@@ -87,6 +87,13 @@ union vec3
         e[2] += v.e[2];
         return *this;
     }
+    vec3 &operator-=(const vec3 &v)
+    {
+        e[0] -= v.e[0];
+        e[1] -= v.e[1];
+        e[2] -= v.e[2];
+        return *this;
+    }
     vec3 &operator*=(double t)
     {
         e[0] *= t;
@@ -339,6 +346,7 @@ union AABB
     {
         minP = min;
         maxP = max;
+        PadToMinimums();
     }
     AABB(AABB box1, AABB box2)
     {
@@ -349,6 +357,7 @@ union AABB
         maxX = box1.maxX >= box2.maxX ? box1.maxX : box2.maxX;
         maxY = box1.maxY >= box2.maxY ? box1.maxY : box2.maxY;
         maxZ = box1.maxZ >= box2.maxZ ? box1.maxZ : box2.maxZ;
+        PadToMinimums();
     }
 
     bool Hit(const Ray &r, double tMin, double tMax)
@@ -378,6 +387,34 @@ union AABB
     vec3 GetHalfExtent()
     {
         return (maxP - minP) * 0.5f;
+    }
+
+    void Expand(f64 delta)
+    {
+        vec3 pad = vec3(delta / 2, delta / 2, delta / 2);
+        minP -= pad;
+        maxP += pad;
+    }
+
+    void PadToMinimums()
+    {
+        f64 delta        = 0.0001;
+        f64 deltaOverTwo = delta / 2;
+        if (maxX - minX < delta)
+        {
+            minX -= deltaOverTwo;
+            maxX += deltaOverTwo;
+        }
+        if (maxY - minY < delta)
+        {
+            minY -= deltaOverTwo;
+            maxY += deltaOverTwo;
+        }
+        if (maxZ - minZ < delta)
+        {
+            minZ -= deltaOverTwo;
+            maxZ += deltaOverTwo;
+        }
     }
 };
 
@@ -457,45 +494,131 @@ private:
     AABB aabb;
 };
 
+struct Quad
+{
+    Quad(const vec3 &q, const vec3 &u, const vec3 &v, Material *mat) : q(q), u(u), v(v), material(mat)
+    {
+        vec3 n = cross(u, v);
+        normal = normalize(n);
+        d      = dot(normal, q);
+        w      = n / dot(n, n);
+    }
+
+    inline AABB GetAABB() const
+    {
+        AABB bbox1  = AABB(q, q + u + v);
+        AABB bbox2  = AABB(q + u, q + v);
+        AABB result = AABB(bbox1, bbox2);
+        return result;
+    }
+
+    bool Hit(const Ray &r, const double tMin, const double tMax, HitRecord &record) const
+    {
+        f64 denom = dot(normal, r.direction());
+        // if the ray is parallel to the plane
+        if (fabs(denom) < 1e-8)
+            return false;
+
+        f64 t = (d - dot(normal, r.origin())) / denom;
+
+        if (t < tMin || t > tMax)
+            return false;
+
+        vec3 intersection = r.at(t);
+
+        vec3 planarHitVector = intersection - q;
+        f64 alpha            = dot(w, cross(planarHitVector, v));
+        f64 beta             = dot(w, cross(u, planarHitVector));
+
+        if (!(alpha >= 0 && alpha <= 1 && beta >= 0 && beta <= 1))
+        {
+            return false;
+        }
+
+        record.u        = alpha;
+        record.v        = beta;
+        record.p        = intersection;
+        record.t        = t;
+        record.material = material;
+        record.SetNormal(r, normal);
+        return true;
+    }
+
+    vec3 q; // corner
+    vec3 u, v;
+    Material *material;
+
+    // plane
+    f64 d;
+    vec3 w;
+    vec3 normal;
+};
+
 struct Scene
 {
     std::vector<Sphere> spheres;
-    AABB sceneAABB;
-
-    // bool Hit(const Ray &r, const double tMin, const double tMax, HitRecord &record) const
-    // {
-    //     HitRecord temp;
-    //     double closest = tMax;
-    //     bool hit       = false;
-    //     for (const Sphere &sphere : spheres)
-    //     {
-    //         if (sphere.Hit(r, tMin, tMax, temp))
-    //         {
-    //             if (temp.t < closest)
-    //             {
-    //                 closest = temp.t;
-    //                 record  = temp;
-    //                 hit     = true;
-    //             }
-    //         }
-    //     }
-    //     return hit;
-    // }
+    std::vector<Quad> quads;
 
     void Clear()
     {
         spheres.clear();
+        quads.clear();
     }
 
     void Add(Sphere &sphere)
     {
         spheres.push_back(sphere);
-        sceneAABB = AABB(sceneAABB, sphere.GetAABB());
     }
 
     void Add(Sphere &&sphere)
     {
         spheres.push_back(std::move(sphere));
+    }
+
+    void Add(Quad &quad)
+    {
+        quads.push_back(quad);
+    }
+
+    void Add(Quad &&quad)
+    {
+        quads.push_back(std::move(quad));
+    }
+
+    u32 GetPrimitiveCount() const
+    {
+        return (u32)spheres.size() + (u32)quads.size();
+    }
+
+    void GetAABBs(AABB *aabbs)
+    {
+        u32 numSpheres = (u32)spheres.size();
+        for (u32 i = 0; i < numSpheres; i++)
+        {
+            Sphere &sphere = spheres[i];
+            aabbs[i]       = sphere.GetAABB();
+        }
+        u32 numQuads = (u32)quads.size();
+        for (u32 i = 0; i < numQuads; i++)
+        {
+            Quad &quad            = quads[i];
+            aabbs[i + numSpheres] = quad.GetAABB();
+        }
+    }
+
+    bool Hit(const Ray &r, const double tMin, const double tMax, HitRecord &temp, u32 index)
+    {
+        u32 numSpheres = (u32)spheres.size();
+        if (index >= numSpheres)
+        {
+            Quad &quad = quads[index - numSpheres];
+            return quad.Hit(r, tMin, tMax, temp);
+        }
+        else
+        {
+            Sphere &sphere = spheres[index];
+            return sphere.Hit(r, tMin, tMax, temp);
+        }
     }
 };
 
@@ -516,14 +639,11 @@ struct BVH
 
     void Build(Scene *inScene)
     {
-        scene       = inScene;
-        AABB *aabbs = (AABB *)malloc(scene->spheres.size() * sizeof(AABB));
-        for (u32 i = 0; i < scene->spheres.size(); i++)
-        {
-            Sphere &sphere = scene->spheres[i];
-            aabbs[i]       = sphere.GetAABB();
-        }
-        Build(aabbs, (u32)scene->spheres.size());
+        scene                   = inScene;
+        u32 totalPrimitiveCount = scene->GetPrimitiveCount();
+        AABB *aabbs             = (AABB *)malloc(totalPrimitiveCount * sizeof(AABB));
+        scene->GetAABBs(aabbs);
+        Build(aabbs, totalPrimitiveCount);
     }
 
     void Build(AABB *aabbs, u32 count)
@@ -628,8 +748,7 @@ struct BVH
             {
                 for (u32 i = 0; i < node.count; i++)
                 {
-                    const Sphere &sphere = scene->spheres[leafIndices[node.offset + i]];
-                    if (sphere.Hit(r, tMin, tMax, temp))
+                    if (scene->Hit(r, tMin, tMax, temp, leafIndices[node.offset + i]))
                     {
                         if (temp.t < closest)
                         {
@@ -970,11 +1089,12 @@ vec3 RayColor(const Ray &r, const int depth, const BVH &bvh)
     return (1 - t) * vec3(1, 1, 1) + t * vec3(0.5, 0.7, 1.0);
 }
 
-#define PERLIN 1
+#define QUADS 1
 int main(int argc, char *argv[])
 {
 
 #if SPHERES
+    const double aspectRatio  = 16.0 / 9.0;
     const vec3 lookFrom       = vec3(13, 2, 3);
     const vec3 lookAt         = vec3(0, 0, 0);
     const vec3 worldUp        = vec3(0, 1, 0);
@@ -982,6 +1102,7 @@ int main(int argc, char *argv[])
     const double defocusAngle = 0.6;
     const double focusDist    = 10;
 #elif EARTH
+    const double aspectRatio  = 16.0 / 9.0;
     const vec3 lookFrom       = vec3(0, 0, 12);
     const vec3 lookAt         = vec3(0, 0, 0);
     const vec3 worldUp        = vec3(0, 1, 0);
@@ -989,15 +1110,23 @@ int main(int argc, char *argv[])
     const double defocusAngle = 0;
     const double focusDist    = 10;
 #elif PERLIN
+    const double aspectRatio  = 16.0 / 9.0;
     const vec3 lookFrom       = vec3(13, 2, 3);
     const vec3 lookAt         = vec3(0, 0, 0);
     const vec3 worldUp        = vec3(0, 1, 0);
     const double verticalFov  = 20;
     const double defocusAngle = 0;
     const double focusDist    = 10;
+#elif QUADS
+    const double aspectRatio  = 1.0;
+    const vec3 lookFrom       = vec3(0, 0, 9);
+    const vec3 lookAt         = vec3(0, 0, 0);
+    const vec3 worldUp        = vec3(0, 1, 0);
+    const double verticalFov  = 80;
+    const double defocusAngle = 0;
+    const double focusDist    = 10;
 #endif
 
-    const double aspectRatio  = 16.0 / 9.0;
     const int samplesPerPixel = 100;
     const int maxDepth        = 50;
     const int imageWidth      = 400;
@@ -1097,6 +1226,20 @@ int main(int argc, char *argv[])
 
     scene.Add(Sphere(vec3(0, -1000, 0), 1000, &perlin));
     scene.Add(Sphere(vec3(0, 2, 0), 2, &perlin));
+#elif QUADS
+    Material materials[]      = {
+        Material::CreateLambert(vec3(1.0, 0.2, 0.2)),
+        Material::CreateLambert(vec3(0.2, 1.0, 0.2)),
+        Material::CreateLambert(vec3(0.2, 0.2, 1.0)),
+        Material::CreateLambert(vec3(1.0, 0.5, 0.0)),
+        Material::CreateLambert(vec3(0.2, 0.8, 0.8)),
+    };
+
+    scene.Add(Quad(vec3(-3, -2, 5), vec3(0, 0, -4), vec3(0, 4, 0), &materials[0]));
+    scene.Add(Quad(vec3(-2, -2, 0), vec3(4, 0, 0), vec3(0, 4, 0), &materials[1]));
+    scene.Add(Quad(vec3(3, -2, 1), vec3(0, 0, 4), vec3(0, 4, 0), &materials[2]));
+    scene.Add(Quad(vec3(-2, 3, 1), vec3(4, 0, 0), vec3(0, 0, 4), &materials[3]));
+    scene.Add(Quad(vec3(-2, -3, 5), vec3(4, 0, 0), vec3(0, 0, -4), &materials[4]));
 #endif
 
     BVH bvh;
