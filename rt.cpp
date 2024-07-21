@@ -191,9 +191,14 @@ inline double RandomDouble()
     return rand() / (RAND_MAX + 1.0);
 }
 
-inline double RandomDouble(double min, double max)
+inline f64 RandomDouble(f64 min, f64 max)
 {
     return min + (max - min) * RandomDouble();
+}
+
+inline i32 RandomInt(i32 min, i32 max)
+{
+    return i32(RandomDouble(f64(min), f64(max)));
 }
 
 inline vec3 RandomVec3()
@@ -647,6 +652,103 @@ struct BVH
 
 struct Perlin
 {
+    // f64 *randFloat;
+    vec3 *randVec;
+    i32 *permX;
+    i32 *permY;
+    i32 *permZ;
+    static const i32 pointCount = 256;
+
+    void Init()
+    {
+        randVec = new vec3[pointCount];
+        for (i32 i = 0; i < pointCount; i++)
+        {
+            randVec[i] = normalize(RandomVec3(-1, 1));
+        }
+
+        auto GeneratePerm = [&]() -> i32 * {
+            i32 *perm = new i32[pointCount];
+            for (i32 i = 0; i < pointCount; i++)
+            {
+                perm[i] = i;
+            }
+
+            for (i32 i = pointCount - 1; i > 0; i--)
+            {
+                i32 target   = RandomInt(0, i);
+                i32 temp     = perm[i];
+                perm[i]      = perm[target];
+                perm[target] = temp;
+            }
+            return perm;
+        };
+
+        permX = GeneratePerm();
+        permY = GeneratePerm();
+        permZ = GeneratePerm();
+    }
+
+    f64 Noise(const vec3 &p) const
+    {
+        f64 u = p.x - floor(p.x);
+        f64 v = p.y - floor(p.y);
+        f64 w = p.z - floor(p.z);
+
+        vec3 c[2][2][2];
+        {
+            i32 i = i32(floor(p.x));
+            i32 j = i32(floor(p.y));
+            i32 k = i32(floor(p.z));
+
+            for (i32 di = 0; di < 2; di++)
+            {
+                for (i32 dj = 0; dj < 2; dj++)
+                {
+                    for (i32 dk = 0; dk < 2; dk++)
+                    {
+                        c[di][dj][dk] = randVec[permX[(i + di) & 255] ^ permY[(j + dj) & 255] ^ permZ[(k + dk) & 255]];
+                    }
+                }
+            }
+        }
+
+        f64 accum = 0.0;
+        {
+            f64 uu = u * u * (3 - 2 * u);
+            f64 vv = v * v * (3 - 2 * v);
+            f64 ww = w * w * (3 - 2 * w);
+            for (i32 i = 0; i < 2; i++)
+            {
+                for (i32 j = 0; j < 2; j++)
+                {
+                    for (i32 k = 0; k < 2; k++)
+                    {
+                        vec3 weightV(u - i, v - j, w - k);
+                        accum += (i * uu + (1 - i) * (1 - uu)) *
+                                 (j * vv + (1 - j) * (1 - vv)) *
+                                 (k * ww + (1 - k) * (1 - ww)) *
+                                 dot(c[i][j][k], weightV);
+                    }
+                }
+            }
+        }
+        return accum;
+    }
+
+    f64 Turbulence(vec3 p, i32 depth) const
+    {
+        f64 accum  = 0.0;
+        f64 weight = 1.0;
+        for (i32 i = 0; i < depth; i++)
+        {
+            accum += weight * Noise(p);
+            weight *= 0.5;
+            p *= 2;
+        }
+
+        return fabs(accum);
+    }
 };
 
 struct Texture
@@ -656,6 +758,7 @@ struct Texture
         Solid,
         Checkered,
         Image,
+        Noise
     } type;
 
     static Texture CreateSolid(const vec3 &albedo)
@@ -680,6 +783,15 @@ struct Texture
         Texture texture;
         texture.image = LoadFile(filename);
         texture.type  = Type::Image;
+        return texture;
+    }
+
+    static Texture CreateNoise(double scale)
+    {
+        Texture texture;
+        texture.perlin.Init();
+        texture.type  = Type::Noise;
+        texture.scale = scale;
         return texture;
     }
 
@@ -715,6 +827,12 @@ struct Texture
                 return vec3(r, g, b);
             }
             break;
+            case Type::Noise:
+            {
+                // return vec3(1, 1, 1) * 0.5 * (1.0 + perlin.Noise(scale * p));
+                return vec3(.5, .5, .5) * (1 + sin(scale * p.z + 10 * perlin.Turbulence(p, 7)));
+            }
+            break;
             default: assert(0); return vec3(0, 0, 0);
         }
     }
@@ -727,6 +845,10 @@ struct Texture
 
     // image
     Image image;
+
+    // perlin
+    Perlin perlin;
+    double scale;
 };
 
 struct Material
@@ -848,15 +970,11 @@ vec3 RayColor(const Ray &r, const int depth, const BVH &bvh)
     return (1 - t) * vec3(1, 1, 1) + t * vec3(0.5, 0.7, 1.0);
 }
 
-#define EARTH 1
+#define PERLIN 1
 int main(int argc, char *argv[])
 {
 
 #if SPHERES
-    const double aspectRatio  = 16.0 / 9.0;
-    const int samplesPerPixel = 100;
-    const int maxDepth        = 50;
-    const int imageWidth      = 400;
     const vec3 lookFrom       = vec3(13, 2, 3);
     const vec3 lookAt         = vec3(0, 0, 0);
     const vec3 worldUp        = vec3(0, 1, 0);
@@ -864,17 +982,25 @@ int main(int argc, char *argv[])
     const double defocusAngle = 0.6;
     const double focusDist    = 10;
 #elif EARTH
-    const double aspectRatio  = 16.0 / 9.0;
-    const int samplesPerPixel = 100;
-    const int maxDepth        = 50;
-    const int imageWidth      = 400;
     const vec3 lookFrom       = vec3(0, 0, 12);
     const vec3 lookAt         = vec3(0, 0, 0);
     const vec3 worldUp        = vec3(0, 1, 0);
     const double verticalFov  = 20;
     const double defocusAngle = 0;
     const double focusDist    = 10;
+#elif PERLIN
+    const vec3 lookFrom       = vec3(13, 2, 3);
+    const vec3 lookAt         = vec3(0, 0, 0);
+    const vec3 worldUp        = vec3(0, 1, 0);
+    const double verticalFov  = 20;
+    const double defocusAngle = 0;
+    const double focusDist    = 10;
 #endif
+
+    const double aspectRatio  = 16.0 / 9.0;
+    const int samplesPerPixel = 100;
+    const int maxDepth        = 50;
+    const int imageWidth      = 400;
 
     int imageHeight    = int(imageWidth / aspectRatio);
     imageHeight        = imageHeight < 1 ? 1 : imageHeight;
@@ -965,6 +1091,12 @@ int main(int argc, char *argv[])
     Material surface          = Material::CreateLambert(&earth);
 
     scene.Add(Sphere(vec3(0, 0, 0), 2, &surface));
+#elif PERLIN
+    Texture noise             = Texture::CreateNoise(4.0);
+    Material perlin           = Material::CreateLambert(&noise);
+
+    scene.Add(Sphere(vec3(0, -1000, 0), 1000, &perlin));
+    scene.Add(Sphere(vec3(0, 2, 0), 2, &perlin));
 #endif
 
     BVH bvh;
