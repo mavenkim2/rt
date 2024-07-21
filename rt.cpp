@@ -645,6 +645,10 @@ struct BVH
     }
 };
 
+struct Perlin
+{
+};
+
 struct Texture
 {
     enum class Type
