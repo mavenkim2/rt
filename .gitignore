@@ -30,3 +30,12 @@
 *.exe
 *.out
 *.app
+
+# other
+build.bat*
+*.pdb
+*.rdbg
+*.obj
+*.jpg
+*.ppm
+*.png
