@@ -1,6 +1,6 @@
 #include "rt.h"
 
-#define CORNELL 1
+#define FINAL 1
 #define EMISSIVE
 
 using std::sqrt;
@@ -340,18 +340,11 @@ public:
     Sphere() {}
     Sphere(vec3 c, f32 r, Material *m) : center(c), radius(fmax(0.f, r)), material(m)
     {
-        centerVec      = vec3(0, 0, 0);
-        vec3 boxRadius = vec3(radius, radius, radius);
-        aabb.minP      = c - boxRadius;
-        aabb.maxP      = c + boxRadius;
+        centerVec = vec3(0, 0, 0);
     }
     Sphere(vec3 c1, vec3 c2, f32 r, Material *m) : center(c1), radius(fmax(0.f, r)), material(m)
     {
-        vec3 boxRadius = vec3(radius, radius, radius);
-        centerVec      = c2 - c1;
-        AABB box1      = AABB(c1 - boxRadius, c1 + boxRadius);
-        AABB box2      = AABB(c2 - boxRadius, c2 + boxRadius);
-        aabb           = AABB(box1, box2);
+        centerVec = c2 - c1;
     }
     bool Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const
     {
@@ -389,8 +382,13 @@ public:
     {
         return center + centerVec * time;
     }
-    AABB &GetAABB()
+    AABB GetAABB() const
     {
+        vec3 boxRadius = vec3(radius, radius, radius);
+        vec3 center2   = center + centerVec;
+        AABB box1      = AABB(center - boxRadius, center + boxRadius);
+        AABB box2      = AABB(center2 - boxRadius, center2 + boxRadius);
+        AABB aabb      = AABB(box1, box2);
         return aabb;
     }
     static void GetUV(f32 &u, f32 &v, const vec3 &p)
@@ -407,7 +405,6 @@ private:
     f32 radius;
     Material *material;
     vec3 centerVec;
-    AABB aabb;
 };
 
 struct Quad
@@ -470,6 +467,7 @@ struct Quad
 struct Box
 {
     Quad sides[6];
+    Box() {}
     Box(const vec3 &a, const vec3 &b, Material *mat)
     {
         vec3 min = vec3(fmin(a.x, b.x), fmin(a.y, b.y), fmin(a.z, b.z));
@@ -486,11 +484,40 @@ struct Box
         sides[4] = Quad(vec3(min.x, max.y, max.z), dx, -dz, mat);
         sides[5] = Quad(vec3(min.x, min.y, min.z), dx, dz, mat);
     }
+
+    bool Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const
+    {
+        bool hit    = false;
+        f32 closest = tMax;
+        HitRecord temp;
+        for (u32 i = 0; i < ArrayLength(sides); i++)
+        {
+            const Quad &quad = sides[i];
+            if (quad.Hit(r, tMin, tMax, temp))
+            {
+                if (temp.t < closest)
+                {
+                    closest = temp.t;
+                    record  = temp;
+                    hit     = true;
+                }
+            }
+        }
+        return hit;
+    }
+    AABB GetAABB() const
+    {
+        AABB result;
+        for (u32 i = 0; i < ArrayLength(sides); i++)
+        {
+            result = AABB(result, sides[i].GetAABB());
+        }
+        return result;
+    };
 };
 
 struct ConstantMedium
 {
-    // f32 density;
     f32 negInvDensity;
     Material *phaseFunction;
 
@@ -513,7 +540,7 @@ struct ConstantMedium
 
         if (rec1.t >= rec2.t)
         {
-            std::clog << "\ntMin=" << rec1.t << ", tMax=" << rec2.t;
+            // std::clog << "\ntMin=" << rec1.t << ", tMax=" << rec2.t;
             return false;
         }
         // std::clog << "\n2.";
@@ -570,175 +597,244 @@ enum class PrimitiveType
 
 struct Scene
 {
-    std::vector<Sphere> spheres;
-    std::vector<Quad> quads;
+    // std::vector<Sphere> spheres;
+    // std::vector<Quad> quads;
     // std::vector<Box> boxes;
+    //
+    // std::vector<PrimitiveIndices> primitiveIndices;
+    //
+    // std::vector<HomogeneousTransform> transforms;
+    // std::vector<ConstantMedium> media;
 
-    std::vector<PrimitiveIndices> primitiveIndices;
+    Sphere *spheres;
+    Quad *quads;
+    Box *boxes;
 
-    std::vector<HomogeneousTransform> transforms;
-    std::vector<ConstantMedium> media;
+    PrimitiveIndices *primitiveIndices;
 
-    void Clear()
+    HomogeneousTransform *transforms;
+    ConstantMedium *media;
+
+    u32 sphereCount;
+    u32 quadCount;
+    u32 boxCount;
+    u32 totalPrimitiveCount;
+
+    u32 transformCount;
+    u32 mediaCount;
+
+    void FinalizePrimitives()
     {
-        spheres.clear();
-        quads.clear();
-        primitiveIndices.clear();
-        transforms.clear();
+        totalPrimitiveCount = sphereCount + quadCount + boxCount;
+        primitiveIndices    = (PrimitiveIndices *)malloc(sizeof(PrimitiveIndices) * totalPrimitiveCount);
+        for (u32 i = 0; i < totalPrimitiveCount; i++)
+        {
+            primitiveIndices[i].transformIndex     = -1;
+            primitiveIndices[i].constantMediaIndex = -1;
+        }
     }
 
-    SceneHandle StartHandle(PrimitiveType type, u32 count)
+    inline i32 GetIndex(PrimitiveType type, i32 primIndex) const
     {
-        SceneHandle handle;
+        i32 index = -1;
         switch (type)
         {
             case PrimitiveType::Sphere:
             {
-                handle.offset = (u32)spheres.size();
+                index = primIndex;
             }
             break;
             case PrimitiveType::Quad:
             {
-                handle.offset = (u32)spheres.size() + (u32)quads.size();
+                index = primIndex + sphereCount;
             }
-                // case PrimitiveType::Box:
-                // {
-                //     handle.offset = (u32)spheres.size() + (u32)quads.size() + (u32)boxes.size();
-                // }
-                // break;
+            break;
+            case PrimitiveType::Box:
+            {
+                index = primIndex + sphereCount + quadCount;
+            }
+            break;
         }
-        handle.count = count;
-        return handle;
+        return index;
     }
-
-    SceneHandle Add(Sphere &sphere)
+    inline void GetTypeAndLocalindex(const u32 totalIndex, PrimitiveType *type, u32 *localIndex) const
     {
-        SceneHandle handle;
-        handle.offset = (u32)spheres.size();
-        handle.count  = 1;
-        spheres.push_back(sphere);
-        primitiveIndices.push_back({});
-        return handle;
-    }
-
-    SceneHandle Add(Sphere &&sphere)
-    {
-        SceneHandle handle;
-        handle.offset = (u32)spheres.size();
-        handle.count  = 1;
-        spheres.push_back(std::move(sphere));
-        primitiveIndices.push_back({});
-        return handle;
-    }
-
-    SceneHandle Add(Quad &quad)
-    {
-        SceneHandle handle;
-        handle.offset = (u32)spheres.size() + (u32)quads.size();
-        handle.count  = 1;
-        quads.push_back(quad);
-        primitiveIndices.push_back({});
-        return handle;
-    }
-
-    SceneHandle Add(Quad &&quad)
-    {
-        SceneHandle handle;
-        handle.offset = (u32)spheres.size() + (u32)quads.size();
-        handle.count  = 1;
-        quads.push_back(std::move(quad));
-        primitiveIndices.push_back({});
-        return handle;
-    }
-
-    SceneHandle Add(Box &box)
-    {
-        SceneHandle handle;
-        handle.offset = (u32)spheres.size() + (u32)quads.size();
-        handle.count  = ArrayLength(box.sides);
-        for (u32 i = 0; i < ArrayLength(box.sides); i++)
+        if (totalIndex < sphereCount)
         {
-            Add(box.sides[i]);
-            primitiveIndices.push_back({});
+            *type       = PrimitiveType::Sphere;
+            *localIndex = totalIndex;
         }
-        return handle;
-    }
-
-    SceneHandle Add(Box &&box)
-    {
-        SceneHandle handle;
-        handle.offset = (u32)spheres.size() + (u32)quads.size();
-        handle.count  = ArrayLength(box.sides);
-        for (u32 i = 0; i < ArrayLength(box.sides); i++)
+        else if (totalIndex < quadCount + sphereCount)
         {
-            Add(std::move(box.sides[i]));
-            primitiveIndices.push_back({});
+            *type       = PrimitiveType::Quad;
+            *localIndex = totalIndex - sphereCount;
         }
-        return handle;
-    }
-
-    void AddTransform(HomogeneousTransform transform, SceneHandle handle)
-    {
-        u32 transformIndex = (u32)transforms.size();
-        transforms.push_back(transform);
-
-        for (u32 i = handle.offset; i < handle.offset + handle.count; i++)
+        else if (totalIndex < quadCount + sphereCount + boxCount)
         {
-            primitiveIndices[i].transformIndex = transformIndex;
+            *type       = PrimitiveType::Box;
+            *localIndex = totalIndex - sphereCount - quadCount;
         }
-    }
-
-    void AddConstantMedium(ConstantMedium medium, SceneHandle handle)
-    {
-        u32 mediumIndex = (u32)media.size();
-        media.push_back(std::move(medium));
-        for (u32 i = handle.offset; i < handle.offset + handle.count; i++)
+        else
         {
-            primitiveIndices[i].constantMediaIndex = mediumIndex;
+            assert(0);
         }
     }
 
-    u32 GetPrimitiveCount() const
+    void AddConstantMedium(PrimitiveType type, i32 primIndex, i32 constantMediumIndex)
     {
-        return (u32)spheres.size() + (u32)quads.size();
+        i32 index                                  = GetIndex(type, primIndex);
+        primitiveIndices[index].constantMediaIndex = constantMediumIndex;
     }
+
+    void AddTransform(PrimitiveType type, i32 primIndex, i32 transformIndex)
+    {
+        i32 index                              = GetIndex(type, primIndex);
+        primitiveIndices[index].transformIndex = transformIndex;
+    }
+
+    // SceneHandle StartHandle(PrimitiveType type, u32 count)
+    // {
+    //     SceneHandle handle;
+    //     switch (type)
+    //     {
+    //         case PrimitiveType::Sphere:
+    //         {
+    //             handle.offset = (u32)spheres.size();
+    //         }
+    //         break;
+    //         case PrimitiveType::Quad:
+    //         {
+    //             handle.offset = (u32)spheres.size() + (u32)quads.size();
+    //         }
+    //         case PrimitiveType::Box:
+    //         {
+    //             handle.offset = (u32)spheres.size() + (u32)quads.size() + (u32)boxes.size();
+    //         }
+    //         break;
+    //     }
+    //     handle.count = count;
+    //     return handle;
+    // }
+
+    // SceneHandle Add(Sphere &sphere)
+    // {
+    //     SceneHandle handle;
+    //     handle.offset = (u32)spheres.size();
+    //     handle.count  = 1;
+    //     spheres.push_back(sphere);
+    //     primitiveIndices.push_back({});
+    //     return handle;
+    // }
+
+    // SceneHandle Add(Sphere &&sphere)
+    // {
+    //     SceneHandle handle;
+    //     handle.offset = (u32)spheres.size();
+    //     handle.count  = 1;
+    //     spheres.push_back(std::move(sphere));
+    //     primitiveIndices.push_back({});
+    //     return handle;
+    // }
+
+    // SceneHandle Add(Quad &quad)
+    // {
+    //     SceneHandle handle;
+    //     handle.offset = (u32)spheres.size() + (u32)quads.size();
+    //     handle.count  = 1;
+    //     quads.push_back(quad);
+    //     primitiveIndices.push_back({});
+    //     return handle;
+    // }
+
+    // SceneHandle Add(Quad &&quad)
+    // {
+    //     SceneHandle handle;
+    //     handle.offset = (u32)spheres.size() + (u32)quads.size();
+    //     handle.count  = 1;
+    //     quads.push_back(std::move(quad));
+    //     primitiveIndices.push_back({});
+    //     return handle;
+    // }
+
+    // SceneHandle Add(Box &box)
+    // {
+    //     SceneHandle handle;
+    //     handle.offset = (u32)spheres.size() + (u32)quads.size();
+    //     handle.count  = ArrayLength(box.sides);
+    //     for (u32 i = 0; i < ArrayLength(box.sides); i++)
+    //     {
+    //         Add(box.sides[i]);
+    //         primitiveIndices.push_back({});
+    //     }
+    //     return handle;
+    // }
+
+    // SceneHandle Add(Box &&box)
+    // {
+    //     SceneHandle handle;
+    //     handle.offset = (u32)spheres.size() + (u32)quads.size();
+    //     handle.count  = ArrayLength(box.sides);
+    //     for (u32 i = 0; i < ArrayLength(box.sides); i++)
+    //     {
+    //         Add(std::move(box.sides[i]));
+    //         primitiveIndices.push_back({});
+    //     }
+    //     return handle;
+    // }
+
+    // void AddTransform(HomogeneousTransform transform, SceneHandle handle)
+    // {
+    //     u32 transformIndex = (u32)transforms.size();
+    //     transforms.push_back(transform);
+    //
+    //     for (u32 i = handle.offset; i < handle.offset + handle.count; i++)
+    //     {
+    //         primitiveIndices[i].transformIndex = transformIndex;
+    //     }
+    // }
+
+    // void AddConstantMedium(ConstantMedium medium, SceneHandle handle)
+    // {
+    //     u32 mediumIndex = (u32)media.size();
+    //     media.push_back(std::move(medium));
+    //     for (u32 i = handle.offset; i < handle.offset + handle.count; i++)
+    //     {
+    //         primitiveIndices[i].constantMediaIndex = mediumIndex;
+    //     }
+    // }
 
     void GetAABBs(AABB *aabbs)
     {
-        u32 numSpheres = (u32)spheres.size();
-        for (u32 i = 0; i < numSpheres; i++)
+        for (u32 i = 0; i < sphereCount; i++)
         {
             Sphere &sphere = spheres[i];
+            u32 index      = GetIndex(PrimitiveType::Sphere, i);
+            aabbs[index]   = sphere.GetAABB();
+        }
+        for (u32 i = 0; i < quadCount; i++)
+        {
+            Quad &quad   = quads[i];
+            u32 index    = GetIndex(PrimitiveType::Quad, i);
+            aabbs[index] = quad.GetAABB();
+        }
+        for (u32 i = 0; i < boxCount; i++)
+        {
+            Box &box     = boxes[i];
+            u32 index    = GetIndex(PrimitiveType::Box, i);
+            aabbs[index] = box.GetAABB();
+        }
+        for (u32 i = 0; i < totalPrimitiveCount; i++)
+        {
             if (primitiveIndices[i].transformIndex != -1)
             {
-                // convert aabb to world space
-                aabbs[i] = Transform(transforms[primitiveIndices[i].transformIndex], sphere.GetAABB());
-            }
-            else
-            {
-                aabbs[i] = sphere.GetAABB();
-            }
-        }
-        u32 numQuads = (u32)quads.size();
-        for (u32 i = 0; i < numQuads; i++)
-        {
-            Quad &quad = quads[i];
-            u32 index  = i + numSpheres;
-            if (primitiveIndices[index].transformIndex != -1)
-            {
-                aabbs[index] = Transform(transforms[primitiveIndices[i].transformIndex], quad.GetAABB());
-            }
-            else
-            {
-                aabbs[index] = quad.GetAABB();
+                aabbs[i] = Transform(transforms[primitiveIndices[i].transformIndex], aabbs[i]);
             }
         }
     }
 
     bool Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &temp, u32 index)
     {
-        u32 numSpheres = (u32)spheres.size();
-        bool result    = false;
+        bool result = false;
 
         Ray ray;
         HomogeneousTransform *transform = 0;
@@ -768,31 +864,56 @@ struct Scene
             ray = r;
         }
 
+        PrimitiveType type;
+        u32 localIndex;
+        GetTypeAndLocalindex(index, &type, &localIndex);
         if (primitiveIndices[index].constantMediaIndex != -1)
         {
-            if (index >= numSpheres)
+            ConstantMedium &medium = media[primitiveIndices[index].constantMediaIndex];
+            switch (type)
             {
-                Quad &quad             = quads[index - numSpheres];
-                ConstantMedium &medium = media[primitiveIndices[index].constantMediaIndex];
-                result                 = medium.Hit(quad, ray, tMin, tMax, temp);
-            }
-            else
-            {
-                Sphere &sphere = spheres[index];
-                result         = media[primitiveIndices[index].constantMediaIndex].Hit(sphere, ray, tMin, tMax, temp);
+                case PrimitiveType::Sphere:
+                {
+                    Sphere &sphere = spheres[localIndex];
+                    result         = medium.Hit(sphere, ray, tMin, tMax, temp);
+                }
+                break;
+                case PrimitiveType::Quad:
+                {
+                    Quad &quad = quads[localIndex];
+                    result     = medium.Hit(quad, ray, tMin, tMax, temp);
+                }
+                break;
+                case PrimitiveType::Box:
+                {
+                    Box &box = boxes[localIndex];
+                    result   = medium.Hit(box, ray, tMin, tMax, temp);
+                }
+                break;
             }
         }
         else
         {
-            if (index >= numSpheres)
+            switch (type)
             {
-                Quad &quad = quads[index - numSpheres];
-                result     = quad.Hit(ray, tMin, tMax, temp);
-            }
-            else
-            {
-                Sphere &sphere = spheres[index];
-                result         = sphere.Hit(ray, tMin, tMax, temp);
+                case PrimitiveType::Sphere:
+                {
+                    Sphere &sphere = spheres[localIndex];
+                    result         = sphere.Hit(ray, tMin, tMax, temp);
+                }
+                break;
+                case PrimitiveType::Quad:
+                {
+                    Quad &quad = quads[localIndex];
+                    result     = quad.Hit(ray, tMin, tMax, temp);
+                }
+                break;
+                case PrimitiveType::Box:
+                {
+                    Box &box = boxes[localIndex];
+                    result   = box.Hit(ray, tMin, tMax, temp);
+                }
+                break;
             }
         }
 
@@ -834,7 +955,7 @@ struct BVH
     void Build(Scene *inScene)
     {
         scene                   = inScene;
-        u32 totalPrimitiveCount = scene->GetPrimitiveCount();
+        u32 totalPrimitiveCount = scene->totalPrimitiveCount;
         AABB *aabbs             = (AABB *)malloc(totalPrimitiveCount * sizeof(AABB));
         scene->GetAABBs(aabbs);
         Build(aabbs, totalPrimitiveCount);
@@ -1505,8 +1626,8 @@ int main(int argc, char *argv[])
     const f32 defocusAngle = 0;
     const f32 focusDist    = 10;
 
-    const u32 imageWidth      = 400;
-    const u32 samplesPerPixel = 100;
+    const u32 imageWidth      = 600;
+    const u32 samplesPerPixel = 200;
     const u32 maxDepth        = 50;
     BACKGROUND                = vec3(0, 0, 0);
 #elif FINAL
@@ -1554,7 +1675,7 @@ int main(int argc, char *argv[])
     // std::cout << "P3\n"
     //           << imageWidth << ' ' << imageHeight << "\n255\n";
 
-    Scene scene;
+    Scene scene = {};
 
 #if SPHERES
     for (int a = -11; a < 11; a++)
@@ -1657,20 +1778,20 @@ int main(int argc, char *argv[])
     scene.Add(Quad(vec3(555, 555, 555), vec3(-555, 0, 0), vec3(0, 0, -555), &materials[1]));
     scene.Add(Quad(vec3(0, 0, 555), vec3(555, 0, 0), vec3(0, 555, 0), &materials[1]));
 
-    // SceneHandle handle = scene.Add(Box(vec3(0, 0, 0), vec3(165, 330, 165), &materials[1]));
-    // f32 rotateAngle    = DegreesToRadians(15);
-    // vec3 translate     = vec3(265, 0, 295);
-    // HomogeneousTransform transform;
-    // transform.translation  = translate;
-    // transform.rotateAngleY = rotateAngle;
-    // scene.AddTransform(transform, handle);
+    SceneHandle handle = scene.Add(Box(vec3(0, 0, 0), vec3(165, 330, 165), &materials[1]));
+    f32 rotateAngle    = DegreesToRadians(15);
+    vec3 translate     = vec3(265, 0, 295);
+    HomogeneousTransform transform;
+    transform.translation  = translate;
+    transform.rotateAngleY = rotateAngle;
+    scene.AddTransform(transform, handle);
 
-    // handle                 = scene.Add(Box(vec3(0, 0, 0), vec3(165, 165, 165), &materials[1]));
-    // rotateAngle            = DegreesToRadians(-18);
-    // translate              = vec3(130, 0, 65);
-    // transform.translation  = translate;
-    // transform.rotateAngleY = rotateAngle;
-    // scene.AddTransform(transform, handle);
+    handle                 = scene.Add(Box(vec3(0, 0, 0), vec3(165, 165, 165), &materials[1]));
+    rotateAngle            = DegreesToRadians(-18);
+    translate              = vec3(130, 0, 65);
+    transform.translation  = translate;
+    transform.rotateAngleY = rotateAngle;
+    scene.AddTransform(transform, handle);
 #elif CORNELL_SMOKE
     Material materials[]      = {
         Material::CreateLambert(vec3(.65f, .05f, .05f)),
@@ -1681,97 +1802,132 @@ int main(int argc, char *argv[])
         Material::CreateIsotropic(vec3(1, 1, 1)),
     };
 
-    scene.Add(Quad(vec3(555, 0, 0), vec3(0, 555, 0), vec3(0, 0, 555), &materials[2]));
-    scene.Add(Quad(vec3(0, 0, 0), vec3(0, 555, 0), vec3(0, 0, 555), &materials[0]));
-    scene.Add(Quad(vec3(343, 554, 332), vec3(-130, 0, 0), vec3(0, 0, -105), &materials[3]));
-    scene.Add(Quad(vec3(0, 0, 0), vec3(555, 0, 0), vec3(0, 0, 555), &materials[1]));
-    scene.Add(Quad(vec3(555, 555, 555), vec3(-555, 0, 0), vec3(0, 0, -555), &materials[1]));
-    scene.Add(Quad(vec3(0, 0, 555), vec3(555, 0, 0), vec3(0, 555, 0), &materials[1]));
+    Quad quads[] = {
+        Quad(vec3(555, 0, 0), vec3(0, 555, 0), vec3(0, 0, 555), &materials[2]),
+        Quad(vec3(0, 0, 0), vec3(0, 555, 0), vec3(0, 0, 555), &materials[0]),
+        Quad(vec3(113, 554, 127), vec3(330, 0, 0), vec3(0, 0, 305), &materials[3]),
+        Quad(vec3(0, 0, 0), vec3(555, 0, 0), vec3(0, 0, 555), &materials[1]),
+        Quad(vec3(0, 555, 0), vec3(555, 0, 0), vec3(0, 0, 555), &materials[1]),
+        Quad(vec3(0, 0, 555), vec3(555, 0, 0), vec3(0, 555, 0), &materials[1]),
+    };
 
-    SceneHandle handle = scene.Add(Box(vec3(0, 0, 0), vec3(165, 330, 165), &materials[1]));
-    f32 rotateAngle    = DegreesToRadians(15);
-    vec3 translate     = vec3(265, 0, 295);
-    HomogeneousTransform transform;
-    transform.translation  = translate;
-    transform.rotateAngleY = rotateAngle;
-    scene.AddTransform(transform, handle);
-    ConstantMedium smoke(0.01f, &materials[4]);
-    scene.AddConstantMedium(smoke, handle);
+    Box boxes[] = {
+        Box(vec3(0, 0, 0), vec3(165, 330, 165), &materials[1]),
+        Box(vec3(0, 0, 0), vec3(165, 165, 165), &materials[1]),
+    };
 
-    handle                 = scene.Add(Box(vec3(0, 0, 0), vec3(165, 165, 165), &materials[1]));
-    rotateAngle            = DegreesToRadians(-18);
-    translate              = vec3(130, 0, 65);
-    transform.translation  = translate;
-    transform.rotateAngleY = rotateAngle;
-    smoke                  = ConstantMedium(0.01f, &materials[5]);
-    scene.AddTransform(transform, handle);
-    scene.AddConstantMedium(smoke, handle);
+    HomogeneousTransform transforms[] = {
+        {vec3(265, 0, 295), DegreesToRadians(15)},
+        {vec3(130, 0, 65), DegreesToRadians(-18)},
+    };
+
+    ConstantMedium media[] = {
+        {0.01f, &materials[4]},
+        {0.01f, &materials[5]},
+    };
+
+    scene.quads          = quads;
+    scene.quadCount      = ArrayLength(quads);
+    scene.boxes          = boxes;
+    scene.boxCount       = ArrayLength(boxes);
+    scene.transforms     = transforms;
+    scene.transformCount = ArrayLength(transforms);
+    scene.media          = media;
+    scene.mediaCount     = ArrayLength(media);
+
+    scene.FinalizePrimitives();
+    scene.AddConstantMedium(PrimitiveType::Box, 0, 0);
+    scene.AddTransform(PrimitiveType::Box, 0, 0);
+
+    scene.AddConstantMedium(PrimitiveType::Box, 1, 1);
+    scene.AddTransform(PrimitiveType::Box, 1, 1);
+
 #elif FINAL
     Texture texture           = Texture::CreateImage("earthmap.jpg");
-    Texture noise             = Texture::CreateNoise(0.2);
+    Texture noise             = Texture::CreateNoise(0.2f);
     Material materials[]{
-        Material::CreateLambert(vec3(0.48, 0.83, 0.53)),
+        Material::CreateLambert(vec3(0.48f, 0.83f, 0.53f)),
         Material::CreateDiffuseLight(vec3(7, 7, 7)),
-        Material::CreateLambert(vec3(0.7, 0.3, 0.1)),
-        Material::CreateDielectric(1.5),
-        Material::CreateMetal(vec3(0.8, 0.8, 0.9), 1.0),
-        Material::CreateIsotropic(vec3(0.2, 0.4, 0.9)),
+        Material::CreateLambert(vec3(0.7f, 0.3f, 0.1f)),
+        Material::CreateDielectric(1.5f),
+        Material::CreateMetal(vec3(0.8f, 0.8f, 0.9f), 1.f),
+        Material::CreateIsotropic(vec3(0.2f, 0.4f, 0.9f)),
         Material::CreateIsotropic(vec3(1, 1, 1)),
         Material::CreateLambert(&texture),
         Material::CreateLambert(&noise),
-        Material::CreateLambert(vec3(.73, .73, .73)),
+        Material::CreateLambert(vec3(.73f, .73f, .73f)),
     };
 
-    i32 boxesPerSide = 20;
+    const i32 boxesPerSide = 20;
+    Box boxes[boxesPerSide * boxesPerSide];
     for (i32 i = 0; i < boxesPerSide; i++)
     {
         for (i32 j = 0; j < boxesPerSide; j++)
         {
-            f32 w  = 100.0;
-            f32 x0 = -1000.0 + i * w;
-            f32 z0 = -1000.0 + j * w;
-            f32 y0 = 0.0;
+            f32 w  = 100.f;
+            f32 x0 = -1000.f + i * w;
+            f32 z0 = -1000.f + j * w;
+            f32 y0 = 0.f;
             f32 x1 = x0 + w;
             f32 y1 = RandomFloat(1, 101);
             f32 z1 = z0 + w;
 
-            scene.Add(Box(vec3(x0, y0, z0), vec3(x1, y1, z1), &materials[0]));
+            boxes[i * boxesPerSide + j] = Box(vec3(x0, y0, z0), vec3(x1, y1, z1), &materials[0]);
         }
     }
-    scene.Add(Quad(vec3(123, 554, 147), vec3(300, 0, 0), vec3(0, 0, 265), &materials[1]));
+
+    Quad quads[] = {
+        Quad(vec3(123, 554, 147), vec3(300, 0, 0), vec3(0, 0, 265), &materials[1]),
+    };
 
     vec3 center1 = vec3(400, 400, 200);
     vec3 center2 = center1 + vec3(30, 0, 0);
-    scene.Add(Sphere(center1, center2, 50, &materials[2]));
 
-    scene.Add(Sphere(vec3(260, 150, 45), 50, &materials[3]));
-    scene.Add(Sphere(vec3(0, 150, 45), 50, &materials[4]));
+    const i32 ns           = 1000;
+    Sphere spheres[8 + ns] = {
+        Sphere(center1, center2, 50, &materials[2]),
+        Sphere(vec3(260, 150, 45), 50, &materials[3]),
+        Sphere(vec3(0, 150, 45), 50, &materials[4]),
+        Sphere(vec3(360, 150, 145), 70, &materials[3]),
+        Sphere(vec3(360, 150, 145), 70, &materials[3]),
+        Sphere(vec3(0, 0, 0), 5000, &materials[3]),
+        Sphere(vec3(400, 200, 400), 100, &materials[7]),
+        Sphere(vec3(220, 280, 300), 80, &materials[8]),
+    };
 
-    Sphere sphere = Sphere(vec3(360, 150, 145), 70, &materials[3]);
-    scene.Add(sphere);
-    SceneHandle handle = scene.Add(sphere);
-    ConstantMedium medium(0.2, &materials[5]);
-    scene.AddConstantMedium(medium, handle);
+    HomogeneousTransform transforms[] = {
+        {vec3(-100, 270, 395), 15},
+    };
 
-    sphere = Sphere(vec3(0, 0, 0), 5000, &materials[3]);
-    handle = scene.Add(sphere);
-    medium = ConstantMedium(0.0001, &materials[6]);
-    scene.AddConstantMedium(medium, handle);
+    ConstantMedium media[] = {
+        {0.2f, &materials[5]},
+        {0.0001f, &materials[6]},
+    };
 
-    scene.Add(Sphere(vec3(400, 200, 400), 100, &materials[7]));
-    scene.Add(Sphere(vec3(220, 280, 300), 80, &materials[8]));
-
-    i32 ns = 1000;
-    handle = scene.StartHandle(PrimitiveType::Sphere, ns);
-    for (i32 j = 0; j < ns; j++)
+    for (i32 j = 8; j < ArrayLength(spheres); j++)
     {
-        scene.Add(Sphere(RandomVec3(0, 165), 10, &materials[9]));
+        spheres[j] = Sphere(RandomVec3(0, 165), 10, &materials[9]);
     }
 
-    HomogeneousTransform transform;
-    transform.translation  = vec3(-100, 270, 395);
-    transform.rotateAngleY = 15;
-    scene.AddTransform(transform, handle);
+    scene.spheres        = spheres;
+    scene.sphereCount    = ArrayLength(spheres);
+    scene.quads          = quads;
+    scene.quadCount      = ArrayLength(quads);
+    scene.boxes          = boxes;
+    scene.boxCount       = ArrayLength(boxes);
+    scene.transforms     = transforms;
+    scene.transformCount = ArrayLength(transforms);
+    scene.media          = media;
+    scene.mediaCount     = ArrayLength(media);
+    scene.FinalizePrimitives();
+
+    scene.AddConstantMedium(PrimitiveType::Sphere, 4, 0);
+    scene.AddConstantMedium(PrimitiveType::Sphere, 5, 1);
+
+    for (i32 j = 8; j < ArrayLength(spheres); j++)
+    {
+        scene.AddTransform(PrimitiveType::Sphere, j, 0);
+    }
 
 #endif
 
