@@ -1887,7 +1887,7 @@ int main(int argc, char *argv[])
     Sphere spheres[8 + ns] = {
         Sphere(center1, center2, 50, &materials[2]),
         Sphere(vec3(260, 150, 45), 50, &materials[3]),
-        Sphere(vec3(0, 150, 45), 50, &materials[4]),
+        Sphere(vec3(0, 150, 145), 50, &materials[4]),
         Sphere(vec3(360, 150, 145), 70, &materials[3]),
         Sphere(vec3(360, 150, 145), 70, &materials[3]),
         Sphere(vec3(0, 0, 0), 5000, &materials[3]),
@@ -1896,7 +1896,7 @@ int main(int argc, char *argv[])
     };
 
     HomogeneousTransform transforms[] = {
-        {vec3(-100, 270, 395), 15},
+        {vec3(-100, 270, 395), DegreesToRadians(15)},
     };
 
     ConstantMedium media[] = {
