@@ -1,12 +1,15 @@
 #include "rt.h"
+#include <algorithm>
 
-#define FINAL 1
+#define CORNELL 1
 #define EMISSIVE
 
 using std::sqrt;
 
 const f32 infinity = std::numeric_limits<f32>::infinity();
-#define PI 3.1415926535897932385f
+#define PI     3.1415926535897932385f
+#define U32Max 0xffffffff
+const vec3 INVALID_VEC = vec3((f32)U32Max, (f32)U32Max, (f32)U32Max);
 
 inline f32 DegreesToRadians(f32 degrees)
 {
@@ -83,6 +86,18 @@ inline vec3 RandomInUnitDisk()
     }
 }
 
+inline vec3 RandomCosineDirection()
+{
+    f32 r1 = RandomFloat();
+    f32 r2 = RandomFloat();
+
+    f32 phi = 2 * PI * r1;
+    f32 x   = cos(phi) * sqrt(r2);
+    f32 y   = sin(phi) * sqrt(r2);
+    f32 z   = sqrt(1 - r2);
+    return vec3(x, y, z);
+}
+
 class Ray
 {
 public:
@@ -104,6 +119,11 @@ private:
     vec3 dir;
     f32 tm;
 };
+
+bool IsValidRay(Ray *r)
+{
+    return r->time() != (f32)U32Max;
+}
 
 inline vec3 LinearToSRGB(const vec3 &v)
 {
@@ -143,6 +163,34 @@ f32 ExactLinearToSRGB(f32 l)
 
 struct Material;
 
+struct Basis
+{
+    vec3 t;
+    vec3 b;
+    vec3 n;
+};
+
+Basis GenerateBasis(vec3 n)
+{
+    Basis result;
+    n        = normalize(n);
+    vec3 up  = fabs(n.x) > 0.9 ? vec3(0, 1, 0) : vec3(1, 0, 0);
+    vec3 t   = normalize(cross(n, up));
+    vec3 b   = cross(n, t);
+    result.t = t;
+    result.b = b;
+    result.n = n;
+    return result;
+}
+
+// TODO: I'm pretty sure this is converting to world space. not really sure about this
+vec3 ConvertToLocal(Basis *basis, vec3 vec)
+{
+    // vec3 cosDirection     = RandomCosineDirection();
+    vec3 result = basis->t * vec.x + basis->b * vec.y + basis->n * vec.z;
+    return result;
+}
+
 struct HitRecord
 {
     vec3 normal;
@@ -157,6 +205,13 @@ struct HitRecord
         isFrontFace = dot(r.direction(), inNormal) < 0;
         normal      = isFrontFace ? inNormal : -inNormal;
     }
+};
+
+struct ScatterRecord
+{
+    vec3 attenuation;
+    Ray skipPDFRay;
+    vec3 sample;
 };
 
 union AABB
@@ -399,6 +454,31 @@ public:
         u = azimuth / (2 * PI);
         v = zenith / PI;
     }
+    f32 PdfValue(const vec3 &origin, const vec3 &direction) const
+    {
+        HitRecord rec;
+        if (!this->Hit(Ray(origin, direction), 0.001f, infinity, rec))
+            return 0;
+        f32 cosThetaMax = sqrt(1 - radius * radius / (center - origin).lengthSquared());
+        f32 solidAngle  = 2 * PI * (1 - cosThetaMax);
+        return 1 / solidAngle;
+    }
+    vec3 Random(const vec3 &origin) const
+    {
+        vec3 dir            = center - origin;
+        f32 distanceSquared = dir.lengthSquared();
+        Basis basis         = GenerateBasis(dir);
+
+        f32 r1 = RandomFloat();
+        f32 r2 = RandomFloat();
+        f32 z  = 1 + r2 * (sqrt(1 - radius * radius / distanceSquared) - 1);
+
+        f32 phi     = 2 * PI * r1;
+        f32 x       = cos(phi) * sqrt(1 - z * z);
+        f32 y       = sin(phi) * sqrt(1 - z * z);
+        vec3 result = ConvertToLocal(&basis, vec3(x, y, z));
+        return result;
+    }
 
 private:
     vec3 center;
@@ -416,6 +496,7 @@ struct Quad
         normal = normalize(n);
         d      = dot(normal, q);
         w      = n / dot(n, n);
+        area   = n.length();
     }
 
     inline AABB GetAABB() const
@@ -454,10 +535,27 @@ struct Quad
         return true;
     }
 
+    f32 PdfValue(const vec3 &origin, const vec3 &direction) const
+    {
+        HitRecord rec;
+        if (!this->Hit(Ray(origin, direction), 0.0001f, infinity, rec))
+            return 0;
+        f32 distanceSquared = rec.t * rec.t * direction.lengthSquared();
+        f32 cosine          = fabs(dot(direction, rec.normal) / direction.length());
+        return distanceSquared / (cosine * area);
+    };
+
+    vec3 Random(const vec3 &origin) const
+    {
+        vec3 p = q + (RandomFloat() * u) + (RandomFloat() * v);
+        return p - origin;
+    }
+
     vec3 q; // corner
     vec3 u, v;
     Material *material;
 
+    f32 area;
     // plane
     f32 d;
     vec3 w;
@@ -562,20 +660,6 @@ struct ConstantMedium
     }
 };
 
-typedef u32 PrimitiveFlags;
-enum
-{
-    PrimitiveFlags_Transform      = 1 << 0,
-    PrimitiveFlags_ConstantMedium = 1 << 1,
-    PrimitiveFlags_Sphere         = 1 << 2,
-    PrimitiveFlags_Quad           = 1 << 3,
-};
-
-bool EnumHasAnyFlags(u32 lhs, u32 rhs)
-{
-    return (lhs & rhs) != 0;
-}
-
 struct SceneHandle
 {
     u32 offset;
@@ -594,6 +678,97 @@ enum class PrimitiveType
     Quad,
     Box,
 };
+
+struct Light
+{
+    PrimitiveType type;
+    void *primitive;
+};
+
+Light CreateQuadLight(Quad *quad)
+{
+    Light light;
+    light.type      = PrimitiveType::Quad;
+    light.primitive = quad;
+    return light;
+}
+
+Light CreateSphereLight(Sphere *sphere)
+{
+    Light light;
+    light.type      = PrimitiveType::Sphere;
+    light.primitive = sphere;
+    return light;
+}
+
+vec3 GenerateLightSample(const Light *light, const vec3 &origin)
+{
+    switch (light->type)
+    {
+        case PrimitiveType::Quad:
+        {
+            Quad *quad = (Quad *)light->primitive;
+            return quad->Random(origin);
+        }
+        case PrimitiveType::Sphere:
+        {
+            Sphere *sphere = (Sphere *)light->primitive;
+            return sphere->Random(origin);
+        }
+        default: assert(0); return vec3(1, 0, 0);
+    }
+}
+
+f32 GetLightPDFValue(const Light *light, const vec3 &origin, const vec3 &direction)
+{
+    switch (light->type)
+    {
+        case PrimitiveType::Quad:
+        {
+            Quad *quad = (Quad *)light->primitive;
+            return quad->PdfValue(origin, direction);
+        }
+        case PrimitiveType::Sphere:
+        {
+            Sphere *sphere = (Sphere *)light->primitive;
+            return sphere->PdfValue(origin, direction);
+        }
+        default: assert(0); return 0;
+    }
+}
+
+f32 GetLightsPDFValue(const Light *lights, const u32 numLights, const vec3 &origin, const vec3 &direction)
+{
+    f32 pdfSum = 0.f;
+    for (u32 i = 0; i < numLights; i++)
+    {
+        pdfSum += GetLightPDFValue(&lights[i], origin, direction);
+    }
+    pdfSum /= numLights;
+    return pdfSum;
+}
+
+vec3 GenerateSampleFromLights(const Light *lights, const u32 numLights, const vec3 &origin)
+{
+    i32 randomIndex = RandomInt(0, numLights);
+    assert(randomIndex < (i32)numLights);
+    vec3 result = GenerateLightSample(&lights[randomIndex], origin);
+    return result;
+}
+
+inline vec3 GenerateCosSample(vec3 normal)
+{
+    Basis basis = GenerateBasis(normal);
+    vec3 cosDir = ConvertToLocal(&basis, RandomCosineDirection());
+    return cosDir;
+}
+
+inline f32 GetCosPDFValue(vec3 dir, vec3 normal)
+{
+    f32 cosTheta = dot(normalize(dir), normal);
+    f32 cosPdf   = fmax(cosTheta / PI, 0.f);
+    return cosPdf;
+}
 
 struct Scene
 {
@@ -1368,28 +1543,27 @@ struct Material
         return result;
     }
 
-    bool LambertScatter(const Ray &r, const HitRecord &record, vec3 &attenuation, Ray &scatteredRay)
+    bool LambertScatter(const Ray &r, const HitRecord &record, ScatterRecord &sRec)
     {
-        vec3 scatterDirection = record.normal + RandomUnitVector();
-        scatterDirection      = NearZero(scatterDirection) ? record.normal : scatterDirection;
-        scatteredRay          = Ray(record.p, scatterDirection, r.time());
-        attenuation           = texture.Value(record.u, record.v, record.p);
+        sRec.attenuation = texture.Value(record.u, record.v, record.p);
+        sRec.skipPDFRay  = Ray(INVALID_VEC, INVALID_VEC, (f32)U32Max);
+        sRec.sample      = GenerateCosSample(record.normal);
         return true;
     }
 
-    bool MetalScatter(const Ray &r, const HitRecord &record, vec3 &attenuation, Ray &scatteredRay)
+    bool MetalScatter(const Ray &r, const HitRecord &record, ScatterRecord &sRec)
     {
-        vec3 reflectDir = Reflect(r.direction(), record.normal);
-        reflectDir      = normalize(reflectDir) + fuzz * RandomUnitVector();
-        scatteredRay    = Ray(record.p, reflectDir, r.time());
-        attenuation     = albedo;
+        vec3 reflectDir  = Reflect(r.direction(), record.normal);
+        reflectDir       = normalize(reflectDir) + fuzz * RandomUnitVector();
+        sRec.attenuation = albedo;
+        sRec.skipPDFRay  = Ray(record.p, reflectDir, r.time());
         return true;
     }
 
-    bool DielectricScatter(const Ray &r, const HitRecord &record, vec3 &attenuation, Ray &scatteredRay)
+    bool DielectricScatter(const Ray &r, const HitRecord &record, ScatterRecord &sRec)
     {
-        attenuation = vec3(1, 1, 1);
-        f32 ri      = record.isFrontFace ? 1.f / refractiveIndex : refractiveIndex;
+        sRec.attenuation = vec3(1, 1, 1);
+        f32 ri           = record.isFrontFace ? 1.f / refractiveIndex : refractiveIndex;
 
         vec3 rayDir  = normalize(r.direction());
         f32 cosTheta = fmin(dot(-rayDir, record.normal), 1.f);
@@ -1403,40 +1577,64 @@ struct Material
         vec3 direction  = cannotRefract || reflectance > RandomFloat()
                               ? Reflect(rayDir, record.normal)
                               : Refract(rayDir, record.normal, ri);
-        scatteredRay    = Ray(record.p, direction, r.time());
+        sRec.skipPDFRay = Ray(record.p, direction, r.time());
 
         return true;
     }
 
-    bool IsotropicScatter(const Ray &r, const HitRecord &record, vec3 &attenuation, Ray &scatteredRay)
+    bool IsotropicScatter(const Ray &r, const HitRecord &record, ScatterRecord &sRec)
     {
-        scatteredRay = Ray(record.p, RandomUnitVector(), r.time());
-        attenuation  = texture.Value(record.u, record.v, record.p);
+        // scatteredRay     = Ray(record.p, RandomUnitVector(), r.time());
+        sRec.attenuation = texture.Value(record.u, record.v, record.p);
+        sRec.skipPDFRay  = Ray(INVALID_VEC, INVALID_VEC, (f32)U32Max);
+        sRec.sample      = RandomUnitVector();
         return true;
     }
 
-    inline bool Scatter(const Ray &r, const HitRecord &record, vec3 &attenuation, Ray &scatteredRay)
+    inline bool Scatter(const Ray &r, const HitRecord &record, ScatterRecord &sRec)
     {
         switch (type)
         {
-            case MaterialType::Lambert: return LambertScatter(r, record, attenuation, scatteredRay);
-            case MaterialType::Metal: return MetalScatter(r, record, attenuation, scatteredRay);
-            case MaterialType::Dielectric: return DielectricScatter(r, record, attenuation, scatteredRay);
-            case MaterialType::Isotropic: return IsotropicScatter(r, record, attenuation, scatteredRay);
+            case MaterialType::Lambert: return LambertScatter(r, record, sRec);
+            case MaterialType::Metal: return MetalScatter(r, record, sRec);
+            case MaterialType::Dielectric: return DielectricScatter(r, record, sRec);
+            case MaterialType::Isotropic: return IsotropicScatter(r, record, sRec);
             default: return false;
         }
     }
 
-    inline vec3 Emitted(f32 u, f32 v, const vec3 &p) const
+    inline vec3 Emitted(const Ray &r, const HitRecord &record, f32 u, f32 v, const vec3 &p) const
     {
         switch (type)
         {
             case MaterialType::DiffuseLight:
             {
+                if (!record.isFrontFace)
+                {
+                    return vec3(0, 0, 0);
+                }
                 return texture.Value(u, v, p);
             }
             break;
             default: return vec3(0, 0, 0);
+        }
+    }
+
+    inline f32 ScatteringPDF(const Ray &r, const HitRecord &record, Ray &scattered)
+    {
+        switch (type)
+        {
+            case MaterialType::Lambert:
+            {
+                f32 cosTheta = dot(record.normal, normalize(scattered.direction()));
+                cosTheta     = fmax(cosTheta / PI, 0.f);
+                return cosTheta;
+            }
+            case MaterialType::Isotropic:
+            {
+                return (1 / (4 * PI));
+            }
+            default: return 0;
         }
     }
 };
@@ -1466,7 +1664,7 @@ vec3 RayColor(const Ray &r, const int depth, const BVH &bvh)
     return (1 - t) * vec3(1, 1, 1) + t * vec3(0.5f, 0.7f, 1.f);
 }
 #else
-vec3 RayColor(const Ray &r, const int depth, const BVH &bvh)
+vec3 RayColor(const Ray &r, const int depth, const BVH &bvh, const Light *lights, const u32 numLights)
 {
     if (depth <= 0)
         return vec3(0, 0, 0);
@@ -1476,12 +1674,39 @@ vec3 RayColor(const Ray &r, const int depth, const BVH &bvh)
 
     if (!bvh.Hit(r, 0.001f, infinity, record))
         return BACKGROUND;
-    Ray scattered;
-    vec3 attenuation;
-    vec3 emissiveColor = record.material->Emitted(record.u, record.v, record.p);
-    if (!record.material->Scatter(r, record, attenuation, scattered))
+
+    ScatterRecord sRec;
+    // Ray scattered;
+    vec3 emissiveColor = record.material->Emitted(r, record, record.u, record.v, record.p);
+    if (!record.material->Scatter(r, record, sRec))
         return emissiveColor;
-    return emissiveColor + attenuation * RayColor(scattered, depth - 1, bvh);
+
+    if (IsValidRay(&sRec.skipPDFRay))
+        return sRec.attenuation * RayColor(sRec.skipPDFRay, depth - 1, bvh, lights, numLights);
+
+    // Cosine importance sampling
+    // TODO: this is hardcoded, this should be switched on based on the type of pdf
+    f32 cosPdf = GetCosPDFValue(sRec.sample, record.normal);
+
+    // Light importance sampling
+    vec3 randLightDir = GenerateSampleFromLights(lights, numLights, record.p);
+
+    vec3 scatteredDir;
+    if (RandomFloat() < 0.5f)
+    {
+        scatteredDir = sRec.sample;
+    }
+    else
+    {
+        scatteredDir = randLightDir;
+    }
+    Ray scattered = Ray(record.p, scatteredDir, r.time());
+    f32 lightPdf  = GetLightsPDFValue(lights, numLights, record.p, scatteredDir);
+    f32 pdf       = 0.5f * lightPdf + 0.5f * cosPdf;
+
+    f32 scatteringPDF = record.material->ScatteringPDF(r, record, scattered);
+    vec3 scatterColor = (sRec.attenuation * scatteringPDF * RayColor(scattered, depth - 1, bvh, lights, numLights)) / pdf;
+    return emissiveColor + scatterColor;
 }
 #endif
 
@@ -1492,8 +1717,10 @@ bool RenderTile(WorkQueue *queue)
 
     WorkItem *item = &queue->workItems[workItemIndex];
 
-    i32 samplesPerPixel = queue->params->samplesPerPixel;
-    vec3 cameraCenter   = queue->params->cameraCenter;
+    i32 samplesPerPixel            = queue->params->samplesPerPixel;
+    u32 squareRootSamplesPerPixel  = queue->params->squareRootSamplesPerPixel;
+    f32 oneOverSqrtSamplesPerPixel = 1.f / squareRootSamplesPerPixel;
+    vec3 cameraCenter              = queue->params->cameraCenter;
 
     for (u32 height = item->startY; height < item->onePastEndY; height++)
     {
@@ -1502,30 +1729,44 @@ bool RenderTile(WorkQueue *queue)
         {
             vec3 pixelColor(0, 0, 0);
 
-            for (i32 i = 0; i < samplesPerPixel; i++)
+            // for (i32 i = 0; i < samplesPerPixel; i++)
+            for (u32 i = 0; i < squareRootSamplesPerPixel; i++)
             {
-                const vec3 offset      = vec3(RandomFloat() - 0.5f, RandomFloat() - 0.5f, 0.f);
-                const vec3 pixelSample = queue->params->pixel00 + ((width + offset.x) * queue->params->pixelDeltaU) +
-                                         ((height + offset.y) * queue->params->pixelDeltaV);
-                vec3 rayOrigin;
-                if (queue->params->defocusAngle <= 0)
+                for (u32 j = 0; j < squareRootSamplesPerPixel; j++)
                 {
-                    rayOrigin = cameraCenter;
-                }
-                else
-                {
-                    vec3 sample = RandomInUnitDisk();
-                    rayOrigin   = cameraCenter + sample[0] * queue->params->defocusDiskU +
-                                sample[1] * queue->params->defocusDiskV;
-                }
-                const vec3 rayDirection = pixelSample - rayOrigin;
-                const f32 rayTime       = RandomFloat();
-                Ray r(rayOrigin, rayDirection, rayTime);
+                    // const vec3 offset      = vec3(RandomFloat() - 0.5f, RandomFloat() - 0.5f, 0.f);
+                    const f32 offsetX      = ((i + RandomFloat()) * oneOverSqrtSamplesPerPixel) - 0.5f;
+                    const f32 offsetY      = ((j + RandomFloat()) * oneOverSqrtSamplesPerPixel) - 0.5f;
+                    const vec3 offset      = vec3(offsetX, offsetY, 0.f);
+                    const vec3 pixelSample = queue->params->pixel00 + ((width + offset.x) * queue->params->pixelDeltaU) +
+                                             ((height + offset.y) * queue->params->pixelDeltaV);
+                    vec3 rayOrigin;
+                    if (queue->params->defocusAngle <= 0)
+                    {
+                        rayOrigin = cameraCenter;
+                    }
+                    else
+                    {
+                        vec3 sample = RandomInUnitDisk();
+                        rayOrigin   = cameraCenter + sample[0] * queue->params->defocusDiskU +
+                                    sample[1] * queue->params->defocusDiskV;
+                    }
+                    const vec3 rayDirection = pixelSample - rayOrigin;
+                    const f32 rayTime       = RandomFloat();
+                    Ray r(rayOrigin, rayDirection, rayTime);
 
-                pixelColor += RayColor(r, queue->params->maxDepth, *queue->params->bvh);
+                    pixelColor += RayColor(r, queue->params->maxDepth, *queue->params->bvh,
+                                           queue->params->lights, queue->params->numLights);
+                }
             }
 
             pixelColor /= (f32)samplesPerPixel;
+
+            // NOTE: lazy NAN check
+            if (pixelColor.r != pixelColor.r) pixelColor.r = 0.f;
+            if (pixelColor.g != pixelColor.g) pixelColor.g = 0.f;
+            if (pixelColor.b != pixelColor.b) pixelColor.b = 0.f;
+
             f32 r = 255.f * ExactLinearToSRGB(pixelColor.r);
             f32 g = 255.f * ExactLinearToSRGB(pixelColor.g);
             f32 b = 255.f * ExactLinearToSRGB(pixelColor.b);
@@ -1542,8 +1783,30 @@ bool RenderTile(WorkQueue *queue)
     return true;
 }
 
+struct Sample
+{
+    f32 x;
+    f32 pX;
+};
+bool CompareByX(const Sample &a, const Sample &b)
+{
+    return a.x < b.x;
+}
+
 int main(int argc, char *argv[])
 {
+#if 0
+    const u32 n = 1;
+    f32 sum     = 0.f;
+    for (u32 i = 0; i < n; i++)
+    {
+        f32 x = 2.f * powf(RandomFloat(), 1.f / 3.f); // inverse of cdf
+        sum += x * x / (3.f / 8.f * x * x);
+    }
+    printf("I = %f\n", sum / n);
+#endif
+
+#if 1
 #if SPHERES
     const f32 aspectRatio     = 16.f / 9.f;
     const vec3 lookFrom       = vec3(13, 2, 3);
@@ -1613,8 +1876,8 @@ int main(int argc, char *argv[])
     const f32 defocusAngle = 0;
     const f32 focusDist    = 10;
 
-    const int imageWidth      = 400;
-    const int samplesPerPixel = 100;
+    const int imageWidth      = 600;
+    const int samplesPerPixel = 1000;
     const int maxDepth        = 50;
     BACKGROUND                = vec3(0, 0, 0);
 #elif CORNELL_SMOKE
@@ -1672,8 +1935,7 @@ int main(int argc, char *argv[])
     vec3 defocusDiskU = defocusRadius * s;
     vec3 defocusDiskV = defocusRadius * u;
 
-    // std::cout << "P3\n"
-    //           << imageWidth << ' ' << imageHeight << "\n255\n";
+    u32 squareRootSamplesPerPixel = (u32)sqrt(samplesPerPixel);
 
     Scene scene = {};
 
@@ -1769,29 +2031,51 @@ int main(int argc, char *argv[])
         Material::CreateLambert(vec3(.73f, .73f, .73f)),
         Material::CreateLambert(vec3(.12f, .45f, .15f)),
         Material::CreateDiffuseLight(vec3(15, 15, 15)),
+        Material::CreateMetal(vec3(.8f, .85f, .88f), 0.f),
+        Material::CreateDielectric(1.5f),
     };
 
-    scene.Add(Quad(vec3(555, 0, 0), vec3(0, 555, 0), vec3(0, 0, 555), &materials[2]));
-    scene.Add(Quad(vec3(0, 0, 0), vec3(0, 555, 0), vec3(0, 0, 555), &materials[0]));
-    scene.Add(Quad(vec3(343, 554, 332), vec3(-130, 0, 0), vec3(0, 0, -105), &materials[3]));
-    scene.Add(Quad(vec3(0, 0, 0), vec3(555, 0, 0), vec3(0, 0, 555), &materials[1]));
-    scene.Add(Quad(vec3(555, 555, 555), vec3(-555, 0, 0), vec3(0, 0, -555), &materials[1]));
-    scene.Add(Quad(vec3(0, 0, 555), vec3(555, 0, 0), vec3(0, 555, 0), &materials[1]));
+    Quad quads[] = {
+        Quad(vec3(555, 0, 0), vec3(0, 555, 0), vec3(0, 0, 555), &materials[2]),
+        Quad(vec3(0, 0, 0), vec3(0, 555, 0), vec3(0, 0, 555), &materials[0]),
+        Quad(vec3(343, 554, 332), vec3(-130, 0, 0), vec3(0, 0, -105), &materials[3]),
+        Quad(vec3(0, 0, 0), vec3(555, 0, 0), vec3(0, 0, 555), &materials[1]),
+        Quad(vec3(555, 555, 555), vec3(-555, 0, 0), vec3(0, 0, -555), &materials[1]),
+        Quad(vec3(0, 0, 555), vec3(555, 0, 0), vec3(0, 555, 0), &materials[1]),
+    };
 
-    SceneHandle handle = scene.Add(Box(vec3(0, 0, 0), vec3(165, 330, 165), &materials[1]));
-    f32 rotateAngle    = DegreesToRadians(15);
-    vec3 translate     = vec3(265, 0, 295);
-    HomogeneousTransform transform;
-    transform.translation  = translate;
-    transform.rotateAngleY = rotateAngle;
-    scene.AddTransform(transform, handle);
+    Box boxes[] = {
+        Box(vec3(0, 0, 0), vec3(165, 330, 165), &materials[1]),
+        // Box(vec3(0, 0, 0), vec3(165, 165, 165), &materials[1]),
+    };
 
-    handle                 = scene.Add(Box(vec3(0, 0, 0), vec3(165, 165, 165), &materials[1]));
-    rotateAngle            = DegreesToRadians(-18);
-    translate              = vec3(130, 0, 65);
-    transform.translation  = translate;
-    transform.rotateAngleY = rotateAngle;
-    scene.AddTransform(transform, handle);
+    Sphere spheres[] = {
+        Sphere(vec3(190, 90, 190), 90, &materials[5]),
+    };
+
+    HomogeneousTransform transforms[] = {
+        {vec3(265, 0, 295), DegreesToRadians(15)},
+        {vec3(130, 0, 65), DegreesToRadians(-18)}
+
+    };
+
+    Light lights[] = {
+        CreateQuadLight(&quads[2]),
+        CreateSphereLight(&spheres[0]),
+    };
+
+    scene.spheres        = spheres;
+    scene.sphereCount    = ArrayLength(spheres);
+    scene.quads          = quads;
+    scene.quadCount      = ArrayLength(quads);
+    scene.boxes          = boxes;
+    scene.boxCount       = ArrayLength(boxes);
+    scene.transforms     = transforms;
+    scene.transformCount = ArrayLength(transforms);
+
+    scene.FinalizePrimitives();
+    scene.AddTransform(PrimitiveType::Box, 0, 0);
+    // scene.AddTransform(PrimitiveType::Box, 1, 1);
 #elif CORNELL_SMOKE
     Material materials[]      = {
         Material::CreateLambert(vec3(.65f, .05f, .05f)),
@@ -1935,16 +2219,19 @@ int main(int argc, char *argv[])
     bvh.Build(&scene);
 
     RenderParams params;
-    params.pixel00         = pixel00;
-    params.pixelDeltaU     = pixelDeltaU;
-    params.pixelDeltaV     = pixelDeltaV;
-    params.cameraCenter    = cameraCenter;
-    params.defocusDiskU    = defocusDiskU;
-    params.defocusDiskV    = defocusDiskV;
-    params.defocusAngle    = defocusAngle;
-    params.bvh             = &bvh;
-    params.maxDepth        = maxDepth;
-    params.samplesPerPixel = samplesPerPixel;
+    params.pixel00                   = pixel00;
+    params.pixelDeltaU               = pixelDeltaU;
+    params.pixelDeltaV               = pixelDeltaV;
+    params.cameraCenter              = cameraCenter;
+    params.defocusDiskU              = defocusDiskU;
+    params.defocusDiskV              = defocusDiskV;
+    params.defocusAngle              = defocusAngle;
+    params.bvh                       = &bvh;
+    params.maxDepth                  = maxDepth;
+    params.samplesPerPixel           = samplesPerPixel;
+    params.squareRootSamplesPerPixel = squareRootSamplesPerPixel;
+    params.lights                    = lights;
+    params.numLights                 = ArrayLength(lights);
 
     Image image;
     image.width         = imageWidth;
@@ -2000,4 +2287,5 @@ int main(int argc, char *argv[])
     printf("Total time: %dms\n", end - start);
     WriteImage(&image, "image.bmp");
     fprintf(stderr, "Done.");
+#endif
 }

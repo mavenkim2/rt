@@ -103,6 +103,7 @@ void WriteImage(Image *image, char *filename)
 }
 
 struct BVH;
+struct Light;
 struct WorkItem
 {
     u32 startX;
@@ -115,6 +116,7 @@ struct RenderParams
 {
     BVH *bvh;
     Image *image;
+    Light *lights;
     vec3 cameraCenter;
     vec3 pixel00;
     vec3 pixelDeltaU;
@@ -124,6 +126,8 @@ struct RenderParams
     f32 defocusAngle;
     u32 maxDepth;
     u32 samplesPerPixel;
+    u32 squareRootSamplesPerPixel;
+    u32 numLights;
 };
 
 struct WorkQueue
