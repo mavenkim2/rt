@@ -1,3 +1,15 @@
+#ifndef MATH_H
+#define MATH_H
+
+#include <xmmintrin.h>
+
+inline u16 SafeTruncateU32(u32 val)
+{
+    u16 result = (u16)val;
+    assert(val == result);
+    return result;
+}
+
 union vec3
 {
     f32 e[3];
@@ -191,6 +203,24 @@ inline vec3 Refract(const vec3 &uv, const vec3 &n, f32 refractiveIndexRatio)
     vec3 perp     = refractiveIndexRatio * (uv + cosTheta * n);
     vec3 parallel = -sqrt(fabs(1 - perp.lengthSquared())) * n;
     return perp + parallel;
+}
+
+inline vec3 Min(const vec3 &a, const vec3 &b)
+{
+    vec3 result;
+    result.x = a.x < b.x ? a.x : b.x;
+    result.y = a.y < b.y ? a.y : b.y;
+    result.z = a.z < b.z ? a.z : b.z;
+    return result;
+}
+
+inline vec3 Max(const vec3 &a, const vec3 &b)
+{
+    vec3 result;
+    result.x = a.x > b.x ? a.x : b.x;
+    result.y = a.y > b.y ? a.y : b.y;
+    result.z = a.z > b.z ? a.z : b.z;
+    return result;
 }
 
 //////////////////////////////
@@ -406,10 +436,38 @@ struct LaneF32
     __m128 v;
 };
 
+struct LaneVec3
+{
+    LaneF32 x;
+    LaneF32 y;
+    LaneF32 z;
+};
+
+inline LaneF32 Load(f32 *val)
+{
+    LaneF32 result;
+    result.v = _mm_load_ps(val);
+    return result;
+}
+
 inline LaneF32 operator+(LaneF32 a, LaneF32 b)
 {
     LaneF32 result;
     result.v = _mm_add_ps(a.v, b.v);
+    return result;
+}
+
+inline LaneF32 operator-(LaneF32 a, LaneF32 b)
+{
+    LaneF32 result;
+    result.v = _mm_sub_ps(a.v, b.v);
+    return result;
+}
+
+inline LaneF32 operator*(LaneF32 a, LaneF32 b)
+{
+    LaneF32 result;
+    result.v = _mm_mul_ps(a.v, b.v);
     return result;
 }
 
@@ -420,10 +478,24 @@ inline LaneF32 LaneF32FromF32(f32 repl)
     return result;
 }
 
+inline LaneU32 LaneU32FromU32(u32 repl)
+{
+    LaneU32 result;
+    result.v = _mm_set1_epi32(repl);
+    return result;
+}
+
 inline LaneU32 CastLaneU32FromLaneF32(LaneF32 lane)
 {
     LaneU32 result;
     result.v = _mm_castps_si128(lane.v);
+    return result;
+}
+
+inline LaneF32 CastLaneF32FromLaneU32(const LaneU32 &lane)
+{
+    LaneF32 result;
+    result.v = _mm_castsi128_ps(lane.v);
     return result;
 }
 
@@ -432,3 +504,215 @@ inline u32 RoundFloatToU32(f32 a)
     u32 result = (u32)(a + 0.5f);
     return result;
 }
+
+inline LaneVec3 LaneV3FromV3(const vec3 &v3)
+{
+    LaneVec3 result;
+    result.x = LaneF32FromF32(v3.x);
+    result.y = LaneF32FromF32(v3.y);
+    result.z = LaneF32FromF32(v3.z);
+    return result;
+}
+
+inline LaneF32 operator<(const LaneF32 &a, const LaneF32 &b)
+{
+    LaneF32 result;
+    result.v = _mm_cmplt_ps(a.v, b.v);
+    return result;
+}
+
+inline LaneF32 operator>(const LaneF32 &a, const LaneF32 &b)
+{
+    LaneF32 result;
+    result.v = _mm_cmpgt_ps(a.v, b.v);
+    return result;
+}
+
+inline LaneF32 operator&(const LaneF32 &a, const LaneF32 &b)
+{
+    LaneF32 result;
+    result.v = _mm_and_ps(a.v, b.v);
+    return result;
+}
+
+inline LaneF32 operator|(const LaneF32 &a, const LaneF32 &b)
+{
+    LaneF32 result;
+    result.v = _mm_or_ps(a.v, b.v);
+    return result;
+}
+
+inline LaneF32 AndNot(const LaneF32 &a, const LaneF32 &b)
+{
+    LaneF32 result;
+    result.v = _mm_andnot_ps(a.v, b.v);
+    return result;
+}
+
+inline void ConditionalAssign(LaneF32 &dest, const LaneF32 &src, const LaneF32 &mask)
+{
+    dest.v = _mm_or_ps(_mm_andnot_ps(mask.v, dest.v), _mm_and_ps(mask.v, src.v));
+}
+
+inline bool MaskIsZeroed(const LaneF32 &a)
+{
+    i32 result = _mm_movemask_ps(a.v);
+    return result == 0;
+}
+
+inline i32 FlattenMask(const LaneF32 &a)
+{
+    i32 result = _mm_movemask_ps(a.v);
+    return result;
+}
+
+//////////////////////////////
+// Ray
+//
+struct Ray
+{
+    Ray() {}
+    Ray(const vec3 &origin, const vec3 &direction) : o(origin), d(direction), t(0) {}
+    Ray(const vec3 &origin, const vec3 &direction, const f32 time) : o(origin), d(direction), t(time) {}
+
+    const vec3 &origin() const { return o; }
+    const vec3 &direction() const { return d; }
+    const f32 &time() const { return t; }
+
+    vec3 at(f32 time) const
+    {
+        return o + time * d;
+    }
+
+    vec3 o;
+    vec3 d;
+    f32 t;
+};
+
+//////////////////////////////
+// AABB
+//
+union AABB
+{
+    struct
+    {
+        vec3 minP;
+        vec3 maxP;
+    };
+    struct
+    {
+        f32 minX;
+        f32 minY;
+        f32 minZ;
+        f32 maxX;
+        f32 maxY;
+        f32 maxZ;
+    };
+
+    AABB();
+    AABB(vec3 pt1, vec3 pt2);
+    AABB(AABB box1, AABB box2);
+
+    bool Hit(const Ray &r, f32 tMin, f32 tMax);
+    inline vec3 Center() const
+    {
+        return (maxP + minP) * 0.5f;
+    }
+    inline vec3 Centroid() const
+    {
+        return Center();
+    }
+    inline vec3 GetHalfExtent()
+    {
+        return (maxP - minP) * 0.5f;
+    }
+
+    inline vec3 Offset(const vec3 &p) const
+    {
+        vec3 o = p - minP;
+        if (maxX > minX)
+            o.x /= (maxX - minX);
+        if (maxY > minY)
+            o.y /= (maxY - minY);
+        if (maxZ > minZ)
+            o.z /= (maxZ - minZ);
+        return o;
+    }
+
+    inline void Expand(f32 delta)
+    {
+        vec3 pad = vec3(delta / 2, delta / 2, delta / 2);
+        minP -= pad;
+        maxP += pad;
+    }
+
+    inline void PadToMinimums()
+    {
+        f32 delta        = 0.0001f;
+        f32 deltaOverTwo = delta / 2;
+        if (maxX - minX < delta)
+        {
+            minX -= deltaOverTwo;
+            maxX += deltaOverTwo;
+        }
+        if (maxY - minY < delta)
+        {
+            minY -= deltaOverTwo;
+            maxY += deltaOverTwo;
+        }
+        if (maxZ - minZ < delta)
+        {
+            minZ -= deltaOverTwo;
+            maxZ += deltaOverTwo;
+        }
+    }
+    vec3 Diagonal() const
+    {
+        return maxP - minP;
+    }
+    f32 SurfaceArea() const
+    {
+        vec3 d = Diagonal();
+        return 2 * (d.x * d.y + d.x * d.z + d.y * d.z);
+    }
+
+    i32 MaxDimension() const
+    {
+        vec3 d = Diagonal();
+        if (d.x > d.y && d.x > d.z)
+            return 0;
+        else if (d.y > d.z)
+            return 1;
+        return 2;
+    }
+};
+
+inline AABB Union(const AABB &box1, const AABB &box2)
+{
+    AABB result;
+    result.minP = Min(box1.minP, box2.minP);
+    result.maxP = Max(box1.minP, box2.minP);
+    return result;
+}
+
+inline AABB Union(const AABB &box1, const vec3 &p)
+{
+    AABB result;
+    result.minP = Min(box1.minP, p);
+    result.maxP = Max(box1.maxP, p);
+    return result;
+}
+
+inline vec3 Min(const AABB &box1, const AABB &box2)
+{
+    vec3 result = Min(box1.minP, box2.minP);
+    return result;
+}
+
+inline vec3 Max(const AABB &box1, const AABB &box2)
+{
+    vec3 result = Max(box1.maxP, box2.maxP);
+    return result;
+}
+
+#endif

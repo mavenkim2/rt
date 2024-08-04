@@ -1,14 +1,44 @@
+#ifndef RT_H
+#define RT_H
+
 #include "base.h"
+#include "template.h"
 #include "math.h"
 
 #define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
+#include "third_party/stb_image.h"
+
+#define CORNELL 1
+#define EMISSIVE
+
+using std::sqrt;
+
+const f32 infinity = std::numeric_limits<f32>::infinity();
+#define PI     3.1415926535897932385f
+#define U32Max 0xffffffff
+const vec3 INVALID_VEC = vec3((f32)U32Max, (f32)U32Max, (f32)U32Max);
 
 template <typename T>
 T Clamp(T min, T max, T x)
 {
     return x < min ? min : (x > max ? max : x);
 }
+
+struct HitRecord
+{
+    vec3 normal;
+    vec3 p;
+    f32 t;
+    f32 u, v;
+    bool isFrontFace;
+    struct Material *material;
+
+    inline void SetNormal(const Ray &r, const vec3 &inNormal)
+    {
+        isFrontFace = dot(r.direction(), inNormal) < 0;
+        normal      = isFrontFace ? inNormal : -inNormal;
+    }
+};
 
 struct Image
 {
@@ -114,7 +144,7 @@ struct WorkItem
 
 struct RenderParams
 {
-    BVH *bvh;
+    struct CompressedBVH *bvh;
     Image *image;
     Light *lights;
     vec3 cameraCenter;
@@ -168,4 +198,6 @@ inline u32 GetCPUCoreCount()
     u32 result = info.dwNumberOfProcessors;
     return result;
 }
+#endif
+
 #endif
