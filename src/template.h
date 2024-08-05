@@ -64,6 +64,15 @@ struct TaggedPointer
         void *ptr = reinterpret_cast<void *>(bits & ptrMask);
         return ptr;
     }
+    static constexpr inline u32 MaxTag()
+    {
+        return sizeof...(Ts);
+    }
+    template <typename T>
+    T *Cast()
+    {
+        return reinterpret_cast<T *>(GetPtr());
+    }
 };
 
 #endif

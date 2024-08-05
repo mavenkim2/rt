@@ -1,8 +1,10 @@
 #include "rt.h"
+#include "hash.h"
 #include "random.h"
 #include "scene.h"
 #include "bvh.h"
-#include "primitive.h"
+#include "base_types.h"
+#include "sampler.h"
 #include "parallel.h"
 #include <algorithm>
 
@@ -706,6 +708,10 @@ bool CompareByX(const Sample &a, const Sample &b)
 
 int main(int argc, char *argv[])
 {
+    IndependentSampler sampler(1024, 5);
+
+    Sampler test = &sampler;
+    printf("%d", test.SamplesPerPixel());
 #if 0
     const u32 n = 1;
     f32 sum     = 0.f;
@@ -717,7 +723,7 @@ int main(int argc, char *argv[])
     printf("I = %f\n", sum / n);
 #endif
 
-#if 1
+#if 0
 #if SPHERES
     const f32 aspectRatio     = 16.f / 9.f;
     const vec3 lookFrom       = vec3(13, 2, 3);

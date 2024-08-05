@@ -10,6 +10,99 @@ inline u16 SafeTruncateU32(u32 val)
     return result;
 }
 
+union vec2
+{
+    f32 e[2];
+    struct
+    {
+        f32 x, y;
+    };
+    struct
+    {
+        f32 r, g;
+    };
+    vec2() : e{0, 0} {}
+    vec2(f32 e0, f32 e1) : e{e0, e1} {}
+    vec2 operator-() const { return vec2(-e[0], -e[1]); }
+    f32 operator[](int i) const { return e[i]; }
+    f32 &operator[](int i) { return e[i]; }
+
+    vec2 &operator+=(const vec2 &v)
+    {
+        e[0] += v.e[0];
+        e[1] += v.e[1];
+        return *this;
+    }
+    vec2 &operator-=(const vec2 &v)
+    {
+        e[0] -= v.e[0];
+        e[1] -= v.e[1];
+        return *this;
+    }
+    vec2 &operator*=(f32 t)
+    {
+        e[0] *= t;
+        e[1] *= t;
+        return *this;
+    }
+
+    vec2 &operator/=(f32 t)
+    {
+        return *this *= 1 / t;
+    }
+
+    f32 length() const
+    {
+        return sqrt(lengthSquared());
+    }
+
+    f32 lengthSquared() const
+    {
+        return e[0] * e[0] + e[1] * e[1] + e[2] * e[2];
+    }
+};
+
+union vec2i
+{
+    i32 e[2];
+    struct
+    {
+        i32 x, y;
+    };
+    struct
+    {
+        i32 r, g;
+    };
+    vec2i() : e{0, 0} {}
+    vec2i(i32 e0, i32 e1) : e{e0, e1} {}
+    vec2i operator-() const { return vec2i(-e[0], -e[1]); }
+    i32 operator[](int i) const { return e[i]; }
+    i32 &operator[](int i) { return e[i]; }
+
+    vec2i &operator+=(const vec2i &v)
+    {
+        e[0] += v.e[0];
+        e[1] += v.e[1];
+        return *this;
+    }
+    vec2i &operator-=(const vec2i &v)
+    {
+        e[0] -= v.e[0];
+        e[1] -= v.e[1];
+        return *this;
+    }
+    vec2i &operator*=(i32 t)
+    {
+        e[0] *= t;
+        e[1] *= t;
+        return *this;
+    }
+    vec2i &operator/=(i32 t)
+    {
+        return *this *= 1 / t;
+    }
+};
+
 union vec3
 {
     f32 e[3];
@@ -20,6 +113,16 @@ union vec3
     struct
     {
         f32 r, g, b;
+    };
+    struct
+    {
+        vec2 xy;
+        f32 z;
+    };
+    struct
+    {
+        f32 x;
+        vec2 yz;
     };
 
     vec3() : e{0, 0, 0} {}
@@ -130,6 +233,146 @@ union vec4
         return e[0] * e[0] + e[1] * e[1] + e[2] * e[2] + e[3] * e[3];
     }
 };
+
+//////////////////////////////
+// Vec2
+//
+inline vec2 operator+(const vec2 &u, const vec2 &v)
+{
+    return vec2(u[0] + v[0], u[1] + v[1]);
+}
+
+inline vec2 operator-(const vec2 &u, const vec2 &v)
+{
+    return vec2(u[0] - v[0], u[1] - v[1]);
+}
+
+inline vec2 operator*(const vec2 &u, const vec2 &v)
+{
+    return vec2(u[0] * v[0], u[1] * v[1]);
+}
+
+inline vec2 operator*(const vec2 &u, f32 d)
+{
+    return vec2(u[0] * d, u[1] * d);
+}
+
+inline vec2 operator*(f32 d, const vec2 &v)
+{
+    return v * d;
+}
+
+inline vec2 operator/(const vec2 &v, f32 d)
+{
+    return (1 / d) * v;
+}
+
+inline f32 dot(const vec2 &u, const vec2 &v)
+{
+    return u[0] * v[0] + u[1] * v[1];
+}
+
+inline vec2 normalize(const vec2 &v)
+{
+    return v / v.length();
+}
+
+inline bool NearZero(const vec2 &v)
+{
+    f32 s = 1e-8f;
+    return ((std::fabs(v.x) < s) && (std::fabs(v.y) < s));
+}
+
+inline vec2 Min(const vec2 &a, const vec2 &b)
+{
+    vec2 result;
+    result.x = a.x < b.x ? a.x : b.x;
+    result.y = a.y < b.y ? a.y : b.y;
+    return result;
+}
+
+inline vec2 Max(const vec2 &a, const vec2 &b)
+{
+    vec2 result;
+    result.x = a.x > b.x ? a.x : b.x;
+    result.y = a.y > b.y ? a.y : b.y;
+    return result;
+}
+
+//////////////////////////////
+// Vec2i
+//
+inline vec2i operator+(const vec2i &u, const vec2i &v)
+{
+    return vec2i(u[0] + v[0], u[1] + v[1]);
+}
+
+inline vec2i operator-(const vec2i &u, const vec2i &v)
+{
+    return vec2i(u[0] - v[0], u[1] - v[1]);
+}
+
+inline vec2i operator*(const vec2i &u, const vec2i &v)
+{
+    return vec2i(u[0] * v[0], u[1] * v[1]);
+}
+
+inline vec2i operator*(const vec2i &u, i32 d)
+{
+    return vec2i(u[0] * d, u[1] * d);
+}
+
+inline vec2i operator*(i32 d, const vec2i &v)
+{
+    return v * d;
+}
+
+inline vec2i operator/(const vec2i &v, i32 d)
+{
+    return (1 / d) * v;
+}
+
+inline vec2 operator*(const vec2i &u, f32 d)
+{
+    return vec2(u[0] * d, u[1] * d);
+}
+
+inline vec2 operator*(f32 d, const vec2i &v)
+{
+    return v * d;
+}
+
+inline vec2 operator/(const vec2i &v, f32 d)
+{
+    return (1 / d) * v;
+}
+
+inline i32 dot(const vec2i &u, const vec2i &v)
+{
+    return u[0] * v[0] + u[1] * v[1];
+}
+
+inline bool NearZero(const vec2i &v)
+{
+    f32 s = 1e-8f;
+    return ((std::fabs(v.x) < s) && (std::fabs(v.y) < s));
+}
+
+inline vec2i Min(const vec2i &a, const vec2i &b)
+{
+    vec2i result;
+    result.x = a.x < b.x ? a.x : b.x;
+    result.y = a.y < b.y ? a.y : b.y;
+    return result;
+}
+
+inline vec2i Max(const vec2i &a, const vec2i &b)
+{
+    vec2i result;
+    result.x = a.x > b.x ? a.x : b.x;
+    result.y = a.y > b.y ? a.y : b.y;
+    return result;
+}
 //////////////////////////////
 // Vec3
 //
