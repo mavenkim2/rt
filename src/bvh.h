@@ -33,6 +33,18 @@ struct UncompressedBVHNode
     LaneVec3 minP;
     LaneVec3 maxP;
 
+    union
+    {
+        // Internal nodes
+        u32 child[4];
+        // Offset into primitive array
+        u32 offset[4];
+    };
+    // Number of primitives
+    u16 count[4];
+    u32 leafMask : 4;
+    u32 numChildren : 4;
+
     i32 IntersectP(const Ray &r, const f32 tMinHit, const f32 tMaxHit) const
     {
         LaneVec3 rayOrigin = LaneV3FromV3(r.o);
@@ -76,10 +88,18 @@ struct UncompressedBVHNode
 
             LaneF32 intersectionTest = testMinT > testMaxT;
             result                   = AndNot(intersectionTest, result);
+
+            if (MaskIsZeroed(result))
+                return 0;
         }
 
         i32 outcome = FlattenMask(result);
         return outcome;
+    }
+    inline b8 IsLeaf(i32 index)
+    {
+        b8 result = leafMask & (1 << index);
+        return result;
     }
 };
 
@@ -238,7 +258,16 @@ void Compress(CompressedBVHNode *node, const AABB &child1, const AABB &child2, c
     node->scaleZ = u8(FloatToBits(powZ) >> 23);
 }
 
-struct CompressedBVH
+struct BVH4
+{
+    struct Scene *scene;
+    UncompressedBVHNode *nodes;
+    u32 *leafIndices;
+    u32 nodeCount;
+    bool Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const;
+};
+
+struct CompressedBVH4
 {
     struct Scene *scene;
     CompressedBVHNode *nodes;
@@ -246,5 +275,9 @@ struct CompressedBVH
     u32 nodeCount;
     bool Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const;
 };
+
+inline bool BVHHit(void *ptr, const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record);
+inline bool BVH4Hit(void *ptr, const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record);
+inline bool CompressedBVH4Hit(void *ptr, const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record);
 
 #endif

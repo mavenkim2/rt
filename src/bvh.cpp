@@ -156,55 +156,156 @@ inline void BVH::UpdateNodeBounds(u32 nodeIndex, AABB *aabbs)
     }
 }
 
-bool BVH::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const
+//////////////////////////////
+// BVH4
+//
+BVH4 CreateBVH4(BVH *bvh)
 {
-    u32 stack[64];
-    u32 stackPtr      = 0;
-    stack[stackPtr++] = 0;
-    f32 closest       = tMax;
-    bool hit          = false;
-    HitRecord temp;
+    // Convert BVH-2 to BVH-4 by skipping every other level
+    u32 bvh4NodeCount = (bvh->nodeCount + 3) / 4;
+    BVH4 bvh4;
+    bvh4.scene       = bvh->scene;
+    bvh4.nodes       = (UncompressedBVHNode *)malloc(sizeof(UncompressedBVHNode) * bvh4NodeCount);
+    bvh4.nodeCount   = bvh->nodeCount;
+    bvh4.leafIndices = std::move(bvh->leafIndices);
 
-    while (stackPtr > 0)
+    u32 stack[64];
+    stack[0]                         = 0;
+    i32 stackCount                   = 1;
+    u32 runningBVH4NodeCount         = 1;
+    bvh->nodes[0].compressedBVHIndex = 0;
+
+    const AABB emptyAABB;
+
+    while (stackCount > 0)
     {
-        assert(stackPtr < 64);
-        const u32 nodeIndex = stack[--stackPtr];
-        Node &node          = nodes[nodeIndex];
-        if (!node.aabb.Hit(r, 0, infinity))
-            continue;
-        if (node.IsLeaf())
+        assert(runningBVH4NodeCount < bvh4NodeCount);
+        u32 top          = stack[--stackCount];
+        BVH::Node *node  = &bvh->nodes[top];
+        BVH::Node *left  = &bvh->nodes[node->left];
+        BVH::Node *right = &bvh->nodes[node->left + 1];
+
+        i32 grandChildrenIndices[] = {
+            -1,
+            -1,
+            -1,
+            -1,
+        };
+
+        u32 childrenCount = 0;
+        if (left->IsLeaf())
         {
-            for (u32 i = 0; i < node.count; i++)
-            {
-                if (scene->Hit(r, tMin, tMax, temp, leafIndices[node.offset + i]))
-                {
-                    if (temp.t < closest)
-                    {
-                        closest = temp.t;
-                        record  = temp;
-                        hit     = true;
-                    }
-                }
-            }
+            grandChildrenIndices[childrenCount++] = node->left;
         }
         else
         {
-            stack[stackPtr++] = node.left;
-            stack[stackPtr++] = node.left + 1;
+            grandChildrenIndices[childrenCount++] = left->left;
+            grandChildrenIndices[childrenCount++] = left->left + 1;
         }
+
+        if (right->IsLeaf())
+        {
+            grandChildrenIndices[childrenCount++] = node->left + 1;
+        }
+        else
+        {
+            grandChildrenIndices[childrenCount++] = right->left;
+            grandChildrenIndices[childrenCount++] = right->left + 1;
+        }
+
+        BVH::Node *grandChildren[4] = {
+            grandChildrenIndices[0] != -1 ? &bvh->nodes[grandChildrenIndices[0]] : 0,
+            grandChildrenIndices[1] != -1 ? &bvh->nodes[grandChildrenIndices[1]] : 0,
+            grandChildrenIndices[2] != -1 ? &bvh->nodes[grandChildrenIndices[2]] : 0,
+            grandChildrenIndices[3] != -1 ? &bvh->nodes[grandChildrenIndices[3]] : 0,
+        };
+
+        UncompressedBVHNode *currentNode = &bvh4.nodes[node->compressedBVHIndex];
+        currentNode->leafMask            = 0;
+        currentNode->numChildren         = childrenCount;
+
+        for (u32 i = 0; i < ArrayLength(grandChildren); i++)
+        {
+            BVH::Node *grandChild = grandChildren[i];
+            assert(grandChild != &bvh->nodes[0]);
+            if (!grandChild) continue;
+
+            b8 isLeaf = grandChild->IsLeaf();
+            if (!isLeaf)
+            {
+                stack[stackCount++]            = grandChildrenIndices[i];
+                currentNode->child[i]          = runningBVH4NodeCount;
+                grandChild->compressedBVHIndex = runningBVH4NodeCount++;
+            }
+            else
+            {
+                currentNode->offset[i] = grandChild->offset;
+                currentNode->count[i]  = SafeTruncateU32(grandChild->count);
+            }
+            currentNode->leafMask |= (isLeaf << i);
+        }
+
+        f32 minX[4] = {
+            grandChildren[0] ? grandChildren[0]->aabb.minX : emptyAABB.minX,
+            grandChildren[1] ? grandChildren[1]->aabb.minX : emptyAABB.minX,
+            grandChildren[2] ? grandChildren[2]->aabb.minX : emptyAABB.minX,
+            grandChildren[3] ? grandChildren[3]->aabb.minX : emptyAABB.minX,
+        };
+        currentNode->minP.x = Load(minX);
+
+        f32 minY[4] = {
+            grandChildren[0] ? grandChildren[0]->aabb.minY : emptyAABB.minY,
+            grandChildren[1] ? grandChildren[1]->aabb.minY : emptyAABB.minY,
+            grandChildren[2] ? grandChildren[2]->aabb.minY : emptyAABB.minY,
+            grandChildren[3] ? grandChildren[3]->aabb.minY : emptyAABB.minY,
+        };
+        currentNode->minP.y = Load(minY);
+
+        f32 minZ[4] = {
+            grandChildren[0] ? grandChildren[0]->aabb.minZ : emptyAABB.minZ,
+            grandChildren[1] ? grandChildren[1]->aabb.minZ : emptyAABB.minZ,
+            grandChildren[2] ? grandChildren[2]->aabb.minZ : emptyAABB.minZ,
+            grandChildren[3] ? grandChildren[3]->aabb.minZ : emptyAABB.minZ,
+        };
+        currentNode->minP.z = Load(minZ);
+
+        f32 maxX[4] = {
+            grandChildren[0] ? grandChildren[0]->aabb.maxX : emptyAABB.maxX,
+            grandChildren[1] ? grandChildren[1]->aabb.maxX : emptyAABB.maxX,
+            grandChildren[2] ? grandChildren[2]->aabb.maxX : emptyAABB.maxX,
+            grandChildren[3] ? grandChildren[3]->aabb.maxX : emptyAABB.maxX,
+        };
+        currentNode->maxP.x = Load(maxX);
+
+        f32 maxY[4] = {
+            grandChildren[0] ? grandChildren[0]->aabb.maxY : emptyAABB.maxY,
+            grandChildren[1] ? grandChildren[1]->aabb.maxY : emptyAABB.maxY,
+            grandChildren[2] ? grandChildren[2]->aabb.maxY : emptyAABB.maxY,
+            grandChildren[3] ? grandChildren[3]->aabb.maxY : emptyAABB.maxY,
+        };
+        currentNode->maxP.y = Load(maxY);
+
+        f32 maxZ[4] = {
+            grandChildren[0] ? grandChildren[0]->aabb.maxZ : emptyAABB.maxZ,
+            grandChildren[1] ? grandChildren[1]->aabb.maxZ : emptyAABB.maxZ,
+            grandChildren[2] ? grandChildren[2]->aabb.maxZ : emptyAABB.maxZ,
+            grandChildren[3] ? grandChildren[3]->aabb.maxZ : emptyAABB.maxZ,
+        };
+        currentNode->maxP.z = Load(maxZ);
     }
-    return hit;
+    return bvh4;
 }
 
 //////////////////////////////
 // Compressed
 //
-CompressedBVH CompressBVH(BVH *bvh)
+CompressedBVH4 CreateCompressedBVH4(BVH *bvh)
 {
     // Convert BVH-2 to BVH-4 by skipping every other level
-    CompressedBVH compressedBVH;
+    u32 compressedNodeCount = (bvh->nodeCount + 3) / 4;
+    CompressedBVH4 compressedBVH;
     compressedBVH.scene       = bvh->scene;
-    compressedBVH.nodes       = (CompressedBVHNode *)malloc(sizeof(CompressedBVHNode) * (bvh->nodeCount + 3) / 4);
+    compressedBVH.nodes       = (CompressedBVHNode *)malloc(sizeof(CompressedBVHNode) * compressedNodeCount);
     compressedBVH.nodeCount   = bvh->nodeCount;
     compressedBVH.leafIndices = std::move(bvh->leafIndices);
 
@@ -218,6 +319,7 @@ CompressedBVH CompressBVH(BVH *bvh)
 
     while (stackCount > 0)
     {
+        assert(runningCompressedNodeCount < compressedNodeCount);
         u32 top          = stack[--stackCount];
         BVH::Node *node  = &bvh->nodes[top];
         BVH::Node *left  = &bvh->nodes[node->left];
@@ -271,7 +373,7 @@ CompressedBVH CompressBVH(BVH *bvh)
             b8 isLeaf = grandChild->IsLeaf();
             if (!isLeaf)
             {
-                stack[stackCount++] = grandChildrenIndices[i];
+                stack[stackCount++]             = grandChildrenIndices[i];
                 currentCompressedNode->child[i] = runningCompressedNodeCount;
                 grandChild->compressedBVHIndex  = runningCompressedNodeCount++;
             }
@@ -292,7 +394,100 @@ CompressedBVH CompressBVH(BVH *bvh)
     return compressedBVH;
 }
 
-bool CompressedBVH::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const
+//////////////////////////////
+// Intersection Tests
+//
+bool BVH::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const
+{
+    u32 stack[64];
+    u32 stackPtr      = 0;
+    stack[stackPtr++] = 0;
+    f32 closest       = tMax;
+    bool hit          = false;
+    HitRecord temp;
+
+    while (stackPtr > 0)
+    {
+        assert(stackPtr < 64);
+        const u32 nodeIndex = stack[--stackPtr];
+        Node &node          = nodes[nodeIndex];
+        // statistics.rayAABBTests.fetch_add(1);
+        if (!node.aabb.Hit(r, 0, infinity))
+            continue;
+        if (node.IsLeaf())
+        {
+            for (u32 i = 0; i < node.count; i++)
+            {
+                // statistics.rayPrimitiveTests.fetch_add(1);
+                if (scene->Hit(r, tMin, tMax, temp, leafIndices[node.offset + i]))
+                {
+                    if (temp.t < closest)
+                    {
+                        closest = temp.t;
+                        record  = temp;
+                        hit     = true;
+                    }
+                }
+            }
+        }
+        else
+        {
+            stack[stackPtr++] = node.left;
+            stack[stackPtr++] = node.left + 1;
+        }
+    }
+    return hit;
+}
+
+bool BVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const
+{
+    u32 stack[64];
+    u32 stackPtr      = 0;
+    stack[stackPtr++] = 0;
+    f32 closest       = tMax;
+    bool hit          = false;
+    HitRecord temp;
+
+    while (stackPtr > 0)
+    {
+        assert(stackPtr < 64);
+        const u32 nodeIndex       = stack[--stackPtr];
+        UncompressedBVHNode &node = nodes[nodeIndex];
+
+        i32 result = node.IntersectP(r, 0, infinity);
+        // statistics.rayAABBTests.fetch_add(4);
+        if (!result)
+            continue;
+
+        for (u32 childIndex = 0; childIndex < node.numChildren; childIndex++)
+        {
+            if (!(result & (1 << childIndex))) continue;
+            if (node.IsLeaf(childIndex))
+            {
+                for (u32 i = 0; i < node.count[childIndex]; i++)
+                {
+                    // statistics.rayPrimitiveTests.fetch_add(1);
+                    if (scene->Hit(r, tMin, tMax, temp, leafIndices[node.offset[childIndex] + i]))
+                    {
+                        if (temp.t < closest)
+                        {
+                            closest = temp.t;
+                            record  = temp;
+                            hit     = true;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                stack[stackPtr++] = node.child[childIndex];
+            }
+        }
+    }
+    return hit;
+}
+
+bool CompressedBVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const
 {
     u32 stack[64];
     u32 stackPtr      = 0;
@@ -308,8 +503,7 @@ bool CompressedBVH::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord 
         CompressedBVHNode &node = nodes[nodeIndex];
 
         UncompressedBVHNode uncompressedNode = node.Decompress();
-
-        i32 result = uncompressedNode.IntersectP(r, 0, infinity);
+        i32 result                           = uncompressedNode.IntersectP(r, 0, infinity);
         if (!result)
             continue;
 
@@ -337,4 +531,21 @@ bool CompressedBVH::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord 
         }
     }
     return hit;
+}
+
+inline bool BVHHit(void *ptr, const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record)
+{
+    BVH *bvh = (BVH *)ptr;
+    return bvh->Hit(r, tMin, tMax, record);
+}
+
+inline bool BVH4Hit(void *ptr, const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record)
+{
+    BVH4 *bvh = (BVH4 *)ptr;
+    return bvh->Hit(r, tMin, tMax, record);
+}
+inline bool CompressedBVH4Hit(void *ptr, const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record)
+{
+    CompressedBVH4 *bvh = (CompressedBVH4 *)ptr;
+    return bvh->Hit(r, tMin, tMax, record);
 }

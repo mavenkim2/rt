@@ -2,6 +2,8 @@
 #include "random.h"
 #include "scene.h"
 #include "bvh.h"
+#include "primitive.h"
+#include "parallel.h"
 #include <algorithm>
 
 #include "math.cpp"
@@ -573,7 +575,7 @@ vec3 RayColor(const Ray &r, const int depth, const BVH &bvh)
     return (1 - t) * vec3(1, 1, 1) + t * vec3(0.5f, 0.7f, 1.f);
 }
 #else
-vec3 RayColor(const Ray &r, const int depth, const CompressedBVH &bvh, const Light *lights, const u32 numLights)
+vec3 RayColor(const Ray &r, const int depth, const Primitive &bvh, const Light *lights, const u32 numLights)
 {
     if (depth <= 0)
         return vec3(0, 0, 0);
@@ -664,7 +666,7 @@ bool RenderTile(WorkQueue *queue)
                     const f32 rayTime       = RandomFloat();
                     Ray r(rayOrigin, rayDirection, rayTime);
 
-                    pixelColor += RayColor(r, queue->params->maxDepth, *queue->params->bvh,
+                    pixelColor += RayColor(r, queue->params->maxDepth, queue->params->bvh,
                                            queue->params->lights, queue->params->numLights);
                 }
             }
@@ -704,9 +706,6 @@ bool CompareByX(const Sample &a, const Sample &b)
 
 int main(int argc, char *argv[])
 {
-    // using test = TypePack<i32, f32, f64>;
-    // i32 index  = IndexOf<f32, test>::count;
-    // printf("%d", index);
 #if 0
     const u32 n = 1;
     f32 sum     = 0.f;
@@ -1127,10 +1126,14 @@ int main(int argc, char *argv[])
 
 #endif
 
+    statistics.rayAABBTests      = 0;
+    statistics.rayPrimitiveTests = 0;
+
     BVH bvh;
     bvh.Build(&scene, 2);
 
-    CompressedBVH compressedBVH = CompressBVH(&bvh);
+    // CompressedBVH4 compressedBVH = CreateCompressedBVH4(&bvh);
+    BVH4 bvh4 = CreateBVH4(&bvh);
 
     RenderParams params;
     params.pixel00                   = pixel00;
@@ -1140,7 +1143,7 @@ int main(int argc, char *argv[])
     params.defocusDiskU              = defocusDiskU;
     params.defocusDiskV              = defocusDiskV;
     params.defocusAngle              = defocusAngle;
-    params.bvh                       = &compressedBVH;
+    params.bvh                       = &bvh4; 
     params.maxDepth                  = maxDepth;
     params.samplesPerPixel           = samplesPerPixel;
     params.squareRootSamplesPerPixel = squareRootSamplesPerPixel;
@@ -1200,6 +1203,8 @@ int main(int argc, char *argv[])
     fprintf(stderr, "\n");
     printf("Total time: %dms\n", end - start);
     WriteImage(&image, "image.bmp");
+    // printf("Total ray AABB tests: %lld\n", statistics.rayAABBTests.load());
+    // printf("Total ray primitive tests: %lld\n", statistics.rayPrimitiveTests.load());
     fprintf(stderr, "Done.");
 #endif
 }
