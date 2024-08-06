@@ -35,8 +35,11 @@ struct Primitive : TaggedPointer<BVH, BVH4, CompressedBVH4>
 //
 struct IndependentSampler;
 struct StratifiedSampler;
+struct SobolSampler;
+struct PaddedSobolSampler;
+struct ZSobolSampler;
 
-using SamplerTaggedPointer = TaggedPointer<IndependentSampler, StratifiedSampler>;
+using SamplerTaggedPointer = TaggedPointer<IndependentSampler, StratifiedSampler, SobolSampler, PaddedSobolSampler, ZSobolSampler>;
 
 struct SamplerMethods
 {
@@ -74,15 +77,15 @@ struct Sampler : SamplerTaggedPointer
     }
     inline vec2 Get2D()
     {
-        void *ptr  = GetPtr();
-        u32 tag    = GetTag();
+        void *ptr   = GetPtr();
+        u32 tag     = GetTag();
         vec2 result = samplerMethods[tag].Get2D(ptr);
         return result;
     }
     inline vec2 GetPixel2D()
     {
-        void *ptr  = GetPtr();
-        u32 tag    = GetTag();
+        void *ptr   = GetPtr();
+        u32 tag     = GetTag();
         vec2 result = samplerMethods[tag].GetPixel2D(ptr);
         return result;
     }
@@ -125,5 +128,8 @@ const i32 SamplerCRTP<T>::samplerID = SamplerCRTP<T>::Register();
 
 template struct SamplerCRTP<IndependentSampler>;
 template struct SamplerCRTP<StratifiedSampler>;
+template struct SamplerCRTP<SobolSampler>;
+template struct SamplerCRTP<PaddedSobolSampler>;
+template struct SamplerCRTP<ZSobolSampler>;
 
 #endif

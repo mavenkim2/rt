@@ -25,3 +25,14 @@ typedef i32 b32;
 #define SSE42
 
 #define ArrayLength(array) sizeof(array) / sizeof(array[0])
+#define kilobytes(value)   ((value)*1024LL)
+#define megabytes(value)   (kilobytes(value) * 1024LL)
+#define gigabytes(value)   (megabytes(value) * 1024LL)
+#define terabytes(value)   (gigabytes(value) * 1024LL)
+
+#define MemoryCopy            memcpy
+#define MemorySet             memset
+#define MemoryZero(ptr, size) MemorySet((ptr), 0, (size))
+#define AlignPow2(x, b)       (((x) + (b)-1) & (~((b)-1)))
+
+#define IsPow2(x) (((x) & ((x) - 1)) == 0)

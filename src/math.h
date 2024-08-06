@@ -3,11 +3,82 @@
 
 #include <xmmintrin.h>
 
+template <typename T>
+T Clamp(T min, T max, T x)
+{
+    return x < min ? min : (x > max ? max : x);
+}
+
+template <typename T>
+T Min(T a, T b)
+{
+    return a < b ? a : b;
+}
+
+template <typename T>
+T Max(T a, T b)
+{
+    return a > b ? a : b;
+}
+
+inline int Log2Int(u64 v)
+{
+#if _WIN32
+    unsigned long lz = 0;
+    BitScanReverse64(&lz, v);
+    return lz;
+#else
+#error
+#endif
+}
+
+//////////////////////////////
+// Morton
+//
+
+// https://fgiesen.wordpress.com/2009/12/13/decoding-morton-codes/
+inline u64 LeftShift2(u64 x)
+{
+    x &= 0xffffffff;
+    x = (x ^ (x << 16)) & 0x0000ffff0000ffff;
+    x = (x ^ (x << 8)) & 0x00ff00ff00ff00ff;
+    x = (x ^ (x << 4)) & 0x0f0f0f0f0f0f0f0f;
+    x = (x ^ (x << 2)) & 0x3333333333333333;
+    x = (x ^ (x << 1)) & 0x5555555555555555;
+    return x;
+}
+
+inline u64 EncodeMorton2(u32 x, u32 y)
+{
+    return (LeftShift2(y) << 1) | LeftShift2(x);
+}
+
+inline constexpr i32 NextPowerOfTwo(i32 v)
+{
+    v--;
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    return v + 1;
+}
+
 inline u16 SafeTruncateU32(u32 val)
 {
     u16 result = (u16)val;
     assert(val == result);
     return result;
+}
+
+inline u32 ReverseBits32(u32 n)
+{
+    n = (n << 16) | (n >> 16);
+    n = ((n & 0x00ff00ff) << 8) | ((n & 0xff00ff00) >> 8);
+    n = ((n & 0x0f0f0f0f) << 4) | ((n & 0xf0f0f0f0) >> 4);
+    n = ((n & 0x33333333) << 2) | ((n & 0xcccccccc) >> 2);
+    n = ((n & 0x55555555) << 1) | ((n & 0xaaaaaaaa) >> 1);
+    return n;
 }
 
 union vec2

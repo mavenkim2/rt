@@ -18,12 +18,6 @@ const f32 infinity = std::numeric_limits<f32>::infinity();
 #define U32Max 0xffffffff
 const vec3 INVALID_VEC = vec3((f32)U32Max, (f32)U32Max, (f32)U32Max);
 
-template <typename T>
-T Clamp(T min, T max, T x)
-{
-    return x < min ? min : (x > max ? max : x);
-}
-
 struct Statistics
 {
     std::atomic<u64> rayAABBTests;

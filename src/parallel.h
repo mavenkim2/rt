@@ -35,32 +35,9 @@ struct WorkQueue
 };
 
 bool RenderTile(WorkQueue *queue);
-// platform specific
-#if _WIN32
-DWORD WorkerThread(void *parameter)
+
+THREAD_ENTRY_POINT(WorkerThread)
 {
     WorkQueue *queue = (WorkQueue *)parameter;
     while (RenderTile(queue)) continue;
-    return 0;
 }
-
-void CreateWorkThread(void *parameter)
-{
-    DWORD threadID;
-    HANDLE threadHandle = CreateThread(0, 0, WorkerThread, parameter, 0, &threadID);
-    CloseHandle(threadHandle);
-}
-
-inline u64 InterlockedAdd(u64 volatile *addend, u64 value)
-{
-    return InterlockedExchangeAdd64((volatile LONG64 *)addend, value);
-}
-
-inline u32 GetCPUCoreCount()
-{
-    SYSTEM_INFO info;
-    GetSystemInfo(&info);
-    u32 result = info.dwNumberOfProcessors;
-    return result;
-}
-#endif

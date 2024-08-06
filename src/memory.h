@@ -1,4 +1,51 @@
-struct ScratchBuffer
+#ifndef MEMORY_H
+#define MEMORY_H
+
+#define ARENA_HEADER_SIZE  128
+#define ARENA_COMMIT_SIZE  kilobytes(64)
+#define ARENA_RESERVE_SIZE megabytes(64)
+
+struct Arena
 {
-    
+    struct Arena *prev;
+    struct Arena *current;
+    u64 basePos;
+    u64 pos;
+    u64 cmt;
+    u64 res;
+    u64 align;
+    b8 grow;
 };
+
+struct TempArena
+{
+    Arena *arena;
+    u64 pos;
+};
+
+Arena *ArenaAlloc(u64 resSize, u64 cmtSize, u64 align);
+Arena *ArenaAlloc(u64 size, u64 align = 8);
+Arena *ArenaAlloc();
+void *ArenaPushNoZero(Arena *arena, u64 size);
+void *ArenaPush(Arena *arena, u64 size);
+u64 ArenaPos(Arena *arena);
+void ArenaPopTo(Arena *arena, u64 pos);
+void ArenaPopToZero(Arena *arena, u64 pos);
+TempArena TempBegin(Arena *arena);
+void TempEnd(TempArena temp);
+b32 CheckZero(u32 size, u8 *instance);
+void ArenaRelease(Arena *arena);
+void ArenaClear(Arena *arena);
+
+#define PushArrayNoZero(arena, type, count) (type *)ArenaPushNoZero(arena, sizeof(type) * (count))
+#define PushStructNoZero(arena, type)       (type *)PushArrayNoZero(arena, type, 1)
+#define PushArray(arena, type, count)       (type *)ArenaPush(arena, sizeof(type) * (count))
+#define PushStruct(arena, type)             (type *)PushArray(arena, type, 1)
+
+#define ScratchEnd(temp) TempEnd(temp)
+
+#define IsZero(instance) CheckZero(sizeof(instance), (u8 *)(&instance))
+
+#endif
+
+

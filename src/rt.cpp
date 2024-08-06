@@ -1,13 +1,24 @@
 #include "rt.h"
+#include "sobolmatrices.h"
+#include "primes.h"
+
+#include "win32.h"
+#include "memory.h"
+#include "thread_context.h"
+
 #include "hash.h"
 #include "random.h"
 #include "scene.h"
 #include "bvh.h"
 #include "base_types.h"
+#include "low_discrepancy.h"
 #include "sampler.h"
 #include "parallel.h"
 #include <algorithm>
 
+#include "win32.cpp"
+#include "thread_context.cpp"
+#include "memory.cpp"
 #include "math.cpp"
 #include "scene.cpp"
 #include "bvh.cpp"
@@ -708,10 +719,18 @@ bool CompareByX(const Sample &a, const Sample &b)
 
 int main(int argc, char *argv[])
 {
-    IndependentSampler sampler(1024, 5);
+    Arena *arena = ArenaAlloc();
+    InitThreadContext(arena, "[Main Thread]", 1);
+    OS_Init();
 
-    Sampler test = &sampler;
-    printf("%d", test.SamplesPerPixel());
+    TempArena temp = ScratchStart(0, 0);
+    i32 *numbers   = PushArray(temp.arena, i32, 20);
+    for (u32 i = 0; i < 20; i++)
+    {
+        numbers[i] = i;
+    }
+    int stop = 5;
+    ScratchEnd(temp);
 #if 0
     const u32 n = 1;
     f32 sum     = 0.f;
@@ -1149,7 +1168,7 @@ int main(int argc, char *argv[])
     params.defocusDiskU              = defocusDiskU;
     params.defocusDiskV              = defocusDiskV;
     params.defocusAngle              = defocusAngle;
-    params.bvh                       = &bvh4; 
+    params.bvh                       = &bvh4;
     params.maxDepth                  = maxDepth;
     params.samplesPerPixel           = samplesPerPixel;
     params.squareRootSamplesPerPixel = squareRootSamplesPerPixel;
@@ -1193,9 +1212,9 @@ int main(int argc, char *argv[])
     assert(queue.workItemCount == workItemTotal);
 
     clock_t start = clock();
-    for (u32 i = 0; i < GetCPUCoreCount(); i++)
+    for (u32 i = 0; i < OS_NumProcessors(); i++)
     {
-        CreateWorkThread(&queue);
+        OS_CreateWorkThread(WorkerThread, &queue);
     }
 
     while (queue.tilesFinished < workItemTotal)

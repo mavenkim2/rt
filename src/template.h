@@ -49,10 +49,13 @@ struct TaggedPointer
     static constexpr u32 TypeIndex()
     {
         using Type = typename std::remove_cv_t<T>;
-        // if constexpr (std::is_same_v<Type, std::nullptr_t>)
-        //     return 0;
-        // else
-        return IndexOf<Type, Types>::count;
+        if constexpr (std::is_same_v<Type, std::nullptr_t>)
+        {
+            assert("Null");
+            return 0;
+        }
+        else
+            return IndexOf<Type, Types>::count;
     }
     inline u32 GetTag() const
     {

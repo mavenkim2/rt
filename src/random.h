@@ -160,7 +160,7 @@ inline void RNG::SetSequence(u64 sequenceIndex, u64 seed)
 template <>
 inline f32 RNG::Uniform<f32>()
 {
-    return std::min<f32>(oneMinusEpsilon, Uniform<u32>() * 0x1p-32f);
+    return Min(oneMinusEpsilon, Uniform<u32>() * 0x1p-32f);
 }
 
 inline void RNG::Advance(i64 iDelta)
