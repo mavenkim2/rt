@@ -7,7 +7,7 @@ struct IndependentSampler : SamplerCRTP<IndependentSampler>
     {
         return samplesPerPixel;
     }
-    void StartPixelSample(vec2i p, i32 sampleIndex, i32 dimension)
+    void StartPixelSample(vec2i p, i32 sampleIndex, i32 dimension = 0)
     {
         rng.SetSequence(Hash(p, seed));
         rng.Advance(sampleIndex * 65536ull + dimension);
@@ -94,7 +94,7 @@ struct SobolSampler : SamplerCRTP<SobolSampler>
     {
         return samplesPerPixel;
     }
-    void StartPixelSample(vec2i p, i32 sampleIndex, i32 d)
+    void StartPixelSample(vec2i p, i32 sampleIndex, i32 d = 0)
     {
         pixel      = p;
         dimension  = std::max<i32>(2, d);
@@ -217,7 +217,7 @@ struct ZSobolSampler : SamplerCRTP<ZSobolSampler>
     {
         return 1 << log2SamplesPerPixel;
     }
-    void StartPixelSample(vec2i p, i32 index, i32 dim)
+    void StartPixelSample(vec2i p, i32 index, i32 dim = 0)
     {
         dimension   = dim;
         mortonIndex = (EncodeMorton2(p.x, p.y) << log2SamplesPerPixel) | index;
@@ -319,8 +319,7 @@ struct ZSobolSampler : SamplerCRTP<ZSobolSampler>
         return sampleIndex;
     }
 
-    i32 nBase4Digits,
-        log2SamplesPerPixel, seed;
+    i32 nBase4Digits, log2SamplesPerPixel, seed;
     i32 dimension;
     u64 mortonIndex;
     RandomizeStrategy randomize;

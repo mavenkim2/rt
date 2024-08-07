@@ -103,20 +103,6 @@ struct UncompressedBVHNode
     }
 };
 
-inline f32 BitsToFloat(u32 src)
-{
-    f32 dst;
-    std::memcpy(&dst, &src, sizeof(dst));
-    return dst;
-}
-
-inline u32 FloatToBits(f32 src)
-{
-    u32 dst;
-    std::memcpy(&dst, &src, sizeof(dst));
-    return dst;
-}
-
 struct alignas(32) CompressedBVHNode
 {
     vec3 minP;

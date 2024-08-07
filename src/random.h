@@ -25,6 +25,7 @@ inline vec3 RandomVec3(f32 min, f32 max)
     return vec3(RandomFloat(min, max), RandomFloat(min, max), RandomFloat(min, max));
 }
 
+#if 0
 inline vec3 RandomUnitVector()
 {
     while (true)
@@ -36,6 +37,18 @@ inline vec3 RandomUnitVector()
         }
     }
 }
+#endif
+
+inline vec3 RandomUnitVector(vec2 u)
+{
+    return normalize(SampleUniformSphere(u));
+}
+
+inline vec3 RandomUnitVector()
+{
+    vec2 u = vec2(RandomFloat(), RandomFloat());
+    return RandomUnitVector(u);
+}
 
 inline vec3 RandomOnHemisphere(const vec3 &normal)
 {
@@ -45,6 +58,7 @@ inline vec3 RandomOnHemisphere(const vec3 &normal)
     return result;
 }
 
+#if 0
 inline vec3 RandomInUnitDisk()
 {
     while (true)
@@ -55,6 +69,12 @@ inline vec3 RandomInUnitDisk()
             return p;
         }
     }
+}
+#endif
+inline vec3 RandomInUnitDisk()
+{
+    vec2 u = vec2(RandomFloat(), RandomFloat());
+    return vec3(SampleUniformDiskConcentric(u), 0.f);
 }
 
 inline vec3 RandomCosineDirection()

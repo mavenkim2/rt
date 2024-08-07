@@ -3,6 +3,18 @@
 
 #include <xmmintrin.h>
 
+using std::sqrt;
+const f32 infinity = std::numeric_limits<f32>::infinity();
+
+#define PI      3.14159265358979323846f
+#define InvPi   0.31830988618379067154f
+#define Inv2Pi  0.15915494309189533577f
+#define Inv4Pi  0.07957747154594766788f
+#define PiOver2 1.57079632679489661923f
+#define PiOver4 0.78539816339744830961f
+#define Sqrt2   1.41421356237309504880f
+#define U32Max  0xffffffff
+
 template <typename T>
 T Clamp(T min, T max, T x)
 {
@@ -30,6 +42,73 @@ inline int Log2Int(u64 v)
 #else
 #error
 #endif
+}
+
+f32 SafeSqrt(f32 x)
+{
+    return std::sqrt(Max(0.f, x));
+}
+
+template <int n>
+constexpr f32 Pow(f32 v)
+{
+    if constexpr (n < 0) return 1 / Pow<-n>(v);
+    f32 n2 = Pow<n / 2>(v);
+    return n2 * n2 * Pow<n & 1>(v);
+}
+
+template <>
+constexpr f32 Pow<0>(f32 v) { return 1; }
+
+template <>
+constexpr f32 Pow<1>(f32 v) { return v; }
+
+f32 FMA(f32 a, f32 b, f32 c)
+{
+    return std::fma(a, b, c);
+}
+
+template <typename f32, typename C>
+constexpr f32 EvaluatePolynomial(f32 t, C c) { return c; }
+
+template <typename f32, typename C, typename... Args>
+constexpr f32 EvaluatePolynomial(f32 t, C c, Args... cRemaining)
+{
+    return FMA(t, EvaluatePolynomial(t, cRemaining...), c);
+}
+
+inline f32 BitsToFloat(u32 src)
+{
+    f32 dst;
+    std::memcpy(&dst, &src, sizeof(dst));
+    return dst;
+}
+
+inline u32 FloatToBits(f32 src)
+{
+    u32 dst;
+    std::memcpy(&dst, &src, sizeof(dst));
+    return dst;
+}
+
+inline i32 Exponent(f32 v) { return (FloatToBits(v) >> 23) - 127; }
+
+f32 FastExp(f32 x)
+{
+    f32 xp  = x * 1.442695041f;
+    f32 fxp = std::floor(xp), f = xp - fxp;
+    i32 i = (i32)fxp;
+
+    f32 twoToF = EvaluatePolynomial(f, 1.f, 0.695556856f,
+                                    0.226173572f, 0.0781455737f);
+
+    i32 exponent = Exponent(twoToF) + i;
+    if (exponent < -126) return 0;
+    if (exponent > 127) return infinity;
+    u32 bits = FloatToBits(twoToF);
+    bits &= 0b10000000011111111111111111111111u;
+    bits |= (exponent + 127) << 23;
+    return BitsToFloat(bits);
 }
 
 //////////////////////////////
@@ -198,6 +277,7 @@ union vec3
 
     vec3() : e{0, 0, 0} {}
     vec3(f32 e0, f32 e1, f32 e2) : e{e0, e1, e2} {}
+    vec3(vec2 a, f32 b) : xy(a), z(b) {}
 
     vec3 operator-() const { return vec3(-e[0], -e[1], -e[2]); }
     f32 operator[](int i) const { return e[i]; }

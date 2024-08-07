@@ -7,17 +7,21 @@
 #include "thread_context.h"
 
 #include "hash.h"
+#include "sampling.h"
 #include "random.h"
+#include "base_types.h"
 #include "scene.h"
 #include "bvh.h"
-#include "base_types.h"
+#include "spectrum.h"
 #include "low_discrepancy.h"
 #include "sampler.h"
 #include "parallel.h"
 #include <algorithm>
 
 #include "win32.cpp"
+#include "base_types.cpp"
 #include "thread_context.cpp"
+#include "spectrum.cpp"
 #include "memory.cpp"
 #include "math.cpp"
 #include "scene.cpp"
@@ -114,22 +118,31 @@ Light CreateSphereLight(Sphere *sphere)
     return light;
 }
 
-vec3 GenerateLightSample(const Light *light, const vec3 &origin)
+vec3 Sample(const Light *light, const vec3 &origin, vec2 u)
 {
     switch (light->type)
     {
         case PrimitiveType::Quad:
         {
             Quad *quad = (Quad *)light->primitive;
-            return quad->Random(origin);
+            return quad->Random(origin, u);
         }
         case PrimitiveType::Sphere:
         {
             Sphere *sphere = (Sphere *)light->primitive;
-            return sphere->Random(origin);
+            return sphere->Random(origin, u);
         }
         default: assert(0); return vec3(1, 0, 0);
     }
+}
+
+// vec3 GenerateSampleFromLights(const Light *lights, const u32 numLights, const vec3 &origin, f32 u)
+// NOTE: bad uniform sampling
+const Light *SampleLights(const Light *lights, const u32 numLights, f32 u)
+{
+    i32 randomIndex = (i32)(numLights * u); // RandomInt(0, numLights);
+    assert(randomIndex < (i32)numLights);
+    return &lights[randomIndex]; // vec3 result = GenerateLightSample(&lights[randomIndex], origin, );
 }
 
 f32 GetLightPDFValue(const Light *light, const vec3 &origin, const vec3 &direction)
@@ -161,18 +174,10 @@ f32 GetLightsPDFValue(const Light *lights, const u32 numLights, const vec3 &orig
     return pdfSum;
 }
 
-vec3 GenerateSampleFromLights(const Light *lights, const u32 numLights, const vec3 &origin)
-{
-    i32 randomIndex = RandomInt(0, numLights);
-    assert(randomIndex < (i32)numLights);
-    vec3 result = GenerateLightSample(&lights[randomIndex], origin);
-    return result;
-}
-
-inline vec3 GenerateCosSample(vec3 normal)
+inline vec3 GenerateCosSample(vec3 normal, vec2 u)
 {
     Basis basis = GenerateBasis(normal);
-    vec3 cosDir = ConvertToLocal(&basis, RandomCosineDirection());
+    vec3 cosDir = ConvertToLocal(&basis, SampleCosineHemisphere(u)); // RandomCosineDirection());
     return cosDir;
 }
 
@@ -467,24 +472,24 @@ struct Material
         return result;
     }
 
-    bool LambertScatter(const Ray &r, const HitRecord &record, ScatterRecord &sRec)
+    bool LambertScatter(const Ray &r, const HitRecord &record, ScatterRecord &sRec, vec2 u)
     {
         sRec.attenuation = texture.Value(record.u, record.v, record.p);
         sRec.skipPDFRay  = Ray(INVALID_VEC, INVALID_VEC, (f32)U32Max);
-        sRec.sample      = GenerateCosSample(record.normal);
+        sRec.sample      = GenerateCosSample(record.normal, u);
         return true;
     }
 
-    bool MetalScatter(const Ray &r, const HitRecord &record, ScatterRecord &sRec)
+    bool MetalScatter(const Ray &r, const HitRecord &record, ScatterRecord &sRec, vec2 u)
     {
         vec3 reflectDir  = Reflect(r.direction(), record.normal);
-        reflectDir       = normalize(reflectDir) + fuzz * RandomUnitVector();
+        reflectDir       = normalize(reflectDir) + fuzz * RandomUnitVector(u);
         sRec.attenuation = albedo;
         sRec.skipPDFRay  = Ray(record.p, reflectDir, r.time());
         return true;
     }
 
-    bool DielectricScatter(const Ray &r, const HitRecord &record, ScatterRecord &sRec)
+    bool DielectricScatter(const Ray &r, const HitRecord &record, ScatterRecord &sRec, vec2 u)
     {
         sRec.attenuation = vec3(1, 1, 1);
         f32 ri           = record.isFrontFace ? 1.f / refractiveIndex : refractiveIndex;
@@ -498,7 +503,7 @@ struct Material
         f32 f0          = (1 - ri) / (1 + ri);
         f0              = f0 * f0;
         f32 reflectance = f0 + (1 - f0) * powf(1 - cosTheta, 5.f);
-        vec3 direction  = cannotRefract || reflectance > RandomFloat()
+        vec3 direction  = cannotRefract || reflectance > u.x // RandomFloat()
                               ? Reflect(rayDir, record.normal)
                               : Refract(rayDir, record.normal, ri);
         sRec.skipPDFRay = Ray(record.p, direction, r.time());
@@ -506,23 +511,23 @@ struct Material
         return true;
     }
 
-    bool IsotropicScatter(const Ray &r, const HitRecord &record, ScatterRecord &sRec)
+    bool IsotropicScatter(const Ray &r, const HitRecord &record, ScatterRecord &sRec, vec2 u)
     {
         // scatteredRay     = Ray(record.p, RandomUnitVector(), r.time());
         sRec.attenuation = texture.Value(record.u, record.v, record.p);
         sRec.skipPDFRay  = Ray(INVALID_VEC, INVALID_VEC, (f32)U32Max);
-        sRec.sample      = RandomUnitVector();
+        sRec.sample      = RandomUnitVector(u);
         return true;
     }
 
-    inline bool Scatter(const Ray &r, const HitRecord &record, ScatterRecord &sRec)
+    inline bool Scatter(const Ray &r, const HitRecord &record, ScatterRecord &sRec, vec2 u)
     {
         switch (type)
         {
-            case MaterialType::Lambert: return LambertScatter(r, record, sRec);
-            case MaterialType::Metal: return MetalScatter(r, record, sRec);
-            case MaterialType::Dielectric: return DielectricScatter(r, record, sRec);
-            case MaterialType::Isotropic: return IsotropicScatter(r, record, sRec);
+            case MaterialType::Lambert: return LambertScatter(r, record, sRec, u);
+            case MaterialType::Metal: return MetalScatter(r, record, sRec, u);
+            case MaterialType::Dielectric: return DielectricScatter(r, record, sRec, u);
+            case MaterialType::Isotropic: return IsotropicScatter(r, record, sRec, u);
             default: return false;
         }
     }
@@ -587,8 +592,9 @@ vec3 RayColor(const Ray &r, const int depth, const BVH &bvh)
     f32 t                          = 0.5f * (normalizedDirection.y + 1.f);
     return (1 - t) * vec3(1, 1, 1) + t * vec3(0.5f, 0.7f, 1.f);
 }
-#else
-vec3 RayColor(const Ray &r, const int depth, const Primitive &bvh, const Light *lights, const u32 numLights)
+#endif
+#if 1
+vec3 RayColor(const Ray &r, Sampler sampler, const int depth, const Primitive &bvh, const Light *lights, const u32 numLights)
 {
     if (depth <= 0)
         return vec3(0, 0, 0);
@@ -602,18 +608,20 @@ vec3 RayColor(const Ray &r, const int depth, const Primitive &bvh, const Light *
     ScatterRecord sRec;
     // Ray scattered;
     vec3 emissiveColor = record.material->Emitted(r, record, record.u, record.v, record.p);
-    if (!record.material->Scatter(r, record, sRec))
+    if (!record.material->Scatter(r, record, sRec, sampler.Get2D()))
         return emissiveColor;
 
     if (IsValidRay(&sRec.skipPDFRay))
-        return sRec.attenuation * RayColor(sRec.skipPDFRay, depth - 1, bvh, lights, numLights);
+        return sRec.attenuation * RayColor(sRec.skipPDFRay, sampler, depth - 1, bvh, lights, numLights);
 
     // Cosine importance sampling
     // TODO: this is hardcoded, this should be switched on based on the type of pdf
     f32 cosPdf = GetCosPDFValue(sRec.sample, record.normal);
 
     // Light importance sampling
-    vec3 randLightDir = GenerateSampleFromLights(lights, numLights, record.p);
+    const Light *light = SampleLights(lights, numLights, sampler.Get1D());
+    assert(light);
+    vec3 randLightDir = Sample(light, record.p, sampler.Get2D());
 
     vec3 scatteredDir;
     if (RandomFloat() < 0.5f)
@@ -629,7 +637,7 @@ vec3 RayColor(const Ray &r, const int depth, const Primitive &bvh, const Light *
     f32 pdf       = 0.5f * lightPdf + 0.5f * cosPdf;
 
     f32 scatteringPDF = record.material->ScatteringPDF(r, record, scattered);
-    vec3 scatterColor = (sRec.attenuation * scatteringPDF * RayColor(scattered, depth - 1, bvh, lights, numLights)) / pdf;
+    vec3 scatterColor = (sRec.attenuation * scatteringPDF * RayColor(scattered, sampler, depth - 1, bvh, lights, numLights)) / pdf;
     return emissiveColor + scatterColor;
 }
 #endif
@@ -651,16 +659,26 @@ bool RenderTile(WorkQueue *queue)
         u32 *out = GetPixelPointer(queue->params->image, item->startX, height);
         for (u32 width = item->startX; width < item->onePastEndX; width++)
         {
+            // ZSobolSampler sampler(samplesPerPixel, vec2i(queue->params->image->width, queue->params->image->height),
+            //                       RandomizeStrategy::FastOwen);
+            // SobolSampler sampler(samplesPerPixel, vec2i(queue->params->image->width, queue->params->image->height),
+            //                      RandomizeStrategy::Owen);
+
+            IndependentSampler sampler(samplesPerPixel);
             vec3 pixelColor(0, 0, 0);
 
-            // for (i32 i = 0; i < samplesPerPixel; i++)
+            vec2i pixel = vec2i(width, height);
             for (u32 i = 0; i < squareRootSamplesPerPixel; i++)
             {
                 for (u32 j = 0; j < squareRootSamplesPerPixel; j++)
                 {
-                    // const vec3 offset      = vec3(RandomFloat() - 0.5f, RandomFloat() - 0.5f, 0.f);
-                    const f32 offsetX      = ((i + RandomFloat()) * oneOverSqrtSamplesPerPixel) - 0.5f;
-                    const f32 offsetY      = ((j + RandomFloat()) * oneOverSqrtSamplesPerPixel) - 0.5f;
+                    // const vec3 offset = vec3(RandomFloat() - 0.5f, RandomFloat() - 0.5f, 0.f);
+                    u32 sampleIndex = i * squareRootSamplesPerPixel + j;
+                    sampler.StartPixelSample(pixel, sampleIndex);
+
+                    vec2 offsetSample      = sampler.Get2D();
+                    const f32 offsetX      = ((i + offsetSample.x)) * oneOverSqrtSamplesPerPixel - 0.5f;
+                    const f32 offsetY      = ((j + offsetSample.y)) * oneOverSqrtSamplesPerPixel - 0.5f;
                     const vec3 offset      = vec3(offsetX, offsetY, 0.f);
                     const vec3 pixelSample = queue->params->pixel00 + ((width + offset.x) * queue->params->pixelDeltaU) +
                                              ((height + offset.y) * queue->params->pixelDeltaV);
@@ -676,10 +694,10 @@ bool RenderTile(WorkQueue *queue)
                                     sample[1] * queue->params->defocusDiskV;
                     }
                     const vec3 rayDirection = pixelSample - rayOrigin;
-                    const f32 rayTime       = RandomFloat();
+                    const f32 rayTime       = sampler.Get1D();
                     Ray r(rayOrigin, rayDirection, rayTime);
 
-                    pixelColor += RayColor(r, queue->params->maxDepth, queue->params->bvh,
+                    pixelColor += RayColor(r, &sampler, queue->params->maxDepth, queue->params->bvh,
                                            queue->params->lights, queue->params->numLights);
                 }
             }
@@ -707,30 +725,25 @@ bool RenderTile(WorkQueue *queue)
     return true;
 }
 
-struct Sample
-{
-    f32 x;
-    f32 pX;
-};
-bool CompareByX(const Sample &a, const Sample &b)
-{
-    return a.x < b.x;
-}
-
 int main(int argc, char *argv[])
 {
     Arena *arena = ArenaAlloc();
     InitThreadContext(arena, "[Main Thread]", 1);
     OS_Init();
 
-    TempArena temp = ScratchStart(0, 0);
-    i32 *numbers   = PushArray(temp.arena, i32, 20);
-    for (u32 i = 0; i < 20; i++)
+#if 0
+    vec2i resolution = {1024, 1024};
+    ZSobolSampler sampler(1024, resolution, RandomizeStrategy::FastOwen);
+
+    u32 count = 500;
+    f32* results = PushArray(arena, f32, count);
+    for (u32 i = 0; i < count; i++)
     {
-        numbers[i] = i;
+        results[i] = sampler.Get1D();
     }
     int stop = 5;
-    ScratchEnd(temp);
+#endif
+
 #if 0
     const u32 n = 1;
     f32 sum     = 0.f;
@@ -742,7 +755,7 @@ int main(int argc, char *argv[])
     printf("I = %f\n", sum / n);
 #endif
 
-#if 0
+#if 1
 #if SPHERES
     const f32 aspectRatio     = 16.f / 9.f;
     const vec3 lookFrom       = vec3(13, 2, 3);
@@ -813,7 +826,7 @@ int main(int argc, char *argv[])
     const f32 focusDist    = 10;
 
     const int imageWidth      = 600;
-    const int samplesPerPixel = 100;
+    const int samplesPerPixel = 256;
     const int maxDepth        = 50;
     BACKGROUND                = vec3(0, 0, 0);
 #elif CORNELL_SMOKE

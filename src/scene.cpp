@@ -112,14 +112,14 @@ f32 Sphere::PdfValue(const vec3 &origin, const vec3 &direction) const
     f32 solidAngle  = 2 * PI * (1 - cosThetaMax);
     return 1 / solidAngle;
 }
-vec3 Sphere::Random(const vec3 &origin) const
+vec3 Sphere::Random(const vec3 &origin, vec2 u) const
 {
     vec3 dir            = center - origin;
     f32 distanceSquared = dir.lengthSquared();
     Basis basis         = GenerateBasis(dir);
 
-    f32 r1 = RandomFloat();
-    f32 r2 = RandomFloat();
+    f32 r1 = u.x;
+    f32 r2 = u.y;
     f32 z  = 1 + r2 * (sqrt(1 - radius * radius / distanceSquared) - 1);
 
     f32 phi     = 2 * PI * r1;

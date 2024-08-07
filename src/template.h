@@ -76,6 +76,7 @@ struct TaggedPointer
     {
         return reinterpret_cast<T *>(GetPtr());
     }
+    explicit operator bool() { return (bits & ptrMask) != 0; }
 };
 
 #endif

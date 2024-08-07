@@ -13,11 +13,7 @@ struct PrimitiveMethods
     bool (*Hit)(void *ptr, const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record);
 };
 
-static PrimitiveMethods primitiveMethods[] = {
-    {BVHHit},
-    {BVH4Hit},
-    {CompressedBVH4Hit},
-};
+extern PrimitiveMethods primitiveMethods[];
 
 struct Primitive : TaggedPointer<BVH, BVH4, CompressedBVH4>
 {
@@ -62,7 +58,7 @@ struct Sampler : SamplerTaggedPointer
         i32 result = samplerMethods[tag].SamplesPerPixel(ptr);
         return result;
     }
-    inline void StartPixelSample(vec2i p, i32 index, i32 dimension)
+    inline void StartPixelSample(vec2i p, i32 index, i32 dimension = 0)
     {
         void *ptr = GetPtr();
         u32 tag   = GetTag();
@@ -131,5 +127,54 @@ template struct SamplerCRTP<StratifiedSampler>;
 template struct SamplerCRTP<SobolSampler>;
 template struct SamplerCRTP<PaddedSobolSampler>;
 template struct SamplerCRTP<ZSobolSampler>;
+
+//////////////////////////////
+// Spectrum
+//
+struct ConstantSpectrum;
+struct DenselySampledSpectrum;
+
+struct SampledSpectrum;
+struct SampledWavelengths;
+
+using SpectrumTaggedPointer = TaggedPointer<ConstantSpectrum, DenselySampledSpectrum>;
+
+struct SpectrumMethods
+{
+    f32 (*Evaluate)(void *, f32);
+    f32 (*MaxValue)(void *);
+    SampledSpectrum (*Sample)(void *, const SampledWavelengths &);
+};
+
+static SpectrumMethods spectrumMethods[SpectrumTaggedPointer::MaxTag()] = {};
+
+struct Spectrum : SpectrumTaggedPointer
+{
+    using TaggedPointer::TaggedPointer;
+
+    f32 operator()(f32 lambda) const;
+    f32 MaxValue() const;
+    SampledSpectrum Sample(const SampledWavelengths &lambda) const;
+};
+
+template <class T>
+struct SpectrumCRTP
+{
+    static const i32 id;
+    static f32 Evaluate(void *ptr, f32 lambda);
+    static f32 MaxValue(void *ptr);
+    static SampledSpectrum Sample(void *ptr, const SampledWavelengths &lambda);
+    static constexpr i32 Register()
+    {
+        spectrumMethods[SpectrumTaggedPointer::TypeIndex<T>()] = {Evaluate, MaxValue, Sample};
+        return SpectrumTaggedPointer::TypeIndex<T>();
+    }
+};
+
+template <class T>
+const i32 SpectrumCRTP<T>::id = SpectrumCRTP<T>::Register();
+
+template struct SpectrumCRTP<ConstantSpectrum>;
+template struct SpectrumCRTP<DenselySampledSpectrum>;
 
 #endif

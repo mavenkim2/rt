@@ -29,7 +29,7 @@ public:
         v = zenith / PI;
     }
     f32 PdfValue(const vec3 &origin, const vec3 &direction) const;
-    vec3 Random(const vec3 &origin) const;
+    vec3 Random(const vec3 &origin, vec2 u) const;
 
 private:
     vec3 center;
@@ -96,9 +96,9 @@ struct Quad
         return distanceSquared / (cosine * area);
     };
 
-    vec3 Random(const vec3 &origin) const
+    vec3 Random(const vec3 &origin, vec2 random) const
     {
-        vec3 p = q + (RandomFloat() * u) + (RandomFloat() * v);
+        vec3 p = q + (random.x * u) + (random.y * v);
         return p - origin;
     }
 
