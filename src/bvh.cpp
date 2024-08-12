@@ -399,6 +399,7 @@ CompressedBVH4 CreateCompressedBVH4(BVH *bvh)
 //
 bool BVH::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const
 {
+    TIMED_FUNCTION(primitiveIntersectionTime);
     u32 stack[64];
     u32 stackPtr      = 0;
     stack[stackPtr++] = 0;
@@ -406,19 +407,26 @@ bool BVH::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) c
     bool hit          = false;
     HitRecord temp;
 
+    int dirIsNeg[3] = {
+        r.d.x < 0 ? 1 : 0,
+        r.d.y < 0 ? 1 : 0,
+        r.d.z < 0 ? 1 : 0,
+    };
+
     while (stackPtr > 0)
     {
         assert(stackPtr < 64);
         const u32 nodeIndex = stack[--stackPtr];
         Node &node          = nodes[nodeIndex];
-        // statistics.rayAABBTests.fetch_add(1);
-        if (!node.aabb.Hit(r, 0, infinity))
+
+        bool result = node.aabb.Hit(r, 0, infinity, dirIsNeg);
+
+        if (!result)
             continue;
         if (node.IsLeaf())
         {
             for (u32 i = 0; i < node.count; i++)
             {
-                // statistics.rayPrimitiveTests.fetch_add(1);
                 if (scene->Hit(r, tMin, tMax, temp, leafIndices[node.offset + i]))
                 {
                     if (temp.t < closest)
@@ -441,6 +449,8 @@ bool BVH::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) c
 
 bool BVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const
 {
+    TIMED_FUNCTION(primitiveIntersectionTime);
+
     u32 stack[64];
     u32 stackPtr      = 0;
     stack[stackPtr++] = 0;
@@ -448,14 +458,21 @@ bool BVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) 
     bool hit          = false;
     HitRecord temp;
 
+    int dirIsNeg[3] = {
+        r.d.x < 0 ? 1 : 0,
+        r.d.y < 0 ? 1 : 0,
+        r.d.z < 0 ? 1 : 0,
+    };
+
+    PerformanceCounter totalCounter = OS_StartCounter();
     while (stackPtr > 0)
     {
         assert(stackPtr < 64);
         const u32 nodeIndex       = stack[--stackPtr];
         UncompressedBVHNode &node = nodes[nodeIndex];
 
-        i32 result = node.IntersectP(r, 0, infinity);
-        // statistics.rayAABBTests.fetch_add(4);
+        i32 result = node.IntersectP(r, 0, infinity, dirIsNeg);
+
         if (!result)
             continue;
 
@@ -466,8 +483,9 @@ bool BVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) 
             {
                 for (u32 i = 0; i < node.count[childIndex]; i++)
                 {
-                    // statistics.rayPrimitiveTests.fetch_add(1);
-                    if (scene->Hit(r, tMin, tMax, temp, leafIndices[node.offset[childIndex] + i]))
+                    bool primitiveHit = scene->Hit(r, tMin, tMax, temp, leafIndices[node.offset[childIndex] + i]);
+
+                    if (primitiveHit)
                     {
                         if (temp.t < closest)
                         {

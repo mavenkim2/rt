@@ -4,6 +4,37 @@
 
 static Arena *win32Arena;
 static Win32Thread *win32FreeThread;
+static u64 osPerformanceFrequency;
+
+PerformanceCounter OS_StartCounter()
+{
+    PerformanceCounter counter;
+    LARGE_INTEGER c;
+    QueryPerformanceCounter(&c);
+    counter.counter = c.QuadPart;
+    return counter;
+}
+
+f32 OS_GetMilliseconds(PerformanceCounter counter)
+{
+    LARGE_INTEGER c;
+    QueryPerformanceCounter(&c);
+    f32 result = (f32)(1000.f * (c.QuadPart - counter.counter)) / (osPerformanceFrequency);
+    return result;
+}
+
+u64 OS_GetCounts(PerformanceCounter counter)
+{
+    LARGE_INTEGER c;
+    QueryPerformanceCounter(&c);
+    u64 result = 1000 * (c.QuadPart - counter.counter);
+    return result;
+}
+
+f32 OS_GetMilliseconds(u64 count)
+{
+    return (f32)count / osPerformanceFrequency;
+}
 
 u32 OS_NumProcessors()
 {
@@ -84,6 +115,9 @@ void OS_SetThreadName(char *name, u32 size)
 void OS_Init()
 {
     win32Arena = ArenaAlloc();
+    LARGE_INTEGER frequency;
+    QueryPerformanceFrequency(&frequency);
+    osPerformanceFrequency = frequency.QuadPart;
 }
 
 inline u64 InterlockedAdd(u64 volatile *addend, u64 value)

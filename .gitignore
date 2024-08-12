@@ -40,3 +40,4 @@ build.bat*
 *.ppm
 *.png
 *.bmp
+*.exr

@@ -41,7 +41,7 @@ inline vec3 RandomUnitVector()
 
 inline vec3 RandomUnitVector(vec2 u)
 {
-    return normalize(SampleUniformSphere(u));
+    return Normalize(SampleUniformSphere(u));
 }
 
 inline vec3 RandomUnitVector()
@@ -54,7 +54,7 @@ inline vec3 RandomOnHemisphere(const vec3 &normal)
 {
     // NOTE: why can't you just normalize a vector that has a length > 1?
     vec3 result = RandomUnitVector();
-    result      = dot(normal, result) > 0 ? result : -result;
+    result      = Dot(normal, result) > 0 ? result : -result;
     return result;
 }
 

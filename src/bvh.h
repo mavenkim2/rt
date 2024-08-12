@@ -96,6 +96,74 @@ struct UncompressedBVHNode
         i32 outcome = FlattenMask(result);
         return outcome;
     }
+
+    i32 IntersectP(const Ray &r, const f32 tMinHit, const f32 tMaxHit, const int dirIsNeg[3]) const
+    {
+        LaneVec3 rayOrigin = LaneV3FromV3(r.o);
+
+        LaneF32 result = CastLaneF32FromLaneU32(LaneU32FromU32(0xffffffff));
+
+        vec3 oneOverDir              = vec3(1.f / r.d.x, 1.f / r.d.y, 1.f / r.d.z);
+        LaneVec3 oneOverRayDirection = LaneV3FromV3(oneOverDir);
+
+        LaneF32 xMask = CastLaneF32FromLaneU32(LaneU32FromU32(dirIsNeg[0] ? 0xffffffff : 0));
+        LaneF32 yMask = CastLaneF32FromLaneU32(LaneU32FromU32(dirIsNeg[1] ? 0xffffffff : 0));
+        LaneF32 zMask = CastLaneF32FromLaneU32(LaneU32FromU32(dirIsNeg[2] ? 0xffffffff : 0));
+
+        // Slab test
+        // p = o + d * t
+        // t = (p - o) p -
+
+        LaneVec3 min = minP;
+        LaneVec3 max = maxP;
+
+        ConditionalAssign(min.x, maxP.x, xMask);
+        ConditionalAssign(min.y, maxP.y, yMask);
+        ConditionalAssign(min.z, maxP.z, zMask);
+
+        ConditionalAssign(max.x, minP.x, xMask);
+        ConditionalAssign(max.y, minP.y, yMask);
+        ConditionalAssign(max.z, minP.z, zMask);
+
+        LaneF32 tNearAxis[3] = {
+            (min.x - rayOrigin.x) * oneOverRayDirection.x,
+            (min.y - rayOrigin.y) * oneOverRayDirection.y,
+            (min.z - rayOrigin.z) * oneOverRayDirection.z,
+        };
+        LaneF32 tFarAxis[3] = {
+            (max.x - rayOrigin.x) * oneOverRayDirection.x,
+            (max.y - rayOrigin.y) * oneOverRayDirection.y,
+            (max.z - rayOrigin.z) * oneOverRayDirection.z,
+        };
+
+        LaneF32 testMinT = LaneF32FromF32(tMinHit);
+        LaneF32 testMaxT = LaneF32FromF32(tMaxHit);
+        for (u32 i = 0; i < ArrayLength(tNearAxis); i++)
+        {
+            // LaneF32 swapMask = tNearAxis[i] > tFarAxis[i];
+
+            // LaneF32 tMin = AndNot(swapMask, tNearAxis[i]) | (swapMask & tFarAxis[i]);
+            // LaneF32 tMax = AndNot(swapMask, tFarAxis[i]) | (swapMask & tNearAxis[i]);
+
+            // TODO: error correction? (see chapter 6.8 PBRT)
+            // tMax *= 1 + 2 * gamma(3)
+
+            LaneF32 minMask = tNearAxis[i] > testMinT;
+            LaneF32 maxMask = tFarAxis[i] < testMaxT;
+
+            ConditionalAssign(testMinT, tNearAxis[i], minMask);
+            ConditionalAssign(testMaxT, tFarAxis[i], maxMask);
+
+            LaneF32 intersectionTest = testMinT > testMaxT;
+            result                   = AndNot(intersectionTest, result);
+
+            if (MaskIsZeroed(result))
+                return 0;
+        }
+
+        i32 outcome = FlattenMask(result);
+        return outcome;
+    }
     inline b8 IsLeaf(i32 index)
     {
         b8 result = leafMask & (1 << index);

@@ -3,6 +3,7 @@
 #include "primes.h"
 
 #include "win32.h"
+#include "debug.h"
 #include "memory.h"
 #include "thread_context.h"
 
@@ -13,12 +14,14 @@
 #include "scene.h"
 #include "bvh.h"
 #include "spectrum.h"
+#include "bsdf.h"
 #include "low_discrepancy.h"
 #include "sampler.h"
 #include "parallel.h"
 #include <algorithm>
 
 #include "win32.cpp"
+#include "debug.cpp"
 #include "base_types.cpp"
 #include "thread_context.cpp"
 #include "spectrum.cpp"
@@ -183,7 +186,7 @@ inline vec3 GenerateCosSample(vec3 normal, vec2 u)
 
 inline f32 GetCosPDFValue(vec3 dir, vec3 normal)
 {
-    f32 cosTheta = dot(normalize(dir), normal);
+    f32 cosTheta = Dot(Normalize(dir), normal);
     f32 cosPdf   = fmax(cosTheta / PI, 0.f);
     return cosPdf;
 }
@@ -202,7 +205,7 @@ struct Perlin
         randVec = new vec3[pointCount];
         for (i32 i = 0; i < pointCount; i++)
         {
-            randVec[i] = normalize(RandomVec3(-1, 1));
+            randVec[i] = Normalize(RandomVec3(-1, 1));
         }
 
         auto GeneratePerm = [&]() -> i32 * {
@@ -266,7 +269,7 @@ struct Perlin
                         accum += (i * uu + (1 - i) * (1 - uu)) *
                                  (j * vv + (1 - j) * (1 - vv)) *
                                  (k * ww + (1 - k) * (1 - ww)) *
-                                 dot(c[i][j][k], weightV);
+                                 Dot(c[i][j][k], weightV);
                     }
                 }
             }
@@ -483,7 +486,7 @@ struct Material
     bool MetalScatter(const Ray &r, const HitRecord &record, ScatterRecord &sRec, vec2 u)
     {
         vec3 reflectDir  = Reflect(r.direction(), record.normal);
-        reflectDir       = normalize(reflectDir) + fuzz * RandomUnitVector(u);
+        reflectDir       = Normalize(reflectDir) + fuzz * RandomUnitVector(u);
         sRec.attenuation = albedo;
         sRec.skipPDFRay  = Ray(record.p, reflectDir, r.time());
         return true;
@@ -494,8 +497,8 @@ struct Material
         sRec.attenuation = vec3(1, 1, 1);
         f32 ri           = record.isFrontFace ? 1.f / refractiveIndex : refractiveIndex;
 
-        vec3 rayDir  = normalize(r.direction());
-        f32 cosTheta = fmin(dot(-rayDir, record.normal), 1.f);
+        vec3 rayDir  = Normalize(r.direction());
+        f32 cosTheta = fmin(Dot(-rayDir, record.normal), 1.f);
         f32 sinTheta = sqrt(1 - cosTheta * cosTheta);
         // total internal reflection
         bool cannotRefract = ri * sinTheta > 1.f;
@@ -555,7 +558,7 @@ struct Material
         {
             case MaterialType::Lambert:
             {
-                f32 cosTheta = dot(record.normal, normalize(scattered.direction()));
+                f32 cosTheta = Dot(record.normal, Normalize(scattered.direction()));
                 cosTheta     = fmax(cosTheta / PI, 0.f);
                 return cosTheta;
             }
@@ -588,8 +591,8 @@ vec3 RayColor(const Ray &r, const int depth, const BVH &bvh)
         return vec3(0, 0, 0);
     }
 
-    const vec3 normalizedDirection = normalize(r.direction());
-    f32 t                          = 0.5f * (normalizedDirection.y + 1.f);
+    const vec3 NormalizedDirection = Normalize(r.direction());
+    f32 t                          = 0.5f * (NormalizedDirection.y + 1.f);
     return (1 - t) * vec3(1, 1, 1) + t * vec3(0.5f, 0.7f, 1.f);
 }
 #endif
@@ -599,7 +602,6 @@ vec3 RayColor(const Ray &r, Sampler sampler, const int depth, const Primitive &b
     if (depth <= 0)
         return vec3(0, 0, 0);
 
-    vec3 sphereCenter = vec3(0, 0, -1);
     HitRecord record;
 
     if (!bvh.Hit(r, 0.001f, infinity, record))
@@ -624,7 +626,7 @@ vec3 RayColor(const Ray &r, Sampler sampler, const int depth, const Primitive &b
     vec3 randLightDir = Sample(light, record.p, sampler.Get2D());
 
     vec3 scatteredDir;
-    if (RandomFloat() < 0.5f)
+    if (sampler.Get1D() < 0.5f) // RandomFloat() < 0.5f)
     {
         scatteredDir = sRec.sample;
     }
@@ -642,6 +644,130 @@ vec3 RayColor(const Ray &r, Sampler sampler, const int depth, const Primitive &b
 }
 #endif
 
+void Integrate(const Ray *inRays, Ray *outRays, u32 numRays, int depth,
+               const Primitive &bvh, const Light *lights, const u32 numLights, vec3 *outRadiance, Sampler sampler, u32 *mask)
+{
+    TIMED_FUNCTION(integrationTime);
+    TempArena temp     = ScratchStart(0, 0);
+    HitRecord *records = PushArray(temp.arena, HitRecord, numRays);
+
+    for (u32 i = 0; i < numRays; i++)
+    {
+        if (((mask[i >> 5] & (1 << (i & 31))) != 0) || depth <= 0)
+            continue;
+
+        const Ray r = inRays[i];
+
+        if (!bvh.Hit(r, 0.001f, infinity, records[i]))
+        {
+            outRadiance[i] *= BACKGROUND;
+            mask[i >> 5] |= 1 << (i & 31);
+        }
+    }
+
+    for (u32 i = 0; i < numRays; i++)
+    {
+        if (mask[i >> 5] & (1 << (i & 31)))
+            continue;
+
+        const Ray r = inRays[i];
+
+        if (depth <= 0)
+        {
+            outRadiance[i] *= vec3(0, 0, 0);
+            continue;
+        }
+
+        HitRecord record = records[i];
+
+        ScatterRecord sRec;
+        // Ray scattered;
+        vec3 emissiveColor = record.material->Emitted(r, record, record.u, record.v, record.p);
+        if (!record.material->Scatter(r, record, sRec, sampler.Get2D()))
+        {
+            outRadiance[i] *= emissiveColor;
+            mask[i >> 5] |= 1 << (i & 31);
+            continue;
+        }
+
+        if (IsValidRay(&sRec.skipPDFRay))
+        {
+            outRadiance[i] *= sRec.attenuation;
+            outRays[i] = sRec.skipPDFRay;
+            continue;
+        }
+
+        // Cosine importance sampling
+        // TODO: this is hardcoded, this should be switched on based on the type of pdf
+        f32 cosPdf = GetCosPDFValue(sRec.sample, record.normal);
+
+        // Light importance sampling
+        const Light *light = SampleLights(lights, numLights, sampler.Get1D());
+        assert(light);
+        vec3 randLightDir = Sample(light, record.p, sampler.Get2D());
+
+        vec3 scatteredDir;
+        if (sampler.Get1D() < 0.5f) // RandomFloat() < 0.5f)
+        {
+            scatteredDir = sRec.sample;
+        }
+        else
+        {
+            scatteredDir = randLightDir;
+        }
+        Ray scattered = Ray(record.p, scatteredDir, r.time());
+        f32 lightPdf  = GetLightsPDFValue(lights, numLights, record.p, scatteredDir);
+        f32 pdf       = 0.5f * lightPdf + 0.5f * cosPdf;
+
+        f32 scatteringPDF = record.material->ScatteringPDF(r, record, scattered);
+        vec3 scatterColor = (sRec.attenuation * scatteringPDF) / pdf;
+        outRays[i]        = scattered;
+        outRadiance[i] *= emissiveColor + scatterColor;
+    }
+    ScratchEnd(temp);
+}
+
+struct WorkItem
+{
+    u32 startX;
+    u32 startY;
+    u32 onePastEndX;
+    u32 onePastEndY;
+};
+
+struct RenderParams
+{
+    Primitive bvh;
+    Image *image;
+    Light *lights;
+    vec3 cameraCenter;
+    vec3 pixel00;
+    vec3 pixelDeltaU;
+    vec3 pixelDeltaV;
+    vec3 defocusDiskU;
+    vec3 defocusDiskV;
+    f32 defocusAngle;
+    u32 maxDepth;
+    u32 samplesPerPixel;
+    u32 squareRootSamplesPerPixel;
+    u32 numLights;
+};
+
+struct WorkQueue
+{
+    WorkItem *workItems;
+    RenderParams *params;
+    u64 volatile workItemIndex;
+    u64 volatile tilesFinished;
+    u32 workItemCount;
+};
+
+struct ThreadData
+{
+    WorkQueue *queue;
+    u32 threadIndex;
+};
+
 bool RenderTile(WorkQueue *queue)
 {
     u64 workItemIndex = InterlockedAdd(&queue->workItemIndex, 1);
@@ -654,17 +780,17 @@ bool RenderTile(WorkQueue *queue)
     f32 oneOverSqrtSamplesPerPixel = 1.f / squareRootSamplesPerPixel;
     vec3 cameraCenter              = queue->params->cameraCenter;
 
+    // ZSobolSampler sampler(samplesPerPixel, vec2i(queue->params->image->width, queue->params->image->height),
+    //                       RandomizeStrategy::FastOwen);
+    IndependentSampler sampler(samplesPerPixel);
     for (u32 height = item->startY; height < item->onePastEndY; height++)
     {
         u32 *out = GetPixelPointer(queue->params->image, item->startX, height);
         for (u32 width = item->startX; width < item->onePastEndX; width++)
         {
-            // ZSobolSampler sampler(samplesPerPixel, vec2i(queue->params->image->width, queue->params->image->height),
-            //                       RandomizeStrategy::FastOwen);
             // SobolSampler sampler(samplesPerPixel, vec2i(queue->params->image->width, queue->params->image->height),
             //                      RandomizeStrategy::Owen);
 
-            IndependentSampler sampler(samplesPerPixel);
             vec3 pixelColor(0, 0, 0);
 
             vec2i pixel = vec2i(width, height);
@@ -725,11 +851,141 @@ bool RenderTile(WorkQueue *queue)
     return true;
 }
 
+bool RenderTileTest(WorkQueue *queue)
+{
+    u64 workItemIndex = InterlockedAdd(&queue->workItemIndex, 1);
+    if (workItemIndex >= queue->workItemCount) return false;
+
+    WorkItem *item = &queue->workItems[workItemIndex];
+
+    i32 samplesPerPixel            = queue->params->samplesPerPixel;
+    vec3 cameraCenter              = queue->params->cameraCenter;
+    u32 squareRootSamplesPerPixel  = queue->params->squareRootSamplesPerPixel;
+    f32 oneOverSqrtSamplesPerPixel = 1.f / squareRootSamplesPerPixel;
+
+    TempArena temp = ScratchStart(0, 0);
+    u32 numPixels  = (item->onePastEndY - item->startY) * (item->onePastEndX - item->startX);
+
+    // Double buffered
+    Ray *rayBuffer0    = PushArray(temp.arena, Ray, numPixels);
+    Ray *rayBuffer1    = PushArray(temp.arena, Ray, numPixels);
+    vec3 *outRadiance  = PushArray(temp.arena, vec3, numPixels);
+    vec3 *tempRadiance = PushArray(temp.arena, vec3, numPixels);
+
+    u32 numBits = (numPixels + 31) / 32;
+
+    u32 *mask = PushArray(temp.arena, u32, numBits);
+
+    // ZSobolSampler sampler(samplesPerPixel, vec2i(queue->params->image->width, queue->params->image->height),
+    //                       RandomizeStrategy::FastOwen);
+    IndependentSampler sampler(samplesPerPixel);
+
+    u32 time = 0;
+    for (u32 i = 0; i < squareRootSamplesPerPixel; i++)
+    {
+        for (u32 j = 0; j < squareRootSamplesPerPixel; j++)
+        {
+            u32 rayCount = 0;
+            for (u32 height = item->startY; height < item->onePastEndY; height++)
+            {
+                for (u32 width = item->startX; width < item->onePastEndX; width++)
+                {
+                    u32 sampleIndex = i * squareRootSamplesPerPixel + j;
+                    vec2i pixel     = vec2i(width, height);
+                    sampler.StartPixelSample(pixel, sampleIndex);
+
+                    vec2 offsetSample      = sampler.Get2D();
+                    const f32 offsetX      = ((i + offsetSample.x)) * oneOverSqrtSamplesPerPixel - 0.5f;
+                    const f32 offsetY      = ((j + offsetSample.y)) * oneOverSqrtSamplesPerPixel - 0.5f;
+                    const vec3 offset      = vec3(offsetX, offsetY, 0.f);
+                    const vec3 pixelSample = queue->params->pixel00 + ((width + offset.x) * queue->params->pixelDeltaU) +
+                                             ((height + offset.y) * queue->params->pixelDeltaV);
+                    vec3 rayOrigin          = cameraCenter;
+                    const vec3 rayDirection = pixelSample - rayOrigin;
+                    const f32 rayTime       = sampler.Get1D();
+                    Ray r(rayOrigin, rayDirection, rayTime);
+
+                    rayBuffer0[rayCount++] = r;
+                }
+            }
+
+            assert(rayCount == numPixels);
+            int depth = queue->params->maxDepth;
+            MemoryZero(mask, sizeof(u32) * numBits);
+            for (u32 index = 0; index < numPixels; index++)
+            {
+                tempRadiance[index] = vec3(1, 1, 1);
+            }
+            for (;;)
+            {
+                Ray *inRayBuffer  = ((queue->params->maxDepth - depth) & 1) ? rayBuffer1 : rayBuffer0;
+                Ray *outRayBuffer = ((queue->params->maxDepth - depth) & 1) ? rayBuffer0 : rayBuffer1;
+                Integrate(inRayBuffer, outRayBuffer, numPixels, depth, queue->params->bvh,
+                          queue->params->lights, queue->params->numLights, tempRadiance, &sampler, mask);
+                if (depth == 0)
+                    break;
+                depth--;
+            }
+            for (u32 index = 0; index < numPixels; index++)
+            {
+                outRadiance[index] += tempRadiance[index];
+            }
+        }
+    }
+
+    u32 stride = item->onePastEndX - item->startX;
+    for (u32 height = item->startY; height < item->onePastEndY; height++)
+    {
+        for (u32 width = item->startX; width < item->onePastEndX; width++)
+        {
+            u32 *out        = GetPixelPointer(queue->params->image, width, height);
+            vec3 pixelColor = outRadiance[(width - item->startX) + (height - item->startY) * stride];
+            pixelColor /= (f32)samplesPerPixel;
+
+            // NOTE: lazy NAN check
+            if (pixelColor.r != pixelColor.r) pixelColor.r = 0.f;
+            if (pixelColor.g != pixelColor.g) pixelColor.g = 0.f;
+            if (pixelColor.b != pixelColor.b) pixelColor.b = 0.f;
+
+            f32 r = 255.f * ExactLinearToSRGB(pixelColor.r);
+            f32 g = 255.f * ExactLinearToSRGB(pixelColor.g);
+            f32 b = 255.f * ExactLinearToSRGB(pixelColor.b);
+            f32 a = 255.f;
+
+            u32 color = (RoundFloatToU32(a) << 24) |
+                        (RoundFloatToU32(r) << 16) |
+                        (RoundFloatToU32(g) << 8) |
+                        (RoundFloatToU32(b) << 0);
+            *out = color;
+        }
+    }
+    InterlockedAdd(&queue->tilesFinished, 1);
+
+    ScratchEnd(temp);
+    return true;
+}
+
+THREAD_ENTRY_POINT(WorkerThread)
+{
+    ThreadData *data = (ThreadData *)parameter;
+
+    char name[20];
+    sprintf_s(name, "Worker %u", data->threadIndex);
+    SetThreadName(name);
+    SetThreadIndex(data->threadIndex);
+
+    // while (RenderTile(data->queue)) continue;
+    while (RenderTileTest(data->queue)) continue;
+}
+
 int main(int argc, char *argv[])
 {
     Arena *arena = ArenaAlloc();
     InitThreadContext(arena, "[Main Thread]", 1);
     OS_Init();
+    SetThreadIndex(0);
+
+    threadLocalStatistics = PushArray(arena, ThreadStatistics, OS_NumProcessors());
 
 #if 0
     vec2i resolution = {1024, 1024};
@@ -863,9 +1119,9 @@ int main(int argc, char *argv[])
     f32 theta       = DegreesToRadians(verticalFov);
     f32 h           = tan(theta / 2);
 
-    vec3 f = normalize(lookFrom - lookAt);
-    vec3 s = cross(worldUp, f);
-    vec3 u = cross(f, s);
+    vec3 f = Normalize(lookFrom - lookAt);
+    vec3 s = Cross(worldUp, f);
+    vec3 u = Cross(f, s);
 
     f32 viewportHeight = 2 * h * focusDist;
     f32 viewportWidth  = viewportHeight * (f32(imageWidth) / imageHeight);
@@ -1164,9 +1420,6 @@ int main(int argc, char *argv[])
 
 #endif
 
-    statistics.rayAABBTests      = 0;
-    statistics.rayPrimitiveTests = 0;
-
     BVH bvh;
     bvh.Build(&scene, 2);
 
@@ -1225,16 +1478,20 @@ int main(int argc, char *argv[])
     assert(queue.workItemCount == workItemTotal);
 
     clock_t start = clock();
-    for (u32 i = 0; i < OS_NumProcessors(); i++)
+    for (u32 i = 1; i < OS_NumProcessors(); i++)
     {
-        OS_CreateWorkThread(WorkerThread, &queue);
+        ThreadData *threadData  = PushStruct(arena, ThreadData);
+        threadData->queue       = &queue;
+        threadData->threadIndex = i;
+        OS_CreateWorkThread(WorkerThread, threadData);
     }
 
     while (queue.tilesFinished < workItemTotal)
     {
         fprintf(stderr, "\rRaycasting %d%%...    ", 100 * (u32)queue.tilesFinished / workItemTotal);
         fflush(stdout);
-        RenderTile(&queue);
+        // RenderTile(&queue);
+        RenderTileTest(&queue);
     }
     clock_t end = clock();
 
@@ -1242,7 +1499,19 @@ int main(int argc, char *argv[])
     printf("Total time: %dms\n", end - start);
     WriteImage(&image, "image.bmp");
     // printf("Total ray AABB tests: %lld\n", statistics.rayAABBTests.load());
-    // printf("Total ray primitive tests: %lld\n", statistics.rayPrimitiveTests.load());
+
+    // Aggregate statistics
+    u64 primitiveIntersectionTime = 0;
+    u64 bvhIntersectionTime       = 0;
+    u64 integrationTime           = 0;
+    for (u32 i = 0; i < OS_NumProcessors(); i++)
+    {
+        primitiveIntersectionTime += threadLocalStatistics[i].primitiveIntersectionTime;
+        bvhIntersectionTime += threadLocalStatistics[i].bvhIntersectionTime;
+        integrationTime += threadLocalStatistics[i].integrationTime;
+    }
+    printf("Total primitive intersection time: %lldms\n", primitiveIntersectionTime);
+    printf("Total integration time: %lldms\n", integrationTime);
     fprintf(stderr, "Done.");
 #endif
 }

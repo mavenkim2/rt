@@ -49,3 +49,21 @@ bool AABB::Hit(const Ray &r, f32 tMin, f32 tMax)
     }
     return true;
 }
+
+bool AABB::Hit(const Ray &r, f32 tMin, f32 tMax, const int dirIsNeg[3]) const
+{
+    for (int axis = 0; axis < 3; axis++)
+    {
+        f32 min = (*this)[dirIsNeg[axis]][axis];
+        f32 max = (*this)[1 - dirIsNeg[axis]][axis];
+
+        f32 oneOverDir = 1.f / r.direction().e[axis];
+        f32 t0         = (min - r.origin()[axis]) * oneOverDir;
+        f32 t1         = (max - r.origin()[axis]) * oneOverDir;
+        tMin           = t0 > tMin ? t0 : tMin;
+        tMax           = t1 < tMax ? t1 : tMax;
+        if (tMax <= tMin)
+            return false;
+    }
+    return true;
+}

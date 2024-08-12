@@ -1,6 +1,7 @@
 #ifndef MATH_H
 #define MATH_H
 
+#include <cmath>
 #include <xmmintrin.h>
 
 using std::sqrt;
@@ -14,6 +15,37 @@ const f32 infinity = std::numeric_limits<f32>::infinity();
 #define PiOver4 0.78539816339744830961f
 #define Sqrt2   1.41421356237309504880f
 #define U32Max  0xffffffff
+
+f32 IsInf(f32 x)
+{
+    return std::isinf(x);
+}
+
+f32 IsNaN(f32 x)
+{
+    return std::isnan(x);
+}
+
+f64 IsNaN(f64 x)
+{
+    return std::isnan(x);
+}
+
+f32 Sqr(f32 x)
+{
+    return x * x;
+}
+
+f64 Sqrt(f64 x)
+{
+    return x * x;
+}
+
+template <typename T>
+T Lerp(f32 t, T a, T b)
+{
+    return (1 - t) * a + t * b;
+}
 
 template <typename T>
 T Clamp(T min, T max, T x)
@@ -303,6 +335,13 @@ union vec3
         e[2] *= t;
         return *this;
     }
+    vec3 &operator*=(vec3 t)
+    {
+        e[0] *= t.x;
+        e[1] *= t.y;
+        e[2] *= t.z;
+        return *this;
+    }
 
     vec3 &operator/=(f32 t)
     {
@@ -418,12 +457,12 @@ inline vec2 operator/(const vec2 &v, f32 d)
     return (1 / d) * v;
 }
 
-inline f32 dot(const vec2 &u, const vec2 &v)
+inline f32 Dot(const vec2 &u, const vec2 &v)
 {
     return u[0] * v[0] + u[1] * v[1];
 }
 
-inline vec2 normalize(const vec2 &v)
+inline vec2 Normalize(const vec2 &v)
 {
     return v / v.length();
 }
@@ -498,7 +537,7 @@ inline vec2 operator/(const vec2i &v, f32 d)
     return (1 / d) * v;
 }
 
-inline i32 dot(const vec2i &u, const vec2i &v)
+inline i32 Dot(const vec2i &u, const vec2i &v)
 {
     return u[0] * v[0] + u[1] * v[1];
 }
@@ -563,19 +602,24 @@ inline vec3 operator/(const vec3 &v, f32 d)
     return (1 / d) * v;
 }
 
-inline f32 dot(const vec3 &u, const vec3 &v)
+inline f32 Dot(const vec3 &u, const vec3 &v)
 {
     return u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
 }
 
-inline vec3 cross(const vec3 &u, const vec3 &v)
+inline f32 AbsDot(const vec3 &u, const vec3 &v)
+{
+    return fabsf(Dot(u, v));
+}
+
+inline vec3 Cross(const vec3 &u, const vec3 &v)
 {
     return vec3(u[1] * v[2] - u[2] * v[1],
                 u[2] * v[0] - u[0] * v[2],
                 u[0] * v[1] - u[1] * v[0]);
 }
 
-inline vec3 normalize(const vec3 &v)
+inline vec3 Normalize(const vec3 &v)
 {
     return v / v.length();
 }
@@ -588,12 +632,12 @@ inline bool NearZero(const vec3 &v)
 
 inline vec3 Reflect(const vec3 &v, const vec3 &norm)
 {
-    return v - 2 * dot(v, norm) * norm;
+    return v - 2 * Dot(v, norm) * norm;
 }
 
 inline vec3 Refract(const vec3 &uv, const vec3 &n, f32 refractiveIndexRatio)
 {
-    f32 cosTheta  = fmin(dot(-uv, n), 1.f);
+    f32 cosTheta  = fmin(Dot(-uv, n), 1.f);
     vec3 perp     = refractiveIndexRatio * (uv + cosTheta * n);
     vec3 parallel = -sqrt(fabs(1 - perp.lengthSquared())) * n;
     return perp + parallel;
@@ -656,12 +700,12 @@ inline vec4 operator/(const vec4 &v, f32 d)
     return (1 / d) * v;
 }
 
-inline f32 dot(const vec4 &u, const vec4 &v)
+inline f32 Dot(const vec4 &u, const vec4 &v)
 {
     return u[0] * v[0] + u[1] * v[1] + u[2] * v[2] + u[3] * v[3];
 }
 
-inline vec4 normalize(const vec4 &v)
+inline vec4 Normalize(const vec4 &v)
 {
     return v / v.length();
 }
@@ -671,6 +715,10 @@ inline bool NearZero(const vec4 &v)
     f32 s = 1e-8f;
     return ((std::fabs(v.x) < s) && (std::fabs(v.y) < s) && (std::fabs(v.z) < s) && (std::fabs(v.w) < s));
 }
+
+//////////////////////////////
+// mat3
+//
 
 //////////////////////////////
 // mat4
@@ -710,7 +758,7 @@ union mat4
     static mat4 Rotate(vec3 axis, f32 theta)
     {
         mat4 result           = mat4::Identity();
-        axis                  = normalize(axis);
+        axis                  = Normalize(axis);
         f32 sinTheta          = sin(theta);
         f32 cosTheta          = cos(theta);
         f32 cosValue          = 1.f - cosTheta;
@@ -784,6 +832,25 @@ vec3 mul(mat4 a, vec3 b)
 {
     vec4 vec(b.x, b.y, b.z, 1);
     return mul(a, vec).xyz;
+}
+
+// Ignores translation
+inline vec3 NormalTransform(const mat4 &a, const vec3 &b)
+{
+    vec3 result;
+    result.x = a.columns[0].x * b.x;
+    result.y = a.columns[0].y * b.x;
+    result.z = a.columns[0].z * b.x;
+
+    result.x += a.columns[1].x * b.y;
+    result.y += a.columns[1].y * b.y;
+    result.z += a.columns[1].z * b.y;
+
+    result.x += a.columns[2].x * b.z;
+    result.y += a.columns[2].y * b.z;
+    result.z += a.columns[2].z * b.z;
+
+    return result;
 }
 
 inline mat4 mul(mat4 a, mat4 b)
@@ -1008,6 +1075,7 @@ union AABB
     AABB(AABB box1, AABB box2);
 
     bool Hit(const Ray &r, f32 tMin, f32 tMax);
+    bool Hit(const Ray &r, f32 tMin, f32 tMax, const int dirIsNeg[3]) const;
     inline vec3 Center() const
     {
         return (maxP + minP) * 0.5f;
@@ -1019,6 +1087,11 @@ union AABB
     inline vec3 GetHalfExtent()
     {
         return (maxP - minP) * 0.5f;
+    }
+
+    vec3 operator[](int i) const
+    {
+        return i == 0 ? minP : maxP;
     }
 
     inline vec3 Offset(const vec3 &p) const
@@ -1108,5 +1181,107 @@ inline vec3 Max(const AABB &box1, const AABB &box2)
     vec3 result = Max(box1.maxP, box2.maxP);
     return result;
 }
+
+//////////////////////////////
+// Complex numbers
+//
+struct complex
+{
+    complex(f32 real) : real(real), im(0) {}
+    complex(f32 real, f32 im) : real(real), im(im) {}
+
+    complex operator-() const { return {-real, -im}; }
+
+    complex operator+(complex z) const { return {real + z.real, im + z.im}; }
+
+    complex operator-(complex z) const { return {real - z.real, im - z.im}; }
+
+    complex operator*(complex z) const
+    {
+        return {real * z.real - im * z.im, real * z.im + im * z.real};
+    }
+
+    complex operator/(complex z) const
+    {
+        f32 scale = 1 / (z.real * z.real + z.im * z.im);
+        return {scale * (real * z.real + im * z.im), scale * (im * z.real - real * z.im)};
+    }
+
+    friend complex operator+(f32 value, complex z)
+    {
+        return complex(value) + z;
+    }
+
+    friend complex operator-(f32 value, complex z)
+    {
+        return complex(value) - z;
+    }
+
+    friend complex operator*(f32 value, complex z)
+    {
+        return complex(value) * z;
+    }
+
+    friend complex operator/(f32 value, complex z)
+    {
+        return complex(value) / z;
+    }
+
+    f32 norm() const
+    {
+        return real * real + im * im;
+    }
+
+    f32 real, im;
+};
+
+f32 Abs(const complex &z)
+{
+    return sqrtf(z.norm());
+}
+
+complex sqrt(const complex &z)
+{
+    f32 n  = Abs(z);
+    f32 t1 = sqrtf(.5f * (n + fabsf(z.real)));
+    f32 t2 = .5f * z.im / t1;
+
+    if (n == 0)
+        return 0;
+
+    if (z.real >= 0)
+        return {t1, t2};
+    else
+        return {fabsf(t2), std::copysign(t1, z.im)};
+}
+
+struct Frame
+{
+    vec3 x;
+    vec3 y;
+    vec3 z;
+
+    Frame() : x(1, 0, 0), y(0, 1, 0), z(0, 0, 1) {}
+
+    Frame(vec3 x, vec3 y, vec3 z) : x(x), y(y), z(z) {}
+
+    static Frame FromXZ(vec3 x, vec3 z)
+    {
+        return Frame(x, Cross(z, x), z);
+    }
+    static Frame FromXY(vec3 x, vec3 y)
+    {
+        return Frame(x, y, Cross(x, y));
+    }
+    vec3 ToLocal(vec3 a) const
+    {
+        return vec3(Dot(x, a), Dot(y, a), Dot(z, a));
+    }
+
+    vec3 FromLocal(vec3 a) const
+    {
+        return a.x * x + a.y * y + a.z * z;
+    }
+};
 
 #endif

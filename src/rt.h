@@ -4,6 +4,7 @@
 #include "base.h"
 #include "template.h"
 #include "math.h"
+#include "algo.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "third_party/stb_image.h"
@@ -13,13 +14,18 @@
 
 const vec3 INVALID_VEC = vec3((f32)U32Max, (f32)U32Max, (f32)U32Max);
 
-struct Statistics
+// NOTE: all member have to be u64
+struct ThreadStatistics
 {
-    std::atomic<u64> rayAABBTests;
-    std::atomic<u64> rayPrimitiveTests;
+    // u64 rayPrimitiveTests;
+    // u64 rayAABBTests;
+    u64 bvhIntersectionTime;
+    u64 primitiveIntersectionTime;
+    u64 integrationTime;
+    u64 samplingTime;
 };
 
-static Statistics statistics;
+static ThreadStatistics *threadLocalStatistics;
 
 struct HitRecord
 {
@@ -32,10 +38,12 @@ struct HitRecord
 
     inline void SetNormal(const Ray &r, const vec3 &inNormal)
     {
-        isFrontFace = dot(r.direction(), inNormal) < 0;
+        isFrontFace = Dot(r.direction(), inNormal) < 0;
         normal      = isFrontFace ? inNormal : -inNormal;
     }
 };
+
+#define OffsetOf(type, member) (u64) & (((type *)0)->member)
 
 struct Image
 {

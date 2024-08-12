@@ -42,10 +42,10 @@ void ArenaClear(Arena *arena);
 #define PushArray(arena, type, count)       (type *)ArenaPush(arena, sizeof(type) * (count))
 #define PushStruct(arena, type)             (type *)PushArray(arena, type, 1)
 
+#define PushStructConstruct(arena, Type) new (PushStruct(arena, Type)) Type
+
 #define ScratchEnd(temp) TempEnd(temp)
 
 #define IsZero(instance) CheckZero(sizeof(instance), (u8 *)(&instance))
 
 #endif
-
-

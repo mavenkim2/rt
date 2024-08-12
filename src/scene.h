@@ -43,10 +43,10 @@ struct Quad
     Quad() {}
     Quad(const vec3 &q, const vec3 &u, const vec3 &v, Material *mat) : q(q), u(u), v(v), material(mat)
     {
-        vec3 n = cross(u, v);
-        normal = normalize(n);
-        d      = dot(normal, q);
-        w      = n / dot(n, n);
+        vec3 n = Cross(u, v);
+        normal = Normalize(n);
+        d      = Dot(normal, q);
+        w      = n / Dot(n, n);
         area   = n.length();
     }
 
@@ -60,20 +60,20 @@ struct Quad
 
     bool Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const
     {
-        f32 denom = dot(normal, r.direction());
+        f32 denom = Dot(normal, r.direction());
         // if the ray is parallel to the plane
         if (fabs(denom) < 1e-8f)
             return false;
 
-        f32 t = (d - dot(normal, r.origin())) / denom;
+        f32 t = (d - Dot(normal, r.origin())) / denom;
 
         if (t < tMin || t > tMax) return false;
 
         vec3 intersection = r.at(t);
 
         vec3 planarHitVector = intersection - q;
-        f32 alpha            = dot(w, cross(planarHitVector, v));
-        f32 beta             = dot(w, cross(u, planarHitVector));
+        f32 alpha            = Dot(w, Cross(planarHitVector, v));
+        f32 beta             = Dot(w, Cross(u, planarHitVector));
 
         if (!(alpha >= 0 && alpha <= 1 && beta >= 0 && beta <= 1)) return false;
 
@@ -92,7 +92,7 @@ struct Quad
         if (!this->Hit(Ray(origin, direction), 0.0001f, infinity, rec))
             return 0;
         f32 distanceSquared = rec.t * rec.t * direction.lengthSquared();
-        f32 cosine          = fabs(dot(direction, rec.normal) / direction.length());
+        f32 cosine          = fabs(Dot(direction, rec.normal) / direction.length());
         return distanceSquared / (cosine * area);
     };
 

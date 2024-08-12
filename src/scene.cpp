@@ -37,10 +37,10 @@ AABB Transform(const HomogeneousTransform &transform, const AABB &aabb)
 Basis GenerateBasis(vec3 n)
 {
     Basis result;
-    n        = normalize(n);
+    n        = Normalize(n);
     vec3 up  = fabs(n.x) > 0.9 ? vec3(0, 1, 0) : vec3(1, 0, 0);
-    vec3 t   = normalize(cross(n, up));
-    vec3 b   = cross(n, t);
+    vec3 t   = Normalize(Cross(n, up));
+    vec3 b   = Cross(n, t);
     result.t = t;
     result.b = b;
     result.n = n;
@@ -60,14 +60,14 @@ vec3 ConvertToLocal(Basis *basis, vec3 vec)
 //
 bool Sphere::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const
 {
-    // (C - P) dot (C - P) = r^2
-    // (C - (O + Dt)) dot (C - (O + Dt)) - r^2 = 0
-    // (-Dt + C - O) dot (-Dt + C - O) - r^2 = 0
-    // t^2(D dot D) - 2t(D dot (C - O)) + (C - O dot C - O) - r^2 = 0
+    // (C - P) Dot (C - P) = r^2
+    // (C - (O + Dt)) Dot (C - (O + Dt)) - r^2 = 0
+    // (-Dt + C - O) Dot (-Dt + C - O) - r^2 = 0
+    // t^2(D Dot D) - 2t(D Dot (C - O)) + (C - O Dot C - O) - r^2 = 0
     vec3 oc = Center(r.time()) - r.origin();
-    f32 a   = dot(r.direction(), r.direction());
-    f32 h   = dot(r.direction(), oc);
-    f32 c   = dot(oc, oc) - radius * radius;
+    f32 a   = Dot(r.direction(), r.direction());
+    f32 h   = Dot(r.direction(), oc);
+    f32 c   = Dot(oc, oc) - radius * radius;
 
     f32 discriminant = h * h - a * c;
     if (discriminant < 0)

@@ -10,6 +10,13 @@ struct Win32Thread
     Win32Thread *next;
 };
 
+struct PerformanceCounter
+{
+    u64 counter;
+};
+
+
+PerformanceCounter OS_StartCounter();
 u32 OS_NumProcessors();
 void *OS_Reserve(u64 size);
 b8 OS_Commit(void *ptr, u64 size);
