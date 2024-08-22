@@ -9,6 +9,6 @@ struct Event
     ~Event();
 };
 
-#define TIMED_FUNCTION(arg) Event event_##__LINE__(OffsetOf(ThreadStatistics, arg) / 8)
+#define TIMED_FUNCTION(arg) Event event_##__LINE__##arg(OffsetOf(ThreadStatistics, arg) / 8)
 
 #endif

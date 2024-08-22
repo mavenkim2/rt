@@ -1,6 +1,8 @@
 #ifndef SPECTRUM_H
 #define SPECTRUM_H
 
+// #include "../build/rgbspectrum_srgb.cpp"
+
 constexpr f32 LambdaMin           = 360;
 constexpr f32 LambdaMax           = 830;
 constexpr u32 NSampledWavelengths = 4;
@@ -31,6 +33,7 @@ f32 Blackbody(f32 lambda, f32 T)
 }
 
 struct Spectrum;
+struct RGBColorSpace;
 
 struct SampledSpectrum
 {
@@ -51,6 +54,7 @@ struct SampledSpectrum
     }
 
     vec3 ToXYZ(const SampledWavelengths &lambda) const;
+    vec3 ToRGB(const RGBColorSpace &space, const SampledWavelengths &lambda) const;
     f32 operator[](i32 i) const
     {
         return values[i];
@@ -403,5 +407,41 @@ struct BlackbodySpectrum : SpectrumCRTP<BlackbodySpectrum>
     // Using Wien's displacement law, find the wavelength where emission is maximum
     f32 normalizationFactor;
 };
+
+struct RGBToSpectrumTable
+{
+};
+
+struct RGBColorSpace
+{
+    mat3 RGBToXYZ;
+    mat3 XYZToRGB;
+
+    // Color primaries (xy chromaticity coordinates)
+    vec2 r, g, b, w;
+
+    // White point
+    Spectrum illuminant;
+    const RGBToSpectrumTable *rgbToSpec;
+
+    RGBColorSpace(Arena *arena, vec2 r, vec2 g, vec2 b, Spectrum illuminant, const RGBToSpectrumTable *rgbToSpec);
+    vec3 ToRGB(vec3 xyz) const
+    {
+        return mul(XYZToRGB, xyz);
+    }
+    vec3 ToXYZ(vec3 rgb) const
+    {
+        return mul(RGBToXYZ, rgb);
+    }
+};
+
+// Converting from RGB to spectral: https://rgl.s3.eu-central-1.amazonaws.com/media/papers/Jakob2019Spectral_3.pdf
+inline LaneF32 EvaluateSpectral(f32 c0, f32 c1, f32 c2, LaneF32 wl)
+{
+    // f(x) = S(c0x^2 + c1x + c2), S is a sigmoid, x is the wavelength
+    // S(x) = 1/2 + x/(2 * sqrt(1 + x^2))
+    LaneF32 x = FMA(FMA(c0, wl, c1), wl, c2);
+    return FMA(.5f * x, rsqrt(FMA(x, x, 1)), .5f);
+}
 
 #endif

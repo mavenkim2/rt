@@ -14,21 +14,23 @@ struct BVH
         u32 count;
 
         u32 compressedBVHIndex;
-        bool IsLeaf() { return count > 0; }
+        // TODO: this is really wasteful and bad
+        b8 isNode;
+        bool IsLeaf() { return isNode == 0; }
     };
     Node *nodes;
     u32 *leafIndices;
     u32 nodeCount;
     u32 maxPrimitivesPerLeaf;
 
-    void Build(Scene *inScene, u32 primsPerLeaf);
-    void Build(AABB *aabbs, u32 count);
+    void Build(Arena *arena, Scene *inScene, u32 primsPerLeaf);
+    void Build(Arena *arena, AABB *aabbs, u32 count);
     void Subdivide(u32 nodeIndex, AABB *aabbs);
     inline void UpdateNodeBounds(u32 nodeIndex, AABB *aabbs);
     bool Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const;
 };
 
-struct UncompressedBVHNode
+struct alignas(64) UncompressedBVHNode
 {
     LaneVec3 minP;
     LaneVec3 maxP;
@@ -36,14 +38,50 @@ struct UncompressedBVHNode
     union
     {
         // Internal nodes
-        u32 child[4];
+        u32 childIndex[4];
         // Offset into primitive array
-        u32 offset[4];
+        u32 offsetIndex[4];
     };
     // Number of primitives
     u16 count[4];
-    u32 leafMask : 4;
-    u32 numChildren : 4;
+    // invalid = 0, child = 1, leaf = 2
+    u32 leafMask : 8;
+
+    // https://www.youtube.com/watch?v=6BIfqfC1i7U
+    i32 IntersectP(const LaneVec3 rayOrigin, const LaneVec3 rcpDir, const f32 tMinHit, const f32 tMaxHit) const
+    {
+        const LaneF32 termMinX = (minP.x - rayOrigin.x) * rcpDir.x;
+        const LaneF32 termMaxX = (maxP.x - rayOrigin.x) * rcpDir.x;
+
+        __m128 resultTest = _mm_mul_ps(_mm_sub_ps(maxP.x.v, rayOrigin.x.v), rcpDir.x.v);
+
+        const LaneF32 termMinY = (minP.y - rayOrigin.y) * rcpDir.y;
+        const LaneF32 termMaxY = (maxP.y - rayOrigin.y) * rcpDir.y;
+
+        const LaneF32 termMinZ = (minP.z - rayOrigin.z) * rcpDir.z;
+        const LaneF32 termMaxZ = (maxP.z - rayOrigin.z) * rcpDir.z;
+
+        // NOTE: the order matters here. If one of the two values are NaN, SSE returns the second one.
+        // For example, if rayOrigin.x = minP.x, and rcpDir.x = 0, then termMinX = NaN and termMaxX = +infinity
+        // (because -0 is converted to +0). Therefore, tLeave won't be automatically set to -infinity, causing
+        // the intersection to fail in this case. This prevents cracks between edges.
+
+        const LaneF32 tMinX = Min(termMaxX, termMinX);
+        const LaneF32 tMaxX = Max(termMinX, termMaxX);
+
+        const LaneF32 tMinY = Min(termMaxY, termMinY);
+        const LaneF32 tMaxY = Max(termMinY, termMaxY);
+
+        const LaneF32 tMinZ = Min(termMaxZ, termMinZ);
+        const LaneF32 tMaxZ = Max(termMinZ, termMaxZ);
+
+        const LaneF32 tEntry = Max(tMinX, Max(tMinY, Max(tMinX, LaneF32FromF32(tMinHit))));
+        const LaneF32 tLeave = Min(tMaxZ, Min(tMaxY, Min(tMaxX, LaneF32FromF32(tMaxHit))));
+
+        // TODO: maybe this should be <=, in the case that we're intersecting something infinitely thin
+        // (i.e. min = max)
+        return FlattenMask(tEntry <= tLeave);
+    }
 
     i32 IntersectP(const Ray &r, const f32 tMinHit, const f32 tMaxHit) const
     {
@@ -164,44 +202,47 @@ struct UncompressedBVHNode
         i32 outcome = FlattenMask(result);
         return outcome;
     }
-    inline b8 IsLeaf(i32 index)
-    {
-        b8 result = leafMask & (1 << index);
-        return result;
-    }
 };
 
-struct alignas(32) CompressedBVHNode
+struct alignas(64) CompressedBVHNode
 {
     vec3 minP;
+    u32 minX;
+    u32 minY;
+    u32 minZ;
+    // u8 minX[4];
+    // u8 minY[4];
+    // u8 minZ[4];
+
     struct
     {
         u32 scaleX : 8;
         u32 scaleY : 8;
         u32 scaleZ : 8;
         // Set bit = Leaf
-        u32 leafMask : 4;
+        u32 leafMask : 8;
         // Set bit = Valid
-        u32 numChildren : 4;
+        // u32 numChildren : 4;
     };
-    u8 minX[4];
-    u8 minY[4];
-    u8 minZ[4];
 
-    u8 maxX[4];
-    u8 maxY[4];
-    u8 maxZ[4];
+    u32 maxX;
+    u32 maxY;
+    u32 maxZ;
+    // u8 maxX[4];
+    // u8 maxY[4];
+    // u8 maxZ[4];
 
     union
     {
         // Internal nodes
-        u32 child[4];
+        u32 childIndex[4];
         // Offset into primitive array
-        u32 offset[4];
+        u32 offsetIndex[4];
     };
     // Number of primitives
     u16 count[4];
 
+    // TODO: actually deal with floating point precision systematically (see 6.8 pbrt)
     UncompressedBVHNode Decompress()
     {
         UncompressedBVHNode node;
@@ -211,40 +252,40 @@ struct alignas(32) CompressedBVHNode
         f32 expZ = BitsToFloat(scaleZ << 23);
 
         f32 uncompressedMinX[4];
-        uncompressedMinX[0] = minP.x + expX * minX[0];
-        uncompressedMinX[1] = minP.x + expX * minX[1];
-        uncompressedMinX[2] = minP.x + expX * minX[2];
-        uncompressedMinX[3] = minP.x + expX * minX[3];
+        uncompressedMinX[0] = minP.x + expX * (minX & 0xff);         // 0.001f;
+        uncompressedMinX[1] = minP.x + expX * ((minX >> 8) & 0xff);  // 0.001f;
+        uncompressedMinX[2] = minP.x + expX * ((minX >> 16) & 0xff); // 0.001f;
+        uncompressedMinX[3] = minP.x + expX * ((minX >> 24) & 0xff); // 0.001f;
 
         f32 uncompressedMinY[4];
-        uncompressedMinY[0] = minP.y + expY * minY[0];
-        uncompressedMinY[1] = minP.y + expY * minY[1];
-        uncompressedMinY[2] = minP.y + expY * minY[2];
-        uncompressedMinY[3] = minP.y + expY * minY[3];
+        uncompressedMinY[0] = minP.y + expY * (minY & 0xff);         // 0.001f;
+        uncompressedMinY[1] = minP.y + expY * ((minY >> 8) & 0xff);  // 0.001f;
+        uncompressedMinY[2] = minP.y + expY * ((minY >> 16) & 0xff); // 0.001f;
+        uncompressedMinY[3] = minP.y + expY * ((minY >> 24) & 0xff); // 0.001f;
 
         f32 uncompressedMinZ[4];
-        uncompressedMinZ[0] = minP.z + expZ * minZ[0];
-        uncompressedMinZ[1] = minP.z + expZ * minZ[1];
-        uncompressedMinZ[2] = minP.z + expZ * minZ[2];
-        uncompressedMinZ[3] = minP.z + expZ * minZ[3];
+        uncompressedMinZ[0] = minP.z + expZ * (minZ & 0xff);         // 0.001f;
+        uncompressedMinZ[1] = minP.z + expZ * ((minZ >> 8) & 0xff);  // 0.001f;
+        uncompressedMinZ[2] = minP.z + expZ * ((minZ >> 16) & 0xff); // 0.001f;
+        uncompressedMinZ[3] = minP.z + expZ * ((minZ >> 24) & 0xff); // 0.001f;
 
         f32 uncompressedMaxX[4];
-        uncompressedMaxX[0] = minP.x + expX * maxX[0];
-        uncompressedMaxX[1] = minP.x + expX * maxX[1];
-        uncompressedMaxX[2] = minP.x + expX * maxX[2];
-        uncompressedMaxX[3] = minP.x + expX * maxX[3];
+        uncompressedMaxX[0] = minP.x + expX * (maxX & 0xff);         // 0.001f;
+        uncompressedMaxX[1] = minP.x + expX * ((maxX >> 8) & 0xff);  // 0.001f;
+        uncompressedMaxX[2] = minP.x + expX * ((maxX >> 16) & 0xff); // 0.001f;
+        uncompressedMaxX[3] = minP.x + expX * ((maxX >> 24) & 0xff); // 0.001f;
 
         f32 uncompressedMaxY[4];
-        uncompressedMaxY[0] = minP.y + expY * maxY[0];
-        uncompressedMaxY[1] = minP.y + expY * maxY[1];
-        uncompressedMaxY[2] = minP.y + expY * maxY[2];
-        uncompressedMaxY[3] = minP.y + expY * maxY[3];
+        uncompressedMaxY[0] = minP.y + expY * (maxY & 0xff);         // 0.001f;
+        uncompressedMaxY[1] = minP.y + expY * ((maxY >> 8) & 0xff);  // 0.001f;
+        uncompressedMaxY[2] = minP.y + expY * ((maxY >> 16) & 0xff); // 0.001f;
+        uncompressedMaxY[3] = minP.y + expY * ((maxY >> 24) & 0xff); // 0.001f;
 
         f32 uncompressedMaxZ[4];
-        uncompressedMaxZ[0] = minP.z + expZ * maxZ[0];
-        uncompressedMaxZ[1] = minP.z + expZ * maxZ[1];
-        uncompressedMaxZ[2] = minP.z + expZ * maxZ[2];
-        uncompressedMaxZ[3] = minP.z + expZ * maxZ[3];
+        uncompressedMaxZ[0] = minP.z + expZ * (maxZ & 0xff);         // + 0.001f;
+        uncompressedMaxZ[1] = minP.z + expZ * ((maxZ >> 8) & 0xff);  // + 0.001f;
+        uncompressedMaxZ[2] = minP.z + expZ * ((maxZ >> 16) & 0xff); // + 0.001f;
+        uncompressedMaxZ[3] = minP.z + expZ * ((maxZ >> 24) & 0xff); //+ 0.001f;
 
         node.minP.x = Load(uncompressedMinX);
         node.minP.y = Load(uncompressedMinY);
@@ -254,21 +295,26 @@ struct alignas(32) CompressedBVHNode
         node.maxP.y = Load(uncompressedMaxY);
         node.maxP.z = Load(uncompressedMaxZ);
 
-        return node;
-    }
+        node.childIndex[0] = childIndex[0];
+        node.childIndex[1] = childIndex[1];
+        node.childIndex[2] = childIndex[2];
+        node.childIndex[3] = childIndex[3];
 
-    inline b8 IsLeaf(i32 index)
-    {
-        b8 result = leafMask & (1 << index);
-        return result;
+        node.count[0] = count[0];
+        node.count[1] = count[1];
+        node.count[2] = count[2];
+        node.count[3] = count[3];
+
+        node.leafMask = leafMask;
+        return node;
     }
 };
 
-void Compress(CompressedBVHNode *node, const AABB &child1, const AABB &child2, const AABB &child3, const AABB &child4)
+void Compress(CompressedBVHNode *node, const AABB &child0, const AABB &child1, const AABB &child2, const AABB &child3)
 {
-    node->minP = Min(Min(child1, child2), Min(child3, child4));
+    node->minP = Min(Min(child0, child1), Min(child2, child3));
 
-    vec3 maxP = Max(Max(child1, child2), Max(child3, child4));
+    vec3 maxP = Max(Max(child0, child1), Max(child2, child3));
     f32 expX  = std::ceil(log2f((maxP.x - node->minP.x) / 255.f));
     f32 expY  = std::ceil(log2f((maxP.y - node->minP.y) / 255.f));
     f32 expZ  = std::ceil(log2f((maxP.z - node->minP.z) / 255.f));
@@ -277,40 +323,80 @@ void Compress(CompressedBVHNode *node, const AABB &child1, const AABB &child2, c
     f32 powY = powf(2.f, expY);
     f32 powZ = powf(2.f, expZ);
 
-    node->minX[0] = u8((child1.minX - node->minP.x) / powX);
-    node->minX[1] = u8((child2.minX - node->minP.x) / powX);
-    node->minX[2] = u8((child3.minX - node->minP.x) / powX);
-    node->minX[3] = u8((child4.minX - node->minP.x) / powX);
+    LaneF32 powXLane = LaneF32FromF32(powX);
+    LaneF32 powYLane = LaneF32FromF32(powY);
+    LaneF32 powZLane = LaneF32FromF32(powZ);
 
-    node->minY[0] = u8((child1.minY - node->minP.y) / powY);
-    node->minY[1] = u8((child2.minY - node->minP.y) / powY);
-    node->minY[2] = u8((child3.minY - node->minP.y) / powY);
-    node->minY[3] = u8((child4.minY - node->minP.y) / powY);
+    LaneF32 minX = Load(child0.minX, child1.minX, child2.minX, child3.minX);
+    LaneF32 minY = Load(child0.minY, child1.minY, child2.minY, child3.minY);
+    LaneF32 minZ = Load(child0.minZ, child1.minZ, child2.minZ, child3.minZ);
 
-    node->minZ[0] = u8((child1.minZ - node->minP.z) / powZ);
-    node->minZ[1] = u8((child2.minZ - node->minP.z) / powZ);
-    node->minZ[2] = u8((child3.minZ - node->minP.z) / powZ);
-    node->minZ[3] = u8((child4.minZ - node->minP.z) / powZ);
+    LaneF32 maxX = Load(child0.maxX, child1.maxX, child2.maxX, child3.maxX);
+    LaneF32 maxY = Load(child0.maxY, child1.maxY, child2.maxY, child3.maxY);
+    LaneF32 maxZ = Load(child0.maxZ, child1.maxZ, child2.maxZ, child3.maxZ);
 
-    node->maxX[0] = u8((child1.maxX - node->minP.x) / powX);
-    node->maxX[1] = u8((child2.maxX - node->minP.x) / powX);
-    node->maxX[2] = u8((child3.maxX - node->minP.x) / powX);
-    node->maxX[3] = u8((child4.maxX - node->minP.x) / powX);
+    LaneF32 nodeMinX = LaneF32FromF32(node->minP.x);
+    LaneF32 nodeMinY = LaneF32FromF32(node->minP.y);
+    LaneF32 nodeMinZ = LaneF32FromF32(node->minP.z);
 
-    node->maxY[0] = u8((child1.maxY - node->minP.y) / powY);
-    node->maxY[1] = u8((child2.maxY - node->minP.y) / powY);
-    node->maxY[2] = u8((child3.maxY - node->minP.y) / powY);
-    node->maxY[3] = u8((child4.maxY - node->minP.y) / powY);
+    node->minX = ExtractU32(TruncateU32ToU8(ConvertLaneF32ToLaneU32((minX - nodeMinX) / powXLane)), 0);
+    node->minY = ExtractU32(TruncateU32ToU8(ConvertLaneF32ToLaneU32((minY - nodeMinY) / powYLane)), 0);
+    node->minZ = ExtractU32(TruncateU32ToU8(ConvertLaneF32ToLaneU32((minZ - nodeMinZ) / powZLane)), 0);
 
-    node->maxZ[0] = u8((child1.maxZ - node->minP.z) / powZ);
-    node->maxZ[1] = u8((child2.maxZ - node->minP.z) / powZ);
-    node->maxZ[2] = u8((child3.maxZ - node->minP.z) / powZ);
-    node->maxZ[3] = u8((child4.maxZ - node->minP.z) / powZ);
+    node->maxX = ExtractU32(TruncateU32ToU8(ConvertLaneF32ToLaneU32((maxX - nodeMinX) / powXLane)), 0);
+    node->maxY = ExtractU32(TruncateU32ToU8(ConvertLaneF32ToLaneU32((maxY - nodeMinY) / powYLane)), 0);
+    node->maxZ = ExtractU32(TruncateU32ToU8(ConvertLaneF32ToLaneU32((maxZ - nodeMinZ) / powZLane)), 0);
 
     node->scaleX = u8(FloatToBits(powX) >> 23);
     node->scaleY = u8(FloatToBits(powY) >> 23);
     node->scaleZ = u8(FloatToBits(powZ) >> 23);
 }
+// {
+//     node->minP = Min(Min(child0, child1), Min(child2, child3));
+//
+//     vec3 maxP = Max(Max(child0, child1), Max(child2, child3));
+//     f32 expX  = std::ceil(log2f((maxP.x - node->minP.x) / 255.f));
+//     f32 expY  = std::ceil(log2f((maxP.y - node->minP.y) / 255.f));
+//     f32 expZ  = std::ceil(log2f((maxP.z - node->minP.z) / 255.f));
+//
+//     f32 powX = powf(2.f, expX);
+//     f32 powY = powf(2.f, expY);
+//     f32 powZ = powf(2.f, expZ);
+//
+//     node->minX = (u32)((child0.minX - node->minP.x) / powX) & 0xff;
+//     node->minX |= ((u32)(((child1.minX - node->minP.x) / powX)) & 0xff) << 8;
+//     node->minX |= ((u32)(((child2.minX - node->minP.x) / powX)) & 0xff) << 16;
+//     node->minX |= ((u32)(((child3.minX - node->minP.x) / powX)) & 0xff) << 24;
+//
+//     node->minY = (u32)((child0.minY - node->minP.y) / powY) & 0xff;
+//     node->minY |= ((u32)(((child1.minY - node->minP.y) / powY)) & 0xff) << 8;
+//     node->minY |= ((u32)(((child2.minY - node->minP.y) / powY)) & 0xff) << 16;
+//     node->minY |= ((u32)(((child3.minY - node->minP.y) / powY)) & 0xff) << 24;
+//
+//     node->minZ = (u32)((child0.minZ - node->minP.z) / powZ) & 0xff;
+//     node->minZ |= ((u32)(((child1.minZ - node->minP.z) / powZ)) & 0xff) << 8;
+//     node->minZ |= ((u32)(((child2.minZ - node->minP.z) / powZ)) & 0xff) << 16;
+//     node->minZ |= ((u32)(((child3.minZ - node->minP.z) / powZ)) & 0xff) << 24;
+//
+//     node->maxX = (u32)((child0.maxX - node->minP.x) / powX) & 0xff;
+//     node->maxX |= ((u32)(((child1.maxX - node->minP.x) / powX)) & 0xff) << 8;
+//     node->maxX |= ((u32)(((child2.maxX - node->minP.x) / powX)) & 0xff) << 16;
+//     node->maxX |= ((u32)(((child3.maxX - node->minP.x) / powX)) & 0xff) << 24;
+//
+//     node->maxY = (u32)((child0.maxY - node->minP.y) / powY) & 0xff;
+//     node->maxY |= ((u32)(((child1.maxY - node->minP.y) / powY)) & 0xff) << 8;
+//     node->maxY |= ((u32)(((child2.maxY - node->minP.y) / powY)) & 0xff) << 16;
+//     node->maxY |= ((u32)(((child3.maxY - node->minP.y) / powY)) & 0xff) << 24;
+//
+//     node->maxZ = (u32)((child0.maxZ - node->minP.z) / powZ) & 0xff;
+//     node->maxZ |= ((u32)(((child1.maxZ - node->minP.z) / powZ)) & 0xff) << 8;
+//     node->maxZ |= ((u32)(((child2.maxZ - node->minP.z) / powZ)) & 0xff) << 16;
+//     node->maxZ |= ((u32)(((child3.maxZ - node->minP.z) / powZ)) & 0xff) << 24;
+//
+//     node->scaleX = u8(FloatToBits(powX) >> 23);
+//     node->scaleY = u8(FloatToBits(powY) >> 23);
+//     node->scaleZ = u8(FloatToBits(powZ) >> 23);
+// }
 
 struct BVH4
 {

@@ -9,7 +9,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "third_party/stb_image.h"
 
-#define CORNELL 1
+#define FINAL 1
 #define EMISSIVE
 
 const vec3 INVALID_VEC = vec3((f32)U32Max, (f32)U32Max, (f32)U32Max);
@@ -23,6 +23,8 @@ struct ThreadStatistics
     u64 primitiveIntersectionTime;
     u64 integrationTime;
     u64 samplingTime;
+
+    u64 dumb;
 };
 
 static ThreadStatistics *threadLocalStatistics;
@@ -74,6 +76,12 @@ struct BitmapHeader
     u32 colorsImportant;
 };
 #pragma pack(pop)
+
+struct RayQueueItem
+{
+    Ray ray;
+    i32 radianceIndex;
+};
 
 inline u32 *GetPixelPointer(Image *image, u32 x, u32 y)
 {

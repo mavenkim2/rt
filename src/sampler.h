@@ -12,8 +12,14 @@ struct IndependentSampler : SamplerCRTP<IndependentSampler>
         rng.SetSequence(Hash(p, seed));
         rng.Advance(sampleIndex * 65536ull + dimension);
     }
-    f32 Get1D() { return rng.Uniform<f32>(); }
-    vec2 Get2D() { return {rng.Uniform<f32>(), rng.Uniform<f32>()}; }
+    f32 Get1D()
+    {
+        return rng.Uniform<f32>();
+    }
+    vec2 Get2D()
+    {
+        return {rng.Uniform<f32>(), rng.Uniform<f32>()};
+    }
     vec2 GetPixel2D() { return Get2D(); }
 
     i32 samplesPerPixel, seed;
@@ -324,3 +330,144 @@ struct ZSobolSampler : SamplerCRTP<ZSobolSampler>
     u64 mortonIndex;
     RandomizeStrategy randomize;
 };
+
+// struct SOAZSobolSampler : SamplerCRTP<SOAZSobolSampler>
+// {
+//     SOAZSobolSampler(i32 samplesPerPixel, vec2i fullResolution, RandomizeStrategy randomize, i32 seed = 0)
+//         : randomize(randomize), seed(seed)
+//     {
+//         assert(IsPow2(samplesPerPixel));
+//         log2SamplesPerPixel     = Log2Int(samplesPerPixel);
+//         i32 res                 = NextPowerOfTwo(Max(fullResolution.x, fullResolution.y));
+//         i32 log4SamplesPerPixel = (log2SamplesPerPixel + 1) / 2;
+//         nBase4Digits            = log4SamplesPerPixel + Log2Int(res);
+//     }
+//     i32 SamplesPerPixel() const
+//     {
+//         return 1 << log2SamplesPerPixel;
+//     }
+//
+//     void StartPixelSample(LaneVec2i pixels, i32 inIndex, i32 dim = 0)
+//     {
+//         dimension   = dim;
+//         mortonIndex = EncodeMorton2(pixels.x, pixels.y);
+//
+//         LaneU32 index = LaneU32FromU64((u64)inIndex);
+//
+//         for (u32 i = 0; i < 2; i++)
+//         {
+//             mortonIndex[i] = (mortonIndex[i] << (u64)log2SamplesPerPixel) | index;
+//         }
+//     }
+//
+//     LaneF32 Get1D()
+//     {
+//         u64 sampleIndex = GetSampleIndex();
+//         dimension++;
+//         if (randomize == RandomizeStrategy::NoRandomize)
+//             return SobolSample(sampleIndex, 0, NoRandomizer);
+//
+//         u32 hash = (u32)Hash(dimension, seed);
+//         if (randomize == RandomizeStrategy::PermuteDigits)
+//             return SobolSample(sampleIndex, 0, BinaryPermuteScrambler, hash);
+//         if (randomize == RandomizeStrategy::FastOwen)
+//             return SobolSample(sampleIndex, 0, FastOwenScrambler, hash);
+//
+//         // Default is owen scrambling
+//         return SobolSample(sampleIndex, 0, OwenScrambler, hash);
+//     }
+//
+//     vec2 Get2D()
+//     {
+//         u64 sampleIndex = GetSampleIndex();
+//         dimension += 2;
+//         if (randomize == RandomizeStrategy::NoRandomize)
+//             return vec2(SobolSample(sampleIndex, 0, NoRandomizer), SobolSample(sampleIndex, 1, NoRandomizer));
+//
+//         u64 hash          = Hash(dimension, seed);
+//         u32 sampleHash[2] = {u32(hash), u32(hash >> 32)};
+//         if (randomize == RandomizeStrategy::PermuteDigits)
+//         {
+//             return vec2(SobolSample(sampleIndex, 0, BinaryPermuteScrambler, sampleHash[0]),
+//                         SobolSample(sampleIndex, 1, BinaryPermuteScrambler, sampleHash[1]));
+//         }
+//         if (randomize == RandomizeStrategy::FastOwen)
+//         {
+//             return vec2(SobolSample(sampleIndex, 0, FastOwenScrambler, sampleHash[0]),
+//                         SobolSample(sampleIndex, 1, FastOwenScrambler, sampleHash[1]));
+//         }
+//
+//         // Default is owen scrambling
+//         return vec2(SobolSample(sampleIndex, 0, OwenScrambler, sampleHash[0]),
+//                     SobolSample(sampleIndex, 1, OwenScrambler, sampleHash[1]));
+//     }
+//     vec2 GetPixel2D()
+//     {
+//         return Get2D();
+//     }
+//
+//     LaneVec2i GetSampleIndex() const
+//     {
+//         static const u8 permutations[24][4] = {
+//             {0, 1, 2, 3},
+//             {0, 1, 3, 2},
+//             {0, 2, 1, 3},
+//             {0, 2, 3, 1},
+//             {0, 3, 2, 1},
+//             {0, 3, 1, 2},
+//             {1, 0, 2, 3},
+//             {1, 0, 3, 2},
+//             {1, 2, 0, 3},
+//             {1, 2, 3, 0},
+//             {1, 3, 2, 0},
+//             {1, 3, 0, 2},
+//             {2, 1, 0, 3},
+//             {2, 1, 3, 0},
+//             {2, 0, 1, 3},
+//             {2, 0, 3, 1},
+//             {2, 3, 0, 1},
+//             {2, 3, 1, 0},
+//             {3, 1, 2, 0},
+//             {3, 1, 0, 2},
+//             {3, 2, 1, 0},
+//             {3, 2, 0, 1},
+//             {3, 0, 2, 1},
+//             {3, 0, 1, 2},
+//         };
+//
+//         LaneVec2i result;
+//         result.x = LaneU32FromU64(0ull);
+//         result.y = LaneU32FromU64(0ull);
+//
+//         u32 isNotPow4 = log2SamplesPerPixel & 1;
+//         i32 lastDigit = isNotPow4 ? 1 : 0;
+//         for (i32 i = nBase4Digits - 1; i >= lastDigit; i--)
+//         {
+//             // Get the base 4 digit
+//             i32 digitShift = 2 * i - (isNotPow4 ? 1 : 0);
+//             for (u32 j = 0; j < 2; j++)
+//             {
+//                 LaneU32 digit = (mortonIndex[j] >> (u64)digitShift) & 3ull;
+//
+//                 // Find the permutation of the digit based on the higher bits + the dimension
+//                 LaneU32 higherDigits = mortonIndex[j] >> (digitShift + 2);
+//                 i32 p                = (MixBits(higherDigits ^ (0x55555555u * dimension)) >> 24) % 24;
+//                 digit                = permutations[p][digit];
+//                 sampleIndex |= u64(digit) << digitShift;
+//             }
+//         }
+//         if (isNotPow4)
+//         {
+//             i32 digit = mortonIndex & 1;
+//             sampleIndex |= digit ^ (MixBits((mortonIndex >> 1) ^ (0x55555555u * dimension)) & 1);
+//         }
+//
+//         return sampleIndex;
+//     }
+//
+//     i32 nBase4Digits, log2SamplesPerPixel, seed;
+//     i32 dimension;
+//     // u64 mortonIndex;
+//     LaneVec2i mortonIndex;
+//     RandomizeStrategy randomize;
+// };

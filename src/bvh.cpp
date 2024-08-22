@@ -1,21 +1,21 @@
 #include "bvh.h"
-void BVH::Build(Scene *inScene, u32 primsPerLeaf)
+void BVH::Build(Arena *arena, Scene *inScene, u32 primsPerLeaf)
 {
     maxPrimitivesPerLeaf    = primsPerLeaf;
     scene                   = inScene;
     u32 totalPrimitiveCount = scene->totalPrimitiveCount;
-    AABB *aabbs             = (AABB *)malloc(totalPrimitiveCount * sizeof(AABB));
+    AABB *aabbs             = PushArray(arena, AABB, totalPrimitiveCount);
     scene->GetAABBs(aabbs);
-    Build(aabbs, totalPrimitiveCount);
+    Build(arena, aabbs, totalPrimitiveCount);
 }
 
-void BVH::Build(AABB *aabbs, u32 count)
+void BVH::Build(Arena *arena, AABB *aabbs, u32 count)
 {
     nodeCount = 0;
     assert(count != 0);
     const u32 nodeCapacity = count * 2 - 1;
-    nodes                  = (Node *)malloc(sizeof(Node) * nodeCapacity);
-    leafIndices            = (u32 *)malloc(sizeof(u32) * count);
+    nodes                  = PushArray(arena, Node, nodeCapacity);
+    leafIndices            = PushArray(arena, u32, count);
 
     Node &node = nodes[nodeCount++];
     node       = {};
@@ -47,9 +47,19 @@ void BVH::Subdivide(u32 nodeIndex, AABB *aabbs)
 
     BVHSplitBucket bucket[12];
 
+    // for (u32 i = node.offset; i < node.count; i++)
+    // {
+    // Node &node = nodes[nodeIndex];
+    // for (u32 i = 0; i < node.count; i++)
+    // {
+    //     node.aabb = AABB(node.aabb, aabbs[leafIndices[node.offset + i]]);
+    // }
+    //
+    // }
+
     for (u32 i = node.offset; i < node.count; i++)
     {
-        i32 b = i32(numBuckets * node.aabb.Offset(aabbs[i].Centroid())[axis]);
+        i32 b = i32(numBuckets * node.aabb.Offset(aabbs[leafIndices[i]].Centroid())[axis]);
         if (b == numBuckets) b--;
         assert(b >= 0 && b < numBuckets);
         bucket[b].count++;
@@ -139,7 +149,8 @@ void BVH::Subdivide(u32 nodeIndex, AABB *aabbs)
     rightChild.offset = i;
     rightChild.count  = node.count - leftCount;
 
-    node.count = 0;
+    // node.count = 0;
+    node.isNode = 1;
     UpdateNodeBounds(leftChildIndex, aabbs);
     UpdateNodeBounds(rightChildIndex, aabbs);
 
@@ -159,13 +170,13 @@ inline void BVH::UpdateNodeBounds(u32 nodeIndex, AABB *aabbs)
 //////////////////////////////
 // BVH4
 //
-BVH4 CreateBVH4(BVH *bvh)
+BVH4 CreateBVH4(Arena *arena, BVH *bvh)
 {
     // Convert BVH-2 to BVH-4 by skipping every other level
     u32 bvh4NodeCount = (bvh->nodeCount + 3) / 4;
     BVH4 bvh4;
     bvh4.scene       = bvh->scene;
-    bvh4.nodes       = (UncompressedBVHNode *)malloc(sizeof(UncompressedBVHNode) * bvh4NodeCount);
+    bvh4.nodes       = PushArray(arena, UncompressedBVHNode, bvh4NodeCount);
     bvh4.nodeCount   = bvh->nodeCount;
     bvh4.leafIndices = std::move(bvh->leafIndices);
 
@@ -176,6 +187,62 @@ BVH4 CreateBVH4(BVH *bvh)
     bvh->nodes[0].compressedBVHIndex = 0;
 
     const AABB emptyAABB;
+
+    if (bvh->nodes[0].IsLeaf())
+    {
+        f32 minX[4] = {
+            bvh->nodes[0].aabb.minX,
+            emptyAABB.minX,
+            emptyAABB.minX,
+            emptyAABB.minX,
+        };
+        bvh4.nodes[0].minP.x = Load(minX);
+
+        f32 minY[4] = {
+            bvh->nodes[0].aabb.minY,
+            emptyAABB.minY,
+            emptyAABB.minY,
+            emptyAABB.minY,
+        };
+        bvh4.nodes[0].minP.y = Load(minY);
+
+        f32 minZ[4] = {
+            bvh->nodes[0].aabb.minZ,
+            emptyAABB.minZ,
+            emptyAABB.minZ,
+            emptyAABB.minZ,
+        };
+        bvh4.nodes[0].minP.z = Load(minZ);
+
+        f32 maxX[4] = {
+            bvh->nodes[0].aabb.maxX,
+            emptyAABB.maxX,
+            emptyAABB.maxX,
+            emptyAABB.maxX,
+        };
+        bvh4.nodes[0].maxP.x = Load(maxX);
+
+        f32 maxY[4] = {
+            bvh->nodes[0].aabb.maxY,
+            emptyAABB.maxY,
+            emptyAABB.maxY,
+            emptyAABB.maxY,
+        };
+        bvh4.nodes[0].maxP.y = Load(maxY);
+
+        f32 maxZ[4] = {
+            bvh->nodes[0].aabb.maxZ,
+            emptyAABB.maxZ,
+            emptyAABB.maxZ,
+            emptyAABB.maxZ,
+        };
+        bvh4.nodes[0].maxP.z = Load(maxZ);
+
+        bvh4.nodes[0].offsetIndex[0] = bvh->nodes[0].offset;
+        bvh4.nodes[0].count[0]       = SafeTruncateU32(bvh->nodes[0].count);
+        bvh4.nodes[0].leafMask       = 2;
+        return bvh4;
+    }
 
     while (stackCount > 0)
     {
@@ -222,7 +289,6 @@ BVH4 CreateBVH4(BVH *bvh)
 
         UncompressedBVHNode *currentNode = &bvh4.nodes[node->compressedBVHIndex];
         currentNode->leafMask            = 0;
-        currentNode->numChildren         = childrenCount;
 
         for (u32 i = 0; i < ArrayLength(grandChildren); i++)
         {
@@ -234,15 +300,16 @@ BVH4 CreateBVH4(BVH *bvh)
             if (!isLeaf)
             {
                 stack[stackCount++]            = grandChildrenIndices[i];
-                currentNode->child[i]          = runningBVH4NodeCount;
+                currentNode->childIndex[i]     = runningBVH4NodeCount;
                 grandChild->compressedBVHIndex = runningBVH4NodeCount++;
             }
             else
             {
-                currentNode->offset[i] = grandChild->offset;
-                currentNode->count[i]  = SafeTruncateU32(grandChild->count);
+                currentNode->offsetIndex[i] = grandChild->offset;
+                currentNode->count[i]       = SafeTruncateU32(grandChild->count);
             }
-            currentNode->leafMask |= (isLeaf << i);
+            b8 mask = isLeaf ? 2 : 1;
+            currentNode->leafMask |= (mask << (2 * i));
         }
 
         f32 minX[4] = {
@@ -299,13 +366,12 @@ BVH4 CreateBVH4(BVH *bvh)
 //////////////////////////////
 // Compressed
 //
-CompressedBVH4 CreateCompressedBVH4(BVH *bvh)
+CompressedBVH4 CreateCompressedBVH4(Arena *arena, BVH *bvh)
 {
     // Convert BVH-2 to BVH-4 by skipping every other level
-    u32 compressedNodeCount = (bvh->nodeCount + 3) / 4;
     CompressedBVH4 compressedBVH;
     compressedBVH.scene       = bvh->scene;
-    compressedBVH.nodes       = (CompressedBVHNode *)malloc(sizeof(CompressedBVHNode) * compressedNodeCount);
+    compressedBVH.nodes       = PushArray(arena, CompressedBVHNode, bvh->nodeCount);
     compressedBVH.nodeCount   = bvh->nodeCount;
     compressedBVH.leafIndices = std::move(bvh->leafIndices);
 
@@ -317,9 +383,19 @@ CompressedBVH4 CreateCompressedBVH4(BVH *bvh)
 
     const AABB emptyAABB;
 
+    if (bvh->nodes[0].IsLeaf())
+    {
+        Compress(&compressedBVH.nodes[0], bvh->nodes[0].aabb, emptyAABB, emptyAABB, emptyAABB);
+        compressedBVH.nodes[0].offsetIndex[0] = bvh->nodes[0].offset;
+        compressedBVH.nodes[0].count[0]       = SafeTruncateU32(bvh->nodes[0].count);
+        compressedBVH.nodes[0].leafMask       = 2;
+        compressedBVH.nodeCount               = runningCompressedNodeCount;
+        return compressedBVH;
+    }
+
     while (stackCount > 0)
     {
-        assert(runningCompressedNodeCount < compressedNodeCount);
+        // assert(runningCompressedNodeCount < compressedNodeCount);
         u32 top          = stack[--stackCount];
         BVH::Node *node  = &bvh->nodes[top];
         BVH::Node *left  = &bvh->nodes[node->left];
@@ -362,7 +438,6 @@ CompressedBVH4 CreateCompressedBVH4(BVH *bvh)
 
         CompressedBVHNode *currentCompressedNode = &compressedBVH.nodes[node->compressedBVHIndex];
         currentCompressedNode->leafMask          = 0;
-        currentCompressedNode->numChildren       = childrenCount;
 
         for (u32 i = 0; i < ArrayLength(grandChildren); i++)
         {
@@ -373,16 +448,17 @@ CompressedBVH4 CreateCompressedBVH4(BVH *bvh)
             b8 isLeaf = grandChild->IsLeaf();
             if (!isLeaf)
             {
-                stack[stackCount++]             = grandChildrenIndices[i];
-                currentCompressedNode->child[i] = runningCompressedNodeCount;
-                grandChild->compressedBVHIndex  = runningCompressedNodeCount++;
+                stack[stackCount++]                  = grandChildrenIndices[i];
+                currentCompressedNode->childIndex[i] = runningCompressedNodeCount;
+                grandChild->compressedBVHIndex       = runningCompressedNodeCount++;
             }
             else
             {
-                currentCompressedNode->offset[i] = grandChild->offset;
-                currentCompressedNode->count[i]  = SafeTruncateU32(grandChild->count);
+                currentCompressedNode->offsetIndex[i] = grandChild->offset;
+                currentCompressedNode->count[i]       = SafeTruncateU32(grandChild->count);
             }
-            currentCompressedNode->leafMask |= (isLeaf << i);
+            b8 mask = isLeaf ? 2 : 1;
+            currentCompressedNode->leafMask |= (mask << (2 * i));
         }
 
         Compress(currentCompressedNode,
@@ -391,6 +467,7 @@ CompressedBVH4 CreateCompressedBVH4(BVH *bvh)
                  grandChildren[2] ? grandChildren[2]->aabb : emptyAABB,
                  grandChildren[3] ? grandChildren[3]->aabb : emptyAABB);
     }
+    compressedBVH.nodeCount = runningCompressedNodeCount;
     return compressedBVH;
 }
 
@@ -451,6 +528,14 @@ bool BVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) 
 {
     TIMED_FUNCTION(primitiveIntersectionTime);
 
+    f32 rdx = (r.d.x == -0.f) ? 0.f : r.d.x;
+    f32 rdy = (r.d.y == -0.f) ? 0.f : r.d.y;
+    f32 rdz = (r.d.z == -0.f) ? 0.f : r.d.z;
+
+    vec3 oneOverDir    = vec3(1.f / rdx, 1.f / rdy, 1.f / rdz); // r.d.x, 1.f / r.d.y, 1.f / r.d.z);
+    LaneVec3 rcpDir    = LaneV3FromV3(oneOverDir);
+    LaneVec3 rayOrigin = LaneV3FromV3(r.o);
+
     u32 stack[64];
     u32 stackPtr      = 0;
     stack[stackPtr++] = 0;
@@ -458,32 +543,26 @@ bool BVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) 
     bool hit          = false;
     HitRecord temp;
 
-    int dirIsNeg[3] = {
-        r.d.x < 0 ? 1 : 0,
-        r.d.y < 0 ? 1 : 0,
-        r.d.z < 0 ? 1 : 0,
-    };
-
-    PerformanceCounter totalCounter = OS_StartCounter();
     while (stackPtr > 0)
     {
         assert(stackPtr < 64);
         const u32 nodeIndex       = stack[--stackPtr];
         UncompressedBVHNode &node = nodes[nodeIndex];
 
-        i32 result = node.IntersectP(r, 0, infinity, dirIsNeg);
+        i32 result = node.IntersectP(rayOrigin, rcpDir, 0, infinity);
 
         if (!result)
             continue;
 
-        for (u32 childIndex = 0; childIndex < node.numChildren; childIndex++)
+        for (u32 childIndex = 0; childIndex < 4; childIndex++)
         {
-            if (!(result & (1 << childIndex))) continue;
-            if (node.IsLeaf(childIndex))
+            u32 mask = (node.leafMask >> (2 * childIndex)) & 3;
+            if ((!(result & (1 << childIndex))) || mask == 0) continue;
+            if (mask == 2)
             {
                 for (u32 i = 0; i < node.count[childIndex]; i++)
                 {
-                    bool primitiveHit = scene->Hit(r, tMin, tMax, temp, leafIndices[node.offset[childIndex] + i]);
+                    bool primitiveHit = scene->Hit(r, tMin, tMax, temp, leafIndices[node.offsetIndex[childIndex] + i]);
 
                     if (primitiveHit)
                     {
@@ -498,21 +577,59 @@ bool BVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) 
             }
             else
             {
-                stack[stackPtr++] = node.child[childIndex];
+                stack[stackPtr++] = node.childIndex[childIndex];
             }
         }
     }
     return hit;
 }
 
+// https://research.nvidia.com/sites/default/files/publications/ylitie2017hpg-paper.pdf
 bool CompressedBVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const
 {
+    TIMED_FUNCTION(primitiveIntersectionTime);
     u32 stack[64];
+
+    HitRecord temp;
+    const u32 queueLength = 64;
+    const u32 queueMask   = queueLength - 1;
+
+    // for leaf primitives
+    struct QueueEntry
+    {
+        u32 offset;
+        u32 count;
+    };
+    QueueEntry queue[queueLength];
+
+    u32 queueWritePos = 0;
+    u32 queueReadPos  = 0;
+
+    // traversal stack
     u32 stackPtr      = 0;
     stack[stackPtr++] = 0;
-    f32 closest       = tMax;
-    bool hit          = false;
-    HitRecord temp;
+
+    f32 tClosest  = tMax;
+    record.t      = tMax;
+
+    temp.t = tMax;
+
+    bool hit  = false;
+
+    f32 rdx = (r.d.x == -0.f) ? 0.f : r.d.x;
+    f32 rdy = (r.d.y == -0.f) ? 0.f : r.d.y;
+    f32 rdz = (r.d.z == -0.f) ? 0.f : r.d.z;
+
+    vec3 oneOverDir    = vec3(1.f / rdx, 1.f / rdy, 1.f / rdz);
+    LaneVec3 rcpDir    = LaneV3FromV3(oneOverDir);
+    LaneVec3 rayOrigin = LaneV3FromV3(r.o);
+
+    const LaneU32 simdZeroI = LaneU32Zero();
+    const LaneF32 simdZero  = LaneF32Zero();
+
+    LaneF32 simdInfinity;
+    simdInfinity.v       = SIMDInfinity;
+    LaneF32 tLaneClosest = LaneF32FromF32(tClosest);
 
     while (stackPtr > 0)
     {
@@ -520,36 +637,233 @@ bool CompressedBVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord
         const u32 nodeIndex     = stack[--stackPtr];
         CompressedBVHNode &node = nodes[nodeIndex];
 
-        UncompressedBVHNode uncompressedNode = node.Decompress();
-        i32 result                           = uncompressedNode.IntersectP(r, 0, infinity);
-        if (!result)
-            continue;
+        const f32 expX = BitsToFloat(node.scaleX << 23);
+        const f32 expY = BitsToFloat(node.scaleY << 23);
+        const f32 expZ = BitsToFloat(node.scaleZ << 23);
 
-        for (u32 childIndex = 0; childIndex < node.numChildren; childIndex++)
+        const LaneVec3 minP = LaneV3FromV3(node.minP);
+        const LaneVec3 exp  = LaneV3FromV3(expX, expY, expZ);
+
+        // TODO: low efficiency?
+        const LaneU32 minXminYminZmaxX = Load(node.minX, node.minY, node.minZ, node.maxX);
+        const LaneU32 maxYmaxZ         = Load(node.maxY, 0, node.maxZ, 0);
+
+        const LaneU32 minXminY = UnpackLowU32(minXminYminZmaxX, simdZeroI);
+        const LaneU32 minZmaxX = UnpackHiU32(minXminYminZmaxX, simdZeroI);
+
+        const LaneU32 minXCompressed_i = UnpackLowU32(minXminY, simdZeroI);
+        const LaneF32 minXCompressed   = ConvertLaneU32ToLaneF32(SignExtendU8ToU32(minXCompressed_i));
+        const LaneU32 minYCompressed_i = UnpackHiU32(minXminY, simdZeroI);
+        const LaneF32 minYCompressed   = ConvertLaneU32ToLaneF32(SignExtendU8ToU32(minYCompressed_i));
+
+        const LaneU32 minZCompressed_i = UnpackLowU32(minZmaxX, simdZeroI);
+        const LaneF32 minZCompressed   = ConvertLaneU32ToLaneF32(SignExtendU8ToU32(minZCompressed_i));
+        const LaneU32 maxXCompressed_i = UnpackHiU32(minZmaxX, simdZeroI);
+        const LaneF32 maxXCompressed   = ConvertLaneU32ToLaneF32(SignExtendU8ToU32(maxXCompressed_i));
+
+        const LaneU32 maxYCompressed_i = UnpackLowU32(maxYmaxZ, simdZeroI);
+        const LaneF32 maxYCompressed   = ConvertLaneU32ToLaneF32(SignExtendU8ToU32(maxYCompressed_i));
+        const LaneU32 maxZCompressed_i = UnpackHiU32(maxYmaxZ, simdZeroI);
+        const LaneF32 maxZCompressed   = ConvertLaneU32ToLaneF32(SignExtendU8ToU32(maxZCompressed_i));
+
+        LaneVec3 minCompressed;
+        minCompressed.x = minXCompressed;
+        minCompressed.y = minYCompressed;
+        minCompressed.z = minZCompressed;
+
+        LaneVec3 maxCompressed;
+        maxCompressed.x = maxXCompressed;
+        maxCompressed.y = maxYCompressed;
+        maxCompressed.z = maxZCompressed;
+
+        const LaneVec3 rayDPrime = exp * rcpDir;
+
+        // TODO: see whether operator overloading abstraction has a cost
+        const LaneVec3 rayOPrime = (minP - rayOrigin) * rcpDir;
+
+        const LaneVec3 termMin = FMA(minCompressed, rayDPrime, rayOPrime);
+        const LaneVec3 termMax = FMA(maxCompressed, rayDPrime, rayOPrime);
+
+        const LaneF32 tEntryX = Min(termMax.x, termMin.x);
+        const LaneF32 tLeaveX = Max(termMin.x, termMax.x);
+
+        const LaneF32 tEntryY = Min(termMax.y, termMin.y);
+        const LaneF32 tLeaveY = Max(termMin.y, termMax.y);
+
+        const LaneF32 tEntryZ = Min(termMax.z, termMin.z);
+        const LaneF32 tLeaveZ = Max(termMin.z, termMax.z);
+
+        const LaneF32 tEntry    = Max(tEntryZ, Max(tEntryY, Max(tEntryX, simdZero)));
+        const LaneF32 tLeaveRaw = Min(tLeaveZ, Min(tLeaveY, Min(tLeaveX, simdInfinity)));
+
+        const LaneF32 tLeave = Min(tLeaveRaw, tLaneClosest);
+
+        const LaneF32 intersectMask = tEntry <= tLeave;
+        const i32 intersectFlags    = FlattenMask(intersectMask);
+
+        LaneF32 t_dcba = Blend(simdInfinity, tLeaveRaw, intersectMask);
+
+        const u32 childType0 = node.leafMask & 3;
+        const u32 childType1 = (node.leafMask >> 2) & 3;
+        const u32 childType2 = (node.leafMask >> 4) & 3;
+        const u32 childType3 = (node.leafMask >> 6) & 3;
+
+        // If child is a leaf or invalid (case 0 and 2), the upper bits are set according to the mask
+        const u32 nodeBits0 = (0xffffffffu + !(childType0 & 1)) & 0x02a10;
+        const u32 nodeBits1 = (0xffffffffu + !(childType1 & 1)) & 0x21420;
+        const u32 nodeBits2 = (0xffffffffu + !(childType2 & 1)) & 0x48140;
+        const u32 nodeBits3 = (0xffffffffu + !(childType3 & 1)) & 0x94080;
+
+        const u32 leafBits0 = (1 - childType0) & 0x02a10;
+        const u32 leafBits1 = (1 - childType1) & 0x21420;
+        const u32 leafBits2 = (1 - childType2) & 0x48140;
+        const u32 leafBits3 = (1 - childType3) & 0x94080;
+
+        const u32 nodeBits = (nodeBits0 | nodeBits1 | nodeBits2 | nodeBits3) >> 4;
+        const u32 leafBits = (leafBits0 | leafBits1 | leafBits2 | leafBits3) >> 4;
+
+        // Third bit of nodeBits_n is either 1, 2, 4, 8, so can use that to determine wheter a node is invalid
+        const u32 isKeptNode = (nodeBits & intersectFlags & 0xf);
+        const u32 isKeptLeaf = (leafBits & intersectFlags & 0xf);
+
+        const u32 numNodes  = PopCount(isKeptNode);
+        const u32 numLeaves = PopCount(isKeptLeaf);
+
+        // TODO: see if this branch is worth it
+        if ((numNodes | numLeaves) <= 1)
         {
-            if (node.IsLeaf(childIndex))
+            // If numNodes <= 1, then numNode will be 0, 1, 2, 4, or 8. x/2 - x/8 maps to
+            // 0, 0, 1, 2, 3
+            stack[stackPtr] = node.childIndex[(isKeptNode >> 1) - (isKeptNode >> 3)];
+            stackPtr += numNodes;
+
+            const u32 leafIndex              = (isKeptLeaf >> 1) - (isKeptLeaf >> 3);
+            queue[queueWritePos & queueMask] = {node.offsetIndex[leafIndex], node.count[leafIndex]};
+            queueWritePos += numLeaves;
+        }
+        else
+        {
+            // Branchless adding leaf nodes
+            const LaneF32 abac = PermuteReverseF32(t_dcba, 0, 1, 0, 2);
+            const LaneF32 adcd = PermuteReverseF32(t_dcba, 0, 3, 2, 3);
+
+            const u32 da_cb_ba_ac = FlattenMask(t_dcba < abac) & 0xe;
+            const u32 aa_db_ca_dc = FlattenMask(adcd < abac);
+
+            u32 da_cb_ba_db_ca_dc        = da_cb_ba_ac * 4 + aa_db_ca_dc;
+            u32 da_cb_ba_db_ca_dc_nodes  = (da_cb_ba_db_ca_dc | (~nodeBits >> 4)) & (nodeBits >> 10);
+            u32 da_cb_ba_db_ca_dc_leaves = (da_cb_ba_db_ca_dc | (~leafBits >> 4)) & (leafBits >> 10);
+
+            u32 indexA = PopCount(da_cb_ba_db_ca_dc_nodes & 0x2a);
+            u32 indexB = PopCount((da_cb_ba_db_ca_dc_nodes ^ 0x08) & 0x1c);
+            u32 indexC = PopCount((da_cb_ba_db_ca_dc_nodes ^ 0x12) & 0x13);
+            u32 indexD = PopCount((~da_cb_ba_db_ca_dc_nodes) & 0x25);
+
+            stack[stackPtr + ((numNodes - 1 - indexA) & 3)] = node.childIndex[0];
+            stack[stackPtr + ((numNodes - 1 - indexB) & 3)] = node.childIndex[1];
+            stack[stackPtr + ((numNodes - 1 - indexC) & 3)] = node.childIndex[2];
+            stack[stackPtr + ((numNodes - 1 - indexD) & 3)] = node.childIndex[3];
+
+            stackPtr += numNodes;
+
+            u32 childIndexA = PopCount(da_cb_ba_db_ca_dc_leaves & 0x2a);
+            u32 childIndexB = PopCount((da_cb_ba_db_ca_dc_leaves ^ 0x08) & 0x1c);
+            u32 childIndexC = PopCount((da_cb_ba_db_ca_dc_leaves ^ 0x12) & 0x13);
+            u32 childIndexD = PopCount((~da_cb_ba_db_ca_dc_leaves) & 0x25);
+
+            const u32 queueIndexA = (queueWritePos + childIndexA) & queueMask;
+            const u32 queueIndexB = (queueWritePos + childIndexB) & queueMask;
+            const u32 queueIndexC = (queueWritePos + childIndexC) & queueMask;
+            const u32 queueIndexD = (queueWritePos + childIndexD) & queueMask;
+
+            queue[queueIndexA].offset = node.offsetIndex[0];
+            queue[queueIndexB].offset = node.offsetIndex[1];
+            queue[queueIndexC].offset = node.offsetIndex[2];
+            queue[queueIndexD].offset = node.offsetIndex[3];
+
+            queue[queueIndexA].count = node.count[0];
+            queue[queueIndexB].count = node.count[1];
+            queue[queueIndexC].count = node.count[2];
+            queue[queueIndexD].count = node.count[3];
+
+            queueWritePos += numLeaves;
+        }
+        for (u32 queueIndex = queueReadPos; queueIndex < queueWritePos; queueIndex++)
+        {
+            QueueEntry *entry = &queue[queueIndex & queueMask];
+            for (u32 i = 0; i < entry->count; i++)
             {
-                for (u32 i = 0; i < node.count[childIndex]; i++)
-                {
-                    if (scene->Hit(r, tMin, tMax, temp, leafIndices[node.offset[childIndex] + i]))
-                    {
-                        if (temp.t < closest)
-                        {
-                            closest = temp.t;
-                            record  = temp;
-                            hit     = true;
-                        }
-                    }
-                }
-            }
-            else
-            {
-                stack[stackPtr++] = node.child[childIndex];
+                bool primitiveHit = scene->Hit(r, tMin, tClosest, record, leafIndices[entry->offset + i]);
+                hit |= primitiveHit;
+                tClosest = record.t;
             }
         }
+        queueReadPos = queueWritePos;
+        tLaneClosest = LaneF32FromF32(tClosest);
     }
     return hit;
 }
+
+// bool CompressedBVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const
+// {
+//     TIMED_FUNCTION(primitiveIntersectionTime);
+//
+//     f32 rdx = (r.d.x == -0.f) ? 0.f : r.d.x;
+//     f32 rdy = (r.d.y == -0.f) ? 0.f : r.d.y;
+//     f32 rdz = (r.d.z == -0.f) ? 0.f : r.d.z;
+//
+//     vec3 oneOverDir    = vec3(1.f / rdx, 1.f / rdy, 1.f / rdz); // r.d.x, 1.f / r.d.y, 1.f / r.d.z);
+//     LaneVec3 rcpDir    = LaneV3FromV3(oneOverDir);
+//     LaneVec3 rayOrigin = LaneV3FromV3(r.o);
+//
+//     u32 stack[64];
+//     u32 stackPtr      = 0;
+//     stack[stackPtr++] = 0;
+//     f32 closest       = tMax;
+//     bool hit          = false;
+//     HitRecord temp;
+//
+//     while (stackPtr > 0)
+//     {
+//         assert(stackPtr < 64);
+//         const u32 nodeIndex     = stack[--stackPtr];
+//         CompressedBVHNode &node = nodes[nodeIndex];
+//
+//         UncompressedBVHNode uncompressedNode = node.Decompress();
+//         // i32 result                           = uncompressedNode.IntersectP(r, 0, infinity);
+//         i32 result = uncompressedNode.IntersectP(rayOrigin, rcpDir, 0, infinity);
+//         if (!result)
+//             continue;
+//
+//         for (u32 childIndex = 0; childIndex < 4; childIndex++)
+//         {
+//             u32 mask = (uncompressedNode.leafMask >> (2 * childIndex)) & 3;
+//             if ((!(result & (1 << childIndex))) || mask == 0) continue;
+//             if (mask == 2)
+//             {
+//                 for (u32 i = 0; i < uncompressedNode.count[childIndex]; i++)
+//                 {
+//                     bool primitiveHit = scene->Hit(r, tMin, tMax, temp, leafIndices[uncompressedNode.offsetIndex[childIndex] + i]);
+//
+//                     if (primitiveHit)
+//                     {
+//                         if (temp.t < closest)
+//                         {
+//                             closest = temp.t;
+//                             record  = temp;
+//                             hit     = true;
+//                         }
+//                     }
+//                 }
+//             }
+//             else
+//             {
+//                 stack[stackPtr++] = uncompressedNode.childIndex[childIndex];
+//             }
+//         }
+//     }
+//     return hit;
+// }
 
 inline bool BVHHit(void *ptr, const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record)
 {

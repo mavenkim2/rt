@@ -8,6 +8,16 @@ u64 MixBits(u64 v)
     return v;
 }
 
+LaneU32 MixBits(LaneU32 v)
+{
+    v ^= (v >> 31u);
+    v *= 0x7fb5d329728ea185;
+    v ^= (v >> 27u);
+    v *= 0x81dadef4bc2dd44d;
+    v ^= (v >> 33u);
+    return v;
+}
+
 inline u64 MurmurHash64A(const u8 *key, size_t len, u64 seed)
 {
     const u64 m = 0xc6a4a7935bd1e995ull;

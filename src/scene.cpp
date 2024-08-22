@@ -314,7 +314,7 @@ bool Scene::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &temp, u
         }
     }
 
-    if (primitiveIndices[index].transformIndex != -1)
+    if (result && primitiveIndices[index].transformIndex != -1)
     {
         assert(transform);
         vec3 p;

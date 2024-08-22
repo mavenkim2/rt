@@ -67,7 +67,7 @@ struct Quad
 
         f32 t = (d - Dot(normal, r.origin())) / denom;
 
-        if (t < tMin || t > tMax) return false;
+        if (t <= tMin || t >= tMax) return false;
 
         vec3 intersection = r.at(t);
 

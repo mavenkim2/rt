@@ -34,8 +34,10 @@ struct StratifiedSampler;
 struct SobolSampler;
 struct PaddedSobolSampler;
 struct ZSobolSampler;
+// struct SOAZSobolSampler;
 
-using SamplerTaggedPointer = TaggedPointer<IndependentSampler, StratifiedSampler, SobolSampler, PaddedSobolSampler, ZSobolSampler>;
+using SamplerTaggedPointer = TaggedPointer<IndependentSampler, StratifiedSampler, SobolSampler,
+                                           PaddedSobolSampler, ZSobolSampler>; //, SOAZSobolSampler>;
 
 struct SamplerMethods
 {
@@ -127,6 +129,7 @@ template struct SamplerCRTP<StratifiedSampler>;
 template struct SamplerCRTP<SobolSampler>;
 template struct SamplerCRTP<PaddedSobolSampler>;
 template struct SamplerCRTP<ZSobolSampler>;
+// template struct SamplerCRTP<SOAZSobolSampler>;
 
 //////////////////////////////
 // Spectrum

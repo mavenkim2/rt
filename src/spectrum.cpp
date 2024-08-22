@@ -9,6 +9,11 @@ inline f32 InnerProduct(Spectrum f, Spectrum g)
     return integral;
 }
 
+vec3 SpectrumToXYZ(Spectrum s)
+{
+    return vec3(InnerProduct(&Spectra::X(), s), InnerProduct(&Spectra::Y(), s), InnerProduct(&Spectra::Z(), s)) / CIE_Y_integral;
+}
+
 // Computes XYZ coefficients for a spectrum
 vec3 SampledSpectrum::ToXYZ(const SampledWavelengths &lambda) const
 {
@@ -20,6 +25,13 @@ vec3 SampledSpectrum::ToXYZ(const SampledWavelengths &lambda) const
     return vec3(SafeDiv(X * *this, pdf).Average(), SafeDiv(Y * *this, pdf).Average(), SafeDiv(Z * *this, pdf).Average()) / CIE_Y_integral;
 }
 
+vec3 SampledSpectrum::ToRGB(const RGBColorSpace &space, const SampledWavelengths &lambda) const
+{
+    vec3 xyz = ToXYZ(lambda);
+    vec3 rgb = space.ToRGB(xyz);
+    return rgb;
+}
+
 // Finds chromaticity of XYZ color (colorfulness with respect to white)
 inline vec2 xy(vec3 xyz)
 {
@@ -28,7 +40,7 @@ inline vec2 xy(vec3 xyz)
 }
 
 // Reverse of above
-inline vec3 FromxyY(vec3 xy, f32 Y = 1.f)
+inline vec3 FromxyY(vec2 xy, f32 Y = 1.f)
 {
     if (xy.y == 0)
         return vec3(0, 0, 0);
@@ -502,3 +514,19 @@ void Init(Arena *arena)
 }
 
 } // namespace Spectra
+
+RGBColorSpace::RGBColorSpace(Arena *arena, vec2 r, vec2 g, vec2 b, Spectrum illuminant, const RGBToSpectrumTable *rgbToSpec)
+    : r(r), g(g), b(b), illuminant(illuminant), rgbToSpec(rgbToSpec)
+{
+    vec3 W = SpectrumToXYZ(illuminant);
+    w      = xy(W);
+    vec3 R = FromxyY(r);
+    vec3 G = FromxyY(g);
+    vec3 B = FromxyY(b);
+
+    mat3 rgb(R, G, B);
+
+    vec3 c   = mul(rgb.Inverse(), W);
+    RGBToXYZ = mul(rgb, mat3(c));
+    XYZToRGB = RGBToXYZ.Inverse();
+}

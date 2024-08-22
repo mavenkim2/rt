@@ -1,6 +1,6 @@
 #include "rt.h"
-#include "sobolmatrices.h"
-#include "primes.h"
+#include "tables/sobolmatrices.h"
+#include "tables/primes.h"
 
 #include "win32.h"
 #include "debug.h"
@@ -17,7 +17,6 @@
 #include "bsdf.h"
 #include "low_discrepancy.h"
 #include "sampler.h"
-#include "parallel.h"
 #include <algorithm>
 
 #include "win32.cpp"
@@ -644,56 +643,48 @@ vec3 RayColor(const Ray &r, Sampler sampler, const int depth, const Primitive &b
 }
 #endif
 
-void Integrate(const Ray *inRays, Ray *outRays, u32 numRays, int depth,
-               const Primitive &bvh, const Light *lights, const u32 numLights, vec3 *outRadiance, Sampler sampler, u32 *mask)
+void Integrate(const RayQueueItem *inRays, RayQueueItem *outRays, u32 numInRays, u32 *numOutRays, int depth,
+               const Primitive &bvh, const Light *lights, const u32 numLights, vec3 *outRadiance, Sampler sampler)
 {
     TIMED_FUNCTION(integrationTime);
-    TempArena temp     = ScratchStart(0, 0);
-    HitRecord *records = PushArray(temp.arena, HitRecord, numRays);
 
-    for (u32 i = 0; i < numRays; i++)
+    *numOutRays = 0;
+    for (u32 i = 0; i < numInRays; i++)
     {
-        if (((mask[i >> 5] & (1 << (i & 31))) != 0) || depth <= 0)
-            continue;
-
-        const Ray r = inRays[i];
-
-        if (!bvh.Hit(r, 0.001f, infinity, records[i]))
-        {
-            outRadiance[i] *= BACKGROUND;
-            mask[i >> 5] |= 1 << (i & 31);
-        }
-    }
-
-    for (u32 i = 0; i < numRays; i++)
-    {
-        if (mask[i >> 5] & (1 << (i & 31)))
-            continue;
-
-        const Ray r = inRays[i];
+        // TIMED_FUNCTION(samplingTime);
+        const Ray r = inRays[i].ray;
+        i32 index   = inRays[i].radianceIndex;
 
         if (depth <= 0)
         {
-            outRadiance[i] *= vec3(0, 0, 0);
+            outRadiance[index] *= vec3(0, 0, 0);
             continue;
         }
 
-        HitRecord record = records[i];
+        HitRecord record;
+        bool result = bvh.Hit(r, 0.001f, infinity, record);
+        if (!result)
+        {
+            outRadiance[index] *= BACKGROUND;
+            continue;
+        }
 
         ScatterRecord sRec;
         // Ray scattered;
+
         vec3 emissiveColor = record.material->Emitted(r, record, record.u, record.v, record.p);
         if (!record.material->Scatter(r, record, sRec, sampler.Get2D()))
         {
-            outRadiance[i] *= emissiveColor;
-            mask[i >> 5] |= 1 << (i & 31);
+            outRadiance[index] *= emissiveColor;
             continue;
         }
 
         if (IsValidRay(&sRec.skipPDFRay))
         {
-            outRadiance[i] *= sRec.attenuation;
-            outRays[i] = sRec.skipPDFRay;
+            outRadiance[index] *= sRec.attenuation;
+            outRays[*numOutRays].ray           = sRec.skipPDFRay;
+            outRays[*numOutRays].radianceIndex = index;
+            *numOutRays += 1;
             continue;
         }
 
@@ -719,12 +710,16 @@ void Integrate(const Ray *inRays, Ray *outRays, u32 numRays, int depth,
         f32 lightPdf  = GetLightsPDFValue(lights, numLights, record.p, scatteredDir);
         f32 pdf       = 0.5f * lightPdf + 0.5f * cosPdf;
 
-        f32 scatteringPDF = record.material->ScatteringPDF(r, record, scattered);
-        vec3 scatterColor = (sRec.attenuation * scatteringPDF) / pdf;
-        outRays[i]        = scattered;
-        outRadiance[i] *= emissiveColor + scatterColor;
+        f32 weight_l = lightPdf / (lightPdf + cosPdf);
+        f32 weight_c = cosPdf / (lightPdf + cosPdf);
+
+        f32 scatteringPDF                  = record.material->ScatteringPDF(r, record, scattered);
+        vec3 scatterColor                  = (sRec.attenuation * scatteringPDF) / pdf;
+        outRays[*numOutRays].ray           = scattered; // sRec.skipPDFRay;
+        outRays[*numOutRays].radianceIndex = index;
+        *numOutRays += 1;
+        outRadiance[index] *= emissiveColor + scatterColor;
     }
-    ScratchEnd(temp);
 }
 
 struct WorkItem
@@ -853,6 +848,7 @@ bool RenderTile(WorkQueue *queue)
 
 bool RenderTileTest(WorkQueue *queue)
 {
+    TIMED_FUNCTION(dumb);
     u64 workItemIndex = InterlockedAdd(&queue->workItemIndex, 1);
     if (workItemIndex >= queue->workItemCount) return false;
 
@@ -867,20 +863,17 @@ bool RenderTileTest(WorkQueue *queue)
     u32 numPixels  = (item->onePastEndY - item->startY) * (item->onePastEndX - item->startX);
 
     // Double buffered
-    Ray *rayBuffer0    = PushArray(temp.arena, Ray, numPixels);
-    Ray *rayBuffer1    = PushArray(temp.arena, Ray, numPixels);
+    RayQueueItem *rayBuffer0 = PushArray(temp.arena, RayQueueItem, numPixels);
+    RayQueueItem *rayBuffer1 = PushArray(temp.arena, RayQueueItem, numPixels);
+
     vec3 *outRadiance  = PushArray(temp.arena, vec3, numPixels);
     vec3 *tempRadiance = PushArray(temp.arena, vec3, numPixels);
-
-    u32 numBits = (numPixels + 31) / 32;
-
-    u32 *mask = PushArray(temp.arena, u32, numBits);
 
     // ZSobolSampler sampler(samplesPerPixel, vec2i(queue->params->image->width, queue->params->image->height),
     //                       RandomizeStrategy::FastOwen);
     IndependentSampler sampler(samplesPerPixel);
 
-    u32 time = 0;
+    u32 totalTileWidth = item->onePastEndX - item->startX;
     for (u32 i = 0; i < squareRootSamplesPerPixel; i++)
     {
         for (u32 j = 0; j < squareRootSamplesPerPixel; j++)
@@ -905,23 +898,65 @@ bool RenderTileTest(WorkQueue *queue)
                     const f32 rayTime       = sampler.Get1D();
                     Ray r(rayOrigin, rayDirection, rayTime);
 
-                    rayBuffer0[rayCount++] = r;
+                    rayBuffer0[rayCount].ray           = r;
+                    rayBuffer0[rayCount].radianceIndex = rayCount;
+                    rayCount++;
                 }
             }
-
+            // for (u32 pixelIndex = 0; pixelIndex < numPixels; pixelIndex += LANE_WIDTH)
+            // {
+            //     // u32 sample
+            //     u32 sampleIndicesArray[LANE_WIDTH];
+            //     u32 widthArray[LANE_WIDTH];
+            //     u32 heightArray[LANE_WIDTH];
+            //     vec2i pixelsArray[LANE_WIDTH];
+            //
+            //     u32 numLanes = Min<u32>(LANE_WIDTH, numPixels - pixelIndex);
+            //     for (u32 laneIndex = 0; laneIndex < numLanes; laneIndex++)
+            //     {
+            //         sampleIndicesArray[laneIndex] = laneIndex * squareRootSamplesPerPixel + j;
+            //         widthArray[laneIndex]         = item->startX + ((pixelIndex + laneIndex) % totalTileWidth);
+            //         heightArray[laneIndex]        = item->startY + ((pixelIndex + laneIndex) / totalTileWidth);
+            //         pixelsArray[laneIndex]        = vec2i(widthArray[laneIndex], heightArray[laneIndex]);
+            //     }
+            //
+            //     LaneU32 sampleIndices = Load(sampleIndicesArray);
+            //     LaneU32 width         = Load(widthArray);
+            //     LaneU32 height        = Load(heightArray);
+            //     LaneVec2i pixels      = Load(pixelsArray);
+            //
+            //     // TODO: change this to work with simd
+            //     sampler.StartPixelSample(pixel, sampleIndex);
+            //
+            //     vec2 offsetSample      = sampler.Get2D();
+            //     const f32 offsetX      = ((i + offsetSample.x)) * oneOverSqrtSamplesPerPixel - 0.5f;
+            //     const f32 offsetY      = ((j + offsetSample.y)) * oneOverSqrtSamplesPerPixel - 0.5f;
+            //     const vec3 offset      = vec3(offsetX, offsetY, 0.f);
+            //     const vec3 pixelSample = queue->params->pixel00 + ((width + offset.x) * queue->params->pixelDeltaU) +
+            //                              ((height + offset.y) * queue->params->pixelDeltaV);
+            //     vec3 rayOrigin          = cameraCenter;
+            //     const vec3 rayDirection = pixelSample - rayOrigin;
+            //     const f32 rayTime       = sampler.Get1D();
+            //     Ray r(rayOrigin, rayDirection, rayTime);
+            //
+            //     rayBuffer0[rayCount].ray           = r;
+            //     rayBuffer0[rayCount].radianceIndex = rayCount;
+            //     rayCount++;
+            // }
+            //
             assert(rayCount == numPixels);
             int depth = queue->params->maxDepth;
-            MemoryZero(mask, sizeof(u32) * numBits);
             for (u32 index = 0; index < numPixels; index++)
             {
                 tempRadiance[index] = vec3(1, 1, 1);
             }
+            u32 numRays = numPixels;
             for (;;)
             {
-                Ray *inRayBuffer  = ((queue->params->maxDepth - depth) & 1) ? rayBuffer1 : rayBuffer0;
-                Ray *outRayBuffer = ((queue->params->maxDepth - depth) & 1) ? rayBuffer0 : rayBuffer1;
-                Integrate(inRayBuffer, outRayBuffer, numPixels, depth, queue->params->bvh,
-                          queue->params->lights, queue->params->numLights, tempRadiance, &sampler, mask);
+                RayQueueItem *inRayBuffer  = ((queue->params->maxDepth - depth) & 1) ? rayBuffer1 : rayBuffer0;
+                RayQueueItem *outRayBuffer = ((queue->params->maxDepth - depth) & 1) ? rayBuffer0 : rayBuffer1;
+                Integrate(inRayBuffer, outRayBuffer, numRays, &numRays, depth, queue->params->bvh,
+                          queue->params->lights, queue->params->numLights, tempRadiance, &sampler);
                 if (depth == 0)
                     break;
                 depth--;
@@ -1107,8 +1142,8 @@ int main(int argc, char *argv[])
     const f32 defocusAngle = 0;
     const f32 focusDist    = 10;
 
-    const int imageWidth      = 400;
-    const int samplesPerPixel = 250;
+    const int imageWidth      = 600;
+    const int samplesPerPixel = 4;
     const int maxDepth        = 4;
     BACKGROUND                = vec3(0, 0, 0);
 #endif
@@ -1242,11 +1277,11 @@ int main(int argc, char *argv[])
 
     Quad quads[] = {
         Quad(vec3(555, 0, 0), vec3(0, 555, 0), vec3(0, 0, 555), &materials[2]),
-        Quad(vec3(0, 0, 0), vec3(0, 555, 0), vec3(0, 0, 555), &materials[0]),
         Quad(vec3(343, 554, 332), vec3(-130, 0, 0), vec3(0, 0, -105), &materials[3]),
         Quad(vec3(0, 0, 0), vec3(555, 0, 0), vec3(0, 0, 555), &materials[1]),
         Quad(vec3(555, 555, 555), vec3(-555, 0, 0), vec3(0, 0, -555), &materials[1]),
         Quad(vec3(0, 0, 555), vec3(555, 0, 0), vec3(0, 555, 0), &materials[1]),
+        Quad(vec3(0, 0, 0), vec3(0, 555, 0), vec3(0, 0, 555), &materials[0]),
     };
 
     Box boxes[] = {
@@ -1265,7 +1300,7 @@ int main(int argc, char *argv[])
     };
 
     Light lights[] = {
-        CreateQuadLight(&quads[2]),
+        CreateQuadLight(&quads[1]),
         CreateSphereLight(&spheres[0]),
     };
 
@@ -1369,6 +1404,10 @@ int main(int argc, char *argv[])
         Quad(vec3(123, 554, 147), vec3(300, 0, 0), vec3(0, 0, 265), &materials[1]),
     };
 
+    Light lights[] = {
+        CreateQuadLight(&quads[0]),
+    };
+
     vec3 center1 = vec3(400, 400, 200);
     vec3 center2 = center1 + vec3(30, 0, 0);
 
@@ -1421,10 +1460,15 @@ int main(int argc, char *argv[])
 #endif
 
     BVH bvh;
-    bvh.Build(&scene, 2);
+    bvh.Build(arena, &scene, 2);
 
-    // CompressedBVH4 compressedBVH = CreateCompressedBVH4(&bvh);
-    BVH4 bvh4 = CreateBVH4(&bvh);
+    CompressedBVH4 compressedBVH = CreateCompressedBVH4(arena, &bvh);
+    BVH4 bvh4                    = CreateBVH4(arena, &bvh);
+
+    // UncompressedBVHNode *test = PushArray(arena, UncompressedBVHNode, 2);
+    // test[0] = compressedBVH.nodes[0].Decompress();
+    // test[1] = compressedBVH.nodes[1].Decompress();
+    // int stop = 5;
 
     RenderParams params;
     params.pixel00                   = pixel00;
@@ -1434,7 +1478,7 @@ int main(int argc, char *argv[])
     params.defocusDiskU              = defocusDiskU;
     params.defocusDiskV              = defocusDiskV;
     params.defocusAngle              = defocusAngle;
-    params.bvh                       = &bvh4;
+    params.bvh                       = &compressedBVH;
     params.maxDepth                  = maxDepth;
     params.samplesPerPixel           = samplesPerPixel;
     params.squareRootSamplesPerPixel = squareRootSamplesPerPixel;
@@ -1504,14 +1548,20 @@ int main(int argc, char *argv[])
     u64 primitiveIntersectionTime = 0;
     u64 bvhIntersectionTime       = 0;
     u64 integrationTime           = 0;
+    u64 totalTime                 = 0;
+    u64 totalSamplingTime         = 0;
     for (u32 i = 0; i < OS_NumProcessors(); i++)
     {
         primitiveIntersectionTime += threadLocalStatistics[i].primitiveIntersectionTime;
         bvhIntersectionTime += threadLocalStatistics[i].bvhIntersectionTime;
         integrationTime += threadLocalStatistics[i].integrationTime;
+        totalTime += threadLocalStatistics[i].dumb;
+        totalSamplingTime += threadLocalStatistics[i].samplingTime;
     }
     printf("Total primitive intersection time: %lldms\n", primitiveIntersectionTime);
     printf("Total integration time: %lldms\n", integrationTime);
+    printf("Total sampling time time: %lldms\n", totalSamplingTime);
+    printf("Total time: %lldms\n", totalTime);
     fprintf(stderr, "Done.");
 #endif
 }
