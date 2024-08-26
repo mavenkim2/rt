@@ -9,7 +9,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "third_party/stb_image.h"
 
-#define FINAL 1
+#define CORNELL 1
 #define EMISSIVE
 
 const vec3 INVALID_VEC = vec3((f32)U32Max, (f32)U32Max, (f32)U32Max);

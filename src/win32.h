@@ -26,4 +26,5 @@ void OS_CreateWorkThread(OS_ThreadFunction func, void *parameter);
 DWORD Win32ThreadProc(void *parameter);
 Win32Thread *Win32GetFreeThread();
 void OS_SetThreadName(char *name, u32 size);
+string OS_ReadFile(Arena *arena, string filename);
 void OS_Init();

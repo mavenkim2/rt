@@ -70,6 +70,12 @@ inline u64 MurmurHash64A(const u8 *key, size_t len, u64 seed)
 template <typename... Args>
 inline u64 Hash(Args... args);
 
+template <>
+inline u64 Hash<string>(string arg)
+{
+    return MurmurHash64A((const u8 *)arg.str, arg.size, 0);
+}
+
 template <typename... Args>
 inline void HashRecursiveCopy(u8 *buf, Args...);
 

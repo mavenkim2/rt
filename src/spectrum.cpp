@@ -515,8 +515,42 @@ void Init(Arena *arena)
 
 } // namespace Spectra
 
+vec3 RGBToSpectrumTable::operator()(vec3 rgb) const
+{
+    if (rgb.x == rgb.y && rgb.y == rgb.z)
+    {
+        return vec3(0, 0, (rgb[0] - .5f) / std::sqrtf(rgb[0] * (1 - rgb[0])));
+    }
+    i32 maxC = (rgb[0] > rgb[1]) ? ((rgb[0] > rgb[2]) ? 0 : 2) : ((rgb[1] > rgb[2]) ? 1 : 2);
+    f32 z    = rgb[maxC];
+    f32 x    = rgb[(maxC + 1) % 3] * (res - 1) / z;
+    f32 y    = rgb[(maxC + 2) % 3] * (res - 1) / z;
+
+    i32 xi = Min((i32)x, res - 2);
+    i32 yi = Min((i32)y, res - 2);
+    i32 zi = FindInterval(res, [&](i32 i) { return zNodes[i] < z; });
+    f32 dx = x - xi;
+    f32 dy = y - yi;
+    f32 dz = (z - zNodes[zi]) / (zNodes[zi + 1] - zNodes[zi]);
+
+    f32 c[3];
+    for (i32 i = 0; i < 3; i++)
+    {
+        auto co = [&](i32 dx, i32 dy, i32 dz) {
+            return (*coeffs)[maxC][zi + dz][yi + dy][xi + dx][i];
+        };
+        // clang-format off
+        c[i] = Lerp(dz, Lerp(dy, Lerp(dx, co(0, 0, 0), co(1, 0, 0)), 
+                                 Lerp(dx, co(0, 1, 0), co(1, 1, 0))),
+                        Lerp(dy, Lerp(dx, co(0, 0, 1), co(1, 0, 1)),
+                                 Lerp(dx, co(0, 1, 1), co(1, 1, 1))));
+        // clang-format on
+    }
+    return vec3(c[0], c[1], c[2]);
+}
+
 RGBColorSpace::RGBColorSpace(Arena *arena, vec2 r, vec2 g, vec2 b, Spectrum illuminant, const RGBToSpectrumTable *rgbToSpec)
-    : r(r), g(g), b(b), illuminant(illuminant), rgbToSpec(rgbToSpec)
+    : r(r), g(g), b(b), illuminant(arena, illuminant), rgbToSpec(rgbToSpec)
 {
     vec3 W = SpectrumToXYZ(illuminant);
     w      = xy(W);
@@ -529,4 +563,9 @@ RGBColorSpace::RGBColorSpace(Arena *arena, vec2 r, vec2 g, vec2 b, Spectrum illu
     vec3 c   = mul(rgb.Inverse(), W);
     RGBToXYZ = mul(rgb, mat3(c));
     XYZToRGB = RGBToXYZ.Inverse();
+}
+
+vec3 RGBColorSpace::ToRGBCoeffs(vec3 rgb) const
+{
+    return (*rgbToSpec)(ClampZero(rgb));
 }

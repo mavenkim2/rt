@@ -138,11 +138,15 @@ struct ConstantSpectrum;
 struct DenselySampledSpectrum;
 struct PiecewiseLinearSpectrum;
 struct BlackbodySpectrum;
+struct RGBAlbedoSpectrum;
+struct RGBUnboundedSpectrum;
+struct RGBIlluminantSpectrum;
 
 struct SampledSpectrum;
 struct SampledWavelengths;
 
-using SpectrumTaggedPointer = TaggedPointer<ConstantSpectrum, DenselySampledSpectrum, PiecewiseLinearSpectrum, BlackbodySpectrum>;
+using SpectrumTaggedPointer = TaggedPointer<ConstantSpectrum, DenselySampledSpectrum, PiecewiseLinearSpectrum, BlackbodySpectrum,
+                                            RGBAlbedoSpectrum, RGBUnboundedSpectrum, RGBIlluminantSpectrum>;
 
 struct SpectrumMethods
 {
@@ -183,6 +187,9 @@ template struct SpectrumCRTP<ConstantSpectrum>;
 template struct SpectrumCRTP<DenselySampledSpectrum>;
 template struct SpectrumCRTP<PiecewiseLinearSpectrum>;
 template struct SpectrumCRTP<BlackbodySpectrum>;
+template struct SpectrumCRTP<RGBAlbedoSpectrum>;
+template struct SpectrumCRTP<RGBUnboundedSpectrum>;
+template struct SpectrumCRTP<RGBIlluminantSpectrum>;
 
 //////////////////////////////
 // BSDF

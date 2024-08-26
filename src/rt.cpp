@@ -2,9 +2,10 @@
 #include "tables/sobolmatrices.h"
 #include "tables/primes.h"
 
+#include "memory.h"
+#include "string.h"
 #include "win32.h"
 #include "debug.h"
-#include "memory.h"
 #include "thread_context.h"
 
 #include "hash.h"
@@ -20,6 +21,7 @@
 #include <algorithm>
 
 #include "win32.cpp"
+#include "string.cpp"
 #include "debug.cpp"
 #include "base_types.cpp"
 #include "thread_context.cpp"
@@ -134,7 +136,7 @@ vec3 Sample(const Light *light, const vec3 &origin, vec2 u)
             Sphere *sphere = (Sphere *)light->primitive;
             return sphere->Random(origin, u);
         }
-        default: assert(0); return vec3(1, 0, 0);
+        default: Assert(0); return vec3(1, 0, 0);
     }
 }
 
@@ -143,7 +145,7 @@ vec3 Sample(const Light *light, const vec3 &origin, vec2 u)
 const Light *SampleLights(const Light *lights, const u32 numLights, f32 u)
 {
     i32 randomIndex = (i32)(numLights * u); // RandomInt(0, numLights);
-    assert(randomIndex < (i32)numLights);
+    Assert(randomIndex < (i32)numLights);
     return &lights[randomIndex]; // vec3 result = GenerateLightSample(&lights[randomIndex], origin, );
 }
 
@@ -161,7 +163,7 @@ f32 GetLightPDFValue(const Light *light, const vec3 &origin, const vec3 &directi
             Sphere *sphere = (Sphere *)light->primitive;
             return sphere->PdfValue(origin, direction);
         }
-        default: assert(0); return 0;
+        default: Assert(0); return 0;
     }
 }
 
@@ -354,8 +356,8 @@ struct Texture
             break;
             case Type::Image:
             {
-                assert(image.width);
-                assert(image.height);
+                Assert(image.width);
+                Assert(image.height);
                 i32 x = i32(u * image.width);
                 i32 y = i32((1 - v) * image.height);
 
@@ -372,7 +374,7 @@ struct Texture
                 return vec3(.5f, .5f, .5f) * (1.f + sinf(scale * p.z + 10.f * perlin.Turbulence(p, 7)));
             }
             break;
-            default: assert(0); return vec3(0, 0, 0);
+            default: Assert(0); return vec3(0, 0, 0);
         }
     }
 
@@ -621,7 +623,7 @@ vec3 RayColor(const Ray &r, Sampler sampler, const int depth, const Primitive &b
 
     // Light importance sampling
     const Light *light = SampleLights(lights, numLights, sampler.Get1D());
-    assert(light);
+    Assert(light);
     vec3 randLightDir = Sample(light, record.p, sampler.Get2D());
 
     vec3 scatteredDir;
@@ -694,7 +696,7 @@ void Integrate(const RayQueueItem *inRays, RayQueueItem *outRays, u32 numInRays,
 
         // Light importance sampling
         const Light *light = SampleLights(lights, numLights, sampler.Get1D());
-        assert(light);
+        Assert(light);
         vec3 randLightDir = Sample(light, record.p, sampler.Get2D());
 
         vec3 scatteredDir;
@@ -944,7 +946,7 @@ bool RenderTileTest(WorkQueue *queue)
             //     rayCount++;
             // }
             //
-            assert(rayCount == numPixels);
+            Assert(rayCount == numPixels);
             int depth = queue->params->maxDepth;
             for (u32 index = 0; index < numPixels; index++)
             {
@@ -1022,6 +1024,11 @@ int main(int argc, char *argv[])
 
     threadLocalStatistics = PushArray(arena, ThreadStatistics, OS_NumProcessors());
 
+    // TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
+
+    LoadPBRT(arena, "data/island/pbrt-v4/island.pbrt");
+    int stop = 5;
+
 #if 0
     vec2i resolution = {1024, 1024};
     ZSobolSampler sampler(1024, resolution, RandomizeStrategy::FastOwen);
@@ -1046,7 +1053,7 @@ int main(int argc, char *argv[])
     printf("I = %f\n", sum / n);
 #endif
 
-#if 1
+#if 0
 #if SPHERES
     const f32 aspectRatio     = 16.f / 9.f;
     const vec3 lookFrom       = vec3(13, 2, 3);
@@ -1519,7 +1526,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    assert(queue.workItemCount == workItemTotal);
+    Assert(queue.workItemCount == workItemTotal);
 
     clock_t start = clock();
     for (u32 i = 1; i < OS_NumProcessors(); i++)

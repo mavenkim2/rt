@@ -161,7 +161,7 @@ inline constexpr i32 NextPowerOfTwo(i32 v)
 inline u16 SafeTruncateU32(u32 val)
 {
     u16 result = (u16)val;
-    assert(val == result);
+    Assert(val == result);
     return result;
 }
 
@@ -644,6 +644,11 @@ inline vec3 Max(const vec3 &a, const vec3 &b)
     return result;
 }
 
+inline vec3 ClampZero(const vec3 &v)
+{
+    return vec3(Max(0.f, v.x), Max(0.f, v.y), Max(0.f, v.z));
+}
+
 //////////////////////////////
 // Vec4
 //
@@ -765,7 +770,7 @@ union mat3
 
         f32 det = a1 * det1 + b1 * det2 + c1 * det3;
 
-        assert(det != 0.f);
+        Assert(det != 0.f);
         return result / det;
     }
 
