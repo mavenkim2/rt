@@ -29,27 +29,31 @@ typedef i32 b32;
 #error compiler not implemented
 #endif
 
+void Print(char *fmt, ...);
+void Print(char *fmt, va_list args);
+
 #define Glue(a, b) a##b
 #define DEBUG      1
 #if DEBUG
 // #define Assert(expression) (!(expression) ? (*(volatile int *)0 = 0, 0) : 0)
-#define Assert(expression) \
-    if (expression)        \
-    {                      \
-    }                      \
-    else                   \
-    {                      \
-        Trap();            \
+#define Assert(expression)                                                                  \
+    if (expression)                                                                         \
+    {                                                                                       \
+    }                                                                                       \
+    else                                                                                    \
+    {                                                                                       \
+        Print("Expression: %s\nFile: %s\nLine Num: %u\n", #expression, __FILE__, __LINE__); \
+        Trap();                                                                             \
     }
-#define Error(expression, str, ...)                                                                   \
-    if (expression)                                                                                   \
-    {                                                                                                 \
-    }                                                                                                 \
-    else                                                                                              \
-    {                                                                                                 \
-        fprintf(stderr, str, __VA_ARGS__);                                                            \
-        fprintf(stderr, "Expression: %s\nFile: %s\nLine Num: %u\n", #expression, __FILE__, __LINE__); \
-        Trap();                                                                                       \
+#define Error(expression, str, ...)                                                         \
+    if (expression)                                                                         \
+    {                                                                                       \
+    }                                                                                       \
+    else                                                                                    \
+    {                                                                                       \
+        Print(str, __VA_ARGS__);                                                            \
+        Print("Expression: %s\nFile: %s\nLine Num: %u\n", #expression, __FILE__, __LINE__); \
+        Trap();                                                                             \
     }
 #define StaticAssert(expr, ID) static u8 Glue(ID, __LINE__)[(expr) ? 1 : -1]
 #else
@@ -159,3 +163,92 @@ void Swap(T a, T b)
 #define DLLPushFront(f, l, n) DLLPushBack_NPZ(l, f, n, prev, next, CheckNull, SetNull)
 #define DLLInsert(f, l, p, n) DLLInsert_NPZ(f, l, p, n, next, prev, CheckNull, SetNull)
 #define DLLRemove(f, l, n)    DLLRemove_NPZ(f, l, n, next, prev, CheckNull, SetNull)
+
+//////////////////////////////
+// Mutexes
+//
+
+struct TicketMutex
+{
+    std::atomic<u64> ticket;
+    std::atomic<u64> serving;
+    void Init()
+    {
+        ticket.store(0);
+        serving.store(0);
+    }
+    // u64 volatile ticket;
+    // u64 volatile serving;
+};
+
+inline void BeginTicketMutex(TicketMutex *mutex)
+{
+    u64 ticket = mutex->ticket.fetch_add(1);
+    while (ticket != mutex->serving)
+    {
+        _mm_pause();
+    }
+}
+
+inline void EndTicketMutex(TicketMutex *mutex)
+{
+    mutex->serving.fetch_add(1);
+}
+
+struct Mutex
+{
+    std::atomic<u32> count;
+};
+
+inline void BeginMutex(Mutex *mutex)
+{
+    u32 expected = 0;
+    while (!mutex->count.compare_exchange_weak(expected, 1))
+    {
+        expected = 0;
+        _mm_pause();
+    }
+}
+
+// TODO: use memory barrier instead, _mm_sfence()?
+inline void EndMutex(Mutex *mutex)
+{
+    mutex->count.store(0);
+}
+
+// TODO: ????
+inline void BeginRMutex(Mutex *mutex)
+{
+    for (;;)
+    {
+        u32 oldValue = (mutex->count.load() & 0x7fffffff);
+        u32 newValue = oldValue + 1;
+        if (mutex->count.compare_exchange_weak(oldValue, newValue))
+        {
+            break;
+        }
+        _mm_pause();
+    }
+}
+
+inline void EndRMutex(Mutex *mutex)
+{
+    mutex->count.fetch_sub(1);
+    Assert(mutex->count >= 0);
+}
+
+inline void BeginWMutex(Mutex *mutex)
+{
+    u32 expected = 0;
+    while (!mutex->count.compare_exchange_weak(expected, 0x80000000))
+    {
+        expected = 0;
+        _mm_pause();
+    }
+}
+
+inline void EndWMutex(Mutex *mutex)
+{
+    u32 expected = 0x80000000;
+    Assert(mutex->count.compare_exchange_strong(expected, 0));
+}

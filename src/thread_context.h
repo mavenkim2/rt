@@ -17,7 +17,7 @@ void ReleaseThreadContext();
 ThreadContext *GetThreadContext();
 void SetThreadContext(ThreadContext *tctx);
 Arena *GetThreadContextScratch(Arena **conflicts, u32 count);
-void SetThreadName(char *name);
+void SetThreadName(string name);
 void SetThreadIndex(u32 index);
 u32 GetThreadIndex();
 void BaseThreadEntry(OS_ThreadFunction *func, void *params);

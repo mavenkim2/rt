@@ -9,6 +9,78 @@ PrimitiveMethods primitiveMethods[] = {
 };
 
 //////////////////////////////
+// Creation from scene description
+//
+
+Sampler Sampler::Create(Arena *arena, const ScenePacket *packet, const vec2i fullResolution)
+{
+    i32 samplesPerPixel        = 16;
+    RandomizeStrategy strategy = RandomizeStrategy::FastOwen;
+    i32 seed                   = 0;
+
+    b32 isHalton     = (*packet->type == "halton");
+    b32 isStratified = (*packet->type == "stratified");
+
+    // stratified sampler only
+    bool jitter  = true;
+    i32 xSamples = 4;
+    i32 ySamples = 4;
+
+    for (u32 i = 0; i < packet->parameterCount; i++)
+    {
+        if (*packet->parameterNames[i] == "pixelsamples")
+        {
+            samplesPerPixel = packet->GetInt(i);
+        }
+        else if (*packet->parameterNames[i] == "randomization")
+        {
+            if (Compare(packet->bytes[i], "none"))
+            {
+                strategy = RandomizeStrategy::FastOwen;
+            }
+            else if (Compare(packet->bytes[i], "permutedigits"))
+            {
+                strategy = RandomizeStrategy::PermuteDigits;
+            }
+            else if (Compare(packet->bytes[i], "owen"))
+            {
+                Assert(!isHalton);
+                strategy = RandomizeStrategy::Owen;
+            }
+        }
+        else if (*packet->parameterNames[i] == "seed")
+        {
+            seed = packet->GetInt(i);
+        }
+        else if (*packet->parameterNames[i] == "jitter")
+        {
+            Assert(isStratified);
+            jitter = packet->GetBool(i);
+        }
+        else if (*packet->parameterNames[i] == "xsamples")
+        {
+            Assert(isStratified);
+            xSamples = packet->GetInt(i);
+        }
+        else if (*packet->parameterNames[i] == "ysamples")
+        {
+            Assert(isStratified);
+            ySamples = packet->GetInt(i);
+        }
+        else
+        {
+            Error(0, "Invalid option encountered during Sampler creation: %S\n", *packet->parameterNames[i]);
+        }
+    }
+    if (isHalton) Error(0, "Halton sampler not implemented.");
+    if (*packet->type == "independent") return PushStructConstruct(arena, IndependentSampler)(samplesPerPixel);
+    if (*packet->type == "paddedsobol") return PushStructConstruct(arena, PaddedSobolSampler)(samplesPerPixel, strategy, seed);
+    if (*packet->type == "sobol") return PushStructConstruct(arena, SobolSampler)(samplesPerPixel, fullResolution, strategy, seed);
+    if (isStratified) return PushStructConstruct(arena, StratifiedSampler)(xSamples, ySamples, jitter, seed);
+    return PushStructConstruct(arena, ZSobolSampler)(samplesPerPixel, fullResolution, strategy);
+}
+
+//////////////////////////////
 // Spectrum Methods
 //
 

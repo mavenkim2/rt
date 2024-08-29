@@ -88,6 +88,11 @@ Win32Thread *Win32GetFreeThread()
     return thread;
 }
 
+inline void Win32FreeThread(Win32Thread *thread)
+{
+    StackPush(win32FreeThread, thread);
+}
+
 void OS_CreateWorkThread(OS_ThreadFunction func, void *parameter)
 {
     DWORD threadID;
@@ -99,13 +104,13 @@ void OS_CreateWorkThread(OS_ThreadFunction func, void *parameter)
     CloseHandle(threadHandle);
 }
 
-void OS_SetThreadName(char *name, u32 size)
+void OS_SetThreadName(string name)
 {
     TempArena scratch = ScratchStart(0, 0);
 
-    u32 resultSize     = (u32)(size);
+    u32 resultSize     = (u32)(name.size);
     wchar_t *result    = (wchar_t *)PushArray(scratch.arena, u8, resultSize + 1);
-    resultSize         = MultiByteToWideChar(CP_UTF8, 0, name, (i32)size, result, (i32)resultSize);
+    resultSize         = MultiByteToWideChar(CP_UTF8, 0, (char *)name.str, (i32)(name.size), result, (i32)resultSize);
     result[resultSize] = 0;
     SetThreadDescription(GetCurrentThread(), result);
 
@@ -115,7 +120,7 @@ void OS_SetThreadName(char *name, u32 size)
 string OS_ReadFile(Arena *arena, string filename)
 {
     HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    Error(file != INVALID_HANDLE_VALUE, "Could not open file: %s\n", (char *)filename.str);
+    Error(file != INVALID_HANDLE_VALUE, "Could not open file: %S\n", filename);
     u64 size;
     GetFileSizeEx(file, (LARGE_INTEGER *)&size);
     string result;
@@ -157,6 +162,61 @@ b32 OS_WriteFile(string filename, void *fileMemory, u64 fileSize)
 b32 OS_WriteFile(string filename, string buffer)
 {
     return OS_WriteFile(filename, buffer.str, (u32)buffer.size);
+}
+
+void OS_SetThreadAffinity(OS_Handle input, i32 index)
+{
+    HANDLE handle  = (HANDLE)input.handle;
+    DWORD_PTR mask = 1ull << index;
+    SetThreadAffinityMask(handle, mask);
+}
+
+OS_Handle OS_ThreadStart(OS_ThreadFunction *func, void *ptr)
+{
+    Win32Thread *thread = Win32GetFreeThread();
+    thread->func        = func;
+    thread->ptr         = ptr;
+    thread->handle      = CreateThread(0, 0, Win32ThreadProc, thread, 0, 0);
+    OS_Handle handle    = {(u64)thread};
+    return handle;
+}
+
+OS_Handle OS_CreateSemaphore(u32 maxCount)
+{
+    HANDLE handle    = CreateSemaphoreEx(0, 0, maxCount, 0, 0, SEMAPHORE_ALL_ACCESS);
+    OS_Handle result = {(u64)handle};
+    return result;
+}
+
+void OS_ReleaseSemaphore(OS_Handle input)
+{
+    HANDLE handle = (HANDLE)input.handle;
+    ReleaseSemaphore(handle, 1, 0);
+}
+
+void OS_ReleaseSemaphores(OS_Handle input, u32 count)
+{
+    HANDLE handle = (HANDLE)input.handle;
+    ReleaseSemaphore(handle, count, 0);
+}
+
+void OS_ThreadJoin(OS_Handle handle)
+{
+    Win32Thread *thread = (Win32Thread *)handle.handle;
+    if (thread && thread->handle && thread->handle != INVALID_HANDLE_VALUE)
+    {
+        WaitForSingleObject(thread->handle, INFINITE);
+        CloseHandle(thread->handle);
+    }
+    Win32FreeThread(thread);
+}
+
+b32 OS_SignalWait(OS_Handle input)
+{
+    HANDLE handle = (HANDLE)input.handle;
+    DWORD result  = WaitForSingleObject(handle, U32Max);
+    Assert(result == WAIT_OBJECT_0 || result == WAIT_TIMEOUT);
+    return (result == WAIT_OBJECT_0);
 }
 
 void OS_Init()

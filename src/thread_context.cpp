@@ -62,15 +62,12 @@ Arena *GetThreadContextScratch(Arena **conflicts, u32 count)
     return result;
 }
 
-void SetThreadName(char *name)
+void SetThreadName(string name)
 {
-    u64 length = 0;
-    for (; name[length]; length++) continue;
-
     ThreadContext *context  = GetThreadContext();
-    context->threadNameSize = Min(length, sizeof(context->threadName));
-    MemoryCopy(context->threadName, name, context->threadNameSize);
-    OS_SetThreadName(name, (u32)context->threadNameSize);
+    context->threadNameSize = Min(name.size, sizeof(context->threadName));
+    MemoryCopy(context->threadName, name.str, context->threadNameSize);
+    OS_SetThreadName(name);
 }
 
 void SetThreadIndex(u32 index)

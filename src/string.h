@@ -7,6 +7,7 @@ struct string
 
     string() {}
     string(const char *c);
+    b32 operator==(const string &a) const;
     b32 operator==(const string &a);
     b32 operator==(const char *text);
 };

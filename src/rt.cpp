@@ -3,8 +3,10 @@
 #include "tables/primes.h"
 
 #include "memory.h"
+#include "containers.h"
 #include "string.h"
 #include "win32.h"
+#include "jobsystem.h"
 #include "debug.h"
 #include "thread_context.h"
 
@@ -20,7 +22,9 @@
 #include "sampler.h"
 #include <algorithm>
 
+#include "base.cpp"
 #include "win32.cpp"
+#include "jobsystem.cpp"
 #include "string.cpp"
 #include "debug.cpp"
 #include "base_types.cpp"
@@ -1021,13 +1025,17 @@ int main(int argc, char *argv[])
     InitThreadContext(arena, "[Main Thread]", 1);
     OS_Init();
     SetThreadIndex(0);
+    jobsystem::InitializeJobsystem();
 
     threadLocalStatistics = PushArray(arena, ThreadStatistics, OS_NumProcessors());
 
     // TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
 
+    clock_t start = clock();
     LoadPBRT(arena, "data/island/pbrt-v4/island.pbrt");
-    int stop = 5;
+    clock_t end = clock();
+
+    printf("Total time: %dms\n", end - start);
 
 #if 0
     vec2i resolution = {1024, 1024};
@@ -1322,7 +1330,7 @@ int main(int argc, char *argv[])
 
     scene.FinalizePrimitives();
     scene.AddTransform(PrimitiveType::Box, 0, 0);
-    // scene.AddTransform(PrimitiveType::Box, 1, 1);
+// scene.AddTransform(PrimitiveType::Box, 1, 1);
 #elif CORNELL_SMOKE
     Material materials[]      = {
         Material::CreateLambert(vec3(.65f, .05f, .05f)),

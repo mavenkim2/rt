@@ -247,6 +247,52 @@ struct HomogeneousTransform
     vec3 translation;
     f32 rotateAngleY;
 };
+
+struct ScenePacket
+{
+    // const string *name;
+    const string *type;
+
+    const string **parameterNames;
+    u8 **bytes;
+    u32 *sizes;
+    // SceneByteType *types;
+    u32 parameterCount;
+
+    void Initialize(Arena *arena, u32 count)
+    {
+        // parameterCount = count;
+        parameterNames = PushArray(arena, const string *, count);
+        bytes          = PushArray(arena, u8 *, count);
+        sizes          = PushArray(arena, u32, count);
+        // types          = PushArray(arena, SceneByteType, count);
+    }
+
+    inline i32 GetInt(i32 i) const
+    {
+        return *(i32 *)(bytes[i]);
+    }
+    inline bool GetBool(i32 i) const
+    {
+        return *(bool *)(bytes[i]);
+    }
+    inline f32 GetFloat(i32 i) const
+    {
+        return *(f32 *)(bytes[i]);
+    }
+    // inline u8 *GetByParamName(const string &name) const
+    // {
+    //     for (u32 i = 0; i < parameterCount; i++)
+    //     {
+    //         if (*parameterNames[i] == name)
+    //         {
+    //             return bytes[i];
+    //         }
+    //     }
+    //     return 0;
+    // }
+};
+
 struct Scene
 {
     // std::vector<Sphere> spheres;
@@ -257,6 +303,7 @@ struct Scene
     //
     // std::vector<HomogeneousTransform> transforms;
     // std::vector<ConstantMedium> media;
+    Sampler sampler;
 
     Sphere *spheres;
     Quad *quads;

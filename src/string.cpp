@@ -165,6 +165,23 @@ void StringCopy(string *out, string in)
     out->size = in.size;
 }
 
+b32 string::operator==(const string &a) const
+{
+    b32 result = false;
+    if (size == a.size)
+    {
+        for (int i = 0; i < a.size; i++)
+        {
+            result = (str[i] == a.str[i]);
+            if (!result)
+            {
+                break;
+            }
+        }
+    }
+    return result;
+}
+
 b32 string::operator==(const string &a)
 {
     b32 result = false;
@@ -184,7 +201,7 @@ b32 string::operator==(const string &a)
 
 b32 string::operator==(const char *text)
 {
-    string test = Str8C(text);
+    const string test = Str8C(text);
     return *this == test;
 }
 
@@ -304,8 +321,10 @@ string SkipToNextWord(string line)
 string GetFirstWord(string line)
 {
     u32 index;
-    for (index = 0; index < line.size && line.str[index] != ' '; index++) continue;
-    line = Substr8(line, 0, index);
+    u32 startIndex = 0;
+    for (; startIndex < line.size && line.str[startIndex] == ' '; startIndex++) continue;
+    for (index = startIndex; index < line.size && line.str[index] != ' '; index++) continue;
+    line = Substr8(line, startIndex, index);
     return line;
 }
 
@@ -372,7 +391,7 @@ string Str8PathChopLastSlash(string string)
     u64 onePastLastSlash = string.size;
     for (u64 count = 0; count < string.size; count++)
     {
-        if (string.str[count] == '\\')
+        if (CharIsSlash(string.str[count]))
         {
             onePastLastSlash = count;
         }
@@ -387,7 +406,7 @@ string Str8PathChopPastLastSlash(string string)
     u64 onePastLastSlash = string.size;
     for (u64 count = 0; count < string.size; count++)
     {
-        if (string.str[count] == '\\')
+        if (CharIsSlash(string.str[count]))
         {
             onePastLastSlash = count + 1;
         }
@@ -638,6 +657,20 @@ inline f32 ReadFloat(Tokenizer *iter)
     return value;
 }
 
+inline i32 ReadInt(Tokenizer *iter)
+{
+    b32 valueSign = (*iter->cursor == '-');
+    if (valueSign) iter->cursor++;
+
+    i32 result = 0;
+    while (CharIsDigit(*iter->cursor))
+    {
+        result *= 10;
+        result += *iter->cursor++ - '0';
+    }
+    return valueSign ? -result : result;
+}
+
 inline u32 ReadUint(Tokenizer *iter)
 {
     u32 result = 0;
@@ -649,14 +682,14 @@ inline u32 ReadUint(Tokenizer *iter)
     return result;
 }
 
-inline void SkipToNextWord(Tokenizer *tokenizer)
+inline void SkipToNextChar(Tokenizer *tokenizer)
 {
     while (!EndOfBuffer(tokenizer) && IsBlank(tokenizer)) tokenizer->cursor++;
 }
 
 inline void SkipToNextDigit(Tokenizer *tokenizer)
 {
-    while (!EndOfBuffer(tokenizer) && !IsDigit(tokenizer)) tokenizer->cursor++;
+    while (!EndOfBuffer(tokenizer) && (!IsDigit(tokenizer) && *tokenizer->cursor != '-')) tokenizer->cursor++;
 }
 
 inline void SkipToNextLine(Tokenizer *iter)
@@ -686,39 +719,45 @@ inline u8 *GetPointer_(Tokenizer *tokenizer)
 b32 Compare(u8 *ptr, string str)
 {
     Assert(ptr);
-    for (u32 i = 0; i < str.size; i++)
-    {
-        if (ptr[i] != str.str[i]) return false;
-    }
-    return true;
+    return memcmp(ptr, str.str, str.size) == 0;
 }
 
 // NOTE: counts the number of lines starting with ch, ignoring whitespace
+// TODO: hardcoded
 inline u32 CountLinesStartWith(Tokenizer *tokenizer, u8 ch)
 {
     u8 *cursor = tokenizer->cursor;
-    u32 count  = 0;
-    do
+    while (CharIsBlank(*cursor)) cursor++;
+    u32 count      = 0;
+    bool isComment = false;
+
+    b8 left  = false;
+    b8 right = false; //']';
+    while (cursor[0] == ch || cursor[0] == '#' || left != right)
     {
-        while (*cursor++ != '\n') continue;
-        count++;
+        isComment = cursor[0] == '#';
+        while (*cursor != '\n')
+        {
+            if (*cursor == ']')
+            {
+                right = true;
+            }
+            else if (*cursor == '[')
+            {
+                left = true;
+            }
+            cursor++;
+            continue;
+        }
+        if (!isComment && (left == right))
+        {
+            count++;
+            left = right = false;
+        }
         while (CharIsBlank(*cursor)) cursor++;
-    } while (cursor[0] == ch);
+    }
     return count;
 }
-
-// inline u32 CountRemainingWordsOnLine(Tokenizer *tokenizer)
-// {
-//     Assert(!IsBlank(tokenizer));
-//     u32 count  = 0;
-//     u8 *cursor = tokenizer->cursor;
-//     while (*cursor != '\n')
-//     {
-//         if (*cursor == ' ') count++;
-//         cursor++;
-//     }
-//     return count + 1;
-// }
 
 b8 GetBetweenPair(string &out, Tokenizer *tokenizer, const u8 ch)
 {
@@ -726,14 +765,14 @@ b8 GetBetweenPair(string &out, Tokenizer *tokenizer, const u8 ch)
     u8 right = CharGetPair(ch);
 
     u8 *cursor = tokenizer->cursor;
-    for (; cursor < tokenizer->input.str + tokenizer->input.size && *cursor != left;)
+    for (; cursor < tokenizer->input.str + tokenizer->input.size && CharIsBlank(*cursor) && *cursor != left;)
     {
         if (*cursor == '\n') return 0;
         cursor++;
     }
+    if (*cursor == '#') return 2;
+    if (cursor >= tokenizer->input.str + tokenizer->input.size || *cursor != left) return 0;
     cursor++;
-
-    if (cursor >= tokenizer->input.str + tokenizer->input.size) return 0;
 
     u8 *start = cursor;
     u32 count = 0;
@@ -757,22 +796,31 @@ u32 CountBetweenPair(Tokenizer *tokenizer, const u8 ch)
     u8 right = CharGetPair(ch);
 
     u8 *cursor = tokenizer->cursor;
-    for (; cursor < tokenizer->input.str + tokenizer->input.size && *cursor++ != left;) continue;
-    if (*cursor == right) return 0;
+    for (; *cursor != '\n' && *cursor++ != left;) continue;
+    if (*(cursor - 1) != left || *cursor == right) return 0;
 
-    for (; cursor < tokenizer->input.str + tokenizer->input.size && CharIsBlank(*cursor);) cursor++;
+    for (; CharIsBlank(*cursor);) cursor++;
 
-    u32 count = 0;
-    for (; cursor < tokenizer->input.str + tokenizer->input.size && *cursor != right;)
+    u32 count = 1;
+    for (; *cursor != right;)
     {
         if (*cursor == ' ')
         {
-            count++;
+            if (*(cursor + 1) != right) count++;
+            while (CharIsBlank(*cursor)) cursor++;
         }
-        cursor++;
+        else
+        {
+            cursor++;
+        }
     }
 
     return count;
+}
+
+b32 IsEndOfLine(Tokenizer *tokenizer)
+{
+    return (*tokenizer->cursor == '\n');
 }
 
 //////////////////////////////

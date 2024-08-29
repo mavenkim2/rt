@@ -816,11 +816,40 @@ union mat4
     {
     }
 
-    mat4(f32 val) : a1(val), b2(val), c3(val), d4(val)
+    mat4(f32 a1, f32 a2, f32 a3, f32 a4,
+         f32 b1, f32 b2, f32 b3, f32 b4,
+         f32 c1, f32 c2, f32 c3, f32 c4,
+         f32 d1, f32 d2, f32 d3, f32 d4)
+        : a1(a1), a2(a2), a3(a3), a4(a4), b1(b1), b2(b2), b3(b3), b4(b4),
+          c1(c1), c2(c2), c3(c3), c4(c4), d1(d1), d2(d2), d3(d3), d4(d4)
     {
     }
 
-    vec4 &operator[](const i32 index)
+    mat4(f32 val) : a1(val), a2(0), a3(0), a4(0),
+                    b1(0), b2(val), b3(0), b4(0),
+                    c1(0), c2(0), c3(val), c4(0),
+                    d1(0), d2(0), d3(0), d4(val)
+    {
+    }
+
+    b32 operator==(const mat4 &other)
+    {
+        return a1 == other.a1 && a2 == other.a2 && a3 == other.a3 && a4 == other.a4 &&
+               b1 == other.b1 && b2 == other.b2 && b3 == other.b3 && b4 == other.b4 &&
+               c1 == other.c1 && c2 == other.c2 && c3 == other.c3 && c4 == other.c4 &&
+               d1 == other.d1 && d2 == other.d2 && d3 == other.d3 && d4 == other.d4;
+    }
+
+    b32 operator!=(const mat4 &other)
+    {
+        return a1 != other.a1 || a2 != other.a2 || a3 != other.a3 || a4 != other.a4 ||
+               b1 != other.b1 || b2 != other.b2 || b3 != other.b3 || b4 != other.b4 ||
+               c1 != other.c1 || c2 != other.c2 || c3 != other.c3 || c4 != other.c4 ||
+               d1 != other.d1 || d2 != other.d2 || d3 != other.d3 || d4 != other.d4;
+    }
+
+    vec4 &
+    operator[](const i32 index)
     {
         return columns[index];
     }
@@ -925,6 +954,34 @@ inline vec3 NormalTransform(const mat4 &a, const vec3 &b)
     result.x += a.columns[2].x * b.z;
     result.y += a.columns[2].y * b.z;
     result.z += a.columns[2].z * b.z;
+
+    return result;
+}
+
+inline mat4 LookAt(vec3 eye, vec3 center, vec3 up)
+{
+    mat4 result;
+
+    vec3 f = Normalize(eye - center);
+    vec3 s = Normalize(Cross(up, f));
+    vec3 u = Cross(f, s);
+
+    result.elements[0][0] = s.x;
+    result.elements[0][1] = u.x;
+    result.elements[0][2] = f.x;
+    result.elements[0][3] = 0.0f;
+    result.elements[1][0] = s.y;
+    result.elements[1][1] = u.y;
+    result.elements[1][2] = f.y;
+    result.elements[1][3] = 0.0f;
+    result.elements[2][0] = s.z;
+    result.elements[2][1] = u.z;
+    result.elements[2][2] = f.z;
+    result.elements[2][3] = 0.0f;
+    result.elements[3][0] = -Dot(s, eye);
+    result.elements[3][1] = -Dot(u, eye);
+    result.elements[3][2] = -Dot(f, eye);
+    result.elements[3][3] = 1.0f;
 
     return result;
 }

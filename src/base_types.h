@@ -34,6 +34,7 @@ struct StratifiedSampler;
 struct SobolSampler;
 struct PaddedSobolSampler;
 struct ZSobolSampler;
+struct ScenePacket;
 // struct SOAZSobolSampler;
 
 using SamplerTaggedPointer = TaggedPointer<IndependentSampler, StratifiedSampler, SobolSampler,
@@ -53,6 +54,7 @@ static SamplerMethods samplerMethods[SamplerTaggedPointer::MaxTag()] = {};
 struct Sampler : SamplerTaggedPointer
 {
     using TaggedPointer::TaggedPointer;
+    static Sampler Create(Arena *arena, const ScenePacket *packet, const vec2i fullResolution);
     inline i32 SamplesPerPixel() const
     {
         void *ptr  = GetPtr();
