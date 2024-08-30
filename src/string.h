@@ -79,11 +79,10 @@ u64 HashStruct_(void *ptr, u64 size);
 #define HashStruct(ptr) HashStruct_((ptr), sizeof(*(ptr)))
 
 //////////////////////////////
-// Global string table
+// String Ids
 //
-u32 Hash(string str);
-u32 AddSID(string str);
-u32 GetSID(string str);
+typedef u32 StringId;
+constexpr StringId operator""_sid(const char *ptr, size_t count);
 
 //////////////////////////////
 // String token building/reading

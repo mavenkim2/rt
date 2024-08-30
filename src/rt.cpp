@@ -1027,15 +1027,48 @@ int main(int argc, char *argv[])
     SetThreadIndex(0);
     jobsystem::InitializeJobsystem();
 
-    threadLocalStatistics = PushArray(arena, ThreadStatistics, OS_NumProcessors());
+    threadLocalStatistics  = PushArray(arena, ThreadStatistics, OS_NumProcessors());
+    threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, OS_NumProcessors());
 
     // TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
+    StringId id = "xgPalmDebris_archiveLeaflet0125_ge"_sid;
 
     clock_t start = clock();
     LoadPBRT(arena, "data/island/pbrt-v4/island.pbrt");
     clock_t end = clock();
 
     printf("Total time: %dms\n", end - start);
+
+    u64 totalFileMemory      = 0;
+    u64 totalShapeMemory     = 0;
+    u64 totalMaterialMemory  = 0;
+    u64 totalTextureMemory   = 0;
+    u64 totalLightMemory     = 0;
+    u64 totalInstanceMemory  = 0;
+    u64 totalTransformMemory = 0;
+    u64 totalStringMemory    = 0;
+    u64 totalOtherMemory     = 0;
+    for (u32 i = 0; i < OS_NumProcessors(); i++)
+    {
+        totalFileMemory += threadMemoryStatistics[i].totalFileMemory;
+        totalShapeMemory += threadMemoryStatistics[i].totalShapeMemory;
+        totalMaterialMemory += threadMemoryStatistics[i].totalMaterialMemory;
+        totalTextureMemory += threadMemoryStatistics[i].totalTextureMemory;
+        totalLightMemory += threadMemoryStatistics[i].totalLightMemory;
+        totalInstanceMemory += threadMemoryStatistics[i].totalInstanceMemory;
+        totalTransformMemory += threadMemoryStatistics[i].totalTransformMemory;
+        totalStringMemory += threadMemoryStatistics[i].totalStringMemory;
+        totalOtherMemory += threadMemoryStatistics[i].totalOtherMemory;
+    }
+    printf("Total file memory: %lld\n", totalFileMemory);
+    printf("Total shape memory: %lld\n", totalShapeMemory);
+    printf("Total material memory: %lld\n", totalMaterialMemory);
+    printf("Total texture memory: %lld\n", totalTextureMemory);
+    printf("Total light memory: %lld\n", totalLightMemory);
+    printf("Total instance memory: %lld\n", totalInstanceMemory);
+    printf("Total transform memory: %lld\n", totalTransformMemory);
+    printf("Total string memory: %lld\n", totalStringMemory);
+    printf("Total other memory: %lld\n", totalOtherMemory);
 
 #if 0
     vec2i resolution = {1024, 1024};

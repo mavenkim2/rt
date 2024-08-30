@@ -122,7 +122,7 @@ string PushStr8Copy(Arena *arena, string str)
 {
     string res;
     res.size = str.size;
-    res.str  = PushArrayNoZero(arena, u8, str.size + 1);
+    res.str  = PushArrayTagged(arena, u8, str.size + 1, MemoryType_String);
     MemoryCopy(res.str, str.str, str.size);
     res.str[str.size] = 0;
     return res;
@@ -142,7 +142,7 @@ string StrConcat(Arena *arena, string s1, string s2)
 {
     string result;
     result.size = s1.size + s2.size;
-    result.str  = PushArrayNoZero(arena, u8, result.size + 1);
+    result.str  = PushArrayTagged(arena, u8, result.size + 1, MemoryType_String);
     MemoryCopy(result.str, s1.str, s1.size);
     MemoryCopy(result.str + s1.size, s2.str, s2.size);
     result.str[result.size] = 0;
@@ -826,6 +826,10 @@ b32 IsEndOfLine(Tokenizer *tokenizer)
 //////////////////////////////
 // Global string table
 //
+constexpr StringId operator""_sid(const char *ptr, size_t count)
+{
+    return MurmurHash32((const char *)ptr, (int)count, 0);
+}
 
 #if 0
 u32 stringIds[1024];

@@ -101,6 +101,7 @@ b32 Pop(JobQueue &queue, u64 threadIndex)
     b32 result         = 0;
     u64 writePos       = queue.writePos.load();
     u64 readPos        = queue.readPos.load();
+    u64 commitReadPos  = queue.commitReadPos.load();
     u64 availableSpots = writePos - readPos;
     if (availableSpots >= 1)
     {

@@ -18,8 +18,8 @@ Sampler Sampler::Create(Arena *arena, const ScenePacket *packet, const vec2i ful
     RandomizeStrategy strategy = RandomizeStrategy::FastOwen;
     i32 seed                   = 0;
 
-    b32 isHalton     = (*packet->type == "halton");
-    b32 isStratified = (*packet->type == "stratified");
+    b32 isHalton     = (packet->type == "halton"_sid);
+    b32 isStratified = (packet->type == "stratified"_sid);
 
     // stratified sampler only
     bool jitter  = true;
@@ -28,56 +28,68 @@ Sampler Sampler::Create(Arena *arena, const ScenePacket *packet, const vec2i ful
 
     for (u32 i = 0; i < packet->parameterCount; i++)
     {
-        if (*packet->parameterNames[i] == "pixelsamples")
+        switch (packet->parameterNames[i])
         {
-            samplesPerPixel = packet->GetInt(i);
-        }
-        else if (*packet->parameterNames[i] == "randomization")
-        {
-            if (Compare(packet->bytes[i], "none"))
+            case "pixelsamples"_sid:
             {
-                strategy = RandomizeStrategy::FastOwen;
+                samplesPerPixel = packet->GetInt(i);
             }
-            else if (Compare(packet->bytes[i], "permutedigits"))
+            break;
+            case "randomization"_sid:
             {
-                strategy = RandomizeStrategy::PermuteDigits;
+                if (Compare(packet->bytes[i], "none"))
+                {
+                    strategy = RandomizeStrategy::FastOwen;
+                }
+                else if (Compare(packet->bytes[i], "permutedigits"))
+                {
+                    strategy = RandomizeStrategy::PermuteDigits;
+                }
+                else if (Compare(packet->bytes[i], "owen"))
+                {
+                    Assert(!isHalton);
+                    strategy = RandomizeStrategy::Owen;
+                }
             }
-            else if (Compare(packet->bytes[i], "owen"))
+            break;
+            case "seed"_sid:
             {
-                Assert(!isHalton);
-                strategy = RandomizeStrategy::Owen;
+                seed = packet->GetInt(i);
             }
-        }
-        else if (*packet->parameterNames[i] == "seed")
-        {
-            seed = packet->GetInt(i);
-        }
-        else if (*packet->parameterNames[i] == "jitter")
-        {
-            Assert(isStratified);
-            jitter = packet->GetBool(i);
-        }
-        else if (*packet->parameterNames[i] == "xsamples")
-        {
-            Assert(isStratified);
-            xSamples = packet->GetInt(i);
-        }
-        else if (*packet->parameterNames[i] == "ysamples")
-        {
-            Assert(isStratified);
-            ySamples = packet->GetInt(i);
-        }
-        else
-        {
-            Error(0, "Invalid option encountered during Sampler creation: %S\n", *packet->parameterNames[i]);
+            break;
+            case "jitter"_sid:
+            {
+                Assert(isStratified);
+                jitter = packet->GetBool(i);
+            }
+            break;
+            case "xsamples"_sid:
+            {
+                Assert(isStratified);
+                xSamples = packet->GetInt(i);
+            }
+            break;
+            case "ysamples"_sid:
+            {
+                Assert(isStratified);
+                ySamples = packet->GetInt(i);
+            }
+            break;
+            default:
+            {
+                Error(0, "Invalid option encountered during Sampler creation\n");
+            }
         }
     }
-    if (isHalton) Error(0, "Halton sampler not implemented.");
-    if (*packet->type == "independent") return PushStructConstruct(arena, IndependentSampler)(samplesPerPixel);
-    if (*packet->type == "paddedsobol") return PushStructConstruct(arena, PaddedSobolSampler)(samplesPerPixel, strategy, seed);
-    if (*packet->type == "sobol") return PushStructConstruct(arena, SobolSampler)(samplesPerPixel, fullResolution, strategy, seed);
-    if (isStratified) return PushStructConstruct(arena, StratifiedSampler)(xSamples, ySamples, jitter, seed);
-    return PushStructConstruct(arena, ZSobolSampler)(samplesPerPixel, fullResolution, strategy);
+    switch (packet->type)
+    {
+        case "independent"_sid: return PushStructConstruct(arena, IndependentSampler)(samplesPerPixel);
+        case "paddedsobol"_sid: return PushStructConstruct(arena, PaddedSobolSampler)(samplesPerPixel, strategy, seed);
+        case "sobol"_sid: return PushStructConstruct(arena, SobolSampler)(samplesPerPixel, fullResolution, strategy, seed);
+        case "stratified"_sid: return PushStructConstruct(arena, StratifiedSampler)(xSamples, ySamples, jitter, seed);
+        case "halton"_sid: Error(0, "Halton sampler not implemented.");
+        default: return PushStructConstruct(arena, ZSobolSampler)(samplesPerPixel, fullResolution, strategy);
+    }
 }
 
 //////////////////////////////

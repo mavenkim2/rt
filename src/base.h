@@ -33,7 +33,6 @@ void Print(char *fmt, ...);
 void Print(char *fmt, va_list args);
 
 #define Glue(a, b) a##b
-#define DEBUG      1
 #if DEBUG
 // #define Assert(expression) (!(expression) ? (*(volatile int *)0 = 0, 0) : 0)
 #define Assert(expression)                                                                  \
@@ -57,9 +56,9 @@ void Print(char *fmt, va_list args);
     }
 #define StaticAssert(expr, ID) static u8 Glue(ID, __LINE__)[(expr) ? 1 : -1]
 #else
-#define Assert(expression)          (void)(expression)
-#define Error(expression, str, ...) (void)(expression)
-#define StaticAssert(expr)          (void)(expr)
+#define Assert(expression)
+#define Error(expression, str, ...)
+#define StaticAssert(expr, ID)
 #endif
 
 #define ArrayLength(array) sizeof(array) / sizeof(array[0])
@@ -216,7 +215,6 @@ inline void EndMutex(Mutex *mutex)
     mutex->count.store(0);
 }
 
-// TODO: ????
 inline void BeginRMutex(Mutex *mutex)
 {
     for (;;)
@@ -250,5 +248,6 @@ inline void BeginWMutex(Mutex *mutex)
 inline void EndWMutex(Mutex *mutex)
 {
     u32 expected = 0x80000000;
-    Assert(mutex->count.compare_exchange_strong(expected, 0));
+    b32 result   = mutex->count.compare_exchange_strong(expected, 0);
+    Assert(result);
 }

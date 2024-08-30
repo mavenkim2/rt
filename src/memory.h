@@ -38,9 +38,33 @@ void ArenaRelease(Arena *arena);
 void ArenaClear(Arena *arena);
 
 #define PushArrayNoZero(arena, type, count) (type *)ArenaPushNoZero(arena, sizeof(type) * (count))
-#define PushStructNoZero(arena, type)       (type *)PushArrayNoZero(arena, type, 1)
+#define PushStructNoZero(arena, type)       PushArrayNoZero(arena, type, 1)
 #define PushArray(arena, type, count)       (type *)ArenaPush(arena, sizeof(type) * (count))
-#define PushStruct(arena, type)             (type *)PushArray(arena, type, 1)
+#define PushStruct(arena, type)             PushArray(arena, type, 1)
+
+enum MemoryType
+{
+    MemoryType_File,
+    MemoryType_Shape,
+    MemoryType_Material,
+    MemoryType_Texture,
+    MemoryType_Light,
+    MemoryType_Instance,
+    MemoryType_Transform,
+    MemoryType_String,
+    MemoryType_Other,
+};
+
+#if TRACK_MEMORY
+#define PushArrayTagged(arena, type, count, tag) \
+    (((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(type) * count, PushArray(arena, type, count))
+
+#define PushStructTagged(arena, type, tag) \
+    (((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(type), PushStruct(arena, type))
+#else
+#define PushArrayTagged(arena, type, count, tag) PushArray(arena, type, count)
+#define PushStructTagged(arena, type, tag) PushStruct(arena, type)
+#endif
 
 #define PushStructConstruct(arena, Type) new (PushStruct(arena, Type)) Type
 

@@ -185,7 +185,7 @@ inline void Scene::GetTypeAndLocalindex(const u32 totalIndex, PrimitiveType *typ
     }
     else
     {
-        assert(0);
+        Assert(0);
     }
 }
 
@@ -316,7 +316,7 @@ bool Scene::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &temp, u
 
     if (result && primitiveIndices[index].transformIndex != -1)
     {
-        assert(transform);
+        Assert(transform);
         vec3 p;
         p.x = cosTheta * temp.p.x + sinTheta * temp.p.z;
         p.y = temp.p.y;
@@ -394,7 +394,8 @@ TriangleMesh LoadPLY(Arena *arena, string filename)
                     word = CheckWord(&tokenizer);
                     if (word == "element") break;
                     ReadWord(&tokenizer);
-                    Assert(ReadWord(&tokenizer) == "float");
+                    word = ReadWord(&tokenizer);
+                    Assert(word == "float");
                     word = ReadWord(&tokenizer);
 
                     if (word == "x")
@@ -514,87 +515,190 @@ TriangleMesh LoadPLY(Arena *arena, string filename)
     return mesh;
 }
 
-template <typename T, i32 numSlots = 1024, i32 chunkSize = 8>
-struct Map
+// template <typename T, i32 numSlots = 1024, i32 chunkSize = 8>
+// struct Map
+// {
+//     StaticAssert(IsPow2(numSlots), CachePow2N);
+//     struct ChunkNode
+//     {
+//         T values[chunkSize];
+//         u32 count;
+//         ChunkNode *next;
+//     };
+//     struct Slot
+//     {
+//         ChunkNode *first;
+//         ChunkNode *last;
+//     };
+//     Slot *slots;
+//
+//     Map() {}
+//     Map(Arena *arena)
+//     {
+//         slots = PushArray(arena, Slot, numSlots);
+//     }
+//     const T *GetOrCreate(Arena *arena, T value);
+//     T *Add(Arena *arena, string key);
+//     const T *Get(string key) const;
+// };
+//
+// template <typename T, i32 numNodes, i32 chunkSize>
+// const T *Map<T, numNodes, chunkSize>::GetOrCreate(Arena *arena, T value)
+// {
+//     u32 hash        = (u32)Hash<T>(value);
+//     Slot *slot      = &slots[hash & (numNodes - 1)];
+//     ChunkNode *prev = 0;
+//     for (ChunkNode *node = slot->first, prev = 0; node != 0; prev = node, node = node->next)
+//     {
+//         for (u32 i = 0; i < node->count; i++)
+//         {
+//             if (node->values[i] == value) return &node->values[i];
+//         }
+//     }
+//
+//     if (prev->count == ArrayLength(prev->values))
+//     {
+//         node = PushStruct(arena, ChunkNode);
+//         QueuePush(slot->first, slot->last, node);
+//         prev = node;
+//     }
+//     prev->values[prev->count++] = value; // Copy<T>(arena, value);
+//     return &prev->values[prev->count - 1];
+// };
+//
+// // NOTE: allows for nodes with the same key to be used
+// template <typename T, i32 numNodes, i32 chunkSize>
+// T *Map<T, numNodes, chunkSize>::Add(Arena *arena, string key)
+// {
+//     u32 hash   = (u32)Hash<string>(key);
+//     Slot *slot = &slots[hash & (numNodes - 1)];
+//     if (!slot->last || slot->last->count == chunkSize)
+//     {
+//         ChunkNode *newNode = PushStruct(arena, ChunkNode);
+//         QueuePush(slot->first, slot->last, newNode);
+//     }
+//     return &slot->last->values[slot->last->count++];
+// }
+//
+// // TODO: what's even the point of having this templated
+// template <typename T, i32 numNodes, i32 chunkSize>
+// const T *Map<T, numNodes, chunkSize>::Get(string key) const
+// {
+//     u32 hash   = (u32)Hash<string>(key);
+//     Slot *slot = &slots[hash & (numNodes - 1)];
+//     for (ChunkNode *node = slot->first; node != 0; node = node->next)
+//     {
+//         for (u32 i = 0; i < node->count; i++)
+//         {
+//             if (key == *node->values[i].name) return &node->values[i];
+//         }
+//     }
+//
+//     return 0;
+// };
+
+template <i32 numNodes, i32 chunkSize, i32 numStripes>
+struct InternedStringCache
 {
-    StaticAssert(IsPow2(numSlots), CachePow2N);
+    StaticAssert(IsPow2(numNodes), CachePow2N);
+    StaticAssert(IsPow2(numStripes), CachePow2Stripes);
     struct ChunkNode
     {
-        T values[chunkSize];
+        StringId stringIds[chunkSize];
+#if DEBUG
+        string str[chunkSize];
+#endif
         u32 count;
         ChunkNode *next;
     };
-    struct Slot
-    {
-        ChunkNode *first;
-        ChunkNode *last;
-    };
-    Slot *slots;
+    ChunkNode *nodes;
+    Mutex *mutexes;
 
-    Map() {}
-    Map(Arena *arena)
+    InternedStringCache() {}
+    InternedStringCache(Arena *arena)
     {
-        slots = PushArray(arena, Slot, numSlots);
+        nodes   = PushArrayTagged(arena, ChunkNode, numNodes, MemoryType_String);
+        mutexes = PushArray(arena, Mutex, numStripes);
     }
-    const T *GetOrCreate(Arena *arena, T value);
-    T *Add(Arena *arena, string key);
-    const T *Get(string key) const;
+    StringId GetOrCreate(Arena *arena, string value);
+#if DEBUG
+    string Get(StringId id);
+#endif
 };
 
-template <typename T, i32 numNodes, i32 chunkSize>
-const T *Map<T, numNodes, chunkSize>::GetOrCreate(Arena *arena, T value)
+template <i32 numNodes, i32 chunkSize, i32 numStripes>
+StringId InternedStringCache<numNodes, chunkSize, numStripes>::GetOrCreate(Arena *arena, string value)
 {
-    u32 hash        = (u32)Hash<T>(value);
-    Slot *slot      = &slots[hash & (numNodes - 1)];
+    StringId sid    = Hash(value);
+    ChunkNode *node = &nodes[sid & (numNodes - 1)];
     ChunkNode *prev = 0;
-    for (ChunkNode *node = slot->first, prev = 0; node != 0; prev = node, node = node->next)
+
+    u32 stripe = sid & (numStripes - 1);
+    BeginRMutex(&mutexes[stripe]);
+    while (node)
     {
         for (u32 i = 0; i < node->count; i++)
         {
-            if (node->values[i] == value) return &node->values[i];
+            if (sid == node->stringIds[i])
+            {
+#if DEBUG
+                Error(node->str[i] == value, "Hash collision between %S and %S\n", value, node->str[i]);
+#endif
+                EndRMutex(&mutexes[stripe]);
+                return node->stringIds[i];
+            }
         }
-    }
-
-    if (prev->count == ArrayLength(prev->values))
-    {
-        node = PushStruct(arena, ChunkNode);
-        QueuePush(slot->first, slot->last, node);
         prev = node;
+        node = node->next;
     }
-    prev->values[prev->count++] = value; // Copy<T>(arena, value);
-    return &prev->values[prev->count - 1];
-};
+    EndRMutex(&mutexes[stripe]);
 
-// NOTE: allows for nodes with the same key to be used
-template <typename T, i32 numNodes, i32 chunkSize>
-T *Map<T, numNodes, chunkSize>::Add(Arena *arena, string key)
-{
-    u32 hash   = (u32)Hash<string>(key);
-    Slot *slot = &slots[hash & (numNodes - 1)];
-    if (!slot->last || slot->last->count == chunkSize)
+    StringId result = 0;
+    BeginWMutex(&mutexes[stripe]);
+    if (prev->count == ArrayLength(prev->stringIds))
     {
-        ChunkNode *newNode = PushStruct(arena, ChunkNode);
-        QueuePush(slot->first, slot->last, newNode);
+        node       = PushStructTagged(arena, ChunkNode, MemoryType_String);
+        prev->next = node;
+        prev       = node;
     }
-    return &slot->last->values[slot->last->count++];
+    prev->stringIds[prev->count] = sid;
+#if DEBUG
+    prev->str[prev->count] = PushStr8Copy(arena, value);
+#endif
+    prev->count++;
+    EndWMutex(&mutexes[stripe]);
+
+    return sid;
 }
 
-// TODO: what's even the point of having this templated
-template <typename T, i32 numNodes, i32 chunkSize>
-const T *Map<T, numNodes, chunkSize>::Get(string key) const
+#if DEBUG
+template <i32 numNodes, i32 chunkSize, i32 numStripes>
+string InternedStringCache<numNodes, chunkSize, numStripes>::Get(StringId id)
 {
-    u32 hash   = (u32)Hash<string>(key);
-    Slot *slot = &slots[hash & (numNodes - 1)];
-    for (ChunkNode *node = slot->first; node != 0; node = node->next)
+    ChunkNode *node = &nodes[id & (numNodes - 1)];
+    ChunkNode *prev = 0;
+
+    u32 stripe = id & (numStripes - 1);
+    BeginRMutex(&mutexes[stripe]);
+    while (node)
     {
         for (u32 i = 0; i < node->count; i++)
         {
-            if (key == *node->values[i].name) return &node->values[i];
+            if (id == node->stringIds[i])
+            {
+                EndRMutex(&mutexes[stripe]);
+                return node->str[i];
+            }
         }
+        prev = node;
+        node = node->next;
     }
+    EndRMutex(&mutexes[stripe]);
+    return {};
+}
+#endif
 
-    return 0;
-};
+//////////////////////////////
 
 template <i32 numNodes, i32 chunkSize, i32 numStripes>
 struct StringCache
@@ -610,19 +714,19 @@ struct StringCache
     ChunkNode *nodes;
     Mutex *mutexes;
 
+    StringCache() {}
     StringCache(Arena *arena)
     {
-        nodes   = PushArray(arena, ChunkNode, numNodes);
+        nodes   = PushArrayTagged(arena, ChunkNode, numNodes, MemoryType_String);
         mutexes = PushArray(arena, Mutex, numStripes);
     }
     const string *GetOrCreate(Arena *arena, string value);
-    const string *GetOrCreate(Arena *arena, char *fmt, ...);
 };
 
 template <i32 numNodes, i32 chunkSize, i32 numStripes>
 const string *StringCache<numNodes, chunkSize, numStripes>::GetOrCreate(Arena *arena, string value)
 {
-    u32 hash        = (u32)Hash<string>(value);
+    u32 hash        = Hash(value);
     ChunkNode *node = &nodes[hash & (numNodes - 1)];
     ChunkNode *prev = 0;
 
@@ -651,7 +755,7 @@ const string *StringCache<numNodes, chunkSize, numStripes>::GetOrCreate(Arena *a
     BeginWMutex(&mutexes[stripe]);
     if (prev->count == ArrayLength(prev->values))
     {
-        node       = PushStruct(arena, ChunkNode);
+        node       = PushStructTagged(arena, ChunkNode, MemoryType_String);
         prev->next = node;
         prev       = node;
     }
@@ -662,31 +766,20 @@ const string *StringCache<numNodes, chunkSize, numStripes>::GetOrCreate(Arena *a
     return out;
 }
 
-template <i32 numNodes, i32 chunkSize, i32 numStripes>
-const string *StringCache<numNodes, chunkSize, numStripes>::GetOrCreate(Arena *arena, char *fmt, ...)
-{
-    va_list args;
-    va_start(args, fmt);
-    TempArena temp       = ScratchStart(0, 0);
-    string str           = PushStr8FV(temp.arena, fmt, args);
-    const string *result = GetOrCreate(arena, str);
-    va_end(args);
-    ScratchEnd(temp);
-    return result;
-}
-
 // NOTE: sets the camera, film, sampler, etc.
 template <i32 numNodes, i32 chunkSize, i32 numStripes>
 void CreateScenePacket(Arena *arena,
                        string word,
                        ScenePacket *packet,
                        Tokenizer *tokenizer,
-                       StringCache<numNodes, chunkSize, numStripes> *stringCache,
+                       InternedStringCache<numNodes, chunkSize, numStripes> *stringCache,
+                       MemoryType memoryType,
                        u32 additionalParameters = 0)
 {
     ReadWord(tokenizer);
     string type;
-    Assert(GetBetweenPair(type, tokenizer, '"'));
+    b32 result = GetBetweenPair(type, tokenizer, '"');
+    Assert(result);
     packet->type = stringCache->GetOrCreate(arena, type);
     if (IsEndOfLine(tokenizer))
     {
@@ -697,7 +790,7 @@ void CreateScenePacket(Arena *arena,
         SkipToNextChar(tokenizer);
     }
 
-    ReadParameters(arena, packet, tokenizer, stringCache, additionalParameters);
+    ReadParameters(arena, packet, tokenizer, stringCache, memoryType, additionalParameters);
 }
 
 inline void SkipToNextDigitArray(Tokenizer *tokenizer)
@@ -708,7 +801,8 @@ inline void SkipToNextDigitArray(Tokenizer *tokenizer)
 
 template <i32 numNodes, i32 chunkSize, i32 numStripes>
 void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
-                    StringCache<numNodes, chunkSize, numStripes> *stringCache, u32 additionalParameters = 0)
+                    InternedStringCache<numNodes, chunkSize, numStripes> *stringCache,
+                    MemoryType memoryType, u32 additionalParameters = 0)
 {
     u32 numParameters = CountLinesStartWith(tokenizer, '"') + additionalParameters;
     Assert(numParameters);
@@ -737,7 +831,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
         u32 size      = 0;
         if (dataType == "float")
         {
-            f32 *floats = PushArray(arena, f32, numValues);
+            f32 *floats = PushArrayTagged(arena, f32, numValues, memoryType);
 
             Advance(tokenizer, "[");
             SkipToNextDigit(tokenizer);
@@ -759,7 +853,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
         else if (dataType == "point2" || dataType == "vector2")
         {
             Assert((numValues & 1) == 0);
-            vec2 *vectors = PushArray(arena, vec2, numValues / 2);
+            vec2 *vectors = PushArrayTagged(arena, vec2, numValues / 2, memoryType);
 
             b32 brackets = Advance(tokenizer, "[");
             Advance(tokenizer, "[");
@@ -786,7 +880,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
                  dataType == "normal" || dataType == "vector")
         {
             Assert(numValues % 3 == 0);
-            vec3 *vectors = PushArray(arena, vec3, numValues / 3);
+            vec3 *vectors = PushArrayTagged(arena, vec3, numValues / 3, memoryType);
 
             b32 brackets = Advance(tokenizer, "[");
             SkipToNextDigit(tokenizer);
@@ -810,7 +904,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
         }
         else if (dataType == "integer")
         {
-            i32 *ints    = PushArray(arena, i32, numValues);
+            i32 *ints    = PushArrayTagged(arena, i32, numValues, memoryType);
             b32 brackets = Advance(tokenizer, "[");
             SkipToNextDigit(tokenizer);
             if (numValues == 1)
@@ -830,7 +924,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
         }
         else if (dataType == "bool")
         {
-            out  = PushStruct(arena, u8);
+            out  = PushStructTagged(arena, u8, memoryType);
             size = sizeof(u8);
             Advance(tokenizer, "[");
             SkipToNextChar(tokenizer);
@@ -851,7 +945,8 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
             SkipToNextChar(tokenizer);
 
             string str;
-            Assert(GetBetweenPair(str, tokenizer, '"'));
+            b32 pairResult = GetBetweenPair(str, tokenizer, '"');
+            Assert(pairResult);
 
             out  = str.str;
             size = (u32)str.size;
@@ -863,7 +958,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
             i32 val = ReadInt(tokenizer);
             tokenizer->cursor++;
 
-            i32 *ints = PushArray(arena, i32, 1);
+            i32 *ints = PushArrayTagged(arena, i32, 1, memoryType);
             ints[0]   = val;
             out       = (u8 *)ints;
             size      = (u32)sizeof(i32);
@@ -876,7 +971,8 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
             if (numValues > 1)
             {
                 string str;
-                Assert(GetBetweenPair(str, tokenizer, '"'));
+                b32 pairResult = GetBetweenPair(str, tokenizer, '"');
+                Assert(pairResult);
 
                 out  = str.str;
                 size = (u32)str.size;
@@ -885,7 +981,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
             {
                 Advance(tokenizer, "[");
                 Assert((numValues & 1) == 0);
-                out = PushArray(arena, u8, sizeof(f32) * numValues);
+                out = PushArrayTagged(arena, u8, sizeof(f32) * numValues, memoryType);
                 for (u32 i = 0; i < numValues / 2; i++)
                 {
                     *((i32 *)out + 2 * i)     = ReadInt(tokenizer);
@@ -905,34 +1001,64 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
     }
 }
 
-// struct Instance
-// {
-//     i32 shapeIndices;
-//     i32 transformIndex;
-// };
-
-struct MaterialIndex
+template <typename T, i32 numPerChunk, i32 memoryTag = 0>
+struct ChunkedLinkedList
 {
-    u32 threadIndex;
-    i32 materialIndex;
-};
+    Arena *arena;
+    struct ChunkNode
+    {
+        T values[numPerChunk];
+        u32 count;
+        ChunkNode *next;
+    };
+    ChunkNode *first;
+    ChunkNode *last;
+    u32 totalCount;
 
-struct ObjectIndex
-{
-    u32 threadIndex;
-    i32 objectIndex;
+    ChunkedLinkedList(Arena *arena) : arena(arena), first(0), last(0), totalCount(0)
+    {
+        AddNode();
+    }
+    T &AddBack()
+    {
+        if (last->count >= numPerChunk)
+        {
+            AddNode();
+        }
+        T &result = last->values[last->count++];
+        totalCount++;
+        return result;
+    }
+    inline void Push(T &val)
+    {
+        AddBack() = val;
+    }
+    inline void Push(T &&val)
+    {
+        AddBack() = std::move(val);
+    }
+    inline void AddNode()
+    {
+        ChunkNode *newNode = PushStructTagged(arena, ChunkNode, memoryTag);
+        QueuePush(first, last, newNode);
+    }
+    inline u32 Length() const
+    {
+        return totalCount;
+    }
 };
 
 struct ObjectInstanceType
 {
-    const string *name;
+    StringId name;
+    // string name;
     i32 transformIndex;
-    Array<i32> shapeIndices;
+    Array<i32, MemoryType_Instance> shapeIndices;
 };
 
 struct Instance
 {
-    const string *name;
+    StringId name;
     i32 transformIndex;
 };
 
@@ -952,13 +1078,16 @@ struct SceneLoadState
 
     ScenePacket packets[MAX] = {};
 
-    Array<ScenePacket> *shapes;
-    Array<ScenePacket> *materials;
-    Array<ScenePacket> *textures;
-    Array<ScenePacket> *lights;
-    Array<ObjectInstanceType> *instanceTypes;
-    Array<Instance> *instances;
-    Array<mat4> *transforms;
+    ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape> *shapes;
+    ChunkedLinkedList<ScenePacket, 1024, MemoryType_Material> *materials;
+    ChunkedLinkedList<ScenePacket, 1024, MemoryType_Texture> *textures;
+    ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light> *lights;
+    ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance> *instanceTypes;
+    ChunkedLinkedList<Instance, 1024, MemoryType_Instance> *instances;
+    ChunkedLinkedList<mat4, 1024, MemoryType_Transform> *transforms;
+
+    InternedStringCache<16384, 8, 64> stringCache;
+
     Arena **threadArenas;
 
     Arena *mainArena;
@@ -966,125 +1095,140 @@ struct SceneLoadState
     jobsystem::Counter counter = {};
 };
 
-struct SceneThreadState
+struct GraphicsState
 {
-    const string **materialNames;
-    MaterialIndex *materialIndices;
-    const string **objectNames;
-    ObjectIndex *objectIndices;
+    StringId materialId = 0;
+    i32 materialIndex   = -1;
+    mat4 transform      = mat4::Identity();
+    i32 transformIndex  = -1;
 
-    u32 materialCount;
-    u32 objectCount;
-    // Array<ObjectInstance> instances;
+    i32 areaLightIndex = -1;
+    i32 mediaIndex     = -1;
 };
 
-void LoadPBRT(string filename, string directory, SceneLoadState *state, bool inWorldBegin = false);
+void LoadPBRT(string filename, string directory, SceneLoadState *state, GraphicsState graphicsState = {}, bool inWorldBegin = false);
 
 Scene *LoadPBRT(Arena *arena, string filename)
 {
-    TempArena temp = ScratchStart(0, 0);
-    Scene *scene   = PushStruct(arena, Scene);
+#define COMMA ,
+    Scene *scene = PushStruct(arena, Scene);
     SceneLoadState state;
     u32 numProcessors   = OS_NumProcessors();
-    state.shapes        = PushArray(arena, Array<ScenePacket>, numProcessors);
-    state.materials     = PushArray(arena, Array<ScenePacket>, numProcessors);
-    state.textures      = PushArray(arena, Array<ScenePacket>, numProcessors);
-    state.lights        = PushArray(arena, Array<ScenePacket>, numProcessors);
-    state.instanceTypes = PushArray(arena, Array<ObjectInstanceType>, numProcessors);
-    state.instances     = PushArray(arena, Array<Instance>, numProcessors);
-    state.transforms    = PushArray(arena, Array<mat4>, numProcessors);
+    state.shapes        = PushArray(arena, ChunkedLinkedList<ScenePacket COMMA 1024 COMMA MemoryType_Shape>, numProcessors);
+    state.materials     = PushArray(arena, ChunkedLinkedList<ScenePacket COMMA 1024 COMMA MemoryType_Material>, numProcessors);
+    state.textures      = PushArray(arena, ChunkedLinkedList<ScenePacket COMMA 1024 COMMA MemoryType_Texture>, numProcessors);
+    state.lights        = PushArray(arena, ChunkedLinkedList<ScenePacket COMMA 1024 COMMA MemoryType_Light>, numProcessors);
+    state.instanceTypes = PushArray(arena, ChunkedLinkedList<ObjectInstanceType COMMA 512 COMMA MemoryType_Instance>, numProcessors);
+    state.instances     = PushArray(arena, ChunkedLinkedList<Instance COMMA 1024 COMMA MemoryType_Instance>, numProcessors);
+    state.transforms    = PushArray(arena, ChunkedLinkedList<mat4 COMMA 1024 COMMA MemoryType_Transform>, numProcessors);
     state.threadArenas  = PushArray(arena, Arena *, numProcessors);
+#undef COMMA
 
     for (u32 i = 0; i < numProcessors; i++)
     {
         state.threadArenas[i]  = ArenaAlloc();
-        state.shapes[i]        = Array<ScenePacket>(state.threadArenas[i], 32);
-        state.materials[i]     = Array<ScenePacket>(state.threadArenas[i], 32);
-        state.textures[i]      = Array<ScenePacket>(state.threadArenas[i], 32);
-        state.lights[i]        = Array<ScenePacket>(state.threadArenas[i], 32);
-        state.instanceTypes[i] = Array<ObjectInstanceType>(state.threadArenas[i], 32);
-        state.instances[i]     = Array<Instance>(state.threadArenas[i], 32);
-        state.transforms[i]    = Array<mat4>(state.threadArenas[i], 32);
+        state.shapes[i]        = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape>(state.threadArenas[i]);
+        state.materials[i]     = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Material>(state.threadArenas[i]);
+        state.textures[i]      = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Texture>(state.threadArenas[i]);
+        state.lights[i]        = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light>(state.threadArenas[i]);
+        state.instanceTypes[i] = ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance>(state.threadArenas[i]);
+        state.instances[i]     = ChunkedLinkedList<Instance, 1024, MemoryType_Instance>(state.threadArenas[i]);
+        state.transforms[i]    = ChunkedLinkedList<mat4, 1024, MemoryType_Transform>(state.threadArenas[i]);
     }
-    state.mainArena = arena;
-    state.scene     = scene;
+    state.mainArena   = arena;
+    state.scene       = scene;
+    state.stringCache = InternedStringCache<16384, 8, 64>(arena);
 
     LoadPBRT(filename, Str8PathChopPastLastSlash(filename), &state);
 
     // TODO: combine the arrays
     jobsystem::WaitJobs(&state.counter);
 
-    for (u32 i = 0; i < ArrayLength(state.threadArenas); i++)
+    u64 totalNumShapes        = 0;
+    u64 totalNumMaterials     = 0;
+    u64 totalNumTextures      = 0;
+    u64 totalNumLights        = 0;
+    u64 totalNumInstanceTypes = 0;
+    u64 totalNumInstances     = 0;
+    u64 totalNumTransforms    = 0;
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        totalNumShapes += state.shapes[i].totalCount;
+        totalNumMaterials += state.materials[i].totalCount;
+        totalNumTextures += state.textures[i].totalCount;
+        totalNumLights += state.lights[i].totalCount;
+        totalNumInstanceTypes += state.instanceTypes[i].totalCount;
+        totalNumInstances += state.instances[i].totalCount;
+        totalNumTransforms += state.transforms[i].totalCount;
+    }
+
+    printf("Total num shapes: %lld\n", totalNumShapes);
+    printf("Total num materials: %lld\n", totalNumMaterials);
+    printf("Total num textures: %lld\n", totalNumTextures);
+    printf("Total num lights: %lld\n", totalNumLights);
+    printf("Total num instance types: %lld\n", totalNumInstanceTypes);
+    printf("Total num instances: %lld\n", totalNumInstances);
+    printf("Total num transforms: %lld\n", totalNumTransforms);
+
+    for (u32 i = 0; i < numProcessors; i++)
     {
         ArenaClear(state.threadArenas[i]);
     }
-    ScratchEnd(temp);
     return scene;
 }
 
-struct GraphicsState
-{
-    const string *materialName;
-    i32 materialIndex;
-    mat4 transform;
-    i32 transformIndex;
-};
-
 // template <i32 numSlots, i32 chunkSize>
-void LoadPBRT(string filename, string directory, SceneLoadState *state, bool inWorldBegin)
+void LoadPBRT(string filename, string directory, SceneLoadState *state, GraphicsState graphicsState, bool inWorldBegin)
 {
     TempArena temp  = ScratchStart(0, 0);
     u32 threadIndex = GetThreadIndex();
     Arena *arena    = state->threadArenas[threadIndex];
 
-    // if (filename == "data/island/pbrt-v4/isBeach/isBeach.pbrt")
-    // {
-    //     int stop = 5;
-    // }
+    if (filename == "data/island/pbrt-v4/isBeach/isBeach.pbrt")
+    {
+        int stop = 5;
+    }
 
     Tokenizer tokenizer;
     tokenizer.input  = OS_ReadFile(temp.arena, filename);
     tokenizer.cursor = tokenizer.input.str;
 
-    StringCache<1024, 8, 64> stringCache(arena);
-    Array<ScenePacket> &shapes               = state->shapes[threadIndex];
-    Array<ScenePacket> &materials            = state->materials[threadIndex];
-    Array<ScenePacket> &textures             = state->textures[threadIndex];
-    Array<ScenePacket> &lights               = state->lights[threadIndex];
-    Array<ObjectInstanceType> &instanceTypes = state->instanceTypes[threadIndex];
-    Array<Instance> &instances               = state->instances[threadIndex];
+    // TODO: run through the file really fast to find the total number of shapes/materials/etc, and then allocate that amount.
+    // also stop reading files when they're already on disk (for the current thread)
+    auto &shapes        = state->shapes[threadIndex];
+    auto &materials     = state->materials[threadIndex];
+    auto &textures      = state->textures[threadIndex];
+    auto &lights        = state->lights[threadIndex];
+    auto &instanceTypes = state->instanceTypes[threadIndex];
+    auto &instances     = state->instances[threadIndex];
 
     const string *currentInstanceTypeName = 0;
-    Array<mat4> &transforms               = state->transforms[threadIndex];
+    auto &transforms                      = state->transforms[threadIndex];
+    auto &stringCache                     = state->stringCache;
 
     bool worldBegin = inWorldBegin;
 
     // Stack variables
     Tokenizer oldTokenizers[32];
-    u32 numTokenizers = 0;
 
-    string currentFilename = filename;
+    Tokenizer includedFiles[128];
+    string includedFilenames[128];
+    u32 numIncludedFiles = 0;
+    u32 numTokenizers    = 0;
+
+    // string currentFilename = filename;
 
     GraphicsState graphicsStateStack[64];
     u32 graphicsStateCount = 0;
 
-    const string *currentMaterialName = 0;
+    GraphicsState currentGraphicsState = graphicsState;
+
     ObjectInstanceType *currentObject = 0;
 
-    i32 currentMaterialIndex  = -1;
-    i32 currentAreaLightIndex = -1;
     // TODO: media
-    i32 currentMediaIndex = -1;
-
-    mat4 currentTransform     = mat4::Identity();
-    i32 currentTransformIndex = 0;
 
     for (;;)
     {
-        // if (currentFilename == "data/island/pbrt-v4/isBeach/xgHibiscus/xgHibiscus_archiveHibiscusFlower0009_mod_geometry.pbrt")
-        // {
-        //     int stop = 5;
-        // }
         if (EndOfBuffer(&tokenizer))
         {
             if (numTokenizers == 0) break;
@@ -1101,325 +1245,217 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, bool inW
             continue;
         }
 
-        if (word == "Film" || word == "Camera" || word == "Sampler" || word == "Integrator" || word == "Accelerator")
+        StringId sid = stringCache.GetOrCreate(arena, word);
+        switch (sid)
         {
-            if (!worldBegin)
+            case "Accelerator"_sid:
             {
-                SceneLoadState::Type type;
-                if (word == "Film")
-                {
-                    type = SceneLoadState::Type::Film;
-                }
-                else if (word == "Camera")
-                {
-                    type = SceneLoadState::Type::Camera;
-                }
-                else if (word == "Sampler")
-                {
-                    type = SceneLoadState::Type::Sampler;
-                }
-                else if (word == "Integrator")
-                {
-                    type = SceneLoadState::Type::Integrator;
-                }
-                else if (word == "Accelerator")
-                {
-                    type = SceneLoadState::Type::Accelerator;
-                }
-                ScenePacket *packet = &state->packets[type];
-                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache);
+                Error(!worldBegin, "%S cannot be specified after WorldBegin statement\n", word);
+                SceneLoadState::Type type = SceneLoadState::Type::Accelerator;
+                ScenePacket *packet       = &state->packets[type];
+                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache, MemoryType_Other);
                 continue;
             }
-            else
+            break;
+            case "AttributeBegin"_sid:
             {
-                Error(0, "Tried to specify %S after WorldBegin\n", word);
-            }
-        }
-        else if (word == "WorldBegin")
-        {
-            ReadWord(&tokenizer);
-            // NOTE: this assumes "WorldBegin" only occurs in one file
-            worldBegin = true;
-
-            const ScenePacket *filmPacket = &state->packets[SceneLoadState::Type::Film];
-            vec2i fullResolution;
-            for (u32 i = 0; i < filmPacket->parameterCount; i++)
-            {
-                if (*filmPacket->parameterNames[i] == "xresolution")
-                {
-                    fullResolution.x = filmPacket->GetInt(i);
-                }
-                else if (*filmPacket->parameterNames[i] == "yresolution")
-                {
-                    fullResolution.y = filmPacket->GetInt(i);
-                }
-            }
-
-            const ScenePacket *samplerPacket = &state->packets[SceneLoadState::Type::Sampler];
-            state->scene->sampler            = Sampler::Create(state->mainArena, samplerPacket, fullResolution);
-
-            if (currentTransform != mat4::Identity())
-            {
-                transforms.Push(std::move(currentTransform));
-            }
-            // TODO: instantiate the camera with the current transform
-
-            currentTransform = mat4::Identity();
-        }
-        else if (word == "Identity")
-        {
-            ReadWord(&tokenizer);
-            currentTransform = mat4::Identity();
-        }
-        else if (word == "Translate")
-        {
-            currentTransformIndex = transforms.Length();
-            ReadWord(&tokenizer);
-            f32 t0 = ReadFloat(&tokenizer);
-            f32 t1 = ReadFloat(&tokenizer);
-            f32 t2 = ReadFloat(&tokenizer);
-            mat4 translationMatrix(0.f, 0.f, 0.f, 0.f,
-                                   0.f, 0.f, 0.f, 0.f,
-                                   0.f, 0.f, 0.f, 0.f,
-                                   t0, t1, t2, 1.f);
-            currentTransform = mul(currentTransform, translationMatrix);
-        }
-        else if (word == "Rotate")
-        {
-            currentTransformIndex = transforms.Length();
-            ReadWord(&tokenizer);
-            f32 angle           = ReadFloat(&tokenizer);
-            f32 axisX           = ReadFloat(&tokenizer);
-            f32 axisY           = ReadFloat(&tokenizer);
-            f32 axisZ           = ReadFloat(&tokenizer);
-            mat4 rotationMatrix = mat4::Rotate(vec3(axisX, axisY, axisZ), angle);
-            currentTransform    = mul(currentTransform, rotationMatrix);
-        }
-        else if (word == "Scale")
-        {
-            currentTransformIndex = transforms.Length();
-            ReadWord(&tokenizer);
-            f32 s0 = ReadFloat(&tokenizer);
-            f32 s1 = ReadFloat(&tokenizer);
-            f32 s2 = ReadFloat(&tokenizer);
-            mat4 scaleMatrix(s0, 0.f, 0.f, 0.f,
-                             0.f, s1, 0.f, 0.f,
-                             0.f, 0.f, s2, 0.f,
-                             0.f, 0.f, 0.f, 1.f);
-            currentTransform = mul(currentTransform, scaleMatrix);
-        }
-        else if (word == "LookAt")
-        {
-            currentTransformIndex = transforms.Length();
-            ReadWord(&tokenizer);
-            f32 posX = ReadFloat(&tokenizer);
-            f32 posY = ReadFloat(&tokenizer);
-            f32 posZ = ReadFloat(&tokenizer);
-            SkipToNextDigit(&tokenizer);
-            f32 lookX = ReadFloat(&tokenizer);
-            f32 lookY = ReadFloat(&tokenizer);
-            f32 lookZ = ReadFloat(&tokenizer);
-            SkipToNextDigit(&tokenizer);
-            f32 upX = ReadFloat(&tokenizer);
-            f32 upY = ReadFloat(&tokenizer);
-            f32 upZ = ReadFloat(&tokenizer);
-
-            currentTransform = LookAt(vec3(posX, posY, posZ), vec3(lookX, lookY, lookZ), Normalize(vec3(upX, upY, upZ)));
-        }
-        else if (word == "Transform")
-        {
-            // if (filename == "data/island/pbrt-v4/isLavaRocks/isLavaRocks.pbrt")
-            // {
-            //     int stop = 5;
-            // }
-            currentTransformIndex = transforms.Length();
-            ReadWord(&tokenizer);
-            SkipToNextDigit(&tokenizer);
-            f32 r0c0 = ReadFloat(&tokenizer);
-            f32 r0c1 = ReadFloat(&tokenizer);
-            f32 r0c2 = ReadFloat(&tokenizer);
-            f32 r0c3 = ReadFloat(&tokenizer);
-
-            f32 r1c0 = ReadFloat(&tokenizer);
-            f32 r1c1 = ReadFloat(&tokenizer);
-            f32 r1c2 = ReadFloat(&tokenizer);
-            f32 r1c3 = ReadFloat(&tokenizer);
-
-            f32 r2c0 = ReadFloat(&tokenizer);
-            f32 r2c1 = ReadFloat(&tokenizer);
-            f32 r2c2 = ReadFloat(&tokenizer);
-            f32 r2c3 = ReadFloat(&tokenizer);
-
-            f32 r3c0 = ReadFloat(&tokenizer);
-            f32 r3c1 = ReadFloat(&tokenizer);
-            f32 r3c2 = ReadFloat(&tokenizer);
-            f32 r3c3 = ReadFloat(&tokenizer);
-
-            // NOTE: this transposes the matrix
-            currentTransform = mat4(r0c0, r0c1, r0c2, r0c3,
-                                    r1c0, r1c1, r1c2, r1c3,
-                                    r2c0, r2c1, r2c2, r2c3,
-                                    r3c0, r3c1, r3c2, r3c3);
-
-            SkipToNextLine(&tokenizer);
-        }
-        else if (word == "ConcatTransform")
-        {
-            currentTransformIndex = transforms.Length();
-            ReadWord(&tokenizer);
-            SkipToNextDigit(&tokenizer);
-            f32 r0c0 = ReadFloat(&tokenizer);
-            f32 r0c1 = ReadFloat(&tokenizer);
-            f32 r0c2 = ReadFloat(&tokenizer);
-            f32 r0c3 = ReadFloat(&tokenizer);
-
-            f32 r1c0 = ReadFloat(&tokenizer);
-            f32 r1c1 = ReadFloat(&tokenizer);
-            f32 r1c2 = ReadFloat(&tokenizer);
-            f32 r1c3 = ReadFloat(&tokenizer);
-
-            f32 r2c0 = ReadFloat(&tokenizer);
-            f32 r2c1 = ReadFloat(&tokenizer);
-            f32 r2c2 = ReadFloat(&tokenizer);
-            f32 r2c3 = ReadFloat(&tokenizer);
-
-            f32 r3c0 = ReadFloat(&tokenizer);
-            f32 r3c1 = ReadFloat(&tokenizer);
-            f32 r3c2 = ReadFloat(&tokenizer);
-            f32 r3c3 = ReadFloat(&tokenizer);
-
-            // NOTE: this transposes the matrix
-            currentTransform = mul(currentTransform, mat4(r0c0, r0c1, r0c2, r0c3,
-                                                          r1c0, r1c1, r1c2, r1c3,
-                                                          r2c0, r2c1, r2c2, r2c3,
-                                                          r3c0, r3c1, r3c2, r3c3));
-            SkipToNextLine(&tokenizer);
-        }
-        else if (worldBegin)
-        {
-            if (word == "AttributeBegin")
-            {
+                Error(worldBegin, "%S cannot be specified before WorldBegin statement\n", word);
                 Assert(graphicsStateCount < ArrayLength(graphicsStateStack));
-                GraphicsState *graphicsState  = &graphicsStateStack[graphicsStateCount++];
-                graphicsState->transform      = currentTransform;
-                graphicsState->materialIndex  = currentMaterialIndex;
-                graphicsState->materialName   = currentMaterialName;
-                graphicsState->transformIndex = currentTransformIndex;
+                GraphicsState *gs    = &graphicsStateStack[graphicsStateCount++];
+                *gs                  = currentGraphicsState;
+                currentGraphicsState = {};
 
-                currentMaterialIndex  = -1;
-                currentTransform      = mat4::Identity();
-                currentTransformIndex = 0;
+                // currentTransform      = mat4::Identity();
+                // currentMaterialIndex  = -1;
+                // currentTransformIndex = 0;
                 SkipToNextLine(&tokenizer);
             }
-            else if (word == "AttributeEnd")
+            break;
+            case "AttributeEnd"_sid:
             {
+                Error(worldBegin, "%S cannot be specified before WorldBegin statement\n", word);
                 Assert(graphicsStateCount > 0);
 
                 // Add transform to cache
-                transforms.Push(std::move(currentTransform));
+                transforms.Push(std::move(currentGraphicsState.transform));
 
                 // Pop stack
-                GraphicsState *graphicsState = &graphicsStateStack[--graphicsStateCount];
-                currentMaterialIndex         = graphicsState->materialIndex;
-                currentMaterialName          = graphicsState->materialName;
-                currentTransform             = graphicsState->transform;
-                currentTransformIndex        = graphicsState->transformIndex;
-
-                currentAreaLightIndex = -1;
+                currentGraphicsState = graphicsStateStack[--graphicsStateCount];
 
                 SkipToNextLine(&tokenizer);
             }
-            else if (word == "AreaLightSource")
+            break;
+            case "AreaLightSource"_sid:
             {
-                currentAreaLightIndex = lights.Length();
-                ScenePacket *packet   = &lights.AddBack();
-                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache);
+                Error(worldBegin, "%S cannot be specified before WorldBegin statement\n", word);
+                currentGraphicsState.areaLightIndex = lights.Length();
+                ScenePacket *packet                 = &lights.AddBack();
+                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache, MemoryType_Light);
             }
-            else if (word == "LightSource")
+            break;
+            case "Attribute"_sid:
             {
-                // ReadWord(&tokenizer);
+                Error(0, "Not implemented Attribute");
+            }
+            break;
+            case "Camera"_sid:
+            {
+                Error(!worldBegin, "%S cannot be specified after WorldBegin statement\n", word);
+                SceneLoadState::Type type = SceneLoadState::Type::Camera;
+                ScenePacket *packet       = &state->packets[type];
+                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache, MemoryType_Other);
+                continue;
+            }
+            case "ConcatTransform"_sid:
+            {
+                currentGraphicsState.transformIndex = transforms.Length();
+                ReadWord(&tokenizer);
+                SkipToNextDigit(&tokenizer);
+                f32 r0c0 = ReadFloat(&tokenizer);
+                f32 r0c1 = ReadFloat(&tokenizer);
+                f32 r0c2 = ReadFloat(&tokenizer);
+                f32 r0c3 = ReadFloat(&tokenizer);
+
+                f32 r1c0 = ReadFloat(&tokenizer);
+                f32 r1c1 = ReadFloat(&tokenizer);
+                f32 r1c2 = ReadFloat(&tokenizer);
+                f32 r1c3 = ReadFloat(&tokenizer);
+
+                f32 r2c0 = ReadFloat(&tokenizer);
+                f32 r2c1 = ReadFloat(&tokenizer);
+                f32 r2c2 = ReadFloat(&tokenizer);
+                f32 r2c3 = ReadFloat(&tokenizer);
+
+                f32 r3c0 = ReadFloat(&tokenizer);
+                f32 r3c1 = ReadFloat(&tokenizer);
+                f32 r3c2 = ReadFloat(&tokenizer);
+                f32 r3c3 = ReadFloat(&tokenizer);
+
+                // NOTE: this transposes the matrix
+                currentGraphicsState.transform = mul(currentGraphicsState.transform, mat4(r0c0, r0c1, r0c2, r0c3,
+                                                                                          r1c0, r1c1, r1c2, r1c3,
+                                                                                          r2c0, r2c1, r2c2, r2c3,
+                                                                                          r3c0, r3c1, r3c2, r3c3));
+                SkipToNextLine(&tokenizer);
+            }
+            break;
+            case "CoordinateSystem"_sid:
+            case "CoordSysTransform"_sid:
+            {
+                Error(0, "Not implemented %S\n", word);
+            }
+            break;
+            case "Film"_sid:
+            {
+                Error(!worldBegin, "Tried to specify %S after WorldBegin\n", word);
+                SceneLoadState::Type type = SceneLoadState::Type::Film;
+                ScenePacket *packet       = &state->packets[type];
+                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache, MemoryType_Other);
+                continue;
+            }
+            case "Integrator"_sid:
+            {
+                Error(!worldBegin, "Tried to specify %S after WorldBegin\n", word);
+                SceneLoadState::Type type = SceneLoadState::Type::Integrator;
+                ScenePacket *packet       = &state->packets[type];
+                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache, MemoryType_Other);
+                continue;
+            }
+            case "Identity"_sid:
+            {
+                ReadWord(&tokenizer);
+                currentGraphicsState.transform = mat4::Identity();
+            }
+            break;
+            case "Import"_sid:
+            {
+                ReadWord(&tokenizer);
+                string importedFilename;
+
+                b32 result = GetBetweenPair(importedFilename, &tokenizer, '"');
+                Assert(result);
+                string importedFullPath = StrConcat(arena, directory, importedFilename);
+
+                jobsystem::KickJob(&state->counter, [importedFullPath, directory, state,
+                                                     currentGraphicsState, worldBegin](jobsystem::JobArgs args) {
+                    LoadPBRT(importedFullPath, directory, state, currentGraphicsState, worldBegin);
+                });
+            }
+            break;
+            case "Include"_sid:
+            {
+                ReadWord(&tokenizer);
+                string importedFilename;
+                b32 result = GetBetweenPair(importedFilename, &tokenizer, '"');
+                Assert(result);
+                string importedFullPath = StrConcat(temp.arena, directory, importedFilename);
+                Assert(numTokenizers < ArrayLength(oldTokenizers));
+                oldTokenizers[numTokenizers++] = tokenizer;
+
+                // if (importedFullPath == "data/island/pbrt-v4/isBeach/objects.pbrt")
+                // {
+                //     int stop = 5;
+                // }
+
+                bool tokenizerSet = false;
+                for (u32 i = 0; i < numIncludedFiles; i++)
+                {
+                    if (includedFilenames[i] == importedFullPath)
+                    {
+                        tokenizer        = includedFiles[i];
+                        tokenizer.cursor = tokenizer.input.str;
+                        tokenizerSet     = true;
+                        break;
+                    }
+                }
+                if (!tokenizerSet)
+                {
+                    Assert(numIncludedFiles < ArrayLength(includedFiles));
+                    tokenizer.input                       = OS_ReadFile(temp.arena, importedFullPath);
+                    tokenizer.cursor                      = tokenizer.input.str;
+                    includedFiles[numIncludedFiles]       = tokenizer;
+                    includedFilenames[numIncludedFiles++] = importedFullPath;
+                }
+
+                // currentFilename = importedFullPath;
+            }
+            break;
+            case "LookAt"_sid:
+            {
+                currentGraphicsState.transformIndex = transforms.Length();
+                ReadWord(&tokenizer);
+                f32 posX = ReadFloat(&tokenizer);
+                f32 posY = ReadFloat(&tokenizer);
+                f32 posZ = ReadFloat(&tokenizer);
+                SkipToNextDigit(&tokenizer);
+                f32 lookX = ReadFloat(&tokenizer);
+                f32 lookY = ReadFloat(&tokenizer);
+                f32 lookZ = ReadFloat(&tokenizer);
+                SkipToNextDigit(&tokenizer);
+                f32 upX = ReadFloat(&tokenizer);
+                f32 upY = ReadFloat(&tokenizer);
+                f32 upZ = ReadFloat(&tokenizer);
+
+                currentGraphicsState.transform = mul(currentGraphicsState.transform,
+                                                     LookAt(vec3(posX, posY, posZ), vec3(lookX, lookY, lookZ), Normalize(vec3(upX, upY, upZ))));
+            }
+            break;
+            case "LightSource"_sid:
+            {
+                Error(worldBegin, "Tried to specify %S before WorldBegin\n", word);
                 ScenePacket *packet = &lights.AddBack();
-                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache);
+                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache, MemoryType_Light);
             }
-            else if (word == "ObjectBegin")
+            break;
+            case "Material"_sid:
+            case "MakeNamedMaterial"_sid:
             {
-                Error(currentObject == 0, "ObjectBegin cannot be called recursively.");
-                ReadWord(&tokenizer);
-                string objectName;
-
-                Assert(GetBetweenPair(objectName, &tokenizer, '"'));
-
-                currentObject                 = &instanceTypes.AddBack();
-                currentObject->name           = stringCache.GetOrCreate(arena, objectName);
-                currentObject->transformIndex = currentTransformIndex;
-                currentObject->shapeIndices   = Array<i32>(arena);
-            }
-            else if (word == "ObjectEnd")
-            {
-                ReadWord(&tokenizer);
-                Error(currentObject != 0, "ObjectEnd must occur after ObjectBegin");
-                currentObject = 0;
-            }
-            else if (word == "ObjectInstance")
-            {
-                ReadWord(&tokenizer);
-                string objectName;
-                Assert(GetBetweenPair(objectName, &tokenizer, '"'));
-
-                Instance &instance      = instances.AddBack();
-                instance.name           = stringCache.GetOrCreate(arena, objectName);
-                instance.transformIndex = (i32)transforms.Length();
-
-                transforms.Push(currentTransform);
-            }
-            // TODO IMPORTANT: the indices are clockwise since PBRT uses a left-handed coordinate system. either need to
-            // revert the winding or use a left handed system as well
-            else if (word == "Shape")
-            {
-                ScenePacket *packet = &shapes.AddBack();
-                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache, currentMaterialName ? 2 : 1);
-                i32 *indices = PushArray(arena, i32, 4);
-                // ORDER: Light, Medium, Transform, Material
-                indices[0] = currentAreaLightIndex;
-                indices[1] = currentMediaIndex;
-                indices[2] = currentTransformIndex;
-                indices[3] = currentMaterialIndex;
-
-                if (currentObject)
-                {
-                    currentObject->shapeIndices.Push(shapes.Length() - 1);
-                }
-
-                u32 currentParameter                     = packet->parameterCount++;
-                packet->parameterNames[currentParameter] = stringCache.GetOrCreate(arena, "Indices");
-                packet->bytes[currentParameter]          = (u8 *)indices;
-                packet->sizes[currentParameter]          = sizeof(i32) * 4;
-
-                if (currentMaterialName)
-                {
-                    currentParameter                         = packet->parameterCount++;
-                    packet->parameterNames[currentParameter] = stringCache.GetOrCreate(arena, "MaterialName");
-                    packet->bytes[currentParameter]          = currentMaterialName->str;
-                    packet->sizes[currentParameter]          = (u32)currentMaterialName->size;
-                }
-                transforms.Push(currentTransform);
-            }
-            else if (word == "NamedMaterial")
-            {
-                ReadWord(&tokenizer);
-                string materialName;
-                Assert(GetBetweenPair(materialName, &tokenizer, '"'));
-
-                currentMaterialName  = stringCache.GetOrCreate(arena, materialName);
-                currentMaterialIndex = -1;
-            }
-            else if (word == "Material" || word == "MakeNamedMaterial")
-            {
-                bool isNamedMaterial = (word == "MakeNamedMaterial");
+                bool isNamedMaterial = (sid == "MakeNamedMaterial"_sid);
                 // scenePacketCache
                 ReadWord(&tokenizer);
                 string materialNameOrType;
-                Assert(GetBetweenPair(materialNameOrType, &tokenizer, '"'));
+                b32 result = GetBetweenPair(materialNameOrType, &tokenizer, '"');
+                Assert(result);
 
                 ScenePacket *packet = &materials.AddBack();
                 packet->type        = stringCache.GetOrCreate(arena, materialNameOrType);
@@ -1432,28 +1468,203 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, bool inW
                 {
                     SkipToNextChar(&tokenizer);
                 }
-                ReadParameters(arena, packet, &tokenizer, &stringCache);
+                ReadParameters(arena, packet, &tokenizer, &stringCache, MemoryType_Material);
 
                 if (isNamedMaterial)
                 {
-                    currentMaterialName  = stringCache.GetOrCreate(arena, materialNameOrType);
-                    currentMaterialIndex = -1;
+                    currentGraphicsState.materialId    = stringCache.GetOrCreate(arena, materialNameOrType);
+                    currentGraphicsState.materialIndex = -1;
                 }
                 else
                 {
-                    currentMaterialIndex = materialIndex;
-                    currentMaterialName  = 0;
+                    currentGraphicsState.materialIndex = materialIndex;
+                    currentGraphicsState.materialId    = 0;
                 }
             }
-            else if (word == "Texture")
+            break;
+            case "MakeNamedMedium"_sid:
+            case "MediumInterface"_sid:
+            {
+                // not implemented yet
+                Error(0, "Not implemented %S\n", word);
+            }
+            break;
+            case "NamedMaterial"_sid:
+            {
+                ReadWord(&tokenizer);
+                string materialName;
+                b32 result = GetBetweenPair(materialName, &tokenizer, '"');
+                Assert(result);
+
+                currentGraphicsState.materialId    = stringCache.GetOrCreate(arena, materialName);
+                currentGraphicsState.materialIndex = -1;
+            }
+            break;
+            case "ObjectBegin"_sid:
+            {
+                Error(worldBegin, "Tried to specify %S before WorldBegin\n", word);
+                Error(currentObject == 0, "ObjectBegin cannot be called recursively.");
+                Error(currentGraphicsState.areaLightIndex == -1, "Area lights instancing not supported.");
+                ReadWord(&tokenizer);
+                string objectName;
+
+                b32 result = GetBetweenPair(objectName, &tokenizer, '"');
+                Assert(result);
+
+                currentObject                 = &instanceTypes.AddBack();
+                // StringId id                   = stringCache.GetOrCreate(arena, objectName);
+                // currentObject->name           = stringCache.Get(id);
+                currentObject->name = stringCache.GetOrCreate(arena, objectName);
+                currentObject->transformIndex = currentGraphicsState.transformIndex;
+                currentObject->shapeIndices   = Array<i32, MemoryType_Instance>(arena);
+            }
+            break;
+            case "ObjectEnd"_sid:
+            {
+                Error(worldBegin, "Tried to specify %S before WorldBegin\n", word);
+                ReadWord(&tokenizer);
+                Error(currentObject != 0, "ObjectEnd must occur after ObjectBegin");
+                currentObject = 0;
+            }
+            break;
+            case "ObjectInstance"_sid:
+            {
+                Error(worldBegin, "Tried to specify %S after WorldBegin\n", word);
+                ReadWord(&tokenizer);
+                string objectName;
+                b32 result = GetBetweenPair(objectName, &tokenizer, '"');
+                Assert(result);
+
+                Instance &instance      = instances.AddBack();
+                instance.name           = stringCache.GetOrCreate(arena, objectName);
+                instance.transformIndex = (i32)transforms.Length();
+
+                transforms.Push(currentGraphicsState.transform);
+                SkipToNextLine(&tokenizer);
+            }
+            break;
+            case "Rotate"_sid:
+            {
+                currentGraphicsState.transformIndex = transforms.Length();
+                ReadWord(&tokenizer);
+                f32 angle                      = ReadFloat(&tokenizer);
+                f32 axisX                      = ReadFloat(&tokenizer);
+                f32 axisY                      = ReadFloat(&tokenizer);
+                f32 axisZ                      = ReadFloat(&tokenizer);
+                mat4 rotationMatrix            = mat4::Rotate(vec3(axisX, axisY, axisZ), angle);
+                currentGraphicsState.transform = mul(currentGraphicsState.transform, rotationMatrix);
+            }
+            break;
+            case "Sampler"_sid:
+            {
+                Error(!worldBegin, "Tried to specify %S after WorldBegin\n", word);
+                SceneLoadState::Type type = SceneLoadState::Type::Sampler;
+                ScenePacket *packet       = &state->packets[type];
+                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache, MemoryType_Other);
+                continue;
+            }
+            break;
+            case "Scale"_sid:
+            {
+                currentGraphicsState.transformIndex = transforms.Length();
+                ReadWord(&tokenizer);
+                f32 s0 = ReadFloat(&tokenizer);
+                f32 s1 = ReadFloat(&tokenizer);
+                f32 s2 = ReadFloat(&tokenizer);
+                mat4 scaleMatrix(s0, 0.f, 0.f, 0.f,
+                                 0.f, s1, 0.f, 0.f,
+                                 0.f, 0.f, s2, 0.f,
+                                 0.f, 0.f, 0.f, 1.f);
+                currentGraphicsState.transform = mul(currentGraphicsState.transform, scaleMatrix);
+            }
+            break;
+            case "Shape"_sid:
+            {
+                Error(worldBegin, "Tried to specify %S after WorldBegin\n", word);
+                ScenePacket *packet = &shapes.AddBack();
+                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache, MemoryType_Shape, 1);
+                i32 *indices = PushArray(arena, i32, 4);
+                // ORDER: Light, Medium, Transform, Material Index, Material StringID (if present)
+                indices[0] = currentGraphicsState.areaLightIndex;
+                indices[1] = currentGraphicsState.mediaIndex;
+                indices[2] = currentGraphicsState.transformIndex;
+                // NOTE: the highest bit is set if it's an index
+                indices[3] = currentGraphicsState.materialIndex == -1 ? currentGraphicsState.materialId
+                                                                      : (u32)currentGraphicsState.materialIndex | 0x80000000;
+
+                if (currentObject)
+                {
+                    currentObject->shapeIndices.Push(shapes.Length() - 1);
+                }
+
+                u32 currentParameter                     = packet->parameterCount++;
+                packet->parameterNames[currentParameter] = stringCache.GetOrCreate(arena, "Indices");
+                packet->bytes[currentParameter]          = (u8 *)indices;
+                packet->sizes[currentParameter]          = sizeof(i32) * 4;
+
+                transforms.Push(currentGraphicsState.transform);
+            }
+            break;
+            case "Translate"_sid:
+            {
+                currentGraphicsState.transformIndex = transforms.Length();
+                ReadWord(&tokenizer);
+                f32 t0 = ReadFloat(&tokenizer);
+                f32 t1 = ReadFloat(&tokenizer);
+                f32 t2 = ReadFloat(&tokenizer);
+                mat4 translationMatrix(0.f, 0.f, 0.f, 0.f,
+                                       0.f, 0.f, 0.f, 0.f,
+                                       0.f, 0.f, 0.f, 0.f,
+                                       t0, t1, t2, 1.f);
+                currentGraphicsState.transform = mul(currentGraphicsState.transform, translationMatrix);
+            }
+            break;
+            case "Transform"_sid:
+            {
+                currentGraphicsState.transformIndex = transforms.Length();
+                ReadWord(&tokenizer);
+                SkipToNextDigit(&tokenizer);
+                f32 r0c0 = ReadFloat(&tokenizer);
+                f32 r0c1 = ReadFloat(&tokenizer);
+                f32 r0c2 = ReadFloat(&tokenizer);
+                f32 r0c3 = ReadFloat(&tokenizer);
+
+                f32 r1c0 = ReadFloat(&tokenizer);
+                f32 r1c1 = ReadFloat(&tokenizer);
+                f32 r1c2 = ReadFloat(&tokenizer);
+                f32 r1c3 = ReadFloat(&tokenizer);
+
+                f32 r2c0 = ReadFloat(&tokenizer);
+                f32 r2c1 = ReadFloat(&tokenizer);
+                f32 r2c2 = ReadFloat(&tokenizer);
+                f32 r2c3 = ReadFloat(&tokenizer);
+
+                f32 r3c0 = ReadFloat(&tokenizer);
+                f32 r3c1 = ReadFloat(&tokenizer);
+                f32 r3c2 = ReadFloat(&tokenizer);
+                f32 r3c3 = ReadFloat(&tokenizer);
+
+                // NOTE: this transposes the matrix
+                currentGraphicsState.transform = mat4(r0c0, r0c1, r0c2, r0c3,
+                                                      r1c0, r1c1, r1c2, r1c3,
+                                                      r2c0, r2c1, r2c2, r2c3,
+                                                      r3c0, r3c1, r3c2, r3c3);
+
+                SkipToNextLine(&tokenizer);
+            }
+            break;
+            case "Texture"_sid:
             {
                 ReadWord(&tokenizer);
                 string textureName;
-                Assert(GetBetweenPair(textureName, &tokenizer, '"'));
+                b32 result = GetBetweenPair(textureName, &tokenizer, '"');
+                Assert(result);
                 string textureType;
-                Assert(GetBetweenPair(textureType, &tokenizer, '"'));
+                result = GetBetweenPair(textureType, &tokenizer, '"');
+                Assert(result);
                 string textureClass;
-                Assert(GetBetweenPair(textureClass, &tokenizer, '"'));
+                result = GetBetweenPair(textureClass, &tokenizer, '"');
+                Assert(result);
 
                 ScenePacket *packet = &textures.AddBack();
                 packet->type        = stringCache.GetOrCreate(arena, StrConcat(arena, textureType, textureClass));
@@ -1466,49 +1677,53 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, bool inW
                 {
                     SkipToNextChar(&tokenizer);
                 }
-                ReadParameters(arena, packet, &tokenizer, &stringCache);
+                ReadParameters(arena, packet, &tokenizer, &stringCache, MemoryType_Texture);
             }
-            else if (word == "Import")
+            break;
+            case "WorldBegin"_sid:
             {
                 ReadWord(&tokenizer);
-                string importedFilename;
-                Assert(GetBetweenPair(importedFilename, &tokenizer, '"'));
-                string importedFullPath = StrConcat(arena, directory, importedFilename);
+                // NOTE: this assumes "WorldBegin" only occurs in one file
+                worldBegin = true;
 
-                jobsystem::KickJob(&state->counter, [&](jobsystem::JobArgs args) {
-                    LoadPBRT(importedFullPath, directory, state, worldBegin);
-                });
-            }
-            else if (word == "Include")
-            {
-                ReadWord(&tokenizer);
-                string importedFilename;
-                Assert(GetBetweenPair(importedFilename, &tokenizer, '"'));
-                string importedFullPath = StrConcat(temp.arena, directory, importedFilename);
-                Assert(numTokenizers < ArrayLength(oldTokenizers));
-                oldTokenizers[numTokenizers++] = tokenizer;
-                tokenizer.input                = OS_ReadFile(temp.arena, importedFullPath);
-                tokenizer.cursor               = tokenizer.input.str;
+                const ScenePacket *filmPacket = &state->packets[SceneLoadState::Type::Film];
+                vec2i fullResolution;
+                for (u32 i = 0; i < filmPacket->parameterCount; i++)
+                {
+                    switch (filmPacket->parameterNames[i])
+                    {
+                        case "xresolution"_sid:
+                        {
+                            fullResolution.x = filmPacket->GetInt(i);
+                        }
+                        break;
+                        case "yresolution"_sid:
+                        {
+                            fullResolution.y = filmPacket->GetInt(i);
+                        }
+                        break;
+                    }
+                }
 
-                currentFilename = importedFullPath;
+                const ScenePacket *samplerPacket = &state->packets[SceneLoadState::Type::Sampler];
+                state->scene->sampler            = Sampler::Create(state->mainArena, samplerPacket, fullResolution);
+
+                if (currentGraphicsState.transform != mat4::Identity())
+                {
+                    transforms.Push(std::move(currentGraphicsState.transform));
+                }
+                // TODO: instantiate the camera with the current transform
+
+                currentGraphicsState.transform = mat4::Identity();
             }
-            else if (word == "Attribute" || word == "MakeNamedMedium" || word == "MediumInterface" ||
-                     word == "CoordinateSystem" || word == "CoordSysTransform")
-            {
-                // not implemented yet
-                Assert(0);
-            }
-            else
+            break;
+            default:
             {
                 string line = ReadLine(&tokenizer);
                 Error(0, "Error while parsing scene. Buffer: %S", line);
             }
-        }
-        else
-        {
-            string line = ReadLine(&tokenizer);
-            Error(0, "Error while parsing scene. Buffer: %S, WorldBegin: %b\n", line, worldBegin);
-            // SkipToNextLine(&tokenizer);
+                // TODO IMPORTANT: the indices are clockwise since PBRT uses a left-handed coordinate system. either need to
+                // revert the winding or use a left handed system as well
         }
     }
     ScratchEnd(temp);

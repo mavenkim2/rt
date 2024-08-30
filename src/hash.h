@@ -18,6 +18,90 @@ LaneU32 MixBits(LaneU32 v)
     return v;
 }
 
+// https://github.com/aappleby/smhasher/blob/master/src/MurmurHash3.cpp
+// https://github.com/AntonJohansson/StaticMurmur/blob/master/StaticMurmur.hpp
+constexpr uint32_t get_block(const char *p, unsigned i)
+{
+    const uint32_t block =
+        static_cast<uint32_t>(p[0 + i * 4]) << 0 |
+        static_cast<uint32_t>(p[1 + i * 4]) << 8 |
+        static_cast<uint32_t>(p[2 + i * 4]) << 16 |
+        static_cast<uint32_t>(p[3 + i * 4]) << 24;
+    return block;
+}
+
+constexpr uint32_t rotl32(uint32_t x, int8_t r)
+{
+    return (x << r) | (x >> (32 - r));
+}
+
+constexpr uint32_t fmix32(uint32_t h)
+{
+    h ^= h >> 16;
+    h *= 0x85ebca6b;
+    h ^= h >> 13;
+    h *= 0xc2b2ae35;
+    h ^= h >> 16;
+    return h;
+}
+
+constexpr u32 MurmurHash32(const char *key,
+                           const u32 len,
+                           const u32 seed)
+{
+    const u32 nblocks = len / 4;
+
+    u32 h1 = seed;
+
+    const u32 c1 = 0xcc9e2d51;
+    const u32 c2 = 0x1b873593;
+
+    //----------
+    // body
+    for (u32 i = 0; i < nblocks; ++i)
+    {
+        u32 k1 = get_block(key, i);
+
+        k1 *= c1;
+        k1 = rotl32(k1, 15);
+        k1 *= c2;
+
+        h1 ^= k1;
+        h1 = rotl32(h1, 13);
+        h1 = h1 * 5 + 0xe6546b64;
+    }
+    //----------
+    // tail
+
+    u32 k1 = 0;
+
+    // The "tail" of key are the bytes that do not fit into any block,
+    // len%4 is the size of the tail and
+    // 	(tail_start + i)
+    // returns the i:th tail byte.
+    const unsigned tail_start = len - (len % 4);
+    switch (len & 3)
+    {
+        case 3: k1 ^= key[tail_start + 2] << 16;
+        case 2: k1 ^= key[tail_start + 1] << 8;
+        case 1:
+            k1 ^= key[tail_start + 0];
+            k1 *= c1;
+            k1 = rotl32(k1, 15);
+            k1 *= c2;
+            h1 ^= k1;
+    };
+
+    //----------
+    // finalization
+
+    h1 ^= len;
+
+    h1 = fmix32(h1);
+
+    return h1;
+}
+
 inline u64 MurmurHash64A(const u8 *key, size_t len, u64 seed)
 {
     const u64 m = 0xc6a4a7935bd1e995ull;
@@ -70,10 +154,9 @@ inline u64 MurmurHash64A(const u8 *key, size_t len, u64 seed)
 template <typename... Args>
 inline u64 Hash(Args... args);
 
-template <>
-inline u64 Hash<string>(string arg)
+inline u32 Hash(string arg)
 {
-    return MurmurHash64A((const u8 *)arg.str, arg.size, 0);
+    return MurmurHash32((const char *)arg.str, (int)arg.size, 0);
 }
 
 template <typename... Args>

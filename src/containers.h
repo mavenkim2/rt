@@ -214,7 +214,7 @@ struct FixedArray
 };
 
 // Basic dynamic array implementation
-template <typename T>
+template <typename T, i32 tag = 0>
 struct Array
 {
     i32 size;
@@ -239,14 +239,22 @@ struct Array
         arena    = inArena;
         size     = 0;
         capacity = 4;
-        data     = (T *)PushArray(arena, u8, sizeof(T) * capacity);
+#if TRACK_MEMORY
+        data = (T *)PushArrayTagged(arena, u8, sizeof(T) * capacity, tag);
+#else
+        data       = (T *)PushArray(arena, u8, sizeof(T) * capacity);
+#endif
     }
 
     Array(Arena *inArena, u32 initialCapacity) : arena(inArena)
     {
         size     = 0;
         capacity = initialCapacity;
-        data     = (T *)PushArray(arena, u8, sizeof(T) * capacity);
+#if TRACK_MEMORY
+        data = (T *)PushArrayTagged(arena, u8, sizeof(T) * capacity, tag);
+#else
+        data       = (T *)PushArray(arena, u8, sizeof(T) * capacity);
+#endif
     }
 
     inline void RangeCheck(i32 index)
@@ -268,8 +276,12 @@ struct Array
 
     inline void Reserve(const u32 num)
     {
-        capacity   = num;
+        capacity = num;
+#if TRACK_MEMORY
+        T *newData = (T *)PushArrayTagged(arena, u8, sizeof(T) * capacity, tag);
+#else
         T *newData = (T *)PushArray(arena, u8, sizeof(T) * capacity);
+#endif
         MemoryCopy(newData, data, sizeof(T) * size);
         data = newData;
     }
@@ -367,8 +379,12 @@ private:
     {
         if (size + num > capacity)
         {
-            capacity   = (size + num) * 2;
+            capacity = (size + num) * 2;
+#if TRACK_MEMORY
+            T *newData = (T *)PushArrayTagged(arena, u8, sizeof(T) * capacity, tag);
+#else
             T *newData = (T *)PushArray(arena, u8, sizeof(T) * capacity);
+#endif
             MemoryCopy(newData, data, sizeof(T) * size);
             data = newData;
         }

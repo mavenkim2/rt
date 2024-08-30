@@ -250,10 +250,10 @@ struct HomogeneousTransform
 
 struct ScenePacket
 {
-    // const string *name;
-    const string *type;
+    StringId type;
 
-    const string **parameterNames;
+    // const string **parameterNames;
+    StringId *parameterNames;
     u8 **bytes;
     u32 *sizes;
     // SceneByteType *types;
@@ -262,7 +262,8 @@ struct ScenePacket
     void Initialize(Arena *arena, u32 count)
     {
         // parameterCount = count;
-        parameterNames = PushArray(arena, const string *, count);
+        parameterCount = 0;
+        parameterNames = PushArray(arena, StringId, count);
         bytes          = PushArray(arena, u8 *, count);
         sizes          = PushArray(arena, u32, count);
         // types          = PushArray(arena, SceneByteType, count);

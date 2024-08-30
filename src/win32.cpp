@@ -117,6 +117,7 @@ void OS_SetThreadName(string name)
     ScratchEnd(scratch);
 }
 
+#include "memory.h"
 string OS_ReadFile(Arena *arena, string filename)
 {
     HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
@@ -124,7 +125,7 @@ string OS_ReadFile(Arena *arena, string filename)
     u64 size;
     GetFileSizeEx(file, (LARGE_INTEGER *)&size);
     string result;
-    result.str  = PushArray(arena, u8, size);
+    result.str  = PushArrayTagged(arena, u8, size, MemoryType_File);
     result.size = size;
 
     u64 totalReadSize = 0;

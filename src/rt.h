@@ -27,7 +27,21 @@ struct ThreadStatistics
     u64 dumb;
 };
 
+struct ThreadMemoryStatistics
+{
+    u64 totalFileMemory;
+    u64 totalShapeMemory;
+    u64 totalMaterialMemory;
+    u64 totalTextureMemory;
+    u64 totalLightMemory;
+    u64 totalInstanceMemory;
+    u64 totalTransformMemory;
+    u64 totalStringMemory;
+    u64 totalOtherMemory;
+};
+
 static ThreadStatistics *threadLocalStatistics;
+static ThreadMemoryStatistics *threadMemoryStatistics;
 
 struct HitRecord
 {
