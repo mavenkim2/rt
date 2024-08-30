@@ -1184,13 +1184,8 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
     u32 threadIndex = GetThreadIndex();
     Arena *arena    = state->threadArenas[threadIndex];
 
-    if (filename == "data/island/pbrt-v4/isBeach/isBeach.pbrt")
-    {
-        int stop = 5;
-    }
-
     Tokenizer tokenizer;
-    tokenizer.input  = OS_ReadFile(temp.arena, filename);
+    tokenizer.input  = OS_MapFileRead(filename);
     tokenizer.cursor = tokenizer.input.str;
 
     // TODO: run through the file really fast to find the total number of shapes/materials/etc, and then allocate that amount.
@@ -1411,7 +1406,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 if (!tokenizerSet)
                 {
                     Assert(numIncludedFiles < ArrayLength(includedFiles));
-                    tokenizer.input                       = OS_ReadFile(temp.arena, importedFullPath);
+                    tokenizer.input                       = OS_MapFileRead(importedFullPath);
                     tokenizer.cursor                      = tokenizer.input.str;
                     includedFiles[numIncludedFiles]       = tokenizer;
                     includedFilenames[numIncludedFiles++] = importedFullPath;
@@ -1511,10 +1506,10 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 b32 result = GetBetweenPair(objectName, &tokenizer, '"');
                 Assert(result);
 
-                currentObject                 = &instanceTypes.AddBack();
+                currentObject = &instanceTypes.AddBack();
                 // StringId id                   = stringCache.GetOrCreate(arena, objectName);
                 // currentObject->name           = stringCache.Get(id);
-                currentObject->name = stringCache.GetOrCreate(arena, objectName);
+                currentObject->name           = stringCache.GetOrCreate(arena, objectName);
                 currentObject->transformIndex = currentGraphicsState.transformIndex;
                 currentObject->shapeIndices   = Array<i32, MemoryType_Instance>(arena);
             }

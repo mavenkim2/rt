@@ -250,12 +250,13 @@ struct HomogeneousTransform
 
 struct ScenePacket
 {
-    StringId type;
-
-    // const string **parameterNames;
     StringId *parameterNames;
     u8 **bytes;
     u32 *sizes;
+
+    StringId type;
+
+    // const string **parameterNames;
     // SceneByteType *types;
     u32 parameterCount;
 

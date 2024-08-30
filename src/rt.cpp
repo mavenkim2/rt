@@ -1031,7 +1031,8 @@ int main(int argc, char *argv[])
     threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, OS_NumProcessors());
 
     // TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
-    StringId id = "xgPalmDebris_archiveLeaflet0125_ge"_sid;
+
+    size_t size = sizeof(ScenePacket);
 
     clock_t start = clock();
     LoadPBRT(arena, "data/island/pbrt-v4/island.pbrt");

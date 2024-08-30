@@ -117,7 +117,6 @@ void OS_SetThreadName(string name)
     ScratchEnd(scratch);
 }
 
-#include "memory.h"
 string OS_ReadFile(Arena *arena, string filename)
 {
     HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
@@ -163,6 +162,25 @@ b32 OS_WriteFile(string filename, void *fileMemory, u64 fileSize)
 b32 OS_WriteFile(string filename, string buffer)
 {
     return OS_WriteFile(filename, buffer.str, (u32)buffer.size);
+}
+
+string OS_MapFileRead(string filename)
+{
+    HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    Error(file != INVALID_HANDLE_VALUE, "Could not open file: %S\n", filename);
+    u64 size;
+    GetFileSizeEx(file, (LARGE_INTEGER *)&size);
+
+    HANDLE mapping = CreateFileMapping(file, 0, PAGE_READONLY, 0, 0, 0);
+    CloseHandle(file);
+    Error(mapping != INVALID_HANDLE_VALUE, "Could not map file: %S\n", filename);
+
+    LPVOID ptr = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+
+    string result;
+    result.str  = (u8 *)ptr;
+    result.size = size;
+    return result;
 }
 
 void OS_SetThreadAffinity(OS_Handle input, i32 index)
