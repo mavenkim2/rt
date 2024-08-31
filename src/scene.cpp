@@ -515,87 +515,65 @@ TriangleMesh LoadPLY(Arena *arena, string filename)
     return mesh;
 }
 
-// template <typename T, i32 numSlots = 1024, i32 chunkSize = 8>
-// struct Map
-// {
-//     StaticAssert(IsPow2(numSlots), CachePow2N);
-//     struct ChunkNode
-//     {
-//         T values[chunkSize];
-//         u32 count;
-//         ChunkNode *next;
-//     };
-//     struct Slot
-//     {
-//         ChunkNode *first;
-//         ChunkNode *last;
-//     };
-//     Slot *slots;
-//
-//     Map() {}
-//     Map(Arena *arena)
-//     {
-//         slots = PushArray(arena, Slot, numSlots);
-//     }
-//     const T *GetOrCreate(Arena *arena, T value);
-//     T *Add(Arena *arena, string key);
-//     const T *Get(string key) const;
-// };
-//
-// template <typename T, i32 numNodes, i32 chunkSize>
-// const T *Map<T, numNodes, chunkSize>::GetOrCreate(Arena *arena, T value)
-// {
-//     u32 hash        = (u32)Hash<T>(value);
-//     Slot *slot      = &slots[hash & (numNodes - 1)];
-//     ChunkNode *prev = 0;
-//     for (ChunkNode *node = slot->first, prev = 0; node != 0; prev = node, node = node->next)
-//     {
-//         for (u32 i = 0; i < node->count; i++)
-//         {
-//             if (node->values[i] == value) return &node->values[i];
-//         }
-//     }
-//
-//     if (prev->count == ArrayLength(prev->values))
-//     {
-//         node = PushStruct(arena, ChunkNode);
-//         QueuePush(slot->first, slot->last, node);
-//         prev = node;
-//     }
-//     prev->values[prev->count++] = value; // Copy<T>(arena, value);
-//     return &prev->values[prev->count - 1];
-// };
-//
-// // NOTE: allows for nodes with the same key to be used
-// template <typename T, i32 numNodes, i32 chunkSize>
-// T *Map<T, numNodes, chunkSize>::Add(Arena *arena, string key)
-// {
-//     u32 hash   = (u32)Hash<string>(key);
-//     Slot *slot = &slots[hash & (numNodes - 1)];
-//     if (!slot->last || slot->last->count == chunkSize)
-//     {
-//         ChunkNode *newNode = PushStruct(arena, ChunkNode);
-//         QueuePush(slot->first, slot->last, newNode);
-//     }
-//     return &slot->last->values[slot->last->count++];
-// }
-//
-// // TODO: what's even the point of having this templated
-// template <typename T, i32 numNodes, i32 chunkSize>
-// const T *Map<T, numNodes, chunkSize>::Get(string key) const
-// {
-//     u32 hash   = (u32)Hash<string>(key);
-//     Slot *slot = &slots[hash & (numNodes - 1)];
-//     for (ChunkNode *node = slot->first; node != 0; node = node->next)
-//     {
-//         for (u32 i = 0; i < node->count; i++)
-//         {
-//             if (key == *node->values[i].name) return &node->values[i];
-//         }
-//     }
-//
-//     return 0;
-// };
+template <typename T, i32 numSlots, i32 chunkSize, i32 numStripes, i32 tag>
+struct Map
+{
+    StaticAssert(IsPow2(numSlots), CachePow2N);
+    struct ChunkNode
+    {
+        T values[chunkSize];
+        u32 count;
+        ChunkNode *next;
+    };
+    ChunkNode *nodes;
+    Mutex *mutexes;
+
+    Map() {}
+    Map(Arena *arena)
+    {
+        nodes   = PushArrayTagged(arena, ChunkNode, numSlots, tag);
+        mutexes = PushArrayTagged(arena, Mutex, numStripes, tag);
+    }
+    const T *GetOrCreate(Arena *arena, T value);
+};
+
+template <typename T, i32 numSlots, i32 chunkSize, i32 numStripes, i32 tag>
+const T *Map<T, numSlots, chunkSize, numStripes, tag>::GetOrCreate(Arena *arena, T value)
+{
+    u64 hash        = Hash<T>(value);
+    ChunkNode *node = &nodes[hash & (numSlots - 1)];
+    ChunkNode *prev = 0;
+
+    u32 stripe = hash & (numStripes - 1);
+    BeginRMutex(&mutexes[stripe]);
+    while (node)
+    {
+        for (u32 i = 0; i < node->count; i++)
+        {
+            if (node->values[i] == value)
+            {
+                EndRMutex(&mutexes[stripe]);
+                return &node->values[i];
+            }
+        }
+        prev = node;
+        node = node->next;
+    }
+    EndRMutex(&mutexes[stripe]);
+
+    T *out = 0;
+    BeginWMutex(&mutexes[stripe]);
+    if (prev->count == ArrayLength(prev->values))
+    {
+        node       = PushStructTagged(arena, ChunkNode, tag);
+        prev->next = node;
+        prev       = node;
+    }
+    prev->values[prev->count] = value;
+    out                       = &prev->values[prev->count++];
+    EndWMutex(&mutexes[stripe]);
+    return out;
+}
 
 template <i32 numNodes, i32 chunkSize, i32 numStripes>
 struct InternedStringCache
@@ -1078,15 +1056,21 @@ struct SceneLoadState
 
     ScenePacket packets[MAX] = {};
 
+    // TODO: these numbers are really ad hoc. honestly the best solution would be to just serialize the scene
+    // so that they number of transforms, shapes, instances, etc. is known from the very start. that way you
+    // don't even need hash tables. you would just need an index into a global array that contains everything
+    // and it would be really simple and easy to use.
     ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape> *shapes;
     ChunkedLinkedList<ScenePacket, 1024, MemoryType_Material> *materials;
     ChunkedLinkedList<ScenePacket, 1024, MemoryType_Texture> *textures;
     ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light> *lights;
     ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance> *instanceTypes;
     ChunkedLinkedList<Instance, 1024, MemoryType_Instance> *instances;
-    ChunkedLinkedList<mat4, 1024, MemoryType_Transform> *transforms;
+
+    ChunkedLinkedList<const mat4 *, 16384, MemoryType_Transform> *transforms;
 
     InternedStringCache<16384, 8, 64> stringCache;
+    Map<mat4, 1048576, 8, 1024, MemoryType_Transform> transformCache;
 
     Arena **threadArenas;
 
@@ -1120,7 +1104,7 @@ Scene *LoadPBRT(Arena *arena, string filename)
     state.lights        = PushArray(arena, ChunkedLinkedList<ScenePacket COMMA 1024 COMMA MemoryType_Light>, numProcessors);
     state.instanceTypes = PushArray(arena, ChunkedLinkedList<ObjectInstanceType COMMA 512 COMMA MemoryType_Instance>, numProcessors);
     state.instances     = PushArray(arena, ChunkedLinkedList<Instance COMMA 1024 COMMA MemoryType_Instance>, numProcessors);
-    state.transforms    = PushArray(arena, ChunkedLinkedList<mat4 COMMA 1024 COMMA MemoryType_Transform>, numProcessors);
+    state.transforms    = PushArray(arena, ChunkedLinkedList<const mat4 * COMMA 16384 COMMA MemoryType_Transform>, numProcessors);
     state.threadArenas  = PushArray(arena, Arena *, numProcessors);
 #undef COMMA
 
@@ -1133,11 +1117,12 @@ Scene *LoadPBRT(Arena *arena, string filename)
         state.lights[i]        = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light>(state.threadArenas[i]);
         state.instanceTypes[i] = ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance>(state.threadArenas[i]);
         state.instances[i]     = ChunkedLinkedList<Instance, 1024, MemoryType_Instance>(state.threadArenas[i]);
-        state.transforms[i]    = ChunkedLinkedList<mat4, 1024, MemoryType_Transform>(state.threadArenas[i]);
+        state.transforms[i]    = ChunkedLinkedList<const mat4 *, 16384, MemoryType_Transform>(state.threadArenas[i]);
     }
-    state.mainArena   = arena;
-    state.scene       = scene;
-    state.stringCache = InternedStringCache<16384, 8, 64>(arena);
+    state.mainArena      = arena;
+    state.scene          = scene;
+    state.stringCache    = InternedStringCache<16384, 8, 64>(arena);
+    state.transformCache = Map<mat4, 1048576, 8, 1024, MemoryType_Transform>(arena);
 
     LoadPBRT(filename, Str8PathChopPastLastSlash(filename), &state);
 
@@ -1177,7 +1162,6 @@ Scene *LoadPBRT(Arena *arena, string filename)
     return scene;
 }
 
-// template <i32 numSlots, i32 chunkSize>
 void LoadPBRT(string filename, string directory, SceneLoadState *state, GraphicsState graphicsState, bool inWorldBegin)
 {
     TempArena temp  = ScratchStart(0, 0);
@@ -1205,18 +1189,20 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
 
     // Stack variables
     Tokenizer oldTokenizers[32];
-
-    Tokenizer includedFiles[128];
-    string includedFilenames[128];
-    u32 numIncludedFiles = 0;
-    u32 numTokenizers    = 0;
-
-    // string currentFilename = filename;
+    u32 numTokenizers = 0;
 
     GraphicsState graphicsStateStack[64];
     u32 graphicsStateCount = 0;
 
     GraphicsState currentGraphicsState = graphicsState;
+
+    auto AddTransform = [&]() {
+        if (currentGraphicsState.transformIndex != -1)
+        {
+            const mat4 *transform = state->transformCache.GetOrCreate(arena, currentGraphicsState.transform);
+            transforms.Push(transform);
+        }
+    };
 
     ObjectInstanceType *currentObject = 0;
 
@@ -1226,6 +1212,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
     {
         if (EndOfBuffer(&tokenizer))
         {
+            OS_UnmapFile(tokenizer.input.str);
             if (numTokenizers == 0) break;
             tokenizer = oldTokenizers[--numTokenizers];
             continue;
@@ -1260,9 +1247,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 *gs                  = currentGraphicsState;
                 currentGraphicsState = {};
 
-                // currentTransform      = mat4::Identity();
-                // currentMaterialIndex  = -1;
-                // currentTransformIndex = 0;
                 SkipToNextLine(&tokenizer);
             }
             break;
@@ -1271,8 +1255,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 Error(worldBegin, "%S cannot be specified before WorldBegin statement\n", word);
                 Assert(graphicsStateCount > 0);
 
-                // Add transform to cache
-                transforms.Push(std::move(currentGraphicsState.transform));
+                AddTransform();
 
                 // Pop stack
                 currentGraphicsState = graphicsStateStack[--graphicsStateCount];
@@ -1387,32 +1370,8 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 Assert(numTokenizers < ArrayLength(oldTokenizers));
                 oldTokenizers[numTokenizers++] = tokenizer;
 
-                // if (importedFullPath == "data/island/pbrt-v4/isBeach/objects.pbrt")
-                // {
-                //     int stop = 5;
-                // }
-
-                bool tokenizerSet = false;
-                for (u32 i = 0; i < numIncludedFiles; i++)
-                {
-                    if (includedFilenames[i] == importedFullPath)
-                    {
-                        tokenizer        = includedFiles[i];
-                        tokenizer.cursor = tokenizer.input.str;
-                        tokenizerSet     = true;
-                        break;
-                    }
-                }
-                if (!tokenizerSet)
-                {
-                    Assert(numIncludedFiles < ArrayLength(includedFiles));
-                    tokenizer.input                       = OS_MapFileRead(importedFullPath);
-                    tokenizer.cursor                      = tokenizer.input.str;
-                    includedFiles[numIncludedFiles]       = tokenizer;
-                    includedFilenames[numIncludedFiles++] = importedFullPath;
-                }
-
-                // currentFilename = importedFullPath;
+                tokenizer.input  = OS_MapFileRead(importedFullPath);
+                tokenizer.cursor = tokenizer.input.str;
             }
             break;
             case "LookAt"_sid:
@@ -1534,7 +1493,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 instance.name           = stringCache.GetOrCreate(arena, objectName);
                 instance.transformIndex = (i32)transforms.Length();
 
-                transforms.Push(currentGraphicsState.transform);
+                AddTransform();
                 SkipToNextLine(&tokenizer);
             }
             break;
@@ -1597,7 +1556,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 packet->bytes[currentParameter]          = (u8 *)indices;
                 packet->sizes[currentParameter]          = sizeof(i32) * 4;
 
-                transforms.Push(currentGraphicsState.transform);
+                AddTransform();
             }
             break;
             case "Translate"_sid:
@@ -1703,10 +1662,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 const ScenePacket *samplerPacket = &state->packets[SceneLoadState::Type::Sampler];
                 state->scene->sampler            = Sampler::Create(state->mainArena, samplerPacket, fullResolution);
 
-                if (currentGraphicsState.transform != mat4::Identity())
-                {
-                    transforms.Push(std::move(currentGraphicsState.transform));
-                }
+                AddTransform();
                 // TODO: instantiate the camera with the current transform
 
                 currentGraphicsState.transform = mat4::Identity();

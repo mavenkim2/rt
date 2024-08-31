@@ -183,6 +183,11 @@ string OS_MapFileRead(string filename)
     return result;
 }
 
+void OS_UnmapFile(void *ptr)
+{
+    UnmapViewOfFile(ptr);
+}
+
 void OS_SetThreadAffinity(OS_Handle input, i32 index)
 {
     HANDLE handle  = (HANDLE)input.handle;
