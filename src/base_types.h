@@ -4,6 +4,8 @@
 //////////////////////////////
 // Primitive
 //
+namespace rt
+{
 struct BVH;
 struct BVH4;
 struct CompressedBVH4;
@@ -43,10 +45,10 @@ using SamplerTaggedPointer = TaggedPointer<IndependentSampler, StratifiedSampler
 struct SamplerMethods
 {
     i32 (*SamplesPerPixel)(void *);
-    void (*StartPixelSample)(void *, vec2i p, i32 index, i32 dimension);
+    void (*StartPixelSample)(void *, Vec2i p, i32 index, i32 dimension);
     f32 (*Get1D)(void *);
-    vec2 (*Get2D)(void *);
-    vec2 (*GetPixel2D)(void *);
+    Vec2f (*Get2D)(void *);
+    Vec2f (*GetPixel2D)(void *);
 };
 
 static SamplerMethods samplerMethods[SamplerTaggedPointer::MaxTag()] = {};
@@ -54,7 +56,7 @@ static SamplerMethods samplerMethods[SamplerTaggedPointer::MaxTag()] = {};
 struct Sampler : SamplerTaggedPointer
 {
     using TaggedPointer::TaggedPointer;
-    static Sampler Create(Arena *arena, const ScenePacket *packet, const vec2i fullResolution);
+    static Sampler Create(Arena *arena, const ScenePacket *packet, const Vec2i fullResolution);
     inline i32 SamplesPerPixel() const
     {
         void *ptr  = GetPtr();
@@ -62,7 +64,7 @@ struct Sampler : SamplerTaggedPointer
         i32 result = samplerMethods[tag].SamplesPerPixel(ptr);
         return result;
     }
-    inline void StartPixelSample(vec2i p, i32 index, i32 dimension = 0)
+    inline void StartPixelSample(Vec2i p, i32 index, i32 dimension = 0)
     {
         void *ptr = GetPtr();
         u32 tag   = GetTag();
@@ -75,18 +77,18 @@ struct Sampler : SamplerTaggedPointer
         f32 result = samplerMethods[tag].Get1D(ptr);
         return result;
     }
-    inline vec2 Get2D()
+    inline Vec2f Get2D()
     {
         void *ptr   = GetPtr();
         u32 tag     = GetTag();
-        vec2 result = samplerMethods[tag].Get2D(ptr);
+        Vec2f result = samplerMethods[tag].Get2D(ptr);
         return result;
     }
-    inline vec2 GetPixel2D()
+    inline Vec2f GetPixel2D()
     {
         void *ptr   = GetPtr();
         u32 tag     = GetTag();
-        vec2 result = samplerMethods[tag].GetPixel2D(ptr);
+        Vec2f result = samplerMethods[tag].GetPixel2D(ptr);
         return result;
     }
 };
@@ -99,7 +101,7 @@ struct SamplerCRTP
     {
         return static_cast<T *>(ptr)->SamplesPerPixel();
     }
-    static void StartPixelSample(void *ptr, vec2i p, i32 index, i32 dimension)
+    static void StartPixelSample(void *ptr, Vec2i p, i32 index, i32 dimension)
     {
         return static_cast<T *>(ptr)->StartPixelSample(p, index, dimension);
     }
@@ -107,11 +109,11 @@ struct SamplerCRTP
     {
         return static_cast<T *>(ptr)->Get1D();
     }
-    static vec2 Get2D(void *ptr)
+    static Vec2f Get2D(void *ptr)
     {
         return static_cast<T *>(ptr)->Get2D();
     }
-    static vec2 GetPixel2D(void *ptr)
+    static Vec2f GetPixel2D(void *ptr)
     {
         return static_cast<T *>(ptr)->GetPixel2D();
     }
@@ -208,9 +210,9 @@ enum class BSDFFlags;
 using BSDFTaggedPointer = TaggedPointer<DiffuseBSDF, ConductorBSDF, DielectricBSDF, ThinDielectricBSDF>;
 struct BSDFMethods
 {
-    SampledSpectrum (*f)(void *, vec3, vec3, TransportMode);
-    BSDFSample (*Sample_f)(void *, vec3, f32, vec2, TransportMode, BSDFFlags);
-    f32 (*PDF)(void *, vec3 wo, vec3 wi, TransportMode mode, BSDFFlags flags);
+    SampledSpectrum (*f)(void *, Vec3f, Vec3f, TransportMode);
+    BSDFSample (*Sample_f)(void *, Vec3f, f32, Vec2f, TransportMode, BSDFFlags);
+    f32 (*PDF)(void *, Vec3f wo, Vec3f wi, TransportMode mode, BSDFFlags flags);
     BSDFFlags (*Flags)(void *);
 };
 
@@ -223,15 +225,15 @@ struct BSDF : BSDFTaggedPointer
     BSDF() = default;
     Frame frame;
 
-    BSDF(vec3 ns, vec3 dpdus) : frame(Frame::FromXZ(Normalize(dpdus), ns)) {}
+    BSDF(Vec3f ns, Vec3f dpdus) : frame(Frame::FromXZ(Normalize(dpdus), ns)) {}
 
-    SampledSpectrum f(vec3 wo, vec3 wi, TransportMode mode) const;
-    BSDFSample Sample_f(vec3 wo, f32 uc, vec2 u, TransportMode mode, BSDFFlags inFlags) const;
-    f32 PDF(vec3 wo, vec3 wi, TransportMode mode, BSDFFlags inFlags) const;
+    SampledSpectrum f(Vec3f wo, Vec3f wi, TransportMode mode) const;
+    BSDFSample Sample_f(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags inFlags) const;
+    f32 PDF(Vec3f wo, Vec3f wi, TransportMode mode, BSDFFlags inFlags) const;
     // Hemispherical directional function
-    SampledSpectrum rho(vec3 wo, f32 *uc, vec2 *u, u32 numSamples) const;
+    SampledSpectrum rho(Vec3f wo, f32 *uc, Vec2f *u, u32 numSamples) const;
     // Hemispherical hemispherical function
-    SampledSpectrum rho(vec2 *u1, f32 *uc, vec2 *u2, u32 numSamples) const;
+    SampledSpectrum rho(Vec2f *u1, f32 *uc, Vec2f *u2, u32 numSamples) const;
     BSDFFlags Flags() const;
 };
 
@@ -239,9 +241,9 @@ template <class T>
 struct BSDFCRTP
 {
     static const i32 id;
-    static SampledSpectrum f(void *ptr, vec3 wo, vec3 wi, TransportMode mode);
-    static BSDFSample Sample_f(void *ptr, vec3 wo, f32 uc, vec2 u, TransportMode mode, BSDFFlags flags);
-    static f32 PDF(void *ptr, vec3 wo, vec3 wi, TransportMode mode, BSDFFlags flags);
+    static SampledSpectrum f(void *ptr, Vec3f wo, Vec3f wi, TransportMode mode);
+    static BSDFSample Sample_f(void *ptr, Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags flags);
+    static f32 PDF(void *ptr, Vec3f wo, Vec3f wi, TransportMode mode, BSDFFlags flags);
     static BSDFFlags Flags(void *ptr);
     static constexpr i32 Register()
     {
@@ -258,4 +260,5 @@ template struct BSDFCRTP<ConductorBSDF>;
 template struct BSDFCRTP<DielectricBSDF>;
 template struct BSDFCRTP<ThinDielectricBSDF>;
 
+} // namespace rt
 #endif

@@ -1,3 +1,5 @@
+namespace rt 
+{
 struct ThreadContext;
 #define THREAD_ENTRY_POINT(name) void name(void *parameter, ThreadContext *ctx)
 typedef THREAD_ENTRY_POINT(OS_ThreadFunction);
@@ -45,3 +47,4 @@ void OS_ReleaseSemaphores(OS_Handle input, u32 count);
 void OS_ThreadJoin(OS_Handle handle);
 b32 OS_SignalWait(OS_Handle input);
 void OS_Init();
+}

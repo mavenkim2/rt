@@ -1,4 +1,6 @@
 #include <functional>
+namespace rt
+{
 namespace jobsystem
 {
 
@@ -68,3 +70,4 @@ THREAD_ENTRY_POINT(JobThreadEntryPoint);
 void EndJobsystem();
 
 } // namespace jobsystem
+} // namespace rt

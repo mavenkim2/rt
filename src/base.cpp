@@ -1,3 +1,5 @@
+namespace rt 
+{
 void Print(char *fmt, va_list args)
 {
     char printBuffer[1024];
@@ -21,4 +23,5 @@ void Print(char *fmt, ...)
 #else
     printf(printBuffer);
 #endif
+}
 }

@@ -1,4 +1,6 @@
 #include "spectrum.h"
+namespace rt
+{
 inline f32 InnerProduct(Spectrum f, Spectrum g)
 {
     f32 integral = 0.f;
@@ -9,42 +11,42 @@ inline f32 InnerProduct(Spectrum f, Spectrum g)
     return integral;
 }
 
-vec3 SpectrumToXYZ(Spectrum s)
+Vec3f SpectrumToXYZ(Spectrum s)
 {
-    return vec3(InnerProduct(&Spectra::X(), s), InnerProduct(&Spectra::Y(), s), InnerProduct(&Spectra::Z(), s)) / CIE_Y_integral;
+    return Vec3f(InnerProduct(&Spectra::X(), s), InnerProduct(&Spectra::Y(), s), InnerProduct(&Spectra::Z(), s)) / CIE_Y_integral;
 }
 
 // Computes XYZ coefficients for a spectrum
-vec3 SampledSpectrum::ToXYZ(const SampledWavelengths &lambda) const
+Vec3f SampledSpectrum::ToXYZ(const SampledWavelengths &lambda) const
 {
     SampledSpectrum X = Spectra::X().Sample(lambda);
     SampledSpectrum Y = Spectra::Y().Sample(lambda);
     SampledSpectrum Z = Spectra::Z().Sample(lambda);
 
     SampledSpectrum pdf = lambda.PDF();
-    return vec3(SafeDiv(X * *this, pdf).Average(), SafeDiv(Y * *this, pdf).Average(), SafeDiv(Z * *this, pdf).Average()) / CIE_Y_integral;
+    return Vec3f(SafeDiv(X * *this, pdf).Average(), SafeDiv(Y * *this, pdf).Average(), SafeDiv(Z * *this, pdf).Average()) / CIE_Y_integral;
 }
 
-vec3 SampledSpectrum::ToRGB(const RGBColorSpace &space, const SampledWavelengths &lambda) const
+Vec3f SampledSpectrum::ToRGB(const RGBColorSpace &space, const SampledWavelengths &lambda) const
 {
-    vec3 xyz = ToXYZ(lambda);
-    vec3 rgb = space.ToRGB(xyz);
+    Vec3f xyz = ToXYZ(lambda);
+    Vec3f rgb = space.ToRGB(xyz);
     return rgb;
 }
 
 // Finds chromaticity of XYZ color (colorfulness with respect to white)
-inline vec2 xy(vec3 xyz)
+inline Vec2f xy(Vec3f xyz)
 {
     f32 sum = xyz.x + xyz.y + xyz.x;
-    return vec2(xyz.x / sum, xyz.y / sum);
+    return Vec2f(xyz.x / sum, xyz.y / sum);
 }
 
 // Reverse of above
-inline vec3 FromxyY(vec2 xy, f32 Y = 1.f)
+inline Vec3f FromxyY(Vec2f xy, f32 Y = 1.f)
 {
     if (xy.y == 0)
-        return vec3(0, 0, 0);
-    return vec3(xy.x * Y / xy.y, Y, (1 - xy.x - xy.y) * Y / xy.y);
+        return Vec3f(0, 0, 0);
+    return Vec3f(xy.x * Y / xy.y, Y, (1 - xy.x - xy.y) * Y / xy.y);
 }
 
 DenselySampledSpectrum::DenselySampledSpectrum(Arena *arena, Spectrum spec, i32 lambdaMin, i32 lambdaMax)
@@ -515,11 +517,11 @@ void Init(Arena *arena)
 
 } // namespace Spectra
 
-vec3 RGBToSpectrumTable::operator()(vec3 rgb) const
+Vec3f RGBToSpectrumTable::operator()(Vec3f rgb) const
 {
     if (rgb.x == rgb.y && rgb.y == rgb.z)
     {
-        return vec3(0, 0, (rgb[0] - .5f) / std::sqrtf(rgb[0] * (1 - rgb[0])));
+        return Vec3f(0, 0, (rgb[0] - .5f) / std::sqrtf(rgb[0] * (1 - rgb[0])));
     }
     i32 maxC = (rgb[0] > rgb[1]) ? ((rgb[0] > rgb[2]) ? 0 : 2) : ((rgb[1] > rgb[2]) ? 1 : 2);
     f32 z    = rgb[maxC];
@@ -546,26 +548,27 @@ vec3 RGBToSpectrumTable::operator()(vec3 rgb) const
                                  Lerp(dx, co(0, 1, 1), co(1, 1, 1))));
         // clang-format on
     }
-    return vec3(c[0], c[1], c[2]);
+    return Vec3f(c[0], c[1], c[2]);
 }
 
-RGBColorSpace::RGBColorSpace(Arena *arena, vec2 r, vec2 g, vec2 b, Spectrum illuminant, const RGBToSpectrumTable *rgbToSpec)
+RGBColorSpace::RGBColorSpace(Arena *arena, Vec2f r, Vec2f g, Vec2f b, Spectrum illuminant, const RGBToSpectrumTable *rgbToSpec)
     : r(r), g(g), b(b), illuminant(arena, illuminant), rgbToSpec(rgbToSpec)
 {
-    vec3 W = SpectrumToXYZ(illuminant);
+    Vec3f W = SpectrumToXYZ(illuminant);
     w      = xy(W);
-    vec3 R = FromxyY(r);
-    vec3 G = FromxyY(g);
-    vec3 B = FromxyY(b);
+    Vec3f R = FromxyY(r);
+    Vec3f G = FromxyY(g);
+    Vec3f B = FromxyY(b);
 
-    mat3 rgb(R, G, B);
+    Mat3 rgb(R, G, B);
 
-    vec3 c   = mul(rgb.Inverse(), W);
-    RGBToXYZ = mul(rgb, mat3(c));
+    Vec3f c   = Mul(rgb.Inverse(), W);
+    RGBToXYZ = Mul(rgb, Mat3(c));
     XYZToRGB = RGBToXYZ.Inverse();
 }
 
-vec3 RGBColorSpace::ToRGBCoeffs(vec3 rgb) const
+Vec3f RGBColorSpace::ToRGBCoeffs(Vec3f rgb) const
 {
     return (*rgbToSpec)(ClampZero(rgb));
 }
+} // namespace rt

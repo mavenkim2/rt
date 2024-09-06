@@ -1,3 +1,6 @@
+namespace rt
+{
+
 template <typename Predicate>
 u32 FindInterval(u32 sz, const Predicate &pred)
 {
@@ -11,3 +14,4 @@ u32 FindInterval(u32 sz, const Predicate &pred)
     }
     return (u32)Clamp(first - 1, 0, (i32)sz - 2);
 }
+} // namespace rt

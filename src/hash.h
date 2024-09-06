@@ -1,3 +1,5 @@
+namespace rt
+{
 u64 MixBits(u64 v)
 {
     v ^= (v >> 31);
@@ -8,15 +10,15 @@ u64 MixBits(u64 v)
     return v;
 }
 
-LaneU32 MixBits(LaneU32 v)
-{
-    v ^= (v >> 31u);
-    v *= 0x7fb5d329728ea185;
-    v ^= (v >> 27u);
-    v *= 0x81dadef4bc2dd44d;
-    v ^= (v >> 33u);
-    return v;
-}
+// Lane4U32 MixBits(Lane4U32 v)
+// {
+//     v ^= (v >> 31u);
+//     v *= 0x7fb5d329728ea185;
+//     v ^= (v >> 27u);
+//     v *= 0x81dadef4bc2dd44d;
+//     v ^= (v >> 33u);
+//     return v;
+// }
 
 // https://github.com/aappleby/smhasher/blob/master/src/MurmurHash3.cpp
 // https://github.com/AntonJohansson/StaticMurmur/blob/master/StaticMurmur.hpp
@@ -213,3 +215,4 @@ inline i32 PermutationElement(u32 i, u32 l, u32 p)
     } while (i >= l);
     return (i + p) % l;
 }
+} // namespace rt

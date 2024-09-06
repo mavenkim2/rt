@@ -1,3 +1,5 @@
+namespace rt
+{
 Arena *ArenaAlloc(u64 resSize, u64 cmtSize, u64 align)
 {
     u64 pageSize = OS_PageSize();
@@ -176,3 +178,4 @@ void ArenaRelease(Arena *arena)
         OS_Release(a);
     }
 }
+} // namespace rt

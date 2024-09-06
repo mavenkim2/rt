@@ -1,3 +1,6 @@
+namespace rt
+{
+
 f32 RadicalInverse(i32 baseIndex, u64 a)
 {
     i32 base           = primes[baseIndex];
@@ -85,7 +88,7 @@ inline f32 SobolSample(i64 a, i32 dimension, u32 (*randomizer)(u32, u32), u32 se
     return Min(v * 0x1p-32f, oneMinusEpsilon);
 }
 
-inline u64 SobolIntervalToIndex(u32 log2Scale, u64 sampleIndex, vec2i p)
+inline u64 SobolIntervalToIndex(u32 log2Scale, u64 sampleIndex, Vec2i p)
 {
     if (log2Scale == 0)
         return sampleIndex;
@@ -109,9 +112,10 @@ inline u64 SobolIntervalToIndex(u32 log2Scale, u64 sampleIndex, vec2i p)
     }
     return index;
 }
+} // namespace rt
 
-// Given pixel coordinate p, you're trying to find the index in the halton sequence that gives a value such that 
-// the value scaled by the max screen resolution (rounded up to the next pow of 2) gives the pixel coordinate you're 
-// looking for. To do this, note that multiplying a radical inverse number 0.d1(a)d2(a)d3(a)... by b^2 gives 
-// d1(a)d2(a).d3(a)... Thus, the inverse radical inverse of the two last digits of x gives the value in the halton 
+// Given pixel coordinate p, you're trying to find the index in the halton sequence that gives a value such that
+// the value scaled by the max screen resolution (rounded up to the next pow of 2) gives the pixel coordinate you're
+// looking for. To do this, note that multiplying a radical inverse number 0.d1(a)d2(a)d3(a)... by b^2 gives
+// d1(a)d2(a).d3(a)... Thus, the inverse radical inverse of the two last digits of x gives the value in the halton
 // sequence that corresponds with pixel coordinate p.

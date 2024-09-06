@@ -5,6 +5,9 @@
 #include <vector>
 #include <intrin.h>
 
+namespace rt
+{
+
 typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
@@ -251,3 +254,4 @@ inline void EndWMutex(Mutex *mutex)
     b32 result   = mutex->count.compare_exchange_strong(expected, 0);
     Assert(result);
 }
+} // namespace rt

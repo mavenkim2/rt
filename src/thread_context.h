@@ -1,5 +1,7 @@
 #ifndef THREAD_CONTEXT_H
 #define THREAD_CONTEXT_H
+namespace rt
+{
 
 struct ThreadContext
 {
@@ -23,5 +25,6 @@ u32 GetThreadIndex();
 void BaseThreadEntry(OS_ThreadFunction *func, void *params);
 
 #define ScratchStart(conflicts, count) TempBegin(GetThreadContextScratch((conflicts), (count)))
+} // namespace rt
 
 #endif

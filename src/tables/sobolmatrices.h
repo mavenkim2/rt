@@ -6,6 +6,8 @@
 // The tabulated direction numbers are available here:
 // http://web.maths.unsw.edu.au/~fkuo/sobol/new-joe-kuo-6.21201
 
+namespace rt {
+
 static constexpr i32 nSobolDimensions = 1024;
 static constexpr i32 sobolMatrixSize  = 52;
 // clang-format off
@@ -9214,5 +9216,6 @@ const u64 vdCSobolMatricesInv[][sobolMatrixSize] = {
      0x4000000040ULL,    0x2000000020ULL,    0x1000000010ULL,
      0x800000008ULL,     0x400000004ULL,     0x200000002ULL,
      0x100000001ULL}};
+}
 
 // clang-format on

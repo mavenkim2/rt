@@ -1,3 +1,5 @@
+namespace rt
+{
 template <typename ElementType>
 struct CheckedIterator
 {
@@ -650,3 +652,4 @@ struct HashIndex
         return result;
     }
 };
+} // namespace rt

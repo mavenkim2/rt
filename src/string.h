@@ -1,3 +1,5 @@
+namespace rt
+{
 static const i32 MAX_OS_PATH = 256;
 
 struct string
@@ -154,3 +156,4 @@ void PutLine(StringBuilder *builder, u32 indents, char *fmt, ...);
     } while (0)
 
 #define GetTokenCursor(tokenizer, type) (type *)GetCursor_(tokenizer)
+} // namespace rt

@@ -1,10 +1,13 @@
 #ifndef BSDF_H
 #define BSDF_H
 
+namespace rt
+{
+
 // TODO: multiple scattering, better hair models, light polarization (ew)
 
 // NOTE: wi and wt point away from the surface point
-bool Refract(vec3 wi, vec3 n, f32 eta, f32 *etap, vec3 *wt)
+bool Refract(Vec3f wi, Vec3f n, f32 eta, f32 *etap, Vec3f *wt)
 {
     f32 cosTheta_i = Dot(wi, n);
     if (cosTheta_i < 0)
@@ -52,10 +55,10 @@ f32 FrComplex(f32 cosTheta_i, complex eta)
     cosTheta_i          = Clamp(cosTheta_i, 0.f, 1.f);
     f32 sin2Theta_i     = Max(0.f, 1 - cosTheta_i * cosTheta_i);
     complex sin2Theta_t = sin2Theta_i / (eta * eta);
-    complex cosTheta_t  = sqrt(1 - sin2Theta_t);
+    complex cosTheta_t  = Sqrt(1 - sin2Theta_t);
     complex rParallel   = (eta * cosTheta_i - cosTheta_t) / (eta * cosTheta_i + cosTheta_t);
     complex rPerp       = (cosTheta_i - eta * cosTheta_t) / (cosTheta_i + eta * cosTheta_t);
-    f32 Fr              = 0.5f * (rPerp.norm() + rParallel.norm());
+    f32 Fr              = 0.5f * (rPerp.Norm() + rParallel.Norm());
     return Fr;
 }
 
@@ -69,59 +72,59 @@ SampledSpectrum FrComplex(f32 cosTheta_i, SampledSpectrum eta, SampledSpectrum k
 
 // NOTE: BSDF calculations operate in the frame where the geometric normal is the z axis. Thus, the angle
 // between the surface normal and a vector in that frame is just the z component.
-f32 CosTheta(vec3 w)
+f32 CosTheta(Vec3f w)
 {
     return w.z;
 }
 
-f32 Cos2Theta(vec3 w)
+f32 Cos2Theta(Vec3f w)
 {
     return w.z * w.z;
 }
 
-f32 AbsCosTheta(vec3 w)
+f32 AbsCosTheta(Vec3f w)
 {
-    return fabsf(w.z);
+    return Abs(w.z);
 }
 
-f32 Sin2Theta(vec3 w)
+f32 Sin2Theta(Vec3f w)
 {
     return Max(0.f, 1 - Cos2Theta(w));
 }
 
-f32 SinTheta(vec3 w)
+f32 SinTheta(Vec3f w)
 {
     return sqrtf(Sin2Theta(w));
 }
 
-f32 TanTheta(vec3 w)
+f32 TanTheta(Vec3f w)
 {
     return SinTheta(w) / CosTheta(w);
 }
 
-f32 Tan2Theta(vec3 w)
+f32 Tan2Theta(Vec3f w)
 {
     return Sin2Theta(w) / Cos2Theta(w);
 }
 
-f32 CosPhi(vec3 w)
+f32 CosPhi(Vec3f w)
 {
     f32 sinTheta = SinTheta(w);
     return (sinTheta == 0) ? 1 : Clamp(w.x / sinTheta, -1.f, 1.f);
 }
 
-f32 SinPhi(vec3 w)
+f32 SinPhi(Vec3f w)
 {
     f32 sinTheta = SinTheta(w);
     return (sinTheta == 0) ? 0 : Clamp(w.y / sinTheta, -1.f, 1.f);
 }
 
-bool SameHemisphere(vec3 w, vec3 wp)
+bool SameHemisphere(Vec3f w, Vec3f wp)
 {
     return w.z * wp.z > 0;
 }
 
-vec3 FaceForward(vec3 n, vec3 v)
+Vec3f FaceForward(Vec3f n, Vec3f v)
 {
     return (Dot(n, v) < 0.f) ? -n : n;
 }
@@ -129,7 +132,7 @@ vec3 FaceForward(vec3 n, vec3 v)
 struct TrowbridgeReitzDistribution
 {
     TrowbridgeReitzDistribution(f32 alphaX, f32 alphaY) : alphaX(alphaX), alphaY(alphaY) {}
-    f32 D(vec3 wm) const
+    f32 D(Vec3f wm) const
     {
         f32 tan2Theta = Tan2Theta(wm);
         if (IsInf(tan2Theta)) return 0;
@@ -139,34 +142,34 @@ struct TrowbridgeReitzDistribution
                              Sqr(SinPhi(wm) / alphaY));
         return 1 / (PI * alphaX * alphaY * cos4Theta * Sqr(1 + e));
     }
-    f32 G1(vec3 w) const
+    f32 G1(Vec3f w) const
     {
         return 1 / (1 + Lambda(w));
     }
     // NOTE: height based correlation; microfacets at a greater height are more likely to be visible
-    f32 G(vec3 wo, vec3 wi) const
+    f32 G(Vec3f wo, Vec3f wi) const
     {
         return 1 / (1 + Lambda(wo) + Lambda(wi));
     }
-    f32 D(vec3 w, vec3 wm) const
+    f32 D(Vec3f w, Vec3f wm) const
     {
         return G1(w) / AbsCosTheta(w) * D(wm) * AbsDot(w, wm);
     }
-    f32 Lambda(vec3 w) const
+    f32 Lambda(Vec3f w) const
     {
         f32 tan2Theta = Tan2Theta(w);
         if (IsInf(tan2Theta)) return 0;
         f32 alpha2 = Sqr(CosPhi(w) * alphaX) + Sqr(SinPhi(w) * alphaY);
         return (sqrtf(1 + alpha2 * tan2Theta) - 1) / 2;
     }
-    f32 PDF(vec3 w, vec3 wm) const
+    f32 PDF(Vec3f w, Vec3f wm) const
     {
         return D(w, wm);
     }
     // NOTE: samples the visible normals instead of simply the distribution function
-    vec3 Sample_wm(vec3 w, vec2 u) const
+    Vec3f Sample_wm(Vec3f w, Vec2f u) const
     {
-        vec3 wh = Normalize(vec3(alphaX * w.x, alphaY * w.y, w.z));
+        Vec3f wh = Normalize(Vec3f(alphaX * w.x, alphaY * w.y, w.z));
         if (wh.z < 0)
         {
             wh = -wh;
@@ -174,9 +177,9 @@ struct TrowbridgeReitzDistribution
         // NOTE: this process involves the projection of a disk of uniformly distributed points onto a truncated ellipsoid.
         // The inverse of the scale factor of the ellipsoid is applied to the incoming direction in order to simplify to the
         // isotropic case.
-        vec2 p  = SampleUniformDiskPolar(u);
-        vec3 T1 = wh.z < 0.99999f ? Normalize(Cross(vec3(0, 0, 1), wh)) : vec3(1, 0, 0);
-        vec3 T2 = Cross(wh, T1);
+        Vec2f p  = SampleUniformDiskPolar(u);
+        Vec3f T1 = wh.z < 0.99999f ? Normalize(Cross(Vec3f(0, 0, 1), wh)) : Vec3f(1, 0, 0);
+        Vec3f T2 = Cross(wh, T1);
         // NOTE: For a given x, the y component has a value in range [-h, h], where h = sqrt(1 - Sqr(x)). When the
         // projection is not perpendicular to the ellipsoid, the range shrinks to [-hcos(theta), h]. This requires an
         // affine transformation with scale 0.5(1 + cosTheta) and translation 0.5h(1 - cosTheta).
@@ -185,9 +188,9 @@ struct TrowbridgeReitzDistribution
         p.y   = Lerp((1.f + wh.z) / 2.f, h, p.y);
 
         // Project point to hemisphere, transform to ellipsoid.
-        f32 pz  = sqrtf(Max(0.f, 1 - p.x * p.x - p.y * p.y));
-        vec3 nh = p.x * T1 + p.y * T2 + pz * wh;
-        return Normalize(vec3(alphaX * nh.x, alphaY * nh.y, Max(1e-6f, nh.z)));
+        f32 pz   = sqrtf(Max(0.f, 1 - p.x * p.x - p.y * p.y));
+        Vec3f nh = p.x * T1 + p.y * T2 + pz * wh;
+        return Normalize(Vec3f(alphaX * nh.x, alphaY * nh.y, Max(1e-6f, nh.z)));
     }
     bool EffectivelySmooth() const
     {
@@ -253,7 +256,7 @@ inline b32 IsValid(BSDFFlags f)
 struct BSDFSample
 {
     SampledSpectrum f;
-    vec3 wi;
+    Vec3f wi;
     f32 pdf;
     BSDFFlags flags;
     f32 eta;
@@ -261,7 +264,7 @@ struct BSDFSample
 
     BSDFSample() = default;
 
-    BSDFSample(SampledSpectrum f, vec3 wi, f32 pdf, BSDFFlags flags, f32 eta = 1.f, bool pdfIsProportional = false)
+    BSDFSample(SampledSpectrum f, Vec3f wi, f32 pdf, BSDFFlags flags, f32 eta = 1.f, bool pdfIsProportional = false)
         : f(f), wi(wi), pdf(pdf), flags(flags), eta(eta), pdfIsProportional(pdfIsProportional) {}
 
     bool IsReflective() { return rt::IsReflective(flags); }
@@ -286,21 +289,21 @@ struct DiffuseBSDF : BSDFCRTP<DiffuseBSDF>
     DiffuseBSDF() = default;
     DiffuseBSDF(SampledSpectrum R) : R(R) {}
 
-    SampledSpectrum f(vec3 wo, vec3 wi, TransportMode mode) const
+    SampledSpectrum f(Vec3f wo, Vec3f wi, TransportMode mode) const
     {
         if (!SameHemisphere(wo, wi)) return SampledSpectrum(0.f);
         return R / PI;
     }
 
-    BSDFSample Sample_f(vec3 wo, f32 uc, vec2 u, TransportMode mode, BSDFFlags sampleFlags = BSDFFlags::RT) const
+    BSDFSample Sample_f(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags sampleFlags = BSDFFlags::RT) const
     {
         if (!EnumHasAnyFlags(sampleFlags, BSDFFlags::Reflection)) return {};
-        vec3 wi = SampleCosineHemisphere(u);
+        Vec3f wi = SampleCosineHemisphere(u);
         if (wo.z < 0) wi.z *= -1;
         f32 pdf = CosineHemispherePDF(AbsCosTheta(wi));
         return BSDFSample(R * InvPi, wi, pdf, BSDFFlags::DiffuseReflection);
     }
-    f32 PDF(vec3 wo, vec3 wi, TransportMode mode, BSDFFlags sampleFlags = BSDFFlags::RT) const
+    f32 PDF(Vec3f wo, Vec3f wi, TransportMode mode, BSDFFlags sampleFlags = BSDFFlags::RT) const
     {
         if (!EnumHasAnyFlags(sampleFlags, BSDFFlags::Reflection) || !SameHemisphere(wo, wi)) return 0.f;
         return CosineHemispherePDF(AbsCosTheta(wi));
@@ -319,33 +322,33 @@ struct ConductorBSDF : BSDFCRTP<ConductorBSDF>
     TrowbridgeReitzDistribution mfDistrib;
     SampledSpectrum eta, k;
 
-    SampledSpectrum f(vec3 wo, vec3 wi, TransportMode mode) const
+    SampledSpectrum f(Vec3f wo, Vec3f wi, TransportMode mode) const
     {
         if (!SameHemisphere(wo, wi)) return {};
         if (mfDistrib.EffectivelySmooth()) return {};
         f32 cosTheta_o = AbsCosTheta(wo);
         f32 cosTheta_i = AbsCosTheta(wi);
         if (cosTheta_i == 0 || cosTheta_o == 0) return {};
-        vec3 wm = wi + wo;
-        if (wm.lengthSquared() == 0.f) return {};
+        Vec3f wm = wi + wo;
+        if (LengthSquared(wm) == 0.f) return {};
         wm                 = Normalize(wm);
         SampledSpectrum Fr = FrComplex(AbsDot(wo, wm), eta, k);
         SampledSpectrum f  = mfDistrib.D(wm) * Fr * mfDistrib.G(wo, wi) / (4 * cosTheta_i * cosTheta_o);
         return f;
     }
-    BSDFSample Sample_f(vec3 wo, f32 uc, vec2 u, TransportMode mode, BSDFFlags sampleFlags) const
+    BSDFSample Sample_f(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags sampleFlags) const
     {
         if (!EnumHasAnyFlags(sampleFlags, BSDFFlags::RT)) return {};
         if (mfDistrib.EffectivelySmooth())
         {
-            vec3 wi(-wo.x, -wo.y, wo.z);
+            Vec3f wi(-wo.x, -wo.y, wo.z);
             SampledSpectrum f = FrComplex(AbsCosTheta(wi), eta, k) / AbsCosTheta(wi);
             return BSDFSample(f, wi, 1.f, BSDFFlags::SpecularReflection);
         }
-        vec3 wm = mfDistrib.Sample_wm(wo, u);
-        vec3 wi = Reflect(wo, wm);
+        Vec3f wm = mfDistrib.Sample_wm(wo, u);
+        Vec3f wi = Reflect(wo, wm);
         if (!SameHemisphere(wo, wi)) return {};
-        f32 pdf = mfDistrib.PDF(wo, wm) / (4 * AbsDot(wo, wm));
+        f32 pdf        = mfDistrib.PDF(wo, wm) / (4 * AbsDot(wo, wm));
         f32 cosTheta_o = AbsCosTheta(wo);
         f32 cosTheta_i = AbsCosTheta(wi);
         // NOTE: Fresnel term with respect to the microfacet normal, wm
@@ -354,14 +357,14 @@ struct ConductorBSDF : BSDFCRTP<ConductorBSDF>
         SampledSpectrum f = mfDistrib.D(wm) * Fr * mfDistrib.G(wo, wi) / (4 * cosTheta_i * cosTheta_o);
         return BSDFSample(f, wi, pdf, BSDFFlags::GlossyReflection);
     }
-    f32 PDF(vec3 wo, vec3 wi, TransportMode mode, BSDFFlags sampleFlags = BSDFFlags::RT) const
+    f32 PDF(Vec3f wo, Vec3f wi, TransportMode mode, BSDFFlags sampleFlags = BSDFFlags::RT) const
     {
         if (!EnumHasAnyFlags(sampleFlags, BSDFFlags::Reflection)) return 0.f;
         if (!SameHemisphere(wo, wi)) return 0.f;
         if (mfDistrib.EffectivelySmooth()) return 0.f;
-        vec3 wm = wo + wi;
-        if (wm.lengthSquared() == 0.f) return 0.f;
-        wm = FaceForward(Normalize(wm), vec3(0, 0, 1));
+        Vec3f wm = wo + wi;
+        if (LengthSquared(wm) == 0.f) return 0.f;
+        wm = FaceForward(Normalize(wm), Vec3f(0, 0, 1));
         return mfDistrib.PDF(wo, wm) / (4 * AbsDot(wo, wm));
     }
 
@@ -375,7 +378,7 @@ struct DielectricBSDF : BSDFCRTP<DielectricBSDF>
 {
     DielectricBSDF() = default;
     DielectricBSDF(f32 eta, TrowbridgeReitzDistribution mfDistrib) : eta(eta), mfDistrib(mfDistrib) {}
-    SampledSpectrum f(vec3 wo, vec3 wi, TransportMode mode) const
+    SampledSpectrum f(Vec3f wo, Vec3f wi, TransportMode mode) const
     {
         if (eta == 1 || mfDistrib.EffectivelySmooth())
             return SampledSpectrum(0.f);
@@ -385,24 +388,24 @@ struct DielectricBSDF : BSDFCRTP<DielectricBSDF>
         f32 etap       = 1.f;
         if (!reflect)
             etap = cosTheta_o > 0.f ? eta : 1 / eta;
-        vec3 wm = wi * eta + wo;
-        if (cosTheta_i == 0 || cosTheta_o == 0 || wm.lengthSquared() == 0.f)
+        Vec3f wm = wi * eta + wo;
+        if (cosTheta_i == 0 || cosTheta_o == 0 || LengthSquared(wm) == 0.f)
             return {};
         wm = wm.z < 0.f ? -wm : wm;
         if (Dot(wm, wi) * cosTheta_i < 0.f || Dot(wm, wo) * cosTheta_o < 0.f) return {};
         f32 F = FrDielectric(Dot(wo, wm), eta);
         if (reflect)
-            return SampledSpectrum(mfDistrib.D(wm) * mfDistrib.G(wo, wi) * F / fabsf(4 * cosTheta_i * cosTheta_o));
+            return SampledSpectrum(mfDistrib.D(wm) * mfDistrib.G(wo, wi) * F / Abs(4 * cosTheta_i * cosTheta_o));
         else
         {
             f32 denom = Sqr(Dot(wi, wm) + Dot(wo, wm) / etap) * cosTheta_i * cosTheta_o;
-            f32 ft    = mfDistrib.D(wm) * (1 - F) * mfDistrib.G(wo, wi) * fabsf(Dot(wi, wm) * Dot(wo, wm) / denom);
+            f32 ft    = mfDistrib.D(wm) * (1 - F) * mfDistrib.G(wo, wi) * Abs(Dot(wi, wm) * Dot(wo, wm) / denom);
             if (mode == TransportMode::Radiance)
                 ft /= Sqr(etap);
             return SampledSpectrum(ft);
         }
     }
-    BSDFSample Sample_f(vec3 wo, f32 uc, vec2 u, TransportMode mode, BSDFFlags sampleFlags) const
+    BSDFSample Sample_f(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags sampleFlags) const
     {
         // Sample specular BTDF
         if (eta == 1 || mfDistrib.EffectivelySmooth())
@@ -418,16 +421,16 @@ struct DielectricBSDF : BSDFCRTP<DielectricBSDF>
             // Specular reflection
             if (uc < pr / (pr + pt))
             {
-                vec3 wi(-wo.x, -wo.y, wo.z);
+                Vec3f wi(-wo.x, -wo.y, wo.z);
                 SampledSpectrum fr(R / AbsCosTheta(wi));
                 return BSDFSample(fr, wi, pr / (pr + pt), BSDFFlags::SpecularReflection);
             }
             // Specular transmission
             else
             {
-                vec3 wi;
+                Vec3f wi;
                 f32 etap;
-                if (!Refract(wo, vec3(0, 0, 1), eta, &etap, &wi)) return {};
+                if (!Refract(wo, Vec3f(0, 0, 1), eta, &etap, &wi)) return {};
                 SampledSpectrum ft(T / AbsCosTheta(wi));
                 if (mode == TransportMode::Radiance) ft /= etap * etap;
                 return BSDFSample(ft, wi, pt / (pr + pt), BSDFFlags::SpecularTransmission, etap);
@@ -436,18 +439,18 @@ struct DielectricBSDF : BSDFCRTP<DielectricBSDF>
         // Rough dielectric BSDF
         else
         {
-            vec3 wm = mfDistrib.Sample_wm(wo, u);
-            f32 R   = FrDielectric(Dot(wo, wm), eta);
-            f32 T   = 1 - R;
-            f32 pr  = R;
-            f32 pt  = T;
+            Vec3f wm = mfDistrib.Sample_wm(wo, u);
+            f32 R    = FrDielectric(Dot(wo, wm), eta);
+            f32 T    = 1 - R;
+            f32 pr   = R;
+            f32 pt   = T;
             if (!EnumHasAnyFlags(sampleFlags, BSDFFlags::Reflection)) pr = 0.f;
             if (!EnumHasAnyFlags(sampleFlags, BSDFFlags::Transmission)) pt = 0.f;
             if (pr == 0.f && pt == 0.f) return {};
             // Glossy reflection
             if (uc < pr / (pr + pt))
             {
-                vec3 wi = Reflect(wo, wm);
+                Vec3f wi = Reflect(wo, wm);
                 if (!SameHemisphere(wo, wi)) return {};
                 f32 pdf = mfDistrib.PDF(wo, wm) / (4 * AbsDot(wo, wm)) * pr / (pr + pt);
                 SampledSpectrum f(mfDistrib.D(wm) * mfDistrib.G(wo, wi) * R / (4 * CosTheta(wi) * CosTheta(wo)));
@@ -456,14 +459,14 @@ struct DielectricBSDF : BSDFCRTP<DielectricBSDF>
             // Glossy transmission
             else
             {
-                vec3 wi;
+                Vec3f wi;
                 f32 etap;
                 if (!Refract(wo, wm, eta, &etap, &wi) || SameHemisphere(wo, wi) || wi.z == 0.f) return {};
                 f32 denom   = Sqr(Dot(wi, wm) + Dot(wo, wm) / etap);
                 f32 dwm_dwi = AbsDot(wi, wm) / denom;
                 f32 pdf     = mfDistrib.PDF(wo, wm) * dwm_dwi * pt / (pr + pt);
                 SampledSpectrum ft(T * mfDistrib.D(wm) * mfDistrib.G(wo, wi) *
-                                   fabsf(Dot(wi, wm) * Dot(wo, wm) / (CosTheta(wi) * CosTheta(wo) * denom)));
+                                   Abs(Dot(wi, wm) * Dot(wo, wm) / (CosTheta(wi) * CosTheta(wo) * denom)));
                 if (mode == TransportMode::Radiance) ft /= etap * etap;
                 return BSDFSample(ft, wi, pdf, BSDFFlags::GlossyTransmission, etap);
             }
@@ -474,7 +477,7 @@ struct DielectricBSDF : BSDFCRTP<DielectricBSDF>
         BSDFFlags flags = (eta == 1.f) ? BSDFFlags::Transmission : (BSDFFlags::RT);
         return flags | (mfDistrib.EffectivelySmooth() ? BSDFFlags::Specular : BSDFFlags::Glossy);
     }
-    f32 PDF(vec3 wo, vec3 wi, TransportMode mode, BSDFFlags sampleFlags = BSDFFlags::RT) const
+    f32 PDF(Vec3f wo, Vec3f wi, TransportMode mode, BSDFFlags sampleFlags = BSDFFlags::RT) const
     {
         if (eta == 1.f || mfDistrib.EffectivelySmooth())
             return 0.f;
@@ -485,8 +488,8 @@ struct DielectricBSDF : BSDFCRTP<DielectricBSDF>
         if (!reflect)
             etap = cosTheta_o > 0.f ? eta : 1.f / eta;
         // Calculate the half angle, accounting for transmission
-        vec3 wm = wi * etap + wo;
-        if (cosTheta_i == 0 || cosTheta_o == 0 || wm.lengthSquared() == 0) return {};
+        Vec3f wm = wi * etap + wo;
+        if (cosTheta_i == 0 || cosTheta_o == 0 || LengthSquared(wm) == 0.f) return {};
         wm = wm.z < 0.f ? -wm : wm;
         if (Dot(wm, wi) * cosTheta_i < 0 || Dot(wm, wo) * cosTheta_o < 0) return {};
         f32 R  = FrDielectric(Dot(wo, wm), eta);
@@ -520,11 +523,11 @@ struct ThinDielectricBSDF : BSDFCRTP<ThinDielectricBSDF>
 {
     ThinDielectricBSDF() = default;
     ThinDielectricBSDF(f32 eta) : eta(eta) {}
-    SampledSpectrum f(vec3 wo, vec3 wi, TransportMode mode) const
+    SampledSpectrum f(Vec3f wo, Vec3f wi, TransportMode mode) const
     {
         return SampledSpectrum(0.f);
     }
-    BSDFSample Sample_f(vec3 wo, f32 uc, vec2 u, TransportMode mode, BSDFFlags sampleFlags) const
+    BSDFSample Sample_f(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags sampleFlags) const
     {
         f32 R = FrDielectric(AbsCosTheta(wo), eta);
         f32 T = 1 - R;
@@ -541,15 +544,15 @@ struct ThinDielectricBSDF : BSDFCRTP<ThinDielectricBSDF>
         // TODO: this is the same as in the dielectric case. Compress?
         if (uc < pr / (pr + pt))
         {
-            vec3 wi(-wo.x, -wo.y, wo.z);
+            Vec3f wi(-wo.x, -wo.y, wo.z);
             SampledSpectrum fr(R / AbsCosTheta(wi));
             return BSDFSample(fr, wi, pr / (pr + pt), BSDFFlags::SpecularReflection);
         }
-        vec3 wi = -wo;
+        Vec3f wi = -wo;
         SampledSpectrum ft(T / AbsCosTheta(wi));
         return BSDFSample(ft, wi, pt / (pr + pt), BSDFFlags::SpecularTransmission);
     }
-    f32 PDF(vec3 wo, vec3 wi, TransportMode mode, BSDFFlags sampleFlags) const
+    f32 PDF(Vec3f wo, Vec3f wi, TransportMode mode, BSDFFlags sampleFlags) const
     {
         return 0.f;
     }
@@ -560,5 +563,6 @@ struct ThinDielectricBSDF : BSDFCRTP<ThinDielectricBSDF>
 
     f32 eta;
 };
+} // namespace rt
 
 #endif

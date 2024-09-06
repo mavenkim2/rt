@@ -1,5 +1,7 @@
 #ifndef TEMPLATE_H
 #define TEMPLATE_H
+namespace rt
+{
 
 template <typename... Ts>
 struct TypePack
@@ -78,5 +80,6 @@ struct TaggedPointer
     }
     explicit operator bool() { return (bits & ptrMask) != 0; }
 };
+} // namespace rt
 
 #endif

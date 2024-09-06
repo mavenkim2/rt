@@ -10,6 +10,9 @@
 #define CIE_LAMBDA_MAX   830.0
 #define RGB2SPEC_EPSILON 1e-4
 
+namespace rt
+{
+
 const double CIE_X[CIE_SAMPLES] = {
     0.000129900000, 0.000232100000, 0.000414900000, 0.000741600000, 0.001368000000,
     0.002236000000, 0.004243000000, 0.007650000000, 0.014310000000, 0.023190000000,
@@ -453,3 +456,4 @@ int main(int argc, char *argv)
     fprintf(f, "};\n");
     fclose(f);
 }
+} // namespace rt

@@ -1,3 +1,5 @@
+namespace rt
+{
 string::string(const char *c)
 {
     *this = Str8C(c);
@@ -990,3 +992,4 @@ inline u8 *ConvertOffsetToPointer(u8 *base, u64 offset)
     u8 *ptr = base + offset;
     return ptr;
 }
+} // namespace rt

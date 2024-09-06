@@ -2,6 +2,8 @@
 #define SPECTRUM_H
 
 // #include "../build/rgbspectrum_srgb.cpp"
+namespace rt
+{
 
 constexpr f32 LambdaMin           = 360;
 constexpr f32 LambdaMax           = 830;
@@ -53,8 +55,8 @@ struct SampledSpectrum
         }
     }
 
-    vec3 ToXYZ(const SampledWavelengths &lambda) const;
-    vec3 ToRGB(const RGBColorSpace &space, const SampledWavelengths &lambda) const;
+    Vec3f ToXYZ(const SampledWavelengths &lambda) const;
+    Vec3f ToRGB(const RGBColorSpace &space, const SampledWavelengths &lambda) const;
     f32 operator[](i32 i) const
     {
         return values[i];
@@ -414,7 +416,7 @@ struct RGBToSpectrumTable
     using CoefficientArray   = f32[3][res][res][res][3];
     RGBToSpectrumTable(const float *zNodes, const CoefficientArray *coeffs) : zNodes(zNodes), coeffs(coeffs) {}
 
-    vec3 operator()(vec3 rgb) const;
+    Vec3f operator()(Vec3f rgb) const;
 
     static const RGBToSpectrumTable *sRGB;
 
@@ -424,30 +426,30 @@ struct RGBToSpectrumTable
 
 struct RGBColorSpace
 {
-    mat3 RGBToXYZ;
-    mat3 XYZToRGB;
+    Mat3 RGBToXYZ;
+    Mat3 XYZToRGB;
 
     // Color primaries (xy chromaticity coordinates)
-    vec2 r, g, b, w;
+    Vec2f r, g, b, w;
 
     // White point
     DenselySampledSpectrum illuminant;
     const RGBToSpectrumTable *rgbToSpec;
 
-    RGBColorSpace(Arena *arena, vec2 r, vec2 g, vec2 b, Spectrum illuminant, const RGBToSpectrumTable *rgbToSpec);
-    vec3 ToRGB(vec3 xyz) const
+    RGBColorSpace(Arena *arena, Vec2f r, Vec2f g, Vec2f b, Spectrum illuminant, const RGBToSpectrumTable *rgbToSpec);
+    Vec3f ToRGB(Vec3f xyz) const
     {
-        return mul(XYZToRGB, xyz);
+        return Mul(XYZToRGB, xyz);
     }
-    vec3 ToXYZ(vec3 rgb) const
+    Vec3f ToXYZ(Vec3f rgb) const
     {
-        return mul(RGBToXYZ, rgb);
+        return Mul(RGBToXYZ, rgb);
     }
-    vec3 ToRGBCoeffs(vec3 rgb) const;
+    Vec3f ToRGBCoeffs(Vec3f rgb) const;
 };
 
 // Converting from RGB to spectral: https://rgl.s3.eu-central-1.amazonaws.com/media/papers/Jakob2019Spectral_3.pdf
-inline f32 EvaluateSpectral(const vec3 &c, const f32 wl)
+inline f32 EvaluateSpectral(const Vec3f &c, const f32 wl)
 {
     // f(x) = S(c0x^2 + c1x + c2), S is a sigmoid, x is the wavelength
     // S(x) = 1/2 + x/(2 * sqrt(1 + x^2))
@@ -455,15 +457,15 @@ inline f32 EvaluateSpectral(const vec3 &c, const f32 wl)
     return FMA(.5f * x, 1.f / sqrtf(FMA(x, x, 1)), .5f);
 }
 
-inline LaneF32 EvaluateSpectral(const vec3 &c, const LaneF32 &wl)
+inline Lane4F32 EvaluateSpectral(const Vec3f &c, const Lane4F32 &wl)
 {
     // f(x) = S(c0x^2 + c1x + c2), S is a sigmoid, x is the wavelength
     // S(x) = 1/2 + x/(2 * sqrt(1 + x^2))
-    LaneF32 x = FMA(FMA(c.x, wl, c.y), wl, c.z);
-    return FMA(.5f * x, rsqrt(FMA(x, x, 1)), .5f);
+    Lane4F32 x = FMA(FMA(c.x, wl, c.y), wl, c.z);
+    return FMA(.5f * x, Rsqrt(FMA(x, x, 1)), .5f);
 }
 
-inline f32 SigmoidPolynomialMaxValue(const vec3 &c)
+inline f32 SigmoidPolynomialMaxValue(const Vec3f &c)
 {
     f32 result = Max(EvaluateSpectral(c, LambdaMin), EvaluateSpectral(c, LambdaMax));
     f32 lambda = -c.y / (2 * c.x);
@@ -497,12 +499,12 @@ struct RGBAlbedoSpectrum : SpectrumCRTP<RGBAlbedoSpectrum>
         }
         return s;
     }
-    RGBAlbedoSpectrum(const RGBColorSpace &cs, vec3 rgb)
+    RGBAlbedoSpectrum(const RGBColorSpace &cs, Vec3f rgb)
     {
         coeffs = cs.ToRGBCoeffs(rgb);
     }
 
-    vec3 coeffs;
+    Vec3f coeffs;
 };
 
 // For unbounded positive RGB values (remapped to necessary range)
@@ -529,15 +531,15 @@ struct RGBUnboundedSpectrum : SpectrumCRTP<RGBUnboundedSpectrum>
         }
         return s;
     }
-    RGBUnboundedSpectrum(const RGBColorSpace &cs, vec3 rgb)
+    RGBUnboundedSpectrum(const RGBColorSpace &cs, Vec3f rgb)
     {
         f32 m  = Max(rgb.r, Max(rgb.g, rgb.b));
         scale  = 2 * m;
-        coeffs = cs.ToRGBCoeffs(scale ? rgb / scale : vec3(0, 0, 0));
+        coeffs = cs.ToRGBCoeffs(scale ? rgb / scale : Vec3f(0, 0, 0));
     }
 
     f32 scale = 1;
-    vec3 coeffs;
+    Vec3f coeffs;
 };
 
 struct RGBIlluminantSpectrum : SpectrumCRTP<RGBIlluminantSpectrum>
@@ -567,16 +569,17 @@ struct RGBIlluminantSpectrum : SpectrumCRTP<RGBIlluminantSpectrum>
         return s * illuminant->Sample(lambda);
     }
 
-    RGBIlluminantSpectrum(const RGBColorSpace &cs, vec3 rgb) : illuminant(&cs.illuminant)
+    RGBIlluminantSpectrum(const RGBColorSpace &cs, Vec3f rgb) : illuminant(&cs.illuminant)
     {
         f32 m  = Max(rgb.r, Max(rgb.g, rgb.b));
         scale  = 2 * m;
-        coeffs = cs.ToRGBCoeffs(scale ? rgb / scale : vec3(0, 0, 0));
+        coeffs = cs.ToRGBCoeffs(scale ? rgb / scale : Vec3f(0, 0, 0));
     }
 
     f32 scale = 1;
-    vec3 coeffs;
+    Vec3f coeffs;
     const DenselySampledSpectrum *illuminant;
 };
+} // namespace rt
 
 #endif

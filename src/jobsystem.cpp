@@ -1,4 +1,6 @@
 #include <thread>
+namespace rt
+{
 namespace jobsystem
 {
 static JobSystem jobSystem;
@@ -170,3 +172,4 @@ void EndJobsystem()
     }
 }
 } // namespace jobsystem
+} // namespace rt

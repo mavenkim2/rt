@@ -1,9 +1,26 @@
 #ifndef RT_H
 #define RT_H
 
+#define PI      3.14159265358979323846f
+#define InvPi   0.31830988618379067154f
+#define Inv2Pi  0.15915494309189533577f
+#define Inv4Pi  0.07957747154594766788f
+#define PiOver2 1.57079632679489661923f
+#define PiOver4 0.78539816339744830961f
+#define Sqrt2   1.41421356237309504880f
+#define U32Max  0xffffffff
+
 #include "base.h"
 #include "template.h"
-#include "math.h"
+#include "math/simd_base.h"
+#include "math/lane4u32.h"
+#include "math/lane4f32.h"
+#include "math/basemath.h"
+#include "math/vec2.h"
+#include "math/vec3.h"
+#include "math/vec4.h"
+#include "math/matx.h"
+#include "math/math.h"
 #include "algo.h"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -12,7 +29,10 @@
 #define CORNELL 1
 #define EMISSIVE
 
-const vec3 INVALID_VEC = vec3((f32)U32Max, (f32)U32Max, (f32)U32Max);
+namespace rt
+{
+
+const Vec3f INVALID_VEC = Vec3f((f32)U32Max, (f32)U32Max, (f32)U32Max);
 
 // NOTE: all member have to be u64
 struct ThreadStatistics
@@ -45,16 +65,16 @@ static ThreadMemoryStatistics *threadMemoryStatistics;
 
 struct HitRecord
 {
-    vec3 normal;
-    vec3 p;
+    Vec3f normal;
+    Vec3f p;
     f32 t;
     f32 u, v;
     bool isFrontFace;
     struct Material *material;
 
-    inline void SetNormal(const Ray &r, const vec3 &inNormal)
+    inline void SetNormal(const Ray &r, const Vec3f &inNormal)
     {
-        isFrontFace = Dot(r.direction(), inNormal) < 0;
+        isFrontFace = Dot(r.d, inNormal) < 0;
         normal      = isFrontFace ? inNormal : -inNormal;
     }
 };
@@ -158,5 +178,6 @@ void WriteImage(Image *image, char *filename)
         fprintf(stderr, "[ERROR] Unable to write file %s.\n", filename);
     }
 }
+} // namespace rt
 
 #endif

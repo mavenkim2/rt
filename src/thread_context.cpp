@@ -1,3 +1,5 @@
+namespace rt
+{
 thread_local ThreadContext *tLocalContext;
 
 void InitThreadContext(Arena *arena, char *name, b32 isMainThread)
@@ -90,3 +92,4 @@ void BaseThreadEntry(OS_ThreadFunction *func, void *params)
     func(params, &tContext_);
     ReleaseThreadContext();
 }
+} // namespace rt

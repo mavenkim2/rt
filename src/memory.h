@@ -5,6 +5,9 @@
 #define ARENA_COMMIT_SIZE  kilobytes(64)
 #define ARENA_RESERVE_SIZE megabytes(64)
 
+namespace rt
+{
+
 struct Arena
 {
     struct Arena *prev;
@@ -63,7 +66,7 @@ enum MemoryType
     (((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(type), PushStruct(arena, type))
 #else
 #define PushArrayTagged(arena, type, count, tag) PushArray(arena, type, count)
-#define PushStructTagged(arena, type, tag) PushStruct(arena, type)
+#define PushStructTagged(arena, type, tag)       PushStruct(arena, type)
 #endif
 
 #define PushStructConstruct(arena, Type) new (PushStruct(arena, Type)) Type
@@ -71,5 +74,6 @@ enum MemoryType
 #define ScratchEnd(temp) TempEnd(temp)
 
 #define IsZero(instance) CheckZero(sizeof(instance), (u8 *)(&instance))
+} // namespace rt
 
 #endif

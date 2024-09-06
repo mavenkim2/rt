@@ -1,6 +1,8 @@
 #ifdef _WIN32
 
 #include <windows.h>
+namespace rt
+{
 
 static Arena *win32Arena;
 static Win32Thread *win32FreeThread;
@@ -256,4 +258,5 @@ inline u64 InterlockedAdd(u64 volatile *addend, u64 value)
     return InterlockedExchangeAdd64((volatile LONG64 *)addend, value);
 }
 
+} // namespace rt
 #endif

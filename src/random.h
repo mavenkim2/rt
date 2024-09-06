@@ -1,4 +1,6 @@
 #include <limits>
+namespace rt
+{
 
 inline f32 RandomFloat()
 {
@@ -15,22 +17,22 @@ inline i32 RandomInt(i32 min, i32 max)
     return i32(RandomFloat(f32(min), f32(max)));
 }
 
-inline vec3 RandomVec3()
+inline Vec3f RandomVec3()
 {
-    return vec3(RandomFloat(), RandomFloat(), RandomFloat());
+    return Vec3f(RandomFloat(), RandomFloat(), RandomFloat());
 }
 
-inline vec3 RandomVec3(f32 min, f32 max)
+inline Vec3f RandomVec3(f32 min, f32 max)
 {
-    return vec3(RandomFloat(min, max), RandomFloat(min, max), RandomFloat(min, max));
+    return Vec3f(RandomFloat(min, max), RandomFloat(min, max), RandomFloat(min, max));
 }
 
 #if 0
-inline vec3 RandomUnitVector()
+inline Vec3f RandomUnitVector()
 {
     while (true)
     {
-        vec3 result = RandomVec3(-1, 1);
+        Vec3f result = RandomVec3(-1, 1);
         if (result.lengthSquared() < 1)
         {
             return normalize(result);
@@ -39,31 +41,31 @@ inline vec3 RandomUnitVector()
 }
 #endif
 
-inline vec3 RandomUnitVector(vec2 u)
+inline Vec3f RandomUnitVector(Vec2f u)
 {
     return Normalize(SampleUniformSphere(u));
 }
 
-inline vec3 RandomUnitVector()
+inline Vec3f RandomUnitVector()
 {
-    vec2 u = vec2(RandomFloat(), RandomFloat());
+    Vec2f u = Vec2f(RandomFloat(), RandomFloat());
     return RandomUnitVector(u);
 }
 
-inline vec3 RandomOnHemisphere(const vec3 &normal)
+inline Vec3f RandomOnHemisphere(const Vec3f &normal)
 {
     // NOTE: why can't you just normalize a vector that has a length > 1?
-    vec3 result = RandomUnitVector();
-    result      = Dot(normal, result) > 0 ? result : -result;
+    Vec3f result = RandomUnitVector();
+    result       = Dot(normal, result) > 0 ? result : -result;
     return result;
 }
 
 #if 0
-inline vec3 RandomInUnitDisk()
+inline Vec3f RandomInUnitDisk()
 {
     while (true)
     {
-        vec3 p = vec3(RandomFloat(-1, 1), RandomFloat(-1, 1), 0);
+        Vec3f p = Vec3f(RandomFloat(-1, 1), RandomFloat(-1, 1), 0);
         if (p.lengthSquared() < 1)
         {
             return p;
@@ -71,22 +73,22 @@ inline vec3 RandomInUnitDisk()
     }
 }
 #endif
-inline vec3 RandomInUnitDisk()
+inline Vec3f RandomInUnitDisk()
 {
-    vec2 u = vec2(RandomFloat(), RandomFloat());
-    return vec3(SampleUniformDiskConcentric(u), 0.f);
+    Vec2f u = Vec2f(RandomFloat(), RandomFloat());
+    return Vec3f(SampleUniformDiskConcentric(u), 0.f);
 }
 
-inline vec3 RandomCosineDirection()
+inline Vec3f RandomCosineDirection()
 {
     f32 r1 = RandomFloat();
     f32 r2 = RandomFloat();
 
     f32 phi = 2 * PI * r1;
-    f32 x   = cos(phi) * sqrt(r2);
-    f32 y   = sin(phi) * sqrt(r2);
-    f32 z   = sqrt(1 - r2);
-    return vec3(x, y, z);
+    f32 x   = Cos(phi) * Sqrt(r2);
+    f32 y   = Sin(phi) * Sqrt(r2);
+    f32 z   = Sqrt(1 - r2);
+    return Vec3f(x, y, z);
 }
 
 //////////////////////////////
@@ -220,3 +222,4 @@ inline i64 RNG::operator-(const RNG &other) const
     }
     return (i64)distance;
 }
+} // namespace rt

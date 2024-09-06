@@ -1,23 +1,25 @@
+namespace rt
+{
 AABB Transform(const HomogeneousTransform &transform, const AABB &aabb)
 {
     AABB result;
-    vec3 vecs[] = {
-        vec3(aabb.minX, aabb.minY, aabb.minZ),
-        vec3(aabb.maxX, aabb.minY, aabb.minZ),
-        vec3(aabb.maxX, aabb.maxY, aabb.minZ),
-        vec3(aabb.minX, aabb.maxY, aabb.minZ),
-        vec3(aabb.minX, aabb.minY, aabb.maxZ),
-        vec3(aabb.maxX, aabb.minY, aabb.maxZ),
-        vec3(aabb.maxX, aabb.maxY, aabb.maxZ),
-        vec3(aabb.minX, aabb.maxY, aabb.maxZ),
+    Vec3f vecs[] = {
+        Vec3f(aabb.minX, aabb.minY, aabb.minZ),
+        Vec3f(aabb.maxX, aabb.minY, aabb.minZ),
+        Vec3f(aabb.maxX, aabb.maxY, aabb.minZ),
+        Vec3f(aabb.minX, aabb.maxY, aabb.minZ),
+        Vec3f(aabb.minX, aabb.minY, aabb.maxZ),
+        Vec3f(aabb.maxX, aabb.minY, aabb.maxZ),
+        Vec3f(aabb.maxX, aabb.maxY, aabb.maxZ),
+        Vec3f(aabb.minX, aabb.maxY, aabb.maxZ),
     };
     f32 cosTheta = cos(transform.rotateAngleY);
     f32 sinTheta = sin(transform.rotateAngleY);
     for (u32 i = 0; i < ArrayLength(vecs); i++)
     {
-        vec3 &vec = vecs[i];
-        vec.x     = cosTheta * vec.x + sinTheta * vec.z;
-        vec.z     = -sinTheta * vec.x + cosTheta * vec.z;
+        Vec3f &vec = vecs[i];
+        vec.x      = cosTheta * vec.x + sinTheta * vec.z;
+        vec.z      = -sinTheta * vec.x + cosTheta * vec.z;
         vec += transform.translation;
 
         result.minX = result.minX < vec.x ? result.minX : vec.x;
@@ -34,13 +36,13 @@ AABB Transform(const HomogeneousTransform &transform, const AABB &aabb)
 //////////////////////////////
 // Basis
 //
-Basis GenerateBasis(vec3 n)
+Basis GenerateBasis(Vec3f n)
 {
     Basis result;
     n        = Normalize(n);
-    vec3 up  = fabs(n.x) > 0.9 ? vec3(0, 1, 0) : vec3(1, 0, 0);
-    vec3 t   = Normalize(Cross(n, up));
-    vec3 b   = Cross(n, t);
+    Vec3f up = fabs(n.x) > 0.9 ? Vec3f(0, 1, 0) : Vec3f(1, 0, 0);
+    Vec3f t  = Normalize(Cross(n, up));
+    Vec3f b  = Cross(n, t);
     result.t = t;
     result.b = b;
     result.n = n;
@@ -48,10 +50,10 @@ Basis GenerateBasis(vec3 n)
 }
 
 // TODO: I'm pretty sure this is converting to world space. not really sure about this
-vec3 ConvertToLocal(Basis *basis, vec3 vec)
+Vec3f ConvertToLocal(Basis *basis, Vec3f vec)
 {
-    // vec3 cosDirection     = RandomCosineDirection();
-    vec3 result = basis->t * vec.x + basis->b * vec.y + basis->n * vec.z;
+    // Vec3f cosDirection     = RandomCosin.d;
+    Vec3f result = basis->t * vec.x + basis->b * vec.y + basis->n * vec.z;
     return result;
 }
 
@@ -64,10 +66,10 @@ bool Sphere::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record
     // (C - (O + Dt)) Dot (C - (O + Dt)) - r^2 = 0
     // (-Dt + C - O) Dot (-Dt + C - O) - r^2 = 0
     // t^2(D Dot D) - 2t(D Dot (C - O)) + (C - O Dot C - O) - r^2 = 0
-    vec3 oc = Center(r.time()) - r.origin();
-    f32 a   = Dot(r.direction(), r.direction());
-    f32 h   = Dot(r.direction(), oc);
-    f32 c   = Dot(oc, oc) - radius * radius;
+    Vec3f oc = Center(r.t) - r.o;
+    f32 a    = Dot(r.d, r.d);
+    f32 h    = Dot(r.d, oc);
+    f32 c    = Dot(oc, oc) - radius * radius;
 
     f32 discriminant = h * h - a * c;
     if (discriminant < 0)
@@ -81,51 +83,51 @@ bool Sphere::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record
             return false;
     }
 
-    record.t    = result;
-    record.p    = r.at(record.t);
-    vec3 normal = (record.p - center) / radius;
+    record.t     = result;
+    record.p     = r.at(record.t);
+    Vec3f normal = (record.p - center) / radius;
     record.SetNormal(r, normal);
     record.material = material;
     Sphere::GetUV(record.u, record.v, normal);
 
     return true;
 }
-vec3 Sphere::Center(f32 time) const
+Vec3f Sphere::Center(f32 time) const
 {
     return center + centerVec * time;
 }
 AABB Sphere::GetAABB() const
 {
-    vec3 boxRadius = vec3(radius, radius, radius);
-    vec3 center2   = center + centerVec;
-    AABB box1      = AABB(center - boxRadius, center + boxRadius);
-    AABB box2      = AABB(center2 - boxRadius, center2 + boxRadius);
-    AABB aabb      = AABB(box1, box2);
+    Vec3f boxRadius = Vec3f(radius, radius, radius);
+    Vec3f center2   = center + centerVec;
+    AABB box1       = AABB(center - boxRadius, center + boxRadius);
+    AABB box2       = AABB(center2 - boxRadius, center2 + boxRadius);
+    AABB aabb       = AABB(box1, box2);
     return aabb;
 }
-f32 Sphere::PdfValue(const vec3 &origin, const vec3 &direction) const
+f32 Sphere::PdfValue(const Vec3f &origin, const Vec3f &direction) const
 {
     HitRecord rec;
     if (!this->Hit(Ray(origin, direction), 0.001f, infinity, rec))
         return 0;
-    f32 cosThetaMax = sqrt(1 - radius * radius / (center - origin).lengthSquared());
+    f32 cosThetaMax = Sqrt(1 - radius * radius / Distance(center, origin));
     f32 solidAngle  = 2 * PI * (1 - cosThetaMax);
     return 1 / solidAngle;
 }
-vec3 Sphere::Random(const vec3 &origin, vec2 u) const
+Vec3f Sphere::Random(const Vec3f &origin, Vec2f u) const
 {
-    vec3 dir            = center - origin;
-    f32 distanceSquared = dir.lengthSquared();
+    Vec3f dir           = center - origin;
+    f32 distanceSquared = LengthSquared(dir);
     Basis basis         = GenerateBasis(dir);
 
     f32 r1 = u.x;
     f32 r2 = u.y;
     f32 z  = 1 + r2 * (sqrt(1 - radius * radius / distanceSquared) - 1);
 
-    f32 phi     = 2 * PI * r1;
-    f32 x       = cos(phi) * sqrt(1 - z * z);
-    f32 y       = sin(phi) * sqrt(1 - z * z);
-    vec3 result = ConvertToLocal(&basis, vec3(x, y, z));
+    f32 phi      = 2 * PI * r1;
+    f32 x        = Cos(phi) * Sqrt(1 - z * z);
+    f32 y        = Sin(phi) * Sqrt(1 - z * z);
+    Vec3f result = ConvertToLocal(&basis, Vec3f(x, y, z));
     return result;
 }
 
@@ -148,17 +150,17 @@ inline i32 Scene::GetIndex(PrimitiveType type, i32 primIndex) const
     i32 index = -1;
     switch (type)
     {
-        case PrimitiveType::Sphere:
+        case PrimitiveType_Sphere:
         {
             index = primIndex;
         }
         break;
-        case PrimitiveType::Quad:
+        case PrimitiveType_Quad:
         {
             index = primIndex + sphereCount;
         }
         break;
-        case PrimitiveType::Box:
+        case PrimitiveType_Box:
         {
             index = primIndex + sphereCount + quadCount;
         }
@@ -170,17 +172,17 @@ inline void Scene::GetTypeAndLocalindex(const u32 totalIndex, PrimitiveType *typ
 {
     if (totalIndex < sphereCount)
     {
-        *type       = PrimitiveType::Sphere;
+        *type       = PrimitiveType_Sphere;
         *localIndex = totalIndex;
     }
     else if (totalIndex < quadCount + sphereCount)
     {
-        *type       = PrimitiveType::Quad;
+        *type       = PrimitiveType_Quad;
         *localIndex = totalIndex - sphereCount;
     }
     else if (totalIndex < quadCount + sphereCount + boxCount)
     {
-        *type       = PrimitiveType::Box;
+        *type       = PrimitiveType_Box;
         *localIndex = totalIndex - sphereCount - quadCount;
     }
     else
@@ -205,19 +207,19 @@ void Scene::GetAABBs(AABB *aabbs)
     for (u32 i = 0; i < sphereCount; i++)
     {
         Sphere &sphere = spheres[i];
-        u32 index      = GetIndex(PrimitiveType::Sphere, i);
+        u32 index      = GetIndex(PrimitiveType_Sphere, i);
         aabbs[index]   = sphere.GetAABB();
     }
     for (u32 i = 0; i < quadCount; i++)
     {
         Quad &quad   = quads[i];
-        u32 index    = GetIndex(PrimitiveType::Quad, i);
+        u32 index    = GetIndex(PrimitiveType_Quad, i);
         aabbs[index] = quad.GetAABB();
     }
     for (u32 i = 0; i < boxCount; i++)
     {
         Box &box     = boxes[i];
-        u32 index    = GetIndex(PrimitiveType::Box, i);
+        u32 index    = GetIndex(PrimitiveType_Box, i);
         aabbs[index] = box.GetAABB();
     }
     for (u32 i = 0; i < totalPrimitiveCount; i++)
@@ -240,21 +242,21 @@ bool Scene::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &temp, u
 
     if (primitiveIndices[index].transformIndex != -1)
     {
-        transform             = &transforms[primitiveIndices[index].transformIndex];
-        vec3 translatedOrigin = r.origin() - transform->translation;
-        cosTheta              = cos(transform->rotateAngleY);
-        sinTheta              = sin(transform->rotateAngleY);
+        transform              = &transforms[primitiveIndices[index].transformIndex];
+        Vec3f translatedOrigin = r.o - transform->translation;
+        cosTheta               = cos(transform->rotateAngleY);
+        sinTheta               = sin(transform->rotateAngleY);
 
-        vec3 origin;
+        Vec3f origin;
         origin.x = cosTheta * translatedOrigin.x - sinTheta * translatedOrigin.z;
         origin.y = translatedOrigin.y;
         origin.z = sinTheta * translatedOrigin.x + cosTheta * translatedOrigin.z;
-        vec3 dir;
-        dir.x = cosTheta * r.direction().x - sinTheta * r.direction().z;
-        dir.y = r.direction().y;
-        dir.z = sinTheta * r.direction().x + cosTheta * r.direction().z;
+        Vec3f dir;
+        dir.x = cosTheta * r.d.x - sinTheta * r.d.z;
+        dir.y = r.d.y;
+        dir.z = sinTheta * r.d.x + cosTheta * r.d.z;
         // convert ray to object space
-        ray = Ray(origin, dir, r.time());
+        ray = Ray(origin, dir, r.t);
     }
     else
     {
@@ -269,19 +271,19 @@ bool Scene::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &temp, u
         ConstantMedium &medium = media[primitiveIndices[index].constantMediaIndex];
         switch (type)
         {
-            case PrimitiveType::Sphere:
+            case PrimitiveType_Sphere:
             {
                 Sphere &sphere = spheres[localIndex];
                 result         = medium.Hit(sphere, ray, tMin, tMax, temp);
             }
             break;
-            case PrimitiveType::Quad:
+            case PrimitiveType_Quad:
             {
                 Quad &quad = quads[localIndex];
                 result     = medium.Hit(quad, ray, tMin, tMax, temp);
             }
             break;
-            case PrimitiveType::Box:
+            case PrimitiveType_Box:
             {
                 Box &box = boxes[localIndex];
                 result   = medium.Hit(box, ray, tMin, tMax, temp);
@@ -293,19 +295,19 @@ bool Scene::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &temp, u
     {
         switch (type)
         {
-            case PrimitiveType::Sphere:
+            case PrimitiveType_Sphere:
             {
                 Sphere &sphere = spheres[localIndex];
                 result         = sphere.Hit(ray, tMin, tMax, temp);
             }
             break;
-            case PrimitiveType::Quad:
+            case PrimitiveType_Quad:
             {
                 Quad &quad = quads[localIndex];
                 result     = quad.Hit(ray, tMin, tMax, temp);
             }
             break;
-            case PrimitiveType::Box:
+            case PrimitiveType_Box:
             {
                 Box &box = boxes[localIndex];
                 result   = box.Hit(ray, tMin, tMax, temp);
@@ -317,14 +319,14 @@ bool Scene::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &temp, u
     if (result && primitiveIndices[index].transformIndex != -1)
     {
         Assert(transform);
-        vec3 p;
+        Vec3f p;
         p.x = cosTheta * temp.p.x + sinTheta * temp.p.z;
         p.y = temp.p.y;
         p.z = -sinTheta * temp.p.x + cosTheta * temp.p.z;
         p += transform->translation;
         temp.p = p;
 
-        vec3 normal;
+        Vec3f normal;
         normal.x    = cosTheta * temp.normal.x + sinTheta * temp.normal.z;
         normal.y    = temp.normal.y;
         normal.z    = -sinTheta * temp.normal.x + cosTheta * temp.normal.z;
@@ -335,9 +337,10 @@ bool Scene::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &temp, u
 
 struct TriangleMesh
 {
-    vec3 *p;
-    vec3 *n;
-    vec2 *uv;
+    Vec3f *p;
+    Vec3f *n;
+    Vec3f *t;
+    Vec2f *uv;
     u32 *indices;
     u32 numVertices;
     u32 numIndices;
@@ -355,7 +358,7 @@ inline u32 GetTypeStride(string word)
 
 TriangleMesh LoadPLY(Arena *arena, string filename)
 {
-    string buffer = OS_ReadFile(arena, filename);
+    string buffer = OS_MapFileRead(filename); // OS_ReadFile(arena, filename);
     Tokenizer tokenizer;
     tokenizer.input  = buffer;
     tokenizer.cursor = buffer.str;
@@ -466,9 +469,9 @@ TriangleMesh LoadPLY(Arena *arena, string filename)
     TriangleMesh mesh = {};
     mesh.numVertices  = numVertices;
     mesh.numIndices   = numFaces * 3;
-    if (hasVertices) mesh.p = PushArray(arena, vec3, numVertices);
-    if (hasNormals) mesh.n = PushArray(arena, vec3, numVertices);
-    if (hasUv) mesh.uv = PushArray(arena, vec2, numVertices);
+    if (hasVertices) mesh.p = PushArray(arena, Vec3f, numVertices);
+    if (hasNormals) mesh.n = PushArray(arena, Vec3f, numVertices);
+    if (hasUv) mesh.uv = PushArray(arena, Vec2f, numVertices);
     mesh.indices = PushArray(arena, u32, numFaces * 3);
 
     for (u32 i = 0; i < numVertices; i++)
@@ -478,19 +481,19 @@ TriangleMesh LoadPLY(Arena *arena, string filename)
         {
             Assert(totalVertexStride >= 12);
             f32 *pos  = (f32 *)bytes.str;
-            mesh.p[i] = vec3(pos[0], pos[1], pos[2]);
+            mesh.p[i] = Vec3f(pos[0], pos[1], pos[2]);
         }
         if (hasNormals)
         {
             Assert(totalVertexStride >= 24);
             f32 *norm = (f32 *)bytes.str + 3;
-            mesh.n[i] = vec3(norm[0], norm[1], norm[2]);
+            mesh.n[i] = Vec3f(norm[0], norm[1], norm[2]);
         }
         if (hasUv)
         {
             Assert(totalVertexStride >= 32);
             f32 *uv    = (f32 *)bytes.str + 6;
-            mesh.uv[i] = vec2(uv[0], uv[1]);
+            mesh.uv[i] = Vec2f(uv[0], uv[1]);
         }
     }
 
@@ -512,6 +515,7 @@ TriangleMesh LoadPLY(Arena *arena, string filename)
         Advance(&tokenizer, countStride + count * faceIndicesStride + otherStride);
     }
     Assert(EndOfBuffer(&tokenizer));
+    OS_UnmapFile(buffer.str);
     return mesh;
 }
 
@@ -831,7 +835,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
         else if (dataType == "point2" || dataType == "vector2")
         {
             Assert((numValues & 1) == 0);
-            vec2 *vectors = PushArrayTagged(arena, vec2, numValues / 2, memoryType);
+            Vec2f *vectors = PushArrayTagged(arena, Vec2f, numValues / 2, memoryType);
 
             b32 brackets = Advance(tokenizer, "[");
             Advance(tokenizer, "[");
@@ -858,7 +862,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
                  dataType == "normal" || dataType == "vector")
         {
             Assert(numValues % 3 == 0);
-            vec3 *vectors = PushArrayTagged(arena, vec3, numValues / 3, memoryType);
+            Vec3f *vectors = PushArrayTagged(arena, Vec3f, numValues / 3, memoryType);
 
             b32 brackets = Advance(tokenizer, "[");
             SkipToNextDigit(tokenizer);
@@ -1057,7 +1061,7 @@ struct SceneLoadState
     ScenePacket packets[MAX] = {};
 
     // TODO: these numbers are really ad hoc. honestly the best solution would be to just serialize the scene
-    // so that they number of transforms, shapes, instances, etc. is known from the very start. that way you
+    // so that the number of transforms, shapes, instances, etc. is known from the very start. that way you
     // don't even need hash tables. you would just need an index into a global array that contains everything
     // and it would be really simple and easy to use.
     ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape> *shapes;
@@ -1067,10 +1071,10 @@ struct SceneLoadState
     ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance> *instanceTypes;
     ChunkedLinkedList<Instance, 1024, MemoryType_Instance> *instances;
 
-    ChunkedLinkedList<const mat4 *, 16384, MemoryType_Transform> *transforms;
+    ChunkedLinkedList<const Mat4 *, 16384, MemoryType_Transform> *transforms;
 
     InternedStringCache<16384, 8, 64> stringCache;
-    Map<mat4, 1048576, 8, 1024, MemoryType_Transform> transformCache;
+    Map<Mat4, 1048576, 8, 1024, MemoryType_Transform> transformCache;
 
     Arena **threadArenas;
 
@@ -1083,7 +1087,7 @@ struct GraphicsState
 {
     StringId materialId = 0;
     i32 materialIndex   = -1;
-    mat4 transform      = mat4::Identity();
+    Mat4 transform      = Mat4::Identity();
     i32 transformIndex  = -1;
 
     i32 areaLightIndex = -1;
@@ -1104,7 +1108,7 @@ Scene *LoadPBRT(Arena *arena, string filename)
     state.lights        = PushArray(arena, ChunkedLinkedList<ScenePacket COMMA 1024 COMMA MemoryType_Light>, numProcessors);
     state.instanceTypes = PushArray(arena, ChunkedLinkedList<ObjectInstanceType COMMA 512 COMMA MemoryType_Instance>, numProcessors);
     state.instances     = PushArray(arena, ChunkedLinkedList<Instance COMMA 1024 COMMA MemoryType_Instance>, numProcessors);
-    state.transforms    = PushArray(arena, ChunkedLinkedList<const mat4 * COMMA 16384 COMMA MemoryType_Transform>, numProcessors);
+    state.transforms    = PushArray(arena, ChunkedLinkedList<const Mat4 * COMMA 16384 COMMA MemoryType_Transform>, numProcessors);
     state.threadArenas  = PushArray(arena, Arena *, numProcessors);
 #undef COMMA
 
@@ -1117,12 +1121,12 @@ Scene *LoadPBRT(Arena *arena, string filename)
         state.lights[i]        = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light>(state.threadArenas[i]);
         state.instanceTypes[i] = ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance>(state.threadArenas[i]);
         state.instances[i]     = ChunkedLinkedList<Instance, 1024, MemoryType_Instance>(state.threadArenas[i]);
-        state.transforms[i]    = ChunkedLinkedList<const mat4 *, 16384, MemoryType_Transform>(state.threadArenas[i]);
+        state.transforms[i]    = ChunkedLinkedList<const Mat4 *, 16384, MemoryType_Transform>(state.threadArenas[i]);
     }
     state.mainArena      = arena;
     state.scene          = scene;
     state.stringCache    = InternedStringCache<16384, 8, 64>(arena);
-    state.transformCache = Map<mat4, 1048576, 8, 1024, MemoryType_Transform>(arena);
+    state.transformCache = Map<Mat4, 1048576, 8, 1024, MemoryType_Transform>(arena);
 
     LoadPBRT(filename, Str8PathChopPastLastSlash(filename), &state);
 
@@ -1199,7 +1203,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
     auto AddTransform = [&]() {
         if (currentGraphicsState.transformIndex != -1)
         {
-            const mat4 *transform = state->transformCache.GetOrCreate(arena, currentGraphicsState.transform);
+            const Mat4 *transform = state->transformCache.GetOrCreate(arena, currentGraphicsState.transform);
             transforms.Push(transform);
         }
     };
@@ -1310,7 +1314,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 f32 r3c3 = ReadFloat(&tokenizer);
 
                 // NOTE: this transposes the matrix
-                currentGraphicsState.transform = mul(currentGraphicsState.transform, mat4(r0c0, r0c1, r0c2, r0c3,
+                currentGraphicsState.transform = Mul(currentGraphicsState.transform, Mat4(r0c0, r0c1, r0c2, r0c3,
                                                                                           r1c0, r1c1, r1c2, r1c3,
                                                                                           r2c0, r2c1, r2c2, r2c3,
                                                                                           r3c0, r3c1, r3c2, r3c3));
@@ -1342,7 +1346,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
             case "Identity"_sid:
             {
                 ReadWord(&tokenizer);
-                currentGraphicsState.transform = mat4::Identity();
+                currentGraphicsState.transform = Mat4::Identity();
             }
             break;
             case "Import"_sid:
@@ -1390,8 +1394,8 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 f32 upY = ReadFloat(&tokenizer);
                 f32 upZ = ReadFloat(&tokenizer);
 
-                currentGraphicsState.transform = mul(currentGraphicsState.transform,
-                                                     LookAt(vec3(posX, posY, posZ), vec3(lookX, lookY, lookZ), Normalize(vec3(upX, upY, upZ))));
+                currentGraphicsState.transform = Mul(currentGraphicsState.transform,
+                                                     LookAt(Vec3f(posX, posY, posZ), Vec3f(lookX, lookY, lookZ), Normalize(Vec3f(upX, upY, upZ))));
             }
             break;
             case "LightSource"_sid:
@@ -1505,8 +1509,8 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 f32 axisX                      = ReadFloat(&tokenizer);
                 f32 axisY                      = ReadFloat(&tokenizer);
                 f32 axisZ                      = ReadFloat(&tokenizer);
-                mat4 rotationMatrix            = mat4::Rotate(vec3(axisX, axisY, axisZ), angle);
-                currentGraphicsState.transform = mul(currentGraphicsState.transform, rotationMatrix);
+                Mat4 rotationMatrix            = Mat4::Rotate(Vec3f(axisX, axisY, axisZ), angle);
+                currentGraphicsState.transform = Mul(currentGraphicsState.transform, rotationMatrix);
             }
             break;
             case "Sampler"_sid:
@@ -1525,11 +1529,11 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 f32 s0 = ReadFloat(&tokenizer);
                 f32 s1 = ReadFloat(&tokenizer);
                 f32 s2 = ReadFloat(&tokenizer);
-                mat4 scaleMatrix(s0, 0.f, 0.f, 0.f,
+                Mat4 scaleMatrix(s0, 0.f, 0.f, 0.f,
                                  0.f, s1, 0.f, 0.f,
                                  0.f, 0.f, s2, 0.f,
                                  0.f, 0.f, 0.f, 1.f);
-                currentGraphicsState.transform = mul(currentGraphicsState.transform, scaleMatrix);
+                currentGraphicsState.transform = Mul(currentGraphicsState.transform, scaleMatrix);
             }
             break;
             case "Shape"_sid:
@@ -1566,11 +1570,11 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 f32 t0 = ReadFloat(&tokenizer);
                 f32 t1 = ReadFloat(&tokenizer);
                 f32 t2 = ReadFloat(&tokenizer);
-                mat4 translationMatrix(0.f, 0.f, 0.f, 0.f,
+                Mat4 translationMatrix(0.f, 0.f, 0.f, 0.f,
                                        0.f, 0.f, 0.f, 0.f,
                                        0.f, 0.f, 0.f, 0.f,
                                        t0, t1, t2, 1.f);
-                currentGraphicsState.transform = mul(currentGraphicsState.transform, translationMatrix);
+                currentGraphicsState.transform = Mul(currentGraphicsState.transform, translationMatrix);
             }
             break;
             case "Transform"_sid:
@@ -1599,7 +1603,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 f32 r3c3 = ReadFloat(&tokenizer);
 
                 // NOTE: this transposes the matrix
-                currentGraphicsState.transform = mat4(r0c0, r0c1, r0c2, r0c3,
+                currentGraphicsState.transform = Mat4(r0c0, r0c1, r0c2, r0c3,
                                                       r1c0, r1c1, r1c2, r1c3,
                                                       r2c0, r2c1, r2c2, r2c3,
                                                       r3c0, r3c1, r3c2, r3c3);
@@ -1641,7 +1645,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 worldBegin = true;
 
                 const ScenePacket *filmPacket = &state->packets[SceneLoadState::Type::Film];
-                vec2i fullResolution;
+                Vec2i fullResolution;
                 for (u32 i = 0; i < filmPacket->parameterCount; i++)
                 {
                     switch (filmPacket->parameterNames[i])
@@ -1665,7 +1669,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 AddTransform();
                 // TODO: instantiate the camera with the current transform
 
-                currentGraphicsState.transform = mat4::Identity();
+                currentGraphicsState.transform = Mat4::Identity();
             }
             break;
             default:
@@ -1679,3 +1683,4 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
     }
     ScratchEnd(temp);
 }
+} // namespace rt
