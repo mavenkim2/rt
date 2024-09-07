@@ -45,6 +45,8 @@ struct LaneU32<4>
     static __forceinline Lane4U32 Load(const void *ptr) { return _mm_load_si128((const __m128i *)ptr); }
     static __forceinline Lane4U32 LoadU(const void *ptr) { return _mm_loadu_si128((const __m128i *)ptr); }
     static __forceinline void Store(void *ptr, const Lane4U32 &l) { _mm_store_si128((__m128i *)ptr, l); }
+
+    static __forceinline Lane4U32 Step(u32 start) { return LaneU32(start + 0, start + 1, start + 2, start + 3); }
 };
 
 __forceinline Lane4U32 UnpackLo(const Lane4U32 &a, const Lane4U32 &b) { return _mm_unpacklo_epi32(a, b); }

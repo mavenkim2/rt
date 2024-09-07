@@ -20,6 +20,7 @@
 #include "bsdf.h"
 #include "low_discrepancy.h"
 #include "sampler.h"
+#include "bvh/bvh_sah.h"
 #include <algorithm>
 
 #include "base.cpp"
@@ -1028,6 +1029,7 @@ using namespace rt;
 
 int main(int argc, char *argv[])
 {
+    InitTables();
     Arena *arena = ArenaAlloc();
     InitThreadContext(arena, "[Main Thread]", 1);
     OS_Init();
@@ -1036,6 +1038,8 @@ int main(int argc, char *argv[])
 
     threadLocalStatistics  = PushArray(arena, ThreadStatistics, OS_NumProcessors());
     threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, OS_NumProcessors());
+
+    HeuristicSAHBinned<32> heuristic;
 
     // TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
 
@@ -1193,7 +1197,7 @@ int main(int argc, char *argv[])
     printf("Total other memory: %lld\n", totalOtherMemory);
 #endif
 
-#if 1
+#if 0
 #if SPHERES
     const f32 aspectRatio     = 16.f / 9.f;
     const Vec3f lookFrom      = Vec3f(13, 2, 3);

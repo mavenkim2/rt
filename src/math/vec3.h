@@ -24,6 +24,7 @@ struct Vec3
     };
     // TODO: see if this breaks anything
     __forceinline Vec3() : x(zero), y(zero), z(zero) {}
+    __forceinline Vec3(T e0) : x(e0), y(e0), z(e0) {}
     __forceinline Vec3(T e0, T e1, T e2) : x(e0), y(e1), z(e2) {}
     __forceinline Vec3(Vec2<T> v, T e2) : x(v.x), y(v.y), z(e2) {}
 

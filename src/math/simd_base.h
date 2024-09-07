@@ -5,6 +5,18 @@
 
 namespace rt
 {
+#define MAX_LANE_WIDTH 4
+#if 0
+#ifdef __AVX512VL__
+#define MAX_LANE_WIDTH 16
+#elif defined(__AVX2__)
+#define MAX_LANE_WIDTH 8
+#elif defined(__SSE2__)
+#define MAX_LANE_WIDTH 4
+#else
+#define MAX_LANE_WIDTH 1
+#endif
+#endif
 
 static const float one_over_255  = 1.0f / 255.0f;
 static const float min_rcp_input = 1E-18f; // for abs(x) >= min_rcp_input the newton raphson rcp calculation does not fail
@@ -204,6 +216,25 @@ struct UndefinedTy
 };
 
 const constexpr UndefinedTy undefined = UndefinedTy();
+
+static __m128i PermutationTable[255];
+
+__forceinline constexpr void InitTables()
+{
+    for (u8 i = 0; i <= 255; i++)
+    {
+        u8 a = (i & 3) * 4;
+        u8 b = ((i >> 2) & 3) * 4;
+        u8 c = ((i >> 4) & 3) * 4;
+        u8 d = ((i >> 6) & 3) * 4;
+
+        PermutationTable[i] = _mm_setr_epi8(a, a + 1, a + 2, a + 3,
+                                            b, b + 1, b + 2, b + 3,
+                                            c, c + 1, c + 2, c + 3,
+                                            d, d + 1, d + 2, d + 3);
+    }
+}
+
 template <i32 N>
 struct LaneF32
 {
@@ -260,6 +291,23 @@ static const __m128 _mm_lookupmask_ps[16] = {
     _mm_castsi128_ps(_mm_set_epi32(-1, -1, -1, 0)),
     _mm_castsi128_ps(_mm_set_epi32(-1, -1, -1, -1)),
 };
+
+__forceinline u32 Bsf(u32 val)
+{
+    unsigned long result = 0;
+    _BitScanForward(&result, val);
+    return result;
+}
+
+__forceinline constexpr u32 BsfConst(const u32 val)
+{
+    if (val == 0) return 0;
+    for (u32 i = 0; i < 32; i++)
+    {
+        if (val & (1 << i)) return i;
+    }
+    return 32;
+}
 
 } // namespace rt
 

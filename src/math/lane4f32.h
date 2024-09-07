@@ -38,6 +38,7 @@ struct LaneF32<4>
     __forceinline LaneF32(ZeroTy) { v = _mm_setzero_ps(); }
     __forceinline LaneF32(PosInfTy) { v = _mm_set1_ps(pos_inf); }
     __forceinline LaneF32(NegInfTy) { v = _mm_set1_ps(neg_inf); }
+    __forceinline LaneF32(NaNTy) { v = _mm_set1_ps(NaN); }
 
     template <i32 i1>
     __forceinline static LaneF32 Mask()
@@ -153,6 +154,7 @@ __forceinline Lane4F32 rcp(const Lane4F32 &a)
 
 __forceinline Lane4F32 Abs(const Lane4F32 &a) { return _mm_and_ps(a, _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff))); }
 __forceinline Lane4F32 Min(const Lane4F32 &a, const Lane4F32 &b) { return _mm_min_ps(a, b); }
+
 __forceinline Lane4F32 Max(const Lane4F32 &a, const Lane4F32 &b) { return _mm_max_ps(a, b); }
 __forceinline Lane4F32 operator^(const Lane4F32 &a, const Lane4F32 &b) { return _mm_xor_ps(a, b); }
 __forceinline Lane4F32 operator<(const Lane4F32 &a, const Lane4F32 &b) { return _mm_cmplt_ps(a, b); }
@@ -181,6 +183,32 @@ __forceinline i32 Movemask(const Lane4F32 &a) { return _mm_movemask_ps(a); }
 __forceinline bool All(const Lane4F32 &a) { return _mm_movemask_ps(a) == 0xf; }
 __forceinline bool Any(const Lane4F32 &a) { return _mm_movemask_ps(a) != 0; }
 __forceinline bool None(const Lane4F32 &a) { return _mm_movemask_ps(a) == 0; }
+
+__forceinline Lane4F32 MaskAdd(const Lane4F32 &mask, const Lane4F32 &a, const Lane4F32 &b)
+{
+#if defined(__AVX512VL__)
+    return _mm_mask_add_ps(a, (__mmask8)Movemask(mask), a, b);
+#else
+    return Select(mask, a + b, a);
+#endif
+}
+__forceinline Lane4F32 MaskMin(const Lane4F32 &mask, const Lane4F32 &a, const Lane4F32 &b)
+{
+#if defined(__AVX512VL__)
+    return _mm_mask_min_ps(a, (__mmask8)Movemask(mask), a, b);
+#else
+    return Select(mask, _mm_min_ps(a, b), a);
+#endif
+}
+
+__forceinline Lane4F32 MaskMax(const Lane4F32 &mask, const Lane4F32 &a, const Lane4F32 &b)
+{
+#if defined(__AVX512VL__)
+    return _mm_mask_max_ps(a, (__mmask8)Movemask(mask), a, b);
+#else
+    return Select(mask, _mm_max_ps(a, b), a);
+#endif
+}
 
 __forceinline Lane4F32 UnpackLo(const Lane4F32 &a, const Lane4F32 &b) { return _mm_unpacklo_ps(a, b); }
 __forceinline Lane4F32 UnpackHi(const Lane4F32 &a, const Lane4F32 &b) { return _mm_unpackhi_ps(a, b); }
@@ -221,6 +249,34 @@ __forceinline f32 Extract<0>(const Lane4F32 &a)
     return _mm_cvtss_f32(a);
 }
 
+__forceinline Lane4F32 Permute(const Lane4F32 &a, const Lane4U32 &b)
+{
+#if defined(__AVX__)
+    return _mm_permutevar_ps(a, b);
+#elif defined(__SSE4_1__)
+    __m128i m           = b;
+    m                   = _mm_packus_epi32(m, m);
+    m                   = _mm_packus_epi16(m, m);
+    i32 result          = _mm_cvtsi128_si32(m);
+    __m128i permutation = PermutationTable[*(u32 *)(&result)];
+
+    return _mm_castsi128_ps(_mm_shuffle_epi8(_mm_castps_si128(a), permutation));
+#elif defined(__SSS3__)
+    const u32 MUL = 0x04040404;
+    const u32 ADD = 0x03020100;
+
+    const __m128i i0 = _mm_cvtsi32_si128((b[0] & 3) * MUL + ADD);
+    const __m128i i1 = _mm_cvtsi32_si128((b[1] & 3) * MUL + ADD);
+    const __m128i i2 = _mm_cvtsi32_si128((b[2] & 3) * MUL + ADD);
+    const __m128i i3 = _mm_cvtsi32_si128((b[3] & 3) * MUL + ADD);
+
+    __m128i permutation = _mm_unpacklo_epi64(_mm_unpacklo_epi32(i0, i1), _mm_unpacklo_epi32(i2, i3));
+    return _mm_castsi128_ps(_mm_shuffle_epi8(_mm_castps_si128(a), permutation));
+#else
+#error TODO
+#endif
+}
+
 __forceinline u32 TruncateToU8(const Lane4F32 &lane)
 {
 #ifdef __SSE4_1__
@@ -229,6 +285,15 @@ __forceinline u32 TruncateToU8(const Lane4F32 &lane)
     m          = _mm_packus_epi16(m, m);
     i32 result = _mm_cvtsi128_si32(m);
     return *(u32 *)(&result);
+#elif __SSSE3__
+    __m128i m                 = _mm_cvtps_epi32(lane);
+    static const __m128i mask = _mm_setr_epi8((u8)0, (u8)4, (u8)8, (u8)12,
+                                              (u8)0x80, (u8)0x80, (u8)0x80, (u8)0x80,
+                                              (u8)0x80, (u8)0x80, (u8)0x80, (u8)0x80,
+                                              (u8)0x80, (u8)0x80, (u8)0x80, (u8)0x80);
+    i32 result                = _mm_cvvtsi128_si32(_mm_shuffle_epi8(m, mask));
+    return *(u32 *)(&result);
+
 #else
     u32 result = 0;
     for (i32 i = 0; i < 4; i++)
@@ -252,13 +317,49 @@ __forceinline Lane4F32 Ceil(const Lane4F32 &lane)
 #else
 __forceinline Lane4F32 Floor(const Lane4F32 &lane)
 {
-    return Lane4F32(Floor(lane[0]), Floor(lane[1]), Floor(lane[2]), Floor(lane[3]));
+    return Lane4F32(floorf(lane[0]), floorf(lane[1]), floorf(lane[2]), floorf(lane[3]));
 }
 __forceinline Lane4F32 Ceil(const Lane4F32 &lane)
 {
-    return Lane4F32(Ceil(lane[0]), Ceil(lane[1]), Ceil(lane[2]), Ceil(lane[3]));
+    return Lane4F32(ceilf(lane[0]), ceilf(lane[1]), ceilf(lane[2]), ceilf(lane[3]));
 }
 #endif
+
+__forceinline Lane4U32 Flooru(const Lane4F32 &lane)
+{
+    return _mm_cvtps_epi32(Floor(lane));
+}
+
+template <i32 R>
+__forceinline Lane4F32 Rotate(const Lane4F32 &a)
+{
+    if constexpr (R == 4)
+    {
+        return a;
+    }
+    else
+    {
+        constexpr i32 S = (R > 0) ? (4 - (R % 4)) : -R;
+        constexpr i32 A = (S + 0) % 4;
+        constexpr i32 B = (S + 1) % 4;
+        constexpr i32 C = (S + 2) % 4;
+        constexpr i32 D = (S + 3) % 4;
+
+        return Shuffle<A, B, C, D>(a);
+    }
+}
+
+template <i32 S, typename T>
+__forceinline Lane4F32 ShiftUp(const Lane4F32 &a)
+{
+    StaticAssert(S >= 0 && S <= 4, ShiftMustBeBetween0And4);
+    constexpr Lane4U32 shiftMask(S > 0 ? 0 : 0xffffffff, S > 1 ? 0 : 0xffffffff,
+                                 S > 2 ? 0 : 0xffffffff, S > 3 ? 0 : 0xffffffff);
+    return Select(shiftMask, Rotate<S>(a), Lane4F32(T));
+}
+
+template <i32 S>
+__forceinline Lane4F32 ShiftUp(const Lane4F32 &a) { return ShiftUp<S, 0.f>; }
 
 } // namespace rt
 
