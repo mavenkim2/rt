@@ -50,6 +50,10 @@ __forceinline f32 Rsqrt(const f32 x)
 __forceinline f32 Cos(const f32 x) { return ::cosf(x); }
 __forceinline f32 Sin(const f32 x) { return ::sinf(x); }
 __forceinline f32 Tan(const f32 x) { return ::tanf(x); }
+__forceinline f32 Ceil(const f32 x) { return ::ceilf(x); }
+__forceinline f32 Floor(const f32 x) { return ::floorf(x); }
+__forceinline f32 Pow(const f32 x, const f32 y) { return ::powf(x, y); }
+__forceinline f32 Log2f(const f32 x) { return ::log2f(x); }
 
 template <typename T>
 T Lerp(f32 t, T a, T b)

@@ -110,7 +110,7 @@ f32 Sphere::PdfValue(const Vec3f &origin, const Vec3f &direction) const
     HitRecord rec;
     if (!this->Hit(Ray(origin, direction), 0.001f, infinity, rec))
         return 0;
-    f32 cosThetaMax = Sqrt(1 - radius * radius / Distance(center, origin));
+    f32 cosThetaMax = Sqrt(1 - radius * radius / LengthSquared(center - origin));
     f32 solidAngle  = 2 * PI * (1 - cosThetaMax);
     return 1 / solidAngle;
 }

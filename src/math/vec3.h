@@ -12,10 +12,6 @@ struct Vec3
         };
         struct
         {
-            T r, g, b;
-        };
-        struct
-        {
             Vec2<T> xy;
             T z;
         };

@@ -533,7 +533,7 @@ struct RGBUnboundedSpectrum : SpectrumCRTP<RGBUnboundedSpectrum>
     }
     RGBUnboundedSpectrum(const RGBColorSpace &cs, Vec3f rgb)
     {
-        f32 m  = Max(rgb.r, Max(rgb.g, rgb.b));
+        f32 m  = Max(rgb.x, Max(rgb.y, rgb.z));
         scale  = 2 * m;
         coeffs = cs.ToRGBCoeffs(scale ? rgb / scale : Vec3f(0, 0, 0));
     }
@@ -571,7 +571,7 @@ struct RGBIlluminantSpectrum : SpectrumCRTP<RGBIlluminantSpectrum>
 
     RGBIlluminantSpectrum(const RGBColorSpace &cs, Vec3f rgb) : illuminant(&cs.illuminant)
     {
-        f32 m  = Max(rgb.r, Max(rgb.g, rgb.b));
+        f32 m  = Max(rgb.x, Max(rgb.y, rgb.z));
         scale  = 2 * m;
         coeffs = cs.ToRGBCoeffs(scale ? rgb / scale : Vec3f(0, 0, 0));
     }

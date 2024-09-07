@@ -168,10 +168,10 @@ __forceinline Lane4F32 &operator&=(Lane4F32 &a, const Lane4F32 &b)
 }
 __forceinline Lane4F32 operator|(const Lane4F32 &a, const Lane4F32 &b) { return _mm_or_ps(a, b); }
 
-__forceinline Lane4F32 Select(const Lane4F32 &a, const Lane4F32 &b, const Lane4F32 &mask)
+__forceinline Lane4F32 Select(const Lane4F32 &mask, const Lane4F32 &a, const Lane4F32 &b)
 {
 #ifdef __SSE4_1__
-    return _mm_blendv_ps(a, b, mask);
+    return _mm_blendv_ps(b, a, mask);
 #else
     return _mm_or_ps(_mm_andnot_ps(mask, b), _mm_and_ps(mask, a));
 #endif
@@ -233,11 +233,32 @@ __forceinline u32 TruncateToU8(const Lane4F32 &lane)
     u32 result = 0;
     for (i32 i = 0; i < 4; i++)
     {
-        result |= ((u8)lane[i] << (i * 8));
+        result |= (u32((u8)lane[i]) << (i * 8));
     }
     return result;
 #endif
 }
+
+#ifdef __SSE4_1__
+__forceinline Lane4F32 Floor(const Lane4F32 &lane)
+{
+    return _mm_round_ps(lane, _MM_FROUND_TO_NEG_INF);
+}
+__forceinline Lane4F32 Ceil(const Lane4F32 &lane)
+{
+    return _mm_round_ps(lane, _MM_FROUND_TO_POS_INF);
+}
+
+#else
+__forceinline Lane4F32 Floor(const Lane4F32 &lane)
+{
+    return Lane4F32(Floor(lane[0]), Floor(lane[1]), Floor(lane[2]), Floor(lane[3]));
+}
+__forceinline Lane4F32 Ceil(const Lane4F32 &lane)
+{
+    return Lane4F32(Ceil(lane[0]), Ceil(lane[1]), Ceil(lane[2]), Ceil(lane[3]));
+}
+#endif
 
 } // namespace rt
 

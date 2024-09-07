@@ -310,16 +310,19 @@ struct alignas(64) CompressedBVHNode
 
 void Compress(CompressedBVHNode *node, const AABB &child0, const AABB &child1, const AABB &child2, const AABB &child3)
 {
+    const f32 MIN_QUAN = 0.f;
+    const f32 MAX_QUAN = 255.f;
+
     node->minP = Min(Min(child0, child1), Min(child2, child3));
 
     Vec3f maxP = Max(Max(child0, child1), Max(child2, child3));
-    f32 expX   = std::ceil(log2f((maxP.x - node->minP.x) / 255.f));
-    f32 expY   = std::ceil(log2f((maxP.y - node->minP.y) / 255.f));
-    f32 expZ   = std::ceil(log2f((maxP.z - node->minP.z) / 255.f));
+    f32 expX   = Ceil(Log2f((maxP.x - node->minP.x) / 255.f));
+    f32 expY   = Ceil(Log2f((maxP.y - node->minP.y) / 255.f));
+    f32 expZ   = Ceil(Log2f((maxP.z - node->minP.z) / 255.f));
 
-    f32 powX = powf(2.f, expX);
-    f32 powY = powf(2.f, expY);
-    f32 powZ = powf(2.f, expZ);
+    f32 powX = Pow(2.f, expX);
+    f32 powY = Pow(2.f, expY);
+    f32 powZ = Pow(2.f, expZ);
 
     Lane4F32 powXLane(powX);
     Lane4F32 powYLane(powY);
@@ -337,13 +340,27 @@ void Compress(CompressedBVHNode *node, const AABB &child0, const AABB &child1, c
     Lane4F32 nodeMinY(node->minP.y);
     Lane4F32 nodeMinZ(node->minP.z);
 
-    node->minX = TruncateToU8((minX - nodeMinX) / powXLane);
-    node->minY = TruncateToU8((minY - nodeMinY) / powYLane);
-    node->minZ = TruncateToU8((minZ - nodeMinZ) / powZLane);
+    Lane4F32 qNodeMinX = Floor((minX - nodeMinX) / powXLane);
+    Lane4F32 qNodeMinY = Floor((minY - nodeMinY) / powYLane);
+    Lane4F32 qNodeMinZ = Floor((minZ - nodeMinZ) / powZLane);
 
-    node->maxX = TruncateToU8((maxX - nodeMinX) / powXLane);
-    node->maxY = TruncateToU8((maxY - nodeMinY) / powYLane);
-    node->maxZ = TruncateToU8((maxZ - nodeMinZ) / powZLane);
+    Lane4F32 qNodeMaxX = Ceil((maxX - nodeMinX) / powXLane);
+    Lane4F32 qNodeMaxY = Ceil((maxY - nodeMinY) / powYLane);
+    Lane4F32 qNodeMaxZ = Ceil((maxZ - nodeMinZ) / powZLane);
+
+    Lane4F32 maskMinX = FMA(powXLane, qNodeMinX, nodeMinX) > minX;
+    node->minX        = TruncateToU8(Max(Select(maskMinX, qNodeMinX - 1, qNodeMinX), MIN_QUAN));
+    Lane4F32 maskMinY = FMA(powYLane, qNodeMinY, nodeMinY) > minY;
+    node->minY        = TruncateToU8(Max(Select(maskMinY, qNodeMinY - 1, qNodeMinY), MIN_QUAN));
+    Lane4F32 maskMinZ = FMA(powZLane, qNodeMinZ, nodeMinZ) > minZ;
+    node->minZ        = TruncateToU8(Max(Select(maskMinZ, qNodeMinZ - 1, qNodeMinZ), MIN_QUAN));
+
+    Lane4F32 maskMaxX = FMA(powXLane, qNodeMaxX, nodeMinX) < maxX;
+    node->maxX        = TruncateToU8(Min(Select(maskMaxX, qNodeMaxX + 1, qNodeMaxX), MAX_QUAN));
+    Lane4F32 maskMaxY = FMA(powYLane, qNodeMaxY, nodeMinY) < maxY;
+    node->maxY        = TruncateToU8(Min(Select(maskMaxY, qNodeMaxY + 1, qNodeMaxY), MAX_QUAN));
+    Lane4F32 maskMaxZ = FMA(powZLane, qNodeMaxZ, nodeMinZ) < maxZ;
+    node->maxZ        = TruncateToU8(Min(Select(maskMaxZ, qNodeMaxZ + 1, qNodeMaxZ), MAX_QUAN));
 
     node->scaleX = u8(FloatToBits(powX) >> 23);
     node->scaleY = u8(FloatToBits(powY) >> 23);

@@ -835,13 +835,13 @@ bool RenderTile(WorkQueue *queue)
             pixelColor /= (f32)samplesPerPixel;
 
             // NOTE: lazy NAN check
-            if (pixelColor.r != pixelColor.r) pixelColor.r = 0.f;
-            if (pixelColor.g != pixelColor.g) pixelColor.g = 0.f;
-            if (pixelColor.b != pixelColor.b) pixelColor.b = 0.f;
+            if (pixelColor.x != pixelColor.x) pixelColor.x = 0.f;
+            if (pixelColor.y != pixelColor.y) pixelColor.y = 0.f;
+            if (pixelColor.z != pixelColor.z) pixelColor.z = 0.f;
 
-            f32 r = 255.f * ExactLinearToSRGB(pixelColor.r);
-            f32 g = 255.f * ExactLinearToSRGB(pixelColor.g);
-            f32 b = 255.f * ExactLinearToSRGB(pixelColor.b);
+            f32 r = 255.f * ExactLinearToSRGB(pixelColor.x);
+            f32 g = 255.f * ExactLinearToSRGB(pixelColor.y);
+            f32 b = 255.f * ExactLinearToSRGB(pixelColor.z);
             f32 a = 255.f;
 
             u32 color = (RoundFloatToU32(a) << 24) |
@@ -987,13 +987,13 @@ bool RenderTileTest(WorkQueue *queue)
             pixelColor /= (f32)samplesPerPixel;
 
             // NOTE: lazy NAN check
-            if (pixelColor.r != pixelColor.r) pixelColor.r = 0.f;
-            if (pixelColor.g != pixelColor.g) pixelColor.g = 0.f;
-            if (pixelColor.b != pixelColor.b) pixelColor.b = 0.f;
+            if (pixelColor.x != pixelColor.x) pixelColor.x = 0.f;
+            if (pixelColor.y != pixelColor.y) pixelColor.y = 0.f;
+            if (pixelColor.z != pixelColor.z) pixelColor.z = 0.f;
 
-            f32 r = 255.f * ExactLinearToSRGB(pixelColor.r);
-            f32 g = 255.f * ExactLinearToSRGB(pixelColor.g);
-            f32 b = 255.f * ExactLinearToSRGB(pixelColor.b);
+            f32 r = 255.f * ExactLinearToSRGB(pixelColor.x);
+            f32 g = 255.f * ExactLinearToSRGB(pixelColor.y);
+            f32 b = 255.f * ExactLinearToSRGB(pixelColor.z);
             f32 a = 255.f;
 
             u32 color = (RoundFloatToU32(a) << 24) |
@@ -1612,11 +1612,6 @@ int main(int argc, char *argv[])
     CompressedBVH4 compressedBVH = CreateCompressedBVH4(arena, &bvh);
     BVH4 bvh4                    = CreateBVH4(arena, &bvh);
 
-    // UncompressedBVHNode *test = PushArray(arena, UncompressedBVHNode, 2);
-    // test[0] = compressedBVH.nodes[0].Decompress();
-    // test[1] = compressedBVH.nodes[1].Decompress();
-    // int stop = 5;
-
     RenderParams params;
     params.pixel00                   = pixel00;
     params.pixelDeltaU               = pixelDeltaU;
@@ -1625,7 +1620,7 @@ int main(int argc, char *argv[])
     params.defocusDiskU              = defocusDiskU;
     params.defocusDiskV              = defocusDiskV;
     params.defocusAngle              = defocusAngle;
-    params.bvh                       = &bvh4; //&compressedBVH;
+    params.bvh                       = &compressedBVH;
     params.maxDepth                  = maxDepth;
     params.samplesPerPixel           = samplesPerPixel;
     params.squareRootSamplesPerPixel = squareRootSamplesPerPixel;
