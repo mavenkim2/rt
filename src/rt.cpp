@@ -1029,7 +1029,6 @@ using namespace rt;
 
 int main(int argc, char *argv[])
 {
-    InitTables();
     Arena *arena = ArenaAlloc();
     InitThreadContext(arena, "[Main Thread]", 1);
     OS_Init();
@@ -1039,7 +1038,85 @@ int main(int argc, char *argv[])
     threadLocalStatistics  = PushArray(arena, ThreadStatistics, OS_NumProcessors());
     threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, OS_NumProcessors());
 
-    HeuristicSAHBinned<32> heuristic;
+    PrimData data;
+    const u32 count = 100000000;
+    data.minP       = PushArray(arena, Lane4F32, count);
+    data.maxP       = PushArray(arena, Lane4F32, count);
+
+    data.total = count;
+
+    for (u32 i = 0; i < count; i++)
+    {
+        Vec3f min       = RandomVec3(-100.f, 100.f);
+        Vec3f max       = RandomVec3(100.f, 300.f);
+        data.minP[i][0] = min.x;
+        data.minP[i][1] = min.y;
+        data.minP[i][2] = min.z;
+
+        data.maxP[i][0] = max.x;
+        data.maxP[i][1] = max.y;
+        data.maxP[i][2] = max.z;
+    }
+
+    AABB centroidBounds;
+    for (u32 i = 0; i < count; i++)
+    {
+        Lane4F32 centroid = (data.minP[i] + data.maxP[i]) * 0.5f;
+        centroidBounds    = Union(centroidBounds, Vec3f(centroid[0], centroid[1], centroid[2]));
+    }
+
+    HeuristicSAHBinned<32> heuristic(centroidBounds);
+
+    clock_t start = clock();
+    // heuristic.Bin(&data);
+    // Split split = heuristic.Best(0);
+    Split split = BinParallel(centroidBounds, &data);
+    clock_t end = clock();
+
+    printf("Binning time: %dms\n", end - start);
+
+    start = clock();
+    // u32 mid = PartitionSerial(split, &data);
+    // u32 mid = PartitionSerialCrazy(split, &data);
+    u32 mid = PartitionParallel(split, data);
+    end     = clock();
+
+    u32 errors = 0;
+    for (u32 i = 0; i < data.total; i++)
+    {
+        f32 minP     = data.minP[i][split.bestDim];
+        f32 maxP     = data.maxP[i][split.bestDim];
+        f32 centroid = (maxP + minP) * 0.5f;
+        if (i < mid)
+        {
+            Assert(Floor((centroid - heuristic.minP[split.bestDim]) * heuristic.scale[split.bestDim]) <= split.bestPos);
+            // if (Floor((centroid - heuristic.minP[split.bestDim]) * heuristic.scale[split.bestDim]) > split.bestPos)
+            // {
+            //     errors += 1;
+            // }
+        }
+        else
+        {
+            Assert(Floor((centroid - heuristic.minP[split.bestDim]) * heuristic.scale[split.bestDim]) > split.bestPos);
+            // if (Floor((centroid - heuristic.minP[split.bestDim]) * heuristic.scale[split.bestDim]) <= split.bestPos)
+            // {
+            //     errors += 1;
+            // }
+        }
+    }
+
+    printf("Num errors: %u\n", errors);
+    printf("Partition Time: %dms\n", end - start);
+    printf("Split: %u\n", mid);
+
+    u64 rngTime = 0;
+    for (u32 i = 0; i < OS_NumProcessors(); i++)
+    {
+        rngTime += threadLocalStatistics[i].dumb;
+    }
+    // printf("RNG time: %lldms\n", rngTime);
+
+    int stop = 5;
 
     // TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
 

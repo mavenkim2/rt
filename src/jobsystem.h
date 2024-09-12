@@ -65,9 +65,12 @@ void InitializeJobsystem();
 void KickJob(Counter *counter, const JobFunction &func, Priority priority = Priority::Low);
 void KickJobs(Counter *counter, u32 numJobs, u32 groupSize, const JobFunction &func, Priority priority = Priority::Low);
 void WaitJobs(Counter *counter);
+template <typename T, typename Func, typename Reduce, typename... Args>
+T ParallelReduce(u32 count, u32 blockSize, Func func, Reduce reduce, Args... inArgs);
 b32 Pop(JobQueue &queue, u64 threadIndex);
 THREAD_ENTRY_POINT(JobThreadEntryPoint);
 void EndJobsystem();
 
 } // namespace jobsystem
+
 } // namespace rt

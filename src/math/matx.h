@@ -55,6 +55,14 @@ union Mat3
     Mat3(f32 a1, f32 a2, f32 a3, f32 b1, f32 b2, f32 b3, f32 c1, f32 c2, f32 c3)
         : Mat3(Vec3f(a1, a2, a3), Vec3f(b1, b2, b3), Vec3f(c1, c2, c3)) {}
 
+    __forceinline Mat3 &operator=(const Mat3 &other)
+    {
+        columns[0] = other.columns[0];
+        columns[1] = other.columns[1];
+        columns[2] = other.columns[2];
+        return *this;
+    }
+
     Mat3 Inverse()
     {
         // a1, b1, c1,

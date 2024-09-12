@@ -84,6 +84,13 @@ union AABB
         maxZ = box1.maxZ >= box2.maxZ ? box1.maxZ : box2.maxZ;
         PadToMinimums();
     }
+
+    __forceinline AABB &operator=(const AABB &other)
+    {
+        minP = other.minP;
+        maxP = other.maxP;
+        return *this;
+    }
     bool Hit(const Ray &r, f32 tMin, f32 tMax)
     {
         for (int axis = 0; axis < 3; axis++)

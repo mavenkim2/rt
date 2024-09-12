@@ -245,6 +245,11 @@ b32 OS_SignalWait(OS_Handle input)
     return (result == WAIT_OBJECT_0);
 }
 
+void OS_Yield()
+{
+    SwitchToThread();
+}
+
 void OS_Init()
 {
     win32Arena = ArenaAlloc();

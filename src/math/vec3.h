@@ -33,6 +33,13 @@ struct Vec3
     template <typename T1>
     __forceinline Vec3(const Vec3<T1> &other) : x(T(other.x)), y(T(other.y)), z(T(other.z)) {}
 
+    __forceinline Vec3 &operator=(const Vec3<T> &other)
+    {
+        x = other.x;
+        y = other.y;
+        z = other.z;
+        return *this;
+    }
     template <typename T1>
     __forceinline Vec3 &operator=(const Vec3<T1> &other)
     {
@@ -50,6 +57,10 @@ struct Vec3
     {
         Assert(i < 3);
         return e[i];
+    }
+    __forceinline operator Lane4F32() const
+    {
+        return Lane4F32(x, y, z, 0.f);
     }
 };
 
@@ -220,18 +231,21 @@ inline Vec3<T> ClampZero(const Vec3<T> &v)
 }
 
 typedef Vec3<f32> Vec3f;
+typedef Vec3<u32> Vec3u;
 
 template <i32 K>
-using LaneVec3f = Vec3<LaneF32<K>>;
-typedef LaneVec3f<4> Lane4Vec3f;
+using Vec3lf = Vec3<LaneF32<K>>;
+typedef Vec3lf<4> Vec3lf4;
 
-// template <>
-// __forceinline Vec3<Lane4F32>::Vec3(const Vec3f &a)
-// {
-//     x = a.x;
-//     y = a.y;
-//     z = a.z;
-// }
+template <i32 K>
+using Vec3lu = Vec3<LaneU32<K>>;
+typedef Vec3lu<4> Vec3lu4;
+
+template <i32 K>
+__forceinline Vec3lu<K> Flooru(const Vec3lf<K> &v)
+{
+    return Vec3lu<K>(Flooru(v.x), Flooru(v.y), Flooru(v.z));
+}
 
 inline Vec3f Reflect(const Vec3f &v, const Vec3f &norm)
 {

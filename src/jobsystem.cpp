@@ -1,15 +1,30 @@
 #include <thread>
+#include <utility>
 namespace rt
 {
 namespace jobsystem
 {
 static JobSystem jobSystem;
 
+static const u32 TASK_STACK_SIZE = 1024;
+
+struct ThreadQueue
+{
+    Job taskStack[TASK_STACK_SIZE];
+    u32 stackPtr;
+};
+
+ThreadQueue *threadQueues;
+thread_local ThreadQueue *threadLocalQueue;
+static u32 numProcessors;
+
 void InitializeJobsystem()
 {
-    u32 numProcessors       = OS_NumProcessors();
+    numProcessors           = OS_NumProcessors();
     jobSystem.threadCount   = Min<u32>(ArrayLength(jobSystem.threads), numProcessors);
     jobSystem.readSemaphore = OS_CreateSemaphore(jobSystem.threadCount);
+
+    threadQueues = (ThreadQueue *)malloc(numProcessors * sizeof(ThreadQueue));
 
     for (size_t i = 0; i < numProcessors; i++)
     {
@@ -49,46 +64,98 @@ void KickJob(Counter *counter, const JobFunction &func, Priority priority)
                 }
 
                 queue->writePos.store(writePos + 1);
-                OS_ReleaseSemaphore(jobSystem.readSemaphore);
+                // OS_ReleaseSemaphore(jobSystem.readSemaphore);
                 break;
             }
         }
     }
 }
 
-// void KickJobs(Counter *counter, u32 numJobs, u32 groupSize, const JobFunction &func, Priority priority)
+void KickJobs(Counter *counter, u32 numJobs, u32 numGroups, const JobFunction &func, Priority priority)
+{
+    JobQueue *queue = 0;
+    switch (priority)
+    {
+        case Priority::Low: queue = &jobSystem.lowPriorityQueue; break;
+        case Priority::High: queue = &jobSystem.highPriorityQueue; break;
+    }
+
+    u32 groupSize = (numJobs + numGroups - 1) / numGroups;
+
+    for (;;)
+    {
+        u64 writePos = queue->writePos.load();
+        u64 readPos  = queue->readPos.load();
+
+        u64 availableSpots = JOB_QUEUE_LENGTH - (writePos - readPos);
+        if (availableSpots >= numGroups)
+        {
+            if (queue->commitWritePos.compare_exchange_weak(writePos, writePos + numGroups))
+            {
+                for (u32 i = 0; i < numGroups; i++)
+                {
+                    Job *job           = &queue->jobs[(writePos + i) & (JOB_QUEUE_LENGTH - 1)];
+                    job->func          = func;
+                    job->counter       = counter;
+                    job->groupId       = i;
+                    job->groupJobStart = i * groupSize;
+                    job->groupJobSize  = Min(groupSize, numJobs - job->groupJobStart);
+                }
+                counter->count.fetch_add(numGroups);
+                queue->writePos.store(writePos + numGroups);
+                // OS_ReleaseSemaphores(jobSystem.readSemaphore, Min(numGroups, numProcessors));
+                break;
+            }
+        }
+    }
+}
+
+// template <typename Closure>
+// void ParallelFor(Counter *counter, u32 size, u32 blockSize, const Closure &func)
 // {
-//     JobQueue *queue = 0;
-//     switch (priority)
+//     u32 taskSize = (size + blockSize - 1) / blockSize;
+//     for (u32 i = 0; i < taskSize; i++)
 //     {
-//         case Priority::Low: queue = &jobSystem.lowPriorityQueue; break;
-//         case Priority::High: queue = &jobSystem.highPriorityQueue; break;
+//         threadLocalQueue[threadLocalQueue->stackPtr++] =
 //     }
-//
-//     u32 numGroups = ((numJobs + groupSize - 1) / groupSize);
-//
-//     u64 writePos = queue->writePos.fetch_add(numGroups);
-//     for (;;)
-//     {
-//         u64 readPos        = queue->readPos.load();
-//         u64 availableSpots = JOB_QUEUE_LENGTH - (writePos - readPos);
-//         if (availableSpots >= numGroups)
-//         {
-//             for (u32 i = 0; i < numGroups; i++)
-//             {
-//                 Job *job           = &queue->jobs[(writePos + i) & (JOB_QUEUE_LENGTH - 1)];
-//                 job->func          = func;
-//                 job->counter       = counter;
-//                 job->groupId       = i;
-//                 job->groupJobStart = i * groupSize;
-//                 job->groupJobSize  = Min(groupSize, numJobs - job->groupJobStart);
-//             }
-//             counter->count.fetch_add(numGroups);
-//             OS_ReleaseSemaphores(jobSystem.readSemaphore, numGroups);
-//             break;
-//         }
-//     }
+//     threadLocalQueue[]
 // }
+
+template <typename T, typename Func, typename Reduce, typename... Args>
+T ParallelReduce(u32 count, u32 blockSize, Func func, Reduce reduce, Args... inArgs)
+{
+    TempArena temp             = ScratchStart(0, 0);
+    jobsystem::Counter counter = {};
+
+    // TODO: this is kind of redundant. maybe just want to pass in the number of groups directly
+    u32 taskCount = (count + blockSize - 1) / blockSize;
+    taskCount     = Min(taskCount, numProcessors);
+    u32 groupSize = (count + taskCount - 1) / taskCount;
+
+    T *objs = (T *)PushArray(temp.arena, u8, sizeof(T) * taskCount);
+    for (u32 i = 0; i < taskCount; i++)
+    {
+        new (&objs[i]) T(std::forward<Args>(inArgs)...);
+    }
+    // TODO: maybe going to need task stealing, and have the thread work on something while it waits
+    jobsystem::KickJobs(&counter, taskCount, taskCount, [&](jobsystem::JobArgs args) {
+        T &obj    = objs[args.jobId];
+        u32 start = groupSize * args.jobId;
+        func(obj, start, Min(groupSize, count - start));
+    });
+
+    jobsystem::WaitJobs(&counter);
+
+    T result = T(std::forward<Args>(inArgs)...);
+
+    for (u32 i = 0; i < taskCount; i++)
+    {
+        reduce(result, objs[i]);
+    }
+
+    ScratchEnd(temp);
+    return result;
+}
 
 void WaitJobs(Counter *counter)
 {
@@ -150,11 +217,15 @@ THREAD_ENTRY_POINT(JobThreadEntryPoint)
     TempArena temp = ScratchStart(0, 0);
     SetThreadName(PushStr8F(temp.arena, "[Jobsystem] Worker %u", threadIndex));
     ScratchEnd(temp);
+
+    threadLocalQueue           = &threadQueues[threadIndex];
+    threadLocalQueue->stackPtr = 0;
+
     for (; !gTerminateJobs;)
     {
         if (Pop(jobSystem.highPriorityQueue, threadIndex) && Pop(jobSystem.lowPriorityQueue, threadIndex))
         {
-            OS_SignalWait(jobSystem.readSemaphore);
+            OS_Yield();
         }
     }
 }

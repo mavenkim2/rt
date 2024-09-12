@@ -35,8 +35,8 @@ struct BVH
 
 struct alignas(64) UncompressedBVHNode
 {
-    Lane4Vec3f minP;
-    Lane4Vec3f maxP;
+    Vec3lf4 minP;
+    Vec3lf4 maxP;
 
     union
     {
@@ -51,7 +51,7 @@ struct alignas(64) UncompressedBVHNode
     u32 leafMask : 8;
 
     // https://www.youtube.com/watch?v=6BIfqfC1i7U
-    i32 IntersectP(const Lane4Vec3f rayOrigin, const Lane4Vec3f rcpDir, const f32 tMinHit, const f32 tMaxHit) const
+    i32 IntersectP(const Vec3lf4 rayOrigin, const Vec3lf4 rcpDir, const f32 tMinHit, const f32 tMaxHit) const
     {
         const Lane4F32 termMinX = (minP.x - rayOrigin.x) * rcpDir.x;
         const Lane4F32 termMaxX = (maxP.x - rayOrigin.x) * rcpDir.x;
@@ -84,12 +84,12 @@ struct alignas(64) UncompressedBVHNode
 
     i32 IntersectP(const Ray &r, const f32 tMinHit, const f32 tMaxHit) const
     {
-        Lane4Vec3f rayOrigin = r.o;
+        Vec3lf4 rayOrigin = r.o;
 
         Lane4F32 result = Lane4F32::Mask(true);
 
         Vec3f oneOverDir               = Vec3f(1.f / r.d.x, 1.f / r.d.y, 1.f / r.d.z);
-        Lane4Vec3f oneOverRayDirection = oneOverDir;
+        Vec3lf4 oneOverRayDirection = oneOverDir;
 
         // Slab test
         // p = o + d * t
@@ -136,12 +136,12 @@ struct alignas(64) UncompressedBVHNode
 
     i32 IntersectP(const Ray &r, const f32 tMinHit, const f32 tMaxHit, const int dirIsNeg[3]) const
     {
-        Lane4Vec3f rayOrigin = r.o;
+        Vec3lf4 rayOrigin = r.o;
 
         Lane4F32 result = Lane4F32::Mask(true);
 
         Vec3f oneOverDir               = Vec3f(1.f / r.d.x, 1.f / r.d.y, 1.f / r.d.z);
-        Lane4Vec3f oneOverRayDirection = oneOverDir;
+        Vec3lf4 oneOverRayDirection = oneOverDir;
 
         Lane4F32 xMask = Lane4F32::Mask(dirIsNeg[0] ? false : true);
         Lane4F32 yMask = Lane4F32::Mask(dirIsNeg[1] ? false : true);
@@ -151,8 +151,8 @@ struct alignas(64) UncompressedBVHNode
         // p = o + d * t
         // t = (p - o) p -
 
-        Lane4Vec3f min;
-        Lane4Vec3f max;
+        Vec3lf4 min;
+        Vec3lf4 max;
         min.x = Select(xMask, minP.x, maxP.x);
         min.y = Select(yMask, minP.y, maxP.y);
         min.z = Select(zMask, minP.z, maxP.z);

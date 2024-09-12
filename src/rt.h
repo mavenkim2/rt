@@ -12,10 +12,8 @@
 
 #include "base.h"
 #include "template.h"
-#include "math/simd_base.h"
-#include "math/lane4u32.h"
-#include "math/lane4f32.h"
 #include "math/basemath.h"
+#include "math/simd_include.h"
 #include "math/vec2.h"
 #include "math/vec3.h"
 #include "math/vec4.h"

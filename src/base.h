@@ -128,7 +128,7 @@ void EnumRemoveFlags(Enum &Flags, Enum FlagsToRemove)
 }
 
 template <typename T>
-void Swap(T a, T b)
+void Swap(T &a, T &b)
 {
     T temp = std::move(a);
     a      = std::move(b);

@@ -62,19 +62,19 @@ T Lerp(f32 t, T a, T b)
 }
 
 template <typename T>
-T Clamp(T min, T max, T x)
+T Clamp(const T &min, const T &max, const T &x)
 {
-    return x < min ? min : (x > max ? max : x);
+    return Max(Min(max, x), min);
 }
 
 template <typename T>
-T Min(T a, T b)
+T Min(const T &a, const T &b)
 {
     return a < b ? a : b;
 }
 
 template <typename T>
-T Max(T a, T b)
+T Max(const T &a, const T &b)
 {
     return a > b ? a : b;
 }

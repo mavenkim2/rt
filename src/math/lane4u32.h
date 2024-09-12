@@ -62,6 +62,11 @@ u32 Extract(const Lane4U32 &l)
 __forceinline Lane4U32 operator+(const Lane4U32 &a, const Lane4U32 &b) { return _mm_add_epi32(a, b); }
 __forceinline Lane4U32 operator+(const Lane4U32 &a, const u32 b) { return a + Lane4U32(b); }
 __forceinline Lane4U32 operator+(const u32 a, const Lane4U32 &b) { return Lane4U32(a) + b; }
+__forceinline Lane4U32 &operator+=(Lane4U32 &a, const Lane4U32 &b)
+{
+    a = a + b;
+    return a;
+}
 
 __forceinline Lane4U32 operator-(const Lane4U32 &a, const Lane4U32 &b) { return _mm_sub_epi32(a, b); }
 __forceinline Lane4U32 operator-(const Lane4U32 &a, const u32 b) { return a - Lane4U32(b); }
@@ -105,6 +110,24 @@ __forceinline Lane4U32 &operator&=(Lane4U32 &lane, const u32 val)
 __forceinline Lane4U32 operator|(const Lane4U32 &a, const Lane4U32 &b) { return _mm_or_si128(a, b); }
 __forceinline Lane4U32 operator<<(const Lane4U32 &a, const u32 inShift) { return _mm_slli_epi32(a, inShift); }
 __forceinline Lane4U32 operator>>(const Lane4U32 &a, const u32 inShift) { return _mm_srli_epi32(a, inShift); }
+
+__forceinline Lane4U32 Min(const Lane4U32 &a, const Lane4U32 &b)
+{
+#if defined(__SSE4_1__)
+    return _mm_min_epu32(a, b);
+#else
+#error TODO
+#endif
+}
+__forceinline Lane4U32 Max(const Lane4U32 &a, const Lane4U32 &b)
+{
+#if defined(__SSE4_1__)
+    return _mm_max_epu32(a, b);
+#else
+#error TODO
+#endif
+}
+
 __forceinline Lane4U32 SignExtendU8ToU32(const Lane4U32 &l)
 {
 #ifdef __SSE4_1__
@@ -119,6 +142,76 @@ __forceinline Lane4U32 SignExtendU8ToU32(const Lane4U32 &l)
     return _mm_setr_epi32(l[0] & 0xf, (l[0] >> 8) & 0xf, (l[0] >> 16) & 0xf, (l[0] >> 24) & 0xf);
 #endif
 }
+
+template <i32 a, i32 b, i32 c, i32 d>
+__forceinline Lane4U32 Shuffle(const Lane4U32 &l)
+{
+    return _mm_shuffle_epi32(l, _MM_SHUFFLE(d, c, b, a));
+}
+
+template <i32 a, i32 b, i32 c, i32 d>
+__forceinline Lane4U32 ShuffleReverse(const Lane4U32 &l)
+{
+    return Shuffle<d, c, b, a>(l);
+}
+
+template <i32 i>
+__forceinline Lane4U32 Shuffle(const Lane4U32 &a)
+{
+    return Shuffle<i, i, i, i>(a);
+}
+
+template <i32 R>
+__forceinline Lane4U32 Rotate(const Lane4U32 &a)
+{
+    if constexpr (R == 4)
+    {
+        return a;
+    }
+    else
+    {
+        constexpr i32 S = (R > 0) ? (4 - (R % 4)) : -R;
+        constexpr i32 A = (S + 0) % 4;
+        constexpr i32 B = (S + 1) % 4;
+        constexpr i32 C = (S + 2) % 4;
+        constexpr i32 D = (S + 3) % 4;
+
+        return Shuffle<A, B, C, D>(a);
+    }
+}
+
+template <i32 S, typename T>
+__forceinline Lane4U32 ShiftUp(const Lane4U32 &a)
+{
+    StaticAssert(S >= 0 && S <= 4, ShiftMustBeBetween0And4);
+    constexpr u32 A        = S > 0 ? 0 : 0xffffffff;
+    constexpr u32 B        = S > 1 ? 0 : 0xffffffff;
+    constexpr u32 C        = S > 2 ? 0 : 0xffffffff;
+    constexpr u32 D        = S > 3 ? 0 : 0xffffffff;
+    const __m128 shiftMask = _mm_castsi128_ps(Lane4U32(A, B, C, D));
+
+    return Select(shiftMask, Rotate<S>(a), Lane4U32(T()));
+}
+
+template <i32 S>
+__forceinline Lane4U32 ShiftUp(const Lane4U32 &a) { return ShiftUp<S, ZeroTy>(a); }
+
+template <i32 S, typename T>
+__forceinline Lane4U32 ShiftDown(const Lane4U32 &a)
+{
+    StaticAssert(S >= 0 && S <= 4, ShiftMustBeBetween0And4);
+
+    constexpr u32 A = S > 3 ? 0 : 0xffffffff;
+    constexpr u32 B = S > 2 ? 0 : 0xffffffff;
+    constexpr u32 C = S > 1 ? 0 : 0xffffffff;
+    constexpr u32 D = S > 0 ? 0 : 0xffffffff;
+
+    const __m128 shiftMask = _mm_castsi128_ps(Lane4U32(A, B, C, D));
+    return Select(shiftMask, Rotate<-S>(a), Lane4U32(T()));
+}
+
+template <i32 S>
+__forceinline Lane4U32 ShiftDown(const Lane4U32 &a) { return ShiftDown<S, ZeroTy>(a); }
 
 } // namespace rt
 #endif

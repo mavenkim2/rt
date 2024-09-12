@@ -65,7 +65,7 @@ void BVH::Subdivide(u32 nodeIndex, AABB *aabbs)
         if (b == numBuckets) b--;
         assert(b >= 0 && b < numBuckets);
         bucket[b].count++;
-        bucket[b].bounds = Union(bucket[b].bounds, aabbs[i]);
+        bucket[b].bounds = Union(bucket[b].bounds, aabbs[leafIndices[i]]);
     }
 
     const i32 numSplits = numBuckets - 1;
@@ -534,9 +534,9 @@ bool BVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) 
     f32 rdy = (r.d.y == -0.f) ? 0.f : r.d.y;
     f32 rdz = (r.d.z == -0.f) ? 0.f : r.d.z;
 
-    Vec3f oneOverDir     = Vec3f(1.f / rdx, 1.f / rdy, 1.f / rdz); // r.d.x, 1.f / r.d.y, 1.f / r.d.z);
-    Lane4Vec3f rcpDir    = oneOverDir;
-    Lane4Vec3f rayOrigin = r.o;
+    Vec3f oneOverDir  = Vec3f(1.f / rdx, 1.f / rdy, 1.f / rdz); // r.d.x, 1.f / r.d.y, 1.f / r.d.z);
+    Vec3lf4 rcpDir    = oneOverDir;
+    Vec3lf4 rayOrigin = r.o;
 
     u32 stack[64];
     u32 stackPtr      = 0;
@@ -622,9 +622,9 @@ bool CompressedBVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord
     f32 rdy = (r.d.y == -0.f) ? 0.f : r.d.y;
     f32 rdz = (r.d.z == -0.f) ? 0.f : r.d.z;
 
-    Vec3f oneOverDir     = Vec3f(1.f / rdx, 1.f / rdy, 1.f / rdz);
-    Lane4Vec3f rcpDir    = oneOverDir;
-    Lane4Vec3f rayOrigin = r.o;
+    Vec3f oneOverDir  = Vec3f(1.f / rdx, 1.f / rdy, 1.f / rdz);
+    Vec3lf4 rcpDir    = oneOverDir;
+    Vec3lf4 rayOrigin = r.o;
 
     Lane4F32 tLaneClosest(tClosest);
 
@@ -638,8 +638,8 @@ bool CompressedBVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord
         const f32 expY = BitsToFloat(node.scaleY << 23);
         const f32 expZ = BitsToFloat(node.scaleZ << 23);
 
-        const Lane4Vec3f minP = node.minP;
-        const Lane4Vec3f exp  = Vec3f(expX, expY, expZ);
+        const Vec3lf4 minP = node.minP;
+        const Vec3lf4 exp  = Vec3f(expX, expY, expZ);
 
         // TODO: low efficiency?
         const Lane4U32 minXminYminZmaxX(node.minX, node.minY, node.minZ, node.maxX);
@@ -663,23 +663,23 @@ bool CompressedBVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord
         const Lane4U32 maxZCompressed_i = UnpackHi(maxYmaxZ, zero);
         const Lane4F32 maxZCompressed(SignExtendU8ToU32(maxZCompressed_i));
 
-        Lane4Vec3f minCompressed;
+        Vec3lf4 minCompressed;
         minCompressed.x = minXCompressed;
         minCompressed.y = minYCompressed;
         minCompressed.z = minZCompressed;
 
-        Lane4Vec3f maxCompressed;
+        Vec3lf4 maxCompressed;
         maxCompressed.x = maxXCompressed;
         maxCompressed.y = maxYCompressed;
         maxCompressed.z = maxZCompressed;
 
-        const Lane4Vec3f rayDPrime = exp * rcpDir;
+        const Vec3lf4 rayDPrime = exp * rcpDir;
 
         // TODO: see whether operator overloading abstraction has a cost
-        const Lane4Vec3f rayOPrime = (minP - rayOrigin) * rcpDir;
+        const Vec3lf4 rayOPrime = (minP - rayOrigin) * rcpDir;
 
-        const Lane4Vec3f termMin = FMA(minCompressed, rayDPrime, rayOPrime);
-        const Lane4Vec3f termMax = FMA(maxCompressed, rayDPrime, rayOPrime);
+        const Vec3lf4 termMin = FMA(minCompressed, rayDPrime, rayOPrime);
+        const Vec3lf4 termMax = FMA(maxCompressed, rayDPrime, rayOPrime);
 
         const Lane4F32 tEntryX = Min(termMax.x, termMin.x);
         const Lane4F32 tLeaveX = Max(termMin.x, termMax.x);
