@@ -435,12 +435,12 @@ u32 PartitionParallel(Split split, PrimData prim)
     u32 *mid  = PushArray(temp.arena, u32, numJobs);
     u32 *ends = PushArray(temp.arena, u32, numJobs);
 
-    u32 *elementsInGroup0 = PushArray(temp.arena, u32, numChunks);
+    // u32 *elementsInGroup0 = PushArray(temp.arena, u32, numChunks);
 
-    for (u32 i = 0; i < numChunks; i++)
-    {
-        elementsInGroup0[i] = RandomInt(0, numBlocksPerChunk);
-    }
+    // for (u32 i = 0; i < numChunks; i++)
+    // {
+    //     elementsInGroup0[i] = RandomInt(0, numBlocksPerChunk);
+    // }
 
     Bounds *lBounds = PushArray(temp.arena, Bounds, numJobs);
     Bounds *rBounds = PushArray(temp.arena, Bounds, numJobs);
@@ -454,7 +454,7 @@ u32 PartitionParallel(Split split, PrimData prim)
         const u32 group = args.jobId;
         auto GetIndex   = [&](u32 index) {
             const u32 chunkIndex   = index >> blockShift;
-            const u32 blockIndex   = ((elementsInGroup0[chunkIndex] + group) % numBlocksPerChunk);
+            const u32 blockIndex   = group; //((elementsInGroup0[chunkIndex] + group) % numBlocksPerChunk);
             const u32 indexInBlock = index & (blockSize - 1);
             return chunkIndex * chunkSize + blockSize * blockIndex + indexInBlock;
         };
@@ -517,7 +517,7 @@ u32 PartitionParallel(Split split, PrimData prim)
 
     auto GetIndex = [&](u32 index, u32 group) {
         const u32 chunkIndex   = index >> blockShift;
-        const u32 blockIndex   = ((elementsInGroup0[chunkIndex] + group) % numBlocksPerChunk);
+        const u32 blockIndex   = group; //((elementsInGroup0[chunkIndex] + group) % numBlocksPerChunk);
         const u32 indexInBlock = index & (blockSize - 1);
         return chunkIndex * chunkSize + blockSize * blockIndex + indexInBlock;
     };
@@ -538,17 +538,25 @@ u32 PartitionParallel(Split split, PrimData prim)
             u32 diff = (((globalMid - globalIndex) / chunkSize) << blockShift) + ((globalMid - globalIndex) & (blockSize - 1));
 
             u32 check = GetIndex(mid[i] + diff - 1, i);
-            if (check > globalMid)
-            {
-                diff -= blockSize;
-            }
-            check = GetIndex(mid[i] + diff + 1, i);
-            if (check < globalMid)
-            {
-                diff += blockSize;
-            }
-            rightMisplacedRanges[rCount] = {mid[i], mid[i] + diff, i};
 
+            int steps0 = 0;
+            while (check > globalMid && !isLeft(check))
+            {
+                diff -= 1;
+                steps0++;
+                check = GetIndex(mid[i] + diff - 1, i);
+            }
+            int steps1 = 0;
+            check      = GetIndex(mid[i] + diff + 1, i);
+            while (check < globalMid && !isLeft(check))
+            {
+                steps1++;
+                diff += 1;
+                check = GetIndex(mid[i] + diff + 1, i);
+            }
+            if (steps1) diff++;
+
+            rightMisplacedRanges[rCount] = {mid[i], mid[i] + diff, i};
             numMisplacedRight += rightMisplacedRanges[rCount].Size();
             rCount++;
         }
@@ -556,26 +564,37 @@ u32 PartitionParallel(Split split, PrimData prim)
         {
             u32 diff = (((globalIndex - globalMid) / chunkSize) << blockShift) + ((globalIndex - globalMid) & (blockSize - 1));
             Assert(diff <= mid[i]);
-
-            u32 check = GetIndex(mid[i] - diff + 1, i);
-            if (check < globalMid)
+            u32 check  = GetIndex(mid[i] - diff + 1, i);
+            int steps0 = 0;
+            while (check < globalMid && isLeft(check))
             {
-                diff -= blockSize;
+                diff -= 1;
+                steps0++;
+                check = GetIndex(mid[i] - diff + 1, i);
+                // u32 check2 = GetIndex(mid[i] - diff, i);
+                // check      = GetIndex(mid[i] - diff - 1, i);
+                // Assert(check2 >= globalMid);
+                // Assert(check < globalMid);
+                // int stop = 5;
             }
-            check = GetIndex(mid[i] - diff - 1, i);
-            if (check >= globalMid)
-            {
-                diff += blockSize;
-            }
+            if (steps0) diff--;
 
+            check      = GetIndex(mid[i] - diff - 1, i);
+            int steps1 = 0;
+            while (check >= globalMid && isLeft(check))
+            {
+                steps1++;
+                diff += 1;
+                check = GetIndex(mid[i] - diff - 1, i);
+            }
             leftMisplacedRanges[lCount] = {mid[i] - diff, mid[i], i};
-
             numMisplacedLeft += leftMisplacedRanges[lCount].Size();
             lCount++;
         }
     }
 
     Assert(numMisplacedLeft == numMisplacedRight);
+    printf("Num misplaced: %u\n", numMisplacedLeft);
 
     u32 leftIndex  = 0;
     u32 rightIndex = 0;

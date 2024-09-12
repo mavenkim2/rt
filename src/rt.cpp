@@ -1039,7 +1039,7 @@ int main(int argc, char *argv[])
     threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, OS_NumProcessors());
 
     PrimData data;
-    const u32 count = 100000000;
+    const u32 count = 49013233;
     data.minP       = PushArray(arena, Lane4F32, count);
     data.maxP       = PushArray(arena, Lane4F32, count);
 
@@ -1090,18 +1090,18 @@ int main(int argc, char *argv[])
         if (i < mid)
         {
             Assert(Floor((centroid - heuristic.minP[split.bestDim]) * heuristic.scale[split.bestDim]) <= split.bestPos);
-            // if (Floor((centroid - heuristic.minP[split.bestDim]) * heuristic.scale[split.bestDim]) > split.bestPos)
-            // {
-            //     errors += 1;
-            // }
+            if (Floor((centroid - heuristic.minP[split.bestDim]) * heuristic.scale[split.bestDim]) > split.bestPos)
+            {
+                errors += 1;
+            }
         }
         else
         {
             Assert(Floor((centroid - heuristic.minP[split.bestDim]) * heuristic.scale[split.bestDim]) > split.bestPos);
-            // if (Floor((centroid - heuristic.minP[split.bestDim]) * heuristic.scale[split.bestDim]) <= split.bestPos)
-            // {
-            //     errors += 1;
-            // }
+            if (Floor((centroid - heuristic.minP[split.bestDim]) * heuristic.scale[split.bestDim]) <= split.bestPos)
+            {
+                errors += 1;
+            }
         }
     }
 
