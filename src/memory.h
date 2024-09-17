@@ -69,6 +69,17 @@ enum MemoryType
 #define PushStructTagged(arena, type, tag)       PushStruct(arena, type)
 #endif
 
+template <typename T>
+__forceinline T *PushArrayDefault(Arena *arena, u32 count)
+{
+    T *out = (T *)PushArray(arena, u8, sizeof(T) * count);
+    for (u32 i = 0; i < count; i++)
+    {
+        out[i] = T();
+    }
+    return out;
+}
+
 #define PushStructConstruct(arena, Type) new (PushStruct(arena, Type)) Type
 
 #define ScratchEnd(temp) TempEnd(temp)

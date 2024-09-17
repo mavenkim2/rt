@@ -33,6 +33,9 @@ struct Vec3
     template <typename T1>
     __forceinline Vec3(const Vec3<T1> &other) : x(T(other.x)), y(T(other.y)), z(T(other.z)) {}
 
+    __forceinline Vec3(PosInfTy) : x(pos_inf), y(pos_inf), z(pos_inf) {}
+    __forceinline Vec3(NegInfTy) : x(neg_inf), y(neg_inf), z(neg_inf) {}
+
     __forceinline Vec3 &operator=(const Vec3<T> &other)
     {
         x = other.x;
@@ -58,7 +61,7 @@ struct Vec3
         Assert(i < 3);
         return e[i];
     }
-    __forceinline operator Lane4F32() const
+    __forceinline explicit operator Lane4F32() const
     {
         return Lane4F32(x, y, z, 0.f);
     }
@@ -131,6 +134,12 @@ __forceinline Vec3<T> operator/(const Vec3<T> &v, T d)
 }
 
 template <typename T>
+__forceinline Vec3<T> operator/(const Vec3<T> &a, const Vec3<T> &b)
+{
+    return Vec3<T>(a.x / b.x, a.y / b.y, a.z / b.z);
+}
+
+template <typename T>
 __forceinline Vec3<T> &operator*=(Vec3<T> &a, const Vec3<T> &b)
 {
     a.x *= b.x;
@@ -144,6 +153,24 @@ __forceinline Vec3<T> &operator/=(Vec3<T> &a, const T b)
 {
     a = a / b;
     return a;
+}
+
+template <typename T>
+__forceinline Vec3<T> operator>(const Vec3<T> &a, const Vec3<T> &b)
+{
+    return Vec3<T>(a.x > b.x, a.y > b.y, a.z > b.z);
+}
+
+template <typename T>
+__forceinline Vec3<T> operator<(const Vec3<T> &a, const Vec3<T> &b)
+{
+    return Vec3<T>(a.x < b.x, a.y < b.y, a.z < b.z);
+}
+
+template <typename T>
+__forceinline Vec3<T> Select(const Vec3<T> &mask, const Vec3<T> &a, const Vec3<T> &b)
+{
+    return Vec3<T>(Select(mask.x, a.x, b.x), Select(mask.y, a.y, b.y), Select(mask.z, a.z, b.z));
 }
 
 template <typename T>
@@ -219,6 +246,18 @@ __forceinline Vec3<T> Max(const Vec3<T> &a, const Vec3<T> &b)
 }
 
 template <typename T>
+__forceinline Vec3<T> Floor(const Vec3<T> &v)
+{
+    return Vec3<T>(Floor(v.x), Floor(v.y), Floor(v.z));
+}
+
+template <typename T>
+__forceinline Vec3<T> Ceil(const Vec3<T> &v)
+{
+    return Vec3<T>(Ceil(v.x), Ceil(v.y), Ceil(v.z));
+}
+
+template <typename T>
 __forceinline Vec3<T> FMA(const Vec3<T> &a, const Vec3<T> &b, const Vec3<T> &c)
 {
     return Vec3<T>(FMA(a.x, b.x, c.x), FMA(a.y, b.y, c.y), FMA(a.z, b.z, c.z));
@@ -245,6 +284,11 @@ template <i32 K>
 __forceinline Vec3lu<K> Flooru(const Vec3lf<K> &v)
 {
     return Vec3lu<K>(Flooru(v.x), Flooru(v.y), Flooru(v.z));
+}
+
+__forceinline Vec3f ToVec3f(const Lane4F32 &l)
+{
+    return Vec3f(l[0], l[1], l[2]);
 }
 
 inline Vec3f Reflect(const Vec3f &v, const Vec3f &norm)

@@ -1,8 +1,34 @@
 #ifndef BVH_SAH_H
 #define BVH_SAH_H
 #include "../math/simd_base.h"
+
+// TODO:
+// - explore octant order traversal,
+// - spatial splits
+// - partial rebraiding
+// - stream (Fuetterling 2015, frusta)/packet traversal
+// - ray sorting/binning(hyperion, or individually in each thread).
+// - curves
+//     - it seems that PBRT doesn't supported instanced curves, so the scene description files handle these weirdly.
+//     look at converting these to instances?
+// - support both BVH over all primitives and two level BVH.
+//     - for BVH over all primitives, need polymorphism. will implement by indexing into an array of indices,
+//     - can instances contain multiple types of primitives?
+// - expand current BVH4 traversal code to BVH8
+
+// crazier TODOs
+// - stackless/stack compressed?
+// - PLOC and agglomerative aggregate clustering
+// - subdivision surfaces
+
+// for the top level BVH, I think I can get rid of some of the meta fields maybe because the counts should be
+// 1. probably can actually use 2 bits per node (node, invalid, leaf) for 2 bytes for 8-wide and 1 byte for 4-wide.
+// not sure how much that would save or if it's even worth it, but something to consider.
+
 namespace rt
 {
+
+const u32 PARALLEL_THRESHOLD = 4 * 1024;
 
 // TODO: make sure to pad to max lane width, set min and maxes to pos_inf and neg_inf and count to zero for padded entries
 struct PrimDataSOA
@@ -20,10 +46,94 @@ struct PrimDataSOA
 
 struct PrimData
 {
-    Lane4F32 *minP;
-    Lane4F32 *maxP;
+    // NOTE: contains the geomID
+    Lane4F32 minP;
+    // NOTE: contains the primID
+    Lane4F32 maxP;
 
-    u32 total;
+    __forceinline GeometryID GeomID() const
+    {
+        return GeometryID(minP.u);
+    }
+
+    __forceinline u32 PrimID() const
+    {
+        return maxP.u;
+    }
+
+    __forceinline void SetGeomID(GeometryID geomID)
+    {
+        minP.u = geomID.id;
+    }
+
+    __forceinline void SetPrimID(u32 primID)
+    {
+        maxP.u = primID;
+    }
+};
+
+// struct PrimData
+// {
+//     union
+//     {
+//         Lane4F32 *minP;
+//         Lane4F32 *minP_geomID;
+//     };
+//     union
+//     {
+//         Lane4F32 *maxP;
+//         Lane4F32 *maxP_primID;
+//     };
+//     AABB centroidBounds;
+//
+//     u32 total;
+// };
+
+struct BuildSettings
+{
+    u32 maxLeafSize = 3;
+    i32 maxDepth    = 32;
+    f32 intCost     = 1.f;
+    f32 travCost    = 1.f;
+    bool twoLevel   = true;
+};
+
+struct Record
+{
+    PrimData *data;
+    Bounds geomBounds;
+    Bounds centBounds;
+    u32 start;
+    u32 end;
+
+    Record() {}
+    Record(PrimData *data, const Bounds &gBounds, const Bounds &cBounds, const u32 start, const u32 end)
+        : data(data), geomBounds(gBounds), centBounds(cBounds), start(start), end(end) {}
+    u32 Size() const { return end - start; }
+};
+
+struct PartitionResult
+{
+    Bounds geomBoundsL;
+    Bounds geomBoundsR;
+
+    Bounds centBoundsL;
+    Bounds centBoundsR;
+
+    u32 mid;
+
+    PartitionResult() : geomBoundsL(Bounds()), geomBoundsR(Bounds()), centBoundsL(Bounds()), centBoundsR(Bounds()) {}
+    PartitionResult(Bounds &gL, Bounds &gR, Bounds &cL, Bounds &cR, u32 mid)
+        : geomBoundsL(gL), geomBoundsR(gR), centBoundsL(cL), centBoundsR(cR), mid(mid) {}
+
+    __forceinline void Extend(const PartitionResult &other)
+    {
+        geomBoundsL.Extend(other.geomBoundsL);
+        geomBoundsR.Extend(other.geomBoundsR);
+
+        centBoundsL.Extend(other.centBoundsL);
+        centBoundsR.Extend(other.centBoundsR);
+    }
 };
 
 struct Split
@@ -51,16 +161,18 @@ struct HeuristicSAHBinned
     Lane4F32 binMax[3][numBins];
     Lane4U32 binCounts[numBins];
 
-    AABB base;
     Lane4F32 minP;
     Lane4F32 scale;
 
     HeuristicSAHBinned() {}
-    HeuristicSAHBinned(const AABB &base)
+    HeuristicSAHBinned(const AABB &base) { Init(Lane4F32(base.minP), Lane4F32(base.maxP)); }
+    HeuristicSAHBinned(const Bounds &base) { Init(base.minP, base.maxP); }
+
+    __forceinline void Init(const Lane4F32 inMin, const Lane4F32 inMax)
     {
         const Lane4F32 eps  = 1e-34f;
-        minP                = base.minP;
-        const Lane4F32 diag = Max(base.maxP - base.minP, 0.f);
+        minP                = inMin;
+        const Lane4F32 diag = Max(inMax - minP, 0.f);
 
         scale = Select(diag > eps, Lane4F32((f32)numBins) / diag, Lane4F32(0.f));
 
@@ -78,15 +190,16 @@ struct HeuristicSAHBinned
         }
     }
 
-    __forceinline void Bin(const PrimData *prim, u32 start, u32 count)
+    __forceinline void Bin(const PrimData *prims, u32 start, u32 count)
     {
         u32 i   = start;
         u32 end = start + count;
-        for (; i < end; i += 2)
+        for (; i < end - 1; i += 2)
         {
+            const PrimData *prim = &prims[i];
             // Load
-            Lane4F32 prim0Min = prim->minP[i];
-            Lane4F32 prim0Max = prim->maxP[i];
+            Lane4F32 prim0Min = prim->minP;
+            Lane4F32 prim0Max = prim->maxP;
 
             Lane4F32 centroid   = (prim0Min + prim0Max) * 0.5f;
             Lane4U32 binIndices = Flooru((centroid - minP) * scale);
@@ -103,11 +216,12 @@ struct HeuristicSAHBinned
             binCounts[binIndices[1]][1] += 1;
             binCounts[binIndices[2]][2] += 1;
 
-            Lane4F32 prim1Min = prim->minP[i + 1];
-            Lane4F32 prim1Max = prim->maxP[i + 1];
+            const PrimData *prim1 = &prims[i + 1];
+            Lane4F32 prim1Min     = prim1->minP;
+            Lane4F32 prim1Max     = prim1->maxP;
 
             Lane4F32 centroid1   = (prim1Min + prim1Max) * 0.5f;
-            Lane4U32 binIndices1 = Flooru((centroid1 - minP) * scale * (f32)numBins);
+            Lane4U32 binIndices1 = Flooru((centroid1 - minP) * scale);
             binIndices1          = Clamp(Lane4U32(0), Lane4U32(numBins - 1), binIndices1);
 
             binMin[0][binIndices1[0]] = Min(binMin[0][binIndices1[0]], prim1Min);
@@ -123,11 +237,12 @@ struct HeuristicSAHBinned
         }
         if (i < end)
         {
-            Lane4F32 primMin    = prim->minP[i];
-            Lane4F32 primMax    = prim->maxP[i];
-            Lane4F32 centroid   = (primMin + primMax) * 0.5f;
-            Lane4U32 binIndices = Flooru((centroid - minP) * scale * (f32)numBins);
-            binIndices          = Clamp(Lane4U32(0), Lane4U32(numBins - 1), binIndices);
+            const PrimData *prim = &prims[i];
+            Lane4F32 primMin     = prim->minP;
+            Lane4F32 primMax     = prim->maxP;
+            Lane4F32 centroid    = (primMin + primMax) * 0.5f;
+            Lane4U32 binIndices  = Flooru((centroid - minP) * scale);
+            binIndices           = Clamp(Lane4U32(0), Lane4U32(numBins - 1), binIndices);
 
             binMin[0][binIndices[0]] = Min(binMin[0][binIndices[0]], primMin);
             binMin[1][binIndices[1]] = Min(binMin[1][binIndices[1]], primMin);
@@ -140,11 +255,6 @@ struct HeuristicSAHBinned
             binCounts[binIndices[1]][1] += 1;
             binCounts[binIndices[2]][2] += 1;
         }
-    }
-
-    __forceinline void Bin(PrimData *prim)
-    {
-        Bin(prim, 0, prim->total);
     }
 
     __forceinline void Merge(const HeuristicSAHBinned<numBins> &other)
@@ -190,20 +300,16 @@ struct HeuristicSAHBinned
             maxDimY = Max(maxDimY, binMax[1][i]);
             maxDimZ = Max(maxDimZ, binMax[2][i]);
 
-            // Lane4F32 a = UnpackLo(minDimX, minDimZ);
-            // Lane4F32 b = UnpackLo(minDimY, minDimZ);
-            //
-            // Lane4F32 x = UnpackLo(a, minDimY);
-            // Lane4F32 y = UnpackHi(a, b);
-            // Lane4F32 z = Shuffle<0, 1, 2, 0>(UnpackHi(minDimX, minDimY), minDimZ);
+            Lane4F32 minX, minY, minZ;
+            Lane4F32 maxX, maxY, maxZ;
+            Transpose3x3(minDimX, minDimY, minDimZ, minX, minY, minZ);
+            Transpose3x3(maxDimX, maxDimY, maxDimZ, maxX, maxY, maxZ);
 
-            Lane4F32 extentDimX = maxDimX - minDimX;
-            Lane4F32 extentDimY = maxDimY - minDimY;
-            Lane4F32 extentDimZ = maxDimZ - minDimZ;
+            Lane4F32 extentX = maxX - minX;
+            Lane4F32 extentY = maxY - minY;
+            Lane4F32 extentZ = maxZ - minZ;
 
-            area[i][0] = FMA(extentDimX[0], extentDimX[1] + extentDimX[2], extentDimX[1] * extentDimX[2]);
-            area[i][1] = FMA(extentDimY[0], extentDimY[1] + extentDimY[2], extentDimY[1] * extentDimY[2]);
-            area[i][2] = FMA(extentDimZ[0], extentDimZ[1] + extentDimZ[2], extentDimZ[1] * extentDimZ[2]);
+            area[i] = FMA(extentX, extentY + extentZ, extentY * extentZ);
         }
 
         count = 0;
@@ -230,18 +336,28 @@ struct HeuristicSAHBinned
             maxDimY = Max(maxDimY, binMax[1][i]);
             maxDimZ = Max(maxDimZ, binMax[2][i]);
 
-            Lane4F32 extentDimX = maxDimX - minDimX;
-            Lane4F32 extentDimY = maxDimY - minDimY;
-            Lane4F32 extentDimZ = maxDimZ - minDimZ;
+            Lane4F32 minX, minY, minZ;
+            Lane4F32 maxX, maxY, maxZ;
+            Transpose3x3(minDimX, minDimY, minDimZ, minX, minY, minZ);
+            Transpose3x3(maxDimX, maxDimY, maxDimZ, maxX, maxY, maxZ);
+
+            Lane4F32 extentX = maxX - minX;
+            Lane4F32 extentY = maxY - minY;
+            Lane4F32 extentZ = maxZ - minZ;
+
+            const Lane4F32 rArea = FMA(extentX, extentY + extentZ, extentY * extentZ);
 
             const Lane4U32 lCount = (lCounts[i - 1] + blockAdd) >> blockShift;
             const Lane4U32 rCount = (count + blockAdd) >> blockShift;
             const Lane4F32 lArea  = area[i - 1];
 
-            f32 areaDimX = FMA(extentDimX[0], extentDimX[1] + extentDimX[2], extentDimX[1] * extentDimX[2]);
-            f32 areaDimY = FMA(extentDimY[0], extentDimY[1] + extentDimY[2], extentDimY[1] * extentDimY[2]);
-            f32 areaDimZ = FMA(extentDimZ[0], extentDimZ[1] + extentDimZ[2], extentDimZ[1] * extentDimZ[2]);
-            const Lane4F32 rArea(areaDimX, areaDimY, areaDimZ, 0.f);
+            // TODO: consider increasing the cost of having empty children/leaves
+            // (lCount & (blockAdd - 1));
+
+            // f32 areaDimX = FMA(extentDimX[0], extentDimX[1] + extentDimX[2], extentDimX[1] * extentDimX[2]);
+            // f32 areaDimY = FMA(extentDimY[0], extentDimY[1] + extentDimY[2], extentDimY[1] * extentDimY[2]);
+            // f32 areaDimZ = FMA(extentDimZ[0], extentDimZ[1] + extentDimZ[2], extentDimZ[1] * extentDimZ[2]);
+            // const Lane4F32 rArea(areaDimX, areaDimY, areaDimZ, 0.f);
             const Lane4F32 sah = FMA(rArea, Lane4F32(rCount), lArea * Lane4F32(lCount));
 
             lBestPos = Select(sah < lBestSAH, Lane4U32(i), lBestPos);
@@ -267,152 +383,115 @@ struct HeuristicSAHBinned
     }
 };
 
-Split BinParallel(const AABB &centroidBounds, PrimData *prim)
+Split BinParallel(const Record &record, u32 blockSize = 1, HeuristicSAHBinned<32> *out = 0)
 {
-    u32 blockSize                 = 1024;
+    Assert(IsPow2(blockSize));
+    u32 blockShift = Bsf(blockSize);
+    u32 total      = record.end - record.start;
+    if (total < PARALLEL_THRESHOLD)
+    {
+        HeuristicSAHBinned<32> heuristic(record.centBounds);
+        heuristic.Bin(record.data, record.start, total);
+        if (out)
+        {
+            *out = heuristic;
+        }
+        return heuristic.Best(blockShift);
+    }
+
+    u32 taskSize                  = 1024;
     HeuristicSAHBinned<32> result = jobsystem::ParallelReduce<HeuristicSAHBinned<32>>(
-        prim->total, blockSize,
-        [&](HeuristicSAHBinned<32> &bin, u32 start, u32 count) { bin.Bin(prim, start, count); },
+        total, taskSize,
+        [&](HeuristicSAHBinned<32> &bin, u32 start, u32 count) { bin.Bin(record.data, start, count); },
         [&](HeuristicSAHBinned<32> &a, const HeuristicSAHBinned<32> &b) { a.Merge(b); },
-        centroidBounds);
-    return result.Best(0);
+        record.centBounds);
+
+    if (out)
+    {
+        *out = result;
+    }
+    return result.Best(blockShift);
 }
 
-struct Bounds
-{
-    Lane4F32 minP;
-    Lane4F32 maxP;
-
-    Bounds() : minP(pos_inf), maxP(neg_inf) {}
-
-    __forceinline void Extend(Lane4F32 inMin, Lane4F32 inMax)
-    {
-        minP = Min(minP, inMin);
-        maxP = Max(maxP, inMax);
-    }
-};
-
-u32 PartitionSerial(Split split, PrimData *prim)
+template <typename T>
+void PartitionSerial(Split split, PrimData *prims, T *data, u32 start, u32 end, PartitionResult *result)
 {
     const u32 bestPos   = split.bestPos;
     const u32 bestDim   = split.bestDim;
     const f32 bestValue = split.bestValue;
-    u32 l               = 0;
-    u32 r               = prim->total - 1;
+    u32 l               = start;
+    u32 r               = end - 1;
 
-    Bounds lBounds;
-    Bounds rBounds;
+    Bounds &gL = result->geomBoundsL;
+    Bounds &gR = result->geomBoundsR;
+
+    Bounds &cL = result->centBoundsL;
+    Bounds &cR = result->centBoundsR;
+
+    gL = Bounds();
+    gR = Bounds();
+
+    cL = Bounds();
+    cR = Bounds();
 
     for (;;)
     {
         b32 isLeft = true;
+        Lane4F32 lCentroid;
+        Lane4F32 rCentroid;
+        PrimData *lPrim;
+        PrimData *rPrim;
         do
         {
-            Lane4F32 centroid = (prim->minP[l] + prim->maxP[l]) * 0.5f;
-            isLeft            = centroid[bestDim] < bestValue;
-        } while (isLeft && (lBounds.Extend(prim->minP[l], prim->maxP[l]), l++ <= r));
+            lPrim     = &prims[l];
+            lCentroid = (lPrim->minP + lPrim->maxP) * 0.5f;
+            if (lCentroid[bestDim] >= bestValue) break;
+            gL.Extend(lPrim->minP, lPrim->maxP);
+            cL.Extend(lCentroid);
+            l++;
+        } while (l <= r);
         do
         {
-            Lane4F32 centroid = (prim->minP[r] + prim->maxP[r]) * 0.5f;
-            isLeft            = centroid[bestDim] < bestValue;
-        } while (!isLeft && (rBounds.Extend(prim->minP[r], prim->maxP[r]), l <= r--));
-        if (r < l) break;
+            rPrim     = &prims[r];
+            rCentroid = (rPrim->minP + rPrim->maxP) * 0.5f;
+            if (rCentroid[bestDim] < bestValue) break;
+            gR.Extend(rPrim->minP, rPrim->maxP);
+            cR.Extend(rCentroid);
+            r--;
+        } while (l <= r);
+        if (l > r) break;
 
-        Swap(prim->minP[l], prim->minP[r]);
-        Swap(prim->maxP[l], prim->maxP[r]);
+        Swap(lPrim->minP, rPrim->minP);
+        Swap(lPrim->maxP, rPrim->maxP);
+        Swap(data, l, r);
 
-        lBounds.Extend(prim->minP[l], prim->maxP[l]);
-        rBounds.Extend(prim->minP[r], prim->maxP[r]);
+        gL.Extend(lPrim->minP, lPrim->maxP);
+        gR.Extend(rPrim->minP, rPrim->maxP);
+
+        cL.Extend(rCentroid);
+        cR.Extend(lCentroid);
         l++;
         r--;
     }
 
-    return r + 1;
+    result->mid = r + 1;
 }
 
-// u32 PartitionSerialCrazy(Split split, PrimData *prim)
-// {
-//     u32 l = 0;
-//     u32 r = soa->total - LaneXF32::N;
-//
-//     for (;;)
-//     {
-//         LaneXF32 mask(True);
-//
-//         do
-//         {
-//             LaneXF32 minX = LaneXF32::LoadU(soa->minX + l);
-//             // LaneXF32 minY = LaneXF32::LoadU(soa->minY + l);
-//             // LaneXF32 minZ = LaneXF32::LoadU(soa->minZ + l);
-//
-//             // LaneXF32 maxX = LaneXF32::LoadU(soa->maxX + l);
-//             // LaneXF32 maxY = LaneXF32::LoadU(soa->maxY + l);
-//             // LaneXF32 maxZ = LaneXF32::LoadU(soa->maxZ + l);
-//
-//             LaneXF32 centroid   = minX; //(minX + maxX) * 0.5f;
-//             LaneXF32 isLeftMask = centroid < split.bestValue;
-//
-//             const u32 isLeftBitMask = Movemask(isLeftMask);
-//             u32 numLeft             = PopCount(isLeftBitMask);
-//             u32 storeMaskLeft       = (1 << numLeft) - 1;
-//             u32 storeMaskRight      = (1 << (LaneXF32::N - numLeft)) - 1;
-//
-//             LaneXF32 storeMinXLeft  = Compact(isLeftBitMask, minX);
-//             LaneXF32 storeMinXRight = Compact(~isLeftBitMask, minX);
-//             LaneXF32::StoreU(storeMaskLeft, soa->minX + l, storeMinXLeft);
-//             LaneXF32::StoreU(storeMaskRight, soa->minX + l + numLeft, storeMinXRight);
-//
-//             l += numLeft;
-//         } while (l <= r && Any(mask));
-//
-//         mask = LaneXF32(True);
-//         do
-//         {
-//             LaneXF32 minX = LaneXF32::LoadU(soa->minX + r);
-//             // LaneXF32 maxX = LaneXF32::LoadU(soa->max + r);
-//
-//             LaneXF32 centroid   = minX; //(minX + maxX) * 0.5f;
-//             LaneXF32 isLeftMask = centroid < split.bestValue;
-//
-//             const u32 isLeftBitMask = Movemask(isLeftMask);
-//             u32 numLeft             = PopCount(isLeftBitMask);
-//             u32 numRight            = LaneXF32::N - numLeft;
-//             u32 storeMaskLeft       = (1 << numLeft) - 1;
-//             u32 storeMaskRight      = (1 << numRight) - 1;
-//
-//             LaneXF32 storeMinXLeft  = Compact(isLeftBitMask, minX);
-//             LaneXF32 storeMinXRight = Compact(~isLeftBitMask, minX);
-//             LaneXF32::StoreU(storeMaskRight, soa->minX + r + numLeft, storeMinXRight);
-//             LaneXF32::StoreU(storeMaskLeft, soa->minX + r, storeMinXLeft);
-//             r -= numRight;
-//
-//         } while (l <= r && Any(mask));
-//         if (l > r) break;
-//
-//         LaneXF32 left  = LaneXF32::LoadU(soa->minX + l);
-//         LaneXF32 right = LaneXF32::LoadU(soa->minX + r);
-//         LaneXF32::Store(soa->minX + l, right);
-//         LaneXF32::Store(soa->minX + r, left);
-//
-//         l += LaneXF32::N;
-//         r -= LaneXF32::N;
-//     }
-//     return r + 1;
-// }
-
-// u32 PartitionParallel(Split split, PrimData prim, AABB &leftBounds, AABB &rightBounds)
-// {
-// }
-
-u32 PartitionParallel(Split split, PrimData prim)
+template <typename Primitive>
+void PartitionParallel(Split split, PrimData *prims, Primitive *data, u32 start, u32 end, PartitionResult *result)
 {
-    if (prim.total < 4 * 1024) return PartitionSerial(split, &prim);
+    u32 total = end - start;
+    if (total < 4 * 1024)
+    {
+        PartitionSerial(split, prims, data, start, end, result);
+        return;
+    }
 
     TempArena temp             = ScratchStart(0, 0);
     jobsystem::Counter counter = {};
 
     // TODO: hardcoded
-    const u32 numJobs = 32; // 16; // jobsystem::numProcessors;
+    const u32 numJobs = 64;
 
     const u32 blockSize = 16;
     StaticAssert(IsPow2(blockSize), Pow2BlockSize);
@@ -420,91 +499,129 @@ u32 PartitionParallel(Split split, PrimData prim)
     const u32 blockShift        = Bsf(blockSize);
     const u32 numBlocksPerChunk = numJobs;
     const u32 chunkSize         = numBlocksPerChunk << blockShift;
-    const u32 numChunks         = (prim.total + chunkSize - 1) / chunkSize;
-    const u32 numBlocks         = numBlocksPerChunk * numChunks;
+    const u32 numChunks         = (total + chunkSize - 1) / chunkSize;
     const u32 bestDim           = split.bestDim;
     const f32 bestValue         = split.bestValue;
 
     auto isLeft = [&](u32 index) -> bool {
-        f32 centroid = (prim.minP[index][bestDim] + prim.maxP[index][bestDim]) * 0.5f;
+        PrimData *prim = &prims[index];
+        f32 centroid   = (prim->minP[bestDim] + prim->maxP[bestDim]) * 0.5f;
         return centroid < bestValue;
     };
 
     // Index of first element greater than the pivot
     u32 *vi   = PushArray(temp.arena, u32, numJobs);
-    u32 *mid  = PushArray(temp.arena, u32, numJobs);
     u32 *ends = PushArray(temp.arena, u32, numJobs);
 
-    // u32 *elementsInGroup0 = PushArray(temp.arena, u32, numChunks);
+    PartitionResult *results = PushArrayDefault<PartitionResult>(temp.arena, numJobs);
 
-    // for (u32 i = 0; i < numChunks; i++)
-    // {
-    //     elementsInGroup0[i] = RandomInt(0, numBlocksPerChunk);
-    // }
+    jobsystem::KickJobs(
+        &counter, numJobs, 1, [&](jobsystem::JobArgs args) {
+            clock_t start   = clock();
+            const u32 group = args.jobId;
+            auto GetIndexL  = [&](u32 index) {
+                const u32 chunkIndex   = index >> blockShift;
+                const u32 blockIndex   = group;
+                const u32 indexInBlock = index & (blockSize - 1);
 
-    Bounds *lBounds = PushArray(temp.arena, Bounds, numJobs);
-    Bounds *rBounds = PushArray(temp.arena, Bounds, numJobs);
-    for (u32 i = 0; i < numJobs; i++)
-    {
-        lBounds[i] = Bounds();
-        rBounds[i] = Bounds();
-    }
+                const u32 nextIndex = (chunkIndex + 1) * chunkSize + blockSize * blockIndex + indexInBlock;
 
-    jobsystem::KickJobs(&counter, numJobs, numJobs, [&](jobsystem::JobArgs args) {
-        const u32 group = args.jobId;
-        auto GetIndex   = [&](u32 index) {
-            const u32 chunkIndex   = index >> blockShift;
-            const u32 blockIndex   = group; //((elementsInGroup0[chunkIndex] + group) % numBlocksPerChunk);
-            const u32 indexInBlock = index & (blockSize - 1);
-            return chunkIndex * chunkSize + blockSize * blockIndex + indexInBlock;
-        };
+                _mm_prefetch((char *)(&prims[nextIndex]), _MM_HINT_T0);
+                PrefetchL1(data, nextIndex);
+                return chunkIndex * chunkSize + blockSize * blockIndex + indexInBlock;
+            };
 
-        u32 l             = 0;
-        u32 r             = blockSize * numChunks - 1;
-        u32 lastRIndex    = GetIndex(r);
-        r                 = lastRIndex >= prim.total
-                                ? (lastRIndex - prim.total) < (blockSize - 1)
-                                      ? r - (lastRIndex - prim.total) - 1
-                                      : r - (r & (blockSize - 1)) - 1
-                                : r;
-        u32 newLastRIndex = GetIndex(r);
-        ends[args.jobId]  = r;
+            auto GetIndexR = [&](u32 index) {
+                const u32 chunkIndex   = index >> blockShift;
+                const u32 blockIndex   = group;
+                const u32 indexInBlock = index & (blockSize - 1);
 
-        for (;;)
-        {
-            u32 lIndex = GetIndex(l);
-            for (; l <= r && isLeft(lIndex); lIndex = GetIndex(l))
+                const u32 nextIndex = (chunkIndex - 1) * chunkSize + blockSize * blockIndex + indexInBlock;
+
+                _mm_prefetch((char *)(&prims[nextIndex]), _MM_HINT_T0);
+                PrefetchL1(data, nextIndex);
+                return chunkIndex * chunkSize + blockSize * blockIndex + indexInBlock;
+            };
+
+            u32 l            = 0;
+            u32 r            = blockSize * numChunks - 1;
+            u32 lastRIndex   = GetIndexR(r);
+            r                = lastRIndex >= total
+                                   ? (lastRIndex - total) < (blockSize - 1)
+                                         ? r - (lastRIndex - total) - 1
+                                         : r - (r & (blockSize - 1)) - 1
+                                   : r;
+            ends[args.jobId] = r;
+
+            Bounds &gL = results[group].geomBoundsL;
+            Bounds &gR = results[group].geomBoundsR;
+
+            Bounds &cL = results[group].centBoundsL;
+            Bounds &cR = results[group].centBoundsR;
+
+            gL = Bounds();
+            gR = Bounds();
+
+            cL = Bounds();
+            cR = Bounds();
+            for (;;)
             {
-                // lBounds.Extend(prim.minP[lIndex], prim.maxP[lIndex]);
+                u32 lIndex;
+                u32 rIndex;
+                Lane4F32 lCentroid;
+                Lane4F32 rCentroid;
+                PrimData *lPrim;
+                PrimData *rPrim;
+                do
+                {
+                    lIndex    = GetIndexL(l);
+                    lPrim     = &prims[lIndex];
+                    lCentroid = (lPrim->minP + lPrim->maxP) * 0.5f;
+                    if (lCentroid[bestDim] >= bestValue) break;
+                    gL.Extend(lPrim->minP, lPrim->maxP);
+                    cL.Extend(lCentroid);
+                    l++;
+                } while (l <= r);
+
+                do
+                {
+                    rIndex    = GetIndexR(r);
+                    rPrim     = &prims[rIndex];
+                    rCentroid = (rPrim->minP + rPrim->maxP) * 0.5f;
+                    if (rCentroid[bestDim] < bestValue) break;
+                    gR.Extend(rPrim->minP, rPrim->maxP);
+                    cR.Extend(rCentroid);
+                    r--;
+
+                } while (l <= r);
+                if (l > r) break;
+
+                Swap(lPrim->minP, rPrim->minP);
+                Swap(lPrim->maxP, rPrim->maxP);
+
+                Swap(data, lIndex, rIndex);
+
+                gL.Extend(lPrim->minP, lPrim->maxP);
+                gR.Extend(rPrim->minP, rPrim->maxP);
+                cL.Extend(rCentroid);
+                cR.Extend(lCentroid);
+
                 l++;
-            }
-            u32 rIndex = GetIndex(r);
-            for (; l < r && !isLeft(rIndex); rIndex = GetIndex(r))
-            {
-                // rBounds.Extend(prim.minP[rIndex], prim.maxP[rIndex]);
                 r--;
             }
-            if (l >= r) break;
-
-            Swap(prim.minP[lIndex], prim.minP[rIndex]);
-            Swap(prim.maxP[lIndex], prim.maxP[rIndex]);
-
-            // lBounds.Extend(prim.minP[lIndex], prim.maxP[lIndex]);
-            // rBounds.Extend(prim.minP[rIndex], prim.maxP[rIndex]);
-
-            l++;
-            r--;
-        }
-        vi[args.jobId]  = GetIndex(l);
-        mid[args.jobId] = l;
-    });
+            vi[args.jobId]          = GetIndexL(l);
+            results[args.jobId].mid = l;
+            clock_t end             = clock();
+            threadLocalStatistics[GetThreadIndex()].dumb += u64(end - start);
+        },
+        jobsystem::Priority::High);
 
     jobsystem::WaitJobs(&counter);
 
     u32 globalMid = 0;
     for (u32 i = 0; i < numJobs; i++)
     {
-        globalMid += mid[i];
+        globalMid += results[i].mid;
     }
 
     struct Range
@@ -517,7 +634,7 @@ u32 PartitionParallel(Split split, PrimData prim)
 
     auto GetIndex = [&](u32 index, u32 group) {
         const u32 chunkIndex   = index >> blockShift;
-        const u32 blockIndex   = group; //((elementsInGroup0[chunkIndex] + group) % numBlocksPerChunk);
+        const u32 blockIndex   = group;
         const u32 indexInBlock = index & (blockSize - 1);
         return chunkIndex * chunkSize + blockSize * blockIndex + indexInBlock;
     };
@@ -532,69 +649,63 @@ u32 PartitionParallel(Split split, PrimData prim)
 
     for (u32 i = 0; i < numJobs; i++)
     {
-        u32 globalIndex = GetIndex(mid[i], i);
+        u32 globalIndex = GetIndex(results[i].mid, i);
         if (globalIndex < globalMid)
         {
             u32 diff = (((globalMid - globalIndex) / chunkSize) << blockShift) + ((globalMid - globalIndex) & (blockSize - 1));
 
-            u32 check = GetIndex(mid[i] + diff - 1, i);
+            u32 check = GetIndex(results[i].mid + diff - 1, i);
 
             int steps0 = 0;
-            while (check > globalMid && !isLeft(check))
+            while (check > globalMid) // && !isLeft(check))
             {
                 diff -= 1;
                 steps0++;
-                check = GetIndex(mid[i] + diff - 1, i);
+                check = GetIndex(results[i].mid + diff - 1, i);
             }
             int steps1 = 0;
-            check      = GetIndex(mid[i] + diff + 1, i);
-            while (check < globalMid && !isLeft(check))
+            check      = GetIndex(results[i].mid + diff + 1, i);
+            while (check < globalMid) // && !isLeft(check))
             {
                 steps1++;
                 diff += 1;
-                check = GetIndex(mid[i] + diff + 1, i);
+                check = GetIndex(results[i].mid + diff + 1, i);
             }
             if (steps1) diff++;
 
-            rightMisplacedRanges[rCount] = {mid[i], mid[i] + diff, i};
+            rightMisplacedRanges[rCount] = {results[i].mid, results[i].mid + diff, i};
             numMisplacedRight += rightMisplacedRanges[rCount].Size();
             rCount++;
         }
         else if (globalIndex > globalMid)
         {
             u32 diff = (((globalIndex - globalMid) / chunkSize) << blockShift) + ((globalIndex - globalMid) & (blockSize - 1));
-            Assert(diff <= mid[i]);
-            u32 check  = GetIndex(mid[i] - diff + 1, i);
+            Assert(diff <= results[i].mid);
+            u32 check  = GetIndex(results[i].mid - diff + 1, i);
             int steps0 = 0;
-            while (check < globalMid && isLeft(check))
+            while (check < globalMid) // && isLeft(check))
             {
                 diff -= 1;
                 steps0++;
-                check = GetIndex(mid[i] - diff + 1, i);
-                // u32 check2 = GetIndex(mid[i] - diff, i);
-                // check      = GetIndex(mid[i] - diff - 1, i);
-                // Assert(check2 >= globalMid);
-                // Assert(check < globalMid);
-                // int stop = 5;
+                check = GetIndex(results[i].mid - diff + 1, i);
             }
             if (steps0) diff--;
 
-            check      = GetIndex(mid[i] - diff - 1, i);
+            check      = GetIndex(results[i].mid - diff - 1, i);
             int steps1 = 0;
-            while (check >= globalMid && isLeft(check))
+            while (check >= globalMid) // && isLeft(check))
             {
                 steps1++;
                 diff += 1;
-                check = GetIndex(mid[i] - diff - 1, i);
+                check = GetIndex(results[i].mid - diff - 1, i);
             }
-            leftMisplacedRanges[lCount] = {mid[i] - diff, mid[i], i};
+            leftMisplacedRanges[lCount] = {results[i].mid - diff, results[i].mid, i};
             numMisplacedLeft += leftMisplacedRanges[lCount].Size();
             lCount++;
         }
     }
 
     Assert(numMisplacedLeft == numMisplacedRight);
-    printf("Num misplaced: %u\n", numMisplacedLeft);
 
     u32 leftIndex  = 0;
     u32 rightIndex = 0;
@@ -617,8 +728,9 @@ u32 PartitionParallel(Split split, PrimData prim)
             u32 lIndex = GetIndex(lRange.start + lIter, lRange.group);
             u32 rIndex = GetIndex(rRange.start + rIter, rRange.group);
 
-            Swap(prim.minP[lIndex], prim.minP[rIndex]);
-            Swap(prim.maxP[lIndex], prim.maxP[rIndex]);
+            Swap(prims[lIndex].minP, prims[rIndex].minP);
+            Swap(prims[lIndex].maxP, prims[rIndex].maxP);
+            Swap(data, lIndex, rIndex);
 
             lIter++;
             rIter++;
@@ -642,35 +754,690 @@ u32 PartitionParallel(Split split, PrimData prim)
         }
     }
 
-#if 0
-    u32 vMax = neg_inf;
-    u32 vMin = pos_inf;
-    Bounds lBound;
-    Bounds rBound;
     for (u32 i = 0; i < numJobs; i++)
     {
-        vMax = Max(vMax, vi[i]);
-        vMin = Min(vMin, vi[i]);
-
-        // lBound.Extend(lBounds[i]);
-        // rBound.Extend(rBounds[i]);
+        result->Extend(results[i]);
     }
 
-    ScratchEnd(temp);
-    PrimData newPrim;
-    newPrim.minP  = prim.minP + vMin;
-    newPrim.maxP  = prim.maxP + vMin;
-    newPrim.total = vMax - vMin;
-    return vMin + PartitionParallel(split, newPrim);
-#endif
-    return globalMid;
+    result->mid = globalMid;
 }
 
-// void BuildTree(PrimData prim)
+template <typename Primitive>
+__forceinline void PartitionParallel(Split split, Primitive *primitives, const Record &record, PartitionResult *result)
+{
+    PartitionParallel(split, record.data, primitives, record.start, record.end, result);
+}
+
+template <i32 N>
+struct QuantizedNode;
+
+#define CREATE_NODE() __forceinline void operator()(const Record *records, const u32 numRecords, NodeType *result)
+#define CREATE_LEAF() __forceinline void operator()(NodeType *leaf, PrimData *prims, u32 start, u32 end)
+#define UPDATE_NODE() __forceinline void operator()()
+
+template <i32 N>
+struct QuantizedNode
+{
+    StaticAssert(N == 4 || N == 8, NMustBe4Or8);
+
+    // TODO: the bottom 4 bits can be used for something (and maybe the top 7 bits too)
+    QuantizedNode<N> *internalOffset;
+    u8 lowerX[N];
+    u8 lowerY[N];
+    u8 lowerZ[N];
+
+    // NOTE: upperX = 255 when node is invalid
+    u8 upperX[N];
+    u8 upperY[N];
+    u8 upperZ[N];
+
+    Vec3f minP;
+    u32 leafOffset;
+    u8 scale[3];
+
+    // TODO: the last 5 bytes can be used for something
+    u8 meta[N >> 2];
+    u8 _pad[N == 8 ? 3 : 4];
+};
+
+template <i32 N>
+struct CreateQuantizedNode
+{
+    using NodeType = QuantizedNode<N>;
+
+    CREATE_NODE()
+    {
+        const f32 MIN_QUAN = 0.f;
+        const f32 MAX_QUAN = 255.f;
+        Lane4F32 boundsMinP(pos_inf);
+        Lane4F32 boundsMaxP(neg_inf);
+
+        for (u32 i = 0; i < numRecords; i++)
+        {
+            boundsMinP = Min(boundsMinP, records[i].geomBounds.minP);
+            boundsMaxP = Max(boundsMaxP, records[i].geomBounds.maxP);
+        }
+        result->minP = ToVec3f(boundsMinP);
+
+        Lane4F32 diff = boundsMaxP - boundsMinP;
+
+        f32 expX = Ceil(Log2f(diff[0] / 255.f));
+        f32 expY = Ceil(Log2f(diff[1] / 255.f));
+        f32 expZ = Ceil(Log2f(diff[2] / 255.f));
+
+        Lane4U32 shift = Flooru(Lane4F32(expX, expY, expZ, 0.f)) + 127;
+
+        Lane4F32 pow = AsFloat(shift << 23);
+
+        Vec3lf<N> powVec;
+        powVec.x = Shuffle<0>(pow);
+        powVec.y = Shuffle<1>(pow);
+        powVec.z = Shuffle<2>(pow);
+
+        Assert(numRecords <= N);
+        Vec3lf<N> min;
+        Vec3lf<N> max;
+
+        if constexpr (N == 4)
+        {
+            LaneF32<N> min02xy = UnpackLo(records[0].geomBounds.minP, records[2].geomBounds.minP);
+            LaneF32<N> min13xy = UnpackLo(records[1].geomBounds.minP, records[3].geomBounds.minP);
+
+            LaneF32<N> min02z_ = UnpackHi(records[0].geomBounds.minP, records[2].geomBounds.minP);
+            LaneF32<N> min13z_ = UnpackHi(records[1].geomBounds.minP, records[3].geomBounds.minP);
+
+            LaneF32<N> max02xy = UnpackLo(records[0].geomBounds.maxP, records[2].geomBounds.maxP);
+            LaneF32<N> max13xy = UnpackLo(records[1].geomBounds.maxP, records[3].geomBounds.maxP);
+
+            LaneF32<N> max02z_ = UnpackHi(records[0].geomBounds.maxP, records[2].geomBounds.maxP);
+            LaneF32<N> max13z_ = UnpackHi(records[1].geomBounds.maxP, records[3].geomBounds.maxP);
+
+            min.x = UnpackLo(min02xy, min13xy);
+            min.y = UnpackHi(min02xy, min13xy);
+            min.z = UnpackLo(min02z_, min13z_);
+
+            max.x = UnpackLo(max02xy, max13xy);
+            max.y = UnpackHi(max02xy, max13xy);
+            max.z = UnpackLo(max02z_, max13z_);
+        }
+        else if constexpr (N == 8)
+        {
+            LaneF32<N> min04(records[0].geomBounds.minP, records[4].geomBounds.minP);
+            LaneF32<N> min26(records[2].geomBounds.minP, records[6].geomBounds.minP);
+
+            LaneF32<N> min15(records[1].geomBounds.minP, records[5].geomBounds.minP);
+            LaneF32<N> min37(records[3].geomBounds.minP, records[7].geomBounds.minP);
+
+            LaneF32<N> max04(records[0].geomBounds.maxP, records[4].geomBounds.maxP);
+            LaneF32<N> max26(records[2].geomBounds.maxP, records[6].geomBounds.maxP);
+
+            LaneF32<N> max15(records[1].geomBounds.maxP, records[5].geomBounds.maxP);
+            LaneF32<N> max37(records[3].geomBounds.maxP, records[7].geomBounds.maxP);
+
+            // x0 x2 y0 y2 x4 x6 y4 y6
+            // x1 x3 y1 y3 x5 x7 y5 y7
+
+            // z0 z2 _0 _2 z4 z6 _4 _6
+            // z1 z3 _1 _3 z5 z7 _5 _7
+
+            LaneF32<N> min0246xy = UnpackLo(min04, min26);
+            LaneF32<N> min1357xy = UnpackLo(min15, min37);
+            min.x                = UnpackLo(min0246xy, min1357xy);
+            min.y                = UnpackHi(min0246xy, min1357xy);
+            min.z                = UnpackLo(UnpackHi(min04, min26), UnpackHi(min15, min37));
+
+            LaneF32<N> max0246xy = UnpackLo(max04, max26);
+            LaneF32<N> max1357xy = UnpackLo(max15, max37);
+            max.x                = UnpackLo(max0246xy, max1357xy);
+            max.y                = UnpackHi(max0246xy, max1357xy);
+            max.z                = UnpackLo(UnpackHi(max04, max26), UnpackHi(max15, max37));
+        }
+
+        Vec3lf<N> nodeMin;
+        nodeMin.x = Shuffle<0>(boundsMinP);
+        nodeMin.y = Shuffle<1>(boundsMinP);
+        nodeMin.z = Shuffle<2>(boundsMinP);
+
+        Vec3lf<N> qNodeMin = Floor((min - nodeMin) / powVec);
+        Vec3lf<N> qNodeMax = Ceil((max - nodeMin) / powVec);
+
+        Lane4F32 maskMinX = FMA(powVec.x, qNodeMin.x, nodeMin.x) > min.x;
+        TruncateToU8(result->lowerX, Max(Select(maskMinX, qNodeMin.x - 1, qNodeMin.x), MIN_QUAN));
+        Lane4F32 maskMinY = FMA(powVec.y, qNodeMin.y, nodeMin.y) > min.y;
+        TruncateToU8(result->lowerY, Max(Select(maskMinY, qNodeMin.y - 1, qNodeMin.y), MIN_QUAN));
+        Lane4F32 maskMinZ = FMA(powVec.z, qNodeMin.z, nodeMin.z) > min.z;
+        TruncateToU8(result->lowerZ, Max(Select(maskMinZ, qNodeMin.z - 1, qNodeMin.z), MIN_QUAN));
+
+        Lane4F32 maskMaxX = FMA(powVec.x, qNodeMax.x, nodeMin.x) < max.x;
+        TruncateToU8(result->upperX, Min(Select(maskMaxX, qNodeMax.x + 1, qNodeMax.x), MAX_QUAN));
+        Lane4F32 maskMaxY = FMA(powVec.y, qNodeMax.y, nodeMin.y) < max.y;
+        TruncateToU8(result->upperY, Min(Select(maskMaxY, qNodeMax.y + 1, qNodeMax.y), MAX_QUAN));
+        Lane4F32 maskMaxZ = FMA(powVec.z, qNodeMax.z, nodeMin.z) < max.z;
+        TruncateToU8(result->upperZ, Min(Select(maskMaxZ, qNodeMax.z + 1, qNodeMax.z), MAX_QUAN));
+
+        Assert(shift[0] <= 255 && shift[1] <= 255 && shift[2] <= 255);
+        result->scale[0] = (u8)shift[0];
+        result->scale[1] = (u8)shift[1];
+        result->scale[2] = (u8)shift[2];
+    }
+};
+
+template <i32 N>
+struct UpdateQuantizedNode;
+
+template <i32 N>
+struct UpdateQuantizedNode
+{
+    using NodeType = QuantizedNode<N>;
+    __forceinline void operator()(NodeType *parent, const Record *records, NodeType *children,
+                                  const u32 *leafIndices, const u32 leafCount)
+    {
+        // NOTE: for leaves, top 3 bits represent binary count. bottom 5 bits represent offset from base offset.
+        // 0 denotes a node, 1 denotes invalid.
+
+        parent->internalOffset = children;
+        for (u32 i = 0; i < N >> 2; i++)
+        {
+            parent->meta[i] = 0;
+        }
+        for (u32 i = 0; i < leafCount; i++)
+        {
+            parent->leafOffset   = records[leafIndices[0]].start;
+            u32 leafIndex        = leafIndices[i];
+            const Record *record = &records[leafIndex];
+            u32 primCount        = record->end - record->start;
+            u32 leafOffset       = record->start - parent->leafOffset;
+
+            Assert(primCount >= 1 && primCount <= 3);
+            Assert(leafOffset < 24);
+
+            parent->meta[leafIndex >> 2] |= primCount << ((leafIndex & 3) << 1);
+        }
+    }
+};
+
+// NOTE: ptr MUST be aligned to 16 bytes, bottom 4 bits store the type, top 7 bits store the count
+
+template <i32 N>
+struct AABBNode
+{
+    struct Create
+    {
+        using NodeType = AABBNode;
+        CREATE_NODE()
+        {
+        }
+    };
+
+    LaneF32<N> lowerX;
+    LaneF32<N> lowerY;
+    LaneF32<N> lowerZ;
+
+    LaneF32<N> upperX;
+    LaneF32<N> upperY;
+    LaneF32<N> upperZ;
+};
+
+template <i32 N, typename NodeType>
+struct BVHN
+{
+    BVHN() {}
+    NodeType *root;
+};
+
+template <i32 N>
+using QuantizedNode4 = QuantizedNode<4>;
+template <i32 N>
+using QuantizedNode8 = QuantizedNode<8>;
+
+template <i32 N>
+using BVHQuantized = BVHN<N, QuantizedNode<N>>;
+typedef BVHQuantized<4> BVH4Quantized;
+typedef BVHQuantized<8> BVH8Quantized;
+
+template <i32 N, typename CreateNode, typename UpdateNode, typename Prim>
+struct BuildFuncs
+{
+    using NodeType      = typename CreateNode::NodeType;
+    using Primitive     = Prim;
+    using BasePrimitive = Prim;
+
+    CreateNode createNode;
+    UpdateNode updateNode;
+};
+
+template <i32 N> //, typename CreateNode, typename UpdateNode, typename Prim>
+struct BuildFuncs<N, typename CreateQuantizedNode<N>, typename UpdateQuantizedNode<N>, TriangleMesh>
+{
+    using NodeType      = typename CreateQuantizedNode<N>::NodeType;
+    using Primitive     = TriangleMesh;
+    using BasePrimitive = Triangle;
+
+    CreateQuantizedNode<N> createNode;
+    UpdateQuantizedNode<N> updateNode;
+};
+
+template <i32 N>
+using BLAS_QuantizedNode_TriangleLeaf_Funcs =
+    BuildFuncs<
+        N,
+        typename CreateQuantizedNode<N>,
+        typename UpdateQuantizedNode<N>,
+        TriangleMesh>;
+
+// template <i32 N>
+// using QuantizedInstanceFuncs =
+//     BuildFunctions<
+//         N,
+//         typename CreateQuantizedNodeQuantizedNode<N>::Create,
+//         typename CreateInstanceLeaf,
+//         typename QuantizedNode<N>::Update>;
+
+template <i32 N, typename BuildFunctions>
+struct BVHBuilder
+{
+    using NodeType      = typename BuildFunctions::NodeType;
+    using Primitive     = typename BuildFunctions::Primitive;
+    using BasePrimitive = typename BuildFunctions::BasePrimitive;
+    // BuildFunctions funcs;
+    BuildFunctions f;
+
+    Arena **arenas;
+    Primitive *primitives;
+
+    NodeType *BuildBVHRoot(BuildSettings settings, Record &record);
+    __forceinline u32 BuildNode(BuildSettings settings, const Record &record, Record *childRecords, u32 &numChildren);
+    void BuildBVH(BuildSettings settings, NodeType *parent, Record *records, u32 numChildren);
+
+    BVHN<N, NodeType> BuildBVH(BuildSettings settings, Arena **inArenas, Primitive *inRawPrims, u32 count);
+};
+
+template <i32 N>
+using BVHBuilderTriangleMesh = BVHBuilder<N, BLAS_QuantizedNode_TriangleLeaf_Funcs<N>>;
+
+// template <i32 N>
+// struct PolyLeaf
 // {
-//
-//     prim.Find();
+//     LaneU32<N> indices;
+// };
+
+// template <>
+// struct PolyLeaf<1>
+// {
+// };
+
+// NOTE: for BVHs where the leaves are primitives containing any intersection type. not sure if this will actually exist
+// CREATE_LEAF(CreatePolyLeaf)
+// {
+//     switch ((u32)prim.minP_geomID[3])
+//     {
+//         case PrimitiveType_Triangle:
+//         {
+//             u32 count              = end - start;
+//             Triangle<N> *triangles = PushArray(arena, Triangle<N>, (end - start + N - 1) / N);
+//             for (u32 i = start; i < end; i++)
+//             {
+//                 triangles[i].Fill(scene, prim[i], start, end);
+//             }
+//         }
+//         break;
+//         default:
+//         {
+//             Assert(!"Not implemented");
+//         }
+//     }
 // }
+
+template <i32 N, typename BuildFunctions>
+typename BVHBuilder<N, BuildFunctions>::NodeType *BVHBuilder<N, BuildFunctions>::BuildBVHRoot(BuildSettings settings, Record &record)
+{
+    Record childRecords[N];
+    u32 numChildren;
+    u32 result = BuildNode(settings, record, childRecords, numChildren);
+
+    NodeType *root = PushStruct(arenas[GetThreadIndex()], NodeType);
+    if (result)
+    {
+        f.createNode(childRecords, numChildren, root);
+        BuildBVH(settings, root, childRecords, numChildren);
+    }
+    // If the root is a leaf
+    else
+    {
+        u32 leafIndex = 0;
+        f.createNode(&record, 1, root);
+        f.updateNode(root, &record, 0, &leafIndex, 1);
+    }
+    return root;
+}
+
+template <i32 N, typename BuildFunctions>
+__forceinline u32 BVHBuilder<N, BuildFunctions>::BuildNode(BuildSettings settings, const Record &record,
+                                                           Record *childRecords, u32 &numChildren)
+
+{
+    u32 total = record.end - record.start;
+    Assert(total > 0);
+
+    if (total == 1) return 0;
+
+    HeuristicSAHBinned<32> heuristic;
+
+    {
+        Split split = BinParallel(record, 1, &heuristic);
+        PartitionResult result;
+
+        PartitionParallel(split, primitives, record, &result);
+
+        // NOTE: multiply both by the area instead of dividing
+        f32 area     = HalfArea(record.geomBounds);
+        f32 leafSAH  = settings.intCost * area * total; //((total + (1 << settings.logBlockSize) - 1) >> settings.logBlockSize);
+        f32 splitSAH = settings.travCost * area + settings.intCost * split.bestSAH;
+
+        if (total <= settings.maxLeafSize && leafSAH <= splitSAH) return 0;
+
+        childRecords[0] = Record(record.data, result.geomBoundsL, result.centBoundsL, record.start, result.mid);
+        childRecords[1] = Record(record.data, result.geomBoundsR, result.centBoundsR, result.mid, record.end);
+    }
+
+    // N - 1 splits produces N children
+    for (numChildren = 2; numChildren < N; numChildren++)
+    {
+        i32 bestChild = -1;
+        f32 maxArea   = neg_inf;
+        for (u32 recordIndex = 0; recordIndex < numChildren; recordIndex++)
+        {
+            Record &childRecord = childRecords[recordIndex];
+            if (childRecord.Size() <= settings.maxLeafSize) continue;
+
+            f32 childArea = HalfArea(childRecord.geomBounds);
+            if (childArea > maxArea)
+            {
+                bestChild = recordIndex;
+                maxArea   = childArea;
+            }
+        }
+        if (bestChild == -1) break;
+
+        Split split = BinParallel(childRecords[bestChild], 1, &heuristic);
+
+        PartitionResult result;
+        PartitionParallel(split, primitives, childRecords[bestChild], &result);
+
+        Record &childRecord = childRecords[bestChild];
+        PrimData *prim      = childRecord.data;
+        u32 start           = childRecord.start;
+        u32 end             = childRecord.end;
+
+        Assert(start != end && start != result.mid && result.mid != end);
+
+        childRecords[bestChild]   = Record(prim, result.geomBoundsL, result.centBoundsL, start, result.mid);
+        childRecords[numChildren] = Record(prim, result.geomBoundsR, result.centBoundsR, result.mid, end);
+    }
+
+    // Test
+    // for (u32 i = 0; i < numChildren; i++)
+    // {
+    //     Lane4F32 maskMin(False);
+    //     Lane4F32 maskMax(False);
+    //     Bounds test;
+    //     Record &childRecord = childRecords[i];
+    //     for (u32 j = childRecord.start; j < childRecord.end; j++)
+    //     {
+    //         AABB bounds = Primitive::Bounds(primitives, j);
+    //
+    //         Bounds b;
+    //         b.minP = Lane4F32(bounds.minP);
+    //         b.maxP = Lane4F32(bounds.maxP);
+    //
+    //         Assert(((Movemask(record.data[j].minP == b.minP) & 0x7) == 0x7) &&
+    //                ((Movemask(record.data[j].maxP == b.maxP) & 0x7) == 0x7));
+    //
+    //         test.Extend(b);
+    //         maskMin = maskMin | (b.minP == childRecord.geomBounds.minP);
+    //         maskMax = maskMax | (b.maxP == childRecord.geomBounds.maxP);
+    //         Assert(childRecord.geomBounds.Contains(b));
+    //     }
+    //     u32 minBits = Movemask(maskMin);
+    //     u32 maxBits = Movemask(maskMax);
+    //     Assert(((minBits & 0x7) == 0x7) && ((maxBits & 0x7) == 0x7));
+    // }
+    return 1;
+}
+
+template <i32 N, typename BuildFunctions>
+void BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, NodeType *parent, Record *records, u32 inNumChildren)
+{
+    Record allChildRecords[N][N];
+    u32 allNumChildren[N];
+
+    u32 childNodeIndices[N];
+    u32 childLeafIndices[N];
+    u32 nodeCount = 0;
+    u32 leafCount = 0;
+
+    Assert(inNumChildren <= N);
+
+    for (u32 childIndex = 0; childIndex < inNumChildren; childIndex++)
+    {
+        Record *childRecords = allChildRecords[childIndex];
+        Record &record       = records[childIndex];
+        u32 &numChildren     = allNumChildren[childIndex];
+        u32 result           = BuildNode(settings, record, childRecords, numChildren);
+
+        childNodeIndices[nodeCount] = childIndex;
+        childLeafIndices[leafCount] = childIndex;
+        nodeCount += result;
+        leafCount += !result;
+    }
+
+    NodeType *children = PushArray(arenas[GetThreadIndex()], NodeType, nodeCount);
+
+    // TODO: need to partition again so that the ranges pointed to by the leaves are consecutive in memory
+    if (leafCount > 0)
+    {
+        u32 offset = pos_inf;
+        u32 end    = neg_inf;
+
+        TempArena temp = ScratchStart(0, 0);
+        for (u32 i = 0; i < inNumChildren; i++)
+        {
+            offset = Min(offset, records[i].start);
+            end    = Max(end, records[i].end);
+        }
+
+        u32 totalInternalNodeRange = 0;
+        u32 totalLeafNodeRange     = 0;
+        for (u32 i = 0; i < nodeCount; i++)
+        {
+            u32 internalNodeIndex = childNodeIndices[i];
+            Record &record        = records[internalNodeIndex];
+            totalInternalNodeRange += record.Size();
+        }
+
+        for (u32 i = 0; i < leafCount; i++)
+        {
+            u32 internalLeafIndex = childLeafIndices[i];
+            Record &record        = records[internalLeafIndex];
+            totalLeafNodeRange += record.Size();
+        }
+
+        Assert(totalLeafNodeRange + totalInternalNodeRange == end - offset);
+        // TODO: this needs to be the indices for triangle meshes. i have no clue how I'm going to handle non indexed triangle meshes.
+        // maybe could group into a triangle struct or something then transpose, under the assumption that non indexed triangle meshes
+        // probably have relatively few vertices
+        struct Range
+        {
+            u32 start;
+            u32 end;
+        };
+
+        // TODO
+        BasePrimitive *temporaryInternalNodeStorage = PushArray(temp.arena, BasePrimitive, totalInternalNodeRange);
+        PrimData *tempInternalPrimData              = PushArray(temp.arena, PrimData, totalInternalNodeRange);
+        Range *newInternalNodeRanges                = PushArray(temp.arena, Range, nodeCount);
+
+        BasePrimitive *temporaryLeafNodeStorage = PushArray(temp.arena, BasePrimitive, totalLeafNodeRange);
+        PrimData *tempLeafPrimData              = PushArray(temp.arena, PrimData, totalLeafNodeRange);
+        Range *newLeafNodeRanges                = PushArray(temp.arena, Range, leafCount);
+
+        u32 nodeOffset = 0;
+        u32 leafOffset = 0;
+        for (u32 i = 0; i < nodeCount; i++)
+        {
+            u32 internalNodeIndex = childNodeIndices[i];
+            Record &record        = records[internalNodeIndex];
+
+            newInternalNodeRanges[i].start = nodeOffset;
+            newInternalNodeRanges[i].end   = nodeOffset + record.Size();
+            for (u32 j = record.start; j < record.end; j++)
+            {
+                temporaryInternalNodeStorage[nodeOffset] = GetPrimitive<Primitive, BasePrimitive>(primitives, j);
+                tempInternalPrimData[nodeOffset]         = record.data[j];
+                nodeOffset++;
+            }
+        }
+        for (u32 i = 0; i < leafCount; i++)
+        {
+            u32 leafNodeIndex = childLeafIndices[i];
+            Record &record    = records[leafNodeIndex];
+
+            newLeafNodeRanges[i].start = leafOffset;
+            newLeafNodeRanges[i].end   = leafOffset + record.Size();
+            for (u32 j = record.start; j < record.end; j++)
+            {
+                temporaryLeafNodeStorage[leafOffset] = GetPrimitive<Primitive, BasePrimitive>(primitives, j);
+                tempLeafPrimData[leafOffset]         = record.data[j];
+                leafOffset++;
+            }
+        }
+
+        for (u32 i = 0; i < leafCount; i++)
+        {
+            u32 index           = childLeafIndices[i];
+            Record &childRecord = records[index];
+            Range *range        = &newLeafNodeRanges[i];
+            childRecord.start   = offset;
+            for (u32 j = range->start; j < range->end; j++)
+            {
+                StorePrimitive(primitives, temporaryLeafNodeStorage[j], offset);
+                childRecord.data[offset] = tempLeafPrimData[j];
+                offset++;
+            }
+            childRecord.end = offset;
+        }
+        for (u32 i = 0; i < nodeCount; i++)
+        {
+            u32 index           = childNodeIndices[i];
+            Record &childRecord = records[index];
+            Range *range        = &newInternalNodeRanges[i];
+            u32 newStart        = offset;
+            for (u32 j = range->start; j < range->end; j++)
+            {
+                StorePrimitive(primitives, temporaryInternalNodeStorage[j], offset);
+                childRecord.data[offset] = tempInternalPrimData[j];
+                offset++;
+            }
+            u32 newEnd = offset;
+            for (u32 grandChildIndex = 0; grandChildIndex < allNumChildren[index]; grandChildIndex++)
+            {
+                Record &grandChildRecord = allChildRecords[index][grandChildIndex];
+                i32 shift                = (i32)newStart - (i32)childRecord.start;
+                grandChildRecord.start += shift;
+                grandChildRecord.end += shift;
+            }
+            childRecord.start = newStart;
+            childRecord.end   = newEnd;
+        }
+
+        Assert(offset == end);
+
+        ScratchEnd(temp);
+    }
+
+    for (u32 i = 0; i < nodeCount; i++)
+    {
+        u32 childNodeIndex = childNodeIndices[i];
+        f.createNode(allChildRecords[childNodeIndex], allNumChildren[childNodeIndex], &children[childNodeIndex]);
+    }
+
+    // Updates the parent
+    f.updateNode(parent, records, children, childLeafIndices, leafCount);
+
+    for (u32 i = 0; i < nodeCount; i++)
+    {
+        u32 childNodeIndex = childNodeIndices[i];
+        BuildBVH(settings, &children[childNodeIndex], allChildRecords[childNodeIndex], allNumChildren[childNodeIndex]);
+    }
+
+    // return NodePtr::EncodeNode(node);
+}
+
+template <i32 N, typename BuildFunctions>
+BVHN<N, typename BVHBuilder<N, BuildFunctions>::NodeType>
+BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings,
+                                        Arena **inArenas,
+                                        Primitive *inRawPrims,
+                                        u32 count)
+{
+    arenas = inArenas;
+
+    const u32 groupSize        = count / 16;
+    jobsystem::Counter counter = {};
+
+    PrimData *prims = PushArray(arenas[GetThreadIndex()], PrimData, count);
+
+    jobsystem::KickJobs(&counter, count, groupSize, [&](jobsystem::JobArgs args) {
+        u32 index         = args.jobId;
+        AABB bounds       = Primitive::Bounds(inRawPrims, index);
+        prims[index].minP = Lane4F32(bounds.minP);
+        prims[index].maxP = Lane4F32(bounds.maxP);
+        prims[index].SetGeomID(0);
+        prims[index].SetPrimID(index);
+    });
+    jobsystem::WaitJobs(&counter);
+    // for (u32 i = 0; i < count; i++)
+    // {
+    //     u32 index         = i;
+    //     AABB bounds       = Primitive::Bounds(inRawPrims, index);
+    //     prims[index].minP = Lane4F32(bounds.minP);
+    //     prims[index].maxP = Lane4F32(bounds.maxP);
+    //     prims[index].SetGeomID(0);
+    //     prims[index].SetPrimID(index);
+    // }
+
+    primitives = inRawPrims;
+    Record record;
+    record = jobsystem::ParallelReduce<Record>(
+        count, 1024,
+        [&](Record &record, u32 start, u32 count) {
+        for (u32 i = start; i < start + count; i++)
+        {
+            PrimData *prim    = &prims[i];
+            Lane4F32 centroid = (prim->minP + prim->maxP) * 0.5f;
+            record.geomBounds.Extend(prim->minP, prim->maxP);
+            record.centBounds.Extend(centroid);
+        } },
+        [&](Record &a, Record &b) {
+        a.geomBounds.Extend(b.geomBounds);
+        a.centBounds.Extend(b.centBounds); });
+
+    record.data  = prims;
+    record.start = 0;
+    record.end   = count;
+
+    // BVH<N> *result = PushStruct(arenas[GetThreadIndex()], BVH<N>);
+    BVHN<N, NodeType> result;
+    result.root = BuildBVHRoot(settings, record);
+    // if (settings.twoLevel)
+    // {
+    // }
+    // else
+    // {
+    //     BuildBVH(settings, record);
+    // }
+    return result;
+}
 
 } // namespace rt
 

@@ -109,7 +109,22 @@ __forceinline Lane4U32 &operator&=(Lane4U32 &lane, const u32 val)
 }
 __forceinline Lane4U32 operator|(const Lane4U32 &a, const Lane4U32 &b) { return _mm_or_si128(a, b); }
 __forceinline Lane4U32 operator<<(const Lane4U32 &a, const u32 inShift) { return _mm_slli_epi32(a, inShift); }
-__forceinline Lane4U32 operator>>(const Lane4U32 &a, const u32 inShift) { return _mm_srli_epi32(a, inShift); }
+__forceinline Lane4U32 operator>>(const Lane4U32 &a, const u32 inShift)
+{
+    return _mm_srli_epi32(a, inShift);
+}
+
+#if defined(__AVX2__)
+__forceinline Lane4U32 operator<<(const Lane4U32 &a, const Lane4U32 &b)
+{
+    return _mm_sllv_epi32(a, b);
+}
+__forceinline Lane4U32 operator>>(const Lane4U32 &a, const Lane4U32 &b) { return _mm_srlv_epi32(a, b); }
+#else
+__forceinline Lane4U32 operator<<(const Lane4U32 &a, const Lane4U32 &b)
+{
+}
+#endif
 
 __forceinline Lane4U32 Min(const Lane4U32 &a, const Lane4U32 &b)
 {

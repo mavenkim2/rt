@@ -1,5 +1,39 @@
 namespace rt
 {
+
+struct Bounds
+{
+    Lane4F32 minP;
+    Lane4F32 maxP;
+
+    Bounds() : minP(pos_inf), maxP(neg_inf) {}
+
+    __forceinline void Extend(Lane4F32 inMin, Lane4F32 inMax)
+    {
+        minP = Min(minP, inMin);
+        maxP = Max(maxP, inMax);
+    }
+    __forceinline void Extend(Lane4F32 in)
+    {
+        minP = Min(minP, in);
+        maxP = Max(maxP, in);
+    }
+    __forceinline void Extend(const Bounds &other)
+    {
+        minP = Min(minP, other.minP);
+        maxP = Max(maxP, other.maxP);
+    }
+    __forceinline bool Contains(const Bounds &other) const
+    {
+        return All(other.minP >= minP) && All(other.maxP <= maxP);
+    }
+};
+
+__forceinline f32 HalfArea(const Bounds &b)
+{
+    Lane4F32 extent = b.maxP - b.minP;
+    return FMA(extent[0], extent[1] + extent[2], extent[1] * extent[2]);
+}
 struct Basis
 {
     Vec3f t;
@@ -50,10 +84,16 @@ enum
     PrimitiveType_Triangle,
     PrimitiveType_Curve,
     PrimitiveType_Subdiv,
-    PrimitiveType_Instance,
+
+    // NOTE: triangle mesh instances only (for now)
+    PrimitiveType_Instance     = 16,
+    PrimitiveType_InstanceMask = PrimitiveType_Instance - 1,
 
     PrimitiveType_Count,
 };
+
+__forceinline b32 IsInstanced(u32 i) { return ~PrimitiveType_InstanceMask & i; }
+__forceinline PrimitiveType GetBaseType(u32 i) { return PrimitiveType(i & PrimitiveType_InstanceMask); }
 
 struct Quad
 {
@@ -228,6 +268,139 @@ struct ConstantMedium
     }
 };
 
+// template <i32 N>
+// struct Triangle
+// {
+//     LaneU32<N> geomIDs; // mesh
+//     LaneU32<N> primIDs; // face
+//
+//     void Fill(Scene *scene, const PrimData *prim, u32 start, u32 end)
+//     {
+//         LaneU32<N> geomID;
+//         LaneU32<N> geomID;
+//
+//         Assert(end - start < N);
+//         u32 i = 0;
+//         for (; i < N && start < end; i++, start++)
+//         {
+//             geomID[i] = prim[start].GeomID();
+//             primID[i] = prim[start].PrimID();
+//         }
+//         for (; i < N - (end - start); i++, start++)
+//         {
+//             geomID[i] = geomID[0];
+//             primID[i] = -1;
+//         }
+//     }
+// };
+
+struct Triangle
+{
+    u32 indices[3];
+};
+
+// TODO: if no indices, generate them (i.e. 0, 1, 2, 3, 4, 5, 6...)
+struct TriangleMesh
+{
+    Vec3f *p;
+    Vec3f *n;
+    Vec3f *t;
+    Vec2f *uv;
+    u32 *indices;
+    u32 numVertices;
+    u32 numIndices;
+
+    static __forceinline AABB Bounds(TriangleMesh *mesh, u32 faceIndex)
+    {
+        Assert(faceIndex < mesh->numIndices / 3);
+        AABB result;
+        result.Extend(mesh->p[mesh->indices[faceIndex * 3 + 0]]);
+        result.Extend(mesh->p[mesh->indices[faceIndex * 3 + 1]]);
+        result.Extend(mesh->p[mesh->indices[faceIndex * 3 + 2]]);
+        return result;
+    }
+};
+
+//////////////////////////////
+// Methods used for BVH construction
+//
+template <typename Primitive, typename BasePrimitive>
+__forceinline BasePrimitive GetPrimitive(Primitive *primitives, u32 index)
+{
+    static_assert(std::is_same_v<Primitive, BasePrimitive>);
+    return primitives[index];
+}
+
+template <>
+__forceinline Triangle GetPrimitive<TriangleMesh, Triangle>(TriangleMesh *mesh, u32 index)
+{
+    Triangle out;
+    Assert(index < mesh->numIndices / 3);
+    out.indices[0] = mesh->indices[index * 3 + 0];
+    out.indices[1] = mesh->indices[index * 3 + 1];
+    out.indices[2] = mesh->indices[index * 3 + 2];
+    return out;
+}
+
+template <typename Primitive, typename BasePrimitive>
+__forceinline void StorePrimitive(Primitive *primitives, const BasePrimitive &stored, u32 index) { primitives[index] = stored; }
+
+template <>
+__forceinline void StorePrimitive<TriangleMesh, Triangle>(TriangleMesh *mesh, const Triangle &stored, u32 index)
+{
+    Assert(index < mesh->numIndices / 3);
+    mesh->indices[index * 3 + 0] = stored.indices[0];
+    mesh->indices[index * 3 + 1] = stored.indices[1];
+    mesh->indices[index * 3 + 2] = stored.indices[2];
+}
+
+template <typename Primitive>
+void Swap(Primitive *prim, u32 lIndex, u32 rIndex)
+{
+    Swap(prim[lIndex], prim[rIndex]);
+}
+
+template <>
+void Swap<TriangleMesh>(TriangleMesh *mesh, u32 lIndex, u32 rIndex)
+{
+    Assert(mesh->indices);
+    Swap(mesh->indices[lIndex * 3 + 0], mesh->indices[rIndex * 3 + 0]);
+    Swap(mesh->indices[lIndex * 3 + 1], mesh->indices[rIndex * 3 + 1]);
+    Swap(mesh->indices[lIndex * 3 + 2], mesh->indices[rIndex * 3 + 2]);
+}
+
+template <typename Primitive>
+void PrefetchL1(Primitive *prims, u32 index)
+{
+    static const size_t cacheLineSize  = 64;
+    static const size_t cacheLineShift = 6;
+
+    char *base                  = (char *)(&prims[index]);
+    constexpr u32 numCacheLines = (sizeof(Primitive) + cacheLineSize - 1) >> cacheLineShift;
+
+    for (u32 i = 0; i < numCacheLines; i++)
+    {
+        _mm_prefetch(base + cacheLineSize * i, _MM_HINT_T0);
+    }
+}
+
+template <>
+void PrefetchL1<TriangleMesh>(TriangleMesh *prims, u32 index)
+{
+    static const size_t cacheLineSize  = 64;
+    static const size_t cacheLineShift = 6;
+
+    if (prims->indices)
+    {
+        _mm_prefetch((char *)(&prims->indices[index * 3]), _MM_HINT_T0);
+    }
+    else
+    {
+    }
+}
+
+//////////////////////////////
+
 struct SceneHandle
 {
     u32 offset;
@@ -305,8 +478,48 @@ struct ScenePacket
     // }
 };
 
+template <i32 index, typename T, typename... Ts>
+struct RemoveFirstN;
+
+template <i32 index, typename T, typename... Ts>
+struct RemoveFirstN<index, TypePack<T, Ts...>>
+{
+    using type = typename RemoveFirstN<index - 1, TypePack<Ts...>>::type;
+};
+
+struct GeometryID
+{
+    static const u32 indexMask = 0x0fffffff;
+    static const u32 typeShift = 28;
+
+    static const u32 sphereType       = 0;
+    static const u32 quadType         = 1;
+    static const u32 boxType          = 2;
+    static const u32 triangleMeshType = 3;
+    static const u32 curveType        = 4;
+    static const u32 subdivType       = 5;
+    static const u32 instanceType     = 16;
+
+    u32 id;
+
+    GeometryID(u32 id) : id(id) {}
+
+    u32 GetType() const
+    {
+        return id >> typeShift;
+    }
+};
+
+struct InstancePrimitive
+{
+    GeometryID geomID;     // points to the bvh and the geometry
+    Mat4 *objectFromWorld; // transform
+};
+
 struct Scene
 {
+    // using PrimitiveTypes = TypePack<Sphere, Quad, Box, TriangleMesh>;
+
     static const u32 indexMask = 0x0fffffff;
     static const u32 typeShift = 28;
 
@@ -323,6 +536,9 @@ struct Scene
     Sphere *spheres;
     Quad *quads;
     Box *boxes;
+    TriangleMesh *meshes;
+
+    InstancePrimitive *instances;
 
     PrimitiveIndices *primitiveIndices;
 
@@ -332,10 +548,10 @@ struct Scene
     u32 sphereCount;
     u32 quadCount;
     u32 boxCount;
+    u32 meshCount;
     u32 totalPrimitiveCount;
 
     // PrimitiveType_Count arrays
-    void *primitives[PrimitiveType_Count];
     u32 counts[PrimitiveType_Count];
 
     u32 transformCount;
@@ -352,5 +568,39 @@ struct Scene
 
     void GetAABBs(AABB *aabbs);
     bool Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &temp, u32 index);
+
+    template <typename T>
+    __forceinline const T *Get(u32 i) const
+    {
+        StaticAssert(false, UnspecifiedPrimType);
+    }
+
+    template <>
+    __forceinline const Sphere *Get<Sphere>(u32 i) const
+    {
+        Assert(i < sphereCount);
+        return &spheres[i];
+    }
+
+    template <>
+    __forceinline const Quad *Get<Quad>(u32 i) const
+    {
+        Assert(i < quadCount);
+        return &quads[i];
+    }
+
+    template <>
+    __forceinline const Box *Get<Box>(u32 i) const
+    {
+        Assert(i < boxCount);
+        return &boxes[i];
+    }
+
+    template <>
+    __forceinline const TriangleMesh *Get<TriangleMesh>(u32 i) const
+    {
+        Assert(i < meshCount);
+        return &meshes[i];
+    }
 };
 } // namespace rt

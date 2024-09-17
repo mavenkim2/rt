@@ -45,16 +45,22 @@ u32 OS_NumProcessors()
     return systemInfo.dwNumberOfProcessors;
 }
 
-void *OS_Reserve(u64 size)
+void *OS_Reserve(u64 size, void *ptr)
 {
-    void *ptr = VirtualAlloc(0, size, MEM_RESERVE, PAGE_READWRITE);
-    return ptr;
+    void *out = VirtualAlloc(ptr, size, MEM_RESERVE, PAGE_READWRITE);
+    return out;
 }
 
 b8 OS_Commit(void *ptr, u64 size)
 {
     b8 result = (VirtualAlloc(ptr, size, MEM_COMMIT, PAGE_READWRITE) != 0);
     return result;
+}
+
+void *OS_Alloc(u64 size, void *ptr)
+{
+    void *out = VirtualAlloc(ptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    return out;
 }
 
 void OS_Release(void *memory)

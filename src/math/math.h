@@ -206,6 +206,12 @@ union AABB
             return 1;
         return 2;
     }
+
+    __forceinline void Extend(const Vec3f &p)
+    {
+        minP = Min(minP, p);
+        maxP = Max(maxP, p);
+    }
 };
 
 inline AABB Union(const AABB &box1, const AABB &box2)

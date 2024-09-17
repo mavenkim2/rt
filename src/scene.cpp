@@ -335,17 +335,6 @@ bool Scene::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &temp, u
     return result;
 }
 
-struct TriangleMesh
-{
-    Vec3f *p;
-    Vec3f *n;
-    Vec3f *t;
-    Vec2f *uv;
-    u32 *indices;
-    u32 numVertices;
-    u32 numIndices;
-};
-
 inline u32 GetTypeStride(string word)
 {
     if (word == "uint8" || word == "char" || word == "uchar") return 1;

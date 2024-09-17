@@ -1,4 +1,4 @@
-namespace rt 
+namespace rt
 {
 struct ThreadContext;
 #define THREAD_ENTRY_POINT(name) void name(void *parameter, ThreadContext *ctx)
@@ -25,9 +25,10 @@ struct PerformanceCounter
 
 PerformanceCounter OS_StartCounter();
 u32 OS_NumProcessors();
-void *OS_Reserve(u64 size);
+void *OS_Reserve(u64 size, void *ptr = 0);
 b8 OS_Commit(void *ptr, u64 size);
 void OS_Release(void *memory);
+void *OS_Alloc(u64 size, void *ptr = 0);
 u64 OS_PageSize();
 void OS_CreateWorkThread(OS_ThreadFunction func, void *parameter);
 DWORD Win32ThreadProc(void *parameter);
@@ -47,4 +48,4 @@ void OS_ReleaseSemaphores(OS_Handle input, u32 count);
 void OS_ThreadJoin(OS_Handle handle);
 b32 OS_SignalWait(OS_Handle input);
 void OS_Init();
-}
+} // namespace rt

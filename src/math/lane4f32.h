@@ -16,6 +16,17 @@ struct LaneF32<4>
     {
         __m128 v;
         f32 f[4];
+        // NOTE: this is technically undefined behavior, but should be fine for most popular compilers
+        struct
+        {
+            f32 values[3];
+            union
+            {
+                i32 integer;
+                u32 u;
+                f32 fl;
+            };
+        };
     };
     __forceinline LaneF32() {}
     __forceinline LaneF32(__m128 v) : v(v) {}
@@ -334,6 +345,12 @@ __forceinline u32 TruncateToU8(const Lane4F32 &lane)
 #endif
 }
 
+__forceinline void TruncateToU8(u8 *out, const Lane4F32 &lane)
+{
+    u32 result  = TruncateToU8(lane);
+    *(u32 *)out = result;
+}
+
 #ifdef __SSE4_1__
 __forceinline Lane4F32 Floor(const Lane4F32 &lane)
 {
@@ -359,6 +376,8 @@ __forceinline Lane4U32 Flooru(Lane4F32 lane)
 {
     return _mm_cvtps_epi32(Floor(lane));
 }
+
+__forceinline Lane4F32 AsFloat(Lane4U32 lane) { return _mm_castsi128_ps(lane); }
 
 #if defined(__AVX512VL__)
 template <i32 R>
@@ -461,6 +480,17 @@ __forceinline Lane4F32 Compact(const u32 mask, const Lane4F32 &l)
 #elif defined(__SSSE3__)
 #error TODO
 #endif
+}
+
+__forceinline void Transpose3x3(const Lane4F32 &a, const Lane4F32 &b, const Lane4F32 &c,
+                                    Lane4F32 &out1, Lane4F32 &out2, Lane4F32 &out3)
+{
+    Lane4F32 acXY = UnpackLo(a, c);
+    Lane4F32 bcXY = UnpackLo(b, c);
+
+    out1 = UnpackLo(acXY, b);
+    out2 = UnpackHi(acXY, bcXY);
+    out3 = Shuffle<0, 1, 2, 0>(UnpackHi(a, b), c);
 }
 
 } // namespace rt

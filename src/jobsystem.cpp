@@ -24,7 +24,7 @@ void InitializeJobsystem()
     jobSystem.threadCount   = Min<u32>(ArrayLength(jobSystem.threads), numProcessors);
     jobSystem.readSemaphore = OS_CreateSemaphore(jobSystem.threadCount);
 
-    threadQueues = (ThreadQueue *)malloc(numProcessors * sizeof(ThreadQueue));
+    // threadQueues = (ThreadQueue *)malloc(numProcessors * sizeof(ThreadQueue));
 
     for (size_t i = 0; i < numProcessors; i++)
     {
@@ -71,7 +71,7 @@ void KickJob(Counter *counter, const JobFunction &func, Priority priority)
     }
 }
 
-void KickJobs(Counter *counter, u32 numJobs, u32 numGroups, const JobFunction &func, Priority priority)
+void KickJobs(Counter *counter, u32 numJobs, u32 groupSize, const JobFunction &func, Priority priority)
 {
     JobQueue *queue = 0;
     switch (priority)
@@ -80,7 +80,7 @@ void KickJobs(Counter *counter, u32 numJobs, u32 numGroups, const JobFunction &f
         case Priority::High: queue = &jobSystem.highPriorityQueue; break;
     }
 
-    u32 groupSize = (numJobs + numGroups - 1) / numGroups;
+    u32 numGroups = (numJobs + groupSize - 1) / groupSize;
 
     for (;;)
     {
@@ -138,7 +138,7 @@ T ParallelReduce(u32 count, u32 blockSize, Func func, Reduce reduce, Args... inA
         new (&objs[i]) T(std::forward<Args>(inArgs)...);
     }
     // TODO: maybe going to need task stealing, and have the thread work on something while it waits
-    jobsystem::KickJobs(&counter, taskCount, taskCount, [&](jobsystem::JobArgs args) {
+    jobsystem::KickJobs(&counter, taskCount, 1, [&](jobsystem::JobArgs args) {
         T &obj    = objs[args.jobId];
         u32 start = groupSize * args.jobId;
         func(obj, start, Min(groupSize, count - start));
@@ -218,8 +218,8 @@ THREAD_ENTRY_POINT(JobThreadEntryPoint)
     SetThreadName(PushStr8F(temp.arena, "[Jobsystem] Worker %u", threadIndex));
     ScratchEnd(temp);
 
-    threadLocalQueue           = &threadQueues[threadIndex];
-    threadLocalQueue->stackPtr = 0;
+    // threadLocalQueue           = &threadQueues[threadIndex];
+    // threadLocalQueue->stackPtr = 0;
 
     for (; !gTerminateJobs;)
     {

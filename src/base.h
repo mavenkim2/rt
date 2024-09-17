@@ -27,7 +27,8 @@ typedef i32 b32;
 #define SSE42
 
 #ifdef _MSC_VER
-#define Trap() __debugbreak()
+#define __thread __declspec(thread)
+#define Trap()   __debugbreak()
 #else
 #error compiler not implemented
 #endif

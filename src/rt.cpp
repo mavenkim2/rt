@@ -1035,42 +1035,63 @@ int main(int argc, char *argv[])
     SetThreadIndex(0);
     jobsystem::InitializeJobsystem();
 
-    threadLocalStatistics  = PushArray(arena, ThreadStatistics, OS_NumProcessors());
-    threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, OS_NumProcessors());
+    u32 numProcessors      = OS_NumProcessors();
+    threadLocalStatistics  = PushArray(arena, ThreadStatistics, numProcessors);
+    threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, numProcessors);
 
-    PrimData data;
-    const u32 count = 49013233;
-    data.minP       = PushArray(arena, Lane4F32, count);
-    data.maxP       = PushArray(arena, Lane4F32, count);
+    jobsystem::Counter counter = {};
 
-    data.total = count;
+#if 1
+    Arena **arenas = PushArray(arena, Arena *, numProcessors);
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        arenas[i] = ArenaAlloc();
+    }
+
+    TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
+
+    BuildSettings settings;
+    BVHBuilderTriangleMesh<4> builder;
+    BVH4Quantized bvh = builder.BuildBVH(settings, arenas, &mesh, mesh.numIndices / 3);
+
+#endif
+
+//////////////////////////////
+// Parallel Binning and Partitioning Test
+//
+#if 0
+    const u32 count = 10000000;
+    PrimData *data  = PushArray(arena, PrimData, count);
 
     for (u32 i = 0; i < count; i++)
     {
-        Vec3f min       = RandomVec3(-100.f, 100.f);
-        Vec3f max       = RandomVec3(100.f, 300.f);
-        data.minP[i][0] = min.x;
-        data.minP[i][1] = min.y;
-        data.minP[i][2] = min.z;
-
-        data.maxP[i][0] = max.x;
-        data.maxP[i][1] = max.y;
-        data.maxP[i][2] = max.z;
+        PrimData *prim = &data[i];
+        Vec3f min      = RandomVec3(-100.f, 100.f);
+        Vec3f max      = RandomVec3(100.f, 300.f);
+        prim->minP     = Lane4F32(min);
+        prim->maxP     = Lane4F32(max);
     }
 
-    AABB centroidBounds;
+    Bounds centroidBounds;
+    Bounds geomBounds;
     for (u32 i = 0; i < count; i++)
     {
-        Lane4F32 centroid = (data.minP[i] + data.maxP[i]) * 0.5f;
-        centroidBounds    = Union(centroidBounds, Vec3f(centroid[0], centroid[1], centroid[2]));
+        PrimData *prim    = &data[i];
+        Lane4F32 centroid = (prim->minP + prim->maxP) * 0.5f;
+        centroidBounds.Extend(centroid);
+        geomBounds.Extend(prim->minP, prim->maxP);
     }
+
+    printf("%llu\n", sizeof(QuantizedNode<8>));
 
     HeuristicSAHBinned<32> heuristic(centroidBounds);
 
     clock_t start = clock();
     // heuristic.Bin(&data);
     // Split split = heuristic.Best(0);
-    Split split = BinParallel(centroidBounds, &data);
+    Record record(data, geomBounds, centroidBounds, 0, count);
+
+    Split split = BinParallel(record);
     clock_t end = clock();
 
     printf("Binning time: %dms\n", end - start);
@@ -1078,15 +1099,21 @@ int main(int argc, char *argv[])
     start = clock();
     // u32 mid = PartitionSerial(split, &data);
     // u32 mid = PartitionSerialCrazy(split, &data);
-    u32 mid = PartitionParallel(split, data);
-    end     = clock();
+    PartitionResult result;
+    PartitionParallel(split, data, 0, count, &result);
+    end = clock();
+
+    printf("SAH: %f\n", split.bestSAH / HalfArea(geomBounds));
+
+    u32 mid = result.mid;
 
     u32 errors = 0;
-    for (u32 i = 0; i < data.total; i++)
+    for (u32 i = 0; i < count; i++)
     {
-        f32 minP     = data.minP[i][split.bestDim];
-        f32 maxP     = data.maxP[i][split.bestDim];
-        f32 centroid = (maxP + minP) * 0.5f;
+        PrimData *prim = &data[i];
+        f32 minP       = prim->minP[split.bestDim];
+        f32 maxP       = prim->maxP[split.bestDim];
+        f32 centroid   = (maxP + minP) * 0.5f;
         if (i < mid)
         {
             Assert(Floor((centroid - heuristic.minP[split.bestDim]) * heuristic.scale[split.bestDim]) <= split.bestPos);
@@ -1109,17 +1136,20 @@ int main(int argc, char *argv[])
     printf("Partition Time: %dms\n", end - start);
     printf("Split: %u\n", mid);
 
-    u64 rngTime = 0;
+    u64 time = 0;
     for (u32 i = 0; i < OS_NumProcessors(); i++)
     {
-        rngTime += threadLocalStatistics[i].dumb;
+        printf("Thread %u time: %llu\n", i, threadLocalStatistics[i].dumb);
+        time += threadLocalStatistics[i].dumb;
     }
-    // printf("RNG time: %lldms\n", rngTime);
+    printf("Per thread time: %fms\n", (f64)time / OS_NumProcessors());
 
     int stop = 5;
+#endif
 
-    // TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
-
+//////////////////////////////
+// SIMD Octahedral Encoding Test
+//
 #if 0
     const u32 num  = 100000000;
     Vec3f *normals  = (Vec3f *)malloc(sizeof(Vec3f) * num);
@@ -1235,6 +1265,9 @@ int main(int argc, char *argv[])
     int stop = 5;
 #endif
 
+//////////////////////////////
+// Loading PBRT File Test
+//
 #if 0
     clock_t start = clock();
     LoadPBRT(arena, "data/island/pbrt-v4/island.pbrt");
@@ -1274,6 +1307,9 @@ int main(int argc, char *argv[])
     printf("Total other memory: %lld\n", totalOtherMemory);
 #endif
 
+//////////////////////////////
+// Main
+//
 #if 0
 #if SPHERES
     const f32 aspectRatio     = 16.f / 9.f;

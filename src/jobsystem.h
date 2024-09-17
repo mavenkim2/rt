@@ -62,8 +62,8 @@ struct JobSystem
 };
 
 void InitializeJobsystem();
-void KickJob(Counter *counter, const JobFunction &func, Priority priority = Priority::Low);
-void KickJobs(Counter *counter, u32 numJobs, u32 groupSize, const JobFunction &func, Priority priority = Priority::Low);
+void KickJob(Counter *counter, const JobFunction &func, Priority priority = Priority::High);
+void KickJobs(Counter *counter, u32 numJobs, u32 groupSize, const JobFunction &func, Priority priority = Priority::High);
 void WaitJobs(Counter *counter);
 template <typename T, typename Func, typename Reduce, typename... Args>
 T ParallelReduce(u32 count, u32 blockSize, Func func, Reduce reduce, Args... inArgs);

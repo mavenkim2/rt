@@ -675,7 +675,6 @@ bool CompressedBVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord
 
         const Vec3lf4 rayDPrime = exp * rcpDir;
 
-        // TODO: see whether operator overloading abstraction has a cost
         const Vec3lf4 rayOPrime = (minP - rayOrigin) * rcpDir;
 
         const Vec3lf4 termMin = FMA(minCompressed, rayDPrime, rayOPrime);
