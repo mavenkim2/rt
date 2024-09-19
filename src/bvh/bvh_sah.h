@@ -496,30 +496,66 @@ struct PrimRef
     };
 };
 
+// NOTE: the bounding box will be invalid if the split plane is completely to the left/right of the triangle
+// (the min of the split dim will be greater than the max)
 __forceinline u32 ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8], PrimRef *refs,
                                const u32 dim, const f32 clipPos, Bounds &lBounds, Bounds &rBounds)
 {
-    static const u32 LUTAxis[] = {1, 2, 0};
+    static const u32 LUTAxis[]     = {1, 2, 0};
+    static const __m256i swizzle[] = {_mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3), _mm256_setr_epi32(2, 0, 1, 3, 2, 0, 1, 3),
+                                      _mm256_setr_epi32(1, 2, 0, 3, 1, 2, 0, 3)};
     Lane8F32 p;
 
+    struct Bounds8F32
+    {
+        Lane8F32 minU;
+        Lane8F32 minV;
+        Lane8F32 minW;
+
+        Lane8F32 maxU;
+        Lane8F32 maxV;
+        Lane8F32 maxW;
+
+        Bounds8F32() : minU(pos_inf), minV(pos_inf), minW(pos_inf), maxU(pos_inf), maxV(pos_inf), maxW(pos_inf) {}
+
+        __forceinline void MaskExtendL(const Lane8F32 &mask, const Lane8F32 &clip, const Lane8F32 &u,
+                                       const Lane8F32 &v, const Lane8F32 &w)
+        {
+            minU = MaskMin(mask, minU, u);
+            minV = MaskMin(mask, minV, v);
+            minW = MaskMin(mask, minW, w);
+
+            maxU = clip;
+            maxV = MaskMax(mask, maxV, v);
+            maxW = MaskMax(mask, maxW, w);
+        }
+
+        __forceinline void MaskExtendR(const Lane8F32 &mask, const Lane8F32 &clip, const Lane8F32 &u,
+                                       const Lane8F32 &v, const Lane8F32 &w)
+        {
+
+            minU = clip;
+            minV = Select(mask, minV, Min(minV, v));
+            minW = Select(mask, minW, Min(minW, w));
+
+            maxU = Select(mask, maxU, Max(maxU, u));
+            maxV = Select(mask, maxV, Max(maxV, v));
+            maxW = Select(mask, maxW, Max(maxW, w));
+        }
+
+        __forceinline void MaskExtendVW(const Lane8F32 &mask, const Lane8F32 &v, const Lane8F32 &w)
+        {
+            minV = MaskMin(mask, minV, v);
+            maxV = MaskMax(mask, maxV, v);
+
+            minW = MaskMin(mask, minW, w);
+            maxW = MaskMax(mask, maxW, w);
+        }
+    };
+
     // Bounds
-    Lane8F32 minULeft(pos_inf);
-    Lane8F32 maxULeft(neg_inf);
-
-    Lane8F32 minVLeft(pos_inf);
-    Lane8F32 maxVLeft(neg_inf);
-
-    Lane8F32 minWLeft(pos_inf);
-    Lane8F32 maxWLeft(neg_inf);
-
-    Lane8F32 minURight(pos_inf);
-    Lane8F32 maxURight(neg_inf);
-
-    Lane8F32 minVRight(pos_inf);
-    Lane8F32 maxVRight(neg_inf);
-
-    Lane8F32 minWRight(pos_inf);
-    Lane8F32 maxWRight(neg_inf);
+    Bounds8F32 left;
+    Bounds8F32 right;
 
     Lane8F32 clip(clipPos);
 
@@ -551,26 +587,18 @@ __forceinline u32 ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8
     Lane8F32 v1uClipMask = v1u < clip;
     Lane8F32 v2uClipMask = v2u < clip;
 
-    // TODO: it might be faster to do all of the mins and maxes separately, and then the blends, depending on what the compiler does
-    // TODO: do I have to min and max the clip positions with the boxes?
-    minULeft = Select(v0uClipMask, Min(minULeft, v0u), minULeft);
-    minULeft = Select(v1uClipMask, Min(minULeft, v1u), minULeft);
-    minULeft = Select(v2uClipMask, Min(minULeft, v2u), minULeft);
+    left.MaskExtendL(v0uClipMask, clip, v0u, v0v, v0w);
+    left.MaskExtendL(v1uClipMask, clip, v1u, v1v, v1w);
+    left.MaskExtendL(v2uClipMask, clip, v2u, v2v, v2w);
 
-    maxULeft = Select(v0uClipMask, Max(maxULeft, v0u), maxULeft);
-    maxULeft = Select(v1uClipMask, Max(maxULeft, v1u), maxULeft);
-    maxULeft = Select(v2uClipMask, Max(maxULeft, v2u), maxULeft);
-
-    minURight = Select(v0uClipMask, minURight, Min(minURight, v0u));
-    minURight = Select(v1uClipMask, minURight, Min(minURight, v1u));
-    minURight = Select(v2uClipMask, minURight, Min(minURight, v2u));
-
-    maxURight = Select(v0uClipMask, maxURight, Max(maxURight, v0u));
-    maxURight = Select(v1uClipMask, maxURight, Max(maxURight, v1u));
-    maxURight = Select(v2uClipMask, maxURight, Max(maxURight, v2u));
+    right.MaskExtendR(v0uClipMask, v0u, v0v, v0w);
+    right.MaskExtendR(v1uClipMask, v1u, v1v, v1w);
+    right.MaskExtendR(v2uClipMask, v2u, v2v, v2w);
 
     // If the edge is clipped, clip the vertex and add to both the left and right bounds
     Lane8F32 edgeIsClippedMask0 = v0uClipMask ^ v1uClipMask;
+    Lane8F32 edgeIsClippedMask1 = v1uClipMask ^ v2uClipMask;
+    Lane8F32 edgeIsClippedMask2 = v0uClipMask ^ v2uClipMask;
 
     // (plane - v0) / (v1 - v0)
     // v01Clipped = t0 * (v1 - v0) + v0
@@ -578,16 +606,8 @@ __forceinline u32 ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8
     Lane8F32 v01ClippedV = FMA(t0, v1w - v0w, v0w);
     Lane8F32 v01ClippedW = FMA(t0, v1w - v0w, v0w);
 
-    // TODO this needs to be a masked min
-    minVLeft  = Min(minVLeft, v01ClippedV);
-    minVRight = Min(minVRight, v01ClippedV);
-    minWLeft  = Min(minWLeft, v01ClippedW);
-    minWRight = Min(minWRight, v01ClippedW);
-
-    maxVLeft  = Min(maxVLeft, v01ClippedV);
-    maxVRight = Min(maxVRight, v01ClippedV);
-    maxWLeft  = Max(maxWLeft, v01ClippedW);
-    maxWRight = Max(maxWRight, v01ClippedW);
+    left.MaskExtendVW(edgeIsClippedMask0, v01ClippedV, v01ClippedW);
+    right.MaskExtendVW(edgeIsClippedMask0, v01ClippedV, v01ClippedW);
 
     // t1 = (plane - v1) / (v2 - v1)
     // v12Clipped = t1 * (v2 - v1) + v1
@@ -595,15 +615,8 @@ __forceinline u32 ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8
     Lane8F32 v12ClippedV = FMA(t1, v2w - v1w, v1w);
     Lane8F32 v12ClippedW = FMA(t1, v2w - v1w, v1w);
 
-    minVLeft  = Min(minVLeft, v12ClippedV);
-    minVRight = Min(minVRight, v12ClippedV);
-    minWLeft  = Min(minWLeft, v12ClippedW);
-    minWRight = Min(minWRight, v12ClippedW);
-
-    maxVLeft  = Min(maxVLeft, v12ClippedV);
-    maxVRight = Min(maxVRight, v12ClippedV);
-    maxWLeft  = Max(maxWLeft, v12ClippedW);
-    maxWRight = Max(maxWRight, v12ClippedW);
+    left.MaskExtendVW(edgeIsClippedMask1, v12ClippedV, v12ClippedW);
+    right.MaskExtendVW(edgeIsClippedMask1, v12ClippedV, v12ClippedW);
 
     // t2 = (plane - v2) / (v0 - v2)
     // v20Clipped = t2 * (v0 - v2) + v2
@@ -611,62 +624,32 @@ __forceinline u32 ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8
     Lane8F32 v20ClippedV = FMA(t2, v0v - v2v, v2v);
     Lane8F32 v20ClippedW = FMA(t2, v0w - v2w, v2w);
 
-    minVLeft  = Min(minVLeft, v20ClippedV);
-    minVRight = Min(minVRight, v20ClippedV);
-    minWLeft  = Min(minWLeft, v20ClippedW);
-    minWRight = Min(minWRight, v20ClippedW);
-
-    maxVLeft  = Min(maxVLeft, v20ClippedV);
-    maxVRight = Min(maxVRight, v20ClippedV);
-    maxWLeft  = Max(maxWLeft, v20ClippedW);
-    maxWRight = Max(maxWRight, v20ClippedW);
+    left.MaskExtendVW(edgeIsClippedMask2, v20ClippedV, v20ClippedW);
+    right.MaskExtendVW(edgeIsClippedMask2, v20ClippedV, v20ClippedW);
 
     // Tranpose bounds 6x8 to PrimRef format
 
     const Lane8F32 negInf(neg_inf);
     const Lane8F32 posInf(pos_inf);
 
-    Lane8F32 minLeft_u0w0u1w1u4w4u5w5 = UnpackLo(minULeft, minWLeft);
-    Lane8F32 minLeft_u2w2u3w3u6w6u7w7 = UnpackHi(minULeft, minWLeft);
+    Lane8F32 leftRef0, leftRef1, leftRef2, leftRef3, leftRef4, leftRef5, leftRef6, leftRef7;
+    Lane8F32 rightRef0, rightRef1, rightRef2, rightRef3, rightRef4, rightRef5, rightRef6, rightRef7;
 
-    Lane8F32 minLeft_v0_v1_v4_v5_ = UnpackLo(minVLeft, negInf);
-    Lane8F32 minLeft_v2_v3_v6_v7_ = UnpackHi(minVLeft, negInf);
+    Transpose8x8(left.minU, left.minV, left.minW, posInf, left.maxU, left.maxV, left.maxW, posInf,
+                 leftRef0, leftRef1, leftRef2, leftRef3, leftRef4, leftRef5, leftRef6, leftRef7);
 
-    Lane8F32 minLeft_u0v0w0_u4v4w4_ = UnpackLo(minLeft_u0w0u1w1u4w4u5w5, minVLeft);
-    Lane8F32 minLeft_u2v2w2_u6v6w6_ = UnpackLo(minLeft_u2w2u3w3u6w6u7w7, minVLeft);
-
-    Lane8F32 minLeft_u1v1w1_u5v5w5_ = UnpackHi(minLeft_u0w0u1w1u4w4u5w5, minLeft_v0_v1_v4_v5_);
-    Lane8F32 minLeft_u3v3w3_u7v7w7_ = UnpackHi(minLeft_u2w2u3w3u6w6u7w7, minLeft_v2_v3_v6_v7_);
-
-    Lane8F32 maxLeft_u0w0u1w1u4w4u5w5 = UnpackLo(maxULeft, maxWLeft);
-    Lane8F32 maxLeft_u2w2u3w3u6w6u7w7 = UnpackHi(maxULeft, maxWLeft);
-
-    Lane8F32 maxLeft_v0_v1_v4_v5_ = UnpackLo(maxVLeft, posInf);
-    Lane8F32 maxLeft_v2_v3_v6_v7_ = UnpackHi(maxVLeft, posInf);
-
-    Lane8F32 maxLeft_u0v0w0_u4v4w4_ = UnpackLo(maxLeft_u0w0u1w1u4w4u5w5, maxVLeft);
-    Lane8F32 maxLeft_u2v2w2_u6v6w6_ = UnpackLo(maxLeft_u2w2u3w3u6w6u7w7, maxVLeft);
-
-    Lane8F32 maxLeft_u1v1w1_u5v5w5_ = UnpackHi(maxLeft_u0w0u1w1u4w4u5w5, maxLeft_v0_v1_v4_v5_);
-    Lane8F32 maxLeft_u3v3w3_u7v7w7_ = UnpackHi(maxLeft_u2w2u3w3u6w6u7w7, maxLeft_v2_v3_v6_v7_);
+    Transpose8x8(right.minU, right.minV, right.minW, posInf, right.maxU, right.maxV, right.maxW, posInf,
+                 rightRef0, rightRef1, rightRef2, rightRef3, rightRef4, rightRef5, rightRef6, rightRef7);
 
     const Lane8F32 signFlipMask(-0.f, -0.f, -0.f, 0.f, 0.f, 0.f, 0.f, 0.f);
-    refs[0].m256 = Min(Shuffle4<0, 2>(minLeft_u0v0w0_u4v4w4_ ^ signFlipMask, maxLeft_u0v0w0_u4v4w4_),
-                       refs[0].m256); // prim ref 0
-    refs[4].m256 = Min(Shuffle4<1, 3>(minLeft_u0v0w0_u4v4w4_ ^ signFlipMask, maxLeft_u0v0w0_u4v4w4_),
-                       refs[4].m256); // prim ref 4
-    refs[1].m256 = Min(Shuffle4<0, 2>(minLeft_u1v1w1_u5v5w5_ ^ signFlipMask, maxLeft_u1v1w1_u5v5w5_),
-                       refs[1].m256); // prim ref 1
-    refs[5].m256 = Min(Shuffle4<1, 3>(minLeft_u1v1w1_u5v5w5_ ^ signFlipMask, maxLeft_u1v1w1_u5v5w5_),
-                       refs[5].m256); // prim ref 5
-    refs[2].m256 = Min(Shuffle4<0, 2>(minLeft_u2v2w2_u6v6w6_ ^ signFlipMask, maxLeft_u2v2w2_u6v6w6_),
-                       refs[2].m256); // prim ref 2
-    refs[6].m256 = Min(Shuffle4<1, 3>(minLeft_u2v2w2_u6v6w6_ ^ signFlipMask, maxLeft_u2v2w2_u6v6w6_),
-                       refs[6].m256); // prim ref 6
-    refs[1].m256 = Min(Shuffle4<0, 2>(minLeft_u3v3w3_u7v7w7_ ^ signFlipMask, maxLeft_u3v3w3_u7v7w7_),
-                       refs[1].m256); // prim ref 3
-    refs[7].m256 = Min(Shuffle4<1, 3>(minLeft_u3v3w3_u7v7w7_ ^ signFlipMask, maxLeft_u3v3w3_u7v7w7_),
-                       refs[7].m256); // prim ref 7
+    refs[0].m256 = Min(Shuffle(leftRef0 ^ signFlipMask, swizzle[dim]), refs[0].m256);
+    refs[1].m256 = Min(Shuffle(leftRef1 ^ signFlipMask, swizzle[dim]), refs[1].m256);
+    refs[2].m256 = Min(Shuffle(leftRef2 ^ signFlipMask, swizzle[dim]), refs[2].m256);
+    refs[3].m256 = Min(Shuffle(leftRef3 ^ signFlipMask, swizzle[dim]), refs[3].m256);
+    refs[4].m256 = Min(Shuffle(leftRef4 ^ signFlipMask, swizzle[dim]), refs[4].m256);
+    refs[5].m256 = Min(Shuffle(leftRef5 ^ signFlipMask, swizzle[dim]), refs[5].m256);
+    refs[6].m256 = Min(Shuffle(leftRef6 ^ signFlipMask, swizzle[dim]), refs[6].m256);
+    refs[7].m256 = Min(Shuffle(leftRef7 ^ signFlipMask, swizzle[dim]), refs[7].m256);
 }
 
 template <i32 numBins>

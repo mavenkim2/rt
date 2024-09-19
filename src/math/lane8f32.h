@@ -207,16 +207,25 @@ __forceinline Lane8F32 MaskAdd(const Lane8F32 &mask, const Lane8F32 &a, const La
 __forceinline Lane8F32 MaskMin(const Lane8F32 &mask, const Lane8F32 &a, const Lane8F32 &b)
 {
 #if defined(__AVX512VL__)
-    return _mm256_mask_min_ps(a, (__mm256ask8)Movemask(mask), a, b);
+    return _mm256_mask_min_ps(a, (__mmask8)Movemask(mask), a, b);
 #else
     return Select(mask, _mm256_min_ps(a, b), a);
+#endif
+}
+
+__forceinline Lane8F32 MaskMin(const Lane8F32 &mask, const Lane8F32 &a, const Lane8F32 &b, const Lane8F32 &default)
+{
+#if defined(__AVX512VL__)
+    return _mm256_mask_min_ps(default, (__mmask8)Movemask(mask), a, b);
+#else
+    return Select(mask, _mm256_min_ps(a, b), default);
 #endif
 }
 
 __forceinline Lane8F32 MaskMax(const Lane8F32 &mask, const Lane8F32 &a, const Lane8F32 &b)
 {
 #if defined(__AVX512VL__)
-    return _mm256_mask_max_ps(a, (__mm256ask8)Movemask(mask), a, b);
+    return _mm256_mask_max_ps(a, (__mmask8)Movemask(mask), a, b);
 #else
     return Select(mask, _mm256_max_ps(a, b), a);
 #endif
@@ -231,6 +240,8 @@ __forceinline Lane8F32 Shuffle(const Lane8F32 &l)
     static constexpr __m256i shuf = _mm256_setr_epi32(a, b, c, d, e, f, g, h);
     return _mm256_permutevar8x32_ps(l, shuf);
 }
+
+__forceinline Lane8F32 Shuffle(const Lane8F32 &l, const __m256i &shuf) { return _mm256_permutevar8x32_ps(l, shuf); }
 
 template <i32 a, i32 b, i32 c, i32 d>
 __forceinline Lane8F32 Permute(const Lane8F32 &l)
@@ -303,6 +314,43 @@ __forceinline Lane8F32 Floor(const Lane8F32 &lane)
 __forceinline Lane8F32 Ceil(const Lane8F32 &lane)
 {
     return _mm256_round_ps(lane, _MM_FROUND_TO_POS_INF);
+}
+
+__forceinline void Transpose8x8(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC, const Lane8F32 &inD,
+                                const Lane8F32 &inE, const Lane8F32 &inF, const Lane8F32 &inG, const Lane8F32 &inH,
+                                Lane8F32 &outA, Lane8F32 &outB, Lane8F32 &outC, Lane8F32 &outD,
+                                Lane8F32 &outE, Lane8F32 &outF, Lane8F32 &outG, Lane8F32 &outH)
+{
+    Lane8F32 a = UnpackLo(inA, inC);
+    Lane8F32 b = UnpackHi(inA, inC);
+
+    Lane8F32 c = UnpackLo(inB, inD);
+    Lane8F32 d = UnpackHi(inB, inD);
+
+    Lane8F32 t0 = UnpackLo(a, c);
+    Lane8F32 t1 = UnpackHi(a, c);
+    Lane8F32 t2 = UnpackLo(b, d);
+    Lane8F32 t3 = UnpackHi(b, d);
+
+    Lane8F32 e = UnpackLo(inE, inG);
+    Lane8F32 f = UnpackHi(inE, inG);
+
+    Lane8F32 g = UnpackLo(inF, inH);
+    Lane8F32 h = UnpackHi(inF, inH);
+
+    Lane8F32 t4 = UnpackLo(e, g);
+    Lane8F32 t5 = UnpackHi(e, g);
+    Lane8F32 t6 = UnpackLo(f, h);
+    Lane8F32 t7 = UnpackHi(f, h);
+
+    outA = Shuffle4<0, 2>(t0, t4);
+    outB = Shuffle4<0, 2>(t1, t5);
+    outC = Shuffle4<0, 2>(t2, t6);
+    outD = Shuffle4<0, 2>(t3, t7);
+    outE = Shuffle4<1, 3>(t0, t4);
+    outF = Shuffle4<1, 3>(t1, t5);
+    outG = Shuffle4<1, 3>(t2, t6);
+    outH = Shuffle4<1, 3>(t3, t7);
 }
 
 // __forceinline Lane4U32 Flooru(Lane8F32 lane)
