@@ -595,33 +595,86 @@ __forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[
 
     Lane8F32 clip(clipPos);
 
-    // TODO: this is limited by i32 max, not u32 max
-    __m256 mult     = _mm256_set1_ps(3);
-    __m256i indices = _mm256_load_si256((__m256i *)faceIndices);
-    indices         = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(indices), mult));
+    // PerformanceCounter counter = OS_StartCounter();
 
-    __m256i v0 = _mm256_i32gather_epi32((const i32 *)mesh->indices, indices, 4);
-    __m256i v1 = _mm256_i32gather_epi32((const i32 *)mesh->indices, _mm256_add_epi32(indices, _mm256_set1_epi32(1)), 4);
-    __m256i v2 = _mm256_i32gather_epi32((const i32 *)mesh->indices, _mm256_add_epi32(indices, _mm256_set1_epi32(2)), 4);
+    Vec3f v0[8];
+    Vec3f v1[8];
+    Vec3f v2[8];
 
-    __m256i startV0 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v0), mult));
-    __m256i startV1 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v1), mult));
-    __m256i startV2 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v2), mult));
+    u32 v = LUTAxis[dim];
+    u32 w = LUTAxis[dim];
 
-    // there's going to be 24 vertices if I use 8
-    Lane8F32 v0u = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(startV0, _mm256_set1_epi32(dim)), 4);
-    Lane8F32 v1u = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(startV1, _mm256_set1_epi32(dim)), 4);
-    Lane8F32 v2u = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(startV2, _mm256_set1_epi32(dim)), 4);
+    u32 faceIndexA = faceIndices[0];
+    u32 faceIndexB = faceIndices[1];
+    u32 faceIndexC = faceIndices[2];
+    u32 faceIndexD = faceIndices[3];
 
-    u32 v        = LUTAxis[dim];
-    Lane8F32 v0v = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(startV0, _mm256_set1_epi32(v)), 4);
-    Lane8F32 v1v = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(startV1, _mm256_set1_epi32(v)), 4);
-    Lane8F32 v2v = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(startV2, _mm256_set1_epi32(v)), 4);
+    Lane4F32 v0a = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3]]));
+    Lane4F32 v1a = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3 + 1]]));
+    Lane4F32 v2a = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3 + 2]]));
 
-    u32 w        = LUTAxis[v];
-    Lane8F32 v0w = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(startV0, _mm256_set1_epi32(w)), 4);
-    Lane8F32 v1w = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(startV1, _mm256_set1_epi32(w)), 4);
-    Lane8F32 v2w = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(startV2, _mm256_set1_epi32(w)), 4);
+    Lane4F32 v0b = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexB * 3]]));
+    Lane4F32 v1b = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexB * 3 + 1]]));
+    Lane4F32 v2b = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexB * 3 + 2]]));
+
+    Lane4F32 v0c = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexC * 3]]));
+    Lane4F32 v1c = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexC * 3 + 1]]));
+    Lane4F32 v2c = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexC * 3 + 2]]));
+
+    Lane4F32 v0d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3]]));
+    Lane4F32 v1d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 1]]));
+    Lane4F32 v2d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 2]]));
+
+    Vec3lf4 p0;
+    Vec3lf4 p1;
+    Vec3lf4 p2;
+
+    Transpose4x3(v0a, v0b, v0c, v0d, p0.x, p0.y, p0.z);
+    Transpose4x3(v1a, v1b, v1c, v1d, p1.x, p1.y, p1.z);
+    Transpose4x3(v2a, v2b, v2c, v2d, p2.x, p2.y, p2.z);
+
+    faceIndexA = faceIndices[4];
+    faceIndexB = faceIndices[5];
+    faceIndexC = faceIndices[6];
+    faceIndexD = faceIndices[7];
+    v0a        = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3]]));
+    v1a        = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3 + 1]]));
+    v2a        = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3 + 2]]));
+
+    v0b = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexB * 3]]));
+    v1b = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexB * 3 + 1]]));
+    v2b = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexB * 3 + 2]]));
+
+    v0c = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexC * 3]]));
+    v1c = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexC * 3 + 1]]));
+    v2c = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexC * 3 + 2]]));
+
+    v0d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3]]));
+    v1d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 1]]));
+    v2d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 2]]));
+
+    Vec3lf4 p3;
+    Vec3lf4 p4;
+    Vec3lf4 p5;
+
+    Transpose4x3(v0a, v0b, v0c, v0d, p3.x, p3.y, p3.z);
+    Transpose4x3(v1a, v1b, v1c, v1d, p4.x, p4.y, p4.z);
+    Transpose4x3(v2a, v2b, v2c, v2d, p5.x, p5.y, p5.z);
+
+    Lane8F32 v0u(p0[dim], p3[dim]);
+    Lane8F32 v1u(p1[dim], p4[dim]);
+    Lane8F32 v2u(p2[dim], p5[dim]);
+
+    Lane8F32 v0v(p0[v], p3[v]);
+    Lane8F32 v1v(p1[v], p4[v]);
+    Lane8F32 v2v(p2[v], p5[v]);
+
+    Lane8F32 v0w(p0[w], p3[w]);
+    Lane8F32 v1w(p1[w], p4[w]);
+    Lane8F32 v2w(p2[w], p5[w]);
+
+    // u64 time = OS_GetCounts(counter);
+    // threadLocalStatistics->misc += (u64)time;
 
     // If the vertex is to the left of the split, add to the left bounds. Otherwise, add to the right bounds
     Lane8F32 v0uClipMask = v0u < clip;
@@ -691,11 +744,6 @@ __forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[
             Max(Permute(leftRef4 ^ signFlipMask, swizzle[dim]), Permute(leftRef5 ^ signFlipMask, swizzle[dim])),
             Max(Permute(leftRef6 ^ signFlipMask, swizzle[dim]), Permute(leftRef7 ^ signFlipMask, swizzle[dim]))));
     l ^= signFlipMask;
-    Lane4F32 hi = Lane4F32(l.hi);
-    if (hi[dim] > clipPos)
-    {
-        int stop = 5;
-    }
     outLeft.minP = l.lo;
     outLeft.maxP = l.hi;
     Lane8F32 r   = Max(

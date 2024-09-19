@@ -483,7 +483,7 @@ __forceinline Lane4F32 Compact(const u32 mask, const Lane4F32 &l)
 }
 
 __forceinline void Transpose3x3(const Lane4F32 &a, const Lane4F32 &b, const Lane4F32 &c,
-                                    Lane4F32 &out1, Lane4F32 &out2, Lane4F32 &out3)
+                                Lane4F32 &out1, Lane4F32 &out2, Lane4F32 &out3)
 {
     Lane4F32 acXY = UnpackLo(a, c);
     Lane4F32 bcXY = UnpackLo(b, c);
@@ -491,6 +491,19 @@ __forceinline void Transpose3x3(const Lane4F32 &a, const Lane4F32 &b, const Lane
     out1 = UnpackLo(acXY, b);
     out2 = UnpackHi(acXY, bcXY);
     out3 = Shuffle<0, 1, 2, 0>(UnpackHi(a, b), c);
+}
+
+__forceinline void Transpose4x3(const Lane4F32 &a, const Lane4F32 &b, const Lane4F32 &c, const Lane4F32 &d,
+                                Lane4F32 &out1, Lane4F32 &out2, Lane4F32 &out3)
+{
+    Lane4F32 acXY = UnpackLo(a, c);
+    Lane4F32 acZ  = UnpackHi(a, c);
+    Lane4F32 bdXY = UnpackLo(b, d);
+    Lane4F32 bdZ  = UnpackHi(b, d);
+
+    out1 = UnpackLo(acXY, bdXY);
+    out2 = UnpackHi(acXY, bdXY);
+    out3 = UnpackLo(acZ, bdZ);
 }
 
 } // namespace rt

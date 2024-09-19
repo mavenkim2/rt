@@ -42,7 +42,7 @@ struct ThreadStatistics
     u64 integrationTime;
     u64 samplingTime;
 
-    u64 dumb;
+    u64 misc;
 };
 
 struct ThreadMemoryStatistics

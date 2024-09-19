@@ -858,7 +858,7 @@ bool RenderTile(WorkQueue *queue)
 
 bool RenderTileTest(WorkQueue *queue)
 {
-    TIMED_FUNCTION(dumb);
+    TIMED_FUNCTION(misc);
     u64 workItemIndex = InterlockedAdd(&queue->workItemIndex, 1);
     if (workItemIndex >= queue->workItemCount) return false;
 
@@ -1042,7 +1042,7 @@ int main(int argc, char *argv[])
     jobsystem::Counter counter = {};
 
     TriangleMesh mesh;
-    const u32 count  = 3000; // 30000000;
+    const u32 count  = 30000000;
     mesh.p           = PushArray(arena, Vec3f, count);
     mesh.numVertices = count;
     mesh.indices     = PushArray(arena, u32, count);
@@ -1071,43 +1071,52 @@ int main(int argc, char *argv[])
         refs[i].primID = i;
     }
 
-    clock_t start = clock();
-    Bounds l;
-    Bounds r;
-    for (u32 i = 0; i < count / 3; i += 8)
-    {
-        u32 faceIndices[8];
-        Bounds left;
-        Bounds right;
-        for (u32 j = 0; j < 8; j++)
-        {
-            faceIndices[j] = i + j;
-        }
-        ClipTriangle(&mesh, faceIndices, refs, 1, 1.f, left, right);
-        l.Extend(left);
-        r.Extend(right);
-    }
-    clock_t end = clock();
-    printf("Time elapsed AVX: %dms\n", end - start);
-    printf("L Bounds: %f %f %f - %f %f %f\n", l.minP[0], l.minP[1], l.minP[2], l.maxP[0], l.maxP[1], l.maxP[2]);
-    printf("R Bounds: %f %f %f - %f %f %f\n", r.minP[0], r.minP[1], r.minP[2], r.minP[0], r.minP[1], r.minP[2]);
-
-    start = clock();
-    l     = Bounds();
-    r     = Bounds();
+    u32 *faceIndices = PushArray(arena, u32, count / 3);
     for (u32 i = 0; i < count / 3; i++)
     {
-        Bounds left;
-        Bounds right;
-        ClipTriangleSimple(&mesh, i, refs, 1, 1.f, left, right);
-        l.Extend(left);
-        r.Extend(right);
+        faceIndices[i] = RandomInt(0, count / 3);
     }
-    end = clock();
+#if 1
+    {
+        clock_t start = clock();
+        Bounds l;
+        Bounds r;
+        for (u32 i = 0; i < count / 3; i += 8)
+        {
+            Bounds left;
+            Bounds right;
+            ClipTriangle(&mesh, faceIndices + i, refs, 1, 1.f, left, right);
+            l.Extend(left);
+            r.Extend(right);
+        }
+        clock_t end = clock();
+        printf("Time elapsed AVX: %dms\n", end - start);
+        printf("L Bounds: %f %f %f - %f %f %f\n", l.minP[0], l.minP[1], l.minP[2], l.maxP[0], l.maxP[1], l.maxP[2]);
+        printf("R Bounds: %f %f %f - %f %f %f\n", r.minP[0], r.minP[1], r.minP[2], r.maxP[0], r.maxP[1], r.maxP[2]);
+        printf("Gather Time: %f\n", OS_GetMilliseconds(threadLocalStatistics->misc));
+    }
+#endif
 
-    printf("Time elapsed simple: %dms\n", end - start);
-    printf("L Bounds: %f %f %f - %f %f %f\n", l.minP[0], l.minP[1], l.minP[2], l.maxP[0], l.maxP[1], l.maxP[2]);
-    printf("R Bounds: %f %f %f - %f %f %f\n", r.minP[0], r.minP[1], r.minP[2], r.minP[0], r.minP[1], r.minP[2]);
+#if 0
+    {
+        clock_t start = clock();
+        Bounds l      = Bounds();
+        Bounds r      = Bounds();
+        for (u32 i = 0; i < count / 3; i++)
+        {
+            Bounds left;
+            Bounds right;
+            ClipTriangleSimple(&mesh, faceIndices[i], refs, 1, 1.f, left, right);
+            l.Extend(left);
+            r.Extend(right);
+        }
+        clock_t end = clock();
+
+        printf("Time elapsed simple: %dms\n", end - start);
+        printf("L Bounds: %f %f %f - %f %f %f\n", l.minP[0], l.minP[1], l.minP[2], l.maxP[0], l.maxP[1], l.maxP[2]);
+        printf("R Bounds: %f %f %f - %f %f %f\n", r.minP[0], r.minP[1], r.minP[2], r.maxP[0], r.maxP[1], r.maxP[2]);
+    }
+#endif
 
 #if 0
     Arena **arenas = PushArray(arena, Arena *, numProcessors);

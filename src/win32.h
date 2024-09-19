@@ -24,6 +24,8 @@ struct PerformanceCounter
 };
 
 PerformanceCounter OS_StartCounter();
+f32 OS_GetMilliseconds(PerformanceCounter counter);
+u64 OS_GetCounts(PerformanceCounter counter);
 u32 OS_NumProcessors();
 void *OS_Reserve(u64 size, void *ptr = 0);
 b8 OS_Commit(void *ptr, u64 size);
