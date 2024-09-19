@@ -214,6 +214,7 @@ union AABB
     }
 };
 
+
 inline AABB Union(const AABB &box1, const AABB &box2)
 {
     AABB result;

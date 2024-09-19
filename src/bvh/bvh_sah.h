@@ -353,11 +353,6 @@ struct HeuristicSAHBinned
 
             // TODO: consider increasing the cost of having empty children/leaves
             // (lCount & (blockAdd - 1));
-
-            // f32 areaDimX = FMA(extentDimX[0], extentDimX[1] + extentDimX[2], extentDimX[1] * extentDimX[2]);
-            // f32 areaDimY = FMA(extentDimY[0], extentDimY[1] + extentDimY[2], extentDimY[1] * extentDimY[2]);
-            // f32 areaDimZ = FMA(extentDimZ[0], extentDimZ[1] + extentDimZ[2], extentDimZ[1] * extentDimZ[2]);
-            // const Lane4F32 rArea(areaDimX, areaDimY, areaDimZ, 0.f);
             const Lane4F32 sah = FMA(rArea, Lane4F32(rCount), lArea * Lane4F32(lCount));
 
             lBestPos = Select(sah < lBestSAH, Lane4U32(i), lBestPos);
@@ -412,6 +407,392 @@ Split BinParallel(const Record &record, u32 blockSize = 1, HeuristicSAHBinned<32
     }
     return result.Best(blockShift);
 }
+
+__forceinline u32 ClipTriangle(const Vec3f &pA, const Vec3f &pB, const Vec3f &pC, const u32 dim,
+                               const f32 clipPosA, const f32 clipPosB, Bounds &outBounds)
+{
+    u32 invalid = 0;
+
+    Bounds out;
+
+    Lane4F32 p0 = Lane4F32(pA);
+    Lane4F32 p1 = Lane4F32(pB);
+    Lane4F32 p2 = Lane4F32(pC);
+
+    Lane4F32 edge0 = p1 - p0;
+
+    f32 tA0 = (clipPosA - p0[dim]) / edge0[dim];
+    f32 tB0 = (clipPosB - p0[dim]) / edge0[dim];
+
+    invalid = invalid | ((tA0 > 1.f) && (tB0 > 1.f));
+    invalid = invalid | (((tA0 < 0.f) && (tB0 < 0.f)) << 1);
+
+    tA0 = Clamp(0.f, 1.f, tA0);
+    tB0 = Clamp(0.f, 1.f, tB0);
+
+    Lane4F32 clippedPointA0 = FMA(edge0, tA0, p0);
+    Lane4F32 clippedPointB0 = FMA(edge0, tB0, p0);
+
+    out.Extend(clippedPointA0);
+    out.Extend(clippedPointB0);
+
+    Lane4F32 edge1 = p2 - p1;
+
+    f32 tA1 = (clipPosA - p1[dim]) / edge1[dim];
+    f32 tB1 = (clipPosB - p1[dim]) / edge1[dim];
+
+    invalid = invalid | ((tA1 > 1.f) && (tB1 > 1.f));
+    invalid = invalid | (((tA1 < 0.f) && (tB1 < 0.f)) << 1);
+
+    tA1 = Clamp(0.f, 1.f, tA1);
+    tB1 = Clamp(0.f, 1.f, tB1);
+
+    Lane4F32 clippedPointA1 = FMA(edge1, tA1, p1);
+    Lane4F32 clippedPointB1 = FMA(edge1, tB1, p1);
+
+    out.Extend(clippedPointA1);
+    out.Extend(clippedPointB1);
+
+    Lane4F32 edge2 = p0 - p2;
+
+    f32 tA2 = (clipPosA - p2[dim]) / edge2[dim];
+    f32 tB2 = (clipPosB - p2[dim]) / edge2[dim];
+
+    invalid = invalid | ((tA2 > 1.f) && (tB2 > 1.f));
+    invalid = invalid | (((tA2 < 0.f) && (tB2 < 0.f)) << 1);
+
+    tA2 = Clamp(0.f, 1.f, tA2);
+    tB2 = Clamp(0.f, 1.f, tB2);
+
+    Lane4F32 clippedPointA2 = FMA(edge2, tA2, p2);
+    Lane4F32 clippedPointB2 = FMA(edge2, tB2, p2);
+
+    out.Extend(clippedPointA2);
+    out.Extend(clippedPointB2);
+
+    outBounds.minP = Select(Lane4F32((bool)invalid), Lane4F32(pos_inf), out.minP);
+    outBounds.maxP = Select(Lane4F32((bool)invalid), Lane4F32(neg_inf), out.maxP);
+}
+
+__forceinline void Swap(const Lane8F32 &mask, Lane8F32 &a, Lane8F32 &b)
+{
+    Lane8F32 temp = a;
+    a             = _mm256_blendv_ps(a, b, mask);
+    b             = _mm256_blendv_ps(b, temp, mask);
+}
+
+struct PrimRef
+{
+    union
+    {
+        __m256 m256;
+        struct
+        {
+            f32 minX, minY, minZ;
+            u32 geomID;
+            f32 maxX, maxY, maxZ;
+            u32 primID;
+        };
+    };
+};
+
+__forceinline u32 ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8], PrimRef *refs,
+                               const u32 dim, const f32 clipPos, Bounds &lBounds, Bounds &rBounds)
+{
+    static const u32 LUTAxis[] = {1, 2, 0};
+    Lane8F32 p;
+
+    // Bounds
+    Lane8F32 minULeft(pos_inf);
+    Lane8F32 maxULeft(neg_inf);
+
+    Lane8F32 minVLeft(pos_inf);
+    Lane8F32 maxVLeft(neg_inf);
+
+    Lane8F32 minWLeft(pos_inf);
+    Lane8F32 maxWLeft(neg_inf);
+
+    Lane8F32 minURight(pos_inf);
+    Lane8F32 maxURight(neg_inf);
+
+    Lane8F32 minVRight(pos_inf);
+    Lane8F32 maxVRight(neg_inf);
+
+    Lane8F32 minWRight(pos_inf);
+    Lane8F32 maxWRight(neg_inf);
+
+    Lane8F32 clip(clipPos);
+
+    // TODO: this is limited by i32 max, not u32 max
+    __m256i mult    = _mm256_set1_epi32(3);
+    __m256i indices = _mm256_mul_epu32(_mm256_load_si256((__m256i *)faceIndices), mult);
+
+    __m256i v0 = _mm256_i32gather_epi32((const i32 *)mesh->indices, indices, 4);
+    __m256i v1 = _mm256_i32gather_epi32((const i32 *)mesh->indices, _mm256_add_epi32(indices, _mm256_set1_epi32(1)), 4);
+    __m256i v2 = _mm256_i32gather_epi32((const i32 *)mesh->indices, _mm256_add_epi32(indices, _mm256_set1_epi32(2)), 4);
+
+    // there's going to be 24 vertices if I use 8
+    Lane8F32 v0u = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(_mm256_mul_epu32(v0, mult), _mm256_set1_epi32(dim)), 4);
+    Lane8F32 v1u = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(_mm256_mul_epu32(v1, mult), _mm256_set1_epi32(dim)), 4);
+    Lane8F32 v2u = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(_mm256_mul_epu32(v2, mult), _mm256_set1_epi32(dim)), 4);
+
+    u32 v        = LUTAxis[dim];
+    Lane8F32 v0v = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(_mm256_mul_epu32(v0, mult), _mm256_set1_epi32(v)), 4);
+    Lane8F32 v1v = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(_mm256_mul_epu32(v1, mult), _mm256_set1_epi32(v)), 4);
+    Lane8F32 v2v = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(_mm256_mul_epu32(v2, mult), _mm256_set1_epi32(v)), 4);
+
+    u32 w        = LUTAxis[v];
+    Lane8F32 v0w = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(_mm256_mul_epu32(v0, mult), _mm256_set1_epi32(w)), 4);
+    Lane8F32 v1w = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(_mm256_mul_epu32(v1, mult), _mm256_set1_epi32(w)), 4);
+    Lane8F32 v2w = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(_mm256_mul_epu32(v2, mult), _mm256_set1_epi32(w)), 4);
+
+    // If the vertex is to the left of the split, add to the left bounds. Otherwise, add to the right bounds
+    Lane8F32 v0uClipMask = v0u < clip;
+    Lane8F32 v1uClipMask = v1u < clip;
+    Lane8F32 v2uClipMask = v2u < clip;
+
+    // TODO: it might be faster to do all of the mins and maxes separately, and then the blends, depending on what the compiler does
+    // TODO: do I have to min and max the clip positions with the boxes?
+    minULeft = Select(v0uClipMask, Min(minULeft, v0u), minULeft);
+    minULeft = Select(v1uClipMask, Min(minULeft, v1u), minULeft);
+    minULeft = Select(v2uClipMask, Min(minULeft, v2u), minULeft);
+
+    maxULeft = Select(v0uClipMask, Max(maxULeft, v0u), maxULeft);
+    maxULeft = Select(v1uClipMask, Max(maxULeft, v1u), maxULeft);
+    maxULeft = Select(v2uClipMask, Max(maxULeft, v2u), maxULeft);
+
+    minURight = Select(v0uClipMask, minURight, Min(minURight, v0u));
+    minURight = Select(v1uClipMask, minURight, Min(minURight, v1u));
+    minURight = Select(v2uClipMask, minURight, Min(minURight, v2u));
+
+    maxURight = Select(v0uClipMask, maxURight, Max(maxURight, v0u));
+    maxURight = Select(v1uClipMask, maxURight, Max(maxURight, v1u));
+    maxURight = Select(v2uClipMask, maxURight, Max(maxURight, v2u));
+
+    // If the edge is clipped, clip the vertex and add to both the left and right bounds
+    Lane8F32 edgeIsClippedMask0 = v0uClipMask ^ v1uClipMask;
+
+    // (plane - v0) / (v1 - v0)
+    // v01Clipped = t0 * (v1 - v0) + v0
+    Lane8F32 t0          = (clip - v0u) / (v1u - v0u);
+    Lane8F32 v01ClippedV = FMA(t0, v1w - v0w, v0w);
+    Lane8F32 v01ClippedW = FMA(t0, v1w - v0w, v0w);
+
+    // TODO this needs to be a masked min
+    minVLeft  = Min(minVLeft, v01ClippedV);
+    minVRight = Min(minVRight, v01ClippedV);
+    minWLeft  = Min(minWLeft, v01ClippedW);
+    minWRight = Min(minWRight, v01ClippedW);
+
+    maxVLeft  = Min(maxVLeft, v01ClippedV);
+    maxVRight = Min(maxVRight, v01ClippedV);
+    maxWLeft  = Max(maxWLeft, v01ClippedW);
+    maxWRight = Max(maxWRight, v01ClippedW);
+
+    // t1 = (plane - v1) / (v2 - v1)
+    // v12Clipped = t1 * (v2 - v1) + v1
+    Lane8F32 t1          = (clip - v1u) / (v2u - v1u);
+    Lane8F32 v12ClippedV = FMA(t1, v2w - v1w, v1w);
+    Lane8F32 v12ClippedW = FMA(t1, v2w - v1w, v1w);
+
+    minVLeft  = Min(minVLeft, v12ClippedV);
+    minVRight = Min(minVRight, v12ClippedV);
+    minWLeft  = Min(minWLeft, v12ClippedW);
+    minWRight = Min(minWRight, v12ClippedW);
+
+    maxVLeft  = Min(maxVLeft, v12ClippedV);
+    maxVRight = Min(maxVRight, v12ClippedV);
+    maxWLeft  = Max(maxWLeft, v12ClippedW);
+    maxWRight = Max(maxWRight, v12ClippedW);
+
+    // t2 = (plane - v2) / (v0 - v2)
+    // v20Clipped = t2 * (v0 - v2) + v2
+    Lane8F32 t2          = (clip - v2u) / (v0u - v2u);
+    Lane8F32 v20ClippedV = FMA(t2, v0v - v2v, v2v);
+    Lane8F32 v20ClippedW = FMA(t2, v0w - v2w, v2w);
+
+    minVLeft  = Min(minVLeft, v20ClippedV);
+    minVRight = Min(minVRight, v20ClippedV);
+    minWLeft  = Min(minWLeft, v20ClippedW);
+    minWRight = Min(minWRight, v20ClippedW);
+
+    maxVLeft  = Min(maxVLeft, v20ClippedV);
+    maxVRight = Min(maxVRight, v20ClippedV);
+    maxWLeft  = Max(maxWLeft, v20ClippedW);
+    maxWRight = Max(maxWRight, v20ClippedW);
+
+    // Tranpose bounds 6x8 to PrimRef format
+
+    const Lane8F32 negInf(neg_inf);
+    const Lane8F32 posInf(pos_inf);
+
+    Lane8F32 minLeft_u0w0u1w1u4w4u5w5 = UnpackLo(minULeft, minWLeft);
+    Lane8F32 minLeft_u2w2u3w3u6w6u7w7 = UnpackHi(minULeft, minWLeft);
+
+    Lane8F32 minLeft_v0_v1_v4_v5_ = UnpackLo(minVLeft, negInf);
+    Lane8F32 minLeft_v2_v3_v6_v7_ = UnpackHi(minVLeft, negInf);
+
+    Lane8F32 minLeft_u0v0w0_u4v4w4_ = UnpackLo(minLeft_u0w0u1w1u4w4u5w5, minVLeft);
+    Lane8F32 minLeft_u2v2w2_u6v6w6_ = UnpackLo(minLeft_u2w2u3w3u6w6u7w7, minVLeft);
+
+    Lane8F32 minLeft_u1v1w1_u5v5w5_ = UnpackHi(minLeft_u0w0u1w1u4w4u5w5, minLeft_v0_v1_v4_v5_);
+    Lane8F32 minLeft_u3v3w3_u7v7w7_ = UnpackHi(minLeft_u2w2u3w3u6w6u7w7, minLeft_v2_v3_v6_v7_);
+
+    Lane8F32 maxLeft_u0w0u1w1u4w4u5w5 = UnpackLo(maxULeft, maxWLeft);
+    Lane8F32 maxLeft_u2w2u3w3u6w6u7w7 = UnpackHi(maxULeft, maxWLeft);
+
+    Lane8F32 maxLeft_v0_v1_v4_v5_ = UnpackLo(maxVLeft, posInf);
+    Lane8F32 maxLeft_v2_v3_v6_v7_ = UnpackHi(maxVLeft, posInf);
+
+    Lane8F32 maxLeft_u0v0w0_u4v4w4_ = UnpackLo(maxLeft_u0w0u1w1u4w4u5w5, maxVLeft);
+    Lane8F32 maxLeft_u2v2w2_u6v6w6_ = UnpackLo(maxLeft_u2w2u3w3u6w6u7w7, maxVLeft);
+
+    Lane8F32 maxLeft_u1v1w1_u5v5w5_ = UnpackHi(maxLeft_u0w0u1w1u4w4u5w5, maxLeft_v0_v1_v4_v5_);
+    Lane8F32 maxLeft_u3v3w3_u7v7w7_ = UnpackHi(maxLeft_u2w2u3w3u6w6u7w7, maxLeft_v2_v3_v6_v7_);
+
+    const Lane8F32 signFlipMask(-0.f, -0.f, -0.f, 0.f, 0.f, 0.f, 0.f, 0.f);
+    refs[0].m256 = Min(Shuffle4<0, 2>(minLeft_u0v0w0_u4v4w4_ ^ signFlipMask, maxLeft_u0v0w0_u4v4w4_),
+                       refs[0].m256); // prim ref 0
+    refs[4].m256 = Min(Shuffle4<1, 3>(minLeft_u0v0w0_u4v4w4_ ^ signFlipMask, maxLeft_u0v0w0_u4v4w4_),
+                       refs[4].m256); // prim ref 4
+    refs[1].m256 = Min(Shuffle4<0, 2>(minLeft_u1v1w1_u5v5w5_ ^ signFlipMask, maxLeft_u1v1w1_u5v5w5_),
+                       refs[1].m256); // prim ref 1
+    refs[5].m256 = Min(Shuffle4<1, 3>(minLeft_u1v1w1_u5v5w5_ ^ signFlipMask, maxLeft_u1v1w1_u5v5w5_),
+                       refs[5].m256); // prim ref 5
+    refs[2].m256 = Min(Shuffle4<0, 2>(minLeft_u2v2w2_u6v6w6_ ^ signFlipMask, maxLeft_u2v2w2_u6v6w6_),
+                       refs[2].m256); // prim ref 2
+    refs[6].m256 = Min(Shuffle4<1, 3>(minLeft_u2v2w2_u6v6w6_ ^ signFlipMask, maxLeft_u2v2w2_u6v6w6_),
+                       refs[6].m256); // prim ref 6
+    refs[1].m256 = Min(Shuffle4<0, 2>(minLeft_u3v3w3_u7v7w7_ ^ signFlipMask, maxLeft_u3v3w3_u7v7w7_),
+                       refs[1].m256); // prim ref 3
+    refs[7].m256 = Min(Shuffle4<1, 3>(minLeft_u3v3w3_u7v7w7_ ^ signFlipMask, maxLeft_u3v3w3_u7v7w7_),
+                       refs[7].m256); // prim ref 7
+}
+
+template <i32 numBins>
+struct HeuristicSplitBinned
+{
+    // SBVH alpha parameter
+    f32 alpha;
+    u32 numSplits;
+    Bounds splitBins[3][numBins];
+
+    Lane4U32 entryCounts[numBins];
+    Lane4U32 exitCounts[numBins];
+
+    Lane4F32 minP;
+    Lane4F32 scale;
+    Lane4F32 invScale;
+
+    struct SpatialSplit
+    {
+        f32 bestSAH;
+        u32 bestDim;
+        f32 splitPos;
+        u32 leftCount;
+        u32 rightCount;
+    };
+
+    HeuristicSplitBinned(const Bounds &centroidBounds, f32 inAlpha = 1e-5)
+    {
+        alpha         = inAlpha;
+        minP          = centroidBounds.minP;
+        Lane4F32 diag = centroidBounds.maxP - minP;
+        scale         = Lane4F32((f32)numBins) / diag;
+        invScale      = diag / Lane4F32((f32)numBins);
+
+        for (u32 i = 0; i < numBins; i++)
+        {
+            entryCounts[i] = 0;
+            exitCounts[i]  = 0;
+        }
+    }
+
+    void Bin(TriangleMesh *mesh, PrimData *prims, u32 start, u32 count)
+    {
+        for (u32 i = start; i < start + count; i++)
+        {
+            PrimData *prim         = &prims[i];
+            Lane4U32 binIndicesMin = Clamp(Lane4U32(0), Lane4U32(numBins - 1), Flooru((prim->minP - minP) * scale));
+            Lane4U32 binIndicesMax = Clamp(Lane4U32(0), Lane4U32(numBins - 1), Flooru((prim->maxP - minP) * scale));
+
+            u32 faceIndex = prim->PrimID();
+            Vec3f &a      = mesh->p[mesh->indices[faceIndex * 3 + 0]];
+            Vec3f &b      = mesh->p[mesh->indices[faceIndex * 3 + 1]];
+            Vec3f &c      = mesh->p[mesh->indices[faceIndex * 3 + 2]];
+
+            for (u32 dim = 0; dim < 3; dim++)
+            {
+                u32 binIndexMin = binIndicesMin[dim];
+                u32 binIndexMax = binIndicesMax[dim];
+
+                Bounds bounds;
+
+                for (u32 bin = binIndexMin; bin <= binIndexMax; bin++)
+                {
+                    // TODO: check that this is actually branchless
+                    u32 invalid = ClipTriangle(a, b, c, dim,
+                                               (f32)binIndex * invScale + minP,
+                                               ((f32)binIndex + 1) * invScale + minP,
+                                               bounds);
+                    binIndexMin += (invalid & 1);
+                    binIndexMax -= (invalid & 2);
+                    splitBins[dim][bin].Extend(bounds);
+                }
+                entryCounts[binIndexMin][dim] += 1;
+                exitCounts[binIndexMax][dim] += 1;
+            }
+        }
+    }
+
+    SpatialSplit Best(u32 blockShift)
+    {
+    }
+
+    // void Split(TriangleMesh *mesh, ExtRange range, SpatialSplit split)
+    // {
+    //     // PartitionResult result;
+    //     // PartitionParallel(, range.prims, ?, range.start, range.end, )
+    //
+    //     const u32 SPATIAL_SPLIT_GROUP_SIZE = 4 * 1024;
+    //
+    //     jobsystem::Counter counter = {};
+    //
+    //     jobsystem::KickJobs(&counter, range.count, SPATIAL_SPLIT_GROUP_SIZE, [&](jobsystem::JobArgs args) {
+    //         PrimData *prim  = &data[i];
+    //         u32 binIndexMin = (u32)Clamp(0.f, (f32)numBins - 1.f, Floor((prim->minP[split.bestDim] - minP[split.bestDim]) * scale));
+    //         u32 binIndexMax = (u32)Clamp(0.f, (f32)numBins - 1.f, Floor((prim->maxP[split.bestDim] - minP[split.bestDim]) * scale));
+    //         if (binIndexMin == binIndexMax) continue;
+    //
+    //         u32 faceIndex = prim->PrimID();
+    //         Vec3f &a      = mesh->p[mesh->indices[faceIndex * 3 + 0]];
+    //         Vec3f &b      = mesh->p[mesh->indices[faceIndex * 3 + 1]];
+    //         Vec3f &c      = mesh->p[mesh->indices[faceIndex * 3 + 2]];
+    //
+    //         u32 invalid = ClipTriangle(a, b, c, split.bestDim, split.bestValue, split.splitPos, ((f32)binIndex + 1.f) * invScale + minP, );
+    //     });
+    // }
+};
+
+struct ExtRange
+{
+    PrimData *data;
+    u32 start;
+    u32 count; // number allocated
+    u32 end;   // allocation end
+};
+
+// how am I going to manage the memory of the extended ranges?
+
+// problem:
+// when spatial splits occur, references are duplicated, meaning extra memory allocations/memory management.
+// solutions involve doing something like embree where each priminfo just has a little extra added to the end,
+// and when you split the # of primitives on the left and right is used to determine how much of this extra chunk
+// each split gets. however, I don't want to do that because I have a massive ego and want to come up with my own solution.
+// right now, all I can think of is some sort of ring buffer. you atomically append to the end of this buffer (by atomic
+// incrementing). when the ring runs out of space,
+
+// the problem with this is that you have to calculate the number of splits upfront
 
 template <typename T>
 void PartitionSerial(Split split, PrimData *prims, T *data, u32 start, u32 end, PartitionResult *result)
@@ -1234,6 +1615,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, NodeType *p
     NodeType *children = PushArray(arenas[GetThreadIndex()], NodeType, nodeCount);
 
     // TODO: need to partition again so that the ranges pointed to by the leaves are consecutive in memory
+    // TODO: consider whether we actually want to do this
     if (leafCount > 0)
     {
         u32 offset = pos_inf;
@@ -1263,9 +1645,6 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, NodeType *p
         }
 
         Assert(totalLeafNodeRange + totalInternalNodeRange == end - offset);
-        // TODO: this needs to be the indices for triangle meshes. i have no clue how I'm going to handle non indexed triangle meshes.
-        // maybe could group into a triangle struct or something then transpose, under the assumption that non indexed triangle meshes
-        // probably have relatively few vertices
         struct Range
         {
             u32 start;

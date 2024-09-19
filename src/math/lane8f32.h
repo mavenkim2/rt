@@ -228,7 +228,22 @@ __forceinline Lane8F32 UnpackHi(const Lane8F32 &a, const Lane8F32 &b) { return _
 template <i32 a, i32 b, i32 c, i32 d, i32 e, i32 f, i32 g, i32 h>
 __forceinline Lane8F32 Shuffle(const Lane8F32 &l)
 {
-    return _mm256_permute2f128_ps(_mm256_permute_ps(l, _MM_SHUFFLE(d, c, b, a)), _mm256_permute_ps(l, _MM_SHUFFLE(h, g, f, e)), ((1 << 4) | 1));
+    static constexpr __m256i shuf = _mm256_setr_epi32(a, b, c, d, e, f, g, h);
+    return _mm256_permutevar8x32_ps(l, shuf);
+}
+
+template <i32 a, i32 b, i32 c, i32 d>
+__forceinline Lane8F32 Permute(const Lane8F32 &l)
+{
+    StaticAssert(a >= 0 && a <= 3 && b >= 0 && b <= 3 && c >= 0 && c <= 3 && c >= 0 && c <= 3, InvalidPermute);
+    return _mm256_permute_ps(l, (d << 6) | (c << 4) | (b << 2) | (a));
+}
+
+template <i32 a, i32 b>
+__forceinline Lane8F32 Shuffle4(const Lane8F32 &l, const Lane8F32 &r)
+{
+    StaticAssert(a >= 0 && a <= 3 && b >= 0 && b <= 3, InvalidPermute2f128);
+    return _mm256_permute2f128_ps(l, r, (b << 4) | (a));
 }
 
 template <i32 a, i32 b, i32 c, i32 d>
