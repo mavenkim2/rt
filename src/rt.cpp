@@ -1041,7 +1041,75 @@ int main(int argc, char *argv[])
 
     jobsystem::Counter counter = {};
 
-#if 1
+    TriangleMesh mesh;
+    const u32 count  = 3000; // 30000000;
+    mesh.p           = PushArray(arena, Vec3f, count);
+    mesh.numVertices = count;
+    mesh.indices     = PushArray(arena, u32, count);
+    mesh.numIndices  = count;
+
+    PrimRef *refs = PushArray(arena, PrimRef, count / 3);
+
+    for (u32 i = 0; i < count / 3; i++)
+    {
+        mesh.p[i * 3]           = RandomVec3(-100.f, 100.f);
+        mesh.p[i * 3 + 1]       = RandomVec3(-100.f, 100.f);
+        mesh.p[i * 3 + 2]       = RandomVec3(-100.f, 100.f);
+        mesh.indices[i * 3]     = i * 3;
+        mesh.indices[i * 3 + 1] = i * 3 + 1;
+        mesh.indices[i * 3 + 2] = i * 3 + 2;
+
+        Vec3f min      = Min(Min(mesh.p[i * 3], mesh.p[i * 3 + 1]), mesh.p[i * 3 + 2]);
+        Vec3f max      = Max(Max(mesh.p[i * 3], mesh.p[i * 3 + 1]), mesh.p[i * 3 + 2]);
+        refs[i].minX   = min.x;
+        refs[i].minY   = min.y;
+        refs[i].minZ   = min.z;
+        refs[i].geomID = 0;
+        refs[i].maxX   = max.x;
+        refs[i].maxY   = max.y;
+        refs[i].maxZ   = max.z;
+        refs[i].primID = i;
+    }
+
+    clock_t start = clock();
+    Bounds l;
+    Bounds r;
+    for (u32 i = 0; i < count / 3; i += 8)
+    {
+        u32 faceIndices[8];
+        Bounds left;
+        Bounds right;
+        for (u32 j = 0; j < 8; j++)
+        {
+            faceIndices[j] = i + j;
+        }
+        ClipTriangle(&mesh, faceIndices, refs, 1, 1.f, left, right);
+        l.Extend(left);
+        r.Extend(right);
+    }
+    clock_t end = clock();
+    printf("Time elapsed AVX: %dms\n", end - start);
+    printf("L Bounds: %f %f %f - %f %f %f\n", l.minP[0], l.minP[1], l.minP[2], l.maxP[0], l.maxP[1], l.maxP[2]);
+    printf("R Bounds: %f %f %f - %f %f %f\n", r.minP[0], r.minP[1], r.minP[2], r.minP[0], r.minP[1], r.minP[2]);
+
+    start = clock();
+    l     = Bounds();
+    r     = Bounds();
+    for (u32 i = 0; i < count / 3; i++)
+    {
+        Bounds left;
+        Bounds right;
+        ClipTriangleSimple(&mesh, i, refs, 1, 1.f, left, right);
+        l.Extend(left);
+        r.Extend(right);
+    }
+    end = clock();
+
+    printf("Time elapsed simple: %dms\n", end - start);
+    printf("L Bounds: %f %f %f - %f %f %f\n", l.minP[0], l.minP[1], l.minP[2], l.maxP[0], l.maxP[1], l.maxP[2]);
+    printf("R Bounds: %f %f %f - %f %f %f\n", r.minP[0], r.minP[1], r.minP[2], r.minP[0], r.minP[1], r.minP[2]);
+
+#if 0
     Arena **arenas = PushArray(arena, Arena *, numProcessors);
     for (u32 i = 0; i < numProcessors; i++)
     {

@@ -496,10 +496,46 @@ struct PrimRef
     };
 };
 
+__forceinline void ClipTriangleSimple(const TriangleMesh *mesh, const u32 faceIndex, PrimRef *refs,
+                                      const u32 dim, const f32 clipPos, Bounds &l, Bounds &r)
+{
+    Bounds left;
+    Bounds right;
+    /* clip triangle to left and right box by processing all edges */
+
+    Vec3f v[] = {mesh->p[mesh->indices[faceIndex * 3 + 0]], mesh->p[mesh->indices[faceIndex * 3 + 1]],
+                 mesh->p[mesh->indices[faceIndex * 3 + 2]], mesh->p[mesh->indices[faceIndex * 3 + 0]]};
+
+    for (size_t i = 0; i < 4; i++)
+    {
+        const Vec3f &v0 = v[i];
+        const Vec3f &v1 = v[i + 1];
+        const float v0d = v0[dim];
+        const float v1d = v1[dim];
+
+        if (v0d <= clipPos) left.Extend(v0);  // this point is on left side
+        if (v0d >= clipPos) right.Extend(v0); // this point is on right side
+
+        if ((v0d < clipPos && clipPos < v1d) || (v1d < clipPos && clipPos < v0d)) // the edge crosses the splitting location
+        {
+            Assert((v1d - v0d) != 0.0f);
+            const float inv_length = 1.0f / (v1d - v0d);
+            const Vec3f c          = FMA(Vec3f((clipPos - v0d) * inv_length), v1 - v0, v0);
+            left.Extend(c);
+            right.Extend(c);
+        }
+    }
+
+    l = left;
+    r = right;
+    // left_o  = intersect(left, bounds);
+    // right_o = intersect(right, bounds);
+}
+
 // NOTE: the bounding box will be invalid if the split plane is completely to the left/right of the triangle
 // (the min of the split dim will be greater than the max)
-__forceinline u32 ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8], PrimRef *refs,
-                               const u32 dim, const f32 clipPos, Bounds &lBounds, Bounds &rBounds)
+__forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8], PrimRef *refs,
+                                const u32 dim, const f32 clipPos, Bounds &outLeft, Bounds &outRight)
 {
     static const u32 LUTAxis[]     = {1, 2, 0};
     static const __m256i swizzle[] = {_mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3), _mm256_setr_epi32(2, 0, 1, 3, 2, 0, 1, 3),
@@ -516,7 +552,7 @@ __forceinline u32 ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8
         Lane8F32 maxV;
         Lane8F32 maxW;
 
-        Bounds8F32() : minU(pos_inf), minV(pos_inf), minW(pos_inf), maxU(pos_inf), maxV(pos_inf), maxW(pos_inf) {}
+        Bounds8F32() : minU(pos_inf), minV(pos_inf), minW(pos_inf), maxU(neg_inf), maxV(neg_inf), maxW(neg_inf) {}
 
         __forceinline void MaskExtendL(const Lane8F32 &mask, const Lane8F32 &clip, const Lane8F32 &u,
                                        const Lane8F32 &v, const Lane8F32 &w)
@@ -560,27 +596,32 @@ __forceinline u32 ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8
     Lane8F32 clip(clipPos);
 
     // TODO: this is limited by i32 max, not u32 max
-    __m256i mult    = _mm256_set1_epi32(3);
-    __m256i indices = _mm256_mul_epu32(_mm256_load_si256((__m256i *)faceIndices), mult);
+    __m256 mult     = _mm256_set1_ps(3);
+    __m256i indices = _mm256_load_si256((__m256i *)faceIndices);
+    indices         = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(indices), mult));
 
     __m256i v0 = _mm256_i32gather_epi32((const i32 *)mesh->indices, indices, 4);
     __m256i v1 = _mm256_i32gather_epi32((const i32 *)mesh->indices, _mm256_add_epi32(indices, _mm256_set1_epi32(1)), 4);
     __m256i v2 = _mm256_i32gather_epi32((const i32 *)mesh->indices, _mm256_add_epi32(indices, _mm256_set1_epi32(2)), 4);
 
+    __m256i startV0 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v0), mult));
+    __m256i startV1 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v1), mult));
+    __m256i startV2 = _mm256_cvtps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(v2), mult));
+
     // there's going to be 24 vertices if I use 8
-    Lane8F32 v0u = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(_mm256_mul_epu32(v0, mult), _mm256_set1_epi32(dim)), 4);
-    Lane8F32 v1u = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(_mm256_mul_epu32(v1, mult), _mm256_set1_epi32(dim)), 4);
-    Lane8F32 v2u = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(_mm256_mul_epu32(v2, mult), _mm256_set1_epi32(dim)), 4);
+    Lane8F32 v0u = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(startV0, _mm256_set1_epi32(dim)), 4);
+    Lane8F32 v1u = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(startV1, _mm256_set1_epi32(dim)), 4);
+    Lane8F32 v2u = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(startV2, _mm256_set1_epi32(dim)), 4);
 
     u32 v        = LUTAxis[dim];
-    Lane8F32 v0v = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(_mm256_mul_epu32(v0, mult), _mm256_set1_epi32(v)), 4);
-    Lane8F32 v1v = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(_mm256_mul_epu32(v1, mult), _mm256_set1_epi32(v)), 4);
-    Lane8F32 v2v = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(_mm256_mul_epu32(v2, mult), _mm256_set1_epi32(v)), 4);
+    Lane8F32 v0v = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(startV0, _mm256_set1_epi32(v)), 4);
+    Lane8F32 v1v = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(startV1, _mm256_set1_epi32(v)), 4);
+    Lane8F32 v2v = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(startV2, _mm256_set1_epi32(v)), 4);
 
     u32 w        = LUTAxis[v];
-    Lane8F32 v0w = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(_mm256_mul_epu32(v0, mult), _mm256_set1_epi32(w)), 4);
-    Lane8F32 v1w = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(_mm256_mul_epu32(v1, mult), _mm256_set1_epi32(w)), 4);
-    Lane8F32 v2w = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(_mm256_mul_epu32(v2, mult), _mm256_set1_epi32(w)), 4);
+    Lane8F32 v0w = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(startV0, _mm256_set1_epi32(w)), 4);
+    Lane8F32 v1w = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(startV1, _mm256_set1_epi32(w)), 4);
+    Lane8F32 v2w = _mm256_i32gather_ps((float *)mesh->p, _mm256_add_epi32(startV2, _mm256_set1_epi32(w)), 4);
 
     // If the vertex is to the left of the split, add to the left bounds. Otherwise, add to the right bounds
     Lane8F32 v0uClipMask = v0u < clip;
@@ -591,9 +632,9 @@ __forceinline u32 ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8
     left.MaskExtendL(v1uClipMask, clip, v1u, v1v, v1w);
     left.MaskExtendL(v2uClipMask, clip, v2u, v2v, v2w);
 
-    right.MaskExtendR(v0uClipMask, v0u, v0v, v0w);
-    right.MaskExtendR(v1uClipMask, v1u, v1v, v1w);
-    right.MaskExtendR(v2uClipMask, v2u, v2v, v2w);
+    right.MaskExtendR(v0uClipMask, clip, v0u, v0v, v0w);
+    right.MaskExtendR(v1uClipMask, clip, v1u, v1v, v1w);
+    right.MaskExtendR(v2uClipMask, clip, v2u, v2v, v2w);
 
     // If the edge is clipped, clip the vertex and add to both the left and right bounds
     Lane8F32 edgeIsClippedMask0 = v0uClipMask ^ v1uClipMask;
@@ -602,8 +643,9 @@ __forceinline u32 ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8
 
     // (plane - v0) / (v1 - v0)
     // v01Clipped = t0 * (v1 - v0) + v0
+    // TODO: handle nan and inf
     Lane8F32 t0          = (clip - v0u) / (v1u - v0u);
-    Lane8F32 v01ClippedV = FMA(t0, v1w - v0w, v0w);
+    Lane8F32 v01ClippedV = FMA(t0, v1v - v0v, v0v);
     Lane8F32 v01ClippedW = FMA(t0, v1w - v0w, v0w);
 
     left.MaskExtendVW(edgeIsClippedMask0, v01ClippedV, v01ClippedW);
@@ -612,7 +654,7 @@ __forceinline u32 ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8
     // t1 = (plane - v1) / (v2 - v1)
     // v12Clipped = t1 * (v2 - v1) + v1
     Lane8F32 t1          = (clip - v1u) / (v2u - v1u);
-    Lane8F32 v12ClippedV = FMA(t1, v2w - v1w, v1w);
+    Lane8F32 v12ClippedV = FMA(t1, v2v - v1v, v1v);
     Lane8F32 v12ClippedW = FMA(t1, v2w - v1w, v1w);
 
     left.MaskExtendVW(edgeIsClippedMask1, v12ClippedV, v12ClippedW);
@@ -642,6 +684,31 @@ __forceinline u32 ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8
                  rightRef0, rightRef1, rightRef2, rightRef3, rightRef4, rightRef5, rightRef6, rightRef7);
 
     const Lane8F32 signFlipMask(-0.f, -0.f, -0.f, 0.f, 0.f, 0.f, 0.f, 0.f);
+    Lane8F32 l = Max(
+        Max(Max(Permute(leftRef0 ^ signFlipMask, swizzle[dim]), Permute(leftRef1 ^ signFlipMask, swizzle[dim])),
+            Max(Permute(leftRef2 ^ signFlipMask, swizzle[dim]), Permute(leftRef3 ^ signFlipMask, swizzle[dim]))),
+        Max(
+            Max(Permute(leftRef4 ^ signFlipMask, swizzle[dim]), Permute(leftRef5 ^ signFlipMask, swizzle[dim])),
+            Max(Permute(leftRef6 ^ signFlipMask, swizzle[dim]), Permute(leftRef7 ^ signFlipMask, swizzle[dim]))));
+    l ^= signFlipMask;
+    Lane4F32 hi = Lane4F32(l.hi);
+    if (hi[dim] > clipPos)
+    {
+        int stop = 5;
+    }
+    outLeft.minP = l.lo;
+    outLeft.maxP = l.hi;
+    Lane8F32 r   = Max(
+        Max(Max(Permute(rightRef0 ^ signFlipMask, swizzle[dim]), Permute(rightRef1 ^ signFlipMask, swizzle[dim])),
+              Max(Permute(rightRef2 ^ signFlipMask, swizzle[dim]), Permute(rightRef3 ^ signFlipMask, swizzle[dim]))),
+        Max(
+            Max(Permute(rightRef4 ^ signFlipMask, swizzle[dim]), Permute(rightRef5 ^ signFlipMask, swizzle[dim])),
+            Max(Permute(rightRef6 ^ signFlipMask, swizzle[dim]), Permute(rightRef7 ^ signFlipMask, swizzle[dim]))));
+    r ^= signFlipMask;
+    outRight.minP = r.lo;
+    outRight.maxP = r.hi;
+
+#if 0
     refs[0].m256 = Min(Shuffle(leftRef0 ^ signFlipMask, swizzle[dim]), refs[0].m256);
     refs[1].m256 = Min(Shuffle(leftRef1 ^ signFlipMask, swizzle[dim]), refs[1].m256);
     refs[2].m256 = Min(Shuffle(leftRef2 ^ signFlipMask, swizzle[dim]), refs[2].m256);
@@ -650,6 +717,7 @@ __forceinline u32 ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8
     refs[5].m256 = Min(Shuffle(leftRef5 ^ signFlipMask, swizzle[dim]), refs[5].m256);
     refs[6].m256 = Min(Shuffle(leftRef6 ^ signFlipMask, swizzle[dim]), refs[6].m256);
     refs[7].m256 = Min(Shuffle(leftRef7 ^ signFlipMask, swizzle[dim]), refs[7].m256);
+#endif
 }
 
 template <i32 numBins>

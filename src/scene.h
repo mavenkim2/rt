@@ -18,6 +18,7 @@ struct Bounds
         minP = Min(minP, in);
         maxP = Max(maxP, in);
     }
+    __forceinline void Extend(Vec3f in) { return Extend(Lane4F32(in)); }
     __forceinline void Extend(const Bounds &other)
     {
         minP = Min(minP, other.minP);
@@ -26,6 +27,11 @@ struct Bounds
     __forceinline bool Contains(const Bounds &other) const
     {
         return All(other.minP >= minP) && All(other.maxP <= maxP);
+    }
+    __forceinline void Intersect(const Bounds &other)
+    {
+        minP = Max(other.minP, minP);
+        maxP = Min(other.maxP, maxP);
     }
 };
 

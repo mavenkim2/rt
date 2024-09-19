@@ -173,6 +173,11 @@ __forceinline Lane8F32 Min(const Lane8F32 &a, const Lane8F32 &b) { return _mm256
 
 __forceinline Lane8F32 Max(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_max_ps(a, b); }
 __forceinline Lane8F32 operator^(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_xor_ps(a, b); }
+__forceinline Lane8F32 &operator^=(Lane8F32 &a, const Lane8F32 &b)
+{
+    a = a ^ b;
+    return a;
+}
 __forceinline Lane8F32 operator<(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_cmp_ps(a, b, _CMP_LT_OS); }
 __forceinline Lane8F32 operator<=(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_cmp_ps(a, b, _CMP_LE_OS); }
 __forceinline Lane8F32 operator>(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_cmp_ps(a, b, _CMP_NLE_US); }
@@ -242,6 +247,8 @@ __forceinline Lane8F32 Shuffle(const Lane8F32 &l)
 }
 
 __forceinline Lane8F32 Shuffle(const Lane8F32 &l, const __m256i &shuf) { return _mm256_permutevar8x32_ps(l, shuf); }
+
+__forceinline Lane8F32 Permute(const Lane8F32 &l, const __m256i &shuf) { return _mm256_permutevar_ps(l, shuf); }
 
 template <i32 a, i32 b, i32 c, i32 d>
 __forceinline Lane8F32 Permute(const Lane8F32 &l)
