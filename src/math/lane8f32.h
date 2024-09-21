@@ -153,7 +153,7 @@ __forceinline Lane8F32 Rsqrt(const Lane8F32 &a)
     return r;
 }
 
-__forceinline Lane8F32 rcp(const Lane8F32 &a)
+__forceinline Lane8F32 Rcp(const Lane8F32 &a)
 {
 #ifdef __AVX512VL__
     Lane8F32 r = _mm256_rcp14_ps(a);
@@ -240,15 +240,38 @@ __forceinline Lane8F32 UnpackLo(const Lane8F32 &a, const Lane8F32 &b) { return _
 __forceinline Lane8F32 UnpackHi(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_unpackhi_ps(a, b); }
 
 template <i32 a, i32 b, i32 c, i32 d, i32 e, i32 f, i32 g, i32 h>
+__forceinline Lane8F32 Blend(const Lane8F32 &l, const Lane8F32 &r)
+{
+    StaticAssert((a | b | c | d | e | f | g | h) == 1, Blend01);
+    static constexpr u32 mask = (h << 7) | (g << 6) | (f << 5) | (e << 4) | (d << 3) | (c << 2) | (b << 1) | a;
+    return _mm256_blend_ps(l, r, mask);
+}
+
+template <i32 a, i32 b, i32 c, i32 d, i32 e, i32 f, i32 g, i32 h>
 __forceinline Lane8F32 Shuffle(const Lane8F32 &l)
 {
     static constexpr __m256i shuf = _mm256_setr_epi32(a, b, c, d, e, f, g, h);
     return _mm256_permutevar8x32_ps(l, shuf);
 }
 
+template <i32 a>
+__forceinline Lane8F32 Shuffle(const Lane8F32 &l)
+{
+    StaticAssert(a >= 0 && a < 8, Shuf);
+    static constexpr __m256i shuf = _mm256_setr_epi32(a, a, a, a, a, a, a, a);
+    return _mm256_permutevar8x32_ps(l, shuf);
+}
+
 __forceinline Lane8F32 Shuffle(const Lane8F32 &l, const __m256i &shuf) { return _mm256_permutevar8x32_ps(l, shuf); }
 
 __forceinline Lane8F32 Permute(const Lane8F32 &l, const __m256i &shuf) { return _mm256_permutevar_ps(l, shuf); }
+
+template <i32 a>
+__forceinline Lane8F32 Permute(const Lane8F32 &l)
+{
+    StaticAssert(a >= 0 && a <= 3, Perm);
+    return _mm256_permute_ps(l, (a << 6) | (a << 4) | (a << 2) | (a));
+}
 
 template <i32 a, i32 b, i32 c, i32 d>
 __forceinline Lane8F32 Permute(const Lane8F32 &l)
@@ -262,24 +285,6 @@ __forceinline Lane8F32 Shuffle4(const Lane8F32 &l, const Lane8F32 &r)
 {
     StaticAssert(a >= 0 && a <= 3 && b >= 0 && b <= 3, InvalidPermute2f128);
     return _mm256_permute2f128_ps(l, r, (b << 4) | (a));
-}
-
-template <i32 a, i32 b, i32 c, i32 d>
-__forceinline Lane8F32 ShuffleReverse(const Lane8F32 &l)
-{
-    return Shuffle<d, c, b, a>(l);
-}
-
-template <i32 i>
-__forceinline Lane8F32 Shuffle(const Lane8F32 &a)
-{
-    return Shuffle<i, i, i, i>(a);
-}
-
-template <i32 a, i32 b, i32 c, i32 d>
-__forceinline Lane8F32 Shuffle(const Lane8F32 &l, const Lane8F32 &r)
-{
-    return _mm256_shuffle_ps(l, r, _MM_SHUFFLE(d, c, b, a));
 }
 
 template <i32 i>
@@ -360,10 +365,44 @@ __forceinline void Transpose8x8(const Lane8F32 &inA, const Lane8F32 &inB, const 
     outH = Shuffle4<1, 3>(t3, t7);
 }
 
-// __forceinline Lane4U32 Flooru(Lane8F32 lane)
-// {
-//     return _mm256_cvtps_epi32(Floor(lane));
-// }
+__forceinline void Transpose8x6(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC, const Lane8F32 &inD,
+                                const Lane8F32 &inE, const Lane8F32 &inF, const Lane8F32 &inG, const Lane8F32 &inH,
+                                Lane8F32 &outA, Lane8F32 &outB, Lane8F32 &outC, Lane8F32 &outD,
+                                Lane8F32 &outE, Lane8F32 &outF)
+{
+    Lane8F32 a = UnpackLo(inA, inC);
+    Lane8F32 b = UnpackHi(inA, inC); // v v _ _ v v _ _
+
+    Lane8F32 c = UnpackLo(inB, inD);
+    Lane8F32 d = UnpackHi(inB, inD); // v v _ _ v v _ _
+
+    Lane8F32 t0 = UnpackLo(a, c);
+    Lane8F32 t1 = UnpackHi(a, c);
+    Lane8F32 t2 = UnpackLo(b, d);
+
+    Lane8F32 e = UnpackLo(inE, inG);
+    Lane8F32 f = UnpackHi(inE, inG);
+
+    Lane8F32 g = UnpackLo(inF, inH);
+    Lane8F32 h = UnpackHi(inF, inH);
+
+    Lane8F32 t3 = UnpackLo(e, g);
+    Lane8F32 t4 = UnpackHi(e, g);
+    Lane8F32 t5 = UnpackLo(f, h);
+
+    outA = Shuffle4<0, 2>(t0, t3);
+    outB = Shuffle4<0, 2>(t1, t4);
+    outC = Shuffle4<0, 2>(t2, t5);
+
+    outD = Shuffle4<1, 3>(t0, t3);
+    outE = Shuffle4<1, 3>(t1, t4);
+    outF = Shuffle4<1, 3>(t2, t5);
+}
+
+__forceinline Lane8U32 Flooru(Lane8F32 lane)
+{
+    return _mm256_cvtps_epi32(Floor(lane));
+}
 
 #if 0
 #if defined(__AVX512VL__)

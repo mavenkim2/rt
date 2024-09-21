@@ -6,6 +6,7 @@
 #include "lane4f32.h"
 
 #if defined(__AVX__)
+#include "lane8u32.h"
 #include "lane8f32.h"
 #endif
 

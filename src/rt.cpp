@@ -21,6 +21,7 @@
 #include "low_discrepancy.h"
 #include "sampler.h"
 #include "bvh/bvh_sah.h"
+#include "bvh/bvh_soa.h"
 #include <algorithm>
 
 #include "base.cpp"
@@ -34,6 +35,8 @@
 #include "memory.cpp"
 #include "scene.cpp"
 #include "bvh.cpp"
+
+#include "tests/triangleclip_test.cpp"
 
 namespace rt
 {
@@ -1039,84 +1042,9 @@ int main(int argc, char *argv[])
     threadLocalStatistics  = PushArray(arena, ThreadStatistics, numProcessors);
     threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, numProcessors);
 
-    jobsystem::Counter counter = {};
-
-    TriangleMesh mesh;
-    const u32 count  = 30000000;
-    mesh.p           = PushArray(arena, Vec3f, count);
-    mesh.numVertices = count;
-    mesh.indices     = PushArray(arena, u32, count);
-    mesh.numIndices  = count;
-
-    PrimRef *refs = PushArray(arena, PrimRef, count / 3);
-
-    for (u32 i = 0; i < count / 3; i++)
-    {
-        mesh.p[i * 3]           = RandomVec3(-100.f, 100.f);
-        mesh.p[i * 3 + 1]       = RandomVec3(-100.f, 100.f);
-        mesh.p[i * 3 + 2]       = RandomVec3(-100.f, 100.f);
-        mesh.indices[i * 3]     = i * 3;
-        mesh.indices[i * 3 + 1] = i * 3 + 1;
-        mesh.indices[i * 3 + 2] = i * 3 + 2;
-
-        Vec3f min      = Min(Min(mesh.p[i * 3], mesh.p[i * 3 + 1]), mesh.p[i * 3 + 2]);
-        Vec3f max      = Max(Max(mesh.p[i * 3], mesh.p[i * 3 + 1]), mesh.p[i * 3 + 2]);
-        refs[i].minX   = min.x;
-        refs[i].minY   = min.y;
-        refs[i].minZ   = min.z;
-        refs[i].geomID = 0;
-        refs[i].maxX   = max.x;
-        refs[i].maxY   = max.y;
-        refs[i].maxZ   = max.z;
-        refs[i].primID = i;
-    }
-
-    u32 *faceIndices = PushArray(arena, u32, count / 3);
-    for (u32 i = 0; i < count / 3; i++)
-    {
-        faceIndices[i] = RandomInt(0, count / 3);
-    }
-#if 1
-    {
-        clock_t start = clock();
-        Bounds l;
-        Bounds r;
-        for (u32 i = 0; i < count / 3; i += 8)
-        {
-            Bounds left;
-            Bounds right;
-            ClipTriangle(&mesh, faceIndices + i, refs, 1, 1.f, left, right);
-            l.Extend(left);
-            r.Extend(right);
-        }
-        clock_t end = clock();
-        printf("Time elapsed AVX: %dms\n", end - start);
-        printf("L Bounds: %f %f %f - %f %f %f\n", l.minP[0], l.minP[1], l.minP[2], l.maxP[0], l.maxP[1], l.maxP[2]);
-        printf("R Bounds: %f %f %f - %f %f %f\n", r.minP[0], r.minP[1], r.minP[2], r.maxP[0], r.maxP[1], r.maxP[2]);
-        printf("Gather Time: %f\n", OS_GetMilliseconds(threadLocalStatistics->misc));
-    }
-#endif
-
-#if 0
-    {
-        clock_t start = clock();
-        Bounds l      = Bounds();
-        Bounds r      = Bounds();
-        for (u32 i = 0; i < count / 3; i++)
-        {
-            Bounds left;
-            Bounds right;
-            ClipTriangleSimple(&mesh, faceIndices[i], refs, 1, 1.f, left, right);
-            l.Extend(left);
-            r.Extend(right);
-        }
-        clock_t end = clock();
-
-        printf("Time elapsed simple: %dms\n", end - start);
-        printf("L Bounds: %f %f %f - %f %f %f\n", l.minP[0], l.minP[1], l.minP[2], l.maxP[0], l.maxP[1], l.maxP[2]);
-        printf("R Bounds: %f %f %f - %f %f %f\n", r.minP[0], r.minP[1], r.minP[2], r.maxP[0], r.maxP[1], r.maxP[2]);
-    }
-#endif
+    const u32 count = 3000000;
+    TriangleClipTestSOA(count);
+    // TriangleClipBinTestDefault(count);
 
 #if 0
     Arena **arenas = PushArray(arena, Arena *, numProcessors);
@@ -1131,6 +1059,53 @@ int main(int argc, char *argv[])
     BVHBuilderTriangleMesh<4> builder;
     BVH4Quantized bvh = builder.BuildBVH(settings, arenas, &mesh, mesh.numIndices / 3);
 
+#endif
+
+    //////////////////////////////
+    // AVX Binning Test
+    //
+
+#if 0
+    const u32 count = 100000000;
+    PrimData *data  = PushArray(arena, PrimData, count);
+
+    for (u32 i = 0; i < count; i++)
+    {
+        PrimData *prim = &data[i];
+        Vec3f min      = RandomVec3(-100.f, 100.f);
+        Vec3f max      = RandomVec3(100.f, 300.f);
+        prim->minP     = Lane4F32(min) * -1.f;
+        prim->maxP     = Lane4F32(max);
+    }
+
+    Bounds centroidBounds;
+    Bounds geomBounds;
+    for (u32 i = 0; i < count; i++)
+    {
+        PrimData *prim    = &data[i];
+        Lane4F32 centroid = (prim->minP + prim->maxP) * 0.5f;
+        centroidBounds.Extend(centroid);
+        geomBounds.Extend(prim->minP, prim->maxP);
+    }
+    HeuristicSAHBinnedAVX<32> heuristic(centroidBounds);
+
+    PerformanceCounter counter;
+    f32 time;
+    counter = OS_StartCounter();
+    heuristic.BinTest(data, 0, count);
+    time = OS_GetMilliseconds(counter);
+    printf("Time AVX Binning 1: %fms\n", time);
+
+    counter = OS_StartCounter();
+    heuristic.BinTest2(data, 0, count);
+    time = OS_GetMilliseconds(counter);
+    printf("Time AVX Binning 2: %fms\n", time);
+
+    HeuristicSAHBinned<32> heuristicNormal(centroidBounds);
+    counter = OS_StartCounter();
+    heuristicNormal.Bin(data, 0, count);
+    time = OS_GetMilliseconds(counter);
+    printf("Time Normal Binning: %fms\n", time);
 #endif
 
 //////////////////////////////
@@ -1158,8 +1133,6 @@ int main(int argc, char *argv[])
         centroidBounds.Extend(centroid);
         geomBounds.Extend(prim->minP, prim->maxP);
     }
-
-    printf("%llu\n", sizeof(QuantizedNode<8>));
 
     HeuristicSAHBinned<32> heuristic(centroidBounds);
 

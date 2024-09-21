@@ -8,6 +8,11 @@ struct Bounds
 
     Bounds() : minP(pos_inf), maxP(neg_inf) {}
 
+    __forceinline bool Empty() const
+    {
+        return Any(minP > maxP);
+    }
+
     __forceinline void Extend(Lane4F32 inMin, Lane4F32 inMax)
     {
         minP = Min(minP, inMin);

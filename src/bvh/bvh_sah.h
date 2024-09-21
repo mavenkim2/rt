@@ -3,8 +3,8 @@
 #include "../math/simd_base.h"
 
 // TODO:
+// - spatial splits <- currently working on
 // - explore octant order traversal,
-// - spatial splits
 // - partial rebraiding
 // - stream (Fuetterling 2015, frusta)/packet traversal
 // - ray sorting/binning(hyperion, or individually in each thread).
@@ -31,25 +31,19 @@ namespace rt
 const u32 PARALLEL_THRESHOLD = 4 * 1024;
 
 // TODO: make sure to pad to max lane width, set min and maxes to pos_inf and neg_inf and count to zero for padded entries
-struct PrimDataSOA
-{
-    f32 *minX;
-    f32 *minY;
-    f32 *minZ;
-    f32 *maxX;
-    f32 *maxY;
-    f32 *maxZ;
-
-    u32 *counts;
-    u32 total;
-};
-
 struct PrimData
 {
-    // NOTE: contains the geomID
-    Lane4F32 minP;
-    // NOTE: contains the primID
-    Lane4F32 maxP;
+    union
+    {
+        struct
+        {
+            // NOTE: contains the geomID
+            Lane4F32 minP;
+            // NOTE: contains the primID
+            Lane4F32 maxP;
+        };
+        Lane8F32 m256;
+    };
 
     __forceinline GeometryID GeomID() const
     {
@@ -70,24 +64,30 @@ struct PrimData
     {
         maxP.u = primID;
     }
+
+    __forceinline Bounds GetBounds() const
+    {
+        Bounds out;
+        out.minP = minP;
+        out.maxP = maxP;
+        return out;
+    }
 };
 
-// struct PrimData
-// {
-//     union
-//     {
-//         Lane4F32 *minP;
-//         Lane4F32 *minP_geomID;
-//     };
-//     union
-//     {
-//         Lane4F32 *maxP;
-//         Lane4F32 *maxP_primID;
-//     };
-//     AABB centroidBounds;
-//
-//     u32 total;
-// };
+struct PrimRef
+{
+    union
+    {
+        __m256 m256;
+        struct
+        {
+            f32 minX, minY, minZ;
+            u32 geomID;
+            f32 maxX, maxY, maxZ;
+            u32 primID;
+        };
+    };
+};
 
 struct BuildSettings
 {
@@ -126,14 +126,14 @@ struct PartitionResult
     PartitionResult(Bounds &gL, Bounds &gR, Bounds &cL, Bounds &cR, u32 mid)
         : geomBoundsL(gL), geomBoundsR(gR), centBoundsL(cL), centBoundsR(cR), mid(mid) {}
 
-    __forceinline void Extend(const PartitionResult &other)
-    {
-        geomBoundsL.Extend(other.geomBoundsL);
-        geomBoundsR.Extend(other.geomBoundsR);
-
-        centBoundsL.Extend(other.centBoundsL);
-        centBoundsR.Extend(other.centBoundsR);
-    }
+    // __forceinline void Extend(const PartitionResult &other)
+    // {
+    //     geomBoundsL.Extend(other.geomBoundsL);
+    //     geomBoundsR.Extend(other.geomBoundsR);
+    //
+    //     centBoundsL.Extend(other.centBoundsL);
+    //     centBoundsR.Extend(other.centBoundsR);
+    // }
 };
 
 struct Split
@@ -144,6 +144,302 @@ struct Split
     f32 bestValue;
 
     Split(f32 sah, u32 pos, u32 dim, f32 val) : bestSAH(sah), bestPos(pos), bestDim(dim), bestValue(val) {}
+};
+
+template <i32 numBins>
+struct HeuristicSAHBinnedAVX
+{
+    Lane8F32 bins[3][numBins];
+    Lane4U32 binCounts[numBins];
+
+    Lane8F32 scaleX;
+    Lane8F32 scaleY;
+    Lane8F32 scaleZ;
+
+    Lane8F32 baseX;
+    Lane8F32 baseY;
+    Lane8F32 baseZ;
+
+    Lane8F32 base;
+    Lane8F32 scale;
+
+    HeuristicSAHBinnedAVX() {}
+    HeuristicSAHBinnedAVX(const AABB &base) { Init(Lane4F32(base.minP), Lane4F32(base.maxP)); }
+    HeuristicSAHBinnedAVX(const Bounds &base) { Init(base.minP, base.maxP); }
+
+    __forceinline void Init(const Lane4F32 inMin, const Lane4F32 inMax)
+    {
+        const Lane4F32 eps = 1e-34f;
+
+        baseX               = Lane8F32(inMin[0]);
+        baseY               = Lane8F32(inMin[1]);
+        baseZ               = Lane8F32(inMin[2]);
+        base                = Lane8F32(inMin, inMin);
+        const Lane4F32 diag = Max(inMax - inMin, 0.f);
+
+        Lane4F32 inScale = Select(diag > eps, Lane4F32((f32)numBins) / diag, Lane4F32(0.f));
+        scaleX           = Lane8F32(inScale[0]);
+        scaleY           = Lane8F32(inScale[1]);
+        scaleZ           = Lane8F32(inScale[2]);
+        scale            = Lane8F32(inScale, inScale);
+
+        for (u32 dim = 0; dim < 3; dim++)
+        {
+            for (u32 i = 0; i < numBins; i++)
+            {
+                bins[dim][i] = pos_inf;
+            }
+        }
+        for (u32 i = 0; i < numBins; i++)
+        {
+            binCounts[i] = 0;
+        }
+    }
+
+    __forceinline void BinTest(const PrimData *prims, u32 start, u32 count)
+    {
+        u32 i   = start;
+        u32 end = start + count;
+
+        u32 tempBinIndicesX[8];
+        u32 tempBinIndicesY[8];
+        u32 tempBinIndicesZ[8];
+
+        Lane8F32 prev[8] = {
+            prims[i].m256,
+            prims[i + 1].m256,
+            prims[i + 2].m256,
+            prims[i + 3].m256,
+            prims[i + 4].m256,
+            prims[i + 5].m256,
+            prims[i + 6].m256,
+            prims[i + 7].m256,
+        };
+        Lane8F32 minX;
+        Lane8F32 minY;
+        Lane8F32 minZ;
+
+        Lane8F32 maxX;
+        Lane8F32 maxY;
+        Lane8F32 maxZ;
+
+        Transpose8x6(prev[0], prev[1], prev[2], prev[3],
+                     prev[4], prev[5], prev[6], prev[7],
+                     minX, minY, minZ, maxX, maxY, maxZ);
+
+        const Lane8F32 centroidX0   = (minX - maxX) * 0.5f;
+        const Lane8U32 binIndicesX0 = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroidX0 - baseX) * scaleX));
+        const Lane8F32 centroidY0   = (minY - maxY) * 0.5f;
+        const Lane8U32 binIndicesY0 = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroidY0 - baseY) * scaleY));
+        const Lane8F32 centroidZ0   = (minZ - maxZ) * 0.5f;
+        const Lane8U32 binIndicesZ0 = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroidZ0 - baseZ) * scaleZ));
+
+        i += 8;
+        Lane8U32::Store(tempBinIndicesX, binIndicesX0);
+        Lane8U32::Store(tempBinIndicesY, binIndicesY0);
+        Lane8U32::Store(tempBinIndicesZ, binIndicesZ0);
+
+        for (; i < end; i += 8)
+        {
+            const Lane8F32 prims8[8] = {
+                prims[i].m256,
+                prims[i + 1].m256,
+                prims[i + 2].m256,
+                prims[i + 3].m256,
+
+                prims[i + 4].m256,
+                prims[i + 5].m256,
+                prims[i + 6].m256,
+                prims[i + 7].m256};
+
+            Transpose8x6(prims8[0], prims8[1], prims8[2], prims8[3],
+                         prims8[4], prims8[5], prims8[6], prims8[7],
+                         minX, minY, minZ, maxX, maxY, maxZ);
+
+            const Lane8F32 centroidX = (minX - maxX) * 0.5f;
+
+            u32 iX0 = tempBinIndicesX[0];
+            u32 iY0 = tempBinIndicesY[0];
+            u32 iZ0 = tempBinIndicesZ[0];
+            binCounts[iX0][0]++;
+            binCounts[iY0][1]++;
+            binCounts[iZ0][2]++;
+            bins[0][iX0] = Max(bins[0][iX0], prev[0]);
+            bins[1][iY0] = Max(bins[1][iY0], prev[0]);
+            bins[2][iZ0] = Max(bins[2][iZ0], prev[0]);
+            prev[0]      = prims8[0];
+
+            const Lane8U32 binIndicesX = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroidX - baseX) * scaleX));
+
+            u32 iX1 = tempBinIndicesX[1];
+            u32 iY1 = tempBinIndicesY[1];
+            u32 iZ1 = tempBinIndicesZ[1];
+            binCounts[iX1][0]++;
+            binCounts[iY1][1]++;
+            binCounts[iZ1][2]++;
+            bins[0][iX1] = Max(bins[0][iX1], prev[1]);
+            bins[1][iY1] = Max(bins[1][iY1], prev[1]);
+            bins[2][iZ1] = Max(bins[2][iZ1], prev[1]);
+            prev[1]      = prims8[1];
+
+            const Lane8F32 centroidY = (minY - maxY) * 0.5f;
+
+            u32 iX2 = tempBinIndicesX[2];
+            u32 iY2 = tempBinIndicesY[2];
+            u32 iZ2 = tempBinIndicesZ[2];
+            binCounts[iX2][0]++;
+            binCounts[iY2][1]++;
+            binCounts[iZ2][2]++;
+            bins[0][iX2] = Max(bins[0][iX2], prev[2]);
+            bins[1][iY2] = Max(bins[1][iY2], prev[2]);
+            bins[2][iZ2] = Max(bins[2][iZ2], prev[2]);
+            prev[2]      = prims8[2];
+
+            const Lane8U32 binIndicesY = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroidY - baseY) * scaleY));
+
+            u32 iX3 = tempBinIndicesX[3];
+            u32 iY3 = tempBinIndicesY[3];
+            u32 iZ3 = tempBinIndicesZ[3];
+            binCounts[iX3][0]++;
+            binCounts[iY3][1]++;
+            binCounts[iZ3][2]++;
+            bins[0][iX3] = Max(bins[0][iX3], prev[3]);
+            bins[1][iY3] = Max(bins[1][iY3], prev[3]);
+            bins[2][iZ3] = Max(bins[2][iZ3], prev[3]);
+            prev[3]      = prims8[3];
+
+            const Lane8F32 centroidZ = (minZ - maxZ) * 0.5f;
+
+            u32 iX4 = tempBinIndicesX[4];
+            u32 iY4 = tempBinIndicesY[4];
+            u32 iZ4 = tempBinIndicesZ[4];
+            binCounts[iX4][0]++;
+            binCounts[iY4][1]++;
+            binCounts[iZ4][2]++;
+            bins[0][iX4] = Max(bins[0][iX4], prev[4]);
+            bins[1][iY4] = Max(bins[1][iY4], prev[4]);
+            bins[2][iZ4] = Max(bins[2][iZ4], prev[4]);
+            prev[4]      = prims8[4];
+
+            const Lane8U32 binIndicesZ = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroidZ - baseZ) * scaleZ));
+
+            u32 iX5 = tempBinIndicesX[5];
+            u32 iY5 = tempBinIndicesY[5];
+            u32 iZ5 = tempBinIndicesZ[5];
+            binCounts[iX5][0]++;
+            binCounts[iY5][1]++;
+            binCounts[iZ5][2]++;
+            bins[0][iX5] = Max(bins[0][iX5], prev[5]);
+            bins[1][iY5] = Max(bins[1][iY5], prev[5]);
+            bins[2][iZ5] = Max(bins[2][iZ5], prev[5]);
+            prev[5]      = prims8[5];
+
+            u32 iX6 = tempBinIndicesX[6];
+            u32 iY6 = tempBinIndicesY[6];
+            u32 iZ6 = tempBinIndicesZ[6];
+            binCounts[iX6][0]++;
+            binCounts[iY6][1]++;
+            binCounts[iZ6][2]++;
+            bins[0][iX6] = Max(bins[0][iX6], prev[6]);
+            bins[1][iY6] = Max(bins[1][iY6], prev[6]);
+            bins[2][iZ6] = Max(bins[2][iZ6], prev[6]);
+            prev[6]      = prims8[6];
+
+            u32 iX7 = tempBinIndicesX[7];
+            u32 iY7 = tempBinIndicesY[7];
+            u32 iZ7 = tempBinIndicesZ[7];
+            binCounts[iX7][0]++;
+            binCounts[iY7][1]++;
+            binCounts[iZ7][2]++;
+            bins[0][iX7] = Max(bins[0][iX7], prev[7]);
+            bins[1][iY7] = Max(bins[1][iY7], prev[7]);
+            bins[2][iZ7] = Max(bins[2][iZ7], prev[7]);
+            prev[7]      = prims8[7];
+
+            Lane8U32::Store(tempBinIndicesX, binIndicesX);
+            Lane8U32::Store(tempBinIndicesY, binIndicesY);
+            Lane8U32::Store(tempBinIndicesZ, binIndicesZ);
+        }
+    }
+
+    __forceinline void BinTest2(const PrimData *prims, u32 start, u32 count)
+    {
+        u32 i   = start;
+        u32 end = start + count;
+
+        u32 tempBinIndices[8];
+        Lane8F32 prev0;
+        Lane8F32 prev1;
+
+        prev0 = prims[i].m256;
+        prev1 = prims[i].m256;
+
+        Lane8F32 binMin = Shuffle4<0, 2>(prev0, prev1);
+        Lane8F32 binMax = Shuffle4<1, 3>(prev0, prev1);
+
+        Lane8F32 centroid   = (binMax + binMin) * 0.5f;
+        Lane8U32 binIndices = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroid - base) * scale));
+
+        Lane8U32::Store(tempBinIndices, binIndices);
+        i += 2;
+
+        for (; i < end - 1; i += 2)
+        {
+            const PrimData *prim0 = &prims[i];
+            const PrimData *prim1 = &prims[i];
+
+            binMin = Shuffle4<0, 2>(prim0->m256, prim1->m256);
+            binMax = Shuffle4<1, 3>(prim0->m256, prim1->m256);
+
+            centroid   = (binMax + binMin) * 0.5f;
+            binIndices = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroid - base) * scale));
+
+            u32 binIndexX = tempBinIndices[0];
+            u32 binIndexY = tempBinIndices[1];
+            u32 binIndexZ = tempBinIndices[2];
+            binCounts[binIndexX][0]++;
+            binCounts[binIndexY][1]++;
+            binCounts[binIndexZ][2]++;
+            bins[0][binIndexX] = Max(bins[0][binIndexX], prev0);
+            bins[1][binIndexY] = Max(bins[1][binIndexY], prev0);
+            bins[2][binIndexZ] = Max(bins[2][binIndexZ], prev0);
+
+            prev0 = prim0->m256;
+
+            u32 binIndexX2 = tempBinIndices[4];
+            u32 binIndexY2 = tempBinIndices[5];
+            u32 binIndexZ2 = tempBinIndices[6];
+            binCounts[binIndexX2][0]++;
+            binCounts[binIndexY2][1]++;
+            binCounts[binIndexZ2][2]++;
+            bins[0][binIndexX2] = Max(bins[0][binIndexX2], prev1);
+            bins[1][binIndexY2] = Max(bins[1][binIndexY2], prev1);
+            bins[2][binIndexZ2] = Max(bins[2][binIndexZ2], prev1);
+
+            prev1 = prim1->m256;
+
+            Lane8U32::Store(tempBinIndices, binIndices);
+        }
+        u32 binIndexX = tempBinIndices[0];
+        u32 binIndexY = tempBinIndices[1];
+        u32 binIndexZ = tempBinIndices[2];
+        binCounts[binIndexX][0]++;
+        binCounts[binIndexY][1]++;
+        binCounts[binIndexZ][2]++;
+        bins[0][binIndexX] = Max(bins[0][binIndexX], prev0);
+        bins[1][binIndexY] = Max(bins[1][binIndexY], prev0);
+        bins[2][binIndexZ] = Max(bins[2][binIndexZ], prev0);
+
+        u32 binIndexX2 = tempBinIndices[4];
+        u32 binIndexY2 = tempBinIndices[5];
+        u32 binIndexZ2 = tempBinIndices[6];
+        binCounts[binIndexX2][0]++;
+        binCounts[binIndexY2][1]++;
+        binCounts[binIndexZ2][2]++;
+        bins[0][binIndexX2] = Max(bins[0][binIndexX2], prev1);
+        bins[1][binIndexY2] = Max(bins[1][binIndexY2], prev1);
+        bins[2][binIndexZ2] = Max(bins[2][binIndexZ2], prev1);
+    }
 };
 
 template <i32 numBins>
@@ -481,22 +777,8 @@ __forceinline void Swap(const Lane8F32 &mask, Lane8F32 &a, Lane8F32 &b)
     b             = _mm256_blendv_ps(b, temp, mask);
 }
 
-struct PrimRef
-{
-    union
-    {
-        __m256 m256;
-        struct
-        {
-            f32 minX, minY, minZ;
-            u32 geomID;
-            f32 maxX, maxY, maxZ;
-            u32 primID;
-        };
-    };
-};
-
-__forceinline void ClipTriangleSimple(const TriangleMesh *mesh, const u32 faceIndex, PrimRef *refs,
+// TODO: this code doesnt' work
+__forceinline void ClipTriangleSimple(const TriangleMesh *mesh, const u32 faceIndex,
                                       const u32 dim, const f32 clipPos, Bounds &l, Bounds &r)
 {
     Bounds left;
@@ -534,60 +816,91 @@ __forceinline void ClipTriangleSimple(const TriangleMesh *mesh, const u32 faceIn
 
 // NOTE: the bounding box will be invalid if the split plane is completely to the left/right of the triangle
 // (the min of the split dim will be greater than the max)
-__forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8], PrimRef *refs,
-                                const u32 dim, const f32 clipPos, Bounds &outLeft, Bounds &outRight)
+
+struct ClipTrianglePayload
 {
-    static const u32 LUTAxis[]     = {1, 2, 0};
-    static const __m256i swizzle[] = {_mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3), _mm256_setr_epi32(2, 0, 1, 3, 2, 0, 1, 3),
-                                      _mm256_setr_epi32(1, 2, 0, 3, 1, 2, 0, 3)};
-    Lane8F32 p;
+    Lane8F32 leftRef0, leftRef1, leftRef2, leftRef3, leftRef4, leftRef5, leftRef6, leftRef7;
+    Lane8F32 rightRef0, rightRef1, rightRef2, rightRef3, rightRef4, rightRef5, rightRef6, rightRef7;
+};
 
-    struct Bounds8F32
+static const Lane8F32 signFlipMask(-0.f, -0.f, -0.f, 0.f, 0.f, 0.f, 0.f, 0.f);
+static const u32 LUTAxis[]     = {1, 2, 0};
+static const __m256i Swizzle[] = {_mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3), _mm256_setr_epi32(2, 0, 1, 3, 2, 0, 1, 3),
+                                  _mm256_setr_epi32(1, 2, 0, 3, 1, 2, 0, 3)};
+
+struct Bounds8F32
+{
+    Lane8F32 minU;
+    Lane8F32 minV;
+    Lane8F32 minW;
+
+    Lane8F32 maxU;
+    Lane8F32 maxV;
+    Lane8F32 maxW;
+
+    Bounds8F32() : minU(pos_inf), minV(pos_inf), minW(pos_inf), maxU(neg_inf), maxV(neg_inf), maxW(neg_inf) {}
+
+    __forceinline void Extend(const Bounds8F32 &other)
     {
-        Lane8F32 minU;
-        Lane8F32 minV;
-        Lane8F32 minW;
+        minU = Min(minU, other.minU);
+        minV = Min(minV, other.minV);
+        minW = Min(minW, other.minW);
 
-        Lane8F32 maxU;
-        Lane8F32 maxV;
-        Lane8F32 maxW;
+        maxU = Max(maxU, other.maxU);
+        maxV = Max(maxV, other.maxV);
+        maxW = Max(maxW, other.maxW);
+    }
 
-        Bounds8F32() : minU(pos_inf), minV(pos_inf), minW(pos_inf), maxU(neg_inf), maxV(neg_inf), maxW(neg_inf) {}
+    __forceinline void MaskExtend(const Lane8F32 &mask, const Lane8F32 &u, const Lane8F32 &v, const Lane8F32 &w)
+    {
+        minU = MaskMin(mask, minU, u);
+        minV = MaskMin(mask, minV, v);
+        minW = MaskMin(mask, minW, w);
 
-        __forceinline void MaskExtendL(const Lane8F32 &mask, const Lane8F32 &clip, const Lane8F32 &u,
-                                       const Lane8F32 &v, const Lane8F32 &w)
-        {
-            minU = MaskMin(mask, minU, u);
-            minV = MaskMin(mask, minV, v);
-            minW = MaskMin(mask, minW, w);
+        maxU = MaskMax(mask, maxU, u);
+        maxV = MaskMax(mask, maxV, v);
+        maxW = MaskMax(mask, maxW, w);
+    }
 
-            maxU = clip;
-            maxV = MaskMax(mask, maxV, v);
-            maxW = MaskMax(mask, maxW, w);
-        }
+    __forceinline void MaskExtendL(const Lane8F32 &mask, const Lane8F32 &clip, const Lane8F32 &u,
+                                   const Lane8F32 &v, const Lane8F32 &w)
+    {
+        minU = MaskMin(mask, minU, u);
+        minV = MaskMin(mask, minV, v);
+        minW = MaskMin(mask, minW, w);
 
-        __forceinline void MaskExtendR(const Lane8F32 &mask, const Lane8F32 &clip, const Lane8F32 &u,
-                                       const Lane8F32 &v, const Lane8F32 &w)
-        {
+        maxU = clip;
+        maxV = MaskMax(mask, maxV, v);
+        maxW = MaskMax(mask, maxW, w);
+    }
 
-            minU = clip;
-            minV = Select(mask, minV, Min(minV, v));
-            minW = Select(mask, minW, Min(minW, w));
+    __forceinline void MaskExtendR(const Lane8F32 &mask, const Lane8F32 &clip, const Lane8F32 &u,
+                                   const Lane8F32 &v, const Lane8F32 &w)
+    {
 
-            maxU = Select(mask, maxU, Max(maxU, u));
-            maxV = Select(mask, maxV, Max(maxV, v));
-            maxW = Select(mask, maxW, Max(maxW, w));
-        }
+        minU = clip;
+        minV = Select(mask, minV, Min(minV, v));
+        minW = Select(mask, minW, Min(minW, w));
 
-        __forceinline void MaskExtendVW(const Lane8F32 &mask, const Lane8F32 &v, const Lane8F32 &w)
-        {
-            minV = MaskMin(mask, minV, v);
-            maxV = MaskMax(mask, maxV, v);
+        maxU = Select(mask, maxU, Max(maxU, u));
+        maxV = Select(mask, maxV, Max(maxV, v));
+        maxW = Select(mask, maxW, Max(maxW, w));
+    }
 
-            minW = MaskMin(mask, minW, w);
-            maxW = MaskMax(mask, maxW, w);
-        }
-    };
+    __forceinline void MaskExtendVW(const Lane8F32 &mask, const Lane8F32 &v, const Lane8F32 &w)
+    {
+        minV = MaskMin(mask, minV, v);
+        maxV = MaskMax(mask, maxV, v);
+
+        minW = MaskMin(mask, minW, w);
+        maxW = MaskMax(mask, maxW, w);
+    }
+};
+
+__forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8], const u32 dim,
+                                const f32 clipPos, ClipTrianglePayload *payload)
+{
+    Lane8F32 p;
 
     // Bounds
     Bounds8F32 left;
@@ -696,8 +1009,9 @@ __forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[
 
     // (plane - v0) / (v1 - v0)
     // v01Clipped = t0 * (v1 - v0) + v0
-    // TODO: handle nan and inf
-    Lane8F32 t0          = (clip - v0u) / (v1u - v0u);
+
+    Lane8F32 v1uMinusV0u = Select(v1u == v0u, Lane8F32(zero), Rcp(v1u - v0u));
+    Lane8F32 t0          = (clip - v0u) * v1uMinusV0u;
     Lane8F32 v01ClippedV = FMA(t0, v1v - v0v, v0v);
     Lane8F32 v01ClippedW = FMA(t0, v1w - v0w, v0w);
 
@@ -706,7 +1020,8 @@ __forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[
 
     // t1 = (plane - v1) / (v2 - v1)
     // v12Clipped = t1 * (v2 - v1) + v1
-    Lane8F32 t1          = (clip - v1u) / (v2u - v1u);
+    Lane8F32 v2uMinusV1u = Select(v2u == v1u, Lane8F32(zero), Rcp(v2u - v1u));
+    Lane8F32 t1          = (clip - v1u) * v2uMinusV1u;
     Lane8F32 v12ClippedV = FMA(t1, v2v - v1v, v1v);
     Lane8F32 v12ClippedW = FMA(t1, v2w - v1w, v1w);
 
@@ -715,7 +1030,8 @@ __forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[
 
     // t2 = (plane - v2) / (v0 - v2)
     // v20Clipped = t2 * (v0 - v2) + v2
-    Lane8F32 t2          = (clip - v2u) / (v0u - v2u);
+    Lane8F32 v0uMinusV2u = Select(v0u == v2u, Lane8F32(zero), Rcp(v0u - v2u));
+    Lane8F32 t2          = (clip - v2u) * v0uMinusV2u;
     Lane8F32 v20ClippedV = FMA(t2, v0v - v2v, v2v);
     Lane8F32 v20ClippedW = FMA(t2, v0w - v2w, v2w);
 
@@ -727,46 +1043,77 @@ __forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[
     const Lane8F32 negInf(neg_inf);
     const Lane8F32 posInf(pos_inf);
 
-    Lane8F32 leftRef0, leftRef1, leftRef2, leftRef3, leftRef4, leftRef5, leftRef6, leftRef7;
-    Lane8F32 rightRef0, rightRef1, rightRef2, rightRef3, rightRef4, rightRef5, rightRef6, rightRef7;
-
     Transpose8x8(left.minU, left.minV, left.minW, posInf, left.maxU, left.maxV, left.maxW, posInf,
-                 leftRef0, leftRef1, leftRef2, leftRef3, leftRef4, leftRef5, leftRef6, leftRef7);
+                 payload->leftRef0, payload->leftRef1, payload->leftRef2, payload->leftRef3,
+                 payload->leftRef4, payload->leftRef5, payload->leftRef6, payload->leftRef7);
 
     Transpose8x8(right.minU, right.minV, right.minW, posInf, right.maxU, right.maxV, right.maxW, posInf,
-                 rightRef0, rightRef1, rightRef2, rightRef3, rightRef4, rightRef5, rightRef6, rightRef7);
+                 payload->rightRef0, payload->rightRef1, payload->rightRef2, payload->rightRef3,
+                 payload->rightRef4, payload->rightRef5, payload->rightRef6, payload->rightRef7);
+}
 
-    const Lane8F32 signFlipMask(-0.f, -0.f, -0.f, 0.f, 0.f, 0.f, 0.f, 0.f);
+__forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8], const u32 dim,
+                                const f32 clipPos, Bounds &outLeft, Bounds &outRight)
+{
+    ClipTrianglePayload payload;
+    ClipTriangle(mesh, faceIndices, dim, clipPos, &payload);
+
     Lane8F32 l = Max(
-        Max(Max(Permute(leftRef0 ^ signFlipMask, swizzle[dim]), Permute(leftRef1 ^ signFlipMask, swizzle[dim])),
-            Max(Permute(leftRef2 ^ signFlipMask, swizzle[dim]), Permute(leftRef3 ^ signFlipMask, swizzle[dim]))),
+        Max(Max(Permute(payload.leftRef0 ^ signFlipMask, Swizzle[dim]), Permute(payload.leftRef1 ^ signFlipMask, Swizzle[dim])),
+            Max(Permute(payload.leftRef2 ^ signFlipMask, Swizzle[dim]), Permute(payload.leftRef3 ^ signFlipMask, Swizzle[dim]))),
         Max(
-            Max(Permute(leftRef4 ^ signFlipMask, swizzle[dim]), Permute(leftRef5 ^ signFlipMask, swizzle[dim])),
-            Max(Permute(leftRef6 ^ signFlipMask, swizzle[dim]), Permute(leftRef7 ^ signFlipMask, swizzle[dim]))));
+            Max(Permute(payload.leftRef4 ^ signFlipMask, Swizzle[dim]), Permute(payload.leftRef5 ^ signFlipMask, Swizzle[dim])),
+            Max(Permute(payload.leftRef6 ^ signFlipMask, Swizzle[dim]), Permute(payload.leftRef7 ^ signFlipMask, Swizzle[dim]))));
     l ^= signFlipMask;
     outLeft.minP = l.lo;
     outLeft.maxP = l.hi;
     Lane8F32 r   = Max(
-        Max(Max(Permute(rightRef0 ^ signFlipMask, swizzle[dim]), Permute(rightRef1 ^ signFlipMask, swizzle[dim])),
-              Max(Permute(rightRef2 ^ signFlipMask, swizzle[dim]), Permute(rightRef3 ^ signFlipMask, swizzle[dim]))),
+        Max(Max(Permute(payload.rightRef0 ^ signFlipMask, Swizzle[dim]), Permute(payload.rightRef1 ^ signFlipMask, Swizzle[dim])),
+              Max(Permute(payload.rightRef2 ^ signFlipMask, Swizzle[dim]), Permute(payload.rightRef3 ^ signFlipMask, Swizzle[dim]))),
         Max(
-            Max(Permute(rightRef4 ^ signFlipMask, swizzle[dim]), Permute(rightRef5 ^ signFlipMask, swizzle[dim])),
-            Max(Permute(rightRef6 ^ signFlipMask, swizzle[dim]), Permute(rightRef7 ^ signFlipMask, swizzle[dim]))));
+            Max(Permute(payload.rightRef4 ^ signFlipMask, Swizzle[dim]), Permute(payload.rightRef5 ^ signFlipMask, Swizzle[dim])),
+            Max(Permute(payload.rightRef6 ^ signFlipMask, Swizzle[dim]), Permute(payload.rightRef7 ^ signFlipMask, Swizzle[dim]))));
     r ^= signFlipMask;
     outRight.minP = r.lo;
     outRight.maxP = r.hi;
-
-#if 0
-    refs[0].m256 = Min(Shuffle(leftRef0 ^ signFlipMask, swizzle[dim]), refs[0].m256);
-    refs[1].m256 = Min(Shuffle(leftRef1 ^ signFlipMask, swizzle[dim]), refs[1].m256);
-    refs[2].m256 = Min(Shuffle(leftRef2 ^ signFlipMask, swizzle[dim]), refs[2].m256);
-    refs[3].m256 = Min(Shuffle(leftRef3 ^ signFlipMask, swizzle[dim]), refs[3].m256);
-    refs[4].m256 = Min(Shuffle(leftRef4 ^ signFlipMask, swizzle[dim]), refs[4].m256);
-    refs[5].m256 = Min(Shuffle(leftRef5 ^ signFlipMask, swizzle[dim]), refs[5].m256);
-    refs[6].m256 = Min(Shuffle(leftRef6 ^ signFlipMask, swizzle[dim]), refs[6].m256);
-    refs[7].m256 = Min(Shuffle(leftRef7 ^ signFlipMask, swizzle[dim]), refs[7].m256);
-#endif
 }
+
+__forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8], const PrimRef *refs,
+                                const u32 dim, const f32 clipPos, PrimRef *outLeft, PrimRef *outRight)
+{
+    ClipTrianglePayload payload;
+    ClipTriangle(mesh, faceIndices, dim, clipPos, &payload);
+
+    outLeft[0].m256 = Min(Permute(payload.leftRef0 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[0]].m256);
+    outLeft[1].m256 = Min(Permute(payload.leftRef1 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[1]].m256);
+    outLeft[2].m256 = Min(Permute(payload.leftRef2 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[2]].m256);
+    outLeft[3].m256 = Min(Permute(payload.leftRef3 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[3]].m256);
+    outLeft[4].m256 = Min(Permute(payload.leftRef4 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[4]].m256);
+    outLeft[5].m256 = Min(Permute(payload.leftRef5 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[5]].m256);
+    outLeft[6].m256 = Min(Permute(payload.leftRef6 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[6]].m256);
+    outLeft[7].m256 = Min(Permute(payload.leftRef7 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[7]].m256);
+
+    outRight[0].m256 = Min(Permute(payload.rightRef0 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[0]].m256);
+    outRight[1].m256 = Min(Permute(payload.rightRef1 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[1]].m256);
+    outRight[2].m256 = Min(Permute(payload.rightRef2 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[2]].m256);
+    outRight[3].m256 = Min(Permute(payload.rightRef3 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[3]].m256);
+    outRight[4].m256 = Min(Permute(payload.rightRef4 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[4]].m256);
+    outRight[5].m256 = Min(Permute(payload.rightRef5 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[5]].m256);
+    outRight[6].m256 = Min(Permute(payload.rightRef6 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[6]].m256);
+    outRight[7].m256 = Min(Permute(payload.rightRef7 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[7]].m256);
+}
+
+struct ExtRange
+{
+    PrimRef *data;
+    u32 start;
+    u32 count;  // number allocated
+    u32 extEnd; // allocation end
+
+    __forceinline u32 End() const { return start + count; }
+    __forceinline u32 ExtSize() const { return extEnd - (start + count); }
+    __forceinline u32 TotalSize() const { return extEnd - start; }
+};
 
 template <i32 numBins>
 struct HeuristicSplitBinned
@@ -848,50 +1195,125 @@ struct HeuristicSplitBinned
     {
     }
 
-    // void Split(TriangleMesh *mesh, ExtRange range, SpatialSplit split)
-    // {
-    //     // PartitionResult result;
-    //     // PartitionParallel(, range.prims, ?, range.start, range.end, )
-    //
-    //     const u32 SPATIAL_SPLIT_GROUP_SIZE = 4 * 1024;
-    //
-    //     jobsystem::Counter counter = {};
-    //
-    //     jobsystem::KickJobs(&counter, range.count, SPATIAL_SPLIT_GROUP_SIZE, [&](jobsystem::JobArgs args) {
-    //         PrimData *prim  = &data[i];
-    //         u32 binIndexMin = (u32)Clamp(0.f, (f32)numBins - 1.f, Floor((prim->minP[split.bestDim] - minP[split.bestDim]) * scale));
-    //         u32 binIndexMax = (u32)Clamp(0.f, (f32)numBins - 1.f, Floor((prim->maxP[split.bestDim] - minP[split.bestDim]) * scale));
-    //         if (binIndexMin == binIndexMax) continue;
-    //
-    //         u32 faceIndex = prim->PrimID();
-    //         Vec3f &a      = mesh->p[mesh->indices[faceIndex * 3 + 0]];
-    //         Vec3f &b      = mesh->p[mesh->indices[faceIndex * 3 + 1]];
-    //         Vec3f &c      = mesh->p[mesh->indices[faceIndex * 3 + 2]];
-    //
-    //         u32 invalid = ClipTriangle(a, b, c, split.bestDim, split.bestValue, split.splitPos, ((f32)binIndex + 1.f) * invScale + minP, );
-    //     });
-    // }
+    void Split(Arena **arenas, TriangleMesh *mesh, ExtRange range, SpatialSplit split)
+    {
+        TempArena temp                     = ScratchStart(0, 0);
+        const u32 SPATIAL_SPLIT_GROUP_SIZE = 4 * 1024;
+        u32 numJobs                        = (range.count + SPATIAL_SPLIT_GROUP_SIZE - 1) / SPATIAL_SPLIT_GROUP_SIZE;
+
+        jobsystem::Counter counter = {};
+        const u32 dim              = split.bestDim;
+        const u32 splitPos         = split.splitPos;
+
+        u32 threadIndex   = GetThreadIndex();
+        PrimRef *out      = range.data + range.End();
+        PrimRef *newAlloc = 0;
+
+        u32 splitStart = range.End() + threadIndex * allotment;
+        u32 splitCount = 0;
+
+        u32 faceIndices[8];
+        u32 count      = 0;
+        u32 totalCount = 0;
+
+        for (u32 i = range.start; i < range.End(); i++)
+        {
+            PrimData *prim     = &data[i];
+            faceIndices[count] = prim->PrimID();
+            u32 binIndexMin    = (Clamp(Lane4U32(0), Lane4U32(numBins - 1), Flooru((prim->minP - minP) * scale)))[split.bestDim];
+            u32 binIndexMax    = (Clamp(Lane4U32(0), Lane4U32(numBins - 1), Flooru((prim->maxP - minP) * scale)))[split.bestDim];
+            count += (binIndexMin < split.splitPos && binIndexMax >= split.splitPos);
+
+            if (count == 8)
+            {
+                PrimRef left[8];
+                PrimRef right[8];
+                if (splitCount + 8 > range.ExtSize())
+                {
+                    Assert(out == range.data + range.End());
+                    // TODO: this extra allocation may be too much
+                    PrimRef *oldOut = out;
+                    out             = PushArray(arenas[threadIndex], PrimRef, range.TotalSize());
+
+                    for (u32 splitIndex = 0; splitIndex < splitCount; splitIndex++)
+                    {
+                        out[splitIndex] = std::move(oldOut[splitIndex]);
+                    }
+                    newAlloc   = out;
+                    out        = out + splitCount;
+                    splitCount = 0;
+                }
+                ClipTriangle(mesh, faceIndices, refs, dim, splitPos, left, right);
+                for (u32 i = 0; i < 8; i++)
+                {
+                    u32 faceIndex         = faceIndices[i];
+                    range.data[faceIndex] = left[i];
+                    out[splitCount++]     = right[i];
+                }
+                count = 0;
+                totalCount += 8;
+            }
+        }
+        // Compute remaining unclipped triangles
+        for (u32 i = 0; i < count; i++)
+        {
+        }
+
+        if (!newAlloc)
+        {
+            PartitionResult result;
+            PartitionParallel(, range.data, ?, range.start, range.end, )
+        }
+        else
+        {
+            // Partition the two regions
+            Lane8F32 splitPos = split.splitPos;
+
+            PrimRef *storeRefs[2];
+            storeRefs[0] = range.data;
+            storeRefs[1] = out;
+            for (u32 i = range.start; i < range.End(); i += 8)
+            {
+                // partition 8 at a time
+                Lane8F32 ctrl(split.bestDim);
+                Lane8F32 box0 = Permute(range.data[i], ctrl);
+                Lane8F32 box1 = Permute(range.data[i + 1], ctrl);
+                Lane8F32 box2 = Permute(range.data[i + 2], ctrl);
+                Lane8F32 box3 = Permute(range.data[i + 3], ctrl);
+                Lane8F32 box4 = Permute(range.data[i + 4], ctrl);
+                Lane8F32 box5 = Permute(range.data[i + 5], ctrl);
+                Lane8F32 box6 = Permute(range.data[i + 6], ctrl);
+                Lane8F32 box7 = Permute(range.data[i + 7], ctrl);
+
+                Lane8F32 box01   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box0, box1);
+                Lane8F32 box23   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box2, box3);
+                Lane8F32 box0123 = Blend<0, 0, 1, 1, 0, 0, 1, 1>(box01, box23);
+
+                Lane8F32 box45   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box4, box5);
+                Lane8F32 box67   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box6, box7);
+                Lane8F32 box4567 = Blend<0, 0, 1, 1, 0, 0, 1, 1>(box45, box67);
+
+                Lane8F32 boxMin = Shuffle4<0, 2>(box0123, box4567);
+                Lane8F32 boxMax = Shuffle4<1, 3>(box0123, box4567);
+
+                // NOTE: boxMin is the negative min
+                Lane8F32 centroid = boxMax - boxMin;
+                Lane8F32 mask     = (centroid - minP) * scale < splitPos;
+
+                u32 maskBits = Movemask(mask);
+
+                storeRefs[maskBits & 1]++   = range.data[i];
+                storeRefs[maskBits & 2]++   = range.data[i + 1];
+                storeRefs[maskBits & 4]++   = range.data[i + 2];
+                storeRefs[maskBits & 8]++   = range.data[i + 3];
+                storeRefs[maskBits & 16]++  = range.data[i + 4];
+                storeRefs[maskBits & 32]++  = range.data[i + 5];
+                storeRefs[maskBits & 64]++  = range.data[i + 6];
+                storeRefs[maskBits & 128]++ = range.data[i + 7];
+            }
+        }
+    }
 };
-
-struct ExtRange
-{
-    PrimData *data;
-    u32 start;
-    u32 count; // number allocated
-    u32 end;   // allocation end
-};
-
-// how am I going to manage the memory of the extended ranges?
-
-// problem:
-// when spatial splits occur, references are duplicated, meaning extra memory allocations/memory management.
-// solutions involve doing something like embree where each priminfo just has a little extra added to the end,
-// and when you split the # of primitives on the left and right is used to determine how much of this extra chunk
-// each split gets. however, I don't want to do that because I have a massive ego and want to come up with my own solution.
-// right now, all I can think of is some sort of ring buffer. you atomically append to the end of this buffer (by atomic
-// incrementing). when the ring runs out of space,
-
-// the problem with this is that you have to calculate the number of splits upfront
 
 template <typename T>
 void PartitionSerial(Split split, PrimData *prims, T *data, u32 start, u32 end, PartitionResult *result)
