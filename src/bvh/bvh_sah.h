@@ -125,7 +125,6 @@ struct PartitionResult
     PartitionResult() : geomBoundsL(Bounds()), geomBoundsR(Bounds()), centBoundsL(Bounds()), centBoundsR(Bounds()) {}
     PartitionResult(Bounds &gL, Bounds &gR, Bounds &cL, Bounds &cR, u32 mid)
         : geomBoundsL(gL), geomBoundsR(gR), centBoundsL(cL), centBoundsR(cR), mid(mid) {}
-
 };
 
 struct Split
@@ -793,9 +792,9 @@ __forceinline void ClipTriangleSimple(const TriangleMesh *mesh, const Bounds &bo
         if ((v0d < clipPos && clipPos < v1d) || (v1d < clipPos && clipPos < v0d)) // the edge crosses the splitting location
         {
             Assert((v1d - v0d) != 0.0f);
-            const float sub        = v1d - v0d;
-            f32 eps                = 1e-34f;
-            const float inv_length = Abs(sub) < eps ? 0.f : 1.0f / (v1d - v0d);
+            // f32 eps                = 1e-34f;
+            f32 div                = Rcp(v1d - v0d);
+            const float inv_length = v1d == v0d ? 0.f : div;
             const Vec3f c          = FMA(Vec3f((clipPos - v0d) * inv_length), v1 - v0, v0);
             left.Extend(c);
             right.Extend(c);

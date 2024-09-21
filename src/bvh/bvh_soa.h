@@ -38,6 +38,7 @@ __forceinline void ClipTriangleTest(const TriangleMesh *mesh, const u32 faceIndi
                                     const f32 leftBound, const f32 rightBound, Bounds8F32 &out)
 {
 
+    Assert(leftBound < rightBound);
     Lane8F32 clipLeft(leftBound);
     Lane8F32 clipRight(rightBound);
 
@@ -122,19 +123,17 @@ __forceinline void ClipTriangleTest(const TriangleMesh *mesh, const u32 faceIndi
     Lane8F32 maxU = Max(v0u, Max(v1u, v2u));
     out.maxU      = Max(out.maxU, Min(maxU, clipRight));
 
-    Lane8F32 v0uClipRightMask = v0u < clipRight;
-    Lane8F32 v1uClipRightMask = v1u < clipRight;
-    Lane8F32 v2uClipRightMask = v2u < clipRight;
+    Lane8F32 v0uClipLeftMask = v0u >= clipLeft;
+    Lane8F32 v1uClipLeftMask = v1u >= clipLeft;
+    Lane8F32 v2uClipLeftMask = v2u >= clipLeft;
 
-    Lane8F32 v0uClipLeftMask = v0u < clipLeft;
-    Lane8F32 v1uClipLeftMask = v1u < clipLeft;
-    Lane8F32 v2uClipLeftMask = v2u < clipLeft;
+    Lane8F32 v0uClipRightMask = v0u <= clipRight;
+    Lane8F32 v1uClipRightMask = v1u <= clipRight;
+    Lane8F32 v2uClipRightMask = v2u <= clipRight;
 
-    // TODO: my v and w bounds are too big?
-    // do I really have to make sure the edge crosses a clipping plane before min and max? shouldn't the clamp handle this?
-    //      - answer: no the clamp doesn't handle this. an edge can be outside of the bin, but the triangle as a whole
-    //      can be inside the bin. the clamp would add the v and w values of the edge to the bounds, but it should not
-    //      be added to the bounds.
+    out.MaskExtendVW(v0uClipLeftMask & v0uClipRightMask, v0v, v0w);
+    out.MaskExtendVW(v1uClipLeftMask & v1uClipRightMask, v1v, v1w);
+    out.MaskExtendVW(v2uClipLeftMask & v2uClipRightMask, v2v, v2w);
 
     // Edge 0: v0 to v1
     Lane8F32 div0    = Select(v1u == v0u, Lane8F32(zero), Rcp(v1u - v0u));
@@ -168,8 +167,8 @@ __forceinline void ClipTriangleTest(const TriangleMesh *mesh, const u32 faceIndi
     Lane8F32 edge1ClippedWLeft  = FMA(t1Left, sub1w, v1w);
     Lane8F32 edge1ClippedWRight = FMA(t1Right, sub1w, v1w);
 
-    Lane8F32 edgeIsClippedLeftMask1  = v1uClipLeftMask ^ v2uClipLeftMask;
-    Lane8F32 edgeIsClippedRightMask1 = v1uClipRightMask ^ v2uClipRightMask;
+    Lane8F32 edgeIsClippedLeftMask1  = v2uClipLeftMask ^ v1uClipLeftMask;
+    Lane8F32 edgeIsClippedRightMask1 = v2uClipRightMask ^ v1uClipRightMask;
 
     out.MaskExtendVW(edgeIsClippedLeftMask1, edge1ClippedVLeft, edge1ClippedWLeft);
     out.MaskExtendVW(edgeIsClippedRightMask1, edge1ClippedVRight, edge1ClippedWRight);
@@ -187,8 +186,8 @@ __forceinline void ClipTriangleTest(const TriangleMesh *mesh, const u32 faceIndi
     Lane8F32 edge2ClippedWLeft  = FMA(t2Left, sub2w, v2w);
     Lane8F32 edge2ClippedWRight = FMA(t2Right, sub2w, v2w);
 
-    Lane8F32 edgeIsClippedLeftMask2  = v2uClipLeftMask ^ v0uClipLeftMask;
-    Lane8F32 edgeIsClippedRightMask2 = v2uClipRightMask ^ v0uClipRightMask;
+    Lane8F32 edgeIsClippedLeftMask2  = v0uClipLeftMask ^ v2uClipLeftMask;
+    Lane8F32 edgeIsClippedRightMask2 = v0uClipRightMask ^ v2uClipRightMask;
 
     out.MaskExtendVW(edgeIsClippedLeftMask2, edge2ClippedVLeft, edge2ClippedWLeft);
     out.MaskExtendVW(edgeIsClippedRightMask2, edge2ClippedVRight, edge2ClippedWRight);
@@ -758,7 +757,7 @@ struct TestSplitBinningBase
     __forceinline void Add(const u32 dim, const u32 beginID, const u32 endID, const u32 binID, const Bounds &b, const u32 n = 1)
     {
         numEnd[endID][dim] += n;
-        numBegin[endID][dim] += n;
+        numBegin[beginID][dim] += n;
         bins[dim][binID].Extend(b);
     }
     __forceinline Lane4U32 GetBin(const Lane4F32 &l)
