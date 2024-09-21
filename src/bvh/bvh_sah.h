@@ -126,14 +126,6 @@ struct PartitionResult
     PartitionResult(Bounds &gL, Bounds &gR, Bounds &cL, Bounds &cR, u32 mid)
         : geomBoundsL(gL), geomBoundsR(gR), centBoundsL(cL), centBoundsR(cR), mid(mid) {}
 
-    // __forceinline void Extend(const PartitionResult &other)
-    // {
-    //     geomBoundsL.Extend(other.geomBoundsL);
-    //     geomBoundsR.Extend(other.geomBoundsR);
-    //
-    //     centBoundsL.Extend(other.centBoundsL);
-    //     centBoundsR.Extend(other.centBoundsR);
-    // }
 };
 
 struct Split
@@ -778,7 +770,7 @@ __forceinline void Swap(const Lane8F32 &mask, Lane8F32 &a, Lane8F32 &b)
 }
 
 // TODO: this code doesnt' work
-__forceinline void ClipTriangleSimple(const TriangleMesh *mesh, const u32 faceIndex,
+__forceinline void ClipTriangleSimple(const TriangleMesh *mesh, const Bounds &bounds, const u32 faceIndex,
                                       const u32 dim, const f32 clipPos, Bounds &l, Bounds &r)
 {
     Bounds left;
@@ -803,17 +795,19 @@ __forceinline void ClipTriangleSimple(const TriangleMesh *mesh, const u32 faceIn
             Assert((v1d - v0d) != 0.0f);
             const float sub        = v1d - v0d;
             f32 eps                = 1e-34f;
-            const float inv_length = sub < eps ? 0.f : 1.0f / (v1d - v0d);
+            const float inv_length = Abs(sub) < eps ? 0.f : 1.0f / (v1d - v0d);
             const Vec3f c          = FMA(Vec3f((clipPos - v0d) * inv_length), v1 - v0, v0);
             left.Extend(c);
             right.Extend(c);
         }
     }
 
-    l = left;
-    r = right;
-    // left_o  = intersect(left, bounds);
-    // right_o = intersect(right, bounds);
+    // l       = left;
+    // r       = right;
+    l = Intersect(left, bounds);
+    r = Intersect(right, bounds);
+    // left_o = intersect(left, bounds);
+    // r      = intersect(right, bounds);
 }
 
 // NOTE: the bounding box will be invalid if the split plane is completely to the left/right of the triangle

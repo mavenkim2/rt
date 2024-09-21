@@ -110,7 +110,7 @@ void TriangleClipTest()
     }
 #endif
 
-#if 1
+#if 0
     {
         PerformanceCounter perf = OS_StartCounter();
         Bounds l                = Bounds();
@@ -173,9 +173,10 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
         Vec3f min = Min(Min(v0, v1), v2);
         Vec3f max = Max(Max(v0, v1), v2);
 
-        geomBounds.Extend(Lane4F32(v0));
-        geomBounds.Extend(Lane4F32(v1));
-        geomBounds.Extend(Lane4F32(v2));
+        Lane4F32 lMin(min);
+        Lane4F32 lMax(max);
+
+        geomBounds.Extend(lMin, lMax);
 
         soa.minX[i]    = min.x;
         soa.minY[i]    = min.y;
@@ -197,8 +198,10 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     printf("Time elapsed: %fms\n", time);
     printf("Split value: %u\n", split.bestPos);
     printf("Split SAH: %f\n", split.bestSAH);
+    printf("Split dim: %u\n", split.bestDim);
 }
 
+#if 0
 void TriangleClipTestAOS(const u32 count)
 {
     Arena *arena = ArenaAlloc();
@@ -252,6 +255,7 @@ void TriangleClipTestAOS(const u32 count)
 
     printf("Time elapsed: %fms\n", time);
 }
+#endif
 
 void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
 {
@@ -281,6 +285,7 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
     printf("Time elapsed: %fms\n", time);
     printf("Split value: %u\n", split.bestPos);
     printf("Split SAH: %f\n", split.bestSAH);
+    printf("Split dim: %u\n", split.bestDim);
 }
 
 } // namespace rt

@@ -7,11 +7,9 @@ struct Bounds
     Lane4F32 maxP;
 
     Bounds() : minP(pos_inf), maxP(neg_inf) {}
+    Bounds(Lane4F32 minP, Lane4F32 maxP) : minP(minP), maxP(maxP) {}
 
-    __forceinline bool Empty() const
-    {
-        return Any(minP > maxP);
-    }
+    __forceinline bool Empty() const { return Any(minP > maxP); }
 
     __forceinline void Extend(Lane4F32 inMin, Lane4F32 inMax)
     {
@@ -39,6 +37,14 @@ struct Bounds
         maxP = Min(other.maxP, maxP);
     }
 };
+
+__forceinline Bounds Intersect(const Bounds &a, const Bounds &b)
+{
+    Bounds result;
+    result.minP = Max(a.minP, b.minP);
+    result.maxP = Min(a.maxP, b.maxP);
+    return result;
+}
 
 __forceinline f32 HalfArea(const Bounds &b)
 {

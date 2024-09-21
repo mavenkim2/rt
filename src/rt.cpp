@@ -1044,9 +1044,9 @@ int main(int argc, char *argv[])
 
     const u32 count   = 3000;
     TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
+    // TriangleClipTestAOS(count);
     // TriangleClipTestSOA(0, count);
     TriangleClipTestSOA(&mesh);
-    // TriangleClipTestAOS(count);
     // TriangleClipBinTestDefault(&mesh);
     // TriangleClipBinTestDefault(0, count);
 

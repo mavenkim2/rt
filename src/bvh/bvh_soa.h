@@ -34,8 +34,8 @@ struct PrimDataSOA
 // 4. maybe instead of finding all of the bin indices first, we could tweak the count before work is started on the tests
 //      results: makes it slower
 
-__forceinline void ClipTriangleTest(const TriangleMesh *mesh, const u32 faceIndices[8], const f32 leftBound,
-                                    const f32 rightBound, Bounds8F32 &out)
+__forceinline void ClipTriangleTest(const TriangleMesh *mesh, const u32 faceIndices[8], const u32 dim,
+                                    const f32 leftBound, const f32 rightBound, Bounds8F32 &out)
 {
 
     Lane8F32 clipLeft(leftBound);
@@ -102,17 +102,19 @@ __forceinline void ClipTriangleTest(const TriangleMesh *mesh, const u32 faceIndi
     Transpose4x3(v1a, v1b, v1c, v1d, p4.x, p4.y, p4.z);
     Transpose4x3(v2a, v2b, v2c, v2d, p5.x, p5.y, p5.z);
 
-    Lane8F32 v0u(p0[0], p3[0]);
-    Lane8F32 v1u(p1[0], p4[0]);
-    Lane8F32 v2u(p2[0], p5[0]);
+    u32 v = LUTAxis[dim];
+    u32 w = LUTAxis[v];
+    Lane8F32 v0u(p0[dim], p3[dim]);
+    Lane8F32 v1u(p1[dim], p4[dim]);
+    Lane8F32 v2u(p2[dim], p5[dim]);
 
-    Lane8F32 v0v(p0[1], p3[1]);
-    Lane8F32 v1v(p1[1], p4[1]);
-    Lane8F32 v2v(p2[1], p5[1]);
+    Lane8F32 v0v(p0[v], p3[v]);
+    Lane8F32 v1v(p1[v], p4[v]);
+    Lane8F32 v2v(p2[v], p5[v]);
 
-    Lane8F32 v0w(p0[2], p3[2]);
-    Lane8F32 v1w(p1[2], p4[2]);
-    Lane8F32 v2w(p2[2], p5[2]);
+    Lane8F32 v0w(p0[w], p3[w]);
+    Lane8F32 v1w(p1[w], p4[w]);
+    Lane8F32 v2w(p2[w], p5[w]);
 
     Lane8F32 minU = Min(v0u, Min(v1u, v2u));
     out.minU      = Min(out.minU, Max(minU, clipLeft));
@@ -120,74 +122,76 @@ __forceinline void ClipTriangleTest(const TriangleMesh *mesh, const u32 faceIndi
     Lane8F32 maxU = Max(v0u, Max(v1u, v2u));
     out.maxU      = Max(out.maxU, Min(maxU, clipRight));
 
+    Lane8F32 v0uClipRightMask = v0u < clipRight;
+    Lane8F32 v1uClipRightMask = v1u < clipRight;
+    Lane8F32 v2uClipRightMask = v2u < clipRight;
+
+    Lane8F32 v0uClipLeftMask = v0u < clipLeft;
+    Lane8F32 v1uClipLeftMask = v1u < clipLeft;
+    Lane8F32 v2uClipLeftMask = v2u < clipLeft;
+
+    // TODO: my v and w bounds are too big?
+    // do I really have to make sure the edge crosses a clipping plane before min and max? shouldn't the clamp handle this?
+    //      - answer: no the clamp doesn't handle this. an edge can be outside of the bin, but the triangle as a whole
+    //      can be inside the bin. the clamp would add the v and w values of the edge to the bounds, but it should not
+    //      be added to the bounds.
+
     // Edge 0: v0 to v1
-    Lane8F32 div0    = Rcp(v1u - v0u);
-    Lane8F32 t0Left  = Clamp(Lane8F32(0.f), Lane8F32(1.f), (clipLeft - v0u) * div0);
-    Lane8F32 t0Right = Clamp(Lane8F32(0.f), Lane8F32(1.f), (clipRight - v0u) * div0);
+    Lane8F32 div0    = Select(v1u == v0u, Lane8F32(zero), Rcp(v1u - v0u));
+    Lane8F32 t0Left  = (clipLeft - v0u) * div0;
+    Lane8F32 t0Right = (clipRight - v0u) * div0;
 
-    Lane8F32 edge0ClippedVLeft  = FMA(t0Left, v1v - v0v, v0v);
-    Lane8F32 edge0ClippedVRight = FMA(t0Right, v1v - v0v, v0v);
+    Lane8F32 sub0v              = v1v - v0v;
+    Lane8F32 sub0w              = v1w - v0w;
+    Lane8F32 edge0ClippedVLeft  = FMA(t0Left, sub0v, v0v);
+    Lane8F32 edge0ClippedVRight = FMA(t0Right, sub0v, v0v);
 
-    Lane8F32 edge0ClippedWLeft  = FMA(t0Left, v1w - v0w, v0w);
-    Lane8F32 edge0ClippedWRight = FMA(t0Right, v1w - v0w, v0w);
+    Lane8F32 edge0ClippedWLeft  = FMA(t0Left, sub0w, v0w);
+    Lane8F32 edge0ClippedWRight = FMA(t0Right, sub0w, v0w);
 
-    out.minV = Min(out.minV, Min(edge0ClippedVLeft, edge0ClippedVRight));
-    out.maxV = Max(out.maxV, Max(edge0ClippedVLeft, edge0ClippedVRight));
+    Lane8F32 edgeIsClippedLeftMask0  = v0uClipLeftMask ^ v1uClipLeftMask;
+    Lane8F32 edgeIsClippedRightMask0 = v0uClipRightMask ^ v1uClipRightMask;
 
-    out.minV = Min(out.minV, Min(edge0ClippedVLeft, edge0ClippedVRight));
-    out.maxV = Max(out.maxV, Max(edge0ClippedVLeft, edge0ClippedVRight));
-
-    out.minW = Min(out.minW, Min(edge0ClippedWLeft, edge0ClippedWRight));
-    out.maxW = Max(out.maxW, Max(edge0ClippedWLeft, edge0ClippedWRight));
-
-    out.minW = Min(out.minW, Min(edge0ClippedWLeft, edge0ClippedWRight));
-    out.maxW = Max(out.maxW, Max(edge0ClippedWLeft, edge0ClippedWRight));
+    out.MaskExtendVW(edgeIsClippedLeftMask0, edge0ClippedVLeft, edge0ClippedWLeft);
+    out.MaskExtendVW(edgeIsClippedRightMask0, edge0ClippedVRight, edge0ClippedWRight);
 
     // Edge 1 : v1 to v2
-    Lane8F32 div1    = Rcp(v2u - v1u);
-    Lane8F32 t1Left  = Clamp(Lane8F32(0.f), Lane8F32(1.f), (clipLeft - v1u) * div1);
-    Lane8F32 t1Right = Clamp(Lane8F32(0.f), Lane8F32(1.f), (clipRight - v1u) * div1);
+    Lane8F32 div1    = Select(v2u == v1u, Lane8F32(zero), Rcp(v2u - v1u));
+    Lane8F32 t1Left  = (clipLeft - v1u) * div1;
+    Lane8F32 t1Right = (clipRight - v1u) * div1;
 
-    Lane8F32 edge1ClippedVLeft  = FMA(t1Left, v2v - v1v, v1v);
-    Lane8F32 edge1ClippedVRight = FMA(t1Right, v2v - v1v, v1v);
+    Lane8F32 sub1v              = v2v - v1v;
+    Lane8F32 sub1w              = v2w - v1w;
+    Lane8F32 edge1ClippedVLeft  = FMA(t1Left, sub1v, v1v);
+    Lane8F32 edge1ClippedVRight = FMA(t1Right, sub1v, v1v);
 
-    Lane8F32 edge1ClippedWLeft  = FMA(t1Left, v2w - v1w, v1w);
-    Lane8F32 edge1ClippedWRight = FMA(t1Right, v2w - v1w, v1w);
+    Lane8F32 edge1ClippedWLeft  = FMA(t1Left, sub1w, v1w);
+    Lane8F32 edge1ClippedWRight = FMA(t1Right, sub1w, v1w);
 
-    out.minV = Min(out.minV, Min(edge1ClippedVLeft, edge1ClippedVRight));
-    out.maxV = Max(out.maxV, Max(edge1ClippedVLeft, edge1ClippedVRight));
+    Lane8F32 edgeIsClippedLeftMask1  = v1uClipLeftMask ^ v2uClipLeftMask;
+    Lane8F32 edgeIsClippedRightMask1 = v1uClipRightMask ^ v2uClipRightMask;
 
-    out.minV = Min(out.minV, Min(edge1ClippedVLeft, edge1ClippedVRight));
-    out.maxV = Max(out.maxV, Max(edge1ClippedVLeft, edge1ClippedVRight));
-
-    out.minW = Min(out.minW, Min(edge1ClippedWLeft, edge1ClippedWRight));
-    out.maxW = Max(out.maxW, Max(edge1ClippedWLeft, edge1ClippedWRight));
-
-    out.minW = Min(out.minW, Min(edge1ClippedWLeft, edge1ClippedWRight));
-    out.maxW = Max(out.maxW, Max(edge1ClippedWLeft, edge1ClippedWRight));
+    out.MaskExtendVW(edgeIsClippedLeftMask1, edge1ClippedVLeft, edge1ClippedWLeft);
+    out.MaskExtendVW(edgeIsClippedRightMask1, edge1ClippedVRight, edge1ClippedWRight);
 
     // Edge 2 : v2 to v0
-    Lane8F32 div2    = Rcp(v2u - v1u);
-    Lane8F32 t2Left  = Clamp(Lane8F32(0.f), Lane8F32(1.f), (clipLeft - v2u) * div2);
-    Lane8F32 t2Right = Clamp(Lane8F32(0.f), Lane8F32(1.f), (clipRight - v2u) * div2);
+    Lane8F32 div2    = Select(v0u == v2u, Lane8F32(zero), Rcp(v0u - v2u));
+    Lane8F32 t2Left  = (clipLeft - v2u) * div2;
+    Lane8F32 t2Right = (clipRight - v2u) * div2;
 
-    Lane8F32 edge2ClippedVLeft  = FMA(t2Left, v0v - v2v, v2v);
-    Lane8F32 edge2ClippedVRight = FMA(t2Right, v0v - v2v, v2v);
+    Lane8F32 sub2v              = v0v - v2v;
+    Lane8F32 sub2w              = v0w - v2w;
+    Lane8F32 edge2ClippedVLeft  = FMA(t2Left, sub2v, v2v);
+    Lane8F32 edge2ClippedVRight = FMA(t2Right, sub2v, v2v);
 
-    Lane8F32 edge2ClippedWLeft  = FMA(t2Left, v0w - v2w, v2w);
-    Lane8F32 edge2ClippedWRight = FMA(t2Right, v0w - v2w, v2w);
+    Lane8F32 edge2ClippedWLeft  = FMA(t2Left, sub2w, v2w);
+    Lane8F32 edge2ClippedWRight = FMA(t2Right, sub2w, v2w);
 
-    out.minV = Min(out.minV, Min(edge2ClippedVLeft, edge2ClippedVRight));
-    out.maxV = Max(out.maxV, Max(edge2ClippedVLeft, edge2ClippedVRight));
+    Lane8F32 edgeIsClippedLeftMask2  = v2uClipLeftMask ^ v0uClipLeftMask;
+    Lane8F32 edgeIsClippedRightMask2 = v2uClipRightMask ^ v0uClipRightMask;
 
-    out.minV = Min(out.minV, Min(edge2ClippedVLeft, edge2ClippedVRight));
-    out.maxV = Max(out.maxV, Max(edge2ClippedVLeft, edge2ClippedVRight));
-
-    out.minW = Min(out.minW, Min(edge2ClippedWLeft, edge2ClippedWRight));
-    out.maxW = Max(out.maxW, Max(edge2ClippedWLeft, edge2ClippedWRight));
-
-    out.minW = Min(out.minW, Min(edge2ClippedWLeft, edge2ClippedWRight));
-    out.maxW = Max(out.maxW, Max(edge2ClippedWLeft, edge2ClippedWRight));
+    out.MaskExtendVW(edgeIsClippedLeftMask2, edge2ClippedVLeft, edge2ClippedWLeft);
+    out.MaskExtendVW(edgeIsClippedRightMask2, edge2ClippedVRight, edge2ClippedWRight);
 }
 
 template <i32 numBins = 16>
@@ -245,120 +249,120 @@ struct TestSOASplitBinning
             for (u32 i = 0; i < numBins; i++)
             {
                 binCounts[dim][i]      = 0;
-                splitPositions[dim][i] = bounds.minP[dim] + ((i + 1) * diag[dim] / (f32)numBins);
+                splitPositions[dim][i] = bounds.minP[dim] + (i * diag[dim] / (f32)numBins);
             }
             splitPositions[dim][numBins] = bounds.maxP[dim];
         }
     }
 
-    void BinTest2(TriangleMesh *mesh, PrimRef *refs, u32 start, u32 count)
-    {
-        Lane8U32 z = Lane8U32(0);
-        Lane8U32 e = Lane8U32(numBins - 1);
-
-        u32 binIndices[8];
-
-        for (u32 i = start; i < start + count; i++)
-        {
-            PrimRef *ref      = &refs[i];
-            Lane8U32 binIndex = Clamp(z, e, Flooru((ref->m256 - base) * scale));
-
-            Lane8U32::Store(binIndices, binIndex);
-
-            u32 indexMinX = binIndices[0];
-            u32 indexMaxX = binIndices[4];
-
-            Lane8F32 minX = Shuffle<0>(ref->m256);
-            Lane8F32 minY = Shuffle<1>(ref->m256);
-            Lane8F32 minZ = Shuffle<2>(ref->m256);
-
-            Lane8F32 maxX = Shuffle<4>(ref->m256);
-            Lane8F32 maxY = Shuffle<5>(ref->m256);
-            Lane8F32 maxZ = Shuffle<6>(ref->m256);
-
-            Lane8F32 maskX(indexMinX == indexMaxX);
-            bins[0][indexMinX].minU = MaskMin(maskX, bins[0][indexMinX].minU, minX);
-            bins[0][indexMinX].minV = MaskMin(maskX, bins[0][indexMinX].minV, minY);
-            bins[0][indexMinX].minW = MaskMin(maskX, bins[0][indexMinX].minW, minZ);
-
-            bins[0][indexMinX].maxU = MaskMax(maskX, bins[0][indexMinX].maxU, maxX);
-            bins[0][indexMinX].maxV = MaskMax(maskX, bins[0][indexMinX].maxV, maxY);
-            bins[0][indexMinX].maxW = MaskMax(maskX, bins[0][indexMinX].maxW, maxZ);
-
-            entryCounts[indexMinX][0] += 1;
-            exitCounts[indexMaxX][0] += 1;
-
-            u32 faceID = ref->primID;
-
-            for (u32 index = indexMinX; index < indexMaxX; index++)
-            {
-                faceIndices[0][index][binCounts[0][index]++] = faceID;
-                if (binCounts[0][index] == LANE_WIDTH)
-                {
-                    Bounds8F32 out;
-                    ClipTriangleTest(mesh, faceIndices[0][index], splitPositions[0][index], splitPositions[0][index + 1], out);
-                    binCounts[0][index] = 0;
-                    bins[0][index].Extend(out);
-                }
-            }
-
-            u32 indexMinY = binIndices[1];
-            u32 indexMaxY = binIndices[5];
-            Lane8F32 maskY(indexMinY == indexMaxY);
-
-            bins[1][indexMinY].minU = MaskMin(maskY, bins[1][indexMinY].minU, minY);
-            bins[1][indexMinY].minV = MaskMin(maskY, bins[1][indexMinY].minV, minZ);
-            bins[1][indexMinY].minW = MaskMin(maskY, bins[1][indexMinY].minW, minX);
-
-            bins[1][indexMinY].maxU = MaskMax(maskY, bins[1][indexMinY].maxU, maxY);
-            bins[1][indexMinY].maxV = MaskMax(maskY, bins[1][indexMinY].maxV, maxZ);
-            bins[1][indexMinY].maxW = MaskMax(maskY, bins[1][indexMinY].maxW, maxX);
-
-            entryCounts[indexMinX][1] += 1;
-            exitCounts[indexMaxX][1] += 1;
-
-            for (u32 index = indexMinY; index < indexMaxY; index++)
-            {
-                faceIndices[1][index][binCounts[1][index]++] = faceID;
-                if (binCounts[1][index] == LANE_WIDTH)
-                {
-                    Bounds8F32 out;
-                    ClipTriangleTest(mesh, faceIndices[1][index],
-                                     splitPositions[1][index], splitPositions[1][index + 1], out);
-                    binCounts[1][index] = 0;
-                    bins[1][index].Extend(out);
-                }
-            }
-
-            u32 indexMinZ = binIndices[2];
-            u32 indexMaxZ = binIndices[6];
-            Lane8F32 maskZ(indexMinZ == indexMaxZ);
-
-            bins[2][indexMinZ].minU = MaskMin(maskZ, bins[2][indexMinZ].minU, minZ);
-            bins[2][indexMinZ].minV = MaskMin(maskZ, bins[2][indexMinZ].minV, minX);
-            bins[2][indexMinZ].minW = MaskMin(maskZ, bins[2][indexMinZ].minW, minY);
-
-            bins[2][indexMinZ].maxU = MaskMax(maskZ, bins[2][indexMinZ].maxU, maxZ);
-            bins[2][indexMinZ].maxV = MaskMax(maskZ, bins[2][indexMinZ].maxV, maxX);
-            bins[2][indexMinZ].maxW = MaskMax(maskZ, bins[2][indexMinZ].maxW, maxY);
-
-            entryCounts[indexMinX][2] += 1;
-            exitCounts[indexMaxX][2] += 1;
-
-            for (u32 index = indexMinZ; index < indexMaxZ; index++)
-            {
-                faceIndices[2][index][binCounts[2][index]++] = faceID;
-                if (binCounts[2][index] == LANE_WIDTH)
-                {
-                    Bounds8F32 out;
-                    ClipTriangleTest(mesh, faceIndices[2][index],
-                                     splitPositions[2][index], splitPositions[2][index + 1], out);
-                    binCounts[2][index] = 0;
-                    bins[2][index].Extend(out);
-                }
-            }
-        }
-    }
+    // void BinTest2(TriangleMesh *mesh, PrimRef *refs, u32 start, u32 count)
+    // {
+    //     Lane8U32 z = Lane8U32(0);
+    //     Lane8U32 e = Lane8U32(numBins - 1);
+    //
+    //     u32 binIndices[8];
+    //
+    //     for (u32 i = start; i < start + count; i++)
+    //     {
+    //         PrimRef *ref      = &refs[i];
+    //         Lane8U32 binIndex = Clamp(z, e, Flooru((ref->m256 - base) * scale));
+    //
+    //         Lane8U32::Store(binIndices, binIndex);
+    //
+    //         u32 indexMinX = binIndices[0];
+    //         u32 indexMaxX = binIndices[4];
+    //
+    //         Lane8F32 minX = Shuffle<0>(ref->m256);
+    //         Lane8F32 minY = Shuffle<1>(ref->m256);
+    //         Lane8F32 minZ = Shuffle<2>(ref->m256);
+    //
+    //         Lane8F32 maxX = Shuffle<4>(ref->m256);
+    //         Lane8F32 maxY = Shuffle<5>(ref->m256);
+    //         Lane8F32 maxZ = Shuffle<6>(ref->m256);
+    //
+    //         Lane8F32 maskX(indexMinX == indexMaxX);
+    //         bins[0][indexMinX].minU = MaskMin(maskX, bins[0][indexMinX].minU, minX);
+    //         bins[0][indexMinX].minV = MaskMin(maskX, bins[0][indexMinX].minV, minY);
+    //         bins[0][indexMinX].minW = MaskMin(maskX, bins[0][indexMinX].minW, minZ);
+    //
+    //         bins[0][indexMinX].maxU = MaskMax(maskX, bins[0][indexMinX].maxU, maxX);
+    //         bins[0][indexMinX].maxV = MaskMax(maskX, bins[0][indexMinX].maxV, maxY);
+    //         bins[0][indexMinX].maxW = MaskMax(maskX, bins[0][indexMinX].maxW, maxZ);
+    //
+    //         entryCounts[indexMinX][0] += 1;
+    //         exitCounts[indexMaxX][0] += 1;
+    //
+    //         u32 faceID = ref->primID;
+    //
+    //         for (u32 index = indexMinX; index < indexMaxX; index++)
+    //         {
+    //             faceIndices[0][index][binCounts[0][index]++] = faceID;
+    //             if (binCounts[0][index] == LANE_WIDTH)
+    //             {
+    //                 Bounds8F32 out;
+    //                 ClipTriangleTest(mesh, faceIndices[0][index], splitPositions[0][index], splitPositions[0][index + 1], out);
+    //                 binCounts[0][index] = 0;
+    //                 bins[0][index].Extend(out);
+    //             }
+    //         }
+    //
+    //         u32 indexMinY = binIndices[1];
+    //         u32 indexMaxY = binIndices[5];
+    //         Lane8F32 maskY(indexMinY == indexMaxY);
+    //
+    //         bins[1][indexMinY].minU = MaskMin(maskY, bins[1][indexMinY].minU, minY);
+    //         bins[1][indexMinY].minV = MaskMin(maskY, bins[1][indexMinY].minV, minZ);
+    //         bins[1][indexMinY].minW = MaskMin(maskY, bins[1][indexMinY].minW, minX);
+    //
+    //         bins[1][indexMinY].maxU = MaskMax(maskY, bins[1][indexMinY].maxU, maxY);
+    //         bins[1][indexMinY].maxV = MaskMax(maskY, bins[1][indexMinY].maxV, maxZ);
+    //         bins[1][indexMinY].maxW = MaskMax(maskY, bins[1][indexMinY].maxW, maxX);
+    //
+    //         entryCounts[indexMinY][1] += 1;
+    //         exitCounts[indexMaxY][1] += 1;
+    //
+    //         for (u32 index = indexMinY; index < indexMaxY; index++)
+    //         {
+    //             faceIndices[1][index][binCounts[1][index]++] = faceID;
+    //             if (binCounts[1][index] == LANE_WIDTH)
+    //             {
+    //                 Bounds8F32 out;
+    //                 ClipTriangleTest(mesh, faceIndices[1][index],
+    //                                  splitPositions[1][index], splitPositions[1][index + 1], out);
+    //                 binCounts[1][index] = 0;
+    //                 bins[1][index].Extend(out);
+    //             }
+    //         }
+    //
+    //         u32 indexMinZ = binIndices[2];
+    //         u32 indexMaxZ = binIndices[6];
+    //         Lane8F32 maskZ(indexMinZ == indexMaxZ);
+    //
+    //         bins[2][indexMinZ].minU = MaskMin(maskZ, bins[2][indexMinZ].minU, minZ);
+    //         bins[2][indexMinZ].minV = MaskMin(maskZ, bins[2][indexMinZ].minV, minX);
+    //         bins[2][indexMinZ].minW = MaskMin(maskZ, bins[2][indexMinZ].minW, minY);
+    //
+    //         bins[2][indexMinZ].maxU = MaskMax(maskZ, bins[2][indexMinZ].maxU, maxZ);
+    //         bins[2][indexMinZ].maxV = MaskMax(maskZ, bins[2][indexMinZ].maxV, maxX);
+    //         bins[2][indexMinZ].maxW = MaskMax(maskZ, bins[2][indexMinZ].maxW, maxY);
+    //
+    //         entryCounts[indexMinZ][2] += 1;
+    //         exitCounts[indexMaxZ][2] += 1;
+    //
+    //         for (u32 index = indexMinZ; index < indexMaxZ; index++)
+    //         {
+    //             faceIndices[2][index][binCounts[2][index]++] = faceID;
+    //             if (binCounts[2][index] == LANE_WIDTH)
+    //             {
+    //                 Bounds8F32 out;
+    //                 ClipTriangleTest(mesh, faceIndices[2][index],
+    //                                  splitPositions[2][index], splitPositions[2][index + 1], out);
+    //                 binCounts[2][index] = 0;
+    //                 bins[2][index].Extend(out);
+    //             }
+    //         }
+    //     }
+    // }
 
     void Bin(TriangleMesh *mesh, PrimDataSOA *soa, u32 start, u32 count)
     {
@@ -378,58 +382,13 @@ struct TestSOASplitBinning
 
         u32 i = start;
         // Initial run
-#if 0
-        Lane8U32 faceIDs = Lane8U32::LoadU(soa->primIDs + i);
+        // find greatest multiple of 8 less than the end
 
-        Lane8F32 prevMinX = Lane8F32::LoadU(soa->minX + i);
-        Lane8F32 prevMinY = Lane8F32::LoadU(soa->minY + i);
-        Lane8F32 prevMinZ = Lane8F32::LoadU(soa->minZ + i);
-
-        Lane8F32 prevMaxX = Lane8F32::LoadU(soa->maxX + i);
-        Lane8F32 prevMaxY = Lane8F32::LoadU(soa->maxY + i);
-        Lane8F32 prevMaxZ = Lane8F32::LoadU(soa->maxZ + i);
-
-        // X
-        Lane8U32 binIndexMinX0 = Clamp(z, e, Flooru((prevMinX - baseX) * scaleX));
-        Lane8U32 binIndexMaxX0 = Clamp(z, e, Flooru((prevMaxX - baseX) * scaleX));
-        Lane8U32::Store(indexMinXPrev, binIndexMinX0);
-        Lane8U32::Store(indexMaxXPrev, binIndexMaxX0);
-
-        // Y
-        Lane8U32 binIndexMinY0 = Clamp(z, e, Flooru((prevMinY - baseY) * scaleY));
-        Lane8U32 binIndexMaxY0 = Clamp(z, e, Flooru((prevMaxY - baseY) * scaleY));
-        Lane8U32::Store(indexMinYPrev, binIndexMinY0);
-        Lane8U32::Store(indexMaxYPrev, binIndexMaxY0);
-
-        // Z
-        Lane8U32 binIndexMinZ0 = Clamp(z, e, Flooru((prevMinZ - baseZ) * scaleZ));
-        Lane8U32 binIndexMaxZ0 = Clamp(z, e, Flooru((prevMaxZ - baseZ) * scaleZ));
-        Lane8U32::Store(indexMinZPrev, binIndexMinZ0);
-        Lane8U32::Store(indexMaxZPrev, binIndexMaxZ0);
-
-        Lane8U32::Store(faceIDPrev, faceIDs);
-
-        i += 8;
-#endif
-        for (; i < start + count; i += 8)
+        u32 alignedCount = count - count % 8;
+        u32 end          = start + count;
+        for (; i < start + alignedCount; i += 8)
         {
             Lane8U32 faceIds = Lane8U32::LoadU(soa->primIDs + i);
-
-#if 0
-            Lane8F32 minX = Lane8F32::LoadU(soa->minX + i);
-            Lane8F32 minY = Lane8F32::LoadU(soa->minY + i);
-            Lane8F32 minZ = Lane8F32::LoadU(soa->minZ + i);
-
-            Lane8F32 maxX = Lane8F32::LoadU(soa->maxX + i);
-            Lane8F32 maxY = Lane8F32::LoadU(soa->maxY + i);
-            Lane8F32 maxZ = Lane8F32::LoadU(soa->maxZ + i);
-
-            // X
-            Lane8U32 binIndexMinX = Clamp(z, e, Flooru((minX - baseX) * scaleX));
-            Lane8U32 binIndexMaxX = Clamp(z, e, Flooru((maxX - baseX) * scaleX));
-            Lane8U32 faceIDs = Lane8U32::LoadU(soa->primIDs + i);
-#endif
-#if 1
 
             Lane8F32 prevMinX = Lane8F32::LoadU(soa->minX + i);
             Lane8F32 prevMinY = Lane8F32::LoadU(soa->minY + i);
@@ -445,7 +404,6 @@ struct TestSOASplitBinning
             Lane8U32::Store(indexMinXPrev, binIndexMinX);
             Lane8U32::Store(indexMaxXPrev, binIndexMaxX);
             Lane8U32::Store(faceIDPrev, faceIds);
-#endif
 
             for (u32 prevIndex = 0; prevIndex < 8; prevIndex++)
             {
@@ -455,7 +413,7 @@ struct TestSOASplitBinning
 
                 bool noSplit  = indexMinX == indexMaxX;
                 Lane8F32 mask = Lane8F32::Mask(noSplit);
-                Lane8U32 perm(i);
+                Lane8U32 perm(prevIndex);
 
                 bins[0][indexMinX].minU = MaskMin(mask, bins[0][indexMinX].minU, Shuffle(prevMinX, perm));
                 bins[0][indexMinX].minV = MaskMin(mask, bins[0][indexMinX].minV, Shuffle(prevMinY, perm));
@@ -468,36 +426,29 @@ struct TestSOASplitBinning
                 entryCounts[indexMinX][0] += 1;
                 exitCounts[indexMaxX][0] += 1;
 
-                for (u32 index = indexMinX; index <= indexMaxX; index++)
+                if (indexMinX != indexMaxX)
                 {
-                    faceIndices[0][index][binCounts[0][index]++] = faceID;
-                    if (binCounts[0][index] == LANE_WIDTH)
+                    for (u32 index = indexMinX; index <= indexMaxX; index++)
                     {
-                        Bounds8F32 out;
-                        ClipTriangleTest(mesh, faceIndices[0][index], splitPositions[0][index], splitPositions[0][index + 1], out);
-                        binCounts[0][index] = 0;
-                        bins[0][index].Extend(out);
+                        faceIndices[0][index][binCounts[0][index]++] = faceID;
+                        if (binCounts[0][index] == LANE_WIDTH)
+                        {
+                            Bounds8F32 out;
+                            ClipTriangleTest(mesh, faceIndices[0][index], 0,
+                                             splitPositions[0][index], splitPositions[0][index + 1], out);
+                            binCounts[0][index] = 0;
+                            bins[0][index].Extend(out);
+                        }
                     }
                 }
             }
 
-#if 0
-            Lane8U32::Store(indexMinXPrev, binIndexMinX);
-            Lane8U32::Store(indexMaxXPrev, binIndexMaxX);
-#endif
-
             // Y
-#if 0
-            Lane8U32 binIndexMinY = Clamp(z, e, Flooru((minY - baseY) * scaleY));
-            Lane8U32 binIndexMaxY = Clamp(z, e, Flooru((maxY - baseY) * scaleY));
-#endif
-#if 1
             Lane8U32 binIndexMinY = Clamp(z, e, Flooru((prevMinY - baseY) * scaleY));
             Lane8U32 binIndexMaxY = Clamp(z, e, Flooru((prevMaxY - baseY) * scaleY));
 
             Lane8U32::Store(indexMinYPrev, binIndexMinY);
             Lane8U32::Store(indexMaxYPrev, binIndexMaxY);
-#endif
 
             for (u32 prevIndex = 0; prevIndex < 8; prevIndex++)
             {
@@ -507,7 +458,7 @@ struct TestSOASplitBinning
 
                 bool noSplit  = indexMinY == indexMaxY;
                 Lane8F32 mask = Lane8F32::Mask(noSplit);
-                Lane8U32 perm(i);
+                Lane8U32 perm(prevIndex);
 
                 bins[1][indexMinY].minU = MaskMin(mask, bins[1][indexMinY].minU, Shuffle(prevMinY, perm));
                 bins[1][indexMinY].minV = MaskMin(mask, bins[1][indexMinY].minV, Shuffle(prevMinZ, perm));
@@ -518,39 +469,31 @@ struct TestSOASplitBinning
                 bins[1][indexMinY].maxW = MaskMax(mask, bins[1][indexMinY].maxW, Shuffle(prevMaxX, perm));
 
                 entryCounts[indexMinY][1] += 1;
-                exitCounts[indexMinY][1] += 1;
+                exitCounts[indexMaxY][1] += 1;
 
-                for (u32 index = indexMinY; index <= indexMaxY; index++)
+                if (indexMinY != indexMaxY)
                 {
-                    faceIndices[1][index][binCounts[1][index]++] = faceID;
-                    if (binCounts[1][index] == LANE_WIDTH)
+                    for (u32 index = indexMinY; index <= indexMaxY; index++)
                     {
-                        Bounds8F32 out;
-                        ClipTriangleTest(mesh, faceIndices[1][index], splitPositions[1][index], splitPositions[1][index + 1], out);
-                        binCounts[1][index] = 0;
-                        bins[1][index].Extend(out);
+                        faceIndices[1][index][binCounts[1][index]++] = faceID;
+                        if (binCounts[1][index] == LANE_WIDTH)
+                        {
+                            Bounds8F32 out;
+                            ClipTriangleTest(mesh, faceIndices[1][index], 1,
+                                             splitPositions[1][index], splitPositions[1][index + 1], out);
+                            binCounts[1][index] = 0;
+                            bins[1][index].Extend(out);
+                        }
                     }
                 }
             }
 
-#if 0
-            Lane8U32::Store(indexMinYPrev, binIndexMinY);
-            Lane8U32::Store(indexMaxYPrev, binIndexMaxY);
-#endif
-
             // Z
-#if 0
-            Lane8U32 binIndexMinZ = Clamp(z, e, Flooru((minZ - baseZ) * scaleZ));
-            Lane8U32 binIndexMaxZ = Clamp(z, e, Flooru((maxZ - baseZ) * scaleZ));
-#endif
-
-#if 1
             Lane8U32 binIndexMinZ = Clamp(z, e, Flooru((prevMinZ - baseZ) * scaleZ));
             Lane8U32 binIndexMaxZ = Clamp(z, e, Flooru((prevMaxZ - baseZ) * scaleZ));
 
             Lane8U32::Store(indexMinZPrev, binIndexMinZ);
             Lane8U32::Store(indexMaxZPrev, binIndexMaxZ);
-#endif
 
             for (u32 prevIndex = 0; prevIndex < 8; prevIndex++)
             {
@@ -558,9 +501,9 @@ struct TestSOASplitBinning
                 u32 indexMinZ = indexMinZPrev[prevIndex];
                 u32 indexMaxZ = indexMaxZPrev[prevIndex];
 
-                bool noSplit = indexMinZ == indexMaxZ;
+                bool noSplit  = indexMinZ == indexMaxZ;
                 Lane8F32 mask = Lane8F32::Mask(noSplit);
-                Lane8U32 perm(i);
+                Lane8U32 perm(prevIndex);
 
                 bins[2][indexMinZ].minU = MaskMin(mask, bins[2][indexMinZ].minU, Shuffle(prevMinZ, perm));
                 bins[2][indexMinZ].minV = MaskMin(mask, bins[2][indexMinZ].minV, Shuffle(prevMinX, perm));
@@ -573,140 +516,158 @@ struct TestSOASplitBinning
                 entryCounts[indexMinZ][2] += 1;
                 exitCounts[indexMaxZ][2] += 1;
 
+                if (indexMinZ != indexMaxZ)
+                {
+                    for (u32 index = indexMinZ; index <= indexMaxZ; index++)
+                    {
+                        faceIndices[2][index][binCounts[2][index]++] = faceID;
+                        if (binCounts[2][index] == LANE_WIDTH)
+                        {
+                            Bounds8F32 out;
+                            ClipTriangleTest(mesh, faceIndices[2][index], 2,
+                                             splitPositions[2][index], splitPositions[2][index + 1], out);
+                            binCounts[2][index] = 0;
+                            bins[2][index].Extend(out);
+                        }
+                    }
+                }
+            }
+        }
+        f32 baseXScalar = baseX[0];
+        f32 baseYScalar = baseY[0];
+        f32 baseZScalar = baseZ[0];
+
+        f32 scaleXScalar = scaleX[0];
+        f32 scaleYScalar = scaleY[0];
+        f32 scaleZScalar = scaleZ[0];
+
+        // Add the remaining triangles
+        for (; i < end; i++)
+        {
+            f32 prevMinX = soa->minX[i];
+            f32 prevMinY = soa->minY[i];
+            f32 prevMinZ = soa->minZ[i];
+
+            f32 prevMaxX = soa->maxX[i];
+            f32 prevMaxY = soa->maxY[i];
+            f32 prevMaxZ = soa->maxZ[i];
+
+            u32 faceID = soa->primIDs[i];
+
+            // X
+            u32 indexMinX = Clamp(0u, numBins - 1u, (u32)Floor((prevMinX - baseXScalar) * scaleXScalar));
+            u32 indexMaxX = Clamp(0u, numBins - 1u, (u32)Floor((prevMaxX - baseXScalar) * scaleXScalar));
+            bool noSplit  = indexMinX == indexMaxX;
+            Lane8F32 mask = Lane8F32::Mask(noSplit);
+
+            bins[0][indexMinX].minU = MaskMin(mask, bins[0][indexMinX].minU, Lane8F32(prevMinX));
+            bins[0][indexMinX].minV = MaskMin(mask, bins[0][indexMinX].minV, Lane8F32(prevMinY));
+            bins[0][indexMinX].minW = MaskMin(mask, bins[0][indexMinX].minW, Lane8F32(prevMinZ));
+
+            bins[0][indexMinX].maxU = MaskMax(mask, bins[0][indexMinX].maxU, Lane8F32(prevMaxX));
+            bins[0][indexMinX].maxV = MaskMax(mask, bins[0][indexMinX].maxV, Lane8F32(prevMaxY));
+            bins[0][indexMinX].maxW = MaskMax(mask, bins[0][indexMinX].maxW, Lane8F32(prevMaxZ));
+
+            entryCounts[indexMinX][0] += 1;
+            exitCounts[indexMaxX][0] += 1;
+
+            if (indexMinX != indexMaxX)
+            {
+                for (u32 index = indexMinX; index <= indexMaxX; index++)
+                {
+                    faceIndices[0][index][binCounts[0][index]++] = faceID;
+                    if (binCounts[0][index] == LANE_WIDTH)
+                    {
+                        Bounds8F32 out;
+                        ClipTriangleTest(mesh, faceIndices[0][index], 0,
+                                         splitPositions[0][index], splitPositions[0][index + 1], out);
+                        binCounts[0][index] = 0;
+                        bins[0][index].Extend(out);
+                    }
+                }
+            }
+
+            // Y
+            u32 indexMinY  = Clamp(0u, numBins - 1u, (u32)Floor((prevMinY - baseYScalar) * scaleYScalar));
+            u32 indexMaxY  = Clamp(0u, numBins - 1u, (u32)Floor((prevMaxY - baseYScalar) * scaleYScalar));
+            bool noSplitY  = indexMinY == indexMaxY;
+            Lane8F32 maskY = Lane8F32::Mask(noSplitY);
+
+            bins[1][indexMinY].minU = MaskMin(maskY, bins[1][indexMinY].minU, Lane8F32(prevMinY));
+            bins[1][indexMinY].minV = MaskMin(maskY, bins[1][indexMinY].minV, Lane8F32(prevMinZ));
+            bins[1][indexMinY].minW = MaskMin(maskY, bins[1][indexMinY].minW, Lane8F32(prevMinX));
+
+            bins[1][indexMinY].maxU = MaskMax(maskY, bins[1][indexMinY].maxU, Lane8F32(prevMaxY));
+            bins[1][indexMinY].maxV = MaskMax(maskY, bins[1][indexMinY].maxV, Lane8F32(prevMaxZ));
+            bins[1][indexMinY].maxW = MaskMax(maskY, bins[1][indexMinY].maxW, Lane8F32(prevMaxX));
+
+            entryCounts[indexMinY][1] += 1;
+            exitCounts[indexMaxY][1] += 1;
+
+            if (indexMinY != indexMaxY)
+            {
+                for (u32 index = indexMinY; index <= indexMaxY; index++)
+                {
+                    faceIndices[1][index][binCounts[1][index]++] = faceID;
+                    if (binCounts[1][index] == LANE_WIDTH)
+                    {
+                        Bounds8F32 out;
+                        ClipTriangleTest(mesh, faceIndices[1][index], 1,
+                                         splitPositions[1][index], splitPositions[1][index + 1], out);
+                        binCounts[1][index] = 0;
+                        bins[1][index].Extend(out);
+                    }
+                }
+            }
+
+            // Z
+            u32 indexMinZ = Clamp(0u, numBins - 1u, (u32)Floor((prevMinZ - baseZScalar) * scaleZScalar));
+            u32 indexMaxZ = Clamp(0u, numBins - 1u, (u32)Floor((prevMaxZ - baseZScalar) * scaleZScalar));
+
+            bool noSplitZ  = indexMinZ == indexMaxZ;
+            Lane8F32 maskZ = Lane8F32::Mask(noSplitZ);
+
+            bins[2][indexMinZ].minU = MaskMin(maskZ, bins[2][indexMinZ].minU, Lane8F32(prevMinZ));
+            bins[2][indexMinZ].minV = MaskMin(maskZ, bins[2][indexMinZ].minV, Lane8F32(prevMinX));
+            bins[2][indexMinZ].minW = MaskMin(maskZ, bins[2][indexMinZ].minW, Lane8F32(prevMinY));
+
+            bins[2][indexMinZ].maxU = MaskMax(maskZ, bins[2][indexMinZ].maxU, Lane8F32(prevMaxZ));
+            bins[2][indexMinZ].maxV = MaskMax(maskZ, bins[2][indexMinZ].maxV, Lane8F32(prevMaxX));
+            bins[2][indexMinZ].maxW = MaskMax(maskZ, bins[2][indexMinZ].maxW, Lane8F32(prevMaxY));
+
+            entryCounts[indexMinZ][2] += 1;
+            exitCounts[indexMaxZ][2] += 1;
+
+            if (indexMinZ != indexMaxZ)
+            {
                 for (u32 index = indexMinZ; index <= indexMaxZ; index++)
                 {
                     faceIndices[2][index][binCounts[2][index]++] = faceID;
                     if (binCounts[2][index] == LANE_WIDTH)
                     {
                         Bounds8F32 out;
-                        ClipTriangleTest(mesh, faceIndices[2][index], splitPositions[2][index], splitPositions[2][index + 1], out);
+                        ClipTriangleTest(mesh, faceIndices[2][index], 2,
+                                         splitPositions[2][index], splitPositions[2][index + 1], out);
                         binCounts[2][index] = 0;
                         bins[2][index].Extend(out);
                     }
                 }
             }
-
-#if 0
-            Lane8U32::Store(indexMinZPrev, binIndexMinZ);
-            Lane8U32::Store(indexMaxZPrev, binIndexMaxZ);
-
-            Lane8U32::Store(faceIDPrev, faceIds);
-#endif
-
-#if 0
-            prevMinX = minX;
-            prevMinY = minY;
-            prevMinZ = minZ;
-
-            prevMaxX = maxX;
-            prevMaxY = maxY;
-            prevMaxZ = maxZ;
-#endif
         }
 
-        // Finish the final prev
-#if 0
-        for (u32 prevIndex = 0; prevIndex < 8; prevIndex++)
-        {
-            u32 faceID    = faceIDPrev[prevIndex];
-            u32 indexMinX = indexMinXPrev[prevIndex];
-            u32 indexMaxX = indexMaxXPrev[prevIndex];
-
-            Lane8F32 mask(indexMinX == indexMaxX);
-            Lane8U32 perm(i);
-
-            bins[0][indexMinX].minU = MaskMin(mask, bins[0][indexMinX].minU, Shuffle(prevMinX, perm));
-            bins[0][indexMinX].minV = MaskMin(mask, bins[0][indexMinX].minV, Shuffle(prevMinY, perm));
-            bins[0][indexMinX].minW = MaskMin(mask, bins[0][indexMinX].minW, Shuffle(prevMinZ, perm));
-
-            bins[0][indexMinX].maxU = MaskMax(mask, bins[0][indexMinX].maxU, Shuffle(prevMaxX, perm));
-            bins[0][indexMinX].maxV = MaskMax(mask, bins[0][indexMinX].maxV, Shuffle(prevMaxY, perm));
-            bins[0][indexMinX].maxW = MaskMax(mask, bins[0][indexMinX].maxW, Shuffle(prevMaxZ, perm));
-
-            for (u32 index = indexMinX; index < indexMaxX; index++)
-            {
-                faceIndices[0][index][binCounts[0][index]++] = faceID;
-                if (binCounts[0][index] == LANE_WIDTH)
-                {
-                    Bounds8F32 out;
-                    ClipTriangleTest(mesh, faceIndices[0][index], splitPositions[0][index], splitPositions[0][index + 1], out);
-                    binCounts[0][index] = 0;
-                    bins[0][index].Extend(out);
-                }
-            }
-        }
-        for (u32 prevIndex = 0; prevIndex < 8; prevIndex++)
-        {
-            u32 faceID    = faceIDPrev[prevIndex];
-            u32 indexMinY = indexMinYPrev[prevIndex];
-            u32 indexMaxY = indexMaxYPrev[prevIndex];
-
-            Lane8F32 mask(indexMinY == indexMaxY);
-            Lane8U32 perm(i);
-
-            bins[1][indexMinY].minU = MaskMin(mask, bins[1][indexMinY].minU, Shuffle(prevMinY, perm));
-            bins[1][indexMinY].minV = MaskMin(mask, bins[1][indexMinY].minV, Shuffle(prevMinZ, perm));
-            bins[1][indexMinY].minW = MaskMin(mask, bins[1][indexMinY].minW, Shuffle(prevMinX, perm));
-
-            bins[1][indexMinY].maxU = MaskMax(mask, bins[1][indexMinY].maxU, Shuffle(prevMaxY, perm));
-            bins[1][indexMinY].maxV = MaskMax(mask, bins[1][indexMinY].maxV, Shuffle(prevMaxZ, perm));
-            bins[1][indexMinY].maxW = MaskMax(mask, bins[1][indexMinY].maxW, Shuffle(prevMaxX, perm));
-
-            for (u32 index = indexMinY; index < indexMaxY; index++)
-            {
-                faceIndices[1][index][binCounts[1][index]++] = faceID;
-                if (binCounts[1][index] == LANE_WIDTH)
-                {
-                    Bounds8F32 out;
-                    ClipTriangleTest(mesh, faceIndices[1][index], splitPositions[1][index], splitPositions[1][index + 1], out);
-                    binCounts[1][index] = 0;
-                    bins[1][index].Extend(out);
-                }
-            }
-        }
-        for (u32 prevIndex = 0; prevIndex < 8; prevIndex++)
-        {
-            u32 faceID    = faceIDPrev[prevIndex];
-            u32 indexMinZ = indexMinZPrev[prevIndex];
-            u32 indexMaxZ = indexMaxZPrev[prevIndex];
-
-            Lane8F32 mask(indexMinZ == indexMaxZ);
-            Lane8U32 perm(i);
-
-            bins[1][indexMinZ].minU = MaskMin(mask, bins[1][indexMinZ].minU, Shuffle(prevMinZ, perm));
-            bins[1][indexMinZ].minV = MaskMin(mask, bins[1][indexMinZ].minV, Shuffle(prevMinX, perm));
-            bins[1][indexMinZ].minW = MaskMin(mask, bins[1][indexMinZ].minW, Shuffle(prevMinY, perm));
-
-            bins[1][indexMinZ].maxU = MaskMax(mask, bins[1][indexMinZ].maxU, Shuffle(prevMaxZ, perm));
-            bins[1][indexMinZ].maxV = MaskMax(mask, bins[1][indexMinZ].maxV, Shuffle(prevMaxX, perm));
-            bins[1][indexMinZ].maxW = MaskMax(mask, bins[1][indexMinZ].maxW, Shuffle(prevMaxY, perm));
-
-            for (u32 index = indexMinZ; index < indexMaxZ; index++)
-            {
-                faceIndices[2][index][binCounts[2][index]++] = faceID;
-                if (binCounts[2][index] == LANE_WIDTH)
-                {
-                    Bounds8F32 out;
-                    ClipTriangleTest(mesh, faceIndices[2][index], splitPositions[2][index], splitPositions[2][index + 1], out);
-                    binCounts[2][index] = 0;
-                    bins[2][index].Extend(out);
-                }
-            }
-        }
-#endif
-
+        // Empty the bins
         Lane8F32 posInf(pos_inf);
         Lane8F32 negInf(neg_inf);
         for (u32 dim = 0; dim < 3; dim++)
         {
             for (u32 binIndex = 0; binIndex < numBins; binIndex++)
             {
-                u32 remainingCount = binCounts[0][binIndex];
+                u32 remainingCount = binCounts[dim][binIndex];
                 u32 bitMask        = (1 << remainingCount) - 1;
                 Lane8F32 mask      = Lane8F32::Mask(bitMask);
                 Bounds8F32 out;
-                ClipTriangleTest(mesh, faceIndices[dim][binIndex], splitPositions[dim][binIndex],
-                                 splitPositions[dim][binIndex + 1], out);
+                ClipTriangleTest(mesh, faceIndices[dim][binIndex], dim,
+                                 splitPositions[dim][binIndex], splitPositions[dim][binIndex + 1], out);
 
                 out.minU = Select(mask, out.minU, posInf);
                 out.minV = Select(mask, out.minV, posInf);
@@ -715,7 +676,6 @@ struct TestSOASplitBinning
                 out.maxV = Select(mask, out.maxV, negInf);
                 out.maxW = Select(mask, out.maxW, negInf);
 
-                binCounts[dim][binIndex] = 0;
                 bins[dim][binIndex].Extend(out);
             }
         }
@@ -734,7 +694,7 @@ struct TestSOASplitBinning
             Lane4F32 xMinP(bXMinX, bXMinY, bXMinZ, 0.f);
             Lane4F32 xMaxP(bXMaxX, bXMaxY, bXMaxZ, 0.f);
 
-            finalBounds[0][i].Extend(xMinP, xMaxP);
+            finalBounds[0][i] = Bounds(xMinP, xMaxP);
 
             Bounds8F32 &bY = bins[1][i];
             f32 bYMinX     = ReduceMin(bY.minW);
@@ -748,21 +708,21 @@ struct TestSOASplitBinning
             Lane4F32 yMinP(bYMinX, bYMinY, bYMinZ, 0.f);
             Lane4F32 yMaxP(bYMaxX, bYMaxY, bYMaxZ, 0.f);
 
-            finalBounds[1][i].Extend(yMinP, yMaxP);
+            finalBounds[1][i] = Bounds(yMinP, yMaxP);
 
             Bounds8F32 &bZ = bins[2][i];
             f32 bZMinX     = ReduceMin(bZ.minV);
             f32 bZMinY     = ReduceMin(bZ.minW);
             f32 bZMinZ     = ReduceMin(bZ.minU);
 
-            f32 bZMaxX = ReduceMax(bZ.maxU);
-            f32 bZMaxY = ReduceMax(bZ.maxV);
-            f32 bZMaxZ = ReduceMax(bZ.maxW);
+            f32 bZMaxX = ReduceMax(bZ.maxV);
+            f32 bZMaxY = ReduceMax(bZ.maxW);
+            f32 bZMaxZ = ReduceMax(bZ.maxU);
 
             Lane4F32 zMinP(bZMinX, bZMinY, bZMinZ, 0.f);
             Lane4F32 zMaxP(bZMaxX, bZMaxY, bZMaxZ, 0.f);
 
-            finalBounds[2][i].Extend(zMinP, zMaxP);
+            finalBounds[2][i] = Bounds(zMinP, zMaxP);
         }
     }
 };
@@ -777,7 +737,7 @@ struct TestSplitBinningBase
 
     Lane4U32 numEnd[numBins];
     Lane4U32 numBegin[numBins];
-    Bounds bins[numBins][3];
+    Bounds bins[3][numBins];
 
     TestSplitBinningBase(Bounds &bounds)
     {
@@ -791,15 +751,15 @@ struct TestSplitBinningBase
 
         for (u32 i = 0; i < numBins; i++)
         {
-            numEnd[0]   = 0;
-            numBegin[0] = 0;
+            numEnd[i]   = 0;
+            numBegin[i] = 0;
         }
     }
     __forceinline void Add(const u32 dim, const u32 beginID, const u32 endID, const u32 binID, const Bounds &b, const u32 n = 1)
     {
         numEnd[endID][dim] += n;
         numBegin[endID][dim] += n;
-        bins[binID][dim].Extend(b);
+        bins[dim][binID].Extend(b);
     }
     __forceinline Lane4U32 GetBin(const Lane4F32 &l)
     {
@@ -851,10 +811,10 @@ struct TestSplitBinningBase
                 {
                     const float pos = GetPos(bin + 1, dim);
                     Bounds left, right;
-                    ClipTriangleSimple(mesh, prim.PrimID(), dim, pos, left, right);
+                    ClipTriangleSimple(mesh, rest, prim.PrimID(), dim, pos, left, right);
 
                     if (left.Empty()) l++;
-                    bins[bin][dim].Extend(left);
+                    bins[dim][bin].Extend(left);
                     rest = right;
                 }
                 if (rest.Empty()) r--;
