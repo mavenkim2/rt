@@ -1,5 +1,56 @@
 namespace rt
 {
+TriangleMesh *GenerateMesh(Arena *arena, u32 count, f32 min = -100.f, f32 max = 100.f)
+{
+    TriangleMesh *mesh = PushStruct(arena, TriangleMesh);
+    mesh->p            = PushArray(arena, Vec3f, count);
+    mesh->numVertices  = count;
+    mesh->indices      = PushArray(arena, u32, count);
+    mesh->numIndices   = count;
+
+    for (u32 i = 0; i < count; i++)
+    {
+        mesh->indices[i] = RandomInt(0, count);
+    }
+
+    for (u32 i = 0; i < count / 3; i++)
+    {
+        mesh->p[i * 3]     = RandomVec3(min, max);
+        mesh->p[i * 3 + 1] = RandomVec3(min, max);
+        mesh->p[i * 3 + 2] = RandomVec3(min, max);
+    }
+    return mesh;
+}
+
+PrimData *GeneratePrimData(Arena *arena, TriangleMesh *mesh, u32 count, u32 numFaces, Bounds &bounds)
+{
+    PrimData *data = PushArray(arena, PrimData, numFaces);
+    for (u32 i = 0; i < numFaces; i++)
+    {
+        u32 i0 = mesh->indices[i * 3];
+        u32 i1 = mesh->indices[i * 3 + 1];
+        u32 i2 = mesh->indices[i * 3 + 2];
+
+        PrimData *prim = &data[i];
+        Vec3f v0       = mesh->p[i0];
+        Vec3f v1       = mesh->p[i1];
+        Vec3f v2       = mesh->p[i2];
+
+        Vec3f min = Min(Min(v0, v1), v2);
+        Vec3f max = Max(Max(v0, v1), v2);
+
+        Lane4F32 lMin(min);
+        Lane4F32 lMax(max);
+        prim->minP = lMin;
+        prim->maxP = lMax;
+        prim->SetPrimID(i);
+        prim->SetGeomID(0);
+
+        bounds.Extend(lMin, lMax);
+    }
+    return data;
+}
+
 void TriangleClipTest()
 {
     Arena *arena = ArenaAlloc();
@@ -81,15 +132,20 @@ void TriangleClipTest()
 #endif
 }
 
-void TriangleClipTestSOA(const u32 count)
+void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
 {
 
     Arena *arena = ArenaAlloc();
-    TriangleMesh mesh;
-    mesh.p           = PushArray(arena, Vec3f, count);
-    mesh.numVertices = count;
-    mesh.indices     = PushArray(arena, u32, count);
-    mesh.numIndices  = count;
+
+    if (!mesh)
+    {
+        Assert(count != 0);
+        mesh = GenerateMesh(arena, count);
+    }
+    else
+    {
+        count = mesh->numIndices;
+    }
 
     const u32 numFaces = count / 3;
     PrimDataSOA soa;
@@ -103,26 +159,24 @@ void TriangleClipTestSOA(const u32 count)
     soa.primIDs = PushArray(arena, u32, numFaces);
 
     Bounds geomBounds;
-    for (u32 i = 0; i < numFaces; i++)
-    {
-        mesh.p[i * 3]     = RandomVec3(-100.f, 100.f);
-        mesh.p[i * 3 + 1] = RandomVec3(-100.f, 100.f);
-        mesh.p[i * 3 + 2] = RandomVec3(-100.f, 100.f);
-        geomBounds.Extend(Lane4F32(mesh.p[i * 3]));
-        geomBounds.Extend(Lane4F32(mesh.p[i * 3 + 1]));
-        geomBounds.Extend(Lane4F32(mesh.p[i * 3 + 2]));
-        mesh.indices[i * 3]     = i * 3;
-        mesh.indices[i * 3 + 1] = i * 3 + 1;
-        mesh.indices[i * 3 + 2] = i * 3 + 2;
-    }
-
-    TestSOASplitBinning heuristic(geomBounds);
 
     for (u32 i = 0; i < numFaces; i++)
     {
-        u32 primID     = RandomInt(0, numFaces);
-        Vec3f min      = Min(Min(mesh.p[primID * 3], mesh.p[primID * 3 + 1]), mesh.p[primID * 3 + 2]);
-        Vec3f max      = Max(Max(mesh.p[primID * 3], mesh.p[primID * 3 + 1]), mesh.p[primID * 3 + 2]);
+        u32 i0 = mesh->indices[i * 3 + 0];
+        u32 i1 = mesh->indices[i * 3 + 1];
+        u32 i2 = mesh->indices[i * 3 + 2];
+
+        Vec3f v0 = mesh->p[i0];
+        Vec3f v1 = mesh->p[i1];
+        Vec3f v2 = mesh->p[i2];
+
+        Vec3f min = Min(Min(v0, v1), v2);
+        Vec3f max = Max(Max(v0, v1), v2);
+
+        geomBounds.Extend(Lane4F32(v0));
+        geomBounds.Extend(Lane4F32(v1));
+        geomBounds.Extend(Lane4F32(v2));
+
         soa.minX[i]    = min.x;
         soa.minY[i]    = min.y;
         soa.minZ[i]    = min.z;
@@ -130,17 +184,22 @@ void TriangleClipTestSOA(const u32 count)
         soa.maxX[i]    = max.x;
         soa.maxY[i]    = max.y;
         soa.maxZ[i]    = max.z;
-        soa.primIDs[i] = primID;
+        soa.primIDs[i] = i;
     }
 
+    TestSOASplitBinning heuristic(geomBounds);
     PerformanceCounter start = OS_StartCounter();
-    heuristic.Bin(&mesh, &soa, 0, numFaces);
+    heuristic.Bin(mesh, &soa, 0, numFaces);
+    Split split = SpatialSplitBest(heuristic.finalBounds, heuristic.entryCounts, heuristic.exitCounts);
+
     f32 time = OS_GetMilliseconds(start);
 
     printf("Time elapsed: %fms\n", time);
+    printf("Split value: %u\n", split.bestPos);
+    printf("Split SAH: %f\n", split.bestSAH);
 }
 
-void TriangleClipBinTestDefault(const u32 count)
+void TriangleClipTestAOS(const u32 count)
 {
     Arena *arena = ArenaAlloc();
     TriangleMesh mesh;
@@ -150,43 +209,78 @@ void TriangleClipBinTestDefault(const u32 count)
     mesh.numIndices  = count;
 
     const u32 numFaces = count / 3;
-    PrimData *data     = PushArray(arena, PrimData, numFaces);
 
-    Bounds geomBounds;
+    PrimRef *refs = PushArray(arena, PrimRef, numFaces);
+
     for (u32 i = 0; i < numFaces; i++)
     {
-        mesh.p[i * 3]     = RandomVec3(-100.f, 100.f);
-        mesh.p[i * 3 + 1] = RandomVec3(-100.f, 100.f);
-        mesh.p[i * 3 + 2] = RandomVec3(-100.f, 100.f);
-
-        geomBounds.Extend(Lane4F32(mesh.p[i * 3]));
-        geomBounds.Extend(Lane4F32(mesh.p[i * 3 + 1]));
-        geomBounds.Extend(Lane4F32(mesh.p[i * 3 + 2]));
-
+        mesh.p[i * 3]           = RandomVec3(-100.f, 100.f);
+        mesh.p[i * 3 + 1]       = RandomVec3(-100.f, 100.f);
+        mesh.p[i * 3 + 2]       = RandomVec3(-100.f, 100.f);
         mesh.indices[i * 3]     = i * 3;
         mesh.indices[i * 3 + 1] = i * 3 + 1;
         mesh.indices[i * 3 + 2] = i * 3 + 2;
     }
-
-    TestSplitBinningBase heuristic(geomBounds);
-
+    Bounds geomBounds;
     for (u32 i = 0; i < numFaces; i++)
     {
-        PrimData *prim = &data[i];
-        u32 primID     = RandomInt(0, numFaces);
-        Vec3f min      = Min(Min(mesh.p[primID * 3], mesh.p[primID * 3 + 1]), mesh.p[primID * 3 + 2]);
-        Vec3f max      = Max(Max(mesh.p[primID * 3], mesh.p[primID * 3 + 1]), mesh.p[primID * 3 + 2]);
-        prim->minP     = Min(prim->minP, Lane4F32(min));
-        prim->maxP     = Max(prim->maxP, Lane4F32(max));
-        prim->SetPrimID(primID);
-        prim->SetGeomID(0);
+        u32 primID = RandomInt(0, numFaces);
+        Vec3f min  = Min(Min(mesh.p[primID * 3], mesh.p[primID * 3 + 1]), mesh.p[primID * 3 + 2]);
+        Vec3f max  = Max(Max(mesh.p[primID * 3], mesh.p[primID * 3 + 1]), mesh.p[primID * 3 + 2]);
+        geomBounds.Extend(Lane4F32(min), Lane4F32(max));
+        refs[i].minX   = min.x;
+        refs[i].minY   = min.y;
+        refs[i].minZ   = min.z;
+        refs[i].geomID = 0;
+        refs[i].maxX   = max.x;
+        refs[i].maxY   = max.y;
+        refs[i].maxZ   = max.z;
+        refs[i].primID = primID;
     }
 
+    TestSOASplitBinning heuristic(geomBounds);
+
     PerformanceCounter start = OS_StartCounter();
-    heuristic.Bin(&mesh, data, 0, numFaces);
+    heuristic.BinTest2(&mesh, refs, 0, numFaces);
+    Split split = SpatialSplitBest(heuristic.finalBounds, heuristic.entryCounts, heuristic.exitCounts);
+
     f32 time = OS_GetMilliseconds(start);
 
     printf("Time elapsed: %fms\n", time);
+    printf("Split value: %u\n", split.bestPos);
+    printf("Split SAH: %f\n", split.bestSAH);
+
+    printf("Time elapsed: %fms\n", time);
+}
+
+void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
+{
+    Arena *arena = ArenaAlloc();
+
+    if (!mesh)
+    {
+        Assert(count != 0);
+        mesh = GenerateMesh(arena, count);
+    }
+    else
+    {
+        count = mesh->numIndices;
+    }
+    const u32 numFaces = count / 3;
+
+    Bounds geomBounds;
+    PrimData *data = GeneratePrimData(arena, mesh, count, numFaces, geomBounds);
+
+    TestSplitBinningBase heuristic(geomBounds);
+
+    PerformanceCounter start = OS_StartCounter();
+    heuristic.Bin(mesh, data, 0, numFaces);
+    f32 time    = OS_GetMilliseconds(start);
+    Split split = SpatialSplitBest(heuristic.bins, heuristic.numBegin, heuristic.numEnd);
+
+    printf("Time elapsed: %fms\n", time);
+    printf("Split value: %u\n", split.bestPos);
+    printf("Split SAH: %f\n", split.bestSAH);
 }
 
 } // namespace rt

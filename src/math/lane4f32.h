@@ -69,9 +69,15 @@ struct LaneF32<4>
         }
     }
 
-    __forceinline static LaneF32 Mask(i32 i)
+    __forceinline static LaneF32 Mask(bool i)
     {
         return _mm_lookupmask_ps[((size_t)i << 3) | ((size_t)i << 2) | ((size_t)i << 1) | ((size_t)i)];
+    }
+
+    __forceinline static LaneF32 Mask(u32 i)
+    {
+        Assert(i >= 0 && i < 16);
+        return _mm_lookupmask_ps[i]; //((size_t)i << 3) | ((size_t)i << 2) | ((size_t)i << 1) | ((size_t)i)];
     }
 
     __forceinline LaneF32(TrueTy) { v = _mm_cmpeq_ps(_mm_setzero_ps(), _mm_setzero_ps()); }

@@ -801,7 +801,9 @@ __forceinline void ClipTriangleSimple(const TriangleMesh *mesh, const u32 faceIn
         if ((v0d < clipPos && clipPos < v1d) || (v1d < clipPos && clipPos < v0d)) // the edge crosses the splitting location
         {
             Assert((v1d - v0d) != 0.0f);
-            const float inv_length = 1.0f / (v1d - v0d);
+            const float sub        = v1d - v0d;
+            f32 eps                = 1e-34f;
+            const float inv_length = sub < eps ? 0.f : 1.0f / (v1d - v0d);
             const Vec3f c          = FMA(Vec3f((clipPos - v0d) * inv_length), v1 - v0, v0);
             left.Extend(c);
             right.Extend(c);
@@ -1732,6 +1734,7 @@ struct CreateQuantizedNode
         Lane4F32 pow = AsFloat(shift << 23);
 
         Vec3lf<N> powVec;
+        // TODO: for N = 8, this needs to be shuffle across
         powVec.x = Shuffle<0>(pow);
         powVec.y = Shuffle<1>(pow);
         powVec.z = Shuffle<2>(pow);

@@ -63,10 +63,15 @@ struct LaneF32<8>
         }
     }
 
-    // __forceinline static LaneF32 Mask(bool i)
-    // {
-    //     return _mm_lookupmask_ps[((size_t)i << 3) | ((size_t)i << 2) | ((size_t)i << 1) | ((size_t)i)];
-    // }
+    __forceinline static LaneF32 Mask(bool i)
+    {
+        return Lane8F32(Lane4F32::Mask(i), Lane4F32::Mask(i));
+    }
+    __forceinline static LaneF32 Mask(u32 i)
+    {
+        Assert(i >= 0 && i < 256);
+        return Lane8F32(Lane4F32::Mask(i & 15), Lane4F32::Mask(i >> 4));
+    }
 
     __forceinline operator const __m256 &() const { return v; }
     __forceinline operator __m256 &() { return v; }
@@ -170,8 +175,8 @@ __forceinline Lane8F32 Rcp(const Lane8F32 &a)
 
 __forceinline Lane8F32 Abs(const Lane8F32 &a) { return _mm256_and_ps(a, _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff))); }
 __forceinline Lane8F32 Min(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_min_ps(a, b); }
-
 __forceinline Lane8F32 Max(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_max_ps(a, b); }
+
 __forceinline Lane8F32 operator^(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_xor_ps(a, b); }
 __forceinline Lane8F32 &operator^=(Lane8F32 &a, const Lane8F32 &b)
 {
@@ -250,19 +255,42 @@ __forceinline Lane8F32 Blend(const Lane8F32 &l, const Lane8F32 &r)
 template <i32 a, i32 b, i32 c, i32 d, i32 e, i32 f, i32 g, i32 h>
 __forceinline Lane8F32 Shuffle(const Lane8F32 &l)
 {
-    static constexpr __m256i shuf = _mm256_setr_epi32(a, b, c, d, e, f, g, h);
+    static const __m256i shuf = _mm256_setr_epi32(a, b, c, d, e, f, g, h);
     return _mm256_permutevar8x32_ps(l, shuf);
 }
 
+// TODO: permutevar8x32 is AVX2
 template <i32 a>
 __forceinline Lane8F32 Shuffle(const Lane8F32 &l)
 {
     StaticAssert(a >= 0 && a < 8, Shuf);
-    static constexpr __m256i shuf = _mm256_setr_epi32(a, a, a, a, a, a, a, a);
+    static const __m256i shuf = _mm256_setr_epi32(a, a, a, a, a, a, a, a);
     return _mm256_permutevar8x32_ps(l, shuf);
 }
 
 __forceinline Lane8F32 Shuffle(const Lane8F32 &l, const __m256i &shuf) { return _mm256_permutevar8x32_ps(l, shuf); }
+
+template <i32 a, i32 b>
+__forceinline Lane8F32 Shuffle4(const Lane8F32 &l, const Lane8F32 &r)
+{
+    StaticAssert(a >= 0 && a <= 3 && b >= 0 && b <= 3, InvalidPermute2f128);
+    return _mm256_permute2f128_ps(l, r, (b << 4) | (a));
+}
+
+template <i32 a, i32 b>
+__forceinline Lane8F32 Shuffle4(const Lane8F32 &l)
+{
+    StaticAssert(a >= 0 && a <= 3 && b >= 0 && b <= 3, InvalidPermute2f128);
+    return _mm256_permute2f128_ps(l, l, (b << 4) | (a));
+}
+
+// NOTE: Functions with permute don't cross 128-bit lanes and work on one ymm register.
+// Functions with shuffle either take two ymm registers, or shuffle across lanes.
+template <i32 a, i32 b, i32 c, i32 d>
+__forceinline Lane8F32 Permute(const Lane8F32 &l)
+{
+    return _mm256_permute_ps(l, _MM_SHUFFLE(d, c, b, a));
+}
 
 __forceinline Lane8F32 Permute(const Lane8F32 &l, const __m256i &shuf) { return _mm256_permutevar_ps(l, shuf); }
 
@@ -271,20 +299,6 @@ __forceinline Lane8F32 Permute(const Lane8F32 &l)
 {
     StaticAssert(a >= 0 && a <= 3, Perm);
     return _mm256_permute_ps(l, (a << 6) | (a << 4) | (a << 2) | (a));
-}
-
-template <i32 a, i32 b, i32 c, i32 d>
-__forceinline Lane8F32 Permute(const Lane8F32 &l)
-{
-    StaticAssert(a >= 0 && a <= 3 && b >= 0 && b <= 3 && c >= 0 && c <= 3 && c >= 0 && c <= 3, InvalidPermute);
-    return _mm256_permute_ps(l, (d << 6) | (c << 4) | (b << 2) | (a));
-}
-
-template <i32 a, i32 b>
-__forceinline Lane8F32 Shuffle4(const Lane8F32 &l, const Lane8F32 &r)
-{
-    StaticAssert(a >= 0 && a <= 3 && b >= 0 && b <= 3, InvalidPermute2f128);
-    return _mm256_permute2f128_ps(l, r, (b << 4) | (a));
 }
 
 template <i32 i>
@@ -318,6 +332,22 @@ __forceinline f32 Extract<0>(const Lane8F32 &a)
 // #error TODO
 // #endif
 // }
+
+__forceinline f32 ReduceMin(const Lane8F32 &l)
+{
+    Lane8F32 a = Min(l, Permute<1, 0, 3, 2>(l));
+    Lane8F32 b = Min(a, Permute<2, 3, 0, 1>(a));
+    Lane8F32 c = Min(b, Shuffle4<1, 0>(b));
+    return _mm_cvtss_f32(_mm256_castps256_ps128(c));
+}
+
+__forceinline f32 ReduceMax(const Lane8F32 &l)
+{
+    Lane8F32 a = Max(l, Permute<1, 0, 3, 2>(l));
+    Lane8F32 b = Max(a, Permute<2, 3, 0, 1>(a));
+    Lane8F32 c = Max(b, Shuffle4<1, 0>(b));
+    return _mm_cvtss_f32(_mm256_castps256_ps128(c));
+}
 
 __forceinline Lane8F32 Floor(const Lane8F32 &lane)
 {
