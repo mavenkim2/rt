@@ -197,6 +197,11 @@ __forceinline Lane4F32 rcp(const Lane4F32 &a)
 }
 
 __forceinline Lane4F32 Abs(const Lane4F32 &a) { return _mm_and_ps(a, _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff))); }
+__forceinline Lane4F32 FlipSign(const Lane4F32 &a)
+{
+    static const __m128 signFlipMask = _mm_setr_ps(-0.f, -0.f, -0.f, -0.f);
+    return _mm_xor_ps(a, signFlipMask);
+}
 __forceinline Lane4F32 Min(const Lane4F32 &a, const Lane4F32 &b) { return _mm_min_ps(a, b); }
 
 __forceinline Lane4F32 Max(const Lane4F32 &a, const Lane4F32 &b) { return _mm_max_ps(a, b); }

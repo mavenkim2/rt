@@ -36,6 +36,9 @@ struct LaneF32<8>
     //     v         = _mm_add_ps(a2, b2);
     // }
 
+    // TODO: not technically correct for unsigned integers > than int max
+    __forceinline explicit LaneF32(const Lane8U32 &l) { v = _mm256_cvtepi32_ps(l); }
+
     // __forceinline Lane4U32 AsUInt()
     // {
     //     Lane4U32 l;
@@ -306,6 +309,12 @@ __forceinline f32 Extract(const Lane8F32 &a)
 {
     return _mm256_cvtss_f32(Shuffle<i>(a));
 }
+
+template <i32 i>
+__forceinline Lane4F32 Extract4(const Lane8F32 &a) { return _mm256_extractf128_ps(a, i); }
+
+template <>
+__forceinline Lane4F32 Extract4<0>(const Lane8F32 &a) { return _mm256_castps256_ps128(a); }
 
 template <>
 __forceinline f32 Extract<0>(const Lane8F32 &a)
