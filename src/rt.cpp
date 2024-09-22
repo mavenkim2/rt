@@ -1042,13 +1042,16 @@ int main(int argc, char *argv[])
     threadLocalStatistics  = PushArray(arena, ThreadStatistics, numProcessors);
     threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, numProcessors);
 
-    const u32 count   = 300000;
+    const u32 count   = 3000000;
     TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
-    // TriangleClipTestAOS(count);
-    TriangleClipTestSOA(0, count);
+
+    // TriangleClipTestAOS(0, count);
+    // TriangleClipTestSOA(0, count);
+    TriangleClipBinTestDefault(0, count);
+
+    // TriangleClipTestAOS(&mesh);
     // TriangleClipTestSOA(&mesh);
     // TriangleClipBinTestDefault(&mesh);
-    // TriangleClipBinTestDefault(0, count);
 
 #if 0
     Arena **arenas = PushArray(arena, Arena *, numProcessors);

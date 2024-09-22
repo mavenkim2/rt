@@ -776,15 +776,15 @@ __forceinline void ClipTriangleSimple(const TriangleMesh *mesh, const Bounds &bo
     Bounds right;
     /* clip triangle to left and right box by processing all edges */
 
-    Vec3f v[] = {mesh->p[mesh->indices[faceIndex * 3 + 0]], mesh->p[mesh->indices[faceIndex * 3 + 1]],
-                 mesh->p[mesh->indices[faceIndex * 3 + 2]], mesh->p[mesh->indices[faceIndex * 3 + 0]]};
+    Lane4F32 v[] = {Lane4F32(mesh->p[mesh->indices[faceIndex * 3 + 0]]), Lane4F32(mesh->p[mesh->indices[faceIndex * 3 + 1]]),
+                    Lane4F32(mesh->p[mesh->indices[faceIndex * 3 + 2]]), Lane4F32(mesh->p[mesh->indices[faceIndex * 3 + 0]])};
 
     for (size_t i = 0; i < 4; i++)
     {
-        const Vec3f &v0 = v[i];
-        const Vec3f &v1 = v[i + 1];
-        const float v0d = v0[dim];
-        const float v1d = v1[dim];
+        const Lane4F32 &v0 = v[i];
+        const Lane4F32 &v1 = v[i + 1];
+        const float v0d    = v0[dim];
+        const float v1d    = v1[dim];
 
         if (v0d <= clipPos) left.Extend(v0);  // this point is on left side
         if (v0d >= clipPos) right.Extend(v0); // this point is on right side
@@ -795,7 +795,7 @@ __forceinline void ClipTriangleSimple(const TriangleMesh *mesh, const Bounds &bo
             // f32 eps                = 1e-34f;
             f32 div                = Rcp(v1d - v0d);
             const float inv_length = v1d == v0d ? 0.f : div;
-            const Vec3f c          = FMA(Vec3f((clipPos - v0d) * inv_length), v1 - v0, v0);
+            const Lane4F32 c       = FMA((clipPos - v0d) * inv_length, v1 - v0, v0);
             left.Extend(c);
             right.Extend(c);
         }

@@ -45,6 +45,7 @@ struct LaneU32<8>
     static __forceinline Lane8U32 Load(const void *ptr) { return _mm256_load_si256((const __m256i *)ptr); }
     static __forceinline Lane8U32 LoadU(const void *ptr) { return _mm256_loadu_si256((const __m256i *)ptr); }
     static __forceinline void Store(void *ptr, const Lane8U32 &l) { _mm256_store_si256((__m256i *)ptr, l); }
+    static __forceinline void StoreU(void *ptr, const Lane8U32 &l) { _mm256_storeu_si256((__m256i *)ptr, l); }
     static __forceinline void Store(const __m256 &mask, void *ptr, const Lane8U32 &l)
     {
 #ifdef __AVX512VL__
