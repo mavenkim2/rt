@@ -179,6 +179,11 @@ __forceinline Lane8F32 Rcp(const Lane8F32 &a)
 __forceinline Lane8F32 Abs(const Lane8F32 &a) { return _mm256_and_ps(a, _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff))); }
 __forceinline Lane8F32 Min(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_min_ps(a, b); }
 __forceinline Lane8F32 Max(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_max_ps(a, b); }
+__forceinline Lane8F32 FlipSign(const Lane8F32 &a)
+{
+    static const __m256 signFlipMask = _mm256_setr_ps(-0.f, -0.f, -0.f, -0.f, -0.f, -0.f, -0.f, -0.f);
+    return _mm256_xor_ps(a, signFlipMask);
+}
 
 __forceinline Lane8F32 operator^(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_xor_ps(a, b); }
 __forceinline Lane8F32 &operator^=(Lane8F32 &a, const Lane8F32 &b)
@@ -226,12 +231,12 @@ __forceinline Lane8F32 MaskMin(const Lane8F32 &mask, const Lane8F32 &a, const La
 #endif
 }
 
-__forceinline Lane8F32 MaskMin(const Lane8F32 &mask, const Lane8F32 &a, const Lane8F32 &b, const Lane8F32 &default)
+__forceinline Lane8F32 MaskMin(const Lane8F32 &mask, const Lane8F32 &a, const Lane8F32 &b, const Lane8F32 &def)
 {
 #if defined(__AVX512VL__)
     return _mm256_mask_min_ps(default, (__mmask8)Movemask(mask), a, b);
 #else
-    return Select(mask, _mm256_min_ps(a, b), default);
+    return Select(mask, _mm256_min_ps(a, b), def);
 #endif
 }
 
@@ -543,7 +548,7 @@ __forceinline Lane8U32 MaskCompress(const u32 mask, const Lane8U32 &l)
 #if defined(__AVX512VL__)
     return _mm256_mask_compress_epi32(0, (__mmask8)(mask), l);
 #else
-    return _mm256_castps_si256(MaskCompress(mask, _mm256_castsi256_ps(l)));
+    return _mm256_castps_si256(MaskCompress(mask, Lane8F32(_mm256_castsi256_ps(l))));
 #endif
 }
 

@@ -103,14 +103,14 @@ void Print(char *fmt, va_list args);
 template <typename Enum>
 constexpr bool EnumHasAllFlags(Enum Flags, Enum Contains)
 {
-    using UnderlyingType = std::underlying_type<Enum>::type;
+    using UnderlyingType = typename std::underlying_type<Enum>::type;
     return ((UnderlyingType)Flags & (UnderlyingType)Contains) == (UnderlyingType)Contains;
 }
 
 template <typename Enum>
 constexpr bool EnumHasAnyFlags(Enum Flags, Enum Contains)
 {
-    using UnderlyingType = std::underlying_type<Enum>::type;
+    using UnderlyingType = typename std::underlying_type<Enum>::type;
     return ((UnderlyingType)Flags & (UnderlyingType)Contains) != 0;
 }
 

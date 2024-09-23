@@ -13,7 +13,7 @@ struct ThreadContext
     u32 index;
 };
 
-void InitThreadContext(Arena *arena, char *name, b32 isMainThread = 0);
+void InitThreadContext(Arena *arena, const char *name, b32 isMainThread = 0);
 void InitThreadContext(ThreadContext *t, b32 isMainThread = 0);
 void ReleaseThreadContext();
 ThreadContext *GetThreadContext();

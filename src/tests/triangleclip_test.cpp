@@ -185,9 +185,9 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
 
         geomBounds.Extend(lMin, lMax);
 
-        soa.minX[i]    = min.x;
-        soa.minY[i]    = min.y;
-        soa.minZ[i]    = min.z;
+        soa.minX[i]    = -min.x;
+        soa.minY[i]    = -min.y;
+        soa.minZ[i]    = -min.z;
         soa.geomIDs[i] = 0;
         soa.maxX[i]    = max.x;
         soa.maxY[i]    = max.y;
@@ -203,16 +203,16 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     Split split = SpatialSplitBest(heuristic.finalBounds, heuristic.entryCounts, heuristic.exitCounts);
     printf("Time elapsed binning: %fms\n", time);
     printf("Num faces: %u\n", numFaces);
-    printf("Split value: %u\n", split.bestPos);
-    printf("Split SAH: %f\n", split.bestSAH);
-    printf("Split dim: %u\n", split.bestDim);
+    // printf("Split value: %u\n", split.bestPos);
+    // printf("Split SAH: %f\n", split.bestSAH);
+    // printf("Split dim: %u\n", split.bestDim);
 
     printf("Misc: %llu\n\n", threadLocalStatistics->misc);
 
     ExtRangeSOA range(&soa, 0, numFaces, u32(numFaces * GROW_AMOUNT));
 
     start = OS_StartCounter();
-    heuristic.Split(arena, mesh, range, split);
+    // heuristic.Split(arena, mesh, range, split);
     time = OS_GetMilliseconds(start);
 
     printf("Split time: %fms\n", time);

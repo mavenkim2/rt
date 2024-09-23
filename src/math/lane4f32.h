@@ -197,6 +197,10 @@ __forceinline Lane4F32 rcp(const Lane4F32 &a)
 }
 
 __forceinline Lane4F32 Abs(const Lane4F32 &a) { return _mm_and_ps(a, _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff))); }
+
+template <typename T>
+__forceinline T FlipSign(const Lane4F32 &a);
+
 __forceinline Lane4F32 FlipSign(const Lane4F32 &a)
 {
     static const __m128 signFlipMask = _mm_setr_ps(-0.f, -0.f, -0.f, -0.f);

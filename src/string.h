@@ -7,7 +7,7 @@ struct string
     u8 *str;
     u64 size;
 
-    string() {}
+    string() = default;
     string(const char *c);
     b32 operator==(const string &a) const;
     b32 operator==(const string &a);
@@ -34,8 +34,8 @@ u8 CharToUpper(u8 c);
 string Str8(u8 *str, u64 size);
 inline string Substr8(string str, u64 min, u64 max);
 u64 CalculateCStringLength(const char *cstr);
-string PushStr8F(Arena *arena, char *fmt, ...);
-string PushStr8FV(Arena *arena, char *fmt, va_list args);
+string PushStr8F(Arena *arena, const char *fmt, ...);
+string PushStr8FV(Arena *arena, const char *fmt, va_list args);
 string PushStr8Copy(Arena *arena, string str);
 string StrConcat(Arena *arena, string s1, string s2);
 

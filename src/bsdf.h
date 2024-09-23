@@ -316,7 +316,7 @@ struct DiffuseBSDF : BSDFCRTP<DiffuseBSDF>
 
 struct ConductorBSDF : BSDFCRTP<ConductorBSDF>
 {
-    ConductorBSDF() = default;
+    ConductorBSDF() = delete;
     ConductorBSDF(TrowbridgeReitzDistribution mfDistrib, SampledSpectrum eta, SampledSpectrum k)
         : mfDistrib(mfDistrib), eta(eta), k(k) {}
     TrowbridgeReitzDistribution mfDistrib;
@@ -376,7 +376,7 @@ struct ConductorBSDF : BSDFCRTP<ConductorBSDF>
 
 struct DielectricBSDF : BSDFCRTP<DielectricBSDF>
 {
-    DielectricBSDF() = default;
+    DielectricBSDF() = delete;
     DielectricBSDF(f32 eta, TrowbridgeReitzDistribution mfDistrib) : eta(eta), mfDistrib(mfDistrib) {}
     SampledSpectrum f(Vec3f wo, Vec3f wi, TransportMode mode) const
     {

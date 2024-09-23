@@ -222,7 +222,7 @@ struct LaneF32
 {
     f32 values[N];
 
-    const f32 &operator[](i32 i)
+    const f32 &operator[](i32 i) const
     {
         Assert(i < N);
         return values[i];
@@ -239,7 +239,7 @@ template <i32 N>
 struct LaneU32
 {
     u32 values[N];
-    const u32 &operator[](i32 i)
+    const u32 &operator[](i32 i) const
     {
         Assert(i < N);
         return values[i];

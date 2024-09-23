@@ -108,7 +108,7 @@ u64 CalculateCStringLength(const char *cstr)
     return length;
 }
 
-string PushStr8FV(Arena *arena, char *fmt, va_list args)
+string PushStr8FV(Arena *arena, const char *fmt, va_list args)
 {
     string result = {};
     va_list args2;
@@ -130,7 +130,7 @@ string PushStr8Copy(Arena *arena, string str)
     return res;
 }
 
-string PushStr8F(Arena *arena, char *fmt, ...)
+string PushStr8F(Arena *arena, const char *fmt, ...)
 {
     string result = {};
     va_list args;

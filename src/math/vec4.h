@@ -16,7 +16,7 @@ struct Vec4
         struct
         {
             Vec3<T> xyz;
-            T w;
+            T w_;
         };
     };
 

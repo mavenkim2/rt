@@ -293,12 +293,12 @@ struct Array
         AddOrGrow(num - size);
     }
 
-    const u32 Length()
+    u32 Length() const
     {
         return size;
     }
 
-    const b8 Empty()
+    b8 Empty() const
     {
         return size == 0;
     }

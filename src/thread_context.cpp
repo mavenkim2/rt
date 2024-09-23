@@ -2,7 +2,7 @@ namespace rt
 {
 thread_local ThreadContext *tLocalContext;
 
-void InitThreadContext(Arena *arena, char *name, b32 isMainThread)
+void InitThreadContext(Arena *arena, const char *name, b32 isMainThread)
 {
     ThreadContext *tctx = PushStruct(arena, ThreadContext);
     InitThreadContext(tctx, 1);

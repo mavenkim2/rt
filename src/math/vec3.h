@@ -13,11 +13,11 @@ struct Vec3
         struct
         {
             Vec2<T> xy;
-            T z;
+            T z_;
         };
         struct
         {
-            T x;
+            T x_;
             Vec2<T> yz;
         };
         T e[3];

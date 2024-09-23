@@ -90,9 +90,9 @@ struct PrimRef
         struct
         {
             f32 min[3];
-            u32 geomID;
+            u32 geomID_;
             f32 max[3];
-            u32 primID;
+            u32 primID_;
         };
     };
 };
@@ -767,7 +767,9 @@ __forceinline u32 ClipTriangle(const Vec3f &pA, const Vec3f &pB, const Vec3f &pC
 
     outBounds.minP = Select(Lane4F32((bool)invalid), Lane4F32(pos_inf), out.minP);
     outBounds.maxP = Select(Lane4F32((bool)invalid), Lane4F32(neg_inf), out.maxP);
+    return 0;
 }
+
 
 __forceinline void Swap(const Lane8F32 &mask, Lane8F32 &a, Lane8F32 &b)
 {
@@ -1916,7 +1918,7 @@ struct BuildFuncs
 };
 
 template <i32 N> //, typename CreateNode, typename UpdateNode, typename Prim>
-struct BuildFuncs<N, typename CreateQuantizedNode<N>, typename UpdateQuantizedNode<N>, TriangleMesh>
+struct BuildFuncs<N, CreateQuantizedNode<N>, UpdateQuantizedNode<N>, TriangleMesh>
 {
     using NodeType      = typename CreateQuantizedNode<N>::NodeType;
     using Primitive     = TriangleMesh;
@@ -1930,8 +1932,8 @@ template <i32 N>
 using BLAS_QuantizedNode_TriangleLeaf_Funcs =
     BuildFuncs<
         N,
-        typename CreateQuantizedNode<N>,
-        typename UpdateQuantizedNode<N>,
+        CreateQuantizedNode<N>,
+        UpdateQuantizedNode<N>,
         TriangleMesh>;
 
 // template <i32 N>
