@@ -1110,6 +1110,18 @@ struct ExtRange
     __forceinline u32 TotalSize() const { return extEnd - start; }
 };
 
+// struct ExtRangeSOA
+// {
+//     PrimDataSOA *data;
+//     u32 start;
+//     u32 count;
+//     u32 extEnd;
+//
+//     __forceinline u32 End() const { return start + count; }
+//     __forceinline u32 ExtSize() const { return extEnd - (start + count); }
+//     __forceinline u32 TotalSize() const { return extEnd - start; }
+// };
+
 template <i32 numBins>
 struct HeuristicSplitBinned
 {

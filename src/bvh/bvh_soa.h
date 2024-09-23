@@ -101,7 +101,7 @@ struct Triangle8
         return v[i];
     }
 
-    __forceinline static Triangle8 Load(TriangleMesh *mesh, const u32 dim, const u32 faceIndices[8])
+    static Triangle8 Load(TriangleMesh *mesh, const u32 dim, const u32 faceIndices[8])
     {
         u32 faceIndexA = faceIndices[0];
         u32 faceIndexB = faceIndices[1];
@@ -180,8 +180,8 @@ struct Triangle8
 };
 
 // NOTE: l contains bounds to intersect against
-void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
-                  Bounds8 *l, Bounds8 *r)
+__forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
+                                Bounds8 *l, Bounds8 *r)
 {
     threadLocalStatistics->misc += 1;
     static const u32 LUTX[] = {0, 2, 1};
@@ -435,7 +435,7 @@ __forceinline void ClipTriangleTest(const TriangleMesh *mesh, const u32 faceIndi
 }
 
 template <i32 numBins = 16>
-struct TestSOASplitBinning
+struct HeuristicSOASplitBinning
 {
     Lane8F32 baseX;
     Lane8F32 baseY;
@@ -470,7 +470,7 @@ struct TestSOASplitBinning
     Lane8F32 invScaleY;
     Lane8F32 invScaleZ;
 
-    TestSOASplitBinning(Bounds &bounds)
+    HeuristicSOASplitBinning(Bounds &bounds)
     {
         const Lane4F32 eps = 1e-34f;
 
@@ -527,10 +527,11 @@ struct TestSOASplitBinning
         Lane8F32 invScaleArr[] = {invScaleX, invScaleY, invScaleZ};
 
         u32 i            = start;
-        u32 alignedCount = count - count % 8;
-        for (; i < start + count; i += 8)
+        u32 alignedCount = count - count % LANE_WIDTH;
+        f32 totalTime    = 0.f;
+        for (; i < start + count; i += LANE_WIDTH)
         {
-            u32 num          = Min(8u, start + count - i);
+            u32 num          = Min(LANE_WIDTH, start + count - i);
             Lane8U32 faceIds = Lane8U32::LoadU(soa->primIDs + i);
 
             Lane8F32 prevMin[] = {
@@ -573,6 +574,7 @@ struct TestSOASplitBinning
                     // Fast path, no splitting
                     if (diff == 0)
                     {
+                        // PerformanceCounter counter = OS_StartCounter();
                         Lane8F32 primBounds(prevMin[0][prevIndex], prevMin[1][prevIndex], prevMin[2][prevIndex], pos_inf,
                                             prevMax[0][prevIndex], prevMax[1][prevIndex], prevMax[2][prevIndex], pos_inf);
                         bins8[dim][indexMin].Extend(primBounds);
@@ -587,12 +589,12 @@ struct TestSOASplitBinning
                         Triangle8 tri     = Triangle8::Load(mesh, dim, faceIndices[dim][diff]);
                         Lane8U32 startBin = Lane8U32::Load(binIndexStart[dim][diff]);
 
-                        Bounds8 bounds[2][8];
-                        for (u32 boundIndex = 0; boundIndex < 8; boundIndex++)
+                        Bounds8 bounds[2][LANE_WIDTH];
+                        for (u32 boundIndex = 0; boundIndex < LANE_WIDTH; boundIndex++)
                         {
                             bounds[0][boundIndex] = Bounds8(pos_inf);
                         }
-                        u32 binIndices[8];
+                        u32 binIndices[LANE_WIDTH];
 
                         u32 current = 0;
                         for (u32 d = 0; d < diff; d++)
@@ -602,7 +604,7 @@ struct TestSOASplitBinning
                             Lane8F32 splitPos = Lane8F32(startBin) * invScaleD + baseD;
                             ClipTriangle(mesh, dim, tri, splitPos, bounds[current], bounds[!current]);
 
-                            for (u32 b = 0; b < 8; b++)
+                            for (u32 b = 0; b < LANE_WIDTH; b++)
                             {
                                 bins8[dim][binIndices[b]].Extend(bounds[current][b]);
                             }
@@ -763,6 +765,50 @@ struct TestSOASplitBinning
             Lane4F32 zMaxP(bZMaxX, bZMaxY, bZMaxZ, 0.f);
 
             finalBounds[2][i] = Bounds(zMinP, zMaxP);
+        }
+    }
+
+    void Split(Arena **arenas, TriangleMesh *mesh, ExtRange range, Split split)
+    {
+        TempArena temp = ScratchStart(0, 0);
+        // partitioning
+        u32 dim                = split.bestDim;
+        f32 *minStream         = range.data.arr[dim];
+        f32 *maxStream         = range.data.arr[dim + 4];
+        u32 alignedCount       = range.count - range.count % LANE_WIDTH;
+        Lane8F32 invScaleArr[] = {invScaleX, invScaleY, invScaleZ};
+        Lane8F32 invScaleD     = invScaleArr[dim];
+        Lane8F32 baseArr[]     = {baseX, baseY, baseZ};
+        Lane8F32 baseD         = baseArr[dim];
+
+        // TODO: this could be problematic
+        u32 *faceIDs = PushArray(temp.arena, u32, range.count);
+        u32 count    = 0;
+
+        // mask compress
+        u32 i = range.start;
+        for (u32 i = range.start; i < range.start + alignedCount; i += LANE_WIDTH)
+        {
+            Lane8F32 min       = Lane8F32::Load(minStream + i);
+            Lane8F32 max       = Lane8F32::Load(maxStream + i);
+            Lane8U32 faceIDs   = Lane8U32::Load(range.data.primIDs + i);
+            Lane8F32 splitMask = (min <= split.bestValue && max > split.bestValue);
+            u32 mask           = Movemask(splitMask);
+            Lane8U32::StoreU(MaskCompress(mask, faceIDs));
+            count += PopCount(mask);
+        }
+        for (; i < range.End(); i++)
+        {
+            f32 min        = minStream[i];
+            f32 max        = maxStream[i];
+            u32 faceID     = range.data.primIDs[i];
+            faceIDs[count] = faceID;
+            count += (min <= split.bestPos && max > split.bestPos);
+        }
+        for (i = 0; i < count - count % LANE_WIDTH; i += LANE_WIDTH)
+        {
+            Triangle8 tri = Triangle8::Load(mesh, dim, faceIDs + i);
+            // ClipTriangle(mesh, dim, tri, split.bestValue,
         }
     }
 

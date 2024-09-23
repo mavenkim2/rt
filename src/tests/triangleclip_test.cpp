@@ -187,7 +187,7 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
         soa.primIDs[i] = i;
     }
 
-    TestSOASplitBinning heuristic(geomBounds);
+    HeuristicSOASplitBinning<16> heuristic(geomBounds);
     PerformanceCounter start = OS_StartCounter();
     // heuristic.Bin(mesh, &soa, 0, numFaces);
     heuristic.BinDiffTest(mesh, &soa, 0, numFaces);
@@ -252,7 +252,7 @@ void TriangleClipTestAOS(TriangleMesh *mesh, u32 count = 0)
         ref->primID  = i;
     }
 
-    TestSOASplitBinning heuristic(geomBounds);
+    HeuristicSOASplitBinning heuristic(geomBounds);
 
     PerformanceCounter start = OS_StartCounter();
     heuristic.BinTest(mesh, refs, 0, numFaces);
@@ -261,7 +261,6 @@ void TriangleClipTestAOS(TriangleMesh *mesh, u32 count = 0)
     Split split = SpatialSplitBest(heuristic.finalBounds, heuristic.entryCounts, heuristic.exitCounts);
 
     printf("Time elapsed: %fms\n", time);
-    printf("Num faces: %u\n", numFaces);
     printf("Split value: %u\n", split.bestPos);
     printf("Split SAH: %f\n", split.bestSAH);
     printf("Split dim: %u\n", split.bestDim);
@@ -285,7 +284,7 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
     Bounds geomBounds;
     PrimData *data = GeneratePrimData(arena, mesh, count, numFaces, geomBounds);
 
-    TestSplitBinningBase heuristic(geomBounds);
+    TestSplitBinningBase<16> heuristic(geomBounds);
 
     PerformanceCounter start = OS_StartCounter();
     heuristic.Bin(mesh, data, 0, numFaces);
@@ -294,7 +293,6 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
     Split split = SpatialSplitBest(heuristic.bins, heuristic.numBegin, heuristic.numEnd);
 
     printf("Time elapsed: %fms\n", time);
-    printf("Num faces: %u\n", numFaces);
     printf("Split value: %u\n", split.bestPos);
     printf("Split SAH: %f\n", split.bestSAH);
     printf("Split dim: %u\n", split.bestDim);

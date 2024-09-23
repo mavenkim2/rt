@@ -443,6 +443,44 @@ __forceinline Lane8U32 Flooru(Lane8F32 lane)
     return _mm256_cvtps_epi32(Floor(lane));
 }
 
+__forceinline Lane8F32 MaskCompress(const u32 mask, const Lane8F32 &l)
+{
+#if defined(__AVX512VL__)
+    return _mm256_mask_compress_ps(0.f, (__mmask8)(mask), l);
+#else
+    const u32 loMask  = mask & 15;
+    const u32 loShift = loMask * 4;
+    const u32 hiMask  = (mask >> 4) & 15;
+    const u32 hiShift = hiMask * 4;
+
+    const u32 numLoBits = PopCount(loMask);
+
+    const u64 bitMask0 = 0x0102010301020100ull;
+    const u64 bitMask1 = 0x1223133012201000ull;
+    const u64 bitMask2 = 0x2330300020000000ull;
+    const u64 bitMask3 = 0x3000000000000000ull;
+
+    const u32 lo0 = (bitMask0 >> loShift) & 3;
+    const u32 lo1 = (bitMask1 >> loShift) & 3;
+    const u32 lo2 = (bitMask2 >> loShift) & 3;
+    const u32 lo3 = (bitMask3 >> loShift) & 3;
+
+    const u32 hi0 = ((bitMask0 >> hiShift) & 3) + 4;
+    const u32 hi1 = ((bitMask1 >> hiShift) & 3) + 4;
+    const u32 hi2 = ((bitMask2 >> hiShift) & 3) + 4;
+    const u32 hi3 = ((bitMask3 >> hiShift) & 3) + 4;
+
+    u32 shuffleIndices[]          = {lo0, lo1, lo2, lo3, hi0, hi1, hi2, hi3};
+    shuffleIndices[numLoBits]     = hi0;
+    shuffleIndices[numLoBits + 1] = hi1;
+    shuffleIndices[numLoBits + 2] = hi2;
+    shuffleIndices[numLoBits + 3] = hi3;
+
+    return _mm256_permutevar8x32_ps(l, _mm256_load_si256((__m256i *)shuffleIndices));
+
+#endif
+}
+
 #if 0
 #if defined(__AVX512VL__)
 template <i32 R>

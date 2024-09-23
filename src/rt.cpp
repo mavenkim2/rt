@@ -1045,15 +1045,23 @@ int main(int argc, char *argv[])
     const u32 count = 30000000;
     // TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
     // TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
-    TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
+    // TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
 
     // TriangleClipTestAOS(0, count);
     // TriangleClipTestSOA(0, count);
     // TriangleClipBinTestDefault(0, count);
 
     // TriangleClipTestAOS(&mesh);
-    TriangleClipTestSOA(&mesh);
+    // TriangleClipTestSOA(&mesh);
     // TriangleClipBinTestDefault(&mesh);
+
+    Lane8F32 test(0.f, 1.f, 2.f, 3.f, 4.f, 5.f, 6.f, 7.f);
+
+    for (u32 i = 0; i < 255; i++)
+    {
+        Lane8F32 out = MaskCompress(i, test);
+        int stop = 5;
+    }
 
 #if 0
     Arena **arenas = PushArray(arena, Arena *, numProcessors);
