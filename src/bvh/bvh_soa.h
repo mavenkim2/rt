@@ -292,20 +292,17 @@ __forceinline void ClipTrianglePartition(const TriangleMesh *mesh, const u32 dim
 }
 
 template <i32 numBins = 16>
-struct HeuristicSOASplitBinning
+struct alignas(32) HeuristicSOASplitBinning
 {
-    Lane8F32 baseX;
-    Lane8F32 baseY;
-    Lane8F32 baseZ;
-
-    Lane8F32 scaleX;
-    Lane8F32 scaleY;
-    Lane8F32 scaleZ;
+    Bounds8 bins8[3][numBins];
+    Lane8F32 base[3];
+    Lane8F32 invScale[3];
+    Lane8F32 scale[3];
 
     static const u32 LANE_WIDTH = 8;
 
     // temp storage
-    u32 faceIndices[3][numBins][LANE_WIDTH];
+    u32 faceIndices[3][numBins][2 * LANE_WIDTH - 1];
     u32 binCounts[3][numBins];
 
     // result data
@@ -315,35 +312,31 @@ struct HeuristicSOASplitBinning
     Bounds finalBounds[3][numBins];
 
     // used in soa 8 triangle multi plane diff binning
-    Bounds8 bins8[3][numBins];
-    Lane8F32 invScaleX;
-    Lane8F32 invScaleY;
-    Lane8F32 invScaleZ;
 
     HeuristicSOASplitBinning(Bounds &bounds)
     {
         const Lane4F32 eps = 1e-34f;
 
         Lane8F32 minP(bounds.minP);
-        baseX = Shuffle<0>(minP);
-        baseY = Shuffle<1>(minP);
-        baseZ = Shuffle<2>(minP);
+        base[0] = Shuffle<0>(minP);
+        base[1] = Shuffle<1>(minP);
+        base[2] = Shuffle<2>(minP);
 
         const Lane4F32 diag = Max(bounds.maxP - bounds.minP, eps);
 
         Lane4F32 scale4 = Select(diag > eps, Lane4F32((f32)numBins) / diag, Lane4F32(0.f));
 
         Lane8F32 scale8(scale4);
-        scaleX = Shuffle<0>(scale8);
-        scaleY = Shuffle<1>(scale8);
-        scaleZ = Shuffle<2>(scale8);
+        scale[0] = Shuffle<0>(scale8);
+        scale[1] = Shuffle<1>(scale8);
+        scale[2] = Shuffle<2>(scale8);
 
         // test
         Lane4F32 invScale4 = Select(scale4 == 0.f, 0.f, 1.f / scale4);
         Lane8F32 invScale8(invScale4);
-        invScaleX = Shuffle<0>(invScale8);
-        invScaleY = Shuffle<1>(invScale8);
-        invScaleZ = Shuffle<2>(invScale8);
+        invScale[0] = Shuffle<0>(invScale8);
+        invScale[1] = Shuffle<1>(invScale8);
+        invScale[2] = Shuffle<2>(invScale8);
 
         for (u32 i = 0; i < numBins; i++)
         {
@@ -352,7 +345,7 @@ struct HeuristicSOASplitBinning
             for (u32 dim = 0; dim < 3; dim++)
             {
                 binCounts[dim][i] = 0;
-                for (u32 j = 0; j < 8; j++)
+                for (u32 j = 0; j < ArrayLength(faceIndices[0][0]); j++)
                 {
                     faceIndices[dim][i][j] = 0;
                 }
@@ -365,17 +358,13 @@ struct HeuristicSOASplitBinning
         Lane8U32 z = Lane8U32(0);
         Lane8U32 e = Lane8U32(numBins - 1);
 
-        alignas(32) u32 faceIDPrev[8];
+        // alignas(32) u32 faceIDPrev[8];
 
-        alignas(32) u32 indexMinPrev[8];
-        alignas(32) u32 indexMaxPrev[8];
-
+        // alignas(32) u32 indexMinPrev[8];
+        // alignas(32) u32 indexMaxPrev[8];
         alignas(32) u32 binIndexStart[3][numBins][8];
 
-        Lane8F32 baseArr[]     = {baseX, baseY, baseZ};
-        Lane8F32 scaleArr[]    = {scaleX, scaleY, scaleZ};
-        Lane8F32 scaleNegArr[] = {FlipSign(scaleX), FlipSign(scaleY), FlipSign(scaleZ)};
-        Lane8F32 invScaleArr[] = {invScaleX, invScaleY, invScaleZ};
+        Lane8F32 scaleNegArr[] = {FlipSign(scale[0]), FlipSign(scale[1]), FlipSign(scale[2])};
 
         u32 i            = start;
         u32 alignedCount = count - count % LANE_WIDTH;
@@ -383,11 +372,9 @@ struct HeuristicSOASplitBinning
 
         Lane8F32 lanes[8];
 
-        for (; i < start + count; i += LANE_WIDTH)
+        for (; i < start + alignedCount; i += LANE_WIDTH)
         {
-            bool transposed  = false;
-            u32 num          = Min(LANE_WIDTH, start + count - i);
-            Lane8U32 faceIds = Lane8U32::LoadU(soa->primIDs + i);
+            u32 *faceIDs = soa->primIDs + i;
 
             Lane8F32 prevMin[] = {
                 Lane8F32::LoadU(soa->minX + i),
@@ -401,76 +388,145 @@ struct HeuristicSOASplitBinning
                 Lane8F32::LoadU(soa->maxZ + i),
             };
 
-            Lane8U32::Store(faceIDPrev, faceIds);
+            // Lane8U32::Store(faceIDPrev, faceIds);
+
+            Lane8U32 indexMinArr[3] = {
+                Clamp(z, e, Flooru((base[0] + prevMin[0]) * scaleNegArr[0])),
+                Clamp(z, e, Flooru((base[1] + prevMin[1]) * scaleNegArr[1])),
+                Clamp(z, e, Flooru((base[2] + prevMin[2]) * scaleNegArr[2])),
+            };
+            Lane8U32 indexMaxArr[3] = {
+                Clamp(z, e, Flooru((prevMax[0] - base[0]) * scale[0])),
+                Clamp(z, e, Flooru((prevMax[1] - base[1]) * scale[1])),
+                Clamp(z, e, Flooru((prevMax[2] - base[2]) * scale[2])),
+            };
+
+            Lane8U32 binDiffX = indexMaxArr[0] - indexMinArr[0];
+            Lane8U32 binDiffY = indexMaxArr[1] - indexMinArr[1];
+            Lane8U32 binDiffZ = indexMaxArr[2] - indexMinArr[2];
+            // x0 x1 x2 x3 y0 y1 y2 y3 x4 x5 x6 x7 y4 y5 y6 y7
+            Lane8U32 out0 = _mm256_packus_epi32(binDiffX, binDiffY);
+            // x0 x1 x2 x3 |  y0 y1 y2 y3 |  z0 00 z1 00 |  z2 00 z3 00 |  x4 x5 x6 x7 |  y4 y5 y6 y7 |  z4 00 z5 00 | z6 00 z7 00
+
+            u8 testing[32];
+            Lane8U32 out1 = _mm256_packus_epi16(out0, binDiffZ);
+            Lane8U32::Store(testing, out1);
+
+            u32 bitMask[3] = {};
+
+            static const u32 order[3][LANE_WIDTH] = {
+                {0, 1, 2, 3, 16, 17, 18, 19},
+                {4, 5, 6, 7, 20, 21, 22, 23},
+                {8, 10, 12, 14, 24, 26, 28, 30},
+            };
+            Transpose6x8(prevMin[0], prevMin[1], prevMin[2], prevMax[0], prevMax[1], prevMax[2],
+                         lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5], lanes[6], lanes[7]);
             for (u32 dim = 0; dim < 3; dim++)
             {
-                const Lane8F32 &baseD     = baseArr[dim];
-                const Lane8F32 &scaleD    = scaleArr[dim];
-                const Lane8F32 &scaleDNeg = scaleNegArr[dim];
-                const Lane8F32 &invScaleD = invScaleArr[dim];
-
-                Lane8U32 binIndexMin = Clamp(z, e, Flooru((baseD + prevMin[dim]) * scaleDNeg));
-                Lane8U32 binIndexMax = Clamp(z, e, Flooru((prevMax[dim] - baseD) * scaleD));
-
-                Lane8U32::Store(indexMinPrev, binIndexMin);
-                Lane8U32::Store(indexMaxPrev, binIndexMax);
-
-                for (u32 prevIndex = 0; prevIndex < num; prevIndex++)
+                alignas(32) u32 indexMins[8];
+                Lane8U32::Store(indexMins, indexMinArr[dim]);
+                for (u32 b = 0; b < LANE_WIDTH; b++)
                 {
-                    u32 faceID   = faceIDPrev[prevIndex];
-                    u32 indexMin = indexMinPrev[prevIndex];
-                    u32 indexMax = indexMaxPrev[prevIndex];
-
+                    u32 diff     = testing[order[dim][b]];
+                    u32 indexMin = indexMins[b];
                     entryCounts[indexMin][dim] += 1;
-                    exitCounts[indexMax][dim] += 1;
-
-                    Assert(indexMax >= indexMin);
-                    u32 diff = indexMax - indexMin;
-
-                    // Fast path, no splitting
-                    if (diff == 0)
+                    exitCounts[indexMin + diff][dim] += 1;
+                    switch (diff)
                     {
-                        if (!transposed)
+                        case 0:
                         {
-                            Transpose6x8(prevMin[0], prevMin[1], prevMin[2], prevMax[0], prevMax[1], prevMax[2],
-                                         lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5], lanes[6], lanes[7]);
-                            transposed = true;
+                            bins8[dim][indexMin].Extend(lanes[b]);
                         }
-                        bins8[dim][indexMin].Extend(lanes[prevIndex]);
-                        continue;
+                        break;
+                        default:
+                        {
+                            bitMask[dim] |= (1 << diff);
+                            faceIndices[dim][diff][binCounts[dim][diff]]   = faceIDs[b];
+                            binIndexStart[dim][diff][binCounts[dim][diff]] = indexMin;
+                            binCounts[dim][diff]++;
+                        }
                     }
-
-                    faceIndices[dim][diff][binCounts[dim][diff]]   = faceID;
-                    binIndexStart[dim][diff][binCounts[dim][diff]] = indexMin;
-                    binCounts[dim][diff]++;
-                    if (binCounts[dim][diff] == LANE_WIDTH)
+                }
+            }
+            for (u32 dim = 0; dim < 3; dim++)
+            {
+                while (bitMask[dim])
+                {
+                    u32 bin = Bsf(bitMask[dim]);
+                    if (binCounts[dim][bin] >= LANE_WIDTH)
                     {
-                        Triangle8 tri     = Triangle8::Load(mesh, dim, faceIndices[dim][diff]);
-                        Lane8U32 startBin = Lane8U32::Load(binIndexStart[dim][diff]);
+                        binCounts[dim][bin] -= LANE_WIDTH;
+                        u32 binCount = binCounts[dim][bin];
+
+                        Triangle8 tri     = Triangle8::Load(mesh, dim, faceIndices[dim][bin] + binCount);
+                        Lane8U32 startBin = Lane8U32::LoadU(binIndexStart[dim][bin] + binCount);
 
                         Bounds8 bounds[2][LANE_WIDTH];
                         for (u32 boundIndex = 0; boundIndex < LANE_WIDTH; boundIndex++)
                         {
                             bounds[0][boundIndex] = Bounds8(pos_inf);
                         }
-                        alignas(32) u32 binIndices[LANE_WIDTH];
+                        u32 binIndices[LANE_WIDTH];
 
                         u32 current = 0;
-                        for (u32 d = 0; d < diff; d++)
+                        for (u32 d = 0; d < bin; d++)
                         {
                             Lane8U32::Store(binIndices, startBin);
                             startBin += 1u;
-                            Lane8F32 splitPos = Lane8F32(startBin) * invScaleD + baseD;
+                            Lane8F32 splitPos = Lane8F32(startBin) * invScale[dim] + base[dim];
                             ClipTriangle(mesh, dim, tri, splitPos, bounds[current], bounds[!current]);
 
                             for (u32 b = 0; b < LANE_WIDTH; b++)
                             {
                                 bins8[dim][binIndices[b]].Extend(bounds[current][b]);
-                                faceIndices[dim][diff][b] = 0;
                             }
                             current = !current;
                         }
-                        binCounts[dim][diff] = 0;
+                        binCounts[dim][bin] = 0;
+                    }
+                    bitMask[dim] &= bitMask[dim] - 1;
+                }
+            }
+        }
+        // Finish the remaining primitives
+        f32 scaleArr[3]          = {scale[0][0], scale[1][0], scale[2][0]};
+        f32 baseArr[3]           = {base[0][0], base[1][0], base[2][0]};
+        f32 scaleNegScalarArr[3] = {scaleNegArr[0][0], scaleNegArr[1][0], scaleNegArr[2][0]};
+        for (; i < start + count; i++)
+        {
+            f32 min[3] = {
+                soa->minX[i],
+                soa->minY[i],
+                soa->minZ[i],
+            };
+
+            f32 max[3] = {
+                soa->maxX[i],
+                soa->maxY[i],
+                soa->maxZ[i],
+            };
+            u32 faceID = soa->primIDs[i];
+
+            for (u32 dim = 0; dim < 3; dim++)
+            {
+                u32 binIndexMin = Clamp(0u, numBins - 1u, (u32)Floor((baseArr[dim] + min[dim]) * scaleNegScalarArr[dim]));
+                u32 binIndexMax = Clamp(0u, numBins - 1u, (u32)Floor((max[dim] - baseArr[dim]) * scaleArr[dim]));
+                u32 diff        = binIndexMax - binIndexMin;
+                entryCounts[binIndexMin][dim] += 1;
+                exitCounts[binIndexMax][dim] += 1;
+                switch (diff)
+                {
+                    case 0:
+                    {
+                        Lane8F32 prim(min[0], min[1], min[2], pos_inf, max[0], max[1], max[2], pos_inf);
+                        bins8[dim][binIndexMin].Extend(prim);
+                    }
+                    break;
+                    default:
+                    {
+                        faceIndices[dim][diff][binCounts[dim][diff]]   = faceID;
+                        binIndexStart[dim][diff][binCounts[dim][diff]] = binIndexMin;
+                        binCounts[dim][diff]++;
                     }
                 }
             }
@@ -480,32 +536,35 @@ struct HeuristicSOASplitBinning
         Lane8F32 negInf(neg_inf);
         for (u32 dim = 0; dim < 3; dim++)
         {
-            Lane8F32 invScaleD = invScaleArr[dim];
-            Lane8F32 baseD     = baseArr[dim];
             for (u32 diff = 1; diff < numBins; diff++)
             {
                 u32 remainingCount = binCounts[dim][diff];
-                if (remainingCount == 0) continue;
 
-                Triangle8 tri     = Triangle8::Load(mesh, dim, faceIndices[dim][diff]);
-                Lane8U32 startBin = Lane8U32::Load(binIndexStart[dim][diff]);
-
-                Bounds8 bounds[2][8];
-                alignas(32) u32 binIndices[8];
-
-                u32 current = 0;
-                for (u32 d = 0; d < diff; d++)
+                const u32 numIters = ((remainingCount + 7) >> 3);
+                for (u32 remaining = 0; remaining < numIters; remaining++)
                 {
-                    Lane8U32::Store(binIndices, startBin);
-                    startBin += 1u;
-                    Lane8F32 splitPos = Lane8F32(startBin) * invScaleD + baseD;
-                    ClipTriangle(mesh, dim, tri, splitPos, bounds[current], bounds[!current]);
+                    u32 numPrims      = Min(remainingCount, 8u);
+                    Triangle8 tri     = Triangle8::Load(mesh, dim, faceIndices[dim][diff] + remaining * LANE_WIDTH);
+                    Lane8U32 startBin = Lane8U32::Load(binIndexStart[dim][diff] + remaining * LANE_WIDTH);
 
-                    for (u32 b = 0; b < remainingCount; b++)
+                    Bounds8 bounds[2][8];
+                    alignas(32) u32 binIndices[8];
+
+                    u32 current = 0;
+                    for (u32 d = 0; d < diff; d++)
                     {
-                        bins8[dim][binIndices[b]].Extend(bounds[current][b]);
+                        Lane8U32::Store(binIndices, startBin);
+                        startBin += 1u;
+                        Lane8F32 splitPos = Lane8F32(startBin) * invScale[dim] + base[dim];
+                        ClipTriangle(mesh, dim, tri, splitPos, bounds[current], bounds[!current]);
+
+                        for (u32 b = 0; b < numPrims; b++)
+                        {
+                            bins8[dim][binIndices[b]].Extend(bounds[current][b]);
+                        }
+                        current = !current;
                     }
-                    current = !current;
+                    remainingCount -= 8;
                 }
             }
         }
@@ -522,14 +581,10 @@ struct HeuristicSOASplitBinning
     void Split(Arena *arena, TriangleMesh *mesh, ExtRangeSOA range, Split split)
     {
         // partitioning
-        u32 dim                = split.bestDim;
-        f32 *minStream         = range.data->arr[dim];
-        f32 *maxStream         = range.data->arr[dim + 4];
-        u32 alignedCount       = range.count - range.count % LANE_WIDTH;
-        Lane8F32 invScaleArr[] = {invScaleX, invScaleY, invScaleZ};
-        Lane8F32 invScaleD     = invScaleArr[dim];
-        Lane8F32 baseArr[]     = {baseX, baseY, baseZ};
-        Lane8F32 baseD         = baseArr[dim];
+        u32 dim          = split.bestDim;
+        f32 *minStream   = range.data->arr[dim];
+        f32 *maxStream   = range.data->arr[dim + 4];
+        u32 alignedCount = range.count - range.count % LANE_WIDTH;
 
         u32 count = 0;
 
@@ -588,6 +643,8 @@ struct HeuristicSOASplitBinning
                     out.maxZ             = (f32 *)(alloc + streamSize * 6);
                     out.primIDs          = (u32 *)(alloc + streamSize * 7);
                 }
+                Triangle8 tri = Triangle8::Load(mesh, dim, faceIDQueue);
+                ClipTrianglePartition(mesh, dim, tri, split.bestValue, bounds[0], bounds[1]);
                 for (u32 queueIndex = 0; queueIndex < 8; queueIndex++)
                 {
                     const u32 refID = refIDQueue[count + queueIndex];
@@ -607,13 +664,7 @@ struct HeuristicSOASplitBinning
                     out.maxY[splitCount - 8 + queueIndex] = bounds[1][queueIndex].v[5];
                     out.maxZ[splitCount - 8 + queueIndex] = bounds[1][queueIndex].v[6];
                 }
-
-                Triangle8 tri = Triangle8::Load(mesh, dim, faceIDQueue);
-                ClipTrianglePartition(mesh, dim, tri, split.bestValue, bounds[0], bounds[1]);
             }
-            // PerformanceCounter counter = OS_StartCounter();
-            // Lane8U32::StoreU(faceIDQueue + count, MaskCompress(mask, faceIDs));
-            // test += OS_GetMilliseconds(counter);
         }
         // printf("test: %fms\n", test);
         // for (; i < range.End(); i++)
@@ -625,7 +676,7 @@ struct HeuristicSOASplitBinning
         //     count += (min <= split.bestPos && max > split.bestPos);
         // }
     }
-};
+}; // namespace rt
 
 // NOTE: this is embree's implementation of split binning for SBVH
 template <i32 numBins = 16>
@@ -858,7 +909,6 @@ Split SpatialSplitBest(const Bounds bounds[3][numBins],
             bestDim  = dim;
         }
     }
-    // f32 bestValue = splitPositions[bestDim][bestPos + 1];
     return Split(bestArea, bestPos, bestDim, 0.f); // bestValue);
 }
 

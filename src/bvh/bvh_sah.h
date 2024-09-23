@@ -770,7 +770,6 @@ __forceinline u32 ClipTriangle(const Vec3f &pA, const Vec3f &pB, const Vec3f &pC
     return 0;
 }
 
-
 __forceinline void Swap(const Lane8F32 &mask, Lane8F32 &a, Lane8F32 &b)
 {
     Lane8F32 temp = a;
@@ -902,212 +901,6 @@ struct Bounds8F32
     }
 };
 
-__forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8], const u32 dim,
-                                const f32 clipPos, ClipTrianglePayload *payload)
-{
-    Lane8F32 p;
-
-    // Bounds
-    Bounds8F32 left;
-    Bounds8F32 right;
-
-    Lane8F32 clip(clipPos);
-
-    // PerformanceCounter counter = OS_StartCounter();
-
-    Vec3f v0[8];
-    Vec3f v1[8];
-    Vec3f v2[8];
-
-    u32 v = LUTAxis[dim];
-    u32 w = LUTAxis[dim];
-
-    u32 faceIndexA = faceIndices[0];
-    u32 faceIndexB = faceIndices[1];
-    u32 faceIndexC = faceIndices[2];
-    u32 faceIndexD = faceIndices[3];
-
-    Lane4F32 v0a = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3]]));
-    Lane4F32 v1a = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3 + 1]]));
-    Lane4F32 v2a = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3 + 2]]));
-
-    Lane4F32 v0b = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexB * 3]]));
-    Lane4F32 v1b = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexB * 3 + 1]]));
-    Lane4F32 v2b = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexB * 3 + 2]]));
-
-    Lane4F32 v0c = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexC * 3]]));
-    Lane4F32 v1c = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexC * 3 + 1]]));
-    Lane4F32 v2c = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexC * 3 + 2]]));
-
-    Lane4F32 v0d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3]]));
-    Lane4F32 v1d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 1]]));
-    Lane4F32 v2d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 2]]));
-
-    Vec3lf4 p0;
-    Vec3lf4 p1;
-    Vec3lf4 p2;
-
-    Transpose4x3(v0a, v0b, v0c, v0d, p0.x, p0.y, p0.z);
-    Transpose4x3(v1a, v1b, v1c, v1d, p1.x, p1.y, p1.z);
-    Transpose4x3(v2a, v2b, v2c, v2d, p2.x, p2.y, p2.z);
-
-    faceIndexA = faceIndices[4];
-    faceIndexB = faceIndices[5];
-    faceIndexC = faceIndices[6];
-    faceIndexD = faceIndices[7];
-    v0a        = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3]]));
-    v1a        = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3 + 1]]));
-    v2a        = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3 + 2]]));
-
-    v0b = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexB * 3]]));
-    v1b = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexB * 3 + 1]]));
-    v2b = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexB * 3 + 2]]));
-
-    v0c = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexC * 3]]));
-    v1c = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexC * 3 + 1]]));
-    v2c = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexC * 3 + 2]]));
-
-    v0d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3]]));
-    v1d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 1]]));
-    v2d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 2]]));
-
-    Vec3lf4 p3;
-    Vec3lf4 p4;
-    Vec3lf4 p5;
-
-    Transpose4x3(v0a, v0b, v0c, v0d, p3.x, p3.y, p3.z);
-    Transpose4x3(v1a, v1b, v1c, v1d, p4.x, p4.y, p4.z);
-    Transpose4x3(v2a, v2b, v2c, v2d, p5.x, p5.y, p5.z);
-
-    Lane8F32 v0u(p0[dim], p3[dim]);
-    Lane8F32 v1u(p1[dim], p4[dim]);
-    Lane8F32 v2u(p2[dim], p5[dim]);
-
-    Lane8F32 v0v(p0[v], p3[v]);
-    Lane8F32 v1v(p1[v], p4[v]);
-    Lane8F32 v2v(p2[v], p5[v]);
-
-    Lane8F32 v0w(p0[w], p3[w]);
-    Lane8F32 v1w(p1[w], p4[w]);
-    Lane8F32 v2w(p2[w], p5[w]);
-
-    // u64 time = OS_GetCounts(counter);
-    // threadLocalStatistics->misc += (u64)time;
-
-    // If the vertex is to the left of the split, add to the left bounds. Otherwise, add to the right bounds
-    Lane8F32 v0uClipMask = v0u < clip;
-    Lane8F32 v1uClipMask = v1u < clip;
-    Lane8F32 v2uClipMask = v2u < clip;
-
-    left.MaskExtendL(v0uClipMask, clip, v0u, v0v, v0w);
-    left.MaskExtendL(v1uClipMask, clip, v1u, v1v, v1w);
-    left.MaskExtendL(v2uClipMask, clip, v2u, v2v, v2w);
-
-    right.MaskExtendR(v0uClipMask, clip, v0u, v0v, v0w);
-    right.MaskExtendR(v1uClipMask, clip, v1u, v1v, v1w);
-    right.MaskExtendR(v2uClipMask, clip, v2u, v2v, v2w);
-
-    // If the edge is clipped, clip the vertex and add to both the left and right bounds
-    Lane8F32 edgeIsClippedMask0 = v0uClipMask ^ v1uClipMask;
-    Lane8F32 edgeIsClippedMask1 = v1uClipMask ^ v2uClipMask;
-    Lane8F32 edgeIsClippedMask2 = v0uClipMask ^ v2uClipMask;
-
-    // (plane - v0) / (v1 - v0)
-    // v01Clipped = t0 * (v1 - v0) + v0
-
-    Lane8F32 v1uMinusV0u = Select(v1u == v0u, Lane8F32(zero), Rcp(v1u - v0u));
-    Lane8F32 t0          = (clip - v0u) * v1uMinusV0u;
-    Lane8F32 v01ClippedV = FMA(t0, v1v - v0v, v0v);
-    Lane8F32 v01ClippedW = FMA(t0, v1w - v0w, v0w);
-
-    left.MaskExtendVW(edgeIsClippedMask0, v01ClippedV, v01ClippedW);
-    right.MaskExtendVW(edgeIsClippedMask0, v01ClippedV, v01ClippedW);
-
-    // t1 = (plane - v1) / (v2 - v1)
-    // v12Clipped = t1 * (v2 - v1) + v1
-    Lane8F32 v2uMinusV1u = Select(v2u == v1u, Lane8F32(zero), Rcp(v2u - v1u));
-    Lane8F32 t1          = (clip - v1u) * v2uMinusV1u;
-    Lane8F32 v12ClippedV = FMA(t1, v2v - v1v, v1v);
-    Lane8F32 v12ClippedW = FMA(t1, v2w - v1w, v1w);
-
-    left.MaskExtendVW(edgeIsClippedMask1, v12ClippedV, v12ClippedW);
-    right.MaskExtendVW(edgeIsClippedMask1, v12ClippedV, v12ClippedW);
-
-    // t2 = (plane - v2) / (v0 - v2)
-    // v20Clipped = t2 * (v0 - v2) + v2
-    Lane8F32 v0uMinusV2u = Select(v0u == v2u, Lane8F32(zero), Rcp(v0u - v2u));
-    Lane8F32 t2          = (clip - v2u) * v0uMinusV2u;
-    Lane8F32 v20ClippedV = FMA(t2, v0v - v2v, v2v);
-    Lane8F32 v20ClippedW = FMA(t2, v0w - v2w, v2w);
-
-    left.MaskExtendVW(edgeIsClippedMask2, v20ClippedV, v20ClippedW);
-    right.MaskExtendVW(edgeIsClippedMask2, v20ClippedV, v20ClippedW);
-
-    // Tranpose bounds 6x8 to PrimRef format
-
-    const Lane8F32 negInf(neg_inf);
-    const Lane8F32 posInf(pos_inf);
-
-    Transpose8x8(left.minU, left.minV, left.minW, posInf, left.maxU, left.maxV, left.maxW, posInf,
-                 payload->leftRef0, payload->leftRef1, payload->leftRef2, payload->leftRef3,
-                 payload->leftRef4, payload->leftRef5, payload->leftRef6, payload->leftRef7);
-
-    Transpose8x8(right.minU, right.minV, right.minW, posInf, right.maxU, right.maxV, right.maxW, posInf,
-                 payload->rightRef0, payload->rightRef1, payload->rightRef2, payload->rightRef3,
-                 payload->rightRef4, payload->rightRef5, payload->rightRef6, payload->rightRef7);
-}
-
-__forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8], const u32 dim,
-                                const f32 clipPos, Bounds &outLeft, Bounds &outRight)
-{
-    ClipTrianglePayload payload;
-    ClipTriangle(mesh, faceIndices, dim, clipPos, &payload);
-
-    Lane8F32 l = Max(
-        Max(Max(Permute(payload.leftRef0 ^ signFlipMask, Swizzle[dim]), Permute(payload.leftRef1 ^ signFlipMask, Swizzle[dim])),
-            Max(Permute(payload.leftRef2 ^ signFlipMask, Swizzle[dim]), Permute(payload.leftRef3 ^ signFlipMask, Swizzle[dim]))),
-        Max(
-            Max(Permute(payload.leftRef4 ^ signFlipMask, Swizzle[dim]), Permute(payload.leftRef5 ^ signFlipMask, Swizzle[dim])),
-            Max(Permute(payload.leftRef6 ^ signFlipMask, Swizzle[dim]), Permute(payload.leftRef7 ^ signFlipMask, Swizzle[dim]))));
-    l ^= signFlipMask;
-    outLeft.minP = l.lo;
-    outLeft.maxP = l.hi;
-    Lane8F32 r   = Max(
-        Max(Max(Permute(payload.rightRef0 ^ signFlipMask, Swizzle[dim]), Permute(payload.rightRef1 ^ signFlipMask, Swizzle[dim])),
-              Max(Permute(payload.rightRef2 ^ signFlipMask, Swizzle[dim]), Permute(payload.rightRef3 ^ signFlipMask, Swizzle[dim]))),
-        Max(
-            Max(Permute(payload.rightRef4 ^ signFlipMask, Swizzle[dim]), Permute(payload.rightRef5 ^ signFlipMask, Swizzle[dim])),
-            Max(Permute(payload.rightRef6 ^ signFlipMask, Swizzle[dim]), Permute(payload.rightRef7 ^ signFlipMask, Swizzle[dim]))));
-    r ^= signFlipMask;
-    outRight.minP = r.lo;
-    outRight.maxP = r.hi;
-}
-
-__forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[8], const PrimRef *refs,
-                                const u32 dim, const f32 clipPos, PrimRef *outLeft, PrimRef *outRight)
-{
-    ClipTrianglePayload payload;
-    ClipTriangle(mesh, faceIndices, dim, clipPos, &payload);
-
-    outLeft[0].m256 = Min(Permute(payload.leftRef0 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[0]].m256);
-    outLeft[1].m256 = Min(Permute(payload.leftRef1 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[1]].m256);
-    outLeft[2].m256 = Min(Permute(payload.leftRef2 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[2]].m256);
-    outLeft[3].m256 = Min(Permute(payload.leftRef3 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[3]].m256);
-    outLeft[4].m256 = Min(Permute(payload.leftRef4 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[4]].m256);
-    outLeft[5].m256 = Min(Permute(payload.leftRef5 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[5]].m256);
-    outLeft[6].m256 = Min(Permute(payload.leftRef6 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[6]].m256);
-    outLeft[7].m256 = Min(Permute(payload.leftRef7 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[7]].m256);
-
-    outRight[0].m256 = Min(Permute(payload.rightRef0 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[0]].m256);
-    outRight[1].m256 = Min(Permute(payload.rightRef1 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[1]].m256);
-    outRight[2].m256 = Min(Permute(payload.rightRef2 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[2]].m256);
-    outRight[3].m256 = Min(Permute(payload.rightRef3 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[3]].m256);
-    outRight[4].m256 = Min(Permute(payload.rightRef4 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[4]].m256);
-    outRight[5].m256 = Min(Permute(payload.rightRef5 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[5]].m256);
-    outRight[6].m256 = Min(Permute(payload.rightRef6 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[6]].m256);
-    outRight[7].m256 = Min(Permute(payload.rightRef7 ^ signFlipMask, Swizzle[dim]), refs[faceIndices[7]].m256);
-}
-
 struct ExtRange
 {
     PrimData *data;
@@ -1123,205 +916,124 @@ struct ExtRange
     __forceinline u32 TotalSize() const { return extEnd - start; }
 };
 
-template <i32 numBins>
-struct HeuristicSplitBinned
-{
-    // SBVH alpha parameter
-    f32 alpha;
-    u32 numSplits;
-    Bounds splitBins[3][numBins];
-
-    Lane4U32 entryCounts[numBins];
-    Lane4U32 exitCounts[numBins];
-
-    Lane4F32 minP;
-    Lane4F32 scale;
-    Lane4F32 invScale;
-
-    struct SpatialSplit
-    {
-        f32 bestSAH;
-        u32 bestDim;
-        f32 splitPos;
-        u32 leftCount;
-        u32 rightCount;
-    };
-
-    HeuristicSplitBinned(const Bounds &centroidBounds, f32 inAlpha = 1e-5)
-    {
-        alpha         = inAlpha;
-        minP          = centroidBounds.minP;
-        Lane4F32 diag = centroidBounds.maxP - minP;
-        scale         = Lane4F32((f32)numBins) / diag;
-        invScale      = diag / Lane4F32((f32)numBins);
-
-        for (u32 i = 0; i < numBins; i++)
-        {
-            entryCounts[i] = 0;
-            exitCounts[i]  = 0;
-        }
-    }
-
-    void Bin(TriangleMesh *mesh, PrimData *prims, u32 start, u32 count)
-    {
-        for (u32 i = start; i < start + count; i++)
-        {
-            PrimData *prim         = &prims[i];
-            Lane4U32 binIndicesMin = Clamp(Lane4U32(0), Lane4U32(numBins - 1), Flooru((prim->minP - minP) * scale));
-            Lane4U32 binIndicesMax = Clamp(Lane4U32(0), Lane4U32(numBins - 1), Flooru((prim->maxP - minP) * scale));
-
-            u32 faceIndex = prim->PrimID();
-            Vec3f &a      = mesh->p[mesh->indices[faceIndex * 3 + 0]];
-            Vec3f &b      = mesh->p[mesh->indices[faceIndex * 3 + 1]];
-            Vec3f &c      = mesh->p[mesh->indices[faceIndex * 3 + 2]];
-
-            for (u32 dim = 0; dim < 3; dim++)
-            {
-                u32 binIndexMin = binIndicesMin[dim];
-                u32 binIndexMax = binIndicesMax[dim];
-
-                Bounds bounds;
-
-                for (u32 bin = binIndexMin; bin <= binIndexMax; bin++)
-                {
-                    // TODO: check that this is actually branchless
-                    u32 invalid = ClipTriangle(a, b, c, dim,
-                                               (f32)binIndex * invScale + minP,
-                                               ((f32)binIndex + 1) * invScale + minP,
-                                               bounds);
-                    binIndexMin += (invalid & 1);
-                    binIndexMax -= (invalid & 2);
-                    splitBins[dim][bin].Extend(bounds);
-                }
-                entryCounts[binIndexMin][dim] += 1;
-                exitCounts[binIndexMax][dim] += 1;
-            }
-        }
-    }
-
-    SpatialSplit Best(u32 blockShift)
-    {
-    }
-
-    // void Split(Arena **arenas, TriangleMesh *mesh, ExtRange range, SpatialSplit split)
-    // {
-    //     TempArena temp                     = ScratchStart(0, 0);
-    //     const u32 SPATIAL_SPLIT_GROUP_SIZE = 4 * 1024;
-    //     u32 numJobs                        = (range.count + SPATIAL_SPLIT_GROUP_SIZE - 1) / SPATIAL_SPLIT_GROUP_SIZE;
-    //
-    //     jobsystem::Counter counter = {};
-    //     const u32 dim              = split.bestDim;
-    //     const u32 splitPos         = split.splitPos;
-    //
-    //     u32 threadIndex   = GetThreadIndex();
-    //     PrimRef *out      = range.data + range.End();
-    //     PrimRef *newAlloc = 0;
-    //
-    //     u32 splitStart = range.End() + threadIndex * allotment;
-    //     u32 splitCount = 0;
-    //
-    //     u32 faceIndices[8];
-    //     u32 count      = 0;
-    //     u32 totalCount = 0;
-    //
-    //     for (u32 i = range.start; i < range.End(); i++)
-    //     {
-    //         PrimData *prim     = &data[i];
-    //         faceIndices[count] = prim->PrimID();
-    //         u32 binIndexMin    = (Clamp(Lane4U32(0), Lane4U32(numBins - 1), Flooru((prim->minP - minP) * scale)))[split.bestDim];
-    //         u32 binIndexMax    = (Clamp(Lane4U32(0), Lane4U32(numBins - 1), Flooru((prim->maxP - minP) * scale)))[split.bestDim];
-    //         count += (binIndexMin < split.splitPos && binIndexMax >= split.splitPos);
-    //
-    //         if (count == 8)
-    //         {
-    //             PrimRef left[8];
-    //             PrimRef right[8];
-    //             if (splitCount + 8 > range.ExtSize())
-    //             {
-    //                 Assert(out == range.data + range.End());
-    //                 // TODO: this extra allocation may be too much
-    //                 PrimRef *oldOut = out;
-    //                 out             = PushArray(arenas[threadIndex], PrimRef, range.TotalSize());
-    //
-    //                 for (u32 splitIndex = 0; splitIndex < splitCount; splitIndex++)
-    //                 {
-    //                     out[splitIndex] = std::move(oldOut[splitIndex]);
-    //                 }
-    //                 newAlloc   = out;
-    //                 out        = out + splitCount;
-    //                 splitCount = 0;
-    //             }
-    //             ClipTriangle(mesh, faceIndices, refs, dim, splitPos, left, right);
-    //             for (u32 i = 0; i < 8; i++)
-    //             {
-    //                 u32 faceIndex         = faceIndices[i];
-    //                 range.data[faceIndex] = left[i];
-    //                 out[splitCount++]     = right[i];
-    //             }
-    //             count = 0;
-    //             totalCount += 8;
-    //         }
-    //     }
-    //     // Compute remaining unclipped triangles
-    //     for (u32 i = 0; i < count; i++)
-    //     {
-    //     }
-    //
-    //     if (!newAlloc)
-    //     {
-    //         PartitionResult result;
-    //         PartitionParallel(, range.data, ?, range.start, range.end, )
-    //     }
-    //     else
-    //     {
-    //         // Partition the two regions
-    //         Lane8F32 splitPos = split.splitPos;
-    //
-    //         PrimRef *storeRefs[2];
-    //         storeRefs[0] = range.data;
-    //         storeRefs[1] = out;
-    //         for (u32 i = range.start; i < range.End(); i += 8)
-    //         {
-    //             // partition 8 at a time
-    //             Lane8F32 ctrl(split.bestDim);
-    //             Lane8F32 box0 = Permute(range.data[i], ctrl);
-    //             Lane8F32 box1 = Permute(range.data[i + 1], ctrl);
-    //             Lane8F32 box2 = Permute(range.data[i + 2], ctrl);
-    //             Lane8F32 box3 = Permute(range.data[i + 3], ctrl);
-    //             Lane8F32 box4 = Permute(range.data[i + 4], ctrl);
-    //             Lane8F32 box5 = Permute(range.data[i + 5], ctrl);
-    //             Lane8F32 box6 = Permute(range.data[i + 6], ctrl);
-    //             Lane8F32 box7 = Permute(range.data[i + 7], ctrl);
-    //
-    //             Lane8F32 box01   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box0, box1);
-    //             Lane8F32 box23   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box2, box3);
-    //             Lane8F32 box0123 = Blend<0, 0, 1, 1, 0, 0, 1, 1>(box01, box23);
-    //
-    //             Lane8F32 box45   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box4, box5);
-    //             Lane8F32 box67   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box6, box7);
-    //             Lane8F32 box4567 = Blend<0, 0, 1, 1, 0, 0, 1, 1>(box45, box67);
-    //
-    //             Lane8F32 boxMin = Shuffle4<0, 2>(box0123, box4567);
-    //             Lane8F32 boxMax = Shuffle4<1, 3>(box0123, box4567);
-    //
-    //             // NOTE: boxMin is the negative min
-    //             Lane8F32 centroid = boxMax - boxMin;
-    //             Lane8F32 mask     = (centroid - minP) * scale < splitPos;
-    //
-    //             u32 maskBits = Movemask(mask);
-    //
-    //             storeRefs[maskBits & 1]++   = range.data[i];
-    //             storeRefs[maskBits & 2]++   = range.data[i + 1];
-    //             storeRefs[maskBits & 4]++   = range.data[i + 2];
-    //             storeRefs[maskBits & 8]++   = range.data[i + 3];
-    //             storeRefs[maskBits & 16]++  = range.data[i + 4];
-    //             storeRefs[maskBits & 32]++  = range.data[i + 5];
-    //             storeRefs[maskBits & 64]++  = range.data[i + 6];
-    //             storeRefs[maskBits & 128]++ = range.data[i + 7];
-    //         }
-    //     }
-    // }
-};
+// void Split(Arena **arenas, TriangleMesh *mesh, ExtRange range, SpatialSplit split)
+// {
+//     TempArena temp                     = ScratchStart(0, 0);
+//     const u32 SPATIAL_SPLIT_GROUP_SIZE = 4 * 1024;
+//     u32 numJobs                        = (range.count + SPATIAL_SPLIT_GROUP_SIZE - 1) / SPATIAL_SPLIT_GROUP_SIZE;
+//
+//     jobsystem::Counter counter = {};
+//     const u32 dim              = split.bestDim;
+//     const u32 splitPos         = split.splitPos;
+//
+//     u32 threadIndex   = GetThreadIndex();
+//     PrimRef *out      = range.data + range.End();
+//     PrimRef *newAlloc = 0;
+//
+//     u32 splitStart = range.End() + threadIndex * allotment;
+//     u32 splitCount = 0;
+//
+//     u32 faceIndices[8];
+//     u32 count      = 0;
+//     u32 totalCount = 0;
+//
+//     for (u32 i = range.start; i < range.End(); i++)
+//     {
+//         PrimData *prim     = &data[i];
+//         faceIndices[count] = prim->PrimID();
+//         u32 binIndexMin    = (Clamp(Lane4U32(0), Lane4U32(numBins - 1), Flooru((prim->minP - minP) * scale)))[split.bestDim];
+//         u32 binIndexMax    = (Clamp(Lane4U32(0), Lane4U32(numBins - 1), Flooru((prim->maxP - minP) * scale)))[split.bestDim];
+//         count += (binIndexMin < split.splitPos && binIndexMax >= split.splitPos);
+//
+//         if (count == 8)
+//         {
+//             PrimRef left[8];
+//             PrimRef right[8];
+//             if (splitCount + 8 > range.ExtSize())
+//             {
+//                 Assert(out == range.data + range.End());
+//                 // TODO: this extra allocation may be too much
+//                 PrimRef *oldOut = out;
+//                 out             = PushArray(arenas[threadIndex], PrimRef, range.TotalSize());
+//
+//                 for (u32 splitIndex = 0; splitIndex < splitCount; splitIndex++)
+//                 {
+//                     out[splitIndex] = std::move(oldOut[splitIndex]);
+//                 }
+//                 newAlloc   = out;
+//                 out        = out + splitCount;
+//                 splitCount = 0;
+//             }
+//             ClipTriangle(mesh, faceIndices, refs, dim, splitPos, left, right);
+//             for (u32 i = 0; i < 8; i++)
+//             {
+//                 u32 faceIndex         = faceIndices[i];
+//                 range.data[faceIndex] = left[i];
+//                 out[splitCount++]     = right[i];
+//             }
+//             count = 0;
+//             totalCount += 8;
+//         }
+//     }
+//     // Compute remaining unclipped triangles
+//     for (u32 i = 0; i < count; i++)
+//     {
+//     }
+//
+//     if (!newAlloc)
+//     {
+//         PartitionResult result;
+//         PartitionParallel(, range.data, ?, range.start, range.end, )
+//     }
+//     else
+//     {
+//         // Partition the two regions
+//         Lane8F32 splitPos = split.splitPos;
+//
+//         PrimRef *storeRefs[2];
+//         storeRefs[0] = range.data;
+//         storeRefs[1] = out;
+//         for (u32 i = range.start; i < range.End(); i += 8)
+//         {
+//             // partition 8 at a time
+//             Lane8F32 ctrl(split.bestDim);
+//             Lane8F32 box0 = Permute(range.data[i], ctrl);
+//             Lane8F32 box1 = Permute(range.data[i + 1], ctrl);
+//             Lane8F32 box2 = Permute(range.data[i + 2], ctrl);
+//             Lane8F32 box3 = Permute(range.data[i + 3], ctrl);
+//             Lane8F32 box4 = Permute(range.data[i + 4], ctrl);
+//             Lane8F32 box5 = Permute(range.data[i + 5], ctrl);
+//             Lane8F32 box6 = Permute(range.data[i + 6], ctrl);
+//             Lane8F32 box7 = Permute(range.data[i + 7], ctrl);
+//
+//             Lane8F32 box01   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box0, box1);
+//             Lane8F32 box23   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box2, box3);
+//             Lane8F32 box0123 = Blend<0, 0, 1, 1, 0, 0, 1, 1>(box01, box23);
+//
+//             Lane8F32 box45   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box4, box5);
+//             Lane8F32 box67   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box6, box7);
+//             Lane8F32 box4567 = Blend<0, 0, 1, 1, 0, 0, 1, 1>(box45, box67);
+//
+//             Lane8F32 boxMin = Shuffle4<0, 2>(box0123, box4567);
+//             Lane8F32 boxMax = Shuffle4<1, 3>(box0123, box4567);
+//
+//             // NOTE: boxMin is the negative min
+//             Lane8F32 centroid = boxMax - boxMin;
+//             Lane8F32 mask     = (centroid - minP) * scale < splitPos;
+//
+//             u32 maskBits = Movemask(mask);
+//
+//             storeRefs[maskBits & 1]++   = range.data[i];
+//             storeRefs[maskBits & 2]++   = range.data[i + 1];
+//             storeRefs[maskBits & 4]++   = range.data[i + 2];
+//             storeRefs[maskBits & 8]++   = range.data[i + 3];
+//             storeRefs[maskBits & 16]++  = range.data[i + 4];
+//             storeRefs[maskBits & 32]++  = range.data[i + 5];
+//             storeRefs[maskBits & 64]++  = range.data[i + 6];
+//             storeRefs[maskBits & 128]++ = range.data[i + 7];
+//         }
+//     }
+// }
 
 template <typename T>
 void PartitionSerial(Split split, PrimData *prims, T *data, u32 start, u32 end, PartitionResult *result)

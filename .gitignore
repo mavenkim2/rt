@@ -43,3 +43,5 @@ build.bat*
 *.exr
 data/
 .vs/
+*.exp
+*.profraw
