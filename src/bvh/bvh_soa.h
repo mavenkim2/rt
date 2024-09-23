@@ -21,6 +21,20 @@ struct PrimDataSOA
     };
 };
 
+struct ExtRangeSOA
+{
+    PrimDataSOA *data;
+    u32 start;
+    u32 count;
+    u32 extEnd;
+
+    __forceinline ExtRangeSOA(PrimDataSOA *data, u32 start, u32 count, u32 extEnd)
+        : data(data), start(start), count(count), extEnd(extEnd) {}
+    __forceinline u32 End() const { return start + count; }
+    __forceinline u32 ExtSize() const { return extEnd - (start + count); }
+    __forceinline u32 TotalSize() const { return extEnd - start; }
+};
+
 // ways of doing this
 // what I have now: data is SOA. find the bin index min and max in each dimension. increment the count of the bin and place the
 // face index in the bin. when the count reaches the max, start working on the 8 triangle/plane test. at the end,
@@ -180,6 +194,7 @@ struct Triangle8
 };
 
 // NOTE: l contains bounds to intersect against
+template <bool isPartition = false>
 __forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
                                 Bounds8 *l, Bounds8 *r)
 {
@@ -266,12 +281,21 @@ __forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const T
         Bounds8 lBounds8(lOut[i]);
         Bounds8 rBounds8(rOut[i]);
 
-        lBounds8.Intersect(l[i]);
-        rBounds8.Intersect(l[i]);
+        if constexpr (!isPartition)
+        {
+            lBounds8.Intersect(l[i]);
+            rBounds8.Intersect(l[i]);
+        }
 
         l[i] = lBounds8;
         r[i] = rBounds8;
     }
+}
+
+__forceinline void ClipTrianglePartition(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
+                                         Bounds8 *l, Bounds8 *r)
+{
+    ClipTriangle<true>(mesh, dim, tri, splitPos, l, r);
 }
 
 __forceinline void ClipTriangleTest(const TriangleMesh *mesh, const u32 faceIndices[8], const u32 dim,
@@ -768,48 +792,112 @@ struct HeuristicSOASplitBinning
         }
     }
 
-    void Split(Arena **arenas, TriangleMesh *mesh, ExtRange range, Split split)
+    void Split(Arena *arena, TriangleMesh *mesh, ExtRangeSOA range, Split split)
     {
-        TempArena temp = ScratchStart(0, 0);
         // partitioning
         u32 dim                = split.bestDim;
-        f32 *minStream         = range.data.arr[dim];
-        f32 *maxStream         = range.data.arr[dim + 4];
+        f32 *minStream         = range.data->arr[dim];
+        f32 *maxStream         = range.data->arr[dim + 4];
         u32 alignedCount       = range.count - range.count % LANE_WIDTH;
         Lane8F32 invScaleArr[] = {invScaleX, invScaleY, invScaleZ};
         Lane8F32 invScaleD     = invScaleArr[dim];
         Lane8F32 baseArr[]     = {baseX, baseY, baseZ};
         Lane8F32 baseD         = baseArr[dim];
 
-        // TODO: this could be problematic
-        u32 *faceIDs = PushArray(temp.arena, u32, range.count);
-        u32 count    = 0;
+        u32 count = 0;
 
+        // u32 faceIDQueue[16];
+        u32 refIDQueue[16];
         // mask compress
-        u32 i = range.start;
+        Bounds8 bounds[2][8];
+
+        u32 splitCount      = 0;
+        u32 totalSplitCount = 0;
+        u32 splitBegin      = range.End();
+        u32 splitMax        = range.ExtSize();
+        PrimDataSOA out;
+        out.minX    = range.data->minX + splitBegin;
+        out.minY    = range.data->minY + splitBegin;
+        out.minZ    = range.data->minZ + splitBegin;
+        out.geomIDs = range.data->geomIDs + splitBegin;
+        out.maxX    = range.data->maxX + splitBegin;
+        out.maxY    = range.data->maxY + splitBegin;
+        out.maxZ    = range.data->maxZ + splitBegin;
+        out.primIDs = range.data->primIDs + splitBegin;
+        f32 test    = 0.f;
         for (u32 i = range.start; i < range.start + alignedCount; i += LANE_WIDTH)
         {
-            Lane8F32 min       = Lane8F32::Load(minStream + i);
-            Lane8F32 max       = Lane8F32::Load(maxStream + i);
-            Lane8U32 faceIDs   = Lane8U32::Load(range.data.primIDs + i);
-            Lane8F32 splitMask = (min <= split.bestValue && max > split.bestValue);
+            Lane8F32 min = Lane8F32::LoadU(minStream + i);
+            Lane8F32 max = Lane8F32::LoadU(maxStream + i);
+            // Lane8U32 faceIDs   = Lane8U32::LoadU(range.data->primIDs + i);
+            Lane8U32 refIDs    = Lane8U32::Step(i);
+            Lane8F32 splitMask = (min <= split.bestValue & max > split.bestValue);
             u32 mask           = Movemask(splitMask);
-            Lane8U32::StoreU(MaskCompress(mask, faceIDs));
+            Lane8U32::StoreU(refIDQueue + count, MaskCompress(mask, refIDs));
             count += PopCount(mask);
+
+            if (count >= LANE_WIDTH)
+            {
+                count -= LANE_WIDTH;
+                u32 faceIDQueue[8];
+                Lane8U32::Store((int *)faceIDQueue, _mm256_i32gather_epi32((int *)range.data->primIDs,
+                                                                           Lane8U32::LoadU(refIDQueue + count), 4));
+                // for (u32 refIDIndex = 0; refIDIndex < 8; refIDIndex++)
+                // {
+                //     faceIDQueue[refIDIndex] = range.data->primIDs[refIDQueue[refIDIndex + count]];
+                // }
+                splitCount += LANE_WIDTH;
+                totalSplitCount += LANE_WIDTH;
+                if (splitCount > splitMax)
+                {
+                    const u32 streamSize = u32(sizeof(u32) * range.count * GROW_AMOUNT);
+                    u8 *alloc            = PushArray(arena, u8, u32(streamSize * LANE_WIDTH));
+                    splitCount           = 8;
+                    out.minX             = (f32 *)(alloc + streamSize * 0);
+                    out.minY             = (f32 *)(alloc + streamSize * 1);
+                    out.minZ             = (f32 *)(alloc + streamSize * 2);
+                    out.geomIDs          = (u32 *)(alloc + streamSize * 3);
+                    out.maxX             = (f32 *)(alloc + streamSize * 4);
+                    out.maxY             = (f32 *)(alloc + streamSize * 5);
+                    out.maxZ             = (f32 *)(alloc + streamSize * 6);
+                    out.primIDs          = (u32 *)(alloc + streamSize * 7);
+                }
+                for (u32 queueIndex = 0; queueIndex < 8; queueIndex++)
+                {
+                    const u32 refID = refIDQueue[count + queueIndex];
+                    // const u32 refID = faceIDQueue[count + queueIndex];
+
+                    range.data->minX[refID] = -bounds[0][queueIndex].v[0];
+                    range.data->minY[refID] = -bounds[0][queueIndex].v[1];
+                    range.data->minZ[refID] = -bounds[0][queueIndex].v[2];
+                    range.data->maxX[refID] = bounds[0][queueIndex].v[4];
+                    range.data->maxY[refID] = bounds[0][queueIndex].v[5];
+                    range.data->maxZ[refID] = bounds[0][queueIndex].v[6];
+
+                    out.minX[splitCount - 8 + queueIndex] = -bounds[1][queueIndex].v[0];
+                    out.minY[splitCount - 8 + queueIndex] = -bounds[1][queueIndex].v[1];
+                    out.minZ[splitCount - 8 + queueIndex] = -bounds[1][queueIndex].v[2];
+                    out.maxX[splitCount - 8 + queueIndex] = bounds[1][queueIndex].v[4];
+                    out.maxY[splitCount - 8 + queueIndex] = bounds[1][queueIndex].v[5];
+                    out.maxZ[splitCount - 8 + queueIndex] = bounds[1][queueIndex].v[6];
+                }
+
+                Triangle8 tri = Triangle8::Load(mesh, dim, faceIDQueue);
+                ClipTrianglePartition(mesh, dim, tri, split.bestValue, bounds[0], bounds[1]);
+            }
+            // PerformanceCounter counter = OS_StartCounter();
+            // Lane8U32::StoreU(faceIDQueue + count, MaskCompress(mask, faceIDs));
+            // test += OS_GetMilliseconds(counter);
         }
-        for (; i < range.End(); i++)
-        {
-            f32 min        = minStream[i];
-            f32 max        = maxStream[i];
-            u32 faceID     = range.data.primIDs[i];
-            faceIDs[count] = faceID;
-            count += (min <= split.bestPos && max > split.bestPos);
-        }
-        for (i = 0; i < count - count % LANE_WIDTH; i += LANE_WIDTH)
-        {
-            Triangle8 tri = Triangle8::Load(mesh, dim, faceIDs + i);
-            // ClipTriangle(mesh, dim, tri, split.bestValue,
-        }
+        // printf("test: %fms\n", test);
+        // for (; i < range.End(); i++)
+        // {
+        //     f32 min        = minStream[i];
+        //     f32 max        = maxStream[i];
+        //     u32 faceID     = range.data.primIDs[i];
+        //     faceIDs[count] = faceID;
+        //     count += (min <= split.bestPos && max > split.bestPos);
+        // }
     }
 
     void Bin(TriangleMesh *mesh, PrimDataSOA *soa, u32 start, u32 count)
@@ -1106,6 +1194,51 @@ struct TestSplitBinningBase
                 Add(dim, l, r, bin, rest);
             }
         }
+    }
+    __forceinline void Split(TriangleMesh *mesh, PrimData *prims, ExtRange range, Split split)
+    {
+        u32 dim                         = split.bestDim;
+        const size_t max_ext_range_size = range.ExtSize();
+        const size_t ext_range_start    = range.End();
+
+        /* atomic counter for number of primref splits */
+        // std::atomic<size_t> ext_elements;
+        // ext_elements.store(0);
+
+        const float fpos = (split.bestPos * invScale[dim]) + base[dim];
+
+        u32 ID = 0;
+
+        for (size_t i = range.start; i < range.End(); i++)
+        {
+            // const unsigned int splits = prims[i].GeomID();
+
+            const u32 bin0 = (u32)Floor((prims[i].minP[dim] - base[dim]) * scale[dim]);
+            const u32 bin1 = (u32)Floor((prims[i].maxP[dim] - base[dim]) * scale[dim]);
+            if (bin0 < split.bestPos && bin1 >= split.bestPos)
+            {
+                Bounds left, right;
+                Bounds primBounds;
+                primBounds.minP = prims[i].minP;
+                primBounds.maxP = prims[i].maxP;
+                ClipTriangleSimple(mesh, primBounds, prims[i].PrimID(), dim, fpos, left, right);
+
+                // no empty splits
+                // if (left.Empty() || right.Empty()) continue;
+
+                /* break if the number of subdivided elements are greater than the maximum allowed size */
+                if (ID++ >= max_ext_range_size) break;
+
+                /* only write within the correct bounds */
+                prims[i].minP                    = left.minP;
+                prims[i].maxP                    = left.maxP;
+                prims[ext_range_start + ID].minP = right.minP;
+                prims[ext_range_start + ID].maxP = right.maxP;
+            }
+        }
+
+        // const size_t numExtElements = min(max_ext_range_size, ext_elements.load());
+        // set._end += numExtElements;
     }
 };
 

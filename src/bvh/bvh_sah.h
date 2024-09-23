@@ -28,6 +28,7 @@
 namespace rt
 {
 
+static const f32 GROW_AMOUNT = 1.2f;
 const u32 PARALLEL_THRESHOLD = 4 * 1024;
 
 // TODO: make sure to pad to max lane width, set min and maxes to pos_inf and neg_inf and count to zero for padded entries
@@ -1100,27 +1101,18 @@ __forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 faceIndices[
 
 struct ExtRange
 {
-    PrimRef *data;
+    PrimData *data;
     u32 start;
     u32 count;  // number allocated
     u32 extEnd; // allocation end
+
+    ExtRange(PrimData *data, u32 start, u32 count, u32 extEnd)
+        : data(data), start(start), count(count), extEnd(extEnd) {}
 
     __forceinline u32 End() const { return start + count; }
     __forceinline u32 ExtSize() const { return extEnd - (start + count); }
     __forceinline u32 TotalSize() const { return extEnd - start; }
 };
-
-// struct ExtRangeSOA
-// {
-//     PrimDataSOA *data;
-//     u32 start;
-//     u32 count;
-//     u32 extEnd;
-//
-//     __forceinline u32 End() const { return start + count; }
-//     __forceinline u32 ExtSize() const { return extEnd - (start + count); }
-//     __forceinline u32 TotalSize() const { return extEnd - start; }
-// };
 
 template <i32 numBins>
 struct HeuristicSplitBinned
@@ -1202,124 +1194,124 @@ struct HeuristicSplitBinned
     {
     }
 
-    void Split(Arena **arenas, TriangleMesh *mesh, ExtRange range, SpatialSplit split)
-    {
-        TempArena temp                     = ScratchStart(0, 0);
-        const u32 SPATIAL_SPLIT_GROUP_SIZE = 4 * 1024;
-        u32 numJobs                        = (range.count + SPATIAL_SPLIT_GROUP_SIZE - 1) / SPATIAL_SPLIT_GROUP_SIZE;
-
-        jobsystem::Counter counter = {};
-        const u32 dim              = split.bestDim;
-        const u32 splitPos         = split.splitPos;
-
-        u32 threadIndex   = GetThreadIndex();
-        PrimRef *out      = range.data + range.End();
-        PrimRef *newAlloc = 0;
-
-        u32 splitStart = range.End() + threadIndex * allotment;
-        u32 splitCount = 0;
-
-        u32 faceIndices[8];
-        u32 count      = 0;
-        u32 totalCount = 0;
-
-        for (u32 i = range.start; i < range.End(); i++)
-        {
-            PrimData *prim     = &data[i];
-            faceIndices[count] = prim->PrimID();
-            u32 binIndexMin    = (Clamp(Lane4U32(0), Lane4U32(numBins - 1), Flooru((prim->minP - minP) * scale)))[split.bestDim];
-            u32 binIndexMax    = (Clamp(Lane4U32(0), Lane4U32(numBins - 1), Flooru((prim->maxP - minP) * scale)))[split.bestDim];
-            count += (binIndexMin < split.splitPos && binIndexMax >= split.splitPos);
-
-            if (count == 8)
-            {
-                PrimRef left[8];
-                PrimRef right[8];
-                if (splitCount + 8 > range.ExtSize())
-                {
-                    Assert(out == range.data + range.End());
-                    // TODO: this extra allocation may be too much
-                    PrimRef *oldOut = out;
-                    out             = PushArray(arenas[threadIndex], PrimRef, range.TotalSize());
-
-                    for (u32 splitIndex = 0; splitIndex < splitCount; splitIndex++)
-                    {
-                        out[splitIndex] = std::move(oldOut[splitIndex]);
-                    }
-                    newAlloc   = out;
-                    out        = out + splitCount;
-                    splitCount = 0;
-                }
-                ClipTriangle(mesh, faceIndices, refs, dim, splitPos, left, right);
-                for (u32 i = 0; i < 8; i++)
-                {
-                    u32 faceIndex         = faceIndices[i];
-                    range.data[faceIndex] = left[i];
-                    out[splitCount++]     = right[i];
-                }
-                count = 0;
-                totalCount += 8;
-            }
-        }
-        // Compute remaining unclipped triangles
-        for (u32 i = 0; i < count; i++)
-        {
-        }
-
-        if (!newAlloc)
-        {
-            PartitionResult result;
-            PartitionParallel(, range.data, ?, range.start, range.end, )
-        }
-        else
-        {
-            // Partition the two regions
-            Lane8F32 splitPos = split.splitPos;
-
-            PrimRef *storeRefs[2];
-            storeRefs[0] = range.data;
-            storeRefs[1] = out;
-            for (u32 i = range.start; i < range.End(); i += 8)
-            {
-                // partition 8 at a time
-                Lane8F32 ctrl(split.bestDim);
-                Lane8F32 box0 = Permute(range.data[i], ctrl);
-                Lane8F32 box1 = Permute(range.data[i + 1], ctrl);
-                Lane8F32 box2 = Permute(range.data[i + 2], ctrl);
-                Lane8F32 box3 = Permute(range.data[i + 3], ctrl);
-                Lane8F32 box4 = Permute(range.data[i + 4], ctrl);
-                Lane8F32 box5 = Permute(range.data[i + 5], ctrl);
-                Lane8F32 box6 = Permute(range.data[i + 6], ctrl);
-                Lane8F32 box7 = Permute(range.data[i + 7], ctrl);
-
-                Lane8F32 box01   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box0, box1);
-                Lane8F32 box23   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box2, box3);
-                Lane8F32 box0123 = Blend<0, 0, 1, 1, 0, 0, 1, 1>(box01, box23);
-
-                Lane8F32 box45   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box4, box5);
-                Lane8F32 box67   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box6, box7);
-                Lane8F32 box4567 = Blend<0, 0, 1, 1, 0, 0, 1, 1>(box45, box67);
-
-                Lane8F32 boxMin = Shuffle4<0, 2>(box0123, box4567);
-                Lane8F32 boxMax = Shuffle4<1, 3>(box0123, box4567);
-
-                // NOTE: boxMin is the negative min
-                Lane8F32 centroid = boxMax - boxMin;
-                Lane8F32 mask     = (centroid - minP) * scale < splitPos;
-
-                u32 maskBits = Movemask(mask);
-
-                storeRefs[maskBits & 1]++   = range.data[i];
-                storeRefs[maskBits & 2]++   = range.data[i + 1];
-                storeRefs[maskBits & 4]++   = range.data[i + 2];
-                storeRefs[maskBits & 8]++   = range.data[i + 3];
-                storeRefs[maskBits & 16]++  = range.data[i + 4];
-                storeRefs[maskBits & 32]++  = range.data[i + 5];
-                storeRefs[maskBits & 64]++  = range.data[i + 6];
-                storeRefs[maskBits & 128]++ = range.data[i + 7];
-            }
-        }
-    }
+    // void Split(Arena **arenas, TriangleMesh *mesh, ExtRange range, SpatialSplit split)
+    // {
+    //     TempArena temp                     = ScratchStart(0, 0);
+    //     const u32 SPATIAL_SPLIT_GROUP_SIZE = 4 * 1024;
+    //     u32 numJobs                        = (range.count + SPATIAL_SPLIT_GROUP_SIZE - 1) / SPATIAL_SPLIT_GROUP_SIZE;
+    //
+    //     jobsystem::Counter counter = {};
+    //     const u32 dim              = split.bestDim;
+    //     const u32 splitPos         = split.splitPos;
+    //
+    //     u32 threadIndex   = GetThreadIndex();
+    //     PrimRef *out      = range.data + range.End();
+    //     PrimRef *newAlloc = 0;
+    //
+    //     u32 splitStart = range.End() + threadIndex * allotment;
+    //     u32 splitCount = 0;
+    //
+    //     u32 faceIndices[8];
+    //     u32 count      = 0;
+    //     u32 totalCount = 0;
+    //
+    //     for (u32 i = range.start; i < range.End(); i++)
+    //     {
+    //         PrimData *prim     = &data[i];
+    //         faceIndices[count] = prim->PrimID();
+    //         u32 binIndexMin    = (Clamp(Lane4U32(0), Lane4U32(numBins - 1), Flooru((prim->minP - minP) * scale)))[split.bestDim];
+    //         u32 binIndexMax    = (Clamp(Lane4U32(0), Lane4U32(numBins - 1), Flooru((prim->maxP - minP) * scale)))[split.bestDim];
+    //         count += (binIndexMin < split.splitPos && binIndexMax >= split.splitPos);
+    //
+    //         if (count == 8)
+    //         {
+    //             PrimRef left[8];
+    //             PrimRef right[8];
+    //             if (splitCount + 8 > range.ExtSize())
+    //             {
+    //                 Assert(out == range.data + range.End());
+    //                 // TODO: this extra allocation may be too much
+    //                 PrimRef *oldOut = out;
+    //                 out             = PushArray(arenas[threadIndex], PrimRef, range.TotalSize());
+    //
+    //                 for (u32 splitIndex = 0; splitIndex < splitCount; splitIndex++)
+    //                 {
+    //                     out[splitIndex] = std::move(oldOut[splitIndex]);
+    //                 }
+    //                 newAlloc   = out;
+    //                 out        = out + splitCount;
+    //                 splitCount = 0;
+    //             }
+    //             ClipTriangle(mesh, faceIndices, refs, dim, splitPos, left, right);
+    //             for (u32 i = 0; i < 8; i++)
+    //             {
+    //                 u32 faceIndex         = faceIndices[i];
+    //                 range.data[faceIndex] = left[i];
+    //                 out[splitCount++]     = right[i];
+    //             }
+    //             count = 0;
+    //             totalCount += 8;
+    //         }
+    //     }
+    //     // Compute remaining unclipped triangles
+    //     for (u32 i = 0; i < count; i++)
+    //     {
+    //     }
+    //
+    //     if (!newAlloc)
+    //     {
+    //         PartitionResult result;
+    //         PartitionParallel(, range.data, ?, range.start, range.end, )
+    //     }
+    //     else
+    //     {
+    //         // Partition the two regions
+    //         Lane8F32 splitPos = split.splitPos;
+    //
+    //         PrimRef *storeRefs[2];
+    //         storeRefs[0] = range.data;
+    //         storeRefs[1] = out;
+    //         for (u32 i = range.start; i < range.End(); i += 8)
+    //         {
+    //             // partition 8 at a time
+    //             Lane8F32 ctrl(split.bestDim);
+    //             Lane8F32 box0 = Permute(range.data[i], ctrl);
+    //             Lane8F32 box1 = Permute(range.data[i + 1], ctrl);
+    //             Lane8F32 box2 = Permute(range.data[i + 2], ctrl);
+    //             Lane8F32 box3 = Permute(range.data[i + 3], ctrl);
+    //             Lane8F32 box4 = Permute(range.data[i + 4], ctrl);
+    //             Lane8F32 box5 = Permute(range.data[i + 5], ctrl);
+    //             Lane8F32 box6 = Permute(range.data[i + 6], ctrl);
+    //             Lane8F32 box7 = Permute(range.data[i + 7], ctrl);
+    //
+    //             Lane8F32 box01   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box0, box1);
+    //             Lane8F32 box23   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box2, box3);
+    //             Lane8F32 box0123 = Blend<0, 0, 1, 1, 0, 0, 1, 1>(box01, box23);
+    //
+    //             Lane8F32 box45   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box4, box5);
+    //             Lane8F32 box67   = Blend<0, 1, 0, 1, 0, 1, 0, 1>(box6, box7);
+    //             Lane8F32 box4567 = Blend<0, 0, 1, 1, 0, 0, 1, 1>(box45, box67);
+    //
+    //             Lane8F32 boxMin = Shuffle4<0, 2>(box0123, box4567);
+    //             Lane8F32 boxMax = Shuffle4<1, 3>(box0123, box4567);
+    //
+    //             // NOTE: boxMin is the negative min
+    //             Lane8F32 centroid = boxMax - boxMin;
+    //             Lane8F32 mask     = (centroid - minP) * scale < splitPos;
+    //
+    //             u32 maskBits = Movemask(mask);
+    //
+    //             storeRefs[maskBits & 1]++   = range.data[i];
+    //             storeRefs[maskBits & 2]++   = range.data[i + 1];
+    //             storeRefs[maskBits & 4]++   = range.data[i + 2];
+    //             storeRefs[maskBits & 8]++   = range.data[i + 3];
+    //             storeRefs[maskBits & 16]++  = range.data[i + 4];
+    //             storeRefs[maskBits & 32]++  = range.data[i + 5];
+    //             storeRefs[maskBits & 64]++  = range.data[i + 6];
+    //             storeRefs[maskBits & 128]++ = range.data[i + 7];
+    //         }
+    //     }
+    // }
 };
 
 template <typename T>

@@ -22,9 +22,17 @@ TriangleMesh *GenerateMesh(Arena *arena, u32 count, f32 min = -100.f, f32 max = 
     return mesh;
 }
 
-PrimData *GeneratePrimData(Arena *arena, TriangleMesh *mesh, u32 count, u32 numFaces, Bounds &bounds)
+PrimData *GeneratePrimData(Arena *arena, TriangleMesh *mesh, u32 count, u32 numFaces, Bounds &bounds, bool grow = false)
 {
-    PrimData *data = PushArray(arena, PrimData, numFaces);
+    PrimData *data;
+    if (grow)
+    {
+        data = PushArray(arena, PrimData, u32(numFaces * GROW_AMOUNT));
+    }
+    else
+    {
+        data = PushArray(arena, PrimData, numFaces);
+    }
     for (u32 i = 0; i < numFaces; i++)
     {
         u32 i0 = mesh->indices[i * 3];
@@ -148,14 +156,14 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
 
     const u32 numFaces = count / 3;
     PrimDataSOA soa;
-    soa.minX    = PushArray(arena, f32, numFaces);
-    soa.minY    = PushArray(arena, f32, numFaces);
-    soa.minZ    = PushArray(arena, f32, numFaces);
-    soa.geomIDs = PushArray(arena, u32, numFaces);
-    soa.maxX    = PushArray(arena, f32, numFaces);
-    soa.maxY    = PushArray(arena, f32, numFaces);
-    soa.maxZ    = PushArray(arena, f32, numFaces);
-    soa.primIDs = PushArray(arena, u32, numFaces);
+    soa.minX    = PushArray(arena, f32, u32(numFaces * GROW_AMOUNT));
+    soa.minY    = PushArray(arena, f32, u32(numFaces * GROW_AMOUNT));
+    soa.minZ    = PushArray(arena, f32, u32(numFaces * GROW_AMOUNT));
+    soa.geomIDs = PushArray(arena, u32, u32(numFaces * GROW_AMOUNT));
+    soa.maxX    = PushArray(arena, f32, u32(numFaces * GROW_AMOUNT));
+    soa.maxY    = PushArray(arena, f32, u32(numFaces * GROW_AMOUNT));
+    soa.maxZ    = PushArray(arena, f32, u32(numFaces * GROW_AMOUNT));
+    soa.primIDs = PushArray(arena, u32, u32(numFaces * GROW_AMOUNT));
 
     Bounds geomBounds;
 
@@ -194,14 +202,22 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     f32 time = OS_GetMilliseconds(start);
 
     Split split = SpatialSplitBest(heuristic.finalBounds, heuristic.entryCounts, heuristic.exitCounts);
-
-    printf("Time elapsed: %fms\n", time);
+    printf("Time elapsed binning: %fms\n", time);
     printf("Num faces: %u\n", numFaces);
     printf("Split value: %u\n", split.bestPos);
     printf("Split SAH: %f\n", split.bestSAH);
     printf("Split dim: %u\n", split.bestDim);
 
-    printf("Load time: %llums\n", threadLocalStatistics->misc);
+    printf("Misc: %llu\n\n", threadLocalStatistics->misc);
+
+    ExtRangeSOA range(&soa, 0, numFaces, u32(numFaces * GROW_AMOUNT));
+
+    start = OS_StartCounter();
+    heuristic.Split(arena, mesh, range, split);
+    time = OS_GetMilliseconds(start);
+
+    printf("Split time: %fms\n", time);
+
     // printf("Clip # calls: %llu\n", threadLocalStatistics->misc);
 }
 
@@ -282,7 +298,7 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
     const u32 numFaces = count / 3;
 
     Bounds geomBounds;
-    PrimData *data = GeneratePrimData(arena, mesh, count, numFaces, geomBounds);
+    PrimData *data = GeneratePrimData(arena, mesh, count, numFaces, geomBounds, true);
 
     TestSplitBinningBase<16> heuristic(geomBounds);
 
@@ -292,10 +308,16 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
 
     Split split = SpatialSplitBest(heuristic.bins, heuristic.numBegin, heuristic.numEnd);
 
-    printf("Time elapsed: %fms\n", time);
+    printf("Time elapsed binning: %fms\n", time);
     printf("Split value: %u\n", split.bestPos);
     printf("Split SAH: %f\n", split.bestSAH);
-    printf("Split dim: %u\n", split.bestDim);
+    printf("Split dim: %u\n\n", split.bestDim);
+
+    ExtRange range(data, 0, numFaces, u32(numFaces * GROW_AMOUNT));
+    start = OS_StartCounter();
+    heuristic.Split(mesh, data, range, split);
+    time = OS_GetMilliseconds(start);
+    printf("Time elapsed splitting: %fms\n", time);
 }
 
 } // namespace rt
