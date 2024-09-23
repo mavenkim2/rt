@@ -438,6 +438,43 @@ __forceinline void Transpose8x6(const Lane8F32 &inA, const Lane8F32 &inB, const 
     outF = Shuffle4<1, 3>(t2, t5);
 }
 
+__forceinline void Transpose6x8(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC,
+                                const Lane8F32 &inD, const Lane8F32 &inE, const Lane8F32 &inF,
+                                Lane8F32 &outA, Lane8F32 &outB, Lane8F32 &outC, Lane8F32 &outD,
+                                Lane8F32 &outE, Lane8F32 &outF, Lane8F32 &outG, Lane8F32 &outH)
+{
+    Lane8F32 a = UnpackLo(inA, inC);
+    Lane8F32 b = UnpackLo(inB, inC); // v v _ _ v v _ _
+                                     //
+    Lane8F32 c = UnpackHi(inA, inC);
+    Lane8F32 d = UnpackHi(inB, inC);
+
+    Lane8F32 t0 = UnpackLo(a, b);
+    Lane8F32 t1 = UnpackHi(a, b);
+    Lane8F32 t2 = UnpackLo(c, d);
+    Lane8F32 t3 = UnpackHi(c, d);
+
+    Lane8F32 e = UnpackLo(inD, inF);
+    Lane8F32 f = UnpackLo(inE, inF);
+
+    Lane8F32 g = UnpackHi(inD, inF);
+    Lane8F32 h = UnpackHi(inE, inF); // v v _ _ v v _ _
+
+    Lane8F32 t4 = UnpackLo(e, f);
+    Lane8F32 t5 = UnpackHi(e, f);
+    Lane8F32 t6 = UnpackLo(g, h);
+    Lane8F32 t7 = UnpackHi(g, h);
+
+    outA = Shuffle4<0, 2>(t0, t4);
+    outB = Shuffle4<0, 2>(t1, t5);
+    outC = Shuffle4<0, 2>(t2, t6);
+    outD = Shuffle4<0, 2>(t3, t7);
+    outE = Shuffle4<1, 3>(t0, t4);
+    outF = Shuffle4<1, 3>(t1, t5);
+    outG = Shuffle4<1, 3>(t2, t6);
+    outH = Shuffle4<1, 3>(t3, t7);
+}
+
 __forceinline Lane8U32 Flooru(Lane8F32 lane)
 {
     return _mm256_cvtps_epi32(Floor(lane));

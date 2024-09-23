@@ -35,17 +35,6 @@ struct ExtRangeSOA
     __forceinline u32 TotalSize() const { return extEnd - start; }
 };
 
-// ways of doing this
-// what I have now: data is SOA. find the bin index min and max in each dimension. increment the count of the bin and place the
-// face index in the bin. when the count reaches the max, start working on the 8 triangle/plane test. at the end,
-// process the remaining triangles and flush the bins.
-
-// 1. test this with AoS? (the 8-wide prim data version).
-//       slightly slower. however, it could still be worth using this if partitioning soa is a pain.
-// 2. testing triangle vs multiple planes (4 triangles vs 4 planes, 1 triangle vs multiple planes)
-
-// NOTE: stores -minX -minY -minZ _ maxX maxY maxZ, so union is one max inst, intersect is a min
-
 struct Bounds8
 {
     Lane8F32 v;
@@ -195,8 +184,8 @@ struct Triangle8
 
 // NOTE: l contains bounds to intersect against
 template <bool isPartition = false>
-__forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
-                                Bounds8 *l, Bounds8 *r)
+void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
+                  Bounds8 *l, Bounds8 *r)
 {
     threadLocalStatistics->misc += 1;
     static const u32 LUTX[] = {0, 2, 1};
@@ -271,9 +260,9 @@ __forceinline void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const T
     Lane8F32 *rightMaxY = (Lane8F32 *)(&right) + 3 + LUTY[dim];
     Lane8F32 *rightMaxZ = (Lane8F32 *)(&right) + 3 + LUTZ[dim];
 
-    Transpose8x8(*leftMinX, *leftMinY, *leftMinZ, posInf, *leftMaxX, *leftMaxY, *leftMaxZ, posInf,
+    Transpose6x8(*leftMinX, *leftMinY, *leftMinZ, *leftMaxX, *leftMaxY, *leftMaxZ,
                  lOut[0], lOut[1], lOut[2], lOut[3], lOut[4], lOut[5], lOut[6], lOut[7]);
-    Transpose8x8(*rightMinX, *rightMinY, *rightMinZ, posInf, *rightMaxX, *rightMaxY, *rightMaxZ, posInf,
+    Transpose6x8(*rightMinX, *rightMinY, *rightMinZ, *rightMaxX, *rightMaxY, *rightMaxZ,
                  rOut[0], rOut[1], rOut[2], rOut[3], rOut[4], rOut[5], rOut[6], rOut[7]);
 
     for (u32 i = 0; i < 8; i++)
@@ -355,7 +344,7 @@ struct HeuristicSOASplitBinning
         for (u32 i = 0; i < numBins; i++)
         {
             entryCounts[i] = 0;
-            exitCounts[i] = 0;
+            exitCounts[i]  = 0;
             for (u32 dim = 0; dim < 3; dim++)
             {
                 binCounts[dim][i] = 0;
@@ -386,8 +375,12 @@ struct HeuristicSOASplitBinning
         u32 i            = start;
         u32 alignedCount = count - count % LANE_WIDTH;
         f32 totalTime    = 0.f;
+
+        Lane8F32 lanes[8];
+
         for (; i < start + count; i += LANE_WIDTH)
         {
+            bool transposed  = false;
             u32 num          = Min(LANE_WIDTH, start + count - i);
             Lane8U32 faceIds = Lane8U32::LoadU(soa->primIDs + i);
 
@@ -431,10 +424,13 @@ struct HeuristicSOASplitBinning
                     // Fast path, no splitting
                     if (diff == 0)
                     {
-                        // PerformanceCounter counter = OS_StartCounter();
-                        Lane8F32 primBounds(prevMin[0][prevIndex], prevMin[1][prevIndex], prevMin[2][prevIndex], pos_inf,
-                                            prevMax[0][prevIndex], prevMax[1][prevIndex], prevMax[2][prevIndex], pos_inf);
-                        bins8[dim][indexMin].Extend(primBounds);
+                        if (!transposed)
+                        {
+                            Transpose6x8(prevMin[0], prevMin[1], prevMin[2], prevMax[0], prevMax[1], prevMax[2],
+                                         lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5], lanes[6], lanes[7]);
+                            transposed = true;
+                        }
+                        bins8[dim][indexMin].Extend(lanes[prevIndex]);
                         continue;
                     }
 
@@ -473,6 +469,7 @@ struct HeuristicSOASplitBinning
                 }
             }
         }
+        printf("test: %fms\n", totalTime);
 
         // Empty the bins
         Lane8F32 posInf(pos_inf);
