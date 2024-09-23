@@ -87,6 +87,13 @@ struct PrimRef
             f32 maxX, maxY, maxZ;
             u32 primID;
         };
+        struct
+        {
+            f32 min[3];
+            u32 geomID;
+            f32 max[3];
+            u32 primID;
+        };
     };
 };
 

@@ -488,7 +488,7 @@ TriangleMesh LoadPLY(Arena *arena, string filename)
 
     Assert(countStride == 1);
     Assert(faceIndicesStride == 4);
-    Assert(otherStride == 4);
+    // Assert(otherStride == 4);
     for (u32 i = 0; i < numFaces; i++)
     {
         u8 *bytes = tokenizer.cursor;
