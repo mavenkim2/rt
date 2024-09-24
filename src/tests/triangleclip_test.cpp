@@ -118,27 +118,27 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     PerformanceCounter start = OS_StartCounter();
     heuristic.BinDiffTest(mesh, &soa, 0, numFaces);
     f32 time = OS_GetMilliseconds(start);
-
-    Split split = SpatialSplitBest(heuristic.finalBounds, heuristic.entryCounts, heuristic.exitCounts);
     printf("Time elapsed binning: %fms\n", time);
+
+#if 1
+    Split split = SpatialSplitBest(heuristic.finalBounds, heuristic.entryCounts, heuristic.exitCounts);
     printf("Num faces: %u\n", numFaces);
     printf("Split value: %u\n", split.bestPos);
     printf("Split SAH: %f\n", split.bestSAH);
     printf("Split dim: %u\n", split.bestDim);
-
     printf("Misc: %llu\n\n", threadLocalStatistics->misc);
 
     f32 invScale    = (Lane8F32::LoadU((f32 *)(&heuristic.invScale[split.bestDim])))[0];
     f32 base        = (Lane8F32::LoadU((f32 *)(&heuristic.base[split.bestDim])))[0];
     split.bestValue = (split.bestPos * invScale) + base;
     printf("Split value: %f\n", split.bestValue);
-    ExtRangeSOA range(&soa, 0, numFaces, u32(numFaces * GROW_AMOUNT));
 
+    ExtRangeSOA range(&soa, 0, numFaces, u32(numFaces * GROW_AMOUNT));
     start = OS_StartCounter();
     heuristic.Split(arena, mesh, range, split);
     time = OS_GetMilliseconds(start);
-
     printf("Split time: %fms\n", time);
+#endif
 
     // printf("Clip # calls: %llu\n", threadLocalStatistics->misc);
 }

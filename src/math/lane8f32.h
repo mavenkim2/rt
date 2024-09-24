@@ -210,7 +210,8 @@ __forceinline Lane8F32 Select(const Lane8F32 &mask, const Lane8F32 &a, const Lan
 }
 
 __forceinline i32 Movemask(const Lane8F32 &a) { return _mm256_movemask_ps(a); }
-__forceinline bool All(const Lane8F32 &a) { return _mm256_movemask_ps(a) == 0xf; }
+
+__forceinline bool All(const Lane8F32 &a) { return _mm256_movemask_ps(a) == 0xff; }
 __forceinline bool Any(const Lane8F32 &a) { return _mm256_movemask_ps(a) != 0; }
 __forceinline bool None(const Lane8F32 &a) { return _mm256_movemask_ps(a) == 0; }
 

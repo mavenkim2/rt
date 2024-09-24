@@ -286,6 +286,13 @@ __forceinline u32 Bsf(u32 val)
     return result;
 }
 
+__forceinline u32 Bsr(u32 val)
+{
+    unsigned long result = 0;
+    _BitScanReverse(&result, val);
+    return result;
+}
+
 __forceinline constexpr u32 BsfConst(const u32 val)
 {
     if (val == 0) return 0;

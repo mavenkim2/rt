@@ -1043,7 +1043,7 @@ int main(int argc, char *argv[])
     threadLocalStatistics  = PushArray(arena, ThreadStatistics, numProcessors);
     threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, numProcessors);
 
-    const u32 count = 30000000;
+    const u32 count = 3000000;
     // TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
     // TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
     TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");

@@ -45,3 +45,6 @@ data/
 .vs/
 *.exp
 *.profraw
+*.txt
+*.asm
+

@@ -777,7 +777,6 @@ __forceinline void Swap(const Lane8F32 &mask, Lane8F32 &a, Lane8F32 &b)
     b             = _mm256_blendv_ps(b, temp, mask);
 }
 
-// TODO: this code doesnt' work
 __forceinline void ClipTriangleSimple(const TriangleMesh *mesh, const Bounds &bounds, const u32 faceIndex,
                                       const u32 dim, const f32 clipPos, Bounds &l, Bounds &r)
 {
@@ -818,19 +817,8 @@ __forceinline void ClipTriangleSimple(const TriangleMesh *mesh, const Bounds &bo
     // r      = intersect(right, bounds);
 }
 
-// NOTE: the bounding box will be invalid if the split plane is completely to the left/right of the triangle
-// (the min of the split dim will be greater than the max)
-
-struct ClipTrianglePayload
-{
-    Lane8F32 leftRef0, leftRef1, leftRef2, leftRef3, leftRef4, leftRef5, leftRef6, leftRef7;
-    Lane8F32 rightRef0, rightRef1, rightRef2, rightRef3, rightRef4, rightRef5, rightRef6, rightRef7;
-};
-
 static const Lane8F32 signFlipMask(-0.f, -0.f, -0.f, 0.f, 0.f, 0.f, 0.f, 0.f);
-static const u32 LUTAxis[]     = {1, 2, 0};
-static const __m256i Swizzle[] = {_mm256_setr_epi32(0, 1, 2, 3, 0, 1, 2, 3), _mm256_setr_epi32(2, 0, 1, 3, 2, 0, 1, 3),
-                                  _mm256_setr_epi32(1, 2, 0, 3, 1, 2, 0, 3)};
+static const u32 LUTAxis[] = {1, 2, 0};
 
 struct Bounds8F32
 {
