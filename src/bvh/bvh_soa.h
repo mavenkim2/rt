@@ -2,6 +2,12 @@
 #define BVH_SOA_H
 namespace rt
 {
+// TODO:
+// unfortunately, partitioning in place with SOA scales really really badly. possible solutions:
+// 1. AoS, one avx register for each prim data.
+// 2. AoSoA
+// 3. use an index buffer and partition that (would require gathers on the binning though, as well as more memory)
+
 struct PrimDataSOA
 {
     union
@@ -53,6 +59,14 @@ struct PrimDataSOA
         f32 tempMaxZ = std::move(maxZ[lIndex]);
         maxZ[lIndex] = std::move(maxZ[rIndex]);
         maxZ[rIndex] = std::move(tempMaxZ);
+
+        // u32 tempGeomID  = std::move(geomIDs[lIndex]);
+        // geomIDs[lIndex] = std::move(geomIDs[rIndex]);
+        // geomIDs[rIndex] = std::move(tempGeomID);
+
+        u32 tempPrimID  = std::move(primIDs[lIndex]);
+        primIDs[lIndex] = std::move(primIDs[rIndex]);
+        primIDs[rIndex] = std::move(tempPrimID);
     }
 };
 
@@ -788,21 +802,23 @@ struct alignas(32) HeuristicSOASplitBinning
             i32 l = (i32)range.start;
             i32 r = (i32)range.End() - 8;
 
+            Bounds8F32 left;
+            Bounds8F32 right;
+
             for (;;)
             {
                 while (l <= r && leftCount < LANE_WIDTH)
                 {
-                    Lane8F32 min         = Lane8F32::LoadU(minStream + l);
-                    Lane8F32 max         = Lane8F32::LoadU(maxStream + l);
-                    Lane8F32 centroid    = (max - min) * 0.5f;
-                    Lane8F32 notLeftMask = centroid >= split.bestValue;
-                    const u32 mask       = Movemask(notLeftMask);
-
-                    Lane8U32 refID = Lane8U32::Step(l);
-                    Lane8U32::StoreU(leftQueue + leftCount, MaskCompress(mask, refID));
-                    // Move l to first position where condition isn't met
+                    Lane8F32 lMin        = Lane8F32::LoadU(minStream + l);
+                    Lane8F32 lMax        = Lane8F32::LoadU(maxStream + l);
+                    Lane8F32 lCentroid   = (lMax - lMin) * 0.5f;
+                    Lane8F32 notLeftMask = lCentroid >= split.bestValue;
+                    u32 leftMask         = Movemask(notLeftMask);
+                    Lane8U32 leftRefId   = Lane8U32::Step(l);
+                    _mm_prefetch((char *)(&range.data->primIDs[leftQueue[0]]), _MM_HINT_T0);
+                    Lane8U32::StoreU(leftQueue + leftCount, MaskCompress(leftMask, leftRefId));
                     l += LANE_WIDTH;
-                    leftCount += PopCount(mask);
+                    leftCount += PopCount(leftMask);
                 }
                 while (l <= r && rightCount < LANE_WIDTH)
                 {
@@ -864,14 +880,6 @@ struct alignas(32) HeuristicSOASplitBinning
                     }
                     break;
                 }
-#if 0
-                u32 numSwaps = Min(leftCount, rightCount);
-                for (u32 i = 0; i < numSwaps; i++)
-                {
-                    range.data->Swap(leftQueue[--leftCount], rightQueue[--rightCount]);
-                }
-#endif
-                // branchless way
                 Assert(leftCount >= LANE_WIDTH);
                 Assert(rightCount >= LANE_WIDTH);
                 for (i = 0; i < LANE_WIDTH; i++)
@@ -989,7 +997,7 @@ struct TestSplitBinningBase
             }
         }
     }
-    __forceinline void Split(TriangleMesh *mesh, PrimData *prims, ExtRange range, Split split)
+    __forceinline u32 Split(TriangleMesh *mesh, PrimData *prims, ExtRange range, Split split)
     {
         u32 dim                         = split.bestDim;
         const size_t max_ext_range_size = range.ExtSize();
@@ -1030,6 +1038,38 @@ struct TestSplitBinningBase
                 prims[ext_range_start + ID].maxP = right.maxP;
             }
         }
+        u32 l = range.start;
+        u32 r = range.End() - 1;
+        for (;;)
+        {
+            b32 isLeft = true;
+            Lane4F32 lCentroid;
+            Lane4F32 rCentroid;
+            PrimData *lPrim;
+            PrimData *rPrim;
+            do
+            {
+                lPrim     = &prims[l];
+                lCentroid = (lPrim->minP + lPrim->maxP) * 0.5f;
+                if (lCentroid[split.bestDim] >= split.bestValue) break;
+                l++;
+            } while (l <= r);
+            do
+            {
+                rPrim     = &prims[r];
+                rCentroid = (rPrim->minP + rPrim->maxP) * 0.5f;
+                if (rCentroid[split.bestDim] < split.bestValue) break;
+                r--;
+            } while (l <= r);
+            if (l > r) break;
+
+            Swap(lPrim->minP, rPrim->minP);
+            Swap(lPrim->maxP, rPrim->maxP);
+
+            l++;
+            r--;
+        }
+        return l;
 
         // const size_t numExtElements = min(max_ext_range_size, ext_elements.load());
         // set._end += numExtElements;

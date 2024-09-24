@@ -871,12 +871,20 @@ struct Bounds8F32
     {
 
         minU = clip;
+        minV = MaskMin(mask, minV, v);
+        minW = MaskMin(mask, minW, w);
+
+        maxU = MaskMax(mask, maxU, u);
+        maxV = MaskMax(mask, maxV, v);
+        maxW = MaskMax(mask, maxW, w);
+#if 0
         minV = Select(mask, minV, Min(minV, v));
         minW = Select(mask, minW, Min(minW, w));
 
         maxU = Select(mask, maxU, Max(maxU, u));
         maxV = Select(mask, maxV, Max(maxV, v));
         maxW = Select(mask, maxW, Max(maxW, w));
+#endif
     }
 
     __forceinline void MaskExtendVW(const Lane8F32 &mask, const Lane8F32 &v, const Lane8F32 &w)

@@ -123,10 +123,10 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
 #if 1
     Split split = SpatialSplitBest(heuristic.finalBounds, heuristic.entryCounts, heuristic.exitCounts);
     printf("Num faces: %u\n", numFaces);
-    printf("Split value: %u\n", split.bestPos);
-    printf("Split SAH: %f\n", split.bestSAH);
+    printf("Split pos: %u\n", split.bestPos);
     printf("Split dim: %u\n", split.bestDim);
-    printf("Misc: %llu\n\n", threadLocalStatistics->misc);
+    printf("Split SAH: %f\n", split.bestSAH);
+    // printf("Misc: %llu\n\n", threadLocalStatistics->misc);
 
     f32 invScale    = (Lane8F32::LoadU((f32 *)(&heuristic.invScale[split.bestDim])))[0];
     f32 base        = (Lane8F32::LoadU((f32 *)(&heuristic.base[split.bestDim])))[0];
@@ -137,10 +137,10 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     start   = OS_StartCounter();
     u32 mid = heuristic.Split(arena, mesh, range, split);
     time    = OS_GetMilliseconds(start);
-    printf("Split time: %fms\n", time);
+    printf("Mid: %u\n", mid);
 #endif
 
-    printf("Mid: %u\n", mid);
+    printf("Split time: %fms\n", time);
     // Tests to ensure that the partitioning is valid
     u32 errors     = 0;
     f32 *minStream = ((f32 **)(&soa.minX))[split.bestDim];
@@ -199,15 +199,45 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
     Split split = SpatialSplitBest(heuristic.bins, heuristic.numBegin, heuristic.numEnd);
 
     printf("Time elapsed binning: %fms\n", time);
-    printf("Split value: %u\n", split.bestPos);
+    printf("Split pos: %u\n", split.bestPos);
+    printf("Split dim: %u\n", split.bestDim);
     printf("Split SAH: %f\n", split.bestSAH);
-    printf("Split dim: %u\n\n", split.bestDim);
 
+    split.bestValue = ((split.bestPos + 1) * heuristic.invScale[split.bestDim]) + heuristic.base[split.bestDim];
+    printf("Split value: %f\n", split.bestValue);
     ExtRange range(data, 0, numFaces, u32(numFaces * GROW_AMOUNT));
-    start = OS_StartCounter();
-    heuristic.Split(mesh, data, range, split);
-    time = OS_GetMilliseconds(start);
+    start   = OS_StartCounter();
+    u32 mid = heuristic.Split(mesh, data, range, split);
+    time    = OS_GetMilliseconds(start);
+    printf("Mid: %u\n", mid);
     printf("Time elapsed splitting: %fms\n", time);
+
+    // Correctness test
+    u32 errors = 0;
+    for (u32 i = 0; i < numFaces; i++)
+    {
+        PrimData *prim = &data[i];
+        f32 centroid   = (prim->maxP + prim->minP)[split.bestDim] * 0.5f;
+        if (i < mid)
+        {
+            u32 value = (u32)Floor((centroid - heuristic.base[split.bestDim]) * heuristic.scale[split.bestDim]);
+            if (centroid >= split.bestValue || value > split.bestPos)
+            {
+                // Assert(false);
+                errors += 1;
+            }
+        }
+        else
+        {
+            u32 value = (u32)Floor((centroid - heuristic.base[split.bestDim]) * heuristic.scale[split.bestDim]);
+            if (centroid < split.bestValue || value <= split.bestPos)
+            {
+                // Assert(false);
+                errors += 1;
+            }
+        }
+    }
+    printf("Num errors: %u\n", errors);
 }
 
 } // namespace rt
