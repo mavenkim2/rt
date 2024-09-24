@@ -502,7 +502,8 @@ __m256i MoveMaskToIndicesReverse(u32 moveMask)
     u8 *adr         = g_pack_left_table_u8x3 + moveMask * 3;
     __m256i indices = _mm256_set1_epi32(*reinterpret_cast<u32 *>(adr)); // lower 24 bits has our LUT
 
-    __m256i shufmask = _mm256_srlv_epi32(indices, _mm256_setr_epi32(21, 18, 15, 12, 9, 6, 3, 0));
+    indices          = _mm256_sub_epi32(_mm256_set1_epi32(0xffffffff), indices);
+    __m256i shufmask = _mm256_srlv_epi32(indices, _mm256_setr_epi32(0, 3, 6, 9, 12, 15, 18, 21));
     return shufmask;
 }
 

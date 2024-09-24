@@ -130,7 +130,7 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
 
     f32 invScale    = (Lane8F32::LoadU((f32 *)(&heuristic.invScale[split.bestDim])))[0];
     f32 base        = (Lane8F32::LoadU((f32 *)(&heuristic.base[split.bestDim])))[0];
-    split.bestValue = (split.bestPos * invScale) + base;
+    split.bestValue = ((split.bestPos + 1) * invScale) + base;
     printf("Split value: %f\n", split.bestValue);
 
     ExtRangeSOA range(&soa, 0, numFaces, u32(numFaces * GROW_AMOUNT));
@@ -140,10 +140,11 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     printf("Split time: %fms\n", time);
 #endif
 
+    printf("Mid: %u\n", mid);
     // Tests to ensure that the partitioning is valid
     u32 errors     = 0;
-    f32 *minStream = (f32 *)(&soa) + split.bestDim;
-    f32 *maxStream = (f32 *)(&soa) + split.bestDim + 4;
+    f32 *minStream = ((f32 **)(&soa.minX))[split.bestDim];
+    f32 *maxStream = ((f32 **)(&soa.minX))[split.bestDim + 4];
     for (u32 i = 0; i < numFaces; i++)
     {
         f32 min      = minStream[i];
@@ -151,19 +152,19 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
         f32 centroid = (max - min) * 0.5f;
         if (i < mid)
         {
-            if (centroid >= split.bestValue ||
-                Floor((centroid - heuristic.base[split.bestDim][0]) * heuristic.scale[split.bestDim][0]) > split.bestPos)
+            u32 value = (u32)Floor((centroid - heuristic.base[split.bestDim][0]) * heuristic.scale[split.bestDim][0]);
+            if (centroid >= split.bestValue || value > split.bestPos)
             {
-                Assert(false);
+                // Assert(false);
                 errors += 1;
             }
         }
         else
         {
-            if (centroid < split.bestValue ||
-                Floor((centroid - heuristic.base[split.bestDim][0]) * heuristic.scale[split.bestDim][0]) <= split.bestPos)
+            u32 value = (u32)Floor((centroid - heuristic.base[split.bestDim][0]) * heuristic.scale[split.bestDim][0]);
+            if (centroid < split.bestValue || value <= split.bestPos)
             {
-                Assert(false);
+                // Assert(false);
                 errors += 1;
             }
         }

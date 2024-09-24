@@ -57,6 +57,17 @@ struct LaneU32<8>
                                                                                 mask)));
 #endif
     }
+    static __forceinline void StoreU(const __m256 &mask, void *ptr, const Lane8U32 &l)
+    {
+#ifdef __AVX512VL__
+        _mm256_mask_storeu_epi32((__m256i)ptr, (__mmask8)Movemask(mask), l);
+#else
+
+        _mm256_storeu_si256((__m256i *)ptr, _mm256_castps_si256(_mm256_blendv_ps(_mm256_castsi256_ps(_mm256_load_si256((__m256i *)ptr)),
+                                                                                 _mm256_castsi256_ps(l),
+                                                                                 mask)));
+#endif
+    }
 
     static __forceinline Lane8U32 Step(u32 start)
     {
