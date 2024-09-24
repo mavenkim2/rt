@@ -615,7 +615,7 @@ struct alignas(32) HeuristicSOASplitBinning
         }
     }
 
-    void Split(Arena *arena, TriangleMesh *mesh, ExtRangeSOA range, Split split)
+    u32 Split(Arena *arena, TriangleMesh *mesh, ExtRangeSOA range, Split split)
     {
         // partitioning
         u32 dim          = split.bestDim;
@@ -703,6 +703,15 @@ struct alignas(32) HeuristicSOASplitBinning
                 }
             }
         }
+        // printf("test: %fms\n", test);
+        // for (; i < range.End(); i++)
+        // {
+        //     f32 min        = minStream[i];
+        //     f32 max        = maxStream[i];
+        //     u32 faceID     = range.data.primIDs[i];
+        //     faceIDs[count] = faceID;
+        //     count += (min <= split.bestPos && max > split.bestPos);
+        // }
         if (totalSplitCount > range.ExtSize())
         {
             // Partition by moving elements to the right of the split to the new allocation
@@ -723,6 +732,8 @@ struct alignas(32) HeuristicSOASplitBinning
                     counts[choice]++;
                 }
             }
+            Assert(false);
+            return counts[0];
         }
         else
         {
@@ -732,18 +743,20 @@ struct alignas(32) HeuristicSOASplitBinning
             // would slow that down)
             // in place (uses less memory, but partitioning may be slower)
             // Normal partitioning
-            u32 leftQueue[LANE_WIDTH * 2 - 1];
+            const u32 queueSize      = LANE_WIDTH * 2 - 1;
+            const u32 rightQueueSize = queueSize + LANE_WIDTH;
+            u32 leftQueue[queueSize];
             u32 leftCount = 0;
-            u32 rightQueue[LANE_WIDTH * 2 - 1];
+            u32 rightQueue[rightQueueSize];
             u32 rightCount = 0;
 
-            u32 l = range.start;
-            u32 r = range.End() - 8;
+            i32 l = (i32)range.start;
+            i32 r = (i32)range.End() - 8;
 
             // NOTE: there should be more lefts than rights, since primitives are split.
             for (;;)
             {
-                while (l < r && leftCount < LANE_WIDTH)
+                while (l <= r - (i32)LANE_WIDTH && leftCount < LANE_WIDTH)
                 {
                     Lane8F32 min         = Lane8F32::LoadU(minStream + l);
                     Lane8F32 max         = Lane8F32::LoadU(maxStream + l);
@@ -758,7 +771,7 @@ struct alignas(32) HeuristicSOASplitBinning
                     leftCount += PopCount(mask);
                 }
                 u32 rMask = 0xff;
-                while (l < r && rightCount < LANE_WIDTH)
+                while (l <= r - (i32)LANE_WIDTH && rightCount < LANE_WIDTH)
                 {
                     Lane8F32 min          = Lane8F32::LoadU(minStream + r);
                     Lane8F32 max          = Lane8F32::LoadU(maxStream + r);
@@ -767,11 +780,50 @@ struct alignas(32) HeuristicSOASplitBinning
                     const u32 mask        = Movemask(notRightMask);
 
                     Lane8U32 refID = Lane8U32::Step(l);
-                    Lane8U32::StoreU(rightQueue + rightCount, MaskCompress(mask, refID));
+                    // Store so that entries are sorted from smallest to largest
+                    Lane8U32::StoreU(rightQueue + queueSize - rightCount, MaskCompressRight(mask, refID));
                     r -= LANE_WIDTH;
                     rightCount += PopCount(mask);
                 }
-                if (l >= r) break;
+                if (l > r - (i32)LANE_WIDTH)
+                {
+                    u32 minCount = Min(leftCount, rightCount);
+                    for (u32 i = 0; i < minCount; i++)
+                    {
+                        range.data->Swap(leftQueue[i], rightQueue[rightQueueSize - 1 - i]);
+                    }
+                    if (leftCount != minCount)
+                    {
+                        l = leftQueue[minCount];
+                    }
+                    else
+                    {
+                        r = rightQueue[rightQueueSize - 1 - minCount];
+                    }
+                    for (;;)
+                    {
+                        while (l <= r)
+                        {
+                            f32 min      = minStream[l];
+                            f32 max      = minStream[l];
+                            f32 centroid = (max - min) * 0.5f;
+                            if (centroid >= split.bestValue) break;
+                            l++;
+                        }
+                        while (l <= r)
+                        {
+                            f32 min      = minStream[r];
+                            f32 max      = minStream[r];
+                            f32 centroid = (max - min) * 0.5f;
+                            if (centroid < split.bestValue) break;
+                            r--;
+                        }
+                        if (l > r) break;
+
+                        range.data->Swap(l, r);
+                    }
+                    break;
+                }
 #if 0
                 u32 numSwaps = Min(leftCount, rightCount);
                 for (u32 i = 0; i < numSwaps; i++)
@@ -782,25 +834,26 @@ struct alignas(32) HeuristicSOASplitBinning
                 // branchless way
                 Assert(leftCount >= LANE_WIDTH);
                 Assert(rightCount >= LANE_WIDTH);
+                Assert(leftCount == LANE_WIDTH || rightCount == LANE_WIDTH);
                 for (u32 i = 0; i < LANE_WIDTH; i++)
                 {
-                    range.data->Swap(leftQueue[leftCount - 1 - i], rightQueue[rightCount - 1 - i]);
+                    range.data->Swap(leftQueue[i], rightQueue[rightQueueSize - 1 - i]);
                 }
                 leftCount -= LANE_WIDTH;
                 rightCount -= LANE_WIDTH;
+                for (u32 i = 0; i < leftCount; i++)
+                {
+                    leftQueue[i] = leftQueue[i + LANE_WIDTH];
+                }
+                for (u32 i = 0; i < rightCount; i++)
+                {
+                    rightQueue[rightQueueSize - 1 - i] = rightQueue[rightQueueSize - 1 - i - LANE_WIDTH];
+                }
             }
+            return l;
         }
-        // printf("test: %fms\n", test);
-        // for (; i < range.End(); i++)
-        // {
-        //     f32 min        = minStream[i];
-        //     f32 max        = maxStream[i];
-        //     u32 faceID     = range.data.primIDs[i];
-        //     faceIDs[count] = faceID;
-        //     count += (min <= split.bestPos && max > split.bestPos);
-        // }
     }
-}; 
+};
 
 // NOTE: this is embree's implementation of split binning for SBVH
 template <i32 numBins = 16>

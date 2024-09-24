@@ -134,13 +134,41 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     printf("Split value: %f\n", split.bestValue);
 
     ExtRangeSOA range(&soa, 0, numFaces, u32(numFaces * GROW_AMOUNT));
-    start = OS_StartCounter();
-    heuristic.Split(arena, mesh, range, split);
-    time = OS_GetMilliseconds(start);
+    start   = OS_StartCounter();
+    u32 mid = heuristic.Split(arena, mesh, range, split);
+    time    = OS_GetMilliseconds(start);
     printf("Split time: %fms\n", time);
 #endif
 
-    // printf("Clip # calls: %llu\n", threadLocalStatistics->misc);
+    // Tests to ensure that the partitioning is valid
+    u32 errors     = 0;
+    f32 *minStream = (f32 *)(&soa) + split.bestDim;
+    f32 *maxStream = (f32 *)(&soa) + split.bestDim + 4;
+    for (u32 i = 0; i < numFaces; i++)
+    {
+        f32 min      = minStream[i];
+        f32 max      = maxStream[i];
+        f32 centroid = (max - min) * 0.5f;
+        if (i < mid)
+        {
+            if (centroid >= split.bestValue ||
+                Floor((centroid - heuristic.base[split.bestDim][0]) * heuristic.scale[split.bestDim][0]) > split.bestPos)
+            {
+                Assert(false);
+                errors += 1;
+            }
+        }
+        else
+        {
+            if (centroid < split.bestValue ||
+                Floor((centroid - heuristic.base[split.bestDim][0]) * heuristic.scale[split.bestDim][0]) <= split.bestPos)
+            {
+                Assert(false);
+                errors += 1;
+            }
+        }
+    }
+    printf("Num errors: %u\n", errors);
 }
 
 void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
