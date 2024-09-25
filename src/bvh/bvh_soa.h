@@ -36,39 +36,52 @@ struct PrimDataSOA
     }
     __forceinline void Swap(u32 lIndex, u32 rIndex)
     {
-        f32 tempMinX = std::move(minX[lIndex]);
-        minX[lIndex] = std::move(minX[rIndex]);
-        minX[rIndex] = std::move(tempMinX);
-
-        f32 tempMinY = std::move(minY[lIndex]);
-        minY[lIndex] = std::move(minY[rIndex]);
-        minY[rIndex] = std::move(tempMinY);
-
-        f32 tempMinZ = std::move(minZ[lIndex]);
-        minZ[lIndex] = std::move(minZ[rIndex]);
-        minZ[rIndex] = std::move(tempMinZ);
-
-        f32 tempMaxX = std::move(maxX[lIndex]);
-        maxX[lIndex] = std::move(maxX[rIndex]);
-        maxX[rIndex] = std::move(tempMaxX);
-
-        f32 tempMaxY = std::move(maxY[lIndex]);
-        maxY[lIndex] = std::move(maxY[rIndex]);
-        maxY[rIndex] = std::move(tempMaxY);
-
-        f32 tempMaxZ = std::move(maxZ[lIndex]);
-        maxZ[lIndex] = std::move(maxZ[rIndex]);
-        maxZ[rIndex] = std::move(tempMaxZ);
-
-        // u32 tempGeomID  = std::move(geomIDs[lIndex]);
-        // geomIDs[lIndex] = std::move(geomIDs[rIndex]);
-        // geomIDs[rIndex] = std::move(tempGeomID);
-
-        // u32 tempPrimID  = std::move(primIDs[lIndex]);
-        // primIDs[lIndex] = std::move(primIDs[rIndex]);
-        // primIDs[rIndex] = std::move(tempPrimID);
+        ::rt::Swap(minX[lIndex], minX[rIndex]);
+        ::rt::Swap(minY[lIndex], minY[rIndex]);
+        ::rt::Swap(minZ[lIndex], minZ[rIndex]);
+        ::rt::Swap(geomIDs[lIndex], geomIDs[rIndex]);
+        ::rt::Swap(maxX[lIndex], maxX[rIndex]);
+        ::rt::Swap(maxY[lIndex], maxY[rIndex]);
+        ::rt::Swap(maxZ[lIndex], maxZ[rIndex]);
+        ::rt::Swap(primIDs[lIndex], primIDs[rIndex]);
     }
 };
+
+template <u32 width = 8>
+struct PrimDataAOSOA
+{
+    StaticAssert(IsPow2(width), pow2);
+    static const u32 shift = BsfConst(width);
+    static const u32 mask  = width - 1;
+    f32 minX[width];
+    f32 minY[width];
+    f32 minZ[width];
+    u32 geomIDs[width];
+    f32 maxX[width];
+    f32 maxY[width];
+    f32 maxZ[width];
+    u32 primIDs[width];
+
+    f32 *operator[](i32 dim)
+    {
+        return (f32 *)this + dim * width;
+    }
+};
+
+__forceinline void Swap(PrimDataAOSOA<8> *data, u32 lIndex, u32 rIndex)
+{
+    u32 lBlockIndex   = lIndex >> PrimDataAOSOA<8>::shift;
+    u32 lIndexInBlock = lIndex & PrimDataAOSOA<8>::mask;
+
+    u32 rBlockIndex   = rIndex >> PrimDataAOSOA<8>::shift;
+    u32 rIndexInBlock = rIndex & PrimDataAOSOA<8>::mask;
+    Swap(data[lBlockIndex].minX[lIndexInBlock], data[rBlockIndex].minX[rIndexInBlock]);
+    Swap(data[lBlockIndex].minY[lIndexInBlock], data[rBlockIndex].minY[rIndexInBlock]);
+    Swap(data[lBlockIndex].minZ[lIndexInBlock], data[rBlockIndex].minZ[rIndexInBlock]);
+    Swap(data[lBlockIndex].maxX[lIndexInBlock], data[rBlockIndex].maxX[rIndexInBlock]);
+    Swap(data[lBlockIndex].maxY[lIndexInBlock], data[rBlockIndex].maxY[rIndexInBlock]);
+    Swap(data[lBlockIndex].maxZ[lIndexInBlock], data[rBlockIndex].maxZ[rIndexInBlock]);
+}
 
 struct ExtRangeSOA
 {
@@ -78,6 +91,20 @@ struct ExtRangeSOA
     u32 extEnd;
 
     __forceinline ExtRangeSOA(PrimDataSOA *data, u32 start, u32 count, u32 extEnd)
+        : data(data), start(start), count(count), extEnd(extEnd) {}
+    __forceinline u32 End() const { return start + count; }
+    __forceinline u32 ExtSize() const { return extEnd - (start + count); }
+    __forceinline u32 TotalSize() const { return extEnd - start; }
+};
+
+struct ExtRangeAOSOA
+{
+    PrimDataAOSOA<8> *data;
+    u32 start;
+    u32 count;
+    u32 extEnd;
+
+    __forceinline ExtRangeAOSOA(PrimDataAOSOA<8> *data, u32 start, u32 count, u32 extEnd)
         : data(data), start(start), count(count), extEnd(extEnd) {}
     __forceinline u32 End() const { return start + count; }
     __forceinline u32 ExtSize() const { return extEnd - (start + count); }
@@ -798,21 +825,9 @@ struct alignas(32) HeuristicSOASplitBinning
         else
         {
             // Normal partitioning
-            const u32 queueSize      = LANE_WIDTH * 2 - 1;
-            const u32 rightQueueSize = queueSize + LANE_WIDTH;
-            u32 leftQueue[queueSize];
-            u32 lIDQueue[queueSize];
-            u32 leftCount = 0;
 
-            u32 rightQueue[rightQueueSize];
-            u32 rIDQueue[queueSize];
-            u32 rightCount = 0;
-
-            i32 l = (i32)range.start;
-            i32 r = (i32)range.End() - 8;
-
-            Bounds8F32 left(neg_inf);
-            Bounds8F32 right(neg_inf);
+            // Bounds8F32 left(neg_inf);
+            // Bounds8F32 right(neg_inf);
 
             u32 v      = LUTAxis[dim];
             u32 w      = LUTAxis[v];
@@ -821,7 +836,129 @@ struct alignas(32) HeuristicSOASplitBinning
 
             f32 *maxVs = range.data->arr[v + 4];
             f32 *maxWs = range.data->arr[w + 4];
+
+            // NOTE: one cache line
+            const u32 blockSize         = 16;
+            const u32 blockMask         = 15;
+            const u32 blockShift        = Bsf(blockSize);
+            const u32 numJobs           = 32;//OS_NumProcessors();
+            const u32 numBlocksPerChunk = numJobs;
+            const u32 chunkSize         = blockSize * numJobs;
+
+            // NOTE: these should be aligned on a cache line
+            u32 lStartAligned   = AlignPow2(range.start, 16);
+            u32 rEndAligned     = range.End() & (~15);
+            alignedCount        = rEndAligned - lStartAligned;
+            const u32 numChunks = (alignedCount + chunkSize - 1) / chunkSize;
+
+            jobsystem::Counter counter = {};
+            // NOTE: it is very important to ensure that none of the processors touch the same cache lines when
+            // reading/writing
+            jobsystem::KickJobs(&counter, numJobs, 1, [&](jobsystem::JobArgs args) {
+                const u32 queueSize      = LANE_WIDTH * 2 - 1;
+                const u32 rightQueueSize = queueSize + LANE_WIDTH;
+                const u32 group          = args.jobId;
+                auto GetIndex            = [&](u32 index) {
+                    Assert((index & (LANE_WIDTH - 1)) == 0);
+                    const u32 chunkIndex = index >> blockShift;
+                    const u32 blockIndex = group;
+                    // NOTE: 0 or 8
+                    const u32 indexInBlock = index & blockMask;
+                    Assert(indexInBlock == 0 || indexInBlock == 8);
+
+                    return lStartAligned + chunkIndex * chunkSize + (blockIndex << blockShift) + indexInBlock;
+                };
+                u32 leftQueue[queueSize];
+                u32 leftCount = 0;
+
+                u32 rightQueue[rightQueueSize];
+                u32 rightCount = 0;
+
+                u32 l          = 0;
+                u32 r          = (numChunks << blockShift);
+                u32 lastRIndex = GetIndex(r);
+                Assert(!(lastRIndex >= rEndAligned && (lastRIndex - rEndAligned) == LANE_WIDTH));
+                r = lastRIndex > rEndAligned ? r - blockSize - LANE_WIDTH : r - LANE_WIDTH;
+                for (;;)
+                {
+                    while (l <= r && leftCount < LANE_WIDTH)
+                    {
+                        u32 lIndex    = GetIndex(l);
+                        Lane8F32 lMin = Lane8F32::Load(minStream + lIndex);
+                        Lane8F32 lMax = Lane8F32::Load(maxStream + lIndex);
+                        Lane8F32 minV = Lane8F32::Load(minVs + lIndex);
+                        Lane8F32 minW = Lane8F32::Load(minWs + lIndex);
+                        Lane8F32 maxV = Lane8F32::Load(maxVs + lIndex);
+                        Lane8F32 maxW = Lane8F32::Load(maxWs + lIndex);
+
+                        Lane8F32 lCentroid   = (lMax - lMin) * 0.5f;
+                        Lane8F32 notLeftMask = lCentroid >= split.bestValue;
+                        Lane8F32 leftMask    = lCentroid < split.bestValue;
+                        u32 mask             = Movemask(notLeftMask);
+                        Lane8U32 leftRefId   = Lane8U32::Step(lIndex);
+                        Lane8U32::StoreU(leftQueue + leftCount, MaskCompress(mask, leftRefId));
+
+                        // left.MaskExtendNegativeMin(leftMask, lMin, minV, minW, lMax, maxV, maxW);
+                        // right.MaskExtendNegativeMin(notLeftMask, lMin, minV, minW, lMax, maxV, maxW);
+                        l += LANE_WIDTH;
+                        leftCount += PopCount(mask);
+                    }
+                    while (l <= r && rightCount < LANE_WIDTH)
+                    {
+                        u32 rIndex    = GetIndex(r);
+                        Lane8F32 min  = Lane8F32::Load(minStream + rIndex);
+                        Lane8F32 max  = Lane8F32::Load(maxStream + rIndex);
+                        Lane8F32 minV = Lane8F32::Load(minVs + rIndex);
+                        Lane8F32 minW = Lane8F32::Load(minWs + rIndex);
+                        Lane8F32 maxV = Lane8F32::Load(maxVs + rIndex);
+                        Lane8F32 maxW = Lane8F32::Load(maxWs + rIndex);
+
+                        Lane8F32 centroid     = (max - min) * 0.5f;
+                        Lane8F32 notRightMask = centroid < split.bestValue;
+                        Lane8F32 rightMask    = centroid >= split.bestValue;
+                        const u32 mask        = Movemask(notRightMask);
+
+                        u32 notRightCount  = PopCount(mask);
+                        Lane8F32 storeMask = Lane8F32::Mask((1 << notRightCount) - 1u);
+
+                        Lane8U32 refID = Lane8U32::Step(rIndex);
+                        // Store so that entries are sorted from smallest to largest
+                        rightCount += notRightCount;
+                        Lane8U32::StoreU(storeMask, rightQueue + queueSize - rightCount, MaskCompress(mask, refID));
+                        // left.MaskExtendNegativeMin(notRightMask, min, minV, minW, max, maxV, maxW);
+                        // right.MaskExtendNegativeMin(rightMask, min, minV, minW, max, maxV, maxW);
+                        r -= LANE_WIDTH;
+                    }
+                    // TODO: finish properly
+                    if (l > r) break;
+                    Assert(leftCount >= LANE_WIDTH && leftCount <= queueSize);
+                    Assert(rightCount >= LANE_WIDTH && rightCount <= queueSize);
+
+                    u32 minCount = Min(leftCount, rightCount);
+
+                    for (u32 i = 0; i < minCount; i++)
+                    {
+                        u32 leftIndex  = leftQueue[i];
+                        u32 rightIndex = rightQueue[queueSize - 1 - i];
+                        range.data->Swap(leftIndex, rightIndex);
+                    }
+                    leftCount -= minCount;
+                    rightCount -= minCount;
+                    for (u32 i = 0; i < leftCount; i++)
+                    {
+                        leftQueue[i] = leftQueue[i + minCount];
+                    }
+                    for (u32 i = 0; i < rightCount; i++)
+                    {
+                        rightQueue[queueSize - 1 - i] = rightQueue[queueSize - 1 - i - minCount];
+                    }
+                }
+            });
+            jobsystem::WaitJobs(&counter);
+
+#if 0
             for (;;)
+
             {
                 while (l <= r && leftCount < LANE_WIDTH)
                 {
@@ -832,14 +969,12 @@ struct alignas(32) HeuristicSOASplitBinning
                     Lane8F32 maxV = Lane8F32::LoadU(maxVs + l);
                     Lane8F32 maxW = Lane8F32::LoadU(maxWs + l);
 
-                    Lane8U32 primIDs     = Lane8U32::LoadU(range.data->primIDs + l);
                     Lane8F32 lCentroid   = (lMax - lMin) * 0.5f;
                     Lane8F32 notLeftMask = lCentroid >= split.bestValue;
                     Lane8F32 leftMask    = lCentroid < split.bestValue;
                     u32 mask             = Movemask(notLeftMask);
                     Lane8U32 leftRefId   = Lane8U32::Step(l);
                     Lane8U32::StoreU(leftQueue + leftCount, MaskCompress(mask, leftRefId));
-                    Lane8U32::StoreU(lIDQueue + leftCount, MaskCompress(mask, primIDs));
 
                     left.MaskExtendNegativeMin(leftMask, lMin, minV, minW, lMax, maxV, maxW);
                     right.MaskExtendNegativeMin(notLeftMask, lMin, minV, minW, lMax, maxV, maxW);
@@ -855,7 +990,6 @@ struct alignas(32) HeuristicSOASplitBinning
                     Lane8F32 maxV = Lane8F32::LoadU(maxVs + r);
                     Lane8F32 maxW = Lane8F32::LoadU(maxWs + r);
 
-                    Lane8U32 primIDs      = Lane8U32::LoadU(range.data->primIDs + r);
                     Lane8F32 centroid     = (max - min) * 0.5f;
                     Lane8F32 notRightMask = centroid < split.bestValue;
                     Lane8F32 rightMask    = centroid >= split.bestValue;
@@ -868,7 +1002,6 @@ struct alignas(32) HeuristicSOASplitBinning
                     // Store so that entries are sorted from smallest to largest
                     rightCount += notRightCount;
                     Lane8U32::StoreU(storeMask, rightQueue + queueSize - rightCount, MaskCompress(mask, refID));
-                    Lane8U32::StoreU(storeMask, rIDQueue + queueSize - rightCount, MaskCompress(mask, primIDs));
                     left.MaskExtendNegativeMin(notRightMask, min, minV, minW, max, maxV, maxW);
                     right.MaskExtendNegativeMin(rightMask, min, minV, minW, max, maxV, maxW);
                     r -= LANE_WIDTH;
@@ -879,8 +1012,6 @@ struct alignas(32) HeuristicSOASplitBinning
                     for (i = 0; i < minCount; i++)
                     {
                         range.data->Swap(leftQueue[i], rightQueue[queueSize - 1 - i]);
-                        range.data->primIDs[leftQueue[i]]  = rIDQueue[queueSize - 1 - i];
-                        range.data->primIDs[rightQueue[i]] = lIDQueue[i];
                     }
                     if (leftCount != minCount)
                     {
@@ -919,10 +1050,10 @@ struct alignas(32) HeuristicSOASplitBinning
                             f32 max      = maxStream[r];
                             f32 centroid = (max - min) * 0.5f;
                             if (centroid < split.bestValue) break;
-                            f32 minV   = minVs[l];
-                            f32 minW   = minWs[l];
-                            f32 maxV   = maxVs[l];
-                            f32 maxW   = maxWs[l];
+                            f32 minV   = minVs[r];
+                            f32 minW   = minWs[r];
+                            f32 maxV   = maxVs[r];
+                            f32 maxW   = maxWs[r];
                             right.minU = Max(right.minU, min);
                             right.minV = Max(right.minV, minV);
                             right.minW = Max(right.minW, minW);
@@ -974,20 +1105,16 @@ struct alignas(32) HeuristicSOASplitBinning
                     u32 leftIndex  = leftQueue[i];
                     u32 rightIndex = rightQueue[queueSize - 1 - i];
                     range.data->Swap(leftIndex, rightIndex);
-                    range.data->primIDs[leftIndex]  = rIDQueue[queueSize - 1 - i];
-                    range.data->primIDs[rightIndex] = lIDQueue[i];
                 }
                 leftCount -= minCount;
                 rightCount -= minCount;
                 for (i = 0; i < leftCount; i++)
                 {
                     leftQueue[i] = leftQueue[i + minCount];
-                    lIDQueue[i]  = lIDQueue[i + minCount];
                 }
                 for (i = 0; i < rightCount; i++)
                 {
                     rightQueue[queueSize - 1 - i] = rightQueue[queueSize - 1 - i - minCount];
-                    rIDQueue[queueSize - 1 - i]   = rIDQueue[queueSize - 1 - i - minCount];
                 }
             }
             f32 minScalars[6] = {
@@ -1020,10 +1147,291 @@ struct alignas(32) HeuristicSOASplitBinning
             outRight.maxP[v]   = maxScalars[4];
             outRight.maxP[w]   = maxScalars[5];
 
-            return l;
+#endif
+            return 0;
         }
     }
-}; // namespace rt
+
+    void Split(Arena *arena, TriangleMesh *mesh, ExtRangeAOSOA range, struct Split split, Bounds &outLeft, Bounds &outRight)
+    {
+        u32 dim = split.bestDim;
+        Lane8U32 shufMask(dim);
+
+        static constexpr u32 dataShift = BsfConst(LANE_WIDTH);
+        static constexpr u32 dataMask  = LANE_WIDTH - 1;
+
+        u32 refIDQueue[LANE_WIDTH * 2 - 1];
+        u32 faceIDQueue[LANE_WIDTH * 2 - 1];
+        Bounds8 bounds[2][8];
+
+        PrimDataAOSOA<8> *data = range.data;
+        f32 negBestValue       = -split.bestValue;
+        u32 queueCount         = 0;
+        u32 splitCount         = 0;
+
+        u32 splitBegin = range.End();
+        u32 splitMax   = range.ExtSize();
+
+        // TODO: this is not correct. the start could be in the middle of a block, and so can the end
+        u32 end = range.End() >> dataShift;
+        for (u32 i = range.start >> dataShift; i < end; i++)
+        {
+            PrimDataAOSOA<8> *prims = &data[i];
+            Lane8F32 min            = Lane8F32::LoadU((*prims)[dim]);
+            Lane8F32 max            = Lane8F32::LoadU((*prims)[dim + 4]);
+            Lane8U32 faceIDs        = Lane8U32::LoadU(prims->primIDs);
+            Lane8U32 refIDs         = Lane8U32::Step(i * LANE_WIDTH);
+            Lane8F32 splitMask      = (min > negBestValue & max > split.bestValue);
+            u32 mask                = Movemask(splitMask);
+            Lane8U32::StoreU(refIDQueue + queueCount, MaskCompress(mask, refIDs));
+            Lane8U32::StoreU(faceIDQueue + queueCount, MaskCompress(mask, faceIDs));
+            queueCount += PopCount(mask);
+
+            if (queueCount >= LANE_WIDTH)
+            {
+                queueCount -= LANE_WIDTH;
+                splitCount += LANE_WIDTH;
+                if (splitCount > splitMax) break;
+                Triangle8 tri = Triangle8::Load(mesh, dim, faceIDQueue + queueCount);
+                ClipTrianglePartition(mesh, dim, tri, split.bestValue, bounds[0], bounds[1]);
+                for (u32 queueIndex = 0; queueIndex < LANE_WIDTH; queueIndex++)
+                {
+                    const u32 refID        = refIDQueue[queueCount + queueIndex];
+                    const u32 blockIndex   = refID >> dataShift;
+                    const u32 indexInBlock = refID & dataMask;
+
+                    const u32 rightBlockIndex   = (splitBegin + splitCount) >> dataShift;
+                    const u32 rightIndexInBlock = (splitBegin + splitCount) & dataMask;
+
+                    data[blockIndex].minX[indexInBlock] = bounds[0][queueIndex].v[0];
+                    data[blockIndex].minY[indexInBlock] = bounds[0][queueIndex].v[1];
+                    data[blockIndex].minZ[indexInBlock] = bounds[0][queueIndex].v[2];
+                    data[blockIndex].maxX[indexInBlock] = bounds[0][queueIndex].v[4];
+                    data[blockIndex].maxY[indexInBlock] = bounds[0][queueIndex].v[5];
+                    data[blockIndex].maxZ[indexInBlock] = bounds[0][queueIndex].v[6];
+
+                    data[rightBlockIndex].minX[indexInBlock] = bounds[1][queueIndex].v[0];
+                    data[rightBlockIndex].minY[indexInBlock] = bounds[1][queueIndex].v[1];
+                    data[rightBlockIndex].minZ[indexInBlock] = bounds[1][queueIndex].v[2];
+                    data[rightBlockIndex].maxX[indexInBlock] = bounds[1][queueIndex].v[4];
+                    data[rightBlockIndex].maxY[indexInBlock] = bounds[1][queueIndex].v[5];
+                    data[rightBlockIndex].maxZ[indexInBlock] = bounds[1][queueIndex].v[6];
+                }
+            }
+        }
+        {
+            // Normal partitioning
+            const u32 queueSize      = LANE_WIDTH * 2 - 1;
+            const u32 rightQueueSize = queueSize + LANE_WIDTH;
+            u32 leftQueue[queueSize];
+            u32 leftCount = 0;
+
+            u32 rightQueue[rightQueueSize];
+            u32 rightCount = 0;
+
+            i32 l = (i32)range.start;
+            i32 r = (i32)range.End() - 8;
+
+            Bounds8F32 left(neg_inf);
+            Bounds8F32 right(neg_inf);
+
+            u32 v = LUTAxis[dim];
+            u32 w = LUTAxis[v];
+            for (;;)
+            {
+                while (l <= r && leftCount < LANE_WIDTH)
+                {
+                    PrimDataAOSOA<8> *prim = &data[l >> dataShift];
+                    Lane8F32 lMin          = Lane8F32::LoadU((*prim)[dim]);
+                    Lane8F32 lMax          = Lane8F32::LoadU((*prim)[v]);
+                    Lane8F32 minV          = Lane8F32::LoadU((*prim)[w]);
+                    Lane8F32 minW          = Lane8F32::LoadU((*prim)[dim]);
+                    Lane8F32 maxV          = Lane8F32::LoadU((*prim)[v]);
+                    Lane8F32 maxW          = Lane8F32::LoadU((*prim)[w]);
+
+                    Lane8F32 lCentroid   = (lMax - lMin) * 0.5f;
+                    Lane8F32 notLeftMask = lCentroid >= split.bestValue;
+                    Lane8F32 leftMask    = lCentroid < split.bestValue;
+                    u32 mask             = Movemask(notLeftMask);
+                    Lane8U32 leftRefId   = Lane8U32::Step(l);
+                    Lane8U32::StoreU(leftQueue + leftCount, MaskCompress(mask, leftRefId));
+
+                    left.MaskExtendNegativeMin(leftMask, lMin, minV, minW, lMax, maxV, maxW);
+                    right.MaskExtendNegativeMin(notLeftMask, lMin, minV, minW, lMax, maxV, maxW);
+                    l += LANE_WIDTH;
+                    leftCount += PopCount(mask);
+                }
+                while (l <= r && rightCount < LANE_WIDTH)
+                {
+                    PrimDataAOSOA<8> *prim = &data[r >> dataShift];
+                    Lane8F32 min           = Lane8F32::LoadU((*prim)[dim]);
+                    Lane8F32 max           = Lane8F32::LoadU((*prim)[v]);
+                    Lane8F32 minV          = Lane8F32::LoadU((*prim)[w]);
+                    Lane8F32 minW          = Lane8F32::LoadU((*prim)[dim]);
+                    Lane8F32 maxV          = Lane8F32::LoadU((*prim)[v]);
+                    Lane8F32 maxW          = Lane8F32::LoadU((*prim)[w]);
+
+                    Lane8F32 centroid     = (max - min) * 0.5f;
+                    Lane8F32 notRightMask = centroid < split.bestValue;
+                    Lane8F32 rightMask    = centroid >= split.bestValue;
+                    const u32 mask        = Movemask(notRightMask);
+
+                    u32 notRightCount  = PopCount(mask);
+                    Lane8F32 storeMask = Lane8F32::Mask((1 << notRightCount) - 1u);
+
+                    Lane8U32 refID = Lane8U32::Step(r);
+                    // Store so that entries are sorted from smallest to largest
+                    rightCount += notRightCount;
+                    Lane8U32::StoreU(storeMask, rightQueue + queueSize - rightCount, MaskCompress(mask, refID));
+                    left.MaskExtendNegativeMin(notRightMask, min, minV, minW, max, maxV, maxW);
+                    right.MaskExtendNegativeMin(rightMask, min, minV, minW, max, maxV, maxW);
+                    r -= LANE_WIDTH;
+                }
+                if (l > r) break;
+                // {
+                //     u32 minCount = Min(leftCount, rightCount);
+                //     for (i = 0; i < minCount; i++)
+                //     {
+                //         Swap(data, leftQueue[i], rightQueue[queueSize - 1 - i]);
+                //     }
+                //     if (leftCount != minCount)
+                //     {
+                //         l = leftQueue[minCount];
+                //         r += LANE_WIDTH;
+                //     }
+                //     else
+                //     {
+                //         r = rightQueue[queueSize - 1 - minCount];
+                //         l -= LANE_WIDTH;
+                //     }
+                //     for (;;)
+                //     {
+                //         while (l <= r)
+                //         {
+                //             f32 min      = minStream[l];
+                //             f32 max      = maxStream[l];
+                //             f32 centroid = (max - min) * 0.5f;
+                //             if (centroid >= split.bestValue) break;
+                //             f32 minV  = minVs[l];
+                //             f32 minW  = minWs[l];
+                //             f32 maxV  = maxVs[l];
+                //             f32 maxW  = maxWs[l];
+                //             left.minU = Max(left.minU, min);
+                //             left.minV = Max(left.minV, minV);
+                //             left.minW = Max(left.minW, minW);
+                //             left.maxU = Max(left.maxU, max);
+                //             left.maxV = Max(left.maxV, maxV);
+                //             left.maxW = Max(left.maxW, maxW);
+                //
+                //             l++;
+                //         }
+                //         while (l <= r)
+                //         {
+                //             f32 min      = minStream[r];
+                //             f32 max      = maxStream[r];
+                //             f32 centroid = (max - min) * 0.5f;
+                //             if (centroid < split.bestValue) break;
+                //             f32 minV   = minVs[r];
+                //             f32 minW   = minWs[r];
+                //             f32 maxV   = maxVs[r];
+                //             f32 maxW   = maxWs[r];
+                //             right.minU = Max(right.minU, min);
+                //             right.minV = Max(right.minV, minV);
+                //             right.minW = Max(right.minW, minW);
+                //             right.maxU = Max(right.maxU, max);
+                //             right.maxV = Max(right.maxV, maxV);
+                //             right.maxW = Max(right.maxW, maxW);
+                //             r--;
+                //         }
+                //         if (l > r) break;
+                //
+                //         f32 lMinU  = minStream[l];
+                //         f32 lMinV  = minVs[l];
+                //         f32 lMinW  = minWs[l];
+                //         f32 lMaxU  = maxStream[l];
+                //         f32 lMaxV  = maxVs[l];
+                //         f32 lMaxW  = maxWs[l];
+                //         right.minU = Max(right.minU, lMinU);
+                //         right.minV = Max(right.minV, lMinV);
+                //         right.minW = Max(right.minW, lMinW);
+                //         right.maxU = Max(right.maxU, lMaxU);
+                //         right.maxV = Max(right.maxV, lMaxV);
+                //         right.maxW = Max(right.maxW, lMaxW);
+                //
+                //         f32 rMinU = minStream[r];
+                //         f32 rMinV = minVs[r];
+                //         f32 rMinW = minWs[r];
+                //         f32 rMaxU = maxStream[r];
+                //         f32 rMaxV = maxVs[r];
+                //         f32 rMaxW = maxWs[r];
+                //         left.minU = Max(left.minU, rMinU);
+                //         left.minV = Max(left.minV, rMinV);
+                //         left.minW = Max(left.minW, rMinW);
+                //         left.maxU = Max(left.maxU, rMaxU);
+                //         left.maxV = Max(left.maxV, rMaxV);
+                //         left.maxW = Max(left.maxW, rMaxW);
+                //         range.data->Swap(l, r);
+                //         l++;
+                //         r--;
+                //     }
+                //     break;
+                // }
+                Assert(leftCount >= LANE_WIDTH);
+                Assert(rightCount >= LANE_WIDTH);
+
+                u32 minCount = Min(leftCount, rightCount);
+
+                for (u32 i = 0; i < minCount; i++)
+                {
+                    u32 leftIndex  = leftQueue[i];
+                    u32 rightIndex = rightQueue[queueSize - 1 - i];
+                    Swap(data, leftIndex, rightIndex);
+                }
+                leftCount -= minCount;
+                rightCount -= minCount;
+                for (u32 i = 0; i < leftCount; i++)
+                {
+                    leftQueue[i] = leftQueue[i + minCount];
+                }
+                for (u32 i = 0; i < rightCount; i++)
+                {
+                    rightQueue[queueSize - 1 - i] = rightQueue[queueSize - 1 - i - minCount];
+                }
+            }
+            f32 minScalars[6] = {
+                ReduceMax(left.minU),
+                ReduceMax(left.minV),
+                ReduceMax(left.minW),
+                ReduceMax(right.minU),
+                ReduceMax(right.minV),
+                ReduceMax(right.minW),
+            };
+            f32 maxScalars[6] = {
+                ReduceMax(left.maxU),
+                ReduceMax(left.maxV),
+                ReduceMax(left.maxW),
+                ReduceMax(right.maxU),
+                ReduceMax(right.maxV),
+                ReduceMax(right.maxW),
+            };
+
+            outLeft.minP[dim]  = minScalars[0];
+            outLeft.minP[v]    = minScalars[1];
+            outLeft.minP[w]    = minScalars[2];
+            outRight.minP[dim] = minScalars[3];
+            outRight.minP[v]   = minScalars[4];
+            outRight.minP[w]   = minScalars[5];
+            outLeft.maxP[dim]  = maxScalars[0];
+            outLeft.maxP[v]    = maxScalars[1];
+            outLeft.maxP[w]    = maxScalars[2];
+            outRight.maxP[dim] = maxScalars[3];
+            outRight.maxP[v]   = maxScalars[4];
+            outRight.maxP[w]   = maxScalars[5];
+
+            // return l;
+        }
+    }
+};
 
 // NOTE: this is embree's implementation of split binning for SBVH
 template <i32 numBins = 16>
@@ -1120,7 +1528,7 @@ struct TestSplitBinningBase
             }
         }
     }
-    __forceinline u32 Split(TriangleMesh *mesh, PrimData *prims, ExtRange range, Split split, Bounds &left, Bounds &right)
+    __forceinline u32 Split(TriangleMesh *mesh, PrimData *prims, ExtRange range, Split split, Bounds &outLeft, Bounds &outRight)
     {
         u32 dim                         = split.bestDim;
         const size_t max_ext_range_size = range.ExtSize();
@@ -1161,6 +1569,9 @@ struct TestSplitBinningBase
                 prims[ext_range_start + ID].maxP = right.maxP;
             }
         }
+
+        // PartitionParallel(split, prims, range.start, range.End(), 0)
+#if 1
         u32 l = range.start;
         u32 r = range.End() - 1;
         for (;;)
@@ -1175,7 +1586,7 @@ struct TestSplitBinningBase
                 lPrim     = &prims[l];
                 lCentroid = (lPrim->minP + lPrim->maxP) * 0.5f;
                 if (lCentroid[split.bestDim] >= split.bestValue) break;
-                left.Extend(lPrim->minP, lPrim->maxP);
+                outLeft.Extend(lPrim->minP, lPrim->maxP);
                 l++;
             } while (l <= r);
             do
@@ -1183,20 +1594,22 @@ struct TestSplitBinningBase
                 rPrim     = &prims[r];
                 rCentroid = (rPrim->minP + rPrim->maxP) * 0.5f;
                 if (rCentroid[split.bestDim] < split.bestValue) break;
-                right.Extend(rPrim->minP, rPrim->maxP);
+                outRight.Extend(rPrim->minP, rPrim->maxP);
                 r--;
             } while (l <= r);
             if (l > r) break;
 
             Swap(lPrim->minP, rPrim->minP);
             Swap(lPrim->maxP, rPrim->maxP);
-            left.Extend(lPrim->minP, lPrim->maxP);
-            right.Extend(rPrim->minP, rPrim->maxP);
+            outLeft.Extend(lPrim->minP, lPrim->maxP);
+            outRight.Extend(rPrim->minP, rPrim->maxP);
 
             l++;
             r--;
         }
-        return l;
+
+#endif
+            return l;
 
         // const size_t numExtElements = min(max_ext_range_size, ext_elements.load());
         // set._end += numExtElements;

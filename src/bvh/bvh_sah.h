@@ -142,6 +142,7 @@ struct Split
     u32 bestDim;
     f32 bestValue;
 
+    Split() {}
     Split(f32 sah, u32 pos, u32 dim, f32 val) : bestSAH(sah), bestPos(pos), bestDim(dim), bestValue(val) {}
 };
 
@@ -917,6 +918,21 @@ struct ExtRange
     u32 extEnd; // allocation end
 
     ExtRange(PrimData *data, u32 start, u32 count, u32 extEnd)
+        : data(data), start(start), count(count), extEnd(extEnd) {}
+
+    __forceinline u32 End() const { return start + count; }
+    __forceinline u32 ExtSize() const { return extEnd - (start + count); }
+    __forceinline u32 TotalSize() const { return extEnd - start; }
+};
+
+struct ExtRangeRef
+{
+    PrimRef *data;
+    u32 start;
+    u32 count;  // number allocated
+    u32 extEnd; // allocation end
+
+    ExtRangeRef(PrimRef *data, u32 start, u32 count, u32 extEnd)
         : data(data), start(start), count(count), extEnd(extEnd) {}
 
     __forceinline u32 End() const { return start + count; }
