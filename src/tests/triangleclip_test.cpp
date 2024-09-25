@@ -134,13 +134,19 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     printf("Split value: %f\n", split.bestValue);
 
     ExtRangeSOA range(&soa, 0, numFaces, u32(numFaces * GROW_AMOUNT));
-    start   = OS_StartCounter();
-    u32 mid = heuristic.Split(arena, mesh, range, split);
+    start = OS_StartCounter();
+    Bounds left;
+    Bounds right;
+    u32 mid = heuristic.Split(arena, mesh, range, split, left, right);
     time    = OS_GetMilliseconds(start);
     printf("Mid: %u\n", mid);
 #endif
 
     printf("Split time: %fms\n", time);
+    printf("Left bounds min: %f %f %f\n", left.minP[0], left.minP[1], left.minP[2]);
+    printf("Left bounds max: %f %f %f\n", left.maxP[0], left.maxP[1], left.maxP[2]);
+    printf("Right bounds min: %f %f %f\n", right.minP[0], right.minP[1], right.minP[2]);
+    printf("Right bounds max: %f %f %f\n", right.maxP[0], right.maxP[1], right.maxP[2]);
     // Tests to ensure that the partitioning is valid
     u32 errors     = 0;
     f32 *minStream = ((f32 **)(&soa.minX))[split.bestDim];
@@ -206,10 +212,17 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
     split.bestValue = ((split.bestPos + 1) * heuristic.invScale[split.bestDim]) + heuristic.base[split.bestDim];
     printf("Split value: %f\n", split.bestValue);
     ExtRange range(data, 0, numFaces, u32(numFaces * GROW_AMOUNT));
-    start   = OS_StartCounter();
-    u32 mid = heuristic.Split(mesh, data, range, split);
+    start = OS_StartCounter();
+
+    Bounds left;
+    Bounds right;
+    u32 mid = heuristic.Split(mesh, data, range, split, left, right);
     time    = OS_GetMilliseconds(start);
     printf("Mid: %u\n", mid);
+    printf("Left bounds min: %f %f %f\n", left.minP[0], left.minP[1], left.minP[2]);
+    printf("Left bounds max: %f %f %f\n", left.maxP[0], left.maxP[1], left.maxP[2]);
+    printf("Right bounds min: %f %f %f\n", right.minP[0], right.minP[1], right.minP[2]);
+    printf("Right bounds max: %f %f %f\n", right.maxP[0], right.maxP[1], right.maxP[2]);
     printf("Time elapsed splitting: %fms\n", time);
 
     // Correctness test

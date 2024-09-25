@@ -831,6 +831,7 @@ struct Bounds8F32
     Lane8F32 maxW;
 
     Bounds8F32() : minU(pos_inf), minV(pos_inf), minW(pos_inf), maxU(neg_inf), maxV(neg_inf), maxW(neg_inf) {}
+    Bounds8F32(NegInfTy) : minU(neg_inf), minV(neg_inf), minW(neg_inf), maxU(neg_inf), maxV(neg_inf), maxW(neg_inf) {}
 
     __forceinline void Extend(const Bounds8F32 &other)
     {
@@ -852,6 +853,17 @@ struct Bounds8F32
         maxU = MaskMax(mask, maxU, u);
         maxV = MaskMax(mask, maxV, v);
         maxW = MaskMax(mask, maxW, w);
+    }
+    __forceinline void MaskExtendNegativeMin(const Lane8F32 &mask, const Lane8F32 &inMinU, const Lane8F32 &inMinV, const Lane8F32 &inMinW,
+                                             const Lane8F32 &inMaxU, const Lane8F32 &inMaxV, const Lane8F32 &inMaxW)
+    {
+        minU = MaskMax(mask, minU, inMinU);
+        minV = MaskMax(mask, minV, inMinV);
+        minW = MaskMax(mask, minW, inMinW);
+
+        maxU = MaskMax(mask, maxU, inMaxU);
+        maxV = MaskMax(mask, maxV, inMaxV);
+        maxW = MaskMax(mask, maxW, inMaxW);
     }
 
     __forceinline void MaskExtendL(const Lane8F32 &mask, const Lane8F32 &clip, const Lane8F32 &u,

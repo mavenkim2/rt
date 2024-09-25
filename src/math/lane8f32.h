@@ -107,6 +107,10 @@ struct LaneF32<8>
     {
         _mm256_store_ps((f32 *)ptr, l);
     }
+    static __forceinline void StoreU(void *ptr, const Lane8F32 &l)
+    {
+        _mm256_storeu_ps((f32 *)ptr, l);
+    }
 };
 
 __forceinline Lane8F32 operator+(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_add_ps(a, b); }
