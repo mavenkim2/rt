@@ -161,7 +161,11 @@ void WaitJobs(Counter *counter)
 {
     while (counter->count.load() != 0)
     {
-        std::this_thread::yield();
+        if (Pop(jobSystem.highPriorityQueue, 0) && Pop(jobSystem.lowPriorityQueue, 0))
+        {
+            _mm_pause();
+            // std::this_thread::yield();
+        }
     }
 }
 

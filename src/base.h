@@ -36,7 +36,9 @@ typedef i32 b32;
 void Print(char *fmt, ...);
 void Print(char *fmt, va_list args);
 
-#define Glue(a, b) a##b
+// TODO: set this based on os call
+#define CACHE_LINE_SIZE 64
+#define Glue(a, b)      a##b
 #if DEBUG
 // #define Assert(expression) (!(expression) ? (*(volatile int *)0 = 0, 0) : 0)
 #define Assert(expression)                                                                  \

@@ -267,7 +267,6 @@ template <bool isPartition = false>
 void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
                   Bounds8 *l, Bounds8 *r)
 {
-    threadLocalStatistics->misc += 1;
     static const u32 LUTX[] = {0, 2, 1};
     static const u32 LUTY[] = {1, 0, 2};
     static const u32 LUTZ[] = {2, 1, 0};
@@ -662,7 +661,7 @@ struct alignas(32) HeuristicSOASplitBinning
         }
     }
 
-    u32 Split(Arena *arena, TriangleMesh *mesh, ExtRangeSOA range, Split split, Bounds &outLeft, Bounds &outRight)
+    u32 SplitSOA(Arena *arena, TriangleMesh *mesh, ExtRangeSOA range, Split split, Bounds &outLeft, Bounds &outRight)
     {
         // partitioning
         u32 dim          = split.bestDim;
@@ -841,7 +840,7 @@ struct alignas(32) HeuristicSOASplitBinning
             const u32 blockSize         = 16;
             const u32 blockMask         = 15;
             const u32 blockShift        = Bsf(blockSize);
-            const u32 numJobs           = 32;//OS_NumProcessors();
+            const u32 numJobs           = OS_NumProcessors();
             const u32 numBlocksPerChunk = numJobs;
             const u32 chunkSize         = blockSize * numJobs;
 
@@ -851,14 +850,18 @@ struct alignas(32) HeuristicSOASplitBinning
             alignedCount        = rEndAligned - lStartAligned;
             const u32 numChunks = (alignedCount + chunkSize - 1) / chunkSize;
 
-            jobsystem::Counter counter = {};
             // NOTE: it is very important to ensure that none of the processors touch the same cache lines when
             // reading/writing
-            jobsystem::KickJobs(&counter, numJobs, 1, [&](jobsystem::JobArgs args) {
-                const u32 queueSize      = LANE_WIDTH * 2 - 1;
-                const u32 rightQueueSize = queueSize + LANE_WIDTH;
-                const u32 group          = args.jobId;
-                auto GetIndex            = [&](u32 index) {
+            // jobsystem::Counter counter = {};
+            // jobsystem::KickJobs(&counter, numJobs, 1, [&](jobsystem::JobArgs args) {
+            Scheduler::Counter counter = {};
+            scheduler.Schedule(&counter, numJobs, 1, [&](u32 jobID) {
+                PerformanceCounter perfCounter = OS_StartCounter();
+                const u32 queueSize            = LANE_WIDTH * 2 - 1;
+                const u32 rightQueueSize       = queueSize + LANE_WIDTH;
+                const u32 group                = jobID;
+                // const u32 group = args.jobId;
+                auto GetIndex = [&](u32 index) {
                     Assert((index & (LANE_WIDTH - 1)) == 0);
                     const u32 chunkIndex = index >> blockShift;
                     const u32 blockIndex = group;
@@ -866,7 +869,8 @@ struct alignas(32) HeuristicSOASplitBinning
                     const u32 indexInBlock = index & blockMask;
                     Assert(indexInBlock == 0 || indexInBlock == 8);
 
-                    return lStartAligned + chunkIndex * chunkSize + (blockIndex << blockShift) + indexInBlock;
+                    u32 outIndex = lStartAligned + chunkIndex * chunkSize + (blockIndex << blockShift) + indexInBlock;
+                    return outIndex;
                 };
                 u32 leftQueue[queueSize];
                 u32 leftCount = 0;
@@ -953,8 +957,10 @@ struct alignas(32) HeuristicSOASplitBinning
                         rightQueue[queueSize - 1 - i] = rightQueue[queueSize - 1 - i - minCount];
                     }
                 }
+                threadLocalStatistics[GetThreadIndex()].misc += 1; // OS_GetMilliseconds(perfCounter);
             });
-            jobsystem::WaitJobs(&counter);
+            // jobsystem::WaitJobs(&counter);
+            scheduler.Wait(&counter);
 
 #if 0
             for (;;)
@@ -1570,8 +1576,9 @@ struct TestSplitBinningBase
             }
         }
 
-        // PartitionParallel(split, prims, range.start, range.End(), 0)
-#if 1
+        PartitionResult result;
+        PartitionParallel(split, prims, range.start, range.End(), &result);
+#if 0
         u32 l = range.start;
         u32 r = range.End() - 1;
         for (;;)
@@ -1608,8 +1615,9 @@ struct TestSplitBinningBase
             r--;
         }
 
+        return l;
 #endif
-            return l;
+        return result.mid;
 
         // const size_t numExtElements = min(max_ext_range_size, ext_elements.load());
         // set._end += numExtElements;

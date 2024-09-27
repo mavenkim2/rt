@@ -13,6 +13,7 @@
 #include "hash.h"
 #include "sampling.h"
 #include "random.h"
+#include "bvh/parallel.h"
 #include "base_types.h"
 #include "scene.h"
 #include "bvh.h"
@@ -1037,16 +1038,18 @@ int main(int argc, char *argv[])
     InitThreadContext(arena, "[Main Thread]", 1);
     OS_Init();
     SetThreadIndex(0);
-    jobsystem::InitializeJobsystem();
+    // jobsystem::InitializeJobsystem();
 
-    u32 numProcessors      = OS_NumProcessors();
+    u32 numProcessors = OS_NumProcessors();
     threadLocalStatistics  = PushArray(arena, ThreadStatistics, numProcessors);
     threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, numProcessors);
+    scheduler.Init(numProcessors);
 
     const u32 count = 3000000;
     // TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
     // TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
     TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
+    // TriangleMesh mesh = LoadPLY(arena, "data/xyzrgb_statuette.ply");
 
     // TriangleClipTestSOA(0, count);
     // TriangleClipBinTestDefault(0, count);

@@ -138,12 +138,20 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     start = OS_StartCounter();
     Bounds left;
     Bounds right;
-    u32 mid = heuristic.Split(arena, mesh, range, split, left, right);
+    u32 mid = heuristic.SplitSOA(arena, mesh, range, split, left, right);
     time    = OS_GetMilliseconds(start);
     printf("Mid: %u\n", mid);
 #endif
 
     printf("Split time: %fms\n", time);
+    u64 total = 0;
+    for (u32 i = 0; i < OS_NumProcessors(); i++)
+    {
+        printf("thread time %u : %llums\n", i, threadLocalStatistics[i].misc);
+        // total += threadLocalStatistics[i].misc;
+    }
+
+    printf("Misc: %llums\n", total);
 
 #if 0
     printf("Left bounds min: %f %f %f\n", left.minP[0], left.minP[1], left.minP[2]);
@@ -253,6 +261,7 @@ void TriangleClipTestAOSOA(TriangleMesh *mesh, u32 count = 0)
 void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
 {
     Arena *arena = ArenaAlloc();
+    arena->align = 64;
 
     if (!mesh)
     {
@@ -291,11 +300,13 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
     u32 mid = heuristic.Split(mesh, data, range, split, left, right);
     time    = OS_GetMilliseconds(start);
     printf("Mid: %u\n", mid);
+
+    printf("Time elapsed splitting: %fms\n", time);
+#if 0
     printf("Left bounds min: %f %f %f\n", left.minP[0], left.minP[1], left.minP[2]);
     printf("Left bounds max: %f %f %f\n", left.maxP[0], left.maxP[1], left.maxP[2]);
     printf("Right bounds min: %f %f %f\n", right.minP[0], right.minP[1], right.minP[2]);
     printf("Right bounds max: %f %f %f\n", right.maxP[0], right.maxP[1], right.maxP[2]);
-    printf("Time elapsed splitting: %fms\n", time);
 
     // Correctness test
     u32 errors = 0;
@@ -323,6 +334,7 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
         }
     }
     printf("Num errors: %u\n", errors);
+#endif
 }
 
 } // namespace rt
