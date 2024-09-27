@@ -153,15 +153,17 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
 
     printf("Misc: %llums\n", total);
 
-#if 0
-    printf("Left bounds min: %f %f %f\n", left.minP[0], left.minP[1], left.minP[2]);
-    printf("Left bounds max: %f %f %f\n", left.maxP[0], left.maxP[1], left.maxP[2]);
-    printf("Right bounds min: %f %f %f\n", right.minP[0], right.minP[1], right.minP[2]);
-    printf("Right bounds max: %f %f %f\n", right.maxP[0], right.maxP[1], right.maxP[2]);
+#if 1
+    // printf("Left bounds min: %f %f %f\n", left.minP[0], left.minP[1], left.minP[2]);
+    // printf("Left bounds max: %f %f %f\n", left.maxP[0], left.maxP[1], left.maxP[2]);
+    // printf("Right bounds min: %f %f %f\n", right.minP[0], right.minP[1], right.minP[2]);
+    // printf("Right bounds max: %f %f %f\n", right.maxP[0], right.maxP[1], right.maxP[2]);
     // Tests to ensure that the partitioning is valid
-    u32 errors     = 0;
-    f32 *minStream = ((f32 **)(&soa.minX))[split.bestDim];
-    f32 *maxStream = ((f32 **)(&soa.minX))[split.bestDim + 4];
+    u32 errors        = 0;
+    f32 *minStream    = ((f32 **)(&soa.minX))[split.bestDim];
+    f32 *maxStream    = ((f32 **)(&soa.minX))[split.bestDim + 4];
+    u32 firstBadIndex = 0;
+    u32 lastBadIndex  = 0;
     for (u32 i = 0; i < numFaces; i++)
     {
         f32 min      = minStream[i];
@@ -172,6 +174,10 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
             u32 value = (u32)Floor((centroid - heuristic.base[split.bestDim][0]) * heuristic.scale[split.bestDim][0]);
             if (centroid >= split.bestValue || value > split.bestPos)
             {
+                if (firstBadIndex == 0)
+                {
+                    firstBadIndex = i;
+                }
                 // Assert(false);
                 errors += 1;
             }
@@ -181,11 +187,18 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
             u32 value = (u32)Floor((centroid - heuristic.base[split.bestDim][0]) * heuristic.scale[split.bestDim][0]);
             if (centroid < split.bestValue || value <= split.bestPos)
             {
+                if (firstBadIndex == 0)
+                {
+                    firstBadIndex = i;
+                }
+                lastBadIndex = i;
                 // Assert(false);
                 errors += 1;
             }
         }
     }
+    printf("first bad index: %u\n", firstBadIndex);
+    printf("last bad index: %u\n", lastBadIndex);
     printf("Num errors: %u\n", errors);
 #endif
 }

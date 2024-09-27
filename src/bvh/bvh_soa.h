@@ -836,38 +836,42 @@ struct alignas(32) HeuristicSOASplitBinning
             f32 *maxVs = range.data->arr[v + 4];
             f32 *maxWs = range.data->arr[w + 4];
 
-            // NOTE: one cache line
-            const u32 blockSize         = 16;
-            const u32 blockMask         = 15;
+            const u32 numPerCacheLine   = CACHE_LINE_SIZE / sizeof(f32);
+            const u32 blockSize         = numPerCacheLine * 2;
+            const u32 blockMask         = blockSize - 1;
             const u32 blockShift        = Bsf(blockSize);
             const u32 numJobs           = OS_NumProcessors();
             const u32 numBlocksPerChunk = numJobs;
             const u32 chunkSize         = blockSize * numJobs;
 
             // NOTE: these should be aligned on a cache line
-            u32 lStartAligned   = AlignPow2(range.start, 16);
-            u32 rEndAligned     = range.End() & (~15);
+            u32 align = numPerCacheLine;
+            Assert(IsPow2(align));
+            u32 lStartAligned   = AlignPow2(range.start, align);
+            u32 rEndAligned     = range.End() & ~(align - 1);
             alignedCount        = rEndAligned - lStartAligned;
             const u32 numChunks = (alignedCount + chunkSize - 1) / chunkSize;
 
+            TempArena temp    = ScratchStart(0, 0);
+            u32 *blockIndices = PushArray(temp.arena, u32, numChunks);
+            u32 *outMid       = PushArray(temp.arena, u32, numJobs);
+            for (u32 chunkIndex = 0; chunkIndex < numChunks; chunkIndex++)
+            {
+                blockIndices[chunkIndex] = RandomInt(0, numBlocksPerChunk);
+            }
+
             // NOTE: it is very important to ensure that none of the processors touch the same cache lines when
             // reading/writing
-            // jobsystem::Counter counter = {};
-            // jobsystem::KickJobs(&counter, numJobs, 1, [&](jobsystem::JobArgs args) {
             Scheduler::Counter counter = {};
             scheduler.Schedule(&counter, numJobs, 1, [&](u32 jobID) {
-                PerformanceCounter perfCounter = OS_StartCounter();
-                const u32 queueSize            = LANE_WIDTH * 2 - 1;
-                const u32 rightQueueSize       = queueSize + LANE_WIDTH;
-                const u32 group                = jobID;
-                // const u32 group = args.jobId;
-                auto GetIndex = [&](u32 index) {
+                const u32 queueSize      = LANE_WIDTH * 2 - 1;
+                const u32 rightQueueSize = queueSize + LANE_WIDTH;
+                const u32 group          = jobID;
+                auto GetIndex            = [&](u32 index) {
                     Assert((index & (LANE_WIDTH - 1)) == 0);
-                    const u32 chunkIndex = index >> blockShift;
-                    const u32 blockIndex = group;
-                    // NOTE: 0 or 8
+                    const u32 chunkIndex   = index >> blockShift;
+                    const u32 blockIndex   = (blockIndices[chunkIndex] + group) & (numBlocksPerChunk - 1);
                     const u32 indexInBlock = index & blockMask;
-                    Assert(indexInBlock == 0 || indexInBlock == 8);
 
                     u32 outIndex = lStartAligned + chunkIndex * chunkSize + (blockIndex << blockShift) + indexInBlock;
                     return outIndex;
@@ -882,7 +886,7 @@ struct alignas(32) HeuristicSOASplitBinning
                 u32 r          = (numChunks << blockShift);
                 u32 lastRIndex = GetIndex(r);
                 Assert(!(lastRIndex >= rEndAligned && (lastRIndex - rEndAligned) == LANE_WIDTH));
-                r = lastRIndex > rEndAligned ? r - blockSize - LANE_WIDTH : r - LANE_WIDTH;
+                r = lastRIndex > rEndAligned ? AlignPow2(r, blockSize) - blockSize - LANE_WIDTH : r - LANE_WIDTH;
                 for (;;)
                 {
                     while (l <= r && leftCount < LANE_WIDTH)
@@ -934,7 +938,11 @@ struct alignas(32) HeuristicSOASplitBinning
                         r -= LANE_WIDTH;
                     }
                     // TODO: finish properly
-                    if (l > r) break;
+                    if (l > r)
+                    {
+                        outMid[group] = GetIndex(l);
+                        break;
+                    }
                     Assert(leftCount >= LANE_WIDTH && leftCount <= queueSize);
                     Assert(rightCount >= LANE_WIDTH && rightCount <= queueSize);
 
@@ -959,8 +967,12 @@ struct alignas(32) HeuristicSOASplitBinning
                 }
                 threadLocalStatistics[GetThreadIndex()].misc += 1; // OS_GetMilliseconds(perfCounter);
             });
-            // jobsystem::WaitJobs(&counter);
             scheduler.Wait(&counter);
+            u32 mid = pos_inf;
+            for (u32 chunkIndex = 0; chunkIndex < numJobs; chunkIndex++)
+            {
+                mid = Min(outMid[chunkIndex], mid);
+            }
 
 #if 0
             for (;;)
@@ -1154,7 +1166,7 @@ struct alignas(32) HeuristicSOASplitBinning
             outRight.maxP[w]   = maxScalars[5];
 
 #endif
-            return 0;
+            return mid;
         }
     }
 

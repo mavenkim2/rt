@@ -90,7 +90,7 @@ struct JobDeque
     }
     bool Pop(T &out)
     {
-        i64 b         = bottom.load(std::memory_order_relaxed) - 1;
+        i64 b = bottom.load(std::memory_order_relaxed) - 1;
         bottom.store(b, std::memory_order_relaxed);
         std::atomic_thread_fence(std::memory_order_seq_cst);
         i64 t = top.load(std::memory_order_relaxed);
@@ -394,7 +394,7 @@ struct Scheduler
     begin:
         if (counter)
         {
-            if (ExploreTask(w, t, [&]() { return counter->count.load(std::memory_order_acquire) == 0; })) return true;
+            if (ExploreTask(w, t, [&]() { return counter->count.load(std::memory_order_relaxed) == 0; })) return true;
         }
         else
         {
