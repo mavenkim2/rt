@@ -521,8 +521,8 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, Bou
                     bool isNotRight = centroid < bestValue;
                     Lane8F32 leftMask(isNotRight);
                     Lane8F32 rightMask(centroid >= bestValue);
-                    left.MaskExtendNegativeMin(leftMask, min, minVs[lIndex], minWs[lIndex], max, maxVs[lIndex], maxWs[lIndex]);
-                    right.MaskExtendNegativeMin(rightMask, min, minVs[lIndex], minWs[lIndex], max, maxVs[lIndex], maxWs[lIndex]);
+                    left.MaskExtendNegativeMin(leftMask, min, minVs[rIndex], minWs[rIndex], max, maxVs[rIndex], maxWs[rIndex]);
+                    right.MaskExtendNegativeMin(rightMask, min, minVs[rIndex], minWs[rIndex], max, maxVs[rIndex], maxWs[rIndex]);
                     if (isNotRight) break;
                     r--;
                 }

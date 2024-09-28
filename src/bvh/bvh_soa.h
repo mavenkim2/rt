@@ -160,7 +160,6 @@ struct Triangle8
 };
 
 // NOTE: l contains bounds to intersect against
-template <bool isPartition = false>
 void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
                   Bounds8 *l, Bounds8 *r)
 {
@@ -252,21 +251,12 @@ void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri,
         Bounds8 lBounds8(lOut[i]);
         Bounds8 rBounds8(rOut[i]);
 
-        if constexpr (!isPartition)
-        {
-            lBounds8.Intersect(l[i]);
-            rBounds8.Intersect(l[i]);
-        }
+        lBounds8.Intersect(l[i]);
+        rBounds8.Intersect(l[i]);
 
         l[i] = lBounds8;
         r[i] = rBounds8;
     }
-}
-
-__forceinline void ClipTrianglePartition(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
-                                         Bounds8 *l, Bounds8 *r)
-{
-    ClipTriangle<true>(mesh, dim, tri, splitPos, l, r);
 }
 
 template <i32 numBins = 16>
@@ -568,7 +558,6 @@ struct alignas(32) HeuristicSOASplitBinning
 
         u32 refIDQueue[LANE_WIDTH * 2 - 1];
         u32 faceIDQueue[LANE_WIDTH * 2 - 1];
-        Bounds8 bounds[2][8];
 
         u32 splitCount      = 0;
         u32 totalSplitCount = 0;
@@ -592,7 +581,7 @@ struct alignas(32) HeuristicSOASplitBinning
             Lane8F32 max       = Lane8F32::LoadU(maxStream + i);
             Lane8U32 faceIDs   = Lane8U32::LoadU(range.data->primIDs + i);
             Lane8U32 refIDs    = Lane8U32::Step(i);
-            Lane8F32 splitMask = (min > negBestValue & max > split.bestValue);
+            Lane8F32 splitMask = (min > negBestValue & max >= split.bestValue);
             u32 mask           = Movemask(splitMask);
             Lane8U32::StoreU(refIDQueue + count, MaskCompress(mask, refIDs));
             Lane8U32::StoreU(faceIDQueue + count, MaskCompress(mask, faceIDs));
@@ -624,25 +613,32 @@ struct alignas(32) HeuristicSOASplitBinning
                     out.primIDs          = (u32 *)(alloc + streamSize * 7);
                 }
                 Triangle8 tri = Triangle8::Load(mesh, dim, faceIDQueue + count);
-                ClipTrianglePartition(mesh, dim, tri, split.bestValue, bounds[0], bounds[1]);
+
+                Bounds8 boundsLeft[LANE_WIDTH];
+                for (u32 i = 0; i < LANE_WIDTH; i++)
+                {
+                    boundsLeft[i] = Bounds8(pos_inf);
+                }
+                Bounds8 boundsRight[8];
+                ClipTriangle(mesh, dim, tri, split.bestValue, boundsLeft, boundsRight);
                 for (u32 queueIndex = 0; queueIndex < LANE_WIDTH; queueIndex++)
                 {
                     const u32 refID = refIDQueue[count + queueIndex];
                     // const u32 refID = faceIDQueue[count + queueIndex];
 
-                    range.data->minX[refID] = bounds[0][queueIndex].v[0];
-                    range.data->minY[refID] = bounds[0][queueIndex].v[1];
-                    range.data->minZ[refID] = bounds[0][queueIndex].v[2];
-                    range.data->maxX[refID] = bounds[0][queueIndex].v[4];
-                    range.data->maxY[refID] = bounds[0][queueIndex].v[5];
-                    range.data->maxZ[refID] = bounds[0][queueIndex].v[6];
+                    range.data->minX[refID] = boundsLeft[queueIndex].v[0];
+                    range.data->minY[refID] = boundsLeft[queueIndex].v[1];
+                    range.data->minZ[refID] = boundsLeft[queueIndex].v[2];
+                    range.data->maxX[refID] = boundsLeft[queueIndex].v[4];
+                    range.data->maxY[refID] = boundsLeft[queueIndex].v[5];
+                    range.data->maxZ[refID] = boundsLeft[queueIndex].v[6];
 
-                    out.minX[splitCount - 8 + queueIndex] = bounds[1][queueIndex].v[0];
-                    out.minY[splitCount - 8 + queueIndex] = bounds[1][queueIndex].v[1];
-                    out.minZ[splitCount - 8 + queueIndex] = bounds[1][queueIndex].v[2];
-                    out.maxX[splitCount - 8 + queueIndex] = bounds[1][queueIndex].v[4];
-                    out.maxY[splitCount - 8 + queueIndex] = bounds[1][queueIndex].v[5];
-                    out.maxZ[splitCount - 8 + queueIndex] = bounds[1][queueIndex].v[6];
+                    out.minX[splitCount - 8 + queueIndex] = boundsRight[queueIndex].v[0];
+                    out.minY[splitCount - 8 + queueIndex] = boundsRight[queueIndex].v[1];
+                    out.minZ[splitCount - 8 + queueIndex] = boundsRight[queueIndex].v[2];
+                    out.maxX[splitCount - 8 + queueIndex] = boundsRight[queueIndex].v[4];
+                    out.maxY[splitCount - 8 + queueIndex] = boundsRight[queueIndex].v[5];
+                    out.maxZ[splitCount - 8 + queueIndex] = boundsRight[queueIndex].v[6];
                 }
             }
         }
@@ -656,7 +652,7 @@ struct alignas(32) HeuristicSOASplitBinning
         if (splitCount + count > splitMax)
         {
             const u32 streamSize = u32(sizeof(u32) * range.count * GROW_AMOUNT);
-            u8 *alloc            = PushArray(arena, u8, u32(streamSize * LANE_WIDTH));
+            u8 *alloc            = PushArray(arena, u8, u32(streamSize * 8));
             splitCount           = 0;
             out.minX             = (f32 *)(alloc + streamSize * 0);
             out.minY             = (f32 *)(alloc + streamSize * 1);
@@ -671,21 +667,21 @@ struct alignas(32) HeuristicSOASplitBinning
         for (u32 queueIndex = 0; queueIndex < count; queueIndex++)
         {
             u32 refID = refIDQueue[queueIndex];
-            Bounds inBounds(Lane4F32(range.data->minX[refID], range.data->minY[refID], range.data->minZ[refID], 0.f),
+            Bounds inBounds(Lane4F32(-range.data->minX[refID], -range.data->minY[refID], -range.data->minZ[refID], 0.f),
                             Lane4F32(range.data->maxX[refID], range.data->maxY[refID], range.data->maxZ[refID], 0.f));
             Bounds l;
             Bounds r;
             ClipTriangleSimple(mesh, inBounds, range.data->primIDs[refID], dim, split.bestValue, l, r);
-            range.data->minX[refID] = l.minP[0];
-            range.data->minY[refID] = l.minP[1];
-            range.data->minZ[refID] = l.minP[2];
+            range.data->minX[refID] = -l.minP[0];
+            range.data->minY[refID] = -l.minP[1];
+            range.data->minZ[refID] = -l.minP[2];
             range.data->maxX[refID] = l.maxP[0];
             range.data->maxY[refID] = l.maxP[1];
             range.data->maxZ[refID] = l.maxP[2];
 
-            out.minX[splitCount]    = l.minP[0];
-            out.minY[splitCount]    = l.minP[1];
-            out.minZ[splitCount]    = l.minP[2];
+            out.minX[splitCount]    = -l.minP[0];
+            out.minY[splitCount]    = -l.minP[1];
+            out.minZ[splitCount]    = -l.minP[2];
             out.geomIDs[splitCount] = range.data->geomIDs[refID];
             out.maxX[splitCount]    = l.maxP[0];
             out.maxY[splitCount]    = l.maxP[1];
@@ -863,49 +859,7 @@ struct TestSplitBinningBase
 
         PartitionResult result;
         PartitionParallel(split, prims, range.start, range.End(), &result);
-#if 0
-        u32 l = range.start;
-        u32 r = range.End() - 1;
-        for (;;)
-        {
-            b32 isLeft = true;
-            Lane4F32 lCentroid;
-            Lane4F32 rCentroid;
-            PrimData *lPrim;
-            PrimData *rPrim;
-            do
-            {
-                lPrim     = &prims[l];
-                lCentroid = (lPrim->minP + lPrim->maxP) * 0.5f;
-                if (lCentroid[split.bestDim] >= split.bestValue) break;
-                outLeft.Extend(lPrim->minP, lPrim->maxP);
-                l++;
-            } while (l <= r);
-            do
-            {
-                rPrim     = &prims[r];
-                rCentroid = (rPrim->minP + rPrim->maxP) * 0.5f;
-                if (rCentroid[split.bestDim] < split.bestValue) break;
-                outRight.Extend(rPrim->minP, rPrim->maxP);
-                r--;
-            } while (l <= r);
-            if (l > r) break;
-
-            Swap(lPrim->minP, rPrim->minP);
-            Swap(lPrim->maxP, rPrim->maxP);
-            outLeft.Extend(lPrim->minP, lPrim->maxP);
-            outRight.Extend(rPrim->minP, rPrim->maxP);
-
-            l++;
-            r--;
-        }
-
-        return l;
-#endif
         return result.mid;
-
-        // const size_t numExtElements = min(max_ext_range_size, ext_elements.load());
-        // set._end += numExtElements;
     }
 };
 
