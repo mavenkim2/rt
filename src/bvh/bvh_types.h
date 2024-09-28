@@ -4,6 +4,7 @@ namespace rt
 {
 static const u32 LANE_WIDTH  = 8;
 static const f32 GROW_AMOUNT = 1.2f;
+static const u32 PARALLEL_THRESHOLD = 4 * 1024;
 struct BuildSettings
 {
     u32 maxLeafSize = 3;
@@ -226,13 +227,14 @@ struct Bounds8F32
     {
 
         minU = clip;
+#if 0
         minV = MaskMin(mask, minV, v);
         minW = MaskMin(mask, minW, w);
 
         maxU = MaskMax(mask, maxU, u);
         maxV = MaskMax(mask, maxV, v);
         maxW = MaskMax(mask, maxW, w);
-#if 0
+#else
         minV = Select(mask, minV, Min(minV, v));
         minW = Select(mask, minW, Min(minW, w));
 

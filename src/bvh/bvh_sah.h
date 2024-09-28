@@ -4,7 +4,6 @@
 
 // TODO:
 // - spatial splits <- currently working on
-// - explore octant order traversal,
 // - partial rebraiding
 // - stream (Fuetterling 2015, frusta)/packet traversal
 // - ray sorting/binning(hyperion, or individually in each thread).
@@ -16,7 +15,8 @@
 //     - can instances contain multiple types of primitives?
 // - expand current BVH4 traversal code to BVH8
 
-// crazier TODOs
+// far future TODOs (after moana is rendered)
+// - explore octant order traversal,
 // - stackless/stack compressed?
 // - PLOC and agglomerative aggregate clustering
 // - subdivision surfaces
@@ -27,10 +27,6 @@
 
 namespace rt
 {
-
-const u32 PARALLEL_THRESHOLD = 4 * 1024;
-
-// TODO: make sure to pad to max lane width, set min and maxes to pos_inf and neg_inf and count to zero for padded entries
 
 template <i32 numBins>
 struct HeuristicSAHBinnedAVX
@@ -590,80 +586,6 @@ Split BinParallel(const Record &record, u32 blockSize = 1, HeuristicSAHBinned<32
     return result.Best(blockShift);
 }
 
-__forceinline u32 ClipTriangle(const Vec3f &pA, const Vec3f &pB, const Vec3f &pC, const u32 dim,
-                               const f32 clipPosA, const f32 clipPosB, Bounds &outBounds)
-{
-    u32 invalid = 0;
-
-    Bounds out;
-
-    Lane4F32 p0 = Lane4F32(pA);
-    Lane4F32 p1 = Lane4F32(pB);
-    Lane4F32 p2 = Lane4F32(pC);
-
-    Lane4F32 edge0 = p1 - p0;
-
-    f32 tA0 = (clipPosA - p0[dim]) / edge0[dim];
-    f32 tB0 = (clipPosB - p0[dim]) / edge0[dim];
-
-    invalid = invalid | ((tA0 > 1.f) && (tB0 > 1.f));
-    invalid = invalid | (((tA0 < 0.f) && (tB0 < 0.f)) << 1);
-
-    tA0 = Clamp(0.f, 1.f, tA0);
-    tB0 = Clamp(0.f, 1.f, tB0);
-
-    Lane4F32 clippedPointA0 = FMA(edge0, tA0, p0);
-    Lane4F32 clippedPointB0 = FMA(edge0, tB0, p0);
-
-    out.Extend(clippedPointA0);
-    out.Extend(clippedPointB0);
-
-    Lane4F32 edge1 = p2 - p1;
-
-    f32 tA1 = (clipPosA - p1[dim]) / edge1[dim];
-    f32 tB1 = (clipPosB - p1[dim]) / edge1[dim];
-
-    invalid = invalid | ((tA1 > 1.f) && (tB1 > 1.f));
-    invalid = invalid | (((tA1 < 0.f) && (tB1 < 0.f)) << 1);
-
-    tA1 = Clamp(0.f, 1.f, tA1);
-    tB1 = Clamp(0.f, 1.f, tB1);
-
-    Lane4F32 clippedPointA1 = FMA(edge1, tA1, p1);
-    Lane4F32 clippedPointB1 = FMA(edge1, tB1, p1);
-
-    out.Extend(clippedPointA1);
-    out.Extend(clippedPointB1);
-
-    Lane4F32 edge2 = p0 - p2;
-
-    f32 tA2 = (clipPosA - p2[dim]) / edge2[dim];
-    f32 tB2 = (clipPosB - p2[dim]) / edge2[dim];
-
-    invalid = invalid | ((tA2 > 1.f) && (tB2 > 1.f));
-    invalid = invalid | (((tA2 < 0.f) && (tB2 < 0.f)) << 1);
-
-    tA2 = Clamp(0.f, 1.f, tA2);
-    tB2 = Clamp(0.f, 1.f, tB2);
-
-    Lane4F32 clippedPointA2 = FMA(edge2, tA2, p2);
-    Lane4F32 clippedPointB2 = FMA(edge2, tB2, p2);
-
-    out.Extend(clippedPointA2);
-    out.Extend(clippedPointB2);
-
-    outBounds.minP = Select(Lane4F32((bool)invalid), Lane4F32(pos_inf), out.minP);
-    outBounds.maxP = Select(Lane4F32((bool)invalid), Lane4F32(neg_inf), out.maxP);
-    return 0;
-}
-
-__forceinline void Swap(const Lane8F32 &mask, Lane8F32 &a, Lane8F32 &b)
-{
-    Lane8F32 temp = a;
-    a             = _mm256_blendv_ps(a, b, mask);
-    b             = _mm256_blendv_ps(b, temp, mask);
-}
-
 __forceinline void ClipTriangleSimple(const TriangleMesh *mesh, const Bounds &bounds, const u32 faceIndex,
                                       const u32 dim, const f32 clipPos, Bounds &l, Bounds &r)
 {
@@ -750,7 +672,9 @@ struct QuantizedNode
     StaticAssert(N == 4 || N == 8, NMustBe4Or8);
 
     // TODO: the bottom 4 bits can be used for something (and maybe the top 7 bits too)
-    QuantizedNode<N> *internalOffset;
+    // QuantizedNode<N> *internalOffset;
+    uintptr_t internalOffset;
+    uintptr_t leafOffset;
     u8 lowerX[N];
     u8 lowerY[N];
     u8 lowerZ[N];
@@ -761,12 +685,8 @@ struct QuantizedNode
     u8 upperZ[N];
 
     Vec3f minP;
-    u32 leafOffset;
     u8 scale[3];
-
-    // TODO: the last 5 bytes can be used for something
-    u8 meta[N >> 2];
-    u8 _pad[N == 8 ? 3 : 4];
+    u8 meta;
 };
 
 template <i32 N>
@@ -896,32 +816,100 @@ template <i32 N>
 struct UpdateQuantizedNode;
 
 template <i32 N>
-struct UpdateQuantizedNode
+struct UpdateQuantizedNode;
+
+template <>
+struct UpdateQuantizedNode<4>
 {
-    using NodeType = QuantizedNode<N>;
-    __forceinline void operator()(NodeType *parent, const Record *records, NodeType *children,
+    using NodeType = QuantizedNode<4>;
+    __forceinline void operator()(Arena *arena, NodeType *parent, const Record *records, NodeType *children,
                                   const u32 *leafIndices, const u32 leafCount)
     {
         // NOTE: for leaves, top 3 bits represent binary count. bottom 5 bits represent offset from base offset.
         // 0 denotes a node, 1 denotes invalid.
 
-        parent->internalOffset = children;
-        for (u32 i = 0; i < N >> 2; i++)
-        {
-            parent->meta[i] = 0;
-        }
+        u32 primTotal = 0;
         for (u32 i = 0; i < leafCount; i++)
         {
-            parent->leafOffset   = records[leafIndices[0]].start;
+            u32 leafIndex        = leafIndices[i];
+            const Record *record = &records[leafIndex];
+            primTotal += record->end - record->start;
+        }
+
+        Assert(primTotal <= 12);
+        u32 *primIndices       = PushArray(arena, u32, primTotal);
+        parent->internalOffset = (uintptr_t)children;
+        parent->leafOffset     = (uintptr_t)primIndices;
+        parent->meta           = 0;
+        u32 offset             = 0;
+        for (u32 i = 0; i < leafCount; i++)
+        {
             u32 leafIndex        = leafIndices[i];
             const Record *record = &records[leafIndex];
             u32 primCount        = record->end - record->start;
-            u32 leafOffset       = record->start - parent->leafOffset;
+            for (u32 j = record->start; j < record->end; j++)
+            {
+                primIndices[offset++] = j;
+            }
 
             Assert(primCount >= 1 && primCount <= 3);
-            Assert(leafOffset < 24);
+            Assert(leafIndex >= 0 && leafIndex <= 3);
 
-            parent->meta[leafIndex >> 2] |= primCount << ((leafIndex & 3) << 1);
+            parent->meta |= primCount << (leafIndex * 2);
+        }
+    }
+};
+
+template <>
+struct UpdateQuantizedNode<8>
+{
+    using NodeType = QuantizedNode<8>;
+    __forceinline void operator()(Arena *arena, NodeType *parent, const Record *records, NodeType *children,
+                                  const u32 *leafIndices, const u32 leafCount)
+    {
+        // NOTE: for leaves, top 3 bits represent binary count. bottom 5 bits represent offset from base offset.
+        // 0 denotes a node, 1 denotes invalid.
+        Assert(((u64)parent->internalOffset & 0xf) == 0);
+        Assert(((u64)parent->leafOffset & 0xf) == 0);
+
+        uintptr_t internalOffset = (uintptr_t)children;
+
+        u32 primTotal = 0;
+        for (u32 i = 0; i < leafCount; i++)
+        {
+            u32 leafIndex        = leafIndices[i];
+            const Record *record = &records[leafIndex];
+            primTotal += record->end - record->start;
+        }
+        Assert(primTotal <= 24);
+        u32 *primIndices     = PushArray(arena, u32, primTotal);
+        uintptr_t leafOffset = (uintptr_t)primIndices;
+        parent->meta         = 0;
+        u32 offset           = 0;
+        for (u32 i = 0; i < leafCount; i++)
+        {
+            u32 leafIndex        = leafIndices[i];
+            const Record *record = &records[leafIndex];
+            u32 primCount        = record->end - record->start;
+
+            for (u32 j = record->start; j < record->end; j++)
+            {
+                primIndices[offset++] = j;
+            }
+            Assert(primCount >= 1 && primCount <= 3);
+
+            if (leafIndex >= 6)
+            {
+                internalOffset |= (primCount << ((leafIndex - 6) * 2));
+            }
+            else if (leafIndex >= 4)
+            {
+                leafOffset |= (primCount << ((leafIndex - 4) * 2));
+            }
+            else
+            {
+                parent->meta |= primCount << (leafIndex * 2);
+            }
         }
     }
 };
@@ -1188,6 +1176,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, NodeType *p
 
     Assert(inNumChildren <= N);
 
+    // TODO: multithread this loop
     for (u32 childIndex = 0; childIndex < inNumChildren; childIndex++)
     {
         Record *childRecords = allChildRecords[childIndex];
@@ -1201,127 +1190,9 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, NodeType *p
         leafCount += !result;
     }
 
-    NodeType *children = PushArray(arenas[GetThreadIndex()], NodeType, nodeCount);
+    Arena *currentArena = arenas[GetThreadIndex()];
 
-    // TODO: need to partition again so that the ranges pointed to by the leaves are consecutive in memory
-    // TODO: consider whether we actually want to do this
-    if (leafCount > 0)
-    {
-        u32 offset = pos_inf;
-        u32 end    = neg_inf;
-
-        TempArena temp = ScratchStart(0, 0);
-        for (u32 i = 0; i < inNumChildren; i++)
-        {
-            offset = Min(offset, records[i].start);
-            end    = Max(end, records[i].end);
-        }
-
-        u32 totalInternalNodeRange = 0;
-        u32 totalLeafNodeRange     = 0;
-        for (u32 i = 0; i < nodeCount; i++)
-        {
-            u32 internalNodeIndex = childNodeIndices[i];
-            Record &record        = records[internalNodeIndex];
-            totalInternalNodeRange += record.Size();
-        }
-
-        for (u32 i = 0; i < leafCount; i++)
-        {
-            u32 internalLeafIndex = childLeafIndices[i];
-            Record &record        = records[internalLeafIndex];
-            totalLeafNodeRange += record.Size();
-        }
-
-        Assert(totalLeafNodeRange + totalInternalNodeRange == end - offset);
-        struct Range
-        {
-            u32 start;
-            u32 end;
-        };
-
-        // TODO
-        BasePrimitive *temporaryInternalNodeStorage = PushArray(temp.arena, BasePrimitive, totalInternalNodeRange);
-        PrimData *tempInternalPrimData              = PushArray(temp.arena, PrimData, totalInternalNodeRange);
-        Range *newInternalNodeRanges                = PushArray(temp.arena, Range, nodeCount);
-
-        BasePrimitive *temporaryLeafNodeStorage = PushArray(temp.arena, BasePrimitive, totalLeafNodeRange);
-        PrimData *tempLeafPrimData              = PushArray(temp.arena, PrimData, totalLeafNodeRange);
-        Range *newLeafNodeRanges                = PushArray(temp.arena, Range, leafCount);
-
-        u32 nodeOffset = 0;
-        u32 leafOffset = 0;
-        for (u32 i = 0; i < nodeCount; i++)
-        {
-            u32 internalNodeIndex = childNodeIndices[i];
-            Record &record        = records[internalNodeIndex];
-
-            newInternalNodeRanges[i].start = nodeOffset;
-            newInternalNodeRanges[i].end   = nodeOffset + record.Size();
-            for (u32 j = record.start; j < record.end; j++)
-            {
-                temporaryInternalNodeStorage[nodeOffset] = GetPrimitive<Primitive, BasePrimitive>(primitives, j);
-                tempInternalPrimData[nodeOffset]         = record.data[j];
-                nodeOffset++;
-            }
-        }
-        for (u32 i = 0; i < leafCount; i++)
-        {
-            u32 leafNodeIndex = childLeafIndices[i];
-            Record &record    = records[leafNodeIndex];
-
-            newLeafNodeRanges[i].start = leafOffset;
-            newLeafNodeRanges[i].end   = leafOffset + record.Size();
-            for (u32 j = record.start; j < record.end; j++)
-            {
-                temporaryLeafNodeStorage[leafOffset] = GetPrimitive<Primitive, BasePrimitive>(primitives, j);
-                tempLeafPrimData[leafOffset]         = record.data[j];
-                leafOffset++;
-            }
-        }
-
-        for (u32 i = 0; i < leafCount; i++)
-        {
-            u32 index           = childLeafIndices[i];
-            Record &childRecord = records[index];
-            Range *range        = &newLeafNodeRanges[i];
-            childRecord.start   = offset;
-            for (u32 j = range->start; j < range->end; j++)
-            {
-                StorePrimitive(primitives, temporaryLeafNodeStorage[j], offset);
-                childRecord.data[offset] = tempLeafPrimData[j];
-                offset++;
-            }
-            childRecord.end = offset;
-        }
-        for (u32 i = 0; i < nodeCount; i++)
-        {
-            u32 index           = childNodeIndices[i];
-            Record &childRecord = records[index];
-            Range *range        = &newInternalNodeRanges[i];
-            u32 newStart        = offset;
-            for (u32 j = range->start; j < range->end; j++)
-            {
-                StorePrimitive(primitives, temporaryInternalNodeStorage[j], offset);
-                childRecord.data[offset] = tempInternalPrimData[j];
-                offset++;
-            }
-            u32 newEnd = offset;
-            for (u32 grandChildIndex = 0; grandChildIndex < allNumChildren[index]; grandChildIndex++)
-            {
-                Record &grandChildRecord = allChildRecords[index][grandChildIndex];
-                i32 shift                = (i32)newStart - (i32)childRecord.start;
-                grandChildRecord.start += shift;
-                grandChildRecord.end += shift;
-            }
-            childRecord.start = newStart;
-            childRecord.end   = newEnd;
-        }
-
-        Assert(offset == end);
-
-        ScratchEnd(temp);
-    }
+    NodeType *children = PushArray(currentArena, NodeType, nodeCount);
 
     for (u32 i = 0; i < nodeCount; i++)
     {
@@ -1330,15 +1201,14 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, NodeType *p
     }
 
     // Updates the parent
-    f.updateNode(parent, records, children, childLeafIndices, leafCount);
+    f.updateNode(currentArena, parent, records, children, childLeafIndices, leafCount);
 
+    // TODO: multithread this loop
     for (u32 i = 0; i < nodeCount; i++)
     {
         u32 childNodeIndex = childNodeIndices[i];
         BuildBVH(settings, &children[childNodeIndex], allChildRecords[childNodeIndex], allNumChildren[childNodeIndex]);
     }
-
-    // return NodePtr::EncodeNode(node);
 }
 
 template <i32 N, typename BuildFunctions>

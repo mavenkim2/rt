@@ -168,15 +168,9 @@ void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri,
     static const u32 LUTZ[] = {2, 1, 0};
 
     Lane8F32 clipMasks[] = {
-        tri.v0u <= splitPos,
-        tri.v1u <= splitPos,
-        tri.v2u <= splitPos,
-    };
-
-    Lane8F32 clipMasksR[] = {
-        tri.v0u >= splitPos,
-        tri.v1u >= splitPos,
-        tri.v2u >= splitPos,
+        tri.v0u < splitPos,
+        tri.v1u < splitPos,
+        tri.v2u < splitPos,
     };
 
     Bounds8F32 left;
@@ -200,7 +194,7 @@ void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri,
 
         const Lane8F32 &clipMask = clipMasks[first];
         left.MaskExtendL(clipMask, splitPos, v0u, v0v, v0w);
-        right.MaskExtendR(clipMasksR[first], splitPos, v0u, v0v, v0w);
+        right.MaskExtendR(clipMask, splitPos, v0u, v0v, v0w);
 
         const Lane8F32 div = Select(v1u == v0u, Lane8F32(zero), Rcp(v1u - v0u));
         const Lane8F32 t   = (splitPos - v0u) * div;
@@ -258,6 +252,98 @@ void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri,
         r[i] = rBounds8;
     }
 }
+
+template <i32 numBins = 32>
+struct ObjectBinner
+{
+    Lane8F32 base[3];
+    Lane8F32 scale[3];
+
+    ObjectBinner(Bounds &centroidBounds)
+    {
+        Lane8F32 minP(centroidBounds.minP);
+        base[0] = Shuffle<0>(minP);
+        base[1] = Shuffle<1>(minP);
+        base[2] = Shuffle<2>(minP);
+
+        const Lane4F32 diag = Max(centroidBounds.maxP - centroidBounds.minP);
+        Lane4F32 scale4     = Select(diag > eps, Lane4F32((f32)numBins) / diag, Lane4F32(0.f));
+
+        Lane8F32 scale8(scale4);
+        scale[0] = Shuffle<0>(scale8);
+        scale[1] = Shuffle<1>(scale8);
+        scale[2] = Shuffle<2>(scale8);
+    }
+    Lane8U32 Bin(const Lane8F32 &in, const u32 dim) const
+    {
+        return (in - base[dim]) * scale[dim];
+    }
+};
+
+template <i32 numBins = 32>
+struct alignas(32) HeuristicSOAObjectBinning
+{
+    Bounds8 bins[3][numBins];
+    Lane4U32 counts[numBins];
+    HeuristicSOAObjectBinning()
+    {
+        for (u32 i = 0; i < numBins; i++)
+        {
+            counts[i] = 0;
+        }
+    }
+
+    void Bin(ObjectBinner<numBins> binner, ExtRangeSOA range)
+    {
+        PrimDataSOA *data = range.data;
+        u32 alignedCount  = range.count - range.count % LANE_WIDTH;
+        u32 i             = range.start;
+        Lane8F32 lanes[8];
+        for (; i < range.start + alignedCount; i += LANE_WIDTH)
+        {
+            Lane8F32 mins[] = {
+                Lane8F32::Load(data->minX),
+                Lane8F32::Load(data->minY),
+                Lane8F32::Load(data->minZ),
+            };
+            Lane8F32 maxs[] = {
+                Lane8F32::Load(data->maxX),
+                Lane8F32::Load(data->maxY),
+                Lane8F32::Load(data->maxZ),
+            };
+            Lane8F32 centroids[] = {
+                (maxs[0] - mins[0]) * 0.5f,
+                (maxs[1] - mins[1]) * 0.5f,
+                (maxs[2] - mins[2]) * 0.5f,
+            };
+            Lane8U32 binIndices[] = {binner.Bin(centroids[0], 0), binner.Bin(centroids[1], 1), binner.Bin(centroids[2], 2)};
+            Lane8U32 out          = PackU32(binIndices[0], binIndices[1]);
+            Lane8U32 out1         = PackU16(out, binIndices[2]);
+
+            alignas(32) u8 bytes[32];
+            Lane8U32::Store(bytes, out);
+
+            Transpose6x8(mins[0], mins[1], mins[2], maxs[0], maxs[1], maxs[2],
+                         lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5], lanes[6], lanes[7]);
+
+            static const u32 order[3][LANE_WIDTH] = {
+                {0, 1, 2, 3, 16, 17, 18, 19},
+                {4, 5, 6, 7, 20, 21, 22, 23},
+                {8, 10, 12, 14, 24, 26, 28, 30},
+            };
+            // TODO: see if it's faster to pack before storing, or storing all three lanes separately
+            for (u32 dim = 0; dim < 3; dim++)
+            {
+                for (u32 b = 0; b < LANE_WIDTH; b++)
+                {
+                    u32 bin = bytes[order[dim][b]];
+                    bins[dim][bin].Extend(lanes[b]);
+                    binCounts[dim][bin]++;
+                }
+            }
+        }
+    }
+}; // namespace rt
 
 template <i32 numBins = 16>
 struct alignas(32) HeuristicSOASplitBinning
@@ -615,9 +701,9 @@ struct alignas(32) HeuristicSOASplitBinning
                 Triangle8 tri = Triangle8::Load(mesh, dim, faceIDQueue + count);
 
                 Bounds8 boundsLeft[LANE_WIDTH];
-                for (u32 i = 0; i < LANE_WIDTH; i++)
+                for (u32 b = 0; b < LANE_WIDTH; b++)
                 {
-                    boundsLeft[i] = Bounds8(pos_inf);
+                    boundsLeft[b] = Bounds8(pos_inf);
                 }
                 Bounds8 boundsRight[8];
                 ClipTriangle(mesh, dim, tri, split.bestValue, boundsLeft, boundsRight);
@@ -859,6 +945,9 @@ struct TestSplitBinningBase
 
         PartitionResult result;
         PartitionParallel(split, prims, range.start, range.End(), &result);
+        // PartitionSerial(split, prims, range.start, range.End(), &result);
+        outLeft  = result.geomBoundsL;
+        outRight = result.geomBoundsR;
         return result.mid;
     }
 };

@@ -238,7 +238,7 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
     printf("Mid: %u\n", mid);
 
     printf("Time elapsed splitting: %fms\n", time);
-#if 0
+#if 1
     printf("Left bounds min: %f %f %f\n", left.minP[0], left.minP[1], left.minP[2]);
     printf("Left bounds max: %f %f %f\n", left.maxP[0], left.maxP[1], left.maxP[2]);
     printf("Right bounds min: %f %f %f\n", right.minP[0], right.minP[1], right.minP[2]);

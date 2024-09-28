@@ -169,5 +169,8 @@ __forceinline Lane8U32 Max(const Lane8U32 &a, const Lane8U32 &b)
 #endif
 }
 
+__forceinline Lane8U32 PackU32(const Lane8U32 &a, const Lane8U32 &b) { return _mm256_packus_epi32(a, b); }
+__forceinline Lane8U32 PackU16(const Lane8U32 &a, const Lane8U32 &b) { return _mm256_packus_epi16(a, b); }
+
 } // namespace rt
 #endif

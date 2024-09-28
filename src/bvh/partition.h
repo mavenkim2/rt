@@ -261,7 +261,7 @@ void PartitionSerial(Split split, PrimData *prims, u32 start, u32 end, Partition
 void PartitionParallel(Split split, PrimData *prims, u32 start, u32 end, PartitionResult *result)
 {
     u32 total = end - start;
-    if (total < 4 * 1024)
+    if (total < PARALLEL_THRESHOLD)
     {
         PartitionSerial(split, prims, start, end, result);
         return;
@@ -592,7 +592,7 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, Bou
 
 u32 PartitionParallel(Split split, ExtRangeSOA range, Bounds &outLeft, Bounds &outRight)
 {
-    if (range.count < 4 * 1024)
+    if (range.count < PARALLEL_THRESHOLD)
     {
         return PartitionSerial(range.data, split.bestDim, split.bestValue, range.start, range.End(), outLeft, outRight,
                                [&](u32 index) { return index; });
