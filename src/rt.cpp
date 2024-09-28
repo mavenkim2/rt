@@ -21,6 +21,8 @@
 #include "bsdf.h"
 #include "low_discrepancy.h"
 #include "sampler.h"
+#include "bvh/bvh_types.h"
+#include "bvh/partition.h"
 #include "bvh/bvh_sah.h"
 #include "bvh/bvh_soa.h"
 #include <algorithm>

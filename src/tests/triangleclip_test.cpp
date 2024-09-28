@@ -144,20 +144,11 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
 #endif
 
     printf("Split time: %fms\n", time);
-    u64 total = 0;
-    for (u32 i = 0; i < OS_NumProcessors(); i++)
-    {
-        printf("thread time %u : %llums\n", i, threadLocalStatistics[i].misc);
-        // total += threadLocalStatistics[i].misc;
-    }
-
-    printf("Misc: %llums\n", total);
-
 #if 1
-    // printf("Left bounds min: %f %f %f\n", left.minP[0], left.minP[1], left.minP[2]);
-    // printf("Left bounds max: %f %f %f\n", left.maxP[0], left.maxP[1], left.maxP[2]);
-    // printf("Right bounds min: %f %f %f\n", right.minP[0], right.minP[1], right.minP[2]);
-    // printf("Right bounds max: %f %f %f\n", right.maxP[0], right.maxP[1], right.maxP[2]);
+    printf("Left bounds min: %f %f %f\n", left.minP[0], left.minP[1], left.minP[2]);
+    printf("Left bounds max: %f %f %f\n", left.maxP[0], left.maxP[1], left.maxP[2]);
+    printf("Right bounds min: %f %f %f\n", right.minP[0], right.minP[1], right.minP[2]);
+    printf("Right bounds max: %f %f %f\n", right.maxP[0], right.maxP[1], right.maxP[2]);
     // Tests to ensure that the partitioning is valid
     u32 errors        = 0;
     f32 *minStream    = ((f32 **)(&soa.minX))[split.bestDim];
@@ -201,74 +192,6 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     printf("last bad index: %u\n", lastBadIndex);
     printf("Num errors: %u\n", errors);
 #endif
-}
-
-void TriangleClipTestAOSOA(TriangleMesh *mesh, u32 count = 0)
-{
-    Arena *arena = ArenaAlloc();
-
-    if (!mesh)
-    {
-        Assert(count != 0);
-        mesh = GenerateMesh(arena, count);
-    }
-    else
-    {
-        count = mesh->numIndices;
-    }
-
-    const u32 numFaces      = count / 3;
-    PrimDataAOSOA<8> *aosoa = PushArray(arena, PrimDataAOSOA<8>, (u32)(numFaces * GROW_AMOUNT));
-
-    Bounds geomBounds;
-
-    for (u32 i = 0; i < numFaces; i++)
-    {
-        u32 i0 = mesh->indices[i * 3 + 0];
-        u32 i1 = mesh->indices[i * 3 + 1];
-        u32 i2 = mesh->indices[i * 3 + 2];
-
-        Vec3f v0 = mesh->p[i0];
-        Vec3f v1 = mesh->p[i1];
-        Vec3f v2 = mesh->p[i2];
-
-        Vec3f min = Min(Min(v0, v1), v2);
-        Vec3f max = Max(Max(v0, v1), v2);
-
-        Lane4F32 lMin(min);
-        Lane4F32 lMax(max);
-
-        geomBounds.Extend(lMin, lMax);
-
-        aosoa[i >> 3].minX[i & 7]    = -min.x;
-        aosoa[i >> 3].minY[i & 7]    = -min.y;
-        aosoa[i >> 3].minZ[i & 7]    = -min.z;
-        aosoa[i >> 3].geomIDs[i & 7] = 0;
-        aosoa[i >> 3].maxX[i & 7]    = max.x;
-        aosoa[i >> 3].maxY[i & 7]    = max.y;
-        aosoa[i >> 3].maxZ[i & 7]    = max.z;
-        aosoa[i >> 3].primIDs[i & 7] = i;
-    }
-
-    HeuristicSOASplitBinning heuristic(geomBounds);
-    PerformanceCounter start;
-    f32 time;
-
-    Split split;
-    split.bestPos   = 4;
-    split.bestDim   = 0;
-    split.bestValue = 16043.018555;
-
-    ExtRangeAOSOA range(aosoa, 0, numFaces, u32(numFaces * GROW_AMOUNT));
-    start = OS_StartCounter();
-    Bounds left;
-    Bounds right;
-    heuristic.Split(arena, mesh, range, split, left, right);
-    time = OS_GetMilliseconds(start);
-    printf("Split time: %fms\n", time);
-    // printf("Mid: %u\n", mid);
-
-    // printf("Num errors: %u\n", errors);
 }
 
 void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
