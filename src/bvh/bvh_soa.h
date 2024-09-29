@@ -277,6 +277,11 @@ struct ObjectBinner
     {
         return (in - base[dim]) * scale[dim];
     }
+    f32 GetSplitValue(u32 pos, u32 dim) const
+    {
+        f32 invScale = scale[dim][0] == 0.f ? 0.f : 1 / scale[dim][0];
+        return (pos * invScale) + base[dim][0];
+    }
 };
 
 template <i32 numBins = 32>
@@ -316,7 +321,7 @@ struct HeuristicSOAObjectBinning
                 (maxs[1] - mins[1]) * 0.5f,
                 (maxs[2] - mins[2]) * 0.5f,
             };
-            Lane8U32 binIndices[] = {binner.Bin(centroids[0], 0), binner.Bin(centroids[1], 1), binner.Bin(centroids[2], 2)};
+            Lane8U32 binIndices[] = {binner->Bin(centroids[0], 0), binner->Bin(centroids[1], 1), binner->Bin(centroids[2], 2)};
             Lane8U32 out          = PackU32(binIndices[0], binIndices[1]);
             Lane8U32 out1         = PackU16(out, binIndices[2]);
 
@@ -382,18 +387,22 @@ struct SplitBinner
         scaleNegArr[1] = FlipSign(scale[1]);
         scaleNegArr[2] = FlipSign(scale[2]);
     };
-    __forceinline Lane8U32 BinMin(const Lane8F32 &min, const u32 dim)
+    __forceinline Lane8U32 BinMin(const Lane8F32 &min, const u32 dim) const
     {
         return Clamp(Lane8U32(zero), Lane8U32(numBins - 1), Flooru((base[dim] + min) * scaleNegArr[dim]));
     }
-    __forceinline Lane8U32 BinMax(const Lane8F32 &max, const u32 dim)
+    __forceinline Lane8U32 BinMax(const Lane8F32 &max, const u32 dim) const
     {
         // return Clamp(Lane8F32(zero), Lane8F32(one), Flooru((base[dim] + min]) * scaleNegArr[dim])),
         return Clamp(Lane8U32(zero), Lane8U32(numBins - 1), Flooru((max - base[dim]) * scale[dim]));
     }
-    __forceinline Lane8F32 FindPos(const Lane8U32 &bins, u32 dim)
+    __forceinline Lane8F32 GetSplitValue(const Lane8U32 &bins, u32 dim) const
     {
         return Lane8F32(bins) * invScale[dim] + base[dim];
+    }
+    __forceinline f32 GetSplitValue(u32 bin, u32 dim) const
+    {
+        return bin * invScale[dim][0] + base[dim][0];
     }
 };
 
@@ -545,7 +554,7 @@ struct alignas(32) HeuristicSOASplitBinning
                         {
                             Lane8U32::Store(binIndices, startBin);
                             startBin += 1u;
-                            Lane8F32 splitPos = binner->FindPos(startBin, dim);
+                            Lane8F32 splitPos = binner->GetSplitValue(startBin, dim);
                             ClipTriangle(mesh, dim, tri, splitPos, bounds[current], bounds[!current]);
 
                             for (u32 b = 0; b < LANE_WIDTH; b++)
@@ -627,7 +636,7 @@ struct alignas(32) HeuristicSOASplitBinning
                     {
                         Lane8U32::Store(binIndices, startBin);
                         startBin += 1u;
-                        Lane8F32 splitPos = binner->FindPos(startBin, dim);
+                        Lane8F32 splitPos = binner->GetSplitValue(startBin, dim);
                         ClipTriangle(mesh, dim, tri, splitPos, bounds[current], bounds[!current]);
 
                         for (u32 b = 0; b < numPrims; b++)
@@ -933,6 +942,19 @@ struct HeuristicSpatialSplits
 
 // NOTE: this is embree's implementation of split binning for SBVH
 template <i32 numBins = 16>
+struct TestHeuristic
+{
+    Lane4F32 base;
+    Lane4F32 scale;
+    Lane4F32 invScale;
+
+    TestHeuristic(Lane4F32 base, Lane4F32 scale, Lane4F32 invScale) : base(base), scale(scale), invScale(invScale) {}
+    f32 GetSplitValue(u32 bin, u32 dim) const
+    {
+        return bin * invScale[dim] + base[dim];
+    }
+};
+template <i32 numBins = 16>
 struct TestSplitBinningBase
 {
     Lane4F32 base;
@@ -1077,10 +1099,11 @@ struct TestSplitBinningBase
     }
 };
 
-template <i32 numBins>
+template <typename Binner, i32 numBins>
 Split BinBest(const Bounds bounds[3][numBins],
               const Lane4U32 *entryCounts,
               const Lane4U32 *exitCounts,
+              const Binner *binner,
               const u32 blockShift = 0)
 {
     Bounds boundsDimX;
@@ -1166,7 +1189,8 @@ Split BinBest(const Bounds bounds[3][numBins],
             bestDim  = dim;
         }
     }
-    return Split(bestArea, bestPos, bestDim, 0.f); // bestValue);
+    f32 bestValue = binner->GetSplitValue(bestPos + 1, bestDim);
+    return Split(bestArea, bestPos, bestDim, bestValue);
 }
 
 template <i32 numBins>
