@@ -6,7 +6,6 @@ namespace rt
 // unfortunately, partitioning in place with SOA scales really really badly. possible solutions:
 // 1. AoS, one avx register for each prim data.
 // 2. AoSoA
-// 3. use an index buffer and partition that (would require gathers on the binning though, as well as more memory)
 
 struct Bounds8
 {
@@ -281,11 +280,13 @@ struct ObjectBinner
 };
 
 template <i32 numBins = 32>
-struct alignas(32) HeuristicSOAObjectBinning
+struct HeuristicSOAObjectBinning
 {
     Bounds8 bins[3][numBins];
     Lane4U32 counts[numBins];
-    HeuristicSOAObjectBinning()
+    ObjectBinner<numBins> *binner;
+
+    HeuristicSOAObjectBinning(ObjectBinner<numBins> *binner) : binner(binner)
     {
         for (u32 i = 0; i < numBins; i++)
         {
@@ -293,13 +294,12 @@ struct alignas(32) HeuristicSOAObjectBinning
         }
     }
 
-    void Bin(ObjectBinner<numBins> binner, ExtRangeSOA range)
+    void Bin(ObjectBinner<numBins> binner, PrimDataSOA *data, u32 start, u32 counT)
     {
-        PrimDataSOA *data = range.data;
-        u32 alignedCount  = range.count - range.count % LANE_WIDTH;
-        u32 i             = range.start;
+        u32 alignedCount = count - count % LANE_WIDTH;
+        u32 i            = start;
         Lane8F32 lanes[8];
-        for (; i < range.start + alignedCount; i += LANE_WIDTH)
+        for (; i < start + alignedCount; i += LANE_WIDTH)
         {
             Lane8F32 mins[] = {
                 Lane8F32::Load(data->minX),
@@ -343,29 +343,17 @@ struct alignas(32) HeuristicSOAObjectBinning
             }
         }
     }
-}; // namespace rt
+};
 
 template <i32 numBins = 16>
-struct alignas(32) HeuristicSOASplitBinning
+struct SplitBinner
 {
-    Bounds8 bins8[3][numBins];
     Lane8F32 base[3];
     Lane8F32 invScale[3];
     Lane8F32 scale[3];
+    Lane8F32 scaleNegArr[3];
 
-    // temp storage
-    u32 faceIndices[3][numBins][2 * LANE_WIDTH - 1];
-    u32 binCounts[3][numBins];
-
-    // result data
-    Lane4U32 entryCounts[numBins];
-    Lane4U32 exitCounts[numBins];
-
-    Bounds finalBounds[3][numBins];
-
-    // used in soa 8 triangle multi plane diff binning
-
-    HeuristicSOASplitBinning(Bounds &bounds)
+    SplitBinner(Bounds &bounds)
     {
         const Lane4F32 eps = 1e-34f;
 
@@ -390,6 +378,45 @@ struct alignas(32) HeuristicSOASplitBinning
         invScale[1] = Shuffle<1>(invScale8);
         invScale[2] = Shuffle<2>(invScale8);
 
+        scaleNegArr[0] = FlipSign(scale[0]);
+        scaleNegArr[1] = FlipSign(scale[1]);
+        scaleNegArr[2] = FlipSign(scale[2]);
+    };
+    __forceinline Lane8U32 BinMin(const Lane8F32 &min, const u32 dim)
+    {
+        return Clamp(Lane8U32(zero), Lane8U32(numBins - 1), Flooru((base[dim] + min) * scaleNegArr[dim]));
+    }
+    __forceinline Lane8U32 BinMax(const Lane8F32 &max, const u32 dim)
+    {
+        // return Clamp(Lane8F32(zero), Lane8F32(one), Flooru((base[dim] + min]) * scaleNegArr[dim])),
+        return Clamp(Lane8U32(zero), Lane8U32(numBins - 1), Flooru((max - base[dim]) * scale[dim]));
+    }
+    __forceinline Lane8F32 FindPos(const Lane8U32 &bins, u32 dim)
+    {
+        return Lane8F32(bins) * invScale[dim] + base[dim];
+    }
+};
+
+template <i32 numBins = 16>
+struct alignas(32) HeuristicSOASplitBinning
+{
+    Bounds8 bins8[3][numBins];
+    SplitBinner<numBins> *binner;
+
+    // temp storage
+    u32 faceIndices[3][numBins][2 * LANE_WIDTH - 1];
+    u32 binCounts[3][numBins];
+
+    // result data
+    Lane4U32 entryCounts[numBins];
+    Lane4U32 exitCounts[numBins];
+
+    Bounds finalBounds[3][numBins];
+
+    // used in soa 8 triangle multi plane diff binning
+
+    HeuristicSOASplitBinning(SplitBinner<numBins> *binner) : binner(binner) // Bounds &bounds)
+    {
         for (u32 i = 0; i < numBins; i++)
         {
             entryCounts[i] = 0;
@@ -405,18 +432,9 @@ struct alignas(32) HeuristicSOASplitBinning
         }
     }
 
-    void BinDiffTest(TriangleMesh *mesh, PrimDataSOA *soa, u32 start, u32 count)
+    void Bin(TriangleMesh *mesh, PrimDataSOA *soa, u32 start, u32 count)
     {
-        Lane8U32 z = Lane8U32(0);
-        Lane8U32 e = Lane8U32(numBins - 1);
-
-        // alignas(32) u32 faceIDPrev[8];
-
-        // alignas(32) u32 indexMinPrev[8];
-        // alignas(32) u32 indexMaxPrev[8];
         alignas(32) u32 binIndexStart[3][numBins][8];
-
-        Lane8F32 scaleNegArr[] = {FlipSign(scale[0]), FlipSign(scale[1]), FlipSign(scale[2])};
 
         u32 i            = start;
         u32 alignedCount = count - count % LANE_WIDTH;
@@ -443,25 +461,25 @@ struct alignas(32) HeuristicSOASplitBinning
             // Lane8U32::Store(faceIDPrev, faceIds);
 
             Lane8U32 indexMinArr[3] = {
-                Clamp(z, e, Flooru((base[0] + prevMin[0]) * scaleNegArr[0])),
-                Clamp(z, e, Flooru((base[1] + prevMin[1]) * scaleNegArr[1])),
-                Clamp(z, e, Flooru((base[2] + prevMin[2]) * scaleNegArr[2])),
+                binner->BinMin(prevMin[0], 0),
+                binner->BinMin(prevMin[1], 1),
+                binner->BinMin(prevMin[2], 2),
             };
             Lane8U32 indexMaxArr[3] = {
-                Clamp(z, e, Flooru((prevMax[0] - base[0]) * scale[0])),
-                Clamp(z, e, Flooru((prevMax[1] - base[1]) * scale[1])),
-                Clamp(z, e, Flooru((prevMax[2] - base[2]) * scale[2])),
+                binner->BinMax(prevMax[0], 0),
+                binner->BinMax(prevMax[1], 1),
+                binner->BinMax(prevMax[2], 2),
             };
 
             Lane8U32 binDiffX = indexMaxArr[0] - indexMinArr[0];
             Lane8U32 binDiffY = indexMaxArr[1] - indexMinArr[1];
             Lane8U32 binDiffZ = indexMaxArr[2] - indexMinArr[2];
             // x0 x1 x2 x3 y0 y1 y2 y3 x4 x5 x6 x7 y4 y5 y6 y7
-            Lane8U32 out0 = _mm256_packus_epi32(binDiffX, binDiffY);
+            Lane8U32 out0 = PackU32(binDiffX, binDiffY);
             // x0 x1 x2 x3 |  y0 y1 y2 y3 |  z0 00 z1 00 |  z2 00 z3 00 |  x4 x5 x6 x7 |  y4 y5 y6 y7 |  z4 00 z5 00 | z6 00 z7 00
 
             alignas(32) u8 bytes[32];
-            Lane8U32 out1 = _mm256_packus_epi16(out0, binDiffZ);
+            Lane8U32 out1 = PackU16(out0, binDiffZ);
             Lane8U32::Store(bytes, out1);
 
             u32 bitMask[3] = {};
@@ -527,7 +545,7 @@ struct alignas(32) HeuristicSOASplitBinning
                         {
                             Lane8U32::Store(binIndices, startBin);
                             startBin += 1u;
-                            Lane8F32 splitPos = Lane8F32(startBin) * invScale[dim] + base[dim];
+                            Lane8F32 splitPos = binner->FindPos(startBin, dim);
                             ClipTriangle(mesh, dim, tri, splitPos, bounds[current], bounds[!current]);
 
                             for (u32 b = 0; b < LANE_WIDTH; b++)
@@ -543,9 +561,9 @@ struct alignas(32) HeuristicSOASplitBinning
             }
         }
         // Finish the remaining primitives
-        f32 scaleArr[3]          = {scale[0][0], scale[1][0], scale[2][0]};
-        f32 baseArr[3]           = {base[0][0], base[1][0], base[2][0]};
-        f32 scaleNegScalarArr[3] = {scaleNegArr[0][0], scaleNegArr[1][0], scaleNegArr[2][0]};
+        f32 scaleArr[3]          = {binner->scale[0][0], binner->scale[1][0], binner->scale[2][0]};
+        f32 baseArr[3]           = {binner->base[0][0], binner->base[1][0], binner->base[2][0]};
+        f32 scaleNegScalarArr[3] = {binner->scaleNegArr[0][0], binner->scaleNegArr[1][0], binner->scaleNegArr[2][0]};
         for (; i < start + count; i++)
         {
             f32 min[3] = {
@@ -609,7 +627,7 @@ struct alignas(32) HeuristicSOASplitBinning
                     {
                         Lane8U32::Store(binIndices, startBin);
                         startBin += 1u;
-                        Lane8F32 splitPos = Lane8F32(startBin) * invScale[dim] + base[dim];
+                        Lane8F32 splitPos = binner->FindPos(startBin, dim);
                         ClipTriangle(mesh, dim, tri, splitPos, bounds[current], bounds[!current]);
 
                         for (u32 b = 0; b < numPrims; b++)
@@ -632,12 +650,13 @@ struct alignas(32) HeuristicSOASplitBinning
         }
     }
 
-    u32 SplitSOA(Arena *arena, TriangleMesh *mesh, ExtRangeSOA range, Split split, Bounds &outLeft, Bounds &outRight)
+    u32 Split(Arena *arena, TriangleMesh *mesh, PrimDataSOA *data, ExtRange range, Split split,
+              RecordSOASplits &outLeft, RecordSOASplits &outRight) // Bounds &outLeft, Bounds &outRight)
     {
         // partitioning
         u32 dim          = split.bestDim;
-        f32 *minStream   = range.data->arr[dim];
-        f32 *maxStream   = range.data->arr[dim + 4];
+        f32 *minStream   = data->arr[dim];
+        f32 *maxStream   = data->arr[dim + 4];
         u32 alignedCount = range.count - range.count % LANE_WIDTH;
 
         u32 count = 0;
@@ -650,14 +669,14 @@ struct alignas(32) HeuristicSOASplitBinning
         u32 splitBegin      = range.End();
         u32 splitMax        = range.ExtSize();
         PrimDataSOA out;
-        out.minX         = range.data->minX + splitBegin;
-        out.minY         = range.data->minY + splitBegin;
-        out.minZ         = range.data->minZ + splitBegin;
-        out.geomIDs      = range.data->geomIDs + splitBegin;
-        out.maxX         = range.data->maxX + splitBegin;
-        out.maxY         = range.data->maxY + splitBegin;
-        out.maxZ         = range.data->maxZ + splitBegin;
-        out.primIDs      = range.data->primIDs + splitBegin;
+        out.minX         = data->minX + splitBegin;
+        out.minY         = data->minY + splitBegin;
+        out.minZ         = data->minZ + splitBegin;
+        out.geomIDs      = data->geomIDs + splitBegin;
+        out.maxX         = data->maxX + splitBegin;
+        out.maxY         = data->maxY + splitBegin;
+        out.maxZ         = data->maxZ + splitBegin;
+        out.primIDs      = data->primIDs + splitBegin;
         f32 test         = 0.f;
         f32 negBestValue = -split.bestValue;
         u32 i            = range.start;
@@ -665,7 +684,7 @@ struct alignas(32) HeuristicSOASplitBinning
         {
             Lane8F32 min       = Lane8F32::LoadU(minStream + i);
             Lane8F32 max       = Lane8F32::LoadU(maxStream + i);
-            Lane8U32 faceIDs   = Lane8U32::LoadU(range.data->primIDs + i);
+            Lane8U32 faceIDs   = Lane8U32::LoadU(data->primIDs + i);
             Lane8U32 refIDs    = Lane8U32::Step(i);
             Lane8F32 splitMask = (min > negBestValue & max >= split.bestValue);
             u32 mask           = Movemask(splitMask);
@@ -712,12 +731,12 @@ struct alignas(32) HeuristicSOASplitBinning
                     const u32 refID = refIDQueue[count + queueIndex];
                     // const u32 refID = faceIDQueue[count + queueIndex];
 
-                    range.data->minX[refID] = boundsLeft[queueIndex].v[0];
-                    range.data->minY[refID] = boundsLeft[queueIndex].v[1];
-                    range.data->minZ[refID] = boundsLeft[queueIndex].v[2];
-                    range.data->maxX[refID] = boundsLeft[queueIndex].v[4];
-                    range.data->maxY[refID] = boundsLeft[queueIndex].v[5];
-                    range.data->maxZ[refID] = boundsLeft[queueIndex].v[6];
+                    data->minX[refID] = boundsLeft[queueIndex].v[0];
+                    data->minY[refID] = boundsLeft[queueIndex].v[1];
+                    data->minZ[refID] = boundsLeft[queueIndex].v[2];
+                    data->maxX[refID] = boundsLeft[queueIndex].v[4];
+                    data->maxY[refID] = boundsLeft[queueIndex].v[5];
+                    data->maxZ[refID] = boundsLeft[queueIndex].v[6];
 
                     out.minX[splitCount - 8 + queueIndex] = boundsRight[queueIndex].v[0];
                     out.minY[splitCount - 8 + queueIndex] = boundsRight[queueIndex].v[1];
@@ -753,33 +772,33 @@ struct alignas(32) HeuristicSOASplitBinning
         for (u32 queueIndex = 0; queueIndex < count; queueIndex++)
         {
             u32 refID = refIDQueue[queueIndex];
-            Bounds inBounds(Lane4F32(-range.data->minX[refID], -range.data->minY[refID], -range.data->minZ[refID], 0.f),
-                            Lane4F32(range.data->maxX[refID], range.data->maxY[refID], range.data->maxZ[refID], 0.f));
+            Bounds inBounds(Lane4F32(-data->minX[refID], -data->minY[refID], -data->minZ[refID], 0.f),
+                            Lane4F32(data->maxX[refID], data->maxY[refID], data->maxZ[refID], 0.f));
             Bounds l;
             Bounds r;
-            ClipTriangleSimple(mesh, inBounds, range.data->primIDs[refID], dim, split.bestValue, l, r);
-            range.data->minX[refID] = -l.minP[0];
-            range.data->minY[refID] = -l.minP[1];
-            range.data->minZ[refID] = -l.minP[2];
-            range.data->maxX[refID] = l.maxP[0];
-            range.data->maxY[refID] = l.maxP[1];
-            range.data->maxZ[refID] = l.maxP[2];
+            ClipTriangleSimple(mesh, inBounds, data->primIDs[refID], dim, split.bestValue, l, r);
+            data->minX[refID] = -l.minP[0];
+            data->minY[refID] = -l.minP[1];
+            data->minZ[refID] = -l.minP[2];
+            data->maxX[refID] = l.maxP[0];
+            data->maxY[refID] = l.maxP[1];
+            data->maxZ[refID] = l.maxP[2];
 
             out.minX[splitCount]    = -l.minP[0];
             out.minY[splitCount]    = -l.minP[1];
             out.minZ[splitCount]    = -l.minP[2];
-            out.geomIDs[splitCount] = range.data->geomIDs[refID];
+            out.geomIDs[splitCount] = data->geomIDs[refID];
             out.maxX[splitCount]    = l.maxP[0];
             out.maxY[splitCount]    = l.maxP[1];
             out.maxZ[splitCount]    = l.maxP[2];
-            out.primIDs[splitCount] = range.data->primIDs[refID];
+            out.primIDs[splitCount] = data->primIDs[refID];
             splitCount++;
             totalSplitCount++;
         }
         if (totalSplitCount > range.ExtSize())
         {
             // Partition by moving elements to the right of the split to the new allocation
-            PrimDataSOA *soa[2] = {range.data, &out};
+            PrimDataSOA *soa[2] = {data, &out};
             u32 counts[2]       = {};
             for (i = range.start; i < range.start + alignedCount; i += LANE_WIDTH)
             {
@@ -792,16 +811,122 @@ struct alignas(32) HeuristicSOASplitBinning
                 for (u32 b = 0; b < LANE_WIDTH; b++)
                 {
                     const u32 choice = (mask >> b) & 1;
-                    soa[choice]->Set(*range.data, counts[choice], i + b);
+                    soa[choice]->Set(*data, counts[choice], i + b);
                     counts[choice]++;
                 }
             }
             Assert(false);
+            outLeft.data        = data;
+            PrimDataSOA *outSOA = PushStruct(arena, PrimDataSOA);
+            outSOA->minX        = out.minX;
+            outSOA->minY        = out.minY;
+            outSOA->minZ        = out.minZ;
+            outSOA->geomIDs     = out.geomIDs;
+            outSOA->maxX        = out.maxX;
+            outSOA->maxY        = out.maxY;
+            outSOA->maxZ        = out.maxZ;
+            outSOA->primIDs     = out.primIDs;
+            outRight.data       = outSOA;
             return counts[0];
         }
         else
         {
-            return PartitionParallel(split, range, outLeft, outRight);
+            outLeft.data  = data;
+            outRight.data = data;
+            u32 mid       = PartitionParallel(split, range, data, outLeft.geomBounds, outRight.geomBounds);
+            u32 numLeft   = mid - range.start;
+            u32 numRight  = range.End() - mid + splitCount;
+
+            u32 extSizeLeft  = Min(range.ExtSize() * (numLeft) / (numLeft + numRight), range.ExtSize());
+            u32 extSizeRight = range.ExtSize() - extSizeLeft;
+
+            u32 shift      = Max(extSizeLeft, numRight);
+            u32 numToShift = Min(extSizeLeft, numRight);
+
+            if (numToShift > PARALLEL_THRESHOLD)
+            {
+                // TODO: don't hardcode this
+                u32 groupSize = 4 * 1024;
+                scheduler.ScheduleAndWait(numToShift, groupSize, [&](u32 jobID) {
+                    u32 start = range.End() + jobID * groupSize;
+                    u32 end   = range.End() + (jobID + 1) * groupSize;
+
+                    end = Min(end, range.End() + numToShift);
+                    for (u32 i = start; i < end; i++)
+                    {
+                        data->Set(*data, i, i + shift);
+                    }
+                });
+            }
+            else
+            {
+                for (i = range.End(); i < range.End() + numToShift; i++)
+                {
+                    data->Set(*data, i, i + shift);
+                }
+            }
+            return mid;
+        }
+    }
+    void Merge(const HeuristicSOASplitBinning<numBins> &other)
+    {
+        for (u32 i = 0; i < numBins; i++)
+        {
+            entryCounts[i] += other.entryCounts[i];
+            exitCounts[i] += other.exitCounts[i];
+            for (u32 dim = 0; dim < 3; dim++)
+            {
+                finalBounds[dim][i].Extend(other.finalBounds[dim][i]);
+            }
+        }
+    }
+}; // namespace rt
+
+// SBVH
+template <i32 numSpatialBins = 16>
+struct HeuristicSpatialSplits
+{
+    using Record = RecordSOASplits;
+    using HSplit = HeuristicSOASplitBinning<numSpatialBins>;
+
+    Arena **arenas;
+    TriangleMesh *mesh;
+    HeuristicSpatialSplits(Arena **arenas, TriangleMesh *mesh) : arenas(arenas), mesh(mesh) {}
+    static Split Bin(const Record &record, u32 blockSize = 1)
+    {
+        // Object splits
+        ObjectBinner<32> objectBinner(record.centBounds);
+        if (record.range.count > PARALLEL_THRESHOLD)
+        {
+        }
+        else
+        {
+        }
+
+        // Spatial splits
+        SplitBinner<numSpatialBins> splitBinner(record.geomBounds);
+
+        HSplit splitHeuristic;
+        if (record.range.count > PARALLEL_THRESHOLD)
+        {
+            const u32 groupSize = 4 * 1024;
+            splitHeuristic      = ParallelReduce(
+                record.start, record.count, groupSize,
+                [&](HSplit &binner, u32 start, u32 count) { binner.Bin(mesh, record.data, start, count); },
+                [&](const HSplit &l, const HSplit &r) { l.Merge(r); },
+                &splitBinner);
+        }
+        else
+        {
+            splitHeuristic = HSplit(&splitBinner);
+            splitHeuristic.Bin(mesh, record.data, record.start, record.count);
+        }
+        return BinBest<numBins>(splitHeuristic.finalBounds, splitHeuristic.entryCounts, splitHeuristic.exitCounts);
+    }
+    static void Split(Split split, const Record &record)
+    {
+        if (record.range.count > PARALLEL_THRESHOLD)
+        {
         }
     }
 };
@@ -952,11 +1077,11 @@ struct TestSplitBinningBase
     }
 };
 
-template <i32 numBins = 16>
-Split SpatialSplitBest(const Bounds bounds[3][numBins],
-                       const Lane4U32 *entryCounts,
-                       const Lane4U32 *exitCounts,
-                       const u32 blockShift = 0)
+template <i32 numBins>
+Split BinBest(const Bounds bounds[3][numBins],
+              const Lane4U32 *entryCounts,
+              const Lane4U32 *exitCounts,
+              const u32 blockShift = 0)
 {
     Bounds boundsDimX;
     Bounds boundsDimY;
@@ -1042,6 +1167,14 @@ Split SpatialSplitBest(const Bounds bounds[3][numBins],
         }
     }
     return Split(bestArea, bestPos, bestDim, 0.f); // bestValue);
+}
+
+template <i32 numBins>
+Split BinBest(const Bounds bounds[3][numBins],
+              const Lane4U32 *counts,
+              const u32 blockShift = 0)
+{
+    return BinBest(bounds, counts, counts, blockShift);
 }
 
 } // namespace rt

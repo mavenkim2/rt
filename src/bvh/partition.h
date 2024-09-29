@@ -590,11 +590,11 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, Bou
     return l;
 }
 
-u32 PartitionParallel(Split split, ExtRangeSOA range, Bounds &outLeft, Bounds &outRight)
+u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data, Bounds &outLeft, Bounds &outRight)
 {
     if (range.count < PARALLEL_THRESHOLD)
     {
-        return PartitionSerial(range.data, split.bestDim, split.bestValue, range.start, range.End(), outLeft, outRight,
+        return PartitionSerial(data, split.bestDim, split.bestValue, range.start, range.End(), outLeft, outRight,
                                [&](u32 index) { return index; });
     }
 
@@ -655,7 +655,7 @@ u32 PartitionParallel(Split split, ExtRangeSOA range, Bounds &outLeft, Bounds &o
         auto GetIndexInBlock = [&](u32 index) {
             return GetIndex(index, group);
         };
-        outMid[jobID] = PartitionSerial(range.data, split.bestDim, split.bestValue, l, r,
+        outMid[jobID] = PartitionSerial(data, split.bestDim, split.bestValue, l, r,
                                         lefts[jobID], rights[jobID], GetIndexInBlock);
     });
     scheduler.Wait(&counter);
@@ -665,12 +665,12 @@ u32 PartitionParallel(Split split, ExtRangeSOA range, Bounds &outLeft, Bounds &o
     u32 rightLeftOverMid = range.End();
     if (range.start != lStartAligned)
     {
-        leftOverMid = PartitionSerial(range.data, split.bestDim, split.bestValue, range.start, lStartAligned,
+        leftOverMid = PartitionSerial(data, split.bestDim, split.bestValue, range.start, lStartAligned,
                                       lefts[numJobs], rights[numJobs], [&](u32 index) { return index; });
     }
     if (range.End() != rEndAligned)
     {
-        rightLeftOverMid = PartitionSerial(range.data, split.bestDim, split.bestValue, rEndAligned, range.End(),
+        rightLeftOverMid = PartitionSerial(data, split.bestDim, split.bestValue, rEndAligned, range.End(),
                                            lefts[numJobs], rights[numJobs], [&](u32 index) { return index; });
     }
 
@@ -686,7 +686,7 @@ u32 PartitionParallel(Split split, ExtRangeSOA range, Bounds &outLeft, Bounds &o
     ranges.leftRange.start  = rEndAligned;
     ranges.leftRange.end    = rightLeftOverMid;
 
-    u32 result = FixMisplacedRanges(range.data, numJobs, chunkSize, blockShift, blockSize, globalMid, outMid, GetIndex, &ranges);
+    u32 result = FixMisplacedRanges(data, numJobs, chunkSize, blockShift, blockSize, globalMid, outMid, GetIndex, &ranges);
 
     for (u32 i = 0; i < numJobs + 1; i++)
     {

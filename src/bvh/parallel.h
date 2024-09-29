@@ -463,6 +463,12 @@ struct Scheduler
             }
         }
     }
+    void ScheduleAndWait(u32 numJobs, u32 groupSize, const TaskFunction &func)
+    {
+        Counter counter = {};
+        Schedule(&counter, numJobs, groupSize, func);
+        Wait(&counter);
+    }
     void Wait(Counter *counter)
     {
         Worker *worker = &workers[GetThreadIndex()];
@@ -494,6 +500,34 @@ THREAD_ENTRY_POINT(WorkerLoop)
         scheduler.ExploitTask(w, &t);
         if (!scheduler.WaitForTask(w, &t)) break;
     }
+}
+
+template <typename T, typename Func, typename Reduce, typename... Args>
+T ParallelReduce(u32 start, u32 count, u32 groupSize, Func func, Reduce reduce, Args... inArgs)
+{
+    TempArena temp      = ScratchStart(0, 0);
+    const u32 taskCount = (count + groupSize - 1) / groupSize;
+    T *values           = (T *)PushArray(temp.arena, u8, sizeof(T) * taskCount);
+    for (u32 i = 0; i < taskCount; i++)
+    {
+        new (&values[i]) T(std::forward<Args>(inArgs));
+    }
+
+    // HeuristicSOASplitBinning<16> *binners = PushArray(temp.arena, HeuristicSOASplitBinning<16>, taskCount);
+
+    scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
+        T &val          = values[jobID];
+        u32 threadStart = start + groupSize * jobID;
+        func(val, threadStart, Min(groupSize, start + count - threadStart));
+    });
+
+    T out = T(std::forward<Args>(inArgs));
+    for (u32 i = 0; i < taskCount; i++)
+    {
+        reduce(out, values[i]);
+    }
+    ScratchEnd(temp);
+    return out;
 }
 
 } // namespace rt

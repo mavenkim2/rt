@@ -2,8 +2,8 @@
 #define BVH_TYPES_H
 namespace rt
 {
-static const u32 LANE_WIDTH  = 8;
-static const f32 GROW_AMOUNT = 1.2f;
+static const u32 LANE_WIDTH         = 8;
+static const f32 GROW_AMOUNT        = 1.2f;
 static const u32 PARALLEL_THRESHOLD = 4 * 1024;
 struct BuildSettings
 {
@@ -77,6 +77,7 @@ struct PrimData
         return out;
     }
 };
+
 struct Record
 {
     PrimData *data;
@@ -90,6 +91,7 @@ struct Record
         : data(data), geomBounds(gBounds), centBounds(cBounds), start(start), end(end) {}
     u32 Size() const { return end - start; }
 };
+
 struct PrimRef
 {
     union
@@ -139,18 +141,43 @@ struct PrimDataSOA
     }
 };
 
-struct ExtRangeSOA
+// struct ExtRangeSOA
+// {
+//     PrimDataSOA *data;
+//     u32 start;
+//     u32 count;
+//     u32 extEnd;
+//
+//     __forceinline ExtRangeSOA(PrimDataSOA *data, u32 start, u32 count, u32 extEnd)
+//         : data(data), start(start), count(count), extEnd(extEnd) {}
+//     __forceinline u32 End() const { return start + count; }
+//     __forceinline u32 ExtSize() const { return extEnd - (start + count); }
+//     __forceinline u32 TotalSize() const { return extEnd - start; }
+// };
+
+struct ExtRange
 {
-    PrimDataSOA *data;
     u32 start;
     u32 count;
     u32 extEnd;
 
-    __forceinline ExtRangeSOA(PrimDataSOA *data, u32 start, u32 count, u32 extEnd)
-        : data(data), start(start), count(count), extEnd(extEnd) {}
+    ExtRange() {}
+    __forceinline ExtRange(u32 start, u32 count, u32 extEnd)
+        : start(start), count(count), extEnd(extEnd)
+    {
+        Assert(extEnd >= start + count);
+    }
     __forceinline u32 End() const { return start + count; }
     __forceinline u32 ExtSize() const { return extEnd - (start + count); }
     __forceinline u32 TotalSize() const { return extEnd - start; }
+};
+
+struct RecordSOASplits
+{
+    PrimDataSOA *data;
+    Bounds geomBounds;
+    Bounds centBounds;
+    ExtRange range;
 };
 
 struct Bounds8F32

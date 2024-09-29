@@ -25,6 +25,7 @@
 #include "bvh/partition.h"
 #include "bvh/bvh_sah.h"
 #include "bvh/bvh_soa.h"
+#include "bvh/bvh_build.h"
 #include <algorithm>
 
 #include "base.cpp"
@@ -1056,9 +1057,9 @@ int main(int argc, char *argv[])
     // TriangleClipTestSOA(0, count);
     // TriangleClipBinTestDefault(0, count);
 
-    // TriangleClipTestSOA(&mesh);
+    TriangleClipTestSOA(&mesh);
     // TriangleClipTestAOSOA(&mesh);
-    TriangleClipBinTestDefault(&mesh);
+    // TriangleClipBinTestDefault(&mesh);
 
 #if 0
     Arena **arenas = PushArray(arena, Arena *, numProcessors);

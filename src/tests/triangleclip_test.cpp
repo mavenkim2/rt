@@ -115,40 +115,42 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
         soa.primIDs[i] = i;
     }
 
-    HeuristicSOASplitBinning heuristic(geomBounds);
+    SplitBinner binner(geomBounds);
+    HeuristicSOASplitBinning heuristic(&binner);
     PerformanceCounter start = OS_StartCounter();
-    heuristic.BinDiffTest(mesh, &soa, 0, numFaces);
+    heuristic.Bin(mesh, &soa, 0, numFaces);
     f32 time = OS_GetMilliseconds(start);
     printf("Time elapsed binning: %fms\n", time);
 
 #if 1
-    Split split = SpatialSplitBest(heuristic.finalBounds, heuristic.entryCounts, heuristic.exitCounts);
+    Split split = BinBest(heuristic.finalBounds, heuristic.entryCounts, heuristic.exitCounts);
     printf("Num faces: %u\n", numFaces);
     printf("Split pos: %u\n", split.bestPos);
     printf("Split dim: %u\n", split.bestDim);
     printf("Split SAH: %f\n", split.bestSAH);
     // printf("Misc: %llu\n\n", threadLocalStatistics->misc);
 
-    f32 invScale    = (Lane8F32::LoadU((f32 *)(&heuristic.invScale[split.bestDim])))[0];
-    f32 base        = (Lane8F32::LoadU((f32 *)(&heuristic.base[split.bestDim])))[0];
+    f32 invScale    = (Lane8F32::LoadU((f32 *)(&binner.invScale[split.bestDim])))[0];
+    f32 base        = (Lane8F32::LoadU((f32 *)(&binner.base[split.bestDim])))[0];
     split.bestValue = ((split.bestPos + 1) * invScale) + base;
     printf("Split value: %f\n", split.bestValue);
 
-    ExtRangeSOA range(&soa, 0, numFaces, u32(numFaces * GROW_AMOUNT));
+    ExtRange range(0, numFaces, u32(numFaces * GROW_AMOUNT));
     start = OS_StartCounter();
-    Bounds left;
-    Bounds right;
-    u32 mid = heuristic.SplitSOA(arena, mesh, range, split, left, right);
+
+    RecordSOASplits left;
+    RecordSOASplits right;
+    u32 mid = heuristic.Split(arena, mesh, &soa, range, split, left, right);
     time    = OS_GetMilliseconds(start);
     printf("Mid: %u\n", mid);
 #endif
 
     printf("Split time: %fms\n", time);
 #if 1
-    printf("Left bounds min: %f %f %f\n", left.minP[0], left.minP[1], left.minP[2]);
-    printf("Left bounds max: %f %f %f\n", left.maxP[0], left.maxP[1], left.maxP[2]);
-    printf("Right bounds min: %f %f %f\n", right.minP[0], right.minP[1], right.minP[2]);
-    printf("Right bounds max: %f %f %f\n", right.maxP[0], right.maxP[1], right.maxP[2]);
+    printf("Left bounds min: %f %f %f\n", left.geomBounds.minP[0], left.geomBounds.minP[1], left.geomBounds.minP[2]);
+    printf("Left bounds max: %f %f %f\n", left.geomBounds.maxP[0], left.geomBounds.maxP[1], left.geomBounds.maxP[2]);
+    printf("Right bounds min: %f %f %f\n", right.geomBounds.minP[0], right.geomBounds.minP[1], right.geomBounds.minP[2]);
+    printf("Right bounds max: %f %f %f\n", right.geomBounds.maxP[0], right.geomBounds.maxP[1], right.geomBounds.maxP[2]);
     // Tests to ensure that the partitioning is valid
     u32 errors        = 0;
     f32 *minStream    = ((f32 **)(&soa.minX))[split.bestDim];
@@ -162,7 +164,7 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
         f32 centroid = (max - min) * 0.5f;
         if (i < mid)
         {
-            u32 value = (u32)Floor((centroid - heuristic.base[split.bestDim][0]) * heuristic.scale[split.bestDim][0]);
+            u32 value = (u32)Floor((centroid - binner.base[split.bestDim][0]) * binner.scale[split.bestDim][0]);
             if (centroid >= split.bestValue || value > split.bestPos)
             {
                 if (firstBadIndex == 0)
@@ -175,7 +177,7 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
         }
         else
         {
-            u32 value = (u32)Floor((centroid - heuristic.base[split.bestDim][0]) * heuristic.scale[split.bestDim][0]);
+            u32 value = (u32)Floor((centroid - binner.base[split.bestDim][0]) * binner.scale[split.bestDim][0]);
             if (centroid < split.bestValue || value <= split.bestPos)
             {
                 if (firstBadIndex == 0)
@@ -219,7 +221,7 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
     heuristic.Bin(mesh, data, 0, numFaces);
     f32 time = OS_GetMilliseconds(start);
 
-    Split split = SpatialSplitBest(heuristic.bins, heuristic.numBegin, heuristic.numEnd);
+    Split split = BinBest(heuristic.bins, heuristic.numBegin, heuristic.numEnd);
 
     printf("Time elapsed binning: %fms\n", time);
     printf("Split pos: %u\n", split.bestPos);
@@ -228,7 +230,7 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
 
     split.bestValue = ((split.bestPos + 1) * heuristic.invScale[split.bestDim]) + heuristic.base[split.bestDim];
     printf("Split value: %f\n", split.bestValue);
-    ExtRange range(data, 0, numFaces, u32(numFaces * GROW_AMOUNT));
+    ExtRange range(0, numFaces, u32(numFaces * GROW_AMOUNT));
     start = OS_StartCounter();
 
     Bounds left;
