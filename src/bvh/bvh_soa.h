@@ -260,12 +260,13 @@ struct ObjectBinner
 
     ObjectBinner(Bounds &centroidBounds)
     {
+        const f32 eps = 1e-34f;
         Lane8F32 minP(centroidBounds.minP);
         base[0] = Shuffle<0>(minP);
         base[1] = Shuffle<1>(minP);
         base[2] = Shuffle<2>(minP);
 
-        const Lane4F32 diag = Max(centroidBounds.maxP - centroidBounds.minP);
+        const Lane4F32 diag = Max(centroidBounds.maxP - centroidBounds.minP, eps);
         Lane4F32 scale4     = Select(diag > eps, Lane4F32((f32)numBins) / diag, Lane4F32(0.f));
 
         Lane8F32 scale8(scale4);
@@ -275,7 +276,7 @@ struct ObjectBinner
     }
     Lane8U32 Bin(const Lane8F32 &in, const u32 dim) const
     {
-        return (in - base[dim]) * scale[dim];
+        return Clamp(Lane8U32(zero), Lane8U32(numBins - 1), Flooru((in - base[dim]) * scale[dim]));
     }
     f32 GetSplitValue(u32 pos, u32 dim) const
     {
@@ -299,7 +300,7 @@ struct HeuristicSOAObjectBinning
         }
     }
 
-    void Bin(ObjectBinner<numBins> binner, PrimDataSOA *data, u32 start, u32 counT)
+    void Bin(PrimDataSOA *data, u32 start, u32 count)
     {
         u32 alignedCount = count - count % LANE_WIDTH;
         u32 i            = start;
@@ -322,28 +323,19 @@ struct HeuristicSOAObjectBinning
                 (maxs[2] - mins[2]) * 0.5f,
             };
             Lane8U32 binIndices[] = {binner->Bin(centroids[0], 0), binner->Bin(centroids[1], 1), binner->Bin(centroids[2], 2)};
-            Lane8U32 out          = PackU32(binIndices[0], binIndices[1]);
-            Lane8U32 out1         = PackU16(out, binIndices[2]);
-
-            alignas(32) u8 bytes[32];
-            Lane8U32::Store(bytes, out);
 
             Transpose6x8(mins[0], mins[1], mins[2], maxs[0], maxs[1], maxs[2],
                          lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5], lanes[6], lanes[7]);
 
-            static const u32 order[3][LANE_WIDTH] = {
-                {0, 1, 2, 3, 16, 17, 18, 19},
-                {4, 5, 6, 7, 20, 21, 22, 23},
-                {8, 10, 12, 14, 24, 26, 28, 30},
-            };
-            // TODO: see if it's faster to pack before storing, or storing all three lanes separately
             for (u32 dim = 0; dim < 3; dim++)
             {
+                alignas(32) u32 binDimIndices[LANE_WIDTH];
+                Lane8U32::Store(binDimIndices, binIndices[dim]);
                 for (u32 b = 0; b < LANE_WIDTH; b++)
                 {
-                    u32 bin = bytes[order[dim][b]];
+                    u32 bin = binDimIndices[b];
                     bins[dim][bin].Extend(lanes[b]);
-                    binCounts[dim][bin]++;
+                    counts[dim][bin]++;
                 }
             }
         }
@@ -889,7 +881,7 @@ struct alignas(32) HeuristicSOASplitBinning
             }
         }
     }
-}; // namespace rt
+};
 
 // SBVH
 template <i32 numSpatialBins = 16>
@@ -1193,12 +1185,13 @@ Split BinBest(const Bounds bounds[3][numBins],
     return Split(bestArea, bestPos, bestDim, bestValue);
 }
 
-template <i32 numBins>
+template <typename Binner, i32 numBins>
 Split BinBest(const Bounds bounds[3][numBins],
               const Lane4U32 *counts,
+              const Binner *binner,
               const u32 blockShift = 0)
 {
-    return BinBest(bounds, counts, counts, blockShift);
+    return BinBest(bounds, counts, counts, binner, blockShift);
 }
 
 } // namespace rt

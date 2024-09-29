@@ -22,7 +22,7 @@ TriangleMesh *GenerateMesh(Arena *arena, u32 count, f32 min = -100.f, f32 max = 
     return mesh;
 }
 
-PrimData *GeneratePrimData(Arena *arena, TriangleMesh *mesh, u32 count, u32 numFaces, Bounds &bounds, bool grow = false)
+PrimData *GeneratePrimData(Arena *arena, TriangleMesh *mesh, u32 count, u32 numFaces, Bounds &bounds, Bounds &centBounds, bool grow = false)
 {
     PrimData *data;
     if (grow)
@@ -55,6 +55,7 @@ PrimData *GeneratePrimData(Arena *arena, TriangleMesh *mesh, u32 count, u32 numF
         prim->SetGeomID(0);
 
         bounds.Extend(lMin, lMax);
+        centBounds.Extend((lMin + lMax) * 0.5f);
     }
     return data;
 }
@@ -86,6 +87,7 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     soa.primIDs = PushArray(arena, u32, u32(numFaces * GROW_AMOUNT));
 
     Bounds geomBounds;
+    Bounds centBounds;
 
     for (u32 i = 0; i < numFaces; i++)
     {
@@ -104,6 +106,7 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
         Lane4F32 lMax(max);
 
         geomBounds.Extend(lMin, lMax);
+        centBounds.Extend((lMin + lMax) * 0.5f);
 
         soa.minX[i]    = -min.x;
         soa.minY[i]    = -min.y;
@@ -115,14 +118,20 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
         soa.primIDs[i] = i;
     }
 
+#if 0
+    ObjectBinner<32> binner(centBounds);
+    HeuristicSOAObjectBinning<32> heuristic(&binner);
+    PerformanceCounter start = OS_StartCounter();
+    heuristic.Bin(&soa, 0, numFaces);
+    f32 time = OS_GetMilliseconds(start);
+    printf("Time elapsed binning: %fms\n", time);
+#else
     SplitBinner binner(geomBounds);
     HeuristicSOASplitBinning heuristic(&binner);
     PerformanceCounter start = OS_StartCounter();
     heuristic.Bin(mesh, &soa, 0, numFaces);
     f32 time = OS_GetMilliseconds(start);
     printf("Time elapsed binning: %fms\n", time);
-
-#if 1
     Split split = BinBest(heuristic.finalBounds, heuristic.entryCounts, heuristic.exitCounts, &binner);
     printf("Num faces: %u\n", numFaces);
     printf("Split pos: %u\n", split.bestPos);
@@ -145,8 +154,8 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     printf("Mid: %u\n", mid);
 #endif
 
-    printf("Split time: %fms\n", time);
 #if 1
+    printf("Split time: %fms\n", time);
     printf("Left bounds min: %f %f %f\n", left.geomBounds.minP[0], left.geomBounds.minP[1], left.geomBounds.minP[2]);
     printf("Left bounds max: %f %f %f\n", left.geomBounds.maxP[0], left.geomBounds.maxP[1], left.geomBounds.maxP[2]);
     printf("Right bounds min: %f %f %f\n", right.geomBounds.minP[0], right.geomBounds.minP[1], right.geomBounds.minP[2]);
@@ -213,13 +222,24 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
     const u32 numFaces = count / 3;
 
     Bounds geomBounds;
-    PrimData *data = GeneratePrimData(arena, mesh, count, numFaces, geomBounds, true);
+    Bounds centBounds;
+    PrimData *data = GeneratePrimData(arena, mesh, count, numFaces, geomBounds, centBounds, true);
 
+    PerformanceCounter start = OS_StartCounter();
+    HeuristicSAHBinned<32> heuristic(centBounds);
+    heuristic.Bin(data, 0, numFaces);
+    f32 time = OS_GetMilliseconds(start);
+    printf("Time elapsed binning: %fms\n", time);
+
+#if 0
     TestSplitBinningBase heuristic(geomBounds);
 
     PerformanceCounter start = OS_StartCounter();
     heuristic.Bin(mesh, data, 0, numFaces);
     f32 time = OS_GetMilliseconds(start);
+#endif
+
+#if 0
 
     TestHeuristic test(heuristic.base, heuristic.scale, heuristic.invScale);
     Split split = BinBest(heuristic.bins, heuristic.numBegin, heuristic.numEnd, &test);
@@ -241,7 +261,6 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
     printf("Mid: %u\n", mid);
 
     printf("Time elapsed splitting: %fms\n", time);
-#if 1
     printf("Left bounds min: %f %f %f\n", left.minP[0], left.minP[1], left.minP[2]);
     printf("Left bounds max: %f %f %f\n", left.maxP[0], left.maxP[1], left.maxP[2]);
     printf("Right bounds min: %f %f %f\n", right.minP[0], right.minP[1], right.minP[2]);

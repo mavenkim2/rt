@@ -28,312 +28,306 @@
 namespace rt
 {
 
-template <i32 numBins>
-struct HeuristicSAHBinnedAVX
-{
-    Lane8F32 bins[3][numBins];
-    Lane4U32 binCounts[numBins];
-
-    Lane8F32 scaleX;
-    Lane8F32 scaleY;
-    Lane8F32 scaleZ;
-
-    Lane8F32 baseX;
-    Lane8F32 baseY;
-    Lane8F32 baseZ;
-
-    Lane8F32 base;
-    Lane8F32 scale;
-
-    HeuristicSAHBinnedAVX() {}
-    HeuristicSAHBinnedAVX(const AABB &base) { Init(Lane4F32(base.minP), Lane4F32(base.maxP)); }
-    HeuristicSAHBinnedAVX(const Bounds &base) { Init(base.minP, base.maxP); }
-
-    __forceinline void Init(const Lane4F32 inMin, const Lane4F32 inMax)
-    {
-        const Lane4F32 eps = 1e-34f;
-
-        baseX               = Lane8F32(inMin[0]);
-        baseY               = Lane8F32(inMin[1]);
-        baseZ               = Lane8F32(inMin[2]);
-        base                = Lane8F32(inMin, inMin);
-        const Lane4F32 diag = Max(inMax - inMin, 0.f);
-
-        Lane4F32 inScale = Select(diag > eps, Lane4F32((f32)numBins) / diag, Lane4F32(0.f));
-        scaleX           = Lane8F32(inScale[0]);
-        scaleY           = Lane8F32(inScale[1]);
-        scaleZ           = Lane8F32(inScale[2]);
-        scale            = Lane8F32(inScale, inScale);
-
-        for (u32 dim = 0; dim < 3; dim++)
-        {
-            for (u32 i = 0; i < numBins; i++)
-            {
-                bins[dim][i] = pos_inf;
-            }
-        }
-        for (u32 i = 0; i < numBins; i++)
-        {
-            binCounts[i] = 0;
-        }
-    }
-
-    __forceinline void BinTest(const PrimData *prims, u32 start, u32 count)
-    {
-        u32 i   = start;
-        u32 end = start + count;
-
-        u32 tempBinIndicesX[8];
-        u32 tempBinIndicesY[8];
-        u32 tempBinIndicesZ[8];
-
-        Lane8F32 prev[8] = {
-            prims[i].m256,
-            prims[i + 1].m256,
-            prims[i + 2].m256,
-            prims[i + 3].m256,
-            prims[i + 4].m256,
-            prims[i + 5].m256,
-            prims[i + 6].m256,
-            prims[i + 7].m256,
-        };
-        Lane8F32 minX;
-        Lane8F32 minY;
-        Lane8F32 minZ;
-
-        Lane8F32 maxX;
-        Lane8F32 maxY;
-        Lane8F32 maxZ;
-
-        Transpose8x6(prev[0], prev[1], prev[2], prev[3],
-                     prev[4], prev[5], prev[6], prev[7],
-                     minX, minY, minZ, maxX, maxY, maxZ);
-
-        const Lane8F32 centroidX0   = (minX - maxX) * 0.5f;
-        const Lane8U32 binIndicesX0 = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroidX0 - baseX) * scaleX));
-        const Lane8F32 centroidY0   = (minY - maxY) * 0.5f;
-        const Lane8U32 binIndicesY0 = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroidY0 - baseY) * scaleY));
-        const Lane8F32 centroidZ0   = (minZ - maxZ) * 0.5f;
-        const Lane8U32 binIndicesZ0 = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroidZ0 - baseZ) * scaleZ));
-
-        i += 8;
-        Lane8U32::Store(tempBinIndicesX, binIndicesX0);
-        Lane8U32::Store(tempBinIndicesY, binIndicesY0);
-        Lane8U32::Store(tempBinIndicesZ, binIndicesZ0);
-
-        for (; i < end; i += 8)
-        {
-            const Lane8F32 prims8[8] = {
-                prims[i].m256,
-                prims[i + 1].m256,
-                prims[i + 2].m256,
-                prims[i + 3].m256,
-
-                prims[i + 4].m256,
-                prims[i + 5].m256,
-                prims[i + 6].m256,
-                prims[i + 7].m256};
-
-            Transpose8x6(prims8[0], prims8[1], prims8[2], prims8[3],
-                         prims8[4], prims8[5], prims8[6], prims8[7],
-                         minX, minY, minZ, maxX, maxY, maxZ);
-
-            const Lane8F32 centroidX = (minX - maxX) * 0.5f;
-
-            u32 iX0 = tempBinIndicesX[0];
-            u32 iY0 = tempBinIndicesY[0];
-            u32 iZ0 = tempBinIndicesZ[0];
-            binCounts[iX0][0]++;
-            binCounts[iY0][1]++;
-            binCounts[iZ0][2]++;
-            bins[0][iX0] = Max(bins[0][iX0], prev[0]);
-            bins[1][iY0] = Max(bins[1][iY0], prev[0]);
-            bins[2][iZ0] = Max(bins[2][iZ0], prev[0]);
-            prev[0]      = prims8[0];
-
-            const Lane8U32 binIndicesX = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroidX - baseX) * scaleX));
-
-            u32 iX1 = tempBinIndicesX[1];
-            u32 iY1 = tempBinIndicesY[1];
-            u32 iZ1 = tempBinIndicesZ[1];
-            binCounts[iX1][0]++;
-            binCounts[iY1][1]++;
-            binCounts[iZ1][2]++;
-            bins[0][iX1] = Max(bins[0][iX1], prev[1]);
-            bins[1][iY1] = Max(bins[1][iY1], prev[1]);
-            bins[2][iZ1] = Max(bins[2][iZ1], prev[1]);
-            prev[1]      = prims8[1];
-
-            const Lane8F32 centroidY = (minY - maxY) * 0.5f;
-
-            u32 iX2 = tempBinIndicesX[2];
-            u32 iY2 = tempBinIndicesY[2];
-            u32 iZ2 = tempBinIndicesZ[2];
-            binCounts[iX2][0]++;
-            binCounts[iY2][1]++;
-            binCounts[iZ2][2]++;
-            bins[0][iX2] = Max(bins[0][iX2], prev[2]);
-            bins[1][iY2] = Max(bins[1][iY2], prev[2]);
-            bins[2][iZ2] = Max(bins[2][iZ2], prev[2]);
-            prev[2]      = prims8[2];
-
-            const Lane8U32 binIndicesY = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroidY - baseY) * scaleY));
-
-            u32 iX3 = tempBinIndicesX[3];
-            u32 iY3 = tempBinIndicesY[3];
-            u32 iZ3 = tempBinIndicesZ[3];
-            binCounts[iX3][0]++;
-            binCounts[iY3][1]++;
-            binCounts[iZ3][2]++;
-            bins[0][iX3] = Max(bins[0][iX3], prev[3]);
-            bins[1][iY3] = Max(bins[1][iY3], prev[3]);
-            bins[2][iZ3] = Max(bins[2][iZ3], prev[3]);
-            prev[3]      = prims8[3];
-
-            const Lane8F32 centroidZ = (minZ - maxZ) * 0.5f;
-
-            u32 iX4 = tempBinIndicesX[4];
-            u32 iY4 = tempBinIndicesY[4];
-            u32 iZ4 = tempBinIndicesZ[4];
-            binCounts[iX4][0]++;
-            binCounts[iY4][1]++;
-            binCounts[iZ4][2]++;
-            bins[0][iX4] = Max(bins[0][iX4], prev[4]);
-            bins[1][iY4] = Max(bins[1][iY4], prev[4]);
-            bins[2][iZ4] = Max(bins[2][iZ4], prev[4]);
-            prev[4]      = prims8[4];
-
-            const Lane8U32 binIndicesZ = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroidZ - baseZ) * scaleZ));
-
-            u32 iX5 = tempBinIndicesX[5];
-            u32 iY5 = tempBinIndicesY[5];
-            u32 iZ5 = tempBinIndicesZ[5];
-            binCounts[iX5][0]++;
-            binCounts[iY5][1]++;
-            binCounts[iZ5][2]++;
-            bins[0][iX5] = Max(bins[0][iX5], prev[5]);
-            bins[1][iY5] = Max(bins[1][iY5], prev[5]);
-            bins[2][iZ5] = Max(bins[2][iZ5], prev[5]);
-            prev[5]      = prims8[5];
-
-            u32 iX6 = tempBinIndicesX[6];
-            u32 iY6 = tempBinIndicesY[6];
-            u32 iZ6 = tempBinIndicesZ[6];
-            binCounts[iX6][0]++;
-            binCounts[iY6][1]++;
-            binCounts[iZ6][2]++;
-            bins[0][iX6] = Max(bins[0][iX6], prev[6]);
-            bins[1][iY6] = Max(bins[1][iY6], prev[6]);
-            bins[2][iZ6] = Max(bins[2][iZ6], prev[6]);
-            prev[6]      = prims8[6];
-
-            u32 iX7 = tempBinIndicesX[7];
-            u32 iY7 = tempBinIndicesY[7];
-            u32 iZ7 = tempBinIndicesZ[7];
-            binCounts[iX7][0]++;
-            binCounts[iY7][1]++;
-            binCounts[iZ7][2]++;
-            bins[0][iX7] = Max(bins[0][iX7], prev[7]);
-            bins[1][iY7] = Max(bins[1][iY7], prev[7]);
-            bins[2][iZ7] = Max(bins[2][iZ7], prev[7]);
-            prev[7]      = prims8[7];
-
-            Lane8U32::Store(tempBinIndicesX, binIndicesX);
-            Lane8U32::Store(tempBinIndicesY, binIndicesY);
-            Lane8U32::Store(tempBinIndicesZ, binIndicesZ);
-        }
-    }
-
-    __forceinline void BinTest2(const PrimData *prims, u32 start, u32 count)
-    {
-        u32 i   = start;
-        u32 end = start + count;
-
-        u32 tempBinIndices[8];
-        Lane8F32 prev0;
-        Lane8F32 prev1;
-
-        prev0 = prims[i].m256;
-        prev1 = prims[i].m256;
-
-        Lane8F32 binMin = Shuffle4<0, 2>(prev0, prev1);
-        Lane8F32 binMax = Shuffle4<1, 3>(prev0, prev1);
-
-        Lane8F32 centroid   = (binMax + binMin) * 0.5f;
-        Lane8U32 binIndices = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroid - base) * scale));
-
-        Lane8U32::Store(tempBinIndices, binIndices);
-        i += 2;
-
-        for (; i < end - 1; i += 2)
-        {
-            const PrimData *prim0 = &prims[i];
-            const PrimData *prim1 = &prims[i];
-
-            binMin = Shuffle4<0, 2>(prim0->m256, prim1->m256);
-            binMax = Shuffle4<1, 3>(prim0->m256, prim1->m256);
-
-            centroid   = (binMax + binMin) * 0.5f;
-            binIndices = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroid - base) * scale));
-
-            u32 binIndexX = tempBinIndices[0];
-            u32 binIndexY = tempBinIndices[1];
-            u32 binIndexZ = tempBinIndices[2];
-            binCounts[binIndexX][0]++;
-            binCounts[binIndexY][1]++;
-            binCounts[binIndexZ][2]++;
-            bins[0][binIndexX] = Max(bins[0][binIndexX], prev0);
-            bins[1][binIndexY] = Max(bins[1][binIndexY], prev0);
-            bins[2][binIndexZ] = Max(bins[2][binIndexZ], prev0);
-
-            prev0 = prim0->m256;
-
-            u32 binIndexX2 = tempBinIndices[4];
-            u32 binIndexY2 = tempBinIndices[5];
-            u32 binIndexZ2 = tempBinIndices[6];
-            binCounts[binIndexX2][0]++;
-            binCounts[binIndexY2][1]++;
-            binCounts[binIndexZ2][2]++;
-            bins[0][binIndexX2] = Max(bins[0][binIndexX2], prev1);
-            bins[1][binIndexY2] = Max(bins[1][binIndexY2], prev1);
-            bins[2][binIndexZ2] = Max(bins[2][binIndexZ2], prev1);
-
-            prev1 = prim1->m256;
-
-            Lane8U32::Store(tempBinIndices, binIndices);
-        }
-        u32 binIndexX = tempBinIndices[0];
-        u32 binIndexY = tempBinIndices[1];
-        u32 binIndexZ = tempBinIndices[2];
-        binCounts[binIndexX][0]++;
-        binCounts[binIndexY][1]++;
-        binCounts[binIndexZ][2]++;
-        bins[0][binIndexX] = Max(bins[0][binIndexX], prev0);
-        bins[1][binIndexY] = Max(bins[1][binIndexY], prev0);
-        bins[2][binIndexZ] = Max(bins[2][binIndexZ], prev0);
-
-        u32 binIndexX2 = tempBinIndices[4];
-        u32 binIndexY2 = tempBinIndices[5];
-        u32 binIndexZ2 = tempBinIndices[6];
-        binCounts[binIndexX2][0]++;
-        binCounts[binIndexY2][1]++;
-        binCounts[binIndexZ2][2]++;
-        bins[0][binIndexX2] = Max(bins[0][binIndexX2], prev1);
-        bins[1][binIndexY2] = Max(bins[1][binIndexY2], prev1);
-        bins[2][binIndexZ2] = Max(bins[2][binIndexZ2], prev1);
-    }
-};
+// template <i32 numBins>
+// struct HeuristicSAHBinnedAVX
+// {
+//     Lane8F32 bins[3][numBins];
+//     Lane4U32 binCounts[numBins];
+//
+//     Lane8F32 scaleX;
+//     Lane8F32 scaleY;
+//     Lane8F32 scaleZ;
+//
+//     Lane8F32 baseX;
+//     Lane8F32 baseY;
+//     Lane8F32 baseZ;
+//
+//     Lane8F32 base;
+//     Lane8F32 scale;
+//
+//     HeuristicSAHBinnedAVX() {}
+//     HeuristicSAHBinnedAVX(const AABB &base) { Init(Lane4F32(base.minP), Lane4F32(base.maxP)); }
+//     HeuristicSAHBinnedAVX(const Bounds &base) { Init(base.minP, base.maxP); }
+//
+//     __forceinline void Init(const Lane4F32 inMin, const Lane4F32 inMax)
+//     {
+//         const Lane4F32 eps = 1e-34f;
+//
+//         baseX               = Lane8F32(inMin[0]);
+//         baseY               = Lane8F32(inMin[1]);
+//         baseZ               = Lane8F32(inMin[2]);
+//         base                = Lane8F32(inMin, inMin);
+//         const Lane4F32 diag = Max(inMax - inMin, 0.f);
+//
+//         Lane4F32 inScale = Select(diag > eps, Lane4F32((f32)numBins) / diag, Lane4F32(0.f));
+//         scaleX           = Lane8F32(inScale[0]);
+//         scaleY           = Lane8F32(inScale[1]);
+//         scaleZ           = Lane8F32(inScale[2]);
+//         scale            = Lane8F32(inScale, inScale);
+//
+//         for (u32 dim = 0; dim < 3; dim++)
+//         {
+//             for (u32 i = 0; i < numBins; i++)
+//             {
+//                 bins[dim][i] = pos_inf;
+//             }
+//         }
+//         for (u32 i = 0; i < numBins; i++)
+//         {
+//             binCounts[i] = 0;
+//         }
+//     }
+//
+//     __forceinline void BinTest(const PrimData *prims, u32 start, u32 count)
+//     {
+//         u32 i   = start;
+//         u32 end = start + count;
+//
+//         u32 tempBinIndicesX[8];
+//         u32 tempBinIndicesY[8];
+//         u32 tempBinIndicesZ[8];
+//
+//         Lane8F32 prev[8] = {
+//             prims[i].m256,
+//             prims[i + 1].m256,
+//             prims[i + 2].m256,
+//             prims[i + 3].m256,
+//             prims[i + 4].m256,
+//             prims[i + 5].m256,
+//             prims[i + 6].m256,
+//             prims[i + 7].m256,
+//         };
+//         Lane8F32 minX;
+//         Lane8F32 minY;
+//         Lane8F32 minZ;
+//
+//         Lane8F32 maxX;
+//         Lane8F32 maxY;
+//         Lane8F32 maxZ;
+//
+//         Transpose8x6(prev[0], prev[1], prev[2], prev[3],
+//                      prev[4], prev[5], prev[6], prev[7],
+//                      minX, minY, minZ, maxX, maxY, maxZ);
+//
+//         const Lane8F32 centroidX0   = (minX - maxX) * 0.5f;
+//         const Lane8U32 binIndicesX0 = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroidX0 - baseX) * scaleX));
+//         const Lane8F32 centroidY0   = (minY - maxY) * 0.5f;
+//         const Lane8U32 binIndicesY0 = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroidY0 - baseY) * scaleY));
+//         const Lane8F32 centroidZ0   = (minZ - maxZ) * 0.5f;
+//         const Lane8U32 binIndicesZ0 = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroidZ0 - baseZ) * scaleZ));
+//
+//         i += 8;
+//         Lane8U32::Store(tempBinIndicesX, binIndicesX0);
+//         Lane8U32::Store(tempBinIndicesY, binIndicesY0);
+//         Lane8U32::Store(tempBinIndicesZ, binIndicesZ0);
+//
+//         for (; i < end; i += 8)
+//         {
+//             const Lane8F32 prims8[8] = {
+//                 prims[i].m256,
+//                 prims[i + 1].m256,
+//                 prims[i + 2].m256,
+//                 prims[i + 3].m256,
+//
+//                 prims[i + 4].m256,
+//                 prims[i + 5].m256,
+//                 prims[i + 6].m256,
+//                 prims[i + 7].m256};
+//
+//             Transpose8x6(prims8[0], prims8[1], prims8[2], prims8[3],
+//                          prims8[4], prims8[5], prims8[6], prims8[7],
+//                          minX, minY, minZ, maxX, maxY, maxZ);
+//
+//             const Lane8F32 centroidX = (minX - maxX) * 0.5f;
+//
+//             u32 iX0 = tempBinIndicesX[0];
+//             u32 iY0 = tempBinIndicesY[0];
+//             u32 iZ0 = tempBinIndicesZ[0];
+//             binCounts[iX0][0]++;
+//             binCounts[iY0][1]++;
+//             binCounts[iZ0][2]++;
+//             bins[0][iX0] = Max(bins[0][iX0], prev[0]);
+//             bins[1][iY0] = Max(bins[1][iY0], prev[0]);
+//             bins[2][iZ0] = Max(bins[2][iZ0], prev[0]);
+//             prev[0]      = prims8[0];
+//
+//             const Lane8U32 binIndicesX = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroidX - baseX) * scaleX));
+//
+//             u32 iX1 = tempBinIndicesX[1];
+//             u32 iY1 = tempBinIndicesY[1];
+//             u32 iZ1 = tempBinIndicesZ[1];
+//             binCounts[iX1][0]++;
+//             binCounts[iY1][1]++;
+//             binCounts[iZ1][2]++;
+//             bins[0][iX1] = Max(bins[0][iX1], prev[1]);
+//             bins[1][iY1] = Max(bins[1][iY1], prev[1]);
+//             bins[2][iZ1] = Max(bins[2][iZ1], prev[1]);
+//             prev[1]      = prims8[1];
+//
+//             const Lane8F32 centroidY = (minY - maxY) * 0.5f;
+//
+//             u32 iX2 = tempBinIndicesX[2];
+//             u32 iY2 = tempBinIndicesY[2];
+//             u32 iZ2 = tempBinIndicesZ[2];
+//             binCounts[iX2][0]++;
+//             binCounts[iY2][1]++;
+//             binCounts[iZ2][2]++;
+//             bins[0][iX2] = Max(bins[0][iX2], prev[2]);
+//             bins[1][iY2] = Max(bins[1][iY2], prev[2]);
+//             bins[2][iZ2] = Max(bins[2][iZ2], prev[2]);
+//             prev[2]      = prims8[2];
+//
+//             const Lane8U32 binIndicesY = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroidY - baseY) * scaleY));
+//
+//             u32 iX3 = tempBinIndicesX[3];
+//             u32 iY3 = tempBinIndicesY[3];
+//             u32 iZ3 = tempBinIndicesZ[3];
+//             binCounts[iX3][0]++;
+//             binCounts[iY3][1]++;
+//             binCounts[iZ3][2]++;
+//             bins[0][iX3] = Max(bins[0][iX3], prev[3]);
+//             bins[1][iY3] = Max(bins[1][iY3], prev[3]);
+//             bins[2][iZ3] = Max(bins[2][iZ3], prev[3]);
+//             prev[3]      = prims8[3];
+//
+//             const Lane8F32 centroidZ = (minZ - maxZ) * 0.5f;
+//
+//             u32 iX4 = tempBinIndicesX[4];
+//             u32 iY4 = tempBinIndicesY[4];
+//             u32 iZ4 = tempBinIndicesZ[4];
+//             binCounts[iX4][0]++;
+//             binCounts[iY4][1]++;
+//             binCounts[iZ4][2]++;
+//             bins[0][iX4] = Max(bins[0][iX4], prev[4]);
+//             bins[1][iY4] = Max(bins[1][iY4], prev[4]);
+//             bins[2][iZ4] = Max(bins[2][iZ4], prev[4]);
+//             prev[4]      = prims8[4];
+//
+//             const Lane8U32 binIndicesZ = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroidZ - baseZ) * scaleZ));
+//
+//             u32 iX5 = tempBinIndicesX[5];
+//             u32 iY5 = tempBinIndicesY[5];
+//             u32 iZ5 = tempBinIndicesZ[5];
+//             binCounts[iX5][0]++;
+//             binCounts[iY5][1]++;
+//             binCounts[iZ5][2]++;
+//             bins[0][iX5] = Max(bins[0][iX5], prev[5]);
+//             bins[1][iY5] = Max(bins[1][iY5], prev[5]);
+//             bins[2][iZ5] = Max(bins[2][iZ5], prev[5]);
+//             prev[5]      = prims8[5];
+//
+//             u32 iX6 = tempBinIndicesX[6];
+//             u32 iY6 = tempBinIndicesY[6];
+//             u32 iZ6 = tempBinIndicesZ[6];
+//             binCounts[iX6][0]++;
+//             binCounts[iY6][1]++;
+//             binCounts[iZ6][2]++;
+//             bins[0][iX6] = Max(bins[0][iX6], prev[6]);
+//             bins[1][iY6] = Max(bins[1][iY6], prev[6]);
+//             bins[2][iZ6] = Max(bins[2][iZ6], prev[6]);
+//             prev[6]      = prims8[6];
+//
+//             u32 iX7 = tempBinIndicesX[7];
+//             u32 iY7 = tempBinIndicesY[7];
+//             u32 iZ7 = tempBinIndicesZ[7];
+//             binCounts[iX7][0]++;
+//             binCounts[iY7][1]++;
+//             binCounts[iZ7][2]++;
+//             bins[0][iX7] = Max(bins[0][iX7], prev[7]);
+//             bins[1][iY7] = Max(bins[1][iY7], prev[7]);
+//             bins[2][iZ7] = Max(bins[2][iZ7], prev[7]);
+//             prev[7]      = prims8[7];
+//
+//             Lane8U32::Store(tempBinIndicesX, binIndicesX);
+//             Lane8U32::Store(tempBinIndicesY, binIndicesY);
+//             Lane8U32::Store(tempBinIndicesZ, binIndicesZ);
+//         }
+//     }
+//
+//     __forceinline void BinTest2(const PrimData *prims, u32 start, u32 count)
+//     {
+//         u32 i   = start;
+//         u32 end = start + count;
+//
+//         u32 tempBinIndices[8];
+//         Lane8F32 prev0;
+//         Lane8F32 prev1;
+//
+//         prev0 = prims[i].m256;
+//         prev1 = prims[i].m256;
+//
+//         Lane8F32 binMin = Shuffle4<0, 2>(prev0, prev1);
+//         Lane8F32 binMax = Shuffle4<1, 3>(prev0, prev1);
+//
+//         Lane8F32 centroid   = (binMax + binMin) * 0.5f;
+//         Lane8U32 binIndices = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroid - base) * scale));
+//
+//         Lane8U32::Store(tempBinIndices, binIndices);
+//         i += 2;
+//
+//         for (; i < end - 1; i += 2)
+//         {
+//             const PrimData *prim0 = &prims[i];
+//             const PrimData *prim1 = &prims[i];
+//
+//             binMin = Shuffle4<0, 2>(prim0->m256, prim1->m256);
+//             binMax = Shuffle4<1, 3>(prim0->m256, prim1->m256);
+//
+//             centroid   = (binMax + binMin) * 0.5f;
+//             binIndices = Clamp(Lane8U32(0), Lane8U32(numBins - 1), Flooru((centroid - base) * scale));
+//
+//             u32 binIndexX = tempBinIndices[0];
+//             u32 binIndexY = tempBinIndices[1];
+//             u32 binIndexZ = tempBinIndices[2];
+//             binCounts[binIndexX][0]++;
+//             binCounts[binIndexY][1]++;
+//             binCounts[binIndexZ][2]++;
+//             bins[0][binIndexX] = Max(bins[0][binIndexX], prev0);
+//             bins[1][binIndexY] = Max(bins[1][binIndexY], prev0);
+//             bins[2][binIndexZ] = Max(bins[2][binIndexZ], prev0);
+//
+//             prev0 = prim0->m256;
+//
+//             u32 binIndexX2 = tempBinIndices[4];
+//             u32 binIndexY2 = tempBinIndices[5];
+//             u32 binIndexZ2 = tempBinIndices[6];
+//             binCounts[binIndexX2][0]++;
+//             binCounts[binIndexY2][1]++;
+//             binCounts[binIndexZ2][2]++;
+//             bins[0][binIndexX2] = Max(bins[0][binIndexX2], prev1);
+//             bins[1][binIndexY2] = Max(bins[1][binIndexY2], prev1);
+//             bins[2][binIndexZ2] = Max(bins[2][binIndexZ2], prev1);
+//
+//             prev1 = prim1->m256;
+//
+//             Lane8U32::Store(tempBinIndices, binIndices);
+//         }
+//         u32 binIndexX = tempBinIndices[0];
+//         u32 binIndexY = tempBinIndices[1];
+//         u32 binIndexZ = tempBinIndices[2];
+//         binCounts[binIndexX][0]++;
+//         binCounts[binIndexY][1]++;
+//         binCounts[binIndexZ][2]++;
+//         bins[0][binIndexX] = Max(bins[0][binIndexX], prev0);
+//         bins[1][binIndexY] = Max(bins[1][binIndexY], prev0);
+//         bins[2][binIndexZ] = Max(bins[2][binIndexZ], prev0);
+//
+//         u32 binIndexX2 = tempBinIndices[4];
+//         u32 binIndexY2 = tempBinIndices[5];
+//         u32 binIndexZ2 = tempBinIndices[6];
+//         binCounts[binIndexX2][0]++;
+//         binCounts[binIndexY2][1]++;
+//         binCounts[binIndexZ2][2]++;
+//         bins[0][binIndexX2] = Max(bins[0][binIndexX2], prev1);
+//         bins[1][binIndexY2] = Max(bins[1][binIndexY2], prev1);
+//         bins[2][binIndexZ2] = Max(bins[2][binIndexZ2], prev1);
+//     }
+// };
 
 template <i32 numBins>
 struct HeuristicSAHBinned
 {
     StaticAssert(numBins >= 4, MoreThan4Bins);
-
-    // static const u32 pow2NumBins = NextPowerOfTwo(numBins);
-    // static const u32 numBinsX    = pow2NumBins < MAX_LANE_WIDTH ? pow2NumBins : MAX_LANE_WIDTH;
-    // static const u32 binMask     = numBinsX - 1;
-    // static const u32 binShift    = BsfConst(numBinsX);
-    // static const u32 numBinsY    = (numBins + numBinsX - 1) / numBinsX; // MAX_LANE_WIDTH - 1) / MAX_LANE_WIDTH;
 
     Lane4F32 binMin[3][numBins];
     Lane4F32 binMax[3][numBins];

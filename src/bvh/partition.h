@@ -425,6 +425,8 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, Bou
     f32 *maxVs = data->arr[v + 4];
     f32 *maxWs = data->arr[w + 4];
 
+    // bestValue *= 2.f;
+
     Bounds8F32 left(neg_inf);
     Bounds8F32 right(neg_inf);
     for (;;)
