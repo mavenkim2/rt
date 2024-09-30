@@ -130,9 +130,20 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
 
 #else
     SplitBinner binner(geomBounds);
-    HeuristicSOASplitBinning heuristic(&binner);
+    // HeuristicSOASplitBinning heuristic(&binner);
     PerformanceCounter start = OS_StartCounter();
-    heuristic.Bin(mesh, &soa, 0, numFaces);
+    // heuristic.Bin(mesh, &soa, 0, numFaces);
+    using HSplit = HeuristicSOASplitBinning<16>;
+    SplitBinner splitBinner(geomBounds);
+
+    HSplit heuristic(&splitBinner);
+    const u32 groupSize = 32 * 1024;
+    heuristic           = ParallelReduce<HSplit>(
+        0, numFaces, groupSize,
+        [&](HSplit &binner, u32 start, u32 count) { binner.Bin(mesh, &soa, start, count); },
+        [&](HSplit &l, const HSplit &r) { l.Merge(r); },
+        &splitBinner);
+
     f32 time = OS_GetMilliseconds(start);
     printf("Time elapsed binning: %fms\n", time);
     Split split = BinBest(heuristic.finalBounds, heuristic.entryCounts, heuristic.exitCounts, &binner);
@@ -177,10 +188,17 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     printf("mismatches: %u\n", errors);
 
 #if 1
+    printf("\n");
     printf("Left bounds min: %f %f %f\n", left.geomBounds.minP[0], left.geomBounds.minP[1], left.geomBounds.minP[2]);
     printf("Left bounds max: %f %f %f\n", left.geomBounds.maxP[0], left.geomBounds.maxP[1], left.geomBounds.maxP[2]);
     printf("Right bounds min: %f %f %f\n", right.geomBounds.minP[0], right.geomBounds.minP[1], right.geomBounds.minP[2]);
     printf("Right bounds max: %f %f %f\n", right.geomBounds.maxP[0], right.geomBounds.maxP[1], right.geomBounds.maxP[2]);
+
+    printf("\n");
+    printf("Left cent bounds min: %f %f %f\n", left.centBounds.minP[0], left.centBounds.minP[1], left.centBounds.minP[2]);
+    printf("Left cent bounds max: %f %f %f\n", left.centBounds.maxP[0], left.centBounds.maxP[1], left.centBounds.maxP[2]);
+    printf("Right cent bounds min: %f %f %f\n", right.centBounds.minP[0], right.centBounds.minP[1], right.centBounds.minP[2]);
+    printf("Right cent bounds max: %f %f %f\n", right.centBounds.maxP[0], right.centBounds.maxP[1], right.centBounds.maxP[2]);
     // Tests to ensure that the partitioning is valid
     errors            = 0;
     u32 firstBadIndex = 0;

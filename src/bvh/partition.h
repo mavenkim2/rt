@@ -418,40 +418,34 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, Get
     u32 rightCount = 0;
 
     f32 *minStream = data->arr[dim];
-    f32 *maxStream = data->arr[dim + 4];
-    u32 v          = LUTAxis[dim];
-    u32 w          = LUTAxis[v];
-    f32 *minVs     = data->arr[v];
-    f32 *minWs     = data->arr[w];
-
-    f32 *maxVs = data->arr[v + 4];
-    f32 *maxWs = data->arr[w + 4];
 
     // bestValue *= 2.f;
 
-    Bounds8F32 left(neg_inf);
-    Bounds8F32 right(neg_inf);
+    Bounds8F32 left;
+    Bounds8F32 right;
     Lane8F32 negBestValue = -bestValue;
     for (;;)
     {
-        while (l <= r && leftCount < LANE_WIDTH)
+        while (l <= r && leftCount == 0) //< LANE_WIDTH)
         {
-            u32 lIndex           = getIndex(l);
-            Lane8F32 min         = Lane8F32::LoadU(minStream + lIndex);
-            Lane8F32 notLeftMask = min <= negBestValue;
-            u32 mask             = Movemask(notLeftMask);
-            Lane8U32 leftRefId   = Lane8U32::Step(l);
+            u32 lIndex   = getIndex(l);
+            Lane8F32 min = Lane8F32::LoadU(minStream + lIndex);
+
+            Lane8F32 rightMask = min <= negBestValue;
+            u32 mask           = Movemask(rightMask);
+            Lane8U32 leftRefId = Lane8U32::Step(l);
             Lane8U32::StoreU(leftQueue + leftCount, MaskCompress(mask, leftRefId));
 
             l += LANE_WIDTH;
             leftCount += PopCount(mask);
         }
-        while (l <= r && rightCount < LANE_WIDTH)
+        while (l <= r && rightCount == 0) //< LANE_WIDTH)
         {
-            u32 rIndex            = getIndex(r);
-            Lane8F32 min          = Lane8F32::LoadU(minStream + rIndex);
-            Lane8F32 notRightMask = min > negBestValue;
-            const u32 mask        = Movemask(notRightMask);
+            u32 rIndex   = getIndex(r);
+            Lane8F32 min = Lane8F32::LoadU(minStream + rIndex);
+
+            Lane8F32 leftMask = min > negBestValue;
+            const u32 mask    = Movemask(leftMask);
 
             u32 notRightCount  = PopCount(mask);
             Lane8F32 storeMask = Lane8F32::Mask((1 << notRightCount) - 1u);
@@ -495,6 +489,7 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, Get
                 {
                     rIndex  = getIndex(r);
                     f32 min = minStream[rIndex];
+
                     if (min > -bestValue) break;
                     r--;
                 }
@@ -506,8 +501,8 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, Get
             }
             break;
         }
-        Assert(leftCount >= LANE_WIDTH);
-        Assert(rightCount >= LANE_WIDTH);
+        // Assert(leftCount >= LANE_WIDTH);
+        // Assert(rightCount >= LANE_WIDTH);
 
         u32 minCount = Min(leftCount, rightCount);
 
@@ -536,8 +531,7 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
 {
     if (range.count < PARALLEL_THRESHOLD)
     {
-        return PartitionSerial(data, split.bestDim, split.bestValue, range.start, range.End(),
-                               [&](u32 index) { return index; });
+        return PartitionSerial(data, split.bestDim, split.bestValue, range.start, range.End(), [&](u32 index) { return index; });
     }
 
     const u32 numPerCacheLine   = CACHE_LINE_SIZE / sizeof(f32);

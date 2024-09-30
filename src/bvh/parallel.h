@@ -446,6 +446,7 @@ struct Scheduler
         Task task;
         task.counter = counter;
         task.func    = func;
+        Assert(numGroups <= JobDeque<Task>::size);
         for (u32 i = 0; i < numGroups; i++)
         {
             task.id = i;
@@ -510,7 +511,7 @@ T ParallelReduce(u32 start, u32 count, u32 groupSize, Func func, Reduce reduce, 
     T *values           = (T *)PushArray(temp.arena, u8, sizeof(T) * taskCount);
     for (u32 i = 0; i < taskCount; i++)
     {
-        new (&values[i]) T(std::forward<Args>(inArgs));
+        new (&values[i]) T(std::forward<Args>(inArgs)...);
     }
 
     // HeuristicSOASplitBinning<16> *binners = PushArray(temp.arena, HeuristicSOASplitBinning<16>, taskCount);
@@ -521,7 +522,7 @@ T ParallelReduce(u32 start, u32 count, u32 groupSize, Func func, Reduce reduce, 
         func(val, threadStart, Min(groupSize, start + count - threadStart));
     });
 
-    T out = T(std::forward<Args>(inArgs));
+    T out = T(std::forward<Args>(inArgs)...);
     for (u32 i = 0; i < taskCount; i++)
     {
         reduce(out, values[i]);

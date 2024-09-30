@@ -153,9 +153,11 @@ struct Triangle8
     }
 };
 
-// NOTE: l contains bounds to intersect against
 void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
-                  Bounds8 *l, Bounds8 *r)
+                  Lane8F32 &leftMinX, Lane8F32 &leftMinY, Lane8F32 &leftMinZ,
+                  Lane8F32 &leftMaxX, Lane8F32 &leftMaxY, Lane8F32 &leftMaxZ,
+                  Lane8F32 &rightMinX, Lane8F32 &rightMinY, Lane8F32 &rightMinZ,
+                  Lane8F32 &rightMaxX, Lane8F32 &rightMaxY, Lane8F32 &rightMaxZ)
 {
     static const u32 LUTX[] = {0, 2, 1};
     static const u32 LUTY[] = {1, 0, 2};
@@ -212,29 +214,85 @@ void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri,
 
     const Lane8F32 posInf(pos_inf);
 
+    leftMinX = *((Lane8F32 *)(&left) + LUTX[dim]);
+    leftMinY = *((Lane8F32 *)(&left) + LUTY[dim]);
+    leftMinZ = *((Lane8F32 *)(&left) + LUTZ[dim]);
+
+    leftMaxX = *((Lane8F32 *)(&left) + 3 + LUTX[dim]);
+    leftMaxY = *((Lane8F32 *)(&left) + 3 + LUTY[dim]);
+    leftMaxZ = *((Lane8F32 *)(&left) + 3 + LUTZ[dim]);
+
+    rightMinX = *((Lane8F32 *)(&right) + LUTX[dim]);
+    rightMinY = *((Lane8F32 *)(&right) + LUTY[dim]);
+    rightMinZ = *((Lane8F32 *)(&right) + LUTZ[dim]);
+
+    rightMaxX = *((Lane8F32 *)(&right) + 3 + LUTX[dim]);
+    rightMaxY = *((Lane8F32 *)(&right) + 3 + LUTY[dim]);
+    rightMaxZ = *((Lane8F32 *)(&right) + 3 + LUTZ[dim]);
+}
+
+void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
+                  Bounds8 *l, Bounds8 *r)
+{
     Lane8F32 lOut[8];
     Lane8F32 rOut[8];
+    Lane8F32 leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
+        rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ;
 
-    Lane8F32 *leftMinX = (Lane8F32 *)(&left) + LUTX[dim];
-    Lane8F32 *leftMinY = (Lane8F32 *)(&left) + LUTY[dim];
-    Lane8F32 *leftMinZ = (Lane8F32 *)(&left) + LUTZ[dim];
+    ClipTriangle(mesh, dim, tri, splitPos,
+                 leftMinX, leftMinY, leftMinZ,
+                 leftMaxX, leftMaxY, leftMaxZ,
+                 rightMinX, rightMinY, rightMinZ,
+                 rightMaxX, rightMaxY, rightMaxZ);
 
-    Lane8F32 *leftMaxX = (Lane8F32 *)(&left) + 3 + LUTX[dim];
-    Lane8F32 *leftMaxY = (Lane8F32 *)(&left) + 3 + LUTY[dim];
-    Lane8F32 *leftMaxZ = (Lane8F32 *)(&left) + 3 + LUTZ[dim];
-
-    Lane8F32 *rightMinX = (Lane8F32 *)(&right) + LUTX[dim];
-    Lane8F32 *rightMinY = (Lane8F32 *)(&right) + LUTY[dim];
-    Lane8F32 *rightMinZ = (Lane8F32 *)(&right) + LUTZ[dim];
-
-    Lane8F32 *rightMaxX = (Lane8F32 *)(&right) + 3 + LUTX[dim];
-    Lane8F32 *rightMaxY = (Lane8F32 *)(&right) + 3 + LUTY[dim];
-    Lane8F32 *rightMaxZ = (Lane8F32 *)(&right) + 3 + LUTZ[dim];
-
-    Transpose6x8(*leftMinX, *leftMinY, *leftMinZ, *leftMaxX, *leftMaxY, *leftMaxZ,
+    Transpose6x8(leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
                  lOut[0], lOut[1], lOut[2], lOut[3], lOut[4], lOut[5], lOut[6], lOut[7]);
-    Transpose6x8(*rightMinX, *rightMinY, *rightMinZ, *rightMaxX, *rightMaxY, *rightMaxZ,
+    Transpose6x8(rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ,
                  rOut[0], rOut[1], rOut[2], rOut[3], rOut[4], rOut[5], rOut[6], rOut[7]);
+
+    for (u32 i = 0; i < 8; i++)
+    {
+        Bounds8 lBounds8(lOut[i]);
+        Bounds8 rBounds8(rOut[i]);
+
+        lBounds8.Intersect(l[i]);
+        rBounds8.Intersect(l[i]);
+
+        l[i] = lBounds8;
+        r[i] = rBounds8;
+    }
+}
+
+void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
+                  Bounds8 *l, Bounds8 *r, Lane8F32 *outCentroidBounds)
+{
+    Lane8F32 lOut[8];
+    Lane8F32 rOut[8];
+    Lane8F32 leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
+        rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ;
+
+    ClipTriangle(mesh, dim, tri, splitPos,
+                 leftMinX, leftMinY, leftMinZ,
+                 leftMaxX, leftMaxY, leftMaxZ,
+                 rightMinX, rightMinY, rightMinZ,
+                 rightMaxX, rightMaxY, rightMaxZ);
+
+    Transpose6x8(leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
+                 lOut[0], lOut[1], lOut[2], lOut[3], lOut[4], lOut[5], lOut[6], lOut[7]);
+    Transpose6x8(rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ,
+                 rOut[0], rOut[1], rOut[2], rOut[3], rOut[4], rOut[5], rOut[6], rOut[7]);
+
+    Lane8F32 centroidLeftX = (leftMaxX + leftMinX) * 0.5f;
+    Lane8F32 centroidLeftY = (leftMaxY + leftMinY) * 0.5f;
+    Lane8F32 centroidLeftZ = (leftMaxZ + leftMinZ) * 0.5f;
+
+    Lane8F32 centroidRightX = (rightMaxX + rightMinX) * 0.5f;
+    Lane8F32 centroidRightY = (rightMaxY + rightMinY) * 0.5f;
+    Lane8F32 centroidRightZ = (rightMaxZ + rightMinZ) * 0.5f;
+
+    Transpose6x8(centroidLeftX, centroidLeftY, centroidLeftZ, centroidRightX, centroidRightY, centroidRightZ,
+                 outCentroidBounds[0], outCentroidBounds[1], outCentroidBounds[2], outCentroidBounds[3],
+                 outCentroidBounds[4], outCentroidBounds[5], outCentroidBounds[6], outCentroidBounds[7]);
 
     for (u32 i = 0; i < 8; i++)
     {
@@ -407,7 +465,9 @@ template <i32 numBins = 16>
 struct alignas(32) HeuristicSOASplitBinning
 {
     Bounds8 bins8[3][numBins];
+    Lane8F32 centroidBoundsSplits[3][numBins][2];
     Bounds8 centroidBounds[3][numBins];
+
     SplitBinner<numBins> *binner;
 
     // temp storage
@@ -436,6 +496,8 @@ struct alignas(32) HeuristicSOASplitBinning
                 {
                     faceIndices[dim][i][j] = 0;
                 }
+                centroidBoundsSplits[dim][i][0] = pos_inf;
+                centroidBoundsSplits[dim][i][1] = neg_inf;
             }
         }
     }
@@ -449,7 +511,6 @@ struct alignas(32) HeuristicSOASplitBinning
         f32 totalTime    = 0.f;
 
         Lane8F32 lanes[8];
-        Lane8F32 centroids[8];
 
         for (; i < start + alignedCount; i += LANE_WIDTH)
         {
@@ -503,8 +564,29 @@ struct alignas(32) HeuristicSOASplitBinning
             };
             Transpose6x8(prevMin[0], prevMin[1], prevMin[2], prevMax[0], prevMax[1], prevMax[2],
                          lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5], lanes[6], lanes[7]);
-            Transpose6x8(prevCentroids[0], prevCentroids[1], prevCentroids[2], prevCentroids[0], prevCentroids[1], prevCentroids[2],
-                         centroids[0], centroids[1], centroids[2], centroids[3], centroids[4], centroids[5], centroids[6], centroids[7]);
+
+            Lane8F32 prevCentroids02Lo = UnpackLo(prevCentroids[0], prevCentroids[2]);
+            Lane8F32 prevCentroids02Hi = UnpackHi(prevCentroids[0], prevCentroids[2]);
+
+            Lane8F32 prevCentroids1Lo = Permute<0, 0, 1, 1>(prevCentroids[1]);
+            Lane8F32 prevCentroids1Hi = Permute<2, 2, 3, 3>(prevCentroids[1]);
+
+            Lane8F32 centroids04 = UnpackLo(prevCentroids02Lo, prevCentroids1Lo);
+            Lane8F32 centroids15 = UnpackHi(prevCentroids02Lo, prevCentroids1Lo);
+            Lane8F32 centroids26 = UnpackLo(prevCentroids02Hi, prevCentroids1Hi);
+            Lane8F32 centroids37 = UnpackHi(prevCentroids02Hi, prevCentroids1Hi);
+
+            Lane8F32 centroids[8] = {
+                Shuffle4<0, 0>(centroids04),
+                Shuffle4<0, 0>(centroids15),
+                Shuffle4<0, 0>(centroids26),
+                Shuffle4<0, 0>(centroids37),
+                Shuffle4<1, 1>(centroids04),
+                Shuffle4<1, 1>(centroids15),
+                Shuffle4<1, 1>(centroids26),
+                Shuffle4<1, 1>(centroids37),
+            };
+
             for (u32 dim = 0; dim < 3; dim++)
             {
                 alignas(32) u32 indexMins[8];
@@ -520,7 +602,7 @@ struct alignas(32) HeuristicSOASplitBinning
                         case 0:
                         {
                             bins8[dim][indexMin].Extend(lanes[b]);
-                            centroidBounds[dim][indexMin].Extend(centroids[b] ^ signFlipMask);
+                            centroidBounds[dim][indexMin].Extend(Bounds8(centroids[b]));
                         }
                         break;
                         default:
@@ -552,7 +634,7 @@ struct alignas(32) HeuristicSOASplitBinning
                         {
                             bounds[0][boundIndex] = Bounds8(pos_inf);
                         }
-                        u32 binIndices[LANE_WIDTH];
+                        alignas(32) u32 binIndices[LANE_WIDTH];
 
                         u32 current = 0;
                         for (u32 d = 0; d < bin; d++)
@@ -560,11 +642,18 @@ struct alignas(32) HeuristicSOASplitBinning
                             Lane8U32::Store(binIndices, startBin);
                             startBin += 1u;
                             Lane8F32 splitPos = binner->GetSplitValue(startBin, dim);
-                            ClipTriangle(mesh, dim, tri, splitPos, bounds[current], bounds[!current]);
+
+                            Lane8F32 triCentBounds[8];
+                            ClipTriangle(mesh, dim, tri, splitPos, bounds[current], bounds[!current], triCentBounds);
 
                             for (u32 b = 0; b < LANE_WIDTH; b++)
                             {
-                                bins8[dim][binIndices[b]].Extend(bounds[current][b]);
+                                u32 binIndex = binIndices[b];
+                                bins8[dim][binIndex].Extend(bounds[current][b]);
+                                centroidBoundsSplits[dim][binIndex][0] = Min(centroidBoundsSplits[dim][binIndex][0],
+                                                                             triCentBounds[b]);
+                                centroidBoundsSplits[dim][binIndex][1] = Max(centroidBoundsSplits[dim][binIndex][1],
+                                                                             triCentBounds[b]);
                             }
                             current = !current;
                         }
@@ -591,7 +680,16 @@ struct alignas(32) HeuristicSOASplitBinning
                 soa->maxY[i],
                 soa->maxZ[i],
             };
+            f32 centroids[3] = {
+                (max[0] - min[0]) * 0.5f,
+                (max[1] - min[1]) * 0.5f,
+                (max[2] - min[2]) * 0.5f,
+            };
             u32 faceID = soa->primIDs[i];
+
+            Lane8F32 prim(min[0], min[1], min[2], pos_inf, max[0], max[1], max[2], pos_inf);
+            Lane8F32 centroid(-centroids[0], -centroids[1], -centroids[2], pos_inf,
+                              centroids[0], centroids[1], centroids[2], pos_inf);
 
             for (u32 dim = 0; dim < 3; dim++)
             {
@@ -604,8 +702,8 @@ struct alignas(32) HeuristicSOASplitBinning
                 {
                     case 0:
                     {
-                        Lane8F32 prim(min[0], min[1], min[2], pos_inf, max[0], max[1], max[2], pos_inf);
                         bins8[dim][binIndexMin].Extend(prim);
+                        centroidBounds[dim][binIndexMin].Extend(Bounds8(centroid));
                     }
                     break;
                     default:
@@ -631,7 +729,7 @@ struct alignas(32) HeuristicSOASplitBinning
                 {
                     u32 numPrims      = Min(remainingCount, 8u);
                     Triangle8 tri     = Triangle8::Load(mesh, dim, faceIndices[dim][diff] + remaining * LANE_WIDTH);
-                    Lane8U32 startBin = Lane8U32::Load(binIndexStart[dim][diff] + remaining * LANE_WIDTH);
+                    Lane8U32 startBin = Lane8U32::LoadU(binIndexStart[dim][diff] + remaining * LANE_WIDTH);
 
                     Bounds8 bounds[2][8];
                     alignas(32) u32 binIndices[8];
@@ -642,15 +740,21 @@ struct alignas(32) HeuristicSOASplitBinning
                         Lane8U32::Store(binIndices, startBin);
                         startBin += 1u;
                         Lane8F32 splitPos = binner->GetSplitValue(startBin, dim);
-                        ClipTriangle(mesh, dim, tri, splitPos, bounds[current], bounds[!current]);
+                        Lane8F32 triCentBounds[8];
+                        ClipTriangle(mesh, dim, tri, splitPos, bounds[current], bounds[!current], triCentBounds);
 
                         for (u32 b = 0; b < numPrims; b++)
                         {
-                            bins8[dim][binIndices[b]].Extend(bounds[current][b]);
+                            u32 binIndex = binIndices[b];
+                            bins8[dim][binIndex].Extend(bounds[current][b]);
+                            centroidBoundsSplits[dim][binIndex][0] = Min(centroidBoundsSplits[dim][binIndex][0],
+                                                                         triCentBounds[b]);
+                            centroidBoundsSplits[dim][binIndex][1] = Max(centroidBoundsSplits[dim][binIndex][1],
+                                                                         triCentBounds[b]);
                         }
                         current = !current;
                     }
-                    remainingCount -= 8;
+                    remainingCount -= LANE_WIDTH;
                 }
             }
         }
@@ -666,13 +770,17 @@ struct alignas(32) HeuristicSOASplitBinning
     }
 
     u32 Split(Arena *arena, TriangleMesh *mesh, PrimDataSOA *data, ExtRange range, Split split,
-              RecordSOASplits &outLeft, RecordSOASplits &outRight) // Bounds &outLeft, Bounds &outRight)
+              RecordSOASplits &outLeft, RecordSOASplits &outRight)
     {
         // partitioning
         u32 dim          = split.bestDim;
         f32 *minStream   = data->arr[dim];
         f32 *maxStream   = data->arr[dim + 4];
         u32 alignedCount = range.count - range.count % LANE_WIDTH;
+
+        Lane8F32 testCentBounds[2];
+        testCentBounds[0] = pos_inf;
+        testCentBounds[1] = neg_inf;
 
         u32 count = 0;
 
@@ -737,13 +845,16 @@ struct alignas(32) HeuristicSOASplitBinning
                 Bounds8 boundsLeft[LANE_WIDTH];
                 for (u32 b = 0; b < LANE_WIDTH; b++)
                 {
-                    boundsLeft[b] = Bounds8(pos_inf);
+                    boundsLeft[b] = pos_inf;
                 }
                 Bounds8 boundsRight[8];
-                ClipTriangle(mesh, dim, tri, split.bestValue, boundsLeft, boundsRight);
+                Lane8F32 triCentBounds[8];
+                ClipTriangle(mesh, dim, tri, split.bestValue, boundsLeft, boundsRight, triCentBounds);
                 for (u32 queueIndex = 0; queueIndex < LANE_WIDTH; queueIndex++)
                 {
-                    const u32 refID = refIDQueue[count + queueIndex];
+                    testCentBounds[0] = Min(testCentBounds[0], triCentBounds[queueIndex]);
+                    testCentBounds[1] = Max(testCentBounds[1], triCentBounds[queueIndex]);
+                    const u32 refID   = refIDQueue[count + queueIndex];
                     // const u32 refID = faceIDQueue[count + queueIndex];
 
                     data->minX[refID] = boundsLeft[queueIndex].v[0];
@@ -810,6 +921,7 @@ struct alignas(32) HeuristicSOASplitBinning
             splitCount++;
             totalSplitCount++;
         }
+
         // Get the bounds
         for (i = 0; i <= split.bestPos; i++)
         {
@@ -821,8 +933,14 @@ struct alignas(32) HeuristicSOASplitBinning
             outRight.geomBounds.Extend(finalBounds[split.bestDim][i]);
             outRight.centBounds.Extend(finalCentBounds[split.bestDim][i]);
         }
-        outLeft.geomBounds.maxP[split.bestDim]  = split.bestValue;
-        outRight.geomBounds.minP[split.bestDim] = split.bestValue;
+        Lane4F32 centBoundsLeftMin  = Extract4<0>(centroidBoundsSplits[split.bestDim][split.bestPos][0]);
+        Lane4F32 centBoundsRightMin = Extract4<1>(centroidBoundsSplits[split.bestDim][split.bestPos][0]);
+
+        Lane4F32 centBoundsLeftMax  = Extract4<0>(centroidBoundsSplits[split.bestDim][split.bestPos][1]);
+        Lane4F32 centBoundsRightMax = Extract4<1>(centroidBoundsSplits[split.bestDim][split.bestPos][1]);
+
+        outLeft.centBounds.Extend(centBoundsLeftMin, centBoundsLeftMax);
+        outRight.centBounds.Extend(centBoundsRightMin, centBoundsRightMax);
 
         if (totalSplitCount > range.ExtSize())
         {
@@ -862,9 +980,10 @@ struct alignas(32) HeuristicSOASplitBinning
         {
             outLeft.data  = data;
             outRight.data = data;
-            u32 mid       = PartitionParallel(split, range, data);
-            u32 numLeft   = mid - range.start;
-            u32 numRight  = range.End() - mid + splitCount;
+
+            u32 mid      = PartitionParallel(split, range, data);
+            u32 numLeft  = mid - range.start;
+            u32 numRight = range.End() - mid + splitCount;
 
             u32 extSizeLeft  = Min(range.ExtSize() * (numLeft) / (numLeft + numRight), range.ExtSize());
             u32 extSizeRight = range.ExtSize() - extSizeLeft;
@@ -906,10 +1025,13 @@ struct alignas(32) HeuristicSOASplitBinning
             for (u32 dim = 0; dim < 3; dim++)
             {
                 finalBounds[dim][i].Extend(other.finalBounds[dim][i]);
+                finalCentBounds[dim][i].Extend(other.finalCentBounds[dim][i]);
+                centroidBoundsSplits[dim][i][0] = Min(centroidBoundsSplits[dim][i][0], other.centroidBoundsSplits[dim][i][0]);
+                centroidBoundsSplits[dim][i][1] = Max(centroidBoundsSplits[dim][i][1], other.centroidBoundsSplits[dim][i][1]);
             }
         }
     }
-};
+}; // namespace rt
 
 // SBVH
 static const f32 sbvhAlpha = 1e-5;
