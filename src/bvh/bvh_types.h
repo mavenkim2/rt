@@ -27,6 +27,10 @@ struct Split
     u32 bestDim;
     f32 bestValue;
 
+    // TODO: this is maybe a bit jank
+    void *ptr;
+    u64 allocPos;
+
     Split() {}
     Split(f32 sah, u32 pos, u32 dim, f32 val) : bestSAH(sah), bestPos(pos), bestDim(dim), bestValue(val) {}
 };

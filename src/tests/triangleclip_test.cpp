@@ -242,8 +242,8 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     }
     printf("first bad index: %u\n", firstBadIndex);
     printf("last bad index: %u\n", lastBadIndex);
-#endif
     printf("Num errors: %u\n", errors);
+#endif
 }
 
 void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)

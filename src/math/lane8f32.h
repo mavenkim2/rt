@@ -501,16 +501,14 @@ __forceinline void Transpose3x8(const Lane8F32 &inA, const Lane8F32 &inB, const 
     Lane8F32 t26 = UnpackLo(acHi, bHi);
     Lane8F32 t37 = UnpackHi(acHi, bHi);
 
-    Lane8F32 centroids[8] = {
-        Shuffle4<0, 0>(t04),
-        Shuffle4<0, 0>(t15),
-        Shuffle4<0, 0>(t26),
-        Shuffle4<0, 0>(t37),
-        Shuffle4<1, 1>(t04),
-        Shuffle4<1, 1>(t15),
-        Shuffle4<1, 1>(t26),
-        Shuffle4<1, 1>(t37),
-    };
+    outA = Shuffle4<0, 0>(t04);
+    outB = Shuffle4<0, 0>(t15);
+    outC = Shuffle4<0, 0>(t26);
+    outD = Shuffle4<0, 0>(t37);
+    outE = Shuffle4<1, 1>(t04);
+    outF = Shuffle4<1, 1>(t15);
+    outG = Shuffle4<1, 1>(t26);
+    outH = Shuffle4<1, 1>(t37);
 }
 
 __forceinline Lane8U32 Flooru(Lane8F32 lane)
