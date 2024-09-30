@@ -62,22 +62,9 @@ PrimData *GeneratePrimData(Arena *arena, TriangleMesh *mesh, u32 count, u32 numF
     return data;
 }
 
-void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
+PrimDataSOA GenerateSOAData(Arena *arena, TriangleMesh *mesh, u32 numFaces, Bounds &geomBounds, Bounds &centBounds)
 {
-    Arena *arena = ArenaAlloc();
-
-    if (!mesh)
-    {
-        Assert(count != 0);
-        mesh = GenerateMesh(arena, count);
-    }
-    else
-    {
-        count = mesh->numIndices;
-    }
-
-    const u32 numFaces = count / 3;
-    arena->align       = 64;
+    arena->align = 64;
     PrimDataSOA soa;
     soa.minX    = PushArray(arena, f32, u32(numFaces * GROW_AMOUNT));
     soa.minY    = PushArray(arena, f32, u32(numFaces * GROW_AMOUNT));
@@ -87,9 +74,6 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     soa.maxY    = PushArray(arena, f32, u32(numFaces * GROW_AMOUNT));
     soa.maxZ    = PushArray(arena, f32, u32(numFaces * GROW_AMOUNT));
     soa.primIDs = PushArray(arena, u32, u32(numFaces * GROW_AMOUNT));
-
-    Bounds geomBounds;
-    Bounds centBounds;
 
     for (u32 i = 0; i < numFaces; i++)
     {
@@ -119,6 +103,27 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
         soa.maxZ[i]    = max.z;
         soa.primIDs[i] = i;
     }
+    return soa;
+}
+
+void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
+{
+    Arena *arena = ArenaAlloc();
+
+    if (!mesh)
+    {
+        Assert(count != 0);
+        mesh = GenerateMesh(arena, count);
+    }
+    else
+    {
+        count = mesh->numIndices;
+    }
+
+    const u32 numFaces = count / 3;
+    Bounds geomBounds;
+    Bounds centBounds;
+    PrimDataSOA soa = GenerateSOAData(arena, mesh, numFaces, geomBounds, centBounds);
 
 #if 0
     ObjectBinner<32> binner(centBounds);
@@ -341,6 +346,36 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
     }
     printf("Num errors: %u\n", errors);
 #endif
+}
+
+void SOASBVHBuilderTest(TriangleMesh *mesh)
+{
+    Arena *arena = ArenaAlloc();
+    arena->align = 64;
+
+    const u32 numFaces = mesh->numIndices / 3;
+    Bounds geomBounds;
+    Bounds centBounds;
+    PrimDataSOA soa = GenerateSOAData(arena, mesh, numFaces, geomBounds, centBounds);
+
+    BuildSettings settings;
+
+    RecordSOASplits record;
+    record.geomBounds = geomBounds;
+    record.centBounds = centBounds;
+    record.data       = &soa;
+    record.range      = ExtRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
+    u32 numProcessors = OS_NumProcessors();
+    Arena **arenas    = PushArray(arena, Arena *, numProcessors);
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        arenas[i] = ArenaAlloc();
+    }
+
+    PerformanceCounter counter = OS_StartCounter();
+    BVH4Quantized bvh          = BuildQuantizedSBVH<4>(settings, arenas, mesh, record);
+    f32 time                   = OS_GetMilliseconds(counter);
+    printf("Build time: %fms\n", time);
 }
 
 } // namespace rt

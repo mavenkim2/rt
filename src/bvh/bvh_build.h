@@ -5,9 +5,8 @@ namespace rt
 template <i32 N>
 struct QuantizedNode;
 
-#define CREATE_NODE() __forceinline void operator()(const Record *records, const u32 numRecords, NodeType *result)
-#define CREATE_LEAF() __forceinline void operator()(NodeType *leaf, PrimData *prims, u32 start, u32 end)
-#define UPDATE_NODE() __forceinline void operator()()
+#define CREATE_NODE() template <typename Record> \
+__forceinline void operator()(const Record *records, const u32 numRecords, NodeType *result)
 
 template <i32 N>
 struct QuantizedNode
@@ -165,6 +164,7 @@ template <>
 struct UpdateQuantizedNode<4>
 {
     using NodeType = QuantizedNode<4>;
+    template <typename Record>
     __forceinline void operator()(Arena *arena, NodeType *parent, const Record *records, NodeType *children,
                                   const u32 *leafIndices, const u32 leafCount)
     {
@@ -176,7 +176,7 @@ struct UpdateQuantizedNode<4>
         {
             u32 leafIndex        = leafIndices[i];
             const Record *record = &records[leafIndex];
-            primTotal += record->end - record->start;
+            primTotal += record->range.Size();
         }
 
         Assert(primTotal <= 12);
@@ -189,8 +189,8 @@ struct UpdateQuantizedNode<4>
         {
             u32 leafIndex        = leafIndices[i];
             const Record *record = &records[leafIndex];
-            u32 primCount        = record->end - record->start;
-            for (u32 j = record->start; j < record->end; j++)
+            u32 primCount        = record->range.Size();
+            for (u32 j = record->range.start; j < record->range.End(); j++)
             {
                 primIndices[offset++] = j;
             }
@@ -222,7 +222,7 @@ struct UpdateQuantizedNode<8>
         {
             u32 leafIndex        = leafIndices[i];
             const Record *record = &records[leafIndex];
-            primTotal += record->end - record->start;
+            primTotal += record->range.end - record->range.start;
         }
         Assert(primTotal <= 24);
         u32 *primIndices     = PushArray(arena, u32, primTotal);
@@ -233,9 +233,9 @@ struct UpdateQuantizedNode<8>
         {
             u32 leafIndex        = leafIndices[i];
             const Record *record = &records[leafIndex];
-            u32 primCount        = record->end - record->start;
+            u32 primCount        = record->range.end - record->range.start;
 
-            for (u32 j = record->start; j < record->end; j++)
+            for (u32 j = record->range.start; j < record->range.end; j++)
             {
                 primIndices[offset++] = j;
             }
@@ -296,11 +296,12 @@ using BVHQuantized = BVHN<N, QuantizedNode<N>>;
 typedef BVHQuantized<4> BVH4Quantized;
 typedef BVHQuantized<8> BVH8Quantized;
 
-template <i32 N, typename Heuristic, typename CreateNode, typename UpdateNode, typename Prim>
+template <i32 N, typename Heur, typename CreateNode, typename UpdateNode, typename Prim>
 struct BuildFuncs
 {
     using NodeType  = typename CreateNode::NodeType;
     using Primitive = Prim;
+    using Heuristic = Heur;
 
     CreateNode createNode;
     UpdateNode updateNode;
@@ -331,7 +332,7 @@ template <i32 N>
 using BLAS_SOA_SBVH_QuantizedNode_TriangleLeaf_Funcs =
     BuildFuncs<
         N,
-        HeuristicSpatialSplits<16>,
+        HeuristicSpatialSplits<32, 16>,
         CreateQuantizedNode<N>,
         UpdateQuantizedNode<N>,
         TriangleMesh>;
@@ -339,20 +340,23 @@ using BLAS_SOA_SBVH_QuantizedNode_TriangleLeaf_Funcs =
 template <i32 N, typename BuildFunctions>
 struct BVHBuilder
 {
-    using NodeType  = typename BuildFunctions::NodeType;
-    using Primitive = typename BuildFunctions::Primitive;
-    using Heuristic = typename BuildFunctions::Heuristic;
-    using Record    = typename Heuristic::Record;
+    using NodeType      = typename BuildFunctions::NodeType;
+    using Primitive     = typename BuildFunctions::Primitive;
+    using Heuristic     = typename BuildFunctions::Heuristic;
+    using Record        = typename Heuristic::Record;
+    using PrimitiveData = typename Record::PrimitiveData;
     BuildFunctions f;
 
     Arena **arenas;
     Primitive *primitives;
+    Heuristic heuristic;
 
+    BVHBuilder() {}
     NodeType *BuildBVHRoot(BuildSettings settings, Record &record);
     __forceinline u32 BuildNode(BuildSettings settings, const Record &record, Record *childRecords, u32 &numChildren);
     void BuildBVH(BuildSettings settings, NodeType *parent, Record *records, u32 numChildren);
 
-    BVHN<N, NodeType> BuildBVH(BuildSettings settings, Arena **inArenas, Primitive *inRawPrims, u32 count);
+    BVHN<N, NodeType> BuildBVH(BuildSettings settings, Arena **inArenas, Primitive *inRawPrims, Record &record);
 };
 
 template <i32 N>
@@ -367,7 +371,8 @@ typename BVHBuilder<N, BuildFunctions>::NodeType *BVHBuilder<N, BuildFunctions>:
     u32 numChildren;
     u32 result = BuildNode(settings, record, childRecords, numChildren);
 
-    NodeType *root = PushStruct(arenas[GetThreadIndex()], NodeType);
+    Arena *arena   = arenas[GetThreadIndex()];
+    NodeType *root = PushStruct(arena, NodeType);
     if (result)
     {
         f.createNode(childRecords, numChildren, root);
@@ -378,7 +383,7 @@ typename BVHBuilder<N, BuildFunctions>::NodeType *BVHBuilder<N, BuildFunctions>:
     {
         u32 leafIndex = 0;
         f.createNode(&record, 1, root);
-        f.updateNode(root, &record, 0, &leafIndex, 1);
+        f.updateNode(arena, root, &record, 0, &leafIndex, 1);
     }
     return root;
 }
@@ -388,16 +393,14 @@ __forceinline u32 BVHBuilder<N, BuildFunctions>::BuildNode(BuildSettings setting
                                                            Record *childRecords, u32 &numChildren)
 
 {
-    u32 total = record.end - record.start;
+    u32 total = record.range.Size();
     Assert(total > 0);
 
     if (total == 1) return 0;
 
-    // HeuristicSAHBinned<32> heuristic;
-
     {
         Split split = heuristic.Bin(record, 1);
-        heuristic.Split(split, /*primitives, */ record, &result);
+        heuristic.Split(split, record, childRecords[0], childRecords[1]);
 
         // NOTE: multiply both by the area instead of dividing
         f32 area     = HalfArea(record.geomBounds);
@@ -405,9 +408,6 @@ __forceinline u32 BVHBuilder<N, BuildFunctions>::BuildNode(BuildSettings setting
         f32 splitSAH = settings.travCost * area + settings.intCost * split.bestSAH;
 
         if (total <= settings.maxLeafSize && leafSAH <= splitSAH) return 0;
-
-        childRecords[0] = Record(record.data, result.geomBoundsL, result.centBoundsL, record.start, result.mid);
-        childRecords[1] = Record(record.data, result.geomBoundsR, result.centBoundsR, result.mid, record.end);
     }
 
     // N - 1 splits produces N children
@@ -418,7 +418,7 @@ __forceinline u32 BVHBuilder<N, BuildFunctions>::BuildNode(BuildSettings setting
         for (u32 recordIndex = 0; recordIndex < numChildren; recordIndex++)
         {
             Record &childRecord = childRecords[recordIndex];
-            if (childRecord.Size() <= settings.maxLeafSize) continue;
+            if (childRecord.range.Size() <= settings.maxLeafSize) continue;
 
             f32 childArea = HalfArea(childRecord.geomBounds);
             if (childArea > maxArea)
@@ -429,20 +429,23 @@ __forceinline u32 BVHBuilder<N, BuildFunctions>::BuildNode(BuildSettings setting
         }
         if (bestChild == -1) break;
 
-        Split split = BinParallel(childRecords[bestChild], 1, &heuristic);
+        Split split = heuristic.Bin(childRecords[bestChild]);
 
-        PartitionResult result;
-        PartitionParallel(split, /*primitives, */ childRecords[bestChild], &result);
+        Record out;
+        heuristic.Split(split, childRecords[bestChild], out, childRecords[numChildren]);
 
-        Record &childRecord = childRecords[bestChild];
-        PrimData *prim      = childRecord.data;
-        u32 start           = childRecord.start;
-        u32 end             = childRecord.end;
+        // PartitionResult result;
+        // PartitionParallel(split, childRecords[bestChild], &result);
 
-        Assert(start != end && start != result.mid && result.mid != end);
+        // Record &childRecord = childRecords[bestChild];
+        // PrimData *prim      = childRecord.data;
+        // u32 start           = childRecord.start;
+        // u32 end             = childRecord.end;
 
-        childRecords[bestChild]   = Record(prim, result.geomBoundsL, result.centBoundsL, start, result.mid);
-        childRecords[numChildren] = Record(prim, result.geomBoundsR, result.centBoundsR, result.mid, end);
+        // Assert(start != end && start != result.mid && result.mid != end);
+
+        childRecords[bestChild] = out; // Record(prim, result.geomBoundsL, result.centBoundsL, start, result.mid);
+        // childRecords[numChildren] = Record(prim, result.geomBoundsR, result.centBoundsR, result.mid, end);
     }
 
     // Test
@@ -528,24 +531,25 @@ BVHN<N, typename BVHBuilder<N, BuildFunctions>::NodeType>
 BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings,
                                         Arena **inArenas,
                                         Primitive *inRawPrims,
-                                        u32 count)
+                                        Record &record)
 {
     arenas = inArenas;
 
-    const u32 groupSize        = count / 16;
-    jobsystem::Counter counter = {};
+    // const u32 groupSize = count / 16;
 
-    PrimData *prims = PushArray(arenas[GetThreadIndex()], PrimData, count);
-
-    jobsystem::KickJobs(&counter, count, groupSize, [&](jobsystem::JobArgs args) {
-        u32 index         = args.jobId;
-        AABB bounds       = Primitive::Bounds(inRawPrims, index);
-        prims[index].minP = Lane4F32(bounds.minP);
-        prims[index].maxP = Lane4F32(bounds.maxP);
-        prims[index].SetGeomID(0);
-        prims[index].SetPrimID(index);
-    });
-    jobsystem::WaitJobs(&counter);
+    // jobsystem::Counter counter = {};
+    //
+    // PrimData *prims = PushArray(arenas[GetThreadIndex()], PrimData, count);
+    //
+    // jobsystem::KickJobs(&counter, count, groupSize, [&](jobsystem::JobArgs args) {
+    //     u32 index         = args.jobId;
+    //     AABB bounds       = Primitive::Bounds(inRawPrims, index);
+    //     prims[index].minP = Lane4F32(bounds.minP);
+    //     prims[index].maxP = Lane4F32(bounds.maxP);
+    //     prims[index].SetGeomID(0);
+    //     prims[index].SetPrimID(index);
+    // });
+    // jobsystem::WaitJobs(&counter);
     // for (u32 i = 0; i < count; i++)
     // {
     //     u32 index         = i;
@@ -557,24 +561,24 @@ BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings,
     // }
 
     primitives = inRawPrims;
-    Record record;
-    record = jobsystem::ParallelReduce<Record>(
-        count, 1024,
-        [&](Record &record, u32 start, u32 count) {
-        for (u32 i = start; i < start + count; i++)
-        {
-            PrimData *prim    = &prims[i];
-            Lane4F32 centroid = (prim->minP + prim->maxP) * 0.5f;
-            record.geomBounds.Extend(prim->minP, prim->maxP);
-            record.centBounds.Extend(centroid);
-        } },
-        [&](Record &a, Record &b) {
-        a.geomBounds.Extend(b.geomBounds);
-        a.centBounds.Extend(b.centBounds); });
+    // Record record;
+    // record = jobsystem::ParallelReduce<Record>(
+    //     count, 1024,
+    //     [&](Record &record, u32 start, u32 count) {
+    //     for (u32 i = start; i < start + count; i++)
+    //     {
+    //         PrimData *prim    = &prims[i];
+    //         Lane4F32 centroid = (prim->minP + prim->maxP) * 0.5f;
+    //         record.geomBounds.Extend(prim->minP, prim->maxP);
+    //         record.centBounds.Extend(centroid);
+    //     } },
+    //     [&](Record &a, Record &b) {
+    //     a.geomBounds.Extend(b.geomBounds);
+    //     a.centBounds.Extend(b.centBounds); });
 
-    record.data  = prims;
-    record.start = 0;
-    record.end   = count;
+    // record.data  = record.data;
+    // record.start = record.range.start;
+    // record.end   = record.range.count;
 
     // BVH<N> *result = PushStruct(arenas[GetThreadIndex()], BVH<N>);
     BVHN<N, NodeType> result;
@@ -588,5 +592,18 @@ BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings,
     // }
     return result;
 }
+
+template <i32 N>
+BVHQuantized<N> BuildQuantizedSBVH(BuildSettings settings,
+                                   Arena **inArenas,
+                                   TriangleMesh *mesh,
+                                   RecordSOASplits &record)
+{
+    SBVHBuilderTriangleMesh<N> builder;
+    HeuristicSpatialSplits heuristic(inArenas, mesh, HalfArea(record.geomBounds));
+    builder.heuristic = heuristic;
+    return builder.BuildBVH(settings, inArenas, mesh, record);
+}
+
 } // namespace rt
 #endif

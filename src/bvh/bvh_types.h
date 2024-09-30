@@ -93,13 +93,21 @@ struct Record
     PrimData *data;
     Bounds geomBounds;
     Bounds centBounds;
-    u32 start;
-    u32 end;
+    struct Range
+    {
+        u32 start;
+        u32 end;
+        Range() {}
+        Range(u32 start, u32 end) : start(start), end(end) {}
+        u32 End() const { return end; }
+        u32 Size() const { return end - start; }
+    };
+    Range range;
 
     Record() {}
     Record(PrimData *data, const Bounds &gBounds, const Bounds &cBounds, const u32 start, const u32 end)
-        : data(data), geomBounds(gBounds), centBounds(cBounds), start(start), end(end) {}
-    u32 Size() const { return end - start; }
+        : data(data), geomBounds(gBounds), centBounds(cBounds), range(start, end) {}
+    u32 Size() const { return range.Size(); }
 };
 
 struct PrimRef
@@ -178,12 +186,14 @@ struct ExtRange
         Assert(extEnd >= start + count);
     }
     __forceinline u32 End() const { return start + count; }
+    __forceinline u32 Size() const { return count; }
     __forceinline u32 ExtSize() const { return extEnd - (start + count); }
     __forceinline u32 TotalSize() const { return extEnd - start; }
 };
 
 struct RecordSOASplits
 {
+    using PrimitiveData = PrimDataSOA;
     PrimDataSOA *data;
     Bounds geomBounds;
     Bounds centBounds;
