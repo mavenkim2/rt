@@ -4,7 +4,7 @@ namespace rt
 {
 static const u32 LANE_WIDTH         = 8;
 static const f32 GROW_AMOUNT        = 1.2f;
-static const u32 PARALLEL_THRESHOLD = 4 * 1024;
+static const u32 PARALLEL_THRESHOLD = 32 * 1024;
 struct BuildSettings
 {
     u32 maxLeafSize = 3;
@@ -16,6 +16,12 @@ struct BuildSettings
 
 struct Split
 {
+    enum Type
+    {
+        Object,
+        Spatial,
+    };
+    Type type;
     f32 bestSAH;
     u32 bestPos;
     u32 bestDim;

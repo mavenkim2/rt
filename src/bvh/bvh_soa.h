@@ -344,8 +344,11 @@ template <i32 numBins = 32>
 struct HeuristicSOAObjectBinning
 {
     Bounds8 bins[3][numBins];
+    Bounds8 centroidBins[3][numBins];
+
     Lane4U32 counts[numBins];
     Bounds finalBounds[3][numBins];
+    Bounds finalCentBounds[3][numBins];
     ObjectBinner<numBins> *binner;
 
     HeuristicSOAObjectBinning(ObjectBinner<numBins> *binner) : binner(binner)
@@ -379,9 +382,13 @@ struct HeuristicSOAObjectBinning
                 (maxs[2] - mins[2]) * 0.5f,
             };
             Lane8U32 binIndices[] = {binner->Bin(centroids[0], 0), binner->Bin(centroids[1], 1), binner->Bin(centroids[2], 2)};
+            Lane8F32 aosCentroids[8];
 
             Transpose6x8(mins[0], mins[1], mins[2], maxs[0], maxs[1], maxs[2],
                          lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5], lanes[6], lanes[7]);
+            Transpose3x8(centroids[0], centroids[1], centroids[2],
+                         aosCentroids[0], aosCentroids[1], aosCentroids[2], aosCentroids[3],
+                         aosCentroids[4], aosCentroids[5], aosCentroids[6], aosCentroids[7]);
 
             for (u32 dim = 0; dim < 3; dim++)
             {
@@ -391,6 +398,7 @@ struct HeuristicSOAObjectBinning
                 {
                     u32 bin = binDimIndices[b];
                     bins[dim][bin].Extend(lanes[b]);
+                    centroidBins[dim][bin].Extend(Bounds8(aosCentroids[b]));
                     counts[bin][dim]++;
                 }
             }
@@ -399,7 +407,8 @@ struct HeuristicSOAObjectBinning
         {
             for (i = 0; i < numBins; i++)
             {
-                finalBounds[dim][i] = Bounds(bins8[dim][i]);
+                finalBounds[dim][i]     = Bounds(bins8[dim][i]);
+                finalCentBounds[dim][i] = Bounds(centroidBins[dim][i]);
             }
         }
     }
@@ -448,13 +457,13 @@ struct SplitBinner
     }
     __forceinline Lane8U32 BinMax(const Lane8F32 &max, const u32 dim) const
     {
-        // return Clamp(Lane8F32(zero), Lane8F32(one), Flooru((base[dim] + min]) * scaleNegArr[dim])),
         return Clamp(Lane8U32(zero), Lane8U32(numBins - 1), Flooru((max - base[dim]) * scale[dim]));
     }
     __forceinline Lane8F32 GetSplitValue(const Lane8U32 &bins, u32 dim) const
     {
         return Lane8F32(bins) * invScale[dim] + base[dim];
     }
+    // NOTE: scalar and AVX floating point computations produce different results, so it's important that this uses AVX.
     __forceinline f32 GetSplitValue(u32 bin, u32 dim) const
     {
         Lane8F32 result = GetSplitValue(Lane8U32(bin), dim);
@@ -564,27 +573,10 @@ struct alignas(32) HeuristicSOASplitBinning
             Transpose6x8(prevMin[0], prevMin[1], prevMin[2], prevMax[0], prevMax[1], prevMax[2],
                          lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5], lanes[6], lanes[7]);
 
-            Lane8F32 prevCentroids02Lo = UnpackLo(prevCentroids[0], prevCentroids[2]);
-            Lane8F32 prevCentroids02Hi = UnpackHi(prevCentroids[0], prevCentroids[2]);
-
-            Lane8F32 prevCentroids1Lo = Permute<0, 0, 1, 1>(prevCentroids[1]);
-            Lane8F32 prevCentroids1Hi = Permute<2, 2, 3, 3>(prevCentroids[1]);
-
-            Lane8F32 centroids04 = UnpackLo(prevCentroids02Lo, prevCentroids1Lo);
-            Lane8F32 centroids15 = UnpackHi(prevCentroids02Lo, prevCentroids1Lo);
-            Lane8F32 centroids26 = UnpackLo(prevCentroids02Hi, prevCentroids1Hi);
-            Lane8F32 centroids37 = UnpackHi(prevCentroids02Hi, prevCentroids1Hi);
-
-            Lane8F32 centroids[8] = {
-                Shuffle4<0, 0>(centroids04),
-                Shuffle4<0, 0>(centroids15),
-                Shuffle4<0, 0>(centroids26),
-                Shuffle4<0, 0>(centroids37),
-                Shuffle4<1, 1>(centroids04),
-                Shuffle4<1, 1>(centroids15),
-                Shuffle4<1, 1>(centroids26),
-                Shuffle4<1, 1>(centroids37),
-            };
+            Lane8F32 centroids[8];
+            Transpose3x8(prevCentroids[0], prevCentroids[1], prevCentroids[2],
+                         centroids[0], centroids[1], centroids[2], centroids[3],
+                         centroids[4], centroids[5], centroids[6], centroids[7]);
 
             for (u32 dim = 0; dim < 3; dim++)
             {
@@ -596,11 +588,6 @@ struct alignas(32) HeuristicSOASplitBinning
                     u32 indexMin = indexMins[b];
                     entryCounts[indexMin][dim] += 1;
                     exitCounts[indexMin + diff][dim] += 1;
-
-                    if (indexMin <= 4 && indexMin + diff > 4)
-                    {
-                        int stop = 5;
-                    }
 
                     switch (diff)
                     {
@@ -633,14 +620,6 @@ struct alignas(32) HeuristicSOASplitBinning
 
                         Triangle8 tri     = Triangle8::Load(mesh, dim, faceIndices[dim][bin] + binCount);
                         Lane8U32 startBin = Lane8U32::LoadU(binIndexStart[dim][bin] + binCount);
-
-                        for (u32 test = binCount; test < binCount + 8; test++)
-                        {
-                            if (binIndexStart[dim][bin][test] <= 4 && binIndexStart[dim][bin][test] + bin > 4)
-                            {
-                                int stop = 5;
-                            }
-                        }
 
                         Bounds8 bounds[2][LANE_WIDTH];
                         for (u32 boundIndex = 0; boundIndex < LANE_WIDTH; boundIndex++)
@@ -1054,7 +1033,7 @@ struct alignas(32) HeuristicSOASplitBinning
             }
         }
     }
-}; // namespace rt
+};
 
 // SBVH
 static const f32 sbvhAlpha = 1e-5;
@@ -1077,7 +1056,7 @@ struct HeuristicSpatialSplits
         if (record.range.count > PARALLEL_THRESHOLD)
         {
             const u32 groupSize = 4 * 1024;
-            objectBinHeuristic  = ParallelReduce(
+            objectBinHeuristic  = ParallelReduce<OBin>(
                 record.start, record.count, groupSize,
                 [&](OBin &binner, u32 start, u32 count) { binner.Bin(record.data, start, count); },
                 [&](OBin &l, const OBin &r) { l.Merge(r); },
@@ -1089,28 +1068,46 @@ struct HeuristicSpatialSplits
             objectBinHeuristic.Bin(record.data, record.start, record.count);
         }
         Split objectSplit = BinBest<numObjectBins>(objectBinHeuristic.finalBounds, objectBinHeuristic.counts, &objectBinner);
+        objectSplit.type  = Split::Object;
 
-        // objectSplit.Get
-
-        // Spatial splits
-        SplitBinner<numSpatialBins> splitBinner(record.geomBounds);
-
-        HSplit splitHeuristic;
-        if (record.range.count > PARALLEL_THRESHOLD)
+        Bounds geomBoundsL;
+        for (u32 i = 0; i <= objectSplit.bestPos; i++)
         {
-            const u32 groupSize = 4 * 1024;
-            splitHeuristic      = ParallelReduce(
-                record.start, record.count, groupSize,
-                [&](HSplit &binner, u32 start, u32 count) { binner.Bin(mesh, record.data, start, count); },
-                [&](HSplit &l, const HSplit &r) { l.Merge(r); },
-                &splitBinner);
+            geomBoundsL.Extend(objectBinHeuristic.finalBounds[objectSplit.bestDim][i]);
         }
-        else
+        Bounds geomBoundsR;
+        for (u32 i = objectSplit.bestPos + 1; i < numObjectBins; i++)
         {
-            splitHeuristic = HSplit(&splitBinner);
-            splitHeuristic.Bin(mesh, record.data, record.start, record.count);
+            geomBoundsR.Extend(objectBinHeuristic.finalBounds[objectSplit.bestDim][i]);
         }
-        return BinBest<numBins>(splitHeuristic.finalBounds, splitHeuristic.entryCounts, splitHeuristic.exitCounts, );
+
+        f32 lambda = HalfArea(Intersect(geomBoundsL, geomBoundsR));
+        if (lambda > sbvhAlpha * rootArea)
+        {
+            // Spatial splits
+            SplitBinner<numSpatialBins> splitBinner(record.geomBounds);
+
+            HSplit splitHeuristic;
+            if (record.range.count > PARALLEL_THRESHOLD)
+            {
+                const u32 groupSize = PARALLEL_THRESHOLD;
+                splitHeuristic      = ParallelReduce<HSplit>(
+                    record.start, record.count, groupSize,
+                    [&](HSplit &binner, u32 start, u32 count) { binner.Bin(mesh, record.data, start, count); },
+                    [&](HSplit &l, const HSplit &r) { l.Merge(r); },
+                    &splitBinner);
+            }
+            else
+            {
+                splitHeuristic = HSplit(&splitBinner);
+                splitHeuristic.Bin(mesh, record.data, record.start, record.count);
+            }
+            Split spatialSplit = BinBest<numSpatialBins>(splitHeuristic.finalBounds,
+                                                         splitHeuristic.entryCounts, splitHeuristic.exitCounts, &splitBinner);
+            spatialSplit.type  = Split::Spatial;
+            if (spatialSplit.bestSAH < objectSplit.bestSAH) return spatialSplit;
+        }
+        return objectSplit;
     }
     static void Split(Split split, const Record &record)
     {
