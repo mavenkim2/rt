@@ -457,7 +457,8 @@ struct SplitBinner
     }
     __forceinline f32 GetSplitValue(u32 bin, u32 dim) const
     {
-        return bin * invScale[dim][0] + base[dim][0];
+        Lane8F32 result = GetSplitValue(Lane8U32(bin), dim);
+        return result[0];
     }
 };
 
@@ -481,9 +482,7 @@ struct alignas(32) HeuristicSOASplitBinning
     Bounds finalBounds[3][numBins];
     Bounds finalCentBounds[3][numBins];
 
-    // used in soa 8 triangle multi plane diff binning
-
-    HeuristicSOASplitBinning(SplitBinner<numBins> *binner) : binner(binner) // Bounds &bounds)
+    HeuristicSOASplitBinning(SplitBinner<numBins> *binner) : binner(binner)
     {
         for (u32 i = 0; i < numBins; i++)
         {
@@ -597,6 +596,12 @@ struct alignas(32) HeuristicSOASplitBinning
                     u32 indexMin = indexMins[b];
                     entryCounts[indexMin][dim] += 1;
                     exitCounts[indexMin + diff][dim] += 1;
+
+                    if (indexMin <= 4 && indexMin + diff > 4)
+                    {
+                        int stop = 5;
+                    }
+
                     switch (diff)
                     {
                         case 0:
@@ -629,6 +634,14 @@ struct alignas(32) HeuristicSOASplitBinning
                         Triangle8 tri     = Triangle8::Load(mesh, dim, faceIndices[dim][bin] + binCount);
                         Lane8U32 startBin = Lane8U32::LoadU(binIndexStart[dim][bin] + binCount);
 
+                        for (u32 test = binCount; test < binCount + 8; test++)
+                        {
+                            if (binIndexStart[dim][bin][test] <= 4 && binIndexStart[dim][bin][test] + bin > 4)
+                            {
+                                int stop = 5;
+                            }
+                        }
+
                         Bounds8 bounds[2][LANE_WIDTH];
                         for (u32 boundIndex = 0; boundIndex < LANE_WIDTH; boundIndex++)
                         {
@@ -656,6 +669,11 @@ struct alignas(32) HeuristicSOASplitBinning
                                                                              triCentBounds[b]);
                             }
                             current = !current;
+                        }
+                        for (u32 b = 0; b < LANE_WIDTH; b++)
+                        {
+                            u32 binIndex = binIndices[b] + 1;
+                            bins8[dim][binIndex].Extend(bounds[current][b]);
                         }
                         binCounts[dim][bin] = 0;
                     }
@@ -703,7 +721,7 @@ struct alignas(32) HeuristicSOASplitBinning
                     case 0:
                     {
                         bins8[dim][binIndexMin].Extend(prim);
-                        centroidBounds[dim][binIndexMin].Extend(Bounds8(centroid));
+                        centroidBounds[dim][binIndexMin].Extend(centroid);
                     }
                     break;
                     default:
@@ -753,6 +771,11 @@ struct alignas(32) HeuristicSOASplitBinning
                                                                          triCentBounds[b]);
                         }
                         current = !current;
+                    }
+                    for (u32 b = 0; b < LANE_WIDTH; b++)
+                    {
+                        u32 binIndex = binIndices[b] + 1;
+                        bins8[dim][binIndex].Extend(bounds[current][b]);
                     }
                     remainingCount -= LANE_WIDTH;
                 }
@@ -1205,7 +1228,8 @@ struct TestSplitBinningBase
             }
         }
     }
-    __forceinline u32 Split(TriangleMesh *mesh, PrimData *prims, ExtRange range, Split split, Bounds &outLeft, Bounds &outRight)
+    __forceinline u32 Split(TriangleMesh *mesh, PrimData *prims, ExtRange range, Split split, Bounds &outLeft, Bounds &outRight,
+                            Bounds &centLeft, Bounds &centRight)
     {
         u32 dim                         = split.bestDim;
         const size_t max_ext_range_size = range.ExtSize();
@@ -1250,8 +1274,10 @@ struct TestSplitBinningBase
         PartitionResult result;
         PartitionParallel(split, prims, range.start, range.End(), &result);
         // PartitionSerial(split, prims, range.start, range.End(), &result);
-        outLeft  = result.geomBoundsL;
-        outRight = result.geomBoundsR;
+        outLeft   = result.geomBoundsL;
+        outRight  = result.geomBoundsR;
+        centLeft  = result.centBoundsL;
+        centRight = result.centBoundsR;
         return result.mid;
     }
 };

@@ -165,6 +165,10 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     printf("Mid: %u\n", mid);
     printf("Split time: %fms\n", time);
 #endif
+    for (u32 i = 0; i < OS_NumProcessors(); i++)
+    {
+        printf("Thread %u time: %llu\n", i, threadLocalStatistics[i].misc);
+    }
 
     // unless I'm misunderstanding something, none of the primitives' bboxes should cross the split plane
     f32 *minStream = ((f32 **)(&soa.minX))[split.bestDim];
@@ -293,7 +297,9 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
 
     Bounds left;
     Bounds right;
-    u32 mid = heuristic.Split(mesh, data, range, split, left, right);
+    Bounds centLeft;
+    Bounds centRight;
+    u32 mid = heuristic.Split(mesh, data, range, split, left, right, centLeft, centRight);
     time    = OS_GetMilliseconds(start);
     printf("Mid: %u\n", mid);
 
@@ -302,6 +308,11 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
     printf("Left bounds max: %f %f %f\n", left.maxP[0], left.maxP[1], left.maxP[2]);
     printf("Right bounds min: %f %f %f\n", right.minP[0], right.minP[1], right.minP[2]);
     printf("Right bounds max: %f %f %f\n", right.maxP[0], right.maxP[1], right.maxP[2]);
+
+    printf("Left cent bounds min: %f %f %f\n", centLeft.minP[0], centLeft.minP[1], centLeft.minP[2]);
+    printf("Left cent bounds max: %f %f %f\n", centLeft.maxP[0], centLeft.maxP[1], centLeft.maxP[2]);
+    printf("Right cent bounds min: %f %f %f\n", centRight.minP[0], centRight.minP[1], centRight.minP[2]);
+    printf("Right cent bounds max: %f %f %f\n", centRight.maxP[0], centRight.maxP[1], centRight.maxP[2]);
 
     // Correctness test
     u32 errors = 0;

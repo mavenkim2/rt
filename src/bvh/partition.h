@@ -538,7 +538,7 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
     const u32 blockSize         = numPerCacheLine * 2;
     const u32 blockMask         = blockSize - 1;
     const u32 blockShift        = Bsf(blockSize);
-    const u32 numJobs           = OS_NumProcessors();
+    const u32 numJobs           = OS_NumProcessors() * 2;
     const u32 numBlocksPerChunk = numJobs;
     const u32 chunkSize         = blockSize * numBlocksPerChunk;
 
@@ -567,9 +567,9 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
         return outIndex;
     };
 
-    Scheduler::Counter counter = {};
-    scheduler.Schedule(&counter, numJobs, 1, [&](u32 jobID) {
-        const u32 group = jobID;
+    scheduler.ScheduleAndWait(numJobs, 1, [&](u32 jobID) {
+        PerformanceCounter counter = OS_StartCounter();
+        const u32 group            = jobID;
 
         u32 l          = 0;
         u32 r          = (numChunks << blockShift) - 1;
@@ -586,8 +586,8 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
             return GetIndex(index, group);
         };
         outMid[jobID] = PartitionSerial(data, split.bestDim, split.bestValue, l, r, GetIndexInBlock);
+        threadLocalStatistics[GetThreadIndex()].misc += (u64)(OS_GetMilliseconds(counter));
     });
-    scheduler.Wait(&counter);
 
     // Partition the beginning and the end
     u32 leftOverMid      = range.start;
