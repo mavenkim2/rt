@@ -490,6 +490,11 @@ __forceinline Lane8U32 Flooru(Lane8F32 lane)
     return _mm256_cvtps_epi32(Floor(lane));
 }
 
+__forceinline Lane8F32 AsFloat(const Lane8U32 &a)
+{
+    return _mm256_castsi256_ps(a);
+}
+
 // https://stackoverflow.com/questions/36932240/avx2-what-is-the-most-efficient-way-to-pack-left-based-on-a-mask
 u8 g_pack_left_table_u8x3[256 * 3 + 1];
 __m256i MoveMaskToIndices(u32 moveMask)
