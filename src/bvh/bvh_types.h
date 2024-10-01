@@ -150,28 +150,16 @@ struct PrimDataSOA
     };
     __forceinline void Set(const PrimDataSOA &other, const u32 lIndex, const u32 rIndex)
     {
-        minX[lIndex] = other.minX[rIndex];
-        minY[lIndex] = other.minY[rIndex];
-        minZ[lIndex] = other.minZ[rIndex];
-        maxX[lIndex] = other.maxX[rIndex];
-        maxY[lIndex] = other.maxY[rIndex];
-        maxZ[lIndex] = other.maxZ[rIndex];
+        minX[lIndex]    = other.minX[rIndex];
+        minY[lIndex]    = other.minY[rIndex];
+        minZ[lIndex]    = other.minZ[rIndex];
+        maxX[lIndex]    = other.maxX[rIndex];
+        maxY[lIndex]    = other.maxY[rIndex];
+        maxZ[lIndex]    = other.maxZ[rIndex];
+        geomIDs[lIndex] = other.geomIDs[rIndex];
+        primIDs[lIndex] = other.primIDs[rIndex];
     }
 };
-
-// struct ExtRangeSOA
-// {
-//     PrimDataSOA *data;
-//     u32 start;
-//     u32 count;
-//     u32 extEnd;
-//
-//     __forceinline ExtRangeSOA(PrimDataSOA *data, u32 start, u32 count, u32 extEnd)
-//         : data(data), start(start), count(count), extEnd(extEnd) {}
-//     __forceinline u32 End() const { return start + count; }
-//     __forceinline u32 ExtSize() const { return extEnd - (start + count); }
-//     __forceinline u32 TotalSize() const { return extEnd - start; }
-// };
 
 struct ExtRange
 {

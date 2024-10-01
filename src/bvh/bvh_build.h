@@ -402,6 +402,13 @@ __forceinline u32 BVHBuilder<N, BuildFunctions>::BuildNode(BuildSettings setting
         Split split = heuristic.Bin(record, 1);
         heuristic.Split(split, record, childRecords[0], childRecords[1]);
 
+        if (!(childRecords[0].range.count < record.range.count && childRecords[1].range.count < record.range.count))
+        {
+            split = heuristic.Bin(record, 1);
+            heuristic.Split(split, record, childRecords[0], childRecords[1]);
+            Assert(false);
+        }
+
         // NOTE: multiply both by the area instead of dividing
         f32 area     = HalfArea(record.geomBounds);
         f32 leafSAH  = settings.intCost * area * total; //((total + (1 << settings.logBlockSize) - 1) >> settings.logBlockSize);
@@ -434,6 +441,12 @@ __forceinline u32 BVHBuilder<N, BuildFunctions>::BuildNode(BuildSettings setting
         Record out;
         heuristic.Split(split, childRecords[bestChild], out, childRecords[numChildren]);
 
+        if (!(childRecords[bestChild].range.count < record.range.count))
+        {
+            split = heuristic.Bin(childRecords[bestChild], 1);
+            heuristic.Split(split, childRecords[bestChild], out, childRecords[numChildren]);
+            Assert(false);
+        }
         // PartitionResult result;
         // PartitionParallel(split, childRecords[bestChild], &result);
 
