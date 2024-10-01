@@ -61,9 +61,9 @@ struct AdditionalMisplacedRanges
     Range rightRange;
 };
 
-template <typename PrimitiveData, typename GetIndex>
+template <typename PrimitiveData, typename GetIndex, typename IsLeft>
 u32 FixMisplacedRanges(PrimitiveData *data, u32 numJobs, u32 chunkSize, u32 blockShift,
-                       u32 blockSize, u32 globalMid, u32 *mids, GetIndex getIndex, AdditionalMisplacedRanges *add = 0)
+                       u32 blockSize, u32 globalMid, u32 *mids, GetIndex getIndex, IsLeft isLeft, AdditionalMisplacedRanges *add = 0)
 {
     TempArena temp              = ScratchStart(0, 0);
     u32 numMisplacedRanges      = add ? numJobs + 1 : numJobs;
@@ -104,6 +104,7 @@ u32 FixMisplacedRanges(PrimitiveData *data, u32 numJobs, u32 chunkSize, u32 bloc
 
             while (check >= globalMid)
             {
+                Assert(!isLeft(check));
                 diff -= 1;
                 check = getIndex(mids[i] + diff - 1, i);
             }
@@ -111,6 +112,7 @@ u32 FixMisplacedRanges(PrimitiveData *data, u32 numJobs, u32 chunkSize, u32 bloc
             check      = getIndex(mids[i] + diff + 1, i);
             while (check < globalMid)
             {
+                Assert(isLeft(check));
                 steps1++;
                 diff += 1;
                 check = getIndex(mids[i] + diff + 1, i);
@@ -129,6 +131,7 @@ u32 FixMisplacedRanges(PrimitiveData *data, u32 numJobs, u32 chunkSize, u32 bloc
             int steps0 = 0;
             while (check < globalMid)
             {
+                Assert(isLeft(check));
                 diff -= 1;
                 steps0++;
                 check = getIndex(mids[i] - diff + 1, i);
@@ -138,6 +141,7 @@ u32 FixMisplacedRanges(PrimitiveData *data, u32 numJobs, u32 chunkSize, u32 bloc
             check = getIndex(mids[i] - diff - 1, i);
             while (check >= globalMid)
             {
+                Assert(!isLeft(check));
                 diff += 1;
                 check = getIndex(mids[i] - diff - 1, i);
             }
@@ -402,7 +406,11 @@ void PartitionParallel(Split split, PrimData *prims, u32 start, u32 end, Partiti
         globalMid += mids[i];
     }
 
-    result->mid = FixMisplacedRanges(prims, numJobs, chunkSize, blockShift, blockSize, globalMid, mids, GetIndex);
+    auto IsLeft = [&](u32 index) -> bool {
+        return true;
+    };
+
+    result->mid = FixMisplacedRanges(prims, numJobs, chunkSize, blockShift, blockSize, globalMid, mids, GetIndex, IsLeft);
 
     for (u32 i = 0; i < numJobs; i++)
     {
@@ -434,10 +442,13 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, Get
     f32 *minStream = data->arr[dim];
     f32 *maxStream = data->arr[dim + 4];
 
+    u32 start = l;
+    u32 end   = r;
+
     Lane8F32 negBestValue = -bestValue;
     for (;;)
     {
-        while (l <= r && leftCount == 0) //< LANE_WIDTH)
+        while (l + LANE_WIDTH <= r && leftCount == 0) //< LANE_WIDTH)
         {
             u32 lIndex   = getIndex(l);
             Lane8F32 min = Lane8F32::LoadU(minStream + lIndex);
@@ -461,7 +472,7 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, Get
             l += LANE_WIDTH;
             leftCount += PopCount(mask);
         }
-        while (l <= r && rightCount == 0) //< LANE_WIDTH)
+        while (l + LANE_WIDTH <= r && rightCount == 0) //< LANE_WIDTH)
         {
             u32 rIndex   = getIndex(r);
             Lane8F32 min = Lane8F32::LoadU(minStream + rIndex);
@@ -489,7 +500,7 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, Get
             Lane8U32::StoreU(storeMask, rightQueue + queueSize - rightCount, MaskCompress(mask, refID));
             r -= LANE_WIDTH;
         }
-        if (l > r)
+        if (l + LANE_WIDTH > r)
         {
             u32 minCount = Min(leftCount, rightCount);
             for (u32 i = 0; i < minCount; i++)
@@ -499,12 +510,15 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, Get
             if (leftCount != minCount)
             {
                 l = leftQueue[minCount];
-                r += LANE_WIDTH;
+                r = Min(end, r + LANE_WIDTH - 1);
             }
             else if (rightCount != minCount)
             {
                 r = rightQueue[queueSize - 1 - minCount];
-                l -= LANE_WIDTH;
+            }
+            else
+            {
+                r = Min(end, r + LANE_WIDTH - 1);
             }
             for (;;)
             {
@@ -577,6 +591,9 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, Get
             rightQueue[queueSize - 1 - i] = rightQueue[queueSize - 1 - i - minCount];
         }
     }
+
+    Assert(l < end);
+    Assert(r > start);
 
     return l;
 }
@@ -702,35 +719,78 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
     });
 
     // Partition the beginning and the end
-    u32 leftOverMid      = range.start;
-    u32 rightLeftOverMid = range.End();
-    if (range.start != lStartAligned)
-    {
-        leftOverMid = PartitionSerialScalar<centroidPartition>(data, split.bestDim, split.bestValue, range.start, lStartAligned - 1,
-                                                               [&](u32 index) { return index; });
-    }
-    if (range.End() != rEndAligned)
-    {
-        rightLeftOverMid = PartitionSerialScalar<centroidPartition>(data, split.bestDim, split.bestValue, rEndAligned, range.End() - 1,
-                                                                    [&](u32 index) { return index; });
-    }
-
     u32 globalMid = range.start;
-    globalMid += leftOverMid - range.start + rightLeftOverMid - rEndAligned;
+
+    u32 minIndex = pos_inf;
+    u32 maxIndex = neg_inf;
     for (u32 i = 0; i < numJobs; i++)
     {
         globalMid += outMid[i];
+        minIndex = Min(GetIndex(outMid[i], i), minIndex);
+        maxIndex = Max(GetIndex(outMid[i], i), maxIndex);
     }
-    AdditionalMisplacedRanges ranges;
-    ranges.rightRange.start = leftOverMid;
-    ranges.rightRange.end   = lStartAligned;
-    ranges.leftRange.start  = rEndAligned;
-    ranges.leftRange.end    = rightLeftOverMid;
 
-    u32 result = FixMisplacedRanges(data, numJobs, chunkSize, blockShift, blockSize, globalMid, outMid, GetIndex, &ranges);
+    u32 out = PartitionSerial<centroidPartition>(data, split.bestDim, split.bestValue,
+                                                 minIndex, maxIndex, [&](u32 index) { return index; });
+
+    // Parallelize the unaligned begin and end
+    u32 lCount     = 0;
+    u32 l          = range.start;
+    u32 r          = range.End() - 1;
+    f32 *minStream = data->arr[split.bestDim];
+    Assert(minStream[out] <= -split.bestValue);
+    for (;;)
+    {
+        while (l < lStartAligned && r >= rEndAligned && minStream[l] > -split.bestValue)
+        {
+            lCount++;
+            l++;
+        }
+        while (l < lStartAligned && r >= rEndAligned && minStream[r] <= -split.bestValue)
+        {
+            r--;
+        }
+        if (l >= lStartAligned || r < rEndAligned) break;
+        Swap(data, l, r);
+        lCount++;
+        l++;
+        r--;
+    }
+    if (l < lStartAligned)
+    {
+        for (u32 i = l; i < lStartAligned; i++)
+        {
+            if (minStream[i] <= -split.bestValue)
+            {
+                out--;
+                Assert(minStream[out] > -split.bestValue);
+                Swap(data, i, out);
+            }
+            else
+            {
+                lCount++;
+            }
+        }
+    }
+    else if (r >= rEndAligned)
+    {
+        for (u32 i = r; i >= rEndAligned; i--)
+        {
+            if (minStream[i] > -split.bestValue)
+            {
+                Assert(minStream[out] <= -split.bestValue);
+                Swap(data, i, out);
+                out++;
+                lCount++;
+            }
+        }
+    }
+
+    globalMid += lCount;
+    Assert(out == globalMid);
+
     ScratchEnd(temp);
-
-    return result;
+    return out;
 }
 
 u32 PartitionParallelCentroids(Split split, ExtRange range, PrimDataSOA *data)

@@ -52,9 +52,9 @@ struct CreateQuantizedNode
 
         Lane4F32 diff = boundsMaxP - boundsMinP;
 
-        f32 expX = Ceil(Log2f(diff[0] / 255.f));
-        f32 expY = Ceil(Log2f(diff[1] / 255.f));
-        f32 expZ = Ceil(Log2f(diff[2] / 255.f));
+        f32 expX = diff[0] == 0.f ? 0.f : Ceil(Log2f(diff[0] / 255.f));
+        f32 expY = diff[1] == 0.f ? 0.f : Ceil(Log2f(diff[1] / 255.f));
+        f32 expZ = diff[2] == 0.f ? 0.f : Ceil(Log2f(diff[2] / 255.f));
 
         Lane4U32 shift = Flooru(Lane4F32(expX, expY, expZ, 0.f)) + 127;
 
