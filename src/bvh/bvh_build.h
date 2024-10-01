@@ -525,7 +525,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, NodeType *p
     for (u32 i = 0; i < nodeCount; i++)
     {
         u32 childNodeIndex = childNodeIndices[i];
-        f.createNode(allChildRecords[childNodeIndex], allNumChildren[childNodeIndex], &children[childNodeIndex]);
+        f.createNode(allChildRecords[childNodeIndex], allNumChildren[childNodeIndex], &children[i]);
     }
 
     // Updates the parent
@@ -535,7 +535,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, NodeType *p
     for (u32 i = 0; i < nodeCount; i++)
     {
         u32 childNodeIndex = childNodeIndices[i];
-        BuildBVH(settings, &children[childNodeIndex], allChildRecords[childNodeIndex], allNumChildren[childNodeIndex]);
+        BuildBVH(settings, &children[i], allChildRecords[childNodeIndex], allNumChildren[childNodeIndex]);
     }
 }
 

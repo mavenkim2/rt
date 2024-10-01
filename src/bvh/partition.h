@@ -429,7 +429,7 @@ void PartitionParallel(Split split, const Record &record, PartitionResult *resul
 // SOA Partitions
 //
 template <bool centroidPartition, typename GetIndex>
-u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, GetIndex getIndex)
+u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, i32 l, i32 r, GetIndex getIndex)
 {
     const u32 queueSize      = LANE_WIDTH * 2 - 1;
     const u32 rightQueueSize = queueSize + LANE_WIDTH;
@@ -442,13 +442,14 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, Get
     f32 *minStream = data->arr[dim];
     f32 *maxStream = data->arr[dim + 4];
 
-    u32 start = l;
-    u32 end   = r;
+    i32 start = l;
+    i32 end   = r;
 
     Lane8F32 negBestValue = -bestValue;
+    r -= LANE_WIDTHi;
     for (;;)
     {
-        while (l + LANE_WIDTH <= r && leftCount == 0) //< LANE_WIDTH)
+        while (l + LANE_WIDTHi <= r && leftCount == 0) //< LANE_WIDTH)
         {
             u32 lIndex   = getIndex(l);
             Lane8F32 min = Lane8F32::LoadU(minStream + lIndex);
@@ -469,11 +470,12 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, Get
             Lane8U32 leftRefId = Lane8U32::Step(l);
             Lane8U32::StoreU(leftQueue + leftCount, MaskCompress(mask, leftRefId));
 
-            l += LANE_WIDTH;
+            l += LANE_WIDTHi;
             leftCount += PopCount(mask);
         }
-        while (l + LANE_WIDTH <= r && rightCount == 0) //< LANE_WIDTH)
+        while (l + LANE_WIDTHi <= r && rightCount == 0) //< LANE_WIDTH)
         {
+            Assert(r >= 0);
             u32 rIndex   = getIndex(r);
             Lane8F32 min = Lane8F32::LoadU(minStream + rIndex);
 
@@ -498,9 +500,9 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, Get
             rightCount += notRightCount;
 
             Lane8U32::StoreU(storeMask, rightQueue + queueSize - rightCount, MaskCompress(mask, refID));
-            r -= LANE_WIDTH;
+            r -= LANE_WIDTHi;
         }
-        if (l + LANE_WIDTH > r)
+        if (l + LANE_WIDTHi > r)
         {
             u32 minCount = Min(leftCount, rightCount);
             for (u32 i = 0; i < minCount; i++)
@@ -510,16 +512,18 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, Get
             if (leftCount != minCount)
             {
                 l = leftQueue[minCount];
-                r = Min(end, r + LANE_WIDTH - 1);
+                r = Min(end, r + LANE_WIDTHi);
             }
             else if (rightCount != minCount)
             {
                 r = rightQueue[queueSize - 1 - minCount];
+                l -= LANE_WIDTHi;
             }
             else
             {
-                r = Min(end, r + LANE_WIDTH - 1);
+                r = Min(end, r + LANE_WIDTHi);
             }
+            Assert(r >= 0);
             for (;;)
             {
                 u32 lIndex;
@@ -544,6 +548,7 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, Get
                 u32 rIndex;
                 while (l <= r)
                 {
+                    Assert(r >= 0);
                     rIndex  = getIndex(r);
                     f32 min = minStream[rIndex];
 
@@ -592,28 +597,27 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, Get
         }
     }
 
-    Assert(l < end);
-    Assert(r > start);
+    // Assert(l < end);
+    // Assert(r >= start);
 
     return l;
 }
 
-template <bool centroidPartition, typename GetIndex>
-u32 PartitionSerialScalar(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 r, GetIndex getIndex)
+template <bool centroidPartition>
+u32 PartitionSerialScalar(PrimDataSOA *data, u32 dim, f32 bestValue, i32 l, i32 r)
 {
     f32 *minStream = data->arr[dim];
     f32 *maxStream = data->arr[dim + 4];
+    r--;
     for (;;)
     {
-        u32 lIndex;
         while (l <= r)
         {
-            lIndex  = getIndex(l);
-            f32 min = minStream[lIndex];
+            f32 min = minStream[l];
             bool isRight;
             if constexpr (centroidPartition)
             {
-                f32 max      = maxStream[lIndex];
+                f32 max      = maxStream[l];
                 f32 centroid = (max - min) * 0.5f;
                 isRight      = (centroid >= bestValue);
             }
@@ -624,16 +628,15 @@ u32 PartitionSerialScalar(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 
             if (isRight) break;
             l++;
         }
-        u32 rIndex;
         while (l <= r)
         {
-            rIndex  = getIndex(r);
-            f32 min = minStream[rIndex];
+            Assert(r >= 0);
+            f32 min = minStream[r];
 
             bool isLeft;
             if constexpr (centroidPartition)
             {
-                f32 max      = maxStream[rIndex];
+                f32 max      = maxStream[r];
                 f32 centroid = (max - min) * 0.5f;
                 isLeft       = (centroid < bestValue);
             }
@@ -646,7 +649,7 @@ u32 PartitionSerialScalar(PrimDataSOA *data, u32 dim, f32 bestValue, u32 l, u32 
         }
         if (l > r) break;
 
-        Swap(data, lIndex, rIndex);
+        Swap(data, l, r);
         l++;
         r--;
     }
@@ -658,6 +661,11 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
 {
     if (range.count < PARALLEL_THRESHOLD)
     {
+        if (range.count < LANE_WIDTH)
+        {
+            return PartitionSerialScalar<centroidPartition>(data, split.bestDim, split.bestValue, range.start, range.End());
+        }
+
         auto getIndex = [&](u32 index) { return index; };
         return PartitionSerial<centroidPartition>(data, split.bestDim, split.bestValue,
                                                   range.start, range.End(), getIndex);
@@ -706,10 +714,10 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
         Assert(!(lastRIndex >= rEndAligned && (lastRIndex - rEndAligned) == LANE_WIDTH));
         r = lastRIndex > rEndAligned
                 ? (lastRIndex - rEndAligned) < (blockSize - 1)
-                      ? r - (lastRIndex - rEndAligned) - LANE_WIDTH
-                      : AlignPow2(r, blockSize) - blockSize - LANE_WIDTH
-                : r - (LANE_WIDTH - 1);
-        Assert(GetIndex(r, group) < rEndAligned);
+                      ? r - (lastRIndex - rEndAligned)
+                      : AlignPow2(r, blockSize) - blockSize
+                : r + 1; // r - (LANE_WIDTH - 1);
+        Assert(GetIndex(r - 1, group) < rEndAligned);
 
         auto GetIndexInBlock = [&](u32 index) {
             return GetIndex(index, group);
@@ -729,24 +737,26 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
         minIndex = Min(GetIndex(outMid[i], i), minIndex);
         maxIndex = Max(GetIndex(outMid[i], i), maxIndex);
     }
+    f32 *minStream = data->arr[split.bestDim];
+    f32 *maxStream = data->arr[split.bestDim + 4];
 
     u32 out = PartitionSerial<centroidPartition>(data, split.bestDim, split.bestValue,
                                                  minIndex, maxIndex, [&](u32 index) { return index; });
 
     // Parallelize the unaligned begin and end
-    u32 lCount     = 0;
-    u32 l          = range.start;
-    u32 r          = range.End() - 1;
-    f32 *minStream = data->arr[split.bestDim];
-    Assert(minStream[out] <= -split.bestValue);
+
+    u32 lCount = 0;
+    u32 l      = range.start;
+    u32 r      = range.End();
+    Assert((maxStream[out] - minStream[out]) * 0.5f >= split.bestValue);
     for (;;)
     {
-        while (l < lStartAligned && r >= rEndAligned && minStream[l] > -split.bestValue)
+        while (l < lStartAligned && r >= rEndAligned && (maxStream[l] - minStream[l]) * 0.5f < split.bestValue)
         {
             lCount++;
             l++;
         }
-        while (l < lStartAligned && r >= rEndAligned && minStream[r] <= -split.bestValue)
+        while (l < lStartAligned && r >= rEndAligned && (maxStream[r] - minStream[r]) * 0.5f >= split.bestValue)
         {
             r--;
         }
@@ -760,10 +770,10 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
     {
         for (u32 i = l; i < lStartAligned; i++)
         {
-            if (minStream[i] <= -split.bestValue)
+            if ((maxStream[i] - minStream[i]) * 0.5f >= split.bestValue)
             {
                 out--;
-                Assert(minStream[out] > -split.bestValue);
+                Assert((maxStream[out] - minStream[out]) * 0.5f < split.bestValue);
                 Swap(data, i, out);
             }
             else
@@ -776,14 +786,40 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
     {
         for (u32 i = r; i >= rEndAligned; i--)
         {
-            if (minStream[i] > -split.bestValue)
+            if ((maxStream[i] - minStream[i]) * 0.5f < split.bestValue)
             {
-                Assert(minStream[out] <= -split.bestValue);
+                Assert((maxStream[out] - minStream[out]) * 0.5f >= split.bestValue);
                 Swap(data, i, out);
                 out++;
                 lCount++;
             }
         }
+    }
+
+    // error check
+    {
+        u32 errors = 0;
+        for (u32 i = range.start; i < range.start + range.count; i++)
+        {
+            f32 min      = minStream[i];
+            f32 max      = maxStream[i];
+            f32 centroid = (max - min) * 0.5f;
+            if (i < out)
+            {
+                if (centroid >= split.bestValue) // || value > split.bestPos)
+                {
+                    errors++;
+                }
+            }
+            else
+            {
+                if (centroid < split.bestValue) // || value <= split.bestPos)
+                {
+                    errors++;
+                }
+            }
+        }
+        Assert(errors == 0);
     }
 
     globalMid += lCount;

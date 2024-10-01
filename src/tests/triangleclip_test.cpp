@@ -220,7 +220,7 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
         if (i < mid)
         {
             u32 value = (u32)Floor((centroid - binner.base[split.bestDim][0]) * binner.scale[split.bestDim][0]);
-            if (centroid >= split.bestValue || value > split.bestPos)
+            if (centroid >= split.bestValue || value >= split.bestPos)
             {
                 if (firstBadIndex == 0)
                 {
@@ -233,7 +233,7 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
         else
         {
             u32 value = (u32)Floor((centroid - binner.base[split.bestDim][0]) * binner.scale[split.bestDim][0]);
-            if (centroid < split.bestValue || value <= split.bestPos)
+            if (centroid < split.bestValue || value < split.bestPos)
             {
                 if (firstBadIndex == 0)
                 {
