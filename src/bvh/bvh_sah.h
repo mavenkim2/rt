@@ -324,9 +324,6 @@ __forceinline void ClipTriangleSimple(const TriangleMesh *mesh, const Bounds &bo
     // r      = intersect(right, bounds);
 }
 
-static const Lane8F32 signFlipMask(-0.f, -0.f, -0.f, 0.f, 0.f, 0.f, 0.f, 0.f);
-static const u32 LUTAxis[] = {1, 2, 0};
-
 } // namespace rt
 
 #endif

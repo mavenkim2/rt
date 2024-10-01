@@ -295,7 +295,7 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
     printf("Split dim: %u\n", split.bestDim);
     printf("Split SAH: %f\n", split.bestSAH);
 
-    split.bestValue = ((split.bestPos + 1) * heuristic.invScale[split.bestDim]) + heuristic.base[split.bestDim];
+    split.bestValue = ((split.bestPos) * heuristic.invScale[split.bestDim]) + heuristic.base[split.bestDim];
     printf("Split value: %f\n", split.bestValue);
     ExtRange range(0, numFaces, u32(numFaces * GROW_AMOUNT));
     start = OS_StartCounter();

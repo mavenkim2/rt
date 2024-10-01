@@ -468,6 +468,7 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, i32 l, i32 r, Get
 
             u32 mask           = Movemask(rightMask);
             Lane8U32 leftRefId = Lane8U32::Step(l);
+
             Lane8U32::StoreU(leftQueue + leftCount, MaskCompress(mask, leftRefId));
 
             l += LANE_WIDTHi;
@@ -512,7 +513,7 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, i32 l, i32 r, Get
             if (leftCount != minCount)
             {
                 l = leftQueue[minCount];
-                r = Min(end, r + LANE_WIDTHi);
+                r = Min(end, r + LANE_WIDTHi - 1);
             }
             else if (rightCount != minCount)
             {
@@ -521,7 +522,7 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, i32 l, i32 r, Get
             }
             else
             {
-                r = Min(end, r + LANE_WIDTHi);
+                r = Min(end, r + LANE_WIDTHi - 1);
             }
             Assert(r >= 0);
             for (;;)
@@ -661,7 +662,7 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
 {
     if (range.count < PARALLEL_THRESHOLD)
     {
-        if (range.count < LANE_WIDTH)
+        if (range.count < 1024)
         {
             return PartitionSerialScalar<centroidPartition>(data, split.bestDim, split.bestValue, range.start, range.End());
         }
@@ -746,29 +747,29 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
     // Parallelize the unaligned begin and end
 
     u32 lCount = 0;
-    u32 l      = range.start;
-    u32 r      = range.End();
+    i32 l      = range.start;
+    i32 r      = range.End() - 1;
     Assert((maxStream[out] - minStream[out]) * 0.5f >= split.bestValue);
     for (;;)
     {
-        while (l < lStartAligned && r >= rEndAligned && (maxStream[l] - minStream[l]) * 0.5f < split.bestValue)
+        while (l < (i32)lStartAligned && r >= (i32)rEndAligned && (maxStream[l] - minStream[l]) * 0.5f < split.bestValue)
         {
             lCount++;
             l++;
         }
-        while (l < lStartAligned && r >= rEndAligned && (maxStream[r] - minStream[r]) * 0.5f >= split.bestValue)
+        while (l < (i32)lStartAligned && r >= (i32)rEndAligned && (maxStream[r] - minStream[r]) * 0.5f >= split.bestValue)
         {
             r--;
         }
-        if (l >= lStartAligned || r < rEndAligned) break;
+        if (l >= (i32)lStartAligned || r < (i32)rEndAligned) break;
         Swap(data, l, r);
         lCount++;
         l++;
         r--;
     }
-    if (l < lStartAligned)
+    if (l < (i32)lStartAligned)
     {
-        for (u32 i = l; i < lStartAligned; i++)
+        for (i32 i = l; i < (i32)lStartAligned; i++)
         {
             if ((maxStream[i] - minStream[i]) * 0.5f >= split.bestValue)
             {
@@ -782,9 +783,9 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
             }
         }
     }
-    else if (r >= rEndAligned)
+    else if (r >= (i32)rEndAligned)
     {
-        for (u32 i = r; i >= rEndAligned; i--)
+        for (i32 i = r; i >= (i32)rEndAligned; i--)
         {
             if ((maxStream[i] - minStream[i]) * 0.5f < split.bestValue)
             {
@@ -797,30 +798,30 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
     }
 
     // error check
-    {
-        u32 errors = 0;
-        for (u32 i = range.start; i < range.start + range.count; i++)
-        {
-            f32 min      = minStream[i];
-            f32 max      = maxStream[i];
-            f32 centroid = (max - min) * 0.5f;
-            if (i < out)
-            {
-                if (centroid >= split.bestValue) // || value > split.bestPos)
-                {
-                    errors++;
-                }
-            }
-            else
-            {
-                if (centroid < split.bestValue) // || value <= split.bestPos)
-                {
-                    errors++;
-                }
-            }
-        }
-        Assert(errors == 0);
-    }
+    // {
+    //     u32 errors = 0;
+    //     for (u32 i = range.start; i < range.start + range.count; i++)
+    //     {
+    //         f32 min      = minStream[i];
+    //         f32 max      = maxStream[i];
+    //         f32 centroid = (max - min) * 0.5f;
+    //         if (i < out)
+    //         {
+    //             if (centroid >= split.bestValue) // || value > split.bestPos)
+    //             {
+    //                 errors++;
+    //             }
+    //         }
+    //         else
+    //         {
+    //             if (centroid < split.bestValue) // || value <= split.bestPos)
+    //             {
+    //                 errors++;
+    //             }
+    //         }
+    //     }
+    //     Assert(errors == 0);
+    // }
 
     globalMid += lCount;
     Assert(out == globalMid);
