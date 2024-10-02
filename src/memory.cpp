@@ -62,6 +62,7 @@ void *ArenaPushNoZero(Arena *arena, u64 size)
         {
             newArena->basePos = current->basePos + current->res;
             newArena->prev    = current;
+            newArena->align   = current->align;
             arena->current    = newArena;
             current           = newArena;
             currentAlignPos   = AlignPow2(current->pos, current->align);

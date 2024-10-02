@@ -311,7 +311,6 @@ void PartitionParallel(Split split, PrimData *prims, u32 start, u32 end, Partiti
     Scheduler::Counter counter = {};
     scheduler.Schedule(
         &counter, numJobs, 1, [&](u32 jobID) {
-            clock_t start   = clock();
             const u32 group = jobID;
             auto GetIndex   = [&](u32 index) {
                 const u32 chunkIndex   = index >> blockShift;
@@ -387,8 +386,6 @@ void PartitionParallel(Split split, PrimData *prims, u32 start, u32 end, Partiti
             }
             vi[jobID]   = GetIndex(l);
             mids[jobID] = l;
-            clock_t end = clock();
-            threadLocalStatistics[GetThreadIndex()].misc += u64(end - start);
         });
 
     scheduler.Wait(&counter);
@@ -660,7 +657,8 @@ u32 PartitionSerialScalar(PrimDataSOA *data, u32 dim, f32 bestValue, i32 l, i32 
 template <bool centroidPartition = false>
 u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
 {
-    if (range.count < PARALLEL_THRESHOLD)
+    static const u32 PARTITION_PARALLEL_THRESHOLD = 3 * 1024;
+    if (range.count < 16 * 1024)//PARTITION_PARALLEL_THRESHOLD)
     {
         if (range.count < 1024)
         {
@@ -668,8 +666,9 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
         }
 
         auto getIndex = [&](u32 index) { return index; };
-        return PartitionSerial<centroidPartition>(data, split.bestDim, split.bestValue,
-                                                  range.start, range.End(), getIndex);
+        u32 out       = PartitionSerial<centroidPartition>(data, split.bestDim, split.bestValue,
+                                                     range.start, range.End(), getIndex);
+        return out;
     }
 
     const u32 numPerCacheLine   = CACHE_LINE_SIZE / sizeof(f32);
@@ -706,8 +705,7 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
     };
 
     scheduler.ScheduleAndWait(numJobs, 1, [&](u32 jobID) {
-        PerformanceCounter counter = OS_StartCounter();
-        const u32 group            = jobID;
+        const u32 group = jobID;
 
         u32 l          = 0;
         u32 r          = (numChunks << blockShift) - 1;
@@ -724,7 +722,6 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
             return GetIndex(index, group);
         };
         outMid[jobID] = PartitionSerial<centroidPartition>(data, split.bestDim, split.bestValue, l, r, GetIndexInBlock);
-        threadLocalStatistics[GetThreadIndex()].misc += (u64)(OS_GetMilliseconds(counter));
     });
 
     // Partition the beginning and the end

@@ -5,6 +5,10 @@ thread_local ThreadContext *tLocalContext;
 void InitThreadContext(Arena *arena, const char *name, b32 isMainThread)
 {
     ThreadContext *tctx = PushStruct(arena, ThreadContext);
+    if (isMainThread)
+    {
+        tctx->index = 0;
+    }
     InitThreadContext(tctx, 1);
     SetThreadName(name);
 }

@@ -456,6 +456,7 @@ __forceinline u32 BVHBuilder<N, BuildFunctions>::BuildNode(BuildSettings setting
         childRecords[bestChild] = out; // Record(prim, result.geomBoundsL, result.centBoundsL, start, result.mid);
         // childRecords[numChildren] = Record(prim, result.geomBoundsR, result.centBoundsR, result.mid, end);
     }
+    threadLocalStatistics[GetThreadIndex()].misc += numChildren;
 
     // Test
     // for (u32 i = 0; i < numChildren; i++)
@@ -493,6 +494,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(Scheduler::Counter *counter, BuildS
 {
     // TODO: stack allocate this
     Arena *currentArena = arenas[GetThreadIndex()];
+    Assert(currentArena->align == 32);
     // Record allChildRecords[N][N];
     Record **allChildRecords = PushArrayNoZero(currentArena, Record *, N);
     for (u32 i = 0; i < N; i++)
@@ -509,6 +511,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(Scheduler::Counter *counter, BuildS
 
     Assert(inNumChildren <= N);
 
+    PerformanceCounter perfCounter = OS_StartCounter();
     if (parallel)
     {
         scheduler.ScheduleAndWait(inNumChildren, 1, [&](u32 jobID) {
@@ -562,6 +565,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(Scheduler::Counter *counter, BuildS
 
     // Updates the parent
     f.updateNode(currentArena, parent, records, children, childLeafIndices, leafCount.load());
+    threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perfCounter);
 
     if (parallel)
     {
