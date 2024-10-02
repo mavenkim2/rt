@@ -513,7 +513,7 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, i32 l, i32 r, Get
             if (leftCount != minCount)
             {
                 l = leftQueue[minCount];
-                r = Min(end, r + LANE_WIDTHi - 1);
+                r = Min(end - 1, r + LANE_WIDTHi - 1);
             }
             else if (rightCount != minCount)
             {
@@ -522,7 +522,7 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, i32 l, i32 r, Get
             }
             else
             {
-                r = Min(end, r + LANE_WIDTHi - 1);
+                r = Min(end - 1, r + LANE_WIDTHi - 1);
             }
             Assert(r >= 0);
             for (;;)
@@ -536,12 +536,12 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, i32 l, i32 r, Get
                     if constexpr (centroidPartition)
                     {
                         f32 max      = maxStream[lIndex];
-                        f32 centroid = (max - min) * 0.5f;
+                        f32 centroid = ((Lane8F32(max) - Lane8F32(min)) * 0.5f)[0];
                         isRight      = (centroid >= bestValue);
                     }
                     else
                     {
-                        isRight = min <= -bestValue;
+                        isRight = All(Lane8F32(min) <= Lane8F32(-bestValue));
                     }
                     if (isRight) break;
                     l++;
@@ -557,12 +557,12 @@ u32 PartitionSerial(PrimDataSOA *data, u32 dim, f32 bestValue, i32 l, i32 r, Get
                     if constexpr (centroidPartition)
                     {
                         f32 max      = maxStream[rIndex];
-                        f32 centroid = (max - min) * 0.5f;
+                        f32 centroid = ((Lane8F32(max) - Lane8F32(min)) * 0.5f)[0];
                         isLeft       = (centroid < bestValue);
                     }
                     else
                     {
-                        isLeft = min > -bestValue;
+                        isLeft = All(Lane8F32(min) > Lane8F32(-bestValue));
                     }
                     if (isLeft) break;
                     r--;
@@ -619,7 +619,7 @@ u32 PartitionSerialScalar(PrimDataSOA *data, u32 dim, f32 bestValue, i32 l, i32 
             if constexpr (centroidPartition)
             {
                 f32 max      = maxStream[l];
-                f32 centroid = (max - min) * 0.5f;
+                f32 centroid = ((Lane8F32(max) - Lane8F32(min)) * 0.5f)[0];
                 isRight      = (centroid >= bestValue);
             }
             else
@@ -638,7 +638,7 @@ u32 PartitionSerialScalar(PrimDataSOA *data, u32 dim, f32 bestValue, i32 l, i32 
             if constexpr (centroidPartition)
             {
                 f32 max      = maxStream[r];
-                f32 centroid = (max - min) * 0.5f;
+                f32 centroid = ((Lane8F32(max) - Lane8F32(min)) * 0.5f)[0];
                 isLeft       = (centroid < bestValue);
             }
             else

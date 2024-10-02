@@ -125,6 +125,25 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     Bounds centBounds;
     PrimDataSOA soa = GenerateSOAData(arena, mesh, numFaces, geomBounds, centBounds);
 
+    Arena **arenas = PushArray(arena, Arena *, 16); // numProcessors);
+    for (u32 i = 0; i < 16; i++)
+    {
+        arenas[i] = ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
+    }
+    HeuristicSpatialSplits heuristic(arenas, mesh, HalfArea(geomBounds));
+    RecordSOASplits record;
+    record.data       = &soa;
+    record.geomBounds = geomBounds;
+    record.centBounds = centBounds;
+    record.range      = ExtRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
+
+    Split split = heuristic.Bin(record);
+    RecordSOASplits left;
+    RecordSOASplits right;
+    heuristic.Split(split, record, left, right);
+    printf("done");
+
+#if 0
 #if 0
     ObjectBinner<32> binner(centBounds);
     HeuristicSOAObjectBinning<32> heuristic(&binner);
@@ -249,6 +268,7 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     printf("last bad index: %u\n", lastBadIndex);
     printf("Num errors: %u\n", errors);
 #endif
+#endif
 }
 
 void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
@@ -369,13 +389,21 @@ void SOASBVHBuilderTest(TriangleMesh *mesh)
     Arena **arenas    = PushArray(arena, Arena *, numProcessors);
     for (u32 i = 0; i < numProcessors; i++)
     {
-        arenas[i] = ArenaAlloc();
+        arenas[i] = ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
     }
 
     PerformanceCounter counter = OS_StartCounter();
     BVH4Quantized bvh          = BuildQuantizedSBVH<4>(settings, arenas, mesh, record);
     f32 time                   = OS_GetMilliseconds(counter);
+    printf("num faces: %u\n", numFaces);
     printf("Build time: %fms\n", time);
+
+    u64 totalMiscTime = 0;
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        totalMiscTime += threadLocalStatistics[i].misc;
+    }
+    printf("total bounds time: %llums \n", totalMiscTime);
 }
 
 } // namespace rt

@@ -22,7 +22,7 @@ Arena *ArenaAlloc(u64 resSize, u64 cmtSize, u64 align)
         arena->pos     = ARENA_HEADER_SIZE;
         arena->cmt     = cmtSize;
         arena->res     = resSize;
-        arena->align   = 8;
+        arena->align   = align;
         arena->grow    = 1;
     }
 

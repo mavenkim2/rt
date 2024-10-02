@@ -133,13 +133,31 @@ __forceinline Lane4F32 operator+(const Lane4F32 &a, const Lane4F32 &b) { return 
 __forceinline Lane4F32 operator+(f32 a, const Lane4F32 &b) { return Lane4F32(a) + b; }
 __forceinline Lane4F32 operator+(const Lane4F32 &a, f32 b) { return a + Lane4F32(b); }
 
+__forceinline Lane4F32 &operator+=(Lane4F32 &a, const Lane4F32 &b)
+{
+    a = a + b;
+    return a;
+}
+
 __forceinline Lane4F32 operator-(const Lane4F32 &a, const Lane4F32 &b) { return _mm_sub_ps(a, b); }
 __forceinline Lane4F32 operator-(f32 a, const Lane4F32 &b) { return Lane4F32(a) - b; }
 __forceinline Lane4F32 operator-(const Lane4F32 &a, f32 b) { return a - Lane4F32(b); }
 
+__forceinline Lane4F32 &operator-=(Lane4F32 &a, const Lane4F32 &b)
+{
+    a = a - b;
+    return a;
+}
+
 __forceinline Lane4F32 operator*(const Lane4F32 &a, const Lane4F32 &b) { return _mm_mul_ps(a, b); }
 __forceinline Lane4F32 operator*(f32 a, const Lane4F32 &b) { return Lane4F32(a) * b; }
 __forceinline Lane4F32 operator*(const Lane4F32 &a, f32 b) { return a * Lane4F32(b); }
+
+__forceinline Lane4F32 &operator*=(Lane4F32 &a, const Lane4F32 &b)
+{
+    a = a * b;
+    return a;
+}
 
 __forceinline Lane4F32 operator/(const Lane4F32 &a, const Lane4F32 &b) { return _mm_div_ps(a, b); }
 __forceinline Lane4F32 operator/(f32 a, const Lane4F32 &b) { return Lane4F32(a) / b; }

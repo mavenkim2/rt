@@ -262,7 +262,7 @@ struct EventCount
             else
             {
                 u64 stackTop = s & stackMask;
-                Assert(stackTop < stackMask);
+                if (stackTop == stackMask) return;
                 Waiter *w = &waiters[stackTop];
                 u64 next  = w->next.load(std::memory_order_relaxed);
                 newState  = (s & (waiterMask | signalMask)) | next;
@@ -338,8 +338,9 @@ struct Scheduler
 
     void Init(u32 numThreads)
     {
-        numWorkers = numThreads;
-        for (u32 i = 0; i < numThreads; i++)
+        numWorkers        = numThreads;
+        workers[0].waiter = &notifier.waiters[0];
+        for (u32 i = 1; i < numThreads; i++)
         {
             workers[i].waiter = &notifier.waiters[i];
             OS_ThreadStart(WorkerLoop, (void *)&workers[i]);
@@ -358,7 +359,10 @@ struct Scheduler
     void ExecuteTask(Task *t)
     {
         t->func(t->id);
-        t->counter->count.fetch_sub(1, std::memory_order_release);
+        if (t->counter)
+        {
+            t->counter->count.fetch_sub(1); //, std::memory_order_release);
+        }
     }
     template <typename Pred>
     bool ExploreTask(Worker *w, Task *t, Pred predicate)
@@ -432,6 +436,7 @@ struct Scheduler
     {
         Worker *worker = &workers[GetThreadIndex()];
         Task task;
+        counter->count.fetch_add(1);
         task.counter = counter;
         task.func    = func;
         task.id      = 0;
@@ -442,7 +447,7 @@ struct Scheduler
     {
         Worker *worker = &workers[GetThreadIndex()];
         u32 numGroups  = (numJobs + groupSize - 1) / groupSize;
-        counter->count = numGroups;
+        counter->count.fetch_add(numGroups);
         Task task;
         task.counter = counter;
         task.func    = func;
@@ -507,6 +512,7 @@ template <typename T, typename Func, typename Reduce, typename... Args>
 T ParallelReduce(u32 start, u32 count, u32 groupSize, Func func, Reduce reduce, Args... inArgs)
 {
     TempArena temp      = ScratchStart(0, 0);
+    temp.arena->align   = 32;
     const u32 taskCount = (count + groupSize - 1) / groupSize;
     T *values           = (T *)PushArray(temp.arena, u8, sizeof(T) * taskCount);
     for (u32 i = 0; i < taskCount; i++)

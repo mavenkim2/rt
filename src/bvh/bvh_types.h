@@ -187,10 +187,10 @@ struct ExtRange
 struct RecordSOASplits
 {
     using PrimitiveData = PrimDataSOA;
-    PrimDataSOA *data;
     Bounds geomBounds;
     Bounds centBounds;
     ExtRange range;
+    PrimDataSOA *data;
 };
 
 struct Bounds8F32
@@ -206,6 +206,31 @@ struct Bounds8F32
     Bounds8F32() : minU(pos_inf), minV(pos_inf), minW(pos_inf), maxU(neg_inf), maxV(neg_inf), maxW(neg_inf) {}
     Bounds8F32(NegInfTy) : minU(neg_inf), minV(neg_inf), minW(neg_inf), maxU(neg_inf), maxV(neg_inf), maxW(neg_inf) {}
 
+    __forceinline Bounds ToBounds()
+    {
+        f32 sMinU = ReduceMin(minU);
+        f32 sMinV = ReduceMin(minV);
+        f32 sMinW = ReduceMin(minW);
+
+        f32 sMaxU = ReduceMax(maxU);
+        f32 sMaxV = ReduceMax(maxV);
+        f32 sMaxW = ReduceMax(maxW);
+
+        return Bounds(Lane4F32(sMinU, sMinV, sMinW, 0.f), Lane4F32(sMaxU, sMaxV, sMaxW, 0.f));
+    }
+
+    __forceinline Bounds ToBoundsNegMin()
+    {
+        f32 sMinU = ReduceMax(minU);
+        f32 sMinV = ReduceMax(minV);
+        f32 sMinW = ReduceMax(minW);
+
+        f32 sMaxU = ReduceMax(maxU);
+        f32 sMaxV = ReduceMax(maxV);
+        f32 sMaxW = ReduceMax(maxW);
+
+        return Bounds(Lane4F32(-sMinU, -sMinV, -sMinW, 0.f), Lane4F32(sMaxU, sMaxV, sMaxW, 0.f));
+    }
     __forceinline void Extend(const Bounds8F32 &other)
     {
         minU = Min(minU, other.minU);
@@ -216,38 +241,36 @@ struct Bounds8F32
         maxV = Max(maxV, other.maxV);
         maxW = Max(maxW, other.maxW);
     }
-    __forceinline void ExtendNegativeMin(const Lane8F32 &inMinU, const Lane8F32 &inMinV, const Lane8F32 &inMinW,
-                                         const Lane8F32 &inMaxU, const Lane8F32 &inMaxV, const Lane8F32 &inMaxW)
+    __forceinline void Extend(const Lane8F32 &x, const Lane8F32 &y, const Lane8F32 &z)
     {
-        minU = Max(minU, inMinU);
-        minV = Max(minV, inMinV);
-        minW = Max(minW, inMinW);
+        minU = Min(minU, x);
+        minV = Min(minV, y);
+        minW = Min(minW, z);
 
-        maxU = Max(maxU, inMaxU);
-        maxV = Max(maxV, inMaxV);
-        maxW = Max(maxW, inMaxW);
+        maxU = Max(maxU, x);
+        maxV = Max(maxV, y);
+        maxW = Max(maxW, z);
     }
-
-    __forceinline void MaskExtend(const Lane8F32 &mask, const Lane8F32 &u, const Lane8F32 &v, const Lane8F32 &w)
+    __forceinline void ExtendNegativeMin(const Lane8F32 &minX, const Lane8F32 &minY, const Lane8F32 &minZ,
+                                         const Lane8F32 &maxX, const Lane8F32 &maxY, const Lane8F32 &maxZ)
     {
-        minU = MaskMin(mask, minU, u);
-        minV = MaskMin(mask, minV, v);
-        minW = MaskMin(mask, minW, w);
+        minU = Max(minU, minX);
+        minV = Max(minV, minY);
+        minW = Max(minW, minZ);
 
-        maxU = MaskMax(mask, maxU, u);
-        maxV = MaskMax(mask, maxV, v);
-        maxW = MaskMax(mask, maxW, w);
+        maxU = Max(maxU, maxX);
+        maxV = Max(maxV, maxY);
+        maxW = Max(maxW, maxZ);
     }
-    __forceinline void MaskExtendNegativeMin(const Lane8F32 &mask, const Lane8F32 &inMinU, const Lane8F32 &inMinV, const Lane8F32 &inMinW,
-                                             const Lane8F32 &inMaxU, const Lane8F32 &inMaxV, const Lane8F32 &inMaxW)
+    __forceinline void ExtendNegativeMin(const Bounds8F32 &other)
     {
-        minU = MaskMax(mask, minU, inMinU);
-        minV = MaskMax(mask, minV, inMinV);
-        minW = MaskMax(mask, minW, inMinW);
+        minU = Max(minU, other.minU);
+        minV = Max(minV, other.minV);
+        minW = Max(minW, other.minW);
 
-        maxU = MaskMax(mask, maxU, inMaxU);
-        maxV = MaskMax(mask, maxV, inMaxV);
-        maxW = MaskMax(mask, maxW, inMaxW);
+        maxU = Max(maxU, other.maxU);
+        maxV = Max(maxV, other.maxV);
+        maxW = Max(maxW, other.maxW);
     }
 
     __forceinline void MaskExtendL(const Lane8F32 &mask, const Lane8F32 &u, const Lane8F32 &v, const Lane8F32 &w)
@@ -264,7 +287,7 @@ struct Bounds8F32
                                    const Lane8F32 &v, const Lane8F32 &w)
     {
 
-#if 0
+#if 1
         minV = MaskMin(mask, minV, v);
         minW = MaskMin(mask, minW, w);
 
