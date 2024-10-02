@@ -393,17 +393,17 @@ void SOASBVHBuilderTest(TriangleMesh *mesh)
     }
 
     PerformanceCounter counter = OS_StartCounter();
-    BVH4Quantized bvh          = BuildQuantizedSBVH<4>(settings, arenas, mesh, record);
+    BVH8Quantized bvh          = BuildQuantizedSBVH<8>(settings, arenas, mesh, record);
     f32 time                   = OS_GetMilliseconds(counter);
     printf("num faces: %u\n", numFaces);
     printf("Build time: %fms\n", time);
 
-    u64 totalMiscTime = 0;
+    f64 totalMiscTime = 0;
     for (u32 i = 0; i < numProcessors; i++)
     {
-        totalMiscTime += threadLocalStatistics[i].misc;
+        totalMiscTime += threadLocalStatistics[i].miscF;
     }
-    printf("total bounds time: %llums \n", totalMiscTime);
+    printf("total bounds time: %fms \n", totalMiscTime);
 }
 
 } // namespace rt

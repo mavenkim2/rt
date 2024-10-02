@@ -612,6 +612,17 @@ __forceinline Lane8U32 MaskCompressRight(const u32 mask, const Lane8U32 &l)
 #endif
 }
 
+__forceinline void TruncateToU8(u8 *out, const Lane8F32 &lane)
+{
+    __m256i m           = _mm256_cvtps_epi32(lane);
+    m                   = _mm256_packus_epi32(m, m);
+    m                   = _mm256_packus_epi16(m, m);
+    i32 result0         = _mm256_cvtsi256_si32(m);
+    i32 result1         = _mm_cvtsi128_si32(_mm_castps_si128(_mm256_extractf128_ps(_mm256_castsi256_ps(m), 1)));
+    *(u32 *)out         = result0;
+    *((u32 *)(out) + 4) = result1;
+}
+
 #if 0
 #if defined(__AVX512VL__)
 template <i32 R>

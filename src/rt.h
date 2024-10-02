@@ -43,6 +43,7 @@ struct ThreadStatistics
     u64 samplingTime;
 
     u64 misc;
+    f64 miscF;
 };
 
 struct ThreadMemoryStatistics

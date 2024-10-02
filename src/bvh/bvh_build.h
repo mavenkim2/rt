@@ -62,9 +62,9 @@ struct CreateQuantizedNode
 
         Vec3lf<N> powVec;
         // TODO: for N = 8, this needs to be shuffle across
-        powVec.x = Shuffle<0>(pow);
-        powVec.y = Shuffle<1>(pow);
-        powVec.z = Shuffle<2>(pow);
+        powVec.x = Shuffle<0>(LaneF32<N>(pow));
+        powVec.y = Shuffle<1>(LaneF32<N>(pow));
+        powVec.z = Shuffle<2>(LaneF32<N>(pow));
 
         Assert(numRecords <= N);
         Vec3lf<N> min;
@@ -126,25 +126,25 @@ struct CreateQuantizedNode
         }
 
         Vec3lf<N> nodeMin;
-        nodeMin.x = Shuffle<0>(boundsMinP);
-        nodeMin.y = Shuffle<1>(boundsMinP);
-        nodeMin.z = Shuffle<2>(boundsMinP);
+        nodeMin.x = Shuffle<0>(LaneF32<N>(boundsMinP));
+        nodeMin.y = Shuffle<1>(LaneF32<N>(boundsMinP));
+        nodeMin.z = Shuffle<2>(LaneF32<N>(boundsMinP));
 
         Vec3lf<N> qNodeMin = Floor((min - nodeMin) / powVec);
         Vec3lf<N> qNodeMax = Ceil((max - nodeMin) / powVec);
 
-        Lane4F32 maskMinX = FMA(powVec.x, qNodeMin.x, nodeMin.x) > min.x;
+        LaneF32<N> maskMinX = FMA(powVec.x, qNodeMin.x, nodeMin.x) > min.x;
         TruncateToU8(result->lowerX, Max(Select(maskMinX, qNodeMin.x - 1, qNodeMin.x), MIN_QUAN));
-        Lane4F32 maskMinY = FMA(powVec.y, qNodeMin.y, nodeMin.y) > min.y;
+        LaneF32<N> maskMinY = FMA(powVec.y, qNodeMin.y, nodeMin.y) > min.y;
         TruncateToU8(result->lowerY, Max(Select(maskMinY, qNodeMin.y - 1, qNodeMin.y), MIN_QUAN));
-        Lane4F32 maskMinZ = FMA(powVec.z, qNodeMin.z, nodeMin.z) > min.z;
+        LaneF32<N> maskMinZ = FMA(powVec.z, qNodeMin.z, nodeMin.z) > min.z;
         TruncateToU8(result->lowerZ, Max(Select(maskMinZ, qNodeMin.z - 1, qNodeMin.z), MIN_QUAN));
 
-        Lane4F32 maskMaxX = FMA(powVec.x, qNodeMax.x, nodeMin.x) < max.x;
+        LaneF32<N> maskMaxX = FMA(powVec.x, qNodeMax.x, nodeMin.x) < max.x;
         TruncateToU8(result->upperX, Min(Select(maskMaxX, qNodeMax.x + 1, qNodeMax.x), MAX_QUAN));
-        Lane4F32 maskMaxY = FMA(powVec.y, qNodeMax.y, nodeMin.y) < max.y;
+        LaneF32<N> maskMaxY = FMA(powVec.y, qNodeMax.y, nodeMin.y) < max.y;
         TruncateToU8(result->upperY, Min(Select(maskMaxY, qNodeMax.y + 1, qNodeMax.y), MAX_QUAN));
-        Lane4F32 maskMaxZ = FMA(powVec.z, qNodeMax.z, nodeMin.z) < max.z;
+        LaneF32<N> maskMaxZ = FMA(powVec.z, qNodeMax.z, nodeMin.z) < max.z;
         TruncateToU8(result->upperZ, Min(Select(maskMaxZ, qNodeMax.z + 1, qNodeMax.z), MAX_QUAN));
 
         Assert(shift[0] <= 255 && shift[1] <= 255 && shift[2] <= 255);
@@ -207,6 +207,7 @@ template <>
 struct UpdateQuantizedNode<8>
 {
     using NodeType = QuantizedNode<8>;
+    template <typename Record>
     __forceinline void operator()(Arena *arena, NodeType *parent, const Record *records, NodeType *children,
                                   const u32 *leafIndices, const u32 leafCount)
     {
@@ -222,7 +223,7 @@ struct UpdateQuantizedNode<8>
         {
             u32 leafIndex        = leafIndices[i];
             const Record *record = &records[leafIndex];
-            primTotal += record->range.end - record->range.start;
+            primTotal += record->range.count;
         }
         Assert(primTotal <= 24);
         u32 *primIndices     = PushArray(arena, u32, primTotal);
@@ -233,9 +234,9 @@ struct UpdateQuantizedNode<8>
         {
             u32 leafIndex        = leafIndices[i];
             const Record *record = &records[leafIndex];
-            u32 primCount        = record->range.end - record->range.start;
+            u32 primCount        = record->range.count;
 
-            for (u32 j = record->range.start; j < record->range.end; j++)
+            for (u32 j = record->range.start; j < record->range.End(); j++)
             {
                 primIndices[offset++] = j;
             }
@@ -496,7 +497,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(Scheduler::Counter *counter, BuildS
     Record **allChildRecords = PushArrayNoZero(currentArena, Record *, N);
     for (u32 i = 0; i < N; i++)
     {
-        allChildRecords[i] = PushArrayDefault<Record>(currentArena,  N);
+        allChildRecords[i] = PushArrayDefault<Record>(currentArena, N);
     }
 
     u32 allNumChildren[N];

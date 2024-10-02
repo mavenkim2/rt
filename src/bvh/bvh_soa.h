@@ -75,7 +75,7 @@ struct Triangle8
         return v[i];
     }
 
-    static Triangle8 Load(TriangleMesh *mesh, const u32 dim, const u32 faceIndices[8], Bounds8 *primBounds)
+    static Triangle8 Load(TriangleMesh *mesh, const u32 dim, const u32 faceIndices[8])
     {
         u32 faceIndexA = faceIndices[0];
         u32 faceIndexB = faceIndices[1];
@@ -98,10 +98,10 @@ struct Triangle8
         Lane4F32 v1d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 1]]));
         Lane4F32 v2d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 2]]));
 
-        primBounds[0] = Lane8F32(Min(Min(v0a, v1a), v2a), Max(Max(v0a, v1a), v2a));
-        primBounds[1] = Lane8F32(Min(Min(v0b, v1b), v2b), Max(Max(v0b, v1b), v2b));
-        primBounds[2] = Lane8F32(Min(Min(v0c, v1c), v2c), Max(Max(v0c, v1c), v2c));
-        primBounds[3] = Lane8F32(Min(Min(v0d, v1d), v2d), Max(Max(v0d, v1d), v2d));
+        // primBounds[0] = Lane8F32(Min(Min(v0a, v1a), v2a), Max(Max(v0a, v1a), v2a));
+        // primBounds[1] = Lane8F32(Min(Min(v0b, v1b), v2b), Max(Max(v0b, v1b), v2b));
+        // primBounds[2] = Lane8F32(Min(Min(v0c, v1c), v2c), Max(Max(v0c, v1c), v2c));
+        // primBounds[3] = Lane8F32(Min(Min(v0d, v1d), v2d), Max(Max(v0d, v1d), v2d));
 
         Vec3lf4 p0;
         Vec3lf4 p1;
@@ -131,10 +131,10 @@ struct Triangle8
         v1d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 1]]));
         v2d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 2]]));
 
-        primBounds[4] = Lane8F32(Min(Min(v0a, v1a), v2a), Max(Max(v0a, v1a), v2a));
-        primBounds[5] = Lane8F32(Min(Min(v0b, v1b), v2b), Max(Max(v0b, v1b), v2b));
-        primBounds[6] = Lane8F32(Min(Min(v0c, v1c), v2c), Max(Max(v0c, v1c), v2c));
-        primBounds[7] = Lane8F32(Min(Min(v0d, v1d), v2d), Max(Max(v0d, v1d), v2d));
+        // primBounds[4] = Lane8F32(Min(Min(v0a, v1a), v2a), Max(Max(v0a, v1a), v2a));
+        // primBounds[5] = Lane8F32(Min(Min(v0b, v1b), v2b), Max(Max(v0b, v1b), v2b));
+        // primBounds[6] = Lane8F32(Min(Min(v0c, v1c), v2c), Max(Max(v0c, v1c), v2c));
+        // primBounds[7] = Lane8F32(Min(Min(v0d, v1d), v2d), Max(Max(v0d, v1d), v2d));
 
         Vec3lf4 p3;
         Vec3lf4 p4;
@@ -680,13 +680,13 @@ struct alignas(32) HeuristicSOASplitBinning
                         u32 binCount = binCounts[dim][bin];
 
                         Bounds8 bounds[2][LANE_WIDTH];
-                        Triangle8 tri     = Triangle8::Load(mesh, dim, faceIndices[dim][bin] + binCount, bounds[0]);
+                        Triangle8 tri     = Triangle8::Load(mesh, dim, faceIndices[dim][bin] + binCount); //, bounds[0]);
                         Lane8U32 startBin = Lane8U32::LoadU(binIndexStart[dim][bin] + binCount);
 
-                        // for (u32 boundIndex = 0; boundIndex < LANE_WIDTH; boundIndex++)
-                        // {
-                        //     bounds[0][boundIndex] = Bounds8(pos_inf);
-                        // }
+                        for (u32 boundIndex = 0; boundIndex < LANE_WIDTH; boundIndex++)
+                        {
+                            bounds[0][boundIndex] = Bounds8(pos_inf);
+                        }
                         alignas(32) u32 binIndices[LANE_WIDTH];
 
                         u32 current = 0;
@@ -780,7 +780,11 @@ struct alignas(32) HeuristicSOASplitBinning
                 {
                     u32 numPrims = Min(remainingCount, 8u);
                     Bounds8 bounds[2][8];
-                    Triangle8 tri     = Triangle8::Load(mesh, dim, faceIndices[dim][diff] + remaining * LANE_WIDTH, bounds[0]);
+                    for (u32 boundIndex = 0; boundIndex < LANE_WIDTH; boundIndex++)
+                    {
+                        bounds[0][boundIndex] = Bounds8(pos_inf);
+                    }
+                    Triangle8 tri     = Triangle8::Load(mesh, dim, faceIndices[dim][diff] + remaining * LANE_WIDTH); //, bounds[0]);
                     Lane8U32 startBin = Lane8U32::LoadU(binIndexStart[dim][diff] + remaining * LANE_WIDTH);
 
                     alignas(32) u32 binIndices[8];
@@ -896,31 +900,36 @@ struct alignas(32) HeuristicSOASplitBinning
                     // out.primIDs          = (u32 *)(alloc + streamSize * 7);
                 }
                 Bounds8 boundsLeft[LANE_WIDTH];
-                Triangle8 tri = Triangle8::Load(mesh, dim, faceIDQueue + count, boundsLeft);
-                Bounds8 boundsRight[8];
+                for (u32 b = 0; b < LANE_WIDTH; b++)
+                {
+                    boundsLeft[b] = pos_inf;
+                }
+                Triangle8 tri = Triangle8::Load(mesh, dim, faceIDQueue + count); //, boundsLeft);
+                Bounds8 boundsRight[LANE_WIDTH];
                 ClipTriangle(mesh, dim, tri, split.bestValue, boundsLeft, boundsRight);
                 for (u32 queueIndex = 0; queueIndex < LANE_WIDTH; queueIndex++)
                 {
                     const u32 refID = refIDQueue[count + queueIndex];
 
-                    if (Any(boundsLeft[queueIndex].v == Lane8F32(neg_inf)))
-                    {
-                        Assert(false);
-                    }
-                    data->minX[refID] = boundsLeft[queueIndex].v[0];
-                    data->minY[refID] = boundsLeft[queueIndex].v[1];
-                    data->minZ[refID] = boundsLeft[queueIndex].v[2];
-                    data->maxX[refID] = boundsLeft[queueIndex].v[4];
-                    data->maxY[refID] = boundsLeft[queueIndex].v[5];
-                    data->maxZ[refID] = boundsLeft[queueIndex].v[6];
+                    alignas(32) f32 valuesLeft[8];
+                    alignas(32) f32 valuesRight[8];
+                    Lane8F32::Store(valuesLeft, boundsLeft[queueIndex].v);
+                    Lane8F32::Store(valuesRight, boundsRight[queueIndex].v);
+
+                    data->minX[refID] = valuesLeft[0];
+                    data->minY[refID] = valuesLeft[1];
+                    data->minZ[refID] = valuesLeft[2];
+                    data->maxX[refID] = valuesLeft[4];
+                    data->maxY[refID] = valuesLeft[5];
+                    data->maxZ[refID] = valuesLeft[6];
                     data->geomIDs[refID]++;
 
-                    out.minX[splitCount - 8 + queueIndex]    = boundsRight[queueIndex].v[0];
-                    out.minY[splitCount - 8 + queueIndex]    = boundsRight[queueIndex].v[1];
-                    out.minZ[splitCount - 8 + queueIndex]    = boundsRight[queueIndex].v[2];
-                    out.maxX[splitCount - 8 + queueIndex]    = boundsRight[queueIndex].v[4];
-                    out.maxY[splitCount - 8 + queueIndex]    = boundsRight[queueIndex].v[5];
-                    out.maxZ[splitCount - 8 + queueIndex]    = boundsRight[queueIndex].v[6];
+                    out.minX[splitCount - 8 + queueIndex]    = valuesRight[0];
+                    out.minY[splitCount - 8 + queueIndex]    = valuesRight[1];
+                    out.minZ[splitCount - 8 + queueIndex]    = valuesRight[2];
+                    out.maxX[splitCount - 8 + queueIndex]    = valuesRight[4];
+                    out.maxY[splitCount - 8 + queueIndex]    = valuesRight[5];
+                    out.maxZ[splitCount - 8 + queueIndex]    = valuesRight[6];
                     out.primIDs[splitCount - 8 + queueIndex] = data->primIDs[refID];
                     out.geomIDs[splitCount - 8 + queueIndex] = data->geomIDs[refID];
                 }
@@ -957,28 +966,36 @@ struct alignas(32) HeuristicSOASplitBinning
             {
                 u32 numPrims = Min(remainingCount, LANE_WIDTH);
                 Bounds8 bounds[2][8];
-                Triangle8 tri = Triangle8::Load(mesh, dim, faceIDQueue + remaining * LANE_WIDTH, bounds[0]);
+                for (u32 b = 0; b < LANE_WIDTH; b++)
+                {
+                    bounds[0][b] = pos_inf;
+                }
+                Triangle8 tri = Triangle8::Load(mesh, dim, faceIDQueue + remaining * LANE_WIDTH); //, bounds[0]);
 
                 ClipTriangle(mesh, dim, tri, split.bestValue, bounds[0], bounds[1]);
                 for (u32 b = 0; b < numPrims; b++)
                 {
                     const u32 refID = refIDQueue[remaining * LANE_WIDTH + b];
                     // const u32 refID = faceIDQueue[count + queueIndex];
+                    alignas(32) f32 valuesLeft[8];
+                    alignas(32) f32 valuesRight[8];
+                    Lane8F32::Store(valuesLeft, bounds[0][b].v);
+                    Lane8F32::Store(valuesRight, bounds[1][b].v);
 
-                    data->minX[refID] = bounds[0][b].v[0];
-                    data->minY[refID] = bounds[0][b].v[1];
-                    data->minZ[refID] = bounds[0][b].v[2];
-                    data->maxX[refID] = bounds[0][b].v[4];
-                    data->maxY[refID] = bounds[0][b].v[5];
-                    data->maxZ[refID] = bounds[0][b].v[6];
+                    data->minX[refID] = valuesLeft[0];
+                    data->minY[refID] = valuesLeft[1];
+                    data->minZ[refID] = valuesLeft[2];
+                    data->maxX[refID] = valuesLeft[4];
+                    data->maxY[refID] = valuesLeft[5];
+                    data->maxZ[refID] = valuesLeft[6];
                     data->geomIDs[refID]++;
 
-                    out.minX[splitCount]    = bounds[1][b].v[0];
-                    out.minY[splitCount]    = bounds[1][b].v[1];
-                    out.minZ[splitCount]    = bounds[1][b].v[2];
-                    out.maxX[splitCount]    = bounds[1][b].v[4];
-                    out.maxY[splitCount]    = bounds[1][b].v[5];
-                    out.maxZ[splitCount]    = bounds[1][b].v[6];
+                    out.minX[splitCount]    = valuesRight[0];
+                    out.minY[splitCount]    = valuesRight[1];
+                    out.minZ[splitCount]    = valuesRight[2];
+                    out.maxX[splitCount]    = valuesRight[4];
+                    out.maxY[splitCount]    = valuesRight[5];
+                    out.maxZ[splitCount]    = valuesRight[6];
                     out.primIDs[splitCount] = data->primIDs[refID];
                     out.geomIDs[splitCount] = data->geomIDs[refID];
                     totalSplitCount++;
@@ -986,34 +1003,6 @@ struct alignas(32) HeuristicSOASplitBinning
                 }
 
                 remainingCount -= LANE_WIDTH;
-#if 0
-            u32 refID = refIDQueue[queueIndex];
-            Bounds inBounds(Lane4F32(-data->minX[refID], -data->minY[refID], -data->minZ[refID], 0.f),
-                            Lane4F32(data->maxX[refID], data->maxY[refID], data->maxZ[refID], 0.f));
-            Bounds l;
-            Bounds r;
-            ClipTriangleSimple(mesh, inBounds, data->primIDs[refID], dim, split.bestValue, l, r);
-            Assert(None(l.minP == pos_inf));
-            data->minX[refID] = -l.minP[0];
-            data->minY[refID] = -l.minP[1];
-            data->minZ[refID] = -l.minP[2];
-            data->maxX[refID] = l.maxP[0];
-            data->maxY[refID] = l.maxP[1];
-            data->maxZ[refID] = l.maxP[2];
-            data->geomIDs[refID]++;
-
-            out.minX[splitCount] = -r.minP[0];
-            out.minY[splitCount] = -r.minP[1];
-            out.minZ[splitCount] = -r.minP[2];
-            // TODO: temporarily count splits
-            out.geomIDs[splitCount] = data->geomIDs[refID];
-            out.maxX[splitCount]    = r.maxP[0];
-            out.maxY[splitCount]    = r.maxP[1];
-            out.maxZ[splitCount]    = r.maxP[2];
-            out.primIDs[splitCount] = data->primIDs[refID];
-            splitCount++;
-            totalSplitCount++;
-#endif
             }
         }
         else
@@ -1345,78 +1334,6 @@ struct HeuristicSpatialSplits
             outRight.centBounds = right.cent.ToBounds();
         }
 
-#if 0
-        outLeft.geomBounds.minP = pos_inf;
-        outLeft.geomBounds.maxP = neg_inf;
-        outLeft.centBounds.minP = pos_inf;
-        outLeft.centBounds.maxP = neg_inf;
-
-        outRight.geomBounds.minP = pos_inf;
-        outRight.geomBounds.maxP = neg_inf;
-        outRight.centBounds.minP = pos_inf;
-        outRight.centBounds.maxP = neg_inf;
-#endif
-        for (u32 i = record.range.start; i < mid; i++)
-        {
-            // Lane4F32 min      = Lane4F32(data->minX[i], data->minY[i], data->minZ[i], 0.f);
-            // Lane4F32 max      = Lane4F32(data->maxX[i], data->maxY[i], data->maxZ[i], 0.f);
-            // Lane4F32 centroid = (max - min) * 0.5f;
-            // outLeft.geomBounds.Extend(-min, max);
-            // outLeft.centBounds.Extend(centroid);
-
-#if 1
-            Lane4F32 min = Lane4F32(data->minX[i], data->minY[i], data->minZ[i], 0.f);
-            Lane4F32 max = Lane4F32(data->maxX[i], data->maxY[i], data->maxZ[i], 0.f);
-            u32 minMask  = Movemask(-min >= outLeft.geomBounds.minP) & 0x7;
-            Assert(minMask == 0x7);
-            u32 maxMask = Movemask(max <= outLeft.geomBounds.maxP) & 0x7;
-            Assert(maxMask == 0x7);
-#endif
-        }
-        for (u32 i = mid; i < record.range.End() + splitCount; i++)
-        {
-            // Lane4F32 min      = Lane4F32(data->minX[i], data->minY[i], data->minZ[i], 0.f);
-            // Lane4F32 max      = Lane4F32(data->maxX[i], data->maxY[i], data->maxZ[i], 0.f);
-            // Lane4F32 centroid = (max - min) * 0.5f;
-            // outRight.geomBounds.Extend(-min, max);
-            // outRight.centBounds.Extend(centroid);
-#if 1
-            Lane4F32 min = Lane4F32(data->minX[i], data->minY[i], data->minZ[i], 0.f);
-            Lane4F32 max = Lane4F32(data->maxX[i], data->maxY[i], data->maxZ[i], 0.f);
-            u32 minMask  = Movemask(-min >= outRight.geomBounds.minP) & 0x7;
-            Assert(minMask == 0x7);
-            u32 maxMask = Movemask(max <= outRight.geomBounds.maxP) & 0x7;
-            Assert(maxMask == 0x7);
-            // if (maxMask != 0x7)
-            // {
-            //     switch (split.type)
-            //     {
-            //         case Split::Object:
-            //         {
-            //             u32 binX = oHeuristic->binner->Bin((max[0] - min[0]) * 0.5f, 0);
-            //             u32 binY = oHeuristic->binner->Bin((max[1] - min[1]) * 0.5f, 1);
-            //             u32 binZ = oHeuristic->binner->Bin((max[2] - min[2]) * 0.5f, 2);
-            //             oHeuristic->Bin(data, record.range.start, record.range.count);
-            //         }
-            //         break;
-            //         case Split::Spatial:
-            //         {
-            //             u32 binMinX = sHeuristic->binner->BinMin(min[0], 0);
-            //             u32 binMaxX = sHeuristic->binner->BinMax(max[0], 0);
-            //             u32 binMinY = sHeuristic->binner->BinMin(min[1], 1);
-            //             u32 binMaxY = sHeuristic->binner->BinMax(max[1], 1);
-            //             u32 binMinZ = sHeuristic->binner->BinMin(min[2], 2);
-            //             u32 binMaxZ = sHeuristic->binner->BinMax(max[2], 2);
-            //             int stop    = 5;
-            //             sHeuristic->Bin(mesh, data, record.range.start, record.range.count);
-            //         }
-            //         break;
-            //     }
-            //     Assert(false);
-            // }
-#endif
-        }
-
         // if new split allocation, no need to partition
         if (data != outRight.data) return;
 
@@ -1463,7 +1380,7 @@ struct HeuristicSpatialSplits
 
         ArenaPopTo(temp.arena, split.allocPos);
     }
-}; // namespace rt
+};
 
 // NOTE: this is embree's implementation of split binning for SBVH
 template <i32 numBins = 16>
