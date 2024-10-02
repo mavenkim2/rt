@@ -72,7 +72,7 @@ template <typename T>
 struct JobDeque
 {
     static const i32 logBlockSize = 10;
-    static const i32 size         = 1 << 10;
+    static const i32 size         = 1 << logBlockSize;
     static const i32 mask         = size - 1;
     alignas(CACHE_LINE_SIZE * 2) std::atomic<i64> top{0};
     alignas(CACHE_LINE_SIZE * 2) std::atomic<i64> bottom{0};
@@ -447,6 +447,7 @@ struct Scheduler
     {
         Worker *worker = &workers[GetThreadIndex()];
         u32 numGroups  = (numJobs + groupSize - 1) / groupSize;
+        // numGroups      = Min(numGroups, numWorkers);
         counter->count.fetch_add(numGroups);
         Task task;
         task.counter = counter;
@@ -511,10 +512,11 @@ THREAD_ENTRY_POINT(WorkerLoop)
 template <typename T, typename Func, typename Reduce, typename... Args>
 T ParallelReduce(u32 start, u32 count, u32 groupSize, Func func, Reduce reduce, Args... inArgs)
 {
-    TempArena temp      = ScratchStart(0, 0);
-    temp.arena->align   = 32;
-    const u32 taskCount = (count + groupSize - 1) / groupSize;
-    T *values           = (T *)PushArray(temp.arena, u8, sizeof(T) * taskCount);
+    TempArena temp    = ScratchStart(0, 0);
+    temp.arena->align = 32;
+    u32 taskCount     = (count + groupSize - 1) / groupSize;
+    taskCount         = Min(taskCount, scheduler.numWorkers);
+    T *values         = (T *)PushArray(temp.arena, u8, sizeof(T) * taskCount);
     for (u32 i = 0; i < taskCount; i++)
     {
         new (&values[i]) T(std::forward<Args>(inArgs)...);
@@ -522,10 +524,17 @@ T ParallelReduce(u32 start, u32 count, u32 groupSize, Func func, Reduce reduce, 
 
     // HeuristicSOASplitBinning<16> *binners = PushArray(temp.arena, HeuristicSOASplitBinning<16>, taskCount);
 
+    u32 end      = start + count;
+    u32 stepSize = count / taskCount;
     scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
         T &val          = values[jobID];
-        u32 threadStart = start + groupSize * jobID;
-        func(val, threadStart, Min(groupSize, start + count - threadStart));
+        u32 threadStart = start + stepSize * jobID;
+        u32 size        = stepSize;
+        if (jobID == taskCount - 1)
+        {
+            size = end - threadStart;
+        }
+        func(val, threadStart, size);
     });
 
     T out = T(std::forward<Args>(inArgs)...);

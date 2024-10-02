@@ -658,7 +658,7 @@ template <bool centroidPartition = false>
 u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
 {
     static const u32 PARTITION_PARALLEL_THRESHOLD = 3 * 1024;
-    if (range.count < 16 * 1024)//PARTITION_PARALLEL_THRESHOLD)
+    if (range.count < 16 * 1024) // PARTITION_PARALLEL_THRESHOLD)
     {
         if (range.count < 1024)
         {
@@ -675,7 +675,7 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
     const u32 blockSize         = numPerCacheLine * 2;
     const u32 blockMask         = blockSize - 1;
     const u32 blockShift        = Bsf(blockSize);
-    const u32 numJobs           = OS_NumProcessors() * 2;
+    const u32 numJobs           = OS_NumProcessors(); // * 2;
     const u32 numBlocksPerChunk = numJobs;
     const u32 chunkSize         = blockSize * numBlocksPerChunk;
 
@@ -795,30 +795,30 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
     }
 
     // error check
-    // {
-    //     u32 errors = 0;
-    //     for (u32 i = range.start; i < range.start + range.count; i++)
-    //     {
-    //         f32 min      = minStream[i];
-    //         f32 max      = maxStream[i];
-    //         f32 centroid = (max - min) * 0.5f;
-    //         if (i < out)
-    //         {
-    //             if (centroid >= split.bestValue) // || value > split.bestPos)
-    //             {
-    //                 errors++;
-    //             }
-    //         }
-    //         else
-    //         {
-    //             if (centroid < split.bestValue) // || value <= split.bestPos)
-    //             {
-    //                 errors++;
-    //             }
-    //         }
-    //     }
-    //     Assert(errors == 0);
-    // }
+    {
+        u32 errors = 0;
+        for (u32 i = range.start; i < range.start + range.count; i++)
+        {
+            f32 min      = minStream[i];
+            f32 max      = maxStream[i];
+            f32 centroid = (max - min) * 0.5f;
+            if (i < out)
+            {
+                if (centroid >= split.bestValue) // || value > split.bestPos)
+                {
+                    errors++;
+                }
+            }
+            else
+            {
+                if (centroid < split.bestValue) // || value <= split.bestPos)
+                {
+                    errors++;
+                }
+            }
+        }
+        threadLocalStatistics[GetThreadIndex()].misc += errors;
+    }
 
     globalMid += lCount;
     Assert(out == globalMid);

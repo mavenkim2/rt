@@ -125,25 +125,24 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     Bounds centBounds;
     PrimDataSOA soa = GenerateSOAData(arena, mesh, numFaces, geomBounds, centBounds);
 
-    Arena **arenas = PushArray(arena, Arena *, 16); // numProcessors);
-    for (u32 i = 0; i < 16; i++)
-    {
-        arenas[i] = ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
-    }
-    HeuristicSpatialSplits heuristic(arenas, mesh, HalfArea(geomBounds));
-    RecordSOASplits record;
-    record.data       = &soa;
-    record.geomBounds = geomBounds;
-    record.centBounds = centBounds;
-    record.range      = ExtRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
+    // Arena **arenas = PushArray(arena, Arena *, 16); // numProcessors);
+    // for (u32 i = 0; i < 16; i++)
+    // {
+    //     arenas[i] = ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
+    // }
+    // HeuristicSpatialSplits heuristic(arenas, mesh, HalfArea(geomBounds));
+    // RecordSOASplits record;
+    // record.data       = &soa;
+    // record.geomBounds = geomBounds;
+    // record.centBounds = centBounds;
+    // record.range      = ExtRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
+    //
+    // Split split = heuristic.Bin(record);
+    // RecordSOASplits left;
+    // RecordSOASplits right;
+    // heuristic.Split(split, record, left, right);
 
-    Split split = heuristic.Bin(record);
-    RecordSOASplits left;
-    RecordSOASplits right;
-    heuristic.Split(split, record, left, right);
-    printf("done");
-
-#if 0
+#if 1
 #if 0
     ObjectBinner<32> binner(centBounds);
     HeuristicSOAObjectBinning<32> heuristic(&binner);
@@ -379,6 +378,7 @@ void SOASBVHBuilderTest(TriangleMesh *mesh)
     PrimDataSOA soa = GenerateSOAData(arena, mesh, numFaces, geomBounds, centBounds);
 
     BuildSettings settings;
+    settings.intCost = 0.3f;
 
     RecordSOASplits record;
     record.geomBounds = geomBounds;
@@ -407,7 +407,7 @@ void SOASBVHBuilderTest(TriangleMesh *mesh)
         numNodes += threadLocalStatistics[i].misc;
     }
     printf("total time: %fms \n", totalMiscTime);
-    printf("num nodes: %llu\n", numNodes);
+    printf("num errors: %llu", numNodes); // num nodes: %llu\n", numNodes);
 }
 
 } // namespace rt

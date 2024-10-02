@@ -1187,7 +1187,7 @@ struct HeuristicSpatialSplits
             HSplit *splitHeuristic = PushStructNoZero(temp.arena, HSplit);
             if (record.range.count > PARALLEL_THRESHOLD)
             {
-                const u32 groupSize = PARALLEL_THRESHOLD;
+                const u32 groupSize = 4 * 1024; // PARALLEL_THRESHOLD;
                 *splitHeuristic     = ParallelReduce<HSplit>(
                     record.range.start, record.range.count, groupSize,
                     [&](HSplit &binner, u32 start, u32 count) { binner.Bin(mesh, record.data, start, count); },
@@ -1349,11 +1349,19 @@ struct HeuristicSpatialSplits
         {
             if (numToShift > PARALLEL_THRESHOLD)
             {
-                // TODO: don't hardcode this
                 u32 groupSize = PARALLEL_THRESHOLD;
-                scheduler.ScheduleAndWait(numToShift, groupSize, [&](u32 jobID) {
-                    u32 start = mid + jobID * groupSize;
-                    u32 end   = Min(mid + numToShift, start + groupSize);
+                u32 taskCount = (numToShift + groupSize - 1) / groupSize;
+                taskCount     = Min(taskCount, scheduler.numWorkers);
+                u32 stepSize  = numToShift / taskCount;
+
+                scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
+                    u32 start = mid + jobID * stepSize;
+                    u32 end   = start + stepSize; // Min(mid + numToShift, start + groupSize);
+                    if (jobID == taskCount - 1)
+                    {
+                        Assert(mid + numToShift >= end);
+                        end = mid + numToShift;
+                    }
                     for (u32 i = start; i < end; i++)
                     {
                         Assert(i + shift < range.extEnd);
