@@ -184,13 +184,51 @@ struct ExtRange
     __forceinline u32 TotalSize() const { return extEnd - start; }
 };
 
+struct ScalarBounds 
+{
+    f32 minX;
+    f32 minY;
+    f32 minZ;
+    f32 maxX;
+    f32 maxY;
+    f32 maxZ;
+
+    Bounds ToBounds() const
+    {
+        Bounds result;
+        result.minP = Lane4F32::LoadU(&minX);
+        result.maxP = Lane4F32::LoadU(&maxX);
+        return result;
+    }
+    // NOTE: geomBounds must be set first, then cent bounds, and then the range in RecordSOASplits must be updated
+    void FromBounds(const Bounds &b)
+    {
+        Lane4F32::StoreU(&minX, b.minP);
+        Lane4F32::StoreU(&maxX, b.maxP);
+    }
+    f32 HalfArea() const 
+    {
+        f32 diffX = maxX - minX;
+        f32 diffY = maxY - minY;
+        f32 diffZ = maxZ - minZ;
+        return FMA(diffX, diffY + diffZ, diffY * diffZ);
+    }
+};
+
+f32 HalfArea(const ScalarBounds &b)
+{
+    return b.HalfArea();
+}
+
+
 struct RecordSOASplits
 {
     using PrimitiveData = PrimDataSOA;
-    Bounds geomBounds;
-    Bounds centBounds;
+    // Bounds geomBounds;
+    // Bounds centBounds;
+    ScalarBounds geomBounds;
+    ScalarBounds centBounds;
     ExtRange range;
-    PrimDataSOA *data;
 };
 
 struct Bounds8F32

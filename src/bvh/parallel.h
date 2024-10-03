@@ -522,8 +522,6 @@ T ParallelReduce(u32 start, u32 count, u32 groupSize, Func func, Reduce reduce, 
         new (&values[i]) T(std::forward<Args>(inArgs)...);
     }
 
-    // HeuristicSOASplitBinning<16> *binners = PushArray(temp.arena, HeuristicSOASplitBinning<16>, taskCount);
-
     u32 end      = start + count;
     u32 stepSize = count / taskCount;
     scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {

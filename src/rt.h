@@ -56,6 +56,8 @@ struct ThreadMemoryStatistics
     u64 totalInstanceMemory;
     u64 totalTransformMemory;
     u64 totalStringMemory;
+    u64 totalNodeMemory;
+    u64 totalRecordMemory;
     u64 totalOtherMemory;
 };
 

@@ -45,8 +45,8 @@ struct CreateQuantizedNode
 
         for (u32 i = 0; i < numRecords; i++)
         {
-            boundsMinP = Min(boundsMinP, Lane4F32::LoadU(records[i].geomBounds.minP.f));
-            boundsMaxP = Max(boundsMaxP, Lane4F32::LoadU(records[i].geomBounds.maxP.f));
+            boundsMinP = Min(boundsMinP, Lane4F32::LoadU(&records[i].geomBounds.minX));
+            boundsMaxP = Max(boundsMaxP, Lane4F32::LoadU(&records[i].geomBounds.maxX));
         }
         result->minP = ToVec3f(boundsMinP);
 
@@ -72,17 +72,17 @@ struct CreateQuantizedNode
 
         if constexpr (N == 4)
         {
-            LaneF32<N> min02xy = UnpackLo(Lane4F32::LoadU(records[0].geomBounds.minP.f), Lane4F32::LoadU(records[2].geomBounds.minP.f));
-            LaneF32<N> min13xy = UnpackLo(Lane4F32::LoadU(records[1].geomBounds.minP.f), Lane4F32::LoadU(records[3].geomBounds.minP.f));
+            LaneF32<N> min02xy = UnpackLo(Lane4F32::LoadU(&records[0].geomBounds.minX), Lane4F32::LoadU(&records[2].geomBounds.minX));
+            LaneF32<N> min13xy = UnpackLo(Lane4F32::LoadU(&records[1].geomBounds.minX), Lane4F32::LoadU(&records[3].geomBounds.minX));
 
-            LaneF32<N> min02z_ = UnpackHi(Lane4F32::LoadU(records[0].geomBounds.minP.f), Lane4F32::LoadU(records[2].geomBounds.minP.f));
-            LaneF32<N> min13z_ = UnpackHi(Lane4F32::LoadU(records[1].geomBounds.minP.f), Lane4F32::LoadU(records[3].geomBounds.minP.f));
+            LaneF32<N> min02z_ = UnpackHi(Lane4F32::LoadU(&records[0].geomBounds.minX), Lane4F32::LoadU(&records[2].geomBounds.minX));
+            LaneF32<N> min13z_ = UnpackHi(Lane4F32::LoadU(&records[1].geomBounds.minX), Lane4F32::LoadU(&records[3].geomBounds.minX));
 
-            LaneF32<N> max02xy = UnpackLo(Lane4F32::LoadU(records[0].geomBounds.maxP.f), Lane4F32::LoadU(records[2].geomBounds.maxP.f));
-            LaneF32<N> max13xy = UnpackLo(Lane4F32::LoadU(records[1].geomBounds.maxP.f), Lane4F32::LoadU(records[3].geomBounds.maxP.f));
+            LaneF32<N> max02xy = UnpackLo(Lane4F32::LoadU(&records[0].geomBounds.maxX), Lane4F32::LoadU(&records[2].geomBounds.maxX));
+            LaneF32<N> max13xy = UnpackLo(Lane4F32::LoadU(&records[1].geomBounds.maxX), Lane4F32::LoadU(&records[3].geomBounds.maxX));
 
-            LaneF32<N> max02z_ = UnpackHi(Lane4F32::LoadU(records[0].geomBounds.maxP.f), Lane4F32::LoadU(records[2].geomBounds.maxP.f));
-            LaneF32<N> max13z_ = UnpackHi(Lane4F32::LoadU(records[1].geomBounds.maxP.f), Lane4F32::LoadU(records[3].geomBounds.maxP.f));
+            LaneF32<N> max02z_ = UnpackHi(Lane4F32::LoadU(&records[0].geomBounds.maxX), Lane4F32::LoadU(&records[2].geomBounds.maxX));
+            LaneF32<N> max13z_ = UnpackHi(Lane4F32::LoadU(&records[1].geomBounds.maxX), Lane4F32::LoadU(&records[3].geomBounds.maxX));
 
             min.x = UnpackLo(min02xy, min13xy);
             min.y = UnpackHi(min02xy, min13xy);
@@ -94,17 +94,17 @@ struct CreateQuantizedNode
         }
         else if constexpr (N == 8)
         {
-            LaneF32<N> min04(records[0].geomBounds.minP, records[4].geomBounds.minP);
-            LaneF32<N> min26(records[2].geomBounds.minP, records[6].geomBounds.minP);
+            LaneF32<N> min04(&records[0].geomBounds.minX,&records[4].geomBounds.minX);
+            LaneF32<N> min26(&records[2].geomBounds.minX,&records[6].geomBounds.minX);
 
-            LaneF32<N> min15(records[1].geomBounds.minP, records[5].geomBounds.minP);
-            LaneF32<N> min37(records[3].geomBounds.minP, records[7].geomBounds.minP);
+            LaneF32<N> min15(&records[1].geomBounds.minX,&records[5].geomBounds.minX);
+            LaneF32<N> min37(&records[3].geomBounds.minX,&records[7].geomBounds.minX);
 
-            LaneF32<N> max04(records[0].geomBounds.maxP, records[4].geomBounds.maxP);
-            LaneF32<N> max26(records[2].geomBounds.maxP, records[6].geomBounds.maxP);
+            LaneF32<N> max04(&records[0].geomBounds.maxX,&records[4].geomBounds.maxX);
+            LaneF32<N> max26(&records[2].geomBounds.maxX,&records[6].geomBounds.maxX);
 
-            LaneF32<N> max15(records[1].geomBounds.maxP, records[5].geomBounds.maxP);
-            LaneF32<N> max37(records[3].geomBounds.maxP, records[7].geomBounds.maxP);
+            LaneF32<N> max15(&records[1].geomBounds.maxX,&records[5].geomBounds.maxX);
+            LaneF32<N> max37(&records[3].geomBounds.maxX,&records[7].geomBounds.maxX);
 
             // x0 x2 y0 y2 x4 x6 y4 y6
             // x1 x3 y1 y3 x5 x7 y5 y7
@@ -350,12 +350,13 @@ struct BVHBuilder
 
     Arena **arenas;
     Primitive *primitives;
+    PrimitiveData *data;
     Heuristic heuristic;
 
     BVHBuilder() {}
     NodeType *BuildBVHRoot(BuildSettings settings, Record &record);
     __forceinline u32 BuildNode(BuildSettings settings, const Record &record, Record *childRecords, u32 &numChildren);
-    void BuildBVH(Scheduler::Counter *counter, BuildSettings settings, NodeType *parent, Record *records, u32 numChildren,
+    void BuildBVH(Scheduler::Counter *counter, BuildSettings settings, NodeType *parent, const Record *records, u32 numChildren,
                   bool parallel = true);
 
     BVHN<N, NodeType> BuildBVH(BuildSettings settings, Arena **inArenas, Primitive *inRawPrims, Record &record);
@@ -489,17 +490,12 @@ __forceinline u32 BVHBuilder<N, BuildFunctions>::BuildNode(BuildSettings setting
 
 template <i32 N, typename BuildFunctions>
 void BVHBuilder<N, BuildFunctions>::BuildBVH(Scheduler::Counter *counter, BuildSettings settings,
-                                             NodeType *parent, Record *records, u32 inNumChildren, bool parallel)
+                                             NodeType *parent, const Record *records, u32 inNumChildren, bool parallel)
 {
     // TODO: stack allocate this
     Arena *currentArena = arenas[GetThreadIndex()];
     Assert(currentArena->align == 32);
-    // Record allChildRecords[N][N];
-    Record **allChildRecords = PushArrayNoZero(currentArena, Record *, N);
-    for (u32 i = 0; i < N; i++)
-    {
-        allChildRecords[i] = PushArrayDefault<Record>(currentArena, N);
-    }
+    Record allChildRecords[N][N];
 
     u32 allNumChildren[N];
 
@@ -515,7 +511,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(Scheduler::Counter *counter, BuildS
         scheduler.ScheduleAndWait(inNumChildren, 1, [&](u32 jobID) {
             u32 childIndex       = jobID;
             Record *childRecords = allChildRecords[childIndex];
-            Record &record       = records[childIndex];
+            const Record &record       = records[childIndex];
             u32 &numChildren     = allNumChildren[childIndex];
             u32 result           = BuildNode(settings, record, childRecords, numChildren);
 
@@ -536,7 +532,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(Scheduler::Counter *counter, BuildS
         for (u32 childIndex = 0; childIndex < inNumChildren; childIndex++)
         {
             Record *childRecords = allChildRecords[childIndex];
-            Record &record       = records[childIndex];
+            const Record &record       = records[childIndex];
             u32 &numChildren     = allNumChildren[childIndex];
             u32 result           = BuildNode(settings, record, childRecords, numChildren);
 
@@ -554,7 +550,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(Scheduler::Counter *counter, BuildS
     u32 finalNodeCount = nodeCount.load();
     // threadLocalStatistics[GetThreadIndex()].misc += finalNodeCount; // numChildren;
 
-    NodeType *children = PushArray(currentArena, NodeType, finalNodeCount);
+    NodeType *children = PushArrayTagged(currentArena, NodeType, finalNodeCount, MemoryType_Node);
 
     for (u32 i = 0; i < finalNodeCount; i++)
     {
@@ -592,63 +588,11 @@ BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings,
                                         Primitive *inRawPrims,
                                         Record &record)
 {
-    arenas = inArenas;
 
-    // const u32 groupSize = count / 16;
-
-    // jobsystem::Counter counter = {};
-    //
-    // PrimData *prims = PushArray(arenas[GetThreadIndex()], PrimData, count);
-    //
-    // jobsystem::KickJobs(&counter, count, groupSize, [&](jobsystem::JobArgs args) {
-    //     u32 index         = args.jobId;
-    //     AABB bounds       = Primitive::Bounds(inRawPrims, index);
-    //     prims[index].minP = Lane4F32(bounds.minP);
-    //     prims[index].maxP = Lane4F32(bounds.maxP);
-    //     prims[index].SetGeomID(0);
-    //     prims[index].SetPrimID(index);
-    // });
-    // jobsystem::WaitJobs(&counter);
-    // for (u32 i = 0; i < count; i++)
-    // {
-    //     u32 index         = i;
-    //     AABB bounds       = Primitive::Bounds(inRawPrims, index);
-    //     prims[index].minP = Lane4F32(bounds.minP);
-    //     prims[index].maxP = Lane4F32(bounds.maxP);
-    //     prims[index].SetGeomID(0);
-    //     prims[index].SetPrimID(index);
-    // }
-
+    arenas     = inArenas;
     primitives = inRawPrims;
-    // Record record;
-    // record = jobsystem::ParallelReduce<Record>(
-    //     count, 1024,
-    //     [&](Record &record, u32 start, u32 count) {
-    //     for (u32 i = start; i < start + count; i++)
-    //     {
-    //         PrimData *prim    = &prims[i];
-    //         Lane4F32 centroid = (prim->minP + prim->maxP) * 0.5f;
-    //         record.geomBounds.Extend(prim->minP, prim->maxP);
-    //         record.centBounds.Extend(centroid);
-    //     } },
-    //     [&](Record &a, Record &b) {
-    //     a.geomBounds.Extend(b.geomBounds);
-    //     a.centBounds.Extend(b.centBounds); });
-
-    // record.data  = record.data;
-    // record.start = record.range.start;
-    // record.end   = record.range.count;
-
-    // BVH<N> *result = PushStruct(arenas[GetThreadIndex()], BVH<N>);
     BVHN<N, NodeType> result;
     result.root = BuildBVHRoot(settings, record);
-    // if (settings.twoLevel)
-    // {
-    // }
-    // else
-    // {
-    //     BuildBVH(settings, record);
-    // }
     return result;
 }
 
@@ -656,10 +600,11 @@ template <i32 N>
 BVHQuantized<N> BuildQuantizedSBVH(BuildSettings settings,
                                    Arena **inArenas,
                                    TriangleMesh *mesh,
+                                   PrimDataSOA *soa,
                                    RecordSOASplits &record)
 {
     SBVHBuilderTriangleMesh<N> builder;
-    HeuristicSpatialSplits heuristic(inArenas, mesh, HalfArea(record.geomBounds));
+    HeuristicSpatialSplits heuristic(inArenas, soa, mesh, HalfArea(record.geomBounds.ToBounds()));
     builder.heuristic = heuristic;
     return builder.BuildBVH(settings, inArenas, mesh, record);
 }

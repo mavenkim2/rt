@@ -215,17 +215,17 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     printf("mismatches: %u\n", errors);
 
 #if 1
-    printf("\n");
-    printf("Left bounds min: %f %f %f\n", left.geomBounds.minP[0], left.geomBounds.minP[1], left.geomBounds.minP[2]);
-    printf("Left bounds max: %f %f %f\n", left.geomBounds.maxP[0], left.geomBounds.maxP[1], left.geomBounds.maxP[2]);
-    printf("Right bounds min: %f %f %f\n", right.geomBounds.minP[0], right.geomBounds.minP[1], right.geomBounds.minP[2]);
-    printf("Right bounds max: %f %f %f\n", right.geomBounds.maxP[0], right.geomBounds.maxP[1], right.geomBounds.maxP[2]);
-
-    printf("\n");
-    printf("Left cent bounds min: %f %f %f\n", left.centBounds.minP[0], left.centBounds.minP[1], left.centBounds.minP[2]);
-    printf("Left cent bounds max: %f %f %f\n", left.centBounds.maxP[0], left.centBounds.maxP[1], left.centBounds.maxP[2]);
-    printf("Right cent bounds min: %f %f %f\n", right.centBounds.minP[0], right.centBounds.minP[1], right.centBounds.minP[2]);
-    printf("Right cent bounds max: %f %f %f\n", right.centBounds.maxP[0], right.centBounds.maxP[1], right.centBounds.maxP[2]);
+    // printf("\n");
+    // printf("Left bounds min: %f %f %f\n", left.geomBounds.minP[0], left.geomBounds.minP[1], left.geomBounds.minP[2]);
+    // printf("Left bounds max: %f %f %f\n", left.geomBounds.maxP[0], left.geomBounds.maxP[1], left.geomBounds.maxP[2]);
+    // printf("Right bounds min: %f %f %f\n", right.geomBounds.minP[0], right.geomBounds.minP[1], right.geomBounds.minP[2]);
+    // printf("Right bounds max: %f %f %f\n", right.geomBounds.maxP[0], right.geomBounds.maxP[1], right.geomBounds.maxP[2]);
+    //
+    // printf("\n");
+    // printf("Left cent bounds min: %f %f %f\n", left.centBounds.minP[0], left.centBounds.minP[1], left.centBounds.minP[2]);
+    // printf("Left cent bounds max: %f %f %f\n", left.centBounds.maxP[0], left.centBounds.maxP[1], left.centBounds.maxP[2]);
+    // printf("Right cent bounds min: %f %f %f\n", right.centBounds.minP[0], right.centBounds.minP[1], right.centBounds.minP[2]);
+    // printf("Right cent bounds max: %f %f %f\n", right.centBounds.maxP[0], right.centBounds.maxP[1], right.centBounds.maxP[2]);
     // Tests to ensure that the partitioning is valid
     errors            = 0;
     u32 firstBadIndex = 0;
@@ -381,9 +381,8 @@ void SOASBVHBuilderTest(TriangleMesh *mesh)
     settings.intCost = 0.3f;
 
     RecordSOASplits record;
-    record.geomBounds = geomBounds;
-    record.centBounds = centBounds;
-    record.data       = &soa;
+    record.geomBounds.FromBounds(geomBounds);
+    record.centBounds.FromBounds(centBounds);
     record.range      = ExtRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
     u32 numProcessors = OS_NumProcessors();
     Arena **arenas    = PushArray(arena, Arena *, numProcessors);
@@ -393,21 +392,27 @@ void SOASBVHBuilderTest(TriangleMesh *mesh)
     }
 
     PerformanceCounter counter = OS_StartCounter();
-    BVH4Quantized bvh          = BuildQuantizedSBVH<4>(settings, arenas, mesh, record);
+    BVH4Quantized bvh          = BuildQuantizedSBVH<4>(settings, arenas, mesh, &soa, record);
     f32 time                   = OS_GetMilliseconds(counter);
     printf("num faces: %u\n", numFaces);
     printf("Build time: %fms\n", time);
 
-    f64 totalMiscTime = 0;
-    u64 numNodes      = 0;
+    f64 totalMiscTime     = 0;
+    u64 numNodes          = 0;
+    u64 totalNodeMemory   = 0;
+    u64 totalRecordMemory = 0;
     for (u32 i = 0; i < numProcessors; i++)
     {
         totalMiscTime += threadLocalStatistics[i].miscF;
+        totalNodeMemory += threadMemoryStatistics[i].totalNodeMemory;
+        totalRecordMemory += threadMemoryStatistics[i].totalRecordMemory;
         printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
         numNodes += threadLocalStatistics[i].misc;
     }
     printf("total time: %fms \n", totalMiscTime);
-    printf("num errors: %llu", numNodes); // num nodes: %llu\n", numNodes);
+    printf("num errors: %llu\n", numNodes);              // num nodes: %llu\n", numNodes);
+    printf("node kb: %llu\n", totalNodeMemory / 1000);   // num nodes: %llu\n", numNodes);
+    printf("record kb: %llu", totalRecordMemory / 1000); // num nodes: %llu\n", numNodes);
 }
 
 } // namespace rt

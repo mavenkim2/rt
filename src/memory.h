@@ -55,19 +55,10 @@ enum MemoryType
     MemoryType_Instance,
     MemoryType_Transform,
     MemoryType_String,
+    MemoryType_Node,
+    MemoryType_Record,
     MemoryType_Other,
 };
-
-#if TRACK_MEMORY
-#define PushArrayTagged(arena, type, count, tag) \
-    (((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(type) * count, PushArray(arena, type, count))
-
-#define PushStructTagged(arena, type, tag) \
-    (((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(type), PushStruct(arena, type))
-#else
-#define PushArrayTagged(arena, type, count, tag) PushArray(arena, type, count)
-#define PushStructTagged(arena, type, tag)       PushStruct(arena, type)
-#endif
 
 template <typename T>
 __forceinline T *PushArrayDefault(Arena *arena, u32 count)
@@ -79,6 +70,37 @@ __forceinline T *PushArrayDefault(Arena *arena, u32 count)
     }
     return out;
 }
+
+#if TRACK_MEMORY
+#define PushArrayTagged(arena, type, count, tag) \
+    (((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(type) * count, PushArray(arena, type, count))
+#define PushArrayNoZeroTagged(arena, type, count, tag) \
+    (((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(type) * count, PushArrayNoZero(arena, type, count))
+
+#define PushStructTagged(arena, type, tag) \
+    (((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(type), PushStruct(arena, type))
+
+template <typename T>
+__forceinline T *PushArrayDefaultTagged(Arena *arena, u32 count, MemoryType tag)
+{
+    ((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(T);
+    T *out = (T *)PushArray(arena, u8, sizeof(T) * count);
+    for (u32 i = 0; i < count; i++)
+    {
+        out[i] = T();
+    }
+    return out;
+}
+#else
+#define PushArrayTagged(arena, type, count, tag)       PushArray(arena, type, count)
+#define PushArrayNoZeroTagged(arena, type, count, tag) PushArrayNoZero(arena, type, count)
+#define PushStructTagged(arena, type, tag)             PushStruct(arena, type)
+template <typename T>
+__forceinline T *PushArrayDefaultTagged(Arena *arena, u32 count, MemoryType type)
+{
+    return PushArrayDefault<T>(arena, count);
+}
+#endif
 
 #define PushStructConstruct(arena, Type) new (PushStruct(arena, Type)) Type
 
