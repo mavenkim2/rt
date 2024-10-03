@@ -371,7 +371,7 @@ struct BVHBuilder
     NodeType *BuildBVHRoot2(BuildSettings settings, Record &record);
 
     void BuildBVH2(BuildSettings settings, const Record &record, NodeType *&outGrandChild,
-                   Record *childRecords, u32 *leafIndices, u32 &leafCount, bool parallel);
+                   Record *childRecords, u32 *leafIndices, u32 &leafCount, u32 &numChildren, bool parallel);
 };
 
 template <i32 N>
@@ -391,19 +391,28 @@ BVHBuilder<N, BuildFunctions>::BuildBVHRoot2(BuildSettings settings, Record &rec
     Arena *arena         = arenas[GetThreadIndex()];
     NodeType *root       = PushStruct(arena, NodeType);
     NodeType *grandChild = 0;
-    BuildBVH2(settings, record, grandChild, childRecords, leafIndices, leafCount, true);
+    u32 numChildren      = 0;
+    BuildBVH2(settings, record, grandChild, childRecords, leafIndices, leafCount, numChildren, true);
 
-    Assert(grandChild);
-    // TODO: this isn't correct, need the number of children or the number of nodes (since num nodes + num leaves could be
-    // less than N)
-    f.createNode(childRecords, N - leafCount, root);
-    f.updateNode(arena, root, childRecords, grandChild, leafIndices, leafCount);
+    if (grandChild)
+    {
+        // TODO: this isn't correct, need the number of children or the number of nodes (since num nodes + num leaves could be
+        // less than N)
+        f.createNode(childRecords, N - leafCount, root);
+        f.updateNode(arena, root, childRecords, grandChild, leafIndices, leafCount);
+    }
+    else
+    {
+        u32 leafIndex = 0;
+        f.createNode(&record, 1, root);
+        f.updateNode(arena, root, &record, 0, &leafIndex, 1);
+    }
     return root;
 }
 
 template <i32 N, typename BuildFunctions>
 void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Record &record, NodeType *&outGrandChild,
-                                              Record *childRecords, u32 *leafIndices, u32 &leafCount, bool parallel)
+                                              Record *childRecords, u32 *leafIndices, u32 &leafCount, u32 &numChildren, bool parallel)
 {
 
     u32 total = record.range.Size();
@@ -412,6 +421,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     // Record childRecords[N];
     bool areLeaves[N] = {};
 
+    numChildren = 0;
     if (total == 1)
     {
         outGrandChild = 0;
@@ -425,7 +435,6 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     f32 leafSAH  = settings.intCost * area * total; //((total + (1 << settings.logBlockSize) - 1) >> settings.logBlockSize);
     f32 splitSAH = settings.travCost * area + settings.intCost * split.bestSAH;
 
-    u32 numChildren = 0;
     if (total <= settings.maxLeafSize)
     {
         heuristic.FlushState(split);
@@ -471,10 +480,11 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     u32 nextGenLeafCount[N];
     if (parallel)
     {
+        // TODO: split the thread pools here
         scheduler.ScheduleAndWait(numChildren, 1, [&](u32 jobID) {
             bool childParallel = childRecords[jobID].range.count >= PARALLEL_THRESHOLD;
             BuildBVH2(settings, childRecords[jobID], grandChildren[jobID], nextGenRecords[jobID],
-                      nextGenLeafIndices[jobID], nextGenLeafCount[jobID], childParallel);
+                      nextGenLeafIndices[jobID], nextGenLeafCount[jobID], nextGenNumChildren[jobID], childParallel);
         });
     }
     else
@@ -482,10 +492,11 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
         for (u32 i = 0; i < numChildren; i++)
         {
             BuildBVH2(settings, childRecords[i], grandChildren[i], nextGenRecords[i], nextGenLeafIndices[i],
-                      nextGenLeafCount[i], false);
+                      nextGenLeafCount[i], nextGenNumChildren[i], false);
         }
     }
 
+    PerformanceCounter perfCounter = OS_StartCounter();
     // u32 leafIndices[N];
     leafCount = 0;
     u32 nodeIndices[N];
@@ -495,12 +506,12 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
         leafIndices[leafCount] = i;
         nodeIndices[nodeCount] = i;
         u32 isLeaf             = grandChildren[i] == 0;
-        nodeCount += isLeaf;
-        leafCount += !isLeaf;
+        nodeCount += !isLeaf;
+        leafCount += isLeaf;
     }
 
     Arena *currentArena = arenas[GetThreadIndex()];
-    NodeType *children  = 0;
+    NodeType *children  = (NodeType *)(0xffffffffffffffff);
 
     if (nodeCount)
     {
@@ -515,6 +526,9 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
                      grandChildren[nodeIndex], nextGenLeafIndices[nodeIndex], nextGenLeafCount[nodeIndex]);
     }
     outGrandChild = children;
+
+    threadLocalStatistics[GetThreadIndex()].misc += nodeCount;
+    threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perfCounter);
 }
 
 template <i32 N, typename BuildFunctions>
