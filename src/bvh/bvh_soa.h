@@ -423,11 +423,6 @@ struct HeuristicSOAObjectBinning
                 Lane8U32::Store(binDimIndices, binIndices[dim]);
                 for (u32 b = 0; b < LANE_WIDTH; b++)
                 {
-                    if (Any(lanes[b] == pos_inf))
-                    {
-                        int stop = 5;
-                        Assert(false);
-                    }
                     u32 bin = binDimIndices[b];
                     bins[dim][bin].Extend(lanes[b]);
                     counts[bin][dim]++;
@@ -986,6 +981,121 @@ struct alignas(32) HeuristicSOASplitBinning
             for (u32 dim = 0; dim < 3; dim++)
             {
                 finalBounds[dim][i].Extend(other.finalBounds[dim][i]);
+            }
+        }
+    }
+};
+
+template <i32 numBins = 32>
+struct HeuristicAOSObjectBinning
+{
+    Bounds8 bins[3][numBins];
+    Lane4U32 counts[numBins];
+    Bounds finalBounds[3][numBins];
+    ObjectBinner<numBins> *binner;
+    HeuristicAOSObjectBinning(ObjectBinner<numBins> *binner) : binner(binner)
+    {
+        for (u32 dim = 0; dim < 3; dim++)
+        {
+            for (u32 i = 0; i < numBins; i++)
+            {
+                bins[dim][i]        = Bounds8();
+                finalBounds[dim][i] = Bounds();
+            }
+        }
+        for (u32 i = 0; i < numBins; i++)
+        {
+            counts[i] = 0;
+        }
+    }
+    void Bin(PrimRef *data, u32 start, u32 count)
+    {
+        u32 alignedCount = count - count % LANE_WIDTH;
+        u32 i            = start;
+
+        Lane8F32 prevLanes[6];
+        alignas(32) u32 prevBinIndices[3][8];
+        if (count >= LANE_WIDTH)
+        {
+            Transpose8x6(data[i].m256, data[i + 1].m256, data[i + 2].m256, data[i + 3].m256,
+                         data[i + 4].m256, data[i + 5].m256, data[i + 6].m256, data[i + 7].m256,
+                         prevLanes[0], prevLanes[1], prevLanes[2], prevLanes[3], prevLanes[4], prevLanes[5]);
+            Lane8F32 centroids[3] = {
+                (prevLanes[3] - prevLanes[0]) * 0.5f,
+                (prevLanes[4] - prevLanes[1]) * 0.5f,
+                (prevLanes[5] - prevLanes[2]) * 0.5f,
+            };
+            Lane8U32::Store(prevBinIndices[0], binner->Bin(centroids[0], 0));
+            Lane8U32::Store(prevBinIndices[1], binner->Bin(centroids[1], 1));
+            Lane8U32::Store(prevBinIndices[2], binner->Bin(centroids[2], 2));
+            i += LANE_WIDTH;
+        }
+        for (; i < start + alignedCount; i += LANE_WIDTH)
+        {
+            Lane8F32 lanes[6];
+
+            Transpose8x6(data[i].m256, data[i + 1].m256, data[i + 2].m256, data[i + 3].m256,
+                         data[i + 4].m256, data[i + 5].m256, data[i + 6].m256, data[i + 7].m256,
+                         lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5]);
+            Lane8F32 centroids[] = {
+                (lanes[3] - lanes[0]) * 0.5f,
+                (lanes[4] - lanes[1]) * 0.5f,
+                (lanes[5] - lanes[2]) * 0.5f,
+            };
+
+            Lane8U32 indicesX = binner->Bin(centroids[0], 0);
+            Lane8U32 indicesY = binner->Bin(centroids[1], 1);
+            Lane8U32 indicesZ = binner->Bin(centroids[2], 2);
+
+            for (u32 dim = 0; dim < 3; dim++)
+            {
+                for (u32 b = 0; b < LANE_WIDTH; b++)
+                {
+                    u32 bin = prevBinIndices[dim][b];
+                    bins[dim][bin].Extend(prevLanes[b]);
+                    counts[bin][dim]++;
+                }
+            }
+
+            Lane8U32::Store(prevBinIndices[0], indicesX);
+            Lane8U32::Store(prevBinIndices[1], indicesY);
+            Lane8U32::Store(prevBinIndices[2], indicesZ);
+            prevLanes[0] = lanes[0];
+            prevLanes[1] = lanes[1];
+            prevLanes[2] = lanes[2];
+        }
+        for (u32 dim = 0; dim < 3; dim++)
+        {
+            for (u32 b = 0; b < LANE_WIDTH; b++)
+            {
+                u32 bin = prevBinIndices[dim][b];
+                bins[dim][bin].Extend(prevLanes[b]);
+                counts[bin][dim]++;
+            }
+        }
+        for (; i < start + count; i++)
+        {
+            Lane4F32 low      = Extract<0>(data[i].m256);
+            Lane4F32 hi       = Extract<1>(data[i].m256);
+            Lane4F32 centroid = (hi - low) * 0.5f;
+            u32 indices[]     = {
+                binner->Bin(centroid[0], 0),
+                binner->Bin(centroid[1], 1),
+                binner->Bin(centroid[2], 2),
+            };
+            for (u32 dim = 0; dim < 3; dim++)
+            {
+                u32 bin = indices[dim];
+                bins[dim][bin].Extend(data[i].m256);
+                counts[bin][dim]++;
+            }
+        }
+
+        for (u32 dim = 0; dim < 3; dim++)
+        {
+            for (i = 0; i < numBins; i++)
+            {
+                finalBounds[dim][i] = Bounds(bins[dim][i]);
             }
         }
     }

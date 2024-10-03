@@ -143,7 +143,7 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     // heuristic.Split(split, record, left, right);
 
 #if 1
-#if 0
+#if 1
     ObjectBinner<32> binner(centBounds);
     HeuristicSOAObjectBinning<32> heuristic(&binner);
     PerformanceCounter start = OS_StartCounter();
@@ -187,7 +187,6 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     time    = OS_GetMilliseconds(start);
     printf("Mid: %u\n", mid);
     printf("Split time: %fms\n", time);
-#endif
     for (u32 i = 0; i < OS_NumProcessors(); i++)
     {
         printf("Thread %u time: %llu\n", i, threadLocalStatistics[i].misc);
@@ -213,8 +212,9 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
         }
     }
     printf("mismatches: %u\n", errors);
+#endif
 
-#if 1
+#if 0
     // printf("\n");
     // printf("Left bounds min: %f %f %f\n", left.geomBounds.minP[0], left.geomBounds.minP[1], left.geomBounds.minP[2]);
     // printf("Left bounds max: %f %f %f\n", left.geomBounds.maxP[0], left.geomBounds.maxP[1], left.geomBounds.maxP[2]);
@@ -268,6 +268,46 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     printf("Num errors: %u\n", errors);
 #endif
 #endif
+}
+
+void TriangleClipTestAOS(TriangleMesh *mesh)
+{
+    Arena *arena = ArenaAlloc();
+    arena->align = 32;
+
+    Bounds centBounds;
+    Bounds geomBounds;
+    u32 numFaces  = mesh->numIndices / 3;
+    PrimRef *refs = PushArray(arena, PrimRef, numFaces);
+    for (u32 i = 0; i < numFaces; i++)
+    {
+        u32 i0 = mesh->indices[i * 3];
+        u32 i1 = mesh->indices[i * 3 + 1];
+        u32 i2 = mesh->indices[i * 3 + 2];
+
+        PrimRef *prim = &refs[i];
+        Vec3f v0      = mesh->p[i0];
+        Vec3f v1      = mesh->p[i1];
+        Vec3f v2      = mesh->p[i2];
+
+        Vec3f min = Min(Min(v0, v1), v2);
+        Vec3f max = Max(Max(v0, v1), v2);
+
+        Lane4F32 mins = Lane4F32(-min.x, -min.y, -min.z, 0);
+        Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
+
+        prim->primID = i;
+
+        geomBounds.Extend(mins, maxs);
+        centBounds.Extend((maxs - mins) * 0.5f);
+    }
+
+    ObjectBinner binner(centBounds);
+    HeuristicAOSObjectBinning heuristic(&binner);
+    PerformanceCounter counter = OS_StartCounter();
+    heuristic.Bin(refs, 0, numFaces);
+    f32 time = OS_GetMilliseconds(counter);
+    printf("bin time: %fms\n", time);
 }
 
 void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
