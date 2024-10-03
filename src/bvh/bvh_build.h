@@ -94,17 +94,17 @@ struct CreateQuantizedNode
         }
         else if constexpr (N == 8)
         {
-            LaneF32<N> min04(&records[0].geomBounds.minX,&records[4].geomBounds.minX);
-            LaneF32<N> min26(&records[2].geomBounds.minX,&records[6].geomBounds.minX);
+            LaneF32<N> min04(&records[0].geomBounds.minX, &records[4].geomBounds.minX);
+            LaneF32<N> min26(&records[2].geomBounds.minX, &records[6].geomBounds.minX);
 
-            LaneF32<N> min15(&records[1].geomBounds.minX,&records[5].geomBounds.minX);
-            LaneF32<N> min37(&records[3].geomBounds.minX,&records[7].geomBounds.minX);
+            LaneF32<N> min15(&records[1].geomBounds.minX, &records[5].geomBounds.minX);
+            LaneF32<N> min37(&records[3].geomBounds.minX, &records[7].geomBounds.minX);
 
-            LaneF32<N> max04(&records[0].geomBounds.maxX,&records[4].geomBounds.maxX);
-            LaneF32<N> max26(&records[2].geomBounds.maxX,&records[6].geomBounds.maxX);
+            LaneF32<N> max04(&records[0].geomBounds.maxX, &records[4].geomBounds.maxX);
+            LaneF32<N> max26(&records[2].geomBounds.maxX, &records[6].geomBounds.maxX);
 
-            LaneF32<N> max15(&records[1].geomBounds.maxX,&records[5].geomBounds.maxX);
-            LaneF32<N> max37(&records[3].geomBounds.maxX,&records[7].geomBounds.maxX);
+            LaneF32<N> max15(&records[1].geomBounds.maxX, &records[5].geomBounds.maxX);
+            LaneF32<N> max37(&records[3].geomBounds.maxX, &records[7].geomBounds.maxX);
 
             // x0 x2 y0 y2 x4 x6 y4 y6
             // x1 x3 y1 y3 x5 x7 y5 y7
@@ -348,6 +348,13 @@ struct BVHBuilder
     using PrimitiveData = typename Record::PrimitiveData;
     BuildFunctions f;
 
+    struct alignas(CACHE_LINE_SIZE) ThreadBuildData
+    {
+        u32 chunkStart;
+        u32 chunkCount;
+        u32 current;
+    };
+
     Arena **arenas;
     Primitive *primitives;
     PrimitiveData *data;
@@ -360,12 +367,155 @@ struct BVHBuilder
                   bool parallel = true);
 
     BVHN<N, NodeType> BuildBVH(BuildSettings settings, Arena **inArenas, Primitive *inRawPrims, Record &record);
+
+    NodeType *BuildBVHRoot2(BuildSettings settings, Record &record);
+
+    void BuildBVH2(BuildSettings settings, const Record &record, NodeType *&outGrandChild,
+                   Record *childRecords, u32 *leafIndices, u32 &leafCount, bool parallel);
 };
 
 template <i32 N>
 using SBVHBuilderTriangleMesh = BVHBuilder<N, BLAS_SOA_SBVH_QuantizedNode_TriangleLeaf_Funcs<N>>;
 template <i32 N>
 using BVHBuilderTriangleMesh = BVHBuilder<N, BLAS_SOA_ObjectBin_QuantizedNode_TriangleLeaf_Funcs<N>>;
+
+template <i32 N, typename BuildFunctions>
+typename BVHBuilder<N, BuildFunctions>::NodeType *
+BVHBuilder<N, BuildFunctions>::BuildBVHRoot2(BuildSettings settings, Record &record)
+{
+    Record childRecords[N];
+    u32 leafIndices[N];
+    u32 leafCount = 0;
+    // u32 result = BuildNode(settings, record, childRecords, numChildren);
+
+    Arena *arena         = arenas[GetThreadIndex()];
+    NodeType *root       = PushStruct(arena, NodeType);
+    NodeType *grandChild = 0;
+    BuildBVH2(settings, record, grandChild, childRecords, leafIndices, leafCount, true);
+
+    Assert(grandChild);
+    // TODO: this isn't correct, need the number of children or the number of nodes (since num nodes + num leaves could be
+    // less than N)
+    f.createNode(childRecords, N - leafCount, root);
+    f.updateNode(arena, root, childRecords, grandChild, leafIndices, leafCount);
+    return root;
+}
+
+template <i32 N, typename BuildFunctions>
+void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Record &record, NodeType *&outGrandChild,
+                                              Record *childRecords, u32 *leafIndices, u32 &leafCount, bool parallel)
+{
+
+    u32 total = record.range.Size();
+    Assert(total > 0);
+
+    // Record childRecords[N];
+    bool areLeaves[N] = {};
+
+    if (total == 1)
+    {
+        outGrandChild = 0;
+        return;
+    }
+
+    Split split = heuristic.Bin(record, 1);
+
+    // NOTE: multiply both by the area instead of dividing
+    f32 area     = HalfArea(record.geomBounds);
+    f32 leafSAH  = settings.intCost * area * total; //((total + (1 << settings.logBlockSize) - 1) >> settings.logBlockSize);
+    f32 splitSAH = settings.travCost * area + settings.intCost * split.bestSAH;
+
+    u32 numChildren = 0;
+    if (total <= settings.maxLeafSize)
+    {
+        heuristic.FlushState(split);
+        outGrandChild = 0;
+        return;
+    }
+    heuristic.Split(split, record, childRecords[0], childRecords[1]);
+    Assert(childRecords[0].range.count <= record.range.count && childRecords[1].range.count <= record.range.count);
+
+    // N - 1 splits produces N children
+    for (numChildren = 2; numChildren < N; numChildren++)
+    {
+        i32 bestChild = -1;
+        f32 maxArea   = neg_inf;
+        for (u32 recordIndex = 0; recordIndex < numChildren; recordIndex++)
+        {
+            Record &childRecord = childRecords[recordIndex];
+            if (childRecord.range.Size() <= settings.maxLeafSize) continue;
+
+            f32 childArea = HalfArea(childRecord.geomBounds);
+            if (childArea > maxArea)
+            {
+                bestChild = recordIndex;
+                maxArea   = childArea;
+            }
+        }
+        if (bestChild == -1) break;
+
+        split = heuristic.Bin(childRecords[bestChild]);
+
+        Record out;
+        heuristic.Split(split, childRecords[bestChild], out, childRecords[numChildren]);
+
+        Assert(childRecords[0].range.count <= record.range.count && childRecords[1].range.count <= record.range.count);
+        childRecords[bestChild] = out; // Record(prim, result.geomBoundsL, result.centBoundsL, start, result.mid);
+    }
+
+    Record nextGenRecords[N][N];
+    u32 nextGenNumChildren[N];
+
+    NodeType *grandChildren[N];
+    u32 nextGenLeafIndices[N][N];
+    u32 nextGenLeafCount[N];
+    if (parallel)
+    {
+        scheduler.ScheduleAndWait(numChildren, 1, [&](u32 jobID) {
+            bool childParallel = childRecords[jobID].range.count >= PARALLEL_THRESHOLD;
+            BuildBVH2(settings, childRecords[jobID], grandChildren[jobID], nextGenRecords[jobID],
+                      nextGenLeafIndices[jobID], nextGenLeafCount[jobID], childParallel);
+        });
+    }
+    else
+    {
+        for (u32 i = 0; i < numChildren; i++)
+        {
+            BuildBVH2(settings, childRecords[i], grandChildren[i], nextGenRecords[i], nextGenLeafIndices[i],
+                      nextGenLeafCount[i], false);
+        }
+    }
+
+    // u32 leafIndices[N];
+    leafCount = 0;
+    u32 nodeIndices[N];
+    u32 nodeCount = 0;
+    for (u32 i = 0; i < numChildren; i++)
+    {
+        leafIndices[leafCount] = i;
+        nodeIndices[nodeCount] = i;
+        u32 isLeaf             = grandChildren[i] == 0;
+        nodeCount += isLeaf;
+        leafCount += !isLeaf;
+    }
+
+    Arena *currentArena = arenas[GetThreadIndex()];
+    NodeType *children  = 0;
+
+    if (nodeCount)
+    {
+        children = PushArrayTagged(currentArena, NodeType, nodeCount, MemoryType_Node);
+    }
+    // PerformanceCounter perfCounter = OS_StartCounter();
+    for (u32 i = 0; i < nodeCount; i++)
+    {
+        u32 nodeIndex = nodeIndices[i];
+        f.createNode(nextGenRecords[nodeIndex], nextGenNumChildren[nodeIndex], &children[i]);
+        f.updateNode(currentArena, &children[i], nextGenRecords[nodeIndex],
+                     grandChildren[nodeIndex], nextGenLeafIndices[nodeIndex], nextGenLeafCount[nodeIndex]);
+    }
+    outGrandChild = children;
+}
 
 template <i32 N, typename BuildFunctions>
 typename BVHBuilder<N, BuildFunctions>::NodeType *BVHBuilder<N, BuildFunctions>::BuildBVHRoot(BuildSettings settings, Record &record)
@@ -407,16 +557,20 @@ __forceinline u32 BVHBuilder<N, BuildFunctions>::BuildNode(BuildSettings setting
 
     {
         Split split = heuristic.Bin(record, 1);
-        heuristic.Split(split, record, childRecords[0], childRecords[1]);
-
-        Assert(childRecords[0].range.count <= record.range.count && childRecords[1].range.count <= record.range.count);
 
         // NOTE: multiply both by the area instead of dividing
         f32 area     = HalfArea(record.geomBounds);
         f32 leafSAH  = settings.intCost * area * total; //((total + (1 << settings.logBlockSize) - 1) >> settings.logBlockSize);
         f32 splitSAH = settings.travCost * area + settings.intCost * split.bestSAH;
 
-        if (total <= settings.maxLeafSize) return 0; // && leafSAH <= splitSAH) return 0;
+        if (total <= settings.maxLeafSize)
+        {
+            heuristic.FlushState(split);
+            return 0; // && leafSAH <= splitSAH) return 0;
+        }
+
+        heuristic.Split(split, record, childRecords[0], childRecords[1]);
+        Assert(childRecords[0].range.count <= record.range.count && childRecords[1].range.count <= record.range.count);
     }
 
     // N - 1 splits produces N children
@@ -490,9 +644,9 @@ __forceinline u32 BVHBuilder<N, BuildFunctions>::BuildNode(BuildSettings setting
 
 template <i32 N, typename BuildFunctions>
 void BVHBuilder<N, BuildFunctions>::BuildBVH(Scheduler::Counter *counter, BuildSettings settings,
-                                             NodeType *parent, const Record *records, u32 inNumChildren, bool parallel)
+                                             NodeType *parent, const Record *records, u32 inNumChildren,
+                                             bool parallel)
 {
-    // TODO: stack allocate this
     Arena *currentArena = arenas[GetThreadIndex()];
     Assert(currentArena->align == 32);
     Record allChildRecords[N][N];
@@ -506,52 +660,53 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(Scheduler::Counter *counter, BuildS
 
     Assert(inNumChildren <= N);
 
-    if (parallel)
+    // if (parallel)
+    // {
+    //     scheduler.ScheduleAndWait(inNumChildren, 1, [&](u32 jobID) {
+    //         u32 childIndex       = jobID;
+    //         Record *childRecords = allChildRecords[childIndex];
+    //         const Record &record = records[childIndex];
+    //         u32 &numChildren     = allNumChildren[childIndex];
+    //         u32 result           = BuildNode(settings, record, childRecords, numChildren);
+    //
+    //         if (result)
+    //         {
+    //             u32 nodeIndex               = nodeCount.fetch_add(1);
+    //             childNodeIndices[nodeIndex] = childIndex;
+    //         }
+    //         else
+    //         {
+    //             u32 leafIndex               = leafCount.fetch_add(1);
+    //             childLeafIndices[leafIndex] = childIndex;
+    //         }
+    //     });
+    // }
+    // else
+    // {
+    for (u32 childIndex = 0; childIndex < inNumChildren; childIndex++)
     {
-        scheduler.ScheduleAndWait(inNumChildren, 1, [&](u32 jobID) {
-            u32 childIndex       = jobID;
-            Record *childRecords = allChildRecords[childIndex];
-            const Record &record       = records[childIndex];
-            u32 &numChildren     = allNumChildren[childIndex];
-            u32 result           = BuildNode(settings, record, childRecords, numChildren);
+        Record *childRecords = allChildRecords[childIndex];
+        const Record &record = records[childIndex];
+        u32 &numChildren     = allNumChildren[childIndex];
+        u32 result           = BuildNode(settings, record, childRecords, numChildren);
 
-            if (result)
-            {
-                u32 nodeIndex               = nodeCount.fetch_add(1);
-                childNodeIndices[nodeIndex] = childIndex;
-            }
-            else
-            {
-                u32 leafIndex               = leafCount.fetch_add(1);
-                childLeafIndices[leafIndex] = childIndex;
-            }
-        });
-    }
-    else
-    {
-        for (u32 childIndex = 0; childIndex < inNumChildren; childIndex++)
+        if (result)
         {
-            Record *childRecords = allChildRecords[childIndex];
-            const Record &record       = records[childIndex];
-            u32 &numChildren     = allNumChildren[childIndex];
-            u32 result           = BuildNode(settings, record, childRecords, numChildren);
-
-            if (result)
-            {
-                childNodeIndices[nodeCount++] = childIndex;
-            }
-            else
-            {
-                childLeafIndices[leafCount++] = childIndex;
-            }
+            childNodeIndices[nodeCount++] = childIndex;
+        }
+        else
+        {
+            childLeafIndices[leafCount++] = childIndex;
         }
     }
+    // }
 
     u32 finalNodeCount = nodeCount.load();
-    // threadLocalStatistics[GetThreadIndex()].misc += finalNodeCount; // numChildren;
+    threadLocalStatistics[GetThreadIndex()].misc += finalNodeCount; // numChildren;
 
     NodeType *children = PushArrayTagged(currentArena, NodeType, finalNodeCount, MemoryType_Node);
 
+    PerformanceCounter perfCounter = OS_StartCounter();
     for (u32 i = 0; i < finalNodeCount; i++)
     {
         u32 childNodeIndex = childNodeIndices[i];
@@ -560,6 +715,25 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(Scheduler::Counter *counter, BuildS
 
     // Updates the parent
     f.updateNode(currentArena, parent, records, children, childLeafIndices, leafCount.load());
+    threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perfCounter);
+
+    // Splits the thread pool
+    // Range orderedRanges[N];
+    // for (u32 i = 0; i < inNumChildren; i++)
+    // {
+    //     orderedRanges[i] = {records[i].range.start, records[i].range.count};
+    // }
+    // // TODO: 8-wide
+    // for (u32 i = 0; i < inNumChildren; i++)
+    // {
+    //     const Record &record = records[i];
+    //     bool split           = scheduler.SplitThreadPool(parentCount, record.range.count);
+    //     parentCount -= record.range.count;
+    //     if (!split)
+    //     {
+    //         dynamicPoolScheduler.Schedule(
+    //     }
+    // }
 
     if (parallel)
     {
@@ -572,11 +746,10 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(Scheduler::Counter *counter, BuildS
     }
     else
     {
-        for (u32 i = 0; i < nodeCount.load(); i++)
+        for (u32 i = 0; i < finalNodeCount; i++)
         {
             u32 childNodeIndex = childNodeIndices[i];
-            bool childParallel = records[childNodeIndex].range.count >= PARALLEL_THRESHOLD;
-            BuildBVH(counter, settings, &children[i], allChildRecords[childNodeIndex], allNumChildren[childNodeIndex], childParallel);
+            BuildBVH(counter, settings, &children[i], allChildRecords[childNodeIndex], allNumChildren[childNodeIndex], false);
         }
     }
 }
@@ -592,7 +765,8 @@ BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings,
     arenas     = inArenas;
     primitives = inRawPrims;
     BVHN<N, NodeType> result;
-    result.root = BuildBVHRoot(settings, record);
+    // result.root = BuildBVHRoot(settings, record);
+    result.root = BuildBVHRoot2(settings, record);
     return result;
 }
 
@@ -604,7 +778,7 @@ BVHQuantized<N> BuildQuantizedSBVH(BuildSettings settings,
                                    RecordSOASplits &record)
 {
     SBVHBuilderTriangleMesh<N> builder;
-    HeuristicSpatialSplits heuristic(inArenas, soa, mesh, HalfArea(record.geomBounds.ToBounds()));
+    HeuristicSpatialSplits heuristic(soa, mesh, HalfArea(record.geomBounds.ToBounds()));
     builder.heuristic = heuristic;
     return builder.BuildBVH(settings, inArenas, mesh, record);
 }

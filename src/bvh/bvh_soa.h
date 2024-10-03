@@ -822,7 +822,7 @@ struct alignas(32) HeuristicSOASplitBinning
         }
     }
 
-    u32 Split(Arena *arena, TriangleMesh *mesh, PrimDataSOA *data, ExtRange range, Split split,
+    u32 Split(TriangleMesh *mesh, PrimDataSOA *data, ExtRange range, Split split,
               RecordSOASplits &outLeft, RecordSOASplits &outRight, u32 *outSplitCount = 0)
     {
         // partitioning
@@ -1000,13 +1000,11 @@ struct HeuristicSpatialSplits
     using HSplit = HeuristicSOASplitBinning<numSpatialBins>;
     using OBin   = HeuristicSOAObjectBinning<numObjectBins>;
 
-    Arena **arenas;
     TriangleMesh *mesh;
     f32 rootArea;
     PrimDataSOA *soa;
     HeuristicSpatialSplits() {}
-    HeuristicSpatialSplits(Arena **arenas, PrimDataSOA *soa, TriangleMesh *mesh, f32 rootArea) :
-        arenas(arenas), soa(soa), mesh(mesh), rootArea(rootArea) {}
+    HeuristicSpatialSplits(PrimDataSOA *soa, TriangleMesh *mesh, f32 rootArea) : soa(soa), mesh(mesh), rootArea(rootArea) {}
 
     void CalculateBounds(u32 start, u32 count, Bounds8F32 &geom, Bounds8F32 &cent)
     {
@@ -1141,6 +1139,11 @@ struct HeuristicSpatialSplits
         objectSplit.allocPos = popPos;
         return objectSplit;
     }
+    void FlushState(struct Split split)
+    {
+        TempArena temp = ScratchStart(0, 0);
+        ArenaPopTo(temp.arena, split.allocPos);
+    }
     void Split(struct Split split, const Record &record, Record &outLeft, Record &outRight)
     {
         // NOTE: Split must be called from the same thread as Bin
@@ -1205,7 +1208,7 @@ struct HeuristicSpatialSplits
                 case Split::Spatial:
                 {
                     HSplit *heuristic = (HSplit *)(split.ptr);
-                    mid               = heuristic->Split(arenas[GetThreadIndex()], mesh, soa, record.range,
+                    mid               = heuristic->Split(mesh, soa, record.range,
                                                          split, outLeft, outRight, &splitCount);
                 }
                 break;

@@ -183,7 +183,7 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     start = OS_StartCounter();
     RecordSOASplits left;
     RecordSOASplits right;
-    u32 mid = heuristic.Split(arena, mesh, &soa, range, split, left, right);
+    u32 mid = heuristic.Split(mesh, &soa, range, split, left, right);
     time    = OS_GetMilliseconds(start);
     printf("Mid: %u\n", mid);
     printf("Split time: %fms\n", time);
@@ -410,7 +410,7 @@ void SOASBVHBuilderTest(TriangleMesh *mesh)
         numNodes += threadLocalStatistics[i].misc;
     }
     printf("total time: %fms \n", totalMiscTime);
-    printf("num errors: %llu\n", numNodes);              // num nodes: %llu\n", numNodes);
+    printf("num nodes: %llu\n", numNodes);               // num nodes: %llu\n", numNodes);
     printf("node kb: %llu\n", totalNodeMemory / 1000);   // num nodes: %llu\n", numNodes);
     printf("record kb: %llu", totalRecordMemory / 1000); // num nodes: %llu\n", numNodes);
 }
