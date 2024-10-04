@@ -716,6 +716,63 @@ u32 Partition2(Split split, u32 l, u32 r, u32 outLStart, u32 outRStart, PrimRef 
     return 0;
 }
 
+u32 Partition3(Split split, u32 l, u32 r, u32 outLStart, u32 outRStart, PrimRef *data, u32 *inRefs, u32 *outRefs,
+               Lane8F32 &outLeft, Lane8F32 &outRight)
+{
+    u32 dim           = split.bestDim;
+    u32 writeLocs[2]  = {outLStart, outRStart};
+    Lane8F32 masks[2] = {Lane8F32::Mask(false), Lane8F32::Mask(true)};
+
+    Lane8U32 shuf(split.bestDim);
+    u32 prevMask = 0;
+    u32 i        = l;
+    alignas(32) f32 mins[LANE_WIDTH];
+    alignas(32) f32 maxs[LANE_WIDTH];
+    Lane8F32 left(neg_inf);
+    Lane8F32 right(neg_inf);
+    for (; i < r - (LANE_WIDTH - 1); i += LANE_WIDTH)
+    {
+        for (u32 b = 0; b < LANE_WIDTH; b++)
+        {
+            mins[b] = data[inRefs[i + b]].min[dim];
+            maxs[b] = data[inRefs[i + b]].max[dim];
+        }
+        Lane8F32 min      = Lane8F32::Load(mins);
+        Lane8F32 max      = Lane8F32::Load(maxs);
+        Lane8F32 centroid = (max - min) * 0.5f;
+        Lane8F32 maskR    = (centroid >= split.bestValue);
+        prevMask          = Movemask(maskR);
+        for (u32 b = 0; b < LANE_WIDTH; b++)
+        {
+            u32 select                   = (prevMask >> i) & 1;
+            outRefs[writeLocs[select++]] = inRefs[i + b];
+            left                         = MaskMax(masks[!select], left, data[inRefs[i + b]].m256);
+            right                        = MaskMax(masks[select], right, data[inRefs[i + b]].m256);
+        }
+    }
+    for (; i < r; i++)
+    {
+        u32 ref                       = inRefs[i];
+        PrimRef *primRef              = &data[ref];
+        f32 min                       = primRef->min[dim];
+        f32 max                       = primRef->max[dim];
+        f32 centroid                  = (max - min) * 0.5f;
+        bool isRight                  = centroid >= split.bestValue;
+        outRefs[writeLocs[isRight]++] = ref;
+        if (isRight)
+        {
+            right = Max(right, primRef->m256);
+        }
+        else
+        {
+            left = Max(left, primRef->m256);
+        }
+    }
+    outLeft  = left;
+    outRight = right;
+    return 0;
+}
+
 struct PartitionPayload
 {
     u32 *lOffsets;
@@ -734,20 +791,27 @@ u32 PartitionParallel(PartitionPayload &payload, Split split, ExtRange range, Pr
         return Partition(split, range.start, range.End(), data);
     }
 
-    const u32 numJobs = OS_NumProcessors();
-
     TempArena temp = ScratchStart(0, 0);
 
     u32 groupSize = payload.groupSize;
     u32 end       = range.End();
 
-    scheduler.ScheduleAndWait(numJobs, 1, [&](u32 jobID) {
+    Lane8F32 *lBounds = PushArrayNoZero(temp.arena, Lane8F32, payload.count);
+    Lane8F32 *rBounds = PushArrayNoZero(temp.arena, Lane8F32, payload.count);
+    for (u32 i = 0; i < payload.count; i++)
+    {
+        lBounds[i] = neg_inf;
+        rBounds[i] = neg_inf;
+    }
+
+    scheduler.ScheduleAndWait(payload.count, 1, [&](u32 jobID) {
         PerformanceCounter counter = OS_StartCounter();
 
         u32 start = range.start + groupSize * jobID;
         u32 end   = Min(start + groupSize, range.End());
 
-        Partition2(split, start, end, payload.lOffsets[jobID], payload.rOffsets[jobID], data, inRefs, outRefs);
+        Partition3(split, start, end, payload.lOffsets[jobID], payload.rOffsets[jobID], data, inRefs, outRefs,
+                   lBounds[jobID], rBounds[jobID]);
         threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(counter);
     });
 

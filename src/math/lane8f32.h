@@ -270,6 +270,12 @@ __forceinline Lane8F32 Blend(const Lane8F32 &l, const Lane8F32 &r)
     return _mm256_blend_ps(l, r, mask);
 }
 
+template <i32 m>
+__forceinline Lane8F32 Blend(const Lane8F32 &l, const Lane8F32 &r)
+{
+    return _mm256_blend_ps(l, r, m);
+}
+
 template <i32 a, i32 b, i32 c, i32 d, i32 e, i32 f, i32 g, i32 h>
 __forceinline Lane8F32 Shuffle(const Lane8F32 &l)
 {
