@@ -512,8 +512,17 @@ THREAD_ENTRY_POINT(WorkerLoop)
     }
 }
 
-template <typename T, typename Func, typename Reduce, typename... Args>
-T ParallelReduce(u32 start, u32 count, u32 groupSize, Func func, Reduce reduce, Args... inArgs)
+template <typename T>
+struct ParallelForOutput
+{
+    TempArena temp;
+    T *out;
+    u32 num;
+    u32 groupSize;
+};
+
+template <typename T, typename Func, typename... Args>
+ParallelForOutput<T> ParallelFor(u32 start, u32 count, u32 groupSize, Func func, Args... inArgs)
 {
     TempArena temp    = ScratchStart(0, 0);
     temp.arena->align = 32;
@@ -538,275 +547,32 @@ T ParallelReduce(u32 start, u32 count, u32 groupSize, Func func, Reduce reduce, 
         func(val, threadStart, size);
     });
 
-    T out = T(std::forward<Args>(inArgs)...);
-    for (u32 i = 0; i < taskCount; i++)
-    {
-        reduce(out, values[i]);
-    }
-    ScratchEnd(temp);
+    ParallelForOutput<T> out;
+    out.temp      = temp;
+    out.out       = values;
+    out.num       = taskCount;
+    out.groupSize = stepSize;
+
     return out;
 }
 
-// template <i32 N>
-// struct SchedulingInfo
-// {
-// };
-
-#if 0
-struct DynamicPoolScheduler
+template <typename T, typename ReduceFunc, typename... Args>
+T Reduce(ParallelForOutput<T> output, ReduceFunc reduce, Args... inArgs)
 {
-    struct Counter
+    T out = T(std::forward<Args>(inArgs)...);
+    for (u32 i = 0; i < output.num; i++)
     {
-        std::atomic<u32> count{0};
-    };
-    struct Task
-    {
-        static const u32 INVALID_ID = 0xffffffff;
-        TaskFunction func;
-        u32 id           = INVALID_ID;
-        Counter *counter = 0;
-        Task() {}
-    };
-
-    struct Worker
-    {
-        // EventCount::Waiter *waiter;
-        // u32 victim;
-        std::atomic<u32> poolIndex;
-    };
-    struct ThreadPool
-    {
-        JobDeque<Task> queue;
-        u32 start;
-        u32 count;
-    };
-    alignas(CACHE_LINE_SIZE) Worker workers[MAX_THREAD_COUNT];
-    u32 numWorkers;
-    std::atomic<ThreadPool> pools[MAX_THREAD_COUNT];
-    std::atomic<u32> numPools{1};
-
-    DynamicPoolScheduler() {}
-    // for Dynamic Load balancing
-
-    template <i32 N>
-    bool SplitThreadPool(u32 *starts, u32 *counts)
-    {
-        Assert(N == 4);
-        u32 orderedStarts[N];
-        u32 orderedCounts[N];
-        u32 totalCount = 0;
-        for (u32 i = 0; i < N; i++)
-        {
-            orderedStarts[i] = starts[i];
-            orderedCounts[i] = counts[i];
-            totalCount += counts[i];
-        }
-        if (orderedStarts[2] < orderedStarts[1])
-        {
-            Swap(orderedStarts[2], orderedStarts[1]);
-            Swap(orderedCounts[2], orderedCounts[1]);
-        }
-        if (orderedStarts[3] < orderedStarts[2])
-        {
-            Swap(orderedStarts[3], orderedStarts[2]);
-            Swap(orderedCounts[3], orderedCounts[2]);
-        }
-        if (orderedStarts[2] < orderedStarts[1])
-        {
-            Swap(orderedStarts[2], orderedStarts[1]);
-            Swap(orderedCounts[2], orderedCounts[1]);
-        }
-
-        u32 threadIndex = GetThreadIndex();
-        u32 poolIndex   = workers[threadIndex].poolIndex.load(std::memory_order_acquire);
-        ThreadPool pool = pools[poolIndex].load(std::memory_order_relaxed);
-        if (pool.count == 1)
-        {
-            return false;
-        }
-
-        u32 newNumThreads[N];
-        u32 total = 0;
-        for (u32 i = 0; i < N - 1; i++)
-        {
-            newNumThreads[i] = u32(pool.count * (f32)orderedCounts[i] / (totalCount));
-            total += newNumThreads[i];
-        }
-        newNumThreads[N - 1] = pool.count - total;
-
-        u32 offset      = 0;
-        u32 numNewPools = 0;
-        ThreadPool newPools[N];
-        for (u32 i = 0; i < N; i++)
-        {
-            u32 numThreads = newNumThreads[i];
-            if (numThreads == 0) continue;
-            ThreadPool &pool = newPools[numNewPools++];
-            pool.start       = offset;
-            pool.count       = numThreads;
-            offset += numThreads;
-        }
-
-        if (numNewPools == 1) return true;
-
-        // pool[poolIndex].store(left, std::memory_order_relaxed);
-        pools[poolIndex].store(newPools[0], std::memory_order_relaxed);
-        u32 newPoolIndex = numPools.fetch_add(numNewPools - 1, std::memory_order_relaxed);
-        for (u32 i = 0; i < numNewPools - 1; i++)
-        {
-            pool[newPoolIndex + i].store(newPools[i + 1], std::memory_order_relaxed);
-        }
-        for (u32 i = 1; i < numNewPools; i++)
-        {
-            ThreadPool &pool = newPools[i];
-            for (u32 j = pool.start; j < pool.start + pool.count; j++)
-            {
-                workers[j].poolIndex.store(newPoolIndex + i - 1, std::memory_order_release);
-            }
-        }
-        return true;
+        reduce(out, output.out[i]);
     }
+    ScratchEnd(output.temp);
+    return out;
+}
 
-    void WorkerLoop(Worker *w)
-    {
-        Scheduler::Task t;
-        const u32 stealBound = 2 * (numWorkers + 1);
-        const u32 yieldBound = 100;
-        u32 numFailedSteals  = 0;
-        u32 numYields        = 0;
-        const u32 id         = (u32)(w - workers);
-        // Initial dynamic thread pool phase
-        for (;;)
-        {
-            if (t.id != Task::INVALID_ID)
-            {
-                ExecuteTask(&t);
-                numFailedSteals = 0;
-            }
-            u32 poolIndex    = w->poolIndex.load(std::memory_order_relaxed);
-            ThreadPool &pool = pools[poolIndex].load(std::memory_order_relaxed);
-            // if (pool.count == 1) break;
-            if (!pool.queue.Steal(*t))
-            {
-                numFailedSteals++;
-                if (numFailedSteals > stealBounds)
-                {
-                    std::this_thread_yield();
-                }
-            }
-        }
-        // Now start stealing (?)
-        // for (;;)
-        // {
-        //     ? for (;;)
-        //     {
-        //         u32 poolIndex    = w->poolIndex.load(std::memory_order_relaxed);
-        //         ThreadPool &pool = pools[poolIndex];
-        //         if (!pool.queue.SinglePop(*t)) break;
-        //     }
-        //     WaitForTask(w, &t);
-        // }
-    }
-
-    void ExecuteTask(Task *t)
-    {
-        t->func(t->id);
-        if (t->counter)
-        {
-            t->counter->count.fetch_sub(1, std::memory_order_acq_rel);
-        }
-    }
-
-    void Schedule(Counter *counter, u32 numJobs, u32 groupSize, const TaskFunction &func)
-    {
-        Worker *worker = &workers[GetThreadIndex()];
-        u32 numGroups  = (numJobs + groupSize - 1) / groupSize;
-        counter->count.fetch_add(numGroups, std::memory_order_acq_rel);
-        Task task;
-        task.counter = counter;
-        task.func    = func;
-        Assert(numGroups <= JobDeque<Task>::size);
-
-        ThreadPool &pool = pools[worker->poolIndex.load(std::memory_order_relaxed)];
-        for (u32 i = 0; i < numGroups; i++)
-        {
-            pool.queue.
-        }
-    }
-
-    // template <typename Pred>
-    // bool ExploreTask(Worker *w, Task *t, Pred predicate)
-    // {
-    //     const u32 stealBound = 2 * (numWorkers + 1);
-    //     const u32 yieldBound = 100;
-    //     u32 numFailedSteals  = 0;
-    //     u32 numYields        = 0;
-    //     const u32 id         = (u32)(w - workers);
-    //     ThreadPool &pool     = pools[w->poolIndex.load(std::memory_order_relaxed)];
-    //     Assert(pool.count == 1);
-    //     for (;;)
-    //     {
-    //         // TODO: spread out distribution
-    //         if (w->victim == id ? pools->queue.Steal(*t) : pools[w->victim].queue.Steal(*t)) return true;
-    //         if (!predicate())
-    //         {
-    //             numFailedSteals++;
-    //             if (numFailedSteals > stealBound)
-    //             {
-    //                 std::this_thread::yield();
-    //                 numYields++;
-    //                 if (numYields == yieldBound) return false;
-    //             }
-    //             // w->victim = RandomInt(0, numWorkers);
-    //             w->victim = (w->victim + 1) % numWorkers;
-    //         }
-    //         else
-    //         {
-    //             return false;
-    //         }
-    //     }
-    // }
-    //
-    // void WaitForTask(Worker *w, Task *t, Counter *counter = 0)
-    // {
-    // begin:
-    //     if (counter)
-    //     {
-    //         if (ExploreTask(w, t, [&]() { return counter->count.load(std::memory_order_relaxed) == 0; })) return true;
-    //     }
-    //     else
-    //     {
-    //         if (ExploreTask(w, t, [&]() { return false; })) return true;
-    //     }
-    //     notifier.Prewait();
-    //     if (!w->queue.Empty())
-    //     {
-    //         w->victim = (u32)(w - workers);
-    //         notifier.CancelWait();
-    //         goto begin;
-    //     }
-    //     for (u32 i = 0; i < numWorkers; i++)
-    //     {
-    //         if (!workers[i].queue.Empty())
-    //         {
-    //             w->victim = i;
-    //             notifier.CancelWait();
-    //             goto begin;
-    //         }
-    //     }
-    //     if (counter)
-    //     {
-    //         notifier.CancelWait();
-    //         if (counter->count.load(std::memory_order_relaxed) == 0)
-    //             return false;
-    //     }
-    //     else
-    //     {
-    //         notifier.CommitWait(w->waiter);
-    //     }
-    //     goto begin;
-    // }
-};
-#endif
+template <typename T, typename Func, typename ReduceFunc, typename... Args>
+T ParallelReduce(u32 start, u32 count, u32 groupSize, Func func, ReduceFunc reduce, Args... inArgs)
+{
+    ParallelForOutput<T> output = ParallelFor<T>(start, count, groupSize, func, std::forward<Args>(inArgs)...);
+    return Reduce<T>(output, reduce, std::forward<Args>(inArgs)...);
+}
 
 } // namespace rt

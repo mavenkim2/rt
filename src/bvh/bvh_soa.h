@@ -993,6 +993,9 @@ struct HeuristicAOSObjectBinning
     Lane4U32 counts[numBins];
     Bounds finalBounds[3][numBins];
     ObjectBinner<numBins> *binner;
+
+    u32 lStart;
+    u32 rStart;
     HeuristicAOSObjectBinning(ObjectBinner<numBins> *binner) : binner(binner)
     {
         for (u32 dim = 0; dim < 3; dim++)
@@ -1008,7 +1011,7 @@ struct HeuristicAOSObjectBinning
             counts[i] = 0;
         }
     }
-    void Bin(PrimRef *data, u32 start, u32 count)
+    void Bin(PrimRef *data, u32 *refs, u32 start, u32 count)
     {
         u32 alignedCount = count - count % LANE_WIDTH;
         u32 i            = start;
@@ -1018,8 +1021,8 @@ struct HeuristicAOSObjectBinning
         if (count >= LANE_WIDTH)
         {
             Lane8F32 temp[6];
-            Transpose8x6(data[i].m256, data[i + 1].m256, data[i + 2].m256, data[i + 3].m256,
-                         data[i + 4].m256, data[i + 5].m256, data[i + 6].m256, data[i + 7].m256,
+            Transpose8x6(data[refs[i]].m256, data[refs[i] + 1].m256, data[refs[i] + 2].m256, data[refs[i] + 3].m256,
+                         data[refs[i] + 4].m256, data[refs[i] + 5].m256, data[refs[i] + 6].m256, data[refs[i] + 7].m256,
                          temp[0], temp[1], temp[2], temp[3], temp[4], temp[5]);
             Lane8F32 centroids[3] = {
                 (temp[3] - temp[0]) * 0.5f,
@@ -1031,7 +1034,7 @@ struct HeuristicAOSObjectBinning
             Lane8U32::Store(prevBinIndices[2], binner->Bin(centroids[2], 2));
             for (u32 c = 0; c < LANE_WIDTH; c++)
             {
-                prevLanes[c] = data[i + c].m256;
+                prevLanes[c] = data[refs[i] + c].m256;
             }
             i += LANE_WIDTH;
         }
@@ -1039,8 +1042,8 @@ struct HeuristicAOSObjectBinning
         {
             Lane8F32 temp[6];
 
-            Transpose8x6(data[i].m256, data[i + 1].m256, data[i + 2].m256, data[i + 3].m256,
-                         data[i + 4].m256, data[i + 5].m256, data[i + 6].m256, data[i + 7].m256,
+            Transpose8x6(data[refs[i]].m256, data[refs[i] + 1].m256, data[refs[i] + 2].m256, data[refs[i] + 3].m256,
+                         data[refs[i] + 4].m256, data[refs[i] + 5].m256, data[refs[i] + 6].m256, data[refs[i] + 7].m256,
                          temp[0], temp[1], temp[2], temp[3], temp[4], temp[5]);
             Lane8F32 centroids[] = {
                 (temp[3] - temp[0]) * 0.5f,
@@ -1067,7 +1070,7 @@ struct HeuristicAOSObjectBinning
             Lane8U32::Store(prevBinIndices[2], indicesZ);
             for (u32 c = 0; c < LANE_WIDTH; c++)
             {
-                prevLanes[c] = data[i + c].m256;
+                prevLanes[c] = data[refs[i] + c].m256;
             }
         }
         if (count >= LANE_WIDTH)
@@ -1084,8 +1087,8 @@ struct HeuristicAOSObjectBinning
         }
         for (; i < start + count; i++)
         {
-            Lane4F32 low      = Extract4<0>(data[i].m256);
-            Lane4F32 hi       = Extract4<1>(data[i].m256);
+            Lane4F32 low      = Extract4<0>(data[refs[i]].m256);
+            Lane4F32 hi       = Extract4<1>(data[refs[i]].m256);
             Lane4F32 centroid = (hi - low) * 0.5f;
             u32 indices[]     = {
                 binner->Bin(centroid[0], 0),
@@ -1095,7 +1098,7 @@ struct HeuristicAOSObjectBinning
             for (u32 dim = 0; dim < 3; dim++)
             {
                 u32 bin = indices[dim];
-                bins[dim][bin].Extend(data[i].m256);
+                bins[dim][bin].Extend(data[refs[i]].m256);
                 counts[bin][dim]++;
             }
         }
@@ -1106,6 +1109,20 @@ struct HeuristicAOSObjectBinning
             {
                 finalBounds[dim][i] = Bounds(bins[dim][i]);
             }
+        }
+    }
+    void Merge(const HeuristicAOSObjectBinning &other)
+    {
+        for (u32 dim = 0; dim < 3; dim++)
+        {
+            for (u32 i = 0; i < numBins; i++)
+            {
+                finalBounds[dim][i].Extend(other.finalBounds[dim][i]);
+            }
+        }
+        for (u32 i = 0; i < numBins; i++)
+        {
+            counts[i] += other.counts[i];
         }
     }
 };

@@ -282,7 +282,7 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
 void TriangleClipTestAOS(TriangleMesh *mesh)
 {
     Arena *arena = ArenaAlloc();
-    arena->align = 32;
+    arena->align = 64;
 
     Bounds centBounds;
     Bounds geomBounds;
@@ -312,11 +312,27 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
         centBounds.Extend((maxs - mins) * 0.5f);
     }
 
+    u32 *refRefs  = PushArray(arena, u32, numFaces);
+    u32 *refRefs2 = PushArrayNoZero(arena, u32, numFaces);
+    for (u32 i = 0; i < numFaces; i++)
+    {
+        refRefs[i] = RandomInt(0, numFaces);
+    }
+
     ObjectBinner binner(centBounds);
-    HeuristicAOSObjectBinning heuristic(&binner);
-    PerformanceCounter counter = OS_StartCounter();
-    heuristic.Bin(refs, 0, numFaces);
+    using Heuristic = HeuristicAOSObjectBinning<32>;
+    // HeuristicAOSObjectBinning heuristic(&binner);
+    // heuristic.Bin(refs, 0, numFaces);
+
+    PerformanceCounter counter          = OS_StartCounter();
+    ParallelForOutput<Heuristic> output = ParallelFor<Heuristic>(
+        0, numFaces, PARALLEL_THRESHOLD,
+        [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(refs, refRefs, start, count); },
+        &binner);
+    Heuristic heuristic = Reduce(
+        output, [&](Heuristic &l, const Heuristic &r) { l.Merge(r); }, &binner);
     f32 time = OS_GetMilliseconds(counter);
+
     printf("bin time: %fms\n", time);
 
     Split split = BinBest(heuristic.finalBounds, heuristic.counts, &binner);
@@ -324,11 +340,42 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     printf("Split dim: %u\n", split.bestDim);
     printf("Split SAH: %f\n", split.bestSAH);
 
+    u32 *lOffsets = PushArrayNoZero(arena, u32, output.num);
+    u32 *rOffsets = PushArrayNoZero(arena, u32, output.num);
+    u32 lOffset   = 0;
+    u32 rOffset   = numFaces;
+    for (u32 i = 0; i < output.num; i++)
+    {
+        Heuristic *h = &output.out[i];
+        lOffsets[i]  = lOffset;
+        for (u32 bin = 0; bin < split.bestPos; bin++)
+        {
+            lOffset += h->counts[bin][split.bestDim];
+        }
+        for (u32 bin = split.bestDim; bin < 32; bin++)
+        {
+            rOffset -= h->counts[bin][split.bestDim];
+        }
+        rOffsets[i] = rOffset;
+    }
+    Assert(lOffset == rOffset);
+
+    PartitionPayload payload(lOffsets, rOffsets, output.num, output.groupSize);
+
     counter = OS_StartCounter();
     ExtRange range(0, numFaces, numFaces);
-    u32 mid = Partition(split, range, refs);
-    time    = OS_GetMilliseconds(counter);
+    // u32 mid = PartitionParallel(split, range, refs);
+    // u32 mid = Partition(split, 0, numFaces, refs);
+    // u32 mid = Partition2(split, 0, numFaces, refs, refRefs, refRefs2);
+    PartitionParallel(payload, split, range, refs, refRefs, refRefs2);
+
+    time = OS_GetMilliseconds(counter);
     printf("Time elapsed partition: %fms\n", time);
+
+    for (u32 i = 0; i < OS_NumProcessors(); i++)
+    {
+        printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
+    }
 }
 
 void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)

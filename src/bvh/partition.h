@@ -654,32 +654,32 @@ u32 PartitionSerialScalar(PrimDataSOA *data, u32 dim, f32 bestValue, i32 l, i32 
     return l;
 }
 
-u32 Partition(Split split, ExtRange range, PrimRef *data)
+u32 Partition(Split split, i32 l, i32 r, PrimRef *data)
 {
-    // TODO
-    u32 l = 0;
-    u32 r = range.count - 1;
+    // u32 l   = 0;
+    // u32 r   = range.count - 1;
+    u32 dim = split.bestDim;
     for (;;)
     {
         while (l <= r)
         {
-            PrimRef *lRef     = &data[l];
-            Lane4F32 min      = Extract4<0>(lRef->m256);
-            Lane4F32 max      = Extract4<1>(lRef->m256);
-            Lane4F32 centroid = (max - min) * 0.5f;
-            bool isRight      = (centroid[split.bestDim] >= split.bestValue);
+            PrimRef *lRef = &data[l];
+            f32 max       = lRef->max[dim];
+            f32 min       = lRef->min[dim];
+            f32 centroid  = (max - min) * 0.5f;
+            bool isRight  = (centroid >= split.bestValue);
             if (isRight) break;
             l++;
         }
         while (l <= r)
         {
             Assert(r >= 0);
-            PrimRef *rRef     = &data[r];
-            Lane4F32 min      = Extract4<0>(rRef->m256);
-            Lane4F32 max      = Extract4<1>(rRef->m256);
-            Lane4F32 centroid = (max - min) * 0.5f;
+            PrimRef *rRef = &data[r];
+            f32 min       = rRef->min[dim];
+            f32 max       = rRef->max[dim];
+            f32 centroid  = (max - min) * 0.5f;
 
-            bool isLeft = (centroid[split.bestDim] < split.bestValue);
+            bool isLeft = (centroid < split.bestValue);
             if (isLeft) break;
             r--;
         }
@@ -690,6 +690,69 @@ u32 Partition(Split split, ExtRange range, PrimRef *data)
         r--;
     }
     return l;
+}
+
+// ways of doing this:
+// double buffer (better for multithread?)
+// in place (better for single thread)
+u32 Partition2(Split split, u32 l, u32 r, u32 outLStart, u32 outRStart, PrimRef *data, u32 *inRefs, u32 *outRefs)
+{
+    u32 dim          = split.bestDim;
+    u32 writeLocs[2] = {outLStart, outRStart};
+
+    const u32 fetchAmt = 64;
+    u32 currentCount   = fetchAmt;
+    for (u32 i = l; i < r; i++)
+    {
+        u32 ref                     = inRefs[i];
+        PrimRef *primRef            = &data[ref];
+        f32 min                     = primRef->min[dim];
+        f32 max                     = primRef->max[dim];
+        f32 centroid                = (max - min) * 0.5f;
+        bool isRight                = centroid >= split.bestValue;
+        outRefs[writeLocs[isRight]] = ref;
+        writeLocs[isRight]++;
+    }
+    return 0;
+}
+
+struct PartitionPayload
+{
+    u32 *lOffsets;
+    u32 *rOffsets;
+    u32 count;
+    u32 groupSize;
+    PartitionPayload() {}
+    PartitionPayload(u32 *lOffsets, u32 *rOffsets, u32 count, u32 groupSize)
+        : lOffsets(lOffsets), rOffsets(rOffsets), count(count), groupSize(groupSize) {}
+};
+
+u32 PartitionParallel(PartitionPayload &payload, Split split, ExtRange range, PrimRef *data, u32 *inRefs, u32 *outRefs)
+{
+    if (range.count < 16 * 1024) // PARTITION_PARALLEL_THRESHOLD)
+    {
+        return Partition(split, range.start, range.End(), data);
+    }
+
+    const u32 numJobs = OS_NumProcessors();
+
+    TempArena temp = ScratchStart(0, 0);
+
+    u32 groupSize = payload.groupSize;
+    u32 end       = range.End();
+
+    scheduler.ScheduleAndWait(numJobs, 1, [&](u32 jobID) {
+        PerformanceCounter counter = OS_StartCounter();
+
+        u32 start = range.start + groupSize * jobID;
+        u32 end   = Min(start + groupSize, range.End());
+
+        Partition2(split, start, end, payload.lOffsets[jobID], payload.rOffsets[jobID], data, inRefs, outRefs);
+        threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(counter);
+    });
+
+    return 0;
+    // return out;
 }
 
 template <bool centroidPartition = false>
