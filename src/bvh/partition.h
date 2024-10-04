@@ -723,25 +723,31 @@ u32 Partition3(Split split, u32 l, u32 r, u32 outLStart, u32 outRStart, PrimRef 
     u32 writeLocs[2]  = {outLStart, outRStart};
     Lane8F32 masks[2] = {Lane8F32::Mask(false), Lane8F32::Mask(true)};
 
-    Lane8U32 shuf(split.bestDim);
-    u32 prevMask = 0;
-    u32 i        = l;
-    alignas(32) f32 mins[LANE_WIDTH];
-    alignas(32) f32 maxs[LANE_WIDTH];
     Lane8F32 left(neg_inf);
     Lane8F32 right(neg_inf);
+
+    Lane8F32 lanes[6];
+
+    Bounds8F32 centLeft;
+    Bounds8F32 centRight;
+
+    u32 v = LUTAxis[dim];
+    u32 w = LUTAxis[v];
+
+    u32 i = l;
     for (; i < r - (LANE_WIDTH - 1); i += LANE_WIDTH)
     {
-        for (u32 b = 0; b < LANE_WIDTH; b++)
-        {
-            mins[b] = data[inRefs[i + b]].min[dim];
-            maxs[b] = data[inRefs[i + b]].max[dim];
-        }
-        Lane8F32 min      = Lane8F32::Load(mins);
-        Lane8F32 max      = Lane8F32::Load(maxs);
-        Lane8F32 centroid = (max - min) * 0.5f;
-        Lane8F32 maskR    = (centroid >= split.bestValue);
-        prevMask          = Movemask(maskR);
+        Transpose8x6(data[inRefs[i]].m256, data[inRefs[i + 1]].m256, data[inRefs[i + 2]].m256, data[inRefs[i + 3]].m256,
+                     data[inRefs[i + 4]].m256, data[inRefs[i + 5]].m256, data[inRefs[i + 6]].m256, data[inRefs[i + 7]].m256,
+                     lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5]);
+
+        Lane8F32 centroid  = (lanes[dim + 3] - lanes[dim]) * 0.5f;
+        Lane8F32 centroidV = (lanes[v + 3] - lanes[v]) * 0.5f;
+        Lane8F32 centroidW = (lanes[w + 3] - lanes[w]) * 0.5f;
+
+        Lane8F32 maskR = (centroid >= split.bestValue);
+        Lane8F32 maskL = (centroid < split.bestValue);
+        u32 prevMask   = Movemask(maskR);
         for (u32 b = 0; b < LANE_WIDTH; b++)
         {
             u32 select                   = (prevMask >> i) & 1;
@@ -749,6 +755,8 @@ u32 Partition3(Split split, u32 l, u32 r, u32 outLStart, u32 outRStart, PrimRef 
             left                         = MaskMax(masks[!select], left, data[inRefs[i + b]].m256);
             right                        = MaskMax(masks[select], right, data[inRefs[i + b]].m256);
         }
+        centLeft.MaskExtendNegMin(maskL, centroid, centroidV, centroidW);
+        centRight.MaskExtendNegMin(maskR, centroid, centroidV, centroidW);
     }
     for (; i < r; i++)
     {

@@ -184,7 +184,7 @@ struct ExtRange
     __forceinline u32 TotalSize() const { return extEnd - start; }
 };
 
-struct ScalarBounds 
+struct ScalarBounds
 {
     f32 minX;
     f32 minY;
@@ -206,7 +206,7 @@ struct ScalarBounds
         Lane4F32::StoreU(&minX, b.minP);
         Lane4F32::StoreU(&maxX, b.maxP);
     }
-    f32 HalfArea() const 
+    f32 HalfArea() const
     {
         f32 diffX = maxX - minX;
         f32 diffY = maxY - minY;
@@ -219,7 +219,6 @@ f32 HalfArea(const ScalarBounds &b)
 {
     return b.HalfArea();
 }
-
 
 struct RecordSOASplits
 {
@@ -288,6 +287,16 @@ struct Bounds8F32
         maxU = Max(maxU, x);
         maxV = Max(maxV, y);
         maxW = Max(maxW, z);
+    }
+    __forceinline void MaskExtendNegMin(const Lane8F32 &mask, const Lane8F32 &x, const Lane8F32 &y, const Lane8F32 &z)
+    {
+        minU = MaskMax(mask, minU, x);
+        minV = MaskMax(mask, minV, y);
+        minW = MaskMax(mask, minW, z);
+
+        maxU = MaskMax(mask, maxU, x);
+        maxV = MaskMax(mask, maxV, y);
+        maxW = MaskMax(mask, maxW, z);
     }
     __forceinline void ExtendNegativeMin(const Lane8F32 &minX, const Lane8F32 &minY, const Lane8F32 &minZ,
                                          const Lane8F32 &maxX, const Lane8F32 &maxY, const Lane8F32 &maxZ)
