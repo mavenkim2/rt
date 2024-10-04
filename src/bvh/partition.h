@@ -654,6 +654,44 @@ u32 PartitionSerialScalar(PrimDataSOA *data, u32 dim, f32 bestValue, i32 l, i32 
     return l;
 }
 
+u32 Partition(Split split, ExtRange range, PrimRef *data)
+{
+    // TODO
+    u32 l = 0;
+    u32 r = range.count - 1;
+    for (;;)
+    {
+        while (l <= r)
+        {
+            PrimRef *lRef     = &data[l];
+            Lane4F32 min      = Extract4<0>(lRef->m256);
+            Lane4F32 max      = Extract4<1>(lRef->m256);
+            Lane4F32 centroid = (max - min) * 0.5f;
+            bool isRight      = (centroid[split.bestDim] >= split.bestValue);
+            if (isRight) break;
+            l++;
+        }
+        while (l <= r)
+        {
+            Assert(r >= 0);
+            PrimRef *rRef     = &data[r];
+            Lane4F32 min      = Extract4<0>(rRef->m256);
+            Lane4F32 max      = Extract4<1>(rRef->m256);
+            Lane4F32 centroid = (max - min) * 0.5f;
+
+            bool isLeft = (centroid[split.bestDim] < split.bestValue);
+            if (isLeft) break;
+            r--;
+        }
+        if (l > r) break;
+
+        Swap(data[l], data[r]);
+        l++;
+        r--;
+    }
+    return l;
+}
+
 template <bool centroidPartition = false>
 u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
 {
@@ -744,8 +782,8 @@ u32 PartitionParallel(Split split, ExtRange range, PrimDataSOA *data)
     // Parallelize the unaligned begin and end
 
     // u32 lCount = 0;
-    i32 l      = range.start;
-    i32 r      = range.End() - 1;
+    i32 l = range.start;
+    i32 r = range.End() - 1;
     Assert((maxStream[out] - minStream[out]) * 0.5f >= split.bestValue);
     for (;;)
     {

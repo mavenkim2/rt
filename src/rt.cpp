@@ -1056,8 +1056,8 @@ int main(int argc, char *argv[])
     // TriangleClipTestSOA(0, count);
     // TriangleClipBinTestDefault(0, count);
 
-    // TriangleClipTestAOS(&mesh);
-    TriangleClipTestSOA(&mesh);
+    TriangleClipTestAOS(&mesh);
+    // TriangleClipTestSOA(&mesh);
     // TriangleClipBinTestDefault(&mesh);
     // SOASBVHBuilderTest(&mesh);
 

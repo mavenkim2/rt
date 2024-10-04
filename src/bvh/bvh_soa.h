@@ -1013,34 +1013,39 @@ struct HeuristicAOSObjectBinning
         u32 alignedCount = count - count % LANE_WIDTH;
         u32 i            = start;
 
-        Lane8F32 prevLanes[6];
+        Lane8F32 prevLanes[8];
         alignas(32) u32 prevBinIndices[3][8];
         if (count >= LANE_WIDTH)
         {
+            Lane8F32 temp[6];
             Transpose8x6(data[i].m256, data[i + 1].m256, data[i + 2].m256, data[i + 3].m256,
                          data[i + 4].m256, data[i + 5].m256, data[i + 6].m256, data[i + 7].m256,
-                         prevLanes[0], prevLanes[1], prevLanes[2], prevLanes[3], prevLanes[4], prevLanes[5]);
+                         temp[0], temp[1], temp[2], temp[3], temp[4], temp[5]);
             Lane8F32 centroids[3] = {
-                (prevLanes[3] - prevLanes[0]) * 0.5f,
-                (prevLanes[4] - prevLanes[1]) * 0.5f,
-                (prevLanes[5] - prevLanes[2]) * 0.5f,
+                (temp[3] - temp[0]) * 0.5f,
+                (temp[4] - temp[1]) * 0.5f,
+                (temp[5] - temp[2]) * 0.5f,
             };
             Lane8U32::Store(prevBinIndices[0], binner->Bin(centroids[0], 0));
             Lane8U32::Store(prevBinIndices[1], binner->Bin(centroids[1], 1));
             Lane8U32::Store(prevBinIndices[2], binner->Bin(centroids[2], 2));
+            for (u32 c = 0; c < LANE_WIDTH; c++)
+            {
+                prevLanes[c] = data[i + c].m256;
+            }
             i += LANE_WIDTH;
         }
         for (; i < start + alignedCount; i += LANE_WIDTH)
         {
-            Lane8F32 lanes[6];
+            Lane8F32 temp[6];
 
             Transpose8x6(data[i].m256, data[i + 1].m256, data[i + 2].m256, data[i + 3].m256,
                          data[i + 4].m256, data[i + 5].m256, data[i + 6].m256, data[i + 7].m256,
-                         lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5]);
+                         temp[0], temp[1], temp[2], temp[3], temp[4], temp[5]);
             Lane8F32 centroids[] = {
-                (lanes[3] - lanes[0]) * 0.5f,
-                (lanes[4] - lanes[1]) * 0.5f,
-                (lanes[5] - lanes[2]) * 0.5f,
+                (temp[3] - temp[0]) * 0.5f,
+                (temp[4] - temp[1]) * 0.5f,
+                (temp[5] - temp[2]) * 0.5f,
             };
 
             Lane8U32 indicesX = binner->Bin(centroids[0], 0);
@@ -1060,23 +1065,27 @@ struct HeuristicAOSObjectBinning
             Lane8U32::Store(prevBinIndices[0], indicesX);
             Lane8U32::Store(prevBinIndices[1], indicesY);
             Lane8U32::Store(prevBinIndices[2], indicesZ);
-            prevLanes[0] = lanes[0];
-            prevLanes[1] = lanes[1];
-            prevLanes[2] = lanes[2];
-        }
-        for (u32 dim = 0; dim < 3; dim++)
-        {
-            for (u32 b = 0; b < LANE_WIDTH; b++)
+            for (u32 c = 0; c < LANE_WIDTH; c++)
             {
-                u32 bin = prevBinIndices[dim][b];
-                bins[dim][bin].Extend(prevLanes[b]);
-                counts[bin][dim]++;
+                prevLanes[c] = data[i + c].m256;
+            }
+        }
+        if (count >= LANE_WIDTH)
+        {
+            for (u32 dim = 0; dim < 3; dim++)
+            {
+                for (u32 b = 0; b < LANE_WIDTH; b++)
+                {
+                    u32 bin = prevBinIndices[dim][b];
+                    bins[dim][bin].Extend(prevLanes[b]);
+                    counts[bin][dim]++;
+                }
             }
         }
         for (; i < start + count; i++)
         {
-            Lane4F32 low      = Extract<0>(data[i].m256);
-            Lane4F32 hi       = Extract<1>(data[i].m256);
+            Lane4F32 low      = Extract4<0>(data[i].m256);
+            Lane4F32 hi       = Extract4<1>(data[i].m256);
             Lane4F32 centroid = (hi - low) * 0.5f;
             u32 indices[]     = {
                 binner->Bin(centroid[0], 0),
