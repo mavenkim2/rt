@@ -512,17 +512,16 @@ THREAD_ENTRY_POINT(WorkerLoop)
     }
 }
 
-template <typename T>
 struct ParallelForOutput
 {
     TempArena temp;
-    T *out;
+    void *out;
     u32 num;
     u32 groupSize;
 };
 
 template <typename T, typename Func, typename... Args>
-ParallelForOutput<T> ParallelFor(u32 start, u32 count, u32 groupSize, Func func, Args... inArgs)
+ParallelForOutput ParallelFor(u32 start, u32 count, u32 groupSize, Func func, Args... inArgs)
 {
     TempArena temp    = ScratchStart(0, 0);
     temp.arena->align = 32;
@@ -547,9 +546,9 @@ ParallelForOutput<T> ParallelFor(u32 start, u32 count, u32 groupSize, Func func,
         func(val, threadStart, size);
     });
 
-    ParallelForOutput<T> out;
+    ParallelForOutput out;
     out.temp      = temp;
-    out.out       = values;
+    out.out       = (void *)values;
     out.num       = taskCount;
     out.groupSize = stepSize;
 
@@ -557,22 +556,28 @@ ParallelForOutput<T> ParallelFor(u32 start, u32 count, u32 groupSize, Func func,
 }
 
 template <typename T, typename ReduceFunc, typename... Args>
-T Reduce(ParallelForOutput<T> output, ReduceFunc reduce, Args... inArgs)
+void Reduce(T &out, ParallelForOutput output, ReduceFunc reduce, Args... inArgs)
 {
-    T out = T(std::forward<Args>(inArgs)...);
+    out = T(std::forward<Args>(inArgs)...);
     for (u32 i = 0; i < output.num; i++)
     {
-        reduce(out, output.out[i]);
+        reduce(out, ((T *)output.out)[i]);
     }
+}
+
+void EndReduce(ParallelForOutput &output)
+{
     ScratchEnd(output.temp);
-    return out;
 }
 
 template <typename T, typename Func, typename ReduceFunc, typename... Args>
 T ParallelReduce(u32 start, u32 count, u32 groupSize, Func func, ReduceFunc reduce, Args... inArgs)
 {
-    ParallelForOutput<T> output = ParallelFor<T>(start, count, groupSize, func, std::forward<Args>(inArgs)...);
-    return Reduce<T>(output, reduce, std::forward<Args>(inArgs)...);
+    ParallelForOutput output = ParallelFor<T>(start, count, groupSize, func, std::forward<Args>(inArgs)...);
+    T out;
+    Reduce<T>(out, output, reduce, std::forward<Args>(inArgs)...);
+    EndReduce(output);
+    return out;
 }
 
 } // namespace rt

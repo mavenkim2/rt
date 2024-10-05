@@ -319,11 +319,27 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
         refRefs[i] = RandomInt(0, numFaces);
     }
 
+    SplitBinner<16> binner(geomBounds);
+    using Heuristic            = HeuristicAOSSplitBinning<16>;
+    PerformanceCounter counter = OS_StartCounter();
+    // Heuristic heuristic(&binner);
+    // heuristic.Bin(mesh, refs, refRefs, 0, numFaces);
+    Heuristic heuristic = ParallelReduce<Heuristic>(
+        0, numFaces, PARALLEL_THRESHOLD,
+        [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(mesh, refs, refRefs, start, count); },
+        [&](Heuristic &l, const Heuristic &r) { l.Merge(r); },
+        &binner);
+
+    f32 time = OS_GetMilliseconds(counter);
+    printf("bin time: %fms\n", time);
+
+#if 0
     ObjectBinner binner(centBounds);
     using Heuristic = HeuristicAOSObjectBinning<32>;
+    printf("size: %llu\n", sizeof(Heuristic));
+
     // HeuristicAOSObjectBinning heuristic(&binner);
     // heuristic.Bin(refs, 0, numFaces);
-
     PerformanceCounter counter          = OS_StartCounter();
     ParallelForOutput<Heuristic> output = ParallelFor<Heuristic>(
         0, numFaces, PARALLEL_THRESHOLD,
@@ -372,6 +388,7 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     time = OS_GetMilliseconds(counter);
     printf("Time elapsed partition: %fms\n", time);
 
+#endif
     for (u32 i = 0; i < OS_NumProcessors(); i++)
     {
         printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
@@ -475,52 +492,52 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
 #endif
 }
 
-void SOASBVHBuilderTest(TriangleMesh *mesh)
-{
-    Arena *arena = ArenaAlloc();
-    arena->align = 64;
-
-    const u32 numFaces = mesh->numIndices / 3;
-    Bounds geomBounds;
-    Bounds centBounds;
-    PrimDataSOA soa = GenerateSOAData(arena, mesh, numFaces, geomBounds, centBounds);
-
-    BuildSettings settings;
-    settings.intCost = 0.3f;
-
-    RecordSOASplits record;
-    record.geomBounds.FromBounds(geomBounds);
-    record.centBounds.FromBounds(centBounds);
-    record.range      = ExtRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
-    u32 numProcessors = OS_NumProcessors();
-    Arena **arenas    = PushArray(arena, Arena *, numProcessors);
-    for (u32 i = 0; i < numProcessors; i++)
-    {
-        arenas[i] = ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
-    }
-
-    PerformanceCounter counter = OS_StartCounter();
-    BVH4Quantized bvh          = BuildQuantizedSBVH<4>(settings, arenas, mesh, &soa, record);
-    f32 time                   = OS_GetMilliseconds(counter);
-    printf("num faces: %u\n", numFaces);
-    printf("Build time: %fms\n", time);
-
-    f64 totalMiscTime     = 0;
-    u64 numNodes          = 0;
-    u64 totalNodeMemory   = 0;
-    u64 totalRecordMemory = 0;
-    for (u32 i = 0; i < numProcessors; i++)
-    {
-        totalMiscTime += threadLocalStatistics[i].miscF;
-        totalNodeMemory += threadMemoryStatistics[i].totalNodeMemory;
-        totalRecordMemory += threadMemoryStatistics[i].totalRecordMemory;
-        printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
-        numNodes += threadLocalStatistics[i].misc;
-    }
-    printf("total time: %fms \n", totalMiscTime);
-    printf("num nodes: %llu\n", numNodes);               // num nodes: %llu\n", numNodes);
-    printf("node kb: %llu\n", totalNodeMemory / 1000);   // num nodes: %llu\n", numNodes);
-    printf("record kb: %llu", totalRecordMemory / 1000); // num nodes: %llu\n", numNodes);
-}
+// void SOASBVHBuilderTest(TriangleMesh *mesh)
+// {
+//     Arena *arena = ArenaAlloc();
+//     arena->align = 64;
+//
+//     const u32 numFaces = mesh->numIndices / 3;
+//     Bounds geomBounds;
+//     Bounds centBounds;
+//     PrimDataSOA soa = GenerateSOAData(arena, mesh, numFaces, geomBounds, centBounds);
+//
+//     BuildSettings settings;
+//     settings.intCost = 0.3f;
+//
+//     RecordSOASplits record;
+//     record.geomBounds.FromBounds(geomBounds);
+//     record.centBounds.FromBounds(centBounds);
+//     record.range      = ExtRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
+//     u32 numProcessors = OS_NumProcessors();
+//     Arena **arenas    = PushArray(arena, Arena *, numProcessors);
+//     for (u32 i = 0; i < numProcessors; i++)
+//     {
+//         arenas[i] = ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
+//     }
+//
+//     PerformanceCounter counter = OS_StartCounter();
+//     BVH4Quantized bvh          = BuildQuantizedSBVH<4>(settings, arenas, mesh, &soa, record);
+//     f32 time                   = OS_GetMilliseconds(counter);
+//     printf("num faces: %u\n", numFaces);
+//     printf("Build time: %fms\n", time);
+//
+//     f64 totalMiscTime     = 0;
+//     u64 numNodes          = 0;
+//     u64 totalNodeMemory   = 0;
+//     u64 totalRecordMemory = 0;
+//     for (u32 i = 0; i < numProcessors; i++)
+//     {
+//         totalMiscTime += threadLocalStatistics[i].miscF;
+//         totalNodeMemory += threadMemoryStatistics[i].totalNodeMemory;
+//         totalRecordMemory += threadMemoryStatistics[i].totalRecordMemory;
+//         printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
+//         numNodes += threadLocalStatistics[i].misc;
+//     }
+//     printf("total time: %fms \n", totalMiscTime);
+//     printf("num nodes: %llu\n", numNodes);               // num nodes: %llu\n", numNodes);
+//     printf("node kb: %llu\n", totalNodeMemory / 1000);   // num nodes: %llu\n", numNodes);
+//     printf("record kb: %llu", totalRecordMemory / 1000); // num nodes: %llu\n", numNodes);
+// }
 
 } // namespace rt

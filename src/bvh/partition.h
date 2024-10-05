@@ -751,7 +751,7 @@ u32 Partition3(Split split, u32 l, u32 r, u32 outLStart, u32 outRStart, PrimRef 
         for (u32 b = 0; b < LANE_WIDTH; b++)
         {
             u32 select                   = (prevMask >> i) & 1;
-            outRefs[writeLocs[select++]] = inRefs[i + b];
+            outRefs[writeLocs[select]++] = inRefs[i + b];
             left                         = MaskMax(masks[!select], left, data[inRefs[i + b]].m256);
             right                        = MaskMax(masks[select], right, data[inRefs[i + b]].m256);
         }
@@ -780,17 +780,6 @@ u32 Partition3(Split split, u32 l, u32 r, u32 outLStart, u32 outRStart, PrimRef 
     outRight = right;
     return 0;
 }
-
-struct PartitionPayload
-{
-    u32 *lOffsets;
-    u32 *rOffsets;
-    u32 count;
-    u32 groupSize;
-    PartitionPayload() {}
-    PartitionPayload(u32 *lOffsets, u32 *rOffsets, u32 count, u32 groupSize)
-        : lOffsets(lOffsets), rOffsets(rOffsets), count(count), groupSize(groupSize) {}
-};
 
 u32 PartitionParallel(PartitionPayload &payload, Split split, ExtRange range, PrimRef *data, u32 *inRefs, u32 *outRefs)
 {

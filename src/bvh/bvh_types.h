@@ -19,6 +19,29 @@ struct BuildSettings
     bool twoLevel   = true;
 };
 
+struct PartitionPayload
+{
+    u32 *lOffsets;
+    u32 *rOffsets;
+    u32 count;
+    u32 groupSize;
+    PartitionPayload() {}
+    PartitionPayload(u32 *lOffsets, u32 *rOffsets, u32 count, u32 groupSize)
+        : lOffsets(lOffsets), rOffsets(rOffsets), count(count), groupSize(groupSize) {}
+};
+
+struct SplitPayload
+{
+    u32 *splitOffsets;
+    u32 *refOffsets;
+    u32 count;
+    u32 groupSize;
+
+    SplitPayload() {}
+    SplitPayload(u32 *splitOffsets, u32 *refOffsets, u32 count, u32 groupSize)
+        : splitOffsets(splitOffsets), refOffsets(refOffsets), count(count), groupSize(groupSize) {}
+};
+
 struct Split
 {
     enum Type
@@ -34,11 +57,15 @@ struct Split
 
     // TODO: this is maybe a bit jank
     void *ptr;
+    PartitionPayload partitionPayload;
+    SplitPayload splitPayload;
+
     u64 allocPos;
 
     Split() {}
     Split(f32 sah, u32 pos, u32 dim, f32 val) : bestSAH(sah), bestPos(pos), bestDim(dim), bestValue(val) {}
 };
+
 struct PrimData
 {
     union
@@ -220,6 +247,7 @@ f32 HalfArea(const ScalarBounds &b)
     return b.HalfArea();
 }
 
+// TODO: these structs shouldn't exist
 struct RecordSOASplits
 {
     using PrimitiveData = PrimDataSOA;
@@ -229,6 +257,66 @@ struct RecordSOASplits
     ScalarBounds centBounds;
     ExtRange range;
 };
+
+struct RecordAOSSplits
+{
+    using PrimitiveData = PrimRef;
+    ScalarBounds geomBounds;
+    ScalarBounds centBounds;
+    ExtRange range;
+};
+
+struct Bounds8
+{
+    Lane8F32 v;
+
+    Bounds8() : v(neg_inf) {}
+    Bounds8(EmptyTy) : v(neg_inf) {}
+    Bounds8(PosInfTy) : v(pos_inf) {}
+    __forceinline Bounds8(Lane8F32 in)
+    {
+        v = in ^ signFlipMask;
+    }
+
+    __forceinline operator const __m256 &() const { return v; }
+    __forceinline operator __m256 &() { return v; }
+
+    __forceinline explicit operator Bounds() const
+    {
+        Bounds out;
+        out.minP = FlipSign(Extract4<0>(v));
+        out.maxP = Extract4<1>(v);
+        return out;
+    }
+
+    __forceinline void Extend(const Lane8F32 &other)
+    {
+        v = Max(v, other.v);
+    }
+    __forceinline void Extend(const Bounds8 &other)
+    {
+        v = Max(v, other.v);
+    }
+    __forceinline void Intersect(const Bounds8 &other)
+    {
+        v = Min(v, other.v);
+    }
+};
+
+__forceinline Bounds8 Intersect(const Bounds8 &l, const Bounds8 &r)
+{
+    Bounds8 out;
+    out.v = Min(l.v, r.v);
+    return out;
+}
+
+__forceinline f32 HalfArea(const Bounds8 &b)
+{
+    Lane4F32 mins   = Extract4<0>(b.v);
+    Lane4F32 maxs   = Extract4<1>(b.v);
+    Lane4F32 extent = (maxs + mins);
+    return FMA(extent[0], extent[1] + extent[2], extent[1] * extent[2]);
+}
 
 struct Bounds8F32
 {

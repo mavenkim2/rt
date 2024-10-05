@@ -25,6 +25,7 @@
 #include "bvh/partition.h"
 #include "bvh/bvh_sah.h"
 #include "bvh/bvh_soa.h"
+#include "bvh/bvh_aos.h"
 #include "bvh/bvh_build.h"
 #include <algorithm>
 

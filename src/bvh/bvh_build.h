@@ -788,11 +788,13 @@ template <i32 N>
 BVHQuantized<N> BuildQuantizedSBVH(BuildSettings settings,
                                    Arena **inArenas,
                                    TriangleMesh *mesh,
-                                   PrimDataSOA *soa,
+                                   PrimRef *data,
+                                   u32 *ref0,
+                                   u32 *ref1,
                                    RecordSOASplits &record)
 {
     SBVHBuilderTriangleMesh<N> builder;
-    HeuristicSpatialSplits heuristic(soa, mesh, HalfArea(record.geomBounds.ToBounds()));
+    HeuristicSpatialSplits heuristic(soa, mesh, ref0, ref1, HalfArea(record.geomBounds.ToBounds()));
     builder.heuristic = heuristic;
     return builder.BuildBVH(settings, inArenas, mesh, record);
 }
