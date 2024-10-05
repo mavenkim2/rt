@@ -319,39 +319,40 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
         refRefs[i] = RandomInt(0, numFaces);
     }
 
-    SplitBinner<16> binner(geomBounds);
-    using Heuristic            = HeuristicAOSSplitBinning<16>;
-    PerformanceCounter counter = OS_StartCounter();
-    // Heuristic heuristic(&binner);
-    // heuristic.Bin(mesh, refs, refRefs, 0, numFaces);
-    Heuristic heuristic = ParallelReduce<Heuristic>(
-        0, numFaces, PARALLEL_THRESHOLD,
-        [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(mesh, refs, refRefs, start, count); },
-        [&](Heuristic &l, const Heuristic &r) { l.Merge(r); },
-        &binner);
+    // SplitBinner<16> binner(geomBounds);
+    // using Heuristic            = HeuristicAOSSplitBinning<16>;
+    // PerformanceCounter counter = OS_StartCounter();
+    // // Heuristic heuristic(&binner);
+    // // heuristic.Bin(mesh, refs, refRefs, 0, numFaces);
+    // Heuristic heuristic = ParallelReduce<Heuristic>(
+    //     0, numFaces, PARALLEL_THRESHOLD,
+    //     [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(mesh, refs, refRefs, start, count); },
+    //     [&](Heuristic &l, const Heuristic &r) { l.Merge(r); },
+    //     &binner);
+    //
+    // f32 time = OS_GetMilliseconds(counter);
+    // printf("bin time: %fms\n", time);
 
-    f32 time = OS_GetMilliseconds(counter);
-    printf("bin time: %fms\n", time);
-
-#if 0
+#if 1
     ObjectBinner binner(centBounds);
     using Heuristic = HeuristicAOSObjectBinning<32>;
     printf("size: %llu\n", sizeof(Heuristic));
 
     // HeuristicAOSObjectBinning heuristic(&binner);
     // heuristic.Bin(refs, 0, numFaces);
-    PerformanceCounter counter          = OS_StartCounter();
-    ParallelForOutput<Heuristic> output = ParallelFor<Heuristic>(
+    PerformanceCounter counter = OS_StartCounter();
+    ParallelForOutput output   = ParallelFor<Heuristic>(
         0, numFaces, PARALLEL_THRESHOLD,
         [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(refs, refRefs, start, count); },
         &binner);
-    Heuristic heuristic = Reduce(
-        output, [&](Heuristic &l, const Heuristic &r) { l.Merge(r); }, &binner);
+    Heuristic heuristic;
+    Reduce(
+        heuristic, output, [&](Heuristic &l, const Heuristic &r) { l.Merge(r); }, &binner);
     f32 time = OS_GetMilliseconds(counter);
 
     printf("bin time: %fms\n", time);
 
-    Split split = BinBest(heuristic.finalBounds, heuristic.counts, &binner);
+    Split split = BinBest(heuristic.bins, heuristic.counts, &binner);
     printf("Split pos: %u\n", split.bestPos);
     printf("Split dim: %u\n", split.bestDim);
     printf("Split SAH: %f\n", split.bestSAH);
@@ -362,15 +363,15 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     u32 rOffset   = numFaces;
     for (u32 i = 0; i < output.num; i++)
     {
-        Heuristic *h = &output.out[i];
+        Heuristic &h = ((Heuristic *)output.out)[i];
         lOffsets[i]  = lOffset;
         for (u32 bin = 0; bin < split.bestPos; bin++)
         {
-            lOffset += h->counts[bin][split.bestDim];
+            lOffset += h.counts[bin][split.bestDim];
         }
         for (u32 bin = split.bestDim; bin < 32; bin++)
         {
-            rOffset -= h->counts[bin][split.bestDim];
+            rOffset -= h.counts[bin][split.bestDim];
         }
         rOffsets[i] = rOffset;
     }

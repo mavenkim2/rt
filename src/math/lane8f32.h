@@ -193,6 +193,7 @@ __forceinline Lane8F32 FlipSign(const Lane8F32 &a)
     static const __m256 signFlipMask = _mm256_setr_ps(-0.f, -0.f, -0.f, -0.f, -0.f, -0.f, -0.f, -0.f);
     return _mm256_xor_ps(a, signFlipMask);
 }
+__forceinline Lane8F32 operator-(const Lane8F32 &l) { return FlipSign(l); }
 
 __forceinline Lane8F32 operator^(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_xor_ps(a, b); }
 __forceinline Lane8F32 &operator^=(Lane8F32 &a, const Lane8F32 &b)
@@ -363,20 +364,28 @@ __forceinline f32 Extract<0>(const Lane8F32 &a)
 // #endif
 // }
 
-__forceinline f32 ReduceMin(const Lane8F32 &l)
+__forceinline Lane8F32 ReduceMinV(const Lane8F32 &l)
 {
     Lane8F32 a = Min(l, Permute<1, 0, 3, 2>(l));
     Lane8F32 b = Min(a, Permute<2, 3, 0, 1>(a));
-    Lane8F32 c = Min(b, Shuffle4<1, 0>(b));
-    return _mm_cvtss_f32(_mm256_castps256_ps128(c));
+    return Min(b, Shuffle4<1, 0>(b));
+}
+
+__forceinline f32 ReduceMin(const Lane8F32 &l)
+{
+    return _mm_cvtss_f32(_mm256_castps256_ps128(ReduceMinV(l)));
+}
+
+__forceinline Lane8F32 ReduceMaxV(const Lane8F32 &l)
+{
+    Lane8F32 a = Max(l, Permute<1, 0, 3, 2>(l));
+    Lane8F32 b = Max(a, Permute<2, 3, 0, 1>(a));
+    return Max(b, Shuffle4<1, 0>(b));
 }
 
 __forceinline f32 ReduceMax(const Lane8F32 &l)
 {
-    Lane8F32 a = Max(l, Permute<1, 0, 3, 2>(l));
-    Lane8F32 b = Max(a, Permute<2, 3, 0, 1>(a));
-    Lane8F32 c = Max(b, Shuffle4<1, 0>(b));
-    return _mm_cvtss_f32(_mm256_castps256_ps128(c));
+    return _mm_cvtss_f32(_mm256_castps256_ps128(ReduceMaxV(l)));
 }
 
 __forceinline Lane8F32 Floor(const Lane8F32 &lane)

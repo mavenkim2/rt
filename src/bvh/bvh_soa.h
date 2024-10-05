@@ -202,7 +202,6 @@ void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri,
                   Bounds8 *l, Bounds8 *r)
 {
     Lane8F32 lOut[8];
-    Lane8F32 rOut[8];
     Lane8F32 leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
         rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ;
 
@@ -212,29 +211,25 @@ void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri,
                  rightMinX, rightMinY, rightMinZ,
                  rightMaxX, rightMaxY, rightMaxZ);
 
-    Transpose6x8(leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
-                 lOut[0], lOut[1], lOut[2], lOut[3], lOut[4], lOut[5], lOut[6], lOut[7]);
-    Transpose6x8(rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ,
-                 rOut[0], rOut[1], rOut[2], rOut[3], rOut[4], rOut[5], rOut[6], rOut[7]);
-
+    Transpose6x8(-rightMinX, -rightMinY, -rightMinZ, rightMaxX, rightMaxY, rightMaxZ,
+                 r[0].v, r[1].v, r[2].v, r[3].v, r[4].v, r[5].v, r[6].v, r[7].v);
     for (u32 i = 0; i < 8; i++)
     {
-        Bounds8 lBounds8(lOut[i]);
-        Bounds8 rBounds8(rOut[i]);
+        r[i].Intersect(l[i]);
+    }
 
-        lBounds8.Intersect(l[i]);
-        rBounds8.Intersect(l[i]);
-
-        l[i] = lBounds8;
-        r[i] = rBounds8;
+    Transpose6x8(-leftMinX, -leftMinY, -leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
+                 lOut[0], lOut[1], lOut[2], lOut[3], lOut[4], lOut[5], lOut[6], lOut[7]);
+    for (u32 i = 0; i < 8; i++)
+    {
+        l[i].v = Min(lOut[i], l[i].v);
     }
 }
 
+// NOTE: this is for splitting, not binning
 void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const u32 faceIndices[8],
-                  const Triangle8 &tri, const Lane8F32 &splitPos, Bounds8 *l, Bounds8 *r)
+                  const Triangle8 &tri, const Lane8F32 &splitPos, Bounds8 *l, Bounds8 *r, Lane8F32 &centL, Lane8F32 &centR)
 {
-    Lane8F32 lOut[8];
-    Lane8F32 rOut[8];
     Lane8F32 leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
         rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ;
 
@@ -246,19 +241,30 @@ void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const u32 faceIndices
 
     Lane8F32 f = AsFloat(Lane8U32::LoadU(faceIndices));
 
-    Transpose8x8(leftMinX, leftMinY, leftMinZ, pos_inf, leftMaxX, leftMaxY, leftMaxZ, f,
-                 lOut[0], lOut[1], lOut[2], lOut[3], lOut[4], lOut[5], lOut[6], lOut[7]);
-    Transpose8x8(rightMinX, rightMinY, rightMinZ, pos_inf, rightMaxX, rightMaxY, rightMaxZ, f,
-                 rOut[0], rOut[1], rOut[2], rOut[3], rOut[4], rOut[5], rOut[6], rOut[7]);
+    Transpose8x8(-leftMinX, -leftMinY, -leftMinZ, pos_inf, leftMaxX, leftMaxY, leftMaxZ, f,
+                 l[0].v, l[1].v, l[2].v, l[3].v, l[4].v, l[5].v, l[6].v, l[7].v);
+    Transpose8x8(-rightMinX, -rightMinY, -rightMinZ, pos_inf, rightMaxX, rightMaxY, rightMaxZ, f,
+                 r[0].v, r[1].v, r[2].v, r[3].v, r[4].v, r[5].v, r[6].v, r[7].v);
 
-    for (u32 i = 0; i < 8; i++)
-    {
-        Bounds8 lBounds8(lOut[i]);
-        Bounds8 rBounds8(rOut[i]);
+    Lane8F32 centroidLeftX = (leftMaxX + leftMinX) * 0.5f;
+    Lane8F32 centroidLeftY = (leftMaxY + leftMinY) * 0.5f;
+    Lane8F32 centroidLeftZ = (leftMaxZ + leftMinZ) * 0.5f;
 
-        l[i] = lBounds8;
-        r[i] = rBounds8;
-    }
+    Lane8F32 centroidRightX = (rightMaxX + rightMinX) * 0.5f;
+    Lane8F32 centroidRightY = (rightMaxY + rightMinY) * 0.5f;
+    Lane8F32 centroidRightZ = (rightMaxZ + rightMinZ) * 0.5f;
+
+    Lane8F32 centroids[8];
+    Transpose6x8(centroidLeftX, centroidLeftY, centroidLeftZ, centroidRightX, centroidRightY, centroidRightZ,
+                 centroids[0], centroids[1], centroids[2], centroids[3], centroids[4], centroids[5], centroids[6], centroids[7]);
+    Lane8F32 min = Min(
+        Min(Min(centroids[0], centroids[1]), Min(centroids[2], centroids[3])),
+        Min(Min(centroids[4], centroids[5]), Min(centroids[6], centroids[7])));
+    Lane8F32 max = Max(
+        Max(Max(centroids[0], centroids[1]), Max(centroids[2], centroids[3])),
+        Max(Max(centroids[4], centroids[5]), Max(centroids[6], centroids[7])));
+    centL = Shuffle4<0, 2>(min, max) ^ signFlipMask;
+    centR = Shuffle4<1, 3>(min, max) ^ signFlipMask;
 }
 
 template <i32 numBins = 32>

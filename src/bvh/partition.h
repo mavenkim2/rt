@@ -726,10 +726,12 @@ u32 Partition3(Split split, u32 l, u32 r, u32 outLStart, u32 outRStart, PrimRef 
     Lane8F32 left(neg_inf);
     Lane8F32 right(neg_inf);
 
-    Lane8F32 lanes[6];
+    Lane8F32 lanes[8];
 
-    Bounds8F32 centLeft;
-    Bounds8F32 centRight;
+    Lane8F32 centLeft(neg_inf);
+    Lane8F32 centRight(neg_inf);
+    // Bounds8F32 centLeft;
+    // Bounds8F32 centRight;
 
     u32 v = LUTAxis[dim];
     u32 w = LUTAxis[v];
@@ -755,8 +757,16 @@ u32 Partition3(Split split, u32 l, u32 r, u32 outLStart, u32 outRStart, PrimRef 
             left                         = MaskMax(masks[!select], left, data[inRefs[i + b]].m256);
             right                        = MaskMax(masks[select], right, data[inRefs[i + b]].m256);
         }
-        centLeft.MaskExtendNegMin(maskL, centroid, centroidV, centroidW);
-        centRight.MaskExtendNegMin(maskR, centroid, centroidV, centroidW);
+
+        Transpose3x8(centroid, centroidV, centroidW,
+                     lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5], lanes[6], lanes[7]);
+        for (u32 b = 0; b < LANE_WIDTH; b++)
+        {
+            centLeft  = Select(maskL, Max(centLeft, lanes[b] ^ signFlipMask), centLeft);
+            centRight = Select(maskR, Max(centRight, lanes[b] ^ signFlipMask), centRight);
+        }
+        // centLeft.MaskExtendNegMin(maskL, centroid, centroidV, centroidW);
+        // centRight.MaskExtendNegMin(maskR, centroid, centroidV, centroidW);
     }
     for (; i < r; i++)
     {
