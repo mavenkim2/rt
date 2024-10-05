@@ -398,31 +398,11 @@ struct alignas(32) HeuristicAOSSplitBinning
 
             // See if the primitive needs to be split
             // Only add the primitive to the left and right bounds if it doesn't need to be split
-            Lane8F32 minL = lanes[dim] > negBestValue;
-            Lane8F32 maxR = lanes[dim + 4] >= split.bestValue;
-            // Lane8F32 maskL     = lanes[dim] > negBestValue & lanes[dim + 4] < split.bestValue;
-            // Lane8F32 maskR     = lanes[dim] < negBestValue & lanes[dim + 4] >= split.bestValue;
-            // Lane8F32 splitMask = lanes[dim] > negBestValue & lanes[dim + 4] >= split.bestValue;
-
-            u32 lMaskBits = Movemask(minL);
-            u32 rMaskBits = Movemask(maxR);
-            // u32 splitMaskBits = Movemask(minL & maxR);
-            // Extend next generation bounds
-            for (u32 b = 0; b < LANE_WIDTH; b++)
-            {
-                u32 selectL      = (lMaskBits >> i) & 1;
-                u32 selectR      = (rMaskBits >> i) & 1;
-                u32 isFullyRight = !selectL && selectR;
-
-                left                        = MaskMax(masks[selectL && !selectR], left, data[inRefs[i + b]].m256);
-                right                       = MaskMax(masks[isFullyRight], right, data[inRefs[i + b]].m256);
-                outRefs[writeLocs[selectR]] = inRefs[i + b];
-                // write if: 1. the min is to the left of splitting plane 2. both the min and the max are to the right
-                writeLocs[selectR] += selectL || isFullyRight;
-            }
             Lane8U32 faceIDs = AsUInt(lanes[7]);
 
-            // Centroid bounds for next generation
+            Lane8F32 isFullyLeftV  = lanes[dim + 4] < split.bestValue;
+            Lane8F32 isFullyRightV = lanes[dim] <= negBestValue;
+
             Lane8F32 centroid  = (lanes[dim + 4] - lanes[dim]) * 0.5f;
             Lane8F32 centroidV = (lanes[v + 4] - lanes[v]) * 0.5f;
             Lane8F32 centroidW = (lanes[w + 4] - lanes[w]) * 0.5f;
@@ -430,17 +410,29 @@ struct alignas(32) HeuristicAOSSplitBinning
             Transpose3x8(centroid, centroidV, centroidW,
                          lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5], lanes[6], lanes[7]);
 
+            u32 lMaskBits = Movemask(isFullyLeftV);
+            u32 rMaskBits = Movemask(isFullyRightV);
+            // Extend next generation bounds
             for (u32 b = 0; b < LANE_WIDTH; b++)
             {
-                centLeft  = MaskMax(maskL, centLeft, lanes[b] ^ signFlipMask);
-                centRight = MaskMax(maskR, centRight, lanes[b] ^ signFlipMask);
+                u32 isFullyLeft  = (lMaskBits >> i) & 1;
+                u32 isFullyRight = (rMaskBits >> i) & 1;
+
+                left                               = MaskMax(masks[isFullyLeft], left, data[inRefs[i + b]].m256);
+                right                              = MaskMax(masks[isFullyRight], right, data[inRefs[i + b]].m256);
+                centLeft                           = MaskMax(masks[isFullyLeft], centLeft, lanes[b] ^ signFlipMask);
+                centRight                          = MaskMax(masks[isFullyRight], centRight, lanes[b] ^ signFlipMask);
+                outRefs[writeLocs[isFullyRight]++] = inRefs[i + b];
             }
+
+            // Centroid bounds for next generation
 
             // Store primitives that need to be split
             Lane8U32 refIDs = Lane8U32::LoadU(&inRefs[i]);
+            u32 splitMask   = ~(lMaskBits | rMaskBits);
             Lane8U32::StoreU(refIDQueue + count, MaskCompress(splitMask, refIDs));
             Lane8U32::StoreU(faceIDQueue + count, MaskCompress(splitMask, faceIDs));
-            count += PopCount(splitMaskBits);
+            count += PopCount(splitMask);
 
             if (count >= LANE_WIDTH)
             {
@@ -471,28 +463,32 @@ struct alignas(32) HeuristicAOSSplitBinning
                 }
             }
         }
-        // for (; i < start + count; i++)
-        // {
-        //     u32 ref           = inRefs[i];
-        //     PrimRef *primRef  = &data[ref];
-        //     f32 min           = primRef->min[dim];
-        //     f32 max           = primRef->max[dim];
-        //     f32 centroid      = (max - min) * 0.5f;
-        //     bool isRight      = centroid >= split.bestValue;
-        //     refIDQueue[count] = ref;
-        //     faceIDQueue[cout] = primRef->primID;
-        //     bool isSplit      = min > -split.bestValue && max > split.bestValue;
-        //     count += isSplit;
-        //     outRefs[writeLocs[isRight]] = ref;
-        //     if (isRight)
-        //     {
-        //         right = Max(right, primRef->m256);
-        //     }
-        //     else
-        //     {
-        //         left = Max(left, primRef->m256);
-        //     }
-        // }
+        for (; i < start + count; i++)
+        {
+            u32 ref          = inRefs[i];
+            PrimRef *primRef = &data[ref];
+            Lane4F32 min     = Extract4<0>(primRef->m256);
+            Lane4F32 max     = Extract4<1>(primRef->m256);
+
+            Lane4F32 centroid = (max - min) * 0.5f;
+
+            f32 min            = primRef->min[dim];
+            f32 max            = primRef->max[dim];
+            bool isRight       = centroid[dim] >= split.bestValue;
+            refIDQueue[count]  = ref;
+            faceIDQueue[count] = primRef->primID;
+            bool isSplit       = min > -split.bestValue && max > split.bestValue;
+            count += isSplit;
+            outRefs[writeLocs[isRight]] = ref;
+            if (isRight)
+            {
+                right = Max(right, primRef->m256);
+            }
+            else
+            {
+                left = Max(left, primRef->m256);
+            }
+        }
     }
 
     // u32 Split(TriangleMesh *mesh, PrimRef *data, u32 *refs, u32 splitOffset, u32 refOffset,

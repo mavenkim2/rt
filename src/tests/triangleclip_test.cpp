@@ -319,21 +319,23 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
         refRefs[i] = RandomInt(0, numFaces);
     }
 
-    // SplitBinner<16> binner(geomBounds);
-    // using Heuristic            = HeuristicAOSSplitBinning<16>;
-    // PerformanceCounter counter = OS_StartCounter();
-    // // Heuristic heuristic(&binner);
-    // // heuristic.Bin(mesh, refs, refRefs, 0, numFaces);
-    // Heuristic heuristic = ParallelReduce<Heuristic>(
-    //     0, numFaces, PARALLEL_THRESHOLD,
-    //     [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(mesh, refs, refRefs, start, count); },
-    //     [&](Heuristic &l, const Heuristic &r) { l.Merge(r); },
-    //     &binner);
-    //
-    // f32 time = OS_GetMilliseconds(counter);
-    // printf("bin time: %fms\n", time);
+    SplitBinner<16> binner(geomBounds);
+    using Heuristic            = HeuristicAOSSplitBinning<16>;
+    PerformanceCounter counter = OS_StartCounter();
+    Heuristic heuristic        = ParallelReduce<Heuristic>(
+        0, numFaces, PARALLEL_THRESHOLD,
+        [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(mesh, refs, refRefs, start, count); },
+        [&](Heuristic &l, const Heuristic &r) { l.Merge(r); },
+        &binner);
 
-#if 1
+    f32 time = OS_GetMilliseconds(counter);
+    printf("bin time: %fms\n", time);
+    Split split = BinBest(heuristic.bins, heuristic.counts, &binner);
+    printf("Split pos: %u\n", split.bestPos);
+    printf("Split dim: %u\n", split.bestDim);
+    printf("Split SAH: %f\n", split.bestSAH);
+
+#if 0
     ObjectBinner binner(centBounds);
     using Heuristic = HeuristicAOSObjectBinning<32>;
     printf("size: %llu\n", sizeof(Heuristic));
