@@ -541,7 +541,7 @@ __forceinline Lane8F32 AsFloat(const Lane8U32 &a)
     return _mm256_castsi256_ps(a);
 }
 
-__forceinline Lane8U32 AsUint(const Lane8F32 &a)
+__forceinline Lane8U32 AsUInt(const Lane8F32 &a)
 {
     return _mm256_castps_si256(a);
 }

@@ -287,7 +287,8 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     Bounds centBounds;
     Bounds geomBounds;
     u32 numFaces  = mesh->numIndices / 3;
-    PrimRef *refs = PushArray(arena, PrimRef, numFaces);
+    u32 extEnd    = u32(numFaces * GROW_AMOUNT);
+    PrimRef *refs = PushArray(arena, PrimRef, extEnd);
     for (u32 i = 0; i < numFaces; i++)
     {
         u32 i0 = mesh->indices[i * 3];
@@ -312,8 +313,8 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
         centBounds.Extend((maxs - mins) * 0.5f);
     }
 
-    u32 *refRefs  = PushArray(arena, u32, numFaces);
-    u32 *refRefs2 = PushArrayNoZero(arena, u32, numFaces);
+    u32 *refRefs  = PushArray(arena, u32, extEnd);
+    u32 *refRefs2 = PushArrayNoZero(arena, u32, extEnd);
     for (u32 i = 0; i < numFaces; i++)
     {
         refRefs[i] = RandomInt(0, numFaces);
@@ -322,19 +323,76 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     SplitBinner<16> binner(geomBounds);
     using Heuristic            = HeuristicAOSSplitBinning<16>;
     PerformanceCounter counter = OS_StartCounter();
-    Heuristic heuristic        = ParallelReduce<Heuristic>(
+
+    Heuristic heuristic;
+    ParallelForOutput output = ParallelFor<Heuristic>(
         0, numFaces, PARALLEL_THRESHOLD,
         [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(mesh, refs, refRefs, start, count); },
+        &binner);
+
+    Reduce(
+        heuristic, output,
         [&](Heuristic &l, const Heuristic &r) { l.Merge(r); },
         &binner);
 
     f32 time = OS_GetMilliseconds(counter);
     printf("bin time: %fms\n", time);
-    Split split = BinBest(heuristic.bins, heuristic.counts, &binner);
+    Split split = BinBest(heuristic.bins, heuristic.entryCounts, heuristic.exitCounts, &binner);
     printf("Split pos: %u\n", split.bestPos);
     printf("Split dim: %u\n", split.bestDim);
     printf("Split SAH: %f\n", split.bestSAH);
 
+    u32 *lOffsets = PushArrayNoZero(arena, u32, output.num);
+    u32 *rOffsets = PushArrayNoZero(arena, u32, output.num);
+
+    u32 *splitOffsets = PushArrayNoZero(arena, u32, output.num);
+    u32 *refOffsets   = PushArrayNoZero(arena, u32, output.num);
+    u32 lOffset       = 0;
+    u32 rOffset       = extEnd;
+    u32 refOffset     = numFaces;
+    u32 allocOffset   = numFaces;
+    for (u32 i = 0; i < output.num; i++)
+    {
+        Heuristic *h    = &((Heuristic *)output.out)[i];
+        lOffsets[i]     = lOffset;
+        u32 entryCounts = 0;
+        u32 exitCounts  = 0;
+        for (u32 bin = 0; bin < split.bestPos; bin++)
+        {
+            entryCounts += h->entryCounts[bin][split.bestDim];
+        }
+        for (u32 bin = split.bestDim; bin < 16; bin++)
+        {
+            exitCounts += h->exitCounts[bin][split.bestDim];
+        }
+        u32 groupSize      = i == output.num - 1
+                                 ? numFaces - (0 + output.groupSize * (output.num - 1))
+                                 : output.groupSize;
+        u32 taskSplitCount = entryCounts + exitCounts - groupSize;
+        splitOffsets[i]    = allocOffset;
+        refOffsets[i]      = refOffset;
+
+        refOffset += taskSplitCount;
+        allocOffset += taskSplitCount;
+
+        lOffset += entryCounts;
+        rOffset -= exitCounts;
+        rOffsets[i] = rOffset;
+    }
+    // SplitPayload payload = SplitPayload(splitOffsets, refOffsets, output.num, output.groupSize);
+
+    scheduler.ScheduleAndWait(output.num, 1, [&](u32 jobID) {
+        RecordAOSSplits recordL;
+        RecordAOSSplits recordR;
+        u32 threadStart = 0 + jobID * output.groupSize;
+        u32 count       = jobID == output.num - 1
+                              ? numFaces - (0 + output.groupSize * (output.num - 1))
+                              : output.groupSize;
+        heuristic.Split(mesh, refs, refRefs, refRefs2, splitOffsets[jobID], lOffsets[jobID], rOffsets[jobID],
+                        threadStart, count, split, recordL, recordR);
+    });
+
+    EndReduce(output);
 #if 0
     ObjectBinner binner(centBounds);
     using Heuristic = HeuristicAOSObjectBinning<32>;

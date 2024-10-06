@@ -364,8 +364,8 @@ struct alignas(32) HeuristicAOSSplitBinning
     }
 
     // Splits and partitions at the same time
-    u32 Split(TriangleMesh *mesh, PrimRef *data, const u32 *inRefs, u32 *outRefs, u32 splitOffset, u32 outLStart, u32 outRStart,
-              u32 start, u32 count, Split split, RecordAOSSplits &outLeft, RecordAOSSplits &outRight)
+    void Split(TriangleMesh *mesh, PrimRef *data, const u32 *inRefs, u32 *outRefs, u32 splitOffset, u32 outLStart, u32 outRStart,
+               u32 start, u32 count, Split split, RecordAOSSplits &outLeft, RecordAOSSplits &outRight)
     {
         u32 dim                         = split.bestDim;
         u32 alignedCount                = count - count % LANE_WIDTH;
@@ -379,7 +379,7 @@ struct alignas(32) HeuristicAOSSplitBinning
         u32 w            = (v + 1) % 3;
         Lane8F32 lanes[8];
 
-        u32 count = 0;
+        u32 splitCount = 0;
 
         Lane8F32 geomLeft;
         Lane8F32 geomRight;
@@ -418,8 +418,8 @@ struct alignas(32) HeuristicAOSSplitBinning
                 u32 isFullyLeft  = (lMaskBits >> i) & 1;
                 u32 isFullyRight = (rMaskBits >> i) & 1;
 
-                left                               = MaskMax(masks[isFullyLeft], left, data[inRefs[i + b]].m256);
-                right                              = MaskMax(masks[isFullyRight], right, data[inRefs[i + b]].m256);
+                geomLeft                           = MaskMax(masks[isFullyLeft], geomLeft, data[inRefs[i + b]].m256);
+                geomRight                          = MaskMax(masks[isFullyRight], geomRight, data[inRefs[i + b]].m256);
                 centLeft                           = MaskMax(masks[isFullyLeft], centLeft, lanes[b] ^ signFlipMask);
                 centRight                          = MaskMax(masks[isFullyRight], centRight, lanes[b] ^ signFlipMask);
                 outRefs[writeLocs[isFullyRight]++] = inRefs[i + b];
@@ -430,21 +430,21 @@ struct alignas(32) HeuristicAOSSplitBinning
             // Store primitives that need to be split
             Lane8U32 refIDs = Lane8U32::LoadU(&inRefs[i]);
             u32 splitMask   = ~(lMaskBits | rMaskBits);
-            Lane8U32::StoreU(refIDQueue + count, MaskCompress(splitMask, refIDs));
-            Lane8U32::StoreU(faceIDQueue + count, MaskCompress(splitMask, faceIDs));
-            count += PopCount(splitMask);
+            Lane8U32::StoreU(refIDQueue + splitCount, MaskCompress(splitMask, refIDs));
+            Lane8U32::StoreU(faceIDQueue + splitCount, MaskCompress(splitMask, faceIDs));
+            splitCount += PopCount(splitMask);
 
-            if (count >= LANE_WIDTH)
+            if (splitCount >= LANE_WIDTH)
             {
-                count -= LANE_WIDTH;
+                splitCount -= LANE_WIDTH;
 
                 Bounds8 boundsLeft[LANE_WIDTH];
                 Bounds8 boundsRight[LANE_WIDTH];
 
-                Bounds8 cL;
-                Bounds8 cR;
-                Triangle8 tri = Triangle8::Load(mesh, dim, faceIDQueue + count);
-                ClipTriangle(mesh, dim, faceIDQueue + count, tri, split.bestValue, boundsLeft, boundsRight, cL, cR);
+                Lane8F32 cL;
+                Lane8F32 cR;
+                Triangle8 tri = Triangle8::Load(mesh, dim, faceIDQueue + splitCount);
+                ClipTriangle(mesh, dim, faceIDQueue + splitCount, tri, split.bestValue, boundsLeft, boundsRight, cL, cR);
                 centLeft  = Max(centLeft, cL);
                 centRight = Max(centRight, cR);
 
@@ -452,12 +452,12 @@ struct alignas(32) HeuristicAOSSplitBinning
                 // any previously cached PrimRefs, so all reads at the beginning of the outer loop are a cache miss
                 for (u32 queueIndex = 0; queueIndex < LANE_WIDTH; queueIndex++)
                 {
-                    left            = Max(left, boundsLeft[queueIndex].v);
-                    right           = Max(right, boundsRight[queueIndex].v);
-                    const u32 refID = refIDQueue[count + queueIndex];
+                    geomLeft        = Max(geomLeft, boundsLeft[queueIndex].v);
+                    geomRight       = Max(geomRight, boundsRight[queueIndex].v);
+                    const u32 refID = refIDQueue[splitCount + queueIndex];
 
-                    Lane8F32::Store(data[refID].m256, boundsLeft[queueIndex].v);
-                    Lane8F32::Store(data[splitOffset].m256, boundsRight[queueIndex].v);
+                    Lane8F32::Store(&data[refID].m256, boundsLeft[queueIndex].v);
+                    Lane8F32::Store(&data[splitOffset].m256, boundsRight[queueIndex].v);
                     outRefs[writeLocs[1]++] = splitOffset;
                     splitOffset++;
                 }
@@ -470,173 +470,56 @@ struct alignas(32) HeuristicAOSSplitBinning
             Lane4F32 min     = Extract4<0>(primRef->m256);
             Lane4F32 max     = Extract4<1>(primRef->m256);
 
+            bool isFullyLeft  = primRef->max[dim] < split.bestValue;
+            bool isFullyRight = primRef->min[dim] <= -split.bestValue;
             Lane4F32 centroid = (max - min) * 0.5f;
+            bool isSplit      = ~(isFullyLeft | isFullyRight);
 
-            f32 min            = primRef->min[dim];
-            f32 max            = primRef->max[dim];
-            bool isRight       = centroid[dim] >= split.bestValue;
-            refIDQueue[count]  = ref;
-            faceIDQueue[count] = primRef->primID;
-            bool isSplit       = min > -split.bestValue && max > split.bestValue;
-            count += isSplit;
-            outRefs[writeLocs[isRight]] = ref;
-            if (isRight)
+            Lane8F32 c(-centroid, centroid);
+            refIDQueue[splitCount]  = ref;
+            faceIDQueue[splitCount] = primRef->primID;
+            splitCount += isSplit;
+            geomLeft  = MaskMax(masks[isFullyLeft], geomLeft, primRef->m256);
+            geomRight = MaskMax(masks[isFullyRight], geomRight, primRef->m256);
+
+            centLeft  = MaskMax(masks[isFullyLeft], centLeft, c);
+            centRight = MaskMax(masks[isFullyRight], centRight, c);
+
+            outRefs[writeLocs[isFullyRight]++] = ref;
+        }
+        // Flush the queue
+        u32 remainingCount = splitCount;
+        const u32 numIters = (remainingCount + 7) >> 3;
+        for (u32 remaining = 0; remaining < numIters; remaining++)
+        {
+            u32 qStart   = remaining * LANE_WIDTH;
+            u32 numPrims = Min(remainingCount, LANE_WIDTH);
+            Bounds8 boundsLeft[LANE_WIDTH];
+            Bounds8 boundsRight[LANE_WIDTH];
+            Lane8F32 cL;
+            Lane8F32 cR;
+            Triangle8 tri = Triangle8::Load(mesh, dim, faceIDQueue + qStart);
+
+            ClipTriangle(mesh, dim, faceIDQueue + qStart, tri, split.bestValue, boundsLeft, boundsRight, cL, cR);
+
+            centLeft  = Max(centLeft, cL);
+            centRight = Max(centRight, cR);
+            for (u32 queueIndex = 0; queueIndex < numPrims; queueIndex++)
             {
-                right = Max(right, primRef->m256);
+                geomLeft        = Max(geomLeft, boundsLeft[queueIndex].v);
+                geomRight       = Max(geomRight, boundsRight[queueIndex].v);
+                const u32 refID = refIDQueue[qStart + queueIndex];
+
+                Lane8F32::Store(&data[refID].m256, boundsLeft[queueIndex].v);
+                Lane8F32::Store(&data[splitOffset].m256, boundsRight[queueIndex].v);
+                outRefs[writeLocs[1]++] = splitOffset;
+                splitOffset++;
             }
-            else
-            {
-                left = Max(left, primRef->m256);
-            }
+
+            remainingCount -= LANE_WIDTH;
         }
     }
 
-    // u32 Split(TriangleMesh *mesh, PrimRef *data, u32 *refs, u32 splitOffset, u32 refOffset,
-    //           ExtRange range, Split split, RecordAOSSplits &outLeft, RecordAOSSplits &outRight)
-    // {
-    //     // partitioning
-    //     u32 dim          = split.bestDim;
-    //     u32 alignedCount = range.count - range.count % LANE_WIDTH;
-    //
-    //     u32 count = 0;
-    //
-    //     u32 refIDQueue[LANE_WIDTH * 2]  = {};
-    //     u32 faceIDQueue[LANE_WIDTH * 2] = {};
-    //
-    //     u32 splitCount      = 0;
-    //     u32 totalSplitCount = 0;
-    //     u32 splitBegin      = range.End();
-    //     u32 splitMax        = range.ExtSize();
-    //     f32 test            = 0.f;
-    //     f32 negBestValue    = -split.bestValue;
-    //     u32 i               = range.start;
-    //     for (; i < range.start + alignedCount; i++)
-    //     {
-    //         f32 min            = data[i].min[dim];
-    //         f32 max            = data[i].max[dim];
-    //         Lane8F32 min       = Lane8F32::LoadU(minStream + i);
-    //         Lane8F32 max       = Lane8F32::LoadU(maxStream + i);
-    //         Lane8U32 faceIDs   = Lane8U32::LoadU(data->primIDs + i);
-    //         Lane8U32 refIDs    = Lane8U32::Step(i);
-    //         Lane8F32 splitMask = (min > negBestValue & max > split.bestValue);
-    //         u32 mask           = Movemask(splitMask);
-    //         Lane8U32::StoreU(refIDQueue + count, MaskCompress(mask, refIDs));
-    //         Lane8U32::StoreU(faceIDQueue + count, MaskCompress(mask, faceIDs));
-    //         count += PopCount(mask);
-    //
-    //         if (count >= LANE_WIDTH)
-    //         {
-    //             Assert(count <= ArrayLength(refIDQueue));
-    //             count -= LANE_WIDTH;
-    //             // Lane8U32::Store((int *)faceIDQueue, _mm256_i32gather_epi32((int *)range.data->primIDs,
-    //             //                                                            Lane8U32::LoadU(refIDQueue + count), 4));
-    //             // for (u32 refIDIndex = 0; refIDIndex < 8; refIDIndex++)
-    //             // {
-    //             //     faceIDQueue[refIDIndex] = range.data->primIDs[refIDQueue[refIDIndex + count]];
-    //             // }
-    //             splitCount += LANE_WIDTH;
-    //             totalSplitCount += LANE_WIDTH;
-    //             Assert(splitCount <= splitMax);
-    //             Bounds8 boundsLeft[LANE_WIDTH];
-    //             for (u32 b = 0; b < LANE_WIDTH; b++)
-    //             {
-    //                 boundsLeft[b] = pos_inf;
-    //             }
-    //             Triangle8 tri = Triangle8::Load(mesh, dim, faceIDQueue + count); //, boundsLeft);
-    //             Bounds8 boundsRight[LANE_WIDTH];
-    //             ClipTriangle(mesh, dim, tri, split.bestValue, boundsLeft, boundsRight);
-    //             for (u32 queueIndex = 0; queueIndex < LANE_WIDTH; queueIndex++)
-    //             {
-    //                 const u32 refID = refIDQueue[count + queueIndex];
-    //
-    //                 alignas(32) f32 valuesLeft[8];
-    //                 alignas(32) f32 valuesRight[8];
-    //                 Lane8F32::Store(valuesLeft, boundsLeft[queueIndex].v);
-    //                 Lane8F32::Store(valuesRight, boundsRight[queueIndex].v);
-    //
-    //                 data->minX[refID] = valuesLeft[0];
-    //                 data->minY[refID] = valuesLeft[1];
-    //                 data->minZ[refID] = valuesLeft[2];
-    //                 data->maxX[refID] = valuesLeft[4];
-    //                 data->maxY[refID] = valuesLeft[5];
-    //                 data->maxZ[refID] = valuesLeft[6];
-    //                 data->geomIDs[refID]++;
-    //
-    //                 out.minX[splitCount - 8 + queueIndex]    = valuesRight[0];
-    //                 out.minY[splitCount - 8 + queueIndex]    = valuesRight[1];
-    //                 out.minZ[splitCount - 8 + queueIndex]    = valuesRight[2];
-    //                 out.maxX[splitCount - 8 + queueIndex]    = valuesRight[4];
-    //                 out.maxY[splitCount - 8 + queueIndex]    = valuesRight[5];
-    //                 out.maxZ[splitCount - 8 + queueIndex]    = valuesRight[6];
-    //                 out.primIDs[splitCount - 8 + queueIndex] = data->primIDs[refID];
-    //                 out.geomIDs[splitCount - 8 + queueIndex] = data->geomIDs[refID];
-    //             }
-    //         }
-    //     }
-    //     for (; i < range.End(); i++)
-    //     {
-    //         f32 min            = minStream[i];
-    //         f32 max            = maxStream[i];
-    //         refIDQueue[count]  = i;
-    //         faceIDQueue[count] = data->primIDs[i];
-    //         count += (min > -split.bestValue && max > split.bestValue);
-    //     }
-    //     Assert(splitCount + count <= splitMax);
-    //     // Flush the queue
-    //     u32 remainingCount = count;
-    //     const u32 numIters = (remainingCount + 7) >> 3;
-    //     for (u32 remaining = 0; remaining < numIters; remaining++)
-    //     {
-    //         u32 numPrims = Min(remainingCount, LANE_WIDTH);
-    //         Bounds8 bounds[2][8];
-    //         for (u32 b = 0; b < LANE_WIDTH; b++)
-    //         {
-    //             bounds[0][b] = pos_inf;
-    //         }
-    //         Triangle8 tri = Triangle8::Load(mesh, dim, faceIDQueue + remaining * LANE_WIDTH); //, bounds[0]);
-    //
-    //         ClipTriangle(mesh, dim, tri, split.bestValue, bounds[0], bounds[1]);
-    //         for (u32 b = 0; b < numPrims; b++)
-    //         {
-    //             const u32 refID = refIDQueue[remaining * LANE_WIDTH + b];
-    //             // const u32 refID = faceIDQueue[count + queueIndex];
-    //             alignas(32) f32 valuesLeft[8];
-    //             alignas(32) f32 valuesRight[8];
-    //             Lane8F32::Store(valuesLeft, bounds[0][b].v);
-    //             Lane8F32::Store(valuesRight, bounds[1][b].v);
-    //
-    //             data->minX[refID] = valuesLeft[0];
-    //             data->minY[refID] = valuesLeft[1];
-    //             data->minZ[refID] = valuesLeft[2];
-    //             data->maxX[refID] = valuesLeft[4];
-    //             data->maxY[refID] = valuesLeft[5];
-    //             data->maxZ[refID] = valuesLeft[6];
-    //             data->geomIDs[refID]++;
-    //
-    //             out.minX[splitCount]    = valuesRight[0];
-    //             out.minY[splitCount]    = valuesRight[1];
-    //             out.minZ[splitCount]    = valuesRight[2];
-    //             out.maxX[splitCount]    = valuesRight[4];
-    //             out.maxY[splitCount]    = valuesRight[5];
-    //             out.maxZ[splitCount]    = valuesRight[6];
-    //             out.primIDs[splitCount] = data->primIDs[refID];
-    //             out.geomIDs[splitCount] = data->geomIDs[refID];
-    //             totalSplitCount++;
-    //             splitCount++;
-    //         }
-    //
-    //         remainingCount -= LANE_WIDTH;
-    //     }
-    //     Assert(totalSplitCount <= range.ExtSize());
-    //     Assert(splitCount == totalSplitCount);
-    //     if (outSplitCount)
-    //     {
-    //         *outSplitCount = splitCount;
-    //     }
-    //
-    //     u32 mid = PartitionParallel(split, range, data);
-    //     return mid;
-    // }
     void Merge(const HeuristicAOSSplitBinning<numBins> &other)
     {
         for (u32 i = 0; i < numBins; i++)
@@ -662,7 +545,6 @@ struct HeuristicSpatialSplits
 
     TriangleMesh *mesh;
     f32 rootArea;
-    PrimDataSOA *soa;
     PrimRef *data;
     u32 *refs[2];
 
@@ -732,7 +614,7 @@ struct HeuristicSpatialSplits
                 PushStructConstruct(temp.arena, SplitBinner<numSpatialBins>)(record.geomBounds.ToBounds());
 
             HSplit *splitHeuristic = PushStructNoZero(temp.arena, HSplit);
-            ParallelOutput splitOutput;
+            ParallelForOutput splitOutput;
             if (record.range.count > PARALLEL_THRESHOLD)
             {
                 const u32 groupSize = 4 * 1024; // PARALLEL_THRESHOLD;
