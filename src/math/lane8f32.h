@@ -557,16 +557,6 @@ __m256i MoveMaskToIndices(u32 moveMask)
     return shufmask;
 }
 
-__m256i MoveMaskToIndicesReverse(u32 moveMask)
-{
-    u8 *adr         = g_pack_left_table_u8x3 + moveMask * 3;
-    __m256i indices = _mm256_set1_epi32(*reinterpret_cast<u32 *>(adr)); // lower 24 bits has our LUT
-
-    indices          = _mm256_sub_epi32(_mm256_set1_epi32(0xffffffff), indices);
-    __m256i shufmask = _mm256_srlv_epi32(indices, _mm256_setr_epi32(0, 3, 6, 9, 12, 15, 18, 21));
-    return shufmask;
-}
-
 u32 get_nth_bits(int a)
 {
     u32 out = 0;
@@ -614,26 +604,12 @@ __forceinline Lane8F32 MaskCompress(const u32 mask, const Lane8F32 &l)
 #endif
 }
 
-__forceinline Lane8F32 MaskCompressRight(const u32 mask, const Lane8F32 &l)
-{
-    return _mm256_permutevar8x32_ps(l, MoveMaskToIndicesReverse(mask));
-}
-
 __forceinline Lane8U32 MaskCompress(const u32 mask, const Lane8U32 &l)
 {
 #if defined(__AVX512VL__)
     return _mm256_mask_compress_epi32(0, (__mmask8)(mask), l);
 #else
     return _mm256_castps_si256(MaskCompress(mask, Lane8F32(_mm256_castsi256_ps(l))));
-#endif
-}
-
-__forceinline Lane8U32 MaskCompressRight(const u32 mask, const Lane8U32 &l)
-{
-#if defined(__AVX512VL__)
-    return _mm256_mask_compress_epi32(0, (__mmask8)(mask), l);
-#else
-    return _mm256_castps_si256(MaskCompressRight(mask, Lane8F32(_mm256_castsi256_ps(l))));
 #endif
 }
 
