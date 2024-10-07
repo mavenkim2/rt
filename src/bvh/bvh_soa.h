@@ -247,6 +247,32 @@ void ClipTriangle(const TriangleMesh *mesh, const u32 dim,
     centR[2] = (right[2] + right[5]) * 0.5f;
 }
 
+void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const u32 faceIndices[8],
+                  const Triangle8 &tri, const Lane8F32 &splitPos,
+                  Lane8F32 *left, Lane8F32 *right,
+                  Lane8F32 *centL, Lane8F32 *centR)
+{
+    Lane8F32 leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
+        rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ;
+    ClipTriangle(mesh, dim, tri, splitPos,
+                 leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
+                 rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ);
+
+    Lane8U32 faceIDs = Lane8U32::LoadU(faceIndices);
+    Transpose8x8(leftMinX, leftMinY, leftMinZ, pos_inf, leftMaxX, leftMaxY, leftMaxZ, AsFloat(faceIDs),
+                 left[0], left[1], left[2], left[3], left[4], left[5], left[6], left[7]);
+    Transpose8x8(rightMinX, rightMinY, rightMinZ, pos_inf, rightMaxX, rightMaxY, rightMaxZ, AsFloat(faceIDs),
+                 right[0], right[1], right[2], right[3], right[4], right[5], right[6], right[7]);
+
+    centL[0] = (leftMinX + leftMaxX) * 0.5f;
+    centL[1] = (leftMinY + leftMaxY) * 0.5f;
+    centL[2] = (leftMinZ + leftMaxZ) * 0.5f;
+
+    centR[0] = (rightMinX + rightMaxX) * 0.5f;
+    centR[1] = (rightMinY + rightMaxY) * 0.5f;
+    centR[2] = (rightMinZ + rightMaxZ) * 0.5f;
+}
+
 template <i32 numBins = 32>
 struct ObjectBinner
 {
@@ -474,7 +500,7 @@ struct alignas(32) HeuristicSOASplitBinning
     Lane4U32 entryCounts[numBins];
     Lane4U32 exitCounts[numBins];
 
-    Bounds finalBounds[3][numBins];
+    // Bounds finalBounds[3][numBins];
 
     SplitBinner<numBins> *binner;
 
@@ -485,8 +511,8 @@ struct alignas(32) HeuristicSOASplitBinning
         {
             for (u32 i = 0; i < numBins; i++)
             {
-                finalBounds[dim][i] = Bounds();
-                bins8[dim][i]       = Bounds8();
+                // finalBounds[dim][i] = Bounds();
+                bins8[dim][i] = Bounds8();
             }
         }
         for (u32 i = 0; i < numBins; i++)
@@ -736,13 +762,13 @@ struct alignas(32) HeuristicSOASplitBinning
             }
         }
 
-        for (u32 dim = 0; dim < 3; dim++)
-        {
-            for (i = 0; i < numBins; i++)
-            {
-                finalBounds[dim][i] = Bounds(bins8[dim][i]);
-            }
-        }
+        // for (u32 dim = 0; dim < 3; dim++)
+        // {
+        //     for (i = 0; i < numBins; i++)
+        //     {
+        //         finalBounds[dim][i] = Bounds(bins8[dim][i]);
+        //     }
+        // }
     }
 
     void Split(TriangleMesh *mesh, PrimDataSOA *data, PrimDataSOA *outData, u32 lOffset, u32 lCount,
@@ -1025,11 +1051,12 @@ struct alignas(32) HeuristicSOASplitBinning
             exitCounts[i] += other.exitCounts[i];
             for (u32 dim = 0; dim < 3; dim++)
             {
-                finalBounds[dim][i].Extend(other.finalBounds[dim][i]);
+                // finalBounds[dim][i].Extend(other.finalBounds[dim][i]);
+                bins8[dim][i].Extend(other.bins8[dim][i]);
             }
         }
     }
-}; // namespace rt
+};
 
 static const f32 sbvhAlpha = 1e-5;
 template <i32 numObjectBins = 32, i32 numSpatialBins = 16>
