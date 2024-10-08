@@ -447,8 +447,7 @@ struct alignas(32) HeuristicAOSSplitBinning
         u32 faceIDQueue[LANE_WIDTH * 2] = {};
         Lane8F32 masks[2]               = {Lane8F32::Mask(false), Lane8F32::Mask(true)};
 
-        f32 negBestValue = -split.bestValue;
-        u32 i            = start;
+        u32 i = start;
         Lane8F32 lanes[8];
 
         u32 splitCount = 0;
@@ -462,7 +461,8 @@ struct alignas(32) HeuristicAOSSplitBinning
         u32 totalL = 0;
         u32 totalR = 0;
 
-        u32 writeLocs[2] = {outLStart, outRStart};
+        u32 writeLocs[2]    = {outLStart, outRStart};
+        Lane8F32 splitValue = binner->GetSplitValue(Lane8U32(split.bestPos), dim);
         for (; i < start + alignedCount; i += LANE_WIDTH)
         {
             // Transposes the lanes in order to compute the bounds for the next generation
@@ -487,8 +487,11 @@ struct alignas(32) HeuristicAOSSplitBinning
             // Only add the primitive to the left and right bounds if it doesn't need to be split
             Lane8U32 faceIDs = AsUInt(lanes[7]);
 
-            Lane8F32 isFullyLeftV  = AsFloat(binner->BinMin(lanes[dim + 4], dim)) < AsFloat(split.bestPos);
-            Lane8F32 isFullyRightV = AsFloat(binner->BinMax(lanes[dim], dim)) >= AsFloat(split.bestPos);
+            Lane8U32 binMin = binner->BinMin(lanes[dim], dim);
+            Lane8U32 binMax = binner->BinMax(lanes[dim + 4], dim);
+            Assert(All(AsFloat(binMax) >= AsFloat(binMin)));
+            Lane8F32 isFullyLeftV  = AsFloat(binMax) < AsFloat(split.bestPos);
+            Lane8F32 isFullyRightV = AsFloat(binMin) >= AsFloat(split.bestPos);
 
             Lane8F32 centroids[] = {
                 (lanes[4] - lanes[0]) * 0.5f,
@@ -501,30 +504,33 @@ struct alignas(32) HeuristicAOSSplitBinning
             // Extend next generation bounds
             centLeft.MaskExtend(isFullyLeftV, centroids[0], centroids[1], centroids[2]);
             centRight.MaskExtend(isFullyRightV, centroids[0], centroids[1], centroids[2]);
+            u32 splitMask = (~(lMaskBits | rMaskBits)) & 0xff;
 
-            for (u32 b = 0; b < LANE_WIDTH; b++)
+            for (u32 chunkIndex = 0; chunkIndex < LANE_WIDTH; chunkIndex++)
             {
-                u32 isFullyLeft  = (lMaskBits >> i) & 1;
-                u32 isFullyRight = (rMaskBits >> i) & 1;
+                u32 isFullyLeft  = (lMaskBits >> chunkIndex) & 1;
+                u32 isFullyRight = (rMaskBits >> chunkIndex) & 1;
 
-                geomLeft  = MaskMax(masks[isFullyLeft], geomLeft, data[i + b].m256);
-                geomRight = MaskMax(masks[isFullyRight], geomRight, data[i + b].m256);
+                geomLeft  = MaskMax(masks[isFullyLeft], geomLeft, data[i + chunkIndex].m256);
+                geomRight = MaskMax(masks[isFullyRight], geomRight, data[i + chunkIndex].m256);
 
                 if (isFullyRight)
                 {
-                    _mm256_stream_ps((f32 *)&outData[writeLocs[1]].m256, data[i + b].m256);
+                    _mm256_stream_ps((f32 *)&outData[writeLocs[1]++].m256, data[i + chunkIndex].m256);
                     // Lane8F32::Store(&outData[writeLocs[1]], data[i + b].m256);
-                    writeLocs[1]++;
                     totalR++;
                 }
                 else if (isFullyLeft)
                 {
-                    _mm256_stream_ps((f32 *)&outData[writeLocs[0]].m256, data[i + b].m256);
+                    _mm256_stream_ps((f32 *)&outData[writeLocs[0]++].m256, data[i + chunkIndex].m256);
                     // Lane8F32::Store(&outData[writeLocs[0]], data[i + b].m256);
                     // outData[writeLocs[0]] = data[i + b];
 
-                    writeLocs[0]++;
                     totalL++;
+                }
+                else
+                {
+                    Assert((splitMask >> chunkIndex) & 1);
                 }
                 // outData[writeLocs[isFullyRight]] = data[i + b];
                 // writeLocs[isFullyRight] += isFullyRight | isFullyLeft;
@@ -533,7 +539,6 @@ struct alignas(32) HeuristicAOSSplitBinning
             // Centroid bounds for next generation
 
             // Store primitives that need to be split
-            u32 splitMask = (~(lMaskBits | rMaskBits)) & 0xff;
             Lane8U32::StoreU(faceIDQueue + splitCount, MaskCompress(splitMask, faceIDs));
             splitCount += PopCount(splitMask);
 
@@ -548,7 +553,7 @@ struct alignas(32) HeuristicAOSSplitBinning
                 Lane8F32 cL[3];
                 Lane8F32 cR[3];
                 Triangle8 tri = Triangle8::Load(mesh, dim, faceIDQueue + splitCount);
-                ClipTriangle(mesh, dim, faceIDQueue + splitCount, tri, split.bestValue, gL, gR, cL, cR);
+                ClipTriangle(mesh, dim, faceIDQueue + splitCount, tri, splitValue, gL, gR, cL, cR);
 
                 centLeft.Extend(cL[0], cL[1], cL[2]);
                 centRight.Extend(cR[0], cR[1], cR[2]);
@@ -575,10 +580,10 @@ struct alignas(32) HeuristicAOSSplitBinning
             Lane4F32 min           = Extract4<0>(primRef->m256);
             Lane4F32 max           = Extract4<1>(primRef->m256);
 
-            bool isFullyLeft  = primRef->max[dim] < split.bestValue;
-            bool isFullyRight = primRef->min[dim] <= -split.bestValue;
+            bool isFullyLeft  = binner->BinMax(primRef->max[dim], dim) < split.bestPos;
+            bool isFullyRight = binner->BinMin(primRef->min[dim], dim) >= split.bestPos;
             Lane4F32 centroid = (max - min) * 0.5f;
-            bool isSplit      = (~(isFullyLeft | isFullyRight)) & 0xff;
+            bool isSplit      = !(isFullyLeft | isFullyRight);
 
             Lane8F32 c(-centroid, centroid);
             faceIDQueue[splitCount] = primRef->primID;
@@ -594,18 +599,20 @@ struct alignas(32) HeuristicAOSSplitBinning
             if (isFullyRight)
             {
                 // Lane8F32::Store(&outData[writeLocs[1]], data[i].m256);
-                _mm256_stream_ps((f32 *)&outData[writeLocs[1]].m256, data[i].m256);
+                _mm256_stream_ps((f32 *)&outData[writeLocs[1]++].m256, data[i].m256);
                 // outData[writeLocs[1]] = data[i + b];
-                writeLocs[1]++;
                 totalR++;
             }
             else if (isFullyLeft)
             {
                 // Lane8F32::Store(&outData[writeLocs[0]], data[i].m256);
-                _mm256_stream_ps((f32 *)&outData[writeLocs[0]].m256, data[i].m256);
+                _mm256_stream_ps((f32 *)&outData[writeLocs[0]++].m256, data[i].m256);
                 // outData[writeLocs[0]] = data[i + b];
-                writeLocs[0]++;
                 totalL++;
+            }
+            else
+            {
+                Assert(isSplit);
             }
         }
         // Flush the queue
@@ -620,7 +627,7 @@ struct alignas(32) HeuristicAOSSplitBinning
             Lane8F32 cL[3];
             Lane8F32 cR[3];
             Triangle8 tri = Triangle8::Load(mesh, dim, faceIDQueue + qStart);
-            ClipTriangle(mesh, dim, faceIDQueue + qStart, tri, split.bestValue, gL, gR, cL, cR);
+            ClipTriangle(mesh, dim, faceIDQueue + qStart, tri, splitValue, gL, gR, cL, cR);
 
             Lane8F32 mask = Lane8F32::Mask((1 << numPrims) - 1u);
             centLeft.MaskExtend(mask, cL[0], cL[1], cL[2]);
@@ -642,6 +649,10 @@ struct alignas(32) HeuristicAOSSplitBinning
         }
         Assert(totalL == expectedL);
         Assert(totalR == expectedR);
+        outLeft.centBounds  = Lane8F32(ReduceMax(centLeft.minU), ReduceMax(centLeft.minV), ReduceMax(centLeft.minW), pos_inf,
+                                       ReduceMax(centLeft.maxU), ReduceMax(centLeft.maxV), ReduceMax(centLeft.maxW), pos_inf);
+        outRight.centBounds = Lane8F32(ReduceMax(centRight.minU), ReduceMax(centRight.minV), ReduceMax(centRight.minW), pos_inf,
+                                       ReduceMax(centRight.maxU), ReduceMax(centRight.maxV), ReduceMax(centRight.maxW), pos_inf);
     }
 
     void Merge(const HeuristicAOSSplitBinning<numBins> &other)
@@ -928,7 +939,6 @@ struct HeuristicSpatialSplits
                                       threadStart, threadStart + count, inRefs, outRefs, split.bestDim, split.bestPos,
                                       leftRecords[jobID].centBounds, rightRecords[jobID].centBounds,
                                       payload.lCounts[jobID], payload.rCounts[jobID]);
-                            // split.numLeft, split.numRight);
                         });
                     }
                     else
@@ -940,6 +950,15 @@ struct HeuristicSpatialSplits
                                   record.start, record.count, inRefs, outRefs, split.bestDim, split.bestPos,
                                   leftRecords[0].centBounds, rightRecords[0].centBounds, split.numLeft, split.numRight);
                     }
+                    Lane8F32 centLeft(neg_inf);
+                    Lane8F32 centRight(neg_inf);
+                    for (u32 i = 0; i < payload.count; i++)
+                    {
+                        centLeft  = Max(centLeft, leftRecords[i].centBounds);
+                        centRight = Max(centRight, rightRecords[i].centBounds);
+                    }
+                    outLeft.centBounds  = centLeft;
+                    outRight.centBounds = centRight;
                 }
                 break;
                 case Split::Spatial:
@@ -966,24 +985,24 @@ struct HeuristicSpatialSplits
                                          record.start, record.count, split, leftRecords[0], rightRecords[0],
                                          split.numLeft, split.numRight);
                     }
+                    Lane8F32 geomLeft(neg_inf);
+                    Lane8F32 geomRight(neg_inf);
+                    Lane8F32 centLeft(neg_inf);
+                    Lane8F32 centRight(neg_inf);
+                    for (u32 i = 0; i < payload.count; i++)
+                    {
+                        geomLeft  = Max(geomLeft, leftRecords[i].geomBounds);
+                        centLeft  = Max(centLeft, leftRecords[i].centBounds);
+                        geomRight = Max(geomRight, rightRecords[i].geomBounds);
+                        centRight = Max(centRight, rightRecords[i].centBounds);
+                    }
+                    outLeft.geomBounds  = geomLeft;
+                    outLeft.centBounds  = centLeft;
+                    outRight.geomBounds = geomRight;
+                    outRight.centBounds = centRight;
                 }
                 break;
             }
-            Lane8F32 geomLeft(neg_inf);
-            Lane8F32 geomRight(neg_inf);
-            Lane8F32 centLeft(neg_inf);
-            Lane8F32 centRight(neg_inf);
-            for (u32 i = 0; i < payload.count; i++)
-            {
-                geomLeft  = Max(geomLeft, leftRecords[i].geomBounds);
-                centLeft  = Max(centLeft, leftRecords[i].centBounds);
-                geomRight = Max(geomRight, rightRecords[i].geomBounds);
-                centRight = Max(centRight, rightRecords[i].centBounds);
-            }
-            outLeft.geomBounds  = geomLeft;
-            outLeft.centBounds  = centLeft;
-            outRight.geomBounds = geomRight;
-            outRight.centBounds = centRight;
             // threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perCounter);
         }
         u32 numLeft  = split.numLeft;

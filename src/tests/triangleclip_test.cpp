@@ -351,148 +351,164 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     ScratchEnd(temp);
 }
 
-// void TriangleClipTestAOS(TriangleMesh *mesh)
-// {
-//     Arena *arena = ArenaAlloc();
-//     arena->align = 64;
-//
-//     Bounds centBounds;
-//     Bounds geomBounds;
-//     u32 numFaces     = mesh->numIndices / 3;
-//     u32 extEnd       = u32(numFaces * GROW_AMOUNT);
-//     PrimRef *refs    = GenerateAOSData(arena, mesh, numFaces, geomBounds, centBounds);
-//     PrimRef *outRefs = PushArrayNoZero(arena, PrimRef, extEnd);
-//
-//     SplitBinner<16> binner(geomBounds);
-//     using Heuristic            = HeuristicAOSSplitBinning<16>;
-//     PerformanceCounter counter = OS_StartCounter();
-//
-//     Heuristic heuristic; //(&binner);
-//     // heuristic.Bin(mesh, refs, 0, numFaces);
-//     TempArena temp           = ScratchStart(0, 0);
-//     ParallelForOutput output = ParallelFor<Heuristic>(
-//         temp, 0, numFaces, PARALLEL_THRESHOLD,
-//         [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(mesh, refs, start, count); },
-//         &binner);
-//
-//     Reduce(
-//         heuristic, output,
-//         [&](Heuristic &l, const Heuristic &r) { l.Merge(r); },
-//         &binner);
-//
-//     f32 time = OS_GetMilliseconds(counter);
-//     printf("bin time: %fms\n", time);
-//     Split split = BinBest(heuristic.bins, heuristic.entryCounts, heuristic.exitCounts, &binner);
-//     printf("Split pos: %u\n", split.bestPos);
-//     printf("Split dim: %u\n", split.bestDim);
-//     printf("Split SAH: %f\n", split.bestSAH);
-//
-// #if 1
-//     u32 *lOffsets = PushArrayNoZero(arena, u32, output.num);
-//     u32 *rOffsets = PushArrayNoZero(arena, u32, output.num);
-//     u32 *lCounts  = PushArrayNoZero(arena, u32, output.num);
-//     u32 *rCounts  = PushArrayNoZero(arena, u32, output.num);
-//
-//     u32 lOffset = 0;
-//     u32 rOffset = extEnd;
-//     for (u32 i = 0; i < output.num; i++)
-//     {
-//         Heuristic *h    = &((Heuristic *)output.out)[i];
-//         lOffsets[i]     = lOffset;
-//         u32 entryCounts = 0;
-//         u32 exitCounts  = 0;
-//         for (u32 bin = 0; bin < split.bestPos; bin++)
-//         {
-//             entryCounts += h->entryCounts[bin][split.bestDim];
-//         }
-//         for (u32 bin = split.bestDim; bin < 16; bin++)
-//         {
-//             exitCounts += h->exitCounts[bin][split.bestDim];
-//         }
-//         lOffset += entryCounts;
-//         rOffset -= exitCounts;
-//         rOffsets[i] = rOffset;
-//         lCounts[i]  = entryCounts;
-//         rCounts[i]  = exitCounts;
-//     }
-//     // SplitPayload payload = SplitPayload(splitOffsets, refOffsets, output.num, output.groupSize);
-//     counter = OS_StartCounter();
-//
-//     scheduler.ScheduleAndWait(output.num, 1, [&](u32 jobID) {
-//         RecordAOSSplits recordL;
-//         RecordAOSSplits recordR;
-//         u32 threadStart = 0 + jobID * output.groupSize;
-//         u32 count       = jobID == output.num - 1 ? numFaces - threadStart : output.groupSize;
-//         heuristic.Split(mesh, refs, outRefs, lOffsets[jobID], rOffsets[jobID],
-//                         threadStart, count, split, recordL, recordR);
-//     });
-//     time = OS_GetMilliseconds(counter);
-//     printf("split time: %fms\n", time);
-//
-// #endif
-// #if 0
-//     ObjectBinner binner(centBounds);
-//     using Heuristic = HeuristicAOSObjectBinning<32>;
-//     printf("size: %llu\n", sizeof(Heuristic));
-//
-//     // HeuristicAOSObjectBinning heuristic(&binner);
-//     // heuristic.Bin(refs, 0, numFaces);
-//     PerformanceCounter counter = OS_StartCounter();
-//     ParallelForOutput output   = ParallelFor<Heuristic>(
-//         0, numFaces, PARALLEL_THRESHOLD,
-//         [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(refs, refRefs, start, count); },
-//         &binner);
-//     Heuristic heuristic;
-//     Reduce(
-//         heuristic, output, [&](Heuristic &l, const Heuristic &r) { l.Merge(r); }, &binner);
-//     f32 time = OS_GetMilliseconds(counter);
-//
-//     printf("bin time: %fms\n", time);
-//
-//     Split split = BinBest(heuristic.bins, heuristic.counts, &binner);
-//     printf("Split pos: %u\n", split.bestPos);
-//     printf("Split dim: %u\n", split.bestDim);
-//     printf("Split SAH: %f\n", split.bestSAH);
-//
-//     u32 *lOffsets = PushArrayNoZero(arena, u32, output.num);
-//     u32 *rOffsets = PushArrayNoZero(arena, u32, output.num);
-//     u32 lOffset   = 0;
-//     u32 rOffset   = numFaces;
-//     for (u32 i = 0; i < output.num; i++)
-//     {
-//         Heuristic &h = ((Heuristic *)output.out)[i];
-//         lOffsets[i]  = lOffset;
-//         for (u32 bin = 0; bin < split.bestPos; bin++)
-//         {
-//             lOffset += h.counts[bin][split.bestDim];
-//         }
-//         for (u32 bin = split.bestDim; bin < 32; bin++)
-//         {
-//             rOffset -= h.counts[bin][split.bestDim];
-//         }
-//         rOffsets[i] = rOffset;
-//     }
-//     Assert(lOffset == rOffset);
-//
-//     PartitionPayload payload(lOffsets, rOffsets, output.num, output.groupSize);
-//
-//     counter = OS_StartCounter();
-//     ExtRange range(0, numFaces, numFaces);
-//     // u32 mid = PartitionParallel(split, range, refs);
-//     // u32 mid = Partition(split, 0, numFaces, refs);
-//     // u32 mid = Partition2(split, 0, numFaces, refs, refRefs, refRefs2);
-//     PartitionParallel(payload, split, range, refs, refRefs, refRefs2);
-//
-//     time = OS_GetMilliseconds(counter);
-//     printf("Time elapsed partition: %fms\n", time);
-//
-// #endif
-//     for (u32 i = 0; i < OS_NumProcessors(); i++)
-//     {
-//         printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
-//     }
-//     ScratchEnd(temp);
-// }
+void TriangleClipTestAOS(TriangleMesh *mesh)
+{
+    TempArena temp = ScratchStart(0, 0);
+    Arena *arena   = ArenaAlloc();
+    arena->align   = 64;
+
+    Bounds centBounds;
+    Bounds geomBounds;
+    u32 numFaces     = mesh->numIndices / 3;
+    u32 extEnd       = u32(numFaces * GROW_AMOUNT);
+    PrimRef *refs    = GenerateAOSData(arena, mesh, numFaces, geomBounds, centBounds);
+    PrimRef *outRefs = PushArrayNoZero(arena, PrimRef, extEnd);
+
+    SplitBinner<16> binner(geomBounds);
+    using Heuristic            = HeuristicAOSSplitBinning<16>;
+    PerformanceCounter counter = OS_StartCounter();
+
+    Heuristic heuristic(&binner);
+    heuristic.Bin(mesh, refs, 0, numFaces);
+    ParallelForOutput output = ParallelFor<Heuristic>(
+        temp, 0, numFaces, PARALLEL_THRESHOLD,
+        [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(mesh, refs, start, count); },
+        &binner);
+
+    Reduce(
+        heuristic, output,
+        [&](Heuristic &l, const Heuristic &r) { l.Merge(r); },
+        &binner);
+
+    f32 time = OS_GetMilliseconds(counter);
+    printf("bin time: %fms\n", time);
+    Split split = BinBest(heuristic.bins, heuristic.entryCounts, heuristic.exitCounts, &binner);
+    printf("Split pos: %u\n", split.bestPos);
+    printf("Split dim: %u\n", split.bestDim);
+    printf("Split SAH: %f\n", split.bestSAH);
+
+#if 1
+    u32 *lOffsets = PushArrayNoZero(arena, u32, output.num);
+    u32 *rOffsets = PushArrayNoZero(arena, u32, output.num);
+    u32 *lCounts  = PushArrayNoZero(arena, u32, output.num);
+    u32 *rCounts  = PushArrayNoZero(arena, u32, output.num);
+
+    u32 lOffset = 0;
+    u32 rOffset = extEnd;
+    u32 rTotal  = 0;
+    for (u32 i = 0; i < output.num; i++)
+    {
+        Heuristic *h    = &((Heuristic *)output.out)[i];
+        lOffsets[i]     = lOffset;
+        u32 entryCounts = 0;
+        u32 exitCounts  = 0;
+        for (u32 bin = 0; bin < split.bestPos; bin++)
+        {
+            entryCounts += h->entryCounts[bin][split.bestDim];
+        }
+        for (u32 bin = split.bestPos; bin < 16; bin++)
+        {
+            exitCounts += h->exitCounts[bin][split.bestDim];
+        }
+        lOffset += entryCounts;
+        rOffset -= exitCounts;
+        rTotal += exitCounts;
+        rOffsets[i] = rOffset;
+        lCounts[i]  = entryCounts;
+        rCounts[i]  = exitCounts;
+    }
+    u32 lCount = 0;
+    u32 rCount = 0;
+    for (u32 bin = 0; bin < split.bestPos; bin++)
+    {
+        lCount += heuristic.entryCounts[bin][split.bestDim];
+    }
+    for (u32 bin = split.bestPos; bin < 16; bin++)
+    {
+        rCount += heuristic.exitCounts[bin][split.bestDim];
+    }
+    Assert(lCount == lOffset && rCount == rTotal);
+    counter = OS_StartCounter();
+    // heuristic.Split(mesh, refs, outRefs, 0, extEnd - rCount,
+    //                 0, numFaces, split, recordL, recordR, lCount, rCount);
+
+    RecordAOSSplits recordL;
+    RecordAOSSplits recordR;
+    scheduler.ScheduleAndWait(output.num, 1, [&](u32 jobID) {
+        RecordAOSSplits l;
+        RecordAOSSplits r;
+        u32 threadStart = 0 + jobID * output.groupSize;
+        u32 count       = jobID == output.num - 1 ? numFaces - threadStart : output.groupSize;
+        heuristic.Split(mesh, refs, outRefs, lOffsets[jobID], rOffsets[jobID],
+                        threadStart, count, split, l, r, lCounts[jobID], rCounts[jobID]);
+    });
+    time = OS_GetMilliseconds(counter);
+    printf("split time: %fms\n", time);
+
+#endif
+#if 0
+    ObjectBinner binner(centBounds);
+    using Heuristic = HeuristicAOSObjectBinning<32>;
+    printf("size: %llu\n", sizeof(Heuristic));
+
+    // HeuristicAOSObjectBinning heuristic(&binner);
+    // heuristic.Bin(refs, 0, numFaces);
+    PerformanceCounter counter = OS_StartCounter();
+    ParallelForOutput output   = ParallelFor<Heuristic>(
+        0, numFaces, PARALLEL_THRESHOLD,
+        [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(refs, refRefs, start, count); },
+        &binner);
+    Heuristic heuristic;
+    Reduce(
+        heuristic, output, [&](Heuristic &l, const Heuristic &r) { l.Merge(r); }, &binner);
+    f32 time = OS_GetMilliseconds(counter);
+
+    printf("bin time: %fms\n", time);
+
+    Split split = BinBest(heuristic.bins, heuristic.counts, &binner);
+    printf("Split pos: %u\n", split.bestPos);
+    printf("Split dim: %u\n", split.bestDim);
+    printf("Split SAH: %f\n", split.bestSAH);
+
+    u32 *lOffsets = PushArrayNoZero(arena, u32, output.num);
+    u32 *rOffsets = PushArrayNoZero(arena, u32, output.num);
+    u32 lOffset   = 0;
+    u32 rOffset   = numFaces;
+    for (u32 i = 0; i < output.num; i++)
+    {
+        Heuristic &h = ((Heuristic *)output.out)[i];
+        lOffsets[i]  = lOffset;
+        for (u32 bin = 0; bin < split.bestPos; bin++)
+        {
+            lOffset += h.counts[bin][split.bestDim];
+        }
+        for (u32 bin = split.bestDim; bin < 32; bin++)
+        {
+            rOffset -= h.counts[bin][split.bestDim];
+        }
+        rOffsets[i] = rOffset;
+    }
+    Assert(lOffset == rOffset);
+
+    PartitionPayload payload(lOffsets, rOffsets, output.num, output.groupSize);
+
+    counter = OS_StartCounter();
+    ExtRange range(0, numFaces, numFaces);
+    // u32 mid = PartitionParallel(split, range, refs);
+    // u32 mid = Partition(split, 0, numFaces, refs);
+    // u32 mid = Partition2(split, 0, numFaces, refs, refRefs, refRefs2);
+    PartitionParallel(payload, split, range, refs, refRefs, refRefs2);
+
+    time = OS_GetMilliseconds(counter);
+    printf("Time elapsed partition: %fms\n", time);
+
+#endif
+    for (u32 i = 0; i < OS_NumProcessors(); i++)
+    {
+        printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
+    }
+    ScratchEnd(temp);
+}
 
 void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
 {
