@@ -448,6 +448,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
         return;
     }
     heuristic.Split(split, current, record, childRecords[0], childRecords[1]);
+    current = !current;
     Assert(childRecords[0].count <= record.count && childRecords[1].count <= record.count);
 
     // N - 1 splits produces N children
@@ -476,6 +477,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
 
         Assert(childRecords[0].count <= record.count && childRecords[1].count <= record.count);
         childRecords[bestChild] = out;
+        current                 = !current;
     }
 
     Record nextGenRecords[N][N];

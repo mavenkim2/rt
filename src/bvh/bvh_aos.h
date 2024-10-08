@@ -5,7 +5,7 @@ namespace rt
 {
 
 template <typename Binner>
-void Partition(u32 lOffset, u32 rOffset, const Binner *binner, u32 l, u32 r, const PrimRef *data, PrimRef *outRefs, u32 dim,
+void Partition(u32 lOffset, u32 rOffset, const Binner *binner, u32 start, u32 count, const PrimRef *data, PrimRef *outRefs, u32 dim,
                u32 bestPos, Lane8F32 &outLeft, Lane8F32 &outRight, u32 expectedLCount, u32 expectedRCount)
 {
     u32 writeLocs[2]  = {lOffset, rOffset};
@@ -16,10 +16,11 @@ void Partition(u32 lOffset, u32 rOffset, const Binner *binner, u32 l, u32 r, con
     Lane8F32 centLeft(neg_inf);
     Lane8F32 centRight(neg_inf);
 
-    u32 i      = l;
-    u32 totalL = 0;
-    u32 totalR = 0;
-    for (; i + (LANE_WIDTH - 1) < r; i += LANE_WIDTH)
+    u32 i            = start;
+    u32 totalL       = 0;
+    u32 totalR       = 0;
+    u32 alignedCount = count & ~(LANE_WIDTH - 1);
+    for (; i < start + alignedCount; i += LANE_WIDTH)
     {
         Transpose8x6(data[i].m256, data[i + 1].m256, data[i + 2].m256, data[i + 3].m256,
                      data[i + 4].m256, data[i + 5].m256, data[i + 6].m256, data[i + 7].m256,
@@ -35,20 +36,20 @@ void Partition(u32 lOffset, u32 rOffset, const Binner *binner, u32 l, u32 r, con
         u32 prevMask  = Movemask(mask);
         Transpose3x8(centroids[0], centroids[1], centroids[2],
                      lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5], lanes[6], lanes[7]);
-        for (u32 b = 0; b < LANE_WIDTH; b++)
+        for (u32 chunkIndex = 0; chunkIndex < LANE_WIDTH; chunkIndex++)
         {
-            u32 select = (prevMask >> i) & 1;
+            u32 select = (prevMask >> chunkIndex) & 1;
             totalL += !select;
             totalR += select;
-            centLeft  = MaskMax(masks[!select], centLeft, lanes[b] ^ signFlipMask);
-            centRight = MaskMax(masks[select], centRight, lanes[b] ^ signFlipMask);
-            _mm256_stream_ps((f32 *)&outRefs[writeLocs[select]++], data[i + b].m256);
+            centLeft  = MaskMax(masks[!select], centLeft, lanes[chunkIndex] ^ signFlipMask);
+            centRight = MaskMax(masks[select], centRight, lanes[chunkIndex] ^ signFlipMask);
+            _mm256_stream_ps((f32 *)&outRefs[writeLocs[select]++], data[i + chunkIndex].m256);
 
-            // left                         = MaskMax(masks[!select], left, data[inRefs[i + b]].m256);
-            // right                        = MaskMax(masks[select], right, data[inRefs[i + b]].m256);
+            // left                         = MaskMax(masks[!select], left, data[inRefs[i + chunkIndex]].m256);
+            // right                        = MaskMax(masks[select], right, data[inRefs[i + chunkIndex]].m256);
         }
     }
-    for (; i < r; i++)
+    for (; i < start + count; i++)
     {
         const PrimRef *primRef = &data[i];
         // f32 min                = primRef->min[dim];
@@ -109,7 +110,7 @@ struct HeuristicAOSObjectBinning
         if (count >= LANE_WIDTH)
         {
             Lane8F32 temp[6];
-            Transpose8x6(data[i + 1].m256, data[i + 1].m256, data[i + 2].m256, data[i + 3].m256,
+            Transpose8x6(data[i + 0].m256, data[i + 1].m256, data[i + 2].m256, data[i + 3].m256,
                          data[i + 4].m256, data[i + 5].m256, data[i + 6].m256, data[i + 7].m256,
                          temp[0], temp[1], temp[2], temp[3], temp[4], temp[5]);
             Lane8F32 centroids[3] = {
@@ -130,7 +131,7 @@ struct HeuristicAOSObjectBinning
         {
             Lane8F32 temp[6];
 
-            Transpose8x6(data[i + 1].m256, data[i + 1].m256, data[i + 2].m256, data[i + 3].m256,
+            Transpose8x6(data[i + 0].m256, data[i + 1].m256, data[i + 2].m256, data[i + 3].m256,
                          data[i + 4].m256, data[i + 5].m256, data[i + 6].m256, data[i + 7].m256,
                          temp[0], temp[1], temp[2], temp[3], temp[4], temp[5]);
             Lane8F32 centroids[] = {
@@ -260,6 +261,10 @@ struct alignas(32) HeuristicAOSSplitBinning
                 binner->BinMax(lanes[4], 1),
                 binner->BinMax(lanes[5], 2),
             };
+
+            Assert(All(AsFloat(indexMinArr[0]) <= AsFloat(indexMaxArr[0])));
+            Assert(All(AsFloat(indexMinArr[1]) <= AsFloat(indexMaxArr[1])));
+            Assert(All(AsFloat(indexMinArr[2]) <= AsFloat(indexMaxArr[2])));
 
             Lane8U32 binDiffX = indexMaxArr[0] - indexMinArr[0];
             Lane8U32 binDiffY = indexMaxArr[1] - indexMinArr[1];
@@ -517,13 +522,13 @@ struct alignas(32) HeuristicAOSSplitBinning
                 if (isFullyRight)
                 {
                     _mm256_stream_ps((f32 *)&outData[writeLocs[1]++].m256, data[i + chunkIndex].m256);
-                    // Lane8F32::Store(&outData[writeLocs[1]], data[i + b].m256);
+                    // Lane8F32::Store(&outData[writeLocs[1]++], data[i + chunkIndex].m256);
                     totalR++;
                 }
                 else if (isFullyLeft)
                 {
                     _mm256_stream_ps((f32 *)&outData[writeLocs[0]++].m256, data[i + chunkIndex].m256);
-                    // Lane8F32::Store(&outData[writeLocs[0]], data[i + b].m256);
+                    // Lane8F32::Store(&outData[writeLocs[0]++], data[i + chunkIndex].m256);
                     // outData[writeLocs[0]] = data[i + b];
 
                     totalL++;
@@ -567,10 +572,10 @@ struct alignas(32) HeuristicAOSSplitBinning
 
                     _mm256_stream_ps((f32 *)&outData[writeLocs[0]++].m256, gL[queueIndex]);
                     _mm256_stream_ps((f32 *)&outData[writeLocs[1]++].m256, gR[queueIndex]);
-                    totalL++;
-                    totalR++;
                     // Lane8F32::Store(&outData[writeLocs[0]++].m256, gL[queueIndex]);
                     // Lane8F32::Store(&outData[writeLocs[1]++].m256, gR[queueIndex]);
+                    totalL++;
+                    totalR++;
                 }
             }
         }
@@ -598,15 +603,15 @@ struct alignas(32) HeuristicAOSSplitBinning
             // writeLocs[isFullyRight] += isFullyLeft | isFullyRight;
             if (isFullyRight)
             {
-                // Lane8F32::Store(&outData[writeLocs[1]], data[i].m256);
                 _mm256_stream_ps((f32 *)&outData[writeLocs[1]++].m256, data[i].m256);
+                // Lane8F32::Store(&outData[writeLocs[1]++], data[i].m256);
                 // outData[writeLocs[1]] = data[i + b];
                 totalR++;
             }
             else if (isFullyLeft)
             {
-                // Lane8F32::Store(&outData[writeLocs[0]], data[i].m256);
                 _mm256_stream_ps((f32 *)&outData[writeLocs[0]++].m256, data[i].m256);
+                // Lane8F32::Store(&outData[writeLocs[0]++], data[i].m256);
                 // outData[writeLocs[0]] = data[i + b];
                 totalL++;
             }
@@ -639,19 +644,23 @@ struct alignas(32) HeuristicAOSSplitBinning
 
                 _mm256_stream_ps((f32 *)&outData[writeLocs[0]++].m256, gL[queueIndex]);
                 _mm256_stream_ps((f32 *)&outData[writeLocs[1]++].m256, gR[queueIndex]);
-                totalL++;
-                totalR++;
                 // Lane8F32::Store(&outData[writeLocs[0]++].m256, gL[queueIndex]);
                 // Lane8F32::Store(&outData[writeLocs[1]++].m256, gR[queueIndex]);
+                totalL++;
+                totalR++;
             }
 
             remainingCount -= LANE_WIDTH;
         }
         Assert(totalL == expectedL);
         Assert(totalR == expectedR);
-        outLeft.centBounds  = Lane8F32(ReduceMax(centLeft.minU), ReduceMax(centLeft.minV), ReduceMax(centLeft.minW), pos_inf,
+        Assert(writeLocs[0] - outLStart == expectedL);
+        Assert(writeLocs[1] - outRStart == expectedR);
+        outLeft.geomBounds  = geomLeft;
+        outRight.geomBounds = geomRight;
+        outLeft.centBounds  = Lane8F32(-ReduceMin(centLeft.minU), -ReduceMin(centLeft.minV), -ReduceMin(centLeft.minW), pos_inf,
                                        ReduceMax(centLeft.maxU), ReduceMax(centLeft.maxV), ReduceMax(centLeft.maxW), pos_inf);
-        outRight.centBounds = Lane8F32(ReduceMax(centRight.minU), ReduceMax(centRight.minV), ReduceMax(centRight.minW), pos_inf,
+        outRight.centBounds = Lane8F32(-ReduceMin(centRight.minU), -ReduceMin(centRight.minV), -ReduceMin(centRight.minW), pos_inf,
                                        ReduceMax(centRight.maxU), ReduceMax(centRight.maxV), ReduceMax(centRight.maxW), pos_inf);
     }
 
@@ -785,6 +794,7 @@ struct HeuristicSpatialSplits
                 u32 lOffset = record.extStart;
                 u32 rOffset = record.extEnd;
                 u32 rTotal  = 0;
+                u32 lTotal  = 0;
                 for (u32 i = 0; i < splitOutput.num; i++)
                 {
                     HSplit *h       = &((HSplit *)splitOutput.out)[i];
@@ -802,9 +812,13 @@ struct HeuristicSpatialSplits
 
                     lCounts[i] = entryCounts;
                     rCounts[i] = exitCounts;
+
                     lOffset += entryCounts;
                     rOffset -= exitCounts;
+
+                    lTotal += entryCounts;
                     rTotal += exitCounts;
+
                     rOffsets[i] = rOffset;
                 }
                 // TODO: this function and Split() should probably just be combined instead of doing this
@@ -812,7 +826,7 @@ struct HeuristicSpatialSplits
                                                                  splitOutput.num, splitOutput.groupSize);
                 spatialSplit.ptr              = (void *)splitHeuristic;
                 spatialSplit.allocPos         = popPos;
-                spatialSplit.numLeft          = lOffset;
+                spatialSplit.numLeft          = lTotal;
                 spatialSplit.numRight         = rTotal;
 
                 return spatialSplit;
@@ -826,6 +840,7 @@ struct HeuristicSpatialSplits
 
         u32 lOffset = record.extStart;
         u32 rOffset = record.extEnd;
+        u32 lTotal  = 0;
         u32 rTotal  = 0;
         for (u32 i = 0; i < objectOutput.num; i++)
         {
@@ -844,9 +859,13 @@ struct HeuristicSpatialSplits
 
             lCounts[i] = entryCounts;
             rCounts[i] = exitCounts;
+
             lOffset += entryCounts;
             rOffset -= exitCounts;
+
+            lTotal += entryCounts;
             rTotal += exitCounts;
+
             rOffsets[i] = rOffset;
         }
 
@@ -854,7 +873,7 @@ struct HeuristicSpatialSplits
                                                         objectOutput.num, objectOutput.groupSize);
         objectSplit.ptr              = (void *)objectBinHeuristic;
         objectSplit.allocPos         = popPos;
-        objectSplit.numLeft          = lOffset;
+        objectSplit.numLeft          = lTotal;
         objectSplit.numRight         = rTotal;
         return objectSplit;
     }
@@ -936,7 +955,7 @@ struct HeuristicSpatialSplits
                             u32 count       = jobID == payload.count - 1 ? record.End() - threadStart : payload.groupSize;
 
                             Partition(payload.lOffsets[jobID], payload.rOffsets[jobID], heuristic->binner,
-                                      threadStart, threadStart + count, inRefs, outRefs, split.bestDim, split.bestPos,
+                                      threadStart, count, inRefs, outRefs, split.bestDim, split.bestPos,
                                       leftRecords[jobID].centBounds, rightRecords[jobID].centBounds,
                                       payload.lCounts[jobID], payload.rCounts[jobID]);
                         });
@@ -1024,19 +1043,25 @@ struct HeuristicSpatialSplits
         {
             for (u32 i = outLeft.start; i < outLeft.End(); i++)
             {
-                PrimRef *ref = &outRefs[i];
-                f32 min      = ref->min[split.bestDim];
-                f32 max      = ref->max[split.bestDim];
-                f32 centroid = (max - min) * 0.5f;
-                Assert(centroid < split.bestValue);
+                PrimRef *ref      = &outRefs[i];
+                Lane4F32 min      = Extract4<0>(ref->m256);
+                Lane4F32 max      = Extract4<1>(ref->m256);
+                Lane4F32 centroid = (max - min) * 0.5f;
+                Assert(centroid[split.bestDim] < split.bestValue);
+                Lane8F32 c(-centroid, centroid);
+                Assert((Movemask(ref->m256 <= outLeft.geomBounds) & 0x77) == 0x77);
+                Assert((Movemask(c <= outLeft.centBounds) & 0x77) == 0x77);
             }
             for (u32 i = outRight.start; i < outRight.End(); i++)
             {
-                PrimRef *ref = &outRefs[i];
-                f32 min      = ref->min[split.bestDim];
-                f32 max      = ref->max[split.bestDim];
-                f32 centroid = (max - min) * 0.5f;
-                Assert(centroid >= split.bestValue);
+                PrimRef *ref      = &outRefs[i];
+                Lane4F32 min      = Extract4<0>(ref->m256);
+                Lane4F32 max      = Extract4<1>(ref->m256);
+                Lane4F32 centroid = (max - min) * 0.5f;
+                Assert(centroid[split.bestDim] >= split.bestValue);
+                Lane8F32 c(-centroid, centroid);
+                Assert((Movemask(ref->m256 <= outRight.geomBounds) & 0x77) == 0x77);
+                Assert((Movemask(c <= outRight.centBounds) & 0x77) == 0x77);
             }
         }
 

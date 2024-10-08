@@ -255,6 +255,7 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
 
     start = OS_StartCounter();
     scheduler.ScheduleAndWait(output.num, 1, [&](u32 jobID) {
+        PerformanceCounter perfCounter = OS_StartCounter();
         RecordSOASplits left;
         RecordSOASplits right;
         u32 threadStart = range.start + output.groupSize * jobID;
@@ -264,13 +265,14 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
                         rOffsets[jobID], rCounts[jobID],
                         threadStart, groupSize,
                         split, left, right);
+        threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perfCounter);
     });
     time = OS_GetMilliseconds(start);
     printf("Split time: %fms\n", time);
-    // for (u32 i = 0; i < OS_NumProcessors(); i++)
-    // {
-    //     printf("Thread %u time: %llu\n", i, threadLocalStatistics[i].misc);
-    // }
+    for (u32 i = 0; i < OS_NumProcessors(); i++)
+    {
+        printf("Thread %u time: %fms\n", i, threadLocalStatistics[i].miscF);
+    }
 
     // unless I'm misunderstanding something, none of the primitives' bboxes should cross the split plane
     // f32 *minStream = ((f32 **)(&soa.minX))[split.bestDim];
@@ -364,12 +366,13 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     PrimRef *refs    = GenerateAOSData(arena, mesh, numFaces, geomBounds, centBounds);
     PrimRef *outRefs = PushArrayNoZero(arena, PrimRef, extEnd);
 
+#if 1
     SplitBinner<16> binner(geomBounds);
     using Heuristic            = HeuristicAOSSplitBinning<16>;
     PerformanceCounter counter = OS_StartCounter();
 
     Heuristic heuristic(&binner);
-    heuristic.Bin(mesh, refs, 0, numFaces);
+    // heuristic.Bin(mesh, refs, 0, numFaces);
     ParallelForOutput output = ParallelFor<Heuristic>(
         temp, 0, numFaces, PARALLEL_THRESHOLD,
         [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(mesh, refs, start, count); },
@@ -387,7 +390,6 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     printf("Split dim: %u\n", split.bestDim);
     printf("Split SAH: %f\n", split.bestSAH);
 
-#if 1
     u32 *lOffsets = PushArrayNoZero(arena, u32, output.num);
     u32 *rOffsets = PushArrayNoZero(arena, u32, output.num);
     u32 *lCounts  = PushArrayNoZero(arena, u32, output.num);
@@ -435,28 +437,29 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     RecordAOSSplits recordL;
     RecordAOSSplits recordR;
     scheduler.ScheduleAndWait(output.num, 1, [&](u32 jobID) {
+        PerformanceCounter perfCounter = OS_StartCounter();
         RecordAOSSplits l;
         RecordAOSSplits r;
         u32 threadStart = 0 + jobID * output.groupSize;
         u32 count       = jobID == output.num - 1 ? numFaces - threadStart : output.groupSize;
         heuristic.Split(mesh, refs, outRefs, lOffsets[jobID], rOffsets[jobID],
                         threadStart, count, split, l, r, lCounts[jobID], rCounts[jobID]);
+        threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perfCounter);
     });
     time = OS_GetMilliseconds(counter);
     printf("split time: %fms\n", time);
 
-#endif
-#if 0
+#else
     ObjectBinner binner(centBounds);
     using Heuristic = HeuristicAOSObjectBinning<32>;
     printf("size: %llu\n", sizeof(Heuristic));
 
+    PerformanceCounter counter = OS_StartCounter();
     // HeuristicAOSObjectBinning heuristic(&binner);
     // heuristic.Bin(refs, 0, numFaces);
-    PerformanceCounter counter = OS_StartCounter();
-    ParallelForOutput output   = ParallelFor<Heuristic>(
-        0, numFaces, PARALLEL_THRESHOLD,
-        [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(refs, refRefs, start, count); },
+    ParallelForOutput output = ParallelFor<Heuristic>(
+        temp, 0, numFaces, PARALLEL_THRESHOLD,
+        [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(refs, start, count); },
         &binner);
     Heuristic heuristic;
     Reduce(
@@ -472,37 +475,105 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
 
     u32 *lOffsets = PushArrayNoZero(arena, u32, output.num);
     u32 *rOffsets = PushArrayNoZero(arena, u32, output.num);
+    u32 *lCounts  = PushArrayNoZero(arena, u32, output.num);
+    u32 *rCounts  = PushArrayNoZero(arena, u32, output.num);
     u32 lOffset   = 0;
-    u32 rOffset   = numFaces;
+    u32 rOffset   = extEnd;
     for (u32 i = 0; i < output.num; i++)
     {
         Heuristic &h = ((Heuristic *)output.out)[i];
         lOffsets[i]  = lOffset;
+        u32 lCount   = 0;
+        u32 rCount   = 0;
         for (u32 bin = 0; bin < split.bestPos; bin++)
         {
-            lOffset += h.counts[bin][split.bestDim];
+            lCount += h.counts[bin][split.bestDim];
         }
-        for (u32 bin = split.bestDim; bin < 32; bin++)
+        for (u32 bin = split.bestPos; bin < 32; bin++)
         {
-            rOffset -= h.counts[bin][split.bestDim];
+            rCount += h.counts[bin][split.bestDim];
         }
+        lOffset += lCount;
+        rOffset -= rCount;
         rOffsets[i] = rOffset;
+        lCounts[i]  = lCount;
+        rCounts[i]  = rCount;
     }
-    Assert(lOffset == rOffset);
+    // Assert(lOffset == rOffset);
 
-    PartitionPayload payload(lOffsets, rOffsets, output.num, output.groupSize);
+    u32 lCount = 0;
+    u32 rCount = 0;
+    Bounds8 lBounds;
+    Bounds8 rBounds;
+    for (u32 i = 0; i < split.bestPos; i++)
+    {
+        lCount += heuristic.counts[i][split.bestDim];
+        lBounds.Extend(heuristic.bins[split.bestDim][i]);
+    }
+    for (u32 i = split.bestPos; i < 32; i++)
+    {
+        rCount += heuristic.counts[i][split.bestDim];
+        rBounds.Extend(heuristic.bins[split.bestDim][i]);
+    }
 
     counter = OS_StartCounter();
-    ExtRange range(0, numFaces, numFaces);
-    // u32 mid = PartitionParallel(split, range, refs);
-    // u32 mid = Partition(split, 0, numFaces, refs);
-    // u32 mid = Partition2(split, 0, numFaces, refs, refRefs, refRefs2);
-    PartitionParallel(payload, split, range, refs, refRefs, refRefs2);
+    Lane8F32 left;
+    Lane8F32 right;
+    // Partition(0, extEnd - rCount, heuristic.binner,
+    //           0, numFaces, refs, outRefs, split.bestDim, split.bestPos, left, right, lCount, rCount);
+    RecordAOSSplits *leftRecords  = PushArrayNoZero(arena, RecordAOSSplits, output.num);
+    RecordAOSSplits *rightRecords = PushArrayNoZero(arena, RecordAOSSplits, output.num);
+    scheduler.ScheduleAndWait(output.num, 1, [&](u32 jobID) {
+        u32 threadStart = 0 + output.groupSize * jobID;
+        u32 count       = jobID == output.num - 1 ? numFaces - threadStart : output.groupSize;
+
+        Partition(lOffsets[jobID], rOffsets[jobID], &binner,
+                  threadStart, count, refs, outRefs, split.bestDim, split.bestPos,
+                  leftRecords[jobID].centBounds, rightRecords[jobID].centBounds,
+                  lCounts[jobID], rCounts[jobID]);
+    });
 
     time = OS_GetMilliseconds(counter);
     printf("Time elapsed partition: %fms\n", time);
 
+    u32 numErrors = 0;
+    for (u32 i = 0; i < lCount; i++)
+    {
+        PrimRef *ref = &outRefs[i];
+        if (Any(ref->m256 > lBounds.v))
+        {
+            numErrors++;
+        }
+    }
+    for (u32 i = extEnd - rCount; i < extEnd; i++)
+    {
+        PrimRef *ref = &outRefs[i];
+        if (Any(ref->m256 > rBounds.v))
+        {
+            numErrors++;
+        }
+    }
+
+    printf("num errors: %u\n", numErrors);
 #endif
+    {
+        for (u32 i = 0; i < lCount; i++)
+        {
+            PrimRef *ref = &outRefs[i];
+            f32 min      = ref->min[split.bestDim];
+            f32 max      = ref->max[split.bestDim];
+            f32 centroid = (max - min) * 0.5f;
+            Assert(centroid < split.bestValue);
+        }
+        for (u32 i = extEnd - rCount; i < extEnd; i++)
+        {
+            PrimRef *ref = &outRefs[i];
+            f32 min      = ref->min[split.bestDim];
+            f32 max      = ref->max[split.bestDim];
+            f32 centroid = (max - min) * 0.5f;
+            Assert(centroid >= split.bestValue);
+        }
+    }
     for (u32 i = 0; i < OS_NumProcessors(); i++)
     {
         printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);

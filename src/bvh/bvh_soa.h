@@ -226,7 +226,7 @@ void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri,
     }
 }
 
-// NOTE: this is for splitting, not binning
+// NOTE: for soa
 void ClipTriangle(const TriangleMesh *mesh, const u32 dim,
                   const Triangle8 &tri, const Lane8F32 &splitPos,
                   Lane8F32 *left, Lane8F32 *right,
@@ -245,8 +245,16 @@ void ClipTriangle(const TriangleMesh *mesh, const u32 dim,
     centR[0] = (right[0] + right[3]) * 0.5f;
     centR[1] = (right[1] + right[4]) * 0.5f;
     centR[2] = (right[2] + right[5]) * 0.5f;
+
+    left[0]  = -left[0];
+    left[1]  = -left[1];
+    left[2]  = -left[2];
+    right[0] = -right[0];
+    right[1] = -right[1];
+    right[2] = -right[2];
 }
 
+// NOTE: for aos splitting
 void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const u32 faceIndices[8],
                   const Triangle8 &tri, const Lane8F32 &splitPos,
                   Lane8F32 *left, Lane8F32 *right,
@@ -259,9 +267,9 @@ void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const u32 faceIndices
                  rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ);
 
     Lane8U32 faceIDs = Lane8U32::LoadU(faceIndices);
-    Transpose8x8(leftMinX, leftMinY, leftMinZ, pos_inf, leftMaxX, leftMaxY, leftMaxZ, AsFloat(faceIDs),
+    Transpose8x8(-leftMinX, -leftMinY, -leftMinZ, pos_inf, leftMaxX, leftMaxY, leftMaxZ, AsFloat(faceIDs),
                  left[0], left[1], left[2], left[3], left[4], left[5], left[6], left[7]);
-    Transpose8x8(rightMinX, rightMinY, rightMinZ, pos_inf, rightMaxX, rightMaxY, rightMaxZ, AsFloat(faceIDs),
+    Transpose8x8(-rightMinX, -rightMinY, -rightMinZ, pos_inf, rightMaxX, rightMaxY, rightMaxZ, AsFloat(faceIDs),
                  right[0], right[1], right[2], right[3], right[4], right[5], right[6], right[7]);
 
     centL[0] = (leftMinX + leftMaxX) * 0.5f;
@@ -785,9 +793,6 @@ struct alignas(32) HeuristicSOASplitBinning
         u32 refIDQueue[LANE_WIDTH * 2]  = {};
         u32 faceIDQueue[LANE_WIDTH * 2] = {};
 
-        u32 splitCount      = 0;
-        u32 totalSplitCount = 0;
-
         Bounds8F32 centLeft;
         Bounds8F32 centRight;
 
@@ -943,6 +948,7 @@ struct alignas(32) HeuristicSOASplitBinning
                 _mm256_stream_ps(outData->maxY + alignedOutR, Lane8F32::LoadU(rMaxY + queueCountR));
                 _mm256_stream_ps(outData->maxZ + alignedOutR, Lane8F32::LoadU(rMaxZ + queueCountR));
                 _mm256_stream_si256((__m256i *)(outData->primIDs + alignedOutR), Lane8U32::LoadU(rFaceIDs + queueCountR));
+                alignedOutR += 8;
             }
         }
         for (; i < start + num; i++)
@@ -1031,14 +1037,15 @@ struct alignas(32) HeuristicSOASplitBinning
                 outData->maxY[lOffset]    = geomLeft[4][b];
                 outData->maxZ[lOffset]    = geomLeft[5][b];
                 outData->primIDs[lOffset] = faceID;
+                lOffset++;
 
-                outData->minX[splitCount]    = geomRight[0][b];
-                outData->minY[splitCount]    = geomRight[1][b];
-                outData->minZ[splitCount]    = geomRight[2][b];
-                outData->maxX[splitCount]    = geomRight[3][b];
-                outData->maxY[splitCount]    = geomRight[4][b];
-                outData->maxZ[splitCount]    = geomRight[5][b];
-                outData->primIDs[splitCount] = faceID;
+                outData->minX[rOffset]    = geomRight[0][b];
+                outData->minY[rOffset]    = geomRight[1][b];
+                outData->minZ[rOffset]    = geomRight[2][b];
+                outData->maxX[rOffset]    = geomRight[3][b];
+                outData->maxY[rOffset]    = geomRight[4][b];
+                outData->maxZ[rOffset]    = geomRight[5][b];
+                outData->primIDs[rOffset] = faceID;
             }
 
             remainingCount -= LANE_WIDTH;
