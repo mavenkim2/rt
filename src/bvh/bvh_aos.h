@@ -6,7 +6,7 @@ namespace rt
 
 template <typename Binner>
 void Partition(u32 lOffset, u32 rOffset, const Binner *binner, u32 start, u32 count, const PrimRef *data, PrimRef *outRefs, u32 dim,
-               u32 bestPos, Lane8F32 &outLeft, Lane8F32 &outRight, u32 expectedLCount, u32 expectedRCount)
+               u32 bestPos, RecordAOSSplits &outLeft, RecordAOSSplits &outRight, u32 expectedLCount, u32 expectedRCount)
 {
     u32 writeLocs[2]  = {lOffset, rOffset};
     Lane8F32 masks[2] = {Lane8F32::Mask(false), Lane8F32::Mask(true)};
@@ -15,6 +15,9 @@ void Partition(u32 lOffset, u32 rOffset, const Binner *binner, u32 start, u32 co
 
     Lane8F32 centLeft(neg_inf);
     Lane8F32 centRight(neg_inf);
+
+    Lane8F32 geomLeft(neg_inf);
+    Lane8F32 geomRight(neg_inf);
 
     u32 i            = start;
     u32 totalL       = 0;
@@ -43,10 +46,11 @@ void Partition(u32 lOffset, u32 rOffset, const Binner *binner, u32 start, u32 co
             totalR += select;
             centLeft  = MaskMax(masks[!select], centLeft, lanes[chunkIndex] ^ signFlipMask);
             centRight = MaskMax(masks[select], centRight, lanes[chunkIndex] ^ signFlipMask);
-            _mm256_stream_ps((f32 *)&outRefs[writeLocs[select]++], data[i + chunkIndex].m256);
+            // _mm256_stream_ps((f32 *)&outRefs[writeLocs[select]++], data[i + chunkIndex].m256);
+            Lane8F32::Store(&outRefs[writeLocs[select]++], data[i + chunkIndex].m256);
 
-            // left                         = MaskMax(masks[!select], left, data[inRefs[i + chunkIndex]].m256);
-            // right                        = MaskMax(masks[select], right, data[inRefs[i + chunkIndex]].m256);
+            geomLeft  = MaskMax(masks[!select], geomLeft, data[i + chunkIndex].m256);
+            geomRight = MaskMax(masks[select], geomRight, data[i + chunkIndex].m256);
         }
     }
     for (; i < start + count; i++)
@@ -60,22 +64,27 @@ void Partition(u32 lOffset, u32 rOffset, const Binner *binner, u32 start, u32 co
         Lane8F32 c(-centroid, centroid);
         u32 bin      = binner->Bin(centroid[dim], dim);
         bool isRight = bin >= bestPos;
-        _mm256_stream_ps((f32 *)&outRefs[writeLocs[isRight]++], primRef->m256);
+        // _mm256_stream_ps((f32 *)&outRefs[writeLocs[isRight]++], primRef->m256);
+        Lane8F32::Store(&outRefs[writeLocs[isRight]++], primRef->m256);
         if (isRight)
         {
             centRight = Max(centRight, c);
+            geomRight = Max(geomRight, primRef->m256);
             totalR++;
         }
         else
         {
             centLeft = Max(centLeft, c);
+            geomLeft = Max(geomLeft, primRef->m256);
             totalL++;
         }
     }
     Assert(expectedLCount == totalL);
     Assert(expectedRCount == totalR);
-    outLeft  = centLeft;
-    outRight = centRight;
+    outLeft.centBounds  = centLeft;
+    outLeft.geomBounds  = geomLeft;
+    outRight.centBounds = centRight;
+    outRight.geomBounds = geomRight;
 }
 
 template <i32 numBins = 32>
@@ -250,6 +259,13 @@ struct alignas(32) HeuristicAOSSplitBinning
             Transpose8x6(data[i].m256, data[i + 1].m256, data[i + 2].m256, data[i + 3].m256,
                          data[i + 4].m256, data[i + 5].m256, data[i + 6].m256, data[i + 7].m256,
                          lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5]);
+
+            Assert(All(-lanes[0] >= binner->base[0]));
+            Assert(All(-lanes[1] >= binner->base[1]));
+            Assert(All(-lanes[2] >= binner->base[2]));
+            Assert(All(lanes[3] >= binner->base[0]));
+            Assert(All(lanes[4] >= binner->base[1]));
+            Assert(All(lanes[5] >= binner->base[2]));
 
             Lane8U32 indexMinArr[3] = {
                 binner->BinMin(lanes[0], 0),
@@ -457,8 +473,8 @@ struct alignas(32) HeuristicAOSSplitBinning
 
         u32 splitCount = 0;
 
-        Lane8F32 geomLeft;
-        Lane8F32 geomRight;
+        Lane8F32 geomLeft(neg_inf);
+        Lane8F32 geomRight(neg_inf);
 
         Bounds8F32 centLeft;
         Bounds8F32 centRight;
@@ -521,14 +537,14 @@ struct alignas(32) HeuristicAOSSplitBinning
 
                 if (isFullyRight)
                 {
-                    _mm256_stream_ps((f32 *)&outData[writeLocs[1]++].m256, data[i + chunkIndex].m256);
-                    // Lane8F32::Store(&outData[writeLocs[1]++], data[i + chunkIndex].m256);
+                    // _mm256_stream_ps((f32 *)&outData[writeLocs[1]++].m256, data[i + chunkIndex].m256);
+                    Lane8F32::Store(&outData[writeLocs[1]++], data[i + chunkIndex].m256);
                     totalR++;
                 }
                 else if (isFullyLeft)
                 {
-                    _mm256_stream_ps((f32 *)&outData[writeLocs[0]++].m256, data[i + chunkIndex].m256);
-                    // Lane8F32::Store(&outData[writeLocs[0]++], data[i + chunkIndex].m256);
+                    // _mm256_stream_ps((f32 *)&outData[writeLocs[0]++].m256, data[i + chunkIndex].m256);
+                    Lane8F32::Store(&outData[writeLocs[0]++], data[i + chunkIndex].m256);
                     // outData[writeLocs[0]] = data[i + b];
 
                     totalL++;
@@ -570,10 +586,10 @@ struct alignas(32) HeuristicAOSSplitBinning
                     geomLeft  = Max(geomLeft, gL[queueIndex]);
                     geomRight = Max(geomRight, gR[queueIndex]);
 
-                    _mm256_stream_ps((f32 *)&outData[writeLocs[0]++].m256, gL[queueIndex]);
-                    _mm256_stream_ps((f32 *)&outData[writeLocs[1]++].m256, gR[queueIndex]);
-                    // Lane8F32::Store(&outData[writeLocs[0]++].m256, gL[queueIndex]);
-                    // Lane8F32::Store(&outData[writeLocs[1]++].m256, gR[queueIndex]);
+                    // _mm256_stream_ps((f32 *)&outData[writeLocs[0]++].m256, gL[queueIndex]);
+                    // _mm256_stream_ps((f32 *)&outData[writeLocs[1]++].m256, gR[queueIndex]);
+                    Lane8F32::Store(&outData[writeLocs[0]++].m256, gL[queueIndex]);
+                    Lane8F32::Store(&outData[writeLocs[1]++].m256, gR[queueIndex]);
                     totalL++;
                     totalR++;
                 }
@@ -588,7 +604,7 @@ struct alignas(32) HeuristicAOSSplitBinning
             bool isFullyLeft  = binner->BinMax(primRef->max[dim], dim) < split.bestPos;
             bool isFullyRight = binner->BinMin(primRef->min[dim], dim) >= split.bestPos;
             Lane4F32 centroid = (max - min) * 0.5f;
-            bool isSplit      = !(isFullyLeft | isFullyRight);
+            bool isSplit      = !(isFullyLeft || isFullyRight);
 
             Lane8F32 c(-centroid, centroid);
             faceIDQueue[splitCount] = primRef->primID;
@@ -603,15 +619,15 @@ struct alignas(32) HeuristicAOSSplitBinning
             // writeLocs[isFullyRight] += isFullyLeft | isFullyRight;
             if (isFullyRight)
             {
-                _mm256_stream_ps((f32 *)&outData[writeLocs[1]++].m256, data[i].m256);
-                // Lane8F32::Store(&outData[writeLocs[1]++], data[i].m256);
+                // _mm256_stream_ps((f32 *)&outData[writeLocs[1]++].m256, data[i].m256);
+                Lane8F32::Store(&outData[writeLocs[1]++], data[i].m256);
                 // outData[writeLocs[1]] = data[i + b];
                 totalR++;
             }
             else if (isFullyLeft)
             {
-                _mm256_stream_ps((f32 *)&outData[writeLocs[0]++].m256, data[i].m256);
-                // Lane8F32::Store(&outData[writeLocs[0]++], data[i].m256);
+                // _mm256_stream_ps((f32 *)&outData[writeLocs[0]++].m256, data[i].m256);
+                Lane8F32::Store(&outData[writeLocs[0]++], data[i].m256);
                 // outData[writeLocs[0]] = data[i + b];
                 totalL++;
             }
@@ -642,10 +658,10 @@ struct alignas(32) HeuristicAOSSplitBinning
                 geomLeft  = Max(geomLeft, gL[queueIndex]);
                 geomRight = Max(geomRight, gR[queueIndex]);
 
-                _mm256_stream_ps((f32 *)&outData[writeLocs[0]++].m256, gL[queueIndex]);
-                _mm256_stream_ps((f32 *)&outData[writeLocs[1]++].m256, gR[queueIndex]);
-                // Lane8F32::Store(&outData[writeLocs[0]++].m256, gL[queueIndex]);
-                // Lane8F32::Store(&outData[writeLocs[1]++].m256, gR[queueIndex]);
+                // _mm256_stream_ps((f32 *)&outData[writeLocs[0]++].m256, gL[queueIndex]);
+                // _mm256_stream_ps((f32 *)&outData[writeLocs[1]++].m256, gR[queueIndex]);
+                Lane8F32::Store(&outData[writeLocs[0]++].m256, gL[queueIndex]);
+                Lane8F32::Store(&outData[writeLocs[1]++].m256, gR[queueIndex]);
                 totalL++;
                 totalR++;
             }
@@ -753,7 +769,8 @@ struct HeuristicSpatialSplits
             if (record.count > PARALLEL_THRESHOLD)
             {
                 const u32 groupSize = PARALLEL_THRESHOLD;
-                splitOutput         = ParallelFor<HSplit>(
+
+                splitOutput = ParallelFor<HSplit>(
                     temp, record.start, record.count, groupSize,
                     [&](HSplit &binner, u32 start, u32 count) { binner.Bin(mesh, refs[primary], start, count); },
                     splitBinner);
@@ -935,18 +952,6 @@ struct HeuristicSpatialSplits
                 case Split::Object:
                 {
                     OBin *heuristic = (OBin *)(split.ptr);
-                    Bounds8 geomLeft;
-                    Bounds8 geomRight;
-                    for (u32 i = 0; i < split.bestPos; i++)
-                    {
-                        geomLeft.Extend(heuristic->bins[split.bestDim][i]);
-                    }
-                    for (u32 i = split.bestPos; i < numObjectBins; i++)
-                    {
-                        geomRight.Extend(heuristic->bins[split.bestDim][i]);
-                    }
-                    outLeft.geomBounds  = geomLeft.v;
-                    outRight.geomBounds = geomRight.v;
 
                     if (payload.count > 1)
                     {
@@ -956,7 +961,7 @@ struct HeuristicSpatialSplits
 
                             Partition(payload.lOffsets[jobID], payload.rOffsets[jobID], heuristic->binner,
                                       threadStart, count, inRefs, outRefs, split.bestDim, split.bestPos,
-                                      leftRecords[jobID].centBounds, rightRecords[jobID].centBounds,
+                                      leftRecords[jobID], rightRecords[jobID],
                                       payload.lCounts[jobID], payload.rCounts[jobID]);
                         });
                     }
@@ -967,17 +972,8 @@ struct HeuristicSpatialSplits
                         Assert(record.extEnd - split.numRight == payload.rOffsets[0]);
                         Partition(record.extStart, record.extEnd - split.numRight, heuristic->binner,
                                   record.start, record.count, inRefs, outRefs, split.bestDim, split.bestPos,
-                                  leftRecords[0].centBounds, rightRecords[0].centBounds, split.numLeft, split.numRight);
+                                  leftRecords[0], rightRecords[0], split.numLeft, split.numRight);
                     }
-                    Lane8F32 centLeft(neg_inf);
-                    Lane8F32 centRight(neg_inf);
-                    for (u32 i = 0; i < payload.count; i++)
-                    {
-                        centLeft  = Max(centLeft, leftRecords[i].centBounds);
-                        centRight = Max(centRight, rightRecords[i].centBounds);
-                    }
-                    outLeft.centBounds  = centLeft;
-                    outRight.centBounds = centRight;
                 }
                 break;
                 case Split::Spatial:
@@ -988,7 +984,7 @@ struct HeuristicSpatialSplits
                     {
                         scheduler.ScheduleAndWait(payload.count, 1, [&](u32 jobID) {
                             u32 threadStart = record.start + payload.groupSize * jobID;
-                            u32 count       = jobID == payload.count - 1 ? record.start + record.count - threadStart : payload.groupSize;
+                            u32 count       = jobID == payload.count - 1 ? record.End() - threadStart : payload.groupSize;
                             heuristic->Split(mesh, inRefs, outRefs, payload.lOffsets[jobID], payload.rOffsets[jobID],
                                              threadStart, count, split, leftRecords[jobID], rightRecords[jobID],
                                              payload.lCounts[jobID], payload.rCounts[jobID]);
@@ -1004,25 +1000,25 @@ struct HeuristicSpatialSplits
                                          record.start, record.count, split, leftRecords[0], rightRecords[0],
                                          split.numLeft, split.numRight);
                     }
-                    Lane8F32 geomLeft(neg_inf);
-                    Lane8F32 geomRight(neg_inf);
-                    Lane8F32 centLeft(neg_inf);
-                    Lane8F32 centRight(neg_inf);
-                    for (u32 i = 0; i < payload.count; i++)
-                    {
-                        geomLeft  = Max(geomLeft, leftRecords[i].geomBounds);
-                        centLeft  = Max(centLeft, leftRecords[i].centBounds);
-                        geomRight = Max(geomRight, rightRecords[i].geomBounds);
-                        centRight = Max(centRight, rightRecords[i].centBounds);
-                    }
-                    outLeft.geomBounds  = geomLeft;
-                    outLeft.centBounds  = centLeft;
-                    outRight.geomBounds = geomRight;
-                    outRight.centBounds = centRight;
                 }
                 break;
             }
             // threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perCounter);
+            Lane8F32 geomLeft(neg_inf);
+            Lane8F32 geomRight(neg_inf);
+            Lane8F32 centLeft(neg_inf);
+            Lane8F32 centRight(neg_inf);
+            for (u32 i = 0; i < payload.count; i++)
+            {
+                geomLeft  = Max(geomLeft, leftRecords[i].geomBounds);
+                centLeft  = Max(centLeft, leftRecords[i].centBounds);
+                geomRight = Max(geomRight, rightRecords[i].geomBounds);
+                centRight = Max(centRight, rightRecords[i].centBounds);
+            }
+            outLeft.geomBounds  = geomLeft;
+            outLeft.centBounds  = centLeft;
+            outRight.geomBounds = geomRight;
+            outRight.centBounds = centRight;
         }
         u32 numLeft  = split.numLeft;
         u32 numRight = split.numRight;
@@ -1039,14 +1035,17 @@ struct HeuristicSpatialSplits
         outRight.SetRange(outLeft.extEnd, outLeft.extEnd + extSizeRight, numRight, record.extEnd);
         ArenaPopTo(temp.arena, split.allocPos);
 
+        // NOTE: for the nt stores during partitioning
+        _mm_sfence();
+
         // error check
         {
             for (u32 i = outLeft.start; i < outLeft.End(); i++)
             {
-                PrimRef *ref      = &outRefs[i];
-                Lane4F32 min      = Extract4<0>(ref->m256);
-                Lane4F32 max      = Extract4<1>(ref->m256);
-                Lane4F32 centroid = (max - min) * 0.5f;
+                const PrimRef *ref = &outRefs[i];
+                Lane4F32 min       = Extract4<0>(ref->m256);
+                Lane4F32 max       = Extract4<1>(ref->m256);
+                Lane4F32 centroid  = (max - min) * 0.5f;
                 Assert(centroid[split.bestDim] < split.bestValue);
                 Lane8F32 c(-centroid, centroid);
                 Assert((Movemask(ref->m256 <= outLeft.geomBounds) & 0x77) == 0x77);
@@ -1054,19 +1053,16 @@ struct HeuristicSpatialSplits
             }
             for (u32 i = outRight.start; i < outRight.End(); i++)
             {
-                PrimRef *ref      = &outRefs[i];
-                Lane4F32 min      = Extract4<0>(ref->m256);
-                Lane4F32 max      = Extract4<1>(ref->m256);
-                Lane4F32 centroid = (max - min) * 0.5f;
+                const PrimRef *ref = &outRefs[i];
+                Lane4F32 min       = Extract4<0>(ref->m256);
+                Lane4F32 max       = Extract4<1>(ref->m256);
+                Lane4F32 centroid  = (max - min) * 0.5f;
                 Assert(centroid[split.bestDim] >= split.bestValue);
                 Lane8F32 c(-centroid, centroid);
                 Assert((Movemask(ref->m256 <= outRight.geomBounds) & 0x77) == 0x77);
                 Assert((Movemask(c <= outRight.centBounds) & 0x77) == 0x77);
             }
         }
-
-        // NOTE: for the nt stores during partitioning
-        _mm_sfence();
     }
 };
 

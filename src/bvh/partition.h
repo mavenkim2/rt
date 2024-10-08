@@ -692,30 +692,6 @@ u32 Partition(Split split, i32 l, i32 r, PrimRef *data)
     return l;
 }
 
-// ways of doing this:
-// double buffer (better for multithread?)
-// in place (better for single thread)
-u32 Partition2(Split split, u32 l, u32 r, u32 outLStart, u32 outRStart, PrimRef *data, u32 *inRefs, u32 *outRefs)
-{
-    u32 dim          = split.bestDim;
-    u32 writeLocs[2] = {outLStart, outRStart};
-
-    const u32 fetchAmt = 64;
-    u32 currentCount   = fetchAmt;
-    for (u32 i = l; i < r; i++)
-    {
-        u32 ref                     = inRefs[i];
-        PrimRef *primRef            = &data[ref];
-        f32 min                     = primRef->min[dim];
-        f32 max                     = primRef->max[dim];
-        f32 centroid                = (max - min) * 0.5f;
-        bool isRight                = centroid >= split.bestValue;
-        outRefs[writeLocs[isRight]] = ref;
-        writeLocs[isRight]++;
-    }
-    return 0;
-}
-
 u32 Partition3(Split split, u32 l, u32 r, u32 outLStart, u32 outRStart, PrimRef *data, u32 *inRefs, u32 *outRefs,
                Lane8F32 &outLeft, Lane8F32 &outRight)
 {

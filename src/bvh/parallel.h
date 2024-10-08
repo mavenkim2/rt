@@ -523,7 +523,7 @@ template <typename T, typename Func, typename... Args>
 ParallelForOutput ParallelFor(TempArena temp, u32 start, u32 count, u32 groupSize, Func func, Args... inArgs)
 {
     u32 taskCount = (count + groupSize - 1) / groupSize;
-    taskCount     = Min(taskCount, 512u);//scheduler.numWorkers);
+    taskCount     = Min(taskCount, 512u); // scheduler.numWorkers);
     T *values     = (T *)PushArray(temp.arena, u8, sizeof(T) * taskCount);
     for (u32 i = 0; i < taskCount; i++)
     {
@@ -535,7 +535,8 @@ ParallelForOutput ParallelFor(TempArena temp, u32 start, u32 count, u32 groupSiz
     scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
         T &val          = values[jobID];
         u32 threadStart = start + stepSize * jobID;
-        u32 size        = jobID == taskCount - 1 ? end - threadStart : stepSize;
+        Assert(end > threadStart);
+        u32 size = jobID == taskCount - 1 ? end - threadStart : stepSize;
         func(val, threadStart, size);
     });
 

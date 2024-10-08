@@ -434,6 +434,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
         return;
     }
 
+    u32 currents[N];
     Split split = heuristic.Bin(record, current);
 
     // NOTE: multiply both by the area instead of dividing
@@ -441,6 +442,11 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     f32 leafSAH  = settings.intCost * area * total; //((total + (1 << settings.logBlockSize) - 1) >> settings.logBlockSize);
     f32 splitSAH = settings.travCost * area + settings.intCost * split.bestSAH;
 
+    if (leafSAH <= splitSAH && total > settings.maxLeafSize)
+    {
+        printf("size: %u\n", total);
+        int stop = 5;
+    }
     if (total <= settings.maxLeafSize)
     {
         heuristic.FlushState(split);
@@ -450,6 +456,8 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     heuristic.Split(split, current, record, childRecords[0], childRecords[1]);
     current = !current;
     Assert(childRecords[0].count <= record.count && childRecords[1].count <= record.count);
+    currents[0] = current;
+    currents[1] = current;
 
     // N - 1 splits produces N children
     for (numChildren = 2; numChildren < N; numChildren++)
@@ -470,14 +478,16 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
         }
         if (bestChild == -1) break;
 
-        split = heuristic.Bin(childRecords[bestChild], current);
+        split = heuristic.Bin(childRecords[bestChild], currents[bestChild]);
 
         Record out;
-        heuristic.Split(split, current, childRecords[bestChild], out, childRecords[numChildren]);
+        heuristic.Split(split, currents[bestChild], childRecords[bestChild], out, childRecords[numChildren]);
 
         Assert(childRecords[0].count <= record.count && childRecords[1].count <= record.count);
         childRecords[bestChild] = out;
         current                 = !current;
+        currents[bestChild]     = current;
+        currents[numChildren]   = current;
     }
 
     Record nextGenRecords[N][N];
@@ -492,7 +502,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
         scheduler.ScheduleAndWait(numChildren, 1, [&](u32 jobID) {
             bool childParallel = childRecords[jobID].count >= PARALLEL_THRESHOLD;
             BuildBVH2(settings, childRecords[jobID], grandChildren[jobID], nextGenRecords[jobID],
-                      nextGenLeafIndices[jobID], nextGenLeafCount[jobID], nextGenNumChildren[jobID], !current, childParallel);
+                      nextGenLeafIndices[jobID], nextGenLeafCount[jobID], nextGenNumChildren[jobID], currents[jobID], childParallel);
         });
     }
     else
@@ -500,7 +510,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
         for (u32 i = 0; i < numChildren; i++)
         {
             BuildBVH2(settings, childRecords[i], grandChildren[i], nextGenRecords[i], nextGenLeafIndices[i],
-                      nextGenLeafCount[i], nextGenNumChildren[i], !current, false);
+                      nextGenLeafCount[i], nextGenNumChildren[i], currents[i], false);
         }
     }
 
