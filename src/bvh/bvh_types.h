@@ -23,11 +23,13 @@ struct PartitionPayload
 {
     u32 *lOffsets;
     u32 *rOffsets;
+    u32 *lCounts;
+    u32 *rCounts;
     u32 count;
     u32 groupSize;
     PartitionPayload() {}
-    PartitionPayload(u32 *lOffsets, u32 *rOffsets, u32 count, u32 groupSize)
-        : lOffsets(lOffsets), rOffsets(rOffsets), count(count), groupSize(groupSize) {}
+    PartitionPayload(u32 *lOffsets, u32 *rOffsets, u32 *lCounts, u32 *rCounts, u32 count, u32 groupSize)
+        : lOffsets(lOffsets), rOffsets(rOffsets), lCounts(lCounts), rCounts(rCounts), count(count), groupSize(groupSize) {}
 };
 
 struct Split
@@ -260,7 +262,6 @@ f32 HalfArea(const ScalarBounds &b)
     return b.HalfArea();
 }
 
-// TODO: these structs shouldn't exist
 struct RecordSOASplits
 {
     using PrimitiveData = PrimDataSOA;
@@ -313,24 +314,19 @@ struct alignas(64) RecordAOSSplits
         centBounds = other.centBounds;
         return *this;
     }
-    u32 Start() const
-    {
-        return start;
-    }
-    u32 Count() const
-    {
-        return count;
-    }
-    u32 ExtSize() const
-    {
-        return extStart == start ? extEnd - (start + count) : start - extStart;
-    }
+    u32 ExtStart() const { return extStart; }
+    u32 Start() const { return start; }
+    u32 Count() const { return count; }
+    u32 End() const { return start + count; }
+    u32 ExtEnd() const { return extEnd; }
+    u32 ExtSize() const { return extStart == start ? extEnd - (start + count) : start - extStart; }
     void SetRange(u32 inExtStart, u32 inStart, u32 inCount, u32 inExtEnd)
     {
         extStart = inExtStart;
         start    = inStart;
         count    = inCount;
         extEnd   = inExtEnd;
+        Assert(extStart == start || start + count == extEnd);
     }
     void SetRange(DBExtRange r)
     {
@@ -338,6 +334,7 @@ struct alignas(64) RecordAOSSplits
         start    = r.start;
         count    = r.count;
         extEnd   = r.extEnd;
+        Assert(extStart == start || start + count == extEnd);
     }
     DBExtRange GetRange() const
     {

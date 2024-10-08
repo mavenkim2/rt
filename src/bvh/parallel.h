@@ -514,20 +514,17 @@ THREAD_ENTRY_POINT(WorkerLoop)
 
 struct ParallelForOutput
 {
-    TempArena temp;
     void *out;
     u32 num;
     u32 groupSize;
 };
 
 template <typename T, typename Func, typename... Args>
-ParallelForOutput ParallelFor(u32 start, u32 count, u32 groupSize, Func func, Args... inArgs)
+ParallelForOutput ParallelFor(TempArena temp, u32 start, u32 count, u32 groupSize, Func func, Args... inArgs)
 {
-    TempArena temp    = ScratchStart(0, 0);
-    temp.arena->align = 32;
-    u32 taskCount     = (count + groupSize - 1) / groupSize;
-    taskCount         = Min(taskCount, scheduler.numWorkers);
-    T *values         = (T *)PushArray(temp.arena, u8, sizeof(T) * taskCount);
+    u32 taskCount = (count + groupSize - 1) / groupSize;
+    taskCount     = Min(taskCount, scheduler.numWorkers);
+    T *values     = (T *)PushArray(temp.arena, u8, sizeof(T) * taskCount);
     for (u32 i = 0; i < taskCount; i++)
     {
         new (&values[i]) T(std::forward<Args>(inArgs)...);
@@ -538,16 +535,11 @@ ParallelForOutput ParallelFor(u32 start, u32 count, u32 groupSize, Func func, Ar
     scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
         T &val          = values[jobID];
         u32 threadStart = start + stepSize * jobID;
-        u32 size        = stepSize;
-        if (jobID == taskCount - 1)
-        {
-            size = end - threadStart;
-        }
+        u32 size        = jobID == taskCount - 1 ? end - threadStart : stepSize;
         func(val, threadStart, size);
     });
 
     ParallelForOutput out;
-    out.temp      = temp;
     out.out       = (void *)values;
     out.num       = taskCount;
     out.groupSize = stepSize;
@@ -565,18 +557,14 @@ void Reduce(T &out, ParallelForOutput output, ReduceFunc reduce, Args... inArgs)
     }
 }
 
-void EndReduce(ParallelForOutput &output)
-{
-    ScratchEnd(output.temp);
-}
-
 template <typename T, typename Func, typename ReduceFunc, typename... Args>
 T ParallelReduce(u32 start, u32 count, u32 groupSize, Func func, ReduceFunc reduce, Args... inArgs)
 {
-    ParallelForOutput output = ParallelFor<T>(start, count, groupSize, func, std::forward<Args>(inArgs)...);
+    TempArena temp           = ScratchStart(0, 0);
+    ParallelForOutput output = ParallelFor<T>(temp, start, count, groupSize, func, std::forward<Args>(inArgs)...);
     T out;
     Reduce<T>(out, output, reduce, std::forward<Args>(inArgs)...);
-    EndReduce(output);
+    ScratchEnd(temp);
     return out;
 }
 
