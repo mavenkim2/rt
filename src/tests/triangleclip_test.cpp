@@ -106,6 +106,36 @@ PrimDataSOA GenerateSOAData(Arena *arena, TriangleMesh *mesh, u32 numFaces, Boun
     return soa;
 }
 
+PrimRef *GenerateAOSData(Arena *arena, TriangleMesh *mesh, u32 numFaces, Bounds &geomBounds, Bounds &centBounds)
+{
+    arena->align  = 64;
+    PrimRef *refs = PushArray(arena, PrimRef, u32(numFaces * GROW_AMOUNT));
+    for (u32 i = 0; i < numFaces; i++)
+    {
+        u32 i0 = mesh->indices[i * 3];
+        u32 i1 = mesh->indices[i * 3 + 1];
+        u32 i2 = mesh->indices[i * 3 + 2];
+
+        PrimRef *prim = &refs[i];
+        Vec3f v0      = mesh->p[i0];
+        Vec3f v1      = mesh->p[i1];
+        Vec3f v2      = mesh->p[i2];
+
+        Vec3f min = Min(Min(v0, v1), v2);
+        Vec3f max = Max(Max(v0, v1), v2);
+
+        Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
+        Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
+        prim->m256    = Lane8F32(-mins, maxs);
+
+        prim->primID = i;
+
+        geomBounds.Extend(mins, maxs);
+        centBounds.Extend((maxs + mins) * 0.5f);
+    }
+    return refs;
+}
+
 void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
 {
     Arena *arena = ArenaAlloc();
@@ -326,33 +356,10 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
 
     Bounds centBounds;
     Bounds geomBounds;
-    u32 numFaces  = mesh->numIndices / 3;
-    u32 extEnd    = u32(numFaces * GROW_AMOUNT);
-    PrimRef *refs = PushArray(arena, PrimRef, extEnd);
-    for (u32 i = 0; i < numFaces; i++)
-    {
-        u32 i0 = mesh->indices[i * 3];
-        u32 i1 = mesh->indices[i * 3 + 1];
-        u32 i2 = mesh->indices[i * 3 + 2];
-
-        PrimRef *prim = &refs[i];
-        Vec3f v0      = mesh->p[i0];
-        Vec3f v1      = mesh->p[i1];
-        Vec3f v2      = mesh->p[i2];
-
-        Vec3f min = Min(Min(v0, v1), v2);
-        Vec3f max = Max(Max(v0, v1), v2);
-
-        Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
-        Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
-        prim->m256    = Lane8F32(-mins, maxs);
-
-        prim->primID = i;
-
-        geomBounds.Extend(mins, maxs);
-        centBounds.Extend((maxs + mins) * 0.5f);
-    }
-    PrimRef *outRefs = PushArray(arena, PrimRef, extEnd);
+    u32 numFaces     = mesh->numIndices / 3;
+    u32 extEnd       = u32(numFaces * GROW_AMOUNT);
+    PrimRef *refs    = GenerateAOSData(arena, mesh, numFaces, geomBounds, centBounds);
+    PrimRef *outRefs = PushArrayNoZero(arena, PrimRef, extEnd);
 
     SplitBinner<16> binner(geomBounds);
     using Heuristic            = HeuristicAOSSplitBinning<16>;
@@ -413,7 +420,7 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
         RecordAOSSplits recordR;
         u32 threadStart = 0 + jobID * output.groupSize;
         u32 count       = jobID == output.num - 1 ? numFaces - threadStart : output.groupSize;
-        heuristic.Split(mesh, refs, outRefs, lOffsets[jobID], lCounts[jobID], rOffsets[jobID], rCounts[jobID],
+        heuristic.Split(mesh, refs, outRefs, lOffsets[jobID], rOffsets[jobID],
                         threadStart, count, split, recordL, recordR);
     });
     time = OS_GetMilliseconds(counter);
@@ -628,5 +635,53 @@ void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
 //     printf("node kb: %llu\n", totalNodeMemory / 1000);   // num nodes: %llu\n", numNodes);
 //     printf("record kb: %llu", totalRecordMemory / 1000); // num nodes: %llu\n", numNodes);
 // }
+void AOSSBVHBuilderTest(TriangleMesh *mesh)
+{
+    Arena *arena = ArenaAlloc();
+    arena->align = 64;
+
+    const u32 numFaces = mesh->numIndices / 3;
+    Bounds geomBounds;
+    Bounds centBounds;
+    PrimRef *refs    = GenerateAOSData(arena, mesh, numFaces, geomBounds, centBounds);
+    PrimRef *outRefs = PushArrayNoZero(arena, PrimRef, u32(numFaces * GROW_AMOUNT));
+
+    BuildSettings settings;
+    settings.intCost = 0.3f;
+
+    RecordAOSSplits record;
+    record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+    record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+    record.SetRange(0, 0, numFaces, u32(numFaces * GROW_AMOUNT));
+    u32 numProcessors = OS_NumProcessors();
+    Arena **arenas    = PushArray(arena, Arena *, numProcessors);
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        arenas[i] = ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
+    }
+
+    PerformanceCounter counter = OS_StartCounter();
+    BVH4Quantized bvh          = BuildQuantizedSBVH<4>(settings, arenas, mesh, refs, outRefs, record);
+    f32 time                   = OS_GetMilliseconds(counter);
+    printf("num faces: %u\n", numFaces);
+    printf("Build time: %fms\n", time);
+
+    f64 totalMiscTime     = 0;
+    u64 numNodes          = 0;
+    u64 totalNodeMemory   = 0;
+    u64 totalRecordMemory = 0;
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        totalMiscTime += threadLocalStatistics[i].miscF;
+        totalNodeMemory += threadMemoryStatistics[i].totalNodeMemory;
+        totalRecordMemory += threadMemoryStatistics[i].totalRecordMemory;
+        printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
+        numNodes += threadLocalStatistics[i].misc;
+    }
+    printf("total time: %fms \n", totalMiscTime);
+    printf("num nodes: %llu\n", numNodes);               // num nodes: %llu\n", numNodes);
+    printf("node kb: %llu\n", totalNodeMemory / 1000);   // num nodes: %llu\n", numNodes);
+    printf("record kb: %llu", totalRecordMemory / 1000); // num nodes: %llu\n", numNodes);
+}
 
 } // namespace rt

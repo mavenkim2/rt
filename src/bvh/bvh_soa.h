@@ -295,6 +295,7 @@ struct ObjectBinner
         scale[1] = Shuffle<1>(scale8);
         scale[2] = Shuffle<2>(scale8);
     }
+    ObjectBinner(const Lane8F32 &l) : ObjectBinner(Bounds(-Extract4<0>(l), Extract4<1>(l))) {}
     Lane8U32 Bin(const Lane8F32 &in, const u32 dim) const
     {
         Lane8F32 result = (in - base[dim]) * scale[dim];
@@ -461,6 +462,7 @@ struct SplitBinner
         scaleNegArr[1] = FlipSign(scale[1]);
         scaleNegArr[2] = FlipSign(scale[2]);
     };
+    SplitBinner(const Lane8F32 &l) : SplitBinner(Bounds(-Extract4<0>(l), Extract4<1>(l))) {}
     __forceinline Lane8U32 BinMin(const Lane8F32 &min, const u32 dim) const
     {
         return Clamp(Lane8U32(zero), Lane8U32(numBins - 1), Flooru((base[dim] + min) * scaleNegArr[dim]));
@@ -1058,239 +1060,239 @@ struct alignas(32) HeuristicSOASplitBinning
     }
 };
 
-static const f32 sbvhAlpha = 1e-5;
-template <i32 numObjectBins = 32, i32 numSpatialBins = 16>
-struct HeuristicSpatialSplits
-{
-    using Record = RecordSOASplits;
-    using HSplit = HeuristicSOASplitBinning<numSpatialBins>;
-    using OBin   = HeuristicSOAObjectBinning<numObjectBins>;
-    TriangleMesh *mesh;
-    f32 rootArea;
-    PrimDataSOA *soa;
-    HeuristicSpatialSplits() {}
-    HeuristicSpatialSplits(PrimDataSOA *soa, TriangleMesh *mesh, f32 rootArea) : soa(soa), mesh(mesh), rootArea(rootArea) {}
-    Split Bin(const Record &record, u32 blockSize = 1)
-    {
-        // Object splits
-        TempArena temp    = ScratchStart(0, 0);
-        u64 popPos        = ArenaPos(temp.arena);
-        temp.arena->align = 32;
-        // Stack allocate the heuristics since they store the centroid and geom bounds we'll need later
-        ObjectBinner<numObjectBins> *objectBinner = PushStructConstruct(temp.arena, ObjectBinner<numObjectBins>)(record.centBounds.ToBounds());
-        OBin *objectBinHeuristic                  = PushStructNoZero(temp.arena, OBin);
-        if (record.range.count > PARALLEL_THRESHOLD)
-        {
-            const u32 groupSize = PARALLEL_THRESHOLD;
-            *objectBinHeuristic = ParallelReduce<OBin>(
-                record.range.start, record.range.count, groupSize,
-                [&](OBin &binner, u32 start, u32 count) { binner.Bin(soa, start, count); },
-                [&](OBin &l, const OBin &r) { l.Merge(r); },
-                objectBinner);
-        }
-        else
-        {
-            *objectBinHeuristic = OBin(objectBinner);
-            objectBinHeuristic->Bin(soa, record.range.start, record.range.count);
-        }
-        struct Split objectSplit = BinBest(objectBinHeuristic->finalBounds,
-                                           objectBinHeuristic->counts, objectBinner);
-        objectSplit.type         = Split::Object;
-        Bounds geomBoundsL;
-        for (u32 i = 0; i < objectSplit.bestPos; i++)
-        {
-            geomBoundsL.Extend(objectBinHeuristic->finalBounds[objectSplit.bestDim][i]);
-        }
-        Bounds geomBoundsR;
-        for (u32 i = objectSplit.bestPos; i < numObjectBins; i++)
-        {
-            geomBoundsR.Extend(objectBinHeuristic->finalBounds[objectSplit.bestDim][i]);
-        }
-        f32 lambda = HalfArea(Intersect(geomBoundsL, geomBoundsR));
-        if (lambda > sbvhAlpha * rootArea)
-        {
-            // Spatial splits
-            SplitBinner<numSpatialBins> *splitBinner = PushStructConstruct(temp.arena, SplitBinner<numSpatialBins>)(record.geomBounds.ToBounds());
-            HSplit *splitHeuristic                   = PushStructNoZero(temp.arena, HSplit);
-            if (record.range.count > PARALLEL_THRESHOLD)
-            {
-                const u32 groupSize = 4 * 1024; // PARALLEL_THRESHOLD;
-                *splitHeuristic     = ParallelReduce<HSplit>(
-                    record.range.start, record.range.count, groupSize,
-                    [&](HSplit &binner, u32 start, u32 count) { binner.Bin(mesh, soa, start, count); },
-                    [&](HSplit &l, const HSplit &r) { l.Merge(r); },
-                    splitBinner);
-            }
-            else
-            {
-                *splitHeuristic = HSplit(splitBinner);
-                splitHeuristic->Bin(mesh, soa, record.range.start, record.range.count);
-            }
-            struct Split spatialSplit = BinBest(splitHeuristic->finalBounds,
-                                                splitHeuristic->entryCounts, splitHeuristic->exitCounts, splitBinner);
-            spatialSplit.type         = Split::Spatial;
-            u32 lCount                = 0;
-            for (u32 i = 0; i < spatialSplit.bestPos; i++)
-            {
-                lCount += splitHeuristic->entryCounts[i][spatialSplit.bestDim];
-            }
-            u32 rCount = 0;
-            for (u32 i = spatialSplit.bestPos; i < numSpatialBins; i++)
-            {
-                rCount += splitHeuristic->exitCounts[i][spatialSplit.bestDim];
-            }
-            if (spatialSplit.bestSAH < objectSplit.bestSAH && lCount + rCount - record.range.count <= record.range.ExtSize())
-            {
-                spatialSplit.ptr      = (void *)splitHeuristic;
-                spatialSplit.allocPos = popPos;
-                return spatialSplit;
-            }
-        }
-        objectSplit.ptr      = (void *)objectBinHeuristic;
-        objectSplit.allocPos = popPos;
-        return objectSplit;
-    }
-    void FlushState(struct Split split)
-    {
-        TempArena temp = ScratchStart(0, 0);
-        ArenaPopTo(temp.arena, split.allocPos);
-    }
-    void Split(struct Split split, const Record &record, Record &outLeft, Record &outRight)
-    {
-        // NOTE: Split must be called from the same thread as Bin
-        TempArena temp        = ScratchStart(0, 0);
-        const ExtRange &range = record.range;
-        PrimDataSOA *data     = soa;
-        u32 mid;
-        u32 splitCount = 0;
-        if (split.bestSAH == f32(pos_inf))
-        {
-            mid = record.range.start + (record.range.count / 2);
-            Bounds geomLeft;
-            Bounds centLeft;
-            Bounds geomRight;
-            Bounds centRight;
-            for (u32 i = record.range.start; i < record.range.End(); i++) // mid; i++)
-            {
-                f32 min[3] = {
-                    data->minX[i],
-                    data->minY[i],
-                    data->minZ[i],
-                };
-                f32 max[3] = {
-                    data->maxX[i],
-                    data->maxY[i],
-                    data->maxZ[i],
-                };
-                f32 centroid[3] = {
-                    (max[0] - min[0]) * 0.5f,
-                    (max[1] - min[1]) * 0.5f,
-                    (max[2] - min[2]) * 0.5f,
-                };
-                if (i < mid)
-                {
-                    geomLeft.Extend(Lane4F32(min[0], min[1], min[2], 0.f), Lane4F32(max[0], max[1], max[2], 0.f));
-                    centLeft.Extend(Lane4F32(centroid[0], centroid[1], centroid[2], 0.f));
-                }
-                else
-                {
-                    geomRight.Extend(Lane4F32(min[0], min[1], min[2], 0.f), Lane4F32(max[0], max[1], max[2], 0.f));
-                    centRight.Extend(Lane4F32(centroid[0], centroid[1], centroid[2], 0.f));
-                }
-            }
-            outLeft.geomBounds.FromBounds(geomLeft);
-            outLeft.centBounds.FromBounds(centLeft);
-            outRight.geomBounds.FromBounds(geomRight);
-            outRight.centBounds.FromBounds(centRight);
-        }
-        else
-        {
-            // PerformanceCounter perCounter = OS_StartCounter();
-            switch (split.type)
-            {
-                case Split::Object:
-                {
-                    OBin *heuristic = (OBin *)(split.ptr);
-                    mid             = PartitionParallelCentroids(split, record.range, soa);
-                    for (u32 i = 0; i < split.bestPos; i++)
-                    {
-                        outLeft.geomBounds.Extend(heuristic->bins[split.bestDim][i]);
-                    }
-                    for (u32 i = 0; i < split.bestPos; i++)
-                    {
-                        outRight.geomBounds.Extend(heuristic->bins[split.bestDim][i]);
-                    }
-                }
-                break;
-                case Split::Spatial:
-                {
-                    HSplit *heuristic = (HSplit *)(split.ptr);
-                    mid               = heuristic->Split(mesh, soa, record.range,
-                                                         split, outLeft, outRight, &splitCount);
-                    for (u32 i = 0; i < split.bestPos; i++)
-                    {
-                        outLeft.geomBounds.Extend(heuristic->bins8[split.bestDim][i]);
-                    }
-                    for (u32 i = split.bestPos; i < numSpatialBins; i++)
-                    {
-                        outRight.geomBounds.Extend(heuristic->bins8[split.bestDim][i]);
-                    }
-                }
-                break;
-            }
-            // threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perCounter);
-        }
-        OBin *oHeuristic   = (OBin *)(split.ptr);
-        HSplit *sHeuristic = (HSplit *)(split.ptr);
-        u32 numLeft        = mid - range.start;
-        u32 numRight       = range.End() - mid + splitCount;
-        f32 weight         = (f32)(numLeft) / (numLeft + numRight);
-        u32 remainingSpace = (range.ExtSize() - splitCount);
-        u32 extSizeLeft    = Min((u32)(remainingSpace * weight), remainingSpace);
-        u32 extSizeRight   = remainingSpace - extSizeLeft;
-        u32 shift          = Max(extSizeLeft, numRight);
-        u32 numToShift     = Min(extSizeLeft, numRight);
-        if (numToShift != 0)
-        {
-            if (numToShift > PARALLEL_THRESHOLD)
-            {
-                u32 groupSize = PARALLEL_THRESHOLD;
-                u32 taskCount = (numToShift + groupSize - 1) / groupSize;
-                taskCount     = Min(taskCount, scheduler.numWorkers);
-                u32 stepSize  = numToShift / taskCount;
-                scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
-                    u32 start = mid + jobID * stepSize;
-                    u32 end   = start + stepSize; // Min(mid + numToShift, start + groupSize);
-                    if (jobID == taskCount - 1)
-                    {
-                        Assert(mid + numToShift >= end);
-                        end = mid + numToShift;
-                    }
-                    for (u32 i = start; i < end; i++)
-                    {
-                        Assert(i + shift < range.extEnd);
-                        data->Set(*data, i + shift, i);
-                    }
-                });
-            }
-            else
-            {
-                for (u32 i = mid; i < mid + numToShift; i++)
-                {
-                    Assert(i + shift < range.extEnd);
-                    data->Set(*data, i + shift, i);
-                }
-            }
-        }
-        Assert(numLeft <= record.range.count);
-        Assert(numRight <= record.range.count);
-        outLeft.range    = ExtRange(range.start, numLeft, range.start + numLeft + extSizeLeft);
-        outRight.range   = ExtRange(outLeft.range.extEnd, numRight, range.extEnd);
-        u32 rightExtSize = outRight.range.ExtSize();
-        Assert(rightExtSize == extSizeRight);
-        ArenaPopTo(temp.arena, split.allocPos);
-    }
-};
+// static const f32 sbvhAlpha = 1e-5;
+// template <i32 numObjectBins = 32, i32 numSpatialBins = 16>
+// struct HeuristicSpatialSplits
+// {
+//     using Record = RecordSOASplits;
+//     using HSplit = HeuristicSOASplitBinning<numSpatialBins>;
+//     using OBin   = HeuristicSOAObjectBinning<numObjectBins>;
+//     TriangleMesh *mesh;
+//     f32 rootArea;
+//     PrimDataSOA *soa;
+//     HeuristicSpatialSplits() {}
+//     HeuristicSpatialSplits(PrimDataSOA *soa, TriangleMesh *mesh, f32 rootArea) : soa(soa), mesh(mesh), rootArea(rootArea) {}
+//     Split Bin(const Record &record, u32 blockSize = 1)
+//     {
+//         // Object splits
+//         TempArena temp    = ScratchStart(0, 0);
+//         u64 popPos        = ArenaPos(temp.arena);
+//         temp.arena->align = 32;
+//         // Stack allocate the heuristics since they store the centroid and geom bounds we'll need later
+//         ObjectBinner<numObjectBins> *objectBinner = PushStructConstruct(temp.arena, ObjectBinner<numObjectBins>)(record.centBounds.ToBounds());
+//         OBin *objectBinHeuristic                  = PushStructNoZero(temp.arena, OBin);
+//         if (record.range.count > PARALLEL_THRESHOLD)
+//         {
+//             const u32 groupSize = PARALLEL_THRESHOLD;
+//             *objectBinHeuristic = ParallelReduce<OBin>(
+//                 record.range.start, record.range.count, groupSize,
+//                 [&](OBin &binner, u32 start, u32 count) { binner.Bin(soa, start, count); },
+//                 [&](OBin &l, const OBin &r) { l.Merge(r); },
+//                 objectBinner);
+//         }
+//         else
+//         {
+//             *objectBinHeuristic = OBin(objectBinner);
+//             objectBinHeuristic->Bin(soa, record.range.start, record.range.count);
+//         }
+//         struct Split objectSplit = BinBest(objectBinHeuristic->finalBounds,
+//                                            objectBinHeuristic->counts, objectBinner);
+//         objectSplit.type         = Split::Object;
+//         Bounds geomBoundsL;
+//         for (u32 i = 0; i < objectSplit.bestPos; i++)
+//         {
+//             geomBoundsL.Extend(objectBinHeuristic->finalBounds[objectSplit.bestDim][i]);
+//         }
+//         Bounds geomBoundsR;
+//         for (u32 i = objectSplit.bestPos; i < numObjectBins; i++)
+//         {
+//             geomBoundsR.Extend(objectBinHeuristic->finalBounds[objectSplit.bestDim][i]);
+//         }
+//         f32 lambda = HalfArea(Intersect(geomBoundsL, geomBoundsR));
+//         if (lambda > sbvhAlpha * rootArea)
+//         {
+//             // Spatial splits
+//             SplitBinner<numSpatialBins> *splitBinner = PushStructConstruct(temp.arena, SplitBinner<numSpatialBins>)(record.geomBounds.ToBounds());
+//             HSplit *splitHeuristic                   = PushStructNoZero(temp.arena, HSplit);
+//             if (record.range.count > PARALLEL_THRESHOLD)
+//             {
+//                 const u32 groupSize = 4 * 1024; // PARALLEL_THRESHOLD;
+//                 *splitHeuristic     = ParallelReduce<HSplit>(
+//                     record.range.start, record.range.count, groupSize,
+//                     [&](HSplit &binner, u32 start, u32 count) { binner.Bin(mesh, soa, start, count); },
+//                     [&](HSplit &l, const HSplit &r) { l.Merge(r); },
+//                     splitBinner);
+//             }
+//             else
+//             {
+//                 *splitHeuristic = HSplit(splitBinner);
+//                 splitHeuristic->Bin(mesh, soa, record.range.start, record.range.count);
+//             }
+//             struct Split spatialSplit = BinBest(splitHeuristic->finalBounds,
+//                                                 splitHeuristic->entryCounts, splitHeuristic->exitCounts, splitBinner);
+//             spatialSplit.type         = Split::Spatial;
+//             u32 lCount                = 0;
+//             for (u32 i = 0; i < spatialSplit.bestPos; i++)
+//             {
+//                 lCount += splitHeuristic->entryCounts[i][spatialSplit.bestDim];
+//             }
+//             u32 rCount = 0;
+//             for (u32 i = spatialSplit.bestPos; i < numSpatialBins; i++)
+//             {
+//                 rCount += splitHeuristic->exitCounts[i][spatialSplit.bestDim];
+//             }
+//             if (spatialSplit.bestSAH < objectSplit.bestSAH && lCount + rCount - record.range.count <= record.range.ExtSize())
+//             {
+//                 spatialSplit.ptr      = (void *)splitHeuristic;
+//                 spatialSplit.allocPos = popPos;
+//                 return spatialSplit;
+//             }
+//         }
+//         objectSplit.ptr      = (void *)objectBinHeuristic;
+//         objectSplit.allocPos = popPos;
+//         return objectSplit;
+//     }
+//     void FlushState(struct Split split)
+//     {
+//         TempArena temp = ScratchStart(0, 0);
+//         ArenaPopTo(temp.arena, split.allocPos);
+//     }
+//     void Split(struct Split split, const Record &record, Record &outLeft, Record &outRight)
+//     {
+//         // NOTE: Split must be called from the same thread as Bin
+//         TempArena temp        = ScratchStart(0, 0);
+//         const ExtRange &range = record.range;
+//         PrimDataSOA *data     = soa;
+//         u32 mid;
+//         u32 splitCount = 0;
+//         if (split.bestSAH == f32(pos_inf))
+//         {
+//             mid = record.range.start + (record.range.count / 2);
+//             Bounds geomLeft;
+//             Bounds centLeft;
+//             Bounds geomRight;
+//             Bounds centRight;
+//             for (u32 i = record.range.start; i < record.range.End(); i++) // mid; i++)
+//             {
+//                 f32 min[3] = {
+//                     data->minX[i],
+//                     data->minY[i],
+//                     data->minZ[i],
+//                 };
+//                 f32 max[3] = {
+//                     data->maxX[i],
+//                     data->maxY[i],
+//                     data->maxZ[i],
+//                 };
+//                 f32 centroid[3] = {
+//                     (max[0] - min[0]) * 0.5f,
+//                     (max[1] - min[1]) * 0.5f,
+//                     (max[2] - min[2]) * 0.5f,
+//                 };
+//                 if (i < mid)
+//                 {
+//                     geomLeft.Extend(Lane4F32(min[0], min[1], min[2], 0.f), Lane4F32(max[0], max[1], max[2], 0.f));
+//                     centLeft.Extend(Lane4F32(centroid[0], centroid[1], centroid[2], 0.f));
+//                 }
+//                 else
+//                 {
+//                     geomRight.Extend(Lane4F32(min[0], min[1], min[2], 0.f), Lane4F32(max[0], max[1], max[2], 0.f));
+//                     centRight.Extend(Lane4F32(centroid[0], centroid[1], centroid[2], 0.f));
+//                 }
+//             }
+//             outLeft.geomBounds.FromBounds(geomLeft);
+//             outLeft.centBounds.FromBounds(centLeft);
+//             outRight.geomBounds.FromBounds(geomRight);
+//             outRight.centBounds.FromBounds(centRight);
+//         }
+//         else
+//         {
+//             // PerformanceCounter perCounter = OS_StartCounter();
+//             switch (split.type)
+//             {
+//                 case Split::Object:
+//                 {
+//                     OBin *heuristic = (OBin *)(split.ptr);
+//                     mid             = PartitionParallelCentroids(split, record.range, soa);
+//                     for (u32 i = 0; i < split.bestPos; i++)
+//                     {
+//                         outLeft.geomBounds.Extend(heuristic->bins[split.bestDim][i]);
+//                     }
+//                     for (u32 i = 0; i < split.bestPos; i++)
+//                     {
+//                         outRight.geomBounds.Extend(heuristic->bins[split.bestDim][i]);
+//                     }
+//                 }
+//                 break;
+//                 case Split::Spatial:
+//                 {
+//                     HSplit *heuristic = (HSplit *)(split.ptr);
+//                     mid               = heuristic->Split(mesh, soa, record.range,
+//                                                          split, outLeft, outRight, &splitCount);
+//                     for (u32 i = 0; i < split.bestPos; i++)
+//                     {
+//                         outLeft.geomBounds.Extend(heuristic->bins8[split.bestDim][i]);
+//                     }
+//                     for (u32 i = split.bestPos; i < numSpatialBins; i++)
+//                     {
+//                         outRight.geomBounds.Extend(heuristic->bins8[split.bestDim][i]);
+//                     }
+//                 }
+//                 break;
+//             }
+//             // threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perCounter);
+//         }
+//         OBin *oHeuristic   = (OBin *)(split.ptr);
+//         HSplit *sHeuristic = (HSplit *)(split.ptr);
+//         u32 numLeft        = mid - range.start;
+//         u32 numRight       = range.End() - mid + splitCount;
+//         f32 weight         = (f32)(numLeft) / (numLeft + numRight);
+//         u32 remainingSpace = (range.ExtSize() - splitCount);
+//         u32 extSizeLeft    = Min((u32)(remainingSpace * weight), remainingSpace);
+//         u32 extSizeRight   = remainingSpace - extSizeLeft;
+//         u32 shift          = Max(extSizeLeft, numRight);
+//         u32 numToShift     = Min(extSizeLeft, numRight);
+//         if (numToShift != 0)
+//         {
+//             if (numToShift > PARALLEL_THRESHOLD)
+//             {
+//                 u32 groupSize = PARALLEL_THRESHOLD;
+//                 u32 taskCount = (numToShift + groupSize - 1) / groupSize;
+//                 taskCount     = Min(taskCount, scheduler.numWorkers);
+//                 u32 stepSize  = numToShift / taskCount;
+//                 scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
+//                     u32 start = mid + jobID * stepSize;
+//                     u32 end   = start + stepSize; // Min(mid + numToShift, start + groupSize);
+//                     if (jobID == taskCount - 1)
+//                     {
+//                         Assert(mid + numToShift >= end);
+//                         end = mid + numToShift;
+//                     }
+//                     for (u32 i = start; i < end; i++)
+//                     {
+//                         Assert(i + shift < range.extEnd);
+//                         data->Set(*data, i + shift, i);
+//                     }
+//                 });
+//             }
+//             else
+//             {
+//                 for (u32 i = mid; i < mid + numToShift; i++)
+//                 {
+//                     Assert(i + shift < range.extEnd);
+//                     data->Set(*data, i + shift, i);
+//                 }
+//             }
+//         }
+//         Assert(numLeft <= record.range.count);
+//         Assert(numRight <= record.range.count);
+//         outLeft.range    = ExtRange(range.start, numLeft, range.start + numLeft + extSizeLeft);
+//         outRight.range   = ExtRange(outLeft.range.extEnd, numRight, range.extEnd);
+//         u32 rightExtSize = outRight.range.ExtSize();
+//         Assert(rightExtSize == extSizeRight);
+//         ArenaPopTo(temp.arena, split.allocPos);
+//     }
+// };
 
 // NOTE: this is embree's implementation of split binning for SBVH
 template <i32 numBins = 16>

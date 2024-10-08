@@ -30,18 +30,6 @@ struct PartitionPayload
         : lOffsets(lOffsets), rOffsets(rOffsets), count(count), groupSize(groupSize) {}
 };
 
-struct SplitPayload
-{
-    u32 *splitOffsets;
-    u32 *refOffsets;
-    u32 count;
-    u32 groupSize;
-
-    SplitPayload() {}
-    SplitPayload(u32 *splitOffsets, u32 *refOffsets, u32 count, u32 groupSize)
-        : splitOffsets(splitOffsets), refOffsets(refOffsets), count(count), groupSize(groupSize) {}
-};
-
 struct Split
 {
     enum Type
@@ -58,7 +46,8 @@ struct Split
     // TODO: this is maybe a bit jank
     void *ptr;
     PartitionPayload partitionPayload;
-    SplitPayload splitPayload;
+    u32 numLeft;
+    u32 numRight;
 
     u64 allocPos;
 
@@ -211,6 +200,30 @@ struct ExtRange
     __forceinline u32 TotalSize() const { return extEnd - start; }
 };
 
+// double buffered
+struct DBExtRange
+{
+    u32 extStart;
+    u32 start;
+    u32 count;
+    u32 extEnd;
+
+    DBExtRange() {}
+    __forceinline DBExtRange(u32 extStart, u32 start, u32 count, u32 extEnd)
+        : extStart(extStart), start(start), count(count), extEnd(extEnd)
+    {
+        Assert(extStart == start || start + count == extEnd);
+    }
+    __forceinline u32 End() const { return start + count; }
+    __forceinline u32 Size() const { return count; }
+    __forceinline u32 ExtSize() const
+    {
+        Assert(extStart == start || End() == extEnd);
+        return start == extStart ? start - extStart : extEnd - End();
+    }
+    __forceinline u32 TotalSize() const { return extEnd - extStart; }
+};
+
 struct ScalarBounds
 {
     f32 minX;
@@ -258,12 +271,78 @@ struct RecordSOASplits
     ExtRange range;
 };
 
-struct RecordAOSSplits
+struct alignas(64) RecordAOSSplits
 {
     using PrimitiveData = PrimRef;
-    ScalarBounds geomBounds;
-    ScalarBounds centBounds;
-    ExtRange range;
+    union
+    {
+        struct
+        {
+            Lane8F32 geomBounds;
+            Lane8F32 centBounds;
+        };
+        struct
+        {
+            f32 geomMin[3];
+            union
+            {
+                u32 extStart;
+            };
+            f32 geomMax[3];
+            union
+            {
+                u32 start;
+            };
+            f32 centMin[3];
+            union
+            {
+                u32 count;
+            };
+            f32 centMax[3];
+            union
+            {
+                u32 extEnd;
+            };
+        };
+    };
+
+    RecordAOSSplits() : geomBounds(neg_inf), centBounds(neg_inf) {}
+    __forceinline RecordAOSSplits &operator=(const RecordAOSSplits &other)
+    {
+        geomBounds = other.geomBounds;
+        centBounds = other.centBounds;
+        return *this;
+    }
+    u32 Start() const
+    {
+        return start;
+    }
+    u32 Count() const
+    {
+        return count;
+    }
+    u32 ExtSize() const
+    {
+        return extStart == start ? extEnd - (start + count) : start - extStart;
+    }
+    void SetRange(u32 inExtStart, u32 inStart, u32 inCount, u32 inExtEnd)
+    {
+        extStart = inExtStart;
+        start    = inStart;
+        count    = inCount;
+        extEnd   = inExtEnd;
+    }
+    void SetRange(DBExtRange r)
+    {
+        extStart = r.extStart;
+        start    = r.start;
+        count    = r.count;
+        extEnd   = r.extEnd;
+    }
+    DBExtRange GetRange() const
+    {
+        return DBExtRange(extStart, start, count, extEnd);
+    }
 };
 
 struct Bounds8
@@ -314,6 +393,14 @@ __forceinline f32 HalfArea(const Bounds8 &b)
 {
     Lane4F32 mins   = Extract4<0>(b.v);
     Lane4F32 maxs   = Extract4<1>(b.v);
+    Lane4F32 extent = (maxs + mins);
+    return FMA(extent[0], extent[1] + extent[2], extent[1] * extent[2]);
+}
+
+__forceinline f32 HalfArea(const Lane8F32 &b)
+{
+    Lane4F32 mins   = Extract4<0>(b);
+    Lane4F32 maxs   = Extract4<1>(b);
     Lane4F32 extent = (maxs + mins);
     return FMA(extent[0], extent[1] + extent[2], extent[1] * extent[2]);
 }
