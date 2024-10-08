@@ -46,7 +46,7 @@ struct CreateQuantizedNode
         {
             bounds = Max(bounds, Lane8F32::Load(&records[i].geomBounds));
         }
-        Lane4F32 boundsMinP = Extract4<0>(bounds);
+        Lane4F32 boundsMinP = -Extract4<0>(bounds);
         Lane4F32 boundsMaxP = Extract4<1>(bounds);
         result->minP        = ToVec3f(boundsMinP);
 
@@ -442,11 +442,11 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     f32 leafSAH  = settings.intCost * area * total; //((total + (1 << settings.logBlockSize) - 1) >> settings.logBlockSize);
     f32 splitSAH = settings.travCost * area + settings.intCost * split.bestSAH;
 
-    if (leafSAH <= splitSAH && total > settings.maxLeafSize)
-    {
-        printf("size: %u\n", total);
-        int stop = 5;
-    }
+    // if (leafSAH <= splitSAH && total > settings.maxLeafSize)
+    // {
+    // printf("size: %u\n", total);
+    // int stop = 5;
+    // }
     if (total <= settings.maxLeafSize)
     {
         heuristic.FlushState(split);
@@ -478,10 +478,11 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
         }
         if (bestChild == -1) break;
 
-        split = heuristic.Bin(childRecords[bestChild], currents[bestChild]);
+        current = currents[bestChild];
+        split   = heuristic.Bin(childRecords[bestChild], current);
 
         Record out;
-        heuristic.Split(split, currents[bestChild], childRecords[bestChild], out, childRecords[numChildren]);
+        heuristic.Split(split, current, childRecords[bestChild], out, childRecords[numChildren]);
 
         Assert(childRecords[0].count <= record.count && childRecords[1].count <= record.count);
         childRecords[bestChild] = out;
@@ -514,7 +515,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
         }
     }
 
-    PerformanceCounter perfCounter = OS_StartCounter();
+    // PerformanceCounter perfCounter = OS_StartCounter();
     // u32 leafIndices[N];
     leafCount = 0;
     u32 nodeIndices[N];
@@ -546,7 +547,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     outGrandChild = children;
 
     threadLocalStatistics[GetThreadIndex()].misc += nodeCount;
-    threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perfCounter);
+    // threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perfCounter);
 }
 
 template <i32 N, typename BuildFunctions>

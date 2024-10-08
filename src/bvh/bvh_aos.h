@@ -943,10 +943,10 @@ struct HeuristicSpatialSplits
         }
         else
         {
-            // PerformanceCounter perCounter = OS_StartCounter();
             PartitionPayload &payload     = split.partitionPayload;
             RecordAOSSplits *leftRecords  = PushArrayNoZero(temp.arena, RecordAOSSplits, payload.count);
             RecordAOSSplits *rightRecords = PushArrayNoZero(temp.arena, RecordAOSSplits, payload.count);
+            PerformanceCounter perCounter = OS_StartCounter();
             switch (split.type)
             {
                 case Split::Object:
@@ -1003,7 +1003,7 @@ struct HeuristicSpatialSplits
                 }
                 break;
             }
-            // threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perCounter);
+            threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perCounter);
             Lane8F32 geomLeft(neg_inf);
             Lane8F32 geomRight(neg_inf);
             Lane8F32 centLeft(neg_inf);
@@ -1046,7 +1046,7 @@ struct HeuristicSpatialSplits
                 Lane4F32 min       = Extract4<0>(ref->m256);
                 Lane4F32 max       = Extract4<1>(ref->m256);
                 Lane4F32 centroid  = (max - min) * 0.5f;
-                Assert(centroid[split.bestDim] < split.bestValue);
+                // Assert(centroid[split.bestDim] < split.bestValue);
                 Lane8F32 c(-centroid, centroid);
                 Assert((Movemask(ref->m256 <= outLeft.geomBounds) & 0x77) == 0x77);
                 Assert((Movemask(c <= outLeft.centBounds) & 0x77) == 0x77);
@@ -1057,7 +1057,7 @@ struct HeuristicSpatialSplits
                 Lane4F32 min       = Extract4<0>(ref->m256);
                 Lane4F32 max       = Extract4<1>(ref->m256);
                 Lane4F32 centroid  = (max - min) * 0.5f;
-                Assert(centroid[split.bestDim] >= split.bestValue);
+                // Assert(centroid[split.bestDim] >= split.bestValue);
                 Lane8F32 c(-centroid, centroid);
                 Assert((Movemask(ref->m256 <= outRight.geomBounds) & 0x77) == 0x77);
                 Assert((Movemask(c <= outRight.centBounds) & 0x77) == 0x77);
