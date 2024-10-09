@@ -37,8 +37,10 @@ void Partition(u32 lOffset, u32 rOffset, const Binner *binner, u32 start, u32 co
         };
         Lane8U32 bin = binner->Bin(centroids[dim], dim);
 
-        Lane8F32 mask = (AsFloat(bin) >= AsFloat(bestPos));
-        u32 prevMask  = Movemask(mask);
+        Lane8F32 mask  = (AsFloat(bin) >= AsFloat(bestPos));
+        Lane8F32 lMask = (AsFloat(bin) <= AsFloat(bestPos));
+        u32 prevMask   = Movemask(mask);
+
         Transpose3x8(centroids[0], centroids[1], centroids[2],
                      lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5], lanes[6], lanes[7]);
         for (u32 chunkIndex = 0; chunkIndex < LANE_WIDTH; chunkIndex++)
@@ -67,9 +69,10 @@ void Partition(u32 lOffset, u32 rOffset, const Binner *binner, u32 start, u32 co
         outRefs[writeLocs[isRight]++] = refs[i];
         totalR += isRight;
         totalL += !isRight;
-        centRight = MaskMax(masks[isRight], centRight, c);
-        geomRight = MaskMax(masks[isRight], geomRight, primRef->m256);
         centLeft  = MaskMax(masks[!isRight], centLeft, c);
+        centRight = MaskMax(masks[isRight], centRight, c);
+
+        geomRight = MaskMax(masks[isRight], geomRight, primRef->m256);
         geomLeft  = MaskMax(masks[!isRight], geomLeft, primRef->m256);
     }
     Assert(expectedLCount == totalL);
@@ -751,6 +754,8 @@ struct HeuristicSpatialSplits
             u32 totalNumSplits = lCount + rCount - record.count;
             if (spatialSplit.bestSAH < objectSplit.bestSAH && totalNumSplits <= record.ExtSize())
             {
+                // PerformanceCounter perCounter = OS_StartCounter();
+                // threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perCounter);
                 u32 threadSplitOffset      = splitOffset.fetch_add(totalNumSplits, std::memory_order_acq_rel);
                 u32 threadSplitOffsetStart = threadSplitOffset;
 
@@ -906,7 +911,6 @@ struct HeuristicSpatialSplits
             PartitionPayload &payload     = split.partitionPayload;
             RecordAOSSplits *leftRecords  = PushArrayNoZero(temp.arena, RecordAOSSplits, payload.count);
             RecordAOSSplits *rightRecords = PushArrayNoZero(temp.arena, RecordAOSSplits, payload.count);
-            PerformanceCounter perCounter = OS_StartCounter();
             switch (split.type)
             {
                 case Split::Object:
@@ -963,7 +967,6 @@ struct HeuristicSpatialSplits
                 }
                 break;
             }
-            threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perCounter);
             Lane8F32 geomLeft(neg_inf);
             Lane8F32 geomRight(neg_inf);
             Lane8F32 centLeft(neg_inf);
@@ -996,6 +999,7 @@ struct HeuristicSpatialSplits
         ArenaPopTo(temp.arena, split.allocPos);
 
         // error check
+#if 0
         {
             for (u32 i = outLeft.start; i < outLeft.End(); i++)
             {
@@ -1020,6 +1024,7 @@ struct HeuristicSpatialSplits
                 Assert((Movemask(c <= outRight.centBounds) & 0x77) == 0x77);
             }
         }
+#endif
     }
 };
 

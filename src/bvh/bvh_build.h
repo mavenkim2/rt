@@ -452,7 +452,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     }
 
     u32 currents[N];
-    Split split = heuristic.Bin(record, current);
+    Split split                   = heuristic.Bin(record, current);
 
     // NOTE: multiply both by the area instead of dividing
     f32 area     = HalfArea(record.geomBounds);
@@ -467,6 +467,8 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
         return;
     }
     heuristic.Split(split, current, record, childRecords[0], childRecords[1]);
+    // PerformanceCounter perCounter = OS_StartCounter();
+    // threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perCounter);
     current = !current;
     Assert(childRecords[0].count <= record.count && childRecords[1].count <= record.count);
     currents[0] = current;
@@ -491,8 +493,8 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
         }
         if (bestChild == -1) break;
 
-        current = currents[bestChild];
-        split   = heuristic.Bin(childRecords[bestChild], current);
+        current                       = currents[bestChild];
+        split                         = heuristic.Bin(childRecords[bestChild], current);
 
         Record out;
         heuristic.Split(split, current, childRecords[bestChild], out, childRecords[numChildren]);
@@ -528,8 +530,6 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
         }
     }
 
-    // PerformanceCounter perfCounter = OS_StartCounter();
-    // u32 leafIndices[N];
     leafCount = 0;
     u32 nodeIndices[N];
     u32 nodeCount = 0;
@@ -549,7 +549,6 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     {
         children = PushArrayTagged(currentArena, NodeType, nodeCount, MemoryType_Node);
     }
-    // PerformanceCounter perfCounter = OS_StartCounter();
     for (u32 i = 0; i < nodeCount; i++)
     {
         u32 nodeIndex = nodeIndices[i];
@@ -560,7 +559,6 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     outGrandChild = children;
 
     threadLocalStatistics[GetThreadIndex()].misc += nodeCount;
-    // threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perfCounter);
 }
 
 template <i32 N, typename BuildFunctions>

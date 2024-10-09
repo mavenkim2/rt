@@ -471,6 +471,17 @@ struct Bounds8F32
         maxV = MaskMax(mask, maxV, y);
         maxW = MaskMax(mask, maxW, z);
     }
+    __forceinline void MaskExtend(const Lane8F32 &mask, const Lane8F32 &minX, const Lane8F32 &minY, const Lane8F32 &minZ,
+                                  const Lane8F32 &maxX, const Lane8F32 &maxY, const Lane8F32 &maxZ)
+    {
+        minU = MaskMin(mask, minU, minX);
+        minV = MaskMin(mask, minV, minY);
+        minW = MaskMin(mask, minW, minZ);
+
+        maxU = MaskMax(mask, maxU, maxX);
+        maxV = MaskMax(mask, maxV, maxY);
+        maxW = MaskMax(mask, maxW, maxZ);
+    }
     __forceinline void MaskExtendNegMin(const Lane8F32 &mask, const Lane8F32 &x, const Lane8F32 &y, const Lane8F32 &z)
     {
         minU = MaskMax(mask, minU, x);
@@ -481,8 +492,19 @@ struct Bounds8F32
         maxV = MaskMax(mask, maxV, y);
         maxW = MaskMax(mask, maxW, z);
     }
-    __forceinline void ExtendNegativeMin(const Lane8F32 &minX, const Lane8F32 &minY, const Lane8F32 &minZ,
-                                         const Lane8F32 &maxX, const Lane8F32 &maxY, const Lane8F32 &maxZ)
+    __forceinline void MaskExtendNegMin(const Lane8F32 &mask, const Lane8F32 &minX, const Lane8F32 &minY, const Lane8F32 &minZ,
+                                        const Lane8F32 &maxX, const Lane8F32 &maxY, const Lane8F32 &maxZ)
+    {
+        minU = MaskMax(mask, minU, minX);
+        minV = MaskMax(mask, minV, minY);
+        minW = MaskMax(mask, minW, minZ);
+
+        maxU = MaskMax(mask, maxU, maxX);
+        maxV = MaskMax(mask, maxV, maxY);
+        maxW = MaskMax(mask, maxW, maxZ);
+    }
+    __forceinline void ExtendNegMin(const Lane8F32 &minX, const Lane8F32 &minY, const Lane8F32 &minZ,
+                                    const Lane8F32 &maxX, const Lane8F32 &maxY, const Lane8F32 &maxZ)
     {
         minU = Max(minU, minX);
         minV = Max(minV, minY);
@@ -491,16 +513,6 @@ struct Bounds8F32
         maxU = Max(maxU, maxX);
         maxV = Max(maxV, maxY);
         maxW = Max(maxW, maxZ);
-    }
-    __forceinline void ExtendNegativeMin(const Bounds8F32 &other)
-    {
-        minU = Max(minU, other.minU);
-        minV = Max(minV, other.minV);
-        minW = Max(minW, other.minW);
-
-        maxU = Max(maxU, other.maxU);
-        maxV = Max(maxV, other.maxV);
-        maxW = Max(maxW, other.maxW);
     }
 
     __forceinline void MaskExtendL(const Lane8F32 &mask, const Lane8F32 &u, const Lane8F32 &v, const Lane8F32 &w)
