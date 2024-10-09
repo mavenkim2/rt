@@ -5,14 +5,14 @@ namespace rt
 static const u32 LANE_WIDTH         = 8;
 static const i32 LANE_WIDTHi        = 8;
 static const f32 GROW_AMOUNT        = 1.2f;
-static const u32 PARALLEL_THRESHOLD = 32 * 1024;
+static const u32 PARALLEL_THRESHOLD = 64 * 1024;
 
 static const Lane8F32 signFlipMask(-0.f, -0.f, -0.f, 0.f, 0.f, 0.f, 0.f, 0.f);
 static const u32 LUTAxis[] = {1, 2, 0};
 
 struct BuildSettings
 {
-    u32 maxLeafSize = 3;
+    u32 maxLeafSize = 15;
     i32 maxDepth    = 32;
     f32 intCost     = 1.f;
     f32 travCost    = 1.f;

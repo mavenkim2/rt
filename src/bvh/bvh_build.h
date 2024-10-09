@@ -184,8 +184,10 @@ struct UpdateQuantizedNode<4>
             primTotal += record->count;
         }
 
-        Assert(primTotal <= 12);
-        u32 *primIndices       = PushArray(arena, u32, primTotal);
+        Assert(primTotal <= 4 * 7);
+        u32 *primIndices = PushArray(arena, u32, primTotal);
+        Assert(((uintptr_t)children & 0xf) == 0);
+        Assert(((uintptr_t)primIndices & 0xf) == 0);
         parent->internalOffset = (uintptr_t)children;
         parent->leafOffset     = (uintptr_t)primIndices;
         parent->meta           = 0;
@@ -194,16 +196,31 @@ struct UpdateQuantizedNode<4>
         {
             u32 leafIndex        = leafIndices[i];
             const Record *record = &records[leafIndex];
-            u32 primCount        = record->count;
             for (u32 j = record->start; j < record->start + record->count; j++)
             {
                 primIndices[offset++] = j;
             }
 
-            Assert(primCount >= 1 && primCount <= 3);
+            Assert(primCount >= 1 && primCount <= 15);
             Assert(leafIndex >= 0 && leafIndex <= 3);
 
-            parent->meta |= primCount << (leafIndex * 2);
+            switch (leafIndex)
+            {
+                case 0:
+                {
+                    parent->internalOffset |= record->count;
+                }
+                break;
+                case 1:
+                {
+                    parent->leafOffset |= record->count;
+                }
+                break;
+                default:
+                {
+                    parent->meta |= record->count << ((leafIndex - 2) << 2);
+                }
+            }
         }
     }
 };
@@ -442,12 +459,8 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     f32 leafSAH  = settings.intCost * area * total; //((total + (1 << settings.logBlockSize) - 1) >> settings.logBlockSize);
     f32 splitSAH = settings.travCost * area + settings.intCost * split.bestSAH;
 
-    // if (leafSAH <= splitSAH && total > settings.maxLeafSize)
-    // {
-    // printf("size: %u\n", total);
-    // int stop = 5;
-    // }
-    if (total <= settings.maxLeafSize)
+    // if (total <= settings.maxLeafSize)
+    if (total <= settings.maxLeafSize && leafSAH <= splitSAH)
     {
         heuristic.FlushState(split);
         outGrandChild = 0;
@@ -530,7 +543,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     }
 
     Arena *currentArena = arenas[GetThreadIndex()];
-    NodeType *children  = (NodeType *)(0xffffffffffffffff);
+    NodeType *children  = (NodeType *)(0xfffffffffffffff0);
 
     if (nodeCount)
     {
