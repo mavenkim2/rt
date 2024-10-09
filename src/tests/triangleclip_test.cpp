@@ -361,10 +361,11 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
 
     Bounds centBounds;
     Bounds geomBounds;
-    u32 numFaces     = mesh->numIndices / 3;
-    u32 extEnd       = u32(numFaces * GROW_AMOUNT);
-    PrimRef *refs    = GenerateAOSData(arena, mesh, numFaces, geomBounds, centBounds);
-    PrimRef *outRefs = PushArrayNoZero(arena, PrimRef, extEnd);
+    u32 numFaces  = mesh->numIndices / 3;
+    u32 extEnd    = u32(numFaces * GROW_AMOUNT);
+    PrimRef *refs = GenerateAOSData(arena, mesh, numFaces, geomBounds, centBounds);
+    u32 *l        = PushArrayNoZero(arena, u32, extEnd);
+    u32 *r        = PushArrayNoZero(arena, u32, extEnd);
 
 #if 1
     SplitBinner<16> binner(geomBounds);
@@ -375,7 +376,7 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     // heuristic.Bin(mesh, refs, 0, numFaces);
     ParallelForOutput output = ParallelFor<Heuristic>(
         temp, 0, numFaces, PARALLEL_THRESHOLD,
-        [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(mesh, refs, start, count); },
+        [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(mesh, refs, l, start, count); },
         &binner);
 
     Reduce(
@@ -438,12 +439,12 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     RecordAOSSplits recordR;
     scheduler.ScheduleAndWait(output.num, 1, [&](u32 jobID) {
         PerformanceCounter perfCounter = OS_StartCounter();
-        RecordAOSSplits l;
-        RecordAOSSplits r;
+        RecordAOSSplits lRec;
+        RecordAOSSplits rRec;
         u32 threadStart = 0 + jobID * output.groupSize;
         u32 count       = jobID == output.num - 1 ? numFaces - threadStart : output.groupSize;
-        heuristic.Split(mesh, refs, outRefs, lOffsets[jobID], rOffsets[jobID],
-                        threadStart, count, split, l, r, lCounts[jobID], rCounts[jobID]);
+        heuristic.Split(mesh, refs, l, r, lOffsets[jobID], rOffsets[jobID], 0, // TODO
+                        threadStart, count, split, lRec, rRec, lCounts[jobID], rCounts[jobID]);
         threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perfCounter);
     });
     time = OS_GetMilliseconds(counter);
@@ -559,7 +560,7 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     {
         for (u32 i = 0; i < lCount; i++)
         {
-            PrimRef *ref = &outRefs[i];
+            PrimRef *ref = &refs[r[i]];
             f32 min      = ref->min[split.bestDim];
             f32 max      = ref->max[split.bestDim];
             f32 centroid = (max - min) * 0.5f;
@@ -567,7 +568,7 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
         }
         for (u32 i = extEnd - rCount; i < extEnd; i++)
         {
-            PrimRef *ref = &outRefs[i];
+            PrimRef *ref = &refs[r[i]];
             f32 min      = ref->min[split.bestDim];
             f32 max      = ref->max[split.bestDim];
             f32 centroid = (max - min) * 0.5f;
@@ -733,8 +734,13 @@ void AOSSBVHBuilderTest(TriangleMesh *mesh)
     const u32 numFaces = mesh->numIndices / 3;
     Bounds geomBounds;
     Bounds centBounds;
-    PrimRef *refs    = GenerateAOSData(arena, mesh, numFaces, geomBounds, centBounds);
-    PrimRef *outRefs = PushArrayNoZero(arena, PrimRef, u32(numFaces * GROW_AMOUNT));
+    PrimRef *refs = GenerateAOSData(arena, mesh, numFaces, geomBounds, centBounds);
+    u32 *l        = PushArrayNoZero(arena, u32, u32(numFaces * GROW_AMOUNT));
+    u32 *r        = PushArrayNoZero(arena, u32, u32(numFaces * GROW_AMOUNT));
+    for (u32 i = 0; i < numFaces; i++)
+    {
+        l[i] = i;
+    }
 
     BuildSettings settings;
     settings.intCost = 0.3f;
@@ -751,7 +757,7 @@ void AOSSBVHBuilderTest(TriangleMesh *mesh)
     }
 
     PerformanceCounter counter = OS_StartCounter();
-    BVH4Quantized bvh          = BuildQuantizedSBVH<4>(settings, arenas, mesh, refs, outRefs, record);
+    BVH4Quantized bvh          = BuildQuantizedSBVH<4>(settings, arenas, mesh, refs, l, r, record);
     f32 time                   = OS_GetMilliseconds(counter);
     printf("num faces: %u\n", numFaces);
     printf("Build time: %fms\n", time);

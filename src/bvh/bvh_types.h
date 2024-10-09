@@ -48,6 +48,7 @@ struct Split
     // TODO: this is maybe a bit jank
     void *ptr;
     PartitionPayload partitionPayload;
+    u32 *splitOffsets = 0;
     u32 numLeft;
     u32 numRight;
 

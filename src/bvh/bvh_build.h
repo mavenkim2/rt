@@ -184,7 +184,7 @@ struct UpdateQuantizedNode<4>
             primTotal += record->count;
         }
 
-        Assert(primTotal <= 4 * 7);
+        Assert(primTotal <= 4 * 15);
         u32 *primIndices = PushArray(arena, u32, primTotal);
         Assert(((uintptr_t)children & 0xf) == 0);
         Assert(((uintptr_t)primIndices & 0xf) == 0);
@@ -201,7 +201,7 @@ struct UpdateQuantizedNode<4>
                 primIndices[offset++] = j;
             }
 
-            Assert(primCount >= 1 && primCount <= 15);
+            Assert(record->count >= 1 && record->count <= 15);
             Assert(leafIndex >= 0 && leafIndex <= 3);
 
             switch (leafIndex)
@@ -820,13 +820,14 @@ template <i32 N>
 BVHQuantized<N> BuildQuantizedSBVH(BuildSettings settings,
                                    Arena **inArenas,
                                    TriangleMesh *mesh,
-                                   PrimRef *ref0,
-                                   PrimRef *ref1,
+                                   PrimRef *ref,
+                                   u32 *refIndices0,
+                                   u32 *refIndices1,
                                    RecordAOSSplits &record)
 {
     SBVHBuilderTriangleMesh<N> builder;
-    HeuristicSpatialSplits heuristic(ref0, ref1, mesh, HalfArea(record.geomBounds));
-    builder.heuristic = heuristic;
+    new (&builder.heuristic) HeuristicSpatialSplits(ref, refIndices0, refIndices1, mesh, HalfArea(record.geomBounds),
+                                                    record.End());
     return builder.BuildBVH(settings, inArenas, mesh, record);
 }
 
