@@ -531,6 +531,31 @@ __forceinline void Transpose3x8(const Lane8F32 &inA, const Lane8F32 &inB, const 
     outH = Shuffle4<1, 1>(t37);
 }
 
+__forceinline void Transpose3x8(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC,
+                                Lane4F32 &outA, Lane4F32 &outB, Lane4F32 &outC, Lane4F32 &outD,
+                                Lane4F32 &outE, Lane4F32 &outF, Lane4F32 &outG, Lane4F32 &outH)
+{
+    Lane8F32 acLo = UnpackLo(inA, inC);
+    Lane8F32 acHi = UnpackHi(inA, inC);
+
+    Lane8F32 bLo = Permute<0, 0, 1, 1>(inB);
+    Lane8F32 bHi = Permute<2, 2, 3, 3>(inB);
+
+    Lane8F32 t04 = UnpackLo(acLo, bLo);
+    Lane8F32 t15 = UnpackHi(acLo, bLo);
+    Lane8F32 t26 = UnpackLo(acHi, bHi);
+    Lane8F32 t37 = UnpackHi(acHi, bHi);
+
+    outA = Extract4<0>(t04);
+    outB = Extract4<0>(t15);
+    outC = Extract4<0>(t26);
+    outD = Extract4<0>(t37);
+    outE = Extract4<1>(t04);
+    outF = Extract4<1>(t15);
+    outG = Extract4<1>(t26);
+    outH = Extract4<1>(t37);
+}
+
 __forceinline Lane8U32 Flooru(Lane8F32 lane)
 {
     return _mm256_cvtps_epi32(Floor(lane));

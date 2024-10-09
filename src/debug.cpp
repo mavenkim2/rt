@@ -7,6 +7,6 @@ Event::Event(u32 offset) : offset(offset)
 Event::~Event()
 {
     f32 time = OS_GetMilliseconds(counter);
-    ((u64 *)(&threadLocalStatistics[GetThreadIndex()]))[offset] += (u64)time;
+    ((f64 *)(&threadLocalStatistics[GetThreadIndex()]))[offset] += (f64)time;
 }
 } // namespace rt

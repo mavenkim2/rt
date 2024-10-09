@@ -664,6 +664,7 @@ struct HeuristicSpatialSplits
 
     Split Bin(const Record &record, u32 primary, u32 blockSize = 1)
     {
+        // TIMED_FUNCTION(miscF);
         // Object splits
         TempArena temp    = ScratchStart(0, 0);
         u64 popPos        = ArenaPos(temp.arena);
@@ -754,8 +755,6 @@ struct HeuristicSpatialSplits
             u32 totalNumSplits = lCount + rCount - record.count;
             if (spatialSplit.bestSAH < objectSplit.bestSAH && totalNumSplits <= record.ExtSize())
             {
-                // PerformanceCounter perCounter = OS_StartCounter();
-                // threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perCounter);
                 u32 threadSplitOffset      = splitOffset.fetch_add(totalNumSplits, std::memory_order_acq_rel);
                 u32 threadSplitOffsetStart = threadSplitOffset;
 

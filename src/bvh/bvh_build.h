@@ -29,6 +29,11 @@ struct QuantizedNode
     Vec3f minP;
     u8 scale[3];
     u8 meta;
+
+    u32 GetNumChildren() const
+    {
+        return ((internalOffset & 0xff) == 0) + ((leafOffset & 0xff) == 0) + ((meta & 0xff) == 0) + (((meta >> 4) & 0xff) == 0);
+    }
 };
 
 template <i32 N>
@@ -452,14 +457,13 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     }
 
     u32 currents[N];
-    Split split                   = heuristic.Bin(record, current);
+    Split split = heuristic.Bin(record, current);
 
     // NOTE: multiply both by the area instead of dividing
     f32 area     = HalfArea(record.geomBounds);
     f32 leafSAH  = settings.intCost * area * total; //((total + (1 << settings.logBlockSize) - 1) >> settings.logBlockSize);
     f32 splitSAH = settings.travCost * area + settings.intCost * split.bestSAH;
 
-    // if (total <= settings.maxLeafSize)
     if (total <= settings.maxLeafSize && leafSAH <= splitSAH)
     {
         heuristic.FlushState(split);
@@ -467,8 +471,6 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
         return;
     }
     heuristic.Split(split, current, record, childRecords[0], childRecords[1]);
-    // PerformanceCounter perCounter = OS_StartCounter();
-    // threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perCounter);
     current = !current;
     Assert(childRecords[0].count <= record.count && childRecords[1].count <= record.count);
     currents[0] = current;
@@ -493,8 +495,8 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
         }
         if (bestChild == -1) break;
 
-        current                       = currents[bestChild];
-        split                         = heuristic.Bin(childRecords[bestChild], current);
+        current = currents[bestChild];
+        split   = heuristic.Bin(childRecords[bestChild], current);
 
         Record out;
         heuristic.Split(split, current, childRecords[bestChild], out, childRecords[numChildren]);
@@ -746,11 +748,10 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(Scheduler::Counter *counter, BuildS
     // }
 
     u32 finalNodeCount = nodeCount.load();
-    threadLocalStatistics[GetThreadIndex()].misc += finalNodeCount; // numChildren;
+    threadLocalStatistics[GetThreadIndex()].misc += finalNodeCount;
 
     NodeType *children = PushArrayTagged(currentArena, NodeType, finalNodeCount, MemoryType_Node);
 
-    PerformanceCounter perfCounter = OS_StartCounter();
     for (u32 i = 0; i < finalNodeCount; i++)
     {
         u32 childNodeIndex = childNodeIndices[i];
@@ -759,7 +760,6 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(Scheduler::Counter *counter, BuildS
 
     // Updates the parent
     f.updateNode(currentArena, parent, records, children, childLeafIndices, leafCount.load());
-    threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perfCounter);
 
     // Splits the thread pool
     // Range orderedRanges[N];
