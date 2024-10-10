@@ -1303,6 +1303,7 @@ struct alignas(32) HeuristicSOASplitBinning
 // };
 
 // NOTE: this is embree's implementation of split binning for SBVH
+#if 0
 template <i32 numBins = 16>
 struct TestHeuristic
 {
@@ -1566,6 +1567,7 @@ Split BinBest(const Bounds bounds[3][numBins],
 {
     return BinBest(bounds, counts, counts, binner, blockShift);
 }
+#endif
 
 } // namespace rt
 

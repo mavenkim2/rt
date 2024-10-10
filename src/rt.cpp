@@ -1062,8 +1062,8 @@ int main(int argc, char *argv[])
     // SOASBVHBuilderTest(&mesh);
 
     // AOSSBVHBuilderTest(&mesh);
-    // TriangleClipTestAOS(&mesh);
-    TriangleClipTestAOSInPlace(&mesh);
+    TriangleClipTestAOS(&mesh);
+    // TriangleClipTestAOSInPlace(&mesh);
 
 #if 0
     Arena **arenas = PushArray(arena, Arena *, numProcessors);

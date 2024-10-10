@@ -3,70 +3,40 @@
 
 namespace rt
 {
-void Swap(PrimDataSOA *data, u32 lIndex, u32 rIndex)
-{
-    ::rt::Swap(data->minX[lIndex], data->minX[rIndex]);
-    ::rt::Swap(data->minY[lIndex], data->minY[rIndex]);
-    ::rt::Swap(data->minZ[lIndex], data->minZ[rIndex]);
-    ::rt::Swap(data->geomIDs[lIndex], data->geomIDs[rIndex]);
-    ::rt::Swap(data->maxX[lIndex], data->maxX[rIndex]);
-    ::rt::Swap(data->maxY[lIndex], data->maxY[rIndex]);
-    ::rt::Swap(data->maxZ[lIndex], data->maxZ[rIndex]);
-    ::rt::Swap(data->primIDs[lIndex], data->primIDs[rIndex]);
-}
-void Swap(PrimData *prims, u32 lIndex, u32 rIndex)
-{
-    Swap(prims[lIndex], prims[rIndex]);
-}
+// void Swap(PrimDataSOA *data, u32 lIndex, u32 rIndex)
+// {
+//     ::rt::Swap(data->minX[lIndex], data->minX[rIndex]);
+//     ::rt::Swap(data->minY[lIndex], data->minY[rIndex]);
+//     ::rt::Swap(data->minZ[lIndex], data->minZ[rIndex]);
+//     ::rt::Swap(data->geomIDs[lIndex], data->geomIDs[rIndex]);
+//     ::rt::Swap(data->maxX[lIndex], data->maxX[rIndex]);
+//     ::rt::Swap(data->maxY[lIndex], data->maxY[rIndex]);
+//     ::rt::Swap(data->maxZ[lIndex], data->maxZ[rIndex]);
+//     ::rt::Swap(data->primIDs[lIndex], data->primIDs[rIndex]);
+// }
+// void Swap(PrimData *prims, u32 lIndex, u32 rIndex)
+// {
+//     Swap(prims[lIndex], prims[rIndex]);
+// }
 
-struct PartitionResult
-{
-    Bounds geomBoundsL;
-    Bounds geomBoundsR;
-
-    Bounds centBoundsL;
-    Bounds centBoundsR;
-
-    u32 mid;
-
-    PartitionResult() : geomBoundsL(Bounds()), geomBoundsR(Bounds()), centBoundsL(Bounds()), centBoundsR(Bounds()) {}
-    PartitionResult(Bounds &gL, Bounds &gR, Bounds &cL, Bounds &cR, u32 mid)
-        : geomBoundsL(gL), geomBoundsR(gR), centBoundsL(cL), centBoundsR(cR), mid(mid) {}
-
-    void Extend(const PartitionResult &other)
-    {
-        geomBoundsL.Extend(other.geomBoundsL);
-        geomBoundsR.Extend(other.geomBoundsR);
-        centBoundsL.Extend(other.centBoundsL);
-        centBoundsR.Extend(other.centBoundsR);
-    }
-};
-
-struct Range
-{
-    u32 start;
-    u32 end;
-    u32 group;
-    __forceinline u32 Size() const
-    {
-        if (end > start)
-            return end - start;
-        return 0;
-    }
-};
-
-struct AdditionalMisplacedRanges
-{
-    Range leftRange;
-    Range rightRange;
-};
-
-template <typename PrimitiveData, typename GetIndex, typename IsLeft>
+template <typename PrimitiveData, typename GetIndex>
 u32 FixMisplacedRanges(PrimitiveData *data, u32 numJobs, u32 chunkSize, u32 blockShift,
-                       u32 blockSize, u32 globalMid, u32 *mids, GetIndex getIndex, IsLeft isLeft, AdditionalMisplacedRanges *add = 0)
+                       u32 blockSize, u32 globalMid, u32 *mids, GetIndex getIndex)
 {
+    struct Range
+    {
+        u32 start;
+        u32 end;
+        u32 group;
+        __forceinline u32 Size() const
+        {
+            if (end > start)
+                return end - start;
+            return 0;
+        }
+    };
     TempArena temp              = ScratchStart(0, 0);
-    u32 numMisplacedRanges      = add ? numJobs + 1 : numJobs;
+    u32 numMisplacedRanges      = numJobs;
     Range *leftMisplacedRanges  = PushArray(temp.arena, Range, numMisplacedRanges);
     u32 lCount                  = 0;
     Range *rightMisplacedRanges = PushArray(temp.arena, Range, numMisplacedRanges);
@@ -74,24 +44,6 @@ u32 FixMisplacedRanges(PrimitiveData *data, u32 numJobs, u32 chunkSize, u32 bloc
 
     u32 numMisplacedLeft  = 0;
     u32 numMisplacedRight = 0;
-
-    if (add)
-    {
-        numMisplacedLeft += add->leftRange.Size();
-        numMisplacedRight += add->rightRange.Size();
-        leftMisplacedRanges[0]        = add->leftRange;
-        leftMisplacedRanges[0].group  = 0xffffffff;
-        rightMisplacedRanges[0]       = add->rightRange;
-        rightMisplacedRanges[0].group = 0xffffffff;
-        if (add->leftRange.Size() > 0)
-        {
-            lCount++;
-        }
-        if (add->rightRange.Size() > 0)
-        {
-            rCount++;
-        }
-    }
 
     for (u32 i = 0; i < numJobs; i++)
     {
@@ -104,7 +56,7 @@ u32 FixMisplacedRanges(PrimitiveData *data, u32 numJobs, u32 chunkSize, u32 bloc
 
             while (check >= globalMid)
             {
-                Assert(!isLeft(check));
+                // Assert(!isLeft(check));
                 diff -= 1;
                 check = getIndex(mids[i] + diff - 1, i);
             }
@@ -112,7 +64,7 @@ u32 FixMisplacedRanges(PrimitiveData *data, u32 numJobs, u32 chunkSize, u32 bloc
             check      = getIndex(mids[i] + diff + 1, i);
             while (check < globalMid)
             {
-                Assert(isLeft(check));
+                // Assert(isLeft(check));
                 steps1++;
                 diff += 1;
                 check = getIndex(mids[i] + diff + 1, i);
@@ -131,7 +83,7 @@ u32 FixMisplacedRanges(PrimitiveData *data, u32 numJobs, u32 chunkSize, u32 bloc
             int steps0 = 0;
             while (check < globalMid)
             {
-                Assert(isLeft(check));
+                // Assert(isLeft(check));
                 diff -= 1;
                 steps0++;
                 check = getIndex(mids[i] - diff + 1, i);
@@ -141,7 +93,7 @@ u32 FixMisplacedRanges(PrimitiveData *data, u32 numJobs, u32 chunkSize, u32 bloc
             check = getIndex(mids[i] - diff - 1, i);
             while (check >= globalMid)
             {
-                Assert(!isLeft(check));
+                // Assert(!isLeft(check));
                 diff += 1;
                 check = getIndex(mids[i] - diff - 1, i);
             }
@@ -170,7 +122,7 @@ u32 FixMisplacedRanges(PrimitiveData *data, u32 numJobs, u32 chunkSize, u32 bloc
     u32 rIter     = 0;
     u32 rSize     = rRange.Size();
 
-    for (;;)
+    while (leftIndex != lCount && rightIndex != rCount)
     {
         while (lSize != lIter && rSize != rIter)
         {
@@ -178,21 +130,14 @@ u32 FixMisplacedRanges(PrimitiveData *data, u32 numJobs, u32 chunkSize, u32 bloc
             Assert(leftIndex < lCount);
             u32 lIndex = lRange.start + lIter;
             u32 rIndex = rRange.start + rIter;
-            if (lRange.group != 0xffffffff)
-            {
-                lIndex = getIndex(lIndex, lRange.group);
-            }
-            if (rRange.group != 0xffffffff)
-            {
-                rIndex = getIndex(rIndex, rRange.group);
-            }
+            lIndex     = getIndex(lIndex, lRange.group);
+            rIndex     = getIndex(rIndex, rRange.group);
 
-            Swap(data, lIndex, rIndex);
+            Swap(data[lIndex], data[rIndex]); //, lIndex, rIndex);
 
             lIter++;
             rIter++;
         }
-        if (leftIndex >= lCount - 1 && rightIndex >= rCount - 1) break;
         if (rSize == rIter && rightIndex < rCount)
         {
             rightIndex++;
@@ -212,6 +157,7 @@ u32 FixMisplacedRanges(PrimitiveData *data, u32 numJobs, u32 chunkSize, u32 bloc
     return globalMid;
 }
 
+#if 0
 //////////////////////////////
 // Prim Data Partitions
 //
@@ -422,6 +368,6 @@ void PartitionParallel(Split split, const Record &record, PartitionResult *resul
     PartitionParallel(split, record.data, record.start, record.end, result);
 }
 
-
+#endif
 } // namespace rt
 #endif

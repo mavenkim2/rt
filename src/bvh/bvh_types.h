@@ -5,7 +5,7 @@ namespace rt
 static const u32 LANE_WIDTH         = 8;
 static const i32 LANE_WIDTHi        = 8;
 static const f32 GROW_AMOUNT        = 1.2f;
-static const u32 PARALLEL_THRESHOLD = 64 * 1024;
+static const u32 PARALLEL_THRESHOLD = 8 * 1024;//32 * 1024; // 64 * 1024;
 
 static const Lane8F32 signFlipMask(-0.f, -0.f, -0.f, 0.f, 0.f, 0.f, 0.f, 0.f);
 static const u32 LUTAxis[] = {1, 2, 0};

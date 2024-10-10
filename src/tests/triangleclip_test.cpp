@@ -387,7 +387,7 @@ void TriangleClipTestAOSInPlace(TriangleMesh *mesh)
     counter = OS_StartCounter();
     u32 mid = PartitionParallel(&binner, refs, split, 0, numFaces);
     // u32 mid = Partition(&binner, refs, split.bestDim, split.bestPos, 0, numFaces);
-    time    = OS_GetMilliseconds(counter);
+    time = OS_GetMilliseconds(counter);
     printf("mid: %u\n", mid);
     printf("Time elapsed partition: %fms\n", time);
 
@@ -431,15 +431,15 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     u32 numFaces  = mesh->numIndices / 3;
     u32 extEnd    = u32(numFaces * GROW_AMOUNT);
     PrimRef *refs = GenerateAOSData(arena, mesh, numFaces, geomBounds, centBounds);
-    u32 *l        = PushArrayNoZero(arena, u32, extEnd);
-    u32 *r        = PushArrayNoZero(arena, u32, extEnd);
+    // u32 *l        = PushArrayNoZero(arena, u32, extEnd);
+    // u32 *r        = PushArrayNoZero(arena, u32, extEnd);
 
-    for (u32 i = 0; i < numFaces; i++)
-    {
-        l[i] = i;
-    }
+    // for (u32 i = 0; i < numFaces; i++)
+    // {
+    //     l[i] = i;
+    // }
 
-#if 0
+#if 1
     SplitBinner<16> binner(geomBounds);
     using Heuristic            = HeuristicAOSSplitBinning<16>;
     PerformanceCounter counter = OS_StartCounter();
@@ -448,7 +448,7 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     // heuristic.Bin(mesh, refs, 0, numFaces);
     ParallelForOutput output = ParallelFor<Heuristic>(
         temp, 0, numFaces, PARALLEL_THRESHOLD,
-        [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(mesh, refs, l, start, count); },
+        [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(mesh, refs, /* l,*/ start, count); },
         &binner);
 
     Reduce(
@@ -463,18 +463,21 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     printf("Split dim: %u\n", split.bestDim);
     printf("Split SAH: %f\n", split.bestSAH);
 
-    u32 *lOffsets = PushArrayNoZero(arena, u32, output.num);
-    u32 *rOffsets = PushArrayNoZero(arena, u32, output.num);
-    u32 *lCounts  = PushArrayNoZero(arena, u32, output.num);
-    u32 *rCounts  = PushArrayNoZero(arena, u32, output.num);
+    u32 *lOffsets     = PushArrayNoZero(arena, u32, output.num);
+    u32 *rOffsets     = PushArrayNoZero(arena, u32, output.num);
+    u32 *lCounts      = PushArrayNoZero(arena, u32, output.num);
+    u32 *rCounts      = PushArrayNoZero(arena, u32, output.num);
+    u32 *splitOffsets = PushArrayNoZero(arena, u32, output.num);
 
-    u32 lOffset = 0;
-    u32 rOffset = extEnd;
-    u32 rTotal  = 0;
+    u32 lOffset     = 0;
+    u32 rOffset     = extEnd;
+    u32 rTotal      = 0;
+    u32 splitOffset = numFaces;
     for (u32 i = 0; i < output.num; i++)
     {
         Heuristic *h    = &((Heuristic *)output.out)[i];
         lOffsets[i]     = lOffset;
+        splitOffsets[i] = splitOffset;
         u32 entryCounts = 0;
         u32 exitCounts  = 0;
         for (u32 bin = 0; bin < split.bestPos; bin++)
@@ -485,6 +488,11 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
         {
             exitCounts += h->exitCounts[bin][split.bestDim];
         }
+        u32 groupSize = i == output.num - 1
+                            ? numFaces - (i * output.groupSize + 0)
+                            : output.groupSize;
+        splitOffset += (entryCounts + exitCounts - groupSize);
+
         lOffset += entryCounts;
         rOffset -= exitCounts;
         rTotal += exitCounts;
@@ -492,35 +500,179 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
         lCounts[i]  = entryCounts;
         rCounts[i]  = exitCounts;
     }
-    u32 lCount = 0;
-    u32 rCount = 0;
-    for (u32 bin = 0; bin < split.bestPos; bin++)
-    {
-        lCount += heuristic.entryCounts[bin][split.bestDim];
-    }
-    for (u32 bin = split.bestPos; bin < 16; bin++)
-    {
-        rCount += heuristic.exitCounts[bin][split.bestDim];
-    }
-    Assert(lCount == lOffset && rCount == rTotal);
+    // u32 lCount = 0;
+    // u32 rCount = 0;
+    // for (u32 bin = 0; bin < split.bestPos; bin++)
+    // {
+    //     lCount += heuristic.entryCounts[bin][split.bestDim];
+    // }
+    // for (u32 bin = split.bestPos; bin < 16; bin++)
+    // {
+    //     rCount += heuristic.exitCounts[bin][split.bestDim];
+    // }
+    // Assert(lCount == lOffset && rCount == rTotal);
     counter = OS_StartCounter();
     // heuristic.Split(mesh, refs, outRefs, 0, extEnd - rCount,
     //                 0, numFaces, split, recordL, recordR, lCount, rCount);
 
-    RecordAOSSplits recordL;
-    RecordAOSSplits recordR;
-    scheduler.ScheduleAndWait(output.num, 1, [&](u32 jobID) {
+    RecordAOSSplits *recordL = PushArrayNoZero(arena, RecordAOSSplits, output.num);
+    RecordAOSSplits *recordR = PushArrayNoZero(arena, RecordAOSSplits, output.num);
+    u32 *mids                = PushArrayNoZero(arena, u32, output.num);
+
+    const u32 blockSize         = 512;
+    const u32 blockMask         = blockSize - 1;
+    const u32 blockShift        = Bsf(blockSize);
+    const u32 numJobs           = Min(32u, (numFaces + 511) / 512); // OS_NumProcessors();
+    const u32 numBlocksPerChunk = numJobs;
+    const u32 chunkSize         = blockSize * numBlocksPerChunk;
+    Assert(IsPow2(chunkSize));
+
+    const u32 numChunks = (numFaces + chunkSize - 1) / chunkSize;
+    u32 end             = numFaces;
+
+    auto GetIndex = [&](u32 index, u32 group) {
+        const u32 chunkIndex   = index >> blockShift;
+        const u32 indexInBlock = index & blockMask;
+
+        u32 outIndex = 0 + chunkIndex * chunkSize + (group << blockShift) + indexInBlock;
+        return outIndex;
+    };
+
+    std::atomic<u32> splitAtomic{numFaces};
+
+    scheduler.ScheduleAndWait(numJobs, 1, [&](u32 jobID) {
         PerformanceCounter perfCounter = OS_StartCounter();
-        RecordAOSSplits lRec;
-        RecordAOSSplits rRec;
-        u32 threadStart = 0 + jobID * output.groupSize;
-        u32 count       = jobID == output.num - 1 ? numFaces - threadStart : output.groupSize;
-        heuristic.Split(mesh, refs, l, r, lOffsets[jobID], rOffsets[jobID], 0, // TODO
-                        threadStart, count, split, lRec, rRec, lCounts[jobID], rCounts[jobID]);
+        u32 threadStart                = 0 + jobID * output.groupSize;
+        u32 count                      = jobID == output.num - 1 ? numFaces - threadStart : output.groupSize;
+        // heuristic.Split(mesh, refs, l, r, lOffsets[jobID], rOffsets[jobID], splitOffsets[jobID],
+        //                 threadStart, count, split, lRec, rRec, lCounts[jobID], rCounts[jobID]);
+        const u32 group = jobID;
+
+        u32 l          = 0;
+        u32 r          = (numChunks << blockShift) - 1;
+        u32 lastRIndex = GetIndex(r, group);
+        // r              = lastRIndex > rEndAligned ? r - 8 : r;
+
+        r = lastRIndex >= end
+                ? (lastRIndex - end) < (blockSize - 1)
+                      ? r - (lastRIndex - end) - 1
+                      : r - (r & (blockSize - 1)) - 1
+                : r;
+
+        // u32 lIndex = GetIndex(l, group);
+        u32 rIndex = GetIndex(r, group);
+        Assert(rIndex < end);
+
+        auto GetIndexGroup = [&](u32 index) {
+            return GetIndex(index, group);
+        };
+
+        mids[jobID] = heuristic.Split(mesh, refs, split.bestDim, split.bestPos, l, r, splitAtomic,
+                                      GetIndexGroup, recordL[jobID], recordR[jobID]);
         threadLocalStatistics[GetThreadIndex()].miscF += OS_GetMilliseconds(perfCounter);
     });
     time = OS_GetMilliseconds(counter);
     printf("split time: %fms\n", time);
+
+    counter       = OS_StartCounter();
+    u32 globalMid = 0;
+    for (u32 i = 0; i < output.num; i++)
+    {
+        globalMid += mids[i]; // mids[i] - (0 + i * output.groupSize);
+    }
+    FixMisplacedRanges(refs, numJobs, chunkSize, blockShift, blockSize, globalMid, mids, GetIndex);
+    // struct Range
+    // {
+    //     u32 start;
+    //     u32 end;
+    //     u32 Size() const
+    //     {
+    //         return end > start ? end - start : 0;
+    //     }
+    // };
+    // Range *misplacedRangesL = PushArray(arena, Range, output.num);
+    // Range *misplacedRangesR = PushArray(arena, Range, output.num);
+    // u32 lCount              = 0;
+    // u32 rCount              = 0;
+    // for (u32 i = 0; i < output.num; i++)
+    // {
+    //     if (globalMid > mids[i])
+    //     {
+    //         misplacedRangesR[rCount].start = mids[i];
+    //         misplacedRangesR[rCount].end   = Min(globalMid, i == output.num - 1 ? numFaces : 0 + ((i + 1) * output.groupSize));
+    //         rCount++;
+    //     }
+    //     else if (globalMid < mids[i])
+    //     {
+    //         misplacedRangesL[lCount].start = Max(globalMid, 0 + i * output.groupSize);
+    //         misplacedRangesL[lCount].end   = mids[i];
+    //         lCount++;
+    //     }
+    // }
+    // u32 lNumBad = 0;
+    // u32 rNumBad = 0;
+    // for (u32 i = 0; i < output.num; i++)
+    // {
+    //     lNumBad += misplacedRangesL[i].Size();
+    //     rNumBad += misplacedRangesR[i].Size();
+    // }
+    // Assert(lNumBad == rNumBad);
+    //
+    // u32 lRangeI = 0;
+    // u32 rRangeI = 0;
+    // u32 lIter   = 0;
+    // u32 rIter   = 0;
+    // while (lRangeI != lCount && rRangeI != rCount)
+    // {
+    //     Range &currentL  = misplacedRangesL[lRangeI];
+    //     Range &currentR  = misplacedRangesR[rRangeI];
+    //     u32 currentLSize = currentL.Size();
+    //     u32 currentRSize = currentR.Size();
+    //
+    //     while (lIter != currentLSize && rIter != currentRSize)
+    //     {
+    //         u32 lIndex = currentL.start + lIter++;
+    //         u32 rIndex = currentR.start + rIter++;
+    //         Swap(refs[lIndex], refs[rIndex]);
+    //     }
+    //     if (lIter == currentLSize)
+    //     {
+    //         Assert(lCount < output.num);
+    //         lIter = 0;
+    //         lRangeI++;
+    //     }
+    //     if (rIter == currentRSize)
+    //     {
+    //         Assert(rCount < output.num);
+    //         rIter = 0;
+    //         rRangeI++;
+    //     }
+    // }
+    // Assert(rRangeI == rCount && lRangeI == lCount);
+    time = OS_GetMilliseconds(counter);
+    printf("fix time: %fms\n", time);
+    u32 numErrors = 0;
+    {
+        for (u32 i = 0; i < globalMid; i++)
+        {
+            PrimRef *ref = &refs[i];
+            f32 min      = ref->min[split.bestDim];
+            f32 max      = ref->max[split.bestDim];
+            f32 centroid = (max - min) * 0.5f;
+            numErrors += centroid >= split.bestValue;
+            Assert(centroid < split.bestValue);
+        }
+        for (u32 i = globalMid; i < numFaces; i++)
+        {
+            PrimRef *ref = &refs[i];
+            f32 min      = ref->min[split.bestDim];
+            f32 max      = ref->max[split.bestDim];
+            f32 centroid = (max - min) * 0.5f;
+            numErrors += centroid < split.bestValue;
+            Assert(centroid >= split.bestValue);
+        }
+    }
+    printf("num errors: %u\n", numErrors);
 
 #else
     ObjectBinner binner(centBounds);
@@ -628,11 +780,10 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     }
 
     printf("num errors: %u\n", numErrors);
-#endif
     {
         for (u32 i = 0; i < lCount; i++)
         {
-            PrimRef *ref = &refs[r[i]];
+            PrimRef *ref = &refs[i];
             f32 min      = ref->min[split.bestDim];
             f32 max      = ref->max[split.bestDim];
             f32 centroid = (max - min) * 0.5f;
@@ -640,13 +791,14 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
         }
         for (u32 i = extEnd - rCount; i < extEnd; i++)
         {
-            PrimRef *ref = &refs[r[i]];
+            PrimRef *ref = &refs[i];
             f32 min      = ref->min[split.bestDim];
             f32 max      = ref->max[split.bestDim];
             f32 centroid = (max - min) * 0.5f;
             Assert(centroid >= split.bestValue);
         }
     }
+#endif
     for (u32 i = 0; i < OS_NumProcessors(); i++)
     {
         printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
@@ -654,102 +806,102 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     ScratchEnd(temp);
 }
 
-void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
-{
-    Arena *arena = ArenaAlloc();
-    arena->align = 64;
-
-    if (!mesh)
-    {
-        Assert(count != 0);
-        mesh = GenerateMesh(arena, count);
-    }
-    else
-    {
-        count = mesh->numIndices;
-    }
-    const u32 numFaces = count / 3;
-
-    Bounds geomBounds;
-    Bounds centBounds;
-    PrimData *data = GeneratePrimData(arena, mesh, count, numFaces, geomBounds, centBounds, true);
-
-    // PerformanceCounter start = OS_StartCounter();
-    // HeuristicSAHBinned<32> heuristic(centBounds);
-    // heuristic.Bin(data, 0, numFaces);
-    // f32 time = OS_GetMilliseconds(start);
-    // printf("Time elapsed binning: %fms\n", time);
-
-#if 1
-    TestSplitBinningBase heuristic(geomBounds);
-
-    PerformanceCounter start = OS_StartCounter();
-    heuristic.Bin(mesh, data, 0, numFaces);
-    f32 time = OS_GetMilliseconds(start);
-    printf("Time elapsed binning: %fms\n", time);
-#endif
-
-#if 1
-
-    TestHeuristic test(heuristic.base, heuristic.scale, heuristic.invScale);
-    Split split = BinBest(heuristic.bins, heuristic.numBegin, heuristic.numEnd, &test);
-
-    printf("Split pos: %u\n", split.bestPos);
-    printf("Split dim: %u\n", split.bestDim);
-    printf("Split SAH: %f\n", split.bestSAH);
-
-    split.bestValue = ((split.bestPos) * heuristic.invScale[split.bestDim]) + heuristic.base[split.bestDim];
-    printf("Split value: %f\n", split.bestValue);
-    ExtRange range(0, numFaces, u32(numFaces * GROW_AMOUNT));
-    start = OS_StartCounter();
-
-    Bounds left;
-    Bounds right;
-    Bounds centLeft;
-    Bounds centRight;
-    u32 mid = heuristic.Split(mesh, data, range, split, left, right, centLeft, centRight);
-    time    = OS_GetMilliseconds(start);
-    printf("Mid: %u\n", mid);
-
-    printf("Time elapsed splitting: %fms\n", time);
-    printf("Left bounds min: %f %f %f\n", left.minP[0], left.minP[1], left.minP[2]);
-    printf("Left bounds max: %f %f %f\n", left.maxP[0], left.maxP[1], left.maxP[2]);
-    printf("Right bounds min: %f %f %f\n", right.minP[0], right.minP[1], right.minP[2]);
-    printf("Right bounds max: %f %f %f\n", right.maxP[0], right.maxP[1], right.maxP[2]);
-
-    printf("Left cent bounds min: %f %f %f\n", centLeft.minP[0], centLeft.minP[1], centLeft.minP[2]);
-    printf("Left cent bounds max: %f %f %f\n", centLeft.maxP[0], centLeft.maxP[1], centLeft.maxP[2]);
-    printf("Right cent bounds min: %f %f %f\n", centRight.minP[0], centRight.minP[1], centRight.minP[2]);
-    printf("Right cent bounds max: %f %f %f\n", centRight.maxP[0], centRight.maxP[1], centRight.maxP[2]);
-
-    // Correctness test
-    u32 errors = 0;
-    for (u32 i = 0; i < numFaces; i++)
-    {
-        PrimData *prim = &data[i];
-        f32 centroid   = (prim->maxP + prim->minP)[split.bestDim] * 0.5f;
-        if (i < mid)
-        {
-            u32 value = (u32)Floor((centroid - heuristic.base[split.bestDim]) * heuristic.scale[split.bestDim]);
-            if (centroid >= split.bestValue || value > split.bestPos)
-            {
-                // Assert(false);
-                errors += 1;
-            }
-        }
-        else
-        {
-            u32 value = (u32)Floor((centroid - heuristic.base[split.bestDim]) * heuristic.scale[split.bestDim]);
-            if (centroid < split.bestValue || value <= split.bestPos)
-            {
-                // Assert(false);
-                errors += 1;
-            }
-        }
-    }
-    printf("Num errors: %u\n", errors);
-#endif
-}
+// void TriangleClipBinTestDefault(TriangleMesh *mesh, u32 count = 0)
+// {
+//     Arena *arena = ArenaAlloc();
+//     arena->align = 64;
+//
+//     if (!mesh)
+//     {
+//         Assert(count != 0);
+//         mesh = GenerateMesh(arena, count);
+//     }
+//     else
+//     {
+//         count = mesh->numIndices;
+//     }
+//     const u32 numFaces = count / 3;
+//
+//     Bounds geomBounds;
+//     Bounds centBounds;
+//     PrimData *data = GeneratePrimData(arena, mesh, count, numFaces, geomBounds, centBounds, true);
+//
+//     // PerformanceCounter start = OS_StartCounter();
+//     // HeuristicSAHBinned<32> heuristic(centBounds);
+//     // heuristic.Bin(data, 0, numFaces);
+//     // f32 time = OS_GetMilliseconds(start);
+//     // printf("Time elapsed binning: %fms\n", time);
+//
+// #if 1
+//     TestSplitBinningBase heuristic(geomBounds);
+//
+//     PerformanceCounter start = OS_StartCounter();
+//     heuristic.Bin(mesh, data, 0, numFaces);
+//     f32 time = OS_GetMilliseconds(start);
+//     printf("Time elapsed binning: %fms\n", time);
+// #endif
+//
+// #if 1
+//
+//     TestHeuristic test(heuristic.base, heuristic.scale, heuristic.invScale);
+//     Split split = BinBest(heuristic.bins, heuristic.numBegin, heuristic.numEnd, &test);
+//
+//     printf("Split pos: %u\n", split.bestPos);
+//     printf("Split dim: %u\n", split.bestDim);
+//     printf("Split SAH: %f\n", split.bestSAH);
+//
+//     split.bestValue = ((split.bestPos) * heuristic.invScale[split.bestDim]) + heuristic.base[split.bestDim];
+//     printf("Split value: %f\n", split.bestValue);
+//     ExtRange range(0, numFaces, u32(numFaces * GROW_AMOUNT));
+//     start = OS_StartCounter();
+//
+//     Bounds left;
+//     Bounds right;
+//     Bounds centLeft;
+//     Bounds centRight;
+//     u32 mid = heuristic.Split(mesh, data, range, split, left, right, centLeft, centRight);
+//     time    = OS_GetMilliseconds(start);
+//     printf("Mid: %u\n", mid);
+//
+//     printf("Time elapsed splitting: %fms\n", time);
+//     printf("Left bounds min: %f %f %f\n", left.minP[0], left.minP[1], left.minP[2]);
+//     printf("Left bounds max: %f %f %f\n", left.maxP[0], left.maxP[1], left.maxP[2]);
+//     printf("Right bounds min: %f %f %f\n", right.minP[0], right.minP[1], right.minP[2]);
+//     printf("Right bounds max: %f %f %f\n", right.maxP[0], right.maxP[1], right.maxP[2]);
+//
+//     printf("Left cent bounds min: %f %f %f\n", centLeft.minP[0], centLeft.minP[1], centLeft.minP[2]);
+//     printf("Left cent bounds max: %f %f %f\n", centLeft.maxP[0], centLeft.maxP[1], centLeft.maxP[2]);
+//     printf("Right cent bounds min: %f %f %f\n", centRight.minP[0], centRight.minP[1], centRight.minP[2]);
+//     printf("Right cent bounds max: %f %f %f\n", centRight.maxP[0], centRight.maxP[1], centRight.maxP[2]);
+//
+//     // Correctness test
+//     u32 errors = 0;
+//     for (u32 i = 0; i < numFaces; i++)
+//     {
+//         PrimData *prim = &data[i];
+//         f32 centroid   = (prim->maxP + prim->minP)[split.bestDim] * 0.5f;
+//         if (i < mid)
+//         {
+//             u32 value = (u32)Floor((centroid - heuristic.base[split.bestDim]) * heuristic.scale[split.bestDim]);
+//             if (centroid >= split.bestValue || value > split.bestPos)
+//             {
+//                 // Assert(false);
+//                 errors += 1;
+//             }
+//         }
+//         else
+//         {
+//             u32 value = (u32)Floor((centroid - heuristic.base[split.bestDim]) * heuristic.scale[split.bestDim]);
+//             if (centroid < split.bestValue || value <= split.bestPos)
+//             {
+//                 // Assert(false);
+//                 errors += 1;
+//             }
+//         }
+//     }
+//     printf("Num errors: %u\n", errors);
+// #endif
+// }
 
 // void SOASBVHBuilderTest(TriangleMesh *mesh)
 // {
