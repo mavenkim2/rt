@@ -311,9 +311,9 @@ struct ObjectBinner
     }
     u32 Bin(const f32 in, const u32 dim) const
     {
-        // Lane8U32 result = Bin(Lane8F32(in), dim);
-        // return result[0];
-        return Clamp(0u, numBins - 1u, (u32)Floor((in - base[dim][0]) * scale[dim][0]));
+        Lane8U32 result = Bin(Lane8F32(in), dim);
+        return result[0];
+        // return Clamp(0u, numBins - 1u, (u32)Floor((in - base[dim][0]) * scale[dim][0]));
     }
     f32 GetSplitValue(u32 pos, u32 dim) const
     {
@@ -488,6 +488,11 @@ struct SplitBinner
     __forceinline u32 BinMax(const f32 max, const u32 dim) const
     {
         Lane8U32 result = BinMax(Lane8F32(max), dim);
+        return result[0];
+    }
+    __forceinline u32 Bin(const f32 val, const u32 dim) const
+    {
+        Lane8U32 result = BinMax(Lane8F32(val), dim);
         return result[0];
     }
     __forceinline Lane8F32 GetSplitValue(const Lane8U32 &bins, u32 dim) const

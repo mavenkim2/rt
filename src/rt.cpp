@@ -22,7 +22,6 @@
 #include "low_discrepancy.h"
 #include "sampler.h"
 #include "bvh/bvh_types.h"
-#include "bvh/partition.h"
 #include "bvh/bvh_sah.h"
 #include "bvh/bvh_soa.h"
 #include "bvh/bvh_aos.h"
@@ -1050,8 +1049,8 @@ int main(int argc, char *argv[])
 
     const u32 count = 3000000;
     // TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
-    // TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
-    TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
+    TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
+    // TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
     // TriangleMesh mesh = LoadPLY(arena, "data/xyzrgb_statuette.ply");
 
     // TriangleClipTestSOA(0, count);
@@ -1061,8 +1060,8 @@ int main(int argc, char *argv[])
     // TriangleClipBinTestDefault(&mesh);
     // SOASBVHBuilderTest(&mesh);
 
-    // AOSSBVHBuilderTest(&mesh);
-    TriangleClipTestAOS(&mesh);
+    AOSSBVHBuilderTest(&mesh);
+    // TriangleClipTestAOS(&mesh);
     // TriangleClipTestAOSInPlace(&mesh);
 
 #if 0
