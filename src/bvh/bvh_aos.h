@@ -4,6 +4,415 @@
 #include <utility>
 namespace rt
 {
+//////////////////////////////
+// AOS Partitions
+//
+
+template <i32 numBins>
+u32 Partition(const ObjectBinner<numBins> *binner, PrimRef *data, u32 dim, u32 bestPos, i32 l, i32 r)
+{
+    for (;;)
+    {
+        while (l <= r)
+        {
+            PrimRef *lRef = &data[l];
+            f32 max       = lRef->max[dim];
+            f32 min       = lRef->min[dim];
+            f32 centroid  = (max - min) * 0.5f;
+            bool isRight  = binner->Bin(centroid, dim) >= bestPos;
+            if (isRight) break;
+            l++;
+        }
+        while (l <= r)
+        {
+            Assert(r >= 0);
+            PrimRef *rRef = &data[r];
+            f32 min       = rRef->min[dim];
+            f32 max       = rRef->max[dim];
+            f32 centroid  = (max - min) * 0.5f;
+
+            bool isLeft = binner->Bin(centroid, dim) < bestPos;
+            if (isLeft) break;
+            r--;
+        }
+        if (l > r) break;
+
+        Swap(data[l], data[r]);
+        l++;
+        r--;
+    }
+    return l;
+}
+
+template <bool strided, i32 numBins>
+u32 PartitionAVX(const ObjectBinner<numBins> *binner, PrimRef *data, u32 dim, u32 bestPos, i32 l, i32 r,
+                 Lane8F32 &outGeomLeft, Lane8F32 &outGeomRight, Lane8F32 &outCentLeft, Lane8F32 &outCentRight, u32 chunkSize = 0)
+{
+    Lane8F32 masks[2]        = {Lane8F32::Mask(false), Lane8F32::Mask(true)};
+    const u32 queueSize      = LANE_WIDTH * 2 - 1;
+    const u32 rightQueueSize = queueSize + LANE_WIDTH;
+    u32 leftQueue[queueSize];
+    u32 leftCount = 0;
+
+    u32 totalLeftCount = 0;
+
+    u32 rightQueue[rightQueueSize];
+    u32 rightCount = 0;
+
+    Lane8F32 centLeft(neg_inf);
+    Lane8F32 centRight(neg_inf);
+    Lane8F32 geomLeft(neg_inf);
+    Lane8F32 geomRight(neg_inf);
+
+    i32 start = l;
+    i32 end   = r;
+
+    Lane8F32 lanes[8];
+    for (;;)
+    {
+        while (l <= r && leftCount == 0)
+        {
+            if constexpr (strided)
+            {
+                Assert((l & 7) == 0);
+                // _mm_prefetch((char *)(&data[l + chunkSize]), _MM_HINT_T0);
+                // _mm_prefetch((char *)(&data[l + chunkSize + 2]), _MM_HINT_T0);
+                // _mm_prefetch((char *)(&data[l + chunkSize + 4]), _MM_HINT_T0);
+                // _mm_prefetch((char *)(&data[l + chunkSize + 6]), _MM_HINT_T0);
+            }
+
+            Transpose8x6(data[l].m256, data[l + 1].m256, data[l + 2].m256, data[l + 3].m256,
+                         data[l + 4].m256, data[l + 5].m256, data[l + 6].m256, data[l + 7].m256,
+                         lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5]);
+            Lane8F32 centroids[3] = {
+                (lanes[3] - lanes[0]) * 0.5f,
+                (lanes[4] - lanes[1]) * 0.5f,
+                (lanes[5] - lanes[2]) * 0.5f,
+            };
+            Lane8U32 bin  = binner->Bin(centroids[dim], dim);
+            Lane8F32 mask = (AsFloat(bin) >= AsFloat(bestPos));
+            u32 prevMask  = Movemask(mask);
+
+            Transpose3x8(centroids[0], centroids[1], centroids[2],
+                         lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5], lanes[6], lanes[7]);
+            for (u32 blockIndex = 0; blockIndex < LANE_WIDTH; blockIndex++)
+            {
+                u32 select = (prevMask >> blockIndex) & 1;
+                centLeft   = MaskMax(masks[!select], centLeft, lanes[blockIndex] ^ signFlipMask);
+                centRight  = MaskMax(masks[select], centRight, lanes[blockIndex] ^ signFlipMask);
+
+                geomLeft  = MaskMax(masks[!select], geomLeft, data[l + blockIndex].m256);
+                geomRight = MaskMax(masks[select], geomRight, data[l + blockIndex].m256);
+            }
+
+            if constexpr (strided)
+            {
+                l += chunkSize;
+            }
+            else
+            {
+                l += 8;
+            }
+
+            Lane8U32::StoreU(leftQueue + leftCount, Lane8U32::Step(l));
+            u32 numLeft = PopCount(prevMask);
+            leftCount += numLeft;
+        }
+        while (l <= r && rightCount == 0)
+        {
+            Assert(r >= 0);
+
+            if constexpr (strided)
+            {
+                Assert((r & 7) == 0);
+                // _mm_prefetch((char *)(&data[r - chunkSize]), _MM_HINT_T0);
+                // _mm_prefetch((char *)(&data[r - chunkSize + 2]), _MM_HINT_T0);
+                // _mm_prefetch((char *)(&data[r - chunkSize + 4]), _MM_HINT_T0);
+                // _mm_prefetch((char *)(&data[r - chunkSize + 6]), _MM_HINT_T0);
+            }
+
+            Transpose8x6(data[r].m256, data[r + 1].m256, data[r + 2].m256, data[r + 3].m256,
+                         data[r + 4].m256, data[r + 5].m256, data[r + 6].m256, data[r + 7].m256,
+                         lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5]);
+            Lane8F32 centroids[3] = {
+                (lanes[3] - lanes[0]) * 0.5f,
+                (lanes[4] - lanes[1]) * 0.5f,
+                (lanes[5] - lanes[2]) * 0.5f,
+            };
+            Lane8U32 bin  = binner->Bin(centroids[dim], dim);
+            Lane8F32 mask = (AsFloat(bin) < AsFloat(bestPos));
+            u32 prevMask  = Movemask(mask);
+
+            Transpose3x8(centroids[0], centroids[1], centroids[2],
+                         lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5], lanes[6], lanes[7]);
+            for (u32 blockIndex = 0; blockIndex < LANE_WIDTH; blockIndex++)
+            {
+                u32 select = (prevMask >> blockIndex) & 1;
+                centLeft   = MaskMax(masks[select], centLeft, lanes[blockIndex] ^ signFlipMask);
+                centRight  = MaskMax(masks[!select], centRight, lanes[blockIndex] ^ signFlipMask);
+
+                geomLeft  = MaskMax(masks[select], geomLeft, data[r + blockIndex].m256);
+                geomRight = MaskMax(masks[!select], geomRight, data[r + blockIndex].m256);
+            }
+
+            u32 notRightCount  = PopCount(prevMask);
+            Lane8F32 storeMask = Lane8F32::Mask((1 << notRightCount) - 1u);
+            rightCount += notRightCount;
+            Lane8U32::StoreU(storeMask, rightQueue + queueSize - rightCount, MaskCompress(prevMask, Lane8U32::Step(r)));
+
+            if constexpr (strided)
+            {
+                r -= chunkSize;
+            }
+            else
+            {
+                r -= 8;
+            }
+        }
+        if (l > r)
+        {
+            l = leftQueue[0];
+            r = rightQueue[queueSize - 1];
+            Assert(r >= 0);
+            for (;;)
+            {
+                while (l <= r)
+                {
+                    PrimRef &ref      = data[l];
+                    Lane4F32 min      = Lane4F32::Load(&ref.m256);
+                    Lane4F32 max      = Lane4F32::Load(&ref.m256);
+                    Lane4F32 centroid = (max - min) * 0.5f;
+                    bool isRight      = binner->Bin(centroid[dim], dim) >= bestPos;
+
+                    if (isRight) break;
+                    l++;
+                    if constexpr (strided)
+                    {
+                        if ((l & 7) == 0)
+                        {
+                            l = (l - 8) + chunkSize;
+                        }
+                    }
+                }
+                while (l <= r)
+                {
+                    Assert(r >= 0);
+                    PrimRef &ref      = data[r];
+                    Lane4F32 min      = Lane4F32::Load(&ref.m256);
+                    Lane4F32 max      = Lane4F32::Load(&ref.m256);
+                    Lane4F32 centroid = (max - min) * 0.5f;
+                    bool isRight      = binner->Bin(centroid[dim], dim) >= bestPos;
+
+                    if (!isRight) break;
+                    r--;
+                    if constexpr (strided)
+                    {
+                        if ((r & 7) == 0)
+                        {
+                            r = (r + 8) - chunkSize;
+                        }
+                    }
+                }
+                if (l > r) break;
+
+                Swap(data[l], data[r]);
+                l++;
+                r--;
+                if constexpr (strided)
+                {
+                    if ((l & 7) == 0)
+                    {
+                        l = (l - 8) + chunkSize;
+                    }
+                    if ((r & 7) == 0)
+                    {
+                        r = (r + 8) - chunkSize;
+                    }
+                }
+            }
+            break;
+        }
+
+        u32 minCount = Min(leftCount, rightCount);
+
+        for (u32 i = 0; i < minCount; i++)
+        {
+            u32 leftIndex  = leftQueue[i];
+            u32 rightIndex = rightQueue[queueSize - 1 - i];
+            Swap(data[leftIndex], data[rightIndex]);
+        }
+        leftCount -= minCount;
+        rightCount -= minCount;
+        for (u32 i = 0; i < leftCount; i++)
+        {
+            leftQueue[i] = leftQueue[i + minCount];
+        }
+        for (u32 i = 0; i < rightCount; i++)
+        {
+            rightQueue[queueSize - 1 - i] = rightQueue[queueSize - 1 - i - minCount];
+        }
+    }
+
+    outGeomLeft  = geomLeft;
+    outGeomRight = geomRight;
+    outCentLeft  = centLeft;
+    outCentRight = centRight;
+    return l;
+}
+
+template <i32 numBins>
+u32 PartitionParallel(const ObjectBinner<numBins> *binner, PrimRef *data, Split split, u32 start, u32 count)
+{
+    static const u32 PARTITION_PARALLEL_THRESHOLD = 4 * 1024;
+    if (count < PARTITION_PARALLEL_THRESHOLD)
+    {
+        Lane8F32 geomLeft;
+        Lane8F32 geomRight;
+        Lane8F32 centLeft;
+        Lane8F32 centRight;
+        return PartitionAVX<false>(binner, data, split.bestDim, split.bestPos, start, start + count - 1,
+                                   geomLeft, geomRight, centLeft, centRight);
+    }
+
+    const u32 blockSize         = 8;
+    const u32 blockMask         = blockSize - 1;
+    const u32 blockShift        = Bsf(blockSize);
+    const u32 numJobs           = OS_NumProcessors();
+    const u32 numBlocksPerChunk = numJobs;
+    const u32 chunkSize         = blockSize * numBlocksPerChunk;
+    Assert(IsPow2(chunkSize));
+
+    u32 lStartAligned   = AlignPow2(start, blockSize);
+    u32 rEndAligned     = (start + count) & ~(blockSize - 1);
+    u32 alignedCount    = rEndAligned - lStartAligned;
+    const u32 numChunks = (alignedCount + chunkSize - 1) / chunkSize;
+
+    TempArena temp = ScratchStart(0, 0);
+    u32 *outMid    = PushArray(temp.arena, u32, numJobs);
+
+    Lane8F32 *geomLefts  = PushArrayNoZero(temp.arena, Lane8F32, numJobs);
+    Lane8F32 *geomRights = PushArrayNoZero(temp.arena, Lane8F32, numJobs);
+    Lane8F32 *centLefts  = PushArrayNoZero(temp.arena, Lane8F32, numJobs);
+    Lane8F32 *centRights = PushArrayNoZero(temp.arena, Lane8F32, numJobs);
+
+    auto GetIndex = [&](u32 index, u32 group) {
+        const u32 chunkIndex = index >> blockShift;
+        Assert((index & blockMask) == index);
+
+        u32 outIndex = lStartAligned + chunkIndex * chunkSize + (group << blockShift);
+        return outIndex;
+    };
+
+    scheduler.ScheduleAndWait(numJobs, 1, [&](u32 jobID) {
+        const u32 group = jobID;
+
+        u32 l          = 0;
+        u32 r          = (numChunks << blockShift) - 8;
+        u32 lastRIndex = GetIndex(r, group);
+        r              = lastRIndex > rEndAligned ? r - chunkSize : r;
+
+        u32 lIndex = GetIndex(l, group);
+        u32 rIndex = GetIndex(r, group);
+
+        Assert(rIndex < rEndAligned);
+        Assert(((rIndex - lIndex) & (chunkSize - 1)) == 0);
+
+        outMid[jobID] = PartitionAVX<true>(binner, data, split.bestDim, split.bestPos, lIndex, rIndex,
+                                           geomLefts[jobID], geomRights[jobID], centLefts[jobID], centRights[jobID], chunkSize);
+    });
+
+    // Partition the beginning and the end
+    u32 minIndex = pos_inf;
+    u32 maxIndex = neg_inf;
+    for (u32 i = 0; i < numJobs; i++)
+    {
+        minIndex = Min(outMid[i], minIndex);
+        maxIndex = Max(outMid[i], maxIndex);
+    }
+    u32 out = Partition(binner, data, split.bestDim, split.bestPos, minIndex, maxIndex - 1);
+
+    Lane8F32 geomLeft;
+    Lane8F32 geomRight;
+    Lane8F32 centLeft;
+    Lane8F32 centRight;
+
+    i32 l       = start;
+    i32 r       = start + count - 1;
+    u32 dim     = split.bestDim;
+    u32 bestPos = split.bestPos;
+    for (;;)
+    {
+        while (l < (i32)lStartAligned && r >= (i32)rEndAligned)
+        {
+            PrimRef &ref      = data[l];
+            Lane4F32 min      = Lane4F32::Load(ref.min);
+            Lane4F32 max      = Lane4F32::Load(ref.max);
+            Lane4F32 centroid = (max - min) * 0.5f;
+            if (binner->Bin(centroid[dim], dim) >= bestPos)
+            {
+                geomRight = Max(geomRight, ref.m256);
+                centRight = Max(centRight, Lane8F32(-centroid, centroid));
+                break;
+            }
+            geomLeft = Max(geomLeft, ref.m256);
+            centLeft = Max(centLeft, Lane8F32(-centroid, centroid));
+            l++;
+        }
+        while (l < (i32)lStartAligned && r >= (i32)rEndAligned)
+        {
+            PrimRef &ref      = data[r];
+            Lane4F32 min      = Lane4F32::Load(ref.min);
+            Lane4F32 max      = Lane4F32::Load(ref.max);
+            Lane4F32 centroid = (max - min) * 0.5f;
+            if (binner->Bin(centroid[dim], dim) < bestPos)
+            {
+                geomLeft = Max(geomLeft, ref.m256);
+                centLeft = Max(centLeft, Lane8F32(-centroid, centroid));
+                break;
+            }
+            geomRight = Max(geomRight, ref.m256);
+            centRight = Max(centRight, Lane8F32(-centroid, centroid));
+            r--;
+        }
+        if (l >= (i32)lStartAligned || r < (i32)rEndAligned) break;
+        Swap(data[l], data[r]);
+        l++;
+        r--;
+    }
+    if (l < (i32)lStartAligned)
+    {
+        for (i32 i = l; i < (i32)lStartAligned; i++)
+        {
+            PrimRef &ref      = data[i];
+            Lane4F32 min      = Lane4F32::Load(ref.min);
+            Lane4F32 max      = Lane4F32::Load(ref.max);
+            Lane4F32 centroid = (max - min) * 0.5f;
+            if (binner->Bin(centroid[dim], dim) >= bestPos)
+            {
+                out--;
+                Swap(data[i], data[out]);
+            }
+        }
+    }
+    else if (r >= (i32)rEndAligned)
+    {
+        for (i32 i = r; i >= (i32)rEndAligned; i--)
+        {
+            PrimRef &ref      = data[i];
+            Lane4F32 min      = Lane4F32::Load(ref.min);
+            Lane4F32 max      = Lane4F32::Load(ref.max);
+            Lane4F32 centroid = (max - min) * 0.5f;
+            if (binner->Bin(centroid[dim], dim) < bestPos)
+            {
+                Swap(data[i], data[out]);
+                out++;
+            }
+        }
+    }
+
+    ScratchEnd(temp);
+    return out;
+}
 
 template <typename Binner>
 void Partition(u32 lOffset, u32 rOffset, const Binner *binner, u32 start, u32 count, const PrimRef *data, const u32 *refs,
@@ -37,9 +446,8 @@ void Partition(u32 lOffset, u32 rOffset, const Binner *binner, u32 start, u32 co
         };
         Lane8U32 bin = binner->Bin(centroids[dim], dim);
 
-        Lane8F32 mask  = (AsFloat(bin) >= AsFloat(bestPos));
-        Lane8F32 lMask = (AsFloat(bin) <= AsFloat(bestPos));
-        u32 prevMask   = Movemask(mask);
+        Lane8F32 mask = (AsFloat(bin) >= AsFloat(bestPos));
+        u32 prevMask  = Movemask(mask);
 
         Transpose3x8(centroids[0], centroids[1], centroids[2],
                      lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5], lanes[6], lanes[7]);
@@ -105,6 +513,99 @@ struct HeuristicAOSObjectBinning
             counts[i] = 0;
         }
     }
+    void Bin(const PrimRef *data, u32 start, u32 count)
+    {
+        u32 alignedCount = count - count % LANE_WIDTH;
+        u32 i            = start;
+
+        Lane8F32 prevLanes[8];
+        alignas(32) u32 prevBinIndices[3][8];
+        if (count >= LANE_WIDTH)
+        {
+            Lane8F32 temp[6];
+            Transpose8x6(data[i + 0].m256, data[i + 1].m256, data[i + 2].m256, data[i + 3].m256,
+                         data[i + 4].m256, data[i + 5].m256, data[i + 6].m256, data[i + 7].m256,
+                         temp[0], temp[1], temp[2], temp[3], temp[4], temp[5]);
+            Lane8F32 centroids[3] = {
+                (temp[3] - temp[0]) * 0.5f,
+                (temp[4] - temp[1]) * 0.5f,
+                (temp[5] - temp[2]) * 0.5f,
+            };
+            Lane8U32::Store(prevBinIndices[0], binner->Bin(centroids[0], 0));
+            Lane8U32::Store(prevBinIndices[1], binner->Bin(centroids[1], 1));
+            Lane8U32::Store(prevBinIndices[2], binner->Bin(centroids[2], 2));
+            for (u32 c = 0; c < LANE_WIDTH; c++)
+            {
+                prevLanes[c] = data[i + c].m256;
+            }
+            i += LANE_WIDTH;
+        }
+        for (; i < start + alignedCount; i += LANE_WIDTH)
+        {
+            Lane8F32 temp[6];
+
+            Transpose8x6(data[i + 0].m256, data[i + 1].m256, data[i + 2].m256, data[i + 3].m256,
+                         data[i + 4].m256, data[i + 5].m256, data[i + 6].m256, data[i + 7].m256,
+                         temp[0], temp[1], temp[2], temp[3], temp[4], temp[5]);
+            Lane8F32 centroids[] = {
+                (temp[3] - temp[0]) * 0.5f,
+                (temp[4] - temp[1]) * 0.5f,
+                (temp[5] - temp[2]) * 0.5f,
+            };
+
+            Lane8U32 indicesX = binner->Bin(centroids[0], 0);
+            Lane8U32 indicesY = binner->Bin(centroids[1], 1);
+            Lane8U32 indicesZ = binner->Bin(centroids[2], 2);
+
+            for (u32 dim = 0; dim < 3; dim++)
+            {
+                for (u32 b = 0; b < LANE_WIDTH; b++)
+                {
+                    u32 bin = prevBinIndices[dim][b];
+                    bins[dim][bin].Extend(prevLanes[b]);
+                    counts[bin][dim]++;
+                }
+            }
+
+            Lane8U32::Store(prevBinIndices[0], indicesX);
+            Lane8U32::Store(prevBinIndices[1], indicesY);
+            Lane8U32::Store(prevBinIndices[2], indicesZ);
+            for (u32 c = 0; c < LANE_WIDTH; c++)
+            {
+                prevLanes[c] = data[i + c].m256;
+            }
+        }
+        if (count >= LANE_WIDTH)
+        {
+            for (u32 dim = 0; dim < 3; dim++)
+            {
+                for (u32 b = 0; b < LANE_WIDTH; b++)
+                {
+                    u32 bin = prevBinIndices[dim][b];
+                    bins[dim][bin].Extend(prevLanes[b]);
+                    counts[bin][dim]++;
+                }
+            }
+        }
+        for (; i < start + count; i++)
+        {
+            Lane4F32 low      = Extract4<0>(data[i].m256);
+            Lane4F32 hi       = Extract4<1>(data[i].m256);
+            Lane4F32 centroid = (hi - low) * 0.5f;
+            u32 indices[]     = {
+                binner->Bin(centroid[0], 0),
+                binner->Bin(centroid[1], 1),
+                binner->Bin(centroid[2], 2),
+            };
+            for (u32 dim = 0; dim < 3; dim++)
+            {
+                u32 bin = indices[dim];
+                bins[dim][bin].Extend(data[i].m256);
+                counts[bin][dim]++;
+            }
+        }
+    }
+
     void Bin(const PrimRef *data, const u32 *refs, u32 start, u32 count)
     {
         u32 alignedCount = count - count % LANE_WIDTH;

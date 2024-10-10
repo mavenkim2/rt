@@ -353,6 +353,72 @@ void TriangleClipTestSOA(TriangleMesh *mesh, u32 count = 0)
     ScratchEnd(temp);
 }
 
+void TriangleClipTestAOSInPlace(TriangleMesh *mesh)
+{
+    TempArena temp = ScratchStart(0, 0);
+    Arena *arena   = ArenaAlloc();
+    arena->align   = 64;
+
+    Bounds centBounds;
+    Bounds geomBounds;
+    u32 numFaces  = mesh->numIndices / 3;
+    u32 extEnd    = u32(numFaces * GROW_AMOUNT);
+    PrimRef *refs = GenerateAOSData(arena, mesh, numFaces, geomBounds, centBounds);
+
+    ObjectBinner binner(centBounds);
+    using Heuristic = HeuristicAOSObjectBinning<32>;
+    printf("size: %llu\n", sizeof(Heuristic));
+
+    PerformanceCounter counter = OS_StartCounter();
+    Heuristic heuristic        = ParallelReduce<Heuristic>(
+        0, numFaces, PARALLEL_THRESHOLD,
+        [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(refs, start, count); },
+        [&](Heuristic &l, const Heuristic &r) { l.Merge(r); },
+        &binner);
+    f32 time = OS_GetMilliseconds(counter);
+
+    printf("bin time: %fms\n", time);
+
+    Split split = BinBest(heuristic.bins, heuristic.counts, &binner);
+    printf("Split pos: %u\n", split.bestPos);
+    printf("Split dim: %u\n", split.bestDim);
+    printf("Split SAH: %f\n", split.bestSAH);
+
+    counter = OS_StartCounter();
+    // u32 mid = PartitionParallel(&binner, refs, split, 0, numFaces);
+    u32 mid = Partition(&binner, refs, split.bestDim, split.bestPos, 0, numFaces);
+    time    = OS_GetMilliseconds(counter);
+    printf("Time elapsed partition: %fms\n", time);
+
+    u32 numErrors = 0;
+    {
+        for (u32 i = 0; i < mid; i++)
+        {
+            PrimRef *ref = &refs[i];
+            f32 min      = ref->min[split.bestDim];
+            f32 max      = ref->max[split.bestDim];
+            f32 centroid = (max - min) * 0.5f;
+            numErrors += centroid >= split.bestValue;
+            // Assert(centroid < split.bestValue);
+        }
+        for (u32 i = mid; i < numFaces; i++)
+        {
+            PrimRef *ref = &refs[i];
+            f32 min      = ref->min[split.bestDim];
+            f32 max      = ref->max[split.bestDim];
+            f32 centroid = (max - min) * 0.5f;
+            numErrors += centroid < split.bestValue;
+            // Assert(centroid >= split.bestValue);
+        }
+    }
+    printf("num errors: %u\n", numErrors);
+    for (u32 i = 0; i < OS_NumProcessors(); i++)
+    {
+        printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
+    }
+    ScratchEnd(temp);
+}
+
 void TriangleClipTestAOS(TriangleMesh *mesh)
 {
     TempArena temp = ScratchStart(0, 0);
@@ -367,7 +433,12 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     u32 *l        = PushArrayNoZero(arena, u32, extEnd);
     u32 *r        = PushArrayNoZero(arena, u32, extEnd);
 
-#if 1
+    for (u32 i = 0; i < numFaces; i++)
+    {
+        l[i] = i;
+    }
+
+#if 0
     SplitBinner<16> binner(geomBounds);
     using Heuristic            = HeuristicAOSSplitBinning<16>;
     PerformanceCounter counter = OS_StartCounter();
@@ -460,7 +531,7 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     // heuristic.Bin(refs, 0, numFaces);
     ParallelForOutput output = ParallelFor<Heuristic>(
         temp, 0, numFaces, PARALLEL_THRESHOLD,
-        [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(refs, start, count); },
+        [&](Heuristic &heuristic, u32 start, u32 count) { heuristic.Bin(refs, l, start, count); },
         &binner);
     Heuristic heuristic;
     Reduce(
@@ -529,8 +600,8 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
         u32 count       = jobID == output.num - 1 ? numFaces - threadStart : output.groupSize;
 
         Partition(lOffsets[jobID], rOffsets[jobID], &binner,
-                  threadStart, count, refs, outRefs, split.bestDim, split.bestPos,
-                  leftRecords[jobID].centBounds, rightRecords[jobID].centBounds,
+                  threadStart, count, refs, l, r, split.bestDim, split.bestPos,
+                  leftRecords[jobID], rightRecords[jobID],
                   lCounts[jobID], rCounts[jobID]);
     });
 
@@ -540,16 +611,16 @@ void TriangleClipTestAOS(TriangleMesh *mesh)
     u32 numErrors = 0;
     for (u32 i = 0; i < lCount; i++)
     {
-        PrimRef *ref = &outRefs[i];
-        if (Any(ref->m256 > lBounds.v))
+        PrimRef *ref = &refs[l[i]];
+        if (Any(Lane8F32::Load(&ref->m256) > lBounds.v))
         {
             numErrors++;
         }
     }
     for (u32 i = extEnd - rCount; i < extEnd; i++)
     {
-        PrimRef *ref = &outRefs[i];
-        if (Any(ref->m256 > rBounds.v))
+        PrimRef *ref = &refs[r[i]];
+        if (Any(Lane8F32::Load(&ref->m256) > rBounds.v))
         {
             numErrors++;
         }
