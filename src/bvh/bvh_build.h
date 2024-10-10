@@ -824,8 +824,9 @@ BVHQuantized<N> BuildQuantizedSBVH(BuildSettings settings,
                                    RecordAOSSplits &record)
 {
     SBVHBuilderTriangleMesh<N> builder;
-    new (&builder.heuristic) HeuristicSpatialSplits(ref, refIndices0, refIndices1, mesh, HalfArea(record.geomBounds),
-                                                    record.End());
+    // new (&builder.heuristic) HeuristicSpatialSplits(ref, refIndices0, refIndices1, mesh, HalfArea(record.geomBounds),
+    //                                                 record.End());
+    new (&builder.heuristic) HeuristicSpatialSplits(ref, mesh, HalfArea(record.geomBounds));
     return builder.BuildBVH(settings, inArenas, mesh, record);
 }
 
