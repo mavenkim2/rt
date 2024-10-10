@@ -385,9 +385,10 @@ void TriangleClipTestAOSInPlace(TriangleMesh *mesh)
     printf("Split SAH: %f\n", split.bestSAH);
 
     counter = OS_StartCounter();
-    // u32 mid = PartitionParallel(&binner, refs, split, 0, numFaces);
-    u32 mid = Partition(&binner, refs, split.bestDim, split.bestPos, 0, numFaces);
+    u32 mid = PartitionParallel(&binner, refs, split, 0, numFaces);
+    // u32 mid = Partition(&binner, refs, split.bestDim, split.bestPos, 0, numFaces);
     time    = OS_GetMilliseconds(counter);
+    printf("mid: %u\n", mid);
     printf("Time elapsed partition: %fms\n", time);
 
     u32 numErrors = 0;
