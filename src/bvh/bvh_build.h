@@ -13,10 +13,11 @@ struct QuantizedNode
 {
     StaticAssert(N == 4 || N == 8, NMustBe4Or8);
 
-    // TODO: the bottom 4 bits can be used for something (and maybe the top 7 bits too)
-    // QuantizedNode<N> *internalOffset;
     uintptr_t internalOffset;
     uintptr_t leafOffset;
+    u8 scale[3];
+    u8 meta;
+
     u8 lowerX[N];
     u8 lowerY[N];
     u8 lowerZ[N];
@@ -27,12 +28,66 @@ struct QuantizedNode
     u8 upperZ[N];
 
     Vec3f minP;
-    u8 scale[3];
-    u8 meta;
 
     u32 GetNumChildren() const
     {
         return ((internalOffset & 0xff) == 0) + ((leafOffset & 0xff) == 0) + ((meta & 0xff) == 0) + (((meta >> 4) & 0xff) == 0);
+    }
+
+    void GetBounds(f32 *outMinX, f32 *outMinY, f32 *outMinZ, f32 *outMaxX, f32 *outMaxY, f32 *outMaxZ) const
+    {
+        LaneU32<N> lX = LaneU32<N>(*(u32 *)lowerX);
+        LaneU32<N> lY = LaneU32<N>(*(u32 *)lowerY);
+        LaneU32<N> lZ = LaneU32<N>(*(u32 *)lowerZ);
+
+        LaneU32<N> uX = LaneU32<N>(*(u32 *)upperX);
+        LaneU32<N> uY = LaneU32<N>(*(u32 *)upperY);
+        LaneU32<N> uZ = LaneU32<N>(*(u32 *)upperZ);
+
+        LaneU32<N> lExpandedMinX;
+        LaneU32<N> lExpandedMinY;
+        LaneU32<N> lExpandedMinZ;
+
+        LaneU32<N> lExpandedMaxX;
+        LaneU32<N> lExpandedMaxY;
+        LaneU32<N> lExpandedMaxZ;
+        if constexpr (N == 4)
+        {
+            lExpandedMinX = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lX));
+            lExpandedMinY = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lY));
+            lExpandedMinZ = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lZ));
+
+            lExpandedMaxX = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uX));
+            lExpandedMaxY = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uY));
+            lExpandedMaxZ = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uZ));
+        }
+        else
+        {
+            lExpandedMinX = _mm256_cvtepu8_epi32(lX);
+            lExpandedMinY = _mm256_cvtepu8_epi32(lY);
+            lExpandedMinZ = _mm256_cvtepu8_epi32(lZ);
+            lExpandedMaxX = _mm256_cvtepu8_epi32(uX);
+            lExpandedMaxY = _mm256_cvtepu8_epi32(uY);
+            lExpandedMaxZ = _mm256_cvtepu8_epi32(uZ);
+        }
+        LaneF32<N> minX(minP.x);
+        LaneF32<N> minY(minP.y);
+        LaneF32<N> minZ(minP.z);
+
+        LaneF32<N> scaleX = AsFloat(LaneU32<N>(scale[0] << 23));
+        LaneF32<N> scaleY = AsFloat(LaneU32<N>(scale[1] << 23));
+        LaneF32<N> scaleZ = AsFloat(LaneU32<N>(scale[2] << 23));
+
+        LaneF32<N>::Store(outMinX, minX + LaneF32<N>(lExpandedMinX) * scaleX);
+        LaneF32<N>::Store(outMinY, minY + LaneF32<N>(lExpandedMinY) * scaleY);
+        LaneF32<N>::Store(outMinZ, minZ + LaneF32<N>(lExpandedMinZ) * scaleZ);
+        LaneF32<N>::Store(outMaxX, minX + LaneF32<N>(lExpandedMaxX) * scaleX);
+        LaneF32<N>::Store(outMaxY, minY + LaneF32<N>(lExpandedMaxY) * scaleY);
+        LaneF32<N>::Store(outMaxZ, minZ + LaneF32<N>(lExpandedMaxZ) * scaleZ);
+    }
+    QuantizedNode<N> GetBaseChildPtr() const
+    {
+        return (QuantizedNode<N> *)(internalOffset & ~(0xf));
     }
 };
 
@@ -190,7 +245,7 @@ struct UpdateQuantizedNode<4>
         }
 
         Assert(primTotal <= 4 * 15);
-        u32 *primIndices = PushArray(arena, u32, primTotal);
+        u32 *primIndices = PushArrayNoZero(arena, u32, primTotal);
         Assert(((uintptr_t)children & 0xf) == 0);
         Assert(((uintptr_t)primIndices & 0xf) == 0);
         parent->internalOffset = (uintptr_t)children;
@@ -253,7 +308,7 @@ struct UpdateQuantizedNode<8>
             primTotal += record->range.count;
         }
         Assert(primTotal <= 24);
-        u32 *primIndices     = PushArray(arena, u32, primTotal);
+        u32 *primIndices     = PushArrayNoZero(arena, u32, primTotal);
         uintptr_t leafOffset = (uintptr_t)primIndices;
         parent->meta         = 0;
         u32 offset           = 0;
@@ -438,7 +493,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
         return;
     }
 
-    Split split = heuristic.Bin(record );
+    Split split = heuristic.Bin(record);
 
     // NOTE: multiply both by the area instead of dividing
     f32 area     = HalfArea(record.geomBounds);
@@ -523,7 +578,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
 
     if (nodeCount)
     {
-        children = PushArrayTagged(currentArena, NodeType, nodeCount, MemoryType_Node);
+        children = PushArrayNoZeroTagged(currentArena, NodeType, nodeCount, MemoryType_Node);
     }
     for (u32 i = 0; i < nodeCount; i++)
     {

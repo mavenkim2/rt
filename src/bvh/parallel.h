@@ -524,7 +524,7 @@ ParallelForOutput ParallelFor(TempArena temp, u32 start, u32 count, u32 groupSiz
 {
     u32 taskCount = (count + groupSize - 1) / groupSize;
     taskCount     = Min(taskCount, 512u); // scheduler.numWorkers);
-    T *values     = (T *)PushArray(temp.arena, u8, sizeof(T) * taskCount);
+    T *values     = (T *)PushArrayNoZero(temp.arena, u8, sizeof(T) * taskCount);
     for (u32 i = 0; i < taskCount; i++)
     {
         new (&values[i]) T(std::forward<Args>(inArgs)...);

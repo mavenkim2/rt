@@ -102,7 +102,7 @@ __forceinline T *PushArrayDefaultTagged(Arena *arena, u32 count, MemoryType type
 }
 #endif
 
-#define PushStructConstruct(arena, Type) new (PushStruct(arena, Type)) Type
+#define PushStructConstruct(arena, Type) new (PushStructNoZero(arena, Type)) Type
 
 #define ScratchEnd(temp) TempEnd(temp)
 

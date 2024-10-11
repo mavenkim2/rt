@@ -437,7 +437,6 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 star
                       RecordAOSSplits &outLeft, RecordAOSSplits &outRight)
 {
 
-    TIMED_FUNCTION(miscF);
     const u32 blockSize         = 512;
     const u32 blockMask         = blockSize - 1;
     const u32 blockShift        = Bsf(blockSize);
@@ -458,7 +457,7 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 star
     u32 end             = start + count;
 
     TempArena temp = ScratchStart(0, 0);
-    u32 *outMid    = PushArray(temp.arena, u32, numJobs);
+    u32 *outMid    = PushArrayNoZero(temp.arena, u32, numJobs);
 
     RecordAOSSplits *recordL = PushArrayNoZero(temp.arena, RecordAOSSplits, numJobs);
     RecordAOSSplits *recordR = PushArrayNoZero(temp.arena, RecordAOSSplits, numJobs);
@@ -479,7 +478,7 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 star
         u32 lastRIndex = GetIndex(r, group);
         // r              = lastRIndex > rEndAligned ? r - 8 : r;
 
-        r = lastRIndex > end
+        r = lastRIndex >= end
                 ? (lastRIndex - end) < (blockSize - 1)
                       ? r - (lastRIndex - end) - 1
                       : AlignPow2(r, blockSize) - blockSize - 1
@@ -516,7 +515,6 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 star
     Assert(minIndex >= start);
     u32 out = Partition(heuristic->binner, data, split.bestDim, split.bestPos, minIndex, maxIndex);
     Assert(globalMid == out);
-    // u32 out = FixMisplacedRanges(data, numJobs, chunkSize, blockShift, blockSize, start, globalMid, outMid, GetIndex);
 
     for (u32 i = 0; i < numJobs; i++)
     {
@@ -1217,8 +1215,8 @@ struct HeuristicSpatialSplits
         if (record.count > PARALLEL_THRESHOLD)
         {
             const u32 groupSize = PARALLEL_THRESHOLD;
-            *objectBinHeuristic = ParallelReduce<OBin>(
-                record.start, record.count, groupSize,
+            ParallelReduce<OBin>(
+                objectBinHeuristic, record.start, record.count, groupSize,
                 [&](OBin &binner, u32 start, u32 count) { binner.Bin(primRefs, start, count); },
                 [&](OBin &l, const OBin &r) { l.Merge(r); },
                 objectBinner);
