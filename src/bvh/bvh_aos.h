@@ -445,7 +445,7 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 star
     const u32 blockSize         = 512;
     const u32 blockMask         = blockSize - 1;
     const u32 blockShift        = Bsf(blockSize);
-    const u32 numJobs           = 32u;
+    const u32 numJobs           = Min(16u, (count + 511) / 512); // OS_NumProcessors();
     const u32 numBlocksPerChunk = numJobs;
     const u32 chunkSize         = blockSize * numBlocksPerChunk;
     // Assert(IsPow2(chunkSize));
@@ -521,24 +521,17 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 star
     u32 out = Partition(heuristic->binner, data, split.bestDim, split.bestPos, minIndex, maxIndex);
     Assert(globalMid == out);
 
-    Lane8F32 leftGeom(neg_inf);
-    Lane8F32 leftCent(neg_inf);
-    Lane8F32 rightGeom(neg_inf);
-    Lane8F32 rightCent(neg_inf);
     for (u32 i = 0; i < numJobs; i++)
     {
         RecordAOSSplits &l = recordL[i];
         RecordAOSSplits &r = recordR[i];
 
-        leftGeom  = Max(leftGeom, l.GeomBounds());
-        leftCent  = Max(leftCent, l.CentBounds());
-        rightGeom = Max(rightGeom, r.GeomBounds());
-        rightCent = Max(rightCent, r.CentBounds());
+        outLeft.geomBounds = Max(outLeft.geomBounds, l.geomBounds);
+        outLeft.centBounds = Max(outLeft.centBounds, l.centBounds);
+
+        outRight.geomBounds = Max(outRight.geomBounds, r.geomBounds);
+        outRight.centBounds = Max(outRight.centBounds, r.centBounds);
     }
-    outLeft.SetGeomBounds(leftGeom);
-    outLeft.SetCentBounds(leftCent);
-    outRight.SetGeomBounds(rightGeom);
-    outRight.SetCentBounds(rightCent);
 
     ScratchEnd(temp);
     return out;
@@ -735,10 +728,10 @@ struct HeuristicAOSObjectBinning
             r--;
         }
 
-        outLeft.SetGeomBounds(geomLeft);
-        outRight.SetGeomBounds(geomRight);
-        outLeft.SetCentBounds(centLeft);
-        outRight.SetCentBounds(centRight);
+        outLeft.geomBounds  = geomLeft;
+        outRight.geomBounds = geomRight;
+        outLeft.centBounds  = centLeft;
+        outRight.centBounds = centRight;
         return l;
     }
 
@@ -1184,10 +1177,10 @@ struct alignas(32) HeuristicAOSSplitBinning
         // Assert(totalR == expectedR);
         // Assert(writeLocs[0] - outLStart == expectedL);
         // Assert(writeLocs[1] - outRStart == expectedR);
-        outLeft.SetGeomBounds(geomLeft);
-        outRight.SetGeomBounds(geomRight);
-        outLeft.SetCentBounds(centLeft);
-        outRight.SetCentBounds(centRight);
+        outLeft.geomBounds  = geomLeft;
+        outRight.geomBounds = geomRight;
+        outLeft.centBounds  = centLeft;
+        outRight.centBounds = centRight;
         return l;
     }
 
@@ -1231,7 +1224,7 @@ struct HeuristicSpatialSplits
 
         // Stack allocate the heuristics since they store the centroid and geom bounds we'll need later
         ObjectBinner<numObjectBins> *objectBinner =
-            PushStructConstruct(temp.arena, ObjectBinner<numObjectBins>)(record.CentBounds());
+            PushStructConstruct(temp.arena, ObjectBinner<numObjectBins>)(record.centBounds);
         OBin *objectBinHeuristic = PushStructNoZero(temp.arena, OBin);
         if (record.count > PARALLEL_THRESHOLD)
         {
@@ -1266,7 +1259,7 @@ struct HeuristicSpatialSplits
         {
             // Spatial splits
             SplitBinner<numSpatialBins> *splitBinner =
-                PushStructConstruct(temp.arena, SplitBinner<numSpatialBins>)(record.GeomBounds());
+                PushStructConstruct(temp.arena, SplitBinner<numSpatialBins>)(record.geomBounds);
 
             HSplit *splitHeuristic = PushStructNoZero(temp.arena, HSplit);
             if (record.count > PARALLEL_THRESHOLD)
@@ -1362,12 +1355,12 @@ struct HeuristicSpatialSplits
                 geomRight.Extend(m256);
                 centRight.Extend(centroid);
             }
-            outLeft.SetGeomBounds(geomLeft.v);
-            outLeft.SetCentBounds(centLeft.v);
-            outRight.SetGeomBounds(geomRight.v);
-            outRight.SetCentBounds(centRight.v);
-            split.numLeft  = lCount;
-            split.numRight = rCount;
+            outLeft.geomBounds  = geomLeft.v;
+            outLeft.centBounds  = centLeft.v;
+            outRight.geomBounds = geomRight.v;
+            outRight.centBounds = centRight.v;
+            split.numLeft       = lCount;
+            split.numRight      = rCount;
         }
         else
         {
@@ -1432,8 +1425,8 @@ struct HeuristicSpatialSplits
         Assert(numLeft <= record.count);
         Assert(numRight <= record.count);
 
-        outLeft.SetRange(record.start, numLeft, record.start + numLeft + extSizeLeft);
-        outRight.SetRange(outLeft.extEnd, numRight, record.extEnd);
+        outLeft.SetRange(record.start, record.start, numLeft, record.start + numLeft + extSizeLeft);
+        outRight.SetRange(outLeft.extEnd, outLeft.extEnd, numRight, record.extEnd);
         u32 rightExtSize = outRight.ExtSize();
         Assert(rightExtSize == extSizeRight);
 

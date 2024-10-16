@@ -206,6 +206,30 @@ struct ExtRange
     __forceinline u32 TotalSize() const { return extEnd - start; }
 };
 
+// double buffered
+struct DBExtRange
+{
+    u32 extStart;
+    u32 start;
+    u32 count;
+    u32 extEnd;
+
+    DBExtRange() {}
+    __forceinline DBExtRange(u32 extStart, u32 start, u32 count, u32 extEnd)
+        : extStart(extStart), start(start), count(count), extEnd(extEnd)
+    {
+        Assert(extStart == start || start + count == extEnd);
+    }
+    __forceinline u32 End() const { return start + count; }
+    __forceinline u32 Size() const { return count; }
+    __forceinline u32 ExtSize() const
+    {
+        Assert(extStart == start || End() == extEnd);
+        return start == extStart ? start - extStart : extEnd - End();
+    }
+    __forceinline u32 TotalSize() const { return extEnd - extStart; }
+};
+
 struct ScalarBounds
 {
     f32 minX;
@@ -252,58 +276,73 @@ struct RecordSOASplits
     ExtRange range;
 };
 
-struct RecordAOSSplits
+struct alignas(64) RecordAOSSplits
 {
     using PrimitiveData = PrimRef;
-    // union
-    // {
-    // struct
-    // {
-    //     Lane8F32 geomBounds;
-    //     Lane8F32 centBounds;
-    // };
-    f32 geomMin[3];
-    u32 start;
-    f32 geomMax[3];
-    f32 centMin[3];
-    u32 count;
-    f32 centMax[3];
-    u32 extEnd;
-    // };
+    union
+    {
+        struct
+        {
+            Lane8F32 geomBounds;
+            Lane8F32 centBounds;
+        };
+        struct
+        {
+            f32 geomMin[3];
+            union
+            {
+                u32 extStart;
+            };
+            f32 geomMax[3];
+            union
+            {
+                u32 start;
+            };
+            f32 centMin[3];
+            union
+            {
+                u32 count;
+            };
+            f32 centMax[3];
+            union
+            {
+                u32 extEnd;
+            };
+        };
+    };
 
-    RecordAOSSplits() : geomMin{neg_inf, neg_inf, neg_inf}, geomMax{neg_inf, neg_inf, neg_inf},
-                        centMin{neg_inf, neg_inf, neg_inf}, centMax{neg_inf, neg_inf, neg_inf} {}
-    RecordAOSSplits(const Lane8F32 &geom, const Lane8F32 &cent)
+    RecordAOSSplits() : geomBounds(neg_inf), centBounds(neg_inf) {}
+    __forceinline RecordAOSSplits &operator=(const RecordAOSSplits &other)
     {
-        Lane8F32::StoreU(geomMin, geom);
-        Lane8F32::StoreU(centMin, cent);
+        geomBounds = other.geomBounds;
+        centBounds = other.centBounds;
+        return *this;
     }
-    Lane8F32 GeomBounds() const
-    {
-        return Lane8F32::LoadU(geomMin);
-    }
-    void SetGeomBounds(const Lane8F32 &l)
-    {
-        Lane8F32::StoreU(geomMin, l);
-    }
-    void SetCentBounds(const Lane8F32 &l)
-    {
-        Lane8F32::StoreU(centMin, l);
-    }
-    Lane8F32 CentBounds() const
-    {
-        return Lane8F32::LoadU(centMin);
-    }
+    u32 ExtStart() const { return extStart; }
     u32 Start() const { return start; }
     u32 Count() const { return count; }
     u32 End() const { return start + count; }
     u32 ExtEnd() const { return extEnd; }
-    u32 ExtSize() const { return extEnd - (start + count); }
-    void SetRange(u32 inStart, u32 inCount, u32 inExtEnd)
+    u32 ExtSize() const { return extStart == start ? extEnd - (start + count) : start - extStart; }
+    void SetRange(u32 inExtStart, u32 inStart, u32 inCount, u32 inExtEnd)
     {
-        start  = inStart;
-        count  = inCount;
-        extEnd = inExtEnd;
+        extStart = inExtStart;
+        start    = inStart;
+        count    = inCount;
+        extEnd   = inExtEnd;
+        Assert(extStart == start || start + count == extEnd);
+    }
+    void SetRange(DBExtRange r)
+    {
+        extStart = r.extStart;
+        start    = r.start;
+        count    = r.count;
+        extEnd   = r.extEnd;
+        Assert(extStart == start || start + count == extEnd);
+    }
+    DBExtRange GetRange() const
+    {
+        return DBExtRange(extStart, start, count, extEnd);
     }
 };
 

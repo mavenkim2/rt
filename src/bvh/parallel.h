@@ -341,11 +341,13 @@ struct Scheduler
         numWorkers        = numThreads;
         workers[0].waiter = &notifier.waiters[0];
         workers[0].victim = 0;
+        OS_SetThreadAffinity(GetMainThreadHandle(), 0);
         for (u32 i = 1; i < numThreads; i++)
         {
-            workers[i].waiter = &notifier.waiters[i];
-            workers[i].victim = i;
-            OS_ThreadStart(WorkerLoop, (void *)&workers[i]);
+            workers[i].waiter      = &notifier.waiters[i];
+            workers[i].victim      = i;
+            OS_Handle threadHandle = OS_ThreadStart(WorkerLoop, (void *)&workers[i]);
+            OS_SetThreadAffinity(threadHandle, i);
         }
     }
     void ExploitTask(Worker *w, Task *t)
