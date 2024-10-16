@@ -1,5 +1,5 @@
 #ifdef _WIN32
-
+/**/
 #include <windows.h>
 namespace rt
 {
@@ -235,6 +235,12 @@ string OS_MapFileRead(string filename)
 void OS_UnmapFile(void *ptr)
 {
     UnmapViewOfFile(ptr);
+}
+
+OS_Handle GetMainThreadHandle()
+{
+    OS_Handle out = {(u64)GetCurrentThread()};
+    return out;
 }
 
 void OS_SetThreadAffinity(OS_Handle input, i32 index)

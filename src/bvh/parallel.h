@@ -341,11 +341,13 @@ struct Scheduler
         numWorkers        = numThreads;
         workers[0].waiter = &notifier.waiters[0];
         workers[0].victim = 0;
+        OS_SetThreadAffinity(GetMainThreadHandle(), 0);
         for (u32 i = 1; i < numThreads; i++)
         {
-            workers[i].waiter = &notifier.waiters[i];
-            workers[i].victim = i;
-            OS_ThreadStart(WorkerLoop, (void *)&workers[i]);
+            workers[i].waiter      = &notifier.waiters[i];
+            workers[i].victim      = i;
+            OS_Handle threadHandle = OS_ThreadStart(WorkerLoop, (void *)&workers[i]);
+            OS_SetThreadAffinity(threadHandle, i);
         }
     }
     void ExploitTask(Worker *w, Task *t)
@@ -523,7 +525,7 @@ template <typename T, typename Func, typename... Args>
 ParallelForOutput ParallelFor(TempArena temp, u32 start, u32 count, u32 groupSize, Func func, Args... inArgs)
 {
     u32 taskCount = (count + groupSize - 1) / groupSize;
-    taskCount     = Min(taskCount, scheduler.numWorkers);//512u); // scheduler.numWorkers);
+    taskCount     = Min(taskCount, 512u);
     T *values     = (T *)PushArrayNoZero(temp.arena, u8, sizeof(T) * taskCount);
     for (u32 i = 0; i < taskCount; i++)
     {
