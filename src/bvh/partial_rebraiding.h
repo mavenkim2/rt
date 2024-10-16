@@ -12,7 +12,7 @@ struct BuildRef
     uintptr_t nodePtr;
 };
 
-struct RecordRebraid
+struct RebraidRecord
 {
     f32 min[3];
     u32 start;
@@ -53,10 +53,18 @@ void PartialRebraid(Scene *scene, Arena *arena, Instance2 *instances, u32 numIns
         b[i].nodePtr = bvhNode;
     }
 
-    RecordRebraid record;
+    RebraidRecord record;
 }
 
 static const f32 REBRAID_THRESHOLD = .1f;
+struct HeuristicPartialRebraiding
+{
+    typedef RebraidRecord Record;
+    Split Bin(const Record &record)
+    {
+    }
+};
+
 void OpenBraid(RecordRebraid &record, BuildRef *refs, u32 start, u32 count, std::atomic<u32> &refOffset)
 {
     const u32 QUEUE_SIZE = 8;
@@ -147,10 +155,10 @@ void OpenBraid(RecordRebraid &record, BuildRef *refs, u32 start, u32 count, std:
                     refs[offset].min[0]   = minX[b];
                     refs[offset].min[1]   = minY[b];
                     refs[offset].min[2]   = minZ[b];
+                    refs[offset].objectID = refs[refID].objectID;
                     refs[offset].max[0]   = maxX[b];
                     refs[offset].max[1]   = maxY[b];
                     refs[offset].max[2]   = maxZ[b];
-                    refs[offset].objectID = refs[refID].objectID;
                     refs[offset].numPrims = numPrims;
                     refs[offset].nodePtr  = (uintptr_t)(children + b);
 

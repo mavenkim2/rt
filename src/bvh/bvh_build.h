@@ -104,7 +104,7 @@ struct CreateQuantizedNode
         Lane8F32 bounds(neg_inf);
         for (u32 i = 0; i < numRecords; i++)
         {
-            bounds = Max(bounds, Lane8F32::Load(&records[i].geomBounds));
+            bounds = Max(bounds, records[i].GeomBounds());
         }
         Lane4F32 boundsMinP = -Extract4<0>(bounds);
         Lane4F32 boundsMaxP = Extract4<1>(bounds);
@@ -133,10 +133,10 @@ struct CreateQuantizedNode
         if constexpr (N == 4)
         {
             Lane8F32 geomBounds[4] = {
-                Lane8F32::Load(&records[0].geomBounds),
-                Lane8F32::Load(&records[2].geomBounds),
-                Lane8F32::Load(&records[1].geomBounds),
-                Lane8F32::Load(&records[3].geomBounds),
+                records[0].GeomBounds(),
+                records[2].GeomBounds(),
+                records[1].GeomBounds(),
+                records[3].GeomBounds(),
             };
             Lane4F32 mins[4] = {
                 FlipSign(Extract4<0>(geomBounds[0])),
@@ -498,7 +498,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     Split split = heuristic.Bin(record);
 
     // NOTE: multiply both by the area instead of dividing
-    f32 area     = HalfArea(record.geomBounds);
+    f32 area     = HalfArea(record.GeomBounds());
     f32 leafSAH  = settings.intCost * area * total; //((total + (1 << settings.logBlockSize) - 1) >> settings.logBlockSize);
     f32 splitSAH = settings.travCost * area + settings.intCost * split.bestSAH;
 
@@ -521,7 +521,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
             Record &childRecord = childRecords[recordIndex];
             if (childRecord.count <= settings.maxLeafSize) continue;
 
-            f32 childArea = HalfArea(childRecord.geomBounds);
+            f32 childArea = HalfArea(childRecord.GeomBounds());
             if (childArea > maxArea)
             {
                 bestChild = recordIndex;
@@ -859,7 +859,7 @@ BVHQuantized<N> BuildQuantizedSBVH(BuildSettings settings,
     SBVHBuilderTriangleMesh<N> builder;
     // new (&builder.heuristic) HeuristicSpatialSplits(ref, refIndices0, refIndices1, mesh, HalfArea(record.geomBounds),
     //                                                 record.End());
-    new (&builder.heuristic) HeuristicSpatialSplits(ref, mesh, HalfArea(record.geomBounds));
+    new (&builder.heuristic) HeuristicSpatialSplits(ref, mesh, HalfArea(record.GeomBounds()));
     return builder.BuildBVH(settings, inArenas, mesh, record);
 }
 
