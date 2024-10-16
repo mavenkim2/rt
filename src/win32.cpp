@@ -7,6 +7,7 @@ namespace rt
 static Arena *win32Arena;
 static Win32Thread *win32FreeThread;
 static u64 osPerformanceFrequency;
+static b32 win32LargePagesEnabled;
 
 PerformanceCounter OS_StartCounter()
 {
@@ -49,6 +50,46 @@ void *OS_Reserve(u64 size, void *ptr)
 {
     void *out = VirtualAlloc(ptr, size, MEM_RESERVE, PAGE_READWRITE);
     return out;
+}
+
+void *OS_ReserveLarge(u64 size)
+{
+    void *out = VirtualAlloc(0, size, MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES, PAGE_READWRITE);
+    return out;
+}
+
+b32 OS_SetLargePages()
+{
+    b32 is_ok = 0;
+    HANDLE token;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token))
+    {
+        LUID luid;
+        if (LookupPrivilegeValue(0, SE_LOCK_MEMORY_NAME, &luid))
+        {
+            TOKEN_PRIVILEGES priv;
+            priv.PrivilegeCount           = 1;
+            priv.Privileges[0].Luid       = luid;
+            priv.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+            if (AdjustTokenPrivileges(token, 0, &priv, sizeof(priv), 0, 0))
+            {
+                win32LargePagesEnabled = 1;
+                is_ok                  = 1;
+            }
+        }
+        CloseHandle(token);
+    }
+    return is_ok;
+}
+
+size_t OS_GetLargePageSize()
+{
+    return GetLargePageMinimum();
+}
+
+b32 OS_LargePagesEnabled()
+{
+    return win32LargePagesEnabled;
 }
 
 b8 OS_Commit(void *ptr, u64 size)

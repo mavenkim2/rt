@@ -533,9 +533,8 @@ PrimRef *GenerateAOSData(Arena *arena, TriangleMesh *mesh, u32 numFaces, Bounds 
 //     ScratchEnd(temp);
 // }
 
-void AOSSBVHBuilderTest(TriangleMesh *mesh)
+void AOSSBVHBuilderTest(Arena *arena, TriangleMesh *mesh)
 {
-    Arena *arena = ArenaAlloc();
     arena->align = 64;
 
     const u32 numFaces = mesh->numIndices / 3;

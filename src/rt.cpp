@@ -1035,7 +1035,9 @@ using namespace rt;
 int main(int argc, char *argv[])
 {
     BuildPackMask();
-    Arena *arena = ArenaAlloc();
+    OS_SetLargePages();
+    Arena *dataArena = ArenaAllocLargePages();
+    Arena *arena     = ArenaAlloc();
     InitThreadContext(arena, "[Main Thread]", 1);
     OS_Init();
     // jobsystem::InitializeJobsystem();
@@ -1058,7 +1060,7 @@ int main(int argc, char *argv[])
     // TriangleClipBinTestDefault(&mesh);
     // SOASBVHBuilderTest(&mesh);
 
-    AOSSBVHBuilderTest(&mesh);
+    AOSSBVHBuilderTest(dataArena, &mesh);
     // TriangleClipTestAOS(&mesh);
     // TriangleClipTestAOSInPlace(&mesh);
 

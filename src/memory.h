@@ -4,6 +4,8 @@
 #define ARENA_HEADER_SIZE  128
 #define ARENA_COMMIT_SIZE  kilobytes(64)
 #define ARENA_RESERVE_SIZE megabytes(64)
+#define ARENA_RESERVE_SIZE_LARGE_PAGES megabytes(8)
+#define ARENA_COMMIT_SIZE_LARGE_PAGES megabytes(2)
 
 namespace rt
 {
@@ -17,6 +19,7 @@ struct Arena
     u64 cmt;
     u64 res;
     u64 align;
+    b32 largePagesEnabled;
     b8 grow;
 };
 
@@ -26,7 +29,7 @@ struct TempArena
     u64 pos;
 };
 
-Arena *ArenaAlloc(u64 resSize, u64 cmtSize, u64 align);
+Arena *ArenaAlloc(u64 resSize, u64 cmtSize, u64 align, b32 largePages = 0);
 Arena *ArenaAlloc(u64 size, u64 align = 8);
 Arena *ArenaAlloc();
 void *ArenaPushNoZero(Arena *arena, u64 size);

@@ -1,29 +1,49 @@
 namespace rt
 {
-Arena *ArenaAlloc(u64 resSize, u64 cmtSize, u64 align)
+Arena *ArenaAlloc(u64 resSize, u64 cmtSize, u64 align, b32 largePages)
 {
-    u64 pageSize = OS_PageSize();
-    resSize      = AlignPow2(resSize, pageSize);
-    cmtSize      = AlignPow2(cmtSize, pageSize);
-
-    void *memory = OS_Reserve(resSize);
-    if (!OS_Commit(memory, cmtSize))
+    void *memory          = 0;
+    b32 largePagesEnabled = OS_LargePagesEnabled();
+    b32 largePagesFailed  = 0;
+    if (largePagesEnabled && largePages)
     {
-        memory = 0;
-        OS_Release(memory);
+#ifdef _WIN32
+
+        size_t largePageSize = OS_GetLargePageSize();
+        resSize          = AlignPow2(resSize, largePageSize);
+        memory           = OS_ReserveLarge(resSize);
+        largePagesFailed = memory == 0;
+#else
+#error os not supported
+#endif
+    }
+    if (!(largePagesEnabled && largePages) || largePagesFailed)
+    {
+        largePagesEnabled = 0;
+        u64 pageSize      = OS_PageSize();
+        resSize           = AlignPow2(resSize, pageSize);
+        cmtSize           = AlignPow2(cmtSize, pageSize);
+        memory            = OS_Reserve(resSize);
+        if (!OS_Commit(memory, cmtSize))
+        {
+            memory = 0;
+            OS_Release(memory);
+        }
     }
 
+    Assert(memory);
     Arena *arena = (Arena *)memory;
     if (arena)
     {
-        arena->prev    = 0;
-        arena->current = arena;
-        arena->basePos = 0;
-        arena->pos     = ARENA_HEADER_SIZE;
-        arena->cmt     = cmtSize;
-        arena->res     = resSize;
-        arena->align   = align;
-        arena->grow    = 1;
+        arena->prev              = 0;
+        arena->current           = arena;
+        arena->basePos           = 0;
+        arena->pos               = ARENA_HEADER_SIZE;
+        arena->cmt               = cmtSize;
+        arena->res               = resSize;
+        arena->align             = align;
+        arena->grow              = 1;
+        arena->largePagesEnabled = largePagesEnabled;
     }
 
     return arena;
@@ -41,6 +61,12 @@ Arena *ArenaAlloc()
     return result;
 }
 
+Arena *ArenaAllocLargePages()
+{
+    Arena *result = ArenaAlloc(ARENA_RESERVE_SIZE_LARGE_PAGES, megabytes(2), 8, 1);
+    return result;
+}
+
 void *ArenaPushNoZero(Arena *arena, u64 size)
 {
     Arena *current      = arena->current;
@@ -49,14 +75,29 @@ void *ArenaPushNoZero(Arena *arena, u64 size)
     if (current->res < newPos && current->grow)
     {
         Arena *newArena = 0;
-        if (size < ARENA_RESERVE_SIZE / 2 + 1)
+        if (current->largePagesEnabled)
         {
-            newArena = ArenaAlloc();
+            if (size < ARENA_RESERVE_SIZE_LARGE_PAGES / 2 + 1)
+            {
+                newArena = ArenaAllocLargePages();
+            }
+            else
+            {
+                u64 newBlockSize = size + ARENA_HEADER_SIZE;
+                newArena         = ArenaAlloc(newBlockSize, ARENA_COMMIT_SIZE_LARGE_PAGES, arena->align, 1);
+            }
         }
         else
         {
-            u64 newBlockSize = size + ARENA_HEADER_SIZE;
-            newArena         = ArenaAlloc(newBlockSize, ARENA_COMMIT_SIZE, arena->align);
+            if (size < ARENA_RESERVE_SIZE / 2 + 1)
+            {
+                newArena = ArenaAlloc();
+            }
+            else
+            {
+                u64 newBlockSize = size + ARENA_HEADER_SIZE;
+                newArena         = ArenaAlloc(newBlockSize, ARENA_COMMIT_SIZE, arena->align);
+            }
         }
         if (newArena)
         {
@@ -75,12 +116,22 @@ void *ArenaPushNoZero(Arena *arena, u64 size)
     }
     if (current->cmt < newPos)
     {
-        u64 cmtAligned = AlignPow2(newPos, ARENA_COMMIT_SIZE);
-        cmtAligned     = Min(cmtAligned, current->res);
-        u64 cmtSize    = cmtAligned - current->cmt;
-        b8 result      = OS_Commit((u8 *)current + current->cmt, cmtSize);
-        assert(result);
-        current->cmt = cmtAligned;
+        if (!current->largePagesEnabled)
+        {
+            u64 cmtAligned = AlignPow2(newPos, ARENA_COMMIT_SIZE);
+            cmtAligned     = Min(cmtAligned, current->res);
+            u64 cmtSize    = cmtAligned - current->cmt;
+            b8 result      = OS_Commit((u8 *)current + current->cmt, cmtSize);
+            assert(result);
+            current->cmt = cmtAligned;
+        }
+        else
+        {
+            u64 cmtAligned = AlignPow2(newPos, ARENA_COMMIT_SIZE_LARGE_PAGES);
+            cmtAligned     = Min(cmtAligned, current->res);
+            u64 cmtSize    = cmtAligned - current->cmt;
+            current->cmt   = cmtAligned;
+        }
     }
     void *result = 0;
     if (current->cmt >= newPos)

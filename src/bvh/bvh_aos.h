@@ -440,7 +440,7 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 star
     const u32 blockSize         = 512;
     const u32 blockMask         = blockSize - 1;
     const u32 blockShift        = Bsf(blockSize);
-    const u32 numJobs           = Min(32u, (count + 511) / 512); // OS_NumProcessors();
+    const u32 numJobs           = Min(16u, (count + 511) / 512); // OS_NumProcessors();
     const u32 numBlocksPerChunk = numJobs;
     const u32 chunkSize         = blockSize * numBlocksPerChunk;
     // Assert(IsPow2(chunkSize));
