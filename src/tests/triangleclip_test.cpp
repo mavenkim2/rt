@@ -65,7 +65,7 @@ PrimData *GeneratePrimData(Arena *arena, TriangleMesh *mesh, u32 count, u32 numF
 PrimRef *GenerateAOSData(Arena *arena, TriangleMesh *mesh, u32 numFaces, Bounds &geomBounds, Bounds &centBounds)
 {
     arena->align  = 64;
-    PrimRef *refs = PushArray(arena, PrimRef, u32(numFaces * GROW_AMOUNT));
+    PrimRef *refs = PushArray(arena, PrimRef, u32(numFaces * GROW_AMOUNT) + 1);
     for (u32 i = 0; i < numFaces; i++)
     {
         u32 i0 = mesh->indices[i * 3];
@@ -82,7 +82,11 @@ PrimRef *GenerateAOSData(Arena *arena, TriangleMesh *mesh, u32 numFaces, Bounds 
 
         Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
         Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
-        prim->m256    = Lane8F32(-mins, maxs);
+        Lane4F32::StoreU(prim->min, -mins);
+        prim->maxX = max.x;
+        prim->maxY = max.y;
+        prim->maxZ = max.z;
+        // prim->m256 = Lane8F32(-mins, maxs);
 
         prim->primID = i;
 

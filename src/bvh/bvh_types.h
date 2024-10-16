@@ -136,22 +136,27 @@ struct PrimRef
 {
     union
     {
-        __m256 m256;
+        // __m256 m256;
         struct
         {
             f32 minX, minY, minZ;
-            u32 geomID;
-            f32 maxX, maxY, maxZ;
+            // u32 geomID;
             u32 primID;
+            f32 maxX, maxY, maxZ;
         };
         struct
         {
             f32 min[3];
-            u32 geomID_;
-            f32 max[3];
             u32 primID_;
+            // u32 geomID_;
+            f32 max[3];
         };
     };
+    PrimRef() {}
+    PrimRef(const Lane8F32 &l)
+    {
+        MemoryCopy(this, &l, sizeof(PrimRef));
+    }
 };
 struct PrimDataSOA
 {

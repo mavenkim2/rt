@@ -434,6 +434,43 @@ __forceinline void Transpose8x8(const Lane8F32 &inA, const Lane8F32 &inB, const 
     outH = Shuffle4<1, 3>(t3, t7);
 }
 
+__forceinline void Transpose7x8(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC, const Lane8F32 &inD,
+                                const Lane8F32 &inE, const Lane8F32 &inF, const Lane8F32 &inG,
+                                Lane8F32 &outA, Lane8F32 &outB, Lane8F32 &outC, Lane8F32 &outD,
+                                Lane8F32 &outE, Lane8F32 &outF, Lane8F32 &outG, Lane8F32 &outH)
+{
+    Lane8F32 a = UnpackLo(inA, inC);
+    Lane8F32 b = UnpackHi(inA, inC);
+
+    Lane8F32 c = UnpackLo(inB, inD);
+    Lane8F32 d = UnpackHi(inB, inD);
+
+    Lane8F32 t0 = UnpackLo(a, c);
+    Lane8F32 t1 = UnpackHi(a, c);
+    Lane8F32 t2 = UnpackLo(b, d);
+    Lane8F32 t3 = UnpackHi(b, d);
+
+    Lane8F32 e = UnpackLo(inE, inG);
+    Lane8F32 f = UnpackHi(inE, inG);
+
+    Lane8F32 g = Permute<0, 0, 1, 1>(inF);
+    Lane8F32 h = Permute<2, 2, 3, 3>(inF);
+
+    Lane8F32 t4 = UnpackLo(e, g);
+    Lane8F32 t5 = UnpackHi(e, g);
+    Lane8F32 t6 = UnpackLo(f, h);
+    Lane8F32 t7 = UnpackHi(f, h);
+
+    outA = Shuffle4<0, 2>(t0, t4);
+    outB = Shuffle4<0, 2>(t1, t5);
+    outC = Shuffle4<0, 2>(t2, t6);
+    outD = Shuffle4<0, 2>(t3, t7);
+    outE = Shuffle4<1, 3>(t0, t4);
+    outF = Shuffle4<1, 3>(t1, t5);
+    outG = Shuffle4<1, 3>(t2, t6);
+    outH = Shuffle4<1, 3>(t3, t7);
+}
+
 __forceinline void Transpose8x6(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC, const Lane8F32 &inD,
                                 const Lane8F32 &inE, const Lane8F32 &inF, const Lane8F32 &inG, const Lane8F32 &inH,
                                 Lane8F32 &outA, Lane8F32 &outB, Lane8F32 &outC, Lane8F32 &outD,

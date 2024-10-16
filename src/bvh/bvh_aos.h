@@ -156,11 +156,11 @@ struct Triangle8
     }
 };
 
-void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
-                  Lane8F32 &leftMinX, Lane8F32 &leftMinY, Lane8F32 &leftMinZ,
-                  Lane8F32 &leftMaxX, Lane8F32 &leftMaxY, Lane8F32 &leftMaxZ,
-                  Lane8F32 &rightMinX, Lane8F32 &rightMinY, Lane8F32 &rightMinZ,
-                  Lane8F32 &rightMaxX, Lane8F32 &rightMaxY, Lane8F32 &rightMaxZ)
+static void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
+                         Lane8F32 &leftMinX, Lane8F32 &leftMinY, Lane8F32 &leftMinZ,
+                         Lane8F32 &leftMaxX, Lane8F32 &leftMaxY, Lane8F32 &leftMaxZ,
+                         Lane8F32 &rightMinX, Lane8F32 &rightMinY, Lane8F32 &rightMinZ,
+                         Lane8F32 &rightMaxX, Lane8F32 &rightMaxY, Lane8F32 &rightMaxZ)
 {
     static const u32 LUTX[] = {0, 2, 1};
     static const u32 LUTY[] = {1, 0, 2};
@@ -227,8 +227,8 @@ void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri,
     rightMaxZ = *((Lane8F32 *)(&right) + 3 + LUTZ[dim]);
 }
 
-void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
-                  Bounds8 *l, Bounds8 *r)
+static void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
+                         Bounds8 *l, Bounds8 *r)
 {
     Lane8F32 lOut[8];
     Lane8F32 leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
@@ -256,10 +256,10 @@ void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri,
 }
 
 // NOTE: for aos splitting
-void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const u32 faceIndices[8],
-                  const Triangle8 &tri, const Lane8F32 &splitPos,
-                  Lane8F32 *left, Lane8F32 *right,
-                  Lane8F32 *centL, Lane8F32 *centR)
+static void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const u32 faceIndices[8],
+                         const Triangle8 &tri, const Lane8F32 &splitPos,
+                         Lane8F32 *left, Lane8F32 *right,
+                         Lane8F32 *centL, Lane8F32 *centR)
 {
     Lane8F32 leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
         rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ;
@@ -268,11 +268,14 @@ void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const u32 faceIndices
                  rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ);
 
     Lane8U32 faceIDs = Lane8U32::LoadU(faceIndices);
-    Transpose8x8(-leftMinX, -leftMinY, -leftMinZ, pos_inf, leftMaxX, leftMaxY, leftMaxZ, AsFloat(faceIDs),
+    // Transpose8x8(-leftMinX, -leftMinY, -leftMinZ, pos_inf, leftMaxX, leftMaxY, leftMaxZ, AsFloat(faceIDs),
+    //              left[0], left[1], left[2], left[3], left[4], left[5], left[6], left[7]);
+    // Transpose8x8(-rightMinX, -rightMinY, -rightMinZ, pos_inf, rightMaxX, rightMaxY, rightMaxZ, AsFloat(faceIDs),
+    //              right[0], right[1], right[2], right[3], right[4], right[5], right[6], right[7]);
+    Transpose7x8(-leftMinX, -leftMinY, -leftMinZ, AsFloat(faceIDs), leftMaxX, leftMaxY, leftMaxZ,
                  left[0], left[1], left[2], left[3], left[4], left[5], left[6], left[7]);
-    Transpose8x8(-rightMinX, -rightMinY, -rightMinZ, pos_inf, rightMaxX, rightMaxY, rightMaxZ, AsFloat(faceIDs),
+    Transpose7x8(-rightMinX, -rightMinY, -rightMinZ, AsFloat(faceIDs), rightMaxX, rightMaxY, rightMaxZ,
                  right[0], right[1], right[2], right[3], right[4], right[5], right[6], right[7]);
-
     centL[0] = (leftMinX + leftMaxX) * 0.5f;
     centL[1] = (leftMinY + leftMaxY) * 0.5f;
     centL[2] = (leftMinZ + leftMaxZ) * 0.5f;
@@ -408,8 +411,9 @@ u32 Partition(const Binner *binner, PrimRef *data, u32 dim, u32 bestPos, i32 l, 
         while (l <= r)
         {
             PrimRef *lRef     = &data[l];
-            Lane8F32 centroid = ((Shuffle4<1, 1>(lRef->m256) - Shuffle4<0, 0>(lRef->m256)) * 0.5f) ^ signFlipMask;
-            bool isRight      = binner->Bin(centroid[4 + dim], dim) >= bestPos;
+            Lane8F32 centroid = ((Shuffle4<1, 1>(Lane8F32::LoadU(lRef)) - Shuffle4<0, 0>(Lane8F32::LoadU(lRef))) * 0.5f) ^
+                                signFlipMask;
+            bool isRight = binner->Bin(centroid[4 + dim], dim) >= bestPos;
             if (isRight) break;
             l++;
         }
@@ -417,7 +421,8 @@ u32 Partition(const Binner *binner, PrimRef *data, u32 dim, u32 bestPos, i32 l, 
         {
             Assert(r >= 0);
             PrimRef *rRef     = &data[r];
-            Lane8F32 centroid = ((Shuffle4<1, 1>(rRef->m256) - Shuffle4<0, 0>(rRef->m256)) * 0.5f) ^ signFlipMask;
+            Lane8F32 centroid = ((Shuffle4<1, 1>(Lane8F32::LoadU(rRef)) - Shuffle4<0, 0>(Lane8F32::LoadU(rRef))) * 0.5f) ^
+                                signFlipMask;
 
             bool isLeft = binner->Bin(centroid[4 + dim], dim) < bestPos;
             if (isLeft) break;
@@ -532,7 +537,7 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 star
     return out;
 }
 
-template <i32 numBins = 32>
+template <i32 numBins = 32, typename PrimRef = PrimRef>
 struct HeuristicAOSObjectBinning
 {
     Bounds8 bins[3][numBins];
@@ -559,13 +564,20 @@ struct HeuristicAOSObjectBinning
         u32 alignedCount = count - count % LANE_WIDTH;
         u32 i            = start;
 
-        Lane8F32 prevLanes[8];
+        Lane8F32 lanes[2][8];
+        u32 current = 0;
         alignas(32) u32 prevBinIndices[3][8];
         if (count >= LANE_WIDTH)
         {
+            Lane8F32 *currentLanes = lanes[current];
+            for (u32 laneIndex = 0; laneIndex < 8; laneIndex++)
+            {
+                currentLanes[laneIndex] = Lane8F32::LoadU(&data[i + laneIndex]);
+            }
             Lane8F32 temp[6];
-            Transpose8x6(data[i + 0].m256, data[i + 1].m256, data[i + 2].m256, data[i + 3].m256,
-                         data[i + 4].m256, data[i + 5].m256, data[i + 6].m256, data[i + 7].m256,
+
+            Transpose8x6(currentLanes[0], currentLanes[1], currentLanes[2], currentLanes[3],
+                         currentLanes[4], currentLanes[5], currentLanes[6], currentLanes[7],
                          temp[0], temp[1], temp[2], temp[3], temp[4], temp[5]);
             Lane8F32 centroids[3] = {
                 (temp[3] - temp[0]) * 0.5f,
@@ -575,18 +587,21 @@ struct HeuristicAOSObjectBinning
             Lane8U32::Store(prevBinIndices[0], binner->Bin(centroids[0], 0));
             Lane8U32::Store(prevBinIndices[1], binner->Bin(centroids[1], 1));
             Lane8U32::Store(prevBinIndices[2], binner->Bin(centroids[2], 2));
-            for (u32 c = 0; c < LANE_WIDTH; c++)
-            {
-                prevLanes[c] = data[i + c].m256;
-            }
             i += LANE_WIDTH;
+            current = !current;
         }
         for (; i < start + alignedCount; i += LANE_WIDTH)
         {
+            Lane8F32 *currentLanes = lanes[current];
+            Lane8F32 *prevLanes    = lanes[!current];
+            for (u32 laneIndex = 0; laneIndex < 8; laneIndex++)
+            {
+                currentLanes[laneIndex] = Lane8F32::LoadU(&data[i + laneIndex]);
+            }
             Lane8F32 temp[6];
 
-            Transpose8x6(data[i + 0].m256, data[i + 1].m256, data[i + 2].m256, data[i + 3].m256,
-                         data[i + 4].m256, data[i + 5].m256, data[i + 6].m256, data[i + 7].m256,
+            Transpose8x6(currentLanes[0], currentLanes[1], currentLanes[2], currentLanes[3],
+                         currentLanes[4], currentLanes[5], currentLanes[6], currentLanes[7],
                          temp[0], temp[1], temp[2], temp[3], temp[4], temp[5]);
             Lane8F32 centroids[] = {
                 (temp[3] - temp[0]) * 0.5f,
@@ -611,13 +626,11 @@ struct HeuristicAOSObjectBinning
             Lane8U32::Store(prevBinIndices[0], indicesX);
             Lane8U32::Store(prevBinIndices[1], indicesY);
             Lane8U32::Store(prevBinIndices[2], indicesZ);
-            for (u32 c = 0; c < LANE_WIDTH; c++)
-            {
-                prevLanes[c] = data[i + c].m256;
-            }
+            current = !current;
         }
         if (count >= LANE_WIDTH)
         {
+            Lane8F32 *prevLanes = lanes[!current];
             for (u32 dim = 0; dim < 3; dim++)
             {
                 for (u32 b = 0; b < LANE_WIDTH; b++)
@@ -630,8 +643,9 @@ struct HeuristicAOSObjectBinning
         }
         for (; i < start + count; i++)
         {
-            Lane4F32 low      = Extract4<0>(data[i].m256);
-            Lane4F32 hi       = Extract4<1>(data[i].m256);
+            Lane8F32 lane     = Lane8F32::LoadU(data[i].min);
+            Lane4F32 low      = Extract4<0>(lane);
+            Lane4F32 hi       = Extract4<1>(lane);
             Lane4F32 centroid = (hi - low) * 0.5f;
             u32 indices[]     = {
                 binner->Bin(centroid[0], 0),
@@ -641,7 +655,7 @@ struct HeuristicAOSObjectBinning
             for (u32 dim = 0; dim < 3; dim++)
             {
                 u32 bin = indices[dim];
-                bins[dim][bin].Extend(data[i].m256);
+                bins[dim][bin].Extend(lane);
                 counts[bin][dim]++;
             }
         }
@@ -670,7 +684,7 @@ struct HeuristicAOSObjectBinning
             while (l <= r)
             {
                 lIndex            = getIndex(l);
-                lVal              = Lane8F32::Load(&data[lIndex]);
+                lVal              = Lane8F32::LoadU(&data[lIndex]);
                 Lane8F32 centroid = ((Shuffle4<1, 1>(lVal) - Shuffle4<0, 0>(lVal)) * 0.5f) ^ signFlipMask;
 
                 u32 bin      = binner->Bin(centroid[4 + dim], dim);
@@ -690,7 +704,7 @@ struct HeuristicAOSObjectBinning
                 Assert(r >= 0);
 
                 rIndex            = getIndex(r);
-                rVal              = Lane8F32::Load(&data[rIndex]);
+                rVal              = Lane8F32::LoadU(&data[rIndex]);
                 Lane8F32 centroid = ((Shuffle4<1, 1>(rVal) - Shuffle4<0, 0>(rVal)) * 0.5f) ^ signFlipMask;
 
                 u32 bin     = binner->Bin(centroid[4 + dim], dim);
@@ -780,8 +794,10 @@ struct alignas(32) HeuristicAOSSplitBinning
 
         for (; i < start + alignedCount; i += LANE_WIDTH)
         {
-            Transpose8x6(data[i + 0].m256, data[i + 1].m256, data[i + 2].m256, data[i + 3].m256,
-                         data[i + 4].m256, data[i + 5].m256, data[i + 6].m256, data[i + 7].m256,
+            Transpose8x6(Lane8F32::LoadU(&data[i + 0]), Lane8F32::LoadU(&data[i + 1]),
+                         Lane8F32::LoadU(&data[i + 2]), Lane8F32::LoadU(&data[i + 3]),
+                         Lane8F32::LoadU(&data[i + 4]), Lane8F32::LoadU(&data[i + 5]),
+                         Lane8F32::LoadU(&data[i + 6]), Lane8F32::LoadU(&data[i + 7]),
                          lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5]);
 
             Assert(All(-lanes[0] >= binner->base[0]));
@@ -840,7 +856,7 @@ struct alignas(32) HeuristicAOSSplitBinning
                     {
                         case 0:
                         {
-                            bins[dim][indexMin].Extend(data[i + b].m256);
+                            bins[dim][indexMin].Extend(Lane8F32::LoadU(&data[i + b]));
                         }
                         break;
                         default:
@@ -921,7 +937,7 @@ struct alignas(32) HeuristicAOSSplitBinning
                 {
                     case 0:
                     {
-                        bins[dim][binIndexMin].Extend(ref->m256);
+                        bins[dim][binIndexMin].Extend(Lane8F32::LoadU(ref));
                     }
                     break;
                     default:
@@ -1012,20 +1028,19 @@ struct alignas(32) HeuristicAOSSplitBinning
             {
                 lIndex            = getIndex(l);
                 PrimRef &ref      = data[lIndex];
-                Lane4F32 min      = Lane4F32::Load(ref.min);
-                Lane4F32 max      = Lane4F32::Load(ref.max);
-                Lane8F32 centroid = ((Shuffle4<1, 1>(ref.m256) - Shuffle4<0, 0>(ref.m256)) * 0.5f) ^ signFlipMask;
+                Lane8F32 refData  = Lane8F32::LoadU(&ref);
+                Lane8F32 centroid = ((Shuffle4<1, 1>(refData) - Shuffle4<0, 0>(refData)) * 0.5f) ^ signFlipMask;
 
-                u32 minBin        = binner->BinMin(min[dim], dim);
-                u32 maxBin        = binner->BinMax(max[dim], dim);
+                u32 minBin        = binner->BinMin(ref.min[dim], dim);
+                u32 maxBin        = binner->BinMax(ref.max[dim], dim);
                 lIsFullyRight     = minBin >= bestPos;
                 bool lIsFullyLeft = maxBin < bestPos;
                 bool isSplit      = !(lIsFullyRight || lIsFullyLeft); // minBin < bestPos && maxBin >= bestPos;
 
                 centRight = MaskMax(masks[lIsFullyRight], centRight, centroid);
-                geomRight = MaskMax(masks[lIsFullyRight], geomRight, ref.m256);
+                geomRight = MaskMax(masks[lIsFullyRight], geomRight, refData);
                 centLeft  = MaskMax(masks[lIsFullyLeft], centLeft, centroid);
-                geomLeft  = MaskMax(masks[lIsFullyLeft], geomLeft, ref.m256);
+                geomLeft  = MaskMax(masks[lIsFullyLeft], geomLeft, refData);
 
                 faceIDQueue[splitCount] = ref.primID;
                 refIDQueue[splitCount]  = lIndex;
@@ -1042,21 +1057,20 @@ struct alignas(32) HeuristicAOSSplitBinning
             {
                 rIndex            = getIndex(r);
                 PrimRef &rRef     = data[rIndex];
-                Lane4F32 min      = Lane4F32::Load(rRef.min);
-                Lane4F32 max      = Lane4F32::Load(rRef.max);
-                Lane8F32 centroid = ((Shuffle4<1, 1>(rRef.m256) - Shuffle4<0, 0>(rRef.m256)) * 0.5f) ^ signFlipMask;
+                Lane8F32 refData  = Lane8F32::LoadU(&rRef);
+                Lane8F32 centroid = ((Shuffle4<1, 1>(refData) - Shuffle4<0, 0>(refData)) * 0.5f) ^ signFlipMask;
 
-                u32 minBin       = binner->BinMin(min[dim], dim);
-                u32 maxBin       = binner->BinMax(max[dim], dim);
+                u32 minBin       = binner->BinMin(rRef.min[dim], dim);
+                u32 maxBin       = binner->BinMax(rRef.max[dim], dim);
                 rIsFullyRight    = minBin >= bestPos;
                 bool isFullyLeft = maxBin < bestPos;
                 rIsSplit         = !(rIsFullyRight || isFullyLeft);
                 rPrimID          = rRef.primID;
 
                 centRight = MaskMax(masks[rIsFullyRight], centRight, centroid);
-                geomRight = MaskMax(masks[rIsFullyRight], geomRight, rRef.m256);
+                geomRight = MaskMax(masks[rIsFullyRight], geomRight, refData);
                 centLeft  = MaskMax(masks[isFullyLeft], centLeft, centroid);
-                geomLeft  = MaskMax(masks[isFullyLeft], geomLeft, rRef.m256);
+                geomLeft  = MaskMax(masks[isFullyLeft], geomLeft, refData);
 
                 r -= rIsFullyRight;
             }
@@ -1115,8 +1129,8 @@ struct alignas(32) HeuristicAOSSplitBinning
                     centLeft           = Max(centLeft, outCentroidsL[queueIndex]);
                     centRight          = Max(centRight, outCentroidsR[queueIndex]);
 
-                    Lane8F32::Store(&data[refID].m256, gL[queueIndex]);
-                    Lane8F32::Store(&data[splitLoc].m256, gR[queueIndex]);
+                    data[refID]    = PrimRef(gL[queueIndex]);
+                    data[splitLoc] = PrimRef(gR[queueIndex]);
                 }
             }
         }
@@ -1153,8 +1167,8 @@ struct alignas(32) HeuristicAOSSplitBinning
                 centLeft           = Max(centLeft, outCentroidsL[queueIndex]);
                 centRight          = Max(centRight, outCentroidsR[queueIndex]);
 
-                Lane8F32::Store(&data[refID].m256, gL[queueIndex]);
-                Lane8F32::Store(&data[splitLoc].m256, gR[queueIndex]);
+                data[refID]    = PrimRef(gL[queueIndex]);
+                data[splitLoc] = PrimRef(gR[queueIndex]);
             }
 
             remainingCount -= LANE_WIDTH;
@@ -1191,7 +1205,7 @@ struct HeuristicSpatialSplits
 {
     using Record = RecordAOSSplits;
     using HSplit = HeuristicAOSSplitBinning<numSpatialBins>;
-    using OBin   = HeuristicAOSObjectBinning<numObjectBins>;
+    using OBin   = HeuristicAOSObjectBinning<numObjectBins, PrimRef>;
 
     TriangleMesh *mesh;
     f32 rootArea;
@@ -1328,7 +1342,7 @@ struct HeuristicSpatialSplits
             for (u32 i = record.start; i < mid; i++) // record.start + record.count; i++)
             {
                 PrimRef *ref      = &primRefs[i];
-                Lane8F32 m256     = Lane8F32::Load(&ref->m256);
+                Lane8F32 m256     = Lane8F32::LoadU(ref);
                 Lane8F32 centroid = ((Shuffle4<1, 1>(m256) - Shuffle4<0, 0>(m256)) * 0.5f) ^ signFlipMask;
                 geomLeft.Extend(m256);
                 centLeft.Extend(centroid);
@@ -1336,7 +1350,7 @@ struct HeuristicSpatialSplits
             for (u32 i = mid; i < record.End(); i++)
             {
                 PrimRef *ref      = &primRefs[i];
-                Lane8F32 m256     = Lane8F32::Load(&ref->m256);
+                Lane8F32 m256     = Lane8F32::LoadU(ref);
                 Lane8F32 centroid = ((Shuffle4<1, 1>(m256) - Shuffle4<0, 0>(m256)) * 0.5f) ^ signFlipMask;
                 geomRight.Extend(m256);
                 centRight.Extend(centroid);
@@ -1452,10 +1466,10 @@ struct HeuristicSpatialSplits
 };
 
 template <typename Binner, i32 numBins>
-Split BinBest(const Bounds8 bounds[3][numBins],
-              const Lane4U32 *entryCounts,
-              const Lane4U32 *exitCounts,
-              const Binner *binner)
+static Split BinBest(const Bounds8 bounds[3][numBins],
+                     const Lane4U32 *entryCounts,
+                     const Lane4U32 *exitCounts,
+                     const Binner *binner)
 {
 
     Lane4F32 areas[numBins];
@@ -1534,9 +1548,9 @@ Split BinBest(const Bounds8 bounds[3][numBins],
 }
 
 template <typename Binner, i32 numBins>
-Split BinBest(const Bounds8 bounds[3][numBins],
-              const Lane4U32 *counts,
-              const Binner *binner)
+static Split BinBest(const Bounds8 bounds[3][numBins],
+                     const Lane4U32 *counts,
+                     const Binner *binner)
 {
     return BinBest(bounds, counts, counts, binner);
 }

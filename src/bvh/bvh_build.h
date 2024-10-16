@@ -427,13 +427,15 @@ struct BVHBuilder
     Heuristic heuristic;
 
     BVHBuilder() {}
+#if 0
     NodeType *BuildBVHRoot(BuildSettings settings, Record &record);
     __forceinline u32 BuildNode(BuildSettings settings, const Record &record, Record *childRecords, u32 &numChildren);
+
     void BuildBVH(Scheduler::Counter *counter, BuildSettings settings, NodeType *parent, const Record *records, u32 numChildren,
-                  bool parallel = true);
+            bool parallel = true);
+#endif
 
     BVHN<N, NodeType> BuildBVH(BuildSettings settings, Arena **inArenas, Primitive *inRawPrims, Record &record);
-
     NodeType *BuildBVHRoot2(BuildSettings settings, Record &record);
 
     void BuildBVH2(BuildSettings settings, const Record &record, NodeType *&outGrandChild,
@@ -592,6 +594,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     threadLocalStatistics[GetThreadIndex()].misc += nodeCount;
 }
 
+#if 0
 template <i32 N, typename BuildFunctions>
 typename BVHBuilder<N, BuildFunctions>::NodeType *BVHBuilder<N, BuildFunctions>::BuildBVHRoot(BuildSettings settings, Record &record)
 {
@@ -826,6 +829,7 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH(Scheduler::Counter *counter, BuildS
         }
     }
 }
+#endif
 
 template <i32 N, typename BuildFunctions>
 BVHN<N, typename BVHBuilder<N, BuildFunctions>::NodeType>
