@@ -481,7 +481,6 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 star
         u32 l          = 0;
         u32 r          = (numChunks << blockShift) - 1;
         u32 lastRIndex = GetIndex(r, group);
-        // r              = lastRIndex > rEndAligned ? r - 8 : r;
 
         r = lastRIndex >= end
                 ? (lastRIndex - end) < (blockSize - 1)
@@ -521,17 +520,25 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 star
     u32 out = Partition(heuristic->binner, data, split.bestDim, split.bestPos, minIndex, maxIndex);
     Assert(globalMid == out);
 
+    Lane8F32 leftGeom(neg_inf);
+    Lane8F32 leftCent(neg_inf);
+    Lane8F32 rightGeom(neg_inf);
+    Lane8F32 rightCent(neg_inf);
     for (u32 i = 0; i < numJobs; i++)
     {
         RecordAOSSplits &l = recordL[i];
         RecordAOSSplits &r = recordR[i];
 
-        outLeft.geomBounds = Max(outLeft.geomBounds, l.geomBounds);
-        outLeft.centBounds = Max(outLeft.centBounds, l.centBounds);
+        leftGeom = Max(leftGeom, l.geomBounds);
+        leftCent = Max(leftCent, l.centBounds);
 
-        outRight.geomBounds = Max(outRight.geomBounds, r.geomBounds);
-        outRight.centBounds = Max(outRight.centBounds, r.centBounds);
+        rightGeom = Max(rightGeom, r.geomBounds);
+        rightCent = Max(rightCent, r.centBounds);
     }
+    outLeft.geomBounds  = leftGeom;
+    outLeft.centBounds  = leftCent;
+    outRight.geomBounds = rightGeom;
+    outRight.centBounds = rightCent;
 
     ScratchEnd(temp);
     return out;
@@ -1425,8 +1432,8 @@ struct HeuristicSpatialSplits
         Assert(numLeft <= record.count);
         Assert(numRight <= record.count);
 
-        outLeft.SetRange(record.start, record.start, numLeft, record.start + numLeft + extSizeLeft);
-        outRight.SetRange(outLeft.extEnd, outLeft.extEnd, numRight, record.extEnd);
+        outLeft.SetRange(record.start, numLeft, record.start + numLeft + extSizeLeft);
+        outRight.SetRange(outLeft.extEnd, numRight, record.extEnd);
         u32 rightExtSize = outRight.ExtSize();
         Assert(rightExtSize == extSizeRight);
 

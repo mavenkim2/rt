@@ -1,11 +1,11 @@
 #ifndef MEMORY_H
 #define MEMORY_H
 
-#define ARENA_HEADER_SIZE  128
-#define ARENA_COMMIT_SIZE  kilobytes(64)
-#define ARENA_RESERVE_SIZE megabytes(64)
+#define ARENA_HEADER_SIZE              128
+#define ARENA_COMMIT_SIZE              kilobytes(64)
+#define ARENA_RESERVE_SIZE             megabytes(64)
 #define ARENA_RESERVE_SIZE_LARGE_PAGES megabytes(8)
-#define ARENA_COMMIT_SIZE_LARGE_PAGES megabytes(2)
+#define ARENA_COMMIT_SIZE_LARGE_PAGES  megabytes(2)
 
 namespace rt
 {
@@ -30,7 +30,7 @@ struct TempArena
 };
 
 Arena *ArenaAlloc(u64 resSize, u64 cmtSize, u64 align, b32 largePages = 0);
-Arena *ArenaAlloc(u64 size, u64 align = 8);
+Arena *ArenaAlloc(u64 align);
 Arena *ArenaAlloc();
 void *ArenaPushNoZero(Arena *arena, u64 size);
 void *ArenaPush(Arena *arena, u64 size);

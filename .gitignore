@@ -32,7 +32,7 @@
 *.app
 
 # other
-build.bat*
+*.bat
 *.pdb
 *.rdbg
 *.obj

@@ -558,12 +558,12 @@ void AOSSBVHBuilderTest(Arena *arena, TriangleMesh *mesh)
     RecordAOSSplits record;
     record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
     record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
-    record.SetRange(0, 0, numFaces, u32(numFaces * GROW_AMOUNT));
+    record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
     u32 numProcessors = OS_NumProcessors();
     Arena **arenas    = PushArray(arena, Arena *, numProcessors);
     for (u32 i = 0; i < numProcessors; i++)
     {
-        arenas[i] = ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
+        arenas[i] = ArenaAlloc(16); // ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
     }
 
     PerformanceCounter counter = OS_StartCounter();

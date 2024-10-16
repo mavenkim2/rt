@@ -10,9 +10,9 @@ Arena *ArenaAlloc(u64 resSize, u64 cmtSize, u64 align, b32 largePages)
 #ifdef _WIN32
 
         size_t largePageSize = OS_GetLargePageSize();
-        resSize          = AlignPow2(resSize, largePageSize);
-        memory           = OS_ReserveLarge(resSize);
-        largePagesFailed = memory == 0;
+        resSize              = AlignPow2(resSize, largePageSize);
+        memory               = OS_ReserveLarge(resSize);
+        largePagesFailed     = memory == 0;
 #else
 #error os not supported
 #endif
@@ -49,9 +49,9 @@ Arena *ArenaAlloc(u64 resSize, u64 cmtSize, u64 align, b32 largePages)
     return arena;
 }
 
-Arena *ArenaAlloc(u64 size, u64 align)
+Arena *ArenaAlloc(u64 align)
 {
-    Arena *result = ArenaAlloc(size, ARENA_COMMIT_SIZE, align);
+    Arena *result = ArenaAlloc(ARENA_RESERVE_SIZE, ARENA_COMMIT_SIZE, align);
     return result;
 }
 

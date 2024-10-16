@@ -419,6 +419,15 @@ struct BVHBuilder
     using Heuristic     = typename BuildFunctions::Heuristic;
     using Record        = typename Heuristic::Record;
     using PrimitiveData = typename Record::PrimitiveData;
+
+    struct NextGenInfo
+    {
+        NodeType *grandChildren;
+        u32 leafIndices[N];
+        u32 numChildren;
+        u32 leafCount;
+    };
+
     BuildFunctions f;
 
     Arena **arenas;
@@ -438,8 +447,8 @@ struct BVHBuilder
     BVHN<N, NodeType> BuildBVH(BuildSettings settings, Arena **inArenas, Primitive *inRawPrims, Record &record);
     NodeType *BuildBVHRoot2(BuildSettings settings, Record &record);
 
-    void BuildBVH2(BuildSettings settings, const Record &record, NodeType *&outGrandChild,
-                   Record *childRecords, u32 *leafIndices, u32 &leafCount, u32 &numChildren, bool parallel);
+    void BuildBVH2(BuildSettings settings, const Record &record, NextGenInfo &info,
+                   Record *childRecords, bool parallel);
 };
 
 template <i32 N>
@@ -450,22 +459,17 @@ typename BVHBuilder<N, BuildFunctions>::NodeType *
 BVHBuilder<N, BuildFunctions>::BuildBVHRoot2(BuildSettings settings, Record &record)
 {
     Record childRecords[N];
-    u32 leafIndices[N];
-    u32 leafCount = 0;
-    // u32 result = BuildNode(settings, record, childRecords, numChildren);
 
-    Arena *arena         = arenas[GetThreadIndex()];
-    NodeType *root       = PushStruct(arena, NodeType);
-    NodeType *grandChild = 0;
-    u32 numChildren      = 0;
-    BuildBVH2(settings, record, grandChild, childRecords, leafIndices, leafCount, numChildren, true);
+    Arena *arena   = arenas[GetThreadIndex()];
+    NodeType *root = PushStruct(arena, NodeType);
+    NextGenInfo info;
 
-    if (grandChild)
+    BuildBVH2(settings, record, info, childRecords, true);
+
+    if (info.grandChildren)
     {
-        // TODO: this isn't correct, need the number of children or the number of nodes (since num nodes + num leaves could be
-        // less than N)
-        f.createNode(childRecords, N - leafCount, root);
-        f.updateNode(arena, root, childRecords, grandChild, leafIndices, leafCount);
+        f.createNode(childRecords, info.numChildren, root);
+        f.updateNode(arena, root, childRecords, info.grandChildren, info.leafIndices, info.leafCount);
     }
     else
     {
@@ -477,9 +481,8 @@ BVHBuilder<N, BuildFunctions>::BuildBVHRoot2(BuildSettings settings, Record &rec
 }
 
 template <i32 N, typename BuildFunctions>
-void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Record &record, NodeType *&outGrandChild,
-                                              Record *childRecords, u32 *leafIndices, u32 &leafCount, u32 &numChildren,
-                                              bool parallel)
+void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Record &record, NextGenInfo &info,
+                                              Record *childRecords, bool parallel)
 {
 
     u32 total = record.count;
@@ -488,10 +491,11 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     // Record childRecords[N];
     bool areLeaves[N] = {};
 
-    numChildren = 0;
+    u32 numChildren = 0;
     if (total == 1)
     {
-        outGrandChild = 0;
+        info.grandChildren = 0;
+        info.numChildren   = 0;
         return;
     }
 
@@ -505,7 +509,8 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     if (total <= settings.maxLeafSize && leafSAH <= splitSAH)
     {
         heuristic.FlushState(split);
-        outGrandChild = 0;
+        info.grandChildren = 0;
+        info.numChildren   = 0;
         return;
     }
     heuristic.Split(split, record, childRecords[0], childRecords[1]);
@@ -540,39 +545,40 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     }
 
     Record nextGenRecords[N][N];
-    u32 nextGenNumChildren[N];
+    NextGenInfo nextGenInfo[N];
 
-    NodeType *grandChildren[N];
-    u32 nextGenLeafIndices[N][N];
-    u32 nextGenLeafCount[N];
     if (parallel)
     {
-        // TODO: split the thread pools here
         scheduler.ScheduleAndWait(numChildren, 1, [&](u32 jobID) {
-            bool childParallel = childRecords[jobID].count >= PARALLEL_THRESHOLD;
-            BuildBVH2(settings, childRecords[jobID], grandChildren[jobID], nextGenRecords[jobID],
-                      nextGenLeafIndices[jobID], nextGenLeafCount[jobID], nextGenNumChildren[jobID], childParallel);
+            bool childParallel = childRecords[jobID].count >= 8 * 1024;
+            NextGenInfo &info  = nextGenInfo[jobID];
+            BuildBVH2(settings, childRecords[jobID], nextGenInfo[jobID], nextGenRecords[jobID], childParallel);
         });
     }
     else
     {
         for (u32 i = 0; i < numChildren; i++)
         {
-            BuildBVH2(settings, childRecords[i], grandChildren[i], nextGenRecords[i], nextGenLeafIndices[i],
-                      nextGenLeafCount[i], nextGenNumChildren[i], false);
+            BuildBVH2(settings, childRecords[i], nextGenInfo[i], nextGenRecords[i], false);
         }
     }
 
-    leafCount = 0;
+    // info.leafCount = 0;
+    u32 leafCount = 0;
     u32 nodeIndices[N];
     u32 nodeCount = 0;
     for (u32 i = 0; i < numChildren; i++)
     {
-        leafIndices[leafCount] = i;
-        nodeIndices[nodeCount] = i;
-        u32 isLeaf             = grandChildren[i] == 0;
-        nodeCount += !isLeaf;
-        leafCount += isLeaf;
+        u32 isLeaf = nextGenInfo[i].grandChildren == 0;
+        if (isLeaf)
+        {
+            info.leafIndices[leafCount++] = i;
+        }
+        else
+        {
+            nodeIndices[nodeCount] = i;
+            nodeCount++;
+        }
     }
 
     Arena *currentArena = arenas[GetThreadIndex()];
@@ -582,16 +588,20 @@ void BVHBuilder<N, BuildFunctions>::BuildBVH2(BuildSettings settings, const Reco
     {
         children = PushArrayNoZeroTagged(currentArena, NodeType, nodeCount, MemoryType_Node);
     }
+
+    // u8 *bytes = PushArrayNoZeroTagged(currentArena, u8, sizeof(NodeType) + sizeof(u32) * primTotal + (leafCount ? 4 : 0));
     for (u32 i = 0; i < nodeCount; i++)
     {
         u32 nodeIndex = nodeIndices[i];
-        f.createNode(nextGenRecords[nodeIndex], nextGenNumChildren[nodeIndex], &children[i]);
+        f.createNode(nextGenRecords[nodeIndex], nextGenInfo[nodeIndex].numChildren, &children[i]);
         f.updateNode(currentArena, &children[i], nextGenRecords[nodeIndex],
-                     grandChildren[nodeIndex], nextGenLeafIndices[nodeIndex], nextGenLeafCount[nodeIndex]);
+                     nextGenInfo[nodeIndex].grandChildren, nextGenInfo[nodeIndex].leafIndices, nextGenInfo[nodeIndex].leafCount);
     }
-    outGrandChild = children;
+    info.grandChildren = children;
+    info.numChildren   = numChildren;
+    info.leafCount     = leafCount;
 
-    threadLocalStatistics[GetThreadIndex()].misc += nodeCount;
+    // threadLocalStatistics[GetThreadIndex()].misc += leafCount != 0; // nodeCount == 0; // leafCount; // nodeCount;
 }
 
 #if 0
