@@ -448,9 +448,9 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 star
     const u32 numJobs           = Min(16u, (count + 511) / 512); // OS_NumProcessors();
     const u32 numBlocksPerChunk = numJobs;
     const u32 chunkSize         = blockSize * numBlocksPerChunk;
-    // Assert(IsPow2(chunkSize));
 
     const u32 PARTITION_PARALLEL_THRESHOLD = 32 * 1024;
+    // TODO IMPORTANT: there is a multithreading bug here that makes the number of nodes stochastic
     if (count < PARTITION_PARALLEL_THRESHOLD)
     {
         return heuristic->Partition(

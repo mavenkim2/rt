@@ -126,16 +126,17 @@ struct CreateQuantizedNode
 
         Lane4F32 diff = boundsMaxP - boundsMinP;
 
-        f32 expX = diff[0] == 0.f ? 0.f : Ceil(Log2f(diff[0] / 255.f));
-        f32 expY = diff[1] == 0.f ? 0.f : Ceil(Log2f(diff[1] / 255.f));
-        f32 expZ = diff[2] == 0.f ? 0.f : Ceil(Log2f(diff[2] / 255.f));
+        const f32 divisor = 1 / 255.f;
+
+        f32 expX = diff[0] == 0.f ? 0.f : Ceil(Log2f(diff[0] * divisor));
+        f32 expY = diff[1] == 0.f ? 0.f : Ceil(Log2f(diff[1] * divisor));
+        f32 expZ = diff[2] == 0.f ? 0.f : Ceil(Log2f(diff[2] * divisor));
 
         Lane4U32 shift = Flooru(Lane4F32(expX, expY, expZ, 0.f)) + 127;
 
         Lane4F32 pow = AsFloat(shift << 23);
 
         Vec3lf<N> powVec;
-        // TODO: for N = 8, this needs to be shuffle across
         powVec.x = Shuffle<0>(LaneF32<N>(pow));
         powVec.y = Shuffle<1>(LaneF32<N>(pow));
         powVec.z = Shuffle<2>(LaneF32<N>(pow));

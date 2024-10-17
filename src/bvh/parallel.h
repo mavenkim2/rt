@@ -341,13 +341,13 @@ struct Scheduler
         numWorkers        = numThreads;
         workers[0].waiter = &notifier.waiters[0];
         workers[0].victim = 0;
-        OS_SetThreadAffinity(GetMainThreadHandle(), 0);
+        // OS_SetThreadAffinity(GetMainThreadHandle(), 0);
         for (u32 i = 1; i < numThreads; i++)
         {
             workers[i].waiter      = &notifier.waiters[i];
             workers[i].victim      = i;
             OS_Handle threadHandle = OS_ThreadStart(WorkerLoop, (void *)&workers[i]);
-            OS_SetThreadAffinity(threadHandle, i);
+            // OS_SetThreadAffinity(threadHandle, i);
         }
     }
     void ExploitTask(Worker *w, Task *t)
@@ -378,24 +378,18 @@ struct Scheduler
         const u32 id         = (u32)(w - workers);
         for (;;)
         {
+            if (predicate()) return false;
             // TODO: spread out distribution
             if (w->victim == id ? w->queue.Steal(*t) : workers[w->victim].queue.Steal(*t)) return true;
-            if (!predicate())
+            numFailedSteals++;
+            if (numFailedSteals > stealBound)
             {
-                numFailedSteals++;
-                if (numFailedSteals > stealBound)
-                {
-                    std::this_thread::yield();
-                    numYields++;
-                    if (numYields == yieldBound) return false;
-                }
-                // w->victim = RandomInt(0, numWorkers);
-                w->victim = (w->victim + 1) % numWorkers;
+                std::this_thread::yield();
+                numYields++;
+                if (numYields == yieldBound) return false;
             }
-            else
-            {
-                return false;
-            }
+            w->victim = RandomInt(0, numWorkers);
+            // w->victim = (w->victim + 1) % numWorkers;
         }
     }
     bool WaitForTask(Worker *w, Task *t, Counter *counter = 0)
@@ -409,13 +403,21 @@ struct Scheduler
         {
             if (ExploreTask(w, t, [&]() { return false; })) return true;
         }
-        notifier.Prewait();
-        if (!w->queue.Empty())
+        // if (!w->queue.Empty())
+        // {
+        //     w->victim = (u32)(w - workers);
+        //     notifier.CancelWait();
+        //     goto begin;
+        // }
+        if (counter)
         {
-            w->victim = (u32)(w - workers);
-            notifier.CancelWait();
-            goto begin;
+            if (counter->count.load(std::memory_order_relaxed) == 0)
+            {
+                // threadLocalStatistics[GetThreadIndex()].misc += 1;
+                return false;
+            }
         }
+        notifier.Prewait();
         for (u32 i = 0; i < numWorkers; i++)
         {
             if (!workers[i].queue.Empty())
@@ -425,13 +427,7 @@ struct Scheduler
                 goto begin;
             }
         }
-        if (counter)
-        {
-            notifier.CancelWait();
-            if (counter->count.load(std::memory_order_relaxed) == 0)
-                return false;
-        }
-        else
+        if (!counter)
         {
             notifier.CommitWait(w->waiter);
         }
