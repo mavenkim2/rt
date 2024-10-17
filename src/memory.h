@@ -58,7 +58,7 @@ enum MemoryType
     MemoryType_Instance,
     MemoryType_Transform,
     MemoryType_String,
-    MemoryType_Node,
+    MemoryType_BVH,
     MemoryType_Record,
     MemoryType_Other,
 };
@@ -83,6 +83,9 @@ __forceinline T *PushArrayDefault(Arena *arena, u32 count)
 #define PushStructTagged(arena, type, tag) \
     (((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(type), PushStruct(arena, type))
 
+#define PushStructNoZeroTagged(arena, type, tag) \
+    (((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(type), PushStructNoZero(arena, type))
+
 template <typename T>
 __forceinline T *PushArrayDefaultTagged(Arena *arena, u32 count, MemoryType tag)
 {
@@ -98,6 +101,8 @@ __forceinline T *PushArrayDefaultTagged(Arena *arena, u32 count, MemoryType tag)
 #define PushArrayTagged(arena, type, count, tag)       PushArray(arena, type, count)
 #define PushArrayNoZeroTagged(arena, type, count, tag) PushArrayNoZero(arena, type, count)
 #define PushStructTagged(arena, type, tag)             PushStruct(arena, type)
+#define PushStructNoZeroTagged(arena, type, tag)       PushStructNoZero(arena, type)
+
 template <typename T>
 __forceinline T *PushArrayDefaultTagged(Arena *arena, u32 count, MemoryType type)
 {

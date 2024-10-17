@@ -579,15 +579,15 @@ void AOSSBVHBuilderTest(Arena *arena, TriangleMesh *mesh)
     for (u32 i = 0; i < numProcessors; i++)
     {
         totalMiscTime += threadLocalStatistics[i].miscF;
-        totalNodeMemory += threadMemoryStatistics[i].totalNodeMemory;
+        totalNodeMemory += threadMemoryStatistics[i].totalBVHMemory;
         totalRecordMemory += threadMemoryStatistics[i].totalRecordMemory;
         printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
         numNodes += threadLocalStatistics[i].misc;
     }
     printf("total time: %fms \n", totalMiscTime);
     printf("num nodes: %llu\n", numNodes);               // num nodes: %llu\n", numNodes);
-    printf("node kb: %llu\n", totalNodeMemory / 1000);   // num nodes: %llu\n", numNodes);
-    printf("record kb: %llu", totalRecordMemory / 1000); // num nodes: %llu\n", numNodes);
+    printf("node kb: %llu\n", totalNodeMemory / 1024);   // num nodes: %llu\n", numNodes);
+    printf("record kb: %llu", totalRecordMemory / 1024); // num nodes: %llu\n", numNodes);
 }
 
 } // namespace rt
