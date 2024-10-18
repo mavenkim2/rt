@@ -703,6 +703,16 @@ inline void SkipToNextLine(Tokenizer *iter)
     iter->cursor++;
 }
 
+inline void SkipToNextWord(Tokenizer *iter)
+{
+    bool findChar = false;
+    while (!EndOfBuffer(iter) && !(findChar && CharIsAlpha(*iter->cursor)))
+    {
+        if (!findChar && *iter->cursor == ' ') findChar = true;
+        iter->cursor++;
+    }
+}
+
 void Get(Tokenizer *tokenizer, void *ptr, u32 size)
 {
     Assert(tokenizer->cursor + size <= tokenizer->input.str + tokenizer->input.size);

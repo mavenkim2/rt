@@ -395,13 +395,13 @@ static void ClipPolygon(const u32 dim, const u32 faceIndices[8],
                  left[0], left[1], left[2], left[3], left[4], left[5], left[6], left[7]);
     Transpose7x8(-rightMinX, -rightMinY, -rightMinZ, AsFloat(faceIDs), rightMaxX, rightMaxY, rightMaxZ,
                  right[0], right[1], right[2], right[3], right[4], right[5], right[6], right[7]);
-    centL[0] = (leftMinX + leftMaxX) * 0.5f;
-    centL[1] = (leftMinY + leftMaxY) * 0.5f;
-    centL[2] = (leftMinZ + leftMaxZ) * 0.5f;
+    centL[0] = (leftMinX + leftMaxX);
+    centL[1] = (leftMinY + leftMaxY);
+    centL[2] = (leftMinZ + leftMaxZ);
 
-    centR[0] = (rightMinX + rightMaxX) * 0.5f;
-    centR[1] = (rightMinY + rightMaxY) * 0.5f;
-    centR[2] = (rightMinZ + rightMaxZ) * 0.5f;
+    centR[0] = (rightMinX + rightMaxX);
+    centR[1] = (rightMinY + rightMaxY);
+    centR[2] = (rightMinZ + rightMaxZ);
 }
 
 template <i32 numBins = 32>
@@ -522,40 +522,6 @@ struct SplitBinner
 // AOS Partitions
 //
 
-template <typename Binner>
-u32 Partition(const Binner *binner, PrimRef *data, u32 dim, u32 bestPos, i32 l, i32 r)
-{
-    for (;;)
-    {
-        while (l <= r)
-        {
-            PrimRef *lRef     = &data[l];
-            Lane8F32 centroid = ((Shuffle4<1, 1>(Lane8F32::LoadU(lRef)) - Shuffle4<0, 0>(Lane8F32::LoadU(lRef))) * 0.5f) ^
-                                signFlipMask;
-            bool isRight = binner->Bin(centroid[4 + dim], dim) >= bestPos;
-            if (isRight) break;
-            l++;
-        }
-        while (l <= r)
-        {
-            Assert(r >= 0);
-            PrimRef *rRef     = &data[r];
-            Lane8F32 centroid = ((Shuffle4<1, 1>(Lane8F32::LoadU(rRef)) - Shuffle4<0, 0>(Lane8F32::LoadU(rRef))) * 0.5f) ^
-                                signFlipMask;
-
-            bool isLeft = binner->Bin(centroid[4 + dim], dim) < bestPos;
-            if (isLeft) break;
-            r--;
-        }
-        if (l > r) break;
-
-        Swap(data[l], data[r]);
-        l++;
-        r--;
-    }
-    return l;
-}
-
 template <typename Heuristic>
 u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 start, u32 count,
                       RecordAOSSplits &outLeft, RecordAOSSplits &outRight)
@@ -569,12 +535,20 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 star
     const u32 chunkSize         = blockSize * numBlocksPerChunk;
 
     const u32 PARTITION_PARALLEL_THRESHOLD = 32 * 1024;
-    // TODO IMPORTANT: there is a multithreading bug here that makes the number of nodes stochastic
+    // TODO: The problem is that when all of the partitions are serial, the number of times it's executed is consistent
+    // (therefore consistent # nodes). However, when some of the partitions are serial and some are parallel,
+    // the number of times it's executed ISN'T consistent, EVEN THOUGH most of the time it's doing serial execution,
+    // and the partition results are equal to the serial case when the ref counts are high enough. It's doesn't seem to be a
+    // jobsystem bug, also there isn't a bug where the mids are duplicated (this can happen due to splitting).
+    // maybe the way it does the partition is stochastic even if it's parallel? this could lead to the different
+    // partitions.
     if (count < PARTITION_PARALLEL_THRESHOLD)
     {
-        return heuristic->Partition(
+        u32 mid = heuristic->Partition(
             data, split.bestDim, split.bestPos, start, start + count - 1, [&](u32 index) { return index; },
             outLeft, outRight);
+        // printf("%u serial %u\n", mid, split.type);
+        return mid;
     }
 
     const u32 numChunks = (count + chunkSize - 1) / chunkSize;
@@ -604,11 +578,12 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 star
         r = lastRIndex >= end
                 ? (lastRIndex - end) < (blockSize - 1)
                       ? r - (lastRIndex - end) - 1
-                      : AlignPow2(r, blockSize) - blockSize - 1
+                      : (r & ~(blockMask)) - 1
                 : r;
 
-        // u32 lIndex = GetIndex(l, group);
+        u32 lIndex = GetIndex(l, group);
         u32 rIndex = GetIndex(r, group);
+        Assert(lIndex >= start);
         Assert(rIndex < end);
 
         auto GetIndexGroup = [&](u32 index) {
@@ -634,10 +609,12 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 star
         }
     }
 
+    Assert(maxIndex > minIndex);
     Assert(maxIndex < start + count);
     Assert(minIndex >= start);
-    u32 out = Partition(heuristic->binner, data, split.bestDim, split.bestPos, minIndex, maxIndex);
+    u32 out = heuristic->Partition(data, split.bestDim, split.bestPos, minIndex, maxIndex);
     Assert(globalMid == out);
+    Assert(out != start && out != start + count);
 
     Lane8F32 leftGeom(neg_inf);
     Lane8F32 leftCent(neg_inf);
@@ -660,6 +637,7 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 star
     outRight.centBounds = rightCent;
 
     ScratchEnd(temp);
+    // printf("%u parallel %u\n", out, split.type);
     return out;
 }
 
@@ -706,9 +684,9 @@ struct HeuristicAOSObjectBinning
                          currentLanes[4], currentLanes[5], currentLanes[6], currentLanes[7],
                          temp[0], temp[1], temp[2], temp[3], temp[4], temp[5]);
             Lane8F32 centroids[3] = {
-                (temp[3] - temp[0]) * 0.5f,
-                (temp[4] - temp[1]) * 0.5f,
-                (temp[5] - temp[2]) * 0.5f,
+                (temp[3] - temp[0]),
+                (temp[4] - temp[1]),
+                (temp[5] - temp[2]),
             };
             Lane8U32::Store(prevBinIndices[0], binner->Bin(centroids[0], 0));
             Lane8U32::Store(prevBinIndices[1], binner->Bin(centroids[1], 1));
@@ -730,9 +708,9 @@ struct HeuristicAOSObjectBinning
                          currentLanes[4], currentLanes[5], currentLanes[6], currentLanes[7],
                          temp[0], temp[1], temp[2], temp[3], temp[4], temp[5]);
             Lane8F32 centroids[] = {
-                (temp[3] - temp[0]) * 0.5f,
-                (temp[4] - temp[1]) * 0.5f,
-                (temp[5] - temp[2]) * 0.5f,
+                (temp[3] - temp[0]),
+                (temp[4] - temp[1]),
+                (temp[5] - temp[2]),
             };
 
             Lane8U32 indicesX = binner->Bin(centroids[0], 0);
@@ -772,7 +750,7 @@ struct HeuristicAOSObjectBinning
             Lane8F32 lane     = Lane8F32::LoadU(data[i].min);
             Lane4F32 low      = Extract4<0>(lane);
             Lane4F32 hi       = Extract4<1>(lane);
-            Lane4F32 centroid = (hi - low) * 0.5f;
+            Lane4F32 centroid = (hi - low);
             u32 indices[]     = {
                 binner->Bin(centroid[0], 0),
                 binner->Bin(centroid[1], 1),
@@ -811,7 +789,7 @@ struct HeuristicAOSObjectBinning
             {
                 lIndex            = getIndex(l);
                 lVal              = Lane8F32::LoadU(&data[lIndex]);
-                Lane8F32 centroid = ((Shuffle4<1, 1>(lVal) - Shuffle4<0, 0>(lVal)) * 0.5f) ^ signFlipMask;
+                Lane8F32 centroid = ((Shuffle4<1, 1>(lVal) - Shuffle4<0, 0>(lVal))) ^ signFlipMask;
 
                 u32 bin      = binner->Bin(centroid[4 + dim], dim);
                 bool isRight = bin >= bestPos;
@@ -831,7 +809,7 @@ struct HeuristicAOSObjectBinning
 
                 rIndex            = getIndex(r);
                 rVal              = Lane8F32::LoadU(&data[rIndex]);
-                Lane8F32 centroid = ((Shuffle4<1, 1>(rVal) - Shuffle4<0, 0>(rVal)) * 0.5f) ^ signFlipMask;
+                Lane8F32 centroid = ((Shuffle4<1, 1>(rVal) - Shuffle4<0, 0>(rVal))) ^ signFlipMask;
 
                 u32 bin     = binner->Bin(centroid[4 + dim], dim);
                 bool isLeft = bin < bestPos;
@@ -858,6 +836,38 @@ struct HeuristicAOSObjectBinning
         outRight.geomBounds = geomRight;
         outLeft.centBounds  = centLeft;
         outRight.centBounds = centRight;
+        return l;
+    }
+    u32 Partition(PrimRef *data, u32 dim, u32 bestPos, i32 l, i32 r)
+    {
+        for (;;)
+        {
+            while (l <= r)
+            {
+                PrimRef *lRef     = &data[l];
+                Lane8F32 centroid = ((Shuffle4<1, 1>(Lane8F32::LoadU(lRef)) - Shuffle4<0, 0>(Lane8F32::LoadU(lRef)))) ^
+                                    signFlipMask;
+                bool isRight = binner->Bin(centroid[4 + dim], dim) >= bestPos;
+                if (isRight) break;
+                l++;
+            }
+            while (l <= r)
+            {
+                Assert(r >= 0);
+                PrimRef *rRef     = &data[r];
+                Lane8F32 centroid = ((Shuffle4<1, 1>(Lane8F32::LoadU(rRef)) - Shuffle4<0, 0>(Lane8F32::LoadU(rRef)))) ^
+                                    signFlipMask;
+
+                bool isLeft = binner->Bin(centroid[4 + dim], dim) < bestPos;
+                if (isLeft) break;
+                r--;
+            }
+            if (l > r) break;
+
+            Swap(data[l], data[r]);
+            l++;
+            r--;
+        }
         return l;
     }
 
@@ -907,7 +917,7 @@ struct alignas(32) HeuristicAOSSplitBinning
         }
     }
 
-    void Bin(Mesh *mesh, const PrimRef *data, u32 start, u32 count)
+    void Bin(const PrimRef *data, u32 start, u32 count)
     {
         u32 binCounts[3][numBins]                                 = {};
         alignas(32) u32 binIndexStart[3][numBins][2 * LANE_WIDTH] = {};
@@ -1157,7 +1167,7 @@ struct alignas(32) HeuristicAOSSplitBinning
                 lIndex            = getIndex(l);
                 PrimRef &ref      = data[lIndex];
                 Lane8F32 refData  = Lane8F32::LoadU(&ref);
-                Lane8F32 centroid = ((Shuffle4<1, 1>(refData) - Shuffle4<0, 0>(refData)) * 0.5f) ^ signFlipMask;
+                Lane8F32 centroid = ((Shuffle4<1, 1>(refData) - Shuffle4<0, 0>(refData))) ^ signFlipMask;
 
                 u32 minBin        = binner->BinMin(ref.min[dim], dim);
                 u32 maxBin        = binner->BinMax(ref.max[dim], dim);
@@ -1186,7 +1196,7 @@ struct alignas(32) HeuristicAOSSplitBinning
                 rIndex            = getIndex(r);
                 PrimRef &rRef     = data[rIndex];
                 Lane8F32 refData  = Lane8F32::LoadU(&rRef);
-                Lane8F32 centroid = ((Shuffle4<1, 1>(refData) - Shuffle4<0, 0>(refData)) * 0.5f) ^ signFlipMask;
+                Lane8F32 centroid = ((Shuffle4<1, 1>(refData) - Shuffle4<0, 0>(refData))) ^ signFlipMask;
 
                 u32 minBin       = binner->BinMin(rRef.min[dim], dim);
                 u32 maxBin       = binner->BinMax(rRef.max[dim], dim);
@@ -1243,8 +1253,8 @@ struct alignas(32) HeuristicAOSSplitBinning
                     const u32 splitLoc = splitOffset++;
                     geomLeft           = Max(geomLeft, gL[queueIndex]);
                     geomRight          = Max(geomRight, gR[queueIndex]);
-                    centLeft           = Max(centLeft, outCentroidsL[queueIndex]);
-                    centRight          = Max(centRight, outCentroidsR[queueIndex]);
+                    centLeft           = Max(centLeft, outCentroidsL[queueIndex] ^ signFlipMask);
+                    centRight          = Max(centRight, outCentroidsR[queueIndex] ^ signFlipMask);
 
                     data[refID]    = PrimRef(gL[queueIndex]);
                     data[splitLoc] = PrimRef(gR[queueIndex]);
@@ -1282,8 +1292,8 @@ struct alignas(32) HeuristicAOSSplitBinning
                 const u32 splitLoc = splitOffset++;
                 geomLeft           = Max(geomLeft, gL[queueIndex]);
                 geomRight          = Max(geomRight, gR[queueIndex]);
-                centLeft           = Max(centLeft, outCentroidsL[queueIndex]);
-                centRight          = Max(centRight, outCentroidsR[queueIndex]);
+                centLeft           = Max(centLeft, outCentroidsL[queueIndex] ^ signFlipMask);
+                centRight          = Max(centRight, outCentroidsR[queueIndex] ^ signFlipMask);
 
                 data[refID]    = PrimRef(gL[queueIndex]);
                 data[splitLoc] = PrimRef(gR[queueIndex]);
@@ -1299,6 +1309,33 @@ struct alignas(32) HeuristicAOSSplitBinning
         outRight.geomBounds = geomRight;
         outLeft.centBounds  = centLeft;
         outRight.centBounds = centRight;
+        return l;
+    }
+    u32 Partition(PrimRef *data, u32 dim, u32 bestPos, i32 l, i32 r)
+    {
+        for (;;)
+        {
+            while (l <= r)
+            {
+                PrimRef *lRef = &data[l];
+                bool isRight  = binner->BinMin(lRef->min[dim], dim) >= bestPos;
+                if (isRight) break;
+                l++;
+            }
+            while (l <= r)
+            {
+                Assert(r >= 0);
+                PrimRef *rRef = &data[r];
+                bool isLeft   = binner->BinMax(rRef->max[dim], dim) < bestPos;
+                if (isLeft) break;
+                r--;
+            }
+            if (l > r) break;
+
+            Swap(data[l], data[r]);
+            l++;
+            r--;
+        }
         return l;
     }
 
@@ -1386,14 +1423,14 @@ struct HeuristicSpatialSplits
 
                 ParallelReduce<HSplit>(
                     splitHeuristic, record.start, record.count, groupSize,
-                    [&](HSplit &binner, u32 start, u32 count) { binner.Bin(mesh, primRefs, start, count); },
+                    [&](HSplit &binner, u32 start, u32 count) { binner.Bin(primRefs, start, count); },
                     [&](HSplit &l, const HSplit &r) { l.Merge(r); },
                     splitBinner, mesh, record.End());
             }
             else
             {
                 new (splitHeuristic) HSplit(splitBinner, mesh, record.End());
-                splitHeuristic->Bin(mesh, primRefs, record.start, record.count);
+                splitHeuristic->Bin(primRefs, record.start, record.count);
             }
             struct Split spatialSplit = BinBest(splitHeuristic->bins,
                                                 splitHeuristic->entryCounts, splitHeuristic->exitCounts, splitBinner);
@@ -1461,7 +1498,7 @@ struct HeuristicSpatialSplits
             {
                 PrimRef *ref      = &primRefs[i];
                 Lane8F32 m256     = Lane8F32::LoadU(ref);
-                Lane8F32 centroid = ((Shuffle4<1, 1>(m256) - Shuffle4<0, 0>(m256)) * 0.5f) ^ signFlipMask;
+                Lane8F32 centroid = ((Shuffle4<1, 1>(m256) - Shuffle4<0, 0>(m256))) ^ signFlipMask;
                 geomLeft.Extend(m256);
                 centLeft.Extend(centroid);
             }
@@ -1469,7 +1506,7 @@ struct HeuristicSpatialSplits
             {
                 PrimRef *ref      = &primRefs[i];
                 Lane8F32 m256     = Lane8F32::LoadU(ref);
-                Lane8F32 centroid = ((Shuffle4<1, 1>(m256) - Shuffle4<0, 0>(m256)) * 0.5f) ^ signFlipMask;
+                Lane8F32 centroid = ((Shuffle4<1, 1>(m256) - Shuffle4<0, 0>(m256))) ^ signFlipMask;
                 geomRight.Extend(m256);
                 centRight.Extend(centroid);
             }
@@ -1553,30 +1590,68 @@ struct HeuristicSpatialSplits
         ArenaPopTo(temp.arena, split.allocPos);
 
         // error check
-
-        // TODO: the centroid bounds are giving me issues. need a robustness check
-#if 0
+#if 1
         {
-            for (u32 i = outLeft.start; i < outLeft.End(); i++)
+            switch (split.type)
             {
-                const PrimRef *ref = &primRefs[i];
-                Lane8F32 centroid  = ((Shuffle4<1, 1>(ref->m256) - Shuffle4<0, 0>(ref->m256)) * 0.5f) ^ signFlipMask;
-                Assert(centroid[4 + split.bestDim] < split.bestValue);
-                u32 gMask = Movemask(Lane8F32::Load(&ref->m256) <= outLeft.geomBounds) & 0x77;
-                Assert(gMask == 0x77);
-                u32 cMask = Movemask(centroid <= outLeft.centBounds) & 0x77;
-                Assert(cMask == 0x77);
-            }
-            for (u32 i = outRight.start; i < outRight.End(); i++)
-            {
-                const PrimRef *ref = &primRefs[i];
-                Lane8F32 centroid  = ((Shuffle4<1, 1>(ref->m256) - Shuffle4<0, 0>(ref->m256)) * 0.5f) ^ signFlipMask;
-                Assert(centroid[4 + split.bestDim] >= split.bestValue);
-                u32 gMask = Movemask(Lane8F32::Load(&ref->m256) <= outRight.geomBounds) & 0x77;
-                u32 cMask = Movemask(centroid <= outRight.centBounds) & 0x77;
-
-                Assert(gMask == 0x77);
-                Assert(cMask == 0x77);
+                case Split::Object:
+                {
+                    OBin *heuristic = (OBin *)(split.ptr);
+                    for (u32 i = outLeft.start; i < outLeft.End(); i++)
+                    {
+                        const PrimRef *ref = &primRefs[i];
+                        Lane8F32 v         = Lane8F32::LoadU(ref);
+                        Lane8F32 centroid  = ((Shuffle4<1, 1>(v) - Shuffle4<0, 0>(v))) ^ signFlipMask;
+                        u32 pos            = heuristic->binner->Bin(centroid[4 + split.bestDim], split.bestDim);
+                        Assert(pos < split.bestPos);
+                        u32 gMask = Movemask(v <= outLeft.geomBounds) & 0x77;
+                        Assert(gMask == 0x77);
+                        u32 cMask = Movemask(centroid <= outLeft.centBounds) & 0x77;
+                        Assert(cMask == 0x77);
+                    }
+                    for (u32 i = outRight.start; i < outRight.End(); i++)
+                    {
+                        const PrimRef *ref = &primRefs[i];
+                        Lane8F32 v         = Lane8F32::LoadU(ref);
+                        Lane8F32 centroid  = ((Shuffle4<1, 1>(v) - Shuffle4<0, 0>(v))) ^ signFlipMask;
+                        u32 pos            = heuristic->binner->Bin(centroid[4 + split.bestDim], split.bestDim);
+                        Assert(pos >= split.bestPos);
+                        u32 gMask = Movemask(v <= outRight.geomBounds) & 0x77;
+                        u32 cMask = Movemask(centroid <= outRight.centBounds) & 0x77;
+                        Assert(gMask == 0x77);
+                        Assert(cMask == 0x77);
+                    }
+                }
+                break;
+                case Split::Spatial:
+                {
+                    HSplit *heuristic = (HSplit *)(split.ptr);
+                    for (u32 i = outLeft.start; i < outLeft.End(); i++)
+                    {
+                        const PrimRef *ref = &primRefs[i];
+                        Lane8F32 v         = Lane8F32::LoadU(ref);
+                        Lane8F32 centroid  = ((Shuffle4<1, 1>(v) - Shuffle4<0, 0>(v))) ^ signFlipMask;
+                        u32 pos            = heuristic->binner->BinMin(ref->min[split.bestDim], split.bestDim);
+                        Assert(pos < split.bestPos);
+                        u32 gMask = Movemask(v <= outLeft.geomBounds) & 0x77;
+                        Assert(gMask == 0x77);
+                        u32 cMask = Movemask(centroid <= outLeft.centBounds) & 0x77;
+                        Assert(cMask == 0x77);
+                    }
+                    for (u32 i = outRight.start; i < outRight.End(); i++)
+                    {
+                        const PrimRef *ref = &primRefs[i];
+                        Lane8F32 v         = Lane8F32::LoadU(ref);
+                        Lane8F32 centroid  = ((Shuffle4<1, 1>(v) - Shuffle4<0, 0>(v))) ^ signFlipMask;
+                        u32 pos            = heuristic->binner->BinMin(ref->min[split.bestDim], split.bestDim);
+                        Assert(pos >= split.bestPos);
+                        u32 gMask = Movemask(v <= outRight.geomBounds) & 0x77;
+                        u32 cMask = Movemask(centroid <= outRight.centBounds) & 0x77;
+                        Assert(gMask == 0x77);
+                        Assert(cMask == 0x77);
+                    }
+                }
+                break;
             }
         }
 #endif

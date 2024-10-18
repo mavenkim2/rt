@@ -555,7 +555,7 @@ uintptr_t BVHBuilder<N, BuildFunctions>::BuildBVH3(BuildSettings settings, const
         }
     }
 
-    // threadLocalStatistics[GetThreadIndex()].misc += 1;
+    threadLocalStatistics[GetThreadIndex()].misc += 1;
     u32 leafCount = 0;
     u32 primTotal = 0;
     for (u32 i = 0; i < numChildren; i++)

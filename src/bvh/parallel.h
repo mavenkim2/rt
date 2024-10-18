@@ -81,12 +81,19 @@ struct JobDeque
     JobDeque() {}
     bool Push(T item)
     {
-        i64 b = bottom.load(std::memory_order_relaxed);
-        i64 t = top.load(std::memory_order_acquire);
-        if (b >= t + size - 1) return false;
-        buffer[b & mask] = item;
-        bottom.store(b + 1, std::memory_order_release);
-        return true;
+        for (;;)
+        {
+            i64 b = bottom.load(std::memory_order_relaxed);
+            i64 t = top.load(std::memory_order_acquire);
+            if (b >= t + size - 1) continue;
+            // {
+            //     Assert(false);
+            //     return false;
+            // }
+            buffer[b & mask] = item;
+            bottom.store(b + 1, std::memory_order_release);
+            return true;
+        }
     }
     bool Pop(T &out)
     {
