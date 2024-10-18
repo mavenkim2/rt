@@ -603,16 +603,14 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 star
     {
         globalMid += outMid[i];
         minIndex = Min(GetIndex(outMid[i], i), minIndex);
-        if (outMid[i] > 0)
-        {
-            maxIndex = Max(GetIndex(outMid[i] - 1, i), maxIndex);
-        }
+        maxIndex = Max(GetIndex(outMid[i], i), maxIndex);
     }
 
     Assert(maxIndex > minIndex);
     Assert(maxIndex < start + count);
     Assert(minIndex >= start);
     u32 out = heuristic->Partition(data, split.bestDim, split.bestPos, minIndex, maxIndex);
+
     Assert(globalMid == out);
     Assert(out != start && out != start + count);
 
@@ -1173,7 +1171,7 @@ struct alignas(32) HeuristicAOSSplitBinning
                 u32 maxBin        = binner->BinMax(ref.max[dim], dim);
                 lIsFullyRight     = minBin >= bestPos;
                 bool lIsFullyLeft = maxBin < bestPos;
-                bool isSplit      = !(lIsFullyRight || lIsFullyLeft); // minBin < bestPos && maxBin >= bestPos;
+                bool isSplit      = !(lIsFullyRight || lIsFullyLeft);
 
                 centRight = MaskMax(masks[lIsFullyRight], centRight, centroid);
                 geomRight = MaskMax(masks[lIsFullyRight], geomRight, refData);
@@ -1194,16 +1192,16 @@ struct alignas(32) HeuristicAOSSplitBinning
             while (l <= r && rIsFullyRight && splitCount < LANE_WIDTH)
             {
                 rIndex            = getIndex(r);
-                PrimRef &rRef     = data[rIndex];
-                Lane8F32 refData  = Lane8F32::LoadU(&rRef);
+                PrimRef &ref      = data[rIndex];
+                Lane8F32 refData  = Lane8F32::LoadU(&ref);
                 Lane8F32 centroid = ((Shuffle4<1, 1>(refData) - Shuffle4<0, 0>(refData))) ^ signFlipMask;
 
-                u32 minBin       = binner->BinMin(rRef.min[dim], dim);
-                u32 maxBin       = binner->BinMax(rRef.max[dim], dim);
+                u32 minBin       = binner->BinMin(ref.min[dim], dim);
+                u32 maxBin       = binner->BinMax(ref.max[dim], dim);
                 rIsFullyRight    = minBin >= bestPos;
                 bool isFullyLeft = maxBin < bestPos;
                 rIsSplit         = !(rIsFullyRight || isFullyLeft);
-                rPrimID          = rRef.primID;
+                rPrimID          = ref.primID;
 
                 centRight = MaskMax(masks[rIsFullyRight], centRight, centroid);
                 geomRight = MaskMax(masks[rIsFullyRight], geomRight, refData);
@@ -1311,6 +1309,7 @@ struct alignas(32) HeuristicAOSSplitBinning
         outRight.centBounds = centRight;
         return l;
     }
+
     u32 Partition(PrimRef *data, u32 dim, u32 bestPos, i32 l, i32 r)
     {
         for (;;)
@@ -1326,7 +1325,8 @@ struct alignas(32) HeuristicAOSSplitBinning
             {
                 Assert(r >= 0);
                 PrimRef *rRef = &data[r];
-                bool isLeft   = binner->BinMax(rRef->max[dim], dim) < bestPos;
+
+                bool isLeft = binner->BinMin(rRef->min[dim], dim) < bestPos;
                 if (isLeft) break;
                 r--;
             }
@@ -1353,6 +1353,58 @@ struct alignas(32) HeuristicAOSSplitBinning
     }
 };
 
+template <i32 numObjectBins = 32, typename PrimRef = PrimRef>
+Split SAHObjectBinning(const RecordAOSSplits &record, const PrimRef *primRefs,
+                       HeuristicAOSObjectBinning<numObjectBins, PrimRef> *&objectBinHeuristic, u64 &popPos)
+{
+    using OBin        = HeuristicAOSObjectBinning<numObjectBins, PrimRef>;
+    TempArena temp    = ScratchStart(0, 0);
+    popPos            = ArenaPos(temp.arena);
+    temp.arena->align = 32;
+
+    // Stack allocate the heuristics since they store the centroid and geom bounds we'll need later
+    ObjectBinner<numObjectBins> *objectBinner =
+        PushStructConstruct(temp.arena, ObjectBinner<numObjectBins>)(record.centBounds);
+    objectBinHeuristic = PushStructNoZero(temp.arena, OBin);
+    if (record.count > PARALLEL_THRESHOLD)
+    {
+        const u32 groupSize = PARALLEL_THRESHOLD;
+        ParallelReduce<OBin>(
+            objectBinHeuristic, record.start, record.count, groupSize,
+            [&](OBin &binner, u32 start, u32 count) { binner.Bin(primRefs, start, count); },
+            [&](OBin &l, const OBin &r) { l.Merge(r); },
+            objectBinner);
+    }
+    else
+    {
+        new (objectBinHeuristic) OBin(objectBinner);
+        objectBinHeuristic->Bin(primRefs, record.start, record.count);
+    }
+    struct Split objectSplit = BinBest(objectBinHeuristic->bins, objectBinHeuristic->counts, objectBinner);
+    objectSplit.type         = Split::Object;
+    return objectSplit;
+}
+
+template <i32 numObjectBins = 32, typename PrimRef = PrimRef>
+void FinalizeObjectSplit(HeuristicAOSObjectBinning<numObjectBins, PrimRef> *objectBinHeuristic, Split &objectSplit, u64 popPos)
+{
+    u32 lCount = 0;
+    for (u32 i = 0; i < objectSplit.bestPos; i++)
+    {
+        lCount += objectBinHeuristic->counts[i][objectSplit.bestDim];
+    }
+    u32 rCount = 0;
+    for (u32 i = objectSplit.bestPos; i < numObjectBins; i++)
+    {
+        rCount += objectBinHeuristic->counts[i][objectSplit.bestDim];
+    }
+
+    objectSplit.ptr      = (void *)objectBinHeuristic;
+    objectSplit.allocPos = popPos;
+    objectSplit.numLeft  = lCount;
+    objectSplit.numRight = rCount;
+}
+
 // SBVH
 static const f32 sbvhAlpha = 1e-5;
 template <i32 numObjectBins = 32, i32 numSpatialBins = 16, typename Polygon8 = Triangle8, typename Mesh = TriangleMesh>
@@ -1373,30 +1425,13 @@ struct HeuristicSpatialSplits
     Split Bin(const Record &record, u32 blockSize = 1)
     {
         // Object splits
-        TempArena temp    = ScratchStart(0, 0);
-        u64 popPos        = ArenaPos(temp.arena);
-        temp.arena->align = 32;
+        TempArena temp = ScratchStart(0, 0);
+        u64 popPos     = 0; // ArenaPos(temp.arena);
+        OBin *objectBinHeuristic;
+
+        struct Split objectSplit = SAHObjectBinning(record, primRefs, objectBinHeuristic, popPos);
 
         // Stack allocate the heuristics since they store the centroid and geom bounds we'll need later
-        ObjectBinner<numObjectBins> *objectBinner =
-            PushStructConstruct(temp.arena, ObjectBinner<numObjectBins>)(record.centBounds);
-        OBin *objectBinHeuristic = PushStructNoZero(temp.arena, OBin);
-        if (record.count > PARALLEL_THRESHOLD)
-        {
-            const u32 groupSize = PARALLEL_THRESHOLD;
-            ParallelReduce<OBin>(
-                objectBinHeuristic, record.start, record.count, groupSize,
-                [&](OBin &binner, u32 start, u32 count) { binner.Bin(primRefs, start, count); },
-                [&](OBin &l, const OBin &r) { l.Merge(r); },
-                objectBinner);
-        }
-        else
-        {
-            *objectBinHeuristic = OBin(objectBinner);
-            objectBinHeuristic->Bin(primRefs, record.start, record.count);
-        }
-        struct Split objectSplit = BinBest(objectBinHeuristic->bins, objectBinHeuristic->counts, objectBinner);
-        objectSplit.type         = Split::Object;
 
         Bounds8 geomBoundsL;
         for (u32 i = 0; i < objectSplit.bestPos; i++)
@@ -1457,21 +1492,7 @@ struct HeuristicSpatialSplits
             }
         }
 
-        u32 lCount = 0;
-        for (u32 i = 0; i < objectSplit.bestPos; i++)
-        {
-            lCount += objectBinHeuristic->counts[i][objectSplit.bestDim];
-        }
-        u32 rCount = 0;
-        for (u32 i = objectSplit.bestPos; i < numObjectBins; i++)
-        {
-            rCount += objectBinHeuristic->counts[i][objectSplit.bestDim];
-        }
-
-        objectSplit.ptr      = (void *)objectBinHeuristic;
-        objectSplit.allocPos = popPos;
-        objectSplit.numLeft  = lCount;
-        objectSplit.numRight = rCount;
+        FinalizeObjectSplit(objectBinHeuristic, objectSplit, popPos);
         return objectSplit;
     }
     void FlushState(struct Split split)
@@ -1590,7 +1611,7 @@ struct HeuristicSpatialSplits
         ArenaPopTo(temp.arena, split.allocPos);
 
         // error check
-#if 1
+#if 0
         {
             switch (split.type)
             {

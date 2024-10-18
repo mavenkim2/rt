@@ -40,31 +40,21 @@ struct Instance2
     Transform transform;
 };
 
-struct HeuristicPartialRebraid
-{
-    using Record = RebraidRecord;
-    void Bin(const Record &record)
-    {
-        ObjectBinner<32> binner(
-        HeuristicAOSObjectBinning<32, BuildRef> heuristic;
-    }
-};
-
-void PartialRebraid(Scene *scene, Arena *arena, Instance2 *instances, u32 numInstances)
-{
-    BuildRef *b = PushArrayNoZero(arena, BuildRef, 4 * numInstances);
-
-    Lane4F32 min(neg_inf);
-    Lane4F32 max(pos_inf);
-    for (u32 i = 0; i < numInstances; i++)
-    {
-        Instance2 &instance = instances[i];
-        Assert((instance.bvhNode & 0xf) == 0);
-        b[i].nodePtr = bvhNode;
-    }
-
-    RebraidRecord record;
-}
+// void PartialRebraid(Scene *scene, Arena *arena, Instance2 *instances, u32 numInstances)
+// {
+//     BuildRef *b = PushArrayNoZero(arena, BuildRef, 4 * numInstances);
+//
+//     Lane4F32 min(neg_inf);
+//     Lane4F32 max(pos_inf);
+//     for (u32 i = 0; i < numInstances; i++)
+//     {
+//         Instance2 &instance = instances[i];
+//         Assert((instance.bvhNode & 0xf) == 0);
+//         b[i].nodePtr = bvhNode;
+//     }
+//
+//     RebraidRecord record;
+// }
 
 static const f32 REBRAID_THRESHOLD = .1f;
 void OpenBraid(RebraidRecord &record, BuildRef *refs, u32 start, u32 count, std::atomic<u32> &refOffset)
@@ -170,6 +160,46 @@ void OpenBraid(RebraidRecord &record, BuildRef *refs, u32 start, u32 count, std:
         }
     }
 }
+
+struct HeuristicPartialRebraid
+{
+    using Record = RebraidRecord;
+    using OBin   = HeuristicAOSObjectBinning<numObjectBins, BuildRef>;
+
+    BuildRef *buildRefs;
+
+    HeuristicPartialRebraid() {}
+    HeuristicPartialRebraid(BuildRef *data) : primRefs(data) {}
+    Split Bin(const Record &record)
+    {
+        u64 popPos = 0;
+        if (record.count > PARALLEL_THRESHOLD)
+        {
+            std::atomic<u32> refOffset{record.End()};
+            const u32 groupSize = PARALLEL_THRESHOLD;
+            ParallelFor(
+                record.start, record.count, groupSize,
+                [&](u32 start, u32 count) { OpenBraid(record, primRefs, start, count, refOffset); });
+        }
+        else
+        {
+            OpenBraid(record, buildRefs, record.start, record.count, refOffset);
+        }
+        OBin *objectBinHeuristic;
+        struct Split objectSplit = SAHObjectBinning(record, buildRefs, objectBinHeuristic, popPos);
+        FinalizeObjectSplit(objectBinHeuristic, objectSplit, popPos);
+
+        return objectSplit;
+    }
+    void FlushState(struct Split split)
+    {
+        TempArena temp = ScratchStart(0, 0);
+        ArenaPopTo(temp.arena, split.allocPos);
+    }
+    void Split(struct Split split, const Record &record, Record &outLeft, Record &outRight)
+    {
+    }
+};
 
 } // namespace rt
 #endif

@@ -554,17 +554,6 @@ void Reduce(T &out, ParallelForOutput output, ReduceFunc reduce, Args... inArgs)
 }
 
 template <typename T, typename Func, typename ReduceFunc, typename... Args>
-T ParallelReduce(u32 start, u32 count, u32 groupSize, Func func, ReduceFunc reduce, Args... inArgs)
-{
-    TempArena temp           = ScratchStart(0, 0);
-    ParallelForOutput output = ParallelFor<T>(temp, start, count, groupSize, func, std::forward<Args>(inArgs)...);
-    T out;
-    Reduce<T>(out, output, reduce, std::forward<Args>(inArgs)...);
-    ScratchEnd(temp);
-    return out;
-}
-
-template <typename T, typename Func, typename ReduceFunc, typename... Args>
 void ParallelReduce(T *out, u32 start, u32 count, u32 groupSize, Func func, ReduceFunc reduce, Args... inArgs)
 {
     TempArena temp           = ScratchStart(0, 0);
