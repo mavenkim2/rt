@@ -96,6 +96,36 @@ PrimRef *GenerateAOSData(Arena *arena, TriangleMesh *mesh, u32 numFaces, Bounds 
     return refs;
 }
 
+PrimRef *GenerateQuadData(Arena *arena, QuadMesh *mesh, u32 numFaces, Bounds &geomBounds, Bounds &centBounds)
+{
+    arena->align  = 64;
+    PrimRef *refs = PushArray(arena, PrimRef, u32(numFaces * GROW_AMOUNT) + 1);
+    for (u32 i = 0; i < numFaces; i++)
+    {
+        PrimRef *prim = &refs[i];
+        Vec3f v0      = mesh->p[4 * i + 0];
+        Vec3f v1      = mesh->p[4 * i + 1];
+        Vec3f v2      = mesh->p[4 * i + 2];
+        Vec3f v3      = mesh->p[4 * i + 3];
+
+        Vec3f min = Min(Min(v0, v1), Min(v2, v3));
+        Vec3f max = Max(Max(v0, v1), Min(v2, v3));
+
+        Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
+        Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
+        Lane4F32::StoreU(prim->min, -mins);
+        prim->maxX = max.x;
+        prim->maxY = max.y;
+        prim->maxZ = max.z;
+
+        prim->primID = i;
+
+        geomBounds.Extend(mins, maxs);
+        centBounds.Extend((maxs + mins) * 0.5f);
+    }
+    return refs;
+}
+
 // void TriangleClipTestAOSInPlace(TriangleMesh *mesh)
 // {
 //     TempArena temp = ScratchStart(0, 0);
@@ -545,12 +575,6 @@ void AOSSBVHBuilderTest(Arena *arena, TriangleMesh *mesh)
     Bounds geomBounds;
     Bounds centBounds;
     PrimRef *refs = GenerateAOSData(arena, mesh, numFaces, geomBounds, centBounds);
-    u32 *l        = PushArrayNoZero(arena, u32, u32(numFaces * GROW_AMOUNT));
-    u32 *r        = PushArrayNoZero(arena, u32, u32(numFaces * GROW_AMOUNT));
-    for (u32 i = 0; i < numFaces; i++)
-    {
-        l[i] = i;
-    }
 
     BuildSettings settings;
     settings.intCost = 0.3f;
@@ -567,7 +591,54 @@ void AOSSBVHBuilderTest(Arena *arena, TriangleMesh *mesh)
     }
 
     PerformanceCounter counter = OS_StartCounter();
-    BVH4Quantized bvh          = BuildQuantizedSBVH<4>(settings, arenas, mesh, refs, l, r, record);
+    BVH4Quantized bvh          = BuildQuantizedTriSBVH<4>(settings, arenas, mesh, refs, record);
+    f32 time                   = OS_GetMilliseconds(counter);
+    printf("num faces: %u\n", numFaces);
+    printf("Build time: %fms\n", time);
+
+    f64 totalMiscTime     = 0;
+    u64 numNodes          = 0;
+    u64 totalNodeMemory   = 0;
+    u64 totalRecordMemory = 0;
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        totalMiscTime += threadLocalStatistics[i].miscF;
+        totalNodeMemory += threadMemoryStatistics[i].totalBVHMemory;
+        totalRecordMemory += threadMemoryStatistics[i].totalRecordMemory;
+        printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
+        numNodes += threadLocalStatistics[i].misc;
+    }
+    printf("total time: %fms \n", totalMiscTime);
+    printf("num nodes: %llu\n", numNodes);               // num nodes: %llu\n", numNodes);
+    printf("node kb: %llu\n", totalNodeMemory / 1024);   // num nodes: %llu\n", numNodes);
+    printf("record kb: %llu", totalRecordMemory / 1024); // num nodes: %llu\n", numNodes);
+}
+
+void QuadSBVHBuilderTest(Arena *arena, QuadMesh *mesh)
+{
+    arena->align = 64;
+
+    const u32 numFaces = mesh->numVertices / 4;
+    Bounds geomBounds;
+    Bounds centBounds;
+    PrimRef *refs = GenerateQuadData(arena, mesh, numFaces, geomBounds, centBounds);
+
+    BuildSettings settings;
+    settings.intCost = 0.3f;
+
+    RecordAOSSplits record;
+    record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+    record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+    record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
+    u32 numProcessors = OS_NumProcessors();
+    Arena **arenas    = PushArray(arena, Arena *, numProcessors);
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        arenas[i] = ArenaAlloc(16); // ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
+    }
+
+    PerformanceCounter counter = OS_StartCounter();
+    BVH4Quantized bvh          = BuildQuantizedQuadSBVH<4>(settings, arenas, mesh, refs, record);
     f32 time                   = OS_GetMilliseconds(counter);
     printf("num faces: %u\n", numFaces);
     printf("Build time: %fms\n", time);

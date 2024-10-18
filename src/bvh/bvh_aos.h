@@ -30,6 +30,8 @@ namespace rt
 
 struct Quad8
 {
+    static const u32 N = 4;
+    static const u32 LUTNext[];
     union
     {
         struct
@@ -157,6 +159,8 @@ struct Quad8
 
 struct Triangle8
 {
+    static const u32 N = 3;
+    static const u32 LUTNext[];
     union
     {
         struct
@@ -267,11 +271,15 @@ struct Triangle8
     }
 };
 
-static void ClipTriangle(const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
-                         Lane8F32 &leftMinX, Lane8F32 &leftMinY, Lane8F32 &leftMinZ,
-                         Lane8F32 &leftMaxX, Lane8F32 &leftMaxY, Lane8F32 &leftMaxZ,
-                         Lane8F32 &rightMinX, Lane8F32 &rightMinY, Lane8F32 &rightMinZ,
-                         Lane8F32 &rightMaxX, Lane8F32 &rightMaxY, Lane8F32 &rightMaxZ)
+const u32 Quad8::LUTNext[]     = {1, 2, 3, 0};
+const u32 Triangle8::LUTNext[] = {1, 2, 0};
+
+template <typename Polygon8>
+static void ClipPolygon(const u32 dim, const Polygon8 &poly, const Lane8F32 &splitPos,
+                        Lane8F32 &leftMinX, Lane8F32 &leftMinY, Lane8F32 &leftMinZ,
+                        Lane8F32 &leftMaxX, Lane8F32 &leftMaxY, Lane8F32 &leftMaxZ,
+                        Lane8F32 &rightMinX, Lane8F32 &rightMinY, Lane8F32 &rightMinZ,
+                        Lane8F32 &rightMaxX, Lane8F32 &rightMaxY, Lane8F32 &rightMaxZ)
 {
     static const u32 LUTX[] = {0, 2, 1};
     static const u32 LUTY[] = {1, 0, 2};
@@ -282,21 +290,22 @@ static void ClipTriangle(const u32 dim, const Triangle8 &tri, const Lane8F32 &sp
     Bounds8F32 right;
     right.minU = splitPos;
 
+    u32 N     = Polygon8::N;
     u32 first = 0;
-    u32 next  = LUTAxis[first];
-    for (u32 edgeIndex = 0; edgeIndex < 3; edgeIndex++)
+    u32 next  = Polygon8::LUTNext[first];
+    for (u32 edgeIndex = 0; edgeIndex < N; edgeIndex++)
     {
         const u32 v0IndexStart = 3 * first;
         const u32 v1IndexStart = 3 * next;
 
-        const Lane8F32 &v0u = tri[v0IndexStart];
-        const Lane8F32 &v1u = tri[v1IndexStart];
+        const Lane8F32 &v0u = poly[v0IndexStart];
+        const Lane8F32 &v1u = poly[v1IndexStart];
 
-        const Lane8F32 &v0v = tri[v0IndexStart + 1];
-        const Lane8F32 &v1v = tri[v1IndexStart + 1];
+        const Lane8F32 &v0v = poly[v0IndexStart + 1];
+        const Lane8F32 &v1v = poly[v1IndexStart + 1];
 
-        const Lane8F32 &v0w = tri[v0IndexStart + 2];
-        const Lane8F32 &v1w = tri[v1IndexStart + 2];
+        const Lane8F32 &v0w = poly[v0IndexStart + 2];
+        const Lane8F32 &v1w = poly[v1IndexStart + 2];
 
         // const Lane8F32 &clipMaskL = clipMasksL[first];
 
@@ -318,7 +327,7 @@ static void ClipTriangle(const u32 dim, const Triangle8 &tri, const Lane8F32 &sp
         right.MaskExtendVW(edgeIsClipped, clippedV, clippedW);
 
         first = next;
-        next  = LUTAxis[next];
+        next  = Polygon8::LUTNext[first];
     }
 
     leftMinX = *((Lane8F32 *)(&left) + LUTX[dim]);
@@ -338,18 +347,19 @@ static void ClipTriangle(const u32 dim, const Triangle8 &tri, const Lane8F32 &sp
     rightMaxZ = *((Lane8F32 *)(&right) + 3 + LUTZ[dim]);
 }
 
-static void ClipTriangle(const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
-                         Bounds8 *l, Bounds8 *r)
+template <typename Polygon8>
+static void ClipPolygon(const u32 dim, const Polygon8 &tri, const Lane8F32 &splitPos,
+                        Bounds8 *l, Bounds8 *r)
 {
     Lane8F32 lOut[8];
     Lane8F32 leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
         rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ;
 
-    ClipTriangle(dim, tri, splitPos,
-                 leftMinX, leftMinY, leftMinZ,
-                 leftMaxX, leftMaxY, leftMaxZ,
-                 rightMinX, rightMinY, rightMinZ,
-                 rightMaxX, rightMaxY, rightMaxZ);
+    ClipPolygon(dim, tri, splitPos,
+                leftMinX, leftMinY, leftMinZ,
+                leftMaxX, leftMaxY, leftMaxZ,
+                rightMinX, rightMinY, rightMinZ,
+                rightMaxX, rightMaxY, rightMaxZ);
 
     Transpose6x8(-rightMinX, -rightMinY, -rightMinZ, rightMaxX, rightMaxY, rightMaxZ,
                  r[0].v, r[1].v, r[2].v, r[3].v, r[4].v, r[5].v, r[6].v, r[7].v);
@@ -367,22 +377,20 @@ static void ClipTriangle(const u32 dim, const Triangle8 &tri, const Lane8F32 &sp
 }
 
 // NOTE: for aos splitting
-static void ClipTriangle(const u32 dim, const u32 faceIndices[8],
-                         const Triangle8 &tri, const Lane8F32 &splitPos,
-                         Lane8F32 *left, Lane8F32 *right,
-                         Lane8F32 *centL, Lane8F32 *centR)
+
+template <typename Polygon8>
+static void ClipPolygon(const u32 dim, const u32 faceIndices[8],
+                        const Polygon8 &tri, const Lane8F32 &splitPos,
+                        Lane8F32 *left, Lane8F32 *right,
+                        Lane8F32 *centL, Lane8F32 *centR)
 {
     Lane8F32 leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
         rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ;
-    ClipTriangle(dim, tri, splitPos,
-                 leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
-                 rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ);
+    ClipPolygon(dim, tri, splitPos,
+                leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
+                rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ);
 
     Lane8U32 faceIDs = Lane8U32::LoadU(faceIndices);
-    // Transpose8x8(-leftMinX, -leftMinY, -leftMinZ, pos_inf, leftMaxX, leftMaxY, leftMaxZ, AsFloat(faceIDs),
-    //              left[0], left[1], left[2], left[3], left[4], left[5], left[6], left[7]);
-    // Transpose8x8(-rightMinX, -rightMinY, -rightMinZ, pos_inf, rightMaxX, rightMaxY, rightMaxZ, AsFloat(faceIDs),
-    //              right[0], right[1], right[2], right[3], right[4], right[5], right[6], right[7]);
     Transpose7x8(-leftMinX, -leftMinY, -leftMinZ, AsFloat(faceIDs), leftMaxX, leftMaxY, leftMaxZ,
                  left[0], left[1], left[2], left[3], left[4], left[5], left[6], left[7]);
     Transpose7x8(-rightMinX, -rightMinY, -rightMinZ, AsFloat(faceIDs), rightMaxX, rightMaxY, rightMaxZ,
@@ -869,7 +877,7 @@ struct HeuristicAOSObjectBinning
     }
 };
 
-template <i32 numBins = 16>
+template <i32 numBins = 16, typename Polygon8 = Triangle8, typename Mesh = TriangleMesh>
 struct alignas(32) HeuristicAOSSplitBinning
 {
     Bounds8 bins[3][numBins];
@@ -877,13 +885,13 @@ struct alignas(32) HeuristicAOSSplitBinning
     Lane4U32 exitCounts[numBins];
 
     SplitBinner<numBins> *binner;
-    TriangleMesh *triMesh;
+    Mesh *mesh;
     std::atomic<u32> splitAtomic;
 
     HeuristicAOSSplitBinning() {}
 
-    HeuristicAOSSplitBinning(SplitBinner<numBins> *binner, TriangleMesh *mesh = 0, u32 end = 0)
-        : binner(binner), triMesh(mesh), splitAtomic{end}
+    HeuristicAOSSplitBinning(SplitBinner<numBins> *binner, Mesh *mesh = 0, u32 end = 0)
+        : binner(binner), mesh(mesh), splitAtomic{end}
     {
         for (u32 dim = 0; dim < 3; dim++)
         {
@@ -899,7 +907,7 @@ struct alignas(32) HeuristicAOSSplitBinning
         }
     }
 
-    void Bin(TriangleMesh *mesh, const PrimRef *data, u32 start, u32 count)
+    void Bin(Mesh *mesh, const PrimRef *data, u32 start, u32 count)
     {
         u32 binCounts[3][numBins]                                 = {};
         alignas(32) u32 binIndexStart[3][numBins][2 * LANE_WIDTH] = {};
@@ -1000,8 +1008,8 @@ struct alignas(32) HeuristicAOSSplitBinning
                         u32 binCount = binCounts[dim][bin];
 
                         Bounds8 bounds[2][LANE_WIDTH];
-                        Triangle8 tri;
-                        Triangle8::Load(mesh, dim, faceIndices[dim][bin] + binCount, &tri);
+                        Polygon8 tri;
+                        Polygon8::Load(mesh, dim, faceIndices[dim][bin] + binCount, &tri);
                         Lane8U32 startBin = Lane8U32::LoadU(binIndexStart[dim][bin] + binCount);
 
                         for (u32 boundIndex = 0; boundIndex < LANE_WIDTH; boundIndex++)
@@ -1017,7 +1025,7 @@ struct alignas(32) HeuristicAOSSplitBinning
                             startBin += 1u;
                             Lane8F32 splitPos = binner->GetSplitValue(startBin, dim);
 
-                            ClipTriangle(dim, tri, splitPos, bounds[current], bounds[!current]);
+                            ClipPolygon(dim, tri, splitPos, bounds[current], bounds[!current]);
 
                             for (u32 b = 0; b < LANE_WIDTH; b++)
                             {
@@ -1087,8 +1095,8 @@ struct alignas(32) HeuristicAOSSplitBinning
                     {
                         bounds[0][boundIndex] = Bounds8(pos_inf);
                     }
-                    Triangle8 tri;
-                    Triangle8::Load(mesh, dim, faceIndices[dim][diff] + remaining * LANE_WIDTH, &tri); //, bounds[0]);
+                    Polygon8 tri;
+                    Polygon8::Load(mesh, dim, faceIndices[dim][diff] + remaining * LANE_WIDTH, &tri);
                     Lane8U32 startBin = Lane8U32::LoadU(binIndexStart[dim][diff] + remaining * LANE_WIDTH);
 
                     alignas(32) u32 binIndices[8];
@@ -1099,7 +1107,7 @@ struct alignas(32) HeuristicAOSSplitBinning
                         Lane8U32::Store(binIndices, startBin);
                         startBin += 1u;
                         Lane8F32 splitPos = binner->GetSplitValue(startBin, dim);
-                        ClipTriangle(dim, tri, splitPos, bounds[current], bounds[!current]);
+                        ClipPolygon(dim, tri, splitPos, bounds[current], bounds[!current]);
                         for (u32 b = 0; b < numPrims; b++)
                         {
                             u32 binIndex = binIndices[b];
@@ -1206,18 +1214,6 @@ struct alignas(32) HeuristicAOSSplitBinning
                 r--;
             }
 
-            // if (rIsSplit)
-            // {
-            //     Assert(data[lIndex].primID == rPrimID);
-            //     PrimRef &rRef = data[lIndex];
-            //     Lane4F32 min  = Lane4F32::Load(rRef.min);
-            //     Lane4F32 max  = Lane4F32::Load(rRef.max);
-            //
-            //     u32 minBin = binner->BinMin(min[dim], dim);
-            //     u32 maxBin = binner->BinMax(max[dim], dim);
-            //     Assert(minBin < bestPos && maxBin >= bestPos);
-            // }
-
             if (splitCount >= LANE_WIDTH)
             {
                 splitCount -= LANE_WIDTH;
@@ -1230,9 +1226,9 @@ struct alignas(32) HeuristicAOSSplitBinning
                 Lane8F32 outCentroidsL[8];
                 Lane8F32 outCentroidsR[8];
 
-                Triangle8 tri;
-                Triangle8::Load(triMesh, dim, faceIDQueue + splitCount, &tri);
-                ClipTriangle(dim, faceIDQueue + splitCount, tri, splitValue, gL, gR, cL, cR);
+                Polygon8 tri;
+                Polygon8::Load(mesh, dim, faceIDQueue + splitCount, &tri);
+                ClipPolygon(dim, faceIDQueue + splitCount, tri, splitValue, gL, gR, cL, cR);
 
                 Transpose3x8(cL[0], cL[1], cL[2],
                              outCentroidsL[0], outCentroidsL[1], outCentroidsL[2], outCentroidsL[3],
@@ -1270,9 +1266,9 @@ struct alignas(32) HeuristicAOSSplitBinning
             Lane8F32 cR[3];
             Lane8F32 outCentroidsL[8];
             Lane8F32 outCentroidsR[8];
-            Triangle8 tri;
-            Triangle8::Load(triMesh, dim, faceIDQueue + qStart, &tri);
-            ClipTriangle(dim, faceIDQueue + qStart, tri, splitValue, gL, gR, cL, cR);
+            Polygon8 tri;
+            Polygon8::Load(mesh, dim, faceIDQueue + qStart, &tri);
+            ClipPolygon(dim, faceIDQueue + qStart, tri, splitValue, gL, gR, cL, cR);
             Transpose3x8(cL[0], cL[1], cL[2],
                          outCentroidsL[0], outCentroidsL[1], outCentroidsL[2], outCentroidsL[3],
                          outCentroidsL[4], outCentroidsL[5], outCentroidsL[6], outCentroidsL[7]);
@@ -1306,7 +1302,7 @@ struct alignas(32) HeuristicAOSSplitBinning
         return l;
     }
 
-    void Merge(const HeuristicAOSSplitBinning<numBins> &other)
+    void Merge(const HeuristicAOSSplitBinning<numBins, Polygon8, Mesh> &other)
     {
         for (u32 i = 0; i < numBins; i++)
         {
@@ -1322,19 +1318,19 @@ struct alignas(32) HeuristicAOSSplitBinning
 
 // SBVH
 static const f32 sbvhAlpha = 1e-5;
-template <i32 numObjectBins = 32, i32 numSpatialBins = 16>
+template <i32 numObjectBins = 32, i32 numSpatialBins = 16, typename Polygon8 = Triangle8, typename Mesh = TriangleMesh>
 struct HeuristicSpatialSplits
 {
     using Record = RecordAOSSplits;
-    using HSplit = HeuristicAOSSplitBinning<numSpatialBins>;
+    using HSplit = HeuristicAOSSplitBinning<numSpatialBins, Polygon8, Mesh>;
     using OBin   = HeuristicAOSObjectBinning<numObjectBins, PrimRef>;
 
-    TriangleMesh *mesh;
+    Mesh *mesh;
     f32 rootArea;
     PrimRef *primRefs;
 
     HeuristicSpatialSplits() {}
-    HeuristicSpatialSplits(PrimRef *data, TriangleMesh *mesh, f32 rootArea)
+    HeuristicSpatialSplits(PrimRef *data, Mesh *mesh, f32 rootArea)
         : primRefs(data), mesh(mesh), rootArea(rootArea) {}
 
     Split Bin(const Record &record, u32 blockSize = 1)
