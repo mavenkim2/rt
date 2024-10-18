@@ -1049,7 +1049,10 @@ int main(int argc, char *argv[])
 
     const u32 count = 3000000;
     // TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
+
     // TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
+    // QuadMesh mesh = LoadQuadPLY(arena, "data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
+
     TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
     // TriangleMesh mesh = LoadPLY(arena, "data/xyzrgb_statuette.ply");
 
@@ -1077,142 +1080,6 @@ int main(int argc, char *argv[])
     BVHBuilderTriangleMesh<4> builder;
     BVH4Quantized bvh = builder.BuildBVH(settings, arenas, &mesh, mesh.numIndices / 3);
 
-#endif
-
-    //////////////////////////////
-    // AVX Binning Test
-    //
-
-#if 0
-    const u32 count = 100000000;
-    PrimData *data  = PushArray(arena, PrimData, count);
-
-    for (u32 i = 0; i < count; i++)
-    {
-        PrimData *prim = &data[i];
-        Vec3f min      = RandomVec3(-100.f, 100.f);
-        Vec3f max      = RandomVec3(100.f, 300.f);
-        prim->minP     = Lane4F32(min) * -1.f;
-        prim->maxP     = Lane4F32(max);
-    }
-
-    Bounds centroidBounds;
-    Bounds geomBounds;
-    for (u32 i = 0; i < count; i++)
-    {
-        PrimData *prim    = &data[i];
-        Lane4F32 centroid = (prim->minP + prim->maxP) * 0.5f;
-        centroidBounds.Extend(centroid);
-        geomBounds.Extend(prim->minP, prim->maxP);
-    }
-    HeuristicSAHBinnedAVX<32> heuristic(centroidBounds);
-
-    PerformanceCounter counter;
-    f32 time;
-    counter = OS_StartCounter();
-    heuristic.BinTest(data, 0, count);
-    time = OS_GetMilliseconds(counter);
-    printf("Time AVX Binning 1: %fms\n", time);
-
-    counter = OS_StartCounter();
-    heuristic.BinTest2(data, 0, count);
-    time = OS_GetMilliseconds(counter);
-    printf("Time AVX Binning 2: %fms\n", time);
-
-    HeuristicSAHBinned<32> heuristicNormal(centroidBounds);
-    counter = OS_StartCounter();
-    heuristicNormal.Bin(data, 0, count);
-    time = OS_GetMilliseconds(counter);
-    printf("Time Normal Binning: %fms\n", time);
-#endif
-
-//////////////////////////////
-// Parallel Binning and Partitioning Test
-//
-#if 0
-    const u32 count = 10000000;
-    PrimData *data  = PushArray(arena, PrimData, count);
-
-    for (u32 i = 0; i < count; i++)
-    {
-        PrimData *prim = &data[i];
-        Vec3f min      = RandomVec3(-100.f, 100.f);
-        Vec3f max      = RandomVec3(100.f, 300.f);
-        prim->minP     = Lane4F32(min);
-        prim->maxP     = Lane4F32(max);
-    }
-
-    Bounds centroidBounds;
-    Bounds geomBounds;
-    for (u32 i = 0; i < count; i++)
-    {
-        PrimData *prim    = &data[i];
-        Lane4F32 centroid = (prim->minP + prim->maxP) * 0.5f;
-        centroidBounds.Extend(centroid);
-        geomBounds.Extend(prim->minP, prim->maxP);
-    }
-
-    HeuristicSAHBinned<32> heuristic(centroidBounds);
-
-    clock_t start = clock();
-    // heuristic.Bin(&data);
-    // Split split = heuristic.Best(0);
-    Record record(data, geomBounds, centroidBounds, 0, count);
-
-    Split split = BinParallel(record);
-    clock_t end = clock();
-
-    printf("Binning time: %dms\n", end - start);
-
-    start = clock();
-    // u32 mid = PartitionSerial(split, &data);
-    // u32 mid = PartitionSerialCrazy(split, &data);
-    PartitionResult result;
-    PartitionParallel(split, data, 0, count, &result);
-    end = clock();
-
-    printf("SAH: %f\n", split.bestSAH / HalfArea(geomBounds));
-
-    u32 mid = result.mid;
-
-    u32 errors = 0;
-    for (u32 i = 0; i < count; i++)
-    {
-        PrimData *prim = &data[i];
-        f32 minP       = prim->minP[split.bestDim];
-        f32 maxP       = prim->maxP[split.bestDim];
-        f32 centroid   = (maxP + minP) * 0.5f;
-        if (i < mid)
-        {
-            Assert(Floor((centroid - heuristic.minP[split.bestDim]) * heuristic.scale[split.bestDim]) <= split.bestPos);
-            if (Floor((centroid - heuristic.minP[split.bestDim]) * heuristic.scale[split.bestDim]) > split.bestPos)
-            {
-                errors += 1;
-            }
-        }
-        else
-        {
-            Assert(Floor((centroid - heuristic.minP[split.bestDim]) * heuristic.scale[split.bestDim]) > split.bestPos);
-            if (Floor((centroid - heuristic.minP[split.bestDim]) * heuristic.scale[split.bestDim]) <= split.bestPos)
-            {
-                errors += 1;
-            }
-        }
-    }
-
-    printf("Num errors: %u\n", errors);
-    printf("Partition Time: %dms\n", end - start);
-    printf("Split: %u\n", mid);
-
-    u64 time = 0;
-    for (u32 i = 0; i < OS_NumProcessors(); i++)
-    {
-        printf("Thread %u time: %llu\n", i, threadLocalStatistics[i].dumb);
-        time += threadLocalStatistics[i].dumb;
-    }
-    printf("Per thread time: %fms\n", (f64)time / OS_NumProcessors());
-
-    int stop = 5;
 #endif
 
 //////////////////////////////
@@ -1337,11 +1204,9 @@ int main(int argc, char *argv[])
 // Loading PBRT File Test
 //
 #if 0
-    clock_t start = clock();
+    PerformanceCounter counter = OS_StartCounter();
     LoadPBRT(arena, "data/island/pbrt-v4/island.pbrt");
-    clock_t end = clock();
-
-    printf("Total time: %dms\n", end - start);
+    printf("Total time: %fms\n", OS_GetMilliseconds(counter));
 
     u64 totalFileMemory      = 0;
     u64 totalShapeMemory     = 0;

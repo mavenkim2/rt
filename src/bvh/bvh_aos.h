@@ -16,20 +16,144 @@
 // - expand current BVH4 traversal code to BVH8
 
 // far future TODOs (after moana is rendered)
-// - explore octant order traversal,
-// - stackless/stack compressed?
-// - PLOC and agglomerative aggregate clustering
 // - subdivision surfaces
 
-// for the top level BVH, I think I can get rid of some of the meta fields maybe because the counts should be
-// 1. probably can actually use 2 bits per node (node, invalid, leaf) for 2 bytes for 8-wide and 1 byte for 4-wide.
-// not sure how much that would save or if it's even worth it, but something to consider.
+// NOTEs on moana data set:
+// - each triangle pair is a quad (not sure if coplanar, I think so?), representing the base cage
+// of the subdivison surface. don't actually need the indices, uvs, or face indices
 
 namespace rt
 {
 //////////////////////////////
 // Clipping
 //
+
+struct Quad8
+{
+    union
+    {
+        struct
+        {
+            Lane8F32 v0u;
+            Lane8F32 v0v;
+            Lane8F32 v0w;
+
+            Lane8F32 v1u;
+            Lane8F32 v1v;
+            Lane8F32 v1w;
+
+            Lane8F32 v2u;
+            Lane8F32 v2v;
+            Lane8F32 v2w;
+
+            Lane8F32 v3u;
+            Lane8F32 v3v;
+            Lane8F32 v3w;
+        };
+        Lane8F32 v[12];
+    };
+    Quad8() {}
+    __forceinline const Lane8F32 &operator[](i32 i) const
+    {
+        Assert(i < 12);
+        return v[i];
+    }
+    __forceinline Lane8F32 &operator[](i32 i)
+    {
+        Assert(i < 12);
+        return v[i];
+    }
+    static void Load(QuadMesh *mesh, const u32 dim, const u32 faceIndices[8], Quad8 *out)
+    {
+        u32 faceIndexA = faceIndices[0];
+        u32 faceIndexB = faceIndices[1];
+        u32 faceIndexC = faceIndices[2];
+        u32 faceIndexD = faceIndices[3];
+
+        Lane4F32 v0a = Lane4F32::LoadU((float *)(&mesh->p[faceIndexA * 4 + 0]));
+        Lane4F32 v1a = Lane4F32::LoadU((float *)(&mesh->p[faceIndexA * 4 + 1]));
+        Lane4F32 v2a = Lane4F32::LoadU((float *)(&mesh->p[faceIndexA * 4 + 2]));
+        Lane4F32 v3a = Lane4F32::LoadU((float *)(&mesh->p[faceIndexA * 4 + 3]));
+
+        Lane4F32 v0b = Lane4F32::LoadU((float *)(&mesh->p[faceIndexB * 4 + 0]));
+        Lane4F32 v1b = Lane4F32::LoadU((float *)(&mesh->p[faceIndexB * 4 + 1]));
+        Lane4F32 v2b = Lane4F32::LoadU((float *)(&mesh->p[faceIndexB * 4 + 2]));
+        Lane4F32 v3b = Lane4F32::LoadU((float *)(&mesh->p[faceIndexB * 4 + 3]));
+
+        Lane4F32 v0c = Lane4F32::LoadU((float *)(&mesh->p[faceIndexC * 4 + 0]));
+        Lane4F32 v1c = Lane4F32::LoadU((float *)(&mesh->p[faceIndexC * 4 + 1]));
+        Lane4F32 v2c = Lane4F32::LoadU((float *)(&mesh->p[faceIndexC * 4 + 2]));
+        Lane4F32 v3c = Lane4F32::LoadU((float *)(&mesh->p[faceIndexC * 4 + 3]));
+
+        Lane4F32 v0d = Lane4F32::LoadU((float *)(&mesh->p[faceIndexD * 4 + 0]));
+        Lane4F32 v1d = Lane4F32::LoadU((float *)(&mesh->p[faceIndexD * 4 + 1]));
+        Lane4F32 v2d = Lane4F32::LoadU((float *)(&mesh->p[faceIndexD * 4 + 2]));
+        Lane4F32 v3d = Lane4F32::LoadU((float *)(&mesh->p[faceIndexD * 4 + 3]));
+
+        Vec3lf4 p0;
+        Vec3lf4 p1;
+        Vec3lf4 p2;
+        Vec3lf4 p3;
+
+        Transpose4x3(v0a, v0b, v0c, v0d, p0.x, p0.y, p0.z);
+        Transpose4x3(v1a, v1b, v1c, v1d, p1.x, p1.y, p1.z);
+        Transpose4x3(v2a, v2b, v2c, v2d, p2.x, p2.y, p2.z);
+        Transpose4x3(v3a, v3b, v3c, v3d, p3.x, p3.y, p3.z);
+
+        faceIndexA = faceIndices[4];
+        faceIndexB = faceIndices[5];
+        faceIndexC = faceIndices[6];
+        faceIndexD = faceIndices[7];
+
+        v0a = Lane4F32::LoadU((float *)(&mesh->p[faceIndexA * 4 + 0]));
+        v1a = Lane4F32::LoadU((float *)(&mesh->p[faceIndexA * 4 + 1]));
+        v2a = Lane4F32::LoadU((float *)(&mesh->p[faceIndexA * 4 + 2]));
+        v3a = Lane4F32::LoadU((float *)(&mesh->p[faceIndexA * 4 + 3]));
+
+        v0b = Lane4F32::LoadU((float *)(&mesh->p[faceIndexB * 4 + 0]));
+        v1b = Lane4F32::LoadU((float *)(&mesh->p[faceIndexB * 4 + 1]));
+        v2b = Lane4F32::LoadU((float *)(&mesh->p[faceIndexB * 4 + 2]));
+        v3b = Lane4F32::LoadU((float *)(&mesh->p[faceIndexB * 4 + 3]));
+
+        v0c = Lane4F32::LoadU((float *)(&mesh->p[faceIndexC * 4 + 0]));
+        v1c = Lane4F32::LoadU((float *)(&mesh->p[faceIndexC * 4 + 1]));
+        v2c = Lane4F32::LoadU((float *)(&mesh->p[faceIndexC * 4 + 2]));
+        v3c = Lane4F32::LoadU((float *)(&mesh->p[faceIndexC * 4 + 3]));
+
+        v0d = Lane4F32::LoadU((float *)(&mesh->p[faceIndexD * 4 + 0]));
+        v1d = Lane4F32::LoadU((float *)(&mesh->p[faceIndexD * 4 + 1]));
+        v2d = Lane4F32::LoadU((float *)(&mesh->p[faceIndexD * 4 + 2]));
+        v3d = Lane4F32::LoadU((float *)(&mesh->p[faceIndexD * 4 + 3]));
+
+        Vec3lf4 p4;
+        Vec3lf4 p5;
+        Vec3lf4 p6;
+        Vec3lf4 p7;
+
+        Transpose4x3(v0a, v0b, v0c, v0d, p4.x, p4.y, p4.z);
+        Transpose4x3(v1a, v1b, v1c, v1d, p5.x, p5.y, p5.z);
+        Transpose4x3(v2a, v2b, v2c, v2d, p6.x, p6.y, p6.z);
+        Transpose4x3(v3a, v3b, v3c, v3d, p7.x, p7.y, p7.z);
+
+        u32 v = LUTAxis[dim];
+        u32 w = LUTAxis[v];
+
+        out->v0u = Lane8F32(p0[dim], p4[dim]);
+        out->v1u = Lane8F32(p1[dim], p5[dim]);
+        out->v2u = Lane8F32(p2[dim], p6[dim]);
+        out->v3u = Lane8F32(p3[dim], p7[dim]);
+
+        out->v0v = Lane8F32(p0[v], p4[v]);
+        out->v1v = Lane8F32(p1[v], p5[v]);
+        out->v2v = Lane8F32(p2[v], p6[v]);
+        out->v3v = Lane8F32(p3[v], p7[v]);
+
+        out->v0w = Lane8F32(p0[w], p4[w]);
+        out->v1w = Lane8F32(p1[w], p5[w]);
+        out->v2w = Lane8F32(p2[w], p6[w]);
+        out->v3w = Lane8F32(p3[w], p7[w]);
+    }
+};
 
 struct Triangle8
 {
@@ -67,7 +191,7 @@ struct Triangle8
         return v[i];
     }
 
-    static Triangle8 Load(TriangleMesh *mesh, const u32 dim, const u32 faceIndices[8])
+    static void Load(TriangleMesh *mesh, const u32 dim, const u32 faceIndices[8], Triangle8 *out)
     {
         u32 faceIndexA = faceIndices[0];
         u32 faceIndexB = faceIndices[1];
@@ -89,11 +213,6 @@ struct Triangle8
         Lane4F32 v0d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3]]));
         Lane4F32 v1d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 1]]));
         Lane4F32 v2d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 2]]));
-
-        // primBounds[0] = Lane8F32(Min(Min(v0a, v1a), v2a), Max(Max(v0a, v1a), v2a));
-        // primBounds[1] = Lane8F32(Min(Min(v0b, v1b), v2b), Max(Max(v0b, v1b), v2b));
-        // primBounds[2] = Lane8F32(Min(Min(v0c, v1c), v2c), Max(Max(v0c, v1c), v2c));
-        // primBounds[3] = Lane8F32(Min(Min(v0d, v1d), v2d), Max(Max(v0d, v1d), v2d));
 
         Vec3lf4 p0;
         Vec3lf4 p1;
@@ -123,11 +242,6 @@ struct Triangle8
         v1d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 1]]));
         v2d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 2]]));
 
-        // primBounds[4] = Lane8F32(Min(Min(v0a, v1a), v2a), Max(Max(v0a, v1a), v2a));
-        // primBounds[5] = Lane8F32(Min(Min(v0b, v1b), v2b), Max(Max(v0b, v1b), v2b));
-        // primBounds[6] = Lane8F32(Min(Min(v0c, v1c), v2c), Max(Max(v0c, v1c), v2c));
-        // primBounds[7] = Lane8F32(Min(Min(v0d, v1d), v2d), Max(Max(v0d, v1d), v2d));
-
         Vec3lf4 p3;
         Vec3lf4 p4;
         Vec3lf4 p5;
@@ -139,24 +253,21 @@ struct Triangle8
         u32 v = LUTAxis[dim];
         u32 w = LUTAxis[v];
 
-        Triangle8 out;
-        out.v0u = Lane8F32(p0[dim], p3[dim]);
-        out.v1u = Lane8F32(p1[dim], p4[dim]);
-        out.v2u = Lane8F32(p2[dim], p5[dim]);
+        out->v0u = Lane8F32(p0[dim], p3[dim]);
+        out->v1u = Lane8F32(p1[dim], p4[dim]);
+        out->v2u = Lane8F32(p2[dim], p5[dim]);
 
-        out.v0v = Lane8F32(p0[v], p3[v]);
-        out.v1v = Lane8F32(p1[v], p4[v]);
-        out.v2v = Lane8F32(p2[v], p5[v]);
+        out->v0v = Lane8F32(p0[v], p3[v]);
+        out->v1v = Lane8F32(p1[v], p4[v]);
+        out->v2v = Lane8F32(p2[v], p5[v]);
 
-        out.v0w = Lane8F32(p0[w], p3[w]);
-        out.v1w = Lane8F32(p1[w], p4[w]);
-        out.v2w = Lane8F32(p2[w], p5[w]);
-
-        return out;
+        out->v0w = Lane8F32(p0[w], p3[w]);
+        out->v1w = Lane8F32(p1[w], p4[w]);
+        out->v2w = Lane8F32(p2[w], p5[w]);
     }
 };
 
-static void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
+static void ClipTriangle(const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
                          Lane8F32 &leftMinX, Lane8F32 &leftMinY, Lane8F32 &leftMinZ,
                          Lane8F32 &leftMaxX, Lane8F32 &leftMaxY, Lane8F32 &leftMaxZ,
                          Lane8F32 &rightMinX, Lane8F32 &rightMinY, Lane8F32 &rightMinZ,
@@ -192,8 +303,8 @@ static void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle
         left.MaskExtendL(v0u <= splitPos, v0u, v0v, v0w);
         right.MaskExtendR(v0u >= splitPos, v0u, v0v, v0w);
 
-        // const Lane8F32 div = Select(v1u == v0u, Lane8F32(zero), Rcp(v1u - v0u));
-        const Lane8F32 t = (splitPos - v0u) / (v1u - v0u); //* div;
+        const Lane8F32 div = Select(v1u == v0u, Lane8F32(zero), Rcp(v1u - v0u));
+        const Lane8F32 t   = (splitPos - v0u) * div;
 
         const Lane8F32 subV = v1v - v0v;
         const Lane8F32 subW = v1w - v0w;
@@ -227,14 +338,14 @@ static void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle
     rightMaxZ = *((Lane8F32 *)(&right) + 3 + LUTZ[dim]);
 }
 
-static void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
+static void ClipTriangle(const u32 dim, const Triangle8 &tri, const Lane8F32 &splitPos,
                          Bounds8 *l, Bounds8 *r)
 {
     Lane8F32 lOut[8];
     Lane8F32 leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
         rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ;
 
-    ClipTriangle(mesh, dim, tri, splitPos,
+    ClipTriangle(dim, tri, splitPos,
                  leftMinX, leftMinY, leftMinZ,
                  leftMaxX, leftMaxY, leftMaxZ,
                  rightMinX, rightMinY, rightMinZ,
@@ -256,14 +367,14 @@ static void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const Triangle
 }
 
 // NOTE: for aos splitting
-static void ClipTriangle(const TriangleMesh *mesh, const u32 dim, const u32 faceIndices[8],
+static void ClipTriangle(const u32 dim, const u32 faceIndices[8],
                          const Triangle8 &tri, const Lane8F32 &splitPos,
                          Lane8F32 *left, Lane8F32 *right,
                          Lane8F32 *centL, Lane8F32 *centR)
 {
     Lane8F32 leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
         rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ;
-    ClipTriangle(mesh, dim, tri, splitPos,
+    ClipTriangle(dim, tri, splitPos,
                  leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
                  rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ);
 
@@ -889,7 +1000,8 @@ struct alignas(32) HeuristicAOSSplitBinning
                         u32 binCount = binCounts[dim][bin];
 
                         Bounds8 bounds[2][LANE_WIDTH];
-                        Triangle8 tri     = Triangle8::Load(mesh, dim, faceIndices[dim][bin] + binCount);
+                        Triangle8 tri;
+                        Triangle8::Load(mesh, dim, faceIndices[dim][bin] + binCount, &tri);
                         Lane8U32 startBin = Lane8U32::LoadU(binIndexStart[dim][bin] + binCount);
 
                         for (u32 boundIndex = 0; boundIndex < LANE_WIDTH; boundIndex++)
@@ -905,7 +1017,7 @@ struct alignas(32) HeuristicAOSSplitBinning
                             startBin += 1u;
                             Lane8F32 splitPos = binner->GetSplitValue(startBin, dim);
 
-                            ClipTriangle(mesh, dim, tri, splitPos, bounds[current], bounds[!current]);
+                            ClipTriangle(dim, tri, splitPos, bounds[current], bounds[!current]);
 
                             for (u32 b = 0; b < LANE_WIDTH; b++)
                             {
@@ -975,7 +1087,8 @@ struct alignas(32) HeuristicAOSSplitBinning
                     {
                         bounds[0][boundIndex] = Bounds8(pos_inf);
                     }
-                    Triangle8 tri     = Triangle8::Load(mesh, dim, faceIndices[dim][diff] + remaining * LANE_WIDTH); //, bounds[0]);
+                    Triangle8 tri;
+                    Triangle8::Load(mesh, dim, faceIndices[dim][diff] + remaining * LANE_WIDTH, &tri); //, bounds[0]);
                     Lane8U32 startBin = Lane8U32::LoadU(binIndexStart[dim][diff] + remaining * LANE_WIDTH);
 
                     alignas(32) u32 binIndices[8];
@@ -986,7 +1099,7 @@ struct alignas(32) HeuristicAOSSplitBinning
                         Lane8U32::Store(binIndices, startBin);
                         startBin += 1u;
                         Lane8F32 splitPos = binner->GetSplitValue(startBin, dim);
-                        ClipTriangle(mesh, dim, tri, splitPos, bounds[current], bounds[!current]);
+                        ClipTriangle(dim, tri, splitPos, bounds[current], bounds[!current]);
                         for (u32 b = 0; b < numPrims; b++)
                         {
                             u32 binIndex = binIndices[b];
@@ -1117,8 +1230,9 @@ struct alignas(32) HeuristicAOSSplitBinning
                 Lane8F32 outCentroidsL[8];
                 Lane8F32 outCentroidsR[8];
 
-                Triangle8 tri = Triangle8::Load(triMesh, dim, faceIDQueue + splitCount);
-                ClipTriangle(triMesh, dim, faceIDQueue + splitCount, tri, splitValue, gL, gR, cL, cR);
+                Triangle8 tri;
+                Triangle8::Load(triMesh, dim, faceIDQueue + splitCount, &tri);
+                ClipTriangle(dim, faceIDQueue + splitCount, tri, splitValue, gL, gR, cL, cR);
 
                 Transpose3x8(cL[0], cL[1], cL[2],
                              outCentroidsL[0], outCentroidsL[1], outCentroidsL[2], outCentroidsL[3],
@@ -1156,8 +1270,9 @@ struct alignas(32) HeuristicAOSSplitBinning
             Lane8F32 cR[3];
             Lane8F32 outCentroidsL[8];
             Lane8F32 outCentroidsR[8];
-            Triangle8 tri = Triangle8::Load(triMesh, dim, faceIDQueue + qStart);
-            ClipTriangle(triMesh, dim, faceIDQueue + qStart, tri, splitValue, gL, gR, cL, cR);
+            Triangle8 tri;
+            Triangle8::Load(triMesh, dim, faceIDQueue + qStart, &tri);
+            ClipTriangle(dim, faceIDQueue + qStart, tri, splitValue, gL, gR, cL, cR);
             Transpose3x8(cL[0], cL[1], cL[2],
                          outCentroidsL[0], outCentroidsL[1], outCentroidsL[2], outCentroidsL[3],
                          outCentroidsL[4], outCentroidsL[5], outCentroidsL[6], outCentroidsL[7]);

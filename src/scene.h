@@ -316,7 +316,6 @@ struct Triangle
     u32 indices[3];
 };
 
-// TODO: if no indices, generate them (i.e. 0, 1, 2, 3, 4, 5, 6...)
 struct TriangleMesh
 {
     Vec3f *p;
@@ -336,6 +335,14 @@ struct TriangleMesh
         result.Extend(mesh->p[mesh->indices[faceIndex * 3 + 2]]);
         return result;
     }
+};
+
+struct QuadMesh
+{
+    Vec3f *p;
+    Vec3f *n;
+    u32 numVertices;
+    // u32 numQuads;
 };
 
 //////////////////////////////

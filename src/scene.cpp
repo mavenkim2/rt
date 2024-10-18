@@ -508,6 +508,151 @@ TriangleMesh LoadPLY(Arena *arena, string filename)
     return mesh;
 }
 
+// NOTE: specifically for the moana island scene
+QuadMesh LoadQuadPLY(Arena *arena, string filename)
+{
+    string buffer = OS_MapFileRead(filename); // OS_ReadFile(arena, filename);
+    Tokenizer tokenizer;
+    tokenizer.input  = buffer;
+    tokenizer.cursor = buffer.str;
+
+    string line = ReadLine(&tokenizer);
+    Assert(line == "ply");
+    line = ReadLine(&tokenizer);
+    // TODO: really need to handle big endian, used in some of the stanford models
+    Assert(line == "format binary_little_endian 1.0");
+
+    u32 numVertices = 0;
+    u32 numFaces    = 0;
+
+    u32 totalVertexStride = 0;
+
+    // Face
+    u32 countStride       = 0;
+    u32 faceIndicesStride = 0;
+    u32 otherStride       = 0;
+
+    bool vertexProperty = 0;
+
+    bool hasVertices = 0;
+    bool hasNormals  = 0;
+    bool hasUv       = 0;
+    for (;;)
+    {
+        string word = ReadWord(&tokenizer);
+        if (word == "element")
+        {
+            string elementType = ReadWord(&tokenizer);
+            if (elementType == "vertex")
+            {
+                numVertices = ConvertToUint(ReadWord(&tokenizer));
+                for (;;)
+                {
+                    word = CheckWord(&tokenizer);
+                    if (word == "element") break;
+                    ReadWord(&tokenizer);
+                    word = ReadWord(&tokenizer);
+                    Assert(word == "float");
+                    word = ReadWord(&tokenizer);
+
+                    if (word == "x")
+                    {
+                        hasVertices = 1;
+                        totalVertexStride += 12;
+                    }
+                    if (word == "nx")
+                    {
+                        hasNormals = 1;
+                        totalVertexStride += 12;
+                    }
+                    if (word == "u")
+                    {
+                        hasUv = 1;
+                        totalVertexStride += 8;
+                    }
+                }
+            }
+            else if (elementType == "face")
+            {
+                numFaces = ConvertToUint(ReadWord(&tokenizer));
+                for (;;)
+                {
+                    word = CheckWord(&tokenizer);
+                    if (word == "element" || word == "end_header") break;
+                    // Skips the word "property"
+                    ReadWord(&tokenizer);
+                    word = ReadWord(&tokenizer);
+                    if (word == "list")
+                    {
+                        string countType    = ReadWord(&tokenizer);
+                        string listType     = ReadWord(&tokenizer);
+                        string propertyType = ReadWord(&tokenizer);
+                        if (propertyType == "vertex_indices")
+                        {
+                            countStride       = GetTypeStride(countType);
+                            faceIndicesStride = GetTypeStride(listType);
+                        }
+                        else
+                        {
+                            Assert(0);
+                        }
+                    }
+                    else
+                    {
+                        string propertyType = ReadWord(&tokenizer);
+                        if (propertyType == "face_indices")
+                        {
+                            otherStride = GetTypeStride(word);
+                        }
+                        else
+                        {
+                            Assert(0);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                Error(0, "elementType: %s\n", (char *)elementType.str);
+            }
+        }
+        else if (word == "end_header") break;
+    }
+
+    // Read binary data
+    QuadMesh mesh    = {};
+    mesh.numVertices = numVertices;
+
+    // 2 triangles/1 quad for every 4 vertices. If this condition isn't met, it isn't a quad mesh
+    Assert(numFaces == numVertices / 2);
+    // mesh.numQuads    = numFaces / 2;
+    if (hasVertices) mesh.p = PushArrayNoZero(arena, Vec3f, numVertices);
+    if (hasNormals) mesh.n = PushArrayNoZero(arena, Vec3f, numVertices);
+
+    for (u32 i = 0; i < numVertices; i++)
+    {
+        string bytes = ReadBytes(&tokenizer, totalVertexStride);
+        if (hasVertices)
+        {
+            Assert(totalVertexStride >= 12);
+            f32 *pos  = (f32 *)bytes.str;
+            mesh.p[i] = Vec3f(pos[0], pos[1], pos[2]);
+        }
+        if (hasNormals)
+        {
+            Assert(totalVertexStride >= 24);
+            f32 *norm = (f32 *)bytes.str + 3;
+            mesh.n[i] = Vec3f(norm[0], norm[1], norm[2]);
+        }
+    }
+
+    Assert(countStride == 1);
+    Assert(faceIndicesStride == 4);
+    // Assert(otherStride == 4);
+    OS_UnmapFile(buffer.str);
+    return mesh;
+}
+
 template <typename T, i32 numSlots, i32 chunkSize, i32 numStripes, i32 tag>
 struct Map
 {
@@ -802,7 +947,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
         u32 size      = 0;
         if (dataType == "float")
         {
-            f32 *floats = PushArrayTagged(arena, f32, numValues, memoryType);
+            f32 *floats = PushArrayNoZeroTagged(arena, f32, numValues, memoryType);
 
             Advance(tokenizer, "[");
             SkipToNextDigit(tokenizer);
@@ -824,7 +969,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
         else if (dataType == "point2" || dataType == "vector2")
         {
             Assert((numValues & 1) == 0);
-            Vec2f *vectors = PushArrayTagged(arena, Vec2f, numValues / 2, memoryType);
+            Vec2f *vectors = PushArrayNoZeroTagged(arena, Vec2f, numValues / 2, memoryType);
 
             b32 brackets = Advance(tokenizer, "[");
             Advance(tokenizer, "[");
@@ -851,7 +996,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
                  dataType == "normal" || dataType == "vector")
         {
             Assert(numValues % 3 == 0);
-            Vec3f *vectors = PushArrayTagged(arena, Vec3f, numValues / 3, memoryType);
+            Vec3f *vectors = PushArrayNoZeroTagged(arena, Vec3f, numValues / 3, memoryType);
 
             b32 brackets = Advance(tokenizer, "[");
             SkipToNextDigit(tokenizer);
@@ -875,7 +1020,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
         }
         else if (dataType == "integer")
         {
-            i32 *ints    = PushArrayTagged(arena, i32, numValues, memoryType);
+            i32 *ints    = PushArrayNoZeroTagged(arena, i32, numValues, memoryType);
             b32 brackets = Advance(tokenizer, "[");
             SkipToNextDigit(tokenizer);
             if (numValues == 1)
@@ -895,7 +1040,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
         }
         else if (dataType == "bool")
         {
-            out  = PushStructTagged(arena, u8, memoryType);
+            out  = PushStructNoZeroTagged(arena, u8, memoryType);
             size = sizeof(u8);
             Advance(tokenizer, "[");
             SkipToNextChar(tokenizer);
@@ -929,7 +1074,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
             i32 val = ReadInt(tokenizer);
             tokenizer->cursor++;
 
-            i32 *ints = PushArrayTagged(arena, i32, 1, memoryType);
+            i32 *ints = PushArrayNoZeroTagged(arena, i32, 1, memoryType);
             ints[0]   = val;
             out       = (u8 *)ints;
             size      = (u32)sizeof(i32);
@@ -952,7 +1097,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
             {
                 Advance(tokenizer, "[");
                 Assert((numValues & 1) == 0);
-                out = PushArrayTagged(arena, u8, sizeof(f32) * numValues, memoryType);
+                out = PushArrayNoZeroTagged(arena, u8, sizeof(f32) * numValues, memoryType);
                 for (u32 i = 0; i < numValues / 2; i++)
                 {
                     *((i32 *)out + 2 * i)     = ReadInt(tokenizer);
@@ -1069,7 +1214,7 @@ struct SceneLoadState
 
     Arena *mainArena;
     Scene *scene;
-    jobsystem::Counter counter = {};
+    Scheduler::Counter counter = {};
 };
 
 struct GraphicsState
@@ -1085,6 +1230,8 @@ struct GraphicsState
 
 void LoadPBRT(string filename, string directory, SceneLoadState *state, GraphicsState graphicsState = {}, bool inWorldBegin = false);
 
+// TODO IMPORTANT: for some god forsaken reason with clang this generate a vmovaps unaligned error?? i don't want to deal
+// with that rn so im putting this here.
 Scene *LoadPBRT(Arena *arena, string filename)
 {
 #define COMMA ,
@@ -1120,7 +1267,7 @@ Scene *LoadPBRT(Arena *arena, string filename)
     LoadPBRT(filename, Str8PathChopPastLastSlash(filename), &state);
 
     // TODO: combine the arrays
-    jobsystem::WaitJobs(&state.counter);
+    scheduler.Wait(&state.counter);
 
     u64 totalNumShapes        = 0;
     u64 totalNumMaterials     = 0;
@@ -1347,8 +1494,8 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 Assert(result);
                 string importedFullPath = StrConcat(arena, directory, importedFilename);
 
-                jobsystem::KickJob(&state->counter, [importedFullPath, directory, state,
-                                                     currentGraphicsState, worldBegin](jobsystem::JobArgs args) {
+                scheduler.Schedule(&state->counter, [importedFullPath, directory, state,
+                                                     currentGraphicsState, worldBegin](u32 jobID) {
                     LoadPBRT(importedFullPath, directory, state, currentGraphicsState, worldBegin);
                 });
             }

@@ -379,7 +379,6 @@ struct Scheduler
         for (;;)
         {
             if (predicate()) return false;
-            // TODO: spread out distribution
             if (w->victim == id ? w->queue.Steal(*t) : workers[w->victim].queue.Steal(*t)) return true;
             numFailedSteals++;
             if (numFailedSteals > stealBound)
@@ -392,31 +391,10 @@ struct Scheduler
             // w->victim = (w->victim + 1) % numWorkers;
         }
     }
-    bool WaitForTask(Worker *w, Task *t, Counter *counter = 0)
+    bool WaitForTask(Worker *w, Task *t)
     {
     begin:
-        if (counter)
-        {
-            if (ExploreTask(w, t, [&]() { return counter->count.load(std::memory_order_relaxed) == 0; })) return true;
-        }
-        else
-        {
-            if (ExploreTask(w, t, [&]() { return false; })) return true;
-        }
-        // if (!w->queue.Empty())
-        // {
-        //     w->victim = (u32)(w - workers);
-        //     notifier.CancelWait();
-        //     goto begin;
-        // }
-        if (counter)
-        {
-            if (counter->count.load(std::memory_order_relaxed) == 0)
-            {
-                // threadLocalStatistics[GetThreadIndex()].misc += 1;
-                return false;
-            }
-        }
+        if (ExploreTask(w, t, [&]() { return false; })) return true;
         notifier.Prewait();
         for (u32 i = 0; i < numWorkers; i++)
         {
@@ -427,9 +405,21 @@ struct Scheduler
                 goto begin;
             }
         }
-        if (!counter)
+        notifier.CommitWait(w->waiter);
+        goto begin;
+    }
+    bool WaitForTask(Worker *w, Task *t, Counter *counter)
+    {
+    begin:
+        if (ExploreTask(w, t, [&]() { return counter->count.load(std::memory_order_relaxed) == 0; })) return true;
+        if (counter->count.load(std::memory_order_relaxed) == 0) return false;
+        for (u32 i = 0; i < numWorkers; i++)
         {
-            notifier.CommitWait(w->waiter);
+            if (!workers[i].queue.Empty())
+            {
+                w->victim = i;
+                goto begin;
+            }
         }
         goto begin;
     }
