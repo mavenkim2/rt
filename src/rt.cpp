@@ -23,6 +23,7 @@
 #include "sampler.h"
 #include "bvh/bvh_types.h"
 #include "bvh/bvh_aos.h"
+#include "bvh/partial_rebraiding.h"
 #include "bvh/bvh_build.h"
 #include <algorithm>
 

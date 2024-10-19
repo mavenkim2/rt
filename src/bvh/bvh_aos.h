@@ -1405,6 +1405,95 @@ void FinalizeObjectSplit(HeuristicAOSObjectBinning<numObjectBins, PrimRef> *obje
     objectSplit.numRight = rCount;
 }
 
+template <typename PrimRef, typename Record>
+void MoveExtendedRanges(const Split &split, const Record &record, PrimRef *primRefs, u32 mid, Record &outLeft, Record &outRight)
+{
+    u32 numLeft  = split.numLeft;
+    u32 numRight = split.numRight;
+
+    Assert(numLeft == mid - record.start);
+
+    f32 weight         = (f32)(numLeft) / (numLeft + numRight);
+    u32 remainingSpace = (record.extEnd - record.start - numLeft - numRight);
+    u32 extSizeLeft    = Min((u32)(remainingSpace * weight), remainingSpace);
+    u32 extSizeRight   = remainingSpace - extSizeLeft;
+
+    u32 shift      = Max(extSizeLeft, numRight);
+    u32 numToShift = Min(extSizeLeft, numRight);
+
+    if (numToShift != 0)
+    {
+        if (numToShift > PARALLEL_THRESHOLD)
+        {
+            u32 groupSize = PARALLEL_THRESHOLD;
+            u32 taskCount = (numToShift + groupSize - 1) / groupSize;
+            taskCount     = Min(taskCount, scheduler.numWorkers);
+            u32 stepSize  = numToShift / taskCount;
+
+            scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
+                u32 start = mid + jobID * stepSize;
+                u32 end   = jobID == taskCount - 1 ? mid + numToShift : start + stepSize;
+                for (u32 i = start; i < end; i++)
+                {
+                    Assert(i + shift < record.extEnd);
+                    primRefs[i + shift] = primRefs[i];
+                }
+            });
+        }
+        else
+        {
+            for (u32 i = mid; i < mid + numToShift; i++)
+            {
+                Assert(i + shift < record.extEnd);
+                primRefs[i + shift] = primRefs[i];
+            }
+        }
+    }
+
+    Assert(numLeft <= record.count);
+    Assert(numRight <= record.count);
+
+    outLeft.SetRange(record.start, numLeft, record.start + numLeft + extSizeLeft);
+    outRight.SetRange(outLeft.extEnd, numRight, record.extEnd);
+    u32 rightExtSize = outRight.ExtSize();
+    Assert(rightExtSize == extSizeRight);
+}
+
+template <typename Record, typename PrimRef>
+u32 SplitFallback(const Record &record, Split &split, const PrimRef *primRefs, Record &outLeft, Record &outRight)
+{
+    u32 lCount = record.count / 2;
+    u32 rCount = record.count - lCount;
+    u32 mid    = record.start + lCount;
+    Bounds8 geomLeft;
+    Bounds8 centLeft;
+    Bounds8 geomRight;
+    Bounds8 centRight;
+    for (u32 i = record.start; i < mid; i++) // record.start + record.count; i++)
+    {
+        const PrimRef *ref      = &primRefs[i];
+        Lane8F32 m256     = Lane8F32::LoadU(ref);
+        Lane8F32 centroid = ((Shuffle4<1, 1>(m256) - Shuffle4<0, 0>(m256))) ^ signFlipMask;
+        geomLeft.Extend(m256);
+        centLeft.Extend(centroid);
+    }
+    for (u32 i = mid; i < record.End(); i++)
+    {
+        const PrimRef *ref      = &primRefs[i];
+        Lane8F32 m256     = Lane8F32::LoadU(ref);
+        Lane8F32 centroid = ((Shuffle4<1, 1>(m256) - Shuffle4<0, 0>(m256))) ^ signFlipMask;
+        geomRight.Extend(m256);
+        centRight.Extend(centroid);
+    }
+    outLeft.geomBounds  = geomLeft.v;
+    outLeft.centBounds  = centLeft.v;
+    outRight.geomBounds = geomRight.v;
+    outRight.centBounds = centRight.v;
+    split.numLeft       = lCount;
+    split.numRight      = rCount;
+    return mid;
+}
+
 // SBVH
 static const f32 sbvhAlpha = 1e-5;
 template <i32 numObjectBins = 32, i32 numSpatialBins = 16, typename Polygon8 = Triangle8, typename Mesh = TriangleMesh>
@@ -1508,35 +1597,7 @@ struct HeuristicSpatialSplits
 
         if (split.bestSAH == f32(pos_inf))
         {
-            u32 lCount = record.count / 2;
-            u32 rCount = record.count - lCount;
-            mid        = record.start + lCount;
-            Bounds8 geomLeft;
-            Bounds8 centLeft;
-            Bounds8 geomRight;
-            Bounds8 centRight;
-            for (u32 i = record.start; i < mid; i++) // record.start + record.count; i++)
-            {
-                PrimRef *ref      = &primRefs[i];
-                Lane8F32 m256     = Lane8F32::LoadU(ref);
-                Lane8F32 centroid = ((Shuffle4<1, 1>(m256) - Shuffle4<0, 0>(m256))) ^ signFlipMask;
-                geomLeft.Extend(m256);
-                centLeft.Extend(centroid);
-            }
-            for (u32 i = mid; i < record.End(); i++)
-            {
-                PrimRef *ref      = &primRefs[i];
-                Lane8F32 m256     = Lane8F32::LoadU(ref);
-                Lane8F32 centroid = ((Shuffle4<1, 1>(m256) - Shuffle4<0, 0>(m256))) ^ signFlipMask;
-                geomRight.Extend(m256);
-                centRight.Extend(centroid);
-            }
-            outLeft.geomBounds  = geomLeft.v;
-            outLeft.centBounds  = centLeft.v;
-            outRight.geomBounds = geomRight.v;
-            outRight.centBounds = centRight.v;
-            split.numLeft       = lCount;
-            split.numRight      = rCount;
+            mid = SplitFallback(record, split, primRefs, outLeft, outRight);
         }
         else
         {
@@ -1556,58 +1617,8 @@ struct HeuristicSpatialSplits
                 break;
             }
         }
-        u32 numLeft  = split.numLeft;
-        u32 numRight = split.numRight;
 
-        Assert(numLeft == mid - record.start);
-
-        f32 weight         = (f32)(numLeft) / (numLeft + numRight);
-        u32 remainingSpace = (record.extEnd - record.start - numLeft - numRight);
-        u32 extSizeLeft    = Min((u32)(remainingSpace * weight), remainingSpace);
-        u32 extSizeRight   = remainingSpace - extSizeLeft;
-
-        u32 shift      = Max(extSizeLeft, numRight);
-        u32 numToShift = Min(extSizeLeft, numRight);
-
-        if (numToShift != 0)
-        {
-            if (numToShift > PARALLEL_THRESHOLD)
-            {
-                u32 groupSize = PARALLEL_THRESHOLD;
-                u32 taskCount = (numToShift + groupSize - 1) / groupSize;
-                taskCount     = Min(taskCount, scheduler.numWorkers);
-                u32 stepSize  = numToShift / taskCount;
-
-                scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
-                    u32 start = mid + jobID * stepSize;
-                    u32 end   = jobID == taskCount - 1 ? mid + numToShift : start + stepSize;
-                    for (u32 i = start; i < end; i++)
-                    {
-                        Assert(i + shift < record.extEnd);
-                        primRefs[i + shift] = primRefs[i];
-                    }
-                });
-            }
-            else
-            {
-                for (u32 i = mid; i < mid + numToShift; i++)
-                {
-                    Assert(i + shift < record.extEnd);
-                    primRefs[i + shift] = primRefs[i];
-                }
-            }
-        }
-
-        Assert(numLeft <= record.count);
-        Assert(numRight <= record.count);
-
-        outLeft.SetRange(record.start, numLeft, record.start + numLeft + extSizeLeft);
-        outRight.SetRange(outLeft.extEnd, numRight, record.extEnd);
-        u32 rightExtSize = outRight.ExtSize();
-        Assert(rightExtSize == extSizeRight);
-
-        // outLeft.SetRange(record.extStart, record.extStart, numLeft, record.extStart + numLeft + extSizeLeft);
-        // outRight.SetRange(outLeft.extEnd, outLeft.extEnd + extSizeRight, numRight, record.extEnd);
+        MoveExtendedRanges(split, record, primRefs, mid, outLeft, outRight);
         ArenaPopTo(temp.arena, split.allocPos);
 
         // error check

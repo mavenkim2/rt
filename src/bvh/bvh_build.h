@@ -2,109 +2,6 @@
 #define BVH_BUILD_H
 namespace rt
 {
-template <i32 N>
-struct QuantizedNode;
-
-template <i32 N>
-struct CompressedLeafNode
-{
-    StaticAssert(N == 4 || N == 8, NMustBe4Or8);
-
-    u8 scale[3];
-    u8 meta;
-
-    u8 lowerX[N];
-    u8 lowerY[N];
-    u8 lowerZ[N];
-
-    u8 upperX[N];
-    u8 upperY[N];
-    u8 upperZ[N];
-
-    Vec3f minP;
-};
-
-template <i32 N>
-struct QuantizedNode
-{
-    StaticAssert(N == 4 || N == 8, NMustBe4Or8);
-
-    uintptr_t children[N];
-    u8 scale[3];
-    u8 meta;
-
-    u8 lowerX[N];
-    u8 lowerY[N];
-    u8 lowerZ[N];
-
-    // NOTE: upperX = 255 when node is invalid
-    u8 upperX[N];
-    u8 upperY[N];
-    u8 upperZ[N];
-
-    Vec3f minP;
-
-    // u32 GetNumChildren() const
-    // {
-    //     return ((internalOffset & 0xff) == 0) + ((leafOffset & 0xff) == 0) + ((meta & 0xff) == 0) + (((meta >> 4) & 0xff) == 0);
-    // }
-
-    void GetBounds(f32 *outMinX, f32 *outMinY, f32 *outMinZ, f32 *outMaxX, f32 *outMaxY, f32 *outMaxZ) const
-    {
-        LaneU32<N> lX = LaneU32<N>(*(u32 *)lowerX);
-        LaneU32<N> lY = LaneU32<N>(*(u32 *)lowerY);
-        LaneU32<N> lZ = LaneU32<N>(*(u32 *)lowerZ);
-
-        LaneU32<N> uX = LaneU32<N>(*(u32 *)upperX);
-        LaneU32<N> uY = LaneU32<N>(*(u32 *)upperY);
-        LaneU32<N> uZ = LaneU32<N>(*(u32 *)upperZ);
-
-        LaneU32<N> lExpandedMinX;
-        LaneU32<N> lExpandedMinY;
-        LaneU32<N> lExpandedMinZ;
-
-        LaneU32<N> lExpandedMaxX;
-        LaneU32<N> lExpandedMaxY;
-        LaneU32<N> lExpandedMaxZ;
-        if constexpr (N == 4)
-        {
-            lExpandedMinX = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lX));
-            lExpandedMinY = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lY));
-            lExpandedMinZ = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lZ));
-
-            lExpandedMaxX = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uX));
-            lExpandedMaxY = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uY));
-            lExpandedMaxZ = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uZ));
-        }
-        else
-        {
-            lExpandedMinX = _mm256_cvtepu8_epi32(lX);
-            lExpandedMinY = _mm256_cvtepu8_epi32(lY);
-            lExpandedMinZ = _mm256_cvtepu8_epi32(lZ);
-            lExpandedMaxX = _mm256_cvtepu8_epi32(uX);
-            lExpandedMaxY = _mm256_cvtepu8_epi32(uY);
-            lExpandedMaxZ = _mm256_cvtepu8_epi32(uZ);
-        }
-        LaneF32<N> minX(minP.x);
-        LaneF32<N> minY(minP.y);
-        LaneF32<N> minZ(minP.z);
-
-        LaneF32<N> scaleX = AsFloat(LaneU32<N>(scale[0] << 23));
-        LaneF32<N> scaleY = AsFloat(LaneU32<N>(scale[1] << 23));
-        LaneF32<N> scaleZ = AsFloat(LaneU32<N>(scale[2] << 23));
-
-        LaneF32<N>::Store(outMinX, minX + LaneF32<N>(lExpandedMinX) * scaleX);
-        LaneF32<N>::Store(outMinY, minY + LaneF32<N>(lExpandedMinY) * scaleY);
-        LaneF32<N>::Store(outMinZ, minZ + LaneF32<N>(lExpandedMinZ) * scaleZ);
-        LaneF32<N>::Store(outMaxX, minX + LaneF32<N>(lExpandedMaxX) * scaleX);
-        LaneF32<N>::Store(outMaxY, minY + LaneF32<N>(lExpandedMaxY) * scaleY);
-        LaneF32<N>::Store(outMaxZ, minZ + LaneF32<N>(lExpandedMaxZ) * scaleZ);
-    }
-    QuantizedNode<N> GetBaseChildPtr() const
-    {
-        return (QuantizedNode<N> *)(internalOffset & ~(0xf));
-    }
-};
 
 template <i32 N>
 struct CreateQuantizedNode
@@ -120,6 +17,7 @@ struct CreateQuantizedNode
         {
             bounds = Max(bounds, Lane8F32::Load(&records[i].geomBounds));
         }
+        result->meta        = u8((1u << numRecords) - 1);
         Lane4F32 boundsMinP = -Extract4<0>(bounds);
         Lane4F32 boundsMaxP = Extract4<1>(bounds);
         result->minP        = ToVec3f(boundsMinP);
@@ -235,70 +133,10 @@ struct CreateQuantizedNode
 };
 
 template <i32 N>
-struct UpdateQuantizedNode;
-
-template <i32 N>
-struct UpdateQuantizedNode;
-
-template <>
-struct UpdateQuantizedNode<4>
+struct UpdateQuantizedNode
 {
-    using NodeType = QuantizedNode<4>;
-    template <typename Record>
-    __forceinline void operator()(Arena *arena, NodeType *parent, const Record *records, NodeType *children,
-                                  const u32 *leafIndices, const u32 leafCount)
-    {
-        // NOTE: for leaves, top 3 bits represent binary count. bottom 5 bits represent offset from base offset.
-        // 0 denotes a node, 1 denotes invalid.
-
-        u32 primTotal = 0;
-        for (u32 i = 0; i < leafCount; i++)
-        {
-            u32 leafIndex        = leafIndices[i];
-            const Record *record = &records[leafIndex];
-            primTotal += record->count;
-        }
-
-        Assert(primTotal <= 4 * 15);
-        u32 *primIndices = PushArrayNoZero(arena, u32, primTotal);
-        Assert(((uintptr_t)children & 0xf) == 0);
-        Assert(((uintptr_t)primIndices & 0xf) == 0);
-        parent->internalOffset = (uintptr_t)children;
-        parent->leafOffset     = (uintptr_t)primIndices;
-        parent->meta           = 0;
-        u32 offset             = 0;
-        for (u32 i = 0; i < leafCount; i++)
-        {
-            u32 leafIndex        = leafIndices[i];
-            const Record *record = &records[leafIndex];
-            for (u32 j = record->start; j < record->start + record->count; j++)
-            {
-                primIndices[offset++] = j;
-            }
-
-            Assert(record->count >= 1 && record->count <= 15);
-            Assert(leafIndex >= 0 && leafIndex <= 3);
-
-            switch (leafIndex)
-            {
-                case 0:
-                {
-                    parent->internalOffset |= record->count;
-                }
-                break;
-                case 1:
-                {
-                    parent->leafOffset |= record->count;
-                }
-                break;
-                default:
-                {
-                    parent->meta |= record->count << ((leafIndex - 2) << 2);
-                }
-            }
-        }
-    }
-    __forceinline void operator()(NodeType *parent, uintptr_t *children, u32 numChildren)
+    using NodeType = QuantizedNode<N>;
+    __forceinline void operator()(NodeType *parent, BVHNode<N> *children, u32 numChildren)
     {
         for (u32 i = 0; i < numChildren; i++)
         {
@@ -306,61 +144,6 @@ struct UpdateQuantizedNode<4>
         }
     }
 };
-
-// template <>
-// struct UpdateQuantizedNode<8>
-// {
-//     using NodeType = QuantizedNode<8>;
-//     template <typename Record>
-//     __forceinline void operator()(Arena *arena, NodeType *parent, const Record *records, NodeType *children,
-//                                   const u32 *leafIndices, const u32 leafCount)
-//     {
-//         // NOTE: for leaves, top 3 bits represent binary count. bottom 5 bits represent offset from base offset.
-//         // 0 denotes a node, 1 denotes invalid.
-//         Assert(((u64)parent->internalOffset & 0xf) == 0);
-//         Assert(((u64)parent->leafOffset & 0xf) == 0);
-//
-//         uintptr_t internalOffset = (uintptr_t)children;
-//
-//         u32 primTotal = 0;
-//         for (u32 i = 0; i < leafCount; i++)
-//         {
-//             u32 leafIndex        = leafIndices[i];
-//             const Record *record = &records[leafIndex];
-//             primTotal += record->range.count;
-//         }
-//         Assert(primTotal <= 24);
-//         u32 *primIndices     = PushArrayNoZero(arena, u32, primTotal);
-//         uintptr_t leafOffset = (uintptr_t)primIndices;
-//         parent->meta         = 0;
-//         u32 offset           = 0;
-//         for (u32 i = 0; i < leafCount; i++)
-//         {
-//             u32 leafIndex        = leafIndices[i];
-//             const Record *record = &records[leafIndex];
-//             u32 primCount        = record->range.count;
-//
-//             for (u32 j = record->range.start; j < record->range.End(); j++)
-//             {
-//                 primIndices[offset++] = j;
-//             }
-//             Assert(primCount >= 1 && primCount <= 3);
-//
-//             if (leafIndex >= 6)
-//             {
-//                 internalOffset |= (primCount << ((leafIndex - 6) * 2));
-//             }
-//             else if (leafIndex >= 4)
-//             {
-//                 leafOffset |= (primCount << ((leafIndex - 4) * 2));
-//             }
-//             else
-//             {
-//                 parent->meta |= primCount << (leafIndex * 2);
-//             }
-//         }
-//     }
-// };
 
 // NOTE: ptr MUST be aligned to 16 bytes, bottom 4 bits store the type, top 7 bits store the count
 
@@ -401,13 +184,18 @@ using BVHQuantized = BVHN<N, QuantizedNode<N>>;
 typedef BVHQuantized<4> BVH4Quantized;
 typedef BVHQuantized<8> BVH8Quantized;
 
-template <i32 N, typename Heur, typename NT, typename CNT, typename CreateNode, typename UpdateNode, typename Prim>
+struct DefaultCompressedLeaf
+{
+};
+
+template <i32 N, typename Heur, typename NT, typename CreateNode, typename UpdateNode, typename LT,
+          typename CNT = DefaultCompressedLeaf>
 struct BuildFuncs
 {
     using NodeType           = NT;
     using CompressedNodeType = CNT;
-    using Primitive          = Prim;
     using Heuristic          = Heur;
+    using LeafType           = LT;
 
     CreateNode createNode;
     UpdateNode updateNode;
@@ -415,74 +203,80 @@ struct BuildFuncs
 };
 
 template <i32 N>
-using BLAS_AOS_SBVH_QuantizedNode_TriangleLeaf_Funcs =
-    BuildFuncs<
-        N,
-        HeuristicSpatialSplits<32, 16>, //, Triangle8, TriangleMesh>,
-        QuantizedNode<N>,
-        CompressedLeafNode<N>,
-        CreateQuantizedNode<N>,
-        UpdateQuantizedNode<N>,
-        TriangleMesh>;
+using BLAS_SBVH_QuantizedNode_TriangleLeaf_Funcs =
+    BuildFuncs<N,
+               HeuristicSpatialSplits<32, 16>,
+               QuantizedNode<N>,
+               CreateQuantizedNode<N>,
+               UpdateQuantizedNode<N>,
+               u32,
+               CompressedLeafNode<N>>;
 
 template <i32 N>
-using BLAS_AOS_SBVH_QuantizedNode_QuadLeaf_Funcs =
-    BuildFuncs<
-        N,
-        HeuristicSpatialSplits<32, 16, Quad8, QuadMesh>,
-        QuantizedNode<N>,
-        CompressedLeafNode<N>,
-        CreateQuantizedNode<N>,
-        UpdateQuantizedNode<N>,
-        QuadMesh>;
+using BLAS_SBVH_QuantizedNode_QuadLeaf_Funcs =
+    BuildFuncs<N,
+               HeuristicSpatialSplits<32, 16, Quad8, QuadMesh>,
+               QuantizedNode<N>,
+               CreateQuantizedNode<N>,
+               UpdateQuantizedNode<N>,
+               u32,
+               CompressedLeafNode<N>>;
+
+template <i32 N>
+using TLAS_PRB_QuantizedNode_Funcs =
+    BuildFuncs<N,
+               HeuristicPartialRebraid<4, 32>,
+               QuantizedNode<N>,
+               CreateQuantizedNode<N>,
+               UpdateQuantizedNode<N>,
+               BVHNode<N>>;
 
 template <i32 N, typename BuildFunctions>
 struct BVHBuilder
 {
     using NodeType           = typename BuildFunctions::NodeType;
     using CompressedNodeType = typename BuildFunctions::CompressedNodeType;
-    using Primitive          = typename BuildFunctions::Primitive;
     using Heuristic          = typename BuildFunctions::Heuristic;
     using Record             = typename Heuristic::Record;
-    using PrimitiveData      = typename Record::PrimitiveData;
-
-    struct NextGenInfo
-    {
-        NodeType *grandChildren;
-        u32 leafIndices[N];
-        u32 numChildren;
-        u32 leafCount;
-    };
+    using PrimRef            = typename Record::PrimitiveData;
+    using LeafType           = typename BuildFunctions::LeafType;
 
     BuildFunctions f;
 
     Arena **arenas;
-    Primitive *primitives;
-    PrimitiveData *data;
+    PrimRef *primRefs;
     Heuristic heuristic;
 
     BVHBuilder() {}
 
-    BVHN<N, NodeType> BuildBVH(BuildSettings settings, Arena **inArenas, Primitive *inRawPrims, Record &record);
-    uintptr_t BuildBVHRoot3(BuildSettings settings, Record &record);
-    uintptr_t BuildBVH3(BuildSettings settings, const Record &record, bool parallel);
+    BVHNode<N> BuildBVH(BuildSettings settings, Arena **inArenas, Record &record);
+
+    BVHNode<N> BuildBVHRoot(BuildSettings settings, Record &record);
+    BVHNode<N> BuildBVH(BuildSettings settings, const Record &record, bool parallel);
 };
 
 template <i32 N>
-using SBVHBuilderTriangleMesh = BVHBuilder<N, BLAS_AOS_SBVH_QuantizedNode_TriangleLeaf_Funcs<N>>;
+using SBVHBuilderTriangleMesh = BVHBuilder<N, BLAS_SBVH_QuantizedNode_TriangleLeaf_Funcs<N>>;
 
 template <i32 N>
-using SBVHBuilderQuadMesh = BVHBuilder<N, BLAS_AOS_SBVH_QuantizedNode_QuadLeaf_Funcs<N>>;
+using SBVHBuilderQuadMesh = BVHBuilder<N, BLAS_SBVH_QuantizedNode_QuadLeaf_Funcs<N>>;
+
+template <i32 N>
+using PartialRebraidBuilder = BVHBuilder<N, TLAS_PRB_QuantizedNode_Funcs<N>>;
 
 template <i32 N, typename BuildFunctions>
-uintptr_t BVHBuilder<N, BuildFunctions>::BuildBVHRoot3(BuildSettings settings, Record &record)
+BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVHRoot(BuildSettings settings, Record &record)
 {
-    uintptr_t root = BuildBVH3(settings, record, true);
+    BVHNode<N> root = BuildBVH(settings, record, true);
     return root;
 }
 
+// thoughts:
+// 1. should there only be one bvh/instance per leaf?
+// 2. i could get rid of the compressed leaf notion by also partitioning mesh itself, and then have the pointers point to the
+// actual data
 template <i32 N, typename BuildFunctions>
-uintptr_t BVHBuilder<N, BuildFunctions>::BuildBVH3(BuildSettings settings, const Record &record, bool parallel)
+BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, const Record &record, bool parallel)
 {
 
     u32 total = record.count;
@@ -538,20 +332,20 @@ uintptr_t BVHBuilder<N, BuildFunctions>::BuildBVH3(BuildSettings settings, const
         childRecords[bestChild] = out;
     }
 
-    uintptr_t childNodes[N];
+    BVHNode<N> childNodes[N];
 
     if (parallel)
     {
         scheduler.ScheduleAndWait(numChildren, 1, [&](u32 jobID) {
             bool childParallel = childRecords[jobID].count >= 8 * 1024;
-            childNodes[jobID]  = BuildBVH3(settings, childRecords[jobID], childParallel);
+            childNodes[jobID]  = BuildBVH(settings, childRecords[jobID], childParallel);
         });
     }
     else
     {
         for (u32 i = 0; i < numChildren; i++)
         {
-            childNodes[i] = BuildBVH3(settings, childRecords[i], false);
+            childNodes[i] = BuildBVH(settings, childRecords[i], false);
         }
     }
 
@@ -560,7 +354,7 @@ uintptr_t BVHBuilder<N, BuildFunctions>::BuildBVH3(BuildSettings settings, const
     u32 primTotal = 0;
     for (u32 i = 0; i < numChildren; i++)
     {
-        if (childNodes[i] == 0)
+        if (childNodes[i].data == 0)
         {
             leafCount++;
             primTotal += childRecords[i].count;
@@ -573,9 +367,9 @@ uintptr_t BVHBuilder<N, BuildFunctions>::BuildBVH3(BuildSettings settings, const
     if (leafCount == numChildren)
     {
         u8 *bytes                = PushArrayNoZeroTagged(currentArena, u8,
-                                                         sizeof(CompressedNodeType) + sizeof(u32) * primTotal, MemoryType_BVH);
+                                                         sizeof(CompressedNodeType) + sizeof(LeafType) * primTotal, MemoryType_BVH);
         CompressedNodeType *node = (CompressedNodeType *)bytes;
-        u32 *primIndices         = (u32 *)(bytes + sizeof(CompressedNodeType));
+        LeafType *primIDs        = (LeafType *)(bytes + sizeof(CompressedNodeType));
 
         // TODO: not currently keeping track of which prims correspond with which leaf, either need to
         // use 4 8 bit offsets or using a triangle8 struct
@@ -586,72 +380,71 @@ uintptr_t BVHBuilder<N, BuildFunctions>::BuildBVH3(BuildSettings settings, const
             const Record &childRecord = childRecords[recordIndex];
             for (u32 primIndex = childRecord.start; primIndex < childRecord.start + childRecord.count; primIndex++)
             {
-                primIndices[offset++] = primIndex;
+                PrimRef *prim     = &primRefs[primIndex];
+                primIDs[offset++] = prim->LeafID();
             }
         }
-        return (uintptr_t)node;
+        return BVHNode<N>::EncodeNode(node);
     }
 
-    u32 *primIndices = PushArrayNoZeroTagged(currentArena, u32, primTotal, MemoryType_BVH);
+    LeafType *primIDs = PushArrayNoZeroTagged(currentArena, LeafType, primTotal, MemoryType_BVH);
     for (u32 i = 0; i < numChildren; i++)
     {
-        if (childNodes[i] == 0)
+        if (childNodes[i].data == 0)
         {
             const Record &childRecord = childRecords[i];
             u32 numPrims              = childRecord.count;
-            u32 *prims                = &primIndices[offset];
+            LeafType *prims           = &primIDs[offset];
             for (u32 primIndex = childRecord.start; primIndex < childRecord.start + childRecord.count; primIndex++)
             {
-                primIndices[offset++] = primIndex;
+                PrimRef *prim     = &primRefs[primIndex];
+                primIDs[offset++] = prim->LeafID();
             }
-            childNodes[i] = (uintptr_t)(prims);
+            childNodes[i] = BVHNode<N>::EncodeLeaf(prims, childRecord.count);
         }
     }
     NodeType *node = PushStructNoZeroTagged(currentArena, NodeType, MemoryType_BVH);
     f.createNode(childRecords, numChildren, node);
     f.updateNode(node, childNodes, numChildren);
-    return (uintptr_t)node;
+    return BVHNode<N>::EncodeNode(node);
 }
 
 template <i32 N, typename BuildFunctions>
-BVHN<N, typename BVHBuilder<N, BuildFunctions>::NodeType>
-BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings,
-                                        Arena **inArenas,
-                                        Primitive *inRawPrims,
-                                        Record &record)
+// BVHN<N, typename BVHBuilder<N, BuildFunctions>::NodeType>
+BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings,
+                                                   Arena **inArenas,
+                                                   Record &record)
 {
 
-    arenas     = inArenas;
-    primitives = inRawPrims;
-    BVHN<N, NodeType> result;
-
-    // TODO: change bvh to take a  NodePtr struct
-    BuildBVHRoot3(settings, record);
-    return result;
+    arenas          = inArenas;
+    BVHNode<N> head = BuildBVHRoot(settings, record);
+    return head;
 }
 
 template <i32 N>
-BVHQuantized<N> BuildQuantizedTriSBVH(BuildSettings settings,
-                                      Arena **inArenas,
-                                      TriangleMesh *mesh,
-                                      PrimRef *ref,
-                                      RecordAOSSplits &record)
+BVHNode<N> BuildQuantizedTriSBVH(BuildSettings settings,
+                                 Arena **inArenas,
+                                 TriangleMesh *mesh,
+                                 PrimRef *ref,
+                                 RecordAOSSplits &record)
 {
     SBVHBuilderTriangleMesh<N> builder;
     new (&builder.heuristic) HeuristicSpatialSplits(ref, mesh, HalfArea(record.geomBounds));
-    return builder.BuildBVH(settings, inArenas, mesh, record);
+    builder.primRefs = ref;
+    return builder.BuildBVH(settings, inArenas, record);
 }
 
 template <i32 N>
-BVHQuantized<N> BuildQuantizedQuadSBVH(BuildSettings settings,
-                                       Arena **inArenas,
-                                       QuadMesh *mesh,
-                                       PrimRef *ref,
-                                       RecordAOSSplits &record)
+BVHNode<N> BuildQuantizedQuadSBVH(BuildSettings settings,
+                                  Arena **inArenas,
+                                  QuadMesh *mesh,
+                                  PrimRef *ref,
+                                  RecordAOSSplits &record)
 {
     SBVHBuilderQuadMesh<N> builder;
     new (&builder.heuristic) HeuristicSpatialSplits(ref, mesh, HalfArea(record.geomBounds));
-    return builder.BuildBVH(settings, inArenas, mesh, record);
+    builder.primRefs = ref;
+    return builder.BuildBVH(settings, inArenas, record);
 }
 
 } // namespace rt

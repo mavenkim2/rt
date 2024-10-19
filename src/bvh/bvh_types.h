@@ -157,6 +157,7 @@ struct PrimRef
     {
         MemoryCopy(this, &l, sizeof(PrimRef));
     }
+    u32 LeafID() const { return primID; }
 };
 struct PrimDataSOA
 {
@@ -507,5 +508,175 @@ struct Bounds8F32
         maxW = MaskMax(mask, maxW, w);
     }
 };
+
+//////////////////////////////
+// BVH Representation
+//
+template <i32 N>
+struct QuantizedNode;
+
+template <i32 N>
+struct CompressedLeafNode
+{
+    StaticAssert(N == 4 || N == 8, NMustBe4Or8);
+
+    u8 scale[3];
+    u8 meta;
+
+    u8 lowerX[N];
+    u8 lowerY[N];
+    u8 lowerZ[N];
+
+    u8 upperX[N];
+    u8 upperY[N];
+    u8 upperZ[N];
+
+    Vec3f minP;
+};
+
+template <i32 N>
+struct BVHNode
+{
+    static const size_t alignment = 16;
+    static const size_t alignMask = alignment - 1;
+    StaticAssert(IsPow2(alignment), Pow2Alignment);
+    static const size_t tyQuantizedNode  = 0;
+    static const size_t tyEmpty          = 7;
+    static const size_t tyCompressedLeaf = 8;
+    static const size_t tyLeaf           = 8;
+    // NOTE: the leaf count is count - tyLeaf
+
+    uintptr_t data;
+
+    BVHNode() {}
+    BVHNode(uintptr_t data) : data(data) {}
+    static void CheckAlignment(void *ptr);
+    static BVHNode<N> EncodeNode(QuantizedNode<N> *node);
+    static BVHNode<N> EncodeNode(CompressedLeafNode<N> *node);
+    static BVHNode<N> EncodeLeaf(void *leaf, u32 num);
+    QuantizedNode<N> *GetQuantizedNode();
+};
+
+template <i32 N>
+struct QuantizedNode
+{
+    StaticAssert(N == 4 || N == 8, NMustBe4Or8);
+
+    BVHNode<N> children[N];
+    u8 scale[3];
+    u8 meta;
+
+    u8 lowerX[N];
+    u8 lowerY[N];
+    u8 lowerZ[N];
+
+    // NOTE: upperX = 255 when node is invalid
+    u8 upperX[N];
+    u8 upperY[N];
+    u8 upperZ[N];
+
+    Vec3f minP;
+
+    // NOTE: nodes + leaves
+    u32 GetNumChildren() const
+    {
+        return PopCount(meta);
+    }
+    const BVHNode<N> &Child(u32 i) const
+    {
+        return children[i];
+    }
+
+    void GetBounds(f32 *outMinX, f32 *outMinY, f32 *outMinZ, f32 *outMaxX, f32 *outMaxY, f32 *outMaxZ) const
+    {
+        LaneU32<N> lX = LaneU32<N>(*(u32 *)lowerX);
+        LaneU32<N> lY = LaneU32<N>(*(u32 *)lowerY);
+        LaneU32<N> lZ = LaneU32<N>(*(u32 *)lowerZ);
+
+        LaneU32<N> uX = LaneU32<N>(*(u32 *)upperX);
+        LaneU32<N> uY = LaneU32<N>(*(u32 *)upperY);
+        LaneU32<N> uZ = LaneU32<N>(*(u32 *)upperZ);
+
+        LaneU32<N> lExpandedMinX;
+        LaneU32<N> lExpandedMinY;
+        LaneU32<N> lExpandedMinZ;
+
+        LaneU32<N> lExpandedMaxX;
+        LaneU32<N> lExpandedMaxY;
+        LaneU32<N> lExpandedMaxZ;
+        if constexpr (N == 4)
+        {
+            lExpandedMinX = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lX));
+            lExpandedMinY = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lY));
+            lExpandedMinZ = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lZ));
+
+            lExpandedMaxX = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uX));
+            lExpandedMaxY = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uY));
+            lExpandedMaxZ = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uZ));
+        }
+        else
+        {
+            lExpandedMinX = _mm256_cvtepu8_epi32(lX);
+            lExpandedMinY = _mm256_cvtepu8_epi32(lY);
+            lExpandedMinZ = _mm256_cvtepu8_epi32(lZ);
+            lExpandedMaxX = _mm256_cvtepu8_epi32(uX);
+            lExpandedMaxY = _mm256_cvtepu8_epi32(uY);
+            lExpandedMaxZ = _mm256_cvtepu8_epi32(uZ);
+        }
+        LaneF32<N> minX(minP.x);
+        LaneF32<N> minY(minP.y);
+        LaneF32<N> minZ(minP.z);
+
+        LaneF32<N> scaleX = AsFloat(LaneU32<N>(scale[0] << 23));
+        LaneF32<N> scaleY = AsFloat(LaneU32<N>(scale[1] << 23));
+        LaneF32<N> scaleZ = AsFloat(LaneU32<N>(scale[2] << 23));
+
+        LaneF32<N>::Store(outMinX, minX + LaneF32<N>(lExpandedMinX) * scaleX);
+        LaneF32<N>::Store(outMinY, minY + LaneF32<N>(lExpandedMinY) * scaleY);
+        LaneF32<N>::Store(outMinZ, minZ + LaneF32<N>(lExpandedMinZ) * scaleZ);
+        LaneF32<N>::Store(outMaxX, minX + LaneF32<N>(lExpandedMaxX) * scaleX);
+        LaneF32<N>::Store(outMaxY, minY + LaneF32<N>(lExpandedMaxY) * scaleY);
+        LaneF32<N>::Store(outMaxZ, minZ + LaneF32<N>(lExpandedMaxZ) * scaleZ);
+    }
+    QuantizedNode<N> GetBaseChildPtr() const
+    {
+        return (QuantizedNode<N> *)(internalOffset & ~(0xf));
+    }
+};
+
+template <i32 N>
+void BVHNode<N>::CheckAlignment(void *ptr)
+{
+    Assert(!((size_t)ptr & alignMask));
+}
+
+template <i32 N>
+BVHNode<N> BVHNode<N>::EncodeNode(QuantizedNode<N> *node)
+{
+    CheckAlignment(node);
+    return BVHNode((size_t)node | tyQuantizedNode);
+}
+
+template <i32 N>
+BVHNode<N> BVHNode<N>::EncodeNode(CompressedLeafNode<N> *node)
+{
+    CheckAlignment(node);
+    return BVHNode((size_t)node | tyCompressedLeaf);
+}
+
+template <i32 N>
+BVHNode<N> BVHNode<N>::EncodeLeaf(void *leaf, u32 num)
+{
+    CheckAlignment(leaf);
+    return BVHNode((size_t)leaf | (tyLeaf + num));
+}
+
+template <i32 N>
+QuantizedNode<N> *BVHNode<N>::GetQuantizedNode()
+{
+    Assert((data & 0xf) == tyQuantizedNode);
+    return (QuantizedNode<N> *)(data & ~(0xf));
+}
+
 } // namespace rt
 #endif

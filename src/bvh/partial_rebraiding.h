@@ -3,13 +3,16 @@
 namespace rt
 {
 
+template <u32 N>
 struct BuildRef
 {
     f32 min[3];
     u32 objectID;
     f32 max[3];
     u32 numPrims;
-    uintptr_t nodePtr;
+    BVHNode<N> nodePtr;
+
+    BVHNode<N> LeafID() const { return nodePtr; }
 };
 
 struct RebraidRecord
@@ -24,6 +27,12 @@ struct RebraidRecord
     {
         return start + count;
     }
+    void SetRange(u32 inStart, u32 inCount, u32 inExtEnd)
+    {
+        start  = inStart;
+        count  = inCount;
+        extEnd = inExtEnd;
+    }
 };
 
 // NOTE: row major affine transformation matrix
@@ -34,11 +43,11 @@ struct Transform
     f32 z[4];
 };
 
-struct Instance2
-{
-    uintptr_t bvhNode;
-    Transform transform;
-};
+// struct Instance2
+// {
+//     BVHNode bvhNode;
+//     Transform transform;
+// };
 
 // void PartialRebraid(Scene *scene, Arena *arena, Instance2 *instances, u32 numInstances)
 // {
@@ -57,7 +66,8 @@ struct Instance2
 // }
 
 static const f32 REBRAID_THRESHOLD = .1f;
-void OpenBraid(RebraidRecord &record, BuildRef *refs, u32 start, u32 count, std::atomic<u32> &refOffset)
+template <u32 N>
+void OpenBraid(RebraidRecord &record, BuildRef<N> *refs, u32 start, u32 count, std::atomic<u32> &refOffset)
 {
     const u32 QUEUE_SIZE = 8;
     u32 choiceDim        = 0;
@@ -81,46 +91,23 @@ void OpenBraid(RebraidRecord &record, BuildRef *refs, u32 start, u32 count, std:
         bool isOpen           = (ref.max[choiceDim] - ref.min[choiceDim] > REBRAID_THRESHOLD * maxExtent);
         openCount += isOpen;
 
+        // TODO: make sure that a compressed leaf node can't be opened
         if (openCount >= QUEUE_SIZE)
         {
             openCount -= QUEUE_SIZE;
-            BuildRef &refs[QUEUE_SIZE] = {
-                refs[refIDQueue[openCount + 0]],
-                refs[refIDQueue[openCount + 1]],
-                refs[refIDQueue[openCount + 2]],
-                refs[refIDQueue[openCount + 3]],
-                refs[refIDQueue[openCount + 4]],
-                refs[refIDQueue[openCount + 5]],
-                refs[refIDQueue[openCount + 6]],
-                refs[refIDQueue[openCount + 7]],
-            };
-            QuantizedNode4 *nodes[QUEUE_SIZE] = {
-                (QuantizedNode4 *)refs[0].nodePtr,
-                (QuantizedNode4 *)refs[1].nodePtr,
-                (QuantizedNode4 *)refs[2].nodePtr,
-                (QuantizedNode4 *)refs[3].nodePtr,
-                (QuantizedNode4 *)refs[4].nodePtr,
-                (QuantizedNode4 *)refs[5].nodePtr,
-                (QuantizedNode4 *)refs[6].nodePtr,
-                (QuantizedNode4 *)refs[7].nodePtr,
-            };
             u32 numChildren[QUEUE_SIZE];
-
-            u32 totalNumChildren = 0;
-            u32 childAdd         = 0;
-            for (u32 i = 0; i < QUEUE_SIZE; i++)
+            u32 childAdd = 0;
+            for (u32 refID = 0; refID < QUEUE_SIZE; refID++)
             {
-                u32 childCount = node->GetNumChildren();
-                numChildren[i] = childCount;
-                totalNumChildren += childCount;
-                childAdd += childCount != 0 ? childCount - 1 : 0;
+                u32 num            = refs[refIDQueue[openCount + refID]].GetQuantizedNode()->GetNumChildren();
+                numChildren[refID] = num;
+                childAdd += num - 1;
             }
             u32 offset = refOffset.fetch_add(childAdd, std::memory_order_acq_rel);
-            for (u32 i = 0; i < QUEUE_SIZE; i++)
+            for (u32 testIndex = 0; testIndex < QUEUE_SIZE; testIndex++)
             {
-                u32 refID                = refIDQueue[openCount + i];
-                QuantizedNode *node      = nodes[i];
-                QuantizedNode4 *children = (QuantizedNode4 *)node->GetBaseChildPtr();
+                u32 refID            = refIDQueue[openCount + testIndex];
+                QuantizedNode4 *node = refs[refID].GetQuantizedNode();
                 f32 minX[4];
                 f32 minY[4];
                 f32 minZ[4];
@@ -139,10 +126,11 @@ void OpenBraid(RebraidRecord &record, BuildRef *refs, u32 start, u32 count, std:
                 refs[refID].max[1] = maxY[0];
                 refs[refID].max[2] = maxZ[0];
 
-                u32 numPrims         = Max(refs[refID].numPrims / numChildren[i], 1);
+                u32 numPrims         = Max(refs[refID].numPrims / numChildren[testIndex], 1);
                 refs[refID].numPrims = numPrims;
+                refs[refID].nodePtr  = node->Child(0);
 
-                for (u32 b = 1; b < numChildren[i]; b++)
+                for (u32 b = 1; b < numChildren[testIndex]; b++)
                 {
                     refs[offset].min[0]   = minX[b];
                     refs[offset].min[1]   = minY[b];
@@ -152,7 +140,7 @@ void OpenBraid(RebraidRecord &record, BuildRef *refs, u32 start, u32 count, std:
                     refs[offset].max[1]   = maxY[b];
                     refs[offset].max[2]   = maxZ[b];
                     refs[offset].numPrims = numPrims;
-                    refs[offset].nodePtr  = (uintptr_t)(children + b);
+                    refs[offset].nodePtr  = node->Child(b);
 
                     offset++;
                 }
@@ -161,15 +149,16 @@ void OpenBraid(RebraidRecord &record, BuildRef *refs, u32 start, u32 count, std:
     }
 }
 
+template <u32 N, i32 numObjectBins = 32>
 struct HeuristicPartialRebraid
 {
     using Record = RebraidRecord;
-    using OBin   = HeuristicAOSObjectBinning<numObjectBins, BuildRef>;
+    using OBin   = HeuristicAOSObjectBinning<numObjectBins, BuildRef<N>>;
 
-    BuildRef *buildRefs;
+    BuildRef<N> *buildRefs;
 
     HeuristicPartialRebraid() {}
-    HeuristicPartialRebraid(BuildRef *data) : primRefs(data) {}
+    HeuristicPartialRebraid(BuildRef<N> *data) : primRefs(data) {}
     Split Bin(const Record &record)
     {
         u64 popPos = 0;
@@ -179,11 +168,11 @@ struct HeuristicPartialRebraid
             const u32 groupSize = PARALLEL_THRESHOLD;
             ParallelFor(
                 record.start, record.count, groupSize,
-                [&](u32 start, u32 count) { OpenBraid(record, primRefs, start, count, refOffset); });
+                [&](u32 start, u32 count) { OpenBraid(record, buildRefs, start, count, refOffset); });
         }
         else
         {
-            OpenBraid(record, buildRefs, record.start, record.count, refOffset);
+            OpenBraid<N>(record, buildRefs, record.start, record.count, refOffset);
         }
         OBin *objectBinHeuristic;
         struct Split objectSplit = SAHObjectBinning(record, buildRefs, objectBinHeuristic, popPos);
@@ -198,6 +187,19 @@ struct HeuristicPartialRebraid
     }
     void Split(struct Split split, const Record &record, Record &outLeft, Record &outRight)
     {
+        TempArena temp = ScratchStart(0, 0);
+        u32 mid;
+        if (split.bestSAH == f32(pos_inf))
+        {
+            mid = SplitFallback(record, split, buildRefs, outLeft, outRight);
+        }
+        else
+        {
+            OBin *heuristic = (OBin *)(split.ptr);
+            mid             = PartitionParallel(heuristic, buildRefs, split, record.start, record.count, outLeft, outRight);
+        }
+        MoveExtendedRanges(split, record, buildRefs, mid, outLeft, outRight);
+        ArenaPopTo(temp.arena, split.allocPos);
     }
 };
 
