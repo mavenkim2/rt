@@ -1172,7 +1172,7 @@ struct ObjectInstanceType
     Array<i32, MemoryType_Instance> shapeIndices;
 };
 
-struct Instance
+struct SceneInstance
 {
     StringId name;
     i32 transformIndex;
@@ -1203,9 +1203,14 @@ struct SceneLoadState
     ChunkedLinkedList<ScenePacket, 1024, MemoryType_Texture> *textures;
     ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light> *lights;
     ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance> *instanceTypes;
-    ChunkedLinkedList<Instance, 1024, MemoryType_Instance> *instances;
+    ChunkedLinkedList<SceneInstance, 1024, MemoryType_Instance> *instances;
 
     ChunkedLinkedList<const Mat4 *, 16384, MemoryType_Transform> *transforms;
+
+    // TODO: other shapes?
+    u32 *numQuadMeshes;
+    u32 *numTriMeshes;
+    u32 *numCurves;
 
     InternedStringCache<16384, 8, 64> stringCache;
     Map<Mat4, 1048576, 8, 1024, MemoryType_Transform> transformCache;
@@ -1214,6 +1219,7 @@ struct SceneLoadState
 
     Arena *mainArena;
     Scene *scene;
+
     Scheduler::Counter counter = {};
 };
 
@@ -1243,7 +1249,7 @@ Scene *LoadPBRT(Arena *arena, string filename)
     state.textures      = PushArray(arena, ChunkedLinkedList<ScenePacket COMMA 1024 COMMA MemoryType_Texture>, numProcessors);
     state.lights        = PushArray(arena, ChunkedLinkedList<ScenePacket COMMA 1024 COMMA MemoryType_Light>, numProcessors);
     state.instanceTypes = PushArray(arena, ChunkedLinkedList<ObjectInstanceType COMMA 512 COMMA MemoryType_Instance>, numProcessors);
-    state.instances     = PushArray(arena, ChunkedLinkedList<Instance COMMA 1024 COMMA MemoryType_Instance>, numProcessors);
+    state.instances     = PushArray(arena, ChunkedLinkedList<SceneInstance COMMA 1024 COMMA MemoryType_Instance>, numProcessors);
     state.transforms    = PushArray(arena, ChunkedLinkedList<const Mat4 * COMMA 16384 COMMA MemoryType_Transform>, numProcessors);
     state.threadArenas  = PushArray(arena, Arena *, numProcessors);
 #undef COMMA
@@ -1256,7 +1262,7 @@ Scene *LoadPBRT(Arena *arena, string filename)
         state.textures[i]      = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Texture>(state.threadArenas[i]);
         state.lights[i]        = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light>(state.threadArenas[i]);
         state.instanceTypes[i] = ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance>(state.threadArenas[i]);
-        state.instances[i]     = ChunkedLinkedList<Instance, 1024, MemoryType_Instance>(state.threadArenas[i]);
+        state.instances[i]     = ChunkedLinkedList<SceneInstance, 1024, MemoryType_Instance>(state.threadArenas[i]);
         state.transforms[i]    = ChunkedLinkedList<const Mat4 *, 16384, MemoryType_Transform>(state.threadArenas[i]);
     }
     state.mainArena      = arena;
@@ -1629,7 +1635,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 b32 result = GetBetweenPair(objectName, &tokenizer, '"');
                 Assert(result);
 
-                Instance &instance      = instances.AddBack();
+                SceneInstance &instance = instances.AddBack();
                 instance.name           = stringCache.GetOrCreate(arena, objectName);
                 instance.transformIndex = (i32)transforms.Length();
 
@@ -1819,4 +1825,177 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
     }
     ScratchEnd(temp);
 }
+
+void SerializeShapes(Arena *arena, SceneLoadState *state) // ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape> *list)
+{
+    u32 numProcessors = OS_NumProcessors();
+
+    u32 totalNumQuadMeshes = 0;
+    u32 totalNumTriMeshes  = 0;
+    u32 totalNumCurves     = 0;
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        totalNumQuadMeshes += state->numQuadMeshes[i];
+        totalNumTriMeshes += state->numTriMeshes[i];
+        totalNumCurves += state->numCurves[i];
+    }
+
+    enum PrimitiveTy
+    {
+        P_NoneTy,
+        P_TriMesh,
+        P_QuadMesh,
+        P_Curve,
+    };
+
+    QuadMesh *qMeshes       = PushArray(arena, QuadMesh, totalNumQuadMeshes);
+    u32 *qMeshBaseOffsets   = PushArrayNoZero(arena, u32, numProcessors);
+    TriangleMesh *triMeshes = PushArray(arena, TriangleMesh, totalNumTriMeshes);
+    u32 *triMeshBaseOffsets = PushArrayNoZero(arena, u32, numProcessors);
+
+    PrimitiveTy **types = PushArray(arena, PrimitiveTy *, numProcessors);
+    u32 **offsets       = PushArray(arena, u32 *, numProcessors);
+
+    using InstanceTypeList = ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance>;
+
+    using ShapeTypeList = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape>;
+
+    u32 quadOffset = 0;
+    u32 triOffset  = 0;
+    for (u32 pIndex = 0; pIndex < numProcessors; pIndex++)
+    {
+        ShapeTypeList *list = &state->shapes[pIndex];
+        types[pIndex]       = PushArray(arena, PrimitiveTy, list->totalCount);
+        offsets[pIndex]     = PushArray(arena, u32, list->totalCount);
+
+        u32 *pOffsets       = offsets[pIndex];
+        PrimitiveTy *pTypes = types[pIndex];
+        for (ShapeTypeList::ChunkNode *node = list->first; node != 0; node = node->next)
+        {
+            for (u32 i = 0; i < node->count; i++)
+            {
+                ScenePacket *packet = &node->values[i];
+                switch (packet->type)
+                {
+                    case "quadmesh"_sid:
+                    {
+                        pTypes[i]      = P_QuadMesh;
+                        pOffsets[i]    = quadOffset;
+                        QuadMesh *mesh = &qMeshes[quadOffset++];
+                        for (u32 parameterIndex = 0; parameterIndex < packet->parameterCount; parameterIndex++)
+                        {
+                            switch (packet->parameterNames[parameterIndex])
+                            {
+                                case "P"_sid:
+                                {
+                                    mesh->p           = (Vec3f *)packet->bytes[parameterIndex];
+                                    mesh->numVertices = packet->sizes[parameterIndex] / sizeof(Vec3f);
+                                }
+                                break;
+                                case "N"_sid:
+                                {
+                                    mesh->n = (Vec3f *)packet->bytes[parameterIndex];
+                                    Assert(mesh->numVertices == packet->sizes[parameterIndex] / sizeof(Vec3f));
+                                }
+                                break;
+                                // NOTE: this is specific to the moana island data set (not needing the indices or uvs)
+                                default: continue;
+                            }
+                        }
+                    }
+                    break;
+                    case "trianglemesh"_sid:
+                    {
+                        pTypes[i]          = P_TriMesh;
+                        pOffsets[i]        = triOffset;
+                        TriangleMesh *mesh = &triMeshes[triOffset++];
+                        for (u32 parameterIndex = 0; parameterIndex < packet->parameterCount; parameterIndex++)
+                        {
+                            switch (packet->parameterNames[parameterIndex])
+                            {
+                                case "P"_sid:
+                                {
+                                    mesh->p           = (Vec3f *)packet->bytes[parameterIndex];
+                                    mesh->numVertices = packet->sizes[parameterIndex] / sizeof(Vec3f);
+                                }
+                                break;
+                                case "N"_sid:
+                                {
+                                    mesh->n = (Vec3f *)packet->bytes[parameterIndex];
+                                    Assert(mesh->numVertices == packet->sizes[parameterIndex] / sizeof(Vec3f));
+                                }
+                                break;
+                                case "indices"_sid:
+                                {
+                                    mesh->indices    = (u32 *)packet->bytes[parameterIndex];
+                                    mesh->numIndices = packet->sizes[parameterIndex] / sizeof(u32);
+                                }
+                                break;
+                                // TODO: need to make sure that this is always just 0, 1, 2, 3... etc
+                                case "faceIndices"_sid: continue;
+                                case "uv"_sid:
+                                {
+                                    mesh->uv = (Vec2f *)packet->bytes[parameterIndex];
+                                    Assert(mesh->numVertices == packet->sizes[parameterIndex] / sizeof(Vec2f));
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    break;
+                    // TODO: curves
+                    case "curve"_sid: continue;
+                }
+            }
+        }
+    }
+
+    // Merge meshes belonging to the same object instance type
+    for (u32 pIndex = 0; pIndex < numProcessors; pIndex++)
+    {
+        InstanceTypeList *list   = &state->instanceTypes[pIndex];
+        ShapeTypeList *shapeList = &state->shapes[pIndex];
+        PrimitiveTy *pTypes      = types[pIndex];
+        u32 *pOffsets            = offsets[pIndex];
+        for (InstanceTypeList::ChunkNode *node = list->first; node != 0; node = node->next)
+        {
+            for (u32 i = 0; i < node->count; i++)
+            {
+                ObjectInstanceType *instType = &node->values[i];
+                bool allQuads                = true;
+                for (u32 shapeIndexIndex = 0; shapeIndexIndex < instType->shapeIndices.Length(); shapeIndexIndex++)
+                {
+                    u32 shapeIndex = instType->shapeIndices[shapeIndexIndex];
+                    Assert(shapeIndex < shapeList->totalCount);
+                    if (pTypes[shapeIndex] != P_QuadMesh)
+                    {
+                        allQuads = false;
+                        break;
+                    }
+                }
+                if (allQuads)
+                {
+                    QuadMesh *accumMesh  = &qMeshes[pOffsets[instType->shapeIndices[0]]];
+                    u32 totalVertexCount = 0;
+                    for (u32 shapeIndexIndex = 0; shapeIndexIndex < instType->shapeIndices.Length(); shapeIndexIndex++)
+                    {
+                        QuadMesh *mesh = &qMeshes[pOffsets[instType->shapeIndices[shapeIndexIndex]]];
+                        totalVertexCount += mesh->numVertices;
+                    }
+                    Vec3f *p         = PushArrayNoZero(arena, Vec3f, totalVertexCount);
+                    Vec3f *n         = PushArrayNoZero(arena, Vec3f, totalVertexCount);
+                    totalVertexCount = 0;
+                    for (u32 shapeIndexIndex = 0; shapeIndexIndex < instType->shapeIndices.Length(); shapeIndexIndex++)
+                    {
+                        QuadMesh *mesh = &qMeshes[pOffsets[instType->shapeIndices[shapeIndexIndex]]];
+                        MemoryCopy(accumMesh->p + totalVertexCount, mesh->p, sizeof(Vec3f) * mesh->numVertices);
+                        MemoryCopy(accumMesh->n + totalVertexCount, mesh->n, sizeof(Vec3f) * mesh->numVertices);
+                        totalVertexCount += mesh->numVertices;
+                    }
+                }
+            }
+        }
+    }
+}
+
 } // namespace rt

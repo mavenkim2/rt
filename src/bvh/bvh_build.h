@@ -447,5 +447,18 @@ BVHNode<N> BuildQuantizedQuadSBVH(BuildSettings settings,
     return builder.BuildBVH(settings, inArenas, record);
 }
 
+// template <i32 N>
+// BVHNode<N> BuildTLAS(BuildSettings settings,
+//                      Arena **inArenas,
+//                      Instance *instances,
+//                      BuildRef *refs,
+//                      RecordAOSSplits &record)
+// {
+//     PartialRebraidBuilder<N> builder;
+//     new (&builder.heuristic) HeuristicPartialRebraid<N>(refs);
+//     builder.primRefs = refs;
+//     return builder.BuildBVH(settings, inArenas, record);
+// }
+
 } // namespace rt
 #endif
