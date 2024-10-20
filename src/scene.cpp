@@ -624,7 +624,8 @@ QuadMesh LoadQuadPLY(Arena *arena, string filename)
     mesh.numVertices = numVertices;
 
     // 2 triangles/1 quad for every 4 vertices. If this condition isn't met, it isn't a quad mesh
-    Assert(numFaces == numVertices / 2);
+    if (numFaces != numVertices / 2) return mesh;
+
     // mesh.numQuads    = numFaces / 2;
     if (hasVertices) mesh.p = PushArrayNoZero(arena, Vec3f, numVertices);
     if (hasNormals) mesh.n = PushArrayNoZero(arena, Vec3f, numVertices);
@@ -926,6 +927,8 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
 
     string infoType;
     b8 result;
+    u32 numVertices = 0;
+    u32 numIndices  = 0;
     for (;;)
     {
         result = GetBetweenPair(infoType, tokenizer, '"');
@@ -1111,9 +1114,20 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
             Error(0, "Invalid data type: %S\n", dataType);
         }
         packet->parameterNames[currentParam] = stringCache->GetOrCreate(arena, parameterName);
-        packet->bytes[currentParam]          = out;
-        packet->sizes[currentParam]          = size;
+        if (packet->type == "trianglemesh"_sid)
+        {
+            if (packet->parameterNames[currentParam] == "P"_sid)
+                numVertices = numValues / 3;
+            else if (packet->parameterNames[currentParam] == "indices"_sid)
+                numIndices = numValues;
+        }
+        packet->bytes[currentParam] = out;
+        packet->sizes[currentParam] = size;
         SkipToNextLine(tokenizer);
+    }
+    if (packet->type == "trianglemesh"_sid && numVertices && numIndices && numVertices == numIndices * 2)
+    {
+        packet->type = stringCache->GetOrCreate(arena, "quadmesh");
     }
 }
 
@@ -1828,6 +1842,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
 
 void SerializeShapes(Arena *arena, SceneLoadState *state) // ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape> *list)
 {
+    TempArena temp    = ScratchStart(0, 0);
     u32 numProcessors = OS_NumProcessors();
 
     u32 totalNumQuadMeshes = 0;
@@ -1843,15 +1858,15 @@ void SerializeShapes(Arena *arena, SceneLoadState *state) // ChunkedLinkedList<S
     enum PrimitiveTy
     {
         P_NoneTy,
+        P_RemovedTy,
         P_TriMesh,
         P_QuadMesh,
         P_Curve,
     };
 
-    QuadMesh *qMeshes       = PushArray(arena, QuadMesh, totalNumQuadMeshes);
-    u32 *qMeshBaseOffsets   = PushArrayNoZero(arena, u32, numProcessors);
-    TriangleMesh *triMeshes = PushArray(arena, TriangleMesh, totalNumTriMeshes);
-    u32 *triMeshBaseOffsets = PushArrayNoZero(arena, u32, numProcessors);
+    QuadMesh *qMeshes            = PushArray(arena, QuadMesh, totalNumQuadMeshes);
+    QuadMesh *finalOutQuadMeshes = PushArray(arena, QuadMesh, totalNumQuadMeshes);
+    TriangleMesh *triMeshes      = PushArray(arena, TriangleMesh, totalNumTriMeshes);
 
     PrimitiveTy **types = PushArray(arena, PrimitiveTy *, numProcessors);
     u32 **offsets       = PushArray(arena, u32 *, numProcessors);
@@ -1943,13 +1958,39 @@ void SerializeShapes(Arena *arena, SceneLoadState *state) // ChunkedLinkedList<S
                         }
                     }
                     break;
+                    case "plymesh"_sid:
+                    {
+                        Assert(packet->parameterCount == 1);
+                        string filename;
+                        filename.str  = packet->bytes[0];
+                        filename.size = packet->sizes[0];
+                        QuadMesh mesh = LoadQuadPLY(arena, filename);
+                        // NOTE: should only happen for the ocean geometry
+                        if (mesh.p == 0)
+                        {
+                            TriangleMesh triMesh   = LoadPLY(arena, filename);
+                            pTypes[i]              = P_TriMesh;
+                            pOffsets[i]            = triOffset;
+                            triMeshes[triOffset++] = triMesh;
+                        }
+                        else
+                        {
+                            pTypes[i]             = P_QuadMesh;
+                            pOffsets[i]           = quadOffset;
+                            qMeshes[quadOffset++] = mesh;
+                        }
+                        // pTypes[i] = ;
+                    }
+                    break;
                     // TODO: curves
                     case "curve"_sid: continue;
+                    default: Assert(!"not parsed");
                 }
             }
         }
     }
 
+    u32 outQuadOffset = 0;
     // Merge meshes belonging to the same object instance type
     for (u32 pIndex = 0; pIndex < numProcessors; pIndex++)
     {
@@ -1963,6 +2004,7 @@ void SerializeShapes(Arena *arena, SceneLoadState *state) // ChunkedLinkedList<S
             {
                 ObjectInstanceType *instType = &node->values[i];
                 bool allQuads                = true;
+                bool someQuads               = false;
                 for (u32 shapeIndexIndex = 0; shapeIndexIndex < instType->shapeIndices.Length(); shapeIndexIndex++)
                 {
                     u32 shapeIndex = instType->shapeIndices[shapeIndexIndex];
@@ -1972,18 +2014,22 @@ void SerializeShapes(Arena *arena, SceneLoadState *state) // ChunkedLinkedList<S
                         allQuads = false;
                         break;
                     }
+                    else
+                    {
+                        someQuads = true;
+                    }
                 }
                 if (allQuads)
                 {
-                    QuadMesh *accumMesh  = &qMeshes[pOffsets[instType->shapeIndices[0]]];
+                    QuadMesh *accumMesh  = &finalOutQuadMeshes[outQuadOffset++];
                     u32 totalVertexCount = 0;
                     for (u32 shapeIndexIndex = 0; shapeIndexIndex < instType->shapeIndices.Length(); shapeIndexIndex++)
                     {
                         QuadMesh *mesh = &qMeshes[pOffsets[instType->shapeIndices[shapeIndexIndex]]];
                         totalVertexCount += mesh->numVertices;
                     }
-                    Vec3f *p         = PushArrayNoZero(arena, Vec3f, totalVertexCount);
-                    Vec3f *n         = PushArrayNoZero(arena, Vec3f, totalVertexCount);
+                    accumMesh->p     = PushArrayNoZero(arena, Vec3f, totalVertexCount);
+                    accumMesh->n     = PushArrayNoZero(arena, Vec3f, totalVertexCount);
                     totalVertexCount = 0;
                     for (u32 shapeIndexIndex = 0; shapeIndexIndex < instType->shapeIndices.Length(); shapeIndexIndex++)
                     {
@@ -1993,7 +2039,89 @@ void SerializeShapes(Arena *arena, SceneLoadState *state) // ChunkedLinkedList<S
                         totalVertexCount += mesh->numVertices;
                     }
                 }
+                else if (someQuads)
+                {
+                    for (u32 shapeIndexIndex = 0; shapeIndexIndex < instType->shapeIndices.Length(); shapeIndexIndex++)
+                    {
+                        u32 shapeIndex = instType->shapeIndices[shapeIndexIndex];
+                        if (pTypes[shapeIndex] == P_QuadMesh)
+                        {
+                            finalOutQuadMeshes[outQuadOffset++] = qMeshes[pOffsets[shapeIndex]];
+                        }
+                    }
+                }
             }
+        }
+    }
+
+    // convert pointers to offsets (for pointer fix ups) and write to file
+    StringBuilder builder;
+    builder.arena = temp.arena;
+
+    // quad meshes
+    {
+        u64 qMeshFileOffset = AppendArray(&builder, finalOutQuadMeshes, outQuadOffset);
+        Assert(qMeshFileOffset == 0);
+
+        u64 *positionWrites = PushArrayNoZero(temp.arena, u64, outQuadOffset);
+        u64 *normalWrites   = PushArrayNoZero(temp.arena, u64, outQuadOffset);
+        for (u32 i = 0; i < outQuadOffset; i++)
+        {
+            QuadMesh *quadMesh = &finalOutQuadMeshes[i];
+            positionWrites[i]  = AppendArray(&builder, quadMesh->p, quadMesh->numVertices);
+            normalWrites[i]    = AppendArray(&builder, quadMesh->n, quadMesh->numVertices);
+        }
+        string result = CombineBuilderNodes(&builder);
+        for (u32 i = 0; i < outQuadOffset; i++)
+        {
+            ConvertPointerToOffset(result.str, qMeshFileOffset + OffsetOf(QuadMesh, p), positionWrites[i]);
+            ConvertPointerToOffset(result.str, qMeshFileOffset + OffsetOf(QuadMesh, n), normalWrites[i]);
+            qMeshFileOffset += sizeof(QuadMesh);
+        }
+        string quadFilename = "data\\island\\pbrt-v4\\quads.mesh";
+        b32 success         = OS_WriteFile(quadFilename, result.str, (u32)result.size);
+        if (!success)
+        {
+            Print("Failed to write file %S\n", quadFilename);
+            Assert(0);
+        }
+    }
+
+    // repeat for triangle meshes
+    {
+        builder       = {};
+        builder.arena = temp.arena;
+
+        u64 triMeshFileOffset = AppendArray(&builder, triMeshes, triOffset);
+        Assert(triMeshFileOffset == 0);
+
+        u64 *positionWrites = PushArrayNoZero(temp.arena, u64, triOffset);
+        u64 *normalWrites   = PushArrayNoZero(temp.arena, u64, triOffset);
+        u64 *uvWrites       = PushArrayNoZero(temp.arena, u64, triOffset);
+        u64 *indexWrites    = PushArrayNoZero(temp.arena, u64, triOffset);
+        for (u32 i = 0; i < triOffset; i++)
+        {
+            TriangleMesh *mesh     = &triMeshes[i];
+            positionWrites[i] = AppendArray(&builder, mesh->p, mesh->numVertices);
+            normalWrites[i]   = AppendArray(&builder, mesh->n, mesh->numVertices);
+            uvWrites[i]       = AppendArray(&builder, mesh->uv, mesh->numVertices);
+            indexWrites[i]    = AppendArray(&builder, mesh->indices, mesh->numIndices);
+        }
+        string result = CombineBuilderNodes(&builder);
+        for (u32 i = 0; i < triOffset; i++)
+        {
+            ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, p), positionWrites[i]);
+            ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, n), normalWrites[i]);
+            ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, uv), uvWrites[i]);
+            ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, indices), indexWrites[i]);
+            triMeshFileOffset += sizeof(TriangleMesh);
+        }
+        string triFilename = "data\\island\\pbrt-v4\\tris.mesh";
+        b32 success        = OS_WriteFile(triFilename, result.str, (u32)result.size);
+        if (!success)
+        {
+            Print("Failed to write file %S\n", triFilename);
+            Assert(0);
         }
     }
 }

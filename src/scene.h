@@ -320,7 +320,7 @@ struct TriangleMesh
 {
     Vec3f *p;
     Vec3f *n;
-    Vec3f *t;
+    // Vec3f *t;
     Vec2f *uv;
     u32 *indices;
     u32 numVertices;
