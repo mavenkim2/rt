@@ -1113,10 +1113,6 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
                     InternedStringCache<numNodes, chunkSize, numStripes> *stringCache,
                     MemoryType memoryType, u32 additionalParameters = 0)
 {
-    // TODO: this just dosen't work if all the parameters are listed on the same line. i hate ascii file formats
-    // u32 numParameters = CountLinesStartWith(tokenizer, '"') + additionalParameters;
-    // Assert(numParameters);
-    // packet->Initialize(arena, numParameters);
     static const u32 MAX_PARAMETER_COUNT = 16;
 
     string infoType;
@@ -1133,10 +1129,6 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
     for (;;)
     {
         Assert(packet->parameterCount < MAX_PARAMETER_COUNT);
-        // if (packet->parameterCount == numParameters - additionalParameters)
-        // {
-        //     break;
-        // }
         result = GetBetweenPair(infoType, tokenizer, '"');
         if (result == 0) break;
         if (result == 2)
@@ -1278,8 +1270,9 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
             b32 pairResult = GetBetweenPair(str, tokenizer, '"');
             Assert(pairResult);
 
-            out  = str.str;
-            size = (u32)str.size;
+            string copy = PushStr8Copy(arena, str);
+            out         = copy.str;
+            size        = (u32)copy.size;
             AdvanceToNextLine(tokenizer);
         }
         else if (dataType == "blackbody")
@@ -1330,8 +1323,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
         bytes[currentParam]          = out;
         sizes[currentParam]          = size;
     }
-    // Assert(packet->parameterCount + additionalParameters == numParameters);
-    packet->Initialize(arena, packet->parameterCount);
+    packet->Initialize(arena, packet->parameterCount + additionalParameters);
     MemoryCopy(packet->parameterNames, parameterNames, sizeof(StringId) * packet->parameterCount);
     MemoryCopy(packet->bytes, bytes, sizeof(u8 *) * packet->parameterCount);
     MemoryCopy(packet->sizes, sizes, sizeof(u32) * packet->parameterCount);
@@ -1409,7 +1401,7 @@ Scene *LoadPBRT(Arena *arena, string filename)
     printf("Total num instances: %lld\n", totalNumInstances);
     printf("Total num transforms: %lld\n", totalNumTransforms);
 
-    // Serialize(arena, baseDirectory, &state);
+    Serialize(arena, baseDirectory, &state);
 
     for (u32 i = 0; i < numProcessors; i++)
     {
@@ -1749,6 +1741,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 instance.transformIndex = (i32)transforms.Length();
 
                 AddTransform();
+                Assert(IsEndOfLine(&tokenizer));
                 SkipToNextLine(&tokenizer);
             }
             break;
@@ -2103,11 +2096,11 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                                 filename.str        = packet->bytes[parameterIndex];
                                 filename.size       = packet->sizes[parameterIndex];
                                 string fullFilePath = StrConcat(temp.arena, directory, filename);
-                                QuadMesh mesh       = LoadQuadPLY(arena, filename);
+                                QuadMesh mesh       = LoadQuadPLY(arena, fullFilePath);
                                 // NOTE: should only happen for the ocean geometry (twice)
                                 if (mesh.p == 0)
                                 {
-                                    TriangleMesh triMesh   = LoadPLY(arena, filename);
+                                    TriangleMesh triMesh   = LoadPLY(arena, fullFilePath);
                                     pTypes[i]              = P_TriMesh;
                                     pOffsets[i]            = triOffset;
                                     triMeshes[triOffset++] = triMesh;
@@ -2169,9 +2162,10 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                         QuadMesh *mesh = &qMeshes[pOffsets[instType->shapeIndices[shapeIndexIndex]]];
                         totalVertexCount += mesh->numVertices;
                     }
-                    accumMesh->p     = PushArrayNoZero(arena, Vec3f, totalVertexCount);
-                    accumMesh->n     = PushArrayNoZero(arena, Vec3f, totalVertexCount);
-                    totalVertexCount = 0;
+                    accumMesh->p           = PushArrayNoZero(arena, Vec3f, totalVertexCount);
+                    accumMesh->n           = PushArrayNoZero(arena, Vec3f, totalVertexCount);
+                    accumMesh->numVertices = totalVertexCount;
+                    totalVertexCount       = 0;
                     for (u32 shapeIndexIndex = 0; shapeIndexIndex < instType->shapeIndices.Length(); shapeIndexIndex++)
                     {
                         QuadMesh *mesh = &qMeshes[pOffsets[instType->shapeIndices[shapeIndexIndex]]];
@@ -2196,7 +2190,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     }
 
     // convert pointers to offsets (for pointer fix ups) and write to file
-    StringBuilder builder;
+    StringBuilder builder = {};
     builder.arena = temp.arena;
 
     // quad meshes
