@@ -366,63 +366,6 @@ __forceinline Triangle GetPrimitive<TriangleMesh, Triangle>(TriangleMesh *mesh, 
     return out;
 }
 
-template <typename Primitive, typename BasePrimitive>
-__forceinline void StorePrimitive(Primitive *primitives, const BasePrimitive &stored, u32 index) { primitives[index] = stored; }
-
-template <>
-__forceinline void StorePrimitive<TriangleMesh, Triangle>(TriangleMesh *mesh, const Triangle &stored, u32 index)
-{
-    Assert(index < mesh->numIndices / 3);
-    mesh->indices[index * 3 + 0] = stored.indices[0];
-    mesh->indices[index * 3 + 1] = stored.indices[1];
-    mesh->indices[index * 3 + 2] = stored.indices[2];
-}
-
-template <typename Primitive>
-void Swap(Primitive *prim, u32 lIndex, u32 rIndex)
-{
-    Swap(prim[lIndex], prim[rIndex]);
-}
-
-template <>
-void Swap<TriangleMesh>(TriangleMesh *mesh, u32 lIndex, u32 rIndex)
-{
-    Assert(mesh->indices);
-    Swap(mesh->indices[lIndex * 3 + 0], mesh->indices[rIndex * 3 + 0]);
-    Swap(mesh->indices[lIndex * 3 + 1], mesh->indices[rIndex * 3 + 1]);
-    Swap(mesh->indices[lIndex * 3 + 2], mesh->indices[rIndex * 3 + 2]);
-}
-
-template <typename Primitive>
-void PrefetchL1(Primitive *prims, u32 index)
-{
-    static const size_t cacheLineSize  = 64;
-    static const size_t cacheLineShift = 6;
-
-    char *base                  = (char *)(&prims[index]);
-    constexpr u32 numCacheLines = (sizeof(Primitive) + cacheLineSize - 1) >> cacheLineShift;
-
-    for (u32 i = 0; i < numCacheLines; i++)
-    {
-        _mm_prefetch(base + cacheLineSize * i, _MM_HINT_T0);
-    }
-}
-
-template <>
-void PrefetchL1<TriangleMesh>(TriangleMesh *prims, u32 index)
-{
-    static const size_t cacheLineSize  = 64;
-    static const size_t cacheLineShift = 6;
-
-    if (prims->indices)
-    {
-        _mm_prefetch((char *)(&prims->indices[index * 3]), _MM_HINT_T0);
-    }
-    else
-    {
-    }
-}
-
 //////////////////////////////
 
 struct SceneHandle
@@ -470,7 +413,7 @@ struct ScenePacket
     void Initialize(Arena *arena, u32 count)
     {
         // parameterCount = count;
-        parameterCount = 0;
+        // parameterCount = 0;
         parameterNames = PushArray(arena, StringId, count);
         bytes          = PushArray(arena, u8 *, count);
         sizes          = PushArray(arena, u32, count);
@@ -542,25 +485,16 @@ struct InstancePrimitive
 
 struct Scene
 {
-    // using PrimitiveTypes = TypePack<Sphere, Quad, Box, TriangleMesh>;
-
     static const u32 indexMask = 0x0fffffff;
     static const u32 typeShift = 28;
 
-    // std::vector<Sphere> spheres;
-    // std::vector<Quad> quads;
-    // std::vector<Box> boxes;
-    //
-    // std::vector<PrimitiveIndices> primitiveIndices;
-    //
-    // std::vector<HomogeneousTransform> transforms;
-    // std::vector<ConstantMedium> media;
     Sampler sampler;
 
     Sphere *spheres;
     Quad *quads;
     Box *boxes;
     TriangleMesh *meshes;
+    QuadMesh *quadMeshes;
 
     InstancePrimitive *instances;
 

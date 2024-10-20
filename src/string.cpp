@@ -777,7 +777,7 @@ b8 GetBetweenPair(string &out, Tokenizer *tokenizer, const u8 ch)
     u8 right = CharGetPair(ch);
 
     u8 *cursor = tokenizer->cursor;
-    for (; cursor < tokenizer->input.str + tokenizer->input.size && CharIsBlank(*cursor) && *cursor != left;)
+    for (; cursor < tokenizer->input.str + tokenizer->input.size && CharIsBlank(*cursor) && *cursor != '#' && *cursor != left;)
     {
         if (*cursor == '\n') return 0;
         cursor++;
@@ -790,12 +790,12 @@ b8 GetBetweenPair(string &out, Tokenizer *tokenizer, const u8 ch)
     u32 count = 0;
     for (; cursor < tokenizer->input.str + tokenizer->input.size && *cursor != right; count++)
     {
-        if (*cursor == '\n') return 0;
+        // if (*cursor == '\n') return 0;
         cursor++;
     }
     cursor++;
 
-    if (cursor >= tokenizer->input.str + tokenizer->input.size) return 0;
+    if (cursor > tokenizer->input.str + tokenizer->input.size) return 0;
 
     out               = Str8(start, count);
     tokenizer->cursor = cursor;

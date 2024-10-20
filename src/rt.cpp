@@ -1054,11 +1054,11 @@ int main(int argc, char *argv[])
     // TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
     // QuadMesh mesh = LoadQuadPLY(arena, "data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
 
-    TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
+    // TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
     // TriangleMesh mesh = LoadPLY(arena, "data/xyzrgb_statuette.ply");
 
     // QuadSBVHBuilderTest(dataArena, &mesh);
-    AOSSBVHBuilderTest(dataArena, &mesh);
+    // AOSSBVHBuilderTest(dataArena, &mesh);
 
     // PartitionFix();
 
@@ -1183,7 +1183,7 @@ int main(int argc, char *argv[])
 //////////////////////////////
 // Loading PBRT File Test
 //
-#if 0
+#if 1
     PerformanceCounter counter = OS_StartCounter();
     LoadPBRT(arena, "data/island/pbrt-v4/island.pbrt");
     printf("Total time: %fms\n", OS_GetMilliseconds(counter));

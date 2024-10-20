@@ -1,6 +1,6 @@
 namespace rt 
 {
-void Print(char *fmt, va_list args)
+void Print(const char *fmt, va_list args)
 {
     char printBuffer[1024];
     stbsp_vsprintf(printBuffer, fmt, args);
@@ -11,7 +11,7 @@ void Print(char *fmt, va_list args)
 #endif
 }
 
-void Print(char *fmt, ...)
+void Print(const char *fmt, ...)
 {
     va_list va;
     va_start(va, fmt);

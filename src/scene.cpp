@@ -367,8 +367,6 @@ TriangleMesh LoadPLY(Arena *arena, string filename)
     u32 faceIndicesStride = 0;
     u32 otherStride       = 0;
 
-    bool vertexProperty = 0;
-
     bool hasVertices = 0;
     bool hasNormals  = 0;
     bool hasUv       = 0;
@@ -509,6 +507,74 @@ TriangleMesh LoadPLY(Arena *arena, string filename)
 }
 
 // NOTE: specifically for the moana island scene
+bool CheckQuadPLY(string filename)
+{
+    string buffer = OS_MapFileRead(filename); // OS_ReadFile(arena, filename);
+    Tokenizer tokenizer;
+    tokenizer.input  = buffer;
+    tokenizer.cursor = buffer.str;
+
+    string line = ReadLine(&tokenizer);
+    Assert(line == "ply");
+    line = ReadLine(&tokenizer);
+    // TODO: really need to handle big endian, used in some of the stanford models
+    Assert(line == "format binary_little_endian 1.0");
+
+    u32 numVertices = 0;
+    u32 numFaces    = 0;
+
+    for (;;)
+    {
+        string word = ReadWord(&tokenizer);
+        if (word == "element")
+        {
+            string elementType = ReadWord(&tokenizer);
+            if (elementType == "vertex")
+            {
+                numVertices = ConvertToUint(ReadWord(&tokenizer));
+                for (;;)
+                {
+                    word = CheckWord(&tokenizer);
+                    if (word == "element") break;
+                    ReadWord(&tokenizer);
+                    word = ReadWord(&tokenizer);
+                    Assert(word == "float");
+                    word = ReadWord(&tokenizer);
+                }
+            }
+            else if (elementType == "face")
+            {
+                numFaces = ConvertToUint(ReadWord(&tokenizer));
+                for (;;)
+                {
+                    word = CheckWord(&tokenizer);
+                    if (word == "element" || word == "end_header") break;
+                    // Skips the word "property"
+                    ReadWord(&tokenizer);
+                    word = ReadWord(&tokenizer);
+                    if (word == "list")
+                    {
+                        ReadWord(&tokenizer);
+                        ReadWord(&tokenizer);
+                        ReadWord(&tokenizer);
+                    }
+                    else
+                    {
+                        ReadWord(&tokenizer);
+                    }
+                }
+            }
+            else
+            {
+                Error(0, "elementType: %s\n", (char *)elementType.str);
+            }
+        }
+        else if (word == "end_header") break;
+    }
+
+    // 2 triangles/1 quad for every 4 vertices. If this condition isn't met, it isn't a quad mesh
+    return numFaces == numVertices / 2;
+}
 QuadMesh LoadQuadPLY(Arena *arena, string filename)
 {
     string buffer = OS_MapFileRead(filename); // OS_ReadFile(arena, filename);
@@ -531,8 +597,6 @@ QuadMesh LoadQuadPLY(Arena *arena, string filename)
     u32 countStride       = 0;
     u32 faceIndicesStride = 0;
     u32 otherStride       = 0;
-
-    bool vertexProperty = 0;
 
     bool hasVertices = 0;
     bool hasNormals  = 0;
@@ -883,254 +947,6 @@ const string *StringCache<numNodes, chunkSize, numStripes>::GetOrCreate(Arena *a
     return out;
 }
 
-// NOTE: sets the camera, film, sampler, etc.
-template <i32 numNodes, i32 chunkSize, i32 numStripes>
-void CreateScenePacket(Arena *arena,
-                       string word,
-                       ScenePacket *packet,
-                       Tokenizer *tokenizer,
-                       InternedStringCache<numNodes, chunkSize, numStripes> *stringCache,
-                       MemoryType memoryType,
-                       u32 additionalParameters = 0)
-{
-    ReadWord(tokenizer);
-    string type;
-    b32 result = GetBetweenPair(type, tokenizer, '"');
-    Assert(result);
-    packet->type = stringCache->GetOrCreate(arena, type);
-    if (IsEndOfLine(tokenizer))
-    {
-        SkipToNextLine(tokenizer);
-    }
-    else
-    {
-        SkipToNextChar(tokenizer);
-    }
-
-    ReadParameters(arena, packet, tokenizer, stringCache, memoryType, additionalParameters);
-}
-
-inline void SkipToNextDigitArray(Tokenizer *tokenizer)
-{
-    while (!EndOfBuffer(tokenizer) && (!IsDigit(tokenizer) && *tokenizer->cursor != '-' &&
-                                       *tokenizer->cursor != ']')) tokenizer->cursor++;
-}
-
-template <i32 numNodes, i32 chunkSize, i32 numStripes>
-void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
-                    InternedStringCache<numNodes, chunkSize, numStripes> *stringCache,
-                    MemoryType memoryType, u32 additionalParameters = 0)
-{
-    u32 numParameters = CountLinesStartWith(tokenizer, '"') + additionalParameters;
-    Assert(numParameters);
-    packet->Initialize(arena, numParameters);
-
-    string infoType;
-    b8 result;
-    u32 numVertices = 0;
-    u32 numIndices  = 0;
-    for (;;)
-    {
-        result = GetBetweenPair(infoType, tokenizer, '"');
-        if (result == 0) break;
-        else if (result == 2)
-        {
-            SkipToNextLine(tokenizer);
-            continue;
-        }
-        string dataType      = GetFirstWord(infoType);
-        u32 currentParam     = packet->parameterCount++;
-        string parameterName = GetNthWord(infoType, 2);
-
-        SkipToNextChar(tokenizer);
-
-        u32 numValues = CountBetweenPair(tokenizer, '[');
-        numValues     = numValues ? numValues : 1;
-        u8 *out       = 0;
-        u32 size      = 0;
-        if (dataType == "float")
-        {
-            f32 *floats = PushArrayNoZeroTagged(arena, f32, numValues, memoryType);
-
-            Advance(tokenizer, "[");
-            SkipToNextDigit(tokenizer);
-            if (numValues == 1)
-            {
-                floats[0] = ReadFloat(tokenizer);
-            }
-            else
-            {
-                for (u32 i = 0; i < numValues; i++)
-                {
-                    floats[i] = ReadFloat(tokenizer);
-                    SkipToNextDigitArray(tokenizer);
-                }
-            }
-            out  = (u8 *)floats;
-            size = sizeof(f32) * numValues;
-        }
-        else if (dataType == "point2" || dataType == "vector2")
-        {
-            Assert((numValues & 1) == 0);
-            Vec2f *vectors = PushArrayNoZeroTagged(arena, Vec2f, numValues / 2, memoryType);
-
-            b32 brackets = Advance(tokenizer, "[");
-            Advance(tokenizer, "[");
-            SkipToNextDigit(tokenizer);
-            if (numValues == 2)
-            {
-                for (u32 i = 0; i < numValues; i++)
-                {
-                    vectors[i / 2][i & 1] = ReadFloat(tokenizer);
-                }
-            }
-            else
-            {
-                for (u32 i = 0; i < numValues; i++)
-                {
-                    vectors[i / 2][i & 1] = ReadFloat(tokenizer);
-                    SkipToNextDigitArray(tokenizer);
-                }
-            }
-            out  = (u8 *)vectors;
-            size = sizeof(f32) * numValues;
-        }
-        else if (dataType == "rgb" || dataType == "point3" || dataType == "vector3" || dataType == "normal3" ||
-                 dataType == "normal" || dataType == "vector")
-        {
-            Assert(numValues % 3 == 0);
-            Vec3f *vectors = PushArrayNoZeroTagged(arena, Vec3f, numValues / 3, memoryType);
-
-            b32 brackets = Advance(tokenizer, "[");
-            SkipToNextDigit(tokenizer);
-            if (numValues == 3)
-            {
-                for (u32 i = 0; i < numValues; i++)
-                {
-                    vectors[i / 3][i % 3] = ReadFloat(tokenizer);
-                }
-            }
-            else
-            {
-                for (u32 i = 0; i < numValues; i++)
-                {
-                    vectors[i / 3][i % 3] = ReadFloat(tokenizer);
-                    SkipToNextDigitArray(tokenizer);
-                }
-            }
-            out  = (u8 *)vectors;
-            size = sizeof(f32) * numValues;
-        }
-        else if (dataType == "integer")
-        {
-            i32 *ints    = PushArrayNoZeroTagged(arena, i32, numValues, memoryType);
-            b32 brackets = Advance(tokenizer, "[");
-            SkipToNextDigit(tokenizer);
-            if (numValues == 1)
-            {
-                ints[0] = ReadInt(tokenizer);
-            }
-            else
-            {
-                for (u32 i = 0; i < numValues; i++)
-                {
-                    ints[i] = ReadInt(tokenizer);
-                    SkipToNextDigitArray(tokenizer);
-                }
-            }
-            out  = (u8 *)ints;
-            size = sizeof(i32) * numValues;
-        }
-        else if (dataType == "bool")
-        {
-            out  = PushStructNoZeroTagged(arena, u8, memoryType);
-            size = sizeof(u8);
-            Advance(tokenizer, "[");
-            SkipToNextChar(tokenizer);
-            // NOTE: this assumes that the bool is true or false (and not garbage and not capitalized)
-            if (*tokenizer->cursor == 'f')
-            {
-                *out = 0;
-            }
-            else
-            {
-                *out = 1;
-            }
-        }
-        else if (dataType == "string" || dataType == "texture")
-        {
-            Assert(numValues == 1);
-            Advance(tokenizer, "[");
-            SkipToNextChar(tokenizer);
-
-            string str;
-            b32 pairResult = GetBetweenPair(str, tokenizer, '"');
-            Assert(pairResult);
-
-            out  = str.str;
-            size = (u32)str.size;
-        }
-        else if (dataType == "blackbody")
-        {
-            Assert(numValues == 1);
-            SkipToNextDigit(tokenizer);
-            i32 val = ReadInt(tokenizer);
-            tokenizer->cursor++;
-
-            i32 *ints = PushArrayNoZeroTagged(arena, i32, 1, memoryType);
-            ints[0]   = val;
-            out       = (u8 *)ints;
-            size      = (u32)sizeof(i32);
-        }
-
-        // NOTE: either a series of wavelength value pairs or the name of a file with wavelength value pairs
-        // TODO: handle cases where brackets are on new line
-        else if (dataType == "spectrum")
-        {
-            if (numValues > 1)
-            {
-                string str;
-                b32 pairResult = GetBetweenPair(str, tokenizer, '"');
-                Assert(pairResult);
-
-                out  = str.str;
-                size = (u32)str.size;
-            }
-            else
-            {
-                Advance(tokenizer, "[");
-                Assert((numValues & 1) == 0);
-                out = PushArrayNoZeroTagged(arena, u8, sizeof(f32) * numValues, memoryType);
-                for (u32 i = 0; i < numValues / 2; i++)
-                {
-                    *((i32 *)out + 2 * i)     = ReadInt(tokenizer);
-                    *((f32 *)out + 2 * i + 1) = ReadFloat(tokenizer);
-                }
-                size = sizeof(f32) * numValues;
-            }
-        }
-        else
-        {
-            Error(0, "Invalid data type: %S\n", dataType);
-        }
-        packet->parameterNames[currentParam] = stringCache->GetOrCreate(arena, parameterName);
-        if (packet->type == "trianglemesh"_sid)
-        {
-            if (packet->parameterNames[currentParam] == "P"_sid)
-                numVertices = numValues / 3;
-            else if (packet->parameterNames[currentParam] == "indices"_sid)
-                numIndices = numValues;
-        }
-        packet->bytes[currentParam] = out;
-        packet->sizes[currentParam] = size;
-        SkipToNextLine(tokenizer);
-    }
-    if (packet->type == "trianglemesh"_sid && numVertices && numIndices && numVertices == numIndices * 2)
-    {
-        packet->type = stringCache->GetOrCreate(arena, "quadmesh");
-    }
-}
-
 template <typename T, i32 numPerChunk, i32 memoryTag = 0>
 struct ChunkedLinkedList
 {
@@ -1224,7 +1040,7 @@ struct SceneLoadState
     // TODO: other shapes?
     u32 *numQuadMeshes;
     u32 *numTriMeshes;
-    u32 *numCurves;
+    // u32 *numCurves;
 
     InternedStringCache<16384, 8, 64> stringCache;
     Map<Mat4, 1048576, 8, 1024, MemoryType_Transform> transformCache;
@@ -1248,7 +1064,281 @@ struct GraphicsState
     i32 mediaIndex     = -1;
 };
 
+// NOTE: sets the camera, film, sampler, etc.
+template <i32 numNodes, i32 chunkSize, i32 numStripes>
+void CreateScenePacket(Arena *arena,
+                       string word,
+                       ScenePacket *packet,
+                       Tokenizer *tokenizer,
+                       InternedStringCache<numNodes, chunkSize, numStripes> *stringCache,
+                       MemoryType memoryType,
+                       u32 additionalParameters = 0)
+{
+    ReadWord(tokenizer);
+    string type;
+    b32 result = GetBetweenPair(type, tokenizer, '"');
+    Assert(result);
+    packet->type = stringCache->GetOrCreate(arena, type);
+    if (IsEndOfLine(tokenizer))
+    {
+        SkipToNextLine(tokenizer);
+    }
+    else
+    {
+        SkipToNextChar(tokenizer);
+    }
+
+    ReadParameters(arena, packet, tokenizer, stringCache, memoryType, additionalParameters);
+}
+
+inline void SkipToNextDigitArray(Tokenizer *tokenizer)
+{
+    while (!EndOfBuffer(tokenizer) && (!IsDigit(tokenizer) && *tokenizer->cursor != '-' &&
+                                       *tokenizer->cursor != ']')) tokenizer->cursor++;
+}
+
+inline void AdvanceToNextLine(Tokenizer *tokenizer)
+{
+    if (Advance(tokenizer, " ]\n")) return;
+    if (Advance(tokenizer, "]\n")) return;
+    if (Advance(tokenizer, "\n")) return;
+
+    // if it's not on the next line, make sure to still advance
+    if (Advance(tokenizer, "]")) return;
+    if (Advance(tokenizer, " ]")) return;
+}
+
+template <i32 numNodes, i32 chunkSize, i32 numStripes>
+void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
+                    InternedStringCache<numNodes, chunkSize, numStripes> *stringCache,
+                    MemoryType memoryType, u32 additionalParameters = 0)
+{
+    // TODO: this just dosen't work if all the parameters are listed on the same line. i hate ascii file formats
+    // u32 numParameters = CountLinesStartWith(tokenizer, '"') + additionalParameters;
+    // Assert(numParameters);
+    // packet->Initialize(arena, numParameters);
+    static const u32 MAX_PARAMETER_COUNT = 16;
+
+    string infoType;
+    b8 result;
+    u32 numVertices = 0;
+    u32 numIndices  = 0;
+
+    u32 parameterCount = 0;
+
+    StringId parameterNames[MAX_PARAMETER_COUNT];
+    u8 *bytes[MAX_PARAMETER_COUNT];
+    u32 sizes[MAX_PARAMETER_COUNT];
+
+    for (;;)
+    {
+        Assert(packet->parameterCount < MAX_PARAMETER_COUNT);
+        // if (packet->parameterCount == numParameters - additionalParameters)
+        // {
+        //     break;
+        // }
+        result = GetBetweenPair(infoType, tokenizer, '"');
+        if (result == 0) break;
+        if (result == 2)
+        {
+            SkipToNextLine(tokenizer);
+            continue;
+        }
+        string dataType      = GetFirstWord(infoType);
+        u32 currentParam     = packet->parameterCount++;
+        string parameterName = GetNthWord(infoType, 2);
+
+        SkipToNextChar(tokenizer);
+
+        u32 numValues = CountBetweenPair(tokenizer, '[');
+        numValues     = numValues ? numValues : 1;
+        u8 *out       = 0;
+        u32 size      = 0;
+        if (dataType == "float")
+        {
+            f32 *floats = PushArrayNoZeroTagged(arena, f32, numValues, memoryType);
+
+            Advance(tokenizer, "[");
+            SkipToNextDigit(tokenizer);
+            if (numValues == 1)
+            {
+                floats[0] = ReadFloat(tokenizer);
+            }
+            else
+            {
+                for (u32 i = 0; i < numValues; i++)
+                {
+                    floats[i] = ReadFloat(tokenizer);
+                    SkipToNextDigitArray(tokenizer);
+                }
+            }
+            out  = (u8 *)floats;
+            size = sizeof(f32) * numValues;
+            AdvanceToNextLine(tokenizer);
+        }
+        else if (dataType == "point2" || dataType == "vector2")
+        {
+            Assert((numValues & 1) == 0);
+            Vec2f *vectors = PushArrayNoZeroTagged(arena, Vec2f, numValues / 2, memoryType);
+
+            b32 brackets = Advance(tokenizer, "[");
+            Advance(tokenizer, "[");
+            SkipToNextDigit(tokenizer);
+            if (numValues == 2)
+            {
+                for (u32 i = 0; i < numValues; i++)
+                {
+                    vectors[i / 2][i & 1] = ReadFloat(tokenizer);
+                }
+            }
+            else
+            {
+                for (u32 i = 0; i < numValues; i++)
+                {
+                    vectors[i / 2][i & 1] = ReadFloat(tokenizer);
+                    SkipToNextDigitArray(tokenizer);
+                }
+            }
+            out  = (u8 *)vectors;
+            size = sizeof(f32) * numValues;
+            AdvanceToNextLine(tokenizer);
+        }
+        else if (dataType == "rgb" || dataType == "point3" || dataType == "vector3" || dataType == "normal3" ||
+                 dataType == "normal" || dataType == "vector")
+        {
+            Assert(numValues % 3 == 0);
+            Vec3f *vectors = PushArrayNoZeroTagged(arena, Vec3f, numValues / 3, memoryType);
+
+            b32 brackets = Advance(tokenizer, "[");
+            SkipToNextDigit(tokenizer);
+            if (numValues == 3)
+            {
+                for (u32 i = 0; i < numValues; i++)
+                {
+                    vectors[i / 3][i % 3] = ReadFloat(tokenizer);
+                }
+            }
+            else
+            {
+                for (u32 i = 0; i < numValues; i++)
+                {
+                    vectors[i / 3][i % 3] = ReadFloat(tokenizer);
+                    SkipToNextDigitArray(tokenizer);
+                }
+            }
+            out  = (u8 *)vectors;
+            size = sizeof(f32) * numValues;
+            AdvanceToNextLine(tokenizer);
+        }
+        else if (dataType == "integer")
+        {
+            i32 *ints    = PushArrayNoZeroTagged(arena, i32, numValues, memoryType);
+            b32 brackets = Advance(tokenizer, "[");
+            SkipToNextDigit(tokenizer);
+            if (numValues == 1)
+            {
+                ints[0] = ReadInt(tokenizer);
+            }
+            else
+            {
+                for (u32 i = 0; i < numValues; i++)
+                {
+                    ints[i] = ReadInt(tokenizer);
+                    SkipToNextDigitArray(tokenizer);
+                }
+            }
+            out  = (u8 *)ints;
+            size = sizeof(i32) * numValues;
+            AdvanceToNextLine(tokenizer);
+        }
+        else if (dataType == "bool")
+        {
+            out  = PushStructNoZeroTagged(arena, u8, memoryType);
+            size = sizeof(u8);
+            Advance(tokenizer, "[");
+            SkipToNextChar(tokenizer);
+            // NOTE: this assumes that the bool is true or false (and not garbage and not capitalized)
+            if (*tokenizer->cursor == 'f')
+            {
+                *out = 0;
+            }
+            else
+            {
+                *out = 1;
+            }
+            AdvanceToNextLine(tokenizer);
+        }
+        else if (dataType == "string" || dataType == "texture")
+        {
+            Assert(numValues == 1);
+            Advance(tokenizer, "[");
+            SkipToNextChar(tokenizer);
+
+            string str;
+            b32 pairResult = GetBetweenPair(str, tokenizer, '"');
+            Assert(pairResult);
+
+            out  = str.str;
+            size = (u32)str.size;
+            AdvanceToNextLine(tokenizer);
+        }
+        else if (dataType == "blackbody")
+        {
+            Assert(numValues == 1);
+            SkipToNextDigit(tokenizer);
+            i32 val = ReadInt(tokenizer);
+            tokenizer->cursor++;
+
+            i32 *ints = PushArrayNoZeroTagged(arena, i32, 1, memoryType);
+            ints[0]   = val;
+            out       = (u8 *)ints;
+            size      = (u32)sizeof(i32);
+        }
+
+        // NOTE: either a series of wavelength value pairs or the name of a file with wavelength value pairs
+        // TODO: handle cases where brackets are on new line
+        else if (dataType == "spectrum")
+        {
+            if (numValues > 1)
+            {
+                string str;
+                b32 pairResult = GetBetweenPair(str, tokenizer, '"');
+                Assert(pairResult);
+
+                out  = str.str;
+                size = (u32)str.size;
+            }
+            else
+            {
+                Advance(tokenizer, "[");
+                Assert((numValues & 1) == 0);
+                out = PushArrayNoZeroTagged(arena, u8, sizeof(f32) * numValues, memoryType);
+                for (u32 i = 0; i < numValues / 2; i++)
+                {
+                    *((i32 *)out + 2 * i)     = ReadInt(tokenizer);
+                    *((f32 *)out + 2 * i + 1) = ReadFloat(tokenizer);
+                }
+                size = sizeof(f32) * numValues;
+                AdvanceToNextLine(tokenizer);
+            }
+        }
+        else
+        {
+            Error(0, "Invalid data type: %S\n", dataType);
+        }
+        parameterNames[currentParam] = stringCache->GetOrCreate(arena, parameterName);
+        bytes[currentParam]          = out;
+        sizes[currentParam]          = size;
+    }
+    // Assert(packet->parameterCount + additionalParameters == numParameters);
+    packet->Initialize(arena, packet->parameterCount);
+    MemoryCopy(packet->parameterNames, parameterNames, sizeof(StringId) * packet->parameterCount);
+    MemoryCopy(packet->bytes, bytes, sizeof(u8 *) * packet->parameterCount);
+    MemoryCopy(packet->sizes, sizes, sizeof(u32) * packet->parameterCount);
+}
+
 void LoadPBRT(string filename, string directory, SceneLoadState *state, GraphicsState graphicsState = {}, bool inWorldBegin = false);
+void Serialize(Arena *arena, string directory, SceneLoadState *state);
 
 // TODO IMPORTANT: for some god forsaken reason with clang this generate a vmovaps unaligned error?? i don't want to deal
 // with that rn so im putting this here.
@@ -1258,6 +1348,8 @@ Scene *LoadPBRT(Arena *arena, string filename)
     Scene *scene = PushStruct(arena, Scene);
     SceneLoadState state;
     u32 numProcessors   = OS_NumProcessors();
+    state.numTriMeshes  = PushArray(arena, u32, numProcessors);
+    state.numQuadMeshes = PushArray(arena, u32, numProcessors);
     state.shapes        = PushArray(arena, ChunkedLinkedList<ScenePacket COMMA 1024 COMMA MemoryType_Shape>, numProcessors);
     state.materials     = PushArray(arena, ChunkedLinkedList<ScenePacket COMMA 1024 COMMA MemoryType_Material>, numProcessors);
     state.textures      = PushArray(arena, ChunkedLinkedList<ScenePacket COMMA 1024 COMMA MemoryType_Texture>, numProcessors);
@@ -1270,21 +1362,23 @@ Scene *LoadPBRT(Arena *arena, string filename)
 
     for (u32 i = 0; i < numProcessors; i++)
     {
-        state.threadArenas[i]  = ArenaAlloc();
-        state.shapes[i]        = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape>(state.threadArenas[i]);
-        state.materials[i]     = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Material>(state.threadArenas[i]);
-        state.textures[i]      = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Texture>(state.threadArenas[i]);
-        state.lights[i]        = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light>(state.threadArenas[i]);
-        state.instanceTypes[i] = ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance>(state.threadArenas[i]);
-        state.instances[i]     = ChunkedLinkedList<SceneInstance, 1024, MemoryType_Instance>(state.threadArenas[i]);
-        state.transforms[i]    = ChunkedLinkedList<const Mat4 *, 16384, MemoryType_Transform>(state.threadArenas[i]);
+        state.threadArenas[i]        = ArenaAlloc();
+        state.threadArenas[i]->align = 16;
+        state.shapes[i]              = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape>(state.threadArenas[i]);
+        state.materials[i]           = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Material>(state.threadArenas[i]);
+        state.textures[i]            = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Texture>(state.threadArenas[i]);
+        state.lights[i]              = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light>(state.threadArenas[i]);
+        state.instanceTypes[i]       = ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance>(state.threadArenas[i]);
+        state.instances[i]           = ChunkedLinkedList<SceneInstance, 1024, MemoryType_Instance>(state.threadArenas[i]);
+        state.transforms[i]          = ChunkedLinkedList<const Mat4 *, 16384, MemoryType_Transform>(state.threadArenas[i]);
     }
     state.mainArena      = arena;
     state.scene          = scene;
     state.stringCache    = InternedStringCache<16384, 8, 64>(arena);
     state.transformCache = Map<Mat4, 1048576, 8, 1024, MemoryType_Transform>(arena);
 
-    LoadPBRT(filename, Str8PathChopPastLastSlash(filename), &state);
+    string baseDirectory = Str8PathChopPastLastSlash(filename);
+    LoadPBRT(filename, baseDirectory, &state);
 
     // TODO: combine the arrays
     scheduler.Wait(&state.counter);
@@ -1314,6 +1408,8 @@ Scene *LoadPBRT(Arena *arena, string filename)
     printf("Total num instance types: %lld\n", totalNumInstanceTypes);
     printf("Total num instances: %lld\n", totalNumInstances);
     printf("Total num transforms: %lld\n", totalNumTransforms);
+
+    // Serialize(arena, baseDirectory, &state);
 
     for (u32 i = 0; i < numProcessors; i++)
     {
@@ -1565,7 +1661,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
             case "MakeNamedMaterial"_sid:
             {
                 bool isNamedMaterial = (sid == "MakeNamedMaterial"_sid);
-                // scenePacketCache
                 ReadWord(&tokenizer);
                 string materialNameOrType;
                 b32 result = GetBetweenPair(materialNameOrType, &tokenizer, '"');
@@ -1697,6 +1792,40 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 Error(worldBegin, "Tried to specify %S after WorldBegin\n", word);
                 ScenePacket *packet = &shapes.AddBack();
                 CreateScenePacket(arena, word, packet, &tokenizer, &stringCache, MemoryType_Shape, 1);
+
+                u32 numVertices = 0;
+                u32 numIndices  = 0;
+                for (u32 i = 0; i < packet->parameterCount; i++)
+                {
+                    if (packet->parameterNames[i] == "P"_sid)
+                    {
+                        numVertices = packet->sizes[i] / sizeof(Vec3f);
+                    }
+                    else if (packet->parameterNames[i] == "indices"_sid)
+                    {
+                        numIndices = packet->sizes[i] / sizeof(u32);
+                    }
+                    else if (packet->parameterNames[i] == "filename"_sid)
+                    {
+                        string plyMeshFile;
+                        plyMeshFile.str  = packet->bytes[i];
+                        plyMeshFile.size = packet->sizes[i];
+                        if (CheckQuadPLY(StrConcat(temp.arena, directory, plyMeshFile)))
+                            state->numQuadMeshes[threadIndex]++;
+                        else
+                            state->numTriMeshes[threadIndex]++;
+                    }
+                }
+                if (packet->type == "trianglemesh"_sid && numVertices && numIndices && numVertices / 2 == numIndices / 3)
+                {
+                    packet->type = stringCache.GetOrCreate(arena, "quadmesh");
+                    state->numQuadMeshes[GetThreadIndex()]++;
+                }
+                else if (packet->type == "trianglemesh"_sid)
+                {
+                    state->numTriMeshes[GetThreadIndex()]++;
+                }
+
                 i32 *indices = PushArray(arena, i32, 4);
                 // ORDER: Light, Medium, Transform, Material Index, Material StringID (if present)
                 indices[0] = currentGraphicsState.areaLightIndex;
@@ -1772,6 +1901,11 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 ReadWord(&tokenizer);
                 string textureName;
                 b32 result = GetBetweenPair(textureName, &tokenizer, '"');
+
+                if (textureName == "isHibiscus:leafHibiscus_Color")
+                {
+                    int stop = 5;
+                }
                 Assert(result);
                 string textureType;
                 result = GetBetweenPair(textureType, &tokenizer, '"');
@@ -1840,19 +1974,19 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
     ScratchEnd(temp);
 }
 
-void SerializeShapes(Arena *arena, SceneLoadState *state) // ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape> *list)
+void Serialize(Arena *arena, string directory, SceneLoadState *state)
 {
     TempArena temp    = ScratchStart(0, 0);
     u32 numProcessors = OS_NumProcessors();
 
     u32 totalNumQuadMeshes = 0;
     u32 totalNumTriMeshes  = 0;
-    u32 totalNumCurves     = 0;
+    // u32 totalNumCurves     = 0;
     for (u32 i = 0; i < numProcessors; i++)
     {
         totalNumQuadMeshes += state->numQuadMeshes[i];
         totalNumTriMeshes += state->numTriMeshes[i];
-        totalNumCurves += state->numCurves[i];
+        // totalNumCurves += state->numCurves[i];
     }
 
     enum PrimitiveTy
@@ -1954,32 +2088,39 @@ void SerializeShapes(Arena *arena, SceneLoadState *state) // ChunkedLinkedList<S
                                     Assert(mesh->numVertices == packet->sizes[parameterIndex] / sizeof(Vec2f));
                                 }
                                 break;
+                                default: Assert(0);
                             }
                         }
                     }
                     break;
                     case "plymesh"_sid:
                     {
-                        Assert(packet->parameterCount == 1);
-                        string filename;
-                        filename.str  = packet->bytes[0];
-                        filename.size = packet->sizes[0];
-                        QuadMesh mesh = LoadQuadPLY(arena, filename);
-                        // NOTE: should only happen for the ocean geometry
-                        if (mesh.p == 0)
+                        for (u32 parameterIndex = 0; parameterIndex < packet->parameterCount; parameterIndex++)
                         {
-                            TriangleMesh triMesh   = LoadPLY(arena, filename);
-                            pTypes[i]              = P_TriMesh;
-                            pOffsets[i]            = triOffset;
-                            triMeshes[triOffset++] = triMesh;
+                            if (packet->parameterNames[parameterIndex] == "filename"_sid)
+                            {
+                                string filename;
+                                filename.str        = packet->bytes[parameterIndex];
+                                filename.size       = packet->sizes[parameterIndex];
+                                string fullFilePath = StrConcat(temp.arena, directory, filename);
+                                QuadMesh mesh       = LoadQuadPLY(arena, filename);
+                                // NOTE: should only happen for the ocean geometry (twice)
+                                if (mesh.p == 0)
+                                {
+                                    TriangleMesh triMesh   = LoadPLY(arena, filename);
+                                    pTypes[i]              = P_TriMesh;
+                                    pOffsets[i]            = triOffset;
+                                    triMeshes[triOffset++] = triMesh;
+                                }
+                                else
+                                {
+                                    pTypes[i]             = P_QuadMesh;
+                                    pOffsets[i]           = quadOffset;
+                                    qMeshes[quadOffset++] = mesh;
+                                }
+                                break;
+                            }
                         }
-                        else
-                        {
-                            pTypes[i]             = P_QuadMesh;
-                            pOffsets[i]           = quadOffset;
-                            qMeshes[quadOffset++] = mesh;
-                        }
-                        // pTypes[i] = ;
                     }
                     break;
                     // TODO: curves
@@ -2078,11 +2219,11 @@ void SerializeShapes(Arena *arena, SceneLoadState *state) // ChunkedLinkedList<S
             ConvertPointerToOffset(result.str, qMeshFileOffset + OffsetOf(QuadMesh, n), normalWrites[i]);
             qMeshFileOffset += sizeof(QuadMesh);
         }
-        string quadFilename = "data\\island\\pbrt-v4\\quads.mesh";
+        string quadFilename = StrConcat(temp.arena, directory, "quads.mesh");
         b32 success         = OS_WriteFile(quadFilename, result.str, (u32)result.size);
         if (!success)
         {
-            Print("Failed to write file %S\n", quadFilename);
+            printf("Failed to write quad file \n");
             Assert(0);
         }
     }
@@ -2101,11 +2242,11 @@ void SerializeShapes(Arena *arena, SceneLoadState *state) // ChunkedLinkedList<S
         u64 *indexWrites    = PushArrayNoZero(temp.arena, u64, triOffset);
         for (u32 i = 0; i < triOffset; i++)
         {
-            TriangleMesh *mesh     = &triMeshes[i];
-            positionWrites[i] = AppendArray(&builder, mesh->p, mesh->numVertices);
-            normalWrites[i]   = AppendArray(&builder, mesh->n, mesh->numVertices);
-            uvWrites[i]       = AppendArray(&builder, mesh->uv, mesh->numVertices);
-            indexWrites[i]    = AppendArray(&builder, mesh->indices, mesh->numIndices);
+            TriangleMesh *mesh = &triMeshes[i];
+            positionWrites[i]  = AppendArray(&builder, mesh->p, mesh->numVertices);
+            normalWrites[i]    = AppendArray(&builder, mesh->n, mesh->numVertices);
+            uvWrites[i]        = AppendArray(&builder, mesh->uv, mesh->numVertices);
+            indexWrites[i]     = AppendArray(&builder, mesh->indices, mesh->numIndices);
         }
         string result = CombineBuilderNodes(&builder);
         for (u32 i = 0; i < triOffset; i++)
@@ -2116,14 +2257,15 @@ void SerializeShapes(Arena *arena, SceneLoadState *state) // ChunkedLinkedList<S
             ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, indices), indexWrites[i]);
             triMeshFileOffset += sizeof(TriangleMesh);
         }
-        string triFilename = "data\\island\\pbrt-v4\\tris.mesh";
+        string triFilename = StrConcat(temp.arena, directory, "tris.mesh");
         b32 success        = OS_WriteFile(triFilename, result.str, (u32)result.size);
         if (!success)
         {
-            Print("Failed to write file %S\n", triFilename);
+            printf("Failed to write tri file");
             Assert(0);
         }
     }
+    ScratchEnd(temp);
 }
 
 } // namespace rt
