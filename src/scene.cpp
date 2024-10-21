@@ -2167,7 +2167,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
         ScratchEnd(temp);
     });
 
-    string filename = PushStr8F(temp.arena, "%Squad.mesh");
+    string filename = PushStr8F(temp.arena, "%Squad.mesh", directory);
 
     u32 totalVertexCount = 0;
     for (u32 i = 0; i < numProcessors; i++)
@@ -2181,10 +2181,9 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
         u32 quadMeshCount;
     };
     // Initial estimate of file
-    // size of all geometry + size of quad mesh references + size of lookup table
-    u32 fileSize = sizeof(Vec3f) * 2 * totalVertexCount + totalNumQuadMeshes * sizeof(QuadMesh) +
-                   totalNumInstTypes * sizeof(LookupEntry);
-    fileSize = u32(fileSize * 1.2f);
+    // size of all geometry + size of quad mesh references + size of lookup table + size of aligning
+    u64 fileSize = sizeof(Vec3f) * 2 * totalVertexCount + totalNumQuadMeshes * sizeof(QuadMesh) +
+                   totalNumInstTypes * (sizeof(LookupEntry) + 4);
 
     u8 *ptr = OS_MapFileWrite(filename, fileSize);
 
@@ -2229,14 +2228,6 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                 if (numVertices == node->numVertices)
                 {
                     bool equal = memcmp(data, node->v, numVertices * sizeof(Vec3f)) == 0;
-                    // for (u32 i = 0; i < mesh->numVertices; i++)
-                    // {
-                    //     if (mesh->p[i] != node->v[i])
-                    //     {
-                    //         equal = false;
-                    //         break;
-                    //     }
-                    // }
                     if (equal)
                     {
                         return node;
@@ -2257,6 +2248,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     HashTable pTable(temp.arena, 524288);
     HashTable nTable(temp.arena, 524288);
 
+    u32 testVertexCount = 0;
     for (u32 pIndex = 0; pIndex < numProcessors; pIndex++)
     {
         InstanceTypeList *list   = &state->instanceTypes[pIndex];
@@ -2342,6 +2334,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
 
                     QuadMesh *meshes = (QuadMesh *)(AlignPow2((u64)currentPtr, 8));
 
+                    Assert(lookUpPtr < lookUpEnd);
                     lookUpPtr->offset        = u64((u8 *)meshes - ptr);
                     lookUpPtr->quadMeshCount = quadMeshCount;
                     lookUpPtr++;
@@ -2373,7 +2366,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                                 if (mesh->n)
                                 {
                                     u64 nHash = MurmurHash64A((const u8 *)mesh->n, sizeof(Vec3f) * mesh->numVertices, 0);
-                                    nNode     = nTable.FindOrCreate(nHash, mesh->p, mesh->numVertices);
+                                    nNode     = nTable.FindOrCreate(nHash, mesh->n, mesh->numVertices);
                                 }
 
                                 if (pNode->v == mesh->p)
@@ -2381,23 +2374,25 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                                     MemoryCopy(dataPtr, mesh->p, sizeof(Vec3f) * mesh->numVertices);
                                     pNode->v = dataPtr;
                                     dataPtr += mesh->numVertices;
+                                    testVertexCount += mesh->numVertices;
                                 }
                                 u64 offset = u64((u8 *)pNode->v - ptr);
                                 ConvertPointerToOffset((u8 *)&newMesh->p, 0, offset);
-                                if (mesh->n && nNode->v == mesh->n)
+                                if (mesh->n)
                                 {
-                                    MemoryCopy(dataPtr, mesh->n, sizeof(Vec3f) * mesh->numVertices);
-                                    nNode->v = dataPtr;
-                                    dataPtr += mesh->numVertices;
+                                    if (nNode->v == mesh->n)
+                                    {
+                                        MemoryCopy(dataPtr, mesh->n, sizeof(Vec3f) * mesh->numVertices);
+                                        nNode->v = dataPtr;
+                                        dataPtr += mesh->numVertices;
+                                    }
+                                    offset = u64((u8 *)nNode->v - ptr);
+                                    ConvertPointerToOffset((u8 *)&newMesh->n, 0, offset);
                                 }
-                                offset = u64((u8 *)nNode->v - ptr);
-                                ConvertPointerToOffset((u8 *)&newMesh->n, 0, offset);
                                 currentPtr = (u8 *)dataPtr;
                             }
                         }
                     }
-
-                    OS_UnmapFile(ptr);
 
                     // Clear the list
                     MemoryZero(currentObject, sizeof(ObjectInstanceType *) * currentInstanceCount);
@@ -2408,6 +2403,10 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
         }
     }
 
+    OS_UnmapFile(ptr);
+    u64 finalSize = u64(currentPtr - ptr);
+    OS_ResizeFile(filename, finalSize);
+    printf("final file size: %llu\n", finalSize);
     printf("quad instanced total: %u\n", quadInstancedCount);
 
     // convert pointers to offsets (for pointer fix ups) and write to file
@@ -2415,51 +2414,47 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     builder.arena         = temp.arena;
 
     // repeat for triangle meshes
-    {
-        builder       = {};
-        builder.arena = temp.arena;
 
-        u64 triMeshFileOffset = AppendArray(&builder, triMeshes, totalNumTriMeshes);
-        Assert(triMeshFileOffset == 0);
-
-        u64 *positionWrites = PushArrayNoZero(temp.arena, u64, totalNumTriMeshes);
-        u64 *normalWrites   = PushArray(temp.arena, u64, totalNumTriMeshes);
-        u64 *uvWrites       = PushArray(temp.arena, u64, totalNumTriMeshes);
-        u64 *indexWrites    = PushArray(temp.arena, u64, totalNumTriMeshes);
-        for (u32 i = 0; i < totalNumTriMeshes; i++)
-        {
-            TriangleMesh *mesh = &triMeshes[i];
-            positionWrites[i]  = AppendArray(&builder, mesh->p, mesh->numVertices);
-            if (mesh->n)
-            {
-                normalWrites[i] = AppendArray(&builder, mesh->n, mesh->numVertices);
-            }
-            if (mesh->uv)
-            {
-                uvWrites[i] = AppendArray(&builder, mesh->uv, mesh->numVertices);
-            }
-            if (mesh->indices)
-            {
-                indexWrites[i] = AppendArray(&builder, mesh->indices, mesh->numIndices);
-            }
-        }
-        string result = CombineBuilderNodes(&builder);
-        for (u32 i = 0; i < totalNumTriMeshes; i++)
-        {
-            ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, p), positionWrites[i]);
-            ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, n), normalWrites[i]);
-            ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, uv), uvWrites[i]);
-            ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, indices), indexWrites[i]);
-            triMeshFileOffset += sizeof(TriangleMesh);
-        }
-        string triFilename = StrConcat(temp.arena, directory, "tris.mesh");
-        b32 success        = OS_WriteFile(triFilename, result.str, (u32)result.size);
-        if (!success)
-        {
-            printf("Failed to write tri file");
-            Assert(0);
-        }
-    }
+    //     u64 triMeshFileOffset = AppendArray(&builder, triMeshes, totalNumTriMeshes);
+    //     Assert(triMeshFileOffset == 0);
+    //
+    //     u64 *positionWrites = PushArrayNoZero(temp.arena, u64, totalNumTriMeshes);
+    //     u64 *normalWrites   = PushArray(temp.arena, u64, totalNumTriMeshes);
+    //     u64 *uvWrites       = PushArray(temp.arena, u64, totalNumTriMeshes);
+    //     u64 *indexWrites    = PushArray(temp.arena, u64, totalNumTriMeshes);
+    //     for (u32 i = 0; i < totalNumTriMeshes; i++)
+    //     {
+    //         TriangleMesh *mesh = &triMeshes[i];
+    //         positionWrites[i]  = AppendArray(&builder, mesh->p, mesh->numVertices);
+    //         if (mesh->n)
+    //         {
+    //             normalWrites[i] = AppendArray(&builder, mesh->n, mesh->numVertices);
+    //         }
+    //         if (mesh->uv)
+    //         {
+    //             uvWrites[i] = AppendArray(&builder, mesh->uv, mesh->numVertices);
+    //         }
+    //         if (mesh->indices)
+    //         {
+    //             indexWrites[i] = AppendArray(&builder, mesh->indices, mesh->numIndices);
+    //         }
+    //     }
+    //     string result = CombineBuilderNodes(&builder);
+    //     for (u32 i = 0; i < totalNumTriMeshes; i++)
+    //     {
+    //         ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, p), positionWrites[i]);
+    //         ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, n), normalWrites[i]);
+    //         ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, uv), uvWrites[i]);
+    //         ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, indices), indexWrites[i]);
+    //         triMeshFileOffset += sizeof(TriangleMesh);
+    //     }
+    //     string triFilename = StrConcat(temp.arena, directory, "tris.mesh");
+    //     b32 success        = OS_WriteFile(triFilename, result.str, (u32)result.size);
+    //     if (!success)
+    //     {
+    //         printf("Failed to write tri file");
+    //         Assert(0);
+    //     }
     ScratchEnd(temp);
 }
 

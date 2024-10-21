@@ -225,6 +225,7 @@ string OS_MapFileRead(string filename)
     Error(mapping != INVALID_HANDLE_VALUE, "Could not map file: %S\n", filename);
 
     LPVOID ptr = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+    CloseHandle(mapping);
 
     string result;
     result.str  = (u8 *)ptr;
@@ -237,7 +238,7 @@ void OS_UnmapFile(void *ptr)
     UnmapViewOfFile(ptr);
 }
 
-u8 *OS_MapFileWrite(string filename, u32 size)
+u8 *OS_MapFileWrite(string filename, u64 size)
 {
     HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ | GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
     Error(file != INVALID_HANDLE_VALUE, "Could not create file: %S\n", filename);
@@ -247,13 +248,33 @@ u8 *OS_MapFileWrite(string filename, u32 size)
     SetFilePointerEx(file, newFileSize, 0, FILE_BEGIN);
     SetEndOfFile(file);
 
-    HANDLE mapping = CreateFileMapping(file, 0, PAGE_READWRITE, 0, size, 0);
+    HANDLE mapping = CreateFileMapping(file, 0, PAGE_READWRITE, newFileSize.HighPart, newFileSize.LowPart, 0);
     CloseHandle(file);
     Error(mapping != INVALID_HANDLE_VALUE, "Could not map file: %S\n", filename);
 
     LPVOID ptr = MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+    CloseHandle(mapping);
 
     return (u8 *)ptr;
+}
+
+void OS_ResizeFile(string filename, u64 size)
+{
+    HANDLE file = CreateFileA((char *)filename.str, GENERIC_WRITE, 0, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    // Error(file != INVALID_HANDLE_VALUE, "Could not create file: %S\n", filename);
+    if (file == INVALID_HANDLE_VALUE)
+    {
+        DWORD lastError = GetLastError();
+        printf("error code %u\n", lastError);
+    }
+
+    LARGE_INTEGER newFileSize;
+    newFileSize.QuadPart = size;
+    bool result          = SetFilePointerEx(file, newFileSize, 0, FILE_BEGIN);
+    Assert(result);
+    result = SetEndOfFile(file);
+    Assert(result);
+    CloseHandle(file);
 }
 
 OS_Handle GetMainThreadHandle()
