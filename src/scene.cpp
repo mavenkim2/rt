@@ -998,8 +998,13 @@ struct ObjectInstanceType
 {
     StringId name;
     // string name;
-    i32 transformIndex;
-    Array<i32, MemoryType_Instance> shapeIndices;
+    i32 transformIndex  = -1;
+    u32 shapeIndexStart = 0xffffffff;
+    u32 shapeIndexEnd   = 0xffffffff;
+    // Array<i32, MemoryType_Instance> shapeIndices;
+
+    bool Invalid() const { return shapeIndexStart == 0xffffffff; }
+    void Invalidate() { shapeIndexStart = 0xffffffff; }
 };
 
 struct SceneInstance
@@ -1062,6 +1067,8 @@ struct GraphicsState
 
     i32 areaLightIndex = -1;
     i32 mediaIndex     = -1;
+
+    ObjectInstanceType *instanceType = 0;
 };
 
 // NOTE: sets the camera, film, sampler, etc.
@@ -1429,9 +1436,8 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
     auto &instanceTypes = state->instanceTypes[threadIndex];
     auto &instances     = state->instances[threadIndex];
 
-    const string *currentInstanceTypeName = 0;
-    auto &transforms                      = state->transforms[threadIndex];
-    auto &stringCache                     = state->stringCache;
+    auto &transforms  = state->transforms[threadIndex];
+    auto &stringCache = state->stringCache;
 
     bool worldBegin = inWorldBegin;
 
@@ -1443,6 +1449,14 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
     u32 graphicsStateCount = 0;
 
     GraphicsState currentGraphicsState = graphicsState;
+    ObjectInstanceType *&currentObject = currentGraphicsState.instanceType;
+    if (currentObject)
+    {
+        StringId name                  = currentObject->name;
+        currentObject                  = &instanceTypes.AddBack();
+        currentObject->name            = name;
+        currentObject->shapeIndexStart = shapes.Length() - 1;
+    }
 
     auto AddTransform = [&]() {
         if (currentGraphicsState.transformIndex != -1)
@@ -1452,14 +1466,16 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
         }
     };
 
-    ObjectInstanceType *currentObject = 0;
-
     // TODO: media
 
     for (;;)
     {
         if (EndOfBuffer(&tokenizer))
         {
+            if (currentObject)
+            {
+                currentObject->shapeIndexEnd = shapes.Length();
+            }
             OS_UnmapFile(tokenizer.input.str);
             if (numTokenizers == 0) break;
             tokenizer = oldTokenizers[--numTokenizers];
@@ -1712,18 +1728,18 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 b32 result = GetBetweenPair(objectName, &tokenizer, '"');
                 Assert(result);
 
-                currentObject = &instanceTypes.AddBack();
-                // StringId id                   = stringCache.GetOrCreate(arena, objectName);
-                // currentObject->name           = stringCache.Get(id);
-                currentObject->name           = stringCache.GetOrCreate(arena, objectName);
-                currentObject->transformIndex = currentGraphicsState.transformIndex;
-                currentObject->shapeIndices   = Array<i32, MemoryType_Instance>(arena);
+                currentObject                  = &instanceTypes.AddBack();
+                currentObject->name            = stringCache.GetOrCreate(arena, objectName);
+                currentObject->transformIndex  = currentGraphicsState.transformIndex;
+                currentObject->shapeIndexStart = shapes.Length() - 1;
             }
             break;
             case "ObjectEnd"_sid:
             {
                 Error(worldBegin, "Tried to specify %S before WorldBegin\n", word);
                 ReadWord(&tokenizer);
+
+                currentObject->shapeIndexEnd = shapes.Length();
                 Error(currentObject != 0, "ObjectEnd must occur after ObjectBegin");
                 currentObject = 0;
             }
@@ -1827,11 +1843,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 // NOTE: the highest bit is set if it's an index
                 indices[3] = currentGraphicsState.materialIndex == -1 ? currentGraphicsState.materialId
                                                                       : (u32)currentGraphicsState.materialIndex | 0x80000000;
-
-                if (currentObject)
-                {
-                    currentObject->shapeIndices.Push(shapes.Length() - 1);
-                }
 
                 u32 currentParameter                     = packet->parameterCount++;
                 packet->parameterNames[currentParameter] = stringCache.GetOrCreate(arena, "Indices");
@@ -2002,10 +2013,16 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
 
     using ShapeTypeList = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape>;
 
-    u32 quadOffset = 0;
-    u32 triOffset  = 0;
-    for (u32 pIndex = 0; pIndex < numProcessors; pIndex++)
-    {
+    // u32 quadOffset = 0;
+    // u32 triOffset  = 0;
+
+    std::atomic<u32> quadOffset{0};
+    std::atomic<u32> triOffset{0};
+
+    // u32 *quadCounts = PushArray(arena, u32, numProcessors);
+    scheduler.ScheduleAndWait(numProcessors, 1, [&](u32 jobID) {
+        u32 pIndex          = jobID;
+        Arena *arena        = state->threadArenas[pIndex];
         ShapeTypeList *list = &state->shapes[pIndex];
         types[pIndex]       = PushArray(arena, PrimitiveTy, list->totalCount);
         offsets[pIndex]     = PushArray(arena, u32, list->totalCount);
@@ -2022,8 +2039,10 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                     case "quadmesh"_sid:
                     {
                         pTypes[i]      = P_QuadMesh;
-                        pOffsets[i]    = quadOffset;
-                        QuadMesh *mesh = &qMeshes[quadOffset++];
+                        u32 quadIndex  = quadOffset.fetch_add(1, std::memory_order_acq_rel);
+                        pOffsets[i]    = quadIndex;
+                        QuadMesh *mesh = &qMeshes[quadIndex];
+                        // quadCounts[pIndex]++;
                         for (u32 parameterIndex = 0; parameterIndex < packet->parameterCount; parameterIndex++)
                         {
                             switch (packet->parameterNames[parameterIndex])
@@ -2049,8 +2068,9 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                     case "trianglemesh"_sid:
                     {
                         pTypes[i]          = P_TriMesh;
-                        pOffsets[i]        = triOffset;
-                        TriangleMesh *mesh = &triMeshes[triOffset++];
+                        u32 triIndex       = triOffset.fetch_add(1, std::memory_order_acq_rel);
+                        pOffsets[i]        = triIndex;
+                        TriangleMesh *mesh = &triMeshes[triIndex++];
                         for (u32 parameterIndex = 0; parameterIndex < packet->parameterCount; parameterIndex++)
                         {
                             switch (packet->parameterNames[parameterIndex])
@@ -2100,16 +2120,19 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                                 // NOTE: should only happen for the ocean geometry (twice)
                                 if (mesh.p == 0)
                                 {
-                                    TriangleMesh triMesh   = LoadPLY(arena, fullFilePath);
-                                    pTypes[i]              = P_TriMesh;
-                                    pOffsets[i]            = triOffset;
-                                    triMeshes[triOffset++] = triMesh;
+                                    TriangleMesh triMesh = LoadPLY(arena, fullFilePath);
+                                    pTypes[i]            = P_TriMesh;
+                                    u32 triIndex         = triOffset.fetch_add(1, std::memory_order_acq_rel);
+                                    pOffsets[i]          = triIndex;
+                                    triMeshes[triIndex]  = triMesh;
                                 }
                                 else
                                 {
-                                    pTypes[i]             = P_QuadMesh;
-                                    pOffsets[i]           = quadOffset;
-                                    qMeshes[quadOffset++] = mesh;
+                                    pTypes[i]          = P_QuadMesh;
+                                    u32 quadIndex      = quadOffset.fetch_add(1, std::memory_order_acq_rel);
+                                    pOffsets[i]        = quadIndex;
+                                    qMeshes[quadIndex] = mesh;
+                                    // quadCounts[pIndex]++;
                                 }
                                 break;
                             }
@@ -2122,9 +2145,12 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                 }
             }
         }
-    }
+    });
 
-    u32 outQuadOffset = 0;
+    u32 outQuadOffset      = 0;
+    u32 quadInstancedCount = 0;
+
+    ObjectInstanceType *currentObject[64] = {};
     // Merge meshes belonging to the same object instance type
     for (u32 pIndex = 0; pIndex < numProcessors; pIndex++)
     {
@@ -2137,61 +2163,95 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
             for (u32 i = 0; i < node->count; i++)
             {
                 ObjectInstanceType *instType = &node->values[i];
-                bool allQuads                = true;
-                bool someQuads               = false;
-                for (u32 shapeIndexIndex = 0; shapeIndexIndex < instType->shapeIndices.Length(); shapeIndexIndex++)
+                if (!instType->Invalid())
                 {
-                    u32 shapeIndex = instType->shapeIndices[shapeIndexIndex];
-                    Assert(shapeIndex < shapeList->totalCount);
-                    if (pTypes[shapeIndex] != P_QuadMesh)
+                    currentObject[pIndex] = instType;
+                    for (u32 pIndex2 = pIndex + 1; pIndex2 < numProcessors; pIndex2++)
                     {
-                        allQuads = false;
-                        break;
+                        InstanceTypeList *list2 = &state->instanceTypes[pIndex2];
+                        bool completed          = false;
+                        for (InstanceTypeList::ChunkNode *node2 = list2->first; node2 != 0; node2 = node2->next)
+                        {
+                            for (u32 j = 0; j < node2->count; j++)
+                            {
+                                ObjectInstanceType *instType2 = &node2->values[j];
+                                if (instType2->name == instType->name)
+                                {
+                                    currentObject[pIndex2] = instType2;
+                                    completed              = true;
+                                    break;
+                                }
+                            }
+                            if (completed) break;
+                        }
                     }
-                    else
-                    {
-                        someQuads = true;
-                    }
-                }
-                if (allQuads)
-                {
-                    QuadMesh *accumMesh  = &finalOutQuadMeshes[outQuadOffset++];
                     u32 totalVertexCount = 0;
-                    for (u32 shapeIndexIndex = 0; shapeIndexIndex < instType->shapeIndices.Length(); shapeIndexIndex++)
+                    QuadMesh *accumMesh  = &finalOutQuadMeshes[outQuadOffset];
+                    bool someQuads       = false;
+                    for (u32 instanceIndex = 0; instanceIndex < numProcessors; instanceIndex++)
                     {
-                        QuadMesh *mesh = &qMeshes[pOffsets[instType->shapeIndices[shapeIndexIndex]]];
-                        totalVertexCount += mesh->numVertices;
+                        u32 *currentOffsetGroup        = offsets[instanceIndex];
+                        PrimitiveTy *currentTyGroup    = types[instanceIndex];
+                        ObjectInstanceType *currentObj = currentObject[instanceIndex];
+                        if (!currentObj) continue;
+                        Assert(currentObj->shapeIndexStart < currentObj->shapeIndexEnd);
+                        for (u32 shapeIndex = currentObj->shapeIndexStart; shapeIndex < currentObj->shapeIndexEnd; shapeIndex++)
+                        {
+                            if (currentTyGroup[shapeIndex] == P_QuadMesh)
+                            {
+                                someQuads      = true;
+                                QuadMesh *mesh = &qMeshes[currentOffsetGroup[shapeIndex]];
+                                totalVertexCount += mesh->numVertices;
+                                quadInstancedCount++;
+                            }
+                        }
                     }
+                    if (!someQuads)
+                    {
+                        continue; // TODO
+                    }
+                    outQuadOffset++;
                     accumMesh->p           = PushArrayNoZero(arena, Vec3f, totalVertexCount);
                     accumMesh->n           = PushArrayNoZero(arena, Vec3f, totalVertexCount);
                     accumMesh->numVertices = totalVertexCount;
                     totalVertexCount       = 0;
-                    for (u32 shapeIndexIndex = 0; shapeIndexIndex < instType->shapeIndices.Length(); shapeIndexIndex++)
+                    for (u32 instanceIndex = 0; instanceIndex < numProcessors; instanceIndex++)
                     {
-                        QuadMesh *mesh = &qMeshes[pOffsets[instType->shapeIndices[shapeIndexIndex]]];
-                        MemoryCopy(accumMesh->p + totalVertexCount, mesh->p, sizeof(Vec3f) * mesh->numVertices);
-                        MemoryCopy(accumMesh->n + totalVertexCount, mesh->n, sizeof(Vec3f) * mesh->numVertices);
-                        totalVertexCount += mesh->numVertices;
-                    }
-                }
-                else if (someQuads)
-                {
-                    for (u32 shapeIndexIndex = 0; shapeIndexIndex < instType->shapeIndices.Length(); shapeIndexIndex++)
-                    {
-                        u32 shapeIndex = instType->shapeIndices[shapeIndexIndex];
-                        if (pTypes[shapeIndex] == P_QuadMesh)
+                        u32 *currentOffsetGroup        = offsets[instanceIndex];
+                        PrimitiveTy *currentTyGroup    = types[instanceIndex];
+                        ObjectInstanceType *currentObj = currentObject[instanceIndex];
+                        if (!currentObj) continue;
+                        u32 shapeStart = currentObj->shapeIndexStart;
+                        currentObj->Invalidate();
+                        for (u32 shapeIndex = shapeStart; shapeIndex < currentObj->shapeIndexEnd; shapeIndex++)
                         {
-                            finalOutQuadMeshes[outQuadOffset++] = qMeshes[pOffsets[shapeIndex]];
+                            if (currentTyGroup[shapeIndex] == P_QuadMesh)
+                            {
+                                QuadMesh *mesh = &qMeshes[currentOffsetGroup[shapeIndex]];
+                                MemoryCopy(accumMesh->p + totalVertexCount, mesh->p, sizeof(Vec3f) * mesh->numVertices);
+                                if (mesh->n)
+                                {
+                                    MemoryCopy(accumMesh->n + totalVertexCount, mesh->n, sizeof(Vec3f) * mesh->numVertices);
+                                }
+                                totalVertexCount += mesh->numVertices;
+                            }
                         }
+                    }
+                    // Clear the list
+                    for (u32 instanceIndex = 0; instanceIndex < numProcessors; instanceIndex++)
+                    {
+                        currentObject[instanceIndex] = 0;
                     }
                 }
             }
         }
     }
 
+    printf("quad instanced total: %u\n", quadInstancedCount);
+
     // convert pointers to offsets (for pointer fix ups) and write to file
     StringBuilder builder = {};
-    builder.arena = temp.arena;
+    builder.arena         = temp.arena;
 
     // quad meshes
     {
@@ -2231,16 +2291,25 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
         Assert(triMeshFileOffset == 0);
 
         u64 *positionWrites = PushArrayNoZero(temp.arena, u64, triOffset);
-        u64 *normalWrites   = PushArrayNoZero(temp.arena, u64, triOffset);
-        u64 *uvWrites       = PushArrayNoZero(temp.arena, u64, triOffset);
-        u64 *indexWrites    = PushArrayNoZero(temp.arena, u64, triOffset);
+        u64 *normalWrites   = PushArray(temp.arena, u64, triOffset);
+        u64 *uvWrites       = PushArray(temp.arena, u64, triOffset);
+        u64 *indexWrites    = PushArray(temp.arena, u64, triOffset);
         for (u32 i = 0; i < triOffset; i++)
         {
             TriangleMesh *mesh = &triMeshes[i];
             positionWrites[i]  = AppendArray(&builder, mesh->p, mesh->numVertices);
-            normalWrites[i]    = AppendArray(&builder, mesh->n, mesh->numVertices);
-            uvWrites[i]        = AppendArray(&builder, mesh->uv, mesh->numVertices);
-            indexWrites[i]     = AppendArray(&builder, mesh->indices, mesh->numIndices);
+            if (mesh->n)
+            {
+                normalWrites[i] = AppendArray(&builder, mesh->n, mesh->numVertices);
+            }
+            if (mesh->uv)
+            {
+                uvWrites[i] = AppendArray(&builder, mesh->uv, mesh->numVertices);
+            }
+            if (mesh->indices)
+            {
+                indexWrites[i] = AppendArray(&builder, mesh->indices, mesh->numIndices);
+            }
         }
         string result = CombineBuilderNodes(&builder);
         for (u32 i = 0; i < triOffset; i++)
