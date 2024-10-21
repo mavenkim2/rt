@@ -237,6 +237,25 @@ void OS_UnmapFile(void *ptr)
     UnmapViewOfFile(ptr);
 }
 
+u8 *OS_MapFileWrite(string filename, u32 size)
+{
+    HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ | GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+    Error(file != INVALID_HANDLE_VALUE, "Could not create file: %S\n", filename);
+
+    LARGE_INTEGER newFileSize;
+    newFileSize.QuadPart = size;
+    SetFilePointerEx(file, newFileSize, 0, FILE_BEGIN);
+    SetEndOfFile(file);
+
+    HANDLE mapping = CreateFileMapping(file, 0, PAGE_READWRITE, 0, size, 0);
+    CloseHandle(file);
+    Error(mapping != INVALID_HANDLE_VALUE, "Could not map file: %S\n", filename);
+
+    LPVOID ptr = MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+
+    return (u8 *)ptr;
+}
+
 OS_Handle GetMainThreadHandle()
 {
     OS_Handle out = {(u64)GetCurrentThread()};
