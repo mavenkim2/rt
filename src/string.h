@@ -127,9 +127,11 @@ struct Tokenizer
 {
     string input;
     u8 *cursor;
+    Tokenizer() {}
+    Tokenizer(string data) : input(data), cursor(data.str) {}
 };
 
-inline void Advance(Tokenizer *tokenizer, u32 size);
+inline void Advance(Tokenizer *tokenizer, size_t size);
 inline b32 Advance(Tokenizer *tokenizer, string check);
 string ReadLine(Tokenizer *tokenizer);
 inline u32 ReadUint(Tokenizer *iter);

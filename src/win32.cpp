@@ -265,7 +265,7 @@ void OS_ResizeFile(string filename, u64 size)
     if (file == INVALID_HANDLE_VALUE)
     {
         DWORD lastError = GetLastError();
-        printf("error code %u\n", lastError);
+        printf("error code %lu\n", lastError);
     }
 
     LARGE_INTEGER newFileSize;

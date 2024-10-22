@@ -638,7 +638,7 @@ void QuadSBVHBuilderTest(Arena *arena, QuadMesh *mesh)
     }
 
     PerformanceCounter counter = OS_StartCounter();
-    BVHNode<4> bvh          = BuildQuantizedQuadSBVH<4>(settings, arenas, mesh, refs, record);
+    BVHNode<4> bvh             = BuildQuantizedQuadSBVH<4>(settings, arenas, mesh, refs, record);
     f32 time                   = OS_GetMilliseconds(counter);
     printf("num faces: %u\n", numFaces);
     printf("Build time: %fms\n", time);
@@ -692,6 +692,16 @@ void PartitionFix()
         SkipToNextLine(&tokenizer);
     }
     printf("num lines %u\n", numLines);
+}
+
+void SceneLoadTest()
+{
+    Arena *arena = ArenaAlloc();
+    Scene scene;
+
+    PerformanceCounter counter = OS_StartCounter();
+    ReadSerializedData(arena, &scene, "data/pbrt-v4/quad.mesh", "data/island/pbrt-v4/instances.inst");
+    printf("time: %fms\n", OS_GetMilliseconds(counter));
 }
 
 } // namespace rt

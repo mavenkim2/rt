@@ -484,12 +484,6 @@ struct GeometryID
     }
 };
 
-struct InstancePrimitive
-{
-    GeometryID geomID;     // points to the bvh and the geometry
-    Mat4 *objectFromWorld; // transform
-};
-
 struct Instance
 {
     // TODO: materials
@@ -510,12 +504,15 @@ struct Scene
     TriangleMesh *meshes;
     QuadMesh *quadMeshes;
 
-    InstancePrimitive *instances;
-
     PrimitiveIndices *primitiveIndices;
 
     HomogeneousTransform *transforms;
     ConstantMedium *media;
+
+    // new stuff
+    Instance *instances;
+    u64 numInstances;
+    AffineSpace *affineTransforms;
 
     u32 sphereCount;
     u32 quadCount;

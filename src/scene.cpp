@@ -1885,7 +1885,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 indices[1] = currentGraphicsState.mediaIndex;
                 indices[2] = currentGraphicsState.transformIndex;
                 // NOTE: the highest bit is set if it's an index
-                indices[3] = currentGraphicsState.materialIndex == -1 ? currentGraphicsState.materialId
+                indices[3] = currentGraphicsState.materialIndex == -1 ? i32(currentGraphicsState.materialId)
                                                                       : (u32)currentGraphicsState.materialIndex | 0x80000000;
 
                 u32 currentParameter                     = packet->parameterCount++;
@@ -2016,8 +2016,14 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
     ScratchEnd(temp);
 }
 
-#define SERIALIZE_SHAPES    0
-#define SERIALIZE_INSTANCES 1
+struct LookupEntry
+{
+    u64 offset;
+    u32 quadMeshCount;
+};
+
+#define SERIALIZE_SHAPES    1
+#define SERIALIZE_INSTANCES 0
 void Serialize(Arena *arena, string directory, SceneLoadState *state)
 {
     TempArena temp    = ScratchStart(0, 0);
@@ -2222,16 +2228,10 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
         totalVertexCount += totalNumVertices[i];
     }
 
-    struct LookupEntry
-    {
-        u64 offset;
-        u32 quadMeshCount;
-    };
+    static const size_t flushSize = megabytes(64);
+#if SERIALIZE_SHAPES
     // Initial estimate of file
     // size of all geometry + size of quad mesh references + size of lookup table + size of aligning
-    //
-
-#if SERIALIZE_SHAPES
     u64 fileSize = sizeof(Vec3f) * 2 * totalVertexCount + totalNumQuadMeshes * sizeof(QuadMesh) +
                    totalNumInstTypes * (sizeof(LookupEntry) + 4);
 
@@ -2240,6 +2240,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     LookupEntry *lookUpStart = (LookupEntry *)ptr;
     u8 *endOfFile            = ptr + fileSize;
     u8 *currentPtr           = ptr + sizeof(LookupEntry) * totalNumInstTypes;
+    u8 *flushBase            = currentPtr;
 #endif
     u32 lookUpOffset       = 0;
     u32 quadInstancedCount = 0;
@@ -2396,7 +2397,6 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
 
                     QuadMesh *meshes = (QuadMesh *)(AlignPow2((u64)currentPtr, 8));
 
-                    Assert(lookUpPtr < lookUpEnd);
                     LookupEntry *lookUpPtr   = &lookUpStart[entryIndex];
                     lookUpPtr->offset        = u64((u8 *)meshes - ptr);
                     lookUpPtr->quadMeshCount = quadMeshCount;
@@ -2452,6 +2452,13 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                                     ConvertPointerToOffset((u8 *)&newMesh->n, 0, offset);
                                 }
                                 currentPtr = (u8 *)dataPtr;
+
+                                u64 size = u64(currentPtr - flushBase);
+                                if (size >= flushSize)
+                                {
+                                    OS_FlushMappedFile(flushBase, size);
+                                    flushBase = currentPtr;
+                                }
                             }
                         }
                     }
@@ -2534,9 +2541,8 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
 
     *(u64 *)instanceFilePtr = numInstances;
 
-    static const size_t flushSize = megabytes(64);
-    Instance *instances           = (Instance *)(instanceFilePtr + sizeof(numInstances));
-    AffineSpace *transforms       = (AffineSpace *)(instances + numInstances);
+    Instance *instances     = (Instance *)(instanceFilePtr + sizeof(numInstances));
+    AffineSpace *transforms = (AffineSpace *)(instances + numInstances);
 
     Instance *instanceFlushBase     = instances;
     AffineSpace *transformFlushBase = transforms;
@@ -2561,12 +2567,14 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                 bool found = instanceTypeTable.Find(instance.name, &index);
                 if (!found)
                 {
+                    printf("instance not found\n");
                     continue;
                 }
                 const AffineSpace *t = transformList[instance.transformIndex];
 
                 // basically need to use if the transform has been written yet. if it has, use that index. otherwise,
                 // add to the hash and rewrite. this is going to probably use a decent amount of memory
+                Assert(instanceOffset < numInstances);
                 Instance *outInstance = &instances[instanceOffset];
                 outInstance->geomID   = GeometryID::CreateQuadMeshID(index);
 
@@ -2604,6 +2612,44 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     OS_ResizeFile(filename, finalSize);
 #endif
     ScratchEnd(temp);
+}
+
+void ReadSerializedData(Arena *arena, Scene *scene, string meshFile, string instanceFile)
+{
+    // Read instance file data
+    string instanceFileData = OS_ReadFile(arena, instanceFile);
+    Tokenizer tokenizer(instanceFileData);
+    u64 numInstances;
+    GetPointerValue(&tokenizer, &numInstances);
+    scene->instances    = (Instance *)tokenizer.cursor;
+    scene->numInstances = numInstances;
+    Advance(&tokenizer, sizeof(Instance) * numInstances);
+    scene->affineTransforms = (AffineSpace *)tokenizer.cursor;
+
+    // Read the mesh file data
+    string meshFileData = OS_ReadFile(arena, meshFile);
+    u8 *start           = meshFileData.str;
+
+    tokenizer = Tokenizer(meshFileData);
+    u64 numInstanceTypes;
+    GetPointerValue(&tokenizer, &numInstanceTypes);
+    LookupEntry *table = (LookupEntry *)tokenizer.cursor;
+    // fix the pointers
+    for (u32 i = 0; i < u32(numInstanceTypes); i++)
+    {
+        LookupEntry *entry  = table + i;
+        QuadMesh *meshStart = (QuadMesh *)(start + entry->offset);
+        for (u32 meshIndex = 0; meshIndex < entry->quadMeshCount; meshIndex++)
+        {
+            QuadMesh *mesh = meshStart + meshIndex;
+            u64 pOffset    = u64(mesh->p);
+            u64 nOffset    = u64(mesh->n);
+            Assert(pOffset < meshFileData.size);
+            Assert(nOffset < meshFileData.size);
+            mesh->p = (Vec3f *)(start + pOffset);
+            mesh->n = (Vec3f *)(start + nOffset);
+        }
+    }
 }
 
 } // namespace rt

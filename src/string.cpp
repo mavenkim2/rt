@@ -483,7 +483,7 @@ inline b32 Advance(Tokenizer *tokenizer, string check)
     return false;
 }
 
-inline void Advance(Tokenizer *tokenizer, u32 size)
+inline void Advance(Tokenizer *tokenizer, size_t size)
 {
     if (tokenizer->cursor + size <= tokenizer->input.str + tokenizer->input.size)
     {
