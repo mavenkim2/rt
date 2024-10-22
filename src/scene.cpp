@@ -1040,7 +1040,7 @@ struct SceneLoadState
     ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance> *instanceTypes;
     ChunkedLinkedList<SceneInstance, 1024, MemoryType_Instance> *instances;
 
-    ChunkedLinkedList<const Mat4 *, 16384, MemoryType_Transform> *transforms;
+    ChunkedLinkedList<const AffineSpace *, 16384, MemoryType_Transform> *transforms;
 
     // TODO: other shapes?
     u32 *numQuadMeshes;
@@ -1048,7 +1048,7 @@ struct SceneLoadState
     // u32 *numCurves;
 
     InternedStringCache<16384, 8, 64> stringCache;
-    Map<Mat4, 1048576, 8, 1024, MemoryType_Transform> transformCache;
+    Map<AffineSpace, 1048576, 8, 1024, MemoryType_Transform> transformCache;
 
     Arena **threadArenas;
 
@@ -1062,8 +1062,9 @@ struct GraphicsState
 {
     StringId materialId = 0;
     i32 materialIndex   = -1;
-    Mat4 transform      = Mat4::Identity();
-    i32 transformIndex  = -1;
+    // Mat4 transform      = Mat4::Identity();
+    AffineSpace transform = AffineSpace::Identity();
+    i32 transformIndex    = -1;
 
     i32 areaLightIndex = -1;
     i32 mediaIndex     = -1;
@@ -1355,7 +1356,7 @@ Scene *LoadPBRT(Arena *arena, string filename)
     state.lights        = PushArray(arena, ChunkedLinkedList<ScenePacket COMMA 1024 COMMA MemoryType_Light>, numProcessors);
     state.instanceTypes = PushArray(arena, ChunkedLinkedList<ObjectInstanceType COMMA 512 COMMA MemoryType_Instance>, numProcessors);
     state.instances     = PushArray(arena, ChunkedLinkedList<SceneInstance COMMA 1024 COMMA MemoryType_Instance>, numProcessors);
-    state.transforms    = PushArray(arena, ChunkedLinkedList<const Mat4 * COMMA 16384 COMMA MemoryType_Transform>, numProcessors);
+    state.transforms    = PushArray(arena, ChunkedLinkedList<const AffineSpace * COMMA 16384 COMMA MemoryType_Transform>, numProcessors);
     state.threadArenas  = PushArray(arena, Arena *, numProcessors);
 #undef COMMA
 
@@ -1369,12 +1370,12 @@ Scene *LoadPBRT(Arena *arena, string filename)
         state.lights[i]              = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light>(state.threadArenas[i]);
         state.instanceTypes[i]       = ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance>(state.threadArenas[i]);
         state.instances[i]           = ChunkedLinkedList<SceneInstance, 1024, MemoryType_Instance>(state.threadArenas[i]);
-        state.transforms[i]          = ChunkedLinkedList<const Mat4 *, 16384, MemoryType_Transform>(state.threadArenas[i]);
+        state.transforms[i]          = ChunkedLinkedList<const AffineSpace *, 16384, MemoryType_Transform>(state.threadArenas[i]);
     }
     state.mainArena      = arena;
     state.scene          = scene;
     state.stringCache    = InternedStringCache<16384, 8, 64>(arena);
-    state.transformCache = Map<Mat4, 1048576, 8, 1024, MemoryType_Transform>(arena);
+    state.transformCache = Map<AffineSpace, 1048576, 8, 1024, MemoryType_Transform>(arena);
 
     string baseDirectory = Str8PathChopPastLastSlash(filename);
     LoadPBRT(filename, baseDirectory, &state);
@@ -1408,7 +1409,7 @@ Scene *LoadPBRT(Arena *arena, string filename)
     printf("Total num instances: %lld\n", totalNumInstances);
     printf("Total num transforms: %lld\n", totalNumTransforms);
 
-    Serialize(arena, baseDirectory, &state);
+    // Serialize(arena, baseDirectory, &state);
 
     for (u32 i = 0; i < numProcessors; i++)
     {
@@ -1461,7 +1462,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
     auto AddTransform = [&]() {
         if (currentGraphicsState.transformIndex != -1)
         {
-            const Mat4 *transform = state->transformCache.GetOrCreate(arena, currentGraphicsState.transform);
+            const AffineSpace *transform = state->transformCache.GetOrCreate(arena, currentGraphicsState.transform);
             transforms.Push(transform);
         }
     };
@@ -1573,12 +1574,14 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 f32 r3c2 = ReadFloat(&tokenizer);
                 f32 r3c3 = ReadFloat(&tokenizer);
 
-                // NOTE: this transposes the matrix
-                currentGraphicsState.transform = Mul(currentGraphicsState.transform, Mat4(r0c0, r0c1, r0c2, r0c3,
-                                                                                          r1c0, r1c1, r1c2, r1c3,
-                                                                                          r2c0, r2c1, r2c2, r2c3,
-                                                                                          r3c0, r3c1, r3c2, r3c3));
-                SkipToNextLine(&tokenizer);
+                currentGraphicsState.transform = currentGraphicsState.transform *
+                                                 AffineSpace(Vec3f(r0c0, r0c1, r0c2), Vec3f(r1c0, r1c1, r1c2),
+                                                             Vec3f(r2c0, r2c1, r2c2), Vec3f(r3c0, r3c1, r3c2));
+                SkipToNextChar(&tokenizer);
+                bool result = Advance(&tokenizer, "]\n");
+                Assert(result);
+
+                // SkipToNextLine(&tokenizer);
             }
             break;
             case "CoordinateSystem"_sid:
@@ -1606,7 +1609,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
             case "Identity"_sid:
             {
                 ReadWord(&tokenizer);
-                currentGraphicsState.transform = Mat4::Identity();
+                currentGraphicsState.transform = AffineSpace::Identity();
             }
             break;
             case "Import"_sid:
@@ -1654,8 +1657,10 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 f32 upY = ReadFloat(&tokenizer);
                 f32 upZ = ReadFloat(&tokenizer);
 
-                currentGraphicsState.transform = Mul(currentGraphicsState.transform,
-                                                     LookAt(Vec3f(posX, posY, posZ), Vec3f(lookX, lookY, lookZ), Normalize(Vec3f(upX, upY, upZ))));
+                currentGraphicsState.transform = currentGraphicsState.transform *
+                                                 AffineSpace::LookAt(Vec3f(posX, posY, posZ),
+                                                                     Vec3f(lookX, lookY, lookZ),
+                                                                     Normalize(Vec3f(upX, upY, upZ)));
             }
             break;
             case "LightSource"_sid:
@@ -1769,8 +1774,8 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 f32 axisX                      = ReadFloat(&tokenizer);
                 f32 axisY                      = ReadFloat(&tokenizer);
                 f32 axisZ                      = ReadFloat(&tokenizer);
-                Mat4 rotationMatrix            = Mat4::Rotate(Vec3f(axisX, axisY, axisZ), angle);
-                currentGraphicsState.transform = Mul(currentGraphicsState.transform, rotationMatrix);
+                AffineSpace rotationMatrix     = AffineSpace::Rotate(Vec3f(axisX, axisY, axisZ), angle);
+                currentGraphicsState.transform = currentGraphicsState.transform * rotationMatrix;
             }
             break;
             case "Sampler"_sid:
@@ -1789,11 +1794,9 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 f32 s0 = ReadFloat(&tokenizer);
                 f32 s1 = ReadFloat(&tokenizer);
                 f32 s2 = ReadFloat(&tokenizer);
-                Mat4 scaleMatrix(s0, 0.f, 0.f, 0.f,
-                                 0.f, s1, 0.f, 0.f,
-                                 0.f, 0.f, s2, 0.f,
-                                 0.f, 0.f, 0.f, 1.f);
-                currentGraphicsState.transform = Mul(currentGraphicsState.transform, scaleMatrix);
+
+                AffineSpace scale              = AffineSpace::Scale(Vec3f(s0, s1, s2));
+                currentGraphicsState.transform = currentGraphicsState.transform * scale;
             }
             break;
             case "Shape"_sid:
@@ -1859,11 +1862,9 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 f32 t0 = ReadFloat(&tokenizer);
                 f32 t1 = ReadFloat(&tokenizer);
                 f32 t2 = ReadFloat(&tokenizer);
-                Mat4 translationMatrix(0.f, 0.f, 0.f, 0.f,
-                                       0.f, 0.f, 0.f, 0.f,
-                                       0.f, 0.f, 0.f, 0.f,
-                                       t0, t1, t2, 1.f);
-                currentGraphicsState.transform = Mul(currentGraphicsState.transform, translationMatrix);
+
+                AffineSpace t                  = AffineSpace::Translate(Vec3f(t0, t1, t2));
+                currentGraphicsState.transform = currentGraphicsState.transform * t;
             }
             break;
             case "Transform"_sid:
@@ -1892,12 +1893,13 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 f32 r3c3 = ReadFloat(&tokenizer);
 
                 // NOTE: this transposes the matrix
-                currentGraphicsState.transform = Mat4(r0c0, r0c1, r0c2, r0c3,
-                                                      r1c0, r1c1, r1c2, r1c3,
-                                                      r2c0, r2c1, r2c2, r2c3,
-                                                      r3c0, r3c1, r3c2, r3c3);
+                currentGraphicsState.transform = AffineSpace(r0c0, r1c0, r2c0, r3c0,
+                                                             r0c1, r1c1, r2c1, r3c1,
+                                                             r0c2, r1c2, r2c2, r3c2);
 
-                SkipToNextLine(&tokenizer);
+                SkipToNextChar(&tokenizer);
+                bool result = Advance(&tokenizer, "]\n");
+                Assert(result);
             }
             break;
             case "Texture"_sid:
@@ -1962,8 +1964,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
 
                 AddTransform();
                 // TODO: instantiate the camera with the current transform
-
-                currentGraphicsState.transform = Mat4::Identity();
+                currentGraphicsState.transform = AffineSpace::Identity();
             }
             break;
             default:
@@ -2023,6 +2024,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
 
     using ShapeTypeList = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape>;
 
+    // TODO: the number of instanced quads changes every run when it shouldn't
     scheduler.ScheduleAndWait(numProcessors, 1, [&](u32 jobID) {
         TempArena temp      = ScratchStart(0, 0);
         u32 quadOffset      = quadOffsets[jobID];
@@ -2157,12 +2159,18 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                     }
                     break;
                     // TODO: curves
-                    case "curve"_sid: continue;
+                    case "curve"_sid:
+                    {
+                        pTypes[currentOffset + i] = P_Curve;
+                        // pOffsets[currentOffset + i] =
+                    }
+                    break;
                     default: Assert(!"not parsed");
                 }
             }
             currentOffset += node->count;
         }
+        Assert(quadOffset == quadLimit);
         totalNumVertices[jobID] = totalNumQuadVertices;
         ScratchEnd(temp);
     });
@@ -2297,7 +2305,6 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                             }
                         }
                     }
-                    // u32 totalVertexCount = 0;
 
                     bool someQuads    = false;
                     bool hasNormals   = false;
@@ -2319,14 +2326,18 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                                 someQuads      = true;
                                 QuadMesh *mesh = &qMeshes[currentOffsetGroup[shapeIndex]];
                                 if (!hasNormals && mesh->n) hasNormals = true;
-                                // totalVertexCount += mesh->numVertices;
                                 quadInstancedCount++;
+                            }
+                            else
+                            {
+                                printf("ty: %u\n", currentTyGroup[shapeIndex]);
                             }
                         }
                     }
                     if (!someQuads)
                     {
-                        continue; // TODO
+                        printf("no quads\n");
+                        continue;
                     }
 
                     // For each object instance type containing quads, write the position data to a memory mapped file

@@ -268,33 +268,33 @@ inline Vec3f NormalTransform(const Mat4 &a, const Vec3f &b)
     return Vec3f(laneResult[0], laneResult[1], laneResult[2]);
 }
 
-inline Mat4 LookAt(Vec3f eye, Vec3f center, Vec3f up)
-{
-    Mat4 result;
-
-    Vec3f f = Normalize(eye - center);
-    Vec3f s = Normalize(Cross(up, f));
-    Vec3f u = Cross(f, s);
-
-    result.elements[0][0] = s.x;
-    result.elements[0][1] = u.x;
-    result.elements[0][2] = f.x;
-    result.elements[0][3] = 0.0f;
-    result.elements[1][0] = s.y;
-    result.elements[1][1] = u.y;
-    result.elements[1][2] = f.y;
-    result.elements[1][3] = 0.0f;
-    result.elements[2][0] = s.z;
-    result.elements[2][1] = u.z;
-    result.elements[2][2] = f.z;
-    result.elements[2][3] = 0.0f;
-    result.elements[3][0] = -Dot(s, eye);
-    result.elements[3][1] = -Dot(u, eye);
-    result.elements[3][2] = -Dot(f, eye);
-    result.elements[3][3] = 1.0f;
-
-    return result;
-}
+// inline Mat4 LookAt(Vec3f eye, Vec3f center, Vec3f up)
+// {
+//     Mat4 result;
+//
+//     Vec3f f = Normalize(eye - center);
+//     Vec3f s = Normalize(Cross(up, f));
+//     Vec3f u = Cross(f, s);
+//
+//     result.elements[0][0] = s.x;
+//     result.elements[0][1] = u.x;
+//     result.elements[0][2] = f.x;
+//     result.elements[0][3] = 0.0f;
+//     result.elements[1][0] = s.y;
+//     result.elements[1][1] = u.y;
+//     result.elements[1][2] = f.y;
+//     result.elements[1][3] = 0.0f;
+//     result.elements[2][0] = s.z;
+//     result.elements[2][1] = u.z;
+//     result.elements[2][2] = f.z;
+//     result.elements[2][3] = 0.0f;
+//     result.elements[3][0] = -Dot(s, eye);
+//     result.elements[3][1] = -Dot(u, eye);
+//     result.elements[3][2] = -Dot(f, eye);
+//     result.elements[3][3] = 1.0f;
+//
+//     return result;
+// }
 
 inline Mat4 Mul(Mat4 a, Mat4 b)
 {
@@ -342,6 +342,130 @@ inline Vec3f Mul(Mat3 a, Vec3f b)
     result.z += a.c3 * b.z;
 
     return result;
+}
+
+// NOTE: row major affine transformation matrix
+struct AffineSpace
+{
+    union
+    {
+        struct
+        {
+            Vec3f c0;
+            Vec3f c1;
+            Vec3f c2;
+            Vec3f c3;
+        };
+        Vec3f e[4];
+    };
+
+    AffineSpace() {}
+    __forceinline AffineSpace(const AffineSpace &other) : c0(other.c0), c1(other.c1), c2(other.c2), c3(other.c3) {}
+    __forceinline AffineSpace &operator=(const AffineSpace &other)
+    {
+        c0 = other.c0;
+        c1 = other.c1;
+        c2 = other.c2;
+        c3 = other.c3;
+        return *this;
+    }
+
+    AffineSpace(ZeroTy) : c0(0), c1(0), c2(0), c3(0) {}
+    AffineSpace(const Vec3f &a, const Vec3f &b, const Vec3f &c, const Vec3f &d)
+        : c0(a), c1(b), c2(c), c3(d) {}
+    AffineSpace(f32 a, f32 b, f32 c, f32 d,
+                f32 e, f32 f, f32 g, f32 h,
+                f32 i, f32 j, f32 k, f32 l)
+        : c0(a, e, i), c1(b, f, j), c2(c, g, k), c3(d, h, l) {}
+
+    Vec3f &operator[](u32 i)
+    {
+        Assert(i < 4);
+        return e[i];
+    }
+    const Vec3f &operator[](u32 i) const
+    {
+        Assert(i < 4);
+        return e[i];
+    }
+    static AffineSpace Identity()
+    {
+        AffineSpace result = AffineSpace(zero);
+        result[0][0]       = 1;
+        result[1][1]       = 1;
+        result[2][2]       = 1;
+        return result;
+    }
+    static AffineSpace LookAt(Vec3f eye, Vec3f center, Vec3f up)
+    {
+        AffineSpace result;
+
+        Vec3f f = Normalize(eye - center);
+        Vec3f s = Normalize(Cross(up, f));
+        Vec3f u = Cross(f, s);
+
+        result.e[0][0] = s.x;
+        result.e[0][1] = u.x;
+        result.e[0][2] = f.x;
+        result.e[1][0] = s.y;
+        result.e[1][1] = u.y;
+        result.e[1][2] = f.y;
+        result.e[2][0] = s.z;
+        result.e[2][1] = u.z;
+        result.e[2][2] = f.z;
+        result.e[3][0] = -Dot(s, eye);
+        result.e[3][1] = -Dot(u, eye);
+        result.e[3][2] = -Dot(f, eye);
+
+        return result;
+    }
+    static AffineSpace Scale(const Vec3f &scale)
+    {
+        return AffineSpace(scale.x, 0, 0, 0,
+                           0, scale.y, 0, 0,
+                           0, 0, scale.z, 0);
+    }
+    static AffineSpace Rotate(const Vec3f &axis, f32 theta)
+    {
+        const Vec3f a = Normalize(axis);
+        f32 s         = Sin(theta);
+        f32 c         = Cos(theta);
+        f32 mc        = 1.f - c;
+
+        return AffineSpace(a.x * a.x * mc + c, a.y * a.x * mc - a.z * s, a.z * a.x * mc + a.y * s, 0.f,
+                           a.x * a.y * mc + a.z * s, a.y * a.y * mc + c, a.z * a.y * mc - a.x * s, 0.f,
+                           a.x * a.z * mc - a.y * s, a.y * a.z * mc + a.x * s, a.z * a.z * mc + c, 0.f);
+    }
+    static AffineSpace Translate(const Vec3f &v)
+    {
+        return AffineSpace(0, 0, 0, v.x,
+                           0, 0, 0, v.y,
+                           0, 0, 0, v.z);
+    }
+};
+
+__forceinline Vec3f operator*(const AffineSpace &t, const Vec3f &v)
+{
+    return FMA(t.c0, Vec3f(v.x), FMA(t.c1, Vec3f(v.y), t.c2 * Vec3f(v.z) + t.c3));
+}
+
+// NOTE: can only be used when there is at least 4 bytes of padding after AffineSpace
+__forceinline Lane4F32 operator*(const AffineSpace &t, const Lane4F32 &v)
+{
+    return FMA(Lane4F32::LoadU(&t.c0), v[0],
+               FMA(Lane4F32::LoadU(&t.c1), v[1],
+                   Lane4F32::LoadU(&t.c2) * v[2] +
+                       Lane4F32::LoadU(&t.c3)));
+}
+
+__forceinline AffineSpace operator*(const AffineSpace &a, const AffineSpace &b)
+{
+    return AffineSpace(a * b.c0, a * b.c1, a * b.c2, a * b.c3);
+}
+
+__forceinline bool operator==(const AffineSpace &a, const AffineSpace &b)
+{
+    return memcmp(a.e, b.e, sizeof(AffineSpace));
 }
 
 } // namespace rt

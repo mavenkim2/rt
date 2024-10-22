@@ -35,14 +35,6 @@ struct RebraidRecord
     }
 };
 
-// NOTE: row major affine transformation matrix
-struct Transform
-{
-    f32 x[4];
-    f32 y[4];
-    f32 z[4];
-};
-
 // struct Instance2
 // {
 //     BVHNode bvhNode;
