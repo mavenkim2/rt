@@ -983,7 +983,7 @@ struct ChunkedLinkedList
         for (;;)
         {
             Assert(node);
-            if (i > node->count)
+            if (i >= node->count)
             {
                 i -= node->count;
                 node = node->next;
@@ -1002,6 +1002,11 @@ struct ChunkedLinkedList
     {
         AddBack() = std::move(val);
     }
+    inline const T &Last() const
+    {
+        return last->values[last->count - 1];
+    }
+
     inline void AddNode()
     {
         ChunkNode *newNode = PushStructTagged(arena, ChunkNode, memoryTag);
@@ -1017,10 +1022,9 @@ struct ObjectInstanceType
 {
     StringId name;
     // string name;
-    i32 transformIndex  = -1;
+    u32 transformIndex  = 0;
     u32 shapeIndexStart = 0xffffffff;
     u32 shapeIndexEnd   = 0xffffffff;
-    // Array<i32, MemoryType_Instance> shapeIndices;
 
     bool Invalid() const { return shapeIndexStart == 0xffffffff; }
     void Invalidate() { shapeIndexStart = 0xffffffff; }
@@ -1029,7 +1033,7 @@ struct ObjectInstanceType
 struct SceneInstance
 {
     StringId name;
-    i32 transformIndex;
+    u32 transformIndex;
 };
 
 struct SceneLoadState
@@ -1083,7 +1087,7 @@ struct GraphicsState
     i32 materialIndex   = -1;
     // Mat4 transform      = Mat4::Identity();
     AffineSpace transform = AffineSpace::Identity();
-    i32 transformIndex    = -1;
+    u32 transformIndex    = 0;
 
     i32 areaLightIndex = -1;
     i32 mediaIndex     = -1;
@@ -1356,7 +1360,8 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
     MemoryCopy(packet->sizes, sizes, sizeof(u32) * packet->parameterCount);
 }
 
-void LoadPBRT(string filename, string directory, SceneLoadState *state, GraphicsState graphicsState = {}, bool inWorldBegin = false);
+void LoadPBRT(string filename, string directory, SceneLoadState *state,
+              GraphicsState graphicsState = {}, bool inWorldBegin = false, bool imported = false);
 void Serialize(Arena *arena, string directory, SceneLoadState *state);
 
 // TODO IMPORTANT: for some god forsaken reason with clang this generate a vmovaps unaligned error?? i don't want to deal
@@ -1428,7 +1433,7 @@ Scene *LoadPBRT(Arena *arena, string filename)
     printf("Total num instances: %lld\n", totalNumInstances);
     printf("Total num transforms: %lld\n", totalNumTransforms);
 
-    // Serialize(arena, baseDirectory, &state);
+    Serialize(arena, baseDirectory, &state);
 
     for (u32 i = 0; i < numProcessors; i++)
     {
@@ -1437,7 +1442,8 @@ Scene *LoadPBRT(Arena *arena, string filename)
     return scene;
 }
 
-void LoadPBRT(string filename, string directory, SceneLoadState *state, GraphicsState graphicsState, bool inWorldBegin)
+void LoadPBRT(string filename, string directory, SceneLoadState *state,
+              GraphicsState graphicsState, bool inWorldBegin, bool imported)
 {
     TempArena temp  = ScratchStart(0, 0);
     u32 threadIndex = GetThreadIndex();
@@ -1470,19 +1476,33 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
 
     GraphicsState currentGraphicsState = graphicsState;
     ObjectInstanceType *&currentObject = currentGraphicsState.instanceType;
-    if (currentObject)
+
+    if (transforms.totalCount == 0)
+    {
+        transforms.Push(state->transformCache.GetOrCreate(arena, AffineSpace::Identity()));
+    }
+    if (currentObject && imported)
     {
         StringId name                  = currentObject->name;
         currentObject                  = &instanceTypes.AddBack();
         currentObject->name            = name;
-        currentObject->shapeIndexStart = shapes.Length() - 1;
+        currentObject->shapeIndexStart = shapes.Length();
     }
 
     auto AddTransform = [&]() {
-        if (currentGraphicsState.transformIndex != -1)
+        if (currentGraphicsState.transformIndex != 0)
         {
-            const AffineSpace *transform = state->transformCache.GetOrCreate(arena, currentGraphicsState.transform);
-            transforms.Push(transform);
+            if (currentGraphicsState.transformIndex == transforms.Length())
+            {
+                // Assert(currentGraphicsState.transformIndex == transforms.Length());
+                const AffineSpace *transform = state->transformCache.GetOrCreate(arena, currentGraphicsState.transform);
+                transforms.Push(transform);
+            }
+            else
+            {
+                const AffineSpace *t = transforms.Last();
+                Assert(*t == currentGraphicsState.transform);
+            }
         }
     };
 
@@ -1492,9 +1512,10 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
     {
         if (EndOfBuffer(&tokenizer))
         {
-            if (currentObject)
+            if (currentObject && imported)
             {
                 currentObject->shapeIndexEnd = shapes.Length();
+                Assert(currentObject->shapeIndexEnd >= currentObject->shapeIndexStart);
             }
             OS_UnmapFile(tokenizer.input.str);
             if (numTokenizers == 0) break;
@@ -1539,7 +1560,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 Error(worldBegin, "%S cannot be specified before WorldBegin statement\n", word);
                 Assert(graphicsStateCount > 0);
 
-                AddTransform();
+                // AddTransform();
 
                 // Pop stack
                 currentGraphicsState = graphicsStateStack[--graphicsStateCount];
@@ -1599,8 +1620,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 SkipToNextChar(&tokenizer);
                 bool result = Advance(&tokenizer, "]\n");
                 Assert(result);
-
-                // SkipToNextLine(&tokenizer);
             }
             break;
             case "CoordinateSystem"_sid:
@@ -1642,7 +1661,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
 
                 scheduler.Schedule(&state->counter, [importedFullPath, directory, state,
                                                      currentGraphicsState, worldBegin](u32 jobID) {
-                    LoadPBRT(importedFullPath, directory, state, currentGraphicsState, worldBegin);
+                    LoadPBRT(importedFullPath, directory, state, currentGraphicsState, worldBegin, true);
                 });
             }
             break;
@@ -1700,7 +1719,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
 
                 ScenePacket *packet = &materials.AddBack();
                 packet->type        = stringCache.GetOrCreate(arena, materialNameOrType);
-                u32 materialIndex   = materials.Length() - 1; //++materialIndex;
+                u32 materialIndex   = materials.Length();
                 if (IsEndOfLine(&tokenizer))
                 {
                     SkipToNextLine(&tokenizer);
@@ -1755,7 +1774,9 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 currentObject                  = &instanceTypes.AddBack();
                 currentObject->name            = stringCache.GetOrCreate(arena, objectName);
                 currentObject->transformIndex  = currentGraphicsState.transformIndex;
-                currentObject->shapeIndexStart = shapes.Length() - 1;
+                currentObject->shapeIndexStart = shapes.Length();
+
+                AddTransform();
             }
             break;
             case "ObjectEnd"_sid:
@@ -1764,6 +1785,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 ReadWord(&tokenizer);
 
                 currentObject->shapeIndexEnd = shapes.Length();
+                Assert(currentObject->shapeIndexEnd >= currentObject->shapeIndexStart);
                 Error(currentObject != 0, "ObjectEnd must occur after ObjectBegin");
                 currentObject = 0;
             }
@@ -1994,11 +2016,8 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
     ScratchEnd(temp);
 }
 
-// TODO: potential problems
-// 1. the total number of quad meshes that are instanced changes every run
-//      a. the file size should be constant but it's not
-// 2. only 298 instance types use quads (pretty sure it should be all 312)
-
+#define SERIALIZE_SHAPES    0
+#define SERIALIZE_INSTANCES 1
 void Serialize(Arena *arena, string directory, SceneLoadState *state)
 {
     TempArena temp    = ScratchStart(0, 0);
@@ -2210,19 +2229,19 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     };
     // Initial estimate of file
     // size of all geometry + size of quad mesh references + size of lookup table + size of aligning
+    //
+
+#if SERIALIZE_SHAPES
     u64 fileSize = sizeof(Vec3f) * 2 * totalVertexCount + totalNumQuadMeshes * sizeof(QuadMesh) +
                    totalNumInstTypes * (sizeof(LookupEntry) + 4);
 
     u8 *ptr = OS_MapFileWrite(filename, fileSize);
 
-    LookupEntry *lookUpPtr   = (LookupEntry *)ptr;
-    LookupEntry *lookUpStart = lookUpPtr;
-    LookupEntry *lookUpEnd   = (LookupEntry *)(ptr + totalNumInstTypes * sizeof(LookupEntry));
+    LookupEntry *lookUpStart = (LookupEntry *)ptr;
     u8 *endOfFile            = ptr + fileSize;
     u8 *currentPtr           = ptr + sizeof(LookupEntry) * totalNumInstTypes;
-
-    // Merge meshes belonging to the same object instance type
-    u32 outQuadOffset      = 0;
+#endif
+    u32 lookUpOffset       = 0;
     u32 quadInstancedCount = 0;
 
     ObjectInstanceType *currentObject[64] = {};
@@ -2337,12 +2356,11 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                     for (u32 instanceIndex = 0; instanceIndex < currentInstanceCount; instanceIndex++)
                     {
                         ObjectInstanceType *currentObj = currentObject[instanceIndex];
-                        if (!currentObj) continue;
 
                         u32 pIdx                    = pIndices[instanceIndex];
                         u32 *currentOffsetGroup     = offsets[pIdx];
                         PrimitiveTy *currentTyGroup = types[pIdx];
-                        Assert(currentObj->shapeIndexStart < currentObj->shapeIndexEnd);
+                        Assert(currentObj->shapeIndexStart <= currentObj->shapeIndexEnd);
                         for (u32 shapeIndex = currentObj->shapeIndexStart; shapeIndex < currentObj->shapeIndexEnd; shapeIndex++)
                         {
                             if (currentTyGroup[shapeIndex] == P_QuadMesh)
@@ -2358,32 +2376,36 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                                 printf("ty: %u\n", currentTyGroup[shapeIndex]);
                             }
                         }
+#if SERIALIZE_SHAPES == 0
+                        currentObj->Invalidate();
+#endif
                     }
                     if (!someQuads)
                     {
                         printf("no quads\n");
+                        currentInstanceCount = 0;
                         continue;
                     }
 
+                    Assert(lookUpOffset < totalNumInstTypes);
+                    u32 entryIndex = lookUpOffset++;
+                    instanceTypeTable.Create(name, entryIndex);
+#if SERIALIZE_SHAPES
                     // For each object instance type containing quads, write the position data to a memory mapped file
                     // TODO: need to keep track of the material used for each
 
                     QuadMesh *meshes = (QuadMesh *)(AlignPow2((u64)currentPtr, 8));
 
                     Assert(lookUpPtr < lookUpEnd);
+                    LookupEntry *lookUpPtr   = &lookUpStart[entryIndex];
                     lookUpPtr->offset        = u64((u8 *)meshes - ptr);
                     lookUpPtr->quadMeshCount = quadMeshCount;
-
-                    u32 entryIndex = u32(lookUpPtr - lookUpStart);
-
-                    instanceTypeTable.Create(name, entryIndex);
 
                     Vec3f *dataPtr     = (Vec3f *)(meshes + quadMeshCount);
                     u32 quadMeshOffset = 0;
                     for (u32 instanceIndex = 0; instanceIndex < currentInstanceCount; instanceIndex++)
                     {
                         ObjectInstanceType *currentObj = currentObject[instanceIndex];
-                        if (!currentObj) continue;
 
                         u32 pIdx                    = pIndices[instanceIndex];
                         u32 *currentOffsetGroup     = offsets[pIdx];
@@ -2433,69 +2455,68 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                             }
                         }
                     }
-
-                    // Clear the list
-                    MemoryZero(currentObject, sizeof(ObjectInstanceType *) * currentInstanceCount);
-                    MemoryZero(pIndices, sizeof(u32) * currentInstanceCount);
+#endif
                     currentInstanceCount = 0;
                 }
             }
         }
     }
 
-    OS_UnmapFile(ptr);
+    printf("quad instanced total: %u\n", quadInstancedCount);
+    printf("total num instance types: %u\n", lookUpOffset);
+#if SERIALIZE_SHAPES
     u64 finalSize = u64(currentPtr - ptr);
+    OS_UnmapFile(ptr);
     OS_ResizeFile(filename, finalSize);
     printf("final file size: %llu\n", finalSize);
-    printf("quad instanced total: %u\n", quadInstancedCount);
 
     // convert pointers to offsets (for pointer fix ups) and write to file
     StringBuilder builder = {};
     builder.arena         = temp.arena;
 
-    // repeat for triangle meshes
+    u64 triMeshFileOffset = AppendArray(&builder, triMeshes, totalNumTriMeshes);
+    Assert(triMeshFileOffset == 0);
 
-    //     u64 triMeshFileOffset = AppendArray(&builder, triMeshes, totalNumTriMeshes);
-    //     Assert(triMeshFileOffset == 0);
-    //
-    //     u64 *positionWrites = PushArrayNoZero(temp.arena, u64, totalNumTriMeshes);
-    //     u64 *normalWrites   = PushArray(temp.arena, u64, totalNumTriMeshes);
-    //     u64 *uvWrites       = PushArray(temp.arena, u64, totalNumTriMeshes);
-    //     u64 *indexWrites    = PushArray(temp.arena, u64, totalNumTriMeshes);
-    //     for (u32 i = 0; i < totalNumTriMeshes; i++)
-    //     {
-    //         TriangleMesh *mesh = &triMeshes[i];
-    //         positionWrites[i]  = AppendArray(&builder, mesh->p, mesh->numVertices);
-    //         if (mesh->n)
-    //         {
-    //             normalWrites[i] = AppendArray(&builder, mesh->n, mesh->numVertices);
-    //         }
-    //         if (mesh->uv)
-    //         {
-    //             uvWrites[i] = AppendArray(&builder, mesh->uv, mesh->numVertices);
-    //         }
-    //         if (mesh->indices)
-    //         {
-    //             indexWrites[i] = AppendArray(&builder, mesh->indices, mesh->numIndices);
-    //         }
-    //     }
-    //     string result = CombineBuilderNodes(&builder);
-    //     for (u32 i = 0; i < totalNumTriMeshes; i++)
-    //     {
-    //         ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, p), positionWrites[i]);
-    //         ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, n), normalWrites[i]);
-    //         ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, uv), uvWrites[i]);
-    //         ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, indices), indexWrites[i]);
-    //         triMeshFileOffset += sizeof(TriangleMesh);
-    //     }
-    //     string triFilename = StrConcat(temp.arena, directory, "tris.mesh");
-    //     b32 success        = OS_WriteFile(triFilename, result.str, (u32)result.size);
-    //     if (!success)
-    //     {
-    //         printf("Failed to write tri file");
-    //         Assert(0);
-    //     }
+    u64 *positionWrites = PushArrayNoZero(temp.arena, u64, totalNumTriMeshes);
+    u64 *normalWrites   = PushArray(temp.arena, u64, totalNumTriMeshes);
+    u64 *uvWrites       = PushArray(temp.arena, u64, totalNumTriMeshes);
+    u64 *indexWrites    = PushArray(temp.arena, u64, totalNumTriMeshes);
+    for (u32 i = 0; i < totalNumTriMeshes; i++)
+    {
+        TriangleMesh *mesh = &triMeshes[i];
+        positionWrites[i]  = AppendArray(&builder, mesh->p, mesh->numVertices);
+        if (mesh->n)
+        {
+            normalWrites[i] = AppendArray(&builder, mesh->n, mesh->numVertices);
+        }
+        if (mesh->uv)
+        {
+            uvWrites[i] = AppendArray(&builder, mesh->uv, mesh->numVertices);
+        }
+        if (mesh->indices)
+        {
+            indexWrites[i] = AppendArray(&builder, mesh->indices, mesh->numIndices);
+        }
+    }
+    string result = CombineBuilderNodes(&builder);
+    for (u32 i = 0; i < totalNumTriMeshes; i++)
+    {
+        ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, p), positionWrites[i]);
+        ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, n), normalWrites[i]);
+        ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, uv), uvWrites[i]);
+        ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, indices), indexWrites[i]);
+        triMeshFileOffset += sizeof(TriangleMesh);
+    }
+    string triFilename = StrConcat(temp.arena, directory, "tris.mesh");
+    b32 success        = OS_WriteFile(triFilename, result.str, (u32)result.size);
+    if (!success)
+    {
+        printf("Failed to write tri file");
+        Assert(0);
+    }
+#endif
 
+#if SERIALIZE_INSTANCES
     ScratchEnd(temp);
     temp = ScratchStart(0, 0);
 
@@ -2507,14 +2528,18 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
         numTransforms += state->transforms[i].totalCount;
     }
 
-    fileSize            = sizeof(Instance) * numInstances + sizeof(AffineSpace) * numTransforms + sizeof(numInstances);
+    size_t instFileSize = sizeof(Instance) * numInstances + sizeof(AffineSpace) * numTransforms + sizeof(numInstances);
     filename            = PushStr8F(temp.arena, "%Sinstances.inst", directory);
-    u8 *instanceFilePtr = OS_MapFileWrite(filename, fileSize);
+    u8 *instanceFilePtr = OS_MapFileWrite(filename, instFileSize);
 
     *(u64 *)instanceFilePtr = numInstances;
 
-    Instance *instances     = (Instance *)(instanceFilePtr + sizeof(numInstances));
-    AffineSpace *transforms = (AffineSpace *)(instances + numInstances);
+    static const size_t flushSize = megabytes(64);
+    Instance *instances           = (Instance *)(instanceFilePtr + sizeof(numInstances));
+    AffineSpace *transforms       = (AffineSpace *)(instances + numInstances);
+
+    Instance *instanceFlushBase     = instances;
+    AffineSpace *transformFlushBase = transforms;
 
     u32 instanceOffset  = 0;
     u32 transformOffset = 0;
@@ -2534,7 +2559,10 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                 SceneInstance &instance = node->values[i];
                 u32 index;
                 bool found = instanceTypeTable.Find(instance.name, &index);
-                Assert(found);
+                if (!found)
+                {
+                    continue;
+                }
                 const AffineSpace *t = transformList[instance.transformIndex];
 
                 // basically need to use if the transform has been written yet. if it has, use that index. otherwise,
@@ -2548,14 +2576,33 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                 }
                 else
                 {
-                    u32 transformIndex = transformOffset++;
+                    u32 transformIndex         = transformOffset++;
+                    transforms[transformIndex] = *t;
                     transformHashTable.Create(t, transformIndex);
                     outInstance->transformIndex = transformIndex;
+                    u64 size                    = u64((u8 *)(&transforms[transformIndex]) - (u8 *)transformFlushBase);
+                    if (size >= flushSize)
+                    {
+                        OS_FlushMappedFile(transformFlushBase, size);
+                        transformFlushBase = &transforms[transformIndex];
+                    }
                 }
                 instanceOffset++;
+
+                u64 size = u64((u8 *)outInstance - (u8 *)instanceFlushBase);
+                if (size >= flushSize)
+                {
+                    OS_FlushMappedFile(instanceFlushBase, size);
+                    instanceFlushBase = outInstance;
+                }
             }
         }
     }
+
+    u64 finalSize = u64((u8 *)(transforms + transformOffset) - instanceFilePtr);
+    OS_UnmapFile(instanceFilePtr);
+    OS_ResizeFile(filename, finalSize);
+#endif
     ScratchEnd(temp);
 }
 

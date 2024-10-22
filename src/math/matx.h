@@ -465,7 +465,7 @@ __forceinline AffineSpace operator*(const AffineSpace &a, const AffineSpace &b)
 
 __forceinline bool operator==(const AffineSpace &a, const AffineSpace &b)
 {
-    return memcmp(a.e, b.e, sizeof(AffineSpace));
+    return a.c0 == b.c0 && a.c1 == b.c1 && a.c2 == b.c2 && a.c3 == b.c3;
 }
 
 } // namespace rt

@@ -663,14 +663,17 @@ struct HashExt
     u64 mask;
 
     HashExt() {}
-    HashExt(Arena *arena, u32 num, Key invalidKey) : invalidKey(invalidKey)
+    HashExt(Arena *arena, u32 inNum, Key invalidKey) : invalidKey(invalidKey)
     {
-        u32 nextPowerOfTwo = (1 << (Bsf(num) + 1));
-        num                = nextPowerOfTwo;
-        Assert(IsPow2(num) && nextPowerOfTwo > num);
-        mask   = num - 1;
-        keys   = (Key *)PushArrayNoZero(arena, u8, sizeof(Key) * nextPowerOfTwo);
-        values = (Value *)PushArrayNoZero(arena, u8, sizeof(Value) * nextPowerOfTwo);
+        num = (1 << (Bsr(inNum) + 1));
+        Assert(IsPow2(num) && num > inNum);
+        mask = num - 1;
+        keys = (Key *)PushArrayNoZero(arena, u8, sizeof(Key) * num);
+        for (u32 i = 0; i < num; i++)
+        {
+            keys[i] = invalidKey;
+        }
+        values = (Value *)PushArrayNoZero(arena, u8, sizeof(Value) * num);
     }
     void Create(const Key &key, const Value &value)
     {
@@ -698,6 +701,7 @@ struct HashExt
         u64 startIndex = index;
         do
         {
+            if (keys[index] == invalidKey) return false;
             if (keys[index] == key)
             {
                 out = &values[index];

@@ -277,6 +277,11 @@ void OS_ResizeFile(string filename, u64 size)
     CloseHandle(file);
 }
 
+void OS_FlushMappedFile(void *ptr, size_t size)
+{
+    FlushViewOfFile(ptr, size);
+}
+
 OS_Handle GetMainThreadHandle()
 {
     OS_Handle out = {(u64)GetCurrentThread()};

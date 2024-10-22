@@ -68,6 +68,9 @@ struct Vec3
 };
 
 template <typename T>
+__forceinline bool operator==(const Vec3<T> &a, const Vec3<T> &b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
+
+template <typename T>
 __forceinline Vec3<T> operator-(const Vec3<T> &v) { return Vec3<T>(-v.x, -v.y, -v.z); }
 
 template <typename T>
