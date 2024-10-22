@@ -83,8 +83,18 @@ u64 HashStruct_(void *ptr, u64 size);
 //////////////////////////////
 // String Ids
 //
-typedef u32 StringId;
-constexpr StringId operator""_sid(const char *ptr, size_t count);
+// typedef u32 StringId;
+struct StringId
+{
+    static const u32 Invalid = 0xffffffff;
+    u32 id;
+
+    StringId() {}
+    StringId(u32 id) : id(id) {}
+    operator u32() const { return id; }
+};
+
+constexpr u32 operator""_sid(const char *ptr, size_t count);
 
 //////////////////////////////
 // String token building/reading

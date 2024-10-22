@@ -810,7 +810,8 @@ struct InternedStringCache
 template <i32 numNodes, i32 chunkSize, i32 numStripes>
 StringId InternedStringCache<numNodes, chunkSize, numStripes>::GetOrCreate(Arena *arena, string value)
 {
-    StringId sid    = Hash(value);
+    StringId sid = Hash(value);
+    Assert(sid != StringId::Invalid);
     ChunkNode *node = &nodes[sid & (numNodes - 1)];
     ChunkNode *prev = 0;
 
@@ -974,6 +975,24 @@ struct ChunkedLinkedList
         T &result = last->values[last->count++];
         totalCount++;
         return result;
+    }
+    T &operator[](u32 i)
+    {
+        Assert(i < totalCount);
+        ChunkNode *node = first;
+        for (;;)
+        {
+            Assert(node);
+            if (i > node->count)
+            {
+                i -= node->count;
+                node = node->next;
+            }
+            else
+            {
+                return node->values[i];
+            }
+        }
     }
     inline void Push(T &val)
     {
@@ -1908,10 +1927,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
                 string textureName;
                 b32 result = GetBetweenPair(textureName, &tokenizer, '"');
 
-                if (textureName == "isHibiscus:leafHibiscus_Color")
-                {
-                    int stop = 5;
-                }
                 Assert(result);
                 string textureType;
                 result = GetBetweenPair(textureType, &tokenizer, '"');
@@ -1979,6 +1994,11 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state, Graphics
     ScratchEnd(temp);
 }
 
+// TODO: potential problems
+// 1. the total number of quad meshes that are instanced changes every run
+//      a. the file size should be constant but it's not
+// 2. only 298 instance types use quads (pretty sure it should be all 312)
+
 void Serialize(Arena *arena, string directory, SceneLoadState *state)
 {
     TempArena temp    = ScratchStart(0, 0);
@@ -2012,13 +2032,13 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
         P_Curve,
     };
 
-    QuadMesh *qMeshes       = PushArray(arena, QuadMesh, totalNumQuadMeshes);
-    TriangleMesh *triMeshes = PushArray(arena, TriangleMesh, totalNumTriMeshes);
+    QuadMesh *qMeshes       = PushArray(temp.arena, QuadMesh, totalNumQuadMeshes);
+    TriangleMesh *triMeshes = PushArray(temp.arena, TriangleMesh, totalNumTriMeshes);
 
-    PrimitiveTy **types = PushArray(arena, PrimitiveTy *, numProcessors);
-    u32 **offsets       = PushArray(arena, u32 *, numProcessors);
+    PrimitiveTy **types = PushArray(temp.arena, PrimitiveTy *, numProcessors);
+    u32 **offsets       = PushArray(temp.arena, u32 *, numProcessors);
 
-    u32 *totalNumVertices = PushArray(arena, u32, numProcessors);
+    u32 *totalNumVertices = PushArray(temp.arena, u32, numProcessors);
 
     using InstanceTypeList = ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance>;
 
@@ -2195,10 +2215,11 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
 
     u8 *ptr = OS_MapFileWrite(filename, fileSize);
 
-    LookupEntry *lookUpPtr = (LookupEntry *)ptr;
-    LookupEntry *lookUpEnd = (LookupEntry *)(ptr + totalNumInstTypes * sizeof(LookupEntry));
-    u8 *endOfFile          = ptr + fileSize;
-    u8 *currentPtr         = ptr + sizeof(LookupEntry) * totalNumInstTypes;
+    LookupEntry *lookUpPtr   = (LookupEntry *)ptr;
+    LookupEntry *lookUpStart = lookUpPtr;
+    LookupEntry *lookUpEnd   = (LookupEntry *)(ptr + totalNumInstTypes * sizeof(LookupEntry));
+    u8 *endOfFile            = ptr + fileSize;
+    u8 *currentPtr           = ptr + sizeof(LookupEntry) * totalNumInstTypes;
 
     // Merge meshes belonging to the same object instance type
     u32 outQuadOffset      = 0;
@@ -2253,8 +2274,12 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
         }
     };
 
+    // NOTE: externally chained hash table that cannot grow
+
     HashTable pTable(temp.arena, 524288);
     HashTable nTable(temp.arena, 524288);
+
+    HashExt<StringId, u32> instanceTypeTable(arena, totalNumInstTypes, StringId::Invalid);
 
     u32 testVertexCount = 0;
     for (u32 pIndex = 0; pIndex < numProcessors; pIndex++)
@@ -2348,7 +2373,10 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                     Assert(lookUpPtr < lookUpEnd);
                     lookUpPtr->offset        = u64((u8 *)meshes - ptr);
                     lookUpPtr->quadMeshCount = quadMeshCount;
-                    lookUpPtr++;
+
+                    u32 entryIndex = u32(lookUpPtr - lookUpStart);
+
+                    instanceTypeTable.Create(name, entryIndex);
 
                     Vec3f *dataPtr     = (Vec3f *)(meshes + quadMeshCount);
                     u32 quadMeshOffset = 0;
@@ -2368,7 +2396,8 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                             {
                                 QuadMesh *mesh = &qMeshes[currentOffsetGroup[shapeIndex]];
                                 Assert(quadMeshOffset < quadMeshCount);
-                                QuadMesh *newMesh = &meshes[quadMeshOffset++];
+                                QuadMesh *newMesh    = &meshes[quadMeshOffset++];
+                                newMesh->numVertices = mesh->numVertices;
 
                                 u64 pHash              = MurmurHash64A((const u8 *)mesh->p, sizeof(Vec3f) * mesh->numVertices, 0);
                                 HashTable::Node *pNode = pTable.FindOrCreate(pHash, mesh->p, mesh->numVertices);
@@ -2466,6 +2495,67 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     //         printf("Failed to write tri file");
     //         Assert(0);
     //     }
+
+    ScratchEnd(temp);
+    temp = ScratchStart(0, 0);
+
+    u64 numInstances  = 0;
+    u32 numTransforms = 0;
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        numInstances += state->instances[i].totalCount;
+        numTransforms += state->transforms[i].totalCount;
+    }
+
+    fileSize            = sizeof(Instance) * numInstances + sizeof(AffineSpace) * numTransforms + sizeof(numInstances);
+    filename            = PushStr8F(temp.arena, "%Sinstances.inst", directory);
+    u8 *instanceFilePtr = OS_MapFileWrite(filename, fileSize);
+
+    *(u64 *)instanceFilePtr = numInstances;
+
+    Instance *instances     = (Instance *)(instanceFilePtr + sizeof(numInstances));
+    AffineSpace *transforms = (AffineSpace *)(instances + numInstances);
+
+    u32 instanceOffset  = 0;
+    u32 transformOffset = 0;
+    using InstanceList  = ChunkedLinkedList<SceneInstance, 1024, MemoryType_Instance>;
+    using TransformList = ChunkedLinkedList<const AffineSpace *, 16384, MemoryType_Transform>;
+
+    HashExt<const AffineSpace *, u32> transformHashTable(temp.arena, numTransforms, 0);
+
+    for (u32 pIndex = 0; pIndex < numProcessors; pIndex++)
+    {
+        auto &list          = state->instances[pIndex];
+        auto &transformList = state->transforms[pIndex];
+        for (InstanceList::ChunkNode *node = list.first; node != 0; node = node->next)
+        {
+            for (u32 i = 0; i < node->count; i++)
+            {
+                SceneInstance &instance = node->values[i];
+                u32 index;
+                bool found = instanceTypeTable.Find(instance.name, &index);
+                Assert(found);
+                const AffineSpace *t = transformList[instance.transformIndex];
+
+                // basically need to use if the transform has been written yet. if it has, use that index. otherwise,
+                // add to the hash and rewrite. this is going to probably use a decent amount of memory
+                Instance *outInstance = &instances[instanceOffset];
+                outInstance->geomID   = GeometryID::CreateQuadMeshID(index);
+
+                if (transformHashTable.Find(t, &index))
+                {
+                    outInstance->transformIndex = index;
+                }
+                else
+                {
+                    u32 transformIndex = transformOffset++;
+                    transformHashTable.Create(t, transformIndex);
+                    outInstance->transformIndex = transformIndex;
+                }
+                instanceOffset++;
+            }
+        }
+    }
     ScratchEnd(temp);
 }
 

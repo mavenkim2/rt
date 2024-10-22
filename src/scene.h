@@ -459,17 +459,24 @@ struct GeometryID
     static const u32 indexMask = 0x0fffffff;
     static const u32 typeShift = 28;
 
-    static const u32 sphereType       = 0;
-    static const u32 quadType         = 1;
-    static const u32 boxType          = 2;
-    static const u32 triangleMeshType = 3;
-    static const u32 curveType        = 4;
-    static const u32 subdivType       = 5;
-    static const u32 instanceType     = 16;
+    // static const u32 sphereType       = 0;
+    // static const u32 quadType         = 1;
+    // static const u32 boxType          = 2;
+    // static const u32 triangleMeshType = 3;
+    // static const u32 curveType        = 4;
+    // static const u32 subdivType       = 5;
+    // static const u32 instanceType     = 16;
+    static const u32 quadMeshType = 0;
 
     u32 id;
 
     GeometryID(u32 id) : id(id) {}
+
+    static GeometryID CreateQuadMeshID(u32 index)
+    {
+        Assert(index < (1 << 28));
+        return (quadMeshType << typeShift) | (index & indexMask);
+    }
 
     u32 GetType() const
     {
@@ -481,6 +488,13 @@ struct InstancePrimitive
 {
     GeometryID geomID;     // points to the bvh and the geometry
     Mat4 *objectFromWorld; // transform
+};
+
+struct Instance
+{
+    // TODO: materials
+    GeometryID geomID;
+    u32 transformIndex;
 };
 
 struct Scene

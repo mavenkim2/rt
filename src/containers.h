@@ -652,4 +652,62 @@ struct HashIndex
         return result;
     }
 };
+
+template <typename Key, typename Value>
+struct HashExt
+{
+    Key *keys;
+    Key invalidKey;
+    Value *values;
+    u32 num;
+    u64 mask;
+
+    HashExt() {}
+    HashExt(Arena *arena, u32 num, Key invalidKey) : invalidKey(invalidKey)
+    {
+        u32 nextPowerOfTwo = (1 << (Bsf(num) + 1));
+        num                = nextPowerOfTwo;
+        Assert(IsPow2(num) && nextPowerOfTwo > num);
+        mask   = num - 1;
+        keys   = (Key *)PushArrayNoZero(arena, u8, sizeof(Key) * nextPowerOfTwo);
+        values = (Value *)PushArrayNoZero(arena, u8, sizeof(Value) * nextPowerOfTwo);
+    }
+    void Create(const Key &key, const Value &value)
+    {
+        u64 hash       = Hash(key);
+        u64 index      = hash & mask;
+        u64 startIndex = index;
+        do
+        {
+            Assert(keys[index] != key);
+            if (keys[index] == invalidKey)
+            {
+                keys[index]   = key;
+                values[index] = value;
+                return;
+            }
+            index = (index + 1) & mask;
+        } while (index != startIndex);
+
+        Assert(!"hash table overflowed");
+    }
+    bool Find(const Key &key, Value *out) const
+    {
+        u64 hash       = Hash(key);
+        u64 index      = hash & mask;
+        u64 startIndex = index;
+        do
+        {
+            if (keys[index] == key)
+            {
+                out = &values[index];
+                return true;
+            }
+            index = (index + 1) & mask;
+        } while (index != startIndex);
+
+        return false;
+    }
+};
+
 } // namespace rt

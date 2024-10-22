@@ -838,7 +838,7 @@ b32 IsEndOfLine(Tokenizer *tokenizer)
 //////////////////////////////
 // Global string table
 //
-constexpr StringId operator""_sid(const char *ptr, size_t count)
+constexpr u32 operator""_sid(const char *ptr, size_t count)
 {
     return MurmurHash32((const char *)ptr, (int)count, 0);
 }
