@@ -696,11 +696,17 @@ void PartitionFix()
 
 void SceneLoadTest()
 {
-    Arena *arena = ArenaAlloc();
+    Arena *arena      = ArenaAlloc();
+    u32 numProcessors = OS_NumProcessors();
+    Arena **arenas    = PushArray(arena, Arena *, numProcessors);
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        arenas[i] = ArenaAlloc(16); // ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
+    }
     Scene scene;
 
     PerformanceCounter counter = OS_StartCounter();
-    ReadSerializedData(arena, &scene, "data/pbrt-v4/quad.mesh", "data/island/pbrt-v4/instances.inst");
+    ReadSerializedData(arenas, &scene, "data/island/pbrt-v4/meshes/", "data/island/pbrt-v4/instances.inst");
     printf("time: %fms\n", OS_GetMilliseconds(counter));
 }
 

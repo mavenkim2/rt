@@ -282,6 +282,75 @@ void OS_FlushMappedFile(void *ptr, size_t size)
     FlushViewOfFile(ptr, size);
 }
 
+// OS_FileIter OS_DirectoryIterStart(string path, OS_FileIterFlags flags)
+// {
+//     OS_FileIter result;
+//     TempArena temp       = ScratchStart(0, 0);
+//     string search        = StrConcat(temp.arena, path, Str8Lit("\\*"));
+//     result.flags         = flags;
+//     Win32_FileIter *iter = (Win32_FileIter *)result.memory;
+//     iter->handle         = FindFirstFileA((char *)search.str, &iter->findData);
+//     return result;
+// }
+//
+// b32 OS_DirectoryIterNext(Arena *arena, OS_FileIter *input, OS_FileProperties *out)
+// {
+//     b32 done               = 0;
+//     Win32_FileIter *iter   = (Win32_FileIter *)input->memory;
+//     OS_FileIterFlags flags = input->flags;
+//     if (!(input->flags & OS_FileIterFlag_Complete) && iter->handle != INVALID_HANDLE_VALUE)
+//     {
+//         do
+//         {
+//             b32 skip         = 0;
+//             char *filename   = iter->findData.cFileName;
+//             DWORD attributes = iter->findData.dwFileAttributes;
+//             if (filename[0] == '.')
+//             {
+//                 if (flags & OS_FileIterFlag_SkipHiddenFiles || filename[1] == 0 ||
+//                     (filename[1] == '.' && filename[2] == 0))
+//                 {
+//                     skip = 1;
+//                 }
+//             }
+//             if (attributes & FILE_ATTRIBUTE_DIRECTORY)
+//             {
+//                 if (flags & OS_FileIterFlag_SkipDirectories)
+//                 {
+//                     skip = 1;
+//                 }
+//             }
+//             else
+//             {
+//                 if (flags & OS_FileIterFlag_SkipFiles)
+//                 {
+//                     skip = 1;
+//                 }
+//             }
+//             if (!skip)
+//             {
+//                 out->size         = ((u64)iter->findData.nFileSizeLow) | (((u64)iter->findData.nFileSizeHigh) << 32);
+//                 out->lastModified = Win32DenseTimeFromFileTime(&iter->findData.ftLastWriteTime);
+//                 out->isDirectory  = (attributes & FILE_ATTRIBUTE_DIRECTORY);
+//                 out->name         = PushStr8Copy(arena, Str8C(filename));
+//                 done              = 1;
+//                 if (!FindNextFileA(iter->handle, &iter->findData))
+//                 {
+//                     input->flags |= OS_FileIterFlag_Complete;
+//                 }
+//                 break;
+//             }
+//         } while (FindNextFileA(iter->handle, &iter->findData));
+//     }
+//     return done;
+// }
+//
+// void OS_DirectoryIterEnd(OS_FileIter *input)
+// {
+//     Win32_FileIter *iter = (Win32_FileIter *)input->memory;
+//     FindClose(iter->handle);
+// }
+
 OS_Handle GetMainThreadHandle()
 {
     OS_Handle out = {(u64)GetCurrentThread()};

@@ -718,66 +718,6 @@ QuadMesh LoadQuadPLY(Arena *arena, string filename)
     return mesh;
 }
 
-template <typename T, i32 numSlots, i32 chunkSize, i32 numStripes, i32 tag>
-struct Map
-{
-    StaticAssert(IsPow2(numSlots), CachePow2N);
-    struct ChunkNode
-    {
-        T values[chunkSize];
-        u32 count;
-        ChunkNode *next;
-    };
-    ChunkNode *nodes;
-    Mutex *mutexes;
-
-    Map() {}
-    Map(Arena *arena)
-    {
-        nodes   = PushArrayTagged(arena, ChunkNode, numSlots, tag);
-        mutexes = PushArrayTagged(arena, Mutex, numStripes, tag);
-    }
-    const T *GetOrCreate(Arena *arena, T value);
-};
-
-template <typename T, i32 numSlots, i32 chunkSize, i32 numStripes, i32 tag>
-const T *Map<T, numSlots, chunkSize, numStripes, tag>::GetOrCreate(Arena *arena, T value)
-{
-    u64 hash        = Hash<T>(value);
-    ChunkNode *node = &nodes[hash & (numSlots - 1)];
-    ChunkNode *prev = 0;
-
-    u32 stripe = hash & (numStripes - 1);
-    BeginRMutex(&mutexes[stripe]);
-    while (node)
-    {
-        for (u32 i = 0; i < node->count; i++)
-        {
-            if (node->values[i] == value)
-            {
-                EndRMutex(&mutexes[stripe]);
-                return &node->values[i];
-            }
-        }
-        prev = node;
-        node = node->next;
-    }
-    EndRMutex(&mutexes[stripe]);
-
-    T *out = 0;
-    BeginWMutex(&mutexes[stripe]);
-    if (prev->count == ArrayLength(prev->values))
-    {
-        node       = PushStructTagged(arena, ChunkNode, tag);
-        prev->next = node;
-        prev       = node;
-    }
-    prev->values[prev->count] = value;
-    out                       = &prev->values[prev->count++];
-    EndWMutex(&mutexes[stripe]);
-    return out;
-}
-
 template <i32 numNodes, i32 chunkSize, i32 numStripes>
 struct InternedStringCache
 {
@@ -929,7 +869,7 @@ const string *StringCache<numNodes, chunkSize, numStripes>::GetOrCreate(Arena *a
     }
     EndRMutex(&mutexes[stripe]);
 
-    // TODO: there's a very rare case where the thread gets unscheduled here, another thread writes the same
+    // NOTE: there's a very rare case where the thread gets unscheduled here, another thread writes the same
     // string value to the cache. and this thread writes that value again. this doesn't impact correctness
     // but some values will be duplicated, wasting some memory
 
@@ -1052,10 +992,6 @@ struct SceneLoadState
 
     ScenePacket packets[MAX] = {};
 
-    // TODO: these numbers are really ad hoc. honestly the best solution would be to just serialize the scene
-    // so that the number of transforms, shapes, instances, etc. is known from the very start. that way you
-    // don't even need hash tables. you would just need an index into a global array that contains everything
-    // and it would be really simple and easy to use.
     ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape> *shapes;
     ChunkedLinkedList<ScenePacket, 1024, MemoryType_Material> *materials;
     ChunkedLinkedList<ScenePacket, 1024, MemoryType_Texture> *textures;
@@ -1071,7 +1007,7 @@ struct SceneLoadState
     // u32 *numCurves;
 
     InternedStringCache<16384, 8, 64> stringCache;
-    Map<AffineSpace, 1048576, 8, 1024, MemoryType_Transform> transformCache;
+    HashSet<AffineSpace, 1048576, 8, 1024, MemoryType_Transform> transformCache;
 
     Arena **threadArenas;
 
@@ -1320,7 +1256,6 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
         }
 
         // NOTE: either a series of wavelength value pairs or the name of a file with wavelength value pairs
-        // TODO: handle cases where brackets are on new line
         else if (dataType == "spectrum")
         {
             if (numValues > 1)
@@ -1364,8 +1299,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
               GraphicsState graphicsState = {}, bool inWorldBegin = false, bool imported = false);
 void Serialize(Arena *arena, string directory, SceneLoadState *state);
 
-// TODO IMPORTANT: for some god forsaken reason with clang this generate a vmovaps unaligned error?? i don't want to deal
-// with that rn so im putting this here.
 Scene *LoadPBRT(Arena *arena, string filename)
 {
 #define COMMA ,
@@ -1399,12 +1332,11 @@ Scene *LoadPBRT(Arena *arena, string filename)
     state.mainArena      = arena;
     state.scene          = scene;
     state.stringCache    = InternedStringCache<16384, 8, 64>(arena);
-    state.transformCache = Map<AffineSpace, 1048576, 8, 1024, MemoryType_Transform>(arena);
+    state.transformCache = HashSet<AffineSpace, 1048576, 8, 1024, MemoryType_Transform>(arena);
 
     string baseDirectory = Str8PathChopPastLastSlash(filename);
     LoadPBRT(filename, baseDirectory, &state);
 
-    // TODO: combine the arrays
     scheduler.Wait(&state.counter);
 
     u64 totalNumShapes        = 0;
@@ -1453,8 +1385,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
     tokenizer.input  = OS_MapFileRead(filename);
     tokenizer.cursor = tokenizer.input.str;
 
-    // TODO: run through the file really fast to find the total number of shapes/materials/etc, and then allocate that amount.
-    // also stop reading files when they're already on disk (for the current thread)
     auto &shapes        = state->shapes[threadIndex];
     auto &materials     = state->materials[threadIndex];
     auto &textures      = state->textures[threadIndex];
@@ -1507,7 +1437,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
     };
 
     // TODO: media
-
     for (;;)
     {
         if (EndOfBuffer(&tokenizer))
@@ -2018,9 +1947,15 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
 
 struct LookupEntry
 {
-    u64 offset;
+    // u64 offset;
+    u32 name;
     u32 quadMeshCount;
 };
+
+u64 GetOffset(u32 name, u32 offset)
+{
+    return (u64(offset) << 32ull) | u64(name);
+}
 
 #define SERIALIZE_SHAPES    1
 #define SERIALIZE_INSTANCES 0
@@ -2069,7 +2004,6 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
 
     using ShapeTypeList = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape>;
 
-    // TODO: the number of instanced quads changes every run when it shouldn't
     scheduler.ScheduleAndWait(numProcessors, 1, [&](u32 jobID) {
         TempArena temp      = ScratchStart(0, 0);
         u32 quadOffset      = quadOffsets[jobID];
@@ -2154,7 +2088,6 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                                     mesh->numIndices = packet->sizes[parameterIndex] / sizeof(u32);
                                 }
                                 break;
-                                // TODO: need to make sure that this is always just 0, 1, 2, 3... etc
                                 case "faceIndices"_sid: continue;
                                 case "uv"_sid:
                                 {
@@ -2220,27 +2153,22 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
         ScratchEnd(temp);
     });
 
-    string filename = PushStr8F(temp.arena, "%Squad.mesh", directory);
-
     u32 totalVertexCount = 0;
     for (u32 i = 0; i < numProcessors; i++)
     {
         totalVertexCount += totalNumVertices[i];
     }
 
-    static const size_t flushSize = megabytes(64);
 #if SERIALIZE_SHAPES
     // Initial estimate of file
     // size of all geometry + size of quad mesh references + size of lookup table + size of aligning
-    u64 fileSize = sizeof(Vec3f) * 2 * totalVertexCount + totalNumQuadMeshes * sizeof(QuadMesh) +
-                   totalNumInstTypes * (sizeof(LookupEntry) + 4);
 
-    u8 *ptr = OS_MapFileWrite(filename, fileSize);
+    LookupEntry *lookUpStart = PushArrayNoZero(temp.arena, LookupEntry, totalNumInstTypes);
 
-    LookupEntry *lookUpStart = (LookupEntry *)ptr;
-    u8 *endOfFile            = ptr + fileSize;
-    u8 *currentPtr           = ptr + sizeof(LookupEntry) * totalNumInstTypes;
-    u8 *flushBase            = currentPtr;
+    u8 **mappedPtrs   = PushArray(temp.arena, u8 *, totalNumInstTypes);
+    u32 *sizes        = PushArray(temp.arena, u32, totalNumInstTypes);
+    string *filenames = PushArray(temp.arena, string, totalNumInstTypes);
+
 #endif
     u32 lookUpOffset       = 0;
     u32 quadInstancedCount = 0;
@@ -2255,6 +2183,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
         {
             Vec3f *v;
             u32 numVertices;
+            u64 ptr;
             Node *next;
         };
         Node *slots;
@@ -2267,7 +2196,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
             Assert(IsPow2(tableSize));
             slots = PushArray(arena, Node, tableSize);
         }
-        Node *FindOrCreate(u64 hash, Vec3f *data, u32 numVertices)
+        Node *FindOrCreate(u64 hash, Vec3f *data, u32 numVertices, u32 name, u32 offset)
         {
             u64 key    = hash & (tableSize - 1);
             Node *node = &slots[key];
@@ -2276,7 +2205,15 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
             {
                 if (numVertices == node->numVertices)
                 {
-                    bool equal = memcmp(data, node->v, numVertices * sizeof(Vec3f)) == 0;
+                    bool equal = true;
+                    for (u32 i = 0; i < numVertices; i++)
+                    {
+                        if (data[i] != node->v[i])
+                        {
+                            equal = false;
+                            break;
+                        }
+                    }
                     if (equal)
                     {
                         return node;
@@ -2287,9 +2224,10 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
             }
             Assert(node == 0);
             node              = PushStruct(arena, Node);
-            prev->next        = node;
             node->v           = data;
             node->numVertices = numVertices;
+            node->ptr         = GetOffset(name, offset);
+            prev->next        = node;
             return node;
         }
     };
@@ -2301,7 +2239,6 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
 
     HashExt<StringId, u32> instanceTypeTable(arena, totalNumInstTypes, StringId::Invalid);
 
-    u32 testVertexCount = 0;
     for (u32 pIndex = 0; pIndex < numProcessors; pIndex++)
     {
         InstanceTypeList *list   = &state->instanceTypes[pIndex];
@@ -2354,6 +2291,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                     bool someQuads    = false;
                     bool hasNormals   = false;
                     u32 quadMeshCount = 0;
+                    u32 vertexCount   = 0;
                     for (u32 instanceIndex = 0; instanceIndex < currentInstanceCount; instanceIndex++)
                     {
                         ObjectInstanceType *currentObj = currentObject[instanceIndex];
@@ -2371,10 +2309,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                                 QuadMesh *mesh = &qMeshes[currentOffsetGroup[shapeIndex]];
                                 if (!hasNormals && mesh->n) hasNormals = true;
                                 quadInstancedCount++;
-                            }
-                            else
-                            {
-                                printf("ty: %u\n", currentTyGroup[shapeIndex]);
+                                vertexCount += mesh->numVertices;
                             }
                         }
 #if SERIALIZE_SHAPES == 0
@@ -2394,15 +2329,22 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
 #if SERIALIZE_SHAPES
                     // For each object instance type containing quads, write the position data to a memory mapped file
                     // TODO: need to keep track of the material used for each
+                    string filename        = PushStr8F(temp.arena, "%Smeshes/%u.mesh", directory, entryIndex); // name);
+                    filenames[entryIndex]  = filename;
+                    u8 *mappedPtr          = OS_MapFileWrite(filename, vertexCount * sizeof(Vec3f) * 2 +
+                                                                           quadMeshCount * sizeof(QuadMesh));
+                    mappedPtrs[entryIndex] = mappedPtr;
 
-                    QuadMesh *meshes = (QuadMesh *)(AlignPow2((u64)currentPtr, 8));
-
-                    LookupEntry *lookUpPtr   = &lookUpStart[entryIndex];
-                    lookUpPtr->offset        = u64((u8 *)meshes - ptr);
-                    lookUpPtr->quadMeshCount = quadMeshCount;
-
+                    QuadMesh *meshes   = (QuadMesh *)mappedPtr;
                     Vec3f *dataPtr     = (Vec3f *)(meshes + quadMeshCount);
                     u32 quadMeshOffset = 0;
+
+                    const u32 flushSize = megabytes(64);
+                    u8 *flushBase       = (u8 *)dataPtr;
+
+                    LookupEntry *lookUpPtr   = &lookUpStart[entryIndex];
+                    lookUpPtr->name          = name;
+                    lookUpPtr->quadMeshCount = quadMeshCount;
                     for (u32 instanceIndex = 0; instanceIndex < currentInstanceCount; instanceIndex++)
                     {
                         ObjectInstanceType *currentObj = currentObject[instanceIndex];
@@ -2421,47 +2363,50 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                                 QuadMesh *newMesh    = &meshes[quadMeshOffset++];
                                 newMesh->numVertices = mesh->numVertices;
 
-                                u64 pHash              = MurmurHash64A((const u8 *)mesh->p, sizeof(Vec3f) * mesh->numVertices, 0);
-                                HashTable::Node *pNode = pTable.FindOrCreate(pHash, mesh->p, mesh->numVertices);
+                                u64 pOffset = u64((u8 *)dataPtr - mappedPtr);
+                                Assert(pOffset <= 0xffffffff);
 
-                                HashTable::Node *nNode = 0;
-                                if (mesh->n)
-                                {
-                                    u64 nHash = MurmurHash64A((const u8 *)mesh->n, sizeof(Vec3f) * mesh->numVertices, 0);
-                                    nNode     = nTable.FindOrCreate(nHash, mesh->n, mesh->numVertices);
-                                }
+                                u64 pHash              = MurmurHash64A((const u8 *)mesh->p, sizeof(Vec3f) * mesh->numVertices, 0);
+                                HashTable::Node *pNode = pTable.FindOrCreate(pHash, mesh->p, mesh->numVertices, entryIndex, u32(pOffset));
 
                                 if (pNode->v == mesh->p)
                                 {
                                     MemoryCopy(dataPtr, mesh->p, sizeof(Vec3f) * mesh->numVertices);
                                     pNode->v = dataPtr;
                                     dataPtr += mesh->numVertices;
-                                    testVertexCount += mesh->numVertices;
                                 }
-                                u64 offset = u64((u8 *)pNode->v - ptr);
-                                ConvertPointerToOffset((u8 *)&newMesh->p, 0, offset);
+                                u64 offset = pNode->ptr;
+                                Assert((offset & 0xffffffff) < totalNumInstTypes);
+                                *(u64 *)(&newMesh->p) = offset;
+
+                                HashTable::Node *nNode = 0;
                                 if (mesh->n)
                                 {
+                                    u64 nOffset = u64((u8 *)dataPtr - mappedPtr);
+                                    Assert(nOffset <= 0xffffffff);
+                                    u64 nHash = MurmurHash64A((const u8 *)mesh->n, sizeof(Vec3f) * mesh->numVertices, 0);
+                                    nNode     = nTable.FindOrCreate(nHash, mesh->n, mesh->numVertices, entryIndex, u32(nOffset));
                                     if (nNode->v == mesh->n)
                                     {
                                         MemoryCopy(dataPtr, mesh->n, sizeof(Vec3f) * mesh->numVertices);
                                         nNode->v = dataPtr;
                                         dataPtr += mesh->numVertices;
                                     }
-                                    offset = u64((u8 *)nNode->v - ptr);
-                                    ConvertPointerToOffset((u8 *)&newMesh->n, 0, offset);
+                                    offset = nNode->ptr;
+                                    Assert((offset & 0xffffffff) < totalNumInstTypes);
+                                    *(u64 *)(&newMesh->n) = offset;
                                 }
-                                currentPtr = (u8 *)dataPtr;
-
-                                u64 size = u64(currentPtr - flushBase);
+                                u32 size = u32((u8 *)dataPtr - flushBase);
                                 if (size >= flushSize)
                                 {
                                     OS_FlushMappedFile(flushBase, size);
-                                    flushBase = currentPtr;
+                                    flushBase = (u8 *)dataPtr;
                                 }
                             }
                         }
                     }
+
+                    sizes[entryIndex] = u32((u8 *)dataPtr - mappedPtr);
 #endif
                     currentInstanceCount = 0;
                 }
@@ -2472,55 +2417,63 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     printf("quad instanced total: %u\n", quadInstancedCount);
     printf("total num instance types: %u\n", lookUpOffset);
 #if SERIALIZE_SHAPES
-    u64 finalSize = u64(currentPtr - ptr);
-    OS_UnmapFile(ptr);
-    OS_ResizeFile(filename, finalSize);
-    printf("final file size: %llu\n", finalSize);
+    for (u32 i = 0; i < lookUpOffset; i++)
+    {
+        OS_UnmapFile(mappedPtrs[i]);
+        OS_ResizeFile(filenames[i], sizes[i]);
+    }
+
+    u8 *mappedPtr        = OS_MapFileWrite(PushStr8F(temp.arena, "%Smeshes/lut.mesh", directory),
+                                           sizeof(LookupEntry) * lookUpOffset + sizeof(u64));
+    *(u64 *)mappedPtr    = lookUpOffset;
+    LookupEntry *entries = (LookupEntry *)(mappedPtr + sizeof(u64));
+    MemoryCopy(entries, lookUpStart, sizeof(LookupEntry) * lookUpOffset);
+    OS_UnmapFile(mappedPtr);
 
     // convert pointers to offsets (for pointer fix ups) and write to file
-    StringBuilder builder = {};
-    builder.arena         = temp.arena;
-
-    u64 triMeshFileOffset = AppendArray(&builder, triMeshes, totalNumTriMeshes);
-    Assert(triMeshFileOffset == 0);
-
-    u64 *positionWrites = PushArrayNoZero(temp.arena, u64, totalNumTriMeshes);
-    u64 *normalWrites   = PushArray(temp.arena, u64, totalNumTriMeshes);
-    u64 *uvWrites       = PushArray(temp.arena, u64, totalNumTriMeshes);
-    u64 *indexWrites    = PushArray(temp.arena, u64, totalNumTriMeshes);
-    for (u32 i = 0; i < totalNumTriMeshes; i++)
-    {
-        TriangleMesh *mesh = &triMeshes[i];
-        positionWrites[i]  = AppendArray(&builder, mesh->p, mesh->numVertices);
-        if (mesh->n)
-        {
-            normalWrites[i] = AppendArray(&builder, mesh->n, mesh->numVertices);
-        }
-        if (mesh->uv)
-        {
-            uvWrites[i] = AppendArray(&builder, mesh->uv, mesh->numVertices);
-        }
-        if (mesh->indices)
-        {
-            indexWrites[i] = AppendArray(&builder, mesh->indices, mesh->numIndices);
-        }
-    }
-    string result = CombineBuilderNodes(&builder);
-    for (u32 i = 0; i < totalNumTriMeshes; i++)
-    {
-        ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, p), positionWrites[i]);
-        ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, n), normalWrites[i]);
-        ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, uv), uvWrites[i]);
-        ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, indices), indexWrites[i]);
-        triMeshFileOffset += sizeof(TriangleMesh);
-    }
-    string triFilename = StrConcat(temp.arena, directory, "tris.mesh");
-    b32 success        = OS_WriteFile(triFilename, result.str, (u32)result.size);
-    if (!success)
-    {
-        printf("Failed to write tri file");
-        Assert(0);
-    }
+    // StringBuilder builder = {};
+    // builder.arena         = temp.arena;
+    //
+    // u64 triMeshFileOffset = AppendArray(&builder, triMeshes, totalNumTriMeshes);
+    // Assert(triMeshFileOffset == 0);
+    //
+    // u64 *positionWrites = PushArrayNoZero(temp.arena, u64, totalNumTriMeshes);
+    // u64 *normalWrites   = PushArray(temp.arena, u64, totalNumTriMeshes);
+    // u64 *uvWrites       = PushArray(temp.arena, u64, totalNumTriMeshes);
+    // u64 *indexWrites    = PushArray(temp.arena, u64, totalNumTriMeshes);
+    // for (u32 i = 0; i < totalNumTriMeshes; i++)
+    // {
+    //     TriangleMesh *mesh = &triMeshes[i];
+    //     positionWrites[i]  = AppendArray(&builder, mesh->p, mesh->numVertices);
+    //     if (mesh->n)
+    //     {
+    //         normalWrites[i] = AppendArray(&builder, mesh->n, mesh->numVertices);
+    //     }
+    //     if (mesh->uv)
+    //     {
+    //         uvWrites[i] = AppendArray(&builder, mesh->uv, mesh->numVertices);
+    //     }
+    //     if (mesh->indices)
+    //     {
+    //         indexWrites[i] = AppendArray(&builder, mesh->indices, mesh->numIndices);
+    //     }
+    // }
+    // string result = CombineBuilderNodes(&builder);
+    // for (u32 i = 0; i < totalNumTriMeshes; i++)
+    // {
+    //     ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, p), positionWrites[i]);
+    //     ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, n), normalWrites[i]);
+    //     ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, uv), uvWrites[i]);
+    //     ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, indices), indexWrites[i]);
+    //     triMeshFileOffset += sizeof(TriangleMesh);
+    // }
+    // string triFilename = StrConcat(temp.arena, directory, "tris.mesh");
+    // b32 success        = OS_WriteFile(triFilename, result.str, (u32)result.size);
+    // if (!success)
+    // {
+    //     printf("Failed to write tri file");
+    //     Assert(0);
+    // }
 #endif
 
 #if SERIALIZE_INSTANCES
@@ -2564,7 +2517,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
             {
                 SceneInstance &instance = node->values[i];
                 u32 index;
-                bool found = instanceTypeTable.Find(instance.name, &index);
+                bool found = instanceTypeTable.Find(instance.name, index);
                 if (!found)
                 {
                     printf("instance not found\n");
@@ -2578,7 +2531,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                 Instance *outInstance = &instances[instanceOffset];
                 outInstance->geomID   = GeometryID::CreateQuadMeshID(index);
 
-                if (transformHashTable.Find(t, &index))
+                if (transformHashTable.Find(t, index))
                 {
                     outInstance->transformIndex = index;
                 }
@@ -2614,42 +2567,65 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     ScratchEnd(temp);
 }
 
-void ReadSerializedData(Arena *arena, Scene *scene, string meshFile, string instanceFile)
+void ReadSerializedData(Arena **arenas, Scene *scene, string meshDirectory, string instanceFile)
 {
-    // Read instance file data
-    string instanceFileData = OS_ReadFile(arena, instanceFile);
-    Tokenizer tokenizer(instanceFileData);
-    u64 numInstances;
-    GetPointerValue(&tokenizer, &numInstances);
-    scene->instances    = (Instance *)tokenizer.cursor;
-    scene->numInstances = numInstances;
-    Advance(&tokenizer, sizeof(Instance) * numInstances);
-    scene->affineTransforms = (AffineSpace *)tokenizer.cursor;
+    TempArena temp = ScratchStart(0, 0);
 
     // Read the mesh file data
-    string meshFileData = OS_ReadFile(arena, meshFile);
-    u8 *start           = meshFileData.str;
-
-    tokenizer = Tokenizer(meshFileData);
-    u64 numInstanceTypes;
-    GetPointerValue(&tokenizer, &numInstanceTypes);
-    LookupEntry *table = (LookupEntry *)tokenizer.cursor;
-    // fix the pointers
-    for (u32 i = 0; i < u32(numInstanceTypes); i++)
     {
-        LookupEntry *entry  = table + i;
-        QuadMesh *meshStart = (QuadMesh *)(start + entry->offset);
-        for (u32 meshIndex = 0; meshIndex < entry->quadMeshCount; meshIndex++)
-        {
-            QuadMesh *mesh = meshStart + meshIndex;
-            u64 pOffset    = u64(mesh->p);
-            u64 nOffset    = u64(mesh->n);
-            Assert(pOffset < meshFileData.size);
-            Assert(nOffset < meshFileData.size);
-            mesh->p = (Vec3f *)(start + pOffset);
-            mesh->n = (Vec3f *)(start + nOffset);
-        }
+        string lutPath = StrConcat(temp.arena, meshDirectory, "lut.mesh");
+        string lutData = OS_ReadFile(temp.arena, lutPath);
+        Tokenizer tokenizer(lutData);
+        u64 numEntries;
+        GetPointerValue(&tokenizer, &numEntries);
+        LookupEntry *entries = (LookupEntry *)tokenizer.cursor;
+
+        u8 **ptrs = PushArrayNoZero(temp.arena, u8 *, numEntries);
+
+        scheduler.ScheduleAndWait(u32(numEntries), 1, [&](u32 jobID) {
+            TempArena temp     = ScratchStart(0, 0);
+            LookupEntry *entry = &entries[jobID];
+            string filename    = PushStr8F(temp.arena, "%S%u.mesh", meshDirectory, jobID);
+            Arena *arena       = arenas[GetThreadIndex()];
+            string data        = OS_ReadFile(arena, filename);
+            ptrs[jobID]        = data.str;
+
+            ScratchEnd(temp);
+        });
+
+        scheduler.ScheduleAndWait(u32(numEntries), 1, [&](u32 jobID) {
+            QuadMesh *meshes   = (QuadMesh *)(ptrs[jobID]);
+            LookupEntry *entry = &entries[jobID];
+            for (u32 i = 0; i < entry->quadMeshCount; i++)
+            {
+                QuadMesh *mesh = &meshes[i];
+                u64 pOffset    = u64(mesh->p);
+                u32 fileID     = pOffset & 0xffffffff;
+                Assert(fileID < numEntries);
+                u32 offset = (pOffset >> 32) & 0xffffffff;
+                mesh->p    = (Vec3f *)(ptrs[fileID] + offset);
+
+                u64 nOffset = u64(mesh->n);
+                fileID      = nOffset & 0xffffffff;
+                Assert(fileID < numEntries);
+                offset  = (nOffset >> 32) & 0xffffffff;
+                mesh->n = (Vec3f *)(ptrs[fileID] + offset);
+            }
+        });
     }
+
+    // Read instance file data
+    {
+        string instanceFileData = OS_ReadFile(arenas[GetThreadIndex()], instanceFile);
+        Tokenizer tokenizer(instanceFileData);
+        u64 numInstances;
+        GetPointerValue(&tokenizer, &numInstances);
+        scene->instances    = (Instance *)tokenizer.cursor;
+        scene->numInstances = numInstances;
+        Advance(&tokenizer, sizeof(Instance) * numInstances);
+        scene->affineTransforms = (AffineSpace *)tokenizer.cursor;
+    }
+    ScratchEnd(temp);
 }
 
 } // namespace rt

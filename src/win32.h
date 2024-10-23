@@ -23,6 +23,29 @@ struct PerformanceCounter
     u64 counter;
 };
 
+// struct OS_FileProperties
+// {
+//     string name;
+//     u64 size;
+//     u64 lastModified;
+//     b32 isDirectory;
+// };
+//
+// typedef u32 OS_FileIterFlags;
+// enum
+// {
+//     OS_FileIterFlag_SkipDirectories = (1 << 0),
+//     OS_FileIterFlag_SkipFiles       = (1 << 1),
+//     OS_FileIterFlag_SkipHiddenFiles = (1 << 2),
+//     OS_FileIterFlag_Complete        = (1 << 31),
+// };
+//
+// struct OS_FileIter
+// {
+//     OS_FileIterFlags flags;
+//     u8 memory[600];
+// };
+
 PerformanceCounter OS_StartCounter();
 f32 OS_GetMilliseconds(PerformanceCounter counter);
 u64 OS_GetCounts(PerformanceCounter counter);

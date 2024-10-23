@@ -694,7 +694,7 @@ struct HashExt
 
         Assert(!"hash table overflowed");
     }
-    bool Find(const Key &key, Value *out) const
+    bool Find(const Key &key, Value &out) const
     {
         u64 hash       = Hash(key);
         u64 index      = hash & mask;
@@ -704,7 +704,7 @@ struct HashExt
             if (keys[index] == invalidKey) return false;
             if (keys[index] == key)
             {
-                out = &values[index];
+                out = values[index];
                 return true;
             }
             index = (index + 1) & mask;
@@ -713,5 +713,65 @@ struct HashExt
         return false;
     }
 };
+
+template <typename T, i32 numSlots, i32 chunkSize, i32 numStripes, i32 tag>
+struct HashSet
+{
+    StaticAssert(IsPow2(numSlots), CachePow2N);
+    struct ChunkNode
+    {
+        T values[chunkSize];
+        u32 count;
+        ChunkNode *next;
+    };
+    ChunkNode *nodes;
+    Mutex *mutexes;
+
+    HashSet() {}
+    HashSet(Arena *arena)
+    {
+        nodes   = PushArrayTagged(arena, ChunkNode, numSlots, tag);
+        mutexes = PushArrayTagged(arena, Mutex, numStripes, tag);
+    }
+    const T *GetOrCreate(Arena *arena, T value);
+};
+
+template <typename T, i32 numSlots, i32 chunkSize, i32 numStripes, i32 tag>
+const T *HashSet<T, numSlots, chunkSize, numStripes, tag>::GetOrCreate(Arena *arena, T value)
+{
+    u64 hash        = Hash<T>(value);
+    ChunkNode *node = &nodes[hash & (numSlots - 1)];
+    ChunkNode *prev = 0;
+
+    u32 stripe = hash & (numStripes - 1);
+    BeginRMutex(&mutexes[stripe]);
+    while (node)
+    {
+        for (u32 i = 0; i < node->count; i++)
+        {
+            if (node->values[i] == value)
+            {
+                EndRMutex(&mutexes[stripe]);
+                return &node->values[i];
+            }
+        }
+        prev = node;
+        node = node->next;
+    }
+    EndRMutex(&mutexes[stripe]);
+
+    T *out = 0;
+    BeginWMutex(&mutexes[stripe]);
+    if (prev->count == ArrayLength(prev->values))
+    {
+        node       = PushStructTagged(arena, ChunkNode, tag);
+        prev->next = node;
+        prev       = node;
+    }
+    prev->values[prev->count] = value;
+    out                       = &prev->values[prev->count++];
+    EndWMutex(&mutexes[stripe]);
+    return out;
+}
 
 } // namespace rt

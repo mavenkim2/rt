@@ -474,6 +474,12 @@ struct Scheduler
         Schedule(&counter, numJobs, groupSize, func);
         Wait(&counter);
     }
+    void ScheduleAndWait(const TaskFunction &func)
+    {
+        Counter counter = {};
+        Schedule(&counter, func);
+        Wait(&counter);
+    }
     void Wait(Counter *counter)
     {
         Worker *worker = &workers[GetThreadIndex()];
