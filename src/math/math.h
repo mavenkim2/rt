@@ -9,6 +9,63 @@
 namespace rt
 {
 
+struct Bounds
+{
+    Lane4F32 minP;
+    Lane4F32 maxP;
+
+    Bounds() : minP(pos_inf), maxP(neg_inf) {}
+    Bounds(Lane4F32 minP, Lane4F32 maxP) : minP(minP), maxP(maxP) {}
+
+    __forceinline bool Empty() const { return Any(minP > maxP); }
+
+    __forceinline void Extend(Lane4F32 inMin, Lane4F32 inMax)
+    {
+        minP = Min(minP, inMin);
+        maxP = Max(maxP, inMax);
+    }
+    __forceinline void Extend(Lane4F32 in)
+    {
+        minP = Min(minP, in);
+        maxP = Max(maxP, in);
+    }
+    __forceinline void Extend(Vec3f in) { return Extend(Lane4F32(in)); }
+    __forceinline void Extend(const Bounds &other)
+    {
+        minP = Min(minP, other.minP);
+        maxP = Max(maxP, other.maxP);
+    }
+    __forceinline bool Contains(const Bounds &other) const
+    {
+        return All(other.minP >= minP) && All(other.maxP <= maxP);
+    }
+    __forceinline void Intersect(const Bounds &other)
+    {
+        minP = Max(other.minP, minP);
+        maxP = Min(other.maxP, maxP);
+    }
+};
+
+__forceinline Bounds Intersect(const Bounds &a, const Bounds &b)
+{
+    Bounds result;
+    result.minP = Max(a.minP, b.minP);
+    result.maxP = Min(a.maxP, b.maxP);
+    return result;
+}
+
+__forceinline f32 HalfArea(const Bounds &b)
+{
+    Lane4F32 extent = b.maxP - b.minP;
+    return FMA(extent[0], extent[1] + extent[2], extent[1] * extent[2]);
+}
+struct Basis
+{
+    Vec3f t;
+    Vec3f b;
+    Vec3f n;
+};
+
 //////////////////////////////
 // Ray
 //

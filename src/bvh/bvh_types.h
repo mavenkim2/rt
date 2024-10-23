@@ -56,82 +56,6 @@ struct Split
     Split(f32 sah, u32 pos, u32 dim, f32 val) : bestSAH(sah), bestPos(pos), bestDim(dim), bestValue(val) {}
 };
 
-struct PrimData
-{
-    union
-    {
-        struct
-        {
-            // NOTE: contains the geomID
-            Lane4F32 minP;
-            // NOTE: contains the primID
-            Lane4F32 maxP;
-        };
-        Lane8F32 m256;
-    };
-    PrimData(const PrimData &other)
-    {
-        minP = other.minP;
-        maxP = other.maxP;
-    }
-    PrimData &operator=(const PrimData &other)
-    {
-        minP = other.minP;
-        maxP = other.maxP;
-        return *this;
-    }
-
-    __forceinline GeometryID GeomID() const
-    {
-        return GeometryID(minP.u);
-    }
-
-    __forceinline u32 PrimID() const
-    {
-        return maxP.u;
-    }
-
-    __forceinline void SetGeomID(GeometryID geomID)
-    {
-        minP.u = geomID.id;
-    }
-
-    __forceinline void SetPrimID(u32 primID)
-    {
-        maxP.u = primID;
-    }
-
-    __forceinline Bounds GetBounds() const
-    {
-        Bounds out;
-        out.minP = minP;
-        out.maxP = maxP;
-        return out;
-    }
-};
-
-struct Record
-{
-    PrimData *data;
-    Bounds geomBounds;
-    Bounds centBounds;
-    struct Range
-    {
-        u32 start;
-        u32 end;
-        Range() {}
-        Range(u32 start, u32 end) : start(start), end(end) {}
-        u32 End() const { return end; }
-        u32 Size() const { return end - start; }
-    };
-    Range range;
-
-    Record() {}
-    Record(PrimData *data, const Bounds &gBounds, const Bounds &cBounds, const u32 start, const u32 end)
-        : data(data), geomBounds(gBounds), centBounds(cBounds), range(start, end) {}
-    u32 Size() const { return range.Size(); }
-};
-
 struct PrimRef
 {
     union
@@ -158,35 +82,6 @@ struct PrimRef
         MemoryCopy(this, &l, sizeof(PrimRef));
     }
     u32 LeafID() const { return primID; }
-};
-struct PrimDataSOA
-{
-    union
-    {
-        struct
-        {
-            f32 *minX;
-            f32 *minY;
-            f32 *minZ;
-            u32 *geomIDs;
-            f32 *maxX;
-            f32 *maxY;
-            f32 *maxZ;
-            u32 *primIDs;
-        };
-        f32 *arr[8];
-    };
-    __forceinline void Set(const PrimDataSOA &other, const u32 lIndex, const u32 rIndex)
-    {
-        minX[lIndex]    = other.minX[rIndex];
-        minY[lIndex]    = other.minY[rIndex];
-        minZ[lIndex]    = other.minZ[rIndex];
-        maxX[lIndex]    = other.maxX[rIndex];
-        maxY[lIndex]    = other.maxY[rIndex];
-        maxZ[lIndex]    = other.maxZ[rIndex];
-        geomIDs[lIndex] = other.geomIDs[rIndex];
-        primIDs[lIndex] = other.primIDs[rIndex];
-    }
 };
 
 struct ExtRange
@@ -242,16 +137,6 @@ f32 HalfArea(const ScalarBounds &b)
 {
     return b.HalfArea();
 }
-
-struct RecordSOASplits
-{
-    using PrimitiveData = PrimDataSOA;
-    // Bounds geomBounds;
-    // Bounds centBounds;
-    ScalarBounds geomBounds;
-    ScalarBounds centBounds;
-    ExtRange range;
-};
 
 struct alignas(CACHE_LINE_SIZE) RecordAOSSplits
 {
@@ -556,6 +441,9 @@ struct BVHNode
     static BVHNode<N> EncodeLeaf(void *leaf, u32 num);
     QuantizedNode<N> *GetQuantizedNode();
 };
+
+typedef BVHNode<4> BVHNode4;
+typedef BVHNode<8> BVHNode8;
 
 template <i32 N>
 struct QuantizedNode

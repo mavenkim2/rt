@@ -513,6 +513,19 @@ THREAD_ENTRY_POINT(WorkerLoop)
     }
 }
 
+template <typename Func>
+void ParallelFor(u32 start, u32 count, u32 groupSize, const Func &func)
+{
+    u32 taskCount = (count + groupSize - 1) / groupSize;
+    taskCount     = Min(taskCount, scheduler.numWorkers);
+    u32 stepSize  = count / taskCount;
+    scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
+        u32 tStart = start + jobID * stepSize;
+        u32 end    = jobID == taskCount - 1 ? start + count : tStart + stepSize;
+        func(tStart, end);
+    });
+}
+
 struct ParallelForOutput
 {
     void *out;

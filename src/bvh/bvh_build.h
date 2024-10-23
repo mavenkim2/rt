@@ -229,7 +229,8 @@ using TLAS_PRB_QuantizedNode_Funcs =
                QuantizedNode<N>,
                CreateQuantizedNode<N>,
                UpdateQuantizedNode<N>,
-               BVHNode<N>>;
+               BVHNode<N>,
+               CompressedLeafNode<N>>;
 
 template <i32 N, typename BuildFunctions>
 struct BVHBuilder
@@ -238,13 +239,13 @@ struct BVHBuilder
     using CompressedNodeType = typename BuildFunctions::CompressedNodeType;
     using Heuristic          = typename BuildFunctions::Heuristic;
     using Record             = typename Heuristic::Record;
-    using PrimRef            = typename Record::PrimitiveData;
+    using PrimitiveData      = typename Heuristic::PrimitiveData;
     using LeafType           = typename BuildFunctions::LeafType;
 
     BuildFunctions f;
 
     Arena **arenas;
-    PrimRef *primRefs;
+    PrimitiveData *primRefs;
     Heuristic heuristic;
 
     BVHBuilder() {}
@@ -380,8 +381,8 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, const
             const Record &childRecord = childRecords[recordIndex];
             for (u32 primIndex = childRecord.start; primIndex < childRecord.start + childRecord.count; primIndex++)
             {
-                PrimRef *prim     = &primRefs[primIndex];
-                primIDs[offset++] = prim->LeafID();
+                PrimitiveData *prim = &primRefs[primIndex];
+                primIDs[offset++]   = prim->LeafID();
             }
         }
         return BVHNode<N>::EncodeNode(node);
@@ -397,8 +398,8 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, const
             LeafType *prims           = &primIDs[offset];
             for (u32 primIndex = childRecord.start; primIndex < childRecord.start + childRecord.count; primIndex++)
             {
-                PrimRef *prim     = &primRefs[primIndex];
-                primIDs[offset++] = prim->LeafID();
+                PrimitiveData *prim = &primRefs[primIndex];
+                primIDs[offset++]   = prim->LeafID();
             }
             childNodes[i] = BVHNode<N>::EncodeLeaf(prims, childRecord.count);
         }
@@ -447,18 +448,18 @@ BVHNode<N> BuildQuantizedQuadSBVH(BuildSettings settings,
     return builder.BuildBVH(settings, inArenas, record);
 }
 
-// template <i32 N>
-// BVHNode<N> BuildTLAS(BuildSettings settings,
-//                      Arena **inArenas,
-//                      Instance *instances,
-//                      BuildRef *refs,
-//                      RecordAOSSplits &record)
-// {
-//     PartialRebraidBuilder<N> builder;
-//     new (&builder.heuristic) HeuristicPartialRebraid<N>(refs);
-//     builder.primRefs = refs;
-//     return builder.BuildBVH(settings, inArenas, record);
-// }
+template <i32 N>
+BVHNode<N> BuildTLAS(BuildSettings settings,
+                     Arena **inArenas,
+                     // Instance *instances,
+                     BuildRef<N> *refs,
+                     RecordAOSSplits &record)
+{
+    PartialRebraidBuilder<N> builder;
+    new (&builder.heuristic) HeuristicPartialRebraid<N>(refs);
+    builder.primRefs = refs;
+    return builder.BuildBVH(settings, inArenas, record);
+}
 
 } // namespace rt
 #endif

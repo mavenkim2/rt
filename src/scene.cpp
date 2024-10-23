@@ -2567,7 +2567,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     ScratchEnd(temp);
 }
 
-void ReadSerializedData(Arena **arenas, Scene *scene, string meshDirectory, string instanceFile)
+void ReadSerializedData(Arena **arenas, Scene2 *scene, string meshDirectory, string instanceFile)
 {
     TempArena temp = ScratchStart(0, 0);
 
@@ -2621,7 +2621,7 @@ void ReadSerializedData(Arena **arenas, Scene *scene, string meshDirectory, stri
         u64 numInstances;
         GetPointerValue(&tokenizer, &numInstances);
         scene->instances    = (Instance *)tokenizer.cursor;
-        scene->numInstances = numInstances;
+        scene->numInstances = u32(numInstances);
         Advance(&tokenizer, sizeof(Instance) * numInstances);
         scene->affineTransforms = (AffineSpace *)tokenizer.cursor;
     }

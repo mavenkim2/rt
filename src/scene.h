@@ -1,63 +1,6 @@
 namespace rt
 {
 
-struct Bounds
-{
-    Lane4F32 minP;
-    Lane4F32 maxP;
-
-    Bounds() : minP(pos_inf), maxP(neg_inf) {}
-    Bounds(Lane4F32 minP, Lane4F32 maxP) : minP(minP), maxP(maxP) {}
-
-    __forceinline bool Empty() const { return Any(minP > maxP); }
-
-    __forceinline void Extend(Lane4F32 inMin, Lane4F32 inMax)
-    {
-        minP = Min(minP, inMin);
-        maxP = Max(maxP, inMax);
-    }
-    __forceinline void Extend(Lane4F32 in)
-    {
-        minP = Min(minP, in);
-        maxP = Max(maxP, in);
-    }
-    __forceinline void Extend(Vec3f in) { return Extend(Lane4F32(in)); }
-    __forceinline void Extend(const Bounds &other)
-    {
-        minP = Min(minP, other.minP);
-        maxP = Max(maxP, other.maxP);
-    }
-    __forceinline bool Contains(const Bounds &other) const
-    {
-        return All(other.minP >= minP) && All(other.maxP <= maxP);
-    }
-    __forceinline void Intersect(const Bounds &other)
-    {
-        minP = Max(other.minP, minP);
-        maxP = Min(other.maxP, maxP);
-    }
-};
-
-__forceinline Bounds Intersect(const Bounds &a, const Bounds &b)
-{
-    Bounds result;
-    result.minP = Max(a.minP, b.minP);
-    result.maxP = Min(a.maxP, b.maxP);
-    return result;
-}
-
-__forceinline f32 HalfArea(const Bounds &b)
-{
-    Lane4F32 extent = b.maxP - b.minP;
-    return FMA(extent[0], extent[1] + extent[2], extent[1] * extent[2]);
-}
-struct Basis
-{
-    Vec3f t;
-    Vec3f b;
-    Vec3f n;
-};
-
 class Sphere
 {
 public:
@@ -478,6 +421,10 @@ struct GeometryID
         return (quadMeshType << typeShift) | (index & indexMask);
     }
 
+    u32 GetIndex() const
+    {
+        return id & indexMask;
+    }
     u32 GetType() const
     {
         return id >> typeShift;
@@ -491,6 +438,21 @@ struct Instance
     u32 transformIndex;
 };
 
+struct QuadMeshGroup
+{
+    QuadMesh *meshes;
+    BVHNode4 nodePtr;
+    u32 numMeshes;
+};
+
+struct Scene2
+{
+    QuadMeshGroup *quadMeshGroups;
+    Instance *instances;
+    u32 numInstances;
+    AffineSpace *affineTransforms;
+};
+
 struct Scene
 {
     static const u32 indexMask = 0x0fffffff;
@@ -502,17 +464,11 @@ struct Scene
     Quad *quads;
     Box *boxes;
     TriangleMesh *meshes;
-    QuadMesh *quadMeshes;
 
     PrimitiveIndices *primitiveIndices;
 
     HomogeneousTransform *transforms;
     ConstantMedium *media;
-
-    // new stuff
-    Instance *instances;
-    u64 numInstances;
-    AffineSpace *affineTransforms;
 
     u32 sphereCount;
     u32 quadCount;

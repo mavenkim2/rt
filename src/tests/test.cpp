@@ -23,45 +23,6 @@ TriangleMesh *GenerateMesh(Arena *arena, u32 count, f32 min = -100.f, f32 max = 
     return mesh;
 }
 
-PrimData *GeneratePrimData(Arena *arena, TriangleMesh *mesh, u32 count, u32 numFaces, Bounds &bounds, Bounds &centBounds, bool grow = false)
-{
-    arena->align = 32;
-    PrimData *data;
-    if (grow)
-    {
-        data = PushArray(arena, PrimData, u32(numFaces * GROW_AMOUNT));
-    }
-    else
-    {
-        data = PushArray(arena, PrimData, numFaces);
-    }
-    for (u32 i = 0; i < numFaces; i++)
-    {
-        u32 i0 = mesh->indices[i * 3];
-        u32 i1 = mesh->indices[i * 3 + 1];
-        u32 i2 = mesh->indices[i * 3 + 2];
-
-        PrimData *prim = &data[i];
-        Vec3f v0       = mesh->p[i0];
-        Vec3f v1       = mesh->p[i1];
-        Vec3f v2       = mesh->p[i2];
-
-        Vec3f min = Min(Min(v0, v1), v2);
-        Vec3f max = Max(Max(v0, v1), v2);
-
-        Lane4F32 lMin(min);
-        Lane4F32 lMax(max);
-        prim->minP = lMin;
-        prim->maxP = lMax;
-        prim->SetPrimID(i);
-        prim->SetGeomID(0);
-
-        bounds.Extend(lMin, lMax);
-        centBounds.Extend((lMin + lMax) * 0.5f);
-    }
-    return data;
-}
-
 PrimRef *GenerateAOSData(Arena *arena, TriangleMesh *mesh, u32 numFaces, Bounds &geomBounds, Bounds &centBounds)
 {
     arena->align  = 64;
@@ -661,6 +622,42 @@ void QuadSBVHBuilderTest(Arena *arena, QuadMesh *mesh)
     printf("record kb: %llu", totalRecordMemory / 1024); // num nodes: %llu\n", numNodes);
 }
 
+void PartialRebraidBuilderTest(Arena *arena, Scene2 *scene)
+{
+    RecordAOSSplits record;
+    BuildRef4 *buildRefs = GenerateBuildRefs<4>(scene, arena, record);
+
+    u32 numProcessors = OS_NumProcessors();
+    Arena **arenas    = PushArray(arena, Arena *, numProcessors);
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        arenas[i] = ArenaAlloc(16); // ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
+    }
+
+    BuildSettings settings;
+
+    PerformanceCounter counter = OS_StartCounter();
+    BVHNode4 node              = BuildTLAS<4>(settings, arenas, buildRefs, record);
+    f32 time                   = OS_GetMilliseconds(counter);
+
+    f64 totalMiscTime     = 0;
+    u64 numNodes          = 0;
+    u64 totalNodeMemory   = 0;
+    u64 totalRecordMemory = 0;
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        totalMiscTime += threadLocalStatistics[i].miscF;
+        totalNodeMemory += threadMemoryStatistics[i].totalBVHMemory;
+        totalRecordMemory += threadMemoryStatistics[i].totalRecordMemory;
+        // printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
+        numNodes += threadLocalStatistics[i].misc;
+    }
+    printf("total time: %fms \n", totalMiscTime);
+    printf("num nodes: %llu\n", numNodes);
+    printf("node kb: %llu\n", totalNodeMemory / 1024);
+    printf("record kb: %llu", totalRecordMemory / 1024);
+}
+
 void PartitionFix()
 {
     Arena *arena = ArenaAlloc();
@@ -703,7 +700,7 @@ void SceneLoadTest()
     {
         arenas[i] = ArenaAlloc(16); // ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
     }
-    Scene scene;
+    Scene2 scene;
 
     PerformanceCounter counter = OS_StartCounter();
     ReadSerializedData(arenas, &scene, "data/island/pbrt-v4/meshes/", "data/island/pbrt-v4/instances.inst");

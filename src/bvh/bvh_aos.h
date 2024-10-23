@@ -522,7 +522,7 @@ struct SplitBinner
 // AOS Partitions
 //
 
-template <typename Heuristic>
+template <typename Heuristic, typename PrimRef>
 u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 start, u32 count,
                       RecordAOSSplits &outLeft, RecordAOSSplits &outRight)
 {
@@ -1425,14 +1425,7 @@ void MoveExtendedRanges(const Split &split, const Record &record, PrimRef *primR
     {
         if (numToShift > PARALLEL_THRESHOLD)
         {
-            u32 groupSize = PARALLEL_THRESHOLD;
-            u32 taskCount = (numToShift + groupSize - 1) / groupSize;
-            taskCount     = Min(taskCount, scheduler.numWorkers);
-            u32 stepSize  = numToShift / taskCount;
-
-            scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
-                u32 start = mid + jobID * stepSize;
-                u32 end   = jobID == taskCount - 1 ? mid + numToShift : start + stepSize;
+            ParallelFor(mid, numToShift, PARALLEL_THRESHOLD, [&](u32 start, u32 end) {
                 for (u32 i = start; i < end; i++)
                 {
                     Assert(i + shift < record.extEnd);
@@ -1471,17 +1464,17 @@ u32 SplitFallback(const Record &record, Split &split, const PrimRef *primRefs, R
     Bounds8 centRight;
     for (u32 i = record.start; i < mid; i++) // record.start + record.count; i++)
     {
-        const PrimRef *ref      = &primRefs[i];
-        Lane8F32 m256     = Lane8F32::LoadU(ref);
-        Lane8F32 centroid = ((Shuffle4<1, 1>(m256) - Shuffle4<0, 0>(m256))) ^ signFlipMask;
+        const PrimRef *ref = &primRefs[i];
+        Lane8F32 m256      = Lane8F32::LoadU(ref);
+        Lane8F32 centroid  = ((Shuffle4<1, 1>(m256) - Shuffle4<0, 0>(m256))) ^ signFlipMask;
         geomLeft.Extend(m256);
         centLeft.Extend(centroid);
     }
     for (u32 i = mid; i < record.End(); i++)
     {
-        const PrimRef *ref      = &primRefs[i];
-        Lane8F32 m256     = Lane8F32::LoadU(ref);
-        Lane8F32 centroid = ((Shuffle4<1, 1>(m256) - Shuffle4<0, 0>(m256))) ^ signFlipMask;
+        const PrimRef *ref = &primRefs[i];
+        Lane8F32 m256      = Lane8F32::LoadU(ref);
+        Lane8F32 centroid  = ((Shuffle4<1, 1>(m256) - Shuffle4<0, 0>(m256))) ^ signFlipMask;
         geomRight.Extend(m256);
         centRight.Extend(centroid);
     }
@@ -1499,9 +1492,10 @@ static const f32 sbvhAlpha = 1e-5;
 template <i32 numObjectBins = 32, i32 numSpatialBins = 16, typename Polygon8 = Triangle8, typename Mesh = TriangleMesh>
 struct HeuristicSpatialSplits
 {
-    using Record = RecordAOSSplits;
-    using HSplit = HeuristicAOSSplitBinning<numSpatialBins, Polygon8, Mesh>;
-    using OBin   = HeuristicAOSObjectBinning<numObjectBins, PrimRef>;
+    using Record        = RecordAOSSplits;
+    using PrimitiveData = PrimRef;
+    using HSplit        = HeuristicAOSSplitBinning<numSpatialBins, Polygon8, Mesh>;
+    using OBin          = HeuristicAOSObjectBinning<numObjectBins, PrimRef>;
 
     Mesh *mesh;
     f32 rootArea;
