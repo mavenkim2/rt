@@ -2568,17 +2568,19 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     ScratchEnd(temp);
 }
 
-void GeneratePrimRefs(PrimRef *refs, u32 offset, QuadMesh *mesh, u32 geomID, u32 start, u32 count, RecordAOSSplits &record)
+template <typename PRef>
+void GeneratePrimRefs(PRef *refs, u32 offset, QuadMesh *mesh, u32 geomID, u32 start, u32 count, RecordAOSSplits &record)
 {
+#define UseGeomIDs std::is_same_v<PRef, PrimRef>
     Bounds geomBounds;
     Bounds centBounds;
     for (u32 i = start; i < start + count; i++)
     {
-        PrimRef *prim = &refs[offset + i];
-        Vec3f v0      = mesh->p[4 * i + 0];
-        Vec3f v1      = mesh->p[4 * i + 1];
-        Vec3f v2      = mesh->p[4 * i + 2];
-        Vec3f v3      = mesh->p[4 * i + 3];
+        PRef *prim = &refs[offset + i];
+        Vec3f v0   = mesh->p[4 * i + 0];
+        Vec3f v1   = mesh->p[4 * i + 1];
+        Vec3f v2   = mesh->p[4 * i + 2];
+        Vec3f v3   = mesh->p[4 * i + 3];
 
         Vec3f min = Min(Min(v0, v1), Min(v2, v3));
         Vec3f max = Max(Max(v0, v1), Max(v2, v3));
@@ -2586,7 +2588,8 @@ void GeneratePrimRefs(PrimRef *refs, u32 offset, QuadMesh *mesh, u32 geomID, u32
         Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
         Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
         Lane4F32::StoreU(prim->min, -mins);
-        prim->geomID = geomID;
+
+        if constexpr (UseGeomIDs) prim->geomID = geomID;
         prim->maxX   = max.x;
         prim->maxY   = max.y;
         prim->maxZ   = max.z;
@@ -2599,6 +2602,7 @@ void GeneratePrimRefs(PrimRef *refs, u32 offset, QuadMesh *mesh, u32 geomID, u32
     record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
 }
 
+template <typename PrimRef>
 void GeneratePrimRefs(QuadMesh *meshes, PrimRef *refs, u32 offset, u32 start, u32 count, RecordAOSSplits &record)
 {
     RecordAOSSplits r(neg_inf);
@@ -2683,57 +2687,45 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
     });
 
     // Fix geometry pointers, start bottom level BVH builds
+    // TODO:
+    // 1. on demand load files instead of reading them all at once
     scheduler.ScheduleAndWait(u32(numEntries), 1, [&](u32 jobID) {
-        TempArena temp       = ScratchStart(0, 0);
-        QuadMesh *meshes     = (QuadMesh *)(ptrs[jobID]);
-        LookupEntry *entry   = &entries[jobID];
-        Scene2 *group        = &out[jobID];
-        group->meshes        = meshes;
-        group->numMeshes     = entry->quadMeshCount;
+        TempArena temp     = ScratchStart(0, 0);
+        QuadMesh *meshes   = (QuadMesh *)(ptrs[jobID]);
+        LookupEntry *entry = &entries[jobID];
+        Scene2 *group      = &out[jobID];
+        group->meshes      = meshes;
+        group->numMeshes   = entry->quadMeshCount;
+        Assert(group->numMeshes > 0);
         u32 totalVertexCount = 0;
 
-        ParallelForOutput output;
-        Arena *arena        = arenas[GetThreadIndex()];
-        TempArena tempArena = TempBegin(arena);
-
-        u32 *offsets;
+        BuildSettings settings;
+        settings.intCost = 0.3f;
         if (entry->quadMeshCount > PARALLEL_THRESHOLD)
         {
-            output = ParallelFor<u32>(
+            Arena *arena             = arenas[GetThreadIndex()];
+            TempArena tempArena      = TempBegin(arena);
+            ParallelForOutput output = ParallelFor<u32>(
                 tempArena, 0, entry->quadMeshCount, PARALLEL_THRESHOLD,
                 [&](u32 &vertexCount, u32 jobID, u32 start, u32 count) {
                     vertexCount = FixQuadMeshPointers(meshes, ptrs, start, count);
                 });
             Reduce(totalVertexCount, output, [&](u32 &l, const u32 &r) { l += r; });
 
-            u32 offset = 0;
-            offsets    = (u32 *)output.out;
+            u32 offset   = 0;
+            u32 *offsets = (u32 *)output.out;
             for (u32 i = 0; i < output.num; i++)
             {
                 u32 numVertices = offsets[i];
                 offsets[i]      = offset;
                 offset += numVertices;
             }
-        }
-        else
-        {
-            totalVertexCount = FixQuadMeshPointers(meshes, ptrs, 0, entry->quadMeshCount);
-        }
+            u32 numFaces = totalVertexCount / 4;
+            u32 extEnd   = u32(numFaces * GROW_AMOUNT);
+            RecordAOSSplits record(neg_inf);
 
-        // generate prim refs
-        u32 numFaces  = totalVertexCount / 4;
-        u32 extEnd    = u32(numFaces * GROW_AMOUNT);
-        PrimRef *refs = PushArrayNoZero(temp.arena, PrimRef, extEnd);
-        RecordAOSSplits record(neg_inf);
-
-        // TODO:
-        // 1. parallel prim ref generation (both within a mesh and across multiple meshes) -- done
-        // 2. on demand load files instead of reading them all at once
-        // 3. build the bottom level bvhs, save the ptr to the scene -- done
-        // 4. build the tlas over all of the bottom level bvhs
-        //      a. for now we're just having two levels, maybe consider more if memory is tight
-        if (entry->quadMeshCount > PARALLEL_THRESHOLD)
-        {
+            // Generate PrimRefs
+            PrimRef *refs = PushArrayNoZero(temp.arena, PrimRef, extEnd);
             ParallelReduce<RecordAOSSplits>(
                 &record, 0, entry->quadMeshCount, PARALLEL_THRESHOLD,
                 [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
@@ -2742,19 +2734,39 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
                 [&](RecordAOSSplits &l, const RecordAOSSplits &r) {
                     l.Merge(r);
                 });
+            TempEnd(tempArena);
+
+            group->SetBounds(record.geomBounds);
+            record.SetRange(0, numFaces, extEnd);
+            group->numPrims = numFaces;
+            group->nodePtr  = BuildQuantizedQuadSBVH(settings, arenas, group, refs, record);
         }
         else
         {
-            GeneratePrimRefs(meshes, refs, 0, 0, entry->quadMeshCount, record);
-        }
-        record.SetRange(0, numFaces, extEnd);
-        TempEnd(tempArena);
+            totalVertexCount = FixQuadMeshPointers(meshes, ptrs, 0, entry->quadMeshCount);
+            u32 numFaces     = totalVertexCount / 4;
+            u32 extEnd       = u32(numFaces * GROW_AMOUNT);
+            RecordAOSSplits record(neg_inf);
 
-        BuildSettings settings;
-        settings.intCost = 0.3f;
-        group->SetBounds(record.geomBounds);
-        group->numPrims = numFaces;
-        group->nodePtr  = BuildQuantizedQuadSBVH(settings, arenas, group, refs, record);
+            if (entry->quadMeshCount > 1)
+            {
+                PrimRef *refs = PushArrayNoZero(temp.arena, PrimRef, extEnd);
+                GeneratePrimRefs(meshes, refs, 0, 0, numFaces, record);
+                group->SetBounds(record.geomBounds);
+                record.SetRange(0, numFaces, extEnd);
+                group->numPrims = numFaces;
+                group->nodePtr  = BuildQuantizedQuadSBVH(settings, arenas, group, refs, record);
+            }
+            else
+            {
+                PrimRefCompressed *refs = PushArrayNoZero(temp.arena, PrimRefCompressed, extEnd);
+                GeneratePrimRefs(meshes, refs, 0, 0, numFaces, record);
+                group->SetBounds(record.geomBounds);
+                record.SetRange(0, numFaces, extEnd);
+                group->numPrims = numFaces;
+                group->nodePtr  = BuildQuantizedQuadSBVH(settings, arenas, &group->meshes[0], refs, record);
+            }
+        }
 
         ScratchEnd(temp);
     });

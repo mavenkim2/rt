@@ -203,7 +203,7 @@ void PartialRebraidBuilderTest(Arena *arena)
 
     counter          = OS_StartCounter();
     BVHNodeType node = BuildTLAS(settings, arenas, buildRefs, record);
-    f32 time         = OS_GetMilliseconds(counter);
+    printf("time to generate tlas: %fms\n", OS_GetMilliseconds(counter));
 
     f64 totalMiscTime     = 0;
     u64 numNodes          = 0;
@@ -217,7 +217,7 @@ void PartialRebraidBuilderTest(Arena *arena)
         // printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
         numNodes += threadLocalStatistics[i].misc;
     }
-    printf("total time: %fms \n", totalMiscTime);
+    printf("total misc time: %fms \n", totalMiscTime);
     printf("num nodes: %llu\n", numNodes);
     printf("node kb: %llu\n", totalNodeMemory / 1024);
     printf("record kb: %llu", totalRecordMemory / 1024);
