@@ -17,6 +17,7 @@
 #include "math/vec2.h"
 #include "math/vec3.h"
 #include "math/vec4.h"
+#include "math/bounds.h"
 #include "math/matx.h"
 #include "math/math.h"
 #include "algo.h"

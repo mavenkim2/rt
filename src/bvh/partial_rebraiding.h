@@ -3,79 +3,63 @@
 namespace rt
 {
 
-template <u32 N>
-struct BuildRef
+void GenerateBuildRefs(BRef *refs, Scene2 *scene, Scene2 *scenes, u32 start, u32 count, RecordAOSSplits &record)
 {
-    f32 min[3];
-    u32 objectID;
-    f32 max[3];
-    u32 numPrims;
-    BVHNode<N> nodePtr;
-
-    BVHNode<N> LeafID() const { return nodePtr; }
-};
-
-typedef BuildRef<4> BuildRef4;
-typedef BuildRef<8> BuildRef8;
-
-template <i32 N>
-BuildRef<N> *GenerateBuildRefs(Scene2 *scene, Arena *arena, RecordAOSSplits &record)
-{
-    Instance *instances = scene->instances;
-    u32 numInstances    = scene->numInstances;
-    BuildRef<N> *b      = PushArrayNoZero(arena, BuildRef<N>, 4 * numInstances);
-
     Bounds geom;
     Bounds cent;
-    for (u32 i = 0; i < numInstances; i++)
+    Instance *instances = scene->instances;
+    for (u32 i = start; i < start + count; i++)
     {
-        Instance &instance = instances[i];
-        // TODO: make this work for groups of curves
+        Instance &instance     = instances[i];
         AffineSpace &transform = scene->affineTransforms[instance.transformIndex];
-        QuadMeshGroup *group   = &scene->quadMeshGroups[instance.geomID.GetIndex()];
-        BuildRef<N> *ref       = &b[i];
+        Assert(instance.geomID.GetType() == GT_InstanceType);
+        u32 index       = instance.geomID.GetIndex() + 1;
+        Scene2 *inScene = &scenes[index];
+        BRef *ref       = &refs[i];
 
-        Bounds bounds;
-        u32 numPrims = 0;
-        for (u32 meshIndex = 0; meshIndex < group->numMeshes; meshIndex++)
-        {
-            QuadMesh *mesh = &group->meshes[meshIndex];
-            u32 numFaces   = mesh->numVertices / 4;
-            numPrims += numFaces;
-            for (u32 primIndex = 0; primIndex < numFaces; primIndex++)
-            {
-                Vec3f p0 = mesh->p[primIndex * 4 + 0];
-                Vec3f p1 = mesh->p[primIndex * 4 + 1];
-                Vec3f p2 = mesh->p[primIndex * 4 + 2];
-                Vec3f p3 = mesh->p[primIndex * 4 + 3];
-
-                Vec3f min = Min(p0, Min(p1, Min(p2, p3)));
-                Vec3f max = Max(p0, Max(p1, Max(p2, p3)));
-                Lane4F32 mins(min);
-                Lane4F32 maxs(max);
-                bounds.Extend(mins, maxs);
-            }
-        }
+        Bounds bounds = Transform(transform, inScene->GetBounds());
 
         Lane4F32::StoreU(ref->min, -bounds.minP);
         Lane4F32::StoreU(ref->max, bounds.maxP);
         geom.Extend(bounds);
         cent.Extend(bounds.minP + bounds.maxP);
 
-        Assert((instance.bvhNode & 0xf) == 0);
-
         ref->objectID = i;
-        ref->nodePtr  = group->nodePtr;
-        ref->numPrims = numPrims;
+        ref->nodePtr  = inScene->nodePtr;
+        ref->numPrims = inScene->numPrims;
     }
     record.geomBounds = Lane8F32(-geom.minP, geom.maxP);
     record.centBounds = Lane8F32(-cent.minP, cent.maxP);
+}
+
+BRef *GenerateBuildRefs(Scene2 *scenes, u32 sceneNum, Arena *arena, RecordAOSSplits &record)
+{
+    Scene2 *scene    = &scenes[sceneNum];
+    u32 numInstances = scene->numInstances;
+    BRef *b          = PushArrayNoZero(arena, BRef, 4 * numInstances);
+
+    if (numInstances > PARALLEL_THRESHOLD)
+    {
+        ParallelReduce<RecordAOSSplits>(
+            &record, 0, numInstances, PARALLEL_THRESHOLD,
+            [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
+                GenerateBuildRefs(b, scene, scenes, start, count, record);
+            },
+            [&](RecordAOSSplits &l, const RecordAOSSplits &r) {
+                l.Merge(r);
+            });
+    }
+    else
+    {
+        GenerateBuildRefs(b, scene, scenes, 0, numInstances, record);
+    }
     return b;
 }
 
 static const f32 REBRAID_THRESHOLD = .1f;
-template <u32 N>
-void OpenBraid(const RecordAOSSplits &record, BuildRef<N> *refs, u32 start, u32 count, std::atomic<u32> &refOffset)
+template <bool parallel = true>
+void OpenBraid(const RecordAOSSplits &record, BRef *refs, u32 start, u32 count,
+               std::atomic<u32> &refOffset, u32 refO = 0)
 {
     const u32 QUEUE_SIZE = 8;
     u32 choiceDim        = 0;
@@ -94,7 +78,7 @@ void OpenBraid(const RecordAOSSplits &record, BuildRef<N> *refs, u32 start, u32 
     u32 openCount                  = 0;
     for (u32 i = start; i < start + count; i++)
     {
-        BuildRef<N> &ref      = refs[i];
+        BRef &ref             = refs[i];
         refIDQueue[openCount] = i;
         bool isOpen           = (ref.max[choiceDim] - ref.min[choiceDim] > REBRAID_THRESHOLD * maxExtent);
         openCount += isOpen;
@@ -111,17 +95,24 @@ void OpenBraid(const RecordAOSSplits &record, BuildRef<N> *refs, u32 start, u32 
                 numChildren[refID] = num;
                 childAdd += num - 1;
             }
-            u32 offset = refOffset.fetch_add(childAdd, std::memory_order_acq_rel);
+            u32 offset;
+            if constexpr (parallel) offset = refOffset.fetch_add(childAdd, std::memory_order_acq_rel);
+            else
+            {
+                refO += childAdd;
+                offset = refO;
+            }
+
             for (u32 testIndex = 0; testIndex < QUEUE_SIZE; testIndex++)
             {
-                u32 refID              = refIDQueue[openCount + testIndex];
-                QuantizedNode<N> *node = refs[refID].nodePtr.GetQuantizedNode();
-                f32 minX[N];
-                f32 minY[N];
-                f32 minZ[N];
-                f32 maxX[N];
-                f32 maxY[N];
-                f32 maxZ[N];
+                u32 refID   = refIDQueue[openCount + testIndex];
+                QNode *node = refs[refID].nodePtr.GetQuantizedNode();
+                f32 minX[DefaultN];
+                f32 minY[DefaultN];
+                f32 minZ[DefaultN];
+                f32 maxX[DefaultN];
+                f32 maxY[DefaultN];
+                f32 maxZ[DefaultN];
 
                 node->GetBounds(minX, minY, minZ, maxX, maxY, maxZ);
 
@@ -157,17 +148,19 @@ void OpenBraid(const RecordAOSSplits &record, BuildRef<N> *refs, u32 start, u32 
     }
 }
 
-template <u32 N, i32 numObjectBins = 32>
+template <i32 numObjectBins = 32>
 struct HeuristicPartialRebraid
 {
-    using Record        = RecordAOSSplits;
-    using PrimitiveData = BuildRef<N>;
-    using OBin          = HeuristicAOSObjectBinning<numObjectBins, BuildRef<N>>;
+    using Record  = RecordAOSSplits;
+    using PrimRef = BRef;
+    using OBin    = HeuristicAOSObjectBinning<numObjectBins, BRef>;
 
-    BuildRef<N> *buildRefs;
+    BRef *buildRefs;
 
     HeuristicPartialRebraid() {}
-    HeuristicPartialRebraid(BuildRef<N> *data) : buildRefs(data) {}
+    HeuristicPartialRebraid(BRef *data) : buildRefs(data)
+    {
+    }
     Split Bin(const Record &record)
     {
         u64 popPos = 0;
@@ -182,7 +175,7 @@ struct HeuristicPartialRebraid
         }
         else
         {
-            OpenBraid<N>(record, buildRefs, record.start, record.count, refOffset);
+            OpenBraid<false>(record, buildRefs, record.start, record.count, refOffset, record.End());
         }
         OBin *objectBinHeuristic;
         struct Split objectSplit = SAHObjectBinning(record, buildRefs, objectBinHeuristic, popPos);

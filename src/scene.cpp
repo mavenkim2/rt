@@ -2560,72 +2560,218 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
         }
     }
 
-    u64 finalSize = u64((u8 *)(transforms + transformOffset) - instanceFilePtr);
+    // NOTE: padded to support unaligned loads
+    u64 finalSize = u64((u8 *)(transforms + transformOffset) + sizeof(u32) - instanceFilePtr);
     OS_UnmapFile(instanceFilePtr);
     OS_ResizeFile(filename, finalSize);
 #endif
     ScratchEnd(temp);
 }
 
-void ReadSerializedData(Arena **arenas, Scene2 *scene, string meshDirectory, string instanceFile)
+void GeneratePrimRefs(PrimRef *refs, u32 offset, QuadMesh *mesh, u32 geomID, u32 start, u32 count, RecordAOSSplits &record)
+{
+    Bounds geomBounds;
+    Bounds centBounds;
+    for (u32 i = start; i < start + count; i++)
+    {
+        PrimRef *prim = &refs[offset + i];
+        Vec3f v0      = mesh->p[4 * i + 0];
+        Vec3f v1      = mesh->p[4 * i + 1];
+        Vec3f v2      = mesh->p[4 * i + 2];
+        Vec3f v3      = mesh->p[4 * i + 3];
+
+        Vec3f min = Min(Min(v0, v1), Min(v2, v3));
+        Vec3f max = Max(Max(v0, v1), Max(v2, v3));
+
+        Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
+        Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
+        Lane4F32::StoreU(prim->min, -mins);
+        prim->geomID = geomID;
+        prim->maxX   = max.x;
+        prim->maxY   = max.y;
+        prim->maxZ   = max.z;
+        prim->primID = i;
+
+        geomBounds.Extend(mins, maxs);
+        centBounds.Extend(maxs + mins);
+    }
+    record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+    record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+}
+
+void GeneratePrimRefs(QuadMesh *meshes, PrimRef *refs, u32 offset, u32 start, u32 count, RecordAOSSplits &record)
+{
+    RecordAOSSplits r(neg_inf);
+    for (u32 i = start; i < start + count; i++)
+    {
+        QuadMesh *mesh = &meshes[i];
+
+        u32 numFaces = mesh->numVertices / 4;
+        RecordAOSSplits tempRecord;
+        if (numFaces > PARALLEL_THRESHOLD)
+        {
+            ParallelReduce<RecordAOSSplits>(
+                &tempRecord, 0, numFaces, PARALLEL_THRESHOLD,
+                [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
+                    GeneratePrimRefs(refs, offset + start, mesh, i, start, count, record);
+                },
+                [&](RecordAOSSplits &l, const RecordAOSSplits &r) {
+                    l.Merge(r);
+                });
+        }
+        else
+        {
+            GeneratePrimRefs(refs, offset, mesh, i, start, count, tempRecord);
+        }
+        r.Merge(tempRecord);
+        offset += numFaces;
+    }
+    record = r;
+}
+
+u32 FixQuadMeshPointers(QuadMesh *meshes, u8 **ptrs, u32 start, u32 count)
+{
+    u32 totalVertexCount = 0;
+    for (u32 i = start; i < start + count; i++)
+    {
+        QuadMesh *mesh = &meshes[i];
+        u64 pOffset    = u64(mesh->p);
+        u32 fileID     = pOffset & 0xffffffff;
+        u32 offset     = (pOffset >> 32) & 0xffffffff;
+        mesh->p        = (Vec3f *)(ptrs[fileID] + offset);
+
+        // TODO: load in this thread when it encounters an unloaded file (probably a mutexed map or something)
+
+        u64 nOffset = u64(mesh->n);
+        fileID      = nOffset & 0xffffffff;
+        offset      = (nOffset >> 32) & 0xffffffff;
+        mesh->n     = (Vec3f *)(ptrs[fileID] + offset);
+
+        totalVertexCount += mesh->numVertices;
+    }
+    return totalVertexCount;
+}
+
+Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFile)
 {
     TempArena temp = ScratchStart(0, 0);
+    Arena *arena   = arenas[GetThreadIndex()];
+
+    Scene2 *out;
 
     // Read the mesh file data
-    {
-        string lutPath = StrConcat(temp.arena, meshDirectory, "lut.mesh");
-        string lutData = OS_ReadFile(temp.arena, lutPath);
-        Tokenizer tokenizer(lutData);
-        u64 numEntries;
-        GetPointerValue(&tokenizer, &numEntries);
-        LookupEntry *entries = (LookupEntry *)tokenizer.cursor;
+    string lutPath = StrConcat(temp.arena, meshDirectory, "lut.mesh");
+    string lutData = OS_ReadFile(temp.arena, lutPath);
+    Tokenizer tokenizer(lutData);
+    u64 numEntries;
+    GetPointerValue(&tokenizer, &numEntries);
+    LookupEntry *entries = (LookupEntry *)tokenizer.cursor;
 
-        u8 **ptrs = PushArrayNoZero(temp.arena, u8 *, numEntries);
+    u8 **ptrs = PushArrayNoZero(temp.arena, u8 *, numEntries);
 
-        scheduler.ScheduleAndWait(u32(numEntries), 1, [&](u32 jobID) {
-            TempArena temp     = ScratchStart(0, 0);
-            LookupEntry *entry = &entries[jobID];
-            string filename    = PushStr8F(temp.arena, "%S%u.mesh", meshDirectory, jobID);
-            Arena *arena       = arenas[GetThreadIndex()];
-            string data        = OS_ReadFile(arena, filename);
-            ptrs[jobID]        = data.str;
+    out = PushArrayNoZero(arena, Scene2, numEntries + 1);
 
-            ScratchEnd(temp);
-        });
+    scheduler.ScheduleAndWait(u32(numEntries), 1, [&](u32 jobID) {
+        TempArena temp     = ScratchStart(0, 0);
+        LookupEntry *entry = &entries[jobID];
+        string filename    = PushStr8F(temp.arena, "%S%u.mesh", meshDirectory, jobID);
+        Arena *arena       = arenas[GetThreadIndex()];
+        string data        = OS_ReadFile(arena, filename);
+        ptrs[jobID]        = data.str;
 
-        scheduler.ScheduleAndWait(u32(numEntries), 1, [&](u32 jobID) {
-            QuadMesh *meshes   = (QuadMesh *)(ptrs[jobID]);
-            LookupEntry *entry = &entries[jobID];
-            for (u32 i = 0; i < entry->quadMeshCount; i++)
+        ScratchEnd(temp);
+    });
+
+    // Fix geometry pointers, start bottom level BVH builds
+    scheduler.ScheduleAndWait(u32(numEntries), 1, [&](u32 jobID) {
+        TempArena temp       = ScratchStart(0, 0);
+        QuadMesh *meshes     = (QuadMesh *)(ptrs[jobID]);
+        LookupEntry *entry   = &entries[jobID];
+        Scene2 *group        = &out[jobID];
+        group->meshes        = meshes;
+        group->numMeshes     = entry->quadMeshCount;
+        u32 totalVertexCount = 0;
+
+        ParallelForOutput output;
+        Arena *arena        = arenas[GetThreadIndex()];
+        TempArena tempArena = TempBegin(arena);
+
+        u32 *offsets;
+        if (entry->quadMeshCount > PARALLEL_THRESHOLD)
+        {
+            output = ParallelFor<u32>(
+                tempArena, 0, entry->quadMeshCount, PARALLEL_THRESHOLD,
+                [&](u32 &vertexCount, u32 jobID, u32 start, u32 count) {
+                    vertexCount = FixQuadMeshPointers(meshes, ptrs, start, count);
+                });
+            Reduce(totalVertexCount, output, [&](u32 &l, const u32 &r) { l += r; });
+
+            u32 offset = 0;
+            offsets    = (u32 *)output.out;
+            for (u32 i = 0; i < output.num; i++)
             {
-                QuadMesh *mesh = &meshes[i];
-                u64 pOffset    = u64(mesh->p);
-                u32 fileID     = pOffset & 0xffffffff;
-                Assert(fileID < numEntries);
-                u32 offset = (pOffset >> 32) & 0xffffffff;
-                mesh->p    = (Vec3f *)(ptrs[fileID] + offset);
-
-                u64 nOffset = u64(mesh->n);
-                fileID      = nOffset & 0xffffffff;
-                Assert(fileID < numEntries);
-                offset  = (nOffset >> 32) & 0xffffffff;
-                mesh->n = (Vec3f *)(ptrs[fileID] + offset);
+                u32 numVertices = offsets[i];
+                offsets[i]      = offset;
+                offset += numVertices;
             }
-        });
-    }
+        }
+        else
+        {
+            totalVertexCount = FixQuadMeshPointers(meshes, ptrs, 0, entry->quadMeshCount);
+        }
+
+        // generate prim refs
+        u32 numFaces  = totalVertexCount / 4;
+        u32 extEnd    = u32(numFaces * GROW_AMOUNT);
+        PrimRef *refs = PushArrayNoZero(temp.arena, PrimRef, extEnd);
+        RecordAOSSplits record(neg_inf);
+
+        // TODO:
+        // 1. parallel prim ref generation (both within a mesh and across multiple meshes) -- done
+        // 2. on demand load files instead of reading them all at once
+        // 3. build the bottom level bvhs, save the ptr to the scene -- done
+        // 4. build the tlas over all of the bottom level bvhs
+        //      a. for now we're just having two levels, maybe consider more if memory is tight
+        if (entry->quadMeshCount > PARALLEL_THRESHOLD)
+        {
+            ParallelReduce<RecordAOSSplits>(
+                &record, 0, entry->quadMeshCount, PARALLEL_THRESHOLD,
+                [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
+                    GeneratePrimRefs(meshes, refs, offsets[jobID], start, count, record);
+                },
+                [&](RecordAOSSplits &l, const RecordAOSSplits &r) {
+                    l.Merge(r);
+                });
+        }
+        else
+        {
+            GeneratePrimRefs(meshes, refs, 0, 0, entry->quadMeshCount, record);
+        }
+        record.SetRange(0, numFaces, extEnd);
+        TempEnd(tempArena);
+
+        BuildSettings settings;
+        settings.intCost = 0.3f;
+        group->SetBounds(record.geomBounds);
+        group->numPrims = numFaces;
+        group->nodePtr  = BuildQuantizedQuadSBVH(settings, arenas, group, refs, record);
+
+        ScratchEnd(temp);
+    });
 
     // Read instance file data
-    {
-        string instanceFileData = OS_ReadFile(arenas[GetThreadIndex()], instanceFile);
-        Tokenizer tokenizer(instanceFileData);
-        u64 numInstances;
-        GetPointerValue(&tokenizer, &numInstances);
-        scene->instances    = (Instance *)tokenizer.cursor;
-        scene->numInstances = u32(numInstances);
-        Advance(&tokenizer, sizeof(Instance) * numInstances);
-        scene->affineTransforms = (AffineSpace *)tokenizer.cursor;
-    }
+    string instanceFileData = OS_ReadFile(arena, instanceFile);
+    Tokenizer instTokenzier(instanceFileData);
+    u64 numInstances;
+    GetPointerValue(&instTokenzier, &numInstances);
+    Scene2 *scene       = &out[0];
+    scene->instances    = (Instance *)instTokenzier.cursor;
+    scene->numInstances = u32(numInstances);
+    Advance(&instTokenzier, sizeof(Instance) * numInstances);
+    scene->affineTransforms = (AffineSpace *)instTokenzier.cursor;
+
     ScratchEnd(temp);
+    return out;
 }
 
 } // namespace rt

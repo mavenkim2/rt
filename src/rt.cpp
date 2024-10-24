@@ -1059,14 +1059,15 @@ int main(int argc, char *argv[])
 
     // QuadSBVHBuilderTest(dataArena, &mesh);
     // AOSSBVHBuilderTest(dataArena, &mesh);
-
     // PartitionFix();
+
+    PartialRebraidBuilderTest(dataArena);
 
     //////////////////////////////
     // Loading PBRT File Test
     //
 
-    SceneLoadTest();
+    // SceneLoadTest();
 #if 0
     PerformanceCounter counter = OS_StartCounter();
     LoadPBRT(arena, "data/island/pbrt-v4/island.pbrt");

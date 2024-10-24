@@ -155,6 +155,101 @@ struct Quad8
         out->v2w = Lane8F32(p2[w], p6[w]);
         out->v3w = Lane8F32(p3[w], p7[w]);
     }
+
+    static void Load(Scene2 *scene, const u32 dim, const u32 geomIDs[8], const u32 faceIndices[8], Quad8 *out)
+    {
+        QuadMesh *meshes[8] = {
+            &scene->meshes[geomIDs[0]], &scene->meshes[geomIDs[1]], &scene->meshes[geomIDs[2]], &scene->meshes[geomIDs[3]],
+            &scene->meshes[geomIDs[4]], &scene->meshes[geomIDs[5]], &scene->meshes[geomIDs[6]], &scene->meshes[geomIDs[7]]};
+
+        u32 faceIndexA = faceIndices[0];
+        u32 faceIndexB = faceIndices[1];
+        u32 faceIndexC = faceIndices[2];
+        u32 faceIndexD = faceIndices[3];
+
+        Lane4F32 v0a = Lane4F32::LoadU((float *)(&meshes[0]->p[faceIndexA * 4 + 0]));
+        Lane4F32 v1a = Lane4F32::LoadU((float *)(&meshes[0]->p[faceIndexA * 4 + 1]));
+        Lane4F32 v2a = Lane4F32::LoadU((float *)(&meshes[0]->p[faceIndexA * 4 + 2]));
+        Lane4F32 v3a = Lane4F32::LoadU((float *)(&meshes[0]->p[faceIndexA * 4 + 3]));
+
+        Lane4F32 v0b = Lane4F32::LoadU((float *)(&meshes[1]->p[faceIndexB * 4 + 0]));
+        Lane4F32 v1b = Lane4F32::LoadU((float *)(&meshes[1]->p[faceIndexB * 4 + 1]));
+        Lane4F32 v2b = Lane4F32::LoadU((float *)(&meshes[1]->p[faceIndexB * 4 + 2]));
+        Lane4F32 v3b = Lane4F32::LoadU((float *)(&meshes[1]->p[faceIndexB * 4 + 3]));
+
+        Lane4F32 v0c = Lane4F32::LoadU((float *)(&meshes[2]->p[faceIndexC * 4 + 0]));
+        Lane4F32 v1c = Lane4F32::LoadU((float *)(&meshes[2]->p[faceIndexC * 4 + 1]));
+        Lane4F32 v2c = Lane4F32::LoadU((float *)(&meshes[2]->p[faceIndexC * 4 + 2]));
+        Lane4F32 v3c = Lane4F32::LoadU((float *)(&meshes[2]->p[faceIndexC * 4 + 3]));
+
+        Lane4F32 v0d = Lane4F32::LoadU((float *)(&meshes[3]->p[faceIndexD * 4 + 0]));
+        Lane4F32 v1d = Lane4F32::LoadU((float *)(&meshes[3]->p[faceIndexD * 4 + 1]));
+        Lane4F32 v2d = Lane4F32::LoadU((float *)(&meshes[3]->p[faceIndexD * 4 + 2]));
+        Lane4F32 v3d = Lane4F32::LoadU((float *)(&meshes[3]->p[faceIndexD * 4 + 3]));
+
+        Vec3lf4 p0;
+        Vec3lf4 p1;
+        Vec3lf4 p2;
+        Vec3lf4 p3;
+
+        Transpose4x3(v0a, v0b, v0c, v0d, p0.x, p0.y, p0.z);
+        Transpose4x3(v1a, v1b, v1c, v1d, p1.x, p1.y, p1.z);
+        Transpose4x3(v2a, v2b, v2c, v2d, p2.x, p2.y, p2.z);
+        Transpose4x3(v3a, v3b, v3c, v3d, p3.x, p3.y, p3.z);
+
+        faceIndexA = faceIndices[4];
+        faceIndexB = faceIndices[5];
+        faceIndexC = faceIndices[6];
+        faceIndexD = faceIndices[7];
+
+        v0a = Lane4F32::LoadU((float *)(&meshes[4]->p[faceIndexA * 4 + 0]));
+        v1a = Lane4F32::LoadU((float *)(&meshes[4]->p[faceIndexA * 4 + 1]));
+        v2a = Lane4F32::LoadU((float *)(&meshes[4]->p[faceIndexA * 4 + 2]));
+        v3a = Lane4F32::LoadU((float *)(&meshes[4]->p[faceIndexA * 4 + 3]));
+
+        v0b = Lane4F32::LoadU((float *)(&meshes[5]->p[faceIndexB * 4 + 0]));
+        v1b = Lane4F32::LoadU((float *)(&meshes[5]->p[faceIndexB * 4 + 1]));
+        v2b = Lane4F32::LoadU((float *)(&meshes[5]->p[faceIndexB * 4 + 2]));
+        v3b = Lane4F32::LoadU((float *)(&meshes[5]->p[faceIndexB * 4 + 3]));
+
+        v0c = Lane4F32::LoadU((float *)(&meshes[6]->p[faceIndexC * 4 + 0]));
+        v1c = Lane4F32::LoadU((float *)(&meshes[6]->p[faceIndexC * 4 + 1]));
+        v2c = Lane4F32::LoadU((float *)(&meshes[6]->p[faceIndexC * 4 + 2]));
+        v3c = Lane4F32::LoadU((float *)(&meshes[6]->p[faceIndexC * 4 + 3]));
+
+        v0d = Lane4F32::LoadU((float *)(&meshes[7]->p[faceIndexD * 4 + 0]));
+        v1d = Lane4F32::LoadU((float *)(&meshes[7]->p[faceIndexD * 4 + 1]));
+        v2d = Lane4F32::LoadU((float *)(&meshes[7]->p[faceIndexD * 4 + 2]));
+        v3d = Lane4F32::LoadU((float *)(&meshes[7]->p[faceIndexD * 4 + 3]));
+
+        Vec3lf4 p4;
+        Vec3lf4 p5;
+        Vec3lf4 p6;
+        Vec3lf4 p7;
+
+        Transpose4x3(v0a, v0b, v0c, v0d, p4.x, p4.y, p4.z);
+        Transpose4x3(v1a, v1b, v1c, v1d, p5.x, p5.y, p5.z);
+        Transpose4x3(v2a, v2b, v2c, v2d, p6.x, p6.y, p6.z);
+        Transpose4x3(v3a, v3b, v3c, v3d, p7.x, p7.y, p7.z);
+
+        u32 v = LUTAxis[dim];
+        u32 w = LUTAxis[v];
+
+        out->v0u = Lane8F32(p0[dim], p4[dim]);
+        out->v1u = Lane8F32(p1[dim], p5[dim]);
+        out->v2u = Lane8F32(p2[dim], p6[dim]);
+        out->v3u = Lane8F32(p3[dim], p7[dim]);
+
+        out->v0v = Lane8F32(p0[v], p4[v]);
+        out->v1v = Lane8F32(p1[v], p5[v]);
+        out->v2v = Lane8F32(p2[v], p6[v]);
+        out->v3v = Lane8F32(p3[v], p7[v]);
+
+        out->v0w = Lane8F32(p0[w], p4[w]);
+        out->v1w = Lane8F32(p1[w], p5[w]);
+        out->v2w = Lane8F32(p2[w], p6[w]);
+        out->v3w = Lane8F32(p3[w], p7[w]);
+    }
 };
 
 struct Triangle8
@@ -376,8 +471,6 @@ static void ClipPolygon(const u32 dim, const Polygon8 &tri, const Lane8F32 &spli
     }
 }
 
-// NOTE: for aos splitting
-
 template <typename Polygon8>
 static void ClipPolygon(const u32 dim, const u32 faceIndices[8],
                         const Polygon8 &tri, const Lane8F32 &splitPos,
@@ -394,6 +487,33 @@ static void ClipPolygon(const u32 dim, const u32 faceIndices[8],
     Transpose7x8(-leftMinX, -leftMinY, -leftMinZ, AsFloat(faceIDs), leftMaxX, leftMaxY, leftMaxZ,
                  left[0], left[1], left[2], left[3], left[4], left[5], left[6], left[7]);
     Transpose7x8(-rightMinX, -rightMinY, -rightMinZ, AsFloat(faceIDs), rightMaxX, rightMaxY, rightMaxZ,
+                 right[0], right[1], right[2], right[3], right[4], right[5], right[6], right[7]);
+    centL[0] = (leftMinX + leftMaxX);
+    centL[1] = (leftMinY + leftMaxY);
+    centL[2] = (leftMinZ + leftMaxZ);
+
+    centR[0] = (rightMinX + rightMaxX);
+    centR[1] = (rightMinY + rightMaxY);
+    centR[2] = (rightMinZ + rightMaxZ);
+}
+
+template <typename Polygon8>
+static void ClipPolygon(const u32 dim, const u32 geomIndices[8], const u32 faceIndices[8],
+                        const Polygon8 &tri, const Lane8F32 &splitPos,
+                        Lane8F32 *left, Lane8F32 *right,
+                        Lane8F32 *centL, Lane8F32 *centR)
+{
+    Lane8F32 leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
+        rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ;
+    ClipPolygon(dim, tri, splitPos,
+                leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
+                rightMinX, rightMinY, rightMinZ, rightMaxX, rightMaxY, rightMaxZ);
+
+    Lane8U32 faceIDs = Lane8U32::LoadU(faceIndices);
+    Lane8U32 geomIDs = Lane8U32::LoadU(geomIndices);
+    Transpose8x8(-leftMinX, -leftMinY, -leftMinZ, AsFloat(geomIDs), leftMaxX, leftMaxY, leftMaxZ, AsFloat(faceIDs),
+                 left[0], left[1], left[2], left[3], left[4], left[5], left[6], left[7]);
+    Transpose8x8(-rightMinX, -rightMinY, -rightMinZ, AsFloat(geomIDs), rightMaxX, rightMaxY, rightMaxZ, AsFloat(faceIDs),
                  right[0], right[1], right[2], right[3], right[4], right[5], right[6], right[7]);
     centL[0] = (leftMinX + leftMaxX);
     centL[1] = (leftMinY + leftMaxY);
@@ -426,7 +546,7 @@ struct ObjectBinner
         scale[1] = Shuffle<1>(scale8);
         scale[2] = Shuffle<2>(scale8);
     }
-    ObjectBinner(const Lane8F32 &l) : ObjectBinner(Bounds(-Extract4<0>(l), Extract4<1>(l))) {}
+    // ObjectBinner(const Lane8F32 &l) : ObjectBinner(Bounds(-Extract4<0>(l), Extract4<1>(l))) {}
     Lane8U32 Bin(const Lane8F32 &in, const u32 dim) const
     {
         Lane8F32 result = (in - base[dim]) * scale[dim];
@@ -482,7 +602,7 @@ struct SplitBinner
         scaleNegArr[1] = FlipSign(scale[1]);
         scaleNegArr[2] = FlipSign(scale[2]);
     };
-    SplitBinner(const Lane8F32 &l) : SplitBinner(Bounds(-Extract4<0>(l), Extract4<1>(l))) {}
+    // SplitBinner(const Lane8F32 &l) : SplitBinner(Bounds(-Extract4<0>(l), Extract4<1>(l))) {}
     __forceinline Lane8U32 BinMin(const Lane8F32 &min, const u32 dim) const
     {
         return Clamp(Lane8U32(zero), Lane8U32(numBins - 1), Flooru((base[dim] + min) * scaleNegArr[dim]));
@@ -674,7 +794,7 @@ struct HeuristicAOSObjectBinning
             Lane8F32 *currentLanes = lanes[current];
             for (u32 laneIndex = 0; laneIndex < 8; laneIndex++)
             {
-                currentLanes[laneIndex] = Lane8F32::LoadU(&data[i + laneIndex]);
+                currentLanes[laneIndex] = data[i + laneIndex].Load();
             }
             Lane8F32 temp[6];
 
@@ -698,7 +818,7 @@ struct HeuristicAOSObjectBinning
             Lane8F32 *prevLanes    = lanes[!current];
             for (u32 laneIndex = 0; laneIndex < 8; laneIndex++)
             {
-                currentLanes[laneIndex] = Lane8F32::LoadU(&data[i + laneIndex]);
+                currentLanes[laneIndex] = data[i + laneIndex].Load();
             }
             Lane8F32 temp[6];
 
@@ -745,7 +865,7 @@ struct HeuristicAOSObjectBinning
         }
         for (; i < start + count; i++)
         {
-            Lane8F32 lane     = Lane8F32::LoadU(data[i].min);
+            Lane8F32 lane     = data[i].Load();
             Lane4F32 low      = Extract4<0>(lane);
             Lane4F32 hi       = Extract4<1>(lane);
             Lane4F32 centroid = (hi - low);
@@ -786,7 +906,7 @@ struct HeuristicAOSObjectBinning
             while (l <= r)
             {
                 lIndex            = getIndex(l);
-                lVal              = Lane8F32::LoadU(&data[lIndex]);
+                lVal              = data[lIndex].Load();
                 Lane8F32 centroid = ((Shuffle4<1, 1>(lVal) - Shuffle4<0, 0>(lVal))) ^ signFlipMask;
 
                 u32 bin      = binner->Bin(centroid[4 + dim], dim);
@@ -806,7 +926,7 @@ struct HeuristicAOSObjectBinning
                 Assert(r >= 0);
 
                 rIndex            = getIndex(r);
-                rVal              = Lane8F32::LoadU(&data[rIndex]);
+                rVal              = data[rIndex].Load();
                 Lane8F32 centroid = ((Shuffle4<1, 1>(rVal) - Shuffle4<0, 0>(rVal))) ^ signFlipMask;
 
                 u32 bin     = binner->Bin(centroid[4 + dim], dim);
@@ -824,8 +944,6 @@ struct HeuristicAOSObjectBinning
             if (l > r) break;
 
             Swap(data[lIndex], data[rIndex]);
-            // Lane8F32::Store(&data[lIndex], rVal);
-            // Lane8F32::Store(&data[rIndex], lVal);
             l++;
             r--;
         }
@@ -842,8 +960,8 @@ struct HeuristicAOSObjectBinning
         {
             while (l <= r)
             {
-                PrimRef *lRef     = &data[l];
-                Lane8F32 centroid = ((Shuffle4<1, 1>(Lane8F32::LoadU(lRef)) - Shuffle4<0, 0>(Lane8F32::LoadU(lRef)))) ^
+                Lane8F32 lRef     = data[l].Load();
+                Lane8F32 centroid = ((Shuffle4<1, 1>(lRef) - Shuffle4<0, 0>(lRef))) ^
                                     signFlipMask;
                 bool isRight = binner->Bin(centroid[4 + dim], dim) >= bestPos;
                 if (isRight) break;
@@ -852,8 +970,8 @@ struct HeuristicAOSObjectBinning
             while (l <= r)
             {
                 Assert(r >= 0);
-                PrimRef *rRef     = &data[r];
-                Lane8F32 centroid = ((Shuffle4<1, 1>(Lane8F32::LoadU(rRef)) - Shuffle4<0, 0>(Lane8F32::LoadU(rRef)))) ^
+                Lane8F32 rRef     = data[r].Load();
+                Lane8F32 centroid = ((Shuffle4<1, 1>(rRef) - Shuffle4<0, 0>(rRef))) ^
                                     signFlipMask;
 
                 bool isLeft = binner->Bin(centroid[4 + dim], dim) < bestPos;
@@ -885,21 +1003,24 @@ struct HeuristicAOSObjectBinning
     }
 };
 
-template <i32 numBins = 16, typename Polygon8 = Triangle8, typename Mesh = TriangleMesh>
+template <i32 numBins = 16, typename Polygon8 = Triangle8, typename SceneType = TriangleMesh>
 struct alignas(32) HeuristicAOSSplitBinning
 {
+#define UseGeomIDs std::is_same_v<SceneType, Scene2>
+
+    using PrimRef = std::conditional_t<UseGeomIDs, PrimRef, PrimRefCompressed>;
     Bounds8 bins[3][numBins];
     Lane4U32 entryCounts[numBins];
     Lane4U32 exitCounts[numBins];
 
     SplitBinner<numBins> *binner;
-    Mesh *mesh;
+    SceneType *scene;
     std::atomic<u32> splitAtomic;
 
     HeuristicAOSSplitBinning() {}
 
-    HeuristicAOSSplitBinning(SplitBinner<numBins> *binner, Mesh *mesh = 0, u32 end = 0)
-        : binner(binner), mesh(mesh), splitAtomic{end}
+    HeuristicAOSSplitBinning(SplitBinner<numBins> *binner, SceneType *scene = 0, u32 end = 0)
+        : binner(binner), scene(scene), splitAtomic{end}
     {
         for (u32 dim = 0; dim < 3; dim++)
         {
@@ -921,6 +1042,8 @@ struct alignas(32) HeuristicAOSSplitBinning
         alignas(32) u32 binIndexStart[3][numBins][2 * LANE_WIDTH] = {};
         u32 faceIndices[3][numBins][2 * LANE_WIDTH]               = {};
 
+        u32 geomIDs[3][numBins][2 * LANE_WIDTH] = {};
+
         u32 i            = start;
         u32 alignedCount = count - count % LANE_WIDTH;
 
@@ -928,10 +1051,10 @@ struct alignas(32) HeuristicAOSSplitBinning
 
         for (; i < start + alignedCount; i += LANE_WIDTH)
         {
-            Transpose8x6(Lane8F32::LoadU(&data[i + 0]), Lane8F32::LoadU(&data[i + 1]),
-                         Lane8F32::LoadU(&data[i + 2]), Lane8F32::LoadU(&data[i + 3]),
-                         Lane8F32::LoadU(&data[i + 4]), Lane8F32::LoadU(&data[i + 5]),
-                         Lane8F32::LoadU(&data[i + 6]), Lane8F32::LoadU(&data[i + 7]),
+            Transpose8x6(data[i + 0].Load(), data[i + 1].Load(),
+                         data[i + 2].Load(), data[i + 3].Load(),
+                         data[i + 4].Load(), data[i + 5].Load(),
+                         data[i + 6].Load(), data[i + 7].Load(),
                          lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5]);
 
             Assert(All(-lanes[0] >= binner->base[0]));
@@ -990,13 +1113,15 @@ struct alignas(32) HeuristicAOSSplitBinning
                     {
                         case 0:
                         {
-                            bins[dim][indexMin].Extend(Lane8F32::LoadU(&data[i + b]));
+                            bins[dim][indexMin].Extend(data[i + b].Load());
                         }
                         break;
                         default:
                         {
                             bitMask[dim] |= (1 << diff);
-                            faceIndices[dim][diff][binCounts[dim][diff]]   = data[i + b].primID;
+                            faceIndices[dim][diff][binCounts[dim][diff]] = data[i + b].primID;
+                            if constexpr (UseGeomIDs)
+                                geomIDs[dim][diff][binCounts[dim][diff]] = data[i + b].geomID;
                             binIndexStart[dim][diff][binCounts[dim][diff]] = indexMin;
                             binCounts[dim][diff]++;
                         }
@@ -1017,7 +1142,11 @@ struct alignas(32) HeuristicAOSSplitBinning
 
                         Bounds8 bounds[2][LANE_WIDTH];
                         Polygon8 tri;
-                        Polygon8::Load(mesh, dim, faceIndices[dim][bin] + binCount, &tri);
+                        if constexpr (UseGeomIDs)
+                            Polygon8::Load(scene, dim, geomIDs[dim][bin] + binCount, faceIndices[dim][bin] + binCount, &tri);
+                        else
+                            Polygon8::Load(scene, dim, faceIndices[dim][bin] + binCount, &tri);
+
                         Lane8U32 startBin = Lane8U32::LoadU(binIndexStart[dim][bin] + binCount);
 
                         for (u32 boundIndex = 0; boundIndex < LANE_WIDTH; boundIndex++)
@@ -1077,7 +1206,9 @@ struct alignas(32) HeuristicAOSSplitBinning
                     break;
                     default:
                     {
-                        faceIndices[dim][diff][binCounts[dim][diff]]   = ref->primID;
+                        faceIndices[dim][diff][binCounts[dim][diff]] = ref->primID;
+                        if constexpr (UseGeomIDs)
+                            geomIDs[dim][diff][binCounts[dim][diff]] = ref->geomID;
                         binIndexStart[dim][diff][binCounts[dim][diff]] = binIndexMin;
                         binCounts[dim][diff]++;
                     }
@@ -1104,7 +1235,12 @@ struct alignas(32) HeuristicAOSSplitBinning
                         bounds[0][boundIndex] = Bounds8(pos_inf);
                     }
                     Polygon8 tri;
-                    Polygon8::Load(mesh, dim, faceIndices[dim][diff] + remaining * LANE_WIDTH, &tri);
+                    u32 qStart = remaining * LANE_WIDTH;
+                    if constexpr (UseGeomIDs)
+                        Polygon8::Load(scene, dim, geomIDs[dim][diff] + qStart, faceIndices[dim][diff] + qStart, &tri);
+                    else
+                        Polygon8::Load(scene, dim, faceIndices[dim][diff] + qStart, &tri);
+
                     Lane8U32 startBin = Lane8U32::LoadU(binIndexStart[dim][diff] + remaining * LANE_WIDTH);
 
                     alignas(32) u32 binIndices[8];
@@ -1138,6 +1274,7 @@ struct alignas(32) HeuristicAOSSplitBinning
                   GetIndex getIndex, RecordAOSSplits &outLeft, RecordAOSSplits &outRight)
     {
         u32 faceIDQueue[LANE_WIDTH * 2] = {};
+        u32 geomIDQueue[LANE_WIDTH * 2] = {};
         u32 refIDQueue[LANE_WIDTH * 2]  = {};
         Lane8F32 masks[2]               = {Lane8F32::Mask(false), Lane8F32::Mask(true)};
 
@@ -1179,13 +1316,15 @@ struct alignas(32) HeuristicAOSSplitBinning
                 geomLeft  = MaskMax(masks[lIsFullyLeft], geomLeft, refData);
 
                 faceIDQueue[splitCount] = ref.primID;
-                refIDQueue[splitCount]  = lIndex;
+                if constexpr (UseGeomIDs) geomIDQueue[splitCount] = ref.geomID;
+                refIDQueue[splitCount] = lIndex;
                 splitCount += isSplit;
 
                 l += !lIsFullyRight;
             }
 
             u32 rPrimID        = 0;
+            u32 rGeomID        = 0;
             bool rIsSplit      = false;
             bool rIsFullyRight = true;
             u32 rIndex;
@@ -1202,6 +1341,8 @@ struct alignas(32) HeuristicAOSSplitBinning
                 bool isFullyLeft = maxBin < bestPos;
                 rIsSplit         = !(rIsFullyRight || isFullyLeft);
                 rPrimID          = ref.primID;
+                if constexpr (UseGeomIDs)
+                    rGeomID = ref.geomID;
 
                 centRight = MaskMax(masks[rIsFullyRight], centRight, centroid);
                 geomRight = MaskMax(masks[rIsFullyRight], geomRight, refData);
@@ -1213,7 +1354,8 @@ struct alignas(32) HeuristicAOSSplitBinning
 
             if (l > r) break;
             faceIDQueue[splitCount] = rPrimID;
-            refIDQueue[splitCount]  = lIndex;
+            if constexpr (UseGeomIDs) geomIDQueue[splitCount] = rGeomID;
+            refIDQueue[splitCount] = lIndex;
             splitCount += rIsSplit;
             if (lIsFullyRight)
             {
@@ -1235,8 +1377,16 @@ struct alignas(32) HeuristicAOSSplitBinning
                 Lane8F32 outCentroidsR[8];
 
                 Polygon8 tri;
-                Polygon8::Load(mesh, dim, faceIDQueue + splitCount, &tri);
-                ClipPolygon(dim, faceIDQueue + splitCount, tri, splitValue, gL, gR, cL, cR);
+                if constexpr (UseGeomIDs)
+                {
+                    Polygon8::Load(scene, dim, geomIDQueue + splitCount, faceIDQueue + splitCount, &tri);
+                    ClipPolygon(dim, geomIDQueue + splitCount, faceIDQueue + splitCount, tri, splitValue, gL, gR, cL, cR);
+                }
+                else
+                {
+                    Polygon8::Load(scene, dim, faceIDQueue + splitCount, &tri);
+                    ClipPolygon(dim, faceIDQueue + splitCount, tri, splitValue, gL, gR, cL, cR);
+                }
 
                 Transpose3x8(cL[0], cL[1], cL[2],
                              outCentroidsL[0], outCentroidsL[1], outCentroidsL[2], outCentroidsL[3],
@@ -1275,8 +1425,17 @@ struct alignas(32) HeuristicAOSSplitBinning
             Lane8F32 outCentroidsL[8];
             Lane8F32 outCentroidsR[8];
             Polygon8 tri;
-            Polygon8::Load(mesh, dim, faceIDQueue + qStart, &tri);
-            ClipPolygon(dim, faceIDQueue + qStart, tri, splitValue, gL, gR, cL, cR);
+            if constexpr (UseGeomIDs)
+            {
+                Polygon8::Load(scene, dim, geomIDQueue + qStart, faceIDQueue + qStart, &tri);
+                ClipPolygon(dim, geomIDQueue + qStart, faceIDQueue + qStart, tri, splitValue, gL, gR, cL, cR);
+            }
+            else
+            {
+                Polygon8::Load(scene, dim, faceIDQueue + qStart, &tri);
+                ClipPolygon(dim, faceIDQueue + qStart, tri, splitValue, gL, gR, cL, cR);
+            }
+
             Transpose3x8(cL[0], cL[1], cL[2],
                          outCentroidsL[0], outCentroidsL[1], outCentroidsL[2], outCentroidsL[3],
                          outCentroidsL[4], outCentroidsL[5], outCentroidsL[6], outCentroidsL[7]);
@@ -1339,7 +1498,7 @@ struct alignas(32) HeuristicAOSSplitBinning
         return l;
     }
 
-    void Merge(const HeuristicAOSSplitBinning<numBins, Polygon8, Mesh> &other)
+    void Merge(const HeuristicAOSSplitBinning<numBins, Polygon8, SceneType> &other)
     {
         for (u32 i = 0; i < numBins; i++)
         {
@@ -1351,6 +1510,7 @@ struct alignas(32) HeuristicAOSSplitBinning
             }
         }
     }
+#undef UseGeomIDs
 };
 
 template <i32 numObjectBins = 32, typename PrimRef = PrimRef>
@@ -1371,7 +1531,7 @@ Split SAHObjectBinning(const RecordAOSSplits &record, const PrimRef *primRefs,
         const u32 groupSize = PARALLEL_THRESHOLD;
         ParallelReduce<OBin>(
             objectBinHeuristic, record.start, record.count, groupSize,
-            [&](OBin &binner, u32 start, u32 count) { binner.Bin(primRefs, start, count); },
+            [&](OBin &binner, u32 jobID, u32 start, u32 count) { binner.Bin(primRefs, start, count); },
             [&](OBin &l, const OBin &r) { l.Merge(r); },
             objectBinner);
     }
@@ -1489,27 +1649,30 @@ u32 SplitFallback(const Record &record, Split &split, const PrimRef *primRefs, R
 
 // SBVH
 static const f32 sbvhAlpha = 1e-5;
-template <i32 numObjectBins = 32, i32 numSpatialBins = 16, typename Polygon8 = Triangle8, typename Mesh = TriangleMesh>
+template <typename SceneType = TriangleMesh, i32 numObjectBins = 32, i32 numSpatialBins = 16>
 struct HeuristicSpatialSplits
 {
-    using Record        = RecordAOSSplits;
-    using PrimitiveData = PrimRef;
-    using HSplit        = HeuristicAOSSplitBinning<numSpatialBins, Polygon8, Mesh>;
-    using OBin          = HeuristicAOSObjectBinning<numObjectBins, PrimRef>;
+    using Record = RecordAOSSplits;
 
-    Mesh *mesh;
+    using PrimRef  = std::conditional_t<std::is_same_v<SceneType, Scene2>, PrimRef, PrimRefCompressed>;
+    using Polygon8 = std::conditional_t<std::is_same_v<SceneType, TriangleMesh>, Triangle8, Quad8>;
+
+    using HSplit = HeuristicAOSSplitBinning<numSpatialBins, Polygon8, SceneType>;
+    using OBin   = HeuristicAOSObjectBinning<numObjectBins, PrimRef>;
+
+    SceneType *scene;
     f32 rootArea;
     PrimRef *primRefs;
 
     HeuristicSpatialSplits() {}
-    HeuristicSpatialSplits(PrimRef *data, Mesh *mesh, f32 rootArea)
-        : primRefs(data), mesh(mesh), rootArea(rootArea) {}
+    HeuristicSpatialSplits(PrimRef *data, SceneType *scene, f32 rootArea)
+        : primRefs(data), scene(scene), rootArea(rootArea) {}
 
     Split Bin(const Record &record, u32 blockSize = 1)
     {
         // Object splits
         TempArena temp = ScratchStart(0, 0);
-        u64 popPos     = 0; // ArenaPos(temp.arena);
+        u64 popPos     = ArenaPos(temp.arena);
         OBin *objectBinHeuristic;
 
         struct Split objectSplit = SAHObjectBinning(record, primRefs, objectBinHeuristic, popPos);
@@ -1541,13 +1704,13 @@ struct HeuristicSpatialSplits
 
                 ParallelReduce<HSplit>(
                     splitHeuristic, record.start, record.count, groupSize,
-                    [&](HSplit &binner, u32 start, u32 count) { binner.Bin(primRefs, start, count); },
+                    [&](HSplit &binner, u32 jobID, u32 start, u32 count) { binner.Bin(primRefs, start, count); },
                     [&](HSplit &l, const HSplit &r) { l.Merge(r); },
-                    splitBinner, mesh, record.End());
+                    splitBinner, scene, record.End());
             }
             else
             {
-                new (splitHeuristic) HSplit(splitBinner, mesh, record.End());
+                new (splitHeuristic) HSplit(splitBinner, scene, record.End());
                 splitHeuristic->Bin(primRefs, record.start, record.count);
             }
             struct Split spatialSplit = BinBest(splitHeuristic->bins,

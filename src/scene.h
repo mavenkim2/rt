@@ -397,6 +397,12 @@ struct RemoveFirstN<index, TypePack<T, Ts...>>
     using type = typename RemoveFirstN<index - 1, TypePack<Ts...>>::type;
 };
 
+enum GeometryType
+{
+    GT_InstanceType = 0,
+    GT_QuadMeshType = 1,
+};
+
 struct GeometryID
 {
     static const u32 indexMask = 0x0fffffff;
@@ -409,7 +415,8 @@ struct GeometryID
     // static const u32 curveType        = 4;
     // static const u32 subdivType       = 5;
     // static const u32 instanceType     = 16;
-    static const u32 quadMeshType = 0;
+    static const u32 instanceType = 0;
+    static const u32 quadMeshType = 1;
 
     u32 id;
 
@@ -438,19 +445,53 @@ struct Instance
     u32 transformIndex;
 };
 
-struct QuadMeshGroup
-{
-    QuadMesh *meshes;
-    BVHNode4 nodePtr;
-    u32 numMeshes;
-};
+// struct QuadMeshGroup
+// {
+//     QuadMesh *meshes;
+//     BVHNode4 nodePtr;
+//     u32 numMeshes;
+// };
 
+// NOTE: only leaf scenes can
 struct Scene2
 {
-    QuadMeshGroup *quadMeshGroups;
-    Instance *instances;
+    union
+    {
+        QuadMesh *meshes;
+        u32 numMeshes;
+        u32 numPrims;
+        struct
+        {
+            Instance *instances;
+            AffineSpace *affineTransforms;
+        };
+    };
+    BVHNodeType nodePtr;
+
+    f32 minX, minY, minZ;
+    f32 maxX, maxY, maxZ;
     u32 numInstances;
-    AffineSpace *affineTransforms;
+    // union
+    // {
+    //     struct
+    //     {
+    // TriangleMesh* triMeshes;
+    // Curve* curves;
+    //     };
+    // };
+
+    Bounds GetBounds() const
+    {
+        Bounds result;
+        result.minP = Lane4F32::LoadU(&minX);
+        result.maxP = Lane4F32::LoadU(&maxX);
+        return result;
+    }
+    void SetBounds(const Bounds &bounds)
+    {
+        Lane4F32::StoreU(&minX, bounds.minP);
+        Lane4F32::StoreU(&maxX, bounds.maxP);
+    }
 };
 
 struct Scene

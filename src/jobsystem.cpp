@@ -110,17 +110,6 @@ void KickJobs(Counter *counter, u32 numJobs, u32 groupSize, const JobFunction &f
     }
 }
 
-// template <typename Closure>
-// void ParallelFor(Counter *counter, u32 size, u32 blockSize, const Closure &func)
-// {
-//     u32 taskSize = (size + blockSize - 1) / blockSize;
-//     for (u32 i = 0; i < taskSize; i++)
-//     {
-//         threadLocalQueue[threadLocalQueue->stackPtr++] =
-//     }
-//     threadLocalQueue[]
-// }
-
 template <typename T, typename Func, typename Reduce, typename... Args>
 T ParallelReduce(u32 count, u32 blockSize, Func func, Reduce reduce, Args... inArgs)
 {

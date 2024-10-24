@@ -446,7 +446,7 @@ struct AffineSpace
 
 __forceinline Vec3f operator*(const AffineSpace &t, const Vec3f &v)
 {
-    return FMA(t.c0, Vec3f(v.x), FMA(t.c1, Vec3f(v.y), t.c2 * Vec3f(v.z) + t.c3));
+    return FMA(t.c0, Vec3f(v.x), FMA(t.c1, Vec3f(v.y), FMA(t.c2, Vec3f(v.z), t.c3)));
 }
 
 // NOTE: can only be used when there is at least 4 bytes of padding after AffineSpace
@@ -454,8 +454,8 @@ __forceinline Lane4F32 operator*(const AffineSpace &t, const Lane4F32 &v)
 {
     return FMA(Lane4F32::LoadU(&t.c0), v[0],
                FMA(Lane4F32::LoadU(&t.c1), v[1],
-                   Lane4F32::LoadU(&t.c2) * v[2] +
-                       Lane4F32::LoadU(&t.c3)));
+                   FMA(Lane4F32::LoadU(&t.c2), v[2],
+                       Lane4F32::LoadU(&t.c3))));
 }
 
 __forceinline AffineSpace operator*(const AffineSpace &a, const AffineSpace &b)
@@ -466,6 +466,19 @@ __forceinline AffineSpace operator*(const AffineSpace &a, const AffineSpace &b)
 __forceinline bool operator==(const AffineSpace &a, const AffineSpace &b)
 {
     return a.c0 == b.c0 && a.c1 == b.c1 && a.c2 == b.c2 && a.c3 == b.c3;
+}
+
+// TODO: make sure this works :)
+__forceinline Bounds Transform(const AffineSpace &t, const Bounds &b)
+{
+    Lane4F32 extent = b.maxP - b.minP;
+    Lane4F32 add    = t * extent;
+    Lane4F32 base   = t * b.minP;
+    Lane4F32 base2  = base + add;
+    Bounds out;
+    out.minP = Min(base, base2);
+    out.maxP = Max(base, base2);
+    return out;
 }
 
 } // namespace rt

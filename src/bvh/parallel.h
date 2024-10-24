@@ -517,7 +517,7 @@ template <typename Func>
 void ParallelFor(u32 start, u32 count, u32 groupSize, const Func &func)
 {
     u32 taskCount = (count + groupSize - 1) / groupSize;
-    taskCount     = Min(taskCount, scheduler.numWorkers);
+    taskCount     = Min(taskCount, 512u);
     u32 stepSize  = count / taskCount;
     scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
         u32 tStart = start + jobID * stepSize;
@@ -551,7 +551,7 @@ ParallelForOutput ParallelFor(TempArena temp, u32 start, u32 count, u32 groupSiz
         u32 threadStart = start + stepSize * jobID;
         Assert(end > threadStart);
         u32 size = jobID == taskCount - 1 ? end - threadStart : stepSize;
-        func(val, threadStart, size);
+        func(val, jobID, threadStart, size);
     });
 
     ParallelForOutput out;
