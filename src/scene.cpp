@@ -1959,6 +1959,7 @@ u64 GetOffset(u32 name, u32 offset)
 
 #define SERIALIZE_SHAPES    1
 #define SERIALIZE_INSTANCES 0
+
 void Serialize(Arena *arena, string directory, SceneLoadState *state)
 {
     TempArena temp    = ScratchStart(0, 0);
@@ -2160,10 +2161,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     }
 
 #if SERIALIZE_SHAPES
-    // Initial estimate of file
-    // size of all geometry + size of quad mesh references + size of lookup table + size of aligning
-
-    LookupEntry *lookUpStart = PushArrayNoZero(temp.arena, LookupEntry, totalNumInstTypes);
+    LookupEntry *lookUpStart = PushArrayNoZero(temp.arena, LookupEntry, totalNumQuadMeshes + totalNumTriMeshes); // totalNumInstTypes);
 
     u8 **mappedPtrs   = PushArray(temp.arena, u8 *, totalNumInstTypes);
     u32 *sizes        = PushArray(temp.arena, u32, totalNumInstTypes);
@@ -2325,7 +2323,9 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
 
                     Assert(lookUpOffset < totalNumInstTypes);
                     u32 entryIndex = lookUpOffset++;
+#if SERIALIZE_INSTANCES
                     instanceTypeTable.Create(name, entryIndex);
+#endif
 #if SERIALIZE_SHAPES
                     // For each object instance type containing quads, write the position data to a memory mapped file
                     // TODO: need to keep track of the material used for each
@@ -2358,7 +2358,8 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                         {
                             if (currentTyGroup[shapeIndex] == P_QuadMesh)
                             {
-                                QuadMesh *mesh = &qMeshes[currentOffsetGroup[shapeIndex]];
+                                currentTyGroup[shapeIndex] = P_RemovedTy;
+                                QuadMesh *mesh             = &qMeshes[currentOffsetGroup[shapeIndex]];
                                 Assert(quadMeshOffset < quadMeshCount);
                                 QuadMesh *newMesh    = &meshes[quadMeshOffset++];
                                 newMesh->numVertices = mesh->numVertices;
@@ -2420,13 +2421,106 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
 
     printf("quad instanced total: %u\n", quadInstancedCount);
     printf("total num instance types: %u\n", lookUpOffset);
+    u32 numInstanceTypes = lookUpOffset;
 #if SERIALIZE_SHAPES
     for (u32 i = 0; i < lookUpOffset; i++)
     {
         OS_UnmapFile(mappedPtrs[i]);
         OS_ResizeFile(filenames[i], sizes[i]);
     }
+#endif
 
+    using InstanceList = ChunkedLinkedList<SceneInstance, 1024, MemoryType_Instance>;
+    // Next, write the uninstanced meshes
+    for (u32 pIndex = 0; pIndex < numProcessors; pIndex++)
+    {
+        ShapeTypeList *list    = &state->shapes[pIndex];
+        InstanceList *instList = &state->instances[pIndex];
+        PrimitiveTy *pTypes    = types[pIndex];
+        u32 *pOffsets          = offsets[pIndex];
+        u32 currentOffset      = 0;
+        for (ShapeTypeList::ChunkNode *node = list->first; node != 0; node = node->next)
+        {
+            for (u32 i = 0; i < node->count; i++)
+            {
+                ScenePacket *packet = &node->values[i];
+                if (pTypes[currentOffset] == P_QuadMesh)
+                {
+                    pTypes[currentOffset] = P_RemovedTy;
+
+                    u32 entryIndex = lookUpOffset++;
+
+#if SERIALIZE_INSTANCES
+                    for (u32 parameterIndex = 0; parameterIndex < packet->parameterCount; parameterIndex++)
+                    {
+                        if (packet->parameterNames[parameterIndex] == "Indices"_sid)
+                        {
+                            i32 *indices            = (i32 *)(packet->bytes[parameterIndex]);
+                            i32 transformIndex      = indices[2];
+                            SceneInstance &instance = instList->AddBack();
+                            instance.name           = entryIndex;
+                            instance.transformIndex = transformIndex;
+                            instanceTypeTable.Create(instance.name, entryIndex);
+                            break;
+                        }
+                    }
+#endif
+
+#if SERIALIZE_SHAPES
+                    LookupEntry *lookUpPtr   = &lookUpStart[entryIndex];
+                    lookUpPtr->name          = 0;
+                    lookUpPtr->quadMeshCount = 1;
+                    string filename          = PushStr8F(temp.arena, "%Smeshes/%u.mesh", directory, entryIndex);
+                    QuadMesh *mesh           = &qMeshes[pOffsets[currentOffset]];
+                    u8 *mappedPtr            = OS_MapFileWrite(filename, mesh->numVertices * sizeof(Vec3f) * 2 + sizeof(QuadMesh));
+
+                    QuadMesh *newMesh    = (QuadMesh *)mappedPtr;
+                    Vec3f *dataPtr       = (Vec3f *)(newMesh + 1);
+                    newMesh->numVertices = mesh->numVertices;
+
+                    u64 pOffset = u64((u8 *)dataPtr - mappedPtr);
+                    Assert(pOffset <= 0xffffffff);
+
+                    u64 pHash              = MurmurHash64A((const u8 *)mesh->p, sizeof(Vec3f) * mesh->numVertices, 0);
+                    HashTable::Node *pNode = pTable.FindOrCreate(pHash, mesh->p, mesh->numVertices, entryIndex, u32(pOffset));
+
+                    if (pNode->v == mesh->p)
+                    {
+                        MemoryCopy(dataPtr, mesh->p, sizeof(Vec3f) * mesh->numVertices);
+                        pNode->v = dataPtr;
+                        dataPtr += mesh->numVertices;
+                    }
+                    u64 offset            = pNode->ptr;
+                    *(u64 *)(&newMesh->p) = offset;
+
+                    HashTable::Node *nNode = 0;
+                    if (mesh->n)
+                    {
+                        u64 nOffset = u64((u8 *)dataPtr - mappedPtr);
+                        u64 nHash   = MurmurHash64A((const u8 *)mesh->n, sizeof(Vec3f) * mesh->numVertices, 0);
+                        nNode       = nTable.FindOrCreate(nHash, mesh->n, mesh->numVertices, entryIndex, u32(nOffset));
+                        if (nNode->v == mesh->n)
+                        {
+                            MemoryCopy(dataPtr, mesh->n, sizeof(Vec3f) * mesh->numVertices);
+                            nNode->v = dataPtr;
+                            dataPtr += mesh->numVertices;
+                        }
+                        offset                = nNode->ptr;
+                        *(u64 *)(&newMesh->n) = offset;
+                    }
+                    else
+                    {
+                        newMesh->n = 0;
+                    }
+                    OS_UnmapFile(mappedPtr);
+#endif
+                }
+                currentOffset++;
+            }
+        }
+    }
+
+#if SERIALIZE_SHAPES
     u8 *mappedPtr        = OS_MapFileWrite(PushStr8F(temp.arena, "%Smeshes/lut.mesh", directory),
                                            sizeof(LookupEntry) * lookUpOffset + sizeof(u64));
     *(u64 *)mappedPtr    = lookUpOffset;
@@ -2484,16 +2578,20 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     ScratchEnd(temp);
     temp = ScratchStart(0, 0);
 
-    u64 numInstances  = 0;
-    u32 numTransforms = 0;
+    u64 numInstances    = 0;
+    u32 numSingleMeshes = lookUpOffset - numInstanceTypes;
+    u32 numTransforms   = 0;
     for (u32 i = 0; i < numProcessors; i++)
     {
         numInstances += state->instances[i].totalCount;
         numTransforms += state->transforms[i].totalCount;
     }
 
-    size_t instFileSize = sizeof(Instance) * numInstances + sizeof(AffineSpace) * numTransforms + sizeof(numInstances);
-    filename            = PushStr8F(temp.arena, "%Sinstances.inst", directory);
+    numInstances += numSingleMeshes;
+    size_t instFileSize = sizeof(Instance) * numInstances +
+                          sizeof(AffineSpace) * numTransforms + sizeof(numInstances);
+    string filename     = PushStr8F(temp.arena, "%Sinstances.inst", directory);
+    const u32 flushSize = megabytes(64);
     u8 *instanceFilePtr = OS_MapFileWrite(filename, instFileSize);
 
     *(u64 *)instanceFilePtr = numInstances;
@@ -2506,7 +2604,6 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
 
     u32 instanceOffset  = 0;
     u32 transformOffset = 0;
-    using InstanceList  = ChunkedLinkedList<SceneInstance, 1024, MemoryType_Instance>;
     using TransformList = ChunkedLinkedList<const AffineSpace *, 16384, MemoryType_Transform>;
 
     HashExt<const AffineSpace *, u32> transformHashTable(temp.arena, numTransforms, 0);
@@ -2529,8 +2626,6 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                 }
                 const AffineSpace *t = transformList[instance.transformIndex];
 
-                // basically need to use if the transform has been written yet. if it has, use that index. otherwise,
-                // add to the hash and rewrite. this is going to probably use a decent amount of memory
                 Assert(instanceOffset < numInstances);
                 Instance *outInstance = &instances[instanceOffset];
                 outInstance->geomID   = GeometryID::CreateQuadMeshID(index);

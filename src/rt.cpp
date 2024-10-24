@@ -1061,14 +1061,14 @@ int main(int argc, char *argv[])
     // AOSSBVHBuilderTest(dataArena, &mesh);
     // PartitionFix();
 
-    PartialRebraidBuilderTest(dataArena);
+    // PartialRebraidBuilderTest(dataArena);
 
     //////////////////////////////
     // Loading PBRT File Test
     //
 
     // SceneLoadTest();
-#if 0
+#if 1
     PerformanceCounter counter = OS_StartCounter();
     LoadPBRT(arena, "data/island/pbrt-v4/island.pbrt");
     printf("Total time: %fms\n", OS_GetMilliseconds(counter));
