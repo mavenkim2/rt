@@ -461,8 +461,8 @@ struct TriangleCompressed
         TriangleCompressed<N> tri;
         for (u32 i = 0; i < N; i++)
         {
-            PrimRefCompressed *ref   = &refs[i];
-            tri.primIDs[i] = ref->primID;
+            PrimRefCompressed *ref = &refs[i];
+            tri.primIDs[i]         = ref->primID;
         }
         return tri;
     }

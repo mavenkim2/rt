@@ -371,10 +371,10 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, const
     }
 
     Arena *currentArena = arenas[GetThreadIndex()];
-    u32 offset          = 0;
     // Create a compressed leaf
     if (leafCount == numChildren)
     {
+        u32 offset               = 0;
         u8 *bytes                = PushArrayNoZeroTagged(currentArena, u8,
                                                          sizeof(CompressedNodeType) + sizeof(LeafType) * primTotal, MemoryType_BVH);
         CompressedNodeType *node = (CompressedNodeType *)bytes;
@@ -396,20 +396,20 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, const
         return BVHNode<N>::EncodeNode(node);
     }
 
-    LeafType *primIDs = PushArrayNoZeroTagged(currentArena, LeafType, primTotal, MemoryType_BVH);
     for (u32 i = 0; i < numChildren; i++)
     {
         if (childNodes[i].data == 0)
         {
+            u32 offset                = 0;
             const Record &childRecord = childRecords[i];
             u32 numPrims              = childRecord.count;
-            LeafType *prims           = &primIDs[offset];
+            LeafType *primIDs         = PushArrayNoZeroTagged(currentArena, LeafType, numPrims, MemoryType_BVH);
             for (u32 primIndex = childRecord.start; primIndex < childRecord.start + childRecord.count; primIndex++)
             {
                 PrimRef *prim     = &primRefs[primIndex];
                 primIDs[offset++] = LeafType::Fill(prim);
             }
-            childNodes[i] = BVHNode<N>::EncodeLeaf(prims, childRecord.count);
+            childNodes[i] = BVHNode<N>::EncodeLeaf(primIDs, childRecord.count);
         }
     }
     NodeType *node = PushStructNoZeroTagged(currentArena, NodeType, MemoryType_BVH);

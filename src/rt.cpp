@@ -1057,11 +1057,11 @@ int main(int argc, char *argv[])
     // TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
     // TriangleMesh mesh = LoadPLY(arena, "data/xyzrgb_statuette.ply");
 
-    QuadSBVHBuilderTest(dataArena, &mesh);
+    // QuadSBVHBuilderTest(dataArena, &mesh);
     // AOSSBVHBuilderTest(dataArena, &mesh);
     // PartitionFix();
 
-    // PartialRebraidBuilderTest(dataArena);
+    PartialRebraidBuilderTest(dataArena);
 
     //////////////////////////////
     // Loading PBRT File Test

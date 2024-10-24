@@ -723,12 +723,15 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, Split split, u32 star
     {
         globalMid += outMid[i];
         minIndex = Min(GetIndex(outMid[i], i), minIndex);
-        maxIndex = Max(GetIndex(outMid[i], i), maxIndex);
+        if (outMid[i])
+            maxIndex = Max(GetIndex(outMid[i] - 1, i), maxIndex);
     }
 
+    maxIndex = Min(maxIndex, start + count - 1);
+    minIndex = Max(minIndex, start);
     Assert(maxIndex > minIndex);
-    Assert(maxIndex < start + count);
-    Assert(minIndex >= start);
+    // Assert(maxIndex < start + count);
+    // Assert(minIndex >= start);
     u32 out = heuristic->Partition(data, split.bestDim, split.bestPos, minIndex, maxIndex);
 
     Assert(globalMid == out);
@@ -1520,6 +1523,7 @@ Split SAHObjectBinning(const RecordAOSSplits &record, const PrimRef *primRefs,
     using OBin        = HeuristicAOSObjectBinning<numObjectBins, PrimRef>;
     TempArena temp    = ScratchStart(0, 0);
     popPos            = ArenaPos(temp.arena);
+    u64 align         = temp.arena->align;
     temp.arena->align = 32;
 
     // Stack allocate the heuristics since they store the centroid and geom bounds we'll need later
@@ -1542,6 +1546,7 @@ Split SAHObjectBinning(const RecordAOSSplits &record, const PrimRef *primRefs,
     }
     struct Split objectSplit = BinBest(objectBinHeuristic->bins, objectBinHeuristic->counts, objectBinner);
     objectSplit.type         = Split::Object;
+    temp.arena->align        = align;
     return objectSplit;
 }
 

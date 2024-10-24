@@ -431,9 +431,12 @@ struct Scene2
 {
     union
     {
-        QuadMesh *meshes;
-        u32 numMeshes;
-        u32 numPrims;
+        struct
+        {
+            QuadMesh *meshes;
+            u32 numMeshes;
+            u32 numPrims;
+        };
         struct
         {
             Instance *instances;

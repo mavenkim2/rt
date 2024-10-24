@@ -2574,9 +2574,9 @@ void GeneratePrimRefs(PRef *refs, u32 offset, QuadMesh *mesh, u32 geomID, u32 st
 #define UseGeomIDs std::is_same_v<PRef, PrimRef>
     Bounds geomBounds;
     Bounds centBounds;
-    for (u32 i = start; i < start + count; i++)
+    for (u32 i = start; i < start + count; i++, offset++)
     {
-        PRef *prim = &refs[offset + i];
+        PRef *prim = &refs[offset];
         Vec3f v0   = mesh->p[4 * i + 0];
         Vec3f v1   = mesh->p[4 * i + 1];
         Vec3f v2   = mesh->p[4 * i + 2];
@@ -2603,7 +2603,7 @@ void GeneratePrimRefs(PRef *refs, u32 offset, QuadMesh *mesh, u32 geomID, u32 st
 }
 
 template <typename PrimRef>
-void GeneratePrimRefs(QuadMesh *meshes, PrimRef *refs, u32 offset, u32 start, u32 count, RecordAOSSplits &record)
+void GeneratePrimRefs(QuadMesh *meshes, PrimRef *refs, u32 offset, u32 offsetMax, u32 start, u32 count, RecordAOSSplits &record)
 {
     RecordAOSSplits r(neg_inf);
     for (u32 i = start; i < start + count; i++)
@@ -2617,6 +2617,7 @@ void GeneratePrimRefs(QuadMesh *meshes, PrimRef *refs, u32 offset, u32 start, u3
             ParallelReduce<RecordAOSSplits>(
                 &tempRecord, 0, numFaces, PARALLEL_THRESHOLD,
                 [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
+                    Assert(offset + start < offsetMax);
                     GeneratePrimRefs(refs, offset + start, mesh, i, start, count, record);
                 },
                 [&](RecordAOSSplits &l, const RecordAOSSplits &r) {
@@ -2625,11 +2626,13 @@ void GeneratePrimRefs(QuadMesh *meshes, PrimRef *refs, u32 offset, u32 start, u3
         }
         else
         {
-            GeneratePrimRefs(refs, offset, mesh, i, start, count, tempRecord);
+            Assert(offset < offsetMax);
+            GeneratePrimRefs(refs, offset, mesh, i, 0, numFaces, tempRecord);
         }
         r.Merge(tempRecord);
         offset += numFaces;
     }
+    Assert(offsetMax == offset);
     record = r;
 }
 
@@ -2717,19 +2720,27 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
             for (u32 i = 0; i < output.num; i++)
             {
                 u32 numVertices = offsets[i];
+                u32 numFaces    = numVertices / 4;
                 offsets[i]      = offset;
-                offset += numVertices;
+                offset += numFaces;
             }
             u32 numFaces = totalVertexCount / 4;
-            u32 extEnd   = u32(numFaces * GROW_AMOUNT);
+            Assert(numFaces == offset);
+            u32 extEnd = u32(numFaces * GROW_AMOUNT);
             RecordAOSSplits record(neg_inf);
 
             // Generate PrimRefs
-            PrimRef *refs = PushArrayNoZero(temp.arena, PrimRef, extEnd);
+            u64 align        = temp.arena->align;
+            temp.arena->align = 32;
+            PrimRef *refs    = PushArrayNoZero(temp.arena, PrimRef, extEnd);
+            temp.arena->align = align;
+
             ParallelReduce<RecordAOSSplits>(
                 &record, 0, entry->quadMeshCount, PARALLEL_THRESHOLD,
                 [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
-                    GeneratePrimRefs(meshes, refs, offsets[jobID], start, count, record);
+                    GeneratePrimRefs(meshes, refs, offsets[jobID],
+                                     jobID == output.num - 1 ? numFaces : offsets[jobID + 1],
+                                     start, count, record);
                 },
                 [&](RecordAOSSplits &l, const RecordAOSSplits &r) {
                     l.Merge(r);
@@ -2750,8 +2761,11 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
 
             if (entry->quadMeshCount > 1)
             {
-                PrimRef *refs = PushArrayNoZero(temp.arena, PrimRef, extEnd);
-                GeneratePrimRefs(meshes, refs, 0, 0, numFaces, record);
+                u64 align        = temp.arena->align;
+                temp.arena->align = 32;
+                PrimRef *refs    = PushArrayNoZero(temp.arena, PrimRef, extEnd);
+                temp.arena->align = align;
+                GeneratePrimRefs(meshes, refs, 0, numFaces, 0, entry->quadMeshCount, record);
                 group->SetBounds(record.geomBounds);
                 record.SetRange(0, numFaces, extEnd);
                 group->numPrims = numFaces;
@@ -2760,7 +2774,7 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
             else
             {
                 PrimRefCompressed *refs = PushArrayNoZero(temp.arena, PrimRefCompressed, extEnd);
-                GeneratePrimRefs(meshes, refs, 0, 0, numFaces, record);
+                GeneratePrimRefs(refs, 0, &group->meshes[0], 0, 0, numFaces, record);
                 group->SetBounds(record.geomBounds);
                 record.SetRange(0, numFaces, extEnd);
                 group->numPrims = numFaces;

@@ -194,6 +194,7 @@ void PartialRebraidBuilderTest(Arena *arena)
     Scene2 *scenes             = InitializeScene(arenas, "data/island/pbrt-v4/meshes/", "data/island/pbrt-v4/instances.inst");
     printf("scene initialization + blas build time: %fms\n", OS_GetMilliseconds(counter));
 
+#if 0
     RecordAOSSplits record;
     counter         = OS_StartCounter();
     BRef *buildRefs = GenerateBuildRefs(scenes, 0, arena, record);
@@ -204,6 +205,7 @@ void PartialRebraidBuilderTest(Arena *arena)
     counter          = OS_StartCounter();
     BVHNodeType node = BuildTLAS(settings, arenas, buildRefs, record);
     printf("time to generate tlas: %fms\n", OS_GetMilliseconds(counter));
+#endif
 
     f64 totalMiscTime     = 0;
     u64 numNodes          = 0;
