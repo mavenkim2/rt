@@ -1,3 +1,4 @@
+#include <atomic>
 #include <emmintrin.h>
 #include <stdint.h>
 #include <windows.h>
@@ -205,21 +206,24 @@ struct Mutex
     std::atomic<u32> count;
 };
 
+struct alignas(CACHE_LINE_SIZE) AlignedMutex
+{
+    Mutex mutex;
+};
+
 inline void BeginMutex(Mutex *mutex)
 {
     u32 expected = 0;
-    while (!mutex->count.compare_exchange_weak(expected, 1))
+    while (!mutex->count.compare_exchange_weak(expected, 1, std::memory_order_acq_rel))
     {
         expected = 0;
         _mm_pause();
     }
 }
+inline void EndMutex(Mutex *mutex) { mutex->count.store(0, std::memory_order_acq_rel); }
 
-// TODO: use memory barrier instead, _mm_sfence()?
-inline void EndMutex(Mutex *mutex)
-{
-    mutex->count.store(0);
-}
+inline void BeginMutex(AlignedMutex *mutex) { BeginMutex(&mutex->mutex); }
+inline void EndMutex(AlignedMutex *mutex) { EndMutex(&mutex->mutex); }
 
 inline void BeginRMutex(Mutex *mutex)
 {

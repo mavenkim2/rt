@@ -164,7 +164,6 @@ struct HeuristicPartialRebraid
     Split Bin(const Record &record)
     {
         u64 popPos = 0;
-        // TODO: make the single threaded version not take an atomic
         std::atomic<u32> refOffset{record.End()};
         if (record.count > PARALLEL_THRESHOLD)
         {

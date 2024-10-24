@@ -372,7 +372,7 @@ struct Scheduler
         t->func(t->id);
         if (t->counter)
         {
-            t->counter->count.fetch_sub(1, std::memory_order_acq_rel); //, std::memory_order_release);
+            t->counter->count.fetch_sub(1, std::memory_order_acq_rel);
         }
     }
     template <typename Pred>
@@ -418,8 +418,8 @@ struct Scheduler
     bool WaitForTask(Worker *w, Task *t, Counter *counter)
     {
     begin:
-        if (ExploreTask(w, t, [&]() { return counter->count.load(std::memory_order_relaxed) == 0; })) return true;
-        if (counter->count.load(std::memory_order_relaxed) == 0) return false;
+        if (ExploreTask(w, t, [&]() { return counter->count.load(std::memory_order_acq_rel) == 0; })) return true;
+        if (counter->count.load(std::memory_order_acq_rel) == 0) return false;
         for (u32 i = 0; i < numWorkers; i++)
         {
             if (!workers[i].queue.Empty())

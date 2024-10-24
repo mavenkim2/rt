@@ -443,8 +443,8 @@ static void ClipPolygon(const u32 dim, const Polygon8 &poly, const Lane8F32 &spl
 }
 
 template <typename Polygon8>
-static void ClipPolygon(const u32 dim, const Polygon8 &tri, const Lane8F32 &splitPos,
-                        Bounds8 *l, Bounds8 *r)
+__forceinline static void ClipPolygon(const u32 dim, const Polygon8 &tri, const Lane8F32 &splitPos,
+                                      Bounds8 *l, Bounds8 *r)
 {
     Lane8F32 lOut[8];
     Lane8F32 leftMinX, leftMinY, leftMinZ, leftMaxX, leftMaxY, leftMaxZ,
@@ -1179,7 +1179,6 @@ struct alignas(32) HeuristicAOSSplitBinning
                             u32 binIndex = binIndices[b] + 1;
                             bins[dim][binIndex].Extend(bounds[current][b]);
                         }
-                        binCounts[dim][bin] = 0;
                     }
                     bitMask[dim] &= bitMask[dim] - 1;
                 }

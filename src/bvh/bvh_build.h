@@ -276,7 +276,8 @@ using PartialRebraidBuilder = BVHBuilder<N, TLAS_PRB_QuantizedNode_Funcs<N>>;
 template <i32 N, typename BuildFunctions>
 BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVHRoot(BuildSettings settings, Record &record)
 {
-    BVHNode<N> root = BuildBVH(settings, record, true);
+    bool parallel   = record.count >= 8 * 1024;
+    BVHNode<N> root = BuildBVH(settings, record, parallel);
     return root;
 }
 
@@ -358,7 +359,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, const
         }
     }
 
-    threadLocalStatistics[GetThreadIndex()].misc += 1;
+    // threadLocalStatistics[GetThreadIndex()].misc += 1;
     u32 leafCount = 0;
     u32 primTotal = 0;
     for (u32 i = 0; i < numChildren; i++)

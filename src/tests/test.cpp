@@ -92,6 +92,14 @@ void AOSSBVHBuilderTest(Arena *arena, TriangleMesh *mesh)
     arena->align = 64;
 
     const u32 numFaces = mesh->numIndices / 3;
+    u32 numProcessors  = OS_NumProcessors();
+    Arena **arenas     = PushArray(arena, Arena *, numProcessors);
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        arenas[i] = ArenaAlloc(16); // ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
+    }
+
+    PerformanceCounter counter = OS_StartCounter();
     Bounds geomBounds;
     Bounds centBounds;
     PrimRefCompressed *refs = GenerateAOSData(arena, mesh, numFaces, geomBounds, centBounds);
@@ -103,16 +111,9 @@ void AOSSBVHBuilderTest(Arena *arena, TriangleMesh *mesh)
     record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
     record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
     record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
-    u32 numProcessors = OS_NumProcessors();
-    Arena **arenas    = PushArray(arena, Arena *, numProcessors);
-    for (u32 i = 0; i < numProcessors; i++)
-    {
-        arenas[i] = ArenaAlloc(16); // ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
-    }
 
-    PerformanceCounter counter = OS_StartCounter();
-    BVHNodeType bvh            = BuildQuantizedTriSBVH(settings, arenas, mesh, refs, record);
-    f32 time                   = OS_GetMilliseconds(counter);
+    BVHNodeType bvh = BuildQuantizedTriSBVH(settings, arenas, mesh, refs, record);
+    f32 time        = OS_GetMilliseconds(counter);
     printf("num faces: %u\n", numFaces);
     printf("Build time: %fms\n", time);
 
@@ -139,6 +140,14 @@ void QuadSBVHBuilderTest(Arena *arena, QuadMesh *mesh)
     arena->align = 64;
 
     const u32 numFaces = mesh->numVertices / 4;
+    u32 numProcessors  = OS_NumProcessors();
+    Arena **arenas     = PushArray(arena, Arena *, numProcessors);
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        arenas[i] = ArenaAlloc(16); // ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
+    }
+
+    PerformanceCounter counter = OS_StartCounter();
     Bounds geomBounds;
     Bounds centBounds;
     PrimRefCompressed *refs = GenerateQuadData(arena, mesh, numFaces, geomBounds, centBounds);
@@ -150,16 +159,9 @@ void QuadSBVHBuilderTest(Arena *arena, QuadMesh *mesh)
     record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
     record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
     record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
-    u32 numProcessors = OS_NumProcessors();
-    Arena **arenas    = PushArray(arena, Arena *, numProcessors);
-    for (u32 i = 0; i < numProcessors; i++)
-    {
-        arenas[i] = ArenaAlloc(16); // ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
-    }
 
-    PerformanceCounter counter = OS_StartCounter();
-    BVHNodeType bvh            = BuildQuantizedQuadSBVH(settings, arenas, mesh, refs, record);
-    f32 time                   = OS_GetMilliseconds(counter);
+    BVHNodeType bvh = BuildQuantizedQuadSBVH(settings, arenas, mesh, refs, record);
+    f32 time        = OS_GetMilliseconds(counter);
     printf("num faces: %u\n", numFaces);
     printf("Build time: %fms\n", time);
 
@@ -194,7 +196,7 @@ void PartialRebraidBuilderTest(Arena *arena)
     Scene2 *scenes             = InitializeScene(arenas, "data/island/pbrt-v4/meshes/", "data/island/pbrt-v4/instances.inst");
     printf("scene initialization + blas build time: %fms\n", OS_GetMilliseconds(counter));
 
-#if 0
+    // TODO: don't forget to run the instance generation code again to get the pad
     RecordAOSSplits record;
     counter         = OS_StartCounter();
     BRef *buildRefs = GenerateBuildRefs(scenes, 0, arena, record);
@@ -202,10 +204,9 @@ void PartialRebraidBuilderTest(Arena *arena)
 
     BuildSettings settings;
 
-    counter          = OS_StartCounter();
-    BVHNodeType node = BuildTLAS(settings, arenas, buildRefs, record);
-    printf("time to generate tlas: %fms\n", OS_GetMilliseconds(counter));
-#endif
+    // counter          = OS_StartCounter();
+    // BVHNodeType node = BuildTLAS(settings, arenas, buildRefs, record);
+    // printf("time to generate tlas: %fms\n", OS_GetMilliseconds(counter));
 
     f64 totalMiscTime     = 0;
     u64 numNodes          = 0;
@@ -216,11 +217,12 @@ void PartialRebraidBuilderTest(Arena *arena)
         totalMiscTime += threadLocalStatistics[i].miscF;
         totalNodeMemory += threadMemoryStatistics[i].totalBVHMemory;
         totalRecordMemory += threadMemoryStatistics[i].totalRecordMemory;
-        // printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
+        printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
         numNodes += threadLocalStatistics[i].misc;
     }
     printf("total misc time: %fms \n", totalMiscTime);
-    printf("num nodes: %llu\n", numNodes);
+    // printf("num nodes: %llu\n", numNodes);
+    printf("num faces: %llu\n", numNodes);
     printf("node kb: %llu\n", totalNodeMemory / 1024);
     printf("record kb: %llu", totalRecordMemory / 1024);
 }
