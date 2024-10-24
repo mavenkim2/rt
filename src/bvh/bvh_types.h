@@ -82,7 +82,6 @@ struct PrimRef
     {
         return Lane8F32::Load(&m256);
     }
-    u32 LeafID() const { return primID; }
 };
 
 // NOTE: if BVH is built over only one quad mesh. must make sure to pad with an extra entry when allocating
@@ -112,7 +111,6 @@ struct PrimRefCompressed
     {
         return Lane8F32::LoadU(this);
     }
-    u32 LeafID() const { return primID; }
 };
 
 struct ExtRange
@@ -312,7 +310,6 @@ struct BuildRef
     u32 numPrims;
     BVHNode<N> nodePtr;
 
-    BVHNode<N> LeafID() const { return nodePtr; }
     __forceinline Lane8F32 Load() const
     {
         return Lane8F32::LoadU(min);
@@ -432,6 +429,57 @@ typedef BuildRef<8> BRef;
 typedef QuantizedNode<8> QNode;
 static const u32 DefaultN = 8;
 #endif
+
+template <i32 N>
+struct Triangle
+{
+    u32 geomIDs[N];
+    u32 primIDs[N];
+    Triangle() {}
+
+    __forceinline static Triangle<N> Fill(PrimRef *refs)
+    {
+        Triangle<N> tri;
+        for (u32 i = 0; i < N; i++)
+        {
+            PrimRef *ref   = &refs[i];
+            tri.geomIDs[i] = ref->geomID;
+            tri.primIDs[i] = ref->primID;
+        }
+        return tri;
+    }
+};
+
+template <i32 N>
+struct TriangleCompressed
+{
+    u32 primIDs[N];
+    TriangleCompressed() {}
+
+    __forceinline static TriangleCompressed<N> Fill(PrimRefCompressed *refs)
+    {
+        TriangleCompressed<N> tri;
+        for (u32 i = 0; i < N; i++)
+        {
+            PrimRefCompressed *ref   = &refs[i];
+            tri.primIDs[i] = ref->primID;
+        }
+        return tri;
+    }
+};
+
+template <i32 N>
+struct TLASLeaf
+{
+    BVHNode<N> nodePtr;
+    TLASLeaf() {}
+    __forceinline static TLASLeaf<N> Fill(BuildRef<N> *ref)
+    {
+        TLASLeaf<N> result;
+        result.nodePtr = ref->nodePtr;
+        return result;
+    }
+};
 
 } // namespace rt
 #endif

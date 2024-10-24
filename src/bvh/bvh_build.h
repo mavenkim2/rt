@@ -204,7 +204,7 @@ using BLAS_SBVH_QuantizedNode_TriangleLeaf_Funcs =
                QuantizedNode<N>,
                CreateQuantizedNode<N>,
                UpdateQuantizedNode<N>,
-               u32,
+               TriangleCompressed<1>,
                CompressedLeafNode<N>>;
 
 template <i32 N>
@@ -214,7 +214,7 @@ using BLAS_SBVH_QuantizedNode_QuadLeaf_Funcs =
                QuantizedNode<N>,
                CreateQuantizedNode<N>,
                UpdateQuantizedNode<N>,
-               u32,
+               TriangleCompressed<1>,
                CompressedLeafNode<N>>;
 
 template <i32 N>
@@ -224,7 +224,7 @@ using BLAS_SBVH_QuantizedNode_QuadLeaf_Scene_Funcs =
                QuantizedNode<N>,
                CreateQuantizedNode<N>,
                UpdateQuantizedNode<N>,
-               u32,
+               Triangle<1>,
                CompressedLeafNode<N>>;
 
 template <i32 N>
@@ -234,7 +234,7 @@ using TLAS_PRB_QuantizedNode_Funcs =
                QuantizedNode<N>,
                CreateQuantizedNode<N>,
                UpdateQuantizedNode<N>,
-               BVHNode<N>,
+               TLASLeaf<N>,
                CompressedLeafNode<N>>;
 
 template <i32 N, typename BuildFunctions>
@@ -380,7 +380,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, const
         CompressedNodeType *node = (CompressedNodeType *)bytes;
         LeafType *primIDs        = (LeafType *)(bytes + sizeof(CompressedNodeType));
 
-        // TODO: not currently keeping track of which prims correspond with which leaf, either need to
+        // TODO IMPORTANT: not currently keeping track of which prims correspond with which leaf, either need to
         // use 4 8 bit offsets or using a triangle8 struct
         f.createNode(childRecords, numChildren, node);
 
@@ -390,7 +390,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, const
             for (u32 primIndex = childRecord.start; primIndex < childRecord.start + childRecord.count; primIndex++)
             {
                 PrimRef *prim     = &primRefs[primIndex];
-                primIDs[offset++] = prim->LeafID();
+                primIDs[offset++] = LeafType::Fill(prim);
             }
         }
         return BVHNode<N>::EncodeNode(node);
@@ -407,7 +407,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, const
             for (u32 primIndex = childRecord.start; primIndex < childRecord.start + childRecord.count; primIndex++)
             {
                 PrimRef *prim     = &primRefs[primIndex];
-                primIDs[offset++] = prim->LeafID();
+                primIDs[offset++] = LeafType::Fill(prim);
             }
             childNodes[i] = BVHNode<N>::EncodeLeaf(prims, childRecord.count);
         }

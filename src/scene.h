@@ -254,11 +254,6 @@ struct ConstantMedium
 //     }
 // };
 
-struct Triangle
-{
-    u32 indices[3];
-};
-
 struct TriangleMesh
 {
     Vec3f *p;
@@ -287,27 +282,6 @@ struct QuadMesh
     u32 numVertices;
     // u32 numQuads;
 };
-
-//////////////////////////////
-// Methods used for BVH construction
-//
-template <typename Primitive, typename BasePrimitive>
-__forceinline BasePrimitive GetPrimitive(Primitive *primitives, u32 index)
-{
-    static_assert(std::is_same_v<Primitive, BasePrimitive>);
-    return primitives[index];
-}
-
-template <>
-__forceinline Triangle GetPrimitive<TriangleMesh, Triangle>(TriangleMesh *mesh, u32 index)
-{
-    Triangle out;
-    Assert(index < mesh->numIndices / 3);
-    out.indices[0] = mesh->indices[index * 3 + 0];
-    out.indices[1] = mesh->indices[index * 3 + 1];
-    out.indices[2] = mesh->indices[index * 3 + 2];
-    return out;
-}
 
 //////////////////////////////
 
