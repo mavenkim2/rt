@@ -468,16 +468,38 @@ __forceinline bool operator==(const AffineSpace &a, const AffineSpace &b)
     return a.c0 == b.c0 && a.c1 == b.c1 && a.c2 == b.c2 && a.c3 == b.c3;
 }
 
-// TODO: make sure this works :)
 __forceinline Bounds Transform(const AffineSpace &t, const Bounds &b)
 {
-    Lane4F32 extent = b.maxP - b.minP;
-    Lane4F32 add    = t * extent;
-    Lane4F32 base   = t * b.minP;
-    Lane4F32 base2  = base + add;
+    Lane4F32 extentX(b.maxP[0] - b.minP[0], 0, 0, 0);
+    Lane4F32 extentY(0, b.maxP[1] - b.minP[1], 0, 0);
+    Lane4F32 extentZ(0, 0, b.maxP[2] - b.minP[2], 0);
+
+    Lane4F32 newExtentX = t * extentX;
+    Lane4F32 newExtentY = t * extentY;
+    Lane4F32 newExtentZ = t * extentZ;
+
+    Lane4F32 p0 = t * b.minP;
+
     Bounds out;
-    out.minP = Min(base, base2);
-    out.maxP = Max(base, base2);
+    Lane4F32 p1 = p0 + newExtentX;
+    Lane4F32 p2 = p1 + newExtentY;
+    Lane4F32 p3 = p0 + newExtentY;
+
+    out.Extend(p0);
+    out.Extend(p1);
+    out.Extend(p2);
+    out.Extend(p3);
+
+    Lane4F32 p4 = p0 + newExtentZ;
+    Lane4F32 p5 = p4 + newExtentX;
+    Lane4F32 p6 = p5 + newExtentY;
+    Lane4F32 p7 = p4 + newExtentY;
+
+    out.Extend(p4);
+    out.Extend(p5);
+    out.Extend(p6);
+    out.Extend(p7);
+
     return out;
 }
 

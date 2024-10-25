@@ -61,71 +61,75 @@ BRef *GenerateBuildRefs(Scene2 *scenes, u32 sceneNum, Arena *arena, RecordAOSSpl
 static const f32 REBRAID_THRESHOLD = .1f;
 
 template <typename Heuristic, typename GetNode>
-void OpenBraid(const RecordAOSSplits &record, BRef *refs, u32 start, u32 count, u32 offset, Heuristic &heuristic, GetNode &getNode)
+void OpenBraid(const RecordAOSSplits &record, BRef *refs, u32 start, u32 count, u32 offset, const u32 offsetMax,
+               Heuristic &heuristic, GetNode &getNode)
 {
+    TIMED_FUNCTION(miscF);
     using NodeType       = typename GetNode::NodeType;
     const u32 QUEUE_SIZE = 8;
 
-    u32 refIDQueue[2 * QUEUE_SIZE] = {};
-    u32 openCount                  = 0;
     for (u32 i = start; i < start + count; i++)
     {
-        BRef &ref             = refs[i];
-        refIDQueue[openCount] = i;
-        bool isOpen           = heuristic(ref);
-        openCount += isOpen;
-
-        if (openCount >= QUEUE_SIZE)
+        BRef &ref = refs[i];
+        if (heuristic(ref))
         {
-            openCount -= QUEUE_SIZE;
-            u32 numChildren[QUEUE_SIZE];
-            for (u32 refID = 0; refID < QUEUE_SIZE; refID++)
+            NodeType *node = getNode(ref.nodePtr);
+            alignas(4 * DefaultN) f32 minX[DefaultN];
+            alignas(4 * DefaultN) f32 minY[DefaultN];
+            alignas(4 * DefaultN) f32 minZ[DefaultN];
+            alignas(4 * DefaultN) f32 maxX[DefaultN];
+            alignas(4 * DefaultN) f32 maxY[DefaultN];
+            alignas(4 * DefaultN) f32 maxZ[DefaultN];
+
+            node->GetBounds(minX, minY, minZ, maxX, maxY, maxZ);
+
+            // TODO: transform the bounds to world space
+            // Instance &instance =
+            //     Bounds(Lane4F32(minX[0], minY[0], minZ[0], 0), Lane4F32(maxX[0], maxY[0], maxZ[0], 0));
+
+            ref.min[0] = -minX[0];
+            ref.min[1] = -minY[0];
+            ref.min[2] = -minZ[0];
+
+            ref.max[0] = maxX[0];
+            ref.max[1] = maxY[0];
+            ref.max[2] = maxZ[0];
+
+            u32 numC = node->GetNumChildren();
+            Assert(numC > 0 && numC <= DefaultN);
+            u32 numPrims = Max(ref.numPrims / numC, 1u);
+            ref.numPrims = numPrims;
+
+            BVHNodeType parent = ref.nodePtr;
+            ref.nodePtr        = node->Child(0);
+            Assert(ref.nodePtr.data != 0);
+
+            for (u32 b = 1; b < numC; b++)
             {
-                u32 num            = getNode(refs[refIDQueue[openCount + refID]].nodePtr)->GetNumChildren();
-                numChildren[refID] = num;
-            }
+                Assert(offset < offsetMax);
+                refs[offset].min[0]   = -minX[b];
+                refs[offset].min[1]   = -minY[b];
+                refs[offset].min[2]   = -minZ[b];
+                refs[offset].objectID = ref.objectID;
+                refs[offset].max[0]   = maxX[b];
+                refs[offset].max[1]   = maxY[b];
+                refs[offset].max[2]   = maxZ[b];
+                refs[offset].numPrims = numPrims;
+                refs[offset].nodePtr  = node->Child(b);
 
-            for (u32 testIndex = 0; testIndex < QUEUE_SIZE; testIndex++)
-            {
-                u32 refID      = refIDQueue[openCount + testIndex];
-                NodeType *node = getNode(refs[refID].nodePtr);
-                alignas(4 * DefaultN) f32 minX[DefaultN];
-                alignas(4 * DefaultN) f32 minY[DefaultN];
-                alignas(4 * DefaultN) f32 minZ[DefaultN];
-                alignas(4 * DefaultN) f32 maxX[DefaultN];
-                alignas(4 * DefaultN) f32 maxY[DefaultN];
-                alignas(4 * DefaultN) f32 maxZ[DefaultN];
+                Assert(refs[offset].nodePtr.data != 0);
 
-                node->GetBounds(minX, minY, minZ, maxX, maxY, maxZ);
-
-                refs[refID].min[0] = -minX[0];
-                refs[refID].min[1] = -minY[0];
-                refs[refID].min[2] = -minZ[0];
-
-                refs[refID].max[0] = maxX[0];
-                refs[refID].max[1] = maxY[0];
-                refs[refID].max[2] = maxZ[0];
-
-                u32 numPrims         = Max(refs[refID].numPrims / numChildren[testIndex], 1u);
-                refs[refID].numPrims = numPrims;
-                refs[refID].nodePtr  = node->Child(0);
-
-                for (u32 b = 1; b < numChildren[testIndex]; b++)
-                {
-                    refs[offset].min[0]   = -minX[b];
-                    refs[offset].min[1]   = -minY[b];
-                    refs[offset].min[2]   = -minZ[b];
-                    refs[offset].objectID = refs[refID].objectID;
-                    refs[offset].max[0]   = maxX[b];
-                    refs[offset].max[1]   = maxY[b];
-                    refs[offset].max[2]   = maxZ[b];
-                    refs[offset].numPrims = numPrims;
-                    refs[offset].nodePtr  = node->Child(b);
-
-                    offset++;
-                }
+                offset++;
             }
         }
+    }
+    // wtf is going on ?
+
+    if (offset != offsetMax)
+    {
+        // printf("offset %u\n", offset);
+        // printf("offset max %u\n", offsetMax);
+        // assert(0);
     }
 }
 
@@ -226,15 +230,17 @@ struct HeuristicPartialRebraid
                     Props *props = (Props *)output.out;
                     for (u32 i = 0; i < output.num; i++)
                     {
-                        u32 splits   = props->count;
-                        props->count = offset;
+                        u32 splits     = props[i].count;
+                        props[i].count = offset;
+                        Assert(offset < record.ExtEnd());
                         offset += splits;
                     }
                     ParallelFor(
                         record.start, record.count, PARALLEL_THRESHOLD,
                         [&](u32 jobID, u32 start, u32 count) {
                             Props &prop = props[jobID];
-                            OpenBraid(record, buildRefs, start, count, prop.count, heuristic, getNode);
+                            u32 max     = jobID == output.num - 1 ? offset : props[jobID + 1].count;
+                            OpenBraid(record, buildRefs, start, count, prop.count, max, heuristic, getNode);
                         });
                 }
                 ScratchEnd(temp);
@@ -256,7 +262,7 @@ struct HeuristicPartialRebraid
                 }
                 else
                 {
-                    OpenBraid(record, buildRefs, record.start, record.count, record.End(), heuristic, getNode);
+                    OpenBraid(record, buildRefs, record.start, record.count, record.End(), record.ExtEnd(), heuristic, getNode);
                 }
             }
         }

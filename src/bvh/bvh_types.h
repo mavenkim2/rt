@@ -9,7 +9,7 @@ static const u32 PARALLEL_THRESHOLD = 32 * 1024; // 32 * 1024; // 64 * 1024;
 
 struct BuildSettings
 {
-    u32 maxLeafSize = 15;
+    u32 maxLeafSize = 7;
     i32 maxDepth    = 32;
     f32 intCost     = 1.f;
     f32 travCost    = 1.f;
@@ -259,7 +259,7 @@ struct BVHNode
     BVHNode(uintptr_t data) : data(data) {}
     static void CheckAlignment(void *ptr);
     static BVHNode<N> EncodeNode(QuantizedNode<N> *node);
-    static BVHNode<N> EncodeNode(CompressedLeafNode<N> *node);
+    static BVHNode<N> EncodeCompressedNode(CompressedLeafNode<N> *node);
     static BVHNode<N> EncodeLeaf(void *leaf, u32 num);
     QuantizedNode<N> *GetQuantizedNode() const;
     size_t GetType() const { return data & alignMask; }
@@ -271,6 +271,7 @@ template <i32 N>
 void BVHNode<N>::CheckAlignment(void *ptr)
 {
     Assert(!((size_t)ptr & alignMask));
+    assert(!((size_t)ptr & alignMask));
 }
 
 template <i32 N>
@@ -281,7 +282,7 @@ BVHNode<N> BVHNode<N>::EncodeNode(QuantizedNode<N> *node)
 }
 
 template <i32 N>
-BVHNode<N> BVHNode<N>::EncodeNode(CompressedLeafNode<N> *node)
+BVHNode<N> BVHNode<N>::EncodeCompressedNode(CompressedLeafNode<N> *node)
 {
     CheckAlignment(node);
     return BVHNode((size_t)node | tyCompressedLeaf);
@@ -298,7 +299,7 @@ BVHNode<N> BVHNode<N>::EncodeLeaf(void *leaf, u32 num)
 template <i32 N>
 QuantizedNode<N> *BVHNode<N>::GetQuantizedNode() const
 {
-    Assert((data & 0xf) == tyQuantizedNode);
+    Assert(IsQuantizedNode());
     return (QuantizedNode<N> *)(data & ~(0xf));
 }
 

@@ -294,7 +294,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVHRoot(BuildSettings settings, R
         PrimRef *prim     = &primRefs[primIndex];
         primIDs[offset++] = LeafType::Fill(prim);
     }
-    return BVHNode<N>::EncodeNode(node);
+    return BVHNode<N>::EncodeCompressedNode(node);
 }
 
 template <i32 N, typename BuildFunctions>
@@ -406,7 +406,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
                 primIDs[offset++] = LeafType::Fill(prim);
             }
         }
-        return BVHNode<N>::EncodeNode(node);
+        return BVHNode<N>::EncodeCompressedNode(node);
     }
 
     for (u32 i = 0; i < numChildren; i++)

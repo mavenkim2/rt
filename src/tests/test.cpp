@@ -220,7 +220,7 @@ void PartialRebraidBuilderTest(Arena *arena)
 
     RecordAOSSplits record;
     counter         = OS_StartCounter();
-    BRef *buildRefs = GenerateBuildRefs(scenes, 0, arena, record);
+    BRef *buildRefs = GenerateBuildRefs(scenes, 0, temp.arena, record);
     printf("time to generate build refs: %fms\n", OS_GetMilliseconds(counter));
 
     BuildSettings settings;
@@ -281,21 +281,5 @@ void PartitionFix()
     }
     printf("num lines %u\n", numLines);
 }
-
-// void SceneLoadTest()
-// {
-//     Arena *arena      = ArenaAlloc();
-//     u32 numProcessors = OS_NumProcessors();
-//     Arena **arenas    = PushArray(arena, Arena *, numProcessors);
-//     for (u32 i = 0; i < numProcessors; i++)
-//     {
-//         arenas[i] = ArenaAlloc(16); // ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
-//     }
-//     Scene2 scene;
-//
-//     PerformanceCounter counter = OS_StartCounter();
-//     ReadSerializedData(arenas, &scene, "data/island/pbrt-v4/meshes/", "data/island/pbrt-v4/instances.inst");
-//     printf("time: %fms\n", OS_GetMilliseconds(counter));
-// }
 
 } // namespace rt
