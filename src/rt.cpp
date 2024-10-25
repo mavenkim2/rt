@@ -1061,7 +1061,7 @@ int main(int argc, char *argv[])
     // AOSSBVHBuilderTest(dataArena, &mesh);
     // PartitionFix();
 
-    // PartialRebraidBuilderTest(dataArena);
+    PartialRebraidBuilderTest(dataArena);
 
     //////////////////////////////
     // Loading PBRT File Test

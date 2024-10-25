@@ -24,7 +24,7 @@ void GenerateBuildRefs(BRef *refs, Scene2 *scene, Scene2 *scenes, u32 start, u32
         geom.Extend(bounds);
         cent.Extend(bounds.minP + bounds.maxP);
 
-        ref->objectID = i;
+        ref->objectID = index;
         ref->nodePtr  = inScene->nodePtr;
         ref->numPrims = inScene->numPrims;
     }
@@ -57,22 +57,12 @@ BRef *GenerateBuildRefs(Scene2 *scenes, u32 sceneNum, Arena *arena, RecordAOSSpl
 }
 
 static const f32 REBRAID_THRESHOLD = .1f;
-template <bool parallel = true>
-void OpenBraid(const RecordAOSSplits &record, BRef *refs, u32 start, u32 count,
-               std::atomic<u32> &refOffset, u32 refO = 0)
+
+template <typename Heuristic, typename GetNode>
+void OpenBraid(const RecordAOSSplits &record, BRef *refs, u32 start, u32 count, u32 offset, Heuristic &heuristic, GetNode &getNode)
 {
+    using NodeType       = typename GetNode::NodeType;
     const u32 QUEUE_SIZE = 8;
-    u32 choiceDim        = 0;
-    f32 maxExtent        = neg_inf;
-    for (u32 d = 0; d < 3; d++)
-    {
-        f32 extent = record.geomMax[d] - record.geomMin[d];
-        if (extent > maxExtent)
-        {
-            maxExtent = extent;
-            choiceDim = d;
-        }
-    }
 
     u32 refIDQueue[2 * QUEUE_SIZE] = {};
     u32 openCount                  = 0;
@@ -80,7 +70,7 @@ void OpenBraid(const RecordAOSSplits &record, BRef *refs, u32 start, u32 count,
     {
         BRef &ref             = refs[i];
         refIDQueue[openCount] = i;
-        bool isOpen           = (ref.max[choiceDim] - ref.min[choiceDim] > REBRAID_THRESHOLD * maxExtent);
+        bool isOpen           = heuristic(ref);
         openCount += isOpen;
 
         // TODO: make sure that a compressed leaf node can't be opened
@@ -88,25 +78,16 @@ void OpenBraid(const RecordAOSSplits &record, BRef *refs, u32 start, u32 count,
         {
             openCount -= QUEUE_SIZE;
             u32 numChildren[QUEUE_SIZE];
-            u32 childAdd = 0;
             for (u32 refID = 0; refID < QUEUE_SIZE; refID++)
             {
-                u32 num            = refs[refIDQueue[openCount + refID]].nodePtr.GetQuantizedNode()->GetNumChildren();
+                u32 num            = getNode(refs[refIDQueue[openCount + refID]].nodePtr)->GetNumChildren();
                 numChildren[refID] = num;
-                childAdd += num - 1;
-            }
-            u32 offset;
-            if constexpr (parallel) offset = refOffset.fetch_add(childAdd, std::memory_order_acq_rel);
-            else
-            {
-                refO += childAdd;
-                offset = refO;
             }
 
             for (u32 testIndex = 0; testIndex < QUEUE_SIZE; testIndex++)
             {
-                u32 refID   = refIDQueue[openCount + testIndex];
-                QNode *node = refs[refID].nodePtr.GetQuantizedNode();
+                u32 refID      = refIDQueue[openCount + testIndex];
+                NodeType *node = getNode(refs[refID].nodePtr);
                 f32 minX[DefaultN];
                 f32 minY[DefaultN];
                 f32 minZ[DefaultN];
@@ -148,7 +129,14 @@ void OpenBraid(const RecordAOSSplits &record, BRef *refs, u32 start, u32 count,
     }
 }
 
-template <i32 numObjectBins = 32>
+struct GetQuantizedNode
+{
+    using NodeType = QNode;
+
+    __forceinline NodeType *operator()(const BVHNodeType ptr) { return ptr.GetQuantizedNode(); }
+};
+
+template <typename GetNode, i32 numObjectBins = 32>
 struct HeuristicPartialRebraid
 {
     using Record  = RecordAOSSplits;
@@ -156,25 +144,120 @@ struct HeuristicPartialRebraid
     using OBin    = HeuristicAOSObjectBinning<numObjectBins, BRef>;
 
     BRef *buildRefs;
+    GetNode getNode;
 
     HeuristicPartialRebraid() {}
-    HeuristicPartialRebraid(BRef *data) : buildRefs(data)
+    HeuristicPartialRebraid(BRef *data) : buildRefs(data) {}
+    Split Bin(Record &record)
     {
-    }
-    Split Bin(const Record &record)
-    {
-        u64 popPos = 0;
-        std::atomic<u32> refOffset{record.End()};
-        if (record.count > PARALLEL_THRESHOLD)
+        u32 choiceDim = 0;
+        f32 maxExtent = neg_inf;
+        for (u32 d = 0; d < 3; d++)
         {
-            const u32 groupSize = PARALLEL_THRESHOLD;
-            ParallelFor(
-                record.start, record.count, groupSize,
-                [&](u32 start, u32 count) { OpenBraid(record, buildRefs, start, count, refOffset); });
+            f32 extent = record.geomMax[d] - record.geomMin[d];
+            if (extent > maxExtent)
+            {
+                maxExtent = extent;
+                choiceDim = d;
+            }
         }
-        else
+        f32 threshold  = REBRAID_THRESHOLD * maxExtent;
+        auto heuristic = [&](const BRef &ref) -> bool {
+            return !ref.nodePtr.IsLeaf() && ref.max[choiceDim] - ref.min[choiceDim] > threshold;
+        };
+
+        u64 popPos = 0;
+        // conditions to test:
+        // 1. if all the nodes belong to the same geometry, break
+        // 2. if there are 4 or less nodes, and there is no overlap between the bvhs, also break
+        // 3. also obviously break if there is no space for node opening
+
+        if (record.ExtSize() && record.count <= 4)
         {
-            OpenBraid<false>(record, buildRefs, record.start, record.count, refOffset, record.End());
+            for (u32 i = 0; i < record.count; i++)
+            {
+                for (u32 j = i + 1; j < record.count; j++)
+                {
+                    Lane8F32 intersection = Min(buildRefs[record.start + i].Load(), buildRefs[record.start + j].Load());
+                    if (None(-Extract4<0>(intersection) > Extract4<1>(intersection)))
+                    {
+                        record.extEnd = record.start + record.count;
+                        break;
+                    }
+                }
+            }
+        }
+        if (record.ExtSize())
+        {
+            u32 geomID = buildRefs[record.start].objectID;
+            if (record.count > PARALLEL_THRESHOLD)
+            {
+                TempArena temp = ScratchStart(0, 0);
+                struct Props
+                {
+                    u32 count     = 0;
+                    bool sameType = true;
+                };
+                Props prop;
+                ParallelForOutput output = ParallelFor<Props>(
+                    temp, record.start, record.count, PARALLEL_THRESHOLD,
+                    [&](Props &props, u32 jobID, u32 start, u32 count) {
+                        bool commonGeomID = true;
+                        u32 openCount     = 0;
+                        for (u32 i = start; i < start + count; i++)
+                        {
+                            const BRef &ref = buildRefs[i];
+                            u32 objectID    = ref.objectID;
+                            commonGeomID &= objectID == geomID;
+                            if (heuristic(ref)) openCount += getNode(ref.nodePtr)->GetNumChildren() - 1;
+                        }
+                        props.sameType &= commonGeomID;
+                        props.count = openCount;
+                    });
+                Reduce(prop, output,
+                       [&](Props &l, const Props &r) { l.sameType &= r.sameType; });
+                if (prop.sameType || prop.count < record.ExtSize())
+                {
+                    record.extEnd = record.start + record.count;
+                }
+                else
+                {
+                    u32 offset   = record.End();
+                    Props *props = (Props *)output.out;
+                    for (u32 i = 0; i < output.num; i++)
+                    {
+                        u32 splits   = props->count;
+                        props->count = offset;
+                        offset += splits;
+                    }
+                    ParallelFor(
+                        record.start, record.count, PARALLEL_THRESHOLD,
+                        [&](u32 jobID, u32 start, u32 count) { 
+                        Props &prop = props[jobID];
+                        OpenBraid(record, buildRefs, start, count, prop.count, heuristic, getNode); });
+                }
+                ScratchEnd(temp);
+            }
+            else
+            {
+                bool commonGeomID = true;
+                u32 count         = 0;
+                for (u32 i = record.start; i < record.start + record.count; i++)
+                {
+                    const BRef &ref = buildRefs[i];
+                    u32 objectID    = ref.objectID;
+                    commonGeomID &= objectID == geomID;
+                    if (heuristic(ref)) count += getNode(ref.nodePtr)->GetNumChildren() - 1;
+                }
+                if (commonGeomID || count < record.ExtSize())
+                {
+                    record.extEnd = record.start + record.count;
+                }
+                else
+                {
+                    OpenBraid(record, buildRefs, record.start, record.count, record.End(), heuristic, getNode);
+                }
+            }
         }
         OBin *objectBinHeuristic;
         struct Split objectSplit = SAHObjectBinning(record, buildRefs, objectBinHeuristic, popPos);

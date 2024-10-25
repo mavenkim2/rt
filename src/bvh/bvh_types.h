@@ -261,7 +261,9 @@ struct BVHNode
     static BVHNode<N> EncodeNode(QuantizedNode<N> *node);
     static BVHNode<N> EncodeNode(CompressedLeafNode<N> *node);
     static BVHNode<N> EncodeLeaf(void *leaf, u32 num);
-    QuantizedNode<N> *GetQuantizedNode();
+    QuantizedNode<N> *GetQuantizedNode() const;
+    size_t GetType() const { return data & alignMask; }
+    bool IsLeaf() const { return GetType() >= tyLeaf; }
 };
 
 template <i32 N>
@@ -288,11 +290,12 @@ template <i32 N>
 BVHNode<N> BVHNode<N>::EncodeLeaf(void *leaf, u32 num)
 {
     CheckAlignment(leaf);
+    Assert(num >= 1);
     return BVHNode((size_t)leaf | (tyLeaf + num));
 }
 
 template <i32 N>
-QuantizedNode<N> *BVHNode<N>::GetQuantizedNode()
+QuantizedNode<N> *BVHNode<N>::GetQuantizedNode() const
 {
     Assert((data & 0xf) == tyQuantizedNode);
     return (QuantizedNode<N> *)(data & ~(0xf));

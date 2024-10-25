@@ -230,7 +230,7 @@ using BLAS_SBVH_QuantizedNode_QuadLeaf_Scene_Funcs =
 template <i32 N>
 using TLAS_PRB_QuantizedNode_Funcs =
     BuildFuncs<N,
-               HeuristicPartialRebraid<>,
+               HeuristicPartialRebraid<GetQuantizedNode>,
                QuantizedNode<N>,
                CreateQuantizedNode<N>,
                UpdateQuantizedNode<N>,
@@ -258,7 +258,7 @@ struct BVHBuilder
     BVHNode<N> BuildBVH(BuildSettings settings, Arena **inArenas, Record &record);
 
     BVHNode<N> BuildBVHRoot(BuildSettings settings, Record &record);
-    BVHNode<N> BuildBVH(BuildSettings settings, const Record &record, bool parallel);
+    BVHNode<N> BuildBVH(BuildSettings settings, Record &record, bool parallel);
 };
 
 template <i32 N>
@@ -286,7 +286,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVHRoot(BuildSettings settings, R
 // 2. i could get rid of the compressed leaf notion by also partitioning mesh itself, and then have the pointers point to the
 // actual data
 template <i32 N, typename BuildFunctions>
-BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, const Record &record, bool parallel)
+BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Record &record, bool parallel)
 {
 
     u32 total = record.count;
@@ -471,14 +471,14 @@ BVHNode<N> BuildQuantizedQuadSBVH(BuildSettings settings,
 }
 
 template <i32 N>
-BVHNode<N> BuildTLAS(BuildSettings settings,
-                     Arena **inArenas,
-                     // Instance *instances,
-                     BuildRef<N> *refs,
-                     RecordAOSSplits &record)
+BVHNode<N> BuildTLASQuantized(BuildSettings settings,
+                              Arena **inArenas,
+                              // Instance *instances,
+                              BuildRef<N> *refs,
+                              RecordAOSSplits &record)
 {
     PartialRebraidBuilder<N> builder;
-    new (&builder.heuristic) HeuristicPartialRebraid<N>(refs);
+    new (&builder.heuristic) HeuristicPartialRebraid<GetQuantizedNode>(refs);
     builder.primRefs = refs;
     return builder.BuildBVH(settings, inArenas, record);
 }
@@ -525,15 +525,15 @@ __forceinline BVHNodeType BuildQuantizedQuadSBVH(BuildSettings settings,
 #endif
 }
 
-__forceinline BVHNodeType BuildTLAS(BuildSettings settings,
-                                    Arena **inArenas,
-                                    BRef *refs,
-                                    RecordAOSSplits &record)
+__forceinline BVHNodeType BuildTLASQuantized(BuildSettings settings,
+                                             Arena **inArenas,
+                                             BRef *refs,
+                                             RecordAOSSplits &record)
 {
 #if defined(USE_BVH4)
-    return BuildTLAS<4>(settings, inArenas, refs, record);
+    return BuildTLASQuantized<4>(settings, inArenas, refs, record);
 #elif defined(USE_BVH8)
-    return BuildTLAS<8>(settings, inArenas, refs, record);
+    return BuildTLASQuantized<8>(settings, inArenas, refs, record);
 #endif
 }
 

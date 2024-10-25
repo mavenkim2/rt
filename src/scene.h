@@ -373,8 +373,8 @@ struct RemoveFirstN<index, TypePack<T, Ts...>>
 
 enum GeometryType
 {
-    GT_InstanceType = 0,
-    GT_QuadMeshType = 1,
+    GT_QuadMeshType = 0,
+    GT_InstanceType = 1,
 };
 
 struct GeometryID
@@ -389,13 +389,18 @@ struct GeometryID
     // static const u32 curveType        = 4;
     // static const u32 subdivType       = 5;
     // static const u32 instanceType     = 16;
-    static const u32 instanceType = 0;
-    static const u32 quadMeshType = 1;
+    static const u32 quadMeshType = GT_QuadMeshType;
+    static const u32 instanceType = GT_InstanceType;
 
     u32 id;
 
     GeometryID(u32 id) : id(id) {}
 
+    static GeometryID CreateInstanceID(u32 index)
+    {
+        Assert(index < (1 << 28));
+        return (instanceType << typeShift) | (index & indexMask);
+    }
     static GeometryID CreateQuadMeshID(u32 index)
     {
         Assert(index < (1 << 28));

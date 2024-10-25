@@ -1589,7 +1589,7 @@ void MoveExtendedRanges(const Split &split, const Record &record, PrimRef *primR
     {
         if (numToShift > PARALLEL_THRESHOLD)
         {
-            ParallelFor(mid, numToShift, PARALLEL_THRESHOLD, [&](u32 start, u32 end) {
+            ParallelFor(mid, numToShift, PARALLEL_THRESHOLD, [&](u32 jobID, u32 start, u32 end) {
                 for (u32 i = start; i < end; i++)
                 {
                     Assert(i + shift < record.extEnd);

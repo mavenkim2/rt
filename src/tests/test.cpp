@@ -185,6 +185,7 @@ void QuadSBVHBuilderTest(Arena *arena, QuadMesh *mesh)
 
 void PartialRebraidBuilderTest(Arena *arena)
 {
+    TempArena temp    = ScratchStart(0, 0);
     u32 numProcessors = OS_NumProcessors();
     Arena **arenas    = PushArray(arena, Arena *, numProcessors);
     for (u32 i = 0; i < numProcessors; i++)
@@ -192,11 +193,29 @@ void PartialRebraidBuilderTest(Arena *arena)
         arenas[i] = ArenaAlloc(16); // ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
     }
 
-    PerformanceCounter counter = OS_StartCounter();
-    Scene2 *scenes             = InitializeScene(arenas, "data/island/pbrt-v4/meshes/", "data/island/pbrt-v4/instances.inst");
-    printf("scene initialization + blas build time: %fms\n", OS_GetMilliseconds(counter));
+    string meshDirectory = "data/island/pbrt-v4/meshes/";
+    string instanceFile  = "data/island/pbrt-v4/instances.inst";
+    PerformanceCounter counter;
+    // PerformanceCounter counter = OS_StartCounter();
+    // Scene2 *scenes             = InitializeScene(arenas, meshDirectory, instanceFile);
+    // printf("scene initialization + blas build time: %fms\n", OS_GetMilliseconds(counter));
 
-    // TODO: don't forget to run the instance generation code again to get the pad
+    string lutPath = StrConcat(temp.arena, meshDirectory, "lut.mesh");
+    string lutData = OS_ReadFile(temp.arena, lutPath);
+    Tokenizer tokenizer(lutData);
+    u64 numEntries;
+    GetPointerValue(&tokenizer, &numEntries);
+    Scene2 *scenes          = PushArrayNoZero(arena, Scene2, numEntries + 1);
+    string instanceFileData = OS_ReadFile(arena, instanceFile);
+    Tokenizer instTokenzier(instanceFileData);
+    u64 numInstances;
+    GetPointerValue(&instTokenzier, &numInstances);
+    Scene2 *scene       = &scenes[0];
+    scene->instances    = (Instance *)instTokenzier.cursor;
+    scene->numInstances = u32(numInstances);
+    Advance(&instTokenzier, sizeof(Instance) * numInstances);
+    scene->affineTransforms = (AffineSpace *)instTokenzier.cursor;
+
     RecordAOSSplits record;
     counter         = OS_StartCounter();
     BRef *buildRefs = GenerateBuildRefs(scenes, 0, arena, record);
@@ -204,9 +223,9 @@ void PartialRebraidBuilderTest(Arena *arena)
 
     BuildSettings settings;
 
-    // counter          = OS_StartCounter();
-    // BVHNodeType node = BuildTLAS(settings, arenas, buildRefs, record);
-    // printf("time to generate tlas: %fms\n", OS_GetMilliseconds(counter));
+    counter          = OS_StartCounter();
+    BVHNodeType node = BuildTLASQuantized(settings, arenas, buildRefs, record);
+    printf("time to generate tlas: %fms\n", OS_GetMilliseconds(counter));
 
     f64 totalMiscTime     = 0;
     u64 numNodes          = 0;
@@ -225,6 +244,7 @@ void PartialRebraidBuilderTest(Arena *arena)
     printf("num faces: %llu\n", numNodes);
     printf("node kb: %llu\n", totalNodeMemory / 1024);
     printf("record kb: %llu", totalRecordMemory / 1024);
+    ScratchEnd(temp);
 }
 
 void PartitionFix()

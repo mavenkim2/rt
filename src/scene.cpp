@@ -1497,6 +1497,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 SkipToNextLine(&tokenizer);
             }
             break;
+            // TODO: area light count is reported as 23 when there's 22
             case "AreaLightSource"_sid:
             {
                 Error(worldBegin, "%S cannot be specified before WorldBegin statement\n", word);
@@ -2348,6 +2349,9 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                                 if (!hasNormals && mesh->n) hasNormals = true;
                                 quadInstancedCount++;
                                 vertexCount += mesh->numVertices;
+#if SERIALIZE_SHAPES == 0
+                                currentTyGroup[shapeIndex] = P_RemovedTy;
+#endif
                             }
                         }
 #if SERIALIZE_SHAPES == 0
@@ -2424,7 +2428,6 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
 
     printf("quad instanced total: %u\n", quadInstancedCount);
     printf("total num instance types: %u\n", lookUpOffset);
-    u32 numInstanceTypes = lookUpOffset;
 #if SERIALIZE_SHAPES
     for (u32 i = 0; i < lookUpOffset; i++)
     {
@@ -2548,16 +2551,14 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     ScratchEnd(temp);
     temp = ScratchStart(0, 0);
 
-    u64 numInstances    = 0;
-    u32 numSingleMeshes = lookUpOffset - numInstanceTypes;
-    u32 numTransforms   = 0;
+    u64 numInstances  = 0;
+    u32 numTransforms = 0;
     for (u32 i = 0; i < numProcessors; i++)
     {
         numInstances += state->instances[i].totalCount;
         numTransforms += state->transforms[i].totalCount;
     }
 
-    numInstances += numSingleMeshes;
     size_t instFileSize = sizeof(Instance) * numInstances +
                           sizeof(AffineSpace) * numTransforms + sizeof(numInstances);
     string filename     = PushStr8F(temp.arena, "%Sinstances.inst", directory);
@@ -2598,7 +2599,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
 
                 Assert(instanceOffset < numInstances);
                 Instance *outInstance = &instances[instanceOffset];
-                outInstance->geomID   = GeometryID::CreateQuadMeshID(index);
+                outInstance->geomID   = GeometryID::CreateInstanceID(index); // GeometryID::CreateQuadMeshID(index);
 
                 if (transformHashTable.Find(t, index))
                 {
@@ -2775,16 +2776,16 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
     GetPointerValue(&tokenizer, &numEntries);
     LookupEntry *entries = (LookupEntry *)tokenizer.cursor;
 
-    FilePtr *ptrs = PushArray(temp.arena, FilePtr, numEntries);
-    // AlignedMutex *mutexes = PushArray(temp.arena, AlignedMutex, numEntries);
+    FilePtr *ptrs  = PushArray(temp.arena, FilePtr, numEntries);
     Mutex *mutexes = PushArray(temp.arena, Mutex, numEntries);
 
     out = PushArrayNoZero(arena, Scene2, numEntries + 1);
 
     // Fix geometry pointers, start bottom level BVH builds
-    PerformanceCounter counter = OS_StartCounter();
+    // PerformanceCounter counter = OS_StartCounter();
 
-    scheduler.ScheduleAndWait(u32(numEntries), 1, [&](u32 jobID) {
+    Scheduler::Counter jobCounter = {};
+    scheduler.Schedule(&jobCounter, u32(numEntries), 1, [&](u32 jobID) {
         TempArena temp = ScratchStart(0, 0);
         LoadFile(arenas, entries, jobID, meshDirectory, ptrs, mutexes);
         QuadMesh *meshes   = (QuadMesh *)(ptrs[jobID].ptr);
@@ -2896,18 +2897,20 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
         ScratchEnd(temp);
     });
 
-    printf("blas build time: %fms\n", OS_GetMilliseconds(counter));
+    // printf("blas build time: %fms\n", OS_GetMilliseconds(counter));
 
-    // Read instance file data
-    string instanceFileData = OS_ReadFile(arena, instanceFile);
-    Tokenizer instTokenzier(instanceFileData);
-    u64 numInstances;
-    GetPointerValue(&instTokenzier, &numInstances);
-    Scene2 *scene       = &out[0];
-    scene->instances    = (Instance *)instTokenzier.cursor;
-    scene->numInstances = u32(numInstances);
-    Advance(&instTokenzier, sizeof(Instance) * numInstances);
-    scene->affineTransforms = (AffineSpace *)instTokenzier.cursor;
+    scheduler.Schedule(&jobCounter, [&](u32 jobID) {
+        string instanceFileData = OS_ReadFile(arena, instanceFile);
+        Tokenizer instTokenzier(instanceFileData);
+        u64 numInstances;
+        GetPointerValue(&instTokenzier, &numInstances);
+        Scene2 *scene       = &out[0];
+        scene->instances    = (Instance *)instTokenzier.cursor;
+        scene->numInstances = u32(numInstances);
+        Advance(&instTokenzier, sizeof(Instance) * numInstances);
+        scene->affineTransforms = (AffineSpace *)instTokenzier.cursor;
+    });
+    scheduler.Wait(&jobCounter);
 
     ScratchEnd(temp);
     return out;
