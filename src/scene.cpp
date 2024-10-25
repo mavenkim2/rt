@@ -1957,8 +1957,103 @@ u64 GetOffset(u32 name, u32 offset)
     return (u64(offset) << 32ull) | u64(name);
 }
 
-#define SERIALIZE_SHAPES    1
-#define SERIALIZE_INSTANCES 0
+#define SERIALIZE_SHAPES    0
+#define SERIALIZE_INSTANCES 1
+
+struct HashTable
+{
+    struct Node
+    {
+        Vec3f *v;
+        u32 numVertices;
+        u64 ptr;
+        Node *next;
+    };
+    Node *slots;
+    Arena *arena;
+    u32 tableSize;
+
+    HashTable() {}
+    HashTable(Arena *arena, u32 tableSize) : arena(arena), tableSize(tableSize)
+    {
+        Assert(IsPow2(tableSize));
+        slots = PushArray(arena, Node, tableSize);
+    }
+    Node *FindOrCreate(u64 hash, Vec3f *data, u32 numVertices, u32 name, u32 offset)
+    {
+        u64 key    = hash & (tableSize - 1);
+        Node *node = &slots[key];
+        Node *prev = 0;
+        while (node)
+        {
+            if (numVertices == node->numVertices)
+            {
+                bool equal = true;
+                for (u32 i = 0; i < numVertices; i++)
+                {
+                    if (data[i] != node->v[i])
+                    {
+                        equal = false;
+                        break;
+                    }
+                }
+                if (equal)
+                {
+                    return node;
+                }
+            }
+            prev = node;
+            node = node->next;
+        }
+        Assert(node == 0);
+        node              = PushStruct(arena, Node);
+        node->v           = data;
+        node->numVertices = numVertices;
+        node->ptr         = GetOffset(name, offset);
+        prev->next        = node;
+        return node;
+    }
+};
+
+void SerializeMeshes(Vec3f *&dataPtr, u8 *mappedPtr, QuadMesh *mesh, QuadMesh *newMesh,
+                     u32 entryIndex, HashTable &pTable, HashTable &nTable)
+{
+    newMesh->numVertices = mesh->numVertices;
+    u64 pOffset          = u64((u8 *)dataPtr - mappedPtr);
+    Assert(pOffset <= 0xffffffff);
+
+    u64 pHash              = MurmurHash64A((const u8 *)mesh->p, sizeof(Vec3f) * mesh->numVertices, 0);
+    HashTable::Node *pNode = pTable.FindOrCreate(pHash, mesh->p, mesh->numVertices, entryIndex, u32(pOffset));
+
+    if (pNode->v == mesh->p)
+    {
+        MemoryCopy(dataPtr, mesh->p, sizeof(Vec3f) * mesh->numVertices);
+        pNode->v = dataPtr;
+        dataPtr += mesh->numVertices;
+    }
+    u64 offset            = pNode->ptr;
+    *(u64 *)(&newMesh->p) = offset;
+
+    HashTable::Node *nNode = 0;
+    if (mesh->n)
+    {
+        u64 nOffset = u64((u8 *)dataPtr - mappedPtr);
+        u64 nHash   = MurmurHash64A((const u8 *)mesh->n, sizeof(Vec3f) * mesh->numVertices, 0);
+        nNode       = nTable.FindOrCreate(nHash, mesh->n, mesh->numVertices, entryIndex, u32(nOffset));
+        if (nNode->v == mesh->n)
+        {
+            MemoryCopy(dataPtr, mesh->n, sizeof(Vec3f) * mesh->numVertices);
+            nNode->v = dataPtr;
+            dataPtr += mesh->numVertices;
+        }
+        offset                = nNode->ptr;
+        *(u64 *)(&newMesh->n) = offset;
+    }
+    else
+    {
+        newMesh->n = 0;
+    }
+}
 
 void Serialize(Arena *arena, string directory, SceneLoadState *state)
 {
@@ -2161,7 +2256,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     }
 
 #if SERIALIZE_SHAPES
-    LookupEntry *lookUpStart = PushArrayNoZero(temp.arena, LookupEntry, totalNumQuadMeshes + totalNumTriMeshes); // totalNumInstTypes);
+    LookupEntry *lookUpStart = PushArrayNoZero(temp.arena, LookupEntry, totalNumQuadMeshes + totalNumTriMeshes);
 
     u8 **mappedPtrs   = PushArray(temp.arena, u8 *, totalNumInstTypes);
     u32 *sizes        = PushArray(temp.arena, u32, totalNumInstTypes);
@@ -2175,67 +2270,12 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     u32 pIndices[64]                      = {};
     u32 currentInstanceCount              = 0;
 
-    struct HashTable
-    {
-        struct Node
-        {
-            Vec3f *v;
-            u32 numVertices;
-            u64 ptr;
-            Node *next;
-        };
-        Node *slots;
-        Arena *arena;
-        u32 tableSize;
-
-        HashTable() {}
-        HashTable(Arena *arena, u32 tableSize) : arena(arena), tableSize(tableSize)
-        {
-            Assert(IsPow2(tableSize));
-            slots = PushArray(arena, Node, tableSize);
-        }
-        Node *FindOrCreate(u64 hash, Vec3f *data, u32 numVertices, u32 name, u32 offset)
-        {
-            u64 key    = hash & (tableSize - 1);
-            Node *node = &slots[key];
-            Node *prev = 0;
-            while (node)
-            {
-                if (numVertices == node->numVertices)
-                {
-                    bool equal = true;
-                    for (u32 i = 0; i < numVertices; i++)
-                    {
-                        if (data[i] != node->v[i])
-                        {
-                            equal = false;
-                            break;
-                        }
-                    }
-                    if (equal)
-                    {
-                        return node;
-                    }
-                }
-                prev = node;
-                node = node->next;
-            }
-            Assert(node == 0);
-            node              = PushStruct(arena, Node);
-            node->v           = data;
-            node->numVertices = numVertices;
-            node->ptr         = GetOffset(name, offset);
-            prev->next        = node;
-            return node;
-        }
-    };
-
     // NOTE: externally chained hash table that cannot grow
 
     HashTable pTable(temp.arena, 524288);
     HashTable nTable(temp.arena, 524288);
 
-    HashExt<StringId, u32> instanceTypeTable(arena, totalNumInstTypes, StringId::Invalid);
+    HashExt<StringId, u32> instanceTypeTable(arena, totalNumQuadMeshes + totalNumTriMeshes, StringId::Invalid);
 
     for (u32 pIndex = 0; pIndex < numProcessors; pIndex++)
     {
@@ -2361,46 +2401,9 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                                 currentTyGroup[shapeIndex] = P_RemovedTy;
                                 QuadMesh *mesh             = &qMeshes[currentOffsetGroup[shapeIndex]];
                                 Assert(quadMeshOffset < quadMeshCount);
-                                QuadMesh *newMesh    = &meshes[quadMeshOffset++];
-                                newMesh->numVertices = mesh->numVertices;
+                                QuadMesh *newMesh = &meshes[quadMeshOffset++];
 
-                                u64 pOffset = u64((u8 *)dataPtr - mappedPtr);
-                                Assert(pOffset <= 0xffffffff);
-
-                                u64 pHash              = MurmurHash64A((const u8 *)mesh->p, sizeof(Vec3f) * mesh->numVertices, 0);
-                                HashTable::Node *pNode = pTable.FindOrCreate(pHash, mesh->p, mesh->numVertices, entryIndex, u32(pOffset));
-
-                                if (pNode->v == mesh->p)
-                                {
-                                    MemoryCopy(dataPtr, mesh->p, sizeof(Vec3f) * mesh->numVertices);
-                                    pNode->v = dataPtr;
-                                    dataPtr += mesh->numVertices;
-                                }
-                                u64 offset = pNode->ptr;
-                                Assert((offset & 0xffffffff) < totalNumInstTypes);
-                                *(u64 *)(&newMesh->p) = offset;
-
-                                HashTable::Node *nNode = 0;
-                                if (mesh->n)
-                                {
-                                    u64 nOffset = u64((u8 *)dataPtr - mappedPtr);
-                                    Assert(nOffset <= 0xffffffff);
-                                    u64 nHash = MurmurHash64A((const u8 *)mesh->n, sizeof(Vec3f) * mesh->numVertices, 0);
-                                    nNode     = nTable.FindOrCreate(nHash, mesh->n, mesh->numVertices, entryIndex, u32(nOffset));
-                                    if (nNode->v == mesh->n)
-                                    {
-                                        MemoryCopy(dataPtr, mesh->n, sizeof(Vec3f) * mesh->numVertices);
-                                        nNode->v = dataPtr;
-                                        dataPtr += mesh->numVertices;
-                                    }
-                                    offset = nNode->ptr;
-                                    Assert((offset & 0xffffffff) < totalNumInstTypes);
-                                    *(u64 *)(&newMesh->n) = offset;
-                                }
-                                else
-                                {
-                                    newMesh->n = 0;
-                                }
+                                SerializeMeshes(dataPtr, mappedPtr, mesh, newMesh, entryIndex, pTable, nTable);
                                 u32 size = u32((u8 *)dataPtr - flushBase);
                                 if (size >= flushSize)
                                 {
@@ -2432,6 +2435,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
 
     using InstanceList = ChunkedLinkedList<SceneInstance, 1024, MemoryType_Instance>;
     // Next, write the uninstanced meshes
+    // NOTE: this is just the area lights
     for (u32 pIndex = 0; pIndex < numProcessors; pIndex++)
     {
         ShapeTypeList *list    = &state->shapes[pIndex];
@@ -2474,44 +2478,10 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                     QuadMesh *mesh           = &qMeshes[pOffsets[currentOffset]];
                     u8 *mappedPtr            = OS_MapFileWrite(filename, mesh->numVertices * sizeof(Vec3f) * 2 + sizeof(QuadMesh));
 
-                    QuadMesh *newMesh    = (QuadMesh *)mappedPtr;
-                    Vec3f *dataPtr       = (Vec3f *)(newMesh + 1);
-                    newMesh->numVertices = mesh->numVertices;
+                    QuadMesh *newMesh = (QuadMesh *)mappedPtr;
+                    Vec3f *dataPtr    = (Vec3f *)(newMesh + 1);
+                    SerializeMeshes(dataPtr, mappedPtr, mesh, newMesh, entryIndex, pTable, nTable);
 
-                    u64 pOffset = u64((u8 *)dataPtr - mappedPtr);
-                    Assert(pOffset <= 0xffffffff);
-
-                    u64 pHash              = MurmurHash64A((const u8 *)mesh->p, sizeof(Vec3f) * mesh->numVertices, 0);
-                    HashTable::Node *pNode = pTable.FindOrCreate(pHash, mesh->p, mesh->numVertices, entryIndex, u32(pOffset));
-
-                    if (pNode->v == mesh->p)
-                    {
-                        MemoryCopy(dataPtr, mesh->p, sizeof(Vec3f) * mesh->numVertices);
-                        pNode->v = dataPtr;
-                        dataPtr += mesh->numVertices;
-                    }
-                    u64 offset            = pNode->ptr;
-                    *(u64 *)(&newMesh->p) = offset;
-
-                    HashTable::Node *nNode = 0;
-                    if (mesh->n)
-                    {
-                        u64 nOffset = u64((u8 *)dataPtr - mappedPtr);
-                        u64 nHash   = MurmurHash64A((const u8 *)mesh->n, sizeof(Vec3f) * mesh->numVertices, 0);
-                        nNode       = nTable.FindOrCreate(nHash, mesh->n, mesh->numVertices, entryIndex, u32(nOffset));
-                        if (nNode->v == mesh->n)
-                        {
-                            MemoryCopy(dataPtr, mesh->n, sizeof(Vec3f) * mesh->numVertices);
-                            nNode->v = dataPtr;
-                            dataPtr += mesh->numVertices;
-                        }
-                        offset                = nNode->ptr;
-                        *(u64 *)(&newMesh->n) = offset;
-                    }
-                    else
-                    {
-                        newMesh->n = 0;
-                    }
                     OS_UnmapFile(mappedPtr);
 #endif
                 }
