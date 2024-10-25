@@ -518,11 +518,13 @@ void ParallelFor(u32 start, u32 count, u32 groupSize, const Func &func)
 {
     u32 taskCount = (count + groupSize - 1) / groupSize;
     taskCount     = Min(taskCount, 512u);
+    u32 end       = start + count;
     u32 stepSize  = count / taskCount;
     scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
         u32 tStart = start + jobID * stepSize;
-        u32 end    = jobID == taskCount - 1 ? start + count : tStart + stepSize;
-        func(jobID, tStart, end);
+        u32 size   = jobID == taskCount - 1 ? end - tStart : stepSize;
+        // u32 end  = jobID == taskCount - 1 ? start + count : tStart + stepSize;
+        func(jobID, tStart, size);
     });
 }
 

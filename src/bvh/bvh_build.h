@@ -278,13 +278,25 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVHRoot(BuildSettings settings, R
 {
     bool parallel   = record.count >= 8 * 1024;
     BVHNode<N> root = BuildBVH(settings, record, parallel);
-    return root;
+    if (root.data != 0) return root;
+
+    Arena *currentArena      = arenas[GetThreadIndex()];
+    u32 offset               = 0;
+    u8 *bytes                = PushArrayNoZeroTagged(currentArena, u8,
+                                                     sizeof(CompressedNodeType) + sizeof(LeafType) * record.count, MemoryType_BVH);
+    CompressedNodeType *node = (CompressedNodeType *)bytes;
+    LeafType *primIDs        = (LeafType *)(bytes + sizeof(CompressedNodeType));
+
+    f.createNode(&record, 1, node);
+
+    for (u32 primIndex = record.start; primIndex < record.start + record.count; primIndex++)
+    {
+        PrimRef *prim     = &primRefs[primIndex];
+        primIDs[offset++] = LeafType::Fill(prim);
+    }
+    return BVHNode<N>::EncodeNode(node);
 }
 
-// thoughts:
-// 1. should there only be one bvh/instance per leaf?
-// 2. i could get rid of the compressed leaf notion by also partitioning mesh itself, and then have the pointers point to the
-// actual data
 template <i32 N, typename BuildFunctions>
 BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Record &record, bool parallel)
 {

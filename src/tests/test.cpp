@@ -196,10 +196,11 @@ void PartialRebraidBuilderTest(Arena *arena)
     string meshDirectory = "data/island/pbrt-v4/meshes/";
     string instanceFile  = "data/island/pbrt-v4/instances.inst";
     PerformanceCounter counter;
-    // PerformanceCounter counter = OS_StartCounter();
-    // Scene2 *scenes             = InitializeScene(arenas, meshDirectory, instanceFile);
-    // printf("scene initialization + blas build time: %fms\n", OS_GetMilliseconds(counter));
+    counter        = OS_StartCounter();
+    Scene2 *scenes = InitializeScene(arenas, meshDirectory, instanceFile);
+    printf("scene initialization + blas build time: %fms\n", OS_GetMilliseconds(counter));
 
+#if 0
     string lutPath = StrConcat(temp.arena, meshDirectory, "lut.mesh");
     string lutData = OS_ReadFile(temp.arena, lutPath);
     Tokenizer tokenizer(lutData);
@@ -215,6 +216,7 @@ void PartialRebraidBuilderTest(Arena *arena)
     scene->numInstances = u32(numInstances);
     Advance(&instTokenzier, sizeof(Instance) * numInstances);
     scene->affineTransforms = (AffineSpace *)instTokenzier.cursor;
+#endif
 
     RecordAOSSplits record;
     counter         = OS_StartCounter();

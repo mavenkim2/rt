@@ -1068,7 +1068,7 @@ int main(int argc, char *argv[])
     //
 
     // SceneLoadTest();
-#if 1
+#if 0
     PerformanceCounter counter = OS_StartCounter();
     LoadPBRT(arena, "data/island/pbrt-v4/island.pbrt");
     printf("Total time: %fms\n", OS_GetMilliseconds(counter));

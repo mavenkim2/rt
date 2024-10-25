@@ -65,7 +65,7 @@ struct Quad8
         Assert(i < 12);
         return v[i];
     }
-    static void Load(QuadMesh *mesh, const u32 dim, const u32 faceIndices[8], Quad8 *out)
+    static void Load(const QuadMesh *mesh, const u32 dim, const u32 faceIndices[8], Quad8 *out)
     {
         u32 faceIndexA = faceIndices[0];
         u32 faceIndexB = faceIndices[1];
@@ -156,7 +156,7 @@ struct Quad8
         out->v3w = Lane8F32(p3[w], p7[w]);
     }
 
-    static void Load(Scene2 *scene, const u32 dim, const u32 geomIDs[8], const u32 faceIndices[8], Quad8 *out)
+    static void Load(const Scene2 *scene, const u32 dim, const u32 geomIDs[8], const u32 faceIndices[8], Quad8 *out)
     {
         QuadMesh *meshes[8] = {
             &scene->meshes[geomIDs[0]], &scene->meshes[geomIDs[1]], &scene->meshes[geomIDs[2]], &scene->meshes[geomIDs[3]],
@@ -1589,8 +1589,8 @@ void MoveExtendedRanges(const Split &split, const Record &record, PrimRef *primR
     {
         if (numToShift > PARALLEL_THRESHOLD)
         {
-            ParallelFor(mid, numToShift, PARALLEL_THRESHOLD, [&](u32 jobID, u32 start, u32 end) {
-                for (u32 i = start; i < end; i++)
+            ParallelFor(mid, numToShift, PARALLEL_THRESHOLD, [&](u32 jobID, u32 start, u32 count) {
+                for (u32 i = start; i < start + count; i++)
                 {
                     Assert(i + shift < record.extEnd);
                     primRefs[i + shift] = primRefs[i];

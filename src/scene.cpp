@@ -2289,7 +2289,9 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
             for (u32 i = 0; i < node->count; i++)
             {
                 ObjectInstanceType *instType = &node->values[i];
-                StringId name                = instType->name;
+                // NOTE: have to multiply by the object type transform in general case (but for the moana scene desc,
+                // none of the object types have a transform)
+                StringId name = instType->name;
                 if (!instType->Invalid())
                 {
                     Assert(currentInstanceCount == 0);
@@ -2565,8 +2567,6 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     const u32 flushSize = megabytes(64);
     u8 *instanceFilePtr = OS_MapFileWrite(filename, instFileSize);
 
-    *(u64 *)instanceFilePtr = numInstances;
-
     Instance *instances     = (Instance *)(instanceFilePtr + sizeof(numInstances));
     AffineSpace *transforms = (AffineSpace *)(instances + numInstances);
 
@@ -2599,7 +2599,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
 
                 Assert(instanceOffset < numInstances);
                 Instance *outInstance = &instances[instanceOffset];
-                outInstance->geomID   = GeometryID::CreateInstanceID(index); // GeometryID::CreateQuadMeshID(index);
+                outInstance->geomID   = GeometryID::CreateInstanceID(index);
 
                 if (transformHashTable.Find(t, index))
                 {
@@ -2631,7 +2631,8 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     }
 
     // NOTE: padded to support unaligned loads
-    u64 finalSize = u64((u8 *)(transforms + transformOffset) + sizeof(u32) - instanceFilePtr);
+    *(u64 *)instanceFilePtr = instanceOffset;
+    u64 finalSize           = u64((u8 *)(transforms + transformOffset) + sizeof(u32) - instanceFilePtr);
     OS_UnmapFile(instanceFilePtr);
     OS_ResizeFile(filename, finalSize);
 #endif
@@ -2711,7 +2712,7 @@ struct alignas(CACHE_LINE_SIZE) FilePtr
     u8 *ptr;
 };
 
-void LoadFile(Arena **arenas, const LookupEntry *entries, const u32 fileID, const string meshDirectory,
+void LoadFile(Arena *arena, const LookupEntry *entries, const u32 fileID, const string meshDirectory,
               FilePtr *ptrs, Mutex *mutexes)
 {
     TempArena temp = ScratchStart(0, 0);
@@ -2719,7 +2720,6 @@ void LoadFile(Arena **arenas, const LookupEntry *entries, const u32 fileID, cons
     {
         const LookupEntry *entry = &entries[fileID];
         string filename          = PushStr8F(temp.arena, "%S%u.mesh", meshDirectory, fileID);
-        Arena *arena             = arenas[GetThreadIndex()];
         BeginMutex(&mutexes[fileID]);
         if (ptrs[fileID].ptr == 0)
         {
@@ -2731,7 +2731,7 @@ void LoadFile(Arena **arenas, const LookupEntry *entries, const u32 fileID, cons
     ScratchEnd(temp);
 }
 
-u32 FixQuadMeshPointers(Arena **arenas, QuadMesh *meshes, const LookupEntry *entries, const string meshDirectory,
+u32 FixQuadMeshPointers(Arena *arena, QuadMesh *meshes, const LookupEntry *entries, const string meshDirectory,
                         FilePtr *ptrs, Mutex *mutexes, const u32 start, const u32 count)
 {
     TempArena temp = ScratchStart(0, 0);
@@ -2741,7 +2741,7 @@ u32 FixQuadMeshPointers(Arena **arenas, QuadMesh *meshes, const LookupEntry *ent
         QuadMesh *mesh = &meshes[i];
         u64 pOffset    = u64(mesh->p);
         u32 fileID     = pOffset & 0xffffffff;
-        LoadFile(arenas, entries, fileID, meshDirectory, ptrs, mutexes);
+        LoadFile(arena, entries, fileID, meshDirectory, ptrs, mutexes);
 
         u32 offset = (pOffset >> 32) & 0xffffffff;
         mesh->p    = (Vec3f *)(ptrs[fileID].ptr + offset);
@@ -2751,7 +2751,7 @@ u32 FixQuadMeshPointers(Arena **arenas, QuadMesh *meshes, const LookupEntry *ent
         {
             fileID = nOffset & 0xffffffff;
             offset = (nOffset >> 32) & 0xffffffff;
-            LoadFile(arenas, entries, fileID, meshDirectory, ptrs, mutexes);
+            LoadFile(arena, entries, fileID, meshDirectory, ptrs, mutexes);
             mesh->n = (Vec3f *)(ptrs[fileID].ptr + offset);
         }
 
@@ -2779,7 +2779,7 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
     FilePtr *ptrs  = PushArray(temp.arena, FilePtr, numEntries);
     Mutex *mutexes = PushArray(temp.arena, Mutex, numEntries);
 
-    out = PushArrayNoZero(arena, Scene2, numEntries + 1);
+    out = PushArray(arena, Scene2, numEntries + 1);
 
     // Fix geometry pointers, start bottom level BVH builds
     // PerformanceCounter counter = OS_StartCounter();
@@ -2787,7 +2787,8 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
     Scheduler::Counter jobCounter = {};
     scheduler.Schedule(&jobCounter, u32(numEntries), 1, [&](u32 jobID) {
         TempArena temp = ScratchStart(0, 0);
-        LoadFile(arenas, entries, jobID, meshDirectory, ptrs, mutexes);
+        Arena *arena   = arenas[GetThreadIndex()];
+        LoadFile(arena, entries, jobID, meshDirectory, ptrs, mutexes);
         QuadMesh *meshes   = (QuadMesh *)(ptrs[jobID].ptr);
         LookupEntry *entry = &entries[jobID];
         Scene2 *group      = &out[jobID];
@@ -2800,12 +2801,10 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
         settings.intCost = 0.3f;
         if (entry->quadMeshCount > PARALLEL_THRESHOLD)
         {
-            Arena *arena             = arenas[GetThreadIndex()];
-            TempArena tempArena      = TempBegin(arena);
             ParallelForOutput output = ParallelFor<u32>(
-                tempArena, 0, entry->quadMeshCount, PARALLEL_THRESHOLD,
+                temp, 0, entry->quadMeshCount, PARALLEL_THRESHOLD,
                 [&](u32 &vertexCount, u32 jobID, u32 start, u32 count) {
-                    vertexCount = FixQuadMeshPointers(arenas, meshes, entries, meshDirectory,
+                    vertexCount = FixQuadMeshPointers(arenas[GetThreadIndex()], meshes, entries, meshDirectory,
                                                       ptrs, mutexes, start, count);
                 });
             Reduce(totalVertexCount, output, [&](u32 &l, const u32 &r) { l += r; });
@@ -2840,7 +2839,6 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
                 [&](RecordAOSSplits &l, const RecordAOSSplits &r) {
                     l.Merge(r);
                 });
-            TempEnd(tempArena);
 
             group->SetBounds(record.geomBounds);
             record.SetRange(0, numFaces, extEnd);
@@ -2855,7 +2853,7 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
         }
         else
         {
-            totalVertexCount = FixQuadMeshPointers(arenas, meshes, entries, meshDirectory,
+            totalVertexCount = FixQuadMeshPointers(arena, meshes, entries, meshDirectory,
                                                    ptrs, mutexes, 0, entry->quadMeshCount);
 
             u32 numFaces = totalVertexCount / 4;

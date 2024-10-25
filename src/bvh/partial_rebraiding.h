@@ -36,7 +36,8 @@ BRef *GenerateBuildRefs(Scene2 *scenes, u32 sceneNum, Arena *arena, RecordAOSSpl
 {
     Scene2 *scene    = &scenes[sceneNum];
     u32 numInstances = scene->numInstances;
-    BRef *b          = PushArrayNoZero(arena, BRef, 4 * numInstances);
+    u32 extEnd       = 3 * numInstances;
+    BRef *b          = PushArrayNoZero(arena, BRef, extEnd);
 
     if (numInstances > PARALLEL_THRESHOLD)
     {
@@ -53,6 +54,7 @@ BRef *GenerateBuildRefs(Scene2 *scenes, u32 sceneNum, Arena *arena, RecordAOSSpl
     {
         GenerateBuildRefs(b, scene, scenes, 0, numInstances, record);
     }
+    record.SetRange(0, numInstances, extEnd);
     return b;
 }
 
@@ -73,7 +75,6 @@ void OpenBraid(const RecordAOSSplits &record, BRef *refs, u32 start, u32 count, 
         bool isOpen           = heuristic(ref);
         openCount += isOpen;
 
-        // TODO: make sure that a compressed leaf node can't be opened
         if (openCount >= QUEUE_SIZE)
         {
             openCount -= QUEUE_SIZE;
@@ -88,19 +89,18 @@ void OpenBraid(const RecordAOSSplits &record, BRef *refs, u32 start, u32 count, 
             {
                 u32 refID      = refIDQueue[openCount + testIndex];
                 NodeType *node = getNode(refs[refID].nodePtr);
-                f32 minX[DefaultN];
-                f32 minY[DefaultN];
-                f32 minZ[DefaultN];
-                f32 maxX[DefaultN];
-                f32 maxY[DefaultN];
-                f32 maxZ[DefaultN];
+                alignas(4 * DefaultN) f32 minX[DefaultN];
+                alignas(4 * DefaultN) f32 minY[DefaultN];
+                alignas(4 * DefaultN) f32 minZ[DefaultN];
+                alignas(4 * DefaultN) f32 maxX[DefaultN];
+                alignas(4 * DefaultN) f32 maxY[DefaultN];
+                alignas(4 * DefaultN) f32 maxZ[DefaultN];
 
                 node->GetBounds(minX, minY, minZ, maxX, maxY, maxZ);
 
-                // = children->Get ? ? ? ;
-                refs[refID].min[0] = minX[0];
-                refs[refID].min[1] = minY[0];
-                refs[refID].min[2] = minZ[0];
+                refs[refID].min[0] = -minX[0];
+                refs[refID].min[1] = -minY[0];
+                refs[refID].min[2] = -minZ[0];
 
                 refs[refID].max[0] = maxX[0];
                 refs[refID].max[1] = maxY[0];
@@ -112,9 +112,9 @@ void OpenBraid(const RecordAOSSplits &record, BRef *refs, u32 start, u32 count, 
 
                 for (u32 b = 1; b < numChildren[testIndex]; b++)
                 {
-                    refs[offset].min[0]   = minX[b];
-                    refs[offset].min[1]   = minY[b];
-                    refs[offset].min[2]   = minZ[b];
+                    refs[offset].min[0]   = -minX[b];
+                    refs[offset].min[1]   = -minY[b];
+                    refs[offset].min[2]   = -minZ[b];
                     refs[offset].objectID = refs[refID].objectID;
                     refs[offset].max[0]   = maxX[b];
                     refs[offset].max[1]   = maxY[b];
@@ -215,8 +215,8 @@ struct HeuristicPartialRebraid
                         props.count = openCount;
                     });
                 Reduce(prop, output,
-                       [&](Props &l, const Props &r) { l.sameType &= r.sameType; });
-                if (prop.sameType || prop.count < record.ExtSize())
+                       [&](Props &l, const Props &r) { l.sameType &= r.sameType; l.count += r.count; });
+                if (prop.sameType || prop.count > record.ExtSize())
                 {
                     record.extEnd = record.start + record.count;
                 }
@@ -232,9 +232,10 @@ struct HeuristicPartialRebraid
                     }
                     ParallelFor(
                         record.start, record.count, PARALLEL_THRESHOLD,
-                        [&](u32 jobID, u32 start, u32 count) { 
-                        Props &prop = props[jobID];
-                        OpenBraid(record, buildRefs, start, count, prop.count, heuristic, getNode); });
+                        [&](u32 jobID, u32 start, u32 count) {
+                            Props &prop = props[jobID];
+                            OpenBraid(record, buildRefs, start, count, prop.count, heuristic, getNode);
+                        });
                 }
                 ScratchEnd(temp);
             }
@@ -249,7 +250,7 @@ struct HeuristicPartialRebraid
                     commonGeomID &= objectID == geomID;
                     if (heuristic(ref)) count += getNode(ref.nodePtr)->GetNumChildren() - 1;
                 }
-                if (commonGeomID || count < record.ExtSize())
+                if (commonGeomID || count > record.ExtSize())
                 {
                     record.extEnd = record.start + record.count;
                 }

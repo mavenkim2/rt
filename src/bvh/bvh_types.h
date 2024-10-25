@@ -264,6 +264,7 @@ struct BVHNode
     QuantizedNode<N> *GetQuantizedNode() const;
     size_t GetType() const { return data & alignMask; }
     bool IsLeaf() const { return GetType() >= tyLeaf; }
+    bool IsQuantizedNode() const { return GetType() == tyQuantizedNode; }
 };
 
 template <i32 N>
