@@ -42,14 +42,15 @@ void Print(const char *fmt, va_list args);
 #define Glue(a, b)      a##b
 #if DEBUG
 // #define Assert(expression) (!(expression) ? (*(volatile int *)0 = 0, 0) : 0)
-#define Assert(expression)                                                                  \
-    if (expression)                                                                         \
-    {                                                                                       \
-    }                                                                                       \
-    else                                                                                    \
-    {                                                                                       \
-        Print("Expression: %s\nFile: %s\nLine Num: %u\n", #expression, __FILE__, __LINE__); \
-        Trap();                                                                             \
+#define Assert(expression)                                                                   \
+    if (expression)                                                                          \
+    {                                                                                        \
+    }                                                                                        \
+    else                                                                                     \
+    {                                                                                        \
+        Print("Expression: %s\nFile: %s\nLine Num: %u\n", #expression, __FILE__, __LINE__);  \
+        printf("Expression: %s\nFile: %s\nLine Num: %u\n", #expression, __FILE__, __LINE__); \
+        Trap();                                                                              \
     }
 #define Error(expression, str, ...)                                                         \
     if (expression)                                                                         \

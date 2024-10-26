@@ -235,6 +235,7 @@ struct HeuristicPartialRebraid
                             u32 max     = jobID == output.num - 1 ? offset : props[jobID + 1].count;
                             OpenBraid(record, buildRefs, start, count, prop.count, max, heuristic, getNode);
                         });
+                    record.count = offset - record.start;
                 }
                 ScratchEnd(temp);
             }
@@ -257,6 +258,7 @@ struct HeuristicPartialRebraid
                 {
                     OpenBraid(record, buildRefs, record.start, record.count, record.End(), record.End() + count,
                               heuristic, getNode);
+                    record.count = record.End() + count - record.start;
                 }
             }
         }
@@ -284,7 +286,7 @@ struct HeuristicPartialRebraid
             OBin *heuristic = (OBin *)(split.ptr);
             mid             = PartitionParallel(heuristic, buildRefs, split, record.start, record.count, outLeft, outRight);
         }
-        MoveExtendedRanges(split, record, buildRefs, mid, outLeft, outRight);
+        MoveExtendedRanges(split, record.End(), record, buildRefs, mid, outLeft, outRight);
         ArenaPopTo(temp.arena, split.allocPos);
     }
 };

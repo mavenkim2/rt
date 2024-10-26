@@ -83,15 +83,23 @@ struct Bounds8
 
     __forceinline void Extend(const Lane8F32 &other)
     {
-        v = Max(v, other.v);
+        v = Max(v, other);
     }
     __forceinline void Extend(const Bounds8 &other)
     {
         v = Max(v, other.v);
     }
+    __forceinline void MaskExtend(const Lane8F32 &mask, const Bounds8 &other)
+    {
+        v = MaskMax(mask, v, other.v);
+    }
     __forceinline void Intersect(const Bounds8 &other)
     {
         v = Min(v, other.v);
+    }
+    __forceinline bool Empty() const
+    {
+        return (Movemask(-Extract4<0>(v) > Extract4<1>(v)) & 0x77) != 0;
     }
 };
 

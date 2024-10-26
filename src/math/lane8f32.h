@@ -206,6 +206,13 @@ __forceinline Lane8F32 operator<=(const Lane8F32 &a, const Lane8F32 &b) { return
 __forceinline Lane8F32 operator>(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_cmp_ps(a, b, _CMP_NLE_US); }
 __forceinline Lane8F32 operator>=(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_cmp_ps(a, b, _CMP_NLT_US); }
 __forceinline Lane8F32 operator==(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_cmp_ps(a, b, _CMP_EQ_OQ); }
+__forceinline Lane8F32 operator!=(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_cmp_ps(a, b, _CMP_NEQ_UQ); }
+
+// __forceinline Lane8F32 operator<(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_cmp_ps(a, b, _CMP_LT_OQ); }
+// __forceinline Lane8F32 operator<=(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_cmp_ps(a, b, _CMP_LE_OQ); }
+// __forceinline Lane8F32 operator>(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_cmp_ps(a, b, _CMP_NLE_UQ); }
+// __forceinline Lane8F32 operator>=(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_cmp_ps(a, b, _CMP_NLT_UQ); }
+
 __forceinline Lane8F32 operator&(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_and_ps(a, b); }
 __forceinline Lane8F32 &operator&=(Lane8F32 &a, const Lane8F32 &b)
 {
