@@ -1,4 +1,4 @@
-namespace rt 
+namespace rt
 {
 void Print(const char *fmt, va_list args)
 {
@@ -24,4 +24,4 @@ void Print(const char *fmt, ...)
     printf(printBuffer);
 #endif
 }
-}
+} // namespace rt

@@ -123,14 +123,7 @@ void OpenBraid(const RecordAOSSplits &record, BRef *refs, u32 start, u32 count, 
             }
         }
     }
-    // wtf is going on ?
-
-    if (offset != offsetMax)
-    {
-        // printf("offset %u\n", offset);
-        // printf("offset max %u\n", offsetMax);
-        // assert(0);
-    }
+    Assert(offset == offsetMax);
 }
 
 struct GetQuantizedNode
@@ -262,7 +255,8 @@ struct HeuristicPartialRebraid
                 }
                 else
                 {
-                    OpenBraid(record, buildRefs, record.start, record.count, record.End(), record.ExtEnd(), heuristic, getNode);
+                    OpenBraid(record, buildRefs, record.start, record.count, record.End(), record.End() + count,
+                              heuristic, getNode);
                 }
             }
         }

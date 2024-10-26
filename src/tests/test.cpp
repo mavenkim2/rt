@@ -199,35 +199,18 @@ void PartialRebraidBuilderTest(Arena *arena)
     counter        = OS_StartCounter();
     Scene2 *scenes = InitializeScene(arenas, meshDirectory, instanceFile);
     printf("scene initialization + blas build time: %fms\n", OS_GetMilliseconds(counter));
+    Print("scene initialization + blas build time: %fms\n", OS_GetMilliseconds(counter));
 
-#if 0
-    string lutPath = StrConcat(temp.arena, meshDirectory, "lut.mesh");
-    string lutData = OS_ReadFile(temp.arena, lutPath);
-    Tokenizer tokenizer(lutData);
-    u64 numEntries;
-    GetPointerValue(&tokenizer, &numEntries);
-    Scene2 *scenes          = PushArrayNoZero(arena, Scene2, numEntries + 1);
-    string instanceFileData = OS_ReadFile(arena, instanceFile);
-    Tokenizer instTokenzier(instanceFileData);
-    u64 numInstances;
-    GetPointerValue(&instTokenzier, &numInstances);
-    Scene2 *scene       = &scenes[0];
-    scene->instances    = (Instance *)instTokenzier.cursor;
-    scene->numInstances = u32(numInstances);
-    Advance(&instTokenzier, sizeof(Instance) * numInstances);
-    scene->affineTransforms = (AffineSpace *)instTokenzier.cursor;
-#endif
-
-    RecordAOSSplits record;
-    counter         = OS_StartCounter();
-    BRef *buildRefs = GenerateBuildRefs(scenes, 0, temp.arena, record);
-    printf("time to generate build refs: %fms\n", OS_GetMilliseconds(counter));
-
-    BuildSettings settings;
-
-    counter          = OS_StartCounter();
-    BVHNodeType node = BuildTLASQuantized(settings, arenas, buildRefs, record);
-    printf("time to generate tlas: %fms\n", OS_GetMilliseconds(counter));
+    // RecordAOSSplits record;
+    // counter         = OS_StartCounter();
+    // BRef *buildRefs = GenerateBuildRefs(scenes, 0, temp.arena, record);
+    // printf("time to generate build refs: %fms\n", OS_GetMilliseconds(counter));
+    //
+    // BuildSettings settings;
+    //
+    // counter          = OS_StartCounter();
+    // BVHNodeType node = BuildTLASQuantized(settings, arenas, buildRefs, record);
+    // printf("time to generate tlas: %fms\n", OS_GetMilliseconds(counter));
 
     f64 totalMiscTime     = 0;
     u64 numNodes          = 0;

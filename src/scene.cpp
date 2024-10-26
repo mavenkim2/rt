@@ -2849,7 +2849,7 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
             group->nodePtr = BuildQuantizedQuadSBVH(settings, arenas, group, refs, record);
             // printf("build time: %fms\nnum faces: %u\n\n", OS_GetMilliseconds(counter), numFaces);
 
-            threadLocalStatistics[GetThreadIndex()].misc += numFaces;
+            // threadLocalStatistics[GetThreadIndex()].misc += numFaces;
         }
         else
         {
@@ -2889,7 +2889,7 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
                 group->nodePtr = BuildQuantizedQuadSBVH(settings, arenas, &group->meshes[0], refs, record);
                 // printf("build time: %fms\nnum faces: %u\n\n", OS_GetMilliseconds(counter), numFaces);
             }
-            threadLocalStatistics[GetThreadIndex()].misc += numFaces;
+            // threadLocalStatistics[GetThreadIndex()].misc += numFaces;
         }
 
         ScratchEnd(temp);

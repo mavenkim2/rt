@@ -371,7 +371,6 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
         }
     }
 
-    // threadLocalStatistics[GetThreadIndex()].misc += 1;
     u32 leafCount = 0;
     u32 primTotal = 0;
     for (u32 i = 0; i < numChildren; i++)
@@ -400,6 +399,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
         for (u32 recordIndex = 0; recordIndex < numChildren; recordIndex++)
         {
             const Record &childRecord = childRecords[recordIndex];
+            // threadLocalStatistics[GetThreadIndex()].misc += childRecord.count; // 1; // numChildren - leafCount;
             for (u32 primIndex = childRecord.start; primIndex < childRecord.start + childRecord.count; primIndex++)
             {
                 PrimRef *prim     = &primRefs[primIndex];
@@ -416,7 +416,8 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
             u32 offset                = 0;
             const Record &childRecord = childRecords[i];
             u32 numPrims              = childRecord.count;
-            LeafType *primIDs         = PushArrayNoZeroTagged(currentArena, LeafType, numPrims, MemoryType_BVH);
+            // threadLocalStatistics[GetThreadIndex()].misc += childRecord.count; // 1; // numChildren - leafCount;
+            LeafType *primIDs = PushArrayNoZeroTagged(currentArena, LeafType, numPrims, MemoryType_BVH);
             for (u32 primIndex = childRecord.start; primIndex < childRecord.start + childRecord.count; primIndex++)
             {
                 PrimRef *prim     = &primRefs[primIndex];

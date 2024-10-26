@@ -34,23 +34,23 @@ typedef i32 b32;
 #error compiler not implemented
 #endif
 
-void Print(char *fmt, ...);
-void Print(char *fmt, va_list args);
+void Print(const char *fmt, ...);
+void Print(const char *fmt, va_list args);
 
 // TODO: set this based on os call
 #define CACHE_LINE_SIZE 64
 #define Glue(a, b)      a##b
 #if DEBUG
 // #define Assert(expression) (!(expression) ? (*(volatile int *)0 = 0, 0) : 0)
-#define Assert(expression) \
-    if (expression)        \
-    {                      \
-    }                      \
-    else                   \
-    {                      \
-        Trap();            \
+#define Assert(expression)                                                                  \
+    if (expression)                                                                         \
+    {                                                                                       \
+    }                                                                                       \
+    else                                                                                    \
+    {                                                                                       \
+        Print("Expression: %s\nFile: %s\nLine Num: %u\n", #expression, __FILE__, __LINE__); \
+        Trap();                                                                             \
     }
-// Print("Expression: %s\nFile: %s\nLine Num: %u\n", #expression, __FILE__, __LINE__);
 #define Error(expression, str, ...)                                                         \
     if (expression)                                                                         \
     {                                                                                       \
