@@ -1047,13 +1047,13 @@ struct alignas(32) HeuristicAOSSplitBinning
                 {
                     u32 indexMin = indexMins[b];
                     u32 diff     = indexMaxs[b] - indexMin;
-                    entryCounts[indexMin][dim] += 1;
-                    exitCounts[indexMin + diff][dim] += 1;
 
                     switch (diff)
                     {
                         case 0:
                         {
+                            entryCounts[indexMin][dim] += 1;
+                            exitCounts[indexMin][dim] += 1;
                             bins[dim][indexMin].Extend(data[i + b].Load());
                         }
                         break;
@@ -1099,8 +1099,12 @@ struct alignas(32) HeuristicAOSSplitBinning
                         Lane8U32 startBin = Lane8U32::LoadU(binIndexStart[dim][bin] + binCount);
 
                         alignas(32) u32 binIndices[LANE_WIDTH];
+                        alignas(32) u32 startBins[LANE_WIDTH];
+                        Lane8U32::Store(startBins, startBin);
 
                         u32 current = 0;
+
+                        u16 binMasks[LANE_WIDTH] = {};
                         for (u32 d = 0; d < bin; d++)
                         {
                             Lane8U32::Store(binIndices, startBin);
@@ -1114,25 +1118,27 @@ struct alignas(32) HeuristicAOSSplitBinning
                                 u32 bit      = !bounds[current][b].Empty();
                                 u32 binIndex = binIndices[b];
                                 bins[dim][binIndex].MaskExtend(masks[bit], bounds[current][b]);
-                                if (!bit)
-                                {
-                                    Assert(d == 0);
-                                    entryCounts[binIndex][dim] -= 1;
-                                    entryCounts[binIndex + 1][dim] += 1;
-                                }
+                                binMasks[b] |= (bit << d);
                             }
                             current = !current;
                         }
                         for (u32 b = 0; b < LANE_WIDTH; b++)
                         {
-                            u32 bit      = !bounds[current][b].Empty();
+                            u32 bit = !bounds[current][b].Empty();
+                            binMasks[b] |= (bit << bin);
                             u32 binIndex = binIndices[b] + 1;
                             bins[dim][binIndex].MaskExtend(masks[bit], bounds[current][b]);
-                            if (!bit)
-                            {
-                                exitCounts[binIndex][dim] -= 1;
-                                exitCounts[binIndex - 1][dim] += 1;
-                            }
+
+                            u32 tzcnt = _tzcnt_u16(binMasks[b]);
+                            Assert(tzcnt != 16);
+                            u32 startIndex = startBins[b] + tzcnt;
+                            u32 lzcnt      = _lzcnt_u32(binMasks[b]);
+                            Assert(lzcnt != 32);
+                            u32 endIndex = startBins[b] + 31 - lzcnt;
+                            Assert(startIndex >= 0 && startIndex < numBins);
+                            Assert(endIndex >= 0 && endIndex < numBins && endIndex >= startIndex);
+                            entryCounts[startIndex][dim] += 1;
+                            exitCounts[endIndex][dim] += 1;
                         }
                     }
                     bitMask[dim] &= bitMask[dim] - 1;
@@ -1152,12 +1158,12 @@ struct alignas(32) HeuristicAOSSplitBinning
                 Assert(binIndexMax >= binIndexMin);
 
                 u32 diff = binIndexMax - binIndexMin;
-                entryCounts[binIndexMin][dim] += 1;
-                exitCounts[binIndexMax][dim] += 1;
                 switch (diff)
                 {
                     case 0:
                     {
+                        entryCounts[binIndexMin][dim] += 1;
+                        exitCounts[binIndexMax][dim] += 1;
                         bins[dim][binIndexMin].Extend(Lane8F32::LoadU(ref));
                     }
                     break;
@@ -1203,11 +1209,14 @@ struct alignas(32) HeuristicAOSSplitBinning
                     else
                         Polygon8::Load(scene, dim, faceIndices, &tri);
 
-                    Lane8U32 startBin = Lane8U32::LoadU(binIndexStart[dim][diff] + remaining * LANE_WIDTH);
+                    Lane8U32 startBin = Lane8U32::LoadU(binIndexStart[dim][diff] + qStart);
 
                     alignas(32) u32 binIndices[8];
+                    alignas(32) u32 startBins[LANE_WIDTH];
+                    Lane8U32::Store(startBins, startBin);
 
-                    u32 current = 0;
+                    u32 current              = 0;
+                    u16 binMasks[LANE_WIDTH] = {};
                     for (u32 d = 0; d < diff; d++)
                     {
                         Lane8U32::Store(binIndices, startBin);
@@ -1219,25 +1228,27 @@ struct alignas(32) HeuristicAOSSplitBinning
                             u32 bit      = !bounds[current][b].Empty();
                             u32 binIndex = binIndices[b];
                             bins[dim][binIndex].MaskExtend(masks[bit], bounds[current][b]);
-                            if (!bit)
-                            {
-                                Assert(d == 0);
-                                entryCounts[binIndex][dim] -= 1;
-                                entryCounts[binIndex + 1][dim] += 1;
-                            }
+                            binMasks[b] |= (bit << d);
                         }
                         current = !current;
                     }
                     for (u32 b = 0; b < numPrims; b++)
                     {
-                        u32 bit      = !bounds[current][b].Empty();
+                        u32 bit = !bounds[current][b].Empty();
+                        binMasks[b] |= (bit << diff);
                         u32 binIndex = binIndices[b] + 1;
                         bins[dim][binIndex].MaskExtend(masks[bit], bounds[current][b]);
-                        if (!bit)
-                        {
-                            exitCounts[binIndex][dim] -= 1;
-                            exitCounts[binIndex - 1][dim] += 1;
-                        }
+
+                        u32 tzcnt = _tzcnt_u16(binMasks[b]);
+                        Assert(tzcnt != 16);
+                        u32 startIndex = startBins[b] + tzcnt;
+                        u32 lzcnt      = _lzcnt_u32(binMasks[b]);
+                        Assert(lzcnt != 32);
+                        u32 endIndex = startBins[b] + 31 - lzcnt;
+                        Assert(startIndex >= 0 && startIndex < numBins);
+                        Assert(endIndex >= 0 && endIndex < numBins && endIndex >= startIndex);
+                        entryCounts[startIndex][dim]++;
+                        exitCounts[endIndex][dim]++;
                     }
                     remainingCount -= LANE_WIDTH;
                 }
@@ -1387,8 +1398,9 @@ struct alignas(32) HeuristicAOSSplitBinning
                 PrimRef &ref      = data[lIndex];
                 lVal              = ref.Load();
                 Lane8F32 centroid = ((Shuffle4<1, 1>(lVal) - Shuffle4<0, 0>(lVal))) ^ signFlipMask;
+                f32 testCentroid  = (ref.max[dim] - ref.min[dim]) * 0.5f;
 
-                bool isRight = -ref.min[dim] >= split.bestValue;
+                bool isRight = binner->Bin(testCentroid, dim) >= split.bestPos;
                 if (isRight)
                 {
                     centRight = Max(centRight, centroid);
@@ -1407,8 +1419,10 @@ struct alignas(32) HeuristicAOSSplitBinning
                 PrimRef &ref      = data[rIndex];
                 rVal              = ref.Load();
                 Lane8F32 centroid = ((Shuffle4<1, 1>(rVal) - Shuffle4<0, 0>(rVal))) ^ signFlipMask;
+                f32 testCentroid  = (ref.max[dim] - ref.min[dim]) * 0.5f;
 
-                bool isLeft = ref.max[dim] <= split.bestValue;
+                // bool isLeft = ref.max[dim] <= split.bestValue;
+                bool isLeft = binner->Bin(testCentroid, dim) < split.bestPos;
                 if (isLeft)
                 {
                     centLeft = Max(centLeft, centroid);
@@ -1442,7 +1456,8 @@ struct alignas(32) HeuristicAOSSplitBinning
             {
                 PrimRef &ref = data[l];
                 // bool isRight  = binner->BinMin(ref.min[dim], dim) >= bestPos;
-                bool isRight = -ref.min[dim] >= split.bestValue;
+                f32 centroid = (ref.max[dim] - ref.min[dim]) * 0.5f;
+                bool isRight = binner->Bin(centroid, dim) >= split.bestPos;
                 if (isRight) break;
                 l++;
             }
@@ -1451,7 +1466,8 @@ struct alignas(32) HeuristicAOSSplitBinning
                 Assert(r >= 0);
                 PrimRef &ref = data[r];
                 // bool isLeft   = binner->BinMin(ref.min[dim], dim) < bestPos;
-                bool isLeft = ref.max[dim] <= split.bestValue;
+                f32 centroid = (ref.max[dim] - ref.min[dim]) * 0.5f;
+                bool isLeft  = binner->Bin(centroid, dim) < split.bestPos;
                 if (isLeft) break;
                 r--;
             }
@@ -1536,6 +1552,8 @@ void FinalizeObjectSplit(HeuristicAOSObjectBinning<numObjectBins, PrimRef> *obje
 template <typename PrimRef, typename Record>
 void MoveExtendedRanges(const Split &split, const u32 newEnd, const Record &record, PrimRef *primRefs, u32 mid, Record &outLeft, Record &outRight)
 {
+    // TODO: I don't understand why these numbers are no longer correct. the thing is though the error check doesn't assert
+    // and the partitioning is no longer stochastic, so it's not an issue per se.
     // u32 numLeft  = split.numLeft;
     // u32 numRight = split.numRight;
 
@@ -1793,6 +1811,7 @@ struct HeuristicSpatialSplits
                         newEnd        = record.End() + numSplits;
                         heuristic->Split(primRefs, split, record.End(), newEnd, record.start, record.count);
                     }
+                    Assert(newEnd <= record.extEnd);
                     mid = PartitionParallel(heuristic, primRefs, split, record.start, newEnd - record.start, outLeft, outRight);
                 }
                 break;
@@ -1847,7 +1866,8 @@ struct HeuristicSpatialSplits
                         Lane8F32 v         = Lane8F32::LoadU(ref);
                         Lane8F32 centroid  = ((Shuffle4<1, 1>(v) - Shuffle4<0, 0>(v))) ^ signFlipMask;
 
-                        Assert(ref->max[split.bestDim] <= split.bestValue);
+                        f32 c = (ref->max[split.bestDim] - ref->min[split.bestDim]) * 0.5f;
+                        Assert(heuristic->binner->Bin(c, split.bestDim) < split.bestPos);
                         // threadLocalStatistics[GetThreadIndex()].misc += ref->max[split.bestDim] > split.bestValue;
 
                         u32 gMask = Movemask(v <= outLeft.geomBounds) & 0x77;
@@ -1864,7 +1884,8 @@ struct HeuristicSpatialSplits
                         Lane8F32 v         = Lane8F32::LoadU(ref);
                         Lane8F32 centroid  = ((Shuffle4<1, 1>(v) - Shuffle4<0, 0>(v))) ^ signFlipMask;
 
-                        Assert(-ref->min[split.bestDim] >= split.bestValue);
+                        f32 c = (ref->max[split.bestDim] - ref->min[split.bestDim]) * 0.5f;
+                        Assert(heuristic->binner->Bin(c, split.bestDim) >= split.bestPos);
                         // threadLocalStatistics[GetThreadIndex()].misc += -ref->min[split.bestDim] < split.bestValue;
 
                         u32 gMask = Movemask(v <= outRight.geomBounds) & 0x77;

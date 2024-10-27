@@ -47,4 +47,5 @@ data/
 *.profraw
 *.txt
 *.asm
+*.ilk
 
