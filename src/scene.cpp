@@ -2878,7 +2878,7 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
             }
             else
             {
-                PrimRefCompressed *refs = PushArrayNoZero(temp.arena, PrimRefCompressed, extEnd);
+                PrimRefCompressed *refs = PushArrayNoZero(temp.arena, PrimRefCompressed, extEnd + 1);
                 GeneratePrimRefs(refs, 0, &group->meshes[0], 0, 0, numFaces, record);
                 group->SetBounds(record.geomBounds);
                 record.SetRange(0, numFaces, extEnd);

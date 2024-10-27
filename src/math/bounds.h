@@ -65,13 +65,13 @@ struct Bounds8
     Bounds8() : v(neg_inf) {}
     Bounds8(EmptyTy) : v(neg_inf) {}
     Bounds8(PosInfTy) : v(pos_inf) {}
-    __forceinline Bounds8(Lane8F32 in)
+    __forceinline explicit Bounds8(Lane8F32 in)
     {
         v = in ^ signFlipMask;
     }
 
-    __forceinline operator const __m256 &() const { return v; }
-    __forceinline operator __m256 &() { return v; }
+    __forceinline explicit operator const __m256 &() const { return v; }
+    __forceinline explicit operator __m256 &() { return v; }
 
     __forceinline explicit operator Bounds() const
     {

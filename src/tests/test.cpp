@@ -207,6 +207,7 @@ void PartialRebraidBuilderTest(Arena *arena)
     // printf("time to generate build refs: %fms\n", OS_GetMilliseconds(counter));
     //
     // BuildSettings settings;
+    // settings.intCost = 0.3f;
     //
     // counter          = OS_StartCounter();
     // BVHNodeType node = BuildTLASQuantized(settings, arenas, buildRefs, record);
