@@ -316,7 +316,8 @@ template <u32 N>
 struct BuildRef
 {
     f32 min[3];
-    u32 objectID;
+    // u32 objectID;
+    u32 instanceID;
     f32 max[3];
     u32 numPrims;
     BVHNode<N> nodePtr;
@@ -360,7 +361,7 @@ struct QuantizedNode
         return children[i];
     }
 
-    void GetBounds(f32 *outMinX, f32 *outMinY, f32 *outMinZ, f32 *outMaxX, f32 *outMaxY, f32 *outMaxZ) const
+    void GetBounds(LaneF32<N> *outMin, LaneF32<N> *outMax) // f32 *outMinX, f32 *outMinY, f32 *outMinZ, f32 *outMaxX, f32 *outMaxY, f32 *outMaxZ) const
     {
         LaneU32<N> lX = LaneU32<N>(*(u32 *)lowerX);
         LaneU32<N> lY = LaneU32<N>(*(u32 *)lowerY);
@@ -404,13 +405,20 @@ struct QuantizedNode
         LaneF32<N> scaleY = AsFloat(LaneU32<N>(scale[1] << 23));
         LaneF32<N> scaleZ = AsFloat(LaneU32<N>(scale[2] << 23));
 
-        LaneF32<N>::Store(outMinX, minX + LaneF32<N>(lExpandedMinX) * scaleX);
-        LaneF32<N>::Store(outMinY, minY + LaneF32<N>(lExpandedMinY) * scaleY);
-        LaneF32<N>::Store(outMinZ, minZ + LaneF32<N>(lExpandedMinZ) * scaleZ);
-        LaneF32<N>::Store(outMaxX, minX + LaneF32<N>(lExpandedMaxX) * scaleX);
-        LaneF32<N>::Store(outMaxY, minY + LaneF32<N>(lExpandedMaxY) * scaleY);
-        LaneF32<N>::Store(outMaxZ, minZ + LaneF32<N>(lExpandedMaxZ) * scaleZ);
+        //     LaneF32<N>::Store(outMinX, minX + LaneF32<N>(lExpandedMinX) * scaleX);
+        //     LaneF32<N>::Store(outMinY, minY + LaneF32<N>(lExpandedMinY) * scaleY);
+        //     LaneF32<N>::Store(outMinZ, minZ + LaneF32<N>(lExpandedMinZ) * scaleZ);
+        //     LaneF32<N>::Store(outMaxX, minX + LaneF32<N>(lExpandedMaxX) * scaleX);
+        //     LaneF32<N>::Store(outMaxY, minY + LaneF32<N>(lExpandedMaxY) * scaleY);
+        //     LaneF32<N>::Store(outMaxZ, minZ + LaneF32<N>(lExpandedMaxZ) * scaleZ);
+        outMin[0] = minX + LaneF32<N>(lExpandedMinX) * scaleX;
+        outMin[1] = minY + LaneF32<N>(lExpandedMinY) * scaleY;
+        outMin[2] = minZ + LaneF32<N>(lExpandedMinZ) * scaleZ;
+        outMax[0] = minX + LaneF32<N>(lExpandedMaxX) * scaleX;
+        outMax[1] = minY + LaneF32<N>(lExpandedMaxY) * scaleY;
+        outMax[2] = minZ + LaneF32<N>(lExpandedMaxZ) * scaleZ;
     }
+    // }
     QuantizedNode<N> GetBaseChildPtr() const
     {
         return (QuantizedNode<N> *)(internalOffset & ~(0xf));

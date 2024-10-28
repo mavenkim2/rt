@@ -542,6 +542,19 @@ __forceinline void Transpose4x3(const Lane4F32 &a, const Lane4F32 &b, const Lane
     out3 = UnpackLo(acZ, bdZ);
 }
 
+__forceinline void Transpose3x4(const Lane4F32 &a, const Lane4F32 &b, const Lane4F32 &c,
+                                Lane4F32 &out0, Lane4F32 &out1, Lane4F32 &out2, Lane4F32 &out3)
+{
+    Lane4F32 t0 = UnpackLo(a, c);
+    Lane4F32 t1 = UnpackHi(a, c);
+    Lane4F32 t2 = Shuffle<2, 2, 1, 1>(b);
+    Lane4F32 t3 = Shuffle<3>(b);
+    out0        = UnpackLo(t0, b);
+    out1        = UnpackHi(t0, t2);
+    out2        = UnpackLo(t1, t2);
+    out3        = UnpackHi(t1, t3);
+}
+
 } // namespace rt
 
 #endif

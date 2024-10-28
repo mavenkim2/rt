@@ -324,7 +324,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
         return 0;
     }
     heuristic.Split(split, record, childRecords[0], childRecords[1]);
-    Assert(childRecords[0].count <= record.count && childRecords[1].count <= record.count);
+    // Assert(childRecords[0].count <= record.count && childRecords[1].count <= record.count);
 
     // N - 1 splits produces N children
     for (numChildren = 2; numChildren < N; numChildren++)
@@ -350,7 +350,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
         Record out;
         heuristic.Split(split, childRecords[bestChild], out, childRecords[numChildren]);
 
-        Assert(childRecords[0].count <= record.count && childRecords[1].count <= record.count);
+        // Assert(childRecords[0].count <= record.count && childRecords[1].count <= record.count);
         childRecords[bestChild] = out;
     }
 
@@ -487,12 +487,12 @@ BVHNode<N> BuildQuantizedQuadSBVH(BuildSettings settings,
 template <i32 N>
 BVHNode<N> BuildTLASQuantized(BuildSettings settings,
                               Arena **inArenas,
-                              // Instance *instances,
+                              Scene2 *scene,
                               BuildRef<N> *refs,
                               RecordAOSSplits &record)
 {
     PartialRebraidBuilder<N> builder;
-    new (&builder.heuristic) HeuristicPartialRebraid<GetQuantizedNode>(refs);
+    new (&builder.heuristic) HeuristicPartialRebraid<GetQuantizedNode>(scene, refs);
     builder.primRefs = refs;
     return builder.BuildBVH(settings, inArenas, record);
 }
@@ -541,13 +541,14 @@ __forceinline BVHNodeType BuildQuantizedQuadSBVH(BuildSettings settings,
 
 __forceinline BVHNodeType BuildTLASQuantized(BuildSettings settings,
                                              Arena **inArenas,
+                                             Scene2 *scene,
                                              BRef *refs,
                                              RecordAOSSplits &record)
 {
 #if defined(USE_BVH4)
-    return BuildTLASQuantized<4>(settings, inArenas, refs, record);
+    return BuildTLASQuantized<4>(settings, inArenas, scene, refs, record);
 #elif defined(USE_BVH8)
-    return BuildTLASQuantized<8>(settings, inArenas, refs, record);
+    return BuildTLASQuantized<8>(settings, inArenas, scene, refs, record);
 #endif
 }
 

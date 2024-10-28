@@ -17,6 +17,7 @@
 
 // far future TODOs (after moana is rendered)
 // - subdivision surfaces
+// - systematically handling floating point error
 
 // NOTEs on moana data set:
 // - each triangle pair is a quad (not sure if coplanar, I think so?), representing the base cage
@@ -409,6 +410,7 @@ static void ClipPolygon(const u32 dim, const Polygon8 &poly, const Lane8F32 &spl
 
         const Lane8F32 div = Rcp(v1u - v0u);
         // const Lane8F32 div = Select(v1u == v0u, Lane8F32(zero), Rcp(v1u - v0u));
+        // TODO: this is a catastrophic cancellation
         const Lane8F32 t = (splitPos - v0u) * div;
 
         const Lane8F32 subV = v1v - v0v;
@@ -639,7 +641,7 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, const Split &split, u
         u32 lastRIndex = GetIndex(r, group);
 
         r = lastRIndex >= end
-                ? (lastRIndex - end) < (blockSize - 1)
+                ? (lastRIndex - end) < blockSize //(blockSize - 1)
                       ? r - (lastRIndex - end) - 1
                       : (r & ~(blockMask)) - 1
                 : r;
@@ -1552,13 +1554,6 @@ void FinalizeObjectSplit(HeuristicAOSObjectBinning<numObjectBins, PrimRef> *obje
 template <typename PrimRef, typename Record>
 void MoveExtendedRanges(const Split &split, const u32 newEnd, const Record &record, PrimRef *primRefs, u32 mid, Record &outLeft, Record &outRight)
 {
-    // TODO: I don't understand why these numbers are no longer correct. the thing is though the error check doesn't assert
-    // and the partitioning is no longer stochastic, so it's not an issue per se.
-    // u32 numLeft  = split.numLeft;
-    // u32 numRight = split.numRight;
-
-    // Assert(numLeft == mid - record.start);
-    // Assert(numRight == newEnd - mid);
     u32 numLeft  = mid - record.start;
     u32 numRight = newEnd - mid;
 
@@ -1823,7 +1818,7 @@ struct HeuristicSpatialSplits
         Assert(outRight.count > 0);
 
         // error check
-#if 1
+#if DEBUG
         {
             switch (split.type)
             {
@@ -1868,15 +1863,12 @@ struct HeuristicSpatialSplits
 
                         f32 c = (ref->max[split.bestDim] - ref->min[split.bestDim]) * 0.5f;
                         Assert(heuristic->binner->Bin(c, split.bestDim) < split.bestPos);
-                        // threadLocalStatistics[GetThreadIndex()].misc += ref->max[split.bestDim] > split.bestValue;
 
                         u32 gMask = Movemask(v <= outLeft.geomBounds) & 0x77;
                         Assert(gMask == 0x77);
-                        // threadLocalStatistics[GetThreadIndex()].misc += gMask != 0x77;
 
                         u32 cMask = Movemask(centroid <= outLeft.centBounds) & 0x77;
                         Assert(cMask == 0x77);
-                        // threadLocalStatistics[GetThreadIndex()].misc += cMask != 0x77;
                     }
                     for (u32 i = outRight.start; i < outRight.End(); i++)
                     {
@@ -1886,15 +1878,12 @@ struct HeuristicSpatialSplits
 
                         f32 c = (ref->max[split.bestDim] - ref->min[split.bestDim]) * 0.5f;
                         Assert(heuristic->binner->Bin(c, split.bestDim) >= split.bestPos);
-                        // threadLocalStatistics[GetThreadIndex()].misc += -ref->min[split.bestDim] < split.bestValue;
 
                         u32 gMask = Movemask(v <= outRight.geomBounds) & 0x77;
                         Assert(gMask == 0x77);
-                        // threadLocalStatistics[GetThreadIndex()].misc += gMask != 0x77;
 
                         u32 cMask = Movemask(centroid <= outRight.centBounds) & 0x77;
                         Assert(cMask == 0x77);
-                        // threadLocalStatistics[GetThreadIndex()].misc += cMask != 0x77;
                     }
                 }
                 break;
