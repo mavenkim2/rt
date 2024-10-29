@@ -13,9 +13,25 @@ struct BSpline
         const f32 t3 = s * s * s;
         return (1.0f / 6.f) * Vec4f(t0, t1, t2, t3);
     }
+    static Vec4f Derivative(f32 u)
+    {
+        const f32 t  = u;
+        const f32 s  = 1.0f - u;
+        const f32 n0 = -s * s;
+        const f32 n1 = -t * t - 4.0f * (t * s);
+        const f32 n2 = s * s + 4.0f * (s * t);
+        const f32 n3 = t * t;
+        return 0.5f * Vec4f(n0, n1, n2, n3);
+    }
     Vec3f Eval(f32 u)
     {
         Vec4f t      = Eval(u);
+        Vec3f result = FMA(t.x, v0, FMA(t.y, v1, FMA(t.z, v2, t.w * v3)));
+        return result;
+    }
+    Vec3f Derivative(f32 u)
+    {
+        Vec4f t      = Derivative(u);
         Vec3f result = FMA(t.x, v0, FMA(t.y, v1, FMA(t.z, v2, t.w * v3)));
         return result;
     }
@@ -29,7 +45,7 @@ void PhantomCurveIntersector(BSpline &curve, AffineSpace &raySpace)
     // Transform curve into ray space (i.e, o = (0, 0, 0), d = (0, 0, 1))
     BSpline curve2D = Transform(raySpace, curve);
     Vec3f c0        = curve2D.Eval(0);
-    Vec3f cPrime    = curve2D.Dervative(0);
+    Vec3f cPrime    = curve2D.Derivative(0);
 
     f32 dt;
 
@@ -79,5 +95,7 @@ void PhantomCurveIntersector(BSpline &curve, AffineSpace &raySpace)
 
         // c0c0 * cPcP - (c0cP)^2 = |c0 x cP|^2
         f32 c = Dot(c0xcP, c0xcP) - 2 * rdr * c0cP - r * r * cPcP;
+
+        // NOTE: the b and c terms I calculated are different from the paper (b is understandable why, c is not)
     }
 }
