@@ -91,20 +91,18 @@ void OpenBraid(const Scene2 *scene, const RecordAOSSplits &record, BRef *refs, u
             else
             {
                 Transpose3x4(Extract4<0>(min[0]), Extract4<0>(min[1]), Extract4<0>(min[2]),
-                             aosMin[0] aosMin[1], aosMin[2], aosMin[3]);
+                             aosMin[0], aosMin[1], aosMin[2], aosMin[3]);
                 Transpose3x4(Extract4<1>(min[0]), Extract4<1>(min[1]), Extract4<1>(min[2]),
-                             aosMin[4] aosMin[5], aosMin[6], aosMin[7]);
+                             aosMin[4], aosMin[5], aosMin[6], aosMin[7]);
                 Transpose3x4(Extract4<0>(max[0]), Extract4<0>(max[1]), Extract4<0>(max[2]),
-                             aosMax[0] aosMax[1], aosMax[2], aosMax[3]);
+                             aosMax[0], aosMax[1], aosMax[2], aosMax[3]);
                 Transpose3x4(Extract4<1>(max[0]), Extract4<1>(max[1]), Extract4<1>(max[2]),
-                             aosMax[4] aosMax[5], aosMax[6], aosMax[7]);
+                             aosMax[4], aosMax[5], aosMax[6], aosMax[7]);
             }
 
-            // TODO: transform the bounds to world space
             Instance &instance     = scene->instances[ref.instanceID];
             AffineSpace &transform = scene->affineTransforms[instance.transformIndex];
-            // Instance &instance =
-            Bounds bounds0 = Transform(transform, Bounds(aosMin[0], aosMax[0]));
+            Bounds bounds0         = Transform(transform, Bounds(aosMin[0], aosMax[0]));
             Lane4F32::StoreU(ref.min, -bounds0.minP);
             Lane4F32::StoreU(ref.max, bounds0.maxP);
 

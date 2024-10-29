@@ -201,17 +201,17 @@ void PartialRebraidBuilderTest(Arena *arena)
     printf("scene initialization + blas build time: %fms\n", OS_GetMilliseconds(counter));
     Print("scene initialization + blas build time: %fms\n", OS_GetMilliseconds(counter));
 
-    // RecordAOSSplits record;
-    // counter         = OS_StartCounter();
-    // BRef *buildRefs = GenerateBuildRefs(scenes, 0, temp.arena, record);
-    // printf("time to generate build refs: %fms\n", OS_GetMilliseconds(counter));
-    //
-    // BuildSettings settings;
-    // settings.intCost = 0.3f;
-    //
-    // counter          = OS_StartCounter();
-    // BVHNodeType node = BuildTLASQuantized(settings, arenas, buildRefs, record);
-    // printf("time to generate tlas: %fms\n", OS_GetMilliseconds(counter));
+    RecordAOSSplits record;
+    counter         = OS_StartCounter();
+    BRef *buildRefs = GenerateBuildRefs(scenes, 0, temp.arena, record);
+    printf("time to generate build refs: %fms\n", OS_GetMilliseconds(counter));
+
+    BuildSettings settings;
+    settings.intCost = 0.3f;
+
+    counter          = OS_StartCounter();
+    BVHNodeType node = BuildTLASQuantized(settings, arenas, &scenes[0], buildRefs, record);
+    printf("time to generate tlas: %fms\n", OS_GetMilliseconds(counter));
 
     f64 totalMiscTime     = 0;
     u64 numNodes          = 0;
