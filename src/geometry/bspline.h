@@ -38,64 +38,97 @@ struct BSpline
 };
 
 // https://research.nvidia.com/sites/default/files/pubs/2018-08_Phantom-Ray-Hair-Intersector//Phantom-HPG%202018.pdf
-void PhantomCurveIntersector(BSpline &curve, AffineSpace &raySpace)
+void PhantomCurveIntersector(const Ray &ray, BSpline &curve)
 {
     // Intersect against cylinder first
 
     // Transform curve into ray space (i.e, o = (0, 0, 0), d = (0, 0, 1))
     BSpline curve2D = Transform(raySpace, curve);
-    Vec3f c0        = curve2D.Eval(0);
-    Vec3f cPrime    = curve2D.Derivative(0);
+    f32 t           = 0;
+    Vec3f c0        = curve2D.Eval(t);
+    Vec3f cd        = curve2D.Derivative(t);
 
-    f32 dt;
+    f32 dt = 0;
+    f32 prevT;
+    f32 prevDt;
+
+    f32 dc;
+    f32 sp;
+    f32 dp;
 
     // Recursively intersect until abs(dt) < 1e-5
+    // https://www.highperformancegraphics.org/wp-content/uploads/2018/Papers-Session4/HPG2018_PhantomRayHairIntersection.pdf
+    u32 iteration = 0;
     for (;;)
     {
-        // a = c(t) + c'(t) * dt
-        // ray intersects plane with normal c'(t) and point a when p1 = (0, 0, s):
-        // |p1 - a| = r(t) + dr(t) * dt
-        // also, (p1 - a) dot c'(t) = 0 (since p1 and a are co planar,
-        // cancel dt, then solve for s. then calculate dt
+        // a = c0(t) + c'(t)dt
+        // p1 = o + sd (o is (0, 0, 0)), p1 is intersection of ray with cone base plane
+        // |p1 - a| = r(t) + r'(t)dt, intersection with cone
+        // (p1 - a) dot c'(t) = 0 (since p1 and a are coplanar)
+        Vec3f cr         = c0 - ray.o;
+        f32 cdcd         = Dot(cd, cd);
+        f32 crcd         = Dot(cr, cd);
+        f32 crcr         = Dot(cr, cr);
+        f32 crrd         = Dot(cr, ray.d);
+        f32 cdrd         = Dot(cd, ray.d);
+        f32 oneover_cdcd = 1.f / cdcd;
+        f32 cdrdn        = cdrd * oneover_cdcd;
+        f32 crcdn        = crcd * oneover_cdcd;
+        r                = r - dr * crcdn;
+        dr               = dr * cdrdn;
+        f32 q00          = crcr - crcd * crcdn;
+        f32 q01          = cdrd * crcdn - crrd;
+        f32 q11          = 1 - cdrd * cdrdn;
+        // NOTE: coefficients of quadratic equation, cx^2 - 2bx + a = 0
+        f32 a = q00 - r * r;
+        f32 b = q01 - r * dr;
+        f32 c = dr * dr - q11;
 
-        // s * c'(t).z - c(t) dot c'(t) - c'(t) dot c'(t) * dt = 0
-        // dt = (s * c'(t).z - c(t) dot c'(t)) / (c'(t) dot c'(t))
+        // Solve the quadratic equation for s
+        f32 det = b * b + a * c;
+        s       = (b + (det < 0 ? 0 : Sqrt(det))) / c; // ray.s for ray ^ cone
 
-        // plug dt back into original equation
-        // (p1 - a) dot (p1 - a) = r^2 + 2rdrdt + dr^2 * dt^2
-        // s^2 - 2(a dot p1) + a dot a = r^2 + 2rdr(s * c'z - c0cP) / (cPcP) + dr^2((c'z * s - c0cP) / (cPcP))^2
+        prevDt = dt;
+        prevT  = t;
+        dt     = cdrdn * s - crcdn;              // dt to the (ray ^ cone) from t
+        dc     = crcr - 2 * crrd * s + s * s;    // |((ray ^ cone) - c0)|^2
+        sp     = crcd / cdrd;                    // ray.s for ray ^ plane
+        dp     = crcr - 2 * crrd * sp + sp * sp; // |((ray ^ plane) - c0)|^2
 
-        // multiply both sides by cPcP
-        // s^2 * cPcP - 2 * cPcP(c0.z * s + c'z * s * (s * c'z - c0cP) / cPcP) + c0c0*cPcP +
-        // 2c0cP*(c'z * s - c0cP) + cPcP((c'z * s)^2 - 2 * (c'z * s * c0cP) + c0cP^2)/cPcP
-        // = r^2 * cPcP + 2rdr(s * c'z - c0cP) + dr^2((c'z*s)^2 - 2 * (c'z * s * c0cp) + (c0cP) ^2) / cPcP
+        dt = Clamp(dt, -0.5f, 0.5f);
 
-        // s^2 terms: cPcP - 2 * (c'z)^2 + (c'z)^2 - dr^2(c'z)^2
-        // (c'z)^2 all cancel
-        f32 cPcP = cP.x * cP.x + cP.y * cP.y;
-        f32 cPz2 = cP.z * cP.z;
+        const f32 threshold = 5e-5;
+        if (det > 0.f && Abs(dt) < thresold) break;
 
-        f32 qs = dr * dr / Dot(cP, cP);
-        f32 a  = cPcP - qs * cPz2;
+        // regula falsi
+        if (dt * prevDt < 0)
+        {
+            // bisection every 4th iteration
+            if ((iteration & 3) == 0)
+            {
+                t = 0.5f * (prevT + t);
+            }
+            else
+            {
+                t = (dt * prevT - prevDt * t) / (dt - prevDt);
+            }
+        }
+        // normal case
+        else
+        {
+            t += dt;
+        }
+        c0 = curve.Eval(t);
+        cd = curve.Derivative(t);
 
-        f32 cPcP = Dot(cPrime, cPrime);
-        f32 c0cP = Dot(c0, cPrime);
-
-        // s terms: -2 * c0.z * cPcP + (-2 * c'z * c0cP + 2 * c0cP * c'z) - 2 * c'z * s * c0cP - 2rdr * c'z
-        // middle two terms cancel
-        // = - 2 * c0.z * cPcP - 2 * c'z * c0cP - 2rdr * c'z + 2dr^2(c'z * s * c0cp) / cPcP
-        // divide by -2
-        f32 rdr = r * dr;
-        f32 b   = c0.z * cPcP + cPrime.z * (rdr - c0cP - qs * c0cP);
-
-        Vec3f c0xcP = Cross(c0, cP);
-        // constant terms:
-        // c0c0*cPcP - 2(c0cP)^2  + c0cP^2 - 2rdr * c0cP - r^2 * cPcP
-        // c0c0 * cPcP - (c0cP)^2 - 2rdr * c0cP - r^2 * cPcP
-
-        // c0c0 * cPcP - (c0cP)^2 = |c0 x cP|^2
-        f32 c = Dot(c0xcP, c0xcP) - 2 * rdr * c0cP - r * r * cPcP;
-
-        // NOTE: the b and c terms I calculated are different from the paper (b is understandable why, c is not)
+        iteration++;
     }
+
+    // final regula falsi
+    t = (dt * prevT - prevDt * t) / (dt - prevDt);
+    // Intersection point
+    Vec3f p = ray.at(sp);
+    // Normal (for cylinder)
+    // TODO: orient towards ray for "flat" curves, handle ribbons
+    Vec3f n = Normalize(p - c0);
 }
