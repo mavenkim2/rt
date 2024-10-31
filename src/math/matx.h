@@ -442,6 +442,10 @@ struct AffineSpace
                            0, 0, 0, v.y,
                            0, 0, 0, v.z);
     }
+    __forceinline static AffineSpace Transpose3x3(const AffineSpace &space)
+    {
+        return AffineSpace(Vec3f(c0.x, c1.x, c2.x), Vec3f(c0.y, c1.y, c2.y), Vec3f(c0.z, c1.z, c2.z));
+    }
 };
 
 __forceinline Vec3f operator*(const AffineSpace &t, const Vec3f &v)
@@ -501,6 +505,23 @@ __forceinline Bounds Transform(const AffineSpace &t, const Bounds &b)
     out.Extend(p7);
 
     return out;
+}
+
+__forceinline Vec3f TransformV(const AffineSpace &a, Vec3f &v)
+{
+    return FMA(t.c0, v[0], FMA(t.c1, v[1], t.c2 * v[2]));
+}
+__forceinline Vec3f TransformP(const AffineSpace &a, Vec3f &b) { return a * b; }
+
+// takes a normalized vector
+// TODO: maybe take a look at this https://graphics.pixar.com/library/OrthonormalB/paper.pdf
+__forceinline AffineSpace Frame(const Vec3f &n)
+{
+    Vec3f t0(0, n.z, -n.y);
+    Vec3f b0(-n.z, 0, n.x);
+    Vec3f t = Normalize(Select(Dot(t0, t0) > Dot(b0, b0), t0, b0));
+    Vec3f b = Normalize(n, t);
+    return AffineSpace(t, b, n, Vec3f(0.f));
 }
 
 } // namespace rt

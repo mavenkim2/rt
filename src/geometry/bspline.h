@@ -2,6 +2,8 @@ struct BSpline
 {
     // NOTE: the w component contains the radius
     Vec4f v0, v1, v2, v3;
+    BSpline() {}
+    BSpline(const Vec4f &v0, const Vec4f &v1, const Vec4f &v2, const Vec4f &v3) : v0(v0), v1(v1), v2(v2), v3(v3) {}
     static Vec4f Eval(f32 u)
     {
         const f32 t = u;
@@ -37,16 +39,82 @@ struct BSpline
     }
 };
 
+struct CurvePrecalculations
+{
+    f32 invLength;
+    AffineSpace space;
+    CurvePrecalculations(const Ray &ray)
+    {
+        invLength = Rsqrt(Dot(ray.d, ray.d));
+        space     = Frame(ray.d * invLength);
+        // NOTE: this makes it so frame * ray.d = (0, 0, 1)
+        space.c2 *= invLength;
+        space    = AffineSpace::Transpose3x3(space);
+        space.c3 = TransformV(space, -ray.o);
+    }
+};
+
+BSpline Transform(const AffineSpace &space, const BSpline &curve)
+{
+    return BSpline(Vec4f(TransformP(space, curve.v0.xyz), curve.v0.w),
+                   Vec4f(TransformP(space, curve.v1.xyz), curve.v1.w),
+                   Vec4f(TransformP(space, curve.v2.xyz), curve.v2.w),
+                   Vec4f(TransformP(space, curve.v3.xyz), curve.v3.w));
+}
+
+struct Curve
+{
+    BSpline *curve;
+};
+
+// https://www.embree.org/papers/2014-HPG-hair.pdf
+void IntersectCurve(const CurvePrecalculations &pre, const Ray &ray, const Curve &inCurve)
+{
+    BSpline curve = Transform(space, *inCurve.curve);
+    /* directly evaluate 8 line segments (P0, P1) */
+    Vec3lf8 p0, p1;
+    curve.Eval(p0, p1);
+    /* project ray origin (0, 0) onto 8 line segments */
+    Vec3lf8 a   = -p0;
+    Vec3lf8 b   = p1 - p0;
+    Lane8F32 d0 = FMA(a.x, b.x, a.y * b.y);
+    Lane8F32 d1 = FMA(b.x, b.x, b.y * b.y);
+    /* calculate closest points P on line segments */
+    Lane8F32 u = Clamp(d0 * Rcp(d1), 0.0f, 1.0f);
+    Vec3lf8 p  = FMA(u, b, p0);
+    /* the z-component holds hit distance */
+    Lane8F32 t = p.z * pre.invLength;
+    /* the w-component interpolates the curve radius */
+    Lane8F32 r = p.w;
+    /* if distance to nearest point P <= curve radius ... */
+    Lane8F32 r2   = r * r;
+    Lane8F32 d2   = p.x * p.x + p.y * p.y;
+    Lane8F32 mask = d2 <= r2 & ray.tNear < t & t < ray.tFar;
+    /* find closest hit along ray by horizontal reduction */
+    if (Any(mask))
+    {
+        f32 tOut = ReduceMin(t);
+        // TODO: using u, linearly interpolate between the the uMin and uMax of the closest segment
+        f32 uOut   = ? ? ;
+        Vec3f dpdu = inCurve.Derivative(uOut);
+        // if ribbon
+
+        size_t i = select_horizontal_min(mask, t);
+    }
+}
+
 // https://research.nvidia.com/sites/default/files/pubs/2018-08_Phantom-Ray-Hair-Intersector//Phantom-HPG%202018.pdf
-void PhantomCurveIntersector(const Ray &ray, BSpline &curve)
+void IntersectCurve(const Ray &ray, BSpline &curve)
 {
     // Intersect against cylinder first
 
     // Transform curve into ray space (i.e, o = (0, 0, 0), d = (0, 0, 1))
-    BSpline curve2D = Transform(raySpace, curve);
-    f32 t           = 0;
-    Vec3f c0        = curve2D.Eval(t);
-    Vec3f cd        = curve2D.Derivative(t);
+    f32 t    = 0;
+    Vec4f c0 = curve.Eval(t);
+    Vec4f cd = curve.Derivative(t);
+
+    f32 r  = c0.w;
+    f32 dr = ? ;
 
     f32 dt = 0;
     f32 prevT;
@@ -85,15 +153,18 @@ void PhantomCurveIntersector(const Ray &ray, BSpline &curve)
         f32 c = dr * dr - q11;
 
         // Solve the quadratic equation for s
-        f32 det = b * b + a * c;
+        f32 det = b * b - a * c;
         s       = (b + (det < 0 ? 0 : Sqrt(det))) / c; // ray.s for ray ^ cone
 
         prevDt = dt;
         prevT  = t;
-        dt     = cdrdn * s - crcdn;              // dt to the (ray ^ cone) from t
-        dc     = crcr - 2 * crrd * s + s * s;    // |((ray ^ cone) - c0)|^2
-        sp     = crcd / cdrd;                    // ray.s for ray ^ plane
-        dp     = crcr - 2 * crrd * sp + sp * sp; // |((ray ^ plane) - c0)|^2
+        dt     = cdrdn * s - crcdn; // dt to the (ray ^ cone) from t
+
+        // TODO: what are these values supposed to be used for???
+        // also ray direction needs to be normalized
+        // dc     = crcr - 2 * crrd * s + s * s;    // |((ray ^ cone) - c0)|^2
+        sp = crcd / cdrd; // ray.s for ray ^ plane
+        // dp     = crcr - 2 * crrd * sp + sp * sp; // |((ray ^ plane) - c0)|^2
 
         dt = Clamp(dt, -0.5f, 0.5f);
 
@@ -130,5 +201,5 @@ void PhantomCurveIntersector(const Ray &ray, BSpline &curve)
     Vec3f p = ray.at(sp);
     // Normal (for cylinder)
     // TODO: orient towards ray for "flat" curves, handle ribbons
-    Vec3f n = Normalize(p - c0);
+    Vec3f ng = Normalize(p - c0);
 }
