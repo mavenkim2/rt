@@ -605,7 +605,7 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, const Split &split, u
     const u32 chunkSize         = blockSize * numBlocksPerChunk;
 
     const u32 PARTITION_PARALLEL_THRESHOLD = 32 * 1024;
-    if (count < PARTITION_PARALLEL_THRESHOLD)
+    if (count)// < PARTITION_PARALLEL_THRESHOLD)
     {
         u32 mid = heuristic->Partition(
             data, split, start, start + count - 1, [&](u32 index) { return index; },
@@ -619,11 +619,8 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, const Split &split, u
     TempArena temp = ScratchStart(0, 0);
     u32 *outMid    = PushArrayNoZero(temp.arena, u32, numJobs);
 
-    u64 align                = temp.arena->align;
-    temp.arena->align        = 64;
     RecordAOSSplits *recordL = PushArrayNoZero(temp.arena, RecordAOSSplits, numJobs);
     RecordAOSSplits *recordR = PushArrayNoZero(temp.arena, RecordAOSSplits, numJobs);
-    temp.arena->align        = align;
 
     auto GetIndex = [&](u32 index, u32 group) {
         const u32 chunkIndex   = index >> blockShift;
@@ -674,7 +671,7 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, const Split &split, u
 
     maxIndex = Min(maxIndex, start + count - 1);
     minIndex = Max(minIndex, start);
-    Assert(maxIndex > minIndex);
+    Error(maxIndex > minIndex, "max: %u, min %u, start %u, count %u\n", maxIndex, minIndex, start, count);
     // Assert(maxIndex < start + count);
     // Assert(minIndex >= start);
     u32 out = heuristic->Partition(data, split, minIndex, maxIndex);
@@ -756,14 +753,6 @@ struct HeuristicAOSObjectBinning
                 (temp[5] - temp[2]),
             };
             Assert(All(centroids[0] >= binner->base[0]));
-            // if (!All(centroids[0] >= binner->base[0]))
-            // {
-            //     printf("centroids 0: %f %f %f %f %f %f\n", centroids[0][0], centroids[0][1], centroids[0][2],
-            //            centroids[0][4], centroids[0][5], centroids[0][6]);
-            //     printf("base 0: %f %f %f %f %f %f\n", binner->base[0][0], binner->base[0][1], binner->base[0][2],
-            //            binner->base[0][4], binner->base[0][5], binner->base[0][6]);
-            //     Assert(0);
-            // }
             Assert(All(centroids[1] >= binner->base[1]));
             Assert(All(centroids[2] >= binner->base[2]));
             Lane8U32::Store(prevBinIndices[0], binner->Bin(centroids[0], 0));
@@ -794,14 +783,6 @@ struct HeuristicAOSObjectBinning
 
             Assert(All(centroids[0] >= binner->base[0]));
             Assert(All(centroids[1] >= binner->base[1]));
-            // if (!All(centroids[2] >= binner->base[2]))
-            // {
-            //     printf("centroids 2: %f %f %f %f %f %f\n", centroids[2][0], centroids[2][1], centroids[2][2],
-            //            centroids[2][4], centroids[2][5], centroids[2][6]);
-            //     printf("base 2: %f %f %f %f %f %f\n", binner->base[2][0], binner->base[2][1], binner->base[2][2],
-            //            binner->base[2][4], binner->base[2][5], binner->base[2][6]);
-            //     Assert(0);
-            // }
             Assert(All(centroids[2] >= binner->base[2]));
             Lane8U32 indicesX = binner->Bin(centroids[0], 0);
             Lane8U32 indicesY = binner->Bin(centroids[1], 1);
@@ -1517,11 +1498,9 @@ template <i32 numObjectBins = 32, typename PrimRef = PrimRef>
 Split SAHObjectBinning(const RecordAOSSplits &record, const PrimRef *primRefs,
                        HeuristicAOSObjectBinning<numObjectBins, PrimRef> *&objectBinHeuristic, u64 &popPos)
 {
-    using OBin        = HeuristicAOSObjectBinning<numObjectBins, PrimRef>;
-    TempArena temp    = ScratchStart(0, 0);
-    popPos            = ArenaPos(temp.arena);
-    u64 align         = temp.arena->align;
-    temp.arena->align = 32;
+    using OBin     = HeuristicAOSObjectBinning<numObjectBins, PrimRef>;
+    TempArena temp = ScratchStart(0, 0);
+    popPos         = ArenaPos(temp.arena);
 
     // Stack allocate the heuristics since they store the centroid and geom bounds we'll need later
     ObjectBinner<numObjectBins> *objectBinner =
@@ -1543,7 +1522,6 @@ Split SAHObjectBinning(const RecordAOSSplits &record, const PrimRef *primRefs,
     }
     struct Split objectSplit = BinBest(objectBinHeuristic->bins, objectBinHeuristic->counts, objectBinner);
     objectSplit.type         = Split::Object;
-    temp.arena->align        = align;
     return objectSplit;
 }
 
@@ -1834,7 +1812,7 @@ struct HeuristicSpatialSplits
         Assert(outRight.count > 0);
 
         // error check
-#if 0
+#if DEBUG
         {
             switch (split.type)
             {

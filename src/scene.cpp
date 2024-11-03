@@ -1319,15 +1319,14 @@ Scene *LoadPBRT(Arena *arena, string filename)
 
     for (u32 i = 0; i < numProcessors; i++)
     {
-        state.threadArenas[i]        = ArenaAlloc();
-        state.threadArenas[i]->align = 16;
-        state.shapes[i]              = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape>(state.threadArenas[i]);
-        state.materials[i]           = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Material>(state.threadArenas[i]);
-        state.textures[i]            = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Texture>(state.threadArenas[i]);
-        state.lights[i]              = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light>(state.threadArenas[i]);
-        state.instanceTypes[i]       = ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance>(state.threadArenas[i]);
-        state.instances[i]           = ChunkedLinkedList<SceneInstance, 1024, MemoryType_Instance>(state.threadArenas[i]);
-        state.transforms[i]          = ChunkedLinkedList<const AffineSpace *, 16384, MemoryType_Transform>(state.threadArenas[i]);
+        state.threadArenas[i]  = ArenaAlloc(16);
+        state.shapes[i]        = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape>(state.threadArenas[i]);
+        state.materials[i]     = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Material>(state.threadArenas[i]);
+        state.textures[i]      = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Texture>(state.threadArenas[i]);
+        state.lights[i]        = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light>(state.threadArenas[i]);
+        state.instanceTypes[i] = ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance>(state.threadArenas[i]);
+        state.instances[i]     = ChunkedLinkedList<SceneInstance, 1024, MemoryType_Instance>(state.threadArenas[i]);
+        state.transforms[i]    = ChunkedLinkedList<const AffineSpace *, 16384, MemoryType_Transform>(state.threadArenas[i]);
     }
     state.mainArena      = arena;
     state.scene          = scene;
@@ -2838,10 +2837,7 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
             RecordAOSSplits record(neg_inf);
 
             // Generate PrimRefs
-            u64 align         = temp.arena->align;
-            temp.arena->align = 32;
-            PrimRef *refs     = PushArrayNoZero(temp.arena, PrimRef, extEnd);
-            temp.arena->align = align;
+            PrimRef *refs = PushArrayNoZero(temp.arena, PrimRef, extEnd);
 
             ParallelReduce<RecordAOSSplits>(
                 &record, 0, entry->quadMeshCount, PARALLEL_THRESHOLD,
@@ -2876,10 +2872,7 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
 
             if (entry->quadMeshCount > 1)
             {
-                u64 align         = temp.arena->align;
-                temp.arena->align = 32;
-                PrimRef *refs     = PushArrayNoZero(temp.arena, PrimRef, extEnd);
-                temp.arena->align = align;
+                PrimRef *refs = PushArrayNoZero(temp.arena, PrimRef, extEnd);
                 GeneratePrimRefs(meshes, refs, 0, numFaces, 0, entry->quadMeshCount, record);
                 group->SetBounds(record.geomBounds);
                 record.SetRange(0, numFaces, extEnd);

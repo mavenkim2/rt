@@ -39,7 +39,7 @@ BRef *GenerateBuildRefs(Scene2 *scenes, u32 sceneIndex, u64 numScenes, Arena *ar
 {
     Scene2 *scene    = &scenes[sceneIndex];
     u32 numInstances = scene->numInstances;
-    u32 extEnd       = 3 * numInstances;
+    u32 extEnd       = 4 * numInstances;
     BRef *b          = PushArrayNoZero(arena, BRef, extEnd);
 
     if (numInstances > PARALLEL_THRESHOLD)
@@ -67,7 +67,7 @@ template <typename Heuristic, typename GetNode>
 void OpenBraid(const Scene2 *scene, RecordAOSSplits &record, BRef *refs, u32 start, u32 count, u32 offset, const u32 offsetMax,
                Heuristic &heuristic, GetNode &getNode)
 {
-    TIMED_FUNCTION(miscF);
+    // TIMED_FUNCTION(miscF);
     using NodeType       = typename GetNode::NodeType;
     const u32 QUEUE_SIZE = 8;
 
@@ -113,11 +113,6 @@ void OpenBraid(const Scene2 *scene, RecordAOSSplits &record, BRef *refs, u32 sta
             centBounds.Extend(bounds0.minP + bounds0.maxP);
 
             Assert((Movemask(bounds0.maxP >= bounds0.minP) & 0x7) == 0x7);
-            // Bounds baseBounds(Lane4F32(-ref.min[0], -ref.min[1], -ref.min[2], 0),
-            //         Lane4F32(ref.max[0], ref.max[1], ref.max[2], 0));
-            // Assert(((Movemask(bounds0.minP >= baseBounds.minP) & 0x7) == 0x7) &&
-            //        ((Movemask(bounds0.maxP <= baseBounds.maxP) & 0x7) == 0x7));
-
             u32 numC = node->GetNumChildren();
             Assert(numC > 0 && numC <= DefaultN);
 
@@ -161,6 +156,7 @@ struct GetQuantizedNode
     }
 };
 
+// TODO: the number of nodes that this generates can vary very very wildly (like ~6 mil), find out why
 template <typename GetNode, i32 numObjectBins = 32>
 struct HeuristicPartialRebraid
 {
@@ -180,7 +176,7 @@ struct HeuristicPartialRebraid
         f32 maxExtent = neg_inf;
         for (u32 d = 0; d < 3; d++)
         {
-            f32 extent = record.geomMax[d] - record.geomMin[d];
+            f32 extent = record.geomMax[d] + record.geomMin[d];
             if (extent > maxExtent)
             {
                 maxExtent = extent;
@@ -189,7 +185,7 @@ struct HeuristicPartialRebraid
         }
         f32 threshold  = REBRAID_THRESHOLD * maxExtent;
         auto heuristic = [&](const BRef &ref) -> bool {
-            return !ref.nodePtr.IsLeaf() && ref.max[choiceDim] - ref.min[choiceDim] > threshold;
+            return !ref.nodePtr.IsLeaf() && ref.max[choiceDim] + ref.min[choiceDim] > threshold;
         };
 
         u64 popPos = 0;
@@ -218,9 +214,7 @@ struct HeuristicPartialRebraid
             u32 geomID = scene->instances[buildRefs[record.start].instanceID].geomID.GetIndex();
             if (record.count > PARALLEL_THRESHOLD)
             {
-                TempArena temp    = ScratchStart(0, 0);
-                u64 align         = temp.arena->align;
-                temp.arena->align = 32;
+                TempArena temp = ScratchStart(0, 0);
                 struct Props
                 {
                     u32 count     = 0;
@@ -239,7 +233,8 @@ struct HeuristicPartialRebraid
                             commonGeomID &= objectID == geomID;
                             if (heuristic(ref))
                             {
-                                openCount += getNode(ref.nodePtr)->GetNumChildren() - 1;
+                                u32 numToAdd = getNode(ref.nodePtr)->GetNumChildren() - 1;
+                                openCount += numToAdd;
                             }
                         }
                         props.sameType &= commonGeomID;
@@ -247,11 +242,11 @@ struct HeuristicPartialRebraid
                     });
                 Reduce(prop, output,
                        [&](Props &l, const Props &r) { l.sameType &= r.sameType; l.count += r.count; });
-                if (prop.sameType || prop.count > record.ExtSize())
+                if (prop.sameType)
                 {
                     record.extEnd = record.start + record.count;
                 }
-                else
+                else if (prop.count <= record.ExtSize())
                 {
                     u32 offset   = record.End();
                     Props *props = (Props *)output.out;
@@ -289,11 +284,11 @@ struct HeuristicPartialRebraid
                     commonGeomID &= objectID == geomID;
                     if (heuristic(ref)) count += getNode(ref.nodePtr)->GetNumChildren() - 1;
                 }
-                if (commonGeomID || count > record.ExtSize())
+                if (commonGeomID)
                 {
                     record.extEnd = record.start + record.count;
                 }
-                else
+                else if (count <= record.ExtSize())
                 {
                     RecordAOSSplits openRecord;
                     OpenBraid(scene, openRecord, buildRefs, record.start, record.count, record.End(), record.End() + count,

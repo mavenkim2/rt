@@ -1,6 +1,7 @@
 namespace rt
 {
 thread_local ThreadContext *tLocalContext;
+static const u64 threadArenaAlign = 32;
 
 void InitThreadContext(Arena *arena, const char *name, b32 isMainThread)
 {
@@ -17,7 +18,7 @@ void InitThreadContext(ThreadContext *t, b32 isMainThread)
 {
     for (u32 i = 0; i < ArrayLength(t->arenas); i++)
     {
-        t->arenas[i] = ArenaAlloc();
+        t->arenas[i] = ArenaAlloc(threadArenaAlign);
     }
     t->isMainThread = isMainThread;
     tLocalContext   = t;
