@@ -3,7 +3,7 @@
 namespace rt
 {
 
-void GenerateBuildRefs(BRef *refs, Scene2 *scene, Scene2 *scenes, u32 start, u32 count, RecordAOSSplits &record)
+void GenerateBuildRefs(BRef *refs, Scene2 *scene, Scene2 *scenes, u64 numScenes, u32 start, u32 count, RecordAOSSplits &record)
 {
     Bounds geom;
     Bounds cent;
@@ -13,28 +13,31 @@ void GenerateBuildRefs(BRef *refs, Scene2 *scene, Scene2 *scenes, u32 start, u32
         Instance &instance     = instances[i];
         AffineSpace &transform = scene->affineTransforms[instance.transformIndex];
         Assert(instance.geomID.GetType() == GT_InstanceType);
-        u32 index       = instance.geomID.GetIndex() + 1;
+        u32 index = instance.geomID.GetIndex() + 1;
+        Assert(index < numScenes);
         Scene2 *inScene = &scenes[index];
         BRef *ref       = &refs[i];
 
         Bounds bounds = Transform(transform, inScene->GetBounds());
+        Assert((Movemask(bounds.maxP >= bounds.minP) & 0x7) == 0x7);
 
-        Lane4F32::StoreU(ref->min, -bounds.minP);
-        Lane4F32::StoreU(ref->max, bounds.maxP);
+        ref->StoreBounds(bounds);
         geom.Extend(bounds);
         cent.Extend(bounds.minP + bounds.maxP);
 
         ref->instanceID = i;
         ref->nodePtr    = inScene->nodePtr;
         ref->numPrims   = inScene->numPrims;
+
+        Error(ref->nodePtr.data, "Invalid scene: %u\n", index);
     }
     record.geomBounds = Lane8F32(-geom.minP, geom.maxP);
     record.centBounds = Lane8F32(-cent.minP, cent.maxP);
 }
 
-BRef *GenerateBuildRefs(Scene2 *scenes, u32 sceneNum, Arena *arena, RecordAOSSplits &record)
+BRef *GenerateBuildRefs(Scene2 *scenes, u32 sceneIndex, u64 numScenes, Arena *arena, RecordAOSSplits &record)
 {
-    Scene2 *scene    = &scenes[sceneNum];
+    Scene2 *scene    = &scenes[sceneIndex];
     u32 numInstances = scene->numInstances;
     u32 extEnd       = 3 * numInstances;
     BRef *b          = PushArrayNoZero(arena, BRef, extEnd);
@@ -44,7 +47,7 @@ BRef *GenerateBuildRefs(Scene2 *scenes, u32 sceneNum, Arena *arena, RecordAOSSpl
         ParallelReduce<RecordAOSSplits>(
             &record, 0, numInstances, PARALLEL_THRESHOLD,
             [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
-                GenerateBuildRefs(b, scene, scenes, start, count, record);
+                GenerateBuildRefs(b, scene, scenes, numScenes, start, count, record);
             },
             [&](RecordAOSSplits &l, const RecordAOSSplits &r) {
                 l.Merge(r);
@@ -52,7 +55,7 @@ BRef *GenerateBuildRefs(Scene2 *scenes, u32 sceneNum, Arena *arena, RecordAOSSpl
     }
     else
     {
-        GenerateBuildRefs(b, scene, scenes, 0, numInstances, record);
+        GenerateBuildRefs(b, scene, scenes, numScenes, 0, numInstances, record);
     }
     record.SetRange(0, numInstances, extEnd);
     return b;
@@ -61,13 +64,15 @@ BRef *GenerateBuildRefs(Scene2 *scenes, u32 sceneNum, Arena *arena, RecordAOSSpl
 static const f32 REBRAID_THRESHOLD = .1f;
 
 template <typename Heuristic, typename GetNode>
-void OpenBraid(const Scene2 *scene, const RecordAOSSplits &record, BRef *refs, u32 start, u32 count, u32 offset, const u32 offsetMax,
+void OpenBraid(const Scene2 *scene, RecordAOSSplits &record, BRef *refs, u32 start, u32 count, u32 offset, const u32 offsetMax,
                Heuristic &heuristic, GetNode &getNode)
 {
     TIMED_FUNCTION(miscF);
     using NodeType       = typename GetNode::NodeType;
     const u32 QUEUE_SIZE = 8;
 
+    Bounds geomBounds;
+    Bounds centBounds;
     for (u32 i = start; i < start + count; i++)
     {
         BRef &ref = refs[i];
@@ -103,26 +108,34 @@ void OpenBraid(const Scene2 *scene, const RecordAOSSplits &record, BRef *refs, u
             Instance &instance     = scene->instances[ref.instanceID];
             AffineSpace &transform = scene->affineTransforms[instance.transformIndex];
             Bounds bounds0         = Transform(transform, Bounds(aosMin[0], aosMax[0]));
-            Lane4F32::StoreU(ref.min, -bounds0.minP);
-            Lane4F32::StoreU(ref.max, bounds0.maxP);
+
+            geomBounds.Extend(bounds0);
+            centBounds.Extend(bounds0.minP + bounds0.maxP);
+
+            Assert((Movemask(bounds0.maxP >= bounds0.minP) & 0x7) == 0x7);
+            // Bounds baseBounds(Lane4F32(-ref.min[0], -ref.min[1], -ref.min[2], 0),
+            //         Lane4F32(ref.max[0], ref.max[1], ref.max[2], 0));
+            // Assert(((Movemask(bounds0.minP >= baseBounds.minP) & 0x7) == 0x7) &&
+            //        ((Movemask(bounds0.maxP <= baseBounds.maxP) & 0x7) == 0x7));
 
             u32 numC = node->GetNumChildren();
             Assert(numC > 0 && numC <= DefaultN);
-            u32 numPrims = Max(ref.numPrims / numC, 1u);
-            ref.numPrims = numPrims;
 
-            BVHNodeType parent = ref.nodePtr;
-            ref.nodePtr        = node->Child(0);
+            ref.SafeStoreBounds(bounds0);
+            ref.numPrims = Max(ref.numPrims / numC, 1u);
+            ref.nodePtr  = node->Child(0);
             Assert(ref.nodePtr.data != 0);
 
             for (u32 b = 1; b < numC; b++)
             {
                 Assert(offset < offsetMax);
                 Bounds bounds = Transform(transform, Bounds(aosMin[b], aosMax[b]));
-                Lane4F32::StoreU(refs[offset].min, -bounds.minP);
-                Lane4F32::StoreU(refs[offset].max, bounds.maxP);
+                Assert((Movemask(bounds.maxP >= bounds.minP) & 0x7) == 0x7);
+                geomBounds.Extend(bounds);
+                centBounds.Extend(bounds.minP + bounds.maxP);
+                refs[offset].StoreBounds(bounds);
                 refs[offset].instanceID = ref.instanceID;
-                refs[offset].numPrims   = numPrims;
+                refs[offset].numPrims   = ref.numPrims;
                 refs[offset].nodePtr    = node->Child(b);
 
                 Assert(refs[offset].nodePtr.data != 0);
@@ -131,6 +144,8 @@ void OpenBraid(const Scene2 *scene, const RecordAOSSplits &record, BRef *refs, u
             }
         }
     }
+    record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+    record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
     Assert(offset == offsetMax);
 }
 
@@ -138,7 +153,12 @@ struct GetQuantizedNode
 {
     using NodeType = QNode;
 
-    __forceinline NodeType *operator()(const BVHNodeType ptr) { return ptr.GetQuantizedNode(); }
+    __forceinline NodeType *operator()(const BVHNodeType ptr)
+    {
+        Assert(ptr.data);
+        Assert(ptr.IsQuantizedNode());
+        return ptr.GetQuantizedNode();
+    }
 };
 
 template <typename GetNode, i32 numObjectBins = 32>
@@ -198,7 +218,9 @@ struct HeuristicPartialRebraid
             u32 geomID = scene->instances[buildRefs[record.start].instanceID].geomID.GetIndex();
             if (record.count > PARALLEL_THRESHOLD)
             {
-                TempArena temp = ScratchStart(0, 0);
+                TempArena temp    = ScratchStart(0, 0);
+                u64 align         = temp.arena->align;
+                temp.arena->align = 32;
                 struct Props
                 {
                     u32 count     = 0;
@@ -215,7 +237,10 @@ struct HeuristicPartialRebraid
                             const BRef &ref = buildRefs[i];
                             u32 objectID    = scene->instances[ref.instanceID].geomID.GetIndex();
                             commonGeomID &= objectID == geomID;
-                            if (heuristic(ref)) openCount += getNode(ref.nodePtr)->GetNumChildren() - 1;
+                            if (heuristic(ref))
+                            {
+                                openCount += getNode(ref.nodePtr)->GetNumChildren() - 1;
+                            }
                         }
                         props.sameType &= commonGeomID;
                         props.count = openCount;
@@ -237,13 +262,18 @@ struct HeuristicPartialRebraid
                         Assert(offset < record.ExtEnd());
                         offset += splits;
                     }
-                    ParallelFor(
-                        record.start, record.count, PARALLEL_THRESHOLD,
-                        [&](u32 jobID, u32 start, u32 count) {
+                    RecordAOSSplits openRecord;
+                    ParallelReduce(
+                        &openRecord, record.start, record.count, PARALLEL_THRESHOLD,
+                        [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
                             Props &prop = props[jobID];
                             u32 max     = jobID == output.num - 1 ? offset : props[jobID + 1].count;
                             OpenBraid(scene, record, buildRefs, start, count, prop.count, max, heuristic, getNode);
+                        },
+                        [&](RecordAOSSplits &l, const RecordAOSSplits &r) {
+                            l.Merge(r);
                         });
+                    record.SafeMerge(openRecord);
                     record.count = offset - record.start;
                 }
                 ScratchEnd(temp);
@@ -265,8 +295,10 @@ struct HeuristicPartialRebraid
                 }
                 else
                 {
-                    OpenBraid(scene, record, buildRefs, record.start, record.count, record.End(), record.End() + count,
+                    RecordAOSSplits openRecord;
+                    OpenBraid(scene, openRecord, buildRefs, record.start, record.count, record.End(), record.End() + count,
                               heuristic, getNode);
+                    record.SafeMerge(openRecord);
                     record.count = record.End() + count - record.start;
                 }
             }

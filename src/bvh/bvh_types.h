@@ -220,6 +220,16 @@ struct alignas(CACHE_LINE_SIZE) RecordAOSSplits
         geomBounds = Max(geomBounds, other.geomBounds);
         centBounds = Max(centBounds, other.centBounds);
     }
+    void SafeMerge(const RecordAOSSplits &other)
+    {
+        u32 s = start;
+        u32 c = count;
+        u32 e = extEnd;
+        Merge(other);
+        start  = s;
+        count  = c;
+        extEnd = e;
+    }
 };
 
 //////////////////////////////
@@ -326,6 +336,20 @@ struct BuildRef
     {
         return Lane8F32::LoadU(min);
     }
+    __forceinline void StoreBounds(const Bounds &b)
+    {
+        Lane4F32::StoreU(min, -b.minP);
+        Lane4F32::StoreU(max, b.maxP);
+    }
+    __forceinline void SafeStoreBounds(const Bounds &b)
+    {
+        u32 i = instanceID;
+        u32 n = numPrims;
+        Lane4F32::StoreU(min, -b.minP);
+        Lane4F32::StoreU(max, b.maxP);
+        instanceID = i;
+        numPrims   = n;
+    }
 };
 
 typedef BuildRef<4> BuildRef4;
@@ -411,12 +435,12 @@ struct QuantizedNode
         //     LaneF32<N>::Store(outMaxX, minX + LaneF32<N>(lExpandedMaxX) * scaleX);
         //     LaneF32<N>::Store(outMaxY, minY + LaneF32<N>(lExpandedMaxY) * scaleY);
         //     LaneF32<N>::Store(outMaxZ, minZ + LaneF32<N>(lExpandedMaxZ) * scaleZ);
-        outMin[0] = minX + LaneF32<N>(lExpandedMinX) * scaleX;
-        outMin[1] = minY + LaneF32<N>(lExpandedMinY) * scaleY;
-        outMin[2] = minZ + LaneF32<N>(lExpandedMinZ) * scaleZ;
-        outMax[0] = minX + LaneF32<N>(lExpandedMaxX) * scaleX;
-        outMax[1] = minY + LaneF32<N>(lExpandedMaxY) * scaleY;
-        outMax[2] = minZ + LaneF32<N>(lExpandedMaxZ) * scaleZ;
+        outMin[0] = FMA(LaneF32<N>(lExpandedMinX), scaleX, minX);
+        outMin[1] = FMA(LaneF32<N>(lExpandedMinY), scaleY, minY);
+        outMin[2] = FMA(LaneF32<N>(lExpandedMinZ), scaleZ, minZ);
+        outMax[0] = FMA(LaneF32<N>(lExpandedMaxX), scaleX, minX);
+        outMax[1] = FMA(LaneF32<N>(lExpandedMaxY), scaleY, minY);
+        outMax[2] = FMA(LaneF32<N>(lExpandedMaxZ), scaleZ, minZ);
     }
     // }
     QuantizedNode<N> GetBaseChildPtr() const

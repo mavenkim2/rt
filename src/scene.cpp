@@ -2561,14 +2561,18 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
         numTransforms += state->transforms[i].totalCount;
     }
 
-    size_t instFileSize = sizeof(Instance) * numInstances +
-                          sizeof(AffineSpace) * numTransforms + sizeof(numInstances);
-    string filename     = PushStr8F(temp.arena, "%Sinstances.inst", directory);
-    const u32 flushSize = megabytes(64);
-    u8 *instanceFilePtr = OS_MapFileWrite(filename, instFileSize);
+    size_t instFileSize      = sizeof(Instance) * numInstances + sizeof(numInstances);
+    size_t transformFileSize = sizeof(AffineSpace) * numTransforms + sizeof(u32);
+
+    string instFilename      = PushStr8F(temp.arena, "%Sinstances.data", directory);
+    string transformFilename = PushStr8F(temp.arena, "%Stransforms.data", directory);
+
+    const u32 flushSize  = megabytes(64);
+    u8 *instanceFilePtr  = OS_MapFileWrite(instFilename, instFileSize);
+    u8 *transformFilePtr = OS_MapFileWrite(transformFilename, transformFileSize);
 
     Instance *instances     = (Instance *)(instanceFilePtr + sizeof(numInstances));
-    AffineSpace *transforms = (AffineSpace *)(instances + numInstances);
+    AffineSpace *transforms = (AffineSpace *)(transformFilePtr);
 
     Instance *instanceFlushBase     = instances;
     AffineSpace *transformFlushBase = transforms;
@@ -2626,15 +2630,25 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                     OS_FlushMappedFile(instanceFlushBase, size);
                     instanceFlushBase = outInstance;
                 }
+                size = u64((u8 *)(transforms + transformOffset) - (u8 *)transformFlushBase);
+                if (size >= flushSize)
+                {
+                    OS_FlushMappedFile(transformFlushBase, size);
+                    transformFlushBase = transforms + transformOffset;
+                }
             }
         }
     }
 
     // NOTE: padded to support unaligned loads
     *(u64 *)instanceFilePtr = instanceOffset;
-    u64 finalSize           = u64((u8 *)(transforms + transformOffset) + sizeof(u32) - instanceFilePtr);
+    u64 finalSize           = u64((u8 *)(instances + instanceOffset) - instanceFilePtr);
     OS_UnmapFile(instanceFilePtr);
-    OS_ResizeFile(filename, finalSize);
+    OS_ResizeFile(instFilename, finalSize);
+
+    finalSize = u64((u8 *)(transforms + transformOffset) + sizeof(u32) - transformFilePtr);
+    OS_UnmapFile(transformFilePtr);
+    OS_ResizeFile(transformFilename, finalSize);
 #endif
     ScratchEnd(temp);
 }
@@ -2761,7 +2775,7 @@ u32 FixQuadMeshPointers(Arena *arena, QuadMesh *meshes, const LookupEntry *entri
     return vertCount;
 }
 
-Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFile)
+Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFile, string transformFile, u64 &numScenes)
 {
     TempArena temp = ScratchStart(0, 0);
     Arena *arena   = arenas[GetThreadIndex()];
@@ -2791,7 +2805,7 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
         LoadFile(arena, entries, jobID, meshDirectory, ptrs, mutexes);
         QuadMesh *meshes   = (QuadMesh *)(ptrs[jobID].ptr);
         LookupEntry *entry = &entries[jobID];
-        Scene2 *group      = &out[jobID];
+        Scene2 *group      = &out[jobID + 1];
         group->meshes      = meshes;
         group->numMeshes   = entry->quadMeshCount;
         Assert(group->numMeshes > 0);
@@ -2898,19 +2912,20 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
     // printf("blas build time: %fms\n", OS_GetMilliseconds(counter));
 
     scheduler.Schedule(&jobCounter, [&](u32 jobID) {
-        string instanceFileData = OS_ReadFile(arena, instanceFile);
+        string instanceFileData  = OS_ReadFile(arena, instanceFile);
+        string transformFileData = OS_ReadFile(arena, transformFile);
         Tokenizer instTokenzier(instanceFileData);
         u64 numInstances;
         GetPointerValue(&instTokenzier, &numInstances);
-        Scene2 *scene       = &out[0];
-        scene->instances    = (Instance *)instTokenzier.cursor;
-        scene->numInstances = u32(numInstances);
-        Advance(&instTokenzier, sizeof(Instance) * numInstances);
-        scene->affineTransforms = (AffineSpace *)instTokenzier.cursor;
+        Scene2 *scene           = &out[0];
+        scene->instances        = (Instance *)instTokenzier.cursor;
+        scene->numInstances     = u32(numInstances);
+        scene->affineTransforms = (AffineSpace *)transformFileData.str;
     });
     scheduler.Wait(&jobCounter);
 
     ScratchEnd(temp);
+    numScenes = numEntries + 1;
     return out;
 }
 

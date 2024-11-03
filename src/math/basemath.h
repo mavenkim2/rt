@@ -95,6 +95,12 @@ T Max(const T &a, const T &b)
     return a > b ? a : b;
 }
 
+template <typename T>
+T Select(bool mask, const T &a, const T &b)
+{
+    return mask ? a : b;
+}
+
 inline int Log2Int(u64 v)
 {
 #if _WIN32

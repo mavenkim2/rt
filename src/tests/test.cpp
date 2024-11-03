@@ -194,16 +194,18 @@ void PartialRebraidBuilderTest(Arena *arena)
     }
 
     string meshDirectory = "data/island/pbrt-v4/meshes/";
-    string instanceFile  = "data/island/pbrt-v4/instances.inst";
+    string instanceFile  = "data/island/pbrt-v4/instances.data";
+    string transformFile = "data/island/pbrt-v4/transforms.data";
     PerformanceCounter counter;
-    counter        = OS_StartCounter();
-    Scene2 *scenes = InitializeScene(arenas, meshDirectory, instanceFile);
+    counter = OS_StartCounter();
+    u64 numScenes;
+    Scene2 *scenes = InitializeScene(arenas, meshDirectory, instanceFile, transformFile, numScenes);
     printf("scene initialization + blas build time: %fms\n", OS_GetMilliseconds(counter));
     Print("scene initialization + blas build time: %fms\n", OS_GetMilliseconds(counter));
 
     RecordAOSSplits record;
     counter         = OS_StartCounter();
-    BRef *buildRefs = GenerateBuildRefs(scenes, 0, temp.arena, record);
+    BRef *buildRefs = GenerateBuildRefs(scenes, 0, numScenes, temp.arena, record);
     printf("time to generate build refs: %fms\n", OS_GetMilliseconds(counter));
 
     BuildSettings settings;

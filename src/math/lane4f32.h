@@ -542,6 +542,11 @@ __forceinline void Transpose4x3(const Lane4F32 &a, const Lane4F32 &b, const Lane
     out3 = UnpackLo(acZ, bdZ);
 }
 
+__forceinline void Transpose4x4(const Lane4F32 &a, const Lane4F32 &b, const Lane4F32 &c, const Lane4F32 &d,
+                                Lane4F32 &out1, Lane4F32 &out2, Lane4F32 &out3, Lane4F32 &out4)
+{
+}
+
 __forceinline void Transpose3x4(const Lane4F32 &a, const Lane4F32 &b, const Lane4F32 &c,
                                 Lane4F32 &out0, Lane4F32 &out1, Lane4F32 &out2, Lane4F32 &out3)
 {

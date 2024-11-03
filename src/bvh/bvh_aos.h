@@ -756,6 +756,14 @@ struct HeuristicAOSObjectBinning
                 (temp[5] - temp[2]),
             };
             Assert(All(centroids[0] >= binner->base[0]));
+            // if (!All(centroids[0] >= binner->base[0]))
+            // {
+            //     printf("centroids 0: %f %f %f %f %f %f\n", centroids[0][0], centroids[0][1], centroids[0][2],
+            //            centroids[0][4], centroids[0][5], centroids[0][6]);
+            //     printf("base 0: %f %f %f %f %f %f\n", binner->base[0][0], binner->base[0][1], binner->base[0][2],
+            //            binner->base[0][4], binner->base[0][5], binner->base[0][6]);
+            //     Assert(0);
+            // }
             Assert(All(centroids[1] >= binner->base[1]));
             Assert(All(centroids[2] >= binner->base[2]));
             Lane8U32::Store(prevBinIndices[0], binner->Bin(centroids[0], 0));
@@ -786,6 +794,14 @@ struct HeuristicAOSObjectBinning
 
             Assert(All(centroids[0] >= binner->base[0]));
             Assert(All(centroids[1] >= binner->base[1]));
+            // if (!All(centroids[2] >= binner->base[2]))
+            // {
+            //     printf("centroids 2: %f %f %f %f %f %f\n", centroids[2][0], centroids[2][1], centroids[2][2],
+            //            centroids[2][4], centroids[2][5], centroids[2][6]);
+            //     printf("base 2: %f %f %f %f %f %f\n", binner->base[2][0], binner->base[2][1], binner->base[2][2],
+            //            binner->base[2][4], binner->base[2][5], binner->base[2][6]);
+            //     Assert(0);
+            // }
             Assert(All(centroids[2] >= binner->base[2]));
             Lane8U32 indicesX = binner->Bin(centroids[0], 0);
             Lane8U32 indicesY = binner->Bin(centroids[1], 1);
@@ -1818,7 +1834,7 @@ struct HeuristicSpatialSplits
         Assert(outRight.count > 0);
 
         // error check
-#if DEBUG
+#if 0
         {
             switch (split.type)
             {

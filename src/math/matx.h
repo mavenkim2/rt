@@ -444,7 +444,10 @@ struct AffineSpace
     }
     __forceinline static AffineSpace Transpose3x3(const AffineSpace &space)
     {
-        return AffineSpace(Vec3f(c0.x, c1.x, c2.x), Vec3f(c0.y, c1.y, c2.y), Vec3f(c0.z, c1.z, c2.z));
+        return AffineSpace(Vec3f(space.c0.x, space.c1.x, space.c2.x),
+                           Vec3f(space.c0.y, space.c1.y, space.c2.y),
+                           Vec3f(space.c0.z, space.c1.z, space.c2.z),
+                           0.f);
     }
 };
 
@@ -507,9 +510,9 @@ __forceinline Bounds Transform(const AffineSpace &t, const Bounds &b)
     return out;
 }
 
-__forceinline Vec3f TransformV(const AffineSpace &a, Vec3f &v)
+__forceinline Vec3f TransformV(const AffineSpace &t, Vec3f &v)
 {
-    return FMA(t.c0, v[0], FMA(t.c1, v[1], t.c2 * v[2]));
+    return FMA(t.c0, Vec3f(v[0]), FMA(t.c1, Vec3f(v[1]), t.c2 * Vec3f(v[2])));
 }
 __forceinline Vec3f TransformP(const AffineSpace &a, Vec3f &b) { return a * b; }
 
@@ -520,7 +523,7 @@ __forceinline AffineSpace Frame(const Vec3f &n)
     Vec3f t0(0, n.z, -n.y);
     Vec3f b0(-n.z, 0, n.x);
     Vec3f t = Normalize(Select(Dot(t0, t0) > Dot(b0, b0), t0, b0));
-    Vec3f b = Normalize(n, t);
+    Vec3f b = Cross(n, t);
     return AffineSpace(t, b, n, Vec3f(0.f));
 }
 

@@ -223,7 +223,7 @@ static BSDFMethods bsdfMethods[BSDFTaggedPointer::MaxTag()] = {};
 struct BSDF : BSDFTaggedPointer
 {
     BSDF() = default;
-    Frame frame;
+    struct Frame frame;
 
     BSDF(Vec3f ns, Vec3f dpdus) : frame(Frame::FromXZ(Normalize(dpdus), ns)) {}
 

@@ -52,10 +52,10 @@ struct CreateQuantizedNode
                 Lane8F32::Load(&records[3].geomBounds),
             };
             Lane4F32 mins[4] = {
-                FlipSign(Extract4<0>(geomBounds[0])),
-                FlipSign(Extract4<0>(geomBounds[1])),
-                FlipSign(Extract4<0>(geomBounds[2])),
-                FlipSign(Extract4<0>(geomBounds[3])),
+                Extract4<0>(geomBounds[0]),
+                Extract4<0>(geomBounds[1]),
+                Extract4<0>(geomBounds[2]),
+                Extract4<0>(geomBounds[3]),
             };
             Lane4F32 maxs[4] = {
                 Extract4<1>(geomBounds[0]),
@@ -63,25 +63,8 @@ struct CreateQuantizedNode
                 Extract4<1>(geomBounds[2]),
                 Extract4<1>(geomBounds[3]),
             };
-            LaneF32<N> min02xy = UnpackLo(mins[0], mins[2]);
-            LaneF32<N> min13xy = UnpackLo(mins[1], mins[3]);
-
-            LaneF32<N> min02z_ = UnpackHi(mins[0], mins[2]);
-            LaneF32<N> min13z_ = UnpackHi(mins[1], mins[3]);
-
-            LaneF32<N> max02xy = UnpackLo(maxs[0], maxs[2]);
-            LaneF32<N> max13xy = UnpackLo(maxs[1], maxs[3]);
-
-            LaneF32<N> max02z_ = UnpackHi(maxs[0], maxs[2]);
-            LaneF32<N> max13z_ = UnpackHi(maxs[1], maxs[3]);
-
-            min.x = UnpackLo(min02xy, min13xy);
-            min.y = UnpackHi(min02xy, min13xy);
-            min.z = UnpackLo(min02z_, min13z_);
-
-            max.x = UnpackLo(max02xy, max13xy);
-            max.y = UnpackHi(max02xy, max13xy);
-            max.z = UnpackLo(max02z_, max13z_);
+            Transpose4x3(mins[0], mins[1], mins[2], mins[3], min.x, min.y, min.z);
+            Transpose4x3(maxs[0], maxs[1], maxs[2], maxs[3], max.x, max.y, max.z);
         }
         else if constexpr (N == 8)
         {
@@ -98,10 +81,10 @@ struct CreateQuantizedNode
             Transpose8x6(geomBounds[0], geomBounds[1], geomBounds[2], geomBounds[3],
                          geomBounds[4], geomBounds[5], geomBounds[6], geomBounds[7],
                          min.x, min.y, min.z, max.x, max.y, max.z);
-            min.x = FlipSign(min.x);
-            min.y = FlipSign(min.y);
-            min.z = FlipSign(min.z);
         }
+        min.x = FlipSign(min.x);
+        min.y = FlipSign(min.y);
+        min.z = FlipSign(min.z);
 
         Vec3lf<N> nodeMin;
         nodeMin.x = Shuffle<0>(LaneF32<N>(boundsMinP));
