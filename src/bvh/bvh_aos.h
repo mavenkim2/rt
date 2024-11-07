@@ -4,7 +4,6 @@
 #include <utility>
 
 // TODO:
-// - partial rebraiding <-- currently working
 // - stream (Fuetterling 2015, frusta)/packet traversal
 // - ray sorting/binning(hyperion, or individually in each thread).
 // - curves
