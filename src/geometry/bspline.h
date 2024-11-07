@@ -1,40 +1,71 @@
+#ifndef BSPLINE_H
+#define BSPLINE_H
+namespace rt
+{
+namespace curve
+{
+
+static f32 splitTable[8 + 1];
+
+void InitTables()
+{
+    u32 length = 8;
+    for (u32 i = 0; i <= length; i++)
+    {
+        splitTable[i] = (f32)i / length;
+    }
+}
+
+void GetSegments(Lane8F32 &a, Lane8F32 &b)
+{
+    a = Lane8F32::LoadU(splitTable);
+    b = Lane8F32::LoadU(splitTable + 1);
+}
+
 struct BSpline
 {
     // NOTE: the w component contains the radius
     Vec4f v0, v1, v2, v3;
     BSpline() {}
     BSpline(const Vec4f &v0, const Vec4f &v1, const Vec4f &v2, const Vec4f &v3) : v0(v0), v1(v1), v2(v2), v3(v3) {}
-    static Vec4f Eval(f32 u)
-    {
-        const f32 t = u;
-        const f32 s = 1.f - u;
 
-        const f32 t0 = t * t * t;
-        const f32 t1 = (4.0f * (s * s * s) + (t * t * t)) + (12.0f * ((s * t) * s) + 6.0f * ((t * s) * t));
-        const f32 t2 = (4.0f * (t * t * t) + (s * s * s)) + (12.0f * ((t * s) * t) + 6.0f * ((s * t) * s));
-        const f32 t3 = s * s * s;
-        return (1.0f / 6.f) * Vec4f(t0, t1, t2, t3);
-    }
-    static Vec4f Derivative(f32 u)
+    template <typename T>
+    static Vec4<T> Eval(const T &u)
     {
-        const f32 t  = u;
-        const f32 s  = 1.0f - u;
-        const f32 n0 = -s * s;
-        const f32 n1 = -t * t - 4.0f * (t * s);
-        const f32 n2 = s * s + 4.0f * (s * t);
-        const f32 n3 = t * t;
-        return 0.5f * Vec4f(n0, n1, n2, n3);
+        const T t = u;
+        const T s = 1.f - u;
+
+        const T t0 = t * t * t;
+        const T t1 = (4.0f * (s * s * s) + (t * t * t)) + (12.0f * ((s * t) * s) + 6.0f * ((t * s) * t));
+        const T t2 = (4.0f * (t * t * t) + (s * s * s)) + (12.0f * ((t * s) * t) + 6.0f * ((s * t) * s));
+        const T t3 = s * s * s;
+        return (1.0f / 6.f) * Vec4<T>(t0, t1, t2, t3);
     }
-    Vec3f Eval(f32 u)
+
+    template <typename T>
+    static Vec4<T> Derivative(const T &u)
     {
-        Vec4f t      = Eval(u);
-        Vec3f result = FMA(t.x, v0, FMA(t.y, v1, FMA(t.z, v2, t.w * v3)));
+        const T t  = u;
+        const T s  = 1.0f - u;
+        const T n0 = -s * s;
+        const T n1 = -t * t - 4.0f * (t * s);
+        const T n2 = s * s + 4.0f * (s * t);
+        const T n3 = t * t;
+        return 0.5f * Vec4<T>(n0, n1, n2, n3);
+    }
+    template <typename T>
+    Vec3<T> Eval(const T &u)
+    {
+        Vec4<T> t      = Eval(u);
+        Vec3<T> result = FMA(t.x, v0, FMA(t.y, v1, FMA(t.z, v2, t.w * v3)));
         return result;
     }
-    Vec3f Derivative(f32 u)
+
+    template <typename T>
+    Vec3<T> Derivative(const T &u)
     {
-        Vec4f t      = Derivative(u);
-        Vec3f result = FMA(t.x, v0, FMA(t.y, v1, FMA(t.z, v2, t.w * v3)));
+        Vec4<T> t      = Derivative(u);
+        Vec3<T> result = FMA(t.x, v0, FMA(t.y, v1, FMA(t.z, v2, t.w * v3)));
         return result;
     }
 };
@@ -64,7 +95,20 @@ BSpline Transform(const AffineSpace &space, const BSpline &curve)
 
 struct Curve
 {
+    enum CurveType
+    {
+        Ribbon,
+        Cylinder,
+        Flat,
+    };
     BSpline *curve;
+    CurveType type;
+};
+
+struct SurfaceInteraction
+{
+    Vec3f p;
+    Vec3f n;
 };
 
 // https://www.embree.org/papers/2014-HPG-hair.pdf
@@ -72,8 +116,11 @@ void IntersectCurve(const CurvePrecalculations &pre, const Ray &ray, const Curve
 {
     BSpline curve = Transform(space, *inCurve.curve);
     /* directly evaluate 8 line segments (P0, P1) */
-    Vec3lf8 p0, p1;
-    curve.Eval(p0, p1);
+
+    Lane8F32 t0, t1;
+    GetSegments(t0, t1);
+    Vec3lf8 p0 = curve.Eval(t0);
+    Vec3lf8 p1 = curve.Eval(t1);
     /* project ray origin (0, 0) onto 8 line segments */
     Vec3lf8 a   = -p0;
     Vec3lf8 b   = p1 - p0;
@@ -84,26 +131,50 @@ void IntersectCurve(const CurvePrecalculations &pre, const Ray &ray, const Curve
     Vec3lf8 p  = FMA(u, b, p0);
     /* the z-component holds hit distance */
     Lane8F32 t = p.z * pre.invLength;
-    /* the w-component interpolates the curve radius */
-    Lane8F32 r = p.w;
+    /* the w-component interpolates the curve width */
+    Lane8F32 w = p.w;
     /* if distance to nearest point P <= curve radius ... */
-    Lane8F32 r2   = r * r;
+    Lane8F32 r2   = w * w * 0.25f;
     Lane8F32 d2   = p.x * p.x + p.y * p.y;
     Lane8F32 mask = d2 <= r2 & ray.tNear < t & t < ray.tFar;
     /* find closest hit along ray by horizontal reduction */
     if (Any(mask))
     {
-        f32 tOut = ReduceMin(t);
-        // TODO: using u, linearly interpolate between the the uMin and uMax of the closest segment
-        f32 uOut   = ? ? ;
-        Vec3f dpdu = inCurve.Derivative(uOut);
-        // if ribbon
-
-        size_t i = select_horizontal_min(mask, t);
+        f32 tOut  = ReduceMin(t);
+        u32 index = 0;
+        for (u32 i = 0; i < 8; i++)
+        {
+            if (t[i] == tOut)
+            {
+                index = i;
+                break;
+            }
+        }
+        f32 uOut     = (index + u[index]) * 1.f / 8.f; // Lerp(u[index], t0[index], t1[index]);
+        Vec3f dpdu   = inCurve.Derivative(uOut);
+        f32 edgeFunc = dpdu.x * -p.y[index] + dpdu.y * p.x[index];
+        f32 v        = 0.5f - std::copysignf(Sqrtf(d2[index]), edgeFunc) / (r[index]);
+        if (inCurve.type == Curve::Ribbon)
+        {
+            // not implemented
+            Assert(0);
+        }
+        else
+        {
+            Vec3f dpduPlane = Transform(space, dpdu);
+            Vec3f dpdvPlane = Normalize(Vec3f(-dpduPlane.y, dpduPlane.x, 0)) * w[index];
+            if (Curve::Cylinder)
+            {
+                f32 theta = Lerp(v, PI / 2, -PI / 2);
+                dpdvPlane = Transform(Rotate(dpduPlane, theta), dpdvPlane);
+            }
+            dpdv = Transform(Inverse(space), dpdvPlane);
+        }
     }
 }
 
 // https://research.nvidia.com/sites/default/files/pubs/2018-08_Phantom-Ray-Hair-Intersector//Phantom-HPG%202018.pdf
+#if 0
 void IntersectCurve(const Ray &ray, BSpline &curve)
 {
     // Intersect against cylinder first
@@ -203,3 +274,7 @@ void IntersectCurve(const Ray &ray, BSpline &curve)
     // TODO: orient towards ray for "flat" curves, handle ribbons
     Vec3f ng = Normalize(p - c0);
 }
+#endif
+} // namespace curve
+} // namespace rt
+#endif

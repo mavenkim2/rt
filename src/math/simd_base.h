@@ -5,7 +5,6 @@
 
 namespace rt
 {
-#define MAX_LANE_WIDTH 4
 #if 0
 #ifdef __AVX512VL__
 #define MAX_LANE_WIDTH 16

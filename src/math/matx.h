@@ -516,6 +516,12 @@ __forceinline Vec3f TransformV(const AffineSpace &t, Vec3f &v)
 }
 __forceinline Vec3f TransformP(const AffineSpace &a, Vec3f &b) { return a * b; }
 
+__forceinline Vec3f ApplyInverse(const AffineSpace &t, const Vec3f &v)
+{
+    AffineSpace inv = (Cross(a.c1, a.c2), Cross(a.c2, a.c0), Cross(a.c0, a.c1));
+    TransformV(inv, v - t.c3);
+}
+
 // takes a normalized vector
 // TODO: maybe take a look at this https://graphics.pixar.com/library/OrthonormalB/paper.pdf
 __forceinline AffineSpace Frame(const Vec3f &n)
@@ -525,6 +531,15 @@ __forceinline AffineSpace Frame(const Vec3f &n)
     Vec3f t = Normalize(Select(Dot(t0, t0) > Dot(b0, b0), t0, b0));
     Vec3f b = Cross(n, t);
     return AffineSpace(t, b, n, Vec3f(0.f));
+}
+
+__forceinline AffineSpace Inverse(const AffineSpace &a)
+{
+    AffineSpace result = (Cross(a.c1, a.c2), Cross(a.c2, a.c0), Cross(a.c0, a.c1));
+    Vec3f translation  = Vec3f(-Dot(a.c3, result.c0), -Dot(a.c3, result.c1), -Dot(a.c3, result.c2));
+    result             = AffineSpace::Transpose3x3(result);
+    result.c3          = translation;
+    return result;
 }
 
 } // namespace rt
