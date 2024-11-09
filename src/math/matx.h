@@ -510,16 +510,16 @@ __forceinline Bounds Transform(const AffineSpace &t, const Bounds &b)
     return out;
 }
 
-__forceinline Vec3f TransformV(const AffineSpace &t, Vec3f &v)
+__forceinline Vec3f TransformV(const AffineSpace &t, const Vec3f &v)
 {
     return FMA(t.c0, Vec3f(v[0]), FMA(t.c1, Vec3f(v[1]), t.c2 * Vec3f(v[2])));
 }
-__forceinline Vec3f TransformP(const AffineSpace &a, Vec3f &b) { return a * b; }
+__forceinline Vec3f TransformP(const AffineSpace &a, const Vec3f &b) { return a * b; }
 
 __forceinline Vec3f ApplyInverse(const AffineSpace &t, const Vec3f &v)
 {
-    AffineSpace inv = (Cross(a.c1, a.c2), Cross(a.c2, a.c0), Cross(a.c0, a.c1));
-    TransformV(inv, v - t.c3);
+    AffineSpace inv(Cross(t.c1, t.c2), Cross(t.c2, t.c0), Cross(t.c0, t.c1), Vec3f(0.f));
+    return TransformV(inv, v - t.c3);
 }
 
 // takes a normalized vector
@@ -535,7 +535,7 @@ __forceinline AffineSpace Frame(const Vec3f &n)
 
 __forceinline AffineSpace Inverse(const AffineSpace &a)
 {
-    AffineSpace result = (Cross(a.c1, a.c2), Cross(a.c2, a.c0), Cross(a.c0, a.c1));
+    AffineSpace result(Cross(a.c1, a.c2), Cross(a.c2, a.c0), Cross(a.c0, a.c1), Vec3f(0.f));
     Vec3f translation  = Vec3f(-Dot(a.c3, result.c0), -Dot(a.c3, result.c1), -Dot(a.c3, result.c2));
     result             = AffineSpace::Transpose3x3(result);
     result.c3          = translation;
