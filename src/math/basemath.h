@@ -70,9 +70,11 @@ __forceinline f32 Ceil(const f32 x) { return ::ceilf(x); }
 __forceinline f32 Floor(const f32 x) { return ::floorf(x); }
 __forceinline f32 Pow(const f32 x, const f32 y) { return ::powf(x, y); }
 __forceinline f32 Log2f(const f32 x) { return ::log2f(x); }
+__forceinline f32 Copysignf(const f32 a, const f32 b) { return ::copysignf(a, b); }
+__forceinline bool All(bool b) { return b; }
 
-template <typename T>
-T Lerp(f32 t, T a, T b)
+template <typename T, typename F>
+T Lerp(F t, T a, T b)
 {
     return (1 - t) * a + t * b;
 }
@@ -239,6 +241,12 @@ inline u32 ReverseBits32(u32 n)
     n = ((n & 0x33333333) << 2) | ((n & 0xcccccccc) >> 2);
     n = ((n & 0x55555555) << 1) | ((n & 0xaaaaaaaa) >> 1);
     return n;
+}
+
+__forceinline f32 SafeASin(f32 x)
+{
+    Assert(x >= -1.0001 && x <= 1.0001);
+    return std::asin(Clamp(x, -1.f, 1.f));
 }
 
 //////////////////////////////

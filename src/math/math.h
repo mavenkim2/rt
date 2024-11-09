@@ -8,6 +8,12 @@
 
 namespace rt
 {
+__forceinline f32 AngleBetween(Vec3f v1, Vec3f v2)
+{
+    if (Dot(v1, v2) < 0)
+        return PI - 2 * SafeASin(Length(v1 + v2) / 2.f);
+    return 2 * SafeASin(Length(v2 - v1) / 2.f);
+}
 
 struct Basis
 {
