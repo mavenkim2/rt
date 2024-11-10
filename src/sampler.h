@@ -1,4 +1,4 @@
-namespace rt 
+namespace rt
 {
 // NOTE: independent uniform samplers without any care for discrepancy
 struct IndependentSampler : SamplerCRTP<IndependentSampler>
@@ -258,17 +258,17 @@ struct ZSobolSampler : SamplerCRTP<ZSobolSampler>
         if (randomize == RandomizeStrategy::PermuteDigits)
         {
             return Vec2f(SobolSample(sampleIndex, 0, BinaryPermuteScrambler, sampleHash[0]),
-                        SobolSample(sampleIndex, 1, BinaryPermuteScrambler, sampleHash[1]));
+                         SobolSample(sampleIndex, 1, BinaryPermuteScrambler, sampleHash[1]));
         }
         if (randomize == RandomizeStrategy::FastOwen)
         {
             return Vec2f(SobolSample(sampleIndex, 0, FastOwenScrambler, sampleHash[0]),
-                        SobolSample(sampleIndex, 1, FastOwenScrambler, sampleHash[1]));
+                         SobolSample(sampleIndex, 1, FastOwenScrambler, sampleHash[1]));
         }
 
         // Default is owen scrambling
         return Vec2f(SobolSample(sampleIndex, 0, OwenScrambler, sampleHash[0]),
-                    SobolSample(sampleIndex, 1, OwenScrambler, sampleHash[1]));
+                     SobolSample(sampleIndex, 1, OwenScrambler, sampleHash[1]));
     }
     Vec2f GetPixel2D()
     {
@@ -473,4 +473,4 @@ struct ZSobolSampler : SamplerCRTP<ZSobolSampler>
 //     LaneVec2i mortonIndex;
 //     RandomizeStrategy randomize;
 // };
-}
+} // namespace rt

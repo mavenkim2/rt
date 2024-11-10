@@ -268,6 +268,11 @@ __forceinline Vec3<T> FMA(const Vec3<T> &a, const Vec3<T> &b, const Vec3<T> &c)
 {
     return Vec3<T>(FMA(a.x, b.x, c.x), FMA(a.y, b.y, c.y), FMA(a.z, b.z, c.z));
 }
+template <typename T>
+__forceinline Vec3<T> FMS(const Vec3<T> &a, const Vec3<T> &b, const Vec3<T> &c)
+{
+    return Vec3<T>(FMS(a.x, b.x, c.x), FMS(a.y, b.y, c.y), FMS(a.z, b.z, c.z));
+}
 
 template <typename T>
 inline Vec3<T> ClampZero(const Vec3<T> &v)

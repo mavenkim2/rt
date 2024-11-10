@@ -60,7 +60,7 @@ struct DiffuseAreaLight
     f32 scale = 1.f;
     const AffineSpace *renderFromLight;
     const DenselySampledSpectrum *Lemit;
-    static const f32 MinSphericalArea = 1e-4;
+    static constexpr f32 MinSphericalArea = 1e-4;
     f32 area;
 
     DiffuseAreaLight(Vec3f *p, f32 scale, DenselySampledSpectrum *Lemit) : p(p), scale(scale), Lemit(Lemit)
@@ -84,9 +84,9 @@ struct RayDifferential
     Vec3IF32 rxDir, ryDir;
 };
 
-RayDifferential ComputeRayDifferentials(const RayDifferential &ray)
-{
-}
+// RayDifferential ComputeRayDifferentials(const RayDifferential &ray)
+// {
+// }
 
 } // namespace rt
 #endif

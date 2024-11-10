@@ -465,6 +465,8 @@ __forceinline Lane4F32 operator*(const AffineSpace &t, const Lane4F32 &v)
                        Lane4F32::LoadU(&t.c3))));
 }
 
+__forceinline Lane4F32 Transform(const AffineSpace &t, const Lane4F32 &v) { return t * v; }
+
 __forceinline AffineSpace operator*(const AffineSpace &a, const AffineSpace &b)
 {
     return AffineSpace(a * b.c0, a * b.c1, a * b.c2, a * b.c3);
@@ -536,9 +538,9 @@ __forceinline AffineSpace Frame(const Vec3f &n)
 __forceinline AffineSpace Inverse(const AffineSpace &a)
 {
     AffineSpace result(Cross(a.c1, a.c2), Cross(a.c2, a.c0), Cross(a.c0, a.c1), Vec3f(0.f));
-    Vec3f translation  = Vec3f(-Dot(a.c3, result.c0), -Dot(a.c3, result.c1), -Dot(a.c3, result.c2));
-    result             = AffineSpace::Transpose3x3(result);
-    result.c3          = translation;
+    Vec3f translation = Vec3f(-Dot(a.c3, result.c0), -Dot(a.c3, result.c1), -Dot(a.c3, result.c2));
+    result            = AffineSpace::Transpose3x3(result);
+    result.c3         = translation;
     return result;
 }
 

@@ -3,23 +3,24 @@
 namespace rt
 {
 // TODO to render moana:
-// - integrator <- currently working
-// - uniform light sampling (more complicated ones later)
-//      - solid angle sampling of spherical rectangles for area light sources
-// - shading, ptex, materials
+// - shading, ptex, materials, textures
 //      - ray differentials
 // - bvh intersection and triangle intersection
 // - creating objects from the parsed scene packets
 
 // after that's done:
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
+// - volumetric
+//      - ratio tracking, residual ratio tracking, delta tracking, virtual density segments?
+// - bdpt, metropolis, vcm/upbp, mcm?
+// - subdivision surfaces
 
 // NOTE: sample (over solid angle) the spherical rectangle obtained by projecting a planar rectangle onto
 // the unit sphere centered at point p
 // https://blogs.autodesk.com/media-and-entertainment/wp-content/uploads/sites/162/egsr2013_spherical_rectangle.pdf
 
 // TODO: simd sin, cos, and arcsin
-Vec3IF32 SampleSphericalRectangle(const Vec3IF32 &p, const Vec3IF32 &eu, const Vec3IF32 &ev,
+Vec3IF32 SampleSphericalRectangle(const Vec3IF32 &p, const Vec3IF32 &base, const Vec3IF32 &eu, const Vec3IF32 &ev,
                                   const Vec2IF32 &samples, LaneIF32 *pdf)
 {
     LaneIF32 euLength = Length(eu);
@@ -31,14 +32,14 @@ Vec3IF32 SampleSphericalRectangle(const Vec3IF32 &p, const Vec3IF32 &eu, const V
     Vec3IF32 rY = ev / evLength;
     Vec3IF32 rZ = Cross(rX, rY);
 
-    Vec3IF32 d  = quadVertices[0] - p;
-    LaneIF32 x0 = Dot(d, rX);
-    LaneIF32 y0 = Dot(d, rY);
-    LaneIF32 z0 = Dot(d, rZ);
+    Vec3IF32 d0 = base - p;
+    LaneIF32 x0 = Dot(d0, rX);
+    LaneIF32 y0 = Dot(d0, rY);
+    LaneIF32 z0 = Dot(d0, rZ);
     if (z0 > 0)
     {
         z0 *= -1.f;
-        rZ *= -1.f;
+        rZ *= LaneIF32(-1.f);
     }
 
     LaneIF32 x1 = x0 + euLength;
@@ -62,29 +63,29 @@ Vec3IF32 SampleSphericalRectangle(const Vec3IF32 &p, const Vec3IF32 &eu, const V
     LaneIF32 g3 = AngleBetween(-n3, n0);
 
     // Compute solid angle subtended by rectangle
-    LaneIF32 k = 2 * PI - g2 - g3;
+    LaneIF32 k = LaneIF32(2.f * PI) - g2 - g3;
     LaneIF32 S = g0 + g1 - k;
-    *pdf       = 1.f / S;
+    *pdf       = LaneIF32(1.f) / S;
 
     LaneIF32 b0 = n0.z;
     LaneIF32 b1 = n2.z;
 
     // Compute cu
     LaneIF32 au = samples[0] * S + k;
-    LaneIF32 fu = (Cos(au) * b0 - b1) / Sin(au);
+    LaneIF32 fu = ((Cos(au)) * b0 - b1) / (Sin(au));
     LaneIF32 cu = Clamp(Copysignf(1 / Sqrt(fu * fu + b0 * b0), fu), -1.f, 1.f);
 
     // Compute xu
-    LaneIF32 xu = -(cu * z0) / Sqrt(1 - cu * cu);
-    xu          = Clamp(xu, -1.f, 1.f);
+    LaneIF32 xu = -(cu * z0) / LaneIF32(Sqrt(LaneIF32(1.f) - cu * cu));
+    xu          = Clamp(xu, LaneIF32(-1.f), LaneIF32(1.f));
     // Compute yv
     LaneIF32 d  = Sqrt(xu * xu + z0 * z0);
-    LaneIF32 h0 = y0 / Sqrt(d * d + y0 * y0);
-    LaneIF32 h1 = y1 / Sqrt(d * d + y1 * y1);
+    LaneIF32 h0 = y0 / LaneIF32(Sqrt(d * d + y0 * y0));
+    LaneIF32 h1 = y1 / LaneIF32(Sqrt(d * d + y1 * y1));
     // Linearly interpolate between h0 and h1
     LaneIF32 hv   = h0 + (h1 - h0) * samples[1];
     LaneIF32 hvsq = hv * hv;
-    LaneIF32 yv   = (hvsq < 1 - 1e-6f) ? (hv * d / Sqrt(1 - hvsq)) : y1;
+    LaneIF32 yv   = (hvsq < 1 - 1e-6f) ? (hv * d / Lane1F32(Sqrt(1 - hvsq))) : y1;
     // Convert back to world space
     return p + rX * xu + rY * yv + rZ * z0;
 }
@@ -210,7 +211,7 @@ LightSample SampleLi(const Scene2 *scene, const LaneIU32 lightIndices, const Sur
 
     LightSample result;
     // If the solid angle is small
-    MaskF32 mask = SphericalQuadArea(v00, v10, v01, v11) < MinSphericalArea;
+    MaskF32 mask = SphericalQuadArea(v00, v10, v01, v11) < DiffuseAreaLight::MinSphericalArea;
     if (All(mask))
     {
         result.samplePoint = Lerp(u[0], Lerp(u[1], p[0], p[3]), Lerp(u[1], p[1], p[2]));
@@ -221,7 +222,7 @@ LightSample SampleLi(const Scene2 *scene, const LaneIU32 lightIndices, const Sur
     else if (None(mask))
     {
         LaneIF32 pdf;
-        result.samplePoint = SampleSphericalRectangle(intr.p, eu, ev, u, &pdf);
+        result.samplePoint = SampleSphericalRectangle(intr.p, p[0], eu, ev, u, &pdf);
         result.n           = n;
 
         // add projected solid angle measure (n dot wi) to pdf
@@ -272,7 +273,7 @@ LaneIF32 PDF_Li(const Scene2 *scene, const LaneIU32 lightIndices, const Vec3IF32
     Vec3IF32 ev = p[3] - p[0];
     // If the solid angle is small
     LaneIF32 sphArea = SphericalQuadArea(v00, v10, v01, v11);
-    MaskF32 mask     = sphArea < MinSphericalArea;
+    MaskF32 mask     = sphArea < DiffuseAreaLight::MinSphericalArea;
 
     LaneIF32 pdf;
     if (All(mask))
@@ -283,14 +284,15 @@ LaneIF32 PDF_Li(const Scene2 *scene, const LaneIU32 lightIndices, const Vec3IF32
     }
     else if (None(mask))
     {
-        pdf = Rcp(sphArea);
+        pdf = 1.f / sphArea;
 
         NotImplemented;
-        // Vec2IF32 u = InvertSphericalRectangleSample(intrP, prevIntrP, eu, ev);
-        // add projected solid angle measure (n dot wi) to pdf
+#if 0
+        Vec2IF32 u = InvertSphericalRectangleSample(intrP, prevIntrP, eu, ev);
         Vec4IF32 w(AbsDot(v00, intr.shading.n), AbsDot(v10, intr.shading.n),
                    AbsDot(v01, intr.shading.n), AbsDot(v11, intr.shading.n));
         pdf *= BilinearPDF(u, w);
+#endif
     }
     else
     {
@@ -300,6 +302,7 @@ LaneIF32 PDF_Li(const Scene2 *scene, const LaneIU32 lightIndices, const Vec3IF32
     return pdf;
 }
 
+#if 0
 void Li(Scene2 *scene, RayDifferential &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda)
 {
     u32 depth = 0;
@@ -436,4 +439,5 @@ void Li(Scene2 *scene, RayDifferential &ray, Sampler &sampler, u32 maxDepth, Sam
         }
     }
 }
+#endif
 } // namespace rt

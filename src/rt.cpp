@@ -39,7 +39,10 @@
 #include "scene.cpp"
 #include "bvh.cpp"
 
+#include "integrate.cpp"
+
 #include "tests/test.cpp"
+#include "tests/sampling_test.cpp"
 
 namespace rt
 {
@@ -1061,7 +1064,8 @@ int main(int argc, char *argv[])
     // AOSSBVHBuilderTest(dataArena, &mesh);
     // PartitionFix();
 
-    PartialRebraidBuilderTest(dataArena);
+    SphericalSampleTest();
+    // PartialRebraidBuilderTest(dataArena);
 
     //////////////////////////////
     // Loading PBRT File Test
