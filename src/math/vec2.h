@@ -118,7 +118,7 @@ __forceinline T Dot(const Vec2<T> &a, const Vec2<T> &b)
 template <typename T>
 __forceinline T AbsDot(const Vec2<T> &u, const Vec2<T> &v)
 {
-    return abs(Dot(u, v));
+    return Abs(Dot(u, v));
 }
 
 template <typename T>

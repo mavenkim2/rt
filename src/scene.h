@@ -448,6 +448,7 @@ struct Scene2
             AffineSpace *affineTransforms;
         };
     };
+    struct DiffuseAreaLight *lights;
     BVHNodeType nodePtr;
 
     f32 minX, minY, minZ;

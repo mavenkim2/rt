@@ -243,6 +243,7 @@ inline u32 ReverseBits32(u32 n)
     return n;
 }
 
+// TODO: vectorized elementary functions, https://shibata.naist.jp/~n-sibata/pdfs/isc10simd.pdf
 __forceinline f32 SafeASin(f32 x)
 {
     Assert(x >= -1.0001 && x <= 1.0001);

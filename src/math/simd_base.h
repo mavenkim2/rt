@@ -234,6 +234,23 @@ struct LaneF32
     }
 };
 
+template <>
+struct LaneF32<1>
+{
+    f32 value;
+    const f32 &operator[](i32 i) const
+    {
+        Assert(i == 0);
+        return value;
+    }
+    f32 &operator[](i32 i)
+    {
+        Assert(i == 0);
+        return values[i];
+    }
+    __forceinline operator f32 const { return value; }
+}
+
 template <i32 N>
 struct LaneU32
 {

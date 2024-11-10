@@ -63,10 +63,12 @@ void Print(const char *fmt, va_list args);
         Trap();                                                                             \
     }
 #define StaticAssert(expr, ID) static u8 Glue(ID, __LINE__)[(expr) ? 1 : -1]
+#define NotImplemented         Assert(0)
 #else
 #define Assert(expression)
 #define Error(expression, str, ...)
 #define StaticAssert(expr, ID)
+#define NotImplemented
 #endif
 
 #define ArrayLength(array) sizeof(array) / sizeof(array[0])

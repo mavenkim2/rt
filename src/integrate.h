@@ -6,14 +6,15 @@ namespace rt
 // lane width for integration
 #define IntN 1
 #if IntN == 1
-typedef f32 LaneIF32;
+typedef bool MaskF32;
 #else
-typedef LaneF32<IntN> LaneIF32;
+typedef LaneF32<IntN> MaskF32;
 #endif
+typedef LaneF32<IntN> LaneIF32;
 typedef Vec2<LaneIF32> Vec2IF32;
 typedef Vec3<LaneIF32> Vec3IF32;
+typedef Vec4<LaneIF32> Vec4IF32;
 
-template <u32 N>
 struct SurfaceInteraction
 {
     Vec3IF32 p;
@@ -26,8 +27,8 @@ struct SurfaceInteraction
 
 struct LightSample
 {
-    Vec3f samplePoint;
-    f32 pdf;
+    Vec3IF32 samplePoint;
+    LaneIF32 pdf;
 };
 
 // NOTE: rectangle area light, invisible, not two sided

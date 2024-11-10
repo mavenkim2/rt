@@ -1,3 +1,5 @@
+#include "integrate.h"
+
 namespace rt
 {
 // TODO to render moana:
@@ -15,71 +17,73 @@ namespace rt
 // NOTE: sample (over solid angle) the spherical rectangle obtained by projecting a planar rectangle onto
 // the unit sphere centered at point p
 // https://blogs.autodesk.com/media-and-entertainment/wp-content/uploads/sites/162/egsr2013_spherical_rectangle.pdf
-Vec3f SampleSphericalRectangle(const Vec3f *quadVertices, const Vec3f &p, const Vec2f &samples, f32 *pdf)
+
+Vec3IF32 SampleSphericalRectangle(const Vec3IF32 &p, const Vec3IF32 &eu, const Vec3IF32 &ev,
+                                  const Vec2IF32 &samples, LaneIF32 *pdf)
 {
-    Vec3f p01 = quadVertices[1] - quadVertices[0];
-    Vec3f p03 = quadVertices[3] - quadVertices[0];
+    LaneIF32 euLength = Length(eu);
+    LaneIF32 evLength = Length(ev);
 
     // Calculate local coordinate system where sampling is done
     // NOTE: rX and rY must be perpendicular
-    Vec3f rX = Normalize(p01);
-    Vec3f rY = Normalize(p03);
-    Vec3f rZ = Cross(rX, rY);
+    Vec3IF32 rX = eu / euLength;
+    Vec3IF32 rY = ev / evLength;
+    Vec3IF32 rZ = Cross(rX, rY);
 
-    Vec3f d = quadVertices[0] - p;
-    f32 x0  = Dot(d, rX);
-    f32 y0  = Dot(d, rY);
-    f32 z0  = Dot(d, rZ);
+    Vec3IF32 d  = quadVertices[0] - p;
+    LaneIF32 x0 = Dot(d, rX);
+    LaneIF32 y0 = Dot(d, rY);
+    LaneIF32 z0 = Dot(d, rZ);
     if (z0 > 0)
     {
         z0 *= -1.f;
         rZ *= -1.f;
     }
 
-    f32 x1 = x0 + Length(p01);
-    f32 y1 = y0 + Length(p03);
+    LaneIF32 x1 = x0 + euLength;
+    LaneIF32 y1 = y0 + evLength;
 
-    Vec3f v00(x0, y0, z0);
-    Vec3f v01(x0, y1, z0);
-    Vec3f v10(x1, y0, z0);
-    Vec3f v11(x1, y1, z0);
+    Vec3IF32 v00(x0, y0, z0);
+    Vec3IF32 v01(x0, y1, z0);
+    Vec3IF32 v10(x1, y0, z0);
+    Vec3IF32 v11(x1, y1, z0);
 
     // Compute normals to edges (i.e, normal of plane containing edge and p)
-    Vec3f n0 = Normalize(Cross(v00, v10));
-    Vec3f n1 = Normalize(Cross(v10, v11));
-    Vec3f n2 = Normalize(Cross(v11, v01));
-    Vec3f n3 = Normalize(Cross(v01, v00));
+    Vec3IF32 n0 = Normalize(Cross(v00, v10));
+    Vec3IF32 n1 = Normalize(Cross(v10, v11));
+    Vec3IF32 n2 = Normalize(Cross(v11, v01));
+    Vec3IF32 n3 = Normalize(Cross(v01, v00));
 
     // Calculate the angle between the plane normals
-    f32 g0 = AngleBetween(-n0, n1);
-    f32 g1 = AngleBetween(-n1, n2);
-    f32 g2 = AngleBetween(-n2, n3);
-    f32 g3 = AngleBetween(-n3, n0);
+    LaneIF32 g0 = AngleBetween(-n0, n1);
+    LaneIF32 g1 = AngleBetween(-n1, n2);
+    LaneIF32 g2 = AngleBetween(-n2, n3);
+    LaneIF32 g3 = AngleBetween(-n3, n0);
 
     // Compute solid angle subtended by rectangle
-    f32 k = 2 * PI - g2 - g3;
-    f32 S = g0 + g1 - k;
-    *pdf  = 1.f / S;
+    LaneIF32 k = 2 * PI - g2 - g3;
+    LaneIF32 S = g0 + g1 - k;
+    *pdf       = 1.f / S;
 
-    f32 b0 = n0.z;
-    f32 b1 = n2.z;
+    LaneIF32 b0 = n0.z;
+    LaneIF32 b1 = n2.z;
 
     // Compute cu
-    f32 au = samples[0] * S + k;
-    f32 fu = (Cos(au) * b0 - b1) / Sin(au);
-    f32 cu = Clamp(Copysignf(1 / Sqrt(fu * fu + b0 * b0), fu), -1.f, 1.f);
+    LaneIF32 au = samples[0] * S + k;
+    LaneIF32 fu = (Cos(au) * b0 - b1) / Sin(au);
+    LaneIF32 cu = Clamp(Copysignf(1 / Sqrt(fu * fu + b0 * b0), fu), -1.f, 1.f);
 
     // Compute xu
-    f32 xu = -(cu * z0) / Sqrt(1 - cu * cu);
-    xu     = Clamp(xu, -1.f, 1.f);
+    LaneIF32 xu = -(cu * z0) / Sqrt(1 - cu * cu);
+    xu          = Clamp(xu, -1.f, 1.f);
     // Compute yv
-    f32 d  = Sqrt(xu * xu + z0 * z0);
-    f32 h0 = y0 / Sqrt(d * d + y0 * y0);
-    f32 h1 = y1 / Sqrt(d * d + y1 * y1);
+    LaneIF32 d  = Sqrt(xu * xu + z0 * z0);
+    LaneIF32 h0 = y0 / Sqrt(d * d + y0 * y0);
+    LaneIF32 h1 = y1 / Sqrt(d * d + y1 * y1);
     // Linearly interpolate between h0 and h1
-    f32 hv   = h0 + (h1 - h0) * samples[1];
-    f32 hvsq = hv * hv;
-    f32 yv   = (hvsq < 1 - 1e-6f) ? (hv * d / Sqrt(1 - hvsq)) : y1;
+    LaneIF32 hv   = h0 + (h1 - h0) * samples[1];
+    LaneIF32 hvsq = hv * hv;
+    LaneIF32 yv   = (hvsq < 1 - 1e-6f) ? (hv * d / Sqrt(1 - hvsq)) : y1;
     // Convert back to world space
     return p + rX * xu + rY * yv + rZ * z0;
 }
@@ -129,24 +133,102 @@ Vec2<T> SampleBilinear(const Vec2<T> &u, const Vec4<T> &w)
     return result;
 }
 
-LightSample SampleLi(const Scene2 *scene, const SurfaceInteraction<IntN> &intr, const Vec2IF32 &u)
+__forceinline void Transpose8x3(const Lane4F32 &inA, const Lane4F32 &inB, const Lane4F32 &inC, const Lane4F32 &inD,
+                                const Lane4F32 &inE, const Lane4F32 &inF, const Lane4F32 &inG, const Lane4F32 &inH,
+                                Lane8F32 &out0, Lane8F32 &out1, Lane8F32 &out2)
 {
-    LightSample result;
-    if (area < MinSphericalArea)
+    Lane4F32 temp[6];
+    Transpose4x3(inA, inB, inC, inD, temp[0], temp[1], temp[2]);
+    Transpose4x3(inE, inF, inG, inH, temp[3], temp[4], temp[5]);
+    out0 = Lane8F32(temp[0], temp[3]);
+    out1 = Lane8F32(temp[1], temp[4]);
+    out2 = Lane8F32(temp[2], temp[5]);
+}
+
+__forceinline void Transpose(const Lane4F32 lanes[IntN], Vec3IF32 &out)
+{
+#if IntN == 1
+    out = ToVec3f(lanes[0]);
+#elif IntN == 4
+    Transpose4x3(lanes[0], lanes[1], lanes[2], lanes[3], out.x, out.y, out.z);
+#elif IntN == 8
+    Transpose8x3(lanes[0], lanes[1], lanes[2], lanes[3],
+                 lanes[4], lanes[5], lanes[6], lanes[7],
+                 out.x, out.y, out.z);
+#endif
+}
+
+LaneIF32 SphericalQuadArea(const Vec3IF32 &a, const Vec3IF32 &b, const Vec3IF32 &c, const Vec3IF32 &d)
+{
+    Vec3IF32 axb = Normalize(Cross(a, b));
+    Vec3IF32 bxc = Normalize(Cross(b, c));
+    Vec3IF32 cxd = Normalize(Cross(c, d));
+    Vec3IF32 dxa = Normalize(Cross(d, a));
+
+    LaneIF32 g0 = AngleBetween(-axb, bxc);
+    LaneIF32 g1 = AngleBetween(-bxc, cxd);
+    LaneIF32 g2 = AngleBetween(-cxd, dxa);
+    LaneIF32 g3 = AngleBetween(-dxa, axb);
+    return Abs(g0 + g1 + g2 + g3 - 2 * PI);
+}
+
+// TODO: maybe consider one light x N interactions instead of N x N
+LightSample SampleLi(const Scene2 *scene, const u32 lightIndices[IntN], const SurfaceInteraction &intr, const Vec2IF32 &u)
+{
+    DiffuseAreaLight *lights[IntN];
+    for (u32 i = 0; i < IntN; i++)
     {
-        Vec3f samplePoint  = Lerp(u[0], Lerp(u[1], p[0], p[3]), Lerp(u[1], p[1], p[2]));
-        result.samplePoint = Transform(*renderFromLight, samplePoint);
-        result.pdf         = 1.f / area;
+        lights[i] = &scene->lights[i];
+    }
+
+    Vec3IF32 p[4];
+    LaneIF32 area;
+    for (u32 i = 0; i < 4; i++)
+    {
+        Lane4F32 pI[IntN];
+        for (u32 lightIndex = 0; lightIndex < IntN; lightIndex++)
+        {
+            DiffuseAreaLight *light = lights[lightIndex];
+            Lane4F32 pTemp          = Lane4F32::LoadU(light->p + i);
+
+            // TODO: maybe transform the vertices once
+            pI[lightIndex]   = Transform(*light->renderFromLight, pTemp);
+            area[lightIndex] = light->area;
+        }
+        Transpose(pI, p[i]);
+    }
+
+    Vec3IF32 v00 = Normalize(p[0] - Vec3IF32(intr.p));
+    Vec3IF32 v10 = Normalize(p[1] - Vec3IF32(intr.p));
+    Vec3IF32 v01 = Normalize(p[3] - Vec3IF32(intr.p));
+    Vec3IF32 v11 = Normalize(p[2] - Vec3IF32(intr.p));
+
+    LightSample result;
+    // If the solid angle is small
+    MaskF32 mask = SphericalQuadArea(v00, v10, v01, v11) < MinSphericalArea;
+    if (All(mask))
+    {
+        result.samplePoint = Lerp(u[0], Lerp(u[1], p[0], p[3]), Lerp(u[1], p[1], p[2]));
+        for (u32 i = 0; i < IntN; i++)
+        {
+            result.pdf[i] = 1.f / lights[i]->area;
+        }
+    }
+    else if (None(mask))
+    {
+        LaneIF32 pdf;
+        result.samplePoint = SampleSphericalRectangle(intr.p, u, &pdf);
+
+        // add projected solid angle measure (n dot wi) to pdf
+        Vec4IF32 w(AbsDot(v00, intr.shading.n), AbsDot(v10, intr.shading.n),
+                   AbsDot(v01, intr.shading.n), AbsDot(v11, intr.shading.n));
+        u = SampleBilinear(u, w);
+        pdf *= BilinearPDF(u, w);
+        result.pdf = pdf;
     }
     else
     {
-        f32 pdf;
-        result.samplePoint = SampleSphericalRectangle(p, intr.p, u, &pdf);
-
-        Vec4f w(AbsDot(p[0], intr.shading.n), AbsDot(p[1], intr.shading.n),
-                AbsDot(p[3], intr.shading.n), AbsDot(p[2], intr.shading.n));
-        u = SampleBilinear(u, w);
-        pdf *= BilinearPDF(u, w);
+        NotImplemented;
     }
     return result;
 }
@@ -223,7 +305,7 @@ void Li(Scene *scene, RayDifferential &ray, u32 maxDepth, SampledWavelengths &la
         BSDF *bsdf = si.GetBSDF();
 
         // Next Event Estimation
-        // TODO: offset ray origin
+        // TODO: offset ray origin, don't sample lights if bsdf is specular
 
         // Choose light source for direct lighting calculation
         Light *light = lightSampler->SampleLight(&si);
