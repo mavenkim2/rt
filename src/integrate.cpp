@@ -18,6 +18,7 @@ namespace rt
 // the unit sphere centered at point p
 // https://blogs.autodesk.com/media-and-entertainment/wp-content/uploads/sites/162/egsr2013_spherical_rectangle.pdf
 
+// TODO: simd sin, cos, and arcsin
 Vec3IF32 SampleSphericalRectangle(const Vec3IF32 &p, const Vec3IF32 &eu, const Vec3IF32 &ev,
                                   const Vec2IF32 &samples, LaneIF32 *pdf)
 {
@@ -173,12 +174,12 @@ LaneIF32 SphericalQuadArea(const Vec3IF32 &a, const Vec3IF32 &b, const Vec3IF32 
 }
 
 // TODO: maybe consider one light x N interactions instead of N x N
-LightSample SampleLi(const Scene2 *scene, const u32 lightIndices[IntN], const SurfaceInteraction &intr, const Vec2IF32 &u)
+LightSample SampleLi(const Scene2 *scene, const LaneIU32 lightIndices, const SurfaceInteraction &intr, const Vec2IF32 &u)
 {
     DiffuseAreaLight *lights[IntN];
     for (u32 i = 0; i < IntN; i++)
     {
-        lights[i] = &scene->lights[i];
+        lights[i] = &scene->lights[lightIndices[i]];
     }
 
     Vec3IF32 p[4];
@@ -203,27 +204,31 @@ LightSample SampleLi(const Scene2 *scene, const u32 lightIndices[IntN], const Su
     Vec3IF32 v01 = Normalize(p[3] - Vec3IF32(intr.p));
     Vec3IF32 v11 = Normalize(p[2] - Vec3IF32(intr.p));
 
+    Vec3IF32 eu = p[1] - p[0];
+    Vec3IF32 ev = p[3] - p[0];
+    Vec3IF32 n  = Normalize(Cross(eu, ev));
+
     LightSample result;
     // If the solid angle is small
     MaskF32 mask = SphericalQuadArea(v00, v10, v01, v11) < MinSphericalArea;
     if (All(mask))
     {
         result.samplePoint = Lerp(u[0], Lerp(u[1], p[0], p[3]), Lerp(u[1], p[1], p[2]));
-        for (u32 i = 0; i < IntN; i++)
-        {
-            result.pdf[i] = 1.f / lights[i]->area;
-        }
+        Vec3IF32 wi        = intr.p - result.samplePoint;
+        result.n           = n;
+        result.pdf         = LengthSquared(wi) / (area * AbsDot(Normalize(wi), n));
     }
     else if (None(mask))
     {
         LaneIF32 pdf;
-        result.samplePoint = SampleSphericalRectangle(intr.p, u, &pdf);
+        result.samplePoint = SampleSphericalRectangle(intr.p, eu, ev, u, &pdf);
+        result.n           = n;
 
         // add projected solid angle measure (n dot wi) to pdf
         Vec4IF32 w(AbsDot(v00, intr.shading.n), AbsDot(v10, intr.shading.n),
                    AbsDot(v01, intr.shading.n), AbsDot(v11, intr.shading.n));
-        u = SampleBilinear(u, w);
-        pdf *= BilinearPDF(u, w);
+        Vec2IF32 uNew = SampleBilinear(u, w);
+        pdf *= BilinearPDF(uNew, w);
         result.pdf = pdf;
     }
     else
@@ -233,7 +238,69 @@ LightSample SampleLi(const Scene2 *scene, const u32 lightIndices[IntN], const Su
     return result;
 }
 
-void Li(Scene *scene, RayDifferential &ray, u32 maxDepth, SampledWavelengths &lambda)
+// TODO: I don't think this is going to be invoked for the moana scene
+LaneIF32 PDF_Li(const Scene2 *scene, const LaneIU32 lightIndices, const Vec3IF32 &prevIntrP, const SurfaceInteraction &intr)
+{
+    DiffuseAreaLight *lights[IntN];
+    for (u32 i = 0; i < IntN; i++)
+    {
+        lights[i] = &scene->lights[lightIndices[i]];
+    }
+    Vec3IF32 p[4];
+    LaneIF32 area;
+    // TODO: maybe have to spawn a ray??? but I feel like this is only called (at least for now) when it already has intersected,
+    // and we need the pdf for MIS
+    for (u32 i = 0; i < 4; i++)
+    {
+        Lane4F32 pI[IntN];
+        for (u32 lightIndex = 0; lightIndex < IntN; lightIndex++)
+        {
+            DiffuseAreaLight *light = lights[lightIndex];
+            Lane4F32 pTemp          = Lane4F32::LoadU(light->p + i);
+
+            pI[lightIndex]   = Transform(*light->renderFromLight, pTemp);
+            area[lightIndex] = light->area;
+        }
+        Transpose(pI, p[i]);
+    }
+    Vec3IF32 v00 = Normalize(p[0] - Vec3IF32(prevIntrP));
+    Vec3IF32 v10 = Normalize(p[1] - Vec3IF32(prevIntrP));
+    Vec3IF32 v01 = Normalize(p[3] - Vec3IF32(prevIntrP));
+    Vec3IF32 v11 = Normalize(p[2] - Vec3IF32(prevIntrP));
+
+    Vec3IF32 eu = p[1] - p[0];
+    Vec3IF32 ev = p[3] - p[0];
+    // If the solid angle is small
+    LaneIF32 sphArea = SphericalQuadArea(v00, v10, v01, v11);
+    MaskF32 mask     = sphArea < MinSphericalArea;
+
+    LaneIF32 pdf;
+    if (All(mask))
+    {
+        Vec3IF32 n  = Normalize(Cross(eu, ev));
+        Vec3IF32 wi = prevIntrP - intr.p;
+        pdf         = LengthSquared(wi) / (area * AbsDot(Normalize(wi), n));
+    }
+    else if (None(mask))
+    {
+        pdf = Rcp(sphArea);
+
+        NotImplemented;
+        // Vec2IF32 u = InvertSphericalRectangleSample(intrP, prevIntrP, eu, ev);
+        // add projected solid angle measure (n dot wi) to pdf
+        Vec4IF32 w(AbsDot(v00, intr.shading.n), AbsDot(v10, intr.shading.n),
+                   AbsDot(v01, intr.shading.n), AbsDot(v11, intr.shading.n));
+        pdf *= BilinearPDF(u, w);
+    }
+    else
+    {
+        NotImplemented;
+        pdf = 0.f;
+    }
+    return pdf;
+}
+
+void Li(Scene2 *scene, RayDifferential &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda)
 {
     u32 depth = 0;
     SampledSpectrum L(0.f);
@@ -242,6 +309,9 @@ void Li(Scene *scene, RayDifferential &ray, u32 maxDepth, SampledWavelengths &la
     bool specularBounce = false;
     f32 bsdfPdf         = 1.f;
     f32 etaScale        = 1.f;
+
+    SurfaceInteraction prevSi;
+    u32 prevLightIndex;
 
     for (;;)
     {
@@ -262,7 +332,7 @@ void Li(Scene *scene, RayDifferential &ray, u32 maxDepth, SampledWavelengths &la
                 for (u32 i = 0; i < scene->numInfiniteLights; i++)
                 {
                     InfiniteLight *light = &scene->infiniteLights[i];
-                    SampledSpectrum Le   = light->Li(-ray.d);
+                    SampledSpectrum Le   = light->Le(ray.d);
                     L += beta * Le;
                 }
             }
@@ -271,10 +341,13 @@ void Li(Scene *scene, RayDifferential &ray, u32 maxDepth, SampledWavelengths &la
                 for (u32 i = 0; i < scene->numInfiniteLights; i++)
                 {
                     InfiniteLight *light = &scene->infiniteLights[i];
-                    SampledSpectrum Le   = light->Li(-ray.d);
+                    SampledSpectrum Le   = light->Le(ray.d);
                     // probability of sampling the light * probability of
-                    f32 lightPdf = lightSampler->PMF(prev, light) * light->PDF_Li(); // find the pmf for the light
-                    f32 w_l      = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
+                    // lightSampler->PMF(prevSi, light) *
+                    f32 pmf      = 1.f / scene->numLights;
+                    f32 lightPdf = pmf *
+                                   light->PDF_Li(scene, prevSi.lightIndices, prevSi.p, ray.d); // find the pmf for the light
+                    f32 w_l = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
                     // NOTE: beta already contains the cosine, bsdf, and pdf terms
                     L += beta * w_l * Le;
                 }
@@ -282,21 +355,24 @@ void Li(Scene *scene, RayDifferential &ray, u32 maxDepth, SampledWavelengths &la
             break;
             // sample infinite area lights, environment map, and return
         }
-        // If intersected with a light,
-        if (si.light)
+        // If intersected with a light
+        if (si.lightIndices)
         {
-            DiffuseAreaLight *light = si.light;
+            DiffuseAreaLight *light = &scene->lights[si.lightIndices];
             if (specularBounce || depth == 0)
             {
-                SampledSpectrum Le = light->L(si.n, -ray.d, lambda);
+                SampledSpectrum Le = light->Le(si.n, -ray.d, lambda);
                 L += beta * Le;
             }
             else
             {
-                SampledSpectrum Le = light->L(si.n, -ray.d, lambda);
-                // probability of sampling the light * probability of
-                f32 lightPdf = lightSampler->PMF(prev, light) * light->PDF_Li(); // find the pmf for the light
-                f32 w_l      = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
+                Assert(0);
+                SampledSpectrum Le = light->Le(si.n, -ray.d, lambda);
+                // probability of sampling the light * probability of sampling point on light
+                f32 pmf      = 1.f / scene->numLights;
+                f32 lightPdf = pmf *
+                               light->PDF_Li(scene, prevSi.lightIndices, prevSi.p, si);
+                f32 w_l = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
                 // NOTE: beta already contains the cosine, bsdf, and pdf terms
                 L += beta * w_l * Le;
             }
@@ -308,12 +384,15 @@ void Li(Scene *scene, RayDifferential &ray, u32 maxDepth, SampledWavelengths &la
         // TODO: offset ray origin, don't sample lights if bsdf is specular
 
         // Choose light source for direct lighting calculation
-        Light *light = lightSampler->SampleLight(&si);
+        f32 lightU     = sampler.Get1D();
+        u32 lightIndex = u32(Min(lightU * scene->numLights, scene->numLights - 1));
+        Light *light   = &scene->lights[lightIndex];
+        f32 pmf        = 1.f / scene->numLights;
         if (light)
         {
             Vec2f sample = sampler.Get2D();
             // Sample point on the light source
-            LightSample ls = light->Sample(sample);
+            LightSample ls = SampleLi(scene, lightIndex, si, sample);
             if (ls)
             {
                 // Evaluate BSDF for light sample, check visibility with shadow ray
@@ -322,18 +401,18 @@ void Li(Scene *scene, RayDifferential &ray, u32 maxDepth, SampledWavelengths &la
                 if (f && !scene->IntersectShadowRay())
                 {
                     // Calculate contribution
-                    f32 lightPdf = 0.f; // prob of choosing light * prob of choosing point on light;
+                    f32 lightPdf = pmf * ls.pdf;
 
-                    // if (light->type == LightType::Delta)
-                    // {
-                    //     Ld = beta * lightPdf;
-                    // }
-                    // else
-                    // {
-                    f32 bsdfPdf = bsdf->PDF(wo, wi);
-                    f32 w_l     = PowerHeuristic(1, lightPdf, 1, bsdfPdf);
-                    Ld          = beta * f * w_l * ls.L / lightPdf;
-                    // }
+                    if (IsDeltaLight(light->type))
+                    {
+                        Ld = beta * f * ls.L / lightPdf;
+                    }
+                    else
+                    {
+                        f32 bsdfPdf = bsdf->PDF(wo, wi);
+                        f32 w_l     = PowerHeuristic(1, lightPdf, 1, bsdfPdf);
+                        Ld          = beta * f * w_l * ls.L / lightPdf;
+                    }
                 }
             }
         }
@@ -343,6 +422,7 @@ void Li(Scene *scene, RayDifferential &ray, u32 maxDepth, SampledWavelengths &la
         if (bsdf->IsSpecular()) specularBounce = true;
 
         // Spawn new ray
+        prevSi = si;
 
         // Russian Roulette
         SampledSpectrum rrBeta = beta * etaScale;

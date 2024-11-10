@@ -449,11 +449,14 @@ struct Scene2
         };
     };
     struct DiffuseAreaLight *lights;
+    struct InfiniteLight *infiniteLights;
     BVHNodeType nodePtr;
 
     f32 minX, minY, minZ;
     f32 maxX, maxY, maxZ;
     u32 numInstances;
+    u32 numLights;
+    u32 numInfiniteLights;
     // union
     // {
     //     struct

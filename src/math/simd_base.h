@@ -248,8 +248,10 @@ struct LaneF32<1>
         Assert(i == 0);
         return values[i];
     }
+    __forceinline LaneF32() {}
+    __forceinline LaneF32(f32 v) : value(v) {}
     __forceinline operator f32 const { return value; }
-}
+};
 
 template <i32 N>
 struct LaneU32
@@ -267,6 +269,25 @@ struct LaneU32
         return values[i];
     }
 };
+
+template <>
+struct LaneU32<1>
+{
+    u32 value;
+    const u32 &operator[](i32 i) const
+    {
+        Assert(i == 0);
+        return value;
+    }
+    u32 &operator[](i32 i)
+    {
+        Assert(i == 0);
+        return values[i];
+    }
+    __forceinline LaneU32() {}
+    __forceinline LaneU32(u32 v) : value(v) {}
+    __forceinline operator u32 const { return value; }
+}
 
 using Lane4F32 = LaneF32<4>;
 using Lane8F32 = LaneF32<8>;
