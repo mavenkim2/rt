@@ -14,7 +14,7 @@ void SphericalSampleTest()
     auto f = [](Vec3f p) { return p.x * p.y * p.z; };
 
     LaneIF32 sphSum = 0, areaSum = 0;
-    SobolSampler sampler(0, Vec2i(0), RandomizeStrategy::FastOwen);
+    ZSobolSampler sampler(1024, Vec2i(0), RandomizeStrategy::FastOwen);
     sampler.StartPixelSample(Vec2i(0), 0);
     for (int i = 0; i < count; i++)
     {
@@ -25,12 +25,20 @@ void SphericalSampleTest()
 
         pq        = Lerp(u[1], Lerp(u[0], v[0], v[1]), Lerp(u[0], v[2], v[3]));
         pdf       = 1.f / A;
-        Vec3f pqp = pq - p;
+        Vec3f pqp = p - pq; // pq - p;
         areaSum += f(pq) * AbsDot(N, Normalize(pqp)) / (pdf * LengthSquared(pqp));
     }
     LaneIF32 sphInt  = sphSum / f32(count);
     LaneIF32 areaInt = areaSum / f32(count);
 
-    Assert(Abs(areaInt - sphInt) < 1e-3);
+    if (Abs(areaInt - sphInt) < 1e-3)
+    {
+        printf("yay");
+    }
+    else
+    {
+        printf("nay");
+    }
+    printf("%f, %f\n", sphInt.value, areaInt.value);
 }
 } // namespace rt

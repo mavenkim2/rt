@@ -250,6 +250,7 @@ struct LaneF32<1>
     }
     __forceinline LaneF32() {}
     __forceinline LaneF32(f32 v) : value(v) {}
+    __forceinline LaneF32(ZeroTy) : value(0.f) {}
     __forceinline explicit operator f32() const { return value; }
 };
 

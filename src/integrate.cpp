@@ -3,6 +3,7 @@
 namespace rt
 {
 // TODO to render moana:
+// - infinite lights
 // - shading, ptex, materials, textures
 //      - ray differentials
 // - bvh intersection and triangle intersection
@@ -63,29 +64,30 @@ Vec3IF32 SampleSphericalRectangle(const Vec3IF32 &p, const Vec3IF32 &base, const
     LaneIF32 g3 = AngleBetween(-n3, n0);
 
     // Compute solid angle subtended by rectangle
-    LaneIF32 k = LaneIF32(2.f * PI) - g2 - g3;
+    LaneIF32 k = TwoPi * PI - g2 - g3;
     LaneIF32 S = g0 + g1 - k;
-    *pdf       = LaneIF32(1.f) / S;
+    *pdf       = 1.f / S;
 
     LaneIF32 b0 = n0.z;
     LaneIF32 b1 = n2.z;
 
     // Compute cu
-    LaneIF32 au = samples[0] * S + k;
-    LaneIF32 fu = ((Cos(au)) * b0 - b1) / (Sin(au));
+    // LaneIF32 au = samples[0] * S + k;
+    LaneIF32 au = samples[0] * (g0 + g1 - TwoPi) + (samples[0] - 1) * (g2 + g3);
+    LaneIF32 fu = (Cos(au) * b0 - b1) / Sin(au);
     LaneIF32 cu = Clamp(Copysignf(1 / Sqrt(fu * fu + b0 * b0), fu), -1.f, 1.f);
 
     // Compute xu
-    LaneIF32 xu = -(cu * z0) / LaneIF32(Sqrt(LaneIF32(1.f) - cu * cu));
-    xu          = Clamp(xu, LaneIF32(-1.f), LaneIF32(1.f));
+    LaneIF32 xu = -(cu * z0) / Sqrt(1.f - cu * cu);
+    xu          = Clamp(xu, x0, x1);
     // Compute yv
     LaneIF32 d  = Sqrt(xu * xu + z0 * z0);
-    LaneIF32 h0 = y0 / LaneIF32(Sqrt(d * d + y0 * y0));
-    LaneIF32 h1 = y1 / LaneIF32(Sqrt(d * d + y1 * y1));
+    LaneIF32 h0 = y0 / Sqrt(d * d + y0 * y0);
+    LaneIF32 h1 = y1 / Sqrt(d * d + y1 * y1);
     // Linearly interpolate between h0 and h1
     LaneIF32 hv   = h0 + (h1 - h0) * samples[1];
     LaneIF32 hvsq = hv * hv;
-    LaneIF32 yv   = (hvsq < 1 - 1e-6f) ? (hv * d / Lane1F32(Sqrt(1 - hvsq))) : y1;
+    LaneIF32 yv   = (hvsq < 1 - 1e-6f) ? (hv * d / Sqrt(1 - hvsq)) : y1;
     // Convert back to world space
     return p + rX * xu + rY * yv + rZ * z0;
 }
@@ -440,4 +442,197 @@ void Li(Scene2 *scene, RayDifferential &ray, Sampler &sampler, u32 maxDepth, Sam
     }
 }
 #endif
+
+struct VolumeAggregate
+{
+};
+
+struct OctreeNode
+{
+    OctreeNode *children[8];
+    Bounds bounds;
+    f32 extinctionMin;
+    f32 extinctionMax;
+};
+
+struct Volume
+{
+};
+
+f32 HenyeyGreenstein(f32 cosTheta, f32 g)
+{
+    g         = Clamp(g, -.99f, .99f);
+    f32 denom = 1 + Sqr(g) + 2 * g * cosTheta;
+    return Inv4Pi * (1 - Sqr(g)) / (denom * SafeSqrt(denom));
+}
+
+f32 HenyeyGreenstein(Vec3f wo, Vec3f wi, f32 g) { return HenyeyGreenstein(Dot(wo, wi), g); }
+
+Vec3f SampleHenyeyGreenstein(const Vec3f &wo, f32 g, Vec2f u, f32 *pdf = 0)
+{
+    f32 cosTheta;
+    if (Abs(g) < 1e-3f)
+        cosTheta = 1 - 2 * u[0];
+    else
+        cosTheta = -1 / (2 * g) *
+                   (1 + Sqr(g) - Sqr((1 - Sqr(g)) / (1 + g - 2 * g * u[0])));
+
+    f32 sinTheta = SafeSqrt(1 - Sqr(cosTheta));
+    f32 phi      = TwoPi * u[1];
+
+    // TODO: implement FromZ
+    Frame wFrame = Frame::FromZ(wo);
+    Vector3f wi  = wFrame.FromLocal(Vec3f(sinTheta * Cos(phi), sinTheta * Sin(phi), cosTheta));
+
+    if (pdf) *pdf = HenyeyGreenstein(cosTheta, g);
+    return wi;
+}
+
+struct RaySegment
+{
+    f32 tMin;
+    f32 tMax;
+    SampledSpectrum extinctMax;
+    SampledSpectrum extinctMin;
+    f32 g;
+};
+
+void VirtualDensitySegments(const RayDifferential &ray)
+{
+    // TODO: things I don't understand
+    // 1. how are candidate points generated? tracking without termination to the end of the segment??
+    // 2. how do you choose between scattering, absoprtion, and null scattering, or do you even choose?
+
+    // do you delta track along the segment until:
+    // 1. you get absorbed, goodbye
+    // 2. you scatter, find the candidate location for direct illumination + scattering location using the below
+    // 3. null scatter, meaning you continue
+
+    RNG rng;
+    const u32 N = 8;
+
+    Vec3f lightDir;
+
+    // Pick light
+
+    // Generate virtual density segments
+
+    // Equiangular sampling
+    f32 thetaB, thetaA, D;
+    f32 tMax;
+
+    auto EquiSampInverse = [&](f32 u) -> f32 {
+        return D * Tan((1 - u) * thetaB + u * thetaA);
+    };
+
+    // Generate equal importance segments
+    f32 f;
+    f32 tSegment[N + 1];
+    for (u32 i = 0, f = 0.f; i < N; i++, f++)
+    {
+        f32 u       = f / N;
+        tSegment[i] = EquiSampInverse(u);
+    }
+    tSegment[N] = EquiSampInverse(1.f);
+
+    f32 virtualMajorants[N];
+    const f32 c = 1.f;
+    for (u32 i = 0; i < N; i++)
+    {
+        virtualMajorant[i] = c / (tSegment[i + 1] - tSegment[i]);
+    }
+
+    u32 currentVirtualIndex = 0;
+    bool done               = false;
+    while (!done)
+    {
+        // generate ray segments here
+        RaySegment segment;
+
+        f32 majorant       = Max(segment.majorant, virtualMajorants[currentVirtualIndex]);
+        f32 subSegmentTMax = Min(segment.tMax, tSegment[currentVirtualIndex + 1]);
+        for (;;)
+        {
+            // Generate sample along current majorant segment by sampling the exponential
+            f32 u = rng.Uniform<f32>();
+            f32 t = SampleExponential(u, );
+            // Take the max of the majorant
+            if (t < subSegmentTMax)
+            {
+            }
+            else
+            {
+                // if t is past ray segment, fetch a new one
+                if (t >= segment.tMax)
+                {
+                    // do stuff here
+                    break;
+                }
+                // if it's past only the subsegment
+                else
+                {
+                    currentVirtualIndex++;
+                    Assert(currentVirtualIndex < N);
+                    majorant       = Max(segment.majorant, virtualMajorants[currentVirtualIndex]);
+                    subSegmentTMax = Min(segment.tMax, tSegment[currentVirtualIndex + 1]);
+                    continue;
+                }
+            }
+        }
+    }
+
+    // I'm leaning towards that you only do this when you scatter
+
+    // Calculate weights from candidate sample locations
+    // Compute discrete CDF from weights and draw sample
+
+    // Sample scattering direction
+    Vec3f wi[N];
+    f32 pmf[N];
+    // Generate N directions from sampling the phase function, calculate weights by compute phase function
+    for (u32 i = 0; i < N; i++)
+    {
+        wi[i]  = SampleHenyeyGreenstein(-ray.d, segment.g, Vec2f(rng.Uniform<f32>(), rng.Uniform<f32>()));
+        pmf[i] = HenyeyGreenstein(lightDir, wi[i], segment.g);
+    }
+
+    // Get sample from discrete CDF
+    f32 total = 0.f;
+    f32 limit = rng.Uniform<f32>() * pmf[i + 1];
+    u32 index = 0;
+    for (u32 i = 0; i < N; i++)
+    {
+        if (total + pmf[i] >= limit)
+        {
+            index = i;
+            break;
+        }
+        total += pmf[i];
+    }
+
+    // NOTE: beta is not updated because HenyeyGreenstein is perfectly importance sampled
+}
+
+void BuildAggregate(Arena *arena, Scene2 *scene)
+{
+    OctreeNode root;
+}
+
+void IntersectVolumeAggregate(Arena *arena, OctreeNode *root, Bounds &volumeBounds, const RayDifferential &ray)
+{
+    OctreeNode *node = root;
+    while (node)
+    {
+        // If the current root is too small, add a parent
+        if (volumeBounds.minP < node->bounds.minP || volumeBounds.maxP > node->bounds.maxP)
+        {
+            OctreeNode *newNode  = PushStruct(arena, OctreeNode);
+            newNode->children[0] = node;
+            // newNode->bounds = Bounds(node->bounds.minP * 2
+            //         newNode->ext
+        }
+    }
+    f32 filterWidth = ComputeFilterWidth(ray);
+}
+
 } // namespace rt

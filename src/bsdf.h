@@ -388,9 +388,10 @@ struct DielectricBSDF : BSDFCRTP<DielectricBSDF>
         f32 etap       = 1.f;
         if (!reflect)
             etap = cosTheta_o > 0.f ? eta : 1 / eta;
-        Vec3f wm = wi * eta + wo;
+        Vec3f wm = wi * etap + wo;
         if (cosTheta_i == 0 || cosTheta_o == 0 || LengthSquared(wm) == 0.f)
             return {};
+        wm = Normalize(wm);
         wm = wm.z < 0.f ? -wm : wm;
         if (Dot(wm, wi) * cosTheta_i < 0.f || Dot(wm, wo) * cosTheta_o < 0.f) return {};
         f32 F = FrDielectric(Dot(wo, wm), eta);
