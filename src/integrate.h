@@ -25,6 +25,7 @@ struct SurfaceInteraction
         Vec3IF32 n;
     } shading;
     LaneIU32 lightIndices;
+    LaneIU32 mediumIndices;
 };
 
 struct LightSample
