@@ -269,4 +269,9 @@ void PartitionFix()
     printf("num lines %u\n", numLines);
 }
 
+void BVHSortingTest()
+{
+
+}
+
 } // namespace rt

@@ -1,5 +1,6 @@
 namespace rt
 {
+#if 0
 void SphericalSampleTest()
 {
     int count  = 1024 * 1024;
@@ -41,4 +42,5 @@ void SphericalSampleTest()
     }
     printf("%f, %f\n", sphInt.value, areaInt.value);
 }
+#endif
 } // namespace rt

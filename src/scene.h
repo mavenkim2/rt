@@ -436,7 +436,7 @@ struct Volume
     u32 shapeIndex;
     SampledSpectrum Extinction(const Vec3f &p, f32 time, f32 filterWidth) const;
     void QueryExtinction(const Bounds &bounds, SampledSpectrum &cMin, SampledSpectrum &cMaj) const;
-    PhaseFunction PhaseFunction() const;
+    // PhaseFunction PhaseFunction() const;
 };
 
 // NOTE: only leaf scenes can

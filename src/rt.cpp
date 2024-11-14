@@ -39,7 +39,7 @@
 #include "scene.cpp"
 #include "bvh.cpp"
 
-#include "integrate.cpp"
+// #include "integrate.cpp"
 
 #include "tests/test.cpp"
 #include "tests/sampling_test.cpp"
@@ -1064,7 +1064,6 @@ int main(int argc, char *argv[])
     // AOSSBVHBuilderTest(dataArena, &mesh);
     // PartitionFix();
 
-    SphericalSampleTest();
     // PartialRebraidBuilderTest(dataArena);
 
     //////////////////////////////

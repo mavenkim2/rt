@@ -334,6 +334,12 @@ __forceinline f32 Extract<0>(const Lane4F32 &a)
     return _mm_cvtss_f32(a);
 }
 
+template <i32 m>
+__forceinline Lane4F32 Blend(const Lane4F32 &a, const Lane4F32 &b)
+{
+    return _mm_blend_ps(a, b, m);
+}
+
 __forceinline Lane4F32 Permute(const Lane4F32 &a, const Lane4U32 &b)
 {
 #if defined(__AVX__)
