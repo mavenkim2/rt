@@ -39,6 +39,13 @@ struct Bounds
         minP = Max(other.minP, minP);
         maxP = Min(other.maxP, maxP);
     }
+    __forceinline Lane4F32 Diagonal() const { return maxP - minP; }
+    __forceinline Lane4F32 Centroid() const { return (maxP + minP) * 0.5f; }
+    __forceinline Lane4F32 operator[](u32 index)
+    {
+        Assert(index == 0 || index == 1);
+        return index ? maxP : minP;
+    }
 };
 
 __forceinline Bounds Intersect(const Bounds &a, const Bounds &b)

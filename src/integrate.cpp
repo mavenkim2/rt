@@ -456,10 +456,6 @@ void Li(Scene2 *scene, RayDifferential &ray, Sampler &sampler, u32 maxDepth, Sam
 }
 #endif
 
-struct Volume
-{
-};
-
 struct RaySegment
 {
     f32 tMin;
@@ -476,8 +472,22 @@ struct PhaseFunctionSample
     f32 pdf = 0.f;
 };
 
+struct OctreeNode
+{
+    // OctreeNode *children[8];
+    // Bounds bounds;
+    u32 volumeIndices[4];
+    u32 numVolumes;
+    OctreeNode *children;
+    SampledSpectrum extinctionMin;
+    SampledSpectrum extinctionMax;
+};
+
 struct VolumeAggregate
 {
+    Bounds volumeBounds;
+    OctreeNode *root;
+
     struct Interator
     {
         static constexpr u32 MAX_VOLUMES = 8;
@@ -490,17 +500,92 @@ struct VolumeAggregate
         {
         }
     };
+    void Build(Arena *arena, Scene2 *scene)
+    {
+        const f32 T = -1.f / std::log(0.5f);
+        // Loop over the bounds of the volume
+        Bounds bounds;
+        for (u32 i = 0; i < scene->numVolumes; i++)
+        {
+            Shape *shape = scene->shapes[scene->volumes[i].shapeIndex];
+            bounds.Extend(shape->GetBounds());
+        }
+        volumeBounds = bounds;
+
+        f32 maxExtent = neg_inf;
+        Lane4F32 diag = bounds.Diagonal();
+        for (u32 i = 0; i < 3; i++)
+        {
+            if (diag[i] > maxExtent)
+            {
+                maxExtent = diag[i];
+            }
+        }
+
+        OctreeNode *root = PushStruct(arena, OctreeNode);
+        root->extinctionMin.SetInf();
+        for (u32 i = 0; i < scene->numVolumes; i++)
+        {
+            struct StackEntry
+            {
+                OctreeNode *node;
+                Bounds b;
+            };
+            Volume *volume = &scene->volumes[i];
+            StackEnry stack[64];
+            i32 stackPtr      = 0;
+            stack[stackPtr++] = StackEntry{root, bounds};
+
+            while (stackPtr > 0)
+            {
+                StackEntry entry = stack[--stackPtr];
+                Bounds &b        = entry.b;
+                OctreeNode *node = entry.node;
+                // Get minorant and majorant
+                SampledSpectrum extinctionMin, extinctionMax;
+                volume->QueryExtinction(bounds, extinctionMin, extinctionMax);
+                if (!extinctionMax) continue;
+
+                node->volumes[node->numVolumes++] = i;
+                node->extinctionMax               = Max(node->extinctionMax, extinctionMax);
+                node->extinctionMin               = Min(node->extinctionMin, extinctionMin);
+                // max(R) - min(R) * diag(R) > T
+                bool divide = (extinctionMax - extinctionMin) * Length(ToVec3f(b.Diagonal())) > T;
+                if (divide)
+                {
+                    if (!node->children)
+                    {
+                        node->children = PushArray(arena, OctreeNode, 8);
+                        for (u32 childIndex = 0; childIndex < 8; childIndex++)
+                        {
+                            node->children[i].extinctionMin = node->extinctionMin;
+                            node->children[i].extinctionMax = node->extinctionMax;
+                        }
+                    }
+                    Lane4F32 centroid = b.Centroid();
+                    Lane4F32 mins[2]  = {b.minP, centroid};
+                    Lane4F32 maxs[2]  = {centroid, b.maxP};
+                    for (u32 childIndex = 0; childIndex < 8; childIndex++)
+                    {
+                        Lane4F32 min(mins[childIndex & 1][0], mins[(childIndex & 3) >> 1][1],
+                                     mins[childIndex >> 2][2], 0.f);
+
+                        Lane4F32 max(maxs[childIndex & 1][0], maxs[(childIndex & 3) >> 1][1],
+                                     maxs[childIndex >> 2][2], 0.f);
+                        Bounds newBounds(min, max);
+                        stack[stackPtr++] = {&node->children[childIndex], newBounds};
+                    }
+                }
+            }
+        }
+    }
+
     struct Iterator Iterator(const RayDifferential &ray)
     {
     }
-};
-
-struct OctreeNode
-{
-    OctreeNode *children[8];
-    Bounds bounds;
-    f32 extinctionMin;
-    f32 extinctionMax;
+    void Traverse()
+    {
+    }
 };
 
 f32 HenyeyGreenstein(f32 cosTheta, f32 g)

@@ -203,8 +203,8 @@ struct SampledSpectrum
     explicit operator bool() const
     {
         for (u32 i = 0; i < NSampledWavelengths; ++i)
-            if (values[i] == 0) return false;
-        return true;
+            if (values[i] != 0) return true;
+        return false;
     }
     f32 MinComponentValue() const
     {
@@ -227,9 +227,21 @@ struct SampledSpectrum
             sum += values[i];
         return sum / NSampledWavelengths;
     }
+    void SetInf()
+    {
+        for (u32 i = 0; i < NSampledWavelengths; ++i)
+            values[i] = pos_inf;
+    }
 
     f32 values[NSampledWavelengths];
 };
+SampledSpectrum Max(const SampledSpectrum &a, const SampledSpectrum &b)
+{
+    SampledSpectrum result;
+    for (u32 i = 0; i < NSampledWavelengths; ++i)
+        result.values[i] = Max(a.values[i], b.values[i]);
+    return result;
+}
 
 SampledSpectrum SafeDiv(SampledSpectrum a, SampledSpectrum b)
 {

@@ -431,6 +431,14 @@ struct Instance
 //     u32 numMeshes;
 // };
 
+struct Volume
+{
+    u32 shapeIndex;
+    SampledSpectrum Extinction(const Vec3f &p, f32 time, f32 filterWidth) const;
+    void QueryExtinction(const Bounds &bounds, SampledSpectrum &cMin, SampledSpectrum &cMaj) const;
+    PhaseFunction PhaseFunction() const;
+};
+
 // NOTE: only leaf scenes can
 struct Scene2
 {
@@ -448,6 +456,10 @@ struct Scene2
             AffineSpace *affineTransforms;
         };
     };
+    // Volumes
+    Volume *volumes;
+    u32 numVolumes;
+
     struct DiffuseAreaLight *lights;
     struct InfiniteLight *infiniteLights;
     BVHNodeType nodePtr;
