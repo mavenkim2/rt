@@ -271,17 +271,14 @@ void PartitionFix()
 
 void BVHSortingTest()
 {
-    alignas(32) f32 arr[] = {0.f, 1.f, 2.f, 3.f,
-                             4.f, 5.f, 6.f, 7.f};
-    // for (u32 i = 0; i < 40320; i++)
-    // {
-    Lane8F32 t_hgfedcba = Lane8F32::Load(arr);
-
+    f32 time      = 0.f;
+    f32 time2     = 0.f;
     auto testCase = [&](Lane8F32 t_hgfedcba, u32 order[8]) {
-        Lane8F32 t_aaaaaaaa = Shuffle<0>(t_hgfedcba);
-        Lane8F32 t_edbcbbca = ShuffleReverse<4, 3, 1, 2, 1, 1, 2, 0>(t_hgfedcba);
-        Lane8F32 t_gfcfeddb = ShuffleReverse<6, 5, 2, 5, 4, 3, 3, 1>(t_hgfedcba);
-        Lane8F32 t_hhhgfgeh = ShuffleReverse<7, 7, 7, 6, 5, 6, 4, 7>(t_hgfedcba);
+        PerformanceCounter counter = OS_StartCounter();
+        Lane8F32 t_aaaaaaaa        = Shuffle<0>(t_hgfedcba);
+        Lane8F32 t_edbcbbca        = ShuffleReverse<4, 3, 1, 2, 1, 1, 2, 0>(t_hgfedcba);
+        Lane8F32 t_gfcfeddb        = ShuffleReverse<6, 5, 2, 5, 4, 3, 3, 1>(t_hgfedcba);
+        Lane8F32 t_hhhgfgeh        = ShuffleReverse<7, 7, 7, 6, 5, 6, 4, 7>(t_hgfedcba);
 
         const u32 mask0 = Movemask(t_aaaaaaaa < t_gfcfeddb);
         const u32 mask1 = Movemask(t_edbcbbca < t_gfcfeddb);
@@ -306,6 +303,7 @@ void BVHSortingTest()
         Assert(indexF == order[5]);
         Assert(indexG == order[6]);
         Assert(indexH == order[7]);
+        time += OS_GetMilliseconds(counter);
     };
     for (u32 a = 0; a < 8; a++)
     {
@@ -323,9 +321,10 @@ void BVHSortingTest()
                             {
                                 for (u32 h = 0; h < 8; h++)
                                 {
-                                    alignas(32) u32 values[8] = {a, b, c, d, e, f, g, h};
-                                    alignas(32) u32 out[8]    = {a, b, c, d, e, f, g, h};
-                                    u32 order[8]              = {0, 1, 2, 3, 4, 5, 6, 7};
+                                    PerformanceCounter counter = OS_StartCounter();
+                                    alignas(32) u32 values[8]  = {a, b, c, d, e, f, g, h};
+                                    alignas(32) u32 out[8]     = {a, b, c, d, e, f, g, h};
+                                    u32 order[8]               = {0, 1, 2, 3, 4, 5, 6, 7};
                                     for (u32 sort0 = 1; sort0 < 8; sort0++)
                                     {
                                         u32 key   = values[sort0];
@@ -339,11 +338,13 @@ void BVHSortingTest()
                                         values[sort1 + 1] = key;
                                         order[sort1 + 1]  = sort0;
                                     }
+                                    time2 += OS_GetMilliseconds(counter);
                                     u32 outOrder[8];
                                     for (u32 i = 0; i < 8; i++)
                                     {
                                         outOrder[order[i]] = i;
                                     }
+
                                     testCase(Lane8F32(Lane8U32::Load(out)), outOrder);
                                 }
                             }
@@ -353,6 +354,9 @@ void BVHSortingTest()
             }
         }
     }
+    // printf("time %fms\n", OS_GetMilliseconds(counter));
+    printf("time avx %fms\n", time);
+    printf("time insertion %fms\n", time2);
 }
 
 } // namespace rt

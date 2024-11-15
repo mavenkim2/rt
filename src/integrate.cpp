@@ -4,6 +4,8 @@ namespace rt
 {
 // TODO to render moana:
 // - infinite lights
+// - volumetric
+//      - ratio tracking, residual ratio tracking, delta tracking, virtual density segments?
 // - shading, ptex, materials, textures
 //      - ray differentials
 // - bvh intersection and triangle intersection
@@ -11,8 +13,6 @@ namespace rt
 
 // after that's done:
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
-// - volumetric
-//      - ratio tracking, residual ratio tracking, delta tracking, virtual density segments?
 // - bdpt, metropolis, vcm/upbp, mcm?
 // - subdivision surfaces
 
@@ -478,8 +478,11 @@ struct RaySegment
 {
     f32 tMin;
     f32 tMax;
-    SampledSpectrum majorant;
-    SampledSpectrum minorant;
+    SampledSpectrum cMaj;
+    SampledSpectrum cMin;
+    RaySegment() {}
+    RaySegment(f32 tMin, f32 tMax, f32 min, f32 max, SampledSpectrum spec)
+        : tMin(tMin), tMax(tMax), cMaj(spec * min), cMin(spec * max) {}
 };
 
 struct VolumeAggregate
@@ -494,26 +497,17 @@ struct VolumeAggregate
         Lane4F32 invRayD;
         SampledSpectrum cExtinct;
 
-        f32 tMin;
-        f32 tMax;
-        f32 tExitNode;
-
-        f32 tExit;
-        // SampledSpectrum majorant;
-        // SampledSpectrum minorant;
-        Volume *volumes[MAX_VOLUMES];
-
         struct StackEntry
         {
-            OctreeNode *nodes;
+            OctreeNode *node;
             Bounds b;
+            f32 tMin, tMax;
+            StackEntry() {}
+            StackEntry(OctreeNode *node, Bounds &b, f32 tMin, f32 tMax)
+                : node(node), b(b), tMin(tMin), tMax(tMax) {}
         };
         StackEntry entries[128];
         u32 stackPtr;
-
-        f32 nextCrossingT[3];
-        f32 dT[3];
-        i32 step[3];
 
         Iterator() {}
         Iterator(const Ray *ray, SampledSpectrum cExtinct, f32 tMax, VolumeAggregate *agg)
@@ -527,30 +521,32 @@ struct VolumeAggregate
                          0.f));
         }
 
-        RaySegment First()
+        RaySegment Next()
         {
-            Lane4F32 p   = Lane4F32(*ray(tMin));
-            i32 signBits = {
-                ray->d[0] > 0.f,
-                ray->d[1] > 0.f,
-                ray->d[2] > 0.f,
-            };
-            // TODO: this is actually a ray aabb intersection, and you have to sort based on the direction of the ray
             while (stackPtr)
             {
                 StackEntry &entry = entries[--stackPtr];
-                OctreeNode *nodes = entry.nodes;
+                OctreeNode *node  = entry.nodes;
+                Assert(node);
+
+                // If leaf
+                if (!node->children)
+                {
+                    RaySegment segment(entry.tMin, entry.tMax, node->extinctionMin, node->extinctionMax, cExtinct);
+                    return segment;
+                }
+
                 Bounds &b         = entry.b;
                 Lane4F32 centroid = b.Centroid();
 
                 // Calculate bounds, intersect ray
-                Lane4F32 minX = Blend<0xaa>(Lane8F32(b.minP[0]), Lane8F32(centroid[0]));
-                Lane4F32 minY = Blend<0xcc>(Lane8F32(b.minP[1]), Lane8F32(centroid[1]));
-                Lane4F32 minZ = Blend<0xf0>(Lane8F32(b.minP[2]), Lane8F32(centroid[2]));
+                Lane8F32 minX = Blend<0xaa>(Lane8F32(b.minP[0]), Lane8F32(centroid[0]));
+                Lane8F32 minY = Blend<0xcc>(Lane8F32(b.minP[1]), Lane8F32(centroid[1]));
+                Lane8F32 minZ = Blend<0xf0>(Lane8F32(b.minP[2]), Lane8F32(centroid[2]));
 
-                Lane4F32 maxX = Blend<0xaa>(Lane8F32(centroid[0]), Lane8F32(b.maxP[0]);
-                Lane4F32 maxY = Blend<0xcc>(Lane8F32(centroid[1]), Lane8F32(b.maxP[1]);
-                Lane4F32 maxZ = Blend<0xf0>(Lane8F32(centroid[2]), Lane8F32(b.maxP[2]);
+                Lane8F32 maxX = Blend<0xaa>(Lane8F32(centroid[0]), Lane8F32(b.maxP[0]);
+                Lane8F32 maxY = Blend<0xcc>(Lane8F32(centroid[1]), Lane8F32(b.maxP[1]);
+                Lane8F32 maxZ = Blend<0xf0>(Lane8F32(centroid[2]), Lane8F32(b.maxP[2]);
 
                 Lane8F32 tMinX = (minX - ray->o[0]) * invRayD;
                 Lane8F32 tMaxX = (maxX - ray->o[0]) * invRayD;
@@ -575,9 +571,9 @@ struct VolumeAggregate
                 Lane8F32 intersectMask  = tEntry <= tLeave;
                 u32 maskBits =  Movemask(intersectMask);
 
-                Lane8F32 t_hgfedcba = Select(intersectMask, tLeave, pos_inf);
+                Lane8F32 t_hgfedcba = Select(intersectMask, tEntry, pos_inf);
 
-                // Find the indices of each node
+                // Find the indices of each node (distance sorted)
                 Lane8F32 t_aaaaaaaa = Shuffle<0>(t_hgfedcba);
                 Lane8F32 t_edbcbbca = ShuffleReverse<4, 3, 1, 2, 1, 1, 2, 0>(t_hgfedcba);
                 Lane8F32 t_gfcfeddb = ShuffleReverse<6, 5, 2, 5, 4, 3, 3, 1>(t_hgfedcba);
@@ -590,173 +586,115 @@ struct VolumeAggregate
 
                 const u32 mask = mask0 | (mask1 << 8) | (mask2 << 16) | (mask3 << 24);
 
-                u32 indexA = PopCount(~mask & 0x000100ed);
-                u32 indexB = PopCount((mask ^ 0x002c2c00) & 0x002c2d00);
-                u32 indexC = PopCount((mask ^ 0x20121200) & 0x20123220);
-                u32 indexD = PopCount((mask ^ 0x06404000) & 0x06404602);
-                u32 indexE = PopCount((mask ^ 0x08808000) & 0x0a828808);
-                u32 indexF = PopCount((mask ^ 0x50000000) & 0x58085010);
-                u32 indexG = PopCount((mask ^ 0x80000000) & 0x94148080);
-                u32 indexH = PopCount(mask & 0xe0e10000);
+                u32 indices[] = {
+                    PopCount(~mask & 0x000100ed),
+                    PopCount((mask ^ 0x002c2c00) & 0x002c2d00),
+                    PopCount((mask ^ 0x20121200) & 0x20123220),
+                    PopCount((mask ^ 0x06404000) & 0x06404602),
+                    PopCount((mask ^ 0x08808000) & 0x0a828808),
+                    PopCount((mask ^ 0x50000000) & 0x58085010),
+                    PopCount((mask ^ 0x80000000) & 0x94148080),
+                    PopCount(mask & 0xe0e10000),
+                };
 
-                if (!nodes[maskBits].children)
-                {
-                    Lane4F32 diag = b.Diagonal();
-                    // X
-                    dT[0]            = diag[0] / (ray->d[0] * 2.f);
-                    step[0]          = signBits[0] * 2 - 1;
-                    f32 x            = bounds[signBit[0]][maskBits & 1][0];
-                    nextCrossingT[0] = tMin + (x - ray->o[0]) / (ray->d[0]);
-                    // Y
-                    dT[1]            = diag[1] / (ray->d[1] * 2.f);
-                    step[1]          = signBits[1] * 2 - 1;
-                    f32 y            = bounds[signBit[1]][(maskBits & 3) >> 1][1];
-                    nextCrossingT[1] = tMin + (x - ray->o[1]) / (ray->d[1]);
-                    // Z
-                    dT[2]            = diag[2] / (ray->d[2] * 2.f);
-                    step[2]          = signBits[2] * 2 - 1;
-                    f32 z            = bounds[signBit[2]][maskBits >> 2][2];
-                    nextCrossingT[2] = tMin + (x - ray->o[2]) / (ray->d[2]);
-
-                    RaySegment segment;
-                    Next(segment);
-                    return segment;
-                }
-
-                // TODO: simd blend instead
-                Lane4F32 min(bounds[0][maskBits & 1][0], bounds[0][(maskBits & 3) >> 1][1],
-                             bounds[0][maskBits >> 2][2], 0.f);
-                Lane4F32 max(bounds[1][maskBits & 1][0], bounds[1][(maskBits & 3) >> 1][1],
-                             bounds[1][maskBits >> 2][2], 0.f);
-                Bounds newBounds(min, max);
-                entries[stackPtr++] = StackEntry{nodes[maskBits].children, newBounds};
-            }
-        }
-        bool Next(RaySegment &segment)
-        {
-            if (tMin >= tMax) return false;
-            StackEntry &entry = entries[stackPtr];
-            bool cmp01        = nextCrossingT[0] < nextCrossingT[1];
-            bool cmp02        = nextCrossingT[0] < nextCrossingT[2];
-            bool cmp12        = nextCrossingT[1] < nextCrossingT[2];
-            u32 bits          = (cmp01 << 2) | (cmp02 << 1) | cmp12;
-            const u32 lut[8]  = {2, 1, 2, 1, 2, 2, 0, 0};
-            u32 axis          = lut[bits];
-
-            segment.tMin = tMin;
-            segment.tMax = Min(tExit, tMin + dT[axis]);
-            tMin         = segment.tMax;
-
-            if (segment.tMax != tExitNode) return true;
-
-            Vec3f p = *ray(tMin);
-            StackEntry entry;
-            while (stackPtr > 0) // && tMin < tMax)
-            {
-                entry = entries[--stackPtr];
-
-                OctreeNode *nodes = entry.node;
-                Bounds &b         = entry.b;
-
-                bool dda = false;
+                // Add to stack
+                Lane4F32 mins[] = {b.minP, centroid};
+                Lane4F32 maxs[] = {centroid, b.maxP};
+                const u32 numIntersectedNodes = PopCount(maskBits);
                 for (u32 i = 0; i < 8; i++)
                 {
-                    if (nodes[i].children == 0)
-                    {
-                        Lane4F32 diag = b.Diagonal();
-                        for (u32 axis = 0; axis < 3; axis++)
-                        {
-                            dT[axis]            = (diag[axis]) / (ray->d[axis] * 2.f);
-                            nextCrossingT[axis] = ;
-                        }
-                        dda = true;
-                        break;
-                    }
+                    Lane4F32 min(mins[i & 1][0], mins[(i & 3) >> 1][1],
+                                 mins[i >> 2][2], 0.f);
+                    Lane4F32 max(maxs[1][i & 1][0], maxs[1][(i & 3) >> 1][1],
+                                 maxs[1][i >> 2][2], 0.f);
+                    Bounds newBounds(min, max);
+                    entries[stackPtr + (numIntersectedNodes - 1 - indices[i]) & 7] =
+                        StackEntry(&node->children[i], newBounds, tEntry[i], tLeave[i]);
                 }
+                stackPtr += numIntersectedNodes;
             }
         }
     };
-};
 
-void Build(Arena *arena, Scene2 *scene)
-{
-    const f32 T = -1.f / std::log(0.5f);
-    // Loop over the bounds of the volume
-    Bounds bounds;
-    for (u32 i = 0; i < scene->numVolumes; i++)
+    void Build(Arena *arena, Scene2 *scene)
     {
-        Shape *shape = scene->shapes[scene->volumes[i].shapeIndex];
-        bounds.Extend(shape->GetBounds());
-    }
-    volumeBounds = bounds;
-
-    f32 maxExtent = neg_inf;
-    Lane4F32 diag = bounds.Diagonal();
-    for (u32 i = 0; i < 3; i++)
-    {
-        if (diag[i] > maxExtent)
+        const f32 T = -1.f / std::log(0.5f);
+        // Loop over the bounds of the volume
+        Bounds bounds;
+        for (u32 i = 0; i < scene->numVolumes; i++)
         {
-            maxExtent = diag[i];
+            Shape *shape = scene->shapes[scene->volumes[i].shapeIndex];
+            bounds.Extend(shape->GetBounds());
         }
-    }
+        volumeBounds = bounds;
 
-    OctreeNode *root = PushStruct(arena, OctreeNode);
-    root->extinctionMin.SetInf();
-    for (u32 i = 0; i < scene->numVolumes; i++)
-    {
-        struct StackEntry
+        f32 maxExtent = neg_inf;
+        Lane4F32 diag = bounds.Diagonal();
+        for (u32 i = 0; i < 3; i++)
         {
-            OctreeNode *node;
-            Bounds b;
-        };
-        Volume *volume = &scene->volumes[i];
-        StackEnry stack[64];
-        i32 stackPtr      = 0;
-        stack[stackPtr++] = StackEntry{root, bounds};
-
-        while (stackPtr > 0)
-        {
-            StackEntry entry = stack[--stackPtr];
-            Bounds &b        = entry.b;
-            OctreeNode *node = entry.node;
-            // Get minorant and majorant
-            SampledSpectrum extinctionMin, extinctionMax;
-            volume->QueryExtinction(bounds, extinctionMin, extinctionMax);
-            if (!extinctionMax) continue;
-
-            node->volumes[node->numVolumes++] = i;
-            node->extinctionMax               = Max(node->extinctionMax, extinctionMax);
-            node->extinctionMin               = Min(node->extinctionMin, extinctionMin);
-            // max(R) - min(R) * diag(R) > T
-            bool divide = (extinctionMax - extinctionMin) * Length(ToVec3f(b.Diagonal())) > T;
-            if (divide)
+            if (diag[i] > maxExtent)
             {
-                if (!node->children)
+                maxExtent = diag[i];
+            }
+        }
+
+        OctreeNode *root = PushStruct(arena, OctreeNode);
+        root->extinctionMin.SetInf();
+        for (u32 i = 0; i < scene->numVolumes; i++)
+        {
+            struct StackEntry
+            {
+                OctreeNode *node;
+                Bounds b;
+            };
+            Volume *volume = &scene->volumes[i];
+            StackEnry stack[64];
+            i32 stackPtr      = 0;
+            stack[stackPtr++] = StackEntry{root, bounds};
+
+            while (stackPtr > 0)
+            {
+                StackEntry entry = stack[--stackPtr];
+                Bounds &b        = entry.b;
+                OctreeNode *node = entry.node;
+                // Get minorant and majorant
+                SampledSpectrum extinctionMin, extinctionMax;
+                volume->QueryExtinction(bounds, extinctionMin, extinctionMax);
+                if (!extinctionMax) continue;
+
+                node->volumes[node->numVolumes++] = i;
+                node->extinctionMax               = Max(node->extinctionMax, extinctionMax);
+                node->extinctionMin               = Min(node->extinctionMin, extinctionMin);
+                // max(R) - min(R) * diag(R) > T
+                bool divide = (extinctionMax - extinctionMin) * Length(ToVec3f(b.Diagonal())) > T;
+                if (divide)
                 {
-                    node->children = PushArray(arena, OctreeNode, 8);
+                    if (!node->children)
+                    {
+                        node->children = PushArray(arena, OctreeNode, 8);
+                        for (u32 childIndex = 0; childIndex < 8; childIndex++)
+                        {
+                            node->children[i].extinctionMin = node->extinctionMin;
+                            node->children[i].extinctionMax = node->extinctionMax;
+                        }
+                    }
+                    Lane4F32 centroid = b.Centroid();
+                    Lane4F32 mins[2]  = {b.minP, centroid};
+                    Lane4F32 maxs[2]  = {centroid, b.maxP};
                     for (u32 childIndex = 0; childIndex < 8; childIndex++)
                     {
-                        node->children[i].extinctionMin = node->extinctionMin;
-                        node->children[i].extinctionMax = node->extinctionMax;
-                    }
-                }
-                Lane4F32 centroid = b.Centroid();
-                Lane4F32 mins[2]  = {b.minP, centroid};
-                Lane4F32 maxs[2]  = {centroid, b.maxP};
-                for (u32 childIndex = 0; childIndex < 8; childIndex++)
-                {
-                    Lane4F32 min(mins[childIndex & 1][0], mins[(childIndex & 3) >> 1][1],
-                                 mins[childIndex >> 2][2], 0.f);
+                        Lane4F32 min(mins[childIndex & 1][0], mins[(childIndex & 3) >> 1][1],
+                                     mins[childIndex >> 2][2], 0.f);
 
-                    Lane4F32 max(maxs[childIndex & 1][0], maxs[(childIndex & 3) >> 1][1],
-                                 maxs[childIndex >> 2][2], 0.f);
-                    Bounds newBounds(min, max);
-                    stack[stackPtr++] = {&node->children[childIndex], newBounds};
+                        Lane4F32 max(maxs[childIndex & 1][0], maxs[(childIndex & 3) >> 1][1],
+                                     maxs[childIndex >> 2][2], 0.f);
+                        Bounds newBounds(min, max);
+                        stack[stackPtr++] = {&node->children[childIndex], newBounds};
+                    }
                 }
             }
         }
     }
-}
 };
 
 f32 HenyeyGreenstein(f32 cosTheta, f32 g)
@@ -1180,28 +1118,6 @@ void VirtualDensitySegments(const RayDifferential &ray)
     }
 
     // NOTE: beta is not updated because HenyeyGreenstein is perfectly importance sampled
-}
-
-void BuildAggregate(Arena *arena, Scene2 *scene)
-{
-    OctreeNode root;
-}
-
-void IntersectVolumeAggregate(Arena *arena, OctreeNode *root, Bounds &volumeBounds, const RayDifferential &ray)
-{
-    OctreeNode *node = root;
-    while (node)
-    {
-        // If the current root is too small, add a parent
-        if (volumeBounds.minP < node->bounds.minP || volumeBounds.maxP > node->bounds.maxP)
-        {
-            OctreeNode *newNode  = PushStruct(arena, OctreeNode);
-            newNode->children[0] = node;
-            // newNode->bounds = Bounds(node->bounds.minP * 2
-            //         newNode->ext
-        }
-    }
-    f32 filterWidth = ComputeFilterWidth(ray);
 }
 
 } // namespace rt
