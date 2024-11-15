@@ -1052,6 +1052,8 @@ int main(int argc, char *argv[])
     scheduler.Init(numProcessors);
 
     const u32 count = 3000000;
+
+    BVHSortingTest();
     // TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
 
     // TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");

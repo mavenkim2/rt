@@ -291,6 +291,13 @@ __forceinline Lane8F32 Shuffle(const Lane8F32 &l)
     return _mm256_permutevar8x32_ps(l, shuf);
 }
 
+template <i32 a, i32 b, i32 c, i32 d, i32 e, i32 f, i32 g, i32 h>
+__forceinline Lane8F32 ShuffleReverse(const Lane8F32 &l)
+{
+    static const __m256i shuf = _mm256_setr_epi32(h, g, f, e, d, c, b, a);
+    return _mm256_permutevar8x32_ps(l, shuf);
+}
+
 // TODO: permutevar8x32 is AVX2
 template <i32 a>
 __forceinline Lane8F32 Shuffle(const Lane8F32 &l)

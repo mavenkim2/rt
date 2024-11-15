@@ -579,27 +579,25 @@ struct VolumeAggregate
 
                 // Find the indices of each node
                 Lane8F32 t_aaaaaaaa = Shuffle<0>(t_hgfedcba);
-                Lane8F32 t_fdbcbbca = ShuffleReverse<5, 3, 1, 2, 1, 1, 2, 0>(t_hgfedcba);
-                Lane8F32 t_geceeddb = ShuffleReverse<6, 4, 2, 4, 4, 3, 3, 1>(t_hgfedcba);
-                Lane8F32 t_hhhgfgfh = ShuffleReverse<7, 7, 7, 6, 5, 6, 5, 7>(t_hgfedcba);
+                Lane8F32 t_edbcbbca = ShuffleReverse<4, 3, 1, 2, 1, 1, 2, 0>(t_hgfedcba);
+                Lane8F32 t_gfcfeddb = ShuffleReverse<6, 5, 2, 5, 4, 3, 3, 1>(t_hgfedcba);
+                Lane8F32 t_hhhgfgeh = ShuffleReverse<7, 7, 7, 6, 5, 6, 4, 7>(t_hgfedcba);
 
-                const u32 mask0 = Movemask(t_aaaaaaaa < t_gecefddb);
-                const u32 mask1 = Movemask(t_fdbcbbca < t_geceeddb);
-                const u32 mask2 = Movemask(t_fdbcbbca < t_hhhgfgfh);
-                const u32 mask3 = Movemask(t_geceeddb < t_hhhgfgfh);
+                const u32 mask0 = Movemask(t_aaaaaaaa < t_gfcfeddb);
+                const u32 mask1 = Movemask(t_edbcbbca < t_gfcfeddb);
+                const u32 mask2 = Movemask(t_edbcbbca < t_hhhgfgeh);
+                const u32 mask3 = Movemask(t_gfcfeddb < t_hhhgfgeh);
 
                 const u32 mask = mask0 | (mask1 << 8) | (mask2 << 16) | (mask3 << 24);
 
                 u32 indexA = PopCount(~mask & 0x000100ed);
-                u32 indexB = PopCount((mask ^ 0x002a2a00) & 0x002a2b00);
-                u32 indexC = PopCount((mask ^ 0x02121200) & 0x02123220);
-                u32 indexD = PopCount((mask ^ 0x06404000) & 0x06404604);
-                u32 indexE = PopCount((mask ^ 0x58000000) & 0x58005810);
-                u32 indexF = PopCount((mask ^ 0x00808000) & 0x0a8a8080);
+                u32 indexB = PopCount((mask ^ 0x002c2c00) & 0x002c2d00);
+                u32 indexC = PopCount((mask ^ 0x20121200) & 0x20123220);
+                u32 indexD = PopCount((mask ^ 0x06404000) & 0x06404602);
+                u32 indexE = PopCount((mask ^ 0x08808000) & 0x0a828808);
+                u32 indexF = PopCount((mask ^ 0x50000000) & 0x58085010);
                 u32 indexG = PopCount((mask ^ 0x80000000) & 0x94148080);
                 u32 indexH = PopCount(mask & 0xe0e10000);
-
-                Lane8F32 t_dbccbaa = ShuffleReverse<0, 1, 2, 3, 0, 1, 2, 3>(t_hgfedcba);
 
                 if (!nodes[maskBits].children)
                 {
