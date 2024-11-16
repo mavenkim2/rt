@@ -302,6 +302,7 @@ struct Light
     PrimitiveType type;
     void *primitive;
 };
+
 struct ScatterRecord
 {
     Vec3f attenuation;
@@ -435,7 +436,7 @@ struct Volume
 {
     u32 shapeIndex;
     SampledSpectrum Extinction(const Vec3f &p, f32 time, f32 filterWidth) const;
-    void QueryExtinction(const Bounds &bounds, SampledSpectrum &cMin, SampledSpectrum &cMaj) const;
+    void QueryExtinction(const Bounds &bounds, f32 &cMin, f32 &cMaj) const;
     // PhaseFunction PhaseFunction() const;
 };
 
@@ -458,17 +459,23 @@ struct Scene2
     };
     // Volumes
     Volume *volumes;
-    u32 numVolumes;
+    VolumeAggregate aggregate;
 
-    struct DiffuseAreaLight *lights;
+    // Lights
+    struct DiffuseAreaLight *areaLights;
     struct InfiniteLight *infiniteLights;
+    u32 lightPDF[LightClass_Count];
+    u32 numAreaLights;
+    u32 numInfiniteLights;
+    u32 numLights; // total
+
+    // BVH
     BVHNodeType nodePtr;
 
     f32 minX, minY, minZ;
     f32 maxX, maxY, maxZ;
     u32 numInstances;
-    u32 numLights;
-    u32 numInfiniteLights;
+    u32 numVolumes;
     // union
     // {
     //     struct

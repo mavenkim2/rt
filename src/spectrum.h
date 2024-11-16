@@ -227,6 +227,13 @@ struct SampledSpectrum
             sum += values[i];
         return sum / NSampledWavelengths;
     }
+    f32 Sum() const
+    {
+        f32 sum = values[0];
+        for (u32 i = 1; i < NSampledWavelengths; ++i)
+            sum += values[i];
+        return sum;
+    }
     void SetInf()
     {
         for (u32 i = 0; i < NSampledWavelengths; ++i)

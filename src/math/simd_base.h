@@ -293,6 +293,7 @@ using Lane1F32 = LaneF32<1>;
 using Lane4F32 = LaneF32<4>;
 using Lane8F32 = LaneF32<8>;
 
+using Lane1U32 = LaneU32<1>;
 using Lane4U32 = LaneU32<4>;
 using Lane8U32 = LaneU32<8>;
 
@@ -329,6 +330,8 @@ __forceinline Lane1F32 Select(const Lane1F32 mask, const Lane1F32 a, const Lane1
 __forceinline Lane1F32 FMA(const Lane1F32 a, const Lane1F32 b, const Lane1F32 c) { return std::fma(a.value, b.value, c.value); }
 __forceinline Lane1F32 FMS(const Lane1F32 a, const Lane1F32 b, const Lane1F32 c) { return std::fma(a.value, b.value, -c.value); }
 __forceinline Lane1F32 Rsqrt(const Lane1F32 a) { return 1.f / Sqrt(a.value); }
+
+__forceinline bool operator!=(const Lane1U32 &a, const Lane1U32 &b) { return a.value != b.value; }
 
 static const __m128 _mm_lookupmask_ps[16] = {
     _mm_castsi128_ps(_mm_set_epi32(0, 0, 0, 0)),

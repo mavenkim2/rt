@@ -176,13 +176,13 @@ LaneIF32 SphericalQuadArea(const Vec3IF32 &a, const Vec3IF32 &b, const Vec3IF32 
     return Abs(g0 + g1 + g2 + g3 - 2 * PI);
 }
 
-// TODO: maybe consider one light x N interactions instead of N x N
-LightSample SampleLi(const Scene2 *scene, const LaneIU32 lightIndices, const SurfaceInteraction &intr, const Vec2IF32 &u)
+// TODO: get Le
+LightSample SampleLiArea(const Scene2 *scene, const LaneIU32 lightIndices, const SurfaceInteraction &intr, const Vec2IF32 &u)
 {
     DiffuseAreaLight *lights[IntN];
     for (u32 i = 0; i < IntN; i++)
     {
-        lights[i] = &scene->lights[lightIndices[i]];
+        lights[i] = &scene->areaLights[lightIndices[i]];
     }
 
     Vec3IF32 p[4];
@@ -241,13 +241,34 @@ LightSample SampleLi(const Scene2 *scene, const LaneIU32 lightIndices, const Sur
     return result;
 }
 
+// TODO: find the class of each sample, add to a corresponding queue, when the queue is full enough, generate the samples
+LightSample SampleLi(const Scene2 *scene, const LightHandle lightHandle, const SurfaceInteraction &intr, const Vec2f &u)
+{
+    LightClass lClass = lightHandle.GetType();
+    switch (lClass)
+    {
+        case LightClass_Area:
+        {
+            return SampleLiArea(scene, lightHandle.GetIndex(), intr, u);
+        }
+        break;
+        case LightClass_InfImg:
+        {
+            NotImplemented;
+            return LightSample();
+        }
+        break;
+        default: Assert(0); return LightSample();
+    }
+}
+
 // TODO: I don't think this is going to be invoked for the moana scene
 LaneIF32 PDF_Li(const Scene2 *scene, const LaneIU32 lightIndices, const Vec3IF32 &prevIntrP, const SurfaceInteraction &intr)
 {
     DiffuseAreaLight *lights[IntN];
     for (u32 i = 0; i < IntN; i++)
     {
-        lights[i] = &scene->lights[lightIndices[i]];
+        lights[i] = &scene->areaLights[lightIndices[i]];
     }
     Vec3IF32 p[4];
     LaneIF32 area;
@@ -304,17 +325,34 @@ LaneIF32 PDF_Li(const Scene2 *scene, const LaneIU32 lightIndices, const Vec3IF32
     return pdf;
 }
 
+void BuildLightPDF(Scene2 *scene)
+{
+    u32 total                        = 0;
+    scene->lightPDF[LightClass_Area] = total;
+    total += scene->numAreaLights;
+    scene->lightPDF[LightClass_InfImg] = total;
+    total += scene->numInfiniteLights;
+}
+
 f32 LightPDF(Scene2 *scene)
 {
     return 1.f / scene->numLights;
 }
 
-Light *UniformLightSample(Scene2 *scene, f32 u, f32 *pmf = 0)
+LightHandle UniformLightSample(Scene2 *scene, f32 u, f32 *pmf = 0)
 {
-    u32 lightIndex = u32(Min(u * scene->numLights, scene->numLights - 1));
-    Light *light   = &scene->lights[lightIndex];
-    if (pmf) *pmf = LightPDF(scene);
-    return light;
+    u32 lightIndex = Min(u32(u * scene->numLights), scene->numLights - 1);
+    for (u32 i = 0; i < LightClass_Count; i++)
+    {
+        if (lightIndex > scene->lightPDF[i])
+        {
+            LightHandle handle(LightClass(i), lightIndex - scene->lightPDF[i]);
+            if (pmf) *pmf = LightPDF(scene);
+            return handle;
+        }
+    }
+    Assert(0);
+    return LightHandle();
 }
 
 #if 0
@@ -456,246 +494,184 @@ void Li(Scene2 *scene, RayDifferential &ray, Sampler &sampler, u32 maxDepth, Sam
 }
 #endif
 
-struct PhaseFunctionSample
-{
-    Vec3f wi;
-    f32 p;
-    f32 pdf = 0.f;
-};
+//////////////////////////////
+// Volumes
+//
 
-struct OctreeNode
+void VolumeAggregate::Build(Arena *arena, Scene2 *scene)
 {
-    // OctreeNode *children[8];
-    // Bounds bounds;
-    u32 volumeIndices[4];
-    u32 numVolumes;
-    OctreeNode *children;
-    f32 extinctionMin;
-    f32 extinctionMax;
-};
-
-struct RaySegment
-{
-    f32 tMin;
-    f32 tMax;
-    SampledSpectrum cMaj;
-    SampledSpectrum cMin;
-    RaySegment() {}
-    RaySegment(f32 tMin, f32 tMax, f32 min, f32 max, SampledSpectrum spec)
-        : tMin(tMin), tMax(tMax), cMaj(spec * min), cMin(spec * max) {}
-};
-
-struct VolumeAggregate
-{
-    Bounds volumeBounds;
-    OctreeNode *root;
-
-    struct Interator
+    const f32 T = -1.f / std::log(0.5f);
+    // Loop over the bounds of the volume
+    Bounds bounds;
+    for (u32 i = 0; i < scene->numVolumes; i++)
     {
-        static constexpr u32 MAX_VOLUMES = 8;
-        const Ray *ray;
-        Lane4F32 invRayD;
-        SampledSpectrum cExtinct;
+        Shape *shape = scene->shapes[scene->volumes[i].shapeIndex];
+        bounds.Extend(shape->GetBounds());
+    }
+    volumeBounds = bounds;
 
+    f32 maxExtent = neg_inf;
+    Lane4F32 diag = bounds.Diagonal();
+    for (u32 i = 0; i < 3; i++)
+    {
+        if (diag[i] > maxExtent)
+        {
+            maxExtent = diag[i];
+        }
+    }
+
+    root = PushStruct(arena, OctreeNode);
+    root->extinctionMin.SetInf();
+    for (u32 i = 0; i < scene->numVolumes; i++)
+    {
         struct StackEntry
         {
             OctreeNode *node;
             Bounds b;
-            f32 tMin, tMax;
-            StackEntry() {}
-            StackEntry(OctreeNode *node, Bounds &b, f32 tMin, f32 tMax)
-                : node(node), b(b), tMin(tMin), tMax(tMax) {}
         };
-        StackEntry entries[128];
-        u32 stackPtr;
+        Volume *volume = &scene->volumes[i];
+        StackEntry stack[64];
+        i32 stackPtr      = 0;
+        stack[stackPtr++] = StackEntry{root, bounds};
 
-        Iterator() {}
-        Iterator(const Ray *ray, SampledSpectrum cExtinct, f32 tMax, VolumeAggregate *agg)
-            : ray(ray), cExtinct(cExtinct), tMin(0.f), tMax(tMax)
+        while (stackPtr > 0)
         {
-            entries[stackPtr++] = StackEntry{agg->root, agg->volumeBounds};
-            invRayD             = Rcp(
-                Lane4F32(ray->d[0] == -0.f ? 0.f : ray->d[0],
-                         ray->d[1] == -0.f ? 0.f : ray->d[1],
-                         ray->d[2] == -0.f ? 0.f : ray->d[2],
-                         0.f));
-        }
+            StackEntry entry = stack[--stackPtr];
+            Bounds &b        = entry.b;
+            OctreeNode *node = entry.node;
+            // Get minorant and majorant
+            f32 extinctionMin, extinctionMax;
+            volume->QueryExtinction(bounds, extinctionMin, extinctionMax);
+            if (!extinctionMax) continue;
 
-        RaySegment Next()
-        {
-            while (stackPtr)
+            node->volumeHandles[node->numVolumes++] = VolumeHandle(i);
+            node->extinctionMax                     = Max(node->extinctionMax, extinctionMax);
+            node->extinctionMin                     = Min(node->extinctionMin, extinctionMin);
+            // max(R) - min(R) * diag(R) > T
+            bool divide = (extinctionMax - extinctionMin) * Length(ToVec3f(b.Diagonal())) > T;
+            if (divide)
             {
-                StackEntry &entry = entries[--stackPtr];
-                OctreeNode *node  = entry.nodes;
-                Assert(node);
-
-                // If leaf
                 if (!node->children)
                 {
-                    RaySegment segment(entry.tMin, entry.tMax, node->extinctionMin, node->extinctionMax, cExtinct);
-                    return segment;
-                }
-
-                Bounds &b         = entry.b;
-                Lane4F32 centroid = b.Centroid();
-
-                // Calculate bounds, intersect ray
-                Lane8F32 minX = Blend<0xaa>(Lane8F32(b.minP[0]), Lane8F32(centroid[0]));
-                Lane8F32 minY = Blend<0xcc>(Lane8F32(b.minP[1]), Lane8F32(centroid[1]));
-                Lane8F32 minZ = Blend<0xf0>(Lane8F32(b.minP[2]), Lane8F32(centroid[2]));
-
-                Lane8F32 maxX = Blend<0xaa>(Lane8F32(centroid[0]), Lane8F32(b.maxP[0]);
-                Lane8F32 maxY = Blend<0xcc>(Lane8F32(centroid[1]), Lane8F32(b.maxP[1]);
-                Lane8F32 maxZ = Blend<0xf0>(Lane8F32(centroid[2]), Lane8F32(b.maxP[2]);
-
-                Lane8F32 tMinX = (minX - ray->o[0]) * invRayD;
-                Lane8F32 tMaxX = (maxX - ray->o[0]) * invRayD;
-
-                Lane8F32 tMinY = (minY - ray->o[1]) * invRayD;
-                Lane8F32 tMaxY = (maxY - ray->o[1]) * invRayD;
-
-                Lane8F32 tMinZ = (minZ - ray->o[2]) * invRayD;
-                Lane8F32 tMaxZ = (maxZ - ray->o[2]) * invRayD;
-
-                const Lane8F32 tEntryX = Min(tMaxX[0], tMinX[0]);
-                const Lane8F32 tLeaveX = Max(tMinX[0], tMaxX[0]);
-
-                const Lane8F32 tEntryY = Min(tMaxY[1], tMinY[1]);
-                const Lane8F32 tLeaveY = Max(tMinY[1], tMaxY[1]);
-
-                const Lane8F32 tEntryZ = Min(tMaxZ[2], tMinZ[2]);
-                const Lane8F32 tLeaveZ = Max(tMinZ[2], tMaxZ[2]);
-
-                Lane8F32 tEntry = Max(tEntryX, Max(tEntryY, Max(tEntryZ, tMin)));
-                Lane8F32 tLeave = Min(tLeaveX, Min(tLeaveY, Min(tLeaveZ, tMax)));
-                Lane8F32 intersectMask  = tEntry <= tLeave;
-                u32 maskBits =  Movemask(intersectMask);
-
-                Lane8F32 t_hgfedcba = Select(intersectMask, tEntry, pos_inf);
-
-                // Find the indices of each node (distance sorted)
-                Lane8F32 t_aaaaaaaa = Shuffle<0>(t_hgfedcba);
-                Lane8F32 t_edbcbbca = ShuffleReverse<4, 3, 1, 2, 1, 1, 2, 0>(t_hgfedcba);
-                Lane8F32 t_gfcfeddb = ShuffleReverse<6, 5, 2, 5, 4, 3, 3, 1>(t_hgfedcba);
-                Lane8F32 t_hhhgfgeh = ShuffleReverse<7, 7, 7, 6, 5, 6, 4, 7>(t_hgfedcba);
-
-                const u32 mask0 = Movemask(t_aaaaaaaa < t_gfcfeddb);
-                const u32 mask1 = Movemask(t_edbcbbca < t_gfcfeddb);
-                const u32 mask2 = Movemask(t_edbcbbca < t_hhhgfgeh);
-                const u32 mask3 = Movemask(t_gfcfeddb < t_hhhgfgeh);
-
-                const u32 mask = mask0 | (mask1 << 8) | (mask2 << 16) | (mask3 << 24);
-
-                u32 indices[] = {
-                    PopCount(~mask & 0x000100ed),
-                    PopCount((mask ^ 0x002c2c00) & 0x002c2d00),
-                    PopCount((mask ^ 0x20121200) & 0x20123220),
-                    PopCount((mask ^ 0x06404000) & 0x06404602),
-                    PopCount((mask ^ 0x08808000) & 0x0a828808),
-                    PopCount((mask ^ 0x50000000) & 0x58085010),
-                    PopCount((mask ^ 0x80000000) & 0x94148080),
-                    PopCount(mask & 0xe0e10000),
-                };
-
-                // Add to stack
-                Lane4F32 mins[] = {b.minP, centroid};
-                Lane4F32 maxs[] = {centroid, b.maxP};
-                const u32 numIntersectedNodes = PopCount(maskBits);
-                for (u32 i = 0; i < 8; i++)
-                {
-                    Lane4F32 min(mins[i & 1][0], mins[(i & 3) >> 1][1],
-                                 mins[i >> 2][2], 0.f);
-                    Lane4F32 max(maxs[1][i & 1][0], maxs[1][(i & 3) >> 1][1],
-                                 maxs[1][i >> 2][2], 0.f);
-                    Bounds newBounds(min, max);
-                    entries[stackPtr + (numIntersectedNodes - 1 - indices[i]) & 7] =
-                        StackEntry(&node->children[i], newBounds, tEntry[i], tLeave[i]);
-                }
-                stackPtr += numIntersectedNodes;
-            }
-        }
-    };
-
-    void Build(Arena *arena, Scene2 *scene)
-    {
-        const f32 T = -1.f / std::log(0.5f);
-        // Loop over the bounds of the volume
-        Bounds bounds;
-        for (u32 i = 0; i < scene->numVolumes; i++)
-        {
-            Shape *shape = scene->shapes[scene->volumes[i].shapeIndex];
-            bounds.Extend(shape->GetBounds());
-        }
-        volumeBounds = bounds;
-
-        f32 maxExtent = neg_inf;
-        Lane4F32 diag = bounds.Diagonal();
-        for (u32 i = 0; i < 3; i++)
-        {
-            if (diag[i] > maxExtent)
-            {
-                maxExtent = diag[i];
-            }
-        }
-
-        OctreeNode *root = PushStruct(arena, OctreeNode);
-        root->extinctionMin.SetInf();
-        for (u32 i = 0; i < scene->numVolumes; i++)
-        {
-            struct StackEntry
-            {
-                OctreeNode *node;
-                Bounds b;
-            };
-            Volume *volume = &scene->volumes[i];
-            StackEnry stack[64];
-            i32 stackPtr      = 0;
-            stack[stackPtr++] = StackEntry{root, bounds};
-
-            while (stackPtr > 0)
-            {
-                StackEntry entry = stack[--stackPtr];
-                Bounds &b        = entry.b;
-                OctreeNode *node = entry.node;
-                // Get minorant and majorant
-                SampledSpectrum extinctionMin, extinctionMax;
-                volume->QueryExtinction(bounds, extinctionMin, extinctionMax);
-                if (!extinctionMax) continue;
-
-                node->volumes[node->numVolumes++] = i;
-                node->extinctionMax               = Max(node->extinctionMax, extinctionMax);
-                node->extinctionMin               = Min(node->extinctionMin, extinctionMin);
-                // max(R) - min(R) * diag(R) > T
-                bool divide = (extinctionMax - extinctionMin) * Length(ToVec3f(b.Diagonal())) > T;
-                if (divide)
-                {
-                    if (!node->children)
-                    {
-                        node->children = PushArray(arena, OctreeNode, 8);
-                        for (u32 childIndex = 0; childIndex < 8; childIndex++)
-                        {
-                            node->children[i].extinctionMin = node->extinctionMin;
-                            node->children[i].extinctionMax = node->extinctionMax;
-                        }
-                    }
-                    Lane4F32 centroid = b.Centroid();
-                    Lane4F32 mins[2]  = {b.minP, centroid};
-                    Lane4F32 maxs[2]  = {centroid, b.maxP};
+                    node->children = PushArray(arena, OctreeNode, 8);
                     for (u32 childIndex = 0; childIndex < 8; childIndex++)
                     {
-                        Lane4F32 min(mins[childIndex & 1][0], mins[(childIndex & 3) >> 1][1],
-                                     mins[childIndex >> 2][2], 0.f);
-
-                        Lane4F32 max(maxs[childIndex & 1][0], maxs[(childIndex & 3) >> 1][1],
-                                     maxs[childIndex >> 2][2], 0.f);
-                        Bounds newBounds(min, max);
-                        stack[stackPtr++] = {&node->children[childIndex], newBounds};
+                        node->children[i].extinctionMin = node->extinctionMin;
+                        node->children[i].extinctionMax = node->extinctionMax;
                     }
+                }
+                Lane4F32 centroid = b.Centroid();
+                Lane4F32 mins[2]  = {b.minP, centroid};
+                Lane4F32 maxs[2]  = {centroid, b.maxP};
+                for (u32 childIndex = 0; childIndex < 8; childIndex++)
+                {
+                    Lane4F32 minP(mins[childIndex & 1][0], mins[(childIndex & 3) >> 1][1],
+                                  mins[childIndex >> 2][2], 0.f);
+
+                    Lane4F32 maxP(maxs[childIndex & 1][0], maxs[(childIndex & 3) >> 1][1],
+                                  maxs[childIndex >> 2][2], 0.f);
+                    Bounds newBounds(minP, maxP);
+                    stack[stackPtr++] = {&node->children[childIndex], newBounds};
                 }
             }
         }
     }
-};
+}
+
+bool VolumeAggregate::Iterator::Next(RaySegment &segment)
+{
+    while (stackPtr)
+    {
+        StackEntry &entry = entries[--stackPtr];
+        OctreeNode *node  = entry.node;
+        Assert(node);
+
+        // If leaf
+        if (!node->children)
+        {
+            segment = RaySegment(entry.tMin, entry.tMax, node->extinctionMin, node->extinctionMax, cExtinct);
+            return true;
+        }
+
+        Bounds &b         = entry.b;
+        Lane4F32 centroid = b.Centroid();
+
+        // Calculate bounds, intersect ray
+        Lane8F32 minX = Blend<0xaa>(Lane8F32(b.minP[0]), Lane8F32(centroid[0]));
+        Lane8F32 minY = Blend<0xcc>(Lane8F32(b.minP[1]), Lane8F32(centroid[1]));
+        Lane8F32 minZ = Blend<0xf0>(Lane8F32(b.minP[2]), Lane8F32(centroid[2]));
+
+        Lane8F32 maxX = Blend<0xaa>(Lane8F32(centroid[0]), Lane8F32(b.maxP[0]));
+        Lane8F32 maxY = Blend<0xcc>(Lane8F32(centroid[1]), Lane8F32(b.maxP[1]));
+        Lane8F32 maxZ = Blend<0xf0>(Lane8F32(centroid[2]), Lane8F32(b.maxP[2]));
+
+        Lane8F32 tMinX = (minX - ray->o[0]) * invRayDx;
+        Lane8F32 tMaxX = (maxX - ray->o[0]) * invRayDx;
+
+        Lane8F32 tMinY = (minY - ray->o[1]) * invRayDy;
+        Lane8F32 tMaxY = (maxY - ray->o[1]) * invRayDy;
+
+        Lane8F32 tMinZ = (minZ - ray->o[2]) * invRayDz;
+        Lane8F32 tMaxZ = (maxZ - ray->o[2]) * invRayDz;
+
+        const Lane8F32 tEntryX = Min(tMaxX[0], tMinX[0]);
+        const Lane8F32 tLeaveX = Max(tMinX[0], tMaxX[0]);
+
+        const Lane8F32 tEntryY = Min(tMaxY[1], tMinY[1]);
+        const Lane8F32 tLeaveY = Max(tMinY[1], tMaxY[1]);
+
+        const Lane8F32 tEntryZ = Min(tMaxZ[2], tMinZ[2]);
+        const Lane8F32 tLeaveZ = Max(tMinZ[2], tMaxZ[2]);
+
+        Lane8F32 tEntry        = Max(tEntryX, Max(tEntryY, Max(tEntryZ, tMinEpsilon)));
+        Lane8F32 tLeave        = Min(tLeaveX, Min(tLeaveY, Min(tLeaveZ, tMax)));
+        Lane8F32 intersectMask = tEntry <= tLeave;
+        u32 maskBits           = Movemask(intersectMask);
+
+        Lane8F32 t_hgfedcba = Select(intersectMask, tEntry, pos_inf);
+
+        // Find the indices of each node (distance sorted)
+        Lane8F32 t_aaaaaaaa = Shuffle<0>(t_hgfedcba);
+        Lane8F32 t_edbcbbca = ShuffleReverse<4, 3, 1, 2, 1, 1, 2, 0>(t_hgfedcba);
+        Lane8F32 t_gfcfeddb = ShuffleReverse<6, 5, 2, 5, 4, 3, 3, 1>(t_hgfedcba);
+        Lane8F32 t_hhhgfgeh = ShuffleReverse<7, 7, 7, 6, 5, 6, 4, 7>(t_hgfedcba);
+
+        const u32 mask0 = Movemask(t_aaaaaaaa < t_gfcfeddb);
+        const u32 mask1 = Movemask(t_edbcbbca < t_gfcfeddb);
+        const u32 mask2 = Movemask(t_edbcbbca < t_hhhgfgeh);
+        const u32 mask3 = Movemask(t_gfcfeddb < t_hhhgfgeh);
+
+        const u32 mask = mask0 | (mask1 << 8) | (mask2 << 16) | (mask3 << 24);
+
+        u32 indices[] = {
+            PopCount(~mask & 0x000100ed),
+            PopCount((mask ^ 0x002c2c00) & 0x002c2d00),
+            PopCount((mask ^ 0x20121200) & 0x20123220),
+            PopCount((mask ^ 0x06404000) & 0x06404602),
+            PopCount((mask ^ 0x08808000) & 0x0a828808),
+            PopCount((mask ^ 0x50000000) & 0x58085010),
+            PopCount((mask ^ 0x80000000) & 0x94148080),
+            PopCount(mask & 0xe0e10000),
+        };
+
+        // Add to stack
+        Lane4F32 mins[]               = {b.minP, centroid};
+        Lane4F32 maxs[]               = {centroid, b.maxP};
+        const u32 numIntersectedNodes = PopCount(maskBits);
+        for (u32 i = 0; i < 8; i++)
+        {
+            Lane4F32 minP(mins[i & 1][0], mins[(i & 3) >> 1][1],
+                          mins[i >> 2][2], 0.f);
+            Lane4F32 maxP(maxs[i & 1][0], maxs[(i & 3) >> 1][1],
+                          maxs[i >> 2][2], 0.f);
+            Bounds newBounds(minP, maxP);
+            entries[stackPtr + (numIntersectedNodes - 1 - indices[i]) & 7] =
+                StackEntry(&node->children[i], newBounds, tEntry[i], tLeave[i]);
+        }
+        stackPtr += numIntersectedNodes;
+    }
+    return false;
+}
 
 f32 HenyeyGreenstein(f32 cosTheta, f32 g)
 {
@@ -719,8 +695,9 @@ Vec3f SampleHenyeyGreenstein(const Vec3f &wo, f32 g, Vec2f u, f32 *pdf = 0)
     f32 phi      = TwoPi * u[1];
 
     // TODO: implement FromZ
-    Frame wFrame = Frame::FromZ(wo);
-    Vector3f wi  = wFrame.FromLocal(Vec3f(sinTheta * Cos(phi), sinTheta * Sin(phi), cosTheta));
+    Vec3f wi;
+    // Frame wFrame = Frame::FromZ(wo);
+    // Vector3f wi  = wFrame.FromLocal(Vec3f(sinTheta * Cos(phi), sinTheta * Sin(phi), cosTheta));
 
     if (pdf) *pdf = HenyeyGreenstein(cosTheta, g);
     return wi;
@@ -738,11 +715,85 @@ __forceinline f32 MISWeight(SampledSpectrum spec0, SampledSpectrum spec1, u32 ch
     return f32(NSampledWavelengths) * spec0[channel] / (spec0 + spec1).Sum();
 }
 
-SampledSpectrum VolumetricSampleLD(const Vec3f &wo, const BSDF *bsdf, const SurfaceInteraction &intr,
-                                   Scene2 *scene, Sampler sampler, VolumeAggregate &aggregate);
+template <bool residualRatioTracking, typename F>
+SampledSpectrum SampleTMaj(Scene2 *scene, Ray2 &ray, f32 tMax, f32 xi, RNG &rng, SampledWavelengths &lambda, F &callback)
+{
+    tMax *= Length(ray.d);
+    ray.d                      = Normalize(ray.d);
+    VolumeAggregate &aggregate = scene->aggregate;
+    // TODO: get this from the medium somehow
+    SampledSpectrum cExtinct;
 
-SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, Ray &ray, Sampler sampler,
-                                     SampledWavelength &lambda, u32 maxDepth)
+    VolumeAggregate::Iterator itr = aggregate.CreateIterator(&ray, cExtinct, intr.tHit);
+    RaySegment segment;
+
+    // NOTE: contains majorant transmittance (starting from the previous vertex)
+    SampledSpectrum tMaj(1.f);
+    while (itr.Next(segment))
+    {
+        bool terminated = false;
+
+        f32 cMaj                     = segment.cMaj[0];
+        SampledSpectrum cSpectrumMaj = segment.cMaj;
+        if constexpr (residualRatioTracking)
+        {
+            cSpectrumMaj -= segment.cMin;
+            cMaj -= segment.cMin[0];
+        }
+
+        f32 tMax = segment.tMax;
+        f32 tMin = segment.tMin;
+        if (cMaj == 0)
+        {
+            tMaj *= FastExp(-(Min(FLT_MAX, tMax) - tMin) * cSpectrumMaj);
+            continue;
+        }
+
+        for (;;)
+        {
+            f32 t = t - (std::log(1 - xi) / cMaj);
+            xi    = rng.Uniform<f32>();
+            if (t > tMax)
+            {
+                f32 dT = Min(FLT_MAX, tMax) - tMin;
+                tMaj *= FastExp(-dT * cSpectrumMaj);
+                if constexpr (residualRatioTracking) tRay *= FastExp(-dT * segment.cMin[0]);
+                break;
+            }
+            else
+            {
+                tMaj *= FastExp(-(t - tMin) * cSpectrumMaj);
+                Vec3f p = ray(t);
+
+                SampledSpectrum cAbsorb, cScatter, Le;
+                PhaseFunction phase;
+                if (!callback(p, cSpectrumMaj, tMaj, cAbsorb, cScatter, Le, phase))
+                {
+                    terminated = true;
+                    break;
+                }
+                tMaj = SampledSpectrum(1.f);
+                tMin = t;
+            }
+        }
+        if (terminated) return SampledSpectrum(1.f);
+    }
+    return tMaj;
+}
+
+struct NEESample
+{
+    SampledSpectrum L_beta_tray;
+    SampledSpectrum p_l;
+    SampledSpectrum p_u;
+    bool delta;
+};
+
+NEESample VolumetricSampleLD(const SurfaceInteraction &intr, Ray2 &ray, Scene2 *scene, Sampler sampler,
+                             SampledSpectrum beta, const SampledSpectrum &p, const SampledWavelengths &lambda, Vec3f &wi);
+
+SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, Ray2 &ray, Sampler sampler,
+                                     SampledWavelengths &lambda, u32 maxDepth)
 {
     // TODO:
     // 1. actually finish this
@@ -759,38 +810,21 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
     for (;;)
     {
         SurfaceInteraction intr;
+        // TODO: tMin epsilon (for now)
         bool intersect = Intersect(ray, intr);
-        if (intr.mediumIndices)
+        if (intr.volumeIndices != 0)
         {
             bool scattered  = false;
             bool terminated = false;
 
             RNG rng(Hash(sampler.Get1D()), Hash(sampler.Get1D()));
 
-            VolumeAggregate::Iterator itr = aggregate->Iterator(ray);
-            // RaySegment segment;
-            for (; !itr.Finished(); itr.Next())
-            {
-                SampledSpectrum majorant = itr.majorant;
-                f32 tMin                 = itr.tMin;
-                f32 t                    = tMin;
-
-                // Track the transmittance here
-                for (;;)
-                {
-                    f32 xi = rng.Uniform<f32>();
-                    t      = t - (std::log(1 - xi) / majorant[0]);
-                    if (t > itr.tMax)
-                    {
-                        break;
-                    }
-                    Vec3f p = ray(t);
-                    // Compute medium event properties
-                    // TODO: sample/get these properties somehow
-                    SampledSpectrum cAbsorb, cScatter, Le;
-
-                    f32 pAbsorb  = cAbsorb[0] / majorant[0];
-                    f32 pScatter = cScatter[0] / majorant[0];
+            SampleTMaj<false>(
+                scene, ray, si.tHit, sampler.Get1D(), rng, lambda,
+                [&](Vec3f p, const SampledSpectrum &cMaj, const SampledSpectrum &tMaj, const SampledSpectrum &cAbsorb,
+                    const SampledSpectrum &cScatter, const SampledSpectrum &Le, PhaseFunction &phase) {
+                    f32 pAbsorb  = cAbsorb[0] / cMaj[0];
+                    f32 pScatter = cScatter[0] / cMaj[0];
                     f32 pNull    = Max(0.f, 1 - pAbsorb - pScatter);
 
                     xi = rng.Uniform<f32>();
@@ -798,24 +832,14 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
                     if (depth < maxDepth && Le)
                     {
                         // probability of emission (1) * probability of sampling that point
-                        f32 pdf = majorant[0] * t_maj[0];
-                        // divide by pdf cancels
-                        SampledSpectrum betap = beta * t_maj;           // / pdf;
-                        SampledSpectrum p_e   = p_u * majorant * t_maj; // / pdf;
+                        f32 pdf               = cMaj[0] * tMaj[0];
+                        SampledSpectrum betap = beta * tMaj / pdf;
+                        SampledSpectrum p_e   = p_u * cMaj * tMaj / pdf;
                         L += betap * Le * cAbsorb * MISWeight(p_e);
                     }
                     // Emit
                     if (xi < pAbsorb)
                     {
-                        // probability of being absorbed * probability of sampling that point (t_maj * majorant)
-                        // pdf = pAbsorb * t_maj[0] * majorant[0], majorant[0] cancels
-                        // f32 pdf = cAbsorb[0] * t_maj[0];
-                        // L += beta * Le * cAbsorb[0] / (sum(cAbsorb) * 1 / n) / cAbsorb[0]
-                        // L += beta * Le * cAbsorb[0] * MISWeight(cAbsorb);
-
-                        // beta * cAbsorb * Le * Tmaj / ((cAbsorb[0] / majorant[0]) * (majorant[0] * T_maj[0]))
-                        // beta * cAbsorb * Le * Tmaj / (cAbsorb[0] * T_maj[0])
-
                         terminated = true;
                         break;
                     }
@@ -823,23 +847,31 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
                     else if (xi < pAbsorb + pScatter)
                     {
                         // probability of being scattered * probability of sampling that point
-                        f32 pdf = cScatter[0] * t_maj[0];
-                        beta *= t_maj * cScatter / pdf;
-                        p_u *= t_maj * cScatter / pdf;
+                        f32 pdf = cScatter[0] * tMaj[0];
+                        beta *= tMaj * cScatter / pdf;
+                        p_u *= tMaj * cScatter / pdf;
 
-                        Vec2f u                    = sampler.Get2D();
-                        PhaseFunction phase        = itr.GetPhaseFunction();
-                        PhaseFunctionSample sample = phase.GenerateSample(wo, u);
-                        if (sample.pdf == 0)
+                        // Next event estimation (for once scattered direct illumination)
+                        Vec3f wi;
+                        NEESample neeSample = VolumetricSampleLD(intr, ray, scene, sampler, beta, p_u, lambda, wi);
+                        f32 scatterPdf;
+                        SampledSpectrum f = phase.EvaluateSample(wo, wi, &scatterPdf);
+                        neeSample.p_u *= scatterPdf;
+                        L += neeSample.L_beta_tray * f *
+                             MISWeight(neeSample.p_l, Select(neeSample.delta, 0.f, neeSample.p_u));
+
+                        // Generate new scatter direction for indirect illumination
+                        PhaseFunctionSample phaseSample = phase.GenerateSample(wo, sampler.Get2D());
+                        if (phaseSample.pdf == 0)
                         {
                             terminated = true;
                         }
                         else
                         {
-                            beta *= sample.p / sample.pdf;
-                            p_l            = p_u / sample.pdf;
+                            beta *= phaseSample.p / phaseSample.pdf;
+                            p_l            = p_u / phaseSample.pdf;
                             ray.o          = p;
-                            ray.d          = sample.wi;
+                            ray.d          = phaseSample.wi;
                             specularBounce = false;
                         }
 
@@ -848,18 +880,17 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
                     // Null Scatter
                     else
                     {
-                        SampledSpectrum cNull = Max(0.f, 1 - cAbsorb - cScatter);
-                        f32 pdf               = cNull[0] * t_maj[0];
-                        beta *= t_maj * cNull / pdf;
+                        SampledSpectrum cNull = Max(SampledSpectrum(0.f), cMaj - cAbsorb - cScatter);
+                        f32 pdf               = cNull[0] * tMaj[0];
+                        beta *= tMaj * cNull / pdf;
                         beta = Select(pdf, beta, SampledSpectrum(0.f));
-                        p_u *= t_maj * cNull / pdf;
-                        p_l *= t_maj * majorant / pdf;
+                        p_u *= tMaj * cNull / pdf;
+                        p_l *= tMaj * cMaj / pdf;
                     }
-                }
-            }
-            beta *= t_maj / t_maj[0];
-            p_u *= t_maj / t_maj[0];
-            p_l *= t_maj / t_maj[0];
+                });
+            beta *= tMaj / tMaj[0];
+            p_u *= tMaj / tMaj[0];
+            p_l *= tMaj / tMaj[0];
             if (terminated) return L;
             if (scattered) continue;
         }
@@ -896,7 +927,9 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
             // sample infinite area lights, environment map, and return
         }
 
-        // If ray intersects with a light
+        //////////////////////////////
+        // Emitter Intersection
+        //
         if (intr.lightIndices)
         {
             DiffuseAreaLight *light = &scene->lights[intr.lightIndices];
@@ -914,7 +947,8 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
             }
         }
 
-        BSDF bsdf = intr.ComputeShading();
+        // BSDF bsdf = intr.ComputeShading();
+        BSDF bsdf;
         if (!bsdf)
         {
             // denotes boundary between medium, no event
@@ -923,85 +957,132 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
             // skip intersection, expand the differentials
         }
         if (depth++ >= maxDepth) return L;
+
+        //////////////////////////////
+        // Emitter Sampling
+        //
         if (!IsSpecular(bsdf->flags))
         {
-            VolumetricSampleLD(-ray.d, &bsdf, intr, scene, sampler, aggregate);
+            Vec3f wi;
+            NEESample neeSample = VolumetricSampleLD(intr, ray, scene, sampler, beta, p_u, lambda, wi);
+            f32 scatterPdf;
+            SampledSpectrum f = bsdf.EvaluateSample(-ray.d, wi, &scatterPdf);
+            neeSample.p_u *= scatterPdf;
+            L += neeSample.L_beta_tray * f * AbsDot(Vec3f(intr.shading.n), wi) *
+                 MISWeight(neeSample.p_l, neeSample.delta ? SampledSpectrum(0.f) : neeSample.p_u);
         }
-        BSDFSample sample = bsdf->GenerateSample(-ray.d, sampler.Get1D(), sampler.Get2D());
+
+        //////////////////////////////
+        // BSDF Sampling
+        //
+        BSDFSample sample = bsdf.GenerateSample(-ray.d, sampler.Get1D(), sampler.Get2D());
         if (!sample.pdf) return L;
-        beta *= sample.f * AbsDot(intr.shading.n, sample.wi) / sample.pdf;
+        beta *= sample.f * AbsDot(Vec3f(intr.shading.n), sample.wi) / sample.pdf;
         p_l            = p_u / sample.pdf;
-        specularBounce = IsSpecular(bsdf->flags);
+        specularBounce = IsSpecular(bsdf.flags);
         if (sample.IsTransmission())
         {
             etaScale *= Sqr(sample.eta);
         }
-        ray = SpawnRay(sample.wi);
+        ray.p = intr.p;
+        ray.d = sample.wi;
     }
     return L;
 }
 
-SampledSpectrum VolumetricSampleLD(const Vec3f &wo, const BSDF *bsdf, const SurfaceInteraction &intr,
-                                   Scene2 *scene, Sampler sampler, VolumeAggregate &aggregate, SampledSpectrum &p)
+NEESample VolumetricSampleLD(const SurfaceInteraction &intr, Ray2 &ray, Scene2 *scene, Sampler sampler,
+                             SampledSpectrum beta, const SampledSpectrum &p, const SampledWavelengths &lambda, Vec3f &wi)
 {
-    RNG rng;
-
-    f32 pdf;
-    u32 index = UniformLightSample(scene, sampler.Get1D(), &pdf);
-    Vec2f u   = sampler.Get2D();
+    f32 lightPdf;
+    LightHandle lightHandle = UniformLightSample(scene, sampler.Get1D(), &lightPdf);
+    Vec2f u                 = sampler.Get2D();
     if (!light) return SampledSpectrum(0.f);
     LightSample sample = SampleLi(scene, index, intr, u);
     if (sample.pdf == 0.f) return SampledSpectrum(0.f);
-    f32 p_l = pdf * sample.pdf;
-    f32 scatterPdf;
-    SampledSpectrum f_hat;
-    Vec3f wi = Normalize(sample.samplePoint - intr.p);
-    if (bsdf)
-    {
-        // f_hat = bsdf->f(wo, wi) * AbsDot(intr.shading.n, wi);
-        f_hat = bsdf->EvaluateSample(wo, wi, &scatterPdf) * AbsDot(intr.shading.n, wi);
-        // TODO: switch to EvaluateSample, GenerateSample interface (instead of having a separate PDF function)
-        // for both bsdfs and phase functions
-        // bsdf->EvaluateSample(wo, wi) * AbsDot(intr.shading.n);
-    }
-    else
-    {
-        // Sample the phase function
-        f_hat = bsdf->EvaluateSample(wo, wi, &scatterPdf);
-    }
+    pdf *= lightPdf;
+    // f32 scatterPdf;
+    // SampledSpectrum f_hat;
+    wi = Normalize(sample.samplePoint - intr.p);
+    // if (bsdf)
+    // {
+    //     // f_hat = bsdf->f(wo, wi) * AbsDot(intr.shading.n, wi);
+    //     f_hat = bsdf->EvaluateSample(wo, wi, &scatterPdf) * AbsDot(intr.shading.n, wi);
+    //     // TODO: switch to EvaluateSample, GenerateSample interface (instead of having a separate PDF function)
+    //     // for both bsdfs and phase functions
+    //     // bsdf->EvaluateSample(wo, wi) * AbsDot(intr.shading.n);
+    // }
+    // else
+    // {
+    //     // Sample the phase function
+    //     f_hat = bsdf->EvaluateSample(wo, wi, &scatterPdf);
+    // }
 
-    // Tracking()
-    {
-        VolumeAggregate::Iterator iterator = aggregate.Iterator();
-        f32 majorant;
-        f32 xi = rng.Uniform<f32>();
-        t      = t - std::log(1 - xi) / majorant;
-        // Residual ratio tracking
-        SampledSpectrum t_ray(1.f), p_u(1.f), p_l(1.f);
-        {
-            f32 pdf = t_maj * cMaj[0];
-            t_ray   = t_maj * cMaj / pdf;
-            p_u *= t_maj * cNull / pdf;
-            p_l *= t_maj * cMaj / pdf;
+    // Residual ratio tracking
+    SampledSpectrum tRay(1.f), p_u(1.f), p_l(1.f);
 
-            p_u *= p * scatterPdf;
-            p_l *= p * p_l;
-        }
-        beta *= t_maj / t_maj[0];
-        p_u *= t_maj / t_maj[0];
-        p_l *= t_maj / t_maj[0];
+    RNG rng(Hash(sampler.Get1D()), Hash(sampler.Get1D()));
+    SampledSpectrum tMaj = SampleTMaj<true>(
+        scene, ray, intr.tHit, sampler.Get1D(), rng, lambda,
+        [&](Vec3f p, const SampledSpectrum &cMaj, const SampledSpectrum &tMaj,
+            const SampledSpectrum &cAbsorb, const SampledSpectrum &cScatter,
+            const SampledSpectrum &Le, PhaseFunction &phase) {
+            SampledSpectrum cNull = Max(SampledSpectrum(0.f), cMaj - cAbsorb - cScatter);
 
-        if (IsDeltaLight(IsSpecular(bsdf)))
-        {
-            return beta * f_hat * t_ray * sample.L * MISWeight(p_l);
-        }
-        else
-        {
-            return beta * f_hat * t_ray * sample.L * MISWeight(p_l, p_u);
-        }
-    }
+            // Ratio tracking code
+            f32 pdf = tMaj[0] * cMaj[0];
+            tRay *= tMaj * cNull / pdf;
+            p_u *= tMaj * cNull / pdf;
+            p_l *= tMaj * cMaj / pdf;
+
+            // Residual ratio tracking
+            // f32 rMaj = cMaj - cMnt;
+            // f32 pdf  = tResidual[0] * rMaj[0];
+
+            // Probability of sampling point along ray * probability of
+            // (cMaj - cMnt) * tMnt * (1 - ((cAbsorb + cScatter - cMnt) / (cMaj - cMnt)))
+            // rMaj * tMnt * (1 - (cAbsorb + cScatter - cMnt) / rMaj)
+            // tMnt * (rMaj - (cAbsorb + cScatter - cMnt))
+            // tMnt * (cMaj - (cAbsorb + cScatter))
+            // tRay *= tResidual * cNull / pdf;
+            // p_u *= tResidual * cNull / pdf;
+            // p_l *= tResidual * rMaj / pdf;
+            // p_l *= ;
+
+            // Russian roulette
+            if ((tRay / (p_l + p_u).Average()).MaxComponentValue() < 0.05f)
+            {
+                f32 q = 0.25f;
+                if (rng.Uniform<f32>() < q)
+                {
+                    tRay = SampledSpectrum(0.f);
+                }
+                else
+                {
+                    tRay /= 1.f - q;
+                }
+            }
+            if (!tRay) return false;
+            return true;
+        });
+
+    // p_u *= p * scatterPdf;
+    p_l *= p * lightPdf;
+    beta *= tMaj / tMaj[0];
+    p_u *= tMaj / tMaj[0];
+    p_l *= tMaj / tMaj[0];
+
+    return NEESample{beta * tRay * sample.L, p_l, p_u, sample.isDelta};
+    // if (IsDeltaLight(IsSpecular(bsdf)))
+    // {
+    //     return beta * t_ray * sample.L * MISWeight(p_l);
+    // }
+    // else
+    // {
+    //     return beta * t_ray * sample.L * MISWeight(p_l, p_u);
+    // }
 }
 
+#if 0
 void VirtualDensitySegments(const RayDifferential &ray)
 {
     // TODO: things I don't understand
@@ -1035,8 +1116,8 @@ void VirtualDensitySegments(const RayDifferential &ray)
     f32 tSegment[N + 1];
     for (u32 i = 0, f = 0.f; i < N; i++, f++)
     {
-        f32 u       = f / N;
-        tSegment[i] = EquiSampInverse(u);
+                f32 u       = f / N;
+                tSegment[i] = EquiSampInverse(u);
     }
     tSegment[N] = EquiSampInverse(1.f);
 
@@ -1044,7 +1125,7 @@ void VirtualDensitySegments(const RayDifferential &ray)
     const f32 c = 1.f;
     for (u32 i = 0; i < N; i++)
     {
-        virtualMajorant[i] = c / (tSegment[i + 1] - tSegment[i]);
+                virtualMajorant[i] = c / (tSegment[i + 1] - tSegment[i]);
     }
 
     u32 currentVirtualIndex = 0;
@@ -1052,40 +1133,40 @@ void VirtualDensitySegments(const RayDifferential &ray)
     f32 tMin                = ray.t;
     while (!done)
     {
-        // generate ray segments here
-        RaySegment segment;
+                // generate ray segments here
+                RaySegment segment;
 
-        f32 majorant       = Max(segment.majorant, virtualMajorants[currentVirtualIndex]);
-        f32 subSegmentTMax = Min(segment.tMax, tSegment[currentVirtualIndex + 1]);
-        for (;;)
-        {
-            // Generate sample along current majorant segment by sampling the exponential function
-            f32 u = rng.Uniform<f32>();
-            f32 t = tMin - std::log(1 - u) / majorant;
-            // Take the max of the majorant
-            if (t < subSegmentTMax)
-            {
-            }
-            else
-            {
-                // if t is past ray segment, fetch a new one
-                if (t >= segment.tMax)
+                f32 majorant       = Max(segment.majorant, virtualMajorants[currentVirtualIndex]);
+                f32 subSegmentTMax = Min(segment.tMax, tSegment[currentVirtualIndex + 1]);
+                for (;;)
                 {
-                    tMin = segment.tMax;
-                    // do stuff here
-                    break;
+                    // Generate sample along current majorant segment by sampling the exponential function
+                    f32 u = rng.Uniform<f32>();
+                    f32 t = tMin - std::log(1 - u) / majorant;
+                    // Take the max of the majorant
+                    if (t < subSegmentTMax)
+                    {
+                    }
+                    else
+                    {
+                        // if t is past ray segment, fetch a new one
+                        if (t >= segment.tMax)
+                        {
+                            tMin = segment.tMax;
+                            // do stuff here
+                            break;
+                        }
+                        // if it's past only the subsegment
+                        else
+                        {
+                            currentVirtualIndex++;
+                            Assert(currentVirtualIndex < N);
+                            majorant       = Max(segment.majorant, virtualMajorants[currentVirtualIndex]);
+                            subSegmentTMax = Min(segment.tMax, tSegment[currentVirtualIndex + 1]);
+                            continue;
+                        }
+                    }
                 }
-                // if it's past only the subsegment
-                else
-                {
-                    currentVirtualIndex++;
-                    Assert(currentVirtualIndex < N);
-                    majorant       = Max(segment.majorant, virtualMajorants[currentVirtualIndex]);
-                    subSegmentTMax = Min(segment.tMax, tSegment[currentVirtualIndex + 1]);
-                    continue;
-                }
-            }
-        }
     }
 
     // I'm leaning towards that you only do this when you scatter
@@ -1099,8 +1180,8 @@ void VirtualDensitySegments(const RayDifferential &ray)
     // Generate N directions from sampling the phase function, calculate weights by compute phase function
     for (u32 i = 0; i < N; i++)
     {
-        wi[i]  = SampleHenyeyGreenstein(-ray.d, segment.g, Vec2f(rng.Uniform<f32>(), rng.Uniform<f32>()));
-        pmf[i] = HenyeyGreenstein(lightDir, wi[i], segment.g);
+                wi[i]  = SampleHenyeyGreenstein(-ray.d, segment.g, Vec2f(rng.Uniform<f32>(), rng.Uniform<f32>()));
+                pmf[i] = HenyeyGreenstein(lightDir, wi[i], segment.g);
     }
 
     // Get sample from discrete CDF
@@ -1109,15 +1190,16 @@ void VirtualDensitySegments(const RayDifferential &ray)
     u32 index = 0;
     for (u32 i = 0; i < N; i++)
     {
-        if (total + pmf[i] >= limit)
-        {
-            index = i;
-            break;
-        }
-        total += pmf[i];
+                if (total + pmf[i] >= limit)
+                {
+                    index = i;
+                    break;
+                }
+                total += pmf[i];
     }
 
     // NOTE: beta is not updated because HenyeyGreenstein is perfectly importance sampled
 }
+#endif
 
 } // namespace rt

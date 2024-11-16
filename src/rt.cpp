@@ -16,9 +16,10 @@
 #include "bvh/parallel.h"
 #include "base_types.h"
 #include "bvh/bvh_types.h"
+#include "spectrum.h"
+#include "integrate.h"
 #include "scene.h"
 #include "bvh.h"
-#include "spectrum.h"
 #include "bsdf.h"
 #include "low_discrepancy.h"
 #include "sampler.h"
@@ -39,7 +40,7 @@
 #include "scene.cpp"
 #include "bvh.cpp"
 
-// #include "integrate.cpp"
+#include "integrate.cpp"
 
 #include "tests/test.cpp"
 #include "tests/sampling_test.cpp"

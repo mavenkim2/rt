@@ -199,7 +199,7 @@ __forceinline Lane4F32 Rsqrt(const Lane4F32 &a)
     return r;
 }
 
-__forceinline Lane4F32 rcp(const Lane4F32 &a)
+__forceinline Lane4F32 Rcp(const Lane4F32 &a)
 {
 #ifdef __AVX512VL__
     Lane4F32 r = _mm_rcp14_ps(a);
