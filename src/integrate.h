@@ -79,6 +79,7 @@ struct LightHandle
     {
         return data & 0x0fffffff;
     }
+    __forceinline operator bool() { return data != 0; }
 };
 
 bool IsDeltaLight(LightType type)
@@ -107,6 +108,8 @@ struct DiffuseAreaLight
     }
 };
 
+// struct 
+
 struct Ray2
 {
     Vec3f o;
@@ -134,6 +137,21 @@ struct PhaseFunctionSample
     Vec3f wi;
     f32 p;
     f32 pdf = 0.f;
+    PhaseFunctionSample() {}
+};
+
+struct PhaseFunction
+{
+    SampledSpectrum EvaluateSample(Vec3f wo, Vec3f wi, f32 *pdf) const
+    {
+        Assert(pdf);
+        *pdf = 0.f;
+        return SampledSpectrum(0.f);
+    }
+    PhaseFunctionSample GenerateSample(Vec3f wo, Vec2f u) const
+    {
+        return PhaseFunctionSample();
+    }
 };
 
 struct VolumeHandle

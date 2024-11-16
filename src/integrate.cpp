@@ -716,7 +716,7 @@ __forceinline f32 MISWeight(SampledSpectrum spec0, SampledSpectrum spec1, u32 ch
 }
 
 template <bool residualRatioTracking, typename F>
-SampledSpectrum SampleTMaj(Scene2 *scene, Ray2 &ray, f32 tMax, f32 xi, RNG &rng, SampledWavelengths &lambda, F &callback)
+SampledSpectrum SampleTMaj(Scene2 *scene, Ray2 &ray, f32 tMax, f32 xi, RNG &rng, const SampledWavelengths &lambda, const F &callback)
 {
     tMax *= Length(ray.d);
     ray.d                      = Normalize(ray.d);
@@ -819,15 +819,19 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
 
             RNG rng(Hash(sampler.Get1D()), Hash(sampler.Get1D()));
 
-            SampleTMaj<false>(
-                scene, ray, si.tHit, sampler.Get1D(), rng, lambda,
-                [&](Vec3f p, const SampledSpectrum &cMaj, const SampledSpectrum &tMaj, const SampledSpectrum &cAbsorb,
-                    const SampledSpectrum &cScatter, const SampledSpectrum &Le, PhaseFunction &phase) {
+            SampledSpectrum tMaj = SampleTMaj<false>(
+                scene, ray, f32(intr.tHit), sampler.Get1D(), rng, lambda,
+                [&](Vec3f p, const SampledSpectrum &cMaj, const SampledSpectrum &tMaj,
+                    const SampledSpectrum &cAbsorb, const SampledSpectrum &cScatter,
+                    const SampledSpectrum &Le, PhaseFunction &phase) {
+                    if (!beta)
+                    {
+                    }
                     f32 pAbsorb  = cAbsorb[0] / cMaj[0];
                     f32 pScatter = cScatter[0] / cMaj[0];
                     f32 pNull    = Max(0.f, 1 - pAbsorb - pScatter);
 
-                    xi = rng.Uniform<f32>();
+                    f32 xi = rng.Uniform<f32>();
 
                     if (depth < maxDepth && Le)
                     {
@@ -841,11 +845,16 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
                     if (xi < pAbsorb)
                     {
                         terminated = true;
-                        break;
+                        return false;
                     }
                     // Scatter
                     else if (xi < pAbsorb + pScatter)
                     {
+                        if (depth++ >= maxDepth)
+                        {
+                            terminated = true;
+                            return false;
+                        }
                         // probability of being scattered * probability of sampling that point
                         f32 pdf = cScatter[0] * tMaj[0];
                         beta *= tMaj * cScatter / pdf;
@@ -858,13 +867,14 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
                         SampledSpectrum f = phase.EvaluateSample(wo, wi, &scatterPdf);
                         neeSample.p_u *= scatterPdf;
                         L += neeSample.L_beta_tray * f *
-                             MISWeight(neeSample.p_l, Select(neeSample.delta, 0.f, neeSample.p_u));
+                             MISWeight(neeSample.p_l, neeSample.delta ? SampledSpectrum(0.f) : neeSample.p_u);
 
                         // Generate new scatter direction for indirect illumination
-                        PhaseFunctionSample phaseSample = phase.GenerateSample(wo, sampler.Get2D());
+                        PhaseFunctionSample phaseSample = phase.GenerateSample(-ray.d, sampler.Get2D());
                         if (phaseSample.pdf == 0)
                         {
                             terminated = true;
+                            return false;
                         }
                         else
                         {
@@ -873,9 +883,8 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
                             ray.o          = p;
                             ray.d          = phaseSample.wi;
                             specularBounce = false;
+                            return false;
                         }
-
-                        break;
                     }
                     // Null Scatter
                     else
@@ -886,13 +895,14 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
                         beta = Select(pdf, beta, SampledSpectrum(0.f));
                         p_u *= tMaj * cNull / pdf;
                         p_l *= tMaj * cMaj / pdf;
+                        return beta && p_u;
                     }
                 });
+            if (terminated || !beta || !p_u) return L;
+            if (scattered) continue;
             beta *= tMaj / tMaj[0];
             p_u *= tMaj / tMaj[0];
             p_l *= tMaj / tMaj[0];
-            if (terminated) return L;
-            if (scattered) continue;
         }
 
         // If ray doesn't intersect with anything, sum contribution from infinite lights and return
@@ -942,7 +952,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
             {
                 f32 pdf = LightPDF(scene);
                 pdf *= light->PDF_Li(scene, intr.lightIndices, prevIntr.p, intr);
-                r_l *= pdf;
+                p_l *= pdf;
                 L += beta * Le * MISWeight(p_u, p_l);
             }
         }
@@ -952,7 +962,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
         if (!bsdf)
         {
             // denotes boundary between medium, no event
-            ray.p = intr.p;
+            ray.o = intr.p;
             continue;
             // skip intersection, expand the differentials
         }
@@ -984,7 +994,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
         {
             etaScale *= Sqr(sample.eta);
         }
-        ray.p = intr.p;
+        ray.o = intr.p;
         ray.d = sample.wi;
     }
     return L;
@@ -996,10 +1006,10 @@ NEESample VolumetricSampleLD(const SurfaceInteraction &intr, Ray2 &ray, Scene2 *
     f32 lightPdf;
     LightHandle lightHandle = UniformLightSample(scene, sampler.Get1D(), &lightPdf);
     Vec2f u                 = sampler.Get2D();
-    if (!light) return SampledSpectrum(0.f);
-    LightSample sample = SampleLi(scene, index, intr, u);
-    if (sample.pdf == 0.f) return SampledSpectrum(0.f);
-    pdf *= lightPdf;
+    if (!light) return {};
+    LightSample sample = SampleLi(scene, lightHandle, intr, u);
+    if (sample.pdf == 0.f) return {};
+    lightPdf *= f32(sample.pdf);
     // f32 scatterPdf;
     // SampledSpectrum f_hat;
     wi = Normalize(sample.samplePoint - intr.p);
@@ -1022,7 +1032,7 @@ NEESample VolumetricSampleLD(const SurfaceInteraction &intr, Ray2 &ray, Scene2 *
 
     RNG rng(Hash(sampler.Get1D()), Hash(sampler.Get1D()));
     SampledSpectrum tMaj = SampleTMaj<true>(
-        scene, ray, intr.tHit, sampler.Get1D(), rng, lambda,
+        scene, ray, f32(intr.tHit), sampler.Get1D(), rng, lambda,
         [&](Vec3f p, const SampledSpectrum &cMaj, const SampledSpectrum &tMaj,
             const SampledSpectrum &cAbsorb, const SampledSpectrum &cScatter,
             const SampledSpectrum &Le, PhaseFunction &phase) {
