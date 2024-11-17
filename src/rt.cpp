@@ -18,6 +18,7 @@
 #include "bvh/bvh_types.h"
 #include "spectrum.h"
 #include "integrate.h"
+#include "lights.h"
 #include "scene.h"
 #include "bvh.h"
 #include "bsdf.h"
@@ -40,6 +41,7 @@
 #include "scene.cpp"
 #include "bvh.cpp"
 
+#include "lights.cpp"
 #include "integrate.cpp"
 
 #include "tests/test.cpp"

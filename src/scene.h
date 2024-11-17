@@ -463,7 +463,7 @@ struct Scene2
 
     // Lights
     struct DiffuseAreaLight *areaLights;
-    struct InfiniteLight *infiniteLights;
+    struct DistantLight *infiniteLights;
     u32 lightPDF[LightClass_Count];
     u32 numAreaLights;
     u32 numInfiniteLights;
