@@ -359,7 +359,7 @@ struct ConstantSpectrum : SpectrumCRTP<ConstantSpectrum>
 // Spectrum sampled at 1nm increments
 struct DenselySampledSpectrum : SpectrumCRTP<DenselySampledSpectrum>
 {
-    DenselySampledSpectrum(Arena *arena, Spectrum spec, i32 lambdaMin = (i32)LambdaMin, i32 lambdaMax = (i32)LambdaMax);
+    DenselySampledSpectrum(Spectrum spec, i32 lambdaMin = (i32)LambdaMin, i32 lambdaMax = (i32)LambdaMax);
     template <typename F>
     static DenselySampledSpectrum SampleFunction(Arena *arena, F func, i32 lambdaMin = (i32)LambdaMin, i32 lambdaMax = (i32)LambdaMax)
     {
@@ -375,8 +375,9 @@ struct DenselySampledSpectrum : SpectrumCRTP<DenselySampledSpectrum>
     SampledSpectrum Sample(const SampledWavelengths &lambda) const;
     bool operator==(const DenselySampledSpectrum &spec) const;
 
-    f32 *values;
+    // f32 *values;
     u32 numValues;
+    f32 values[u32(LambdaMax - LambdaMin) + 1];
     u16 lambdaMin;
     u16 lambdaMax;
 };

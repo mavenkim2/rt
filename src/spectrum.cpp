@@ -49,12 +49,12 @@ inline Vec3f FromxyY(Vec2f xy, f32 Y = 1.f)
     return Vec3f(xy.x * Y / xy.y, Y, (1 - xy.x - xy.y) * Y / xy.y);
 }
 
-DenselySampledSpectrum::DenselySampledSpectrum(Arena *arena, Spectrum spec, i32 lambdaMin, i32 lambdaMax)
+DenselySampledSpectrum::DenselySampledSpectrum(Spectrum spec, i32 lambdaMin, i32 lambdaMax)
     : lambdaMin((u16)lambdaMin), lambdaMax((u16)lambdaMax)
 {
     assert(lambdaMin >= LambdaMin && lambdaMax <= LambdaMax);
     numValues = lambdaMax + lambdaMin + 1;
-    values    = PushArray(arena, f32, numValues);
+    // values    = PushArray(arena, f32, numValues);
     if (spec)
     {
         for (i32 lambda = lambdaMin; lambda <= lambdaMax; lambda++)
@@ -506,13 +506,13 @@ const DenselySampledSpectrum &Z()
 void Init(Arena *arena)
 {
     PiecewiseLinearSpectrum xpls(CIE_lambda, CIE_X, nCIESamples);
-    x = PushStructConstruct(arena, DenselySampledSpectrum)(arena, &xpls);
+    x = PushStructConstruct(arena, DenselySampledSpectrum)(&xpls);
 
     PiecewiseLinearSpectrum ypls(CIE_lambda, CIE_Y, nCIESamples);
-    y = PushStructConstruct(arena, DenselySampledSpectrum)(arena, &ypls);
+    y = PushStructConstruct(arena, DenselySampledSpectrum)(&ypls);
 
     PiecewiseLinearSpectrum zpls(CIE_lambda, CIE_Z, nCIESamples);
-    z = PushStructConstruct(arena, DenselySampledSpectrum)(arena, &zpls);
+    z = PushStructConstruct(arena, DenselySampledSpectrum)(&zpls);
 }
 
 } // namespace Spectra
@@ -552,17 +552,17 @@ Vec3f RGBToSpectrumTable::operator()(Vec3f rgb) const
 }
 
 RGBColorSpace::RGBColorSpace(Arena *arena, Vec2f r, Vec2f g, Vec2f b, Spectrum illuminant, const RGBToSpectrumTable *rgbToSpec)
-    : r(r), g(g), b(b), illuminant(arena, illuminant), rgbToSpec(rgbToSpec)
+    : r(r), g(g), b(b), illuminant(illuminant), rgbToSpec(rgbToSpec)
 {
     Vec3f W = SpectrumToXYZ(illuminant);
-    w      = xy(W);
+    w       = xy(W);
     Vec3f R = FromxyY(r);
     Vec3f G = FromxyY(g);
     Vec3f B = FromxyY(b);
 
     Mat3 rgb(R, G, B);
 
-    Vec3f c   = Mul(rgb.Inverse(), W);
+    Vec3f c  = Mul(rgb.Inverse(), W);
     RGBToXYZ = Mul(rgb, Mat3(c));
     XYZToRGB = RGBToXYZ.Inverse();
 }

@@ -287,6 +287,7 @@ struct LaneU32<1>
     }
     __forceinline LaneU32() {}
     __forceinline LaneU32(u32 v) : value(v) {}
+    __forceinline explicit operator u32() const { return value; }
 };
 
 using Lane1F32 = LaneF32<1>;

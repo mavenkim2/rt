@@ -1,3 +1,5 @@
+#ifndef SCENE_H
+#define SCENE_H
 namespace rt
 {
 
@@ -463,10 +465,13 @@ struct Scene2
 
     // Lights
     struct DiffuseAreaLight *areaLights;
-    struct DistantLight *infiniteLights;
+    struct DistantLight *distantLights;
+    struct UniformInfiniteLight *uniformInfLights;
+    struct ImageInfiniteLight *imageInfLights;
     u32 lightPDF[LightClass_Count];
-    u32 numAreaLights;
-    u32 numInfiniteLights;
+    u32 lightCount[LightClass_Count];
+    // u32 numAreaLights;
+    // u32 numInfiniteLights;
     u32 numLights; // total
 
     // BVH
@@ -575,3 +580,4 @@ struct Scene
     }
 };
 } // namespace rt
+#endif

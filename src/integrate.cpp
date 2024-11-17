@@ -1,12 +1,13 @@
 #include "integrate.h"
 #include "lights.h"
+#include "scene.h"
 
 namespace rt
 {
 // TODO to render moana:
 // - infinite lights
 // - volumetric
-//      - ratio tracking, residual ratio tracking, delta tracking, 
+//      - ratio tracking, residual ratio tracking, delta tracking,
 //      - virtual density segments?
 // - shading, ptex, materials, textures
 //      - ray differentials
@@ -580,18 +581,33 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
             // or it wasn't sampled with MIS)
             if (specularBounce || depth == 0)
             {
-                for (u32 i = 0; i < scene->numInfiniteLights; i++)
+                for (u32 i = 0; i < scene->lightCount[LightClass_InfUnf]; i++)
                 {
-                    InfiniteLight *light = &scene->infiniteLights[i];
-                    SampledSpectrum Le   = Le(i, ray.d);
+                    UniformInfiniteLight *light = &scene->uniformInfLights[i];
+                    SampledSpectrum Le          = Le(i, ray.d);
+                    L += beta * Le * MISWeight(p_u);
+                }
+                for (u32 i = 0; i < scene->lightCount[LightClass_InfImg]; i++)
+                {
+                    UniformInfiniteLight *light = &scene->uniformInfLights[i];
+                    SampledSpectrum Le          = Le(i, ray.d);
                     L += beta * Le * MISWeight(p_u);
                 }
             }
             else
             {
-                for (u32 i = 0; i < scene->numInfiniteLights; i++)
+                for (u32 i = 0; i < scene->lightCount[LightClass_InfUnf]; i++)
                 {
-                    // InfiniteLight *light = &scene->infiniteLights[i];
+                    SampledSpectrum Le = Le(i, ray.d);
+
+                    f32 pdf      = LightPDF(scene);
+                    f32 lightPdf = pdf * PDF_Li(scene, i, prevIntr, intr);
+
+                    p_l *= lightPdf;
+                    L += beta * Le * MISWeight(p_u, p_l);
+                }
+                for (u32 i = 0; i < scene->lightCount[LightClass_InfImg]; i++)
+                {
                     SampledSpectrum Le = Le(i, ray.d);
 
                     f32 pdf      = LightPDF(scene);
