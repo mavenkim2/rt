@@ -2,6 +2,80 @@
 
 namespace rt
 {
+Vec3f EqualAreaSquareToSphere(Vec2f p)
+{
+    Assert(p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1);
+    // Transform _p_ to $[-1,1]^2$ and compute absolute values
+    float u = 2.f * p.x - 1.f, v = 2.f * p.y - 1.f;
+    float up = Abs(u), vp = Abs(v);
+
+    // Compute radius _r_ as signed distance from diagonal
+    float signedDistance = 1.f - (up + vp);
+    float d              = Abs(signedDistance);
+    float r              = 1.f - d;
+
+    // Compute angle $\phi$ for square to sphere mapping
+    float phi = (r == 0 ? 1 : (vp - up) / r + 1.f) * PI / 4.f;
+
+    // Find $z$ coordinate for spherical direction
+    float z = Copysignf(1 - Sqr(r), signedDistance);
+
+    // Compute $\cos\phi$ and $\sin\phi$ for original quadrant and return vector
+    float cosPhi = Copysignf(Cos(phi), u);
+    float sinPhi = Copysignf(Sin(phi), v);
+    return Vec3f(cosPhi * r * SafeSqrt(2.f - Sqr(r)), sinPhi * r * SafeSqrt(2.f - Sqr(r)),
+                 z);
+}
+
+// Via source code from Clarberg: Fast Equal-Area Mapping of the (Hemi)Sphere using SIMD
+Vec2f EqualAreaSphereToSquare(Vec3f d)
+{
+    Assert(LengthSquared(d) > .999 && LengthSquared(d) < 1.001);
+    float x = Abs(d.x), y = Abs(d.y), z = Abs(d.z);
+
+    // Compute the radius r
+    float r = SafeSqrt(1 - z); // r = sqrt(1-|z|)
+
+    // Compute the argument to atan (detect a=0 to avoid div-by-zero)
+    float a = Max(x, y), b = Min(x, y);
+    b = a == 0 ? 0 : b / a;
+
+    // Polynomial approximation of atan(x)*2/pi, x=b
+    // Coefficients for 6th degree minimax approximation of atan(x)*2/pi,
+    // x=[0,1].
+    const float t1 = 0.406758566246788489601959989e-5;
+    const float t2 = 0.636226545274016134946890922156;
+    const float t3 = 0.61572017898280213493197203466e-2;
+    const float t4 = -0.247333733281268944196501420480;
+    const float t5 = 0.881770664775316294736387951347e-1;
+    const float t6 = 0.419038818029165735901852432784e-1;
+    const float t7 = -0.251390972343483509333252996350e-1;
+    float phi      = EvaluatePolynomial(b, t1, t2, t3, t4, t5, t6, t7);
+
+    // Extend phi if the input is in the range 45-90 degrees (u<v)
+    if (x < y)
+        phi = 1 - phi;
+
+    // Find (u,v) based on (r,phi)
+    float v = phi * r;
+    float u = r - v;
+
+    if (d.z < 0)
+    {
+        // southern hemisphere -> mirror u,v
+        Swap(u, v);
+        u = 1 - u;
+        v = 1 - v;
+    }
+
+    // Move (u,v) to the correct quadrant based on the signs of (x,y)
+    u = Copysignf(u, d.x);
+    v = Copysignf(v, d.y);
+
+    // Transform (u,v) from [-1,1] to [0,1]
+    return Vec2f(0.5f * (u + 1), 0.5f * (v + 1));
+}
+
 // TODO: simd sin, cos, and arcsin
 Vec3IF32 SampleSphericalRectangle(const Vec3IF32 &p, const Vec3IF32 &base, const Vec3IF32 &eu, const Vec3IF32 &ev,
                                   const Vec2IF32 &samples, LaneIF32 *pdf)
@@ -323,7 +397,7 @@ SAMPLE_LI(UniformInfiniteLight)
                        wi, pdf, LightType::Infinite);
 }
 
-PDF_LI(UniformInfiniteLight)
+PDF_LI_INF(UniformInfiniteLight)
 {
     return allowIncompletePDF ? 0.f : UniformSpherePDF();
 }
@@ -333,25 +407,53 @@ LE(UniformInfiniteLight)
     return light->scale * light->Lemit->Sample(lambda);
 }
 
-SAMPLE_LI(ImageInfiniteLight)
+SampledSpectrum ImageInfiniteLight::ImageLe(Vec2f uv, const SampledWavelengths &lambda)
 {
-    // ImageInfiniteLight *light = &scene->imageInfLights[u32(lightIndices)];
-    // if (allowIncompletePDF) return {};
-    // Vec3f wi = SampleUniformSphere(u);
-    // f32 pdf  = UniformSpherePDF();
-    // return LightLiSample(light->scale * light->Lemit->Sample(lambda), Vec3f(intr.p) + 2.f * wi * light->sceneRadius,
-    //                      wi, pdf, LightType::Infinite);
-    return LightSample();
+    Vec3f rgb;
+    RGBIlluminantSpectrum spec(*imageColorSpace, rgb);
+    return spec.Sample(lambda);
 }
 
-PDF_LI(ImageInfiniteLight)
+SAMPLE_LI(ImageInfiniteLight)
 {
-    return 0.f;
+    ImageInfiniteLight *light = &scene->imageInfLights[u32(lightIndices)];
+    f32 pdf;
+    Vec2f uv;
+    if (allowIncompletePDF)
+    {
+        uv = light->compensatedDistribution.Sample(u, &pdf);
+    }
+    else
+    {
+        uv = light->distribution.Sample(u, &pdf);
+    }
+    if (pdf == 0.f) return {};
+    Vec3f wi = TransformV(*light->renderFromLight, EqualAreaSquareToSphere(uv));
+    pdf /= 4 * PI;
+    return LightSample(light->ImageLe(uv, lambda), Vec3f(intr.p) + 2.f * wi * light->sceneRadius, wi, pdf, LightType::Infinite);
+}
+
+PDF_LI_INF(ImageInfiniteLight)
+{
+    Vec3f wi = Normalize(ApplyInverse(*light->renderFromLight, w));
+    Vec2f uv = EqualAreaSphereToSquare(wi);
+    f32 pdf;
+    if (allowIncompletePDF)
+    {
+        pdf = light->compensatedDistribution.PDF(uv);
+    }
+    else
+    {
+        pdf = light->distribution.PDF(uv);
+    }
+    return pdf / (4 * PI);
 }
 
 LE(ImageInfiniteLight)
 {
-    return SampledSpectrum(0.f);
+    Vec3f wi = Normalize(ApplyInverse(*light->renderFromLight, w));
+    Vec2f uv = EqualAreaSphereToSquare(wi);
+    return light->ImageLe(uv, lambda);
 }
 
 //////////////////////////////
@@ -380,8 +482,8 @@ static f32 PDF_Li(Scene2 *scene, LightHandle lightHandle, Vec3f &prevIntrP, Surf
     {
         case LightClass_Area: Assert(0); return (f32)DiffuseAreaLight::PDF_Li(scene, lightIndex, prevIntrP, intr, allowIncompletePDF);
         case LightClass_Distant: return (f32)DistantLight::PDF_Li(scene, lightIndex, prevIntrP, intr, allowIncompletePDF);
-        case LightClass_InfUnf: return (f32)UniformInfiniteLight::PDF_Li(scene, lightIndex, prevIntrP, intr, allowIncompletePDF);
-        case LightClass_InfImg: return (f32)ImageInfiniteLight::PDF_Li(scene, lightIndex, prevIntrP, intr, allowIncompletePDF);
+        // case LightClass_InfUnf: return (f32)UniformInfiniteLight::PDF_Li(scene, lightIndex, prevIntrP, intr, allowIncompletePDF);
+        // case LightClass_InfImg: return (f32)ImageInfiniteLight::PDF_Li(scene, lightIndex, prevIntrP, intr, allowIncompletePDF);
         default: Assert(0); return 0.f;
     }
 }
@@ -395,8 +497,8 @@ static SampledSpectrum Le(Scene2 *scene, LightHandle lightHandle, Vec3f &n, Vec3
     {
         case LightClass_Area: return DiffuseAreaLight::Le(&scene->areaLights[lightIndex], n, w, lambda);
         case LightClass_Distant: return DistantLight::Le(&scene->distantLights[lightIndex], n, w, lambda);
-        case LightClass_InfUnf: return UniformInfiniteLight::Le(&scene->uniformInfLights[lightIndex], n, w, lambda);
-        case LightClass_InfImg: return ImageInfiniteLight::Le(&scene->imageInfLights[lightIndex], n, w, lambda);
+        // case LightClass_InfUnf: return UniformInfiniteLight::Le(&scene->uniformInfLights[lightIndex], n, w, lambda);
+        // case LightClass_InfImg: return ImageInfiniteLight::Le(&scene->imageInfLights[lightIndex], n, w, lambda);
         default: Assert(0); return SampledSpectrum(0.f);
     }
 }

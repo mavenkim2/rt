@@ -77,6 +77,11 @@ bool IsDeltaLight(LightType type)
     PDF_Li(const Scene2 *scene, const LaneIU32 lightIndices, \
            const Vec3IF32 &prevIntrP, const SurfaceInteraction &intr, bool allowIncompletePDF)
 
+#define PDF_LI_INF_HEADER(type) static LaneIF32 PDF_LI_INF_BODY(type)
+#define PDF_LI_INF(type)    LaneIF32 type##::PDF_LI_INF_BODY(type)
+#define PDF_LI_INF_BODY(type) \
+    PDF_Li(type *light, Vec3f &w, bool allowIncompletePDF)
+
 #define LE_HEADER(type) static SampledSpectrum LE_BODY(type)
 #define LE(type)    SampledSpectrum type##::LE_BODY(type)
 #define LE_BODY(type) Le(type *light, const Vec3f &n, const Vec3f &w, const SampledWavelengths &lambda)
@@ -98,6 +103,11 @@ bool IsDeltaLight(LightType type)
     {                                \
         return SampledSpectrum(0.f); \
     }
+
+#define LightFunctionsInf(type) \
+    SAMPLE_LI_HEADER();         \
+    PDF_LI_INF_HEADER(type);    \
+    LE_HEADER(type);
 
 const DenselySampledSpectrum *LookupSpectrum(Spectrum s)
 {
@@ -142,18 +152,112 @@ struct UniformInfiniteLight
     f32 sceneRadius;
 
     UniformInfiniteLight(Spectrum *Lemit, f32 scale = 1.f) : Lemit(LookupSpectrum(Lemit)), scale(scale) {}
-    LightFunctions(UniformInfiniteLight);
+    LightFunctionsInf(UniformInfiniteLight);
+};
+
+struct PiecewiseConstant1D
+{
+    f32 *cdf;
+    f32 *func;
+    u32 num;
+    f32 funcInt;
+    f32 minD, maxD;
+    PiecewiseConstant1D() {}
+    PiecewiseConstant1D(Arena *arena, f32 *values, u32 numValues, f32 minD, f32 maxD)
+        : num(numValues), func(values), minD(minD), maxD(maxD)
+    {
+        num       = numValues;
+        cdf       = PushArrayNoZero(arena, f32, numValues + 1);
+        f32 total = 0.f;
+        for (u32 i = 1; i <= numValues; i++)
+        {
+            values[i - 1] = Abs(values[i - 1]);
+            total += values[i - 1];
+            cdf[i] = total;
+        }
+
+        Assert(total != 0.f);
+        funcInt = total;
+        for (u32 i = 1; i <= numValues; i++)
+        {
+            cdf[i] /= total;
+        }
+    }
+
+    f32 Integral() const
+    {
+        return funcInt;
+    }
+    f32 Sample(f32 u, f32 *pdf = 0, u32 *offset = 0)
+    {
+        u32 index = FindInterval(num, [&](u32 index) { return cdf[index] <= u; });
+        if (offset) *offset = index;
+        if (pdf) *pdf = func[index] / funcInt;
+        f32 cdfRange = cdf[index + 1] - cdf[index];
+        f32 du       = (u - cdf[index]) * cdfRange > 0.f ? 1.f / cdfRange : 0.f;
+        return Lerp((index + du) / f32(num), minD, maxD);
+    }
+};
+
+struct PiecewiseConstant2D
+{
+    PiecewiseConstant1D marginal;
+    PiecewiseConstant1D *conditional;
+    Vec2f minD, maxD;
+
+    PiecewiseConstant2D() {}
+    PiecewiseConstant2D(Arena *arena, f32 *values, u32 nu, u32 nv, Vec2f minD, Vec2f maxD) : minD(minD), maxD(maxD)
+    {
+        conditional = PushArrayNoZero(arena, PiecewiseConstant1D, nv);
+        for (u32 v = 0; v < nv; v++)
+        {
+            conditional[v] = PiecewiseConstant1D(arena, values + v * nu, nu, minD[0], maxD[0]);
+        }
+        f32 *marginalFunc = PushArrayNoZero(arena, f32, nv);
+        for (u32 v = 0; v < nv; v++)
+        {
+            marginalFunc[v] = conditional[v].Integral();
+        }
+        marginal = PiecewiseConstant1D(arena, marginalFunc, nv, minD[1], maxD[1]);
+    }
+    Vec2f Sample(Vec2f u, f32 *pdf = 0, Vec2u *offset = 0)
+    {
+        f32 pdfs[2];
+        Vec2u p;
+        f32 d1 = marginal.Sample(u[1], &pdfs[1], &p[1]);
+        f32 d0 = conditional[p[1]].Sample(u[1], &pdfs[0], &p[0]);
+        if (pdf) *pdf = pdfs[0] * pdfs[1];
+        if (offset) *offset = p;
+        return Vec2f(d0, d1);
+    }
+    f32 PDF(Vec2f u)
+    {
+        u32 sizeU = conditional[0].num;
+        u32 sizeV = marginal.num;
+        u         = (u - minD) / (maxD - minD);
+        Vec2u p   = Clamp(Vec2u(u * Vec2f(f32(sizeU), f32(sizeV))), Vec2u(0), Vec2u(sizeU - 1, sizeV - 1));
+        return conditional[p[1]].func[p[0]] / marginal.Integral();
+    }
 };
 
 struct ImageInfiniteLight
 {
     // Image image;
+    const AffineSpace *renderFromLight;
     const RGBColorSpace *imageColorSpace;
     f32 scale;
     f32 sceneRadius;
-    // PiecewiseConstant2D distribution;
-    // PiecewiseConstant2D compensatedDistribution;
-    LightFunctions(ImageInfiniteLight);
+    PiecewiseConstant2D distribution;
+    PiecewiseConstant2D compensatedDistribution;
+
+    ImageInfiniteLight(Arena *arena)
+    {
+        f32 *values;
+        u32 nu, nv;
+        distribution = PiecewiseConstant2D(arena, values, nu, nv, Vec2f(0.f, 0.f), Vec2f(1.f, 1.f));
+    }
+    LightFunctionsInf(ImageInfiniteLight);
+    SampledSpectrum ImageLe(Vec2f uv, const SampledWavelengths &lambda);
 };
 
 } // namespace rt

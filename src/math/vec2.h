@@ -88,6 +88,9 @@ __forceinline Vec2<T> operator*(T d, const Vec2<T> &u)
 }
 
 template <typename T>
+__forceinline Vec2<T> operator/(const Vec2<T> &u, const Vec2<T> &v) { return Vec2<T>(u.x / v.x, u.y / v.y); }
+
+template <typename T>
 __forceinline Vec2<T> operator/(const Vec2<T> &v, T d)
 {
     return v * (1 / d);
