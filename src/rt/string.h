@@ -15,7 +15,7 @@ struct string
 };
 
 #define STB_SPRINTF_IMPLEMENTATION
-#include "third_party/stb_sprintf.h"
+#include "../third_party/stb_sprintf.h"
 
 //////////////////////////////
 // Char

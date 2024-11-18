@@ -58,29 +58,29 @@ void *OS_ReserveLarge(u64 size)
     return out;
 }
 
-b32 OS_SetLargePages()
-{
-    b32 is_ok = 0;
-    HANDLE token;
-    if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token))
-    {
-        LUID luid;
-        if (LookupPrivilegeValue(0, SE_LOCK_MEMORY_NAME, &luid))
-        {
-            TOKEN_PRIVILEGES priv;
-            priv.PrivilegeCount           = 1;
-            priv.Privileges[0].Luid       = luid;
-            priv.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-            if (AdjustTokenPrivileges(token, 0, &priv, sizeof(priv), 0, 0))
-            {
-                win32LargePagesEnabled = 1;
-                is_ok                  = 1;
-            }
-        }
-        CloseHandle(token);
-    }
-    return is_ok;
-}
+// b32 OS_SetLargePages()
+// {
+//     b32 is_ok = 0;
+//     HANDLE token;
+//     if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token))
+//     {
+//         LUID luid;
+//         if (LookupPrivilegeValue(0, SE_LOCK_MEMORY_NAME, &luid))
+//         {
+//             TOKEN_PRIVILEGES priv;
+//             priv.PrivilegeCount           = 1;
+//             priv.Privileges[0].Luid       = luid;
+//             priv.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+//             if (AdjustTokenPrivileges(token, 0, &priv, sizeof(priv), 0, 0))
+//             {
+//                 win32LargePagesEnabled = 1;
+//                 is_ok                  = 1;
+//             }
+//         }
+//         CloseHandle(token);
+//     }
+//     return is_ok;
+// }
 
 size_t OS_GetLargePageSize()
 {

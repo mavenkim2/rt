@@ -344,7 +344,7 @@ __forceinline Lane4F32 Permute(const Lane4F32 &a, const Lane4U32 &b)
 {
 #if defined(__AVX__)
     return _mm_permutevar_ps(a, b);
-#elif defined(__SSS3__)
+#elif defined(__SSSE3__)
     const u32 MUL = 0x04040404;
     const u32 ADD = 0x03020100;
 

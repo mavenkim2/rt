@@ -24,7 +24,7 @@
 #include "algo.h"
 
 #define STB_IMAGE_IMPLEMENTATION
-#include "third_party/stb_image.h"
+#include "../third_party/stb_image.h"
 
 #define CORNELL 1
 #define EMISSIVE
@@ -90,6 +90,12 @@ struct Image
     i32 width;
     i32 height;
     i32 bytesPerPixel;
+
+    f32 *GetSamplingDistribution(struct Arena *arena);
+    Vec2i GetPixel(Vec2f uv)
+    {
+        return Vec2i(Clamp(i32(uv[0] * width), 0, width - 1), Clamp(i32(uv[1] * height), 0, height - 1));
+    }
 };
 
 #pragma pack(push, 1)

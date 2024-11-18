@@ -1,6 +1,8 @@
 #ifndef INTEGRATE_H
 #define INTEGRATE_H
 
+// #include "third_party/openvdb/openvdb/openvdb/openvdb.h"
+
 namespace rt
 {
 static const f32 tMinEpsilon = 0.00001f;

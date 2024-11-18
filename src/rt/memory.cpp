@@ -3,7 +3,7 @@ namespace rt
 Arena *ArenaAlloc(u64 resSize, u64 cmtSize, u64 align, b32 largePages)
 {
     void *memory          = 0;
-    b32 largePagesEnabled = OS_LargePagesEnabled();
+    b32 largePagesEnabled = false; // OS_LargePagesEnabled();
     b32 largePagesFailed  = 0;
     if (largePagesEnabled && largePages)
     {

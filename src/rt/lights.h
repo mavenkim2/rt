@@ -43,7 +43,7 @@ struct LightSample
 struct LightHandle
 {
     u32 data;
-    LightHandle() {}
+    LightHandle() : data(0xffffffff) {}
     LightHandle(LightClass type, u32 index)
     {
         data = (type << 28) | (index & 0x0fffffff);
@@ -56,7 +56,7 @@ struct LightHandle
     {
         return data & 0x0fffffff;
     }
-    __forceinline operator bool() { return data != 0; }
+    __forceinline operator bool() { return data != 0xffffffff; }
 };
 
 bool IsDeltaLight(LightType type)
@@ -66,25 +66,29 @@ bool IsDeltaLight(LightType type)
 
 // clang-format off
 #define SAMPLE_LI_HEADER() static LightSample SAMPLE_LI_BODY
-#define SAMPLE_LI(type)    LightSample type##::SAMPLE_LI_BODY
+#define SAMPLE_LI(type)    LightSample type::SAMPLE_LI_BODY
 #define SAMPLE_LI_BODY                                                                         \
     SampleLi(const Scene2 *scene, const LaneIU32 lightIndices, const SurfaceInteraction &intr, \
              const SampledWavelengths &lambda, const Vec2IF32 &u, bool allowIncompletePDF)
 
 #define PDF_LI_HEADER() static LaneIF32 PDF_LI_BODY
-#define PDF_LI(type)    LaneIF32 type##::PDF_LI_BODY 
+#define PDF_LI(type)    LaneIF32 type::PDF_LI_BODY 
 #define PDF_LI_BODY \
     PDF_Li(const Scene2 *scene, const LaneIU32 lightIndices, \
            const Vec3IF32 &prevIntrP, const SurfaceInteraction &intr, bool allowIncompletePDF)
 
 #define PDF_LI_INF_HEADER(type) static LaneIF32 PDF_LI_INF_BODY(type)
-#define PDF_LI_INF(type)    LaneIF32 type##::PDF_LI_INF_BODY(type)
+#define PDF_LI_INF(type)    LaneIF32 type::PDF_LI_INF_BODY(type)
 #define PDF_LI_INF_BODY(type) \
     PDF_Li(type *light, Vec3f &w, bool allowIncompletePDF)
 
 #define LE_HEADER(type) static SampledSpectrum LE_BODY(type)
-#define LE(type)    SampledSpectrum type##::LE_BODY(type)
+#define LE(type)    SampledSpectrum type::LE_BODY(type)
 #define LE_BODY(type) Le(type *light, const Vec3f &n, const Vec3f &w, const SampledWavelengths &lambda)
+
+#define LE_INF_HEADER(type) static SampledSpectrum LE_INF_BODY(type)
+#define LE_INF(type)    SampledSpectrum type::LE_INF_BODY(type)
+#define LE_INF_BODY(type) Le(type *light, const Vec3f &w, const SampledWavelengths &lambda)
 
 // clang-format on
 
@@ -107,7 +111,7 @@ bool IsDeltaLight(LightType type)
 #define LightFunctionsInf(type) \
     SAMPLE_LI_HEADER();         \
     PDF_LI_INF_HEADER(type);    \
-    LE_HEADER(type);
+    LE_INF_HEADER(type);
 
 const DenselySampledSpectrum *LookupSpectrum(Spectrum s)
 {
@@ -140,7 +144,7 @@ struct DistantLight
     f32 sceneRadius;
     f32 scale;
 
-    DistantLight(Vec3f d, Spectrum *Lemit, f32 scale = 1.f) : d(d), Lemit(LookupSpectrum(Lemit)), scale(scale) {}
+    DistantLight(Vec3f d, Spectrum Lemit, f32 scale = 1.f) : d(d), Lemit(LookupSpectrum(Lemit)), scale(scale) {}
     LightFunctionsDirac(DistantLight);
 };
 
@@ -151,14 +155,14 @@ struct UniformInfiniteLight
     f32 scale;
     f32 sceneRadius;
 
-    UniformInfiniteLight(Spectrum *Lemit, f32 scale = 1.f) : Lemit(LookupSpectrum(Lemit)), scale(scale) {}
+    UniformInfiniteLight(Spectrum Lemit, f32 scale = 1.f) : Lemit(LookupSpectrum(Lemit)), scale(scale) {}
     LightFunctionsInf(UniformInfiniteLight);
 };
 
 struct PiecewiseConstant1D
 {
     f32 *cdf;
-    f32 *func;
+    const f32 *func;
     u32 num;
     f32 funcInt;
     f32 minD, maxD;
@@ -242,7 +246,7 @@ struct PiecewiseConstant2D
 
 struct ImageInfiniteLight
 {
-    // Image image;
+    Image image;
     const AffineSpace *renderFromLight;
     const RGBColorSpace *imageColorSpace;
     f32 scale;
@@ -250,12 +254,7 @@ struct ImageInfiniteLight
     PiecewiseConstant2D distribution;
     PiecewiseConstant2D compensatedDistribution;
 
-    ImageInfiniteLight(Arena *arena)
-    {
-        f32 *values;
-        u32 nu, nv;
-        distribution = PiecewiseConstant2D(arena, values, nu, nv, Vec2f(0.f, 0.f), Vec2f(1.f, 1.f));
-    }
+    ImageInfiniteLight(Arena *arena, Image image);
     LightFunctionsInf(ImageInfiniteLight);
     SampledSpectrum ImageLe(Vec2f uv, const SampledWavelengths &lambda);
 };

@@ -76,6 +76,9 @@ Vec2f EqualAreaSphereToSquare(Vec3f d)
     return Vec2f(0.5f * (u + 1), 0.5f * (v + 1));
 }
 
+// NOTE: sample (over solid angle) the spherical rectangle obtained by projecting a planar rectangle onto
+// the unit sphere centered at point p
+// https://blogs.autodesk.com/media-and-entertainment/wp-content/uploads/sites/162/egsr2013_spherical_rectangle.pdf
 // TODO: simd sin, cos, and arcsin
 Vec3IF32 SampleSphericalRectangle(const Vec3IF32 &p, const Vec3IF32 &base, const Vec3IF32 &eu, const Vec3IF32 &ev,
                                   const Vec2IF32 &samples, LaneIF32 *pdf)
@@ -402,14 +405,22 @@ PDF_LI_INF(UniformInfiniteLight)
     return allowIncompletePDF ? 0.f : UniformSpherePDF();
 }
 
-LE(UniformInfiniteLight)
+LE_INF(UniformInfiniteLight)
 {
     return light->scale * light->Lemit->Sample(lambda);
 }
 
+ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image) : image(image)
+{
+    f32 *values  = image.GetSamplingDistribution(arena);
+    distribution = PiecewiseConstant2D(arena, values, image.width, image.height, Vec2f(0.f, 0.f), Vec2f(1.f, 1.f));
+}
+
 SampledSpectrum ImageInfiniteLight::ImageLe(Vec2f uv, const SampledWavelengths &lambda)
 {
-    Vec3f rgb;
+    Vec2i loc = image.GetPixel(uv);
+    Vec3f rgb = *(Vec3f *)GetColor(&image, loc.x, loc.y);
+
     RGBIlluminantSpectrum spec(*imageColorSpace, rgb);
     return spec.Sample(lambda);
 }
@@ -449,7 +460,7 @@ PDF_LI_INF(ImageInfiniteLight)
     return pdf / (4 * PI);
 }
 
-LE(ImageInfiniteLight)
+LE_INF(ImageInfiniteLight)
 {
     Vec3f wi = Normalize(ApplyInverse(*light->renderFromLight, w));
     Vec2f uv = EqualAreaSphereToSquare(wi);
@@ -460,7 +471,7 @@ LE(ImageInfiniteLight)
 // Morphism
 //
 // TODO: find the class of each sample, add to a corresponding queue, when the queue is full enough, generate the samples
-static LightSample SampleLi(Scene2 *scene, LightHandle lightHandle, SurfaceInteraction &intr, SampledWavelengths &lambda,
+static LightSample SampleLi(Scene2 *scene, LightHandle lightHandle, const SurfaceInteraction &intr, const SampledWavelengths &lambda,
                             Vec2f &u, bool allowIncompletePDF = false)
 {
     LightClass lClass = lightHandle.GetType();
@@ -520,6 +531,7 @@ f32 LightPDF(Scene2 *scene)
 
 LightHandle UniformLightSample(Scene2 *scene, f32 u, f32 *pmf = 0)
 {
+    if (scene->numLights == 0) return LightHandle();
     u32 lightIndex = Min(u32(u * scene->numLights), scene->numLights - 1);
     for (u32 i = 0; i < LightClass_Count; i++)
     {

@@ -42,10 +42,12 @@
 #include "bvh.cpp"
 
 #include "lights.cpp"
-#include "integrate.cpp"
+// #include "integrate.cpp"
 
 #include "tests/test.cpp"
 #include "tests/sampling_test.cpp"
+
+#include <openvdb/openvdb.h>
 
 namespace rt
 {
@@ -93,6 +95,27 @@ f32 ExactLinearToSRGB(f32 l)
         s = 1.055f * pow(l, 1.0f / 2.4f) - 0.055f;
     }
     return s;
+}
+
+f32 *Image::GetSamplingDistribution(Arena *arena)
+{
+    f32 *v  = (f32 *)contents;
+    u8 *ptr = contents;
+
+    f32 *result = PushArrayNoZero(arena, f32, height * width);
+    u32 count   = 0;
+    for (i32 h = 0; h < height; h++)
+    {
+        for (i32 w = 0; w < width; w++)
+        {
+            // Is bpp correct?
+            f32 *values = (f32 *)ptr;
+            Assert(0);
+            result[count++] = (values[0] + values[1] + values[2]) / 3.f;
+            ptr += bytesPerPixel;
+        }
+    }
+    return result;
 }
 
 struct Material;
@@ -1041,9 +1064,10 @@ using namespace rt;
 
 int main(int argc, char *argv[])
 {
+    openvdb::initialize();
     BuildPackMask();
-    OS_SetLargePages();
-    Arena *dataArena = ArenaAllocLargePages();
+    // OS_SetLargePages();
+    Arena *dataArena = ArenaAlloc();
     Arena *arena     = ArenaAlloc();
     InitThreadContext(arena, "[Main Thread]", 1);
     OS_Init();

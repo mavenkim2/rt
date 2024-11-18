@@ -221,8 +221,6 @@ enum class BSDFFlags
 
 ENUM_CLASS_FLAGS(BSDFFlags)
 
-namespace rt
-{
 inline b32 IsReflective(BSDFFlags f)
 {
     return EnumHasAnyFlags(f, BSDFFlags::Reflection);
@@ -251,7 +249,6 @@ inline b32 IsValid(BSDFFlags f)
 {
     return !EnumHasAnyFlags(f, BSDFFlags::Invalid);
 }
-} // namespace rt
 
 struct BSDFSample
 {

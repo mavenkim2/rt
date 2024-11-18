@@ -1,27 +1,25 @@
 #include "integrate.h"
 #include "lights.h"
+#include "bsdf.h"
 #include "scene.h"
 
 namespace rt
 {
 // TODO to render moana:
-// - infinite lights
+// - loading volumes
+// - creating objects from the parsed scene packets
+
 // - volumetric
 //      - ratio tracking, residual ratio tracking, delta tracking,
 //      - virtual density segments?
 // - shading, ptex, materials, textures
 //      - ray differentials
 // - bvh intersection and triangle intersection
-// - creating objects from the parsed scene packets
 
 // after that's done:
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
 // - bdpt, metropolis, vcm/upbp, mcm?
 // - subdivision surfaces
-
-// NOTE: sample (over solid angle) the spherical rectangle obtained by projecting a planar rectangle onto
-// the unit sphere centered at point p
-// https://blogs.autodesk.com/media-and-entertainment/wp-content/uploads/sites/162/egsr2013_spherical_rectangle.pdf
 
 #if 0
 void Li(Scene2 *scene, RayDifferential &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda)
@@ -533,7 +531,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
                         Vec3f wi;
                         NEESample neeSample = VolumetricSampleEmitter(intr, ray, scene, sampler, beta, p_u, lambda, wi);
                         f32 scatterPdf;
-                        SampledSpectrum f = phase.EvaluateSample(wo, wi, &scatterPdf);
+                        SampledSpectrum f = phase.EvaluateSample(-ray.d, wi, &scatterPdf);
                         neeSample.p_u *= scatterPdf;
                         L += neeSample.L_beta_tray * f *
                              MISWeight(neeSample.p_l, neeSample.delta ? SampledSpectrum(0.f) : neeSample.p_u);
@@ -579,18 +577,19 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
         {
             // Eschew MIS when last bounce is specular or depth is zero (because either light wasn't previously sampled,
             // or it wasn't sampled with MIS)
+            bool noMisFlag = specularBounce || depth == 0;
             if (specularBounce || depth == 0)
             {
                 for (u32 i = 0; i < scene->lightCount[LightClass_InfUnf]; i++)
                 {
                     UniformInfiniteLight *light = &scene->uniformInfLights[i];
-                    SampledSpectrum Le          = Le(i, ray.d);
+                    SampledSpectrum Le          = UniformInfiniteLight::Le(light, ray.d, lambda);
                     L += beta * Le * MISWeight(p_u);
                 }
                 for (u32 i = 0; i < scene->lightCount[LightClass_InfImg]; i++)
                 {
-                    UniformInfiniteLight *light = &scene->uniformInfLights[i];
-                    SampledSpectrum Le          = Le(i, ray.d);
+                    ImageInfiniteLight *light = &scene->imageInfLights[i];
+                    SampledSpectrum Le        = ImageInfiniteLight::Le(light, ray.d, lambda);
                     L += beta * Le * MISWeight(p_u);
                 }
             }
@@ -598,20 +597,22 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
             {
                 for (u32 i = 0; i < scene->lightCount[LightClass_InfUnf]; i++)
                 {
-                    SampledSpectrum Le = Le(i, ray.d);
+                    UniformInfiniteLight *light = &scene->uniformInfLights[i];
+                    SampledSpectrum Le          = UniformInfiniteLight::Le(light, ray.d, lambda);
 
                     f32 pdf      = LightPDF(scene);
-                    f32 lightPdf = pdf * PDF_Li(scene, i, prevIntr, intr);
+                    f32 lightPdf = pdf * (f32)UniformInfiniteLight::PDF_Li(light, ray.d, true);
 
                     p_l *= lightPdf;
                     L += beta * Le * MISWeight(p_u, p_l);
                 }
                 for (u32 i = 0; i < scene->lightCount[LightClass_InfImg]; i++)
                 {
-                    SampledSpectrum Le = Le(i, ray.d);
+                    ImageInfiniteLight *light = &scene->imageInfLights[i];
+                    SampledSpectrum Le        = ImageInfiniteLight::Le(light, ray.d, lambda);
 
                     f32 pdf      = LightPDF(scene);
-                    f32 lightPdf = pdf * PDF_Li(scene, i, prevIntr, intr);
+                    f32 lightPdf = pdf * (f32)ImageInfiniteLight::PDF_Li(light, ray.d, true);
 
                     p_l *= lightPdf;
                     L += beta * Le * MISWeight(p_u, p_l);
@@ -624,10 +625,10 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
         //////////////////////////////
         // Emitter Intersection
         //
-        if (intr.lightIndices)
+        if ((u32)intr.lightIndices)
         {
-            DiffuseAreaLight *light = &scene->lights[intr.lightIndices];
-            SampledSpectrum Le      = light->Le(-ray.d, lambda);
+            DiffuseAreaLight *light = &scene->areaLights[u32(intr.lightIndices)];
+            SampledSpectrum Le      = DiffuseAreaLight::Le(light, intr.n, -ray.d, lambda);
             if (depth == 0 || specularBounce)
             {
                 L += beta * Le * MISWeight(p_u);
@@ -635,7 +636,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
             else
             {
                 f32 pdf = LightPDF(scene);
-                pdf *= light->PDF_Li(scene, intr.lightIndices, prevIntr.p, intr);
+                pdf *= (f32)DiffuseAreaLight::PDF_Li(scene, intr.lightIndices, prevIntr.p, intr, true);
                 p_l *= pdf;
                 L += beta * Le * MISWeight(p_u, p_l);
             }
@@ -655,7 +656,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
         //////////////////////////////
         // Emitter Sampling
         //
-        if (!IsSpecular(bsdf->flags))
+        if (!IsSpecular(bsdf.Flags()))
         {
             Vec3f wi;
             NEESample neeSample = VolumetricSampleEmitter(intr, ray, scene, sampler, beta, p_u, lambda, wi);
@@ -673,8 +674,8 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
         if (!sample.pdf) return L;
         beta *= sample.f * AbsDot(Vec3f(intr.shading.n), sample.wi) / sample.pdf;
         p_l            = p_u / sample.pdf;
-        specularBounce = IsSpecular(bsdf.flags);
-        if (sample.IsTransmission())
+        specularBounce = IsSpecular(bsdf.Flags());
+        if (sample.IsTransmissive())
         {
             etaScale *= Sqr(sample.eta);
         }
@@ -702,7 +703,7 @@ NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Sce
     f32 lightPdf;
     LightHandle lightHandle = UniformLightSample(scene, sampler.Get1D(), &lightPdf);
     Vec2f u                 = sampler.Get2D();
-    if (!light) return {};
+    if (!lightHandle) return {};
     LightSample sample = SampleLi(scene, lightHandle, intr, lambda, u);
     if (sample.pdf == 0.f) return {};
     lightPdf *= f32(sample.pdf);

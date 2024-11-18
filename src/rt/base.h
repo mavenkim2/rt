@@ -40,7 +40,7 @@ void Print(const char *fmt, va_list args);
 // TODO: set this based on os call
 #define CACHE_LINE_SIZE 64
 #define Glue(a, b)      a##b
-#if DEBUG
+#ifdef DEBUG
 // #define Assert(expression) (!(expression) ? (*(volatile int *)0 = 0, 0) : 0)
 #define Assert(expression)                                                                   \
     if (expression)                                                                          \
