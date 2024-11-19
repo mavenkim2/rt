@@ -47,7 +47,8 @@
 #include "tests/test.cpp"
 #include "tests/sampling_test.cpp"
 
-#include <openvdb/openvdb.h>
+// #include <openvdb/openvdb.h>
+#include <nanovdb/NanoVDB.h>
 
 namespace rt
 {
@@ -1064,7 +1065,6 @@ using namespace rt;
 
 int main(int argc, char *argv[])
 {
-    openvdb::initialize();
     BuildPackMask();
     // OS_SetLargePages();
     Arena *dataArena = ArenaAlloc();

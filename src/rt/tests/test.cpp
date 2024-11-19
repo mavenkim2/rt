@@ -1,3 +1,4 @@
+// #include <rt/scene.h>
 namespace rt
 {
 TriangleMesh *GenerateMesh(Arena *arena, u32 count, f32 min = -100.f, f32 max = 100.f)
