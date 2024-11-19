@@ -1,3 +1,10 @@
-[submodule "src/third_party/openvdb"]
-	path = src/third_party/openvdb
-	url = https://github.com/AcademySoftwareFoundation/openvdb.git
+[submodule "src/third_party/openexr"]
+	path = src/third_party/openexr
+	url = https://github.com/mmp/openexr.git
+	branch = zlibstatic-export-workaround
+[submodule "src/third_party/zlib"]
+	path = src/third_party/zlib
+	url = https://github.com/mitsuba-renderer/zlib.git
+[submodule "src/third_party/boost"]
+	path = src/third_party/boost
+	url = https://github.com/boostorg/boost.git
