@@ -489,7 +489,8 @@ struct NanoVDBVolume
                                                           std::string((const char *)type.str, type.size));
         } catch (std::exception)
         {
-            Error(0, "Couldn't find file: %S", str);
+
+            Error(0, "Could not read file: %S\n", str);
         }
         return handle;
     }

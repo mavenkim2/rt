@@ -726,7 +726,7 @@ struct InternedStringCache
     struct ChunkNode
     {
         StringId stringIds[chunkSize];
-#if DEBUG
+#ifdef DEBUG
         string str[chunkSize];
 #endif
         u32 count;
@@ -742,7 +742,7 @@ struct InternedStringCache
         mutexes = PushArray(arena, Mutex, numStripes);
     }
     StringId GetOrCreate(Arena *arena, string value);
-#if DEBUG
+#ifdef DEBUG
     string Get(StringId id);
 #endif
 };
@@ -763,7 +763,7 @@ StringId InternedStringCache<numNodes, chunkSize, numStripes>::GetOrCreate(Arena
         {
             if (sid == node->stringIds[i])
             {
-#if DEBUG
+#ifdef DEBUG
                 Error(node->str[i] == value, "Hash collision between %S and %S\n", value, node->str[i]);
 #endif
                 EndRMutex(&mutexes[stripe]);
@@ -784,7 +784,7 @@ StringId InternedStringCache<numNodes, chunkSize, numStripes>::GetOrCreate(Arena
         prev       = node;
     }
     prev->stringIds[prev->count] = sid;
-#if DEBUG
+#ifdef DEBUG
     prev->str[prev->count] = PushStr8Copy(arena, value);
 #endif
     prev->count++;
@@ -793,7 +793,7 @@ StringId InternedStringCache<numNodes, chunkSize, numStripes>::GetOrCreate(Arena
     return sid;
 }
 
-#if DEBUG
+#ifdef DEBUG
 template <i32 numNodes, i32 chunkSize, i32 numStripes>
 string InternedStringCache<numNodes, chunkSize, numStripes>::Get(StringId id)
 {

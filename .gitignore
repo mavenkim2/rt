@@ -32,7 +32,6 @@
 *.app
 
 # other
-*.bat
 *.pdb
 *.rdbg
 *.obj
