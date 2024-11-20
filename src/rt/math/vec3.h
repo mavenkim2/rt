@@ -282,6 +282,7 @@ inline Vec3<T> ClampZero(const Vec3<T> &v)
 
 typedef Vec3<f32> Vec3f;
 typedef Vec3<u32> Vec3u;
+typedef Vec3<i32> Vec3i;
 
 template <i32 K>
 using Vec3lf = Vec3<LaneF32<K>>;

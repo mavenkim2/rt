@@ -1,5 +1,7 @@
 #ifndef SCENE_H
 #define SCENE_H
+#include <nanovdb/util/IO.h>
+#include <nanovdb/util/SampleFromVoxels.h>
 namespace rt
 {
 
@@ -437,9 +439,163 @@ struct Instance
 struct Volume
 {
     u32 shapeIndex;
-    SampledSpectrum Extinction(const Vec3f &p, f32 time, f32 filterWidth) const;
+    f32 Extinction(const Vec3f &p, f32 time, f32 filterWidth) const;
     void QueryExtinction(const Bounds &bounds, f32 &cMin, f32 &cMaj) const;
     // PhaseFunction PhaseFunction() const;
+};
+
+struct NanoVDBBuffer
+{
+    TempArena arena;
+    u64 allocSize;
+    u8 *ptr;
+    // NOTE: kind of messy, but the buffer owns the arena
+    NanoVDBBuffer() = default;
+    NanoVDBBuffer(u64 size, Arena *arena) : arena(TempBegin(arena)) { init(size); }
+    u64 size() const { return allocSize; }
+    const u8 *data() const { return ptr; }
+    u8 *data() { return ptr; }
+
+    void init(u64 size)
+    {
+        if (size == allocSize) return;
+        if (allocSize > 0) clear();
+        if (size == 0) return;
+        allocSize = size;
+        ptr       = PushArrayNoZero(arena.arena, u8, allocSize);
+    }
+    static NanoVDBBuffer create(u64 size, const NanoVDBBuffer *context = 0)
+    {
+        return NanoVDBBuffer(size, context ? context->arena.arena : ArenaAlloc());
+    }
+    void clear()
+    {
+        TempEnd(arena);
+        allocSize = 0;
+        ptr       = 0;
+    }
+};
+
+struct NanoVDBVolume
+{
+    const AffineSpace *renderFromMedium;
+    const AffineSpace mediumFromRender;
+    static nanovdb::GridHandle<NanoVDBBuffer> ReadGrid(string str, string type)
+    {
+        nanovdb::GridHandle<NanoVDBBuffer> handle;
+        try
+        {
+            handle = nanovdb::io::readGrid<NanoVDBBuffer>(std::string((const char *)str.str, str.size),
+                                                          std::string((const char *)type.str, type.size));
+        } catch (std::exception)
+        {
+            Error(0, "Couldn't find file: %S", str);
+        }
+        return handle;
+    }
+
+    nanovdb::GridHandle<NanoVDBBuffer> densityGrid;
+    nanovdb::GridHandle<NanoVDBBuffer> temperatureGrid;
+    const nanovdb::FloatGrid *densityFloatGrid     = 0;
+    const nanovdb::FloatGrid *temperatureFloatGrid = 0;
+    // NOTE: world space bounds
+    Bounds bounds;
+    f32 LeScale, temperatureOffset, temperatureScale;
+
+    NanoVDBVolume() {}
+    NanoVDBVolume(string filename, const AffineSpace *renderFromMedium) : mediumFromRender(Inverse(*renderFromMedium))
+    {
+        densityGrid          = ReadGrid(filename, "density");
+        temperatureGrid      = ReadGrid(filename, "temperature");
+        densityFloatGrid     = densityGrid.grid<f32>();
+        temperatureFloatGrid = temperatureGrid.grid<f32>();
+
+        nanovdb::BBox<nanovdb::Vec3R> bbox = densityFloatGrid->worldBBox();
+        bounds                             = Transform(*renderFromMedium,
+                                                       Bounds(Vec3f((f32)bbox.min()[0], (f32)bbox.min()[1], (f32)bbox.min()[2]),
+                                                              Vec3f((f32)bbox.max()[0], (f32)bbox.max()[1], (f32)bbox.max()[2])));
+
+        nanovdb::BBox<nanovdb::Vec3R> bbox2 = temperatureFloatGrid->worldBBox();
+        bounds.Extend(
+            Transform(*renderFromMedium,
+                      Bounds(Vec3f((f32)bbox2.min()[0], (f32)bbox2.min()[1], (f32)bbox2.min()[2]),
+                             Vec3f((f32)bbox2.max()[0], (f32)bbox2.max()[1], (f32)bbox2.max()[2]))));
+    }
+
+    SampledSpectrum Le(Vec3f p, const SampledWavelengths &lambda) const
+    {
+        // p = Transform(*mediumFromRender, p);
+        if (!temperatureFloatGrid)
+            return SampledSpectrum(0.f);
+        nanovdb::Vec3<f32> pIndex =
+            temperatureFloatGrid->worldToIndexF(nanovdb::Vec3<f32>(p.x, p.y, p.z));
+        using TreeSampler = nanovdb::SampleFromVoxels<nanovdb::FloatGrid::TreeType, 1, false>;
+        f32 temp          = TreeSampler(temperatureFloatGrid->tree())(pIndex);
+        temp              = (temp - temperatureOffset) * temperatureScale;
+        if (temp <= 100.f)
+            return SampledSpectrum(0.f);
+        return LeScale * BlackbodySpectrum(temp).Sample(lambda);
+    }
+    void Extinction(Vec3f p, f32 time, f32 filterWidth, f32 &density, f32 &le) const
+    {
+        // p = ApplyInverse(*renderFromMedium, p);
+        p                         = TransformP(mediumFromRender, p);
+        nanovdb::Vec3<f32> pIndex = densityFloatGrid->worldToIndexF(nanovdb::Vec3<f32>(p.x, p.y, p.z));
+        using TreeSampler         = nanovdb::SampleFromVoxels<nanovdb::FloatGrid::TreeType, 1, false>;
+        density                   = TreeSampler(densityFloatGrid->tree())(pIndex);
+    }
+    void QueryExtinction(Bounds inBounds, f32 &cMin, f32 &cMaj) const
+    {
+        inBounds = Transform(mediumFromRender, inBounds);
+
+        if (!Intersects(bounds, inBounds))
+        {
+            cMin = 0.f;
+            cMaj = 0.f;
+            return;
+        }
+
+        nanovdb::Vec3<f32> i0 = densityFloatGrid->worldToIndexF(nanovdb::Vec3<f32>(inBounds.minP[0], inBounds.minP[1], inBounds.minP[2]));
+        nanovdb::Vec3<f32> i1 = densityFloatGrid->worldToIndexF(nanovdb::Vec3<f32>(inBounds.maxP[0], inBounds.maxP[1], inBounds.maxP[2]));
+
+        struct MediumData
+        {
+            f32 cMin, cMaj;
+        };
+
+        Vec3i begin((i32)i0[0] - 1, (i32)i0[1] - 1, (i32)i0[2] - 1);
+        Vec3i end((i32)i1[1] + 1, (i32)i1[1] + 1, (i32)i1[2] + 1);
+
+        Vec3i width = end - begin;
+
+        MediumData datum;
+        ParallelReduce(
+            &datum, 0, width.x * width.y * width.z, PARALLEL_THRESHOLD,
+            [&](MediumData &data, u32 jobID, u32 start, u32 count) {
+                auto accessor = densityFloatGrid->getAccessor();
+                f32 cMin      = pos_inf;
+                f32 cMax      = neg_inf;
+
+                // TODO: see if loop carried dependency, or index computation, is significant overhead vs access time
+                for (u32 i = start; i < count; i++)
+                {
+                    i32 nx    = begin[0] + (i % width[0]);
+                    i32 ny    = begin[1] + ((i / width[0]) % width[1]);
+                    i32 nz    = begin[2] + (i / (width[0] * width[1]));
+                    f32 value = accessor.getValue({nx, ny, nz});
+                    cMin      = Min(cMin, value);
+                    cMax      = Max(cMax, value);
+                }
+                datum.cMin = cMin;
+                datum.cMaj = cMax;
+            },
+            [&](MediumData &left, const MediumData &right) {
+                left.cMin = Min(left.cMin, right.cMin);
+                left.cMaj = Max(left.cMaj, right.cMaj);
+            });
+        cMin = datum.cMin;
+        cMaj = datum.cMaj;
+    }
 };
 
 // NOTE: only leaf scenes can

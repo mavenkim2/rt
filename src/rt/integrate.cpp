@@ -10,13 +10,14 @@ namespace rt
 // - creating objects from the parsed scene packets
 
 // - volumetric
-//      - ratio tracking, residual ratio tracking, delta tracking,
+//      - ratio tracking, residual ratio tracking, delta tracking <-- done but untested
 //      - virtual density segments?
+// - bvh intersection and triangle intersection
 // - shading, ptex, materials, textures
 //      - ray differentials
-// - bvh intersection and triangle intersection
 
 // after that's done:
+// - equiangular sampling
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
 // - bdpt, metropolis, vcm/upbp, mcm?
 // - subdivision surfaces

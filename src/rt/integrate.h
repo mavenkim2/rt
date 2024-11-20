@@ -2,6 +2,7 @@
 #define INTEGRATE_H
 
 // #include "third_party/openvdb/openvdb/openvdb/openvdb.h"
+#include <nanovdb/NanoVDB.h>
 
 namespace rt
 {

@@ -9,10 +9,11 @@ struct Bounds
     Lane4F32 maxP;
 
     Bounds() : minP(pos_inf), maxP(neg_inf) {}
+    Bounds(Vec3f minP, Vec3f maxP) : minP(Lane4F32(minP)), maxP(Lane4F32(maxP)) {}
     Bounds(const Lane4F32 &minP, const Lane4F32 &maxP) : minP(minP), maxP(maxP) {}
     Bounds(const Lane8F32 &l) : minP(-Extract4<0>(l)), maxP(Extract4<1>(l)) {}
 
-    __forceinline bool Empty() const { return Any(minP > maxP); }
+    __forceinline bool Empty() const { return (Movemask(minP > maxP) & 0x7) != 0; }
 
     __forceinline void Extend(Lane4F32 inMin, Lane4F32 inMax)
     {
@@ -54,6 +55,11 @@ __forceinline Bounds Intersect(const Bounds &a, const Bounds &b)
     result.minP = Max(a.minP, b.minP);
     result.maxP = Min(a.maxP, b.maxP);
     return result;
+}
+__forceinline bool Intersects(const Bounds &a, const Bounds &b)
+{
+    Bounds test = Intersect(a, b);
+    return None(test.minP > test.maxP);
 }
 
 __forceinline f32 HalfArea(const Bounds &b)
