@@ -1,4 +1,0 @@
-[submodule "src/third_party/openvdb"]
-	path = src/third_party/openvdb
-	url = https://github.com/AcademySoftwareFoundation/openvdb.git
-	branch = feature/nanovdb
