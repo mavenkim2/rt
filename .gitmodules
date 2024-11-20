@@ -1,0 +1,4 @@
+[submodule "src/third_party/openvdb"]
+	path = src/third_party/openvdb
+	url = https://github.com/mavenkim2/openvdb.git
+	branch = main
