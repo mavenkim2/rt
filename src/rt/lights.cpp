@@ -240,10 +240,11 @@ LaneIF32 SphericalQuadArea(const Vec3IF32 &a, const Vec3IF32 &b, const Vec3IF32 
 //
 SAMPLE_LI(DiffuseAreaLight)
 {
-    DiffuseAreaLight *lights[IntN];
+    const DiffuseAreaLight *areaLights = scene->lights.Get<DiffuseAreaLight>();
+    const DiffuseAreaLight *lights[IntN];
     for (u32 i = 0; i < IntN; i++)
     {
-        lights[i] = &scene->areaLights[lightIndices[i]];
+        lights[i] = &areaLights[lightIndices[i]];
     }
 
     Vec3IF32 p[4];
@@ -253,8 +254,8 @@ SAMPLE_LI(DiffuseAreaLight)
         Lane4F32 pI[IntN];
         for (u32 lightIndex = 0; lightIndex < IntN; lightIndex++)
         {
-            DiffuseAreaLight *light = lights[lightIndex];
-            Lane4F32 pTemp          = Lane4F32::LoadU(light->p + i);
+            const DiffuseAreaLight *light = lights[lightIndex];
+            Lane4F32 pTemp                = Lane4F32::LoadU(light->p + i);
 
             // TODO: maybe transform the vertices once
             pI[lightIndex]   = Transform(*light->renderFromLight, pTemp);

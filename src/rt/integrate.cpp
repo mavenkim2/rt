@@ -170,11 +170,12 @@ void VolumeAggregate::Build(Arena *arena, Scene2 *scene)
     const f32 T = -1.f / std::log(0.5f);
     // Loop over the bounds of the volume
     Bounds bounds;
-    for (u32 i = 0; i < scene->numVolumes; i++)
-    {
-        Shape *shape = scene->shapes[scene->volumes[i].shapeIndex];
-        bounds.Extend(shape->GetBounds());
-    }
+    ForEachType(scene->volumes, [&](auto *array, u32 count) {
+        for (u32 i = 0; i < count; i++)
+        {
+            bounds.Extend(array[i].bounds);
+        }
+    });
     volumeBounds = bounds;
 
     f32 maxExtent = neg_inf;
@@ -187,62 +188,65 @@ void VolumeAggregate::Build(Arena *arena, Scene2 *scene)
         }
     }
 
-    root = PushStruct(arena, OctreeNode);
-    root->extinctionMin.SetInf();
-    for (u32 i = 0; i < scene->numVolumes; i++)
+    root                = PushStruct(arena, OctreeNode);
+    root->extinctionMin = pos_inf;
+    struct StackEntry
     {
-        struct StackEntry
+        OctreeNode *node;
+        Bounds b;
+    };
+    ForEachType(scene->volumes, [&](auto *array, u32 count) {
+        for (u32 i = 0; i < count; i++)
         {
-            OctreeNode *node;
-            Bounds b;
-        };
-        Volume *volume = &scene->volumes[i];
-        StackEntry stack[64];
-        i32 stackPtr      = 0;
-        stack[stackPtr++] = StackEntry{root, bounds};
+            auto *volume = &array[i];
+            // Volume *volume = &scene->volumes[i];
+            StackEntry stack[64];
+            i32 stackPtr      = 0;
+            stack[stackPtr++] = StackEntry{root, bounds};
 
-        while (stackPtr > 0)
-        {
-            StackEntry entry = stack[--stackPtr];
-            Bounds &b        = entry.b;
-            OctreeNode *node = entry.node;
-            // Get minorant and majorant
-            f32 extinctionMin, extinctionMax;
-            volume->QueryExtinction(bounds, extinctionMin, extinctionMax);
-            if (!extinctionMax) continue;
-
-            node->volumeHandles[node->numVolumes++] = VolumeHandle(i);
-            node->extinctionMax                     = Max(node->extinctionMax, extinctionMax);
-            node->extinctionMin                     = Min(node->extinctionMin, extinctionMin);
-            // max(R) - min(R) * diag(R) > T
-            bool divide = (extinctionMax - extinctionMin) * Length(ToVec3f(b.Diagonal())) > T;
-            if (divide)
+            while (stackPtr > 0)
             {
-                if (!node->children)
+                StackEntry entry = stack[--stackPtr];
+                Bounds &b        = entry.b;
+                OctreeNode *node = entry.node;
+                // Get minorant and majorant
+                f32 extinctionMin, extinctionMax;
+                volume->QueryExtinction(bounds, extinctionMin, extinctionMax);
+                if (!extinctionMax) continue;
+
+                node->volumeHandles[node->numVolumes++] = VolumeHandle(i);
+                node->extinctionMax                     = Max(node->extinctionMax, extinctionMax);
+                node->extinctionMin                     = Min(node->extinctionMin, extinctionMin);
+                // max(R) - min(R) * diag(R) > T
+                bool divide = (extinctionMax - extinctionMin) * Length(ToVec3f(b.Diagonal())) > T;
+                if (divide)
                 {
-                    node->children = PushArray(arena, OctreeNode, 8);
+                    if (!node->children)
+                    {
+                        node->children = PushArray(arena, OctreeNode, 8);
+                        for (u32 childIndex = 0; childIndex < 8; childIndex++)
+                        {
+                            node->children[i].extinctionMin = node->extinctionMin;
+                            node->children[i].extinctionMax = node->extinctionMax;
+                        }
+                    }
+                    Lane4F32 centroid = b.Centroid();
+                    Lane4F32 mins[2]  = {b.minP, centroid};
+                    Lane4F32 maxs[2]  = {centroid, b.maxP};
                     for (u32 childIndex = 0; childIndex < 8; childIndex++)
                     {
-                        node->children[i].extinctionMin = node->extinctionMin;
-                        node->children[i].extinctionMax = node->extinctionMax;
-                    }
-                }
-                Lane4F32 centroid = b.Centroid();
-                Lane4F32 mins[2]  = {b.minP, centroid};
-                Lane4F32 maxs[2]  = {centroid, b.maxP};
-                for (u32 childIndex = 0; childIndex < 8; childIndex++)
-                {
-                    Lane4F32 minP(mins[childIndex & 1][0], mins[(childIndex & 3) >> 1][1],
-                                  mins[childIndex >> 2][2], 0.f);
+                        Lane4F32 minP(mins[childIndex & 1][0], mins[(childIndex & 3) >> 1][1],
+                                      mins[childIndex >> 2][2], 0.f);
 
-                    Lane4F32 maxP(maxs[childIndex & 1][0], maxs[(childIndex & 3) >> 1][1],
-                                  maxs[childIndex >> 2][2], 0.f);
-                    Bounds newBounds(minP, maxP);
-                    stack[stackPtr++] = {&node->children[childIndex], newBounds};
+                        Lane4F32 maxP(maxs[childIndex & 1][0], maxs[(childIndex & 3) >> 1][1],
+                                      maxs[childIndex >> 2][2], 0.f);
+                        Bounds newBounds(minP, maxP);
+                        stack[stackPtr++] = {&node->children[childIndex], newBounds};
+                    }
                 }
             }
         }
-    }
+    });
 }
 
 bool VolumeAggregate::Iterator::Next(RaySegment &segment)
@@ -424,7 +428,7 @@ SampledSpectrum SampleTMaj(Scene2 *scene, Ray2 &ray, f32 tMax, f32 xi, RNG &rng,
             {
                 f32 dT = Min(FLT_MAX, tMax) - tMin;
                 tMaj *= FastExp(-dT * cSpectrumMaj);
-                if constexpr (residualRatioTracking) tRay *= FastExp(-dT * segment.cMin[0]);
+                // if constexpr (residualRatioTracking) tRay *= FastExp(-dT * segment.cMin[0]);
                 break;
             }
             else
@@ -463,8 +467,6 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
                                      SampledWavelengths &lambda, u32 maxDepth)
 {
     // TODO:
-    // 1. actually finish this
-    // 2. majorant octree
     // 3. multiple volumes
     // 4. virtual density segments, and other sampling methods
     //      a. equiangular sampling
@@ -581,43 +583,56 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
             bool noMisFlag = specularBounce || depth == 0;
             if (specularBounce || depth == 0)
             {
-                for (u32 i = 0; i < scene->lightCount[LightClass_InfUnf]; i++)
+                struct NoMisLightFunctor
                 {
-                    UniformInfiniteLight *light = &scene->uniformInfLights[i];
-                    SampledSpectrum Le          = UniformInfiniteLight::Le(light, ray.d, lambda);
-                    L += beta * Le * MISWeight(p_u);
-                }
-                for (u32 i = 0; i < scene->lightCount[LightClass_InfImg]; i++)
-                {
-                    ImageInfiniteLight *light = &scene->imageInfLights[i];
-                    SampledSpectrum Le        = ImageInfiniteLight::Le(light, ray.d, lambda);
-                    L += beta * Le * MISWeight(p_u);
-                }
+                    NoMisLightFunctor() {}
+                    template <typename Light>
+                    void operator()(Light *array, u32 count)
+                    {
+                        for (u32 i = 0; i < count; i++)
+                        {
+                            Light *light       = &scene->uniformInfLights[i];
+                            SampledSpectrum Le = Light::Le(light, ray.d, lambda);
+                            L += beta * Le * MISWeight(p_u);
+                        }
+                    }
+                };
+                ForEachTypeSubset(scene->lights, NoMisLightFunctor(), Scene2::InfiniteLightTypes());
+                // for (u32 i = 0; i < scene->lightCount[LightClass_InfUnf]; i++)
+                // {
+                //     UniformInfiniteLight *light = &scene->uniformInfLights[i];
+                //     SampledSpectrum Le          = UniformInfiniteLight::Le(light, ray.d, lambda);
+                //     L += beta * Le * MISWeight(p_u);
+                // }
+                // for (u32 i = 0; i < scene->lightCount[LightClass_InfImg]; i++)
+                // {
+                //     ImageInfiniteLight *light = &scene->imageInfLights[i];
+                //     SampledSpectrum Le        = ImageInfiniteLight::Le(light, ray.d, lambda);
+                //     L += beta * Le * MISWeight(p_u);
+                // }
             }
             else
             {
-                for (u32 i = 0; i < scene->lightCount[LightClass_InfUnf]; i++)
+                struct MisLightFunctor
                 {
-                    UniformInfiniteLight *light = &scene->uniformInfLights[i];
-                    SampledSpectrum Le          = UniformInfiniteLight::Le(light, ray.d, lambda);
+                    MisLightFunctor() {}
+                    template <typename Light>
+                    void operator()(Light *array, u32 count)
+                    {
+                        for (u32 i = 0; i < count; i++)
+                        {
+                            Light *light       = &array[i];
+                            SampledSpectrum Le = Light::Le(light, ray.d, lambda);
 
-                    f32 pdf      = LightPDF(scene);
-                    f32 lightPdf = pdf * (f32)UniformInfiniteLight::PDF_Li(light, ray.d, true);
+                            f32 pdf      = LightPDF(scene);
+                            f32 lightPdf = pdf * (f32)Light::PDF_Li(light, ray.d, true);
 
-                    p_l *= lightPdf;
-                    L += beta * Le * MISWeight(p_u, p_l);
-                }
-                for (u32 i = 0; i < scene->lightCount[LightClass_InfImg]; i++)
-                {
-                    ImageInfiniteLight *light = &scene->imageInfLights[i];
-                    SampledSpectrum Le        = ImageInfiniteLight::Le(light, ray.d, lambda);
-
-                    f32 pdf      = LightPDF(scene);
-                    f32 lightPdf = pdf * (f32)ImageInfiniteLight::PDF_Li(light, ray.d, true);
-
-                    p_l *= lightPdf;
-                    L += beta * Le * MISWeight(p_u, p_l);
-                }
+                            p_l *= lightPdf;
+                            L += beta * Le * MISWeight(p_u, p_l);
+                        }
+                    }
+                };
+                ForEachTypeSubset(scene->lights, MisLightFunctor(), Scene2::InfiniteLightTypes());
             }
             break;
             // sample infinite area lights, environment map, and return

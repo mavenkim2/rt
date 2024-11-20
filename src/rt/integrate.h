@@ -148,6 +148,7 @@ struct VolumeAggregate
         bool Next(RaySegment &segment);
     };
 
+    VolumeAggregate() {}
     Iterator CreateIterator(const Ray2 *ray, const SampledSpectrum &cExtinct, f32 tMax)
     {
         return Iterator(ray, cExtinct, tMax, this);

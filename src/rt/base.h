@@ -1,3 +1,6 @@
+#ifndef BASE_H
+#define BASE_H
+
 #include <atomic>
 #include <emmintrin.h>
 #include <stdint.h>
@@ -265,3 +268,4 @@ inline void EndWMutex(Mutex *mutex)
     Assert(result);
 }
 } // namespace rt
+#endif

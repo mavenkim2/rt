@@ -9,6 +9,9 @@
 namespace rt
 {
 
+#define Radians(x) (PI / 180.f) * x
+#define Degrees(x) (180.f / PI) * x
+
 const f32 infinity = std::numeric_limits<f32>::infinity();
 
 static const __m128 SIMDInfinity = _mm_set1_ps(infinity);

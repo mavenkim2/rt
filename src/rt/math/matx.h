@@ -137,8 +137,8 @@ struct Mat4
                        f32 b1, f32 b2, f32 b3, f32 b4,
                        f32 c1, f32 c2, f32 c3, f32 c4,
                        f32 d1, f32 d2, f32 d3, f32 d4)
-        : a1(a1), a2(a2), a3(a3), a4(a4), b1(b1), b2(b2), b3(b3), b4(b4),
-          c1(c1), c2(c2), c3(c3), c4(c4), d1(d1), d2(d2), d3(d3), d4(d4)
+        : a1(a1), b1(a2), c1(a3), d1(a4), a2(b1), b2(b2), c2(b3), d2(b4),
+          a3(c1), b3(c2), c3(c3), d3(c4), a4(d1), b4(d2), c4(d3), d4(d4)
     {
     }
 
@@ -220,6 +220,17 @@ struct Mat4
         result.columns[3][0] = value.x;
         result.columns[3][1] = value.y;
         result.columns[3][2] = value.z;
+        return result;
+    }
+
+    // NOTE: assumes viewing matrix is right hand, with -z into screen
+    __forceinline static Mat4 Perspective(f32 fov, f32 aspectRatio, f32 n = 0.1f, f32 f = 1000.f)
+    {
+        f32 divTanHalf = 1.f / Tan(fov / 2.f);
+        Mat4 result(divTanHalf / aspectRatio, 0.f, 0.f, 0.f,
+                    0.f, divTanHalf, 0.f, 0.f,
+                    0.f, 0.f, f / (n - f), n * f / (n - f),
+                    0.f, 0.f, -1.f, 0.f);
         return result;
     }
 };

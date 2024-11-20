@@ -84,7 +84,7 @@ bool IsDeltaLight(LightType type)
 
 #define LE_HEADER(type) static SampledSpectrum LE_BODY(type)
 #define LE(type)    SampledSpectrum type::LE_BODY(type)
-#define LE_BODY(type) Le(type *light, const Vec3f &n, const Vec3f &w, const SampledWavelengths &lambda)
+#define LE_BODY(type) Le(const type *light, const Vec3f &n, const Vec3f &w, const SampledWavelengths &lambda)
 
 #define LE_INF_HEADER(type) static SampledSpectrum LE_INF_BODY(type)
 #define LE_INF(type)    SampledSpectrum type::LE_INF_BODY(type)

@@ -489,7 +489,6 @@ struct NanoVDBVolume
                                                           std::string((const char *)type.str, type.size));
         } catch (std::exception)
         {
-
             Error(0, "Could not read file: %S\n", str);
         }
         return handle;
@@ -537,13 +536,14 @@ struct NanoVDBVolume
             return SampledSpectrum(0.f);
         return LeScale * BlackbodySpectrum(temp).Sample(lambda);
     }
-    void Extinction(Vec3f p, f32 time, f32 filterWidth, f32 &density, f32 &le) const
+    void Extinction(Vec3f p, const SampledWavelengths &lambda, f32 &density, SampledSpectrum &le, f32, f32) const
     {
         // p = ApplyInverse(*renderFromMedium, p);
         p                         = TransformP(mediumFromRender, p);
         nanovdb::Vec3<f32> pIndex = densityFloatGrid->worldToIndexF(nanovdb::Vec3<f32>(p.x, p.y, p.z));
         using TreeSampler         = nanovdb::SampleFromVoxels<nanovdb::FloatGrid::TreeType, 1, false>;
         density                   = TreeSampler(densityFloatGrid->tree())(pIndex);
+        le                        = Le(p, lambda);
     }
     void QueryExtinction(Bounds inBounds, f32 &cMin, f32 &cMaj) const
     {
@@ -617,14 +617,19 @@ struct Scene2
         };
     };
     // Volumes
-    Volume *volumes;
+    // Volume *volumes;
+    using VolumeTypes = TypePack<NanoVDBVolume>;
+    ArrayTuple<VolumeTypes> volumes;
     VolumeAggregate aggregate;
 
     // Lights
-    struct DiffuseAreaLight *areaLights;
-    struct DistantLight *distantLights;
-    struct UniformInfiniteLight *uniformInfLights;
-    struct ImageInfiniteLight *imageInfLights;
+    using LightTypes         = TypePack<DiffuseAreaLight, DistantLight, UniformInfiniteLight, ImageInfiniteLight>;
+    using InfiniteLightTypes = TypePack<UniformInfiniteLight, ImageInfiniteLight>;
+    ArrayTuple<LightTypes> lights;
+    // struct DiffuseAreaLight *areaLights;
+    // struct DistantLight *distantLights;
+    // struct UniformInfiniteLight *uniformInfLights;
+    // struct ImageInfiniteLight *imageInfLights;
     u32 lightPDF[LightClass_Count];
     u32 lightCount[LightClass_Count];
     // u32 numAreaLights;
@@ -637,7 +642,7 @@ struct Scene2
     f32 minX, minY, minZ;
     f32 maxX, maxY, maxZ;
     u32 numInstances;
-    u32 numVolumes;
+    // u32 numVolumes;
     // union
     // {
     //     struct

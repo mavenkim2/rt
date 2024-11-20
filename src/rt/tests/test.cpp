@@ -1,4 +1,8 @@
-// #include <rt/scene.h>
+#include "../base.h"
+#include "../math/matx.h"
+#include "../scene.h"
+#include "../sampler.h"
+#include "../lights.h"
 namespace rt
 {
 TriangleMesh *GenerateMesh(Arena *arena, u32 count, f32 min = -100.f, f32 max = 100.f)
@@ -358,6 +362,76 @@ void BVHSortingTest()
     // printf("time %fms\n", OS_GetMilliseconds(counter));
     printf("time avx %fms\n", time);
     printf("time insertion %fms\n", time2);
+}
+
+void VolumeRenderingTest(Arena *arena, string filename)
+{
+    // TODO: this is hardcoded from disney-cloud.pbrt. Update the scene reader to handle participating media
+    // Sampler
+    ZSobolSampler sampler(1024, Vec2i(1280, 720));
+    // Camera matrix
+    AffineSpace camera = AffineSpace::LookAt(Vec3f(648.064, -82.473, -63.856),
+                                             Vec3f(6.021, 100.043, -43.679),
+                                             Vec3f(0.273, 0.962, -0.009));
+    Mat4 perspective   = Mat4::Perspective(Radians(31.07), 1280.f / 720.f);
+
+    // Sun
+    Vec3f rgbL(2.6, 2.5, 2.3);
+    RGBIlluminantSpectrum spec(*srgbColorSpace, rgbL);
+    DistantLight sun(Vec3f(-0.5826f, -0.77660f, -0.2717f), &spec);
+
+    // Light
+    rgbL = Vec3f(0.03, 0.07, 0.23);
+    RGBIlluminantSpectrum spec2(*srgbColorSpace, rgbL);
+    UniformInfiniteLight light(&spec2);
+    Scene2 scene;
+
+    // Media
+    AffineSpace transform = AffineSpace::Identity();
+    NanoVDBVolume volume("data/wdas_cloud_quarter.nvdb", &transform);
+
+    scene.volumes.Set(&volume, 1);
+    // Bounding box
+    QuadMesh mesh;
+    Vec3f p[] = {
+        // front
+        Vec3f(-0.5f, -0.5f, -0.5f),
+        Vec3f(0.5f, -0.5f, -0.5f),
+        Vec3f(0.5f, -0.5f, 0.5f),
+        Vec3f(-0.5f, -0.5f, 0.5f),
+        // right
+        Vec3f(0.5f, -0.5f, -0.5f),
+        Vec3f(0.5f, 0.5f, -0.5f),
+        Vec3f(0.5f, 0.5f, 0.5f),
+        Vec3f(0.5f, -0.5f, 0.5f),
+        // back
+        Vec3f(0.5f, 0.5f, -0.5f),
+        Vec3f(-0.5f, 0.5f, -0.5f),
+        Vec3f(-0.5f, 0.5f, 0.5f),
+        Vec3f(0.5f, 0.5f, 0.5f),
+        // left
+        Vec3f(-0.5f, 0.5f, -0.5f),
+        Vec3f(-0.5f, -0.5f, -0.5f),
+        Vec3f(-0.5f, -0.5f, 0.5f),
+        Vec3f(-0.5f, 0.5f, 0.5f),
+        // top
+        Vec3f(-0.5f, -0.5f, 0.5f),
+        Vec3f(0.5f, -0.5f, 0.5f),
+        Vec3f(0.5f, 0.5f, 0.5f),
+        Vec3f(-0.5f, 0.5f, 0.5f),
+        // bottom
+        Vec3f(-0.5f, 0.5f, -0.5f),
+        Vec3f(0.5f, 0.5f, -0.5f),
+        Vec3f(0.5f, -0.5f, -0.5f),
+        Vec3f(-0.5f, -0.5f, -0.5f),
+    };
+    mesh.p           = p;
+    mesh.numVertices = 24;
+    scene.meshes     = &mesh;
+    scene.numMeshes  = 1;
+    BuildLightPDF(&scene);
+
+    scene.aggregate.Build(arena, &scene);
 }
 
 } // namespace rt

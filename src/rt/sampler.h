@@ -1,3 +1,5 @@
+#ifndef SAMPLER_H
+#define SAMPLER_H
 namespace rt
 {
 // NOTE: independent uniform samplers without any care for discrepancy
@@ -212,7 +214,7 @@ struct PaddedSobolSampler : SamplerCRTP<PaddedSobolSampler>
 
 struct ZSobolSampler : SamplerCRTP<ZSobolSampler>
 {
-    ZSobolSampler(i32 samplesPerPixel, Vec2i fullResolution, RandomizeStrategy randomize, i32 seed = 0)
+    ZSobolSampler(i32 samplesPerPixel, Vec2i fullResolution, RandomizeStrategy randomize = RandomizeStrategy::FastOwen, i32 seed = 0)
         : randomize(randomize), seed(seed)
     {
         assert(IsPow2(samplesPerPixel));
@@ -474,3 +476,4 @@ struct ZSobolSampler : SamplerCRTP<ZSobolSampler>
 //     RandomizeStrategy randomize;
 // };
 } // namespace rt
+#endif
