@@ -49,11 +49,18 @@ struct Ray2
     f32 tMax;
     u32 volumeIndex;
 
+    Ray2() {}
+    Ray2(const Vec3f &o, const Vec3f &d) : o(o), d(d) {}
     Vec3f operator()(f32 t)
     {
         return o + t * d;
     }
 };
+
+Ray2 Transform(const Mat4 &m, const Ray2 &r)
+{
+    return Ray2(TransformP(m, r.o), TransformV(m, r.d));
+}
 
 struct RayDifferential
 {

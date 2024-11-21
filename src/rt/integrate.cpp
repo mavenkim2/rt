@@ -511,7 +511,7 @@ bool Intersect(Scene2 *scene, Ray2 &r, SurfaceInteraction &intr)
     return tHit != f32(pos_inf);
 }
 
-SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, Ray2 &ray, Sampler sampler,
+SampledSpectrum VolumetricIntegrator(Scene2 *scene, Ray2 &ray, Sampler sampler,
                                      SampledWavelengths &lambda, u32 maxDepth)
 {
     // TODO:

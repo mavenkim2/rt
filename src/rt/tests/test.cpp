@@ -4,6 +4,7 @@
 #include "../sampler.h"
 #include "../lights.h"
 #include "../spectrum.h"
+#include "../math/matx.h"
 namespace rt
 {
 TriangleMesh *GenerateMesh(Arena *arena, u32 count, f32 min = -100.f, f32 max = 100.f)
@@ -369,12 +370,39 @@ void VolumeRenderingTest(Arena *arena, string filename)
 {
     // TODO: this is hardcoded from disney-cloud.pbrt. Update the scene reader to handle participating media
     // Sampler
-    ZSobolSampler sampler(1024, Vec2i(1280, 720));
+    const u32 width      = 1280;
+    const u32 height     = 720;
+    const u32 spp        = 1024;
+    const u32 maxDepth   = 100;
+    const f32 lensRadius = 0.f;
+    Vec2f filterRadius   = 0.f;
+    f32 focalLength      = 0.f;
     // Camera matrix
-    AffineSpace camera = AffineSpace::LookAt(Vec3f(648.064, -82.473, -63.856),
-                                             Vec3f(6.021, 100.043, -43.679),
-                                             Vec3f(0.273, 0.962, -0.009));
-    Mat4 perspective   = Mat4::Perspective(Radians(31.07), 1280.f / 720.f);
+    Vec3f pCamera = Vec3f(648.064, -82.473, -63.856);
+    Vec3f look    = Vec3f(6.021, 100.043, -43.679);
+    Vec3f up      = Vec3f(0.273, 0.962, -0.009);
+    // AffineSpace camera           = AffineSpace::LookAt(pCamera,
+    //
+    //
+
+    // NOTE: render space is just world space centered at the camera
+    // Vec3f up(0.f, 0.f, 1.f);
+    Vec3f f = Normalize(pCamera - look);
+    Vec3f s = Normalize(Cross(up, f));
+    Vec3f u = Cross(f, s);
+
+    Mat4 cameraFromRender(f.x, f.y, f.z, 0.f,
+                          s.x, s.y, s.z, 0.f,
+                          u.x, u.y, u.z, 0.f,
+                          0.f, 0.f, 0.f, 1.f);
+
+    Mat4 renderFromCamera = Inverse(cameraFromRender);
+    Mat4 NDCFromCamera    = Mat4::Perspective(Radians(31.07), 1280.f / 720.f);
+    // maps to raster coordinates
+    Mat4 rasterFromNDC = Scale(Vec3f(width, -i32(height), 1.f)) * Scale(Vec3f(1.f / 2.f, 1.f / 2.f, 1.f)) *
+                         Translate(Vec3f(1.f, -1.f, 0.f));
+    Mat4 rasterFromCamera = rasterFromNDC * NDCFromCamera;
+    Mat4 cameraFromRaster = Inverse(rasterFromCamera);
 
     // Sun
     Vec3f rgbL(2.6, 2.5, 2.3);
@@ -433,6 +461,63 @@ void VolumeRenderingTest(Arena *arena, string filename)
     BuildLightPDF(&scene);
 
     scene.aggregate.Build(arena, &scene);
+
+    // parallel for over tiles
+    u32 tileWidth  = 32;
+    u32 tileHeight = 32;
+    u32 tileCountX = (width + tileWidth - 1) / tileWidth;
+    u32 tileCountY = (width + tileHeight - 1) / tileHeight;
+    u32 taskCount  = tileCountX * tileCountY;
+
+    scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
+        u32 tileX = taskCount % tileCountX;
+        u32 tileY = taskCount / tileCountX;
+        Vec2u minPixelBounds(tileX, tileY);
+        Vec2u maxPixelBounds(Min(tileX + tileWidth, tileWidth), Min(tileY + tileHeight, tileHeight));
+
+        SampledWavelengths lambda;
+        SampledSpectrum L(0.f);
+
+        ZSobolSampler sampler(spp, Vec2i(width, height));
+        for (u32 y = minPixelBounds.y; y < maxPixelBounds.y; y++)
+        {
+            for (u32 x = minPixelBounds.x; x < maxPixelBounds.x; x++)
+            {
+                Vec2u pPixel(x, y);
+                for (u32 i = 0; i < spp; i++)
+                {
+                    sampler.StartPixelSample(Vec2i(x, y), i);
+                    // box filter
+                    Vec2f u            = sampler.Get2D();
+                    Vec2f filterSample = Vec2f(Lerp(u[0], -filterRadius.x, filterRadius.x),
+                                               Lerp(u[1], -filterRadius.y, filterRadius.y));
+                    // converts from continuous to discrete coordinates
+                    filterSample += Vec2f(0.5f, 0.5f) + Vec2f(pPixel);
+                    Vec2f pLens = sampler.Get2D();
+
+                    Vec3f pCamera = TransformP(cameraFromRaster, Vec3f(filterSample, 0.f));
+                    Ray2 ray(Vec3f(0.f, 0.f, 0.f), Normalize(pCamera));
+                    if (lensRadius > 0.f)
+                    {
+                        pLens = lensRadius * SampleUniformDiskConcentric(pLens);
+
+                        // point on plane of focus
+                        f32 t        = focalLength / -ray.d.z;
+                        Vec3f pFocus = ray(t);
+                        ray.o        = Vec3f(pLens.x, pLens.y, 0.f);
+                        // ensure ray intersects focal point
+                        ray.d = Normalize(pFocus - ray.o);
+                    }
+                    ray = Transform(renderFromCamera, ray);
+                    // generate ray somehow
+                    f32 cameraWeight = 1.f;
+                    L += cameraWeight * VolumetricIntegrator(&scene, ray, &sampler, lambda, maxDepth);
+                    // convert radiance to rgb, add and divide
+                }
+            }
+        }
+        // use measurement equation to convert radiance
+    });
 }
 
 } // namespace rt

@@ -235,6 +235,32 @@ struct Mat4
     }
 };
 
+inline Mat4 Scale(const Vec3f &value)
+{
+    Mat4 result           = Mat4::Identity();
+    result.elements[0][0] = value.x;
+    result.elements[1][1] = value.y;
+    result.elements[2][2] = value.z;
+    return result;
+}
+
+inline Mat4 Scale(f32 value)
+{
+    Mat4 result           = Mat4::Identity();
+    result.elements[0][0] = value;
+    result.elements[1][1] = value;
+    result.elements[2][2] = value;
+    return result;
+}
+inline Mat4 Translate(const Vec3f &value)
+{
+    Mat4 m(1.f, 0.f, 0.f, value.x,
+           0.f, 1.f, 0.f, value.y,
+           0.f, 0.f, 1.f, value.z,
+           0.f, 0.f, 0.f, 1.f);
+    return m;
+}
+
 Vec4f Mul(Mat4 a, Vec4f b)
 {
     Vec4f result;
@@ -266,14 +292,15 @@ Vec4f Mul(Mat4 a, Vec4f b)
 #endif
 }
 
-Vec3f Mul(Mat4 a, Vec3f b)
+Vec3f Mul(const Mat4 &a, const Vec3f &b)
 {
     Vec4f vec(b.x, b.y, b.z, 1);
     return Mul(a, vec).xyz;
 }
+__forceinline Vec3f TransformP(const Mat4 &a, const Vec3f &b) { return Mul(a, b); }
 
 // Ignores translation
-inline Vec3f NormalTransform(const Mat4 &a, const Vec3f &b)
+inline Vec3f TransformV(const Mat4 &a, const Vec3f &b)
 {
     Lane4F32 laneResult = a.columns[0] * b.x + a.columns[1] * b.y + a.columns[2] * b.z;
     return Vec3f(laneResult[0], laneResult[1], laneResult[2]);
@@ -307,7 +334,7 @@ inline Vec3f NormalTransform(const Mat4 &a, const Vec3f &b)
 //     return result;
 // }
 
-inline Mat4 Mul(Mat4 a, Mat4 b)
+inline Mat4 Mul(const Mat4 &a, const Mat4 &b)
 {
     Mat4 result;
     for (int j = 0; j < 4; j += 1)
@@ -319,6 +346,12 @@ inline Mat4 Mul(Mat4 a, Mat4 b)
         }
     }
 
+    return result;
+}
+
+Mat4 operator*(const Mat4 &a, const Mat4 &b)
+{
+    Mat4 result = Mul(a, b);
     return result;
 }
 
@@ -353,6 +386,65 @@ inline Vec3f Mul(Mat3 a, Vec3f b)
     result.z += a.c3 * b.z;
 
     return result;
+}
+
+inline f32 Determinant(const Mat4 &a)
+{
+    f32 result = a.a1 * a.b2 * a.c3 * a.d4 - a.a1 * a.b2 * a.c4 * a.d3 + a.a1 * a.b3 * a.c4 * a.d2 -
+                 a.a1 * a.b3 * a.c2 * a.d4 + a.a1 * a.b4 * a.c2 * a.d3 - a.a1 * a.b4 * a.c3 * a.d2 -
+                 a.a2 * a.b3 * a.c4 * a.d1 + a.a2 * a.b3 * a.c1 * a.d4 - a.a2 * a.b4 * a.c1 * a.d3 +
+                 a.a2 * a.b4 * a.c3 * a.d1 - a.a2 * a.b1 * a.c3 * a.d4 + a.a2 * a.b1 * a.c4 * a.d3 +
+                 a.a3 * a.b4 * a.c1 * a.d2 - a.a3 * a.b4 * a.c2 * a.d1 + a.a3 * a.b1 * a.c2 * a.d4 -
+                 a.a3 * a.b1 * a.c4 * a.d2 + a.a3 * a.b2 * a.c4 * a.d1 - a.a3 * a.b2 * a.c1 * a.d4 -
+                 a.a4 * a.b1 * a.c2 * a.d3 + a.a4 * a.b1 * a.c3 * a.d2 - a.a4 * a.b2 * a.c3 * a.d1 +
+                 a.a4 * a.b2 * a.c1 * a.d3 - a.a4 * a.b3 * a.c1 * a.d2 + a.a4 * a.b3 * a.c2 * a.d1;
+    return result;
+}
+
+inline Mat4 Inverse(const Mat4 &a)
+{
+    Mat4 res   = {};
+    f32 invdet = Determinant(a);
+    if (invdet == 0)
+    {
+        return res;
+    }
+    invdet = 1.f / invdet;
+    // NOTE: transpose
+    res.a1 = invdet * (a.b2 * (a.c3 * a.d4 - a.d3 * a.c4) - a.c2 * (a.b3 * a.d4 - a.d3 * a.b4) +
+                       a.d2 * (a.b3 * a.c4 - a.c3 * a.b4));
+    res.a2 = -invdet * (a.a2 * (a.c3 * a.d4 - a.d3 * a.c4) - a.c2 * (a.a3 * a.d4 - a.d3 * a.a4) +
+                        a.d2 * (a.a3 * a.c4 - a.c3 * a.a4));
+    res.a3 = invdet * (a.a2 * (a.b3 * a.d4 - a.d3 * a.b4) - a.b2 * (a.a3 * a.d4 - a.d3 * a.a4) +
+                       a.d2 * (a.a3 * a.b4 - a.b3 * a.a4));
+    res.a4 = -invdet * (a.a2 * (a.b3 * a.c4 - a.b4 * a.c3) - a.b2 * (a.a3 * a.c4 - a.c3 * a.a4) +
+                        a.c2 * (a.a3 * a.b4 - a.b3 * a.a4));
+    res.b1 = -invdet * (a.b1 * (a.c3 * a.d4 - a.d3 * a.c4) - a.c1 * (a.b3 * a.d4 - a.d3 * a.b4) +
+                        a.d1 * (a.b3 * a.c4 - a.c3 * a.b4));
+    res.b2 = invdet * (a.a1 * (a.c3 * a.d4 - a.d3 * a.c4) - a.c1 * (a.a3 * a.d4 - a.d3 * a.a4) +
+                       a.d1 * (a.a3 * a.c4 - a.c3 * a.a4));
+    res.b3 = -invdet * (a.a1 * (a.b3 * a.d4 - a.d3 * a.b4) - a.b1 * (a.a3 * a.d4 - a.d3 * a.a4) +
+                        a.d1 * (a.a3 * a.b4 - a.b3 * a.a4));
+    res.b4 = invdet * (a.a1 * (a.b3 * a.c4 - a.b4 * a.c3) - a.b1 * (a.a3 * a.c4 - a.c3 * a.a4) +
+                       a.c1 * (a.a3 * a.b4 - a.b3 * a.a4));
+    res.c1 = invdet * (a.b1 * (a.c2 * a.d4 - a.d2 * a.c4) - a.c1 * (a.b2 * a.d4 - a.d2 * a.b4) +
+                       a.d1 * (a.b2 * a.c4 - a.c2 * a.b4));
+    res.c2 = -invdet * (a.a1 * (a.c2 * a.d4 - a.d2 * a.c4) - a.c1 * (a.a2 * a.d4 - a.d2 * a.a4) +
+                        a.d1 * (a.a2 * a.c4 - a.c2 * a.a4));
+    res.c3 = invdet * (a.a1 * (a.b2 * a.d4 - a.d2 * a.b4) - a.b1 * (a.a2 * a.d4 - a.d2 * a.a4) +
+                       a.d1 * (a.a2 * a.b4 - a.b2 * a.a4));
+    res.c4 = -invdet * (a.a1 * (a.b2 * a.c4 - a.c2 * a.b4) - a.b1 * (a.a2 * a.c4 - a.c2 * a.a4) +
+                        a.c1 * (a.a2 * a.b4 - a.b2 * a.a4));
+    res.d1 = -invdet * (a.b1 * (a.c2 * a.d3 - a.d2 * a.c3) - a.c1 * (a.b2 * a.d3 - a.d2 * a.b3) +
+                        a.d1 * (a.b2 * a.c3 - a.c2 * a.b3));
+    res.d2 = invdet * (a.a1 * (a.c2 * a.d3 - a.c3 * a.d2) - a.c1 * (a.a2 * a.d3 - a.d2 * a.a3) +
+                       a.d1 * (a.a2 * a.c3 - a.c2 * a.a3));
+    res.d3 = -invdet * (a.a1 * (a.b2 * a.d3 - a.d2 * a.b3) - a.b1 * (a.a2 * a.d3 - a.d2 * a.a3) +
+                        a.d1 * (a.a2 * a.b3 - a.b2 * a.a3));
+    res.d4 = invdet * (a.a1 * (a.b2 * a.c3 - a.c2 * a.b3) - a.b1 * (a.a2 * a.c3 - a.c2 * a.a3) +
+                       a.c1 * (a.a2 * a.b3 - a.b2 * a.a3));
+
+    return res;
 }
 
 // NOTE: row major affine transformation matrix
