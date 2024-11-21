@@ -242,6 +242,17 @@ struct SampledSpectrum
 
     f32 values[NSampledWavelengths];
 };
+
+SampledSpectrum FastExp(const SampledSpectrum &a)
+{
+    SampledSpectrum result;
+    for (u32 i = 0; i < NSampledWavelengths; i++)
+    {
+        result.values[i] = FastExp(a.values[i]);
+    }
+    return result;
+}
+
 SampledSpectrum Max(const SampledSpectrum &a, const SampledSpectrum &b)
 {
     SampledSpectrum result;
@@ -397,7 +408,7 @@ struct PiecewiseLinearSpectrum : SpectrumCRTP<PiecewiseLinearSpectrum>
     f32 Evaluate(f32 lambda) const;
     f32 MaxValue() const;
     SampledSpectrum Sample(const SampledWavelengths &lambda) const;
-    // static PiecewiseLinearSpectrum *FromInterleaved(Arena *arena, f32 *samples, u32 numSamples, bool normalize);
+    static PiecewiseLinearSpectrum *FromInterleaved(Arena *arena, const f32 *samples, u32 numSamples, bool normalize);
 
     f32 *values;
     f32 *lambdas;
@@ -439,6 +450,7 @@ struct RGBToSpectrumTable
     Vec3f operator()(Vec3f rgb) const;
 
     static const RGBToSpectrumTable *sRGB;
+    static void Init(Arena *arena);
 
     const f32 *zNodes;
     const CoefficientArray *coeffs;
@@ -456,7 +468,10 @@ struct RGBColorSpace
     DenselySampledSpectrum illuminant;
     const RGBToSpectrumTable *rgbToSpec;
 
-    RGBColorSpace(Arena *arena, Vec2f r, Vec2f g, Vec2f b, Spectrum illuminant, const RGBToSpectrumTable *rgbToSpec);
+    static const RGBColorSpace *sRGB;
+    static void Init(Arena *arena);
+
+    RGBColorSpace(Vec2f r, Vec2f g, Vec2f b, Spectrum illuminant, const RGBToSpectrumTable *rgbToSpec);
     Vec3f ToRGB(Vec3f xyz) const
     {
         return Mul(XYZToRGB, xyz);

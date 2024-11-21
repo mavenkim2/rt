@@ -1,4 +1,6 @@
 #include "spectrum.h"
+#include <map>
+#include <rgbspectrum_srgb.cpp>
 namespace rt
 {
 inline f32 InnerProduct(Spectrum f, Spectrum g)
@@ -136,13 +138,39 @@ SampledSpectrum PiecewiseLinearSpectrum::Sample(const SampledWavelengths &lambda
     return s;
 }
 
-// PiecewiseLinearSpectrum *PiecewiseLinearSpectrum::FromInterleaved(Arena *arena, f32 *samples, u32 numSamples, bool normalize)
-// {
-//     assert(numSamples % 2 == 0);
-//     i32 n = numSamples / 2;
-//     PiecewiseLinearSpectrum spec;
-//     return spec;
-// }
+// Wavelength - Value pairs
+PiecewiseLinearSpectrum *PiecewiseLinearSpectrum::FromInterleaved(Arena *arena, const f32 *samples, u32 numSamples, bool normalize)
+{
+    Assert(numSamples % 2 == 0);
+    u32 n       = numSamples / 2;
+    f32 *lambda = PushArray(arena, f32, 2 + n);
+    f32 *values = PushArray(arena, f32, 2 + n);
+    u32 index   = 0;
+    if (samples[0] > LambdaMin)
+    {
+        lambda[index] = LambdaMin - 1;
+        values[index] = samples[1];
+        index++;
+    }
+    for (u32 i = 0; i < n; i++)
+    {
+        lambda[index] = samples[2 * i];
+        values[index] = samples[2 * i + 1];
+        index++;
+    }
+    if (lambda[index - 1] < LambdaMax)
+    {
+        lambda[index] = LambdaMax + 1;
+        values[index] = values[index - 1];
+        index++;
+    }
+    PiecewiseLinearSpectrum *spec = PushStructConstruct(arena, PiecewiseLinearSpectrum)(lambda, values, index);
+    if (normalize)
+    {
+        spec->Scale(CIE_Y_integral / InnerProduct(spec, &Spectra::Y()));
+    }
+    return spec;
+}
 
 SampledSpectrum BlackbodySpectrum::Sample(const SampledWavelengths &lambda)
 {
@@ -481,6 +509,39 @@ f32 CIE_lambda[nCIESamples] = {
     802, 803, 804, 805, 806, 807, 808, 809, 810, 811, 812, 813, 814, 815, 816, 817, 818,
     819, 820, 821, 822, 823, 824, 825, 826, 827, 828, 829, 830};
 
+const f32 CIE_Illum_D6500[] = {
+    300.000000, 0.034100, 305.000000, 1.664300, 310.000000, 3.294500, 315.000000,
+    11.765200, 320.000000, 20.236000, 325.000000, 28.644699, 330.000000, 37.053501,
+    335.000000, 38.501099, 340.000000, 39.948799, 345.000000, 42.430199, 350.000000,
+    44.911701, 355.000000, 45.775002, 360.000000, 46.638302, 365.000000, 49.363701,
+    370.000000, 52.089100, 375.000000, 51.032299, 380.000000, 49.975498, 385.000000,
+    52.311798, 390.000000, 54.648201, 395.000000, 68.701500, 400.000000, 82.754898,
+    405.000000, 87.120399, 410.000000, 91.486000, 415.000000, 92.458900, 420.000000,
+    93.431801, 425.000000, 90.056999, 430.000000, 86.682297, 435.000000, 95.773598,
+    440.000000, 104.864998, 445.000000, 110.935997, 450.000000, 117.008003, 455.000000,
+    117.410004, 460.000000, 117.811996, 465.000000, 116.335999, 470.000000, 114.861000,
+    475.000000, 115.391998, 480.000000, 115.922997, 485.000000, 112.366997, 490.000000,
+    108.810997, 495.000000, 109.082001, 500.000000, 109.353996, 505.000000, 108.578003,
+    510.000000, 107.802002, 515.000000, 106.295998, 520.000000, 104.790001, 525.000000,
+    106.238998, 530.000000, 107.689003, 535.000000, 106.046997, 540.000000, 104.404999,
+    545.000000, 104.224998, 550.000000, 104.045998, 555.000000, 102.023003, 560.000000,
+    100.000000, 565.000000, 98.167099, 570.000000, 96.334198, 575.000000, 96.061096,
+    580.000000, 95.788002, 585.000000, 92.236801, 590.000000, 88.685600, 595.000000,
+    89.345901, 600.000000, 90.006203, 605.000000, 89.802597, 610.000000, 89.599098,
+    615.000000, 88.648903, 620.000000, 87.698700, 625.000000, 85.493599, 630.000000,
+    83.288597, 635.000000, 83.493896, 640.000000, 83.699203, 645.000000, 81.862999,
+    650.000000, 80.026802, 655.000000, 80.120697, 660.000000, 80.214600, 665.000000,
+    81.246201, 670.000000, 82.277802, 675.000000, 80.280998, 680.000000, 78.284203,
+    685.000000, 74.002701, 690.000000, 69.721298, 695.000000, 70.665199, 700.000000,
+    71.609100, 705.000000, 72.978996, 710.000000, 74.348999, 715.000000, 67.976501,
+    720.000000, 61.604000, 725.000000, 65.744797, 730.000000, 69.885597, 735.000000,
+    72.486298, 740.000000, 75.086998, 745.000000, 69.339798, 750.000000, 63.592701,
+    755.000000, 55.005402, 760.000000, 46.418201, 765.000000, 56.611801, 770.000000,
+    66.805397, 775.000000, 65.094101, 780.000000, 63.382801, 785.000000, 63.843399,
+    790.000000, 64.304001, 795.000000, 61.877899, 800.000000, 59.451900, 805.000000,
+    55.705399, 810.000000, 51.959000, 815.000000, 54.699799, 820.000000, 57.440601,
+    825.000000, 58.876499, 830.000000, 60.312500};
+
 namespace Spectra
 {
 
@@ -503,6 +564,7 @@ const DenselySampledSpectrum &Z()
     return *z;
 }
 
+std::map<std::string, Spectrum> namedSpectra;
 void Init(Arena *arena)
 {
     PiecewiseLinearSpectrum xpls(CIE_lambda, CIE_X, nCIESamples);
@@ -513,9 +575,31 @@ void Init(Arena *arena)
 
     PiecewiseLinearSpectrum zpls(CIE_lambda, CIE_Z, nCIESamples);
     z = PushStructConstruct(arena, DenselySampledSpectrum)(&zpls);
+
+    Spectrum illumd65 = PiecewiseLinearSpectrum::FromInterleaved(arena, CIE_Illum_D6500, ArrayLength(CIE_Illum_D6500), true);
+    namedSpectra      = {
+        {"stdillum-D65", illumd65},
+    };
 }
 
 } // namespace Spectra
+
+Spectrum GetNamedSpectrum(string name)
+{
+    auto iter = Spectra::namedSpectra.find(std::string((const char *)name.str, name.size));
+    if (iter != Spectra::namedSpectra.end())
+    {
+        return iter->second;
+    }
+    return {};
+}
+
+const RGBColorSpace *RGBColorSpace::sRGB;
+void RGBColorSpace::Init(Arena *arena)
+{
+    sRGB = PushStructConstruct(arena, RGBColorSpace)(Vec2f(.64, .33), Vec2f(.3, .6), Vec2f(.15, .06),
+                                                     GetNamedSpectrum("stdilllum-D65"), RGBToSpectrumTable::sRGB);
+}
 
 Vec3f RGBToSpectrumTable::operator()(Vec3f rgb) const
 {
@@ -551,7 +635,18 @@ Vec3f RGBToSpectrumTable::operator()(Vec3f rgb) const
     return Vec3f(c[0], c[1], c[2]);
 }
 
-RGBColorSpace::RGBColorSpace(Arena *arena, Vec2f r, Vec2f g, Vec2f b, Spectrum illuminant, const RGBToSpectrumTable *rgbToSpec)
+extern const int sRGBToSpectrumTable_Res;
+extern const float sRGBToSpectrumTable_Scale[64];
+extern const RGBToSpectrumTable::CoefficientArray sRGBToSpectrumTable_Data;
+
+const RGBToSpectrumTable *RGBToSpectrumTable::sRGB;
+
+void RGBToSpectrumTable::Init(Arena *arena)
+{
+    sRGB = PushStructConstruct(arena, RGBToSpectrumTable)(sRGBToSpectrumTable_Scale, &sRGBToSpectrumTable_Data);
+}
+
+RGBColorSpace::RGBColorSpace(Vec2f r, Vec2f g, Vec2f b, Spectrum illuminant, const RGBToSpectrumTable *rgbToSpec)
     : r(r), g(g), b(b), illuminant(illuminant), rgbToSpec(rgbToSpec)
 {
     Vec3f W = SpectrumToXYZ(illuminant);

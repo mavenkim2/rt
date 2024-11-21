@@ -3,6 +3,7 @@
 #include "../scene.h"
 #include "../sampler.h"
 #include "../lights.h"
+#include "../spectrum.h"
 namespace rt
 {
 TriangleMesh *GenerateMesh(Arena *arena, u32 count, f32 min = -100.f, f32 max = 100.f)
@@ -377,12 +378,12 @@ void VolumeRenderingTest(Arena *arena, string filename)
 
     // Sun
     Vec3f rgbL(2.6, 2.5, 2.3);
-    RGBIlluminantSpectrum spec(*srgbColorSpace, rgbL);
+    RGBIlluminantSpectrum spec(*RGBColorSpace::sRGB, rgbL);
     DistantLight sun(Vec3f(-0.5826f, -0.77660f, -0.2717f), &spec);
 
     // Light
     rgbL = Vec3f(0.03, 0.07, 0.23);
-    RGBIlluminantSpectrum spec2(*srgbColorSpace, rgbL);
+    RGBIlluminantSpectrum spec2(*RGBColorSpace::sRGB, rgbL);
     UniformInfiniteLight light(&spec2);
     Scene2 scene;
 

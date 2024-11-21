@@ -286,13 +286,18 @@ struct DiffuseBSDF : BSDFCRTP<DiffuseBSDF>
     DiffuseBSDF() = default;
     DiffuseBSDF(SampledSpectrum R) : R(R) {}
 
-    SampledSpectrum f(Vec3f wo, Vec3f wi, TransportMode mode) const
+    SampledSpectrum EvaluateSample(Vec3f wo, Vec3f wi, f32 &pdf, TransportMode mode) const
     {
-        if (!SameHemisphere(wo, wi)) return SampledSpectrum(0.f);
+        if (!SameHemisphere(wo, wi))
+        {
+            pdf = 0.f;
+            return SampledSpectrum(0.f);
+        }
+        pdf = CosineHemispherePDF(AbsCosTheta(wi));
         return R / PI;
     }
 
-    BSDFSample Sample_f(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags sampleFlags = BSDFFlags::RT) const
+    BSDFSample GenerateSample(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags sampleFlags = BSDFFlags::RT) const
     {
         if (!EnumHasAnyFlags(sampleFlags, BSDFFlags::Reflection)) return {};
         Vec3f wi = SampleCosineHemisphere(u);
@@ -319,21 +324,39 @@ struct ConductorBSDF : BSDFCRTP<ConductorBSDF>
     TrowbridgeReitzDistribution mfDistrib;
     SampledSpectrum eta, k;
 
-    SampledSpectrum f(Vec3f wo, Vec3f wi, TransportMode mode) const
+    SampledSpectrum EvaluateSample(Vec3f wo, Vec3f wi, f32 &pdf, TransportMode mode) const
     {
-        if (!SameHemisphere(wo, wi)) return {};
-        if (mfDistrib.EffectivelySmooth()) return {};
+        if (!SameHemisphere(wo, wi))
+        {
+            pdf = 0.f;
+            return {};
+        }
+        if (mfDistrib.EffectivelySmooth())
+        {
+            pdf = 0.f;
+            return {};
+        }
         f32 cosTheta_o = AbsCosTheta(wo);
         f32 cosTheta_i = AbsCosTheta(wi);
-        if (cosTheta_i == 0 || cosTheta_o == 0) return {};
+        if (cosTheta_i == 0 || cosTheta_o == 0)
+        {
+            pdf = 0.f;
+            return {};
+        }
         Vec3f wm = wi + wo;
-        if (LengthSquared(wm) == 0.f) return {};
+        if (LengthSquared(wm) == 0.f)
+        {
+            pdf = 0.f;
+            return {};
+        }
         wm                 = Normalize(wm);
         SampledSpectrum Fr = FrComplex(AbsDot(wo, wm), eta, k);
         SampledSpectrum f  = mfDistrib.D(wm) * Fr * mfDistrib.G(wo, wi) / (4 * cosTheta_i * cosTheta_o);
+        wm                 = FaceForward(Normalize(wm), Vec3f(0, 0, 1));
+        pdf                = mfDistrib.PDF(wo, wm) / (4 * AbsDot(wo, wm));
         return f;
     }
-    BSDFSample Sample_f(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags sampleFlags) const
+    BSDFSample GenerateSample(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags sampleFlags) const
     {
         if (!EnumHasAnyFlags(sampleFlags, BSDFFlags::RT)) return {};
         if (mfDistrib.EffectivelySmooth())
@@ -375,7 +398,7 @@ struct DielectricBSDF : BSDFCRTP<DielectricBSDF>
 {
     DielectricBSDF() = delete;
     DielectricBSDF(f32 eta, TrowbridgeReitzDistribution mfDistrib) : eta(eta), mfDistrib(mfDistrib) {}
-    SampledSpectrum f(Vec3f wo, Vec3f wi, TransportMode mode) const
+    SampledSpectrum EvaluateSample(Vec3f wo, Vec3f wi, f32 &pdf, TransportMode mode) const
     {
         if (eta == 1 || mfDistrib.EffectivelySmooth())
             return SampledSpectrum(0.f);
@@ -391,19 +414,29 @@ struct DielectricBSDF : BSDFCRTP<DielectricBSDF>
         wm = Normalize(wm);
         wm = wm.z < 0.f ? -wm : wm;
         if (Dot(wm, wi) * cosTheta_i < 0.f || Dot(wm, wo) * cosTheta_o < 0.f) return {};
-        f32 F = FrDielectric(Dot(wo, wm), eta);
+        f32 F  = FrDielectric(Dot(wo, wm), eta);
+        f32 T  = 1 - F;
+        f32 pr = F;
+        f32 pt = T;
+        if (pr == 0.f && pt == 0.f) pdf = 0.f;
         if (reflect)
+        {
+            pdf = mfDistrib.PDF(wo, wm) / (4 * AbsDot(wo, wm)) * pr / (pr + pt);
             return SampledSpectrum(mfDistrib.D(wm) * mfDistrib.G(wo, wi) * F / Abs(4 * cosTheta_i * cosTheta_o));
+        }
         else
         {
-            f32 denom = Sqr(Dot(wi, wm) + Dot(wo, wm) / etap) * cosTheta_i * cosTheta_o;
-            f32 ft    = mfDistrib.D(wm) * (1 - F) * mfDistrib.G(wo, wi) * Abs(Dot(wi, wm) * Dot(wo, wm) / denom);
+            f32 denom = Sqr(Dot(wi, wm) + Dot(wo, wm) / etap);
+            f32 ft    = mfDistrib.D(wm) * (1 - F) * mfDistrib.G(wo, wi) * Abs(Dot(wi, wm) * Dot(wo, wm) / (denom * cosTheta_i * cosTheta_o));
+
+            f32 dwm_dwi = AbsDot(wi, wm) / denom;
+            pdf         = mfDistrib.PDF(wo, wm) * dwm_dwi * pt / (pr + pt);
             if (mode == TransportMode::Radiance)
                 ft /= Sqr(etap);
             return SampledSpectrum(ft);
         }
     }
-    BSDFSample Sample_f(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags sampleFlags) const
+    BSDFSample GenerateSample(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags sampleFlags) const
     {
         // Sample specular BTDF
         if (eta == 1 || mfDistrib.EffectivelySmooth())
@@ -521,11 +554,12 @@ struct ThinDielectricBSDF : BSDFCRTP<ThinDielectricBSDF>
 {
     ThinDielectricBSDF() = default;
     ThinDielectricBSDF(f32 eta) : eta(eta) {}
-    SampledSpectrum f(Vec3f wo, Vec3f wi, TransportMode mode) const
+    SampledSpectrum EvaluateSample(Vec3f wo, Vec3f wi, f32 &pdf, TransportMode mode) const
     {
+        pdf = 0.f;
         return SampledSpectrum(0.f);
     }
-    BSDFSample Sample_f(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags sampleFlags) const
+    BSDFSample GenerateSample(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags sampleFlags) const
     {
         f32 R = FrDielectric(AbsCosTheta(wo), eta);
         f32 T = 1 - R;

@@ -175,43 +175,48 @@ struct Prepend<void, TypePack<Ts...>>
     using type = TypePack<Ts...>;
 };
 
+// template <typename... Ts>
+// struct AddPointer;
+//
+// template <typename T>
+// struct AddPointer
+// {
+//     using type = T *;
+// };
+// template <typename T>
+// struct AddPointer<TypePack<T>>
+// {
+//     using type = TypePack<T *>;
+// };
+//
+// template <typename T, typename... Ts>
+// struct AddPointer<TypePack<T, Ts...>>
+// {
+//     using type = typename Prepend<T *, typename AddPointer<TypePack<Ts...>>::type>::type;
+// };
+
 template <typename... Ts>
-struct AddPointer;
-
-template <typename T>
-struct AddPointer<TypePack<T>>
-{
-    using type = T *;
-};
-
-template <typename T, typename... Ts>
-struct AddPointer<T, TypePack<Ts...>>
-{
-    using type = typename Prepend<T *, typename AddPointer<TypePack<Ts...>>::type>::type;
-};
-
-template <typename T>
 struct ArrayTuple;
 
 template <typename... Ts>
 struct ArrayTuple<TypePack<Ts...>>
 {
     using Types = TypePack<Ts...>;
-    Tuple<typename AddPointer<Types>::type> arrays;
+    Tuple<Ts *...> arrays; // Add *;
+    // Tuple<typename AddPointer<TypePack<Ts...>>::type> arrays;
     u32 counts[Types::count];
 
     // __forceinline operator const Tuple<Ts...> &() const { return arrays; }
     // __forceinline operator Tuple<Ts...> &() { return arrays; }
 
     template <typename T>
-    __forceinline const T *Get() const
-    {
-        return Get<T>(arrays);
-    }
+    __forceinline T *Get() { return ::Get<T *>(arrays); }
+    template <typename T>
+    __forceinline const T *Get() const { return ::Get<T *>(arrays); }
     template <typename T>
     __forceinline void Set(T *array, u32 count)
     {
-        Get<T>(arrays)                   = array;
+        ::Get<T *>(arrays)               = array;
         counts[IndexOf<T, Types>::count] = count;
     }
 };
@@ -225,15 +230,31 @@ void ForEachType(ArrayType arrays, F func, TypePack<>) {}
 template <typename F, typename ArrayType, typename T, typename... Ts>
 void ForEachType(ArrayType &arrays, F func, TypePack<T, Ts...>)
 {
-    func.template operator()<T>(Get<T>(arrays.arrays), arrays.counts[IndexOf<T, ArrayType::Types>::count]);
+    func.template operator()<T>(Get<T *>(arrays.arrays), arrays.counts[IndexOf<T, typename ArrayType::Types>::count]);
     ForEachType(arrays, func, TypePack<Ts...>());
 }
 
 template <typename F, typename... Ts>
-void ForEachType(ArrayTuple<Ts...> &arrays, F func)
+void ForEachType(ArrayTuple<TypePack<Ts...>> &arrays, F func)
 {
     ForEachType(arrays, func, TypePack<Ts...>());
 }
+
+#if 0
+template <typename F, typename ArrayType, typename... Ts>
+void ForEachTypeSubset(ArrayType arrays, F func, TypePack<Ts...>);
+
+template <typename F, typename ArrayType>
+void ForEachTypeSubset(ArrayType arrays, F func, TypePack<>) {}
+
+template <typename F, typename ArrayType, typename T, typename... Ts>
+void ForEachTypeSubset(ArrayType &arrays, F func, TypePack<T, Ts...>)
+{
+    u32 index = IndexOf<T, ArrayType::Types>::count;
+    func.template operator()<T>(Get<T>(arrays.arrays), index, arrays.counts[index]);
+    ForEachTypeSubset(arrays, func, TypePack<Ts...>());
+}
+#endif
 
 template <typename F, typename ArrayType, typename... Ts>
 void ForEachTypeSubset(ArrayType &arrays, F func, TypePack<Ts...> types)

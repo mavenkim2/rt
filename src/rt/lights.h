@@ -192,7 +192,7 @@ struct PiecewiseConstant1D
     {
         return funcInt;
     }
-    f32 Sample(f32 u, f32 *pdf = 0, u32 *offset = 0)
+    f32 Sample(f32 u, f32 *pdf = 0, u32 *offset = 0) const
     {
         u32 index = FindInterval(num, [&](u32 index) { return cdf[index] <= u; });
         if (offset) *offset = index;
@@ -224,7 +224,7 @@ struct PiecewiseConstant2D
         }
         marginal = PiecewiseConstant1D(arena, marginalFunc, nv, minD[1], maxD[1]);
     }
-    Vec2f Sample(Vec2f u, f32 *pdf = 0, Vec2u *offset = 0)
+    Vec2f Sample(Vec2f u, f32 *pdf = 0, Vec2u *offset = 0) const
     {
         f32 pdfs[2];
         Vec2u p;
@@ -234,7 +234,7 @@ struct PiecewiseConstant2D
         if (offset) *offset = p;
         return Vec2f(d0, d1);
     }
-    f32 PDF(Vec2f u)
+    f32 PDF(Vec2f u) const
     {
         u32 sizeU = conditional[0].num;
         u32 sizeV = marginal.num;
@@ -256,7 +256,7 @@ struct ImageInfiniteLight
 
     ImageInfiniteLight(Arena *arena, Image image);
     LightFunctionsInf(ImageInfiniteLight);
-    SampledSpectrum ImageLe(Vec2f uv, const SampledWavelengths &lambda);
+    SampledSpectrum ImageLe(Vec2f uv, const SampledWavelengths &lambda) const;
 };
 
 } // namespace rt

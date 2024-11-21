@@ -2,6 +2,7 @@
 #define SCENE_H
 #include <nanovdb/util/IO.h>
 #include <nanovdb/util/SampleFromVoxels.h>
+#include "lights.h"
 namespace rt
 {
 
@@ -626,10 +627,6 @@ struct Scene2
     using LightTypes         = TypePack<DiffuseAreaLight, DistantLight, UniformInfiniteLight, ImageInfiniteLight>;
     using InfiniteLightTypes = TypePack<UniformInfiniteLight, ImageInfiniteLight>;
     ArrayTuple<LightTypes> lights;
-    // struct DiffuseAreaLight *areaLights;
-    // struct DistantLight *distantLights;
-    // struct UniformInfiniteLight *uniformInfLights;
-    // struct ImageInfiniteLight *imageInfLights;
     u32 lightPDF[LightClass_Count];
     u32 lightCount[LightClass_Count];
     // u32 numAreaLights;
@@ -652,6 +649,14 @@ struct Scene2
     //     };
     // };
 
+    DiffuseAreaLight *GetAreaLights()
+    {
+        return lights.Get<DiffuseAreaLight>();
+    }
+    const DiffuseAreaLight *GetAreaLights() const
+    {
+        return lights.Get<DiffuseAreaLight>();
+    }
     Bounds GetBounds() const
     {
         Bounds result;

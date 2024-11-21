@@ -24,6 +24,7 @@ struct SurfaceInteraction
 {
     Vec3IF32 p;
     Vec3IF32 n;
+    Vec2IF32 uv;
     struct
     {
         Vec3IF32 n;
@@ -31,6 +32,12 @@ struct SurfaceInteraction
     LaneIF32 tHit;
     LaneIU32 lightIndices;
     LaneIU32 volumeIndices;
+
+    bool ComputeShading(BSDF &bsdf)
+    {
+        // TODO:
+        return {};
+    }
 };
 
 // struct

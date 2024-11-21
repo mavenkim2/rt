@@ -92,7 +92,7 @@ struct Image
     i32 bytesPerPixel;
 
     f32 *GetSamplingDistribution(struct Arena *arena);
-    Vec2i GetPixel(Vec2f uv)
+    Vec2i GetPixel(Vec2f uv) const
     {
         return Vec2i(Clamp(i32(uv[0] * width), 0, width - 1), Clamp(i32(uv[1] * height), 0, height - 1));
     }

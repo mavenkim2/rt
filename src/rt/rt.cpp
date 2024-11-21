@@ -1073,6 +1073,9 @@ int main(int argc, char *argv[])
     OS_Init();
     // jobsystem::InitializeJobsystem();
 
+    Spectra::Init(arena);
+    RGBToSpectrumTable::Init(arena);
+    RGBColorSpace::Init(arena);
     u32 numProcessors      = OS_NumProcessors();
     threadLocalStatistics  = PushArray(arena, ThreadStatistics, numProcessors);
     threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, numProcessors);
@@ -1080,7 +1083,7 @@ int main(int argc, char *argv[])
 
     const u32 count = 3000000;
 
-    VolumeRenderingTest();
+    VolumeRenderingTest(arena, "wdas_cloud_quarter.nvdb");
     // BVHSortingTest();
     // TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
 

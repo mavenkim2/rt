@@ -79,15 +79,15 @@ struct Sampler : SamplerTaggedPointer
     }
     inline Vec2f Get2D()
     {
-        void *ptr   = GetPtr();
-        u32 tag     = GetTag();
+        void *ptr    = GetPtr();
+        u32 tag      = GetTag();
         Vec2f result = samplerMethods[tag].Get2D(ptr);
         return result;
     }
     inline Vec2f GetPixel2D()
     {
-        void *ptr   = GetPtr();
-        u32 tag     = GetTag();
+        void *ptr    = GetPtr();
+        u32 tag      = GetTag();
         Vec2f result = samplerMethods[tag].GetPixel2D(ptr);
         return result;
     }
@@ -210,8 +210,8 @@ enum class BSDFFlags;
 using BSDFTaggedPointer = TaggedPointer<DiffuseBSDF, ConductorBSDF, DielectricBSDF, ThinDielectricBSDF>;
 struct BSDFMethods
 {
-    SampledSpectrum (*f)(void *, Vec3f, Vec3f, TransportMode);
-    BSDFSample (*Sample_f)(void *, Vec3f, f32, Vec2f, TransportMode, BSDFFlags);
+    SampledSpectrum (*EvaluateSample)(void *, Vec3f, Vec3f, f32 &, TransportMode);
+    BSDFSample (*GenerateSample)(void *, Vec3f, f32, Vec2f, TransportMode, BSDFFlags);
     f32 (*PDF)(void *, Vec3f wo, Vec3f wi, TransportMode mode, BSDFFlags flags);
     BSDFFlags (*Flags)(void *);
 };
@@ -227,8 +227,8 @@ struct BSDF : BSDFTaggedPointer
 
     BSDF(Vec3f ns, Vec3f dpdus) : frame(Frame::FromXZ(Normalize(dpdus), ns)) {}
 
-    SampledSpectrum f(Vec3f wo, Vec3f wi, TransportMode mode) const;
-    BSDFSample Sample_f(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags inFlags) const;
+    SampledSpectrum EvaluateSample(Vec3f wo, Vec3f wi, f32 &pdf, TransportMode mode) const;
+    BSDFSample GenerateSample(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags inFlags) const;
     f32 PDF(Vec3f wo, Vec3f wi, TransportMode mode, BSDFFlags inFlags) const;
     // Hemispherical directional function
     SampledSpectrum rho(Vec3f wo, f32 *uc, Vec2f *u, u32 numSamples) const;
@@ -241,13 +241,13 @@ template <class T>
 struct BSDFCRTP
 {
     static const i32 id;
-    static SampledSpectrum f(void *ptr, Vec3f wo, Vec3f wi, TransportMode mode);
-    static BSDFSample Sample_f(void *ptr, Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags flags);
+    static SampledSpectrum EvaluateSample(void *ptr, Vec3f wo, Vec3f wi, f32 &pdf, TransportMode mode);
+    static BSDFSample GenerateSample(void *ptr, Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags flags);
     static f32 PDF(void *ptr, Vec3f wo, Vec3f wi, TransportMode mode, BSDFFlags flags);
     static BSDFFlags Flags(void *ptr);
     static constexpr i32 Register()
     {
-        bsdfMethods[BSDFTaggedPointer::TypeIndex<T>()] = {f, Sample_f, PDF, Flags};
+        bsdfMethods[BSDFTaggedPointer::TypeIndex<T>()] = {EvaluateSample, GenerateSample, PDF, Flags};
         return BSDFTaggedPointer::TypeIndex<T>();
     }
 };

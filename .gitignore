@@ -48,3 +48,4 @@ data/
 *.asm
 *.ilk
 build/
+gen/

@@ -387,15 +387,15 @@ __forceinline f32 MISWeight(SampledSpectrum spec0, SampledSpectrum spec1, u32 ch
 }
 
 template <bool residualRatioTracking, typename F>
-SampledSpectrum SampleTMaj(Scene2 *scene, Ray2 &ray, f32 tMax, f32 xi, RNG &rng, const SampledWavelengths &lambda, const F &callback)
+SampledSpectrum SampleTMaj(Scene2 *scene, Ray2 &ray, f32 tHit, f32 xi, RNG &rng, const SampledWavelengths &lambda, const F &callback)
 {
-    tMax *= Length(ray.d);
+    tHit *= Length(ray.d);
     ray.d                      = Normalize(ray.d);
     VolumeAggregate &aggregate = scene->aggregate;
     // TODO: get this from the medium somehow
     SampledSpectrum cExtinct;
 
-    VolumeAggregate::Iterator itr = aggregate.CreateIterator(&ray, cExtinct, intr.tHit);
+    VolumeAggregate::Iterator itr = aggregate.CreateIterator(&ray, cExtinct, tHit);
     RaySegment segment;
 
     // NOTE: contains majorant transmittance (starting from the previous vertex)
@@ -463,6 +463,54 @@ struct NEESample
 NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Scene2 *scene, Sampler sampler,
                                   SampledSpectrum beta, const SampledSpectrum &p, const SampledWavelengths &lambda, Vec3f &wi);
 
+// Manually intersect every quad in every mesh
+bool Intersect(Scene2 *scene, Ray2 &r, SurfaceInteraction &intr)
+{
+    f32 tHit = pos_inf;
+    f32 tMin = tMinEpsilon;
+    for (u32 i = 0; i < scene->numMeshes; i++)
+    {
+        QuadMesh *mesh = &scene->meshes[i];
+        for (u32 quadIndex = 0; quadIndex < mesh->numVertices / 4.f; quadIndex++)
+        {
+            Vec3f p0  = mesh->p[quadIndex * 4 + 0];
+            Vec3f p1  = mesh->p[quadIndex * 4 + 1];
+            Vec3f p2  = mesh->p[quadIndex * 4 + 2];
+            Vec3f p3  = mesh->p[quadIndex * 4 + 3];
+            Vec3f u   = p1 - p0;
+            Vec3f v   = p3 - p0;
+            Vec3f n   = Cross(u, v);
+            f32 denom = 1.f / Dot(n, r.d);
+            if (Abs(denom) < 1e-8f) continue;
+            // Find plane equation
+            f32 d = Dot(n, p0);
+            f32 t = (d - Dot(n, r.o)) * denom;
+            if (t <= tMin || t >= tHit) continue;
+            Vec3f intersection    = r(t);
+            Vec3f planarHitVector = intersection - p0;
+            Vec3f w               = n / LengthSquared(n);
+            f32 alpha             = Dot(w, Cross(planarHitVector, v));
+            f32 beta              = Dot(w, Cross(u, planarHitVector));
+            if (!(alpha >= 0 && alpha <= 1 && beta >= 0 && beta <= 1)) continue;
+            intr.p    = intersection;
+            intr.n    = n;
+            intr.uv   = Vec2f(alpha, beta);
+            intr.tHit = t;
+        }
+    }
+    intr.lightIndices = 0;
+    if (u32(intr.volumeIndices))
+    {
+        // If ray direction is opposite normal, we are entering the medium, otherwise we are exiting
+        intr.volumeIndices = Dot(r.d, Vec3f(intr.n)) < 0.f ? intr.volumeIndices : 0;
+    }
+    else
+    {
+        intr.volumeIndices = r.volumeIndex;
+    }
+    return tHit != f32(pos_inf);
+}
+
 SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, Ray2 &ray, Sampler sampler,
                                      SampledWavelengths &lambda, u32 maxDepth)
 {
@@ -480,7 +528,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
     {
         SurfaceInteraction intr;
         // TODO: tMin epsilon (for now)
-        bool intersect = Intersect(ray, intr);
+        bool intersect = Intersect(scene, ray, intr);
         if (intr.volumeIndices != 0)
         {
             bool scattered  = false;
@@ -495,6 +543,8 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
                     const SampledSpectrum &Le, PhaseFunction &phase) {
                     if (!beta)
                     {
+                        terminated = true;
+                        return false;
                     }
                     // TODO: select base on throughput instead of just using the first wavelength?
                     f32 pAbsorb  = cAbsorb[0] / cMaj[0];
@@ -583,56 +633,36 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
             bool noMisFlag = specularBounce || depth == 0;
             if (specularBounce || depth == 0)
             {
-                struct NoMisLightFunctor
-                {
-                    NoMisLightFunctor() {}
-                    template <typename Light>
-                    void operator()(Light *array, u32 count)
-                    {
+                ForEachTypeSubset(
+                    scene->lights, [&](auto *array, u32 count) {
+                        using Light = std::remove_reference_t<decltype(*array)>;
                         for (u32 i = 0; i < count; i++)
                         {
-                            Light *light       = &scene->uniformInfLights[i];
-                            SampledSpectrum Le = Light::Le(light, ray.d, lambda);
+                            Light &light       = array[i];
+                            SampledSpectrum Le = Light::Le(&light, ray.d, lambda);
                             L += beta * Le * MISWeight(p_u);
                         }
-                    }
-                };
-                ForEachTypeSubset(scene->lights, NoMisLightFunctor(), Scene2::InfiniteLightTypes());
-                // for (u32 i = 0; i < scene->lightCount[LightClass_InfUnf]; i++)
-                // {
-                //     UniformInfiniteLight *light = &scene->uniformInfLights[i];
-                //     SampledSpectrum Le          = UniformInfiniteLight::Le(light, ray.d, lambda);
-                //     L += beta * Le * MISWeight(p_u);
-                // }
-                // for (u32 i = 0; i < scene->lightCount[LightClass_InfImg]; i++)
-                // {
-                //     ImageInfiniteLight *light = &scene->imageInfLights[i];
-                //     SampledSpectrum Le        = ImageInfiniteLight::Le(light, ray.d, lambda);
-                //     L += beta * Le * MISWeight(p_u);
-                // }
+                    },
+                    Scene2::InfiniteLightTypes());
             }
             else
             {
-                struct MisLightFunctor
-                {
-                    MisLightFunctor() {}
-                    template <typename Light>
-                    void operator()(Light *array, u32 count)
-                    {
+                ForEachTypeSubset(
+                    scene->lights, [&](auto *array, u32 count) {
+                        using Light = std::remove_reference_t<decltype(*array)>;
                         for (u32 i = 0; i < count; i++)
                         {
-                            Light *light       = &array[i];
-                            SampledSpectrum Le = Light::Le(light, ray.d, lambda);
+                            Light &light       = array[i];
+                            SampledSpectrum Le = Light::Le(&light, ray.d, lambda);
 
                             f32 pdf      = LightPDF(scene);
-                            f32 lightPdf = pdf * (f32)Light::PDF_Li(light, ray.d, true);
+                            f32 lightPdf = pdf * (f32)Light::PDF_Li(&light, ray.d, true);
 
                             p_l *= lightPdf;
                             L += beta * Le * MISWeight(p_u, p_l);
                         }
-                    }
-                };
-                ForEachTypeSubset(scene->lights, MisLightFunctor(), Scene2::InfiniteLightTypes());
+                    },
+                    Scene2::InfiniteLightTypes());
             }
             break;
             // sample infinite area lights, environment map, and return
@@ -643,7 +673,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
         //
         if ((u32)intr.lightIndices)
         {
-            DiffuseAreaLight *light = &scene->areaLights[u32(intr.lightIndices)];
+            DiffuseAreaLight *light = &scene->GetAreaLights()[u32(intr.lightIndices)];
             SampledSpectrum Le      = DiffuseAreaLight::Le(light, intr.n, -ray.d, lambda);
             if (depth == 0 || specularBounce)
             {
@@ -659,8 +689,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
         }
 
         BSDF bsdf;
-        // BSDF bsdf = intr.ComputeShading();
-        if (!bsdf)
+        if (!intr.ComputeShading(bsdf))
         {
             // denotes boundary between medium, no event
             ray.o = intr.p;
@@ -677,7 +706,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
             Vec3f wi;
             NEESample neeSample = VolumetricSampleEmitter(intr, ray, scene, sampler, beta, p_u, lambda, wi);
             f32 scatterPdf;
-            SampledSpectrum f = bsdf.EvaluateSample(-ray.d, wi, &scatterPdf);
+            SampledSpectrum f = bsdf.EvaluateSample(-ray.d, wi, scatterPdf, TransportMode::Radiance);
             neeSample.p_u *= scatterPdf;
             L += neeSample.L_beta_tray * f * AbsDot(Vec3f(intr.shading.n), wi) *
                  MISWeight(neeSample.p_l, neeSample.delta ? SampledSpectrum(0.f) : neeSample.p_u);
@@ -686,7 +715,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, VolumeAggregate *aggregate, 
         //////////////////////////////
         // BSDF Sampling
         //
-        BSDFSample sample = bsdf.GenerateSample(-ray.d, sampler.Get1D(), sampler.Get2D());
+        BSDFSample sample = bsdf.GenerateSample(-ray.d, sampler.Get1D(), sampler.Get2D(), TransportMode::Radiance, BSDFFlags::RT);
         if (!sample.pdf) return L;
         beta *= sample.f * AbsDot(Vec3f(intr.shading.n), sample.wi) / sample.pdf;
         p_l            = p_u / sample.pdf;

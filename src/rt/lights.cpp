@@ -240,11 +240,10 @@ LaneIF32 SphericalQuadArea(const Vec3IF32 &a, const Vec3IF32 &b, const Vec3IF32 
 //
 SAMPLE_LI(DiffuseAreaLight)
 {
-    const DiffuseAreaLight *areaLights = scene->lights.Get<DiffuseAreaLight>();
     const DiffuseAreaLight *lights[IntN];
     for (u32 i = 0; i < IntN; i++)
     {
-        lights[i] = &areaLights[lightIndices[i]];
+        lights[i] = &scene->GetAreaLights()[lightIndices[i]];
     }
 
     Vec3IF32 p[4];
@@ -308,10 +307,10 @@ SAMPLE_LI(DiffuseAreaLight)
 // TODO: I don't think this is going to be invoked for the moana scene
 PDF_LI(DiffuseAreaLight)
 {
-    DiffuseAreaLight *lights[IntN];
+    const DiffuseAreaLight *lights[IntN];
     for (u32 i = 0; i < IntN; i++)
     {
-        lights[i] = &scene->areaLights[lightIndices[i]];
+        lights[i] = &scene->GetAreaLights()[lightIndices[i]];
     }
     Vec3IF32 p[4];
     LaneIF32 area;
@@ -322,8 +321,8 @@ PDF_LI(DiffuseAreaLight)
         Lane4F32 pI[IntN];
         for (u32 lightIndex = 0; lightIndex < IntN; lightIndex++)
         {
-            DiffuseAreaLight *light = lights[lightIndex];
-            Lane4F32 pTemp          = Lane4F32::LoadU(light->p + i);
+            const DiffuseAreaLight *light = lights[lightIndex];
+            Lane4F32 pTemp                = Lane4F32::LoadU(light->p + i);
 
             pI[lightIndex]   = Transform(*light->renderFromLight, pTemp);
             area[lightIndex] = light->area;
@@ -380,8 +379,8 @@ LE(DiffuseAreaLight)
 
 SAMPLE_LI(DistantLight)
 {
-    DistantLight *light = &scene->distantLights[u32(lightIndices)];
-    Vec3f wi            = -light->d;
+    const DistantLight *light = &scene->lights.Get<DistantLight>()[u32(lightIndices)];
+    Vec3f wi                  = -light->d;
 
     return LightSample(light->scale * light->Lemit->Sample(lambda), Vec3f(intr.p) + 2.f * wi * light->sceneRadius, wi, 1.f,
                        LightType::DeltaDirection);
@@ -393,7 +392,7 @@ SAMPLE_LI(DistantLight)
 // TODO: the scene radius should not have to be stored per infinite light
 SAMPLE_LI(UniformInfiniteLight)
 {
-    UniformInfiniteLight *light = &scene->uniformInfLights[u32(lightIndices)];
+    const UniformInfiniteLight *light = &scene->lights.Get<UniformInfiniteLight>()[u32(lightIndices)];
     if (allowIncompletePDF) return {};
     Vec3f wi = SampleUniformSphere(u);
     f32 pdf  = UniformSpherePDF();
@@ -417,7 +416,7 @@ ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image) : image(image)
     distribution = PiecewiseConstant2D(arena, values, image.width, image.height, Vec2f(0.f, 0.f), Vec2f(1.f, 1.f));
 }
 
-SampledSpectrum ImageInfiniteLight::ImageLe(Vec2f uv, const SampledWavelengths &lambda)
+SampledSpectrum ImageInfiniteLight::ImageLe(Vec2f uv, const SampledWavelengths &lambda) const
 {
     Vec2i loc = image.GetPixel(uv);
     Vec3f rgb = *(Vec3f *)GetColor(&image, loc.x, loc.y);
@@ -428,7 +427,7 @@ SampledSpectrum ImageInfiniteLight::ImageLe(Vec2f uv, const SampledWavelengths &
 
 SAMPLE_LI(ImageInfiniteLight)
 {
-    ImageInfiniteLight *light = &scene->imageInfLights[u32(lightIndices)];
+    const ImageInfiniteLight *light = &scene->lights.Get<ImageInfiniteLight>()[u32(lightIndices)];
     f32 pdf;
     Vec2f uv;
     if (allowIncompletePDF)
@@ -507,8 +506,8 @@ static SampledSpectrum Le(Scene2 *scene, LightHandle lightHandle, Vec3f &n, Vec3
     u32 lightIndex    = lightHandle.GetIndex();
     switch (lClass)
     {
-        case LightClass_Area: return DiffuseAreaLight::Le(&scene->areaLights[lightIndex], n, w, lambda);
-        case LightClass_Distant: return DistantLight::Le(&scene->distantLights[lightIndex], n, w, lambda);
+        case LightClass_Area: return DiffuseAreaLight::Le(&scene->GetAreaLights()[lightIndex], n, w, lambda);
+        case LightClass_Distant: return DistantLight::Le(&scene->lights.Get<DistantLight>()[lightIndex], n, w, lambda);
         // case LightClass_InfUnf: return UniformInfiniteLight::Le(&scene->uniformInfLights[lightIndex], n, w, lambda);
         // case LightClass_InfImg: return ImageInfiniteLight::Le(&scene->imageInfLights[lightIndex], n, w, lambda);
         default: Assert(0); return SampledSpectrum(0.f);

@@ -2,16 +2,14 @@
 // conversion.
 
 #include "base.h"
-#include "math.h"
+#include <assert.h>
+using namespace rt;
 
 #define CIE_SAMPLES      95
 #define CIE_FINE_SAMPLES ((CIE_SAMPLES - 1) * 3 + 1)
 #define CIE_LAMBDA_MIN   360.0
 #define CIE_LAMBDA_MAX   830.0
 #define RGB2SPEC_EPSILON 1e-4
-
-namespace rt
-{
 
 const double CIE_X[CIE_SAMPLES] = {
     0.000129900000, 0.000232100000, 0.000414900000, 0.000741600000, 0.001368000000,
@@ -322,7 +320,7 @@ void GaussNewton(const double rgb[3], double coeffs[3], int it = 15)
 }
 
 #define RES 64
-int main(int argc, char *argv)
+int main(int argc, char **argv)
 {
     // Initialize spec to rgb tables, with discretization 1.6nm
     double h = (CIE_LAMBDA_MAX - CIE_LAMBDA_MIN) / (CIE_FINE_SAMPLES - 1);
@@ -421,7 +419,8 @@ int main(int argc, char *argv)
     }
 
     FILE *f;
-    fopen_s(&f, "rgbspectrum_srgb.cpp", "w");
+    fopen_s(&f, argv[1], "w");
+    fprintf(f, "namespace rt {\n");
     fprintf(f, "extern const int sRGBToSpectrumTable_Res = %d;\n", RES);
     fprintf(f, "extern const float sRGBToSpectrumTable_Scale[%d] = {\n", RES);
     for (int i = 0; i < RES; i++)
@@ -454,6 +453,7 @@ int main(int argc, char *argv)
         fprintf(f, "}, ");
     }
     fprintf(f, "};\n");
+    fprintf(f, "} // namespace rt\n");
     fclose(f);
+    return 0;
 }
-} // namespace rt
