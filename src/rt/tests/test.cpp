@@ -375,8 +375,8 @@ void VolumeRenderingTest(Arena *arena, string filename)
     const u32 spp        = 1024;
     const u32 maxDepth   = 100;
     const f32 lensRadius = 0.f;
-    Vec2f filterRadius   = 0.f;
-    f32 focalLength      = 0.f;
+    Vec2f filterRadius(0.5f, 0.5f);
+    f32 focalLength = 0.f;
     // Camera matrix
     Vec3f pCamera = Vec3f(648.064, -82.473, -63.856);
     Vec3f look    = Vec3f(6.021, 100.043, -43.679);
@@ -469,24 +469,32 @@ void VolumeRenderingTest(Arena *arena, string filename)
     u32 tileCountY = (width + tileHeight - 1) / tileHeight;
     u32 taskCount  = tileCountX * tileCountY;
 
+    Image image;
+    image.width         = width;
+    image.height        = height;
+    image.bytesPerPixel = sizeof(u32);
+    image.contents      = PushArrayNoZero(arena, u8, GetImageSize(&image));
+
     scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
         u32 tileX = taskCount % tileCountX;
         u32 tileY = taskCount / tileCountX;
         Vec2u minPixelBounds(tileX, tileY);
         Vec2u maxPixelBounds(Min(tileX + tileWidth, tileWidth), Min(tileY + tileHeight, tileHeight));
 
-        SampledWavelengths lambda;
         SampledSpectrum L(0.f);
 
         ZSobolSampler sampler(spp, Vec2i(width, height));
         for (u32 y = minPixelBounds.y; y < maxPixelBounds.y; y++)
         {
+            u32 *out = GetPixelPointer(&image, minPixelBounds.x, y);
             for (u32 x = minPixelBounds.x; x < maxPixelBounds.x; x++)
             {
                 Vec2u pPixel(x, y);
+                Vec3f rgb(0.f);
                 for (u32 i = 0; i < spp; i++)
                 {
                     sampler.StartPixelSample(Vec2i(x, y), i);
+                    SampledWavelengths lambda = SampleVisible(sampler.Get1D());
                     // box filter
                     Vec2f u            = sampler.Get2D();
                     Vec2f filterSample = Vec2f(Lerp(u[0], -filterRadius.x, filterRadius.x),
@@ -508,16 +516,39 @@ void VolumeRenderingTest(Arena *arena, string filename)
                         // ensure ray intersects focal point
                         ray.d = Normalize(pFocus - ray.o);
                     }
-                    ray = Transform(renderFromCamera, ray);
-                    // generate ray somehow
+                    ray              = Transform(renderFromCamera, ray);
                     f32 cameraWeight = 1.f;
                     L += cameraWeight * VolumetricIntegrator(&scene, ray, &sampler, lambda, maxDepth);
                     // convert radiance to rgb, add and divide
+                    L     = SafeDiv(L, lambda.PDF());
+                    f32 r = (Spectra::X().Sample(lambda) * L).Average();
+                    f32 g = (Spectra::Y().Sample(lambda) * L).Average();
+                    f32 b = (Spectra::Z().Sample(lambda) * L).Average();
+                    rgb += Vec3f(r, g, b);
                 }
+                // TODO: filter importance sampling
+                rgb /= f32(spp);
+                rgb = Mul(RGBColorSpace::sRGB->XYZToRGB, rgb);
+                if (rgb.x != rgb.x) rgb.x = 0.f;
+                if (rgb.y != rgb.y) rgb.y = 0.f;
+                if (rgb.z != rgb.z) rgb.z = 0.f;
+
+                f32 r = 255.f * rgb.x;
+                f32 g = 255.f * rgb.y;
+                f32 b = 255.f * rgb.z;
+                f32 a = 255.f;
+
+                u32 color = (RoundFloatToU32(a) << 24) |
+                            (RoundFloatToU32(r) << 16) |
+                            (RoundFloatToU32(g) << 8) |
+                            (RoundFloatToU32(b) << 0);
+                *out++ = color;
             }
         }
         // use measurement equation to convert radiance
     });
+    WriteImage(&image, "image.bmp");
+    printf("done\n");
 }
 
 } // namespace rt
