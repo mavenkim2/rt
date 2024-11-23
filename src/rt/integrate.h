@@ -33,6 +33,9 @@ struct SurfaceInteraction
     LaneIU32 lightIndices;
     LaneIU32 volumeIndices;
 
+    SurfaceInteraction() {}
+    SurfaceInteraction(const Vec3IF32 &p, const Vec3IF32 &n, const Vec2IF32 &uv) : p(p), n(n), uv(uv) {}
+    // SurfaceInteraction(const Vec3f &p, const Vec3f &n, Vec2f u, f32 tHit) : p(p), n(n), uv(u), tHit(tHit) {}
     bool ComputeShading(BSDF &bsdf)
     {
         // TODO:
@@ -42,22 +45,28 @@ struct SurfaceInteraction
 
 // struct
 
+static const u32 invalidVolume = 0xffffffff;
 struct Ray2
 {
     Vec3f o;
     Vec3f d;
     f32 tMax;
-    u32 volumeIndex;
+    u32 volumeIndex = invalidVolume;
 
     Ray2() {}
     Ray2(const Vec3f &o, const Vec3f &d) : o(o), d(d) {}
-    Vec3f operator()(f32 t)
+    Vec3f operator()(f32 t) const
     {
         return o + t * d;
     }
 };
 
 Ray2 Transform(const Mat4 &m, const Ray2 &r)
+{
+    return Ray2(TransformP(m, r.o), TransformV(m, r.d));
+}
+
+Ray2 Transform(const AffineSpace &m, const Ray2 &r)
 {
     return Ray2(TransformP(m, r.o), TransformV(m, r.d));
 }
@@ -69,28 +78,6 @@ struct RayDifferential
     LaneIF32 t;
     Vec3IF32 rxOrigin, ryOrigin;
     Vec3IF32 rxDir, ryDir;
-};
-
-struct PhaseFunctionSample
-{
-    Vec3f wi;
-    f32 p;
-    f32 pdf = 0.f;
-    PhaseFunctionSample() {}
-};
-
-struct PhaseFunction
-{
-    SampledSpectrum EvaluateSample(Vec3f wo, Vec3f wi, f32 *pdf) const
-    {
-        Assert(pdf);
-        *pdf = 0.f;
-        return SampledSpectrum(0.f);
-    }
-    PhaseFunctionSample GenerateSample(Vec3f wo, Vec2f u) const
-    {
-        return PhaseFunctionSample();
-    }
 };
 
 struct VolumeHandle

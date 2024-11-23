@@ -4,7 +4,7 @@
 #include "../sampler.h"
 #include "../lights.h"
 #include "../spectrum.h"
-#include "../math/matx.h"
+#include "../template.h"
 namespace rt
 {
 TriangleMesh *GenerateMesh(Arena *arena, u32 count, f32 min = -100.f, f32 max = 100.f)
@@ -417,9 +417,37 @@ void VolumeRenderingTest(Arena *arena, string filename)
 
     // Media
     AffineSpace transform = AffineSpace::Identity();
-    NanoVDBVolume volume("data/wdas_cloud_quarter.nvdb", &transform);
 
-    scene.volumes.Set(&volume, 1);
+    f32 lambdas[] = {200.f, 900.f};
+    f32 valuesA[] = {0.f, 0.f};
+    f32 valuesS[] = {1.f, 1.f};
+
+    ConstantSpectrum cAbs(0.f);
+    ConstantSpectrum cScatter(1.f);
+    f32 scale = 4.f;
+    f32 g     = .877;
+
+    NanoVDBVolume volumes[] = {
+        NanoVDBVolume("data/wdas_cloud_quarter.nvdb", &transform, &cAbs, &cScatter, g, scale),
+    };
+
+    scene.volumes.Set(volumes, ArrayLength(volumes));
+
+    //////////////////////////////
+    // Primitives
+
+    // Disk
+    AffineSpace cameraTranslate = AffineSpace::Translate(-pCamera);
+    AffineSpace diskTransform   = AffineSpace::Translate(0.f, -1000.f, 0.f) * AffineSpace::Scale(2000.f) *
+                                AffineSpace::Rotate(Vec3f(1.f, 0.f, 0.f), -PI / 2.f);
+    diskTransform                    = cameraTranslate * diskTransform;
+    AffineSpace diskObjectFromRender = Inverse(diskTransform);
+    Disk disk(&diskObjectFromRender);
+
+    AffineSpace boxTransform = AffineSpace::Translate(-9.984, 73.008, -42.64) * AffineSpace::Scale(206.544, 140.4, 254.592);
+    boxTransform             = cameraTranslate * boxTransform;
+    scene.affineTransforms   = &boxTransform;
+
     // Bounding box
     QuadMesh mesh;
     Vec3f p[] = {
@@ -456,8 +484,16 @@ void VolumeRenderingTest(Arena *arena, string filename)
     };
     mesh.p           = p;
     mesh.numVertices = 24;
-    scene.meshes     = &mesh;
-    scene.numMeshes  = 1;
+    scene.primitives.Set(&mesh, 1);
+    scene.primitives.Set(&disk, 1);
+
+    const Scene2::PrimitiveIndices indices[2][1] = {
+        {Scene2::PrimitiveIndices(0, 0, 0)},
+        {Scene2::PrimitiveIndices(0, invalidVolume, 1)},
+    };
+    const Scene2::PrimitiveIndices *primIndices[2] = {indices[0], indices[1]};
+    scene.primIndices                              = primIndices;
+
     BuildLightPDF(&scene);
 
     scene.aggregate.Build(arena, &scene);
@@ -545,7 +581,6 @@ void VolumeRenderingTest(Arena *arena, string filename)
                 *out++ = color;
             }
         }
-        // use measurement equation to convert radiance
     });
     WriteImage(&image, "image.bmp");
     printf("done\n");

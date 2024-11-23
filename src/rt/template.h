@@ -240,46 +240,26 @@ void ForEachType(ArrayTuple<TypePack<Ts...>> &arrays, F func)
     ForEachType(arrays, func, TypePack<Ts...>());
 }
 
-#if 0
-template <typename F, typename ArrayType, typename... Ts>
-void ForEachTypeSubset(ArrayType arrays, F func, TypePack<Ts...>);
-
-template <typename F, typename ArrayType>
-void ForEachTypeSubset(ArrayType arrays, F func, TypePack<>) {}
-
-template <typename F, typename ArrayType, typename T, typename... Ts>
-void ForEachTypeSubset(ArrayType &arrays, F func, TypePack<T, Ts...>)
-{
-    u32 index = IndexOf<T, ArrayType::Types>::count;
-    func.template operator()<T>(Get<T>(arrays.arrays), index, arrays.counts[index]);
-    ForEachTypeSubset(arrays, func, TypePack<Ts...>());
-}
-#endif
-
 template <typename F, typename ArrayType, typename... Ts>
 void ForEachTypeSubset(ArrayType &arrays, F func, TypePack<Ts...> types)
 {
     ForEachType(arrays, func, TypePack<Ts...>());
 }
 
-// template <typename F, typename ArrayType>
-// struct EvaluateArrayCallback
-// {
-//     F &func;
-//     ArrayType *arrays;
-//     template <typename Type>
-//     __forceinline void operator()()
-//     {
-//         Type *array = Get<Type>(arrays->arrays);
-//         func(array, IndexOf<Type, ArrayType::Types>::count);
-//     }
-// };
-//
-// template <typename F, typename ArrayType>
-// __forceinline void ForEachType(ArrayType &arrays, const F &func)
-// {
-//     ForEachType(EvaluateArrayCallback{func, &arrays}, ArrayType::Types);
-// }
+template <template <typename> class M, typename... Ts>
+struct MapType;
+
+template <template <typename> class M, typename T>
+struct MapType<M, TypePack<T>>
+{
+    using type = TypePack<M<T>>;
+};
+
+template <template <typename> class M, typename T, typename... Ts>
+struct MapType<M, TypePack<T, Ts...>>
+{
+    using type = typename Prepend<M<T>, typename MapType<M, TypePack<Ts...>>::type>::type;
+};
 
 } // namespace rt
 

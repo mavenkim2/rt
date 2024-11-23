@@ -2,6 +2,7 @@
 #include "lights.h"
 #include "bsdf.h"
 #include "scene.h"
+#include <type_traits>
 
 namespace rt
 {
@@ -344,36 +345,6 @@ bool VolumeAggregate::Iterator::Next(RaySegment &segment)
     return false;
 }
 
-f32 HenyeyGreenstein(f32 cosTheta, f32 g)
-{
-    g         = Clamp(g, -.99f, .99f);
-    f32 denom = 1 + Sqr(g) + 2 * g * cosTheta;
-    return Inv4Pi * (1 - Sqr(g)) / (denom * SafeSqrt(denom));
-}
-
-f32 HenyeyGreenstein(Vec3f wo, Vec3f wi, f32 g) { return HenyeyGreenstein(Dot(wo, wi), g); }
-
-Vec3f SampleHenyeyGreenstein(const Vec3f &wo, f32 g, Vec2f u, f32 *pdf = 0)
-{
-    f32 cosTheta;
-    if (Abs(g) < 1e-3f)
-        cosTheta = 1 - 2 * u[0];
-    else
-        cosTheta = -1 / (2 * g) *
-                   (1 + Sqr(g) - Sqr((1 - Sqr(g)) / (1 + g - 2 * g * u[0])));
-
-    f32 sinTheta = SafeSqrt(1 - Sqr(cosTheta));
-    f32 phi      = TwoPi * u[1];
-
-    // TODO: implement FromZ
-    Vec3f wi;
-    // Frame wFrame = Frame::FromZ(wo);
-    // Vector3f wi  = wFrame.FromLocal(Vec3f(sinTheta * Cos(phi), sinTheta * Sin(phi), cosTheta));
-
-    if (pdf) *pdf = HenyeyGreenstein(cosTheta, g);
-    return wi;
-}
-
 // One sample MIS estimator
 __forceinline f32 MISWeight(SampledSpectrum spec, u32 channel = 0)
 {
@@ -436,8 +407,13 @@ SampledSpectrum SampleTMaj(Scene2 *scene, Ray2 &ray, f32 tHit, f32 xi, RNG &rng,
                 tMaj *= FastExp(-(t - tMin) * cSpectrumMaj);
                 Vec3f p = ray(t);
 
+                NanoVDBVolume volume; // NanoVDBVolume &volume = scene->volumes.Get<NanoVDBVolume>()[segment.volumeIndex];
                 SampledSpectrum cAbsorb, cScatter, Le;
-                PhaseFunction phase;
+                volume.Extinction(p, lambda, cAbsorb, cScatter, Le);
+                const PhaseFunction &phase = volume.PhaseFunction();
+                // TODO: build cdf over extinction coefficients for multiple volumes, select a random volume
+                // how does this work? what value of the majorant do I use? do I do maxDensity * (sum of extinction for
+                // all volumes), or do I do maxDensity * extinction of selected volume, does absorption
                 if (!callback(p, cSpectrumMaj, tMaj, cAbsorb, cScatter, Le, phase))
                 {
                     terminated = true;
@@ -491,51 +467,38 @@ static SampledWavelengths SampleVisible(f32 u)
     return swl;
 }
 
+bool IsValidVolume(u32 volumeIndex) { return volumeIndex != invalidVolume; }
 // Manually intersect every quad in every mesh
 bool Intersect(Scene2 *scene, Ray2 &r, SurfaceInteraction &intr)
 {
-    f32 tHit = pos_inf;
-    f32 tMin = tMinEpsilon;
-    for (u32 i = 0; i < scene->numMeshes; i++)
-    {
-        QuadMesh *mesh = &scene->meshes[i];
-        for (u32 quadIndex = 0; quadIndex < mesh->numVertices / 4.f; quadIndex++)
+    f32 tHit      = pos_inf;
+    f32 tMin      = tMinEpsilon;
+    bool result   = false;
+    u32 typeIndex = 0;
+    u32 index     = 0;
+    ForEachType(scene->primitives, [&](auto *array, u32 count) {
+        using Primitive = std::remove_reference_t<decltype(*array)>;
+        Ray2 ray        = r;
+        for (u32 i = 0; i < count; i++)
         {
-            Vec3f p0  = mesh->p[quadIndex * 4 + 0];
-            Vec3f p1  = mesh->p[quadIndex * 4 + 1];
-            Vec3f p2  = mesh->p[quadIndex * 4 + 2];
-            Vec3f p3  = mesh->p[quadIndex * 4 + 3];
-            Vec3f u   = p1 - p0;
-            Vec3f v   = p3 - p0;
-            Vec3f n   = Cross(u, v);
-            f32 denom = 1.f / Dot(n, r.d);
-            if (Abs(denom) < 1e-8f) continue;
-            // Find plane equation
-            f32 d = Dot(n, p0);
-            f32 t = (d - Dot(n, r.o)) * denom;
-            if (t <= tMin || t >= tHit) continue;
-            Vec3f intersection    = r(t);
-            Vec3f planarHitVector = intersection - p0;
-            Vec3f w               = n / LengthSquared(n);
-            f32 alpha             = Dot(w, Cross(planarHitVector, v));
-            f32 beta              = Dot(w, Cross(u, planarHitVector));
-            if (!(alpha >= 0 && alpha <= 1 && beta >= 0 && beta <= 1)) continue;
-            intr.p    = intersection;
-            intr.n    = n;
-            intr.uv   = Vec2f(alpha, beta);
-            intr.tHit = t;
+            if constexpr (std::is_same_v<Primitive, QuadMesh>)
+            {
+                // NOTE: this is really hacky, but this is test code so...
+                ray = Transform(scene->affineTransforms[i], r);
+            }
+            bool hit = array[i].Intersect(ray, intr, tHit);
+            result |= hit;
+            typeIndex = hit ? IndexOf<Primitive, Scene2::ShapeTypes>::count : typeIndex;
+            index     = hit ? i : index;
         }
-    }
-    intr.lightIndices = 0;
-    if (u32(intr.volumeIndices))
-    {
-        // If ray direction is opposite normal, we are entering the medium, otherwise we are exiting
-        intr.volumeIndices = Dot(r.d, Vec3f(intr.n)) < 0.f ? intr.volumeIndices : 0;
-    }
-    else
-    {
-        intr.volumeIndices = r.volumeIndex;
-    }
+    });
+    // If ray direction is opposite normal, we are entering the medium, otherwise we are exiting
+    const Scene2::PrimitiveIndices &indices = scene->primIndices[typeIndex][index];
+    intr.volumeIndices                      = Dot(r.d, Vec3f(intr.n)) < 0.f ? indices.volumeIndex : invalidVolume;
+    // else
+    // {
+    //     intr.volumeIndices = r.volumeIndex;
+    // }
     return tHit != f32(pos_inf);
 }
 
@@ -557,7 +520,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, Ray2 &ray, Sampler sampler,
         SurfaceInteraction intr;
         // TODO: tMin epsilon (for now)
         bool intersect = Intersect(scene, ray, intr);
-        if (intr.volumeIndices != 0)
+        if (IsValidVolume(u32(intr.volumeIndices)))
         {
             bool scattered  = false;
             bool terminated = false;
@@ -568,7 +531,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, Ray2 &ray, Sampler sampler,
                 scene, ray, f32(intr.tHit), sampler.Get1D(), rng, lambda,
                 [&](Vec3f p, const SampledSpectrum &cMaj, const SampledSpectrum &tMaj,
                     const SampledSpectrum &cAbsorb, const SampledSpectrum &cScatter,
-                    const SampledSpectrum &Le, PhaseFunction &phase) {
+                    const SampledSpectrum &Le, const PhaseFunction &phase) {
                     if (!beta)
                     {
                         terminated = true;
@@ -801,11 +764,11 @@ NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Sce
     SampledSpectrum tRay(1.f), p_u(1.f), p_l(1.f);
 
     RNG rng(Hash(sampler.Get1D()), Hash(sampler.Get1D()));
-    SampledSpectrum tMaj = SampleTMaj<true>(
+    SampledSpectrum tMaj = SampleTMaj<false>(
         scene, ray, f32(intr.tHit), sampler.Get1D(), rng, lambda,
         [&](Vec3f p, const SampledSpectrum &cMaj, const SampledSpectrum &tMaj,
             const SampledSpectrum &cAbsorb, const SampledSpectrum &cScatter,
-            const SampledSpectrum &Le, PhaseFunction &phase) {
+            const SampledSpectrum &Le, const PhaseFunction &phase) {
             SampledSpectrum cNull = Max(SampledSpectrum(0.f), cMaj - cAbsorb - cScatter);
 
             // Ratio tracking code

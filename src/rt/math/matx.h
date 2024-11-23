@@ -522,11 +522,23 @@ struct AffineSpace
 
         return result;
     }
+    static AffineSpace Scale(f32 a)
+    {
+        return AffineSpace(a, 0, 0, 0,
+                           0, a, 0, 0,
+                           0, 0, a, 0);
+    }
     static AffineSpace Scale(const Vec3f &scale)
     {
         return AffineSpace(scale.x, 0, 0, 0,
                            0, scale.y, 0, 0,
                            0, 0, scale.z, 0);
+    }
+    static AffineSpace Scale(f32 a, f32 b, f32 c)
+    {
+        return AffineSpace(a, 0, 0, 0,
+                           0, b, 0, 0,
+                           0, 0, c, 0);
     }
     static AffineSpace Rotate(const Vec3f &axis, f32 theta)
     {
@@ -541,9 +553,15 @@ struct AffineSpace
     }
     static AffineSpace Translate(const Vec3f &v)
     {
-        return AffineSpace(0, 0, 0, v.x,
-                           0, 0, 0, v.y,
-                           0, 0, 0, v.z);
+        return AffineSpace(1, 0, 0, v.x,
+                           0, 1, 0, v.y,
+                           0, 0, 1, v.z);
+    }
+    static AffineSpace Translate(f32 a, f32 b, f32 c)
+    {
+        return AffineSpace(1, 0, 0, a,
+                           0, 1, 0, b,
+                           0, 0, 1, c);
     }
     __forceinline static AffineSpace Transpose3x3(const AffineSpace &space)
     {
