@@ -6,7 +6,7 @@
 
 namespace rt
 {
-// TODO to render moana:
+// TODO
 // - loading volumes
 // - creating objects from the parsed scene packets
 
@@ -22,6 +22,103 @@ namespace rt
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
 // - bdpt, metropolis, vcm/upbp, mcm?
 // - subdivision surfaces
+
+// TODO: one for each type of material
+template <typename Material, i32 length = 512>
+struct ShadingQueuePtex
+{
+    static const u32 queueFlushSize = length / 2;
+    SurfaceInteraction queue[length];
+    u32 count;
+    void Flush() // SortKey *keys, SurfaceInteraction *values, u32 num)
+    {
+        TempArena temp = ScratchStart(0, 0);
+        // SortKey *keys0 = PushArrayNoZero(temp.arena, SortKey, queueFlushSize);
+        // SortKey *keys1 = PushArrayNoZero(temp.arena, SortKey, queueFlushSize);
+        SortKey keys0[queueFlushSize];
+        SortKey keys1[queueFlushSize];
+
+        count -= queueFlushSize;
+        // Create radix sort keys
+        for (u32 i = 0; i < queueFlushSize; i++)
+        {
+            SurfaceInteraction &intr = queue[count + i];
+            keys0[i].value           = intr.GenerateKey();
+            keys0[i].index           = count + i;
+        }
+
+        // Radix sort
+        for (u32 iter = 3; iter >= 0; iter--)
+        {
+            u32 shift        = iter * 8;
+            u32 buckets[255] = {};
+            // Calculate # in each radix
+            for (u32 i = 0; i < queueFlushSize; i++)
+            {
+                SortKey *key = &keys0[i];
+                buckets[(key->value >> shift) & 0xff]++;
+            }
+            // Prefix sum
+            u32 total = 0;
+            for (u32 i = 0; i < 255; i++)
+            {
+                u32 count  = buckets[i];
+                buckets[i] = total;
+                total += count;
+            }
+            // Place in correct position
+            for (u32 i = 0; i < queueFlushSize; i++)
+            {
+                SortKey &sortKey      = &keys0[i];
+                u32 key               = (sortKey.value >> shift) & 0xff;
+                keys1[buckets[key]++] = sortKey;
+            }
+            Swap(keys0, keys1);
+        }
+
+        // Convert to AOSOA
+        u32 limit = queueFlushSize % (IntN);
+        SurfaceInteractionsN aosoaIntrs[queueFlushSize / IntN];
+        for (u32 i = 0, aosoaIndex = 0; i < queueFlushSize; i += IntN, aosoaIndex++)
+        {
+            const u32 prefetchDistance = IntN * 2;
+            for (u32 j = 0; j < IntN; j++)
+            {
+                _mm_prefetch((char *)&queue[keys[i + prefetchDistance + j].index], _MM_HINT_T0);
+            }
+            alignas(32) SurfaceInteraction &intrs[IntN] = {
+                queue[keys0[i + 0].index], queue[keys0[i + 1].index], queue[keys0[i + 2].index], queue[keys0[i + 3].index],
+                queue[keys0[i + 4].index], queue[keys0[i + 5].index], queue[keys0[i + 6].index], queue[keys0[i + 7].index]};
+            SurfaceInteractionsN &out = aosoaIntrs[aosoaIndex];
+
+            // Transpose p, n, uv
+            Transpose8x8(Lane8F32::Load(&intrs[0]), Lane8F32::Load(&intrs[1]), Lane8F32::Load(&intrs[2]), Lane8F32::Load(&intrs[3]),
+                         Lane8F32::Load(&intrs[4]), Lane8F32::Load(&intrs[5]), Lane8F32::Load(&intrs[6]), Lane8F32::Load(&intrs[7]),
+                         out.p.x, out.p.y, out.p.z, out.n.x, out.n.y, out.n.z, out.uv.x, out.uv.y);
+            // Transpose
+        }
+
+        // Return bsdf lobes
+        // Material::Evaluate(aosoaIntrs);
+
+        // Material calculation
+        ScratchEnd(temp);
+    }
+    // mesh id, face index
+};
+
+bool SurfaceInteraction::ComputeShading(Scene2 *scene, BSDF &bsdf)
+{
+    // TODO:
+    // auto material = scene->materials.Get(0, materialIDs.value);
+    // auto Dispatch = [&](auto v) {
+    //     using BSDFType = std::decay<decltype(v)>::type;
+    //     bsdf           = &v;
+    //     BSDFType *b =
+    // };
+
+    return {};
+}
 
 #if 0
 void Li(Scene2 *scene, RayDifferential &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda)
@@ -261,7 +358,7 @@ bool VolumeAggregate::Iterator::Next(RaySegment &segment)
         // If leaf
         if (!node->children)
         {
-            segment = RaySegment(entry.tMin, entry.tMax, node->extinctionMin, node->extinctionMax, cExtinct);
+            segment = RaySegment(entry.tMin, entry.tMax, node->extinctionMin, node->extinctionMax, cExtinct, node->volumeHandles);
             return true;
         }
 
@@ -358,7 +455,7 @@ __forceinline f32 MISWeight(SampledSpectrum spec0, SampledSpectrum spec1, u32 ch
 }
 
 template <bool residualRatioTracking, typename F>
-SampledSpectrum SampleTMaj(Scene2 *scene, Ray2 &ray, f32 tHit, f32 xi, RNG &rng, const SampledWavelengths &lambda, const F &callback)
+SampledSpectrum SampleTMaj(Scene2 *scene, Ray2 &ray, f32 tHit, f32 xi, Sampler sampler, const SampledWavelengths &lambda, const F &callback)
 {
     tHit *= Length(ray.d);
     ray.d                      = Normalize(ray.d);
@@ -369,6 +466,8 @@ SampledSpectrum SampleTMaj(Scene2 *scene, Ray2 &ray, f32 tHit, f32 xi, RNG &rng,
     VolumeAggregate::Iterator itr = aggregate.CreateIterator(&ray, cExtinct, tHit);
     RaySegment segment;
 
+    bool rngInitialized = false;
+    RNG rng;
     // NOTE: contains majorant transmittance (starting from the previous vertex)
     SampledSpectrum tMaj(1.f);
     while (itr.Next(segment))
@@ -391,6 +490,12 @@ SampledSpectrum SampleTMaj(Scene2 *scene, Ray2 &ray, f32 tHit, f32 xi, RNG &rng,
             continue;
         }
 
+        if (!rngInitialized)
+        {
+            rng            = RNG(Hash(sampler.Get1D()), Hash(sampler.Get1D()));
+            rngInitialized = true;
+        }
+
         for (;;)
         {
             f32 t = t - (std::log(1 - xi) / cMaj);
@@ -407,14 +512,14 @@ SampledSpectrum SampleTMaj(Scene2 *scene, Ray2 &ray, f32 tHit, f32 xi, RNG &rng,
                 tMaj *= FastExp(-(t - tMin) * cSpectrumMaj);
                 Vec3f p = ray(t);
 
-                NanoVDBVolume volume; // NanoVDBVolume &volume = scene->volumes.Get<NanoVDBVolume>()[segment.volumeIndex];
+                NanoVDBVolume &volume = scene->volumes.Get<NanoVDBVolume>()[segment.handles[0].index];
                 SampledSpectrum cAbsorb, cScatter, Le;
                 volume.Extinction(p, lambda, cAbsorb, cScatter, Le);
                 const PhaseFunction &phase = volume.PhaseFunction();
                 // TODO: build cdf over extinction coefficients for multiple volumes, select a random volume
                 // how does this work? what value of the majorant do I use? do I do maxDensity * (sum of extinction for
                 // all volumes), or do I do maxDensity * extinction of selected volume, does absorption
-                if (!callback(p, cSpectrumMaj, tMaj, cAbsorb, cScatter, Le, phase))
+                if (!callback(rng, p, cSpectrumMaj, tMaj, cAbsorb, cScatter, Le, phase))
                 {
                     terminated = true;
                     break;
@@ -481,11 +586,6 @@ bool Intersect(Scene2 *scene, Ray2 &r, SurfaceInteraction &intr)
         Ray2 ray        = r;
         for (u32 i = 0; i < count; i++)
         {
-            if constexpr (std::is_same_v<Primitive, QuadMesh>)
-            {
-                // NOTE: this is really hacky, but this is test code so...
-                ray = Transform(scene->affineTransforms[i], r);
-            }
             bool hit = array[i].Intersect(ray, intr, tHit);
             result |= hit;
             typeIndex = hit ? IndexOf<Primitive, Scene2::ShapeTypes>::count : typeIndex;
@@ -493,8 +593,6 @@ bool Intersect(Scene2 *scene, Ray2 &r, SurfaceInteraction &intr)
         }
     });
     // If ray direction is opposite normal, we are entering the medium, otherwise we are exiting
-    const Scene2::PrimitiveIndices &indices = scene->primIndices[typeIndex][index];
-    intr.volumeIndices                      = Dot(r.d, Vec3f(intr.n)) < 0.f ? indices.volumeIndex : invalidVolume;
     // else
     // {
     //     intr.volumeIndices = r.volumeIndex;
@@ -520,16 +618,17 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, Ray2 &ray, Sampler sampler,
         SurfaceInteraction intr;
         // TODO: tMin epsilon (for now)
         bool intersect = Intersect(scene, ray, intr);
-        if (IsValidVolume(u32(intr.volumeIndices)))
+
+        // Volume intersection
         {
             bool scattered  = false;
             bool terminated = false;
 
-            RNG rng(Hash(sampler.Get1D()), Hash(sampler.Get1D()));
+            // RNG rng(Hash(sampler.Get1D()), Hash(sampler.Get1D()));
 
             SampledSpectrum tMaj = SampleTMaj<false>(
-                scene, ray, f32(intr.tHit), sampler.Get1D(), rng, lambda,
-                [&](Vec3f p, const SampledSpectrum &cMaj, const SampledSpectrum &tMaj,
+                scene, ray, f32(intr.tHit), sampler.Get1D(), sampler, lambda,
+                [&](RNG &rng, Vec3f p, const SampledSpectrum &cMaj, const SampledSpectrum &tMaj,
                     const SampledSpectrum &cAbsorb, const SampledSpectrum &cScatter,
                     const SampledSpectrum &Le, const PhaseFunction &phase) {
                     if (!beta)
@@ -680,7 +779,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, Ray2 &ray, Sampler sampler,
         }
 
         BSDF bsdf;
-        if (!intr.ComputeShading(bsdf))
+        if (!intr.ComputeShading(scene, bsdf))
         {
             // denotes boundary between medium, no event
             ray.o = intr.p;
@@ -763,10 +862,10 @@ NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Sce
     // Residual ratio tracking
     SampledSpectrum tRay(1.f), p_u(1.f), p_l(1.f);
 
-    RNG rng(Hash(sampler.Get1D()), Hash(sampler.Get1D()));
+    // RNG rng(Hash(sampler.Get1D()), Hash(sampler.Get1D()));
     SampledSpectrum tMaj = SampleTMaj<false>(
-        scene, ray, f32(intr.tHit), sampler.Get1D(), rng, lambda,
-        [&](Vec3f p, const SampledSpectrum &cMaj, const SampledSpectrum &tMaj,
+        scene, ray, f32(intr.tHit), sampler.Get1D(), sampler, lambda,
+        [&](RNG &rng, Vec3f p, const SampledSpectrum &cMaj, const SampledSpectrum &tMaj,
             const SampledSpectrum &cAbsorb, const SampledSpectrum &cScatter,
             const SampledSpectrum &Le, const PhaseFunction &phase) {
             SampledSpectrum cNull = Max(SampledSpectrum(0.f), cMaj - cAbsorb - cScatter);

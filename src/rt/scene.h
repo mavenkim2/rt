@@ -755,6 +755,10 @@ struct NanoVDBVolume
     }
 };
 
+struct DiffuseMaterial
+{
+};
+
 // NOTE: only leaf scenes can
 struct Scene2
 {
@@ -762,6 +766,7 @@ struct Scene2
     using VolumeTypes        = TypePack<NanoVDBVolume>;
     using LightTypes         = TypePack<DiffuseAreaLight, DistantLight, UniformInfiniteLight, ImageInfiniteLight>;
     using InfiniteLightTypes = TypePack<UniformInfiniteLight, ImageInfiniteLight>;
+    using MaterialTypes      = TypePack<DiffuseMaterial>;
 
     // TODO: this really should adjacent in memory to the primitives
     struct PrimitiveIndices
@@ -803,6 +808,8 @@ struct Scene2
     // u32 numAreaLights;
     // u32 numInfiniteLights;
     u32 numLights; // total
+    // Materials
+    ArrayTuple<MaterialTypes> materials;
 
     // BVH
     BVHNodeType nodePtr;

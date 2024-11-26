@@ -213,6 +213,12 @@ struct ArrayTuple<TypePack<Ts...>>
     __forceinline T *Get() { return ::Get<T *>(arrays); }
     template <typename T>
     __forceinline const T *Get() const { return ::Get<T *>(arrays); }
+
+    // __forceinline const auto &Get(u32 type, u32 index) const
+    // {
+    //     return ::Get<ArrayTuple<TypePack<Ts...>>, Ts...>(arrays, type, index);
+    // }
+
     template <typename T>
     __forceinline void Set(T *array, u32 count)
     {

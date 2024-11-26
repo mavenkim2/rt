@@ -20,28 +20,42 @@ typedef Vec2<LaneIF32> Vec2IF32;
 typedef Vec3<LaneIF32> Vec3IF32;
 typedef Vec4<LaneIF32> Vec4IF32;
 
-struct SurfaceInteraction
+struct SortKey
 {
-    Vec3IF32 p;
-    Vec3IF32 n;
-    Vec2IF32 uv;
+    u32 value;
+    u32 index;
+};
+
+template <i32 width = 1>
+struct SurfaceInteractions
+{
+    using LaneNF32 = LaneF32<width>;
+    using LaneNU32 = LaneU32<width>;
+    Vec3<LaneNF32> p;
+    Vec3<LaneNF32> n;
+    Vec2<LaneNF32> uv;
     struct
     {
-        Vec3IF32 n;
+        Vec3<LaneF32<width>> n;
     } shading;
-    LaneIF32 tHit;
-    LaneIU32 lightIndices;
-    LaneIU32 volumeIndices;
+    LaneNF32 tHit;
+    LaneNU32 lightIndices;
+    LaneNU32 materialIDs;
+    // LaneIU32 volumeIndices;
 
-    SurfaceInteraction() {}
-    SurfaceInteraction(const Vec3IF32 &p, const Vec3IF32 &n, const Vec2IF32 &uv) : p(p), n(n), uv(uv) {}
+    SurfaceInteractions() {}
+    SurfaceInteractions(const Vec3<LaneNF32> &p, const Vec3<LaneNF32> &n, const Vec2<LaneNF32> &uv) : p(p), n(n), uv(uv) {}
     // SurfaceInteraction(const Vec3f &p, const Vec3f &n, Vec2f u, f32 tHit) : p(p), n(n), uv(u), tHit(tHit) {}
-    bool ComputeShading(BSDF &bsdf)
+    bool ComputeShading(struct Scene2 *scene, BSDF &bsdf);
+
+    u32 GenerateKey()
     {
-        // TODO:
         return {};
     }
 };
+
+typedef SurfaceInteractions<1> SurfaceInteraction;
+typedef SurfaceInteractions<IntN> SurfaceInteractionsN;
 
 // struct
 
@@ -104,9 +118,10 @@ struct RaySegment
     f32 tMax;
     SampledSpectrum cMaj;
     SampledSpectrum cMin;
+    VolumeHandle handles[4];
     RaySegment() {}
-    RaySegment(f32 tMin, f32 tMax, f32 min, f32 max, SampledSpectrum spec)
-        : tMin(tMin), tMax(tMax), cMaj(spec * min), cMin(spec * max) {}
+    RaySegment(f32 tMin, f32 tMax, f32 min, f32 max, SampledSpectrum spec, VolumeHandle *handles)
+        : tMin(tMin), tMax(tMax), cMaj(spec * min), cMin(spec * max), handles{handles[0], handles[1], handles[2], handles[3]} {}
 };
 
 struct VolumeAggregate

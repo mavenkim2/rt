@@ -449,6 +449,7 @@ void VolumeRenderingTest(Arena *arena, string filename)
     scene.affineTransforms   = &boxTransform;
 
     // Bounding box
+#if 0
     QuadMesh mesh;
     Vec3f p[] = {
         // front
@@ -485,11 +486,12 @@ void VolumeRenderingTest(Arena *arena, string filename)
     mesh.p           = p;
     mesh.numVertices = 24;
     scene.primitives.Set(&mesh, 1);
+#endif
     scene.primitives.Set(&disk, 1);
 
     const Scene2::PrimitiveIndices indices[2][1] = {
+        {},
         {Scene2::PrimitiveIndices(0, 0, 0)},
-        {Scene2::PrimitiveIndices(0, invalidVolume, 1)},
     };
     const Scene2::PrimitiveIndices *primIndices[2] = {indices[0], indices[1]};
     scene.primIndices                              = primIndices;
