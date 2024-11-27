@@ -3,6 +3,7 @@
 #include "bsdf.h"
 #include "scene.h"
 #include <type_traits>
+#include <Ptexture.h>
 
 namespace rt
 {
@@ -22,6 +23,18 @@ namespace rt
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
 // - bdpt, metropolis, vcm/upbp, mcm?
 // - subdivision surfaces
+
+struct : public PtexErrorHandler
+{
+    void reportError(const char *error) override { Error(0, "%s", error); }
+} errorHandler;
+
+void InitializePtex()
+{
+    u32 maxFiles  = 100;
+    size_t maxMem = gigabytes(4);
+    Ptex::PtexCache::create(maxFiles, maxMem, true, 0, &errorHandler);
+}
 
 // TODO: one for each type of material
 template <typename Material, i32 length = 512>
@@ -95,7 +108,7 @@ struct ShadingQueuePtex
             Transpose8x8(Lane8F32::Load(&intrs[0]), Lane8F32::Load(&intrs[1]), Lane8F32::Load(&intrs[2]), Lane8F32::Load(&intrs[3]),
                          Lane8F32::Load(&intrs[4]), Lane8F32::Load(&intrs[5]), Lane8F32::Load(&intrs[6]), Lane8F32::Load(&intrs[7]),
                          out.p.x, out.p.y, out.p.z, out.n.x, out.n.y, out.n.z, out.uv.x, out.uv.y);
-            // Transpose
+            // Transpose the rest
         }
 
         // Return bsdf lobes
@@ -107,6 +120,7 @@ struct ShadingQueuePtex
     // mesh id, face index
 };
 
+template <>
 bool SurfaceInteraction::ComputeShading(Scene2 *scene, BSDF &bsdf)
 {
     // TODO:

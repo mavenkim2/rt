@@ -6,7 +6,7 @@ set SSE42=%SSE2% -D __SSE3__ -D __SSSE3__ -D __SSE4_1__ -D __SSE4_2__
 set AVX=%SSE42% -arch:AVX
 set AVX2=%SSE42% -arch:AVX2
 
-set Definitions=-D NOMINMAX
+set Definitions=-D NOMINMAX -D PTEX_STATIC
 
 if not exist .\src\gen\rgbspectrum_srgb.cpp (
     IF NOT EXIST build mkdir build
@@ -28,7 +28,17 @@ if not exist .\src\gen\rgbspectrum_srgb.cpp (
     exit /b
 )
 
-set Dependencies=-I ..\src\third_party\openvdb\nanovdb -I ..\src\gen
+if not exist .\build\src\third_party\zlib\Release\zlibstatic.lib (
+    REM TODO this probably only works with visual studio...
+    cmake -B build -T ClangCL . && cmake --build build --config Release
+)
+
+set Dependencies=-I ..\src\third_party\openvdb\nanovdb -I ..\src\gen -I ..\src\third_party\ptex\src\ptex -I ..\src\third_party\zlib ^
+-I .\src\third_party\zlib
+set LibraryPathPtex=.\src\third_party\ptex\src\ptex\Release
+set LibraryPathZlib=.\src\third_party\zlib\Release
+set LibraryNamePtex=Ptex.lib 
+set LibraryNameZlib=zlibstatic.lib
 
 if "%1" == "release" (
     call :AddReleaseFlags
@@ -59,10 +69,10 @@ IF NOT EXIST build mkdir build
 pushd build
 if "%1" == "cl" (
     echo Compiling with Clang
-    clang++ -std=c++17 -march=native -ffp-contract=off %Definitions% %Dependencies% -o rt.exe ../src/rt/rt.cpp
+    clang++ -std=c++17 -march=native -ffp-contract=off %Definitions% %Dependencies% -L %LibraryPathZlib% -L %LibraryPathPtex% -l %LibraryNameZlib% -l %LibraryNamePtex% -o rt.exe ../src/rt/rt.cpp
 ) else (
     echo Compiling with MSVC
-    cl %DefaultCompilerFlags% %Definitions% %AVX2% %Dependencies% ../src/rt/rt.cpp /std:c++17 /link %DefaultLinkerFlags% /out:rt.exe
+    cl /MD %DefaultCompilerFlags% %Definitions% %AVX2% %Dependencies% ../src/rt/rt.cpp /std:c++17 /link %DefaultLinkerFlags% /LIBPATH:%LibraryPathZlib% /LIBPATH:%LibraryPathPtex% %LibraryNameZlib% %LibraryNamePtex% /out:rt.exe
 )
 
 REM cl %DefaultCompilerFlags% ../src/rgb2spec.cpp /std:c++17 /link %DefaultLinkerFlags% /out:rgb2spec.exe
