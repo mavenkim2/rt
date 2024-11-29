@@ -74,6 +74,9 @@ __forceinline f32 Floor(const f32 x) { return ::floorf(x); }
 __forceinline f32 Pow(const f32 x, const f32 y) { return ::powf(x, y); }
 __forceinline f32 Log2f(const f32 x) { return ::log2f(x); }
 __forceinline f32 Copysignf(const f32 a, const f32 b) { return ::copysignf(a, b); }
+__forceinline bool All(bool b) { return b; }
+__forceinline bool None(bool b) { return !b; }
+__forceinline bool Some(bool b) { return b; }
 
 template <typename T, typename F>
 T Lerp(F t, T a, T b)

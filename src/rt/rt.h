@@ -187,6 +187,8 @@ void WriteImage(Image *image, char *filename)
         fprintf(stderr, "[ERROR] Unable to write file %s.\n", filename);
     }
 }
+f32 ExactLinearToSRGB(f32 l);
+
 } // namespace rt
 
 #endif

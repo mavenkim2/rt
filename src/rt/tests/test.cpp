@@ -588,4 +588,8 @@ void VolumeRenderingTest(Arena *arena, string filename)
     printf("done\n");
 }
 
+void DualTest()
+{
+}
+
 } // namespace rt

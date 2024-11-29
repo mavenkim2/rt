@@ -252,6 +252,11 @@ struct LaneF32<1>
     __forceinline LaneF32(f32 v) : value(v) {}
     __forceinline LaneF32(ZeroTy) : value(0.f) {}
     __forceinline explicit operator f32() const { return value; }
+    static __forceinline Lane1F32 Load(const void *ptr)
+    {
+        Assert(v);
+        return Lane1F32(((f32 *)ptr)[0]);
+    }
 };
 
 template <i32 N>
@@ -324,9 +329,6 @@ __forceinline Lane1F32 Sqrt(const Lane1F32 &a) { return Sqrt(a.value); }
 __forceinline Lane1F32 Abs(const Lane1F32 &a) { return Abs(a.value); }
 __forceinline Lane1F32 Copysignf(const Lane1F32 &mag, const Lane1F32 &sign) { return Copysignf(mag.value, sign.value); }
 __forceinline Lane1F32 Clamp(const Lane1F32 &v, const Lane1F32 &min, const Lane1F32 &max) { return Clamp(v.value, min.value, max.value); }
-__forceinline bool All(bool b) { return b; }
-__forceinline bool None(bool b) { return !b; }
-__forceinline bool Some(bool b) { return b; }
 __forceinline Lane1F32 Select(const Lane1F32 mask, const Lane1F32 a, const Lane1F32 b) { return mask.value ? a : b; }
 __forceinline Lane1F32 FMA(const Lane1F32 a, const Lane1F32 b, const Lane1F32 c) { return std::fma(a.value, b.value, c.value); }
 __forceinline Lane1F32 FMS(const Lane1F32 a, const Lane1F32 b, const Lane1F32 c) { return std::fma(a.value, b.value, -c.value); }

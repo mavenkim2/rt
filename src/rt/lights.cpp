@@ -279,7 +279,7 @@ SAMPLE_LI(DiffuseAreaLight)
     if (All(mask))
     {
         result.samplePoint = Lerp(u[0], Lerp(u[1], p[0], p[3]), Lerp(u[1], p[1], p[2]));
-        result.pdf         = LengthSquared(wi) / (area * AbsDot(Normalize(wi), n));
+        result.pdf         = LengthSquared(wi) / (LaneIF32(area) * AbsDot(Normalize(wi), n));
     }
     else if (None(mask))
     {

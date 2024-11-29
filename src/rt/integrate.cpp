@@ -24,16 +24,229 @@ namespace rt
 // - bdpt, metropolis, vcm/upbp, mcm?
 // - subdivision surfaces
 
+// dreams
+// - covariance tracing
+
+static Ptex::PtexCache *cache;
 struct : public PtexErrorHandler
 {
     void reportError(const char *error) override { Error(0, "%s", error); }
 } errorHandler;
 
+enum class ColorEncoding
+{
+    Linear,
+    SRGB,
+};
+
+template <i32 numChannels>
+struct PtexTexture
+{
+    string filename;
+    ColorEncoding encoding;
+    f32 scale;
+    PtexTexture(string filename, ColorEncoding encoding = ColorEncoding::SRGB, f32 scale = 1.f)
+        : filename(filename), encoding(encoding), scale(scale) {}
+
+    auto Evaluate(const Vec2f &uv, const Vec4f &filterWidth, u32 faceIndex)
+    {
+        Assert(cache);
+        Ptex::String error;
+        Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
+        Assert(texture);
+        Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
+        Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
+        i32 nc                   = texture->numChannels();
+        Assert(nc == numChannels);
+
+        // TODO: ray differentials
+        // f32 filterWidth = 0.75f;
+        // Vec2f uv(0.5f, 0.5f);
+
+        f32 out[numChannels];
+        filter->eval(out, 0, nc, faceIndex, uv[0], uv[1], filterWidth[0], filterWidth[1], filterWidth[2], filterWidth[3]);
+        texture->release();
+        filter->release();
+
+        // Convert to srgb
+        if constexpr (numChannels == 1) return out[0];
+
+        if (encoding == ColorEncoding::SRGB)
+        {
+            for (i32 i = 0; i < nc; i++)
+            {
+                out[i] = ExactLinearToSRGB(out[i]);
+            }
+        }
+        for (i32 i = 0; i < nc; i++)
+        {
+            out[i] *= scale;
+        }
+
+        Assert(numChannels == 3);
+        return Vec3f(out[0], out[1], out[2]);
+    }
+};
+
+static Scene2 *scene;
+
+// template <typename Texture>
+struct NormalMap
+{
+    template <i32 width>
+    void Evaluate(SurfaceInteraction<width> &intrs)
+    {
+        Vec3f ns(2 * normalMap.BilerpChannel(uv, wrap), -1);
+        ns = Normalize(ns);
+
+        f32 dpduLength    = Length(dpdu);
+        f32 dpdvLength    = Length(dpdv);
+        dpdu              = dpdu / length;
+        AffineSpace frame = AffineSpace(dpdu, Cross(ns, intrs.shading.dpdu), intrs.shading.ns);
+        // Transform to world space
+        ns   = TransformV(frame, ns);
+        dpdu = Normalize(dpdu - Dot(dpdu, ns) * ns) * dpduLength;
+        dpdv = Normalize(Cross(ns, dpdu)) * dpdvLength;
+    }
+};
+
+template <typename TextureType, i32 numChannels>
+struct ImageTextureShader;
+
+template <typename TextureType>
+struct ImageTextureShader<1>
+{
+    TextureType texture;
+    ImageTextureShader() {}
+    template <typename T, i32 width>
+    static LaneF32<width> Evaluate(SurfaceInteraction<width> &intrs, Vec4lf<width> &filterWidths,
+                                   LaneF32<width> &dfdu, LaneF32<width> &dfdv, const ImageTextureShader<TextureType, 1> **textures)
+    {
+        alignas(4 * width) f32 results[width];
+        // Finite differencing
+        LaneF32<width> du = .5f * Abs(filterWidths[0], filterWidths[2]);
+        du                = Select(du == 0.f, 0.0005f, du);
+        LaneF32<width> dv = .5f * Abs(filterWidths[1], filterWidths[3]);
+        dv                = Select(dv == 0.f, 0.0005f, dv);
+
+        for (u32 i = 0; i < width; i++)
+        {
+            Vec2f uv(intrs.uv[0][i], intrs.uv[1][i]);
+            Vec4f filterWidth(filterWidths[0][i], filterWidths[1][i], filterWidths[2][i], filterWidths[3][i]);
+
+            results[i]      = textures[i]->texture.Evaluate(uv, filterWidth, intrs.faceIndex[i]);
+            results.dfdu[i] = textures[i]->texture.Evaluate(uv + Vec2f(du[i], 0.f), filterWidth, intrs.faceIndex[i]);
+            results.dfdv[i] = textures[i]->texture.Evaluate(uv + Vec2f(0.f, dv[i]), filterWidth, intrs.faceIndex[i]);
+        }
+        return LaneF32<width>::Load(results);
+    }
+};
+
+// template <typename TextureType>
+// struct ImageTextureShader<3>
+// {
+//     ImageTextureShader() {}
+//     template <typename T, i32 width>
+//     static Vec3lf<width> Evaluate(SurfaceInteraction<width> &intrs, Vec4lf<width> &filterWidths,
+//                                   const ImageTexture **textures)
+//     {
+//         Vec3lf<width> result;
+//
+//         for (u32 i = 0; i < width; i++)
+//         {
+//             Vec2f uv(intrs.uv[0][i], intrs.uv[1][i]);
+//             Vec4f filterWidth(filterWidths[0][i], filterWidths[1][i], filterWidths[2][i], filterWidths[3][i]);
+//
+//             Vec3f r     = textures[i]->Evaluate(uv, filterWidth, intrs.faceIndex[i]);
+//             result.x[i] = r.x;
+//             result.y[i] = r.y;
+//             result.z[i] = r.z;
+//         }
+//         return result;
+//     }
+// };
+
+template <typename TextureShader>
+struct BumpMap
+{
+    // p' = p + d * n, d is displacement, estimate shading normal by computing dp'du and dp'dv (using chain rule)
+    TextureShader displacementShader;
+    template <i32 width>
+    static void Evaluate(SurfaceInteraction<width> &intrs, const BumpMap<TextureShader> **bumpMaps)
+    {
+        TextureShader *displacementShaders[width];
+        for (u32 i = 0; i < width; i++)
+        {
+            displacementShaders[i] = &bumpMaps[i]->displacementShader;
+        }
+
+        LaneF32<width> dddu, dddv;
+        LaneF32<width> displacement = TextureShader::Evaluate(intrs, dpdu, dpdv, displacementShaders);
+
+        Vec3lf<width> dpdu = intrs.shading.dpdu + dddu * intrs.shading.n + displacement * intrs.shading.dndu;
+        Vec3lf<width> dpdv = intrs.shading.dpdv + dddv * intrs.shading.n + displacement * intrs.shading.dndv;
+
+        intrs.shading.n    = Cross(dpdu, dpdv);
+        intrs.shading.dpdu = dpdu;
+        intrs.shading.dpdv = dpdv;
+    }
+};
+
+template <typename TextureShader, typename NormalShader>
+struct DiffuseMaterial
+{
+    Texture reflectanceShader;
+
+    template <i32 width>
+    static DiffuseBSDF<IntN> GetBSDF(SurfaceInteractions<width> &intr)
+    {
+        DiffuseMaterial *materials = scene->materials.Get<DiffuseMaterial>();
+        // TODO: vectorized texture evaluation?
+        // TODO: sampled spectrum vectorized
+        Vec4<LaneF32<width>> sampledSpectra;
+
+        Lane4F32 sampledSpectrumArray[width];
+        // for (u32 i = 0; i < width; i++)
+        // {
+        //     materials[i].texture->Evaluate(intr.faceIndices[i], sampledSpectrumArray[i].f);
+        // }
+        // Convert RGB to SRGB
+        Vec4<LaneF32<width>> reflectance = rShaderGraph.Evaluate(intr);
+        return DiffuseBSDF(reflectance);
+    }
+
+    DiffuseBSDF GetBSDF()
+    {
+        Vec3 result;
+        texture->SampleTexture(0, result);
+    }
+};
+
+template <typename BSDFShader, typename NormalShader>
+struct Material
+{
+    BSDFShader bsdfShader;
+    NormalShader normalShader;
+    template <i32 width>
+    static auto Evaluate(SurfaceInteractions<width> &intr)
+    {
+        auto bsdf = bsdfShader.GetBSDF(intr);
+        NormalShader *normalShaders[width];
+        for (u32 i = 0; i < width; i++)
+        {
+            // TODO: get index from id
+            normalShaders[i] = scene->materials.Get<Material>()[intrs.materialIDs[i]].normalShader;
+        }
+        NormalShader::Evaluate(intrs, normalShaders);
+        return bsdf;
+    }
+};
+
 void InitializePtex()
 {
     u32 maxFiles  = 100;
     size_t maxMem = gigabytes(4);
-    Ptex::PtexCache::create(maxFiles, maxMem, true, 0, &errorHandler);
+    cache         = Ptex::PtexCache::create(maxFiles, maxMem, true, 0, &errorHandler);
 }
 
 // TODO: one for each type of material
@@ -91,28 +304,67 @@ struct ShadingQueuePtex
 
         // Convert to AOSOA
         u32 limit = queueFlushSize % (IntN);
-        SurfaceInteractionsN aosoaIntrs[queueFlushSize / IntN];
+        // SurfaceInteractionsN aosoaIntrs[queueFlushSize / IntN];
         for (u32 i = 0, aosoaIndex = 0; i < queueFlushSize; i += IntN, aosoaIndex++)
         {
             const u32 prefetchDistance = IntN * 2;
+            alignas(32) SurfaceInteraction *intrs[IntN];
             for (u32 j = 0; j < IntN; j++)
             {
                 _mm_prefetch((char *)&queue[keys[i + prefetchDistance + j].index], _MM_HINT_T0);
+                intrs[j] = queue[keys0[i + j].index];
             }
-            alignas(32) SurfaceInteraction &intrs[IntN] = {
-                queue[keys0[i + 0].index], queue[keys0[i + 1].index], queue[keys0[i + 2].index], queue[keys0[i + 3].index],
-                queue[keys0[i + 4].index], queue[keys0[i + 5].index], queue[keys0[i + 6].index], queue[keys0[i + 7].index]};
-            SurfaceInteractionsN &out = aosoaIntrs[aosoaIndex];
+            SurfaceInteractionsN aosoaIntrs; //&out = aosoaIntrs[aosoaIndex];
+                                             //
+                                             // Transpose p, n, uv
+            Transpose(intrs, aosoaIntrs);
+            // Transpose8x8(Lane8F32::Load(&intrs[0]), Lane8F32::Load(&intrs[1]), Lane8F32::Load(&intrs[2]), Lane8F32::Load(&intrs[3]),
+            //              Lane8F32::Load(&intrs[4]), Lane8F32::Load(&intrs[5]), Lane8F32::Load(&intrs[6]), Lane8F32::Load(&intrs[7]),
+            //              out.p.x, out.p.y, out.p.z, out.n.x, out.n.y, out.n.z, out.uv.x, out.uv.y);
 
-            // Transpose p, n, uv
-            Transpose8x8(Lane8F32::Load(&intrs[0]), Lane8F32::Load(&intrs[1]), Lane8F32::Load(&intrs[2]), Lane8F32::Load(&intrs[3]),
-                         Lane8F32::Load(&intrs[4]), Lane8F32::Load(&intrs[5]), Lane8F32::Load(&intrs[6]), Lane8F32::Load(&intrs[7]),
-                         out.p.x, out.p.y, out.p.z, out.n.x, out.n.y, out.n.z, out.uv.x, out.uv.y);
             // Transpose the rest
+            // ...
+            Material::BSDF bsdf = Material::Evaluate(aosoaIntrs);
+
+            if constexpr (bsdf::IsSpecular)
+            {
+            }
+            else
+            {
+                // Push to next event estimation queue
+                RayStateHandle rayStateHandles[IntN];
+                lightSampleQueue.Push(rayStateHandles, intrs);
+
+                LaneIF32 pdf;
+                Vec3IF32 wi;
+                // TODO: how do I get wi?
+                NEESample neeSample = Material::BSDF::EvaluateSample(-ray.d, wi, scatterPdf, TransportMode::Radiance);
+                // occlusion ray queue
+            }
+
+            // TODO: things I need to simd:
+            // - sampler
+            // - ray
+            // - path throughput weight
+            // - path flags
+            // - path eta scale for russian roulette
+            Sampler *samplers[IntN];
+            Ray2 *rays[IntN];
+            LaneF32<IntN> u;
+            Vec2lf<IntN> uv;
+
+            BSDFSample<IntN> sample = bsdf.GenerateSample(-ray.d, u, uv, TransportMode ::Radiance, BSDFFlags::RT);
+            MaskF32<IntN> mask;
+            mask = Select(sample.pdf == 0.f, 1, 0);
+            beta *= sample.f * AbsDot(intr.shading.n, sample.wi) / sample.pdf;
+
+            // TODO: path flags, set specular bounce to true
+            // pathFlags &= bsdf.IsSpecular();
+
+            // Spawn a new ray, push to the ray queue
         }
 
         // Return bsdf lobes
-        // Material::Evaluate(aosoaIntrs);
 
         // Material calculation
         ScratchEnd(temp);

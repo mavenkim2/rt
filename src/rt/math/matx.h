@@ -474,6 +474,8 @@ struct AffineSpace
     }
 
     AffineSpace(ZeroTy) : c0(0), c1(0), c2(0), c3(0) {}
+    AffineSpace(const Vec3f &a, const Vec3f &b, const Vec3f &c)
+        : c0(a), c1(b), c2(c), c3(0) {}
     AffineSpace(const Vec3f &a, const Vec3f &b, const Vec3f &c, const Vec3f &d)
         : c0(a), c1(b), c2(c), c3(d) {}
     AffineSpace(f32 a, f32 b, f32 c, f32 d,
