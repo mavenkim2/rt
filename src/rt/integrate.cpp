@@ -249,28 +249,87 @@ void InitializePtex()
     cache         = Ptex::PtexCache::create(maxFiles, maxMem, true, 0, &errorHandler);
 }
 
+typedef u32 PathFlags;
+enum
+{
+    PathFlags_SpecularBounce,
+};
+
+struct RayState
+{
+    SampledSpectrum L;
+    SampledSpectrum beta;
+    SampledSpectrum etaScale;
+    PathFlags pathFlags;
+    u32 depth;
+    Sampler sampler;
+};
+
+typedef u32 RayStateHandle;
+
+static const u32 queueLengths = 512;
+struct RayQueue
+{
+    // lightpdf, le
+    RayStateHandles queue[queueLengths];
+    u32 count;
+    void Push()
+    {
+        if (count > queueFlushSize)
+        {
+            u32 alignedCount = count & (IntN - 1);
+            u32 start        = count - alignedCount;
+            for (u32 i = start; i < start + alignedCount; i++)
+            {
+                // either
+                // 1: need a queue for every pair of material x light type, which is just infeasible
+                // 2: a queue for only sampling the light and doing nothing else????
+                // 3: don't simd light sampling...
+            }
+        }
+    }
+};
+
 // TODO: one for each type of material
-template <typename Material, i32 length = 512>
+// TODO: if no intersection, then shove to the end? beginning? of the queue
+template <typename Material>
 struct ShadingQueuePtex
 {
-    static const u32 queueFlushSize = length / 2;
-    SurfaceInteraction queue[length];
-    u32 count;
+    using BxDF = Material::BxDF;
+    SurfaceInteraction queue[queueLengths];
+    u32 count = 0;
+    ShadingQueuePtex() {}
     void Flush() // SortKey *keys, SurfaceInteraction *values, u32 num)
     {
         TempArena temp = ScratchStart(0, 0);
-        // SortKey *keys0 = PushArrayNoZero(temp.arena, SortKey, queueFlushSize);
-        // SortKey *keys1 = PushArrayNoZero(temp.arena, SortKey, queueFlushSize);
+
+        u32 alignedCount = count & (IntN - 1);
+        count -= alignedCount;
+        u32 start = count;
+
+        // IMPORTANT:
+        // for ptex, radix sort using:
+        // light type, mesh id, face id
+        // for no ptex, radix sort using:
+        // light type, uv
+        // Create radix sort keys, get the light type
+
+        SortKey *keys0 = PushArrayNoZero(temp.arena, SortKey, alignedCount);
+        SortKey *keys1 = PushArrayNoZero(temp.arena, SortKey, alignedCount);
         SortKey keys0[queueFlushSize];
         SortKey keys1[queueFlushSize];
-
-        count -= queueFlushSize;
-        // Create radix sort keys
-        for (u32 i = 0; i < queueFlushSize; i++)
+        f32 *pmfs            = PushArrayNoZero(temp.arena, f32, alignedCount);
+        LightHandle *handles = PushArrayNoZero(temp.arena, LightHandle, alignedCount);
+        for (u32 i = 0; i < alignedCount; i++)
         {
-            SurfaceInteraction &intr = queue[count + i];
-            keys0[i].value           = intr.GenerateKey();
-            keys0[i].index           = count + i;
+            SurfaceInteraction &intr = queue[start + i];
+            // TODO: get this somehow
+            Sampler sampler;
+            LightHandle handle = UniformLightSample(sampler.Get1D(), &pmfs[i]);
+            handles[i]         = handle;
+
+            keys0[i].value = GenerateKey(intr, handle.GetType());
+            keys0[i].index = start + i;
         }
 
         // Radix sort
@@ -305,41 +364,96 @@ struct ShadingQueuePtex
         // Convert to AOSOA
         u32 limit = queueFlushSize % (IntN);
         // SurfaceInteractionsN aosoaIntrs[queueFlushSize / IntN];
-        for (u32 i = 0, aosoaIndex = 0; i < queueFlushSize; i += IntN, aosoaIndex++)
+        for (u32 i = 0; i < alignedCount;) //, aosoaIndex = 0; i < queueFlushSize; i += IntN, aosoaIndex++)
         {
             const u32 prefetchDistance = IntN * 2;
-            alignas(32) SurfaceInteraction *intrs[IntN];
-            for (u32 j = 0; j < IntN; j++)
+            alignas(32) SurfaceInteraction intrs[IntN];
+            if (i + prefetchDistance < alignedCount)
             {
-                _mm_prefetch((char *)&queue[keys[i + prefetchDistance + j].index], _MM_HINT_T0);
-                intrs[j] = queue[keys0[i + j].index];
+                for (u32 j = 0; j < IntN; j++)
+                {
+                    _mm_prefetch((char *)&queue[keys[i + prefetchDistance + j].index], _MM_HINT_T0);
+                    intrs[j] = queue[keys0[i + j].index];
+                }
             }
             SurfaceInteractionsN aosoaIntrs; //&out = aosoaIntrs[aosoaIndex];
-                                             //
                                              // Transpose p, n, uv
             Transpose(intrs, aosoaIntrs);
             // Transpose8x8(Lane8F32::Load(&intrs[0]), Lane8F32::Load(&intrs[1]), Lane8F32::Load(&intrs[2]), Lane8F32::Load(&intrs[3]),
             //              Lane8F32::Load(&intrs[4]), Lane8F32::Load(&intrs[5]), Lane8F32::Load(&intrs[6]), Lane8F32::Load(&intrs[7]),
             //              out.p.x, out.p.y, out.p.z, out.n.x, out.n.y, out.n.z, out.uv.x, out.uv.y);
-
             // Transpose the rest
-            // ...
-            Material::BSDF bsdf = Material::Evaluate(aosoaIntrs);
 
-            if constexpr (bsdf::IsSpecular)
+            MaskF32 continuationMask = LaneIF32::Mask<true>();
+            BxDF bsdf                = Material::Evaluate(aosoaIntrs);
+
+            template <i32 width>
+            struct LightSamples
             {
+                SampledSpectrum Le;
+                Vec3IF32 samplePoint;
+                LaneIF32 pdf;
+            };
+
+            Sampler samplers[];
+
+            //////////////////////////////
+            // Next event estimation
+            //
+            if constexpr (!BxDF::IsSpecular)
+            {
+                RayStateHandle rayStateHandles[IntN];
+
+                // Sample lights
+                alignas(32) LightHandle itrHandles[IntN];
+                alignas(32) f32 pdfs[IntN];
+                for (u32 j = 0; j < IntN; j++)
+                {
+                    u32 index     = keys[i + j].index - start;
+                    itrHandles[j] = handles[index];
+                    pdfs[j]       = pmfs[index];
+                }
+                LaneIU32 handles  = LaneIU32::Load(itrHandles);
+                u32 type          = itrHandles[0].GetType();
+                LaneIU32 laneType = LaneIU32(itrHandles[0].GetType());
+                MaskF32 mask      = (handles & laneType) == laneType;
+                u32 maskBits      = Movemask(mask);
+                u32 add           = PopCount(maskBits);
+                LaneIF32 lightPdf = LaneIF32::Load(pdfs);
+
+                // TODO: get samplers
+                LightSamples sample = SampleLi(type, handles, aosoaIntrs, lambda?, samplers);//scene, lightHandle, intr, lambda, u);
+                mask &= sample.pdf == 0.f;
+                lightPdf *= sample.pdf;
+                // f32 scatterPdf;
+                // SampledSpectrum f_hat;
+                Vec3IF32 wi = Normalize(sample.samplePoint - aosoaIntrs.p);
+
+                LaneIF32 scatterPdf;
+                SampledSpectrum f = Material::BSDF::EvaluateSample(-ray.d, wi, scatterPdf, TransportMode::Radiance) *
+                                    AbsDot(aosoaIntrs.shading.n, wi);
+                // TODO: need to == with 0.f for every wavelength, and then combine together
+                mask &= f.GetMask();
+
+                maskBits = Movemask(mask);
+                // Shoot occlusion rays
+                for (u32 j = 0; j < IntN; j++)
+                {
+                    if (maskBits & (1 << j))
+                    {
+                        // Shoot occlusion ray
+                        // maskBits &= Occluded();
+                    }
+                }
+
+                // Power heuristic
+                LaneIF32 w_l = lightPdf / (Sqr(lightPdf) + Sqr(scatterPdf));
+                // TODO: to prevent atomics, need to basically have thread permanently take a tile
+                L += Select(LaneIF32::Mask(maskbits), f * beta * w_l * sample.Le, 0.f);
+                i += add;
             }
             else
             {
-                // Push to next event estimation queue
-                RayStateHandle rayStateHandles[IntN];
-                lightSampleQueue.Push(rayStateHandles, intrs);
-
-                LaneIF32 pdf;
-                Vec3IF32 wi;
-                // TODO: how do I get wi?
-                NEESample neeSample = Material::BSDF::EvaluateSample(-ray.d, wi, scatterPdf, TransportMode::Radiance);
-                // occlusion ray queue
             }
 
             // TODO: things I need to simd:
@@ -348,20 +462,30 @@ struct ShadingQueuePtex
             // - path throughput weight
             // - path flags
             // - path eta scale for russian roulette
+
+            // TODO: should I copy data (e.g. path throughput weights) so that stages can happen in whatever order? otherwise,
+            // i need to ensure that next event estimation, etc. happens before the bsdf sample is generated, otherwise the
+            // path throughput weight needed for nee is lost
             Sampler *samplers[IntN];
             Ray2 *rays[IntN];
             LaneF32<IntN> u;
             Vec2lf<IntN> uv;
 
             BSDFSample<IntN> sample = bsdf.GenerateSample(-ray.d, u, uv, TransportMode ::Radiance, BSDFFlags::RT);
-            MaskF32<IntN> mask;
+            MaskF32 mask;
             mask = Select(sample.pdf == 0.f, 1, 0);
             beta *= sample.f * AbsDot(intr.shading.n, sample.wi) / sample.pdf;
+
+            // store back path throughput
+            // store back radiance
+            // store back depth
+            // store back eta scale
 
             // TODO: path flags, set specular bounce to true
             // pathFlags &= bsdf.IsSpecular();
 
             // Spawn a new ray, push to the ray queue
+            // Russian roulette
         }
 
         // Return bsdf lobes

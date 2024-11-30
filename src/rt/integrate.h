@@ -94,7 +94,8 @@ struct SurfaceInteractions
     LaneNF32 tHit;
     LaneNU32 lightIndices;
     LaneNU32 materialIDs;
-    LaneNU32 faceIndex;
+    LaneNU32 faceIndices;
+    LaneNU32 rayStateHandles;
     // LaneIU32 volumeIndices;
 
     SurfaceInteractions() {}
