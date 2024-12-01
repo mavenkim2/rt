@@ -176,6 +176,18 @@ inline Vec2<T> ClampZero(const Vec2<T> &v)
     return Vec2<T>(Max(zero, v.x), Max(zero, v.y));
 }
 
+template <typename T>
+__forceinline Vec2<T> Select(const Mask<T> &mask, const Vec2<T> &a, const Vec2<T> &b)
+{
+    return Vec2<T>(Select(mask, a.x, b.x), Select(mask, a.y, b.y));
+}
+
+template <typename T>
+__forceinline Vec2<T> Select(const Vec2<T> &mask, const Vec2<T> &a, const Vec2<T> &b)
+{
+    return Vec2<T>(Select(mask.x, a.x, b.x), Select(mask.y, a.y, b.y));
+}
+
 typedef Vec2<u32> Vec2u;
 typedef Vec2<i32> Vec2i;
 typedef Vec2<f32> Vec2f;

@@ -137,98 +137,23 @@ SampledSpectrum SpectrumCRTP<T>::Sample(void *ptr, const SampledWavelengths &lam
     return static_cast<T *>(ptr)->Sample(lambda);
 }
 
-//////////////////////////////
-// BSDF Methods
-//
-
-SampledSpectrum BSDF::EvaluateSample(Vec3f wo, Vec3f wi, f32 &pdf, TransportMode mode) const
-{
-    wi = frame.ToLocal(wi);
-    wo = frame.ToLocal(wo);
-    if (wo.z == 0) return {};
-    void *ptr              = GetPtr();
-    u32 tag                = GetTag();
-    SampledSpectrum result = bsdfMethods[tag].EvaluateSample(ptr, wo, wi, pdf, mode);
-    return result;
-}
-
-BSDFSample BSDF::GenerateSample(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags sampleFlags) const
-{
-    wo              = frame.ToLocal(wo);
-    BSDFFlags flags = Flags();
-    if (wo.z == 0 || !EnumHasAnyFlags(Flags(), sampleFlags)) return {};
-    void *ptr         = GetPtr();
-    u32 tag           = GetTag();
-    BSDFSample result = bsdfMethods[tag].GenerateSample(ptr, wo, uc, u, mode, sampleFlags);
-    if (!result.IsValid() || result.f == 0 || result.pdf == 0 || result.wi.z == 0) return {};
-    result.wi = frame.FromLocal(result.wi);
-    return result;
-}
-
-f32 BSDF::PDF(Vec3f wo, Vec3f wi, TransportMode mode, BSDFFlags sampleFlags) const
-{
-    wo = frame.ToLocal(wo);
-    wi = frame.ToLocal(wi);
-    if (wo.z == 0 || !EnumHasAnyFlags(Flags(), sampleFlags)) return {};
-    void *ptr  = GetPtr();
-    u32 tag    = GetTag();
-    f32 result = bsdfMethods[tag].PDF(ptr, wo, wi, mode, sampleFlags);
-    return result;
-}
-
-SampledSpectrum BSDF::rho(Vec3f wo, f32 *uc, Vec2f *u, u32 numSamples) const
-{
-    SampledSpectrum r(0.f);
-    for (u32 i = 0; i < numSamples; i++)
-    {
-        BSDFSample sample = GenerateSample(wo, uc[i], u[i], TransportMode::Radiance, BSDFFlags::All);
-        if (sample.IsValid())
-        {
-            r += sample.f * AbsCosTheta(sample.wi) / sample.pdf;
-        }
-    }
-    return r / (f32)numSamples;
-}
-
-SampledSpectrum BSDF::rho(Vec2f *u1, f32 *uc, Vec2f *u2, u32 numSamples) const
-{
-    SampledSpectrum r(0.f);
-    for (u32 i = 0; i < numSamples; i++)
-    {
-        Vec3f wo = SampleUniformHemisphere(u1[i]);
-        if (wo.z == 0) continue;
-        f32 pdfo      = UniformHemispherePDF();
-        BSDFSample bs = GenerateSample(wo, uc[i], u2[i], TransportMode::Radiance, BSDFFlags::All);
-        r += bs.f + AbsCosTheta(bs.wi) * AbsCosTheta(wo) / (pdfo * bs.pdf);
-    }
-    return r / (PI * numSamples);
-}
-
-BSDFFlags BSDF::Flags() const
-{
-    void *ptr        = GetPtr();
-    u32 tag          = GetTag();
-    BSDFFlags result = bsdfMethods[tag].Flags(ptr);
-    return result;
-}
-
 template <class T>
-SampledSpectrum BSDFCRTP<T>::EvaluateSample(void *ptr, Vec3f wo, Vec3f wi, f32 &pdf, TransportMode mode)
+SampledSpectrum BxDFCRTP<T>::EvaluateSample(void *ptr, Vec3f wo, Vec3f wi, f32 &pdf, TransportMode mode)
 {
     return static_cast<T *>(ptr)->EvaluateSample(wo, wi, pdf, mode);
 }
 template <class T>
-BSDFSample BSDFCRTP<T>::GenerateSample(void *ptr, Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags flags)
+BSDFSample BxDFCRTP<T>::GenerateSample(void *ptr, Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BxDFFlags flags)
 {
     return static_cast<T *>(ptr)->GenerateSample(wo, uc, u, mode, flags);
 }
 template <class T>
-f32 BSDFCRTP<T>::PDF(void *ptr, Vec3f wo, Vec3f wi, TransportMode mode, BSDFFlags flags)
+f32 BxDFCRTP<T>::PDF(void *ptr, Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags flags)
 {
     return static_cast<T *>(ptr)->PDF(wo, wi, mode, flags);
 }
 template <class T>
-BSDFFlags BSDFCRTP<T>::Flags(void *ptr)
+BxDFFlags BxDFCRTP<T>::Flags(void *ptr)
 {
     return static_cast<T *>(ptr)->Flags();
 }

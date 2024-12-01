@@ -21,6 +21,7 @@
 #include "lights.h"
 #include "scene.h"
 #include "bvh.h"
+#include "bxdf.h"
 #include "bsdf.h"
 #include "low_discrepancy.h"
 #include "sampler.h"
@@ -40,6 +41,7 @@
 #include "memory.cpp"
 #include "scene.cpp"
 #include "bvh.cpp"
+#include "bsdf.cpp"
 
 #include "lights.cpp"
 #include "integrate.cpp"

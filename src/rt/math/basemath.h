@@ -69,6 +69,7 @@ __forceinline f32 Rcp(const f32 x)
 __forceinline f32 Cos(const f32 x) { return ::cosf(x); }
 __forceinline f32 Sin(const f32 x) { return ::sinf(x); }
 __forceinline f32 Tan(const f32 x) { return ::tanf(x); }
+__forceinline f32 Atan2(const f32 y, const f32 x) { return ::atan2f(y, x); }
 __forceinline f32 Ceil(const f32 x) { return ::ceilf(x); }
 __forceinline f32 Floor(const f32 x) { return ::floorf(x); }
 __forceinline f32 Pow(const f32 x, const f32 y) { return ::powf(x, y); }

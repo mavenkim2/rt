@@ -7,18 +7,6 @@
 namespace rt
 {
 static const f32 tMinEpsilon = 0.00001f;
-// lane width for integration
-#define IntN 1
-#if IntN == 1
-typedef bool MaskF32;
-#else
-typedef LaneF32<IntN> MaskF32;
-#endif
-typedef LaneF32<IntN> LaneIF32;
-typedef LaneU32<IntN> LaneIU32;
-typedef Vec2<LaneIF32> Vec2IF32;
-typedef Vec3<LaneIF32> Vec3IF32;
-typedef Vec4<LaneIF32> Vec4IF32;
 
 template <typename T, i32 i>
 struct Dual;
@@ -142,11 +130,11 @@ Ray2 Transform(const AffineSpace &m, const Ray2 &r)
 
 struct RayDifferential
 {
-    Vec3IF32 o;
-    Vec3IF32 d;
-    LaneIF32 t;
-    Vec3IF32 rxOrigin, ryOrigin;
-    Vec3IF32 rxDir, ryDir;
+    Vec3NF32 o;
+    Vec3NF32 d;
+    LaneNF32 t;
+    Vec3NF32 rxOrigin, ryOrigin;
+    Vec3NF32 rxDir, ryDir;
 };
 
 struct VolumeHandle

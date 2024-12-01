@@ -285,9 +285,19 @@ typedef Vec3<u32> Vec3u;
 typedef Vec3<i32> Vec3i;
 
 template <i32 K>
+using Vec2lf = Vec2<LaneF32<K>>;
+typedef Vec2lf<4> Vec2lf4;
+typedef Vec2lf<8> Vec2lf8;
+
+template <i32 K>
 using Vec3lf = Vec3<LaneF32<K>>;
 typedef Vec3lf<4> Vec3lf4;
 typedef Vec3lf<8> Vec3lf8;
+
+template <i32 K>
+using Vec4lf = Vec4<LaneF32<K>>;
+typedef Vec4lf<4> Vec4lf4;
+typedef Vec4lf<8> Vec4lf8;
 
 template <i32 K>
 using Vec3lu = Vec3<LaneU32<K>>;

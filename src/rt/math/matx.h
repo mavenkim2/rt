@@ -447,6 +447,44 @@ inline Mat4 Inverse(const Mat4 &a)
     return res;
 }
 
+template <typename T>
+struct LinearSpace
+{
+    union
+    {
+        struct
+        {
+            T x, y, z;
+        };
+        T e[3];
+    };
+    LinearSpace() {}
+    __forceinline LinearSpace(ZeroTy) : x(zero), y(zero), z(zero) {}
+    __forceinline LinearSpace(const T &a, const T &b, const T &c) : x(a), y(b), z(c) {}
+    __forceinline LinearSpace(const LinearSpace &space) : x(space.x), y(space.y), z(space.z) {}
+
+    static LinearSpace<T> FromXZ(const T &x, const T &z)
+    {
+        return LinearSpace<T>(x, Cross(z, x), z);
+    }
+    static LinearSpace<T> FromXY(const T &x, const T &y)
+    {
+        return LinearSpace<T>(x, y, Cross(x, y));
+    }
+
+    T ToLocal(const T &a) const
+    {
+        return T(Dot(x, a), Dot(y, a), Dot(z, a));
+    }
+
+    T FromLocal(const T &a) const
+    {
+        return FMA(a.x, x, FMA(a.y, y, a.z * z));
+    }
+};
+
+typedef LinearSpace<Vec3f> LinearSpace3f;
+
 // NOTE: row major affine transformation matrix
 struct AffineSpace
 {

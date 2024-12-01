@@ -184,6 +184,11 @@ __forceinline Lane4F32 FMS(const Lane4F32 &a, const Lane4F32 &b, const Lane4F32 
 }
 
 __forceinline Lane4F32 Sqrt(const Lane4F32 &a) { return _mm_sqrt_ps(a); }
+__forceinline Lane4F32 SafeSqrt(const Lane4F32 &a)
+{
+    return _mm_sqrt_ps(Select(a < 0.f, 0.f, a));
+}
+
 __forceinline Lane4F32 Rsqrt(const Lane4F32 &a)
 {
 #ifdef __AVX512VL__
@@ -220,6 +225,11 @@ __forceinline Lane4F32 FlipSign(const Lane4F32 &a)
 {
     static const __m128 signFlipMask = _mm_setr_ps(-0.f, -0.f, -0.f, -0.f);
     return _mm_xor_ps(a, signFlipMask);
+}
+__forceinline Lane4F32 Copysign(const Lane4F32 &mag, const Lane4F32 &sign)
+{
+    static const __m128 signFlipMask = _mm_setr_ps(-0.f, -0.f, -0.f, -0.f);
+    return _mm_or_ps(Abs(mag), _mm_and_ps(sign, signFlipMask));
 }
 
 __forceinline Lane4F32 operator-(const Lane4F32 &a)

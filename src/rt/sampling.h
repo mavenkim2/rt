@@ -1,47 +1,46 @@
-namespace rt 
+namespace rt
 {
-inline Vec2f SampleUniformDiskPolar(Vec2f u)
+
+template <typename T>
+inline Vec2<T> SampleUniformDiskPolar(Vec2<T> u)
 {
-    f32 r     = sqrtf(u[0]);
-    f32 theta = 2 * PI * u[1];
-    return Vec2f(r * cosf(theta), r * sinf(theta));
+    T r     = Sqrt(u[0]);
+    T theta = 2 * PI * u[1];
+    return Vec2<T>(r * Cos(theta), r * Sin(theta));
 }
 
-inline Vec2f InvertUniformDiskPolarSample(Vec2f sample)
+template <typename T>
+inline Vec2<T> InvertUniformDiskPolarSample(const Vec2<T> &sample)
 {
-    f32 theta = atan2f(sample.y, sample.x);
-    if (theta < 0) theta += 2 * PI;
-    return Vec2f(sample.x * sample.x + sample.y * sample.y, theta / (2 * PI));
+    T theta = Atan(sample.y, sample.x);
+    theta += Select(theta < 0, T(2 * PI), T(0));
+    return Vec2<T>(sample.x * sample.x + sample.y * sample.y, theta / (2 * PI));
 }
 
-inline Vec2f SampleUniformDiskConcentric(Vec2f u)
+template <typename T>
+inline Vec2<T> SampleUniformDiskConcentric(const Vec2<T> &u)
 {
-    Vec2f uOffset = 2.f * u - Vec2f(1, 1);
+    Vec2<T> uOffset = T(2.f * u) - Vec2<T>(1, 1);
     if (uOffset.x == 0 && uOffset.y == 0)
     {
-        return Vec2f(0, 0);
+        return Vec2<T>(0, 0);
     }
 
-    f32 theta, r;
-    if (std::abs(uOffset.x) > std::abs(uOffset.y))
-    {
-        r     = uOffset.x;
-        theta = PI / 4 * (uOffset.y / uOffset.x);
-    }
-    else
-    {
-        r     = uOffset.y;
-        theta = PI / 2 - PI / 4 * (uOffset.x / uOffset.y);
-    }
-    return r * Vec2f(std::cos(theta), std::sin(theta));
+    Mask<T> mask = Abs(uOffset.x) > Abs(uOffset.y);
+    T r          = Select(mask, uOffset.x, uOffset.y);
+    T theta      = Select(mask, PI / 4 * (uOffset.y / uOffset.x), PI / 2 - PI / 4 * (uOffset.x / uOffset.y));
+
+    Vec2<T> result = Select(uOffset.x == 0 && uOffset.y == 0, Vec2<T>(0, 0), r * Vec2<T>(Cos(theta), Sin(theta)););
+    return result;
 }
 
-inline Vec3f SampleUniformHemisphere(Vec2f u)
+template <typename T>
+inline Vec3<T> SampleUniformHemisphere(const Vec2<T> &u)
 {
-    f32 z   = u[0];
-    f32 r   = SafeSqrt(1 - z * z);
-    f32 phi = 2 * PI * u[1];
-    return {r * std::cos(phi), r * std::sin(phi), z};
+    T z   = u[0];
+    T r   = SafeSqrt(1 - z * z);
+    T phi = 2 * PI * u[1];
+    return {r * Cos(phi), r * Sin(phi), z};
 }
 
 inline f32 UniformHemispherePDF()
@@ -49,19 +48,21 @@ inline f32 UniformHemispherePDF()
     return Inv2Pi;
 }
 
-inline Vec2f InvertUniformHemisphereSample(Vec3f w)
+template <typename T>
+inline Vec2<T> InvertUniformHemisphereSample(const Vec3<T> &w)
 {
-    f32 phi = atan2f(w.y, w.x);
-    if (phi < 0) phi += 2 * PI;
-    return Vec2f(w.z, phi / (2 * PI));
+    T phi = Atan2(w.y, w.x);
+    phi += Select(phi < 0, T(2 * PI), T(0));
+    return Vec2<T>(w.z, phi / (2 * PI));
 }
 
-inline Vec3f SampleUniformSphere(Vec2f u)
+template <typename T>
+inline Vec3<T> SampleUniformSphere(const Vec2<T> &u)
 {
-    f32 z   = 1 - 2 * u[0];
-    f32 r   = SafeSqrt(1 - z * z);
-    f32 phi = 2 * PI * u[1];
-    return {r * cosf(phi), r * sinf(phi), z};
+    T z   = 1 - 2 * u[0];
+    T r   = SafeSqrt(1 - z * z);
+    T phi = 2 * PI * u[1];
+    return {r * Cos(phi), r * Sin(phi), z};
 }
 
 inline f32 UniformSpherePDF()
@@ -69,22 +70,25 @@ inline f32 UniformSpherePDF()
     return Inv4Pi;
 }
 
-inline Vec2f InvertUniformSphereSample(Vec3f w)
+template <typename T>
+inline Vec2<T> InvertUniformSphereSample(const Vec3<T> &w)
 {
-    f32 phi = atan2f(w.y, w.x);
-    if (phi < 0) phi += 2 * PI;
-    return Vec2f((1 - w.z) / 2.f, phi / (2 * PI));
+    T phi = Atan2(w.y, w.x);
+    phi += Select(phi < 0, T(2 * PI), T(0));
+    return Vec2<T>((1 - w.z) / 2, phi / (2 * PI));
 }
 
 // using malley method
-inline Vec3f SampleCosineHemisphere(Vec2f u)
+template <typename T>
+inline Vec3<T> SampleCosineHemisphere(const Vec2<T> &u)
 {
-    Vec2f d = SampleUniformDiskConcentric(u);
-    f32 z  = SafeSqrt(1 - d.x * d.x - d.y * d.y);
-    return Vec3f(d.x, d.y, z);
+    Vec2<T> d = SampleUniformDiskConcentric(u);
+    T z       = SafeSqrt(1 - d.x * d.x - d.y * d.y);
+    return Vec3<T>(d.x, d.y, z);
 }
 
-inline f32 CosineHemispherePDF(f32 cosTheta)
+template <typename T>
+inline T CosineHemispherePDF(T cosTheta)
 {
     return cosTheta * InvPi;
 }
@@ -93,4 +97,4 @@ inline f32 CosineHemispherePDF(f32 cosTheta)
 // {
 // return InvertUniformDisk
 // }
-}
+} // namespace rt

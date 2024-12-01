@@ -316,104 +316,108 @@ inline LaneVec2i EncodeMorton2(LaneU32 x, LaneU32 y)
 //////////////////////////////
 // Complex numbers
 //
-struct complex
+
+template <typename T>
+struct Complex
 {
-    complex(f32 real) : real(real), im(0) {}
-    complex(f32 real, f32 im) : real(real), im(im) {}
+    T real, im;
 
-    complex operator-() const { return {-real, -im}; }
+    Complex(const T &real) : real(real), im(0) {}
+    Complex(const T &real, const T &im) : real(real), im(im) {}
 
-    complex operator+(complex z) const { return {real + z.real, im + z.im}; }
+    Complex operator-() const { return {-real, -im}; }
 
-    complex operator-(complex z) const { return {real - z.real, im - z.im}; }
+    Complex operator+(const Complex<T> &z) const { return {real + z.real, im + z.im}; }
 
-    complex operator*(complex z) const
+    Complex operator-(const Complex<T> &z) const { return {real - z.real, im - z.im}; }
+
+    Complex operator*(const Complex<T> &z) const
     {
         return {real * z.real - im * z.im, real * z.im + im * z.real};
     }
 
-    complex operator/(complex z) const
+    Complex operator/(const Complex<T> &z) const
     {
         f32 scale = 1 / (z.real * z.real + z.im * z.im);
         return {scale * (real * z.real + im * z.im), scale * (im * z.real - real * z.im)};
     }
 
-    friend complex operator+(f32 value, complex z)
+    friend Complex operator+(const T &value, const Complex<T> &z)
     {
-        return complex(value) + z;
+        return Complex(value) + z;
     }
 
-    friend complex operator-(f32 value, complex z)
+    friend Complex operator-(const T &value, const Complex<T> &z)
     {
-        return complex(value) - z;
+        return Complex(value) - z;
     }
 
-    friend complex operator*(f32 value, complex z)
+    friend Complex operator*(const T &value, const Complex<T> &z)
     {
-        return complex(value) * z;
+        return Complex(value) * z;
     }
 
-    friend complex operator/(f32 value, complex z)
+    friend Complex operator/(const T &value, const Complex<T> &z)
     {
-        return complex(value) / z;
+        return Complex(value) / z;
     }
 
-    f32 Norm() const
+    LaneNF32 Norm() const
     {
         return real * real + im * im;
     }
-
-    f32 real, im;
 };
 
-f32 Abs(const complex &z)
+template <typename T>
+T Abs(const Complex<T> &z)
 {
     return Sqrt(z.Norm());
 }
 
-complex Sqrt(const complex &z)
+template <typename T>
+Complex<T> Sqrt(const Complex<T> &z)
 {
-    f32 n  = Abs(z);
-    f32 t1 = sqrtf(.5f * (n + Abs(z.real)));
-    f32 t2 = .5f * z.im / t1;
+    T n  = Abs(z);
+    T t1 = Sqrt(.5 * (n + Abs(z.real)));
+    T t2 = .5 * z.im / t1;
 
-    if (n == 0)
-        return 0;
+    if (All(n == 0))
+        return Complex<T>(0);
 
-    if (z.real >= 0)
-        return {t1, t2};
-    else
-        return {Abs(t2), std::copysign(t1, z.im)};
+    Complex<T> out;
+    out.real = Select(z.real >= 0, t1, Abs(t2));
+    out.im   = Select(z.real >= 0, t2, Copysign(t1, z.im));
+    return out;
 }
 
-struct Frame
-{
-    Vec3f x;
-    Vec3f y;
-    Vec3f z;
-
-    Frame() : x(1, 0, 0), y(0, 1, 0), z(0, 0, 1) {}
-
-    Frame(Vec3f x, Vec3f y, Vec3f z) : x(x), y(y), z(z) {}
-
-    static Frame FromXZ(Vec3f x, Vec3f z)
-    {
-        return Frame(x, Cross(z, x), z);
-    }
-    static Frame FromXY(Vec3f x, Vec3f y)
-    {
-        return Frame(x, y, Cross(x, y));
-    }
-    Vec3f ToLocal(Vec3f a) const
-    {
-        return Vec3f(Dot(x, a), Dot(y, a), Dot(z, a));
-    }
-
-    Vec3f FromLocal(Vec3f a) const
-    {
-        return a.x * x + a.y * y + a.z * z;
-    }
-};
+// struct Frame
+// {
+//     Vec3f x;
+//     Vec3f y;
+//     Vec3f z;
+//
+//     Frame() : x(1, 0, 0), y(0, 1, 0), z(0, 0, 1) {}
+//
+//     Frame(Vec3f x, Vec3f y, Vec3f z) : x(x), y(y), z(z) {}
+//
+//     static Frame FromXZ(Vec3f x, Vec3f z)
+//     {
+//         return Frame(x, Cross(z, x), z);
+//     }
+//     static Frame FromXY(Vec3f x, Vec3f y)
+//     {
+//         return Frame(x, y, Cross(x, y));
+//     }
+//     Vec3f ToLocal(Vec3f a) const
+//     {
+//         return Vec3f(Dot(x, a), Dot(y, a), Dot(z, a));
+//     }
+//
+//     Vec3f FromLocal(Vec3f a) const
+//     {
+//         return a.x * x + a.y * y + a.z * z;
+//     }
+// };
 
 //////////////////////////////
 // Octahedral encoding

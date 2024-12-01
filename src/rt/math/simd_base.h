@@ -17,6 +17,19 @@ namespace rt
 #endif
 #endif
 
+// lane width for integration
+#define IntN 1
+#if IntN == 1
+typedef bool MaskF32;
+#else
+typedef LaneF32<IntN> MaskF32;
+#endif
+typedef LaneF32<IntN> LaneNF32;
+typedef LaneU32<IntN> LaneNU32;
+typedef Vec2<LaneNF32> Vec2NF32;
+typedef Vec3<LaneNF32> Vec3NF32;
+typedef Vec4<LaneNF32> Vec4NF32;
+
 static const float one_over_255  = 1.0f / 255.0f;
 static const float min_rcp_input = 1E-18f; // for abs(x) >= min_rcp_input the newton raphson rcp calculation does not fail
 
@@ -234,6 +247,39 @@ struct LaneF32
     }
 };
 
+template <i32 K>
+__forceinline LaneF32<K> Cos(const LaneF32<K> &a)
+{
+    alignas(4 * K) f32 result[4];
+    for (u32 i = 0; i < 4; i++)
+    {
+        result[i] = Cos(a[i]);
+    }
+    return LaneF32<K>::Load(result);
+}
+
+template <i32 K>
+__forceinline LaneF32<K> Sin(const LaneF32<K> &a)
+{
+    alignas(4 * K) f32 result[4];
+    for (u32 i = 0; i < 4; i++)
+    {
+        result[i] = Sin(a[i]);
+    }
+    return LaneF32<K>::Load(result);
+}
+
+template <i32 K>
+__forceinline LaneF32<K> Atan2(const LaneF32<K> &y, const LaneF32<K> &x)
+{
+    alignas(4 * K) f32 result[4];
+    for (u32 i = 0; i < 4; i++)
+    {
+        result[i] = Atan2(y[i], x[i]);
+    }
+    return LaneF32<K>::Load(result);
+}
+
 template <>
 struct LaneF32<1>
 {
@@ -257,6 +303,8 @@ struct LaneF32<1>
         Assert(v);
         return Lane1F32(((f32 *)ptr)[0]);
     }
+    template <bool b>
+    static __forceinline bool Mask() { return b; }
 };
 
 template <i32 N>
@@ -333,8 +381,14 @@ __forceinline Lane1F32 Select(const Lane1F32 mask, const Lane1F32 a, const Lane1
 __forceinline Lane1F32 FMA(const Lane1F32 a, const Lane1F32 b, const Lane1F32 c) { return std::fma(a.value, b.value, c.value); }
 __forceinline Lane1F32 FMS(const Lane1F32 a, const Lane1F32 b, const Lane1F32 c) { return std::fma(a.value, b.value, -c.value); }
 __forceinline Lane1F32 Rsqrt(const Lane1F32 a) { return 1.f / Sqrt(a.value); }
-
 __forceinline bool operator!=(const Lane1U32 &a, const Lane1U32 &b) { return a.value != b.value; }
+
+template <typename T>
+using Mask<T> = T;
+template <>
+using Mask<f32> = bool;
+template <>
+using Mask<Lane1F32> = bool;
 
 static const __m128 _mm_lookupmask_ps[16] = {
     _mm_castsi128_ps(_mm_set_epi32(0, 0, 0, 0)),

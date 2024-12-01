@@ -198,67 +198,60 @@ template struct SpectrumCRTP<RGBIlluminantSpectrum>;
 //////////////////////////////
 // BSDF
 //
-struct DiffuseBSDF;
-struct ConductorBSDF;
-struct DielectricBSDF;
-struct ThinDielectricBSDF;
+struct DiffuseBxDF;
+struct ConductorBxDF;
+struct DielectricBxDF;
+struct ThinDielectricBxDF;
 
 enum class TransportMode;
 struct BSDFSample;
-enum class BSDFFlags;
+enum class BxDFFlags;
 
-using BSDFTaggedPointer = TaggedPointer<DiffuseBSDF, ConductorBSDF, DielectricBSDF, ThinDielectricBSDF>;
-struct BSDFMethods
+using BxDFTaggedPointer = TaggedPointer<DiffuseBxDF, ConductorBxDF, DielectricBxDF, ThinDielectricBxDF>;
+struct BxDFMethods
 {
     SampledSpectrum (*EvaluateSample)(void *, Vec3f, Vec3f, f32 &, TransportMode);
-    BSDFSample (*GenerateSample)(void *, Vec3f, f32, Vec2f, TransportMode, BSDFFlags);
-    f32 (*PDF)(void *, Vec3f wo, Vec3f wi, TransportMode mode, BSDFFlags flags);
-    BSDFFlags (*Flags)(void *);
+    BSDFSample (*GenerateSample)(void *, Vec3f, f32, Vec2f, TransportMode, BxDFFlags);
+    f32 (*PDF)(void *, Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags flags);
+    BxDFFlags (*Flags)(void *);
 };
 
-static BSDFMethods bsdfMethods[BSDFTaggedPointer::MaxTag()] = {};
+static BxDFMethods bxdfMethods[BxDFTaggedPointer::MaxTag()] = {};
 
 // TODO: because of the way I made this it's probably only valid to use bsdfs through this class, not through any
 // of the child bsdfs
-struct BSDF : BSDFTaggedPointer
+
+struct BxDF : BxDFTaggedPointer
 {
-    BSDF() = default;
-    struct Frame frame;
-
-    BSDF(Vec3f ns, Vec3f dpdus) : frame(Frame::FromXZ(Normalize(dpdus), ns)) {}
-
-    SampledSpectrum EvaluateSample(Vec3f wo, Vec3f wi, f32 &pdf, TransportMode mode) const;
-    BSDFSample GenerateSample(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags inFlags) const;
-    f32 PDF(Vec3f wo, Vec3f wi, TransportMode mode, BSDFFlags inFlags) const;
-    // Hemispherical directional function
-    SampledSpectrum rho(Vec3f wo, f32 *uc, Vec2f *u, u32 numSamples) const;
-    // Hemispherical hemispherical function
-    SampledSpectrum rho(Vec2f *u1, f32 *uc, Vec2f *u2, u32 numSamples) const;
-    BSDFFlags Flags() const;
+    BxDF() {}
+    SampledSpectrum EvaluateSample(Vec3f wo, Vec3f wi, f32 &pdf, TransportMode mode) const { return SampledSpectrum(0.f); }
+    BSDFSample GenerateSample(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BxDFFlags inFlags) const { return {}; }
+    f32 PDF(Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags inFlags) const { return 0.f; }
+    BxDFFlags Flags() const { return {}; }
 };
 
 template <class T>
-struct BSDFCRTP
+struct BxDFCRTP
 {
     static const i32 id;
     static SampledSpectrum EvaluateSample(void *ptr, Vec3f wo, Vec3f wi, f32 &pdf, TransportMode mode);
-    static BSDFSample GenerateSample(void *ptr, Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BSDFFlags flags);
-    static f32 PDF(void *ptr, Vec3f wo, Vec3f wi, TransportMode mode, BSDFFlags flags);
-    static BSDFFlags Flags(void *ptr);
+    static BSDFSample GenerateSample(void *ptr, Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BxDFFlags flags);
+    static f32 PDF(void *ptr, Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags flags);
+    static BxDFFlags Flags(void *ptr);
     static constexpr i32 Register()
     {
-        bsdfMethods[BSDFTaggedPointer::TypeIndex<T>()] = {EvaluateSample, GenerateSample, PDF, Flags};
-        return BSDFTaggedPointer::TypeIndex<T>();
+        bxdfMethods[BxDFTaggedPointer::TypeIndex<T>()] = {EvaluateSample, GenerateSample, PDF, Flags};
+        return BxDFTaggedPointer::TypeIndex<T>();
     }
 };
 
 template <class T>
-const i32 BSDFCRTP<T>::id = BSDFCRTP<T>::Register();
+const i32 BxDFCRTP<T>::id = BxDFCRTP<T>::Register();
 
-template struct BSDFCRTP<DiffuseBSDF>;
-template struct BSDFCRTP<ConductorBSDF>;
-template struct BSDFCRTP<DielectricBSDF>;
-template struct BSDFCRTP<ThinDielectricBSDF>;
+template struct BxDFCRTP<DiffuseBxDF>;
+template struct BxDFCRTP<ConductorBxDF>;
+template struct BxDFCRTP<DielectricBxDF>;
+template struct BxDFCRTP<ThinDielectricBxDF>;
 
 } // namespace rt
 #endif

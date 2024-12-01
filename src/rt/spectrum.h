@@ -37,17 +37,18 @@ f32 Blackbody(f32 lambda, f32 T)
 struct Spectrum;
 struct RGBColorSpace;
 
-struct SampledSpectrum
+template <typename T>
+struct SampledSpectrumBase
 {
-    SampledSpectrum() : SampledSpectrum(0.f) {}
-    explicit SampledSpectrum(f32 c)
+    SampledSpectrumBase() : SampledSpectrumBase(0.f) {}
+    explicit SampledSpectrumBase(f32 c)
     {
         for (u32 i = 0; i < NSampledWavelengths; i++)
         {
             values[i] = c;
         }
     }
-    SampledSpectrum(const f32 *v)
+    SampledSpectrumBase(const f32 *v)
     {
         for (u32 i = 0; i < NSampledWavelengths; ++i)
         {
@@ -66,7 +67,7 @@ struct SampledSpectrum
     {
         return values[i];
     }
-    SampledSpectrum &operator+=(const SampledSpectrum &s)
+    SampledSpectrumBase &operator+=(const SampledSpectrumBase<T> &s)
     {
         for (i32 i = 0; i < NSampledWavelengths; i++)
         {
@@ -74,12 +75,12 @@ struct SampledSpectrum
         }
         return *this;
     }
-    SampledSpectrum operator+(const SampledSpectrum &s) const
+    SampledSpectrumBase operator+(const SampledSpectrumBase<T> &s) const
     {
-        SampledSpectrum ret = *this;
+        SampledSpectrumBase ret = *this;
         return ret += s;
     }
-    SampledSpectrum &operator-=(const SampledSpectrum &s)
+    SampledSpectrumBase &operator-=(const SampledSpectrumBase<T> &s)
     {
         for (i32 i = 0; i < NSampledWavelengths; i++)
         {
@@ -87,32 +88,32 @@ struct SampledSpectrum
         }
         return *this;
     }
-    SampledSpectrum operator-(const SampledSpectrum &s) const
+    SampledSpectrumBase operator-(const SampledSpectrumBase<T> &s) const
     {
-        SampledSpectrum ret = *this;
+        SampledSpectrumBase ret = *this;
         return ret -= s;
     }
-    SampledSpectrum operator+(f32 a) const
+    SampledSpectrumBase operator+(f32 a) const
     {
         assert(!IsNaN(a));
-        SampledSpectrum ret;
+        SampledSpectrumBase ret;
         for (i32 i = 0; i < NSampledWavelengths; i++)
         {
             ret.values[i] += a;
         }
         return ret;
     }
-    friend SampledSpectrum operator-(f32 a, const SampledSpectrum &s)
+    friend SampledSpectrumBase operator-(f32 a, const SampledSpectrumBase<T> &s)
     {
         assert(!IsNaN(a));
-        SampledSpectrum ret;
+        SampledSpectrumBase ret;
         for (i32 i = 0; i < NSampledWavelengths; i++)
         {
             ret.values[i] = a - s.values[i];
         }
         return ret;
     }
-    SampledSpectrum &operator*=(const SampledSpectrum &s)
+    SampledSpectrumBase &operator*=(const SampledSpectrumBase<T> &s)
     {
         for (i32 i = 0; i < NSampledWavelengths; i++)
         {
@@ -120,22 +121,22 @@ struct SampledSpectrum
         }
         return *this;
     }
-    SampledSpectrum operator*(const SampledSpectrum &s) const
+    SampledSpectrumBase operator*(const SampledSpectrumBase<T> &s) const
     {
-        SampledSpectrum ret = *this;
+        SampledSpectrumBase ret = *this;
         return ret *= s;
     }
-    SampledSpectrum operator*(f32 a) const
+    SampledSpectrumBase operator*(f32 a) const
     {
         assert(!IsNaN(a));
-        SampledSpectrum ret = *this;
+        SampledSpectrumBase ret = *this;
         for (i32 i = 0; i < NSampledWavelengths; i++)
         {
             ret.values[i] *= a;
         }
         return ret;
     }
-    SampledSpectrum &operator*=(f32 a)
+    SampledSpectrumBase &operator*=(f32 a)
     {
         assert(!IsNaN(a));
         for (i32 i = 0; i < NSampledWavelengths; i++)
@@ -144,16 +145,16 @@ struct SampledSpectrum
         }
         return *this;
     }
-    friend SampledSpectrum operator*(f32 a, const SampledSpectrum &s)
+    friend SampledSpectrumBase operator*(f32 a, const SampledSpectrumBase<T> &s)
     {
         return s * a;
     }
-    friend SampledSpectrum operator+(f32 a, const SampledSpectrum &s)
+    friend SampledSpectrumBase operator+(f32 a, const SampledSpectrumBase<T> &s)
     {
         return s + a;
     }
 
-    SampledSpectrum &operator/=(const SampledSpectrum &s)
+    SampledSpectrumBase &operator/=(const SampledSpectrumBase<T> &s)
     {
         for (int i = 0; i < NSampledWavelengths; ++i)
         {
@@ -162,12 +163,12 @@ struct SampledSpectrum
         }
         return *this;
     }
-    SampledSpectrum operator/(const SampledSpectrum &s) const
+    SampledSpectrumBase operator/(const SampledSpectrumBase<T> &s) const
     {
-        SampledSpectrum ret = *this;
+        SampledSpectrumBase ret = *this;
         return ret /= s;
     }
-    SampledSpectrum &operator/=(f32 a)
+    SampledSpectrumBase &operator/=(f32 a)
     {
         assert(a != 0.f);
         assert(!IsNaN(a));
@@ -175,20 +176,20 @@ struct SampledSpectrum
             values[i] /= a;
         return *this;
     }
-    SampledSpectrum operator/(f32 a) const
+    SampledSpectrumBase operator/(f32 a) const
     {
-        SampledSpectrum ret = *this;
+        SampledSpectrumBase ret = *this;
         return ret /= a;
     }
-    SampledSpectrum operator-() const
+    SampledSpectrumBase operator-() const
     {
-        SampledSpectrum ret;
+        SampledSpectrumBase ret;
         for (i32 i = 0; i < NSampledWavelengths; ++i)
             ret.values[i] = -values[i];
         return ret;
     }
-    bool operator==(const SampledSpectrum &s) const { return values == s.values; }
-    bool operator!=(const SampledSpectrum &s) const { return values != s.values; }
+    bool operator==(const SampledSpectrumBase<T> &s) const { return values == s.values; }
+    bool operator!=(const SampledSpectrumBase<T> &s) const { return values != s.values; }
     bool HasNaNs() const
     {
         for (i32 i = 0; i < NSampledWavelengths; ++i)
@@ -200,36 +201,41 @@ struct SampledSpectrum
     // RGB ToRGB(const SampledWavelengths &lambda, const RGBColorSpace &cs) const;
     // f32 y(const SampledWavelengths &lambda) const;
 
-    explicit operator bool() const
+    explicit operator MaskF32() const
     {
+        MaskF32 mask(True);
         for (u32 i = 0; i < NSampledWavelengths; ++i)
-            if (values[i] != 0) return true;
-        return false;
+        {
+            mask &= (values[i] != 0);
+        }
+        return mask;
+        // if (values[i] != 0) return true;
+        // return false;
     }
-    f32 MinComponentValue() const
+    T MinComponentValue() const
     {
-        f32 m = values[0];
+        T m = values[0];
         for (u32 i = 1; i < NSampledWavelengths; ++i)
             m = Min(m, values[i]);
         return m;
     }
-    f32 MaxComponentValue() const
+    T MaxComponentValue() const
     {
-        f32 m = values[0];
+        T m = values[0];
         for (u32 i = 1; i < NSampledWavelengths; ++i)
             m = Max(m, values[i]);
         return m;
     }
-    f32 Average() const
+    T Average() const
     {
-        f32 sum = values[0];
+        T sum = values[0];
         for (u32 i = 1; i < NSampledWavelengths; ++i)
             sum += values[i];
         return sum / NSampledWavelengths;
     }
-    f32 Sum() const
+    T Sum() const
     {
-        f32 sum = values[0];
+        T sum = values[0];
         for (u32 i = 1; i < NSampledWavelengths; ++i)
             sum += values[i];
         return sum;
@@ -240,12 +246,16 @@ struct SampledSpectrum
             values[i] = pos_inf;
     }
 
-    f32 values[NSampledWavelengths];
+    T values[NSampledWavelengths];
 };
 
-SampledSpectrum FastExp(const SampledSpectrum &a)
+typedef SampledSpectrumBase<f32> SampledSpectrum;
+typedef SampledSpectrumBase<LaneNF32> SampledSpectrumN;
+
+template <typename T>
+SampledSpectrum<T> FastExp(const SampledSpectrum<T> &a)
 {
-    SampledSpectrum result;
+    SampledSpectrum<T> result;
     for (u32 i = 0; i < NSampledWavelengths; i++)
     {
         result.values[i] = FastExp(a.values[i]);
@@ -253,14 +263,16 @@ SampledSpectrum FastExp(const SampledSpectrum &a)
     return result;
 }
 
-SampledSpectrum Max(const SampledSpectrum &a, const SampledSpectrum &b)
+template <typename T>
+SampledSpectrum<T> Max(const SampledSpectrum<T> &a, const SampledSpectrum<T> &b)
 {
-    SampledSpectrum result;
+    SampledSpectrum<T> result;
     for (u32 i = 0; i < NSampledWavelengths; ++i)
         result.values[i] = Max(a.values[i], b.values[i]);
     return result;
 }
 
+template <typename T>
 SampledSpectrum SafeDiv(SampledSpectrum a, SampledSpectrum b)
 {
     SampledSpectrum ret;

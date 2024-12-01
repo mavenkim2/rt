@@ -24,8 +24,9 @@ namespace rt
 // - bdpt, metropolis, vcm/upbp, mcm?
 // - subdivision surfaces
 
-// dreams
+// harder stuff
 // - covariance tracing
+// - path guiding
 
 static Ptex::PtexCache *cache;
 struct : public PtexErrorHandler
@@ -102,7 +103,7 @@ struct NormalMap
         f32 dpduLength    = Length(dpdu);
         f32 dpdvLength    = Length(dpdv);
         dpdu              = dpdu / length;
-        AffineSpace frame = AffineSpace(dpdu, Cross(ns, intrs.shading.dpdu), intrs.shading.ns);
+        LinearSpace frame = LinearSpace::FromXZ(dpdu, intrs.shading.ns); // Cross(ns, intrs.shading.dpdu), intrs.shading.ns);
         // Transform to world space
         ns   = TransformV(frame, ns);
         dpdu = Normalize(dpdu - Dot(dpdu, ns) * ns) * dpduLength;
@@ -195,6 +196,7 @@ struct BumpMap
 template <typename TextureShader, typename NormalShader>
 struct DiffuseMaterial
 {
+    using BxDF = DiffuseBxDF;
     Texture reflectanceShader;
 
     template <i32 width>
@@ -215,7 +217,7 @@ struct DiffuseMaterial
         return DiffuseBSDF(reflectance);
     }
 
-    DiffuseBSDF GetBSDF()
+    DiffuseBxDF GetBxDF()
     {
         Vec3 result;
         texture->SampleTexture(0, result);
@@ -225,12 +227,13 @@ struct DiffuseMaterial
 template <typename BSDFShader, typename NormalShader>
 struct Material
 {
+    using BxDF = BSDFShader::BxDF;
     BSDFShader bsdfShader;
     NormalShader normalShader;
     template <i32 width>
-    static auto Evaluate(SurfaceInteractions<width> &intr)
+    static BSDF<BxDF> Evaluate(SurfaceInteractions<width> &intr)
     {
-        auto bsdf = bsdfShader.GetBSDF(intr);
+        auto bxdf = bsdfShader.GetBxDF(intr);
         NormalShader *normalShaders[width];
         for (u32 i = 0; i < width; i++)
         {
@@ -238,6 +241,8 @@ struct Material
             normalShaders[i] = scene->materials.Get<Material>()[intrs.materialIDs[i]].normalShader;
         }
         NormalShader::Evaluate(intrs, normalShaders);
+
+        // LinearSpace frame = LinearSpace::FromXZ(intr.shading.dpdu, intr.shading.n);
         return bsdf;
     }
 };
@@ -257,6 +262,7 @@ enum
 
 struct RayState
 {
+    Ray2 ray;
     SampledSpectrum L;
     SampledSpectrum beta;
     SampledSpectrum etaScale;
@@ -267,26 +273,24 @@ struct RayState
 
 typedef u32 RayStateHandle;
 
-static const u32 queueLengths = 512;
+static const u32 simdQueueLength = 512;
 struct RayQueue
 {
     // lightpdf, le
-    RayStateHandles queue[queueLengths];
+    RayStateHandle queue[simdQueueLength];
     u32 count;
+    void Flush(u32 add)
+    {
+        if (count + add <= simdQueueLength) return;
+
+        u32 alignedCount = count & (IntN - 1);
+        u32 start        = count - alignedCount;
+        for (u32 i = start; i < start + alignedCount; i++)
+        {
+        }
+    }
     void Push()
     {
-        if (count > queueFlushSize)
-        {
-            u32 alignedCount = count & (IntN - 1);
-            u32 start        = count - alignedCount;
-            for (u32 i = start; i < start + alignedCount; i++)
-            {
-                // either
-                // 1: need a queue for every pair of material x light type, which is just infeasible
-                // 2: a queue for only sampling the light and doing nothing else????
-                // 3: don't simd light sampling...
-            }
-        }
     }
 };
 
@@ -296,7 +300,7 @@ template <typename Material>
 struct ShadingQueuePtex
 {
     using BxDF = Material::BxDF;
-    SurfaceInteraction queue[queueLengths];
+    SurfaceInteraction queue[simdQueueLength];
     u32 count = 0;
     ShadingQueuePtex() {}
     void Flush() // SortKey *keys, SurfaceInteraction *values, u32 num)
@@ -384,7 +388,7 @@ struct ShadingQueuePtex
             //              out.p.x, out.p.y, out.p.z, out.n.x, out.n.y, out.n.z, out.uv.x, out.uv.y);
             // Transpose the rest
 
-            MaskF32 continuationMask = LaneIF32::Mask<true>();
+            MaskF32 continuationMask = LaneNF32::Mask<true>();
             BxDF bsdf                = Material::Evaluate(aosoaIntrs);
 
             template <i32 width>
@@ -392,7 +396,7 @@ struct ShadingQueuePtex
             {
                 SampledSpectrum Le;
                 Vec3IF32 samplePoint;
-                LaneIF32 pdf;
+                LaneNF32 pdf;
             };
 
             Sampler samplers[];
@@ -419,18 +423,18 @@ struct ShadingQueuePtex
                 MaskF32 mask      = (handles & laneType) == laneType;
                 u32 maskBits      = Movemask(mask);
                 u32 add           = PopCount(maskBits);
-                LaneIF32 lightPdf = LaneIF32::Load(pdfs);
+                LaneNF32 lightPdf = LaneNF32::Load(pdfs);
 
                 // TODO: get samplers
-                LightSamples sample = SampleLi(type, handles, aosoaIntrs, lambda?, samplers);//scene, lightHandle, intr, lambda, u);
+                LightSamples sample = SampleLi(type, handles, add, aosoaIntrs, lambda?, samplers);//scene, lightHandle, intr, lambda, u);
                 mask &= sample.pdf == 0.f;
                 lightPdf *= sample.pdf;
                 // f32 scatterPdf;
                 // SampledSpectrum f_hat;
                 Vec3IF32 wi = Normalize(sample.samplePoint - aosoaIntrs.p);
 
-                LaneIF32 scatterPdf;
-                SampledSpectrum f = Material::BSDF::EvaluateSample(-ray.d, wi, scatterPdf, TransportMode::Radiance) *
+                LaneNF32 scatterPdf;
+                SampledSpectrum f = BxDF::EvaluateSample(-ray.d, wi, scatterPdf, TransportMode::Radiance) *
                                     AbsDot(aosoaIntrs.shading.n, wi);
                 // TODO: need to == with 0.f for every wavelength, and then combine together
                 mask &= f.GetMask();
@@ -447,13 +451,14 @@ struct ShadingQueuePtex
                 }
 
                 // Power heuristic
-                LaneIF32 w_l = lightPdf / (Sqr(lightPdf) + Sqr(scatterPdf));
+                LaneNF32 w_l = lightPdf / (Sqr(lightPdf) + Sqr(scatterPdf));
                 // TODO: to prevent atomics, need to basically have thread permanently take a tile
-                L += Select(LaneIF32::Mask(maskbits), f * beta * w_l * sample.Le, 0.f);
+                L += Select(LaneNF32::Mask(maskbits), f * beta * w_l * sample.Le, 0.f);
                 i += add;
             }
             else
             {
+                i += IntN;
             }
 
             // TODO: things I need to simd:
@@ -488,12 +493,8 @@ struct ShadingQueuePtex
             // Russian roulette
         }
 
-        // Return bsdf lobes
-
-        // Material calculation
         ScratchEnd(temp);
     }
-    // mesh id, face index
 };
 
 template <>
