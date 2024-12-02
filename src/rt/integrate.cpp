@@ -3,7 +3,6 @@
 #include "bsdf.h"
 #include "scene.h"
 #include <type_traits>
-#include <Ptexture.h>
 
 namespace rt
 {
@@ -28,222 +27,58 @@ namespace rt
 // - covariance tracing
 // - path guiding
 
-static Ptex::PtexCache *cache;
-struct : public PtexErrorHandler
-{
-    void reportError(const char *error) override { Error(0, "%s", error); }
-} errorHandler;
-
-enum class ColorEncoding
-{
-    Linear,
-    SRGB,
-};
-
-template <i32 nc>
-struct PtexTexture
-{
-    static const u32 numChannels = nc;
-    string filename;
-    ColorEncoding encoding;
-    f32 scale;
-    PtexTexture(string filename, ColorEncoding encoding = ColorEncoding::SRGB, f32 scale = 1.f)
-        : filename(filename), encoding(encoding), scale(scale) {}
-
-    auto Evaluate(const Vec2f &uv, const Vec4f &filterWidth, u32 faceIndex)
-    {
-        Assert(cache);
-        Ptex::String error;
-        Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
-        Assert(texture);
-        Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
-        Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
-        Assert(nc == texture->numChannels());
-
-        // TODO: ray differentials
-        // f32 filterWidth = 0.75f;
-        // Vec2f uv(0.5f, 0.5f);
-
-        f32 out[numChannels];
-        filter->eval(out, 0, nc, faceIndex, uv[0], uv[1], filterWidth[0], filterWidth[1], filterWidth[2], filterWidth[3]);
-        texture->release();
-        filter->release();
-
-        // Convert to srgb
-        if constexpr (numChannels == 1) return out[0];
-
-        if (encoding == ColorEncoding::SRGB)
-        {
-            for (i32 i = 0; i < nc; i++)
-            {
-                out[i] = ExactLinearToSRGB(out[i]);
-            }
-        }
-        for (i32 i = 0; i < nc; i++)
-        {
-            out[i] *= scale;
-        }
-
-        Assert(numChannels == 3);
-        return Vec3f(out[0], out[1], out[2]);
-    }
-};
-
-static Scene2 *scene;
-
-// template <typename Texture>
-struct NormalMap
-{
-    template <i32 K>
-    void Evaluate(SurfaceInteractions<K> &intrs)
-    {
-        Vec3f ns(2 * normalMap.BilerpChannel(uv, wrap), -1);
-        ns = Normalize(ns);
-
-        f32 dpduLength    = Length(dpdu);
-        f32 dpdvLength    = Length(dpdv);
-        dpdu              = dpdu / length;
-        LinearSpace frame = LinearSpace::FromXZ(dpdu, intrs.shading.ns); // Cross(ns, intrs.shading.dpdu), intrs.shading.ns);
-        // Transform to world space
-        ns   = TransformV(frame, ns);
-        dpdu = Normalize(dpdu - Dot(dpdu, ns) * ns) * dpduLength;
-        dpdv = Normalize(Cross(ns, dpdu)) * dpdvLength;
-    }
-};
-
-template <i32 K>
-struct VecBase;
-
-template <>
-struct VecBase<1>
-{
-    using Type = LaneNF32;
-};
-
-template <>
-struct VecBase<3>
-{
-    using Type = Vec3lfn;
-};
-
-template <i32 K>
-using Veclfn = typename VecBase<K>::Type;
-
-template <typename TextureType>
-struct ImageTextureShader
-{
-    static const u32 numChannels = TextureType::numChannels;
-    TextureType texture;
-    ImageTextureShader() {}
-
-    static Veclfn<numChannels> Evaluate(SurfaceInteractionsN &intrs, Vec4lfn &filterWidths,
-                                        LaneNF32 &dfdu, LaneNF32 &dfdv, const ImageTextureShader<TextureType> **textures)
-    {
-        Veclfn<numChannels> results;
-        // Finite differencing
-        LaneF32<K> du = .5f * Abs(filterWidths[0], filterWidths[2]);
-        du            = Select(du == 0.f, 0.0005f, du);
-        LaneF32<K> dv = .5f * Abs(filterWidths[1], filterWidths[3]);
-        dv            = Select(dv == 0.f, 0.0005f, dv);
-
-        for (u32 i = 0; i < IntN; i++)
-        {
-            Vec2f uv(intrs.uv[0][i], intrs.uv[1][i]);
-            Vec4f filterWidth(filterWidths[0][i], filterWidths[1][i], filterWidths[2][i], filterWidths[3][i]);
-
-            Set(results, i) = textures[i]->texture.Evaluate(uv, filterWidth, intrs.faceIndex[i]);
-            results.dfdu[i] = textures[i]->texture.Evaluate(uv + Vec2f(du[i], 0.f), filterWidth, intrs.faceIndex[i]);
-            results.dfdv[i] = textures[i]->texture.Evaluate(uv + Vec2f(0.f, dv[i]), filterWidth, intrs.faceIndex[i]);
-        }
-        return results;
-    }
-};
-
-template <typename TextureShader>
-struct BumpMap
-{
-    // p' = p + d * n, d is displacement, estimate shading normal by computing dp'du and dp'dv (using chain rule)
-    TextureShader displacementShader;
-    template <i32 width>
-    static void Evaluate(SurfaceInteractions<width> &intrs, const BumpMap<TextureShader> **bumpMaps)
-    {
-        TextureShader *displacementShaders[width];
-        for (u32 i = 0; i < width; i++)
-        {
-            displacementShaders[i] = &bumpMaps[i]->displacementShader;
-        }
-
-        LaneF32<width> dddu, dddv;
-        LaneF32<width> displacement = TextureShader::Evaluate(intrs, dpdu, dpdv, displacementShaders);
-
-        Vec3lf<width> dpdu = intrs.shading.dpdu + dddu * intrs.shading.n + displacement * intrs.shading.dndu;
-        Vec3lf<width> dpdv = intrs.shading.dpdv + dddv * intrs.shading.n + displacement * intrs.shading.dndv;
-
-        intrs.shading.n    = Cross(dpdu, dpdv);
-        intrs.shading.dpdu = dpdu;
-        intrs.shading.dpdv = dpdv;
-    }
-};
-
-template <typename TextureShader, typename NormalShader>
-struct DiffuseMaterial
-{
-    using BxDF = DiffuseBxDF;
-    TextureShader reflectanceShader;
-
-    static BSDFBase<BxDF> GetBSDF(SurfaceInteractionsN &intr)
-    {
-        DiffuseMaterial *materials = scene->materials.Get<DiffuseMaterial>();
-        // TODO: vectorized texture evaluation?
-        // TODO: sampled spectrum vectorized
-        Vec4lfn sampledSpectra;
-
-        Lane4F32 sampledSpectrumArray[width];
-        // for (u32 i = 0; i < width; i++)
-        // {
-        //     materials[i].texture->Evaluate(intr.faceIndices[i], sampledSpectrumArray[i].f);
-        // }
-        // Convert RGB to SRGB
-        Vec4lfn reflectance = reflectanceShader.Evaluate(intr);
-        return DiffuseBSDF(reflectance);
-    }
-
-    DiffuseBxDF GetBxDF()
-    {
-        Vec3 result;
-        texture->SampleTexture(0, result);
-    }
-};
-
-template <typename BxDFShader, typename NormalShader>
-struct Material2
-{
-    using BxDF = typename BxDFShader::BxDF;
-    BxDFShader bxdfShader;
-    NormalShader normalShader;
-    template <i32 width>
-    static BSDFBase<BxDF> Evaluate(SurfaceInteractions<width> &intr)
-    {
-        auto bxdf = bsdfShader.GetBxDF(intr);
-        NormalShader *normalShaders[width];
-        for (u32 i = 0; i < width; i++)
-        {
-            // TODO: get index from id
-            normalShaders[i] = scene->materials.Get<Material>()[intrs.materialIDs[i]].normalShader;
-        }
-        NormalShader::Evaluate(intrs, normalShaders);
-
-        // LinearSpace frame = LinearSpace::FromXZ(intr.shading.dpdu, intr.shading.n);
-        return bsdf;
-    }
-};
-
+//////////////////////////////
+// Textures and materials
+//
 void InitializePtex()
 {
     u32 maxFiles  = 100;
     size_t maxMem = gigabytes(4);
     cache         = Ptex::PtexCache::create(maxFiles, maxMem, true, 0, &errorHandler);
 }
+
+template <typename TextureShader>
+DiffuseBxDF DiffuseMaterial<TextureShader>::GetBxDF(SurfaceInteractionsN &intr, DiffuseMaterial **materials)
+{
+    // TODO: vectorized texture evaluation?
+    // TODO: sampled spectrum vectorized
+    Vec4lfn sampledSpectra;
+
+    TextureShader *shaders[IntN];
+    for (u32 i = 0; i < IntN; i++)
+    {
+        shaders[i] = &materials[i]->reflectanceShader;
+    }
+    SampledSpectrumN sampledSpectra;
+    Set(sampledSpectra, i) = TextureShader::Evaluate(materials[i].texture->Evaluate(intr.faceIndices[i]); //, sampledSpectrumArray[i].f);
+    for (u32 i = 0; i < width; i++)
+    {
+    }
+    // Convert RGB to SRGB
+    Vec4lfn reflectance = reflectanceShader.Evaluate(intr);
+    return DiffuseBxDF(reflectance);
+}
+
+template <typename TextureShader>
+DiffuseBxDF DiffuseMaterial<TextureShader>::GetBxDF(SurfaceInteraction &intr)
+{
+    return DiffuseMaterial::GetBxDF(intr, &this);
+}
+
+template <typename TextureShaderReflectance, typename TextureShaderTransmission>
+DiffuseTransmissionBxDF DiffuseTransmissionMaterial<TextureShaderReflectance, TextureShaderTransmission>::
+    GetBxDF(SurfaceInteractionsN &intr, DiffuseTransmissionMaterial **materials)
+{
+}
+
+template <typename TextureShaderReflectance, typename TextureShaderTransmission>
+DiffuseTransmissionBxDF DiffuseTransmissionMaterial<TextureShaderReflectance, TextureShaderTransmission>::
+    GetBxDF(SurfaceInteractionsN &intr)
+{
+    return DiffuseTransmissionMaterial::GetBxDF(intr, &this);
+}
+
+template <typename TextureShaderReflectance, typename TextureShaderTransmission>
 
 typedef u32 PathFlags;
 enum
@@ -647,7 +482,8 @@ void Li(Scene2 *scene, RayDifferential &ray, Sampler &sampler, u32 maxDepth, Sam
 
 void VolumeAggregate::Build(Arena *arena)
 {
-    const f32 T = -1.f / std::log(0.5f);
+    Scene2 *scene = GetScene();
+    const f32 T   = -1.f / std::log(0.5f);
     // Loop over the bounds of the volume
     Bounds bounds;
     ForEachType(scene->volumes, [&](auto *array, u32 count) {
@@ -952,7 +788,7 @@ bool Intersect(Ray2 &r, SurfaceInteraction &intr)
     bool result   = false;
     u32 typeIndex = 0;
     u32 index     = 0;
-    ForEachType(scene->primitives, [&](auto *array, u32 count) {
+    ForEachType(GetScene()->primitives, [&](auto *array, u32 count) {
         using Primitive = std::remove_reference_t<decltype(*array)>;
         Ray2 ray        = r;
         for (u32 i = 0; i < count; i++)
@@ -983,6 +819,8 @@ SampledSpectrum VolumetricIntegrator(Ray2 &ray, Sampler sampler,
     bool specularBounce = false;
     u32 depth           = 0;
     f32 etaScale        = 1.f;
+
+    Scene2 *scene = GetScene();
 
     for (;;)
     {
@@ -1206,6 +1044,7 @@ SampledSpectrum VolumetricIntegrator(Ray2 &ray, Sampler sampler,
 NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Sampler sampler,
                                   SampledSpectrum beta, const SampledSpectrum &p, const SampledWavelengths &lambda, Vec3f &wi)
 {
+    Scene2 *scene = GetScene();
     f32 lightPdf;
     LightHandle lightHandle = UniformLightSample(scene, sampler.Get1D(), &lightPdf);
     Vec2f u                 = sampler.Get2D();

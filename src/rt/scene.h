@@ -854,6 +854,12 @@ struct Scene2
     }
 };
 
+struct Scene2 *scene_;
+Scene2 *GetScene()
+{
+    return scene_;
+}
+
 struct Scene
 {
     static const u32 indexMask = 0x0fffffff;

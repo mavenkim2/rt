@@ -1,6 +1,8 @@
 #ifndef INTEGRATE_H
 #define INTEGRATE_H
 
+#include <Ptexture.h>
+
 namespace rt
 {
 static const f32 tMinEpsilon = 0.00001f;
@@ -99,6 +101,230 @@ struct SurfaceInteractions
 
 typedef SurfaceInteractions<1> SurfaceInteraction;
 typedef SurfaceInteractions<IntN> SurfaceInteractionsN;
+
+static Ptex::PtexCache *cache;
+struct : public PtexErrorHandler
+{
+    void reportError(const char *error) override { Error(0, "%s", error); }
+} errorHandler;
+
+enum class ColorEncoding
+{
+    Linear,
+    SRGB,
+};
+
+template <i32 nc>
+struct PtexTexture
+{
+    static const u32 numChannels = nc;
+    string filename;
+    ColorEncoding encoding;
+    f32 scale;
+    PtexTexture(string filename, ColorEncoding encoding = ColorEncoding::SRGB, f32 scale = 1.f)
+        : filename(filename), encoding(encoding), scale(scale) {}
+
+    auto Evaluate(const Vec2f &uv, const Vec4f &filterWidth, u32 faceIndex)
+    {
+        Assert(cache);
+        Ptex::String error;
+        Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
+        Assert(texture);
+        Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
+        Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
+        Assert(nc == texture->numChannels());
+
+        // TODO: ray differentials
+        // f32 filterWidth = 0.75f;
+        // Vec2f uv(0.5f, 0.5f);
+
+        f32 out[numChannels];
+        filter->eval(out, 0, nc, faceIndex, uv[0], uv[1], filterWidth[0], filterWidth[1], filterWidth[2], filterWidth[3]);
+        texture->release();
+        filter->release();
+
+        // Convert to srgb
+        if constexpr (numChannels == 1) return out[0];
+
+        if (encoding == ColorEncoding::SRGB)
+        {
+            for (i32 i = 0; i < nc; i++)
+            {
+                out[i] = ExactLinearToSRGB(out[i]);
+            }
+        }
+        for (i32 i = 0; i < nc; i++)
+        {
+            out[i] *= scale;
+        }
+
+        Assert(numChannels == 3);
+        return Vec3f(out[0], out[1], out[2]);
+    }
+};
+
+// template <typename Texture>
+struct NormalMap
+{
+    template <i32 K>
+    void Evaluate(SurfaceInteractions<K> &intrs)
+    {
+        Vec3f ns(2 * normalMap.BilerpChannel(uv, wrap), -1);
+        ns = Normalize(ns);
+
+        f32 dpduLength    = Length(dpdu);
+        f32 dpdvLength    = Length(dpdv);
+        dpdu              = dpdu / length;
+        LinearSpace frame = LinearSpace::FromXZ(dpdu, intrs.shading.ns); // Cross(ns, intrs.shading.dpdu), intrs.shading.ns);
+        // Transform to world space
+        ns   = TransformV(frame, ns);
+        dpdu = Normalize(dpdu - Dot(dpdu, ns) * ns) * dpduLength;
+        dpdv = Normalize(Cross(ns, dpdu)) * dpdvLength;
+    }
+};
+
+template <i32 K>
+struct VecBase;
+
+template <>
+struct VecBase<1>
+{
+    using Type = LaneNF32;
+};
+
+template <>
+struct VecBase<3>
+{
+    using Type = Vec3lfn;
+};
+
+template <i32 K>
+using Veclfn = typename VecBase<K>::Type;
+
+template <typename TextureType>
+struct ImageTextureShader
+{
+    static const u32 numChannels = TextureType::numChannels;
+    TextureType texture;
+    ImageTextureShader() {}
+
+    static Veclfn<numChannels> Evaluate(SurfaceInteractionsN &intrs, Vec4lfn &filterWidths,
+                                        LaneNF32 &dfdu, LaneNF32 &dfdv, const ImageTextureShader<TextureType> **textures,
+                                        Veclfn<numChannels> &out)
+    {
+        Veclfn<numChannels> results;
+        // Finite differencing
+        LaneF32<K> du = .5f * Abs(filterWidths[0], filterWidths[2]);
+        du            = Select(du == 0.f, 0.0005f, du);
+        LaneF32<K> dv = .5f * Abs(filterWidths[1], filterWidths[3]);
+        dv            = Select(dv == 0.f, 0.0005f, dv);
+
+        for (u32 i = 0; i < IntN; i++)
+        {
+            Vec2f uv(intrs.uv[0][i], intrs.uv[1][i]);
+            Vec4f filterWidth(filterWidths[0][i], filterWidths[1][i], filterWidths[2][i], filterWidths[3][i]);
+
+            Set(results, i) = textures[i]->texture.Evaluate(uv, filterWidth, intrs.faceIndex[i]);
+            dfdu[i]         = textures[i]->texture.Evaluate(uv + Vec2f(du[i], 0.f), filterWidth, intrs.faceIndex[i]);
+            dfdv[i]         = textures[i]->texture.Evaluate(uv + Vec2f(0.f, dv[i]), filterWidth, intrs.faceIndex[i]);
+        }
+        return results;
+    }
+};
+
+template <typename TextureShader>
+struct BumpMap
+{
+    // p' = p + d * n, d is displacement, estimate shading normal by computing dp'du and dp'dv (using chain rule)
+    TextureShader displacementShader;
+    template <i32 width>
+    static void Evaluate(SurfaceInteractions<width> &intrs, const BumpMap<TextureShader> **bumpMaps)
+    {
+        TextureShader *displacementShaders[width];
+        for (u32 i = 0; i < width; i++)
+        {
+            displacementShaders[i] = &bumpMaps[i]->displacementShader;
+        }
+
+        LaneF32<width> dddu, dddv;
+        LaneF32<width> displacement = TextureShader::Evaluate(intrs, dpdu, dpdv, displacementShaders);
+
+        Vec3lf<width> dpdu = intrs.shading.dpdu + dddu * intrs.shading.n + displacement * intrs.shading.dndu;
+        Vec3lf<width> dpdv = intrs.shading.dpdv + dddv * intrs.shading.n + displacement * intrs.shading.dndv;
+
+        intrs.shading.n    = Cross(dpdu, dpdv);
+        intrs.shading.dpdu = dpdu;
+        intrs.shading.dpdv = dpdv;
+    }
+};
+
+template <typename TextureShader>
+struct DiffuseMaterial
+{
+    using BxDF = DiffuseBxDF;
+    TextureShader reflectanceShader;
+
+    static BxDF GetBxDF(SurfaceInteractionsN &intr);
+    BxDF GetBxDF(SurfaceInteraction &intr);
+};
+
+template <typename TextureShaderReflectance, typename TextureShaderTransmission>
+struct DiffuseTransmissionMaterialBase
+{
+    using BxDF = DiffuseTransmissionBxDF;
+    TextureShaderReflectance reflectanceShader;
+    TextureShaderTransmission transmissionShader;
+
+    static BxDF GetBxDF(SurfaceInteractionsN &intr);
+    BxDF GetBxDF(SurfaceInteraction &intr);
+};
+
+template <typename TextureShaderReflectance, typename TextureShaderTransmission>
+using DiffuseTransmissionMaterial = DiffuseTransmissionMaterialBase<TextureShaderReflectance, TextureShaderTransmission>;
+
+template <typename BxDFShader, typename NormalShader>
+struct Material2
+{
+    using BxDF = typename BxDFShader::BxDF;
+    BxDFShader bxdfShader;
+    NormalShader normalShader;
+    static BSDFBase<BxDF> Evaluate(SurfaceInteractionsN &intr)
+    {
+        BxDF *bxdfs[IntN];
+        NormalShader *normalShaders[K];
+
+        Materiall2 *materials = scene->materials.Get<Material2>();
+        for (u32 i = 0; i < IntN; i++)
+        {
+            Material2 &material = materials[intrs.materialIDs[i]];
+            bxdfs[i]            = material.bxdfShader;
+            normalShaders[i]    = material.normalShader;
+        }
+        auto bxdf = BxDFShader::GetBxDF(intr, bxdfs);
+        NormalShader::Evaluate(intrs, normalShaders);
+
+        return BSDFBase<BxDF>(bxdf, intr.shading.dpdu, intr.shading.n);
+    }
+};
+
+// TODO: automate this :)
+template <i32 K>
+using PtexShader = ImageTextureShader<PtexTexture<K>>;
+template <>
+using BumpMapPtex = BumpMap<PtexShader<1>>;
+template <>
+using DiffuseMaterialPtex = DiffuseMaterial<PtexShader<3>>;
+template <>
+using DiffuseMaterialPtex = DiffuseTransmissionMaterial<PtexShader<3>, PtexShader<3>>;
+template <>
+using DielectricMaterialPtex = DielectricMaterial<PtexShader<3>, PtexShader<3>>;
+
+template <>
+using DiffuseMaterialBumpMapPtex = Material2<DiffuseMaterialPtex, BumpMapPtex>;
+template <>
+using DiffuseTransmissionMaterialBumpMapPtex = Material2<DiffuseTransmissionMaterialPtex, BumpMapPtex>;
+template <>
+using DielectricMaterialBumpMapPtex = Material2<DielectricMaterialPtex, BumpMapPtex>;
 
 // struct
 

@@ -203,13 +203,14 @@ template struct SpectrumCRTP<RGBIlluminantSpectrum>;
 struct DiffuseBxDF;
 struct ConductorBxDF;
 struct DielectricBxDF;
+struct DiffuseTransmissionBxDF;
 // struct ThinDielectricBxDF;
 
 enum class TransportMode;
 struct BSDFSample;
 enum class BxDFFlags;
 
-using BxDFTaggedPointer = TaggedPointer<DiffuseBxDF, ConductorBxDF, DielectricBxDF>; //, ThinDielectricBxDF>;
+using BxDFTaggedPointer = TaggedPointer<DiffuseBxDF, ConductorBxDF, DielectricBxDF, DiffuseTransmissionBxDF>; //, ThinDielectricBxDF>;
 struct BxDFMethods
 {
     SampledSpectrumBase<LaneNF32> (*EvaluateSample)(void *, const Vec3lfn &, const Vec3lfn &, LaneNF32 &, TransportMode);
@@ -251,6 +252,7 @@ template <class T>
 const i32 BxDFCRTP<T>::id = BxDFCRTP<T>::Register();
 
 template struct BxDFCRTP<DiffuseBxDF>;
+template struct BxDFCRTP<DiffuseTransmissionBxDF>;
 template struct BxDFCRTP<ConductorBxDF>;
 template struct BxDFCRTP<DielectricBxDF>;
 // template struct BxDFCRTP<ThinDielectricBxDF>;

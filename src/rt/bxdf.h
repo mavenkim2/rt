@@ -284,10 +284,9 @@ enum class TransportMode
 // Lambertian model, light is scattered in all directions equally
 struct DiffuseBxDF : BxDFCRTP<DiffuseBxDF>
 {
-    static const BxDFFlags flags = BxDFFlags::DiffuseReflection;
     SampledSpectrumN R;
     DiffuseBxDF() = default;
-    DiffuseBxDF(SampledSpectrumN R) : R(R) {}
+    DiffuseBxDF(const SampledSpectrumN &R) : R(R) {}
 
     SampledSpectrumN EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf, TransportMode mode) const
     {
@@ -314,6 +313,46 @@ struct DiffuseBxDF : BxDFCRTP<DiffuseBxDF>
     LaneNU32 Flags() const
     {
         return Select(MaskF32(R), LaneNU32(u32(BxDFFlags::DiffuseReflection)), LaneNU32(u32(BxDFFlags::Unset)));
+    }
+};
+
+struct DiffuseTransmissionBxDF : BxDFCRTP<DiffuseTransmissionBxDF>
+{
+    SampledSpectrumN R, T;
+    DiffuseTransmissionBxDF() = default;
+    DiffuseTransmissionBxDF(const SampledSpectrumN &R, const SampledSpectrumN &T) : R(R), T(T) {}
+
+    SampledSpectrumN EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf, TransportMode mode) const
+    {
+        MaskF32 reflectMask = SameHemisphere(wo, wi);
+        LaneNF32 pr         = R.MaxComponentValue();
+        LaneNF32 pt         = T.MaxComponentValue();
+        pdf                 = CosineHemispherePDF(AbsCosTheta(wi)) * Select(reflectMask, pr, pt) / (pr + pt);
+        return Select(reflectMask, R, T) * InvPi;
+    }
+
+    BSDFSample GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u,
+                              TransportMode mode = TransportMode::Radiance, BxDFFlags sampleFlags = BxDFFlags::RT) const
+    {
+        if (!EnumHasAnyFlags(sampleFlags, BxDFFlags::Reflection)) return {};
+        LaneNF32 pr = R.MaxComponentValue();
+        LaneNF32 pt = T.MaxComponentValue();
+
+        LaneNF32 sum = pr + pt;
+
+        MaskF32 reflectMask = uc < pr / sum;
+        Vec3lfn wi          = SampleCosineHemisphere(u);
+        wi.z                = Select(reflectMask ^ wo.z > 0, -wi.z, wi.z);
+        LaneNF32 pdf        = CosineHemispherePDF(AbsCosTheta(wi));
+        return BSDFSample(Select(reflectMask, R, T) * InvPi, wi, pdf,
+                          Select(reflectMask,
+                                 LaneNU32(u32(BxDFFlags::DiffuseReflection)),
+                                 LaneNU32(u32(BxDFFlags::DiffuseTransmission))));
+    }
+    LaneNU32 Flags() const
+    {
+        return Select(MaskF32(R), LaneNU32(u32(BxDFFlags::DiffuseReflection)), LaneNU32(u32(BxDFFlags::Unset))) |
+               Select(MaskF32(T), LaneNU32(u32(BxDFFlags::DiffuseTransmission)), LaneNU32(u32(BxDFFlags::Unset)));
     }
 };
 

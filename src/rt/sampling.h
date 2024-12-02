@@ -20,7 +20,7 @@ inline Vec2<T> InvertUniformDiskPolarSample(const Vec2<T> &sample)
 template <typename T>
 inline Vec2<T> SampleUniformDiskConcentric(const Vec2<T> &u)
 {
-    Vec2<T> uOffset = Vec2<T>(2.f * u) - Vec2<T>(1, 1);
+    Vec2<T> uOffset = Vec2<T>(2.f * u) - Vec2<T>(1);
     if (uOffset.x == 0 && uOffset.y == 0)
     {
         return Vec2<T>(0, 0);
