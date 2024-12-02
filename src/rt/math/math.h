@@ -322,6 +322,7 @@ struct Complex
 {
     T real, im;
 
+    Complex() {}
     Complex(const T &real) : real(real), im(0) {}
     Complex(const T &real, const T &im) : real(real), im(im) {}
 
@@ -378,8 +379,8 @@ template <typename T>
 Complex<T> Sqrt(const Complex<T> &z)
 {
     T n  = Abs(z);
-    T t1 = Sqrt(.5 * (n + Abs(z.real)));
-    T t2 = .5 * z.im / t1;
+    T t1 = Sqrt(T(.5) * (n + Abs(z.real)));
+    T t2 = T(.5) * z.im / t1;
 
     if (All(n == 0))
         return Complex<T>(0);

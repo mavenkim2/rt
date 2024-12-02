@@ -19,6 +19,7 @@ Vec3f SpectrumToXYZ(Spectrum s)
 }
 
 // Computes XYZ coefficients for a spectrum
+template <>
 Vec3f SampledSpectrum::ToXYZ(const SampledWavelengths &lambda) const
 {
     SampledSpectrum X = Spectra::X().Sample(lambda);
@@ -29,6 +30,7 @@ Vec3f SampledSpectrum::ToXYZ(const SampledWavelengths &lambda) const
     return Vec3f(SafeDiv(X * *this, pdf).Average(), SafeDiv(Y * *this, pdf).Average(), SafeDiv(Z * *this, pdf).Average()) / CIE_Y_integral;
 }
 
+template <>
 Vec3f SampledSpectrum::ToRGB(const RGBColorSpace &space, const SampledWavelengths &lambda) const
 {
     Vec3f xyz = ToXYZ(lambda);

@@ -212,8 +212,19 @@ struct VolumeAggregate
     {
         return Iterator(ray, cExtinct, tMax, this);
     }
-    void Build(Arena *arena, struct Scene2 *scene);
+    void Build(Arena *arena);
 };
+
+struct NEESample
+{
+    SampledSpectrum L_beta_tray;
+    SampledSpectrum p_l;
+    SampledSpectrum p_u;
+    bool delta;
+};
+
+NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Sampler sampler,
+                                  SampledSpectrum beta, const SampledSpectrum &p, const SampledWavelengths &lambda, Vec3f &wi);
 
 } // namespace rt
 #endif

@@ -153,7 +153,7 @@ void IntersectCurve(const CurvePrecalculations &pre, const Ray &ray, const Curve
         f32 uOut     = (index + u[index]) * 1.f / 8.f; // Lerp(u[index], t0[index], t1[index]);
         Vec3f dpdu   = inCurve.Derivative(uOut);
         f32 edgeFunc = dpdu.x * -p.y[index] + dpdu.y * p.x[index];
-        f32 v        = 0.5f - std::copysignf(Sqrtf(d2[index]), edgeFunc) / (r[index]);
+        f32 v        = 0.5f - Copysign(Sqrt(d2[index]), edgeFunc) / (r[index]);
         if (inCurve.type == Curve::Ribbon)
         {
             // not implemented

@@ -454,32 +454,32 @@ struct LinearSpace
     {
         struct
         {
-            T x, y, z;
+            Vec3<T> x, y, z;
         };
-        T e[3];
+        Vec3<T> e[3];
     };
     LinearSpace() {}
     __forceinline LinearSpace(ZeroTy) : x(zero), y(zero), z(zero) {}
-    __forceinline LinearSpace(const T &a, const T &b, const T &c) : x(a), y(b), z(c) {}
+    __forceinline LinearSpace(const Vec3<T> &a, const Vec3<T> &b, const Vec3<T> &c) : x(a), y(b), z(c) {}
     __forceinline LinearSpace(const LinearSpace &space) : x(space.x), y(space.y), z(space.z) {}
 
-    static LinearSpace<T> FromXZ(const T &x, const T &z)
+    static LinearSpace<T> FromXZ(const Vec3<T> &x, const Vec3<T> &z)
     {
         return LinearSpace<T>(x, Cross(z, x), z);
     }
-    static LinearSpace<T> FromXY(const T &x, const T &y)
+    static LinearSpace<T> FromXY(const Vec3<T> &x, const Vec3<T> &y)
     {
         return LinearSpace<T>(x, y, Cross(x, y));
     }
 
-    T ToLocal(const T &a) const
+    Vec3<T> ToLocal(const Vec3<T> &a) const
     {
-        return T(Dot(x, a), Dot(y, a), Dot(z, a));
+        return Vec3<T>(Dot(x, a), Dot(y, a), Dot(z, a));
     }
 
-    T FromLocal(const T &a) const
+    Vec3<T> FromLocal(const Vec3<T> &a) const
     {
-        return FMA(a.x, x, FMA(a.y, y, a.z * z));
+        return FMA(Vec3<T>(a.x), x, FMA(Vec3<T>(a.y), y, Vec3<T>(a.z) * z));
     }
 };
 

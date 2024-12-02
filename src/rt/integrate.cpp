@@ -40,9 +40,10 @@ enum class ColorEncoding
     SRGB,
 };
 
-template <i32 numChannels>
+template <i32 nc>
 struct PtexTexture
 {
+    static const u32 numChannels = nc;
     string filename;
     ColorEncoding encoding;
     f32 scale;
@@ -57,8 +58,7 @@ struct PtexTexture
         Assert(texture);
         Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
         Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
-        i32 nc                   = texture->numChannels();
-        Assert(nc == numChannels);
+        Assert(nc == texture->numChannels());
 
         // TODO: ray differentials
         // f32 filterWidth = 0.75f;
@@ -111,61 +111,53 @@ struct NormalMap
     }
 };
 
-template <typename TextureType, i32 numChannels>
-struct ImageTextureShader;
+template <i32 K>
+struct VecBase;
+
+template <>
+struct VecBase<1>
+{
+    using Type = LaneNF32;
+};
+
+template <>
+struct VecBase<3>
+{
+    using Type = Vec3lfn;
+};
+
+template <i32 K>
+using Veclfn = typename VecBase<K>::Type;
 
 template <typename TextureType>
-struct ImageTextureShader<TextureType, 1>
+struct ImageTextureShader
 {
+    static const u32 numChannels = TextureType::numChannels;
     TextureType texture;
     ImageTextureShader() {}
-    template <typename T, i32 width>
-    static LaneF32<width> Evaluate(SurfaceInteractions<width> &intrs, Vec4lf<width> &filterWidths,
-                                   LaneF32<width> &dfdu, LaneF32<width> &dfdv, const ImageTextureShader<TextureType, 1> **textures)
-    {
-        alignas(4 * width) f32 results[width];
-        // Finite differencing
-        LaneF32<width> du = .5f * Abs(filterWidths[0], filterWidths[2]);
-        du                = Select(du == 0.f, 0.0005f, du);
-        LaneF32<width> dv = .5f * Abs(filterWidths[1], filterWidths[3]);
-        dv                = Select(dv == 0.f, 0.0005f, dv);
 
-        for (u32 i = 0; i < width; i++)
+    static Veclfn<numChannels> Evaluate(SurfaceInteractionsN &intrs, Vec4lfn &filterWidths,
+                                        LaneNF32 &dfdu, LaneNF32 &dfdv, const ImageTextureShader<TextureType> **textures)
+    {
+        Veclfn<numChannels> results;
+        // Finite differencing
+        LaneF32<K> du = .5f * Abs(filterWidths[0], filterWidths[2]);
+        du            = Select(du == 0.f, 0.0005f, du);
+        LaneF32<K> dv = .5f * Abs(filterWidths[1], filterWidths[3]);
+        dv            = Select(dv == 0.f, 0.0005f, dv);
+
+        for (u32 i = 0; i < IntN; i++)
         {
             Vec2f uv(intrs.uv[0][i], intrs.uv[1][i]);
             Vec4f filterWidth(filterWidths[0][i], filterWidths[1][i], filterWidths[2][i], filterWidths[3][i]);
 
-            results[i]      = textures[i]->texture.Evaluate(uv, filterWidth, intrs.faceIndex[i]);
+            Set(results, i) = textures[i]->texture.Evaluate(uv, filterWidth, intrs.faceIndex[i]);
             results.dfdu[i] = textures[i]->texture.Evaluate(uv + Vec2f(du[i], 0.f), filterWidth, intrs.faceIndex[i]);
             results.dfdv[i] = textures[i]->texture.Evaluate(uv + Vec2f(0.f, dv[i]), filterWidth, intrs.faceIndex[i]);
         }
-        return LaneF32<width>::Load(results);
+        return results;
     }
 };
-
-// template <typename TextureType>
-// struct ImageTextureShader<3>
-// {
-//     ImageTextureShader() {}
-//     template <typename T, i32 width>
-//     static Vec3lf<width> Evaluate(SurfaceInteraction<width> &intrs, Vec4lf<width> &filterWidths,
-//                                   const ImageTexture **textures)
-//     {
-//         Vec3lf<width> result;
-//
-//         for (u32 i = 0; i < width; i++)
-//         {
-//             Vec2f uv(intrs.uv[0][i], intrs.uv[1][i]);
-//             Vec4f filterWidth(filterWidths[0][i], filterWidths[1][i], filterWidths[2][i], filterWidths[3][i]);
-//
-//             Vec3f r     = textures[i]->Evaluate(uv, filterWidth, intrs.faceIndex[i]);
-//             result.x[i] = r.x;
-//             result.y[i] = r.y;
-//             result.z[i] = r.z;
-//         }
-//         return result;
-//     }
-// };
 
 template <typename TextureShader>
 struct BumpMap
@@ -197,9 +189,9 @@ template <typename TextureShader, typename NormalShader>
 struct DiffuseMaterial
 {
     using BxDF = DiffuseBxDF;
-    Texture reflectanceShader;
+    TextureShader reflectanceShader;
 
-    static BSDF<BxDF> GetBSDF(SurfaceInteractionsN &intr)
+    static BSDFBase<BxDF> GetBSDF(SurfaceInteractionsN &intr)
     {
         DiffuseMaterial *materials = scene->materials.Get<DiffuseMaterial>();
         // TODO: vectorized texture evaluation?
@@ -212,7 +204,7 @@ struct DiffuseMaterial
         //     materials[i].texture->Evaluate(intr.faceIndices[i], sampledSpectrumArray[i].f);
         // }
         // Convert RGB to SRGB
-        Vec4lfn reflectance = rShaderGraph.Evaluate(intr);
+        Vec4lfn reflectance = reflectanceShader.Evaluate(intr);
         return DiffuseBSDF(reflectance);
     }
 
@@ -223,11 +215,11 @@ struct DiffuseMaterial
     }
 };
 
-template <typename BSDFShader, typename NormalShader>
-struct Material
+template <typename BxDFShader, typename NormalShader>
+struct Material2
 {
-    using BxDF = BSDFShader::BxDF;
-    BSDFShader bsdfShader;
+    using BxDF = typename BxDFShader::BxDF;
+    BxDFShader bxdfShader;
     NormalShader normalShader;
     template <i32 width>
     static BSDFBase<BxDF> Evaluate(SurfaceInteractions<width> &intr)
@@ -298,7 +290,7 @@ struct RayQueue
 template <typename Material>
 struct ShadingQueuePtex
 {
-    using BxDF = Material::BxDF;
+    using BxDF = typename Material::BxDF;
     SurfaceInteraction queue[simdQueueLength];
     u32 count = 0;
     ShadingQueuePtex() {}
@@ -497,7 +489,7 @@ struct ShadingQueuePtex
 };
 
 template <>
-bool SurfaceInteraction::ComputeShading(Scene2 *scene, BSDF &bsdf)
+bool SurfaceInteraction::ComputeShading(BSDF &bsdf)
 {
     // TODO:
     // auto material = scene->materials.Get(0, materialIDs.value);
@@ -653,7 +645,7 @@ void Li(Scene2 *scene, RayDifferential &ray, Sampler &sampler, u32 maxDepth, Sam
 // Volumes
 //
 
-void VolumeAggregate::Build(Arena *arena, Scene2 *scene)
+void VolumeAggregate::Build(Arena *arena)
 {
     const f32 T = -1.f / std::log(0.5f);
     // Loop over the bounds of the volume
@@ -923,17 +915,6 @@ SampledSpectrum SampleTMaj(Scene2 *scene, Ray2 &ray, f32 tHit, f32 xi, Sampler s
     return tMaj;
 }
 
-struct NEESample
-{
-    SampledSpectrum L_beta_tray;
-    SampledSpectrum p_l;
-    SampledSpectrum p_u;
-    bool delta;
-};
-
-NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Scene2 *scene, Sampler sampler,
-                                  SampledSpectrum beta, const SampledSpectrum &p, const SampledWavelengths &lambda, Vec3f &wi);
-
 f32 VisibleWavelengthsPDF(f32 lambda)
 {
     if (lambda < LambdaMin || lambda > LambdaMax)
@@ -964,7 +945,7 @@ static SampledWavelengths SampleVisible(f32 u)
 
 bool IsValidVolume(u32 volumeIndex) { return volumeIndex != invalidVolume; }
 // Manually intersect every quad in every mesh
-bool Intersect(Scene2 *scene, Ray2 &r, SurfaceInteraction &intr)
+bool Intersect(Ray2 &r, SurfaceInteraction &intr)
 {
     f32 tHit      = pos_inf;
     f32 tMin      = tMinEpsilon;
@@ -990,7 +971,7 @@ bool Intersect(Scene2 *scene, Ray2 &r, SurfaceInteraction &intr)
     return tHit != f32(pos_inf);
 }
 
-SampledSpectrum VolumetricIntegrator(Scene2 *scene, Ray2 &ray, Sampler sampler,
+SampledSpectrum VolumetricIntegrator(Ray2 &ray, Sampler sampler,
                                      SampledWavelengths &lambda, u32 maxDepth)
 {
     // TODO:
@@ -1007,7 +988,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, Ray2 &ray, Sampler sampler,
     {
         SurfaceInteraction intr;
         // TODO: tMin epsilon (for now)
-        bool intersect = Intersect(scene, ray, intr);
+        bool intersect = Intersect(ray, intr);
 
         // Volume intersection
         {
@@ -1062,7 +1043,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, Ray2 &ray, Sampler sampler,
 
                         // Next event estimation (for once scattered direct illumination)
                         Vec3f wi;
-                        NEESample neeSample = VolumetricSampleEmitter(intr, ray, scene, sampler, beta, p_u, lambda, wi);
+                        NEESample neeSample = VolumetricSampleEmitter(intr, ray, sampler, beta, p_u, lambda, wi);
                         f32 scatterPdf;
                         SampledSpectrum f = phase.EvaluateSample(-ray.d, wi, &scatterPdf);
                         neeSample.p_u *= scatterPdf;
@@ -1169,7 +1150,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, Ray2 &ray, Sampler sampler,
         }
 
         BSDF bsdf;
-        if (!intr.ComputeShading(scene, bsdf))
+        if (!intr.ComputeShading(bsdf))
         {
             // denotes boundary between medium, no event
             ray.o = intr.p;
@@ -1184,9 +1165,9 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, Ray2 &ray, Sampler sampler,
         if (!IsSpecular(bsdf.Flags()))
         {
             Vec3f wi;
-            NEESample neeSample = VolumetricSampleEmitter(intr, ray, scene, sampler, beta, p_u, lambda, wi);
+            NEESample neeSample = VolumetricSampleEmitter(intr, ray, sampler, beta, p_u, lambda, wi);
             f32 scatterPdf;
-            SampledSpectrum f = bsdf.EvaluateSample(-ray.d, wi, scatterPdf, TransportMode::Radiance);
+            SampledSpectrum f = bsdf.EvaluateSample(-ray.d, wi, scatterPdf);
             neeSample.p_u *= scatterPdf;
             L += neeSample.L_beta_tray * f * AbsDot(Vec3f(intr.shading.n), wi) *
                  MISWeight(neeSample.p_l, neeSample.delta ? SampledSpectrum(0.f) : neeSample.p_u);
@@ -1195,7 +1176,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, Ray2 &ray, Sampler sampler,
         //////////////////////////////
         // BSDF Sampling
         //
-        BSDFSample sample = bsdf.GenerateSample(-ray.d, sampler.Get1D(), sampler.Get2D(), TransportMode::Radiance, BSDFFlags::RT);
+        BSDFSample sample = bsdf.GenerateSample(-ray.d, sampler.Get1D(), sampler.Get2D());
         if (!sample.pdf) return L;
         beta *= sample.f * AbsDot(Vec3f(intr.shading.n), sample.wi) / sample.pdf;
         p_l            = p_u / sample.pdf;
@@ -1222,7 +1203,7 @@ SampledSpectrum VolumetricIntegrator(Scene2 *scene, Ray2 &ray, Sampler sampler,
     return L;
 }
 
-NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Scene2 *scene, Sampler sampler,
+NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Sampler sampler,
                                   SampledSpectrum beta, const SampledSpectrum &p, const SampledWavelengths &lambda, Vec3f &wi)
 {
     f32 lightPdf;

@@ -70,7 +70,7 @@ pushd build
 
 if not exist .\rgbspectrum_srgb.obj ( 
     REM todo msvc?
-    clang++ -fms-compatibility -std=c++17 -march=native -ffp-contract=off -O3 -c ..\src\gen\rgbspectrum_srgb.cpp -o rgbspectrum_srgb.obj
+    clang++ -fms-runtime-lib=dynamic -fms-compatibility -std=c++17 -march=native -ffp-contract=off -O3 -c ..\src\gen\rgbspectrum_srgb.cpp -o rgbspectrum_srgb.obj
 )
 
 if not exist .\rgbspectrum_srgb.obj (
@@ -80,7 +80,7 @@ if not exist .\rgbspectrum_srgb.obj (
 
 if "%1" == "cl" (
     echo Compiling with Clang
-    clang++ -std=c++17 -march=native -ffp-contract=off %Definitions% %Dependencies% -L %LibraryPathZlib% -L %LibraryPathPtex% -l %LibraryNameZlib% -l %LibraryNamePtex% -o rt.exe ../src/rt/rt.cpp rgbspectrum_srgb.obj
+    clang++ --target=x86_64-pc-windows-msvc -fms-runtime-lib=dynamic -std=c++17 -march=native -ffp-contract=off  %Definitions% %Dependencies% -L %LibraryPathZlib% -L %LibraryPathPtex% -l %LibraryNameZlib% -l %LibraryNamePtex% -o rt.exe ../src/rt/rt.cpp rgbspectrum_srgb.obj
 ) else (
     echo Compiling with MSVC
     cl /MD %DefaultCompilerFlags% %Definitions% %AVX2% %Dependencies% ../src/rt/rt.cpp /std:c++17 /link %DefaultLinkerFlags% rgbspectrum_srgb.obj /LIBPATH:%LibraryPathZlib% /LIBPATH:%LibraryPathPtex% %LibraryNameZlib% %LibraryNamePtex% /out:rt.exe

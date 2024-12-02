@@ -18,11 +18,11 @@ Vec3f EqualAreaSquareToSphere(Vec2f p)
     float phi = (r == 0 ? 1 : (vp - up) / r + 1.f) * PI / 4.f;
 
     // Find $z$ coordinate for spherical direction
-    float z = Copysignf(1 - Sqr(r), signedDistance);
+    float z = Copysign(1 - Sqr(r), signedDistance);
 
     // Compute $\cos\phi$ and $\sin\phi$ for original quadrant and return vector
-    float cosPhi = Copysignf(Cos(phi), u);
-    float sinPhi = Copysignf(Sin(phi), v);
+    float cosPhi = Copysign(Cos(phi), u);
+    float sinPhi = Copysign(Sin(phi), v);
     return Vec3f(cosPhi * r * SafeSqrt(2.f - Sqr(r)), sinPhi * r * SafeSqrt(2.f - Sqr(r)),
                  z);
 }
@@ -69,8 +69,8 @@ Vec2f EqualAreaSphereToSquare(Vec3f d)
     }
 
     // Move (u,v) to the correct quadrant based on the signs of (x,y)
-    u = Copysignf(u, d.x);
-    v = Copysignf(v, d.y);
+    u = Copysign(u, d.x);
+    v = Copysign(v, d.y);
 
     // Transform (u,v) from [-1,1] to [0,1]
     return Vec2f(0.5f * (u + 1), 0.5f * (v + 1));
@@ -134,7 +134,7 @@ Vec3lfn SampleSphericalRectangle(const Vec3lfn &p, const Vec3lfn &base, const Ve
     // LaneNF32 au = samples[0] * S + k;
     LaneNF32 au = samples[0] * (g0 + g1 - TwoPi) + (samples[0] - 1) * (g2 + g3);
     LaneNF32 fu = (Cos(au) * b0 - b1) / Sin(au);
-    LaneNF32 cu = Clamp(Copysignf(1 / Sqrt(fu * fu + b0 * b0), fu), -1.f, 1.f);
+    LaneNF32 cu = Clamp(Copysign(1 / Sqrt(fu * fu + b0 * b0), fu), -1.f, 1.f);
 
     // Compute xu
     LaneNF32 xu = -(cu * z0) / Sqrt(1.f - cu * cu);

@@ -149,7 +149,7 @@ BSDFSample BxDF::GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec
     return bxdfMethods[GetTag()].GenerateSample(ptr, wo, uc, u, mode, inFlags);
 }
 
-BxDFFlags BxDF::Flags() const
+LaneNU32 BxDF::Flags() const
 {
     void *ptr = GetPtr();
     return bxdfMethods[GetTag()].Flags(ptr);
@@ -171,7 +171,7 @@ BSDFSample BxDFCRTP<T>::GenerateSample(void *ptr, const Vec3lfn &wo, const LaneN
 //     return static_cast<T *>(ptr)->PDF(wo, wi, mode, flags);
 // }
 template <class T>
-BxDFFlags BxDFCRTP<T>::Flags(void *ptr)
+LaneNU32 BxDFCRTP<T>::Flags(void *ptr)
 {
     return static_cast<T *>(ptr)->Flags();
 }

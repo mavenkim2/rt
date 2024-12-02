@@ -64,6 +64,8 @@ bool IsDeltaLight(LightType type)
     return type == LightType::DeltaPosition || type == LightType::DeltaDirection;
 }
 
+struct Scene2;
+
 // clang-format off
 #define SAMPLE_LI_HEADER() static LightSample SAMPLE_LI_BODY
 #define SAMPLE_LI(type)    LightSample type::SAMPLE_LI_BODY

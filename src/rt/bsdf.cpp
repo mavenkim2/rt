@@ -21,9 +21,9 @@ template <typename BxDF>
 BSDFSample BSDFBase<BxDF>::GenerateSample(Vec3lfn wo, const LaneNF32 &uc, const Vec2lfn &u,
                                           TransportMode mode, BxDFFlags sampleFlags) const
 {
-    wo              = frame.ToLocal(wo);
-    BSDFFlags flags = Flags();
-    if (All(wo.z == 0) || !EnumHasAnyFlags(bxdf.Flags(), sampleFlags)) return {};
+    wo             = frame.ToLocal(wo);
+    LaneNU32 flags = Flags();
+    if (All(wo.z == 0) || All((bxdf.Flags() & LaneNU32(u32(sampleFlags))) == 0)) return {};
     // void *ptr         = GetPtr();
     // u32 tag           = GetTag();
     // BSDFSample result = bsdfMethods[tag].GenerateSample(ptr, wo, uc, u, mode, sampleFlags);
@@ -74,6 +74,12 @@ SampledSpectrumN BSDFBase<BxDF>::rho(Vec2lfn *u1, LaneNF32 *uc, Vec2lfn *u2, u32
         r += bs.f + AbsCosTheta(bs.wi) * AbsCosTheta(wo) / (pdfo * bs.pdf);
     }
     return r / (PI * numSamples);
+}
+
+template <typename BxDF>
+LaneNU32 BSDFBase<BxDF>::Flags() const
+{
+    return bxdf.Flags();
 }
 
 } // namespace rt

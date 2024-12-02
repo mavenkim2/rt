@@ -215,7 +215,7 @@ struct BxDFMethods
     SampledSpectrumBase<LaneNF32> (*EvaluateSample)(void *, const Vec3lfn &, const Vec3lfn &, LaneNF32 &, TransportMode);
     BSDFSample (*GenerateSample)(void *, const Vec3lfn &, const LaneNF32 &, const Vec2lfn &, TransportMode, BxDFFlags);
     // f32 (*PDF)(void *, Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags flags);
-    BxDFFlags (*Flags)(void *);
+    LaneNU32 (*Flags)(void *);
 };
 
 static BxDFMethods bxdfMethods[BxDFTaggedPointer::MaxTag()] = {};
@@ -229,7 +229,7 @@ struct BxDF : BxDFTaggedPointer
     SampledSpectrumBase<LaneNF32> EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf, TransportMode mode) const;
     BSDFSample GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u, TransportMode mode, BxDFFlags inFlags) const;
     // f32 PDF(Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags inFlags) const { return 0.f; }
-    BxDFFlags Flags() const;
+    LaneNU32 Flags() const;
 };
 
 template <class T>
@@ -239,7 +239,7 @@ struct BxDFCRTP
     static SampledSpectrumBase<LaneNF32> EvaluateSample(void *ptr, const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf, TransportMode mode);
     static BSDFSample GenerateSample(void *ptr, const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u, TransportMode mode, BxDFFlags flags);
     // static f32 PDF(void *ptr, Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags flags);
-    static BxDFFlags Flags(void *ptr);
+    static LaneNU32 Flags(void *ptr);
     static constexpr i32 Register()
     {
         bxdfMethods[BxDFTaggedPointer::TypeIndex<T>()] = {EvaluateSample, GenerateSample, Flags};

@@ -302,6 +302,30 @@ typedef Vec3lu<8> Vec3lu8;
 
 typedef Vec3<LaneNF32> Vec3lfn;
 
+template <template <i32> class T, i32 K>
+struct SOASetVec3
+{
+    Vec3<T<K>> &v;
+    u32 index;
+
+    SOASetVec3(Vec3<T<K>> &v, u32 index) : v(v), index(index) {}
+
+    __forceinline SOASetVec3 &operator=(const Vec3f &r)
+    {
+        Assert(index < K);
+        Set(v[0], index) = r[0];
+        Set(v[1], index) = r[1];
+        Set(v[2], index) = r[2];
+        return *this;
+    }
+};
+
+template <template <i32> class T, i32 K>
+__forceinline SOASetVec3<T, K> Set(Vec3<T<K>> &v, u32 index)
+{
+    return SOASetVec3<T, K>(v, index);
+}
+
 template <i32 K>
 __forceinline Vec3lu<K> Flooru(const Vec3lf<K> &v)
 {
