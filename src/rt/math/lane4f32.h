@@ -185,10 +185,6 @@ __forceinline Lane4F32 FMS(const Lane4F32 &a, const Lane4F32 &b, const Lane4F32 
 
 __forceinline Lane4F32 Sqr(const Lane4F32 &a) { return a * a; }
 __forceinline Lane4F32 Sqrt(const Lane4F32 &a) { return _mm_sqrt_ps(a); }
-__forceinline Lane4F32 SafeSqrt(const Lane4F32 &a)
-{
-    return _mm_sqrt_ps(Select(a < Lane4F32(0.f), Lane4F32(0.f), a));
-}
 
 __forceinline Lane4F32 Rsqrt(const Lane4F32 &a)
 {
@@ -273,6 +269,11 @@ __forceinline Lane4U32 Select(const Lane4F32 &mask, const Lane4U32 &a, const Lan
 #else
     return _mm_or_si128(_mm_andnot_si128(mask, b), _mm_and_si128(mask, a));
 #endif
+}
+
+__forceinline Lane4F32 SafeSqrt(const Lane4F32 &a)
+{
+    return _mm_sqrt_ps(Select(a < Lane4F32(0.f), Lane4F32(0.f), a));
 }
 
 __forceinline i32 Movemask(const Lane4F32 &a) { return _mm_movemask_ps(a); }

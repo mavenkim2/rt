@@ -50,7 +50,7 @@
 #include "tests/sampling_test.cpp"
 
 // #include <openvdb/openvdb.h>
-#include <nanovdb/NanoVDB.h>
+// #include <nanovdb/NanoVDB.h>
 
 namespace rt
 {
@@ -1087,7 +1087,7 @@ int main(int argc, char *argv[])
 
     const u32 count = 3000000;
 
-    VolumeRenderingTest(arena, "wdas_cloud_quarter.nvdb");
+    // VolumeRenderingTest(arena, "wdas_cloud_quarter.nvdb");
     // BVHSortingTest();
     // TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
 

@@ -1,6 +1,6 @@
 #include "spectrum.h"
 #include <map>
-#include <rgbspectrum_srgb.cpp>
+// #include <rgbspectrum_srgb.cpp>
 namespace rt
 {
 inline f32 InnerProduct(Spectrum f, Spectrum g)

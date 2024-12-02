@@ -366,6 +366,7 @@ void BVHSortingTest()
     printf("time insertion %fms\n", time2);
 }
 
+#if 0
 void VolumeRenderingTest(Arena *arena, string filename)
 {
     // TODO: this is hardcoded from disney-cloud.pbrt. Update the scene reader to handle participating media
@@ -587,6 +588,7 @@ void VolumeRenderingTest(Arena *arena, string filename)
     WriteImage(&image, "image.bmp");
     printf("done\n");
 }
+#endif
 
 void DualTest()
 {

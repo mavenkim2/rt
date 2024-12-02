@@ -193,12 +193,14 @@ typedef Vec2<i32> Vec2i;
 typedef Vec2<f32> Vec2f;
 
 template <i32 K>
-using LaneVec2f = Vec2<LaneF32<K>>;
-typedef Vec2<Lane4F32> Lane4Vec2f;
+using Vec2lu = Vec2<LaneU32<K>>;
+typedef Vec2lu<4> Vec2lu4;
+typedef Vec2lu<8> Vec2lu8;
 
 template <i32 K>
-using LaneVec2u = Vec2<LaneU32<K>>;
-typedef Vec2<Lane4U32> Lane4Vec2u;
+using Vec2lf = Vec2<LaneF32<K>>;
+typedef Vec2lf<4> Vec2lf4;
+typedef Vec2lf<8> Vec2lf8;
 
 typedef Vec2<LaneNF32> Vec2NF32;
 

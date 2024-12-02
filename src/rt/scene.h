@@ -1,7 +1,11 @@
 #ifndef SCENE_H
 #define SCENE_H
+
+#include <nanovdb/NanoVDB.h>
+#include <nanovdb/util/GridHandle.h>
 #include <nanovdb/util/IO.h>
 #include <nanovdb/util/SampleFromVoxels.h>
+
 #include "lights.h"
 namespace rt
 {

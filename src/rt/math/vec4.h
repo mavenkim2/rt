@@ -203,9 +203,16 @@ inline Vec4<T> ClampZero(const Vec4<T> &v)
 }
 
 typedef Vec4<f32> Vec4f;
+
 template <i32 K>
-using LaneVec4f = Vec4<LaneF32<K>>;
-typedef LaneVec4f<4> Lane4Vec4f;
+using Vec4lf = Vec4<LaneF32<K>>;
+typedef Vec4lf<4> Vec4lf4;
+typedef Vec4lf<8> Vec4lf8;
+
+template <i32 K>
+using Vec4lu = Vec4<LaneU32<K>>;
+typedef Vec4lu<4> Vec4lu4;
+typedef Vec4lu<8> Vec4lu8;
 
 typedef Vec4<LaneNF32> Vec4NF32;
 

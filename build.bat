@@ -33,7 +33,7 @@ if not exist .\build\src\third_party\zlib\Release\zlibstatic.lib (
     cmake -B build -T ClangCL . && cmake --build build --config Release
 )
 
-set Dependencies=-I ..\src\third_party\openvdb\nanovdb -I ..\src\gen -I ..\src\third_party\ptex\src\ptex -I ..\src\third_party\zlib ^
+set Dependencies=-I ..\src\third_party\openvdb\nanovdb -I ..\src\third_party\ptex\src\ptex -I ..\src\third_party\zlib ^
 -I .\src\third_party\zlib
 set LibraryPathPtex=.\src\third_party\ptex\src\ptex\Release
 set LibraryPathZlib=.\src\third_party\zlib\Release
@@ -67,12 +67,23 @@ REM pushd %dir%
 IF NOT EXIST build mkdir build
 
 pushd build
+
+if not exist .\rgbspectrum_srgb.obj ( 
+    REM todo msvc?
+    clang++ -fms-compatibility -std=c++17 -march=native -ffp-contract=off -O3 -c ..\src\gen\rgbspectrum_srgb.cpp -o rgbspectrum_srgb.obj
+)
+
+if not exist .\rgbspectrum_srgb.obj (
+    echo Could not compile sRGB to spectrum tables
+    exit /b
+)
+
 if "%1" == "cl" (
     echo Compiling with Clang
-    clang++ -std=c++17 -march=native -ffp-contract=off %Definitions% %Dependencies% -L %LibraryPathZlib% -L %LibraryPathPtex% -l %LibraryNameZlib% -l %LibraryNamePtex% -o rt.exe ../src/rt/rt.cpp
+    clang++ -std=c++17 -march=native -ffp-contract=off %Definitions% %Dependencies% -L %LibraryPathZlib% -L %LibraryPathPtex% -l %LibraryNameZlib% -l %LibraryNamePtex% -o rt.exe ../src/rt/rt.cpp rgbspectrum_srgb.obj
 ) else (
     echo Compiling with MSVC
-    cl /MD %DefaultCompilerFlags% %Definitions% %AVX2% %Dependencies% ../src/rt/rt.cpp /std:c++17 /link %DefaultLinkerFlags% /LIBPATH:%LibraryPathZlib% /LIBPATH:%LibraryPathPtex% %LibraryNameZlib% %LibraryNamePtex% /out:rt.exe
+    cl /MD %DefaultCompilerFlags% %Definitions% %AVX2% %Dependencies% ../src/rt/rt.cpp /std:c++17 /link %DefaultLinkerFlags% rgbspectrum_srgb.obj /LIBPATH:%LibraryPathZlib% /LIBPATH:%LibraryPathPtex% %LibraryNameZlib% %LibraryNamePtex% /out:rt.exe
 )
 
 REM cl %DefaultCompilerFlags% ../src/rgb2spec.cpp /std:c++17 /link %DefaultLinkerFlags% /out:rgb2spec.exe
