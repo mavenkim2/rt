@@ -214,7 +214,7 @@ using Vec4lu = Vec4<LaneU32<K>>;
 typedef Vec4lu<4> Vec4lu4;
 typedef Vec4lu<8> Vec4lu8;
 
-typedef Vec4<LaneNF32> Vec4NF32;
+typedef Vec4<LaneNF32> Vec4lfn;
 
 } // namespace rt
 #endif

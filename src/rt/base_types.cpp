@@ -137,13 +137,31 @@ SampledSpectrum SpectrumCRTP<T>::Sample(void *ptr, const SampledWavelengths &lam
     return static_cast<T *>(ptr)->Sample(lambda);
 }
 
+SampledSpectrumN BxDF::EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf, TransportMode mode) const
+{
+    void *ptr = GetPtr();
+    return bxdfMethods[GetTag()].EvaluateSample(ptr, wo, wi, pdf, mode);
+}
+
+BSDFSample BxDF::GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u, TransportMode mode, BxDFFlags inFlags) const
+{
+    void *ptr = GetPtr();
+    return bxdfMethods[GetTag()].GenerateSample(ptr, wo, uc, u, mode, inFlags);
+}
+
+BxDFFlags BxDF::Flags() const
+{
+    void *ptr = GetPtr();
+    return bxdfMethods[GetTag()].Flags(ptr);
+}
+
 template <class T>
-SampledSpectrum BxDFCRTP<T>::EvaluateSample(void *ptr, Vec3f wo, Vec3f wi, f32 &pdf, TransportMode mode)
+SampledSpectrum BxDFCRTP<T>::EvaluateSample(void *ptr, const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf, TransportMode mode)
 {
     return static_cast<T *>(ptr)->EvaluateSample(wo, wi, pdf, mode);
 }
 template <class T>
-BSDFSample BxDFCRTP<T>::GenerateSample(void *ptr, Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BxDFFlags flags)
+BSDFSample BxDFCRTP<T>::GenerateSample(void *ptr, const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u, TransportMode mode, BxDFFlags flags)
 {
     return static_cast<T *>(ptr)->GenerateSample(wo, uc, u, mode, flags);
 }

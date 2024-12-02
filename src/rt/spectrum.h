@@ -41,14 +41,14 @@ template <typename T>
 struct SampledSpectrumBase
 {
     SampledSpectrumBase() : SampledSpectrumBase(0.f) {}
-    explicit SampledSpectrumBase(f32 c)
+    explicit SampledSpectrumBase(const T &c)
     {
         for (u32 i = 0; i < NSampledWavelengths; i++)
         {
             values[i] = c;
         }
     }
-    SampledSpectrumBase(const f32 *v)
+    SampledSpectrumBase(const T *v)
     {
         for (u32 i = 0; i < NSampledWavelengths; ++i)
         {
@@ -58,12 +58,12 @@ struct SampledSpectrumBase
 
     Vec3f ToXYZ(const SampledWavelengths &lambda) const;
     Vec3f ToRGB(const RGBColorSpace &space, const SampledWavelengths &lambda) const;
-    f32 operator[](i32 i) const
+    T operator[](i32 i) const
     {
         return values[i];
     }
 
-    f32 &operator[](i32 i)
+    T &operator[](i32 i)
     {
         return values[i];
     }
@@ -253,9 +253,9 @@ typedef SampledSpectrumBase<f32> SampledSpectrum;
 typedef SampledSpectrumBase<LaneNF32> SampledSpectrumN;
 
 template <typename T>
-SampledSpectrum<T> FastExp(const SampledSpectrum<T> &a)
+SampledSpectrumBase<T> FastExp(const SampledSpectrumBase<T> &a)
 {
-    SampledSpectrum<T> result;
+    SampledSpectrumBase<T> result;
     for (u32 i = 0; i < NSampledWavelengths; i++)
     {
         result.values[i] = FastExp(a.values[i]);
@@ -264,18 +264,18 @@ SampledSpectrum<T> FastExp(const SampledSpectrum<T> &a)
 }
 
 template <typename T>
-SampledSpectrum<T> Max(const SampledSpectrum<T> &a, const SampledSpectrum<T> &b)
+SampledSpectrumBase<T> Max(const SampledSpectrumBase<T> &a, const SampledSpectrumBase<T> &b)
 {
-    SampledSpectrum<T> result;
+    SampledSpectrumBase<T> result;
     for (u32 i = 0; i < NSampledWavelengths; ++i)
         result.values[i] = Max(a.values[i], b.values[i]);
     return result;
 }
 
 template <typename T>
-SampledSpectrum<T> SafeDiv(const SampledSpectrum<T> &a, const SampledSpectrum<T> &b)
+SampledSpectrumBase<T> SafeDiv(const SampledSpectrumBase<T> &a, const SampledSpectrumBase<T> &b)
 {
-    SampledSpectrum<T> ret;
+    SampledSpectrumBase<T> ret;
     for (u32 i = 0; i < NSampledWavelengths; i++)
     {
         ret[i] = (b[i] != 0) ? a[i] / b[i] : 0.f;
@@ -284,9 +284,9 @@ SampledSpectrum<T> SafeDiv(const SampledSpectrum<T> &a, const SampledSpectrum<T>
 }
 
 template <typename T>
-SampledSpectrum<T> Select(Mask<T> &mask, const SampledSpectrumN &a, const SampledSpectrumN &b)
+SampledSpectrumBase<T> Select(const Mask<T> &mask, const SampledSpectrumBase<T> &a, const SampledSpectrumBase<T> &b)
 {
-    SampledSpectrum<T> ret;
+    SampledSpectrumBase<T> ret;
     for (u32 i = 0; i < NSampledWavelengths; i++)
     {
         ret[i] = Select(mask, a[i], b[i]);

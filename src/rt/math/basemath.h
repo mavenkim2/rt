@@ -78,6 +78,7 @@ __forceinline f32 Copysignf(const f32 a, const f32 b) { return ::copysignf(a, b)
 __forceinline bool All(bool b) { return b; }
 __forceinline bool None(bool b) { return !b; }
 __forceinline bool Some(bool b) { return b; }
+__forceinline bool Any(bool b) { return b; }
 
 template <typename T, typename F>
 T Lerp(F t, T a, T b)
@@ -103,11 +104,20 @@ T Max(const T &a, const T &b)
     return a > b ? a : b;
 }
 
-// template <typename T>
-// T Select(bool mask, const T &a, const T &b)
-// {
-//     return mask ? a : b;
-// }
+f32 Select(bool mask, f32 a, f32 b)
+{
+    return mask ? a : b;
+}
+
+u32 Select(bool mask, u32 a, u32 b)
+{
+    return mask ? a : b;
+}
+
+bool Select(bool mask, bool a, bool b)
+{
+    return mask ? a : b;
+}
 
 inline int Log2Int(u64 v)
 {

@@ -5,7 +5,7 @@ namespace rt
 {
 
 template <>
-struct LaneF32<4>
+struct LaneF32_<4>
 {
     typedef f32 Type;
     enum
@@ -28,14 +28,14 @@ struct LaneF32<4>
             };
         };
     };
-    __forceinline LaneF32() {}
-    __forceinline LaneF32(__m128 v) : v(v) {}
-    __forceinline LaneF32(const Lane4F32 &other) { v = other.v; }
-    __forceinline LaneF32(f32 a) { v = _mm_set1_ps(a); }
-    __forceinline LaneF32(f32 a, f32 b, f32 c, f32 d) { v = _mm_setr_ps(a, b, c, d); }
+    __forceinline LaneF32_() {}
+    __forceinline LaneF32_(__m128 v) : v(v) {}
+    __forceinline LaneF32_(const Lane4F32 &other) { v = other.v; }
+    __forceinline LaneF32_(f32 a) { v = _mm_set1_ps(a); }
+    __forceinline LaneF32_(f32 a, f32 b, f32 c, f32 d) { v = _mm_setr_ps(a, b, c, d); }
 
     // NOTE: necessary since otherwise it would be interpreted as an integer
-    __forceinline explicit LaneF32(const Lane4U32 &l)
+    __forceinline explicit LaneF32_(const Lane4U32 &l)
     {
         __m128i a = _mm_and_si128(l.v, _mm_set1_epi32(0x7fffffff));
         __m128i b = _mm_and_si128(_mm_srai_epi32(l.v, 31), _mm_set1_epi32(0x4f000000));
@@ -51,13 +51,13 @@ struct LaneF32<4>
         return l;
     }
 
-    __forceinline LaneF32(ZeroTy) { v = _mm_setzero_ps(); }
-    __forceinline LaneF32(PosInfTy) { v = _mm_set1_ps(pos_inf); }
-    __forceinline LaneF32(NegInfTy) { v = _mm_set1_ps(neg_inf); }
-    __forceinline LaneF32(NaNTy) { v = _mm_set1_ps(NaN); }
+    __forceinline LaneF32_(ZeroTy) { v = _mm_setzero_ps(); }
+    __forceinline LaneF32_(PosInfTy) { v = _mm_set1_ps(pos_inf); }
+    __forceinline LaneF32_(NegInfTy) { v = _mm_set1_ps(neg_inf); }
+    __forceinline LaneF32_(NaNTy) { v = _mm_set1_ps(NaN); }
 
     template <i32 i1>
-    __forceinline static LaneF32 Mask()
+    __forceinline static LaneF32_ Mask()
     {
         if constexpr (i1)
         {
@@ -69,19 +69,19 @@ struct LaneF32<4>
         }
     }
 
-    __forceinline static LaneF32 Mask(bool i)
+    __forceinline static LaneF32_ Mask(bool i)
     {
         return _mm_lookupmask_ps[((size_t)i << 3) | ((size_t)i << 2) | ((size_t)i << 1) | ((size_t)i)];
     }
 
-    __forceinline static LaneF32 Mask(u32 i)
+    __forceinline static LaneF32_ Mask(u32 i)
     {
         Assert(i >= 0 && i < 16);
         return _mm_lookupmask_ps[i]; //((size_t)i << 3) | ((size_t)i << 2) | ((size_t)i << 1) | ((size_t)i)];
     }
 
-    __forceinline LaneF32(TrueTy) { v = _mm_cmpeq_ps(_mm_setzero_ps(), _mm_setzero_ps()); }
-    __forceinline LaneF32(FalseTy) { v = _mm_setzero_ps(); }
+    __forceinline LaneF32_(TrueTy) { v = _mm_cmpeq_ps(_mm_setzero_ps(), _mm_setzero_ps()); }
+    __forceinline LaneF32_(FalseTy) { v = _mm_setzero_ps(); }
 
     __forceinline operator const __m128 &() const { return v; }
     __forceinline operator __m128 &() { return v; }
@@ -273,7 +273,7 @@ __forceinline Lane4U32 Select(const Lane4F32 &mask, const Lane4U32 &a, const Lan
 
 __forceinline Lane4F32 SafeSqrt(const Lane4F32 &a)
 {
-    return _mm_sqrt_ps(Select(a < Lane4F32(0.f), Lane4F32(0.f), a));
+    return _mm_sqrt_ps(Max(a, 0.f));
 }
 
 __forceinline i32 Movemask(const Lane4F32 &a) { return _mm_movemask_ps(a); }
@@ -576,6 +576,18 @@ __forceinline void Transpose3x4(const Lane4F32 &a, const Lane4F32 &b, const Lane
     out1        = UnpackHi(t0, t2);
     out2        = UnpackLo(t1, t2);
     out3        = UnpackHi(t1, t3);
+}
+
+f32 &Set(Lane4F32 &val, u32 index)
+{
+    Assert(index < 4);
+    return val[index];
+}
+
+f32 Get(const Lane4F32 &val, u32 index)
+{
+    Assert(index < 4);
+    return val[index];
 }
 
 } // namespace rt

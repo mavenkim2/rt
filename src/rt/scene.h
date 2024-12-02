@@ -759,10 +759,6 @@ struct NanoVDBVolume
     }
 };
 
-struct DiffuseMaterial
-{
-};
-
 // NOTE: only leaf scenes can
 struct Scene2
 {

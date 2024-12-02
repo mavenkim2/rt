@@ -62,31 +62,34 @@ struct SortKey
     u32 index;
 };
 
-template <i32 width = 1>
+template <typename BxDF>
+struct BSDFBase;
+
+template <i32 K>
 struct SurfaceInteractions
 {
-    using LaneNF32 = LaneF32<width>;
-    using LaneNU32 = LaneU32<width>;
-    Vec3<LaneNF32> p;
-    Vec3<LaneNF32> n;
-    Vec2<LaneNF32> uv;
+    using LaneKF32 = LaneF32<K>;
+    using LaneKU32 = LaneU32<K>;
+    Vec3lf<K> p;
+    Vec3lf<K> n;
+    Vec2lf<K> uv;
     struct
     {
-        Vec3<LaneNF32> n;
-        Vec3<LaneNF32> dpdu;
-        Vec3<LaneNF32> dpdv;
+        Vec3lf<K> n;
+        Vec3lf<K> dpdu;
+        Vec3lf<K> dpdv;
     } shading;
-    LaneNF32 tHit;
-    LaneNU32 lightIndices;
-    LaneNU32 materialIDs;
-    LaneNU32 faceIndices;
-    LaneNU32 rayStateHandles;
+    LaneKF32 tHit;
+    LaneKU32 lightIndices;
+    LaneKU32 materialIDs;
+    LaneKU32 faceIndices;
+    LaneKU32 rayStateHandles;
     // LaneIU32 volumeIndices;
 
     SurfaceInteractions() {}
-    SurfaceInteractions(const Vec3<LaneNF32> &p, const Vec3<LaneNF32> &n, const Vec2<LaneNF32> &uv) : p(p), n(n), uv(uv) {}
+    SurfaceInteractions(const Vec3lf<K> &p, const Vec3lf<K> &n, const Vec2lf<K> &uv) : p(p), n(n), uv(uv) {}
     // SurfaceInteraction(const Vec3f &p, const Vec3f &n, Vec2f u, f32 tHit) : p(p), n(n), uv(u), tHit(tHit) {}
-    bool ComputeShading(struct Scene2 *scene, BSDF &bsdf);
+    bool ComputeShading(BSDFBase<BxDF> &bsdf);
 
     u32 GenerateKey()
     {
@@ -127,11 +130,11 @@ Ray2 Transform(const AffineSpace &m, const Ray2 &r)
 
 struct RayDifferential
 {
-    Vec3NF32 o;
-    Vec3NF32 d;
+    Vec3lfn o;
+    Vec3lfn d;
     LaneNF32 t;
-    Vec3NF32 rxOrigin, ryOrigin;
-    Vec3NF32 rxDir, ryDir;
+    Vec3lfn rxOrigin, ryOrigin;
+    Vec3lfn rxDir, ryDir;
 };
 
 struct VolumeHandle

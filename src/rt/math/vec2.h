@@ -202,6 +202,6 @@ using Vec2lf = Vec2<LaneF32<K>>;
 typedef Vec2lf<4> Vec2lf4;
 typedef Vec2lf<8> Vec2lf8;
 
-typedef Vec2<LaneNF32> Vec2NF32;
+typedef Vec2<LaneNF32> Vec2lfn;
 
 } // namespace rt

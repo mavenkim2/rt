@@ -300,7 +300,7 @@ using Vec3lu = Vec3<LaneU32<K>>;
 typedef Vec3lu<4> Vec3lu4;
 typedef Vec3lu<8> Vec3lu8;
 
-typedef Vec3<LaneNF32> Vec3NF32;
+typedef Vec3<LaneNF32> Vec3lfn;
 
 template <i32 K>
 __forceinline Vec3lu<K> Flooru(const Vec3lf<K> &v)

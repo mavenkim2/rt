@@ -29,14 +29,14 @@ enum LightClass
 struct LightSample
 {
     SampledSpectrum L;
-    Vec3NF32 samplePoint;
-    Vec3NF32 wi;
+    Vec3lfn samplePoint;
+    Vec3lfn wi;
     LaneNF32 pdf;
     // TODO: simd
     LightType lightType;
 
     LightSample() {}
-    LightSample(SampledSpectrum L, Vec3NF32 samplePoint, Vec3NF32 wi, LaneNF32 pdf, LightType lightType)
+    LightSample(SampledSpectrum L, Vec3lfn samplePoint, Vec3lfn wi, LaneNF32 pdf, LightType lightType)
         : L(L), samplePoint(samplePoint), wi(wi), pdf(pdf), lightType(lightType) {}
 };
 
@@ -68,14 +68,14 @@ bool IsDeltaLight(LightType type)
 #define SAMPLE_LI_HEADER() static LightSample SAMPLE_LI_BODY
 #define SAMPLE_LI(type)    LightSample type::SAMPLE_LI_BODY
 #define SAMPLE_LI_BODY                                                                         \
-    SampleLi(const Scene2 *scene, const LaneIU32 lightIndices, const SurfaceInteraction &intr, \
-             const SampledWavelengths &lambda, const Vec2NF32 &u, bool allowIncompletePDF)
+    SampleLi(const Scene2 *scene, const LaneNU32 lightIndices, const SurfaceInteractionsN &intr, \
+             const SampledWavelengths &lambda, const Vec2lfn &u, bool allowIncompletePDF)
 
 #define PDF_LI_HEADER() static LaneNF32 PDF_LI_BODY
 #define PDF_LI(type)    LaneNF32 type::PDF_LI_BODY 
 #define PDF_LI_BODY \
-    PDF_Li(const Scene2 *scene, const LaneIU32 lightIndices, \
-           const Vec3NF32 &prevIntrP, const SurfaceInteraction &intr, bool allowIncompletePDF)
+    PDF_Li(const Scene2 *scene, const LaneNU32 lightIndices, \
+           const Vec3lfn &prevIntrP, const SurfaceInteractionsN &intr, bool allowIncompletePDF)
 
 #define PDF_LI_INF_HEADER(type) static LaneNF32 PDF_LI_INF_BODY(type)
 #define PDF_LI_INF(type)    LaneNF32 type::PDF_LI_INF_BODY(type)

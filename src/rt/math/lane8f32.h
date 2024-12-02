@@ -5,7 +5,7 @@ namespace rt
 {
 
 template <>
-struct LaneF32<8>
+struct LaneF32_<8>
 {
     typedef f32 Type;
     union
@@ -17,17 +17,17 @@ struct LaneF32<8>
         };
         f32 f[8];
     };
-    __forceinline LaneF32() {}
-    __forceinline LaneF32(__m256 v) : v(v) {}
-    __forceinline LaneF32(__m128 v) : v(_mm256_castps128_ps256(v)) {}
+    __forceinline LaneF32_() {}
+    __forceinline LaneF32_(__m256 v) : v(v) {}
+    __forceinline LaneF32_(__m128 v) : v(_mm256_castps128_ps256(v)) {}
 
-    __forceinline LaneF32(const Lane8F32 &other) { v = other.v; }
-    __forceinline LaneF32(const Lane4F32 &a, const Lane4F32 &b) : v(_mm256_insertf128_ps(_mm256_castps128_ps256(a), b, 1)) {}
-    __forceinline LaneF32(f32 a) : v(_mm256_set1_ps(a)) {}
-    __forceinline LaneF32(f32 a, f32 b, f32 c, f32 d, f32 e, f32 f, f32 g, f32 h) { v = _mm256_setr_ps(a, b, c, d, e, f, g, h); }
+    __forceinline LaneF32_(const Lane8F32 &other) { v = other.v; }
+    __forceinline LaneF32_(const Lane4F32 &a, const Lane4F32 &b) : v(_mm256_insertf128_ps(_mm256_castps128_ps256(a), b, 1)) {}
+    __forceinline LaneF32_(f32 a) : v(_mm256_set1_ps(a)) {}
+    __forceinline LaneF32_(f32 a, f32 b, f32 c, f32 d, f32 e, f32 f, f32 g, f32 h) { v = _mm256_setr_ps(a, b, c, d, e, f, g, h); }
 
     // NOTE: necessary since otherwise it would be interpreted as an integer
-    // __forceinline explicit LaneF32(const Lane8U32 &l)
+    // __forceinline explicit LaneF32_(const Lane8U32 &l)
     // {
     //     __m256i a = _mm_and_si128(l.v, _mm_set1_epi32(0x7fffffff));
     //     __m256i b = _mm_and_si128(_mm_srai_epi32(l.v, 31), _mm_set1_epi32(0x4f000000));
@@ -37,7 +37,7 @@ struct LaneF32<8>
     // }
 
     // TODO: not technically correct for unsigned integers > than int max
-    __forceinline explicit LaneF32(const Lane8U32 &l) { v = _mm256_cvtepi32_ps(l); }
+    __forceinline explicit LaneF32_(const Lane8U32 &l) { v = _mm256_cvtepi32_ps(l); }
 
     // __forceinline Lane4U32 AsUInt()
     // {
@@ -46,15 +46,15 @@ struct LaneF32<8>
     //     return l;
     // }
 
-    __forceinline LaneF32(ZeroTy) { v = _mm256_setzero_ps(); }
-    __forceinline LaneF32(PosInfTy) { v = _mm256_set1_ps(pos_inf); }
-    __forceinline LaneF32(NegInfTy) { v = _mm256_set1_ps(neg_inf); }
-    __forceinline LaneF32(NaNTy) { v = _mm256_set1_ps(NaN); }
-    __forceinline LaneF32(TrueTy) { v = _mm256_cmp_ps(_mm256_setzero_ps(), _mm256_setzero_ps(), _CMP_EQ_OQ); }
-    __forceinline LaneF32(FalseTy) { v = _mm256_setzero_ps(); }
+    __forceinline LaneF32_(ZeroTy) { v = _mm256_setzero_ps(); }
+    __forceinline LaneF32_(PosInfTy) { v = _mm256_set1_ps(pos_inf); }
+    __forceinline LaneF32_(NegInfTy) { v = _mm256_set1_ps(neg_inf); }
+    __forceinline LaneF32_(NaNTy) { v = _mm256_set1_ps(NaN); }
+    __forceinline LaneF32_(TrueTy) { v = _mm256_cmp_ps(_mm256_setzero_ps(), _mm256_setzero_ps(), _CMP_EQ_OQ); }
+    __forceinline LaneF32_(FalseTy) { v = _mm256_setzero_ps(); }
 
     template <i32 i1>
-    __forceinline static LaneF32 Mask()
+    __forceinline static LaneF32_ Mask()
     {
         if constexpr (i1)
         {
@@ -66,19 +66,19 @@ struct LaneF32<8>
         }
     }
 
-    __forceinline static LaneF32 Mask(bool i)
+    __forceinline static LaneF32_ Mask(bool i)
     {
         return Lane8F32(Lane4F32::Mask(i), Lane4F32::Mask(i));
     }
-    __forceinline static LaneF32 Mask(u32 i)
+    __forceinline static LaneF32_ Mask(u32 i)
     {
         Assert(i >= 0 && i < 256);
         return Lane8F32(Lane4F32::Mask(i & 15), Lane4F32::Mask(i >> 4));
     }
     static __forceinline Lane8F32 Step(u32 start)
     {
-        return LaneF32((f32)start + 0.f, (f32)start + 1.f, (f32)start + 2.f, (f32)start + 3.f,
-                       (f32)start + 4.f, (f32)start + 5.f, (f32)start + 6.f, (f32)start + 7.f);
+        return LaneF32_((f32)start + 0.f, (f32)start + 1.f, (f32)start + 2.f, (f32)start + 3.f,
+                        (f32)start + 4.f, (f32)start + 5.f, (f32)start + 6.f, (f32)start + 7.f);
     }
 
     __forceinline operator const __m256 &() const { return v; }
@@ -699,6 +699,18 @@ __forceinline void TruncateToU8(u8 *out, const Lane8F32 &lane)
     i32 result1         = _mm_cvtsi128_si32(_mm_castps_si128(_mm256_extractf128_ps(_mm256_castsi256_ps(m), 1)));
     *(u32 *)out         = result0;
     *((u32 *)(out) + 4) = result1;
+}
+
+f32 &Set(Lane8F32 &val, u32 index)
+{
+    Assert(index < 8);
+    return val[index];
+}
+
+f32 Get(const Lane8F32 &val, u32 index)
+{
+    Assert(index < 8);
+    return val[index];
 }
 
 #if 0

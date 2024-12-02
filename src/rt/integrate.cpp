@@ -94,8 +94,8 @@ static Scene2 *scene;
 // template <typename Texture>
 struct NormalMap
 {
-    template <i32 width>
-    void Evaluate(SurfaceInteraction<width> &intrs)
+    template <i32 K>
+    void Evaluate(SurfaceInteractions<K> &intrs)
     {
         Vec3f ns(2 * normalMap.BilerpChannel(uv, wrap), -1);
         ns = Normalize(ns);
@@ -115,12 +115,12 @@ template <typename TextureType, i32 numChannels>
 struct ImageTextureShader;
 
 template <typename TextureType>
-struct ImageTextureShader<1>
+struct ImageTextureShader<TextureType, 1>
 {
     TextureType texture;
     ImageTextureShader() {}
     template <typename T, i32 width>
-    static LaneF32<width> Evaluate(SurfaceInteraction<width> &intrs, Vec4lf<width> &filterWidths,
+    static LaneF32<width> Evaluate(SurfaceInteractions<width> &intrs, Vec4lf<width> &filterWidths,
                                    LaneF32<width> &dfdu, LaneF32<width> &dfdv, const ImageTextureShader<TextureType, 1> **textures)
     {
         alignas(4 * width) f32 results[width];
@@ -173,7 +173,7 @@ struct BumpMap
     // p' = p + d * n, d is displacement, estimate shading normal by computing dp'du and dp'dv (using chain rule)
     TextureShader displacementShader;
     template <i32 width>
-    static void Evaluate(SurfaceInteraction<width> &intrs, const BumpMap<TextureShader> **bumpMaps)
+    static void Evaluate(SurfaceInteractions<width> &intrs, const BumpMap<TextureShader> **bumpMaps)
     {
         TextureShader *displacementShaders[width];
         for (u32 i = 0; i < width; i++)
@@ -199,13 +199,12 @@ struct DiffuseMaterial
     using BxDF = DiffuseBxDF;
     Texture reflectanceShader;
 
-    template <i32 width>
-    static DiffuseBSDF<IntN> GetBSDF(SurfaceInteractions<width> &intr)
+    static BSDF<BxDF> GetBSDF(SurfaceInteractionsN &intr)
     {
         DiffuseMaterial *materials = scene->materials.Get<DiffuseMaterial>();
         // TODO: vectorized texture evaluation?
         // TODO: sampled spectrum vectorized
-        Vec4<LaneF32<width>> sampledSpectra;
+        Vec4lfn sampledSpectra;
 
         Lane4F32 sampledSpectrumArray[width];
         // for (u32 i = 0; i < width; i++)
@@ -213,7 +212,7 @@ struct DiffuseMaterial
         //     materials[i].texture->Evaluate(intr.faceIndices[i], sampledSpectrumArray[i].f);
         // }
         // Convert RGB to SRGB
-        Vec4<LaneF32<width>> reflectance = rShaderGraph.Evaluate(intr);
+        Vec4lfn reflectance = rShaderGraph.Evaluate(intr);
         return DiffuseBSDF(reflectance);
     }
 

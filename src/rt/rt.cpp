@@ -95,7 +95,7 @@ f32 ExactLinearToSRGB(f32 l)
     f32 s = l * 12.92f;
     if (l > 0.0031308f)
     {
-        s = 1.055f * Powf(l, 1.0f / 2.4f) - 0.055f;
+        s = 1.055f * Pow(l, 1.0f / 2.4f) - 0.055f;
     }
     return s;
 }

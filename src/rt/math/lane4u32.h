@@ -4,22 +4,22 @@
 namespace rt
 {
 template <>
-struct LaneU32<4>
+struct LaneU32_<4>
 {
     union
     {
         __m128i v;
         u32 f[4];
     };
-    __forceinline LaneU32() {}
-    __forceinline LaneU32(__m128i v) : v(v) {}
-    __forceinline LaneU32(const Lane4U32 &other) { v = other.v; }
-    __forceinline LaneU32(u32 a) { v = _mm_set1_epi32(a); }
-    __forceinline LaneU32(u32 a, u32 b, u32 c, u32 d) { v = _mm_setr_epi32(a, b, c, d); }
+    __forceinline LaneU32_() {}
+    __forceinline LaneU32_(__m128i v) : v(v) {}
+    __forceinline LaneU32_(const Lane4U32 &other) { v = other.v; }
+    __forceinline LaneU32_(u32 a) { v = _mm_set1_epi32(a); }
+    __forceinline LaneU32_(u32 a, u32 b, u32 c, u32 d) { v = _mm_setr_epi32(a, b, c, d); }
 
-    __forceinline LaneU32(ZeroTy) { v = _mm_setzero_si128(); }
-    __forceinline LaneU32(PosInfTy) { v = _mm_set1_epi32(pos_inf); }
-    __forceinline LaneU32(NegInfTy) { v = _mm_set1_epi32(neg_inf); }
+    __forceinline LaneU32_(ZeroTy) { v = _mm_setzero_si128(); }
+    __forceinline LaneU32_(PosInfTy) { v = _mm_set1_epi32(pos_inf); }
+    __forceinline LaneU32_(NegInfTy) { v = _mm_set1_epi32(neg_inf); }
 
     __forceinline operator const __m128i &() const
     {
@@ -46,7 +46,7 @@ struct LaneU32<4>
     static __forceinline Lane4U32 LoadU(const void *ptr) { return _mm_loadu_si128((const __m128i *)ptr); }
     static __forceinline void Store(void *ptr, const Lane4U32 &l) { _mm_store_si128((__m128i *)ptr, l); }
 
-    static __forceinline Lane4U32 Step(u32 start) { return LaneU32(start + 0, start + 1, start + 2, start + 3); }
+    static __forceinline Lane4U32 Step(u32 start) { return LaneU32_(start + 0, start + 1, start + 2, start + 3); }
 };
 
 __forceinline Lane4U32 UnpackLo(const Lane4U32 &a, const Lane4U32 &b) { return _mm_unpacklo_epi32(a, b); }

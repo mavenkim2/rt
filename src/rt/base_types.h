@@ -146,7 +146,9 @@ struct RGBAlbedoSpectrum;
 struct RGBUnboundedSpectrum;
 struct RGBIlluminantSpectrum;
 
-struct SampledSpectrum;
+template <typename T>
+struct SampledSpectrumBase;
+// struct SampledSpectrumN;
 struct SampledWavelengths;
 
 using SpectrumTaggedPointer = TaggedPointer<ConstantSpectrum, DenselySampledSpectrum, PiecewiseLinearSpectrum, BlackbodySpectrum,
@@ -156,7 +158,7 @@ struct SpectrumMethods
 {
     f32 (*Evaluate)(void *, f32);
     f32 (*MaxValue)(void *);
-    SampledSpectrum (*Sample)(void *, const SampledWavelengths &);
+    SampledSpectrumBase<f32> (*Sample)(void *, const SampledWavelengths &);
 };
 
 static SpectrumMethods spectrumMethods[SpectrumTaggedPointer::MaxTag()] = {};
@@ -167,7 +169,7 @@ struct Spectrum : SpectrumTaggedPointer
 
     f32 operator()(f32 lambda) const;
     f32 MaxValue() const;
-    SampledSpectrum Sample(const SampledWavelengths &lambda) const;
+    SampledSpectrumBase<f32> Sample(const SampledWavelengths &lambda) const;
 };
 
 template <class T>
@@ -176,7 +178,7 @@ struct SpectrumCRTP
     static const i32 id;
     static f32 Evaluate(void *ptr, f32 lambda);
     static f32 MaxValue(void *ptr);
-    static SampledSpectrum Sample(void *ptr, const SampledWavelengths &lambda);
+    static SampledSpectrumBase<f32> Sample(void *ptr, const SampledWavelengths &lambda);
     static constexpr i32 Register()
     {
         spectrumMethods[SpectrumTaggedPointer::TypeIndex<T>()] = {Evaluate, MaxValue, Sample};
@@ -201,17 +203,17 @@ template struct SpectrumCRTP<RGBIlluminantSpectrum>;
 struct DiffuseBxDF;
 struct ConductorBxDF;
 struct DielectricBxDF;
-struct ThinDielectricBxDF;
+// struct ThinDielectricBxDF;
 
 enum class TransportMode;
 struct BSDFSample;
 enum class BxDFFlags;
 
-using BxDFTaggedPointer = TaggedPointer<DiffuseBxDF, ConductorBxDF, DielectricBxDF, ThinDielectricBxDF>;
+using BxDFTaggedPointer = TaggedPointer<DiffuseBxDF, ConductorBxDF, DielectricBxDF>; //, ThinDielectricBxDF>;
 struct BxDFMethods
 {
-    SampledSpectrum (*EvaluateSample)(void *, Vec3f, Vec3f, f32 &, TransportMode);
-    BSDFSample (*GenerateSample)(void *, Vec3f, f32, Vec2f, TransportMode, BxDFFlags);
+    SampledSpectrumBase<LaneNF32> (*EvaluateSample)(void *, const Vec3lfn &, const Vec3lfn &, LaneNF32 &, TransportMode);
+    BSDFSample (*GenerateSample)(void *, const Vec3lfn &, const LaneNF32 &, const Vec2lfn &, TransportMode, BxDFFlags);
     // f32 (*PDF)(void *, Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags flags);
     BxDFFlags (*Flags)(void *);
 };
@@ -224,27 +226,18 @@ static BxDFMethods bxdfMethods[BxDFTaggedPointer::MaxTag()] = {};
 struct BxDF : BxDFTaggedPointer
 {
     BxDF() {}
-    SampledSpectrum EvaluateSample(const Vec3NF32 &wo, const Vec3NF32 &wi, const LaneNF32 &pdf, TransportMode mode) const
-    {
-        return SampledSpectrum(0.f);
-    }
-    BSDFSample GenerateSample(const Vec3NF32 &wo, const LaneNF32 &uc, const Vec3NF32 &u, TransportMode mode, BxDFFlags inFlags) const
-    {
-        return {};
-    }
+    SampledSpectrumBase<LaneNF32> EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf, TransportMode mode) const;
+    BSDFSample GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u, TransportMode mode, BxDFFlags inFlags) const;
     // f32 PDF(Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags inFlags) const { return 0.f; }
-    BxDFFlags Flags() const
-    {
-        return {};
-    }
+    BxDFFlags Flags() const;
 };
 
 template <class T>
 struct BxDFCRTP
 {
     static const i32 id;
-    static SampledSpectrum EvaluateSample(void *ptr, Vec3f wo, Vec3f wi, f32 &pdf, TransportMode mode);
-    static BSDFSample GenerateSample(void *ptr, Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BxDFFlags flags);
+    static SampledSpectrumBase<LaneNF32> EvaluateSample(void *ptr, const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf, TransportMode mode);
+    static BSDFSample GenerateSample(void *ptr, const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u, TransportMode mode, BxDFFlags flags);
     // static f32 PDF(void *ptr, Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags flags);
     static BxDFFlags Flags(void *ptr);
     static constexpr i32 Register()
@@ -260,7 +253,7 @@ const i32 BxDFCRTP<T>::id = BxDFCRTP<T>::Register();
 template struct BxDFCRTP<DiffuseBxDF>;
 template struct BxDFCRTP<ConductorBxDF>;
 template struct BxDFCRTP<DielectricBxDF>;
-template struct BxDFCRTP<ThinDielectricBxDF>;
+// template struct BxDFCRTP<ThinDielectricBxDF>;
 
 } // namespace rt
 #endif

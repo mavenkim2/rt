@@ -80,19 +80,19 @@ Vec2f EqualAreaSphereToSquare(Vec3f d)
 // the unit sphere centered at point p
 // https://blogs.autodesk.com/media-and-entertainment/wp-content/uploads/sites/162/egsr2013_spherical_rectangle.pdf
 // TODO: simd sin, cos, and arcsin
-Vec3NF32 SampleSphericalRectangle(const Vec3NF32 &p, const Vec3NF32 &base, const Vec3NF32 &eu, const Vec3NF32 &ev,
-                                  const Vec2NF32 &samples, LaneNF32 *pdf)
+Vec3lfn SampleSphericalRectangle(const Vec3lfn &p, const Vec3lfn &base, const Vec3lfn &eu, const Vec3lfn &ev,
+                                 const Vec2lfn &samples, LaneNF32 *pdf)
 {
     LaneNF32 euLength = Length(eu);
     LaneNF32 evLength = Length(ev);
 
     // Calculate local coordinate system where sampling is done
     // NOTE: rX and rY must be perpendicular
-    Vec3NF32 rX = eu / euLength;
-    Vec3NF32 rY = ev / evLength;
-    Vec3NF32 rZ = Cross(rX, rY);
+    Vec3lfn rX = eu / euLength;
+    Vec3lfn rY = ev / evLength;
+    Vec3lfn rZ = Cross(rX, rY);
 
-    Vec3NF32 d0 = base - p;
+    Vec3lfn d0  = base - p;
     LaneNF32 x0 = Dot(d0, rX);
     LaneNF32 y0 = Dot(d0, rY);
     LaneNF32 z0 = Dot(d0, rZ);
@@ -105,16 +105,16 @@ Vec3NF32 SampleSphericalRectangle(const Vec3NF32 &p, const Vec3NF32 &base, const
     LaneNF32 x1 = x0 + euLength;
     LaneNF32 y1 = y0 + evLength;
 
-    Vec3NF32 v00(x0, y0, z0);
-    Vec3NF32 v01(x0, y1, z0);
-    Vec3NF32 v10(x1, y0, z0);
-    Vec3NF32 v11(x1, y1, z0);
+    Vec3lfn v00(x0, y0, z0);
+    Vec3lfn v01(x0, y1, z0);
+    Vec3lfn v10(x1, y0, z0);
+    Vec3lfn v11(x1, y1, z0);
 
     // Compute normals to edges (i.e, normal of plane containing edge and p)
-    Vec3NF32 n0 = Normalize(Cross(v00, v10));
-    Vec3NF32 n1 = Normalize(Cross(v10, v11));
-    Vec3NF32 n2 = Normalize(Cross(v11, v01));
-    Vec3NF32 n3 = Normalize(Cross(v01, v00));
+    Vec3lfn n0 = Normalize(Cross(v00, v10));
+    Vec3lfn n1 = Normalize(Cross(v10, v11));
+    Vec3lfn n2 = Normalize(Cross(v11, v01));
+    Vec3lfn n3 = Normalize(Cross(v01, v00));
 
     // Calculate the angle between the plane normals
     LaneNF32 g0 = AngleBetween(-n0, n1);
@@ -208,7 +208,7 @@ __forceinline void Transpose8x3(const Lane4F32 &inA, const Lane4F32 &inB, const 
     out2 = Lane8F32(temp[2], temp[5]);
 }
 
-__forceinline void Transpose(const Lane4F32 lanes[IntN], Vec3NF32 &out)
+__forceinline void Transpose(const Lane4F32 lanes[IntN], Vec3lfn &out)
 {
 #if IntN == 1
     out = ToVec3f(lanes[0]);
@@ -221,12 +221,12 @@ __forceinline void Transpose(const Lane4F32 lanes[IntN], Vec3NF32 &out)
 #endif
 }
 
-LaneNF32 SphericalQuadArea(const Vec3NF32 &a, const Vec3NF32 &b, const Vec3NF32 &c, const Vec3NF32 &d)
+LaneNF32 SphericalQuadArea(const Vec3lfn &a, const Vec3lfn &b, const Vec3lfn &c, const Vec3lfn &d)
 {
-    Vec3NF32 axb = Normalize(Cross(a, b));
-    Vec3NF32 bxc = Normalize(Cross(b, c));
-    Vec3NF32 cxd = Normalize(Cross(c, d));
-    Vec3NF32 dxa = Normalize(Cross(d, a));
+    Vec3lfn axb = Normalize(Cross(a, b));
+    Vec3lfn bxc = Normalize(Cross(b, c));
+    Vec3lfn cxd = Normalize(Cross(c, d));
+    Vec3lfn dxa = Normalize(Cross(d, a));
 
     LaneNF32 g0 = AngleBetween(-axb, bxc);
     LaneNF32 g1 = AngleBetween(-bxc, cxd);
@@ -243,10 +243,10 @@ SAMPLE_LI(DiffuseAreaLight)
     const DiffuseAreaLight *lights[IntN];
     for (u32 i = 0; i < IntN; i++)
     {
-        lights[i] = &scene->GetAreaLights()[lightIndices[i]];
+        lights[i] = &scene->GetAreaLights()[Get(lightIndices, i)];
     }
 
-    Vec3NF32 p[4];
+    Vec3lfn p[4];
     LaneNF32 area;
     for (u32 i = 0; i < 4; i++)
     {
@@ -257,25 +257,25 @@ SAMPLE_LI(DiffuseAreaLight)
             Lane4F32 pTemp                = Lane4F32::LoadU(light->p + i);
 
             // TODO: maybe transform the vertices once
-            pI[lightIndex]   = Transform(*light->renderFromLight, pTemp);
-            area[lightIndex] = light->area;
+            pI[lightIndex]        = Transform(*light->renderFromLight, pTemp);
+            Set(area, lightIndex) = light->area;
         }
         Transpose(pI, p[i]);
     }
 
-    Vec3NF32 v00 = Normalize(p[0] - Vec3NF32(intr.p));
-    Vec3NF32 v10 = Normalize(p[1] - Vec3NF32(intr.p));
-    Vec3NF32 v01 = Normalize(p[3] - Vec3NF32(intr.p));
-    Vec3NF32 v11 = Normalize(p[2] - Vec3NF32(intr.p));
+    Vec3lfn v00 = Normalize(p[0] - Vec3lfn(intr.p));
+    Vec3lfn v10 = Normalize(p[1] - Vec3lfn(intr.p));
+    Vec3lfn v01 = Normalize(p[3] - Vec3lfn(intr.p));
+    Vec3lfn v11 = Normalize(p[2] - Vec3lfn(intr.p));
 
-    Vec3NF32 eu = p[1] - p[0];
-    Vec3NF32 ev = p[3] - p[0];
-    Vec3NF32 n  = Normalize(Cross(eu, ev));
+    Vec3lfn eu = p[1] - p[0];
+    Vec3lfn ev = p[3] - p[0];
+    Vec3lfn n  = Normalize(Cross(eu, ev));
 
     LightSample result;
     // If the solid angle is small
     MaskF32 mask = SphericalQuadArea(v00, v10, v01, v11) < DiffuseAreaLight::MinSphericalArea;
-    Vec3NF32 wi  = intr.p - result.samplePoint;
+    Vec3lfn wi   = intr.p - result.samplePoint;
     if (All(mask))
     {
         result.samplePoint = Lerp(u[0], Lerp(u[1], p[0], p[3]), Lerp(u[1], p[1], p[2]));
@@ -287,9 +287,9 @@ SAMPLE_LI(DiffuseAreaLight)
         result.samplePoint = SampleSphericalRectangle(intr.p, p[0], eu, ev, u, &pdf);
 
         // add projected solid angle measure (n dot wi) to pdf
-        Vec4NF32 w(AbsDot(v00, intr.shading.n), AbsDot(v10, intr.shading.n),
+        Vec4lfn w(AbsDot(v00, intr.shading.n), AbsDot(v10, intr.shading.n),
                    AbsDot(v01, intr.shading.n), AbsDot(v11, intr.shading.n));
-        Vec2NF32 uNew = SampleBilinear(u, w);
+        Vec2lfn uNew = SampleBilinear(u, w);
         pdf *= BilinearPDF(uNew, w);
         result.pdf = pdf;
     }
@@ -310,9 +310,9 @@ PDF_LI(DiffuseAreaLight)
     const DiffuseAreaLight *lights[IntN];
     for (u32 i = 0; i < IntN; i++)
     {
-        lights[i] = &scene->GetAreaLights()[lightIndices[i]];
+        lights[i] = &scene->GetAreaLights()[Get(lightIndices, i)];
     }
-    Vec3NF32 p[4];
+    Vec3lfn p[4];
     LaneNF32 area;
     // TODO: maybe have to spawn a ray??? but I feel like this is only called (at least for now) when it already has intersected,
     // and we need the pdf for MIS
@@ -324,18 +324,18 @@ PDF_LI(DiffuseAreaLight)
             const DiffuseAreaLight *light = lights[lightIndex];
             Lane4F32 pTemp                = Lane4F32::LoadU(light->p + i);
 
-            pI[lightIndex]   = Transform(*light->renderFromLight, pTemp);
-            area[lightIndex] = light->area;
+            pI[lightIndex]        = Transform(*light->renderFromLight, pTemp);
+            Set(area, lightIndex) = light->area;
         }
         Transpose(pI, p[i]);
     }
-    Vec3NF32 v00 = Normalize(p[0] - Vec3NF32(prevIntrP));
-    Vec3NF32 v10 = Normalize(p[1] - Vec3NF32(prevIntrP));
-    Vec3NF32 v01 = Normalize(p[3] - Vec3NF32(prevIntrP));
-    Vec3NF32 v11 = Normalize(p[2] - Vec3NF32(prevIntrP));
+    Vec3lfn v00 = Normalize(p[0] - Vec3lfn(prevIntrP));
+    Vec3lfn v10 = Normalize(p[1] - Vec3lfn(prevIntrP));
+    Vec3lfn v01 = Normalize(p[3] - Vec3lfn(prevIntrP));
+    Vec3lfn v11 = Normalize(p[2] - Vec3lfn(prevIntrP));
 
-    Vec3NF32 eu = p[1] - p[0];
-    Vec3NF32 ev = p[3] - p[0];
+    Vec3lfn eu = p[1] - p[0];
+    Vec3lfn ev = p[3] - p[0];
     // If the solid angle is small
     LaneNF32 sphArea = SphericalQuadArea(v00, v10, v01, v11);
     MaskF32 mask     = sphArea < DiffuseAreaLight::MinSphericalArea;
@@ -343,9 +343,9 @@ PDF_LI(DiffuseAreaLight)
     LaneNF32 pdf;
     if (All(mask))
     {
-        Vec3NF32 n  = Normalize(Cross(eu, ev));
-        Vec3NF32 wi = prevIntrP - intr.p;
-        pdf         = LengthSquared(wi) / (area * AbsDot(Normalize(wi), n));
+        Vec3lfn n  = Normalize(Cross(eu, ev));
+        Vec3lfn wi = prevIntrP - intr.p;
+        pdf        = LengthSquared(wi) / (area * AbsDot(Normalize(wi), n));
     }
     else if (None(mask))
     {
@@ -353,8 +353,8 @@ PDF_LI(DiffuseAreaLight)
 
         NotImplemented;
 #if 0
-        Vec2NF32 u = InvertSphericalRectangleSample(intrP, prevIntrP, eu, ev);
-        Vec4NF32 w(AbsDot(v00, intr.shading.n), AbsDot(v10, intr.shading.n),
+        Vec2lfn u = InvertSphericalRectangleSample(intrP, prevIntrP, eu, ev);
+        Vec4lfn w(AbsDot(v00, intr.shading.n), AbsDot(v10, intr.shading.n),
                    AbsDot(v01, intr.shading.n), AbsDot(v11, intr.shading.n));
         pdf *= BilinearPDF(u, w);
 #endif

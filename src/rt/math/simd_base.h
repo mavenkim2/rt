@@ -217,7 +217,7 @@ struct UndefinedTy
 const constexpr UndefinedTy undefined = UndefinedTy();
 
 template <i32 N>
-struct LaneF32
+struct LaneF32_
 {
     f32 values[N];
 
@@ -233,6 +233,21 @@ struct LaneF32
         return values[i];
     }
 };
+
+template <i32 N>
+struct LaneF32Helper
+{
+    using Type = LaneF32_<N>;
+};
+
+template <>
+struct LaneF32Helper<1>
+{
+    using Type = f32;
+};
+
+template <i32 N>
+using LaneF32 = typename LaneF32Helper<N>::Type;
 
 template <i32 K>
 __forceinline LaneF32<K> Cos(const LaneF32<K> &a)
@@ -267,36 +282,36 @@ __forceinline LaneF32<K> Atan2(const LaneF32<K> &y, const LaneF32<K> &x)
     return LaneF32<K>::Load(result);
 }
 
-template <>
-struct LaneF32<1>
-{
-    f32 value;
-    const f32 &operator[](i32 i) const
-    {
-        Assert(i == 0);
-        return value;
-    }
-    f32 &operator[](i32 i)
-    {
-        Assert(i == 0);
-        return value;
-    }
-    __forceinline LaneF32() {}
-    __forceinline LaneF32(f32 v) : value(v) {}
-    __forceinline LaneF32(ZeroTy) : value(0.f) {}
-    __forceinline explicit operator f32() const { return value; }
-
-    static __forceinline LaneF32 Load(const void *ptr)
-    {
-        Assert(ptr);
-        return LaneF32(((f32 *)ptr)[0]);
-    }
-    template <bool b>
-    static __forceinline bool Mask() { return b; }
-};
+// template <>
+// struct LaneF32_<1>
+// {
+//     f32 value;
+//     const f32 &operator[](i32 i) const
+//     {
+//         Assert(i == 0);
+//         return value;
+//     }
+//     f32 &operator[](i32 i)
+//     {
+//         Assert(i == 0);
+//         return value;
+//     }
+//     __forceinline LaneF32_() {}
+//     __forceinline LaneF32_(f32 v) : value(v) {}
+//     __forceinline LaneF32_(ZeroTy) : value(0.f) {}
+//     __forceinline explicit operator f32() const { return value; }
+//
+//     static __forceinline LaneF32_ Load(const void *ptr)
+//     {
+//         Assert(ptr);
+//         return LaneF32_(((f32 *)ptr)[0]);
+//     }
+//     template <bool b>
+//     static __forceinline bool Mask() { return b; }
+// };
 
 template <i32 N>
-struct LaneU32
+struct LaneU32_
 {
     u32 values[N];
     const u32 &operator[](i32 i) const
@@ -312,24 +327,39 @@ struct LaneU32
     }
 };
 
-template <>
-struct LaneU32<1>
+template <i32 N>
+struct LaneU32Helper
 {
-    u32 value;
-    const u32 &operator[](i32 i) const
-    {
-        Assert(i == 0);
-        return value;
-    }
-    u32 &operator[](i32 i)
-    {
-        Assert(i == 0);
-        return value;
-    }
-    __forceinline LaneU32() {}
-    __forceinline LaneU32(u32 v) : value(v) {}
-    __forceinline explicit operator u32() const { return value; }
+    using Type = LaneU32_<N>;
 };
+
+template <>
+struct LaneU32Helper<1>
+{
+    using Type = u32;
+};
+
+template <i32 N>
+using LaneU32 = typename LaneU32Helper<N>::Type;
+
+// template <>
+// struct LaneU32<1>
+// {
+//     u32 value;
+//     const u32 &operator[](i32 i) const
+//     {
+//         Assert(i == 0);
+//         return value;
+//     }
+//     u32 &operator[](i32 i)
+//     {
+//         Assert(i == 0);
+//         return value;
+//     }
+//     __forceinline LaneU32() {}
+//     __forceinline LaneU32(u32 v) : value(v) {}
+//     __forceinline explicit operator u32() const { return value; }
+// };
 
 using Lane1F32 = LaneF32<1>;
 using Lane4F32 = LaneF32<4>;
@@ -341,35 +371,38 @@ using Lane8U32 = LaneU32<8>;
 
 using LaneXF32 = LaneF32<MAX_LANE_WIDTH>;
 
-__forceinline Lane1F32 operator+(const Lane1F32 &a, const Lane1F32 &b) { return a.value + b.value; }
-__forceinline Lane1F32 operator-(const Lane1F32 &a, const Lane1F32 &b) { return a.value - b.value; }
-__forceinline Lane1F32 operator/(const Lane1F32 &a, const Lane1F32 &b) { return a.value / b.value; }
-__forceinline Lane1F32 operator*(const Lane1F32 &a, const Lane1F32 &b) { return a.value * b.value; }
-__forceinline Lane1F32 operator-(const Lane1F32 &a) { return -a.value; }
-__forceinline Lane1F32 &operator+=(Lane1F32 &a, const Lane1F32 &b)
-{
-    a = a + b;
-    return a;
-}
-__forceinline Lane1F32 &operator*=(Lane1F32 &a, const Lane1F32 &b)
-{
-    a = a * b;
-    return a;
-}
-__forceinline bool operator>(const Lane1F32 &a, const Lane1F32 &b) { return a.value > b.value; }
-__forceinline bool operator<(const Lane1F32 &a, const Lane1F32 &b) { return a.value < b.value; }
-__forceinline bool operator==(const Lane1F32 &a, const Lane1F32 &b) { return a.value == b.value; }
-__forceinline Lane1F32 Cos(const Lane1F32 &a) { return Cos(a.value); }
-__forceinline Lane1F32 Sin(const Lane1F32 &a) { return Sin(a.value); }
-__forceinline Lane1F32 Sqrt(const Lane1F32 &a) { return Sqrt(a.value); }
-__forceinline Lane1F32 Abs(const Lane1F32 &a) { return Abs(a.value); }
-__forceinline Lane1F32 Copysignf(const Lane1F32 &mag, const Lane1F32 &sign) { return Copysignf(mag.value, sign.value); }
-__forceinline Lane1F32 Clamp(const Lane1F32 &v, const Lane1F32 &min, const Lane1F32 &max) { return Clamp(v.value, min.value, max.value); }
-__forceinline Lane1F32 Select(const Lane1F32 mask, const Lane1F32 a, const Lane1F32 b) { return mask.value ? a : b; }
-__forceinline Lane1F32 FMA(const Lane1F32 a, const Lane1F32 b, const Lane1F32 c) { return std::fma(a.value, b.value, c.value); }
-__forceinline Lane1F32 FMS(const Lane1F32 a, const Lane1F32 b, const Lane1F32 c) { return std::fma(a.value, b.value, -c.value); }
-__forceinline Lane1F32 Rsqrt(const Lane1F32 a) { return 1.f / Sqrt(a.value); }
-__forceinline bool operator!=(const Lane1U32 &a, const Lane1U32 &b) { return a.value != b.value; }
+// __forceinline Lane1F32 operator+(const Lane1F32 &a, const Lane1F32 &b) { return a.value + b.value; }
+// __forceinline Lane1F32 operator-(const Lane1F32 &a, const Lane1F32 &b) { return a.value - b.value; }
+// __forceinline Lane1F32 operator/(const Lane1F32 &a, const Lane1F32 &b) { return a.value / b.value; }
+// __forceinline Lane1F32 operator*(const Lane1F32 &a, const Lane1F32 &b) { return a.value * b.value; }
+// __forceinline Lane1F32 operator-(const Lane1F32 &a) { return -a.value; }
+// __forceinline Lane1F32 &operator+=(Lane1F32 &a, const Lane1F32 &b)
+// {
+//     a = a + b;
+//     return a;
+// }
+// __forceinline Lane1F32 &operator*=(Lane1F32 &a, const Lane1F32 &b)
+// {
+//     a = a * b;
+//     return a;
+// }
+// __forceinline bool operator>(const Lane1F32 &a, const Lane1F32 &b) { return a.value > b.value; }
+// __forceinline bool operator<(const Lane1F32 &a, const Lane1F32 &b) { return a.value < b.value; }
+// __forceinline bool operator==(const Lane1F32 &a, const Lane1F32 &b) { return a.value == b.value; }
+// __forceinline Lane1F32 Cos(const Lane1F32 &a) { return Cos(a.value); }
+// __forceinline Lane1F32 Sin(const Lane1F32 &a) { return Sin(a.value); }
+// __forceinline Lane1F32 Sqrt(const Lane1F32 &a) { return Sqrt(a.value); }
+// __forceinline Lane1F32 Abs(const Lane1F32 &a) { return Abs(a.value); }
+// __forceinline Lane1F32 Copysignf(const Lane1F32 &mag, const Lane1F32 &sign) { return Copysignf(mag.value, sign.value); }
+// __forceinline Lane1F32 Clamp(const Lane1F32 &v, const Lane1F32 &min, const Lane1F32 &max) { return Clamp(v.value, min.value, max.value); }
+// __forceinline Lane1F32 Select(const Lane1F32 mask, const Lane1F32 a, const Lane1F32 b) { return mask.value ? a : b; }
+// __forceinline Lane1F32 FMA(const Lane1F32 a, const Lane1F32 b, const Lane1F32 c) { return std::fma(a.value, b.value, c.value); }
+// __forceinline Lane1F32 FMS(const Lane1F32 a, const Lane1F32 b, const Lane1F32 c) { return std::fma(a.value, b.value, -c.value); }
+// __forceinline Lane1F32 Rsqrt(const Lane1F32 a) { return 1.f / Sqrt(a.value); }
+// __forceinline Lane1F32 SafeSqrt(const Lane1F32 a) { return 1.f / Sqrt(a.value); }
+// __forceinline Lane1F32 Max(const Lane1F32 a, const Lane1F32 b) { return Max(a.value, b.value); }
+// __forceinline Lane1F32 Min(const Lane1F32 a, const Lane1F32 b) { return Min(a.value, b.value); }
+// __forceinline bool operator!=(const Lane1U32 &a, const Lane1U32 &b) { return a.value != b.value; }
 
 // lane width for integration
 #define IntN 1
@@ -389,11 +422,11 @@ struct MaskBase<f32>
     using Type = bool;
 };
 
-template <>
-struct MaskBase<Lane1F32>
-{
-    using Type = bool;
-};
+// template <>
+// struct MaskBase<Lane1F32>
+// {
+//     using Type = bool;
+// };
 
 template <typename T>
 struct MaskBase
@@ -403,6 +436,30 @@ struct MaskBase
 
 template <typename T>
 using Mask = typename MaskBase<T>::Type;
+
+f32 &Set(f32 &val, u32 index)
+{
+    Assert(index == 0);
+    return val;
+}
+
+u32 &Set(u32 &val, u32 index)
+{
+    Assert(index == 0);
+    return val;
+}
+
+f32 Get(f32 val, u32 index)
+{
+    Assert(index == 0);
+    return val;
+}
+
+u32 Get(u32 val, u32 index)
+{
+    Assert(index == 0);
+    return val;
+}
 
 static const __m128 _mm_lookupmask_ps[16] = {
     _mm_castsi128_ps(_mm_set_epi32(0, 0, 0, 0)),
