@@ -30,7 +30,7 @@ if not exist .\src\gen\rgbspectrum_srgb.cpp (
 
 if not exist .\build\src\third_party\zlib\Release\zlibstatic.lib (
     REM TODO this probably only works with visual studio...
-    cmake -B build -T ClangCL . && cmake --build build --config Release
+    cmake -B build -T ClangCL -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded . && cmake --build build --config Release
 )
 
 set Dependencies=-I ..\src\third_party\openvdb\nanovdb -I ..\src\third_party\ptex\src\ptex -I ..\src\third_party\zlib ^
@@ -80,10 +80,10 @@ if not exist .\rgbspectrum_srgb.obj (
 
 if "%1" == "cl" (
     echo Compiling with Clang
-    clang++ --target=x86_64-pc-windows-msvc -fms-runtime-lib=dynamic -std=c++17 -march=native -ffp-contract=off  %Definitions% %Dependencies% -L %LibraryPathZlib% -L %LibraryPathPtex% -l %LibraryNameZlib% -l %LibraryNamePtex% -o rt.exe ../src/rt/rt.cpp rgbspectrum_srgb.obj
+    clang++ -std=c++17 -march=native -ffp-contract=off %Definitions% %Dependencies% -L %LibraryPathZlib% -L %LibraryPathPtex% -l %LibraryNameZlib% -l %LibraryNamePtex% -o rt.exe ../src/rt/rt.cpp rgbspectrum_srgb.obj
 ) else (
     echo Compiling with MSVC
-    cl /MD %DefaultCompilerFlags% %Definitions% %AVX2% %Dependencies% ../src/rt/rt.cpp /std:c++17 /link %DefaultLinkerFlags% rgbspectrum_srgb.obj /LIBPATH:%LibraryPathZlib% /LIBPATH:%LibraryPathPtex% %LibraryNameZlib% %LibraryNamePtex% /out:rt.exe
+    cl %DefaultCompilerFlags% %Definitions% %AVX2% %Dependencies% ../src/rt/rt.cpp /std:c++17 /link %DefaultLinkerFlags% rgbspectrum_srgb.obj /LIBPATH:%LibraryPathZlib% /LIBPATH:%LibraryPathPtex% %LibraryNameZlib% %LibraryNamePtex% /out:rt.exe
 )
 
 REM cl %DefaultCompilerFlags% ../src/rgb2spec.cpp /std:c++17 /link %DefaultLinkerFlags% /out:rgb2spec.exe
