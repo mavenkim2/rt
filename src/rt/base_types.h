@@ -212,7 +212,7 @@ struct BxDFMethods
 {
     SampledSpectrum (*EvaluateSample)(void *, Vec3f, Vec3f, f32 &, TransportMode);
     BSDFSample (*GenerateSample)(void *, Vec3f, f32, Vec2f, TransportMode, BxDFFlags);
-    f32 (*PDF)(void *, Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags flags);
+    // f32 (*PDF)(void *, Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags flags);
     BxDFFlags (*Flags)(void *);
 };
 
@@ -224,10 +224,19 @@ static BxDFMethods bxdfMethods[BxDFTaggedPointer::MaxTag()] = {};
 struct BxDF : BxDFTaggedPointer
 {
     BxDF() {}
-    SampledSpectrum EvaluateSample(Vec3f wo, Vec3f wi, f32 &pdf, TransportMode mode) const { return SampledSpectrum(0.f); }
-    BSDFSample GenerateSample(Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BxDFFlags inFlags) const { return {}; }
-    f32 PDF(Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags inFlags) const { return 0.f; }
-    BxDFFlags Flags() const { return {}; }
+    SampledSpectrum EvaluateSample(const Vec3NF32 &wo, const Vec3NF32 &wi, const LaneNF32 &pdf, TransportMode mode) const
+    {
+        return SampledSpectrum(0.f);
+    }
+    BSDFSample GenerateSample(const Vec3NF32 &wo, const LaneNF32 &uc, const Vec3NF32 &u, TransportMode mode, BxDFFlags inFlags) const
+    {
+        return {};
+    }
+    // f32 PDF(Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags inFlags) const { return 0.f; }
+    BxDFFlags Flags() const
+    {
+        return {};
+    }
 };
 
 template <class T>
@@ -236,11 +245,11 @@ struct BxDFCRTP
     static const i32 id;
     static SampledSpectrum EvaluateSample(void *ptr, Vec3f wo, Vec3f wi, f32 &pdf, TransportMode mode);
     static BSDFSample GenerateSample(void *ptr, Vec3f wo, f32 uc, Vec2f u, TransportMode mode, BxDFFlags flags);
-    static f32 PDF(void *ptr, Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags flags);
+    // static f32 PDF(void *ptr, Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags flags);
     static BxDFFlags Flags(void *ptr);
     static constexpr i32 Register()
     {
-        bxdfMethods[BxDFTaggedPointer::TypeIndex<T>()] = {EvaluateSample, GenerateSample, PDF, Flags};
+        bxdfMethods[BxDFTaggedPointer::TypeIndex<T>()] = {EvaluateSample, GenerateSample, Flags};
         return BxDFTaggedPointer::TypeIndex<T>();
     }
 };

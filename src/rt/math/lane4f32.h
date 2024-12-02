@@ -183,10 +183,11 @@ __forceinline Lane4F32 FMS(const Lane4F32 &a, const Lane4F32 &b, const Lane4F32 
 #endif
 }
 
+__forceinline Lane4F32 Sqr(const Lane4F32 &a) { return a * a; }
 __forceinline Lane4F32 Sqrt(const Lane4F32 &a) { return _mm_sqrt_ps(a); }
 __forceinline Lane4F32 SafeSqrt(const Lane4F32 &a)
 {
-    return _mm_sqrt_ps(Select(a < 0.f, 0.f, a));
+    return _mm_sqrt_ps(Select(a < Lane4F32(0.f), Lane4F32(0.f), a));
 }
 
 __forceinline Lane4F32 Rsqrt(const Lane4F32 &a)

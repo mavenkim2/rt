@@ -174,6 +174,12 @@ __forceinline Vec3<T> operator<(const Vec3<T> &a, const Vec3<T> &b)
 }
 
 template <typename T>
+__forceinline Vec3<T> Select(const Mask<T> &mask, const Vec3<T> &a, const Vec3<T> &b)
+{
+    return Vec3<T>(Select(mask, a.x, b.x), Select(mask, a.y, b.y), Select(mask, a.z, b.z));
+}
+
+template <typename T>
 __forceinline Vec3<T> Select(const Vec3<T> &mask, const Vec3<T> &a, const Vec3<T> &b)
 {
     return Vec3<T>(Select(mask.x, a.x, b.x), Select(mask.y, a.y, b.y), Select(mask.z, a.z, b.z));
@@ -302,6 +308,8 @@ typedef Vec4lf<8> Vec4lf8;
 template <i32 K>
 using Vec3lu = Vec3<LaneU32<K>>;
 typedef Vec3lu<4> Vec3lu4;
+
+typedef Vec3<LaneNF32> Vec3NF32;
 
 template <i32 K>
 __forceinline Vec3lu<K> Flooru(const Vec3lf<K> &v)

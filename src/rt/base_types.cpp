@@ -147,11 +147,11 @@ BSDFSample BxDFCRTP<T>::GenerateSample(void *ptr, Vec3f wo, f32 uc, Vec2f u, Tra
 {
     return static_cast<T *>(ptr)->GenerateSample(wo, uc, u, mode, flags);
 }
-template <class T>
-f32 BxDFCRTP<T>::PDF(void *ptr, Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags flags)
-{
-    return static_cast<T *>(ptr)->PDF(wo, wi, mode, flags);
-}
+// template <class T>
+// f32 BxDFCRTP<T>::PDF(void *ptr, Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags flags)
+// {
+//     return static_cast<T *>(ptr)->PDF(wo, wi, mode, flags);
+// }
 template <class T>
 BxDFFlags BxDFCRTP<T>::Flags(void *ptr)
 {

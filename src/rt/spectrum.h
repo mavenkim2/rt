@@ -203,10 +203,10 @@ struct SampledSpectrumBase
 
     explicit operator MaskF32() const
     {
-        MaskF32 mask(True);
+        MaskF32 mask(False);
         for (u32 i = 0; i < NSampledWavelengths; ++i)
         {
-            mask &= (values[i] != 0);
+            mask |= (values[i] != 0);
         }
         return mask;
         // if (values[i] != 0) return true;
@@ -273,12 +273,23 @@ SampledSpectrum<T> Max(const SampledSpectrum<T> &a, const SampledSpectrum<T> &b)
 }
 
 template <typename T>
-SampledSpectrum SafeDiv(SampledSpectrum a, SampledSpectrum b)
+SampledSpectrum<T> SafeDiv(const SampledSpectrum<T> &a, const SampledSpectrum<T> &b)
 {
-    SampledSpectrum ret;
+    SampledSpectrum<T> ret;
     for (u32 i = 0; i < NSampledWavelengths; i++)
     {
         ret[i] = (b[i] != 0) ? a[i] / b[i] : 0.f;
+    }
+    return ret;
+}
+
+template <typename T>
+SampledSpectrum<T> Select(Mask<T> &mask, const SampledSpectrumN &a, const SampledSpectrumN &b)
+{
+    SampledSpectrum<T> ret;
+    for (u32 i = 0; i < NSampledWavelengths; i++)
+    {
+        ret[i] = Select(mask, a[i], b[i]);
     }
     return ret;
 }

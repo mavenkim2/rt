@@ -78,7 +78,7 @@ struct LaneF32<8>
     static __forceinline Lane8F32 Step(u32 start)
     {
         return LaneF32((f32)start + 0.f, (f32)start + 1.f, (f32)start + 2.f, (f32)start + 3.f,
-                        (f32)start + 4.f, (f32)start + 5.f, (f32)start + 6.f, (f32)start + 7.f);
+                       (f32)start + 4.f, (f32)start + 5.f, (f32)start + 6.f, (f32)start + 7.f);
     }
 
     __forceinline operator const __m256 &() const { return v; }
@@ -154,6 +154,7 @@ __forceinline Lane8F32 FMS(const Lane8F32 &a, const Lane8F32 &b, const Lane8F32 
 #endif
 }
 
+__forceinline Lane8F32 Sqr(const Lane8F32 &a) { return a * a; }
 __forceinline Lane8F32 Sqrt(const Lane8F32 &a) { return _mm256_sqrt_ps(a); }
 __forceinline Lane8F32 Rsqrt(const Lane8F32 &a)
 {

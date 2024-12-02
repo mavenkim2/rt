@@ -207,5 +207,7 @@ template <i32 K>
 using LaneVec4f = Vec4<LaneF32<K>>;
 typedef LaneVec4f<4> Lane4Vec4f;
 
+typedef Vec4<LaneNF32> Vec4NF32;
+
 } // namespace rt
 #endif

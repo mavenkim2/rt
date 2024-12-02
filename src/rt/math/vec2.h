@@ -200,4 +200,6 @@ template <i32 K>
 using LaneVec2u = Vec2<LaneU32<K>>;
 typedef Vec2<Lane4U32> Lane4Vec2u;
 
+typedef Vec2<LaneNF32> Vec2NF32;
+
 } // namespace rt

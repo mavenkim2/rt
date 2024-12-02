@@ -231,7 +231,7 @@ struct Material
     BSDFShader bsdfShader;
     NormalShader normalShader;
     template <i32 width>
-    static BSDF<BxDF> Evaluate(SurfaceInteractions<width> &intr)
+    static BSDFBase<BxDF> Evaluate(SurfaceInteractions<width> &intr)
     {
         auto bxdf = bsdfShader.GetBxDF(intr);
         NormalShader *normalShaders[width];
@@ -389,7 +389,7 @@ struct ShadingQueuePtex
             // Transpose the rest
 
             MaskF32 continuationMask = LaneNF32::Mask<true>();
-            BxDF bsdf                = Material::Evaluate(aosoaIntrs);
+            BSDFBase<BxDF> bsdf      = Material::Evaluate(aosoaIntrs);
 
             template <i32 width>
             struct LightSamples
@@ -404,7 +404,7 @@ struct ShadingQueuePtex
             //////////////////////////////
             // Next event estimation
             //
-            if constexpr (!BxDF::IsSpecular)
+            if (Any(!IsSpecular(bsdf.Flags())))
             {
                 RayStateHandle rayStateHandles[IntN];
 
