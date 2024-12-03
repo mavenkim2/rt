@@ -294,27 +294,32 @@ SampledSpectrumBase<T> Select(const Mask<T> &mask, const SampledSpectrumBase<T> 
     return ret;
 }
 
-struct SampledWavelengths
+template <typename T>
+struct SampledWavelengthsBase
 {
-    bool operator==(const SampledWavelengths &swl) const
+    T lambda[NSampledWavelengths];
+    T pdf[NSampledWavelengths];
+
+    SampledWavelengthsBase() {}
+    bool operator==(const SampledWavelengthsBase &swl) const
     {
         for (u32 i = 0; i < NSampledWavelengths; i++)
         {
-            if (lambda[i] != swl.lambda[i] || pdf[i] != swl.pdf[i]) return false;
+            if (!All(lambda[i] == swl.lambda[i]) || !All(pdf[i] == swl.pdf[i])) return false;
         }
         return true;
     }
-    bool operator!=(const SampledWavelengths &swl) const
+    bool operator!=(const SampledWavelengthsBase &swl) const
     {
         for (u32 i = 0; i < NSampledWavelengths; i++)
         {
-            if (lambda[i] != swl.lambda[i] || pdf[i] != swl.pdf[i]) return true;
+            if (!All(lambda[i] == swl.lambda[i]) || !All(pdf[i] == swl.pdf[i])) return true;
         }
         return false;
     }
-    static SampledWavelengths SampleUniform(f32 u, f32 lambdaMin = LambdaMin, f32 lambdaMax = LambdaMax)
+    static SampledWavelengthsBase SampleUniform(f32 u, f32 lambdaMin = LambdaMin, f32 lambdaMax = LambdaMax)
     {
-        SampledWavelengths swl;
+        SampledWavelengthsBase swl;
         swl.lambda[0] = Lerp(u, lambdaMin, lambdaMax);
         f32 delta     = (lambdaMax - lambdaMin) / NSampledWavelengths;
         for (u32 i = 1; i < NSampledWavelengths; i++)
@@ -333,36 +338,39 @@ struct SampledWavelengths
         return SampledSpectrum(pdf);
     }
     // NOTE: for dispersion
-    void TerminateSecondary()
+    MaskF32 TerminateSecondary()
     {
-        if (SecondaryTerminated()) return;
+        MaskF32 mask = SecondaryTerminated();
+        if (All(mask)) return;
         for (u32 i = 1; i < NSampledWavelengths; i++)
         {
             pdf[i] = 0.f;
         }
-        pdf[0] *= 1 / NSampledWavelengths;
+        pdf[0] *= Select(mask, 1.f, 1 / NSampledWavelengths);
     }
-    bool SecondaryTerminated() const
+    MaskF32 SecondaryTerminated() const
     {
+        MaskF32 mask(true);
         for (u32 i = 1; i < NSampledWavelengths; i++)
         {
-            if (pdf[i] != 0.f) return false;
+            mask &= pdf[i] != 0.f;
         }
-        return true;
+        return mask;
     }
     // TODO:
     // void SampleVisible() const {}
-    f32 &operator[](i32 i)
+    T &operator[](i32 i)
     {
         return lambda[i];
     }
-    f32 operator[](i32 i) const
+    T operator[](i32 i) const
     {
         return lambda[i];
     }
-    f32 lambda[NSampledWavelengths];
-    f32 pdf[NSampledWavelengths];
 };
+
+typedef SampledWavelengths<f32> SampledWavelengths;
+typedef SampledWavelengths<LaneNF32> SampledWavelengthsN;
 
 //////////////////////////////
 // Spectrum Implementations
@@ -472,6 +480,7 @@ struct RGBToSpectrumTable
     RGBToSpectrumTable(const float *zNodes, const CoefficientArray *coeffs) : zNodes(zNodes), coeffs(coeffs) {}
 
     Vec3f operator()(Vec3f rgb) const;
+    Vec3lfn GetCoeffs(const Vec3lfn &rgb) const;
 
     static const RGBToSpectrumTable *sRGB;
     static void Init(Arena *arena);
@@ -516,11 +525,12 @@ inline f32 EvaluateSpectral(const Vec3f &c, const f32 wl)
     return FMA(.5f * x, 1.f / sqrtf(FMA(x, x, 1)), .5f);
 }
 
-inline Lane4F32 EvaluateSpectral(const Vec3f &c, const Lane4F32 &wl)
+template <i32 K>
+inline LaneF32<K> EvaluateSpectral(const Vec3<LaneF32<K>> &c, const LaneF32<K> &wl)
 {
     // f(x) = S(c0x^2 + c1x + c2), S is a sigmoid, x is the wavelength
     // S(x) = 1/2 + x/(2 * sqrt(1 + x^2))
-    Lane4F32 x = FMA(FMA(c.x, wl, c.y), wl, c.z);
+    LaneF32<K> x = FMA(FMA(c.x, wl, c.y), wl, c.z);
     return FMA(.5f * x, Rsqrt(FMA(x, x, 1)), .5f);
 }
 
@@ -558,6 +568,20 @@ struct RGBAlbedoSpectrum : SpectrumCRTP<RGBAlbedoSpectrum>
         }
         return s;
     }
+    static SampledSpectrumN Sample(const Vec3lfn &rgb, const SampledWavelengthsN &lambda)
+    {
+        Vec3lfn coeffs;
+        for (u32 i = 0; i < IntN; i++)
+        {
+            Set(coeffs, i) = cs.ToRGBCoeffs(Get(rgb, i));
+        }
+        SampledSpectrumN s;
+        for (i32 i = 0; i < NSampledWavelengths; i++)
+        {
+            s[i] = EvaluateSpectral(coeffs, lambda[i]);
+        }
+        return s;
+    }
     RGBAlbedoSpectrum(const RGBColorSpace &cs, Vec3f rgb)
     {
         coeffs = cs.ToRGBCoeffs(rgb);
@@ -587,6 +611,24 @@ struct RGBUnboundedSpectrum : SpectrumCRTP<RGBUnboundedSpectrum>
         for (i32 i = 0; i < NSampledWavelengths; i++)
         {
             s[i] = scale * EvaluateSpectral(coeffs, lambda[i]);
+        }
+        return s;
+    }
+    static SampledSpectrumN Sample(Vec3lfn rgb, const SampledWavelengthsN &lambda)
+    {
+        Vec3lfn coeffs;
+        LaneNF32 m     = Max(rgb.x, Max(rgb.y, rgb.z));
+        LaneNF32 scale = 2 * m;
+        rgb            = Select(scale, rgb / scale, Vec3lfn(0));
+
+        for (u32 i = 0; i < IntN; i++)
+        {
+            Set(coeffs, i) = cs.ToRGBCoeffs(Get(rgb, i));
+        }
+        SampledSpectrumN s;
+        for (i32 i = 0; i < NSampledWavelengths; i++)
+        {
+            s[i] = EvaluateSpectral(coeffs, lambda[i]);
         }
         return s;
     }

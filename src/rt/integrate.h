@@ -7,6 +7,7 @@ namespace rt
 {
 static const f32 tMinEpsilon = 0.00001f;
 
+#if 0
 template <typename T, i32 i>
 struct Dual;
 
@@ -57,6 +58,7 @@ T ReflectTest(T &wo, T &n)
 {
     return -wo + 2 * Dot(wo, n) * n;
 }
+#endif
 
 struct SortKey
 {
@@ -114,6 +116,40 @@ enum class ColorEncoding
     SRGB,
 };
 
+template <i32 K>
+struct VecBase;
+
+template <>
+struct VecBase<1>
+{
+    using Type = LaneNF32;
+};
+
+template <>
+struct VecBase<3>
+{
+    using Type = Vec3lfn;
+};
+
+template <i32 K>
+using Veclfn = typename VecBase<K>::Type;
+
+template <i32 nc>
+struct ConstantTexture
+{
+    Vec<nc> c;
+
+    static Veclfn<nc> Evaluate(SurfaceInteractionsN &, ConstantTexture **textures, Vec4lfn &, SampledWavelengthsN &)
+    {
+        Veclfn<nc> result;
+        for (u32 i = 0; i < IntN; i++)
+        {
+            Set(result, i) = textures[i]->c;
+        }
+        return result;
+    }
+};
+
 template <i32 nc>
 struct PtexTexture
 {
@@ -124,7 +160,7 @@ struct PtexTexture
     PtexTexture(string filename, ColorEncoding encoding = ColorEncoding::SRGB, f32 scale = 1.f)
         : filename(filename), encoding(encoding), scale(scale) {}
 
-    auto Evaluate(const Vec2f &uv, const Vec4f &filterWidth, u32 faceIndex)
+    Veclfn<nc> Evaluate(const Vec2f &uv, const Vec4f &filterWidth, u32 faceIndex)
     {
         Assert(cache);
         Ptex::String error;
@@ -183,36 +219,58 @@ struct NormalMap
     }
 };
 
-template <i32 K>
-struct VecBase;
-
-template <>
-struct VecBase<1>
-{
-    using Type = LaneNF32;
-};
-
-template <>
-struct VecBase<3>
-{
-    using Type = Vec3lfn;
-};
-
-template <i32 K>
-using Veclfn = typename VecBase<K>::Type;
-
-template <typename TextureType>
+template <typename TextureType, typename RGBSpectrum>
 struct ImageTextureShader
 {
     static const u32 numChannels = TextureType::numChannels;
     TextureType texture;
     ImageTextureShader() {}
 
-    static Veclfn<numChannels> Evaluate(SurfaceInteractionsN &intrs, Vec4lfn &filterWidths,
-                                        LaneNF32 &dfdu, LaneNF32 &dfdv, const ImageTextureShader<TextureType> **textures,
-                                        Veclfn<numChannels> &out)
+    static auto Evaluate(SurfaceInteractionsN &intrs,
+                         ImageTextureShader<TextureType> **textures,
+                         Vec4lfn &filterWidths,
+                         SampledWavelengthsN &lambda)
     {
         Veclfn<numChannels> results;
+        for (u32 i = 0; i < IntN; i++)
+        {
+            Vec2f uv          = Get(intrs.uv, i);
+            Vec4f filterWidth = Get(filterWidths, i);
+
+            Set(results, i) = textures[i]->texture.Evaluate(uv, filterWidth, intrs.faceIndex[i]);
+        }
+        // Convert to spectra
+        if constexpr (numChannels == 1)
+        {
+            return results;
+        }
+        else if constexpr (numChannels == 3)
+        {
+            Vec3lfn coeffs;
+            if constexpr (std::is_same_v<RGBSpectrum, RGBAlbedoSpectrum>)
+            {
+                return RGBAlbedoSpectrum::Sample(results, lambda);
+            }
+            else if constexpr (std::is_same_v<RGBSpectrum, RGBUnboundedSpectrum>)
+            {
+                return RGBUnboundedSpectrum::Sample(results, lambda);
+            }
+            else
+            {
+                static_assert(0, "RGBSpectrum must be RGBAlbedoSpectrum or RGBUnboundedSpectrum");
+            }
+        }
+        else
+        {
+            static_assert(0, "numChannels must be 1 or 3");
+            return {};
+        }
+    }
+
+    static void Evaluate(SurfaceInteractionsN &intrs, Vec4lfn &filterWidths,
+                         LaneNF32 &dfdu, LaneNF32 &dfdv, const ImageTextureShader<TextureType> **textures,
+                         Veclfn<numChannels> &results)
+    {
         // Finite differencing
         LaneF32<K> du = .5f * Abs(filterWidths[0], filterWidths[2]);
         du            = Select(du == 0.f, 0.0005f, du);
@@ -221,14 +279,13 @@ struct ImageTextureShader
 
         for (u32 i = 0; i < IntN; i++)
         {
-            Vec2f uv(intrs.uv[0][i], intrs.uv[1][i]);
-            Vec4f filterWidth(filterWidths[0][i], filterWidths[1][i], filterWidths[2][i], filterWidths[3][i]);
+            Vec2f uv          = Get(intrs.uv, i);
+            Vec4f filterWidth = Get(filterWidths, i);
 
             Set(results, i) = textures[i]->texture.Evaluate(uv, filterWidth, intrs.faceIndex[i]);
             dfdu[i]         = textures[i]->texture.Evaluate(uv + Vec2f(du[i], 0.f), filterWidth, intrs.faceIndex[i]);
             dfdv[i]         = textures[i]->texture.Evaluate(uv + Vec2f(0.f, dv[i]), filterWidth, intrs.faceIndex[i]);
         }
-        return results;
     }
 };
 
@@ -258,29 +315,40 @@ struct BumpMap
     }
 };
 
-template <typename TextureShader>
+#define MaterialHeaders(materialName)                                                                                              \
+    static BxDF GetBxDF(SurfaceInteractionsN &intr, materialName **materials, Vec4lfn &filterWidths, SampledWavelengthsN &lambda); \
+    BxDF GetBxDF(SurfaceInteraction &intr, Vec4lfn &filterWidths, SampledWavelengthsN &lambda);
+
+// NOTE: Rfl = Reflect, Trm = Transmit, Rgh = Roughness, IOR
+template <typename RflShader>
 struct DiffuseMaterial
 {
     using BxDF = DiffuseBxDF;
-    TextureShader reflectanceShader;
+    RflShader rflShader;
 
-    static BxDF GetBxDF(SurfaceInteractionsN &intr);
-    BxDF GetBxDF(SurfaceInteraction &intr);
+    MaterialHeaders(DiffuseMaterial);
 };
 
-template <typename TextureShaderReflectance, typename TextureShaderTransmission>
-struct DiffuseTransmissionMaterialBase
+template <typename RflShader, typename TrmShader>
+struct DiffuseTransmissionMaterial
 {
     using BxDF = DiffuseTransmissionBxDF;
-    TextureShaderReflectance reflectanceShader;
-    TextureShaderTransmission transmissionShader;
+    RflShader rflShader;
+    TrmShader trmShader;
 
-    static BxDF GetBxDF(SurfaceInteractionsN &intr);
-    BxDF GetBxDF(SurfaceInteraction &intr);
+    MaterialHeaders(DiffuseTransmissionMaterial);
 };
 
-template <typename TextureShaderReflectance, typename TextureShaderTransmission>
-using DiffuseTransmissionMaterial = DiffuseTransmissionMaterialBase<TextureShaderReflectance, TextureShaderTransmission>;
+template <typename RghShader, typename Spectrum>
+struct DielectricMaterial
+{
+    using IsConstantSpectrum = std::is_same_v<Spectrum, ConstantSpectrum>;
+    using BxDF               = DielectricBxDF;
+    RghShader rghShader;
+    Spectrum ior;
+
+    MaterialHeaders(DielectricMaterial);
+};
 
 template <typename BxDFShader, typename NormalShader>
 struct Material2
@@ -309,16 +377,19 @@ struct Material2
 
 // TODO: automate this :)
 template <i32 K>
-using PtexShader = ImageTextureShader<PtexTexture<K>>;
+using PtexShader = ImageTextureShader<PtexTexture<K>, RGBAlbedoSpectrum>;
 template <>
 using BumpMapPtex = BumpMap<PtexShader<1>>;
 template <>
 using DiffuseMaterialPtex = DiffuseMaterial<PtexShader<3>>;
 template <>
 using DiffuseMaterialPtex = DiffuseTransmissionMaterial<PtexShader<3>, PtexShader<3>>;
-template <>
-using DielectricMaterialPtex = DielectricMaterial<PtexShader<3>, PtexShader<3>>;
 
+// NOTE: isotropic roughness, constant ior
+template <>
+using DielectricMaterialPtex = DielectricMaterial<ConstantTexture<1>, ConstantSpectrum>;
+
+// Material types
 template <>
 using DiffuseMaterialBumpMapPtex = Material2<DiffuseMaterialPtex, BumpMapPtex>;
 template <>

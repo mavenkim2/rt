@@ -204,4 +204,11 @@ typedef Vec2lf<8> Vec2lf8;
 
 typedef Vec2<LaneNF32> Vec2lfn;
 
+template <i32 K>
+Vec2f Get(const Vec2<LaneF32<K>> &v, u32 index)
+{
+    Assert(index < K);
+    return Vec2f(v[0][index], v[1][index]);
+}
+
 } // namespace rt

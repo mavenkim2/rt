@@ -37,48 +37,88 @@ void InitializePtex()
     cache         = Ptex::PtexCache::create(maxFiles, maxMem, true, 0, &errorHandler);
 }
 
-template <typename TextureShader>
-DiffuseBxDF DiffuseMaterial<TextureShader>::GetBxDF(SurfaceInteractionsN &intr, DiffuseMaterial **materials)
+template <typename RflShader>
+DiffuseBxDF DiffuseMaterial<RflShader>::GetBxDF(SurfaceInteractionsN &intr, DiffuseMaterial **materials, Vec4lfn &filterWidths,
+                                                SampledWavelengthsN &lambda)
 {
     // TODO: vectorized texture evaluation?
     // TODO: sampled spectrum vectorized
-    Vec4lfn sampledSpectra;
-
-    TextureShader *shaders[IntN];
+    RflShader *shaders[IntN];
     for (u32 i = 0; i < IntN; i++)
     {
-        shaders[i] = &materials[i]->reflectanceShader;
+        shaders[i] = &materials[i]->rflShader;
     }
-    SampledSpectrumN sampledSpectra;
-    Set(sampledSpectra, i) = TextureShader::Evaluate(materials[i].texture->Evaluate(intr.faceIndices[i]); //, sampledSpectrumArray[i].f);
-    for (u32 i = 0; i < width; i++)
-    {
-    }
-    // Convert RGB to SRGB
-    Vec4lfn reflectance = reflectanceShader.Evaluate(intr);
-    return DiffuseBxDF(reflectance);
+    SampledSpectrumN sampledSpectra = RflShader::Evaluate(intr, filterWidths, shaders);
+    return DiffuseBxDF(sampledSpectra);
 }
 
-template <typename TextureShader>
-DiffuseBxDF DiffuseMaterial<TextureShader>::GetBxDF(SurfaceInteraction &intr)
+template <typename RflShader>
+DiffuseBxDF DiffuseMaterial<RflShader>::GetBxDF(SurfaceInteraction &intr,
+                                                Vec4lfn &filterWidths,
+                                                SampledWavelengthsN &lambda)
 {
     return DiffuseMaterial::GetBxDF(intr, &this);
 }
 
-template <typename TextureShaderReflectance, typename TextureShaderTransmission>
-DiffuseTransmissionBxDF DiffuseTransmissionMaterial<TextureShaderReflectance, TextureShaderTransmission>::
-    GetBxDF(SurfaceInteractionsN &intr, DiffuseTransmissionMaterial **materials)
+template <typename RflShader, typename TrmShader>
+DiffuseTransmissionBxDF DiffuseTransmissionMaterial<RflShader, TrmShader>::GetBxDF(SurfaceInteractionsN &intr,
+                                                                                   DiffuseTransmissionMaterial **materials,
+                                                                                   Vec4lfn &filterWidths,
+                                                                                   SampledWavelengthsN &lambda)
 {
+    RflShader *rflShaders[IntN];
+    TrmShader *trmShaders[IntN];
+    for (u32 i = 0; i < IntN; i++)
+    {
+        rflShaders[i] = &materials[i]->rflShader;
+        trmShaders[i] = &materials[i]->trmShaders;
+    }
+    SampledSpectrumN r = RflShader::Evaluate(intr, filterWidths, rflShaders);
+    SampledSpectrumN t = TrmShader::Evaluate(intr, filterWidths, trmShaders);
+    return DiffuseTransmissionBxDF(r, t);
 }
 
-template <typename TextureShaderReflectance, typename TextureShaderTransmission>
-DiffuseTransmissionBxDF DiffuseTransmissionMaterial<TextureShaderReflectance, TextureShaderTransmission>::
-    GetBxDF(SurfaceInteractionsN &intr)
+template <typename RflShader, typename TrmShader>
+DiffuseTransmissionBxDF DiffuseTransmissionMaterial<RflShader, TrmShader>::GetBxDF(SurfaceInteractions &intr,
+                                                                                   Vec4lfn &filterWidths,
+                                                                                   SampledWavelengthsN &lambda)
 {
     return DiffuseTransmissionMaterial::GetBxDF(intr, &this);
 }
 
-template <typename TextureShaderReflectance, typename TextureShaderTransmission>
+template <typename RghShader, typename IORShader>
+DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(SurfaceInteractionsN &intr,
+                                                                 DielectricMaterial **materials,
+                                                                 Vec4lfn &filterWidths,
+                                                                 SampledWavelengthsN &lambda)
+{
+    RghShader *rghShaders[IntN];
+    LaneNF32 eta;
+    for (u32 i = 0; i < IntN; i++)
+    {
+        rghShaders[i] = &materials[i]->rghShader;
+        eta[i]        = &materials[i]->ior(Get(lambda[0], i));
+    }
+    // NOTE: for dispersion (i.e. wavelength dependent IORs), we terminate every wavelength except the first
+    if constexpr (!IsConstantSpectrum)
+    {
+        lambda.TerminateSecondary();
+    }
+
+    // TODO: anisotropic roughness
+    LaneNF32 roughness = RghShader::Evaluate(intr, rghShaders, filterWidths);
+    roughness          = TrowbridgeReitzDistribution::RoughnessToAlpha(roughness);
+    TrowbridgeReitzDistribution distrib(roughness, roughness);
+    return DielectricBxDF(eta, distrib);
+}
+
+template <typename RghShader, typename IORShader>
+DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(SurfaceInteractionsN &intr,
+                                                                 Vec4lfn &filterWidths,
+                                                                 SampledWavelengthsN &lambda)
+{
+    return DielectricMaterial::GetBxDF(intr, &this);
+}
 
 typedef u32 PathFlags;
 enum

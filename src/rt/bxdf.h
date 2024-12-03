@@ -189,6 +189,7 @@ struct TrowbridgeReitzDistribution
     {
         return Max(alphaX, alphaY) < 1e-3f;
     }
+    static LaneNF32 RoughnessToAlpha(const LaneNF32 &roughness) { return Sqrt(roughness); }
     LaneNF32 alphaX;
     LaneNF32 alphaY;
 };

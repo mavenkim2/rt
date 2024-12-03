@@ -216,5 +216,12 @@ typedef Vec4lu<8> Vec4lu8;
 
 typedef Vec4<LaneNF32> Vec4lfn;
 
+template <i32 K>
+Vec4f Get(const Vec4<LaneF32<K>> &v, u32 index)
+{
+    Assert(index < K);
+    return Vec4f(v[0][index], v[1][index], v[2][index], v[3][index]);
+}
+
 } // namespace rt
 #endif
