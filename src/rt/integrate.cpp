@@ -48,7 +48,7 @@ DiffuseBxDF DiffuseMaterial<RflShader>::GetBxDF(SurfaceInteractionsN &intr, Diff
     {
         shaders[i] = &materials[i]->rflShader;
     }
-    SampledSpectrumN sampledSpectra = RflShader::Evaluate(intr, filterWidths, shaders);
+    SampledSpectrumN sampledSpectra = RflShader::Evaluate(intr, filterWidths, shaders, lambda);
     return DiffuseBxDF(sampledSpectra);
 }
 
@@ -73,8 +73,8 @@ DiffuseTransmissionBxDF DiffuseTransmissionMaterial<RflShader, TrmShader>::GetBx
         rflShaders[i] = &materials[i]->rflShader;
         trmShaders[i] = &materials[i]->trmShaders;
     }
-    SampledSpectrumN r = RflShader::Evaluate(intr, filterWidths, rflShaders);
-    SampledSpectrumN t = TrmShader::Evaluate(intr, filterWidths, trmShaders);
+    SampledSpectrumN r = RflShader::Evaluate(intr, filterWidths, rflShaders, lambda);
+    SampledSpectrumN t = TrmShader::Evaluate(intr, filterWidths, trmShaders, lambda);
     return DiffuseTransmissionBxDF(r, t);
 }
 
@@ -378,7 +378,7 @@ bool SurfaceInteraction::ComputeShading(BSDF &bsdf)
 }
 
 #if 0
-void Li(Scene2 *scene, RayDifferential &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda)
+void Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda)
 {
     u32 depth = 0;
     SampledSpectrum L(0.f);

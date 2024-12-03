@@ -153,6 +153,7 @@ struct ConstantTexture
 template <i32 nc>
 struct PtexTexture
 {
+    using Vec                    = std::conditional_t<nc == 3, Vec3f, f32>;
     static const u32 numChannels = nc;
     string filename;
     ColorEncoding encoding;
@@ -160,8 +161,12 @@ struct PtexTexture
     PtexTexture(string filename, ColorEncoding encoding = ColorEncoding::SRGB, f32 scale = 1.f)
         : filename(filename), encoding(encoding), scale(scale) {}
 
-    Veclfn<nc> Evaluate(const Vec2f &uv, const Vec4f &filterWidth, u32 faceIndex)
+    Vec Evaluate(SurfaceInteractionsN &intrs, const Vec4lfn &filterWidths, u32 index, Vec *dfdu = 0, Vec *dfdv = 0) // const Vec2f &uv, const Vec4f &filterWidth, u32 faceIndex)
     {
+        Vec4f filterWidth = Get(filterWidths, index);
+        Vec2f uv          = Get(intrs.uv, index);
+        u32 faceID        = Get(intrs.faceIndices, index);
+
         Assert(cache);
         Ptex::String error;
         Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
@@ -174,8 +179,21 @@ struct PtexTexture
         // f32 filterWidth = 0.75f;
         // Vec2f uv(0.5f, 0.5f);
 
-        f32 out[numChannels];
+        f32 out[nc];
         filter->eval(out, 0, nc, faceIndex, uv[0], uv[1], filterWidth[0], filterWidth[1], filterWidth[2], filterWidth[3]);
+
+        if (dfdu && dfdv)
+        {
+            // Finite differencing
+            f32 du = .5f * Abs(filterWidth[0], filterWidth[2]);
+            du     = Select(du == 0.f, 0.0005f, du);
+            f32 dv = .5f * Abs(filterWidth[1], filterWidth[3]);
+            dv     = Select(dv == 0.f, 0.0005f, dv);
+
+            filter->eval(&dfdu, 0, nc, faceIndex, uv[0] + du, uv[1], filterWidth[0], filterWidth[1], filterWidth[2], filterWidth[3]);
+            filter->eval(&dfdv, 0, nc, faceIndex, uv[0], uv[1] + dv, filterWidth[0], filterWidth[1], filterWidth[2], filterWidth[3]);
+        }
+
         texture->release();
         filter->release();
 
@@ -223,6 +241,7 @@ template <typename TextureType, typename RGBSpectrum>
 struct ImageTextureShader
 {
     static const u32 numChannels = TextureType::numChannels;
+    using Vec                    = std::conditional_t<numChannels == 3, Vec3f, f32>;
     TextureType texture;
     ImageTextureShader() {}
 
@@ -234,10 +253,7 @@ struct ImageTextureShader
         Veclfn<numChannels> results;
         for (u32 i = 0; i < IntN; i++)
         {
-            Vec2f uv          = Get(intrs.uv, i);
-            Vec4f filterWidth = Get(filterWidths, i);
-
-            Set(results, i) = textures[i]->texture.Evaluate(uv, filterWidth, Get(intrs.faceIndices, i));
+            Set(results, i) = textures[i]->texture.Evaluate(intrs, filterWidths, i);
         }
         // Convert to spectra
         if constexpr (numChannels == 1)
@@ -264,23 +280,24 @@ struct ImageTextureShader
     }
 
     static void Evaluate(SurfaceInteractionsN &intrs, Vec4lfn &filterWidths,
-                         LaneNF32 &dfdu, LaneNF32 &dfdv, const ImageTextureShader **textures,
+                         Veclfn<numChannels> &dfdu, Veclfn<numChannels> &dfdv, const ImageTextureShader **textures,
                          Veclfn<numChannels> &results)
     {
         // Finite differencing
-        LaneF32<K> du = .5f * Abs(filterWidths[0], filterWidths[2]);
-        du            = Select(du == 0.f, 0.0005f, du);
-        LaneF32<K> dv = .5f * Abs(filterWidths[1], filterWidths[3]);
-        dv            = Select(dv == 0.f, 0.0005f, dv);
+        // LaneF32<K> du = .5f * Abs(filterWidths[0], filterWidths[2]);
+        // du            = Select(du == 0.f, 0.0005f, du);
+        // LaneF32<K> dv = .5f * Abs(filterWidths[1], filterWidths[3]);
+        // dv            = Select(dv == 0.f, 0.0005f, dv);
 
         for (u32 i = 0; i < IntN; i++)
         {
-            Vec2f uv          = Get(intrs.uv, i);
-            Vec4f filterWidth = Get(filterWidths, i);
-
-            Set(results, i) = textures[i]->texture.Evaluate(uv, filterWidth, Get(intrs.faceIndices, i));
-            dfdu[i]         = textures[i]->texture.Evaluate(uv + Vec2f(du[i], 0.f), filterWidth, Get(intrs.faceIndices, i));
-            dfdv[i]         = textures[i]->texture.Evaluate(uv + Vec2f(0.f, dv[i]), filterWidth, Get(intrs.faceIndices, i));
+            Vec out_dfdu, out_dfdv;
+            Set(results, i) = textures[i]->texture.Evaluate(intrs, filterWidths, i, out_dfdu, out_dfdv);
+            Set(dfdu, i)    = out_dfdu;
+            Set(dfdv, i)    = out_dfdv;
+            // TODO: this won't work for 3 channel partial derivatives
+            // dfdu[i]         = textures[i]->texture.Evaluate(uv + Vec2f(du[i], 0.f), filterWidth, Get(intrs.faceIndices, i));
+            // dfdv[i]         = textures[i]->texture.Evaluate(uv + Vec2f(0.f, dv[i]), filterWidth, Get(intrs.faceIndices, i));
         }
     }
 };
@@ -291,7 +308,7 @@ struct BumpMap
     // p' = p + d * n, d is displacement, estimate shading normal by computing dp'du and dp'dv (using chain rule)
     TextureShader displacementShader;
     template <i32 width>
-    static void Evaluate(SurfaceInteractions<width> &intrs, const BumpMap<TextureShader> **bumpMaps)
+    static void Evaluate(SurfaceInteractions<width> &intrs, Vec4lfn &filterWidths, const BumpMap<TextureShader> **bumpMaps)
     {
         TextureShader *displacementShaders[width];
         for (u32 i = 0; i < width; i++)
@@ -300,7 +317,8 @@ struct BumpMap
         }
 
         LaneF32<width> dddu, dddv;
-        LaneF32<width> displacement = TextureShader::Evaluate(intrs, dpdu, dpdv, displacementShaders);
+        LaneF32<width> displacement;
+        TextureShader::Evaluate(intrs, filterWidths, dddu, dddv, displacementShaders, displacement);
 
         Vec3lf<width> dpdu = intrs.shading.dpdu + dddu * intrs.shading.n + displacement * intrs.shading.dndu;
         Vec3lf<width> dpdv = intrs.shading.dpdv + dddv * intrs.shading.n + displacement * intrs.shading.dndv;
