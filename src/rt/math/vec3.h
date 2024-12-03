@@ -302,13 +302,13 @@ typedef Vec3lu<8> Vec3lu8;
 
 typedef Vec3<LaneNF32> Vec3lfn;
 
-template <template <i32> class T, i32 K>
+template <i32 K>
 struct SOASetVec3
 {
-    Vec3<T<K>> &v;
+    Vec3<LaneF32<K>> &v;
     u32 index;
 
-    SOASetVec3(Vec3<T<K>> &v, u32 index) : v(v), index(index) {}
+    SOASetVec3(Vec3<LaneF32<K>> &v, u32 index) : v(v), index(index) {}
 
     __forceinline SOASetVec3 &operator=(const Vec3f &r)
     {
@@ -320,10 +320,29 @@ struct SOASetVec3
     }
 };
 
-template <template <i32> class T, i32 K>
-__forceinline SOASetVec3<T, K> Set(Vec3<T<K>> &v, u32 index)
+template <i32 K>
+__forceinline SOASetVec3<K> Set(Vec3<LaneF32<K>> &v, u32 index)
 {
-    return SOASetVec3<T, K>(v, index);
+    return SOASetVec3<K>(v, index);
+}
+
+__forceinline Vec3f &Set(Vec3f &v, u32 index)
+{
+    Assert(index == 0);
+    return v;
+}
+
+template <i32 K>
+__forceinline Vec3f Get(const Vec3<LaneF32<K>> &v, u32 index)
+{
+    Assert(index < K);
+    return Vec3f(v[0][index], v[1][index], v[2][index]);
+}
+
+__forceinline Vec3f Get(const Vec3f &v, u32 index)
+{
+    Assert(index == 0);
+    return v;
 }
 
 template <i32 K>

@@ -343,7 +343,7 @@ struct DiffuseTransmissionBxDF : BxDFCRTP<DiffuseTransmissionBxDF>
 
         MaskF32 reflectMask = uc < pr / sum;
         Vec3lfn wi          = SampleCosineHemisphere(u);
-        wi.z                = Select(reflectMask ^ wo.z > 0, -wi.z, wi.z);
+        wi.z                = Select(reflectMask ^ (wo.z > 0), -wi.z, wi.z);
         LaneNF32 pdf        = CosineHemispherePDF(AbsCosTheta(wi));
         return BSDFSample(Select(reflectMask, R, T) * InvPi, wi, pdf,
                           Select(reflectMask,

@@ -137,7 +137,7 @@ using Veclfn = typename VecBase<K>::Type;
 template <i32 nc>
 struct ConstantTexture
 {
-    Vec<nc> c;
+    std::conditional_t<nc == 3, Vec3f, f32> c;
 
     static Veclfn<nc> Evaluate(SurfaceInteractionsN &, ConstantTexture **textures, Vec4lfn &, SampledWavelengthsN &)
     {
@@ -227,7 +227,7 @@ struct ImageTextureShader
     ImageTextureShader() {}
 
     static auto Evaluate(SurfaceInteractionsN &intrs,
-                         ImageTextureShader<TextureType> **textures,
+                         ImageTextureShader **textures,
                          Vec4lfn &filterWidths,
                          SampledWavelengthsN &lambda)
     {
@@ -237,38 +237,34 @@ struct ImageTextureShader
             Vec2f uv          = Get(intrs.uv, i);
             Vec4f filterWidth = Get(filterWidths, i);
 
-            Set(results, i) = textures[i]->texture.Evaluate(uv, filterWidth, intrs.faceIndex[i]);
+            Set(results, i) = textures[i]->texture.Evaluate(uv, filterWidth, Get(intrs.faceIndices, i));
         }
         // Convert to spectra
         if constexpr (numChannels == 1)
         {
             return results;
         }
-        else if constexpr (numChannels == 3)
+        else
         {
+            static_assert(numChannels == 3, "Num channels must be 1 or 3");
             Vec3lfn coeffs;
             if constexpr (std::is_same_v<RGBSpectrum, RGBAlbedoSpectrum>)
             {
-                return RGBAlbedoSpectrum::Sample(results, lambda);
+                return RGBAlbedoSpectrum::Sample(*RGBColorSpace::sRGB, results, lambda);
             }
             else if constexpr (std::is_same_v<RGBSpectrum, RGBUnboundedSpectrum>)
             {
-                return RGBUnboundedSpectrum::Sample(results, lambda);
+                return RGBUnboundedSpectrum::Sample(*RGBColorSpace::sRGB, results, lambda);
             }
             else
             {
-                static_assert(0, "RGBSpectrum must be RGBAlbedoSpectrum or RGBUnboundedSpectrum");
+                Error(0, "RGBSpectrum must be RGBAlbedoSpectrum or RGBUnboundedSpectrum");
             }
-        }
-        else
-        {
-            static_assert(0, "numChannels must be 1 or 3");
-            return {};
         }
     }
 
     static void Evaluate(SurfaceInteractionsN &intrs, Vec4lfn &filterWidths,
-                         LaneNF32 &dfdu, LaneNF32 &dfdv, const ImageTextureShader<TextureType> **textures,
+                         LaneNF32 &dfdu, LaneNF32 &dfdv, const ImageTextureShader **textures,
                          Veclfn<numChannels> &results)
     {
         // Finite differencing
@@ -282,9 +278,9 @@ struct ImageTextureShader
             Vec2f uv          = Get(intrs.uv, i);
             Vec4f filterWidth = Get(filterWidths, i);
 
-            Set(results, i) = textures[i]->texture.Evaluate(uv, filterWidth, intrs.faceIndex[i]);
-            dfdu[i]         = textures[i]->texture.Evaluate(uv + Vec2f(du[i], 0.f), filterWidth, intrs.faceIndex[i]);
-            dfdv[i]         = textures[i]->texture.Evaluate(uv + Vec2f(0.f, dv[i]), filterWidth, intrs.faceIndex[i]);
+            Set(results, i) = textures[i]->texture.Evaluate(uv, filterWidth, Get(intrs.faceIndices, i));
+            dfdu[i]         = textures[i]->texture.Evaluate(uv + Vec2f(du[i], 0.f), filterWidth, Get(intrs.faceIndices, i));
+            dfdv[i]         = textures[i]->texture.Evaluate(uv + Vec2f(0.f, dv[i]), filterWidth, Get(intrs.faceIndices, i));
         }
     }
 };
@@ -342,8 +338,7 @@ struct DiffuseTransmissionMaterial
 template <typename RghShader, typename Spectrum>
 struct DielectricMaterial
 {
-    using IsConstantSpectrum = std::is_same_v<Spectrum, ConstantSpectrum>;
-    using BxDF               = DielectricBxDF;
+    using BxDF = DielectricBxDF;
     RghShader rghShader;
     Spectrum ior;
 
@@ -378,24 +373,18 @@ struct Material2
 // TODO: automate this :)
 template <i32 K>
 using PtexShader = ImageTextureShader<PtexTexture<K>, RGBAlbedoSpectrum>;
-template <>
-using BumpMapPtex = BumpMap<PtexShader<1>>;
-template <>
-using DiffuseMaterialPtex = DiffuseMaterial<PtexShader<3>>;
-template <>
-using DiffuseMaterialPtex = DiffuseTransmissionMaterial<PtexShader<3>, PtexShader<3>>;
+
+using BumpMapPtex                     = BumpMap<PtexShader<1>>;
+using DiffuseMaterialPtex             = DiffuseMaterial<PtexShader<3>>;
+using DiffuseTransmissionMaterialPtex = DiffuseTransmissionMaterial<PtexShader<3>, PtexShader<3>>;
 
 // NOTE: isotropic roughness, constant ior
-template <>
 using DielectricMaterialPtex = DielectricMaterial<ConstantTexture<1>, ConstantSpectrum>;
 
 // Material types
-template <>
-using DiffuseMaterialBumpMapPtex = Material2<DiffuseMaterialPtex, BumpMapPtex>;
-template <>
+using DiffuseMaterialBumpMapPtex             = Material2<DiffuseMaterialPtex, BumpMapPtex>;
 using DiffuseTransmissionMaterialBumpMapPtex = Material2<DiffuseTransmissionMaterialPtex, BumpMapPtex>;
-template <>
-using DielectricMaterialBumpMapPtex = Material2<DielectricMaterialPtex, BumpMapPtex>;
+using DielectricMaterialBumpMapPtex          = Material2<DielectricMaterialPtex, BumpMapPtex>;
 
 // struct
 

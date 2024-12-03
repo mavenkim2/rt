@@ -369,8 +369,8 @@ struct SampledWavelengthsBase
     }
 };
 
-typedef SampledWavelengths<f32> SampledWavelengths;
-typedef SampledWavelengths<LaneNF32> SampledWavelengthsN;
+typedef SampledWavelengthsBase<f32> SampledWavelengths;
+typedef SampledWavelengthsBase<LaneNF32> SampledWavelengthsN;
 
 //////////////////////////////
 // Spectrum Implementations
@@ -568,7 +568,7 @@ struct RGBAlbedoSpectrum : SpectrumCRTP<RGBAlbedoSpectrum>
         }
         return s;
     }
-    static SampledSpectrumN Sample(const Vec3lfn &rgb, const SampledWavelengthsN &lambda)
+    static SampledSpectrumN Sample(const RGBColorSpace &cs, const Vec3lfn &rgb, const SampledWavelengthsN &lambda)
     {
         Vec3lfn coeffs;
         for (u32 i = 0; i < IntN; i++)
@@ -614,7 +614,7 @@ struct RGBUnboundedSpectrum : SpectrumCRTP<RGBUnboundedSpectrum>
         }
         return s;
     }
-    static SampledSpectrumN Sample(Vec3lfn rgb, const SampledWavelengthsN &lambda)
+    static SampledSpectrumN Sample(const RGBColorSpace &cs, Vec3lfn rgb, const SampledWavelengthsN &lambda)
     {
         Vec3lfn coeffs;
         LaneNF32 m     = Max(rgb.x, Max(rgb.y, rgb.z));

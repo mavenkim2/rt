@@ -149,7 +149,9 @@ struct RGBIlluminantSpectrum;
 template <typename T>
 struct SampledSpectrumBase;
 // struct SampledSpectrumN;
-struct SampledWavelengths;
+template <typename T>
+struct SampledWavelengthsBase;
+typedef SampledWavelengthsBase<f32> SampledWavelengths;
 
 using SpectrumTaggedPointer = TaggedPointer<ConstantSpectrum, DenselySampledSpectrum, PiecewiseLinearSpectrum, BlackbodySpectrum,
                                             RGBAlbedoSpectrum, RGBUnboundedSpectrum, RGBIlluminantSpectrum>;

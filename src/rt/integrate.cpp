@@ -79,7 +79,7 @@ DiffuseTransmissionBxDF DiffuseTransmissionMaterial<RflShader, TrmShader>::GetBx
 }
 
 template <typename RflShader, typename TrmShader>
-DiffuseTransmissionBxDF DiffuseTransmissionMaterial<RflShader, TrmShader>::GetBxDF(SurfaceInteractions &intr,
+DiffuseTransmissionBxDF DiffuseTransmissionMaterial<RflShader, TrmShader>::GetBxDF(SurfaceInteractionsN &intr,
                                                                                    Vec4lfn &filterWidths,
                                                                                    SampledWavelengthsN &lambda)
 {
@@ -100,7 +100,7 @@ DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(SurfaceInteract
         eta[i]        = &materials[i]->ior(Get(lambda[0], i));
     }
     // NOTE: for dispersion (i.e. wavelength dependent IORs), we terminate every wavelength except the first
-    if constexpr (!IsConstantSpectrum)
+    if constexpr (!std::is_same_v<Spectrum, ConstantSpectrum>)
     {
         lambda.TerminateSecondary();
     }
