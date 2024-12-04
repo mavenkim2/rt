@@ -26,7 +26,7 @@ template <u32 types, typename Intersector>
 struct BVHIntersector<4, types, Intersector>
 {
     BVHIntersector() {}
-    bool Intersect(Ray2 &ray, BVHNode4 bvhNode, SurfaceInteraction &itr)
+    static bool Intersect(Ray2 &ray, BVHNode4 bvhNode, SurfaceInteraction &itr)
     {
         // typedef typename Intersector::Primitive Primitive;
 
@@ -52,7 +52,7 @@ struct BVHIntersector<4, types, Intersector>
 
             if (entry.ptr.IsLeaf())
             {
-                Intersector::Intersect<4, types>(ray, entry.ptr, itr);
+                Intersector::Intersect(ray, entry.ptr, itr);
                 continue;
             }
 
@@ -141,28 +141,29 @@ auto GetBounds<4, BVH_QN>(BVHNode4 node, Vec3lf4 &mins, Vec3lf4 &maxs)
         }                                                     \
     }
 
+#define COMMA                      ,
 #define DispatchTmplHelper(x, ...) EXPAND(CONCAT(RECURSE__, x)(TMPL, __VA_ARGS__))
-#define TMPL(x)                    typename CONCAT(T, x)
+#define TMPL(x, ...)               typename CONCAT(T, x)
 
 #define DispatchSwitchHelper(x, ...) CASES(x, __VA_ARGS__)
 #define CASE(x) \
     case x: return func(CONCAT(T, x)());
 #define CASES(n, ...)                EXPAND(CONCAT(RECURSE_, n)(CASE, __VA_ARGS__))
 #define RECURSE_1(macro, first)      macro(first)
-#define RECURSE_2(macro, first, ...) macro(first) RECURSE_1(macro, __VA_ARGS__)
-#define RECURSE_3(macro, first, ...) macro(first) RECURSE_2(macro, __VA_ARGS__)
-#define RECURSE_4(macro, first, ...) macro(first) RECURSE_3(macro, __VA_ARGS__)
-#define RECURSE_5(macro, first, ...) macro(first) RECURSE_4(macro, __VA_ARGS__)
-#define RECURSE_6(macro, first, ...) macro(first) RECURSE_5(macro, __VA_ARGS__)
-#define RECURSE_7(macro, first, ...) macro(first) RECURSE_6(macro, __VA_ARGS__)
+#define RECURSE_2(macro, first, ...) macro(first) EXPAND(RECURSE_1(macro, __VA_ARGS__))
+#define RECURSE_3(macro, first, ...) macro(first) EXPAND(RECURSE_2(macro, __VA_ARGS__))
+#define RECURSE_4(macro, first, ...) macro(first) EXPAND(RECURSE_3(macro, __VA_ARGS__))
+#define RECURSE_5(macro, first, ...) macro(first) EXPAND(RECURSE_4(macro, __VA_ARGS__))
+#define RECURSE_6(macro, first, ...) macro(first) EXPAND(RECURSE_5(macro, __VA_ARGS__))
+#define RECURSE_7(macro, first, ...) macro(first) EXPAND(RECURSE_6(macro, __VA_ARGS__))
 
 #define RECURSE__1(macro, first)      macro(first)
-#define RECURSE__2(macro, first, ...) macro(first), RECURSE__1(macro, __VA_ARGS__)
-#define RECURSE__3(macro, first, ...) macro(first), RECURSE__2(macro, __VA_ARGS__)
-#define RECURSE__4(macro, first, ...) macro(first), RECURSE__3(macro, __VA_ARGS__)
-#define RECURSE__5(macro, first, ...) macro(first), RECURSE__4(macro, __VA_ARGS__)
-#define RECURSE__6(macro, first, ...) macro(first), RECURSE__5(macro, __VA_ARGS__)
-#define RECURSE__7(macro, first, ...) macro(first), RECURSE__6(macro, __VA_ARGS__)
+#define RECURSE__2(macro, first, ...) macro(first), EXPAND(RECURSE__1(macro, __VA_ARGS__))
+#define RECURSE__3(macro, first, ...) macro(first), EXPAND(RECURSE__2(macro, __VA_ARGS__))
+#define RECURSE__4(macro, first, ...) macro(first), EXPAND(RECURSE__3(macro, __VA_ARGS__))
+#define RECURSE__5(macro, first, ...) macro(first), EXPAND(RECURSE__4(macro, __VA_ARGS__))
+#define RECURSE__6(macro, first, ...) macro(first), EXPAND(RECURSE__5(macro, __VA_ARGS__))
+#define RECURSE__7(macro, first, ...) macro(first), EXPAND(RECURSE__6(macro, __VA_ARGS__))
 
 #define EXPAND(x)    x
 #define CONCAT(a, b) a##b
@@ -170,11 +171,16 @@ auto GetBounds<4, BVH_QN>(BVHNode4 node, Vec3lf4 &mins, Vec3lf4 &maxs)
 template <typename F, typename T0>
 auto Dispatch(F &&func, u32 index)
 {
-    Assert(index < 2 && index >= 0);
+    Assert(index == 0);
     return func(T0());
 }
 
 DispatchHelp(2, 0, 1);
+DispatchHelp(3, 0, 1, 2);
+DispatchHelp(4, 0, 1, 2, 3);
+DispatchHelp(5, 0, 1, 2, 3, 4);
+DispatchHelp(6, 0, 1, 2, 3, 4, 5);
+DispatchHelp(7, 0, 1, 2, 3, 4, 5, 6);
 // DispatchHelp(4, 0, 1, 2, 3);
 
 // template <typename F, typename T0, typename T1>
@@ -219,49 +225,68 @@ struct TriangleIntersector
     } // namespace rt
 };
 
-using IntersectorTypes = TypePack<TriangleIntersector>;
+template <typename... Ts>
+struct DispatchTypes
+{
+    template <typename F>
+    __forceinline static auto Dispatch(F &&closure, u32 index)
+    {
+        return Dispatch<Ts...>(closure, index);
+    }
+};
+
 template <u32 N>
 struct InstanceIntersector<N, BVHNodeType_AllQuantized>
 {
-    using Primitive = TLASLeaf<N>;
+    using IntersectorTypes = DispatchTypes<TriangleIntersector>;
+    using Primitive        = TLASLeaf<N>;
 
     InstanceIntersector() {}
     static bool Intersect(Ray2 &ray, BVHNode<N> ptr, SurfaceInteraction &itr)
     {
-        switch (ptr.GetType())
-        {
-            case BVHNode<N>::tyCompressedLeaf:
-            {
-            }
-            break;
-            default:
-            {
-                Assert(ptr.IsLeaf());
-            }
-        }
         // intersect the bounds
         // get the leaves to intersect
         // transform the ray
         // intersect the bottom level hierarchy
-        AffineSpace &t = scene->affineTransforms[instance.transformIndex];
-        Ray2 r         = Transform(t, ray);
-        BVHNodeN node  = scenes[instance.geomID.GetIndex()].nodePtr;
-
-        auto closure = [&](auto type) {
-            using Intersector = std::decay_t<decltype(ptr)>;
-            return Intersect<N, types, Intersector>(r, node, itr);
-        };
-        return Dispatch<IntersectorTypes...>(closure, instance.geomID.GetType());
-    }
-
-    static bool Intersect(Ray2 &ray, TLASLeaf<N> ptr, SurfaceInteraction &itr)
-    {
-        switch (ptr.nodePtr.GetType())
+        Primitive *leaves = (Primitive *)ptr.GetType();
+        u32 num           = ptr.GetType() - BVHNode<N>::tyLeaf;
+        bool result       = false;
+        for (u32 i = 0; i < num; i++)
         {
-            case 0:
+            Primitive &prim    = leaves[i];
+            Instance &instance = scene->instances[prim.index];
+
+            AffineSpace &t  = scene->affineTransforms[instance.transformIndex];
+            BVHNode<N> node = scenes[instance.geomID.GetIndex()].nodePtr;
+            Vec3f rayO      = ray.o;
+            Vec3f rayD      = ray.d;
+            ray             = Transform(t, ray);
+            auto closure    = [&](auto type) {
+                using Intersector = std::decay_t<decltype(ptr)>;
+                return BVHIntersector<N, types, Intersector>::Intersect(r, node, itr);
+            };
+            result |= IntersectorTypes::Dispatch(closure, instance.geomID.GetType());
+            ray.o = rayO;
+            ray.d = rayD;
+        }
+    }
+};
+
+template <u32 N, typename Intersector>
+struct CompressedLeafIntersector
+{
+    CompressedLeafIntersector() {}
+    static bool Intersect(Ray2 &ray, BVHNode<N> ptr, SurfaceInteraction &itr)
+    {
+        bool result = false;
+        switch (ptr.GetType())
+        {
+            case BVHNode<N>::tyCompressedLeaf:
             {
-                Intersect<N, types, T>(ray, ptr.nodePtr, itr);
+                // intersect the compressed leaf, get the leaves to intersect
             }
+            break;
+            default: result |= Intersector::Intersect(ray, ptr, itr);
         }
     }
 };

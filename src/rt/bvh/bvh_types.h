@@ -278,6 +278,10 @@ struct BVHNode
     static BVHNode<N> EncodeCompressedNode(CompressedLeafNode<N> *node);
     static BVHNode<N> EncodeLeaf(void *leaf, u32 num);
     QuantizedNode<N> *GetQuantizedNode() const;
+    void *GetPtr() const
+    {
+        return (void *)(data & ~alignMask);
+    }
     size_t GetType() const { return data & alignMask; }
     bool IsLeaf() const { return GetType() >= tyLeaf; }
     bool IsQuantizedNode() const { return GetType() == tyQuantizedNode; }
