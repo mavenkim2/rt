@@ -148,7 +148,7 @@ struct GetQuantizedNode
 {
     using NodeType = QNode;
 
-    __forceinline NodeType *operator()(const BVHNodeType ptr)
+    __forceinline NodeType *operator()(const BVHNodeN ptr)
     {
         Assert(ptr.data);
         Assert(ptr.IsQuantizedNode());

@@ -281,6 +281,7 @@ struct BVHNode
     size_t GetType() const { return data & alignMask; }
     bool IsLeaf() const { return GetType() >= tyLeaf; }
     bool IsQuantizedNode() const { return GetType() == tyQuantizedNode; }
+    bool IsCompressedLeaf() const { return GetType() == tyQuantizedNode; }
 };
 
 template <i32 N>
@@ -462,12 +463,12 @@ using QuantizedNode8 = QuantizedNode<8>;
 #endif
 
 #ifdef USE_BVH4
-typedef BVHNode<4> BVHNodeType;
+typedef BVHNode<4> BVHNodeN;
 typedef BuildRef<4> BRef;
 typedef QuantizedNode<4> QNode;
 static const u32 DefaultN = 4;
 #elif defined(USE_BVH8)
-typedef BVHNode<8> BVHNodeType;
+typedef BVHNode<8> BVHNodeN;
 typedef BuildRef<8> BRef;
 typedef QuantizedNode<8> QNode;
 static const u32 DefaultN = 8;

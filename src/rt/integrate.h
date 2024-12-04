@@ -411,7 +411,7 @@ struct Ray2
 {
     Vec3f o;
     Vec3f d;
-    f32 tMax;
+    f32 tFar;
     u32 volumeIndex = invalidVolume;
 
     Ray2() {}

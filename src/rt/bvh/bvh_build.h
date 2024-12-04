@@ -483,7 +483,7 @@ BVHNode<N> BuildTLASQuantized(BuildSettings settings,
 //////////////////////////////
 // Helpers
 //
-__forceinline BVHNodeType BuildQuantizedTriSBVH(BuildSettings settings,
+__forceinline BVHNodeN BuildQuantizedTriSBVH(BuildSettings settings,
                                                 Arena **inArenas,
                                                 TriangleMesh *mesh,
                                                 PrimRefCompressed *refs,
@@ -496,7 +496,7 @@ __forceinline BVHNodeType BuildQuantizedTriSBVH(BuildSettings settings,
 #endif
 }
 
-__forceinline BVHNodeType BuildQuantizedQuadSBVH(BuildSettings settings,
+__forceinline BVHNodeN BuildQuantizedQuadSBVH(BuildSettings settings,
                                                  Arena **inArenas,
                                                  QuadMesh *mesh,
                                                  PrimRefCompressed *refs,
@@ -509,7 +509,7 @@ __forceinline BVHNodeType BuildQuantizedQuadSBVH(BuildSettings settings,
 #endif
 }
 
-__forceinline BVHNodeType BuildQuantizedQuadSBVH(BuildSettings settings,
+__forceinline BVHNodeN BuildQuantizedQuadSBVH(BuildSettings settings,
                                                  Arena **inArenas,
                                                  Scene2 *scene,
                                                  PrimRef *refs,
@@ -522,7 +522,7 @@ __forceinline BVHNodeType BuildQuantizedQuadSBVH(BuildSettings settings,
 #endif
 }
 
-__forceinline BVHNodeType BuildTLASQuantized(BuildSettings settings,
+__forceinline BVHNodeN BuildTLASQuantized(BuildSettings settings,
                                              Arena **inArenas,
                                              Scene2 *scene,
                                              BRef *refs,

@@ -119,7 +119,7 @@ void AOSSBVHBuilderTest(Arena *arena, TriangleMesh *mesh)
     record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
     record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
 
-    BVHNodeType bvh = BuildQuantizedTriSBVH(settings, arenas, mesh, refs, record);
+    BVHNodeN bvh = BuildQuantizedTriSBVH(settings, arenas, mesh, refs, record);
     f32 time        = OS_GetMilliseconds(counter);
     printf("num faces: %u\n", numFaces);
     printf("Build time: %fms\n", time);
@@ -167,7 +167,7 @@ void QuadSBVHBuilderTest(Arena *arena, QuadMesh *mesh)
     record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
     record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
 
-    BVHNodeType bvh = BuildQuantizedQuadSBVH(settings, arenas, mesh, refs, record);
+    BVHNodeN bvh = BuildQuantizedQuadSBVH(settings, arenas, mesh, refs, record);
     f32 time        = OS_GetMilliseconds(counter);
     printf("num faces: %u\n", numFaces);
     printf("Build time: %fms\n", time);
@@ -219,7 +219,7 @@ void PartialRebraidBuilderTest(Arena *arena)
     settings.intCost = 0.3f;
 
     counter          = OS_StartCounter();
-    BVHNodeType node = BuildTLASQuantized(settings, arenas, &scenes[0], buildRefs, record);
+    BVHNodeN node = BuildTLASQuantized(settings, arenas, &scenes[0], buildRefs, record);
     printf("time to generate tlas: %fms\n", OS_GetMilliseconds(counter));
     Print("time to generate tlas: %fms\n", OS_GetMilliseconds(counter));
 

@@ -5,22 +5,27 @@
 
 namespace rt
 {
-enum BVHType
+
+typedef u32 BVHNodeType;
+enum
 {
-    BVHType_Quantized;
+    BVHNodeType_Quantized       = 1 << 0,
+    BVHNodeType_QuantizedLeaves = 1 << 1,
+
+    BVHNodeType_AllQuantized = BVHNodeType_Quantized | BVHNodeType_QuantizedLeaves,
 };
 
-template <i32 types, i32 K>
-void GetBounds(BVHNode4 node, Vec3lf4 &mins, Vec3lf4 &maxs);
+template <u32 K, u32 types>
+auto GetBounds(BVHNode4 node, Vec3lf4 &mins, Vec3lf4 &maxs);
 
-template <i32 types, i32 K, typename Intersector>
+template <u32 K, u32 types, typename Intersector>
 bool Intersect(Ray2 &ray, BVHNode<K> bvhNode, SurfaceInteraction &itr);
 
 // Single primitive intersector
-template <i32 types, typename Intersector>
-bool Intersect<types, 4, Intersector>(Ray2 &ray, BVHNode4 bvhNode, SurfaceInteraction &itr)
+template <u32 types, typename Intersector>
+bool Intersect<4, types, Intersector>(Ray2 &ray, BVHNode4 bvhNode, SurfaceInteraction &itr)
 {
-    typedef typename Intersector::Primitive Primitive;
+    // typedef typename Intersector::Primitive Primitive;
 
     Vec3lf4 invRayD(Select(ray.d.x == -0, pos_inf, 1 / ray.d.x),
                     Select(ray.d.y == -0, pos_inf, 1 / ray.d.y),
@@ -44,13 +49,13 @@ bool Intersect<types, 4, Intersector>(Ray2 &ray, BVHNode4 bvhNode, SurfaceIntera
 
         if (entry.ptr.IsLeaf())
         {
-            Intersector::Intersect(ray, stack.ptr, itr);
+            Intersector::Intersect<4, types>(ray, entry.ptr, itr);
             continue;
         }
 
         Vec3lf4 mins, maxs;
         // Get bounds from the node
-        GetBounds<types, 4>(node, &mins, &maxs);
+        auto node = GetBounds<4, types>(entry.ptr, &mins, &maxs);
 
         // Intersect the bounds
         Vec3lf4 tMins = (mins - ray.o) * invRayD;
@@ -82,7 +87,7 @@ bool Intersect<types, 4, Intersector>(Ray2 &ray, BVHNode4 bvhNode, SurfaceIntera
         {
             // If numNodes <= 1, then numNode will be 0, 1, 2, 4, or 8. x/2 - x/8 maps to
             // 0, 0, 1, 2, 3
-            stack[stackPtr] = node.childIndex[(intersectFlags >> 1) - (intersectFlags >> 3)];
+            stack[stackPtr] = node->children[(intersectFlags >> 1) - (intersectFlags >> 3)];
             stackPtr += numNodes;
         }
         else
@@ -112,24 +117,78 @@ bool Intersect<types, 4, Intersector>(Ray2 &ray, BVHNode4 bvhNode, SurfaceIntera
 }
 
 template <i32 K>
-void GetBounds<BVHType_Quantized, K>(BVHNode4 node, Vec3lf<K> &mins, Vec3lf<K> &maxs)
+auto GetBounds<K, BVHType_Quantized>(BVHNode4 node, Vec3lf<K> &mins, Vec3lf<K> &maxs)
 {
     QuantizedNode<K> *qNode = node.GetQuantizedNode();
     node->GetBounds(mins, maxs);
+    return qNode;
 }
 
-template <i32 N, i32 types>
-struct InstanceIntersector<BVHType_Quantized>
+template <typename F, typename T0>
+auto Dispatch(F &&func, u32 index)
 {
-    using Primitive = Instance;
+    Assert(index < 2 && index >= 0);
+    return func(T0());
+}
 
-    bool Intersect(Ray2 &ray, BVHNode<N> ptr, SurfaceInteraction &itr)
+template <typename F, typename T0, typename T1>
+auto Dispatch(F &&func, u32 index)
+{
+    Assert(index < 2 && index >= 0);
+    switch (index)
     {
+        case 0: return func(T0());
+        default: return func(T1());
+    }
+}
+
+template <u32 N, u32 types, typename Ts...>
+struct InstanceIntersector;
+
+template <u32 N, BVHNodeType_AllQuantized, typename... Ts>
+struct InstanceIntersector
+{
+    using Primitive = TLASLeaf<N>;
+    using Types     = TypePack<Ts...>;
+
+    InstanceIntersector() {}
+    static bool Intersect(Ray2 &ray, BVHNode<N> ptr, SurfaceInteraction &itr)
+    {
+        switch (ptr.GetType())
+        {
+            case BVHNode<N>::tyCompressedLeaf:
+            {
+            }
+            break;
+            default:
+            {
+                Assert(ptr.IsLeaf());
+            }
+        }
+        // intersect the bounds
+        // get the leaves to intersect
+        // transform the ray
+        // intersect the bottom level hierarchy
         AffineSpace &t = scene->affineTransforms[instance.transformIndex];
         Ray2 r         = Transform(t, ray);
-        Assert(instance.geomID.GetType() == GeometryID::quadMeshType);
-        BVHNodeType node = scenes[instance.geomID.GetIndex()].nodePtr;
-        return Intersect<>(r, node);
+        BVHNodeN node  = scenes[instance.geomID.GetIndex()].nodePtr;
+
+        auto closure = [&](auto type) {
+            using Intersector = std::decay_t<decltype(ptr)>;
+            return Intersect<N, types, Intersector>(r, node, itr);
+        };
+        return Dispatch(closure, instance.geomID.GetType());
+    }
+
+    static bool Intersect(Ray2 &ray, TLASLeaf<N> ptr, SurfaceInteraction &itr)
+    {
+        switch (ptr.nodePtr.GetType())
+        {
+            case 0:
+            {
+                Intersect<N, types, T>(ray, ptr.nodePtr, itr);
+            }
+        }
     }
 };
 
@@ -158,7 +217,7 @@ struct TriangleIntersector
         LaneF32<K> t = Dot(ng, c);
 
         mask &=
-    }
+    } // namespace rt
 };
 
 struct QuadIntersector

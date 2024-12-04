@@ -817,7 +817,7 @@ struct Scene2
     // ArrayTuple<MaterialTypes> materials;
 
     // BVH
-    BVHNodeType nodePtr;
+    BVHNodeN nodePtr;
 
     f32 minX, minY, minZ;
     f32 maxX, maxY, maxZ;
