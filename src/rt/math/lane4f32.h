@@ -217,6 +217,7 @@ __forceinline Lane4F32 Rcp(const Lane4F32 &a)
 }
 
 __forceinline Lane4F32 Abs(const Lane4F32 &a) { return _mm_and_ps(a, _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff))); }
+__forceinline Lane4F32 Signmask(const Lane4F32 &a) { return _mm_and_ps(a, _mm_castsi128_ps(_mm_set1_epi32(0x80000000))); }
 
 __forceinline Lane4F32 FlipSign(const Lane4F32 &a)
 {
@@ -225,8 +226,7 @@ __forceinline Lane4F32 FlipSign(const Lane4F32 &a)
 }
 __forceinline Lane4F32 Copysign(const Lane4F32 &mag, const Lane4F32 &sign)
 {
-    static const __m128 signFlipMask = _mm_setr_ps(-0.f, -0.f, -0.f, -0.f);
-    return _mm_or_ps(Abs(mag), _mm_and_ps(sign, signFlipMask));
+    return _mm_or_ps(Abs(mag), Signmask(sign));
 }
 
 __forceinline Lane4F32 operator-(const Lane4F32 &a)

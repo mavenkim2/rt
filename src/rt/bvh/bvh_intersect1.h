@@ -106,6 +106,7 @@ struct BVHIntersector;
 template <u32 types, typename Intersector>
 struct BVHIntersector<4, types, Intersector>
 {
+    using Intersection = typename Intersector::Intersection;
     BVHIntersector() {}
     static bool Intersect(Ray2 &ray, BVHNode4 bvhNode, SurfaceInteraction &itr)
     {
@@ -115,8 +116,7 @@ struct BVHIntersector<4, types, Intersector>
                         Select(ray.d.y == -0, pos_inf, 1 / ray.d.y),
                         Select(ray.d.z == -0, pos_inf, 1 / ray.d.z));
 
-        u32 closestHitPrimitiveType;
-        u32 closestHitPrimitiveIndex;
+        Intersection intersection;
 
         StackEntry stack[256];
         i32 stackPtr = 1;
@@ -129,7 +129,7 @@ struct BVHIntersector<4, types, Intersector>
 
             if (entry.ptr.IsLeaf())
             {
-                Intersector::Intersect(ray, entry.ptr, itr);
+                Intersector::Intersect(ray, entry.ptr, intersection);
                 continue;
             }
 
@@ -221,33 +221,92 @@ DispatchHelp(7, 0, 1, 2, 3, 4, 5, 6);
 template <u32 N, u32 types>
 struct InstanceIntersector;
 
+template <u32 K>
+struct TriangleIntersection
+{
+    LaneF32<K> u, v, t;
+    LaneU32<K> geomIDs, primIDs;
+    TriangleIntersection() {}
+};
+
+template <u32 N>
 struct TriangleIntersector
 {
+    using Intersection = TriangleIntersection<N>;
+    using Primitive    = Triangle<N>;
     // https://www.graphics.cornell.edu/pubs/1997/MT97.pdf
-    template <i32 K>
-    bool Intersect(Ray2 &ray, const Vec3lf<K> &v0, const Vec3lf<K> &v1, const Vec3lf<K> &v2)
+    static Mask<LaneF32<N>> Intersect(Ray2 &ray, const Vec3lf<N> &v0, const Vec3lf<N> &v1, const Vec3lf<N> &v2, Intersection &itr)
     {
-        Vec3lf<K> e1 = v1 - v0;
-        Vec3lf<K> e2 = v2 - v0;
-        Vec3lf<K> ng = Cross(e1, e2);
-        Vec3lf<K> c  = v0 - ray.o;
+        Vec3lf<N> e1 = v1 - v0;
+        Vec3lf<N> e2 = v2 - v0;
+        Vec3lf<N> ng = Cross(e1, e2);
+        Vec3lf<N> c  = v0 - ray.o;
 
-        LaneF32<K> det    = Dot(-ray.d, ng);
-        LaneF32<K> absDet = Abs(det);
-        Vec3lf<K> dxt     = Cross(ray.d, c);
+        LaneF32<N> det    = Dot(ray.d, ng);
+        LaneF32<N> absDet = Abs(det);
+        LaneF32<N> sgnDet = Signmask(det);
+        Vec3lf<N> dxt     = Cross(c, ray.d);
 
-        LaneF32<K> u = Dot(dxt, e2);
-        LaneF32<K> v = Dot(-dxt, e1);
+        LaneF32<N> u = Dot(dxt, e2) ^ sgnDet;
+        LaneF32<N> v = Dot(-dxt, e1) ^ sgnDet;
 
-        Mask<LaneF32<K>> mask = (den != LaneF32<K>(0)) & (u >= 0) & (v >= 0) & (u + v <= absDet);
+        Mask<LaneF32<N>> mask = (den != LaneF32<N>(0)) & (u >= 0) & (v >= 0) & (u + v <= absDet);
 
         if (None(mask)) return false;
 
-        LaneF32<K> t = Dot(ng, c);
+        LaneF32<N> t = Dot(ng, c) ^ sgnDet;
 
-        mask &=
+        mask &= (absDet * tMinEpsilon < t) & (t <= absDen * ray.tFar);
+
+        if (None(mask)) return false;
+
+        const LaneF32<N> rcpAbsDet = Rcp(absDet);
+        itr.u                      = Min(u * rcpAbsDet, 1.f);
+        itr.v                      = Min(v * rcpAbsDet, 1.f);
+        itr.t                      = t * rcpAbsDet;
+        return mask;
     }
+    static bool Intersect(Ray2 &ray, BVHNode<N> ptr, Intersection &itr)
+    {
+        Assert(ptr.IsLeaf());
+        Primitive *primitives = (Primitive *)ptr.GetPtr();
+        u32 num               = ptr.GetNum();
+
+        Vec3lf<N> triV0, triV1, triV2;
+        Lane4F32 v0[N];
+        Lane4F32 v1[N];
+        Lane4F32 v2[N];
+        alignas(4 * N) u32 geomIDs[N];
+        alignas(4 * N) u32 primIDs[N];
+        for (u32 i = 0; i < num; i++)
+        {
+            Primitive &prim    = primitives[i];
+            TriangleMesh *mesh = &scene->Get<TriangleMesh>()[prim.geomIDs[i]];
+            v0[i]              = Lane4F32::LoadU((f32 *)(mesh->p + 3 * prim.primIDs[i] + 0));
+            v1[i]              = Lane4F32::LoadU((f32 *)(mesh->p + 3 * prim.primIDs[i] + 1));
+            v2[i]              = Lane4F32::LoadU((f32 *)(mesh->p + 3 * prim.primIDs[i] + 2));
+        }
+        Transpose(v0, triV0);
+        Transpose(v1, triV1);
+        Transpose(v2, triV2);
+
+        auto mask   = Intersect(ray, triV0, triV1, triV2, itr);
+        itr.geomIDs = Select(mask, LaneU32<N>::LoadU(geomIDs), itr.geomIDs);
+        itr.primIDs = Select(mask, LaneU32<N>::LoadU(primIDs), itr.primIDs);
+    }
+    static void FinalizeIntersection(Ray2 &r, SurfaceInteraction &si, Intersection &itr) { return; }
 };
+
+// struct QuadIntersector
+// {
+//     using Primitve = Quad;
+//
+//     template <i32 K>
+//     bool Intersect(Ray2 &ray, const Vec3lf<K> &v0, const Vec3lf<K> &v1, const Vec3lf<K> &v2, const Veclf<K> &v3)
+//     {
+//         v0, v1, v2
+//     }
+// };
 
 template <typename... Ts>
 struct DispatchTypes
@@ -262,7 +321,7 @@ struct DispatchTypes
 template <u32 N>
 struct InstanceIntersector<N, BVHNodeType_AllQuantized>
 {
-    using IntersectorTypes = DispatchTypes<TriangleIntersector>;
+    using IntersectorTypes = DispatchTypes<TriangleIntersector<N>>;
     using Primitive        = TLASLeaf<N>;
 
     InstanceIntersector() {}
@@ -273,7 +332,7 @@ struct InstanceIntersector<N, BVHNodeType_AllQuantized>
         // transform the ray
         // intersect the bottom level hierarchy
         Primitive *leaves = (Primitive *)ptr.GetType();
-        u32 num           = ptr.GetType() - BVHNode<N>::tyLeaf;
+        u32 num           = ptr.GetNum();
         bool result       = false;
         for (u32 i = 0; i < num; i++)
         {
@@ -322,17 +381,6 @@ struct CompressedLeafIntersector
         }
     }
 };
-
-// struct QuadIntersector
-// {
-//     using Primitve = Quad;
-//
-//     template <i32 K>
-//     bool Intersect(Ray2 &ray, const Vec3lf<K> &v0, const Vec3lf<K> &v1, const Vec3lf<K> &v2, const Veclf<K> &v3)
-//     {
-//         v0, v1, v2
-//     }
-// };
 
 } // namespace rt
 #endif
