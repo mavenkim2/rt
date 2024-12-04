@@ -238,6 +238,65 @@ struct alignas(CACHE_LINE_SIZE) RecordAOSSplits
 template <i32 N>
 struct QuantizedNode;
 
+template <template <i32> class Node, i32 N>
+void GetBounds(Node<N> *node, LaneF32<N> *outMin, LaneF32<N> *outMax)
+{
+    LaneU32<N> lX = LaneU32<N>(*(u32 *)node->lowerX);
+    LaneU32<N> lY = LaneU32<N>(*(u32 *)node->lowerY);
+    LaneU32<N> lZ = LaneU32<N>(*(u32 *)node->lowerZ);
+
+    LaneU32<N> uX = LaneU32<N>(*(u32 *)node->upperX);
+    LaneU32<N> uY = LaneU32<N>(*(u32 *)node->upperY);
+    LaneU32<N> uZ = LaneU32<N>(*(u32 *)node->upperZ);
+
+    LaneU32<N> lExpandedMinX;
+    LaneU32<N> lExpandedMinY;
+    LaneU32<N> lExpandedMinZ;
+
+    LaneU32<N> lExpandedMaxX;
+    LaneU32<N> lExpandedMaxY;
+    LaneU32<N> lExpandedMaxZ;
+    if constexpr (N == 4)
+    {
+        lExpandedMinX = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lX));
+        lExpandedMinY = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lY));
+        lExpandedMinZ = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lZ));
+
+        lExpandedMaxX = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uX));
+        lExpandedMaxY = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uY));
+        lExpandedMaxZ = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uZ));
+    }
+    else
+    {
+        lExpandedMinX = _mm256_cvtepu8_epi32(lX);
+        lExpandedMinY = _mm256_cvtepu8_epi32(lY);
+        lExpandedMinZ = _mm256_cvtepu8_epi32(lZ);
+        lExpandedMaxX = _mm256_cvtepu8_epi32(uX);
+        lExpandedMaxY = _mm256_cvtepu8_epi32(uY);
+        lExpandedMaxZ = _mm256_cvtepu8_epi32(uZ);
+    }
+    LaneF32<N> minX(node->minP.x);
+    LaneF32<N> minY(node->minP.y);
+    LaneF32<N> minZ(node->minP.z);
+
+    LaneF32<N> scaleX = AsFloat(LaneU32<N>(node->scale[0] << 23));
+    LaneF32<N> scaleY = AsFloat(LaneU32<N>(node->scale[1] << 23));
+    LaneF32<N> scaleZ = AsFloat(LaneU32<N>(node->scale[2] << 23));
+
+    //     LaneF32<N>::Store(outMinX, minX + LaneF32<N>(lExpandedMinX) * scaleX);
+    //     LaneF32<N>::Store(outMinY, minY + LaneF32<N>(lExpandedMinY) * scaleY);
+    //     LaneF32<N>::Store(outMinZ, minZ + LaneF32<N>(lExpandedMinZ) * scaleZ);
+    //     LaneF32<N>::Store(outMaxX, minX + LaneF32<N>(lExpandedMaxX) * scaleX);
+    //     LaneF32<N>::Store(outMaxY, minY + LaneF32<N>(lExpandedMaxY) * scaleY);
+    //     LaneF32<N>::Store(outMaxZ, minZ + LaneF32<N>(lExpandedMaxZ) * scaleZ);
+    outMin[0] = FMA(LaneF32<N>(lExpandedMinX), scaleX, minX);
+    outMin[1] = FMA(LaneF32<N>(lExpandedMinY), scaleY, minY);
+    outMin[2] = FMA(LaneF32<N>(lExpandedMinZ), scaleZ, minZ);
+    outMax[0] = FMA(LaneF32<N>(lExpandedMaxX), scaleX, minX);
+    outMax[1] = FMA(LaneF32<N>(lExpandedMaxY), scaleY, minY);
+    outMax[2] = FMA(LaneF32<N>(lExpandedMaxZ), scaleZ, minZ);
+}
+
 template <i32 N>
 struct CompressedLeafNode
 {
@@ -255,6 +314,10 @@ struct CompressedLeafNode
     u8 upperZ[N];
 
     Vec3f minP;
+    void GetBounds(LaneF32<N> *outMin, LaneF32<N> *outMax)
+    {
+        ::GetBounds(this, outMin, outMax);
+    }
 };
 
 template <i32 N>
@@ -278,6 +341,7 @@ struct BVHNode
     static BVHNode<N> EncodeCompressedNode(CompressedLeafNode<N> *node);
     static BVHNode<N> EncodeLeaf(void *leaf, u32 num);
     QuantizedNode<N> *GetQuantizedNode() const;
+    CompressedLeafNode<N> *GetCompressedLeaf() const;
     void *GetPtr() const
     {
         return (void *)(data & ~alignMask);
@@ -322,6 +386,13 @@ QuantizedNode<N> *BVHNode<N>::GetQuantizedNode() const
 {
     Assert(IsQuantizedNode());
     return (QuantizedNode<N> *)(data & ~(0xf));
+}
+
+template <i32 N>
+CompressedLeafNode<N> *BVHNode<N>::GetCompressedLeaf() const
+{
+    Assert(IsCompressedLeaf());
+    return (CompressedLeafNode<N> *)(data & ~alignMask);
 }
 
 typedef BVHNode<4> BVHNode4;
@@ -392,60 +463,7 @@ struct QuantizedNode
 
     void GetBounds(LaneF32<N> *outMin, LaneF32<N> *outMax) // f32 *outMinX, f32 *outMinY, f32 *outMinZ, f32 *outMaxX, f32 *outMaxY, f32 *outMaxZ) const
     {
-        LaneU32<N> lX = LaneU32<N>(*(u32 *)lowerX);
-        LaneU32<N> lY = LaneU32<N>(*(u32 *)lowerY);
-        LaneU32<N> lZ = LaneU32<N>(*(u32 *)lowerZ);
-
-        LaneU32<N> uX = LaneU32<N>(*(u32 *)upperX);
-        LaneU32<N> uY = LaneU32<N>(*(u32 *)upperY);
-        LaneU32<N> uZ = LaneU32<N>(*(u32 *)upperZ);
-
-        LaneU32<N> lExpandedMinX;
-        LaneU32<N> lExpandedMinY;
-        LaneU32<N> lExpandedMinZ;
-
-        LaneU32<N> lExpandedMaxX;
-        LaneU32<N> lExpandedMaxY;
-        LaneU32<N> lExpandedMaxZ;
-        if constexpr (N == 4)
-        {
-            lExpandedMinX = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lX));
-            lExpandedMinY = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lY));
-            lExpandedMinZ = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lZ));
-
-            lExpandedMaxX = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uX));
-            lExpandedMaxY = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uY));
-            lExpandedMaxZ = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uZ));
-        }
-        else
-        {
-            lExpandedMinX = _mm256_cvtepu8_epi32(lX);
-            lExpandedMinY = _mm256_cvtepu8_epi32(lY);
-            lExpandedMinZ = _mm256_cvtepu8_epi32(lZ);
-            lExpandedMaxX = _mm256_cvtepu8_epi32(uX);
-            lExpandedMaxY = _mm256_cvtepu8_epi32(uY);
-            lExpandedMaxZ = _mm256_cvtepu8_epi32(uZ);
-        }
-        LaneF32<N> minX(minP.x);
-        LaneF32<N> minY(minP.y);
-        LaneF32<N> minZ(minP.z);
-
-        LaneF32<N> scaleX = AsFloat(LaneU32<N>(scale[0] << 23));
-        LaneF32<N> scaleY = AsFloat(LaneU32<N>(scale[1] << 23));
-        LaneF32<N> scaleZ = AsFloat(LaneU32<N>(scale[2] << 23));
-
-        //     LaneF32<N>::Store(outMinX, minX + LaneF32<N>(lExpandedMinX) * scaleX);
-        //     LaneF32<N>::Store(outMinY, minY + LaneF32<N>(lExpandedMinY) * scaleY);
-        //     LaneF32<N>::Store(outMinZ, minZ + LaneF32<N>(lExpandedMinZ) * scaleZ);
-        //     LaneF32<N>::Store(outMaxX, minX + LaneF32<N>(lExpandedMaxX) * scaleX);
-        //     LaneF32<N>::Store(outMaxY, minY + LaneF32<N>(lExpandedMaxY) * scaleY);
-        //     LaneF32<N>::Store(outMaxZ, minZ + LaneF32<N>(lExpandedMaxZ) * scaleZ);
-        outMin[0] = FMA(LaneF32<N>(lExpandedMinX), scaleX, minX);
-        outMin[1] = FMA(LaneF32<N>(lExpandedMinY), scaleY, minY);
-        outMin[2] = FMA(LaneF32<N>(lExpandedMinZ), scaleZ, minZ);
-        outMax[0] = FMA(LaneF32<N>(lExpandedMaxX), scaleX, minX);
-        outMax[1] = FMA(LaneF32<N>(lExpandedMaxY), scaleY, minY);
-        outMax[2] = FMA(LaneF32<N>(lExpandedMaxZ), scaleZ, minZ);
+        ::GetBounds(this, outMin, outMax);
     }
     // }
     QuantizedNode<N> GetBaseChildPtr() const

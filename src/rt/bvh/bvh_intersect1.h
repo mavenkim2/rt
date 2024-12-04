@@ -13,11 +13,92 @@ enum
     BVHNodeType_QuantizedLeaves = 1 << 1,
 
     BVH_QN                   = BVHNodeType_Quantized,
+    BVH_QNLF                 = BVHNodeType_QuantizedLeaves,
     BVHNodeType_AllQuantized = BVHNodeType_Quantized | BVHNodeType_QuantizedLeaves,
 };
 
 template <u32 K, u32 types>
-auto GetBounds(BVHNode4 node, Vec3lf4 &mins, Vec3lf4 &maxs);
+auto GetNode(BVHNode4 node);
+
+template <u32 N>
+struct StackEntry
+{
+    BVHNode<N> ptr;
+    f32 dist;
+};
+
+template <u32 K, u32 types>
+struct BVHTraverser;
+
+template <u32 types>
+struct BVHTraverser<4, types>
+{
+    using StackEntry = StackEntry<4>;
+    static void Traverse(StackEntry entry, StackEntry *stack, u32 &stackPtr, Ray2 &ray)
+    {
+        Vec3lf4 mins, maxs;
+        // Get bounds from the node
+        auto node = GetNode<4, types>(entry.ptr);
+        node->GetBounds(mins.e, maxs.e);
+
+        // Intersect the bounds
+        Vec3lf4 tMins = (mins - ray.o) * invRayD;
+        Vec3lf4 tMaxs = (maxs - ray.o) * invRayD;
+
+        Vec3lf4 tEntries = Min(tMaxs, tMins);
+        Vec3lf4 tLeave   = Max(tMins, tMaxs);
+
+        Lane4F32 tEntry    = Max(tEntry[0], Max(tEntry[1], Max(tEntry[2], tMinEpsilon)));
+        Lane4F32 tLeaveRaw = Min(tLeave[0], Min(tLeave[1], Min(tLeave[2], pos_inf)));
+
+        const Lane4F32 tLeave = Min(tLeaveRaw, tLaneClosest);
+
+        const Lane4F32 intersectMask = tEntry <= tLeave;
+
+        const u32 childType0   = node->children[0].GetType();
+        const u32 childType1   = node->children[1].GetType();
+        const u32 childType2   = node->children[2].GetType();
+        const u32 childType3   = node->children[3].GetType();
+        Lane4F32 validNodeMask = Lane4U32(childType0, childType1, childType, childType3) != Lane4U32(BVHNode::tyEmpty);
+
+        Lane4F32 mask            = validNodeMask & intersectMask;
+        const i32 intersectFlags = Movemask(mask);
+
+        Lane4F32 t_dcba    = Select(mask, tLeaveRaw, pos_inf);
+        const u32 numNodes = PopCount(intersectFlags);
+
+        if (numNodes <= 1)
+        {
+            // If numNodes <= 1, then numNode will be 0, 1, 2, 4, or 8. x/2 - x/8 maps to
+            // 0, 0, 1, 2, 3
+            stack[stackPtr] = {node->children[(intersectFlags >> 1) - (intersectFlags >> 3)], t_dcba[0]};
+            stackPtr += numNodes;
+        }
+        else
+        {
+            // Branchless adding leaf nodes
+            const Lane4F32 abac = ShuffleReverse<0, 1, 0, 2>(t_dcba);
+            const Lane4F32 adcd = ShuffleReverse<0, 3, 2, 3>(t_dcba);
+
+            const u32 da_cb_ba_ac = Movemask(t_dcba < abac) & 0xe;
+            const u32 aa_db_ca_dc = Movemask(adcd < abac);
+
+            u32 da_cb_ba_db_ca_dc = da_cb_ba_ac * 4 + aa_db_ca_dc;
+
+            u32 indexA = PopCount(da_cb_ba_db_ca_dc & 0x2a);
+            u32 indexB = PopCount((da_cb_ba_db_ca_dc ^ 0x08) & 0x1c);
+            u32 indexC = PopCount((da_cb_ba_db_ca_dc ^ 0x12) & 0x13);
+            u32 indexD = PopCount((~da_cb_ba_db_ca_dc) & 0x25);
+
+            stack[stackPtr + ((numNodes - 1 - indexA) & 3)] = {node->children[0], t_dcba[0]};
+            stack[stackPtr + ((numNodes - 1 - indexB) & 3)] = {node->children[1], t_dcba[1]};
+            stack[stackPtr + ((numNodes - 1 - indexC) & 3)] = {node->children[2], t_dcba[2]};
+            stack[stackPtr + ((numNodes - 1 - indexD) & 3)] = {node->children[3], t_dcba[3]};
+
+            stackPtr += numNodes;
+        }
+    }
+};
 
 template <u32 K, u32 types, typename Intersector>
 struct BVHIntersector;
@@ -37,17 +118,13 @@ struct BVHIntersector<4, types, Intersector>
         u32 closestHitPrimitiveType;
         u32 closestHitPrimitiveIndex;
 
-        struct StackEntry
-        {
-            BVHNode4 ptr;
-            f32 dist;
-        };
-        StackEntry stack[64];
+        StackEntry stack[256];
         i32 stackPtr = 1;
-        stack[0]     = {bvhNode, pos_inf};
+        stack[0]     = {bvhNode, ray.tFar};
         while (stackPtr > 0)
         {
-            StackEntry &entry = stack[--stackPtr];
+            Assert(stackPtr <= ArrayLength(stack));
+            StackEntry entry = stack[--stackPtr];
             if (entry.dist > ray.tFar) continue;
 
             if (entry.ptr.IsLeaf())
@@ -56,76 +133,23 @@ struct BVHIntersector<4, types, Intersector>
                 continue;
             }
 
-            Vec3lf4 mins, maxs;
-            // Get bounds from the node
-            auto node = GetBounds<4, types>(entry.ptr, &mins, &maxs);
-
-            // Intersect the bounds
-            Vec3lf4 tMins = (mins - ray.o) * invRayD;
-            Vec3lf4 tMaxs = (maxs - ray.o) * invRayD;
-
-            Vec3lf4 tEntries = Min(tMaxs, tMins);
-            Vec3lf4 tLeave   = Max(tMins, tMaxs);
-
-            Lane4F32 tEntry    = Max(tEntry[0], Max(tEntry[1], Max(tEntry[2], tMinEpsilon)));
-            Lane4F32 tLeaveRaw = Min(tLeave[0], Min(tLeave[1], Min(tLeave[2], pos_inf)));
-
-            const Lane4F32 tLeave = Min(tLeaveRaw, tLaneClosest);
-
-            const Lane4F32 intersectMask = tEntry <= tLeave;
-
-            const u32 childType0   = node->children[0].GetType();
-            const u32 childType1   = node->children[1].GetType();
-            const u32 childType2   = node->children[2].GetType();
-            const u32 childType3   = node->children[3].GetType();
-            Lane4F32 validNodeMask = Lane4U32(childType0, childType1, childType, childType3) != Lane4U32(BVHNode::tyEmpty);
-
-            Lane4F32 mask            = validNodeMask & intersectMask;
-            const i32 intersectFlags = Movemask(mask);
-
-            Lane4F32 t_dcba    = Select(mask, tLeaveRaw, pos_inf);
-            const u32 numNodes = PopCount(intersectFlags);
-
-            if (numNodes <= 1)
-            {
-                // If numNodes <= 1, then numNode will be 0, 1, 2, 4, or 8. x/2 - x/8 maps to
-                // 0, 0, 1, 2, 3
-                stack[stackPtr] = node->children[(intersectFlags >> 1) - (intersectFlags >> 3)];
-                stackPtr += numNodes;
-            }
-            else
-            {
-                // Branchless adding leaf nodes
-                const Lane4F32 abac = ShuffleReverse<0, 1, 0, 2>(t_dcba);
-                const Lane4F32 adcd = ShuffleReverse<0, 3, 2, 3>(t_dcba);
-
-                const u32 da_cb_ba_ac = Movemask(t_dcba < abac) & 0xe;
-                const u32 aa_db_ca_dc = Movemask(adcd < abac);
-
-                u32 da_cb_ba_db_ca_dc = da_cb_ba_ac * 4 + aa_db_ca_dc;
-
-                u32 indexA = PopCount(da_cb_ba_db_ca_dc & 0x2a);
-                u32 indexB = PopCount((da_cb_ba_db_ca_dc ^ 0x08) & 0x1c);
-                u32 indexC = PopCount((da_cb_ba_db_ca_dc ^ 0x12) & 0x13);
-                u32 indexD = PopCount((~da_cb_ba_db_ca_dc) & 0x25);
-
-                stack[stackPtr + ((numNodes - 1 - indexA) & 3)] = node.childIndex[0];
-                stack[stackPtr + ((numNodes - 1 - indexB) & 3)] = node.childIndex[1];
-                stack[stackPtr + ((numNodes - 1 - indexC) & 3)] = node.childIndex[2];
-                stack[stackPtr + ((numNodes - 1 - indexD) & 3)] = node.childIndex[3];
-
-                stackPtr += numNodes;
-            }
+            BVHTraverser<4, types>::Traverse(entry, stack, stackPtr, ray);
         }
     }
 };
 
 template <>
-auto GetBounds<4, BVH_QN>(BVHNode4 node, Vec3lf4 &mins, Vec3lf4 &maxs)
+auto GetNode<4, BVH_QN>(BVHNode<4> node)
 {
     QuantizedNode<4> *qNode = node.GetQuantizedNode();
-    qNode->GetBounds(mins.e, maxs.e);
     return qNode;
+}
+
+template <>
+auto GetNode<4, BVH_QNLF>(BVHNode<4> node)
+{
+    CompressedLeafNode<4> *leaf = node.GetCompressedLeaf();
+    return leaf;
 }
 
 // using IntersectorTypes = TypePack<QuadIntersector, TriangleIntersector>;
@@ -222,7 +246,7 @@ struct TriangleIntersector
         LaneF32<K> t = Dot(ng, c);
 
         mask &=
-    } // namespace rt
+    }
 };
 
 template <typename... Ts>
@@ -283,7 +307,15 @@ struct CompressedLeafIntersector
         {
             case BVHNode<N>::tyCompressedLeaf:
             {
-                // intersect the compressed leaf, get the leaves to intersect
+                StackEntry stack[N];
+                i32 stackPtr = 0;
+                BVHTraverser<N, BVH_QNLF>::Traverse({ptr, ray.tFar}, stack, stackPtr, ray);
+
+                stackPtr--;
+                for (; stackPtr >= 0; stackPtr--)
+                {
+                    result |= Intersector::Intersect(ray, stack[stackPtr].ptr, itr);
+                }
             }
             break;
             default: result |= Intersector::Intersect(ray, ptr, itr);
