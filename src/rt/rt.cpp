@@ -28,6 +28,7 @@
 #include "bvh/bvh_aos.h"
 #include "bvh/partial_rebraiding.h"
 #include "bvh/bvh_build.h"
+#include "bvh/bvh_intersect1.h"
 #include <algorithm>
 
 #include "base.cpp"
