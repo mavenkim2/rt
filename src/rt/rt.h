@@ -155,7 +155,7 @@ u8 *GetColor(const Image *image, i32 x, i32 y)
     return image->contents + x * image->bytesPerPixel + y * image->width * image->bytesPerPixel;
 }
 
-void WriteImage(Image *image, char *filename)
+void WriteImage(Image *image, const char *filename)
 {
     u32 imageSize = GetImageSize(image);
     BitmapHeader header;

@@ -44,6 +44,7 @@ struct LightHandle
 {
     u32 data;
     LightHandle() : data(0xffffffff) {}
+    LightHandle(u32 a) : data(a) {}
     LightHandle(LightClass type, u32 index)
     {
         data = (type << 28) | (index & 0x0fffffff);

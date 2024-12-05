@@ -412,6 +412,18 @@ __forceinline Lane8F32 Ceil(const Lane8F32 &lane)
     return _mm256_round_ps(lane, _MM_FROUND_TO_POS_INF);
 }
 
+__forceinline void Transpose8x3(const Lane4F32 &inA, const Lane4F32 &inB, const Lane4F32 &inC, const Lane4F32 &inD,
+                                const Lane4F32 &inE, const Lane4F32 &inF, const Lane4F32 &inG, const Lane4F32 &inH,
+                                Lane8F32 &out0, Lane8F32 &out1, Lane8F32 &out2)
+{
+    Lane4F32 temp[6];
+    Transpose4x3(inA, inB, inC, inD, temp[0], temp[1], temp[2]);
+    Transpose4x3(inE, inF, inG, inH, temp[3], temp[4], temp[5]);
+    out0 = Lane8F32(temp[0], temp[3]);
+    out1 = Lane8F32(temp[1], temp[4]);
+    out2 = Lane8F32(temp[2], temp[5]);
+}
+
 __forceinline void Transpose8x8(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC, const Lane8F32 &inD,
                                 const Lane8F32 &inE, const Lane8F32 &inF, const Lane8F32 &inG, const Lane8F32 &inH,
                                 Lane8F32 &outA, Lane8F32 &outB, Lane8F32 &outC, Lane8F32 &outD,

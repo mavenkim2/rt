@@ -237,13 +237,18 @@ __forceinline Lane4F32 operator-(const Lane4F32 &a)
 __forceinline Lane4F32 Min(const Lane4F32 &a, const Lane4F32 &b) { return _mm_min_ps(a, b); }
 
 __forceinline Lane4F32 Max(const Lane4F32 &a, const Lane4F32 &b) { return _mm_max_ps(a, b); }
+__forceinline Lane4F32 operator!(const Lane4F32 &a) { return _mm_xor_ps(a, Lane4F32::Mask<true>()); }
 __forceinline Lane4F32 operator^(const Lane4F32 &a, const Lane4F32 &b) { return _mm_xor_ps(a, b); }
 __forceinline Lane4F32 operator<(const Lane4F32 &a, const Lane4F32 &b) { return _mm_cmplt_ps(a, b); }
 __forceinline Lane4F32 operator<=(const Lane4F32 &a, const Lane4F32 &b) { return _mm_cmple_ps(a, b); }
 __forceinline Lane4F32 operator>(const Lane4F32 &a, const Lane4F32 &b) { return _mm_cmpgt_ps(a, b); }
 __forceinline Lane4F32 operator>=(const Lane4F32 &a, const Lane4F32 &b) { return _mm_cmpge_ps(a, b); }
 __forceinline Lane4F32 operator==(const Lane4F32 &a, const Lane4F32 &b) { return _mm_cmpeq_ps(a, b); }
+__forceinline Lane4F32 operator!=(const Lane4F32 &a, const Lane4F32 &b) { return _mm_cmpneq_ps(a, b); }
 __forceinline Lane4F32 operator~(const Lane4F32 &a) { return _mm_xor_ps(a, Lane4F32(True)); }
+
+__forceinline Lane4F32 operator==(const Lane4U32 &a, const Lane4U32 &b) { return _mm_castsi128_ps(_mm_cmpeq_epi32(a, b)); }
+__forceinline Lane4F32 operator!=(const Lane4U32 &a, const Lane4U32 &b) { return !(a == b); }
 
 __forceinline Lane4F32 operator&(const Lane4F32 &a, const Lane4F32 &b) { return _mm_and_ps(a, b); }
 __forceinline Lane4F32 &operator&=(Lane4F32 &a, const Lane4F32 &b)

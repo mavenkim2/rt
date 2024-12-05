@@ -480,6 +480,13 @@ void Render(Arena *arena, RenderParams2 &params) // Vec2i imageDim, Vec2f filter
     printf("done\n");
 }
 
+f32 PowerHeuristic(u32 numA, f32 pdfA, u32 numB, f32 pdfB)
+{
+    f32 a = Sqr(numA * pdfA);
+    f32 b = Sqr(numB * pdfB);
+    return a / (a + b);
+}
+
 template <typename Sampler>
 SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda)
 {
@@ -493,7 +500,6 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
     f32 etaScale        = 1.f;
 
     SurfaceInteraction prevSi;
-    u32 prevLightIndex;
 
     for (;;)
     {
@@ -552,29 +558,25 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         if (si.lightIndices)
         {
             Assert(0);
-#if 0
-            DiffuseAreaLight *light = &scene->lights[si.lightIndices];
+            DiffuseAreaLight *light = &scene->GetAreaLights()[LightHandle(si.lightIndices).GetIndex()];
             if (specularBounce || depth == 0)
             {
-                SampledSpectrum Le = light->Le(si.n, -ray.d, lambda);
+                SampledSpectrum Le = DiffuseAreaLight::Le(light, si.n, -ray.d, lambda);
                 L += beta * Le;
             }
             else
             {
-                Assert(0);
-                SampledSpectrum Le = light->Le(si.n, -ray.d, lambda);
+                SampledSpectrum Le = DiffuseAreaLight::Le(light, si.n, -ray.d, lambda);
                 // probability of sampling the light * probability of sampling point on light
-                f32 pmf      = 1.f / scene->numLights;
-                f32 lightPdf = pmf *
-                               light->PDF_Li(scene, prevSi.lightIndices, prevSi.p, si);
-                f32 w_l = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
+                f32 pmf      = LightPDF(scene);
+                f32 lightPdf = pmf * DiffuseAreaLight::PDF_Li(scene, si.lightIndices, prevSi.p, si, true);
+                f32 w_l      = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
                 // NOTE: beta already contains the cosine, bsdf, and pdf terms
                 L += beta * w_l * Le;
             }
-#endif
         }
 
-        BSDF *bsdf = si.GetBSDF();
+        BSDF bsdf; // = si.GetBSDF();
 
         // Next Event Estimation
         // Choose light source for direct lighting calculation
@@ -586,13 +588,13 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
             Vec2f sample = sampler.Get2D();
             // Sample point on the light source
             LightSample ls = SampleLi(scene, handle, si, lambda, sample);
-            if (ls)
+            if (ls.pdf)
             {
                 // Evaluate BSDF for light sample, check visibility with shadow ray
                 SampledSpectrum Ld(0.f);
                 f32 p_b;
-                SampledSpectrum f = bsdf.EvaluateSample(-ray.d, ls.wi, p_b) * AbsDot(si.shading.n, wi);
-                if (f && !scene->IntersectShadowRay())
+                SampledSpectrum f = bsdf.EvaluateSample(-ray.d, ls.wi, p_b) * AbsDot(si.shading.n, ls.wi);
+                if (f && !BVHTriangleIntersector4::Occluded(ray, scene->nodePtr))
                 {
                     // Calculate contribution
                     f32 lightPdf = pmf * ls.pdf;
@@ -612,16 +614,17 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
 
         // sample bsdf, calculate pdf
         BSDFSample sample = bsdf.GenerateSample(-ray.d, sampler.Get1D(), sampler.Get2D());
-        beta *= sample.f * AbsDot(shading->n, sample.wi) / sample.pdf;
+        beta *= sample.f * AbsDot(si.shading.n, sample.wi) / sample.pdf;
         bsdfPdf        = sample.pdf;
         specularBounce = sample.IsSpecular();
+        if (sample.IsTransmissive()) etaScale *= Sqr(sample.eta);
 
         // Spawn new ray
         prevSi = si;
 
         // Russian Roulette
-        SampledSpectrum rrBeta = beta * etaScale;
-        f32 q                  = MaxComponentValue(rrBeta);
+        SampledSpectrum rrBeta = beta * sample.eta;
+        f32 q                  = rrBeta.MaxComponentValue();
         if (depth > 1 && q < 1.f)
         {
             if (sampler.Get1D() < Max(0.f, 1 - q)) break;
@@ -630,6 +633,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
             // TODO: infinity check for beta
         }
     }
+    return L;
 }
 
 //////////////////////////////

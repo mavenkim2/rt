@@ -196,31 +196,6 @@ Vec2<T> SampleBilinear(const Vec2<T> &u, const Vec4<T> &w)
     return result;
 }
 
-__forceinline void Transpose8x3(const Lane4F32 &inA, const Lane4F32 &inB, const Lane4F32 &inC, const Lane4F32 &inD,
-                                const Lane4F32 &inE, const Lane4F32 &inF, const Lane4F32 &inG, const Lane4F32 &inH,
-                                Lane8F32 &out0, Lane8F32 &out1, Lane8F32 &out2)
-{
-    Lane4F32 temp[6];
-    Transpose4x3(inA, inB, inC, inD, temp[0], temp[1], temp[2]);
-    Transpose4x3(inE, inF, inG, inH, temp[3], temp[4], temp[5]);
-    out0 = Lane8F32(temp[0], temp[3]);
-    out1 = Lane8F32(temp[1], temp[4]);
-    out2 = Lane8F32(temp[2], temp[5]);
-}
-
-__forceinline void Transpose(const Lane4F32 lanes[IntN], Vec3lfn &out)
-{
-#if IntN == 1
-    out = ToVec3f(lanes[0]);
-#elif IntN == 4
-    Transpose4x3(lanes[0], lanes[1], lanes[2], lanes[3], out.x, out.y, out.z);
-#elif IntN == 8
-    Transpose8x3(lanes[0], lanes[1], lanes[2], lanes[3],
-                 lanes[4], lanes[5], lanes[6], lanes[7],
-                 out.x, out.y, out.z);
-#endif
-}
-
 LaneNF32 SphericalQuadArea(const Vec3lfn &a, const Vec3lfn &b, const Vec3lfn &c, const Vec3lfn &d)
 {
     Vec3lfn axb = Normalize(Cross(a, b));
@@ -260,7 +235,7 @@ SAMPLE_LI(DiffuseAreaLight)
             pI[lightIndex]        = Transform(*light->renderFromLight, pTemp);
             Set(area, lightIndex) = light->area;
         }
-        Transpose(pI, p[i]);
+        Transpose<IntN>(pI, p[i]);
     }
 
     Vec3lfn v00 = Normalize(p[0] - Vec3lfn(intr.p));
@@ -327,7 +302,7 @@ PDF_LI(DiffuseAreaLight)
             pI[lightIndex]        = Transform(*light->renderFromLight, pTemp);
             Set(area, lightIndex) = light->area;
         }
-        Transpose(pI, p[i]);
+        Transpose<IntN>(pI, p[i]);
     }
     Vec3lfn v00 = Normalize(p[0] - Vec3lfn(prevIntrP));
     Vec3lfn v10 = Normalize(p[1] - Vec3lfn(prevIntrP));

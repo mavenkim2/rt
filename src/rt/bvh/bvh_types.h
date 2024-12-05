@@ -346,8 +346,8 @@ struct BVHNode
     {
         return (void *)(data & ~alignMask);
     }
-    u32 GetNum() const { return ptr.GetType() - BVHNode<N>::tyLeaf; }
-    size_t GetType() const { return data & alignMask; }
+    u32 GetNum() const { return GetType() - BVHNode<N>::tyLeaf; }
+    u32 GetType() const { return u32(data & alignMask); }
     bool IsLeaf() const { return GetType() >= tyLeaf; }
     bool IsQuantizedNode() const { return GetType() == tyQuantizedNode; }
     bool IsCompressedLeaf() const { return GetType() == tyQuantizedNode; }
