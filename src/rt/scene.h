@@ -768,69 +768,6 @@ struct NanoVDBVolume
 //     u32 materialID;
 // };
 
-// typedef void (*VTableSig)(void *);
-// template <typename T>
-// struct VTableSig
-// {
-//     using type = void (*)(T *);
-// };
-//
-// struct Test1
-// {
-//     void Test()
-//     {
-//         printf("test1\n");
-//     }
-// };
-//
-// struct Test2
-// {
-//     void Test()
-//     {
-//         printf("test2\n");
-//     }
-// };
-//
-// // #define CREATE_VTABLE(name1, name2)
-// template <template <typename> class Methods, typename T>
-// struct VTable;
-//
-// template <typename T>
-// struct TupleHelper;
-//
-// template <typename... Ts>
-// struct TupleHelper<TypePack<Ts...>>
-// {
-//     Tuple<Ts...> tuple;
-//     TupleHelper(const Ts &...v) : tuple(v...) {}
-// };
-//
-// template <template <typename> class Methods, typename... Ts>
-// struct VTable<Methods, TypePack<Ts...>>
-// {
-//     using Types = TypePack<Ts...>;
-//     TupleHelper<typename MapType<Methods, Ts...>::type> table;
-//
-//     // Helper to extract the function pointer for each class
-//     template <typename Type>
-//     static typename Methods<Type>::type GetFunc()
-//     {
-//         return +[](Type *instance) { instance->Test(); };
-//     }
-//
-//     // Constructor initializes the vtable with the function pointers
-//     VTable() : table{GetFunc<Ts>()...} {}
-//
-//     // void Invoke(void *payload, u32 index)
-//     // {
-//     //     funcs[index](payload);
-//     // }
-// };
-//
-// VTable<VTableSig, TypePack<Test1, Test2>> table;
-
-// CREATE_TABLE(Types, funcname1, funcname2);
-
 // NOTE: only leaf scenes can
 struct Scene2
 {

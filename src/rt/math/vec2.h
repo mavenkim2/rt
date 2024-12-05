@@ -208,7 +208,12 @@ template <i32 K>
 Vec2f Get(const Vec2<LaneF32<K>> &v, u32 index)
 {
     Assert(index < K);
-    return Vec2f(v[0][index], v[1][index]);
+    return Vec2f(Get(v[0], index), Get(v[1], index));
+}
+
+__forceinline Vec2f Get(const Vec2lfn &v, u32 index)
+{
+    return Get<IntN>(v, index);
 }
 
 } // namespace rt

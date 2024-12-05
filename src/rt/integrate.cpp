@@ -97,7 +97,7 @@ DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(SurfaceInteract
     for (u32 i = 0; i < IntN; i++)
     {
         rghShaders[i] = &materials[i]->rghShader;
-        eta[i]        = &materials[i]->ior(Get(lambda[0], i));
+        Set(eta, i)   = materials[i]->ior(Get(lambda[0], i));
     }
     // NOTE: for dispersion (i.e. wavelength dependent IORs), we terminate every wavelength except the first
     if constexpr (!std::is_same_v<Spectrum, ConstantSpectrum>)
@@ -106,7 +106,7 @@ DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(SurfaceInteract
     }
 
     // TODO: anisotropic roughness
-    LaneNF32 roughness = RghShader::Evaluate(intr, rghShaders, filterWidths);
+    LaneNF32 roughness = RghShader::Evaluate(intr, rghShaders, filterWidths, lambda);
     roughness          = TrowbridgeReitzDistribution::RoughnessToAlpha(roughness);
     TrowbridgeReitzDistribution distrib(roughness, roughness);
     return DielectricBxDF(eta, distrib);

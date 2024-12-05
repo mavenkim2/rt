@@ -83,6 +83,8 @@ struct SurfaceInteractions
         Vec3lf<K> n;
         Vec3lf<K> dpdu;
         Vec3lf<K> dpdv;
+        Vec3lf<K> dndu;
+        Vec3lf<K> dndv;
     } shading;
     LaneKF32 tHit;
     LaneKU32 lightIndices;
@@ -163,11 +165,11 @@ struct PtexTexture
     PtexTexture(string filename, ColorEncoding encoding = ColorEncoding::SRGB, f32 scale = 1.f)
         : filename(filename), encoding(encoding), scale(scale) {}
 
-    Vec Evaluate(SurfaceInteractionsN &intrs, const Vec4lfn &filterWidths, u32 index, Vec *dfdu = 0, Vec *dfdv = 0) // const Vec2f &uv, const Vec4f &filterWidth, u32 faceIndex)
+    Vec Evaluate(SurfaceInteractionsN &intrs, const Vec4lfn &filterWidths, u32 index, Vec *dfdu = 0, Vec *dfdv = 0) const
     {
         Vec4f filterWidth = Get(filterWidths, index);
         Vec2f uv          = Get(intrs.uv, index);
-        u32 faceID        = Get(intrs.faceIndices, index);
+        u32 faceIndex     = Get(intrs.faceIndices, index);
 
         Assert(cache);
         Ptex::String error;
@@ -187,13 +189,13 @@ struct PtexTexture
         if (dfdu && dfdv)
         {
             // Finite differencing
-            f32 du = .5f * Abs(filterWidth[0], filterWidth[2]);
+            f32 du = .5f * (Abs(filterWidth[0]) + Abs(filterWidth[2]));
             du     = Select(du == 0.f, 0.0005f, du);
-            f32 dv = .5f * Abs(filterWidth[1], filterWidth[3]);
+            f32 dv = .5f * (Abs(filterWidth[1]) + Abs(filterWidth[3]));
             dv     = Select(dv == 0.f, 0.0005f, dv);
 
-            filter->eval(&dfdu, 0, nc, faceIndex, uv[0] + du, uv[1], filterWidth[0], filterWidth[1], filterWidth[2], filterWidth[3]);
-            filter->eval(&dfdv, 0, nc, faceIndex, uv[0], uv[1] + dv, filterWidth[0], filterWidth[1], filterWidth[2], filterWidth[3]);
+            filter->eval(dfdu, 0, nc, faceIndex, uv[0] + du, uv[1], filterWidth[0], filterWidth[1], filterWidth[2], filterWidth[3]);
+            filter->eval(dfdv, 0, nc, faceIndex, uv[0], uv[1] + dv, filterWidth[0], filterWidth[1], filterWidth[2], filterWidth[3]);
         }
 
         texture->release();
@@ -201,21 +203,23 @@ struct PtexTexture
 
         // Convert to srgb
         if constexpr (numChannels == 1) return out[0];
-
-        if (encoding == ColorEncoding::SRGB)
+        else
         {
+            if (encoding == ColorEncoding::SRGB)
+            {
+                for (i32 i = 0; i < nc; i++)
+                {
+                    out[i] = ExactLinearToSRGB(out[i]);
+                }
+            }
             for (i32 i = 0; i < nc; i++)
             {
-                out[i] = ExactLinearToSRGB(out[i]);
+                out[i] *= scale;
             }
-        }
-        for (i32 i = 0; i < nc; i++)
-        {
-            out[i] *= scale;
-        }
 
-        Assert(numChannels == 3);
-        return Vec3f(out[0], out[1], out[2]);
+            Assert(numChannels == 3);
+            return Vec3f(out[0], out[1], out[2]);
+        }
     }
 };
 
@@ -294,7 +298,7 @@ struct ImageTextureShader
         for (u32 i = 0; i < IntN; i++)
         {
             Vec out_dfdu, out_dfdv;
-            Set(results, i) = textures[i]->texture.Evaluate(intrs, filterWidths, i, out_dfdu, out_dfdv);
+            Set(results, i) = textures[i]->texture.Evaluate(intrs, filterWidths, i, &out_dfdu, &out_dfdv);
             Set(dfdu, i)    = out_dfdu;
             Set(dfdv, i)    = out_dfdv;
             // TODO: this won't work for 3 channel partial derivatives
@@ -312,7 +316,7 @@ struct BumpMap
     template <i32 width>
     static void Evaluate(SurfaceInteractions<width> &intrs, Vec4lfn &filterWidths, const BumpMap<TextureShader> **bumpMaps)
     {
-        TextureShader *displacementShaders[width];
+        const TextureShader *displacementShaders[width];
         for (u32 i = 0; i < width; i++)
         {
             displacementShaders[i] = &bumpMaps[i]->displacementShader;
@@ -332,7 +336,7 @@ struct BumpMap
 };
 
 #define MaterialHeaders(materialName)                                                                                              \
-    materialName();                                                                                                                \
+    materialName() = default;                                                                                                      \
     static BxDF GetBxDF(SurfaceInteractionsN &intr, materialName **materials, Vec4lfn &filterWidths, SampledWavelengthsN &lambda); \
     BxDF GetBxDF(SurfaceInteraction &intr, Vec4lfn &filterWidths, SampledWavelengthsN &lambda);
 

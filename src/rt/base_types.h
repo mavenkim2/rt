@@ -234,7 +234,7 @@ static BxDFMethods bxdfMethods[BxDFTaggedPointer::MaxTag()] = {};
 
 struct BxDF : BxDFTaggedPointer
 {
-    BxDF() {}
+    using TaggedPointer::TaggedPointer;
     SampledSpectrumBase<LaneNF32> EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf, TransportMode mode) const;
     BSDFSample GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u, TransportMode mode, BxDFFlags inFlags) const;
     // f32 PDF(Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags inFlags) const { return 0.f; }
@@ -264,80 +264,6 @@ template struct BxDFCRTP<DiffuseTransmissionBxDF>;
 template struct BxDFCRTP<ConductorBxDF>;
 template struct BxDFCRTP<DielectricBxDF>;
 // template struct BxDFCRTP<ThinDielectricBxDF>;
-
-//////////////////////////////
-// Materials
-//
-// template <typename RflShader>
-// struct DiffuseMaterial;
-// template <typename RflShader, typename TrmShader>
-// struct DiffuseTransmissionMaterial;
-// template <typename RghShader, typename Spectrum>
-// struct DielectricMaterial;
-// template <typename BxDFShader, typename NormalShader>
-// struct Material2;
-// template <typename TextureType, typename RGBSpectrum>
-// struct ImageTextureShader;
-// template <i32 K>
-// struct PtexTexture;
-// template <typename TextureShader>
-// struct BumpMap;
-// template <i32 nc>
-// struct ConstantTexture;
-//
-// // TODO: automate this :)
-// template <i32 K>
-// using PtexShader = ImageTextureShader<PtexTexture<K>, RGBAlbedoSpectrum>;
-//
-// using BumpMapPtex                     = BumpMap<PtexShader<1>>;
-// using DiffuseMaterialPtex             = DiffuseMaterial<PtexShader<3>>;
-// using DiffuseTransmissionMaterialPtex = DiffuseTransmissionMaterial<PtexShader<3>, PtexShader<3>>;
-//
-// // NOTE: isotropic roughness, constant ior
-// using DielectricMaterialConstant = DielectricMaterial<ConstantTexture<1>, ConstantSpectrum>;
-//
-// // Material types
-// using DiffuseMaterialBumpMapPtex             = Material2<DiffuseMaterialPtex, BumpMapPtex>;
-// using DiffuseTransmissionMaterialBumpMapPtex = Material2<DiffuseTransmissionMaterialPtex, BumpMapPtex>;
-// using DielectricMaterialBumpMapPtex          = Material2<DielectricMaterialConstant, BumpMapPtex>;
-//
-// using MaterialTaggedPointer = TaggedPointer<DielectricMaterialBumpMapPtex>;
-// struct MaterialMethods
-// {
-//     SampledSpectrumBase<LaneNF32> (*EvaluateSample)(void *, const Vec3lfn &, const Vec3lfn &, LaneNF32 &, TransportMode);
-//     BSDFSample (*GenerateSample)(void *, const Vec3lfn &, const LaneNF32 &, const Vec2lfn &, TransportMode, BxDFFlags);
-//     // f32 (*PDF)(void *, Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags flags);
-//     LaneNU32 (*Flags)(void *);
-// };
-//
-// static BxDFMethods bxdfMethods[BxDFTaggedPointer::MaxTag()] = {};
-//
-// // TODO: because of the way I made this it's probably only valid to use bsdfs through this class, not through any
-// // of the child bsdfs
-//
-// struct BxDF : BxDFTaggedPointer
-// {
-//     BxDF() {}
-//     SampledSpectrumBase<LaneNF32> EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf, TransportMode mode) const;
-//     BSDFSample GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u, TransportMode mode, BxDFFlags inFlags) const;
-//     // f32 PDF(Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags inFlags) const { return 0.f; }
-//     LaneNU32 Flags() const;
-// };
-//
-// template <class T>
-// struct BxDFCRTP
-// {
-//     static const i32 id;
-//     static SampledSpectrumBase<LaneNF32> EvaluateSample(void *ptr, const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf, TransportMode mode);
-//     static BSDFSample GenerateSample(void *ptr, const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u, TransportMode mode, BxDFFlags flags);
-//     // static f32 PDF(void *ptr, Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags flags);
-//     static LaneNU32 Flags(void *ptr);
-//     static constexpr i32 Register()
-//     {
-//         bxdfMethods[BxDFTaggedPointer::TypeIndex<T>()] = {EvaluateSample, GenerateSample, Flags};
-//         return BxDFTaggedPointer::TypeIndex<T>();
-//     }
-// };
 
 } // namespace rt
 #endif

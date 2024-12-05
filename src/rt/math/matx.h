@@ -483,7 +483,8 @@ struct LinearSpace
     }
 };
 
-typedef LinearSpace<Vec3f> LinearSpace3f;
+typedef LinearSpace<f32> LinearSpace3f;
+typedef LinearSpace<LaneNF32> LinearSpace3fn;
 
 // NOTE: row major affine transformation matrix
 struct AffineSpace

@@ -338,7 +338,7 @@ struct SampledWavelengthsBase
         return SampledSpectrum(pdf);
     }
     // NOTE: for dispersion
-    MaskF32 TerminateSecondary()
+    void TerminateSecondary()
     {
         MaskF32 mask = SecondaryTerminated();
         if (All(mask)) return;
@@ -346,7 +346,7 @@ struct SampledWavelengthsBase
         {
             pdf[i] = 0.f;
         }
-        pdf[0] *= Select(mask, 1.f, 1 / NSampledWavelengths);
+        pdf[0] *= Select(mask, 1.f, 1.f / NSampledWavelengths);
     }
     MaskF32 SecondaryTerminated() const
     {
@@ -378,6 +378,7 @@ typedef SampledWavelengthsBase<LaneNF32> SampledWavelengthsN;
 
 struct ConstantSpectrum
 {
+    ConstantSpectrum() {}
     ConstantSpectrum(f32 c) : c(c) {}
     f32 operator()(f32 lambda) const
     {
@@ -425,7 +426,7 @@ struct DenselySampledSpectrum
     u16 lambdaMax;
 };
 
-struct PiecewiseLinearSpectrum 
+struct PiecewiseLinearSpectrum
 {
     PiecewiseLinearSpectrum() = default;
     PiecewiseLinearSpectrum(f32 *lambdas, f32 *values, u32 numValues) : lambdas(lambdas), values(values), numValues(numValues) {}
@@ -447,7 +448,7 @@ struct PiecewiseLinearSpectrum
     u32 numValues;
 };
 
-struct BlackbodySpectrum 
+struct BlackbodySpectrum
 {
     BlackbodySpectrum(f32 T) : T(T)
     {
@@ -545,7 +546,7 @@ inline f32 SigmoidPolynomialMaxValue(const Vec3f &c)
     return result;
 }
 
-struct RGBAlbedoSpectrum 
+struct RGBAlbedoSpectrum
 {
     f32 operator()(f32 lambda) const
     {
@@ -591,7 +592,7 @@ struct RGBAlbedoSpectrum
 };
 
 // For unbounded positive RGB values (remapped to necessary range)
-struct RGBUnboundedSpectrum 
+struct RGBUnboundedSpectrum
 {
     f32 operator()(f32 lambda) const
     {
@@ -643,7 +644,7 @@ struct RGBUnboundedSpectrum
     Vec3f coeffs;
 };
 
-struct RGBIlluminantSpectrum 
+struct RGBIlluminantSpectrum
 {
     f32 operator()(f32 lambda) const
     {
