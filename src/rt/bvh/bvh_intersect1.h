@@ -29,7 +29,7 @@ auto GetNode<4, BVH_QN>(BVHNode<4> node)
 template <>
 auto GetNode<4, BVH_QNLF>(BVHNode<4> node)
 {
-    QuantizedNode<4> *qNode = node.GetQuantizedNode();
+    CompressedLeafNode<4> *qNode = node.GetCompressedLeaf();
     return qNode;
 }
 
@@ -239,7 +239,7 @@ DispatchHelp(7, 0, 1, 2, 3, 4, 5, 6);
 //     }
 // }
 
-template <u32 N, u32 types>
+template <u32 N>
 struct InstanceIntersector;
 
 template <u32 K>
@@ -342,8 +342,14 @@ struct DispatchTypes
     }
 };
 
+template <typename F, typename... Ts>
+auto Dispatch(F &&closure, TypePack<Ts...>, u32 index)
+{
+    Dispatch<F, Ts...>(std::move(closure), index);
+}
+
 template <u32 N>
-struct InstanceIntersector<N, BVH_AQ>
+struct InstanceIntersector
 {
     using IntersectorTypes = DispatchTypes<TriangleIntersector<N>>;
     using Primitive        = TLASLeaf<N>;

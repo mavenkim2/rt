@@ -252,20 +252,26 @@ void ForEachTypeSubset(ArrayType &arrays, F func, TypePack<Ts...> types)
     ForEachType(arrays, func, TypePack<Ts...>());
 }
 
-template <template <typename> class M, typename... Ts>
-struct MapType;
+// template <template <typename> class M, typename... Ts>
+// struct MapType;
 
-template <template <typename> class M, typename T>
-struct MapType<M, TypePack<T>>
+template <template <typename> class F, typename... Ts>
+struct MapType
 {
-    using type = TypePack<M<T>>;
+    using type = TypePack<typename F<Ts>::type...>;
 };
 
-template <template <typename> class M, typename T, typename... Ts>
-struct MapType<M, TypePack<T, Ts...>>
-{
-    using type = typename Prepend<M<T>, typename MapType<M, TypePack<Ts...>>::type>::type;
-};
+// template <template <typename> class M, typename T>
+// struct MapType<M, TypePack<T>>
+// {
+//     using type = TypePack<M<T>>;
+// };
+//
+// template <template <typename> class M, typename T, typename... Ts>
+// struct MapType<M, TypePack<T, Ts...>>
+// {
+//     using type = typename Prepend<M<T>, typename MapType<M, TypePack<Ts...>>::type>::type;
+// };
 
 } // namespace rt
 

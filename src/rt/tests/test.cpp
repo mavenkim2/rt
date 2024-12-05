@@ -505,8 +505,20 @@ void VolumeRenderingTest(Arena *arena, string filename)
 }
 #endif
 
-void TriangleMeshBVHTest(Arena *arena) //, string filename)
+void TriangleMeshBVHTest(Arena *arena)
 {
+    // TODO:
+    // - instantiate the water material and attach the triangle mesh to it
+    // - have the intersector handle the case where there are no geomIDs (only primIDs)
+    // - make the materials polymorphic so that the integrator can access them
+    // - change the bvh build process to support N-wide leaves (need to change the sah to account for this)
+
+    // once the ocean is rendered
+    // - need to support a bvh with quad/triangle mesh instances
+    // - ray differentials
+    // - load the scene description and properly instantiate lights/materials/textures
+    // - render the scene with all quad meshes, then add support for the bspline curves
+
     Scene2 *scene = GetScene();
     // TempArena temp    = ScratchStart(0, 0);
     u32 numProcessors = OS_NumProcessors();
@@ -530,8 +542,10 @@ void TriangleMeshBVHTest(Arena *arena) //, string filename)
     record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
     record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
 
-    BVHNodeN bvh   = BuildQuantizedTriSBVH(settings, arenas, &mesh, refs, record);
-    scene->nodePtr = bvh;
+    BVHNodeN bvh          = BuildQuantizedTriSBVH(settings, arenas, &mesh, refs, record);
+    scene->nodePtr        = bvh;
+    scene->triangleMeshes = &mesh;
+    scene->numTriMeshes   = 1;
     // PerformanceCounter counter = OS_StartCounter();
     // f32 time                   = OS_GetMilliseconds(counter);
 

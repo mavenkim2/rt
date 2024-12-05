@@ -20,7 +20,8 @@ struct Vec4
         };
     };
 
-    Vec4() : e{zero, zero, zero, zero} {}
+    Vec4() {} //: e{zero, zero, zero, zero} {}
+    __forceinline Vec4(ZeroTy) : e{zero, zero, zero, zero} {}
     Vec4(T e0, T e1, T e2, T e3) : e{e0, e1, e2, e3} {}
     Vec4(const Vec4<T> &other)
     {
@@ -31,6 +32,7 @@ struct Vec4
     }
     template <typename T1>
     Vec4(const Vec4<T1> &other) : x(T(other.x)), y(T(other.y)), z(T(other.z)) {}
+
     template <typename T1>
     Vec4 &operator=(const Vec4<T1> &other)
     {

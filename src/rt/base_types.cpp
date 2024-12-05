@@ -119,17 +119,11 @@ SampledSpectrum Spectrum::Sample(const SampledWavelengths &lambda) const
     return result;
 }
 
-template <class T>
-f32 SpectrumCRTP<T>::Evaluate(void *ptr, f32 lambda)
-{
-    return static_cast<T *>(ptr)->Evaluate(lambda);
-}
-
-template <class T>
-f32 SpectrumCRTP<T>::MaxValue(void *ptr)
-{
-    return static_cast<T *>(ptr)->MaxValue();
-}
+// template <class T>
+// f32 SpectrumCRTP<T>::Evaluate(void *ptr, f32 lambda)
+// {
+//     return static_cast<T *>(ptr)->Evaluate(lambda);
+// }
 
 template <class T>
 SampledSpectrum SpectrumCRTP<T>::Sample(void *ptr, const SampledWavelengths &lambda)

@@ -13,7 +13,8 @@ struct BSDFBase
     BxDF bxdf;
     LinearSpace<LaneNF32> frame;
 
-    BSDFBase(const Vec3lfn &ns, const Vec3lfn &dpdus) : frame(LinearSpace::FromXZ(Normalize(dpdus), ns)) {}
+    BSDFBase(BxDF &bxdf, const Vec3lfn &ns, const Vec3lfn &dpdus) : bxdf(bxdf), frame(LinearSpace::FromXZ(Normalize(dpdus), ns)) {}
+    BSDFBase(BxDF &&bxdf, const Vec3lfn &ns, const Vec3lfn &dpdus) : bxdf(std::move(bxdf)), frame(LinearSpace::FromXZ(Normalize(dpdus), ns)) {}
 
     SampledSpectrumN EvaluateSample(Vec3lfn wo, Vec3lfn wi, LaneNF32 &pdf, TransportMode mode = TransportMode::Radiance) const;
     BSDFSample GenerateSample(Vec3lfn wo, const LaneNF32 &uc, const Vec2lfn &u,

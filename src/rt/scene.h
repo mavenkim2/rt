@@ -759,10 +759,77 @@ struct NanoVDBVolume
     }
 };
 
-template <typename BxDFShader, typename NormalShader>
-struct Material2;
+// struct Primitive
+// {
+//     Shape shape;
+//     ShapeHandle handle;
+//     u32 lightIndex;
+//     u32 volumeIndex;
+//     u32 materialID;
+// };
 
-// Material2<DiffuseMaterial<>, BumpMap<ImageTextureShader<PtexTexture<1>>>;
+// typedef void (*VTableSig)(void *);
+// template <typename T>
+// struct VTableSig
+// {
+//     using type = void (*)(T *);
+// };
+//
+// struct Test1
+// {
+//     void Test()
+//     {
+//         printf("test1\n");
+//     }
+// };
+//
+// struct Test2
+// {
+//     void Test()
+//     {
+//         printf("test2\n");
+//     }
+// };
+//
+// // #define CREATE_VTABLE(name1, name2)
+// template <template <typename> class Methods, typename T>
+// struct VTable;
+//
+// template <typename T>
+// struct TupleHelper;
+//
+// template <typename... Ts>
+// struct TupleHelper<TypePack<Ts...>>
+// {
+//     Tuple<Ts...> tuple;
+//     TupleHelper(const Ts &...v) : tuple(v...) {}
+// };
+//
+// template <template <typename> class Methods, typename... Ts>
+// struct VTable<Methods, TypePack<Ts...>>
+// {
+//     using Types = TypePack<Ts...>;
+//     TupleHelper<typename MapType<Methods, Ts...>::type> table;
+//
+//     // Helper to extract the function pointer for each class
+//     template <typename Type>
+//     static typename Methods<Type>::type GetFunc()
+//     {
+//         return +[](Type *instance) { instance->Test(); };
+//     }
+//
+//     // Constructor initializes the vtable with the function pointers
+//     VTable() : table{GetFunc<Ts>()...} {}
+//
+//     // void Invoke(void *payload, u32 index)
+//     // {
+//     //     funcs[index](payload);
+//     // }
+// };
+//
+// VTable<VTableSig, TypePack<Test1, Test2>> table;
+
+// CREATE_TABLE(Types, funcname1, funcname2);
 
 // NOTE: only leaf scenes can
 struct Scene2
@@ -771,7 +838,7 @@ struct Scene2
     // using VolumeTypes        = TypePack<NanoVDBVolume>;
     using LightTypes         = TypePack<DiffuseAreaLight, DistantLight, UniformInfiniteLight, ImageInfiniteLight>;
     using InfiniteLightTypes = TypePack<UniformInfiniteLight, ImageInfiniteLight>;
-    // using MaterialTypes      = TypePack<DiffuseMaterial>;
+    using MaterialTypes      = TypePack<DielectricMaterialBumpMapPtex>;
 
     // TODO: this really should adjacent in memory to the primitives
     struct PrimitiveIndices
@@ -815,8 +882,9 @@ struct Scene2
     // u32 numAreaLights;
     // u32 numInfiniteLights;
     u32 numLights; // total
+
     // Materials
-    // ArrayTuple<MaterialTypes> materials;
+    ArrayTuple<MaterialTypes> materials;
 
     // BVH
     BVHNodeN nodePtr;

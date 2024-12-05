@@ -159,6 +159,7 @@ struct PtexTexture
     string filename;
     ColorEncoding encoding;
     f32 scale;
+    PtexTexture() {}
     PtexTexture(string filename, ColorEncoding encoding = ColorEncoding::SRGB, f32 scale = 1.f)
         : filename(filename), encoding(encoding), scale(scale) {}
 
@@ -331,6 +332,7 @@ struct BumpMap
 };
 
 #define MaterialHeaders(materialName)                                                                                              \
+    materialName();                                                                                                                \
     static BxDF GetBxDF(SurfaceInteractionsN &intr, materialName **materials, Vec4lfn &filterWidths, SampledWavelengthsN &lambda); \
     BxDF GetBxDF(SurfaceInteraction &intr, Vec4lfn &filterWidths, SampledWavelengthsN &lambda);
 
@@ -370,22 +372,27 @@ struct Material2
     using BxDF = typename BxDFShader::BxDF;
     BxDFShader bxdfShader;
     NormalShader normalShader;
-    static BSDFBase<BxDF> Evaluate(SurfaceInteractionsN &intr)
+    Material2() = default;
+    template <typename BxDFOut>
+    static void Evaluate(Arena *arena, SurfaceInteractionsN &intr, SampledWavelengthsN &lambda, BSDFBase<BxDFOut> *result)
     {
-        BxDF *bxdfs[IntN];
-        NormalShader *normalShaders[K];
+        BxDFShader *bxdfs[IntN];
+        const NormalShader *normalShaders[IntN];
 
-        Materiall2 *materials = scene->materials.Get<Material2>();
+        auto *materials = GetScene()->materials.Get<Material2<BxDFShader, NormalShader>>();
         for (u32 i = 0; i < IntN; i++)
         {
-            Material2 &material = materials[intrs.materialIDs[i]];
-            bxdfs[i]            = material.bxdfShader;
-            normalShaders[i]    = material.normalShader;
+            auto &material   = materials[Get(intr.materialIDs, i)];
+            bxdfs[i]         = &material.bxdfShader;
+            normalShaders[i] = &material.normalShader;
         }
-        auto bxdf = BxDFShader::GetBxDF(intr, bxdfs);
-        NormalShader::Evaluate(intrs, normalShaders);
+        // auto bxdf = BxDFShader::GetBxDF(intr, bxdfs);
+        BxDF *bxdf = PushStruct(arena, BxDF);
+        Vec4lfn filterWidths(zero);
+        *bxdf = BxDFShader::GetBxDF(intr, bxdfs, filterWidths, lambda);
+        NormalShader::Evaluate(intr, filterWidths, normalShaders);
 
-        return BSDFBase<BxDF>(bxdf, intr.shading.dpdu, intr.shading.n);
+        new (result) BSDFBase<BxDFOut>(bxdf, intr.shading.dpdu, intr.shading.n);
     }
 };
 
@@ -398,12 +405,14 @@ using DiffuseMaterialPtex             = DiffuseMaterial<PtexShader<3>>;
 using DiffuseTransmissionMaterialPtex = DiffuseTransmissionMaterial<PtexShader<3>, PtexShader<3>>;
 
 // NOTE: isotropic roughness, constant ior
-using DielectricMaterialPtex = DielectricMaterial<ConstantTexture<1>, ConstantSpectrum>;
+using DielectricMaterialConstant = DielectricMaterial<ConstantTexture<1>, ConstantSpectrum>;
 
 // Material types
 using DiffuseMaterialBumpMapPtex             = Material2<DiffuseMaterialPtex, BumpMapPtex>;
 using DiffuseTransmissionMaterialBumpMapPtex = Material2<DiffuseTransmissionMaterialPtex, BumpMapPtex>;
-using DielectricMaterialBumpMapPtex          = Material2<DielectricMaterialPtex, BumpMapPtex>;
+using DielectricMaterialBumpMapPtex          = Material2<DielectricMaterialConstant, BumpMapPtex>;
+
+using MaterialBumpMapPtex = Material2<DielectricMaterialConstant, BumpMapPtex>;
 
 // struct
 

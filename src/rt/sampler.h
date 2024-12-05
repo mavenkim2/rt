@@ -3,7 +3,7 @@
 namespace rt
 {
 // NOTE: independent uniform samplers without any care for discrepancy
-struct IndependentSampler : SamplerCRTP<IndependentSampler>
+struct IndependentSampler 
 {
     IndependentSampler(i32 samplesPerPixel, i32 seed = 0) : samplesPerPixel(samplesPerPixel), seed(seed) {}
 
@@ -30,7 +30,7 @@ struct IndependentSampler : SamplerCRTP<IndependentSampler>
     RNG rng;
 };
 
-struct StratifiedSampler : SamplerCRTP<StratifiedSampler>
+struct StratifiedSampler 
 {
     StratifiedSampler(i32 xPixelSamples, i32 yPixelSamples, bool jitter, i32 seed = 0)
         : xSamples(xPixelSamples), ySamples(yPixelSamples), jitter(jitter), seed(seed) {}
@@ -88,11 +88,11 @@ enum class RandomizeStrategy
     FastOwen,
 };
 
-struct HaltonSampler : SamplerCRTP<HaltonSampler>
+struct HaltonSampler 
 {
 };
 
-struct SobolSampler : SamplerCRTP<SobolSampler>
+struct SobolSampler 
 {
     SobolSampler(i32 samplesPerPixel, Vec2i fullResolution, RandomizeStrategy randomize, i32 seed = 0)
         : samplesPerPixel(samplesPerPixel), seed(seed), randomize(randomize)
@@ -156,7 +156,7 @@ struct SobolSampler : SamplerCRTP<SobolSampler>
     i64 sobolIndex;
 };
 
-struct PaddedSobolSampler : SamplerCRTP<PaddedSobolSampler>
+struct PaddedSobolSampler 
 {
     PaddedSobolSampler(i32 samplesPerPixel, RandomizeStrategy randomize, i32 seed = 0)
         : samplesPerPixel(samplesPerPixel), seed(seed), randomize(randomize)
@@ -212,7 +212,7 @@ struct PaddedSobolSampler : SamplerCRTP<PaddedSobolSampler>
     i32 dimension, sampleIndex;
 };
 
-struct ZSobolSampler : SamplerCRTP<ZSobolSampler>
+struct ZSobolSampler 
 {
     ZSobolSampler(i32 samplesPerPixel, Vec2i fullResolution, RandomizeStrategy randomize = RandomizeStrategy::FastOwen, i32 seed = 0)
         : randomize(randomize), seed(seed)
@@ -335,7 +335,7 @@ struct ZSobolSampler : SamplerCRTP<ZSobolSampler>
     RandomizeStrategy randomize;
 };
 
-// struct SOAZSobolSampler : SamplerCRTP<SOAZSobolSampler>
+// struct SOAZSobolSampler 
 // {
 //     SOAZSobolSampler(i32 samplesPerPixel, Vec2i fullResolution, RandomizeStrategy randomize, i32 seed = 0)
 //         : randomize(randomize), seed(seed)

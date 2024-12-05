@@ -376,7 +376,7 @@ typedef SampledWavelengthsBase<LaneNF32> SampledWavelengthsN;
 // Spectrum Implementations
 //
 
-struct ConstantSpectrum : SpectrumCRTP<ConstantSpectrum>
+struct ConstantSpectrum
 {
     ConstantSpectrum(f32 c) : c(c) {}
     f32 operator()(f32 lambda) const
@@ -399,7 +399,7 @@ struct ConstantSpectrum : SpectrumCRTP<ConstantSpectrum>
 };
 
 // Spectrum sampled at 1nm increments
-struct DenselySampledSpectrum : SpectrumCRTP<DenselySampledSpectrum>
+struct DenselySampledSpectrum
 {
     DenselySampledSpectrum() = default;
     DenselySampledSpectrum(Spectrum spec, i32 lambdaMin = (i32)LambdaMin, i32 lambdaMax = (i32)LambdaMax);
@@ -425,7 +425,7 @@ struct DenselySampledSpectrum : SpectrumCRTP<DenselySampledSpectrum>
     u16 lambdaMax;
 };
 
-struct PiecewiseLinearSpectrum : SpectrumCRTP<PiecewiseLinearSpectrum>
+struct PiecewiseLinearSpectrum 
 {
     PiecewiseLinearSpectrum() = default;
     PiecewiseLinearSpectrum(f32 *lambdas, f32 *values, u32 numValues) : lambdas(lambdas), values(values), numValues(numValues) {}
@@ -447,7 +447,7 @@ struct PiecewiseLinearSpectrum : SpectrumCRTP<PiecewiseLinearSpectrum>
     u32 numValues;
 };
 
-struct BlackbodySpectrum : SpectrumCRTP<BlackbodySpectrum>
+struct BlackbodySpectrum 
 {
     BlackbodySpectrum(f32 T) : T(T)
     {
@@ -545,7 +545,7 @@ inline f32 SigmoidPolynomialMaxValue(const Vec3f &c)
     return result;
 }
 
-struct RGBAlbedoSpectrum : SpectrumCRTP<RGBAlbedoSpectrum>
+struct RGBAlbedoSpectrum 
 {
     f32 operator()(f32 lambda) const
     {
@@ -591,7 +591,7 @@ struct RGBAlbedoSpectrum : SpectrumCRTP<RGBAlbedoSpectrum>
 };
 
 // For unbounded positive RGB values (remapped to necessary range)
-struct RGBUnboundedSpectrum : SpectrumCRTP<RGBUnboundedSpectrum>
+struct RGBUnboundedSpectrum 
 {
     f32 operator()(f32 lambda) const
     {
@@ -643,7 +643,7 @@ struct RGBUnboundedSpectrum : SpectrumCRTP<RGBUnboundedSpectrum>
     Vec3f coeffs;
 };
 
-struct RGBIlluminantSpectrum : SpectrumCRTP<RGBIlluminantSpectrum>
+struct RGBIlluminantSpectrum 
 {
     f32 operator()(f32 lambda) const
     {

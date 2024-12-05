@@ -576,7 +576,17 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
             }
         }
 
-        BSDF bsdf; // = si.GetBSDF();
+        TempArena temp = ScratchStart(0, 0);
+        // BSDF bsdf; // = si.GetBSDF();
+        BSDF *bsdf = PushStruct(temp.arena, BSDF);
+
+        using MaterialTypes = TypePack<DielectricMaterialConstant>;
+        Dispatch([&](auto t) {
+            using MaterialType = std::decay_t<decltype(t)>;
+
+            MaterialType::Evaluate(temp.arena, si, lambda, bsdf);
+        },
+                 Scene2::MaterialTypes(), si.materialIDs);
 
         // Next Event Estimation
         // Choose light source for direct lighting calculation
@@ -593,7 +603,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
                 // Evaluate BSDF for light sample, check visibility with shadow ray
                 SampledSpectrum Ld(0.f);
                 f32 p_b;
-                SampledSpectrum f = bsdf.EvaluateSample(-ray.d, ls.wi, p_b) * AbsDot(si.shading.n, ls.wi);
+                SampledSpectrum f = bsdf->EvaluateSample(-ray.d, ls.wi, p_b) * AbsDot(si.shading.n, ls.wi);
                 if (f && !BVHTriangleIntersector4::Occluded(ray, scene->nodePtr))
                 {
                     // Calculate contribution
@@ -613,7 +623,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         }
 
         // sample bsdf, calculate pdf
-        BSDFSample sample = bsdf.GenerateSample(-ray.d, sampler.Get1D(), sampler.Get2D());
+        BSDFSample sample = bsdf->GenerateSample(-ray.d, sampler.Get1D(), sampler.Get2D());
         beta *= sample.f * AbsDot(si.shading.n, sample.wi) / sample.pdf;
         bsdfPdf        = sample.pdf;
         specularBounce = sample.IsSpecular();
@@ -632,6 +642,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
             beta /= q;
             // TODO: infinity check for beta
         }
+        ScratchEnd(temp);
     }
     return L;
 }

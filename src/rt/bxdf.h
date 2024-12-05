@@ -283,7 +283,7 @@ enum class TransportMode
 };
 
 // Lambertian model, light is scattered in all directions equally
-struct DiffuseBxDF : BxDFCRTP<DiffuseBxDF>
+struct DiffuseBxDF
 {
     SampledSpectrumN R;
     DiffuseBxDF() = default;
@@ -317,7 +317,7 @@ struct DiffuseBxDF : BxDFCRTP<DiffuseBxDF>
     }
 };
 
-struct DiffuseTransmissionBxDF : BxDFCRTP<DiffuseTransmissionBxDF>
+struct DiffuseTransmissionBxDF
 {
     SampledSpectrumN R, T;
     DiffuseTransmissionBxDF() = default;
@@ -357,7 +357,7 @@ struct DiffuseTransmissionBxDF : BxDFCRTP<DiffuseTransmissionBxDF>
     }
 };
 
-struct ConductorBxDF : BxDFCRTP<ConductorBxDF>
+struct ConductorBxDF
 {
     ConductorBxDF() = delete;
     ConductorBxDF(const TrowbridgeReitzDistribution &mfDistrib, const SampledSpectrumN &eta, const SampledSpectrumN &k)
@@ -440,7 +440,7 @@ struct ConductorBxDF : BxDFCRTP<ConductorBxDF>
     }
 };
 
-struct DielectricBxDF : BxDFCRTP<DielectricBxDF>
+struct DielectricBxDF
 {
     TrowbridgeReitzDistribution mfDistrib;
     // NOTE: spectrally varying IORs are handled by randomly sampling a single wavelength
@@ -641,7 +641,7 @@ struct DielectricBxDF : BxDFCRTP<DielectricBxDF>
 };
 
 // NOTE: only models perfect specular scattering
-// struct ThinDielectricBxDF : BxDFCRTP<ThinDielectricBxDF>
+// struct ThinDielectricBxDF 
 // {
 //     ThinDielectricBxDF() = default;
 //     ThinDielectricBxDF(LaneNF32 eta) : eta(eta) {}
