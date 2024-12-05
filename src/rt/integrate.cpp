@@ -377,15 +377,119 @@ bool SurfaceInteraction::ComputeShading(BSDF &bsdf)
     return {};
 }
 
-#if 0
-void Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda)
+template <typename Sampler>
+SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda);
+
+void Render(Arena *arena, RenderParams2 &params) // Vec2i imageDim, Vec2f filterRadius, u32 spp, Mat4 &cameraFromRaster, )
 {
-    u32 depth = 0;
+    u32 width              = params.width;
+    u32 height             = params.height;
+    u32 spp                = params.spp;
+    Vec2f &filterRadius    = params.filterRadius;
+    Mat4 &cameraFromRaster = params.cameraFromRaster;
+    Mat4 &renderFromCamera = params.renderFromCamera;
+    u32 maxDepth           = params.maxDepth;
+    f32 lensRadius         = params.lensRadius;
+    f32 focalLength        = params.focalLength;
+
+    // parallel for over tiles
+    u32 tileWidth  = 32;
+    u32 tileHeight = 32;
+    u32 tileCountX = (width + tileWidth - 1) / tileWidth;
+    u32 tileCountY = (width + tileHeight - 1) / tileHeight;
+    u32 taskCount  = tileCountX * tileCountY;
+
+    Image image;
+    image.width         = width;
+    image.height        = height;
+    image.bytesPerPixel = sizeof(u32);
+    image.contents      = PushArrayNoZero(arena, u8, GetImageSize(&image));
+
+    scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
+        u32 tileX = taskCount % tileCountX;
+        u32 tileY = taskCount / tileCountX;
+        Vec2u minPixelBounds(tileX, tileY);
+        Vec2u maxPixelBounds(Min(tileX + tileWidth, tileWidth), Min(tileY + tileHeight, tileHeight));
+
+        SampledSpectrum L(0.f);
+
+        ZSobolSampler sampler(spp, Vec2i(width, height));
+        for (u32 y = minPixelBounds.y; y < maxPixelBounds.y; y++)
+        {
+            u32 *out = GetPixelPointer(&image, minPixelBounds.x, y);
+            for (u32 x = minPixelBounds.x; x < maxPixelBounds.x; x++)
+            {
+                Vec2u pPixel(x, y);
+                Vec3f rgb(0.f);
+                for (u32 i = 0; i < spp; i++)
+                {
+                    sampler.StartPixelSample(Vec2i(x, y), i);
+                    SampledWavelengths lambda = SampleVisible(sampler.Get1D());
+                    // box filter
+                    Vec2f u            = sampler.Get2D();
+                    Vec2f filterSample = Vec2f(Lerp(u[0], -filterRadius.x, filterRadius.x),
+                                               Lerp(u[1], -filterRadius.y, filterRadius.y));
+                    // converts from continuous to discrete coordinates
+                    filterSample += Vec2f(0.5f, 0.5f) + Vec2f(pPixel);
+                    Vec2f pLens = sampler.Get2D();
+
+                    Vec3f pCamera = TransformP(cameraFromRaster, Vec3f(filterSample, 0.f));
+                    Ray2 ray(Vec3f(0.f, 0.f, 0.f), Normalize(pCamera));
+                    if (lensRadius > 0.f)
+                    {
+                        pLens = lensRadius * SampleUniformDiskConcentric(pLens);
+
+                        // point on plane of focus
+                        f32 t        = focalLength / -ray.d.z;
+                        Vec3f pFocus = ray(t);
+                        ray.o        = Vec3f(pLens.x, pLens.y, 0.f);
+                        // ensure ray intersects focal point
+                        ray.d = Normalize(pFocus - ray.o);
+                    }
+                    ray              = Transform(renderFromCamera, ray);
+                    f32 cameraWeight = 1.f;
+                    L += cameraWeight * Li(ray, sampler, maxDepth, lambda);
+                    // convert radiance to rgb, add and divide
+                    L     = SafeDiv(L, lambda.PDF());
+                    f32 r = (Spectra::X().Sample(lambda) * L).Average();
+                    f32 g = (Spectra::Y().Sample(lambda) * L).Average();
+                    f32 b = (Spectra::Z().Sample(lambda) * L).Average();
+                    rgb += Vec3f(r, g, b);
+                }
+                // TODO: filter importance sampling
+                rgb /= f32(spp);
+                rgb = Mul(RGBColorSpace::sRGB->XYZToRGB, rgb);
+                if (rgb.x != rgb.x) rgb.x = 0.f;
+                if (rgb.y != rgb.y) rgb.y = 0.f;
+                if (rgb.z != rgb.z) rgb.z = 0.f;
+
+                f32 r = 255.f * rgb.x;
+                f32 g = 255.f * rgb.y;
+                f32 b = 255.f * rgb.z;
+                f32 a = 255.f;
+
+                u32 color = (RoundFloatToU32(a) << 24) |
+                            (RoundFloatToU32(r) << 16) |
+                            (RoundFloatToU32(g) << 8) |
+                            (RoundFloatToU32(b) << 0);
+                *out++ = color;
+            }
+        }
+    });
+    WriteImage(&image, "image.bmp");
+    printf("done\n");
+}
+
+template <typename Sampler>
+SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda)
+{
+    Scene2 *scene = GetScene();
+    u32 depth     = 0;
     SampledSpectrum L(0.f);
     SampledSpectrum beta(1.f);
 
     bool specularBounce = false;
-    f32 bsdfPdf         = 1.f;
+    f32 bsdfPdf         = 0.f;
     f32 etaScale        = 1.f;
 
     SurfaceInteraction prevSi;
@@ -398,7 +502,8 @@ void Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda)
             break;
         }
         SurfaceInteraction si;
-        bool intersect = scene->Intersect(ray, si);
+        // TODO: not hardcoded
+        bool intersect = BVHTriangleIntersector4::Intersect(ray, scene->nodePtr, si);
 
         // If no intersection, sample "infinite" lights (e.g environment maps, sun, etc.)
         if (!intersect)
@@ -407,35 +512,47 @@ void Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda)
             // or it wasn't sampled with MIS)
             if (specularBounce || depth == 0)
             {
-                for (u32 i = 0; i < scene->numInfiniteLights; i++)
-                {
-                    InfiniteLight *light = &scene->infiniteLights[i];
-                    SampledSpectrum Le   = light->Le(ray.d);
-                    L += beta * Le;
-                }
+                ForEachTypeSubset(
+                    scene->lights, [&](auto *array, u32 count) {
+                        using Light = std::remove_reference_t<decltype(*array)>;
+                        for (u32 i = 0; i < count; i++)
+                        {
+                            Light &light       = array[i];
+                            SampledSpectrum Le = Light::Le(&light, ray.d, lambda);
+                            L += beta * Le;
+                        }
+                    },
+                    Scene2::InfiniteLightTypes());
             }
             else
             {
-                for (u32 i = 0; i < scene->numInfiniteLights; i++)
-                {
-                    InfiniteLight *light = &scene->infiniteLights[i];
-                    SampledSpectrum Le   = light->Le(ray.d);
-                    // probability of sampling the light * probability of
-                    // lightSampler->PMF(prevSi, light) *
-                    f32 pmf      = 1.f / scene->numLights;
-                    f32 lightPdf = pmf *
-                                   light->PDF_Li(scene, prevSi.lightIndices, prevSi.p, ray.d); // find the pmf for the light
-                    f32 w_l = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
-                    // NOTE: beta already contains the cosine, bsdf, and pdf terms
-                    L += beta * w_l * Le;
-                }
+                ForEachTypeSubset(
+                    scene->lights, [&](auto *array, u32 count) {
+                        using Light = std::remove_reference_t<decltype(*array)>;
+                        for (u32 i = 0; i < count; i++)
+                        {
+                            Light &light       = array[i];
+                            SampledSpectrum Le = Light::Le(&light, ray.d, lambda);
+
+                            f32 pdf      = LightPDF(scene);
+                            f32 lightPdf = pdf * (f32)Light::PDF_Li(&light, ray.d, true);
+
+                            f32 w_l = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
+                            // NOTE: beta already contains the cosine, bsdf, and pdf terms
+                            L += beta * w_l * Le;
+                        }
+                    },
+                    Scene2::InfiniteLightTypes());
             }
+
             break;
             // sample infinite area lights, environment map, and return
         }
         // If intersected with a light
         if (si.lightIndices)
         {
+            Assert(0);
+#if 0
             DiffuseAreaLight *light = &scene->lights[si.lightIndices];
             if (specularBounce || depth == 0)
             {
@@ -454,50 +571,50 @@ void Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda)
                 // NOTE: beta already contains the cosine, bsdf, and pdf terms
                 L += beta * w_l * Le;
             }
+#endif
         }
 
         BSDF *bsdf = si.GetBSDF();
 
         // Next Event Estimation
-        // TODO: offset ray origin, don't sample lights if bsdf is specular
-
         // Choose light source for direct lighting calculation
-        f32 lightU     = sampler.Get1D();
-        u32 lightIndex = u32(Min(lightU * scene->numLights, scene->numLights - 1));
-        Light *light   = &scene->lights[lightIndex];
-        f32 pmf        = 1.f / scene->numLights;
-        if (light)
+        f32 lightU = sampler.Get1D();
+        f32 pmf;
+        LightHandle handle = UniformLightSample(scene, lightU, &pmf);
+        if (bool(handle))
         {
             Vec2f sample = sampler.Get2D();
             // Sample point on the light source
-            LightSample ls = SampleLi(scene, lightIndex, si, sample);
+            LightSample ls = SampleLi(scene, handle, si, lambda, sample);
             if (ls)
             {
                 // Evaluate BSDF for light sample, check visibility with shadow ray
                 SampledSpectrum Ld(0.f);
-                SampledSpectrum f = bsdf->f(-ray.d, wo) * AbsDot(si.shading.n, wi);
+                f32 p_b;
+                SampledSpectrum f = bsdf.EvaluateSample(-ray.d, ls.wi, p_b) * AbsDot(si.shading.n, wi);
                 if (f && !scene->IntersectShadowRay())
                 {
                     // Calculate contribution
                     f32 lightPdf = pmf * ls.pdf;
 
-                    if (IsDeltaLight(light->type))
+                    if (IsDeltaLight(ls.lightType))
                     {
                         Ld = beta * f * ls.L / lightPdf;
                     }
                     else
                     {
-                        f32 bsdfPdf = bsdf->PDF(wo, wi);
-                        f32 w_l     = PowerHeuristic(1, lightPdf, 1, bsdfPdf);
-                        Ld          = beta * f * w_l * ls.L / lightPdf;
+                        f32 w_l = PowerHeuristic(1, lightPdf, 1, p_b);
+                        Ld      = beta * f * w_l * ls.L / lightPdf;
                     }
                 }
             }
         }
 
         // sample bsdf, calculate pdf
-        beta *= bsdf->f * AbsDot(shading->n, bsdf->wi) / pdf;
-        if (bsdf->IsSpecular()) specularBounce = true;
+        BSDFSample sample = bsdf.GenerateSample(-ray.d, sampler.Get1D(), sampler.Get2D());
+        beta *= sample.f * AbsDot(shading->n, sample.wi) / sample.pdf;
+        bsdfPdf        = sample.pdf;
+        specularBounce = sample.IsSpecular();
 
         // Spawn new ray
         prevSi = si;
@@ -514,12 +631,12 @@ void Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda)
         }
     }
 }
-#endif
 
 //////////////////////////////
 // Volumes
 //
 
+#if 0
 void VolumeAggregate::Build(Arena *arena)
 {
     Scene2 *scene = GetScene();
@@ -791,35 +908,10 @@ SampledSpectrum SampleTMaj(Scene2 *scene, Ray2 &ray, f32 tHit, f32 xi, Sampler s
     return tMaj;
 }
 
-f32 VisibleWavelengthsPDF(f32 lambda)
+bool IsValidVolume(u32 volumeIndex)
 {
-    if (lambda < LambdaMin || lambda > LambdaMax)
-    {
-        return 0;
-    }
-    return 0.0039398042f / Sqr(std::cosh(0.0072f * (lambda - 538)));
+    return volumeIndex != invalidVolume;
 }
-
-f32 SampleVisibleWavelengths(f32 u)
-{
-    return 538 - 138.888889f * std::atanh(0.85691062f - 1.82750197f * u);
-}
-
-// Importance sampling the
-static SampledWavelengths SampleVisible(f32 u)
-{
-    SampledWavelengths swl;
-    for (i32 i = 0; i < NSampledWavelengths; i++)
-    {
-        f32 up = u + f32(i) / NSampledWavelengths;
-        if (up > 1) up -= 1;
-        swl.lambda[i] = SampleVisibleWavelengths(up);
-        swl.pdf[i]    = VisibleWavelengthsPDF(swl.lambda[i]);
-    }
-    return swl;
-}
-
-bool IsValidVolume(u32 volumeIndex) { return volumeIndex != invalidVolume; }
 // Manually intersect every quad in every mesh
 bool Intersect(Ray2 &r, SurfaceInteraction &intr)
 {
@@ -1173,6 +1265,7 @@ NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Sam
     //     return beta * t_ray * sample.L * MISWeight(p_l, p_u);
     // }
 }
+#endif
 
 #if 0
 void VirtualDensitySegments(const RayDifferential &ray)

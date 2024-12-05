@@ -767,8 +767,8 @@ struct Material2;
 // NOTE: only leaf scenes can
 struct Scene2
 {
-    using ShapeTypes         = TypePack<QuadMesh, Disk>;
-    using VolumeTypes        = TypePack<NanoVDBVolume>;
+    // using ShapeTypes = TypePack<QuadMesh, Disk>;
+    // using VolumeTypes        = TypePack<NanoVDBVolume>;
     using LightTypes         = TypePack<DiffuseAreaLight, DistantLight, UniformInfiniteLight, ImageInfiniteLight>;
     using InfiniteLightTypes = TypePack<UniformInfiniteLight, ImageInfiniteLight>;
     // using MaterialTypes      = TypePack<DiffuseMaterial>;
@@ -791,6 +791,8 @@ struct Scene2
             QuadMesh *meshes;
             u32 numMeshes;
             u32 numPrims;
+            TriangleMesh *triangleMeshes;
+            u32 numTriMeshes;
         };
         struct
         {
@@ -800,11 +802,11 @@ struct Scene2
     };
     // Volumes
     // Volume *volumes;
-    ArrayTuple<ShapeTypes> primitives;
-    const PrimitiveIndices **primIndices;
+    // ArrayTuple<ShapeTypes> primitives;
+    // const PrimitiveIndices **primIndices;
 
-    ArrayTuple<VolumeTypes> volumes;
-    VolumeAggregate aggregate;
+    // ArrayTuple<VolumeTypes> volumes;
+    // VolumeAggregate aggregate;
 
     // Lights
     ArrayTuple<LightTypes> lights;

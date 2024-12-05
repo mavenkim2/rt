@@ -288,7 +288,7 @@ SAMPLE_LI(DiffuseAreaLight)
 
         // add projected solid angle measure (n dot wi) to pdf
         Vec4lfn w(AbsDot(v00, intr.shading.n), AbsDot(v10, intr.shading.n),
-                   AbsDot(v01, intr.shading.n), AbsDot(v11, intr.shading.n));
+                  AbsDot(v01, intr.shading.n), AbsDot(v11, intr.shading.n));
         Vec2lfn uNew = SampleBilinear(u, w);
         pdf *= BilinearPDF(uNew, w);
         result.pdf = pdf;

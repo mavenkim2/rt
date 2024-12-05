@@ -5,6 +5,7 @@
 #include "../lights.h"
 #include "../spectrum.h"
 #include "../template.h"
+#include "../integrate.h"
 namespace rt
 {
 TriangleMesh *GenerateMesh(Arena *arena, u32 count, f32 min = -100.f, f32 max = 100.f)
@@ -120,7 +121,7 @@ void AOSSBVHBuilderTest(Arena *arena, TriangleMesh *mesh)
     record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
 
     BVHNodeN bvh = BuildQuantizedTriSBVH(settings, arenas, mesh, refs, record);
-    f32 time        = OS_GetMilliseconds(counter);
+    f32 time     = OS_GetMilliseconds(counter);
     printf("num faces: %u\n", numFaces);
     printf("Build time: %fms\n", time);
 
@@ -168,7 +169,7 @@ void QuadSBVHBuilderTest(Arena *arena, QuadMesh *mesh)
     record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
 
     BVHNodeN bvh = BuildQuantizedQuadSBVH(settings, arenas, mesh, refs, record);
-    f32 time        = OS_GetMilliseconds(counter);
+    f32 time     = OS_GetMilliseconds(counter);
     printf("num faces: %u\n", numFaces);
     printf("Build time: %fms\n", time);
 
@@ -218,7 +219,7 @@ void PartialRebraidBuilderTest(Arena *arena)
     BuildSettings settings;
     settings.intCost = 0.3f;
 
-    counter          = OS_StartCounter();
+    counter       = OS_StartCounter();
     BVHNodeN node = BuildTLASQuantized(settings, arenas, &scenes[0], buildRefs, record);
     printf("time to generate tlas: %fms\n", OS_GetMilliseconds(counter));
     Print("time to generate tlas: %fms\n", OS_GetMilliseconds(counter));
@@ -501,97 +502,75 @@ void VolumeRenderingTest(Arena *arena, string filename)
 
     scene.aggregate.Build(arena, &scene);
 
-    // parallel for over tiles
-    u32 tileWidth  = 32;
-    u32 tileHeight = 32;
-    u32 tileCountX = (width + tileWidth - 1) / tileWidth;
-    u32 tileCountY = (width + tileHeight - 1) / tileHeight;
-    u32 taskCount  = tileCountX * tileCountY;
-
-    Image image;
-    image.width         = width;
-    image.height        = height;
-    image.bytesPerPixel = sizeof(u32);
-    image.contents      = PushArrayNoZero(arena, u8, GetImageSize(&image));
-
-    scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
-        u32 tileX = taskCount % tileCountX;
-        u32 tileY = taskCount / tileCountX;
-        Vec2u minPixelBounds(tileX, tileY);
-        Vec2u maxPixelBounds(Min(tileX + tileWidth, tileWidth), Min(tileY + tileHeight, tileHeight));
-
-        SampledSpectrum L(0.f);
-
-        ZSobolSampler sampler(spp, Vec2i(width, height));
-        for (u32 y = minPixelBounds.y; y < maxPixelBounds.y; y++)
-        {
-            u32 *out = GetPixelPointer(&image, minPixelBounds.x, y);
-            for (u32 x = minPixelBounds.x; x < maxPixelBounds.x; x++)
-            {
-                Vec2u pPixel(x, y);
-                Vec3f rgb(0.f);
-                for (u32 i = 0; i < spp; i++)
-                {
-                    sampler.StartPixelSample(Vec2i(x, y), i);
-                    SampledWavelengths lambda = SampleVisible(sampler.Get1D());
-                    // box filter
-                    Vec2f u            = sampler.Get2D();
-                    Vec2f filterSample = Vec2f(Lerp(u[0], -filterRadius.x, filterRadius.x),
-                                               Lerp(u[1], -filterRadius.y, filterRadius.y));
-                    // converts from continuous to discrete coordinates
-                    filterSample += Vec2f(0.5f, 0.5f) + Vec2f(pPixel);
-                    Vec2f pLens = sampler.Get2D();
-
-                    Vec3f pCamera = TransformP(cameraFromRaster, Vec3f(filterSample, 0.f));
-                    Ray2 ray(Vec3f(0.f, 0.f, 0.f), Normalize(pCamera));
-                    if (lensRadius > 0.f)
-                    {
-                        pLens = lensRadius * SampleUniformDiskConcentric(pLens);
-
-                        // point on plane of focus
-                        f32 t        = focalLength / -ray.d.z;
-                        Vec3f pFocus = ray(t);
-                        ray.o        = Vec3f(pLens.x, pLens.y, 0.f);
-                        // ensure ray intersects focal point
-                        ray.d = Normalize(pFocus - ray.o);
-                    }
-                    ray              = Transform(renderFromCamera, ray);
-                    f32 cameraWeight = 1.f;
-                    L += cameraWeight * VolumetricIntegrator(&scene, ray, &sampler, lambda, maxDepth);
-                    // convert radiance to rgb, add and divide
-                    L     = SafeDiv(L, lambda.PDF());
-                    f32 r = (Spectra::X().Sample(lambda) * L).Average();
-                    f32 g = (Spectra::Y().Sample(lambda) * L).Average();
-                    f32 b = (Spectra::Z().Sample(lambda) * L).Average();
-                    rgb += Vec3f(r, g, b);
-                }
-                // TODO: filter importance sampling
-                rgb /= f32(spp);
-                rgb = Mul(RGBColorSpace::sRGB->XYZToRGB, rgb);
-                if (rgb.x != rgb.x) rgb.x = 0.f;
-                if (rgb.y != rgb.y) rgb.y = 0.f;
-                if (rgb.z != rgb.z) rgb.z = 0.f;
-
-                f32 r = 255.f * rgb.x;
-                f32 g = 255.f * rgb.y;
-                f32 b = 255.f * rgb.z;
-                f32 a = 255.f;
-
-                u32 color = (RoundFloatToU32(a) << 24) |
-                            (RoundFloatToU32(r) << 16) |
-                            (RoundFloatToU32(g) << 8) |
-                            (RoundFloatToU32(b) << 0);
-                *out++ = color;
-            }
-        }
-    });
-    WriteImage(&image, "image.bmp");
-    printf("done\n");
 }
 #endif
 
-void DualTest()
+void TriangleMeshBVHTest(Arena *arena) //, string filename)
 {
+    Scene2 *scene = GetScene();
+    // TempArena temp    = ScratchStart(0, 0);
+    u32 numProcessors = OS_NumProcessors();
+    Arena **arenas    = PushArray(arena, Arena *, numProcessors);
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        arenas[i] = ArenaAlloc(16); // ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
+    }
+
+    TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
+    u32 numFaces      = mesh.numIndices / 3;
+    Bounds geomBounds;
+    Bounds centBounds;
+    PrimRefCompressed *refs = GenerateAOSData(arena, &mesh, numFaces, geomBounds, centBounds);
+
+    BuildSettings settings;
+    settings.intCost = 0.3f;
+
+    RecordAOSSplits record;
+    record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+    record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+    record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
+
+    BVHNodeN bvh   = BuildQuantizedTriSBVH(settings, arenas, &mesh, refs, record);
+    scene->nodePtr = bvh;
+    // PerformanceCounter counter = OS_StartCounter();
+    // f32 time                   = OS_GetMilliseconds(counter);
+
+    // Camera
+    u32 width  = 1920;
+    u32 height = 804;
+    Vec3f pCamera(-1139.0159, 23.286734, 1479.7947);
+    Vec3f look(244.81433, 238.80714, 560.3801);
+    Vec3f up(-0.107149, .991691, .07119);
+
+    Vec3f f = Normalize(pCamera - look);
+    Vec3f s = Normalize(Cross(up, f));
+    Vec3f u = Cross(f, s);
+
+    Mat4 cameraFromRender(f.x, f.y, f.z, 0.f,
+                          s.x, s.y, s.z, 0.f,
+                          u.x, u.y, u.z, 0.f,
+                          0.f, 0.f, 0.f, 1.f);
+
+    Mat4 renderFromCamera = Inverse(cameraFromRender);
+    Mat4 NDCFromCamera    = Mat4::Perspective(Radians(69.50461), 2.386946);
+    // maps to raster coordinates
+    Mat4 rasterFromNDC = Scale(Vec3f(f32(width), -f32(height), 1.f)) * Scale(Vec3f(1.f / 2.f, 1.f / 2.f, 1.f)) *
+                         Translate(Vec3f(1.f, -1.f, 0.f));
+    Mat4 rasterFromCamera = rasterFromNDC * NDCFromCamera;
+    Mat4 cameraFromRaster = Inverse(rasterFromCamera);
+
+    RenderParams2 params;
+    params.cameraFromRaster = cameraFromRaster;
+    params.renderFromCamera = renderFromCamera;
+    params.width            = width;
+    params.height           = height;
+    params.filterRadius     = Vec2f(0.5f);
+    params.spp              = 256;
+    params.maxDepth         = 10;
+    params.lensRadius       = 0.003125;
+    params.focalLength      = 1675.3383;
+
+    Render(arena, params);
 }
 
 } // namespace rt

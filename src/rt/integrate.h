@@ -527,8 +527,50 @@ struct NEESample
     bool delta;
 };
 
+struct RenderParams2
+{
+    Mat4 cameraFromRaster;
+    Mat4 renderFromCamera;
+    u32 width;
+    u32 height;
+    Vec2f filterRadius;
+    u32 spp;
+    u32 maxDepth;
+    f32 lensRadius  = 0.f;
+    f32 focalLength = 0.f;
+};
+
 NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Sampler sampler,
                                   SampledSpectrum beta, const SampledSpectrum &p, const SampledWavelengths &lambda, Vec3f &wi);
+static SampledWavelengths SampleVisible(f32 u);
+
+f32 VisibleWavelengthsPDF(f32 lambda)
+{
+    if (lambda < LambdaMin || lambda > LambdaMax)
+    {
+        return 0;
+    }
+    return 0.0039398042f / Sqr(std::cosh(0.0072f * (lambda - 538)));
+}
+
+f32 SampleVisibleWavelengths(f32 u)
+{
+    return 538 - 138.888889f * std::atanh(0.85691062f - 1.82750197f * u);
+}
+
+// Importance sampling the
+static SampledWavelengths SampleVisible(f32 u)
+{
+    SampledWavelengths swl;
+    for (i32 i = 0; i < NSampledWavelengths; i++)
+    {
+        f32 up = u + f32(i) / NSampledWavelengths;
+        if (up > 1) up -= 1;
+        swl.lambda[i] = SampleVisibleWavelengths(up);
+        swl.pdf[i]    = VisibleWavelengthsPDF(swl.lambda[i]);
+    }
+    return swl;
+}
 
 } // namespace rt
 #endif

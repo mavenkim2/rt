@@ -12,9 +12,9 @@ enum
     BVHNodeType_Quantized       = 1 << 0,
     BVHNodeType_QuantizedLeaves = 1 << 1,
 
-    BVH_QN                   = BVHNodeType_Quantized,
-    BVH_QNLF                 = BVHNodeType_QuantizedLeaves,
-    BVHNodeType_AllQuantized = BVHNodeType_Quantized | BVHNodeType_QuantizedLeaves,
+    BVH_QN   = BVHNodeType_Quantized,
+    BVH_QNLF = BVHNodeType_QuantizedLeaves,
+    BVH_AQ   = BVHNodeType_Quantized | BVHNodeType_QuantizedLeaves,
 };
 
 template <u32 K, u32 types>
@@ -319,7 +319,7 @@ struct DispatchTypes
 };
 
 template <u32 N>
-struct InstanceIntersector<N, BVHNodeType_AllQuantized>
+struct InstanceIntersector<N, BVH_AQ>
 {
     using IntersectorTypes = DispatchTypes<TriangleIntersector<N>>;
     using Primitive        = TLASLeaf<N>;
@@ -381,6 +381,10 @@ struct CompressedLeafIntersector
         }
     }
 };
+
+template <u32 K, u32 types>
+using BVHTriangleIntersector = BVHIntersector<K, types, TriangleIntersector<K>>;
+typedef BVHTriangleIntersector<4, BVH_AQ> BVHTriangleIntersector4;
 
 } // namespace rt
 #endif
