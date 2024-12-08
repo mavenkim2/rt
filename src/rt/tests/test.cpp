@@ -511,12 +511,12 @@ void TriangleMeshBVHTest(Arena *arena)
     // - make the materials polymorphic so that the integrator can access them
     // - fix the compressed leaf intersector
     // - instantiate the water material and attach the triangle mesh to it
+    // - have the intersector handle the case where there are no geomIDs (only primIDs)
 
     // TODO:
-    // - have the intersector handle the case where there are no geomIDs (only primIDs)
-    // - change the bvh build process to support N-wide leaves (need to change the sah to account for this)
 
     // once the ocean is rendered
+    // - change the bvh build process to support N-wide leaves (need to change the sah to account for this)
     // - need to support a bvh with quad/triangle mesh instances
     // - ray differentials
     // - load the scene description and properly instantiate lights/materials/textures

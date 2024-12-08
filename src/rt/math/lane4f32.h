@@ -257,6 +257,11 @@ __forceinline Lane4F32 &operator&=(Lane4F32 &a, const Lane4F32 &b)
     return a;
 }
 __forceinline Lane4F32 operator|(const Lane4F32 &a, const Lane4F32 &b) { return _mm_or_ps(a, b); }
+__forceinline Lane4F32 operator|=(Lane4F32 &a, const Lane4F32 &b)
+{
+    a = a | b;
+    return a;
+}
 
 // __forceinline Lane4F32 Select(const Lane4F32 &mask, const Lane4F32 &a, const Lane4F32 &b)
 // {
@@ -402,6 +407,17 @@ __forceinline u32 TruncateToU8(const Lane4F32 &lane)
     }
     return result;
 #endif
+}
+
+__forceinline Lane4F32 ReduceMinV(const Lane4F32 &l)
+{
+    Lane4F32 a = Min(l, Shuffle<1, 0, 3, 2>(l));
+    return Min(a, Shuffle<2, 3, 0, 1>(a));
+}
+
+__forceinline f32 ReduceMin(const Lane4F32 &l)
+{
+    return _mm_cvtss_f32(ReduceMinV(l));
 }
 
 __forceinline void TruncateToU8(u8 *out, const Lane4F32 &lane)

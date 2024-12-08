@@ -536,6 +536,18 @@ struct Triangle
         }
         return tri;
     }
+    void GetData(Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N], u32 outGeomIDs[N], u32 outPrimIDs[N]) const
+    {
+        for (u32 i = 0; i < N; i++)
+        {
+            TriangleMesh *mesh = &GetScene()->triangleMeshes[geomIDs[i]];
+            v0[i]              = Lane4F32::LoadU((f32 *)(mesh->p + 3 * primIDs[i] + 0));
+            v1[i]              = Lane4F32::LoadU((f32 *)(mesh->p + 3 * primIDs[i] + 1));
+            v2[i]              = Lane4F32::LoadU((f32 *)(mesh->p + 3 * primIDs[i] + 2));
+            outGeomIDs[i]      = geomIDs[i];
+            outPrimIDs[i]      = primIDs[i];
+        }
+    }
 };
 
 template <i32 N>
@@ -553,6 +565,18 @@ struct TriangleCompressed
             tri.primIDs[i]         = ref->primID;
         }
         return tri;
+    }
+    void GetData(Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N], u32 outGeomIDs[N], u32 outPrimIDs[N]) const
+    {
+        // TODO: reconsider this later
+        TriangleMesh *mesh = &GetScene()->triangleMeshes[0];
+        for (u32 i = 0; i < N; i++)
+        {
+            v0[i]         = Lane4F32::LoadU((f32 *)(mesh->p + 3 * primIDs[i] + 0));
+            v1[i]         = Lane4F32::LoadU((f32 *)(mesh->p + 3 * primIDs[i] + 1));
+            v2[i]         = Lane4F32::LoadU((f32 *)(mesh->p + 3 * primIDs[i] + 2));
+            outPrimIDs[i] = primIDs[i];
+        }
     }
 };
 

@@ -519,7 +519,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         }
         SurfaceInteraction si;
         // TODO: not hardcoded
-        bool intersect = BVHTriangleIntersector4::Intersect(ray, scene->nodePtr, si);
+        bool intersect = BVHTriangleIntersectorCmp4::Intersect(ray, scene->nodePtr, si);
 
         // If no intersection, sample "infinite" lights (e.g environment maps, sun, etc.)
         if (!intersect)
