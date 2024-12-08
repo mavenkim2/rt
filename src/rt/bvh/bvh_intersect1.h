@@ -40,10 +40,10 @@ auto GetNode<4, BVH_AQ>(BVHNode<4> node)
     return qNode;
 }
 
-template <u32 N>
+template <typename T>
 struct StackEntry
 {
-    BVHNode<N> ptr;
+    T ptr;
     f32 dist;
 };
 
@@ -58,13 +58,13 @@ struct TravRay
                                                           Select(r.d.z == 0, 0, 1 / r.d.z))) {}
 };
 
-template <u32 K, u32 types>
+template <u32 K, u32 types, typename Primitive>
 struct BVHTraverser;
 
-template <u32 types>
-struct BVHTraverser<4, types>
+template <u32 types, typename Primitive>
+struct BVHTraverser<4, types, Primitive>
 {
-    using StackEntry = StackEntry<4>;
+    using StackEntry = StackEntry<BVHNode4>;
     static void Traverse(StackEntry entry, StackEntry *stack, i32 &stackPtr, TravRay<4> &ray)
     {
         Vec3lf4 mins, maxs;
@@ -86,10 +86,10 @@ struct BVHTraverser<4, types>
 
         const Lane4F32 intersectMask = tEntry <= tLeave;
 
-        const u32 childType0   = node->children[0].GetType();
-        const u32 childType1   = node->children[1].GetType();
-        const u32 childType2   = node->children[2].GetType();
-        const u32 childType3   = node->children[3].GetType();
+        const u32 childType0   = node->Child<Primitive>(0).GetType();
+        const u32 childType1   = node->Child<Primitive>(1).GetType();
+        const u32 childType2   = node->Child<Primitive>(2).GetType();
+        const u32 childType3   = node->Child<Primitive>(3).GetType();
         Lane4F32 validNodeMask = Lane4U32(childType0, childType1, childType2, childType3) != Lane4U32(BVHNode4::tyEmpty);
 
         Lane4F32 mask            = validNodeMask & intersectMask;
@@ -102,7 +102,7 @@ struct BVHTraverser<4, types>
         {
             // If numNodes <= 1, then numNode will be 0, 1, 2, 4, or 8. x/2 - x/8 maps to
             // 0, 0, 1, 2, 3
-            stack[stackPtr] = {node->children[(intersectFlags >> 1) - (intersectFlags >> 3)], t_dcba[0]};
+            stack[stackPtr] = {node->Child((intersectFlags >> 1) - (intersectFlags >> 3)), t_dcba[0]};
             stackPtr += numNodes;
         }
         else
@@ -121,10 +121,10 @@ struct BVHTraverser<4, types>
             u32 indexC = PopCount((da_cb_ba_db_ca_dc ^ 0x12) & 0x13);
             u32 indexD = PopCount((~da_cb_ba_db_ca_dc) & 0x25);
 
-            stack[stackPtr + ((numNodes - 1 - indexA) & 3)] = {node->children[0], t_dcba[0]};
-            stack[stackPtr + ((numNodes - 1 - indexB) & 3)] = {node->children[1], t_dcba[1]};
-            stack[stackPtr + ((numNodes - 1 - indexC) & 3)] = {node->children[2], t_dcba[2]};
-            stack[stackPtr + ((numNodes - 1 - indexD) & 3)] = {node->children[3], t_dcba[3]};
+            stack[stackPtr + ((numNodes - 1 - indexA) & 3)] = {node->Child<Primitive>(0), t_dcba[0]};
+            stack[stackPtr + ((numNodes - 1 - indexB) & 3)] = {node->Child<Primitive>(1), t_dcba[1]};
+            stack[stackPtr + ((numNodes - 1 - indexC) & 3)] = {node->Child<Primitive>(2), t_dcba[2]};
+            stack[stackPtr + ((numNodes - 1 - indexD) & 3)] = {node->Child<Primitive>(3), t_dcba[3]};
 
             stackPtr += numNodes;
         }
@@ -137,7 +137,7 @@ struct BVHIntersector;
 template <u32 types, typename Intersector>
 struct BVHIntersector<4, types, Intersector>
 {
-    using StackEntry   = StackEntry<4>;
+    using StackEntry   = StackEntry<BVHNode4>;
     using Intersection = typename Intersector::Intersection;
     BVHIntersector() {}
     static bool Intersect(Ray2 &ray, BVHNode4 bvhNode, SurfaceInteraction &itr)
@@ -163,7 +163,7 @@ struct BVHIntersector<4, types, Intersector>
                 continue;
             }
 
-            BVHTraverser<4, types>::Traverse(entry, stack, stackPtr, r);
+            BVHTraverser<4, types, typename Intersector::Primitive>::Traverse(entry, stack, stackPtr, r);
         }
         return result;
     }
@@ -271,7 +271,7 @@ struct TriangleIntersector
         Vec3lf<N> dxt     = Cross(c, d);
 
         LaneF32<N> u = Dot(dxt, e2) ^ sgnDet;
-        LaneF32<N> v = Dot(-dxt, e1) ^ sgnDet;
+        LaneF32<N> v = Dot(dxt, e1) ^ sgnDet;
 
         Mask<LaneF32<N>> mask = (det != LaneF32<N>(zero)) & (u >= 0) & (v >= 0) & (u + v <= absDet);
 
@@ -361,7 +361,7 @@ struct InstanceIntersector
         // get the leaves to intersect
         // transform the ray
         // intersect the bottom level hierarchy
-        Primitive *leaves = (Primitive *)ptr.GetType();
+        Primitive *leaves = (Primitive *)ptr.GetPtr();
         u32 num           = ptr.GetNum();
         bool result       = false;
         for (u32 i = 0; i < num; i++)
@@ -388,6 +388,7 @@ struct InstanceIntersector
 template <u32 N, typename Intersector>
 struct CompressedLeafIntersector
 {
+    using StackEntry = StackEntry<BVHNode<N>>;
     CompressedLeafIntersector() {}
     static bool Intersect(Ray2 &ray, BVHNode<N> ptr, SurfaceInteraction &itr)
     {

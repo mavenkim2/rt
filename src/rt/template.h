@@ -175,25 +175,14 @@ struct Prepend<void, TypePack<Ts...>>
     using type = TypePack<Ts...>;
 };
 
-// template <typename... Ts>
-// struct AddPointer;
-//
-// template <typename T>
-// struct AddPointer
-// {
-//     using type = T *;
-// };
-// template <typename T>
-// struct AddPointer<TypePack<T>>
-// {
-//     using type = TypePack<T *>;
-// };
-//
-// template <typename T, typename... Ts>
-// struct AddPointer<TypePack<T, Ts...>>
-// {
-//     using type = typename Prepend<T *, typename AddPointer<TypePack<Ts...>>::type>::type;
-// };
+template <i32 index, typename T, typename... Ts>
+struct RemoveFirstN;
+
+template <i32 index, typename T, typename... Ts>
+struct RemoveFirstN<index, TypePack<T, Ts...>>
+{
+    using type = typename RemoveFirstN<index - 1, TypePack<Ts...>>::type;
+};
 
 template <typename... Ts>
 struct ArrayTuple;

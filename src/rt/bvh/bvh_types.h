@@ -238,6 +238,9 @@ struct alignas(CACHE_LINE_SIZE) RecordAOSSplits
 template <i32 N>
 struct QuantizedNode;
 
+template <i32 N>
+struct CompressedLeafNode;
+
 template <template <i32> class Node, i32 N>
 void GetBounds(Node<N> *node, LaneF32<N> *outMin, LaneF32<N> *outMax)
 {
@@ -298,29 +301,6 @@ void GetBounds(Node<N> *node, LaneF32<N> *outMin, LaneF32<N> *outMax)
 }
 
 template <i32 N>
-struct CompressedLeafNode
-{
-    StaticAssert(N == 4 || N == 8, NMustBe4Or8);
-
-    u8 scale[3];
-    u8 meta;
-
-    u8 lowerX[N];
-    u8 lowerY[N];
-    u8 lowerZ[N];
-
-    u8 upperX[N];
-    u8 upperY[N];
-    u8 upperZ[N];
-
-    Vec3f minP;
-    void GetBounds(LaneF32<N> *outMin, LaneF32<N> *outMax)
-    {
-        ::GetBounds(this, outMin, outMax);
-    }
-};
-
-template <i32 N>
 struct BVHNode
 {
     static const size_t alignment = 16;
@@ -350,7 +330,7 @@ struct BVHNode
     u32 GetType() const { return u32(data & alignMask); }
     bool IsLeaf() const { return GetType() >= tyLeaf; }
     bool IsQuantizedNode() const { return GetType() == tyQuantizedNode; }
-    bool IsCompressedLeaf() const { return GetType() == tyQuantizedNode; }
+    bool IsCompressedLeaf() const { return GetType() == tyCompressedLeaf; }
 };
 
 template <i32 N>
@@ -462,6 +442,12 @@ struct QuantizedNode
         return children[i];
     }
 
+    template <typename T>
+    const BVHNode<N> &Child(u32 i) const
+    {
+        return children[i];
+    }
+
     void GetBounds(LaneF32<N> *outMin, LaneF32<N> *outMax) // f32 *outMinX, f32 *outMinY, f32 *outMinZ, f32 *outMaxX, f32 *outMaxY, f32 *outMaxZ) const
     {
         ::GetBounds(this, outMin, outMax);
@@ -477,6 +463,41 @@ template <i32 N>
 using QuantizedNode4 = QuantizedNode<4>;
 template <i32 N>
 using QuantizedNode8 = QuantizedNode<8>;
+
+template <i32 N>
+struct CompressedLeafNode
+{
+    StaticAssert(N == 4 || N == 8, NMustBe4Or8);
+
+    u8 scale[3];
+    u8 meta;
+
+    u8 offsets[N];
+    u8 lowerX[N];
+    u8 lowerY[N];
+    u8 lowerZ[N];
+
+    u8 upperX[N];
+    u8 upperY[N];
+    u8 upperZ[N];
+
+    Vec3f minP;
+    void GetBounds(LaneF32<N> *outMin, LaneF32<N> *outMax)
+    {
+        ::GetBounds(this, outMin, outMax);
+    }
+    template <typename Primitive>
+    BVHNode<N> Child(u32 index);
+};
+
+template <i32 N>
+template <typename Primitive>
+BVHNode<N> CompressedLeafNode<N>::Child(u32 index)
+{
+    BVHNode<N> out;
+    out.data = (uintptr_t)((Primitive *)(this + 1) + offsets[index]);
+    return out;
+}
 
 #define USE_BVH4
 // #define USE_BVH8

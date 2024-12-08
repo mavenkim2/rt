@@ -17,14 +17,6 @@ enum class LightType : u32
     Area,
     Infinite,
 };
-enum LightClass
-{
-    LightClass_Area,    // diffuse area light
-    LightClass_Distant, // dirac delta direction
-    LightClass_InfUnf,  // uniform infinite light
-    LightClass_InfImg,  // environment map
-    LightClass_Count,
-};
 
 struct LightSample
 {
@@ -38,26 +30,6 @@ struct LightSample
     LightSample() {}
     LightSample(SampledSpectrum L, Vec3lfn samplePoint, Vec3lfn wi, LaneNF32 pdf, LightType lightType)
         : L(L), samplePoint(samplePoint), wi(wi), pdf(pdf), lightType(lightType) {}
-};
-
-struct LightHandle
-{
-    u32 data;
-    LightHandle() : data(0xffffffff) {}
-    LightHandle(u32 a) : data(a) {}
-    LightHandle(LightClass type, u32 index)
-    {
-        data = (type << 28) | (index & 0x0fffffff);
-    }
-    LightClass GetType() const
-    {
-        return LightClass(data >> 28);
-    }
-    u32 GetIndex() const
-    {
-        return data & 0x0fffffff;
-    }
-    __forceinline operator bool() { return data != 0xffffffff; }
 };
 
 bool IsDeltaLight(LightType type)

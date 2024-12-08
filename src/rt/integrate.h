@@ -140,8 +140,11 @@ using Veclfn = typename VecBase<K>::Type;
 template <i32 nc>
 struct ConstantTexture
 {
-    std::conditional_t<nc == 3, Vec3f, f32> c;
+    using T = std::conditional_t<nc == 3, Vec3f, f32>;
+    T c;
 
+    ConstantTexture() {}
+    ConstantTexture(const T &t) : c(t) {}
     static Veclfn<nc> Evaluate(SurfaceInteractionsN &, ConstantTexture **textures, Vec4lfn &, SampledWavelengthsN &)
     {
         Veclfn<nc> result;
@@ -367,7 +370,14 @@ struct DielectricMaterial
     RghShader rghShader;
     Spectrum ior;
 
+    DielectricMaterial(RghShader rghShader, Spectrum ior) : rghShader(rghShader), ior(ior) {}
     MaterialHeaders(DielectricMaterial);
+};
+
+struct NullShader
+{
+    NullShader() {}
+    static void Evaluate(SurfaceInteractionsN, Vec4lfn, const NullShader **) {}
 };
 
 template <typename BxDFShader, typename NormalShader>
@@ -377,6 +387,7 @@ struct Material2
     BxDFShader bxdfShader;
     NormalShader normalShader;
     Material2() = default;
+    Material2(BxDFShader bxdfShader, NormalShader normalShader) : bxdfShader(bxdfShader), normalShader(normalShader) {}
     template <typename BxDFOut>
     static void Evaluate(Arena *arena, SurfaceInteractionsN &intr, SampledWavelengthsN &lambda, BSDFBase<BxDFOut> *result)
     {
@@ -416,9 +427,7 @@ using DiffuseMaterialBumpMapPtex             = Material2<DiffuseMaterialPtex, Bu
 using DiffuseTransmissionMaterialBumpMapPtex = Material2<DiffuseTransmissionMaterialPtex, BumpMapPtex>;
 using DielectricMaterialBumpMapPtex          = Material2<DielectricMaterialConstant, BumpMapPtex>;
 
-using MaterialBumpMapPtex = Material2<DielectricMaterialConstant, BumpMapPtex>;
-
-// struct
+using DielectricMaterialBase = Material2<DielectricMaterialConstant, NullShader>;
 
 static const u32 invalidVolume = 0xffffffff;
 struct Ray2
@@ -453,13 +462,6 @@ struct RayDifferential
     LaneNF32 t;
     Vec3lfn rxOrigin, ryOrigin;
     Vec3lfn rxDir, ryDir;
-};
-
-struct VolumeHandle
-{
-    u32 index;
-    VolumeHandle() {}
-    VolumeHandle(u32 index) : index(index) {}
 };
 
 struct OctreeNode

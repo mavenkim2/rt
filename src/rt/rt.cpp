@@ -17,6 +17,7 @@
 #include "base_types.h"
 #include "bvh/bvh_types.h"
 #include "spectrum.h"
+#include "handles.h"
 #include "integrate.h"
 #include "lights.h"
 #include "scene.h"
@@ -122,8 +123,7 @@ f32 *Image::GetSamplingDistribution(Arena *arena)
     return result;
 }
 
-struct Material;
-
+#if 0
 // TODO: optimize this by multiplying matrix by extents: mul(mat, maxX - minX)
 AABB Transform(const Mat4 &mat, const AABB &aabb)
 {
@@ -1061,6 +1061,7 @@ THREAD_ENTRY_POINT(WorkerThread)
     // while (RenderTile(data->queue)) continue;
     while (RenderTileTest(data->queue)) continue;
 }
+#endif
 
 } // namespace rt
 

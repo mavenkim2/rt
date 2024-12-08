@@ -507,10 +507,13 @@ void VolumeRenderingTest(Arena *arena, string filename)
 
 void TriangleMeshBVHTest(Arena *arena)
 {
-    // TODO:
-    // - instantiate the water material and attach the triangle mesh to it
-    // - have the intersector handle the case where there are no geomIDs (only primIDs)
+    // DONE:
     // - make the materials polymorphic so that the integrator can access them
+    // - fix the compressed leaf intersector
+    // - instantiate the water material and attach the triangle mesh to it
+
+    // TODO:
+    // - have the intersector handle the case where there are no geomIDs (only primIDs)
     // - change the bvh build process to support N-wide leaves (need to change the sah to account for this)
 
     // once the ocean is rendered
@@ -546,6 +549,15 @@ void TriangleMeshBVHTest(Arena *arena)
     scene->nodePtr        = bvh;
     scene->triangleMeshes = &mesh;
     scene->numTriMeshes   = 1;
+
+    ConstantTexture<1> ct(0.f);
+    ConstantSpectrum spec(1.1f);
+    DielectricMaterialBase mat(DielectricMaterialConstant(ct, spec), NullShader());
+    scene->materials.Set<DielectricMaterialBase>(&mat, 1);
+    Scene2::PrimitiveIndices ids[] = {
+        Scene2::PrimitiveIndices(LightHandle(), MaterialHandle(MT_DielectricMaterial, 0)),
+    };
+    scene->primIndices = ids;
     // PerformanceCounter counter = OS_StartCounter();
     // f32 time                   = OS_GetMilliseconds(counter);
 
@@ -585,6 +597,6 @@ void TriangleMeshBVHTest(Arena *arena)
     params.focalLength      = 1675.3383;
 
     Render(arena, params);
-}
+} // namespace rt
 
 } // namespace rt

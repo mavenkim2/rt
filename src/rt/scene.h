@@ -457,15 +457,6 @@ struct ScenePacket
     // }
 };
 
-template <i32 index, typename T, typename... Ts>
-struct RemoveFirstN;
-
-template <i32 index, typename T, typename... Ts>
-struct RemoveFirstN<index, TypePack<T, Ts...>>
-{
-    using type = typename RemoveFirstN<index - 1, TypePack<Ts...>>::type;
-};
-
 enum GeometryType
 {
     GT_QuadMeshType = 0,
@@ -759,9 +750,9 @@ struct NanoVDBVolume
     }
 };
 
+// template <typename Shape>
 // struct Primitive
 // {
-//     Shape shape;
 //     ShapeHandle handle;
 //     u32 lightIndex;
 //     u32 volumeIndex;
@@ -775,17 +766,17 @@ struct Scene2
     // using VolumeTypes        = TypePack<NanoVDBVolume>;
     using LightTypes         = TypePack<DiffuseAreaLight, DistantLight, UniformInfiniteLight, ImageInfiniteLight>;
     using InfiniteLightTypes = TypePack<UniformInfiniteLight, ImageInfiniteLight>;
-    using MaterialTypes      = TypePack<DielectricMaterialBumpMapPtex>;
+    using MaterialTypes      = TypePack<DielectricMaterialBase>;
 
     // TODO: this really should adjacent in memory to the primitives
     struct PrimitiveIndices
     {
         // TODO: these are actaully ids (type + index)
-        u32 lightIndex;
-        u32 volumeIndex;
-        u32 materialID;
+        LightHandle lightID;
+        // u32 volumeIndex;
+        MaterialHandle materialID;
         PrimitiveIndices() {}
-        PrimitiveIndices(u32 lightIndex, u32 volumeIndex, u32 materialID) {}
+        PrimitiveIndices(LightHandle lightID, MaterialHandle materialID) : lightID(lightID), materialID(materialID) {}
     };
 
     union
@@ -808,6 +799,7 @@ struct Scene2
     // Volume *volumes;
     // ArrayTuple<ShapeTypes> primitives;
     // const PrimitiveIndices **primIndices;
+    const PrimitiveIndices *primIndices;
 
     // ArrayTuple<VolumeTypes> volumes;
     // VolumeAggregate aggregate;
