@@ -282,9 +282,9 @@ struct TriangleIntersectorBase
     {
         Vec3lf<N> o  = Vec3lf<N>(ray.o);
         Vec3lf<N> d  = Vec3lf<N>(ray.d);
-        Vec3lf<N> e1 = v1 - v0;
+        Vec3lf<N> e1 = v0 - v1;
         Vec3lf<N> e2 = v2 - v0;
-        Vec3lf<N> ng = Cross(e1, e2);
+        Vec3lf<N> ng = Cross(e2, e1);
         Vec3lf<N> c  = v0 - o;
 
         LaneF32<N> det    = Dot(d, ng);
@@ -360,21 +360,51 @@ struct TriangleIntersectorBase
             f32 v = itr.v[index];
             f32 w = 1 - u - v;
             // TODO: calculate partial derivatives, shading normal, uv etcs from below
-            TriangleMesh *mesh = &GetScene()->triangleMeshes[itr.geomIDs[index]];
+            Scene2 *scene = GetScene();
+
+            TriangleMesh *mesh = &scene->triangleMeshes[itr.geomIDs[index]];
+            // TODO: get index based on type
+            const Scene2::PrimitiveIndices *indices = &scene->primIndices[itr.geomIDs[index]];
+            si.materialIDs     = indices->materialID.data;
             u32 primID         = itr.primIDs[index];
 
+            u32 vertexIndices[3];
+            if (mesh->indices)
+            {
+                vertexIndices[0] = mesh->indices[3 * primID + 0];
+                vertexIndices[1] = mesh->indices[3 * primID + 1];
+                vertexIndices[2] = mesh->indices[3 * primID + 2];
+            }
+            else 
+            {
+                vertexIndices[0] = 3 * primID + 0;
+                vertexIndices[1] = 3 * primID + 1;
+                vertexIndices[2] = 3 * primID + 2;
+            }
             Vec2f uv[3];
             if (mesh->uv)
             {
-                uv[0] = mesh->uv[3 * primID + 0];
-                uv[1] = mesh->uv[3 * primID + 1];
-                uv[2] = mesh->uv[3 * primID + 2];
+                uv[0] = mesh->uv[vertexIndices[0]];
+                uv[1] = mesh->uv[vertexIndices[1]];
+                uv[2] = mesh->uv[vertexIndices[2]];
             }
             else
             {
                 uv[0] = Vec2f(0, 0);
                 uv[1] = Vec2f(1, 0);
                 uv[2] = Vec2f(1, 1);
+            }
+            Vec3f p[3] = {
+                mesh->p[vertexIndices[0]], mesh->p[vertexIndices[1]], mesh->p[vertexIndices[2]]};
+            si.n = Normalize(Cross(p[1] - p[0], p[2] - p[0]));
+            if (mesh->n)
+            {
+                si.shading.n = w * mesh->n[vertexIndices[0]] + u * mesh->n[vertexIndices[1]]
+                                + v * mesh->n[vertexIndices[2]];
+            }
+            else 
+            {
+                si.shading.n = si.n;
             }
             si.uv = w * uv[0] + u * uv[1] + v * uv[2];
             return true;

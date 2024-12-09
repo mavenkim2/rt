@@ -50,6 +50,7 @@
 
 #include "tests/test.cpp"
 #include "tests/sampling_test.cpp"
+#include "tests/bvh_test.cpp"
 
 // #include <openvdb/openvdb.h>
 // #include <nanovdb/NanoVDB.h>
@@ -1089,6 +1090,7 @@ int main(int argc, char *argv[])
     const u32 count = 3000000;
 
     TriangleMeshBVHTest(arena);
+    // BVHTraverse4Test();
 
     // VolumeRenderingTest(arena, "wdas_cloud_quarter.nvdb");
     // BVHSortingTest();

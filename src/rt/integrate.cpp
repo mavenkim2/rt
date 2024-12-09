@@ -8,8 +8,6 @@ namespace rt
 {
 // TODO
 // - loading volumes
-// - creating objects from the parsed scene packets
-
 // - volumetric
 //      - ratio tracking, residual ratio tracking, delta tracking <-- done but untested
 //      - virtual density segments?

@@ -443,7 +443,7 @@ SAMPLE_LI(ImageInfiniteLight)
 
 PDF_LI_INF(ImageInfiniteLight)
 {
-    Vec3f wi = Normalize(ApplyInverse(*light->renderFromLight, w));
+    Vec3f wi = Normalize(ApplyInverseV(*light->renderFromLight, w));
     Vec2f uv = EqualAreaSphereToSquare(wi);
     f32 pdf;
     if (allowIncompletePDF)
@@ -459,7 +459,7 @@ PDF_LI_INF(ImageInfiniteLight)
 
 LE_INF(ImageInfiniteLight)
 {
-    Vec3f wi = Normalize(ApplyInverse(*light->renderFromLight, w));
+    Vec3f wi = Normalize(ApplyInverseV(*light->renderFromLight, w));
     Vec2f uv = EqualAreaSphereToSquare(wi);
     return light->ImageLe(uv, lambda);
 }

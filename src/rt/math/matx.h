@@ -32,6 +32,8 @@ union Mat3
     }
 
     Mat3(Vec3f v) : Mat3(v.x, v.y, v.z) {}
+    Mat3(const Vec3f &a, const Vec3f &b, const Vec3f &c)
+        : columns{a, b, c} {}
 
     Vec3f &operator[](const i32 index)
     {
@@ -46,12 +48,6 @@ union Mat3
         return *this;
     }
 
-    Mat3(Vec3f c1, Vec3f c2, Vec3f c3)
-    {
-        columns[0] = c1;
-        columns[1] = c2;
-        columns[2] = c3;
-    }
     Mat3(f32 a1, f32 a2, f32 a3, f32 b1, f32 b2, f32 b3, f32 c1, f32 c2, f32 c3)
         : Mat3(Vec3f(a1, a2, a3), Vec3f(b1, b2, b3), Vec3f(c1, c2, c3)) {}
 
@@ -95,6 +91,11 @@ union Mat3
     }
 };
 
+__forceinline Mat3 Transpose(const Mat3 &m)
+{
+    return Mat3(Vec3f(m.a1, m.b1, m.c1), Vec3f(m.a2, m.b2, m.c2), Vec3f(m.a3, m.b3, m.c3));
+}
+
 inline Mat3 operator*(Mat3 a, Mat3 b)
 {
     Mat3 result;
@@ -108,6 +109,16 @@ inline Mat3 operator*(Mat3 a, Mat3 b)
     }
 
     return result;
+}
+
+__forceinline f32 Determinant(const Mat3 &t)
+{
+    return Dot(t.columns[0], Cross(t.columns[1], t.columns[2]));
+}
+
+__forceinline Vec3f operator*(const Mat3 &m, const Vec3f &v)
+{
+    return m.columns[0] * v[0] + m.columns[1] * v[1] + m.columns[2] * v[2];
 }
 
 //////////////////////////////
@@ -462,6 +473,13 @@ struct LinearSpace
     __forceinline LinearSpace(ZeroTy) : x(zero), y(zero), z(zero) {}
     __forceinline LinearSpace(const Vec3<T> &a, const Vec3<T> &b, const Vec3<T> &c) : x(a), y(b), z(c) {}
     __forceinline LinearSpace(const LinearSpace &space) : x(space.x), y(space.y), z(space.z) {}
+    __forceinline LinearSpace &operator=(const LinearSpace &other)
+    {
+        x = other.x;
+        y = other.y;
+        z = other.z;
+        return *this;
+    }
 
     static LinearSpace<T> FromXZ(const Vec3<T> &x, const Vec3<T> &z)
     {
@@ -482,6 +500,38 @@ struct LinearSpace
         return FMA(Vec3<T>(a.x), x, FMA(Vec3<T>(a.y), y, Vec3<T>(a.z) * z));
     }
 };
+
+template <typename T>
+LinearSpace<T> operator/(const LinearSpace<T> &l, f32 d)
+{
+    return LinearSpace<T>(l.x / d, l.y / d, l.z / d);
+}
+
+template <typename T>
+LinearSpace<T>& operator/=(LinearSpace<T> &l, f32 d)
+{
+    l = l / d;
+    return l;
+}
+
+template <typename T>
+LinearSpace<T> Transpose(const LinearSpace<T> &a)
+{
+    return LinearSpace<T>(Vec3<T>(a.x[0], a.y[0], a.z[0]), Vec3<T>(a.x[1], a.y[1], a.z[1]), 
+                        Vec3<T>(a.x[2], a.y[2], a.z[2]));
+}
+
+template <typename T>
+__forceinline f32 Determinant(const LinearSpace<T> &t)
+{
+    return Dot(t.x, Cross(t.y, t.z));
+}
+
+template <typename T>
+__forceinline Vec3f operator*(const LinearSpace<T> &m, const Vec3f &v)
+{
+    return FMA(Vec3<T>(v.x), m.x, FMA(Vec3<T>(v.y), m.y, Vec3<T>(v.z) * m.z));
+}
 
 typedef LinearSpace<f32> LinearSpace3f;
 typedef LinearSpace<LaneNF32> LinearSpace3fn;
@@ -521,6 +571,8 @@ struct AffineSpace
                 f32 e, f32 f, f32 g, f32 h,
                 f32 i, f32 j, f32 k, f32 l)
         : c0(a, e, i), c1(b, f, j), c2(c, g, k), c3(d, h, l) {}
+    AffineSpace(const LinearSpace3f &l, const Vec3f &t) 
+        : c0(l.x), c1(l.y), c2(l.z), c3(t) {}
 
     Vec3f &operator[](u32 i)
     {
@@ -604,13 +656,6 @@ struct AffineSpace
                            0, 1, 0, b,
                            0, 0, 1, c);
     }
-    __forceinline static AffineSpace Transpose3x3(const AffineSpace &space)
-    {
-        return AffineSpace(Vec3f(space.c0.x, space.c1.x, space.c2.x),
-                           Vec3f(space.c0.y, space.c1.y, space.c2.y),
-                           Vec3f(space.c0.z, space.c1.z, space.c2.z),
-                           0.f);
-    }
 };
 
 __forceinline Vec3f operator*(const AffineSpace &t, const Vec3f &v)
@@ -628,11 +673,6 @@ __forceinline Lane4F32 operator*(const AffineSpace &t, const Lane4F32 &v)
 }
 
 __forceinline Lane4F32 Transform(const AffineSpace &t, const Lane4F32 &v) { return t * v; }
-
-__forceinline AffineSpace operator*(const AffineSpace &a, const AffineSpace &b)
-{
-    return AffineSpace(a * b.c0, a * b.c1, a * b.c2, a * b.c3);
-}
 
 __forceinline bool operator==(const AffineSpace &a, const AffineSpace &b)
 {
@@ -680,10 +720,31 @@ __forceinline Vec3f TransformV(const AffineSpace &t, const Vec3f &v)
 }
 __forceinline Vec3f TransformP(const AffineSpace &a, const Vec3f &b) { return a * b; }
 
+__forceinline AffineSpace operator*(const AffineSpace &a, const AffineSpace &b)
+{
+    return AffineSpace(TransformV(a, b.c0), TransformV(a, b.c1), TransformV(a, b.c2),
+            TransformP(a, b.c3));
+}
+
+__forceinline f32 Determinant(const AffineSpace &a)
+{
+    return Dot(a.c0, Cross(a.c1, a.c2));
+}
+
 __forceinline Vec3f ApplyInverse(const AffineSpace &t, const Vec3f &v)
 {
-    AffineSpace inv(Cross(t.c1, t.c2), Cross(t.c2, t.c0), Cross(t.c0, t.c1), Vec3f(0.f));
-    return TransformV(inv, v - t.c3);
+    Mat3 inv = Transpose(Mat3(Cross(t.c1, t.c2), Cross(t.c2, t.c0), Cross(t.c0, t.c1)));
+    f32 det = Determinant(t);
+    Assert(det != 0.f);
+    return inv / det * (v - t.c3);
+}
+
+__forceinline Vec3f ApplyInverseV(const AffineSpace &t, const Vec3f &v)
+{
+    Mat3 inv = Transpose(Mat3(Cross(t.c1, t.c2), Cross(t.c2, t.c0), Cross(t.c0, t.c1)));
+    f32 det = Determinant(t);
+    Assert(det != 0.f);
+    return inv / det * v;
 }
 
 // takes a normalized vector
@@ -699,11 +760,12 @@ __forceinline AffineSpace Frame(const Vec3f &n)
 
 __forceinline AffineSpace Inverse(const AffineSpace &a)
 {
-    AffineSpace result(Cross(a.c1, a.c2), Cross(a.c2, a.c0), Cross(a.c0, a.c1), Vec3f(0.f));
-    Vec3f translation = Vec3f(-Dot(a.c3, result.c0), -Dot(a.c3, result.c1), -Dot(a.c3, result.c2));
-    result            = AffineSpace::Transpose3x3(result);
-    result.c3         = translation;
-    return result;
+    LinearSpace3f result = Transpose(LinearSpace3f(Cross(a.c1, a.c2), Cross(a.c2, a.c0), Cross(a.c0, a.c1)));
+    f32 det = Determinant(a);
+    Assert(det != 0.f);
+    result /= det;
+    Vec3f translation = result * a.c3;
+    return AffineSpace(result, -translation);
 }
 
 } // namespace rt
