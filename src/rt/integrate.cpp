@@ -51,17 +51,14 @@ DiffuseBxDF DiffuseMaterial<RflShader>::GetBxDF(SurfaceInteractionsN &intr, Diff
 }
 
 template <typename RflShader>
-DiffuseBxDF DiffuseMaterial<RflShader>::GetBxDF(SurfaceInteraction &intr,
-                                                Vec4lfn &filterWidths,
-                                                SampledWavelengthsN &lambda)
+DiffuseBxDF DiffuseMaterial<RflShader>::GetBxDF(SurfaceInteraction &intr, Vec4lfn &filterWidths, SampledWavelengthsN &lambda)
 {
     return DiffuseMaterial::GetBxDF(intr, &this);
 }
 
 template <typename RflShader, typename TrmShader>
 DiffuseTransmissionBxDF DiffuseTransmissionMaterial<RflShader, TrmShader>::GetBxDF(SurfaceInteractionsN &intr,
-                                                                                   DiffuseTransmissionMaterial **materials,
-                                                                                   Vec4lfn &filterWidths,
+                                                                                   DiffuseTransmissionMaterial **materials, Vec4lfn &filterWidths,
                                                                                    SampledWavelengthsN &lambda)
 {
     RflShader *rflShaders[IntN];
@@ -77,17 +74,14 @@ DiffuseTransmissionBxDF DiffuseTransmissionMaterial<RflShader, TrmShader>::GetBx
 }
 
 template <typename RflShader, typename TrmShader>
-DiffuseTransmissionBxDF DiffuseTransmissionMaterial<RflShader, TrmShader>::GetBxDF(SurfaceInteractionsN &intr,
-                                                                                   Vec4lfn &filterWidths,
+DiffuseTransmissionBxDF DiffuseTransmissionMaterial<RflShader, TrmShader>::GetBxDF(SurfaceInteractionsN &intr, Vec4lfn &filterWidths,
                                                                                    SampledWavelengthsN &lambda)
 {
     return DiffuseTransmissionMaterial::GetBxDF(intr, &this);
 }
 
 template <typename RghShader, typename IORShader>
-DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(SurfaceInteractionsN &intr,
-                                                                 DielectricMaterial **materials,
-                                                                 Vec4lfn &filterWidths,
+DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(SurfaceInteractionsN &intr, DielectricMaterial **materials, Vec4lfn &filterWidths,
                                                                  SampledWavelengthsN &lambda)
 {
     RghShader *rghShaders[IntN];
@@ -111,9 +105,7 @@ DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(SurfaceInteract
 }
 
 template <typename RghShader, typename IORShader>
-DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(SurfaceInteractionsN &intr,
-                                                                 Vec4lfn &filterWidths,
-                                                                 SampledWavelengthsN &lambda)
+DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(SurfaceInteractionsN &intr, Vec4lfn &filterWidths, SampledWavelengthsN &lambda)
 {
     return DielectricMaterial::GetBxDF(intr, &this);
 }
@@ -153,9 +145,7 @@ struct RayQueue
         {
         }
     }
-    void Push()
-    {
-    }
+    void Push() {}
 };
 
 // TODO: one for each type of material
@@ -298,8 +288,7 @@ struct ShadingQueuePtex
                 Vec3IF32 wi = Normalize(sample.samplePoint - aosoaIntrs.p);
 
                 LaneNF32 scatterPdf;
-                SampledSpectrum f = BxDF::EvaluateSample(-ray.d, wi, scatterPdf, TransportMode::Radiance) *
-                                    AbsDot(aosoaIntrs.shading.n, wi);
+                SampledSpectrum f = BxDF::EvaluateSample(-ray.d, wi, scatterPdf, TransportMode::Radiance) * AbsDot(aosoaIntrs.shading.n, wi);
                 // TODO: need to == with 0.f for every wavelength, and then combine together
                 mask &= f.GetMask();
 
@@ -425,8 +414,7 @@ void Render(Arena *arena, RenderParams2 &params) // Vec2i imageDim, Vec2f filter
                     SampledWavelengths lambda = SampleVisible(sampler.Get1D());
                     // box filter
                     Vec2f u            = sampler.Get2D();
-                    Vec2f filterSample = Vec2f(Lerp(u[0], -filterRadius.x, filterRadius.x),
-                                               Lerp(u[1], -filterRadius.y, filterRadius.y));
+                    Vec2f filterSample = Vec2f(Lerp(u[0], -filterRadius.x, filterRadius.x), Lerp(u[1], -filterRadius.y, filterRadius.y));
                     // converts from continuous to discrete coordinates
                     filterSample += Vec2f(0.5f, 0.5f) + Vec2f(pPixel);
                     Vec2f pLens = sampler.Get2D();
@@ -466,11 +454,8 @@ void Render(Arena *arena, RenderParams2 &params) // Vec2i imageDim, Vec2f filter
                 f32 b = 255.f * rgb.z;
                 f32 a = 255.f;
 
-                u32 color = (RoundFloatToU32(a) << 24) |
-                            (RoundFloatToU32(r) << 16) |
-                            (RoundFloatToU32(g) << 8) |
-                            (RoundFloatToU32(b) << 0);
-                *out++ = color;
+                u32 color = (RoundFloatToU32(a) << 24) | (RoundFloatToU32(r) << 16) | (RoundFloatToU32(g) << 8) | (RoundFloatToU32(b) << 0);
+                *out++    = color;
             }
         }
     });
@@ -488,11 +473,12 @@ f32 PowerHeuristic(u32 numA, f32 pdfA, u32 numB, f32 pdfB)
 void EvaluateMaterial(Arena *arena, SurfaceInteraction &si, BSDF *bsdf, SampledWavelengths &lambda)
 {
     using MaterialTypes = Scene2::MaterialTypes;
-    Dispatch([&](auto t) {
-        using MaterialType = std::decay_t<decltype(t)>;
-        MaterialType::Evaluate(arena, si, lambda, bsdf);
-    },
-             Scene2::MaterialTypes(), MaterialHandle::GetType(si.materialIDs));
+    Dispatch(
+        [&](auto t) {
+            using MaterialType = std::decay_t<decltype(t)>;
+            MaterialType::Evaluate(arena, si, lambda, bsdf);
+        },
+        Scene2::MaterialTypes(), MaterialHandle::GetType(si.materialIDs));
 }
 
 template <typename Sampler>
@@ -523,7 +509,8 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
             if (specularBounce || depth == 0)
             {
                 ForEachTypeSubset(
-                    scene->lights, [&](auto *array, u32 count) {
+                    scene->lights,
+                    [&](auto *array, u32 count) {
                         using Light = std::remove_reference_t<decltype(*array)>;
                         for (u32 i = 0; i < count; i++)
                         {
@@ -537,7 +524,8 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
             else
             {
                 ForEachTypeSubset(
-                    scene->lights, [&](auto *array, u32 count) {
+                    scene->lights,
+                    [&](auto *array, u32 count) {
                         using Light = std::remove_reference_t<decltype(*array)>;
                         for (u32 i = 0; i < count; i++)
                         {
@@ -630,9 +618,9 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         if (sample.IsTransmissive()) etaScale *= Sqr(sample.eta);
 
         // Spawn new ray
-        prevSi = si;
-        ray.o = si.p;
-        ray.d = sample.wi;
+        prevSi   = si;
+        ray.o    = si.p;
+        ray.d    = sample.wi;
         ray.tFar = pos_inf;
 
         // Russian Roulette
