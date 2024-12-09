@@ -46,16 +46,16 @@ if "%1" == "release" (
     if "%2" == "release" (
         call :AddReleaseFlags %1
     ) else (
-        call :AddDebugFlags %1
+        if "%1" == "reldebug" (
+            call :AddRelDebugFlags
+        ) else (
+            if "%2" == "reldebug" (
+                call :AddRelDebugFlags %1
+            ) else (
+                call :AddDebugFlags %1
+            )
+        )
     )
-) 
-if "%1" == "reldebug" (
-    call :AddDebugFlags
-    call :AddReleaseFlags
-) 
-if "%2" == "reldebug" (
-    call :AddDebugFlags %1
-    call :AddReleaseFlags %1
 ) 
 
 set DefaultCompilerFlags=-FC -Zi -EHsc -nologo -Oi -WX -W4 -wd4305 -wd4324 -wd4127 -wd4700 -wd4701 -wd4505 -wd4189 -wd4201 -wd4100
@@ -110,6 +110,15 @@ exit /b
 echo Compiling Release
 if "%1" == "cl" (
     set Definitions=%Definitions% -O3
+) else (
+    set Definitions=%Definitions% -O2
+)
+exit /b
+
+:AddRelDebugFlags 
+echo Compiling RelDebug (currently only works for clang)
+if "%1" == "cl" (
+    set Definitions=%Definitions% -O3 -g
 ) else (
     set Definitions=%Definitions% -O2
 )

@@ -556,7 +556,6 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
             }
 
             break;
-            // sample infinite area lights, environment map, and return
         }
         // If intersected with a light
         if (si.lightIndices)
