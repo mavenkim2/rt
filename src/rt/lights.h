@@ -142,16 +142,16 @@ struct PiecewiseConstant1D
     f32 funcInt;
     f32 minD, maxD;
     PiecewiseConstant1D() {}
-    PiecewiseConstant1D(Arena *arena, f32 *values, u32 numValues, f32 minD, f32 maxD)
+    PiecewiseConstant1D(Arena *arena, const f32 *values, u32 numValues, f32 minD, f32 maxD)
         : num(numValues), func(values), minD(minD), maxD(maxD)
     {
         num       = numValues;
         cdf       = PushArrayNoZero(arena, f32, numValues + 1);
         f32 total = 0.f;
+        cdf[0] = 0.f;
         for (u32 i = 1; i <= numValues; i++)
         {
-            values[i - 1] = Abs(values[i - 1]);
-            total += values[i - 1];
+            total += Abs(values[i - 1]);
             cdf[i] = total;
         }
 
@@ -173,7 +173,7 @@ struct PiecewiseConstant1D
         if (offset) *offset = index;
         if (pdf) *pdf = func[index] / funcInt;
         f32 cdfRange = cdf[index + 1] - cdf[index];
-        f32 du       = (u - cdf[index]) * cdfRange > 0.f ? 1.f / cdfRange : 0.f;
+        f32 du       = (u - cdf[index]) * (cdfRange > 0.f ? 1.f / cdfRange : 0.f);
         return Lerp((index + du) / f32(num), minD, maxD);
     }
 };
@@ -204,13 +204,14 @@ struct PiecewiseConstant2D
         f32 pdfs[2];
         Vec2u p;
         f32 d1 = marginal.Sample(u[1], &pdfs[1], &p[1]);
-        f32 d0 = conditional[p[1]].Sample(u[1], &pdfs[0], &p[0]);
+        f32 d0 = conditional[p[1]].Sample(u[0], &pdfs[0], &p[0]);
         if (pdf) *pdf = pdfs[0] * pdfs[1];
         if (offset) *offset = p;
         return Vec2f(d0, d1);
     }
     f32 PDF(Vec2f u) const
     {
+        Assert(maxD != minD);
         u32 sizeU = conditional[0].num;
         u32 sizeV = marginal.num;
         u         = (u - minD) / (maxD - minD);
@@ -229,7 +230,7 @@ struct ImageInfiniteLight
     PiecewiseConstant2D distribution;
     PiecewiseConstant2D compensatedDistribution;
 
-    ImageInfiniteLight(Arena *arena, Image image);
+    ImageInfiniteLight(Arena *arena, Image image, const AffineSpace *renderFromLight, const RGBColorSpace *imageColorSpace, f32 sceneRadius, f32 scale = 1.f);
     LightFunctionsInf(ImageInfiniteLight);
     SampledSpectrum ImageLe(Vec2f uv, const SampledWavelengths &lambda) const;
 };

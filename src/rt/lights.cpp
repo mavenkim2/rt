@@ -385,10 +385,32 @@ LE_INF(UniformInfiniteLight)
     return light->scale * light->Lemit->Sample(lambda);
 }
 
-ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image) : image(image)
+// ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image) : image(image)
+ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image, const AffineSpace *renderFromLight, const RGBColorSpace *imageColorSpace, f32 sceneRadius, f32 scale)
+    :image(image), renderFromLight(renderFromLight), imageColorSpace(imageColorSpace), sceneRadius(sceneRadius), scale(scale) 
 {
     f32 *values  = image.GetSamplingDistribution(arena);
     distribution = PiecewiseConstant2D(arena, values, image.width, image.height, Vec2f(0.f, 0.f), Vec2f(1.f, 1.f));
+
+    u32 size = image.width * image.height;
+    f32 div = 1.f / size;
+    f32 avg = 0.f;
+    f32 first = values[0];
+    bool allSame = true;
+
+    for (u32 i = 0; i < size; i++)
+    {
+        if (allSame && i != 0 && values[i] != first)
+        {
+            allSame = false;
+        }
+        avg += values[i] * div;
+    }
+    for (u32 i = 0; i < size; i++)
+    {
+        values[i] = Max(0.f, values[i] - avg);
+    }
+    compensatedDistribution = PiecewiseConstant2D(arena, values, image.width, image.height, Vec2f(0.f, 0.f), Vec2f(1.f, 1.f));
 }
 
 SampledSpectrum ImageInfiniteLight::ImageLe(Vec2f uv, const SampledWavelengths &lambda) const

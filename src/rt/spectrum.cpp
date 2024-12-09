@@ -600,7 +600,7 @@ const RGBColorSpace *RGBColorSpace::sRGB;
 void RGBColorSpace::Init(Arena *arena)
 {
     sRGB = PushStructConstruct(arena, RGBColorSpace)(Vec2f(.64, .33), Vec2f(.3, .6), Vec2f(.15, .06),
-                                                     GetNamedSpectrum("stdilllum-D65"), RGBToSpectrumTable::sRGB);
+                                                     GetNamedSpectrum("stdillum-D65"), RGBToSpectrumTable::sRGB);
 }
 
 Vec3f RGBToSpectrumTable::operator()(Vec3f rgb) const

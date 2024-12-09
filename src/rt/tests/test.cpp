@@ -522,6 +522,7 @@ void TriangleMeshBVHTest(Arena *arena)
     // - load the scene description and properly instantiate lights/materials/textures
     // - render the scene with all quad meshes, then add support for the bspline curves
 
+    scene_ = PushStruct(arena, Scene2);
     Scene2 *scene = GetScene();
     // TempArena temp    = ScratchStart(0, 0);
     u32 numProcessors = OS_NumProcessors();
@@ -530,36 +531,6 @@ void TriangleMeshBVHTest(Arena *arena)
     {
         arenas[i] = ArenaAlloc(16); // ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
     }
-
-    TriangleMesh mesh = LoadPLY(arena, "data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
-    u32 numFaces      = mesh.numIndices / 3;
-    Bounds geomBounds;
-    Bounds centBounds;
-    PrimRefCompressed *refs = GenerateAOSData(arena, &mesh, numFaces, geomBounds, centBounds);
-
-    BuildSettings settings;
-    settings.intCost = 0.3f;
-
-    RecordAOSSplits record;
-    record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
-    record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
-    record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
-
-    BVHNodeN bvh          = BuildQuantizedTriSBVH(settings, arenas, &mesh, refs, record);
-    scene->nodePtr        = bvh;
-    scene->triangleMeshes = &mesh;
-    scene->numTriMeshes   = 1;
-
-    ConstantTexture<1> ct(0.f);
-    ConstantSpectrum spec(1.1f);
-    DielectricMaterialBase mat(DielectricMaterialConstant(ct, spec), NullShader());
-    scene->materials.Set<DielectricMaterialBase>(&mat, 1);
-    Scene2::PrimitiveIndices ids[] = {
-        Scene2::PrimitiveIndices(LightHandle(), MaterialHandle(MT_DielectricMaterial, 0)),
-    };
-    scene->primIndices = ids;
-    // PerformanceCounter counter = OS_StartCounter();
-    // f32 time                   = OS_GetMilliseconds(counter);
 
     // Camera
     u32 width  = 1920;
@@ -585,6 +556,52 @@ void TriangleMeshBVHTest(Arena *arena)
     Mat4 rasterFromCamera = rasterFromNDC * NDCFromCamera;
     Mat4 cameraFromRaster = Inverse(rasterFromCamera);
 
+    // ocean mesh
+    TriangleMesh mesh = LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
+    u32 numFaces      = mesh.numIndices / 3;
+    // convert to "render space" (i.e. world space centered around the camera)
+    for (u32 i = 0; i < mesh.numVertices; i++)
+    {
+        mesh.p[i] -= pCamera;
+    }
+    Bounds geomBounds;
+    Bounds centBounds;
+    PrimRefCompressed *refs = GenerateAOSData(arena, &mesh, numFaces, geomBounds, centBounds);
+
+    // environment map
+    f32 sceneRadius = 0.5f * Max(geomBounds.maxP[0] - geomBounds.minP[0], 
+                    Max(geomBounds.maxP[1] - geomBounds.minP[1], geomBounds.maxP[2] - geomBounds.minP[2]));
+    AffineSpace renderFromLight =
+        AffineSpace::Scale(-1, 1, 1) * AffineSpace::Rotate(Vec3f(-1, 0, 0), Radians(90)) * AffineSpace::Rotate(Vec3f(0, 0, 1), Radians(65));
+    renderFromLight = AffineSpace::Translate(-pCamera) * renderFromLight;
+
+    ImageInfiniteLight infLight(arena, LoadFile("../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png"), &renderFromLight, RGBColorSpace::sRGB, sceneRadius);
+    scene->lights.Set<ImageInfiniteLight>(&infLight, 1);
+
+    BuildSettings settings;
+    settings.intCost = 0.3f;
+
+    RecordAOSSplits record;
+    record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+    record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+    record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
+
+    BVHNodeN bvh          = BuildQuantizedTriSBVH(settings, arenas, &mesh, refs, record);
+    scene->nodePtr        = bvh;
+    scene->triangleMeshes = &mesh;
+    scene->numTriMeshes   = 1;
+
+    ConstantTexture<1> ct(0.f);
+    ConstantSpectrum spec(1.1f);
+    DielectricMaterialBase mat(DielectricMaterialConstant(ct, spec), NullShader());
+    scene->materials.Set<DielectricMaterialBase>(&mat, 1);
+    Scene2::PrimitiveIndices ids[] = {
+        Scene2::PrimitiveIndices(LightHandle(), MaterialHandle(MT_DielectricMaterial, 0)),
+    };
+    scene->primIndices = ids;
+    // PerformanceCounter counter = OS_StartCounter();
+    // f32 time                   = OS_GetMilliseconds(counter);
+
     RenderParams2 params;
     params.cameraFromRaster = cameraFromRaster;
     params.renderFromCamera = renderFromCamera;
@@ -597,6 +614,6 @@ void TriangleMeshBVHTest(Arena *arena)
     params.focalLength      = 1675.3383;
 
     Render(arena, params);
-} // namespace rt
+}
 
 } // namespace rt

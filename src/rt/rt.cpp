@@ -115,7 +115,6 @@ f32 *Image::GetSamplingDistribution(Arena *arena)
         {
             // Is bpp correct?
             f32 *values = (f32 *)ptr;
-            Assert(0);
             result[count++] = (values[0] + values[1] + values[2]) / 3.f;
             ptr += bytesPerPixel;
         }
@@ -1088,6 +1087,8 @@ int main(int argc, char *argv[])
     scheduler.Init(numProcessors);
 
     const u32 count = 3000000;
+
+    TriangleMeshBVHTest(arena);
 
     // VolumeRenderingTest(arena, "wdas_cloud_quarter.nvdb");
     // BVHSortingTest();

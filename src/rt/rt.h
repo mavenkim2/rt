@@ -142,8 +142,8 @@ Image LoadFile(const char *file)
 {
     Image image;
     i32 nComponents;
-    image.contents      = stbi_load(file, &image.width, &image.height, &nComponents, 0);
-    image.bytesPerPixel = nComponents;
+    image.contents      = (u8*)stbi_loadf(file, &image.width, &image.height, &nComponents, 0);
+    image.bytesPerPixel = nComponents * sizeof(f32);
     return image;
 }
 

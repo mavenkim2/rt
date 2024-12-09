@@ -11,9 +11,9 @@ set Definitions=-D NOMINMAX -D PTEX_STATIC
 if not exist .\src\gen\rgbspectrum_srgb.cpp (
     IF NOT EXIST build mkdir build
     pushd build 
-    clang++ -std=c++17 -march=native -D NOMINMAX -o rgb2spec.exe ../src/rt/rgb2spec.cpp
-    IF NOT EXIST ../src/gen (
-        pushd ../src
+    clang++ -std=c++17 -march=native -D NOMINMAX -O3 -o rgb2spec.exe ../src/rt/rgb2spec.cpp
+    IF NOT EXIST ..\src\gen (
+        pushd ..\src
         mkdir gen
         popd
     )
@@ -89,14 +89,15 @@ if "%1" == "cl" (
 REM cl %DefaultCompilerFlags% ../src/rgb2spec.cpp /std:c++17 /link %DefaultLinkerFlags% /out:rgb2spec.exe
 popd
 
-cd "src"
-w:\cloc.exe --fullpath --exclude-dir=third_party,tables,gen *
-cd ..
+REM cd "src"
+REM w:\cloc.exe --fullpath --exclude-dir=third_party,tables,gen *
+REM cd ..
 
 popd
 exit /b
 
 :AddDebugFlags
+echo Compiling Debug
 set Definitions=%Definitions% -D DEBUG -D TRACK_MEMORY 
 if "%1" == "cl" (
     set Definitions=%Definitions% -g
@@ -106,6 +107,7 @@ if "%1" == "cl" (
 exit /b
 
 :AddReleaseFlags 
+echo Compiling Release
 if "%1" == "cl" (
     set Definitions=%Definitions% -O3
 ) else (

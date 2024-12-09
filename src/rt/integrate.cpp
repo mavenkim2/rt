@@ -393,8 +393,8 @@ void Render(Arena *arena, RenderParams2 &params) // Vec2i imageDim, Vec2f filter
     f32 focalLength        = params.focalLength;
 
     // parallel for over tiles
-    u32 tileWidth  = 32;
-    u32 tileHeight = 32;
+    u32 tileWidth  = 64;
+    u32 tileHeight = 64;
     u32 tileCountX = (width + tileWidth - 1) / tileWidth;
     u32 tileCountY = (width + tileHeight - 1) / tileHeight;
     u32 taskCount  = tileCountX * tileCountY;
