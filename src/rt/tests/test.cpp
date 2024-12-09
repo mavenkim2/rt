@@ -514,6 +514,9 @@ void TriangleMeshBVHTest(Arena *arena)
     // - have the intersector handle the case where there are no geomIDs (only primIDs)
 
     // TODO:
+    // - add node type when building bvh
+    // - make sure traversal code works
+    // - add light index, etc when intersecting
 
     // once the ocean is rendered
     // - change the bvh build process to support N-wide leaves (need to change the sah to account for this)

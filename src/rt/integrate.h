@@ -439,6 +439,7 @@ struct Ray2
 
     Ray2() {}
     Ray2(const Vec3f &o, const Vec3f &d) : o(o), d(d) {}
+    Ray2(const Vec3f &o, const Vec3f &d, f32 tFar) : o(o), d(d), tFar(tFar) {}
     Vec3f operator()(f32 t) const
     {
         return o + t * d;
@@ -447,12 +448,18 @@ struct Ray2
 
 Ray2 Transform(const Mat4 &m, const Ray2 &r)
 {
-    return Ray2(TransformP(m, r.o), TransformV(m, r.d));
+    Ray2 newRay = r;
+    newRay.o = TransformP(m, r.o);
+    newRay.d = TransformV(m, r.d);
+    return newRay;
 }
 
 Ray2 Transform(const AffineSpace &m, const Ray2 &r)
 {
-    return Ray2(TransformP(m, r.o), TransformV(m, r.d));
+    Ray2 newRay = r;
+    newRay.o = TransformP(m, r.o);
+    newRay.d = TransformV(m, r.d);
+    return newRay;
 }
 
 struct RayDifferential

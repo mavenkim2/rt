@@ -55,7 +55,7 @@ struct TravRay
     LaneF32<K> tFar;
     TravRay(Ray2 &r) : o(Vec3lf<K>(r.o)), invRayD(Vec3lf4(Select(r.d.x == 0, 0, 1 / r.d.x),
                                                           Select(r.d.y == 0, 0, 1 / r.d.y),
-                                                          Select(r.d.z == 0, 0, 1 / r.d.z))) {}
+                                                          Select(r.d.z == 0, 0, 1 / r.d.z))), tFar(r.tFar) {}
 };
 
 template <u32 K, u32 types, typename Primitive>
@@ -165,9 +165,32 @@ struct BVHIntersector<4, types, Intersector>
         }
         return result;
     }
+    // TODO: make shadow rays faster?
     static bool Occluded(Ray2 &ray, BVHNode4 bvhNode)
     {
-        return true;
+        TravRay<4> r(ray);
+
+        StackEntry stack[256];
+        i32 stackPtr = 1;
+        stack[0]     = {bvhNode, ray.tFar};
+        bool result  = false;
+        while (stackPtr > 0)
+        {
+            Assert(stackPtr <= ArrayLength(stack));
+            StackEntry entry = stack[--stackPtr];
+            if (entry.dist > ray.tFar) continue;
+
+            if (entry.ptr.IsLeaf())
+            {
+                SurfaceInteraction itr;
+                result |= Intersector::Intersect(ray, entry.ptr, itr);
+                if (result) return result;
+                continue;
+            }
+
+            BVHTraverser<4, types, typename Intersector::Primitive>::Traverse(entry, stack, stackPtr, r);
+        }
+        return false;
     }
 };
 

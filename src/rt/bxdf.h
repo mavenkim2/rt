@@ -448,6 +448,139 @@ struct DielectricBxDF
 
     DielectricBxDF() = delete;
     DielectricBxDF(const LaneNF32 &eta, const TrowbridgeReitzDistribution &mfDistrib) : eta(eta), mfDistrib(mfDistrib) {}
+
+    // TODO: simd this
+    BSDFSample GenerateSample(const Vec3f& wo, const f32& uc, const Vec2f& u, TransportMode mode, BxDFFlags sampleFlags) const 
+    {
+        if (eta == 1 || mfDistrib.EffectivelySmooth()) {
+            // Sample perfect specular dielectric BSDF
+            f32 R = FrDielectric(CosTheta(wo), eta), T = 1 - R;
+            // Compute probabilities _pr_ and _pt_ for sampling reflection and transmission
+            f32 pr = R, pt = T;
+            if (!(sampleFlags & BxDFFlags::Reflection))
+                pr = 0;
+            if (!(sampleFlags & BxDFFlags::Transmission))
+                pt = 0;
+            if (pr == 0 && pt == 0)
+                return {};
+
+            if (uc < pr / (pr + pt)) {
+                // Sample perfect specular dielectric BRDF
+                Vec3f wi(-wo.x, -wo.y, wo.z);
+                SampledSpectrum fr(R / AbsCosTheta(wi));
+                return BSDFSample(fr, wi, pr / (pr + pt), (u32)BxDFFlags::SpecularReflection);
+
+            } else {
+                // Sample perfect specular dielectric BTDF
+                // Compute ray direction for specular transmission
+                Vec3f wi;
+                f32 etap;
+                bool valid = Refract(wo, Vec3f(0, 0, 1), eta, &etap, &wi);
+                if (!valid)
+                    return {};
+
+                SampledSpectrum ft(T / AbsCosTheta(wi));
+                // Account for non-symmetry with transmission to different medium
+                if (mode == TransportMode::Radiance)
+                    ft /= Sqr(etap);
+
+                return BSDFSample(ft, wi, pt / (pr + pt), (u32)BxDFFlags::SpecularTransmission,
+                                  etap);
+            }
+
+        } else {
+            // Sample rough dielectric BSDF
+            Vec3f wm = mfDistrib.Sample_wm(wo, u);
+            f32 R = FrDielectric(Dot(wo, wm), eta);
+            f32 T = 1 - R;
+            // Compute probabilities _pr_ and _pt_ for sampling reflection and transmission
+            f32 pr = R, pt = T;
+            if (!(sampleFlags & BxDFFlags::Reflection))
+                pr = 0;
+            if (!(sampleFlags & BxDFFlags::Transmission))
+                pt = 0;
+            if (pr == 0 && pt == 0)
+                return {};
+
+            f32 pdf;
+            if (uc < pr / (pr + pt)) {
+                // Sample reflection at rough dielectric interface
+                Vec3f wi = Reflect(wo, wm);
+                if (!SameHemisphere(wo, wi))
+                    return {};
+                // Compute PDF of rough dielectric reflection
+                pdf = mfDistrib.PDF(wo, wm) / (4 * AbsDot(wo, wm)) * pr / (pr + pt);
+
+                Assert(!IsNaN(pdf));
+                SampledSpectrum f(mfDistrib.D(wm) * mfDistrib.G(wo, wi) * R /
+                                  (4 * CosTheta(wi) * CosTheta(wo)));
+                return BSDFSample(f, wi, pdf, (u32)BxDFFlags::GlossyReflection);
+
+            } else {
+                // Sample transmission at rough dielectric interface
+                f32 etap;
+                Vec3f wi;
+                bool tir = !Refract(wo, (Vec3f)wm, eta, &etap, &wi);
+                if (SameHemisphere(wo, wi) || wi.z == 0 || tir)
+                    return {};
+                // Compute PDF of rough dielectric transmission
+                f32 denom = Sqr(Dot(wi, wm) + Dot(wo, wm) / etap);
+                f32 dwm_dwi = AbsDot(wi, wm) / denom;
+                pdf = mfDistrib.PDF(wo, wm) * dwm_dwi * pt / (pr + pt);
+
+                Assert(!IsNaN(pdf));
+                // Evaluate BRDF and return _BSDFSample_ for rough transmission
+                SampledSpectrum ft(T * mfDistrib.D(wm) * mfDistrib.G(wo, wi) *
+                                   Abs(Dot(wi, wm) * Dot(wo, wm) /
+                                            (CosTheta(wi) * CosTheta(wo) * denom)));
+                // Account for non-symmetry with transmission to different medium
+                if (mode == TransportMode::Radiance)
+                    ft /= Sqr(etap);
+
+                return BSDFSample(ft, wi, pdf, (u32)BxDFFlags::GlossyTransmission, etap);
+            }
+        }
+    }
+
+    SampledSpectrum EvaluateSample(const Vec3f& wo, const Vec3f& wi, f32 &pdf, TransportMode mode) const 
+    {
+        if (eta == 1 || mfDistrib.EffectivelySmooth())
+            return SampledSpectrum(0.f);
+        // Evaluate rough dielectric BSDF
+        // Compute generalized half vector _wm_
+        f32 cosTheta_o = CosTheta(wo), cosTheta_i = CosTheta(wi);
+        bool reflect = cosTheta_i * cosTheta_o > 0;
+        float etap = 1;
+        if (!reflect)
+            etap = cosTheta_o > 0 ? eta : (1 / eta);
+        Vec3f wm = wi * etap + wo;
+        if (cosTheta_i == 0 || cosTheta_o == 0 || LengthSquared(wm) == 0)
+            return {};
+        wm = FaceForward(Normalize(wm), Vec3f(0, 0, 1));
+
+        // Discard backfacing microfacets
+        if (Dot(wm, wi) * cosTheta_i < 0 || Dot(wm, wo) * cosTheta_o < 0)
+            return {};
+
+        f32 F = FrDielectric(Dot(wo, wm), eta);
+        if (reflect) {
+            // Compute reflection at rough dielectric interface
+            return SampledSpectrum(mfDistrib.D(wm) * mfDistrib.G(wo, wi) * F /
+                                   std::abs(4 * cosTheta_i * cosTheta_o));
+
+        } else {
+            // Compute transmission at rough dielectric interface
+            f32 denom = Sqr(Dot(wi, wm) + Dot(wo, wm) / etap) * cosTheta_i * cosTheta_o;
+            f32 ft = mfDistrib.D(wm) * (1 - F) * mfDistrib.G(wo, wi) *
+                       std::abs(Dot(wi, wm) * Dot(wo, wm) / denom);
+            // Account for non-symmetry with transmission to different medium
+            if (mode == TransportMode::Radiance)
+                ft /= Sqr(etap);
+
+            return SampledSpectrum(ft);
+        }
+    }
+#if 0
     SampledSpectrumN EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf, TransportMode mode) const
     {
         MaskF32 mask = !(eta == 1 || mfDistrib.EffectivelySmooth());
@@ -598,6 +731,7 @@ struct DielectricBxDF
         }
         return BSDFSample(f, wi, pdf, flags, etap);
     }
+#endif
     LaneNU32 Flags() const
     {
         LaneNU32 flags = Select(eta == 1.f, u32(BxDFFlags::Transmission), u32(BxDFFlags::RT));

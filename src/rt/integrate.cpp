@@ -434,7 +434,7 @@ void Render(Arena *arena, RenderParams2 &params) // Vec2i imageDim, Vec2f filter
                     Vec2f pLens = sampler.Get2D();
 
                     Vec3f pCamera = TransformP(cameraFromRaster, Vec3f(filterSample, 0.f));
-                    Ray2 ray(Vec3f(0.f, 0.f, 0.f), Normalize(pCamera));
+                    Ray2 ray(Vec3f(0.f, 0.f, 0.f), Normalize(pCamera), pos_inf);
                     if (lensRadius > 0.f)
                     {
                         pLens = lensRadius * SampleUniformDiskConcentric(pLens);
@@ -513,10 +513,6 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
 
     for (;;)
     {
-        if (depth >= maxDepth)
-        {
-            break;
-        }
         SurfaceInteraction si;
         // TODO: not hardcoded
         bool intersect = BVHTriangleIntersectorCmp4::Intersect(ray, scene->nodePtr, si);
@@ -586,6 +582,11 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
             }
         }
 
+        if (depth >= maxDepth)
+        {
+            break;
+        }
+
         TempArena temp = ScratchStart(0, 0);
         // BSDF bsdf; // = si.GetBSDF();
         BSDF bsdf;
@@ -604,7 +605,6 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
             if (ls.pdf)
             {
                 // Evaluate BSDF for light sample, check visibility with shadow ray
-                SampledSpectrum Ld(0.f);
                 f32 p_b;
                 SampledSpectrum f = bsdf.EvaluateSample(-ray.d, ls.wi, p_b) * AbsDot(si.shading.n, ls.wi);
                 if (f && !BVHTriangleIntersector4::Occluded(ray, scene->nodePtr))
@@ -614,12 +614,12 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
 
                     if (IsDeltaLight(ls.lightType))
                     {
-                        Ld = beta * f * ls.L / lightPdf;
+                        L += beta * f * ls.L / lightPdf;
                     }
                     else
                     {
                         f32 w_l = PowerHeuristic(1, lightPdf, 1, p_b);
-                        Ld      = beta * f * w_l * ls.L / lightPdf;
+                        L += beta * f * w_l * ls.L / lightPdf;
                     }
                 }
             }
@@ -634,6 +634,9 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
 
         // Spawn new ray
         prevSi = si;
+        ray.o = si.p;
+        ray.d = sample.wi;
+        ray.tFar = pos_inf;
 
         // Russian Roulette
         SampledSpectrum rrBeta = beta * sample.eta;
