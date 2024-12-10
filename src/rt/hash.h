@@ -25,17 +25,12 @@ u64 MixBits(u64 v)
 constexpr uint32_t get_block(const char *p, unsigned i)
 {
     const uint32_t block =
-        static_cast<uint32_t>(p[0 + i * 4]) << 0 |
-        static_cast<uint32_t>(p[1 + i * 4]) << 8 |
-        static_cast<uint32_t>(p[2 + i * 4]) << 16 |
-        static_cast<uint32_t>(p[3 + i * 4]) << 24;
+        static_cast<uint32_t>(p[0 + i * 4]) << 0 | static_cast<uint32_t>(p[1 + i * 4]) << 8 |
+        static_cast<uint32_t>(p[2 + i * 4]) << 16 | static_cast<uint32_t>(p[3 + i * 4]) << 24;
     return block;
 }
 
-constexpr uint32_t rotl32(uint32_t x, int8_t r)
-{
-    return (x << r) | (x >> (32 - r));
-}
+constexpr uint32_t rotl32(uint32_t x, int8_t r) { return (x << r) | (x >> (32 - r)); }
 
 constexpr uint32_t fmix32(uint32_t h)
 {
@@ -47,9 +42,7 @@ constexpr uint32_t fmix32(uint32_t h)
     return h;
 }
 
-constexpr u32 MurmurHash32(const char *key,
-                           const u32 len,
-                           const u32 seed)
+constexpr u32 MurmurHash32(const char *key, const u32 len, const u32 seed)
 {
     const u32 nblocks = len / 4;
 
@@ -129,21 +122,13 @@ inline u64 MurmurHash64A(const u8 *key, size_t len, u64 seed)
 
     switch (len & 7)
     {
-        case 7:
-            h ^= u64(key[6]) << 48;
-        case 6:
-            h ^= u64(key[5]) << 40;
-        case 5:
-            h ^= u64(key[4]) << 32;
-        case 4:
-            h ^= u64(key[3]) << 24;
-        case 3:
-            h ^= u64(key[2]) << 16;
-        case 2:
-            h ^= u64(key[1]) << 8;
-        case 1:
-            h ^= u64(key[0]);
-            h *= m;
+        case 7: h ^= u64(key[6]) << 48;
+        case 6: h ^= u64(key[5]) << 40;
+        case 5: h ^= u64(key[4]) << 32;
+        case 4: h ^= u64(key[3]) << 24;
+        case 3: h ^= u64(key[2]) << 16;
+        case 2: h ^= u64(key[1]) << 8;
+        case 1: h ^= u64(key[0]); h *= m;
     };
 
     h ^= h >> r;
@@ -156,16 +141,15 @@ inline u64 MurmurHash64A(const u8 *key, size_t len, u64 seed)
 template <typename... Args>
 inline u64 Hash(Args... args);
 
-inline u32 Hash(string arg)
-{
-    return MurmurHash32((const char *)arg.str, (int)arg.size, 0);
-}
+inline u32 Hash(string arg) { return MurmurHash32((const char *)arg.str, (int)arg.size, 0); }
 
 template <typename... Args>
 inline void HashRecursiveCopy(u8 *buf, Args...);
 
 template <>
-inline void HashRecursiveCopy(u8 *buf) {}
+inline void HashRecursiveCopy(u8 *buf)
+{
+}
 
 template <typename T, typename... Args>
 inline void HashRecursiveCopy(u8 *buf, T v, Args... args)

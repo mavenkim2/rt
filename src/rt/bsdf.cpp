@@ -5,7 +5,8 @@ namespace rt
 // BSDF Methods
 //
 template <typename BxDF>
-SampledSpectrumN BSDFBase<BxDF>::EvaluateSample(Vec3lfn wo, Vec3lfn wi, LaneNF32 &pdf, TransportMode mode) const
+SampledSpectrumN BSDFBase<BxDF>::EvaluateSample(Vec3lfn wo, Vec3lfn wi, LaneNF32 &pdf,
+                                                TransportMode mode) const
 {
     wi = frame.ToLocal(wi);
     wo = frame.ToLocal(wo);
@@ -28,13 +29,16 @@ BSDFSample BSDFBase<BxDF>::GenerateSample(Vec3lfn wo, const LaneNF32 &uc, const 
     // u32 tag           = GetTag();
     // BSDFSample result = bsdfMethods[tag].GenerateSample(ptr, wo, uc, u, mode, sampleFlags);
     BSDFSample result = bxdf.GenerateSample(wo, uc, u, mode, sampleFlags);
-    if (!result.IsValid() || All(result.f == 0) || All(result.pdf == 0) || All(result.wi.z == 0)) return {};
+    if (!result.IsValid() || All(result.f == 0) || All(result.pdf == 0) ||
+        All(result.wi.z == 0))
+        return {};
     result.wi = frame.FromLocal(result.wi);
     return result;
 }
 
 // template <typename BxDF>
-// LaneNF32 BSDFBase<BxDF>::PDF(Vec3lfn wo, Vec3lfn wi, TransportMode mode, BSDFFlags sampleFlags) const
+// LaneNF32 BSDFBase<BxDF>::PDF(Vec3lfn wo, Vec3lfn wi, TransportMode mode, BSDFFlags
+// sampleFlags) const
 // {
 //     wo = frame.ToLocal(wo);
 //     wi = frame.ToLocal(wi);
@@ -47,12 +51,14 @@ BSDFSample BSDFBase<BxDF>::GenerateSample(Vec3lfn wo, const LaneNF32 &uc, const 
 // }
 
 template <typename BxDF>
-SampledSpectrumN BSDFBase<BxDF>::rho(Vec3lfn wo, LaneNF32 *uc, Vec2lfn *u, u32 numSamples) const
+SampledSpectrumN BSDFBase<BxDF>::rho(Vec3lfn wo, LaneNF32 *uc, Vec2lfn *u,
+                                     u32 numSamples) const
 {
     SampledSpectrumN r(0.f);
     for (u32 i = 0; i < numSamples; i++)
     {
-        BSDFSample sample = GenerateSample(wo, uc[i], u[i], TransportMode::Radiance, BSDFFlags::All);
+        BSDFSample sample =
+            GenerateSample(wo, uc[i], u[i], TransportMode::Radiance, BSDFFlags::All);
         if (sample.IsValid())
         {
             r += sample.f * AbsCosTheta(sample.wi) / sample.pdf;
@@ -62,7 +68,8 @@ SampledSpectrumN BSDFBase<BxDF>::rho(Vec3lfn wo, LaneNF32 *uc, Vec2lfn *u, u32 n
 }
 
 template <typename BxDF>
-SampledSpectrumN BSDFBase<BxDF>::rho(Vec2lfn *u1, LaneNF32 *uc, Vec2lfn *u2, u32 numSamples) const
+SampledSpectrumN BSDFBase<BxDF>::rho(Vec2lfn *u1, LaneNF32 *uc, Vec2lfn *u2,
+                                     u32 numSamples) const
 {
     SampledSpectrumN r(0.f);
     for (u32 i = 0; i < numSamples; i++)
@@ -70,7 +77,8 @@ SampledSpectrumN BSDFBase<BxDF>::rho(Vec2lfn *u1, LaneNF32 *uc, Vec2lfn *u2, u32
         Vec3lfn wo = SampleUniformHemisphere(u1[i]);
         if (All(wo.z == 0)) continue;
         LaneNF32 pdfo = UniformHemispherePDF();
-        BSDFSample bs = GenerateSample(wo, uc[i], u2[i], TransportMode::Radiance, BSDFFlags::All);
+        BSDFSample bs =
+            GenerateSample(wo, uc[i], u2[i], TransportMode::Radiance, BSDFFlags::All);
         r += bs.f + AbsCosTheta(bs.wi) * AbsCosTheta(wo) / (pdfo * bs.pdf);
     }
     return r / (PI * numSamples);

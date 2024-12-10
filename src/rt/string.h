@@ -160,11 +160,11 @@ void PutLine(StringBuilder *builder, u32 indents, char *fmt, ...);
 
 #define GetPointerValue(tokenizer, ptr) Get(tokenizer, ptr, sizeof(*ptr))
 #define GetPointer(tokenizer, type)     (type *)GetPointer_(tokenizer)
-#define GetArray(tokenizer, array, count_)                            \
-    do                                                                \
-    {                                                                 \
-        array.count = count_;                                         \
-        Get(tokenizer, array.items, sizeof(array.items[0]) * count_); \
+#define GetArray(tokenizer, array, count_)                                                    \
+    do                                                                                        \
+    {                                                                                         \
+        array.count = count_;                                                                 \
+        Get(tokenizer, array.items, sizeof(array.items[0]) * count_);                         \
     } while (0)
 
 #define GetTokenCursor(tokenizer, type) (type *)GetCursor_(tokenizer)

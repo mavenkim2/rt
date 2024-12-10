@@ -27,7 +27,10 @@ struct BSpline
     // NOTE: the w component contains the radius
     Vec4f v0, v1, v2, v3;
     BSpline() {}
-    BSpline(const Vec4f &v0, const Vec4f &v1, const Vec4f &v2, const Vec4f &v3) : v0(v0), v1(v1), v2(v2), v3(v3) {}
+    BSpline(const Vec4f &v0, const Vec4f &v1, const Vec4f &v2, const Vec4f &v3)
+        : v0(v0), v1(v1), v2(v2), v3(v3)
+    {
+    }
 
     template <typename T>
     static Vec4<T> Eval(const T &u)
@@ -36,8 +39,10 @@ struct BSpline
         const T s = 1.f - u;
 
         const T t0 = t * t * t;
-        const T t1 = (4.0f * (s * s * s) + (t * t * t)) + (12.0f * ((s * t) * s) + 6.0f * ((t * s) * t));
-        const T t2 = (4.0f * (t * t * t) + (s * s * s)) + (12.0f * ((t * s) * t) + 6.0f * ((s * t) * s));
+        const T t1 = (4.0f * (s * s * s) + (t * t * t)) +
+                     (12.0f * ((s * t) * s) + 6.0f * ((t * s) * t));
+        const T t2 = (4.0f * (t * t * t) + (s * s * s)) +
+                     (12.0f * ((t * s) * t) + 6.0f * ((s * t) * s));
         const T t3 = s * s * s;
         return (1.0f / 6.f) * Vec4<T>(t0, t1, t2, t3);
     }

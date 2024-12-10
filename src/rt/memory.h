@@ -43,10 +43,11 @@ b32 CheckZero(u32 size, u8 *instance);
 void ArenaRelease(Arena *arena);
 void ArenaClear(Arena *arena);
 
-#define PushArrayNoZero(arena, type, count) (type *)ArenaPushNoZero(arena, sizeof(type) * (count))
-#define PushStructNoZero(arena, type)       PushArrayNoZero(arena, type, 1)
-#define PushArray(arena, type, count)       (type *)ArenaPush(arena, sizeof(type) * (count))
-#define PushStruct(arena, type)             PushArray(arena, type, 1)
+#define PushArrayNoZero(arena, type, count)                                                   \
+    (type *)ArenaPushNoZero(arena, sizeof(type) * (count))
+#define PushStructNoZero(arena, type) PushArrayNoZero(arena, type, 1)
+#define PushArray(arena, type, count) (type *)ArenaPush(arena, sizeof(type) * (count))
+#define PushStruct(arena, type)       PushArray(arena, type, 1)
 
 enum MemoryType
 {
@@ -75,16 +76,20 @@ __forceinline T *PushArrayDefault(Arena *arena, u32 count)
 }
 
 #if TRACK_MEMORY
-#define PushArrayTagged(arena, type, count, tag) \
-    (((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(type) * count, PushArray(arena, type, count))
-#define PushArrayNoZeroTagged(arena, type, count, tag) \
-    (((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(type) * count, PushArrayNoZero(arena, type, count))
+#define PushArrayTagged(arena, type, count, tag)                                              \
+    (((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(type) * count,       \
+     PushArray(arena, type, count))
+#define PushArrayNoZeroTagged(arena, type, count, tag)                                        \
+    (((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(type) * count,       \
+     PushArrayNoZero(arena, type, count))
 
-#define PushStructTagged(arena, type, tag) \
-    (((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(type), PushStruct(arena, type))
+#define PushStructTagged(arena, type, tag)                                                    \
+    (((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(type),               \
+     PushStruct(arena, type))
 
-#define PushStructNoZeroTagged(arena, type, tag) \
-    (((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(type), PushStructNoZero(arena, type))
+#define PushStructNoZeroTagged(arena, type, tag)                                              \
+    (((u64 *)(&threadMemoryStatistics[GetThreadIndex()]))[tag] += sizeof(type),               \
+     PushStructNoZero(arena, type))
 
 template <typename T>
 __forceinline T *PushArrayDefaultTagged(Arena *arena, u32 count, MemoryType tag)

@@ -3,7 +3,8 @@
 namespace rt
 {
 
-void GenerateBuildRefs(BRef *refs, Scene2 *scene, Scene2 *scenes, u64 numScenes, u32 start, u32 count, RecordAOSSplits &record)
+void GenerateBuildRefs(BRef *refs, Scene2 *scene, Scene2 *scenes, u64 numScenes, u32 start,
+                       u32 count, RecordAOSSplits &record)
 {
     Bounds geom;
     Bounds cent;
@@ -35,7 +36,8 @@ void GenerateBuildRefs(BRef *refs, Scene2 *scene, Scene2 *scenes, u64 numScenes,
     record.centBounds = Lane8F32(-cent.minP, cent.maxP);
 }
 
-BRef *GenerateBuildRefs(Scene2 *scenes, u32 sceneIndex, u64 numScenes, Arena *arena, RecordAOSSplits &record)
+BRef *GenerateBuildRefs(Scene2 *scenes, u32 sceneIndex, u64 numScenes, Arena *arena,
+                        RecordAOSSplits &record)
 {
     Scene2 *scene    = &scenes[sceneIndex];
     u32 numInstances = scene->numInstances;
@@ -49,9 +51,7 @@ BRef *GenerateBuildRefs(Scene2 *scenes, u32 sceneIndex, u64 numScenes, Arena *ar
             [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
                 GenerateBuildRefs(b, scene, scenes, numScenes, start, count, record);
             },
-            [&](RecordAOSSplits &l, const RecordAOSSplits &r) {
-                l.Merge(r);
-            });
+            [&](RecordAOSSplits &l, const RecordAOSSplits &r) { l.Merge(r); });
     }
     else
     {
@@ -64,8 +64,8 @@ BRef *GenerateBuildRefs(Scene2 *scenes, u32 sceneIndex, u64 numScenes, Arena *ar
 static const f32 REBRAID_THRESHOLD = .1f;
 
 template <typename Heuristic, typename GetNode>
-void OpenBraid(const Scene2 *scene, RecordAOSSplits &record, BRef *refs, u32 start, u32 count, u32 offset, const u32 offsetMax,
-               Heuristic &heuristic, GetNode &getNode)
+void OpenBraid(const Scene2 *scene, RecordAOSSplits &record, BRef *refs, u32 start, u32 count,
+               u32 offset, const u32 offsetMax, Heuristic &heuristic, GetNode &getNode)
 {
     // TIMED_FUNCTION(miscF);
     using NodeType       = typename GetNode::NodeType;
@@ -90,8 +90,10 @@ void OpenBraid(const Scene2 *scene, RecordAOSSplits &record, BRef *refs, u32 sta
 
             if constexpr (DefaultN == 4)
             {
-                Transpose3x4(min[0], min[1], min[2], aosMin[0], aosMin[1], aosMin[2], aosMin[3]);
-                Transpose3x4(max[0], max[1], max[2], aosMax[0], aosMax[1], aosMax[2], aosMax[3]);
+                Transpose3x4(min[0], min[1], min[2], aosMin[0], aosMin[1], aosMin[2],
+                             aosMin[3]);
+                Transpose3x4(max[0], max[1], max[2], aosMax[0], aosMax[1], aosMax[2],
+                             aosMax[3]);
             }
             else
             {
@@ -156,7 +158,8 @@ struct GetQuantizedNode
     }
 };
 
-// TODO: the number of nodes that this generates can vary very very wildly (like ~6 mil), find out why
+// TODO: the number of nodes that this generates can vary very very wildly (like ~6 mil), find
+// out why
 template <typename GetNode, i32 numObjectBins = 32>
 struct HeuristicPartialRebraid
 {
@@ -185,13 +188,15 @@ struct HeuristicPartialRebraid
         }
         f32 threshold  = REBRAID_THRESHOLD * maxExtent;
         auto heuristic = [&](const BRef &ref) -> bool {
-            return !ref.nodePtr.IsLeaf() && ref.max[choiceDim] + ref.min[choiceDim] > threshold;
+            return !ref.nodePtr.IsLeaf() &&
+                   ref.max[choiceDim] + ref.min[choiceDim] > threshold;
         };
 
         u64 popPos = 0;
         // conditions to test:
         // 1. if all the nodes belong to the same geometry, break
-        // 2. if there are 4 or less nodes, and there is no overlap between the bvhs, also break
+        // 2. if there are 4 or less nodes, and there is no overlap between the bvhs, also
+        // break
         // 3. also obviously break if there is no space for node opening
 
         if (record.ExtSize() && record.count <= 4)
@@ -200,7 +205,8 @@ struct HeuristicPartialRebraid
             {
                 for (u32 j = i + 1; j < record.count; j++)
                 {
-                    Lane8F32 intersection = Min(buildRefs[record.start + i].Load(), buildRefs[record.start + j].Load());
+                    Lane8F32 intersection = Min(buildRefs[record.start + i].Load(),
+                                                buildRefs[record.start + j].Load());
                     if (None(-Extract4<0>(intersection) > Extract4<1>(intersection)))
                     {
                         record.extEnd = record.start + record.count;
@@ -211,7 +217,8 @@ struct HeuristicPartialRebraid
         }
         if (record.ExtSize())
         {
-            u32 geomID = scene->instances[buildRefs[record.start].instanceID].geomID.GetIndex();
+            u32 geomID =
+                scene->instances[buildRefs[record.start].instanceID].geomID.GetIndex();
             if (record.count > PARALLEL_THRESHOLD)
             {
                 TempArena temp = ScratchStart(0, 0);
@@ -229,7 +236,7 @@ struct HeuristicPartialRebraid
                         for (u32 i = start; i < start + count; i++)
                         {
                             const BRef &ref = buildRefs[i];
-                            u32 objectID    = scene->instances[ref.instanceID].geomID.GetIndex();
+                            u32 objectID = scene->instances[ref.instanceID].geomID.GetIndex();
                             commonGeomID &= objectID == geomID;
                             if (heuristic(ref))
                             {
@@ -240,8 +247,10 @@ struct HeuristicPartialRebraid
                         props.sameType &= commonGeomID;
                         props.count = openCount;
                     });
-                Reduce(prop, output,
-                       [&](Props &l, const Props &r) { l.sameType &= r.sameType; l.count += r.count; });
+                Reduce(prop, output, [&](Props &l, const Props &r) {
+                    l.sameType &= r.sameType;
+                    l.count += r.count;
+                });
                 if (prop.sameType)
                 {
                     record.extEnd = record.start + record.count;
@@ -262,12 +271,12 @@ struct HeuristicPartialRebraid
                         &openRecord, record.start, record.count, PARALLEL_THRESHOLD,
                         [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
                             Props &prop = props[jobID];
-                            u32 max     = jobID == output.num - 1 ? offset : props[jobID + 1].count;
-                            OpenBraid(scene, record, buildRefs, start, count, prop.count, max, heuristic, getNode);
+                            u32 max =
+                                jobID == output.num - 1 ? offset : props[jobID + 1].count;
+                            OpenBraid(scene, record, buildRefs, start, count, prop.count, max,
+                                      heuristic, getNode);
                         },
-                        [&](RecordAOSSplits &l, const RecordAOSSplits &r) {
-                            l.Merge(r);
-                        });
+                        [&](RecordAOSSplits &l, const RecordAOSSplits &r) { l.Merge(r); });
                     record.SafeMerge(openRecord);
                     record.count = offset - record.start;
                 }
@@ -291,15 +300,16 @@ struct HeuristicPartialRebraid
                 else if (count <= record.ExtSize())
                 {
                     RecordAOSSplits openRecord;
-                    OpenBraid(scene, openRecord, buildRefs, record.start, record.count, record.End(), record.End() + count,
-                              heuristic, getNode);
+                    OpenBraid(scene, openRecord, buildRefs, record.start, record.count,
+                              record.End(), record.End() + count, heuristic, getNode);
                     record.SafeMerge(openRecord);
                     record.count = record.End() + count - record.start;
                 }
             }
         }
         OBin *objectBinHeuristic;
-        struct Split objectSplit = SAHObjectBinning(record, buildRefs, objectBinHeuristic, popPos);
+        struct Split objectSplit =
+            SAHObjectBinning(record, buildRefs, objectBinHeuristic, popPos);
         FinalizeObjectSplit(objectBinHeuristic, objectSplit, popPos);
 
         return objectSplit;
@@ -320,7 +330,8 @@ struct HeuristicPartialRebraid
         else
         {
             OBin *heuristic = (OBin *)(split.ptr);
-            mid             = PartitionParallel(heuristic, buildRefs, split, record.start, record.count, outLeft, outRight);
+            mid = PartitionParallel(heuristic, buildRefs, split, record.start, record.count,
+                                    outLeft, outRight);
         }
         MoveExtendedRanges(split, record.End(), record, buildRefs, mid, outLeft, outRight);
         ArenaPopTo(temp.arena, split.allocPos);

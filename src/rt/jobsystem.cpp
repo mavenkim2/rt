@@ -71,7 +71,8 @@ void KickJob(Counter *counter, const JobFunction &func, Priority priority)
     }
 }
 
-void KickJobs(Counter *counter, u32 numJobs, u32 groupSize, const JobFunction &func, Priority priority)
+void KickJobs(Counter *counter, u32 numJobs, u32 groupSize, const JobFunction &func,
+              Priority priority)
 {
     JobQueue *queue = 0;
     switch (priority)
@@ -103,7 +104,8 @@ void KickJobs(Counter *counter, u32 numJobs, u32 groupSize, const JobFunction &f
                 }
                 counter->count.fetch_add(numGroups);
                 queue->writePos.store(writePos + numGroups);
-                // OS_ReleaseSemaphores(jobSystem.readSemaphore, Min(numGroups, numProcessors));
+                // OS_ReleaseSemaphores(jobSystem.readSemaphore, Min(numGroups,
+                // numProcessors));
                 break;
             }
         }
@@ -116,7 +118,8 @@ T ParallelReduce(u32 count, u32 blockSize, Func func, Reduce reduce, Args... inA
     TempArena temp             = ScratchStart(0, 0);
     jobsystem::Counter counter = {};
 
-    // TODO: this is kind of redundant. maybe just want to pass in the number of groups directly
+    // TODO: this is kind of redundant. maybe just want to pass in the number of groups
+    // directly
     u32 taskCount = (count + blockSize - 1) / blockSize;
     taskCount     = Min(taskCount, numProcessors);
     u32 groupSize = (count + taskCount - 1) / taskCount;
@@ -126,7 +129,8 @@ T ParallelReduce(u32 count, u32 blockSize, Func func, Reduce reduce, Args... inA
     {
         new (&objs[i]) T(std::forward<Args>(inArgs)...);
     }
-    // TODO: maybe going to need task stealing, and have the thread work on something while it waits
+    // TODO: maybe going to need task stealing, and have the thread work on something while it
+    // waits
     jobsystem::KickJobs(&counter, taskCount, 1, [&](jobsystem::JobArgs args) {
         T &obj    = objs[args.jobId];
         u32 start = groupSize * args.jobId;
@@ -216,7 +220,8 @@ THREAD_ENTRY_POINT(JobThreadEntryPoint)
 
     for (; !gTerminateJobs;)
     {
-        if (Pop(jobSystem.highPriorityQueue, threadIndex) && Pop(jobSystem.lowPriorityQueue, threadIndex))
+        if (Pop(jobSystem.highPriorityQueue, threadIndex) &&
+            Pop(jobSystem.lowPriorityQueue, threadIndex))
         {
             OS_Yield();
         }
@@ -225,7 +230,8 @@ THREAD_ENTRY_POINT(JobThreadEntryPoint)
 
 void EndJobsystem()
 {
-    while (!Pop(jobSystem.highPriorityQueue, 0) || !Pop(jobSystem.lowPriorityQueue, 0)) continue;
+    while (!Pop(jobSystem.highPriorityQueue, 0) || !Pop(jobSystem.lowPriorityQueue, 0))
+        continue;
 
     gTerminateJobs = 1;
     std::atomic_thread_fence(std::memory_order_release);

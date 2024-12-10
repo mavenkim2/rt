@@ -28,9 +28,11 @@ inline Vec2<T> SampleUniformDiskConcentric(const Vec2<T> &u)
 
     Mask<T> mask = Abs(uOffset.x) > Abs(uOffset.y);
     T r          = Select(mask, uOffset.x, uOffset.y);
-    T theta      = Select(mask, PI / 4 * (uOffset.y / uOffset.x), PI / 2 - PI / 4 * (uOffset.x / uOffset.y));
+    T theta      = Select(mask, PI / 4 * (uOffset.y / uOffset.x),
+                          PI / 2 - PI / 4 * (uOffset.x / uOffset.y));
 
-    Vec2<T> result = Select(uOffset.x == 0 && uOffset.y == 0, Vec2<T>(0, 0), r * Vec2<T>(Cos(theta), Sin(theta)));
+    Vec2<T> result = Select(uOffset.x == 0 && uOffset.y == 0, Vec2<T>(0, 0),
+                            r * Vec2<T>(Cos(theta), Sin(theta)));
     return result;
 }
 
@@ -43,10 +45,7 @@ inline Vec3<T> SampleUniformHemisphere(const Vec2<T> &u)
     return {r * Cos(phi), r * Sin(phi), z};
 }
 
-inline f32 UniformHemispherePDF()
-{
-    return Inv2Pi;
-}
+inline f32 UniformHemispherePDF() { return Inv2Pi; }
 
 template <typename T>
 inline Vec2<T> InvertUniformHemisphereSample(const Vec3<T> &w)
@@ -65,10 +64,7 @@ inline Vec3<T> SampleUniformSphere(const Vec2<T> &u)
     return {r * Cos(phi), r * Sin(phi), z};
 }
 
-inline f32 UniformSpherePDF()
-{
-    return Inv4Pi;
-}
+inline f32 UniformSpherePDF() { return Inv4Pi; }
 
 template <typename T>
 inline Vec2<T> InvertUniformSphereSample(const Vec3<T> &w)

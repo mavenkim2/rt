@@ -16,7 +16,9 @@ struct Vec2
     Vec2(T e0, T e1) : e{e0, e1} {}
     Vec2(const Vec2<T> &other) : x(other.x), y(other.y) {}
     template <typename T1>
-    __forceinline Vec2(const Vec2<T1> &other) : x(T(other.x)), y(T(other.y)) {}
+    __forceinline Vec2(const Vec2<T1> &other) : x(T(other.x)), y(T(other.y))
+    {
+    }
 
     T operator[](i32 i) const
     {
@@ -31,7 +33,10 @@ struct Vec2
 };
 
 template <typename T>
-__forceinline Vec2<T> operator-(const Vec2<T> &v) { return Vec2<T>(-v.x, -v.y); }
+__forceinline Vec2<T> operator-(const Vec2<T> &v)
+{
+    return Vec2<T>(-v.x, -v.y);
+}
 
 template <typename T>
 __forceinline Vec2<T> operator+(const Vec2<T> &u, const Vec2<T> &v)
@@ -88,7 +93,10 @@ __forceinline Vec2<T> operator*(T d, const Vec2<T> &u)
 }
 
 template <typename T>
-__forceinline Vec2<T> operator/(const Vec2<T> &u, const Vec2<T> &v) { return Vec2<T>(u.x / v.x, u.y / v.y); }
+__forceinline Vec2<T> operator/(const Vec2<T> &u, const Vec2<T> &v)
+{
+    return Vec2<T>(u.x / v.x, u.y / v.y);
+}
 
 template <typename T>
 __forceinline Vec2<T> operator/(const Vec2<T> &v, T d)
@@ -223,9 +231,6 @@ Vec2f Get(const Vec2<LaneF32<K>> &v, u32 index)
     return Vec2f(Get(v[0], index), Get(v[1], index));
 }
 
-__forceinline Vec2f Get(const Vec2lfn &v, u32 index)
-{
-    return Get<IntN>(v, index);
-}
+__forceinline Vec2f Get(const Vec2lfn &v, u32 index) { return Get<IntN>(v, index); }
 
 } // namespace rt

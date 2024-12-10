@@ -3,42 +3,35 @@
 namespace rt
 {
 // NOTE: independent uniform samplers without any care for discrepancy
-struct IndependentSampler 
+struct IndependentSampler
 {
-    IndependentSampler(i32 samplesPerPixel, i32 seed = 0) : samplesPerPixel(samplesPerPixel), seed(seed) {}
-
-    i32 SamplesPerPixel() const
+    IndependentSampler(i32 samplesPerPixel, i32 seed = 0)
+        : samplesPerPixel(samplesPerPixel), seed(seed)
     {
-        return samplesPerPixel;
     }
+
+    i32 SamplesPerPixel() const { return samplesPerPixel; }
     void StartPixelSample(Vec2i p, i32 sampleIndex, i32 dimension = 0)
     {
         rng.SetSequence(Hash(p, seed));
         rng.Advance(sampleIndex * 65536ull + dimension);
     }
-    f32 Get1D()
-    {
-        return rng.Uniform<f32>();
-    }
-    Vec2f Get2D()
-    {
-        return {rng.Uniform<f32>(), rng.Uniform<f32>()};
-    }
+    f32 Get1D() { return rng.Uniform<f32>(); }
+    Vec2f Get2D() { return {rng.Uniform<f32>(), rng.Uniform<f32>()}; }
     Vec2f GetPixel2D() { return Get2D(); }
 
     i32 samplesPerPixel, seed;
     RNG rng;
 };
 
-struct StratifiedSampler 
+struct StratifiedSampler
 {
     StratifiedSampler(i32 xPixelSamples, i32 yPixelSamples, bool jitter, i32 seed = 0)
-        : xSamples(xPixelSamples), ySamples(yPixelSamples), jitter(jitter), seed(seed) {}
-
-    i32 SamplesPerPixel() const
+        : xSamples(xPixelSamples), ySamples(yPixelSamples), jitter(jitter), seed(seed)
     {
-        return xSamples * ySamples;
     }
+
+    i32 SamplesPerPixel() const { return xSamples * ySamples; }
     void StartPixelSample(Vec2i p, i32 index, i32 dimension)
     {
         pixel       = p;
@@ -68,10 +61,7 @@ struct StratifiedSampler
 
         return Vec2f((x + deltaX) / xSamples, (y + deltaY) / ySamples);
     }
-    Vec2f GetPixel2D()
-    {
-        return Get2D();
-    }
+    Vec2f GetPixel2D() { return Get2D(); }
 
     i32 xSamples, ySamples, seed;
     b8 jitter;
@@ -88,22 +78,20 @@ enum class RandomizeStrategy
     FastOwen,
 };
 
-struct HaltonSampler 
+struct HaltonSampler
 {
 };
 
-struct SobolSampler 
+struct SobolSampler
 {
-    SobolSampler(i32 samplesPerPixel, Vec2i fullResolution, RandomizeStrategy randomize, i32 seed = 0)
+    SobolSampler(i32 samplesPerPixel, Vec2i fullResolution, RandomizeStrategy randomize,
+                 i32 seed = 0)
         : samplesPerPixel(samplesPerPixel), seed(seed), randomize(randomize)
     {
         assert(IsPow2(samplesPerPixel));
         scale = Max(NextPowerOfTwo(fullResolution.x), NextPowerOfTwo(fullResolution.y));
     }
-    i32 SamplesPerPixel() const
-    {
-        return samplesPerPixel;
-    }
+    i32 SamplesPerPixel() const { return samplesPerPixel; }
     void StartPixelSample(Vec2i p, i32 sampleIndex, i32 d = 0)
     {
         pixel      = p;
@@ -112,21 +100,20 @@ struct SobolSampler
     }
     f32 Get1D()
     {
-        if (dimension >= nSobolDimensions)
-            dimension = 2;
+        if (dimension >= nSobolDimensions) dimension = 2;
         return SampleDimension(dimension++);
     }
     Vec2f Get2D()
     {
-        if (dimension + 1 >= nSobolDimensions)
-            dimension = 2;
+        if (dimension + 1 >= nSobolDimensions) dimension = 2;
         Vec2f u(SampleDimension(dimension), SampleDimension(dimension + 1));
         dimension += 2;
         return u;
     }
     Vec2f GetPixel2D()
     {
-        Vec2f u(SobolSample(sobolIndex, 0, NoRandomizer), SobolSample(sobolIndex, 1, NoRandomizer));
+        Vec2f u(SobolSample(sobolIndex, 0, NoRandomizer),
+                SobolSample(sobolIndex, 1, NoRandomizer));
 
         for (i32 dim = 0; dim < 2; dim++)
         {
@@ -156,17 +143,14 @@ struct SobolSampler
     i64 sobolIndex;
 };
 
-struct PaddedSobolSampler 
+struct PaddedSobolSampler
 {
     PaddedSobolSampler(i32 samplesPerPixel, RandomizeStrategy randomize, i32 seed = 0)
         : samplesPerPixel(samplesPerPixel), seed(seed), randomize(randomize)
     {
         assert(IsPow2(samplesPerPixel));
     }
-    i32 SamplesPerPixel() const
-    {
-        return samplesPerPixel;
-    }
+    i32 SamplesPerPixel() const { return samplesPerPixel; }
     void StartPixelSample(Vec2i p, i32 index, i32 dim)
     {
         pixel       = p;
@@ -186,12 +170,10 @@ struct PaddedSobolSampler
         i32 index = PermutationElement(sampleIndex, samplesPerPixel, (u32)hash);
         int dim   = dimension;
         dimension += 2;
-        return Vec2f(SampleDimension(0, index, (u32)hash), SampleDimension(1, index, hash >> 32));
+        return Vec2f(SampleDimension(0, index, (u32)hash),
+                     SampleDimension(1, index, hash >> 32));
     }
-    Vec2f GetPixel2D()
-    {
-        return Get2D();
-    }
+    Vec2f GetPixel2D() { return Get2D(); }
 
     f32 SampleDimension(i32 dim, u32 a, u32 hash) const
     {
@@ -212,9 +194,10 @@ struct PaddedSobolSampler
     i32 dimension, sampleIndex;
 };
 
-struct ZSobolSampler 
+struct ZSobolSampler
 {
-    ZSobolSampler(i32 samplesPerPixel, Vec2i fullResolution, RandomizeStrategy randomize = RandomizeStrategy::FastOwen, i32 seed = 0)
+    ZSobolSampler(i32 samplesPerPixel, Vec2i fullResolution,
+                  RandomizeStrategy randomize = RandomizeStrategy::FastOwen, i32 seed = 0)
         : randomize(randomize), seed(seed)
     {
         assert(IsPow2(samplesPerPixel));
@@ -223,10 +206,7 @@ struct ZSobolSampler
         i32 log4SamplesPerPixel = (log2SamplesPerPixel + 1) / 2;
         nBase4Digits            = log4SamplesPerPixel + Log2Int(res);
     }
-    i32 SamplesPerPixel() const
-    {
-        return 1 << log2SamplesPerPixel;
-    }
+    i32 SamplesPerPixel() const { return 1 << log2SamplesPerPixel; }
     void StartPixelSample(Vec2i p, i32 index, i32 dim = 0)
     {
         dimension   = dim;
@@ -253,7 +233,8 @@ struct ZSobolSampler
         u64 sampleIndex = GetSampleIndex();
         dimension += 2;
         if (randomize == RandomizeStrategy::NoRandomize)
-            return Vec2f(SobolSample(sampleIndex, 0, NoRandomizer), SobolSample(sampleIndex, 1, NoRandomizer));
+            return Vec2f(SobolSample(sampleIndex, 0, NoRandomizer),
+                         SobolSample(sampleIndex, 1, NoRandomizer));
 
         u64 hash          = Hash(dimension, seed);
         u32 sampleHash[2] = {u32(hash), u32(hash >> 32)};
@@ -272,37 +253,14 @@ struct ZSobolSampler
         return Vec2f(SobolSample(sampleIndex, 0, OwenScrambler, sampleHash[0]),
                      SobolSample(sampleIndex, 1, OwenScrambler, sampleHash[1]));
     }
-    Vec2f GetPixel2D()
-    {
-        return Get2D();
-    }
+    Vec2f GetPixel2D() { return Get2D(); }
     u64 GetSampleIndex() const
     {
         static const u8 permutations[24][4] = {
-            {0, 1, 2, 3},
-            {0, 1, 3, 2},
-            {0, 2, 1, 3},
-            {0, 2, 3, 1},
-            {0, 3, 2, 1},
-            {0, 3, 1, 2},
-            {1, 0, 2, 3},
-            {1, 0, 3, 2},
-            {1, 2, 0, 3},
-            {1, 2, 3, 0},
-            {1, 3, 2, 0},
-            {1, 3, 0, 2},
-            {2, 1, 0, 3},
-            {2, 1, 3, 0},
-            {2, 0, 1, 3},
-            {2, 0, 3, 1},
-            {2, 3, 0, 1},
-            {2, 3, 1, 0},
-            {3, 1, 2, 0},
-            {3, 1, 0, 2},
-            {3, 2, 1, 0},
-            {3, 2, 0, 1},
-            {3, 0, 2, 1},
-            {3, 0, 1, 2},
+            {0, 1, 2, 3}, {0, 1, 3, 2}, {0, 2, 1, 3}, {0, 2, 3, 1}, {0, 3, 2, 1}, {0, 3, 1, 2},
+            {1, 0, 2, 3}, {1, 0, 3, 2}, {1, 2, 0, 3}, {1, 2, 3, 0}, {1, 3, 2, 0}, {1, 3, 0, 2},
+            {2, 1, 0, 3}, {2, 1, 3, 0}, {2, 0, 1, 3}, {2, 0, 3, 1}, {2, 3, 0, 1}, {2, 3, 1, 0},
+            {3, 1, 2, 0}, {3, 1, 0, 2}, {3, 2, 1, 0}, {3, 2, 0, 1}, {3, 0, 2, 1}, {3, 0, 1, 2},
         };
         u64 sampleIndex = 0;
 
@@ -323,7 +281,8 @@ struct ZSobolSampler
         if (isNotPow4)
         {
             i32 digit = mortonIndex & 1;
-            sampleIndex |= digit ^ (MixBits((mortonIndex >> 1) ^ (0x55555555u * dimension)) & 1);
+            sampleIndex |=
+                digit ^ (MixBits((mortonIndex >> 1) ^ (0x55555555u * dimension)) & 1);
         }
 
         return sampleIndex;
@@ -335,9 +294,10 @@ struct ZSobolSampler
     RandomizeStrategy randomize;
 };
 
-// struct SOAZSobolSampler 
+// struct SOAZSobolSampler
 // {
-//     SOAZSobolSampler(i32 samplesPerPixel, Vec2i fullResolution, RandomizeStrategy randomize, i32 seed = 0)
+//     SOAZSobolSampler(i32 samplesPerPixel, Vec2i fullResolution, RandomizeStrategy randomize,
+//     i32 seed = 0)
 //         : randomize(randomize), seed(seed)
 //     {
 //         assert(IsPow2(samplesPerPixel));
@@ -386,7 +346,8 @@ struct ZSobolSampler
 //         u64 sampleIndex = GetSampleIndex();
 //         dimension += 2;
 //         if (randomize == RandomizeStrategy::NoRandomize)
-//             return Vec2f(SobolSample(sampleIndex, 0, NoRandomizer), SobolSample(sampleIndex, 1, NoRandomizer));
+//             return Vec2f(SobolSample(sampleIndex, 0, NoRandomizer), SobolSample(sampleIndex,
+//             1, NoRandomizer));
 //
 //         u64 hash          = Hash(dimension, seed);
 //         u32 sampleHash[2] = {u32(hash), u32(hash >> 32)};
@@ -453,17 +414,17 @@ struct ZSobolSampler
 //             {
 //                 LaneU32 digit = (mortonIndex[j] >> (u64)digitShift) & 3ull;
 //
-//                 // Find the permutation of the digit based on the higher bits + the dimension
-//                 LaneU32 higherDigits = mortonIndex[j] >> (digitShift + 2);
-//                 i32 p                = (MixBits(higherDigits ^ (0x55555555u * dimension)) >> 24) % 24;
-//                 digit                = permutations[p][digit];
-//                 sampleIndex |= u64(digit) << digitShift;
+//                 // Find the permutation of the digit based on the higher bits + the
+//                 dimension LaneU32 higherDigits = mortonIndex[j] >> (digitShift + 2); i32 p
+//                 = (MixBits(higherDigits ^ (0x55555555u * dimension)) >> 24) % 24; digit =
+//                 permutations[p][digit]; sampleIndex |= u64(digit) << digitShift;
 //             }
 //         }
 //         if (isNotPow4)
 //         {
 //             i32 digit = mortonIndex & 1;
-//             sampleIndex |= digit ^ (MixBits((mortonIndex >> 1) ^ (0x55555555u * dimension)) & 1);
+//             sampleIndex |= digit ^ (MixBits((mortonIndex >> 1) ^ (0x55555555u * dimension))
+//             & 1);
 //         }
 //
 //         return sampleIndex;

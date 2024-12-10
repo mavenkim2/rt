@@ -85,12 +85,21 @@ Sampler Sampler::Create(Arena *arena, const ScenePacket *packet, const Vec2i ful
     }
     switch (packet->type)
     {
-        case "independent"_sid: return PushStructConstruct(arena, IndependentSampler)(samplesPerPixel);
-        case "paddedsobol"_sid: return PushStructConstruct(arena, PaddedSobolSampler)(samplesPerPixel, strategy, seed);
-        case "sobol"_sid: return PushStructConstruct(arena, SobolSampler)(samplesPerPixel, fullResolution, strategy, seed);
-        case "stratified"_sid: return PushStructConstruct(arena, StratifiedSampler)(xSamples, ySamples, jitter, seed);
+        case "independent"_sid:
+            return PushStructConstruct(arena, IndependentSampler)(samplesPerPixel);
+        case "paddedsobol"_sid:
+            return PushStructConstruct(arena, PaddedSobolSampler)(samplesPerPixel, strategy,
+                                                                  seed);
+        case "sobol"_sid:
+            return PushStructConstruct(arena, SobolSampler)(samplesPerPixel, fullResolution,
+                                                            strategy, seed);
+        case "stratified"_sid:
+            return PushStructConstruct(arena, StratifiedSampler)(xSamples, ySamples, jitter,
+                                                                 seed);
         case "halton"_sid: Error(0, "Halton sampler not implemented.");
-        default: return PushStructConstruct(arena, ZSobolSampler)(samplesPerPixel, fullResolution, strategy);
+        default:
+            return PushStructConstruct(arena, ZSobolSampler)(samplesPerPixel, fullResolution,
+                                                             strategy);
     }
 }
 
@@ -131,13 +140,15 @@ SampledSpectrum SpectrumCRTP<T>::Sample(void *ptr, const SampledWavelengths &lam
     return static_cast<T *>(ptr)->Sample(lambda);
 }
 
-SampledSpectrumN BxDF::EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf, TransportMode mode) const
+SampledSpectrumN BxDF::EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf,
+                                      TransportMode mode) const
 {
     void *ptr = GetPtr();
     return bxdfMethods[GetTag()].EvaluateSample(ptr, wo, wi, pdf, mode);
 }
 
-BSDFSample BxDF::GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u, TransportMode mode, BxDFFlags inFlags) const
+BSDFSample BxDF::GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u,
+                                TransportMode mode, BxDFFlags inFlags) const
 {
     void *ptr = GetPtr();
     return bxdfMethods[GetTag()].GenerateSample(ptr, wo, uc, u, mode, inFlags);
@@ -150,12 +161,14 @@ LaneNU32 BxDF::Flags() const
 }
 
 template <class T>
-SampledSpectrum BxDFCRTP<T>::EvaluateSample(void *ptr, const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf, TransportMode mode)
+SampledSpectrum BxDFCRTP<T>::EvaluateSample(void *ptr, const Vec3lfn &wo, const Vec3lfn &wi,
+                                            LaneNF32 &pdf, TransportMode mode)
 {
     return static_cast<T *>(ptr)->EvaluateSample(wo, wi, pdf, mode);
 }
 template <class T>
-BSDFSample BxDFCRTP<T>::GenerateSample(void *ptr, const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u, TransportMode mode, BxDFFlags flags)
+BSDFSample BxDFCRTP<T>::GenerateSample(void *ptr, const Vec3lfn &wo, const LaneNF32 &uc,
+                                       const Vec2lfn &u, TransportMode mode, BxDFFlags flags)
 {
     return static_cast<T *>(ptr)->GenerateSample(wo, uc, u, mode, flags);
 }

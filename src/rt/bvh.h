@@ -51,7 +51,8 @@ struct alignas(64) UncompressedBVHNode
     u32 leafMask : 8;
 
     // https://www.youtube.com/watch?v=6BIfqfC1i7U
-    i32 IntersectP(const Vec3lf4 rayOrigin, const Vec3lf4 rcpDir, const f32 tMinHit, const f32 tMaxHit) const
+    i32 IntersectP(const Vec3lf4 rayOrigin, const Vec3lf4 rcpDir, const f32 tMinHit,
+                   const f32 tMaxHit) const
     {
         const Lane4F32 termMinX = (minP.x - rayOrigin.x) * rcpDir.x;
         const Lane4F32 termMaxX = (maxP.x - rayOrigin.x) * rcpDir.x;
@@ -62,10 +63,11 @@ struct alignas(64) UncompressedBVHNode
         const Lane4F32 termMinZ = (minP.z - rayOrigin.z) * rcpDir.z;
         const Lane4F32 termMaxZ = (maxP.z - rayOrigin.z) * rcpDir.z;
 
-        // NOTE: the order matters here. If one of the two values are NaN, SSE returns the second one.
-        // For example, if rayOrigin.x = minP.x, and rcpDir.x = 0, then termMinX = NaN and termMaxX = +infinity
-        // (because -0 is converted to +0). Therefore, tLeave won't be automatically set to -infinity, causing
-        // the intersection to fail in this case. This prevents cracks between edges.
+        // NOTE: the order matters here. If one of the two values are NaN, SSE returns the
+        // second one. For example, if rayOrigin.x = minP.x, and rcpDir.x = 0, then termMinX =
+        // NaN and termMaxX = +infinity (because -0 is converted to +0). Therefore, tLeave
+        // won't be automatically set to -infinity, causing the intersection to fail in this
+        // case. This prevents cracks between edges.
 
         const Lane4F32 tMinX = Min(termMaxX, termMinX);
         const Lane4F32 tMaxX = Max(termMinX, termMaxX);
@@ -88,7 +90,7 @@ struct alignas(64) UncompressedBVHNode
 
         Lane4F32 result = Lane4F32::Mask(true);
 
-        Vec3f oneOverDir               = Vec3f(1.f / r.d.x, 1.f / r.d.y, 1.f / r.d.z);
+        Vec3f oneOverDir            = Vec3f(1.f / r.d.x, 1.f / r.d.y, 1.f / r.d.z);
         Vec3lf4 oneOverRayDirection = oneOverDir;
 
         // Slab test
@@ -126,21 +128,21 @@ struct alignas(64) UncompressedBVHNode
             Lane4F32 intersectionTest = testMinT <= testMaxT;
             result &= intersectionTest;
 
-            if (None(result))
-                return 0;
+            if (None(result)) return 0;
         }
 
         i32 outcome = Movemask(result);
         return outcome;
     }
 
-    i32 IntersectP(const Ray &r, const f32 tMinHit, const f32 tMaxHit, const int dirIsNeg[3]) const
+    i32 IntersectP(const Ray &r, const f32 tMinHit, const f32 tMaxHit,
+                   const int dirIsNeg[3]) const
     {
         Vec3lf4 rayOrigin = r.o;
 
         Lane4F32 result = Lane4F32::Mask(true);
 
-        Vec3f oneOverDir               = Vec3f(1.f / r.d.x, 1.f / r.d.y, 1.f / r.d.z);
+        Vec3f oneOverDir            = Vec3f(1.f / r.d.x, 1.f / r.d.y, 1.f / r.d.z);
         Vec3lf4 oneOverRayDirection = oneOverDir;
 
         Lane4F32 xMask = Lane4F32::Mask(dirIsNeg[0] ? false : true);
@@ -193,8 +195,7 @@ struct alignas(64) UncompressedBVHNode
             Lane4F32 intersectionTest = testMinT <= testMaxT;
             result &= intersectionTest;
 
-            if (None(result))
-                return 0;
+            if (None(result)) return 0;
         }
 
         i32 outcome = Movemask(result);
@@ -308,7 +309,8 @@ struct alignas(64) CompressedBVHNode
     }
 };
 
-void Compress(CompressedBVHNode *node, const AABB &child0, const AABB &child1, const AABB &child2, const AABB &child3)
+void Compress(CompressedBVHNode *node, const AABB &child0, const AABB &child1,
+              const AABB &child2, const AABB &child3)
 {
     const f32 MIN_QUAN = 0.f;
     const f32 MAX_QUAN = 255.f;
@@ -349,18 +351,18 @@ void Compress(CompressedBVHNode *node, const AABB &child0, const AABB &child1, c
     Lane4F32 qNodeMaxZ = Ceil((maxZ - nodeMinZ) / powZLane);
 
     Lane4F32 maskMinX = FMA(powXLane, qNodeMinX, nodeMinX) > minX;
-    node->minX        = TruncateToU8(Max(Select(maskMinX, qNodeMinX - 1, qNodeMinX), MIN_QUAN));
+    node->minX = TruncateToU8(Max(Select(maskMinX, qNodeMinX - 1, qNodeMinX), MIN_QUAN));
     Lane4F32 maskMinY = FMA(powYLane, qNodeMinY, nodeMinY) > minY;
-    node->minY        = TruncateToU8(Max(Select(maskMinY, qNodeMinY - 1, qNodeMinY), MIN_QUAN));
+    node->minY = TruncateToU8(Max(Select(maskMinY, qNodeMinY - 1, qNodeMinY), MIN_QUAN));
     Lane4F32 maskMinZ = FMA(powZLane, qNodeMinZ, nodeMinZ) > minZ;
-    node->minZ        = TruncateToU8(Max(Select(maskMinZ, qNodeMinZ - 1, qNodeMinZ), MIN_QUAN));
+    node->minZ = TruncateToU8(Max(Select(maskMinZ, qNodeMinZ - 1, qNodeMinZ), MIN_QUAN));
 
     Lane4F32 maskMaxX = FMA(powXLane, qNodeMaxX, nodeMinX) < maxX;
-    node->maxX        = TruncateToU8(Min(Select(maskMaxX, qNodeMaxX + 1, qNodeMaxX), MAX_QUAN));
+    node->maxX = TruncateToU8(Min(Select(maskMaxX, qNodeMaxX + 1, qNodeMaxX), MAX_QUAN));
     Lane4F32 maskMaxY = FMA(powYLane, qNodeMaxY, nodeMinY) < maxY;
-    node->maxY        = TruncateToU8(Min(Select(maskMaxY, qNodeMaxY + 1, qNodeMaxY), MAX_QUAN));
+    node->maxY = TruncateToU8(Min(Select(maskMaxY, qNodeMaxY + 1, qNodeMaxY), MAX_QUAN));
     Lane4F32 maskMaxZ = FMA(powZLane, qNodeMaxZ, nodeMinZ) < maxZ;
-    node->maxZ        = TruncateToU8(Min(Select(maskMaxZ, qNodeMaxZ + 1, qNodeMaxZ), MAX_QUAN));
+    node->maxZ = TruncateToU8(Min(Select(maskMaxZ, qNodeMaxZ + 1, qNodeMaxZ), MAX_QUAN));
 
     node->scaleX = u8(FloatToBits(powX) >> 23);
     node->scaleY = u8(FloatToBits(powY) >> 23);
@@ -386,8 +388,10 @@ struct CompressedBVH4
 };
 
 inline bool BVHHit(void *ptr, const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record);
-inline bool BVH4Hit(void *ptr, const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record);
-inline bool CompressedBVH4Hit(void *ptr, const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record);
+inline bool BVH4Hit(void *ptr, const Ray &r, const f32 tMin, const f32 tMax,
+                    HitRecord &record);
+inline bool CompressedBVH4Hit(void *ptr, const Ray &r, const f32 tMin, const f32 tMax,
+                              HitRecord &record);
 } // namespace rt
 
 #endif

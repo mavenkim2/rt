@@ -94,14 +94,15 @@ struct SurfaceInteractions
     // LaneIU32 volumeIndices;
 
     SurfaceInteractions() {}
-    SurfaceInteractions(const Vec3lf<K> &p, const Vec3lf<K> &n, const Vec2lf<K> &uv) : p(p), n(n), uv(uv) {}
-    // SurfaceInteraction(const Vec3f &p, const Vec3f &n, Vec2f u, f32 tHit) : p(p), n(n), uv(u), tHit(tHit) {}
+    SurfaceInteractions(const Vec3lf<K> &p, const Vec3lf<K> &n, const Vec2lf<K> &uv)
+        : p(p), n(n), uv(uv)
+    {
+    }
+    // SurfaceInteraction(const Vec3f &p, const Vec3f &n, Vec2f u, f32 tHit) : p(p), n(n),
+    // uv(u), tHit(tHit) {}
     bool ComputeShading(BSDFBase<BxDF> &bsdf);
 
-    u32 GenerateKey()
-    {
-        return {};
-    }
+    u32 GenerateKey() { return {}; }
 };
 
 typedef SurfaceInteractions<1> SurfaceInteraction;
@@ -145,7 +146,8 @@ struct ConstantTexture
 
     ConstantTexture() {}
     ConstantTexture(const T &t) : c(t) {}
-    static Veclfn<nc> Evaluate(SurfaceInteractionsN &, ConstantTexture **textures, Vec4lfn &, SampledWavelengthsN &)
+    static Veclfn<nc> Evaluate(SurfaceInteractionsN &, ConstantTexture **textures, Vec4lfn &,
+                               SampledWavelengthsN &)
     {
         Veclfn<nc> result;
         for (u32 i = 0; i < IntN; i++)
@@ -166,9 +168,12 @@ struct PtexTexture
     f32 scale;
     PtexTexture() {}
     PtexTexture(string filename, ColorEncoding encoding = ColorEncoding::SRGB, f32 scale = 1.f)
-        : filename(filename), encoding(encoding), scale(scale) {}
+        : filename(filename), encoding(encoding), scale(scale)
+    {
+    }
 
-    Vec Evaluate(SurfaceInteractionsN &intrs, const Vec4lfn &filterWidths, u32 index, Vec *dfdu = 0, Vec *dfdv = 0) const
+    Vec Evaluate(SurfaceInteractionsN &intrs, const Vec4lfn &filterWidths, u32 index,
+                 Vec *dfdu = 0, Vec *dfdv = 0) const
     {
         Vec4f filterWidth = Get(filterWidths, index);
         Vec2f uv          = Get(intrs.uv, index);
@@ -187,7 +192,8 @@ struct PtexTexture
         // Vec2f uv(0.5f, 0.5f);
 
         f32 out[nc];
-        filter->eval(out, 0, nc, faceIndex, uv[0], uv[1], filterWidth[0], filterWidth[1], filterWidth[2], filterWidth[3]);
+        filter->eval(out, 0, nc, faceIndex, uv[0], uv[1], filterWidth[0], filterWidth[1],
+                     filterWidth[2], filterWidth[3]);
 
         if (dfdu && dfdv)
         {
@@ -197,8 +203,10 @@ struct PtexTexture
             f32 dv = .5f * (Abs(filterWidth[1]) + Abs(filterWidth[3]));
             dv     = Select(dv == 0.f, 0.0005f, dv);
 
-            filter->eval(dfdu, 0, nc, faceIndex, uv[0] + du, uv[1], filterWidth[0], filterWidth[1], filterWidth[2], filterWidth[3]);
-            filter->eval(dfdv, 0, nc, faceIndex, uv[0], uv[1] + dv, filterWidth[0], filterWidth[1], filterWidth[2], filterWidth[3]);
+            filter->eval(dfdu, 0, nc, faceIndex, uv[0] + du, uv[1], filterWidth[0],
+                         filterWidth[1], filterWidth[2], filterWidth[3]);
+            filter->eval(dfdv, 0, nc, faceIndex, uv[0], uv[1] + dv, filterWidth[0],
+                         filterWidth[1], filterWidth[2], filterWidth[3]);
         }
 
         texture->release();
@@ -238,7 +246,8 @@ struct NormalMap
         f32 dpduLength    = Length(dpdu);
         f32 dpdvLength    = Length(dpdv);
         dpdu              = dpdu / length;
-        LinearSpace frame = LinearSpace::FromXZ(dpdu, intrs.shading.ns); // Cross(ns, intrs.shading.dpdu), intrs.shading.ns);
+        LinearSpace frame = LinearSpace::FromXZ(
+            dpdu, intrs.shading.ns); // Cross(ns, intrs.shading.dpdu), intrs.shading.ns);
         // Transform to world space
         ns   = TransformV(frame, ns);
         dpdu = Normalize(dpdu - Dot(dpdu, ns) * ns) * dpduLength;
@@ -254,10 +263,8 @@ struct ImageTextureShader
     TextureType texture;
     ImageTextureShader() {}
 
-    static auto Evaluate(SurfaceInteractionsN &intrs,
-                         ImageTextureShader **textures,
-                         Vec4lfn &filterWidths,
-                         SampledWavelengthsN &lambda)
+    static auto Evaluate(SurfaceInteractionsN &intrs, ImageTextureShader **textures,
+                         Vec4lfn &filterWidths, SampledWavelengthsN &lambda)
     {
         Veclfn<numChannels> results;
         for (u32 i = 0; i < IntN; i++)
@@ -289,8 +296,8 @@ struct ImageTextureShader
     }
 
     static void Evaluate(SurfaceInteractionsN &intrs, Vec4lfn &filterWidths,
-                         Veclfn<numChannels> &dfdu, Veclfn<numChannels> &dfdv, const ImageTextureShader **textures,
-                         Veclfn<numChannels> &results)
+                         Veclfn<numChannels> &dfdu, Veclfn<numChannels> &dfdv,
+                         const ImageTextureShader **textures, Veclfn<numChannels> &results)
     {
         // Finite differencing
         // LaneF32<K> du = .5f * Abs(filterWidths[0], filterWidths[2]);
@@ -301,12 +308,15 @@ struct ImageTextureShader
         for (u32 i = 0; i < IntN; i++)
         {
             Vec out_dfdu, out_dfdv;
-            Set(results, i) = textures[i]->texture.Evaluate(intrs, filterWidths, i, &out_dfdu, &out_dfdv);
-            Set(dfdu, i)    = out_dfdu;
-            Set(dfdv, i)    = out_dfdv;
+            Set(results, i) =
+                textures[i]->texture.Evaluate(intrs, filterWidths, i, &out_dfdu, &out_dfdv);
+            Set(dfdu, i) = out_dfdu;
+            Set(dfdv, i) = out_dfdv;
             // TODO: this won't work for 3 channel partial derivatives
-            // dfdu[i]         = textures[i]->texture.Evaluate(uv + Vec2f(du[i], 0.f), filterWidth, Get(intrs.faceIndices, i));
-            // dfdv[i]         = textures[i]->texture.Evaluate(uv + Vec2f(0.f, dv[i]), filterWidth, Get(intrs.faceIndices, i));
+            // dfdu[i]         = textures[i]->texture.Evaluate(uv + Vec2f(du[i], 0.f),
+            // filterWidth, Get(intrs.faceIndices, i)); dfdv[i]         =
+            // textures[i]->texture.Evaluate(uv + Vec2f(0.f, dv[i]), filterWidth,
+            // Get(intrs.faceIndices, i));
         }
     }
 };
@@ -314,10 +324,12 @@ struct ImageTextureShader
 template <typename TextureShader>
 struct BumpMap
 {
-    // p' = p + d * n, d is displacement, estimate shading normal by computing dp'du and dp'dv (using chain rule)
+    // p' = p + d * n, d is displacement, estimate shading normal by computing dp'du and dp'dv
+    // (using chain rule)
     TextureShader displacementShader;
     template <i32 width>
-    static void Evaluate(SurfaceInteractions<width> &intrs, Vec4lfn &filterWidths, const BumpMap<TextureShader> **bumpMaps)
+    static void Evaluate(SurfaceInteractions<width> &intrs, Vec4lfn &filterWidths,
+                         const BumpMap<TextureShader> **bumpMaps)
     {
         const TextureShader *displacementShaders[width];
         for (u32 i = 0; i < width; i++)
@@ -327,10 +339,13 @@ struct BumpMap
 
         LaneF32<width> dddu, dddv;
         LaneF32<width> displacement;
-        TextureShader::Evaluate(intrs, filterWidths, dddu, dddv, displacementShaders, displacement);
+        TextureShader::Evaluate(intrs, filterWidths, dddu, dddv, displacementShaders,
+                                displacement);
 
-        Vec3lf<width> dpdu = intrs.shading.dpdu + dddu * intrs.shading.n + displacement * intrs.shading.dndu;
-        Vec3lf<width> dpdv = intrs.shading.dpdv + dddv * intrs.shading.n + displacement * intrs.shading.dndv;
+        Vec3lf<width> dpdu =
+            intrs.shading.dpdu + dddu * intrs.shading.n + displacement * intrs.shading.dndu;
+        Vec3lf<width> dpdv =
+            intrs.shading.dpdv + dddv * intrs.shading.n + displacement * intrs.shading.dndv;
 
         intrs.shading.n    = Cross(dpdu, dpdv);
         intrs.shading.dpdu = dpdu;
@@ -338,9 +353,10 @@ struct BumpMap
     }
 };
 
-#define MaterialHeaders(materialName)                                                                                              \
-    materialName() = default;                                                                                                      \
-    static BxDF GetBxDF(SurfaceInteractionsN &intr, materialName **materials, Vec4lfn &filterWidths, SampledWavelengthsN &lambda); \
+#define MaterialHeaders(materialName)                                                         \
+    materialName() = default;                                                                 \
+    static BxDF GetBxDF(SurfaceInteractionsN &intr, materialName **materials,                 \
+                        Vec4lfn &filterWidths, SampledWavelengthsN &lambda);                  \
     BxDF GetBxDF(SurfaceInteraction &intr, Vec4lfn &filterWidths, SampledWavelengthsN &lambda);
 
 // NOTE: Rfl = Reflect, Trm = Transmit, Rgh = Roughness, IOR
@@ -387,9 +403,13 @@ struct Material2
     BxDFShader bxdfShader;
     NormalShader normalShader;
     Material2() = default;
-    Material2(BxDFShader bxdfShader, NormalShader normalShader) : bxdfShader(bxdfShader), normalShader(normalShader) {}
+    Material2(BxDFShader bxdfShader, NormalShader normalShader)
+        : bxdfShader(bxdfShader), normalShader(normalShader)
+    {
+    }
     template <typename BxDFOut>
-    static void Evaluate(Arena *arena, SurfaceInteractionsN &intr, SampledWavelengthsN &lambda, BSDFBase<BxDFOut> *result)
+    static void Evaluate(Arena *arena, SurfaceInteractionsN &intr, SampledWavelengthsN &lambda,
+                         BSDFBase<BxDFOut> *result)
     {
         BxDFShader *bxdfs[IntN];
         const NormalShader *normalShaders[IntN];
@@ -415,17 +435,19 @@ struct Material2
 template <i32 K>
 using PtexShader = ImageTextureShader<PtexTexture<K>, RGBAlbedoSpectrum>;
 
-using BumpMapPtex                     = BumpMap<PtexShader<1>>;
-using DiffuseMaterialPtex             = DiffuseMaterial<PtexShader<3>>;
-using DiffuseTransmissionMaterialPtex = DiffuseTransmissionMaterial<PtexShader<3>, PtexShader<3>>;
+using BumpMapPtex         = BumpMap<PtexShader<1>>;
+using DiffuseMaterialPtex = DiffuseMaterial<PtexShader<3>>;
+using DiffuseTransmissionMaterialPtex =
+    DiffuseTransmissionMaterial<PtexShader<3>, PtexShader<3>>;
 
 // NOTE: isotropic roughness, constant ior
 using DielectricMaterialConstant = DielectricMaterial<ConstantTexture<1>, ConstantSpectrum>;
 
 // Material types
-using DiffuseMaterialBumpMapPtex             = Material2<DiffuseMaterialPtex, BumpMapPtex>;
-using DiffuseTransmissionMaterialBumpMapPtex = Material2<DiffuseTransmissionMaterialPtex, BumpMapPtex>;
-using DielectricMaterialBumpMapPtex          = Material2<DielectricMaterialConstant, BumpMapPtex>;
+using DiffuseMaterialBumpMapPtex = Material2<DiffuseMaterialPtex, BumpMapPtex>;
+using DiffuseTransmissionMaterialBumpMapPtex =
+    Material2<DiffuseTransmissionMaterialPtex, BumpMapPtex>;
+using DielectricMaterialBumpMapPtex = Material2<DielectricMaterialConstant, BumpMapPtex>;
 
 using DielectricMaterialBase = Material2<DielectricMaterialConstant, NullShader>;
 
@@ -440,25 +462,22 @@ struct Ray2
     Ray2() {}
     Ray2(const Vec3f &o, const Vec3f &d) : o(o), d(d) {}
     Ray2(const Vec3f &o, const Vec3f &d, f32 tFar) : o(o), d(d), tFar(tFar) {}
-    Vec3f operator()(f32 t) const
-    {
-        return o + t * d;
-    }
+    Vec3f operator()(f32 t) const { return o + t * d; }
 };
 
 Ray2 Transform(const Mat4 &m, const Ray2 &r)
 {
     Ray2 newRay = r;
-    newRay.o = TransformP(m, r.o);
-    newRay.d = TransformV(m, r.d);
+    newRay.o    = TransformP(m, r.o);
+    newRay.d    = TransformV(m, r.d);
     return newRay;
 }
 
 Ray2 Transform(const AffineSpace &m, const Ray2 &r)
 {
     Ray2 newRay = r;
-    newRay.o = TransformP(m, r.o);
-    newRay.d = TransformV(m, r.d);
+    newRay.o    = TransformP(m, r.o);
+    newRay.d    = TransformV(m, r.d);
     return newRay;
 }
 
@@ -490,8 +509,12 @@ struct RaySegment
     SampledSpectrum cMin;
     VolumeHandle handles[4];
     RaySegment() {}
-    RaySegment(f32 tMin, f32 tMax, f32 min, f32 max, SampledSpectrum spec, VolumeHandle *handles)
-        : tMin(tMin), tMax(tMax), cMaj(spec * min), cMin(spec * max), handles{handles[0], handles[1], handles[2], handles[3]} {}
+    RaySegment(f32 tMin, f32 tMax, f32 min, f32 max, SampledSpectrum spec,
+               VolumeHandle *handles)
+        : tMin(tMin), tMax(tMax), cMaj(spec * min), cMin(spec * max),
+          handles{handles[0], handles[1], handles[2], handles[3]}
+    {
+    }
 };
 
 struct VolumeAggregate
@@ -516,13 +539,16 @@ struct VolumeAggregate
             f32 tMin, tMax;
             StackEntry() {}
             StackEntry(OctreeNode *node, Bounds &b, f32 tMin, f32 tMax)
-                : node(node), b(b), tMin(tMin), tMax(tMax) {}
+                : node(node), b(b), tMin(tMin), tMax(tMax)
+            {
+            }
         };
         StackEntry entries[128];
         u32 stackPtr;
 
         Iterator() {}
-        Iterator(const Ray2 *ray, const SampledSpectrum &cExtinct, f32 tMax, VolumeAggregate *agg)
+        Iterator(const Ray2 *ray, const SampledSpectrum &cExtinct, f32 tMax,
+                 VolumeAggregate *agg)
             : ray(ray), cExtinct(cExtinct), tMax(tMax)
         {
             entries[stackPtr++] = StackEntry(agg->root, agg->volumeBounds, tMinEpsilon, tMax);
@@ -564,7 +590,8 @@ struct RenderParams2
 };
 
 NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Sampler sampler,
-                                  SampledSpectrum beta, const SampledSpectrum &p, const SampledWavelengths &lambda, Vec3f &wi);
+                                  SampledSpectrum beta, const SampledSpectrum &p,
+                                  const SampledWavelengths &lambda, Vec3f &wi);
 static SampledWavelengths SampleVisible(f32 u);
 
 f32 VisibleWavelengthsPDF(f32 lambda)
@@ -599,10 +626,11 @@ template <u32 N>
 __forceinline void Transpose(const Lane4F32 lanes[N], Vec3lf<N> &out)
 {
     if constexpr (N == 1) out = ToVec3f(lanes[0]);
-    else if constexpr (N == 4) Transpose4x3(lanes[0], lanes[1], lanes[2], lanes[3], out.x, out.y, out.z);
-    else if constexpr (N == 8) Transpose8x3(lanes[0], lanes[1], lanes[2], lanes[3],
-                                            lanes[4], lanes[5], lanes[6], lanes[7],
-                                            out.x, out.y, out.z);
+    else if constexpr (N == 4)
+        Transpose4x3(lanes[0], lanes[1], lanes[2], lanes[3], out.x, out.y, out.z);
+    else if constexpr (N == 8)
+        Transpose8x3(lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5], lanes[6],
+                     lanes[7], out.x, out.y, out.z);
     else Assert(0);
 }
 

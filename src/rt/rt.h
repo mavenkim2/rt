@@ -94,7 +94,8 @@ struct Image
     f32 *GetSamplingDistribution(struct Arena *arena);
     Vec2i GetPixel(Vec2f uv) const
     {
-        return Vec2i(Clamp(i32(uv[0] * width), 0, width - 1), Clamp(i32(uv[1] * height), 0, height - 1));
+        return Vec2i(Clamp(i32(uv[0] * width), 0, width - 1),
+                     Clamp(i32(uv[1] * height), 0, height - 1));
     }
 };
 
@@ -128,7 +129,8 @@ struct RayQueueItem
 
 inline u32 *GetPixelPointer(Image *image, u32 x, u32 y)
 {
-    u32 *ptr = (u32 *)(image->contents + x * image->bytesPerPixel + (image->height - y - 1) * image->width * image->bytesPerPixel);
+    u32 *ptr = (u32 *)(image->contents + x * image->bytesPerPixel +
+                       (image->height - y - 1) * image->width * image->bytesPerPixel);
     return ptr;
 }
 
@@ -142,7 +144,7 @@ Image LoadFile(const char *file)
 {
     Image image;
     i32 nComponents;
-    image.contents      = (u8*)stbi_loadf(file, &image.width, &image.height, &nComponents, 0);
+    image.contents      = (u8 *)stbi_loadf(file, &image.width, &image.height, &nComponents, 0);
     image.bytesPerPixel = nComponents * sizeof(f32);
     return image;
 }
@@ -152,7 +154,8 @@ u8 *GetColor(const Image *image, i32 x, i32 y)
     x = Clamp(0, image->width - 1, x);
     y = Clamp(0, image->height - 1, y);
 
-    return image->contents + x * image->bytesPerPixel + y * image->width * image->bytesPerPixel;
+    return image->contents + x * image->bytesPerPixel +
+           y * image->width * image->bytesPerPixel;
 }
 
 void WriteImage(Image *image, const char *filename)

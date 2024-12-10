@@ -31,7 +31,9 @@ struct Vec3
     __forceinline Vec3(const Vec3<T> &other) : x(other.x), y(other.y), z(other.z) {}
 
     template <typename T1>
-    __forceinline Vec3(const Vec3<T1> &other) : x(T(other.x)), y(T(other.y)), z(T(other.z)) {}
+    __forceinline Vec3(const Vec3<T1> &other) : x(T(other.x)), y(T(other.y)), z(T(other.z))
+    {
+    }
 
     __forceinline Vec3(PosInfTy) : x(pos_inf), y(pos_inf), z(pos_inf) {}
     __forceinline Vec3(NegInfTy) : x(neg_inf), y(neg_inf), z(neg_inf) {}
@@ -61,20 +63,26 @@ struct Vec3
         Assert(i < 3);
         return e[i];
     }
-    __forceinline explicit operator Lane4F32() const
-    {
-        return Lane4F32(x, y, z, 0.f);
-    }
+    __forceinline explicit operator Lane4F32() const { return Lane4F32(x, y, z, 0.f); }
 };
 
 template <typename T>
-__forceinline bool operator==(const Vec3<T> &a, const Vec3<T> &b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
+__forceinline bool operator==(const Vec3<T> &a, const Vec3<T> &b)
+{
+    return a.x == b.x && a.y == b.y && a.z == b.z;
+}
 
 template <typename T>
-__forceinline bool operator!=(const Vec3<T> &a, const Vec3<T> &b) { return a.x != b.x || a.y != b.y || a.z != b.z; }
+__forceinline bool operator!=(const Vec3<T> &a, const Vec3<T> &b)
+{
+    return a.x != b.x || a.y != b.y || a.z != b.z;
+}
 
 template <typename T>
-__forceinline Vec3<T> operator-(const Vec3<T> &v) { return Vec3<T>(-v.x, -v.y, -v.z); }
+__forceinline Vec3<T> operator-(const Vec3<T> &v)
+{
+    return Vec3<T>(-v.x, -v.y, -v.z);
+}
 
 template <typename T>
 __forceinline Vec3<T> operator+(const Vec3<T> &u, const Vec3<T> &v)
@@ -182,7 +190,8 @@ __forceinline Vec3<T> Select(const Mask<T> &mask, const Vec3<T> &a, const Vec3<T
 template <typename T>
 __forceinline Vec3<T> Select(const Vec3<T> &mask, const Vec3<T> &a, const Vec3<T> &b)
 {
-    return Vec3<T>(Select(mask.x, a.x, b.x), Select(mask.y, a.y, b.y), Select(mask.z, a.z, b.z));
+    return Vec3<T>(Select(mask.x, a.x, b.x), Select(mask.y, a.y, b.y),
+                   Select(mask.z, a.z, b.z));
 }
 
 template <typename T>
@@ -206,7 +215,8 @@ __forceinline T AbsDot(const Vec3<T> &u, const Vec3<T> &v)
 template <typename T>
 __forceinline Vec3<T> Cross(const Vec3<T> &a, const Vec3<T> &b)
 {
-    return Vec3<T>(FMS(a.y, b.z, a.z * b.y), FMS(a.z, b.x, a.x * b.z), FMS(a.x, b.y, a.y * b.x));
+    return Vec3<T>(FMS(a.y, b.z, a.z * b.y), FMS(a.z, b.x, a.x * b.z),
+                   FMS(a.x, b.y, a.y * b.x));
 }
 
 template <typename T>
@@ -351,15 +361,9 @@ __forceinline Vec3lu<K> Flooru(const Vec3lf<K> &v)
     return Vec3lu<K>(Flooru(v.x), Flooru(v.y), Flooru(v.z));
 }
 
-__forceinline Vec3f ToVec3f(const Lane4F32 &l)
-{
-    return Vec3f(l[0], l[1], l[2]);
-}
+__forceinline Vec3f ToVec3f(const Lane4F32 &l) { return Vec3f(l[0], l[1], l[2]); }
 
-inline Vec3f Reflect(const Vec3f &v, const Vec3f &norm)
-{
-    return v - 2 * Dot(v, norm) * norm;
-}
+inline Vec3f Reflect(const Vec3f &v, const Vec3f &norm) { return v - 2 * Dot(v, norm) * norm; }
 
 inline Vec3f Refract(const Vec3f &uv, const Vec3f &n, f32 refractiveIndexRatio)
 {

@@ -16,25 +16,13 @@ const f32 infinity = std::numeric_limits<f32>::infinity();
 
 static const __m128 SIMDInfinity = _mm_set1_ps(infinity);
 
-f32 IsInf(f32 x)
-{
-    return std::isinf(x);
-}
+f32 IsInf(f32 x) { return std::isinf(x); }
 
-f32 IsNaN(f32 x)
-{
-    return std::isnan(x);
-}
+f32 IsNaN(f32 x) { return std::isnan(x); }
 
-f64 IsNaN(f64 x)
-{
-    return std::isnan(x);
-}
+f64 IsNaN(f64 x) { return std::isnan(x); }
 
-f32 Sqr(f32 x)
-{
-    return x * x;
-}
+f32 Sqr(f32 x) { return x * x; }
 
 __forceinline f32 Abs(const f32 x) { return ::fabsf(x); }
 __forceinline f32 Sqrt(const f32 x) { return ::sqrtf(x); }
@@ -44,10 +32,11 @@ __forceinline f32 Rsqrt(const f32 x)
 #if defined(__AVX512VL__)
     __m128 r = _mm_rsqrt14_ss(_mm_set_ss(0.0f), a);
 #else
-    __m128 r       = _mm_rsqrt_ss(a);
+    __m128 r = _mm_rsqrt_ss(a);
 #endif
-    const __m128 c = _mm_add_ss(_mm_mul_ss(_mm_set_ss(1.5f), r),
-                                _mm_mul_ss(_mm_mul_ss(_mm_mul_ss(a, _mm_set_ss(-0.5f)), r), _mm_mul_ss(r, r)));
+    const __m128 c = _mm_add_ss(
+        _mm_mul_ss(_mm_set_ss(1.5f), r),
+        _mm_mul_ss(_mm_mul_ss(_mm_mul_ss(a, _mm_set_ss(-0.5f)), r), _mm_mul_ss(r, r)));
     return _mm_cvtss_f32(c);
 }
 __forceinline f32 Rcp(const f32 x)
@@ -104,20 +93,11 @@ T Max(const T &a, const T &b)
     return a > b ? a : b;
 }
 
-f32 Select(bool mask, f32 a, f32 b)
-{
-    return mask ? a : b;
-}
+f32 Select(bool mask, f32 a, f32 b) { return mask ? a : b; }
 
-u32 Select(bool mask, u32 a, u32 b)
-{
-    return mask ? a : b;
-}
+u32 Select(bool mask, u32 a, u32 b) { return mask ? a : b; }
 
-bool Select(bool mask, bool a, bool b)
-{
-    return mask ? a : b;
-}
+bool Select(bool mask, bool a, bool b) { return mask ? a : b; }
 
 inline int Log2Int(u64 v)
 {
@@ -130,24 +110,27 @@ inline int Log2Int(u64 v)
 #endif
 }
 
-f32 SafeSqrt(f32 x)
-{
-    return std::sqrt(Max(0.f, x));
-}
+f32 SafeSqrt(f32 x) { return std::sqrt(Max(0.f, x)); }
 
 template <int n>
 constexpr f32 Pow(f32 v)
 {
     if constexpr (n < 0) return 1 / Pow<-n>(v);
     f32 n2 = Pow<n / 2>(v);
-    return n2 * n2 * Pow<n & 1>(v);
+    return n2 * n2 * Pow < n & 1 > (v);
 }
 
 template <>
-constexpr f32 Pow<0>(f32 v) { return 1; }
+constexpr f32 Pow<0>(f32 v)
+{
+    return 1;
+}
 
 template <>
-constexpr f32 Pow<1>(f32 v) { return v; }
+constexpr f32 Pow<1>(f32 v)
+{
+    return v;
+}
 
 #ifdef ___AVX2__
 __forceinline f32 FMA(const f32 a, const f32 b, const f32 c)
@@ -159,14 +142,8 @@ __forceinline f32 FMS(const f32 a, const f32 b, const f32 c)
     return _mm_cvtss_f32(_mm_fmsub_ss(_mm_set_ss(a), _mm_set_ss(b), _mm_set_ss(c)));
 }
 #else
-__forceinline f32 FMA(const f32 a, const f32 b, const f32 c)
-{
-    return std::fma(a, b, c);
-}
-__forceinline f32 FMS(const f32 a, const f32 b, const f32 c)
-{
-    return std::fma(a, b, -c);
-}
+__forceinline f32 FMA(const f32 a, const f32 b, const f32 c) { return std::fma(a, b, c); }
+__forceinline f32 FMS(const f32 a, const f32 b, const f32 c) { return std::fma(a, b, -c); }
 #endif
 
 template <typename f32, typename C>
@@ -195,15 +172,9 @@ inline u32 FloatToBits(f32 src)
     return dst;
 }
 
-inline f32 AsFloat(u32 src)
-{
-    return _mm_cvtss_f32(_mm_castsi128_ps(_mm_cvtsi32_si128(src)));
-}
+inline f32 AsFloat(u32 src) { return _mm_cvtss_f32(_mm_castsi128_ps(_mm_cvtsi32_si128(src))); }
 
-inline u32 AsUint(f32 src)
-{
-    return _mm_cvtsi128_si32(_mm_castps_si128(_mm_set_ss(src)));
-}
+inline u32 AsUint(f32 src) { return _mm_cvtsi128_si32(_mm_castps_si128(_mm_set_ss(src))); }
 
 inline i32 Exponent(f32 v) { return (FloatToBits(v) >> 23) - 127; }
 
@@ -213,8 +184,7 @@ f32 FastExp(f32 x)
     f32 fxp = std::floor(xp), f = xp - fxp;
     i32 i = (i32)fxp;
 
-    f32 twoToF = EvaluatePolynomial(f, 1.f, 0.695556856f,
-                                    0.226173572f, 0.0781455737f);
+    f32 twoToF = EvaluatePolynomial(f, 1.f, 0.695556856f, 0.226173572f, 0.0781455737f);
 
     i32 exponent = Exponent(twoToF) + i;
     if (exponent < -126) return 0;

@@ -31,7 +31,9 @@ struct Vec4
         w = other.w;
     }
     template <typename T1>
-    Vec4(const Vec4<T1> &other) : x(T(other.x)), y(T(other.y)), z(T(other.z)) {}
+    Vec4(const Vec4<T1> &other) : x(T(other.x)), y(T(other.y)), z(T(other.z))
+    {
+    }
 
     template <typename T1>
     Vec4 &operator=(const Vec4<T1> &other)
@@ -54,7 +56,10 @@ struct Vec4
 };
 
 template <typename T>
-__forceinline Vec4<T> operator-(const Vec4<T> &v) { return Vec4<T>(-v.x, -v.y, -v.z, -v.w); }
+__forceinline Vec4<T> operator-(const Vec4<T> &v)
+{
+    return Vec4<T>(-v.x, -v.y, -v.z, -v.w);
+}
 
 template <typename T>
 __forceinline Vec4<T> operator+(const Vec4<T> &u, const Vec4<T> &v)
@@ -225,10 +230,7 @@ Vec4f Get(const Vec4<LaneF32<K>> &v, u32 index)
     return Vec4f(Get(v[0], index), Get(v[1], index), Get(v[2], index), Get(v[3], index));
 }
 
-__forceinline Vec4f Get(const Vec4lfn &v, u32 index)
-{
-    return Get<IntN>(v, index);
-}
+__forceinline Vec4f Get(const Vec4lfn &v, u32 index) { return Get<IntN>(v, index); }
 
 } // namespace rt
 #endif

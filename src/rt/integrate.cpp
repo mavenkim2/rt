@@ -36,8 +36,9 @@ void InitializePtex()
 }
 
 template <typename RflShader>
-DiffuseBxDF DiffuseMaterial<RflShader>::GetBxDF(SurfaceInteractionsN &intr, DiffuseMaterial **materials, Vec4lfn &filterWidths,
-                                                SampledWavelengthsN &lambda)
+DiffuseBxDF
+DiffuseMaterial<RflShader>::GetBxDF(SurfaceInteractionsN &intr, DiffuseMaterial **materials,
+                                    Vec4lfn &filterWidths, SampledWavelengthsN &lambda)
 {
     // TODO: vectorized texture evaluation?
     // TODO: sampled spectrum vectorized
@@ -51,15 +52,17 @@ DiffuseBxDF DiffuseMaterial<RflShader>::GetBxDF(SurfaceInteractionsN &intr, Diff
 }
 
 template <typename RflShader>
-DiffuseBxDF DiffuseMaterial<RflShader>::GetBxDF(SurfaceInteraction &intr, Vec4lfn &filterWidths, SampledWavelengthsN &lambda)
+DiffuseBxDF DiffuseMaterial<RflShader>::GetBxDF(SurfaceInteraction &intr,
+                                                Vec4lfn &filterWidths,
+                                                SampledWavelengthsN &lambda)
 {
     return DiffuseMaterial::GetBxDF(intr, &this);
 }
 
 template <typename RflShader, typename TrmShader>
-DiffuseTransmissionBxDF DiffuseTransmissionMaterial<RflShader, TrmShader>::GetBxDF(SurfaceInteractionsN &intr,
-                                                                                   DiffuseTransmissionMaterial **materials, Vec4lfn &filterWidths,
-                                                                                   SampledWavelengthsN &lambda)
+DiffuseTransmissionBxDF DiffuseTransmissionMaterial<RflShader, TrmShader>::GetBxDF(
+    SurfaceInteractionsN &intr, DiffuseTransmissionMaterial **materials, Vec4lfn &filterWidths,
+    SampledWavelengthsN &lambda)
 {
     RflShader *rflShaders[IntN];
     TrmShader *trmShaders[IntN];
@@ -74,15 +77,16 @@ DiffuseTransmissionBxDF DiffuseTransmissionMaterial<RflShader, TrmShader>::GetBx
 }
 
 template <typename RflShader, typename TrmShader>
-DiffuseTransmissionBxDF DiffuseTransmissionMaterial<RflShader, TrmShader>::GetBxDF(SurfaceInteractionsN &intr, Vec4lfn &filterWidths,
-                                                                                   SampledWavelengthsN &lambda)
+DiffuseTransmissionBxDF DiffuseTransmissionMaterial<RflShader, TrmShader>::GetBxDF(
+    SurfaceInteractionsN &intr, Vec4lfn &filterWidths, SampledWavelengthsN &lambda)
 {
     return DiffuseTransmissionMaterial::GetBxDF(intr, &this);
 }
 
 template <typename RghShader, typename IORShader>
-DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(SurfaceInteractionsN &intr, DielectricMaterial **materials, Vec4lfn &filterWidths,
-                                                                 SampledWavelengthsN &lambda)
+DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(
+    SurfaceInteractionsN &intr, DielectricMaterial **materials, Vec4lfn &filterWidths,
+    SampledWavelengthsN &lambda)
 {
     RghShader *rghShaders[IntN];
     LaneNF32 eta;
@@ -91,7 +95,8 @@ DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(SurfaceInteract
         rghShaders[i] = &materials[i]->rghShader;
         Set(eta, i)   = materials[i]->ior(Get(lambda[0], i));
     }
-    // NOTE: for dispersion (i.e. wavelength dependent IORs), we terminate every wavelength except the first
+    // NOTE: for dispersion (i.e. wavelength dependent IORs), we terminate every wavelength
+    // except the first
     if constexpr (!std::is_same_v<Spectrum, ConstantSpectrum>)
     {
         lambda.TerminateSecondary();
@@ -105,7 +110,9 @@ DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(SurfaceInteract
 }
 
 template <typename RghShader, typename IORShader>
-DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(SurfaceInteractionsN &intr, Vec4lfn &filterWidths, SampledWavelengthsN &lambda)
+DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(SurfaceInteractionsN &intr,
+                                                                 Vec4lfn &filterWidths,
+                                                                 SampledWavelengthsN &lambda)
 {
     return DielectricMaterial::GetBxDF(intr, &this);
 }
@@ -222,7 +229,9 @@ struct ShadingQueuePtex
         // Convert to AOSOA
         u32 limit = queueFlushSize % (IntN);
         // SurfaceInteractionsN aosoaIntrs[queueFlushSize / IntN];
-        for (u32 i = 0; i < alignedCount;) //, aosoaIndex = 0; i < queueFlushSize; i += IntN, aosoaIndex++)
+        for (u32 i = 0;
+             i <
+             alignedCount;) //, aosoaIndex = 0; i < queueFlushSize; i += IntN, aosoaIndex++)
         {
             const u32 prefetchDistance = IntN * 2;
             alignas(32) SurfaceInteraction intrs[IntN];
@@ -230,16 +239,19 @@ struct ShadingQueuePtex
             {
                 for (u32 j = 0; j < IntN; j++)
                 {
-                    _mm_prefetch((char *)&queue[keys[i + prefetchDistance + j].index], _MM_HINT_T0);
+                    _mm_prefetch((char *)&queue[keys[i + prefetchDistance + j].index],
+                                 _MM_HINT_T0);
                     intrs[j] = queue[keys0[i + j].index];
                 }
             }
             SurfaceInteractionsN aosoaIntrs; //&out = aosoaIntrs[aosoaIndex];
                                              // Transpose p, n, uv
             Transpose(intrs, aosoaIntrs);
-            // Transpose8x8(Lane8F32::Load(&intrs[0]), Lane8F32::Load(&intrs[1]), Lane8F32::Load(&intrs[2]), Lane8F32::Load(&intrs[3]),
-            //              Lane8F32::Load(&intrs[4]), Lane8F32::Load(&intrs[5]), Lane8F32::Load(&intrs[6]), Lane8F32::Load(&intrs[7]),
-            //              out.p.x, out.p.y, out.p.z, out.n.x, out.n.y, out.n.z, out.uv.x, out.uv.y);
+            // Transpose8x8(Lane8F32::Load(&intrs[0]), Lane8F32::Load(&intrs[1]),
+            // Lane8F32::Load(&intrs[2]), Lane8F32::Load(&intrs[3]),
+            //              Lane8F32::Load(&intrs[4]), Lane8F32::Load(&intrs[5]),
+            //              Lane8F32::Load(&intrs[6]), Lane8F32::Load(&intrs[7]), out.p.x,
+            //              out.p.y, out.p.z, out.n.x, out.n.y, out.n.z, out.uv.x, out.uv.y);
             // Transpose the rest
 
             MaskF32 continuationMask = LaneNF32::Mask<true>();
@@ -288,7 +300,9 @@ struct ShadingQueuePtex
                 Vec3IF32 wi = Normalize(sample.samplePoint - aosoaIntrs.p);
 
                 LaneNF32 scatterPdf;
-                SampledSpectrum f = BxDF::EvaluateSample(-ray.d, wi, scatterPdf, TransportMode::Radiance) * AbsDot(aosoaIntrs.shading.n, wi);
+                SampledSpectrum f =
+                    BxDF::EvaluateSample(-ray.d, wi, scatterPdf, TransportMode::Radiance) *
+                    AbsDot(aosoaIntrs.shading.n, wi);
                 // TODO: need to == with 0.f for every wavelength, and then combine together
                 mask &= f.GetMask();
 
@@ -305,7 +319,8 @@ struct ShadingQueuePtex
 
                 // Power heuristic
                 LaneNF32 w_l = lightPdf / (Sqr(lightPdf) + Sqr(scatterPdf));
-                // TODO: to prevent atomics, need to basically have thread permanently take a tile
+                // TODO: to prevent atomics, need to basically have thread permanently take a
+                // tile
                 L += Select(LaneNF32::Mask(maskbits), f * beta * w_l * sample.Le, 0.f);
                 i += add;
             }
@@ -321,15 +336,17 @@ struct ShadingQueuePtex
             // - path flags
             // - path eta scale for russian roulette
 
-            // TODO: should I copy data (e.g. path throughput weights) so that stages can happen in whatever order? otherwise,
-            // i need to ensure that next event estimation, etc. happens before the bsdf sample is generated, otherwise the
-            // path throughput weight needed for nee is lost
+            // TODO: should I copy data (e.g. path throughput weights) so that stages can
+            // happen in whatever order? otherwise, i need to ensure that next event
+            // estimation, etc. happens before the bsdf sample is generated, otherwise the path
+            // throughput weight needed for nee is lost
             Sampler *samplers[IntN];
             Ray2 *rays[IntN];
             LaneF32<IntN> u;
             Vec2lf<IntN> uv;
 
-            BSDFSample<IntN> sample = bsdf.GenerateSample(-ray.d, u, uv, TransportMode ::Radiance, BSDFFlags::RT);
+            BSDFSample<IntN> sample =
+                bsdf.GenerateSample(-ray.d, u, uv, TransportMode ::Radiance, BSDFFlags::RT);
             MaskF32 mask;
             mask = Select(sample.pdf == 0.f, 1, 0);
             beta *= sample.f * AbsDot(intr.shading.n, sample.wi) / sample.pdf;
@@ -367,7 +384,8 @@ bool SurfaceInteraction::ComputeShading(BSDF &bsdf)
 template <typename Sampler>
 SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda);
 
-void Render(Arena *arena, RenderParams2 &params) // Vec2i imageDim, Vec2f filterRadius, u32 spp, Mat4 &cameraFromRaster, )
+void Render(Arena *arena, RenderParams2 &params) // Vec2i imageDim, Vec2f filterRadius, u32
+                                                 // spp, Mat4 &cameraFromRaster, )
 {
     u32 width              = params.width;
     u32 height             = params.height;
@@ -397,10 +415,13 @@ void Render(Arena *arena, RenderParams2 &params) // Vec2i imageDim, Vec2f filter
         u32 tileX = jobID % tileCountX;
         u32 tileY = jobID / tileCountX;
         Vec2u minPixelBounds(tileWidth * tileX, tileHeight * tileY);
-        Vec2u maxPixelBounds(Min(tileWidth * (tileX + 1), width), Min((tileY + 1) * tileHeight, height));
+        Vec2u maxPixelBounds(Min(tileWidth * (tileX + 1), width),
+                             Min((tileY + 1) * tileHeight, height));
 
-        Assert(maxPixelBounds.x >= minPixelBounds.x && minPixelBounds.x >= 0 && maxPixelBounds.x <= width);
-        Assert(maxPixelBounds.y >= minPixelBounds.y && minPixelBounds.y >= 0 && maxPixelBounds.y <= height);
+        Assert(maxPixelBounds.x >= minPixelBounds.x && minPixelBounds.x >= 0 &&
+               maxPixelBounds.x <= width);
+        Assert(maxPixelBounds.y >= minPixelBounds.y && minPixelBounds.y >= 0 &&
+               maxPixelBounds.y <= height);
 
         ZSobolSampler sampler(spp, Vec2i(width, height));
         for (u32 y = minPixelBounds.y; y < maxPixelBounds.y; y++)
@@ -416,7 +437,8 @@ void Render(Arena *arena, RenderParams2 &params) // Vec2i imageDim, Vec2f filter
                     SampledWavelengths lambda = SampleVisible(sampler.Get1D());
                     // box filter
                     Vec2f u            = sampler.Get2D();
-                    Vec2f filterSample = Vec2f(Lerp(u[0], -filterRadius.x, filterRadius.x), Lerp(u[1], -filterRadius.y, filterRadius.y));
+                    Vec2f filterSample = Vec2f(Lerp(u[0], -filterRadius.x, filterRadius.x),
+                                               Lerp(u[1], -filterRadius.y, filterRadius.y));
                     // converts from continuous to discrete coordinates
                     filterSample += Vec2f(0.5f, 0.5f) + Vec2f(pPixel);
                     Vec2f pLens = sampler.Get2D();
@@ -469,8 +491,9 @@ void Render(Arena *arena, RenderParams2 &params) // Vec2i imageDim, Vec2f filter
 
                 Assert(r <= 255.f && g <= 255.f && b <= 255.f);
 
-                u32 color = (RoundFloatToU32(a) << 24) | (RoundFloatToU32(r) << 16) | (RoundFloatToU32(g) << 8) | (RoundFloatToU32(b) << 0);
-                *out++    = color;
+                u32 color = (RoundFloatToU32(a) << 24) | (RoundFloatToU32(r) << 16) |
+                            (RoundFloatToU32(g) << 8) | (RoundFloatToU32(b) << 0);
+                *out++ = color;
             }
         }
     });
@@ -485,7 +508,8 @@ f32 PowerHeuristic(u32 numA, f32 pdfA, u32 numB, f32 pdfB)
     return a / (a + b);
 }
 
-void EvaluateMaterial(Arena *arena, SurfaceInteraction &si, BSDF *bsdf, SampledWavelengths &lambda)
+void EvaluateMaterial(Arena *arena, SurfaceInteraction &si, BSDF *bsdf,
+                      SampledWavelengths &lambda)
 {
     using MaterialTypes = Scene2::MaterialTypes;
     Dispatch(
@@ -519,8 +543,8 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         // If no intersection, sample "infinite" lights (e.g environment maps, sun, etc.)
         if (!intersect)
         {
-            // Eschew MIS when last bounce is specular or depth is zero (because either light wasn't previously sampled,
-            // or it wasn't sampled with MIS)
+            // Eschew MIS when last bounce is specular or depth is zero (because either light
+            // wasn't previously sampled, or it wasn't sampled with MIS)
             if (specularBounce || depth == 0)
             {
                 ForEachTypeSubset(
@@ -565,7 +589,8 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         if (si.lightIndices)
         {
             Assert(0);
-            DiffuseAreaLight *light = &scene->GetAreaLights()[LightHandle(si.lightIndices).GetIndex()];
+            DiffuseAreaLight *light =
+                &scene->GetAreaLights()[LightHandle(si.lightIndices).GetIndex()];
             if (specularBounce || depth == 0)
             {
                 SampledSpectrum Le = DiffuseAreaLight::Le(light, si.n, -ray.d, lambda);
@@ -575,9 +600,10 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
             {
                 SampledSpectrum Le = DiffuseAreaLight::Le(light, si.n, -ray.d, lambda);
                 // probability of sampling the light * probability of sampling point on light
-                f32 pmf      = LightPDF(scene);
-                f32 lightPdf = pmf * DiffuseAreaLight::PDF_Li(scene, si.lightIndices, prevSi.p, si, true);
-                f32 w_l      = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
+                f32 pmf = LightPDF(scene);
+                f32 lightPdf =
+                    pmf * DiffuseAreaLight::PDF_Li(scene, si.lightIndices, prevSi.p, si, true);
+                f32 w_l = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
                 // NOTE: beta already contains the cosine, bsdf, and pdf terms
                 L += beta * w_l * Le;
             }
@@ -607,7 +633,8 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
             {
                 // Evaluate BSDF for light sample, check visibility with shadow ray
                 f32 p_b;
-                SampledSpectrum f = bsdf.EvaluateSample(-ray.d, ls.wi, p_b) * AbsDot(si.shading.n, ls.wi);
+                SampledSpectrum f =
+                    bsdf.EvaluateSample(-ray.d, ls.wi, p_b) * AbsDot(si.shading.n, ls.wi);
                 if (f && !BVH4TriangleIntersector1::Occluded(ray, scene->nodePtr))
                 {
                     // Calculate contribution

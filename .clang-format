@@ -13,6 +13,7 @@ AllowAllParametersOfDeclarationOnNextLine: true
 ForEachMacros: ['foreach', 'foreach_index']
 AlignConsecutiveMacros: true
 AllowShortCaseLabelsOnASingleLine: true
+AlignOperands: Align
 AccessModifierOffset: -4
 AllowAllArgumentsOnNextLine: false
 

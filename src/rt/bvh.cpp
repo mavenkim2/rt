@@ -34,8 +34,7 @@ void BVH::Subdivide(u32 nodeIndex, AABB *aabbs)
 {
     Node &node      = nodes[nodeIndex];
     f32 surfaceArea = node.aabb.SurfaceArea();
-    if (surfaceArea == 0 || node.count <= 2)
-        return;
+    if (surfaceArea == 0 || node.count <= 2) return;
 
     i32 axis = node.aabb.MaxDimension();
     // Split into buckets
@@ -105,8 +104,7 @@ void BVH::Subdivide(u32 nodeIndex, AABB *aabbs)
     minCost      = 0.5f + minCost / surfaceArea;
     f32 leafCost = f32(node.count);
 
-    if (node.count < maxPrimitivesPerLeaf && leafCost <= minCost)
-        return;
+    if (node.count < maxPrimitivesPerLeaf && leafCost <= minCost) return;
 
     // Vec3f extent = node.aabb.GetHalfExtent();
     // Vec3f min    = node.aabb.minP;
@@ -135,8 +133,7 @@ void BVH::Subdivide(u32 nodeIndex, AABB *aabbs)
         }
     }
     u32 leftCount = i - node.offset;
-    if (leftCount == 0 || leftCount == node.count)
-        return;
+    if (leftCount == 0 || leftCount == node.count) return;
     u32 leftChildIndex  = nodeCount++;
     u32 rightChildIndex = nodeCount++;
     node.left           = leftChildIndex;
@@ -438,8 +435,9 @@ CompressedBVH4 CreateCompressedBVH4(Arena *arena, BVH *bvh)
             grandChildrenIndices[3] != -1 ? &bvh->nodes[grandChildrenIndices[3]] : 0,
         };
 
-        CompressedBVHNode *currentCompressedNode = &compressedBVH.nodes[node->compressedBVHIndex];
-        currentCompressedNode->leafMask          = 0;
+        CompressedBVHNode *currentCompressedNode =
+            &compressedBVH.nodes[node->compressedBVHIndex];
+        currentCompressedNode->leafMask = 0;
 
         for (u32 i = 0; i < ArrayLength(grandChildren); i++)
         {
@@ -463,8 +461,7 @@ CompressedBVH4 CreateCompressedBVH4(Arena *arena, BVH *bvh)
             currentCompressedNode->leafMask |= (mask << (2 * i));
         }
 
-        Compress(currentCompressedNode,
-                 grandChildren[0] ? grandChildren[0]->aabb : emptyAABB,
+        Compress(currentCompressedNode, grandChildren[0] ? grandChildren[0]->aabb : emptyAABB,
                  grandChildren[1] ? grandChildren[1]->aabb : emptyAABB,
                  grandChildren[2] ? grandChildren[2]->aabb : emptyAABB,
                  grandChildren[3] ? grandChildren[3]->aabb : emptyAABB);
@@ -500,8 +497,7 @@ bool BVH::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) c
 
         bool result = node.aabb.Hit(r, 0, infinity, dirIsNeg);
 
-        if (!result)
-            continue;
+        if (!result) continue;
         if (node.IsLeaf())
         {
             for (u32 i = 0; i < node.count; i++)
@@ -534,7 +530,8 @@ bool BVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) 
     f32 rdy = (r.d.y == -0.f) ? 0.f : r.d.y;
     f32 rdz = (r.d.z == -0.f) ? 0.f : r.d.z;
 
-    Vec3f oneOverDir  = Vec3f(1.f / rdx, 1.f / rdy, 1.f / rdz); // r.d.x, 1.f / r.d.y, 1.f / r.d.z);
+    Vec3f oneOverDir =
+        Vec3f(1.f / rdx, 1.f / rdy, 1.f / rdz); // r.d.x, 1.f / r.d.y, 1.f / r.d.z);
     Vec3lf4 rcpDir    = oneOverDir;
     Vec3lf4 rayOrigin = r.o;
 
@@ -553,8 +550,7 @@ bool BVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) 
 
         i32 result = node.IntersectP(rayOrigin, rcpDir, 0, infinity);
 
-        if (!result)
-            continue;
+        if (!result) continue;
 
         for (u32 childIndex = 0; childIndex < 4; childIndex++)
         {
@@ -564,7 +560,8 @@ bool BVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) 
             {
                 for (u32 i = 0; i < node.count[childIndex]; i++)
                 {
-                    bool primitiveHit = scene->Hit(r, tMin, tMax, temp, leafIndices[node.offsetIndex[childIndex] + i]);
+                    bool primitiveHit = scene->Hit(
+                        r, tMin, tMax, temp, leafIndices[node.offsetIndex[childIndex] + i]);
 
                     if (primitiveHit)
                     {
@@ -704,7 +701,8 @@ bool CompressedBVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord
         const u32 childType2 = (node.leafMask >> 4) & 3;
         const u32 childType3 = (node.leafMask >> 6) & 3;
 
-        // If child is a leaf or invalid (case 0 and 2), the upper bits are set according to the mask
+        // If child is a leaf or invalid (case 0 and 2), the upper bits are set according to
+        // the mask
         const u32 nodeBits0 = (0xffffffffu + !(childType0 & 1)) & 0x02a10;
         const u32 nodeBits1 = (0xffffffffu + !(childType1 & 1)) & 0x21420;
         const u32 nodeBits2 = (0xffffffffu + !(childType2 & 1)) & 0x48140;
@@ -718,7 +716,8 @@ bool CompressedBVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord
         const u32 nodeBits = (nodeBits0 | nodeBits1 | nodeBits2 | nodeBits3) >> 4;
         const u32 leafBits = (leafBits0 | leafBits1 | leafBits2 | leafBits3) >> 4;
 
-        // Third bit of nodeBits_n is either 1, 2, 4, 8, so can use that to determine wheter a node is invalid
+        // Third bit of nodeBits_n is either 1, 2, 4, 8, so can use that to determine wheter a
+        // node is invalid
         const u32 isKeptNode = (nodeBits & intersectFlags & 0xf);
         const u32 isKeptLeaf = (leafBits & intersectFlags & 0xf);
 
@@ -734,7 +733,8 @@ bool CompressedBVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord
             stackPtr += numNodes;
 
             const u32 leafIndex              = (isKeptLeaf >> 1) - (isKeptLeaf >> 3);
-            queue[queueWritePos & queueMask] = {node.offsetIndex[leafIndex], node.count[leafIndex]};
+            queue[queueWritePos & queueMask] = {node.offsetIndex[leafIndex],
+                                                node.count[leafIndex]};
             queueWritePos += numLeaves;
         }
         else
@@ -746,9 +746,11 @@ bool CompressedBVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord
             const u32 da_cb_ba_ac = Movemask(t_dcba < abac) & 0xe;
             const u32 aa_db_ca_dc = Movemask(adcd < abac);
 
-            u32 da_cb_ba_db_ca_dc        = da_cb_ba_ac * 4 + aa_db_ca_dc;
-            u32 da_cb_ba_db_ca_dc_nodes  = (da_cb_ba_db_ca_dc | (~nodeBits >> 4)) & (nodeBits >> 10);
-            u32 da_cb_ba_db_ca_dc_leaves = (da_cb_ba_db_ca_dc | (~leafBits >> 4)) & (leafBits >> 10);
+            u32 da_cb_ba_db_ca_dc = da_cb_ba_ac * 4 + aa_db_ca_dc;
+            u32 da_cb_ba_db_ca_dc_nodes =
+                (da_cb_ba_db_ca_dc | (~nodeBits >> 4)) & (nodeBits >> 10);
+            u32 da_cb_ba_db_ca_dc_leaves =
+                (da_cb_ba_db_ca_dc | (~leafBits >> 4)) & (leafBits >> 10);
 
             u32 indexA = PopCount(da_cb_ba_db_ca_dc_nodes & 0x2a);
             u32 indexB = PopCount((da_cb_ba_db_ca_dc_nodes ^ 0x08) & 0x1c);
@@ -789,7 +791,8 @@ bool CompressedBVH4::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord
             QueueEntry *entry = &queue[queueIndex & queueMask];
             for (u32 i = 0; i < entry->count; i++)
             {
-                bool primitiveHit = scene->Hit(r, tMin, tClosest, record, leafIndices[entry->offset + i]);
+                bool primitiveHit =
+                    scene->Hit(r, tMin, tClosest, record, leafIndices[entry->offset + i]);
                 hit |= primitiveHit;
                 tClosest = record.t;
             }
@@ -836,11 +839,13 @@ struct HitRecordTest
 };
 
 // https://jcgt.org/published/0004/04/05/
-// bool HitTest(CompressedBVH4 *bvh, const RayTest *rayBatch, const u32 numRays, const f32 tMax)
+// bool HitTest(CompressedBVH4 *bvh, const RayTest *rayBatch, const u32 numRays, const f32
+// tMax)
 // {
 //     TIMED_FUNCTION(primitiveIntersectionTime);
 //
-//     // TODO: i think the stack size is unbounded. what do? i mean in practice it'll probably be fine
+//     // TODO: i think the stack size is unbounded. what do? i mean in practice it'll probably
+//     be fine
 //     // RayID *rayStack[4];
 //     std::vector<RayID> rayStack[4];
 //     u32 rayStackPointers[4] = {};
@@ -931,19 +936,22 @@ struct HitRecordTest
 //         const LaneU32 minZmaxX = UnpackHiU32(minXminYminZmaxX, simdZeroI);
 //
 //         const LaneU32 minXCompressed_i = UnpackLowU32(minXminY, simdZeroI);
-//         const Lane4F32 minXCompressed  = ConvertLaneU32ToLane4F32(SignExtendU8ToU32(minXCompressed_i));
-//         const LaneU32 minYCompressed_i = UnpackHiU32(minXminY, simdZeroI);
-//         const Lane4F32 minYCompressed  = ConvertLaneU32ToLane4F32(SignExtendU8ToU32(minYCompressed_i));
+//         const Lane4F32 minXCompressed  =
+//         ConvertLaneU32ToLane4F32(SignExtendU8ToU32(minXCompressed_i)); const LaneU32
+//         minYCompressed_i = UnpackHiU32(minXminY, simdZeroI); const Lane4F32 minYCompressed
+//         = ConvertLaneU32ToLane4F32(SignExtendU8ToU32(minYCompressed_i));
 //
 //         const LaneU32 minZCompressed_i = UnpackLowU32(minZmaxX, simdZeroI);
-//         const Lane4F32 minZCompressed  = ConvertLaneU32ToLane4F32(SignExtendU8ToU32(minZCompressed_i));
-//         const LaneU32 maxXCompressed_i = UnpackHiU32(minZmaxX, simdZeroI);
-//         const Lane4F32 maxXCompressed  = ConvertLaneU32ToLane4F32(SignExtendU8ToU32(maxXCompressed_i));
+//         const Lane4F32 minZCompressed  =
+//         ConvertLaneU32ToLane4F32(SignExtendU8ToU32(minZCompressed_i)); const LaneU32
+//         maxXCompressed_i = UnpackHiU32(minZmaxX, simdZeroI); const Lane4F32 maxXCompressed
+//         = ConvertLaneU32ToLane4F32(SignExtendU8ToU32(maxXCompressed_i));
 //
 //         const LaneU32 maxYCompressed_i = UnpackLowU32(maxYmaxZ, simdZeroI);
-//         const Lane4F32 maxYCompressed  = ConvertLaneU32ToLane4F32(SignExtendU8ToU32(maxYCompressed_i));
-//         const LaneU32 maxZCompressed_i = UnpackHiU32(maxYmaxZ, simdZeroI);
-//         const Lane4F32 maxZCompressed  = ConvertLaneU32ToLane4F32(SignExtendU8ToU32(maxZCompressed_i));
+//         const Lane4F32 maxYCompressed  =
+//         ConvertLaneU32ToLane4F32(SignExtendU8ToU32(maxYCompressed_i)); const LaneU32
+//         maxZCompressed_i = UnpackHiU32(maxYmaxZ, simdZeroI); const Lane4F32 maxZCompressed
+//         = ConvertLaneU32ToLane4F32(SignExtendU8ToU32(maxZCompressed_i));
 //
 //         LaneVec3f minCompressed;
 //         minCompressed.x = minXCompressed;
@@ -986,7 +994,8 @@ struct HitRecordTest
 //             const Lane4F32 tLeaveZ = Max(termMin.z, termMax.z);
 //
 //             const Lane4F32 tEntry    = Max(tEntryZ, Max(tEntryY, Max(tEntryX, simdZero)));
-//             const Lane4F32 tLeaveRaw = Min(tLeaveZ, Min(tLeaveY, Min(tLeaveX, simdInfinity)));
+//             const Lane4F32 tLeaveRaw = Min(tLeaveZ, Min(tLeaveY, Min(tLeaveX,
+//             simdInfinity)));
 //
 //             const Lane4F32 tLaneClosest = Lane4F32FromF32(rayBatch->tNear[id]);
 //             const Lane4F32 tLeave       = Min(tLeaveRaw, tLaneClosest);
@@ -1001,9 +1010,9 @@ struct HitRecordTest
 //             const u32 childType2 = (node.leafMask >> 4) & 3;
 //             const u32 childType3 = (node.leafMask >> 6) & 3;
 //
-//             // If child is a leaf or invalid (case 0 and 2), the upper bits are set according to the mask
-//             const u32 nodeBits0 = (0xffffffffu + !(childType0 & 1)) & 0x02a10;
-//             const u32 nodeBits1 = (0xffffffffu + !(childType1 & 1)) & 0x21420;
+//             // If child is a leaf or invalid (case 0 and 2), the upper bits are set
+//             according to the mask const u32 nodeBits0 = (0xffffffffu + !(childType0 & 1)) &
+//             0x02a10; const u32 nodeBits1 = (0xffffffffu + !(childType1 & 1)) & 0x21420;
 //             const u32 nodeBits2 = (0xffffffffu + !(childType2 & 1)) & 0x48140;
 //             const u32 nodeBits3 = (0xffffffffu + !(childType3 & 1)) & 0x94080;
 //
@@ -1015,9 +1024,9 @@ struct HitRecordTest
 //             const u32 nodeBits = (nodeBits0 | nodeBits1 | nodeBits2 | nodeBits3) >> 4;
 //             const u32 leafBits = (leafBits0 | leafBits1 | leafBits2 | leafBits3) >> 4;
 //
-//             // Third bit of nodeBits_n is either 1, 2, 4, 8, so can use that to determine wheter a node is invalid
-//             const u32 isKeptNode = (nodeBits & intersectFlags & 0xf);
-//             const u32 isKeptLeaf = (leafBits & intersectFlags & 0xf);
+//             // Third bit of nodeBits_n is either 1, 2, 4, 8, so can use that to determine
+//             wheter a node is invalid const u32 isKeptNode = (nodeBits & intersectFlags &
+//             0xf); const u32 isKeptLeaf = (leafBits & intersectFlags & 0xf);
 //
 //             const u32 numNodes  = PopCount(isKeptNode);
 //             const u32 numLeaves = PopCount(isKeptLeaf);
@@ -1025,7 +1034,8 @@ struct HitRecordTest
 //             // TODO: see if this branch is worth it
 //             if ((numNodes | numLeaves) <= 1)
 //             {
-//                 // If numNodes <= 1, then numNode will be 0, 1, 2, 4, or 8. x/2 - x/8 maps to
+//                 // If numNodes <= 1, then numNode will be 0, 1, 2, 4, or 8. x/2 - x/8 maps
+//                 to
 //                 // 0, 0, 1, 2, 3
 //                 u32 nodeChildIndex = (isKeptNode >> 1) - (isKeptNode >> 3);
 //                 rayStack[nodeChildIndex].push_back(id); // = id;
@@ -1034,8 +1044,8 @@ struct HitRecordTest
 //                 // stackPtr += numNodes;
 //
 //                 const u32 leafIndex              = (isKeptLeaf >> 1) - (isKeptLeaf >> 3);
-//                 queue[queueWritePos & queueMask] = {node.offsetIndex[leafIndex], node.count[leafIndex]};
-//                 queueWritePos += numLeaves;
+//                 queue[queueWritePos & queueMask] = {node.offsetIndex[leafIndex],
+//                 node.count[leafIndex]}; queueWritePos += numLeaves;
 //             }
 //             else
 //             {
@@ -1047,8 +1057,9 @@ struct HitRecordTest
 //                 const u32 aa_db_ca_dc = Movemask(adcd < abac);
 //
 //                 u32 da_cb_ba_db_ca_dc        = da_cb_ba_ac * 4 + aa_db_ca_dc;
-//                 u32 da_cb_ba_db_ca_dc_nodes  = (da_cb_ba_db_ca_dc | (~nodeBits >> 4)) & (nodeBits >> 10);
-//                 u32 da_cb_ba_db_ca_dc_leaves = (da_cb_ba_db_ca_dc | (~leafBits >> 4)) & (leafBits >> 10);
+//                 u32 da_cb_ba_db_ca_dc_nodes  = (da_cb_ba_db_ca_dc | (~nodeBits >> 4)) &
+//                 (nodeBits >> 10); u32 da_cb_ba_db_ca_dc_leaves = (da_cb_ba_db_ca_dc |
+//                 (~leafBits >> 4)) & (leafBits >> 10);
 //
 //                 u32 indexA = PopCount(da_cb_ba_db_ca_dc_nodes & 0x2a);
 //                 u32 indexB = PopCount((da_cb_ba_db_ca_dc_nodes ^ 0x08) & 0x1c);
@@ -1103,7 +1114,8 @@ struct HitRecordTest
 //
 //                 queueWritePos += numLeaves;
 //
-//                 for (u32 queueIndex = queueReadPos; queueIndex < queueWritePos; queueIndex++)
+//                 for (u32 queueIndex = queueReadPos; queueIndex < queueWritePos;
+//                 queueIndex++)
 //                 {
 //                     QueueEntry *entry = &queue[queueIndex & queueMask];
 //                     for (u32 i = 0; i < entry->count; i++)
@@ -1117,13 +1129,15 @@ struct HitRecordTest
 //
 //                         u32 count = 0;
 //                         f32 data[4];
-//                         GetPrimitiveData(data, leafIndices[entry->offset + i], rayBatch->time[], &count);
-//                         for (u32 floatIndex = 0; floatIndex < count; floatIndex++)
+//                         GetPrimitiveData(data, leafIndices[entry->offset + i],
+//                         rayBatch->time[], &count); for (u32 floatIndex = 0; floatIndex <
+//                         count; floatIndex++)
 //                         {
 //                             queue->vars[floatIndex][queue->count] = data[floatIndex];
 //                         }
 //                         queue->count++;
-//                         // bool primitiveHit = scene->Hit(r, tMin, tClosest, record, leafIndices[entry->offset + i]);
+//                         // bool primitiveHit = scene->Hit(r, tMin, tClosest, record,
+//                         leafIndices[entry->offset + i]);
 //                         // hit |= primitiveHit;
 //                         // tClosest = record.t;
 //                     }
@@ -1144,7 +1158,8 @@ struct HitRecordTest
 //                     {
 //                         RayID id                     = queue->indices[i];
 //                         Sphere *sphere               = &spheres[id];
-//                         Vec3f center                 = sphere->Center(rayBatch->time[queue->ids[i]]);
+//                         Vec3f center                 =
+//                         sphere->Center(rayBatch->time[queue->ids[i]]);
 //                         queue->vars[0][queue->count] = center.x;
 //                         queue->vars[1][queue->count] = center.y;
 //                         queue->vars[2][queue->count] = center.z;
@@ -1217,7 +1232,8 @@ inline bool BVH4Hit(void *ptr, const Ray &r, const f32 tMin, const f32 tMax, Hit
     BVH4 *bvh = (BVH4 *)ptr;
     return bvh->Hit(r, tMin, tMax, record);
 }
-inline bool CompressedBVH4Hit(void *ptr, const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record)
+inline bool CompressedBVH4Hit(void *ptr, const Ray &r, const f32 tMin, const f32 tMax,
+                              HitRecord &record)
 {
     CompressedBVH4 *bvh = (CompressedBVH4 *)ptr;
     return bvh->Hit(r, tMin, tMax, record);

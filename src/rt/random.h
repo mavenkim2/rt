@@ -2,25 +2,13 @@
 namespace rt
 {
 
-inline f32 RandomFloat()
-{
-    return rand() / (RAND_MAX + 1.f);
-}
+inline f32 RandomFloat() { return rand() / (RAND_MAX + 1.f); }
 
-inline f32 RandomFloat(f32 min, f32 max)
-{
-    return min + (max - min) * RandomFloat();
-}
+inline f32 RandomFloat(f32 min, f32 max) { return min + (max - min) * RandomFloat(); }
 
-inline i32 RandomInt(i32 min, i32 max)
-{
-    return i32(RandomFloat(f32(min), f32(max)));
-}
+inline i32 RandomInt(i32 min, i32 max) { return i32(RandomFloat(f32(min), f32(max))); }
 
-inline Vec3f RandomVec3()
-{
-    return Vec3f(RandomFloat(), RandomFloat(), RandomFloat());
-}
+inline Vec3f RandomVec3() { return Vec3f(RandomFloat(), RandomFloat(), RandomFloat()); }
 
 inline Vec3f RandomVec3(f32 min, f32 max)
 {
@@ -41,10 +29,7 @@ inline Vec3f RandomUnitVector()
 }
 #endif
 
-inline Vec3f RandomUnitVector(Vec2f u)
-{
-    return Normalize(SampleUniformSphere(u));
-}
+inline Vec3f RandomUnitVector(Vec2f u) { return Normalize(SampleUniformSphere(u)); }
 
 inline Vec3f RandomUnitVector()
 {
@@ -111,10 +96,7 @@ struct RNG
     RNG(u64 seqIndex) { SetSequence(seqIndex); }
 
     void SetSequence(u64 sequenceIndex, u64 offset);
-    void SetSequence(u64 sequenceIndex)
-    {
-        SetSequence(sequenceIndex, MixBits(sequenceIndex));
-    }
+    void SetSequence(u64 sequenceIndex) { SetSequence(sequenceIndex, MixBits(sequenceIndex)); }
     template <typename T>
     T Uniform();
 
@@ -125,8 +107,7 @@ struct RNG
         for (;;)
         {
             T r = Uniform<T>();
-            if (r >= threshold)
-                return r % b;
+            if (r >= threshold) return r % b;
         }
     }
     void Advance(i64 iDelta);
@@ -165,8 +146,7 @@ template <>
 inline i32 RNG::Uniform<i32>()
 {
     u32 v = Uniform<u32>();
-    if (v <= (u32)INT_MAX)
-        return i32(v);
+    if (v <= (u32)INT_MAX) return i32(v);
     return i32(v - INT_MIN) + INT_MIN;
 }
 

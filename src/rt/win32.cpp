@@ -34,10 +34,7 @@ u64 OS_GetCounts(PerformanceCounter counter)
     return result;
 }
 
-f32 OS_GetMilliseconds(u64 count)
-{
-    return (f32)count / osPerformanceFrequency;
-}
+f32 OS_GetMilliseconds(u64 count) { return (f32)count / osPerformanceFrequency; }
 
 u32 OS_NumProcessors()
 {
@@ -54,7 +51,8 @@ void *OS_Reserve(u64 size, void *ptr)
 
 void *OS_ReserveLarge(u64 size)
 {
-    void *out = VirtualAlloc(0, size, MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES, PAGE_READWRITE);
+    void *out =
+        VirtualAlloc(0, size, MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES, PAGE_READWRITE);
     return out;
 }
 
@@ -62,7 +60,8 @@ void *OS_ReserveLarge(u64 size)
 // {
 //     b32 is_ok = 0;
 //     HANDLE token;
-//     if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token))
+//     if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+//     &token))
 //     {
 //         LUID luid;
 //         if (LookupPrivilegeValue(0, SE_LOCK_MEMORY_NAME, &luid))
@@ -82,15 +81,9 @@ void *OS_ReserveLarge(u64 size)
 //     return is_ok;
 // }
 
-size_t OS_GetLargePageSize()
-{
-    return GetLargePageMinimum();
-}
+size_t OS_GetLargePageSize() { return GetLargePageMinimum(); }
 
-b32 OS_LargePagesEnabled()
-{
-    return win32LargePagesEnabled;
-}
+b32 OS_LargePagesEnabled() { return win32LargePagesEnabled; }
 
 b8 OS_Commit(void *ptr, u64 size)
 {
@@ -104,10 +97,7 @@ void *OS_Alloc(u64 size, void *ptr)
     return out;
 }
 
-void OS_Release(void *memory)
-{
-    VirtualFree(memory, 0, MEM_RELEASE);
-}
+void OS_Release(void *memory) { VirtualFree(memory, 0, MEM_RELEASE); }
 
 u64 OS_PageSize()
 {
@@ -137,10 +127,7 @@ Win32Thread *Win32GetFreeThread()
     return thread;
 }
 
-inline void Win32FreeThread(Win32Thread *thread)
-{
-    StackPush(win32FreeThread, thread);
-}
+inline void Win32FreeThread(Win32Thread *thread) { StackPush(win32FreeThread, thread); }
 
 void OS_CreateWorkThread(OS_ThreadFunction func, void *parameter)
 {
@@ -157,9 +144,10 @@ void OS_SetThreadName(string name)
 {
     TempArena scratch = ScratchStart(0, 0);
 
-    u32 resultSize     = (u32)(name.size);
-    wchar_t *result    = (wchar_t *)PushArray(scratch.arena, u8, resultSize + 1);
-    resultSize         = MultiByteToWideChar(CP_UTF8, 0, (char *)name.str, (i32)(name.size), result, (i32)resultSize);
+    u32 resultSize  = (u32)(name.size);
+    wchar_t *result = (wchar_t *)PushArray(scratch.arena, u8, resultSize + 1);
+    resultSize = MultiByteToWideChar(CP_UTF8, 0, (char *)name.str, (i32)(name.size), result,
+                                     (i32)resultSize);
     result[resultSize] = 0;
     SetThreadDescription(GetCurrentThread(), result);
 
@@ -168,7 +156,8 @@ void OS_SetThreadName(string name)
 
 string OS_ReadFile(Arena *arena, string filename)
 {
-    HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     Error(file != INVALID_HANDLE_VALUE, "Could not open file: %S\n", filename);
     u64 size;
     GetFileSizeEx(file, (LARGE_INTEGER *)&size);
@@ -192,7 +181,8 @@ string OS_ReadFile(Arena *arena, string filename)
 
 b32 OS_WriteFile(string filename, void *fileMemory, u64 fileSize)
 {
-    HANDLE fileHandle = CreateFileA((char *)filename.str, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE fileHandle = CreateFileA((char *)filename.str, GENERIC_WRITE, 0, 0, CREATE_ALWAYS,
+                                    FILE_ATTRIBUTE_NORMAL, NULL);
     u64 totalWritten  = 0;
     if (fileHandle != INVALID_HANDLE_VALUE)
     {
@@ -200,7 +190,8 @@ b32 OS_WriteFile(string filename, void *fileMemory, u64 fileSize)
         {
             DWORD bytesToWrite = (DWORD)Min(fileSize - totalWritten, 0xffffffffull);
             DWORD bytesWritten;
-            if (!WriteFile(fileHandle, (u8 *)fileMemory, bytesToWrite, &bytesWritten, NULL)) break;
+            if (!WriteFile(fileHandle, (u8 *)fileMemory, bytesToWrite, &bytesWritten, NULL))
+                break;
             totalWritten += bytesWritten;
         }
         CloseHandle(fileHandle);
@@ -215,7 +206,8 @@ b32 OS_WriteFile(string filename, string buffer)
 
 string OS_MapFileRead(string filename)
 {
-    HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     Error(file != INVALID_HANDLE_VALUE, "Could not open file: %S\n", filename);
     u64 size;
     GetFileSizeEx(file, (LARGE_INTEGER *)&size);
@@ -233,14 +225,12 @@ string OS_MapFileRead(string filename)
     return result;
 }
 
-void OS_UnmapFile(void *ptr)
-{
-    UnmapViewOfFile(ptr);
-}
+void OS_UnmapFile(void *ptr) { UnmapViewOfFile(ptr); }
 
 u8 *OS_MapFileWrite(string filename, u64 size)
 {
-    HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ | GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+    HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ | GENERIC_WRITE, 0, 0,
+                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
     Error(file != INVALID_HANDLE_VALUE, "Could not create file: %S\n", filename);
 
     LARGE_INTEGER newFileSize;
@@ -248,7 +238,8 @@ u8 *OS_MapFileWrite(string filename, u64 size)
     SetFilePointerEx(file, newFileSize, 0, FILE_BEGIN);
     SetEndOfFile(file);
 
-    HANDLE mapping = CreateFileMapping(file, 0, PAGE_READWRITE, newFileSize.HighPart, newFileSize.LowPart, 0);
+    HANDLE mapping = CreateFileMapping(file, 0, PAGE_READWRITE, newFileSize.HighPart,
+                                       newFileSize.LowPart, 0);
     CloseHandle(file);
     Error(mapping != INVALID_HANDLE_VALUE, "Could not map file: %S\n", filename);
 
@@ -260,7 +251,8 @@ u8 *OS_MapFileWrite(string filename, u64 size)
 
 void OS_ResizeFile(string filename, u64 size)
 {
-    HANDLE file = CreateFileA((char *)filename.str, GENERIC_WRITE, 0, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    HANDLE file = CreateFileA((char *)filename.str, GENERIC_WRITE, 0, 0, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, 0);
     // Error(file != INVALID_HANDLE_VALUE, "Could not create file: %S\n", filename);
     if (file == INVALID_HANDLE_VALUE)
     {
@@ -277,10 +269,7 @@ void OS_ResizeFile(string filename, u64 size)
     CloseHandle(file);
 }
 
-void OS_FlushMappedFile(void *ptr, size_t size)
-{
-    FlushViewOfFile(ptr, size);
-}
+void OS_FlushMappedFile(void *ptr, size_t size) { FlushViewOfFile(ptr, size); }
 
 // OS_FileIter OS_DirectoryIterStart(string path, OS_FileIterFlags flags)
 // {
@@ -329,8 +318,9 @@ void OS_FlushMappedFile(void *ptr, size_t size)
 //             }
 //             if (!skip)
 //             {
-//                 out->size         = ((u64)iter->findData.nFileSizeLow) | (((u64)iter->findData.nFileSizeHigh) << 32);
-//                 out->lastModified = Win32DenseTimeFromFileTime(&iter->findData.ftLastWriteTime);
+//                 out->size         = ((u64)iter->findData.nFileSizeLow) |
+//                 (((u64)iter->findData.nFileSizeHigh) << 32); out->lastModified =
+//                 Win32DenseTimeFromFileTime(&iter->findData.ftLastWriteTime);
 //                 out->isDirectory  = (attributes & FILE_ATTRIBUTE_DIRECTORY);
 //                 out->name         = PushStr8Copy(arena, Str8C(filename));
 //                 done              = 1;
@@ -412,10 +402,7 @@ b32 OS_SignalWait(OS_Handle input)
     return (result == WAIT_OBJECT_0);
 }
 
-void OS_Yield()
-{
-    SwitchToThread();
-}
+void OS_Yield() { SwitchToThread(); }
 
 void OS_Init()
 {

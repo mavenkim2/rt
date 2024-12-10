@@ -23,8 +23,7 @@ Vec3f EqualAreaSquareToSphere(Vec2f p)
     // Compute $\cos\phi$ and $\sin\phi$ for original quadrant and return vector
     float cosPhi = Copysign(Cos(phi), u);
     float sinPhi = Copysign(Sin(phi), v);
-    return Vec3f(cosPhi * r * SafeSqrt(2.f - Sqr(r)), sinPhi * r * SafeSqrt(2.f - Sqr(r)),
-                 z);
+    return Vec3f(cosPhi * r * SafeSqrt(2.f - Sqr(r)), sinPhi * r * SafeSqrt(2.f - Sqr(r)), z);
 }
 
 // Via source code from Clarberg: Fast Equal-Area Mapping of the (Hemi)Sphere using SIMD
@@ -53,8 +52,7 @@ Vec2f EqualAreaSphereToSquare(Vec3f d)
     float phi      = EvaluatePolynomial(b, t1, t2, t3, t4, t5, t6, t7);
 
     // Extend phi if the input is in the range 45-90 degrees (u<v)
-    if (x < y)
-        phi = 1 - phi;
+    if (x < y) phi = 1 - phi;
 
     // Find (u,v) based on (r,phi)
     float v = phi * r;
@@ -76,12 +74,12 @@ Vec2f EqualAreaSphereToSquare(Vec3f d)
     return Vec2f(0.5f * (u + 1), 0.5f * (v + 1));
 }
 
-// NOTE: sample (over solid angle) the spherical rectangle obtained by projecting a planar rectangle onto
-// the unit sphere centered at point p
+// NOTE: sample (over solid angle) the spherical rectangle obtained by projecting a planar
+// rectangle onto the unit sphere centered at point p
 // https://blogs.autodesk.com/media-and-entertainment/wp-content/uploads/sites/162/egsr2013_spherical_rectangle.pdf
 // TODO: simd sin, cos, and arcsin
-Vec3lfn SampleSphericalRectangle(const Vec3lfn &p, const Vec3lfn &base, const Vec3lfn &eu, const Vec3lfn &ev,
-                                 const Vec2lfn &samples, LaneNF32 *pdf)
+Vec3lfn SampleSphericalRectangle(const Vec3lfn &p, const Vec3lfn &base, const Vec3lfn &eu,
+                                 const Vec3lfn &ev, const Vec2lfn &samples, LaneNF32 *pdf)
 {
     LaneNF32 euLength = Length(eu);
     LaneNF32 evLength = Length(ev);
@@ -196,7 +194,8 @@ Vec2<T> SampleBilinear(const Vec2<T> &u, const Vec4<T> &w)
     return result;
 }
 
-LaneNF32 SphericalQuadArea(const Vec3lfn &a, const Vec3lfn &b, const Vec3lfn &c, const Vec3lfn &d)
+LaneNF32 SphericalQuadArea(const Vec3lfn &a, const Vec3lfn &b, const Vec3lfn &c,
+                           const Vec3lfn &d)
 {
     Vec3lfn axb = Normalize(Cross(a, b));
     Vec3lfn bxc = Normalize(Cross(b, c));
@@ -289,8 +288,8 @@ PDF_LI(DiffuseAreaLight)
     }
     Vec3lfn p[4];
     LaneNF32 area;
-    // TODO: maybe have to spawn a ray??? but I feel like this is only called (at least for now) when it already has intersected,
-    // and we need the pdf for MIS
+    // TODO: maybe have to spawn a ray??? but I feel like this is only called (at least for
+    // now) when it already has intersected, and we need the pdf for MIS
     for (u32 i = 0; i < 4; i++)
     {
         Lane4F32 pI[IntN];
@@ -357,7 +356,8 @@ SAMPLE_LI(DistantLight)
     const DistantLight *light = &scene->lights.Get<DistantLight>()[u32(lightIndices)];
     Vec3f wi                  = -light->d;
 
-    return LightSample(light->scale * light->Lemit->Sample(lambda), Vec3f(intr.p) + 2.f * wi * light->sceneRadius, wi, 1.f,
+    return LightSample(light->scale * light->Lemit->Sample(lambda),
+                       Vec3f(intr.p) + 2.f * wi * light->sceneRadius, wi, 1.f,
                        LightType::DeltaDirection);
 }
 
@@ -367,35 +367,36 @@ SAMPLE_LI(DistantLight)
 // TODO: the scene radius should not have to be stored per infinite light
 SAMPLE_LI(UniformInfiniteLight)
 {
-    const UniformInfiniteLight *light = &scene->lights.Get<UniformInfiniteLight>()[u32(lightIndices)];
+    const UniformInfiniteLight *light =
+        &scene->lights.Get<UniformInfiniteLight>()[u32(lightIndices)];
     if (allowIncompletePDF) return {};
     Vec3f wi = SampleUniformSphere(u);
     f32 pdf  = UniformSpherePDF();
-    return LightSample(light->scale * light->Lemit->Sample(lambda), Vec3f(intr.p) + 2.f * wi * light->sceneRadius,
-                       wi, pdf, LightType::Infinite);
+    return LightSample(light->scale * light->Lemit->Sample(lambda),
+                       Vec3f(intr.p) + 2.f * wi * light->sceneRadius, wi, pdf,
+                       LightType::Infinite);
 }
 
-PDF_LI_INF(UniformInfiniteLight)
-{
-    return allowIncompletePDF ? 0.f : UniformSpherePDF();
-}
+PDF_LI_INF(UniformInfiniteLight) { return allowIncompletePDF ? 0.f : UniformSpherePDF(); }
 
-LE_INF(UniformInfiniteLight)
-{
-    return light->scale * light->Lemit->Sample(lambda);
-}
+LE_INF(UniformInfiniteLight) { return light->scale * light->Lemit->Sample(lambda); }
 
 // ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image) : image(image)
-ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image, const AffineSpace *renderFromLight, const RGBColorSpace *imageColorSpace, f32 sceneRadius, f32 scale)
-    :image(image), renderFromLight(renderFromLight), imageColorSpace(imageColorSpace), sceneRadius(sceneRadius), scale(scale) 
+ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image,
+                                       const AffineSpace *renderFromLight,
+                                       const RGBColorSpace *imageColorSpace, f32 sceneRadius,
+                                       f32 scale)
+    : image(image), renderFromLight(renderFromLight), imageColorSpace(imageColorSpace),
+      sceneRadius(sceneRadius), scale(scale)
 {
     f32 *values  = image.GetSamplingDistribution(arena);
-    distribution = PiecewiseConstant2D(arena, values, image.width, image.height, Vec2f(0.f, 0.f), Vec2f(1.f, 1.f));
+    distribution = PiecewiseConstant2D(arena, values, image.width, image.height,
+                                       Vec2f(0.f, 0.f), Vec2f(1.f, 1.f));
 
-    u32 size = image.width * image.height;
-    f32 div = 1.f / size;
-    f32 avg = 0.f;
-    f32 first = values[0];
+    u32 size     = image.width * image.height;
+    f32 div      = 1.f / size;
+    f32 avg      = 0.f;
+    f32 first    = values[0];
     bool allSame = true;
 
     for (u32 i = 0; i < size; i++)
@@ -410,7 +411,8 @@ ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image, const AffineSp
     {
         values[i] = Max(0.f, values[i] - avg);
     }
-    compensatedDistribution = PiecewiseConstant2D(arena, values, image.width, image.height, Vec2f(0.f, 0.f), Vec2f(1.f, 1.f));
+    compensatedDistribution = PiecewiseConstant2D(arena, values, image.width, image.height,
+                                                  Vec2f(0.f, 0.f), Vec2f(1.f, 1.f));
 }
 
 SampledSpectrum ImageInfiniteLight::ImageLe(Vec2f uv, const SampledWavelengths &lambda) const
@@ -424,7 +426,8 @@ SampledSpectrum ImageInfiniteLight::ImageLe(Vec2f uv, const SampledWavelengths &
 
 SAMPLE_LI(ImageInfiniteLight)
 {
-    const ImageInfiniteLight *light = &scene->lights.Get<ImageInfiniteLight>()[u32(lightIndices)];
+    const ImageInfiniteLight *light =
+        &scene->lights.Get<ImageInfiniteLight>()[u32(lightIndices)];
     f32 pdf;
     Vec2f uv;
     if (allowIncompletePDF)
@@ -438,7 +441,9 @@ SAMPLE_LI(ImageInfiniteLight)
     if (pdf == 0.f) return {};
     Vec3f wi = TransformV(*light->renderFromLight, EqualAreaSquareToSphere(uv));
     pdf /= 4 * PI;
-    return LightSample(light->ImageLe(uv, lambda), Vec3f(intr.p) + 2.f * wi * light->sceneRadius, wi, pdf, LightType::Infinite);
+    return LightSample(light->ImageLe(uv, lambda),
+                       Vec3f(intr.p) + 2.f * wi * light->sceneRadius, wi, pdf,
+                       LightType::Infinite);
 }
 
 PDF_LI_INF(ImageInfiniteLight)
@@ -467,46 +472,71 @@ LE_INF(ImageInfiniteLight)
 //////////////////////////////
 // Morphism
 //
-// TODO: find the class of each sample, add to a corresponding queue, when the queue is full enough, generate the samples
-static LightSample SampleLi(Scene2 *scene, LightHandle lightHandle, const SurfaceInteraction &intr, const SampledWavelengths &lambda,
+// TODO: find the class of each sample, add to a corresponding queue, when the queue is full
+// enough, generate the samples
+static LightSample SampleLi(Scene2 *scene, LightHandle lightHandle,
+                            const SurfaceInteraction &intr, const SampledWavelengths &lambda,
                             Vec2f &u, bool allowIncompletePDF = false)
 {
     LightClass lClass = lightHandle.GetType();
     switch (lClass)
     {
-        case LightClass_Area: return DiffuseAreaLight::SampleLi(scene, lightHandle.GetIndex(), intr, lambda, u, allowIncompletePDF);
-        case LightClass_Distant: return DistantLight::SampleLi(scene, lightHandle.GetIndex(), intr, lambda, u, allowIncompletePDF);
-        case LightClass_InfUnf: return UniformInfiniteLight::SampleLi(scene, lightHandle.GetIndex(), intr, lambda, u, allowIncompletePDF);
-        case LightClass_InfImg: return ImageInfiniteLight::SampleLi(scene, lightHandle.GetIndex(), intr, lambda, u, allowIncompletePDF);
+        case LightClass_Area:
+            return DiffuseAreaLight::SampleLi(scene, lightHandle.GetIndex(), intr, lambda, u,
+                                              allowIncompletePDF);
+        case LightClass_Distant:
+            return DistantLight::SampleLi(scene, lightHandle.GetIndex(), intr, lambda, u,
+                                          allowIncompletePDF);
+        case LightClass_InfUnf:
+            return UniformInfiniteLight::SampleLi(scene, lightHandle.GetIndex(), intr, lambda,
+                                                  u, allowIncompletePDF);
+        case LightClass_InfImg:
+            return ImageInfiniteLight::SampleLi(scene, lightHandle.GetIndex(), intr, lambda, u,
+                                                allowIncompletePDF);
         default: Assert(0); return LightSample();
     }
 }
 
-static f32 PDF_Li(Scene2 *scene, LightHandle lightHandle, Vec3f &prevIntrP, SurfaceInteraction &intr, bool allowIncompletePDF = false)
+static f32 PDF_Li(Scene2 *scene, LightHandle lightHandle, Vec3f &prevIntrP,
+                  SurfaceInteraction &intr, bool allowIncompletePDF = false)
 {
     LightClass lClass = lightHandle.GetType();
     u32 lightIndex    = lightHandle.GetIndex();
     switch (lClass)
     {
-        case LightClass_Area: Assert(0); return (f32)DiffuseAreaLight::PDF_Li(scene, lightIndex, prevIntrP, intr, allowIncompletePDF);
-        case LightClass_Distant: return (f32)DistantLight::PDF_Li(scene, lightIndex, prevIntrP, intr, allowIncompletePDF);
-        // case LightClass_InfUnf: return (f32)UniformInfiniteLight::PDF_Li(scene, lightIndex, prevIntrP, intr, allowIncompletePDF);
-        // case LightClass_InfImg: return (f32)ImageInfiniteLight::PDF_Li(scene, lightIndex, prevIntrP, intr, allowIncompletePDF);
+        case LightClass_Area:
+            Assert(0);
+            return (f32)DiffuseAreaLight::PDF_Li(scene, lightIndex, prevIntrP, intr,
+                                                 allowIncompletePDF);
+        case LightClass_Distant:
+            return (f32)DistantLight::PDF_Li(scene, lightIndex, prevIntrP, intr,
+                                             allowIncompletePDF);
+        // case LightClass_InfUnf: return (f32)UniformInfiniteLight::PDF_Li(scene, lightIndex,
+        // prevIntrP, intr, allowIncompletePDF); case LightClass_InfImg: return
+        // (f32)ImageInfiniteLight::PDF_Li(scene, lightIndex, prevIntrP, intr,
+        // allowIncompletePDF);
         default: Assert(0); return 0.f;
     }
 }
 
-// NOTE: other pdfs cannot sample dirac delta distributions (unless they have the same direction)
-static SampledSpectrum Le(Scene2 *scene, LightHandle lightHandle, Vec3f &n, Vec3f &w, SampledWavelengths &lambda)
+// NOTE: other pdfs cannot sample dirac delta distributions (unless they have the same
+// direction)
+static SampledSpectrum Le(Scene2 *scene, LightHandle lightHandle, Vec3f &n, Vec3f &w,
+                          SampledWavelengths &lambda)
 {
     LightClass lClass = lightHandle.GetType();
     u32 lightIndex    = lightHandle.GetIndex();
     switch (lClass)
     {
-        case LightClass_Area: return DiffuseAreaLight::Le(&scene->GetAreaLights()[lightIndex], n, w, lambda);
-        case LightClass_Distant: return DistantLight::Le(&scene->lights.Get<DistantLight>()[lightIndex], n, w, lambda);
-        // case LightClass_InfUnf: return UniformInfiniteLight::Le(&scene->uniformInfLights[lightIndex], n, w, lambda);
-        // case LightClass_InfImg: return ImageInfiniteLight::Le(&scene->imageInfLights[lightIndex], n, w, lambda);
+        case LightClass_Area:
+            return DiffuseAreaLight::Le(&scene->GetAreaLights()[lightIndex], n, w, lambda);
+        case LightClass_Distant:
+            return DistantLight::Le(&scene->lights.Get<DistantLight>()[lightIndex], n, w,
+                                    lambda);
+        // case LightClass_InfUnf: return
+        // UniformInfiniteLight::Le(&scene->uniformInfLights[lightIndex], n, w, lambda); case
+        // LightClass_InfImg: return ImageInfiniteLight::Le(&scene->imageInfLights[lightIndex],
+        // n, w, lambda);
         default: Assert(0); return SampledSpectrum(0.f);
     }
 }
@@ -521,10 +551,7 @@ void BuildLightPDF(Scene2 *scene)
     }
 }
 
-f32 LightPDF(Scene2 *scene)
-{
-    return 1.f / scene->numLights;
-}
+f32 LightPDF(Scene2 *scene) { return 1.f / scene->numLights; }
 
 LightHandle UniformLightSample(Scene2 *scene, f32 u, f32 *pmf = 0)
 {

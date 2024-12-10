@@ -33,15 +33,9 @@ void ReleaseThreadContext()
     }
 }
 
-ThreadContext *GetThreadContext()
-{
-    return tLocalContext;
-}
+ThreadContext *GetThreadContext() { return tLocalContext; }
 
-void SetThreadContext(ThreadContext *tctx)
-{
-    tLocalContext = tctx;
-}
+void SetThreadContext(ThreadContext *tctx) { tLocalContext = tctx; }
 
 Arena *GetThreadContextScratch(Arena **conflicts, u32 count)
 {

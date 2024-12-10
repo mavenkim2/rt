@@ -84,7 +84,8 @@ void *ArenaPushNoZero(Arena *arena, u64 size)
             else
             {
                 u64 newBlockSize = size + ARENA_HEADER_SIZE;
-                newArena         = ArenaAlloc(newBlockSize, ARENA_COMMIT_SIZE_LARGE_PAGES, arena->align, 1);
+                newArena =
+                    ArenaAlloc(newBlockSize, ARENA_COMMIT_SIZE_LARGE_PAGES, arena->align, 1);
             }
         }
         else
@@ -198,10 +199,7 @@ TempArena TempBegin(Arena *arena)
     return temp;
 }
 
-void TempEnd(TempArena temp)
-{
-    ArenaPopTo(temp.arena, temp.pos);
-}
+void TempEnd(TempArena temp) { ArenaPopTo(temp.arena, temp.pos); }
 
 b32 CheckZero(u32 size, u8 *instance)
 {
@@ -217,10 +215,7 @@ b32 CheckZero(u32 size, u8 *instance)
     return result;
 }
 
-void ArenaClear(Arena *arena)
-{
-    ArenaPopTo(arena, ARENA_HEADER_SIZE);
-}
+void ArenaClear(Arena *arena) { ArenaPopTo(arena, ARENA_HEADER_SIZE); }
 
 void ArenaRelease(Arena *arena)
 {

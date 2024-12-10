@@ -56,8 +56,7 @@ struct TaggedPointer
             assert("Null");
             return 0;
         }
-        else
-            return IndexOf<Type, Types>::count;
+        else return IndexOf<Type, Types>::count;
     }
     inline u32 GetTag() const
     {
@@ -69,10 +68,7 @@ struct TaggedPointer
         void *ptr = reinterpret_cast<void *>(bits & ptrMask);
         return ptr;
     }
-    static constexpr inline u32 MaxTag()
-    {
-        return sizeof...(Ts);
-    }
+    static constexpr inline u32 MaxTag() { return sizeof...(Ts); }
     template <typename T>
     T *Cast()
     {
@@ -103,8 +99,7 @@ struct Tuple<T, Ts...> : Tuple<Ts...>
 
     Tuple(const T &value, const Ts &...values) : Base(values...), value(value) {}
 
-    Tuple(T &&value, Ts &&...values)
-        : Base(std::move(values)...), value(std::move(value)) {}
+    Tuple(T &&value, Ts &&...values) : Base(std::move(values)...), value(std::move(value)) {}
 
     T value;
 };
@@ -115,37 +110,29 @@ Tuple(Ts &&...) -> Tuple<std::decay_t<Ts>...>;
 template <size_t I, typename T, typename... Ts>
 auto &Get(Tuple<T, Ts...> &t)
 {
-    if constexpr (I == 0)
-        return t.value;
-    else
-        return Get<I - 1>((Tuple<Ts...> &)t);
+    if constexpr (I == 0) return t.value;
+    else return Get<I - 1>((Tuple<Ts...> &)t);
 }
 
 template <size_t I, typename T, typename... Ts>
 const auto &Get(const Tuple<T, Ts...> &t)
 {
-    if constexpr (I == 0)
-        return t.value;
-    else
-        return Get<I - 1>((const Tuple<Ts...> &)t);
+    if constexpr (I == 0) return t.value;
+    else return Get<I - 1>((const Tuple<Ts...> &)t);
 }
 
 template <typename Req, typename T, typename... Ts>
 auto &Get(Tuple<T, Ts...> &t)
 {
-    if constexpr (std::is_same_v<Req, T>)
-        return t.value;
-    else
-        return Get<Req>((Tuple<Ts...> &)t);
+    if constexpr (std::is_same_v<Req, T>) return t.value;
+    else return Get<Req>((Tuple<Ts...> &)t);
 }
 
 template <typename Req, typename T, typename... Ts>
 const auto &Get(const Tuple<T, Ts...> &t)
 {
-    if constexpr (std::is_same_v<Req, T>)
-        return t.value;
-    else
-        return Get<Req>((const Tuple<Ts...> &)t);
+    if constexpr (std::is_same_v<Req, T>) return t.value;
+    else return Get<Req>((const Tuple<Ts...> &)t);
 }
 
 template <typename F, typename... Ts>
@@ -158,7 +145,9 @@ void ForEachType(F func, TypePack<T, Ts...>)
 }
 
 template <typename F>
-void ForEachType(F func, TypePack<>) {}
+void ForEachType(F func, TypePack<>)
+{
+}
 
 template <typename... Ts>
 struct Prepend;
@@ -199,9 +188,15 @@ struct ArrayTuple<TypePack<Ts...>>
     // __forceinline operator Tuple<Ts...> &() { return arrays; }
 
     template <typename T>
-    __forceinline T *Get() { return ::Get<T *>(arrays); }
+    __forceinline T *Get()
+    {
+        return ::Get<T *>(arrays);
+    }
     template <typename T>
-    __forceinline const T *Get() const { return ::Get<T *>(arrays); }
+    __forceinline const T *Get() const
+    {
+        return ::Get<T *>(arrays);
+    }
 
     // __forceinline const auto &Get(u32 type, u32 index) const
     // {
@@ -220,12 +215,15 @@ template <typename F, typename ArrayType, typename... Ts>
 void ForEachType(ArrayType arrays, F func, TypePack<Ts...>);
 
 template <typename F, typename ArrayType>
-void ForEachType(ArrayType arrays, F func, TypePack<>) {}
+void ForEachType(ArrayType arrays, F func, TypePack<>)
+{
+}
 
 template <typename F, typename ArrayType, typename T, typename... Ts>
 void ForEachType(ArrayType &arrays, F func, TypePack<T, Ts...>)
 {
-    func.template operator()<T>(Get<T *>(arrays.arrays), arrays.counts[IndexOf<T, typename ArrayType::Types>::count]);
+    func.template operator()<T>(Get<T *>(arrays.arrays),
+                                arrays.counts[IndexOf<T, typename ArrayType::Types>::count]);
     ForEachType(arrays, func, TypePack<Ts...>());
 }
 

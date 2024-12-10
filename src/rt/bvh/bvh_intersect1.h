@@ -57,7 +57,7 @@ struct TravRay
         : o(Vec3lf<K>(r.o)),
           invRayD(Vec3lf4(Select(r.d.x == 0, 0, 1 / r.d.x), Select(r.d.y == 0, 0, 1 / r.d.y),
                           Select(r.d.z == 0, 0, 1 / r.d.z))),
-          tFar(r.tFar)
+          tFar(LaneF32<K>(r.tFar))
     {
     }
 };
@@ -85,8 +85,6 @@ struct BVHTraverser<4, types>
 
         Lane4F32 tEntry = Max(tEntries[0], Max(tEntries[1], Max(tEntries[2], tMinEpsilon)));
         Lane4F32 tLeave = Min(tLeaves[0], Min(tLeaves[1], Min(tLeaves[2], ray.tFar)));
-
-        // const Lane4F32 tLeave = Min(tLeaveRaw, ray.tFar);
 
         const Lane4F32 intersectMask = tEntry <= tLeave;
 
@@ -165,6 +163,7 @@ struct BVHIntersector<4, types, Intersector>
             if (entry.ptr.IsLeaf())
             {
                 result |= Intersector::Intersect(ray, entry.ptr, itr, r);
+                r.tFar = ray.tFar;
                 continue;
             }
 
@@ -538,7 +537,9 @@ struct CompressedLeafIntersector
                 for (; stackPtr >= 0; stackPtr--)
                 {
                     // TODO: this is kind of hacky
-                    uintptr_t child       = stack[stackPtr].ptr.data;
+                    StackEntry entry = stack[stackPtr];
+                    if (entry.dist > ray.tFar) continue;
+                    uintptr_t child       = entry.ptr.data;
                     u32 start             = (child == 0 ? 0 : node->offsets[child - 1]);
                     Primitive *primitives = (Primitive *)(node + 1) + start;
                     u32 num               = node->offsets[child] - start;

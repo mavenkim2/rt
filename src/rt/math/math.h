@@ -10,8 +10,7 @@ namespace rt
 {
 __forceinline f32 AngleBetween(Vec3f v1, Vec3f v2)
 {
-    if (Dot(v1, v2) < 0)
-        return PI - 2 * SafeASin(Length(v1 + v2) / 2.f);
+    if (Dot(v1, v2) < 0) return PI - 2 * SafeASin(Length(v1 + v2) / 2.f);
     return 2 * SafeASin(Length(v2 - v1) / 2.f);
 }
 
@@ -29,12 +28,12 @@ struct Ray
 {
     Ray() {}
     Ray(const Vec3f &origin, const Vec3f &direction) : o(origin), d(direction), t(0) {}
-    Ray(const Vec3f &origin, const Vec3f &direction, const f32 time) : o(origin), d(direction), t(time) {}
-
-    Vec3f at(f32 time) const
+    Ray(const Vec3f &origin, const Vec3f &direction, const f32 time)
+        : o(origin), d(direction), t(time)
     {
-        return o + time * d;
     }
+
+    Vec3f at(f32 time) const { return o + time * d; }
 
     Vec3f o;
     Vec3f d;
@@ -119,8 +118,7 @@ union AABB
             }
             tMin = t0 > tMin ? t0 : tMin;
             tMax = t1 < tMax ? t1 : tMax;
-            if (tMax <= tMin)
-                return false;
+            if (tMax <= tMin) return false;
         }
         return true;
     }
@@ -137,39 +135,23 @@ union AABB
             f32 t1         = (max - r.o[axis]) * oneOverDir;
             tMin           = t0 > tMin ? t0 : tMin;
             tMax           = t1 < tMax ? t1 : tMax;
-            if (tMax <= tMin)
-                return false;
+            if (tMax <= tMin) return false;
         }
         return true;
     }
 
-    inline Vec3f Center() const
-    {
-        return (maxP + minP) * 0.5f;
-    }
-    inline Vec3f Centroid() const
-    {
-        return Center();
-    }
-    inline Vec3f GetHalfExtent()
-    {
-        return (maxP - minP) * 0.5f;
-    }
+    inline Vec3f Center() const { return (maxP + minP) * 0.5f; }
+    inline Vec3f Centroid() const { return Center(); }
+    inline Vec3f GetHalfExtent() { return (maxP - minP) * 0.5f; }
 
-    Vec3f operator[](int i) const
-    {
-        return i == 0 ? minP : maxP;
-    }
+    Vec3f operator[](int i) const { return i == 0 ? minP : maxP; }
 
     inline Vec3f Offset(const Vec3f &p) const
     {
         Vec3f o = p - minP;
-        if (maxX > minX)
-            o.x /= (maxX - minX);
-        if (maxY > minY)
-            o.y /= (maxY - minY);
-        if (maxZ > minZ)
-            o.z /= (maxZ - minZ);
+        if (maxX > minX) o.x /= (maxX - minX);
+        if (maxY > minY) o.y /= (maxY - minY);
+        if (maxZ > minZ) o.z /= (maxZ - minZ);
         return o;
     }
 
@@ -200,10 +182,7 @@ union AABB
             maxZ += deltaOverTwo;
         }
     }
-    Vec3f Diagonal() const
-    {
-        return maxP - minP;
-    }
+    Vec3f Diagonal() const { return maxP - minP; }
     f32 SurfaceArea() const
     {
         Vec3f d = Diagonal();
@@ -213,10 +192,8 @@ union AABB
     i32 MaxDimension() const
     {
         Vec3f d = Diagonal();
-        if (d.x > d.y && d.x > d.z)
-            return 0;
-        else if (d.y > d.z)
-            return 1;
+        if (d.x > d.y && d.x > d.z) return 0;
+        else if (d.y > d.z) return 1;
         return 2;
     }
 
@@ -271,10 +248,7 @@ inline u64 LeftShift2(u64 x)
     return x;
 }
 
-inline u64 EncodeMorton2(u32 x, u32 y)
-{
-    return (LeftShift2(y) << 1) | LeftShift2(x);
-}
+inline u64 EncodeMorton2(u32 x, u32 y) { return (LeftShift2(y) << 1) | LeftShift2(x); }
 
 #if 0
 inline LaneVec2i EncodeMorton2(LaneU32 x, LaneU32 y)
@@ -363,10 +337,7 @@ struct Complex
         return Complex(value) / z;
     }
 
-    LaneNF32 Norm() const
-    {
-        return real * real + im * im;
-    }
+    LaneNF32 Norm() const { return real * real + im * im; }
 };
 
 template <typename T>
@@ -382,8 +353,7 @@ Complex<T> Sqrt(const Complex<T> &z)
     T t1 = Sqrt(T(.5) * (n + Abs(z.real)));
     T t2 = T(.5) * z.im / t1;
 
-    if (All(n == 0))
-        return Complex<T>(0);
+    if (All(n == 0)) return Complex<T>(0);
 
     Complex<T> out;
     out.real = Select(z.real >= 0, t1, Abs(t2));
@@ -430,15 +400,9 @@ struct OctahedralVector
     u16 y;
 };
 
-inline u16 Encode(f32 f)
-{
-    return (u16)((f + 1) / 2 * 65535.f + 0.5f);
-}
+inline u16 Encode(f32 f) { return (u16)((f + 1) / 2 * 65535.f + 0.5f); }
 
-inline f32 Decode(u16 u)
-{
-    return (f32)(u / 65535.f * 2 - 1);
-}
+inline f32 Decode(u16 u) { return (f32)(u / 65535.f * 2 - 1); }
 
 // TODO: simd
 OctahedralVector EncodeOctahedral(Vec3f v)

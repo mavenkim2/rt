@@ -31,10 +31,12 @@ TriangleMesh *GenerateMesh(Arena *arena, u32 count, f32 min = -100.f, f32 max = 
     return mesh;
 }
 
-PrimRefCompressed *GenerateAOSData(Arena *arena, TriangleMesh *mesh, u32 numFaces, Bounds &geomBounds, Bounds &centBounds)
+PrimRefCompressed *GenerateAOSData(Arena *arena, TriangleMesh *mesh, u32 numFaces,
+                                   Bounds &geomBounds, Bounds &centBounds)
 {
-    arena->align            = 64;
-    PrimRefCompressed *refs = PushArray(arena, PrimRefCompressed, u32(numFaces * GROW_AMOUNT) + 1);
+    arena->align = 64;
+    PrimRefCompressed *refs =
+        PushArray(arena, PrimRefCompressed, u32(numFaces * GROW_AMOUNT) + 1);
     for (u32 i = 0; i < numFaces; i++)
     {
         u32 i0 = mesh->indices[i * 3];
@@ -65,10 +67,12 @@ PrimRefCompressed *GenerateAOSData(Arena *arena, TriangleMesh *mesh, u32 numFace
     return refs;
 }
 
-PrimRefCompressed *GenerateQuadData(Arena *arena, QuadMesh *mesh, u32 numFaces, Bounds &geomBounds, Bounds &centBounds)
+PrimRefCompressed *GenerateQuadData(Arena *arena, QuadMesh *mesh, u32 numFaces,
+                                    Bounds &geomBounds, Bounds &centBounds)
 {
-    arena->align            = 64;
-    PrimRefCompressed *refs = PushArray(arena, PrimRefCompressed, u32(numFaces * GROW_AMOUNT) + 1);
+    arena->align = 64;
+    PrimRefCompressed *refs =
+        PushArray(arena, PrimRefCompressed, u32(numFaces * GROW_AMOUNT) + 1);
     for (u32 i = 0; i < numFaces; i++)
     {
         PrimRefCompressed *prim = &refs[i];
@@ -207,7 +211,8 @@ void PartialRebraidBuilderTest(Arena *arena)
     PerformanceCounter counter;
     counter = OS_StartCounter();
     u64 numScenes;
-    Scene2 *scenes = InitializeScene(arenas, meshDirectory, instanceFile, transformFile, numScenes);
+    Scene2 *scenes =
+        InitializeScene(arenas, meshDirectory, instanceFile, transformFile, numScenes);
     printf("scene initialization + blas build time: %fms\n", OS_GetMilliseconds(counter));
     Print("scene initialization + blas build time: %fms\n", OS_GetMilliseconds(counter));
 
@@ -428,7 +433,8 @@ void TriangleMeshBVHTest(Arena *arena)
     // TODO:
 
     // once the ocean is rendered
-    // - change the bvh build process to support N-wide leaves (need to change the sah to account for this)
+    // - change the bvh build process to support N-wide leaves (need to change the sah to
+    // account for this)
     // - need to support a bvh with quad/triangle mesh instances
     // - load the scene description and properly instantiate lights/materials/textures
     // - render the scene with all quad meshes, then add support for the bspline curves
@@ -457,18 +463,22 @@ void TriangleMeshBVHTest(Arena *arena)
     Vec3f s = Normalize(Cross(up, f));
     Vec3f u = Cross(f, s);
 
-    Mat4 cameraFromRender(f.x, f.y, f.z, 0.f, s.x, s.y, s.z, 0.f, u.x, u.y, u.z, 0.f, 0.f, 0.f, 0.f, 1.f);
+    Mat4 cameraFromRender(f.x, f.y, f.z, 0.f, s.x, s.y, s.z, 0.f, u.x, u.y, u.z, 0.f, 0.f, 0.f,
+                          0.f, 1.f);
 
     Mat4 renderFromCamera = Inverse(cameraFromRender);
     Mat4 NDCFromCamera    = Mat4::Perspective(Radians(69.50461), 2.386946);
     // maps to raster coordinates
-    Mat4 rasterFromNDC    = Scale(Vec3f(f32(width), -f32(height), 1.f)) * Scale(Vec3f(1.f / 2.f, 1.f / 2.f, 1.f)) * Translate(Vec3f(1.f, -1.f, 0.f));
+    Mat4 rasterFromNDC = Scale(Vec3f(f32(width), -f32(height), 1.f)) *
+                         Scale(Vec3f(1.f / 2.f, 1.f / 2.f, 1.f)) *
+                         Translate(Vec3f(1.f, -1.f, 0.f));
     Mat4 rasterFromCamera = rasterFromNDC * NDCFromCamera;
     Mat4 cameraFromRaster = Inverse(rasterFromCamera);
 
     // ocean mesh
-    TriangleMesh mesh = LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
-    u32 numFaces      = mesh.numIndices / 3;
+    TriangleMesh mesh =
+        LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
+    u32 numFaces = mesh.numIndices / 3;
     // convert to "render space" (i.e. world space centered around the camera)
     for (u32 i = 0; i < mesh.numVertices; i++)
     {
@@ -479,10 +489,12 @@ void TriangleMeshBVHTest(Arena *arena)
     PrimRefCompressed *refs = GenerateAOSData(arena, &mesh, numFaces, geomBounds, centBounds);
 
     // environment map
-    f32 sceneRadius =
-        0.5f * Max(geomBounds.maxP[0] - geomBounds.minP[0], Max(geomBounds.maxP[1] - geomBounds.minP[1], geomBounds.maxP[2] - geomBounds.minP[2]));
-    AffineSpace renderFromLight = AffineSpace::Rotate(Vec3f(-1, 0, 0), Radians(90)) * AffineSpace::Rotate(Vec3f(0, 0, 1), Radians(65));
-    renderFromLight             = AffineSpace::Translate(-pCamera) * renderFromLight;
+    f32 sceneRadius             = 0.5f * Max(geomBounds.maxP[0] - geomBounds.minP[0],
+                                             Max(geomBounds.maxP[1] - geomBounds.minP[1],
+                                                 geomBounds.maxP[2] - geomBounds.minP[2]));
+    AffineSpace renderFromLight = AffineSpace::Rotate(Vec3f(-1, 0, 0), Radians(90)) *
+                                  AffineSpace::Rotate(Vec3f(0, 0, 1), Radians(65));
+    renderFromLight = AffineSpace::Translate(-pCamera) * renderFromLight;
 
 #if 0
     AffineSpace lightFromRender = Inverse(renderFromLight);
@@ -496,8 +508,9 @@ void TriangleMeshBVHTest(Arena *arena)
     Vec3f r4 = ApplyInverseV(renderFromLight, testVec);
 #endif
 
-    ImageInfiniteLight infLight(arena, LoadFile("../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png"), &renderFromLight, RGBColorSpace::sRGB,
-                                sceneRadius);
+    ImageInfiniteLight infLight(
+        arena, LoadFile("../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png"),
+        &renderFromLight, RGBColorSpace::sRGB, sceneRadius);
     scene->lights.Set<ImageInfiniteLight>(&infLight, 1);
 
     BuildSettings settings;

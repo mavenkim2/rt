@@ -28,7 +28,8 @@ struct MPMC
             u64 pos    = writePos.load(std::memory_order_relaxed);
             Cell &cell = array[pos & blockMask];
             u8 a       = cell.a.load(std::memory_order_acquire);
-            if (a == EMPTY && writePos.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed))
+            if (a == EMPTY &&
+                writePos.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed))
             {
                 cell.data = data;
                 cell.a.store.(WRITTEN, std::memory_order_release);
@@ -43,7 +44,8 @@ struct MPMC
             u64 pos    = readPos.load(std::memory_order_relaxed);
             Cell &cell = array[pos & blockMask];
             u8 a       = cell.a.load(std::memory_order_acquire);
-            if (a == WRITTEN && readPos.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed))
+            if (a == WRITTEN &&
+                readPos.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed))
             {
                 T out = cell.data;
                 cell.a.store(EMPTY, std::memory_order_release);
@@ -56,7 +58,8 @@ struct MPMC
         u64 pos    = readPos.load(std::memory_order_relaxed);
         Cell &cell = array[pos & blockMask];
         u8 a       = cell.a.load(std::memory_order_acquire);
-        if (a == WRITTEN && readPos.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed))
+        if (a == WRITTEN &&
+            readPos.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed))
         {
             out = cell.data;
             cell.a.store(EMPTY, std::memory_order_release);
@@ -108,7 +111,8 @@ struct JobDeque
             out = buffer[b & mask];
             if (t == b)
             {
-                if (!top.compare_exchange_strong(t, t + 1, std::memory_order_seq_cst, std::memory_order_relaxed))
+                if (!top.compare_exchange_strong(t, t + 1, std::memory_order_seq_cst,
+                                                 std::memory_order_relaxed))
                 {
                     result = false;
                 }
@@ -132,7 +136,8 @@ struct JobDeque
         {
             result = true;
             out    = buffer[t & mask];
-            if (!top.compare_exchange_strong(t, t + 1, std::memory_order_seq_cst, std::memory_order_relaxed))
+            if (!top.compare_exchange_strong(t, t + 1, std::memory_order_seq_cst,
+                                             std::memory_order_relaxed))
             {
                 result = false;
             }
@@ -203,7 +208,8 @@ struct EventCount
             if ((s & signalMask) != 0)
             {
                 newState = s - waiterInc - signalInc;
-                if (state.compare_exchange_weak(s, newState, std::memory_order_acq_rel)) return;
+                if (state.compare_exchange_weak(s, newState, std::memory_order_acq_rel))
+                    return;
             }
             else
             {
@@ -224,7 +230,8 @@ struct EventCount
         for (;;)
         {
             u64 newState = s - waiterInc;
-            if (((s & waiterMask) >> waiterShift) == ((s & signalMask) >> signalShift)) newState -= signalInc;
+            if (((s & waiterMask) >> waiterShift) == ((s & signalMask) >> signalShift))
+                newState -= signalInc;
             if (state.compare_exchange_weak(s, newState, std::memory_order_acq_rel)) return;
         }
     }
@@ -264,7 +271,8 @@ struct EventCount
             if (numSignals < numWaiters)
             {
                 newState = s + signalInc;
-                if (state.compare_exchange_weak(s, newState, std::memory_order_acq_rel)) return;
+                if (state.compare_exchange_weak(s, newState, std::memory_order_acq_rel))
+                    return;
             }
             else
             {
@@ -328,7 +336,8 @@ struct Scheduler
         u32 id           = INVALID_ID;
         Counter *counter = 0;
         Task() {}
-        // Task(Counter *counter, TaskFunction inFunc, u32 jobID) : counter(counter), func(inFunc), id(jobID) {}
+        // Task(Counter *counter, TaskFunction inFunc, u32 jobID) : counter(counter),
+        // func(inFunc), id(jobID) {}
     };
 
     struct Worker
@@ -386,7 +395,8 @@ struct Scheduler
         for (;;)
         {
             if (predicate()) return false;
-            if (w->victim == id ? w->queue.Steal(*t) : workers[w->victim].queue.Steal(*t)) return true;
+            if (w->victim == id ? w->queue.Steal(*t) : workers[w->victim].queue.Steal(*t))
+                return true;
             numFailedSteals++;
             if (numFailedSteals > stealBound)
             {
@@ -418,7 +428,9 @@ struct Scheduler
     bool WaitForTask(Worker *w, Task *t, Counter *counter)
     {
     begin:
-        if (ExploreTask(w, t, [&]() { return counter->count.load(std::memory_order_acq_rel) == 0; })) return true;
+        if (ExploreTask(w, t,
+                        [&]() { return counter->count.load(std::memory_order_acq_rel) == 0; }))
+            return true;
         if (counter->count.load(std::memory_order_acq_rel) == 0) return false;
         for (u32 i = 0; i < numWorkers; i++)
         {
@@ -536,7 +548,8 @@ struct ParallelForOutput
 };
 
 template <typename T, typename Func, typename... Args>
-ParallelForOutput ParallelFor(TempArena temp, u32 start, u32 count, u32 groupSize, Func func, Args... inArgs)
+ParallelForOutput ParallelFor(TempArena temp, u32 start, u32 count, u32 groupSize, Func func,
+                              Args... inArgs)
 {
     u32 taskCount = (count + groupSize - 1) / groupSize;
     taskCount     = Min(taskCount, 512u);
@@ -575,10 +588,12 @@ void Reduce(T &out, ParallelForOutput output, ReduceFunc reduce, Args... inArgs)
 }
 
 template <typename T, typename Func, typename ReduceFunc, typename... Args>
-void ParallelReduce(T *out, u32 start, u32 count, u32 groupSize, Func func, ReduceFunc reduce, Args... inArgs)
+void ParallelReduce(T *out, u32 start, u32 count, u32 groupSize, Func func, ReduceFunc reduce,
+                    Args... inArgs)
 {
-    TempArena temp           = ScratchStart(0, 0);
-    ParallelForOutput output = ParallelFor<T>(temp, start, count, groupSize, func, std::forward<Args>(inArgs)...);
+    TempArena temp = ScratchStart(0, 0);
+    ParallelForOutput output =
+        ParallelFor<T>(temp, start, count, groupSize, func, std::forward<Args>(inArgs)...);
     Reduce<T>(*out, output, reduce, std::forward<Args>(inArgs)...);
     ScratchEnd(temp);
 }

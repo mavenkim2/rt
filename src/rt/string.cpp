@@ -1,9 +1,6 @@
 namespace rt
 {
-string::string(const char *c)
-{
-    *this = Str8C(c);
-}
+string::string(const char *c) { *this = Str8C(c); }
 
 //////////////////////////////
 // Char
@@ -19,34 +16,16 @@ u8 CharGetPair(const u8 ch)
     return 'x';
 }
 
-inline b32 CharIsWhitespace(u8 c)
-{
-    return c == ' ';
-}
+inline b32 CharIsWhitespace(u8 c) { return c == ' '; }
 
-inline b32 CharIsBlank(u8 c)
-{
-    return c == ' ' || c == '\n' || c == '\r' || c == '\t';
-}
+inline b32 CharIsBlank(u8 c) { return c == ' ' || c == '\n' || c == '\r' || c == '\t'; }
 
-b32 CharIsAlpha(u8 c)
-{
-    return CharIsAlphaUpper(c) || CharIsAlphaLower(c);
-}
+b32 CharIsAlpha(u8 c) { return CharIsAlphaUpper(c) || CharIsAlphaLower(c); }
 
-b32 CharIsAlphaUpper(u8 c)
-{
-    return c >= 'A' && c <= 'Z';
-}
+b32 CharIsAlphaUpper(u8 c) { return c >= 'A' && c <= 'Z'; }
 
-b32 CharIsAlphaLower(u8 c)
-{
-    return c >= 'a' && c <= 'z';
-}
-b32 CharIsDigit(u8 c)
-{
-    return (c >= '0' && c <= '9');
-}
+b32 CharIsAlphaLower(u8 c) { return c >= 'a' && c <= 'z'; }
+b32 CharIsDigit(u8 c) { return (c >= '0' && c <= '9'); }
 
 u8 CharToLower(u8 c)
 {
@@ -58,10 +37,7 @@ u8 CharToUpper(u8 c)
     u8 result = (c >= 'a' && c <= 'z') ? ('A' + (c - 'a')) : c;
     return result;
 }
-b32 CharIsSlash(u8 c)
-{
-    return (c == '/' || c == '\\');
-}
+b32 CharIsSlash(u8 c) { return (c == '/' || c == '\\'); }
 u8 CharCorrectSlash(u8 c)
 {
     if (CharIsSlash(c))
@@ -155,8 +131,8 @@ string StrConcat(Arena *arena, string s1, string s2)
 // Finding Strings
 //
 
-// NOTE: assumes string a already has a backing buffer of size at least b.size. If need to copy, use
-// PushStr8Copy()
+// NOTE: assumes string a already has a backing buffer of size at least b.size. If need to
+// copy, use PushStr8Copy()
 void StringCopy(string *out, string in)
 {
     u8 *ptr = out->str;
@@ -507,25 +483,16 @@ inline b32 EndOfBuffer(Tokenizer *tokenizer)
     return result;
 }
 
-inline b32 IsAlpha(Tokenizer *tokenizer)
-{
-    return CharIsAlpha(tokenizer->cursor[0]);
-}
+inline b32 IsAlpha(Tokenizer *tokenizer) { return CharIsAlpha(tokenizer->cursor[0]); }
 
-inline b32 IsDigit(Tokenizer *tokenizer)
-{
-    return CharIsDigit(tokenizer->cursor[0]);
-}
+inline b32 IsDigit(Tokenizer *tokenizer) { return CharIsDigit(tokenizer->cursor[0]); }
 
 inline b32 IsAlphaNumeric(Tokenizer *tokenizer)
 {
     return IsAlpha(tokenizer) || IsDigit(tokenizer);
 }
 
-inline b32 IsBlank(Tokenizer *tokenizer)
-{
-    return CharIsBlank(tokenizer->cursor[0]);
-}
+inline b32 IsBlank(Tokenizer *tokenizer) { return CharIsBlank(tokenizer->cursor[0]); }
 
 // TODO: carriage returns?
 string ReadLine(Tokenizer *tokenizer)
@@ -534,7 +501,9 @@ string ReadLine(Tokenizer *tokenizer)
     result.str  = tokenizer->cursor;
     result.size = 0;
 
-    while (!EndOfBuffer(tokenizer) && (tokenizer->cursor++, (*(tokenizer->cursor - 1) != '\n' && (*(tokenizer->cursor - 1) != '\r'))))
+    while (!EndOfBuffer(tokenizer) &&
+           (tokenizer->cursor++,
+            (*(tokenizer->cursor - 1) != '\n' && (*(tokenizer->cursor - 1) != '\r'))))
     {
         result.size++;
     }
@@ -547,9 +516,10 @@ string ReadWord(Tokenizer *tokenizer)
     result.str  = tokenizer->cursor;
     result.size = 0;
 
-    while (!EndOfBuffer(tokenizer) && (tokenizer->cursor++, (*(tokenizer->cursor - 1) != ' ' &&
-                                                             *(tokenizer->cursor - 1) != '\n' &&
-                                                             (*(tokenizer->cursor - 1) != '\r'))))
+    while (!EndOfBuffer(tokenizer) &&
+           (tokenizer->cursor++,
+            (*(tokenizer->cursor - 1) != ' ' && *(tokenizer->cursor - 1) != '\n' &&
+             (*(tokenizer->cursor - 1) != '\r'))))
     {
         result.size++;
     }
@@ -559,8 +529,9 @@ string ReadWord(Tokenizer *tokenizer)
 string ReadBytes(Tokenizer *tokenizer, u64 numBytes)
 {
     string result;
-    result.str  = tokenizer->cursor;
-    result.size = Min(numBytes, (u64)(tokenizer->input.str + tokenizer->input.size - tokenizer->cursor));
+    result.str = tokenizer->cursor;
+    result.size =
+        Min(numBytes, (u64)(tokenizer->input.str + tokenizer->input.size - tokenizer->cursor));
     tokenizer->cursor += result.size;
     return result;
 }
@@ -691,7 +662,8 @@ inline void SkipToNextChar(Tokenizer *tokenizer)
 
 inline void SkipToNextDigit(Tokenizer *tokenizer)
 {
-    while (!EndOfBuffer(tokenizer) && (!IsDigit(tokenizer) && *tokenizer->cursor != '-')) tokenizer->cursor++;
+    while (!EndOfBuffer(tokenizer) && (!IsDigit(tokenizer) && *tokenizer->cursor != '-'))
+        tokenizer->cursor++;
 }
 
 inline void SkipToNextLine(Tokenizer *iter)
@@ -777,7 +749,8 @@ b8 GetBetweenPair(string &out, Tokenizer *tokenizer, const u8 ch)
     u8 right = CharGetPair(ch);
 
     u8 *cursor = tokenizer->cursor;
-    for (; cursor < tokenizer->input.str + tokenizer->input.size && CharIsBlank(*cursor) && *cursor != '#' && *cursor != left;)
+    for (; cursor < tokenizer->input.str + tokenizer->input.size && CharIsBlank(*cursor) &&
+           *cursor != '#' && *cursor != left;)
     {
         if (*cursor == '\n') return 0;
         cursor++;
@@ -830,10 +803,7 @@ u32 CountBetweenPair(Tokenizer *tokenizer, const u8 ch)
     return count;
 }
 
-b32 IsEndOfLine(Tokenizer *tokenizer)
-{
-    return (*tokenizer->cursor == '\n');
-}
+b32 IsEndOfLine(Tokenizer *tokenizer) { return (*tokenizer->cursor == '\n'); }
 
 //////////////////////////////
 // Global string table

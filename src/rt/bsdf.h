@@ -14,13 +14,17 @@ struct BSDFBase
     LinearSpace<LaneNF32> frame;
 
     BSDFBase(BxDF bxdf, const Vec3lfn &ns, const Vec3lfn &dpdus)
-        : bxdf(bxdf), frame(LinearSpace3fn::FromXZ(Normalize(dpdus), ns)) {}
+        : bxdf(bxdf), frame(LinearSpace3fn::FromXZ(Normalize(dpdus), ns))
+    {
+    }
     // BSDFBase(BxDF &&bxdf, const Vec3lfn &ns, const Vec3lfn &dpdus)
     //     : bxdf(std::move(bxdf)), frame(LinearSpace3fn::FromXZ(Normalize(dpdus), ns)) {}
 
-    SampledSpectrumN EvaluateSample(Vec3lfn wo, Vec3lfn wi, LaneNF32 &pdf, TransportMode mode = TransportMode::Radiance) const;
+    SampledSpectrumN EvaluateSample(Vec3lfn wo, Vec3lfn wi, LaneNF32 &pdf,
+                                    TransportMode mode = TransportMode::Radiance) const;
     BSDFSample GenerateSample(Vec3lfn wo, const LaneNF32 &uc, const Vec2lfn &u,
-                              TransportMode mode = TransportMode::Radiance, BxDFFlags inFlags = BxDFFlags::RT) const;
+                              TransportMode mode = TransportMode::Radiance,
+                              BxDFFlags inFlags  = BxDFFlags::RT) const;
     // LaneNF32 PDF(Vec3lfn wo, Vec3lfn wi, TransportMode mode, BxDFFlags inFlags) const;
     // Hemispherical directional function
     SampledSpectrumN rho(Vec3lfn wo, LaneNF32 *uc, Vec2lfn *u, u32 numSamples) const;

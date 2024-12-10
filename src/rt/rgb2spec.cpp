@@ -1,5 +1,5 @@
-// Similar to pbrt, using Gauss-Newton to solve non-linear least squaRES for overspecified problem (rgb to spectrum)
-// conversion.
+// Similar to pbrt, using Gauss-Newton to solve non-linear least squaRES for overspecified
+// problem (rgb to spectrum) conversion.
 
 #include "base.h"
 #include <assert.h>
@@ -78,18 +78,18 @@ const double CIE_Z[CIE_SAMPLES] = {
 
 const double CIE_D65[CIE_SAMPLES] = {
     N(46.6383), N(49.3637), N(52.0891), N(51.0323), N(49.9755), N(52.3118), N(54.6482),
-    N(68.7015), N(82.7549), N(87.1204), N(91.486), N(92.4589), N(93.4318), N(90.057),
-    N(86.6823), N(95.7736), N(104.865), N(110.936), N(117.008), N(117.41), N(117.812),
+    N(68.7015), N(82.7549), N(87.1204), N(91.486),  N(92.4589), N(93.4318), N(90.057),
+    N(86.6823), N(95.7736), N(104.865), N(110.936), N(117.008), N(117.41),  N(117.812),
     N(116.336), N(114.861), N(115.392), N(115.923), N(112.367), N(108.811), N(109.082),
-    N(109.354), N(108.578), N(107.802), N(106.296), N(104.79), N(106.239), N(107.689),
-    N(106.047), N(104.405), N(104.225), N(104.046), N(102.023), N(100.0), N(98.1671),
-    N(96.3342), N(96.0611), N(95.788), N(92.2368), N(88.6856), N(89.3459), N(90.0062),
+    N(109.354), N(108.578), N(107.802), N(106.296), N(104.79),  N(106.239), N(107.689),
+    N(106.047), N(104.405), N(104.225), N(104.046), N(102.023), N(100.0),   N(98.1671),
+    N(96.3342), N(96.0611), N(95.788),  N(92.2368), N(88.6856), N(89.3459), N(90.0062),
     N(89.8026), N(89.5991), N(88.6489), N(87.6987), N(85.4936), N(83.2886), N(83.4939),
-    N(83.6992), N(81.863), N(80.0268), N(80.1207), N(80.2146), N(81.2462), N(82.2778),
-    N(80.281), N(78.2842), N(74.0027), N(69.7213), N(70.6652), N(71.6091), N(72.979),
-    N(74.349), N(67.9765), N(61.604), N(65.7448), N(69.8856), N(72.4863), N(75.087),
+    N(83.6992), N(81.863),  N(80.0268), N(80.1207), N(80.2146), N(81.2462), N(82.2778),
+    N(80.281),  N(78.2842), N(74.0027), N(69.7213), N(70.6652), N(71.6091), N(72.979),
+    N(74.349),  N(67.9765), N(61.604),  N(65.7448), N(69.8856), N(72.4863), N(75.087),
     N(69.3398), N(63.5927), N(55.0054), N(46.4182), N(56.6118), N(66.8054), N(65.0941),
-    N(63.3828), N(63.8434), N(64.304), N(61.8779), N(59.4519), N(55.7054), N(51.959),
+    N(63.3828), N(63.8434), N(64.304),  N(61.8779), N(59.4519), N(55.7054), N(51.959),
     N(54.6998), N(57.4406), N(58.8765), N(60.3125)};
 
 // NOTE: SRGB
@@ -148,10 +148,7 @@ void CIE_Lab(double *p)
     p[2] = 200.0 * (f(Y / Yw) - f(Z / Zw));
 }
 
-f64 Smoothstep(f64 x)
-{
-    return x * x * (3.0 - 2.0 * x);
-}
+f64 Smoothstep(f64 x) { return x * x * (3.0 - 2.0 * x); }
 
 void EvalResidual(const double *coeffs, const double *rgb, double *residual)
 {
@@ -211,8 +208,7 @@ int LUPDecompose(double **A, int N, double Tol, int *P)
     int i, j, k, imax;
     double maxA, *ptr, absA;
 
-    for (i = 0; i <= N; i++)
-        P[i] = i; // Unit permutation matrix, P[N] initialized with N
+    for (i = 0; i <= N; i++) P[i] = i; // Unit permutation matrix, P[N] initialized with N
 
     for (i = 0; i < N; i++)
     {
@@ -248,8 +244,7 @@ int LUPDecompose(double **A, int N, double Tol, int *P)
         {
             A[j][i] /= A[i][i];
 
-            for (k = i + 1; k < N; k++)
-                A[j][k] -= A[j][i] * A[i][k];
+            for (k = i + 1; k < N; k++) A[j][k] -= A[j][i] * A[i][k];
         }
     }
 
@@ -266,14 +261,12 @@ void LUPSolve(double **A, int *P, double *b, int N, double *x)
     {
         x[i] = b[P[i]];
 
-        for (int k = 0; k < i; k++)
-            x[i] -= A[i][k] * x[k];
+        for (int k = 0; k < i; k++) x[i] -= A[i][k] * x[k];
     }
 
     for (int i = N - 1; i >= 0; i--)
     {
-        for (int k = i + 1; k < N; k++)
-            x[i] -= A[i][k] * x[k];
+        for (int k = i + 1; k < N; k++) x[i] -= A[i][k] * x[k];
 
         x[i] /= A[i][i];
     }
@@ -293,7 +286,8 @@ void GaussNewton(const double rgb[3], double coeffs[3], int it = 15)
         int rv = LUPDecompose(J, 3, 1e-15, P);
         if (rv != 1)
         {
-            printf("%f %f %f\n%f %f %f\n", rgb[0], rgb[1], rgb[2], coeffs[0], coeffs[1], coeffs[2]);
+            printf("%f %f %f\n%f %f %f\n", rgb[0], rgb[1], rgb[2], coeffs[0], coeffs[1],
+                   coeffs[2]);
             assert(0);
         }
 
@@ -314,8 +308,7 @@ void GaussNewton(const double rgb[3], double coeffs[3], int it = 15)
             }
         }
 
-        if (r < 1e-6)
-            break;
+        if (r < 1e-6) break;
     }
 }
 
@@ -329,8 +322,7 @@ int main(int argc, char **argv)
     for (int i = 0; i < CIE_FINE_SAMPLES; i++)
     {
         double lambda = CIE_LAMBDA_MIN + i * h;
-        double xyz[3] = {CIE_Interp(CIE_X, lambda),
-                         CIE_Interp(CIE_Y, lambda),
+        double xyz[3] = {CIE_Interp(CIE_X, lambda), CIE_Interp(CIE_Y, lambda),
                          CIE_Interp(CIE_Z, lambda)};
 
         double I = CIE_Interp(CIE_D65, lambda);
@@ -428,7 +420,8 @@ int main(int argc, char **argv)
         fprintf(f, "%.9g, ", scale[i]);
     }
     fprintf(f, "};\n");
-    fprintf(f, "extern const float sRGBToSpectrumTable_Data[3][%d][%d][%d][3] = {\n", RES, RES, RES);
+    fprintf(f, "extern const float sRGBToSpectrumTable_Data[3][%d][%d][%d][3] = {\n", RES, RES,
+            RES);
     const float *ptr = out;
     for (int maxc = 0; maxc < 3; ++maxc)
     {
@@ -442,8 +435,7 @@ int main(int argc, char **argv)
                 for (int x = 0; x < RES; ++x)
                 {
                     fprintf(f, "{ ");
-                    for (int c = 0; c < 3; ++c)
-                        fprintf(f, "%.9g, ", *ptr++);
+                    for (int c = 0; c < 3; ++c) fprintf(f, "%.9g, ", *ptr++);
                     fprintf(f, "}, ");
                 }
                 fprintf(f, "},\n    ");

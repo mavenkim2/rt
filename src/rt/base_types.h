@@ -39,8 +39,9 @@ struct ZSobolSampler;
 struct ScenePacket;
 // struct SOAZSobolSampler;
 
-using SamplerTaggedPointer = TaggedPointer<IndependentSampler, StratifiedSampler, SobolSampler,
-                                           PaddedSobolSampler, ZSobolSampler>; //, SOAZSobolSampler>;
+using SamplerTaggedPointer =
+    TaggedPointer<IndependentSampler, StratifiedSampler, SobolSampler, PaddedSobolSampler,
+                  ZSobolSampler>; //, SOAZSobolSampler>;
 
 struct SamplerMethods
 {
@@ -97,29 +98,18 @@ template <class T>
 struct SamplerCRTP
 {
     static const i32 samplerID;
-    static i32 SamplesPerPixel(void *ptr)
-    {
-        return static_cast<T *>(ptr)->SamplesPerPixel();
-    }
+    static i32 SamplesPerPixel(void *ptr) { return static_cast<T *>(ptr)->SamplesPerPixel(); }
     static void StartPixelSample(void *ptr, Vec2i p, i32 index, i32 dimension)
     {
         return static_cast<T *>(ptr)->StartPixelSample(p, index, dimension);
     }
-    static f32 Get1D(void *ptr)
-    {
-        return static_cast<T *>(ptr)->Get1D();
-    }
-    static Vec2f Get2D(void *ptr)
-    {
-        return static_cast<T *>(ptr)->Get2D();
-    }
-    static Vec2f GetPixel2D(void *ptr)
-    {
-        return static_cast<T *>(ptr)->GetPixel2D();
-    }
+    static f32 Get1D(void *ptr) { return static_cast<T *>(ptr)->Get1D(); }
+    static Vec2f Get2D(void *ptr) { return static_cast<T *>(ptr)->Get2D(); }
+    static Vec2f GetPixel2D(void *ptr) { return static_cast<T *>(ptr)->GetPixel2D(); }
     static constexpr i32 Register()
     {
-        samplerMethods[SamplerTaggedPointer::TypeIndex<T>()] = {SamplesPerPixel, StartPixelSample, Get1D, Get2D, GetPixel2D};
+        samplerMethods[SamplerTaggedPointer::TypeIndex<T>()] = {
+            SamplesPerPixel, StartPixelSample, Get1D, Get2D, GetPixel2D};
 
         return SamplerTaggedPointer::TypeIndex<T>();
     }
@@ -153,8 +143,10 @@ template <typename T>
 struct SampledWavelengthsBase;
 typedef SampledWavelengthsBase<f32> SampledWavelengths;
 
-using SpectrumTaggedPointer = TaggedPointer<ConstantSpectrum, DenselySampledSpectrum, PiecewiseLinearSpectrum, BlackbodySpectrum,
-                                            RGBAlbedoSpectrum, RGBUnboundedSpectrum, RGBIlluminantSpectrum>;
+using SpectrumTaggedPointer =
+    TaggedPointer<ConstantSpectrum, DenselySampledSpectrum, PiecewiseLinearSpectrum,
+                  BlackbodySpectrum, RGBAlbedoSpectrum, RGBUnboundedSpectrum,
+                  RGBIlluminantSpectrum>;
 
 struct SpectrumMethods
 {
@@ -182,10 +174,7 @@ struct SpectrumCRTP
     {
         return static_cast<T *>(ptr)->Evaluate(lambda);
     }
-    static f32 MaxValue(void *ptr)
-    {
-        return static_cast<T *>(ptr)->MaxValue();
-    }
+    static f32 MaxValue(void *ptr) { return static_cast<T *>(ptr)->MaxValue(); }
     static SampledSpectrumBase<f32> Sample(void *ptr, const SampledWavelengths &lambda);
     static constexpr i32 Register()
     {
@@ -218,25 +207,30 @@ enum class TransportMode;
 struct BSDFSample;
 enum class BxDFFlags;
 
-using BxDFTaggedPointer = TaggedPointer<DiffuseBxDF, ConductorBxDF, DielectricBxDF, DiffuseTransmissionBxDF>; //, ThinDielectricBxDF>;
+using BxDFTaggedPointer = TaggedPointer<DiffuseBxDF, ConductorBxDF, DielectricBxDF,
+                                        DiffuseTransmissionBxDF>; //, ThinDielectricBxDF>;
 struct BxDFMethods
 {
-    SampledSpectrumBase<LaneNF32> (*EvaluateSample)(void *, const Vec3lfn &, const Vec3lfn &, LaneNF32 &, TransportMode);
-    BSDFSample (*GenerateSample)(void *, const Vec3lfn &, const LaneNF32 &, const Vec2lfn &, TransportMode, BxDFFlags);
+    SampledSpectrumBase<LaneNF32> (*EvaluateSample)(void *, const Vec3lfn &, const Vec3lfn &,
+                                                    LaneNF32 &, TransportMode);
+    BSDFSample (*GenerateSample)(void *, const Vec3lfn &, const LaneNF32 &, const Vec2lfn &,
+                                 TransportMode, BxDFFlags);
     // f32 (*PDF)(void *, Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags flags);
     LaneNU32 (*Flags)(void *);
 };
 
 static BxDFMethods bxdfMethods[BxDFTaggedPointer::MaxTag()] = {};
 
-// TODO: because of the way I made this it's probably only valid to use bsdfs through this class, not through any
-// of the child bsdfs
+// TODO: because of the way I made this it's probably only valid to use bsdfs through this
+// class, not through any of the child bsdfs
 
 struct BxDF : BxDFTaggedPointer
 {
     using TaggedPointer::TaggedPointer;
-    SampledSpectrumBase<LaneNF32> EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf, TransportMode mode) const;
-    BSDFSample GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u, TransportMode mode, BxDFFlags inFlags) const;
+    SampledSpectrumBase<LaneNF32> EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi,
+                                                 LaneNF32 &pdf, TransportMode mode) const;
+    BSDFSample GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u,
+                              TransportMode mode, BxDFFlags inFlags) const;
     // f32 PDF(Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags inFlags) const { return 0.f; }
     LaneNU32 Flags() const;
 };
@@ -245,13 +239,17 @@ template <class T>
 struct BxDFCRTP
 {
     static const i32 id;
-    static SampledSpectrumBase<LaneNF32> EvaluateSample(void *ptr, const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf, TransportMode mode);
-    static BSDFSample GenerateSample(void *ptr, const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u, TransportMode mode, BxDFFlags flags);
+    static SampledSpectrumBase<LaneNF32> EvaluateSample(void *ptr, const Vec3lfn &wo,
+                                                        const Vec3lfn &wi, LaneNF32 &pdf,
+                                                        TransportMode mode);
+    static BSDFSample GenerateSample(void *ptr, const Vec3lfn &wo, const LaneNF32 &uc,
+                                     const Vec2lfn &u, TransportMode mode, BxDFFlags flags);
     // static f32 PDF(void *ptr, Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags flags);
     static LaneNU32 Flags(void *ptr);
     static constexpr i32 Register()
     {
-        bxdfMethods[BxDFTaggedPointer::TypeIndex<T>()] = {EvaluateSample, GenerateSample, Flags};
+        bxdfMethods[BxDFTaggedPointer::TypeIndex<T>()] = {EvaluateSample, GenerateSample,
+                                                          Flags};
         return BxDFTaggedPointer::TypeIndex<T>();
     }
 };

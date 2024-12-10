@@ -21,8 +21,9 @@ union Mat3
     Mat3() {}
     Mat3(f32 a) : Mat3(a, a, a) {}
 
-    Mat3(f32 a, f32 b, f32 c)
-        : a1(a), a2(0), a3(0), b1(0), b2(b), b3(0), c1(0), c2(0), c3(c) {}
+    Mat3(f32 a, f32 b, f32 c) : a1(a), a2(0), a3(0), b1(0), b2(b), b3(0), c1(0), c2(0), c3(c)
+    {
+    }
 
     Mat3(const Mat3 &other)
     {
@@ -32,13 +33,9 @@ union Mat3
     }
 
     Mat3(Vec3f v) : Mat3(v.x, v.y, v.z) {}
-    Mat3(const Vec3f &a, const Vec3f &b, const Vec3f &c)
-        : columns{a, b, c} {}
+    Mat3(const Vec3f &a, const Vec3f &b, const Vec3f &c) : columns{a, b, c} {}
 
-    Vec3f &operator[](const i32 index)
-    {
-        return columns[index];
-    }
+    Vec3f &operator[](const i32 index) { return columns[index]; }
 
     Mat3 &operator/(const f32 f)
     {
@@ -49,7 +46,9 @@ union Mat3
     }
 
     Mat3(f32 a1, f32 a2, f32 a3, f32 b1, f32 b2, f32 b3, f32 c1, f32 c2, f32 c3)
-        : Mat3(Vec3f(a1, a2, a3), Vec3f(b1, b2, b3), Vec3f(c1, c2, c3)) {}
+        : Mat3(Vec3f(a1, a2, a3), Vec3f(b1, b2, b3), Vec3f(c1, c2, c3))
+    {
+    }
 
     __forceinline Mat3 &operator=(const Mat3 &other)
     {
@@ -103,8 +102,9 @@ inline Mat3 operator*(Mat3 a, Mat3 b)
     {
         for (int i = 0; i < 3; i += 1)
         {
-            result.elements[i][j] = (a.elements[0][j] * b.elements[i][0] + a.elements[1][j] * b.elements[i][1] +
-                                     a.elements[2][j] * b.elements[i][2]);
+            result.elements[i][j] =
+                (a.elements[0][j] * b.elements[i][0] + a.elements[1][j] * b.elements[i][1] +
+                 a.elements[2][j] * b.elements[i][2]);
         }
     }
 
@@ -139,24 +139,22 @@ struct Mat4
         };
     };
 
-    __forceinline Mat4() : a1(0), a2(0), a3(0), a4(0), b1(0), b2(0), b3(0), b4(0),
-                           c1(0), c2(0), c3(0), c4(0), d1(0), d2(0), d3(0), d4(0)
+    __forceinline Mat4()
+        : a1(0), a2(0), a3(0), a4(0), b1(0), b2(0), b3(0), b4(0), c1(0), c2(0), c3(0), c4(0),
+          d1(0), d2(0), d3(0), d4(0)
     {
     }
 
-    __forceinline Mat4(f32 a1, f32 a2, f32 a3, f32 a4,
-                       f32 b1, f32 b2, f32 b3, f32 b4,
-                       f32 c1, f32 c2, f32 c3, f32 c4,
-                       f32 d1, f32 d2, f32 d3, f32 d4)
-        : a1(a1), b1(a2), c1(a3), d1(a4), a2(b1), b2(b2), c2(b3), d2(b4),
-          a3(c1), b3(c2), c3(c3), d3(c4), a4(d1), b4(d2), c4(d3), d4(d4)
+    __forceinline Mat4(f32 a1, f32 a2, f32 a3, f32 a4, f32 b1, f32 b2, f32 b3, f32 b4, f32 c1,
+                       f32 c2, f32 c3, f32 c4, f32 d1, f32 d2, f32 d3, f32 d4)
+        : a1(a1), b1(a2), c1(a3), d1(a4), a2(b1), b2(b2), c2(b3), d2(b4), a3(c1), b3(c2),
+          c3(c3), d3(c4), a4(d1), b4(d2), c4(d3), d4(d4)
     {
     }
 
-    Mat4(f32 val) : a1(val), a2(0), a3(0), a4(0),
-                    b1(0), b2(val), b3(0), b4(0),
-                    c1(0), c2(0), c3(val), c4(0),
-                    d1(0), d2(0), d3(0), d4(val)
+    Mat4(f32 val)
+        : a1(val), a2(0), a3(0), a4(0), b1(0), b2(val), b3(0), b4(0), c1(0), c2(0), c3(val),
+          c4(0), d1(0), d2(0), d3(0), d4(val)
     {
     }
 
@@ -195,10 +193,7 @@ struct Mat4
                d1 != other.d1 || d2 != other.d2 || d3 != other.d3 || d4 != other.d4;
     }
 
-    Lane4F32 &operator[](const i32 index)
-    {
-        return columns[index];
-    }
+    Lane4F32 &operator[](const i32 index) { return columns[index]; }
 
     static __forceinline Mat4 Identity()
     {
@@ -235,13 +230,12 @@ struct Mat4
     }
 
     // NOTE: assumes viewing matrix is right hand, with -z into screen
-    __forceinline static Mat4 Perspective(f32 fov, f32 aspectRatio, f32 n = 0.1f, f32 f = 1000.f)
+    __forceinline static Mat4 Perspective(f32 fov, f32 aspectRatio, f32 n = 0.1f,
+                                          f32 f = 1000.f)
     {
         f32 divTanHalf = 1.f / Tan(fov / 2.f);
-        Mat4 result(divTanHalf / aspectRatio, 0.f, 0.f, 0.f,
-                    0.f, divTanHalf, 0.f, 0.f,
-                    0.f, 0.f, f / (n - f), n * f / (n - f),
-                    0.f, 0.f, -1.f, 0.f);
+        Mat4 result(divTanHalf / aspectRatio, 0.f, 0.f, 0.f, 0.f, divTanHalf, 0.f, 0.f, 0.f,
+                    0.f, f / (n - f), n * f / (n - f), 0.f, 0.f, -1.f, 0.f);
         return result;
     }
 };
@@ -265,10 +259,8 @@ inline Mat4 Scale(f32 value)
 }
 inline Mat4 Translate(const Vec3f &value)
 {
-    Mat4 m(1.f, 0.f, 0.f, value.x,
-           0.f, 1.f, 0.f, value.y,
-           0.f, 0.f, 1.f, value.z,
-           0.f, 0.f, 0.f, 1.f);
+    Mat4 m(1.f, 0.f, 0.f, value.x, 0.f, 1.f, 0.f, value.y, 0.f, 0.f, 1.f, value.z, 0.f, 0.f,
+           0.f, 1.f);
     return m;
 }
 
@@ -276,7 +268,8 @@ Vec4f Mul(Mat4 a, Vec4f b)
 {
     Vec4f result;
 #ifdef __SSE2__
-    Lane4F32 laneResult = a.columns[0] * b.x + a.columns[1] * b.y + a.columns[2] * b.z + a.columns[3] * b.w;
+    Lane4F32 laneResult =
+        a.columns[0] * b.x + a.columns[1] * b.y + a.columns[2] * b.z + a.columns[3] * b.w;
     Lane4F32::Store(&result, laneResult);
     return result;
 #else
@@ -352,8 +345,9 @@ inline Mat4 Mul(const Mat4 &a, const Mat4 &b)
     {
         for (int i = 0; i < 4; i += 1)
         {
-            result.elements[i][j] = (a.elements[0][j] * b.elements[i][0] + a.elements[1][j] * b.elements[i][1] +
-                                     a.elements[2][j] * b.elements[i][2] + a.elements[3][j] * b.elements[i][3]);
+            result.elements[i][j] =
+                (a.elements[0][j] * b.elements[i][0] + a.elements[1][j] * b.elements[i][1] +
+                 a.elements[2][j] * b.elements[i][2] + a.elements[3][j] * b.elements[i][3]);
         }
     }
 
@@ -373,8 +367,9 @@ inline Mat3 Mul(Mat3 a, Mat3 b)
     {
         for (int i = 0; i < 3; i += 1)
         {
-            result.elements[i][j] = (a.elements[0][j] * b.elements[i][0] + a.elements[1][j] * b.elements[i][1] +
-                                     a.elements[2][j] * b.elements[i][2]);
+            result.elements[i][j] =
+                (a.elements[0][j] * b.elements[i][0] + a.elements[1][j] * b.elements[i][1] +
+                 a.elements[2][j] * b.elements[i][2]);
         }
     }
 
@@ -401,14 +396,15 @@ inline Vec3f Mul(Mat3 a, Vec3f b)
 
 inline f32 Determinant(const Mat4 &a)
 {
-    f32 result = a.a1 * a.b2 * a.c3 * a.d4 - a.a1 * a.b2 * a.c4 * a.d3 + a.a1 * a.b3 * a.c4 * a.d2 -
-                 a.a1 * a.b3 * a.c2 * a.d4 + a.a1 * a.b4 * a.c2 * a.d3 - a.a1 * a.b4 * a.c3 * a.d2 -
-                 a.a2 * a.b3 * a.c4 * a.d1 + a.a2 * a.b3 * a.c1 * a.d4 - a.a2 * a.b4 * a.c1 * a.d3 +
-                 a.a2 * a.b4 * a.c3 * a.d1 - a.a2 * a.b1 * a.c3 * a.d4 + a.a2 * a.b1 * a.c4 * a.d3 +
-                 a.a3 * a.b4 * a.c1 * a.d2 - a.a3 * a.b4 * a.c2 * a.d1 + a.a3 * a.b1 * a.c2 * a.d4 -
-                 a.a3 * a.b1 * a.c4 * a.d2 + a.a3 * a.b2 * a.c4 * a.d1 - a.a3 * a.b2 * a.c1 * a.d4 -
-                 a.a4 * a.b1 * a.c2 * a.d3 + a.a4 * a.b1 * a.c3 * a.d2 - a.a4 * a.b2 * a.c3 * a.d1 +
-                 a.a4 * a.b2 * a.c1 * a.d3 - a.a4 * a.b3 * a.c1 * a.d2 + a.a4 * a.b3 * a.c2 * a.d1;
+    f32 result =
+        a.a1 * a.b2 * a.c3 * a.d4 - a.a1 * a.b2 * a.c4 * a.d3 + a.a1 * a.b3 * a.c4 * a.d2 -
+        a.a1 * a.b3 * a.c2 * a.d4 + a.a1 * a.b4 * a.c2 * a.d3 - a.a1 * a.b4 * a.c3 * a.d2 -
+        a.a2 * a.b3 * a.c4 * a.d1 + a.a2 * a.b3 * a.c1 * a.d4 - a.a2 * a.b4 * a.c1 * a.d3 +
+        a.a2 * a.b4 * a.c3 * a.d1 - a.a2 * a.b1 * a.c3 * a.d4 + a.a2 * a.b1 * a.c4 * a.d3 +
+        a.a3 * a.b4 * a.c1 * a.d2 - a.a3 * a.b4 * a.c2 * a.d1 + a.a3 * a.b1 * a.c2 * a.d4 -
+        a.a3 * a.b1 * a.c4 * a.d2 + a.a3 * a.b2 * a.c4 * a.d1 - a.a3 * a.b2 * a.c1 * a.d4 -
+        a.a4 * a.b1 * a.c2 * a.d3 + a.a4 * a.b1 * a.c3 * a.d2 - a.a4 * a.b2 * a.c3 * a.d1 +
+        a.a4 * a.b2 * a.c1 * a.d3 - a.a4 * a.b3 * a.c1 * a.d2 + a.a4 * a.b3 * a.c2 * a.d1;
     return result;
 }
 
@@ -422,38 +418,54 @@ inline Mat4 Inverse(const Mat4 &a)
     }
     invdet = 1.f / invdet;
     // NOTE: transpose
-    res.a1 = invdet * (a.b2 * (a.c3 * a.d4 - a.d3 * a.c4) - a.c2 * (a.b3 * a.d4 - a.d3 * a.b4) +
-                       a.d2 * (a.b3 * a.c4 - a.c3 * a.b4));
-    res.a2 = -invdet * (a.a2 * (a.c3 * a.d4 - a.d3 * a.c4) - a.c2 * (a.a3 * a.d4 - a.d3 * a.a4) +
-                        a.d2 * (a.a3 * a.c4 - a.c3 * a.a4));
-    res.a3 = invdet * (a.a2 * (a.b3 * a.d4 - a.d3 * a.b4) - a.b2 * (a.a3 * a.d4 - a.d3 * a.a4) +
-                       a.d2 * (a.a3 * a.b4 - a.b3 * a.a4));
-    res.a4 = -invdet * (a.a2 * (a.b3 * a.c4 - a.b4 * a.c3) - a.b2 * (a.a3 * a.c4 - a.c3 * a.a4) +
-                        a.c2 * (a.a3 * a.b4 - a.b3 * a.a4));
-    res.b1 = -invdet * (a.b1 * (a.c3 * a.d4 - a.d3 * a.c4) - a.c1 * (a.b3 * a.d4 - a.d3 * a.b4) +
-                        a.d1 * (a.b3 * a.c4 - a.c3 * a.b4));
-    res.b2 = invdet * (a.a1 * (a.c3 * a.d4 - a.d3 * a.c4) - a.c1 * (a.a3 * a.d4 - a.d3 * a.a4) +
-                       a.d1 * (a.a3 * a.c4 - a.c3 * a.a4));
-    res.b3 = -invdet * (a.a1 * (a.b3 * a.d4 - a.d3 * a.b4) - a.b1 * (a.a3 * a.d4 - a.d3 * a.a4) +
-                        a.d1 * (a.a3 * a.b4 - a.b3 * a.a4));
-    res.b4 = invdet * (a.a1 * (a.b3 * a.c4 - a.b4 * a.c3) - a.b1 * (a.a3 * a.c4 - a.c3 * a.a4) +
-                       a.c1 * (a.a3 * a.b4 - a.b3 * a.a4));
-    res.c1 = invdet * (a.b1 * (a.c2 * a.d4 - a.d2 * a.c4) - a.c1 * (a.b2 * a.d4 - a.d2 * a.b4) +
-                       a.d1 * (a.b2 * a.c4 - a.c2 * a.b4));
-    res.c2 = -invdet * (a.a1 * (a.c2 * a.d4 - a.d2 * a.c4) - a.c1 * (a.a2 * a.d4 - a.d2 * a.a4) +
-                        a.d1 * (a.a2 * a.c4 - a.c2 * a.a4));
-    res.c3 = invdet * (a.a1 * (a.b2 * a.d4 - a.d2 * a.b4) - a.b1 * (a.a2 * a.d4 - a.d2 * a.a4) +
-                       a.d1 * (a.a2 * a.b4 - a.b2 * a.a4));
-    res.c4 = -invdet * (a.a1 * (a.b2 * a.c4 - a.c2 * a.b4) - a.b1 * (a.a2 * a.c4 - a.c2 * a.a4) +
-                        a.c1 * (a.a2 * a.b4 - a.b2 * a.a4));
-    res.d1 = -invdet * (a.b1 * (a.c2 * a.d3 - a.d2 * a.c3) - a.c1 * (a.b2 * a.d3 - a.d2 * a.b3) +
-                        a.d1 * (a.b2 * a.c3 - a.c2 * a.b3));
-    res.d2 = invdet * (a.a1 * (a.c2 * a.d3 - a.c3 * a.d2) - a.c1 * (a.a2 * a.d3 - a.d2 * a.a3) +
-                       a.d1 * (a.a2 * a.c3 - a.c2 * a.a3));
-    res.d3 = -invdet * (a.a1 * (a.b2 * a.d3 - a.d2 * a.b3) - a.b1 * (a.a2 * a.d3 - a.d2 * a.a3) +
-                        a.d1 * (a.a2 * a.b3 - a.b2 * a.a3));
-    res.d4 = invdet * (a.a1 * (a.b2 * a.c3 - a.c2 * a.b3) - a.b1 * (a.a2 * a.c3 - a.c2 * a.a3) +
-                       a.c1 * (a.a2 * a.b3 - a.b2 * a.a3));
+    res.a1 =
+        invdet * (a.b2 * (a.c3 * a.d4 - a.d3 * a.c4) - a.c2 * (a.b3 * a.d4 - a.d3 * a.b4) +
+                  a.d2 * (a.b3 * a.c4 - a.c3 * a.b4));
+    res.a2 =
+        -invdet * (a.a2 * (a.c3 * a.d4 - a.d3 * a.c4) - a.c2 * (a.a3 * a.d4 - a.d3 * a.a4) +
+                   a.d2 * (a.a3 * a.c4 - a.c3 * a.a4));
+    res.a3 =
+        invdet * (a.a2 * (a.b3 * a.d4 - a.d3 * a.b4) - a.b2 * (a.a3 * a.d4 - a.d3 * a.a4) +
+                  a.d2 * (a.a3 * a.b4 - a.b3 * a.a4));
+    res.a4 =
+        -invdet * (a.a2 * (a.b3 * a.c4 - a.b4 * a.c3) - a.b2 * (a.a3 * a.c4 - a.c3 * a.a4) +
+                   a.c2 * (a.a3 * a.b4 - a.b3 * a.a4));
+    res.b1 =
+        -invdet * (a.b1 * (a.c3 * a.d4 - a.d3 * a.c4) - a.c1 * (a.b3 * a.d4 - a.d3 * a.b4) +
+                   a.d1 * (a.b3 * a.c4 - a.c3 * a.b4));
+    res.b2 =
+        invdet * (a.a1 * (a.c3 * a.d4 - a.d3 * a.c4) - a.c1 * (a.a3 * a.d4 - a.d3 * a.a4) +
+                  a.d1 * (a.a3 * a.c4 - a.c3 * a.a4));
+    res.b3 =
+        -invdet * (a.a1 * (a.b3 * a.d4 - a.d3 * a.b4) - a.b1 * (a.a3 * a.d4 - a.d3 * a.a4) +
+                   a.d1 * (a.a3 * a.b4 - a.b3 * a.a4));
+    res.b4 =
+        invdet * (a.a1 * (a.b3 * a.c4 - a.b4 * a.c3) - a.b1 * (a.a3 * a.c4 - a.c3 * a.a4) +
+                  a.c1 * (a.a3 * a.b4 - a.b3 * a.a4));
+    res.c1 =
+        invdet * (a.b1 * (a.c2 * a.d4 - a.d2 * a.c4) - a.c1 * (a.b2 * a.d4 - a.d2 * a.b4) +
+                  a.d1 * (a.b2 * a.c4 - a.c2 * a.b4));
+    res.c2 =
+        -invdet * (a.a1 * (a.c2 * a.d4 - a.d2 * a.c4) - a.c1 * (a.a2 * a.d4 - a.d2 * a.a4) +
+                   a.d1 * (a.a2 * a.c4 - a.c2 * a.a4));
+    res.c3 =
+        invdet * (a.a1 * (a.b2 * a.d4 - a.d2 * a.b4) - a.b1 * (a.a2 * a.d4 - a.d2 * a.a4) +
+                  a.d1 * (a.a2 * a.b4 - a.b2 * a.a4));
+    res.c4 =
+        -invdet * (a.a1 * (a.b2 * a.c4 - a.c2 * a.b4) - a.b1 * (a.a2 * a.c4 - a.c2 * a.a4) +
+                   a.c1 * (a.a2 * a.b4 - a.b2 * a.a4));
+    res.d1 =
+        -invdet * (a.b1 * (a.c2 * a.d3 - a.d2 * a.c3) - a.c1 * (a.b2 * a.d3 - a.d2 * a.b3) +
+                   a.d1 * (a.b2 * a.c3 - a.c2 * a.b3));
+    res.d2 =
+        invdet * (a.a1 * (a.c2 * a.d3 - a.c3 * a.d2) - a.c1 * (a.a2 * a.d3 - a.d2 * a.a3) +
+                  a.d1 * (a.a2 * a.c3 - a.c2 * a.a3));
+    res.d3 =
+        -invdet * (a.a1 * (a.b2 * a.d3 - a.d2 * a.b3) - a.b1 * (a.a2 * a.d3 - a.d2 * a.a3) +
+                   a.d1 * (a.a2 * a.b3 - a.b2 * a.a3));
+    res.d4 =
+        invdet * (a.a1 * (a.b2 * a.c3 - a.c2 * a.b3) - a.b1 * (a.a2 * a.c3 - a.c2 * a.a3) +
+                  a.c1 * (a.a2 * a.b3 - a.b2 * a.a3));
 
     return res;
 }
@@ -471,7 +483,10 @@ struct LinearSpace
     };
     LinearSpace() {}
     __forceinline LinearSpace(ZeroTy) : x(zero), y(zero), z(zero) {}
-    __forceinline LinearSpace(const Vec3<T> &a, const Vec3<T> &b, const Vec3<T> &c) : x(a), y(b), z(c) {}
+    __forceinline LinearSpace(const Vec3<T> &a, const Vec3<T> &b, const Vec3<T> &c)
+        : x(a), y(b), z(c)
+    {
+    }
     __forceinline LinearSpace(const LinearSpace &space) : x(space.x), y(space.y), z(space.z) {}
     __forceinline LinearSpace &operator=(const LinearSpace &other)
     {
@@ -508,7 +523,7 @@ LinearSpace<T> operator/(const LinearSpace<T> &l, f32 d)
 }
 
 template <typename T>
-LinearSpace<T>& operator/=(LinearSpace<T> &l, f32 d)
+LinearSpace<T> &operator/=(LinearSpace<T> &l, f32 d)
 {
     l = l / d;
     return l;
@@ -517,8 +532,8 @@ LinearSpace<T>& operator/=(LinearSpace<T> &l, f32 d)
 template <typename T>
 LinearSpace<T> Transpose(const LinearSpace<T> &a)
 {
-    return LinearSpace<T>(Vec3<T>(a.x[0], a.y[0], a.z[0]), Vec3<T>(a.x[1], a.y[1], a.z[1]), 
-                        Vec3<T>(a.x[2], a.y[2], a.z[2]));
+    return LinearSpace<T>(Vec3<T>(a.x[0], a.y[0], a.z[0]), Vec3<T>(a.x[1], a.y[1], a.z[1]),
+                          Vec3<T>(a.x[2], a.y[2], a.z[2]));
 }
 
 template <typename T>
@@ -552,7 +567,10 @@ struct AffineSpace
     };
 
     AffineSpace() {}
-    __forceinline AffineSpace(const AffineSpace &other) : c0(other.c0), c1(other.c1), c2(other.c2), c3(other.c3) {}
+    __forceinline AffineSpace(const AffineSpace &other)
+        : c0(other.c0), c1(other.c1), c2(other.c2), c3(other.c3)
+    {
+    }
     __forceinline AffineSpace &operator=(const AffineSpace &other)
     {
         c0 = other.c0;
@@ -563,16 +581,17 @@ struct AffineSpace
     }
 
     AffineSpace(ZeroTy) : c0(0), c1(0), c2(0), c3(0) {}
-    AffineSpace(const Vec3f &a, const Vec3f &b, const Vec3f &c)
-        : c0(a), c1(b), c2(c), c3(0) {}
+    AffineSpace(const Vec3f &a, const Vec3f &b, const Vec3f &c) : c0(a), c1(b), c2(c), c3(0) {}
     AffineSpace(const Vec3f &a, const Vec3f &b, const Vec3f &c, const Vec3f &d)
-        : c0(a), c1(b), c2(c), c3(d) {}
-    AffineSpace(f32 a, f32 b, f32 c, f32 d,
-                f32 e, f32 f, f32 g, f32 h,
-                f32 i, f32 j, f32 k, f32 l)
-        : c0(a, e, i), c1(b, f, j), c2(c, g, k), c3(d, h, l) {}
-    AffineSpace(const LinearSpace3f &l, const Vec3f &t) 
-        : c0(l.x), c1(l.y), c2(l.z), c3(t) {}
+        : c0(a), c1(b), c2(c), c3(d)
+    {
+    }
+    AffineSpace(f32 a, f32 b, f32 c, f32 d, f32 e, f32 f, f32 g, f32 h, f32 i, f32 j, f32 k,
+                f32 l)
+        : c0(a, e, i), c1(b, f, j), c2(c, g, k), c3(d, h, l)
+    {
+    }
+    AffineSpace(const LinearSpace3f &l, const Vec3f &t) : c0(l.x), c1(l.y), c2(l.z), c3(t) {}
 
     Vec3f &operator[](u32 i)
     {
@@ -615,23 +634,14 @@ struct AffineSpace
 
         return result;
     }
-    static AffineSpace Scale(f32 a)
-    {
-        return AffineSpace(a, 0, 0, 0,
-                           0, a, 0, 0,
-                           0, 0, a, 0);
-    }
+    static AffineSpace Scale(f32 a) { return AffineSpace(a, 0, 0, 0, 0, a, 0, 0, 0, 0, a, 0); }
     static AffineSpace Scale(const Vec3f &scale)
     {
-        return AffineSpace(scale.x, 0, 0, 0,
-                           0, scale.y, 0, 0,
-                           0, 0, scale.z, 0);
+        return AffineSpace(scale.x, 0, 0, 0, 0, scale.y, 0, 0, 0, 0, scale.z, 0);
     }
     static AffineSpace Scale(f32 a, f32 b, f32 c)
     {
-        return AffineSpace(a, 0, 0, 0,
-                           0, b, 0, 0,
-                           0, 0, c, 0);
+        return AffineSpace(a, 0, 0, 0, 0, b, 0, 0, 0, 0, c, 0);
     }
     static AffineSpace Rotate(const Vec3f &axis, f32 theta)
     {
@@ -640,21 +650,18 @@ struct AffineSpace
         f32 c         = Cos(theta);
         f32 mc        = 1.f - c;
 
-        return AffineSpace(a.x * a.x * mc + c, a.y * a.x * mc - a.z * s, a.z * a.x * mc + a.y * s, 0.f,
-                           a.x * a.y * mc + a.z * s, a.y * a.y * mc + c, a.z * a.y * mc - a.x * s, 0.f,
-                           a.x * a.z * mc - a.y * s, a.y * a.z * mc + a.x * s, a.z * a.z * mc + c, 0.f);
+        return AffineSpace(
+            a.x * a.x * mc + c, a.y * a.x * mc - a.z * s, a.z * a.x * mc + a.y * s, 0.f,
+            a.x * a.y * mc + a.z * s, a.y * a.y * mc + c, a.z * a.y * mc - a.x * s, 0.f,
+            a.x * a.z * mc - a.y * s, a.y * a.z * mc + a.x * s, a.z * a.z * mc + c, 0.f);
     }
     static AffineSpace Translate(const Vec3f &v)
     {
-        return AffineSpace(1, 0, 0, v.x,
-                           0, 1, 0, v.y,
-                           0, 0, 1, v.z);
+        return AffineSpace(1, 0, 0, v.x, 0, 1, 0, v.y, 0, 0, 1, v.z);
     }
     static AffineSpace Translate(f32 a, f32 b, f32 c)
     {
-        return AffineSpace(1, 0, 0, a,
-                           0, 1, 0, b,
-                           0, 0, 1, c);
+        return AffineSpace(1, 0, 0, a, 0, 1, 0, b, 0, 0, 1, c);
     }
 };
 
@@ -668,8 +675,7 @@ __forceinline Lane4F32 operator*(const AffineSpace &t, const Lane4F32 &v)
 {
     return FMA(Lane4F32::LoadU(&t.c0), v[0],
                FMA(Lane4F32::LoadU(&t.c1), v[1],
-                   FMA(Lane4F32::LoadU(&t.c2), v[2],
-                       Lane4F32::LoadU(&t.c3))));
+                   FMA(Lane4F32::LoadU(&t.c2), v[2], Lane4F32::LoadU(&t.c3))));
 }
 
 __forceinline Lane4F32 Transform(const AffineSpace &t, const Lane4F32 &v) { return t * v; }
@@ -723,18 +729,15 @@ __forceinline Vec3f TransformP(const AffineSpace &a, const Vec3f &b) { return a 
 __forceinline AffineSpace operator*(const AffineSpace &a, const AffineSpace &b)
 {
     return AffineSpace(TransformV(a, b.c0), TransformV(a, b.c1), TransformV(a, b.c2),
-            TransformP(a, b.c3));
+                       TransformP(a, b.c3));
 }
 
-__forceinline f32 Determinant(const AffineSpace &a)
-{
-    return Dot(a.c0, Cross(a.c1, a.c2));
-}
+__forceinline f32 Determinant(const AffineSpace &a) { return Dot(a.c0, Cross(a.c1, a.c2)); }
 
 __forceinline Vec3f ApplyInverse(const AffineSpace &t, const Vec3f &v)
 {
     Mat3 inv = Transpose(Mat3(Cross(t.c1, t.c2), Cross(t.c2, t.c0), Cross(t.c0, t.c1)));
-    f32 det = Determinant(t);
+    f32 det  = Determinant(t);
     Assert(det != 0.f);
     return inv / det * (v - t.c3);
 }
@@ -742,7 +745,7 @@ __forceinline Vec3f ApplyInverse(const AffineSpace &t, const Vec3f &v)
 __forceinline Vec3f ApplyInverseV(const AffineSpace &t, const Vec3f &v)
 {
     Mat3 inv = Transpose(Mat3(Cross(t.c1, t.c2), Cross(t.c2, t.c0), Cross(t.c0, t.c1)));
-    f32 det = Determinant(t);
+    f32 det  = Determinant(t);
     Assert(det != 0.f);
     return inv / det * v;
 }
@@ -760,7 +763,8 @@ __forceinline AffineSpace Frame(const Vec3f &n)
 
 __forceinline AffineSpace Inverse(const AffineSpace &a)
 {
-    LinearSpace3f result = Transpose(LinearSpace3f(Cross(a.c1, a.c2), Cross(a.c2, a.c0), Cross(a.c0, a.c1)));
+    LinearSpace3f result =
+        Transpose(LinearSpace3f(Cross(a.c1, a.c2), Cross(a.c2, a.c0), Cross(a.c0, a.c1)));
     f32 det = Determinant(a);
     Assert(det != 0.f);
     result /= det;

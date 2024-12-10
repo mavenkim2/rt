@@ -18,7 +18,8 @@ public:
     {
         centerVec = Vec3f(0, 0, 0);
     }
-    Sphere(Vec3f c1, Vec3f c2, f32 r, Material *m) : center(c1), radius(fmax(0.f, r)), material(m)
+    Sphere(Vec3f c1, Vec3f c2, f32 r, Material *m)
+        : center(c1), radius(fmax(0.f, r)), material(m)
     {
         centerVec = c2 - c1;
     }
@@ -62,14 +63,20 @@ enum
 };
 
 __forceinline b32 IsInstanced(u32 i) { return ~PrimitiveType_InstanceMask & i; }
-__forceinline PrimitiveType GetBaseType(u32 i) { return PrimitiveType(i & PrimitiveType_InstanceMask); }
+__forceinline PrimitiveType GetBaseType(u32 i)
+{
+    return PrimitiveType(i & PrimitiveType_InstanceMask);
+}
 
 struct Disk
 {
     f32 radius, height;
     const AffineSpace *objectFromRender;
 
-    Disk(const AffineSpace *t, f32 radius = 1.f, f32 height = 0.f) : objectFromRender(t), radius(radius), height(height) {}
+    Disk(const AffineSpace *t, f32 radius = 1.f, f32 height = 0.f)
+        : objectFromRender(t), radius(radius), height(height)
+    {
+    }
     bool Intersect(const Ray2 &r, SurfaceInteraction &intr, f32 tMax = pos_inf)
     {
         Vec3f oi = TransformP(*objectFromRender, Vec3f(r.o));
@@ -77,18 +84,15 @@ struct Disk
 
         // Compute plane intersection for disk
         // Reject disk intersections for rays parallel to the disk's plane
-        if (f32(di.z) == 0)
-            return false;
+        if (f32(di.z) == 0) return false;
 
         f32 tShapeHit = (height - f32(oi.z)) / f32(di.z);
-        if (tShapeHit <= 0 || tShapeHit >= tMax)
-            return false;
+        if (tShapeHit <= 0 || tShapeHit >= tMax) return false;
 
         // See if hit point is inside disk radii and $\phimax$
         Vec3f pHit = Vec3f(oi) + (f32)tShapeHit * Vec3f(di);
         f32 dist2  = Sqr(pHit.x) + Sqr(pHit.y);
-        if (dist2 > Sqr(radius))
-            return false;
+        if (dist2 > Sqr(radius)) return false;
 
         f32 phi = std::atan2(pHit.y, pHit.x);
         if (phi < 0) phi += 2 * PI;
@@ -118,7 +122,8 @@ struct Disk
 struct Quad
 {
     Quad() {}
-    Quad(const Vec3f &q, const Vec3f &u, const Vec3f &v, Material *mat) : q(q), u(u), v(v), material(mat)
+    Quad(const Vec3f &q, const Vec3f &u, const Vec3f &v, Material *mat)
+        : q(q), u(u), v(v), material(mat)
     {
         Vec3f n = Cross(u, v);
         normal  = Normalize(n);
@@ -139,8 +144,7 @@ struct Quad
     {
         f32 denom = Dot(normal, r.d);
         // if the ray is parallel to the plane
-        if (fabs(denom) < 1e-8f)
-            return false;
+        if (fabs(denom) < 1e-8f) return false;
 
         f32 t = (d - Dot(normal, r.o)) / denom;
 
@@ -166,8 +170,7 @@ struct Quad
     f32 PdfValue(const Vec3f &origin, const Vec3f &direction) const
     {
         HitRecord rec;
-        if (!this->Hit(Ray(origin, direction), 0.0001f, infinity, rec))
-            return 0;
+        if (!this->Hit(Ray(origin, direction), 0.0001f, infinity, rec)) return 0;
         f32 distanceSquared = rec.t * rec.t * LengthSquared(direction);
         f32 cosine          = Abs(Dot(direction, rec.normal) / Length(direction));
         return distanceSquared / (cosine * area);
@@ -247,10 +250,14 @@ struct ConstantMedium
     f32 negInvDensity;
     Material *phaseFunction;
 
-    ConstantMedium(f32 density, Material *material) : negInvDensity(-1 / density), phaseFunction(material) {}
+    ConstantMedium(f32 density, Material *material)
+        : negInvDensity(-1 / density), phaseFunction(material)
+    {
+    }
 
     template <typename T>
-    bool Hit(const T &primitive, const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const
+    bool Hit(const T &primitive, const Ray &r, const f32 tMin, const f32 tMax,
+             HitRecord &record) const
     {
         HitRecord rec1, rec2;
         if (!primitive.Hit(r, -infinity, infinity, rec1)) return false;
@@ -432,18 +439,9 @@ struct ScenePacket
         // types          = PushArray(arena, SceneByteType, count);
     }
 
-    inline i32 GetInt(i32 i) const
-    {
-        return *(i32 *)(bytes[i]);
-    }
-    inline bool GetBool(i32 i) const
-    {
-        return *(bool *)(bytes[i]);
-    }
-    inline f32 GetFloat(i32 i) const
-    {
-        return *(f32 *)(bytes[i]);
-    }
+    inline i32 GetInt(i32 i) const { return *(i32 *)(bytes[i]); }
+    inline bool GetBool(i32 i) const { return *(bool *)(bytes[i]); }
+    inline f32 GetFloat(i32 i) const { return *(f32 *)(bytes[i]); }
     // inline u8 *GetByParamName(const string &name) const
     // {
     //     for (u32 i = 0; i < parameterCount; i++)
@@ -493,14 +491,8 @@ struct GeometryID
         return (quadMeshType << typeShift) | (index & indexMask);
     }
 
-    u32 GetIndex() const
-    {
-        return id & indexMask;
-    }
-    u32 GetType() const
-    {
-        return id >> typeShift;
-    }
+    u32 GetIndex() const { return id & indexMask; }
+    u32 GetType() const { return id >> typeShift; }
 };
 
 struct Instance
@@ -569,11 +561,8 @@ f32 HenyeyGreenstein(Vec3f wo, Vec3f wi, f32 g) { return HenyeyGreenstein(Dot(wo
 Vec3f SampleHenyeyGreenstein(const Vec3f &wo, f32 g, Vec2f u, f32 *pdf = 0)
 {
     f32 cosTheta;
-    if (Abs(g) < 1e-3f)
-        cosTheta = 1 - 2 * u[0];
-    else
-        cosTheta = -1 / (2 * g) *
-                   (1 + Sqr(g) - Sqr((1 - Sqr(g)) / (1 + g - 2 * g * u[0])));
+    if (Abs(g) < 1e-3f) cosTheta = 1 - 2 * u[0];
+    else cosTheta = -1 / (2 * g) * (1 + Sqr(g) - Sqr((1 - Sqr(g)) / (1 + g - 2 * g * u[0])));
 
     f32 sinTheta = SafeSqrt(1 - Sqr(cosTheta));
     f32 phi      = TwoPi * u[1];
@@ -581,7 +570,8 @@ Vec3f SampleHenyeyGreenstein(const Vec3f &wo, f32 g, Vec2f u, f32 *pdf = 0)
     // TODO: implement FromZ
     Vec3f wi;
     // Frame wFrame = Frame::FromZ(wo);
-    // Vector3f wi  = wFrame.FromLocal(Vec3f(sinTheta * Cos(phi), sinTheta * Sin(phi), cosTheta));
+    // Vector3f wi  = wFrame.FromLocal(Vec3f(sinTheta * Cos(phi), sinTheta * Sin(phi),
+    // cosTheta));
 
     if (pdf) *pdf = HenyeyGreenstein(cosTheta, g);
     return wi;
@@ -601,7 +591,8 @@ struct PhaseFunction
     f32 g;
     PhaseFunction() {}
     PhaseFunction(f32 g) : g(g) {}
-    // NOTE: HG phase function is perfectly importance sampled, so the value of the phasefunction = the pdf
+    // NOTE: HG phase function is perfectly importance sampled, so the value of the
+    // phasefunction = the pdf
     SampledSpectrum EvaluateSample(Vec3f wo, Vec3f wi, f32 *pdf) const
     {
         Assert(pdf);
@@ -626,8 +617,9 @@ struct NanoVDBVolume
         nanovdb::GridHandle<NanoVDBBuffer> handle;
         try
         {
-            handle = nanovdb::io::readGrid<NanoVDBBuffer>(std::string((const char *)str.str, str.size),
-                                                          std::string((const char *)type.str, type.size));
+            handle = nanovdb::io::readGrid<NanoVDBBuffer>(
+                std::string((const char *)str.str, str.size),
+                std::string((const char *)type.str, type.size));
         } catch (std::exception)
         {
             Error(0, "Could not read file: %S\n", str);
@@ -647,10 +639,13 @@ struct NanoVDBVolume
     PhaseFunction phaseFunction;
 
     NanoVDBVolume() {}
-    NanoVDBVolume(string filename, const AffineSpace *renderFromMedium, Spectrum cAbs, Spectrum cScatter, f32 g, f32 cScale,
-                  f32 LeScale = 1.f, f32 temperatureOffset = 0.f, f32 temperatureScale = 1.f)
-        : mediumFromRender(Inverse(*renderFromMedium)), cAbs(DenselySampledSpectrum(cAbs)), cScatter(DenselySampledSpectrum(cScatter)),
-          phaseFunction(g), cScale(cScale), LeScale(LeScale), temperatureOffset(temperatureOffset), temperatureScale(temperatureScale)
+    NanoVDBVolume(string filename, const AffineSpace *renderFromMedium, Spectrum cAbs,
+                  Spectrum cScatter, f32 g, f32 cScale, f32 LeScale = 1.f,
+                  f32 temperatureOffset = 0.f, f32 temperatureScale = 1.f)
+        : mediumFromRender(Inverse(*renderFromMedium)), cAbs(DenselySampledSpectrum(cAbs)),
+          cScatter(DenselySampledSpectrum(cScatter)), phaseFunction(g), cScale(cScale),
+          LeScale(LeScale), temperatureOffset(temperatureOffset),
+          temperatureScale(temperatureScale)
     {
         densityGrid          = ReadGrid(filename, "density");
         temperatureGrid      = ReadGrid(filename, "temperature");
@@ -658,38 +653,39 @@ struct NanoVDBVolume
         temperatureFloatGrid = temperatureGrid.grid<f32>();
 
         nanovdb::BBox<nanovdb::Vec3R> bbox = densityFloatGrid->worldBBox();
-        bounds                             = Transform(*renderFromMedium,
-                                                       Bounds(Vec3f((f32)bbox.min()[0], (f32)bbox.min()[1], (f32)bbox.min()[2]),
-                                                              Vec3f((f32)bbox.max()[0], (f32)bbox.max()[1], (f32)bbox.max()[2])));
+        bounds                             = Transform(
+            *renderFromMedium,
+            Bounds(Vec3f((f32)bbox.min()[0], (f32)bbox.min()[1], (f32)bbox.min()[2]),
+                                               Vec3f((f32)bbox.max()[0], (f32)bbox.max()[1], (f32)bbox.max()[2])));
 
         nanovdb::BBox<nanovdb::Vec3R> bbox2 = temperatureFloatGrid->worldBBox();
-        bounds.Extend(
-            Transform(*renderFromMedium,
-                      Bounds(Vec3f((f32)bbox2.min()[0], (f32)bbox2.min()[1], (f32)bbox2.min()[2]),
-                             Vec3f((f32)bbox2.max()[0], (f32)bbox2.max()[1], (f32)bbox2.max()[2]))));
+        bounds.Extend(Transform(
+            *renderFromMedium,
+            Bounds(Vec3f((f32)bbox2.min()[0], (f32)bbox2.min()[1], (f32)bbox2.min()[2]),
+                   Vec3f((f32)bbox2.max()[0], (f32)bbox2.max()[1], (f32)bbox2.max()[2]))));
     }
 
     SampledSpectrum Le(Vec3f p, const SampledWavelengths &lambda) const
     {
         // p = Transform(*mediumFromRender, p);
-        if (!temperatureFloatGrid)
-            return SampledSpectrum(0.f);
+        if (!temperatureFloatGrid) return SampledSpectrum(0.f);
         nanovdb::Vec3<f32> pIndex =
             temperatureFloatGrid->worldToIndexF(nanovdb::Vec3<f32>(p.x, p.y, p.z));
         using TreeSampler = nanovdb::SampleFromVoxels<nanovdb::FloatGrid::TreeType, 1, false>;
         f32 temp          = TreeSampler(temperatureFloatGrid->tree())(pIndex);
         temp              = (temp - temperatureOffset) * temperatureScale;
-        if (temp <= 100.f)
-            return SampledSpectrum(0.f);
+        if (temp <= 100.f) return SampledSpectrum(0.f);
         return LeScale * BlackbodySpectrum(temp).Sample(lambda);
     }
-    void Extinction(Vec3f p, const SampledWavelengths &lambda, SampledSpectrum &outAbs, SampledSpectrum &outScatter, SampledSpectrum &le) const //, f32, f32) const
+    void Extinction(Vec3f p, const SampledWavelengths &lambda, SampledSpectrum &outAbs,
+                    SampledSpectrum &outScatter, SampledSpectrum &le) const //, f32, f32) const
     {
         // p = ApplyInverse(*renderFromMedium, p);
-        p                         = TransformP(mediumFromRender, p);
-        nanovdb::Vec3<f32> pIndex = densityFloatGrid->worldToIndexF(nanovdb::Vec3<f32>(p.x, p.y, p.z));
-        using TreeSampler         = nanovdb::SampleFromVoxels<nanovdb::FloatGrid::TreeType, 1, false>;
-        f32 density               = TreeSampler(densityFloatGrid->tree())(pIndex);
+        p = TransformP(mediumFromRender, p);
+        nanovdb::Vec3<f32> pIndex =
+            densityFloatGrid->worldToIndexF(nanovdb::Vec3<f32>(p.x, p.y, p.z));
+        using TreeSampler = nanovdb::SampleFromVoxels<nanovdb::FloatGrid::TreeType, 1, false>;
+        f32 density       = TreeSampler(densityFloatGrid->tree())(pIndex);
 
         outAbs     = cAbs.Sample(lambda) * density;
         outScatter = cScatter.Sample(lambda) * density;
@@ -707,8 +703,10 @@ struct NanoVDBVolume
             return;
         }
 
-        nanovdb::Vec3<f32> i0 = densityFloatGrid->worldToIndexF(nanovdb::Vec3<f32>(inBounds.minP[0], inBounds.minP[1], inBounds.minP[2]));
-        nanovdb::Vec3<f32> i1 = densityFloatGrid->worldToIndexF(nanovdb::Vec3<f32>(inBounds.maxP[0], inBounds.maxP[1], inBounds.maxP[2]));
+        nanovdb::Vec3<f32> i0 = densityFloatGrid->worldToIndexF(
+            nanovdb::Vec3<f32>(inBounds.minP[0], inBounds.minP[1], inBounds.minP[2]));
+        nanovdb::Vec3<f32> i1 = densityFloatGrid->worldToIndexF(
+            nanovdb::Vec3<f32>(inBounds.maxP[0], inBounds.maxP[1], inBounds.maxP[2]));
 
         struct MediumData
         {
@@ -728,7 +726,8 @@ struct NanoVDBVolume
                 f32 cMin      = pos_inf;
                 f32 cMax      = neg_inf;
 
-                // TODO: see if loop carried dependency, or index computation, is significant overhead vs access time
+                // TODO: see if loop carried dependency, or index computation, is significant
+                // overhead vs access time
                 for (u32 i = start; i < count; i++)
                 {
                     i32 nx    = begin[0] + (i % width[0]);
@@ -764,7 +763,8 @@ struct Scene2
 {
     // using ShapeTypes = TypePack<QuadMesh, Disk>;
     // using VolumeTypes        = TypePack<NanoVDBVolume>;
-    using LightTypes         = TypePack<DiffuseAreaLight, DistantLight, UniformInfiniteLight, ImageInfiniteLight>;
+    using LightTypes =
+        TypePack<DiffuseAreaLight, DistantLight, UniformInfiniteLight, ImageInfiniteLight>;
     using InfiniteLightTypes = TypePack<UniformInfiniteLight, ImageInfiniteLight>;
     using MaterialTypes      = TypePack<DielectricMaterialBase>;
 
@@ -776,7 +776,10 @@ struct Scene2
         // u32 volumeIndex;
         MaterialHandle materialID;
         PrimitiveIndices() {}
-        PrimitiveIndices(LightHandle lightID, MaterialHandle materialID) : lightID(lightID), materialID(materialID) {}
+        PrimitiveIndices(LightHandle lightID, MaterialHandle materialID)
+            : lightID(lightID), materialID(materialID)
+        {
+        }
     };
 
     union
@@ -831,14 +834,8 @@ struct Scene2
     //     };
     // };
 
-    DiffuseAreaLight *GetAreaLights()
-    {
-        return lights.Get<DiffuseAreaLight>();
-    }
-    const DiffuseAreaLight *GetAreaLights() const
-    {
-        return lights.Get<DiffuseAreaLight>();
-    }
+    DiffuseAreaLight *GetAreaLights() { return lights.Get<DiffuseAreaLight>(); }
+    const DiffuseAreaLight *GetAreaLights() const { return lights.Get<DiffuseAreaLight>(); }
     Bounds GetBounds() const
     {
         Bounds result;
@@ -854,10 +851,7 @@ struct Scene2
 };
 
 struct Scene2 *scene_;
-Scene2 *GetScene()
-{
-    return scene_;
-}
+Scene2 *GetScene() { return scene_; }
 
 struct Scene
 {
@@ -891,7 +885,8 @@ struct Scene
     void FinalizePrimitives();
 
     inline i32 GetIndex(PrimitiveType type, i32 primIndex) const;
-    inline void GetTypeAndLocalindex(const u32 totalIndex, PrimitiveType *type, u32 *localIndex) const;
+    inline void GetTypeAndLocalindex(const u32 totalIndex, PrimitiveType *type,
+                                     u32 *localIndex) const;
 
     void AddConstantMedium(PrimitiveType type, i32 primIndex, i32 constantMediumIndex);
 

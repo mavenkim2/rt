@@ -28,8 +28,11 @@ struct LightSample
     LightType lightType;
 
     LightSample() {}
-    LightSample(SampledSpectrum L, Vec3lfn samplePoint, Vec3lfn wi, LaneNF32 pdf, LightType lightType)
-        : L(L), samplePoint(samplePoint), wi(wi), pdf(pdf), lightType(lightType) {}
+    LightSample(SampledSpectrum L, Vec3lfn samplePoint, Vec3lfn wi, LaneNF32 pdf,
+                LightType lightType)
+        : L(L), samplePoint(samplePoint), wi(wi), pdf(pdf), lightType(lightType)
+    {
+    }
 };
 
 bool IsDeltaLight(LightType type)
@@ -67,31 +70,22 @@ struct Scene2;
 
 // clang-format on
 
-#define LightFunctions(type) \
-    SAMPLE_LI_HEADER();      \
-    PDF_LI_HEADER();         \
+#define LightFunctions(type)                                                                  \
+    SAMPLE_LI_HEADER();                                                                       \
+    PDF_LI_HEADER();                                                                          \
     LE_HEADER(type);
 
-#define LightFunctionsDirac(type)    \
-    SAMPLE_LI_HEADER();              \
-    PDF_LI_HEADER()                  \
-    {                                \
-        return 0.f;                  \
-    }                                \
-    LE_HEADER(type)                  \
-    {                                \
-        return SampledSpectrum(0.f); \
-    }
+#define LightFunctionsDirac(type)                                                             \
+    SAMPLE_LI_HEADER();                                                                       \
+    PDF_LI_HEADER() { return 0.f; }                                                           \
+    LE_HEADER(type) { return SampledSpectrum(0.f); }
 
-#define LightFunctionsInf(type) \
-    SAMPLE_LI_HEADER();         \
-    PDF_LI_INF_HEADER(type);    \
+#define LightFunctionsInf(type)                                                               \
+    SAMPLE_LI_HEADER();                                                                       \
+    PDF_LI_INF_HEADER(type);                                                                  \
     LE_INF_HEADER(type);
 
-const DenselySampledSpectrum *LookupSpectrum(Spectrum s)
-{
-    return 0;
-}
+const DenselySampledSpectrum *LookupSpectrum(Spectrum s) { return 0; }
 
 struct DiffuseAreaLight
 {
@@ -102,7 +96,8 @@ struct DiffuseAreaLight
     static constexpr f32 MinSphericalArea = 1e-4;
     f32 area;
 
-    DiffuseAreaLight(Vec3f *p, f32 scale, Spectrum Lemit) : p(p), scale(scale), Lemit(LookupSpectrum(Lemit))
+    DiffuseAreaLight(Vec3f *p, f32 scale, Spectrum Lemit)
+        : p(p), scale(scale), Lemit(LookupSpectrum(Lemit))
     {
         area = Length(Cross(p[1] - p[0], p[3] - p[0]));
     }
@@ -119,7 +114,10 @@ struct DistantLight
     f32 sceneRadius;
     f32 scale;
 
-    DistantLight(Vec3f d, Spectrum Lemit, f32 scale = 1.f) : d(d), Lemit(LookupSpectrum(Lemit)), scale(scale) {}
+    DistantLight(Vec3f d, Spectrum Lemit, f32 scale = 1.f)
+        : d(d), Lemit(LookupSpectrum(Lemit)), scale(scale)
+    {
+    }
     LightFunctionsDirac(DistantLight);
 };
 
@@ -130,7 +128,10 @@ struct UniformInfiniteLight
     f32 scale;
     f32 sceneRadius;
 
-    UniformInfiniteLight(Spectrum Lemit, f32 scale = 1.f) : Lemit(LookupSpectrum(Lemit)), scale(scale) {}
+    UniformInfiniteLight(Spectrum Lemit, f32 scale = 1.f)
+        : Lemit(LookupSpectrum(Lemit)), scale(scale)
+    {
+    }
     LightFunctionsInf(UniformInfiniteLight);
 };
 
@@ -148,7 +149,7 @@ struct PiecewiseConstant1D
         num       = numValues;
         cdf       = PushArrayNoZero(arena, f32, numValues + 1);
         f32 total = 0.f;
-        cdf[0] = 0.f;
+        cdf[0]    = 0.f;
         for (u32 i = 1; i <= numValues; i++)
         {
             total += Abs(values[i - 1]);
@@ -163,10 +164,7 @@ struct PiecewiseConstant1D
         }
     }
 
-    f32 Integral() const
-    {
-        return funcInt;
-    }
+    f32 Integral() const { return funcInt; }
     f32 Sample(f32 u, f32 *pdf = 0, u32 *offset = 0) const
     {
         u32 index = FindInterval(num, [&](u32 index) { return cdf[index] <= u; });
@@ -185,7 +183,8 @@ struct PiecewiseConstant2D
     Vec2f minD, maxD;
 
     PiecewiseConstant2D() {}
-    PiecewiseConstant2D(Arena *arena, f32 *values, u32 nu, u32 nv, Vec2f minD, Vec2f maxD) : minD(minD), maxD(maxD)
+    PiecewiseConstant2D(Arena *arena, f32 *values, u32 nu, u32 nv, Vec2f minD, Vec2f maxD)
+        : minD(minD), maxD(maxD)
     {
         conditional = PushArrayNoZero(arena, PiecewiseConstant1D, nv);
         for (u32 v = 0; v < nv; v++)
@@ -215,7 +214,8 @@ struct PiecewiseConstant2D
         u32 sizeU = conditional[0].num;
         u32 sizeV = marginal.num;
         u         = (u - minD) / (maxD - minD);
-        Vec2u p   = Clamp(Vec2u(u * Vec2f(f32(sizeU), f32(sizeV))), Vec2u(0), Vec2u(sizeU - 1, sizeV - 1));
+        Vec2u p   = Clamp(Vec2u(u * Vec2f(f32(sizeU), f32(sizeV))), Vec2u(0),
+                          Vec2u(sizeU - 1, sizeV - 1));
         return conditional[p[1]].func[p[0]] / marginal.Integral();
     }
 };
@@ -230,7 +230,8 @@ struct ImageInfiniteLight
     PiecewiseConstant2D distribution;
     PiecewiseConstant2D compensatedDistribution;
 
-    ImageInfiniteLight(Arena *arena, Image image, const AffineSpace *renderFromLight, const RGBColorSpace *imageColorSpace, f32 sceneRadius, f32 scale = 1.f);
+    ImageInfiniteLight(Arena *arena, Image image, const AffineSpace *renderFromLight,
+                       const RGBColorSpace *imageColorSpace, f32 sceneRadius, f32 scale = 1.f);
     LightFunctionsInf(ImageInfiniteLight);
     SampledSpectrum ImageLe(Vec2f uv, const SampledWavelengths &lambda) const;
 };
