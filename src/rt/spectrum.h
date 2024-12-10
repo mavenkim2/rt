@@ -523,7 +523,7 @@ inline f32 EvaluateSpectral(const Vec3f &c, const f32 wl)
     // f(x) = S(c0x^2 + c1x + c2), S is a sigmoid, x is the wavelength
     // S(x) = 1/2 + x/(2 * sqrt(1 + x^2))
     f32 x = FMA(FMA(c.x, wl, c.y), wl, c.z);
-    return FMA(.5f * x, 1.f / sqrtf(FMA(x, x, 1)), .5f);
+    return FMA(.5f * x, 1.f / Sqrt(FMA(x, x, 1)), .5f);
 }
 
 template <i32 K>

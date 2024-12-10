@@ -457,11 +457,11 @@ void Render(Arena *arena, RenderParams2 &params) // Vec2i imageDim, Vec2f filter
                 if (rgb.y != rgb.y) rgb.y = 0.f;
                 if (rgb.z != rgb.z) rgb.z = 0.f;
 
-                // f32 m = Max(rgb.x, Max(rgb.y, rgb.z));
-                // if (m > 1.f)
-                // {
-                //     rgb *= 1.f / m;
-                // }
+                f32 m = Max(rgb.x, Max(rgb.y, rgb.z));
+                if (m > 1.f)
+                {
+                    rgb *= 1.f / m;
+                }
                 f32 r = 255.f * rgb.x;
                 f32 g = 255.f * rgb.y;
                 f32 b = 255.f * rgb.z;
@@ -560,6 +560,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
 
             break;
         }
+
         // If intersected with a light
         if (si.lightIndices)
         {
