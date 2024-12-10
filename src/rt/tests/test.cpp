@@ -436,7 +436,7 @@ void TriangleMeshBVHTest(Arena *arena)
     // once moana is rendered
     // - ray differentials
 
-    scene_ = PushStruct(arena, Scene2);
+    scene_        = PushStruct(arena, Scene2);
     Scene2 *scene = GetScene();
     // TempArena temp    = ScratchStart(0, 0);
     u32 numProcessors = OS_NumProcessors();
@@ -457,16 +457,12 @@ void TriangleMeshBVHTest(Arena *arena)
     Vec3f s = Normalize(Cross(up, f));
     Vec3f u = Cross(f, s);
 
-    Mat4 cameraFromRender(f.x, f.y, f.z, 0.f,
-                          s.x, s.y, s.z, 0.f,
-                          u.x, u.y, u.z, 0.f,
-                          0.f, 0.f, 0.f, 1.f);
+    Mat4 cameraFromRender(f.x, f.y, f.z, 0.f, s.x, s.y, s.z, 0.f, u.x, u.y, u.z, 0.f, 0.f, 0.f, 0.f, 1.f);
 
     Mat4 renderFromCamera = Inverse(cameraFromRender);
     Mat4 NDCFromCamera    = Mat4::Perspective(Radians(69.50461), 2.386946);
     // maps to raster coordinates
-    Mat4 rasterFromNDC = Scale(Vec3f(f32(width), -f32(height), 1.f)) * Scale(Vec3f(1.f / 2.f, 1.f / 2.f, 1.f)) *
-                         Translate(Vec3f(1.f, -1.f, 0.f));
+    Mat4 rasterFromNDC    = Scale(Vec3f(f32(width), -f32(height), 1.f)) * Scale(Vec3f(1.f / 2.f, 1.f / 2.f, 1.f)) * Translate(Vec3f(1.f, -1.f, 0.f));
     Mat4 rasterFromCamera = rasterFromNDC * NDCFromCamera;
     Mat4 cameraFromRaster = Inverse(rasterFromCamera);
 
@@ -483,11 +479,10 @@ void TriangleMeshBVHTest(Arena *arena)
     PrimRefCompressed *refs = GenerateAOSData(arena, &mesh, numFaces, geomBounds, centBounds);
 
     // environment map
-    f32 sceneRadius = 0.5f * Max(geomBounds.maxP[0] - geomBounds.minP[0], 
-                    Max(geomBounds.maxP[1] - geomBounds.minP[1], geomBounds.maxP[2] - geomBounds.minP[2]));
-    AffineSpace renderFromLight =
-        AffineSpace::Scale(-1, 1, 1) * AffineSpace::Rotate(Vec3f(-1, 0, 0), Radians(90)) * AffineSpace::Rotate(Vec3f(0, 0, 1), Radians(65));
-    renderFromLight = AffineSpace::Translate(-pCamera) * renderFromLight;
+    f32 sceneRadius =
+        0.5f * Max(geomBounds.maxP[0] - geomBounds.minP[0], Max(geomBounds.maxP[1] - geomBounds.minP[1], geomBounds.maxP[2] - geomBounds.minP[2]));
+    AffineSpace renderFromLight = AffineSpace::Rotate(Vec3f(-1, 0, 0), Radians(90)) * AffineSpace::Rotate(Vec3f(0, 0, 1), Radians(65));
+    renderFromLight             = AffineSpace::Translate(-pCamera) * renderFromLight;
 
 #if 0
     AffineSpace lightFromRender = Inverse(renderFromLight);
@@ -501,7 +496,8 @@ void TriangleMeshBVHTest(Arena *arena)
     Vec3f r4 = ApplyInverseV(renderFromLight, testVec);
 #endif
 
-    ImageInfiniteLight infLight(arena, LoadFile("../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png"), &renderFromLight, RGBColorSpace::sRGB, sceneRadius);
+    ImageInfiniteLight infLight(arena, LoadFile("../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png"), &renderFromLight, RGBColorSpace::sRGB,
+                                sceneRadius);
     scene->lights.Set<ImageInfiniteLight>(&infLight, 1);
 
     BuildSettings settings;
@@ -534,7 +530,7 @@ void TriangleMeshBVHTest(Arena *arena)
     params.width            = width;
     params.height           = height;
     params.filterRadius     = Vec2f(0.5f);
-    params.spp              = 8;//256;
+    params.spp              = 8; // 256;
     params.maxDepth         = 10;
     params.lensRadius       = 0.003125;
     params.focalLength      = 1675.3383;

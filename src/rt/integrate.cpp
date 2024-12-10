@@ -378,12 +378,13 @@ void Render(Arena *arena, RenderParams2 &params) // Vec2i imageDim, Vec2f filter
     u32 maxDepth           = params.maxDepth;
     f32 lensRadius         = params.lensRadius;
     f32 focalLength        = params.focalLength;
+    f32 maxComponentValue  = 10.f;
 
     // parallel for over tiles
     u32 tileWidth  = 64;
     u32 tileHeight = 64;
     u32 tileCountX = (width + tileWidth - 1) / tileWidth;
-    u32 tileCountY = (width + tileHeight - 1) / tileHeight;
+    u32 tileCountY = (height + tileHeight - 1) / tileHeight;
     u32 taskCount  = tileCountX * tileCountY;
 
     Image image;
@@ -393,12 +394,13 @@ void Render(Arena *arena, RenderParams2 &params) // Vec2i imageDim, Vec2f filter
     image.contents      = PushArrayNoZero(arena, u8, GetImageSize(&image));
 
     scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
-        u32 tileX = taskCount % tileCountX;
-        u32 tileY = taskCount / tileCountX;
-        Vec2u minPixelBounds(tileX, tileY);
-        Vec2u maxPixelBounds(Min(tileX + tileWidth, tileWidth), Min(tileY + tileHeight, tileHeight));
+        u32 tileX = jobID % tileCountX;
+        u32 tileY = jobID / tileCountX;
+        Vec2u minPixelBounds(tileWidth * tileX, tileHeight * tileY);
+        Vec2u maxPixelBounds(Min(tileWidth * (tileX + 1), width), Min((tileY + 1) * tileHeight, height));
 
-        SampledSpectrum L(0.f);
+        Assert(maxPixelBounds.x >= minPixelBounds.x && minPixelBounds.x >= 0 && maxPixelBounds.x <= width);
+        Assert(maxPixelBounds.y >= minPixelBounds.y && minPixelBounds.y >= 0 && maxPixelBounds.y <= height);
 
         ZSobolSampler sampler(spp, Vec2i(width, height));
         for (u32 y = minPixelBounds.y; y < maxPixelBounds.y; y++)
@@ -432,15 +434,21 @@ void Render(Arena *arena, RenderParams2 &params) // Vec2i imageDim, Vec2f filter
                         // ensure ray intersects focal point
                         ray.d = Normalize(pFocus - ray.o);
                     }
-                    ray              = Transform(renderFromCamera, ray);
-                    f32 cameraWeight = 1.f;
-                    L += cameraWeight * Li(ray, sampler, maxDepth, lambda);
+                    ray               = Transform(renderFromCamera, ray);
+                    f32 cameraWeight  = 1.f;
+                    SampledSpectrum L = cameraWeight * Li(ray, sampler, maxDepth, lambda);
                     // convert radiance to rgb, add and divide
-                    L     = SafeDiv(L, lambda.PDF());
-                    f32 r = (Spectra::X().Sample(lambda) * L).Average();
-                    f32 g = (Spectra::Y().Sample(lambda) * L).Average();
-                    f32 b = (Spectra::Z().Sample(lambda) * L).Average();
-                    rgb += Vec3f(r, g, b);
+                    L               = SafeDiv(L, lambda.PDF());
+                    f32 r           = (Spectra::X().Sample(lambda) * L).Average();
+                    f32 g           = (Spectra::Y().Sample(lambda) * L).Average();
+                    f32 b           = (Spectra::Z().Sample(lambda) * L).Average();
+                    f32 m           = Max(r, Max(g, b));
+                    Vec3f sampleRgb = Vec3f(r, g, b);
+                    if (m > maxComponentValue)
+                    {
+                        sampleRgb *= maxComponentValue / m;
+                    }
+                    rgb += sampleRgb;
                 }
                 // TODO: filter importance sampling
                 rgb /= f32(spp);
@@ -449,10 +457,17 @@ void Render(Arena *arena, RenderParams2 &params) // Vec2i imageDim, Vec2f filter
                 if (rgb.y != rgb.y) rgb.y = 0.f;
                 if (rgb.z != rgb.z) rgb.z = 0.f;
 
+                // f32 m = Max(rgb.x, Max(rgb.y, rgb.z));
+                // if (m > 1.f)
+                // {
+                //     rgb *= 1.f / m;
+                // }
                 f32 r = 255.f * rgb.x;
                 f32 g = 255.f * rgb.y;
                 f32 b = 255.f * rgb.z;
                 f32 a = 255.f;
+
+                Assert(r <= 255.f && g <= 255.f && b <= 255.f);
 
                 u32 color = (RoundFloatToU32(a) << 24) | (RoundFloatToU32(r) << 16) | (RoundFloatToU32(g) << 8) | (RoundFloatToU32(b) << 0);
                 *out++    = color;
