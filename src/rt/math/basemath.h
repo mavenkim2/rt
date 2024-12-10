@@ -243,6 +243,13 @@ inline u16 SafeTruncateU32(u32 val)
     return result;
 }
 
+inline u8 SafeTruncateU32ToU8(u32 val)
+{
+    Assert(val <= 255);
+    u8 result = (u8)val;
+    return result;
+}
+
 __forceinline u32 RoundFloatToU32(f32 val)
 {
     u32 result = (u32)(val + 0.5f);

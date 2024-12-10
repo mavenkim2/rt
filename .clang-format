@@ -2,13 +2,14 @@ BasedOnStyle: LLVM
 IndentWidth: 4
 BreakBeforeBraces: Custom
 AlwaysBreakTemplateDeclarations: Yes
-ColumnLimit: 150
+ColumnLimit: 95
 AllowShortFunctionsOnASingleLine: All
 AllowShortLoopsOnASingleLine: true
 IndentCaseLabels: true
 SortIncludes: false
 AlignConsecutiveAssignments: Consecutive
 AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AllowAllParametersOfDeclarationOnNextLine: true
 ForEachMacros: ['foreach', 'foreach_index']
 AlignConsecutiveMacros: true
 AllowShortCaseLabelsOnASingleLine: true

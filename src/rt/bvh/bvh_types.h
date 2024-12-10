@@ -25,8 +25,12 @@ struct PartitionPayload
     u32 count;
     u32 groupSize;
     PartitionPayload() {}
-    PartitionPayload(u32 *lOffsets, u32 *rOffsets, u32 *lCounts, u32 *rCounts, u32 count, u32 groupSize)
-        : lOffsets(lOffsets), rOffsets(rOffsets), lCounts(lCounts), rCounts(rCounts), count(count), groupSize(groupSize) {}
+    PartitionPayload(u32 *lOffsets, u32 *rOffsets, u32 *lCounts, u32 *rCounts, u32 count,
+                     u32 groupSize)
+        : lOffsets(lOffsets), rOffsets(rOffsets), lCounts(lCounts), rCounts(rCounts),
+          count(count), groupSize(groupSize)
+    {
+    }
 };
 
 struct Split
@@ -56,7 +60,10 @@ struct Split
     u64 allocPos;
 
     Split() {}
-    Split(f32 sah, u32 pos, u32 dim, f32 val) : bestSAH(sah), bestPos(pos), bestDim(dim), bestValue(val) {}
+    Split(f32 sah, u32 pos, u32 dim, f32 val)
+        : bestSAH(sah), bestPos(pos), bestDim(dim), bestValue(val)
+    {
+    }
 };
 
 struct PrimRef
@@ -80,17 +87,12 @@ struct PrimRef
         };
     };
     PrimRef() {}
-    PrimRef(const Lane8F32 &l)
-    {
-        MemoryCopy(this, &l, sizeof(PrimRef));
-    }
-    __forceinline Lane8F32 Load() const
-    {
-        return Lane8F32::Load(&m256);
-    }
+    PrimRef(const Lane8F32 &l) { MemoryCopy(this, &l, sizeof(PrimRef)); }
+    __forceinline Lane8F32 Load() const { return Lane8F32::Load(&m256); }
 };
 
-// NOTE: if BVH is built over only one quad mesh. must make sure to pad with an extra entry when allocating
+// NOTE: if BVH is built over only one quad mesh. must make sure to pad with an extra entry
+// when allocating
 struct PrimRefCompressed
 {
     union
@@ -109,14 +111,8 @@ struct PrimRefCompressed
         };
     };
     PrimRefCompressed() {}
-    PrimRefCompressed(const Lane8F32 &l)
-    {
-        MemoryCopy(this, &l, sizeof(PrimRef));
-    }
-    __forceinline Lane8F32 Load() const
-    {
-        return Lane8F32::LoadU(this);
-    }
+    PrimRefCompressed(const Lane8F32 &l) { MemoryCopy(this, &l, sizeof(PrimRef)); }
+    __forceinline Lane8F32 Load() const { return Lane8F32::LoadU(this); }
 };
 
 struct ExtRange
@@ -153,7 +149,8 @@ struct ScalarBounds
         result.maxP = Lane4F32::LoadU(&maxX);
         return result;
     }
-    // NOTE: geomBounds must be set first, then cent bounds, and then the range in RecordSOASplits must be updated
+    // NOTE: geomBounds must be set first, then cent bounds, and then the range in
+    // RecordSOASplits must be updated
     void FromBounds(const Bounds &b)
     {
         Lane4F32::StoreU(&minX, b.minP);
@@ -168,10 +165,7 @@ struct ScalarBounds
     }
 };
 
-f32 HalfArea(const ScalarBounds &b)
-{
-    return b.HalfArea();
-}
+f32 HalfArea(const ScalarBounds &b) { return b.HalfArea(); }
 
 struct alignas(CACHE_LINE_SIZE) RecordAOSSplits
 {
@@ -241,6 +235,7 @@ struct QuantizedNode;
 template <i32 N>
 struct CompressedLeafNode;
 
+// TODO: this is not going to work for 8 wide
 template <template <i32> class Node, i32 N>
 void GetBounds(Node<N> *node, LaneF32<N> *outMin, LaneF32<N> *outMax)
 {
@@ -320,12 +315,10 @@ struct BVHNode
     static BVHNode<N> EncodeNode(QuantizedNode<N> *node);
     static BVHNode<N> EncodeCompressedNode(CompressedLeafNode<N> *node);
     static BVHNode<N> EncodeLeaf(void *leaf, u32 num);
+    static BVHNode<N> EncodeEmpty() { return BVHNode<N>(tyEmpty); }
     QuantizedNode<N> *GetQuantizedNode() const;
     CompressedLeafNode<N> *GetCompressedLeaf() const;
-    void *GetPtr() const
-    {
-        return (void *)(data & ~alignMask);
-    }
+    void *GetPtr() const { return (void *)(data & ~alignMask); }
     u32 GetNum() const { return GetType() - BVHNode<N>::tyLeaf; }
     u32 GetType() const { return u32(data & alignMask); }
     bool IsLeaf() const { return GetType() >= tyLeaf; }
@@ -389,10 +382,7 @@ struct BuildRef
     u32 numPrims;
     BVHNode<N> nodePtr;
 
-    __forceinline Lane8F32 Load() const
-    {
-        return Lane8F32::LoadU(min);
-    }
+    __forceinline Lane8F32 Load() const { return Lane8F32::LoadU(min); }
     __forceinline void StoreBounds(const Bounds &b)
     {
         Lane4F32::StoreU(min, -b.minP);
@@ -433,22 +423,15 @@ struct QuantizedNode
     Vec3f minP;
 
     // NOTE: nodes + leaves
-    u32 GetNumChildren() const
-    {
-        return PopCount(meta);
-    }
-    const BVHNode<N> &Child(u32 i) const
-    {
-        return children[i];
-    }
+    u32 GetNumChildren() const { return PopCount(meta); }
 
-    template <typename T>
-    const BVHNode<N> &Child(u32 i) const
-    {
-        return children[i];
-    }
+    const BVHNode<N> &Child(u32 i) const { return children[i]; }
 
-    void GetBounds(LaneF32<N> *outMin, LaneF32<N> *outMax) // f32 *outMinX, f32 *outMinY, f32 *outMinZ, f32 *outMaxX, f32 *outMaxY, f32 *outMaxZ) const
+    u32 GetType(u32 childIndex) const { return children[childIndex].GetType(); }
+
+    void GetBounds(LaneF32<N> *outMin,
+                   LaneF32<N> *outMax) // f32 *outMinX, f32 *outMinY, f32 *outMinZ, f32
+                                       // *outMaxX, f32 *outMaxY, f32 *outMaxZ) const
     {
         ::GetBounds(this, outMin, outMax);
     }
@@ -486,18 +469,12 @@ struct CompressedLeafNode
     {
         ::GetBounds(this, outMin, outMax);
     }
-    template <typename Primitive>
-    BVHNode<N> Child(u32 index);
+    BVHNode<N> Child(u32 index) { return BVHNode<N>(index); }
+    u32 GetType(u32 childIndex) const
+    {
+        return (meta & (1 << childIndex)) ? 0 : BVHNode<N>::tyEmpty;
+    }
 };
-
-template <i32 N>
-template <typename Primitive>
-BVHNode<N> CompressedLeafNode<N>::Child(u32 index)
-{
-    BVHNode<N> out;
-    out.data = (uintptr_t)((Primitive *)(this + 1) + offsets[index]);
-    return out;
-}
 
 #define USE_BVH4
 // #define USE_BVH8
@@ -536,16 +513,32 @@ struct Triangle
         }
         return tri;
     }
-    void GetData(Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N], u32 outGeomIDs[N], u32 outPrimIDs[N]) const
+    void GetData(Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N], u32 outGeomIDs[N],
+                 u32 outPrimIDs[N]) const
     {
         for (u32 i = 0; i < N; i++)
         {
             TriangleMesh *mesh = &GetScene()->triangleMeshes[geomIDs[i]];
-            v0[i]              = Lane4F32::LoadU((f32 *)(mesh->p + 3 * primIDs[i] + 0));
-            v1[i]              = Lane4F32::LoadU((f32 *)(mesh->p + 3 * primIDs[i] + 1));
-            v2[i]              = Lane4F32::LoadU((f32 *)(mesh->p + 3 * primIDs[i] + 2));
-            outGeomIDs[i]      = geomIDs[i];
-            outPrimIDs[i]      = primIDs[i];
+            u32 indices[3];
+            if (mesh->indices)
+            {
+                Assert(3 * primIDs[i] < mesh->numIndices);
+                indices[0] = mesh->indices[3 * primIDs[i] + 0];
+                indices[1] = mesh->indices[3 * primIDs[i] + 1];
+                indices[2] = mesh->indices[3 * primIDs[i] + 2];
+            }
+            else
+            {
+                Assert(3 * primIDs[i] < mesh->numVertices);
+                indices[0] = 3 * primIDs[i] + 0;
+                indices[1] = 3 * primIDs[i] + 1;
+                indices[2] = 3 * primIDs[i] + 2;
+            }
+            v0[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[0]));
+            v1[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[1]));
+            v2[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[2]));
+            outGeomIDs[i] = geomIDs[i];
+            outPrimIDs[i] = primIDs[i];
         }
     }
 };
@@ -566,16 +559,33 @@ struct TriangleCompressed
         }
         return tri;
     }
-    void GetData(Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N], u32 outGeomIDs[N], u32 outPrimIDs[N]) const
+    void GetData(Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N], u32 outGeomIDs[N],
+                 u32 outPrimIDs[N]) const
     {
         // TODO: reconsider this later
         TriangleMesh *mesh = &GetScene()->triangleMeshes[0];
         for (u32 i = 0; i < N; i++)
         {
-            v0[i]         = Lane4F32::LoadU((f32 *)(mesh->p + 3 * primIDs[i] + 0));
-            v1[i]         = Lane4F32::LoadU((f32 *)(mesh->p + 3 * primIDs[i] + 1));
-            v2[i]         = Lane4F32::LoadU((f32 *)(mesh->p + 3 * primIDs[i] + 2));
+            u32 indices[3];
+            if (mesh->indices)
+            {
+                Assert(3 * primIDs[i] < mesh->numIndices);
+                indices[0] = mesh->indices[3 * primIDs[i] + 0];
+                indices[1] = mesh->indices[3 * primIDs[i] + 1];
+                indices[2] = mesh->indices[3 * primIDs[i] + 2];
+            }
+            else
+            {
+                Assert(3 * primIDs[i] < mesh->numVertices);
+                indices[0] = 3 * primIDs[i] + 0;
+                indices[1] = 3 * primIDs[i] + 1;
+                indices[2] = 3 * primIDs[i] + 2;
+            }
+            v0[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[0]));
+            v1[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[1]));
+            v2[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[2]));
             outPrimIDs[i] = primIDs[i];
+            outGeomIDs[i] = 0;
         }
     }
 };

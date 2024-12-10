@@ -7,7 +7,8 @@ template <i32 N>
 struct CreateQuantizedNode
 {
     template <typename Record, typename NodeType>
-    __forceinline void operator()(const Record *records, const u32 numRecords, NodeType *result)
+    __forceinline void operator()(const Record *records, const u32 numRecords,
+                                  NodeType *result)
     {
         const f32 MIN_QUAN = 0.f;
         const f32 MAX_QUAN = 255.f;
@@ -69,12 +70,14 @@ struct CreateQuantizedNode
         else if constexpr (N == 8)
         {
             Lane8F32 geomBounds[8] = {
-                Lane8F32::Load(&records[0].geomBounds), Lane8F32::Load(&records[1].geomBounds), Lane8F32::Load(&records[2].geomBounds),
-                Lane8F32::Load(&records[3].geomBounds), Lane8F32::Load(&records[4].geomBounds), Lane8F32::Load(&records[5].geomBounds),
+                Lane8F32::Load(&records[0].geomBounds), Lane8F32::Load(&records[1].geomBounds),
+                Lane8F32::Load(&records[2].geomBounds), Lane8F32::Load(&records[3].geomBounds),
+                Lane8F32::Load(&records[4].geomBounds), Lane8F32::Load(&records[5].geomBounds),
                 Lane8F32::Load(&records[6].geomBounds), Lane8F32::Load(&records[7].geomBounds),
             };
-            Transpose8x6(geomBounds[0], geomBounds[1], geomBounds[2], geomBounds[3], geomBounds[4], geomBounds[5], geomBounds[6], geomBounds[7],
-                         min.x, min.y, min.z, max.x, max.y, max.z);
+            Transpose8x6(geomBounds[0], geomBounds[1], geomBounds[2], geomBounds[3],
+                         geomBounds[4], geomBounds[5], geomBounds[6], geomBounds[7], min.x,
+                         min.y, min.z, max.x, max.y, max.z);
         }
         min.x = FlipSign(min.x);
         min.y = FlipSign(min.y);
@@ -89,18 +92,24 @@ struct CreateQuantizedNode
         Vec3lf<N> qNodeMax = Ceil((max - nodeMin) / powVec);
 
         LaneF32<N> maskMinX = FMA(powVec.x, qNodeMin.x, nodeMin.x) > min.x;
-        TruncateToU8(result->lowerX, Max(Select(maskMinX, qNodeMin.x - 1, qNodeMin.x), MIN_QUAN));
+        TruncateToU8(result->lowerX,
+                     Max(Select(maskMinX, qNodeMin.x - 1, qNodeMin.x), MIN_QUAN));
         LaneF32<N> maskMinY = FMA(powVec.y, qNodeMin.y, nodeMin.y) > min.y;
-        TruncateToU8(result->lowerY, Max(Select(maskMinY, qNodeMin.y - 1, qNodeMin.y), MIN_QUAN));
+        TruncateToU8(result->lowerY,
+                     Max(Select(maskMinY, qNodeMin.y - 1, qNodeMin.y), MIN_QUAN));
         LaneF32<N> maskMinZ = FMA(powVec.z, qNodeMin.z, nodeMin.z) > min.z;
-        TruncateToU8(result->lowerZ, Max(Select(maskMinZ, qNodeMin.z - 1, qNodeMin.z), MIN_QUAN));
+        TruncateToU8(result->lowerZ,
+                     Max(Select(maskMinZ, qNodeMin.z - 1, qNodeMin.z), MIN_QUAN));
 
         LaneF32<N> maskMaxX = FMA(powVec.x, qNodeMax.x, nodeMin.x) < max.x;
-        TruncateToU8(result->upperX, Min(Select(maskMaxX, qNodeMax.x + 1, qNodeMax.x), MAX_QUAN));
+        TruncateToU8(result->upperX,
+                     Min(Select(maskMaxX, qNodeMax.x + 1, qNodeMax.x), MAX_QUAN));
         LaneF32<N> maskMaxY = FMA(powVec.y, qNodeMax.y, nodeMin.y) < max.y;
-        TruncateToU8(result->upperY, Min(Select(maskMaxY, qNodeMax.y + 1, qNodeMax.y), MAX_QUAN));
+        TruncateToU8(result->upperY,
+                     Min(Select(maskMaxY, qNodeMax.y + 1, qNodeMax.y), MAX_QUAN));
         LaneF32<N> maskMaxZ = FMA(powVec.z, qNodeMax.z, nodeMin.z) < max.z;
-        TruncateToU8(result->upperZ, Min(Select(maskMaxZ, qNodeMax.z + 1, qNodeMax.z), MAX_QUAN));
+        TruncateToU8(result->upperZ,
+                     Min(Select(maskMaxZ, qNodeMax.z + 1, qNodeMax.z), MAX_QUAN));
 
         Assert(shift[0] <= 255 && shift[1] <= 255 && shift[2] <= 255);
         result->scale[0] = (u8)shift[0];
@@ -119,10 +128,15 @@ struct UpdateQuantizedNode
         {
             parent->children[i] = children[i];
         }
+        for (u32 j = numChildren; j < N; j++)
+        {
+            parent->children[j] = BVHNode<N>::EncodeEmpty();
+        }
     }
 };
 
-// NOTE: ptr MUST be aligned to 16 bytes, bottom 4 bits store the type, top 7 bits store the count
+// NOTE: ptr MUST be aligned to 16 bytes, bottom 4 bits store the type, top 7 bits store the
+// count
 
 // template <i32 N>
 // struct AABBNode
@@ -160,7 +174,8 @@ struct DefaultCompressedLeaf
 {
 };
 
-template <i32 N, typename Heur, typename NT, typename CreateNode, typename UpdateNode, typename LT, typename CNT = DefaultCompressedLeaf>
+template <i32 N, typename Heur, typename NT, typename CreateNode, typename UpdateNode,
+          typename LT, typename CNT = DefaultCompressedLeaf>
 struct BuildFuncs
 {
     using NodeType           = NT;
@@ -174,20 +189,25 @@ struct BuildFuncs
 };
 
 template <i32 N>
-using BLAS_SBVH_QuantizedNode_TriangleLeaf_Funcs = BuildFuncs<N, HeuristicSpatialSplits<>, QuantizedNode<N>, CreateQuantizedNode<N>,
-                                                              UpdateQuantizedNode<N>, TriangleCompressed<1>, CompressedLeafNode<N>>;
+using BLAS_SBVH_QuantizedNode_TriangleLeaf_Funcs =
+    BuildFuncs<N, HeuristicSpatialSplits<>, QuantizedNode<N>, CreateQuantizedNode<N>,
+               UpdateQuantizedNode<N>, TriangleCompressed<1>, CompressedLeafNode<N>>;
 
 template <i32 N>
-using BLAS_SBVH_QuantizedNode_QuadLeaf_Funcs = BuildFuncs<N, HeuristicSpatialSplits<QuadMesh>, QuantizedNode<N>, CreateQuantizedNode<N>,
-                                                          UpdateQuantizedNode<N>, TriangleCompressed<1>, CompressedLeafNode<N>>;
+using BLAS_SBVH_QuantizedNode_QuadLeaf_Funcs =
+    BuildFuncs<N, HeuristicSpatialSplits<QuadMesh>, QuantizedNode<N>, CreateQuantizedNode<N>,
+               UpdateQuantizedNode<N>, TriangleCompressed<1>, CompressedLeafNode<N>>;
 
 template <i32 N>
-using BLAS_SBVH_QuantizedNode_QuadLeaf_Scene_Funcs = BuildFuncs<N, HeuristicSpatialSplits<Scene2>, QuantizedNode<N>, CreateQuantizedNode<N>,
-                                                                UpdateQuantizedNode<N>, Triangle<1>, CompressedLeafNode<N>>;
+using BLAS_SBVH_QuantizedNode_QuadLeaf_Scene_Funcs =
+    BuildFuncs<N, HeuristicSpatialSplits<Scene2>, QuantizedNode<N>, CreateQuantizedNode<N>,
+               UpdateQuantizedNode<N>, Triangle<1>, CompressedLeafNode<N>>;
 
 template <i32 N>
-using TLAS_PRB_QuantizedNode_Funcs = BuildFuncs<N, HeuristicPartialRebraid<GetQuantizedNode>, QuantizedNode<N>, CreateQuantizedNode<N>,
-                                                UpdateQuantizedNode<N>, TLASLeaf<N>, CompressedLeafNode<N>>;
+using TLAS_PRB_QuantizedNode_Funcs =
+    BuildFuncs<N, HeuristicPartialRebraid<GetQuantizedNode>, QuantizedNode<N>,
+               CreateQuantizedNode<N>, UpdateQuantizedNode<N>, TLASLeaf<N>,
+               CompressedLeafNode<N>>;
 
 template <i32 N, typename BuildFunctions>
 struct BVHBuilder
@@ -232,9 +252,11 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVHRoot(BuildSettings settings, R
     BVHNode<N> root = BuildBVH(settings, record, parallel);
     if (root.data != 0) return root;
 
-    Arena *currentArena      = arenas[GetThreadIndex()];
-    u32 offset               = 0;
-    u8 *bytes                = PushArrayNoZeroTagged(currentArena, u8, sizeof(CompressedNodeType) + sizeof(LeafType) * record.count, MemoryType_BVH);
+    Arena *currentArena = arenas[GetThreadIndex()];
+    u32 offset          = 0;
+    u8 *bytes           = PushArrayNoZeroTagged(
+        currentArena, u8, sizeof(CompressedNodeType) + sizeof(LeafType) * record.count,
+        MemoryType_BVH);
     CompressedNodeType *node = (CompressedNodeType *)bytes;
     LeafType *primIDs        = (LeafType *)(bytes + sizeof(CompressedNodeType));
 
@@ -249,7 +271,8 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVHRoot(BuildSettings settings, R
 }
 
 template <i32 N, typename BuildFunctions>
-BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Record &record, bool parallel)
+BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Record &record,
+                                                   bool parallel)
 {
 
     u32 total = record.count;
@@ -265,8 +288,10 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
     Split split = heuristic.Bin(record);
 
     // NOTE: multiply both by the area instead of dividing
-    f32 area     = HalfArea(record.geomBounds);
-    f32 leafSAH  = settings.intCost * area * total; //((total + (1 << settings.logBlockSize) - 1) >> settings.logBlockSize);
+    f32 area = HalfArea(record.geomBounds);
+    f32 leafSAH =
+        settings.intCost * area *
+        total; //((total + (1 << settings.logBlockSize) - 1) >> settings.logBlockSize);
     f32 splitSAH = settings.travCost * area + settings.intCost * split.bestSAH;
 
     if (total <= settings.maxLeafSize && leafSAH <= splitSAH)
@@ -301,7 +326,8 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
         Record out;
         heuristic.Split(split, childRecords[bestChild], out, childRecords[numChildren]);
 
-        // Assert(childRecords[0].count <= record.count && childRecords[1].count <= record.count);
+        // Assert(childRecords[0].count <= record.count && childRecords[1].count <=
+        // record.count);
         childRecords[bestChild] = out;
     }
 
@@ -338,24 +364,28 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
     // Create a compressed leaf
     if (leafCount == numChildren)
     {
-        u32 offset               = 0;
-        u8 *bytes                = PushArrayNoZeroTagged(currentArena, u8, sizeof(CompressedNodeType) + sizeof(LeafType) * primTotal, MemoryType_BVH);
+        u32 offset = 0;
+        u8 *bytes  = PushArrayNoZeroTagged(
+            currentArena, u8, sizeof(CompressedNodeType) + sizeof(LeafType) * primTotal,
+            MemoryType_BVH);
         CompressedNodeType *node = (CompressedNodeType *)bytes;
         LeafType *primIDs        = (LeafType *)(bytes + sizeof(CompressedNodeType));
 
-        // TODO IMPORTANT: not currently keeping track of which prims correspond with which leaf, either need to
-        // use 4 8 bit offsets or using a triangle8 struct
         f.createNode(childRecords, numChildren, node);
 
         for (u32 recordIndex = 0; recordIndex < numChildren; recordIndex++)
         {
             const Record &childRecord = childRecords[recordIndex];
-            // threadLocalStatistics[GetThreadIndex()].misc += childRecord.count; // 1; // numChildren - leafCount;
-            for (u32 primIndex = childRecord.start; primIndex < childRecord.start + childRecord.count; primIndex++)
+            // threadLocalStatistics[GetThreadIndex()].misc += childRecord.count; // 1; //
+            // numChildren - leafCount;
+            for (u32 primIndex = childRecord.start;
+                 primIndex < childRecord.start + childRecord.count; primIndex++)
             {
                 PrimRef *prim     = &primRefs[primIndex];
                 primIDs[offset++] = LeafType::Fill(prim);
             }
+            Assert(recordIndex < N);
+            node->offsets[recordIndex] = SafeTruncateU32ToU8(offset);
         }
         return BVHNode<N>::EncodeCompressedNode(node);
     }
@@ -367,9 +397,12 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
             u32 offset                = 0;
             const Record &childRecord = childRecords[i];
             u32 numPrims              = childRecord.count;
-            // threadLocalStatistics[GetThreadIndex()].misc += childRecord.count; // 1; // numChildren - leafCount;
-            LeafType *primIDs = PushArrayNoZeroTagged(currentArena, LeafType, numPrims, MemoryType_BVH);
-            for (u32 primIndex = childRecord.start; primIndex < childRecord.start + childRecord.count; primIndex++)
+            // threadLocalStatistics[GetThreadIndex()].misc += childRecord.count; // 1; //
+            // numChildren - leafCount;
+            LeafType *primIDs =
+                PushArrayNoZeroTagged(currentArena, LeafType, numPrims, MemoryType_BVH);
+            for (u32 primIndex = childRecord.start;
+                 primIndex < childRecord.start + childRecord.count; primIndex++)
             {
                 PrimRef *prim     = &primRefs[primIndex];
                 primIDs[offset++] = LeafType::Fill(prim);
@@ -405,7 +438,8 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
 
 template <i32 N, typename BuildFunctions>
 // BVHN<N, typename BVHBuilder<N, BuildFunctions>::NodeType>
-BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Arena **inArenas, Record &record)
+BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Arena **inArenas,
+                                                   Record &record)
 {
 
     arenas          = inArenas;
@@ -414,7 +448,8 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Arena
 }
 
 template <i32 N>
-BVHNode<N> BuildQuantizedTriSBVH(BuildSettings settings, Arena **inArenas, TriangleMesh *mesh, PrimRefCompressed *ref, RecordAOSSplits &record)
+BVHNode<N> BuildQuantizedTriSBVH(BuildSettings settings, Arena **inArenas, TriangleMesh *mesh,
+                                 PrimRefCompressed *ref, RecordAOSSplits &record)
 {
     SBVHBuilderTriangleMesh<N> builder;
     new (&builder.heuristic) HeuristicSpatialSplits(ref, mesh, HalfArea(record.geomBounds));
@@ -423,25 +458,30 @@ BVHNode<N> BuildQuantizedTriSBVH(BuildSettings settings, Arena **inArenas, Trian
 }
 
 template <i32 N>
-BVHNode<N> BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas, QuadMesh *mesh, PrimRefCompressed *ref, RecordAOSSplits &record)
+BVHNode<N> BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas, QuadMesh *mesh,
+                                  PrimRefCompressed *ref, RecordAOSSplits &record)
 {
     SBVHBuilderQuadMesh<N> builder;
-    new (&builder.heuristic) HeuristicSpatialSplits<QuadMesh>(ref, mesh, HalfArea(record.geomBounds));
+    new (&builder.heuristic)
+        HeuristicSpatialSplits<QuadMesh>(ref, mesh, HalfArea(record.geomBounds));
     builder.primRefs = ref;
     return builder.BuildBVH(settings, inArenas, record);
 }
 
 template <i32 N>
-BVHNode<N> BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas, Scene2 *scene, PrimRef *ref, RecordAOSSplits &record)
+BVHNode<N> BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas, Scene2 *scene,
+                                  PrimRef *ref, RecordAOSSplits &record)
 {
     SBVHBuilderSceneQuads<N> builder;
-    new (&builder.heuristic) HeuristicSpatialSplits<Scene2>(ref, scene, HalfArea(record.geomBounds));
+    new (&builder.heuristic)
+        HeuristicSpatialSplits<Scene2>(ref, scene, HalfArea(record.geomBounds));
     builder.primRefs = ref;
     return builder.BuildBVH(settings, inArenas, record);
 }
 
 template <i32 N>
-BVHNode<N> BuildTLASQuantized(BuildSettings settings, Arena **inArenas, Scene2 *scene, BuildRef<N> *refs, RecordAOSSplits &record)
+BVHNode<N> BuildTLASQuantized(BuildSettings settings, Arena **inArenas, Scene2 *scene,
+                              BuildRef<N> *refs, RecordAOSSplits &record)
 {
     PartialRebraidBuilder<N> builder;
     new (&builder.heuristic) HeuristicPartialRebraid<GetQuantizedNode>(scene, refs);
@@ -452,7 +492,8 @@ BVHNode<N> BuildTLASQuantized(BuildSettings settings, Arena **inArenas, Scene2 *
 //////////////////////////////
 // Helpers
 //
-__forceinline BVHNodeN BuildQuantizedTriSBVH(BuildSettings settings, Arena **inArenas, TriangleMesh *mesh, PrimRefCompressed *refs,
+__forceinline BVHNodeN BuildQuantizedTriSBVH(BuildSettings settings, Arena **inArenas,
+                                             TriangleMesh *mesh, PrimRefCompressed *refs,
                                              RecordAOSSplits &record)
 {
 #if defined(USE_BVH4)
@@ -462,7 +503,8 @@ __forceinline BVHNodeN BuildQuantizedTriSBVH(BuildSettings settings, Arena **inA
 #endif
 }
 
-__forceinline BVHNodeN BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas, QuadMesh *mesh, PrimRefCompressed *refs,
+__forceinline BVHNodeN BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas,
+                                              QuadMesh *mesh, PrimRefCompressed *refs,
                                               RecordAOSSplits &record)
 {
 #if defined(USE_BVH4)
@@ -472,7 +514,9 @@ __forceinline BVHNodeN BuildQuantizedQuadSBVH(BuildSettings settings, Arena **in
 #endif
 }
 
-__forceinline BVHNodeN BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas, Scene2 *scene, PrimRef *refs, RecordAOSSplits &record)
+__forceinline BVHNodeN BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas,
+                                              Scene2 *scene, PrimRef *refs,
+                                              RecordAOSSplits &record)
 {
 #if defined(USE_BVH4)
     return BuildQuantizedQuadSBVH<4>(settings, inArenas, scene, refs, record);
@@ -481,7 +525,8 @@ __forceinline BVHNodeN BuildQuantizedQuadSBVH(BuildSettings settings, Arena **in
 #endif
 }
 
-__forceinline BVHNodeN BuildTLASQuantized(BuildSettings settings, Arena **inArenas, Scene2 *scene, BRef *refs, RecordAOSSplits &record)
+__forceinline BVHNodeN BuildTLASQuantized(BuildSettings settings, Arena **inArenas,
+                                          Scene2 *scene, BRef *refs, RecordAOSSplits &record)
 {
 #if defined(USE_BVH4)
     return BuildTLASQuantized<4>(settings, inArenas, scene, refs, record);

@@ -514,7 +514,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
     {
         SurfaceInteraction si;
         // TODO: not hardcoded
-        bool intersect = BVHTriangleIntersectorCmp4::Intersect(ray, scene->nodePtr, si);
+        bool intersect = BVH4TriangleIntersectorCmp1::Intersect(ray, scene->nodePtr, si);
 
         // If no intersection, sample "infinite" lights (e.g environment maps, sun, etc.)
         if (!intersect)
@@ -608,7 +608,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
                 // Evaluate BSDF for light sample, check visibility with shadow ray
                 f32 p_b;
                 SampledSpectrum f = bsdf.EvaluateSample(-ray.d, ls.wi, p_b) * AbsDot(si.shading.n, ls.wi);
-                if (f && !BVHTriangleIntersector4::Occluded(ray, scene->nodePtr))
+                if (f && !BVH4TriangleIntersector1::Occluded(ray, scene->nodePtr))
                 {
                     // Calculate contribution
                     f32 lightPdf = pmf * ls.pdf;

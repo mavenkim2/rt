@@ -147,10 +147,12 @@ void BVHTraverse8Test()
 void BVHIntersectionTest(Arena *arena)
 {
     Scene2 baseScene;
-    scene_            = &baseScene;
-    Scene2 *scene     = GetScene();
-    TriangleMesh mesh = LoadPLY(arena, "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
-    // TriangleMesh mesh = LoadPLY(arena, "../data/island/pbrt-v4/isKava/isKava_geometry_00001.ply");
+    scene_        = &baseScene;
+    Scene2 *scene = GetScene();
+    TriangleMesh mesh =
+        LoadPLY(arena, "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
+    // TriangleMesh mesh = LoadPLY(arena,
+    // "../data/island/pbrt-v4/isKava/isKava_geometry_00001.ply");
     u32 numFaces = mesh.numIndices / 3;
     Bounds geomBounds;
     Bounds centBounds;
@@ -176,6 +178,16 @@ void BVHIntersectionTest(Arena *arena)
     scene->triangleMeshes = &mesh;
     scene->numTriMeshes   = 1;
 
+    // Placeholder material
+    ConstantTexture<1> ct(0.f);
+    ConstantSpectrum spec(1.1f);
+    DielectricMaterialBase mat(DielectricMaterialConstant(ct, spec), NullShader());
+    scene->materials.Set<DielectricMaterialBase>(&mat, 1);
+    Scene2::PrimitiveIndices ids[] = {
+        Scene2::PrimitiveIndices(LightHandle(), MaterialHandle(MT_DielectricMaterial, 0)),
+    };
+    scene->primIndices = ids;
+
     u32 testFace  = numFaces / 2;
     u32 indices[] = {
         mesh.indices[3 * testFace + 0],
@@ -191,10 +203,11 @@ void BVHIntersectionTest(Arena *arena)
 
     Vec3f center = (p[0] + p[1] + p[2]) / 3.f;
 
-    Vec3f origin = Vec3f(geomBounds.minP[0] - 1.f, geomBounds.minP[1] - 1.f, geomBounds.minP[2] - 1.f);
-    Ray2 r       = Ray2(origin, Normalize(center - origin), pos_inf);
+    Vec3f origin =
+        Vec3f(geomBounds.minP[0] - 1.f, geomBounds.minP[1] - 1.f, geomBounds.minP[2] - 1.f);
+    Ray2 r = Ray2(origin, Normalize(center - origin), pos_inf);
     SurfaceInteraction si;
-    bool intersect = BVHTriangleIntersectorCmp4::Intersect(r, bvh, si);
+    bool intersect = BVH4TriangleCLIntersectorCmp1::Intersect(r, bvh, si);
 
     Assert(intersect);
 

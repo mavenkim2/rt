@@ -17,8 +17,9 @@ namespace rt
 #endif
 #endif
 
-static const float one_over_255  = 1.0f / 255.0f;
-static const float min_rcp_input = 1E-18f; // for abs(x) >= min_rcp_input the newton raphson rcp calculation does not fail
+static const float one_over_255 = 1.0f / 255.0f;
+static const float min_rcp_input =
+    1E-18f; // for abs(x) >= min_rcp_input the newton raphson rcp calculation does not fail
 
 /* we consider floating point numbers in that range as valid input numbers */
 static float FLT_LARGE = 1.844E18f;
@@ -77,16 +78,34 @@ struct NegInfTy
 {
     __forceinline operator double() const { return -std::numeric_limits<double>::infinity(); }
     __forceinline operator float() const { return -std::numeric_limits<float>::infinity(); }
-    __forceinline operator long long() const { return (std::numeric_limits<long long>::min)(); }
-    __forceinline operator unsigned long long() const { return (std::numeric_limits<unsigned long long>::min)(); }
+    __forceinline operator long long() const
+    {
+        return (std::numeric_limits<long long>::min)();
+    }
+    __forceinline operator unsigned long long() const
+    {
+        return (std::numeric_limits<unsigned long long>::min)();
+    }
     __forceinline operator long() const { return (std::numeric_limits<long>::min)(); }
-    __forceinline operator unsigned long() const { return (std::numeric_limits<unsigned long>::min)(); }
+    __forceinline operator unsigned long() const
+    {
+        return (std::numeric_limits<unsigned long>::min)();
+    }
     __forceinline operator int() const { return (std::numeric_limits<int>::min)(); }
-    __forceinline operator unsigned int() const { return (std::numeric_limits<unsigned int>::min)(); }
+    __forceinline operator unsigned int() const
+    {
+        return (std::numeric_limits<unsigned int>::min)();
+    }
     __forceinline operator short() const { return (std::numeric_limits<short>::min)(); }
-    __forceinline operator unsigned short() const { return (std::numeric_limits<unsigned short>::min)(); }
+    __forceinline operator unsigned short() const
+    {
+        return (std::numeric_limits<unsigned short>::min)();
+    }
     __forceinline operator char() const { return (std::numeric_limits<char>::min)(); }
-    __forceinline operator unsigned char() const { return (std::numeric_limits<unsigned char>::min)(); }
+    __forceinline operator unsigned char() const
+    {
+        return (std::numeric_limits<unsigned char>::min)();
+    }
 };
 
 const constexpr NegInfTy neg_inf = NegInfTy();
@@ -95,16 +114,34 @@ struct PosInfTy
 {
     __forceinline operator double() const { return std::numeric_limits<double>::infinity(); }
     __forceinline operator float() const { return std::numeric_limits<float>::infinity(); }
-    __forceinline operator long long() const { return (std::numeric_limits<long long>::max)(); }
-    __forceinline operator unsigned long long() const { return (std::numeric_limits<unsigned long long>::max)(); }
+    __forceinline operator long long() const
+    {
+        return (std::numeric_limits<long long>::max)();
+    }
+    __forceinline operator unsigned long long() const
+    {
+        return (std::numeric_limits<unsigned long long>::max)();
+    }
     __forceinline operator long() const { return (std::numeric_limits<long>::max)(); }
-    __forceinline operator unsigned long() const { return (std::numeric_limits<unsigned long>::max)(); }
+    __forceinline operator unsigned long() const
+    {
+        return (std::numeric_limits<unsigned long>::max)();
+    }
     __forceinline operator int() const { return (std::numeric_limits<int>::max)(); }
-    __forceinline operator unsigned int() const { return (std::numeric_limits<unsigned int>::max)(); }
+    __forceinline operator unsigned int() const
+    {
+        return (std::numeric_limits<unsigned int>::max)();
+    }
     __forceinline operator short() const { return (std::numeric_limits<short>::max)(); }
-    __forceinline operator unsigned short() const { return (std::numeric_limits<unsigned short>::max)(); }
+    __forceinline operator unsigned short() const
+    {
+        return (std::numeric_limits<unsigned short>::max)();
+    }
     __forceinline operator char() const { return (std::numeric_limits<char>::max)(); }
-    __forceinline operator unsigned char() const { return (std::numeric_limits<unsigned char>::max)(); }
+    __forceinline operator unsigned char() const
+    {
+        return (std::numeric_limits<unsigned char>::max)();
+    }
 };
 
 const constexpr PosInfTy inf     = PosInfTy();
@@ -371,10 +408,14 @@ using Lane8U32 = LaneU32<8>;
 
 using LaneXF32 = LaneF32<MAX_LANE_WIDTH>;
 
-// __forceinline Lane1F32 operator+(const Lane1F32 &a, const Lane1F32 &b) { return a.value + b.value; }
-// __forceinline Lane1F32 operator-(const Lane1F32 &a, const Lane1F32 &b) { return a.value - b.value; }
-// __forceinline Lane1F32 operator/(const Lane1F32 &a, const Lane1F32 &b) { return a.value / b.value; }
-// __forceinline Lane1F32 operator*(const Lane1F32 &a, const Lane1F32 &b) { return a.value * b.value; }
+// __forceinline Lane1F32 operator+(const Lane1F32 &a, const Lane1F32 &b) { return a.value +
+// b.value; }
+// __forceinline Lane1F32 operator-(const Lane1F32 &a, const Lane1F32 &b) { return a.value -
+// b.value; }
+// __forceinline Lane1F32 operator/(const Lane1F32 &a, const Lane1F32 &b) { return a.value /
+// b.value; }
+// __forceinline Lane1F32 operator*(const Lane1F32 &a, const Lane1F32 &b) { return a.value *
+// b.value; }
 // __forceinline Lane1F32 operator-(const Lane1F32 &a) { return -a.value; }
 // __forceinline Lane1F32 &operator+=(Lane1F32 &a, const Lane1F32 &b)
 // {
@@ -386,23 +427,34 @@ using LaneXF32 = LaneF32<MAX_LANE_WIDTH>;
 //     a = a * b;
 //     return a;
 // }
-// __forceinline bool operator>(const Lane1F32 &a, const Lane1F32 &b) { return a.value > b.value; }
-// __forceinline bool operator<(const Lane1F32 &a, const Lane1F32 &b) { return a.value < b.value; }
-// __forceinline bool operator==(const Lane1F32 &a, const Lane1F32 &b) { return a.value == b.value; }
+// __forceinline bool operator>(const Lane1F32 &a, const Lane1F32 &b) { return a.value >
+// b.value; }
+// __forceinline bool operator<(const Lane1F32 &a, const Lane1F32 &b) { return a.value <
+// b.value; }
+// __forceinline bool operator==(const Lane1F32 &a, const Lane1F32 &b) { return a.value ==
+// b.value; }
 // __forceinline Lane1F32 Cos(const Lane1F32 &a) { return Cos(a.value); }
 // __forceinline Lane1F32 Sin(const Lane1F32 &a) { return Sin(a.value); }
 // __forceinline Lane1F32 Sqrt(const Lane1F32 &a) { return Sqrt(a.value); }
 // __forceinline Lane1F32 Abs(const Lane1F32 &a) { return Abs(a.value); }
-// __forceinline Lane1F32 Copysignf(const Lane1F32 &mag, const Lane1F32 &sign) { return Copysignf(mag.value, sign.value); }
-// __forceinline Lane1F32 Clamp(const Lane1F32 &v, const Lane1F32 &min, const Lane1F32 &max) { return Clamp(v.value, min.value, max.value); }
-// __forceinline Lane1F32 Select(const Lane1F32 mask, const Lane1F32 a, const Lane1F32 b) { return mask.value ? a : b; }
-// __forceinline Lane1F32 FMA(const Lane1F32 a, const Lane1F32 b, const Lane1F32 c) { return std::fma(a.value, b.value, c.value); }
-// __forceinline Lane1F32 FMS(const Lane1F32 a, const Lane1F32 b, const Lane1F32 c) { return std::fma(a.value, b.value, -c.value); }
+// __forceinline Lane1F32 Copysignf(const Lane1F32 &mag, const Lane1F32 &sign) { return
+// Copysignf(mag.value, sign.value); }
+// __forceinline Lane1F32 Clamp(const Lane1F32 &v, const Lane1F32 &min, const Lane1F32 &max) {
+// return Clamp(v.value, min.value, max.value); }
+// __forceinline Lane1F32 Select(const Lane1F32 mask, const Lane1F32 a, const Lane1F32 b) {
+// return mask.value ? a : b; }
+// __forceinline Lane1F32 FMA(const Lane1F32 a, const Lane1F32 b, const Lane1F32 c) { return
+// std::fma(a.value, b.value, c.value); }
+// __forceinline Lane1F32 FMS(const Lane1F32 a, const Lane1F32 b, const Lane1F32 c) { return
+// std::fma(a.value, b.value, -c.value); }
 // __forceinline Lane1F32 Rsqrt(const Lane1F32 a) { return 1.f / Sqrt(a.value); }
 // __forceinline Lane1F32 SafeSqrt(const Lane1F32 a) { return 1.f / Sqrt(a.value); }
-// __forceinline Lane1F32 Max(const Lane1F32 a, const Lane1F32 b) { return Max(a.value, b.value); }
-// __forceinline Lane1F32 Min(const Lane1F32 a, const Lane1F32 b) { return Min(a.value, b.value); }
-// __forceinline bool operator!=(const Lane1U32 &a, const Lane1U32 &b) { return a.value != b.value; }
+// __forceinline Lane1F32 Max(const Lane1F32 a, const Lane1F32 b) { return Max(a.value,
+// b.value); }
+// __forceinline Lane1F32 Min(const Lane1F32 a, const Lane1F32 b) { return Min(a.value,
+// b.value); }
+// __forceinline bool operator!=(const Lane1U32 &a, const Lane1U32 &b) { return a.value !=
+// b.value; }
 
 // lane width for integration
 #define IntN 1
@@ -436,6 +488,17 @@ struct MaskBase
 
 template <typename T>
 using Mask = typename MaskBase<T>::Type;
+
+template <i32 N>
+struct MemSimdU32;
+
+template <>
+struct MemSimdU32<1>
+{
+    static u32 LoadU(void *ptr) { return *(u32 *)(ptr); }
+};
+
+f32 ReduceMin(LaneF32<1> f) { return f; }
 
 f32 &Set(f32 &val, u32 index)
 {

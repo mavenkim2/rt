@@ -21,10 +21,7 @@ struct LaneU32_<4>
     __forceinline LaneU32_(PosInfTy) { v = _mm_set1_epi32(pos_inf); }
     __forceinline LaneU32_(NegInfTy) { v = _mm_set1_epi32(neg_inf); }
 
-    __forceinline operator const __m128i &() const
-    {
-        return v;
-    }
+    __forceinline operator const __m128i &() const { return v; }
     __forceinline operator __m128i &() { return v; }
     __forceinline Lane4U32 &operator=(const Lane4U32 &other)
     {
@@ -42,15 +39,33 @@ struct LaneU32_<4>
         Assert(i < 4);
         return f[i];
     }
-    static __forceinline Lane4U32 Load(const void *ptr) { return _mm_load_si128((const __m128i *)ptr); }
-    static __forceinline Lane4U32 LoadU(const void *ptr) { return _mm_loadu_si128((const __m128i *)ptr); }
-    static __forceinline void Store(void *ptr, const Lane4U32 &l) { _mm_store_si128((__m128i *)ptr, l); }
+    static __forceinline Lane4U32 Load(const void *ptr)
+    {
+        return _mm_load_si128((const __m128i *)ptr);
+    }
+    static __forceinline Lane4U32 LoadU(const void *ptr)
+    {
+        return _mm_loadu_si128((const __m128i *)ptr);
+    }
+    static __forceinline void Store(void *ptr, const Lane4U32 &l)
+    {
+        _mm_store_si128((__m128i *)ptr, l);
+    }
 
-    static __forceinline Lane4U32 Step(u32 start) { return LaneU32_(start + 0, start + 1, start + 2, start + 3); }
+    static __forceinline Lane4U32 Step(u32 start)
+    {
+        return LaneU32_(start + 0, start + 1, start + 2, start + 3);
+    }
 };
 
-__forceinline Lane4U32 UnpackLo(const Lane4U32 &a, const Lane4U32 &b) { return _mm_unpacklo_epi32(a, b); }
-__forceinline Lane4U32 UnpackHi(const Lane4U32 &a, const Lane4U32 &b) { return _mm_unpackhi_epi32(a, b); }
+__forceinline Lane4U32 UnpackLo(const Lane4U32 &a, const Lane4U32 &b)
+{
+    return _mm_unpacklo_epi32(a, b);
+}
+__forceinline Lane4U32 UnpackHi(const Lane4U32 &a, const Lane4U32 &b)
+{
+    return _mm_unpackhi_epi32(a, b);
+}
 
 template <i32 i>
 u32 Extract(const Lane4U32 &l)
@@ -59,7 +74,10 @@ u32 Extract(const Lane4U32 &l)
     return *(u32 *)(&result);
 }
 
-__forceinline Lane4U32 operator+(const Lane4U32 &a, const Lane4U32 &b) { return _mm_add_epi32(a, b); }
+__forceinline Lane4U32 operator+(const Lane4U32 &a, const Lane4U32 &b)
+{
+    return _mm_add_epi32(a, b);
+}
 __forceinline Lane4U32 operator+(const Lane4U32 &a, const u32 b) { return a + Lane4U32(b); }
 __forceinline Lane4U32 operator+(const u32 a, const Lane4U32 &b) { return Lane4U32(a) + b; }
 __forceinline Lane4U32 &operator+=(Lane4U32 &a, const Lane4U32 &b)
@@ -68,7 +86,10 @@ __forceinline Lane4U32 &operator+=(Lane4U32 &a, const Lane4U32 &b)
     return a;
 }
 
-__forceinline Lane4U32 operator-(const Lane4U32 &a, const Lane4U32 &b) { return _mm_sub_epi32(a, b); }
+__forceinline Lane4U32 operator-(const Lane4U32 &a, const Lane4U32 &b)
+{
+    return _mm_sub_epi32(a, b);
+}
 __forceinline Lane4U32 operator-(const Lane4U32 &a, const u32 b) { return a - Lane4U32(b); }
 __forceinline Lane4U32 operator-(const u32 a, const Lane4U32 &b) { return Lane4U32(a) - b; }
 
@@ -76,14 +97,8 @@ __forceinline Lane4U32 operator^(const Lane4U32 &a, const Lane4U32 &b)
 {
     return _mm_xor_si128(a, b);
 }
-__forceinline Lane4U32 operator^(const Lane4U32 &a, const u32 b)
-{
-    return a ^ Lane4U32(b);
-}
-__forceinline Lane4U32 operator^(const u32 a, const Lane4U32 &b)
-{
-    return Lane4U32(a) ^ b;
-}
+__forceinline Lane4U32 operator^(const Lane4U32 &a, const u32 b) { return a ^ Lane4U32(b); }
+__forceinline Lane4U32 operator^(const u32 a, const Lane4U32 &b) { return Lane4U32(a) ^ b; }
 __forceinline Lane4U32 &operator^=(Lane4U32 &a, const Lane4U32 &b)
 {
     a = a ^ b;
@@ -107,8 +122,14 @@ __forceinline Lane4U32 &operator&=(Lane4U32 &lane, const u32 val)
     lane = lane & Lane4U32(val);
     return lane;
 }
-__forceinline Lane4U32 operator|(const Lane4U32 &a, const Lane4U32 &b) { return _mm_or_si128(a, b); }
-__forceinline Lane4U32 operator<<(const Lane4U32 &a, const u32 inShift) { return _mm_slli_epi32(a, inShift); }
+__forceinline Lane4U32 operator|(const Lane4U32 &a, const Lane4U32 &b)
+{
+    return _mm_or_si128(a, b);
+}
+__forceinline Lane4U32 operator<<(const Lane4U32 &a, const u32 inShift)
+{
+    return _mm_slli_epi32(a, inShift);
+}
 __forceinline Lane4U32 operator>>(const Lane4U32 &a, const u32 inShift)
 {
     return _mm_srli_epi32(a, inShift);
@@ -119,11 +140,12 @@ __forceinline Lane4U32 operator<<(const Lane4U32 &a, const Lane4U32 &b)
 {
     return _mm_sllv_epi32(a, b);
 }
-__forceinline Lane4U32 operator>>(const Lane4U32 &a, const Lane4U32 &b) { return _mm_srlv_epi32(a, b); }
-#else
-__forceinline Lane4U32 operator<<(const Lane4U32 &a, const Lane4U32 &b)
+__forceinline Lane4U32 operator>>(const Lane4U32 &a, const Lane4U32 &b)
 {
+    return _mm_srlv_epi32(a, b);
 }
+#else
+__forceinline Lane4U32 operator<<(const Lane4U32 &a, const Lane4U32 &b) {}
 #endif
 
 __forceinline Lane4U32 Min(const Lane4U32 &a, const Lane4U32 &b)
@@ -148,13 +170,13 @@ __forceinline Lane4U32 SignExtendU8ToU32(const Lane4U32 &l)
 #ifdef __SSE4_1__
     return _mm_cvtepu8_epi32(l);
 #elif __SSE3__
-    static const __m128i mask = _mm_setr_epi8((u8)0, (u8)0xff, (u8)0xff, (u8)0xff,
-                                              (u8)1, (u8)0xff, (u8)0xff, (u8)0xff,
-                                              (u8)2, (u8)0xff, (u8)0xff, (u8)0xff,
-                                              (u8)3, (u8)0xff, (u8)0xff, (u8)0xff);
+    static const __m128i mask = _mm_setr_epi8(
+        (u8)0, (u8)0xff, (u8)0xff, (u8)0xff, (u8)1, (u8)0xff, (u8)0xff, (u8)0xff, (u8)2,
+        (u8)0xff, (u8)0xff, (u8)0xff, (u8)3, (u8)0xff, (u8)0xff, (u8)0xff);
     return _mm_shuffle_epi8(l, mask);
 #else
-    return _mm_setr_epi32(l[0] & 0xf, (l[0] >> 8) & 0xf, (l[0] >> 16) & 0xf, (l[0] >> 24) & 0xf);
+    return _mm_setr_epi32(l[0] & 0xf, (l[0] >> 8) & 0xf, (l[0] >> 16) & 0xf,
+                          (l[0] >> 24) & 0xf);
 #endif
 }
 
@@ -209,7 +231,10 @@ __forceinline Lane4U32 ShiftUp(const Lane4U32 &a)
 }
 
 template <i32 S>
-__forceinline Lane4U32 ShiftUp(const Lane4U32 &a) { return ShiftUp<S, ZeroTy>(a); }
+__forceinline Lane4U32 ShiftUp(const Lane4U32 &a)
+{
+    return ShiftUp<S, ZeroTy>(a);
+}
 
 template <i32 S, typename T>
 __forceinline Lane4U32 ShiftDown(const Lane4U32 &a)
@@ -226,7 +251,16 @@ __forceinline Lane4U32 ShiftDown(const Lane4U32 &a)
 }
 
 template <i32 S>
-__forceinline Lane4U32 ShiftDown(const Lane4U32 &a) { return ShiftDown<S, ZeroTy>(a); }
+__forceinline Lane4U32 ShiftDown(const Lane4U32 &a)
+{
+    return ShiftDown<S, ZeroTy>(a);
+}
+
+template <>
+struct MemSimdU32<4>
+{
+    static Lane4U32 LoadU(void *ptr) { return Lane4U32::LoadU(ptr); }
+};
 
 } // namespace rt
 #endif
