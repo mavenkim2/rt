@@ -66,10 +66,7 @@ struct LaneF32_<8>
         }
     }
 
-    __forceinline static LaneF32_ Mask(bool i)
-    {
-        return Lane8F32(Lane4F32::Mask(i), Lane4F32::Mask(i));
-    }
+    __forceinline static LaneF32_ Mask(bool i) { return Lane8F32(Lane4F32::Mask(i), Lane4F32::Mask(i)); }
     __forceinline static LaneF32_ Mask(u32 i)
     {
         Assert(i >= 0 && i < 256);
@@ -77,8 +74,8 @@ struct LaneF32_<8>
     }
     static __forceinline Lane8F32 Step(u32 start)
     {
-        return LaneF32_((f32)start + 0.f, (f32)start + 1.f, (f32)start + 2.f, (f32)start + 3.f,
-                        (f32)start + 4.f, (f32)start + 5.f, (f32)start + 6.f, (f32)start + 7.f);
+        return LaneF32_((f32)start + 0.f, (f32)start + 1.f, (f32)start + 2.f, (f32)start + 3.f, (f32)start + 4.f, (f32)start + 5.f, (f32)start + 6.f,
+                        (f32)start + 7.f);
     }
 
     __forceinline operator const __m256 &() const { return v; }
@@ -100,22 +97,10 @@ struct LaneF32_<8>
         Assert(i < 8);
         return f[i];
     }
-    static __forceinline Lane8F32 Load(const void *ptr)
-    {
-        return _mm256_load_ps((f32 *)ptr);
-    }
-    static __forceinline Lane8F32 LoadU(const void *ptr)
-    {
-        return _mm256_loadu_ps((f32 *)ptr);
-    }
-    static __forceinline void Store(void *ptr, const Lane8F32 &l)
-    {
-        _mm256_store_ps((f32 *)ptr, l);
-    }
-    static __forceinline void StoreU(void *ptr, const Lane8F32 &l)
-    {
-        _mm256_storeu_ps((f32 *)ptr, l);
-    }
+    static __forceinline Lane8F32 Load(const void *ptr) { return _mm256_load_ps((f32 *)ptr); }
+    static __forceinline Lane8F32 LoadU(const void *ptr) { return _mm256_loadu_ps((f32 *)ptr); }
+    static __forceinline void Store(void *ptr, const Lane8F32 &l) { _mm256_store_ps((f32 *)ptr, l); }
+    static __forceinline void StoreU(void *ptr, const Lane8F32 &l) { _mm256_storeu_ps((f32 *)ptr, l); }
 };
 
 __forceinline Lane8F32 operator+(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_add_ps(a, b); }
@@ -166,7 +151,8 @@ __forceinline Lane8F32 Rsqrt(const Lane8F32 &a)
 #if defined(__AVX2__)
     r = _mm256_fmadd_ps(_mm256_set1_ps(1.5f), r, _mm256_mul_ps(_mm256_mul_ps(_mm256_mul_ps(a, _mm256_set1_ps(-0.5f)), r), _mm256_mul_ps(r, r)));
 #else
-    r          = _mm256_add_ps(_mm256_mul_ps(_mm256_set1_ps(1.5f), r), _mm256_mul_ps(_mm256_mul_ps(_mm256_mul_ps(a, _mm256_set1_ps(-0.5f)), r), _mm256_mul_ps(r, r)));
+    r = _mm256_add_ps(_mm256_mul_ps(_mm256_set1_ps(1.5f), r),
+                      _mm256_mul_ps(_mm256_mul_ps(_mm256_mul_ps(a, _mm256_set1_ps(-0.5f)), r), _mm256_mul_ps(r, r)));
 #endif
     return r;
 }
@@ -222,10 +208,7 @@ __forceinline Lane8F32 &operator&=(Lane8F32 &a, const Lane8F32 &b)
 }
 __forceinline Lane8F32 operator|(const Lane8F32 &a, const Lane8F32 &b) { return _mm256_or_ps(a, b); }
 
-__forceinline Lane8F32 Select(const Lane8F32 &mask, const Lane8F32 &a, const Lane8F32 &b)
-{
-    return _mm256_blendv_ps(b, a, mask);
-}
+__forceinline Lane8F32 Select(const Lane8F32 &mask, const Lane8F32 &a, const Lane8F32 &b) { return _mm256_blendv_ps(b, a, mask); }
 
 __forceinline i32 Movemask(const Lane8F32 &a) { return _mm256_movemask_ps(a); }
 
@@ -348,10 +331,16 @@ __forceinline f32 Extract(const Lane8F32 &a)
 }
 
 template <i32 i>
-__forceinline Lane4F32 Extract4(const Lane8F32 &a) { return _mm256_extractf128_ps(a, i); }
+__forceinline Lane4F32 Extract4(const Lane8F32 &a)
+{
+    return _mm256_extractf128_ps(a, i);
+}
 
 template <>
-__forceinline Lane4F32 Extract4<0>(const Lane8F32 &a) { return _mm256_castps256_ps128(a); }
+__forceinline Lane4F32 Extract4<0>(const Lane8F32 &a)
+{
+    return _mm256_castps256_ps128(a);
+}
 
 template <>
 __forceinline f32 Extract<0>(const Lane8F32 &a)
@@ -386,10 +375,7 @@ __forceinline Lane8F32 ReduceMinV(const Lane8F32 &l)
     return Min(b, Shuffle4<1, 0>(b));
 }
 
-__forceinline f32 ReduceMin(const Lane8F32 &l)
-{
-    return _mm_cvtss_f32(_mm256_castps256_ps128(ReduceMinV(l)));
-}
+__forceinline f32 ReduceMin(const Lane8F32 &l) { return _mm_cvtss_f32(_mm256_castps256_ps128(ReduceMinV(l))); }
 
 __forceinline Lane8F32 ReduceMaxV(const Lane8F32 &l)
 {
@@ -398,23 +384,13 @@ __forceinline Lane8F32 ReduceMaxV(const Lane8F32 &l)
     return Max(b, Shuffle4<1, 0>(b));
 }
 
-__forceinline f32 ReduceMax(const Lane8F32 &l)
-{
-    return _mm_cvtss_f32(_mm256_castps256_ps128(ReduceMaxV(l)));
-}
+__forceinline f32 ReduceMax(const Lane8F32 &l) { return _mm_cvtss_f32(_mm256_castps256_ps128(ReduceMaxV(l))); }
 
-__forceinline Lane8F32 Floor(const Lane8F32 &lane)
-{
-    return _mm256_round_ps(lane, _MM_FROUND_TO_NEG_INF);
-}
-__forceinline Lane8F32 Ceil(const Lane8F32 &lane)
-{
-    return _mm256_round_ps(lane, _MM_FROUND_TO_POS_INF);
-}
+__forceinline Lane8F32 Floor(const Lane8F32 &lane) { return _mm256_round_ps(lane, _MM_FROUND_TO_NEG_INF); }
+__forceinline Lane8F32 Ceil(const Lane8F32 &lane) { return _mm256_round_ps(lane, _MM_FROUND_TO_POS_INF); }
 
-__forceinline void Transpose8x3(const Lane4F32 &inA, const Lane4F32 &inB, const Lane4F32 &inC, const Lane4F32 &inD,
-                                const Lane4F32 &inE, const Lane4F32 &inF, const Lane4F32 &inG, const Lane4F32 &inH,
-                                Lane8F32 &out0, Lane8F32 &out1, Lane8F32 &out2)
+__forceinline void Transpose8x3(const Lane4F32 &inA, const Lane4F32 &inB, const Lane4F32 &inC, const Lane4F32 &inD, const Lane4F32 &inE,
+                                const Lane4F32 &inF, const Lane4F32 &inG, const Lane4F32 &inH, Lane8F32 &out0, Lane8F32 &out1, Lane8F32 &out2)
 {
     Lane4F32 temp[6];
     Transpose4x3(inA, inB, inC, inD, temp[0], temp[1], temp[2]);
@@ -424,10 +400,9 @@ __forceinline void Transpose8x3(const Lane4F32 &inA, const Lane4F32 &inB, const 
     out2 = Lane8F32(temp[2], temp[5]);
 }
 
-__forceinline void Transpose8x8(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC, const Lane8F32 &inD,
-                                const Lane8F32 &inE, const Lane8F32 &inF, const Lane8F32 &inG, const Lane8F32 &inH,
-                                Lane8F32 &outA, Lane8F32 &outB, Lane8F32 &outC, Lane8F32 &outD,
-                                Lane8F32 &outE, Lane8F32 &outF, Lane8F32 &outG, Lane8F32 &outH)
+__forceinline void Transpose8x8(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC, const Lane8F32 &inD, const Lane8F32 &inE,
+                                const Lane8F32 &inF, const Lane8F32 &inG, const Lane8F32 &inH, Lane8F32 &outA, Lane8F32 &outB, Lane8F32 &outC,
+                                Lane8F32 &outD, Lane8F32 &outE, Lane8F32 &outF, Lane8F32 &outG, Lane8F32 &outH)
 {
     Lane8F32 a = UnpackLo(inA, inC);
     Lane8F32 b = UnpackHi(inA, inC);
@@ -461,9 +436,8 @@ __forceinline void Transpose8x8(const Lane8F32 &inA, const Lane8F32 &inB, const 
     outH = Shuffle4<1, 3>(t3, t7);
 }
 
-__forceinline void Transpose7x8(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC, const Lane8F32 &inD,
-                                const Lane8F32 &inE, const Lane8F32 &inF, const Lane8F32 &inG,
-                                Lane8F32 &outA, Lane8F32 &outB, Lane8F32 &outC, Lane8F32 &outD,
+__forceinline void Transpose7x8(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC, const Lane8F32 &inD, const Lane8F32 &inE,
+                                const Lane8F32 &inF, const Lane8F32 &inG, Lane8F32 &outA, Lane8F32 &outB, Lane8F32 &outC, Lane8F32 &outD,
                                 Lane8F32 &outE, Lane8F32 &outF, Lane8F32 &outG, Lane8F32 &outH)
 {
     Lane8F32 a = UnpackLo(inA, inC);
@@ -498,10 +472,9 @@ __forceinline void Transpose7x8(const Lane8F32 &inA, const Lane8F32 &inB, const 
     outH = Shuffle4<1, 3>(t3, t7);
 }
 
-__forceinline void Transpose8x6(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC, const Lane8F32 &inD,
-                                const Lane8F32 &inE, const Lane8F32 &inF, const Lane8F32 &inG, const Lane8F32 &inH,
-                                Lane8F32 &outA, Lane8F32 &outB, Lane8F32 &outC, Lane8F32 &outD,
-                                Lane8F32 &outE, Lane8F32 &outF)
+__forceinline void Transpose8x6(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC, const Lane8F32 &inD, const Lane8F32 &inE,
+                                const Lane8F32 &inF, const Lane8F32 &inG, const Lane8F32 &inH, Lane8F32 &outA, Lane8F32 &outB, Lane8F32 &outC,
+                                Lane8F32 &outD, Lane8F32 &outE, Lane8F32 &outF)
 {
     Lane8F32 a = UnpackLo(inA, inC);
     Lane8F32 b = UnpackHi(inA, inC); // v v _ _ v v _ _
@@ -532,10 +505,9 @@ __forceinline void Transpose8x6(const Lane8F32 &inA, const Lane8F32 &inB, const 
     outF = Shuffle4<1, 3>(t2, t5);
 }
 
-__forceinline void Transpose6x8(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC,
-                                const Lane8F32 &inD, const Lane8F32 &inE, const Lane8F32 &inF,
-                                Lane8F32 &outA, Lane8F32 &outB, Lane8F32 &outC, Lane8F32 &outD,
-                                Lane8F32 &outE, Lane8F32 &outF, Lane8F32 &outG, Lane8F32 &outH)
+__forceinline void Transpose6x8(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC, const Lane8F32 &inD, const Lane8F32 &inE,
+                                const Lane8F32 &inF, Lane8F32 &outA, Lane8F32 &outB, Lane8F32 &outC, Lane8F32 &outD, Lane8F32 &outE, Lane8F32 &outF,
+                                Lane8F32 &outG, Lane8F32 &outH)
 {
     Lane8F32 a = UnpackLo(inA, inC);
     Lane8F32 b = UnpackLo(inB, inC); // v v _ _ v v _ _
@@ -570,9 +542,8 @@ __forceinline void Transpose6x8(const Lane8F32 &inA, const Lane8F32 &inB, const 
 }
 
 // NOTE: transforms to: a0 b0 c0 _ a0 b0 c0 _
-__forceinline void Transpose3x8(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC,
-                                Lane8F32 &outA, Lane8F32 &outB, Lane8F32 &outC, Lane8F32 &outD,
-                                Lane8F32 &outE, Lane8F32 &outF, Lane8F32 &outG, Lane8F32 &outH)
+__forceinline void Transpose3x8(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC, Lane8F32 &outA, Lane8F32 &outB, Lane8F32 &outC,
+                                Lane8F32 &outD, Lane8F32 &outE, Lane8F32 &outF, Lane8F32 &outG, Lane8F32 &outH)
 {
     Lane8F32 acLo = UnpackLo(inA, inC);
     Lane8F32 acHi = UnpackHi(inA, inC);
@@ -595,9 +566,24 @@ __forceinline void Transpose3x8(const Lane8F32 &inA, const Lane8F32 &inB, const 
     outH = Shuffle4<1, 1>(t37);
 }
 
-__forceinline void Transpose3x8(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC,
-                                Lane4F32 &outA, Lane4F32 &outB, Lane4F32 &outC, Lane4F32 &outD,
-                                Lane4F32 &outE, Lane4F32 &outF, Lane4F32 &outG, Lane4F32 &outH)
+__forceinline void Transpose3x4(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC, Lane8F32 &outA, Lane8F32 &outB, Lane8F32 &outC,
+                                Lane8F32 &outD)
+
+{
+    Lane8F32 acLo = UnpackLo(inA, inC);
+    Lane8F32 acHi = UnpackHi(inA, inC);
+
+    Lane8F32 bLo = Permute<0, 0, 1, 1>(inB);
+    Lane8F32 bHi = Permute<2, 2, 3, 3>(inB);
+
+    Lane8F32 t04 = UnpackLo(acLo, bLo);
+    Lane8F32 t15 = UnpackHi(acLo, bLo);
+    Lane8F32 t26 = UnpackLo(acHi, bHi);
+    Lane8F32 t37 = UnpackHi(acHi, bHi);
+}
+
+__forceinline void Transpose3x8(const Lane8F32 &inA, const Lane8F32 &inB, const Lane8F32 &inC, Lane4F32 &outA, Lane4F32 &outB, Lane4F32 &outC,
+                                Lane4F32 &outD, Lane4F32 &outE, Lane4F32 &outF, Lane4F32 &outG, Lane4F32 &outH)
 {
     Lane8F32 acLo = UnpackLo(inA, inC);
     Lane8F32 acHi = UnpackHi(inA, inC);
@@ -620,20 +606,11 @@ __forceinline void Transpose3x8(const Lane8F32 &inA, const Lane8F32 &inB, const 
     outH = Extract4<1>(t37);
 }
 
-__forceinline Lane8U32 Flooru(Lane8F32 lane)
-{
-    return _mm256_cvtps_epi32(Floor(lane));
-}
+__forceinline Lane8U32 Flooru(Lane8F32 lane) { return _mm256_cvtps_epi32(Floor(lane)); }
 
-__forceinline Lane8F32 AsFloat(const Lane8U32 &a)
-{
-    return _mm256_castsi256_ps(a);
-}
+__forceinline Lane8F32 AsFloat(const Lane8U32 &a) { return _mm256_castsi256_ps(a); }
 
-__forceinline Lane8U32 AsUInt(const Lane8F32 &a)
-{
-    return _mm256_castps_si256(a);
-}
+__forceinline Lane8U32 AsUInt(const Lane8F32 &a) { return _mm256_castps_si256(a); }
 
 // https://stackoverflow.com/questions/36932240/avx2-what-is-the-most-efficient-way-to-pack-left-based-on-a-mask
 u8 g_pack_left_table_u8x3[256 * 3 + 1];

@@ -1804,6 +1804,8 @@ struct HeuristicSpatialSplits
                 }
                 break;
             }
+            Assert((Movemask(outLeft.geomBounds <= record.geomBounds) & 0x77) == 0x77);
+            Assert((Movemask(outRight.geomBounds <= record.geomBounds) & 0x77) == 0x77);
         }
 
         MoveExtendedRanges(split, newEnd, record, primRefs, mid, outLeft, outRight);
@@ -1811,7 +1813,7 @@ struct HeuristicSpatialSplits
         Assert(outRight.count > 0);
 
         // error check
-#if DEBUG
+#ifdef DEBUG
         {
             switch (split.type)
             {

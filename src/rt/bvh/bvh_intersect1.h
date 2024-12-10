@@ -80,9 +80,9 @@ struct BVHTraverser<4, types, Primitive>
         Vec3lf4 tLeaves  = Max(tMins, tMaxs);
 
         Lane4F32 tEntry    = Max(tEntries[0], Max(tEntries[1], Max(tEntries[2], tMinEpsilon)));
-        Lane4F32 tLeaveRaw = Min(tLeaves[0], Min(tLeaves[1], Min(tLeaves[2], pos_inf)));
+        Lane4F32 tLeave = Min(tLeaves[0], Min(tLeaves[1], Min(tLeaves[2], ray.tFar)));
 
-        const Lane4F32 tLeave = Min(tLeaveRaw, ray.tFar);
+        // const Lane4F32 tLeave = Min(tLeaveRaw, ray.tFar);
 
         const Lane4F32 intersectMask = tEntry <= tLeave;
 
@@ -95,7 +95,7 @@ struct BVHTraverser<4, types, Primitive>
         Lane4F32 mask            = validNodeMask & intersectMask;
         const i32 intersectFlags = Movemask(mask);
 
-        Lane4F32 t_dcba    = Select(mask, tLeaveRaw, pos_inf);
+        Lane4F32 t_dcba    = Select(mask, tEntry, pos_inf);
         const u32 numNodes = PopCount(intersectFlags);
 
         if (numNodes <= 1)

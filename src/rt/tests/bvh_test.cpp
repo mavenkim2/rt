@@ -144,7 +144,59 @@ void BVHTraverse8Test()
     printf("time avx %fms\n", time);
     printf("time insertion %fms\n", time2);
 }
-void BVHIntersectionTest() {
+void BVHIntersectionTest(Arena *arena)
+{
+    Scene2 baseScene;
+    scene_            = &baseScene;
+    Scene2 *scene     = GetScene();
+    TriangleMesh mesh = LoadPLY(arena, "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
+    // TriangleMesh mesh = LoadPLY(arena, "../data/island/pbrt-v4/isKava/isKava_geometry_00001.ply");
+    u32 numFaces = mesh.numIndices / 3;
+    Bounds geomBounds;
+    Bounds centBounds;
+    PrimRefCompressed *refs = GenerateAOSData(arena, &mesh, numFaces, geomBounds, centBounds);
 
-}
+    BuildSettings settings;
+    settings.intCost = 0.3f;
+
+    u32 numProcessors = OS_NumProcessors();
+    Arena **arenas    = PushArray(arena, Arena *, numProcessors);
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        arenas[i] = ArenaAlloc(16); // ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
+    }
+
+    RecordAOSSplits record;
+    record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+    record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+    record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
+
+    BVHNodeN bvh          = BuildQuantizedTriSBVH(settings, arenas, &mesh, refs, record);
+    scene->nodePtr        = bvh;
+    scene->triangleMeshes = &mesh;
+    scene->numTriMeshes   = 1;
+
+    u32 testFace  = numFaces / 2;
+    u32 indices[] = {
+        mesh.indices[3 * testFace + 0],
+        mesh.indices[3 * testFace + 1],
+        mesh.indices[3 * testFace + 2],
+    };
+
+    Vec3f p[] = {
+        mesh.p[indices[0]],
+        mesh.p[indices[1]],
+        mesh.p[indices[2]],
+    };
+
+    Vec3f center = (p[0] + p[1] + p[2]) / 3.f;
+
+    Vec3f origin = Vec3f(geomBounds.minP[0] - 1.f, geomBounds.minP[1] - 1.f, geomBounds.minP[2] - 1.f);
+    Ray2 r       = Ray2(origin, Normalize(center - origin), pos_inf);
+    SurfaceInteraction si;
+    bool intersect = BVHTriangleIntersectorCmp4::Intersect(r, bvh, si);
+
+    Assert(intersect);
+
+} // namespace rt
 } // namespace rt

@@ -117,6 +117,7 @@ exit /b
 
 :AddRelDebugFlags 
 echo Compiling RelDebug (currently only works for clang)
+set Definitions=%Definitions% -D DEBUG -D TRACK_MEMORY
 if "%1" == "cl" (
     set Definitions=%Definitions% -O3 -g
 ) else (

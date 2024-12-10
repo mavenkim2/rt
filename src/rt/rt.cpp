@@ -58,30 +58,18 @@
 namespace rt
 {
 
-inline f32 DegreesToRadians(f32 degrees)
-{
-    return degrees * PI / 180.f;
-}
+inline f32 DegreesToRadians(f32 degrees) { return degrees * PI / 180.f; }
 
 //////////////////////////////
 // Intervals
 //
-bool IsInInterval(f32 min, f32 max, f32 x)
-{
-    return x >= min && x <= max;
-}
+bool IsInInterval(f32 min, f32 max, f32 x) { return x >= min && x <= max; }
 
 static Vec3f BACKGROUND;
 
-bool IsValidRay(Ray *r)
-{
-    return r->t != (f32)U32Max;
-}
+bool IsValidRay(Ray *r) { return r->t != (f32)U32Max; }
 
-inline Vec3f LinearToSRGB(const Vec3f &v)
-{
-    return Vec3f(Sqrt(v.x), Sqrt(v.y), Sqrt(v.z));
-}
+inline Vec3f LinearToSRGB(const Vec3f &v) { return Vec3f(Sqrt(v.x), Sqrt(v.y), Sqrt(v.z)); }
 
 f32 ExactLinearToSRGB(f32 l)
 {
@@ -115,7 +103,7 @@ f32 *Image::GetSamplingDistribution(Arena *arena)
         for (i32 w = 0; w < width; w++)
         {
             // Is bpp correct?
-            f32 *values = (f32 *)ptr;
+            f32 *values     = (f32 *)ptr;
             result[count++] = (values[0] + values[1] + values[2]) / 3.f;
             ptr += bytesPerPixel;
         }
@@ -1089,7 +1077,8 @@ int main(int argc, char *argv[])
 
     const u32 count = 3000000;
 
-    TriangleMeshBVHTest(arena);
+    BVHIntersectionTest(arena);
+    // TriangleMeshBVHTest(arena);
     // BVHTraverse4Test();
 
     // VolumeRenderingTest(arena, "wdas_cloud_quarter.nvdb");
