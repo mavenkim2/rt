@@ -418,10 +418,10 @@ ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image,
 SampledSpectrum ImageInfiniteLight::ImageLe(Vec2f uv, const SampledWavelengths &lambda) const
 {
     Vec2i loc = image.GetPixel(uv);
-    Vec3f rgb = *(Vec3f *)GetColor(&image, loc.x, loc.y);
+    Vec3f rgb = GetRGB(&image, loc.x, loc.y);
 
     RGBIlluminantSpectrum spec(*imageColorSpace, rgb);
-    return spec.Sample(lambda);
+    return scale * spec.Sample(lambda);
 }
 
 SAMPLE_LI(ImageInfiniteLight)

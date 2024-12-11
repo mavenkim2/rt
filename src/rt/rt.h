@@ -158,6 +158,12 @@ u8 *GetColor(const Image *image, i32 x, i32 y)
            y * image->width * image->bytesPerPixel;
 }
 
+Vec3f GetRGB(const Image *image, i32 x, i32 y)
+{
+    Assert(x < image->width && x >= 0 && y < image->height && y >= 0);
+    return *(Vec3f *)(image->contents + image->bytesPerPixel * (x + y * image->width));
+}
+
 void WriteImage(Image *image, const char *filename)
 {
     u32 imageSize = GetImageSize(image);

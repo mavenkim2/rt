@@ -512,6 +512,65 @@ void CameraRayTest(Arena *arena)
     }
 }
 
+void TestImageInfiniteLight(Arena *arena)
+{
+    // rayd
+    // render from light matrix
+    // {-0.42261824,0.906307817,0,1139.01587}
+    // {-3.96159727e-08,-1.84732301e-08,1,-23.2867336}
+    // {-0.906307817,-0.42261824,-4.37113883e-08,-1479.79468}
+    // wLight = {x=0.662455142 y=0.670940042 z=0.333155632}
+    // uv = {x=0.702497244 y=0.705805421}
+    // rgb = {r=0.0343398079 g=0.423267752 b=0.854992688}
+
+    // sigmoid polynomial coefficients: {c0=-3.61476741e-05 c1=0.0298558027 c2=-6.153368}
+    // scale = 1.70998538
+    //
+    // radiance: {values={values={0.00539485598,0.00208824105,0.000413342146,0.00859673042}}}
+
+    Ray2 r(Vec3f(0, 0, 0), Vec3f(0.328112572f, 0.333155632f, -0.883939862f));
+    u32 spp = 8;
+    Vec2f filterRadius(0.5f);
+    f32 lensRadius  = 0.003125;
+    f32 focalLength = 1675.3383;
+    // Camera
+    u32 width  = 1920;
+    u32 height = 804;
+    Vec3f cameraP(-1139.0159, 23.286734, 1479.7947);
+    Vec3f look(244.81433, 238.80714, 560.3801);
+    Vec3f up(-0.107149, .991691, .07119);
+    ZSobolSampler sampler(spp, Vec2i(width, height));
+
+    SampledWavelengths lambda;
+    lambda.lambda[0] = 518.704041;
+    lambda.lambda[1] = 583.881409;
+    lambda.lambda[2] = 681.680664;
+    lambda.lambda[3] = 442.826965;
+    for (u32 i = 0; i < 4; i++)
+    {
+        lambda.pdf[i] = VisibleWavelengthsPDF(lambda.lambda[i]);
+    }
+
+    AffineSpace renderFromLight = AffineSpace::Scale(-1, 1, 1) *
+                                  AffineSpace::Rotate(Vec3f(-1, 0, 0), Radians(90)) *
+                                  AffineSpace::Rotate(Vec3f(0, 0, 1), Radians(65));
+    Vec3f pCamera(-1139.0159, 23.286734, 1479.7947);
+    renderFromLight = AffineSpace::Translate(-pCamera) * renderFromLight;
+
+    Scene2 sceneBase = Scene2();
+    scene_           = &sceneBase;
+    Scene2 *scene    = GetScene();
+    f32 scale        = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
+    Assert(scale == 0.00935831666f);
+    ImageInfiniteLight infLight(
+        arena, LoadFile("../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png"),
+        &renderFromLight, RGBColorSpace::sRGB, 100000.f, scale);
+    scene->lights.Set<ImageInfiniteLight>(&infLight, 1);
+    SampledSpectrum L = Li(r, sampler, 10, lambda);
+    int stop          = 5;
+    // radiance: {values={values={0.00539485598,0.00208824105,0.000413342146,0.00859673042}}}
+}
+
 void TriangleMeshBVHTest(Arena *arena)
 {
     // DONE:
@@ -582,13 +641,16 @@ void TriangleMeshBVHTest(Arena *arena)
     f32 sceneRadius             = 0.5f * Max(geomBounds.maxP[0] - geomBounds.minP[0],
                                              Max(geomBounds.maxP[1] - geomBounds.minP[1],
                                                  geomBounds.maxP[2] - geomBounds.minP[2]));
-    AffineSpace renderFromLight = AffineSpace::Rotate(Vec3f(-1, 0, 0), Radians(90)) *
+    AffineSpace renderFromLight = AffineSpace::Scale(-1, 1, 1) *
+                                  AffineSpace::Rotate(Vec3f(-1, 0, 0), Radians(90)) *
                                   AffineSpace::Rotate(Vec3f(0, 0, 1), Radians(65));
     renderFromLight = AffineSpace::Translate(-pCamera) * renderFromLight;
 
+    f32 scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
+    Assert(scale == 0.00935831666f);
     ImageInfiniteLight infLight(
         arena, LoadFile("../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png"),
-        &renderFromLight, RGBColorSpace::sRGB, sceneRadius);
+        &renderFromLight, RGBColorSpace::sRGB, sceneRadius, scale);
     scene->lights.Set<ImageInfiniteLight>(&infLight, 1);
 
 #if 0

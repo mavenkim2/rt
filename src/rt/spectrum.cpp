@@ -3,6 +3,19 @@
 // #include <rgbspectrum_srgb.cpp>
 namespace rt
 {
+
+// f32 SpectrumToPhotometric(Spectrum s)
+// {
+//     // We have to handle RGBIlluminantSpectrum separately here as it's composed of an
+//     // illuminant spectrum and an RGB multiplier. We only want to consider the
+//     // illuminant for the sake of this calculation, and we should consider the
+//     // RGB separately for the purposes of target power/illuminance computation
+//     // in the lights themselves (but we currently don't)
+//     if (s.Is<RGBIlluminantSpectrum>()) s = s.Cast<RGBIlluminantSpectrum>()->Illuminant();
+//
+//     return InnerProduct(&Spectra::Y(), s);
+// }
+
 inline f32 InnerProduct(Spectrum f, Spectrum g)
 {
     f32 integral = 0.f;
@@ -11,6 +24,16 @@ inline f32 InnerProduct(Spectrum f, Spectrum g)
         integral += f(lambda) * g(lambda);
     }
     return integral;
+}
+
+f32 SpectrumToPhotometric(const RGBIlluminantSpectrum& s)
+{
+    return InnerProduct(&Spectra::Y(), s.illuminant);
+}
+
+f32 SpectrumToPhotometric(const DenselySampledSpectrum &s)
+{
+    return InnerProduct(&Spectra::Y(), &s);
 }
 
 Vec3f SpectrumToXYZ(Spectrum s)
