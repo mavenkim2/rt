@@ -478,15 +478,18 @@ void Render(Arena *arena, RenderParams2 &params)
                 if (rgb.y != rgb.y) rgb.y = 0.f;
                 if (rgb.z != rgb.z) rgb.z = 0.f;
 
-                f32 m = Max(rgb.x, Max(rgb.y, rgb.z));
-                if (m > 1.f)
-                {
-                    rgb *= 1.f / m;
-                }
-                f32 r = 255.f * rgb.x;
-                f32 g = 255.f * rgb.y;
-                f32 b = 255.f * rgb.z;
+                // f32 r = 255.f * rgb.x;
+                // f32 g = 255.f * rgb.y;
+                // f32 b = 255.f * rgb.z;
+                f32 r = 255.f * ExactLinearToSRGB(rgb.x);
+                f32 g = 255.f * ExactLinearToSRGB(rgb.y);
+                f32 b = 255.f * ExactLinearToSRGB(rgb.z);
                 f32 a = 255.f;
+                f32 m = Max(r, Max(g, b));
+                if (m > 255.5f)
+                {
+                    int stop = 5;
+                }
 
                 Assert(r <= 255.f && g <= 255.f && b <= 255.f);
 

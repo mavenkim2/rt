@@ -230,11 +230,22 @@ struct Mat4
     }
 
     // NOTE: assumes viewing matrix is right hand, with -z into screen
-    __forceinline static Mat4 Perspective(f32 fov, f32 aspectRatio, f32 n = 0.1f,
+
+    // NOTE: vertical fov
+    __forceinline static Mat4 Perspective(f32 fov, f32 aspectRatio, f32 n = 1e-2f,
                                           f32 f = 1000.f)
     {
         f32 divTanHalf = 1.f / Tan(fov / 2.f);
         Mat4 result(divTanHalf / aspectRatio, 0.f, 0.f, 0.f, 0.f, divTanHalf, 0.f, 0.f, 0.f,
+                    0.f, f / (n - f), n * f / (n - f), 0.f, 0.f, -1.f, 0.f);
+        return result;
+    }
+    // NOTE: horizontal fov
+    __forceinline static Mat4 Perspective2(f32 fov, f32 aspectRatio, f32 n = 1e-2f,
+                                           f32 f = 1000.f)
+    {
+        f32 divTanHalf = 1.f / Tan(fov / 2.f);
+        Mat4 result(divTanHalf, 0.f, 0.f, 0.f, 0.f, divTanHalf * aspectRatio, 0.f, 0.f, 0.f,
                     0.f, f / (n - f), n * f / (n - f), 0.f, 0.f, -1.f, 0.f);
         return result;
     }
@@ -313,7 +324,7 @@ inline Vec3f TransformV(const Mat4 &a, const Vec3f &b)
 inline Mat4 LookAt(Vec3f eye, Vec3f center, Vec3f up)
 {
     Vec3f f = Normalize(eye - center);
-    Vec3f s = Normalize(Cross(up, f));
+    Vec3f s = Normalize(Cross(Normalize(up), f));
     Vec3f u = Cross(f, s);
 
     return Mat4(s.x, s.y, s.z, -Dot(s, eye), u.x, u.y, u.z, -Dot(u, eye), f.x, f.y, f.z,

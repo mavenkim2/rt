@@ -1078,8 +1078,8 @@ int main(int argc, char *argv[])
 
     const u32 count = 3000000;
 
-    TestImageInfiniteLight(arena);
-    // TriangleMeshBVHTest(arena);
+    // TestImageInfiniteLight(arena);
+    TriangleMeshBVHTest(arena);
     // CameraRayTest(arena);
     // BVHTraverse4Test();
 

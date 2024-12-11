@@ -617,7 +617,7 @@ void TriangleMeshBVHTest(Arena *arena)
     Mat4 cameraFromRender = LookAt(pCamera, look, up) * Translate(pCamera);
 
     Mat4 renderFromCamera = Inverse(cameraFromRender);
-    Mat4 NDCFromCamera    = Mat4::Perspective(Radians(69.50461), 2.386946);
+    Mat4 NDCFromCamera    = Mat4::Perspective2(Radians(69.50461), 2.386946);
     // maps to raster coordinates
     Mat4 rasterFromNDC = Scale(Vec3f(f32(width), -f32(height), 1.f)) *
                          Scale(Vec3f(1.f / 2.f, 1.f / 2.f, 1.f)) *
