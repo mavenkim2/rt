@@ -458,7 +458,7 @@ void CameraRayTest(Arena *arena)
 
     Ray2 testRay(Vec3f(0, 0, 0), Normalize(center));
 
-    Mat4 cameraFromRender = LookAtRender(cameraP, look, up);
+    Mat4 cameraFromRender = LookAt(cameraP, look, up) * Translate(cameraP);
 
     Mat4 renderFromCamera = Inverse(cameraFromRender);
     Mat4 NDCFromCamera    = Mat4::Perspective(Radians(69.50461), 2.386946);
@@ -523,9 +523,9 @@ void TriangleMeshBVHTest(Arena *arena)
     // - add material index when intersecting
 
     // TODO:
-    // - make sure i'm shooting the right camera rays
     // - make sure the environment map works properly and returns the right radiances
     // - make sure i'm calculating the final rgb value correctly for each pixel
+    // - make sure i'm shooting the right camera rays
 
     // once the ocean is rendered
     // - need to support a bvh with quad/triangle mesh instances
@@ -554,12 +554,7 @@ void TriangleMeshBVHTest(Arena *arena)
     Vec3f look(244.81433, 238.80714, 560.3801);
     Vec3f up(-0.107149, .991691, .07119);
 
-    Mat4 cameraFromRender = LookAtRender(pCamera, look, up);
-
-    // NOTE: this should be the same as above, as he matrix is cameraFromWorld *
-    // worldFromRender
-
-    // Mat4 test = LookAt(pCamera, look, up) * Translate(pCamera);
+    Mat4 cameraFromRender = LookAt(pCamera, look, up) * Translate(pCamera);
 
     Mat4 renderFromCamera = Inverse(cameraFromRender);
     Mat4 NDCFromCamera    = Mat4::Perspective(Radians(69.50461), 2.386946);

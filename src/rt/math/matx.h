@@ -310,16 +310,6 @@ inline Vec3f TransformV(const Mat4 &a, const Vec3f &b)
     return Vec3f(laneResult[0], laneResult[1], laneResult[2]);
 }
 
-inline Mat4 LookAtRender(const Vec3f &eye, const Vec3f &center, const Vec3f &up)
-{
-    Vec3f f = Normalize(eye - center);
-    Vec3f s = Normalize(Cross(up, f));
-    Vec3f u = Cross(f, s);
-
-    return Mat4(s.x, s.y, s.z, 0.f, u.x, u.y, u.z, 0.f, f.x, f.y, f.z, 0.f, 0.f, 0.f, 0.f,
-                1.f);
-}
-
 inline Mat4 LookAt(Vec3f eye, Vec3f center, Vec3f up)
 {
     Vec3f f = Normalize(eye - center);
