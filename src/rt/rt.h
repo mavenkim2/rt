@@ -144,6 +144,15 @@ Image LoadFile(const char *file)
 {
     Image image;
     i32 nComponents;
+    image.contents      = (u8 *)stbi_load(file, &image.width, &image.height, &nComponents, 0);
+    image.bytesPerPixel = nComponents;
+    return image;
+}
+
+Image LoadHDR(const char *file)
+{
+    Image image;
+    i32 nComponents;
     image.contents      = (u8 *)stbi_loadf(file, &image.width, &image.height, &nComponents, 0);
     image.bytesPerPixel = nComponents * sizeof(f32);
     return image;
@@ -162,6 +171,37 @@ Vec3f GetRGB(const Image *image, i32 x, i32 y)
 {
     Assert(x < image->width && x >= 0 && y < image->height && y >= 0);
     return *(Vec3f *)(image->contents + image->bytesPerPixel * (x + y * image->width));
+}
+
+u8 *GetOctahedralRGB(const Image *image, Vec2f uv)
+{
+    Vec2i p(i32(uv[0] * image->width), i32(uv[1] * image->height));
+    if (p[0] < 0)
+    {
+        p[0] = -p[0];                    // mirror across u = 0
+        p[1] = image->height - 1 - p[1]; // mirror across v = 0.5
+    }
+    else if (p[0] >= image->width)
+    {
+        p[0] = 2 * image->width - 1 - p[0]; // mirror across u = 1
+        p[1] = image->height - 1 - p[1];    // mirror across v = 0.5
+    }
+
+    if (p[1] < 0)
+    {
+        p[0] = image->width - 1 - p[0]; // mirror across u = 0.5
+        p[1] = -p[1];                   // mirror across v = 0;
+    }
+    else if (p[1] >= image->height)
+    {
+        p[0] = image->width - 1 - p[0];      // mirror across u = 0.5
+        p[1] = 2 * image->height - 1 - p[1]; // mirror across v = 1
+    }
+
+    if (image->width == 1) p[0] = 0;
+    if (image->height == 1) p[1] = 0;
+
+    return GetColor(image, p[0], p[1]);
 }
 
 void WriteImage(Image *image, const char *filename)

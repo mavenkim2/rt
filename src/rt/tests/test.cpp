@@ -528,6 +528,7 @@ void TestImageInfiniteLight(Arena *arena)
     //
     // radiance: {values={values={0.00539485598,0.00208824105,0.000413342146,0.00859673042}}}
 
+    // 5754, 5781
     Ray2 r(Vec3f(0, 0, 0), Vec3f(0.328112572f, 0.333155632f, -0.883939862f));
     u32 spp = 8;
     Vec2f filterRadius(0.5f);

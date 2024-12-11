@@ -1,4 +1,5 @@
 #include "lights.h"
+#include "color.h"
 
 namespace rt
 {
@@ -417,8 +418,9 @@ ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image,
 
 SampledSpectrum ImageInfiniteLight::ImageLe(Vec2f uv, const SampledWavelengths &lambda) const
 {
-    Vec2i loc = image.GetPixel(uv);
-    Vec3f rgb = GetRGB(&image, loc.x, loc.y);
+    u8 *srgb = GetOctahedralRGB(&image, uv);
+
+    Vec3f rgb = SRGBToLinear(srgb);
 
     RGBIlluminantSpectrum spec(*imageColorSpace, rgb);
     return scale * spec.Sample(lambda);
