@@ -144,6 +144,7 @@ void BVHTraverse8Test()
     printf("time avx %fms\n", time);
     printf("time insertion %fms\n", time2);
 }
+
 void BVHIntersectionTest(Arena *arena)
 {
     Scene2 baseScene;
@@ -211,5 +212,5 @@ void BVHIntersectionTest(Arena *arena)
 
     Assert(intersect);
 
-} // namespace rt
+}
 } // namespace rt

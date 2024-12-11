@@ -310,33 +310,25 @@ inline Vec3f TransformV(const Mat4 &a, const Vec3f &b)
     return Vec3f(laneResult[0], laneResult[1], laneResult[2]);
 }
 
-// inline Mat4 LookAt(Vec3f eye, Vec3f center, Vec3f up)
-// {
-//     Mat4 result;
-//
-//     Vec3f f = Normalize(eye - center);
-//     Vec3f s = Normalize(Cross(up, f));
-//     Vec3f u = Cross(f, s);
-//
-//     result.elements[0][0] = s.x;
-//     result.elements[0][1] = u.x;
-//     result.elements[0][2] = f.x;
-//     result.elements[0][3] = 0.0f;
-//     result.elements[1][0] = s.y;
-//     result.elements[1][1] = u.y;
-//     result.elements[1][2] = f.y;
-//     result.elements[1][3] = 0.0f;
-//     result.elements[2][0] = s.z;
-//     result.elements[2][1] = u.z;
-//     result.elements[2][2] = f.z;
-//     result.elements[2][3] = 0.0f;
-//     result.elements[3][0] = -Dot(s, eye);
-//     result.elements[3][1] = -Dot(u, eye);
-//     result.elements[3][2] = -Dot(f, eye);
-//     result.elements[3][3] = 1.0f;
-//
-//     return result;
-// }
+inline Mat4 LookAtRender(const Vec3f &eye, const Vec3f &center, const Vec3f &up)
+{
+    Vec3f f = Normalize(eye - center);
+    Vec3f s = Normalize(Cross(up, f));
+    Vec3f u = Cross(f, s);
+
+    return Mat4(s.x, s.y, s.z, 0.f, u.x, u.y, u.z, 0.f, f.x, f.y, f.z, 0.f, 0.f, 0.f, 0.f,
+                1.f);
+}
+
+inline Mat4 LookAt(Vec3f eye, Vec3f center, Vec3f up)
+{
+    Vec3f f = Normalize(eye - center);
+    Vec3f s = Normalize(Cross(up, f));
+    Vec3f u = Cross(f, s);
+
+    return Mat4(s.x, s.y, s.z, -Dot(s, eye), u.x, u.y, u.z, -Dot(u, eye), f.x, f.y, f.z,
+                -Dot(f, eye), 0.f, 0.f, 0.f, 1.f);
+}
 
 inline Mat4 Mul(const Mat4 &a, const Mat4 &b)
 {

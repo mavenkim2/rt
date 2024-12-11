@@ -412,8 +412,9 @@ struct TriangleIntersectorBase
             }
             Vec3f p[3] = {mesh->p[vertexIndices[0]], mesh->p[vertexIndices[1]],
                           mesh->p[vertexIndices[2]]};
-            si.p       = w * p[0] + u * p[1] + v * p[2];
-            si.n       = Normalize(Cross(p[1] - p[0], p[2] - p[0]));
+
+            si.p = w * p[0] + u * p[1] + v * p[2];
+            si.n = Normalize(Cross(p[1] - p[0], p[2] - p[0]));
             if (mesh->n)
             {
                 si.shading.n = w * mesh->n[vertexIndices[0]] + u * mesh->n[vertexIndices[1]] +
@@ -429,7 +430,9 @@ struct TriangleIntersectorBase
             const Scene2::PrimitiveIndices *indices =
                 &scene->primIndices[Get(itr.geomIDs, index)];
             si.materialIDs = indices->materialID.data;
-            si.faceIndices = primID;
+            // TODO: properly obtain the light handle
+            si.lightIndices = 0;
+            si.faceIndices  = primID;
             return true;
         }
         return false;

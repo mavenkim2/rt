@@ -420,6 +420,98 @@ void VolumeRenderingTest(Arena *arena, string filename)
 }
 #endif
 
+void CameraRayTest(Arena *arena)
+{
+    u32 spp = 8;
+    Vec2f filterRadius(0.5f);
+    f32 lensRadius  = 0.003125;
+    f32 focalLength = 1675.3383;
+    // Camera
+    u32 width  = 4;
+    u32 height = 4;
+    Vec3f cameraP(-1139.0159, 23.286734, 1479.7947);
+    Vec3f look(244.81433, 238.80714, 560.3801);
+    Vec3f up(-0.107149, .991691, .07119);
+
+    TriangleMesh mesh =
+        LoadPLY(arena, "../data/island/pbrt-v4/isKava/isKava_geometry_00001.ply");
+    for (u32 i = 0; i < mesh.numVertices; i++)
+    {
+        mesh.p[i] -= cameraP;
+    }
+
+    u32 numFaces  = mesh.numIndices / 3;
+    u32 testFace  = numFaces / 2;
+    u32 indices[] = {
+        mesh.indices[3 * testFace + 0],
+        mesh.indices[3 * testFace + 1],
+        mesh.indices[3 * testFace + 2],
+    };
+
+    Vec3f p[] = {
+        mesh.p[indices[0]],
+        mesh.p[indices[1]],
+        mesh.p[indices[2]],
+    };
+
+    Vec3f center = (p[0] + p[1] + p[2]) / 3.f;
+
+    Ray2 testRay(Vec3f(0, 0, 0), Normalize(center));
+
+    Mat4 cameraFromRender = LookAtRender(cameraP, look, up);
+
+    Mat4 renderFromCamera = Inverse(cameraFromRender);
+    Mat4 NDCFromCamera    = Mat4::Perspective(Radians(69.50461), 2.386946);
+    // maps to raster coordinates
+    Mat4 rasterFromNDC = Scale(Vec3f(f32(width), -f32(height), 1.f)) *
+                         Scale(Vec3f(1.f / 2.f, 1.f / 2.f, 1.f)) *
+                         Translate(Vec3f(1.f, -1.f, 0.f));
+    Mat4 rasterFromCamera = rasterFromNDC * NDCFromCamera;
+    Mat4 cameraFromRaster = Inverse(rasterFromCamera);
+
+    ZSobolSampler sampler(spp, Vec2i(width, height));
+    for (u32 y = 0; y < height; y++)
+    {
+        for (u32 x = 0; x < width; x++)
+        {
+            Vec2u pPixel(x, y);
+            Vec3f rgb(0.f);
+            // for (u32 i = 0; i < spp; i++)
+            // {
+            //     sampler.StartPixelSample(Vec2i(x, y), i);
+            // box filter
+            // Vec2f uFilter      = sampler.Get2D();
+            Vec2f filterSample(0);
+            // Vec2f filterSample = Vec2f(Lerp(uFilter[0], -filterRadius.x,
+            // filterRadius.x),
+            //                            Lerp(uFilter[1], -filterRadius.y,
+            //                            filterRadius.y));
+            // converts from continuous to discrete coordinates
+            filterSample += Vec2f(0.5f, 0.5f) + Vec2f(pPixel);
+            Vec2f pLens = sampler.Get2D();
+
+            Vec3f pCamera = TransformP(cameraFromRaster, Vec3f(filterSample, 0.f));
+            Ray2 ray(Vec3f(0.f, 0.f, 0.f), Normalize(pCamera), pos_inf);
+            // if (lensRadius > 0.f)
+            // {
+            //     pLens = lensRadius * SampleUniformDiskConcentric(pLens);
+            //
+            //     // point on plane of focus
+            //     f32 t        = focalLength / -ray.d.z;
+            //     Vec3f pFocus = ray(t);
+            //     ray.o        = Vec3f(pLens.x, pLens.y, 0.f);
+            //     // ensure ray intersects focal point
+            //     ray.d = Normalize(pFocus - ray.o);
+            // }
+            ray         = Transform(renderFromCamera, ray);
+            Vec3f outD  = Normalize(ray.d);
+            bool result = (Dot(ray.d, testRay.d) > 0);
+            int stop    = 5;
+            // }
+        }
+    }
+}
+
 void TriangleMeshBVHTest(Arena *arena)
 {
     // DONE:
@@ -431,13 +523,16 @@ void TriangleMeshBVHTest(Arena *arena)
     // - add material index when intersecting
 
     // TODO:
+    // - make sure i'm shooting the right camera rays
+    // - make sure the environment map works properly and returns the right radiances
+    // - make sure i'm calculating the final rgb value correctly for each pixel
 
     // once the ocean is rendered
-    // - change the bvh build process to support N-wide leaves (need to change the sah to
-    // account for this)
     // - need to support a bvh with quad/triangle mesh instances
     // - load the scene description and properly instantiate lights/materials/textures
     // - render the scene with all quad meshes, then add support for the bspline curves
+    // - change the bvh build process to support N-wide leaves (need to change the sah to
+    // account for this)
 
     // once moana is rendered
     // - ray differentials
@@ -459,12 +554,12 @@ void TriangleMeshBVHTest(Arena *arena)
     Vec3f look(244.81433, 238.80714, 560.3801);
     Vec3f up(-0.107149, .991691, .07119);
 
-    Vec3f f = Normalize(pCamera - look);
-    Vec3f s = Normalize(Cross(up, f));
-    Vec3f u = Cross(f, s);
+    Mat4 cameraFromRender = LookAtRender(pCamera, look, up);
 
-    Mat4 cameraFromRender(f.x, f.y, f.z, 0.f, s.x, s.y, s.z, 0.f, u.x, u.y, u.z, 0.f, 0.f, 0.f,
-                          0.f, 1.f);
+    // NOTE: this should be the same as above, as he matrix is cameraFromWorld *
+    // worldFromRender
+
+    // Mat4 test = LookAt(pCamera, look, up) * Translate(pCamera);
 
     Mat4 renderFromCamera = Inverse(cameraFromRender);
     Mat4 NDCFromCamera    = Mat4::Perspective(Radians(69.50461), 2.386946);
@@ -496,23 +591,12 @@ void TriangleMeshBVHTest(Arena *arena)
                                   AffineSpace::Rotate(Vec3f(0, 0, 1), Radians(65));
     renderFromLight = AffineSpace::Translate(-pCamera) * renderFromLight;
 
-#if 0
-    AffineSpace lightFromRender = Inverse(renderFromLight);
-
-    AffineSpace result = renderFromLight * lightFromRender;
-
-    Vec3f testVec(1, 1, 1);
-    Vec3f r1 = lightFromRender * testVec;
-    Vec3f r2 = ApplyInverse(renderFromLight, testVec);
-    Vec3f r3 = Transpose(Mat3(renderFromLight.c0, renderFromLight.c1, renderFromLight.c2)) * testVec;
-    Vec3f r4 = ApplyInverseV(renderFromLight, testVec);
-#endif
-
     ImageInfiniteLight infLight(
         arena, LoadFile("../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png"),
         &renderFromLight, RGBColorSpace::sRGB, sceneRadius);
     scene->lights.Set<ImageInfiniteLight>(&infLight, 1);
 
+#if 0
     BuildSettings settings;
     settings.intCost = 0.3f;
 
@@ -525,6 +609,7 @@ void TriangleMeshBVHTest(Arena *arena)
     scene->nodePtr        = bvh;
     scene->triangleMeshes = &mesh;
     scene->numTriMeshes   = 1;
+#endif
 
     ConstantTexture<1> ct(0.f);
     ConstantSpectrum spec(1.1f);

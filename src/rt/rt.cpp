@@ -1077,10 +1077,11 @@ int main(int argc, char *argv[])
 
     const u32 count = 3000000;
 
-    BVHIntersectionTest(arena);
-    // TriangleMeshBVHTest(arena);
+    TriangleMeshBVHTest(arena);
+    // CameraRayTest(arena);
     // BVHTraverse4Test();
 
+    // BVHIntersectionTest(arena);
     // VolumeRenderingTest(arena, "wdas_cloud_quarter.nvdb");
     // BVHSortingTest();
     // TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");

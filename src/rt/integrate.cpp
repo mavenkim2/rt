@@ -384,8 +384,7 @@ bool SurfaceInteraction::ComputeShading(BSDF &bsdf)
 template <typename Sampler>
 SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda);
 
-void Render(Arena *arena, RenderParams2 &params) // Vec2i imageDim, Vec2f filterRadius, u32
-                                                 // spp, Mat4 &cameraFromRaster, )
+void Render(Arena *arena, RenderParams2 &params)
 {
     u32 width              = params.width;
     u32 height             = params.height;
@@ -538,7 +537,8 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
     {
         SurfaceInteraction si;
         // TODO: not hardcoded
-        bool intersect = BVH4TriangleIntersectorCmp1::Intersect(ray, scene->nodePtr, si);
+        bool intersect =
+            false; // BVH4TriangleCLIntersectorCmp1::Intersect(ray, scene->nodePtr, si);
 
         // If no intersection, sample "infinite" lights (e.g environment maps, sun, etc.)
         if (!intersect)
