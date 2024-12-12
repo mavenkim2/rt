@@ -266,14 +266,16 @@ struct ArrayTuple<TypePack<Ts...>>
     {
         return Dispatch<F, Ts...>(func, index);
     }
-    __forceinline u32 ConvertIndexToType(u32 index) const
+    __forceinline u32 ConvertIndexToType(u32 index, u32 *outIndex) const
     {
         for (u32 i = 0; i < Types::count; i++)
         {
             if (index < counts[i])
             {
+                *outIndex = index;
                 return i;
             }
+            index -= counts[i];
         }
         return 0xffffffff;
     }

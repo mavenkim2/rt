@@ -560,8 +560,9 @@ LightHandle UniformLightSample(Scene2 *scene, f32 u, f32 *pmf = 0)
     if (scene->numLights == 0) return LightHandle();
     u32 lightIndex = Min(u32(u * scene->numLights), scene->numLights - 1);
     Assert(lightIndex >= 0 && lightIndex < scene->numLights);
-    u32 type = scene->lights.ConvertIndexToType(lightIndex);
+    u32 localIndex;
+    u32 type = scene->lights.ConvertIndexToType(lightIndex, &localIndex);
     if (pmf) *pmf = LightPDF(scene);
-    return LightHandle(LightClass(type), lightIndex);
+    return LightHandle(LightClass(type), localIndex);
 }
 } // namespace rt
