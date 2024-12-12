@@ -125,6 +125,10 @@ void Print(const char *fmt, va_list args);
     inline constexpr Enum operator~(Enum e)                                                   \
     {                                                                                         \
         return (Enum) ~(std::underlying_type<Enum>::type)e;                                   \
+    }                                                                                         \
+    inline u32 operator<<(Enum lhs, u32 rhs)                                                  \
+    {                                                                                         \
+        return (u32)((std::underlying_type<Enum>::type)lhs << rhs);                           \
     }
 
 template <typename Enum>

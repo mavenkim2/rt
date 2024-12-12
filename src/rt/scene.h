@@ -763,10 +763,7 @@ struct Scene2
 {
     // using ShapeTypes = TypePack<QuadMesh, Disk>;
     // using VolumeTypes        = TypePack<NanoVDBVolume>;
-    using LightTypes =
-        TypePack<DiffuseAreaLight, DistantLight, UniformInfiniteLight, ImageInfiniteLight>;
-    using InfiniteLightTypes = TypePack<UniformInfiniteLight, ImageInfiniteLight>;
-    using MaterialTypes      = TypePack<DielectricMaterialBase>;
+    using MaterialTypes = TypePack<DielectricMaterialBase>;
 
     // TODO: this really should adjacent in memory to the primitives
     struct PrimitiveIndices
@@ -809,8 +806,8 @@ struct Scene2
 
     // Lights
     ArrayTuple<LightTypes> lights;
-    u32 lightPDF[LightClass_Count];
-    u32 lightCount[LightClass_Count];
+    // u32 lightPDF[LightClass_Count];
+    // u32 lightCount[LightClass_Count];
     // u32 numAreaLights;
     // u32 numInfiniteLights;
     u32 numLights; // total

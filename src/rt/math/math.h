@@ -437,6 +437,7 @@ Vec3f DecodeOctahedral(OctahedralVector in)
     }
     return Normalize(result);
 }
+
 } // namespace rt
 
 #endif

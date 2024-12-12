@@ -372,4 +372,15 @@ inline Vec3f Refract(const Vec3f &uv, const Vec3f &n, f32 refractiveIndexRatio)
     Vec3f parallel = -Sqrt(Abs(1.f - LengthSquared(perp))) * n;
     return perp + parallel;
 }
+
+template <typename T>
+inline void CoordinateSystem(const Vec3<T> &v1, Vec3<T> *v2, Vec3<T> *v3)
+{
+    f32 sign = Copysign(f32(1), v1.z);
+    f32 a    = -1 / (sign + v1.z);
+    f32 b    = v1.x * v1.y * a;
+    *v2      = Vec3<T>(1 + sign * Sqr(v1.x) * a, sign * b, -sign * v1.x);
+    *v3      = Vec3<T>(b, sign + Sqr(v1.y) * a, -v1.y);
+}
+
 } // namespace rt

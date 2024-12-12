@@ -483,16 +483,16 @@ static LightSample SampleLi(Scene2 *scene, LightHandle lightHandle,
     LightClass lClass = lightHandle.GetType();
     switch (lClass)
     {
-        case LightClass_Area:
+        case LightClass::DiffuseAreaLight:
             return DiffuseAreaLight::SampleLi(scene, lightHandle.GetIndex(), intr, lambda, u,
                                               allowIncompletePDF);
-        case LightClass_Distant:
+        case LightClass::DistantLight:
             return DistantLight::SampleLi(scene, lightHandle.GetIndex(), intr, lambda, u,
                                           allowIncompletePDF);
-        case LightClass_InfUnf:
+        case LightClass::UniformInfiniteLight:
             return UniformInfiniteLight::SampleLi(scene, lightHandle.GetIndex(), intr, lambda,
                                                   u, allowIncompletePDF);
-        case LightClass_InfImg:
+        case LightClass::ImageInfiniteLight:
             return ImageInfiniteLight::SampleLi(scene, lightHandle.GetIndex(), intr, lambda, u,
                                                 allowIncompletePDF);
         default: Assert(0); return LightSample();
@@ -506,11 +506,11 @@ static f32 PDF_Li(Scene2 *scene, LightHandle lightHandle, Vec3f &prevIntrP,
     u32 lightIndex    = lightHandle.GetIndex();
     switch (lClass)
     {
-        case LightClass_Area:
+        case LightClass::DiffuseAreaLight:
             Assert(0);
             return (f32)DiffuseAreaLight::PDF_Li(scene, lightIndex, prevIntrP, intr,
                                                  allowIncompletePDF);
-        case LightClass_Distant:
+        case LightClass::DistantLight:
             return (f32)DistantLight::PDF_Li(scene, lightIndex, prevIntrP, intr,
                                              allowIncompletePDF);
         // case LightClass_InfUnf: return (f32)UniformInfiniteLight::PDF_Li(scene, lightIndex,
@@ -530,9 +530,9 @@ static SampledSpectrum Le(Scene2 *scene, LightHandle lightHandle, Vec3f &n, Vec3
     u32 lightIndex    = lightHandle.GetIndex();
     switch (lClass)
     {
-        case LightClass_Area:
+        case LightClass::DiffuseAreaLight:
             return DiffuseAreaLight::Le(&scene->GetAreaLights()[lightIndex], n, w, lambda);
-        case LightClass_Distant:
+        case LightClass::DistantLight:
             return DistantLight::Le(&scene->lights.Get<DistantLight>()[lightIndex], n, w,
                                     lambda);
         // case LightClass_InfUnf: return
@@ -543,15 +543,15 @@ static SampledSpectrum Le(Scene2 *scene, LightHandle lightHandle, Vec3f &n, Vec3
     }
 }
 
-void BuildLightPDF(Scene2 *scene)
-{
-    u32 total = 0;
-    for (u32 i = 0; i < LightClass_Count; i++)
-    {
-        scene->lightPDF[i] = total;
-        total += scene->lightCount[i];
-    }
-}
+// void BuildLightPDF(Scene2 *scene)
+// {
+//     u32 total = 0;
+//     for (u32 i = 0; i < LightClass_Count; i++)
+//     {
+//         total += scene->lightCount[i];
+//         scene->lightPDF[i] = total;
+//     }
+// }
 
 f32 LightPDF(Scene2 *scene) { return 1.f / scene->numLights; }
 
@@ -559,16 +559,9 @@ LightHandle UniformLightSample(Scene2 *scene, f32 u, f32 *pmf = 0)
 {
     if (scene->numLights == 0) return LightHandle();
     u32 lightIndex = Min(u32(u * scene->numLights), scene->numLights - 1);
-    for (u32 i = 0; i < LightClass_Count; i++)
-    {
-        if (lightIndex > scene->lightPDF[i])
-        {
-            LightHandle handle(LightClass(i), lightIndex - scene->lightPDF[i]);
-            if (pmf) *pmf = LightPDF(scene);
-            return handle;
-        }
-    }
-    Assert(0);
-    return LightHandle();
+    Assert(lightIndex >= 0 && lightIndex < scene->numLights);
+    u32 type = scene->lights.ConvertIndexToType(lightIndex);
+    if (pmf) *pmf = LightPDF(scene);
+    return LightHandle(LightClass(type), lightIndex);
 }
 } // namespace rt

@@ -202,59 +202,6 @@ struct BVHIntersector<4, types, Intersector>
 
 // using IntersectorTypes = TypePack<QuadIntersector, TriangleIntersector>;
 
-#define DispatchHelp(x, ...)                                                                  \
-    template <typename F, DispatchTmplHelper(x, __VA_ARGS__)>                                 \
-    auto Dispatch(F &&func, u32 index)                                                        \
-    {                                                                                         \
-        Assert(index >= 0 && index < x);                                                      \
-        switch (index)                                                                        \
-        {                                                                                     \
-            DispatchSwitchHelper(x, __VA_ARGS__)                                              \
-        }                                                                                     \
-    }
-
-#define COMMA                      ,
-#define DispatchTmplHelper(x, ...) EXPAND(CONCAT(RECURSE__, x)(TMPL, __VA_ARGS__))
-#define TMPL(x, ...)               typename CONCAT(T, x)
-
-#define DispatchSwitchHelper(x, ...) CASES(x, __VA_ARGS__)
-#define CASE(x)                                                                               \
-    case x: return func(CONCAT(T, x)());
-#define CASES(n, ...)                EXPAND(CONCAT(RECURSE_, n)(CASE, __VA_ARGS__))
-#define RECURSE_1(macro, first)      macro(first)
-#define RECURSE_2(macro, first, ...) macro(first) EXPAND(RECURSE_1(macro, __VA_ARGS__))
-#define RECURSE_3(macro, first, ...) macro(first) EXPAND(RECURSE_2(macro, __VA_ARGS__))
-#define RECURSE_4(macro, first, ...) macro(first) EXPAND(RECURSE_3(macro, __VA_ARGS__))
-#define RECURSE_5(macro, first, ...) macro(first) EXPAND(RECURSE_4(macro, __VA_ARGS__))
-#define RECURSE_6(macro, first, ...) macro(first) EXPAND(RECURSE_5(macro, __VA_ARGS__))
-#define RECURSE_7(macro, first, ...) macro(first) EXPAND(RECURSE_6(macro, __VA_ARGS__))
-
-#define RECURSE__1(macro, first)      macro(first)
-#define RECURSE__2(macro, first, ...) macro(first), EXPAND(RECURSE__1(macro, __VA_ARGS__))
-#define RECURSE__3(macro, first, ...) macro(first), EXPAND(RECURSE__2(macro, __VA_ARGS__))
-#define RECURSE__4(macro, first, ...) macro(first), EXPAND(RECURSE__3(macro, __VA_ARGS__))
-#define RECURSE__5(macro, first, ...) macro(first), EXPAND(RECURSE__4(macro, __VA_ARGS__))
-#define RECURSE__6(macro, first, ...) macro(first), EXPAND(RECURSE__5(macro, __VA_ARGS__))
-#define RECURSE__7(macro, first, ...) macro(first), EXPAND(RECURSE__6(macro, __VA_ARGS__))
-
-#define EXPAND(x)    x
-#define CONCAT(a, b) a##b
-
-template <typename F, typename T0>
-auto Dispatch(F &&func, u32 index)
-{
-    Assert(index == 0);
-    return func(T0());
-}
-
-DispatchHelp(2, 0, 1);
-DispatchHelp(3, 0, 1, 2);
-DispatchHelp(4, 0, 1, 2, 3);
-DispatchHelp(5, 0, 1, 2, 3, 4);
-DispatchHelp(6, 0, 1, 2, 3, 4, 5);
-DispatchHelp(7, 0, 1, 2, 3, 4, 5, 6);
-// DispatchHelp(4, 0, 1, 2, 3);
-
 // template <typename F, typename T0, typename T1>
 // auto Dispatch(F &&func, u32 index)
 // {
@@ -413,8 +360,25 @@ struct TriangleIntersectorBase
             Vec3f p[3] = {mesh->p[vertexIndices[0]], mesh->p[vertexIndices[1]],
                           mesh->p[vertexIndices[2]]};
 
-            si.p = w * p[0] + u * p[1] + v * p[2];
-            si.n = Normalize(Cross(p[1] - p[0], p[2] - p[0]));
+            si.p        = w * p[0] + u * p[1] + v * p[2];
+            si.n        = Normalize(Cross(p[1] - p[0], p[2] - p[0]));
+            Vec2f duv02 = uv[0] - uv[2];
+            Vec2f duv12 = uv[1] - uv[2];
+            Vec3f dp02  = p[0] - p[2];
+            Vec3f dp12  = p[1] - p[2];
+            f32 det     = FMS(duv02[0], duv12[1], duv02[1] * duv12[0]);
+            Vec3f dpdu, dpdv;
+            if (det < 1e-9f)
+            {
+                CoordinateSystem(si.n, &dpdu, &dpdv);
+            }
+            else
+            {
+                f32 invDet = 1 / det;
+                dpdu       = FMS(Vec3f(duv12[1]), dp02, duv02[1] * dp12) * invDet;
+                dpdv       = FMS(Vec3f(duv02[0]), dp12, duv12[0] * dp02) * invDet;
+            }
+
             if (mesh->n)
             {
                 si.shading.n = w * mesh->n[vertexIndices[0]] + u * mesh->n[vertexIndices[1]] +
@@ -424,8 +388,21 @@ struct TriangleIntersectorBase
             {
                 si.shading.n = si.n;
             }
-            si.uv   = w * uv[0] + u * uv[1] + v * uv[2];
-            si.tHit = tFar;
+            Vec3f ss = dpdu;
+            Vec3f ts = Cross(si.shading.n, ss);
+            if (LengthSquared(ts) > 0)
+            {
+                ss = Cross(ts, si.shading.n);
+            }
+            else
+            {
+                CoordinateSystem(si.shading.n, &ss, &ts);
+            }
+
+            si.shading.dpdu = ss;
+            si.shading.dpdv = ts;
+            si.uv           = w * uv[0] + u * uv[1] + v * uv[2];
+            si.tHit         = tFar;
             // TODO: get index based on type
             const Scene2::PrimitiveIndices *indices =
                 &scene->primIndices[Get(itr.geomIDs, index)];

@@ -16,14 +16,15 @@ namespace rt
 //      - ray differentials
 
 // after that's done:
-// - equiangular sampling
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
+// - equiangular sampling
 // - bdpt, metropolis, vcm/upbp, mcm?
 // - subdivision surfaces
 
 // harder stuff
 // - covariance tracing
 // - path guiding
+// - non exponential free flight
 
 //////////////////////////////
 // Textures and materials
@@ -540,8 +541,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
     {
         SurfaceInteraction si;
         // TODO: not hardcoded
-        bool intersect =
-            false; // BVH4TriangleCLIntersectorCmp1::Intersect(ray, scene->nodePtr, si);
+        bool intersect = BVH4TriangleCLIntersectorCmp1::Intersect(ray, scene->nodePtr, si);
 
         // If no intersection, sample "infinite" lights (e.g environment maps, sun, etc.)
         if (!intersect)
@@ -561,7 +561,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
                             L += beta * Le;
                         }
                     },
-                    Scene2::InfiniteLightTypes());
+                    InfiniteLightTypes());
             }
             else
             {
@@ -582,7 +582,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
                             L += beta * w_l * Le;
                         }
                     },
-                    Scene2::InfiniteLightTypes());
+                    InfiniteLightTypes());
             }
 
             break;
@@ -658,6 +658,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
 
         // sample bsdf, calculate pdf
         BSDFSample sample = bsdf.GenerateSample(-ray.d, sampler.Get1D(), sampler.Get2D());
+        if (sample.pdf == 0.f) break;
         beta *= sample.f * AbsDot(si.shading.n, sample.wi) / sample.pdf;
         bsdfPdf        = sample.pdf;
         specularBounce = sample.IsSpecular();
@@ -1126,7 +1127,7 @@ SampledSpectrum VolumetricIntegrator(Ray2 &ray, Sampler sampler,
                             L += beta * Le * MISWeight(p_u);
                         }
                     },
-                    Scene2::InfiniteLightTypes());
+                    InfiniteLightTypes());
             }
             else
             {
@@ -1145,7 +1146,7 @@ SampledSpectrum VolumetricIntegrator(Ray2 &ray, Sampler sampler,
                             L += beta * Le * MISWeight(p_u, p_l);
                         }
                     },
-                    Scene2::InfiniteLightTypes());
+                    InfiniteLightTypes());
             }
             break;
             // sample infinite area lights, environment map, and return

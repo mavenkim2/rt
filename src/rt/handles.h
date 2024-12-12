@@ -1,7 +1,27 @@
 #ifndef HANDLES_H
 #define HANDLES_H
+#include "template.h"
 namespace rt
 {
+
+#define CREATE_ENUM_AND_TYPE_PACK(packName, enumName, ...)                                    \
+    using packName = TypePack<COMMA_SEPARATED_LIST(__VA_ARGS__)>;                             \
+    enum class enumName                                                                       \
+    {                                                                                         \
+        COMMA_SEPARATED_LIST(__VA_ARGS__)                                                     \
+    };                                                                                        \
+    ENUM_CLASS_FLAGS(enumName)
+
+#define COMMA_SEPARATED_LIST(...)                                                             \
+    COMMA_SEPARATED_LIST_HELPER(COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
+#define COMMA_SEPARATED_LIST_HELPER(x, ...) EXPAND(CONCAT(RECURSE__, x)(EXPAND, __VA_ARGS__))
+
+#define COUNT_ARGS_IMPL(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15,     \
+                        _16, _17, _18, _19, _20, N, ...)                                      \
+    N
+#define COUNT_ARGS(...)                                                                       \
+    EXPAND(COUNT_ARGS_IMPL(__VA_ARGS__, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7,  \
+                           6, 5, 4, 3, 2, 1))
 
 // TODO: temporary
 enum MaterialType
@@ -33,14 +53,22 @@ struct VolumeHandle
     VolumeHandle(u32 index) : index(index) {}
 };
 
-enum LightClass
-{
-    LightClass_Area,    // diffuse area light
-    LightClass_Distant, // dirac delta direction
-    LightClass_InfUnf,  // uniform infinite light
-    LightClass_InfImg,  // environment map
-    LightClass_Count,
-};
+struct DiffuseAreaLight;
+struct DistantLight;
+struct UniformInfiniteLight;
+struct ImageInfiniteLight;
+CREATE_ENUM_AND_TYPE_PACK(LightTypes, LightClass, DiffuseAreaLight, DistantLight,
+                          UniformInfiniteLight, ImageInfiniteLight);
+using InfiniteLightTypes = TypePack<UniformInfiniteLight, ImageInfiniteLight>;
+
+// enum LightClass
+// {
+//     LightClass_Area,    // diffuse area light
+//     LightClass_Distant, // dirac delta direction
+//     LightClass_InfUnf,  // uniform infinite light
+//     LightClass_InfImg,  // environment map
+//     LightClass_Count,
+// };
 
 struct LightHandle
 {

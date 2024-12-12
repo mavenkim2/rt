@@ -420,158 +420,6 @@ void VolumeRenderingTest(Arena *arena, string filename)
 }
 #endif
 
-void CameraRayTest(Arena *arena)
-{
-    u32 spp = 8;
-    Vec2f filterRadius(0.5f);
-    f32 lensRadius  = 0.003125;
-    f32 focalLength = 1675.3383;
-    // Camera
-    u32 width  = 4;
-    u32 height = 4;
-    Vec3f cameraP(-1139.0159, 23.286734, 1479.7947);
-    Vec3f look(244.81433, 238.80714, 560.3801);
-    Vec3f up(-0.107149, .991691, .07119);
-
-    TriangleMesh mesh =
-        LoadPLY(arena, "../data/island/pbrt-v4/isKava/isKava_geometry_00001.ply");
-    for (u32 i = 0; i < mesh.numVertices; i++)
-    {
-        mesh.p[i] -= cameraP;
-    }
-
-    u32 numFaces  = mesh.numIndices / 3;
-    u32 testFace  = numFaces / 2;
-    u32 indices[] = {
-        mesh.indices[3 * testFace + 0],
-        mesh.indices[3 * testFace + 1],
-        mesh.indices[3 * testFace + 2],
-    };
-
-    Vec3f p[] = {
-        mesh.p[indices[0]],
-        mesh.p[indices[1]],
-        mesh.p[indices[2]],
-    };
-
-    Vec3f center = (p[0] + p[1] + p[2]) / 3.f;
-
-    Ray2 testRay(Vec3f(0, 0, 0), Normalize(center));
-
-    Mat4 cameraFromRender = LookAt(cameraP, look, up) * Translate(cameraP);
-
-    Mat4 renderFromCamera = Inverse(cameraFromRender);
-    Mat4 NDCFromCamera    = Mat4::Perspective(Radians(69.50461), 2.386946);
-    // maps to raster coordinates
-    Mat4 rasterFromNDC = Scale(Vec3f(f32(width), -f32(height), 1.f)) *
-                         Scale(Vec3f(1.f / 2.f, 1.f / 2.f, 1.f)) *
-                         Translate(Vec3f(1.f, -1.f, 0.f));
-    Mat4 rasterFromCamera = rasterFromNDC * NDCFromCamera;
-    Mat4 cameraFromRaster = Inverse(rasterFromCamera);
-
-    ZSobolSampler sampler(spp, Vec2i(width, height));
-    for (u32 y = 0; y < height; y++)
-    {
-        for (u32 x = 0; x < width; x++)
-        {
-            Vec2u pPixel(x, y);
-            Vec3f rgb(0.f);
-            // for (u32 i = 0; i < spp; i++)
-            // {
-            //     sampler.StartPixelSample(Vec2i(x, y), i);
-            // box filter
-            // Vec2f uFilter      = sampler.Get2D();
-            Vec2f filterSample(0);
-            // Vec2f filterSample = Vec2f(Lerp(uFilter[0], -filterRadius.x,
-            // filterRadius.x),
-            //                            Lerp(uFilter[1], -filterRadius.y,
-            //                            filterRadius.y));
-            // converts from continuous to discrete coordinates
-            filterSample += Vec2f(0.5f, 0.5f) + Vec2f(pPixel);
-            Vec2f pLens = sampler.Get2D();
-
-            Vec3f pCamera = TransformP(cameraFromRaster, Vec3f(filterSample, 0.f));
-            Ray2 ray(Vec3f(0.f, 0.f, 0.f), Normalize(pCamera), pos_inf);
-            // if (lensRadius > 0.f)
-            // {
-            //     pLens = lensRadius * SampleUniformDiskConcentric(pLens);
-            //
-            //     // point on plane of focus
-            //     f32 t        = focalLength / -ray.d.z;
-            //     Vec3f pFocus = ray(t);
-            //     ray.o        = Vec3f(pLens.x, pLens.y, 0.f);
-            //     // ensure ray intersects focal point
-            //     ray.d = Normalize(pFocus - ray.o);
-            // }
-            ray         = Transform(renderFromCamera, ray);
-            Vec3f outD  = Normalize(ray.d);
-            bool result = (Dot(ray.d, testRay.d) > 0);
-            int stop    = 5;
-            // }
-        }
-    }
-}
-
-void TestImageInfiniteLight(Arena *arena)
-{
-    // rayd
-    // render from light matrix
-    // {-0.42261824,0.906307817,0,1139.01587}
-    // {-3.96159727e-08,-1.84732301e-08,1,-23.2867336}
-    // {-0.906307817,-0.42261824,-4.37113883e-08,-1479.79468}
-    // wLight = {x=0.662455142 y=0.670940042 z=0.333155632}
-    // uv = {x=0.702497244 y=0.705805421}
-    // rgb = {r=0.0343398079 g=0.423267752 b=0.854992688}
-
-    // sigmoid polynomial coefficients: {c0=-3.61476741e-05 c1=0.0298558027 c2=-6.153368}
-    // scale = 1.70998538
-    //
-    // radiance: {values={values={0.00539485598,0.00208824105,0.000413342146,0.00859673042}}}
-
-    // 5754, 5781
-    Ray2 r(Vec3f(0, 0, 0), Vec3f(0.328112572f, 0.333155632f, -0.883939862f));
-    u32 spp = 8;
-    Vec2f filterRadius(0.5f);
-    f32 lensRadius  = 0.003125;
-    f32 focalLength = 1675.3383;
-    // Camera
-    u32 width  = 1920;
-    u32 height = 804;
-    Vec3f cameraP(-1139.0159, 23.286734, 1479.7947);
-    Vec3f look(244.81433, 238.80714, 560.3801);
-    Vec3f up(-0.107149, .991691, .07119);
-    ZSobolSampler sampler(spp, Vec2i(width, height));
-
-    SampledWavelengths lambda;
-    lambda.lambda[0] = 518.704041;
-    lambda.lambda[1] = 583.881409;
-    lambda.lambda[2] = 681.680664;
-    lambda.lambda[3] = 442.826965;
-    for (u32 i = 0; i < 4; i++)
-    {
-        lambda.pdf[i] = VisibleWavelengthsPDF(lambda.lambda[i]);
-    }
-
-    AffineSpace renderFromLight = AffineSpace::Scale(-1, 1, 1) *
-                                  AffineSpace::Rotate(Vec3f(-1, 0, 0), Radians(90)) *
-                                  AffineSpace::Rotate(Vec3f(0, 0, 1), Radians(65));
-    Vec3f pCamera(-1139.0159, 23.286734, 1479.7947);
-    renderFromLight = AffineSpace::Translate(-pCamera) * renderFromLight;
-
-    Scene2 sceneBase = Scene2();
-    scene_           = &sceneBase;
-    Scene2 *scene    = GetScene();
-    f32 scale        = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
-    Assert(scale == 0.00935831666f);
-    ImageInfiniteLight infLight(
-        arena, LoadFile("../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png"),
-        &renderFromLight, RGBColorSpace::sRGB, 100000.f, scale);
-    scene->lights.Set<ImageInfiniteLight>(&infLight, 1);
-    SampledSpectrum L = Li(r, sampler, 10, lambda);
-    int stop          = 5;
-    // radiance: {values={values={0.00539485598,0.00208824105,0.000413342146,0.00859673042}}}
-}
-
 void TriangleMeshBVHTest(Arena *arena)
 {
     // DONE:
@@ -581,11 +429,13 @@ void TriangleMeshBVHTest(Arena *arena)
     // - have the intersector handle the case where there are no geomIDs (only primIDs)
     // - make sure traversal code works
     // - add material index when intersecting
-
-    // TODO:
     // - make sure the environment map works properly and returns the right radiances
     // - make sure i'm calculating the final rgb value correctly for each pixel
     // - make sure i'm shooting the right camera rays
+
+    // TODO:
+    // - have to handle the handedness scaling factor
+    // - fix material evaluation
 
     // once the ocean is rendered
     // - need to support a bvh with quad/triangle mesh instances
@@ -617,7 +467,8 @@ void TriangleMeshBVHTest(Arena *arena)
     Mat4 cameraFromRender = LookAt(pCamera, look, up) * Translate(pCamera);
 
     Mat4 renderFromCamera = Inverse(cameraFromRender);
-    Mat4 NDCFromCamera    = Mat4::Perspective2(Radians(69.50461), 2.386946);
+    // TODO: going to have to figure out how to handle this automatically
+    Mat4 NDCFromCamera = Mat4::Perspective2(Radians(69.50461), 2.386946);
     // maps to raster coordinates
     Mat4 rasterFromNDC = Scale(Vec3f(f32(width), -f32(height), 1.f)) *
                          Scale(Vec3f(1.f / 2.f, 1.f / 2.f, 1.f)) *
@@ -654,7 +505,6 @@ void TriangleMeshBVHTest(Arena *arena)
         &renderFromLight, RGBColorSpace::sRGB, sceneRadius, scale);
     scene->lights.Set<ImageInfiniteLight>(&infLight, 1);
 
-#if 0
     BuildSettings settings;
     settings.intCost = 0.3f;
 
@@ -667,7 +517,6 @@ void TriangleMeshBVHTest(Arena *arena)
     scene->nodePtr        = bvh;
     scene->triangleMeshes = &mesh;
     scene->numTriMeshes   = 1;
-#endif
 
     ConstantTexture<1> ct(0.f);
     ConstantSpectrum spec(1.1f);
@@ -686,7 +535,7 @@ void TriangleMeshBVHTest(Arena *arena)
     params.width            = width;
     params.height           = height;
     params.filterRadius     = Vec2f(0.5f);
-    params.spp              = 8; // 256;
+    params.spp              = 8;
     params.maxDepth         = 10;
     params.lensRadius       = 0.003125;
     params.focalLength      = 1675.3383;

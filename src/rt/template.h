@@ -3,6 +3,58 @@
 namespace rt
 {
 
+#define DispatchHelp(x, ...)                                                                  \
+    template <typename F, DispatchTmplHelper(x, __VA_ARGS__)>                                 \
+    auto Dispatch(F &&func, u32 index)                                                        \
+    {                                                                                         \
+        Assert(index >= 0 && index < x);                                                      \
+        switch (index)                                                                        \
+        {                                                                                     \
+            DispatchSwitchHelper(x, __VA_ARGS__)                                              \
+        }                                                                                     \
+    }
+
+#define COMMA                      ,
+#define DispatchTmplHelper(x, ...) EXPAND(CONCAT(RECURSE__, x)(TMPL, __VA_ARGS__))
+#define TMPL(x, ...)               typename CONCAT(T, x)
+
+#define DispatchSwitchHelper(x, ...) CASES(x, __VA_ARGS__)
+#define CASE(x)                                                                               \
+    case x: return func(CONCAT(T, x)());
+#define CASES(n, ...)                EXPAND(CONCAT(RECURSE_, n)(CASE, __VA_ARGS__))
+#define RECURSE_1(macro, first)      macro(first)
+#define RECURSE_2(macro, first, ...) macro(first) EXPAND(RECURSE_1(macro, __VA_ARGS__))
+#define RECURSE_3(macro, first, ...) macro(first) EXPAND(RECURSE_2(macro, __VA_ARGS__))
+#define RECURSE_4(macro, first, ...) macro(first) EXPAND(RECURSE_3(macro, __VA_ARGS__))
+#define RECURSE_5(macro, first, ...) macro(first) EXPAND(RECURSE_4(macro, __VA_ARGS__))
+#define RECURSE_6(macro, first, ...) macro(first) EXPAND(RECURSE_5(macro, __VA_ARGS__))
+#define RECURSE_7(macro, first, ...) macro(first) EXPAND(RECURSE_6(macro, __VA_ARGS__))
+
+#define RECURSE__1(macro, first)      macro(first)
+#define RECURSE__2(macro, first, ...) macro(first), EXPAND(RECURSE__1(macro, __VA_ARGS__))
+#define RECURSE__3(macro, first, ...) macro(first), EXPAND(RECURSE__2(macro, __VA_ARGS__))
+#define RECURSE__4(macro, first, ...) macro(first), EXPAND(RECURSE__3(macro, __VA_ARGS__))
+#define RECURSE__5(macro, first, ...) macro(first), EXPAND(RECURSE__4(macro, __VA_ARGS__))
+#define RECURSE__6(macro, first, ...) macro(first), EXPAND(RECURSE__5(macro, __VA_ARGS__))
+#define RECURSE__7(macro, first, ...) macro(first), EXPAND(RECURSE__6(macro, __VA_ARGS__))
+
+#define EXPAND(x)    x
+#define CONCAT(a, b) a##b
+
+template <typename F, typename T0>
+auto Dispatch(F &&func, u32 index)
+{
+    Assert(index == 0);
+    return func(T0());
+}
+
+DispatchHelp(2, 0, 1);
+DispatchHelp(3, 0, 1, 2);
+DispatchHelp(4, 0, 1, 2, 3);
+DispatchHelp(5, 0, 1, 2, 3, 4);
+DispatchHelp(6, 0, 1, 2, 3, 4, 5);
+DispatchHelp(7, 0, 1, 2, 3, 4, 5, 6);
+
 template <typename... Ts>
 struct TypePack
 {
@@ -203,6 +255,28 @@ struct ArrayTuple<TypePack<Ts...>>
     //     return ::Get<ArrayTuple<TypePack<Ts...>>, Ts...>(arrays, type, index);
     // }
 
+    // __forceinline const void *GetPtr(u32 index) const
+    // {
+    //     auto getPtr = [&](auto array) { return (void *)&array[index]; };
+    //     return Dispatch<decltype(getPtr), Ts...>(getPtr, index);
+    // }
+
+    template <typename F>
+    __forceinline auto Dispatch(F &func, u32 index) const
+    {
+        return Dispatch<F, Ts...>(func, index);
+    }
+    __forceinline u32 ConvertIndexToType(u32 index) const
+    {
+        for (u32 i = 0; i < Types::count; i++)
+        {
+            if (index < counts[i])
+            {
+                return i;
+            }
+        }
+        return 0xffffffff;
+    }
     template <typename T>
     __forceinline void Set(T *array, u32 count)
     {

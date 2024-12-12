@@ -132,7 +132,7 @@ constexpr f32 Pow<1>(f32 v)
     return v;
 }
 
-#ifdef ___AVX2__
+#ifdef __AVX2__
 __forceinline f32 FMA(const f32 a, const f32 b, const f32 c)
 {
     return _mm_cvtss_f32(_mm_fmadd_ss(_mm_set_ss(a), _mm_set_ss(b), _mm_set_ss(c)));
