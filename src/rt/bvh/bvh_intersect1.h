@@ -361,11 +361,11 @@ struct TriangleIntersectorBase
                           mesh->p[vertexIndices[2]]};
 
             si.p        = w * p[0] + u * p[1] + v * p[2];
-            si.n        = Normalize(Cross(p[1] - p[0], p[2] - p[0]));
-            Vec2f duv02 = uv[0] - uv[2];
-            Vec2f duv12 = uv[1] - uv[2];
             Vec3f dp02  = p[0] - p[2];
             Vec3f dp12  = p[1] - p[2];
+            si.n        = Normalize(Cross(dp02, dp12)); // p[1] - p[0], p[2] - p[0]));
+            Vec2f duv02 = uv[0] - uv[2];
+            Vec2f duv12 = uv[1] - uv[2];
             f32 det     = FMS(duv02[0], duv12[1], duv02[1] * duv12[0]);
             Vec3f dpdu, dpdv;
             if (det < 1e-9f)
@@ -383,6 +383,8 @@ struct TriangleIntersectorBase
             {
                 si.shading.n = w * mesh->n[vertexIndices[0]] + u * mesh->n[vertexIndices[1]] +
                                v * mesh->n[vertexIndices[2]];
+                si.shading.n =
+                    LengthSquared(si.shading.n) > 0 ? Normalize(si.shading.n) : si.n;
             }
             else
             {

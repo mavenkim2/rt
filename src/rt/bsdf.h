@@ -13,7 +13,7 @@ struct BSDFBase
     BxDF bxdf;
     LinearSpace<LaneNF32> frame;
 
-    BSDFBase(BxDF bxdf, const Vec3lfn &ns, const Vec3lfn &dpdus)
+    BSDFBase(BxDF bxdf, const Vec3lfn &dpdus, const Vec3lfn &ns)
         : bxdf(bxdf), frame(LinearSpace3fn::FromXZ(Normalize(dpdus), ns))
     {
     }

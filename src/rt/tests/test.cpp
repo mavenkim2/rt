@@ -420,6 +420,23 @@ void VolumeRenderingTest(Arena *arena, string filename)
 }
 #endif
 
+// {x=0.95288682 y=0.690009654}
+// 0.943864584
+
+// R = 0.989130855
+// T = 0.0108691454
+// wo = {x=0.622235954 y=0.782828927 z=0.00113311748}
+// 0 , 582
+
+// void DielectricTest()
+// {
+//     auto bxdf         = DielectricBxDF(1.1f, TrowbridgeReitzDistribution(0, 0));
+//     BSDFSample sample = bxdf.GenerateSample(Vec3f(0.622235954f, 0.782828927f,
+//     0.00113311748f),
+//                                             0.943864584f, Vec2f(0.95288682f, 0.690009654f),
+//                                             TransportMode::Radiance, BxDFFlags::RT);
+// }
+
 void TriangleMeshBVHTest(Arena *arena)
 {
     // DONE:
@@ -434,10 +451,12 @@ void TriangleMeshBVHTest(Arena *arena)
     // - make sure i'm shooting the right camera rays
 
     // TODO:
-    // - have to handle the handedness scaling factor
-    // - fix material evaluation
+    // - add the second ocean layer
+    // - render a quad mesh properly
+    // - render two instances of a quad mesh properly
+    // - render a mesh w/ ptex
+    // - render the diffuse/diffuse transmission materials properly
 
-    // once the ocean is rendered
     // - need to support a bvh with quad/triangle mesh instances
     // - load the scene description and properly instantiate lights/materials/textures
     // - render the scene with all quad meshes, then add support for the bspline curves
@@ -479,12 +498,20 @@ void TriangleMeshBVHTest(Arena *arena)
     // ocean mesh
     TriangleMesh mesh =
         LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
+    // Triangle mesh2 =
+    //     LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00002.ply");
+
     u32 numFaces = mesh.numIndices / 3;
     // convert to "render space" (i.e. world space centered around the camera)
     for (u32 i = 0; i < mesh.numVertices; i++)
     {
         mesh.p[i] -= pCamera;
     }
+    // swaps the handedness
+    // for (u32 i = 0; i < numFaces; i++)
+    // {
+    //     Swap(mesh.indices[3 * i + 1], mesh.indices[3 * i + 2]);
+    // }
     Bounds geomBounds;
     Bounds centBounds;
     PrimRefCompressed *refs = GenerateAOSData(arena, &mesh, numFaces, geomBounds, centBounds);
@@ -504,6 +531,7 @@ void TriangleMeshBVHTest(Arena *arena)
         arena, LoadFile("../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png"),
         &renderFromLight, RGBColorSpace::sRGB, sceneRadius, scale);
     scene->lights.Set<ImageInfiniteLight>(&infLight, 1);
+    scene->numLights = 1;
 
     BuildSettings settings;
     settings.intCost = 0.3f;
@@ -526,8 +554,6 @@ void TriangleMeshBVHTest(Arena *arena)
         Scene2::PrimitiveIndices(LightHandle(), MaterialHandle(MT_DielectricMaterial, 0)),
     };
     scene->primIndices = ids;
-    // PerformanceCounter counter = OS_StartCounter();
-    // f32 time                   = OS_GetMilliseconds(counter);
 
     RenderParams2 params;
     params.cameraFromRaster = cameraFromRaster;
@@ -535,12 +561,15 @@ void TriangleMeshBVHTest(Arena *arena)
     params.width            = width;
     params.height           = height;
     params.filterRadius     = Vec2f(0.5f);
-    params.spp              = 8;
+    params.spp              = 64;
     params.maxDepth         = 10;
     params.lensRadius       = 0.003125;
     params.focalLength      = 1675.3383;
 
+    PerformanceCounter counter = OS_StartCounter();
     Render(arena, params);
+    f32 time = OS_GetMilliseconds(counter);
+    printf("total time: %fms\n", time);
 }
 
 } // namespace rt

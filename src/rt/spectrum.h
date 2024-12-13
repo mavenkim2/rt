@@ -49,7 +49,7 @@ struct SampledSpectrumBase
             values[i] = c;
         }
     }
-    SampledSpectrumBase(const T *v)
+    explicit SampledSpectrumBase(const T *v)
     {
         for (u32 i = 0; i < NSampledWavelengths; ++i)
         {

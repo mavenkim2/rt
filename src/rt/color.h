@@ -52,5 +52,37 @@ Vec3f SRGBToLinear(const u8 rgb[3])
 {
     return Vec3f(SRGBToLinearLUT[rgb[0]], SRGBToLinearLUT[rgb[1]], SRGBToLinearLUT[rgb[2]]);
 }
+
+Vec3f GetOctahedralRGB(const Image *image, Vec2f uv)
+{
+    Vec2i p(i32(uv[0] * image->width), i32(uv[1] * image->height));
+    if (p[0] < 0)
+    {
+        p[0] = -p[0];                    // mirror across u = 0
+        p[1] = image->height - 1 - p[1]; // mirror across v = 0.5
+    }
+    else if (p[0] >= image->width)
+    {
+        p[0] = 2 * image->width - 1 - p[0]; // mirror across u = 1
+        p[1] = image->height - 1 - p[1];    // mirror across v = 0.5
+    }
+
+    if (p[1] < 0)
+    {
+        p[0] = image->width - 1 - p[0]; // mirror across u = 0.5
+        p[1] = -p[1];                   // mirror across v = 0;
+    }
+    else if (p[1] >= image->height)
+    {
+        p[0] = image->width - 1 - p[0];      // mirror across u = 0.5
+        p[1] = 2 * image->height - 1 - p[1]; // mirror across v = 1
+    }
+
+    if (image->width == 1) p[0] = 0;
+    if (image->height == 1) p[1] = 0;
+
+    return SRGBToLinear(GetColor(image, p[0], p[1]));
+}
+
 } // namespace rt
 #endif

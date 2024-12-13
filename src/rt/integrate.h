@@ -6,7 +6,7 @@
 
 namespace rt
 {
-static const f32 tMinEpsilon = 0.00001f;
+static const f32 tMinEpsilon = 0.0001f;
 
 #if 0
 template <typename T, i32 i>

@@ -29,7 +29,7 @@ BSDFSample BSDFBase<BxDF>::GenerateSample(Vec3lfn wo, const LaneNF32 &uc, const 
     // u32 tag           = GetTag();
     // BSDFSample result = bsdfMethods[tag].GenerateSample(ptr, wo, uc, u, mode, sampleFlags);
     BSDFSample result = bxdf.GenerateSample(wo, uc, u, mode, sampleFlags);
-    if (!result.IsValid() || All(result.f == 0) || All(result.pdf == 0) ||
+    if (!result.IsValid() || All(result.f == SampledSpectrumN(0.f)) || All(result.pdf == 0) ||
         All(result.wi.z == 0))
         return {};
     result.wi = frame.FromLocal(result.wi);

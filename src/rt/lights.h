@@ -157,6 +157,7 @@ struct PiecewiseConstant1D
         }
 
         Assert(total != 0.f);
+        Assert(total == total);
         funcInt = total;
         for (u32 i = 1; i <= numValues; i++)
         {
@@ -167,12 +168,14 @@ struct PiecewiseConstant1D
     f32 Integral() const { return funcInt; }
     f32 Sample(f32 u, f32 *pdf = 0, u32 *offset = 0) const
     {
-        u32 index = FindInterval(num, [&](u32 index) { return cdf[index] <= u; });
+        u32 index = FindInterval(num + 1, [&](u32 index) { return cdf[index] <= u; });
         if (offset) *offset = index;
         if (pdf) *pdf = func[index] / funcInt;
         f32 cdfRange = cdf[index + 1] - cdf[index];
         f32 du       = (u - cdf[index]) * (cdfRange > 0.f ? 1.f / cdfRange : 0.f);
-        return Lerp((index + du) / f32(num), minD, maxD);
+        f32 t        = (index + du) / f32(num);
+        Assert(t < 1.f);
+        return Lerp(t, minD, maxD);
     }
 };
 

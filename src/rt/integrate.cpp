@@ -20,6 +20,7 @@ namespace rt
 // - equiangular sampling
 // - bdpt, metropolis, vcm/upbp, mcm?
 // - subdivision surfaces
+// - actual displacement mapping
 
 // harder stuff
 // - covariance tracing
@@ -98,7 +99,7 @@ DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(
     }
     // NOTE: for dispersion (i.e. wavelength dependent IORs), we terminate every wavelength
     // except the first
-    if constexpr (!std::is_same_v<Spectrum, ConstantSpectrum>)
+    if constexpr (!std::is_same_v<IORShader, ConstantSpectrum>)
     {
         lambda.TerminateSecondary();
     }
@@ -430,13 +431,19 @@ void Render(Arena *arena, RenderParams2 &params)
             for (u32 x = minPixelBounds.x; x < maxPixelBounds.x; x++)
             {
                 Vec2u pPixel(x, y);
+                if (pPixel.x == 0 && pPixel.y == 582)
+                {
+                    int stop = 5;
+                }
                 Vec3f rgb(0.f);
                 for (u32 i = 0; i < spp; i++)
                 {
                     sampler.StartPixelSample(Vec2i(x, y), i);
                     SampledWavelengths lambda = SampleVisible(sampler.Get1D());
+                    Vec2f u                   = sampler.GetPixel2D();
+                    // TODO: motion blur
+                    sampler.Get1D();
                     // box filter
-                    Vec2f u            = sampler.Get2D();
                     Vec2f filterSample = Vec2f(Lerp(u[0], -filterRadius.x, filterRadius.x),
                                                Lerp(u[1], -filterRadius.y, filterRadius.y));
                     // converts from continuous to discrete coordinates
@@ -523,6 +530,13 @@ void EvaluateMaterial(Arena *arena, SurfaceInteraction &si, BSDF *bsdf,
         Scene2::MaterialTypes(), MaterialHandle::GetType(si.materialIDs));
 }
 
+bool Occluded(Ray2 &r, BVHNodeN nodePtr, SurfaceInteraction &si, LightSample &ls)
+{
+    const f32 shadowRayEpsilon = 1 - .0001f;
+    Ray2 ray(si.p, ls.wi, shadowRayEpsilon);
+    return BVH4TriangleIntersector1::Occluded(ray, nodePtr);
+}
+
 template <typename Sampler>
 SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda)
 {
@@ -540,7 +554,9 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
     for (;;)
     {
         SurfaceInteraction si;
-        // TODO: not hardcoded
+        // TODO IMPORTANT: need to robustly prevent self intersections. right now at grazing
+        // angles the reflected ray is re-intersecting with the ocean, which causes the ray to 
+        // effectively transmit when it should reflect
         bool intersect = BVH4TriangleCLIntersectorCmp1::Intersect(ray, scene->nodePtr, si);
 
         // If no intersection, sample "infinite" lights (e.g environment maps, sun, etc.)
@@ -587,6 +603,10 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
 
             break;
         }
+        else
+        {
+            int stop = 5;
+        }
 
         // If intersected with a light
         if (si.lightIndices)
@@ -612,7 +632,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
             }
         }
 
-        if (depth >= maxDepth)
+        if (depth++ >= maxDepth)
         {
             break;
         }
@@ -624,33 +644,36 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
 
         // Next Event Estimation
         // Choose light source for direct lighting calculation
-        f32 lightU = sampler.Get1D();
-        f32 pmf;
-        LightHandle handle = UniformLightSample(scene, lightU, &pmf);
-        if (bool(handle))
+        if (!IsSpecular(bsdf.Flags()))
         {
-            Vec2f sample = sampler.Get2D();
-            // Sample point on the light source
-            LightSample ls = SampleLi(scene, handle, si, lambda, sample);
-            if (ls.pdf)
+            f32 lightU = sampler.Get1D();
+            f32 pmf;
+            LightHandle handle = UniformLightSample(scene, lightU, &pmf);
+            if (bool(handle))
             {
-                // Evaluate BSDF for light sample, check visibility with shadow ray
-                f32 p_b;
-                SampledSpectrum f =
-                    bsdf.EvaluateSample(-ray.d, ls.wi, p_b) * AbsDot(si.shading.n, ls.wi);
-                if (f && !BVH4TriangleIntersector1::Occluded(ray, scene->nodePtr))
+                Vec2f sample = sampler.Get2D();
+                // Sample point on the light source
+                LightSample ls = SampleLi(scene, handle, si, lambda, sample, true);
+                if (ls.pdf)
                 {
-                    // Calculate contribution
-                    f32 lightPdf = pmf * ls.pdf;
+                    // Evaluate BSDF for light sample, check visibility with shadow ray
+                    f32 p_b;
+                    SampledSpectrum f =
+                        bsdf.EvaluateSample(-ray.d, ls.wi, p_b) * AbsDot(si.shading.n, ls.wi);
+                    if (f && !Occluded(ray, scene->nodePtr, si, ls))
+                    {
+                        // Calculate contribution
+                        f32 lightPdf = pmf * ls.pdf;
 
-                    if (IsDeltaLight(ls.lightType))
-                    {
-                        L += beta * f * ls.L / lightPdf;
-                    }
-                    else
-                    {
-                        f32 w_l = PowerHeuristic(1, lightPdf, 1, p_b);
-                        L += beta * f * w_l * ls.L / lightPdf;
+                        if (IsDeltaLight(ls.lightType))
+                        {
+                            L += beta * f * ls.L / lightPdf;
+                        }
+                        else
+                        {
+                            f32 w_l = PowerHeuristic(1, lightPdf, 1, p_b);
+                            L += beta * f * w_l * ls.L / lightPdf;
+                        }
                     }
                 }
             }

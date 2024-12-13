@@ -104,8 +104,13 @@ f32 *Image::GetSamplingDistribution(Arena *arena)
         for (i32 w = 0; w < width; w++)
         {
             // Is bpp correct?
-            f32 *values     = (f32 *)ptr;
+            Vec3f values    = SRGBToLinear(GetColor(this, w, h));
             result[count++] = (values[0] + values[1] + values[2]) / 3.f;
+            if (result[count - 1] != result[count - 1])
+            {
+                int stop = 5;
+                Assert(0);
+            }
             ptr += bytesPerPixel;
         }
     }

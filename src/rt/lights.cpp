@@ -418,9 +418,7 @@ ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image,
 
 SampledSpectrum ImageInfiniteLight::ImageLe(Vec2f uv, const SampledWavelengths &lambda) const
 {
-    u8 *srgb = GetOctahedralRGB(&image, uv);
-
-    Vec3f rgb = SRGBToLinear(srgb);
+    Vec3f rgb = GetOctahedralRGB(&image, uv);
 
     RGBIlluminantSpectrum spec(*imageColorSpace, rgb);
     return scale * spec.Sample(lambda);
@@ -430,6 +428,11 @@ SAMPLE_LI(ImageInfiniteLight)
 {
     const ImageInfiniteLight *light =
         &scene->lights.Get<ImageInfiniteLight>()[u32(lightIndices)];
+    if (u.x == 0.99999702f && u.y == 0.421200514f)
+    {
+        int stop = 5;
+    }
+
     f32 pdf;
     Vec2f uv;
     if (allowIncompletePDF)

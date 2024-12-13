@@ -199,32 +199,26 @@ inline b32 IsValid(BxDFFlags f) { return !EnumHasAnyFlags(f, BxDFFlags::Invalid)
 
 inline MaskF32 IsReflective(const LaneNU32 &f)
 {
-    return (f & LaneNU32(u32(BxDFFlags::Reflection))) != 0;
+    return (f & LaneNU32((BxDFFlags::Reflection))) != 0;
 }
 inline MaskF32 IsTransmissive(const LaneNU32 &f)
 {
-    return (f & LaneNU32(u32(BxDFFlags::Transmission))) != 0;
+    return (f & LaneNU32((BxDFFlags::Transmission))) != 0;
 }
 inline MaskF32 IsDiffuse(const LaneNU32 &f)
 {
-    return (f & LaneNU32(u32(BxDFFlags::Diffuse))) != 0;
+    return (f & LaneNU32((BxDFFlags::Diffuse))) != 0;
 }
-inline MaskF32 IsGlossy(const LaneNU32 &f)
-{
-    return (f & LaneNU32(u32(BxDFFlags::Glossy))) != 0;
-}
+inline MaskF32 IsGlossy(const LaneNU32 &f) { return (f & LaneNU32((BxDFFlags::Glossy))) != 0; }
 inline MaskF32 IsSpecular(const LaneNU32 &f)
 {
-    return (f & LaneNU32(u32(BxDFFlags::Specular))) != 0;
+    return (f & LaneNU32((BxDFFlags::Specular))) != 0;
 }
 inline MaskF32 IsNonSpecular(const LaneNU32 &f)
 {
-    return (f & LaneNU32(u32(BxDFFlags::Diffuse | BxDFFlags::Glossy))) != 0;
+    return (f & LaneNU32((BxDFFlags::Diffuse | BxDFFlags::Glossy))) != 0;
 }
-inline MaskF32 IsValid(const LaneNU32 &f)
-{
-    return (f & LaneNU32(u32(BxDFFlags::Invalid))) == 0;
-}
+inline MaskF32 IsValid(const LaneNU32 &f) { return (f & LaneNU32(BxDFFlags::Invalid)) != 0; }
 
 struct BSDFSample
 {
@@ -249,7 +243,7 @@ struct BSDFSample
     MaskF32 IsDiffuse() { return rt::IsDiffuse(flags); }
     MaskF32 IsGlossy() { return rt::IsGlossy(flags); }
     MaskF32 IsSpecular() { return rt::IsSpecular(flags); }
-    MaskF32 IsValid() { return !(rt::IsValid(flags)); }
+    MaskF32 IsValid() { return !rt::IsValid(flags); }
 };
 
 // NOTE: BTDFs are not generally symmetric
