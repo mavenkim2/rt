@@ -83,8 +83,10 @@ struct BVHTraverser<4, types>
         Vec3lf4 tEntries = Min(tMaxs, tMins);
         Vec3lf4 tLeaves  = Max(tMins, tMaxs);
 
-        Lane4F32 tEntry = Max(tEntries[0], Max(tEntries[1], Max(tEntries[2], tMinEpsilon)));
+        Lane4F32 tEntry = Max(tEntries[0], Max(tEntries[1], Max(tEntries[2], 0)));
         Lane4F32 tLeave = Min(tLeaves[0], Min(tLeaves[1], Min(tLeaves[2], ray.tFar)));
+        tEntry *= (1 - gamma(3));
+        tLeave *= (1 + gamma(3));
 
         const Lane4F32 intersectMask = tEntry <= tLeave;
 
@@ -237,19 +239,19 @@ struct TriangleIntersectorBase
         Vec3lf<N> d  = Vec3lf<N>(ray.d);
         Vec3lf<N> e1 = v0 - v1;
         Vec3lf<N> e2 = v2 - v0;
-        Vec3lf<N> ng = Cross(e2, e1);
+        Vec3lf<N> ng = Cross(e2, e1); // 4
         Vec3lf<N> c  = v0 - o;
 
-        LaneF32<N> det    = Dot(d, ng);
+        LaneF32<N> det    = Dot(d, ng); // 7
         LaneF32<N> absDet = Abs(det);
         LaneF32<N> sgnDet;
         if constexpr (N == 1) sgnDet = det > 0 ? 1.f : -1.f;
         else sgnDet = Signmask(det);
 
-        Vec3lf<N> dxt = Cross(c, d);
+        Vec3lf<N> dxt = Cross(c, d); // 3
 
-        LaneF32<N> u = Dot(dxt, e2);
-        LaneF32<N> v = Dot(dxt, e1);
+        LaneF32<N> u = Dot(dxt, e2); // 3 1 -> 7
+        LaneF32<N> v = Dot(dxt, e1); // 3 1 -> 7
         if constexpr (N == 1)
         {
             u *= sgnDet;
@@ -266,14 +268,33 @@ struct TriangleIntersectorBase
 
         if (None(mask)) return false;
 
-        LaneF32<N> t = Dot(ng, c);
+        LaneF32<N> t = Dot(ng, c); // 7
 
         if constexpr (N == 1) t *= sgnDet;
         else t ^= sgnDet;
-
-        mask &= (absDet * tMinEpsilon < t) & (t <= absDet * tFar);
+        mask &= (0 < t) & (t <= absDet * tFar);
 
         if (None(mask)) return false;
+
+#if 0
+        f32 maxX = Max(Abs(e1.x), Abs(e2.x));
+        f32 maxY = Max(Abs(e1.y), Abs(e2.y));
+        f32 maxZ = Max(Abs(e1.z), Abs(e2.z));
+
+        f32 errorX = maxX * gamma(1);
+        f32 errorY = maxY * gamma(1);
+        f32 errorZ = maxZ * gamma(1);
+        f32 deltaX = 2 * (gamma(2) * maxY * maxZ + maxY * errorZ + maxZ * errorY);
+        f32 deltaY = 2 * (gamma(2) * maxZ * maxX + maxZ * errorX + maxX * errorZ);
+        f32 deltaZ = 2 * (gamma(2) * maxX * maxY + maxX * errorY + maxY * errorX);
+
+        f32 deltaT = gamma(3) * t + deltaX * c.x + deltaY * c.y * deltaZ * c.z +
+                     gamma(1) * (ng.x + ng.y + ng.z); // + ng.x * c.x * gamma(1);
+
+        mask &= t > deltaT;
+
+        if (None(mask)) return false;
+#endif
 
         const LaneF32<N> rcpAbsDet = Rcp(absDet);
         itr.u                      = Min(u * rcpAbsDet, 1.f);
@@ -360,7 +381,10 @@ struct TriangleIntersectorBase
             Vec3f p[3] = {mesh->p[vertexIndices[0]], mesh->p[vertexIndices[1]],
                           mesh->p[vertexIndices[2]]};
 
-            si.p        = w * p[0] + u * p[1] + v * p[2];
+            si.p = w * p[0] + u * p[1] + v * p[2];
+            // TODO: still iffy about this
+            si.pError = gamma(12) * (Abs(w * p[0]) + Abs(u * p[1]) + Abs(v * p[2]));
+
             Vec3f dp02  = p[0] - p[2];
             Vec3f dp12  = p[1] - p[2];
             si.n        = Normalize(Cross(dp02, dp12)); // p[1] - p[0], p[2] - p[0]));

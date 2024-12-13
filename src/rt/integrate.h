@@ -76,6 +76,7 @@ struct SurfaceInteractions
     using LaneKF32 = LaneF32<K>;
     using LaneKU32 = LaneU32<K>;
     Vec3lf<K> p;
+    Vec3lf<K> pError;
     Vec3lf<K> n;
     Vec2lf<K> uv;
     struct

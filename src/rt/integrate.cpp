@@ -555,7 +555,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
     {
         SurfaceInteraction si;
         // TODO IMPORTANT: need to robustly prevent self intersections. right now at grazing
-        // angles the reflected ray is re-intersecting with the ocean, which causes the ray to 
+        // angles the reflected ray is re-intersecting with the ocean, which causes the ray to
         // effectively transmit when it should reflect
         bool intersect = BVH4TriangleCLIntersectorCmp1::Intersect(ray, scene->nodePtr, si);
 
@@ -688,8 +688,21 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         if (sample.IsTransmissive()) etaScale *= Sqr(sample.eta);
 
         // Spawn new ray
-        prevSi   = si;
-        ray.o    = si.p;
+        prevSi = si;
+        ray.o  = si.p;
+
+        // Offset ray along geometric normal
+        f32 d        = Dot(si.pError, Abs(si.n));
+        d            = Select(Dot(sample.wi, si.n) < 0, -d, d);
+        Vec3f offset = si.n * d;
+        ray.o        = si.p + offset;
+
+        for (int i = 0; i < 3; ++i)
+        {
+            if (offset[i] > 0) ray.o[i] = NextFloatUp(ray.o[i]);
+            else if (offset[i] < 0) ray.o[i] = NextFloatDown(ray.o[i]);
+        }
+
         ray.d    = sample.wi;
         ray.tFar = pos_inf;
 

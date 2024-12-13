@@ -213,6 +213,12 @@ __forceinline T AbsDot(const Vec3<T> &u, const Vec3<T> &v)
 }
 
 template <typename T>
+__forceinline Vec3<T> Abs(const Vec3<T> &u)
+{
+    return Vec3<T>(Abs(u.x), Abs(u.y), Abs(u.z));
+}
+
+template <typename T>
 __forceinline Vec3<T> Cross(const Vec3<T> &a, const Vec3<T> &b)
 {
     return Vec3<T>(FMS(a.y, b.z, a.z * b.y), FMS(a.z, b.x, a.x * b.z),

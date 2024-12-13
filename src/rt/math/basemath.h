@@ -243,6 +243,31 @@ __forceinline f32 SafeASin(f32 x)
     return std::asin(Clamp(x, -1.f, 1.f));
 }
 
+static constexpr f32 MachineEpsilon = std::numeric_limits<f32>::epsilon() * 0.5f;
+inline constexpr f32 gamma(int n) { return (n * MachineEpsilon) / (1 - n * MachineEpsilon); }
+
+inline float NextFloatUp(float v)
+{
+    if (IsInf(v) && v > 0.f) return v;
+    if (v == -0.f) v = 0.f;
+
+    uint32_t ui = FloatToBits(v);
+    if (v >= 0) ++ui;
+    else --ui;
+    return BitsToFloat(ui);
+}
+
+inline float NextFloatDown(float v)
+{
+    if (IsInf(v) && v < 0.) return v;
+    if (v == 0.f) v = -0.f;
+
+    uint32_t ui = FloatToBits(v);
+    if (v > 0) --ui;
+    else ++ui;
+    return BitsToFloat(ui);
+}
+
 //////////////////////////////
 
 inline u32 PopCount(u32 val)
