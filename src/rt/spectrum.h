@@ -498,30 +498,31 @@ struct RGBColorSpace
 
 // Converting from RGB to spectral:
 // https://rgl.s3.eu-central-1.amazonaws.com/media/papers/Jakob2019Spectral_3.pdf
-inline f32 EvaluateSpectral(const Vec3f &c, const f32 wl)
-{
-    // f(x) = S(c0x^2 + c1x + c2), S is a sigmoid, x is the wavelength
-    // S(x) = 1/2 + x/(2 * sqrt(1 + x^2))
-    f32 x = FMA(FMA(c.x, wl, c.y), wl, c.z);
-    return FMA(.5f * x, 1.f / Sqrt(FMA(x, x, 1)), .5f);
-}
+// inline f32 EvaluateSpectral(const Vec3f &c, const f32 wl)
+// {
+//     // f(x) = S(c0x^2 + c1x + c2), S is a sigmoid, x is the wavelength
+//     // S(x) = 1/2 + x/(2 * sqrt(1 + x^2))
+//     f32 x = FMA(FMA(c.x, wl, c.y), wl, c.z);
+//     return FMA(.5f * x, 1.f / Sqrt(FMA(x, x, 1)), .5f);
+// }
 
 template <i32 K>
 inline LaneF32<K> EvaluateSpectral(const Vec3<LaneF32<K>> &c, const LaneF32<K> &wl)
 {
     // f(x) = S(c0x^2 + c1x + c2), S is a sigmoid, x is the wavelength
     // S(x) = 1/2 + x/(2 * sqrt(1 + x^2))
-    LaneF32<K> x = FMA(FMA(c.x, wl, c.y), wl, c.z);
-    return FMA(.5f * x, Rsqrt(FMA(x, x, 1)), .5f);
+    LaneF32<K> x      = FMA(FMA(c.x, wl, c.y), wl, c.z);
+    LaneF32<K> result = FMA(.5f * x, Rsqrt(FMA(x, x, 1)), .5f);
+    return Select(IsInf(result), Select(result > 0, 1.f, 0.f), result);
 }
 
 inline f32 SigmoidPolynomialMaxValue(const Vec3f &c)
 {
-    f32 result = Max(EvaluateSpectral(c, LambdaMin), EvaluateSpectral(c, LambdaMax));
+    f32 result = Max(EvaluateSpectral<1>(c, LambdaMin), EvaluateSpectral<1>(c, LambdaMax));
     f32 lambda = -c.y / (2 * c.x);
     if (lambda >= LambdaMin && lambda <= LambdaMax)
     {
-        result = Max(result, EvaluateSpectral(c, lambda));
+        result = Max(result, EvaluateSpectral<1>(c, lambda));
     }
     return result;
 }
@@ -529,14 +530,14 @@ inline f32 SigmoidPolynomialMaxValue(const Vec3f &c)
 struct RGBAlbedoSpectrum
 {
     f32 operator()(f32 lambda) const { return Evaluate(lambda); }
-    f32 Evaluate(f32 lambda) const { return EvaluateSpectral(coeffs, lambda); }
+    f32 Evaluate(f32 lambda) const { return EvaluateSpectral<1>(coeffs, lambda); }
     f32 MaxValue() const { return SigmoidPolynomialMaxValue(coeffs); }
     SampledSpectrum Sample(const SampledWavelengths &lambda) const
     {
         SampledSpectrum s;
         for (i32 i = 0; i < NSampledWavelengths; i++)
         {
-            s[i] = EvaluateSpectral(coeffs, lambda[i]);
+            s[i] = EvaluateSpectral<1>(coeffs, lambda[i]);
         }
         return s;
     }
@@ -551,7 +552,7 @@ struct RGBAlbedoSpectrum
         SampledSpectrumN s;
         for (i32 i = 0; i < NSampledWavelengths; i++)
         {
-            s[i] = EvaluateSpectral(coeffs, lambda[i]);
+            s[i] = EvaluateSpectral<IntN>(coeffs, lambda[i]);
         }
         return s;
     }
@@ -564,14 +565,14 @@ struct RGBAlbedoSpectrum
 struct RGBUnboundedSpectrum
 {
     f32 operator()(f32 lambda) const { return Evaluate(lambda); }
-    f32 Evaluate(f32 lambda) const { return scale * EvaluateSpectral(coeffs, lambda); }
+    f32 Evaluate(f32 lambda) const { return scale * EvaluateSpectral<1>(coeffs, lambda); }
     f32 MaxValue() const { return scale * SigmoidPolynomialMaxValue(coeffs); }
     SampledSpectrum Sample(const SampledWavelengths &lambda) const
     {
         SampledSpectrum s;
         for (i32 i = 0; i < NSampledWavelengths; i++)
         {
-            s[i] = scale * EvaluateSpectral(coeffs, lambda[i]);
+            s[i] = scale * EvaluateSpectral<1>(coeffs, lambda[i]);
         }
         return s;
     }
@@ -590,7 +591,7 @@ struct RGBUnboundedSpectrum
         SampledSpectrumN s;
         for (i32 i = 0; i < NSampledWavelengths; i++)
         {
-            s[i] = EvaluateSpectral(coeffs, lambda[i]);
+            s[i] = EvaluateSpectral<IntN>(coeffs, lambda[i]);
         }
         return s;
     }
@@ -611,7 +612,7 @@ struct RGBIlluminantSpectrum
     f32 Evaluate(f32 lambda) const
     {
         if (!illuminant) return 0.f;
-        return scale * EvaluateSpectral(coeffs, lambda) * (*illuminant)(lambda);
+        return scale * EvaluateSpectral<1>(coeffs, lambda) * (*illuminant)(lambda);
     }
     f32 MaxValue() const
     {
@@ -624,7 +625,7 @@ struct RGBIlluminantSpectrum
         SampledSpectrum s;
         for (i32 i = 0; i < NSampledWavelengths; i++)
         {
-            s[i] = scale * EvaluateSpectral(coeffs, lambda[i]);
+            s[i] = scale * EvaluateSpectral<1>(coeffs, lambda[i]);
         }
         return s * illuminant->Sample(lambda);
     }

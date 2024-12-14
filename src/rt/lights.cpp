@@ -390,9 +390,9 @@ ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image,
     : image(image), renderFromLight(renderFromLight), imageColorSpace(imageColorSpace),
       sceneRadius(sceneRadius), scale(scale)
 {
-    f32 *values  = image.GetSamplingDistribution(arena);
-    distribution = PiecewiseConstant2D(arena, values, image.width, image.height,
-                                       Vec2f(0.f, 0.f), Vec2f(1.f, 1.f));
+    const f32 *values = image.GetSamplingDistribution(arena);
+    distribution      = PiecewiseConstant2D(arena, values, image.width, image.height,
+                                            Vec2f(0.f, 0.f), Vec2f(1.f, 1.f));
 
     u32 size     = image.width * image.height;
     f32 div      = 1.f / size;
@@ -408,12 +408,23 @@ ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image,
         }
         avg += values[i] * div;
     }
-    for (u32 i = 0; i < size; i++)
+    f32 *compensatedValues = PushArrayNoZero(arena, f32, size);
+    if (allSame)
     {
-        values[i] = Max(0.f, values[i] - avg);
+        for (u32 i = 0; i < size; i++)
+        {
+            compensatedValues[i] = 1.f;
+        }
     }
-    compensatedDistribution = PiecewiseConstant2D(arena, values, image.width, image.height,
-                                                  Vec2f(0.f, 0.f), Vec2f(1.f, 1.f));
+    else
+    {
+        for (u32 i = 0; i < size; i++)
+        {
+            compensatedValues[i] = Max(0.f, values[i] - avg);
+        }
+    }
+    compensatedDistribution = PiecewiseConstant2D(
+        arena, compensatedValues, image.width, image.height, Vec2f(0.f, 0.f), Vec2f(1.f, 1.f));
 }
 
 SampledSpectrum ImageInfiniteLight::ImageLe(Vec2f uv, const SampledWavelengths &lambda) const
@@ -473,8 +484,8 @@ LE_INF(ImageInfiniteLight)
 //////////////////////////////
 // Morphism
 //
-// TODO: find the class of each sample, add to a corresponding queue, when the queue is full
-// enough, generate the samples
+// TODO: find the class of each sample, add to a corresponding queue, when the queue is
+// full enough, generate the samples
 static LightSample SampleLi(Scene2 *scene, LightHandle lightHandle,
                             const SurfaceInteraction &intr, const SampledWavelengths &lambda,
                             Vec2f &u, bool allowIncompletePDF = false)
@@ -512,8 +523,8 @@ static f32 PDF_Li(Scene2 *scene, LightHandle lightHandle, Vec3f &prevIntrP,
         case LightClass::DistantLight:
             return (f32)DistantLight::PDF_Li(scene, lightIndex, prevIntrP, intr,
                                              allowIncompletePDF);
-        // case LightClass_InfUnf: return (f32)UniformInfiniteLight::PDF_Li(scene, lightIndex,
-        // prevIntrP, intr, allowIncompletePDF); case LightClass_InfImg: return
+        // case LightClass_InfUnf: return (f32)UniformInfiniteLight::PDF_Li(scene,
+        // lightIndex, prevIntrP, intr, allowIncompletePDF); case LightClass_InfImg: return
         // (f32)ImageInfiniteLight::PDF_Li(scene, lightIndex, prevIntrP, intr,
         // allowIncompletePDF);
         default: Assert(0); return 0.f;
@@ -535,9 +546,9 @@ static SampledSpectrum Le(Scene2 *scene, LightHandle lightHandle, Vec3f &n, Vec3
             return DistantLight::Le(&scene->lights.Get<DistantLight>()[lightIndex], n, w,
                                     lambda);
         // case LightClass_InfUnf: return
-        // UniformInfiniteLight::Le(&scene->uniformInfLights[lightIndex], n, w, lambda); case
-        // LightClass_InfImg: return ImageInfiniteLight::Le(&scene->imageInfLights[lightIndex],
-        // n, w, lambda);
+        // UniformInfiniteLight::Le(&scene->uniformInfLights[lightIndex], n, w, lambda);
+        // case LightClass_InfImg: return
+        // ImageInfiniteLight::Le(&scene->imageInfLights[lightIndex], n, w, lambda);
         default: Assert(0); return SampledSpectrum(0.f);
     }
 }

@@ -20,7 +20,8 @@ struct Vec4
         };
     };
 
-    Vec4() {} //: e{zero, zero, zero, zero} {}
+    Vec4() {}                      //: e{zero, zero, zero, zero} {}
+    Vec4(f32 x) : e{x, x, x, x} {} //: e{zero, zero, zero, zero} {}
     __forceinline Vec4(ZeroTy) : e{zero, zero, zero, zero} {}
     Vec4(T e0, T e1, T e2, T e3) : e{e0, e1, e2, e3} {}
     Vec4(const Vec4<T> &other)
@@ -31,8 +32,16 @@ struct Vec4
         w = other.w;
     }
     template <typename T1>
-    Vec4(const Vec4<T1> &other) : x(T(other.x)), y(T(other.y)), z(T(other.z))
+    Vec4(const Vec4<T1> &other) : x(T(other.x)), y(T(other.y)), z(T(other.z)), w(T(other.z))
     {
+    }
+    Vec4 &operator=(const Vec4<T> &other)
+    {
+        x = other.x;
+        y = other.y;
+        z = other.z;
+        w = other.w;
+        return *this;
     }
 
     template <typename T1>
@@ -41,6 +50,7 @@ struct Vec4
         x = T(other.x);
         y = T(other.y);
         z = T(other.z);
+        w = T(other.w);
         return *this;
     }
     T &operator[](i32 i)

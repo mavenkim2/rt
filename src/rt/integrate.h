@@ -168,12 +168,13 @@ struct PtexTexture
         Ptex::String error;
         Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
         Assert(texture);
+        u32 numFaces = texture->getInfo().numFaces;
+        Assert(faceIndex < numFaces);
         Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
         Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
         Assert(nc == texture->numChannels());
 
         // TODO: ray differentials
-        // f32 filterWidth = 0.75f;
         // Vec2f uv(0.5f, 0.5f);
 
         f32 out[nc];
@@ -221,9 +222,9 @@ struct PtexTexture
                     rgb[i] = u8(Clamp(out[i] * 255.f + 0.5f, 0.f, 255.f));
                 }
                 Vec3f rgbF = SRGBToLinear(rgb);
-                out[0] = rgbF.x;
-                out[1] = rgbF.y;
-                out[2] = rgbF.z;
+                out[0]     = rgbF.x;
+                out[1]     = rgbF.y;
+                out[2]     = rgbF.z;
             }
             for (i32 i = 0; i < nc; i++)
             {

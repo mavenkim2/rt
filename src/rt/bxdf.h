@@ -970,14 +970,14 @@ struct CoatedBxDF
                 if (flipWi) w = -w;
                 f32 absPdf = PDF(wo, w, mode);
                 f *= absPdf / pdf;
-                return BSDFSample(f, w, pdf, u32(flags), 1.f);
+                return BSDFSample(f, w, absPdf, u32(flags), 1.f);
             }
             f *= AbsCosTheta(w);
         }
         return {};
     }
 
-    SampledSpectrum EvaluateSample(const Vec3f &wOut, const Vec3f &wIn, f32 &pdf,
+    SampledSpectrum EvaluateSample(const Vec3f &wOut, const Vec3f &wIn, f32 &outPdf,
                                    TransportMode mode) const
     {
         Vec3f wo = wOut;
@@ -1066,7 +1066,7 @@ struct CoatedBxDF
                         f32 wt             = 1;
                         SampledSpectrumN p = phase.EvaluateSample(-w, -wis.wi, &_pdf);
                         if (!IsSpecular(exitInterface.Flags()))
-                            wt = PowerHeuristic(1, wis.pdf, 1, pdf);
+                            wt = PowerHeuristic(1, wis.pdf, 1, _pdf);
                         f += beta * albedo * p * wt * Tr(zp - exitZ, wis.wi) * wis.f / wis.pdf;
 
                         // Sample phase function and update layered path state
@@ -1101,7 +1101,7 @@ struct CoatedBxDF
                 if (z == exitZ)
                 {
                     // Account for reflection at _exitInterface_
-                    uc        = r();
+                    uc            = r();
                     BSDFSample bs = exitInterface.GenerateSample(-w, uc, Vec2f(r(), r()), mode,
                                                                  BxDFFlags::Reflection);
                     if (!bs.f || bs.pdf == 0 || bs.wi.z == 0) break;
@@ -1151,7 +1151,7 @@ struct CoatedBxDF
             }
         }
 
-        pdf = PDF(wOut, wIn, mode);
+        outPdf = PDF(wOut, wIn, mode);
         return f / f32(nSamples);
     }
 

@@ -158,7 +158,7 @@ struct PiecewiseConstant1D
 
         Assert(total != 0.f);
         Assert(total == total);
-        funcInt = total;
+        funcInt = total * (maxD - minD) / numValues;
         for (u32 i = 1; i <= numValues; i++)
         {
             cdf[i] /= total;
@@ -186,7 +186,8 @@ struct PiecewiseConstant2D
     Vec2f minD, maxD;
 
     PiecewiseConstant2D() {}
-    PiecewiseConstant2D(Arena *arena, f32 *values, u32 nu, u32 nv, Vec2f minD, Vec2f maxD)
+    PiecewiseConstant2D(Arena *arena, const f32 *values, u32 nu, u32 nv, Vec2f minD,
+                        Vec2f maxD)
         : minD(minD), maxD(maxD)
     {
         conditional = PushArrayNoZero(arena, PiecewiseConstant1D, nv);

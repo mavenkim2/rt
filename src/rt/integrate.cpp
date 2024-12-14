@@ -459,6 +459,8 @@ void Render(Arena *arena, RenderParams2 &params)
     u32 tileCountY = (height + tileHeight - 1) / tileHeight;
     u32 taskCount  = tileCountX * tileCountY;
 
+    // TODO: instead of adding all tasks at once, add them to the thread queue
+    // once the # queued is under a certain threshold (to save space)
     Image image;
     image.width         = width;
     image.height        = height;
@@ -484,7 +486,7 @@ void Render(Arena *arena, RenderParams2 &params)
             for (u32 x = minPixelBounds.x; x < maxPixelBounds.x; x++)
             {
                 Vec2u pPixel(x, y);
-                if (pPixel.x == 0 && pPixel.y == 582)
+                if (pPixel.x == 532 && pPixel.y == 390)
                 {
                     int stop = 5;
                 }

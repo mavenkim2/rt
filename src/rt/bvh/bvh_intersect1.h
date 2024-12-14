@@ -435,7 +435,8 @@ struct TriangleIntersectorBase
             si.materialIDs = indices->materialID.data;
             // TODO: properly obtain the light handle
             si.lightIndices = 0;
-            si.faceIndices  = primID;
+            // TODO: only for moana is this true
+            si.faceIndices = primID / 2;
             return true;
         }
         return false;

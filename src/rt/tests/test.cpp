@@ -497,7 +497,7 @@ void TriangleMeshBVHTest(Arena *arena)
     Mat4 cameraFromRaster = Inverse(rasterFromCamera);
 
     // ocean mesh
-#if 1
+#if 0
     TriangleMesh mesh =
         LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
     ConstantTexture<1> ct(0.f);
@@ -512,10 +512,11 @@ void TriangleMeshBVHTest(Arena *arena)
     TriangleMesh mesh =
         LoadPLY(arena, "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
     PtexTexture<3> texture("../data/island/textures/isIronwoodA1/Color/trunk0001_geo.ptx");
+
     PtexShader<3> rfl(texture);
     CoatedDiffuseMaterial1 mat(CoatedDiffuseMaterialPtex(ConstantTexture<1>(.65), rfl,
                                                          ConstantTexture<1>(0),
-                                                         ConstantSpectrum(0)),
+                                                         ConstantSpectrum(1.5f)),
                                NullShader());
     scene->materials.Set<CoatedDiffuseMaterial1>(&mat, 1);
     Scene2::PrimitiveIndices ids[] = {
@@ -576,7 +577,7 @@ void TriangleMeshBVHTest(Arena *arena)
     params.width            = width;
     params.height           = height;
     params.filterRadius     = Vec2f(0.5f);
-    params.spp              = 256;//64;
+    params.spp              = 64;
     params.maxDepth         = 10;
     params.lensRadius       = 0.003125;
     params.focalLength      = 1675.3383;
