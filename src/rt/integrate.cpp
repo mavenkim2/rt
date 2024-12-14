@@ -17,6 +17,7 @@ namespace rt
 //      - ray differentials
 
 // after that's done:
+// - adaptive sampling
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
 // - equiangular sampling
 // - bdpt, metropolis, vcm/upbp, mcm?
@@ -136,6 +137,7 @@ CoatedDiffuseBxDF CoatedDiffuseMaterial<RghShader, RflShader, AlbedoShader, Spec
     {
         rghShaders[i]     = &materials[i]->rghShader;
         rflShaders[i]     = &materials[i]->rflShader;
+        albShaders[i]     = &materials[i]->albShader;
         Set(eta, i)       = materials[i]->ior(Get(lambda[0], i));
         Set(gg, i)        = materials[i]->g;
         Set(thickness, i) = materials[i]->thickness;
@@ -572,20 +574,38 @@ f32 PowerHeuristic(u32 numA, f32 pdfA, u32 numB, f32 pdfB)
 void EvaluateMaterial(Arena *arena, SurfaceInteraction &si, BSDF *bsdf,
                       SampledWavelengths &lambda)
 {
-    using MaterialTypes = Scene2::MaterialTypes;
     Dispatch(
         [&](auto t) {
             using MaterialType = std::decay_t<decltype(t)>;
             MaterialType::Evaluate(arena, si, lambda, bsdf);
         },
-        Scene2::MaterialTypes(), MaterialHandle::GetType(si.materialIDs));
+        MaterialTypes(), u32(MaterialHandle::GetType(si.materialIDs)));
+}
+
+Vec3f OffsetRayOrigin(const Vec3f &p, const Vec3f &err, const Vec3f &n,
+                      const Vec3f &wi) // const Vec3f &v)
+{
+    f32 d        = Dot(err, Abs(n));
+    d            = Select(Dot(wi, n) < 0, -d, d);
+    Vec3f offset = n * d;
+    Vec3f outP   = p + offset;
+
+    for (int i = 0; i < 3; ++i)
+    {
+        if (offset[i] > 0) outP[i] = NextFloatUp(outP[i]);
+        else if (offset[i] < 0) outP[i] = NextFloatDown(outP[i]);
+    }
+    return outP;
 }
 
 bool Occluded(Ray2 &r, BVHNodeN nodePtr, SurfaceInteraction &si, LightSample &ls)
 {
     const f32 shadowRayEpsilon = 1 - .0001f;
-    Ray2 ray(si.p, ls.wi, shadowRayEpsilon);
-    return BVH4TriangleIntersector1::Occluded(ray, nodePtr);
+
+    Vec3f from = OffsetRayOrigin(si.p, si.pError, si.n, ls.wi);
+    // Vec3f to                   = OffsetRayOrigin(ls.p, ls.rayOrigin);
+    Ray2 ray(from, ls.wi, shadowRayEpsilon);
+    return BVH4TriangleCLIntersectorCmp1::Occluded(ray, nodePtr);
 }
 
 template <typename Sampler>
@@ -743,16 +763,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         ray.o  = si.p;
 
         // Offset ray along geometric normal
-        f32 d        = Dot(si.pError, Abs(si.n));
-        d            = Select(Dot(sample.wi, si.n) < 0, -d, d);
-        Vec3f offset = si.n * d;
-        ray.o        = si.p + offset;
-
-        for (int i = 0; i < 3; ++i)
-        {
-            if (offset[i] > 0) ray.o[i] = NextFloatUp(ray.o[i]);
-            else if (offset[i] < 0) ray.o[i] = NextFloatDown(ray.o[i]);
-        }
+        ray.o = OffsetRayOrigin(si.p, si.pError, si.n, sample.wi);
 
         ray.d    = sample.wi;
         ray.tFar = pos_inf;

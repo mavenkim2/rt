@@ -1,6 +1,7 @@
 #ifndef INTEGRATE_H
 #define INTEGRATE_H
 
+#include "color.h"
 #include "math/simd_include.h"
 #include "spectrum.h"
 #include <Ptexture.h>
@@ -122,24 +123,6 @@ enum class ColorEncoding
     SRGB,
 };
 
-template <i32 K>
-struct VecBase;
-
-template <>
-struct VecBase<1>
-{
-    using Type = LaneNF32;
-};
-
-template <>
-struct VecBase<3>
-{
-    using Type = Vec3lfn;
-};
-
-template <i32 K>
-using Veclfn = typename VecBase<K>::Type;
-
 template <i32 nc>
 struct ConstantTexture
 {
@@ -232,10 +215,15 @@ struct PtexTexture
         {
             if (encoding == ColorEncoding::SRGB)
             {
+                u8 rgb[3];
                 for (i32 i = 0; i < nc; i++)
                 {
-                    out[i] = ExactLinearToSRGB(out[i]);
+                    rgb[i] = u8(Clamp(out[i] * 255.f + 0.5f, 0.f, 255.f));
                 }
+                Vec3f rgbF = SRGBToLinear(rgb);
+                out[0] = rgbF.x;
+                out[1] = rgbF.y;
+                out[2] = rgbF.z;
             }
             for (i32 i = 0; i < nc; i++)
             {
@@ -457,10 +445,14 @@ struct Material2
         BxDFShader *bxdfs[IntN];
         const NormalShader *normalShaders[IntN];
 
-        auto *materials = GetScene()->materials.Get<Material2<BxDFShader, NormalShader>>();
+        using MaterialType = Material2<BxDFShader, NormalShader>;
+        auto *materials    = GetScene()->materials.Get<MaterialType>();
         for (u32 i = 0; i < IntN; i++)
         {
-            auto &material   = materials[Get(intr.materialIDs, i)];
+            MaterialHandle handle = Get(intr.materialIDs, i);
+            u32 index             = handle.GetIndex();
+            Assert(index < GetScene()->materials.GetCount<MaterialType>());
+            auto &material   = materials[index];
             bxdfs[i]         = &material.bxdfShader;
             normalShaders[i] = &material.normalShader;
         }
@@ -473,30 +465,6 @@ struct Material2
         new (result) BSDFBase<BxDFOut>(bxdf, intr.shading.dpdu, intr.shading.n);
     }
 };
-
-// TODO: automate this :)
-template <i32 K>
-using PtexShader = ImageTextureShader<PtexTexture<K>, RGBAlbedoSpectrum>;
-
-using BumpMapPtex         = BumpMap<PtexShader<1>>;
-using DiffuseMaterialPtex = DiffuseMaterial<PtexShader<3>>;
-using DiffuseTransmissionMaterialPtex =
-    DiffuseTransmissionMaterial<PtexShader<3>, PtexShader<3>>;
-
-// NOTE: isotropic roughness, constant ior
-using DielectricMaterialConstant = DielectricMaterial<ConstantTexture<1>, ConstantSpectrum>;
-
-// Material types
-using DiffuseMaterialBumpMapPtex = Material2<DiffuseMaterialPtex, BumpMapPtex>;
-using DiffuseTransmissionMaterialBumpMapPtex =
-    Material2<DiffuseTransmissionMaterialPtex, BumpMapPtex>;
-using DielectricMaterialBumpMapPtex = Material2<DielectricMaterialConstant, BumpMapPtex>;
-
-using CoatedDiffuseMaterialPtex = CoatedDiffuseMaterial<ConstantTexture<1>, PtexShader<3>,
-                                                        ConstantTexture<1>, ConstantSpectrum>;
-
-using CoatedDiffuseMaterial1 = Material2<CoatedDiffuseMaterialPtex, NullShader>;
-using DielectricMaterialBase = Material2<DielectricMaterialConstant, NullShader>;
 
 static const u32 invalidVolume = 0xffffffff;
 struct Ray2

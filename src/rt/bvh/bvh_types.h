@@ -516,9 +516,11 @@ struct Triangle
     void GetData(Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N], u32 outGeomIDs[N],
                  u32 outPrimIDs[N]) const
     {
+        Scene2 *scene = GetScene();
         for (u32 i = 0; i < N; i++)
         {
-            TriangleMesh *mesh = &GetScene()->triangleMeshes[geomIDs[i]];
+            Assert(geomIDs[i] < scene->numTriMeshes);
+            TriangleMesh *mesh = scene->triangleMeshes[geomIDs[i]];
             u32 indices[3];
             if (mesh->indices)
             {

@@ -428,10 +428,6 @@ SAMPLE_LI(ImageInfiniteLight)
 {
     const ImageInfiniteLight *light =
         &scene->lights.Get<ImageInfiniteLight>()[u32(lightIndices)];
-    if (u.x == 0.99999702f && u.y == 0.421200514f)
-    {
-        int stop = 5;
-    }
 
     f32 pdf;
     Vec2f uv;

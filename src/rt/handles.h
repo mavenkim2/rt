@@ -24,10 +24,77 @@ namespace rt
                            6, 5, 4, 3, 2, 1))
 
 // TODO: temporary
-enum MaterialType
+// enum MaterialType
+// {
+//     MT_DielectricMaterial,
+//     MT_CoatedDiffuse,
+// };
+
+template <typename BxDFShader, typename NormalShader>
+struct Material2;
+
+template <i32 K>
+struct VecBase;
+
+template <>
+struct VecBase<1>
 {
-    MT_DielectricMaterial,
+    using Type = LaneNF32;
 };
+
+template <>
+struct VecBase<3>
+{
+    using Type = Vec3lfn;
+};
+
+template <i32 K>
+using Veclfn = typename VecBase<K>::Type;
+
+struct NullShader;
+template <i32 nc>
+struct ConstantTexture;
+template <i32 nc>
+struct PtexTexture;
+template <typename TextureType, typename RGBSpectrum>
+struct ImageTextureShader;
+template <typename TextureShader>
+struct BumpMap;
+template <typename RflShader>
+struct DiffuseMaterial;
+template <typename RflShader, typename TrmShader>
+struct DiffuseTransmissionMaterial;
+template <typename RghShader, typename Spectrum>
+struct DielectricMaterial;
+template <typename RghShader, typename RflShader, typename AlbedoShader, typename Spectrum>
+struct CoatedDiffuseMaterial;
+
+// TODO: automate this :)
+template <i32 K>
+using PtexShader = ImageTextureShader<PtexTexture<K>, RGBAlbedoSpectrum>;
+
+using BumpMapPtex         = BumpMap<PtexShader<1>>;
+using DiffuseMaterialPtex = DiffuseMaterial<PtexShader<3>>;
+using DiffuseTransmissionMaterialPtex =
+    DiffuseTransmissionMaterial<PtexShader<3>, PtexShader<3>>;
+
+// NOTE: isotropic roughness, constant ior
+using DielectricMaterialConstant = DielectricMaterial<ConstantTexture<1>, ConstantSpectrum>;
+
+// Material types
+using DiffuseMaterialBumpMapPtex = Material2<DiffuseMaterialPtex, BumpMapPtex>;
+using DiffuseTransmissionMaterialBumpMapPtex =
+    Material2<DiffuseTransmissionMaterialPtex, BumpMapPtex>;
+using DielectricMaterialBumpMapPtex = Material2<DielectricMaterialConstant, BumpMapPtex>;
+
+using CoatedDiffuseMaterialPtex = CoatedDiffuseMaterial<ConstantTexture<1>, PtexShader<3>,
+                                                        ConstantTexture<1>, ConstantSpectrum>;
+
+using CoatedDiffuseMaterial1 = Material2<CoatedDiffuseMaterialPtex, NullShader>;
+using DielectricMaterialBase = Material2<DielectricMaterialConstant, NullShader>;
+
+CREATE_ENUM_AND_TYPE_PACK(MaterialTypes, MaterialType, DielectricMaterialBase,
+                          CoatedDiffuseMaterial1);
 
 struct MaterialHandle
 {

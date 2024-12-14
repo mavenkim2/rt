@@ -765,7 +765,7 @@ struct Scene2
     // using ShapeTypes = TypePack<QuadMesh, Disk>;
     // using VolumeTypes        = TypePack<NanoVDBVolume>;
     // using MaterialTypes = TypePack<DielectricMaterialBase>;
-    using MaterialTypes = TypePack<CoatedDiffuseMaterial1>;
+    // using MaterialTypes = TypePack<CoatedDiffuseMaterial1>;
 
     // TODO: this really should adjacent in memory to the primitives
     struct PrimitiveIndices

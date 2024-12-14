@@ -383,7 +383,7 @@ struct TriangleIntersectorBase
 
             si.p = w * p[0] + u * p[1] + v * p[2];
             // TODO: still iffy about this
-            si.pError = gamma(12) * (Abs(w * p[0]) + Abs(u * p[1]) + Abs(v * p[2]));
+            si.pError = gamma(5) * (Abs(w * p[0]) + Abs(u * p[1]) + Abs(v * p[2]));
 
             Vec3f dp02  = p[0] - p[2];
             Vec3f dp12  = p[1] - p[2];

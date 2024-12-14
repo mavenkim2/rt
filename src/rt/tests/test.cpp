@@ -451,6 +451,7 @@ void TriangleMeshBVHTest(Arena *arena)
     // - make sure i'm shooting the right camera rays
 
     // TODO:
+    // - coated materials
     // - add the second ocean layer
     // - render a quad mesh properly
     // - render two instances of a quad mesh properly
@@ -496,7 +497,7 @@ void TriangleMeshBVHTest(Arena *arena)
     Mat4 cameraFromRaster = Inverse(rasterFromCamera);
 
     // ocean mesh
-#if 0
+#if 1
     TriangleMesh mesh =
         LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
     ConstantTexture<1> ct(0.f);
@@ -504,10 +505,10 @@ void TriangleMeshBVHTest(Arena *arena)
     DielectricMaterialBase mat(DielectricMaterialConstant(ct, spec), NullShader());
     scene->materials.Set<DielectricMaterialBase>(&mat, 1);
     Scene2::PrimitiveIndices ids[] = {
-        Scene2::PrimitiveIndices(LightHandle(), MaterialHandle(MT_DielectricMaterial, 0)),
+        Scene2::PrimitiveIndices(LightHandle(),
+                                 MaterialHandle(MaterialType::DielectricMaterialBase, 0)),
     };
-    scene->primIndices = ids;
-#endif
+#else
     TriangleMesh mesh =
         LoadPLY(arena, "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
     PtexTexture<3> texture("../data/island/textures/isIronwoodA1/Color/trunk0001_geo.ptx");
@@ -516,6 +517,13 @@ void TriangleMeshBVHTest(Arena *arena)
                                                          ConstantTexture<1>(0),
                                                          ConstantSpectrum(0)),
                                NullShader());
+    scene->materials.Set<CoatedDiffuseMaterial1>(&mat, 1);
+    Scene2::PrimitiveIndices ids[] = {
+        Scene2::PrimitiveIndices(LightHandle(),
+                                 MaterialHandle(MaterialType::CoatedDiffuseMaterial1, 0)),
+    };
+#endif
+    scene->primIndices = ids;
 
     u32 numFaces = mesh.numIndices / 3;
     // convert to "render space" (i.e. world space centered around the camera)
@@ -568,7 +576,7 @@ void TriangleMeshBVHTest(Arena *arena)
     params.width            = width;
     params.height           = height;
     params.filterRadius     = Vec2f(0.5f);
-    params.spp              = 64;
+    params.spp              = 256;//64;
     params.maxDepth         = 10;
     params.lensRadius       = 0.003125;
     params.focalLength      = 1675.3383;

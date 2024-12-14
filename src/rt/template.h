@@ -249,6 +249,11 @@ struct ArrayTuple<TypePack<Ts...>>
     {
         return ::Get<T *>(arrays);
     }
+    template <typename T>
+    __forceinline const u32 GetCount() const
+    {
+        return counts[IndexOf<T, Types>::count];
+    }
 
     // __forceinline const auto &Get(u32 type, u32 index) const
     // {
