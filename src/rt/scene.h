@@ -6,7 +6,7 @@
 #include <nanovdb/util/IO.h>
 #include <nanovdb/util/SampleFromVoxels.h>
 
-#include "lights.h"
+// #include "lights.h"
 namespace rt
 {
 
@@ -606,6 +606,7 @@ struct PhaseFunction
         Vec3f wi = SampleHenyeyGreenstein(wo, g, u, &pdf);
         return PhaseFunctionSample{wi, pdf, pdf};
     }
+    f32 PDF(Vec3f wo, Vec3f wi) const { return HenyeyGreenstein(wo, wi, g); }
 };
 
 struct NanoVDBVolume
@@ -763,7 +764,8 @@ struct Scene2
 {
     // using ShapeTypes = TypePack<QuadMesh, Disk>;
     // using VolumeTypes        = TypePack<NanoVDBVolume>;
-    using MaterialTypes = TypePack<DielectricMaterialBase>;
+    // using MaterialTypes = TypePack<DielectricMaterialBase>;
+    using MaterialTypes = TypePack<CoatedDiffuseMaterial1>;
 
     // TODO: this really should adjacent in memory to the primitives
     struct PrimitiveIndices

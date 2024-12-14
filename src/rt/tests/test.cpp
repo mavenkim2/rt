@@ -496,10 +496,26 @@ void TriangleMeshBVHTest(Arena *arena)
     Mat4 cameraFromRaster = Inverse(rasterFromCamera);
 
     // ocean mesh
+#if 0
     TriangleMesh mesh =
         LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
-    // Triangle mesh2 =
-    //     LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00002.ply");
+    ConstantTexture<1> ct(0.f);
+    ConstantSpectrum spec(1.1f);
+    DielectricMaterialBase mat(DielectricMaterialConstant(ct, spec), NullShader());
+    scene->materials.Set<DielectricMaterialBase>(&mat, 1);
+    Scene2::PrimitiveIndices ids[] = {
+        Scene2::PrimitiveIndices(LightHandle(), MaterialHandle(MT_DielectricMaterial, 0)),
+    };
+    scene->primIndices = ids;
+#endif
+    TriangleMesh mesh =
+        LoadPLY(arena, "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
+    PtexTexture<3> texture("../data/island/textures/isIronwoodA1/Color/trunk0001_geo.ptx");
+    PtexShader<3> rfl(texture);
+    CoatedDiffuseMaterial1 mat(CoatedDiffuseMaterialPtex(ConstantTexture<1>(.65), rfl,
+                                                         ConstantTexture<1>(0),
+                                                         ConstantSpectrum(0)),
+                               NullShader());
 
     u32 numFaces = mesh.numIndices / 3;
     // convert to "render space" (i.e. world space centered around the camera)
@@ -545,15 +561,6 @@ void TriangleMeshBVHTest(Arena *arena)
     scene->nodePtr        = bvh;
     scene->triangleMeshes = &mesh;
     scene->numTriMeshes   = 1;
-
-    ConstantTexture<1> ct(0.f);
-    ConstantSpectrum spec(1.1f);
-    DielectricMaterialBase mat(DielectricMaterialConstant(ct, spec), NullShader());
-    scene->materials.Set<DielectricMaterialBase>(&mat, 1);
-    Scene2::PrimitiveIndices ids[] = {
-        Scene2::PrimitiveIndices(LightHandle(), MaterialHandle(MT_DielectricMaterial, 0)),
-    };
-    scene->primIndices = ids;
 
     RenderParams2 params;
     params.cameraFromRaster = cameraFromRaster;

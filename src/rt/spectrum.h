@@ -240,6 +240,16 @@ typedef SampledSpectrumBase<f32> SampledSpectrum;
 typedef SampledSpectrumBase<LaneNF32> SampledSpectrumN;
 
 template <typename T>
+SampledSpectrumBase<T> Clamp(const SampledSpectrumBase<T> &s, T &u, T &v)
+{
+    SampledSpectrumBase<T> result;
+    for (u32 i = 0; i < NSampledWavelengths; i++)
+    {
+        result.values[i] = Clamp(s[i], u, v);
+    }
+    return result;
+}
+template <typename T>
 SampledSpectrumBase<T> FastExp(const SampledSpectrumBase<T> &a)
 {
     SampledSpectrumBase<T> result;

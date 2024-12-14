@@ -2,6 +2,7 @@
 #define INTEGRATE_H
 
 #include "math/simd_include.h"
+#include "spectrum.h"
 #include <Ptexture.h>
 
 namespace rt
@@ -174,7 +175,7 @@ struct PtexTexture
     }
 
     Vec Evaluate(SurfaceInteractionsN &intrs, const Vec4lfn &filterWidths, u32 index,
-                 Vec *dfdu = 0, Vec *dfdv = 0) const
+                 Vec *dfduOut = 0, Vec *dfdvOut = 0) const
     {
         Vec4f filterWidth = Get(filterWidths, index);
         Vec2f uv          = Get(intrs.uv, index);
@@ -196,7 +197,7 @@ struct PtexTexture
         filter->eval(out, 0, nc, faceIndex, uv[0], uv[1], filterWidth[0], filterWidth[1],
                      filterWidth[2], filterWidth[3]);
 
-        if (dfdu && dfdv)
+        if (dfduOut && dfdvOut)
         {
             // Finite differencing
             f32 du = .5f * (Abs(filterWidth[0]) + Abs(filterWidth[2]));
@@ -204,6 +205,18 @@ struct PtexTexture
             f32 dv = .5f * (Abs(filterWidth[1]) + Abs(filterWidth[3]));
             dv     = Select(dv == 0.f, 0.0005f, dv);
 
+            f32 *dfdu;
+            f32 *dfdv;
+            if constexpr (nc == 1)
+            {
+                dfdu = dfduOut;
+                dfdv = dfdvOut;
+            }
+            else
+            {
+                dfdu = dfduOut->e;
+                dfdv = dfdvOut->e;
+            }
             filter->eval(dfdu, 0, nc, faceIndex, uv[0] + du, uv[1], filterWidth[0],
                          filterWidth[1], filterWidth[2], filterWidth[3]);
             filter->eval(dfdv, 0, nc, faceIndex, uv[0], uv[1] + dv, filterWidth[0],
@@ -263,6 +276,7 @@ struct ImageTextureShader
     using Vec                    = std::conditional_t<numChannels == 3, Vec3f, f32>;
     TextureType texture;
     ImageTextureShader() {}
+    ImageTextureShader(TextureType texture) : texture(texture) {}
 
     static auto Evaluate(SurfaceInteractionsN &intrs, ImageTextureShader **textures,
                          Vec4lfn &filterWidths, SampledWavelengthsN &lambda)
@@ -368,6 +382,7 @@ struct DiffuseMaterial
     RflShader rflShader;
 
     MaterialHeaders(DiffuseMaterial);
+    DiffuseMaterial(RflShader rflShader) : rflShader(rflShader) {}
 };
 
 template <typename RflShader, typename TrmShader>
@@ -378,6 +393,10 @@ struct DiffuseTransmissionMaterial
     TrmShader trmShader;
 
     MaterialHeaders(DiffuseTransmissionMaterial);
+    DiffuseTransmissionMaterial(RflShader rflShader, TrmShader trmShader)
+        : rflShader(rflShader), trmShader(trmShader)
+    {
+    }
 };
 
 template <typename RghShader, typename Spectrum>
@@ -387,8 +406,31 @@ struct DielectricMaterial
     RghShader rghShader;
     Spectrum ior;
 
-    DielectricMaterial(RghShader rghShader, Spectrum ior) : rghShader(rghShader), ior(ior) {}
     MaterialHeaders(DielectricMaterial);
+    DielectricMaterial(RghShader rghShader, Spectrum ior) : rghShader(rghShader), ior(ior) {}
+};
+
+// NOTE: dielectric interface above a diffuse
+template <typename RghShader, typename RflShader, typename AlbedoShader, typename Spectrum>
+struct CoatedDiffuseMaterial
+{
+    using BxDF = CoatedDiffuseBxDF;
+    RghShader rghShader;
+    RflShader rflShader;
+    AlbedoShader albShader;
+
+    Spectrum ior;
+    f32 thickness, g;
+    u32 maxDepth, nSamples;
+
+    MaterialHeaders(CoatedDiffuseMaterial);
+    CoatedDiffuseMaterial(RghShader rghShader, RflShader rflShader, AlbedoShader albShader,
+                          Spectrum ior, f32 thickness = .01, f32 g = 0, u32 maxDepth = 10,
+                          u32 nSamples = 1)
+        : rghShader(rghShader), rflShader(rflShader), albShader(albShader),
+          thickness(thickness), g(g), ior(ior), maxDepth(maxDepth), nSamples(nSamples)
+    {
+    }
 };
 
 struct NullShader
@@ -450,6 +492,10 @@ using DiffuseTransmissionMaterialBumpMapPtex =
     Material2<DiffuseTransmissionMaterialPtex, BumpMapPtex>;
 using DielectricMaterialBumpMapPtex = Material2<DielectricMaterialConstant, BumpMapPtex>;
 
+using CoatedDiffuseMaterialPtex = CoatedDiffuseMaterial<ConstantTexture<1>, PtexShader<3>,
+                                                        ConstantTexture<1>, ConstantSpectrum>;
+
+using CoatedDiffuseMaterial1 = Material2<CoatedDiffuseMaterialPtex, NullShader>;
 using DielectricMaterialBase = Material2<DielectricMaterialConstant, NullShader>;
 
 static const u32 invalidVolume = 0xffffffff;

@@ -2,6 +2,7 @@
 #include "lights.h"
 #include "bsdf.h"
 #include "scene.h"
+#include "spectrum.h"
 #include <type_traits>
 
 namespace rt
@@ -117,6 +118,56 @@ DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(SurfaceInteract
                                                                  SampledWavelengthsN &lambda)
 {
     return DielectricMaterial::GetBxDF(intr, &this);
+}
+
+template <typename RghShader, typename RflShader, typename AlbedoShader, typename Spectrum>
+CoatedDiffuseBxDF CoatedDiffuseMaterial<RghShader, RflShader, AlbedoShader, Spectrum>::GetBxDF(
+    SurfaceInteractionsN &intr, CoatedDiffuseMaterial **materials, Vec4lfn &filterWidths,
+    SampledWavelengthsN &lambda)
+{
+    RghShader *rghShaders[IntN];
+    RflShader *rflShaders[IntN];
+    AlbedoShader *albShaders[IntN];
+    LaneNF32 eta, gg, thickness;
+    LaneNU32 maxDepth, nSamples;
+
+    // TODO: how do I properly simd this material?
+    for (u32 i = 0; i < IntN; i++)
+    {
+        rghShaders[i]     = &materials[i]->rghShader;
+        rflShaders[i]     = &materials[i]->rflShader;
+        Set(eta, i)       = materials[i]->ior(Get(lambda[0], i));
+        Set(gg, i)        = materials[i]->g;
+        Set(thickness, i) = materials[i]->thickness;
+        Set(maxDepth, i)  = materials[i]->maxDepth;
+        Set(nSamples, i)  = materials[i]->nSamples;
+    }
+
+    eta = Select(eta == 0.f, 1.f, eta);
+    // NOTE: for dispersion (i.e. wavelength dependent IORs), we terminate every wavelength
+    // except the first
+    if constexpr (!std::is_same_v<Spectrum, ConstantSpectrum>)
+    {
+        lambda.TerminateSecondary();
+    }
+
+    SampledSpectrumN reflectance = RflShader::Evaluate(intr, rflShaders, filterWidths, lambda);
+    SampledSpectrumN a           = SampledSpectrumN(
+        Clamp(AlbedoShader::Evaluate(intr, albShaders, filterWidths, lambda), 0.f, 1.f));
+
+    LaneNF32 roughness = RghShader::Evaluate(intr, rghShaders, filterWidths, lambda);
+    roughness          = TrowbridgeReitzDistribution::RoughnessToAlpha(roughness);
+    TrowbridgeReitzDistribution distrib(roughness, roughness);
+
+    return CoatedDiffuseBxDF(DielectricBxDF(eta, distrib), DiffuseBxDF(reflectance), a, gg,
+                             thickness, maxDepth, nSamples);
+}
+
+template <typename RghShader, typename RflShader, typename AlbedoShader, typename Spectrum>
+CoatedDiffuseBxDF CoatedDiffuseMaterial<RghShader, RflShader, AlbedoShader, Spectrum>::GetBxDF(
+    SurfaceInteractionsN &intr, Vec4lfn &filterWidths, SampledWavelengthsN &lambda)
+{
+    return CoatedDiffuseMaterial::GetBxDF(intr, &this);
 }
 
 typedef u32 PathFlags;

@@ -201,14 +201,20 @@ struct DiffuseBxDF;
 struct ConductorBxDF;
 struct DielectricBxDF;
 struct DiffuseTransmissionBxDF;
+template <typename TopBxDF, typename BottomBxDF>
+struct CoatedBxDF;
+typedef CoatedBxDF<DielectricBxDF, DiffuseBxDF> CoatedDiffuseBxDF;
+typedef CoatedBxDF<DielectricBxDF, ConductorBxDF> CoatedConductorBxDF;
+
 // struct ThinDielectricBxDF;
 
 enum class TransportMode;
 struct BSDFSample;
 enum class BxDFFlags;
 
-using BxDFTaggedPointer = TaggedPointer<DiffuseBxDF, ConductorBxDF, DielectricBxDF,
-                                        DiffuseTransmissionBxDF>; //, ThinDielectricBxDF>;
+using BxDFTaggedPointer =
+    TaggedPointer<DiffuseBxDF, ConductorBxDF, DielectricBxDF, DiffuseTransmissionBxDF,
+                  CoatedDiffuseBxDF>; //, ThinDielectricBxDF>;
 struct BxDFMethods
 {
     SampledSpectrumBase<LaneNF32> (*EvaluateSample)(void *, const Vec3lfn &, const Vec3lfn &,
@@ -261,6 +267,7 @@ template struct BxDFCRTP<DiffuseBxDF>;
 template struct BxDFCRTP<DiffuseTransmissionBxDF>;
 template struct BxDFCRTP<ConductorBxDF>;
 template struct BxDFCRTP<DielectricBxDF>;
+template struct BxDFCRTP<CoatedDiffuseBxDF>;
 // template struct BxDFCRTP<ThinDielectricBxDF>;
 
 } // namespace rt
