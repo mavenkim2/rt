@@ -1083,7 +1083,43 @@ int main(int argc, char *argv[])
 
     const u32 count = 3000000;
 
-    TriangleMeshBVHTest(arena);
+    Options options;
+    bool setOptions = false;
+    for (int i = 1; i < argc; i++)
+    {
+        string arg = Str8C(argv[i]);
+        if (Contains(arg, "-pixel"))
+        {
+            if (i + 2 >= argc)
+            {
+                printf("Option -pixel requires two integer coordinates, specified as --pixel "
+                       "x y");
+            }
+            string x = Str8C(argv[i + 1]);
+            string y = Str8C(argv[i + 2]);
+            if (!IsInt(x) || !IsInt(y))
+            {
+                printf("-pixel requires two integer coordinates");
+            }
+
+            options.pixelX = ConvertToUint(x);
+            options.pixelY = ConvertToUint(y);
+            setOptions     = true;
+        }
+    }
+
+#if 0
+    TestRay(arena, &options);
+#else
+    if (setOptions)
+    {
+        TriangleMeshBVHTest(arena, &options);
+    }
+    else
+    {
+        TriangleMeshBVHTest(arena);
+    }
+#endif
     // CameraRayTest(arena);
     // BVHTraverse4Test();
 

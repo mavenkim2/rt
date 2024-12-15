@@ -437,7 +437,156 @@ void VolumeRenderingTest(Arena *arena, string filename)
 //                                             TransportMode::Radiance, BxDFFlags::RT);
 // }
 
-void TriangleMeshBVHTest(Arena *arena)
+void TestRay(Arena *arena, Options *options)
+{
+    scene_        = PushStruct(arena, Scene2);
+    Scene2 *scene = GetScene();
+    // TempArena temp    = ScratchStart(0, 0);
+    u32 numProcessors = OS_NumProcessors();
+    Arena **arenas    = PushArray(arena, Arena *, numProcessors);
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        arenas[i] = ArenaAlloc(16); // ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
+    }
+
+    // Camera
+    u32 width  = 1920;
+    u32 height = 804;
+    Vec3f pCamera(-1139.0159, 23.286734, 1479.7947);
+    Vec3f look(244.81433, 238.80714, 560.3801);
+    Vec3f up(-0.107149, .991691, .07119);
+
+    Mat4 cameraFromRender = LookAt(pCamera, look, up) * Translate(pCamera);
+
+    Mat4 renderFromCamera = Inverse(cameraFromRender);
+    // TODO: going to have to figure out how to handle this automatically
+    Mat4 NDCFromCamera = Mat4::Perspective2(Radians(69.50461), 2.386946);
+    // maps to raster coordinates
+    Mat4 rasterFromNDC = Scale(Vec3f(f32(width), -f32(height), 1.f)) *
+                         Scale(Vec3f(1.f / 2.f, 1.f / 2.f, 1.f)) *
+                         Translate(Vec3f(1.f, -1.f, 0.f));
+    Mat4 rasterFromCamera = rasterFromNDC * NDCFromCamera;
+    Mat4 cameraFromRaster = Inverse(rasterFromCamera);
+
+    // ocean mesh
+#if 0
+    TriangleMesh mesh =
+        LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
+    ConstantTexture<1> ct(0.f);
+    ConstantSpectrum spec(1.1f);
+    DielectricMaterialBase mat(DielectricMaterialConstant(ct, spec), NullShader());
+    scene->materials.Set<DielectricMaterialBase>(&mat, 1);
+    Scene2::PrimitiveIndices ids[] = {
+        Scene2::PrimitiveIndices(LightHandle(),
+                                 MaterialHandle(MaterialType::DielectricMaterialBase, 0)),
+    };
+#else
+    TriangleMesh mesh =
+        LoadPLY(arena, "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
+    PtexTexture<3> texture("../data/island/textures/isIronwoodA1/Color/trunk0001_geo.ptx");
+
+    PtexShader<3> rfl(texture);
+    CoatedDiffuseMaterial1 mat(CoatedDiffuseMaterialPtex(ConstantTexture<1>(.65), rfl,
+                                                         ConstantTexture<1>(0),
+                                                         ConstantSpectrum(1.5f)),
+                               NullShader());
+    scene->materials.Set<CoatedDiffuseMaterial1>(&mat, 1);
+    Scene2::PrimitiveIndices ids[] = {
+        Scene2::PrimitiveIndices(LightHandle(),
+                                 MaterialHandle(MaterialType::CoatedDiffuseMaterial1, 0)),
+    };
+#endif
+    scene->primIndices = ids;
+
+    u32 numFaces = mesh.numIndices / 3;
+    // convert to "render space" (i.e. world space centered around the camera)
+    for (u32 i = 0; i < mesh.numVertices; i++)
+    {
+        mesh.p[i] -= pCamera;
+    }
+    // swaps the handedness
+    Bounds geomBounds;
+    Bounds centBounds;
+    PrimRefCompressed *refs = GenerateAOSData(arena, &mesh, numFaces, geomBounds, centBounds);
+
+    // environment map
+    f32 sceneRadius             = 0.5f * Max(geomBounds.maxP[0] - geomBounds.minP[0],
+                                             Max(geomBounds.maxP[1] - geomBounds.minP[1],
+                                                 geomBounds.maxP[2] - geomBounds.minP[2]));
+    AffineSpace renderFromLight = AffineSpace::Scale(-1, 1, 1) *
+                                  AffineSpace::Rotate(Vec3f(-1, 0, 0), Radians(90)) *
+                                  AffineSpace::Rotate(Vec3f(0, 0, 1), Radians(65));
+    renderFromLight = AffineSpace::Translate(-pCamera) * renderFromLight;
+
+    f32 scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
+    Assert(scale == 0.00935831666f);
+    ImageInfiniteLight infLight(
+        arena, LoadFile("../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png"),
+        &renderFromLight, RGBColorSpace::sRGB, sceneRadius, scale);
+    scene->lights.Set<ImageInfiniteLight>(&infLight, 1);
+    scene->numLights = 1;
+
+    BuildSettings settings;
+    settings.intCost = 0.3f;
+
+    RecordAOSSplits record;
+    record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+    record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+    record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
+
+    BVHNodeN bvh          = BuildQuantizedTriSBVH(settings, arenas, &mesh, refs, record);
+    scene->nodePtr        = bvh;
+    scene->triangleMeshes = &mesh;
+    scene->numTriMeshes   = 1;
+
+    RenderParams2 params;
+    params.cameraFromRaster = cameraFromRaster;
+    params.renderFromCamera = renderFromCamera;
+    params.width            = width;
+    params.height           = height;
+    params.filterRadius     = Vec2f(0.5f);
+    params.spp              = 64;
+    params.maxDepth         = 10;
+    params.lensRadius       = 0.003125;
+    params.focalLength      = 1675.3383;
+
+    Assert(options);
+    params.pixelMin = Vec2u(options->pixelX, options->pixelY);
+    params.pixelMax = params.pixelMin + Vec2u(1, 1);
+
+    PerformanceCounter counter = OS_StartCounter();
+    Ray2 ray(Vec3f(-0.000990606961f, 0.00102612865f, -0.0012504491f),
+             Vec3f(0.625233054f, 0.130877733f, -0.769385993f), pos_inf);
+    ZSobolSampler sampler(params.spp, Vec2i(width, height));
+    sampler.StartPixelSample(Vec2i(options->pixelX, options->pixelY), 0);
+    sampler.Get1D();
+    sampler.GetPixel2D();
+    sampler.Get1D();
+    sampler.Get2D();
+    SampledWavelengths lambda;
+    lambda[0]     = 505.219482f;
+    lambda[1]     = 569.81488f;
+    lambda[2]     = 653.67749f;
+    lambda[3]     = 420.59668f;
+    lambda.pdf[0] = 0.0037282363f;
+    lambda.pdf[1] = 0.00374009763f;
+    lambda.pdf[2] = 0.00210720813f;
+    lambda.pdf[3] = 0.00207162322f;
+    BSDF bsdf;
+    SurfaceInteraction si(Vec3f(0, 0, 0), Vec3f(-0.816864014f, 0.185460061f, 0.546202898f),
+                          Vec2f(0.892280161f, 0.00525155338f));
+    // si.dpdu         = Vec3f(5.24487305f, 13.2926178f, 3.33044434f);
+    // si.dpdv         = Vec3f(-0.245361328f, 0.427093506f, -0.511962891f);
+    si.shading.n    = Vec3f(-0.781642318f, 0.200223491f, 0.590716302f);
+    si.shading.dpdu = Vec3f(5.65853882f, 13.1866531f, 3.0178206f);
+    si.shading.dpdv = Vec3f(-7.18533278f, 5.70144796f, -11.4402199f);
+    si.materialIDs  = MaterialHandle(MaterialType::CoatedDiffuseMaterial1, 0).data;
+    si.faceIndices  = 73946;
+    EvaluateMaterial(arena, si, &bsdf, lambda);
+    // Li(ray, sampler, params.maxDepth, lambda);
+}
+
+void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
 {
     // DONE:
     // - make the materials polymorphic so that the integrator can access them
@@ -511,7 +660,8 @@ void TriangleMeshBVHTest(Arena *arena)
 #else
     TriangleMesh mesh =
         LoadPLY(arena, "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
-    PtexTexture<3> texture("../data/island/textures/isIronwoodA1/Color/trunk0001_geo.ptx");
+    PtexTexture<3> texture("../data/island/textures/isIronwoodA1/Color/trunk0001_geo.ptx",
+                           ColorEncoding::Gamma);
 
     PtexShader<3> rfl(texture);
     CoatedDiffuseMaterial1 mat(CoatedDiffuseMaterialPtex(ConstantTexture<1>(.65), rfl,
@@ -533,10 +683,6 @@ void TriangleMeshBVHTest(Arena *arena)
         mesh.p[i] -= pCamera;
     }
     // swaps the handedness
-    // for (u32 i = 0; i < numFaces; i++)
-    // {
-    //     Swap(mesh.indices[3 * i + 1], mesh.indices[3 * i + 2]);
-    // }
     Bounds geomBounds;
     Bounds centBounds;
     PrimRefCompressed *refs = GenerateAOSData(arena, &mesh, numFaces, geomBounds, centBounds);
@@ -581,6 +727,12 @@ void TriangleMeshBVHTest(Arena *arena)
     params.maxDepth         = 10;
     params.lensRadius       = 0.003125;
     params.focalLength      = 1675.3383;
+
+    if (options)
+    {
+        params.pixelMin = Vec2u(options->pixelX, options->pixelY);
+        params.pixelMax = params.pixelMin + Vec2u(1, 1);
+    }
 
     PerformanceCounter counter = OS_StartCounter();
     Render(arena, params);

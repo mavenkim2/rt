@@ -548,18 +548,24 @@ struct DielectricBxDF
         if (Dot(wm, wi) * cosTheta_i < 0 || Dot(wm, wo) * cosTheta_o < 0) return {};
 
         f32 F = FrDielectric(Dot(wo, wm), eta);
+        f32 T = 1 - F;
         if (reflect)
         {
             // Compute reflection at rough dielectric interface
+            pdf = mfDistrib.PDF(wo, wm) / (4 * AbsDot(wo, wm)) * F / (F + T);
             return SampledSpectrum(mfDistrib.D(wm) * mfDistrib.G(wo, wi) * F /
                                    std::abs(4 * cosTheta_i * cosTheta_o));
         }
         else
         {
             // Compute transmission at rough dielectric interface
-            f32 denom = Sqr(Dot(wi, wm) + Dot(wo, wm) / etap) * cosTheta_i * cosTheta_o;
-            f32 ft    = mfDistrib.D(wm) * (1 - F) * mfDistrib.G(wo, wi) *
+            f32 denomPdf = Sqr(Dot(wi, wm) + Dot(wo, wm) / etap);
+            f32 denom    = denomPdf * cosTheta_i * cosTheta_o;
+            f32 ft       = mfDistrib.D(wm) * (1 - F) * mfDistrib.G(wo, wi) *
                      std::abs(Dot(wi, wm) * Dot(wo, wm) / denom);
+
+            f32 dwm_dwi = AbsDot(wi, wm) / denomPdf;
+            pdf         = mfDistrib.PDF(wo, wm) * dwm_dwi * T / (F + T);
             // Account for non-symmetry with transmission to different medium
             if (mode == TransportMode::Radiance) ft /= Sqr(etap);
 
@@ -890,37 +896,37 @@ struct CoatedBxDF
                               BxDFFlags sampleFlags = BxDFFlags::RT) const
     {
         // NOTE: assumes two sided, meaning that it always first intersects the top layer
-        bool flipWi       = false;
-        bool specularPath = true;
-        Vec3f wo          = wOut;
+        bool flipWi = false;
+        Vec3f wo    = wOut;
         if (wo.z < 0)
         {
             flipWi = true;
             wo     = -wo;
         }
 
-        BSDFSample bs = top.GenerateSample(wo, uc, u, mode);
-        if (bs.pdf == 0 || !bs.f || bs.wi.z == 0) return {};
+        BSDFSample sampleInitial = top.GenerateSample(wo, uc, u, mode);
+        if (sampleInitial.pdf == 0 || !sampleInitial.f || sampleInitial.wi.z == 0) return {};
 
-        if (bs.IsReflective())
+        if (sampleInitial.IsReflective())
         {
             if (flipWi)
             {
-                bs.wi = -bs.wi;
+                sampleInitial.wi = -sampleInitial.wi;
             }
             // TODO: maybe a bit hacky but whatever
-            f32 pdf = PDF(wOut, bs.wi, mode);
-            bs.f *= pdf / bs.pdf;
-            bs.pdf = pdf;
-            return bs;
+            f32 pdf = PDF(wOut, sampleInitial.wi, mode);
+            sampleInitial.f *= pdf / sampleInitial.pdf;
+            sampleInitial.pdf = pdf;
+            return sampleInitial;
         }
-        Vec3f w = bs.wi;
+        bool specularPath = sampleInitial.IsSpecular();
+        Vec3f w           = sampleInitial.wi;
 
         RNG rng(Hash(wo), Hash(uc, u));
         auto r = [&rng]() { return Min(rng.Uniform<f32>(), oneMinusEpsilon); };
 
-        SampledSpectrum f = bs.f * AbsCosTheta(w);
-        f32 pdf           = bs.pdf;
+        SampledSpectrum f = sampleInitial.f * AbsCosTheta(w);
+        f32 pdf           = sampleInitial.pdf;
 
         f32 z = thickness;
         PhaseFunction p(g);
@@ -962,13 +968,13 @@ struct CoatedBxDF
             pdf *= sample.pdf;
             specularPath &= sample.IsSpecular();
             w = sample.wi;
-            if (bs.IsTransmissive())
+            if (sample.IsTransmissive())
             {
                 BxDFFlags flags =
                     SameHemisphere(wo, w) ? BxDFFlags::Reflection : BxDFFlags::Transmission;
                 flags |= specularPath ? BxDFFlags::Specular : BxDFFlags::Glossy;
                 if (flipWi) w = -w;
-                f32 absPdf = PDF(wo, w, mode);
+                f32 absPdf = PDF(wOut, w, mode);
                 f *= absPdf / pdf;
                 return BSDFSample(f, w, absPdf, u32(flags), 1.f);
             }

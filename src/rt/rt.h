@@ -35,7 +35,7 @@ namespace rt
 const Vec3f INVALID_VEC = Vec3f((f32)U32Max, (f32)U32Max, (f32)U32Max);
 
 // NOTE: all member have to be u64
-struct ThreadStatistics
+struct alignas(CACHE_LINE_SIZE) ThreadStatistics
 {
     // u64 rayPrimitiveTests;
     // u64 rayAABBTests;
@@ -65,6 +65,11 @@ struct ThreadMemoryStatistics
 
 static ThreadStatistics *threadLocalStatistics;
 static ThreadMemoryStatistics *threadMemoryStatistics;
+
+struct Options
+{
+    u32 pixelX, pixelY;
+};
 
 struct HitRecord
 {

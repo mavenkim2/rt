@@ -120,6 +120,7 @@ struct : public PtexErrorHandler
 enum class ColorEncoding
 {
     Linear,
+    Gamma,
     SRGB,
 };
 
@@ -225,6 +226,12 @@ struct PtexTexture
                 out[0]     = rgbF.x;
                 out[1]     = rgbF.y;
                 out[2]     = rgbF.z;
+            }
+            else 
+            {
+                out[0] = Pow(out[0], 2.2f);
+                out[1] = Pow(out[1], 2.2f);
+                out[2] = Pow(out[2], 2.2f);
             }
             for (i32 i = 0; i < nc; i++)
             {
@@ -598,6 +605,8 @@ struct RenderParams2
     Mat4 renderFromCamera;
     u32 width;
     u32 height;
+    Vec2u pixelMin = Vec2u(0, 0);
+    Vec2u pixelMax = Vec2u(0, 0);
     Vec2f filterRadius;
     u32 spp;
     u32 maxDepth;

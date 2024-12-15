@@ -409,6 +409,15 @@ string PathSkipLastSlash(string str)
     return str;
 }
 
+bool IsInt(string str)
+{
+    for (u64 i = 0; i < str.size; i++)
+    {
+        if (!CharIsDigit(str.str[i])) return false;
+    }
+    return true;
+}
+
 //////////////////////////////
 // Hash
 //

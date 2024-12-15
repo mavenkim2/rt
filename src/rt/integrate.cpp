@@ -453,10 +453,21 @@ void Render(Arena *arena, RenderParams2 &params)
     f32 maxComponentValue  = 10.f;
 
     // parallel for over tiles
+    u32 pixelWidth  = width;
+    u32 pixelHeight = height;
+    if (params.pixelMin != params.pixelMax)
+    {
+        params.pixelMax = Min(params.pixelMax, Vec2u(width, height));
+        params.pixelMin = Min(params.pixelMin, Vec2u(width, height));
+        Assert(params.pixelMax[0] > params.pixelMin[0]);
+        Assert(params.pixelMax[1] > params.pixelMin[1]);
+        pixelWidth  = params.pixelMax[0] - params.pixelMin[0];
+        pixelHeight = params.pixelMax[1] - params.pixelMin[1];
+    }
     u32 tileWidth  = 64;
     u32 tileHeight = 64;
-    u32 tileCountX = (width + tileWidth - 1) / tileWidth;
-    u32 tileCountY = (height + tileHeight - 1) / tileHeight;
+    u32 tileCountX = (pixelWidth + tileWidth - 1) / tileWidth;
+    u32 tileCountY = (pixelHeight + tileHeight - 1) / tileHeight;
     u32 taskCount  = tileCountX * tileCountY;
 
     // TODO: instead of adding all tasks at once, add them to the thread queue
@@ -470,9 +481,12 @@ void Render(Arena *arena, RenderParams2 &params)
     scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
         u32 tileX = jobID % tileCountX;
         u32 tileY = jobID / tileCountX;
-        Vec2u minPixelBounds(tileWidth * tileX, tileHeight * tileY);
-        Vec2u maxPixelBounds(Min(tileWidth * (tileX + 1), width),
-                             Min((tileY + 1) * tileHeight, height));
+        Vec2u minPixelBounds(params.pixelMin[0] + tileWidth * tileX,
+                             params.pixelMin[1] + tileHeight * tileY);
+        Vec2u maxPixelBounds(
+            Min(params.pixelMin[0] + tileWidth * (tileX + 1), params.pixelMin[0] + pixelWidth),
+            Min(params.pixelMin[1] + tileHeight * (tileY + 1),
+                params.pixelMin[1] + pixelHeight));
 
         Assert(maxPixelBounds.x >= minPixelBounds.x && minPixelBounds.x >= 0 &&
                maxPixelBounds.x <= width);
@@ -486,7 +500,7 @@ void Render(Arena *arena, RenderParams2 &params)
             for (u32 x = minPixelBounds.x; x < maxPixelBounds.x; x++)
             {
                 Vec2u pPixel(x, y);
-                if (pPixel.x == 532 && pPixel.y == 390)
+                if (pPixel.x == 442 && pPixel.y == 342)
                 {
                     int stop = 5;
                 }
@@ -762,7 +776,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
 
         // Spawn new ray
         prevSi = si;
-        ray.o  = si.p;
+        // ray.o  = si.p;
 
         // Offset ray along geometric normal
         ray.o = OffsetRayOrigin(si.p, si.pError, si.n, sample.wi);
@@ -771,7 +785,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         ray.tFar = pos_inf;
 
         // Russian Roulette
-        SampledSpectrum rrBeta = beta * sample.eta;
+        SampledSpectrum rrBeta = beta * etaScale;
         f32 q                  = rrBeta.MaxComponentValue();
         if (depth > 1 && q < 1.f)
         {

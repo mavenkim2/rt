@@ -1922,6 +1922,43 @@ struct HeuristicSpatialSplits
                 break;
             }
         }
+
+#endif
+#if 0
+        if constexpr (std::is_same_v<TriangleMesh, SceneType>)
+        {
+            TriangleMesh *mesh = scene;
+            for (u32 i = outLeft.start; i < outLeft.End(); i++)
+            {
+                const PrimRef *ref = &primRefs[i];
+                Lane8F32 v         = Lane8F32::LoadU(ref);
+                u32 indices[3]     = {mesh->indices[3 * ref->primID + 0],
+                                      mesh->indices[3 * ref->primID + 1],
+                                      mesh->indices[3 * ref->primID + 2]};
+                Vec3f p[3] = {mesh->p[indices[0]], mesh->p[indices[1]], mesh->p[indices[2]]};
+                for (u32 j = 0; j < 3; j++)
+                {
+                    Lane4F32 pTest = Lane4F32(p[j]);
+                    u32 mask = Movemask(Lane8F32(-pTest, pTest) <= outLeft.geomBounds) & 0x77;
+                    Assert(mask == 0x77);
+                }
+            }
+            for (u32 i = outRight.start; i < outRight.End(); i++)
+            {
+                const PrimRef *ref = &primRefs[i];
+                Lane8F32 v         = Lane8F32::LoadU(ref);
+                u32 indices[3]     = {mesh->indices[3 * ref->primID + 0],
+                                      mesh->indices[3 * ref->primID + 1],
+                                      mesh->indices[3 * ref->primID + 2]};
+                Vec3f p[3] = {mesh->p[indices[0]], mesh->p[indices[1]], mesh->p[indices[2]]};
+                for (u32 j = 0; j < 3; j++)
+                {
+                    Lane4F32 pTest = Lane4F32(p[j]);
+                    u32 mask = Movemask(Lane8F32(-pTest, pTest) <= outRight.geomBounds) & 0x77;
+                    Assert(mask == 0x77);
+                }
+            }
+        }
 #endif
         ArenaPopTo(temp.arena, split.allocPos);
     }

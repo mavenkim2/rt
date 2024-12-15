@@ -107,8 +107,8 @@ struct BVHTraverser<4, types>
         {
             // If numNodes <= 1, then numNode will be 0, 1, 2, 4, or 8. x/2 - x/8 maps to
             // 0, 0, 1, 2, 3
-            stack[stackPtr] = {node->Child((intersectFlags >> 1) - (intersectFlags >> 3)),
-                               t_dcba[0]};
+            u32 nodeIndex   = (intersectFlags >> 1) - (intersectFlags >> 3);
+            stack[stackPtr] = {node->Child(nodeIndex), t_dcba[nodeIndex]};
             stackPtr += numNodes;
         }
         else
@@ -186,7 +186,6 @@ struct BVHIntersector<4, types, Intersector>
         {
             Assert(stackPtr <= ArrayLength(stack));
             StackEntry entry = stack[--stackPtr];
-            if (entry.dist > ray.tFar) continue;
 
             if (entry.ptr.IsLeaf())
             {
@@ -276,7 +275,7 @@ struct TriangleIntersectorBase
 
         if (None(mask)) return false;
 
-#if 0
+#if 1
         f32 maxX = Max(Abs(e1.x), Abs(e2.x));
         f32 maxY = Max(Abs(e1.y), Abs(e2.y));
         f32 maxZ = Max(Abs(e1.z), Abs(e2.z));
@@ -351,6 +350,10 @@ struct TriangleIntersectorBase
 
             TriangleMesh *mesh = &scene->triangleMeshes[Get(itr.geomIDs, index)];
             u32 primID         = Get(itr.primIDs, index);
+            if (primID / 2 == 73946)
+            {
+                int stop = 5;
+            }
 
             u32 vertexIndices[3];
             if (mesh->indices)
@@ -383,7 +386,7 @@ struct TriangleIntersectorBase
 
             si.p = w * p[0] + u * p[1] + v * p[2];
             // TODO: still iffy about this
-            si.pError = gamma(5) * (Abs(w * p[0]) + Abs(u * p[1]) + Abs(v * p[2]));
+            si.pError = gamma(6) * (Abs(w * p[0]) + Abs(u * p[1]) + Abs(v * p[2]));
 
             Vec3f dp02  = p[0] - p[2];
             Vec3f dp12  = p[1] - p[2];
