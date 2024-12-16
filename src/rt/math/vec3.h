@@ -369,16 +369,6 @@ __forceinline Vec3lu<K> Flooru(const Vec3lf<K> &v)
 
 __forceinline Vec3f ToVec3f(const Lane4F32 &l) { return Vec3f(l[0], l[1], l[2]); }
 
-inline Vec3f Reflect(const Vec3f &v, const Vec3f &norm) { return v - 2 * Dot(v, norm) * norm; }
-
-inline Vec3f Refract(const Vec3f &uv, const Vec3f &n, f32 refractiveIndexRatio)
-{
-    f32 cosTheta   = Min(Dot(-uv, n), 1.f);
-    Vec3f perp     = refractiveIndexRatio * (uv + cosTheta * n);
-    Vec3f parallel = -Sqrt(Abs(1.f - LengthSquared(perp))) * n;
-    return perp + parallel;
-}
-
 template <typename T>
 inline void CoordinateSystem(const Vec3<T> &v1, Vec3<T> *v2, Vec3<T> *v3)
 {

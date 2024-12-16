@@ -615,7 +615,8 @@ bool Occluded(Ray2 &r, BVHNodeN nodePtr, SurfaceInteraction &si, LightSample &ls
     Vec3f from = OffsetRayOrigin(si.p, si.pError, si.n, ls.wi);
     // Vec3f to                   = OffsetRayOrigin(ls.p, ls.rayOrigin);
     Ray2 ray(from, ls.samplePoint - from, shadowRayEpsilon);
-    return BVH4QuadCLIntersectorCmp8::Occluded(ray, nodePtr);
+    // return BVH4QuadCLIntersectorCmp8::Occluded(ray, nodePtr);
+    return BVH4TriangleCLIntersectorCmp8::Occluded(ray, nodePtr);
 }
 
 template <typename Sampler>
@@ -639,8 +640,8 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         // angles the reflected ray is re-intersecting with the ocean, which causes the ray to
         // effectively transmit when it should reflect
 
-        bool intersect = BVH4QuadCLIntersectorCmp8::Intersect(ray, scene->nodePtr, si);
-        // bool intersect = BVH4TriangleCLIntersectorCmp8::Intersect(ray, scene->nodePtr, si);
+        // bool intersect = BVH4QuadCLIntersectorCmp8::Intersect(ray, scene->nodePtr, si);
+        bool intersect = BVH4TriangleCLIntersectorCmp8::Intersect(ray, scene->nodePtr, si);
         // BVH4TriangleCLIntersectorCmp1::Intersect(ray, scene->nodePtr, si);
 
         // If no intersection, sample "infinite" lights (e.g environment maps, sun, etc.)
@@ -729,9 +730,9 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
             f32 lightU = sampler.Get1D();
             f32 pmf;
             LightHandle handle = UniformLightSample(scene, lightU, &pmf);
+            Vec2f sample       = sampler.Get2D();
             if (bool(handle))
             {
-                Vec2f sample = sampler.Get2D();
                 // Sample point on the light source
                 LightSample ls = SampleLi(scene, handle, si, lambda, sample, true);
                 if (ls.pdf)
@@ -760,7 +761,8 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         }
 
         // sample bsdf, calculate pdf
-        BSDFSample sample = bsdf.GenerateSample(-ray.d, sampler.Get1D(), sampler.Get2D());
+        f32 u             = sampler.Get1D();
+        BSDFSample sample = bsdf.GenerateSample(-ray.d, u, sampler.Get2D());
         if (sample.pdf == 0.f) break;
         beta *= sample.f * AbsDot(si.shading.n, sample.wi) / sample.pdf;
         bsdfPdf        = sample.pdf;

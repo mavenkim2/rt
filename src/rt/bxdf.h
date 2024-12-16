@@ -5,6 +5,10 @@ namespace rt
 {
 
 // TODO: multiple scattering, better hair models, light polarization (ew)
+inline Vec3f Reflect(const Vec3f &v, const Vec3f &norm)
+{
+    return -v + 2 * Dot(v, norm) * norm;
+}
 
 // NOTE: wi and wt point away from the surface point
 MaskF32 Refract(Vec3lfn wi, Vec3lfn n, LaneNF32 eta, LaneNF32 *etap, Vec3lfn *wt)
@@ -19,7 +23,7 @@ MaskF32 Refract(Vec3lfn wi, Vec3lfn n, LaneNF32 eta, LaneNF32 *etap, Vec3lfn *wt
     LaneNF32 sin2Theta_i = Max(0.f, 1 - cosTheta_i * cosTheta_i);
     // Snell's law
     LaneNF32 sin2Theta_t = sin2Theta_i / (eta * eta);
-    // Total internal reflection
+    // Total internal eeflection
 
     mask = sin2Theta_t < 1;
     // if (sin2Theta_t >= 1) return false;
@@ -933,6 +937,13 @@ struct CoatedBxDF
 
         for (u32 depth = 0; depth < maxDepth; depth++)
         {
+            f32 rrBeta = f.MaxComponentValue() / pdf;
+            if (depth > 3 && rrBeta < 0.25f)
+            {
+                f32 q = Max(0.f, 1.f - rrBeta);
+                if (r() < q) return {};
+                pdf *= 1 - q;
+            }
             if (w.z == 0) return {};
             // NOTE: assume homogeneous
             if (albedo)
@@ -945,6 +956,7 @@ struct CoatedBxDF
                 if (0 < zp && zp < thickness)
                 {
                     PhaseFunctionSample sample = p.GenerateSample(-w, Vec2f(r(), r()));
+                    if (sample.pdf == 0 || sample.wi.z == 0) return {};
                     f *= albedo * sample.p;
                     pdf *= sample.pdf;
                     specularPath = false;
@@ -961,8 +973,9 @@ struct CoatedBxDF
 
                 f *= Tr(thickness, w);
             }
-            BSDFSample sample = z == 0 ? bot.GenerateSample(-w, r(), Vec2f(r(), r()), mode)
-                                       : top.GenerateSample(-w, r(), Vec2f(r(), r()), mode);
+            f32 uc0           = r();
+            BSDFSample sample = z == 0 ? bot.GenerateSample(-w, uc0, Vec2f(r(), r()), mode)
+                                       : top.GenerateSample(-w, uc0, Vec2f(r(), r()), mode);
             if (sample.pdf == 0.f || !sample.f || sample.wi.z == 0) return {};
             f *= sample.f;
             pdf *= sample.pdf;

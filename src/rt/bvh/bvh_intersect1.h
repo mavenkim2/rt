@@ -318,7 +318,8 @@ static Mask<LaneF32<N>> TriangleIntersect(const Ray2 &ray, const LaneF32<N> &tFa
 template <typename Mesh>
 static void SurfaceInteractionFromTriangleIntersection(const u32 geomID, const u32 primID,
                                                        const u32 ids[3], f32 u, f32 v, f32 w,
-                                                       SurfaceInteraction &si)
+                                                       SurfaceInteraction &si,
+                                                       bool isSecondTri = false)
 {
     Scene2 *scene = GetScene();
     Mesh *mesh    = scene->Get<Mesh>(geomID);
@@ -344,9 +345,18 @@ static void SurfaceInteractionFromTriangleIntersection(const u32 geomID, const u
     }
     else
     {
-        uv[0] = Vec2f(0, 0);
-        uv[1] = Vec2f(1, 0);
-        uv[2] = Vec2f(1, 1);
+        if (isSecondTri)
+        {
+            uv[0] = Vec2f(1, 1);
+            uv[1] = Vec2f(0, 1);
+            uv[2] = Vec2f(1, 0);
+        }
+        else
+        {
+            uv[0] = Vec2f(0, 0);
+            uv[1] = Vec2f(1, 0);
+            uv[2] = Vec2f(0, 1);
+        }
     }
     Vec3f p[3] = {mesh->p[vertexIndices[0]], mesh->p[vertexIndices[1]],
                   mesh->p[vertexIndices[2]]};
@@ -374,8 +384,8 @@ static void SurfaceInteractionFromTriangleIntersection(const u32 geomID, const u
 
     if (mesh->n)
     {
-        si.shading.n = w * mesh->n[vertexIndices[0]] + u * mesh->n[vertexIndices[1]] +
-                       v * mesh->n[vertexIndices[2]];
+        si.shading.n = u * mesh->n[vertexIndices[1]] + v * mesh->n[vertexIndices[2]] +
+                       w * mesh->n[vertexIndices[0]];
         si.shading.n = LengthSquared(si.shading.n) > 0 ? Normalize(si.shading.n) : si.n;
     }
     else
@@ -395,7 +405,7 @@ static void SurfaceInteractionFromTriangleIntersection(const u32 geomID, const u
 
     si.shading.dpdu = ss;
     si.shading.dpdv = ts;
-    si.uv           = w * uv[0] + u * uv[1] + v * uv[2];
+    si.uv           = u * uv[1] + v * uv[2] + w * uv[0];
     // TODO: get index based on type
     const Scene2::PrimitiveIndices *indices = &scene->primIndices[geomID];
     si.materialIDs                          = indices->materialID.data;
@@ -470,7 +480,6 @@ struct TriangleIntersectorBase<N, Prim<N>>
             f32 w   = 1 - u - v;
             si.tHit = tFar;
             // Assert(u >= 0 && u <= 1 && v >= 0 && v <= 1 && w >= 0 && w <= 1);
-            // TODO: calculate partial derivatives, shading normal, uv etcs from below
             Scene2 *scene = GetScene();
 
             u32 primID = Get(itr.primIDs, index);
@@ -535,7 +544,7 @@ struct QuadIntersectorBase<N, Prim<N>>
             Transpose<N>(v2, triV2);
             Transpose<N>(v3, triV3);
 
-            Mask<LaneF32<N>> mask = TriangleIntersect(ray, itr.t, triV0, triV1, triV2, triItr);
+            Mask<LaneF32<N>> mask = TriangleIntersect(ray, itr.t, triV0, triV1, triV3, triItr);
             triMask               = Select(mask, falseMask, trueMask);
             itr.u                 = Select(mask, triItr.u, itr.u);
             itr.v                 = Select(mask, triItr.v, itr.v);
@@ -546,7 +555,7 @@ struct QuadIntersectorBase<N, Prim<N>>
                 Select(mask, AsFloat(MemSimdU32<N>::LoadU(primIDs)), AsFloat(itr.primIDs)));
             outMask |= mask;
 
-            mask        = TriangleIntersect(ray, itr.t, triV0, triV2, triV3, triItr);
+            mask        = TriangleIntersect(ray, itr.t, triV2, triV3, triV1, triItr);
             triMask     = Select(mask, trueMask, falseMask);
             itr.u       = Select(mask, triItr.u, itr.u);
             itr.v       = Select(mask, triItr.v, itr.v);
@@ -582,25 +591,25 @@ struct QuadIntersectorBase<N, Prim<N>>
             f32 v           = Get(itr.v, index);
             f32 w           = 1 - u - v;
             // Assert(u >= 0 && u <= 1 && v >= 0 && v <= 1 && w >= 0 && w <= 1);
-            // TODO: calculate partial derivatives, shading normal, uv etcs from below
             Scene2 *scene = GetScene();
 
             u32 ids[3];
             u32 primID = Get(itr.primIDs, index);
             if (isSecondTri)
             {
-                ids[0] = 4 * primID + 0;
-                ids[1] = 4 * primID + 2;
-                ids[2] = 4 * primID + 3;
+                ids[0] = 4 * primID + 2;
+                ids[1] = 4 * primID + 3;
+                ids[2] = 4 * primID + 1;
             }
             else
             {
                 ids[0] = 4 * primID + 0;
                 ids[1] = 4 * primID + 1;
-                ids[2] = 4 * primID + 2;
+                ids[2] = 4 * primID + 3;
             }
-            SurfaceInteractionFromTriangleIntersection<QuadMesh>(Get(itr.geomIDs, index),
-                                                                 primID, ids, u, v, w, si);
+            SurfaceInteractionFromTriangleIntersection<QuadMesh>(
+                Get(itr.geomIDs, index), primID, ids, u, v, w, si, isSecondTri);
+
             return true;
         }
         return false;

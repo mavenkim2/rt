@@ -453,17 +453,16 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     // - render a mesh w/ ptex
     // - change the bvh build process to support N-wide leaves (need to change the sah to
     // account for this)
-
-    // TODO:
+    // - render a quad mesh properly
     // - the ironwood tree seems to be a bit brighter than it's supposed to be?
 
-    // - render a quad mesh properly
+    // TODO:
     // - add the second ocean layer
     // - render two instances of a quad mesh properly (i.e. test partial rebraiding)
     // - render the diffuse/diffuse transmission materials properly
-
     // - need to support a bvh with quad/triangle mesh instances
     // - load the scene description and properly instantiate lights/materials/textures
+
     // - render the scene with all quad meshes, then add support for the bspline curves
 
     // once moana is rendered
@@ -499,9 +498,12 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     Mat4 cameraFromRaster = Inverse(rasterFromCamera);
 
     // ocean mesh
-#if 0
-    TriangleMesh mesh =
-        LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply");
+#if 1
+    TriangleMesh meshes[] = {
+        LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply"),
+        LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00002.ply"),
+    };
+
     ConstantTexture<1> ct(0.f);
     ConstantSpectrum spec(1.1f);
     DielectricMaterialBase mat(DielectricMaterialConstant(ct, spec), NullShader());
@@ -509,16 +511,19 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     Scene2::PrimitiveIndices ids[] = {
         Scene2::PrimitiveIndices(LightHandle(),
                                  MaterialHandle(MaterialType::DielectricMaterialBase, 0)),
+        Scene2::PrimitiveIndices(LightHandle(),
+                                 MaterialHandle(MaterialType::DielectricMaterialBase, 0)),
     };
-    u32 numFaces = mesh.numIndices / 3;
-    scene->triangleMeshes = &mesh;
+    u32 numFaces          = meshes[0].numIndices / 3;
+    u32 numFaces2         = meshes[1].numIndices / 3;
+    scene->triangleMeshes = meshes;
     scene->numTriMeshes   = 1;
 #else
     // TriangleMesh mesh =
     //     LoadPLY(arena,
     //     "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
-    QuadMesh mesh = LoadQuadPLY(
-        arena, "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
+    QuadMesh meshes[] = {LoadQuadPLY(
+        arena, "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply")};
     PtexTexture<3> texture("../data/island/textures/isIronwoodA1/Color/trunk0001_geo.ptx",
                            ColorEncoding::Gamma);
 
@@ -532,23 +537,49 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
         Scene2::PrimitiveIndices(LightHandle(),
                                  MaterialHandle(MaterialType::CoatedDiffuseMaterial1, 0)),
     };
-    u32 numFaces     = mesh.numVertices / 4;
-    scene->meshes    = &mesh;
+    u32 numFaces     = meshes[0].numVertices / 4;
+    scene->meshes    = meshes;
     scene->numMeshes = 1;
 #endif
     scene->primIndices = ids;
 
     // convert to "render space" (i.e. world space centered around the camera)
-    for (u32 i = 0; i < mesh.numVertices; i++)
+    for (u32 j = 0; j < ArrayLength(meshes); j++)
     {
-        mesh.p[i] -= pCamera;
+        for (u32 i = 0; i < meshes[j].numVertices; i++)
+        {
+            meshes[j].p[i] -= pCamera;
+        }
     }
-    // swaps the handedness
-    Bounds geomBounds;
-    Bounds centBounds;
-    // PrimRefCompressed *refs = GenerateAOSData(arena, &mesh, numFaces, geomBounds,
-    // centBounds);
-    PrimRefCompressed *refs = GenerateQuadData(arena, &mesh, numFaces, geomBounds, centBounds);
+    Bounds geomBounds, geomBounds2;
+    Bounds centBounds, centBounds2;
+    PrimRefCompressed *refs =
+        GenerateAOSData(arena, &meshes[0], numFaces, geomBounds, centBounds);
+    // PrimRefCompressed *refs2 =
+    //     GenerateAOSData(arena, &meshes[1], numFaces2, geomBounds2, centBounds2);
+    // PrimRefCompressed *refs =
+    //     GenerateQuadData(arena, &meshes[0], numFaces, geomBounds, centBounds);
+
+    // build bvh
+    BuildSettings settings;
+    settings.intCost = 1.f;
+
+    RecordAOSSplits record;
+    record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+    record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+    record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
+
+    // RecordAOSSplits record2;
+    // record2.geomBounds = Lane8F32(-geomBounds2.minP, geomBounds2.maxP);
+    // record2.centBounds = Lane8F32(-centBounds2.minP, centBounds2.maxP);
+    // record2.SetRange(0, numFaces2, u32(numFaces2 * GROW_AMOUNT));
+    BVHNodeN bvh = BuildQuantizedTriSBVH(settings, arenas, &meshes[0], refs, record);
+    // BVHNodeN bvh2 = BuildQuantizedTriSBVH(settings, arenas, &meshes[1], refs2, record2);
+
+    // BVHNodeN bvh = BuildTLASQuantized(settings, arenas, ?, ?, ?);
+    // BVHNodeN bvh = BuildQuantizedQuadSBVH(settings, arenas, &meshes[0], refs, record);
+
+    scene->nodePtr = bvh;
 
     // environment map
     f32 sceneRadius             = 0.5f * Max(geomBounds.maxP[0] - geomBounds.minP[0],
@@ -566,20 +597,6 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
         &renderFromLight, RGBColorSpace::sRGB, sceneRadius, scale);
     scene->lights.Set<ImageInfiniteLight>(&infLight, 1);
     scene->numLights = 1;
-
-    // build bvh
-    BuildSettings settings;
-    settings.intCost = 1.f;
-
-    RecordAOSSplits record;
-    record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
-    record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
-    record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
-
-    // BVHNodeN bvh   = BuildQuantizedTriSBVH(settings, arenas, &mesh, refs, record);
-    BVHNodeN bvh = BuildQuantizedQuadSBVH(settings, arenas, &mesh, refs, record);
-
-    scene->nodePtr = bvh;
 
     RenderParams2 params;
     params.cameraFromRaster = cameraFromRaster;

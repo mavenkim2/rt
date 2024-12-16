@@ -89,9 +89,11 @@ if "%1" == "cl" (
 REM cl %DefaultCompilerFlags% ../src/rgb2spec.cpp /std:c++17 /link %DefaultLinkerFlags% /out:rgb2spec.exe
 popd
 
-REM cd "src"
-REM w:\cloc.exe --fullpath --exclude-dir=third_party,tables,gen *
-REM cd ..
+if exist w:\cloc.exe (
+cd "src"
+w:\cloc.exe --fullpath --exclude-dir=third_party,tables,gen *
+cd ..
+)
 
 popd
 exit /b
