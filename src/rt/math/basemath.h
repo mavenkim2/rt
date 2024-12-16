@@ -97,6 +97,8 @@ f32 Select(bool mask, f32 a, f32 b) { return mask ? a : b; }
 
 u32 Select(bool mask, u32 a, u32 b) { return mask ? a : b; }
 
+u32 Movemask(bool mask) { return mask; }
+
 bool Select(bool mask, bool a, bool b) { return mask ? a : b; }
 
 inline int Log2Int(u64 v)

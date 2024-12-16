@@ -454,6 +454,9 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
 
     // TODO:
     // - the ironwood tree seems to be a bit brighter than it's supposed to be?
+
+    // - change the bvh build process to support N-wide leaves (need to change the sah to
+    // account for this)
     // - render a quad mesh properly
     // - add the second ocean layer
     // - render two instances of a quad mesh properly (i.e. test partial rebraiding)
@@ -462,8 +465,6 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     // - need to support a bvh with quad/triangle mesh instances
     // - load the scene description and properly instantiate lights/materials/textures
     // - render the scene with all quad meshes, then add support for the bspline curves
-    // - change the bvh build process to support N-wide leaves (need to change the sah to
-    // account for this)
 
     // once moana is rendered
     // - ray differentials

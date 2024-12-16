@@ -236,14 +236,18 @@ template <i32 K>
 struct TriangleIntersection
 {
     LaneF32<K> u, v, t;
-    LaneU32<K> geomIDs, primIDs;
+    LaneU32<K> geomIDs = {};
+    LaneU32<K> primIDs = {};
     TriangleIntersection() {}
 };
 
-template <i32 N, typename Prim>
-struct TriangleIntersectorBase
+template <i32 N, typename T>
+struct TriangleIntersectorBase;
+
+template <i32 N, template <i32> class Prim>
+struct TriangleIntersectorBase<N, Prim<N>>
 {
-    using Primitive           = Prim;
+    using Primitive           = Prim<N>;
     TriangleIntersectorBase() = default;
     // https://www.graphics.cornell.edu/pubs/1997/MT97.pdf
     static Mask<LaneF32<N>> Intersect(const Ray2 &ray, const LaneF32<N> &tFar,
@@ -303,8 +307,9 @@ struct TriangleIntersectorBase
         LaneF32<N> deltaY = 2 * (gamma(2) * maxZ * maxX + maxZ * errorX + maxX * errorZ);
         LaneF32<N> deltaZ = 2 * (gamma(2) * maxX * maxY + maxX * errorY + maxY * errorX);
 
-        LaneF32<N> deltaT = gamma(3) * t + deltaX * c.x + deltaY * c.y * deltaZ * c.z +
-                            gamma(1) * (ng.x + ng.y + ng.z); // + ng.x * c.x * gamma(1);
+        LaneF32<N> deltaT =
+            absDet * (gamma(3) * t + deltaX * c.x + deltaY * c.y * deltaZ * c.z +
+                      gamma(1) * (ng.x + ng.y + ng.z)); // + ng.x * c.x * gamma(1);
 
         mask &= t > deltaT;
 
@@ -317,7 +322,8 @@ struct TriangleIntersectorBase
         itr.t                      = t * rcpAbsDet;
         return mask;
     }
-    static bool Intersect(Ray2 &ray, Primitive *primitives, u32 num, SurfaceInteraction &si)
+    static bool Intersect(Ray2 &ray, Primitive *primitives, u32 num, SurfaceInteraction &si,
+                          const Mask<LaneF32<N>> &validMask = Mask<LaneF32<N>>(true))
     {
         Vec3lf<N> triV0, triV1, triV2;
         Lane4F32 v0[N];
@@ -326,12 +332,13 @@ struct TriangleIntersectorBase
         alignas(4 * N) u32 geomIDs[N];
         alignas(4 * N) u32 primIDs[N];
 
-        LaneF32<N> t(ray.tFar);
         Mask<LaneF32<N>> outMask(false);
 
         TriangleIntersection<N> itr;
+        itr.t = LaneF32<N>(ray.tFar);
         for (u32 i = 0; i < num; i++)
         {
+            TriangleIntersection<N> triItr;
             Primitive &prim = primitives[i];
             prim.GetData(v0, v1, v2, geomIDs, primIDs);
             // prim.geomID
@@ -339,21 +346,28 @@ struct TriangleIntersectorBase
             Transpose<N>(v1, triV1);
             Transpose<N>(v2, triV2);
 
-            Mask<LaneF32<N>> mask = Intersect(ray, t, triV0, triV1, triV2, itr);
+            Mask<LaneF32<N>> mask = Intersect(ray, itr.t, triV0, triV1, triV2, triItr);
+            itr.u                 = Select(mask, triItr.u, itr.u);
+            itr.v                 = Select(mask, triItr.v, itr.v);
+            itr.t                 = Select(mask, triItr.t, itr.t);
             itr.geomIDs           = AsUInt(
                 Select(mask, AsFloat(MemSimdU32<N>::LoadU(geomIDs)), AsFloat(itr.geomIDs)));
             itr.primIDs = AsUInt(
                 Select(mask, AsFloat(MemSimdU32<N>::LoadU(primIDs)), AsFloat(itr.primIDs)));
-            t = Select(mask, itr.t, t);
             outMask |= mask;
         }
+        outMask &= validMask;
         if (Any(outMask))
         {
-            f32 tFar = ReduceMin(itr.t);
-            ray.tFar = tFar;
+            u32 maskBits = Movemask(outMask);
+            f32 tFar     = ReduceMin(itr.t);
+            ray.tFar     = tFar;
             u32 index;
-            for (u32 i = 0; i < N; i++)
+            for (;;)
             {
+                if (maskBits == 0) return false;
+                u32 i = Bsf(maskBits);
+                maskBits &= maskBits - 1;
                 if (tFar == Get(itr.t, i))
                 {
                     index = i;
@@ -363,6 +377,7 @@ struct TriangleIntersectorBase
             f32 u = Get(itr.u, index);
             f32 v = Get(itr.v, index);
             f32 w = 1 - u - v;
+            // Assert(u >= 0 && u <= 1 && v >= 0 && v <= 1 && w >= 0 && w <= 1);
             // TODO: calculate partial derivatives, shading normal, uv etcs from below
             Scene2 *scene = GetScene();
 
@@ -468,12 +483,6 @@ struct TriangleIntersectorBase
     }
 };
 
-template <i32 N>
-using TriangleIntersector = TriangleIntersectorBase<N, Triangle<N>>;
-
-template <i32 N>
-using TriangleIntersectorCmp = TriangleIntersectorBase<N, TriangleCompressed<N>>;
-
 // struct QuadIntersector
 // {
 //     using Primitve = Quad;
@@ -519,6 +528,12 @@ using TriangleIntersectorCmp = TriangleIntersectorBase<N, TriangleCompressed<N>>
 //         return Intersect(ray, primitives, num, si);
 //     }
 // };
+
+template <i32 N>
+using TriangleIntersector = TriangleIntersectorBase<N, Triangle<N>>;
+
+template <i32 N>
+using TriangleIntersectorCmp = TriangleIntersectorBase<N, TriangleCompressed<N>>;
 
 template <typename... Ts>
 struct DispatchTypes
@@ -613,37 +628,24 @@ struct CompressedLeafIntersector
     }
 };
 
-template <typename T>
+template <typename T, typename U>
 struct QueueIntersector;
 
-template <template <i32, typename...> class Intersector, typename... Args>
-struct QueueIntersector<Intersector<1, Args...>>
+template <typename Intersector, template <i32> class Prim>
+struct QueueIntersector<Intersector, Prim<1>>
 {
-    static const u32 queueLength = 16;
-    using Intersector1           = Intersector<1, Args...>;
-    using Intersector8           = Intersector<8, Args...>;
-    using Primitive              = typename Intersector1::Primitive;
-    using PrimitiveN             = typename Intersector8::Primitive;
-    Primitive queue[queueLength] = {};
-    u32 count;
+    using Primitive  = Prim<1>;
+    using PrimitiveN = Prim<8>;
 
-    QueueIntersector() : count(0) {}
+    QueueIntersector() {}
     bool Intersect(Ray2 &ray, Primitive *primitives, u32 num, SurfaceInteraction &si)
     {
-        Assert(count + num < queueLength);
-        MemoryCopy(queue + count, primitives, sizeof(Primitive) * num);
+        Assert(num < 8);
         bool result = false;
 
-        if (count + num > 8)
-        {
-            for (u32 i = 0; i < 2; i++)
-            {
-                PrimitiveN prim;
-                prim.Fill(queue + 8 * i);
-                result |= Intersector8::Intersect(ray, &prim, 1, si);
-            }
-            count = 0;
-        }
+        PrimitiveN prim;
+        prim.Fill(primitives, num);
+        result |= Intersector::Intersect(ray, &prim, 1, si, Lane8F32::Mask((1u << num) - 1u));
         return result;
     }
     template <i32 N>
@@ -656,8 +658,9 @@ struct QueueIntersector<Intersector<1, Args...>>
     }
 };
 
-typedef QueueIntersector<TriangleIntersector<1>> TriangleQueueIntersector;
-typedef QueueIntersector<TriangleIntersectorCmp<1>> TriangleCmpQueueIntersector;
+typedef QueueIntersector<TriangleIntersector<8>, Triangle<1>> TriangleQueueIntersector;
+typedef QueueIntersector<TriangleIntersectorCmp<8>, TriangleCompressed<1>>
+    TriangleCmpQueueIntersector;
 
 template <i32 K, i32 N, i32 types>
 using BVHTriangleIntersector = BVHIntersector<K, types, TriangleIntersector<N>>;
@@ -682,12 +685,12 @@ typedef BVHTriangleCLIntersectorCmp<4, 1, BVH_AQ> BVH4TriangleCLIntersectorCmp1;
 template <i32 K, i32 types>
 using BVHTriangleCLQueueIntersectorCmp =
     BVHIntersector<K, types, CompressedLeafIntersector<K, TriangleCmpQueueIntersector>>;
-typedef BVHTriangleCLQueueIntersectorCmp<4, BVH_AQ> BVH4TriangleCLQueueIntersectorCmp4;
+typedef BVHTriangleCLQueueIntersectorCmp<4, BVH_AQ> BVH4TriangleCLQueueIntersectorCmp8;
 
 template <i32 K, i32 types>
 using BVHTriangleCLQueueIntersector =
     BVHIntersector<K, types, CompressedLeafIntersector<K, TriangleQueueIntersector>>;
-typedef BVHTriangleCLQueueIntersector<4, BVH_AQ> BVH4TriangleCLQueueIntersector4;
+typedef BVHTriangleCLQueueIntersector<4, BVH_AQ> BVH4TriangleCLQueueIntersector8;
 
 } // namespace rt
 #endif

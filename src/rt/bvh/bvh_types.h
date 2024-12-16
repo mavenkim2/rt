@@ -511,12 +511,23 @@ struct LeafPrim
             primIDs[i]   = ref->primID;
         }
     }
-    __forceinline void Fill(LeafPrim<1> *prims)
+    __forceinline void Fill(LeafPrim<1> *prims, u32 num)
     {
+        Assert(num);
+        u32 last;
         for (u32 i = 0; i < N; i++)
         {
-            geomIDs[i] = prims->geomIDs[0];
-            primIDs[i] = prims->primIDs[0];
+            if (i < num)
+            {
+                geomIDs[i] = prims[i].geomIDs[0];
+                primIDs[i] = prims[i].primIDs[0];
+                last       = i;
+            }
+            else
+            {
+                geomIDs[i] = prims[last].geomIDs[0];
+                primIDs[i] = prims[last].primIDs[0];
+            }
         }
     }
 };
@@ -534,11 +545,21 @@ struct LeafPrimCompressed
             primIDs[i]             = ref->primID;
         }
     }
-    __forceinline void Fill(LeafPrimCompressed<1> *prims)
+    __forceinline void Fill(LeafPrimCompressed<1> *prims, u32 num)
     {
+        Assert(num);
+        u32 last;
         for (u32 i = 0; i < N; i++)
         {
-            primIDs[i] = prims->primIDs[0];
+            if (i < num)
+            {
+                primIDs[i] = prims[i].primIDs[0];
+                last       = i;
+            }
+            else
+            {
+                primIDs[i] = prims[last].primIDs[0];
+            }
         }
     }
 };

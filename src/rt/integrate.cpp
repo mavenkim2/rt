@@ -639,7 +639,8 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         // angles the reflected ray is re-intersecting with the ocean, which causes the ray to
         // effectively transmit when it should reflect
         bool intersect =
-            BVH4TriangleCLQueueIntersectorCmp4::Intersect(ray, scene->nodePtr, si);
+            BVH4TriangleCLQueueIntersectorCmp8::Intersect(ray, scene->nodePtr, si);
+        // BVH4TriangleCLIntersectorCmp1::Intersect(ray, scene->nodePtr, si);
 
         // If no intersection, sample "infinite" lights (e.g environment maps, sun, etc.)
         if (!intersect)
