@@ -20,14 +20,16 @@ namespace rt
 // - adaptive sampling
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
 // - equiangular sampling
+// - multi level instancing using the original json format
 // - bdpt, metropolis, vcm/upbp, mcm?
 // - subdivision surfaces
-// - actual displacement mapping
+// - actual displacement mapping (instead of bump mapping)
 
 // harder stuff
 // - covariance tracing
 // - path guiding
 // - non exponential free flight
+// - photon planes & volumes
 
 //////////////////////////////
 // Textures and materials
@@ -500,10 +502,6 @@ void Render(Arena *arena, RenderParams2 &params)
             for (u32 x = minPixelBounds.x; x < maxPixelBounds.x; x++)
             {
                 Vec2u pPixel(x, y);
-                if (pPixel.x == 442 && pPixel.y == 342)
-                {
-                    int stop = 5;
-                }
                 Vec3f rgb(0.f);
                 for (u32 i = 0; i < spp; i++)
                 {
@@ -563,10 +561,6 @@ void Render(Arena *arena, RenderParams2 &params)
                 f32 b = 255.f * ExactLinearToSRGB(rgb.z);
                 f32 a = 255.f;
                 f32 m = Max(r, Max(g, b));
-                if (m > 255.5f)
-                {
-                    int stop = 5;
-                }
 
                 Assert(r <= 255.f && g <= 255.f && b <= 255.f);
 
@@ -644,7 +638,8 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         // TODO IMPORTANT: need to robustly prevent self intersections. right now at grazing
         // angles the reflected ray is re-intersecting with the ocean, which causes the ray to
         // effectively transmit when it should reflect
-        bool intersect = BVH4TriangleCLIntersectorCmp1::Intersect(ray, scene->nodePtr, si);
+        bool intersect =
+            BVH4TriangleCLQueueIntersectorCmp4::Intersect(ray, scene->nodePtr, si);
 
         // If no intersection, sample "infinite" lights (e.g environment maps, sun, etc.)
         if (!intersect)
@@ -689,10 +684,6 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
             }
 
             break;
-        }
-        else
-        {
-            int stop = 5;
         }
 
         // If intersected with a light

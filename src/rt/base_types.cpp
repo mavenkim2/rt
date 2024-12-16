@@ -4,11 +4,11 @@
 
 namespace rt
 {
-PrimitiveMethods primitiveMethods[] = {
-    {BVHHit},
-    {BVH4Hit},
-    {CompressedBVH4Hit},
-};
+// PrimitiveMethods primitiveMethods[] = {
+//     {BVHHit},
+//     {BVH4Hit},
+//     {CompressedBVH4Hit},
+// };
 
 //////////////////////////////
 // Creation from scene description

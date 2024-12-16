@@ -9,11 +9,12 @@ static const u32 PARALLEL_THRESHOLD = 32 * 1024; // 32 * 1024; // 64 * 1024;
 
 struct BuildSettings
 {
-    u32 maxLeafSize = 7;
-    i32 maxDepth    = 32;
-    f32 intCost     = 1.f;
-    f32 travCost    = 1.f;
-    bool twoLevel   = true;
+    u32 maxLeafSize  = 7;
+    u32 logBlockSize = 0;
+    i32 maxDepth     = 32;
+    f32 intCost      = 1.f;
+    f32 travCost     = 1.f;
+    bool twoLevel    = true;
 };
 
 struct PartitionPayload
@@ -237,7 +238,7 @@ struct CompressedLeafNode;
 
 // TODO: this is not going to work for 8 wide
 template <template <i32> class Node, i32 N>
-void GetBounds(Node<N> *node, LaneF32<N> *outMin, LaneF32<N> *outMax)
+void GetBounds(const Node<N> *node, LaneF32<N> *outMin, LaneF32<N> *outMax)
 {
     LaneU32<N> lX = LaneU32<N>(*(u32 *)node->lowerX);
     LaneU32<N> lY = LaneU32<N>(*(u32 *)node->lowerY);
@@ -429,9 +430,7 @@ struct QuantizedNode
 
     u32 GetType(u32 childIndex) const { return children[childIndex].GetType(); }
 
-    void GetBounds(LaneF32<N> *outMin,
-                   LaneF32<N> *outMax) // f32 *outMinX, f32 *outMinY, f32 *outMinZ, f32
-                                       // *outMaxX, f32 *outMaxY, f32 *outMaxZ) const
+    void GetBounds(LaneF32<N> *outMin, LaneF32<N> *outMax) const
     {
         ::GetBounds(this, outMin, outMax);
     }
@@ -465,7 +464,7 @@ struct CompressedLeafNode
     u8 upperZ[N];
 
     Vec3f minP;
-    void GetBounds(LaneF32<N> *outMin, LaneF32<N> *outMax)
+    void GetBounds(LaneF32<N> *outMin, LaneF32<N> *outMax) const
     {
         ::GetBounds(this, outMin, outMax);
     }
@@ -487,32 +486,68 @@ struct CompressedLeafNode
 typedef BVHNode<4> BVHNodeN;
 typedef BuildRef<4> BRef;
 typedef QuantizedNode<4> QNode;
-static const u32 DefaultN = 4;
+static const u32 DefaultN    = 4;
+static const u32 DefaultLogN = 2;
 #elif defined(USE_BVH8)
 typedef BVHNode<8> BVHNodeN;
 typedef BuildRef<8> BRef;
 typedef QuantizedNode<8> QNode;
-static const u32 DefaultN = 8;
+static const u32 DefaultN    = 8;
+static const u32 DefaultLogN = 3;
 #endif
 
 template <i32 N>
-struct Triangle
+struct LeafPrim
 {
     u32 geomIDs[N];
     u32 primIDs[N];
-    Triangle() {}
-
-    __forceinline static Triangle<N> Fill(PrimRef *refs)
+    LeafPrim() {}
+    __forceinline void Fill(PrimRef *refs)
     {
-        Triangle<N> tri;
         for (u32 i = 0; i < N; i++)
         {
-            PrimRef *ref   = &refs[i];
-            tri.geomIDs[i] = ref->geomID;
-            tri.primIDs[i] = ref->primID;
+            PrimRef *ref = &refs[i];
+            geomIDs[i]   = ref->geomID;
+            primIDs[i]   = ref->primID;
         }
-        return tri;
     }
+    __forceinline void Fill(LeafPrim<1> *prims)
+    {
+        for (u32 i = 0; i < N; i++)
+        {
+            geomIDs[i] = prims->geomIDs[0];
+            primIDs[i] = prims->primIDs[0];
+        }
+    }
+};
+
+template <i32 N>
+struct LeafPrimCompressed
+{
+    u32 primIDs[N];
+    LeafPrimCompressed() {}
+    __forceinline void Fill(PrimRefCompressed *refs)
+    {
+        for (u32 i = 0; i < N; i++)
+        {
+            PrimRefCompressed *ref = &refs[i];
+            primIDs[i]             = ref->primID;
+        }
+    }
+    __forceinline void Fill(LeafPrimCompressed<1> *prims)
+    {
+        for (u32 i = 0; i < N; i++)
+        {
+            primIDs[i] = prims->primIDs[0];
+        }
+    }
+};
+
+template <i32 N>
+struct Triangle : LeafPrim<N>
+{
+    Triangle() {}
+
     void GetData(Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N], u32 outGeomIDs[N],
                  u32 outPrimIDs[N]) const
     {
@@ -546,21 +581,10 @@ struct Triangle
 };
 
 template <i32 N>
-struct TriangleCompressed
+struct TriangleCompressed : LeafPrimCompressed<N>
 {
-    u32 primIDs[N];
     TriangleCompressed() {}
 
-    __forceinline static TriangleCompressed<N> Fill(PrimRefCompressed *refs)
-    {
-        TriangleCompressed<N> tri;
-        for (u32 i = 0; i < N; i++)
-        {
-            PrimRefCompressed *ref = &refs[i];
-            tri.primIDs[i]         = ref->primID;
-        }
-        return tri;
-    }
     void GetData(Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N], u32 outGeomIDs[N],
                  u32 outPrimIDs[N]) const
     {
@@ -571,27 +595,105 @@ struct TriangleCompressed
             u32 indices[3];
             if (mesh->indices)
             {
-                Assert(3 * primIDs[i] < mesh->numIndices);
-                indices[0] = mesh->indices[3 * primIDs[i] + 0];
-                indices[1] = mesh->indices[3 * primIDs[i] + 1];
-                indices[2] = mesh->indices[3 * primIDs[i] + 2];
+                Assert(3 * this->primIDs[i] < mesh->numIndices);
+                indices[0] = mesh->indices[3 * this->primIDs[i] + 0];
+                indices[1] = mesh->indices[3 * this->primIDs[i] + 1];
+                indices[2] = mesh->indices[3 * this->primIDs[i] + 2];
             }
             else
             {
-                Assert(3 * primIDs[i] < mesh->numVertices);
-                indices[0] = 3 * primIDs[i] + 0;
-                indices[1] = 3 * primIDs[i] + 1;
-                indices[2] = 3 * primIDs[i] + 2;
+                Assert(3 * this->primIDs[i] < mesh->numVertices);
+                indices[0] = 3 * this->primIDs[i] + 0;
+                indices[1] = 3 * this->primIDs[i] + 1;
+                indices[2] = 3 * this->primIDs[i] + 2;
             }
             v0[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[0]));
             v1[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[1]));
             v2[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[2]));
-            outPrimIDs[i] = primIDs[i];
+            outPrimIDs[i] = this->primIDs[i];
             outGeomIDs[i] = 0;
         }
     }
 };
 
+template <i32 N>
+struct Quad : LeafPrim<N>
+{
+    Quad() {}
+
+    void GetData(Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N], Lane4F32 v3[N],
+                 u32 outGeomIDs[N], u32 outPrimIDs[N]) const
+    {
+        Scene2 *scene = GetScene();
+        for (u32 i = 0; i < N; i++)
+        {
+            Assert(this->geomIDs[i] < scene->numMeshes);
+            QuadMesh *mesh = scene->meshes[this->geomIDs[i]];
+            u32 indices[4];
+            if (mesh->indices)
+            {
+                Assert(4 * this->primIDs[i] < mesh->numIndices);
+                indices[0] = mesh->indices[4 * this->primIDs[i] + 0];
+                indices[1] = mesh->indices[4 * this->primIDs[i] + 1];
+                indices[2] = mesh->indices[4 * this->primIDs[i] + 2];
+                indices[3] = mesh->indices[4 * this->primIDs[i] + 3];
+            }
+            else
+            {
+                Assert(3 * this->primIDs[i] < mesh->numVertices);
+                indices[0] = 4 * this->primIDs[i] + 0;
+                indices[1] = 4 * this->primIDs[i] + 1;
+                indices[2] = 4 * this->primIDs[i] + 2;
+                indices[3] = 4 * this->primIDs[i] + 3;
+            }
+            v0[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[0]));
+            v1[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[1]));
+            v2[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[2]));
+            v3[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[3]));
+            outGeomIDs[i] = this->geomIDs[i];
+            outPrimIDs[i] = this->primIDs[i];
+        }
+    }
+};
+
+template <i32 N>
+struct QuadCompressed : LeafPrimCompressed<N>
+{
+    QuadCompressed() {}
+
+    void GetData(Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N], Lane4F32 v3[N],
+                 u32 outGeomIDs[N], u32 outPrimIDs[N]) const
+    {
+        // TODO: reconsider this later
+        QuadMesh *mesh = &GetScene()->meshes[0];
+        for (u32 i = 0; i < N; i++)
+        {
+            u32 indices[3];
+            if (mesh->indices)
+            {
+                Assert(3 * primIDs[i] < mesh->numIndices);
+                indices[0] = mesh->indices[4 * primIDs[i] + 0];
+                indices[1] = mesh->indices[4 * primIDs[i] + 1];
+                indices[2] = mesh->indices[4 * primIDs[i] + 2];
+                indices[3] = mesh->indices[4 * primIDs[i] + 3];
+            }
+            else
+            {
+                Assert(4 * primIDs[i] < mesh->numVertices);
+                indices[0] = 4 * primIDs[i] + 0;
+                indices[1] = 4 * primIDs[i] + 1;
+                indices[2] = 4 * primIDs[i] + 2;
+                indices[3] = 4 * primIDs[i] + 3;
+            }
+            v0[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[0]));
+            v1[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[1]));
+            v2[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[2]));
+            v3[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[3]));
+            outPrimIDs[i] = primIDs[i];
+            outGeomIDs[i] = 0;
+        }
+    }
+};
 template <i32 N>
 struct TLASLeaf
 {

@@ -1506,7 +1506,7 @@ struct alignas(32) HeuristicAOSSplitBinning
 template <i32 numObjectBins = 32, typename PrimRef = PrimRef>
 Split SAHObjectBinning(const RecordAOSSplits &record, const PrimRef *primRefs,
                        HeuristicAOSObjectBinning<numObjectBins, PrimRef> *&objectBinHeuristic,
-                       u64 &popPos)
+                       u64 &popPos, u32 logBlockSize)
 {
     using OBin     = HeuristicAOSObjectBinning<numObjectBins, PrimRef>;
     TempArena temp = ScratchStart(0, 0);
@@ -1532,9 +1532,9 @@ Split SAHObjectBinning(const RecordAOSSplits &record, const PrimRef *primRefs,
         new (objectBinHeuristic) OBin(objectBinner);
         objectBinHeuristic->Bin(primRefs, record.start, record.count);
     }
-    struct Split objectSplit =
-        BinBest(objectBinHeuristic->bins, objectBinHeuristic->counts, objectBinner);
-    objectSplit.type = Split::Object;
+    struct Split objectSplit = BinBest(objectBinHeuristic->bins, objectBinHeuristic->counts,
+                                       objectBinner, logBlockSize);
+    objectSplit.type         = Split::Object;
     return objectSplit;
 }
 
@@ -1659,11 +1659,12 @@ struct HeuristicSpatialSplits
 
     SceneType *scene;
     f32 rootArea;
+    u32 logBlockSize;
     PrimRef *primRefs;
 
     HeuristicSpatialSplits() {}
-    HeuristicSpatialSplits(PrimRef *data, SceneType *scene, f32 rootArea)
-        : primRefs(data), scene(scene), rootArea(rootArea)
+    HeuristicSpatialSplits(PrimRef *data, SceneType *scene, f32 rootArea, u32 logBlockSize = 0)
+        : primRefs(data), scene(scene), rootArea(rootArea), logBlockSize(logBlockSize)
     {
     }
 
@@ -1675,7 +1676,7 @@ struct HeuristicSpatialSplits
         OBin *objectBinHeuristic;
 
         struct Split objectSplit =
-            SAHObjectBinning(record, primRefs, objectBinHeuristic, popPos);
+            SAHObjectBinning(record, primRefs, objectBinHeuristic, popPos, logBlockSize);
 
         // Stack allocate the heuristics since they store the centroid and geom bounds we'll
         // need later
@@ -1719,7 +1720,7 @@ struct HeuristicSpatialSplits
             }
             struct Split spatialSplit =
                 BinBest(splitHeuristic->bins, splitHeuristic->entryCounts,
-                        splitHeuristic->exitCounts, splitBinner);
+                        splitHeuristic->exitCounts, splitBinner, logBlockSize);
             spatialSplit.type = Split::Spatial;
             u32 lCount        = 0;
             for (u32 i = 0; i < spatialSplit.bestPos; i++)
@@ -1966,7 +1967,8 @@ struct HeuristicSpatialSplits
 
 template <typename Binner, i32 numBins>
 static Split BinBest(const Bounds8 bounds[3][numBins], const Lane4U32 *entryCounts,
-                     const Lane4U32 *exitCounts, const Binner *binner)
+                     const Lane4U32 *exitCounts, const Binner *binner,
+                     const u32 blockShift = 0)
 {
 
     Lane4F32 areas[numBins];
@@ -1998,10 +2000,11 @@ static Split BinBest(const Bounds8 bounds[3][numBins], const Lane4U32 *entryCoun
 
         areas[i] = FMA(extentX, extentY + extentZ, extentY * extentZ);
     }
-    boundsX      = Bounds8();
-    boundsY      = Bounds8();
-    boundsZ      = Bounds8();
-    currentCount = 0;
+    boundsX           = Bounds8();
+    boundsY           = Bounds8();
+    boundsZ           = Bounds8();
+    currentCount      = 0;
+    Lane4U32 blockAdd = (1 << blockShift) - 1;
     Lane4F32 bestSAH(pos_inf);
     Lane4U32 bestPos(0);
     for (u32 i = numBins - 1; i >= 1; i--)
@@ -2025,8 +2028,10 @@ static Split BinBest(const Bounds8 bounds[3][numBins], const Lane4U32 *entryCoun
 
         Lane4F32 rArea = FMA(extentX, extentY + extentZ, extentY * extentZ);
 
-        Lane4F32 sah =
-            FMA(rArea, Lane4F32(currentCount), areas[i - 1] * Lane4F32(counts[i - 1]));
+        Lane4U32 rCount = (currentCount + blockAdd) >> blockShift;
+        Lane4U32 lCount = (counts[i - 1] + blockAdd) >> blockShift;
+
+        Lane4F32 sah = FMA(rArea, Lane4F32(rCount), areas[i - 1] * Lane4F32(lCount));
 
         bestPos = Select(sah < bestSAH, Lane4U32(i), bestPos);
         bestSAH = Select(sah < bestSAH, sah, bestSAH);
@@ -2051,9 +2056,9 @@ static Split BinBest(const Bounds8 bounds[3][numBins], const Lane4U32 *entryCoun
 
 template <typename Binner, i32 numBins>
 static Split BinBest(const Bounds8 bounds[3][numBins], const Lane4U32 *counts,
-                     const Binner *binner)
+                     const Binner *binner, const u32 blockShift = 0)
 {
-    return BinBest(bounds, counts, counts, binner);
+    return BinBest(bounds, counts, counts, binner, blockShift);
 }
 
 } // namespace rt

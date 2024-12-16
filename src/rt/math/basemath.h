@@ -174,7 +174,7 @@ inline u32 FloatToBits(f32 src)
 
 inline f32 AsFloat(u32 src) { return _mm_cvtss_f32(_mm_castsi128_ps(_mm_cvtsi32_si128(src))); }
 
-inline u32 AsUint(f32 src) { return _mm_cvtsi128_si32(_mm_castps_si128(_mm_set_ss(src))); }
+inline u32 AsUInt(f32 src) { return _mm_cvtsi128_si32(_mm_castps_si128(_mm_set_ss(src))); }
 
 inline i32 Exponent(f32 v) { return (FloatToBits(v) >> 23) - 127; }
 

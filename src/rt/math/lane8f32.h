@@ -218,6 +218,10 @@ __forceinline Lane8F32 Abs(const Lane8F32 &a)
 {
     return _mm256_and_ps(a, _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff)));
 }
+__forceinline Lane8F32 Signmask(const Lane8F32 &a)
+{
+    return _mm256_and_ps(a, _mm256_castsi256_ps(_mm256_set1_epi32(0x80000000)));
+}
 __forceinline Lane8F32 Min(const Lane8F32 &a, const Lane8F32 &b)
 {
     return _mm256_min_ps(a, b);
@@ -289,6 +293,11 @@ __forceinline Lane8F32 &operator&=(Lane8F32 &a, const Lane8F32 &b)
 __forceinline Lane8F32 operator|(const Lane8F32 &a, const Lane8F32 &b)
 {
     return _mm256_or_ps(a, b);
+}
+__forceinline Lane8F32 &operator|=(Lane8F32 &a, const Lane8F32 &b)
+{
+    a = a | b;
+    return a;
 }
 
 __forceinline Lane8F32 Select(const Lane8F32 &mask, const Lane8F32 &a, const Lane8F32 &b)

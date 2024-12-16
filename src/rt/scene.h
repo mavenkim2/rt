@@ -119,6 +119,7 @@ struct Disk
     }
 };
 
+#if 0
 struct Quad
 {
     Quad() {}
@@ -244,6 +245,7 @@ struct Box
         return result;
     };
 };
+#endif
 
 struct ConstantMedium
 {
@@ -852,6 +854,7 @@ struct Scene2
 struct Scene2 *scene_;
 Scene2 *GetScene() { return scene_; }
 
+#if 0
 struct Scene
 {
     static const u32 indexMask = 0x0fffffff;
@@ -928,5 +931,6 @@ struct Scene
         return &meshes[i];
     }
 };
+#endif
 } // namespace rt
 #endif

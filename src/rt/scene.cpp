@@ -124,6 +124,7 @@ Vec3f Sphere::Random(const Vec3f &origin, Vec2f u) const
 //////////////////////////////
 // Scene
 //
+#if 0
 void Scene::FinalizePrimitives()
 {
     totalPrimitiveCount = sphereCount + quadCount + boxCount;
@@ -326,6 +327,7 @@ bool Scene::Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &temp, u
     }
     return result;
 }
+#endif
 
 inline u32 GetTypeStride(string word)
 {
@@ -997,7 +999,7 @@ struct SceneLoadState
     Arena **threadArenas;
 
     Arena *mainArena;
-    Scene *scene;
+    Scene2 *scene;
 
     Scheduler::Counter counter = {};
 };
@@ -1285,10 +1287,10 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
               bool imported = false);
 void Serialize(Arena *arena, string directory, SceneLoadState *state);
 
-Scene *LoadPBRT(Arena *arena, string filename)
+Scene2 *LoadPBRT(Arena *arena, string filename)
 {
 #define COMMA ,
-    Scene *scene = PushStruct(arena, Scene);
+    Scene2 *scene = PushStruct(arena, Scene2);
     SceneLoadState state;
     u32 numProcessors   = OS_NumProcessors();
     state.numTriMeshes  = PushArray(arena, u32, numProcessors);
@@ -1489,9 +1491,8 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 Error(worldBegin, "%S cannot be specified before WorldBegin statement\n",
                       word);
                 Assert(graphicsStateCount < ArrayLength(graphicsStateStack));
-                GraphicsState *gs    = &graphicsStateStack[graphicsStateCount++];
-                *gs                  = currentGraphicsState;
-                currentGraphicsState = {};
+                GraphicsState *gs = &graphicsStateStack[graphicsStateCount++];
+                *gs               = currentGraphicsState;
 
                 SkipToNextLine(&tokenizer);
             }
@@ -1960,8 +1961,8 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
 
                 const ScenePacket *samplerPacket =
                     &state->packets[SceneLoadState::Type::Sampler];
-                state->scene->sampler =
-                    Sampler::Create(state->mainArena, samplerPacket, fullResolution);
+                // state->scene->sampler =
+                //     Sampler::Create(state->mainArena, samplerPacket, fullResolution);
 
                 AddTransform();
                 // TODO: instantiate the camera with the current transform

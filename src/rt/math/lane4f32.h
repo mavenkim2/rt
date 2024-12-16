@@ -322,7 +322,7 @@ __forceinline Lane4F32 operator|(const Lane4F32 &a, const Lane4F32 &b)
 {
     return _mm_or_ps(a, b);
 }
-__forceinline Lane4F32 operator|=(Lane4F32 &a, const Lane4F32 &b)
+__forceinline Lane4F32 &operator|=(Lane4F32 &a, const Lane4F32 &b)
 {
     a = a | b;
     return a;

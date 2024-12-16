@@ -22,7 +22,7 @@
 #include "integrate.h"
 #include "lights.h"
 #include "scene.h"
-#include "bvh.h"
+// #include "bvh.h"
 #include "bxdf.h"
 #include "bsdf.h"
 #include "low_discrepancy.h"
@@ -43,7 +43,7 @@
 #include "spectrum.cpp"
 #include "memory.cpp"
 #include "scene.cpp"
-#include "bvh.cpp"
+// #include "bvh.cpp"
 #include "bsdf.cpp"
 
 #include "lights.cpp"
@@ -106,11 +106,7 @@ f32 *Image::GetSamplingDistribution(Arena *arena)
             // Is bpp correct?
             Vec3f values    = SRGBToLinear(GetColor(this, w, h));
             result[count++] = (values[0] + values[1] + values[2]) / 3.f;
-            if (result[count - 1] != result[count - 1])
-            {
-                int stop = 5;
-                Assert(0);
-            }
+            Assert(result[count - 1] == result[count - 1]);
             ptr += bytesPerPixel;
         }
     }
@@ -1296,8 +1292,6 @@ int main(int argc, char *argv[])
     }
     printf("Total time normal: %dms\n", end - start);
     // OctahedralVector result[] = {};
-
-    int stop = 5;
 #endif
 
 //////////////////////////////

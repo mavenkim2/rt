@@ -196,12 +196,12 @@ using BLAS_SBVH_QuantizedNode_TriangleLeaf_Funcs =
 template <i32 N>
 using BLAS_SBVH_QuantizedNode_QuadLeaf_Funcs =
     BuildFuncs<N, HeuristicSpatialSplits<QuadMesh>, QuantizedNode<N>, CreateQuantizedNode<N>,
-               UpdateQuantizedNode<N>, TriangleCompressed<1>, CompressedLeafNode<N>>;
+               UpdateQuantizedNode<N>, QuadCompressed<1>, CompressedLeafNode<N>>;
 
 template <i32 N>
 using BLAS_SBVH_QuantizedNode_QuadLeaf_Scene_Funcs =
     BuildFuncs<N, HeuristicSpatialSplits<Scene2>, QuantizedNode<N>, CreateQuantizedNode<N>,
-               UpdateQuantizedNode<N>, Triangle<1>, CompressedLeafNode<N>>;
+               UpdateQuantizedNode<N>, Quad<1>, CompressedLeafNode<N>>;
 
 template <i32 N>
 using TLAS_PRB_QuantizedNode_Funcs =
@@ -264,8 +264,8 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVHRoot(BuildSettings settings, R
 
     for (u32 primIndex = record.start; primIndex < record.start + record.count; primIndex++)
     {
-        PrimRef *prim     = &primRefs[primIndex];
-        primIDs[offset++] = LeafType::Fill(prim);
+        PrimRef *prim = &primRefs[primIndex];
+        primIDs[offset++].Fill(prim);
     }
     return BVHNode<N>::EncodeCompressedNode(node);
 }
@@ -288,10 +288,9 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
     Split split = heuristic.Bin(record);
 
     // NOTE: multiply both by the area instead of dividing
-    f32 area = HalfArea(record.geomBounds);
-    f32 leafSAH =
-        settings.intCost * area *
-        total; //((total + (1 << settings.logBlockSize) - 1) >> settings.logBlockSize);
+    f32 area    = HalfArea(record.geomBounds);
+    f32 leafSAH = settings.intCost * area *
+                  ((total + (1 << settings.logBlockSize) - 1) >> settings.logBlockSize);
     f32 splitSAH = settings.travCost * area + settings.intCost * split.bestSAH;
 
     if (total <= settings.maxLeafSize && leafSAH <= splitSAH)
@@ -381,8 +380,8 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
             for (u32 primIndex = childRecord.start;
                  primIndex < childRecord.start + childRecord.count; primIndex++)
             {
-                PrimRef *prim     = &primRefs[primIndex];
-                primIDs[offset++] = LeafType::Fill(prim);
+                PrimRef *prim = &primRefs[primIndex];
+                primIDs[offset++].Fill(prim);
             }
             Assert(recordIndex < N);
             node->offsets[recordIndex] = SafeTruncateU32ToU8(offset);
@@ -404,8 +403,8 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
             for (u32 primIndex = childRecord.start;
                  primIndex < childRecord.start + childRecord.count; primIndex++)
             {
-                PrimRef *prim     = &primRefs[primIndex];
-                primIDs[offset++] = LeafType::Fill(prim);
+                PrimRef *prim = &primRefs[primIndex];
+                primIDs[offset++].Fill(prim);
             }
             childNodes[i] = BVHNode<N>::EncodeLeaf(primIDs, childRecord.count);
         }
@@ -414,25 +413,6 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
     f.createNode(childRecords, numChildren, node);
     f.updateNode(node, childNodes, numChildren);
 
-#if 0
-    Vec3lf4 mins, maxs;
-    node->GetBounds(mins.e, maxs.e);
-    if (mins.x[0] == 54.9426956f && mins.x[1] == 54.9426956f && mins.x[2] == 156.942688f)
-    {
-        // DebugBreak();
-        int stop = 5;
-    }
-    if (mins.x[0] == -81.0876312f && mins.x[1] == 54.9123688f &&
-        mins.x[2] == -103.087631f) //,-103.087631} m128_u64={4781598243637308638,14037206423823068382}…}…}
-    {
-        DebugBreak();
-        int stop = 5;
-        Vec3lf4 min1, max1;
-        f.createNode(childRecords, numChildren, node);
-        // node->children[2].GetQuantizedNode()->GetBounds(min1.e, max1.e);
-        stop = 5;
-    }
-#endif
     return BVHNode<N>::EncodeNode(node);
 }
 
@@ -452,7 +432,8 @@ BVHNode<N> BuildQuantizedTriSBVH(BuildSettings settings, Arena **inArenas, Trian
                                  PrimRefCompressed *ref, RecordAOSSplits &record)
 {
     SBVHBuilderTriangleMesh<N> builder;
-    new (&builder.heuristic) HeuristicSpatialSplits(ref, mesh, HalfArea(record.geomBounds));
+    new (&builder.heuristic)
+        HeuristicSpatialSplits(ref, mesh, HalfArea(record.geomBounds), settings.logBlockSize);
     builder.primRefs = ref;
     return builder.BuildBVH(settings, inArenas, record);
 }
@@ -462,8 +443,8 @@ BVHNode<N> BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas, Quad
                                   PrimRefCompressed *ref, RecordAOSSplits &record)
 {
     SBVHBuilderQuadMesh<N> builder;
-    new (&builder.heuristic)
-        HeuristicSpatialSplits<QuadMesh>(ref, mesh, HalfArea(record.geomBounds));
+    new (&builder.heuristic) HeuristicSpatialSplits<QuadMesh>(
+        ref, mesh, HalfArea(record.geomBounds), settings.logBlockSize);
     builder.primRefs = ref;
     return builder.BuildBVH(settings, inArenas, record);
 }
@@ -473,8 +454,8 @@ BVHNode<N> BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas, Scen
                                   PrimRef *ref, RecordAOSSplits &record)
 {
     SBVHBuilderSceneQuads<N> builder;
-    new (&builder.heuristic)
-        HeuristicSpatialSplits<Scene2>(ref, scene, HalfArea(record.geomBounds));
+    new (&builder.heuristic) HeuristicSpatialSplits<Scene2>(
+        ref, scene, HalfArea(record.geomBounds), settings.logBlockSize);
     builder.primRefs = ref;
     return builder.BuildBVH(settings, inArenas, record);
 }
@@ -484,7 +465,8 @@ BVHNode<N> BuildTLASQuantized(BuildSettings settings, Arena **inArenas, Scene2 *
                               BuildRef<N> *refs, RecordAOSSplits &record)
 {
     PartialRebraidBuilder<N> builder;
-    new (&builder.heuristic) HeuristicPartialRebraid<GetQuantizedNode>(scene, refs);
+    new (&builder.heuristic)
+        HeuristicPartialRebraid<GetQuantizedNode>(scene, refs, settings.logBlockSize);
     builder.primRefs = refs;
     return builder.BuildBVH(settings, inArenas, record);
 }

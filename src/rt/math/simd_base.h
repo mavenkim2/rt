@@ -408,54 +408,6 @@ using Lane8U32 = LaneU32<8>;
 
 using LaneXF32 = LaneF32<MAX_LANE_WIDTH>;
 
-// __forceinline Lane1F32 operator+(const Lane1F32 &a, const Lane1F32 &b) { return a.value +
-// b.value; }
-// __forceinline Lane1F32 operator-(const Lane1F32 &a, const Lane1F32 &b) { return a.value -
-// b.value; }
-// __forceinline Lane1F32 operator/(const Lane1F32 &a, const Lane1F32 &b) { return a.value /
-// b.value; }
-// __forceinline Lane1F32 operator*(const Lane1F32 &a, const Lane1F32 &b) { return a.value *
-// b.value; }
-// __forceinline Lane1F32 operator-(const Lane1F32 &a) { return -a.value; }
-// __forceinline Lane1F32 &operator+=(Lane1F32 &a, const Lane1F32 &b)
-// {
-//     a = a + b;
-//     return a;
-// }
-// __forceinline Lane1F32 &operator*=(Lane1F32 &a, const Lane1F32 &b)
-// {
-//     a = a * b;
-//     return a;
-// }
-// __forceinline bool operator>(const Lane1F32 &a, const Lane1F32 &b) { return a.value >
-// b.value; }
-// __forceinline bool operator<(const Lane1F32 &a, const Lane1F32 &b) { return a.value <
-// b.value; }
-// __forceinline bool operator==(const Lane1F32 &a, const Lane1F32 &b) { return a.value ==
-// b.value; }
-// __forceinline Lane1F32 Cos(const Lane1F32 &a) { return Cos(a.value); }
-// __forceinline Lane1F32 Sin(const Lane1F32 &a) { return Sin(a.value); }
-// __forceinline Lane1F32 Sqrt(const Lane1F32 &a) { return Sqrt(a.value); }
-// __forceinline Lane1F32 Abs(const Lane1F32 &a) { return Abs(a.value); }
-// __forceinline Lane1F32 Copysignf(const Lane1F32 &mag, const Lane1F32 &sign) { return
-// Copysignf(mag.value, sign.value); }
-// __forceinline Lane1F32 Clamp(const Lane1F32 &v, const Lane1F32 &min, const Lane1F32 &max) {
-// return Clamp(v.value, min.value, max.value); }
-// __forceinline Lane1F32 Select(const Lane1F32 mask, const Lane1F32 a, const Lane1F32 b) {
-// return mask.value ? a : b; }
-// __forceinline Lane1F32 FMA(const Lane1F32 a, const Lane1F32 b, const Lane1F32 c) { return
-// std::fma(a.value, b.value, c.value); }
-// __forceinline Lane1F32 FMS(const Lane1F32 a, const Lane1F32 b, const Lane1F32 c) { return
-// std::fma(a.value, b.value, -c.value); }
-// __forceinline Lane1F32 Rsqrt(const Lane1F32 a) { return 1.f / Sqrt(a.value); }
-// __forceinline Lane1F32 SafeSqrt(const Lane1F32 a) { return 1.f / Sqrt(a.value); }
-// __forceinline Lane1F32 Max(const Lane1F32 a, const Lane1F32 b) { return Max(a.value,
-// b.value); }
-// __forceinline Lane1F32 Min(const Lane1F32 a, const Lane1F32 b) { return Min(a.value,
-// b.value); }
-// __forceinline bool operator!=(const Lane1U32 &a, const Lane1U32 &b) { return a.value !=
-// b.value; }
-
 // lane width for integration
 #define IntN 1
 #if IntN == 1

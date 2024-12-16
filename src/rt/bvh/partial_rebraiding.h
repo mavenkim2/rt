@@ -170,9 +170,13 @@ struct HeuristicPartialRebraid
     Scene2 *scene;
     BRef *buildRefs;
     GetNode getNode;
+    u32 logBlockSize;
 
     HeuristicPartialRebraid() {}
-    HeuristicPartialRebraid(Scene2 *scene, BRef *data) : scene(scene), buildRefs(data) {}
+    HeuristicPartialRebraid(Scene2 *scene, BRef *data, u32 logBlockSize = 0)
+        : scene(scene), buildRefs(data), logBlockSize(logBlockSize)
+    {
+    }
     Split Bin(Record &record)
     {
         u32 choiceDim = 0;
@@ -309,7 +313,7 @@ struct HeuristicPartialRebraid
         }
         OBin *objectBinHeuristic;
         struct Split objectSplit =
-            SAHObjectBinning(record, buildRefs, objectBinHeuristic, popPos);
+            SAHObjectBinning(record, buildRefs, objectBinHeuristic, popPos, logBlockSize);
         FinalizeObjectSplit(objectBinHeuristic, objectSplit, popPos);
 
         return objectSplit;
