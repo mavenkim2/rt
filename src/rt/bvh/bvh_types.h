@@ -352,7 +352,7 @@ template <i32 N>
 BVHNode<N> BVHNode<N>::EncodeLeaf(void *leaf, u32 num)
 {
     CheckAlignment(leaf);
-    Assert(num >= 1);
+    Assert(num >= 1 && num <= 7);
     return BVHNode((size_t)leaf | (tyLeaf + num));
 }
 
@@ -511,6 +511,26 @@ struct LeafPrim
             primIDs[i]   = ref->primID;
         }
     }
+    __forceinline void Fill(PrimRef *refs, u32 &begin, u32 end)
+    {
+        Assert(end > begin);
+        for (u32 i = 0; i < N; i++)
+        {
+            if (begin < end)
+            {
+                PrimRef *ref = &refs[begin];
+                geomIDs[i]   = ref->geomID;
+                primIDs[i]   = ref->primID;
+                begin++;
+            }
+            else
+            {
+                PrimRef *ref = &refs[begin - 1];
+                geomIDs[i]   = ref->geomID;
+                primIDs[i]   = ref->primID;
+            }
+        }
+    }
     __forceinline void Fill(LeafPrim<1> *prims, u32 num)
     {
         Assert(num);
@@ -543,6 +563,24 @@ struct LeafPrimCompressed
         {
             PrimRefCompressed *ref = &refs[i];
             primIDs[i]             = ref->primID;
+        }
+    }
+    __forceinline void Fill(PrimRefCompressed *refs, u32 &begin, u32 end)
+    {
+        Assert(end > begin);
+        for (u32 i = 0; i < N; i++)
+        {
+            if (begin < end)
+            {
+                PrimRefCompressed *ref = &refs[begin];
+                primIDs[i]             = ref->primID;
+                begin++;
+            }
+            else
+            {
+                PrimRefCompressed *ref = &refs[begin - 1];
+                primIDs[i]             = ref->primID;
+            }
         }
     }
     __forceinline void Fill(LeafPrimCompressed<1> *prims, u32 num)
@@ -661,7 +699,7 @@ struct Quad : LeafPrim<N>
             }
             else
             {
-                Assert(3 * this->primIDs[i] < mesh->numVertices);
+                Assert(4 * this->primIDs[i] < mesh->numVertices);
                 indices[0] = 4 * this->primIDs[i] + 0;
                 indices[1] = 4 * this->primIDs[i] + 1;
                 indices[2] = 4 * this->primIDs[i] + 2;
@@ -689,28 +727,28 @@ struct QuadCompressed : LeafPrimCompressed<N>
         QuadMesh *mesh = &GetScene()->meshes[0];
         for (u32 i = 0; i < N; i++)
         {
-            u32 indices[3];
+            u32 indices[4];
             if (mesh->indices)
             {
-                Assert(3 * primIDs[i] < mesh->numIndices);
-                indices[0] = mesh->indices[4 * primIDs[i] + 0];
-                indices[1] = mesh->indices[4 * primIDs[i] + 1];
-                indices[2] = mesh->indices[4 * primIDs[i] + 2];
-                indices[3] = mesh->indices[4 * primIDs[i] + 3];
+                Assert(4 * this->primIDs[i] < mesh->numIndices);
+                indices[0] = mesh->indices[4 * this->primIDs[i] + 0];
+                indices[1] = mesh->indices[4 * this->primIDs[i] + 1];
+                indices[2] = mesh->indices[4 * this->primIDs[i] + 2];
+                indices[3] = mesh->indices[4 * this->primIDs[i] + 3];
             }
             else
             {
-                Assert(4 * primIDs[i] < mesh->numVertices);
-                indices[0] = 4 * primIDs[i] + 0;
-                indices[1] = 4 * primIDs[i] + 1;
-                indices[2] = 4 * primIDs[i] + 2;
-                indices[3] = 4 * primIDs[i] + 3;
+                Assert(4 * this->primIDs[i] < mesh->numVertices);
+                indices[0] = 4 * this->primIDs[i] + 0;
+                indices[1] = 4 * this->primIDs[i] + 1;
+                indices[2] = 4 * this->primIDs[i] + 2;
+                indices[3] = 4 * this->primIDs[i] + 3;
             }
             v0[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[0]));
             v1[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[1]));
             v2[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[2]));
             v3[i]         = Lane4F32::LoadU((f32 *)(mesh->p + indices[3]));
-            outPrimIDs[i] = primIDs[i];
+            outPrimIDs[i] = this->primIDs[i];
             outGeomIDs[i] = 0;
         }
     }
@@ -720,11 +758,20 @@ struct TLASLeaf
 {
     BVHNode<N> nodePtr;
     TLASLeaf() {}
-    __forceinline static TLASLeaf<N> Fill(BuildRef<N> *ref)
+    __forceinline void Fill(BuildRef<N> *ref) { nodePtr = ref->nodePtr; }
+    __forceinline void Fill(BuildRef<N> *refs, u32 &begin, u32 end)
     {
-        TLASLeaf<N> result;
-        result.nodePtr = ref->nodePtr;
-        return result;
+        Assert(0);
+        Assert(end > begin);
+        // for (u32 i = 0; i < N; i++)
+        // {
+        //     PrimRef *ref = &refs[begin];
+        //     primIDs[i]   = ref->primID;
+        //     if (begin < end)
+        //     {
+        //         begin++;
+        //     }
+        // }
     }
 };
 

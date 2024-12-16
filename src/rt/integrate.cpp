@@ -614,8 +614,8 @@ bool Occluded(Ray2 &r, BVHNodeN nodePtr, SurfaceInteraction &si, LightSample &ls
 
     Vec3f from = OffsetRayOrigin(si.p, si.pError, si.n, ls.wi);
     // Vec3f to                   = OffsetRayOrigin(ls.p, ls.rayOrigin);
-    Ray2 ray(from, ls.wi, shadowRayEpsilon);
-    return BVH4TriangleCLIntersectorCmp1::Occluded(ray, nodePtr);
+    Ray2 ray(from, ls.samplePoint - from, shadowRayEpsilon);
+    return BVH4QuadCLIntersectorCmp8::Occluded(ray, nodePtr);
 }
 
 template <typename Sampler>
@@ -638,8 +638,9 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         // TODO IMPORTANT: need to robustly prevent self intersections. right now at grazing
         // angles the reflected ray is re-intersecting with the ocean, which causes the ray to
         // effectively transmit when it should reflect
-        bool intersect =
-            BVH4TriangleCLQueueIntersectorCmp8::Intersect(ray, scene->nodePtr, si);
+
+        bool intersect = BVH4QuadCLIntersectorCmp8::Intersect(ray, scene->nodePtr, si);
+        // bool intersect = BVH4TriangleCLIntersectorCmp8::Intersect(ray, scene->nodePtr, si);
         // BVH4TriangleCLIntersectorCmp1::Intersect(ray, scene->nodePtr, si);
 
         // If no intersection, sample "infinite" lights (e.g environment maps, sun, etc.)

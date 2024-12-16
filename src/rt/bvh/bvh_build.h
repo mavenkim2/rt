@@ -188,20 +188,20 @@ struct BuildFuncs
     Heuristic heuristic;
 };
 
-template <i32 N>
+template <i32 N, i32 K>
 using BLAS_SBVH_QuantizedNode_TriangleLeaf_Funcs =
     BuildFuncs<N, HeuristicSpatialSplits<>, QuantizedNode<N>, CreateQuantizedNode<N>,
-               UpdateQuantizedNode<N>, TriangleCompressed<1>, CompressedLeafNode<N>>;
+               UpdateQuantizedNode<N>, TriangleCompressed<K>, CompressedLeafNode<N>>;
 
-template <i32 N>
+template <i32 N, i32 K>
 using BLAS_SBVH_QuantizedNode_QuadLeaf_Funcs =
     BuildFuncs<N, HeuristicSpatialSplits<QuadMesh>, QuantizedNode<N>, CreateQuantizedNode<N>,
-               UpdateQuantizedNode<N>, QuadCompressed<1>, CompressedLeafNode<N>>;
+               UpdateQuantizedNode<N>, QuadCompressed<K>, CompressedLeafNode<N>>;
 
-template <i32 N>
+template <i32 N, i32 K>
 using BLAS_SBVH_QuantizedNode_QuadLeaf_Scene_Funcs =
     BuildFuncs<N, HeuristicSpatialSplits<Scene2>, QuantizedNode<N>, CreateQuantizedNode<N>,
-               UpdateQuantizedNode<N>, Quad<1>, CompressedLeafNode<N>>;
+               UpdateQuantizedNode<N>, Quad<K>, CompressedLeafNode<N>>;
 
 template <i32 N>
 using TLAS_PRB_QuantizedNode_Funcs =
@@ -233,14 +233,16 @@ struct BVHBuilder
     BVHNode<N> BuildBVH(BuildSettings settings, Record &record, bool parallel);
 };
 
-template <i32 N>
-using SBVHBuilderTriangleMesh = BVHBuilder<N, BLAS_SBVH_QuantizedNode_TriangleLeaf_Funcs<N>>;
+template <i32 N, i32 K>
+using SBVHBuilderTriangleMesh =
+    BVHBuilder<N, BLAS_SBVH_QuantizedNode_TriangleLeaf_Funcs<N, K>>;
 
-template <i32 N>
-using SBVHBuilderQuadMesh = BVHBuilder<N, BLAS_SBVH_QuantizedNode_QuadLeaf_Funcs<N>>;
+template <i32 N, i32 K>
+using SBVHBuilderQuadMesh = BVHBuilder<N, BLAS_SBVH_QuantizedNode_QuadLeaf_Funcs<N, K>>;
 
-template <i32 N>
-using SBVHBuilderSceneQuads = BVHBuilder<N, BLAS_SBVH_QuantizedNode_QuadLeaf_Scene_Funcs<N>>;
+template <i32 N, i32 K>
+using SBVHBuilderSceneQuads =
+    BVHBuilder<N, BLAS_SBVH_QuantizedNode_QuadLeaf_Scene_Funcs<N, K>>;
 
 template <i32 N>
 using PartialRebraidBuilder = BVHBuilder<N, TLAS_PRB_QuantizedNode_Funcs<N>>;
@@ -287,19 +289,19 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
 
     Split split = heuristic.Bin(record);
 
+    const u32 blockAdd   = (1 << settings.logBlockSize) - 1;
+    const u32 blockShift = settings.logBlockSize;
     // NOTE: multiply both by the area instead of dividing
-    f32 area    = HalfArea(record.geomBounds);
-    f32 leafSAH = settings.intCost * area *
-                  ((total + (1 << settings.logBlockSize) - 1) >> settings.logBlockSize);
+    f32 area     = HalfArea(record.geomBounds);
+    f32 leafSAH  = settings.intCost * area * ((total + blockAdd) >> blockShift);
     f32 splitSAH = settings.travCost * area + settings.intCost * split.bestSAH;
 
-    if (total <= settings.maxLeafSize && leafSAH <= splitSAH)
+    if (((total + blockAdd) >> blockShift) <= settings.maxLeafSize && leafSAH <= splitSAH)
     {
         heuristic.FlushState(split);
         return 0;
     }
     heuristic.Split(split, record, childRecords[0], childRecords[1]);
-    // Assert(childRecords[0].count <= record.count && childRecords[1].count <= record.count);
 
     // N - 1 splits produces N children
     for (numChildren = 2; numChildren < N; numChildren++)
@@ -325,8 +327,6 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
         Record out;
         heuristic.Split(split, childRecords[bestChild], out, childRecords[numChildren]);
 
-        // Assert(childRecords[0].count <= record.count && childRecords[1].count <=
-        // record.count);
         childRecords[bestChild] = out;
     }
 
@@ -355,7 +355,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
         if (childNodes[i].data == 0)
         {
             leafCount++;
-            primTotal += childRecords[i].count;
+            primTotal += (childRecords[i].count + blockAdd) >> blockShift;
         }
     }
 
@@ -375,17 +375,18 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
         for (u32 recordIndex = 0; recordIndex < numChildren; recordIndex++)
         {
             const Record &childRecord = childRecords[recordIndex];
-            // threadLocalStatistics[GetThreadIndex()].misc += childRecord.count; // 1; //
-            // numChildren - leafCount;
-            for (u32 primIndex = childRecord.start;
-                 primIndex < childRecord.start + childRecord.count; primIndex++)
+            u32 begin                 = childRecord.start;
+            u32 end                   = childRecord.start + childRecord.count;
+            while (begin < end)
             {
-                PrimRef *prim = &primRefs[primIndex];
-                primIDs[offset++].Fill(prim);
+                Assert(offset < primTotal);
+                primIDs[offset++].Fill(primRefs, begin, end);
             }
+            Assert(begin == end);
             Assert(recordIndex < N);
             node->offsets[recordIndex] = SafeTruncateU32ToU8(offset);
         }
+        Assert(offset == primTotal);
         return BVHNode<N>::EncodeCompressedNode(node);
     }
 
@@ -395,18 +396,20 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
         {
             u32 offset                = 0;
             const Record &childRecord = childRecords[i];
-            u32 numPrims              = childRecord.count;
-            // threadLocalStatistics[GetThreadIndex()].misc += childRecord.count; // 1; //
-            // numChildren - leafCount;
+            u32 numPrims              = (childRecord.count + blockAdd) >> blockShift;
+            Assert(numPrims <= settings.maxLeafSize);
             LeafType *primIDs =
                 PushArrayNoZeroTagged(currentArena, LeafType, numPrims, MemoryType_BVH);
-            for (u32 primIndex = childRecord.start;
-                 primIndex < childRecord.start + childRecord.count; primIndex++)
+            u32 begin = childRecord.start;
+            u32 end   = childRecord.start + childRecord.count;
+            while (begin < end)
             {
-                PrimRef *prim = &primRefs[primIndex];
-                primIDs[offset++].Fill(prim);
+                Assert(offset < numPrims);
+                primIDs[offset++].Fill(primRefs, begin, end);
             }
-            childNodes[i] = BVHNode<N>::EncodeLeaf(primIDs, childRecord.count);
+            Assert(begin == end);
+            Assert(offset == numPrims);
+            childNodes[i] = BVHNode<N>::EncodeLeaf(primIDs, numPrims);
         }
     }
     NodeType *node = PushStructNoZeroTagged(currentArena, NodeType, MemoryType_BVH);
@@ -417,7 +420,6 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
 }
 
 template <i32 N, typename BuildFunctions>
-// BVHN<N, typename BVHBuilder<N, BuildFunctions>::NodeType>
 BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Arena **inArenas,
                                                    Record &record)
 {
@@ -431,7 +433,8 @@ template <i32 N>
 BVHNode<N> BuildQuantizedTriSBVH(BuildSettings settings, Arena **inArenas, TriangleMesh *mesh,
                                  PrimRefCompressed *ref, RecordAOSSplits &record)
 {
-    SBVHBuilderTriangleMesh<N> builder;
+    SBVHBuilderTriangleMesh<N, 8> builder;
+    settings.logBlockSize = 3;
     new (&builder.heuristic)
         HeuristicSpatialSplits(ref, mesh, HalfArea(record.geomBounds), settings.logBlockSize);
     builder.primRefs = ref;
@@ -442,7 +445,8 @@ template <i32 N>
 BVHNode<N> BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas, QuadMesh *mesh,
                                   PrimRefCompressed *ref, RecordAOSSplits &record)
 {
-    SBVHBuilderQuadMesh<N> builder;
+    SBVHBuilderQuadMesh<N, 8> builder;
+    settings.logBlockSize = 3;
     new (&builder.heuristic) HeuristicSpatialSplits<QuadMesh>(
         ref, mesh, HalfArea(record.geomBounds), settings.logBlockSize);
     builder.primRefs = ref;
@@ -453,7 +457,8 @@ template <i32 N>
 BVHNode<N> BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas, Scene2 *scene,
                                   PrimRef *ref, RecordAOSSplits &record)
 {
-    SBVHBuilderSceneQuads<N> builder;
+    SBVHBuilderSceneQuads<N, 8> builder;
+    settings.logBlockSize = 3;
     new (&builder.heuristic) HeuristicSpatialSplits<Scene2>(
         ref, scene, HalfArea(record.geomBounds), settings.logBlockSize);
     builder.primRefs = ref;

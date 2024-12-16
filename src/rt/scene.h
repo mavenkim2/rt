@@ -119,134 +119,6 @@ struct Disk
     }
 };
 
-#if 0
-struct Quad
-{
-    Quad() {}
-    Quad(const Vec3f &q, const Vec3f &u, const Vec3f &v, Material *mat)
-        : q(q), u(u), v(v), material(mat)
-    {
-        Vec3f n = Cross(u, v);
-        normal  = Normalize(n);
-        d       = Dot(normal, q);
-        w       = n / Dot(n, n);
-        area    = Length(n);
-    }
-
-    inline AABB GetAABB() const
-    {
-        AABB bbox1  = AABB(q, q + u + v);
-        AABB bbox2  = AABB(q + u, q + v);
-        AABB result = AABB(bbox1, bbox2);
-        return result;
-    }
-
-    bool Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const
-    {
-        f32 denom = Dot(normal, r.d);
-        // if the ray is parallel to the plane
-        if (fabs(denom) < 1e-8f) return false;
-
-        f32 t = (d - Dot(normal, r.o)) / denom;
-
-        if (t <= tMin || t >= tMax) return false;
-
-        Vec3f intersection = r.at(t);
-
-        Vec3f planarHitVector = intersection - q;
-        f32 alpha             = Dot(w, Cross(planarHitVector, v));
-        f32 beta              = Dot(w, Cross(u, planarHitVector));
-
-        if (!(alpha >= 0 && alpha <= 1 && beta >= 0 && beta <= 1)) return false;
-
-        record.u        = alpha;
-        record.v        = beta;
-        record.p        = intersection;
-        record.t        = t;
-        record.material = material;
-        record.SetNormal(r, normal);
-        return true;
-    }
-
-    f32 PdfValue(const Vec3f &origin, const Vec3f &direction) const
-    {
-        HitRecord rec;
-        if (!this->Hit(Ray(origin, direction), 0.0001f, infinity, rec)) return 0;
-        f32 distanceSquared = rec.t * rec.t * LengthSquared(direction);
-        f32 cosine          = Abs(Dot(direction, rec.normal) / Length(direction));
-        return distanceSquared / (cosine * area);
-    };
-
-    Vec3f Random(const Vec3f &origin, Vec2f random) const
-    {
-        Vec3f p = q + (random.x * u) + (random.y * v);
-        return p - origin;
-    }
-
-    Vec3f q; // corner
-    Vec3f u, v;
-    Material *material;
-
-    f32 area;
-    // plane
-    f32 d;
-    Vec3f w;
-    Vec3f normal;
-};
-
-struct Box
-{
-    Quad sides[6];
-    Box() {}
-    Box(const Vec3f &a, const Vec3f &b, Material *mat)
-    {
-        Vec3f min = Vec3f(fmin(a.x, b.x), fmin(a.y, b.y), fmin(a.z, b.z));
-        Vec3f max = Vec3f(fmax(a.x, b.x), fmax(a.y, b.y), fmax(a.z, b.z));
-
-        Vec3f dx = Vec3f(max.x - min.x, 0, 0);
-        Vec3f dy = Vec3f(0, max.y - min.y, 0);
-        Vec3f dz = Vec3f(0, 0, max.z - min.z);
-
-        sides[0] = Quad(Vec3f(min.x, min.y, max.z), dx, dy, mat);
-        sides[1] = Quad(Vec3f(max.x, min.y, max.z), -dz, dy, mat);
-        sides[2] = Quad(Vec3f(max.x, min.y, min.z), -dx, dy, mat);
-        sides[3] = Quad(Vec3f(min.x, min.y, min.z), dz, dy, mat);
-        sides[4] = Quad(Vec3f(min.x, max.y, max.z), dx, -dz, mat);
-        sides[5] = Quad(Vec3f(min.x, min.y, min.z), dx, dz, mat);
-    }
-
-    bool Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const
-    {
-        bool hit    = false;
-        f32 closest = tMax;
-        HitRecord temp;
-        for (u32 i = 0; i < ArrayLength(sides); i++)
-        {
-            const Quad &quad = sides[i];
-            if (quad.Hit(r, tMin, tMax, temp))
-            {
-                if (temp.t < closest)
-                {
-                    closest = temp.t;
-                    record  = temp;
-                    hit     = true;
-                }
-            }
-        }
-        return hit;
-    }
-    AABB GetAABB() const
-    {
-        AABB result;
-        for (u32 i = 0; i < ArrayLength(sides); i++)
-        {
-            result = AABB(result, sides[i].GetAABB());
-        }
-        return result;
-    };
-};
-#endif
-
 struct ConstantMedium
 {
     f32 negInvDensity;
@@ -297,32 +169,6 @@ struct ConstantMedium
     }
 };
 
-// template <i32 N>
-// struct Triangle
-// {
-//     LaneU32<N> geomIDs; // mesh
-//     LaneU32<N> primIDs; // face
-//
-//     void Fill(Scene *scene, const PrimData *prim, u32 start, u32 end)
-//     {
-//         LaneU32<N> geomID;
-//         LaneU32<N> geomID;
-//
-//         Assert(end - start < N);
-//         u32 i = 0;
-//         for (; i < N && start < end; i++, start++)
-//         {
-//             geomID[i] = prim[start].GeomID();
-//             primID[i] = prim[start].PrimID();
-//         }
-//         for (; i < N - (end - start); i++, start++)
-//         {
-//             geomID[i] = geomID[0];
-//             primID[i] = -1;
-//         }
-//     }
-// };
-
 struct TriangleMesh
 {
     Vec3f *p;
@@ -346,44 +192,12 @@ struct TriangleMesh
 
 struct QuadMesh
 {
-    Vec3f *p;
-    Vec3f *n;
+    Vec3f *p     = 0;
+    Vec3f *n     = 0;
+    Vec2f *uv    = 0;
+    u32 *indices = 0;
+    u32 numIndices;
     u32 numVertices;
-
-    // TEMP
-    bool Intersect(const Ray2 &r, SurfaceInteraction &intr, f32 tMax = pos_inf)
-    {
-        bool hit = false;
-        for (u32 quadIndex = 0; quadIndex < numVertices / 4.f; quadIndex++)
-        {
-            Vec3f p0     = p[quadIndex * 4 + 0];
-            Vec3f p1     = p[quadIndex * 4 + 1];
-            Vec3f p2     = p[quadIndex * 4 + 2];
-            Vec3f p3     = p[quadIndex * 4 + 3];
-            Vec3f u      = p1 - p0;
-            Vec3f v      = p3 - p0;
-            Vec3f normal = Cross(u, v);
-            f32 denom    = 1.f / Dot(normal, r.d);
-            if (Abs(denom) < 1e-8f) continue;
-            // Find plane equation
-            f32 d = Dot(normal, p0);
-            f32 t = (d - Dot(normal, r.o)) * denom;
-            if (t <= tMinEpsilon || t >= tMax) continue;
-            Vec3f intersection    = r(t);
-            Vec3f planarHitVector = intersection - p0;
-            Vec3f w               = normal / LengthSquared(normal);
-            f32 alpha             = Dot(w, Cross(planarHitVector, v));
-            f32 beta              = Dot(w, Cross(u, planarHitVector));
-            if (!(alpha >= 0 && alpha <= 1 && beta >= 0 && beta <= 1)) continue;
-            intr.p    = intersection;
-            intr.n    = normal;
-            intr.uv   = Vec2f(alpha, beta);
-            intr.tHit = t;
-            hit       = true;
-        }
-        return hit;
-    }
-    // u32 numQuads;
 };
 
 //////////////////////////////
@@ -849,88 +663,27 @@ struct Scene2
         Lane4F32::StoreU(&minX, bounds.minP);
         Lane4F32::StoreU(&maxX, bounds.maxP);
     }
+
+    template <typename T>
+    T *Get(u32 geomID);
+
+    template <>
+    TriangleMesh *Get<TriangleMesh>(u32 geomID)
+    {
+        Assert(geomID < numTriMeshes);
+        return &triangleMeshes[geomID];
+    }
+
+    template <>
+    QuadMesh *Get<QuadMesh>(u32 geomID)
+    {
+        Assert(geomID < numMeshes);
+        return &meshes[geomID];
+    }
 };
 
 struct Scene2 *scene_;
 Scene2 *GetScene() { return scene_; }
 
-#if 0
-struct Scene
-{
-    static const u32 indexMask = 0x0fffffff;
-    static const u32 typeShift = 28;
-
-    Sampler sampler;
-
-    Sphere *spheres;
-    Quad *quads;
-    Box *boxes;
-    TriangleMesh *meshes;
-
-    PrimitiveIndices *primitiveIndices;
-
-    HomogeneousTransform *transforms;
-    ConstantMedium *media;
-
-    u32 sphereCount;
-    u32 quadCount;
-    u32 boxCount;
-    u32 meshCount;
-    u32 totalPrimitiveCount;
-
-    // PrimitiveType_Count arrays
-    u32 counts[PrimitiveType_Count];
-
-    u32 transformCount;
-    u32 mediaCount;
-
-    void FinalizePrimitives();
-
-    inline i32 GetIndex(PrimitiveType type, i32 primIndex) const;
-    inline void GetTypeAndLocalindex(const u32 totalIndex, PrimitiveType *type,
-                                     u32 *localIndex) const;
-
-    void AddConstantMedium(PrimitiveType type, i32 primIndex, i32 constantMediumIndex);
-
-    void AddTransform(PrimitiveType type, i32 primIndex, i32 transformIndex);
-
-    void GetAABBs(AABB *aabbs);
-    bool Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &temp, u32 index);
-
-    template <typename T>
-    __forceinline const T *Get(u32 i) const
-    {
-        StaticAssert(false, UnspecifiedPrimType);
-    }
-
-    template <>
-    __forceinline const Sphere *Get<Sphere>(u32 i) const
-    {
-        Assert(i < sphereCount);
-        return &spheres[i];
-    }
-
-    template <>
-    __forceinline const Quad *Get<Quad>(u32 i) const
-    {
-        Assert(i < quadCount);
-        return &quads[i];
-    }
-
-    template <>
-    __forceinline const Box *Get<Box>(u32 i) const
-    {
-        Assert(i < boxCount);
-        return &boxes[i];
-    }
-
-    template <>
-    __forceinline const TriangleMesh *Get<TriangleMesh>(u32 i) const
-    {
-        Assert(i < meshCount);
-        return &meshes[i];
-    }
-};
-#endif
 } // namespace rt
 #endif

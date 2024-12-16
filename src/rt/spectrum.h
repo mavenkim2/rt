@@ -195,7 +195,7 @@ struct SampledSpectrumBase
 
     explicit operator MaskF32() const
     {
-        MaskF32 mask(False);
+        MaskF32 mask((FalseTy()));
         for (u32 i = 0; i < NSampledWavelengths; ++i)
         {
             mask |= (values[i] != 0);

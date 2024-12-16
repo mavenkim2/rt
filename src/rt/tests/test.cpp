@@ -451,12 +451,12 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     // - make sure i'm shooting the right camera rays
     // - coated materials
     // - render a mesh w/ ptex
+    // - change the bvh build process to support N-wide leaves (need to change the sah to
+    // account for this)
 
     // TODO:
     // - the ironwood tree seems to be a bit brighter than it's supposed to be?
 
-    // - change the bvh build process to support N-wide leaves (need to change the sah to
-    // account for this)
     // - render a quad mesh properly
     // - add the second ocean layer
     // - render two instances of a quad mesh properly (i.e. test partial rebraiding)
@@ -510,9 +510,15 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
         Scene2::PrimitiveIndices(LightHandle(),
                                  MaterialHandle(MaterialType::DielectricMaterialBase, 0)),
     };
+    u32 numFaces = mesh.numIndices / 3;
+    scene->triangleMeshes = &mesh;
+    scene->numTriMeshes   = 1;
 #else
-    TriangleMesh mesh =
-        LoadPLY(arena, "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
+    // TriangleMesh mesh =
+    //     LoadPLY(arena,
+    //     "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
+    QuadMesh mesh = LoadQuadPLY(
+        arena, "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
     PtexTexture<3> texture("../data/island/textures/isIronwoodA1/Color/trunk0001_geo.ptx",
                            ColorEncoding::Gamma);
 
@@ -526,10 +532,12 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
         Scene2::PrimitiveIndices(LightHandle(),
                                  MaterialHandle(MaterialType::CoatedDiffuseMaterial1, 0)),
     };
+    u32 numFaces     = mesh.numVertices / 4;
+    scene->meshes    = &mesh;
+    scene->numMeshes = 1;
 #endif
     scene->primIndices = ids;
 
-    u32 numFaces = mesh.numIndices / 3;
     // convert to "render space" (i.e. world space centered around the camera)
     for (u32 i = 0; i < mesh.numVertices; i++)
     {
@@ -538,7 +546,9 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     // swaps the handedness
     Bounds geomBounds;
     Bounds centBounds;
-    PrimRefCompressed *refs = GenerateAOSData(arena, &mesh, numFaces, geomBounds, centBounds);
+    // PrimRefCompressed *refs = GenerateAOSData(arena, &mesh, numFaces, geomBounds,
+    // centBounds);
+    PrimRefCompressed *refs = GenerateQuadData(arena, &mesh, numFaces, geomBounds, centBounds);
 
     // environment map
     f32 sceneRadius             = 0.5f * Max(geomBounds.maxP[0] - geomBounds.minP[0],
@@ -557,19 +567,19 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     scene->lights.Set<ImageInfiniteLight>(&infLight, 1);
     scene->numLights = 1;
 
+    // build bvh
     BuildSettings settings;
-    settings.intCost      = 1.f;
-    settings.logBlockSize = DefaultLogN;
+    settings.intCost = 1.f;
 
     RecordAOSSplits record;
     record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
     record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
     record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
 
-    BVHNodeN bvh          = BuildQuantizedTriSBVH(settings, arenas, &mesh, refs, record);
-    scene->nodePtr        = bvh;
-    scene->triangleMeshes = &mesh;
-    scene->numTriMeshes   = 1;
+    // BVHNodeN bvh   = BuildQuantizedTriSBVH(settings, arenas, &mesh, refs, record);
+    BVHNodeN bvh = BuildQuantizedQuadSBVH(settings, arenas, &mesh, refs, record);
+
+    scene->nodePtr = bvh;
 
     RenderParams2 params;
     params.cameraFromRaster = cameraFromRaster;
@@ -592,6 +602,14 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     Render(arena, params);
     f32 time = OS_GetMilliseconds(counter);
     printf("total time: %fms\n", time);
+
+    f64 totalMiscTime = 0;
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        totalMiscTime += threadLocalStatistics[i].miscF;
+        printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
+    }
+    printf("total misc time: %fms \n", totalMiscTime);
 }
 
 } // namespace rt
