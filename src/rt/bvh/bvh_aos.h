@@ -1088,11 +1088,11 @@ struct alignas(32) HeuristicAOSSplitBinning
     Lane4U32 exitCounts[numBins];
 
     SplitBinner<numBins> *binner;
-    ScenePrimitives *scene;
+    const ScenePrimitives *scene;
 
     HeuristicAOSSplitBinning() {}
 
-    HeuristicAOSSplitBinning(SplitBinner<numBins> *binner, ScenePrimitives *scene)
+    HeuristicAOSSplitBinning(SplitBinner<numBins> *binner, const ScenePrimitives *scene)
         : binner(binner), scene(scene)
     {
         for (u32 dim = 0; dim < 3; dim++)
@@ -1766,13 +1766,13 @@ struct HeuristicSpatialSplits
     using HSplit = HeuristicAOSSplitBinning<numSpatialBins, PrimRef, Polygon8>;
     using OBin   = HeuristicAOSObjectBinning<numObjectBins, PrimRef>;
 
-    ScenePrimitives *scene;
+    const ScenePrimitives *scene;
     f32 rootArea;
     u32 logBlockSize;
     PrimRef *primRefs;
 
     HeuristicSpatialSplits() {}
-    HeuristicSpatialSplits(PrimRef *data, ScenePrimitives *scene, f32 rootArea,
+    HeuristicSpatialSplits(PrimRef *data, const ScenePrimitives *scene, f32 rootArea,
                            u32 logBlockSize = 0)
         : primRefs(data), scene(scene), rootArea(rootArea), logBlockSize(logBlockSize)
     {

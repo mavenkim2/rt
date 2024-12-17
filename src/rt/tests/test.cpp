@@ -457,9 +457,9 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     // account for this)
     // - render a quad mesh properly
     // - the ironwood tree seems to be a bit brighter than it's supposed to be?
+    // - add the second ocean layer
 
     // TODO:
-    // - add the second ocean layer
     // - render two instances of a quad mesh properly (i.e. test partial rebraiding)
     // - render the diffuse/diffuse transmission materials properly
     // - need to support a bvh with quad/triangle mesh instances
@@ -474,12 +474,11 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     scene_                      = PushStruct(arena, Scene);
     Scene *scene                = GetScene();
     ScenePrimitives *scenePrims = &scene->scene;
-    // TempArena temp    = ScratchStart(0, 0);
-    u32 numProcessors = OS_NumProcessors();
-    Arena **arenas    = PushArray(arena, Arena *, numProcessors);
+    u32 numProcessors           = OS_NumProcessors();
+    Arena **arenas              = PushArray(arena, Arena *, numProcessors);
     for (u32 i = 0; i < numProcessors; i++)
     {
-        arenas[i] = ArenaAlloc(16); // ArenaAlloc(ARENA_RESERVE_SIZE, LANE_WIDTH * 4);
+        arenas[i] = ArenaAlloc(16);
     }
 
     // Camera
@@ -555,16 +554,6 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
             meshes[j].p[i] -= pCamera;
         }
     }
-#if 0
-    Bounds geomBounds, geomBounds2;
-    Bounds centBounds, centBounds2;
-    PrimRefCompressed *refs =
-        GenerateAOSData(arena, &meshes[0], numFaces, geomBounds, centBounds);
-    PrimRefCompressed *refs2 =
-        GenerateAOSData(arena, &meshes[1], numFaces2, geomBounds2, centBounds2);
-    // PrimRefCompressed *refs =
-    //     GenerateQuadData(arena, &meshes[0], numFaces, geomBounds, centBounds);
-#endif
 
     // build bvh
     BuildSettings settings;
@@ -573,18 +562,6 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     BuildTriangleBVH(arenas, settings, scenePrims);
 
 #if 0
-    RecordAOSSplits record;
-    record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
-    record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
-    record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
-
-    RecordAOSSplits record2;
-    record2.geomBounds = Lane8F32(-geomBounds2.minP, geomBounds2.maxP);
-    record2.centBounds = Lane8F32(-centBounds2.minP, centBounds2.maxP);
-    record2.SetRange(0, numFaces2, u32(numFaces2 * GROW_AMOUNT));
-    BVHNodeN bvh1 = BuildQuantizedTriSBVH(settings, arenas, &meshes[0], refs, record);
-    BVHNodeN bvh2 = BuildQuantizedTriSBVH(settings, arenas, &meshes[1], refs2, record2);
-
     RecordAOSSplits recordTop;
     counter         = OS_StartCounter();
     BRef *buildRefs = GenerateBuildRefs(scenes, 0, numScenes, temp.arena, recordTop);
@@ -601,7 +578,7 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
 #endif
 
     // environment map
-    Bounds &bounds = scenePrims->bounds;
+    Bounds bounds = scenePrims->GetBounds();
     f32 sceneRadius =
         0.5f * Max(bounds.maxP[0] - bounds.minP[0],
                    Max(bounds.maxP[1] - bounds.minP[1], bounds.maxP[2] - bounds.minP[2]));

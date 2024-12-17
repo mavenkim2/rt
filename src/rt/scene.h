@@ -590,13 +590,15 @@ struct ScenePrimitives
     typedef bool (*IntersectFunc)(ScenePrimitives *, Ray2 &, SurfaceInteractions<1> &);
     typedef bool (*OccludedFunc)(ScenePrimitives *, Ray2 &);
 
-    Bounds bounds;
+    Vec3f boundsMin;
+    Vec3f boundsMax;
     BVHNodeN nodePtr;
 
     // NOTE: is one of PrimitiveType
+    void *primitives;
+
     // NOTE: only set if not a leaf node in the scene hierarchy
     ScenePrimitives *childScenes;
-    void *primitives;
     AffineSpace *affineTransforms;
 
     IntersectFunc intersectFunc;
@@ -605,8 +607,12 @@ struct ScenePrimitives
     u32 numScenes     = 0;
 
     ScenePrimitives() {}
-    Bounds GetBounds() const { return bounds; }
-    void SetBounds(const Bounds &inBounds) { bounds = inBounds; }
+    Bounds GetBounds() const { return Bounds(Lane4F32(boundsMin), Lane4F32(boundsMax)); }
+    void SetBounds(const Bounds &inBounds)
+    {
+        boundsMin = ToVec3f(inBounds.minP);
+        boundsMax = ToVec3f(inBounds.maxP);
+    }
     void BuildBVH(Arena **, BuildSettings &, u32 *outNumPrims = 0);
 };
 
@@ -626,7 +632,7 @@ struct Scene
     ArrayTuple<LightTypes> lights;
     ArrayTuple<MaterialTypes> materials;
     // Bounds bounds;
-    u32 numInstances, numLights, numScenes;
+    u32 numLights;
 
     Bounds BuildBVH(Arena **arenas, BuildSettings &settings);
     DiffuseAreaLight *GetAreaLights() { return lights.Get<DiffuseAreaLight>(); }

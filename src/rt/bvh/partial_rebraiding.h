@@ -20,7 +20,7 @@ void GenerateBuildRefs(BRef *refs, ScenePrimitives *scene, const u32 *numPrims, 
         ScenePrimitives *inScene = &scene->childScenes[index];
         BRef *ref                = &refs[i];
 
-        Bounds bounds = Transform(transform, inScene->bounds);
+        Bounds bounds = Transform(transform, inScene->GetBounds());
         Assert((Movemask(bounds.maxP >= bounds.minP) & 0x7) == 0x7);
 
         ref->StoreBounds(bounds);

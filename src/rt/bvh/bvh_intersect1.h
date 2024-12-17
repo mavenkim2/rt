@@ -175,8 +175,6 @@ struct BVHIntersector<4, types, Intersector>
     static bool Intersect(ScenePrimitives *scene, Ray2 &ray, SurfaceInteraction &itr)
     {
         // typedef typename Intersector::Primitive Primitive;
-        TIMED_FUNCTION(miscF);
-
         TravRay<4> r(ray);
 
         StackEntry stack[256];

@@ -189,30 +189,6 @@ struct BuildFuncs
     Heuristic heuristic;
 };
 
-#if 0
-template <i32 N, i32 K>
-using BLAS_SBVH_QuantizedNode_TriangleLeaf_Funcs =
-    BuildFuncs<N, HeuristicSpatialSplits<Scene2Tri, PrimRefCompressed, Triangle8>,
-               QuantizedNode<N>, CreateQuantizedNode<N>, UpdateQuantizedNode<N>,
-               TriangleCompressed<K>, CompressedLeafNode<N>>;
-
-template <i32 N, i32 K>
-using BLAS_SBVH_QuantizedNode_QuadLeaf_Funcs =
-    BuildFuncs<N, HeuristicSpatialSplits<Scene2Quad, PrimRefCompressed, Quad8>,
-               QuantizedNode<N>, CreateQuantizedNode<N>, UpdateQuantizedNode<N>,
-               QuadCompressed<K>, CompressedLeafNode<N>>;
-
-template <i32 N, i32 K>
-using BLAS_SBVH_QuantizedNode_TriangleLeaf_Scene_Funcs =
-    BuildFuncs<N, HeuristicSpatialSplits<Scene2Tri, PrimRef, Triangle8>, QuantizedNode<N>,
-               CreateQuantizedNode<N>, UpdateQuantizedNode<N>, Quad<K>, CompressedLeafNode<N>>;
-
-template <i32 N, i32 K>
-using BLAS_SBVH_QuantizedNode_QuadLeaf_Scene_Funcs =
-    BuildFuncs<N, HeuristicSpatialSplits<Scene2Quad, PrimRef, Quad8>, QuantizedNode<N>,
-               CreateQuantizedNode<N>, UpdateQuantizedNode<N>, Quad<K>, CompressedLeafNode<N>>;
-#endif
-
 template <i32 N, typename Scene>
 using TLAS_PRB_QuantizedNode_Funcs =
     BuildFuncs<N, HeuristicPartialRebraid<GetQuantizedNode>, QuantizedNode<N>,
@@ -242,23 +218,6 @@ struct BVHBuilder
     BVHNode<N> BuildBVHRoot(BuildSettings settings, Record &record);
     BVHNode<N> BuildBVH(BuildSettings settings, Record &record, bool parallel);
 };
-
-#if 0
-template <i32 N, i32 K>
-using SBVHBuilderTriangleMesh =
-    BVHBuilder<N, BLAS_SBVH_QuantizedNode_TriangleLeaf_Funcs<N, K>>;
-
-template <i32 N, i32 K>
-using SBVHBuilderSceneTris =
-    BVHBuilder<N, BLAS_SBVH_QuantizedNode_TriangleLeaf_Scene_Funcs<N, K>>;
-
-template <i32 N, i32 K>
-using SBVHBuilderQuadMesh = BVHBuilder<N, BLAS_SBVH_QuantizedNode_QuadLeaf_Funcs<N, K>>;
-
-template <i32 N, i32 K>
-using SBVHBuilderSceneQuads =
-    BVHBuilder<N, BLAS_SBVH_QuantizedNode_QuadLeaf_Scene_Funcs<N, K>>;
-#endif
 
 template <i32 N, typename Scene>
 using PartialRebraidBuilder = BVHBuilder<N, TLAS_PRB_QuantizedNode_Funcs<N, Scene>>;
@@ -477,8 +436,9 @@ struct BVHHelper<N, QuadMesh, PrimRef>
 };
 
 template <i32 N, i32 K, typename Mesh, typename PrimRef>
-BVHNode<N> BuildQuantizedSBVH(BuildSettings settings, Arena **inArenas, ScenePrimitives *scene,
-                              PrimRef *ref, RecordAOSSplits &record)
+BVHNode<N> BuildQuantizedSBVH(BuildSettings settings, Arena **inArenas,
+                              const ScenePrimitives *scene, PrimRef *ref,
+                              RecordAOSSplits &record)
 {
 
     // template <i32 N, i32 K>
@@ -499,21 +459,9 @@ BVHNode<N> BuildQuantizedSBVH(BuildSettings settings, Arena **inArenas, ScenePri
     return builder.BuildBVH(settings, inArenas, record);
 }
 
-template <typename Mesh, typename PrimRef>
-__forceinline BVHNodeN BuildQuantizedSBVH(BuildSettings settings, Arena **inArenas,
-                                          ScenePrimitives *scene, PrimRef *refs,
-                                          RecordAOSSplits &record)
-{
-#if defined(USE_BVH4)
-    return BuildQuantizedSBVH<4, 8>(settings, inArenas, scene, refs, record);
-#elif defined(USE_BVH8)
-    return BuildQuantizedSBVH<8, 8>(settings, inArenas, mesh, refs, record);
-#endif
-}
-
 template <typename PrimRef>
 __forceinline BVHNodeN BuildQuantizedTriSBVH(BuildSettings settings, Arena **inArenas,
-                                             ScenePrimitives *scene, PrimRef *refs,
+                                             const ScenePrimitives *scene, PrimRef *refs,
                                              RecordAOSSplits &record)
 {
 #if defined(USE_BVH4)
@@ -525,7 +473,7 @@ __forceinline BVHNodeN BuildQuantizedTriSBVH(BuildSettings settings, Arena **inA
 
 template <typename PrimRef>
 __forceinline BVHNodeN BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas,
-                                              ScenePrimitives *scene, PrimRef *refs,
+                                              const ScenePrimitives *scene, PrimRef *refs,
                                               RecordAOSSplits &record)
 {
 #if defined(USE_BVH4)
@@ -534,60 +482,6 @@ __forceinline BVHNodeN BuildQuantizedQuadSBVH(BuildSettings settings, Arena **in
     return BuildQuantizedSBVH<8, 8, QuadMesh>(settings, inArenas, scene, refs, record);
 #endif
 }
-
-#if 0
-template <i32 N>
-BVHNode<N> BuildQuantizedTriSBVH(BuildSettings settings, Arena **inArenas, Scene2Tri *scene,
-                                 PrimRefCompressed *ref, RecordAOSSplits &record)
-{
-    SBVHBuilderTriangleMesh<N, 8> builder;
-    using Heuristic       = typename decltype(builder)::Heuristic;
-    settings.logBlockSize = 3;
-    new (&builder.heuristic)
-        Heuristic(ref, scene, HalfArea(record.geomBounds), settings.logBlockSize);
-    builder.primRefs = ref;
-    return builder.BuildBVH(settings, inArenas, record);
-}
-
-template <i32 N>
-BVHNode<N> BuildQuantizedTriSBVH(BuildSettings settings, Arena **inArenas, Scene2Tri *scene,
-                                 PrimRef *ref, RecordAOSSplits &record)
-{
-    SBVHBuilderSceneTris<N, 8> builder;
-    using Heuristic       = typename decltype(builder)::Heuristic;
-    settings.logBlockSize = 3;
-    new (&builder.heuristic)
-        Heuristic(ref, scene, HalfArea(record.geomBounds), settings.logBlockSize);
-    builder.primRefs = ref;
-    return builder.BuildBVH(settings, inArenas, record);
-}
-
-template <i32 N>
-BVHNode<N> BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas, Scene2Quad *scene,
-                                  PrimRefCompressed *ref, RecordAOSSplits &record)
-{
-    SBVHBuilderQuadMesh<N, 8> builder;
-    using Heuristic       = typename decltype(builder)::Heuristic;
-    settings.logBlockSize = 3;
-    new (&builder.heuristic)
-        Heuristic(ref, scene, HalfArea(record.geomBounds), settings.logBlockSize);
-    builder.primRefs = ref;
-    return builder.BuildBVH(settings, inArenas, record);
-}
-
-template <i32 N>
-BVHNode<N> BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas, Scene2Quad *scene,
-                                  PrimRef *ref, RecordAOSSplits &record)
-{
-    SBVHBuilderSceneQuads<N, 8> builder;
-    using Heuristic       = typename decltype(builder)::Heuristic;
-    settings.logBlockSize = 3;
-    new (&builder.heuristic) HeuristicSpatialSplits<Scene2>(
-        ref, scene, HalfArea(record.geomBounds), settings.logBlockSize);
-    builder.primRefs = ref;
-    return builder.BuildBVH(settings, inArenas, record);
-}
-#endif
 
 template <i32 N, typename Scene>
 BVHNode<N> BuildTLASQuantized(BuildSettings settings, Arena **inArenas, Scene *scene,
@@ -610,56 +504,6 @@ __forceinline BVHNodeN BuildTLASQuantized(BuildSettings settings, Arena **inAren
     return BuildTLASQuantized<Scene, 8>(settings, inArenas, scene, refs, record);
 #endif
 }
-
-//////////////////////////////
-// Helpers
-//
-#if 0
-__forceinline BVHNodeN BuildQuantizedTriSBVH(BuildSettings settings, Arena **inArenas,
-                                             TriangleMesh *mesh, PrimRefCompressed *refs,
-                                             RecordAOSSplits &record)
-{
-#if defined(USE_BVH4)
-    return BuildQuantizedTriSBVH<4>(settings, inArenas, mesh, refs, record);
-#elif defined(USE_BVH8)
-    return BuildQuantizedTriSBVH<8>(settings, inArenas, mesh, refs, record);
-#endif
-}
-
-__forceinline BVHNodeN BuildQuantizedTriSBVH(BuildSettings settings, Arena **inArenas,
-                                             Scene2Tri *scene, PrimRefCompressed *refs,
-                                             RecordAOSSplits &record)
-{
-#if defined(USE_BVH4)
-    return BuildQuantizedTriSBVH<4>(settings, inArenas, scene, refs, record);
-#elif defined(USE_BVH8)
-    return BuildQuantizedTriSBVH<8>(settings, inArenas, mesh, refs, record);
-#endif
-}
-
-__forceinline BVHNodeN BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas,
-                                              QuadMesh *mesh, PrimRefCompressed *refs,
-                                              RecordAOSSplits &record)
-{
-#if defined(USE_BVH4)
-    return BuildQuantizedQuadSBVH<4>(settings, inArenas, mesh, refs, record);
-#elif defined(USE_BVH8)
-    return BuildQuantizedQuadSBVH<8>(settings, inArenas, mesh, refs, record);
-#endif
-}
-
-__forceinline BVHNodeN BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas,
-                                              Scene2 *scene, PrimRef *refs,
-                                              RecordAOSSplits &record)
-{
-#if defined(USE_BVH4)
-    return BuildQuantizedQuadSBVH<4>(settings, inArenas, scene, refs, record);
-#elif defined(USE_BVH8)
-    return BuildQuantizedQuadSBVH<8>(settings, inArenas, scene, refs, record);
-#endif
-}
-
-#endif
 
 } // namespace rt
 #endif

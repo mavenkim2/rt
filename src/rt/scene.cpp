@@ -2816,20 +2816,22 @@ void BuildTriangleBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *
     {
         PrimRefCompressed *refs =
             GenerateTriRefs<PrimRefCompressed>(temp.arena, scene, record, &numPrims);
-        BuildQuantizedTriSBVH(settings, arenas, scene, refs, record);
-        using IntersectorType = BVH4TriangleIntersectorCmp8;
+        scene->nodePtr        = BuildQuantizedTriSBVH(settings, arenas, scene, refs, record);
+        using IntersectorType = BVH4TriangleCLIntersectorCmp8;
         scene->intersectFunc  = &IntersectorType::Intersect;
         scene->occludedFunc   = &IntersectorType::Occluded;
     }
     else
     {
-        PrimRef *refs = GenerateTriRefs<PrimRef>(temp.arena, scene, record, &numPrims);
-        BuildQuantizedTriSBVH(settings, arenas, scene, refs, record);
-        using IntersectorType = BVH4TriangleIntersector8;
+        PrimRef *refs         = GenerateTriRefs<PrimRef>(temp.arena, scene, record, &numPrims);
+        scene->nodePtr        = BuildQuantizedTriSBVH(settings, arenas, scene, refs, record);
+        using IntersectorType = BVH4TriangleCLIntersector8;
         scene->intersectFunc  = &IntersectorType::Intersect;
         scene->occludedFunc   = &IntersectorType::Occluded;
     }
+    scene->SetBounds(Bounds(record.geomBounds));
     if (outNumPrims) *outNumPrims = numPrims;
+    Assert(scene);
     ScratchEnd(temp);
 }
 
