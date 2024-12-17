@@ -10,11 +10,11 @@ void GenerateBuildRefs(BRef *refs, Scene *scene, const u32 *numPrims, u32 start,
     Scene *baseScene = GetScene();
     Bounds geom;
     Bounds cent;
-    Instance *instances = scene->primitives;
+    const Instance *instances = GetInstances(scene);
     for (u32 i = start; i < start + count; i++)
     {
-        Instance &instance     = instances[i];
-        AffineSpace &transform = baseScene->affineTransforms[instance.transformIndex];
+        const Instance &instance = instances[i];
+        AffineSpace &transform   = baseScene->affineTransforms[instance.transformIndex];
         // Assert(instance.geomID.GetType() == GeometryType::Instance);
         u32 index = instance.geomID.GetIndex(); // + 1;
         Assert(index < scene->numScenes);
@@ -43,8 +43,7 @@ template <typename Scene>
 BRef *GenerateBuildRefs(Scene *scene, Arena *arena, const u32 *numPrims,
                         RecordAOSSplits &record)
 {
-    Scene2 *scene    = &scenes[sceneIndex];
-    u32 numInstances = scene->numPrimitives;
+    u32 numInstances = GetNumInstances(scene);
     u32 extEnd       = 4 * numInstances;
     BRef *b          = PushArrayNoZero(arena, BRef, extEnd);
 
@@ -59,7 +58,7 @@ BRef *GenerateBuildRefs(Scene *scene, Arena *arena, const u32 *numPrims,
     }
     else
     {
-        GenerateBuildRefs(b, scene, numPrim, 0, numInstances, record);
+        GenerateBuildRefs(b, scene, numPrims, 0, numInstances, record);
     }
     record.SetRange(0, numInstances, extEnd);
     return b;
@@ -164,20 +163,20 @@ struct GetQuantizedNode
 
 // TODO: the number of nodes that this generates can vary very very wildly (like ~6 mil), find
 // out why
-template <typename GetNode, i32 numObjectBins = 32>
+template <typename Scene, typename GetNode, i32 numObjectBins = 32>
 struct HeuristicPartialRebraid
 {
     using Record  = RecordAOSSplits;
     using PrimRef = BRef;
     using OBin    = HeuristicAOSObjectBinning<numObjectBins, BRef>;
 
-    Scene2 *scene;
+    Scene *scene;
     BRef *buildRefs;
     GetNode getNode;
     u32 logBlockSize;
 
     HeuristicPartialRebraid() {}
-    HeuristicPartialRebraid(Scene2 *scene, BRef *data, u32 logBlockSize = 0)
+    HeuristicPartialRebraid(Scene *scene, BRef *data, u32 logBlockSize = 0)
         : scene(scene), buildRefs(data), logBlockSize(logBlockSize)
     {
     }

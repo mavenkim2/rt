@@ -99,6 +99,7 @@ PrimRefCompressed *GenerateQuadData(Arena *arena, QuadMesh *mesh, u32 numFaces,
     return refs;
 }
 
+#if 0
 void AOSSBVHBuilderTest(Arena *arena, TriangleMesh *mesh)
 {
     arena->align = 64;
@@ -124,7 +125,7 @@ void AOSSBVHBuilderTest(Arena *arena, TriangleMesh *mesh)
     record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
     record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
 
-    BVHNodeN bvh = BuildQuantizedTriSBVH(settings, arenas, mesh, refs, record);
+    BVHNodeN bvh = BuildQuantizedSBVH(settings, arenas, mesh, refs, record);
     f32 time     = OS_GetMilliseconds(counter);
     printf("num faces: %u\n", numFaces);
     printf("Build time: %fms\n", time);
@@ -172,7 +173,7 @@ void QuadSBVHBuilderTest(Arena *arena, QuadMesh *mesh)
     record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
     record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
 
-    BVHNodeN bvh = BuildQuantizedQuadSBVH(settings, arenas, mesh, refs, record);
+    BVHNodeN bvh = BuildQuantizedSBVH(settings, arenas, mesh, refs, record);
     f32 time     = OS_GetMilliseconds(counter);
     printf("num faces: %u\n", numFaces);
     printf("Build time: %fms\n", time);
@@ -195,7 +196,6 @@ void QuadSBVHBuilderTest(Arena *arena, QuadMesh *mesh)
     printf("record kb: %llu", totalRecordMemory / 1024); // num nodes: %llu\n", numNodes);
 }
 
-#if 0
 void PartialRebraidBuilderTest(Arena *arena)
 {
     TempArena temp    = ScratchStart(0, 0);
@@ -574,7 +574,7 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     BuildSettings settings;
     settings.intCost = 1.f;
 
-    scene->BuildBVH(arenas, settings);
+    Bounds bounds = scene->BuildBVH(arenas, settings);
 
 #if 0
     RecordAOSSplits record;
@@ -605,9 +605,9 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
 #endif
 
     // environment map
-    f32 sceneRadius             = 0.5f * Max(geomBounds.maxP[0] - geomBounds.minP[0],
-                                             Max(geomBounds.maxP[1] - geomBounds.minP[1],
-                                                 geomBounds.maxP[2] - geomBounds.minP[2]));
+    f32 sceneRadius =
+        0.5f * Max(bounds.maxP[0] - bounds.minP[0],
+                   Max(bounds.maxP[1] - bounds.minP[1], bounds.maxP[2] - bounds.minP[2]));
     AffineSpace renderFromLight = AffineSpace::Scale(-1, 1, 1) *
                                   AffineSpace::Rotate(Vec3f(-1, 0, 0), Radians(90)) *
                                   AffineSpace::Rotate(Vec3f(0, 0, 1), Radians(65));

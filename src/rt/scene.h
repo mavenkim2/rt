@@ -2,7 +2,6 @@
 #define SCENE_H
 
 #include "bvh/bvh_types.h"
-#include "bvh/partial_rebraiding.h"
 #include "handles.h"
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/util/GridHandle.h>
@@ -582,17 +581,26 @@ struct PrimitiveIndices
     }
 };
 
+struct Ray2;
+template <i32 K>
+struct SurfaceInteractions;
+
 struct Scene
 {
+    typedef bool (*IntersectFunc)(Scene *, Ray2 &, SurfaceInteractions<1> &);
+    typedef bool (*OccludedFunc)(Scene *, Ray2 &);
+
     Instance *instances;
     struct Scene2 **childScenes;
-    ArrayTuple<PrimitiveTypes> shapes;
+    // ArrayTuple<PrimitiveTypes> shapes;
 
     const PrimitiveIndices *primIndices;
     ArrayTuple<LightTypes> lights;
     ArrayTuple<MaterialTypes> materials;
     AffineSpace *affineTransforms;
     BVHNodeN nodePtr;
+    IntersectFunc intersectFunc;
+    OccludedFunc occludedFunc;
     // Bounds bounds;
     u32 numInstances, numLights, numScenes;
 
@@ -613,6 +621,9 @@ struct Scene
     //     shapes.Dispatch(closure, id.GetIndex());
     // }
 
+    Instance *GetInstances() { return instances; }
+    const Instance *GetInstances() const { return instances; }
+    u32 GetNumInstances() const { return numInstances; }
     template <typename T>
     T *Get(u32 geomID)
     {
@@ -637,160 +648,74 @@ Scene *GetScene() { return scene_; }
 
 struct Scene2
 {
+    typedef bool (*IntersectFunc)(Scene2 *, Ray2 &, SurfaceInteractions<1> &);
+    typedef bool (*OccludedFunc)(Scene2 *, Ray2 &);
+
     Bounds bounds;
     BVHNodeN nodePtr;
+
+    // NOTE: is one of PrimitiveType
+    void *primitives;
+    Scene2 *childScenes;
+
+    IntersectFunc intersectFunc;
+    OccludedFunc occludedFunc;
+    u32 numPrimitives = 0;
+    u32 numScenes     = 0;
+
+    Scene2() {}
     Bounds GetBounds() const { return bounds; }
     void SetBounds(const Bounds &inBounds) { bounds = inBounds; }
-    virtual void BuildBVH(Arena **, BuildSettings &, u32 *outNumPrims = 0) = 0;
+    void BuildBVH(Arena **, BuildSettings &, u32 *outNumPrims = 0);
+
+    void BuildBVH(Arena **arenas, BuildSettings &settings, u32 *outNumPrims) override;
 };
 
+void BuildQuadBVH(Arena **arenas, BuildSettings &settings, u32 *outNumPrims, Scene2 *scene);
+void BuildTriangleBVH(Arena **arenas, BuildSettings &settings, u32 *outNumPrims,
+                      Scene2 *scene);
+
+#if 0
 template <typename PrimitiveType>
 struct Scene2Impl : Scene2
 {
+    typedef bool (*IntersectFunc)(Scene2Impl<PrimitiveType> *, Ray2 &,
+                                  SurfaceInteractions<1> &);
+    typedef bool (*OccludedFunc)(Scene2Impl<PrimitiveType> *, Ray2 &);
     static const u32 type             = IndexOf<PrimitiveType, PrimitiveTypes>::count;
     static const GeometryType geoType = GeometryType(type);
     // Leaf node in scene hierarchy
     PrimitiveType *primitives;
     // Child node in scene hierarchy
     Scene2 **childScenes;
+    IntersectFunc intersectFunc;
+    OccludedFunc occludedFunc;
     u32 numPrimitives = 0;
     u32 numScenes     = 0;
 
     Scene2Impl() {}
+
     void BuildBVH(Arena **arenas, BuildSettings &settings, u32 *outNumPrims) override;
 };
 
 typedef Scene2Impl<Instance> Scene2Inst;
 typedef Scene2Impl<TriangleMesh> Scene2Tri;
 typedef Scene2Impl<QuadMesh> Scene2Quad;
-
-template <typename PrimRef>
-PrimRef *GeneratePrimRefs(Arena *arena, Scene2Tri *scene, u32 offset, u32 offsetMax, u32 start,
-                          u32 count, RecordAOSSplits &record, u32 *outNumPrims = 0);
-// what I'm thinking: instances are always instances of a scene, never of a shape. if you want
-// an instance of just one shape, you have a scene that contains only one
-Bounds Scene::BuildBVH(Arena **arenas, BuildSettings &settings)
-{
-    TempArena temp = ScratchStart(0, 0);
-    // First instantiate all child pointers
-    if (childScenes)
-    {
-        Assert(instances);
-        u32 *numPrims = PushArrayNoZero(temp.arena, u32, numScenes);
-        for (u32 i = 0; i < numScenes; i++)
-        {
-            Scene2 *childScene = childScenes[i];
-            if (childScene->nodePtr.data == 0)
-            {
-                childScene->BuildBVH(arenas, settings, &numPrims[i]);
-            }
-        }
-        // build tlas
-        RecordAOSSplits record;
-        BRef *refs = GenerateBuildRefs(this, temp.arena, numPrims, record);
-        nodePtr    = BuildTLASQuantized(settings, arenas, this, refs, record);
-        return Bounds(record.geomBounds);
-    }
-    else
-    {
-        Assert(instances == 0);
-        // TODO: this is kinda hacky
-        if (numScenes = 1)
-        {
-            nodePtr = childScenes[0]->nodePtr;
-        }
-        else
-        {
-            Assert(0);
-        }
-    }
-    ScratchEnd(temp);
-}
-
-template <typename Prim>
-void Scene2Impl<Prim>::BuildBVH(Arena **arenas, BuildSettings &settings, u32 *outNumPrims)
-{
-    TempArena temp  = ScratchStart(0, 0);
-    u32 threadIndex = GetThreadIndex();
-    // Partial rebraiding
-    if constexpr (std::is_same_v<Prim, Instance>)
-    {
-#if 0
-        Assert(childScenes);
-        for (u32 i = 0; i < numChildScenes; i++)
-        {
-            Scene2 *scene = childScenes[i];
-            scene->BuildBVH();
-        }
-        RecordAOSSplits record;
-        BRef *refs = GenerateBuildRefs(this, childScenes, numChildScenes, temp.arena, );
-        BuildTLASQuantized(settings, arenas, refs);
 #endif
-    }
-    else if constexpr (std::is_same_v<Prim, TriangleMesh>)
-    {
-        Assert(numPrimitives);
-        // Compressed builder
-        Bounds geomBounds, centBounds;
-        u32 numPrims;
-        if (numPrimitives == 1)
-        {
-            PrimRefCompressed *refs = GenerateTriRefs<PrimRefCompressed>(
-                temp.arena, primitives, geomBounds, centBounds, &numPrims);
-            RecordAOSSplits record;
-            record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
-            record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
-            record.SetRange(0, numPrims, u32(numPrims * GROW_AMOUNT));
-            BuildQuantizedTriSBVH(settings, arenas, primitives, refs, record);
-        }
-        else
-        {
-            PrimRef *refs =
-                GenerateTriRefs<PrimRef>(temp.arena, this, geomBounds, centBounds, &numPrims);
-            RecordAOSSplits record;
-            record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
-            record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
-            record.SetRange(0, numPrims, u32(numPrims * GROW_AMOUNT));
-            BuildQuantizedTriSBVH(settings, arenas, this, refs, record);
-        }
-        if (outNumPrims) *outNumPrims = numPrims;
-    }
-    else if constexpr (std::is_same_v<Prim, QuadMesh>)
-    {
-        Assert(numPrimitives);
-        // Compressed builder
-#if 0
-        if (numPrimitives == 1)
-        {
-            u32 numFaces;
-            Bounds geomBounds, centBounds;
-            PrimRefCompressed *refs =
-                Generate(arenas[threadIndex], primitives, geomBounds, centBounds);
-            RecordAOSSplits record;
-            record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
-            record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
-            record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
-            BuildQuantizedQuadSBVH(settings, arenas, primitives, refs, record);
-        }
-        else
-        {
-            u32 numFaces;
-            Bounds geomBounds, centBounds;
-            PrimRef *refs = GenerateAOSData(arenas[threadIndex], this, geomBounds, centBounds);
-            RecordAOSSplits record;
-            record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
-            record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
-            record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
-            BuildQuantizedQuadSBVH(settings, arenas, this, refs, record);
-        }
-#endif
-    }
-    else
-    {
-        Error(0, "Invalid primitive type. Currently only supporting quad meshes, triangle "
-                 "meshes, and instances");
-    }
-}
+
+u32 GetNumInstances(Scene *scene) { return scene->numInstances; }
+u32 GetNumInstances(Scene2Inst *scene) { return scene->numPrimitives; }
+const Instance *GetInstances(Scene *scene) { return scene->instances; }
+const Instance *GetInstances(Scene2Inst *scene) { return scene->primitives; }
+
+template <typename PrimRefType>
+PrimRefType *GenerateTriRefs(Arena *arena, Scene2Tri *scene, RecordAOSSplits &record,
+                             u32 *outNumPrims = 0);
+template <typename PrimRefType>
+void GenerateTriRefs(PrimRefType *ref, u32 offset, TriangleMesh *mesh, u32 geomID, u32 start,
+                     u32 count, RecordAOSSplits &record);
+// what I'm thinking: instances are always instances of a scene, never of a shape. if you
+// want an instance of just one shape, you have a scene that contains only one
 
 #if 0
 // NOTE: only leaf scenes can

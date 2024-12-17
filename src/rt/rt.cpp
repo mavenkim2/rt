@@ -39,6 +39,7 @@
 #include "string.cpp"
 #include "debug.cpp"
 #include "base_types.cpp"
+#include "bvh/bvh_types.cpp"
 #include "thread_context.cpp"
 #include "spectrum.cpp"
 #include "memory.cpp"

@@ -1,5 +1,6 @@
 #ifndef BVH_AOS_H
 #define BVH_AOS_H
+#include "bvh_types.h"
 #include <atomic>
 #include <utility>
 
@@ -66,8 +67,11 @@ struct Quad8
         Assert(i < 12);
         return v[i];
     }
-    static void Load(const QuadMesh *mesh, const u32 dim, const u32 faceIndices[8], Quad8 *out)
+    static void Load(const Scene2Quad *scene, const u32 dim, const u32 faceIndices[8],
+                     Quad8 *out)
     {
+        Assert(scene->numPrimitives == 1);
+        QuadMesh *mesh = &scene->primitives[0];
         u32 faceIndexA = faceIndices[0];
         u32 faceIndexB = faceIndices[1];
         u32 faceIndexC = faceIndices[2];
@@ -295,13 +299,118 @@ struct Triangle8
         return v[i];
     }
 
-    static void Load(TriangleMesh *mesh, const u32 dim, const u32 faceIndices[8],
+    static void Load(const Scene2Tri *scene, const u32 dim, const u32 geomIDs[8],
+                     const u32 faceIndices[8], Triangle8 *out)
+    {
+        TriangleMesh *mesh = &scene->primitives[0];
+        u32 faceIndexA     = faceIndices[0];
+        u32 faceIndexB     = faceIndices[1];
+        u32 faceIndexC     = faceIndices[2];
+        u32 faceIndexD     = faceIndices[3];
+
+        TriangleMesh *meshes[8] = {
+            &scene->primitives[geomIDs[0]], &scene->primitives[geomIDs[1]],
+            &scene->primitives[geomIDs[2]], &scene->primitives[geomIDs[3]],
+            &scene->primitives[geomIDs[4]], &scene->primitives[geomIDs[5]],
+            &scene->primitives[geomIDs[6]], &scene->primitives[geomIDs[7]]};
+
+        Lane4F32 v0a =
+            Lane4F32::LoadU((float *)(&meshes[0]->p[meshes[0]->indices[faceIndexA * 3]]));
+        Lane4F32 v1a =
+            Lane4F32::LoadU((float *)(&meshes[0]->p[meshes[0]->indices[faceIndexA * 3 + 1]]));
+        Lane4F32 v2a =
+            Lane4F32::LoadU((float *)(&meshes[0]->p[meshes[0]->indices[faceIndexA * 3 + 2]]));
+
+        Lane4F32 v0b =
+            Lane4F32::LoadU((float *)(&meshes[1]->p[meshes[1]->indices[faceIndexB * 3]]));
+        Lane4F32 v1b =
+            Lane4F32::LoadU((float *)(&meshes[1]->p[meshes[1]->indices[faceIndexB * 3 + 1]]));
+        Lane4F32 v2b =
+            Lane4F32::LoadU((float *)(&meshes[1]->p[meshes[1]->indices[faceIndexB * 3 + 2]]));
+
+        Lane4F32 v0c =
+            Lane4F32::LoadU((float *)(&meshes[2]->p[meshes[2]->indices[faceIndexC * 3]]));
+        Lane4F32 v1c =
+            Lane4F32::LoadU((float *)(&meshes[2]->p[meshes[2]->indices[faceIndexC * 3 + 1]]));
+        Lane4F32 v2c =
+            Lane4F32::LoadU((float *)(&meshes[2]->p[meshes[2]->indices[faceIndexC * 3 + 2]]));
+
+        Lane4F32 v0d =
+            Lane4F32::LoadU((float *)(&meshes[3]->p[meshes[3]->indices[faceIndexD * 3]]));
+        Lane4F32 v1d =
+            Lane4F32::LoadU((float *)(&meshes[3]->p[meshes[3]->indices[faceIndexD * 3 + 1]]));
+        Lane4F32 v2d =
+            Lane4F32::LoadU((float *)(&meshes[3]->p[meshes[3]->indices[faceIndexD * 3 + 2]]));
+
+        Vec3lf4 p0;
+        Vec3lf4 p1;
+        Vec3lf4 p2;
+
+        Transpose4x3(v0a, v0b, v0c, v0d, p0.x, p0.y, p0.z);
+        Transpose4x3(v1a, v1b, v1c, v1d, p1.x, p1.y, p1.z);
+        Transpose4x3(v2a, v2b, v2c, v2d, p2.x, p2.y, p2.z);
+
+        faceIndexA = faceIndices[4];
+        faceIndexB = faceIndices[5];
+        faceIndexC = faceIndices[6];
+        faceIndexD = faceIndices[7];
+        v0a = Lane4F32::LoadU((float *)(&meshes[4]->p[meshes[4]->indices[faceIndexA * 3]]));
+        v1a =
+            Lane4F32::LoadU((float *)(&meshes[4]->p[meshes[4]->indices[faceIndexA * 3 + 1]]));
+        v2a =
+            Lane4F32::LoadU((float *)(&meshes[4]->p[meshes[4]->indices[faceIndexA * 3 + 2]]));
+
+        v0b = Lane4F32::LoadU((float *)(&meshes[5]->p[meshes[5]->indices[faceIndexB * 3]]));
+        v1b =
+            Lane4F32::LoadU((float *)(&meshes[5]->p[meshes[5]->indices[faceIndexB * 3 + 1]]));
+        v2b =
+            Lane4F32::LoadU((float *)(&meshes[5]->p[meshes[5]->indices[faceIndexB * 3 + 2]]));
+
+        v0c = Lane4F32::LoadU((float *)(&meshes[6]->p[meshes[6]->indices[faceIndexC * 3]]));
+        v1c =
+            Lane4F32::LoadU((float *)(&meshes[6]->p[meshes[6]->indices[faceIndexC * 3 + 1]]));
+        v2c =
+            Lane4F32::LoadU((float *)(&meshes[6]->p[meshes[6]->indices[faceIndexC * 3 + 2]]));
+
+        v0d = Lane4F32::LoadU((float *)(&meshes[7]->p[meshes[7]->indices[faceIndexD * 3]]));
+        v1d =
+            Lane4F32::LoadU((float *)(&meshes[7]->p[meshes[7]->indices[faceIndexD * 3 + 1]]));
+        v2d =
+            Lane4F32::LoadU((float *)(&meshes[7]->p[meshes[7]->indices[faceIndexD * 3 + 2]]));
+
+        Vec3lf4 p3;
+        Vec3lf4 p4;
+        Vec3lf4 p5;
+
+        Transpose4x3(v0a, v0b, v0c, v0d, p3.x, p3.y, p3.z);
+        Transpose4x3(v1a, v1b, v1c, v1d, p4.x, p4.y, p4.z);
+        Transpose4x3(v2a, v2b, v2c, v2d, p5.x, p5.y, p5.z);
+
+        u32 v = LUTAxis[dim];
+        u32 w = LUTAxis[v];
+
+        out->v0u = Lane8F32(p0[dim], p3[dim]);
+        out->v1u = Lane8F32(p1[dim], p4[dim]);
+        out->v2u = Lane8F32(p2[dim], p5[dim]);
+
+        out->v0v = Lane8F32(p0[v], p3[v]);
+        out->v1v = Lane8F32(p1[v], p4[v]);
+        out->v2v = Lane8F32(p2[v], p5[v]);
+
+        out->v0w = Lane8F32(p0[w], p3[w]);
+        out->v1w = Lane8F32(p1[w], p4[w]);
+        out->v2w = Lane8F32(p2[w], p5[w]);
+    }
+
+    static void Load(const Scene2Tri *scene, const u32 dim, const u32 faceIndices[8],
                      Triangle8 *out)
     {
-        u32 faceIndexA = faceIndices[0];
-        u32 faceIndexB = faceIndices[1];
-        u32 faceIndexC = faceIndices[2];
-        u32 faceIndexD = faceIndices[3];
+        Assert(scene->numPrimitives == 1);
+        TriangleMesh *mesh = &scene->primitives[0];
+        u32 faceIndexA     = faceIndices[0];
+        u32 faceIndexB     = faceIndices[1];
+        u32 faceIndexC     = faceIndices[2];
+        u32 faceIndexD     = faceIndices[3];
 
         Lane4F32 v0a = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3]]));
         Lane4F32 v1a = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3 + 1]]));
@@ -967,12 +1076,13 @@ struct HeuristicAOSObjectBinning
     }
 };
 
-template <i32 numBins = 16, typename Polygon8 = Triangle8, typename SceneType = TriangleMesh>
+template <i32 numBins, typename PrimRefType, typename Polygon8, typename SceneType>
 struct alignas(32) HeuristicAOSSplitBinning
 {
-#define UseGeomIDs std::is_same_v<SceneType, Scene2>
+#define UseGeomIDs !std::is_same_v<PrimRefType, PrimRefCompressed>
 
-    using PrimRef = std::conditional_t<UseGeomIDs, PrimRef, PrimRefCompressed>;
+    using ThisType = HeuristicAOSSplitBinning<numBins, PrimRefType, Polygon8, SceneType>;
+    using PrimRef  = PrimRefType;
     Bounds8 bins[3][numBins];
     Lane4U32 entryCounts[numBins];
     Lane4U32 exitCounts[numBins];
@@ -1488,7 +1598,7 @@ struct alignas(32) HeuristicAOSSplitBinning
         return l;
     }
 
-    void Merge(const HeuristicAOSSplitBinning<numBins, Polygon8, SceneType> &other)
+    void Merge(const ThisType &other)
     {
         for (u32 i = 0; i < numBins; i++)
         {
@@ -1644,17 +1754,16 @@ u32 SplitFallback(const Record &record, Split &split, const PrimRef *primRefs, R
 
 // SBVH
 static const f32 sbvhAlpha = 1e-5;
-template <typename SceneType = TriangleMesh, i32 numObjectBins = 32, i32 numSpatialBins = 16>
+template <typename SceneType, typename PrimRefType, typename Polygon8Type,
+          i32 numObjectBins = 32, i32 numSpatialBins = 16>
 struct HeuristicSpatialSplits
 {
     using Record = RecordAOSSplits;
 
-    using PrimRef =
-        std::conditional_t<std::is_same_v<SceneType, Scene2>, PrimRef, PrimRefCompressed>;
-    using Polygon8 =
-        std::conditional_t<std::is_same_v<SceneType, TriangleMesh>, Triangle8, Quad8>;
+    using PrimRef  = PrimRefType;
+    using Polygon8 = Polygon8Type;
 
-    using HSplit = HeuristicAOSSplitBinning<numSpatialBins, Polygon8, SceneType>;
+    using HSplit = HeuristicAOSSplitBinning<numSpatialBins, PrimRef, Polygon8, SceneType>;
     using OBin   = HeuristicAOSObjectBinning<numObjectBins, PrimRef>;
 
     SceneType *scene;

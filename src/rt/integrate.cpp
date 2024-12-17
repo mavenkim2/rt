@@ -610,7 +610,12 @@ Vec3f OffsetRayOrigin(const Vec3f &p, const Vec3f &err, const Vec3f &n,
     return outP;
 }
 
-bool Occluded(Ray2 &r, BVHNodeN nodePtr, SurfaceInteraction &si, LightSample &ls)
+bool Occluded(Scene *scene, Ray2 &ray)
+{
+    Assert(scene->occludedFunc);
+    return scene->occludedFunc(scene, ray);
+}
+bool Occluded(Scene *scene, Ray2 &r, SurfaceInteraction &si, LightSample &ls)
 {
     const f32 shadowRayEpsilon = 1 - .0001f;
 
@@ -618,14 +623,20 @@ bool Occluded(Ray2 &r, BVHNodeN nodePtr, SurfaceInteraction &si, LightSample &ls
     // Vec3f to                   = OffsetRayOrigin(ls.p, ls.rayOrigin);
     Ray2 ray(from, ls.samplePoint - from, shadowRayEpsilon);
     // return BVH4QuadCLIntersectorCmp8::Occluded(ray, nodePtr);
-    return BVH4TriangleCLIntersectorCmp8::Occluded(ray, nodePtr);
+    return Occluded(scene, ray);
+}
+
+bool Intersect(Scene *scene, Ray2 &ray, SurfaceInteraction &si)
+{
+    Assert(scene->intersectFunc);
+    return scene->intersectFunc(scene, ray, si);
 }
 
 template <typename Sampler>
 SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda)
 {
-    Scene2 *scene = GetScene();
-    u32 depth     = 0;
+    Scene *scene = GetScene();
+    u32 depth    = 0;
     SampledSpectrum L(0.f);
     SampledSpectrum beta(1.f);
 
@@ -643,7 +654,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         // effectively transmit when it should reflect
 
         // bool intersect = BVH4QuadCLIntersectorCmp8::Intersect(ray, scene->nodePtr, si);
-        bool intersect = BVH4TriangleCLIntersectorCmp8::Intersect(ray, scene->nodePtr, si);
+        bool intersect = Intersect(scene, ray, si);
         // BVH4TriangleCLIntersectorCmp1::Intersect(ray, scene->nodePtr, si);
 
         // If no intersection, sample "infinite" lights (e.g environment maps, sun, etc.)
@@ -743,7 +754,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
                     f32 p_b;
                     SampledSpectrum f =
                         bsdf.EvaluateSample(-ray.d, ls.wi, p_b) * AbsDot(si.shading.n, ls.wi);
-                    if (f && !Occluded(ray, scene->nodePtr, si, ls))
+                    if (f && !Occluded(scene, ray, si, ls))
                     {
                         // Calculate contribution
                         f32 lightPdf = pmf * ls.pdf;
