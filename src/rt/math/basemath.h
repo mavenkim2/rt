@@ -208,6 +208,12 @@ inline constexpr i32 NextPowerOfTwo(i32 v)
     return v + 1;
 }
 
+inline u32 SafeTruncateU64ToU32(u64 val)
+{
+    u32 result = (u32)val;
+    Assert(val <= 0xffffffff);
+    return result;
+}
 inline u16 SafeTruncateU32(u32 val)
 {
     u16 result = (u16)val;

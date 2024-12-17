@@ -195,9 +195,12 @@ void QuadSBVHBuilderTest(Arena *arena, QuadMesh *mesh)
     printf("record kb: %llu", totalRecordMemory / 1024); // num nodes: %llu\n", numNodes);
 }
 
+#if 0
 void PartialRebraidBuilderTest(Arena *arena)
 {
     TempArena temp    = ScratchStart(0, 0);
+    scene_            = PushStruct(arena, Scene);
+    Scene *scene      = GetScene();
     u32 numProcessors = OS_NumProcessors();
     Arena **arenas    = PushArray(arena, Arena *, numProcessors);
     for (u32 i = 0; i < numProcessors; i++)
@@ -209,16 +212,14 @@ void PartialRebraidBuilderTest(Arena *arena)
     string instanceFile  = "data/island/pbrt-v4/instances.data";
     string transformFile = "data/island/pbrt-v4/transforms.data";
     PerformanceCounter counter;
-    counter = OS_StartCounter();
-    u64 numScenes;
-    Scene2 *scenes =
-        InitializeScene(arenas, meshDirectory, instanceFile, transformFile, numScenes);
+    counter         = OS_StartCounter();
+    Scene2 **scenes = InitializeScene(arenas, meshDirectory, instanceFile, transformFile);
     printf("scene initialization + blas build time: %fms\n", OS_GetMilliseconds(counter));
     Print("scene initialization + blas build time: %fms\n", OS_GetMilliseconds(counter));
 
     RecordAOSSplits record;
     counter         = OS_StartCounter();
-    BRef *buildRefs = GenerateBuildRefs(scenes, 0, numScenes, temp.arena, record);
+    BRef *buildRefs = GenerateBuildRefs(scene, scenes, 0, scene->numScenes, temp.arena, record);
     printf("time to generate build refs: %fms\n", OS_GetMilliseconds(counter));
 
     BuildSettings settings;
@@ -248,6 +249,7 @@ void PartialRebraidBuilderTest(Arena *arena)
     printf("record kb: %llu", totalRecordMemory / 1024);
     ScratchEnd(temp);
 }
+#endif
 
 void PartitionFix()
 {
@@ -461,6 +463,7 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     // - render two instances of a quad mesh properly (i.e. test partial rebraiding)
     // - render the diffuse/diffuse transmission materials properly
     // - need to support a bvh with quad/triangle mesh instances
+    // - add area lights (making sure they cannot be intersected, but are sampled properly)
     // - load the scene description and properly instantiate lights/materials/textures
 
     // - render the scene with all quad meshes, then add support for the bspline curves
@@ -468,8 +471,13 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     // once moana is rendered
     // - ray differentials
 
-    scene_        = PushStruct(arena, Scene2);
-    Scene2 *scene = GetScene();
+    scene_              = PushStruct(arena, Scene);
+    Scene *scene        = GetScene();
+    Scene2 **scenes     = PushStruct(arena, Scene2 *);
+    scene->childScenes  = scenes;
+    scenes[0]           = PushStruct(arena, Scene2Tri);
+    Scene2Tri *sceneTri = (Scene2Tri *)scenes[0];
+    scene->numScenes    = 1;
     // TempArena temp    = ScratchStart(0, 0);
     u32 numProcessors = OS_NumProcessors();
     Arena **arenas    = PushArray(arena, Arena *, numProcessors);
@@ -508,16 +516,16 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     ConstantSpectrum spec(1.1f);
     DielectricMaterialBase mat(DielectricMaterialConstant(ct, spec), NullShader());
     scene->materials.Set<DielectricMaterialBase>(&mat, 1);
-    Scene2::PrimitiveIndices ids[] = {
-        Scene2::PrimitiveIndices(LightHandle(),
-                                 MaterialHandle(MaterialType::DielectricMaterialBase, 0)),
-        Scene2::PrimitiveIndices(LightHandle(),
-                                 MaterialHandle(MaterialType::DielectricMaterialBase, 0)),
+    PrimitiveIndices ids[] = {
+        PrimitiveIndices(LightHandle(),
+                         MaterialHandle(MaterialType::DielectricMaterialBase, 0)),
+        PrimitiveIndices(LightHandle(),
+                         MaterialHandle(MaterialType::DielectricMaterialBase, 0)),
     };
-    u32 numFaces          = meshes[0].numIndices / 3;
-    u32 numFaces2         = meshes[1].numIndices / 3;
-    scene->triangleMeshes = meshes;
-    scene->numTriMeshes   = 1;
+    u32 numFaces            = meshes[0].numIndices / 3;
+    u32 numFaces2           = meshes[1].numIndices / 3;
+    sceneTri->primitives    = meshes;
+    sceneTri->numPrimitives = 2;
 #else
     // TriangleMesh mesh =
     //     LoadPLY(arena,
@@ -551,35 +559,50 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
             meshes[j].p[i] -= pCamera;
         }
     }
+#if 0
     Bounds geomBounds, geomBounds2;
     Bounds centBounds, centBounds2;
     PrimRefCompressed *refs =
         GenerateAOSData(arena, &meshes[0], numFaces, geomBounds, centBounds);
-    // PrimRefCompressed *refs2 =
-    //     GenerateAOSData(arena, &meshes[1], numFaces2, geomBounds2, centBounds2);
+    PrimRefCompressed *refs2 =
+        GenerateAOSData(arena, &meshes[1], numFaces2, geomBounds2, centBounds2);
     // PrimRefCompressed *refs =
     //     GenerateQuadData(arena, &meshes[0], numFaces, geomBounds, centBounds);
+#endif
 
     // build bvh
     BuildSettings settings;
     settings.intCost = 1.f;
 
+    scene->BuildBVH(arenas, settings);
+
+#if 0
     RecordAOSSplits record;
     record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
     record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
     record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
 
-    // RecordAOSSplits record2;
-    // record2.geomBounds = Lane8F32(-geomBounds2.minP, geomBounds2.maxP);
-    // record2.centBounds = Lane8F32(-centBounds2.minP, centBounds2.maxP);
-    // record2.SetRange(0, numFaces2, u32(numFaces2 * GROW_AMOUNT));
-    BVHNodeN bvh = BuildQuantizedTriSBVH(settings, arenas, &meshes[0], refs, record);
-    // BVHNodeN bvh2 = BuildQuantizedTriSBVH(settings, arenas, &meshes[1], refs2, record2);
+    RecordAOSSplits record2;
+    record2.geomBounds = Lane8F32(-geomBounds2.minP, geomBounds2.maxP);
+    record2.centBounds = Lane8F32(-centBounds2.minP, centBounds2.maxP);
+    record2.SetRange(0, numFaces2, u32(numFaces2 * GROW_AMOUNT));
+    BVHNodeN bvh1 = BuildQuantizedTriSBVH(settings, arenas, &meshes[0], refs, record);
+    BVHNodeN bvh2 = BuildQuantizedTriSBVH(settings, arenas, &meshes[1], refs2, record2);
 
-    // BVHNodeN bvh = BuildTLASQuantized(settings, arenas, ?, ?, ?);
+    RecordAOSSplits recordTop;
+    counter         = OS_StartCounter();
+    BRef *buildRefs = GenerateBuildRefs(scenes, 0, numScenes, temp.arena, recordTop);
+    printf("time to generate build refs: %fms\n", OS_GetMilliseconds(counter));
+
+    BuildSettings settings;
+    settings.intCost = 0.3f;
+
+    counter       = OS_StartCounter();
+    BVHNodeN node = BuildTLASQuantized(settings, arenas, &scenes[0], buildRefs, recordTop);
+    BVHNodeN bvh = BuildTLASQuantized(settings, arenas, ?, ?, ?);
     // BVHNodeN bvh = BuildQuantizedQuadSBVH(settings, arenas, &meshes[0], refs, record);
-
     scene->nodePtr = bvh;
+#endif
 
     // environment map
     f32 sceneRadius             = 0.5f * Max(geomBounds.maxP[0] - geomBounds.minP[0],

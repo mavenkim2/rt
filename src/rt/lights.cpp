@@ -486,7 +486,7 @@ LE_INF(ImageInfiniteLight)
 //
 // TODO: find the class of each sample, add to a corresponding queue, when the queue is
 // full enough, generate the samples
-static LightSample SampleLi(Scene2 *scene, LightHandle lightHandle,
+static LightSample SampleLi(Scene *scene, LightHandle lightHandle,
                             const SurfaceInteraction &intr, const SampledWavelengths &lambda,
                             Vec2f &u, bool allowIncompletePDF = false)
 {
@@ -509,7 +509,7 @@ static LightSample SampleLi(Scene2 *scene, LightHandle lightHandle,
     }
 }
 
-static f32 PDF_Li(Scene2 *scene, LightHandle lightHandle, Vec3f &prevIntrP,
+static f32 PDF_Li(Scene *scene, LightHandle lightHandle, Vec3f &prevIntrP,
                   SurfaceInteraction &intr, bool allowIncompletePDF = false)
 {
     LightClass lClass = lightHandle.GetType();
@@ -533,7 +533,7 @@ static f32 PDF_Li(Scene2 *scene, LightHandle lightHandle, Vec3f &prevIntrP,
 
 // NOTE: other pdfs cannot sample dirac delta distributions (unless they have the same
 // direction)
-static SampledSpectrum Le(Scene2 *scene, LightHandle lightHandle, Vec3f &n, Vec3f &w,
+static SampledSpectrum Le(Scene *scene, LightHandle lightHandle, Vec3f &n, Vec3f &w,
                           SampledWavelengths &lambda)
 {
     LightClass lClass = lightHandle.GetType();
@@ -553,7 +553,7 @@ static SampledSpectrum Le(Scene2 *scene, LightHandle lightHandle, Vec3f &n, Vec3
     }
 }
 
-// void BuildLightPDF(Scene2 *scene)
+// void BuildLightPDF(Scene *scene)
 // {
 //     u32 total = 0;
 //     for (u32 i = 0; i < LightClass_Count; i++)
@@ -563,9 +563,9 @@ static SampledSpectrum Le(Scene2 *scene, LightHandle lightHandle, Vec3f &n, Vec3
 //     }
 // }
 
-f32 LightPDF(Scene2 *scene) { return 1.f / scene->numLights; }
+f32 LightPDF(Scene *scene) { return 1.f / scene->numLights; }
 
-LightHandle UniformLightSample(Scene2 *scene, f32 u, f32 *pmf = 0)
+LightHandle UniformLightSample(Scene *scene, f32 u, f32 *pmf = 0)
 {
     if (scene->numLights == 0) return LightHandle();
     u32 lightIndex = Min(u32(u * scene->numLights), scene->numLights - 1);

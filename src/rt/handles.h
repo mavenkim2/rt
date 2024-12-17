@@ -23,12 +23,11 @@ namespace rt
     EXPAND(COUNT_ARGS_IMPL(__VA_ARGS__, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7,  \
                            6, 5, 4, 3, 2, 1))
 
-// TODO: temporary
-// enum MaterialType
-// {
-//     MT_DielectricMaterial,
-//     MT_CoatedDiffuse,
-// };
+struct QuadMesh;
+struct TriangleMesh;
+struct Instance;
+
+CREATE_ENUM_AND_TYPE_PACK(PrimitiveTypes, GeometryType, QuadMesh, TriangleMesh, Instance);
 
 template <typename BxDFShader, typename NormalShader>
 struct Material2;

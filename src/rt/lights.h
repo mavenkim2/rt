@@ -40,19 +40,19 @@ bool IsDeltaLight(LightType type)
     return type == LightType::DeltaPosition || type == LightType::DeltaDirection;
 }
 
-struct Scene2;
+struct Scene;
 
 // clang-format off
 #define SAMPLE_LI_HEADER() static LightSample SAMPLE_LI_BODY
 #define SAMPLE_LI(type)    LightSample type::SAMPLE_LI_BODY
 #define SAMPLE_LI_BODY                                                                         \
-    SampleLi(const Scene2 *scene, const LaneNU32 lightIndices, const SurfaceInteractionsN &intr, \
+    SampleLi(const Scene *scene, const LaneNU32 lightIndices, const SurfaceInteractionsN &intr, \
              const SampledWavelengths &lambda, const Vec2lfn &u, bool allowIncompletePDF)
 
 #define PDF_LI_HEADER() static LaneNF32 PDF_LI_BODY
 #define PDF_LI(type)    LaneNF32 type::PDF_LI_BODY 
 #define PDF_LI_BODY \
-    PDF_Li(const Scene2 *scene, const LaneNU32 lightIndices, \
+    PDF_Li(const Scene *scene, const LaneNU32 lightIndices, \
            const Vec3lfn &prevIntrP, const SurfaceInteractionsN &intr, bool allowIncompletePDF)
 
 #define PDF_LI_INF_HEADER(type) static LaneNF32 PDF_LI_INF_BODY(type)

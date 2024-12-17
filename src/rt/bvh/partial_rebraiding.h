@@ -3,20 +3,22 @@
 namespace rt
 {
 
-void GenerateBuildRefs(BRef *refs, Scene2 *scene, Scene2 *scenes, u64 numScenes, u32 start,
-                       u32 count, RecordAOSSplits &record)
+template <typename Scene>
+void GenerateBuildRefs(BRef *refs, Scene *scene, const u32 *numPrims, u32 start, u32 count,
+                       RecordAOSSplits &record)
 {
+    Scene *baseScene = GetScene();
     Bounds geom;
     Bounds cent;
-    Instance *instances = scene->instances;
+    Instance *instances = scene->primitives;
     for (u32 i = start; i < start + count; i++)
     {
         Instance &instance     = instances[i];
-        AffineSpace &transform = scene->affineTransforms[instance.transformIndex];
-        Assert(instance.geomID.GetType() == GT_InstanceType);
-        u32 index = instance.geomID.GetIndex() + 1;
-        Assert(index < numScenes);
-        Scene2 *inScene = &scenes[index];
+        AffineSpace &transform = baseScene->affineTransforms[instance.transformIndex];
+        // Assert(instance.geomID.GetType() == GeometryType::Instance);
+        u32 index = instance.geomID.GetIndex(); // + 1;
+        Assert(index < scene->numScenes);
+        Scene2 *inScene = scene->childScenes[index];
         BRef *ref       = &refs[i];
 
         Bounds bounds = Transform(transform, inScene->GetBounds());
@@ -28,7 +30,7 @@ void GenerateBuildRefs(BRef *refs, Scene2 *scene, Scene2 *scenes, u64 numScenes,
 
         ref->instanceID = i;
         ref->nodePtr    = inScene->nodePtr;
-        ref->numPrims   = inScene->numPrims;
+        ref->numPrims   = numPrims[i];
 
         Error(ref->nodePtr.data, "Invalid scene: %u\n", index);
     }
@@ -36,11 +38,13 @@ void GenerateBuildRefs(BRef *refs, Scene2 *scene, Scene2 *scenes, u64 numScenes,
     record.centBounds = Lane8F32(-cent.minP, cent.maxP);
 }
 
-BRef *GenerateBuildRefs(Scene2 *scenes, u32 sceneIndex, u64 numScenes, Arena *arena,
+// NOTE: either Scene or Scene2Inst
+template <typename Scene>
+BRef *GenerateBuildRefs(Scene *scene, Arena *arena, const u32 *numPrims,
                         RecordAOSSplits &record)
 {
     Scene2 *scene    = &scenes[sceneIndex];
-    u32 numInstances = scene->numInstances;
+    u32 numInstances = scene->numPrimitives;
     u32 extEnd       = 4 * numInstances;
     BRef *b          = PushArrayNoZero(arena, BRef, extEnd);
 
@@ -49,13 +53,13 @@ BRef *GenerateBuildRefs(Scene2 *scenes, u32 sceneIndex, u64 numScenes, Arena *ar
         ParallelReduce<RecordAOSSplits>(
             &record, 0, numInstances, PARALLEL_THRESHOLD,
             [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
-                GenerateBuildRefs(b, scene, scenes, numScenes, start, count, record);
+                GenerateBuildRefs(b, scene, numPrims, start, count, record);
             },
             [&](RecordAOSSplits &l, const RecordAOSSplits &r) { l.Merge(r); });
     }
     else
     {
-        GenerateBuildRefs(b, scene, scenes, numScenes, 0, numInstances, record);
+        GenerateBuildRefs(b, scene, numPrim, 0, numInstances, record);
     }
     record.SetRange(0, numInstances, extEnd);
     return b;
@@ -64,7 +68,7 @@ BRef *GenerateBuildRefs(Scene2 *scenes, u32 sceneIndex, u64 numScenes, Arena *ar
 static const f32 REBRAID_THRESHOLD = .1f;
 
 template <typename Heuristic, typename GetNode>
-void OpenBraid(const Scene2 *scene, RecordAOSSplits &record, BRef *refs, u32 start, u32 count,
+void OpenBraid(const Scene *scene, RecordAOSSplits &record, BRef *refs, u32 start, u32 count,
                u32 offset, const u32 offsetMax, Heuristic &heuristic, GetNode &getNode)
 {
     // TIMED_FUNCTION(miscF);

@@ -512,8 +512,9 @@ __forceinline BVHNodeN BuildQuantizedQuadSBVH(BuildSettings settings, Arena **in
 #endif
 }
 
+template <typename Scene>
 __forceinline BVHNodeN BuildTLASQuantized(BuildSettings settings, Arena **inArenas,
-                                          Scene2 *scene, BRef *refs, RecordAOSSplits &record)
+                                          Scene *scene, BRef *refs, RecordAOSSplits &record)
 {
 #if defined(USE_BVH4)
     return BuildTLASQuantized<4>(settings, inArenas, scene, refs, record);

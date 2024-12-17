@@ -1,5 +1,6 @@
 namespace rt
 {
+#if 0
 AABB Transform(const HomogeneousTransform &transform, const AABB &aabb)
 {
     AABB result;
@@ -120,6 +121,7 @@ Vec3f Sphere::Random(const Vec3f &origin, Vec2f u) const
     Vec3f result = ConvertToLocal(&basis, Vec3f(x, y, z));
     return result;
 }
+#endif
 
 //////////////////////////////
 // Scene
@@ -2717,6 +2719,120 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     ScratchEnd(temp);
 }
 
+// TODO: parallelize
+template <typename PRef>
+void GenerateTriRefs(PrimRef *ref, u32 offset, TriangleMesh *mesh, u32 geomID, u32 start,
+                     u32 count, RecordAOSSplits &record)
+{
+#define UseGeomIDs std::is_same_v<PRef, PrimRef>
+    Bounds geomBounds;
+    Bounds centBounds;
+    for (u32 i = start; i < start + count; i++, offset++)
+    {
+        u32 i0, i1, i2;
+        if (mesh->indices)
+        {
+            i0 = mesh->indices[i * 3];
+            i1 = mesh->indices[i * 3 + 1];
+            i2 = mesh->indices[i * 3 + 2];
+        }
+        else
+        {
+            i0 = i * 3;
+            i1 = i * 3 + 1;
+            i2 = i * 3 + 2;
+        }
+
+        PRef *prim = &refs[offset];
+        Vec3f v0   = mesh->p[i0];
+        Vec3f v1   = mesh->p[i1];
+        Vec3f v2   = mesh->p[i2];
+
+        Vec3f min = Min(Min(v0, v1), v2);
+        Vec3f max = Max(Max(v0, v1), v2);
+
+        Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
+        Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
+        Lane4F32::StoreU(prim->min, -mins);
+        prim->maxX = max.x;
+        prim->maxY = max.y;
+        prim->maxZ = max.z;
+        // prim->m256 = Lane8F32(-mins, maxs);
+
+        if constexpr (UseGeomIDs) prim->geomID = geomID;
+        prim->primID = i;
+
+        geomBounds.Extend(mins, maxs);
+        centBounds.Extend((maxs + mins)); //* 0.5f);
+    }
+    record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+    record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+#undef UseGeomIDs
+}
+
+template <typename PrimRef>
+PrimRef *GeneratePrimRefs(Arena *arena, Scene2Tri *scene, u32 offset, u32 offsetMax, u32 start,
+                          u32 count, RecordAOSSplits &record, u32 *outNumPrims)
+{
+    RecordAOSSplits r(neg_inf);
+    u32 totalNum = 0;
+    for (u32 i = 0; i < scene->numPrimitives; i++)
+    {
+        TriangleMesh *mesh = &scene->primitives[i];
+        u32 numFaces;
+        if (mesh->indices)
+        {
+            numFaces = mesh->numIndices / 3;
+        }
+        else
+        {
+            numFaces = mesh->numVertices / 3;
+        }
+        totalNum += numFaces;
+    }
+    u64 align    = arena->align;
+    arena->align = 64;
+    PRef *refs   = PushArray(arena, PRef, u32(totalNum * GROW_AMOUNT) + 1);
+    arena->align = align;
+
+    u32 offset = 0;
+    for (u32 i = 0; i < scene->numPrimitives; i++)
+    {
+        TriangleMesh *mesh = &scene->primitives[i];
+        u32 numFaces;
+        if (mesh->indices)
+        {
+            numFaces = mesh->numIndices / 3;
+        }
+        else
+        {
+            numFaces = mesh->numVertices / 3;
+        }
+        RecordAOSSplits tempRecord;
+        if (numFaces > PARALLEL_THRESHOLD)
+        {
+            ParallelReduce<RecordAOSSplits>(
+                &tempRecord, 0, numFaces, PARALLEL_THRESHOLD,
+                [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
+                    Assert(offset + start < offsetMax);
+                    GenerateTriRefs(refs, offset + start, mesh, i, start, count, record);
+                },
+                [&](RecordAOSSplits &l, const RecordAOSSplits &r) { l.Merge(r); });
+        }
+        else
+        {
+            Assert(offset < offsetMax);
+            GenerateTriRefs(refs, offset, mesh, i, 0, numFaces, tempRecord);
+        }
+        r.Merge(tempRecord);
+        offset += numFaces;
+    }
+
+    Assert(offsetMax == offset);
+    if (outNumPrims) outNumPrims = totalNum;
+    record = r;
+}
+
 template <typename PRef>
 void GeneratePrimRefs(PRef *refs, u32 offset, QuadMesh *mesh, u32 geomID, u32 start, u32 count,
                       RecordAOSSplits &record)
@@ -2727,10 +2843,21 @@ void GeneratePrimRefs(PRef *refs, u32 offset, QuadMesh *mesh, u32 geomID, u32 st
     for (u32 i = start; i < start + count; i++, offset++)
     {
         PRef *prim = &refs[offset];
-        Vec3f v0   = mesh->p[4 * i + 0];
-        Vec3f v1   = mesh->p[4 * i + 1];
-        Vec3f v2   = mesh->p[4 * i + 2];
-        Vec3f v3   = mesh->p[4 * i + 3];
+        Vec3f v0, v1, v2, v3;
+        if (mesh->indices)
+        {
+            v0 = mesh->p[mesh->indices[4 * i + 0]];
+            v1 = mesh->p[mesh->indices[4 * i + 1]];
+            v2 = mesh->p[mesh->indices[4 * i + 2]];
+            v3 = mesh->p[mesh->indices[4 * i + 3]];
+        }
+        else
+        {
+            v0 = mesh->p[4 * i + 0];
+            v1 = mesh->p[4 * i + 1];
+            v2 = mesh->p[4 * i + 2];
+            v3 = mesh->p[4 * i + 3];
+        }
 
         Vec3f min = Min(Min(v0, v1), Min(v2, v3));
         Vec3f max = Max(Max(v0, v1), Max(v2, v3));
@@ -2750,6 +2877,7 @@ void GeneratePrimRefs(PRef *refs, u32 offset, QuadMesh *mesh, u32 geomID, u32 st
     }
     record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
     record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+#undef UseGeomIDs
 }
 
 template <typename PrimRef>
@@ -2840,13 +2968,11 @@ u32 FixQuadMeshPointers(Arena *arena, QuadMesh *meshes, const LookupEntry *entri
     return vertCount;
 }
 
-Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFile,
-                        string transformFile, u64 &numScenes)
+Scene2 **InitializeScene(Arena **arenas, string meshDirectory, string instanceFile,
+                         string transformFile)
 {
     TempArena temp = ScratchStart(0, 0);
     Arena *arena   = arenas[GetThreadIndex()];
-
-    Scene2 *out;
 
     // Read the mesh file data
     string lutPath = StrConcat(temp.arena, meshDirectory, "lut.mesh");
@@ -2859,7 +2985,8 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
     FilePtr *ptrs  = PushArray(temp.arena, FilePtr, numEntries);
     Mutex *mutexes = PushArray(temp.arena, Mutex, numEntries);
 
-    out = PushArray(arena, Scene2, numEntries + 1);
+    u32 *sceneNumPrims = PushArray(temp.arena, u32, numEntries);
+    Scene2 **out       = PushArray(arena, Scene2 *, numEntries);
 
     // Fix geometry pointers, start bottom level BVH builds
     // PerformanceCounter counter = OS_StartCounter();
@@ -2871,14 +2998,18 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
         LoadFile(arena, entries, jobID, meshDirectory, ptrs, mutexes);
         QuadMesh *meshes   = (QuadMesh *)(ptrs[jobID].ptr);
         LookupEntry *entry = &entries[jobID];
-        Scene2 *group      = &out[jobID + 1];
-        group->meshes      = meshes;
-        group->numMeshes   = entry->quadMeshCount;
-        Assert(group->numMeshes > 0);
+        out[jobID]         = PushStruct(arena, Scene2Quad);
+        Scene2Quad *group  = (Scene2Quad *)out[jobID];
+        // TODO: I changed the quad mesh format so this no longer works. putting this here in
+        // case I forget
+        Assert(0);
+        group->primitives    = meshes;
+        group->numPrimitives = entry->quadMeshCount;
+        Assert(group->numPrimitives > 0);
         u32 totalVertexCount = 0;
 
         BuildSettings settings;
-        settings.intCost = 0.3f;
+        settings.intCost = 1.f;
         if (entry->quadMeshCount > PARALLEL_THRESHOLD)
         {
             ParallelForOutput output =
@@ -2918,7 +3049,7 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
 
             group->SetBounds(record.geomBounds);
             record.SetRange(0, numFaces, extEnd);
-            group->numPrims = numFaces;
+            sceneNumPrims[jobID] = numFaces;
 
             // printf("start num faces: %u\n", numFaces);
             // PerformanceCounter counter = OS_StartCounter();
@@ -2943,7 +3074,7 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
                 GeneratePrimRefs(meshes, refs, 0, numFaces, 0, entry->quadMeshCount, record);
                 group->SetBounds(record.geomBounds);
                 record.SetRange(0, numFaces, extEnd);
-                group->numPrims = numFaces;
+                sceneNumPrims[jobID] = numFaces;
 
                 // printf("start num faces: %u\n", numFaces);
                 // PerformanceCounter counter = OS_StartCounter();
@@ -2955,15 +3086,15 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
             {
                 PrimRefCompressed *refs =
                     PushArrayNoZero(temp.arena, PrimRefCompressed, extEnd + 1);
-                GeneratePrimRefs(refs, 0, &group->meshes[0], 0, 0, numFaces, record);
+                GeneratePrimRefs(refs, 0, &group->primitives[0], 0, 0, numFaces, record);
                 group->SetBounds(record.geomBounds);
                 record.SetRange(0, numFaces, extEnd);
-                group->numPrims = numFaces;
+                sceneNumPrims[jobID] = numFaces;
 
                 // printf("start num faces: %u\n", numFaces);
                 // PerformanceCounter counter = OS_StartCounter();
-                group->nodePtr =
-                    BuildQuantizedQuadSBVH(settings, arenas, &group->meshes[0], refs, record);
+                group->nodePtr = BuildQuantizedQuadSBVH(settings, arenas,
+                                                        &group->primitives[0], refs, record);
                 // printf("build time: %fms\nnum faces: %u\n\n", OS_GetMilliseconds(counter),
                 // numFaces);
             }
@@ -2975,13 +3106,14 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
 
     // printf("blas build time: %fms\n", OS_GetMilliseconds(counter));
 
+    Scene *scene = GetScene();
+    Assert(scene);
     scheduler.Schedule(&jobCounter, [&](u32 jobID) {
         string instanceFileData  = OS_ReadFile(arena, instanceFile);
         string transformFileData = OS_ReadFile(arena, transformFile);
         Tokenizer instTokenzier(instanceFileData);
         u64 numInstances;
         GetPointerValue(&instTokenzier, &numInstances);
-        Scene2 *scene           = &out[0];
         scene->instances        = (Instance *)instTokenzier.cursor;
         scene->numInstances     = u32(numInstances);
         scene->affineTransforms = (AffineSpace *)transformFileData.str;
@@ -2989,7 +3121,8 @@ Scene2 *InitializeScene(Arena **arenas, string meshDirectory, string instanceFil
     scheduler.Wait(&jobCounter);
 
     ScratchEnd(temp);
-    numScenes = numEntries + 1;
+    scene->numScenes = SafeTruncateU64ToU32(numEntries);
+    // numScenes            = numEntries + 1;
     return out;
 }
 

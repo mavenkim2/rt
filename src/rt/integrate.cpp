@@ -17,16 +17,18 @@ namespace rt
 //      - ray differentials
 
 // after that's done:
-// - adaptive sampling
+// what I think is reasonable
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
-// - equiangular sampling
 // - multi level instancing using the original json format
-// - bdpt, metropolis, vcm/upbp, mcm?
-// - subdivision surfaces
-// - actual displacement mapping (instead of bump mapping)
-
-// harder stuff
+// - vcm
+// - adaptive sampling
+// - equiangular sampling
+// - bdpt, metropolis, upbp, mcm?
+//
+// maybe unreasonable:
 // - covariance tracing
+// - actual displacement mapping (instead of bump mapping)
+// - subdivision surfaces
 // - path guiding
 // - non exponential free flight
 // - photon planes & volumes

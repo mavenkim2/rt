@@ -157,13 +157,13 @@ struct Quad8
         out->v3w = Lane8F32(p3[w], p7[w]);
     }
 
-    static void Load(const Scene2 *scene, const u32 dim, const u32 geomIDs[8],
+    static void Load(const Scene2Quad *scene, const u32 dim, const u32 geomIDs[8],
                      const u32 faceIndices[8], Quad8 *out)
     {
-        QuadMesh *meshes[8] = {&scene->meshes[geomIDs[0]], &scene->meshes[geomIDs[1]],
-                               &scene->meshes[geomIDs[2]], &scene->meshes[geomIDs[3]],
-                               &scene->meshes[geomIDs[4]], &scene->meshes[geomIDs[5]],
-                               &scene->meshes[geomIDs[6]], &scene->meshes[geomIDs[7]]};
+        QuadMesh *meshes[8] = {&scene->primitives[geomIDs[0]], &scene->primitives[geomIDs[1]],
+                               &scene->primitives[geomIDs[2]], &scene->primitives[geomIDs[3]],
+                               &scene->primitives[geomIDs[4]], &scene->primitives[geomIDs[5]],
+                               &scene->primitives[geomIDs[6]], &scene->primitives[geomIDs[7]]};
 
         u32 faceIndexA = faceIndices[0];
         u32 faceIndexB = faceIndices[1];

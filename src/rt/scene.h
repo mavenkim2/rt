@@ -1,6 +1,9 @@
 #ifndef SCENE_H
 #define SCENE_H
 
+#include "bvh/bvh_types.h"
+#include "bvh/partial_rebraiding.h"
+#include "handles.h"
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/util/GridHandle.h>
 #include <nanovdb/util/IO.h>
@@ -208,6 +211,7 @@ struct SceneHandle
     u32 count;
 };
 
+#if 0
 struct PrimitiveIndices
 {
     i32 transformIndex     = -1;
@@ -232,6 +236,7 @@ struct HomogeneousTransform
     Vec3f translation;
     f32 rotateAngleY;
 };
+#endif
 
 struct ScenePacket
 {
@@ -271,29 +276,19 @@ struct ScenePacket
     // }
 };
 
-enum GeometryType
-{
-    GT_QuadMeshType = 0,
-    GT_InstanceType = 1,
-};
-
 struct GeometryID
 {
     static const u32 indexMask = 0x0fffffff;
     static const u32 typeShift = 28;
 
-    // static const u32 sphereType       = 0;
-    // static const u32 quadType         = 1;
-    // static const u32 boxType          = 2;
-    // static const u32 triangleMeshType = 3;
-    // static const u32 curveType        = 4;
-    // static const u32 subdivType       = 5;
-    // static const u32 instanceType     = 16;
-    static const u32 quadMeshType = GT_QuadMeshType;
-    static const u32 instanceType = GT_InstanceType;
+    static const u32 quadMeshType = (u32)GeometryType::QuadMesh;
+    static const u32 instanceType = (u32)GeometryType::TriangleMesh;
+
+    static_assert(instanceType < 16, "Not enough bits for geometry types");
 
     u32 id;
 
+    GeometryID() {}
     GeometryID(u32 id) : id(id) {}
 
     static GeometryID CreateInstanceID(u32 index)
@@ -310,20 +305,6 @@ struct GeometryID
     u32 GetIndex() const { return id & indexMask; }
     u32 GetType() const { return id >> typeShift; }
 };
-
-struct Instance
-{
-    // TODO: materials
-    GeometryID geomID;
-    u32 transformIndex;
-};
-
-// struct QuadMeshGroup
-// {
-//     QuadMesh *meshes;
-//     BVHNode4 nodePtr;
-//     u32 numMeshes;
-// };
 
 struct Volume
 {
@@ -575,6 +556,243 @@ struct NanoVDBVolume
 //     u32 materialID;
 // };
 
+struct Instance
+{
+    // TODO: materials
+    GeometryID geomID;
+    u32 transformIndex;
+};
+
+// TODO: I need a better name for this. basically the "top" scene structure. it can point to
+// bottom Scene structures, which contain geometry but not materials/lights/textures/etc
+
+// partial rebraid IF
+// - instances is set
+
+struct PrimitiveIndices
+{
+    // TODO: these are actaully ids (type + index)
+    LightHandle lightID;
+    // u32 volumeIndex;
+    MaterialHandle materialID;
+    PrimitiveIndices() {}
+    PrimitiveIndices(LightHandle lightID, MaterialHandle materialID)
+        : lightID(lightID), materialID(materialID)
+    {
+    }
+};
+
+struct Scene
+{
+    Instance *instances;
+    struct Scene2 **childScenes;
+    ArrayTuple<PrimitiveTypes> shapes;
+
+    const PrimitiveIndices *primIndices;
+    ArrayTuple<LightTypes> lights;
+    ArrayTuple<MaterialTypes> materials;
+    AffineSpace *affineTransforms;
+    BVHNodeN nodePtr;
+    // Bounds bounds;
+    u32 numInstances, numLights, numScenes;
+
+    Bounds BuildBVH(Arena **arenas, BuildSettings &settings);
+    DiffuseAreaLight *GetAreaLights() { return lights.Get<DiffuseAreaLight>(); }
+    const DiffuseAreaLight *GetAreaLights() const { return lights.Get<DiffuseAreaLight>(); }
+
+    // Bounds GetBounds() const { return bounds; }
+    // void SetBounds(const Bounds &inBounds) { bounds = inBounds; }
+
+    // template <typename F>
+    // auto DispatchShape(F &&func, GeometryID id)
+    // {
+    //     auto closure = [&](auto type) {
+    //         using Type = std::decay_t<decltype(type)>;
+    //         func((Type *)typefunc();
+    //     };
+    //     shapes.Dispatch(closure, id.GetIndex());
+    // }
+
+    template <typename T>
+    T *Get(u32 geomID)
+    {
+        return &shapes.Get<T>()[geomID];
+    }
+
+    template <typename T>
+    const T *Get(u32 geomID) const
+    {
+        return &shapes.Get<T>()[geomID];
+    }
+
+    template <typename T>
+    T *GetCount(u32 geomID)
+    {
+        return shapes.GetCount<T>();
+    }
+};
+
+struct Scene *scene_;
+Scene *GetScene() { return scene_; }
+
+struct Scene2
+{
+    Bounds bounds;
+    BVHNodeN nodePtr;
+    Bounds GetBounds() const { return bounds; }
+    void SetBounds(const Bounds &inBounds) { bounds = inBounds; }
+    virtual void BuildBVH(Arena **, BuildSettings &, u32 *outNumPrims = 0) = 0;
+};
+
+template <typename PrimitiveType>
+struct Scene2Impl : Scene2
+{
+    static const u32 type             = IndexOf<PrimitiveType, PrimitiveTypes>::count;
+    static const GeometryType geoType = GeometryType(type);
+    // Leaf node in scene hierarchy
+    PrimitiveType *primitives;
+    // Child node in scene hierarchy
+    Scene2 **childScenes;
+    u32 numPrimitives = 0;
+    u32 numScenes     = 0;
+
+    Scene2Impl() {}
+    void BuildBVH(Arena **arenas, BuildSettings &settings, u32 *outNumPrims) override;
+};
+
+typedef Scene2Impl<Instance> Scene2Inst;
+typedef Scene2Impl<TriangleMesh> Scene2Tri;
+typedef Scene2Impl<QuadMesh> Scene2Quad;
+
+template <typename PrimRef>
+PrimRef *GeneratePrimRefs(Arena *arena, Scene2Tri *scene, u32 offset, u32 offsetMax, u32 start,
+                          u32 count, RecordAOSSplits &record, u32 *outNumPrims = 0);
+// what I'm thinking: instances are always instances of a scene, never of a shape. if you want
+// an instance of just one shape, you have a scene that contains only one
+Bounds Scene::BuildBVH(Arena **arenas, BuildSettings &settings)
+{
+    TempArena temp = ScratchStart(0, 0);
+    // First instantiate all child pointers
+    if (childScenes)
+    {
+        Assert(instances);
+        u32 *numPrims = PushArrayNoZero(temp.arena, u32, numScenes);
+        for (u32 i = 0; i < numScenes; i++)
+        {
+            Scene2 *childScene = childScenes[i];
+            if (childScene->nodePtr.data == 0)
+            {
+                childScene->BuildBVH(arenas, settings, &numPrims[i]);
+            }
+        }
+        // build tlas
+        RecordAOSSplits record;
+        BRef *refs = GenerateBuildRefs(this, temp.arena, numPrims, record);
+        nodePtr    = BuildTLASQuantized(settings, arenas, this, refs, record);
+        return Bounds(record.geomBounds);
+    }
+    else
+    {
+        Assert(instances == 0);
+        // TODO: this is kinda hacky
+        if (numScenes = 1)
+        {
+            nodePtr = childScenes[0]->nodePtr;
+        }
+        else
+        {
+            Assert(0);
+        }
+    }
+    ScratchEnd(temp);
+}
+
+template <typename Prim>
+void Scene2Impl<Prim>::BuildBVH(Arena **arenas, BuildSettings &settings, u32 *outNumPrims)
+{
+    TempArena temp  = ScratchStart(0, 0);
+    u32 threadIndex = GetThreadIndex();
+    // Partial rebraiding
+    if constexpr (std::is_same_v<Prim, Instance>)
+    {
+#if 0
+        Assert(childScenes);
+        for (u32 i = 0; i < numChildScenes; i++)
+        {
+            Scene2 *scene = childScenes[i];
+            scene->BuildBVH();
+        }
+        RecordAOSSplits record;
+        BRef *refs = GenerateBuildRefs(this, childScenes, numChildScenes, temp.arena, );
+        BuildTLASQuantized(settings, arenas, refs);
+#endif
+    }
+    else if constexpr (std::is_same_v<Prim, TriangleMesh>)
+    {
+        Assert(numPrimitives);
+        // Compressed builder
+        Bounds geomBounds, centBounds;
+        u32 numPrims;
+        if (numPrimitives == 1)
+        {
+            PrimRefCompressed *refs = GenerateTriRefs<PrimRefCompressed>(
+                temp.arena, primitives, geomBounds, centBounds, &numPrims);
+            RecordAOSSplits record;
+            record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+            record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+            record.SetRange(0, numPrims, u32(numPrims * GROW_AMOUNT));
+            BuildQuantizedTriSBVH(settings, arenas, primitives, refs, record);
+        }
+        else
+        {
+            PrimRef *refs =
+                GenerateTriRefs<PrimRef>(temp.arena, this, geomBounds, centBounds, &numPrims);
+            RecordAOSSplits record;
+            record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+            record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+            record.SetRange(0, numPrims, u32(numPrims * GROW_AMOUNT));
+            BuildQuantizedTriSBVH(settings, arenas, this, refs, record);
+        }
+        if (outNumPrims) *outNumPrims = numPrims;
+    }
+    else if constexpr (std::is_same_v<Prim, QuadMesh>)
+    {
+        Assert(numPrimitives);
+        // Compressed builder
+#if 0
+        if (numPrimitives == 1)
+        {
+            u32 numFaces;
+            Bounds geomBounds, centBounds;
+            PrimRefCompressed *refs =
+                Generate(arenas[threadIndex], primitives, geomBounds, centBounds);
+            RecordAOSSplits record;
+            record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+            record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+            record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
+            BuildQuantizedQuadSBVH(settings, arenas, primitives, refs, record);
+        }
+        else
+        {
+            u32 numFaces;
+            Bounds geomBounds, centBounds;
+            PrimRef *refs = GenerateAOSData(arenas[threadIndex], this, geomBounds, centBounds);
+            RecordAOSSplits record;
+            record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+            record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+            record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
+            BuildQuantizedQuadSBVH(settings, arenas, this, refs, record);
+        }
+#endif
+    }
+    else
+    {
+        Error(0, "Invalid primitive type. Currently only supporting quad meshes, triangle "
+                 "meshes, and instances");
+    }
+}
+
+#if 0
 // NOTE: only leaf scenes can
 struct Scene2
 {
@@ -584,18 +802,6 @@ struct Scene2
     // using MaterialTypes = TypePack<CoatedDiffuseMaterial1>;
 
     // TODO: this really should adjacent in memory to the primitives
-    struct PrimitiveIndices
-    {
-        // TODO: these are actaully ids (type + index)
-        LightHandle lightID;
-        // u32 volumeIndex;
-        MaterialHandle materialID;
-        PrimitiveIndices() {}
-        PrimitiveIndices(LightHandle lightID, MaterialHandle materialID)
-            : lightID(lightID), materialID(materialID)
-        {
-        }
-    };
 
     union
     {
@@ -681,9 +887,7 @@ struct Scene2
         return &meshes[geomID];
     }
 };
-
-struct Scene2 *scene_;
-Scene2 *GetScene() { return scene_; }
+#endif
 
 } // namespace rt
 #endif
