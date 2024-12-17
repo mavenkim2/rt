@@ -585,135 +585,69 @@ struct Ray2;
 template <i32 K>
 struct SurfaceInteractions;
 
+struct ScenePrimitives
+{
+    typedef bool (*IntersectFunc)(ScenePrimitives *, Ray2 &, SurfaceInteractions<1> &);
+    typedef bool (*OccludedFunc)(ScenePrimitives *, Ray2 &);
+
+    Bounds bounds;
+    BVHNodeN nodePtr;
+
+    // NOTE: is one of PrimitiveType
+    // NOTE: only set if not a leaf node in the scene hierarchy
+    ScenePrimitives *childScenes;
+    void *primitives;
+    AffineSpace *affineTransforms;
+
+    IntersectFunc intersectFunc;
+    OccludedFunc occludedFunc;
+    u32 numPrimitives = 0;
+    u32 numScenes     = 0;
+
+    ScenePrimitives() {}
+    Bounds GetBounds() const { return bounds; }
+    void SetBounds(const Bounds &inBounds) { bounds = inBounds; }
+    void BuildBVH(Arena **, BuildSettings &, u32 *outNumPrims = 0);
+};
+
 struct Scene
 {
     typedef bool (*IntersectFunc)(Scene *, Ray2 &, SurfaceInteractions<1> &);
     typedef bool (*OccludedFunc)(Scene *, Ray2 &);
 
+    ScenePrimitives scene;
+#if 0
     Instance *instances;
-    struct Scene2 **childScenes;
+    struct Scene2 *childScenes;
     // ArrayTuple<PrimitiveTypes> shapes;
+#endif
 
     const PrimitiveIndices *primIndices;
     ArrayTuple<LightTypes> lights;
     ArrayTuple<MaterialTypes> materials;
-    AffineSpace *affineTransforms;
-    BVHNodeN nodePtr;
-    IntersectFunc intersectFunc;
-    OccludedFunc occludedFunc;
     // Bounds bounds;
     u32 numInstances, numLights, numScenes;
 
     Bounds BuildBVH(Arena **arenas, BuildSettings &settings);
     DiffuseAreaLight *GetAreaLights() { return lights.Get<DiffuseAreaLight>(); }
     const DiffuseAreaLight *GetAreaLights() const { return lights.Get<DiffuseAreaLight>(); }
-
-    // Bounds GetBounds() const { return bounds; }
-    // void SetBounds(const Bounds &inBounds) { bounds = inBounds; }
-
-    // template <typename F>
-    // auto DispatchShape(F &&func, GeometryID id)
-    // {
-    //     auto closure = [&](auto type) {
-    //         using Type = std::decay_t<decltype(type)>;
-    //         func((Type *)typefunc();
-    //     };
-    //     shapes.Dispatch(closure, id.GetIndex());
-    // }
-
-    Instance *GetInstances() { return instances; }
-    const Instance *GetInstances() const { return instances; }
-    u32 GetNumInstances() const { return numInstances; }
-    template <typename T>
-    T *Get(u32 geomID)
-    {
-        return &shapes.Get<T>()[geomID];
-    }
-
-    template <typename T>
-    const T *Get(u32 geomID) const
-    {
-        return &shapes.Get<T>()[geomID];
-    }
-
-    template <typename T>
-    T *GetCount(u32 geomID)
-    {
-        return shapes.GetCount<T>();
-    }
 };
 
 struct Scene *scene_;
 Scene *GetScene() { return scene_; }
 
-struct Scene2
-{
-    typedef bool (*IntersectFunc)(Scene2 *, Ray2 &, SurfaceInteractions<1> &);
-    typedef bool (*OccludedFunc)(Scene2 *, Ray2 &);
+void BuildQuadBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene,
+                  u32 *outNumPrims = 0);
+void BuildTriangleBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene,
+                      u32 *outNumPrims = 0);
 
-    Bounds bounds;
-    BVHNodeN nodePtr;
-
-    // NOTE: is one of PrimitiveType
-    void *primitives;
-    Scene2 *childScenes;
-
-    IntersectFunc intersectFunc;
-    OccludedFunc occludedFunc;
-    u32 numPrimitives = 0;
-    u32 numScenes     = 0;
-
-    Scene2() {}
-    Bounds GetBounds() const { return bounds; }
-    void SetBounds(const Bounds &inBounds) { bounds = inBounds; }
-    void BuildBVH(Arena **, BuildSettings &, u32 *outNumPrims = 0);
-
-    void BuildBVH(Arena **arenas, BuildSettings &settings, u32 *outNumPrims) override;
-};
-
-void BuildQuadBVH(Arena **arenas, BuildSettings &settings, u32 *outNumPrims, Scene2 *scene);
-void BuildTriangleBVH(Arena **arenas, BuildSettings &settings, u32 *outNumPrims,
-                      Scene2 *scene);
-
-#if 0
-template <typename PrimitiveType>
-struct Scene2Impl : Scene2
-{
-    typedef bool (*IntersectFunc)(Scene2Impl<PrimitiveType> *, Ray2 &,
-                                  SurfaceInteractions<1> &);
-    typedef bool (*OccludedFunc)(Scene2Impl<PrimitiveType> *, Ray2 &);
-    static const u32 type             = IndexOf<PrimitiveType, PrimitiveTypes>::count;
-    static const GeometryType geoType = GeometryType(type);
-    // Leaf node in scene hierarchy
-    PrimitiveType *primitives;
-    // Child node in scene hierarchy
-    Scene2 **childScenes;
-    IntersectFunc intersectFunc;
-    OccludedFunc occludedFunc;
-    u32 numPrimitives = 0;
-    u32 numScenes     = 0;
-
-    Scene2Impl() {}
-
-    void BuildBVH(Arena **arenas, BuildSettings &settings, u32 *outNumPrims) override;
-};
-
-typedef Scene2Impl<Instance> Scene2Inst;
-typedef Scene2Impl<TriangleMesh> Scene2Tri;
-typedef Scene2Impl<QuadMesh> Scene2Quad;
-#endif
-
-u32 GetNumInstances(Scene *scene) { return scene->numInstances; }
-u32 GetNumInstances(Scene2Inst *scene) { return scene->numPrimitives; }
-const Instance *GetInstances(Scene *scene) { return scene->instances; }
-const Instance *GetInstances(Scene2Inst *scene) { return scene->primitives; }
-
-template <typename PrimRefType>
-PrimRefType *GenerateTriRefs(Arena *arena, Scene2Tri *scene, RecordAOSSplits &record,
-                             u32 *outNumPrims = 0);
 template <typename PrimRefType>
 void GenerateTriRefs(PrimRefType *ref, u32 offset, TriangleMesh *mesh, u32 geomID, u32 start,
                      u32 count, RecordAOSSplits &record);
+
+template <typename PrimRefType>
+PrimRefType *GenerateTriRefs(Arena *arena, ScenePrimitives *scene, RecordAOSSplits &record,
+                             u32 *outNumPrims = 0);
 // what I'm thinking: instances are always instances of a scene, never of a shape. if you
 // want an instance of just one shape, you have a scene that contains only one
 

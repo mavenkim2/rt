@@ -612,8 +612,8 @@ Vec3f OffsetRayOrigin(const Vec3f &p, const Vec3f &err, const Vec3f &n,
 
 bool Occluded(Scene *scene, Ray2 &ray)
 {
-    Assert(scene->occludedFunc);
-    return scene->occludedFunc(scene, ray);
+    Assert(scene->scene.occludedFunc);
+    return scene->scene.occludedFunc(&scene->scene, ray);
 }
 bool Occluded(Scene *scene, Ray2 &r, SurfaceInteraction &si, LightSample &ls)
 {
@@ -628,8 +628,8 @@ bool Occluded(Scene *scene, Ray2 &r, SurfaceInteraction &si, LightSample &ls)
 
 bool Intersect(Scene *scene, Ray2 &ray, SurfaceInteraction &si)
 {
-    Assert(scene->intersectFunc);
-    return scene->intersectFunc(scene, ray, si);
+    Assert(scene->scene.intersectFunc);
+    return scene->scene.intersectFunc(&scene->scene, ray, si);
 }
 
 template <typename Sampler>

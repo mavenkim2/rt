@@ -67,11 +67,11 @@ struct Quad8
         Assert(i < 12);
         return v[i];
     }
-    static void Load(const Scene2Quad *scene, const u32 dim, const u32 faceIndices[8],
+    static void Load(const ScenePrimitives *scene, const u32 dim, const u32 faceIndices[8],
                      Quad8 *out)
     {
         Assert(scene->numPrimitives == 1);
-        QuadMesh *mesh = &scene->primitives[0];
+        QuadMesh *mesh = (QuadMesh *)scene->primitives;
         u32 faceIndexA = faceIndices[0];
         u32 faceIndexB = faceIndices[1];
         u32 faceIndexC = faceIndices[2];
@@ -161,13 +161,14 @@ struct Quad8
         out->v3w = Lane8F32(p3[w], p7[w]);
     }
 
-    static void Load(const Scene2Quad *scene, const u32 dim, const u32 geomIDs[8],
+    static void Load(const ScenePrimitives *scene, const u32 dim, const u32 geomIDs[8],
                      const u32 faceIndices[8], Quad8 *out)
     {
-        QuadMesh *meshes[8] = {&scene->primitives[geomIDs[0]], &scene->primitives[geomIDs[1]],
-                               &scene->primitives[geomIDs[2]], &scene->primitives[geomIDs[3]],
-                               &scene->primitives[geomIDs[4]], &scene->primitives[geomIDs[5]],
-                               &scene->primitives[geomIDs[6]], &scene->primitives[geomIDs[7]]};
+        QuadMesh *primitives = (QuadMesh *)scene->primitives;
+        QuadMesh *meshes[8]  = {primitives + geomIDs[0], primitives + geomIDs[1],
+                                primitives + geomIDs[2], primitives + geomIDs[3],
+                                primitives + geomIDs[4], primitives + geomIDs[5],
+                                primitives + geomIDs[6], primitives + geomIDs[7]};
 
         u32 faceIndexA = faceIndices[0];
         u32 faceIndexB = faceIndices[1];
@@ -299,20 +300,19 @@ struct Triangle8
         return v[i];
     }
 
-    static void Load(const Scene2Tri *scene, const u32 dim, const u32 geomIDs[8],
+    static void Load(const ScenePrimitives *scene, const u32 dim, const u32 geomIDs[8],
                      const u32 faceIndices[8], Triangle8 *out)
     {
-        TriangleMesh *mesh = &scene->primitives[0];
-        u32 faceIndexA     = faceIndices[0];
-        u32 faceIndexB     = faceIndices[1];
-        u32 faceIndexC     = faceIndices[2];
-        u32 faceIndexD     = faceIndices[3];
+        TriangleMesh *primitives = (TriangleMesh *)scene->primitives;
+        u32 faceIndexA           = faceIndices[0];
+        u32 faceIndexB           = faceIndices[1];
+        u32 faceIndexC           = faceIndices[2];
+        u32 faceIndexD           = faceIndices[3];
 
-        TriangleMesh *meshes[8] = {
-            &scene->primitives[geomIDs[0]], &scene->primitives[geomIDs[1]],
-            &scene->primitives[geomIDs[2]], &scene->primitives[geomIDs[3]],
-            &scene->primitives[geomIDs[4]], &scene->primitives[geomIDs[5]],
-            &scene->primitives[geomIDs[6]], &scene->primitives[geomIDs[7]]};
+        TriangleMesh *meshes[8] = {primitives + geomIDs[0], primitives + geomIDs[1],
+                                   primitives + geomIDs[2], primitives + geomIDs[3],
+                                   primitives + geomIDs[4], primitives + geomIDs[5],
+                                   primitives + geomIDs[6], primitives + geomIDs[7]};
 
         Lane4F32 v0a =
             Lane4F32::LoadU((float *)(&meshes[0]->p[meshes[0]->indices[faceIndexA * 3]]));
@@ -402,11 +402,11 @@ struct Triangle8
         out->v2w = Lane8F32(p2[w], p5[w]);
     }
 
-    static void Load(const Scene2Tri *scene, const u32 dim, const u32 faceIndices[8],
+    static void Load(const ScenePrimitives *scene, const u32 dim, const u32 faceIndices[8],
                      Triangle8 *out)
     {
         Assert(scene->numPrimitives == 1);
-        TriangleMesh *mesh = &scene->primitives[0];
+        TriangleMesh *mesh = (TriangleMesh *)scene->primitives;
         u32 faceIndexA     = faceIndices[0];
         u32 faceIndexB     = faceIndices[1];
         u32 faceIndexC     = faceIndices[2];
@@ -1076,23 +1076,23 @@ struct HeuristicAOSObjectBinning
     }
 };
 
-template <i32 numBins, typename PrimRefType, typename Polygon8, typename SceneType>
+template <i32 numBins, typename PrimRefType, typename Polygon8>
 struct alignas(32) HeuristicAOSSplitBinning
 {
 #define UseGeomIDs !std::is_same_v<PrimRefType, PrimRefCompressed>
 
-    using ThisType = HeuristicAOSSplitBinning<numBins, PrimRefType, Polygon8, SceneType>;
+    using ThisType = HeuristicAOSSplitBinning<numBins, PrimRefType, Polygon8>;
     using PrimRef  = PrimRefType;
     Bounds8 bins[3][numBins];
     Lane4U32 entryCounts[numBins];
     Lane4U32 exitCounts[numBins];
 
     SplitBinner<numBins> *binner;
-    SceneType *scene;
+    ScenePrimitives *scene;
 
     HeuristicAOSSplitBinning() {}
 
-    HeuristicAOSSplitBinning(SplitBinner<numBins> *binner, SceneType *scene = 0)
+    HeuristicAOSSplitBinning(SplitBinner<numBins> *binner, ScenePrimitives *scene)
         : binner(binner), scene(scene)
     {
         for (u32 dim = 0; dim < 3; dim++)
@@ -1754,8 +1754,8 @@ u32 SplitFallback(const Record &record, Split &split, const PrimRef *primRefs, R
 
 // SBVH
 static const f32 sbvhAlpha = 1e-5;
-template <typename SceneType, typename PrimRefType, typename Polygon8Type,
-          i32 numObjectBins = 32, i32 numSpatialBins = 16>
+template <typename PrimRefType, typename Polygon8Type, i32 numObjectBins = 32,
+          i32 numSpatialBins = 16>
 struct HeuristicSpatialSplits
 {
     using Record = RecordAOSSplits;
@@ -1763,16 +1763,17 @@ struct HeuristicSpatialSplits
     using PrimRef  = PrimRefType;
     using Polygon8 = Polygon8Type;
 
-    using HSplit = HeuristicAOSSplitBinning<numSpatialBins, PrimRef, Polygon8, SceneType>;
+    using HSplit = HeuristicAOSSplitBinning<numSpatialBins, PrimRef, Polygon8>;
     using OBin   = HeuristicAOSObjectBinning<numObjectBins, PrimRef>;
 
-    SceneType *scene;
+    ScenePrimitives *scene;
     f32 rootArea;
     u32 logBlockSize;
     PrimRef *primRefs;
 
     HeuristicSpatialSplits() {}
-    HeuristicSpatialSplits(PrimRef *data, SceneType *scene, f32 rootArea, u32 logBlockSize = 0)
+    HeuristicSpatialSplits(PrimRef *data, ScenePrimitives *scene, f32 rootArea,
+                           u32 logBlockSize = 0)
         : primRefs(data), scene(scene), rootArea(rootArea), logBlockSize(logBlockSize)
     {
     }
@@ -2033,42 +2034,6 @@ struct HeuristicSpatialSplits
             }
         }
 
-#endif
-#if 0
-        if constexpr (std::is_same_v<TriangleMesh, SceneType>)
-        {
-            TriangleMesh *mesh = scene;
-            for (u32 i = outLeft.start; i < outLeft.End(); i++)
-            {
-                const PrimRef *ref = &primRefs[i];
-                Lane8F32 v         = Lane8F32::LoadU(ref);
-                u32 indices[3]     = {mesh->indices[3 * ref->primID + 0],
-                                      mesh->indices[3 * ref->primID + 1],
-                                      mesh->indices[3 * ref->primID + 2]};
-                Vec3f p[3] = {mesh->p[indices[0]], mesh->p[indices[1]], mesh->p[indices[2]]};
-                for (u32 j = 0; j < 3; j++)
-                {
-                    Lane4F32 pTest = Lane4F32(p[j]);
-                    u32 mask = Movemask(Lane8F32(-pTest, pTest) <= outLeft.geomBounds) & 0x77;
-                    Assert(mask == 0x77);
-                }
-            }
-            for (u32 i = outRight.start; i < outRight.End(); i++)
-            {
-                const PrimRef *ref = &primRefs[i];
-                Lane8F32 v         = Lane8F32::LoadU(ref);
-                u32 indices[3]     = {mesh->indices[3 * ref->primID + 0],
-                                      mesh->indices[3 * ref->primID + 1],
-                                      mesh->indices[3 * ref->primID + 2]};
-                Vec3f p[3] = {mesh->p[indices[0]], mesh->p[indices[1]], mesh->p[indices[2]]};
-                for (u32 j = 0; j < 3; j++)
-                {
-                    Lane4F32 pTest = Lane4F32(p[j]);
-                    u32 mask = Movemask(Lane8F32(-pTest, pTest) <= outRight.geomBounds) & 0x77;
-                    Assert(mask == 0x77);
-                }
-            }
-        }
 #endif
         ArenaPopTo(temp.arena, split.allocPos);
     }

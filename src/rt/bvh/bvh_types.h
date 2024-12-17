@@ -602,22 +602,13 @@ struct LeafPrimCompressed
     }
 };
 
-template <typename T>
-struct Scene2Impl;
-struct Instance; 
-struct TriangleMesh;
-struct QuadMesh;
-
-typedef Scene2Impl<Instance> Scene2Inst;
-typedef Scene2Impl<TriangleMesh> Scene2Tri;
-typedef Scene2Impl<QuadMesh> Scene2Quad;
-
+struct ScenePrimitives;
 template <i32 N>
 struct Triangle : LeafPrim<N>
 {
     Triangle() {}
 
-    void GetData(Scene2Tri *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
+    void GetData(ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
                  u32 outGeomIDs[N], u32 outPrimIDs[N]) const;
 };
 
@@ -626,7 +617,7 @@ struct TriangleCompressed : LeafPrimCompressed<N>
 {
     TriangleCompressed() {}
 
-    void GetData(Scene2Tri *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
+    void GetData(ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
                  u32 outGeomIDs[N], u32 outPrimIDs[N]) const;
 };
 
@@ -635,7 +626,7 @@ struct Quad : LeafPrim<N>
 {
     Quad() {}
 
-    void GetData(Scene2Quad *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
+    void GetData(ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
                  Lane4F32 v3[N], u32 outGeomIDs[N], u32 outPrimIDs[N]) const;
 };
 
@@ -644,7 +635,7 @@ struct QuadCompressed : LeafPrimCompressed<N>
 {
     QuadCompressed() {}
 
-    void GetData(Scene2Quad *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
+    void GetData(ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
                  Lane4F32 v3[N], u32 outGeomIDs[N], u32 outPrimIDs[N]) const;
 };
 template <i32 N>

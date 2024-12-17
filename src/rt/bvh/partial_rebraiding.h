@@ -3,25 +3,24 @@
 namespace rt
 {
 
-template <typename Scene>
-void GenerateBuildRefs(BRef *refs, Scene *scene, const u32 *numPrims, u32 start, u32 count,
-                       RecordAOSSplits &record)
+void GenerateBuildRefs(BRef *refs, ScenePrimitives *scene, const u32 *numPrims, u32 start,
+                       u32 count, RecordAOSSplits &record)
 {
-    Scene *baseScene = GetScene();
     Bounds geom;
     Bounds cent;
-    const Instance *instances = GetInstances(scene);
+    const Instance *instances = (const Instance *)scene->primitives;
     for (u32 i = start; i < start + count; i++)
     {
         const Instance &instance = instances[i];
-        AffineSpace &transform   = baseScene->affineTransforms[instance.transformIndex];
+        AffineSpace &transform   = scene->affineTransforms[instance.transformIndex];
         // Assert(instance.geomID.GetType() == GeometryType::Instance);
         u32 index = instance.geomID.GetIndex(); // + 1;
         Assert(index < scene->numScenes);
-        Scene2 *inScene = scene->childScenes[index];
-        BRef *ref       = &refs[i];
+        Assert(scene->childScenes);
+        ScenePrimitives *inScene = &scene->childScenes[index];
+        BRef *ref                = &refs[i];
 
-        Bounds bounds = Transform(transform, inScene->GetBounds());
+        Bounds bounds = Transform(transform, inScene->bounds);
         Assert((Movemask(bounds.maxP >= bounds.minP) & 0x7) == 0x7);
 
         ref->StoreBounds(bounds);
@@ -39,11 +38,10 @@ void GenerateBuildRefs(BRef *refs, Scene *scene, const u32 *numPrims, u32 start,
 }
 
 // NOTE: either Scene or Scene2Inst
-template <typename Scene>
-BRef *GenerateBuildRefs(Scene *scene, Arena *arena, const u32 *numPrims,
+BRef *GenerateBuildRefs(ScenePrimitives *scene, Arena *arena, const u32 *numPrims,
                         RecordAOSSplits &record)
 {
-    u32 numInstances = GetNumInstances(scene);
+    u32 numInstances = scene->numPrimitives;
     u32 extEnd       = 4 * numInstances;
     BRef *b          = PushArrayNoZero(arena, BRef, extEnd);
 
@@ -67,8 +65,9 @@ BRef *GenerateBuildRefs(Scene *scene, Arena *arena, const u32 *numPrims,
 static const f32 REBRAID_THRESHOLD = .1f;
 
 template <typename Heuristic, typename GetNode>
-void OpenBraid(const Scene *scene, RecordAOSSplits &record, BRef *refs, u32 start, u32 count,
-               u32 offset, const u32 offsetMax, Heuristic &heuristic, GetNode &getNode)
+void OpenBraid(const ScenePrimitives *scene, RecordAOSSplits &record, BRef *refs, u32 start,
+               u32 count, u32 offset, const u32 offsetMax, Heuristic &heuristic,
+               GetNode &getNode)
 {
     // TIMED_FUNCTION(miscF);
     using NodeType       = typename GetNode::NodeType;
@@ -76,6 +75,7 @@ void OpenBraid(const Scene *scene, RecordAOSSplits &record, BRef *refs, u32 star
 
     Bounds geomBounds;
     Bounds centBounds;
+    const Instance *instances = (const Instance *)scene->primitives;
     for (u32 i = start; i < start + count; i++)
     {
         BRef &ref = refs[i];
@@ -110,9 +110,9 @@ void OpenBraid(const Scene *scene, RecordAOSSplits &record, BRef *refs, u32 star
                              aosMax[4], aosMax[5], aosMax[6], aosMax[7]);
             }
 
-            Instance &instance     = scene->instances[ref.instanceID];
-            AffineSpace &transform = scene->affineTransforms[instance.transformIndex];
-            Bounds bounds0         = Transform(transform, Bounds(aosMin[0], aosMax[0]));
+            const Instance &instance = instances[ref.instanceID];
+            AffineSpace &transform   = scene->affineTransforms[instance.transformIndex];
+            Bounds bounds0           = Transform(transform, Bounds(aosMin[0], aosMax[0]));
 
             geomBounds.Extend(bounds0);
             centBounds.Extend(bounds0.minP + bounds0.maxP);
@@ -163,27 +163,28 @@ struct GetQuantizedNode
 
 // TODO: the number of nodes that this generates can vary very very wildly (like ~6 mil), find
 // out why
-template <typename Scene, typename GetNode, i32 numObjectBins = 32>
+template <typename GetNode, i32 numObjectBins = 32>
 struct HeuristicPartialRebraid
 {
     using Record  = RecordAOSSplits;
     using PrimRef = BRef;
     using OBin    = HeuristicAOSObjectBinning<numObjectBins, BRef>;
 
-    Scene *scene;
+    ScenePrimitives *scene;
     BRef *buildRefs;
     GetNode getNode;
     u32 logBlockSize;
 
     HeuristicPartialRebraid() {}
-    HeuristicPartialRebraid(Scene *scene, BRef *data, u32 logBlockSize = 0)
+    HeuristicPartialRebraid(ScenePrimitives *scene, BRef *data, u32 logBlockSize = 0)
         : scene(scene), buildRefs(data), logBlockSize(logBlockSize)
     {
     }
     Split Bin(Record &record)
     {
-        u32 choiceDim = 0;
-        f32 maxExtent = neg_inf;
+        const Instance *instances = (const Instance *)scene->primitives;
+        u32 choiceDim             = 0;
+        f32 maxExtent             = neg_inf;
         for (u32 d = 0; d < 3; d++)
         {
             f32 extent = record.geomMax[d] + record.geomMin[d];
@@ -224,8 +225,7 @@ struct HeuristicPartialRebraid
         }
         if (record.ExtSize())
         {
-            u32 geomID =
-                scene->instances[buildRefs[record.start].instanceID].geomID.GetIndex();
+            u32 geomID = instances[buildRefs[record.start].instanceID].geomID.GetIndex();
             if (record.count > PARALLEL_THRESHOLD)
             {
                 TempArena temp = ScratchStart(0, 0);
@@ -243,7 +243,7 @@ struct HeuristicPartialRebraid
                         for (u32 i = start; i < start + count; i++)
                         {
                             const BRef &ref = buildRefs[i];
-                            u32 objectID = scene->instances[ref.instanceID].geomID.GetIndex();
+                            u32 objectID    = instances[ref.instanceID].geomID.GetIndex();
                             commonGeomID &= objectID == geomID;
                             if (heuristic(ref))
                             {
@@ -296,7 +296,7 @@ struct HeuristicPartialRebraid
                 for (u32 i = record.start; i < record.start + record.count; i++)
                 {
                     const BRef &ref = buildRefs[i];
-                    u32 objectID    = scene->instances[ref.instanceID].geomID.GetIndex();
+                    u32 objectID    = instances[ref.instanceID].geomID.GetIndex();
                     commonGeomID &= objectID == geomID;
                     if (heuristic(ref)) count += getNode(ref.nodePtr)->GetNumChildren() - 1;
                 }

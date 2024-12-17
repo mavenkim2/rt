@@ -471,13 +471,9 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     // once moana is rendered
     // - ray differentials
 
-    scene_              = PushStruct(arena, Scene);
-    Scene *scene        = GetScene();
-    Scene2 **scenes     = PushStruct(arena, Scene2 *);
-    scene->childScenes  = scenes;
-    scenes[0]           = PushStruct(arena, Scene2Tri);
-    Scene2Tri *sceneTri = (Scene2Tri *)scenes[0];
-    scene->numScenes    = 1;
+    scene_                      = PushStruct(arena, Scene);
+    Scene *scene                = GetScene();
+    ScenePrimitives *scenePrims = &scene->scene;
     // TempArena temp    = ScratchStart(0, 0);
     u32 numProcessors = OS_NumProcessors();
     Arena **arenas    = PushArray(arena, Arena *, numProcessors);
@@ -522,10 +518,10 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
         PrimitiveIndices(LightHandle(),
                          MaterialHandle(MaterialType::DielectricMaterialBase, 0)),
     };
-    u32 numFaces            = meshes[0].numIndices / 3;
-    u32 numFaces2           = meshes[1].numIndices / 3;
-    sceneTri->primitives    = meshes;
-    sceneTri->numPrimitives = 2;
+    u32 numFaces              = meshes[0].numIndices / 3;
+    u32 numFaces2             = meshes[1].numIndices / 3;
+    scenePrims->primitives    = meshes;
+    scenePrims->numPrimitives = 2;
 #else
     // TriangleMesh mesh =
     //     LoadPLY(arena,
@@ -574,7 +570,7 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     BuildSettings settings;
     settings.intCost = 1.f;
 
-    Bounds bounds = scene->BuildBVH(arenas, settings);
+    BuildTriangleBVH(arenas, settings, scenePrims);
 
 #if 0
     RecordAOSSplits record;
@@ -605,6 +601,7 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
 #endif
 
     // environment map
+    Bounds &bounds = scenePrims->bounds;
     f32 sceneRadius =
         0.5f * Max(bounds.maxP[0] - bounds.minP[0],
                    Max(bounds.maxP[1] - bounds.minP[1], bounds.maxP[2] - bounds.minP[2]));

@@ -172,8 +172,7 @@ struct BVHIntersector<4, types, Intersector>
     using StackEntry = StackEntry<BVHNode4>;
 
     BVHIntersector() {}
-    template <typename Scene>
-    static bool Intersect(Scene *scene, Ray2 &ray, SurfaceInteraction &itr)
+    static bool Intersect(ScenePrimitives *scene, Ray2 &ray, SurfaceInteraction &itr)
     {
         // typedef typename Intersector::Primitive Primitive;
         TIMED_FUNCTION(miscF);
@@ -203,8 +202,7 @@ struct BVHIntersector<4, types, Intersector>
         }
         return result;
     }
-    template <typename Scene>
-    static bool Occluded(Scene *scene, Ray2 &ray)
+    static bool Occluded(ScenePrimitives *scene, Ray2 &ray)
     {
         TravRay<4> r(ray);
 
@@ -317,13 +315,15 @@ static Mask<LaneF32<N>> TriangleIntersect(const Ray2 &ray, const LaneF32<N> &tFa
     return mask;
 }
 
-template <typename Mesh, typename Scene>
-static void
-SurfaceInteractionFromTriangleIntersection(Scene *scene, const u32 geomID, const u32 primID,
-                                           const u32 ids[3], f32 u, f32 v, f32 w,
-                                           SurfaceInteraction &si, bool isSecondTri = false)
+template <typename Mesh>
+static void SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
+                                                       const u32 geomID, const u32 primID,
+                                                       const u32 ids[3], f32 u, f32 v, f32 w,
+                                                       SurfaceInteraction &si,
+                                                       bool isSecondTri = false)
 {
-    Mesh *mesh = scene->Get(geomID);
+    Scene *baseScene = GetScene();
+    Mesh *mesh       = (Mesh *)scene->primitives + geomID;
     u32 vertexIndices[3];
     if (mesh->indices)
     {
@@ -408,8 +408,8 @@ SurfaceInteractionFromTriangleIntersection(Scene *scene, const u32 geomID, const
     si.shading.dpdv = ts;
     si.uv           = u * uv[1] + v * uv[2] + w * uv[0];
     // TODO: get index based on type
-    const Scene2::PrimitiveIndices *indices = &scene->primIndices[geomID];
-    si.materialIDs                          = indices->materialID.data;
+    const PrimitiveIndices *indices = baseScene->primIndices + geomID;
+    si.materialIDs                  = indices->materialID.data;
     // TODO: properly obtain the light handle
     si.lightIndices = 0;
     si.faceIndices  = primID;
@@ -424,7 +424,7 @@ struct TriangleIntersectorBase<N, Prim<N>>
     using Primitive           = Prim<N>;
     TriangleIntersectorBase() = default;
     // https://www.graphics.cornell.edu/pubs/1997/MT97.pdf
-    static bool Intersect(Scene2Tri *scene, Ray2 &ray, Primitive *primitives, u32 num,
+    static bool Intersect(ScenePrimitives *scene, Ray2 &ray, Primitive *primitives, u32 num,
                           SurfaceInteraction &si,
                           const Mask<LaneF32<N>> &validMask = Mask<LaneF32<N>>(TrueTy()))
     {
@@ -496,8 +496,8 @@ struct TriangleIntersectorBase<N, Prim<N>>
         return false;
     }
     template <i32 K>
-    static bool Intersect(Scene2Tri *scene, Ray2 &ray, BVHNode<K> ptr, SurfaceInteraction &si,
-                          TravRay<K> &)
+    static bool Intersect(ScenePrimitives *scene, Ray2 &ray, BVHNode<K> ptr,
+                          SurfaceInteraction &si, TravRay<K> &)
     {
         Assert(ptr.IsLeaf());
         Primitive *primitives = (Primitive *)ptr.GetPtr();
@@ -515,7 +515,7 @@ struct QuadIntersectorBase<N, Prim<N>>
     using Primitive       = Prim<N>;
     QuadIntersectorBase() = default;
 
-    static bool Intersect(Scene2Quad *scene, Ray2 &ray, Primitive *primitives, u32 num,
+    static bool Intersect(ScenePrimitives *scene, Ray2 &ray, Primitive *primitives, u32 num,
                           SurfaceInteraction &si,
                           const Mask<LaneF32<N>> &validMask = Mask<LaneF32<N>>(TrueTy()))
 
@@ -594,7 +594,6 @@ struct QuadIntersectorBase<N, Prim<N>>
             f32 v           = Get(itr.v, index);
             f32 w           = 1 - u - v;
             // Assert(u >= 0 && u <= 1 && v >= 0 && v <= 1 && w >= 0 && w <= 1);
-            Scene2 *scene = GetScene();
 
             u32 ids[3];
             u32 primID = Get(itr.primIDs, index);
@@ -618,13 +617,13 @@ struct QuadIntersectorBase<N, Prim<N>>
         return false;
     }
     template <i32 K>
-    static bool Intersect(Scene2Quad *scene, Ray2 &ray, BVHNode<K> ptr, SurfaceInteraction &si,
-                          TravRay<K> &)
+    static bool Intersect(ScenePrimitives *scene, Ray2 &ray, BVHNode<K> ptr,
+                          SurfaceInteraction &si, TravRay<K> &)
     {
         Assert(ptr.IsLeaf());
         Primitive *primitives = (Primitive *)ptr.GetPtr();
         u32 num               = ptr.GetNum();
-        return Intersect(ray, primitives, num, si);
+        return Intersect(scene, ray, primitives, num, si);
     }
 };
 

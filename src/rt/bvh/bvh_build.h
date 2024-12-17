@@ -215,7 +215,7 @@ using BLAS_SBVH_QuantizedNode_QuadLeaf_Scene_Funcs =
 
 template <i32 N, typename Scene>
 using TLAS_PRB_QuantizedNode_Funcs =
-    BuildFuncs<N, HeuristicPartialRebraid<Scene, GetQuantizedNode>, QuantizedNode<N>,
+    BuildFuncs<N, HeuristicPartialRebraid<GetQuantizedNode>, QuantizedNode<N>,
                CreateQuantizedNode<N>, UpdateQuantizedNode<N>, TLASLeaf<N>,
                CompressedLeafNode<N>>;
 
@@ -445,48 +445,48 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Arena
     return head;
 }
 
-template <i32 N, typename Scene, typename PrimRefType>
+template <i32 N, typename Mesh, typename PrimRefType>
 struct BVHHelper;
 
 template <i32 N>
-struct BVHHelper<N, Scene2Tri, PrimRefCompressed>
+struct BVHHelper<N, TriangleMesh, PrimRefCompressed>
 {
     using Polygon8 = Triangle8;
     using PrimType = TriangleCompressed<N>;
 };
 
 template <i32 N>
-struct BVHHelper<N, Scene2Tri, PrimRef>
+struct BVHHelper<N, TriangleMesh, PrimRef>
 {
     using Polygon8 = Triangle8;
     using PrimType = Triangle<N>;
 };
 
 template <i32 N>
-struct BVHHelper<N, Scene2Quad, PrimRefCompressed>
+struct BVHHelper<N, QuadMesh, PrimRefCompressed>
 {
     using Polygon8 = Quad8;
     using PrimType = QuadCompressed<N>;
 };
 
 template <i32 N>
-struct BVHHelper<N, Scene2Quad, PrimRef>
+struct BVHHelper<N, QuadMesh, PrimRef>
 {
     using Polygon8 = Quad8;
     using PrimType = Quad<N>;
 };
 
-template <i32 N, i32 K, typename SceneType, typename PrimRef>
-BVHNode<N> BuildQuantizedSBVH(BuildSettings settings, Arena **inArenas, SceneType *scene,
+template <i32 N, i32 K, typename Mesh, typename PrimRef>
+BVHNode<N> BuildQuantizedSBVH(BuildSettings settings, Arena **inArenas, ScenePrimitives *scene,
                               PrimRef *ref, RecordAOSSplits &record)
 {
 
     // template <i32 N, i32 K>
     // using BLAS_SBVH_QuantizedNode_TriangleLeaf_Funcs =
-    using BVHHelper = BVHHelper<K, SceneType, PrimRef>;
+    using BVHHelper = BVHHelper<K, Mesh, PrimRef>;
     using Polygon8  = typename BVHHelper::Polygon8;
     using Prim      = typename BVHHelper::PrimType;
-    using BuildType = BuildFuncs<N, HeuristicSpatialSplits<SceneType, PrimRef, Polygon8>,
+    using BuildType = BuildFuncs<N, HeuristicSpatialSplits<PrimRef, Polygon8>,
                                  QuantizedNode<N>, CreateQuantizedNode<N>,
                                  UpdateQuantizedNode<N>, Prim, CompressedLeafNode<N>>;
     using Builder   = BVHBuilder<N, BuildType>;
@@ -499,15 +499,39 @@ BVHNode<N> BuildQuantizedSBVH(BuildSettings settings, Arena **inArenas, SceneTyp
     return builder.BuildBVH(settings, inArenas, record);
 }
 
-template <typename SceneType, typename PrimRef>
+template <typename Mesh, typename PrimRef>
 __forceinline BVHNodeN BuildQuantizedSBVH(BuildSettings settings, Arena **inArenas,
-                                          SceneType *scene, PrimRef *refs,
+                                          ScenePrimitives *scene, PrimRef *refs,
                                           RecordAOSSplits &record)
 {
 #if defined(USE_BVH4)
     return BuildQuantizedSBVH<4, 8>(settings, inArenas, scene, refs, record);
 #elif defined(USE_BVH8)
     return BuildQuantizedSBVH<8, 8>(settings, inArenas, mesh, refs, record);
+#endif
+}
+
+template <typename PrimRef>
+__forceinline BVHNodeN BuildQuantizedTriSBVH(BuildSettings settings, Arena **inArenas,
+                                             ScenePrimitives *scene, PrimRef *refs,
+                                             RecordAOSSplits &record)
+{
+#if defined(USE_BVH4)
+    return BuildQuantizedSBVH<4, 8, TriangleMesh>(settings, inArenas, scene, refs, record);
+#elif defined(USE_BVH8)
+    return BuildQuantizedSBVH<8, 8, TriangleMesh>(settings, inArenas, scene, refs, record);
+#endif
+}
+
+template <typename PrimRef>
+__forceinline BVHNodeN BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas,
+                                              ScenePrimitives *scene, PrimRef *refs,
+                                              RecordAOSSplits &record)
+{
+#if defined(USE_BVH4)
+    return BuildQuantizedSBVH<4, 8, QuadMesh>(settings, inArenas, scene, refs, record);
+#elif defined(USE_BVH8)
+    return BuildQuantizedSBVH<8, 8, QuadMesh>(settings, inArenas, scene, refs, record);
 #endif
 }
 

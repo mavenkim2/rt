@@ -1,3 +1,4 @@
+#include "scene.h"
 #include "bvh/bvh_types.h"
 namespace rt
 {
@@ -1002,7 +1003,7 @@ struct SceneLoadState
     Arena **threadArenas;
 
     Arena *mainArena;
-    Scene2 *scene;
+    Scene *scene;
 
     Scheduler::Counter counter = {};
 };
@@ -1290,10 +1291,10 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
               bool imported = false);
 void Serialize(Arena *arena, string directory, SceneLoadState *state);
 
-Scene2 *LoadPBRT(Arena *arena, string filename)
+Scene *LoadPBRT(Arena *arena, string filename)
 {
 #define COMMA ,
-    Scene2 *scene = PushStruct(arena, Scene2);
+    Scene *scene = PushStruct(arena, Scene);
     SceneLoadState state;
     u32 numProcessors   = OS_NumProcessors();
     state.numTriMeshes  = PushArray(arena, u32, numProcessors);
@@ -2720,161 +2721,121 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     ScratchEnd(temp);
 }
 
-Bounds Scene::BuildBVH(Arena **arenas, BuildSettings &settings)
+// Bounds Scene::BuildBVH(Arena **arenas, BuildSettings &settings)
+// {
+//     TempArena temp = ScratchStart(0, 0);
+//     // First instantiate all child pointers
+//     if (childScenes)
+//     {
+//         Assert(instances);
+//         u32 *numPrims = PushArrayNoZero(temp.arena, u32, numScenes);
+//         for (u32 i = 0; i < numScenes; i++)
+//         {
+//             Scene2 *childScene = childScenes[i];
+//             if (childScene->nodePtr.data == 0)
+//             {
+//                 childScene->BuildBVH(arenas, settings, &numPrims[i]);
+//             }
+//         }
+//         // build tlas
+//         RecordAOSSplits record;
+//         BRef *refs = GenerateBuildRefs(this, temp.arena, numPrims, record);
+//         nodePtr    = BuildTLASQuantized(settings, arenas, this, refs, record);
+//         // intersectFunc =
+//         return Bounds(record.geomBounds);
+//     }
+//     else
+//     {
+//         Assert(instances == 0);
+//         // TODO: this is kinda hacky
+//         intersectFunc = ;
+//     }
+//     ScratchEnd(temp);
+//     return {};
+// }
+
+#if 0
+void BuildTLASBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
 {
-    TempArena temp = ScratchStart(0, 0);
-    // First instantiate all child pointers
-    if (childScenes)
+    Assert(instances);
+    u32 *numPrims = PushArrayNoZero(temp.arena, u32, numScenes);
+    for (u32 i = 0; i < numScenes; i++)
     {
-        Assert(instances);
-        u32 *numPrims = PushArrayNoZero(temp.arena, u32, numScenes);
-        for (u32 i = 0; i < numScenes; i++)
+        Scene2 *childScene = childScenes[i];
+        if (childScene->nodePtr.data == 0)
         {
-            Scene2 *childScene = childScenes[i];
-            if (childScene->nodePtr.data == 0)
-            {
-                childScene->BuildBVH(arenas, settings, &numPrims[i]);
-            }
+            childScene->BuildBVH(arenas, settings, &numPrims[i]);
         }
-        // build tlas
-        RecordAOSSplits record;
-        BRef *refs = GenerateBuildRefs(this, temp.arena, numPrims, record);
-        nodePtr    = BuildTLASQuantized(settings, arenas, this, refs, record);
-        // intersectFunc =
-        return Bounds(record.geomBounds);
+    }
+    // build tlas
+    RecordAOSSplits record;
+    BRef *refs = GenerateBuildRefs(this, temp.arena, numPrims, record);
+    nodePtr    = BuildTLASQuantized(settings, arenas, this, refs, record);
+    // intersectFunc =
+    return Bounds(record.geomBounds);
+}
+#endif
+
+void BuildQuadBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene,
+                  u32 *outNumPrims)
+
+{
+    Assert(0);
+    RecordAOSSplits record;
+    u32 numPrims;
+    if (scene->numPrimitives == 1)
+    {
+        PrimRefCompressed *refs;
+        // GeneratePrimRefs();
+        BuildQuantizedQuadSBVH(settings, arenas, scene, refs, record);
+        using IntersectorType = BVH4QuadIntersectorCmp8;
+        scene->intersectFunc  = &IntersectorType::Intersect;
+        scene->occludedFunc   = &IntersectorType::Occluded;
     }
     else
     {
-        Assert(instances == 0);
-        // TODO: this is kinda hacky
-        if (numScenes == 1)
-        {
-            nodePtr = childScenes[0]->nodePtr;
-        }
-        else
-        {
-            Assert(0);
-        }
+        PrimRef *refs;
+        BuildQuantizedQuadSBVH(settings, arenas, scene, refs, record);
+        using IntersectorType = BVH4QuadIntersector8;
+        scene->intersectFunc  = &IntersectorType::Intersect;
+        scene->occludedFunc   = &IntersectorType::Occluded;
     }
-    ScratchEnd(temp);
-    return {};
+    if (outNumPrims) *outNumPrims = numPrims;
 }
 
-void BuildQuadBVH(Arena **arenas, BuildSettings &settings, u32 *outNumPrims, Scene2 *scene) {}
-
-void BuildTriangleBVH(Arena **arenas, BuildSettings &settings, u32 *outNumPrims, Scene2 *scene)
+void BuildTriangleBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene,
+                      u32 *outNumPrims)
 {
+    TempArena temp = ScratchStart(0, 0);
     Assert(scene->numPrimitives);
     // Compressed builder
     Bounds geomBounds, centBounds;
     u32 numPrims;
     RecordAOSSplits record;
-    if (numPrimitives == 1)
+    if (scene->numPrimitives == 1)
     {
         PrimRefCompressed *refs =
-            GenerateTriRefs<PrimRefCompressed>(temp.arena, this, record, &numPrims);
-        BuildQuantizedSBVH(settings, arenas, this, refs, record);
+            GenerateTriRefs<PrimRefCompressed>(temp.arena, scene, record, &numPrims);
+        BuildQuantizedTriSBVH(settings, arenas, scene, refs, record);
         using IntersectorType = BVH4TriangleIntersectorCmp8;
-        scene->intersectFunc  = &IntersectorType::Intersect<Scene2Impl<Prim>>;
-        scene->occludedFunc   = &IntersectorType::Occluded<Scene2Impl<Prim>>;
+        scene->intersectFunc  = &IntersectorType::Intersect;
+        scene->occludedFunc   = &IntersectorType::Occluded;
     }
     else
     {
-        PrimRef *refs = GenerateTriRefs<PrimRef>(temp.arena, this, record, &numPrims);
-        BuildQuantizedSBVH(settings, arenas, this, refs, record);
+        PrimRef *refs = GenerateTriRefs<PrimRef>(temp.arena, scene, record, &numPrims);
+        BuildQuantizedTriSBVH(settings, arenas, scene, refs, record);
         using IntersectorType = BVH4TriangleIntersector8;
-        scene->intersectFunc  = &IntersectorType::Intersect<Scene2Impl<Prim>>;
-        scene->occludedFunc   = &IntersectorType::Occluded<Scene2Impl<Prim>>;
+        scene->intersectFunc  = &IntersectorType::Intersect;
+        scene->occludedFunc   = &IntersectorType::Occluded;
     }
     if (outNumPrims) *outNumPrims = numPrims;
-}
-
-template <typename Prim>
-void Scene2Impl<Prim>::BuildBVH(Arena **arenas, BuildSettings &settings, u32 *outNumPrims)
-{
-    TempArena temp  = ScratchStart(0, 0);
-    u32 threadIndex = GetThreadIndex();
-    // Partial rebraiding
-    if constexpr (std::is_same_v<Prim, Instance>)
-    {
-#if 0
-        Assert(childScenes);
-        for (u32 i = 0; i < numChildScenes; i++)
-        {
-            Scene2 *scene = childScenes[i];
-            scene->BuildBVH();
-        }
-        RecordAOSSplits record;
-        BRef *refs = GenerateBuildRefs(this, childScenes, numChildScenes, temp.arena, );
-        BuildTLASQuantized(settings, arenas, refs);
-#endif
-    }
-    else if constexpr (std::is_same_v<Prim, TriangleMesh>)
-    {
-        Assert(numPrimitives);
-        // Compressed builder
-        Bounds geomBounds, centBounds;
-        u32 numPrims;
-        RecordAOSSplits record;
-        if (numPrimitives == 1)
-        {
-            PrimRefCompressed *refs =
-                GenerateTriRefs<PrimRefCompressed>(temp.arena, this, record, &numPrims);
-            BuildQuantizedSBVH(settings, arenas, this, refs, record);
-            using IntersectorType = BVH4TriangleIntersectorCmp8;
-            intersectFunc         = &IntersectorType::Intersect<Scene2Impl<Prim>>;
-            occludedFunc          = &IntersectorType::Occluded<Scene2Impl<Prim>>;
-        }
-        else
-        {
-            PrimRef *refs = GenerateTriRefs<PrimRef>(temp.arena, this, record, &numPrims);
-            BuildQuantizedSBVH(settings, arenas, this, refs, record);
-            using IntersectorType = BVH4TriangleIntersector8;
-            intersectFunc         = &IntersectorType::Intersect<Scene2Impl<Prim>>;
-            occludedFunc          = &IntersectorType::Occluded<Scene2Impl<Prim>>;
-        }
-        if (outNumPrims) *outNumPrims = numPrims;
-    }
-    else if constexpr (std::is_same_v<Prim, QuadMesh>)
-    {
-        Assert(numPrimitives);
-        // Compressed builder
-#if 0
-        if (numPrimitives == 1)
-        {
-            u32 numFaces;
-            Bounds geomBounds, centBounds;
-            PrimRefCompressed *refs =
-                Generate(arenas[threadIndex], primitives, geomBounds, centBounds);
-            RecordAOSSplits record;
-            record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
-            record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
-            record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
-            BuildQuantizedQuadSBVH(settings, arenas, primitives, refs, record);
-        }
-        else
-        {
-            u32 numFaces;
-            Bounds geomBounds, centBounds;
-            PrimRef *refs = GenerateAOSData(arenas[threadIndex], this, geomBounds, centBounds);
-            RecordAOSSplits record;
-            record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
-            record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
-            record.SetRange(0, numFaces, u32(numFaces * GROW_AMOUNT));
-            BuildQuantizedQuadSBVH(settings, arenas, this, refs, record);
-        }
-#endif
-    }
-    else
-    {
-        Error(0, "Invalid primitive type. Currently only supporting quad meshes, triangle "
-                 "meshes, and instances");
-    }
+    ScratchEnd(temp);
 }
 
 // TODO: parallelize
 template <typename PrimRefType>
-void GenerateTriRefs(PrimRef *ref, u32 offset, TriangleMesh *mesh, u32 geomID, u32 start,
+void GenerateTriRefs(PrimRefType *refs, u32 offset, TriangleMesh *mesh, u32 geomID, u32 start,
                      u32 count, RecordAOSSplits &record)
 {
 #define UseGeomIDs !std::is_same_v<PrimRefType, PrimRefCompressed>
@@ -2932,14 +2893,15 @@ void GenerateTriRefs(PrimRef *ref, u32 offset, TriangleMesh *mesh, u32 geomID, u
 // intersection/occlusion routine.
 
 template <typename PrimRefType>
-PrimRefType *GenerateTriRefs(Arena *arena, Scene2 *scene, RecordAOSSplits &record,
+PrimRefType *GenerateTriRefs(Arena *arena, ScenePrimitives *scene, RecordAOSSplits &record,
                              u32 *outNumPrims)
 {
     RecordAOSSplits r(neg_inf);
-    u32 totalNum = 0;
+    u32 totalNum         = 0;
+    TriangleMesh *meshes = (TriangleMesh *)scene->primitives;
     for (u32 i = 0; i < scene->numPrimitives; i++)
     {
-        TriangleMesh *mesh = &scene->primitives[i];
+        TriangleMesh *mesh = meshes + i;
         u32 numFaces;
         if (mesh->indices)
         {
@@ -2959,7 +2921,7 @@ PrimRefType *GenerateTriRefs(Arena *arena, Scene2 *scene, RecordAOSSplits &recor
     u32 offset = 0;
     for (u32 i = 0; i < scene->numPrimitives; i++)
     {
-        TriangleMesh *mesh = &scene->primitives[i];
+        TriangleMesh *mesh = meshes + i;
         u32 numFaces;
         if (mesh->indices)
         {
@@ -2993,6 +2955,7 @@ PrimRefType *GenerateTriRefs(Arena *arena, Scene2 *scene, RecordAOSSplits &recor
     Assert(totalNum == offset);
     if (outNumPrims) *outNumPrims = totalNum;
     record = r;
+    return refs;
 }
 
 template <typename PrimRefType>
@@ -3130,6 +3093,7 @@ u32 FixQuadMeshPointers(Arena *arena, QuadMesh *meshes, const LookupEntry *entri
     return vertCount;
 }
 
+#if 0
 Scene2 **InitializeScene(Arena **arenas, string meshDirectory, string instanceFile,
                          string transformFile)
 {
@@ -3284,5 +3248,6 @@ Scene2 **InitializeScene(Arena **arenas, string meshDirectory, string instanceFi
     // numScenes            = numEntries + 1;
     return out;
 }
+#endif
 
 } // namespace rt
