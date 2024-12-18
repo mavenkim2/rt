@@ -461,8 +461,9 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
 
     // TODO:
     // - render two instances of a quad mesh properly (i.e. test partial rebraiding)
+    // - need to support a bvh with quad/triangle mesh instances (i.e. different instance
+    // types)
     // - render the diffuse/diffuse transmission materials properly
-    // - need to support a bvh with quad/triangle mesh instances
     // - add area lights (making sure they cannot be intersected, but are sampled properly)
     // - load the scene description and properly instantiate lights/materials/textures
 
@@ -471,11 +472,12 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     // once moana is rendered
     // - ray differentials
 
-    scene_                      = PushStruct(arena, Scene);
-    Scene *scene                = GetScene();
-    ScenePrimitives *scenePrims = &scene->scene;
-    u32 numProcessors           = OS_NumProcessors();
-    Arena **arenas              = PushArray(arena, Arena *, numProcessors);
+    scene_                          = PushStruct(arena, Scene);
+    Scene *scene                    = GetScene();
+    ScenePrimitives *baseScenePrims = &scene->scene;
+    ScenePrimitives *scenePrims     = PushStruct(arena, ScenePrimitives);
+    u32 numProcessors               = OS_NumProcessors();
+    Arena **arenas                  = PushArray(arena, Arena *, numProcessors);
     for (u32 i = 0; i < numProcessors; i++)
     {
         arenas[i] = ArenaAlloc(16);
@@ -501,7 +503,7 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     Mat4 cameraFromRaster = Inverse(rasterFromCamera);
 
     // ocean mesh
-#if 1
+#if 0
     TriangleMesh meshes[] = {
         LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply"),
         LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00002.ply"),
@@ -522,9 +524,20 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     scenePrims->primitives    = meshes;
     scenePrims->numPrimitives = 2;
 #else
-    // TriangleMesh mesh =
-    //     LoadPLY(arena,
-    //     "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
+    AffineSpace transforms[] = {
+        AffineSpace(0.883491f, 0.f, -0.171593f, -0.006209f, 0.899411f, -0.031968f, 0.171481f,
+                    0.032566f, 0.882912f, -122.554825f, 89.79077f, -1037.3927f),
+        AffineSpace(-0.638355f, 0.111424f, -0.761635f, 0.08791f, 0.993547f, 0.071671f,
+                    0.764705f, -0.021204f, -0.644031f, 1269.0525f, 104.751915f, -1049.8042),
+    };
+    for (u32 i = 0; i < ArrayLength(transforms); i++)
+    {
+        transforms[i] = Inverse(transforms[i]);
+    }
+    Instance instances[] = {
+        {0, 0},
+        {0, 1},
+    };
     QuadMesh meshes[] = {LoadQuadPLY(
         arena, "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply")};
     PtexTexture<3> texture("../data/island/textures/isIronwoodA1/Color/trunk0001_geo.ptx",
@@ -536,13 +549,17 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
                                                          ConstantSpectrum(1.5f)),
                                NullShader());
     scene->materials.Set<CoatedDiffuseMaterial1>(&mat, 1);
-    Scene2::PrimitiveIndices ids[] = {
-        Scene2::PrimitiveIndices(LightHandle(),
-                                 MaterialHandle(MaterialType::CoatedDiffuseMaterial1, 0)),
+    PrimitiveIndices ids[] = {
+        PrimitiveIndices(LightHandle(),
+                         MaterialHandle(MaterialType::CoatedDiffuseMaterial1, 0)),
     };
-    u32 numFaces     = meshes[0].numVertices / 4;
-    scene->meshes    = meshes;
-    scene->numMeshes = 1;
+    scenePrims->primitives           = meshes;
+    scenePrims->numPrimitives        = 1;
+    baseScenePrims->numPrimitives    = 2;
+    baseScenePrims->primitives       = instances;
+    baseScenePrims->affineTransforms = transforms;
+    baseScenePrims->childScenes      = scenePrims;
+    baseScenePrims->numScenes        = 1;
 #endif
     scene->primIndices = ids;
 
@@ -559,7 +576,9 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     BuildSettings settings;
     settings.intCost = 1.f;
 
-    BuildTriangleBVH(arenas, settings, scenePrims);
+    // BuildTriangleBVH(arenas, settings, scenePrims);
+    BuildQuadBVH(arenas, settings, scenePrims);
+    BuildTLASBVH(arenas, settings, baseScenePrims);
 
 #if 0
     RecordAOSSplits recordTop;

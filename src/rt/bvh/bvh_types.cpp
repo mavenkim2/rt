@@ -2,7 +2,50 @@
 namespace rt
 {
 template <i32 N>
-void Triangle<N>::GetData(ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N],
+__forceinline void LeafPrim<N>::Fill(const ScenePrimitives *, PrimRef *refs, u32 &begin, u32 end)
+{
+    Assert(end > begin);
+    for (u32 i = 0; i < N; i++)
+    {
+        if (begin < end)
+        {
+            PrimRef *ref = &refs[begin];
+            geomIDs[i]   = ref->geomID;
+            primIDs[i]   = ref->primID;
+            begin++;
+        }
+        else
+        {
+            PrimRef *ref = &refs[begin - 1];
+            geomIDs[i]   = ref->geomID;
+            primIDs[i]   = ref->primID;
+        }
+    }
+}
+
+template <i32 N>
+__forceinline void LeafPrimCompressed<N>::Fill(const ScenePrimitives *, PrimRefCompressed *refs,
+                                               u32 &begin, u32 end)
+{
+    Assert(end > begin);
+    for (u32 i = 0; i < N; i++)
+    {
+        if (begin < end)
+        {
+            PrimRefCompressed *ref = &refs[begin];
+            primIDs[i]             = ref->primID;
+            begin++;
+        }
+        else
+        {
+            PrimRefCompressed *ref = &refs[begin - 1];
+            primIDs[i]             = ref->primID;
+        }
+    }
+}
+
+template <i32 N>
+void Triangle<N>::GetData(const ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N],
                           Lane4F32 v2[N], u32 outGeomIDs[N], u32 outPrimIDs[N]) const
 {
     TriangleMesh *meshes = (TriangleMesh *)scene->primitives;
@@ -33,7 +76,7 @@ void Triangle<N>::GetData(ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N]
     }
 }
 template <i32 N>
-void TriangleCompressed<N>::GetData(ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N],
+void TriangleCompressed<N>::GetData(const ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N],
                                     Lane4F32 v2[N], u32 outGeomIDs[N], u32 outPrimIDs[N]) const
 {
     // TODO: reconsider this later
@@ -63,7 +106,7 @@ void TriangleCompressed<N>::GetData(ScenePrimitives *scene, Lane4F32 v0[N], Lane
     }
 }
 template <i32 N>
-void Quad<N>::GetData(ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
+void Quad<N>::GetData(const ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
                       Lane4F32 v3[N], u32 outGeomIDs[N], u32 outPrimIDs[N]) const
 {
     QuadMesh *meshes = (QuadMesh *)scene->primitives;
@@ -98,7 +141,7 @@ void Quad<N>::GetData(ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N], La
 }
 
 template <i32 N>
-void QuadCompressed<N>::GetData(ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N],
+void QuadCompressed<N>::GetData(const ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N],
                                 Lane4F32 v2[N], Lane4F32 v3[N], u32 outGeomIDs[N],
                                 u32 outPrimIDs[N]) const
 {
@@ -130,5 +173,11 @@ void QuadCompressed<N>::GetData(ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32
         outPrimIDs[i] = this->primIDs[i];
         outGeomIDs[i] = 0;
     }
+}
+
+void TLASLeaf::GetData(const ScenePrimitives *scene, AffineSpace *&t, ScenePrimitives *&childScene)
+{
+    t          = &scene->affineTransforms[transformIndex];
+    childScene = &scene->childScenes[sceneIndex];
 }
 } // namespace rt

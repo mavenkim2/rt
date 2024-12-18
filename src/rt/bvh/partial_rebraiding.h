@@ -3,8 +3,8 @@
 namespace rt
 {
 
-void GenerateBuildRefs(BRef *refs, ScenePrimitives *scene, const u32 *numPrims, u32 start,
-                       u32 count, RecordAOSSplits &record)
+void GenerateBuildRefs(BRef *refs, ScenePrimitives *scene, u32 start, u32 count,
+                       RecordAOSSplits &record)
 {
     Bounds geom;
     Bounds cent;
@@ -13,8 +13,7 @@ void GenerateBuildRefs(BRef *refs, ScenePrimitives *scene, const u32 *numPrims, 
     {
         const Instance &instance = instances[i];
         AffineSpace &transform   = scene->affineTransforms[instance.transformIndex];
-        // Assert(instance.geomID.GetType() == GeometryType::Instance);
-        u32 index = instance.geomID.GetIndex(); // + 1;
+        u32 index                = instance.id;
         Assert(index < scene->numScenes);
         Assert(scene->childScenes);
         ScenePrimitives *inScene = &scene->childScenes[index];
@@ -29,7 +28,7 @@ void GenerateBuildRefs(BRef *refs, ScenePrimitives *scene, const u32 *numPrims, 
 
         ref->instanceID = i;
         ref->nodePtr    = inScene->nodePtr;
-        ref->numPrims   = numPrims[i];
+        ref->numPrims   = inScene->numFaces;
 
         Error(ref->nodePtr.data, "Invalid scene: %u\n", index);
     }
@@ -38,8 +37,7 @@ void GenerateBuildRefs(BRef *refs, ScenePrimitives *scene, const u32 *numPrims, 
 }
 
 // NOTE: either Scene or Scene2Inst
-BRef *GenerateBuildRefs(ScenePrimitives *scene, Arena *arena, const u32 *numPrims,
-                        RecordAOSSplits &record)
+BRef *GenerateBuildRefs(ScenePrimitives *scene, Arena *arena, RecordAOSSplits &record)
 {
     u32 numInstances = scene->numPrimitives;
     u32 extEnd       = 4 * numInstances;
@@ -50,13 +48,13 @@ BRef *GenerateBuildRefs(ScenePrimitives *scene, Arena *arena, const u32 *numPrim
         ParallelReduce<RecordAOSSplits>(
             &record, 0, numInstances, PARALLEL_THRESHOLD,
             [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
-                GenerateBuildRefs(b, scene, numPrims, start, count, record);
+                GenerateBuildRefs(b, scene, start, count, record);
             },
             [&](RecordAOSSplits &l, const RecordAOSSplits &r) { l.Merge(r); });
     }
     else
     {
-        GenerateBuildRefs(b, scene, numPrims, 0, numInstances, record);
+        GenerateBuildRefs(b, scene, 0, numInstances, record);
     }
     record.SetRange(0, numInstances, extEnd);
     return b;
@@ -225,7 +223,7 @@ struct HeuristicPartialRebraid
         }
         if (record.ExtSize())
         {
-            u32 geomID = instances[buildRefs[record.start].instanceID].geomID.GetIndex();
+            u32 geomID = instances[buildRefs[record.start].instanceID].id;
             if (record.count > PARALLEL_THRESHOLD)
             {
                 TempArena temp = ScratchStart(0, 0);
@@ -243,7 +241,7 @@ struct HeuristicPartialRebraid
                         for (u32 i = start; i < start + count; i++)
                         {
                             const BRef &ref = buildRefs[i];
-                            u32 objectID    = instances[ref.instanceID].geomID.GetIndex();
+                            u32 objectID    = instances[ref.instanceID].id;
                             commonGeomID &= objectID == geomID;
                             if (heuristic(ref))
                             {
@@ -296,7 +294,7 @@ struct HeuristicPartialRebraid
                 for (u32 i = record.start; i < record.start + record.count; i++)
                 {
                     const BRef &ref = buildRefs[i];
-                    u32 objectID    = instances[ref.instanceID].geomID.GetIndex();
+                    u32 objectID    = instances[ref.instanceID].id;
                     commonGeomID &= objectID == geomID;
                     if (heuristic(ref)) count += getNode(ref.nodePtr)->GetNumChildren() - 1;
                 }

@@ -61,6 +61,12 @@ struct TypePack
     static constexpr size_t count = sizeof...(Ts);
 };
 
+template <typename F, typename... Ts>
+auto Dispatch(F &&closure, TypePack<Ts...>, u32 index)
+{
+    Dispatch<F, Ts...>(std::move(closure), index);
+}
+
 template <typename T, typename... Ts>
 struct IndexOf
 {

@@ -2670,7 +2670,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
 
                 Assert(instanceOffset < numInstances);
                 Instance *outInstance = &instances[instanceOffset];
-                outInstance->geomID   = GeometryID::CreateInstanceID(index);
+                outInstance->id       = index;
 
                 if (transformHashTable.Find(t, index))
                 {
@@ -2721,302 +2721,137 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     ScratchEnd(temp);
 }
 
-// Bounds Scene::BuildBVH(Arena **arenas, BuildSettings &settings)
-// {
-//     TempArena temp = ScratchStart(0, 0);
-//     // First instantiate all child pointers
-//     if (childScenes)
-//     {
-//         Assert(instances);
-//         u32 *numPrims = PushArrayNoZero(temp.arena, u32, numScenes);
-//         for (u32 i = 0; i < numScenes; i++)
-//         {
-//             Scene2 *childScene = childScenes[i];
-//             if (childScene->nodePtr.data == 0)
-//             {
-//                 childScene->BuildBVH(arenas, settings, &numPrims[i]);
-//             }
-//         }
-//         // build tlas
-//         RecordAOSSplits record;
-//         BRef *refs = GenerateBuildRefs(this, temp.arena, numPrims, record);
-//         nodePtr    = BuildTLASQuantized(settings, arenas, this, refs, record);
-//         // intersectFunc =
-//         return Bounds(record.geomBounds);
-//     }
-//     else
-//     {
-//         Assert(instances == 0);
-//         // TODO: this is kinda hacky
-//         intersectFunc = ;
-//     }
-//     ScratchEnd(temp);
-//     return {};
-// }
-
-#if 0
 void BuildTLASBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
 {
-    Assert(instances);
-    u32 *numPrims = PushArrayNoZero(temp.arena, u32, numScenes);
-    for (u32 i = 0; i < numScenes; i++)
-    {
-        Scene2 *childScene = childScenes[i];
-        if (childScene->nodePtr.data == 0)
-        {
-            childScene->BuildBVH(arenas, settings, &numPrims[i]);
-        }
-    }
+    TempArena temp = ScratchStart(0, 0);
+    // for (u32 i = 0; i < numScenes; i++)
+    // {
+    //     Scene2 *childScene = childScenes[i];
+    //     if (childScene->nodePtr.data == 0)
+    //     {
+    //         childScene->BuildBVH(arenas, settings, &numPrims[i]);
+    //     }
+    // }
     // build tlas
     RecordAOSSplits record;
-    BRef *refs = GenerateBuildRefs(this, temp.arena, numPrims, record);
-    nodePtr    = BuildTLASQuantized(settings, arenas, this, refs, record);
-    // intersectFunc =
-    return Bounds(record.geomBounds);
-}
-#endif
+    BRef *refs            = GenerateBuildRefs(scene, temp.arena, record);
+    scene->nodePtr        = BuildTLASQuantized(settings, arenas, scene, refs, record);
+    using IntersectorType = typename IntersectorHelper<Instance, BRef>::IntersectorType;
+    scene->intersectFunc  = &IntersectorType::Intersect;
+    scene->occludedFunc   = &IntersectorType::Occluded;
 
-void BuildQuadBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene,
-                  u32 *outNumPrims)
-
-{
-    Assert(0);
-    RecordAOSSplits record;
-    u32 numPrims;
-    if (scene->numPrimitives == 1)
-    {
-        PrimRefCompressed *refs;
-        // GeneratePrimRefs();
-        BuildQuantizedQuadSBVH(settings, arenas, scene, refs, record);
-        using IntersectorType = BVH4QuadIntersectorCmp8;
-        scene->intersectFunc  = &IntersectorType::Intersect;
-        scene->occludedFunc   = &IntersectorType::Occluded;
-    }
-    else
-    {
-        PrimRef *refs;
-        BuildQuantizedQuadSBVH(settings, arenas, scene, refs, record);
-        using IntersectorType = BVH4QuadIntersector8;
-        scene->intersectFunc  = &IntersectorType::Intersect;
-        scene->occludedFunc   = &IntersectorType::Occluded;
-    }
-    if (outNumPrims) *outNumPrims = numPrims;
-}
-
-void BuildTriangleBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene,
-                      u32 *outNumPrims)
-{
-    TempArena temp = ScratchStart(0, 0);
-    Assert(scene->numPrimitives);
-    // Compressed builder
-    Bounds geomBounds, centBounds;
-    u32 numPrims;
-    RecordAOSSplits record;
-    if (scene->numPrimitives == 1)
-    {
-        PrimRefCompressed *refs =
-            GenerateTriRefs<PrimRefCompressed>(temp.arena, scene, record, &numPrims);
-        scene->nodePtr        = BuildQuantizedTriSBVH(settings, arenas, scene, refs, record);
-        using IntersectorType = BVH4TriangleCLIntersectorCmp8;
-        scene->intersectFunc  = &IntersectorType::Intersect;
-        scene->occludedFunc   = &IntersectorType::Occluded;
-    }
-    else
-    {
-        PrimRef *refs         = GenerateTriRefs<PrimRef>(temp.arena, scene, record, &numPrims);
-        scene->nodePtr        = BuildQuantizedTriSBVH(settings, arenas, scene, refs, record);
-        using IntersectorType = BVH4TriangleCLIntersector8;
-        scene->intersectFunc  = &IntersectorType::Intersect;
-        scene->occludedFunc   = &IntersectorType::Occluded;
-    }
     scene->SetBounds(Bounds(record.geomBounds));
-    if (outNumPrims) *outNumPrims = numPrims;
-    Assert(scene);
     ScratchEnd(temp);
 }
 
-// TODO: parallelize
-template <typename PrimRefType>
-void GenerateTriRefs(PrimRefType *refs, u32 offset, TriangleMesh *mesh, u32 geomID, u32 start,
-                     u32 count, RecordAOSSplits &record)
+template <typename Mesh>
+void BuildBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
+
 {
-#define UseGeomIDs !std::is_same_v<PrimRefType, PrimRefCompressed>
-    Bounds geomBounds;
-    Bounds centBounds;
-    for (u32 i = start; i < start + count; i++, offset++)
+    TempArena temp = ScratchStart(0, 0);
+    Mesh *meshes   = (Mesh *)scene->primitives;
+    RecordAOSSplits record(neg_inf);
+
+    u32 totalNumFaces = 0;
+    if (scene->numPrimitives > 1)
     {
-        u32 i0, i1, i2;
-        if (mesh->indices)
+        PrimRef *refs;
+        u32 extEnd;
+        if (scene->numPrimitives > PARALLEL_THRESHOLD)
         {
-            i0 = mesh->indices[i * 3];
-            i1 = mesh->indices[i * 3 + 1];
-            i2 = mesh->indices[i * 3 + 2];
-        }
-        else
-        {
-            i0 = i * 3;
-            i1 = i * 3 + 1;
-            i2 = i * 3 + 2;
-        }
+            ParallelForOutput output =
+                ParallelFor<u32>(temp, 0, scene->numPrimitives, PARALLEL_THRESHOLD,
+                                 [&](u32 &faceCount, u32 jobID, u32 start, u32 count) {
+                                     u32 outCount = 0;
 
-        PrimRefType *prim = &refs[offset];
-        Vec3f v0          = mesh->p[i0];
-        Vec3f v1          = mesh->p[i1];
-        Vec3f v2          = mesh->p[i2];
+                                     for (u32 i = start; i < start + count; i++)
+                                     {
+                                         Mesh &mesh = meshes[i];
+                                         outCount += mesh.GetNumFaces();
+                                     }
+                                     faceCount = outCount;
+                                 });
+            Reduce(totalNumFaces, output, [&](u32 &l, const u32 &r) { l += r; });
 
-        Vec3f min = Min(Min(v0, v1), v2);
-        Vec3f max = Max(Max(v0, v1), v2);
+            u32 offset   = 0;
+            u32 *offsets = (u32 *)output.out;
+            for (u32 i = 0; i < output.num; i++)
+            {
+                u32 numFaces = offsets[i];
+                offsets[i]   = offset;
+                offset += numFaces;
+            }
+            Assert(totalNumFaces == offset);
+            extEnd = u32(totalNumFaces * GROW_AMOUNT);
 
-        Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
-        Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
-        Lane4F32::StoreU(prim->min, -mins);
-        prim->maxX = max.x;
-        prim->maxY = max.y;
-        prim->maxZ = max.z;
-        // prim->m256 = Lane8F32(-mins, maxs);
+            // Generate PrimRefs
+            refs = PushArrayNoZero(temp.arena, PrimRef, extEnd);
 
-        if constexpr (UseGeomIDs) prim->geomID = geomID;
-        prim->primID = i;
-
-        geomBounds.Extend(mins, maxs);
-        centBounds.Extend((maxs + mins)); //* 0.5f);
-    }
-    record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
-    record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
-#undef UseGeomIDs
-}
-
-// TODO: basically the fundamental idea is that instead of creating a billion templates,
-// we just have one Scene2 struct that contains function pointers for intersect/occluded,
-// and these pointers already know what "type" the Scene2 struct is so it doesn't have
-// to be stored explicitly. this at least makes sense to me because basically when
-// instantiating the scene you are basically switching on a string, and if it's a
-// triangle/curve/quad, then you're basically already locked into a bvh build and
-// intersection/occlusion routine.
-
-template <typename PrimRefType>
-PrimRefType *GenerateTriRefs(Arena *arena, ScenePrimitives *scene, RecordAOSSplits &record,
-                             u32 *outNumPrims)
-{
-    RecordAOSSplits r(neg_inf);
-    u32 totalNum         = 0;
-    TriangleMesh *meshes = (TriangleMesh *)scene->primitives;
-    for (u32 i = 0; i < scene->numPrimitives; i++)
-    {
-        TriangleMesh *mesh = meshes + i;
-        u32 numFaces;
-        if (mesh->indices)
-        {
-            numFaces = mesh->numIndices / 3;
-        }
-        else
-        {
-            numFaces = mesh->numVertices / 3;
-        }
-        totalNum += numFaces;
-    }
-    u64 align         = arena->align;
-    arena->align      = 64;
-    PrimRefType *refs = PushArray(arena, PrimRefType, u32(totalNum * GROW_AMOUNT) + 1);
-    arena->align      = align;
-
-    u32 offset = 0;
-    for (u32 i = 0; i < scene->numPrimitives; i++)
-    {
-        TriangleMesh *mesh = meshes + i;
-        u32 numFaces;
-        if (mesh->indices)
-        {
-            numFaces = mesh->numIndices / 3;
-        }
-        else
-        {
-            numFaces = mesh->numVertices / 3;
-        }
-        RecordAOSSplits tempRecord;
-        if (numFaces > PARALLEL_THRESHOLD)
-        {
             ParallelReduce<RecordAOSSplits>(
-                &tempRecord, 0, numFaces, PARALLEL_THRESHOLD,
+                &record, 0, scene->numPrimitives, PARALLEL_THRESHOLD,
                 [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
-                    Assert(offset + start < totalNum);
-                    GenerateTriRefs(refs, offset + start, mesh, i, start, count, record);
+                    GenerateMeshRefs(meshes, refs, offsets[jobID],
+                                     jobID == output.num - 1 ? totalNumFaces
+                                                             : offsets[jobID + 1],
+                                     start, count, record);
                 },
                 [&](RecordAOSSplits &l, const RecordAOSSplits &r) { l.Merge(r); });
         }
         else
         {
-            Assert(offset < totalNum);
-            GenerateTriRefs(refs, offset, mesh, i, 0, numFaces, tempRecord);
+            for (u32 i = 0; i < scene->numPrimitives; i++)
+            {
+                Mesh &mesh = meshes[i];
+                totalNumFaces += mesh.GetNumFaces();
+            }
+            extEnd = u32(totalNumFaces * GROW_AMOUNT);
+            refs   = PushArrayNoZero(temp.arena, PrimRef, extEnd);
+            GenerateMeshRefs(meshes, refs, 0, totalNumFaces, 0, scene->numPrimitives, record);
         }
-        r.Merge(tempRecord);
-        offset += numFaces;
+        record.SetRange(0, totalNumFaces, extEnd);
+        scene->nodePtr = BuildQuantizedSBVH<Mesh>(settings, arenas, scene, refs, record);
+        using IntersectorType = typename IntersectorHelper<Mesh, PrimRef>::IntersectorType;
+        scene->intersectFunc  = &IntersectorType::Intersect;
+        scene->occludedFunc   = &IntersectorType::Occluded;
     }
-
-    r.SetRange(0, totalNum, u32(totalNum * GROW_AMOUNT));
-    Assert(totalNum == offset);
-    if (outNumPrims) *outNumPrims = totalNum;
-    record = r;
-    return refs;
-}
-
-template <typename PrimRefType>
-void GeneratePrimRefs(PrimRefType *refs, u32 offset, QuadMesh *mesh, u32 geomID, u32 start,
-                      u32 count, RecordAOSSplits &record)
-{
-#define UseGeomIDs !std::is_same_v<PrimRefType, PrimRefCompressed>
-    Bounds geomBounds;
-    Bounds centBounds;
-    for (u32 i = start; i < start + count; i++, offset++)
+    else
     {
-        PrimRefType *prim = &refs[offset];
-        Vec3f v0, v1, v2, v3;
-        if (mesh->indices)
-        {
-            v0 = mesh->p[mesh->indices[4 * i + 0]];
-            v1 = mesh->p[mesh->indices[4 * i + 1]];
-            v2 = mesh->p[mesh->indices[4 * i + 2]];
-            v3 = mesh->p[mesh->indices[4 * i + 3]];
-        }
-        else
-        {
-            v0 = mesh->p[4 * i + 0];
-            v1 = mesh->p[4 * i + 1];
-            v2 = mesh->p[4 * i + 2];
-            v3 = mesh->p[4 * i + 3];
-        }
-
-        Vec3f min = Min(Min(v0, v1), Min(v2, v3));
-        Vec3f max = Max(Max(v0, v1), Max(v2, v3));
-
-        Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
-        Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
-        Lane4F32::StoreU(prim->min, -mins);
-
-        if constexpr (UseGeomIDs) prim->geomID = geomID;
-        prim->maxX   = max.x;
-        prim->maxY   = max.y;
-        prim->maxZ   = max.z;
-        prim->primID = i;
-
-        geomBounds.Extend(mins, maxs);
-        centBounds.Extend(maxs + mins);
+        totalNumFaces           = meshes->GetNumFaces();
+        u32 extEnd              = u32(totalNumFaces * GROW_AMOUNT);
+        PrimRefCompressed *refs = PushArrayNoZero(temp.arena, PrimRefCompressed, extEnd);
+        GenerateMeshRefs<PrimRefCompressed>(meshes, refs, 0, totalNumFaces, 0, 1, record);
+        record.SetRange(0, totalNumFaces, extEnd);
+        scene->nodePtr = BuildQuantizedSBVH<Mesh>(settings, arenas, scene, refs, record);
+        using IntersectorType =
+            typename IntersectorHelper<Mesh, PrimRefCompressed>::IntersectorType;
+        scene->intersectFunc = &IntersectorType::Intersect;
+        scene->occludedFunc  = &IntersectorType::Occluded;
     }
-    record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
-    record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
-#undef UseGeomIDs
+    scene->SetBounds(Bounds(record.geomBounds));
+    scene->numFaces = totalNumFaces;
+    ScratchEnd(temp);
 }
 
-template <typename PrimRef>
-void GeneratePrimRefs(QuadMesh *meshes, PrimRef *refs, u32 offset, u32 offsetMax, u32 start,
+void BuildTriangleBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
+{
+    BuildBVH<TriangleMesh>(arenas, settings, scene);
+}
+
+void BuildQuadBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
+{
+    BuildBVH<QuadMesh>(arenas, settings, scene);
+}
+
+template <typename PrimRef, typename Mesh>
+void GenerateMeshRefs(Mesh *meshes, PrimRef *refs, u32 offset, u32 offsetMax, u32 start,
                       u32 count, RecordAOSSplits &record)
 {
     RecordAOSSplits r(neg_inf);
     for (u32 i = start; i < start + count; i++)
     {
-        QuadMesh *mesh = &meshes[i];
+        Mesh *mesh = &meshes[i];
 
-        u32 numFaces = mesh->numVertices / 4;
+        u32 numFaces = mesh->GetNumFaces();
         RecordAOSSplits tempRecord;
         if (numFaces > PARALLEL_THRESHOLD)
         {
@@ -3024,14 +2859,14 @@ void GeneratePrimRefs(QuadMesh *meshes, PrimRef *refs, u32 offset, u32 offsetMax
                 &tempRecord, 0, numFaces, PARALLEL_THRESHOLD,
                 [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
                     Assert(offset + start < offsetMax);
-                    GeneratePrimRefs(refs, offset + start, mesh, i, start, count, record);
+                    mesh->GenerateMeshRefs(refs, offset + start, i, start, count, record);
                 },
                 [&](RecordAOSSplits &l, const RecordAOSSplits &r) { l.Merge(r); });
         }
         else
         {
             Assert(offset < offsetMax);
-            GeneratePrimRefs(refs, offset, mesh, i, 0, numFaces, tempRecord);
+            mesh->GenerateMeshRefs(refs, offset, i, 0, numFaces, tempRecord);
         }
         r.Merge(tempRecord);
         offset += numFaces;
@@ -3169,7 +3004,7 @@ Scene2 **InitializeScene(Arena **arenas, string meshDirectory, string instanceFi
             ParallelReduce<RecordAOSSplits>(
                 &record, 0, entry->quadMeshCount, PARALLEL_THRESHOLD,
                 [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
-                    GeneratePrimRefs(meshes, refs, offsets[jobID],
+                    GenerateQuadRefs(meshes, refs, offsets[jobID],
                                      jobID == output.num - 1 ? numFaces : offsets[jobID + 1],
                                      start, count, record);
                 },
@@ -3199,7 +3034,7 @@ Scene2 **InitializeScene(Arena **arenas, string meshDirectory, string instanceFi
             if (entry->quadMeshCount > 1)
             {
                 PrimRef *refs = PushArrayNoZero(temp.arena, PrimRef, extEnd);
-                GeneratePrimRefs(meshes, refs, 0, numFaces, 0, entry->quadMeshCount, record);
+                GenerateQuadRefs(meshes, refs, 0, numFaces, 0, entry->quadMeshCount, record);
                 group->SetBounds(record.geomBounds);
                 record.SetRange(0, numFaces, extEnd);
                 sceneNumPrims[jobID] = numFaces;
@@ -3214,7 +3049,7 @@ Scene2 **InitializeScene(Arena **arenas, string meshDirectory, string instanceFi
             {
                 PrimRefCompressed *refs =
                     PushArrayNoZero(temp.arena, PrimRefCompressed, extEnd + 1);
-                GeneratePrimRefs(refs, 0, &group->primitives[0], 0, 0, numFaces, record);
+                GenerateQuadRefs(refs, 0, &group->primitives[0], 0, 0, numFaces, record);
                 group->SetBounds(record.geomBounds);
                 record.SetRange(0, numFaces, extEnd);
                 sceneNumPrims[jobID] = numFaces;

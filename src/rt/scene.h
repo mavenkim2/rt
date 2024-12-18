@@ -181,14 +181,58 @@ struct TriangleMesh
     u32 numVertices;
     u32 numIndices;
 
-    static __forceinline AABB Bounds(TriangleMesh *mesh, u32 faceIndex)
+    u32 GetNumFaces() const
     {
-        Assert(faceIndex < mesh->numIndices / 3);
-        AABB result;
-        result.Extend(mesh->p[mesh->indices[faceIndex * 3 + 0]]);
-        result.Extend(mesh->p[mesh->indices[faceIndex * 3 + 1]]);
-        result.Extend(mesh->p[mesh->indices[faceIndex * 3 + 2]]);
-        return result;
+        if (indices) return numIndices / 3;
+        return numVertices / 3;
+    }
+    template <typename PrimRefType>
+    void GenerateMeshRefs(PrimRefType *refs, u32 offset, u32 geomID, u32 start, u32 count,
+                          RecordAOSSplits &record) const
+    {
+#define UseGeomIDs !std::is_same_v<PrimRefType, PrimRefCompressed>
+        Bounds geomBounds;
+        Bounds centBounds;
+        for (u32 i = start; i < start + count; i++, offset++)
+        {
+            u32 i0, i1, i2;
+            if (indices)
+            {
+                i0 = indices[i * 3];
+                i1 = indices[i * 3 + 1];
+                i2 = indices[i * 3 + 2];
+            }
+            else
+            {
+                i0 = i * 3;
+                i1 = i * 3 + 1;
+                i2 = i * 3 + 2;
+            }
+
+            PrimRefType *prim = &refs[offset];
+            Vec3f v0          = p[i0];
+            Vec3f v1          = p[i1];
+            Vec3f v2          = p[i2];
+
+            Vec3f min = Min(Min(v0, v1), v2);
+            Vec3f max = Max(Max(v0, v1), v2);
+
+            Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
+            Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
+            Lane4F32::StoreU(prim->min, -mins);
+            prim->maxX = max.x;
+            prim->maxY = max.y;
+            prim->maxZ = max.z;
+
+            if constexpr (UseGeomIDs) prim->geomID = geomID;
+            prim->primID = i;
+
+            geomBounds.Extend(mins, maxs);
+            centBounds.Extend((maxs + mins));
+        }
+        record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+        record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+#undef UseGeomIDs
     }
 };
 
@@ -200,6 +244,59 @@ struct QuadMesh
     u32 *indices = 0;
     u32 numIndices;
     u32 numVertices;
+
+    u32 GetNumFaces() const
+    {
+        if (indices) return numIndices / 4;
+        return numVertices / 4;
+    }
+
+    template <typename PrimRefType>
+    void GenerateMeshRefs(PrimRefType *refs, u32 offset, u32 geomID, u32 start, u32 count,
+                          RecordAOSSplits &record)
+    {
+#define UseGeomIDs !std::is_same_v<PrimRefType, PrimRefCompressed>
+        Bounds geomBounds;
+        Bounds centBounds;
+        for (u32 i = start; i < start + count; i++, offset++)
+        {
+            PrimRefType *prim = &refs[offset];
+            Vec3f v0, v1, v2, v3;
+            if (indices)
+            {
+                v0 = p[indices[4 * i + 0]];
+                v1 = p[indices[4 * i + 1]];
+                v2 = p[indices[4 * i + 2]];
+                v3 = p[indices[4 * i + 3]];
+            }
+            else
+            {
+                v0 = p[4 * i + 0];
+                v1 = p[4 * i + 1];
+                v2 = p[4 * i + 2];
+                v3 = p[4 * i + 3];
+            }
+
+            Vec3f min = Min(Min(v0, v1), Min(v2, v3));
+            Vec3f max = Max(Max(v0, v1), Max(v2, v3));
+
+            Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
+            Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
+            Lane4F32::StoreU(prim->min, -mins);
+
+            if constexpr (UseGeomIDs) prim->geomID = geomID;
+            prim->maxX   = max.x;
+            prim->maxY   = max.y;
+            prim->maxZ   = max.z;
+            prim->primID = i;
+
+            geomBounds.Extend(mins, maxs);
+            centBounds.Extend(maxs + mins);
+        }
+        record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+        record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+    }
+#undef UseGeomIDs
 };
 
 //////////////////////////////
@@ -558,15 +655,10 @@ struct NanoVDBVolume
 struct Instance
 {
     // TODO: materials
-    GeometryID geomID;
+    u32 id;
+    // GeometryID geomID;
     u32 transformIndex;
 };
-
-// TODO: I need a better name for this. basically the "top" scene structure. it can point to
-// bottom Scene structures, which contain geometry but not materials/lights/textures/etc
-
-// partial rebraid IF
-// - instances is set
 
 struct PrimitiveIndices
 {
@@ -587,8 +679,9 @@ struct SurfaceInteractions;
 
 struct ScenePrimitives
 {
-    typedef bool (*IntersectFunc)(ScenePrimitives *, Ray2 &, SurfaceInteractions<1> &);
-    typedef bool (*OccludedFunc)(ScenePrimitives *, Ray2 &);
+    typedef bool (*IntersectFunc)(ScenePrimitives *, BVHNodeN, Ray2 &,
+                                  SurfaceInteractions<1> &);
+    typedef bool (*OccludedFunc)(ScenePrimitives *, BVHNodeN, Ray2 &);
 
     Vec3f boundsMin;
     Vec3f boundsMax;
@@ -603,8 +696,7 @@ struct ScenePrimitives
 
     IntersectFunc intersectFunc;
     OccludedFunc occludedFunc;
-    u32 numPrimitives = 0;
-    u32 numScenes     = 0;
+    u32 numPrimitives, numScenes, numFaces;
 
     ScenePrimitives() {}
     Bounds GetBounds() const { return Bounds(Lane4F32(boundsMin), Lane4F32(boundsMax)); }
@@ -613,20 +705,11 @@ struct ScenePrimitives
         boundsMin = ToVec3f(inBounds.minP);
         boundsMax = ToVec3f(inBounds.maxP);
     }
-    void BuildBVH(Arena **, BuildSettings &, u32 *outNumPrims = 0);
 };
 
 struct Scene
 {
-    typedef bool (*IntersectFunc)(Scene *, Ray2 &, SurfaceInteractions<1> &);
-    typedef bool (*OccludedFunc)(Scene *, Ray2 &);
-
     ScenePrimitives scene;
-#if 0
-    Instance *instances;
-    struct Scene2 *childScenes;
-    // ArrayTuple<PrimitiveTypes> shapes;
-#endif
 
     const PrimitiveIndices *primIndices;
     ArrayTuple<LightTypes> lights;
@@ -642,117 +725,17 @@ struct Scene
 struct Scene *scene_;
 Scene *GetScene() { return scene_; }
 
-void BuildQuadBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene,
-                  u32 *outNumPrims = 0);
-void BuildTriangleBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene,
-                      u32 *outNumPrims = 0);
+void BuildTLASBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
+template <typename Mesh>
+void BuildBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
+void BuildQuadBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
+void BuildTriangleBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
 
-template <typename PrimRefType>
-void GenerateTriRefs(PrimRefType *ref, u32 offset, TriangleMesh *mesh, u32 geomID, u32 start,
-                     u32 count, RecordAOSSplits &record);
-
-template <typename PrimRefType>
-PrimRefType *GenerateTriRefs(Arena *arena, ScenePrimitives *scene, RecordAOSSplits &record,
-                             u32 *outNumPrims = 0);
+template <typename PrimRefType, typename Mesh>
+void GenerateMeshRefs(Mesh *meshes, PrimRef *refs, u32 offset, u32 offsetMax, u32 start,
+                      u32 count, RecordAOSSplits &record);
 // what I'm thinking: instances are always instances of a scene, never of a shape. if you
 // want an instance of just one shape, you have a scene that contains only one
-
-#if 0
-// NOTE: only leaf scenes can
-struct Scene2
-{
-    // using ShapeTypes = TypePack<QuadMesh, Disk>;
-    // using VolumeTypes        = TypePack<NanoVDBVolume>;
-    // using MaterialTypes = TypePack<DielectricMaterialBase>;
-    // using MaterialTypes = TypePack<CoatedDiffuseMaterial1>;
-
-    // TODO: this really should adjacent in memory to the primitives
-
-    union
-    {
-        struct
-        {
-            QuadMesh *meshes;
-            u32 numMeshes;
-            u32 numPrims;
-            TriangleMesh *triangleMeshes;
-            u32 numTriMeshes;
-        };
-        struct
-        {
-            Instance *instances;
-            AffineSpace *affineTransforms;
-        };
-    };
-    // Volumes
-    // Volume *volumes;
-    // ArrayTuple<ShapeTypes> primitives;
-    // const PrimitiveIndices **primIndices;
-    const PrimitiveIndices *primIndices;
-
-    // ArrayTuple<VolumeTypes> volumes;
-    // VolumeAggregate aggregate;
-
-    // Lights
-    ArrayTuple<LightTypes> lights;
-    // u32 lightPDF[LightClass_Count];
-    // u32 lightCount[LightClass_Count];
-    // u32 numAreaLights;
-    // u32 numInfiniteLights;
-    u32 numLights; // total
-
-    // Materials
-    ArrayTuple<MaterialTypes> materials;
-
-    // BVH
-    BVHNodeN nodePtr;
-
-    f32 minX, minY, minZ;
-    f32 maxX, maxY, maxZ;
-    u32 numInstances;
-    // u32 numVolumes;
-    // union
-    // {
-    //     struct
-    //     {
-    // TriangleMesh* triMeshes;
-    // Curve* curves;
-    //     };
-    // };
-
-    DiffuseAreaLight *GetAreaLights() { return lights.Get<DiffuseAreaLight>(); }
-    const DiffuseAreaLight *GetAreaLights() const { return lights.Get<DiffuseAreaLight>(); }
-    Bounds GetBounds() const
-    {
-        Bounds result;
-        result.minP = Lane4F32::LoadU(&minX);
-        result.maxP = Lane4F32::LoadU(&maxX);
-        return result;
-    }
-    void SetBounds(const Bounds &bounds)
-    {
-        Lane4F32::StoreU(&minX, bounds.minP);
-        Lane4F32::StoreU(&maxX, bounds.maxP);
-    }
-
-    template <typename T>
-    T *Get(u32 geomID);
-
-    template <>
-    TriangleMesh *Get<TriangleMesh>(u32 geomID)
-    {
-        Assert(geomID < numTriMeshes);
-        return &triangleMeshes[geomID];
-    }
-
-    template <>
-    QuadMesh *Get<QuadMesh>(u32 geomID)
-    {
-        Assert(geomID < numMeshes);
-        return &meshes[geomID];
-    }
-};
-#endif
 
 } // namespace rt
 #endif

@@ -172,14 +172,15 @@ struct BVHIntersector<4, types, Intersector>
     using StackEntry = StackEntry<BVHNode4>;
 
     BVHIntersector() {}
-    static bool Intersect(ScenePrimitives *scene, Ray2 &ray, SurfaceInteraction &itr)
+    static bool Intersect(ScenePrimitives *scene, BVHNode4 nodePtr, Ray2 &ray,
+                          SurfaceInteraction &itr)
     {
         // typedef typename Intersector::Primitive Primitive;
         TravRay<4> r(ray);
 
         StackEntry stack[256];
         i32 stackPtr = 1;
-        stack[0]     = {scene->nodePtr, ray.tFar};
+        stack[0]     = {nodePtr, ray.tFar};
         bool result  = false;
         Intersector intersector;
         while (stackPtr > 0)
@@ -200,13 +201,13 @@ struct BVHIntersector<4, types, Intersector>
         }
         return result;
     }
-    static bool Occluded(ScenePrimitives *scene, Ray2 &ray)
+    static bool Occluded(ScenePrimitives *scene, BVHNode4 nodePtr, Ray2 &ray)
     {
         TravRay<4> r(ray);
 
         BVHNode4 stack[256];
         i32 stackPtr = 1;
-        stack[0]     = scene->nodePtr;
+        stack[0]     = nodePtr;
         bool result  = false;
         Intersector intersector;
         while (stackPtr > 0)
@@ -227,9 +228,6 @@ struct BVHIntersector<4, types, Intersector>
         return false;
     }
 };
-
-template <i32 N>
-struct InstanceIntersector;
 
 template <i32 K>
 struct TriangleIntersection
@@ -423,8 +421,7 @@ struct TriangleIntersectorBase<N, Prim<N>>
     TriangleIntersectorBase() = default;
     // https://www.graphics.cornell.edu/pubs/1997/MT97.pdf
     static bool Intersect(ScenePrimitives *scene, Ray2 &ray, Primitive *primitives, u32 num,
-                          SurfaceInteraction &si,
-                          const Mask<LaneF32<N>> &validMask = Mask<LaneF32<N>>(TrueTy()))
+                          SurfaceInteraction &si)
     {
         Vec3lf<N> triV0, triV1, triV2;
         Lane4F32 v0[N];
@@ -457,7 +454,6 @@ struct TriangleIntersectorBase<N, Prim<N>>
                 Select(mask, AsFloat(MemSimdU32<N>::LoadU(primIDs)), AsFloat(itr.primIDs)));
             outMask |= mask;
         }
-        outMask &= validMask;
         if (Any(outMask))
         {
             u32 maskBits = Movemask(outMask);
@@ -514,8 +510,7 @@ struct QuadIntersectorBase<N, Prim<N>>
     QuadIntersectorBase() = default;
 
     static bool Intersect(ScenePrimitives *scene, Ray2 &ray, Primitive *primitives, u32 num,
-                          SurfaceInteraction &si,
-                          const Mask<LaneF32<N>> &validMask = Mask<LaneF32<N>>(TrueTy()))
+                          SurfaceInteraction &si)
 
     {
         auto trueMask  = Mask<LaneF32<N>>(TrueTy());
@@ -568,7 +563,6 @@ struct QuadIntersectorBase<N, Prim<N>>
             outMask |= mask;
         }
 
-        outMask &= validMask;
         if (Any(outMask))
         {
             u32 maskBits = Movemask(outMask);
@@ -637,56 +631,46 @@ using QuadIntersector = QuadIntersectorBase<N, Quad<N>>;
 template <i32 N>
 using QuadIntersectorCmp = QuadIntersectorBase<N, QuadCompressed<N>>;
 
-template <typename... Ts>
-struct DispatchTypes
-{
-    template <typename F>
-    __forceinline static auto Dispatch(F &&closure, u32 index)
-    {
-        return Dispatch<Ts...>(closure, index);
-    }
-};
-
-template <typename F, typename... Ts>
-auto Dispatch(F &&closure, TypePack<Ts...>, u32 index)
-{
-    Dispatch<F, Ts...>(std::move(closure), index);
-}
-
-template <i32 N>
 struct InstanceIntersector
 {
-    using IntersectorTypes = DispatchTypes<TriangleIntersector<N>>;
-    using Primitive        = TLASLeaf<N>;
+    using Primitive = TLASLeaf;
 
     InstanceIntersector() {}
-    static bool Intersect(Scene *scene, Ray2 &ray, BVHNode<N> ptr, SurfaceInteraction &itr)
+    static bool Intersect(ScenePrimitives *scene, Ray2 &ray, Primitive *primitives, u32 num,
+                          SurfaceInteraction &si)
     {
         // intersect the bounds
         // get the leaves to intersect
         // transform the ray
         // intersect the bottom level hierarchy
-        Primitive *leaves = (Primitive *)ptr.GetPtr();
-        u32 num           = ptr.GetNum();
-        bool result       = false;
+        bool result               = false;
+        const Instance *instances = (const Instance *)scene->primitives;
         for (u32 i = 0; i < num; i++)
         {
-            Primitive &prim    = leaves[i];
-            Instance &instance = scene->instances[prim.index];
+            Primitive &prim = primitives[i];
 
-            AffineSpace &t  = scene->affineTransforms[instance.transformIndex];
-            BVHNode<N> node = scenes[instance.geomID.GetIndex()].nodePtr;
-            Vec3f rayO      = ray.o;
-            Vec3f rayD      = ray.d;
-            ray             = Transform(t, ray);
-            auto closure    = [&](auto type) {
-                using Intersector = std::decay_t<decltype(ptr)>;
-                return BVHIntersector<N, types, Intersector>::Intersect(r, node, itr);
-            };
-            result |= IntersectorTypes::Dispatch(closure, instance.geomID.GetType());
+            AffineSpace *t;
+            ScenePrimitives *childScene;
+
+            prim.GetData(scene, t, childScene);
+            Assert(childScene && t);
+            Vec3f rayO = ray.o;
+            Vec3f rayD = ray.d;
+            ray        = Transform(*t, ray);
+            result |= scene->intersectFunc(childScene, prim.nodePtr, ray, si);
             ray.o = rayO;
             ray.d = rayD;
         }
+        return result;
+    }
+    template <i32 K>
+    static bool Intersect(ScenePrimitives *scene, Ray2 &ray, BVHNode<K> ptr,
+                          SurfaceInteraction &si, TravRay<K> &)
+    {
+        Assert(ptr.IsLeaf());
+        Primitive *primitives = (Primitive *)ptr.GetPtr();
+        u32 num               = ptr.GetNum();
+        return Intersect(scene, ray, primitives, num, si);
     }
 };
 
@@ -776,6 +760,54 @@ using BVHQuadCLIntersectorCmp =
     BVHIntersector<K, types, CompressedLeafIntersector<K, QuadIntersectorCmp<N>>>;
 typedef BVHQuadCLIntersectorCmp<4, 1, BVH_AQ> BVH4QuadCLIntersectorCmp1;
 typedef BVHQuadCLIntersectorCmp<4, 8, BVH_AQ> BVH4QuadCLIntersectorCmp8;
+
+template <i32 K, i32 types>
+using BVHInstanceCLIntersector =
+    BVHIntersector<K, types, CompressedLeafIntersector<K, InstanceIntersector>>;
+typedef BVHInstanceCLIntersector<4, BVH_AQ> BVH4InstanceCLIntersector;
+
+// Helpers
+
+template <i32 N, typename Prim, typename PrimRefType>
+struct IntersectorHelperBase;
+
+template <>
+struct IntersectorHelperBase<4, TriangleMesh, PrimRefCompressed>
+{
+    using IntersectorType = BVH4TriangleCLIntersectorCmp8;
+};
+
+template <>
+struct IntersectorHelperBase<4, TriangleMesh, PrimRef>
+{
+    using IntersectorType = BVH4TriangleCLIntersector8;
+};
+
+template <>
+struct IntersectorHelperBase<4, QuadMesh, PrimRefCompressed>
+{
+    using IntersectorType = BVH4QuadCLIntersectorCmp8;
+};
+
+template <>
+struct IntersectorHelperBase<4, QuadMesh, PrimRef>
+{
+    using IntersectorType = BVH4QuadCLIntersector8;
+};
+
+template <>
+struct IntersectorHelperBase<4, Instance, BRef>
+{
+    using IntersectorType = BVH4InstanceCLIntersector;
+};
+
+#ifdef USE_BVH4
+template <typename Prim, typename PrimRefType>
+using IntersectorHelper = IntersectorHelperBase<4, Prim, PrimRefType>;
+#elif defined(USE_BVH8)
+template <typename Mesh, typename PrimRefType>
+using IntersectorHelper = IntersectorHelperBase<8, Mesh, PrimRefType>;
+#endif
 
 } // namespace rt
 #endif

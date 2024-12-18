@@ -496,41 +496,14 @@ static const u32 DefaultN    = 8;
 static const u32 DefaultLogN = 3;
 #endif
 
+struct ScenePrimitives;
 template <i32 N>
 struct LeafPrim
 {
     u32 geomIDs[N];
     u32 primIDs[N];
     LeafPrim() {}
-    __forceinline void Fill(PrimRef *refs)
-    {
-        for (u32 i = 0; i < N; i++)
-        {
-            PrimRef *ref = &refs[i];
-            geomIDs[i]   = ref->geomID;
-            primIDs[i]   = ref->primID;
-        }
-    }
-    __forceinline void Fill(PrimRef *refs, u32 &begin, u32 end)
-    {
-        Assert(end > begin);
-        for (u32 i = 0; i < N; i++)
-        {
-            if (begin < end)
-            {
-                PrimRef *ref = &refs[begin];
-                geomIDs[i]   = ref->geomID;
-                primIDs[i]   = ref->primID;
-                begin++;
-            }
-            else
-            {
-                PrimRef *ref = &refs[begin - 1];
-                geomIDs[i]   = ref->geomID;
-                primIDs[i]   = ref->primID;
-            }
-        }
-    }
+    __forceinline void Fill(const ScenePrimitives *, PrimRef *refs, u32 &begin, u32 end);
     __forceinline void Fill(LeafPrim<1> *prims, u32 num)
     {
         Assert(num);
@@ -557,32 +530,8 @@ struct LeafPrimCompressed
 {
     u32 primIDs[N];
     LeafPrimCompressed() {}
-    __forceinline void Fill(PrimRefCompressed *refs)
-    {
-        for (u32 i = 0; i < N; i++)
-        {
-            PrimRefCompressed *ref = &refs[i];
-            primIDs[i]             = ref->primID;
-        }
-    }
-    __forceinline void Fill(PrimRefCompressed *refs, u32 &begin, u32 end)
-    {
-        Assert(end > begin);
-        for (u32 i = 0; i < N; i++)
-        {
-            if (begin < end)
-            {
-                PrimRefCompressed *ref = &refs[begin];
-                primIDs[i]             = ref->primID;
-                begin++;
-            }
-            else
-            {
-                PrimRefCompressed *ref = &refs[begin - 1];
-                primIDs[i]             = ref->primID;
-            }
-        }
-    }
+    __forceinline void Fill(const ScenePrimitives *, PrimRefCompressed *refs, u32 &begin,
+                            u32 end);
     __forceinline void Fill(LeafPrimCompressed<1> *prims, u32 num)
     {
         Assert(num);
@@ -602,13 +551,12 @@ struct LeafPrimCompressed
     }
 };
 
-struct ScenePrimitives;
 template <i32 N>
 struct Triangle : LeafPrim<N>
 {
     Triangle() {}
 
-    void GetData(ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
+    void GetData(const ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
                  u32 outGeomIDs[N], u32 outPrimIDs[N]) const;
 };
 
@@ -617,7 +565,7 @@ struct TriangleCompressed : LeafPrimCompressed<N>
 {
     TriangleCompressed() {}
 
-    void GetData(ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
+    void GetData(const ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
                  u32 outGeomIDs[N], u32 outPrimIDs[N]) const;
 };
 
@@ -626,7 +574,7 @@ struct Quad : LeafPrim<N>
 {
     Quad() {}
 
-    void GetData(ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
+    void GetData(const ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
                  Lane4F32 v3[N], u32 outGeomIDs[N], u32 outPrimIDs[N]) const;
 };
 
@@ -635,29 +583,39 @@ struct QuadCompressed : LeafPrimCompressed<N>
 {
     QuadCompressed() {}
 
-    void GetData(ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
+    void GetData(const ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
                  Lane4F32 v3[N], u32 outGeomIDs[N], u32 outPrimIDs[N]) const;
 };
-template <i32 N>
+
+// TODO: maybe also do this?
+// template <i32 N>
+// struct TLASLeaf
+// {
+//     BVHNodeN nodePtr[N];
+//     u32 instanceIndex[N];
+// }
+
 struct TLASLeaf
 {
-    BVHNode<N> nodePtr;
+    BVHNodeN nodePtr;
+    u32 sceneIndex;
+    u32 transformIndex;
     TLASLeaf() {}
-    __forceinline void Fill(BuildRef<N> *ref) { nodePtr = ref->nodePtr; }
-    __forceinline void Fill(BuildRef<N> *refs, u32 &begin, u32 end)
+    template <i32 N>
+    __forceinline void Fill(const ScenePrimitives *scene, BuildRef<N> *refs, u32 &begin,
+                            u32 end)
     {
-        Assert(0);
         Assert(end > begin);
-        // for (u32 i = 0; i < N; i++)
-        // {
-        //     PrimRef *ref = &refs[begin];
-        //     primIDs[i]   = ref->primID;
-        //     if (begin < end)
-        //     {
-        //         begin++;
-        //     }
-        // }
+        const Instance *instances = (const Instance *)scene->primitives;
+
+        BuildRef<N> *ref  = &refs[begin];
+        u32 instanceIndex = ref->instanceID;
+        nodePtr           = ref->nodePtr;
+        sceneIndex        = instances[instanceIndex].id;
+        transformIndex    = instances[instanceIndex].transformIndex;
+        begin++;
     }
+    void GetData(const ScenePrimitives *scene, AffineSpace *&t, ScenePrimitives *&childScene);
 };
 
 } // namespace rt
