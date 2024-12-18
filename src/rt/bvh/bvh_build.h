@@ -219,7 +219,7 @@ struct BVHBuilder
     BVHNode<N> BuildBVH(BuildSettings settings, Arena **inArenas, Record &record);
 
     BVHNode<N> BuildBVHRoot(BuildSettings settings, Record &record);
-    BVHNode<N> BuildBVH(BuildSettings settings, Record &record, bool parallel);
+    BVHNode<N> BuildBVH(const BuildSettings &settings, Record &record, bool parallel);
 };
 
 template <i32 N>
@@ -228,35 +228,38 @@ using PartialRebraidBuilder = BVHBuilder<N, TLAS_PRB_QuantizedNode_Funcs<N>>;
 template <i32 N, typename BuildFunctions>
 BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVHRoot(BuildSettings settings, Record &record)
 {
-    bool parallel   = record.count >= 8 * 1024;
-    BVHNode<N> root = BuildBVH(settings, record, parallel);
+    settings.blockAdd = (1 << settings.logBlockSize) - 1;
+    bool parallel     = record.count >= 8 * 1024;
+    BVHNode<N> root   = BuildBVH(settings, record, parallel);
     if (root.data != 0) return root;
 
-    Assert(0);
-#if 0
-    Arena *currentArena = arenas[GetThreadIndex()];
-    u32 offset          = 0;
-    u8 *bytes           = PushArrayNoZeroTagged(
-        currentArena, u8, sizeof(CompressedNodeType) + sizeof(LeafType) * record.count,
-        MemoryType_BVH);
+    Arena *currentArena      = arenas[GetThreadIndex()];
+    u32 offset               = 0;
+    u32 count                = (record.count + settings.blockAdd) >> settings.logBlockSize;
+    u8 *bytes                = PushArrayNoZeroTagged(currentArena, u8,
+                                                     sizeof(CompressedNodeType) + sizeof(LeafType) * count,
+                                                     MemoryType_BVH);
     CompressedNodeType *node = (CompressedNodeType *)bytes;
     LeafType *primIDs        = (LeafType *)(bytes + sizeof(CompressedNodeType));
 
     f.createNode(&record, 1, node);
 
-    for (u32 primIndex = record.start; primIndex < record.start + record.count; primIndex++)
+    u32 begin = record.start;
+    u32 end   = record.start + record.count;
+    while (begin < end)
     {
-        PrimRef *prim = &primRefs[primIndex];
-        primIDs[offset++].Fill(prim);
+        Assert(offset < count);
+        primIDs[offset++].Fill(scene, primRefs, begin, end);
     }
+    Assert(begin == end);
+    node->offsets[0] = SafeTruncateU32ToU8(offset);
+
     return BVHNode<N>::EncodeCompressedNode(node);
-#endif
-    return 0;
 }
 
 template <i32 N, typename BuildFunctions>
-BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Record &record,
-                                                   bool parallel)
+BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(const BuildSettings &settings,
+                                                   Record &record, bool parallel)
 {
 
     u32 total = record.count;
@@ -271,7 +274,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Recor
 
     Split split = heuristic.Bin(record);
 
-    const u32 blockAdd   = (1 << settings.logBlockSize) - 1;
+    const u32 blockAdd   = settings.blockAdd;
     const u32 blockShift = settings.logBlockSize;
     // NOTE: multiply both by the area instead of dividing
     f32 area     = HalfArea(record.geomBounds);
@@ -514,8 +517,9 @@ BVHNode<N> BuildTLASQuantized(BuildSettings settings, Arena **inArenas, ScenePri
     PartialRebraidBuilder<N> builder;
     using Heuristic = typename decltype(builder)::Heuristic;
     new (&builder.heuristic) Heuristic(scene, refs, settings.logBlockSize);
-    builder.primRefs = refs;
-    builder.scene    = scene;
+    settings.logBlockSize = 0;
+    builder.primRefs      = refs;
+    builder.scene         = scene;
     return builder.BuildBVH(settings, inArenas, record);
 }
 

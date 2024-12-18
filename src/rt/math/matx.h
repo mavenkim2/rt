@@ -664,53 +664,18 @@ __forceinline Vec3f operator*(const AffineSpace &t, const Vec3f &v)
 }
 
 // NOTE: can only be used when there is at least 4 bytes of padding after AffineSpace
-__forceinline Lane4F32 operator*(const AffineSpace &t, const Lane4F32 &v)
-{
-    return FMA(Lane4F32::LoadU(&t.c0), v[0],
-               FMA(Lane4F32::LoadU(&t.c1), v[1],
-                   FMA(Lane4F32::LoadU(&t.c2), v[2], Lane4F32::LoadU(&t.c3))));
-}
+// __forceinline Lane4F32 operator*(const AffineSpace &t, const Lane4F32 &v)
+// {
+//     return FMA(Lane4F32::LoadU(&t.c0), v[0],
+//                FMA(Lane4F32::LoadU(&t.c1), v[1],
+//                    FMA(Lane4F32::LoadU(&t.c2), v[2], Lane4F32::LoadU(&t.c3))));
+// }
 
-__forceinline Lane4F32 Transform(const AffineSpace &t, const Lane4F32 &v) { return t * v; }
+// __forceinline Lane4F32 Transform(const AffineSpace &t, const Lane4F32 &v) { return t * v; }
 
 __forceinline bool operator==(const AffineSpace &a, const AffineSpace &b)
 {
     return a.c0 == b.c0 && a.c1 == b.c1 && a.c2 == b.c2 && a.c3 == b.c3;
-}
-
-__forceinline Bounds Transform(const AffineSpace &t, const Bounds &b)
-{
-    Lane4F32 extentX(b.maxP[0] - b.minP[0], 0, 0, 0);
-    Lane4F32 extentY(0, b.maxP[1] - b.minP[1], 0, 0);
-    Lane4F32 extentZ(0, 0, b.maxP[2] - b.minP[2], 0);
-
-    Lane4F32 newExtentX = t * extentX;
-    Lane4F32 newExtentY = t * extentY;
-    Lane4F32 newExtentZ = t * extentZ;
-
-    Lane4F32 p0 = t * b.minP;
-
-    Bounds out;
-    Lane4F32 p1 = p0 + newExtentX;
-    Lane4F32 p2 = p1 + newExtentY;
-    Lane4F32 p3 = p0 + newExtentY;
-
-    out.Extend(p0);
-    out.Extend(p1);
-    out.Extend(p2);
-    out.Extend(p3);
-
-    Lane4F32 p4 = p0 + newExtentZ;
-    Lane4F32 p5 = p4 + newExtentX;
-    Lane4F32 p6 = p5 + newExtentY;
-    Lane4F32 p7 = p4 + newExtentY;
-
-    out.Extend(p4);
-    out.Extend(p5);
-    out.Extend(p6);
-    out.Extend(p7);
-
-    return out;
 }
 
 __forceinline Vec3f TransformV(const AffineSpace &t, const Vec3f &v)
@@ -718,6 +683,22 @@ __forceinline Vec3f TransformV(const AffineSpace &t, const Vec3f &v)
     return FMA(t.c0, Vec3f(v[0]), FMA(t.c1, Vec3f(v[1]), t.c2 * Vec3f(v[2])));
 }
 __forceinline Vec3f TransformP(const AffineSpace &a, const Vec3f &b) { return a * b; }
+
+__forceinline Bounds Transform(const AffineSpace &t, const Bounds &b)
+{
+    Vec3f corners[8] = {
+        Vec3f(b.minP[0], b.minP[1], b.minP[2]), Vec3f(b.maxP[0], b.minP[1], b.minP[2]),
+        Vec3f(b.maxP[0], b.maxP[1], b.minP[2]), Vec3f(b.minP[0], b.maxP[1], b.minP[2]),
+        Vec3f(b.minP[0], b.minP[1], b.maxP[2]), Vec3f(b.maxP[0], b.minP[1], b.maxP[2]),
+        Vec3f(b.maxP[0], b.maxP[1], b.maxP[2]), Vec3f(b.minP[0], b.maxP[1], b.maxP[2]),
+    };
+    Bounds bounds;
+    for (u32 i = 0; i < 8; i++)
+    {
+        bounds.Extend(Lane4F32(TransformP(t, corners[i])));
+    }
+    return bounds;
+}
 
 __forceinline AffineSpace operator*(const AffineSpace &a, const AffineSpace &b)
 {

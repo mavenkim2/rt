@@ -229,10 +229,10 @@ SAMPLE_LI(DiffuseAreaLight)
         for (u32 lightIndex = 0; lightIndex < IntN; lightIndex++)
         {
             const DiffuseAreaLight *light = lights[lightIndex];
-            Lane4F32 pTemp                = Lane4F32::LoadU(light->p + i);
+            // Lane4F32 pTemp                = Lane4F32::LoadU(light->p + i);
 
             // TODO: maybe transform the vertices once
-            pI[lightIndex]        = Transform(*light->renderFromLight, pTemp);
+            pI[lightIndex]        = Lane4F32(TransformP(*light->renderFromLight, light->p[i]));
             Set(area, lightIndex) = light->area;
         }
         Transpose<IntN>(pI, p[i]);
@@ -297,9 +297,8 @@ PDF_LI(DiffuseAreaLight)
         for (u32 lightIndex = 0; lightIndex < IntN; lightIndex++)
         {
             const DiffuseAreaLight *light = lights[lightIndex];
-            Lane4F32 pTemp                = Lane4F32::LoadU(light->p + i);
 
-            pI[lightIndex]        = Transform(*light->renderFromLight, pTemp);
+            pI[lightIndex]        = Lane4F32(TransformP(*light->renderFromLight, light->p[i]));
             Set(area, lightIndex) = light->area;
         }
         Transpose<IntN>(pI, p[i]);

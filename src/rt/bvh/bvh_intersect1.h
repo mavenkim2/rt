@@ -656,10 +656,15 @@ struct InstanceIntersector
             Assert(childScene && t);
             Vec3f rayO = ray.o;
             Vec3f rayD = ray.d;
-            ray        = Transform(*t, ray);
-            result |= scene->intersectFunc(childScene, prim.nodePtr, ray, si);
-            ray.o = rayO;
-            ray.d = rayD;
+            ray.o      = ApplyInverse(*t, ray.o);
+            ray.d      = ApplyInverseV(*t, ray.d);
+            result |= childScene->intersectFunc(childScene, prim.nodePtr, ray, si);
+            si.p      = Transform(*t, si.p);
+            si.pError = Transform(*t, si.pError);
+            si.shading.n = Transform(
+            si.n      = Transform(*t, si.n);
+            ray.o     = rayO;
+            ray.d     = rayD;
         }
         return result;
     }

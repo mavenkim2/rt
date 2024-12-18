@@ -502,6 +502,7 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     Mat4 rasterFromCamera = rasterFromNDC * NDCFromCamera;
     Mat4 cameraFromRaster = Inverse(rasterFromCamera);
 
+    AffineSpace renderFromWorld = AffineSpace::Translate(-pCamera);
     // ocean mesh
 #if 0
     TriangleMesh meshes[] = {
@@ -525,19 +526,25 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     scenePrims->numPrimitives = 2;
 #else
     AffineSpace transforms[] = {
-        AffineSpace(0.883491f, 0.f, -0.171593f, -0.006209f, 0.899411f, -0.031968f, 0.171481f,
-                    0.032566f, 0.882912f, -122.554825f, 89.79077f, -1037.3927f),
-        AffineSpace(-0.638355f, 0.111424f, -0.761635f, 0.08791f, 0.993547f, 0.071671f,
-                    0.764705f, -0.021204f, -0.644031f, 1269.0525f, 104.751915f, -1049.8042),
+        AffineSpace(Vec3f(0.883491f, 0.f, -0.171593f),
+                    Vec3f(-0.006209f, 0.899411f, -0.031968f),
+                    Vec3f(0.171481f, 0.032566f, 0.882912f),
+                    Vec3f(-122.554825f, 89.79077f, -1037.3927f)),
+        AffineSpace(Vec3f(-0.638355f, 0.111424f, -0.761635f),
+                    Vec3f(0.08791f, 0.993547f, 0.071671f),
+                    Vec3f(0.764705f, -0.021204f, -0.644031f),
+                    Vec3f(1269.0525f, 104.751915f, -1049.8042)),
     };
     for (u32 i = 0; i < ArrayLength(transforms); i++)
     {
-        transforms[i] = Inverse(transforms[i]);
+        transforms[i] = renderFromWorld * transforms[i];
     }
     Instance instances[] = {
         {0, 0},
         {0, 1},
     };
+    TriangleMesh testMesh =
+        LoadPLY(arena, "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
     QuadMesh meshes[] = {LoadQuadPLY(
         arena, "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply")};
     PtexTexture<3> texture("../data/island/textures/isIronwoodA1/Color/trunk0001_geo.ptx",
@@ -564,13 +571,13 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     scene->primIndices = ids;
 
     // convert to "render space" (i.e. world space centered around the camera)
-    for (u32 j = 0; j < ArrayLength(meshes); j++)
-    {
-        for (u32 i = 0; i < meshes[j].numVertices; i++)
-        {
-            meshes[j].p[i] -= pCamera;
-        }
-    }
+    // for (u32 j = 0; j < ArrayLength(meshes); j++)
+    // {
+    //     for (u32 i = 0; i < meshes[j].numVertices; i++)
+    //     {
+    //         meshes[j].p[i] -= pCamera;
+    //     }
+    // }
 
     // build bvh
     BuildSettings settings;
@@ -580,31 +587,15 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     BuildQuadBVH(arenas, settings, scenePrims);
     BuildTLASBVH(arenas, settings, baseScenePrims);
 
-#if 0
-    RecordAOSSplits recordTop;
-    counter         = OS_StartCounter();
-    BRef *buildRefs = GenerateBuildRefs(scenes, 0, numScenes, temp.arena, recordTop);
-    printf("time to generate build refs: %fms\n", OS_GetMilliseconds(counter));
-
-    BuildSettings settings;
-    settings.intCost = 0.3f;
-
-    counter       = OS_StartCounter();
-    BVHNodeN node = BuildTLASQuantized(settings, arenas, &scenes[0], buildRefs, recordTop);
-    BVHNodeN bvh = BuildTLASQuantized(settings, arenas, ?, ?, ?);
-    // BVHNodeN bvh = BuildQuantizedQuadSBVH(settings, arenas, &meshes[0], refs, record);
-    scene->nodePtr = bvh;
-#endif
-
     // environment map
     Bounds bounds = scenePrims->GetBounds();
     f32 sceneRadius =
         0.5f * Max(bounds.maxP[0] - bounds.minP[0],
                    Max(bounds.maxP[1] - bounds.minP[1], bounds.maxP[2] - bounds.minP[2]));
-    AffineSpace renderFromLight = AffineSpace::Scale(-1, 1, 1) *
-                                  AffineSpace::Rotate(Vec3f(-1, 0, 0), Radians(90)) *
-                                  AffineSpace::Rotate(Vec3f(0, 0, 1), Radians(65));
-    renderFromLight = AffineSpace::Translate(-pCamera) * renderFromLight;
+    AffineSpace worldFromLight = AffineSpace::Scale(-1, 1, 1) *
+                                 AffineSpace::Rotate(Vec3f(-1, 0, 0), Radians(90)) *
+                                 AffineSpace::Rotate(Vec3f(0, 0, 1), Radians(65));
+    AffineSpace renderFromLight = renderFromWorld * worldFromLight;
 
     f32 scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
     Assert(scale == 0.00935831666f);
@@ -643,6 +634,6 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
         printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
     }
     printf("total misc time: %fms \n", totalMiscTime);
-}
+} // namespace rt
 
 } // namespace rt

@@ -2733,7 +2733,7 @@ void BuildTLASBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scen
     //     }
     // }
     // build tlas
-    RecordAOSSplits record;
+    RecordAOSSplits record(neg_inf);
     BRef *refs            = GenerateBuildRefs(scene, temp.arena, record);
     scene->nodePtr        = BuildTLASQuantized(settings, arenas, scene, refs, record);
     using IntersectorType = typename IntersectorHelper<Instance, BRef>::IntersectorType;
@@ -2852,7 +2852,7 @@ void GenerateMeshRefs(Mesh *meshes, PrimRef *refs, u32 offset, u32 offsetMax, u3
         Mesh *mesh = &meshes[i];
 
         u32 numFaces = mesh->GetNumFaces();
-        RecordAOSSplits tempRecord;
+        RecordAOSSplits tempRecord(neg_inf);
         if (numFaces > PARALLEL_THRESHOLD)
         {
             ParallelReduce<RecordAOSSplits>(

@@ -25,6 +25,7 @@ namespace rt
 // - equiangular sampling
 // - bdpt, metropolis, upbp, mcm?
 //
+// - memory mapped files for treelets??? (i.e. single level massive bvh)
 // maybe unreasonable:
 // - covariance tracing
 // - actual displacement mapping (instead of bump mapping)

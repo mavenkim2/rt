@@ -15,6 +15,8 @@ struct BuildSettings
     f32 intCost      = 1.f;
     f32 travCost     = 1.f;
     bool twoLevel    = true;
+
+    u32 blockAdd;
 };
 
 struct PartitionPayload
@@ -373,7 +375,7 @@ CompressedLeafNode<N> *BVHNode<N>::GetCompressedLeaf() const
 typedef BVHNode<4> BVHNode4;
 typedef BVHNode<8> BVHNode8;
 
-template <u32 N>
+template <i32 N>
 struct BuildRef
 {
     f32 min[3];
