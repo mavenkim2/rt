@@ -8,9 +8,8 @@ namespace rt
     using packName = TypePack<COMMA_SEPARATED_LIST(__VA_ARGS__)>;                             \
     enum class enumName                                                                       \
     {                                                                                         \
-        COMMA_SEPARATED_LIST(__VA_ARGS__)                                                     \
-    };                                                                                        \
-    ENUM_CLASS_FLAGS(enumName)
+        COMMA_SEPARATED_LIST(__VA_ARGS__), Max,
+}; // namespace rt
 
 #define COMMA_SEPARATED_LIST(...)                                                             \
     COMMA_SEPARATED_LIST_HELPER(COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)

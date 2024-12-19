@@ -463,9 +463,9 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     // types)
 
     // TODO:
+    // - add area lights (making sure they cannot be intersected, but are sampled properly)
     // - verify all code paths in partial rebraiding (i.e. more instances)
     // - render the diffuse/diffuse transmission materials properly
-    // - add area lights (making sure they cannot be intersected, but are sampled properly)
     // - load the scene description and properly instantiate lights/materials/textures
 
     // - render the scene with all quad meshes, then add support for the bspline curves
@@ -512,14 +512,14 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
         LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply"),
         LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00002.ply"),
     };
-    for (u32 i = 0; i < ArrayLength(triMeshes); i++)
-    {
-        TriangleMesh *mesh = &triMeshes[i];
-        for (u32 j = 0; j < mesh->numVertices; j++)
-        {
-            mesh->p[j] -= pCamera;
-        }
-    }
+    // for (u32 i = 0; i < ArrayLength(triMeshes); i++)
+    // {
+    //     TriangleMesh *mesh = &triMeshes[i];
+    //     for (u32 j = 0; j < mesh->numVertices; j++)
+    //     {
+    //         mesh->p[j] -= pCamera;
+    //     }
+    // }
     AffineSpace transforms[] = {
         AffineSpace::Identity(),
         AffineSpace(Vec3f(0.883491f, 0.f, -0.171593f),
@@ -533,7 +533,7 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     };
     for (u32 i = 0; i < ArrayLength(transforms); i++)
     {
-        transforms[i] = renderFromWorld * transforms[i] * worldFromRender;
+        transforms[i] = renderFromWorld * transforms[i]; // * worldFromRender;
     }
     Instance instances[] = {
         {0, 1},
@@ -548,14 +548,14 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
                     "../data/island/pbrt-v4/isMountainA/isMountainA_geometry_00001.ply"),
     };
 
-    for (u32 i = 0; i < ArrayLength(meshes); i++)
-    {
-        QuadMesh *mesh = &meshes[i];
-        for (u32 j = 0; j < mesh->numVertices; j++)
-        {
-            mesh->p[j] -= pCamera;
-        }
-    }
+    // for (u32 i = 0; i < ArrayLength(meshes); i++)
+    // {
+    //     QuadMesh *mesh = &meshes[i];
+    //     for (u32 j = 0; j < mesh->numVertices; j++)
+    //     {
+    //         mesh->p[j] -= pCamera;
+    //     }
+    // }
 
     PtexShader<3> rfl(PtexTexture<3>(
         "../data/island/textures/isIronwoodA1/Color/trunk0001_geo.ptx", ColorEncoding::Gamma));
@@ -588,6 +588,7 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     PrimitiveIndices ids2[] = {
         PrimitiveIndices(LightHandle(), MaterialHandle(MaterialType::DiffuseMaterialBase, 0)),
     };
+
     scenePrims[0].primitives    = meshes;
     scenePrims[0].numPrimitives = 1;
     scenePrims[0].primIndices   = ids0;
@@ -616,14 +617,12 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     BuildTLASBVH(arenas, settings, baseScenePrims);
 
     // environment map
-    Bounds bounds = scenePrims->GetBounds();
-    f32 sceneRadius =
-        0.5f * Max(bounds.maxP[0] - bounds.minP[0],
-                   Max(bounds.maxP[1] - bounds.minP[1], bounds.maxP[2] - bounds.minP[2]));
+    Bounds bounds              = baseScenePrims->GetBounds();
+    f32 sceneRadius            = Length(ToVec3f(bounds.Centroid() - bounds.maxP));
     AffineSpace worldFromLight = AffineSpace::Scale(-1, 1, 1) *
                                  AffineSpace::Rotate(Vec3f(-1, 0, 0), Radians(90)) *
                                  AffineSpace::Rotate(Vec3f(0, 0, 1), Radians(65));
-    AffineSpace renderFromLight = renderFromWorld * worldFromLight;
+    AffineSpace renderFromLight = worldFromLight;
 
     f32 scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
     Assert(scale == 0.00935831666f);

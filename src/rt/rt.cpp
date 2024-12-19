@@ -95,7 +95,6 @@ f32 ExactLinearToSRGB(f32 l)
 
 f32 *Image::GetSamplingDistribution(Arena *arena)
 {
-    f32 *v  = (f32 *)contents;
     u8 *ptr = contents;
 
     f32 *result = PushArrayNoZero(arena, f32, height * width);
@@ -104,9 +103,9 @@ f32 *Image::GetSamplingDistribution(Arena *arena)
     {
         for (i32 w = 0; w < width; w++)
         {
-            // Is bpp correct?
             Vec3f values    = SRGBToLinear(GetColor(this, w, h));
-            result[count++] = (values[0] + values[1] + values[2]) / 3.f;
+            f32 val         = (values[0] + values[1] + values[2]) / 3.f;
+            result[count++] = val;
             Assert(result[count - 1] == result[count - 1]);
             ptr += bytesPerPixel;
         }

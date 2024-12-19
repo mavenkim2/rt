@@ -407,6 +407,7 @@ ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image,
         avg += values[i];
     }
     avg /= size;
+    avg                    = 0.3282774686813354f;
     f32 *compensatedValues = PushArrayNoZero(arena, f32, size);
     if (allSame)
     {

@@ -956,6 +956,8 @@ struct ObjectInstanceType
     u32 transformIndex  = 0;
     u32 shapeIndexStart = 0xffffffff;
     u32 shapeIndexEnd   = 0xffffffff;
+    u32 shapeTypeFlags  = 0;
+    u32 shapeTypeCount[(u32)GeometryType::Max];
 
     bool Invalid() const { return shapeIndexStart == 0xffffffff; }
     void Invalidate() { shapeIndexStart = 0xffffffff; }
@@ -995,12 +997,14 @@ struct SceneLoadState
     // TODO: other shapes?
     u32 *numQuadMeshes;
     u32 *numTriMeshes;
+    u32 *totalNumInstTypes;
     // u32 *numCurves;
 
     InternedStringCache<16384, 8, 64> stringCache;
     HashSet<AffineSpace, 1048576, 8, 1024, MemoryType_Transform> transformCache;
 
-    Arena **threadArenas;
+    Arena **tempArenas;
+    Arena **permArenas;
 
     Arena *mainArena;
     Scene *scene;
@@ -1296,9 +1300,10 @@ Scene *LoadPBRT(Arena *arena, string filename)
 #define COMMA ,
     Scene *scene = PushStruct(arena, Scene);
     SceneLoadState state;
-    u32 numProcessors   = OS_NumProcessors();
-    state.numTriMeshes  = PushArray(arena, u32, numProcessors);
-    state.numQuadMeshes = PushArray(arena, u32, numProcessors);
+    u32 numProcessors       = OS_NumProcessors();
+    state.numTriMeshes      = PushArray(arena, u32, numProcessors);
+    state.numQuadMeshes     = PushArray(arena, u32, numProcessors);
+    state.totalNumInstTypes = PushArray(arena, u32, numProcessors);
     state.shapes =
         PushArray(arena, ChunkedLinkedList<ScenePacket COMMA 1024 COMMA MemoryType_Shape>,
                   numProcessors);
@@ -1387,6 +1392,8 @@ Scene *LoadPBRT(Arena *arena, string filename)
     }
     return scene;
 }
+
+void CreateMeshes() {}
 
 void LoadPBRT(string filename, string directory, SceneLoadState *state,
               GraphicsState graphicsState, bool inWorldBegin, bool imported)
@@ -1745,6 +1752,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 ReadWord(&tokenizer);
 
                 currentObject->shapeIndexEnd = shapes.Length();
+                state->totalNumInstTypes += PopCount(currentObject->shapeTypeFlags);
                 Assert(currentObject->shapeIndexEnd >= currentObject->shapeIndexStart);
                 Error(currentObject != 0, "ObjectEnd must occur after ObjectBegin");
                 currentObject = 0;
@@ -1837,10 +1845,22 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 {
                     packet->type = stringCache.GetOrCreate(arena, "quadmesh");
                     state->numQuadMeshes[GetThreadIndex()]++;
+                    if (currentObject)
+                    {
+                        u32 index = (u32)(GeometryType::QuadMesh);
+                        currentObject->shapeTypeFlags |= (1 << index);
+                        currentObject->shapeTypeCount[index]++;
+                    }
                 }
                 else if (packet->type == "trianglemesh"_sid)
                 {
                     state->numTriMeshes[GetThreadIndex()]++;
+                    if (currentObject)
+                    {
+                        u32 index = (u32)(GeometryType::TriangleMesh);
+                        currentObject->shapeTypeFlags |= (1 << index);
+                        currentObject->shapeTypeCount[index]++;
+                    }
                 }
 
                 i32 *indices = PushArray(arena, i32, 4);
@@ -2095,6 +2115,359 @@ void SerializeMeshes(Vec3f *&dataPtr, u8 *mappedPtr, QuadMesh *mesh, QuadMesh *n
     }
 }
 
+void CreatePBRTScene(Arena *arena, string directory, SceneLoadState *state)
+{
+    scene_            = PushStruct(arena, Scene);
+    Scene *scene      = GetScene();
+    TempArena temp    = ScratchStart(0, 0);
+    u32 numProcessors = OS_NumProcessors();
+
+    u32 *quadOffsets = PushArrayNoZero(temp.arena, u32, numProcessors + 1);
+    u32 *triOffsets  = PushArrayNoZero(temp.arena, u32, numProcessors + 1);
+    u32 *instOffsets = PushArrayNoZero(temp.arena, u32, numProcessors + 1);
+
+    u32 totalNumQuadMeshes = 0;
+    u32 totalNumTriMeshes  = 0;
+    u32 totalNumInstTypes  = 0;
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        quadOffsets[i] = totalNumQuadMeshes;
+        triOffsets[i]  = totalNumTriMeshes;
+        instOffsets[i] = totalNumInstTypes;
+
+        totalNumQuadMeshes += state->numQuadMeshes[i];
+        totalNumTriMeshes += state->numTriMeshes[i];
+        totalNumInstTypes += state->totalNumInstTypes[i];
+    }
+    quadOffsets[numProcessors] = totalNumQuadMeshes;
+    triOffsets[numProcessors]  = totalNumTriMeshes;
+
+    // NOTE: no support for multi level instancing with this format
+    ScenePrimitives *quadScene = PushStruct(arena, ScenePrimitives);
+    ScenePrimitives *triScene  = PushStruct(arena, ScenePrimitives);
+
+    ScenePrimitives *scenePrims =
+        PushArray(temp.arena, ScenePrimitives *, totalNumInstTypes + 1);
+
+    QuadMesh *qMeshes       = PushArray(temp.arena, QuadMesh, totalNumQuadMeshes);
+    TriangleMesh *triMeshes = PushArray(temp.arena, TriangleMesh, totalNumTriMeshes);
+    quadScene->primitives   = qMeshes;
+    triScene->primitives    = triMeshes;
+
+    using InstanceTypeList = ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance>;
+    using ShapeTypeList    = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape>;
+
+    Scheduler::Counter counter = {};
+    // the quad meshes don't know what object instance they are a part of, though they probably
+    // should
+
+    // what should the end game be?
+    // you have the name for the instance type. you need the transform index and scene id
+    // could have an atomic for scene id whenever an object instance type is declared
+
+    // map the instance name to an index;
+
+    // Create object types
+    scheduler.Schedule(&counter, numProcessors, 1, [&](u32 jobID) {
+        u32 pIndex                        = jobID;
+        InstanceTypeList *list            = &state->instanceTypes[pIndex];
+        ShapeTypeList *shapeList          = &state->shapes[pIndex];
+        ObjectInstanceTypeCounts *tCounts = &counts[jobID];
+        Arena *permArena                  = state->permArenas[jobID];
+        u32 instOffset                    = state->instOffsets[jobID];
+        for (InstanceTypeList::ChunkNode *node = list->first; node != 0; node = node->next)
+        {
+            for (u32 i = 0; i < node->count; i++)
+            {
+                ObjectInstanceTypeCounts counts = {};
+                ObjectInstanceType *instType    = &node->values[i];
+                StringId name                   = instType->name;
+                u32 quadCount = instType->shapeTypeCount[(u32)GeometryType::QuadMesh];
+                u32 triCount  = instType->shapeTypeCount[(u32)GeometryType::TriangleMesh];
+                QuadMesh *qMeshes;
+                if (quadCount)
+                {
+                    qMeshes = PushArray(permArena, QuadMesh, quadCount)
+                }
+                TriangleMesh *triMeshes;
+                if (triCount)
+                {
+                    triMeshes = PushArray(permArena, TriangleMesh, triCount);
+                }
+
+                u32 quadOffset = 0;
+                u32 triOffset  = 0;
+
+                for (auto itr = shapeList->Itr(); !itr.End();
+                     itr.Next()) // u32 shapeIndex = instType->shapeIndexStart;
+                                 //  shapeIndex < instType->shapeIndexEnd; shapeIndex++)
+                {
+                    ScenePacket *shapePacket = itr.Get();
+
+                    switch (shapePacket->types)
+                    {
+                        case "quadmesh"_sid:
+                        {
+                            u32 quadIndex = quadOffset++;
+                            Assert(quadIndex < quadLimit);
+                            QuadMesh *mesh = &qMeshes[quadIndex];
+                            // quadCounts[pIndex]++;
+                            for (u32 parameterIndex = 0;
+                                 parameterIndex < packet->parameterCount; parameterIndex++)
+                            {
+                                switch (packet->parameterNames[parameterIndex])
+                                {
+                                    case "P"_sid:
+                                    {
+                                        mesh->p = (Vec3f *)packet->bytes[parameterIndex];
+                                        mesh->numVertices =
+                                            packet->sizes[parameterIndex] / sizeof(Vec3f);
+                                    }
+                                    break;
+                                    case "N"_sid:
+                                    {
+                                        mesh->n = (Vec3f *)packet->bytes[parameterIndex];
+                                        Assert(mesh->numVertices ==
+                                               packet->sizes[parameterIndex] / sizeof(Vec3f));
+                                    }
+                                    break;
+                                    default: continue;
+                                }
+                            }
+                        }
+                        break;
+                        case "trianglemesh"_sid:
+                        {
+                            u32 triIndex = triOffset++;
+                            Assert(triIndex < triLimit);
+                            TriangleMesh *mesh = &triMeshes[triIndex++];
+                            for (u32 parameterIndex = 0;
+                                 parameterIndex < packet->parameterCount; parameterIndex++)
+                            {
+                                switch (packet->parameterNames[parameterIndex])
+                                {
+                                    case "P"_sid:
+                                    {
+                                        mesh->p = (Vec3f *)packet->bytes[parameterIndex];
+                                        mesh->numVertices =
+                                            packet->sizes[parameterIndex] / sizeof(Vec3f);
+                                    }
+                                    break;
+                                    case "N"_sid:
+                                    {
+                                        mesh->n = (Vec3f *)packet->bytes[parameterIndex];
+                                        Assert(mesh->numVertices ==
+                                               packet->sizes[parameterIndex] / sizeof(Vec3f));
+                                    }
+                                    break;
+                                    case "indices"_sid:
+                                    {
+                                        mesh->indices = (u32 *)packet->bytes[parameterIndex];
+                                        mesh->numIndices =
+                                            packet->sizes[parameterIndex] / sizeof(u32);
+                                    }
+                                    break;
+                                    case "faceIndices"_sid: continue;
+                                    case "uv"_sid:
+                                    {
+                                        mesh->uv = (Vec2f *)packet->bytes[parameterIndex];
+                                        Assert(mesh->numVertices ==
+                                               packet->sizes[parameterIndex] / sizeof(Vec2f));
+                                    }
+                                    break;
+                                    default: Assert(0);
+                                }
+                            }
+                        }
+                        break;
+                        case "plymesh"_sid:
+                        {
+                            for (u32 parameterIndex = 0;
+                                 parameterIndex < packet->parameterCount; parameterIndex++)
+                            {
+                                if (packet->parameterNames[parameterIndex] == "filename"_sid)
+                                {
+                                    string filename;
+                                    filename.str  = packet->bytes[parameterIndex];
+                                    filename.size = packet->sizes[parameterIndex];
+                                    string fullFilePath =
+                                        StrConcat(temp.arena, directory, filename);
+                                    if (CheckQuadPLY(fullFilePath))
+                                    {
+                                        qMeshes[quadOffset++] =
+                                            LoadQuadPLY(permArena, fullFilePath);
+                                    }
+                                    else
+                                    {
+                                        triMeshes[triOffset++] =
+                                            LoadPLY(permArena, fullFilePath);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // Instantiate instances
+
+    // Create uninstantiated shapes
+    scheduler.Schedule(&counter, numProcessors, 1, [&](u32 jobID) {
+        TempArena temp      = ScratchStart(0, 0);
+        u32 quadOffset      = quadOffsets[jobID];
+        u32 quadLimit       = quadOffsets[jobID + 1];
+        u32 triOffset       = triOffsets[jobID];
+        u32 triLimit        = triOffsets[jobID + 1];
+        u32 pIndex          = jobID;
+        Arena *arena        = state->threadArenas[pIndex];
+        ShapeTypeList *list = &state->shapes[pIndex];
+        types[pIndex]       = PushArray(arena, PrimitiveTy, list->totalCount);
+        offsets[pIndex]     = PushArray(arena, u32, list->totalCount);
+
+        u32 totalNumQuadVertices = 0;
+
+        u32 *pOffsets       = offsets[pIndex];
+        PrimitiveTy *pTypes = types[pIndex];
+        u32 currentOffset   = 0;
+        for (ShapeTypeList::ChunkNode *node = list->first; node != 0; node = node->next)
+        {
+            for (u32 i = 0; i < node->count; i++)
+            {
+                ScenePacket *packet = &node->values[i];
+                switch (packet->type)
+                {
+                    // NOTE: pbrt doesn't technically support this
+                    case "quadmesh"_sid:
+                    {
+                        u32 quadIndex = quadOffset++;
+                        Assert(quadIndex < quadLimit);
+                        QuadMesh *mesh = &qMeshes[quadIndex];
+                        // quadCounts[pIndex]++;
+                        for (u32 parameterIndex = 0; parameterIndex < packet->parameterCount;
+                             parameterIndex++)
+                        {
+                            switch (packet->parameterNames[parameterIndex])
+                            {
+                                case "P"_sid:
+                                {
+                                    mesh->p = (Vec3f *)packet->bytes[parameterIndex];
+                                    mesh->numVertices =
+                                        packet->sizes[parameterIndex] / sizeof(Vec3f);
+                                    totalNumQuadVertices += mesh->numVertices;
+                                }
+                                break;
+                                case "N"_sid:
+                                {
+                                    mesh->n = (Vec3f *)packet->bytes[parameterIndex];
+                                    Assert(mesh->numVertices ==
+                                           packet->sizes[parameterIndex] / sizeof(Vec3f));
+                                }
+                                break;
+                                default: continue;
+                            }
+                        }
+                    }
+                    break;
+                    case "trianglemesh"_sid:
+                    {
+                        u32 triIndex = triOffset++;
+                        Assert(triIndex < triLimit);
+                        TriangleMesh *mesh = &triMeshes[triIndex++];
+                        for (u32 parameterIndex = 0; parameterIndex < packet->parameterCount;
+                             parameterIndex++)
+                        {
+                            switch (packet->parameterNames[parameterIndex])
+                            {
+                                case "P"_sid:
+                                {
+                                    mesh->p = (Vec3f *)packet->bytes[parameterIndex];
+                                    mesh->numVertices =
+                                        packet->sizes[parameterIndex] / sizeof(Vec3f);
+                                }
+                                break;
+                                case "N"_sid:
+                                {
+                                    mesh->n = (Vec3f *)packet->bytes[parameterIndex];
+                                    Assert(mesh->numVertices ==
+                                           packet->sizes[parameterIndex] / sizeof(Vec3f));
+                                }
+                                break;
+                                case "indices"_sid:
+                                {
+                                    mesh->indices = (u32 *)packet->bytes[parameterIndex];
+                                    mesh->numIndices =
+                                        packet->sizes[parameterIndex] / sizeof(u32);
+                                }
+                                break;
+                                case "faceIndices"_sid: continue;
+                                case "uv"_sid:
+                                {
+                                    mesh->uv = (Vec2f *)packet->bytes[parameterIndex];
+                                    Assert(mesh->numVertices ==
+                                           packet->sizes[parameterIndex] / sizeof(Vec2f));
+                                }
+                                break;
+                                default: Assert(0);
+                            }
+                        }
+                    }
+                    break;
+                    case "plymesh"_sid:
+                    {
+                        for (u32 parameterIndex = 0; parameterIndex < packet->parameterCount;
+                             parameterIndex++)
+                        {
+                            if (packet->parameterNames[parameterIndex] == "filename"_sid)
+                            {
+                                string filename;
+                                filename.str  = packet->bytes[parameterIndex];
+                                filename.size = packet->sizes[parameterIndex];
+                                string fullFilePath =
+                                    StrConcat(temp.arena, directory, filename);
+                                QuadMesh mesh = LoadQuadPLY(arena, fullFilePath);
+                                // NOTE: should only happen for the ocean geometry
+                                // (twice)
+                                if (mesh.p == 0)
+                                {
+                                    TriangleMesh triMesh = LoadPLY(arena, fullFilePath);
+                                    u32 triIndex         = triOffset++;
+                                    Assert(triIndex < triLimit);
+                                    triMeshes[triIndex] = triMesh;
+                                }
+                                else
+                                {
+                                    u32 quadIndex = quadOffset++;
+                                    Assert(quadIndex < quadLimit);
+                                    qMeshes[quadIndex] = mesh;
+                                    totalNumQuadVertices += mesh.numVertices;
+                                    // quadCounts[pIndex]++;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    break;
+                    // TODO: curves
+                    case "curve"_sid:
+                    {
+                    }
+                    break;
+                    default: Assert(!"not parsed");
+                }
+            }
+            currentOffset += node->count;
+        }
+        Assert(quadOffset == quadLimit);
+        totalNumVertices[jobID] = totalNumQuadVertices;
+        ScratchEnd(temp);
+    });
+    scheduler.Wait(&counter);
+}
+
 void Serialize(Arena *arena, string directory, SceneLoadState *state)
 {
     TempArena temp    = ScratchStart(0, 0);
@@ -2192,8 +2565,8 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                                            packet->sizes[parameterIndex] / sizeof(Vec3f));
                                 }
                                 break;
-                                // NOTE: this is specific to the moana island data set (not
-                                // needing the indices or uvs)
+                                // NOTE: this is specific to the moana island data set
+                                // (not needing the indices or uvs)
                                 default: continue;
                             }
                         }
@@ -2258,7 +2631,8 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                                 string fullFilePath =
                                     StrConcat(temp.arena, directory, filename);
                                 QuadMesh mesh = LoadQuadPLY(arena, fullFilePath);
-                                // NOTE: should only happen for the ocean geometry (twice)
+                                // NOTE: should only happen for the ocean geometry
+                                // (twice)
                                 if (mesh.p == 0)
                                 {
                                     TriangleMesh triMesh      = LoadPLY(arena, fullFilePath);
@@ -2341,8 +2715,9 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
             for (u32 i = 0; i < node->count; i++)
             {
                 ObjectInstanceType *instType = &node->values[i];
-                // NOTE: have to multiply by the object type transform in general case (but for
-                // the moana scene desc, none of the object types have a transform)
+                // NOTE: have to multiply by the object type transform in general case
+                // (but for the moana scene desc, none of the object types have a
+                // transform)
                 StringId name = instType->name;
                 if (!instType->Invalid())
                 {
@@ -2429,8 +2804,8 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
                     instanceTypeTable.Create(name, entryIndex);
 #endif
 #if SERIALIZE_SHAPES
-                    // For each object instance type containing quads, write the position data
-                    // to a memory mapped file
+                    // For each object instance type containing quads, write the
+                    // position data to a memory mapped file
                     // TODO: need to keep track of the material used for each
                     string filename = PushStr8F(temp.arena, "%Smeshes/%u.mesh", directory,
                                                 entryIndex); // name);
@@ -2600,12 +2975,14 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
     // string result = CombineBuilderNodes(&builder);
     // for (u32 i = 0; i < totalNumTriMeshes; i++)
     // {
-    //     ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh, p),
-    //     positionWrites[i]); ConvertPointerToOffset(result.str, triMeshFileOffset +
-    //     OffsetOf(TriangleMesh, n), normalWrites[i]); ConvertPointerToOffset(result.str,
-    //     triMeshFileOffset + OffsetOf(TriangleMesh, uv), uvWrites[i]);
-    //     ConvertPointerToOffset(result.str, triMeshFileOffset + OffsetOf(TriangleMesh,
-    //     indices), indexWrites[i]); triMeshFileOffset += sizeof(TriangleMesh);
+    //     ConvertPointerToOffset(result.str, triMeshFileOffset +
+    //     OffsetOf(TriangleMesh, p), positionWrites[i]);
+    //     ConvertPointerToOffset(result.str, triMeshFileOffset +
+    //     OffsetOf(TriangleMesh, n), normalWrites[i]);
+    //     ConvertPointerToOffset(result.str, triMeshFileOffset +
+    //     OffsetOf(TriangleMesh, uv), uvWrites[i]); ConvertPointerToOffset(result.str,
+    //     triMeshFileOffset + OffsetOf(TriangleMesh, indices), indexWrites[i]);
+    //     triMeshFileOffset += sizeof(TriangleMesh);
     // }
     // string triFilename = StrConcat(temp.arena, directory, "tris.mesh");
     // b32 success        = OS_WriteFile(triFilename, result.str, (u32)result.size);
