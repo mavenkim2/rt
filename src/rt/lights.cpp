@@ -394,7 +394,6 @@ ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image,
                                             Vec2f(0.f, 0.f), Vec2f(1.f, 1.f));
 
     u32 size     = image.width * image.height;
-    f32 div      = 1.f / size;
     f32 avg      = 0.f;
     f32 first    = values[0];
     bool allSame = true;
@@ -405,8 +404,9 @@ ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image,
         {
             allSame = false;
         }
-        avg += values[i] * div;
+        avg += values[i];
     }
+    avg /= size;
     f32 *compensatedValues = PushArrayNoZero(arena, f32, size);
     if (allSame)
     {

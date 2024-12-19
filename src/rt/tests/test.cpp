@@ -458,11 +458,12 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     // - render a quad mesh properly
     // - the ironwood tree seems to be a bit brighter than it's supposed to be?
     // - add the second ocean layer
-
-    // TODO:
     // - render two instances of a quad mesh properly (i.e. test partial rebraiding)
     // - need to support a bvh with quad/triangle mesh instances (i.e. different instance
     // types)
+
+    // TODO:
+    // - verify all code paths in partial rebraiding (i.e. more instances)
     // - render the diffuse/diffuse transmission materials properly
     // - add area lights (making sure they cannot be intersected, but are sampled properly)
     // - load the scene description and properly instantiate lights/materials/textures
@@ -475,9 +476,10 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     scene_                          = PushStruct(arena, Scene);
     Scene *scene                    = GetScene();
     ScenePrimitives *baseScenePrims = &scene->scene;
-    ScenePrimitives *scenePrims     = PushStruct(arena, ScenePrimitives);
-    u32 numProcessors               = OS_NumProcessors();
-    Arena **arenas                  = PushArray(arena, Arena *, numProcessors);
+    ScenePrimitives scenePrims[3]   = {};
+    // ScenePrimitives *scenePrims     = PushStruct(arena, ScenePrimitives);
+    u32 numProcessors = OS_NumProcessors();
+    Arena **arenas    = PushArray(arena, Arena *, numProcessors);
     for (u32 i = 0; i < numProcessors; i++)
     {
         arenas[i] = ArenaAlloc(16);
@@ -503,29 +505,23 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     Mat4 cameraFromRaster = Inverse(rasterFromCamera);
 
     AffineSpace renderFromWorld = AffineSpace::Translate(-pCamera);
-    // ocean mesh
-#if 0
-    TriangleMesh meshes[] = {
+    AffineSpace worldFromRender = AffineSpace::Translate(pCamera);
+
+    // Meshes
+    TriangleMesh triMeshes[] = {
         LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply"),
         LoadPLY(arena, "../data/island/pbrt-v4/osOcean/osOcean_geometry_00002.ply"),
     };
-
-    ConstantTexture<1> ct(0.f);
-    ConstantSpectrum spec(1.1f);
-    DielectricMaterialBase mat(DielectricMaterialConstant(ct, spec), NullShader());
-    scene->materials.Set<DielectricMaterialBase>(&mat, 1);
-    PrimitiveIndices ids[] = {
-        PrimitiveIndices(LightHandle(),
-                         MaterialHandle(MaterialType::DielectricMaterialBase, 0)),
-        PrimitiveIndices(LightHandle(),
-                         MaterialHandle(MaterialType::DielectricMaterialBase, 0)),
-    };
-    u32 numFaces              = meshes[0].numIndices / 3;
-    u32 numFaces2             = meshes[1].numIndices / 3;
-    scenePrims->primitives    = meshes;
-    scenePrims->numPrimitives = 2;
-#else
+    for (u32 i = 0; i < ArrayLength(triMeshes); i++)
+    {
+        TriangleMesh *mesh = &triMeshes[i];
+        for (u32 j = 0; j < mesh->numVertices; j++)
+        {
+            mesh->p[j] -= pCamera;
+        }
+    }
     AffineSpace transforms[] = {
+        AffineSpace::Identity(),
         AffineSpace(Vec3f(0.883491f, 0.f, -0.171593f),
                     Vec3f(-0.006209f, 0.899411f, -0.031968f),
                     Vec3f(0.171481f, 0.032566f, 0.882912f),
@@ -537,54 +533,86 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     };
     for (u32 i = 0; i < ArrayLength(transforms); i++)
     {
-        transforms[i] = renderFromWorld * transforms[i];
+        transforms[i] = renderFromWorld * transforms[i] * worldFromRender;
     }
     Instance instances[] = {
-        {0, 0},
         {0, 1},
+        {0, 2},
+        {1, 0},
+        {2, 0},
     };
-    TriangleMesh testMesh =
-        LoadPLY(arena, "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
-    QuadMesh meshes[] = {LoadQuadPLY(
-        arena, "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply")};
-    PtexTexture<3> texture("../data/island/textures/isIronwoodA1/Color/trunk0001_geo.ptx",
-                           ColorEncoding::Gamma);
+    QuadMesh meshes[] = {
+        LoadQuadPLY(arena,
+                    "../data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply"),
+        LoadQuadPLY(arena,
+                    "../data/island/pbrt-v4/isMountainA/isMountainA_geometry_00001.ply"),
+    };
 
-    PtexShader<3> rfl(texture);
+    for (u32 i = 0; i < ArrayLength(meshes); i++)
+    {
+        QuadMesh *mesh = &meshes[i];
+        for (u32 j = 0; j < mesh->numVertices; j++)
+        {
+            mesh->p[j] -= pCamera;
+        }
+    }
+
+    PtexShader<3> rfl(PtexTexture<3>(
+        "../data/island/textures/isIronwoodA1/Color/trunk0001_geo.ptx", ColorEncoding::Gamma));
     CoatedDiffuseMaterial1 mat(CoatedDiffuseMaterialPtex(ConstantTexture<1>(.65), rfl,
                                                          ConstantTexture<1>(0),
                                                          ConstantSpectrum(1.5f)),
                                NullShader());
     scene->materials.Set<CoatedDiffuseMaterial1>(&mat, 1);
-    PrimitiveIndices ids[] = {
+
+    ConstantTexture<1> ct(0.f);
+    ConstantSpectrum spec(1.1f);
+    DielectricMaterialBase dielMat(DielectricMaterialConstant(ct, spec), NullShader());
+    scene->materials.Set<DielectricMaterialBase>(&dielMat, 1);
+
+    PtexShader<3> mountTex(PtexTexture<3>(
+        "../data/island/textures/isMountainA/Color/mountain_geo.ptx", ColorEncoding::Gamma));
+    DiffuseMaterialBase mountDiff((DiffuseMaterialPtex(mountTex)), NullShader());
+    scene->materials.Set<DiffuseMaterialBase>(&mountDiff, 1);
+
+    PrimitiveIndices ids0[] = {
         PrimitiveIndices(LightHandle(),
                          MaterialHandle(MaterialType::CoatedDiffuseMaterial1, 0)),
     };
-    scenePrims->primitives           = meshes;
-    scenePrims->numPrimitives        = 1;
-    baseScenePrims->numPrimitives    = 2;
+    PrimitiveIndices ids1[] = {
+        PrimitiveIndices(LightHandle(),
+                         MaterialHandle(MaterialType::DielectricMaterialBase, 0)),
+        PrimitiveIndices(LightHandle(),
+                         MaterialHandle(MaterialType::DielectricMaterialBase, 0)),
+    };
+    PrimitiveIndices ids2[] = {
+        PrimitiveIndices(LightHandle(), MaterialHandle(MaterialType::DiffuseMaterialBase, 0)),
+    };
+    scenePrims[0].primitives    = meshes;
+    scenePrims[0].numPrimitives = 1;
+    scenePrims[0].primIndices   = ids0;
+
+    scenePrims[1].primitives    = triMeshes;
+    scenePrims[1].numPrimitives = ArrayLength(triMeshes);
+    scenePrims[1].primIndices   = ids1;
+
+    scenePrims[2].primitives    = &meshes[1];
+    scenePrims[2].numPrimitives = 1;
+    scenePrims[2].primIndices   = ids2;
+
     baseScenePrims->primitives       = instances;
+    baseScenePrims->numPrimitives    = ArrayLength(instances);
     baseScenePrims->affineTransforms = transforms;
     baseScenePrims->childScenes      = scenePrims;
-    baseScenePrims->numScenes        = 1;
-#endif
-    scene->primIndices = ids;
-
-    // convert to "render space" (i.e. world space centered around the camera)
-    // for (u32 j = 0; j < ArrayLength(meshes); j++)
-    // {
-    //     for (u32 i = 0; i < meshes[j].numVertices; i++)
-    //     {
-    //         meshes[j].p[i] -= pCamera;
-    //     }
-    // }
+    // baseScenePrims->numScenes        = 3;
 
     // build bvh
     BuildSettings settings;
     settings.intCost = 1.f;
 
-    // BuildTriangleBVH(arenas, settings, scenePrims);
-    BuildQuadBVH(arenas, settings, scenePrims);
+    BuildQuadBVH(arenas, settings, &scenePrims[0]);
+    BuildQuadBVH(arenas, settings, &scenePrims[2]);
+    BuildTriangleBVH(arenas, settings, &scenePrims[1]);
     BuildTLASBVH(arenas, settings, baseScenePrims);
 
     // environment map

@@ -692,11 +692,15 @@ struct ScenePrimitives
 
     // NOTE: only set if not a leaf node in the scene hierarchy
     ScenePrimitives *childScenes;
-    AffineSpace *affineTransforms;
+    union
+    {
+        AffineSpace *affineTransforms;
+        const PrimitiveIndices *primIndices;
+    };
 
     IntersectFunc intersectFunc;
     OccludedFunc occludedFunc;
-    u32 numPrimitives, numScenes, numFaces;
+    u32 numPrimitives,  numFaces;
 
     ScenePrimitives() {}
     Bounds GetBounds() const { return Bounds(Lane4F32(boundsMin), Lane4F32(boundsMax)); }
@@ -711,7 +715,6 @@ struct Scene
 {
     ScenePrimitives scene;
 
-    const PrimitiveIndices *primIndices;
     ArrayTuple<LightTypes> lights;
     ArrayTuple<MaterialTypes> materials;
     // Bounds bounds;

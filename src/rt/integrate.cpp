@@ -56,7 +56,7 @@ DiffuseMaterial<RflShader>::GetBxDF(SurfaceInteractionsN &intr, DiffuseMaterial 
     {
         shaders[i] = &materials[i]->rflShader;
     }
-    SampledSpectrumN sampledSpectra = RflShader::Evaluate(intr, filterWidths, shaders, lambda);
+    SampledSpectrumN sampledSpectra = RflShader::Evaluate(intr, shaders, filterWidths, lambda);
     return DiffuseBxDF(sampledSpectra);
 }
 
@@ -80,8 +80,8 @@ DiffuseTransmissionBxDF DiffuseTransmissionMaterial<RflShader, TrmShader>::GetBx
         rflShaders[i] = &materials[i]->rflShader;
         trmShaders[i] = &materials[i]->trmShaders;
     }
-    SampledSpectrumN r = RflShader::Evaluate(intr, filterWidths, rflShaders, lambda);
-    SampledSpectrumN t = TrmShader::Evaluate(intr, filterWidths, trmShaders, lambda);
+    SampledSpectrumN r = RflShader::Evaluate(intr, rflShaders, filterWidths, lambda);
+    SampledSpectrumN t = TrmShader::Evaluate(intr, trmShaders, filterWidths, lambda);
     return DiffuseTransmissionBxDF(r, t);
 }
 
@@ -426,20 +426,6 @@ struct ShadingQueuePtex
         ScratchEnd(temp);
     }
 };
-
-template <>
-bool SurfaceInteraction::ComputeShading(BSDF &bsdf)
-{
-    // TODO:
-    // auto material = scene->materials.Get(0, materialIDs.value);
-    // auto Dispatch = [&](auto v) {
-    //     using BSDFType = std::decay<decltype(v)>::type;
-    //     bsdf           = &v;
-    //     BSDFType *b =
-    // };
-
-    return {};
-}
 
 template <typename Sampler>
 SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths &lambda);

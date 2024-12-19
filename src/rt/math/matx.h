@@ -684,6 +684,14 @@ __forceinline Vec3f TransformV(const AffineSpace &t, const Vec3f &v)
 }
 __forceinline Vec3f TransformP(const AffineSpace &a, const Vec3f &b) { return a * b; }
 
+__forceinline Vec3f TransformP(const AffineSpace &t, const Vec3f &v, Vec3f &err)
+{
+    err = (gamma(3) + 1) * FMA(Abs(t.c0), Vec3f(err.x),
+                               FMA(Abs(t.c1), Vec3f(err.y), Abs(t.c2) * Vec3f(err.z))) +
+          gamma(3) * (Abs(t.c0 * v.x) + Abs(t.c1 * v.y) + Abs(t.c2 * v.z) + Abs(t.c3));
+    return TransformP(t, v);
+}
+
 __forceinline Bounds Transform(const AffineSpace &t, const Bounds &b)
 {
     Vec3f corners[8] = {

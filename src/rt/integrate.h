@@ -103,7 +103,6 @@ struct SurfaceInteractions
     }
     // SurfaceInteraction(const Vec3f &p, const Vec3f &n, Vec2f u, f32 tHit) : p(p), n(n),
     // uv(u), tHit(tHit) {}
-    bool ComputeShading(BSDFBase<BxDF> &bsdf);
 
     u32 GenerateKey() { return {}; }
 };

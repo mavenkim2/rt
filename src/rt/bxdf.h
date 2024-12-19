@@ -267,7 +267,7 @@ struct DiffuseBxDF
     {
         MaskF32 mask = SameHemisphere(wo, wi);
         pdf          = Select(mask, CosineHemispherePDF(AbsCosTheta(wi)), 0.f);
-        return R / PI;
+        return R * InvPi;
     }
 
     BSDFSample GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u,

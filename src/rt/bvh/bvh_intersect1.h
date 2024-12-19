@@ -318,8 +318,7 @@ static void SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
                                                        SurfaceInteraction &si,
                                                        bool isSecondTri = false)
 {
-    Scene *baseScene = GetScene();
-    Mesh *mesh       = (Mesh *)scene->primitives + geomID;
+    Mesh *mesh = (Mesh *)scene->primitives + geomID;
     u32 vertexIndices[3];
     if (mesh->indices)
     {
@@ -344,15 +343,15 @@ static void SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
     {
         if (isSecondTri)
         {
-            uv[0] = Vec2f(1, 1);
-            uv[1] = Vec2f(0, 1);
-            uv[2] = Vec2f(1, 0);
+            uv[0] = Vec2f(0, 0);
+            uv[1] = Vec2f(1, 1);
+            uv[2] = Vec2f(0, 1);
         }
         else
         {
             uv[0] = Vec2f(0, 0);
             uv[1] = Vec2f(1, 0);
-            uv[2] = Vec2f(0, 1);
+            uv[2] = Vec2f(1, 1);
         }
     }
     Vec3f p[3] = {mesh->p[vertexIndices[0]], mesh->p[vertexIndices[1]],
@@ -404,7 +403,7 @@ static void SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
     si.shading.dpdv = ts;
     si.uv           = u * uv[1] + v * uv[2] + w * uv[0];
     // TODO: get index based on type
-    const PrimitiveIndices *indices = baseScene->primIndices + geomID;
+    const PrimitiveIndices *indices = scene->primIndices + geomID;
     si.materialIDs                  = indices->materialID.data;
     // TODO: properly obtain the light handle
     si.lightIndices = 0;
@@ -540,8 +539,8 @@ struct QuadIntersectorBase<N, Prim<N>>
             Transpose<N>(v2, triV2);
             Transpose<N>(v3, triV3);
 
-            Mask<LaneF32<N>> mask = TriangleIntersect(ray, itr.t, triV0, triV1, triV3, triItr);
-            triMask               = Select(mask, falseMask, trueMask);
+            Mask<LaneF32<N>> mask = TriangleIntersect(ray, itr.t, triV0, triV1, triV2, triItr);
+            triMask               = Select(mask, falseMask, triMask);
             itr.u                 = Select(mask, triItr.u, itr.u);
             itr.v                 = Select(mask, triItr.v, itr.v);
             itr.t                 = Select(mask, triItr.t, itr.t);
@@ -551,8 +550,8 @@ struct QuadIntersectorBase<N, Prim<N>>
                 Select(mask, AsFloat(MemSimdU32<N>::LoadU(primIDs)), AsFloat(itr.primIDs)));
             outMask |= mask;
 
-            mask        = TriangleIntersect(ray, itr.t, triV2, triV3, triV1, triItr);
-            triMask     = Select(mask, trueMask, falseMask);
+            mask        = TriangleIntersect(ray, itr.t, triV0, triV2, triV3, triItr);
+            triMask     = Select(mask, trueMask, triMask);
             itr.u       = Select(mask, triItr.u, itr.u);
             itr.v       = Select(mask, triItr.v, itr.v);
             itr.t       = Select(mask, triItr.t, itr.t);
@@ -591,15 +590,15 @@ struct QuadIntersectorBase<N, Prim<N>>
             u32 primID = Get(itr.primIDs, index);
             if (isSecondTri)
             {
-                ids[0] = 4 * primID + 2;
-                ids[1] = 4 * primID + 3;
-                ids[2] = 4 * primID + 1;
+                ids[0] = 4 * primID + 0;
+                ids[1] = 4 * primID + 2;
+                ids[2] = 4 * primID + 3;
             }
             else
             {
                 ids[0] = 4 * primID + 0;
                 ids[1] = 4 * primID + 1;
-                ids[2] = 4 * primID + 3;
+                ids[2] = 4 * primID + 2;
             }
             SurfaceInteractionFromTriangleIntersection<QuadMesh>(
                 scene, Get(itr.geomIDs, index), primID, ids, u, v, w, si, isSecondTri);
@@ -656,15 +655,22 @@ struct InstanceIntersector
             Assert(childScene && t);
             Vec3f rayO = ray.o;
             Vec3f rayD = ray.d;
-            ray.o      = ApplyInverse(*t, ray.o);
-            ray.d      = ApplyInverseV(*t, ray.d);
-            result |= childScene->intersectFunc(childScene, prim.nodePtr, ray, si);
-            si.p      = Transform(*t, si.p);
-            si.pError = Transform(*t, si.pError);
-            si.shading.n = Transform(
-            si.n      = Transform(*t, si.n);
-            ray.o     = rayO;
-            ray.d     = rayD;
+
+            AffineSpace inv = Inverse(*t);
+            Mat3 invTp      = Transpose(Mat3(inv.c0, inv.c1, inv.c2));
+            ray.o           = TransformP(inv, ray.o);
+            ray.d           = TransformV(inv, ray.d);
+            if (childScene->intersectFunc(childScene, prim.nodePtr, ray, si))
+            {
+                si.p            = TransformP(*t, si.p, si.pError);
+                si.n            = Normalize(invTp * si.n);
+                si.shading.n    = Normalize(invTp * si.shading.n);
+                si.shading.dpdu = TransformV(*t, si.shading.dpdu);
+
+                result = true;
+            }
+            ray.o = rayO;
+            ray.d = rayD;
         }
         return result;
     }
