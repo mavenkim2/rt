@@ -171,6 +171,13 @@ struct ConstantMedium
     }
 };
 
+enum class IndexType
+{
+    u8,
+    u16,
+    u32,
+};
+
 struct TriangleMesh
 {
     Vec3f *p;
@@ -700,7 +707,7 @@ struct ScenePrimitives
 
     IntersectFunc intersectFunc;
     OccludedFunc occludedFunc;
-    u32 numPrimitives,  numFaces;
+    u32 numPrimitives, numFaces;
 
     ScenePrimitives() {}
     Bounds GetBounds() const { return Bounds(Lane4F32(boundsMin), Lane4F32(boundsMax)); }
