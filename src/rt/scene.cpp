@@ -905,6 +905,41 @@ struct ChunkedLinkedList
     ChunkNode *last;
     u32 totalCount;
 
+    struct Iterator
+    {
+        ChunkNode *node;
+        u32 localIndex;
+        u32 numRemaining;
+
+        bool End() { return numRemaining == 0; }
+
+        void Next()
+        {
+            localIndex++;
+            numRemaining--;
+            if (localIndex = numPerChunk)
+            {
+                node = node->next;
+            }
+        }
+        T *Get() { return node->values[localIndex]; }
+    };
+
+    Iterator Itr(u32 start, u32 end)
+    {
+        Iterator itr;
+        itr.node         = first;
+        itr.numRemaining = end - start;
+        u32 index        = start;
+        while (index > numPerChunk)
+        {
+            itr.node = itr.node->next;
+            index -= numPerChunk;
+        }
+        itr.localIndex = index;
+        return itr;
+    }
+
     ChunkedLinkedList(Arena *arena) : arena(arena), first(0), last(0), totalCount(0)
     {
         AddNode();
@@ -986,6 +1021,7 @@ struct SceneLoadState
     ScenePacket packets[MAX] = {};
 
     ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape> *shapes;
+    ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape> *instanceShapes;
     ChunkedLinkedList<ScenePacket, 1024, MemoryType_Material> *materials;
     ChunkedLinkedList<ScenePacket, 1024, MemoryType_Texture> *textures;
     ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light> *lights;
@@ -998,6 +1034,7 @@ struct SceneLoadState
     u32 *numQuadMeshes;
     u32 *numTriMeshes;
     u32 *totalNumInstTypes;
+    u32 **shapeTypeCount;
     // u32 *numCurves;
 
     InternedStringCache<16384, 8, 64> stringCache;
@@ -1304,7 +1341,11 @@ Scene *LoadPBRT(Arena *arena, string filename)
     state.numTriMeshes      = PushArray(arena, u32, numProcessors);
     state.numQuadMeshes     = PushArray(arena, u32, numProcessors);
     state.totalNumInstTypes = PushArray(arena, u32, numProcessors);
+    state.shapeTypeCount    = PushArray(arena, u32 *, numProcessors);
     state.shapes =
+        PushArray(arena, ChunkedLinkedList<ScenePacket COMMA 1024 COMMA MemoryType_Shape>,
+                  numProcessors);
+    state.instanceShapes =
         PushArray(arena, ChunkedLinkedList<ScenePacket COMMA 1024 COMMA MemoryType_Shape>,
                   numProcessors);
     state.materials =
@@ -1325,28 +1366,30 @@ Scene *LoadPBRT(Arena *arena, string filename)
     state.transforms = PushArray(
         arena, ChunkedLinkedList<const AffineSpace * COMMA 16384 COMMA MemoryType_Transform>,
         numProcessors);
-    state.threadArenas = PushArray(arena, Arena *, numProcessors);
+    state.permArenas = PushArray(arena, Arena *, numProcessors);
+    state.tempArenas = PushArray(arena, Arena *, numProcessors);
 #undef COMMA
 
     for (u32 i = 0; i < numProcessors; i++)
     {
-        state.threadArenas[i] = ArenaAlloc(16);
-        state.shapes[i] =
-            ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape>(state.threadArenas[i]);
+        state.permArenas[i]     = ArenaAlloc(16);
+        state.tempArenas[i]     = ArenaAlloc(16);
+        Arena *threadArena      = state.tempArenas[i];
+        state.shapeTypeCount[i] = PushArray(threadArena, u32, (u32)(GeometryType::Max));
+        state.shapes[i] = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape>(threadArena);
+        state.instanceShapes[i] =
+            ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape>(threadArena);
         state.materials[i] =
-            ChunkedLinkedList<ScenePacket, 1024, MemoryType_Material>(state.threadArenas[i]);
+            ChunkedLinkedList<ScenePacket, 1024, MemoryType_Material>(threadArena);
         state.textures[i] =
-            ChunkedLinkedList<ScenePacket, 1024, MemoryType_Texture>(state.threadArenas[i]);
-        state.lights[i] =
-            ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light>(state.threadArenas[i]);
+            ChunkedLinkedList<ScenePacket, 1024, MemoryType_Texture>(threadArena);
+        state.lights[i] = ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light>(threadArena);
         state.instanceTypes[i] =
-            ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance>(
-                state.threadArenas[i]);
+            ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance>(threadArena);
         state.instances[i] =
-            ChunkedLinkedList<SceneInstance, 1024, MemoryType_Instance>(state.threadArenas[i]);
+            ChunkedLinkedList<SceneInstance, 1024, MemoryType_Instance>(threadArena);
         state.transforms[i] =
-            ChunkedLinkedList<const AffineSpace *, 16384, MemoryType_Transform>(
-                state.threadArenas[i]);
+            ChunkedLinkedList<const AffineSpace *, 16384, MemoryType_Transform>(threadArena);
     }
     state.mainArena      = arena;
     state.scene          = scene;
@@ -1388,7 +1431,7 @@ Scene *LoadPBRT(Arena *arena, string filename)
 
     for (u32 i = 0; i < numProcessors; i++)
     {
-        ArenaClear(state.threadArenas[i]);
+        ArenaClear(state.tempArenas[i]);
     }
     return scene;
 }
@@ -1398,20 +1441,22 @@ void CreateMeshes() {}
 void LoadPBRT(string filename, string directory, SceneLoadState *state,
               GraphicsState graphicsState, bool inWorldBegin, bool imported)
 {
-    TempArena temp  = ScratchStart(0, 0);
-    u32 threadIndex = GetThreadIndex();
-    Arena *arena    = state->threadArenas[threadIndex];
+    TempArena temp   = ScratchStart(0, 0);
+    u32 threadIndex  = GetThreadIndex();
+    Arena *tempArena = state->tempArenas[threadIndex];
+    Arena *permArena = state->permArenas[threadIndex];
 
     Tokenizer tokenizer;
     tokenizer.input  = OS_MapFileRead(filename);
     tokenizer.cursor = tokenizer.input.str;
 
-    auto &shapes        = state->shapes[threadIndex];
-    auto &materials     = state->materials[threadIndex];
-    auto &textures      = state->textures[threadIndex];
-    auto &lights        = state->lights[threadIndex];
-    auto &instanceTypes = state->instanceTypes[threadIndex];
-    auto &instances     = state->instances[threadIndex];
+    auto &shapes         = state->shapes[threadIndex];
+    auto &instanceShapes = state->instanceShapes[threadIndex];
+    auto &materials      = state->materials[threadIndex];
+    auto &textures       = state->textures[threadIndex];
+    auto &lights         = state->lights[threadIndex];
+    auto &instanceTypes  = state->instanceTypes[threadIndex];
+    auto &instances      = state->instances[threadIndex];
 
     auto &transforms  = state->transforms[threadIndex];
     auto &stringCache = state->stringCache;
@@ -1430,7 +1475,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
 
     if (transforms.totalCount == 0)
     {
-        transforms.Push(state->transformCache.GetOrCreate(arena, AffineSpace::Identity()));
+        transforms.Push(state->transformCache.GetOrCreate(tempArena, AffineSpace::Identity()));
     }
     if (currentObject && imported)
     {
@@ -1446,8 +1491,8 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             if (currentGraphicsState.transformIndex == transforms.Length())
             {
                 // Assert(currentGraphicsState.transformIndex == transforms.Length());
-                const AffineSpace *transform =
-                    state->transformCache.GetOrCreate(arena, currentGraphicsState.transform);
+                const AffineSpace *transform = state->transformCache.GetOrCreate(
+                    tempArena, currentGraphicsState.transform);
                 transforms.Push(transform);
             }
             else
@@ -1483,7 +1528,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             continue;
         }
 
-        StringId sid = stringCache.GetOrCreate(arena, word);
+        StringId sid = stringCache.GetOrCreate(tempArena, word);
         switch (sid)
         {
             case "Accelerator"_sid:
@@ -1492,7 +1537,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                       word);
                 SceneLoadState::Type type = SceneLoadState::Type::Accelerator;
                 ScenePacket *packet       = &state->packets[type];
-                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache,
+                CreateScenePacket(tempArena, word, packet, &tokenizer, &stringCache,
                                   MemoryType_Other);
                 continue;
             }
@@ -1529,7 +1574,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                       word);
                 currentGraphicsState.areaLightIndex = lights.Length();
                 ScenePacket *packet                 = &lights.AddBack();
-                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache,
+                CreateScenePacket(tempArena, word, packet, &tokenizer, &stringCache,
                                   MemoryType_Light);
             }
             break;
@@ -1544,7 +1589,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                       word);
                 SceneLoadState::Type type = SceneLoadState::Type::Camera;
                 ScenePacket *packet       = &state->packets[type];
-                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache,
+                CreateScenePacket(tempArena, word, packet, &tokenizer, &stringCache,
                                   MemoryType_Other);
                 continue;
             }
@@ -1593,7 +1638,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 Error(!worldBegin, "Tried to specify %S after WorldBegin\n", word);
                 SceneLoadState::Type type = SceneLoadState::Type::Film;
                 ScenePacket *packet       = &state->packets[type];
-                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache,
+                CreateScenePacket(tempArena, word, packet, &tokenizer, &stringCache,
                                   MemoryType_Other);
                 continue;
             }
@@ -1602,7 +1647,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 Error(!worldBegin, "Tried to specify %S after WorldBegin\n", word);
                 SceneLoadState::Type type = SceneLoadState::Type::Integrator;
                 ScenePacket *packet       = &state->packets[type];
-                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache,
+                CreateScenePacket(tempArena, word, packet, &tokenizer, &stringCache,
                                   MemoryType_Other);
                 continue;
             }
@@ -1619,7 +1664,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
 
                 b32 result = GetBetweenPair(importedFilename, &tokenizer, '"');
                 Assert(result);
-                string importedFullPath = StrConcat(arena, directory, importedFilename);
+                string importedFullPath = StrConcat(tempArena, directory, importedFilename);
 
                 scheduler.Schedule(&state->counter,
                                    [importedFullPath, directory, state, currentGraphicsState,
@@ -1669,7 +1714,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             {
                 Error(worldBegin, "Tried to specify %S before WorldBegin\n", word);
                 ScenePacket *packet = &lights.AddBack();
-                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache,
+                CreateScenePacket(tempArena, word, packet, &tokenizer, &stringCache,
                                   MemoryType_Light);
             }
             break;
@@ -1683,7 +1728,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 Assert(result);
 
                 ScenePacket *packet = &materials.AddBack();
-                packet->type        = stringCache.GetOrCreate(arena, materialNameOrType);
+                packet->type        = stringCache.GetOrCreate(tempArena, materialNameOrType);
                 u32 materialIndex   = materials.Length();
                 if (IsEndOfLine(&tokenizer))
                 {
@@ -1693,12 +1738,12 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 {
                     SkipToNextChar(&tokenizer);
                 }
-                ReadParameters(arena, packet, &tokenizer, &stringCache, MemoryType_Material);
+                ReadParameters(tempArena, packet, &tokenizer, &stringCache, MemoryType_Material);
 
                 if (isNamedMaterial)
                 {
                     currentGraphicsState.materialId =
-                        stringCache.GetOrCreate(arena, materialNameOrType);
+                        stringCache.GetOrCreate(tempArena, materialNameOrType);
                     currentGraphicsState.materialIndex = -1;
                 }
                 else
@@ -1722,7 +1767,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 b32 result = GetBetweenPair(materialName, &tokenizer, '"');
                 Assert(result);
 
-                currentGraphicsState.materialId = stringCache.GetOrCreate(arena, materialName);
+                currentGraphicsState.materialId = stringCache.GetOrCreate(tempArena, materialName);
                 currentGraphicsState.materialIndex = -1;
             }
             break;
@@ -1739,7 +1784,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 Assert(result);
 
                 currentObject                  = &instanceTypes.AddBack();
-                currentObject->name            = stringCache.GetOrCreate(arena, objectName);
+                currentObject->name            = stringCache.GetOrCreate(tempArena, objectName);
                 currentObject->transformIndex  = currentGraphicsState.transformIndex;
                 currentObject->shapeIndexStart = shapes.Length();
 
@@ -1767,7 +1812,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 Assert(result);
 
                 SceneInstance &instance = instances.AddBack();
-                instance.name           = stringCache.GetOrCreate(arena, objectName);
+                instance.name           = stringCache.GetOrCreate(tempArena, objectName);
                 instance.transformIndex = (i32)transforms.Length();
 
                 AddTransform();
@@ -1794,7 +1839,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 Error(!worldBegin, "Tried to specify %S after WorldBegin\n", word);
                 SceneLoadState::Type type = SceneLoadState::Type::Sampler;
                 ScenePacket *packet       = &state->packets[type];
-                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache,
+                CreateScenePacket(tempArena, word, packet, &tokenizer, &stringCache,
                                   MemoryType_Other);
                 continue;
             }
@@ -1814,9 +1859,32 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             case "Shape"_sid:
             {
                 Error(worldBegin, "Tried to specify %S after WorldBegin\n", word);
-                ScenePacket *packet = &shapes.AddBack();
-                CreateScenePacket(arena, word, packet, &tokenizer, &stringCache,
-                                  MemoryType_Shape, 1);
+                ScenePacket *packet;
+                if (currentObject)
+                {
+                    packet = &instanceShapes.AddBack();
+                }
+                else
+                {
+                    packet = &shapes.AddBack();
+                }
+
+    ReadWord(tokenizer);
+    string type;
+    b32 result = GetBetweenPair(type, tokenizer, '"');
+    Assert(result);
+    packet->type = stringCache->GetOrCreate(arena, type);
+    if (IsEndOfLine(tokenizer))
+    {
+        SkipToNextLine(tokenizer);
+    }
+    else
+    {
+        SkipToNextChar(tokenizer);
+    }
+    ReadParameters(arena, packet, tokenizer, stringCache, memoryType, additionalParameters);
+                // CreateScenePacket(arena, word, packet, &tokenizer, &stringCache,
+                //                   MemoryType_Shape, 1);
 
                 u32 numVertices = 0;
                 u32 numIndices  = 0;
@@ -1843,13 +1911,18 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 if (packet->type == "trianglemesh"_sid && numVertices && numIndices &&
                     numVertices / 2 == numIndices / 3)
                 {
-                    packet->type = stringCache.GetOrCreate(arena, "quadmesh");
+                    packet->type = stringCache.GetOrCreate(tempArena, "quadmesh");
                     state->numQuadMeshes[GetThreadIndex()]++;
                     if (currentObject)
                     {
                         u32 index = (u32)(GeometryType::QuadMesh);
                         currentObject->shapeTypeFlags |= (1 << index);
                         currentObject->shapeTypeCount[index]++;
+                    }
+                    else
+                    {
+                        u32 index = (u32)(GeometryType::QuadMesh);
+                        state->shapeTypeCount[GetThreadIndex()][index]++;
                     }
                 }
                 else if (packet->type == "trianglemesh"_sid)
@@ -1861,9 +1934,14 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                         currentObject->shapeTypeFlags |= (1 << index);
                         currentObject->shapeTypeCount[index]++;
                     }
+                    else
+                    {
+                        u32 index = (u32)(GeometryType::TriangleMesh);
+                        state->shapeTypeCount[GetThreadIndex()][index]++;
+                    }
                 }
 
-                i32 *indices = PushArray(arena, i32, 4);
+                i32 *indices = PushArray(tempArena, i32, 4);
                 // ORDER: Light, Medium, Transform, Material Index, Material StringID (if
                 // present)
                 indices[0] = currentGraphicsState.areaLightIndex;
@@ -1876,7 +1954,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
 
                 u32 currentParameter = packet->parameterCount++;
                 packet->parameterNames[currentParameter] =
-                    stringCache.GetOrCreate(arena, "Indices");
+                    stringCache.GetOrCreate(tempArena, "Indices");
                 packet->bytes[currentParameter] = (u8 *)indices;
                 packet->sizes[currentParameter] = sizeof(i32) * 4;
 
@@ -1945,7 +2023,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
 
                 ScenePacket *packet = &textures.AddBack();
                 packet->type        = stringCache.GetOrCreate(
-                    arena, StrConcat(arena, textureType, textureClass));
+                    tempArena, StrConcat(tempArena, textureType, textureClass));
 
                 if (IsEndOfLine(&tokenizer))
                 {
@@ -2166,12 +2244,122 @@ void CreatePBRTScene(Arena *arena, string directory, SceneLoadState *state)
     // could have an atomic for scene id whenever an object instance type is declared
 
     // map the instance name to an index;
+    auto CreateShapes = [](ShapeTypeList *shapeList, QuadMesh *qMeshes,
+                           TriangleMesh *triMeshes, u32 start, u32 end, u32 quadOffset = 0,
+                           u32 triOffset = 0) {
+        u32 quadOffset = 0;
+        u32 triOffset  = 0;
+        for (auto itr = shapeList->Itr(start, end); !itr.End(); itr.Next())
+        {
+            ScenePacket *shapePacket = itr.Get();
+
+            switch (shapePacket->types)
+            {
+                case "quadmesh"_sid:
+                {
+                    u32 quadIndex  = quadOffset++;
+                    QuadMesh *mesh = &qMeshes[quadIndex];
+                    // quadCounts[pIndex]++;
+                    for (u32 parameterIndex = 0; parameterIndex < packet->parameterCount;
+                         parameterIndex++)
+                    {
+                        switch (packet->parameterNames[parameterIndex])
+                        {
+                            case "P"_sid:
+                            {
+                                mesh->p = (Vec3f *)packet->bytes[parameterIndex];
+                                mesh->numVertices =
+                                    packet->sizes[parameterIndex] / sizeof(Vec3f);
+                            }
+                            break;
+                            case "N"_sid:
+                            {
+                                mesh->n = (Vec3f *)packet->bytes[parameterIndex];
+                                Assert(mesh->numVertices ==
+                                       packet->sizes[parameterIndex] / sizeof(Vec3f));
+                            }
+                            break;
+                            default: continue;
+                        }
+                    }
+                }
+                break;
+                case "trianglemesh"_sid:
+                {
+                    u32 triIndex = triOffset++;
+                    Assert(triIndex < triLimit);
+                    TriangleMesh *mesh = &triMeshes[triIndex++];
+                    for (u32 parameterIndex = 0; parameterIndex < packet->parameterCount;
+                         parameterIndex++)
+                    {
+                        switch (packet->parameterNames[parameterIndex])
+                        {
+                            case "P"_sid:
+                            {
+                                mesh->p = (Vec3f *)packet->bytes[parameterIndex];
+                                mesh->numVertices =
+                                    packet->sizes[parameterIndex] / sizeof(Vec3f);
+                            }
+                            break;
+                            case "N"_sid:
+                            {
+                                mesh->n = (Vec3f *)packet->bytes[parameterIndex];
+                                Assert(mesh->numVertices ==
+                                       packet->sizes[parameterIndex] / sizeof(Vec3f));
+                            }
+                            break;
+                            case "indices"_sid:
+                            {
+                                mesh->indices    = (u32 *)packet->bytes[parameterIndex];
+                                mesh->numIndices = packet->sizes[parameterIndex] / sizeof(u32);
+                            }
+                            break;
+                            case "faceIndices"_sid: continue;
+                            case "uv"_sid:
+                            {
+                                mesh->uv = (Vec2f *)packet->bytes[parameterIndex];
+                                Assert(mesh->numVertices ==
+                                       packet->sizes[parameterIndex] / sizeof(Vec2f));
+                            }
+                            break;
+                            default: Assert(0);
+                        }
+                    }
+                }
+                break;
+                case "plymesh"_sid:
+                {
+                    for (u32 parameterIndex = 0; parameterIndex < packet->parameterCount;
+                         parameterIndex++)
+                    {
+                        if (packet->parameterNames[parameterIndex] == "filename"_sid)
+                        {
+                            string filename;
+                            filename.str        = packet->bytes[parameterIndex];
+                            filename.size       = packet->sizes[parameterIndex];
+                            string fullFilePath = StrConcat(temp.arena, directory, filename);
+                            if (CheckQuadPLY(fullFilePath))
+                            {
+                                qMeshes[quadOffset++] = LoadQuadPLY(permArena, fullFilePath);
+                            }
+                            else
+                            {
+                                triMeshes[triOffset++] = LoadPLY(permArena, fullFilePath);
+                            }
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    };
 
     // Create object types
     scheduler.Schedule(&counter, numProcessors, 1, [&](u32 jobID) {
         u32 pIndex                        = jobID;
         InstanceTypeList *list            = &state->instanceTypes[pIndex];
-        ShapeTypeList *shapeList          = &state->shapes[pIndex];
+        ShapeTypeList *shapeList          = &state->instanceShapes[pIndex];
         ObjectInstanceTypeCounts *tCounts = &counts[jobID];
         Arena *permArena                  = state->permArenas[jobID];
         u32 instOffset                    = state->instOffsets[jobID];
@@ -2198,272 +2386,39 @@ void CreatePBRTScene(Arena *arena, string directory, SceneLoadState *state)
                 u32 quadOffset = 0;
                 u32 triOffset  = 0;
 
-                for (auto itr = shapeList->Itr(); !itr.End();
-                     itr.Next()) // u32 shapeIndex = instType->shapeIndexStart;
-                                 //  shapeIndex < instType->shapeIndexEnd; shapeIndex++)
-                {
-                    ScenePacket *shapePacket = itr.Get();
-
-                    switch (shapePacket->types)
-                    {
-                        case "quadmesh"_sid:
-                        {
-                            u32 quadIndex = quadOffset++;
-                            Assert(quadIndex < quadLimit);
-                            QuadMesh *mesh = &qMeshes[quadIndex];
-                            // quadCounts[pIndex]++;
-                            for (u32 parameterIndex = 0;
-                                 parameterIndex < packet->parameterCount; parameterIndex++)
-                            {
-                                switch (packet->parameterNames[parameterIndex])
-                                {
-                                    case "P"_sid:
-                                    {
-                                        mesh->p = (Vec3f *)packet->bytes[parameterIndex];
-                                        mesh->numVertices =
-                                            packet->sizes[parameterIndex] / sizeof(Vec3f);
-                                    }
-                                    break;
-                                    case "N"_sid:
-                                    {
-                                        mesh->n = (Vec3f *)packet->bytes[parameterIndex];
-                                        Assert(mesh->numVertices ==
-                                               packet->sizes[parameterIndex] / sizeof(Vec3f));
-                                    }
-                                    break;
-                                    default: continue;
-                                }
-                            }
-                        }
-                        break;
-                        case "trianglemesh"_sid:
-                        {
-                            u32 triIndex = triOffset++;
-                            Assert(triIndex < triLimit);
-                            TriangleMesh *mesh = &triMeshes[triIndex++];
-                            for (u32 parameterIndex = 0;
-                                 parameterIndex < packet->parameterCount; parameterIndex++)
-                            {
-                                switch (packet->parameterNames[parameterIndex])
-                                {
-                                    case "P"_sid:
-                                    {
-                                        mesh->p = (Vec3f *)packet->bytes[parameterIndex];
-                                        mesh->numVertices =
-                                            packet->sizes[parameterIndex] / sizeof(Vec3f);
-                                    }
-                                    break;
-                                    case "N"_sid:
-                                    {
-                                        mesh->n = (Vec3f *)packet->bytes[parameterIndex];
-                                        Assert(mesh->numVertices ==
-                                               packet->sizes[parameterIndex] / sizeof(Vec3f));
-                                    }
-                                    break;
-                                    case "indices"_sid:
-                                    {
-                                        mesh->indices = (u32 *)packet->bytes[parameterIndex];
-                                        mesh->numIndices =
-                                            packet->sizes[parameterIndex] / sizeof(u32);
-                                    }
-                                    break;
-                                    case "faceIndices"_sid: continue;
-                                    case "uv"_sid:
-                                    {
-                                        mesh->uv = (Vec2f *)packet->bytes[parameterIndex];
-                                        Assert(mesh->numVertices ==
-                                               packet->sizes[parameterIndex] / sizeof(Vec2f));
-                                    }
-                                    break;
-                                    default: Assert(0);
-                                }
-                            }
-                        }
-                        break;
-                        case "plymesh"_sid:
-                        {
-                            for (u32 parameterIndex = 0;
-                                 parameterIndex < packet->parameterCount; parameterIndex++)
-                            {
-                                if (packet->parameterNames[parameterIndex] == "filename"_sid)
-                                {
-                                    string filename;
-                                    filename.str  = packet->bytes[parameterIndex];
-                                    filename.size = packet->sizes[parameterIndex];
-                                    string fullFilePath =
-                                        StrConcat(temp.arena, directory, filename);
-                                    if (CheckQuadPLY(fullFilePath))
-                                    {
-                                        qMeshes[quadOffset++] =
-                                            LoadQuadPLY(permArena, fullFilePath);
-                                    }
-                                    else
-                                    {
-                                        triMeshes[triOffset++] =
-                                            LoadPLY(permArena, fullFilePath);
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
+                CreateShapes(shapeList, qMeshes, triMeshes, instType->shapeIndexStart,
+                             instType->shapeIndexEnd);
             }
         }
     });
 
     // Instantiate instances
-
-    // Create uninstantiated shapes
     scheduler.Schedule(&counter, numProcessors, 1, [&](u32 jobID) {
-        TempArena temp      = ScratchStart(0, 0);
-        u32 quadOffset      = quadOffsets[jobID];
-        u32 quadLimit       = quadOffsets[jobID + 1];
-        u32 triOffset       = triOffsets[jobID];
-        u32 triLimit        = triOffsets[jobID + 1];
-        u32 pIndex          = jobID;
-        Arena *arena        = state->threadArenas[pIndex];
-        ShapeTypeList *list = &state->shapes[pIndex];
-        types[pIndex]       = PushArray(arena, PrimitiveTy, list->totalCount);
-        offsets[pIndex]     = PushArray(arena, u32, list->totalCount);
-
-        u32 totalNumQuadVertices = 0;
-
-        u32 *pOffsets       = offsets[pIndex];
-        PrimitiveTy *pTypes = types[pIndex];
-        u32 currentOffset   = 0;
-        for (ShapeTypeList::ChunkNode *node = list->first; node != 0; node = node->next)
+        u32 instOffset    = instOffsets[jobID];
+        auto instanceList = state->instances[jobID];
+        for (auto node = instanceList->first; node != 0; node = node->next)
         {
             for (u32 i = 0; i < node->count; i++)
             {
-                ScenePacket *packet = &node->values[i];
-                switch (packet->type)
-                {
-                    // NOTE: pbrt doesn't technically support this
-                    case "quadmesh"_sid:
-                    {
-                        u32 quadIndex = quadOffset++;
-                        Assert(quadIndex < quadLimit);
-                        QuadMesh *mesh = &qMeshes[quadIndex];
-                        // quadCounts[pIndex]++;
-                        for (u32 parameterIndex = 0; parameterIndex < packet->parameterCount;
-                             parameterIndex++)
-                        {
-                            switch (packet->parameterNames[parameterIndex])
-                            {
-                                case "P"_sid:
-                                {
-                                    mesh->p = (Vec3f *)packet->bytes[parameterIndex];
-                                    mesh->numVertices =
-                                        packet->sizes[parameterIndex] / sizeof(Vec3f);
-                                    totalNumQuadVertices += mesh->numVertices;
-                                }
-                                break;
-                                case "N"_sid:
-                                {
-                                    mesh->n = (Vec3f *)packet->bytes[parameterIndex];
-                                    Assert(mesh->numVertices ==
-                                           packet->sizes[parameterIndex] / sizeof(Vec3f));
-                                }
-                                break;
-                                default: continue;
-                            }
-                        }
-                    }
-                    break;
-                    case "trianglemesh"_sid:
-                    {
-                        u32 triIndex = triOffset++;
-                        Assert(triIndex < triLimit);
-                        TriangleMesh *mesh = &triMeshes[triIndex++];
-                        for (u32 parameterIndex = 0; parameterIndex < packet->parameterCount;
-                             parameterIndex++)
-                        {
-                            switch (packet->parameterNames[parameterIndex])
-                            {
-                                case "P"_sid:
-                                {
-                                    mesh->p = (Vec3f *)packet->bytes[parameterIndex];
-                                    mesh->numVertices =
-                                        packet->sizes[parameterIndex] / sizeof(Vec3f);
-                                }
-                                break;
-                                case "N"_sid:
-                                {
-                                    mesh->n = (Vec3f *)packet->bytes[parameterIndex];
-                                    Assert(mesh->numVertices ==
-                                           packet->sizes[parameterIndex] / sizeof(Vec3f));
-                                }
-                                break;
-                                case "indices"_sid:
-                                {
-                                    mesh->indices = (u32 *)packet->bytes[parameterIndex];
-                                    mesh->numIndices =
-                                        packet->sizes[parameterIndex] / sizeof(u32);
-                                }
-                                break;
-                                case "faceIndices"_sid: continue;
-                                case "uv"_sid:
-                                {
-                                    mesh->uv = (Vec2f *)packet->bytes[parameterIndex];
-                                    Assert(mesh->numVertices ==
-                                           packet->sizes[parameterIndex] / sizeof(Vec2f));
-                                }
-                                break;
-                                default: Assert(0);
-                            }
-                        }
-                    }
-                    break;
-                    case "plymesh"_sid:
-                    {
-                        for (u32 parameterIndex = 0; parameterIndex < packet->parameterCount;
-                             parameterIndex++)
-                        {
-                            if (packet->parameterNames[parameterIndex] == "filename"_sid)
-                            {
-                                string filename;
-                                filename.str  = packet->bytes[parameterIndex];
-                                filename.size = packet->sizes[parameterIndex];
-                                string fullFilePath =
-                                    StrConcat(temp.arena, directory, filename);
-                                QuadMesh mesh = LoadQuadPLY(arena, fullFilePath);
-                                // NOTE: should only happen for the ocean geometry
-                                // (twice)
-                                if (mesh.p == 0)
-                                {
-                                    TriangleMesh triMesh = LoadPLY(arena, fullFilePath);
-                                    u32 triIndex         = triOffset++;
-                                    Assert(triIndex < triLimit);
-                                    triMeshes[triIndex] = triMesh;
-                                }
-                                else
-                                {
-                                    u32 quadIndex = quadOffset++;
-                                    Assert(quadIndex < quadLimit);
-                                    qMeshes[quadIndex] = mesh;
-                                    totalNumQuadVertices += mesh.numVertices;
-                                    // quadCounts[pIndex]++;
-                                }
-                                break;
-                            }
-                        }
-                    }
-                    break;
-                    // TODO: curves
-                    case "curve"_sid:
-                    {
-                    }
-                    break;
-                    default: Assert(!"not parsed");
-                }
+                SceneInstance *sceneInstance = &node->values[i];
+                Instance *instance           = &instances[instOffset++];
+                instance->id                 = ? ;
+                instance->transformIndex     = ? ;
             }
-            currentOffset += node->count;
         }
-        Assert(quadOffset == quadLimit);
-        totalNumVertices[jobID] = totalNumQuadVertices;
-        ScratchEnd(temp);
+    });
+
+    // Create uninstantiated shapes
+    Arena *permArena     = state->permArenas[GetThreadIndex()];
+    QuadMesh *quadMeshes = PushArray(permArena, QuadMesh, totalNumQuadMeshes);
+    QuadMesh *triMeshes  = PushArray(permArena, TriangleMesh, totalNumTriMeshes);
+    scheduler.Schedule(&counter, numProcessors, 1, [&](u32 jobID) {
+        u32 quadOffset      = quadOffsets[jobID];
+        u32 triOffset       = triOffsets[jobID];
+        Arena *arena        = state->threadArenas[jobID];
+        ShapeTypeList *list = &state->shapes[jobID];
+        CreateShapes(shapeList, quadMeshes, triMeshes, 0, list->totalCount, quadOffset,
+                     triOffset);
     });
     scheduler.Wait(&counter);
 }
