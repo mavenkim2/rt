@@ -373,16 +373,6 @@ struct BumpMap
 TextureFunc textureFuncs[]   = {};
 MaterialFunc materialFuncs[] = {};
 
-struct Material0
-{
-    static DiffuseBxDF GetBxDF(SurfaceInteractions &intr, Vec4lfn &filterWidths,
-                               SampledWavelengthsN &lambda)
-    {
-        SampledSpectrumN sampledSpectra = textureFuncs[0](intr, ???, filterWidths, lambda);
-        return DiffseBxDF(sampledSpectra);
-    }
-};
-
 template <typename RflShader>
 struct DiffuseMaterial
 {

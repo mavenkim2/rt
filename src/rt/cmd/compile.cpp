@@ -3,19 +3,17 @@
 
 namespace rt
 {
-void CreateDiffuseMaterial(StringBuilder *builder, u32 materialIndex, u32 textureIndex)
+void CreateDiffuseMaterial(StringBuilder *builder, string textureType, string textureFunc,
+                           u32 &numDiffuseTypes)
 {
-    TempArena temp = ScratchStart(0, 0);
-    // clang-format off
-    string function =
-        PushStr8F(temp.arena, "struct Material%u {"
-                              "DiffuseBxDF GetBxDF(SurfaceInteractions &intr, Vec4lfn &filterWidths, SampledWavelengthsN &lambda) { "
-                              "SampledSpectrumN sampledSpectra = textureFuncs[%u](intr, ???, filterWidths, lambda);"
-                              "return DiffuseBxDF(sampledSpectra); } ", materialIndex, textureIndex);
-    // clang-format on
+    TempArena temp  = ScratchStart(0, 0);
+    string function = PushStr8F(temp.arena, "DIFFUSE_MATERIAL(%u, %S, %S)", numDiffuseTypes++,
+                                textureType, textureFunc);
     Put(builder, function);
     ScratchEnd(temp);
 };
+
+void CreateDielectricMaterial(StringBuilder *builder, string textureType) {}
 
 void CreateTextures()
 {
@@ -40,6 +38,8 @@ int main(int argc, char **argv)
     Tokenizer tokenizer;
     tokenizer.cursor = file.str;
     tokenizer.input  = file;
+
+    StringBuilder builder;
 
     // NOTE: Material, and then texture types
     // e.g. DiffuseMaterial$Const$Ptex#
