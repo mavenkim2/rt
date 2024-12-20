@@ -461,11 +461,12 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     // - render two instances of a quad mesh properly (i.e. test partial rebraiding)
     // - need to support a bvh with quad/triangle mesh instances (i.e. different instance
     // types)
+    // - render diffuse material properly
 
     // TODO:
     // - add area lights (making sure they cannot be intersected, but are sampled properly)
     // - verify all code paths in partial rebraiding (i.e. more instances)
-    // - render the diffuse/diffuse transmission materials properly
+    // - render the diffuse transmission materials properly
     // - load the scene description and properly instantiate lights/materials/textures
 
     // - render the scene with all quad meshes, then add support for the bspline curves

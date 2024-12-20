@@ -1331,7 +1331,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
               bool imported = false);
 void Serialize(Arena *arena, string directory, SceneLoadState *state);
 
-#if 0
 Scene *LoadPBRT(Arena *arena, string filename)
 {
 #define COMMA ,
@@ -1435,8 +1434,159 @@ Scene *LoadPBRT(Arena *arena, string filename)
     return scene;
 }
 
-void LoadScene(Arena **permArenas, Arena *arena, string baseDirectory, string filename,
-               ScenePrims *scene)
+struct StateMachine
+{
+    typedef void (*StateFunc)(SceneLoader *);
+    StateFunc *func;
+    u32 funcCount;
+};
+
+struct SceneLoader
+{
+    Arena **arenas;
+    Scene *baseScene;
+
+    // StateMachine stack[8];
+    u32 stackPtr;
+};
+
+// void ProcessState(SceneLoader *loader, Tokenizer *cursor)
+// {
+//     bool done = false;
+//     Assert(loader->stackPtr < ArrayLength(loader->stack));
+//     StateMachine stMch = loader->stack[stackPtr];
+//     while (!done)
+//     {
+//         stMch->func[cursor->cursor[0]](loader);
+//     }
+// }
+
+#define DefaultError                                                                          \
+    default:                                                                                  \
+    {                                                                                         \
+        Error(0, "Invalid default case reached\n");                                           \
+        exit(0);                                                                              \
+    }
+
+// what I'm thinking
+void LoadTexture(SceneLoader *loader)
+{
+    bool done = false;
+    while (!done)
+    {
+        switch (tokenizer.cursor[0])
+        {
+            // Constant
+            case 0:
+            {
+            }
+            break;
+            // Filename
+            case 1:
+            {
+            }
+            break;
+
+                DefaultError;
+        }
+    }
+
+    Something(
+        [&](SceneLoader *loader, Tokenizer *tokenizer) {
+            DiffuseMaterialBase *material = loader->baseScene->Get<Texture> PtexTexture
+        },
+        [&](SceneLoader *loader) {});
+}
+
+void LoadMaterial(SceneLoader *loader)
+{
+    func[0]   = ;
+    bool done = false;
+    while (!done)
+    {
+        switch (tokenizer.cursor[0])
+        {
+            case 0:
+            {
+            }
+            break;
+        }
+    }
+}
+
+template <typename Mesh>
+void LoadMesh(SceneLoader *loader, ScenePrimitives *scene, Tokenizer *tokenizer)
+{
+    Mesh *meshes = PushArray(arena, Mesh, numMeshes);
+    bool done    = false;
+
+    Mesh *mesh = &meshes[0];
+    while (!done)
+    {
+        switch (tokenizer->cursor[0])
+        {
+            case 'P':
+            {
+                tokenizer->cursor++;
+                u64 offset;
+                u32 numVertices;
+                GetPointerValue(tokenizer, &offset);
+                GetPointerValue(tokenizer, &numVertices);
+                mesh->p           = (Vec3f *)(data.str + offset);
+                mesh->numVertices = numVertices;
+            }
+            break;
+            case 'N':
+            {
+                tokenizer->cursor++;
+                u64 offset;
+                GetPointerValue(tokenizer, &offset);
+                mesh->n = (Vec3f *)(data.str + offset);
+            }
+            break;
+            case 'U':
+            {
+                tokenizer->cursor++;
+                u64 offset;
+                GetPointerValue(tokenizer, &offset);
+                mesh->uv = (Vec2f *)(data.str + offset);
+            }
+            break;
+            case 'I':
+            {
+                tokenizer->cursor++;
+                u64 offset;
+                u32 count;
+                GetPointerValue(tokenizer, &offset);
+                GetPointerValue(tokenizer, &count);
+                mesh->indices    = (u32 *)(data.str + offset);
+                mesh->numIndices = count;
+            }
+            break;
+            case 'X':
+            {
+                tokenizer->cursor++;
+                done = true;
+            }
+            break;
+            case '_':
+            {
+                tokenizer->cursor++;
+            }
+            break;
+            default:
+            {
+                Error(0, "Invalid token read while parsing Mesh. "
+                         "Exiting...\n");
+            }
+        }
+    }
+    BuildSettings settings;
+    BuildBVH<Mesh>(loader->arenas, settings, scene);
+}
+
+void LoadScene(SceneLoader *loader, Arena *arena, string baseDirectory, string filename,
+               ScenePrims *scene, bool top = false)
 {
     Tokenizer tokenizer;
     tokenizer.input  = OS_MapFileRead(filename);
@@ -1469,10 +1619,6 @@ void LoadScene(Arena **permArenas, Arena *arena, string baseDirectory, string fi
     };
     FileData fileData;
     Parser parser;
-    // Read metadata table
-    for (;;)
-    {
-    }
 
     // NOTE IMPORTANT: OFFSETS ARE FROM THE START OF THE PERMANENT DATA SECTION
     // Handle permanent data
@@ -1511,77 +1657,39 @@ void LoadScene(Arena **permArenas, Arena *arena, string baseDirectory, string fi
                 }
             }
             break;
+            case 'M':
+            {
+                if (Advance(&tokenizer, "Material"))
+                {
+                    // TODO: maybe materials should be allowed to be specified in multiple
+                    // files?
+                    if (!top)
+                    {
+                        Error(0, "Material specifications can only be present in the base "
+                                 "input file, not in any included files.\n");
+                        exit(0);
+                    }
+                    LoadMaterial(loader);
+                }
+            }
+            break;
+            case 'Q':
+            {
+                if (Advance(&tokenizer, "QuadMesh"))
+                {
+                    u32 numMeshes;
+                    GetPointerValue(&tokenizer, &numMeshes);
+                    LoadMesh(loader, scene, &tokenizer);
+                }
+            }
+            break;
             case 'T':
             {
                 if (Advance(&tokenizer, "TriangleMesh"))
                 {
                     u32 numMeshes;
                     GetPointerValue(&tokenizer, &numMeshes);
-                    TriangleMesh *meshes = PushArray(arena, TriangleMesh, numMeshes);
-                    bool done            = false;
-
-                    TriangleMesh *triMesh = &meshes[0];
-                    while (!done)
-                    {
-                        switch (tokenizer.cursor[0])
-                        {
-                            case 'P':
-                            {
-                                tokenizer.cursor++;
-                                u64 offset;
-                                u32 numVertices;
-                                GetPointerValue(&tokenizer, &offset);
-                                GetPointerValue(&tokenizer, &numVertices);
-                                triMesh->p           = (Vec3f *)(data.str + offset);
-                                triMesh->numVertices = numVertices;
-                            }
-                            break;
-                            case 'N':
-                            {
-                                tokenizer.cursor++;
-                                u64 offset;
-                                GetPointerValue(&tokenizer, &offset);
-                                triMesh->n = (Vec3f *)(data.str + offset);
-                            }
-                            break;
-                            case 'U':
-                            {
-                                tokenizer.cursor++;
-                                u64 offset;
-                                GetPointerValue(&tokenizer, &offset);
-                                triMesh->uv = (Vec2f *)(data.str + offset);
-                            }
-                            break;
-                            case 'I':
-                            {
-                                tokenizer.cursor++;
-                                u64 offset;
-                                u32 count;
-                                GetPointerValue(&tokenizer, &offset);
-                                GetPointerValue(&tokenizer, &count);
-                                triMesh->indices    = (u32 *)(data.str + offset);
-                                triMesh->numIndices = count;
-                            }
-                            break;
-                            case 'X':
-                            {
-                                tokenizer.cursor++;
-                                done = true;
-                            }
-                            break;
-                            case '_':
-                            {
-                                tokenizer.cursor++;
-                            }
-                            break;
-                            default:
-                            {
-                                Error(0, "Invalid token read while parsing Mesh. "
-                                         "Exiting...\n");
-                            }
-                        }
-                    }
-                    BuildTriangleBVH(arenas, scene);
+                    LoadMesh(loader, scene, &tokenizer);
                 }
                 else if (Advance(&tokenizer, "Transforms"))
                 {
@@ -1590,13 +1698,6 @@ void LoadScene(Arena **permArenas, Arena *arena, string baseDirectory, string fi
 
                     const AffineSpace *transforms = (const AffineSpace *)(data.str + offset);
                     scene->affineTransforms       = transforms;
-                }
-            }
-            break;
-            case 'Q':
-            {
-                if ("QuadMesh")
-                {
                 }
             }
             break;
@@ -2268,7 +2369,6 @@ void ConvertPBRT(string filename, string directory, SceneLoadState *state,
     }
     ScratchEnd(temp);
 }
-#endif
 
 struct LookupEntry
 {

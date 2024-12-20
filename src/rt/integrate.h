@@ -226,7 +226,7 @@ struct PtexTexture
                 out[1]     = rgbF.y;
                 out[2]     = rgbF.z;
             }
-            else 
+            else
             {
                 out[0] = Pow(out[0], 2.2f);
                 out[1] = Pow(out[1], 2.2f);
@@ -370,6 +370,19 @@ struct BumpMap
     BxDF GetBxDF(SurfaceInteraction &intr, Vec4lfn &filterWidths, SampledWavelengthsN &lambda);
 
 // NOTE: Rfl = Reflect, Trm = Transmit, Rgh = Roughness, IOR
+TextureFunc textureFuncs[]   = {};
+MaterialFunc materialFuncs[] = {};
+
+struct Material0
+{
+    static DiffuseBxDF GetBxDF(SurfaceInteractions &intr, Vec4lfn &filterWidths,
+                               SampledWavelengthsN &lambda)
+    {
+        SampledSpectrumN sampledSpectra = textureFuncs[0](intr, ???, filterWidths, lambda);
+        return DiffseBxDF(sampledSpectra);
+    }
+};
+
 template <typename RflShader>
 struct DiffuseMaterial
 {

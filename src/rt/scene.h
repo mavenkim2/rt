@@ -718,6 +718,27 @@ struct ScenePrimitives
     }
 };
 
+// deranged ideas
+// basis: instead of having a bunch of different material types with data, we have a single
+// material data struct that just contains a pointer to data, and the subroutines are what
+// interprets this data differently
+
+// problems: extra indirection (actually nevermind not even.... instead of storing material ids
+// shapes would store offsets into a constant buffer plus an index for the kernel (table of
+// functions). is this an unhinged idea?) and then the file itself could contain what kernels
+// each function represents
+//
+// how would I represent kernels that could call other kernels??? i feel like the fundamental
+// problem with a system like this though is the presence of function pointers. i think (?) if
+// i do some crazy jit compile though, i could create a table, and then JIT compile so that the
+// table is "known" at runtime.
+
+//
+struct Material
+{
+    u8 **data;
+};
+
 struct Scene
 {
     ScenePrimitives scene;
@@ -740,6 +761,8 @@ template <typename Mesh>
 void BuildBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
 void BuildQuadBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
 void BuildTriangleBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
+template <typename Mesh>
+void LoadMesh();
 
 template <typename PrimRefType, typename Mesh>
 void GenerateMeshRefs(Mesh *meshes, PrimRef *refs, u32 offset, u32 offsetMax, u32 start,
