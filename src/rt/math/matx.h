@@ -275,7 +275,7 @@ inline Mat4 Translate(const Vec3f &value)
     return m;
 }
 
-Vec4f Mul(Mat4 a, Vec4f b)
+Vec4f Mul(const Mat4 &a, const Vec4f &b)
 {
     Vec4f result;
 #ifdef __SSE2__
@@ -310,7 +310,8 @@ Vec4f Mul(Mat4 a, Vec4f b)
 Vec3f Mul(const Mat4 &a, const Vec3f &b)
 {
     Vec4f vec(b.x, b.y, b.z, 1);
-    return Mul(a, vec).xyz;
+    Vec4f result = Mul(a, vec);
+    return Vec3f(result.x, result.y, result.z) / result.w;
 }
 __forceinline Vec3f TransformP(const Mat4 &a, const Vec3f &b) { return Mul(a, b); }
 

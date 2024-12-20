@@ -661,6 +661,6 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
         printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
     }
     printf("total misc time: %fms \n", totalMiscTime);
-} // namespace rt
+}
 
 } // namespace rt

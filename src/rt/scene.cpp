@@ -1331,6 +1331,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
               bool imported = false);
 void Serialize(Arena *arena, string directory, SceneLoadState *state);
 
+#if 0
 Scene *LoadPBRT(Arena *arena, string filename)
 {
 #define COMMA ,
@@ -2267,6 +2268,7 @@ void ConvertPBRT(string filename, string directory, SceneLoadState *state,
     }
     ScratchEnd(temp);
 }
+#endif
 
 struct LookupEntry
 {
@@ -2377,6 +2379,7 @@ void SerializeMeshes(Vec3f *&dataPtr, u8 *mappedPtr, QuadMesh *mesh, QuadMesh *n
     }
 }
 
+#if 0
 void CreatePBRTScene(Arena *arena, string directory, SceneLoadState *state)
 {
     scene_            = PushStruct(arena, Scene);
@@ -3244,6 +3247,7 @@ void Serialize(Arena *arena, string directory, SceneLoadState *state)
 #endif
     ScratchEnd(temp);
 }
+#endif
 
 void BuildTLASBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
 {
