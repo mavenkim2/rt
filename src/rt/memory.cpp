@@ -112,7 +112,7 @@ void *ArenaPushNoZero(Arena *arena, u64 size)
         }
         else
         {
-            assert(!"Arena alloc failed");
+            Assert(!"Arena alloc failed");
         }
     }
     if (current->cmt < newPos)
@@ -123,7 +123,7 @@ void *ArenaPushNoZero(Arena *arena, u64 size)
             cmtAligned     = Min(cmtAligned, current->res);
             u64 cmtSize    = cmtAligned - current->cmt;
             b8 result      = OS_Commit((u8 *)current + current->cmt, cmtSize);
-            assert(result);
+            Assert(result);
             current->cmt = cmtAligned;
         }
         else
@@ -142,7 +142,7 @@ void *ArenaPushNoZero(Arena *arena, u64 size)
     }
     if (result == 0)
     {
-        assert(!"Allocation failed");
+        Assert(!"Allocation failed");
     }
     return result;
 }
@@ -163,10 +163,10 @@ void ArenaPopTo(Arena *arena, u64 pos)
         prev = current->prev;
         OS_Release(current);
     }
-    assert(current);
+    Assert(current);
     arena->current = current;
     u64 newPos     = pos - current->basePos;
-    assert(newPos <= current->pos);
+    Assert(newPos <= current->pos);
     current->pos = newPos;
 }
 
@@ -179,9 +179,9 @@ void ArenaPopToZero(Arena *arena, u64 pos)
         prev = current->prev;
         OS_Release(current);
     }
-    assert(current);
+    Assert(current);
     u64 newPos = pos - current->basePos;
-    assert(newPos <= current->pos);
+    Assert(newPos <= current->pos);
     current->pos = newPos;
 }
 

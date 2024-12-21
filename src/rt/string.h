@@ -9,6 +9,7 @@ struct string
 
     string() = default;
     string(const char *c);
+    string(u8 *str, u64 size) : str(str), size(size) {}
     b32 operator==(const string &a) const;
     b32 operator==(const string &a);
     b32 operator==(const char *text);

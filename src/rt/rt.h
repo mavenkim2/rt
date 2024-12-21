@@ -1,16 +1,6 @@
 #ifndef RT_H
 #define RT_H
 
-#define PI      3.14159265358979323846f
-#define TwoPi   6.28318530718f
-#define InvPi   0.31830988618379067154f
-#define Inv2Pi  0.15915494309189533577f
-#define Inv4Pi  0.07957747154594766788f
-#define PiOver2 1.57079632679489661923f
-#define PiOver4 0.78539816339744830961f
-#define Sqrt2   1.41421356237309504880f
-#define U32Max  0xffffffff
-
 #include "base.h"
 #include "template.h"
 #include "math/basemath.h"
