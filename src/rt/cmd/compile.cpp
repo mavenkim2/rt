@@ -1,38 +1,84 @@
+#include "../memory.h"
 #include "../string.h"
+#include "../memory.cpp"
 #include "../string.cpp"
 
-namespace rt
+namespace detail
 {
-void CreateDiffuseMaterial(StringBuilder *builder, string textureType, string textureFunc,
-                           u32 &numDiffuseTypes)
+using namespace rt;
+
+struct HashNode
 {
-    TempArena temp  = ScratchStart(0, 0);
-    string function = PushStr8F(temp.arena, "DIFFUSE_MATERIAL(%u, %S, %S)", numDiffuseTypes++,
-                                textureType, textureFunc);
-    Put(builder, function);
+    string str;
+    u32 id;
+    HashNode *next;
+};
+
+struct SceneLoadState
+{
+    HashNode *map;
+    u32 materialID;
+};
+
+void CheckNewMaterial(SceneLoadState *state, Arena *arena, StringBuilder *builder,
+                      string materialType, string *args, u32 count)
+{
+    TempArena temp = ScratchStart(&arena, 1);
+    i32 hash       = HashFromString(fullMaterialType);
+    HashNode *node = &map[hash];
+    HashNode *prev = 0;
+    while (node)
+    {
+        if (node->str == fullMaterialType) break;
+        prev = node;
+        node = node->next;
+    }
+    if (!node)
+    {
+        prev->next = PushStruct(arena, HashNode);
+        prev->str  = str;
+        u32 matID  = state->materialID++;
+        prev->id   = matID;
+
+        string build = PushStr8F(temp.arena, "%S(%u", materialType, matID);
+        for (u32 i = 0; i < count; i++)
+        {
+            build = PushStr8F(temp.arena, build, ", %S");
+        }
+        build = StrConcat(temp.arena, build, ")");
+        Put(builder, build);
+    }
+}
+
+void ParseTexture(SceneLoadState *state, Arena *arena, StringBuilder *builder,
+                  Tokenizer *tokenizer, string materialType)
+{
+    while (tokenizer->cursor[0] != '_')
+    {
+        if (Advance(tokenizer, "Const$"))
+        {
+            string strType = StrConcat(arena, materialType, "Const");
+            HashNode *node = GetHashNode(strType);
+        }
+        else if (Advance(tokenizer, "Ptex$"))
+        {
+        }
+    }
+}
+void CreateDiffuseMaterial(Arena *arena, StringBuilder *builder, Tokenizer *tokenizer)
+{
+    TempArena temp = ScratchStart(0, 0);
+    ParseTexture(arena, builder, tokenizer, "DIFFUSE_MATERIAL");
     ScratchEnd(temp);
 };
 
 void CreateDielectricMaterial(StringBuilder *builder, string textureType) {}
 
-void CreateTextures()
-{
-    while (tokenizer.cursor[0] != '#')
-    {
-        if (Advance(&tokenizer, "Const$"))
-        {
-        }
-        else if (Advance(&tokenizer, "Ptex$"))
-        {
-        }
-    }
-}
+} // namespace detail
 
-} // namespace rt
-
-using namespace rt;
 int main(int argc, char **argv)
 {
+    TempArena temp  = ScratchStart(0, 0);
     string filename = Str8C(argv[0]);
     string file     = OS_MapFileRead(filename);
     Tokenizer tokenizer;
@@ -40,26 +86,19 @@ int main(int argc, char **argv)
     tokenizer.input  = file;
 
     StringBuilder builder;
+    HashNode *map  = PushArray(temp.arena, HashNode, 1024);
+    u32 materialID = 0;
 
     // NOTE: Material, and then texture types
     // e.g. DiffuseMaterial$Const$Ptex#
-    while (tokenizer.cursor[0] != '_')
+    Tokenizer tempTokenizer;
+    tempTokenizer.cursor = tokenizer.cursor;
+    tempTokenizer.input  = file.str;
+    while (tempTokenizer.cursor[0]++ != '_');
+    string str(tokenizer.cursor, u64(tokenizer.cursor - tokenizer.cursor));
+    u32 matID = node->id;
+    if (Advance("DiffuseMaterial$"))
     {
-        if (Advance(&tokenizer, "DiffuseMaterial$"))
-        {
-            CreateTextures();
-        }
-        else if (Advance(&toknizer, "DielectricMaterial"))
-        {
-            CreateTextures();
-        }
-        else if (Advance(&toknizer, "DiffuseTransmission"))
-        {
-            CreateTextures();
-        }
-        else if (Advance(&toknizer, "CoatedDiffuse"))
-        {
-            CreateTextures();
-        }
+        CreateDiffuseMaterial(builder, tokenizer);
     }
 }
