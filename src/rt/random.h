@@ -29,22 +29,6 @@ inline Vec3f RandomUnitVector()
 }
 #endif
 
-inline Vec3f RandomUnitVector(Vec2f u) { return Normalize(SampleUniformSphere(u)); }
-
-inline Vec3f RandomUnitVector()
-{
-    Vec2f u = Vec2f(RandomFloat(), RandomFloat());
-    return RandomUnitVector(u);
-}
-
-inline Vec3f RandomOnHemisphere(const Vec3f &normal)
-{
-    // NOTE: why can't you just normalize a vector that has a length > 1?
-    Vec3f result = RandomUnitVector();
-    result       = Dot(normal, result) > 0 ? result : -result;
-    return result;
-}
-
 #if 0
 inline Vec3f RandomInUnitDisk()
 {
@@ -58,11 +42,6 @@ inline Vec3f RandomInUnitDisk()
     }
 }
 #endif
-inline Vec3f RandomInUnitDisk()
-{
-    Vec2f u = Vec2f(RandomFloat(), RandomFloat());
-    return Vec3f(SampleUniformDiskConcentric(u), 0.f);
-}
 
 inline Vec3f RandomCosineDirection()
 {
@@ -185,7 +164,7 @@ inline void RNG::Advance(i64 iDelta)
 
 inline i64 RNG::operator-(const RNG &other) const
 {
-    assert(inc == other.inc);
+    Assert(inc == other.inc);
     u64 curMult = PCG32_MULT, curPlus = inc, curState = other.state;
     u64 theBit = 1u, distance = 0u;
     while (state != curState)
@@ -195,7 +174,7 @@ inline i64 RNG::operator-(const RNG &other) const
             curState = curState * curMult + curPlus;
             distance |= theBit;
         }
-        assert((state & theBit) == (curState & theBit));
+        Assert((state & theBit) == (curState & theBit));
         theBit <<= 1;
         curPlus = (curMult + 1ULL) * curPlus;
         curMult *= curMult;

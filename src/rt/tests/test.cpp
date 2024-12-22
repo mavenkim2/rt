@@ -558,21 +558,22 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
     //     }
     // }
 
-    PtexShader<3> rfl(PtexTexture<3>(
-        "../data/island/textures/isIronwoodA1/Color/trunk0001_geo.ptx", ColorEncoding::Gamma));
-    CoatedDiffuseMaterial1 mat(CoatedDiffuseMaterialPtex(ConstantTexture<1>(.65), rfl,
-                                                         ConstantTexture<1>(0),
-                                                         ConstantSpectrum(1.5f)),
-                               NullShader());
+    PtexTexture rfl("../data/island/textures/isIronwoodA1/Color/trunk0001_geo.ptx",
+                    ColorEncoding::Gamma);
+    CoatedDiffuseMaterial1 mat(
+        CoatedDiffuseMaterialPtex(ConstantTexture(.65), rfl,
+                                  ConstantSpectrumTexture(SampledSpectrum(0.f)),
+                                  ConstantSpectrum(1.5f)),
+        NullShader());
     scene->materials.Set<CoatedDiffuseMaterial1>(&mat, 1);
 
-    ConstantTexture<1> ct(0.f);
+    ConstantTexture ct(0.f);
     ConstantSpectrum spec(1.1f);
     DielectricMaterialBase dielMat(DielectricMaterialConstant(ct, spec), NullShader());
     scene->materials.Set<DielectricMaterialBase>(&dielMat, 1);
 
-    PtexShader<3> mountTex(PtexTexture<3>(
-        "../data/island/textures/isMountainA/Color/mountain_geo.ptx", ColorEncoding::Gamma));
+    PtexTexture mountTex("../data/island/textures/isMountainA/Color/mountain_geo.ptx",
+                         ColorEncoding::Gamma);
     DiffuseMaterialBase mountDiff((DiffuseMaterialPtex(mountTex)), NullShader());
     scene->materials.Set<DiffuseMaterialBase>(&mountDiff, 1);
 

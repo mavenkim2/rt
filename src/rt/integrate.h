@@ -123,18 +123,16 @@ enum class ColorEncoding
     SRGB,
 };
 
-template <i32 nc>
 struct ConstantTexture
 {
-    using T = std::conditional_t<nc == 3, Vec3f, f32>;
-    T c;
+    f32 c;
 
     ConstantTexture() {}
-    ConstantTexture(const T &t) : c(t) {}
-    static Veclfn<nc> Evaluate(SurfaceInteractionsN &, ConstantTexture **textures, Vec4lfn &,
-                               SampledWavelengthsN &)
+    ConstantTexture(const f32 &t) : c(t) {}
+    static LaneNF32 EvaluateFloat(SurfaceInteractionsN &, ConstantTexture **textures,
+                                  Vec4lfn &, SampledWavelengthsN &)
     {
-        Veclfn<nc> result;
+        LaneNF32 result;
         for (u32 i = 0; i < IntN; i++)
         {
             Set(result, i) = textures[i]->c;
@@ -143,11 +141,30 @@ struct ConstantTexture
     }
 };
 
-template <i32 nc>
+struct ConstantSpectrumTexture
+{
+    SampledSpectrum c;
+    ConstantSpectrumTexture() {}
+    ConstantSpectrumTexture(const SampledSpectrumN &t) : c(t) {}
+    static SampledSpectrumN EvaluateAlbedo(SurfaceInteractionsN &,
+                                           ConstantSpectrumTexture **textures, Vec4lfn &,
+                                           SampledWavelengthsN &)
+    {
+        SampledSpectrumN result;
+        for (u32 i = 0; i < IntN; i++)
+        {
+            ConstantSpectrumTexture *tex = textures[i];
+            for (u32 j = 0; j < NSampledWavelengths; j++)
+            {
+                Set(result.values[j], i) = tex->c.values[j];
+            }
+        }
+        return result;
+    }
+};
+
 struct PtexTexture
 {
-    using Vec                    = std::conditional_t<nc == 3, Vec3f, f32>;
-    static const u32 numChannels = nc;
     string filename;
     ColorEncoding encoding;
     f32 scale;
@@ -157,89 +174,110 @@ struct PtexTexture
     {
     }
 
-    Vec Evaluate(SurfaceInteractionsN &intrs, const Vec4lfn &filterWidths, u32 index,
-                 Vec *dfduOut = 0, Vec *dfdvOut = 0) const
+    template <i32 nc>
+    static void EvaluateBase(SurfaceInteractionsN &intrs, PtexTexture **textures,
+                             const Vec4lfn &filterWidths, f32 results[nc * IntN])
     {
-        Vec4f filterWidth = Get(filterWidths, index);
-        Vec2f uv          = Get(intrs.uv, index);
-        u32 faceIndex     = Get(intrs.faceIndices, index);
-
-        Assert(cache);
-        Ptex::String error;
-        Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
-        Assert(texture);
-        u32 numFaces = texture->getInfo().numFaces;
-        Assert(faceIndex < numFaces);
-        Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
-        Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
-        Assert(nc == texture->numChannels());
-
-        // TODO: ray differentials
-        // Vec2f uv(0.5f, 0.5f);
-
-        f32 out[nc];
-        filter->eval(out, 0, nc, faceIndex, uv[0], uv[1], filterWidth[0], filterWidth[1],
-                     filterWidth[2], filterWidth[3]);
-
-        if (dfduOut && dfdvOut)
+        for (u32 index = 0; index < IntN; index++)
         {
-            // Finite differencing
-            f32 du = .5f * (Abs(filterWidth[0]) + Abs(filterWidth[2]));
-            du     = Select(du == 0.f, 0.0005f, du);
-            f32 dv = .5f * (Abs(filterWidth[1]) + Abs(filterWidth[3]));
-            dv     = Select(dv == 0.f, 0.0005f, dv);
+            Vec4f filterWidth = Get(filterWidths, index);
+            Vec2f uv          = Get(intrs.uv, index);
+            u32 faceIndex     = Get(intrs.faceIndices, index);
 
-            f32 *dfdu;
-            f32 *dfdv;
-            if constexpr (nc == 1)
-            {
-                dfdu = dfduOut;
-                dfdv = dfdvOut;
-            }
+            PtexTexture *tex = textures[index];
+            Assert(cache);
+            Ptex::String error;
+            Ptex::PtexTexture *texture = cache->get((char *)tex->filename.str, error);
+            Assert(texture);
+            u32 numFaces = texture->getInfo().numFaces;
+            Assert(faceIndex < numFaces);
+            Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
+            Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
+            Assert(texture->numChannels() == nc);
+
+            // TODO: ray differentials
+            // Vec2f uv(0.5f, 0.5f);
+
+            f32 out[nc];
+            filter->eval(out, 0, nc, faceIndex, uv[0], uv[1], filterWidth[0], filterWidth[1],
+                         filterWidth[2], filterWidth[3]);
+
+            // if (dfduOut && dfdvOut)
+            // {
+            //     // Finite differencing
+            //     f32 du = .5f * (Abs(filterWidth[0]) + Abs(filterWidth[2]));
+            //     du     = Select(du == 0.f, 0.0005f, du);
+            //     f32 dv = .5f * (Abs(filterWidth[1]) + Abs(filterWidth[3]));
+            //     dv     = Select(dv == 0.f, 0.0005f, dv);
+            //
+            //     f32 *dfdu;
+            //     f32 *dfdv;
+            //     if constexpr (nc == 1)
+            //     {
+            //         dfdu = dfduOut;
+            //         dfdv = dfdvOut;
+            //     }
+            //     else
+            //     {
+            //         dfdu = dfduOut->e;
+            //         dfdv = dfdvOut->e;
+            //     }
+            //     filter->eval(dfdu, 0, nc, faceIndex, uv[0] + du, uv[1], filterWidth[0],
+            //                  filterWidth[1], filterWidth[2], filterWidth[3]);
+            //     filter->eval(dfdv, 0, nc, faceIndex, uv[0], uv[1] + dv, filterWidth[0],
+            //                  filterWidth[1], filterWidth[2], filterWidth[3]);
+            // }
+
+            texture->release();
+            filter->release();
+
+            // Convert to srgb
+            if constexpr (nc == 1) results[index] = out[0];
             else
             {
-                dfdu = dfduOut->e;
-                dfdv = dfdvOut->e;
-            }
-            filter->eval(dfdu, 0, nc, faceIndex, uv[0] + du, uv[1], filterWidth[0],
-                         filterWidth[1], filterWidth[2], filterWidth[3]);
-            filter->eval(dfdv, 0, nc, faceIndex, uv[0], uv[1] + dv, filterWidth[0],
-                         filterWidth[1], filterWidth[2], filterWidth[3]);
-        }
-
-        texture->release();
-        filter->release();
-
-        // Convert to srgb
-        if constexpr (numChannels == 1) return out[0];
-        else
-        {
-            if (encoding == ColorEncoding::SRGB)
-            {
-                u8 rgb[3];
+                if (tex->encoding == ColorEncoding::SRGB)
+                {
+                    u8 rgb[3];
+                    for (i32 i = 0; i < nc; i++)
+                    {
+                        rgb[i] = u8(Clamp(out[i] * 255.f + 0.5f, 0.f, 255.f));
+                    }
+                    Vec3f rgbF = SRGBToLinear(rgb);
+                    out[0]     = rgbF.x;
+                    out[1]     = rgbF.y;
+                    out[2]     = rgbF.z;
+                }
+                else
+                {
+                    out[0] = Pow(out[0], 2.2f);
+                    out[1] = Pow(out[1], 2.2f);
+                    out[2] = Pow(out[2], 2.2f);
+                }
                 for (i32 i = 0; i < nc; i++)
                 {
-                    rgb[i] = u8(Clamp(out[i] * 255.f + 0.5f, 0.f, 255.f));
+                    out[i] *= tex->scale;
                 }
-                Vec3f rgbF = SRGBToLinear(rgb);
-                out[0]     = rgbF.x;
-                out[1]     = rgbF.y;
-                out[2]     = rgbF.z;
-            }
-            else
-            {
-                out[0] = Pow(out[0], 2.2f);
-                out[1] = Pow(out[1], 2.2f);
-                out[2] = Pow(out[2], 2.2f);
-            }
-            for (i32 i = 0; i < nc; i++)
-            {
-                out[i] *= scale;
-            }
 
-            Assert(numChannels == 3);
-            return Vec3f(out[0], out[1], out[2]);
+                results[index * 3]     = out[0];
+                results[index * 3 + 1] = out[1];
+                results[index * 3 + 2] = out[2];
+            }
         }
+    }
+    static LaneNF32 EvaluateFloat(SurfaceInteractionsN &intrs, PtexTexture **textures,
+                                  const Vec4lfn &filterWidths)
+    {
+        LaneNF32 result;
+        EvaluateBase<1>(intrs, textures, filterWidths, &result);
+        return result;
+    }
+    static SampledSpectrumN EvaluateAlbedo(SurfaceInteractionsN &intrs, PtexTexture **textures,
+                                           const Vec4lfn &filterWidths,
+                                           SampledWavelengthsN &lambda)
+    {
+        Vec3f results[IntN];
+        EvaluateBase<3>(intrs, textures, filterWidths, results[0].e);
+        return RGBAlbedoSpectrum::Sample(*RGBColorSpace::sRGB, results, lambda);
     }
 };
 
@@ -264,6 +302,7 @@ struct NormalMap
     }
 };
 
+#if 0
 template <typename TextureType, typename RGBSpectrum>
 struct ImageTextureShader
 {
@@ -330,6 +369,7 @@ struct ImageTextureShader
         }
     }
 };
+#endif
 
 template <typename TextureShader>
 struct BumpMap
@@ -368,10 +408,6 @@ struct BumpMap
     static BxDF GetBxDF(SurfaceInteractionsN &intr, materialName **materials,                 \
                         Vec4lfn &filterWidths, SampledWavelengthsN &lambda);                  \
     BxDF GetBxDF(SurfaceInteraction &intr, Vec4lfn &filterWidths, SampledWavelengthsN &lambda);
-
-// NOTE: Rfl = Reflect, Trm = Transmit, Rgh = Roughness, IOR
-TextureFunc textureFuncs[]   = {};
-MaterialFunc materialFuncs[] = {};
 
 template <typename RflShader>
 struct DiffuseMaterial

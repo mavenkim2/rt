@@ -52,12 +52,9 @@ template <i32 K>
 using Veclfn = typename VecBase<K>::Type;
 
 struct NullShader;
-template <i32 nc>
 struct ConstantTexture;
-template <i32 nc>
+struct ConstantSpectrumTexture;
 struct PtexTexture;
-template <typename TextureType, typename RGBSpectrum>
-struct ImageTextureShader;
 template <typename TextureShader>
 struct BumpMap;
 template <typename RflShader>
@@ -70,16 +67,12 @@ template <typename RghShader, typename RflShader, typename AlbedoShader, typenam
 struct CoatedDiffuseMaterial;
 
 // TODO: automate this :)
-template <i32 K>
-using PtexShader = ImageTextureShader<PtexTexture<K>, RGBAlbedoSpectrum>;
-
-using BumpMapPtex         = BumpMap<PtexShader<1>>;
-using DiffuseMaterialPtex = DiffuseMaterial<PtexShader<3>>;
-using DiffuseTransmissionMaterialPtex =
-    DiffuseTransmissionMaterial<PtexShader<3>, PtexShader<3>>;
+using BumpMapPtex                     = BumpMap<PtexTexture>;
+using DiffuseMaterialPtex             = DiffuseMaterial<PtexTexture>;
+using DiffuseTransmissionMaterialPtex = DiffuseTransmissionMaterial<PtexTexture, PtexTexture>;
 
 // NOTE: isotropic roughness, constant ior
-using DielectricMaterialConstant = DielectricMaterial<ConstantTexture<1>, ConstantSpectrum>;
+using DielectricMaterialConstant = DielectricMaterial<ConstantTexture, ConstantSpectrum>;
 
 // Material types
 using DiffuseMaterialBumpMapPtex = Material2<DiffuseMaterialPtex, BumpMapPtex>;
@@ -88,8 +81,9 @@ using DiffuseTransmissionMaterialBumpMapPtex =
     Material2<DiffuseTransmissionMaterialPtex, BumpMapPtex>;
 using DielectricMaterialBumpMapPtex = Material2<DielectricMaterialConstant, BumpMapPtex>;
 
-using CoatedDiffuseMaterialPtex = CoatedDiffuseMaterial<ConstantTexture<1>, PtexShader<3>,
-                                                        ConstantTexture<1>, ConstantSpectrum>;
+using CoatedDiffuseMaterialPtex =
+    CoatedDiffuseMaterial<ConstantTexture, PtexTexture, ConstantSpectrumTexture,
+                          ConstantSpectrum>;
 
 using CoatedDiffuseMaterial1 = Material2<CoatedDiffuseMaterialPtex, NullShader>;
 using DielectricMaterialBase = Material2<DielectricMaterialConstant, NullShader>;

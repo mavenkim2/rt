@@ -26,7 +26,7 @@ inline f32 InnerProduct(Spectrum f, Spectrum g)
     return integral;
 }
 
-f32 SpectrumToPhotometric(const RGBIlluminantSpectrum& s)
+f32 SpectrumToPhotometric(const RGBIlluminantSpectrum &s)
 {
     return InnerProduct(&Spectra::Y(), s.illuminant);
 }

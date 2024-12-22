@@ -169,6 +169,9 @@ using namespace rt;
 // - parses the other sections
 int main(int argc, char **argv)
 {
+    InitThreadContext(arena, "[Main Thread]", 1);
+    OS_Init();
+
     TempArena temp  = ScratchStart(0, 0);
     string filename = Str8C(argv[0]);
     // TODO: get current working directory and append
@@ -218,8 +221,8 @@ int main(int argc, char **argv)
 
         if (Advance(&tokenizer, "MATERIALS_START"))
         {
-            StringBuilder builder;
-            builder.arena = temp.arena;
+            StringBuilder builder = {};
+            builder.arena         = temp.arena;
             ProcessMetaMaterials(&builder, temp.arena, &tokenizer, offsets.infoOffset);
             WriteEntireFile(&builder, "../src/gen/shaders.cpp");
         }

@@ -56,7 +56,8 @@ DiffuseMaterial<RflShader>::GetBxDF(SurfaceInteractionsN &intr, DiffuseMaterial 
     {
         shaders[i] = &materials[i]->rflShader;
     }
-    SampledSpectrumN sampledSpectra = RflShader::Evaluate(intr, shaders, filterWidths, lambda);
+    SampledSpectrum sampledSpectra =
+        RflShader::EvaluateAlbedo(intr, shaders, filterWidths, lambda);
     return DiffuseBxDF(sampledSpectra);
 }
 
@@ -80,8 +81,8 @@ DiffuseTransmissionBxDF DiffuseTransmissionMaterial<RflShader, TrmShader>::GetBx
         rflShaders[i] = &materials[i]->rflShader;
         trmShaders[i] = &materials[i]->trmShaders;
     }
-    SampledSpectrumN r = RflShader::Evaluate(intr, rflShaders, filterWidths, lambda);
-    SampledSpectrumN t = TrmShader::Evaluate(intr, trmShaders, filterWidths, lambda);
+    SampledSpectrumN r = RflShader::EvaluateAlbedo(intr, rflShaders, filterWidths, lambda);
+    SampledSpectrumN t = TrmShader::EvaluateAlbedo(intr, trmShaders, filterWidths, lambda);
     return DiffuseTransmissionBxDF(r, t);
 }
 
@@ -112,7 +113,7 @@ DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(
     }
 
     // TODO: anisotropic roughness
-    LaneNF32 roughness = RghShader::Evaluate(intr, rghShaders, filterWidths, lambda);
+    LaneNF32 roughness = RghShader::EvaluateFloat(intr, rghShaders, filterWidths, lambda);
     roughness          = TrowbridgeReitzDistribution::RoughnessToAlpha(roughness);
     TrowbridgeReitzDistribution distrib(roughness, roughness);
     return DielectricBxDF(eta, distrib);
@@ -158,11 +159,12 @@ CoatedDiffuseBxDF CoatedDiffuseMaterial<RghShader, RflShader, AlbedoShader, Spec
         lambda.TerminateSecondary();
     }
 
-    SampledSpectrumN reflectance = RflShader::Evaluate(intr, rflShaders, filterWidths, lambda);
-    SampledSpectrumN a           = SampledSpectrumN(
-        Clamp(AlbedoShader::Evaluate(intr, albShaders, filterWidths, lambda), 0.f, 1.f));
+    SampledSpectrumN reflectance =
+        RflShader::EvaluateAlbedo(intr, rflShaders, filterWidths, lambda);
+    SampledSpectrumN a = SampledSpectrumN(
+        Clamp(AlbedoShader::EvaluateAlbedo(intr, albShaders, filterWidths, lambda), 0.f, 1.f));
 
-    LaneNF32 roughness = RghShader::Evaluate(intr, rghShaders, filterWidths, lambda);
+    LaneNF32 roughness = RghShader::EvaluateFloat(intr, rghShaders, filterWidths, lambda);
     roughness          = TrowbridgeReitzDistribution::RoughnessToAlpha(roughness);
     TrowbridgeReitzDistribution distrib(roughness, roughness);
 

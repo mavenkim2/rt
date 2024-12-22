@@ -12,8 +12,8 @@
 
 #include "hash.h"
 #include "color.h"
-#include "sampling.h"
 #include "random.h"
+#include "sampling.h"
 #include "bvh/parallel.h"
 #include "base_types.h"
 #include "bvh/bvh_types.h"

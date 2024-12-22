@@ -90,6 +90,28 @@ inline T CosineHemispherePDF(T cosTheta)
     return cosTheta * InvPi;
 }
 
+inline Vec3f RandomUnitVector(Vec2f u) { return Normalize(SampleUniformSphere(u)); }
+
+inline Vec3f RandomUnitVector()
+{
+    Vec2f u = Vec2f(RandomFloat(), RandomFloat());
+    return RandomUnitVector(u);
+}
+
+inline Vec3f RandomOnHemisphere(const Vec3f &normal)
+{
+    // NOTE: why can't you just normalize a vector that has a length > 1?
+    Vec3f result = RandomUnitVector();
+    result       = Dot(normal, result) > 0 ? result : -result;
+    return result;
+}
+
+inline Vec3f RandomInUnitDisk()
+{
+    Vec2f u = Vec2f(RandomFloat(), RandomFloat());
+    return Vec3f(SampleUniformDiskConcentric(u), 0.f);
+}
+
 // inline Vec2f InvertCosineHemisphereSample(Vec3f w)
 // {
 // return InvertUniformDisk

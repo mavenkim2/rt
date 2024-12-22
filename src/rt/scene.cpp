@@ -824,6 +824,7 @@ string InternedStringCache<numNodes, chunkSize, numStripes>::Get(StringId id)
 
 //////////////////////////////
 
+#if 0
 template <i32 numNodes, i32 chunkSize, i32 numStripes>
 struct StringCache
 {
@@ -890,6 +891,7 @@ const string *StringCache<numNodes, chunkSize, numStripes>::GetOrCreate(Arena *a
 
     return out;
 }
+#endif
 
 template <typename T, i32 numPerChunk, i32 memoryTag = 0>
 struct ChunkedLinkedList
@@ -1329,7 +1331,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
 void LoadPBRT(string filename, string directory, SceneLoadState *state,
               GraphicsState graphicsState = {}, bool inWorldBegin = false,
               bool imported = false);
-void Serialize(Arena *arena, string directory, SceneLoadState *state);
+// void Serialize(Arena *arena, string directory, SceneLoadState *state);
 
 Scene *LoadPBRT(Arena *arena, string filename)
 {
@@ -1365,7 +1367,6 @@ Scene *LoadPBRT(Arena *arena, string filename)
     state.transforms = PushArray(
         arena, ChunkedLinkedList<const AffineSpace * COMMA 16384 COMMA MemoryType_Transform>,
         numProcessors);
-    state.permArenas = PushArray(arena, Arena *, numProcessors);
     state.tempArenas = PushArray(arena, Arena *, numProcessors);
 #undef COMMA
 
@@ -1425,7 +1426,7 @@ Scene *LoadPBRT(Arena *arena, string filename)
     printf("Total num instances: %lld\n", totalNumInstances);
     printf("Total num transforms: %lld\n", totalNumTransforms);
 
-    Serialize(arena, baseDirectory, &state);
+    // Serialize(arena, baseDirectory, &state);
 
     for (u32 i = 0; i < numProcessors; i++)
     {
@@ -1434,33 +1435,6 @@ Scene *LoadPBRT(Arena *arena, string filename)
     return scene;
 }
 
-struct StateMachine
-{
-    typedef void (*StateFunc)(SceneLoader *);
-    StateFunc *func;
-    u32 funcCount;
-};
-
-struct SceneLoader
-{
-    Arena **arenas;
-    Scene *baseScene;
-
-    // StateMachine stack[8];
-    u32 stackPtr;
-};
-
-// void ProcessState(SceneLoader *loader, Tokenizer *cursor)
-// {
-//     bool done = false;
-//     Assert(loader->stackPtr < ArrayLength(loader->stack));
-//     StateMachine stMch = loader->stack[stackPtr];
-//     while (!done)
-//     {
-//         stMch->func[cursor->cursor[0]](loader);
-//     }
-// }
-
 #define DefaultError                                                                          \
     default:                                                                                  \
     {                                                                                         \
@@ -1468,52 +1442,7 @@ struct SceneLoader
         exit(0);                                                                              \
     }
 
-// what I'm thinking
-void LoadTexture(SceneLoader *loader)
-{
-    bool done = false;
-    while (!done)
-    {
-        switch (tokenizer.cursor[0])
-        {
-            // Constant
-            case 0:
-            {
-            }
-            break;
-            // Filename
-            case 1:
-            {
-            }
-            break;
-
-                DefaultError;
-        }
-    }
-
-    Something(
-        [&](SceneLoader *loader, Tokenizer *tokenizer) {
-            DiffuseMaterialBase *material = loader->baseScene->Get<Texture> PtexTexture
-        },
-        [&](SceneLoader *loader) {});
-}
-
-void LoadMaterial(SceneLoader *loader)
-{
-    func[0]   = ;
-    bool done = false;
-    while (!done)
-    {
-        switch (tokenizer.cursor[0])
-        {
-            case 0:
-            {
-            }
-            break;
-        }
-    }
-}
-
+#if 0
 template <typename Mesh>
 void LoadMesh(SceneLoader *loader, ScenePrimitives *scene, Tokenizer *tokenizer)
 {
@@ -1704,14 +1633,14 @@ void LoadScene(SceneLoader *loader, Arena *arena, string baseDirectory, string f
         }
     }
 }
+#endif
 
-void ConvertPBRT(string filename, string directory, SceneLoadState *state,
-                 GraphicsState graphicsState, bool inWorldBegin, bool imported)
+void LoadPBRT(string filename, string directory, SceneLoadState *state,
+              GraphicsState graphicsState, bool inWorldBegin, bool imported)
 {
     TempArena temp   = ScratchStart(0, 0);
     u32 threadIndex  = GetThreadIndex();
     Arena *tempArena = state->tempArenas[threadIndex];
-    Arena *permArena = state->permArenas[threadIndex];
 
     Tokenizer tokenizer;
     tokenizer.input  = OS_MapFileRead(filename);
@@ -2149,24 +2078,7 @@ void ConvertPBRT(string filename, string directory, SceneLoadState *state,
                     packet = &shapes.AddBack();
                 }
 
-                ReadWord(tokenizer);
-                string type;
-                b32 result = GetBetweenPair(type, tokenizer, '"');
-                Assert(result);
-                packet->type = stringCache->GetOrCreate(arena, type);
-                if (IsEndOfLine(tokenizer))
-                {
-                    SkipToNextLine(tokenizer);
-                }
-                else
-                {
-                    SkipToNextChar(tokenizer);
-                }
-                ReadParameters(arena, packet, tokenizer, stringCache, memoryType,
-                               additionalParameters);
-                // CreateScenePacket(arena, word, packet, &tokenizer,
-                // &stringCache,
-                //                   MemoryType_Shape, 1);
+                ReadWord(&tokenizer);
 
                 u32 numVertices = 0;
                 u32 numIndices  = 0;
@@ -2315,7 +2227,8 @@ void ConvertPBRT(string filename, string directory, SceneLoadState *state,
                 {
                     SkipToNextChar(&tokenizer);
                 }
-                ReadParameters(arena, packet, &tokenizer, &stringCache, MemoryType_Texture);
+                ReadParameters(tempArena, packet, &tokenizer, &stringCache,
+                               MemoryType_Texture);
             }
             break;
             case "WorldBegin"_sid:

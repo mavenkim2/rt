@@ -240,7 +240,7 @@ typedef SampledSpectrumBase<f32> SampledSpectrum;
 typedef SampledSpectrumBase<LaneNF32> SampledSpectrumN;
 
 template <typename T>
-SampledSpectrumBase<T> Clamp(const SampledSpectrumBase<T> &s, T &u, T &v)
+SampledSpectrumBase<T> Clamp(const SampledSpectrumBase<T> &s, const T &u, const T &v)
 {
     SampledSpectrumBase<T> result;
     for (u32 i = 0; i < NSampledWavelengths; i++)
@@ -541,13 +541,15 @@ struct RGBAlbedoSpectrum
         }
         return s;
     }
-    static SampledSpectrumN Sample(const RGBColorSpace &cs, const Vec3lfn &rgb,
+    // TODO: consider using gathers
+    static SampledSpectrumN Sample(const RGBColorSpace &cs, const Vec3f rgb[IntN],
                                    const SampledWavelengthsN &lambda)
     {
         Vec3lfn coeffs;
+        // TODO: test speed of gathers
         for (u32 i = 0; i < IntN; i++)
         {
-            Set(coeffs, i) = cs.ToRGBCoeffs(Get(rgb, i));
+            Set(coeffs, i) = cs.ToRGBCoeffs(rgb[i]);
         }
         SampledSpectrumN s;
         for (i32 i = 0; i < NSampledWavelengths; i++)
