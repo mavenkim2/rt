@@ -610,7 +610,7 @@ struct AffineSpace
         AffineSpace result;
 
         Vec3f f = Normalize(eye - center);
-        Vec3f s = Normalize(Cross(up, f));
+        Vec3f s = Normalize(Cross(Normalize(up), f));
         Vec3f u = Cross(f, s);
 
         result.e[0][0] = s.x;

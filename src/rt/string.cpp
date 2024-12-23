@@ -540,22 +540,6 @@ inline void SkipToNextChar(Tokenizer *tokenizer)
     while (!EndOfBuffer(tokenizer) && IsBlank(tokenizer)) tokenizer->cursor++;
 }
 
-string ReadWordAndSkipToNextWord(Tokenizer *tokenizer)
-{
-    Assert(CharIsAlpha(*tokenizer->cursor));
-    string result;
-    result.str  = tokenizer->cursor;
-    result.size = 0;
-
-    while (!EndOfBuffer(tokenizer) && !CharIsBlank(*tokenizer->cursor))
-    {
-        tokenizer->cursor++;
-        result.size++;
-    }
-    SkipToNextChar(tokenizer);
-    return result;
-}
-
 string ReadBytes(Tokenizer *tokenizer, u64 numBytes)
 {
     string result;
@@ -578,33 +562,6 @@ string CheckWord(Tokenizer *tokenizer)
         result.size++;
     }
     return result;
-}
-
-b8 GetBetweenPair(string &out, const string line, const u8 ch)
-{
-    u8 left  = ch;
-    u8 right = CharGetPair(ch);
-
-    i32 startIndex = -1;
-    u32 endIndex   = (u32)line.size;
-    for (u32 i = 0; i < line.size; i++)
-    {
-        if (line.str[i] == left && startIndex == -1)
-        {
-            startIndex = i;
-        }
-        else if (line.str[i] == right && startIndex != -1)
-        {
-            endIndex = i;
-            break;
-        }
-    }
-    if (startIndex != -1)
-    {
-        out = Substr8(line, (u32)startIndex + 1, endIndex - 1);
-        return 1;
-    }
-    return 0;
 }
 
 inline f32 ReadFloat(Tokenizer *iter)
@@ -768,12 +725,12 @@ inline u32 CountLinesStartWith(Tokenizer *tokenizer, u8 ch)
     return count;
 }
 
-b8 GetBetweenPair(string &out, Tokenizer *tokenizer, const u8 ch)
+bool GetBetweenPair(string &out, Tokenizer *tokenizer, const u8 ch)
 {
     u8 left  = ch;
     u8 right = CharGetPair(ch);
 
-    u8 *cursor = tokenizer->cursor;
+#if 0
     for (; cursor < tokenizer->input.str + tokenizer->input.size && CharIsBlank(*cursor) &&
            *cursor != '#' && *cursor != left;)
     {
@@ -781,23 +738,21 @@ b8 GetBetweenPair(string &out, Tokenizer *tokenizer, const u8 ch)
         cursor++;
     }
     if (*cursor == '#') return 2;
-    if (cursor >= tokenizer->input.str + tokenizer->input.size || *cursor != left) return 0;
-    cursor++;
+#endif
+    if (*tokenizer->cursor != left) return false;
+    tokenizer->cursor++;
 
-    u8 *start = cursor;
+    u8 *start = tokenizer->cursor;
     u32 count = 0;
-    for (; cursor < tokenizer->input.str + tokenizer->input.size && *cursor != right; count++)
+    for (; !EndOfBuffer(tokenizer) && *tokenizer->cursor != right; count++)
     {
-        // if (*cursor == '\n') return 0;
-        cursor++;
+        tokenizer->cursor++;
     }
-    cursor++;
+    if (EndOfBuffer(tokenizer)) return false;
+    tokenizer->cursor++;
 
-    if (cursor > tokenizer->input.str + tokenizer->input.size) return 0;
-
-    out               = Str8(start, count);
-    tokenizer->cursor = cursor;
-    return 1;
+    out = Str8(start, count);
+    return true;
 }
 
 u32 CountBetweenPair(Tokenizer *tokenizer, const u8 ch)
@@ -806,8 +761,8 @@ u32 CountBetweenPair(Tokenizer *tokenizer, const u8 ch)
     u8 right = CharGetPair(ch);
 
     u8 *cursor = tokenizer->cursor;
-    for (; *cursor != '\n' && *cursor++ != left;) continue;
-    if (*(cursor - 1) != left || *cursor == right) return 0;
+    if (*cursor != ch) return 0;
+    cursor++;
 
     for (; CharIsBlank(*cursor);) cursor++;
 

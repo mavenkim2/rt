@@ -20,6 +20,7 @@
 #include "../bvh/parallel.h"
 // #include "../handles.h"
 #include "../scene_load.h"
+#include "../base.cpp"
 #include "../win32.cpp"
 #include "../memory.cpp"
 #include "../string.cpp"
@@ -398,6 +399,19 @@ struct GraphicsState
     ObjectInstanceType *instanceType = 0;
 };
 
+void PBRTSkipToNextChar(Tokenizer *tokenizer)
+{
+    for (;;)
+    {
+        while (!EndOfBuffer(tokenizer) && CharIsBlank(*tokenizer->cursor))
+        {
+            tokenizer->cursor++;
+        }
+        if (*tokenizer->cursor != '#') break;
+        SkipToNextLine(tokenizer);
+    }
+}
+
 // NOTE: sets the camera, film, sampler, etc.
 template <i32 numNodes, i32 chunkSize, i32 numStripes>
 void CreateScenePacket(Arena *arena, string word, ScenePacket *packet, Tokenizer *tokenizer,
@@ -408,14 +422,7 @@ void CreateScenePacket(Arena *arena, string word, ScenePacket *packet, Tokenizer
     b32 result = GetBetweenPair(type, tokenizer, '"');
     Assert(result);
     packet->type = stringCache->GetOrCreate(arena, type);
-    if (IsEndOfLine(tokenizer))
-    {
-        SkipToNextLine(tokenizer);
-    }
-    else
-    {
-        SkipToNextChar(tokenizer);
-    }
+    PBRTSkipToNextChar(tokenizer);
 
     ReadParameters(arena, packet, tokenizer, stringCache, memoryType, additionalParameters);
 }
@@ -430,18 +437,26 @@ inline void SkipToNextDigitArray(Tokenizer *tokenizer)
 inline void AdvanceToNextLine(Tokenizer *tokenizer)
 {
     bool nextLine = false;
-    while (CharIsBlank(*tokenizer->cursor))
+    while (CharIsBlank(*tokenizer->cursor) || *tokenizer->cursor == ']')
     {
         tokenizer->cursor++;
     }
-    if (*tokenizer->cursor == ']')
+}
+
+string ReadWordAndSkipToNextChar(Tokenizer *tokenizer)
+{
+    Assert(CharIsAlpha(*tokenizer->cursor));
+    string result;
+    result.str  = tokenizer->cursor;
+    result.size = 0;
+
+    while (!EndOfBuffer(tokenizer) && !CharIsBlank(*tokenizer->cursor))
     {
         tokenizer->cursor++;
+        result.size++;
     }
-    while (CharIsBlank(*tokenizer->cursor))
-    {
-        tokenizer->cursor++;
-    }
+    PBRTSkipToNextChar(tokenizer);
+    return result;
 }
 
 template <i32 numNodes, i32 chunkSize, i32 numStripes>
@@ -466,17 +481,12 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
     {
         Assert(packet->parameterCount < MAX_PARAMETER_COUNT);
         result = GetBetweenPair(infoType, tokenizer, '"');
-        if (result == 0) break;
-        if (result == 2)
-        {
-            SkipToNextLine(tokenizer);
-            continue;
-        }
+        if (!result) break;
         string dataType      = GetFirstWord(infoType);
         u32 currentParam     = packet->parameterCount++;
         string parameterName = GetNthWord(infoType, 2);
 
-        SkipToNextChar(tokenizer);
+        PBRTSkipToNextChar(tokenizer);
 
         u32 numValues = CountBetweenPair(tokenizer, '[');
         numValues     = numValues ? numValues : 1;
@@ -741,7 +751,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
         {
             if (currentObject && imported)
             {
-                currentObject->shapeIndexEnd = shapes.Length();
+                currentObject->shapeIndexEnd = instanceShapes.Length();
                 Assert(currentObject->shapeIndexEnd >= currentObject->shapeIndexStart);
             }
             OS_UnmapFile(tokenizer.input.str);
@@ -749,19 +759,12 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             tokenizer = oldTokenizers[--numTokenizers];
             continue;
         }
-        if (graphicsStateCount != 0) SkipToNextChar(&tokenizer);
+        // if (graphicsStateCount != 0) PBRTSkipToNextChar(&tokenizer);
 
-        string word = ReadWordAndSkipToNextWord(&tokenizer);
+        PBRTSkipToNextChar(&tokenizer);
+        string word = ReadWordAndSkipToNextChar(&tokenizer);
         // Comments/Blank lines
-        if (word.size == 0)
-        {
-            continue;
-        }
-        if (word.str[0] == '#')
-        {
-            SkipToNextLine(&tokenizer);
-            continue;
-        }
+        Assert(word.size && word.str[0] != '#');
 
         StringId sid = stringCache.GetOrCreate(tempArena, word);
         switch (sid)
@@ -964,14 +967,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 ScenePacket *packet = &materials.AddBack();
                 packet->type        = stringCache.GetOrCreate(tempArena, materialNameOrType);
                 u32 materialIndex   = materials.Length();
-                if (IsEndOfLine(&tokenizer))
-                {
-                    SkipToNextLine(&tokenizer);
-                }
-                else
-                {
-                    SkipToNextChar(&tokenizer);
-                }
+                PBRTSkipToNextChar(&tokenizer);
                 ReadParameters(tempArena, packet, &tokenizer, &stringCache,
                                MemoryType_Material);
 
@@ -1020,7 +1016,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 currentObject                 = &instanceTypes.AddBack();
                 currentObject->name           = stringCache.GetOrCreate(tempArena, objectName);
                 currentObject->transformIndex = currentGraphicsState.transformIndex;
-                currentObject->shapeIndexStart = shapes.Length();
+                currentObject->shapeIndexStart = instanceShapes.Length();
 
                 AddTransform();
             }
@@ -1029,7 +1025,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             {
                 Error(worldBegin, "Tried to specify %S before WorldBegin\n", word);
 
-                currentObject->shapeIndexEnd = shapes.Length();
+                currentObject->shapeIndexEnd = instanceShapes.Length();
                 state->totalNumInstTypes += PopCount(currentObject->shapeTypeFlags);
                 Assert(currentObject->shapeIndexEnd >= currentObject->shapeIndexStart);
                 Error(currentObject != 0, "ObjectEnd must occur after ObjectBegin");
@@ -1048,12 +1044,11 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 instance.transformIndex = (i32)transforms.Length();
 
                 AddTransform();
-                Assert(IsEndOfLine(&tokenizer));
-                SkipToNextLine(&tokenizer);
             }
             break;
             case "PixelFilter"_sid:
             {
+                // TODO: actually parse
                 SkipToNextLine(&tokenizer);
             }
             break;
@@ -1240,14 +1235,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 packet->type        = stringCache.GetOrCreate(
                     tempArena, StrConcat(tempArena, textureType, textureClass));
 
-                if (IsEndOfLine(&tokenizer))
-                {
-                    SkipToNextLine(&tokenizer);
-                }
-                else
-                {
-                    SkipToNextChar(&tokenizer);
-                }
+                PBRTSkipToNextChar(&tokenizer);
                 ReadParameters(tempArena, packet, &tokenizer, &stringCache,
                                MemoryType_Texture);
             }
@@ -1286,7 +1274,8 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 AddTransform();
                 // TODO: instantiate the camera with the current
                 // transform
-                currentGraphicsState.transform = AffineSpace::Identity();
+                currentGraphicsState.transform      = AffineSpace::Identity();
+                currentGraphicsState.transformIndex = 0;
             }
             break;
             default:
