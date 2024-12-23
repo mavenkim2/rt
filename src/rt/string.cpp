@@ -882,7 +882,7 @@ u64 PutU64(StringBuilder *builder, u64 value)
     return result;
 }
 
-void Put(StringBuilder *builder, char *fmt, ...)
+void Put(StringBuilder *builder, const char *fmt, ...)
 {
     va_list args;
     va_start(args, fmt);

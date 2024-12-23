@@ -62,7 +62,7 @@ struct ScenePacket
     inline i32 GetInt(i32 i) const { return *(i32 *)(bytes[i]); }
     inline bool GetBool(i32 i) const { return *(bool *)(bytes[i]); }
     inline f32 GetFloat(i32 i) const { return *(f32 *)(bytes[i]); }
-    inline i32 FindKey(StringID parameterName)
+    inline i32 FindKey(StringId parameterName)
     {
         for (u32 i = 0; i < parameterCount; i++)
         {

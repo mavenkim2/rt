@@ -152,6 +152,7 @@ b32 WriteEntireFile(StringBuilder *builder, string filename);
 inline u64 PutPointer(StringBuilder *builder, u64 address);
 inline void ConvertPointerToOffset(u8 *buffer, u64 location, u64 offset);
 inline u8 *ConvertOffsetToPointer(u8 *base, u64 offset);
+void Put(StringBuilder *builder, const char *fmt, ...);
 void PutLine(StringBuilder *builder, u32 indents, char *fmt, ...);
 
 #define PutPointerValue(builder, ptr)    Put(builder, ptr, sizeof(*ptr))

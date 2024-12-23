@@ -234,8 +234,8 @@ struct ChunkedLinkedList
             }
         }
     }
-    inline void Push(T &val) { AddBack() = val; }
-    inline void Push(T &&val) { AddBack() = std::move(val); }
+    inline void Push(const T &val) { AddBack() = val; }
+    inline void Push(const T &&val) { AddBack() = std::move(val); }
     inline const T &Last() const { return last->values[last->count - 1]; }
 
     inline void AddNode()
@@ -244,6 +244,20 @@ struct ChunkedLinkedList
         QueuePush(first, last, newNode);
     }
     inline u32 Length() const { return totalCount; }
+    void Copy(Arena *arena, ChunkedLinkedList<T, numPerChunk, memoryTag> *list)
+    {
+        new (list) ChunkedLinkedList<T, numPerChunk, memoryTag>(arena);
+        auto node2 = list->first;
+        for (auto node = first; node != 0; node = node->next)
+        {
+            MemoryCopy(node->values, node2->values, sizeof(T) * node->count);
+            node2->count = node->count;
+            if (node->next)
+            {
+                node2->next = PushStruct(arena, ChunkNode);
+            }
+        }
+    }
 };
 
 template <i32 numNodes, i32 chunkSize, i32 numStripes>
@@ -365,7 +379,7 @@ struct SceneLoadState
     ChunkedLinkedList<ScenePacket, 1024, MemoryType_Texture> *textures;
     ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light> *lights;
     ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance> *instanceTypes;
-    ChunkedLinkedList<SceneInstance, 1024, MemoryType_Instance> *instances;
+    ChunkedLinkedList<SceneInstance, 1024, MemoryType_Instance> *sceneInstances;
 
     ChunkedLinkedList<const AffineSpace *, 16384, MemoryType_Transform> *transforms;
 
@@ -383,6 +397,54 @@ struct SceneLoadState
     Arena *mainArena;
 
     Scheduler::Counter counter = {};
+};
+
+struct FileInstance
+{
+    string filename;
+    u32 transformIndex;
+};
+
+struct PBRTFileInfo
+{
+    enum Type
+    {
+        Film,
+        Camera,
+        Sampler,
+        Integrator,
+        Accelerator,
+        MAX,
+    };
+    string filename;
+    ScenePacket packets[MAX] = {};
+    ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape> shapes;
+    ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape> instanceShapes;
+    ChunkedLinkedList<ScenePacket, 1024, MemoryType_Material> materials;
+    ChunkedLinkedList<ScenePacket, 1024, MemoryType_Texture> textures;
+    ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light> lights;
+    ChunkedLinkedList<ObjectInstanceType, 512, MemoryType_Instance> instanceTypes;
+
+    ChunkedLinkedList<string, 32, MemoryType_Instance> includedFiles;
+    ChunkedLinkedList<FileInstance, 512, MemoryType_Instance> fileInstanceTypes;
+
+    ChunkedLinkedList<SceneInstance, 1024, MemoryType_Instance> instances;
+    ChunkedLinkedList<AffineSpace, 16384, MemoryType_Transform> transforms;
+
+    void Init(string inFilename, Arena *arena)
+    {
+        filename       = PushStr8Copy(arena, inFilename);
+        shapes         = decltype(shapes)(arena);
+        instanceShapes = decltype(instanceShapes)(arena);
+        materials      = decltype(materials)(arena);
+        textures       = decltype(textures)(arena);
+        lights         = decltype(lights)(arena);
+        instanceTypes  = decltype(instanceTypes)(arena);
+        instances      = decltype(instances)(arena);
+        transforms     = decltype(transforms)(arena);
+    }
+    void Copy(Arena *arena) {}
+    u32 textureMapSize;
 };
 
 struct GraphicsState
@@ -412,19 +474,19 @@ void PBRTSkipToNextChar(Tokenizer *tokenizer)
     }
 }
 
+void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
+                    MemoryType memoryType, u32 additionalParameters = 0);
 // NOTE: sets the camera, film, sampler, etc.
-template <i32 numNodes, i32 chunkSize, i32 numStripes>
 void CreateScenePacket(Arena *arena, string word, ScenePacket *packet, Tokenizer *tokenizer,
-                       InternedStringCache<numNodes, chunkSize, numStripes> *stringCache,
                        MemoryType memoryType, u32 additionalParameters = 0)
 {
     string type;
     b32 result = GetBetweenPair(type, tokenizer, '"');
     Assert(result);
-    packet->type = stringCache->GetOrCreate(arena, type);
+    packet->type = Hash(type);
     PBRTSkipToNextChar(tokenizer);
 
-    ReadParameters(arena, packet, tokenizer, stringCache, memoryType, additionalParameters);
+    ReadParameters(arena, packet, tokenizer, memoryType, additionalParameters);
 }
 
 inline void SkipToNextDigitArray(Tokenizer *tokenizer)
@@ -464,10 +526,8 @@ string ReadWordAndSkipToNextChar(Tokenizer *tokenizer)
     return result;
 }
 
-template <i32 numNodes, i32 chunkSize, i32 numStripes>
 void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
-                    InternedStringCache<numNodes, chunkSize, numStripes> *stringCache,
-                    MemoryType memoryType, u32 additionalParameters = 0)
+                    MemoryType memoryType, u32 additionalParameters)
 {
     static const u32 MAX_PARAMETER_COUNT = 16;
 
@@ -671,7 +731,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
         {
             Error(0, "Invalid data type: %S\n", dataType);
         }
-        parameterNames[currentParam] = stringCache->GetOrCreate(arena, parameterName);
+        parameterNames[currentParam] = Hash(parameterName);
         bytes[currentParam]          = out;
         sizes[currentParam]          = size;
     }
@@ -682,35 +742,42 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
     MemoryCopy(packet->sizes, sizes, sizeof(u32) * packet->parameterCount);
 }
 
-void LoadPBRT(string filename, string directory, SceneLoadState *state,
-              GraphicsState graphicsState = {}, bool inWorldBegin = false,
-              bool imported = false)
+void WriteFile(PBRTFileInfo *info);
+void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
+              bool inWorldBegin = false, bool imported = false)
 {
+    // TODO
+    inWorldBegin               = true;
     Scheduler::Counter counter = {};
     TempArena temp             = ScratchStart(0, 0);
     u32 threadIndex            = GetThreadIndex();
-    Arena *tempArena           = state->tempArenas[threadIndex];
+    Arena *tempArena           = arenas[threadIndex];
 
     Tokenizer tokenizer;
     tokenizer.input  = OS_MapFileRead(filename);
     tokenizer.cursor = tokenizer.input.str;
 
-    auto &shapes         = state->shapes[threadIndex];
-    auto &instanceShapes = state->instanceShapes[threadIndex];
-    auto &materials      = state->materials[threadIndex];
-    auto &textures       = state->textures[threadIndex];
-    auto &lights         = state->lights[threadIndex];
-    auto &instanceTypes  = state->instanceTypes[threadIndex];
-    auto &instances      = state->instances[threadIndex];
-
-    auto &transforms  = state->transforms[threadIndex];
-    auto &stringCache = state->stringCache;
+    PBRTFileInfo *state = PushStruct(temp.arena, PBRTFileInfo);
+    state->Init(filename, temp.arena);
+    auto &shapes         = state->shapes;
+    auto &instanceShapes = state->instanceShapes;
+    auto &materials      = state->materials;
+    auto &textures       = state->textures;
+    auto &lights         = state->lights;
+    auto &instanceTypes  = state->instanceTypes;
+    auto &instances      = state->instances;
+    auto &transforms     = state->transforms;
 
     bool worldBegin = inWorldBegin;
 
     // Stack variables
-    Tokenizer oldTokenizers[32];
-    u32 numTokenizers = 0;
+    struct FileStack
+    {
+        Tokenizer oldTokenizer;
+        PBRTFileInfo *info;
+    };
+    FileStack stackEntries[32];
+    u32 numStackEntries = 0;
 
     GraphicsState graphicsStateStack[64];
     u32 graphicsStateCount = 0;
@@ -718,10 +785,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
     GraphicsState currentGraphicsState = graphicsState;
     ObjectInstanceType *&currentObject = currentGraphicsState.instanceType;
 
-    if (transforms.totalCount == 0)
-    {
-        transforms.Push(state->transformCache.GetOrCreate(tempArena, AffineSpace::Identity()));
-    }
     if (currentObject && imported)
     {
         StringId name                  = currentObject->name;
@@ -731,21 +794,9 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
     }
 
     auto AddTransform = [&]() {
-        if (currentGraphicsState.transformIndex != 0)
+        if (currentGraphicsState.transformIndex == transforms.Length())
         {
-            if (currentGraphicsState.transformIndex == transforms.Length())
-            {
-                // Assert(currentGraphicsState.transformIndex ==
-                // transforms.Length());
-                const AffineSpace *transform = state->transformCache.GetOrCreate(
-                    tempArena, currentGraphicsState.transform);
-                transforms.Push(transform);
-            }
-            else
-            {
-                const AffineSpace *t = transforms.Last();
-                Assert(*t == currentGraphicsState.transform);
-            }
+            transforms.Push(currentGraphicsState.transform);
         }
     };
 
@@ -760,18 +811,21 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 Assert(currentObject->shapeIndexEnd >= currentObject->shapeIndexStart);
             }
             OS_UnmapFile(tokenizer.input.str);
-            if (numTokenizers == 0) break;
-            tokenizer = oldTokenizers[--numTokenizers];
+            WriteFile(state);
+
+            if (numStackEntries == 0) break;
+            FileStack *stackEntry = &stackEntries[--numStackEntries];
+            tokenizer             = stackEntry->oldTokenizer;
+            state                 = stackEntry->info;
             continue;
         }
-        // if (graphicsStateCount != 0) PBRTSkipToNextChar(&tokenizer);
 
         PBRTSkipToNextChar(&tokenizer);
         string word = ReadWordAndSkipToNextChar(&tokenizer);
         // Comments/Blank lines
         Assert(word.size && word.str[0] != '#');
 
-        StringId sid = stringCache.GetOrCreate(tempArena, word);
+        StringId sid = Hash(word);
         switch (sid)
         {
             case "Accelerator"_sid:
@@ -782,8 +836,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                       word);
                 SceneLoadState::Type type = SceneLoadState::Type::Accelerator;
                 ScenePacket *packet       = &state->packets[type];
-                CreateScenePacket(tempArena, word, packet, &tokenizer, &stringCache,
-                                  MemoryType_Other);
+                CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Other);
                 continue;
             }
             break;
@@ -806,8 +859,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                       word);
                 Assert(graphicsStateCount > 0);
 
-                // AddTransform();
-
                 // Pop stack
                 currentGraphicsState = graphicsStateStack[--graphicsStateCount];
             }
@@ -821,8 +872,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                       word);
                 currentGraphicsState.areaLightIndex = lights.Length();
                 ScenePacket *packet                 = &lights.AddBack();
-                CreateScenePacket(tempArena, word, packet, &tokenizer, &stringCache,
-                                  MemoryType_Light);
+                CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Light);
             }
             break;
             case "Attribute"_sid:
@@ -838,8 +888,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                       word);
                 SceneLoadState::Type type = SceneLoadState::Type::Camera;
                 ScenePacket *packet       = &state->packets[type];
-                CreateScenePacket(tempArena, word, packet, &tokenizer, &stringCache,
-                                  MemoryType_Other);
+                CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Other);
                 continue;
             }
             case "ConcatTransform"_sid:
@@ -886,8 +935,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 Error(!worldBegin, "Tried to specify %S after WorldBegin\n", word);
                 SceneLoadState::Type type = SceneLoadState::Type::Film;
                 ScenePacket *packet       = &state->packets[type];
-                CreateScenePacket(tempArena, word, packet, &tokenizer, &stringCache,
-                                  MemoryType_Other);
+                CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Other);
                 continue;
             }
             case "Integrator"_sid:
@@ -895,8 +943,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 Error(!worldBegin, "Tried to specify %S after WorldBegin\n", word);
                 SceneLoadState::Type type = SceneLoadState::Type::Integrator;
                 ScenePacket *packet       = &state->packets[type];
-                CreateScenePacket(tempArena, word, packet, &tokenizer, &stringCache,
-                                  MemoryType_Other);
+                CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Other);
                 continue;
             }
             case "Identity"_sid:
@@ -910,12 +957,28 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
 
                 b32 result = GetBetweenPair(importedFilename, &tokenizer, '"');
                 Assert(result);
-                string importedFullPath = StrConcat(tempArena, directory, importedFilename);
+                for (auto *node = state->includedFiles.first; node != 0; node = node->next)
+                {
+                    for (u32 i = 0; i < node->count; i++)
+                    {
+                        if (importedFilename == node->values[i])
+                        {
+                            FileInstance &inst  = state->fileInstanceTypes.AddBack();
+                            inst.filename       = PushStr8Copy(tempArena, importedFilename);
+                            inst.transformIndex = currentGraphicsState.transformIndex;
+                            AddTransform();
+                            continue;
+                        }
+                    }
+                }
 
-                scheduler.Schedule(&counter, [importedFullPath, directory, state,
-                                              currentGraphicsState, worldBegin](u32 jobID) {
-                    LoadPBRT(importedFullPath, directory, state, currentGraphicsState,
-                             worldBegin, true);
+                string &str = state->includedFiles.AddBack();
+                str         = PushStr8Copy(tempArena, importedFilename);
+
+                // string importedFullPath = StrConcat(tempArena, directory, importedFilename);
+                scheduler.Schedule(&counter, [arenas, importedFilename, currentGraphicsState,
+                                              worldBegin](u32 jobID) {
+                    LoadPBRT(arenas, importedFilename, currentGraphicsState, worldBegin, true);
                 });
             }
             break;
@@ -924,11 +987,40 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 string importedFilename;
                 b32 result = GetBetweenPair(importedFilename, &tokenizer, '"');
                 Assert(result);
-                string importedFullPath = StrConcat(temp.arena, directory, importedFilename);
-                Assert(numTokenizers < ArrayLength(oldTokenizers));
-                oldTokenizers[numTokenizers++] = tokenizer;
+                for (auto *node = state->includedFiles.first; node != 0; node = node->next)
+                {
+                    for (u32 i = 0; i < node->count; i++)
+                    {
+                        if (importedFilename == node->values[i])
+                        {
+                            FileInstance &inst  = state->fileInstanceTypes.AddBack();
+                            inst.filename       = PushStr8Copy(tempArena, importedFilename);
+                            inst.transformIndex = currentGraphicsState.transformIndex;
+                            AddTransform();
+                            continue;
+                        }
+                    }
+                }
 
-                tokenizer.input  = OS_MapFileRead(importedFullPath);
+                string &str = state->includedFiles.AddBack();
+                str         = PushStr8Copy(tempArena, importedFilename);
+
+                Assert(numStackEntries < ArrayLength(stackEntries));
+
+                PBRTFileInfo *newState = PushStruct(tempArena, PBRTFileInfo);
+                newState->Init(importedFilename, tempArena);
+                stackEntries[numStackEntries++] = {tokenizer, state};
+                state                           = newState;
+                shapes                          = state->shapes;
+                instanceShapes                  = state->instanceShapes;
+                materials                       = state->materials;
+                textures                        = state->textures;
+                lights                          = state->lights;
+                instanceTypes                   = state->instanceTypes;
+                instances                       = state->instances;
+                transforms                      = state->transforms;
+
+                tokenizer.input  = OS_MapFileRead(importedFilename);
                 tokenizer.cursor = tokenizer.input.str;
             }
             break;
@@ -957,8 +1049,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             {
                 Error(worldBegin, "Tried to specify %S before WorldBegin\n", word);
                 ScenePacket *packet = &lights.AddBack();
-                CreateScenePacket(tempArena, word, packet, &tokenizer, &stringCache,
-                                  MemoryType_Light);
+                CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Light);
             }
             break;
             case "Material"_sid:
@@ -970,16 +1061,14 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 Assert(result);
 
                 ScenePacket *packet = &materials.AddBack();
-                packet->type        = stringCache.GetOrCreate(tempArena, materialNameOrType);
+                packet->type        = Hash(materialNameOrType);
                 u32 materialIndex   = materials.Length();
                 PBRTSkipToNextChar(&tokenizer);
-                ReadParameters(tempArena, packet, &tokenizer, &stringCache,
-                               MemoryType_Material);
+                ReadParameters(tempArena, packet, &tokenizer, MemoryType_Material);
 
                 if (isNamedMaterial)
                 {
-                    currentGraphicsState.materialId =
-                        stringCache.GetOrCreate(tempArena, materialNameOrType);
+                    currentGraphicsState.materialId    = Hash(materialNameOrType);
                     currentGraphicsState.materialIndex = -1;
                 }
                 else
@@ -1002,8 +1091,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 b32 result = GetBetweenPair(materialName, &tokenizer, '"');
                 Assert(result);
 
-                currentGraphicsState.materialId =
-                    stringCache.GetOrCreate(tempArena, materialName);
+                currentGraphicsState.materialId    = Hash(materialName);
                 currentGraphicsState.materialIndex = -1;
             }
             break;
@@ -1018,9 +1106,9 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 b32 result = GetBetweenPair(objectName, &tokenizer, '"');
                 Assert(result);
 
-                currentObject                 = &instanceTypes.AddBack();
-                currentObject->name           = stringCache.GetOrCreate(tempArena, objectName);
-                currentObject->transformIndex = currentGraphicsState.transformIndex;
+                currentObject                  = &instanceTypes.AddBack();
+                currentObject->name            = Hash(objectName);
+                currentObject->transformIndex  = currentGraphicsState.transformIndex;
                 currentObject->shapeIndexStart = instanceShapes.Length();
 
                 AddTransform();
@@ -1031,7 +1119,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 Error(worldBegin, "Tried to specify %S before WorldBegin\n", word);
 
                 currentObject->shapeIndexEnd = instanceShapes.Length();
-                state->totalNumInstTypes += PopCount(currentObject->shapeTypeFlags);
                 Assert(currentObject->shapeIndexEnd >= currentObject->shapeIndexStart);
                 Error(currentObject != 0, "ObjectEnd must occur after ObjectBegin");
                 currentObject = 0;
@@ -1045,7 +1132,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 Assert(result);
 
                 SceneInstance &instance = instances.AddBack();
-                instance.name           = stringCache.GetOrCreate(tempArena, objectName);
+                instance.name           = Hash(objectName);
                 instance.transformIndex = (i32)transforms.Length();
 
                 AddTransform();
@@ -1075,8 +1162,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 Error(!worldBegin, "Tried to specify %S after WorldBegin\n", word);
                 SceneLoadState::Type type = SceneLoadState::Type::Sampler;
                 ScenePacket *packet       = &state->packets[type];
-                CreateScenePacket(tempArena, word, packet, &tokenizer, &stringCache,
-                                  MemoryType_Other);
+                CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Other);
                 continue;
             }
             break;
@@ -1103,8 +1189,7 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 {
                     packet = &shapes.AddBack();
                 }
-                CreateScenePacket(tempArena, word, packet, &tokenizer, &stringCache,
-                                  MemoryType_Shape, 1);
+                CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Shape, 1);
 
                 u32 numVertices = 0;
                 u32 numIndices  = 0;
@@ -1123,32 +1208,13 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                         string plyMeshFile;
                         plyMeshFile.str  = packet->bytes[i];
                         plyMeshFile.size = packet->sizes[i];
-                        if (CheckQuadPLY(StrConcat(temp.arena, directory, plyMeshFile)))
-                            state->numQuadMeshes[threadIndex]++;
-                        else state->numTriMeshes[threadIndex]++;
+                        if (CheckQuadPLY(plyMeshFile)) packet->type = "quadmesh"_sid;
                     }
                 }
                 if (packet->type == "trianglemesh"_sid && numVertices && numIndices &&
                     numVertices / 2 == numIndices / 3)
                 {
-                    packet->type = stringCache.GetOrCreate(tempArena, "quadmesh");
-                    state->numQuadMeshes[GetThreadIndex()]++;
-                    if (currentObject)
-                    {
-                        u32 index = (u32)(GeometryType::QuadMesh);
-                        currentObject->shapeTypeFlags |= (1 << index);
-                        currentObject->shapeTypeCount[index]++;
-                    }
-                }
-                else if (packet->type == "trianglemesh"_sid)
-                {
-                    state->numTriMeshes[GetThreadIndex()]++;
-                    if (currentObject)
-                    {
-                        u32 index = (u32)(GeometryType::TriangleMesh);
-                        currentObject->shapeTypeFlags |= (1 << index);
-                        currentObject->shapeTypeCount[index]++;
-                    }
+                    packet->type = "quadmesh"_sid;
                 }
 
                 i32 *indices = PushArray(tempArena, i32, 4);
@@ -1162,11 +1228,10 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                                  ? i32(currentGraphicsState.materialId)
                                  : (u32)currentGraphicsState.materialIndex | 0x80000000;
 
-                u32 currentParameter = packet->parameterCount++;
-                packet->parameterNames[currentParameter] =
-                    stringCache.GetOrCreate(tempArena, "Indices");
-                packet->bytes[currentParameter] = (u8 *)indices;
-                packet->sizes[currentParameter] = sizeof(i32) * 4;
+                u32 currentParameter                     = packet->parameterCount++;
+                packet->parameterNames[currentParameter] = "Indices"_sid;
+                packet->bytes[currentParameter]          = (u8 *)indices;
+                packet->sizes[currentParameter]          = sizeof(i32) * 4;
 
                 AddTransform();
             }
@@ -1231,17 +1296,14 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 PBRTSkipToNextChar(&tokenizer);
 
                 ScenePacket *packet = &textures.AddBack();
-                packet->type        = stringCache.GetOrCreate(
-                    tempArena, StrConcat(tempArena, textureType, textureClass));
+                packet->type        = Hash(StrConcat(tempArena, textureType, textureClass));
 
                 PBRTSkipToNextChar(&tokenizer);
 
-                ReadParameters(tempArena, packet, &tokenizer, &stringCache, MemoryType_Texture,
-                               1);
+                ReadParameters(tempArena, packet, &tokenizer, MemoryType_Texture, 1);
 
-                u32 currentParameter = packet->parameterCount++;
-                packet->parameterNames[currentParameter] =
-                    stringCache.GetOrCreate(tempArena, "Name");
+                u32 currentParameter                     = packet->parameterCount++;
+                packet->parameterNames[currentParameter] = "name"_sid;
                 packet->bytes[currentParameter] = PushStr8Copy(tempArena, textureName).str;
                 packet->sizes[currentParameter] = textureName.size;
             }
@@ -1296,21 +1358,9 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
         }
     }
     scheduler.Wait(&counter);
-    // When everything is done...
-
-    // TODO: see if this is the "beginning file" if so...
-    // if (main)
-    // {
-    // }
-    // StringBuilder builder = {};
 
     ScratchEnd(temp);
 }
-
-// struct PBRTMetaInfo
-// {
-//     u32 numMaterials[(u32)MaterialType::Max];
-// };
 
 struct MaterialHashNode
 {
@@ -1401,8 +1451,10 @@ static const string cDiffuseParameterNames[] = {
     "reflectance",
     "displacement",
 };
+
 // TODO: need to consolidate object types, object instances, textures, materials, shapes,
 // transforms, etc.
+#if 0
 void WriteMeta(StringBuilder *builder, string filename, SceneLoadState *state)
 {
     TempArena temp    = ScratchStart(0, 0);
@@ -1429,9 +1481,11 @@ void WriteMeta(StringBuilder *builder, string filename, SceneLoadState *state)
 
     // ways of doing this:
     // 1. all the textures are in 1 file. the problem with this is that there's a lot...
-    // 2. split the textures between files. the problem with THIS is that how do I allocate?
+    // 2. split the textures between files. the problem with THIS is that how do I
+    // allocate?
     //      - duplicate the material/texture
-    //          - this probably doesn't work because transforms would need to be duplicated?
+    //          - this probably doesn't work because transforms would need to be
+    //          duplicated?
     //      - index into global array
     //          - keep track of running total using atomics. wouldn't be horrible because
     //          we could batch per file
@@ -1449,7 +1503,7 @@ void WriteMeta(StringBuilder *builder, string filename, SceneLoadState *state)
                     case "floatptex"_sid:
                     case "spectrumptex"_sid:
                     {
-                        i32 index = packet->FindKey("Name"_sid);
+                        i32 index = packet->FindKey("name"_sid);
                         if (index == -1) Error(0, "No texture name speciied for material.\n");
 
                         u64 hash =
@@ -1562,17 +1616,6 @@ void WriteMeta(StringBuilder *builder, string filename, SceneLoadState *state)
     printf("Total # unique materials: %u\n", materialCount);
 }
 
-struct PBRTFileInfo
-{
-    u32 numMaterials;
-    u32 numTextures;
-    u32 numLights;
-
-    ChunkedLinkedList<ScenePacket, 1024, MemoryType_Material> materials;
-    TextureHashNode *textureMap;
-    u32 textureMapSize;
-};
-
 void WriteMaterial(StringBuilder *builder, PBRTFileInfo *fileInfo, ScenePacket *packet,
                    StringId *parameterIDs, string *parameterNames, u32 count)
 {
@@ -1598,38 +1641,59 @@ void WriteMaterial(StringBuilder *builder, PBRTFileInfo *fileInfo, ScenePacket *
         }
     }
 }
+#endif
 
 // TODO: don't overcomplicate just use the tagged pointer thing you already have and stop
 // using the weird tuples...
 // TODO: need some way of getting information per file...
-void WriteFile(string filename, SceneLoadState *state)
+void WriteFile(PBRTFileInfo *info)
 {
     TempArena temp = ScratchStart(0, 0);
-    string file    = RemoveFileExtension(filename);
-    StrConcat(temp.arena, file, ".rtscene");
+    string file    = RemoveFileExtension(info->filename);
+    string outFile = StrConcat(temp.arena, file, ".rtscene");
 
     StringBuilder builder  = {};
     builder.arena          = temp.arena;
     u32 totalMaterialCount = 0;
-    PBRTFileInfo info;
 
     Put(&builder, "RTSCENE_START");
     Put(&builder, "MATERIALS_START");
     Put(&builder, "Offset");
     PutPointerValue(&builder, &totalMaterialCount);
 
-    Put(&builder, "_");
-    Put(&builder, "#");
-    for (auto *node = info.materials.first; node != 0; node = node->next)
+    Put(&builder, "INCLUDE_START ");
+    for (auto *node = info->includedFiles.first; node != 0; node = node->next)
     {
         for (u32 i = 0; i < node->count; i++)
         {
-            ScenePacket *packet = &node->values[i];
-            WriteMaterial(&builder, packet, cDiffuseParameterIds,
-                          ArrayLength(cDiffuseParameterIds));
+            string *filename = &node->values[i];
+            Put(&builder, "File: %S ", *filename);
+            for (auto *instNode = info->fileInstanceTypes.first; instNode != 0;
+                 instNode       = instNode->next)
+            {
+                for (u32 instNodeIndex = 0; instNodeIndex < instNode->count; instNodeIndex++)
+                {
+                    FileInstance *fileInst = &instNode->values[instNodeIndex];
+                    if (fileInst->filename == *filename && fileInst->transformIndex >= 0)
+                    {
+                        Put(&builder, "%u ", fileInst->transformIndex);
+                    }
+                }
+            }
         }
     }
+    Put(&builder, "INCLUDE_END");
+    // for (auto *node = info.materials.first; node != 0; node = node->next)
+    // {
+    //     for (u32 i = 0; i < node->count; i++)
+    //     {
+    //         ScenePacket *packet = &node->values[i];
+    //         WriteMaterial(&builder, packet, cDiffuseParameterIds,
+    //                       ArrayLength(cDiffuseParameterIds));
+    //     }
+    // }
 
+    WriteEntireFile(&builder, outFile);
     ScratchEnd(temp);
 }
 
@@ -1689,9 +1753,17 @@ void WriteRTSceneFile(string filename, string directory, SceneLoadState *state)
 
 void LoadPBRT(Arena *arena, string filename)
 {
+    u32 numProcessors = OS_NumProcessors();
+    Arena **arenas    = PushArray(arena, Arena *, numProcessors);
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        arenas[i] = ArenaAlloc(16);
+    }
+    LoadPBRT(arenas, filename);
+
+#if 0
 #define COMMA ,
     SceneLoadState state;
-    u32 numProcessors       = OS_NumProcessors();
     state.numTriMeshes      = PushArray(arena, u32, numProcessors);
     state.numQuadMeshes     = PushArray(arena, u32, numProcessors);
     state.totalNumInstTypes = PushArray(arena, u32, numProcessors);
@@ -1746,11 +1818,7 @@ void LoadPBRT(Arena *arena, string filename)
     state.mainArena      = arena;
     state.stringCache    = InternedStringCache<16384, 8, 64>(arena);
     state.transformCache = HashSet<AffineSpace, 1048576, 8, 1024, MemoryType_Transform>(arena);
-
     string baseDirectory = Str8PathChopPastLastSlash(filename);
-    LoadPBRT(filename, baseDirectory, &state);
-
-    scheduler.Wait(&state.counter);
 
     u64 totalNumShapes        = 0;
     u64 totalNumMaterials     = 0;
@@ -1777,15 +1845,14 @@ void LoadPBRT(Arena *arena, string filename)
     printf("Total num instance types: %lld\n", totalNumInstanceTypes);
     printf("Total num instances: %lld\n", totalNumInstances);
     printf("Total num transforms: %lld\n", totalNumTransforms);
+#endif
 
     // WriteRTSceneFile(filename, &state);
-
-    StringBuilder builder = {};
-    WriteMeta(&builder, filename, &state);
+    // WriteMeta(&builder, filename, &state);
 
     for (u32 i = 0; i < numProcessors; i++)
     {
-        ArenaClear(state.tempArenas[i]);
+        ArenaClear(arenas[i]);
     }
 }
 } // namespace rt
