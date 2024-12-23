@@ -64,6 +64,7 @@ void Print(const char *fmt, va_list args);
         Print("Expression: %s\nFile: %s\nLine Num: %u\n", #expression, __FILE__, __LINE__);   \
         printf("Expression: %s\nFile: %s\nLine Num: %u\n", #expression, __FILE__, __LINE__);  \
         Trap();                                                                               \
+        std::quick_exit(1);                                                                   \
     }
 #define Error(expression, str, ...)                                                           \
     if (expression)                                                                           \
@@ -74,6 +75,7 @@ void Print(const char *fmt, va_list args);
         Print(str, __VA_ARGS__);                                                              \
         Print("Expression: %s\nFile: %s\nLine Num: %u\n", #expression, __FILE__, __LINE__);   \
         Trap();                                                                               \
+        std::quick_exit(1);                                                                   \
     }
 #define StaticAssert(expr, ID) static u8 Glue(ID, __LINE__)[(expr) ? 1 : -1]
 #define NotImplemented         Assert(0)
