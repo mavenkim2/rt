@@ -1386,25 +1386,56 @@ void CheckDuplicateMaterial(Arena *arena, ScenePacket *packet, MaterialHashNode 
     ScratchEnd(temp);
 }
 
-// TODO: need to consolidate object types, object instances, textures, materials, shapes, etc.
+enum class TextureType
+{
+    Ptex,
+    Max,
+};
+ENUM_CLASS_FLAGS(TextureType)
+
+static const StringId cDiffuseParameterIds[] = {
+    "reflectance"_sid,
+    "displacement"_sid,
+};
+static const string cDiffuseParameterNames[] = {
+    "reflectance",
+    "displacement",
+};
+// TODO: need to consolidate object types, object instances, textures, materials, shapes,
+// transforms, etc.
 void WriteMeta(StringBuilder *builder, string filename, SceneLoadState *state)
 {
     TempArena temp    = ScratchStart(0, 0);
     u32 numProcessors = OS_NumProcessors();
 
     u32 tentativeCount = 0;
+    u32 textureCount   = 0;
     for (u32 pIndex = 0; pIndex < numProcessors; pIndex++)
     {
         auto *list = &state->materials[pIndex];
         tentativeCount += list->totalCount;
+        textureCount += &state->textures[pIndex].totalCount;
     }
 
-    u32 hashTableSize     = Max(1024, NextPowerOfTwo(tentativeCount));
-    u32 hashMask          = hashTableSize - 1;
-    MaterialHashNode *map = PushArray(temp.arena, MaterialHashNode, hashTableSize);
-    u32 materialCount     = 0;
-    u32 textureCount      = 0;
+    u32 hashTableSize = Max(1024, NextPowerOfTwo(tentativeCount));
+    u32 hashMask      = hashTableSize - 1;
 
+    u32 textureTableSize        = Max(1024, NextPowerOfTwo(textureCount));
+    MaterialHashNode *map       = PushArray(temp.arena, MaterialHashNode, hashTableSize);
+    TextureHashNode *textureMap = PushArray(temp.arena, TextureHashNode, textureTableSize);
+    u32 materialCount           = 0;
+
+    u32 textureCount = 0;
+
+    // ways of doing this:
+    // 1. all the textures are in 1 file. the problem with this is that there's a lot...
+    // 2. split the textures between files. the problem with THIS is that how do I allocate?
+    //      - duplicate the material/texture
+    //          - this probably doesn't work because transforms would need to be duplicated?
+    //      - index into global array
+    //          - keep track of running total using atomics. wouldn't be horrible because
+    //          we could batch per file
+    Put(builder, "TEXTURE_START");
     for (u32 pIndex = 0; pIndex < numProcessors; pIndex++)
     {
         auto *list = &state->textures[pIndex];
@@ -1416,12 +1447,50 @@ void WriteMeta(StringBuilder *builder, string filename, SceneLoadState *state)
                 switch (packet->type)
                 {
                     case "floatptex"_sid:
-                    {
-                    }
-                    break;
                     case "spectrumptex"_sid:
                     {
-                        textureCount++;
+                        i32 index = packet->FindKey("Name"_sid);
+                        if (index == -1) Error(0, "No texture name speciied for material.\n");
+
+                        u64 hash =
+                            MurmurHash64A(packet->bytes[index], packet->sizes[index], 0);
+
+                        string textureName = Str8(packet->bytes[index], packet->sizes[index]);
+                        TextureHashNode *node = textureMap[hash & (textureTableSize - 1)];
+                        TextureHashNode *prev;
+                        while (node)
+                        {
+                            if (node->hash == hash && node->name == textureName)
+                            {
+                                break;
+                            }
+                            prev = node;
+                            node = node->next;
+                        }
+                        if (!node)
+                        {
+                            prev->hash = hash;
+                            prev->id   = textureCount++;
+                            prev->name = PushStr8Copy(temp.arena, textureName);
+                            prev->next = PushStruct(temp.arena, TextureHashNode);
+                            StringId parameterNames[] = {
+                                "filename"_sid,
+                                "scale"_sid,
+                                "encoding"_sid,
+                            };
+                            u32 count = ArrayLength(parameterNames);
+                            for (u32 c = 0; c < count; c++)
+                            {
+                                for (u32 i = 0; i < packet->parameterCount; i++)
+                                {
+                                    if (packet->parameterNames[i] == parameterNames[c])
+                                    {
+                                        Put(builder, "$");
+                                        Put(builder, packet->bytes[i], packet->sizes[i]);
+                                    }
+                                }
+                            }
+                        }
                     }
                     break;
                     default:
@@ -1431,7 +1500,6 @@ void WriteMeta(StringBuilder *builder, string filename, SceneLoadState *state)
             }
         }
     }
-    printf("Texture count: %u\n", textureCount);
     for (u32 pIndex = 0; pIndex < numProcessors; pIndex++)
     {
         auto *list = &state->materials[pIndex];
@@ -1445,13 +1513,9 @@ void WriteMeta(StringBuilder *builder, string filename, SceneLoadState *state)
                 {
                     case "diffuse"_sid:
                     {
-                        const StringId parameterNames[] = {
-                            "reflectance"_sid,
-                            "displacement"_sid,
-                        };
-                        CheckDuplicateMaterial(temp.arena, packet, map, hashMask, "diffuse",
-                                               parameterNames, ArrayLength(parameterNames),
-                                               materialCount);
+                        CheckDuplicateMaterial(
+                            temp.arena, packet, map, hashMask, "diffuse", cDiffuseParameterIds,
+                            ArrayLength(cDiffuseParameterIds), materialCount);
                     }
                     break;
                     case "diffusetransmission"_sid:
@@ -1496,6 +1560,77 @@ void WriteMeta(StringBuilder *builder, string filename, SceneLoadState *state)
         }
     }
     printf("Total # unique materials: %u\n", materialCount);
+}
+
+struct PBRTFileInfo
+{
+    u32 numMaterials;
+    u32 numTextures;
+    u32 numLights;
+
+    ChunkedLinkedList<ScenePacket, 1024, MemoryType_Material> materials;
+    TextureHashNode *textureMap;
+    u32 textureMapSize;
+};
+
+void WriteMaterial(StringBuilder *builder, PBRTFileInfo *fileInfo, ScenePacket *packet,
+                   StringId *parameterIDs, string *parameterNames, u32 count)
+{
+    for (u32 c = 0; c < count; c++)
+    {
+        for (u32 i = 0; i < packet->parameterCount; i++)
+        {
+            if (packet->parameterNames[i] == parameterNames[c])
+            {
+                u64 hash = MurmurHash64A(packet->bytes[i], packet->sizes[i], 0);
+                TextureHashNode *node =
+                    fileInfo->textureMap[hash & (fileInfo->textureMapSize - 1)];
+                TextureHashNode *prev;
+                while (node)
+                {
+                    if (node->hash == hash && node->name == name) break;
+                    prev = node;
+                    node = node->next;
+                }
+                Error(node, "Material references an unknown texture.\n");
+                Put(builder, "t %u ", node->id);
+            }
+        }
+    }
+}
+
+// TODO: don't overcomplicate just use the tagged pointer thing you already have and stop
+// using the weird tuples...
+// TODO: need some way of getting information per file...
+void WriteFile(string filename, SceneLoadState *state)
+{
+    TempArena temp = ScratchStart(0, 0);
+    string file    = RemoveFileExtension(filename);
+    StrConcat(temp.arena, file, ".rtscene");
+
+    StringBuilder builder  = {};
+    builder.arena          = temp.arena;
+    u32 totalMaterialCount = 0;
+    PBRTFileInfo info;
+
+    Put(&builder, "RTSCENE_START");
+    Put(&builder, "MATERIALS_START");
+    Put(&builder, "Offset");
+    PutPointerValue(&builder, &totalMaterialCount);
+
+    Put(&builder, "_");
+    Put(&builder, "#");
+    for (auto *node = info.materials.first; node != 0; node = node->next)
+    {
+        for (u32 i = 0; i < node->count; i++)
+        {
+            ScenePacket *packet = &node->values[i];
+            WriteMaterial(&builder, packet, cDiffuseParameterIds,
+                          ArrayLength(cDiffuseParameterIds));
+        }
+    }
+
+    ScratchEnd(temp);
 }
 
 #if 0

@@ -882,6 +882,15 @@ u64 PutU64(StringBuilder *builder, u64 value)
     return result;
 }
 
+void Put(StringBuilder *builder, char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    string result = PushStr8FV(builder->arena, fmt, args);
+    Put(builder, result);
+    va_end(args);
+}
+
 void PutLine(StringBuilder *builder, u32 indents, char *fmt, ...)
 {
     va_list args;

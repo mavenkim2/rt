@@ -23,11 +23,25 @@ bool GetSectionOffsets(Tokenizer *tokenizer, FileOffsets *offsets)
     GetPointerValue(tokenizer, &offsets->dataOffset);
     return true;
 }
+
+enum class DataType
+{
+    Float,
+    Vec2,
+    Vec3,
+    Int,
+    Bool,
+    String,
+    Blackbody,
+    Spectrum,
+};
+
 struct ScenePacket
 {
     StringId *parameterNames;
     u8 **bytes;
     u32 *sizes;
+    DataType *types;
 
     StringId type;
 
@@ -48,6 +62,14 @@ struct ScenePacket
     inline i32 GetInt(i32 i) const { return *(i32 *)(bytes[i]); }
     inline bool GetBool(i32 i) const { return *(bool *)(bytes[i]); }
     inline f32 GetFloat(i32 i) const { return *(f32 *)(bytes[i]); }
+    inline i32 FindKey(StringID parameterName)
+    {
+        for (u32 i = 0; i < parameterCount; i++)
+        {
+            if (parameterNames[i] == parameterName) return i;
+        }
+        return -1;
+    }
     // inline u8 *GetByParamName(const string &name) const
     // {
     //     for (u32 i = 0; i < parameterCount; i++)
