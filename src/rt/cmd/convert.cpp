@@ -51,6 +51,77 @@ struct QuadMesh
     u32 numIndices;
     u32 numVertices;
 };
+
+bool CheckQuadPLY(string filename)
+{
+    string buffer = OS_MapFileRead(filename); // OS_ReadFile(arena, filename);
+    Tokenizer tokenizer;
+    tokenizer.input  = buffer;
+    tokenizer.cursor = buffer.str;
+
+    string line = ReadLine(&tokenizer);
+    Assert(line == "ply");
+    line = ReadLine(&tokenizer);
+    // TODO: really need to handle big endian, used in some of the stanford models
+    Assert(line == "format binary_little_endian 1.0");
+
+    u32 numVertices = 0;
+    u32 numFaces    = 0;
+
+    for (;;)
+    {
+        string word = ReadWord(&tokenizer);
+        if (word == "element")
+        {
+            string elementType = ReadWord(&tokenizer);
+            if (elementType == "vertex")
+            {
+                numVertices = ConvertToUint(ReadWord(&tokenizer));
+                for (;;)
+                {
+                    word = CheckWord(&tokenizer);
+                    if (word == "element") break;
+                    ReadWord(&tokenizer);
+                    word = ReadWord(&tokenizer);
+                    Assert(word == "float");
+                    word = ReadWord(&tokenizer);
+                }
+            }
+            else if (elementType == "face")
+            {
+                numFaces = ConvertToUint(ReadWord(&tokenizer));
+                for (;;)
+                {
+                    word = CheckWord(&tokenizer);
+                    if (word == "element" || word == "end_header") break;
+                    // Skips the word "property"
+                    ReadWord(&tokenizer);
+                    word = ReadWord(&tokenizer);
+                    if (word == "list")
+                    {
+                        ReadWord(&tokenizer);
+                        ReadWord(&tokenizer);
+                        ReadWord(&tokenizer);
+                    }
+                    else
+                    {
+                        ReadWord(&tokenizer);
+                    }
+                }
+            }
+            else
+            {
+                Error(0, "elementType: %s\n", (char *)elementType.str);
+            }
+        }
+        else if (word == "end_header") break;
+    }
+
+    // 2 triangles/1 quad for every 4 vertices. If this condition isn't met, it isn't a quad
+    // mesh
+    return numFaces == numVertices / 2;
+}
+
 struct Instance
 {
     // TODO: materials
@@ -333,7 +404,6 @@ void CreateScenePacket(Arena *arena, string word, ScenePacket *packet, Tokenizer
                        InternedStringCache<numNodes, chunkSize, numStripes> *stringCache,
                        MemoryType memoryType, u32 additionalParameters = 0)
 {
-    ReadWord(tokenizer);
     string type;
     b32 result = GetBetweenPair(type, tokenizer, '"');
     Assert(result);
@@ -359,13 +429,19 @@ inline void SkipToNextDigitArray(Tokenizer *tokenizer)
 
 inline void AdvanceToNextLine(Tokenizer *tokenizer)
 {
-    if (Advance(tokenizer, " ]\n")) return;
-    if (Advance(tokenizer, "]\n")) return;
-    if (Advance(tokenizer, "\n")) return;
-
-    // if it's not on the next line, make sure to still advance
-    if (Advance(tokenizer, "]")) return;
-    if (Advance(tokenizer, " ]")) return;
+    bool nextLine = false;
+    while (CharIsBlank(*tokenizer->cursor))
+    {
+        tokenizer->cursor++;
+    }
+    if (*tokenizer->cursor == ']')
+    {
+        tokenizer->cursor++;
+    }
+    while (CharIsBlank(*tokenizer->cursor))
+    {
+        tokenizer->cursor++;
+    }
 }
 
 template <i32 numNodes, i32 chunkSize, i32 numStripes>
@@ -675,9 +751,13 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
         }
         if (graphicsStateCount != 0) SkipToNextChar(&tokenizer);
 
-        string word = CheckWord(&tokenizer);
+        string word = ReadWordAndSkipToNextWord(&tokenizer);
         // Comments/Blank lines
-        if (word.size == 0 || word.str[0] == '#')
+        if (word.size == 0)
+        {
+            continue;
+        }
+        if (word.str[0] == '#')
         {
             SkipToNextLine(&tokenizer);
             continue;
@@ -708,8 +788,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 Assert(graphicsStateCount < ArrayLength(graphicsStateStack));
                 GraphicsState *gs = &graphicsStateStack[graphicsStateCount++];
                 *gs               = currentGraphicsState;
-
-                SkipToNextLine(&tokenizer);
             }
             break;
             case "AttributeEnd"_sid:
@@ -724,8 +802,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
 
                 // Pop stack
                 currentGraphicsState = graphicsStateStack[--graphicsStateCount];
-
-                SkipToNextLine(&tokenizer);
             }
             break;
             // TODO: area light count is reported as 23 when there's 22
@@ -761,7 +837,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             case "ConcatTransform"_sid:
             {
                 currentGraphicsState.transformIndex = transforms.Length();
-                ReadWord(&tokenizer);
                 SkipToNextDigit(&tokenizer);
                 f32 r0c0 = ReadFloat(&tokenizer);
                 f32 r0c1 = ReadFloat(&tokenizer);
@@ -818,13 +893,11 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             }
             case "Identity"_sid:
             {
-                ReadWord(&tokenizer);
                 currentGraphicsState.transform = AffineSpace::Identity();
             }
             break;
             case "Import"_sid:
             {
-                ReadWord(&tokenizer);
                 string importedFilename;
 
                 b32 result = GetBetweenPair(importedFilename, &tokenizer, '"');
@@ -840,7 +913,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             break;
             case "Include"_sid:
             {
-                ReadWord(&tokenizer);
                 string importedFilename;
                 b32 result = GetBetweenPair(importedFilename, &tokenizer, '"');
                 Assert(result);
@@ -855,10 +927,9 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             case "LookAt"_sid:
             {
                 currentGraphicsState.transformIndex = transforms.Length();
-                ReadWord(&tokenizer);
-                f32 posX = ReadFloat(&tokenizer);
-                f32 posY = ReadFloat(&tokenizer);
-                f32 posZ = ReadFloat(&tokenizer);
+                f32 posX                            = ReadFloat(&tokenizer);
+                f32 posY                            = ReadFloat(&tokenizer);
+                f32 posZ                            = ReadFloat(&tokenizer);
                 SkipToNextDigit(&tokenizer);
                 f32 lookX = ReadFloat(&tokenizer);
                 f32 lookY = ReadFloat(&tokenizer);
@@ -886,7 +957,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             case "MakeNamedMaterial"_sid:
             {
                 bool isNamedMaterial = (sid == "MakeNamedMaterial"_sid);
-                ReadWord(&tokenizer);
                 string materialNameOrType;
                 b32 result = GetBetweenPair(materialNameOrType, &tokenizer, '"');
                 Assert(result);
@@ -927,7 +997,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             break;
             case "NamedMaterial"_sid:
             {
-                ReadWord(&tokenizer);
                 string materialName;
                 b32 result = GetBetweenPair(materialName, &tokenizer, '"');
                 Assert(result);
@@ -943,7 +1012,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 Error(currentObject == 0, "ObjectBegin cannot be called recursively.");
                 Error(currentGraphicsState.areaLightIndex == -1,
                       "Area lights instancing not supported.");
-                ReadWord(&tokenizer);
                 string objectName;
 
                 b32 result = GetBetweenPair(objectName, &tokenizer, '"');
@@ -960,7 +1028,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             case "ObjectEnd"_sid:
             {
                 Error(worldBegin, "Tried to specify %S before WorldBegin\n", word);
-                ReadWord(&tokenizer);
 
                 currentObject->shapeIndexEnd = shapes.Length();
                 state->totalNumInstTypes += PopCount(currentObject->shapeTypeFlags);
@@ -972,7 +1039,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             case "ObjectInstance"_sid:
             {
                 Error(worldBegin, "Tried to specify %S after WorldBegin\n", word);
-                ReadWord(&tokenizer);
                 string objectName;
                 b32 result = GetBetweenPair(objectName, &tokenizer, '"');
                 Assert(result);
@@ -986,14 +1052,18 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 SkipToNextLine(&tokenizer);
             }
             break;
+            case "PixelFilter"_sid:
+            {
+                SkipToNextLine(&tokenizer);
+            }
+            break;
             case "Rotate"_sid:
             {
                 currentGraphicsState.transformIndex = transforms.Length();
-                ReadWord(&tokenizer);
-                f32 angle = ReadFloat(&tokenizer);
-                f32 axisX = ReadFloat(&tokenizer);
-                f32 axisY = ReadFloat(&tokenizer);
-                f32 axisZ = ReadFloat(&tokenizer);
+                f32 angle                           = ReadFloat(&tokenizer);
+                f32 axisX                           = ReadFloat(&tokenizer);
+                f32 axisY                           = ReadFloat(&tokenizer);
+                f32 axisZ                           = ReadFloat(&tokenizer);
                 AffineSpace rotationMatrix =
                     AffineSpace::Rotate(Vec3f(axisX, axisY, axisZ), angle);
                 currentGraphicsState.transform =
@@ -1013,10 +1083,9 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             case "Scale"_sid:
             {
                 currentGraphicsState.transformIndex = transforms.Length();
-                ReadWord(&tokenizer);
-                f32 s0 = ReadFloat(&tokenizer);
-                f32 s1 = ReadFloat(&tokenizer);
-                f32 s2 = ReadFloat(&tokenizer);
+                f32 s0                              = ReadFloat(&tokenizer);
+                f32 s1                              = ReadFloat(&tokenizer);
+                f32 s2                              = ReadFloat(&tokenizer);
 
                 AffineSpace scale              = AffineSpace::Scale(Vec3f(s0, s1, s2));
                 currentGraphicsState.transform = currentGraphicsState.transform * scale;
@@ -1034,8 +1103,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
                 {
                     packet = &shapes.AddBack();
                 }
-
-                ReadWord(&tokenizer);
 
                 u32 numVertices = 0;
                 u32 numIndices  = 0;
@@ -1115,10 +1182,9 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             case "Translate"_sid:
             {
                 currentGraphicsState.transformIndex = transforms.Length();
-                ReadWord(&tokenizer);
-                f32 t0 = ReadFloat(&tokenizer);
-                f32 t1 = ReadFloat(&tokenizer);
-                f32 t2 = ReadFloat(&tokenizer);
+                f32 t0                              = ReadFloat(&tokenizer);
+                f32 t1                              = ReadFloat(&tokenizer);
+                f32 t2                              = ReadFloat(&tokenizer);
 
                 AffineSpace t                  = AffineSpace::Translate(Vec3f(t0, t1, t2));
                 currentGraphicsState.transform = currentGraphicsState.transform * t;
@@ -1127,7 +1193,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             case "Transform"_sid:
             {
                 currentGraphicsState.transformIndex = transforms.Length();
-                ReadWord(&tokenizer);
                 SkipToNextDigit(&tokenizer);
                 f32 r0c0 = ReadFloat(&tokenizer);
                 f32 r0c1 = ReadFloat(&tokenizer);
@@ -1160,7 +1225,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             break;
             case "Texture"_sid:
             {
-                ReadWord(&tokenizer);
                 string textureName;
                 b32 result = GetBetweenPair(textureName, &tokenizer, '"');
 
@@ -1190,7 +1254,6 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
             break;
             case "WorldBegin"_sid:
             {
-                ReadWord(&tokenizer);
                 // NOTE: this assumes "WorldBegin" only occurs in one
                 // file
                 worldBegin = true;
@@ -1249,10 +1312,10 @@ void LoadPBRT(string filename, string directory, SceneLoadState *state,
     ScratchEnd(temp);
 }
 
-struct PBRTMetaInfo
-{
-    u32 numMaterials[(u32)MaterialType::Max];
-};
+// struct PBRTMetaInfo
+// {
+//     u32 numMaterials[(u32)MaterialType::Max];
+// };
 
 struct MaterialHashNode
 {
@@ -1547,7 +1610,7 @@ int main(int argc, char **argv)
     }
     Assert(argc == 2);
     string filename = Str8C(argv[1]);
-    if (!(GetFileExtension(filename) == ".pbrt"))
+    if (!(GetFileExtension(filename) == "pbrt"))
     {
         printf("You must pass in a valid PBRT file to convert. Aborting... \n");
         return 1;

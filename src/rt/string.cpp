@@ -535,6 +535,27 @@ string ReadWord(Tokenizer *tokenizer)
     return result;
 }
 
+inline void SkipToNextChar(Tokenizer *tokenizer)
+{
+    while (!EndOfBuffer(tokenizer) && IsBlank(tokenizer)) tokenizer->cursor++;
+}
+
+string ReadWordAndSkipToNextWord(Tokenizer *tokenizer)
+{
+    Assert(CharIsAlpha(*tokenizer->cursor));
+    string result;
+    result.str  = tokenizer->cursor;
+    result.size = 0;
+
+    while (!EndOfBuffer(tokenizer) && !CharIsBlank(*tokenizer->cursor))
+    {
+        tokenizer->cursor++;
+        result.size++;
+    }
+    SkipToNextChar(tokenizer);
+    return result;
+}
+
 string ReadBytes(Tokenizer *tokenizer, u64 numBytes)
 {
     string result;
@@ -551,9 +572,9 @@ string CheckWord(Tokenizer *tokenizer)
     result.str  = tokenizer->cursor;
     result.size = 0;
 
-    u8 *cursor = tokenizer->cursor;
-    while (!EndOfBuffer(tokenizer) && *cursor != ' ' && *cursor++ != '\n')
+    while (!EndOfBuffer(tokenizer) && !CharIsBlank(*tokenizer->cursor))
     {
+        tokenizer->cursor++;
         result.size++;
     }
     return result;
@@ -662,11 +683,6 @@ inline u32 ReadUint(Tokenizer *iter)
         result += *iter->cursor++ - '0';
     }
     return result;
-}
-
-inline void SkipToNextChar(Tokenizer *tokenizer)
-{
-    while (!EndOfBuffer(tokenizer) && IsBlank(tokenizer)) tokenizer->cursor++;
 }
 
 inline void SkipToNextDigit(Tokenizer *tokenizer)
