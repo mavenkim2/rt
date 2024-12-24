@@ -440,8 +440,12 @@ struct PBRTFileInfo
         textures       = decltype(textures)(arena);
         lights         = decltype(lights)(arena);
         instanceTypes  = decltype(instanceTypes)(arena);
-        instances      = decltype(instances)(arena);
-        transforms     = decltype(transforms)(arena);
+
+        includedFiles     = decltype(includedFiles)(arena);
+        fileInstanceTypes = decltype(fileInstanceTypes)(arena);
+
+        instances  = decltype(instances)(arena);
+        transforms = decltype(transforms)(arena);
     }
     void Copy(Arena *arena) {}
     u32 textureMapSize;
@@ -743,9 +747,19 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
 }
 
 void WriteFile(PBRTFileInfo *info);
-void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
-              bool inWorldBegin = false, bool imported = false)
+void LoadPBRT(Arena **arenas, string directory, string filename,
+              GraphicsState graphicsState = {}, bool inWorldBegin = false,
+              bool imported = false)
 {
+    enum class ScopeType
+    {
+        None,
+        Attribute,
+        Object,
+    };
+    ScopeType scope[32] = {};
+    u32 scopeCount      = 0;
+
     // TODO
     inWorldBegin               = true;
     Scheduler::Counter counter = {};
@@ -759,25 +773,36 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
 
     PBRTFileInfo *state = PushStruct(temp.arena, PBRTFileInfo);
     state->Init(filename, temp.arena);
-    auto &shapes         = state->shapes;
-    auto &instanceShapes = state->instanceShapes;
-    auto &materials      = state->materials;
-    auto &textures       = state->textures;
-    auto &lights         = state->lights;
-    auto &instanceTypes  = state->instanceTypes;
-    auto &instances      = state->instances;
-    auto &transforms     = state->transforms;
+    auto *shapes         = &state->shapes;
+    auto *instanceShapes = &state->instanceShapes;
+    auto *materials      = &state->materials;
+    auto *textures       = &state->textures;
+    auto *lights         = &state->lights;
+    auto *instanceTypes  = &state->instanceTypes;
+    auto *instances      = &state->instances;
+    auto *transforms     = &state->transforms;
 
     bool worldBegin = inWorldBegin;
+    bool writeFile  = true;
 
     // Stack variables
-    struct FileStack
+    // struct FileStack
+    // {
+    //     Tokenizer oldTokenizer;
+    //     PBRTFileInfo *info;
+    //     bool writeFile;
+    // };
+    // FileStack stackEntries[32];
+
+    struct FileStackEntry
     {
-        Tokenizer oldTokenizer;
-        PBRTFileInfo *info;
+        Tokenizer tokenizer;
+        bool writeFile;
     };
-    FileStack stackEntries[32];
-    u32 numStackEntries = 0;
+    FileStackEntry fileStack[32];
+    u32 numFileStackEntries = 0;
+    PBRTFileInfo *fileInfoStack[32];
+    u32 numFileInfoStackEntries = 0;
 
     GraphicsState graphicsStateStack[64];
     u32 graphicsStateCount = 0;
@@ -788,16 +813,28 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
     if (currentObject && imported)
     {
         StringId name                  = currentObject->name;
-        currentObject                  = &instanceTypes.AddBack();
+        currentObject                  = &instanceTypes->AddBack();
         currentObject->name            = name;
-        currentObject->shapeIndexStart = shapes.Length();
+        currentObject->shapeIndexStart = shapes->Length();
     }
 
     auto AddTransform = [&]() {
-        if (currentGraphicsState.transformIndex == transforms.Length())
+        if (currentGraphicsState.transformIndex == transforms->Length())
         {
-            transforms.Push(currentGraphicsState.transform);
+            transforms->Push(currentGraphicsState.transform);
         }
+    };
+
+    auto SetNewState = [&](PBRTFileInfo *newState) {
+        state          = newState;
+        shapes         = &state->shapes;
+        instanceShapes = &state->instanceShapes;
+        materials      = &state->materials;
+        textures       = &state->textures;
+        lights         = &state->lights;
+        instanceTypes  = &state->instanceTypes;
+        instances      = &state->instances;
+        transforms     = &state->transforms;
     };
 
     // TODO: media
@@ -805,18 +842,23 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
     {
         if (EndOfBuffer(&tokenizer))
         {
-            if (currentObject && imported)
-            {
-                currentObject->shapeIndexEnd = instanceShapes.Length();
-                Assert(currentObject->shapeIndexEnd >= currentObject->shapeIndexStart);
-            }
+            // if (currentObject && imported)
+            // {
+            //     currentObject->shapeIndexEnd = instanceShapes.Length();
+            //     Assert(currentObject->shapeIndexEnd >= currentObject->shapeIndexStart);
+            // }
             OS_UnmapFile(tokenizer.input.str);
-            WriteFile(state);
 
-            if (numStackEntries == 0) break;
-            FileStack *stackEntry = &stackEntries[--numStackEntries];
-            tokenizer             = stackEntry->oldTokenizer;
-            state                 = stackEntry->info;
+            if (writeFile)
+            {
+                Assert(numFileInfoStackEntries);
+                SetNewState(fileInfoStack[--numFileInfoStackEntries]);
+            }
+
+            if (numFileStackEntries == 0) break;
+            FileStackEntry entry = fileStack[--numFileStackEntries];
+            tokenizer            = entry.tokenizer;
+            writeFile            = entry.writeFile;
             continue;
         }
 
@@ -847,8 +889,9 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
                       "statement\n",
                       word);
                 Assert(graphicsStateCount < ArrayLength(graphicsStateStack));
-                GraphicsState *gs = &graphicsStateStack[graphicsStateCount++];
-                *gs               = currentGraphicsState;
+                GraphicsState *gs   = &graphicsStateStack[graphicsStateCount++];
+                *gs                 = currentGraphicsState;
+                scope[scopeCount++] = ScopeType::Attribute;
             }
             break;
             case "AttributeEnd"_sid:
@@ -857,6 +900,9 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
                       "%S cannot be specified before WorldBegin "
                       "statement\n",
                       word);
+                ScopeType type = scope[--scopeCount];
+                Error(type == ScopeType::Attribute,
+                      "Unmatched AttributeEnd statement. Aborting...\n");
                 Assert(graphicsStateCount > 0);
 
                 // Pop stack
@@ -870,8 +916,8 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
                       "%S cannot be specified before WorldBegin "
                       "statement\n",
                       word);
-                currentGraphicsState.areaLightIndex = lights.Length();
-                ScenePacket *packet                 = &lights.AddBack();
+                currentGraphicsState.areaLightIndex = lights->Length();
+                ScenePacket *packet                 = &lights->AddBack();
                 CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Light);
             }
             break;
@@ -893,7 +939,7 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
             }
             case "ConcatTransform"_sid:
             {
-                currentGraphicsState.transformIndex = transforms.Length();
+                currentGraphicsState.transformIndex = transforms->Length();
                 SkipToNextDigit(&tokenizer);
                 f32 r0c0 = ReadFloat(&tokenizer);
                 f32 r0c1 = ReadFloat(&tokenizer);
@@ -954,6 +1000,8 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
             case "Import"_sid:
             {
                 string importedFilename;
+                Error(scope[scopeCount - 1] != ScopeType::Object,
+                      "Cannot use Import in an ObjectBegin/End block.\n");
 
                 b32 result = GetBetweenPair(importedFilename, &tokenizer, '"');
                 Assert(result);
@@ -975,10 +1023,11 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
                 string &str = state->includedFiles.AddBack();
                 str         = PushStr8Copy(tempArena, importedFilename);
 
-                // string importedFullPath = StrConcat(tempArena, directory, importedFilename);
-                scheduler.Schedule(&counter, [arenas, importedFilename, currentGraphicsState,
-                                              worldBegin](u32 jobID) {
-                    LoadPBRT(arenas, importedFilename, currentGraphicsState, worldBegin, true);
+                string importedFullPath = StrConcat(tempArena, directory, importedFilename);
+                scheduler.Schedule(&counter, [arenas, importedFullPath, directory,
+                                              currentGraphicsState, worldBegin](u32 jobID) {
+                    LoadPBRT(arenas, directory, importedFullPath, currentGraphicsState,
+                             worldBegin, true);
                 });
             }
             break;
@@ -987,46 +1036,69 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
                 string importedFilename;
                 b32 result = GetBetweenPair(importedFilename, &tokenizer, '"');
                 Assert(result);
+
+                string importedFullPath = StrConcat(tempArena, directory, importedFilename);
+
+                bool checkFileInstance = graphicsStateCount &&
+                                         currentGraphicsState.transformIndex != 0 &&
+                                         scope[scopeCount - 1] == ScopeType::Attribute;
+                bool skipFile = false;
                 for (auto *node = state->includedFiles.first; node != 0; node = node->next)
                 {
                     for (u32 i = 0; i < node->count; i++)
                     {
                         if (importedFilename == node->values[i])
                         {
-                            FileInstance &inst  = state->fileInstanceTypes.AddBack();
-                            inst.filename       = PushStr8Copy(tempArena, importedFilename);
-                            inst.transformIndex = currentGraphicsState.transformIndex;
-                            AddTransform();
-                            continue;
+                            if (scope[scopeCount - 1] != ScopeType::None)
+                            {
+                                FileInstance &inst = state->fileInstanceTypes.AddBack();
+                                inst.filename      = PushStr8Copy(tempArena, importedFilename);
+                                inst.transformIndex = currentGraphicsState.transformIndex;
+                                AddTransform();
+                            }
+                            else
+                            {
+                                Error(0, "Duplicate include file outside of Attribute or "
+                                         "Object block.\n");
+                            }
+                            skipFile = true;
+                            break;
                         }
                     }
+                    if (skipFile) break;
                 }
+                if (skipFile) continue;
 
                 string &str = state->includedFiles.AddBack();
                 str         = PushStr8Copy(tempArena, importedFilename);
+                if (checkFileInstance)
+                {
+                    FileInstance &inst  = state->fileInstanceTypes.AddBack();
+                    inst.filename       = PushStr8Copy(tempArena, importedFilename);
+                    inst.transformIndex = currentGraphicsState.transformIndex;
+                    AddTransform();
 
-                Assert(numStackEntries < ArrayLength(stackEntries));
+                    PBRTFileInfo *newState = PushStruct(tempArena, PBRTFileInfo);
+                    newState->Init(importedFullPath, tempArena);
 
-                PBRTFileInfo *newState = PushStruct(tempArena, PBRTFileInfo);
-                newState->Init(importedFilename, tempArena);
-                stackEntries[numStackEntries++] = {tokenizer, state};
-                state                           = newState;
-                shapes                          = state->shapes;
-                instanceShapes                  = state->instanceShapes;
-                materials                       = state->materials;
-                textures                        = state->textures;
-                lights                          = state->lights;
-                instanceTypes                   = state->instanceTypes;
-                instances                       = state->instances;
-                transforms                      = state->transforms;
+                    fileStack[numFileStackEntries++]         = {tokenizer, writeFile};
+                    fileInfoStack[numFileInfoStackEntries++] = state;
+                    SetNewState(newState);
+                    writeFile = true;
+                }
+                else
+                {
+                    fileStack[numFileStackEntries++] = {tokenizer, writeFile};
+                    writeFile                        = false;
+                }
 
-                tokenizer.input  = OS_MapFileRead(importedFilename);
+                tokenizer.input  = OS_MapFileRead(importedFullPath);
                 tokenizer.cursor = tokenizer.input.str;
             }
             break;
             case "LookAt"_sid:
             {
-                currentGraphicsState.transformIndex = transforms.Length();
+                currentGraphicsState.transformIndex = transforms->Length();
                 f32 posX                            = ReadFloat(&tokenizer);
                 f32 posY                            = ReadFloat(&tokenizer);
                 f32 posZ                            = ReadFloat(&tokenizer);
@@ -1048,7 +1120,7 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
             case "LightSource"_sid:
             {
                 Error(worldBegin, "Tried to specify %S before WorldBegin\n", word);
-                ScenePacket *packet = &lights.AddBack();
+                ScenePacket *packet = &lights->AddBack();
                 CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Light);
             }
             break;
@@ -1060,9 +1132,9 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
                 b32 result = GetBetweenPair(materialNameOrType, &tokenizer, '"');
                 Assert(result);
 
-                ScenePacket *packet = &materials.AddBack();
+                u32 materialIndex   = materials->Length();
+                ScenePacket *packet = &materials->AddBack();
                 packet->type        = Hash(materialNameOrType);
-                u32 materialIndex   = materials.Length();
                 PBRTSkipToNextChar(&tokenizer);
                 ReadParameters(tempArena, packet, &tokenizer, MemoryType_Material);
 
@@ -1101,15 +1173,33 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
                 Error(currentObject == 0, "ObjectBegin cannot be called recursively.");
                 Error(currentGraphicsState.areaLightIndex == -1,
                       "Area lights instancing not supported.");
+                scope[scopeCount++] = ScopeType::Object;
+
                 string objectName;
 
                 b32 result = GetBetweenPair(objectName, &tokenizer, '"');
                 Assert(result);
 
-                currentObject                  = &instanceTypes.AddBack();
+                // objectbegin/end block -> write a new file; hash table w/ key as object name,
+                // value as filename
+                PBRTFileInfo *newState = PushStruct(tempArena, PBRTFileInfo);
+                string objectFileName  = StrConcat(
+                    temp.arena, Str8PathChopPastLastSlash(state->filename), objectName);
+                newState->Init(objectFileName, tempArena);
+                fileInfoStack[numFileInfoStackEntries++] = state;
+
+                SetNewState(newState);
+
+                // objectinstance -> include directive, lookup name in table to get filename,
+                // include the file I just wrote.
+
+                // include repeated multiple times in attributebegin/end blocks w/ transform ->
+                // write new file. link old file name to new filename
+
+                currentObject                  = &instanceTypes->AddBack();
                 currentObject->name            = Hash(objectName);
                 currentObject->transformIndex  = currentGraphicsState.transformIndex;
-                currentObject->shapeIndexStart = instanceShapes.Length();
+                currentObject->shapeIndexStart = shapes->Length();
 
                 AddTransform();
             }
@@ -1117,8 +1207,16 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
             case "ObjectEnd"_sid:
             {
                 Error(worldBegin, "Tried to specify %S before WorldBegin\n", word);
+                ScopeType type = scope[--scopeCount];
+                Error(type == ScopeType::Object,
+                      "Unmatched AttributeEnd statement. Aborting...\n");
 
-                currentObject->shapeIndexEnd = instanceShapes.Length();
+                currentObject->shapeIndexEnd = shapes->Length();
+                WriteFile(state);
+                Assert(numFileInfoStackEntries > 0);
+                SetNewState(fileInfoStack[--numFileInfoStackEntries]);
+
+                // #Include directive in object definition
                 Assert(currentObject->shapeIndexEnd >= currentObject->shapeIndexStart);
                 Error(currentObject != 0, "ObjectEnd must occur after ObjectBegin");
                 currentObject = 0;
@@ -1127,13 +1225,15 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
             case "ObjectInstance"_sid:
             {
                 Error(worldBegin, "Tried to specify %S after WorldBegin\n", word);
+                Error(scope[scopeCount - 1] != ScopeType::Object,
+                      "Cannot have object instance in object definition block.\n");
                 string objectName;
                 b32 result = GetBetweenPair(objectName, &tokenizer, '"');
                 Assert(result);
 
-                SceneInstance &instance = instances.AddBack();
+                SceneInstance &instance = instances->AddBack();
                 instance.name           = Hash(objectName);
-                instance.transformIndex = (i32)transforms.Length();
+                instance.transformIndex = (i32)transforms->Length();
 
                 AddTransform();
             }
@@ -1146,7 +1246,7 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
             break;
             case "Rotate"_sid:
             {
-                currentGraphicsState.transformIndex = transforms.Length();
+                currentGraphicsState.transformIndex = transforms->Length();
                 f32 angle                           = ReadFloat(&tokenizer);
                 f32 axisX                           = ReadFloat(&tokenizer);
                 f32 axisY                           = ReadFloat(&tokenizer);
@@ -1168,7 +1268,7 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
             break;
             case "Scale"_sid:
             {
-                currentGraphicsState.transformIndex = transforms.Length();
+                currentGraphicsState.transformIndex = transforms->Length();
                 f32 s0                              = ReadFloat(&tokenizer);
                 f32 s1                              = ReadFloat(&tokenizer);
                 f32 s2                              = ReadFloat(&tokenizer);
@@ -1180,15 +1280,7 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
             case "Shape"_sid:
             {
                 Error(worldBegin, "Tried to specify %S after WorldBegin\n", word);
-                ScenePacket *packet;
-                if (currentObject)
-                {
-                    packet = &instanceShapes.AddBack();
-                }
-                else
-                {
-                    packet = &shapes.AddBack();
-                }
+                ScenePacket *packet = &shapes->AddBack();
                 CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Shape, 1);
 
                 u32 numVertices = 0;
@@ -1208,7 +1300,9 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
                         string plyMeshFile;
                         plyMeshFile.str  = packet->bytes[i];
                         plyMeshFile.size = packet->sizes[i];
-                        if (CheckQuadPLY(plyMeshFile)) packet->type = "quadmesh"_sid;
+
+                        if (CheckQuadPLY(StrConcat(temp.arena, directory, plyMeshFile)))
+                            packet->type = "quadmesh"_sid;
                     }
                 }
                 if (packet->type == "trianglemesh"_sid && numVertices && numIndices &&
@@ -1238,7 +1332,7 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
             break;
             case "Translate"_sid:
             {
-                currentGraphicsState.transformIndex = transforms.Length();
+                currentGraphicsState.transformIndex = transforms->Length();
                 f32 t0                              = ReadFloat(&tokenizer);
                 f32 t1                              = ReadFloat(&tokenizer);
                 f32 t2                              = ReadFloat(&tokenizer);
@@ -1249,7 +1343,7 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
             break;
             case "Transform"_sid:
             {
-                currentGraphicsState.transformIndex = transforms.Length();
+                currentGraphicsState.transformIndex = transforms->Length();
                 SkipToNextDigit(&tokenizer);
                 f32 r0c0 = ReadFloat(&tokenizer);
                 f32 r0c1 = ReadFloat(&tokenizer);
@@ -1295,7 +1389,7 @@ void LoadPBRT(Arena **arenas, string filename, GraphicsState graphicsState = {},
                 Assert(result);
                 PBRTSkipToNextChar(&tokenizer);
 
-                ScenePacket *packet = &textures.AddBack();
+                ScenePacket *packet = &textures->AddBack();
                 packet->type        = Hash(StrConcat(tempArena, textureType, textureClass));
 
                 PBRTSkipToNextChar(&tokenizer);
@@ -1643,9 +1737,6 @@ void WriteMaterial(StringBuilder *builder, PBRTFileInfo *fileInfo, ScenePacket *
 }
 #endif
 
-// TODO: don't overcomplicate just use the tagged pointer thing you already have and stop
-// using the weird tuples...
-// TODO: need some way of getting information per file...
 void WriteFile(PBRTFileInfo *info)
 {
     TempArena temp = ScratchStart(0, 0);
@@ -1657,33 +1748,64 @@ void WriteFile(PBRTFileInfo *info)
     u32 totalMaterialCount = 0;
 
     Put(&builder, "RTSCENE_START");
-    Put(&builder, "MATERIALS_START");
-    Put(&builder, "Offset");
-    PutPointerValue(&builder, &totalMaterialCount);
+    // Put(&builder, "Offset");
+    // PutPointerValue(&builder, &totalMaterialCount);
 
-    Put(&builder, "INCLUDE_START ");
-    for (auto *node = info->includedFiles.first; node != 0; node = node->next)
+    if (info->includedFiles.totalCount && info->shapes.totalCount)
     {
-        for (u32 i = 0; i < node->count; i++)
+        Print("%S has both include and shapes\n", info->filename);
+    }
+    if (info->includedFiles.totalCount)
+    {
+        Put(&builder, "INCLUDE_START ");
+        for (auto *node = info->includedFiles.first; node != 0; node = node->next)
         {
-            string *filename = &node->values[i];
-            Put(&builder, "File: %S ", *filename);
-            for (auto *instNode = info->fileInstanceTypes.first; instNode != 0;
-                 instNode       = instNode->next)
+            for (u32 i = 0; i < node->count; i++)
             {
-                for (u32 instNodeIndex = 0; instNodeIndex < instNode->count; instNodeIndex++)
+                string *filename = &node->values[i];
+                Put(&builder, "File: %S ", *filename);
+                for (auto *instNode = info->fileInstanceTypes.first; instNode != 0;
+                     instNode       = instNode->next)
                 {
-                    FileInstance *fileInst = &instNode->values[instNodeIndex];
-                    if (fileInst->filename == *filename && fileInst->transformIndex >= 0)
+                    for (u32 instNodeIndex = 0; instNodeIndex < instNode->count;
+                         instNodeIndex++)
                     {
-                        Put(&builder, "%u ", fileInst->transformIndex);
+                        FileInstance *fileInst = &instNode->values[instNodeIndex];
+                        if (fileInst->filename == *filename && fileInst->transformIndex >= 0)
+                        {
+                            Put(&builder, "%u ", fileInst->transformIndex);
+                        }
                     }
                 }
             }
         }
+        Put(&builder, "INCLUDE_END");
     }
-    Put(&builder, "INCLUDE_END");
-    // for (auto *node = info.materials.first; node != 0; node = node->next)
+
+    StringBuilder dataBuilder = {};
+    builder.arena             = temp.arena;
+
+    if (info->shapes.totalCount)
+    {
+        Put(&builder, "SHAPE_START");
+        for (auto *node = info->shapes.first; node != 0; node = node->next)
+        {
+            for (u32 i = 0; i < node->count; i++)
+            {
+                ScenePacket *packet = node->values + i;
+                switch (packet->type)
+                {
+                    case "quadmesh"_sid:
+                    {
+                        Put(&builder, "quad");
+                    }
+                    break;
+                    default: Assert(0);
+                }
+            }
+        }
+    }
+    // for (auto *node = info.materials->first; node != 0; node = node->next)
     // {
     //     for (u32 i = 0; i < node->count; i++)
     //     {
@@ -1759,7 +1881,8 @@ void LoadPBRT(Arena *arena, string filename)
     {
         arenas[i] = ArenaAlloc(16);
     }
-    LoadPBRT(arenas, filename);
+
+    LoadPBRT(arenas, "../data/island/pbrt-v4/", filename);
 
 #if 0
 #define COMMA ,

@@ -556,9 +556,10 @@ string CheckWord(Tokenizer *tokenizer)
     result.str  = tokenizer->cursor;
     result.size = 0;
 
-    while (!EndOfBuffer(tokenizer) && !CharIsBlank(*tokenizer->cursor))
+    u8 *cursor = tokenizer->cursor;
+    while (!EndOfBuffer(tokenizer) && !CharIsBlank(*cursor))
     {
-        tokenizer->cursor++;
+        cursor++;
         result.size++;
     }
     return result;
