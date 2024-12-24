@@ -341,44 +341,6 @@ struct HomogeneousTransform
 };
 #endif
 
-struct ScenePacket
-{
-    StringId *parameterNames;
-    u8 **bytes;
-    u32 *sizes;
-
-    StringId type;
-
-    // const string **parameterNames;
-    // SceneByteType *types;
-    u32 parameterCount;
-
-    void Initialize(Arena *arena, u32 count)
-    {
-        // parameterCount = count;
-        // parameterCount = 0;
-        parameterNames = PushArray(arena, StringId, count);
-        bytes          = PushArray(arena, u8 *, count);
-        sizes          = PushArray(arena, u32, count);
-        // types          = PushArray(arena, SceneByteType, count);
-    }
-
-    inline i32 GetInt(i32 i) const { return *(i32 *)(bytes[i]); }
-    inline bool GetBool(i32 i) const { return *(bool *)(bytes[i]); }
-    inline f32 GetFloat(i32 i) const { return *(f32 *)(bytes[i]); }
-    // inline u8 *GetByParamName(const string &name) const
-    // {
-    //     for (u32 i = 0; i < parameterCount; i++)
-    //     {
-    //         if (*parameterNames[i] == name)
-    //         {
-    //             return bytes[i];
-    //         }
-    //     }
-    //     return 0;
-    // }
-};
-
 struct GeometryID
 {
     static const u32 indexMask = 0x0fffffff;
@@ -767,8 +729,6 @@ void LoadMesh();
 template <typename PrimRefType, typename Mesh>
 void GenerateMeshRefs(Mesh *meshes, PrimRef *refs, u32 offset, u32 offsetMax, u32 start,
                       u32 count, RecordAOSSplits &record);
-// what I'm thinking: instances are always instances of a scene, never of a shape. if you
-// want an instance of just one shape, you have a scene that contains only one
 
 } // namespace rt
 #endif

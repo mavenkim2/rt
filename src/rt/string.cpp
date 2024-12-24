@@ -906,14 +906,14 @@ void PutLine(StringBuilder *builder, u32 indents, char *fmt, ...)
     va_end(args);
 }
 
-StringBuilder ConcatBuilders(Arena *arena, StringBuilder *a, StringBuilder *b)
+StringBuilder ConcatBuilders(StringBuilder *a, StringBuilder *b)
 {
     StringBuilder result = {};
     result.first         = a->first;
     result.last          = b->last;
     a->last->next        = b->first;
     result.totalSize     = a->totalSize + b->totalSize;
-    result.arena         = arena;
+    result.arena         = a->arena;
     return result;
 }
 

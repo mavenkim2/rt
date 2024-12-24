@@ -22,6 +22,7 @@
 #include "integrate.h"
 #include "lights.h"
 #include "scene.h"
+#include "scene_load.h"
 // #include "bvh.h"
 #include "bxdf.h"
 #include "bsdf.h"
