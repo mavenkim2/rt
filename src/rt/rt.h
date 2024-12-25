@@ -56,11 +56,6 @@ struct ThreadMemoryStatistics
 static ThreadStatistics *threadLocalStatistics;
 static ThreadMemoryStatistics *threadMemoryStatistics;
 
-struct Options
-{
-    u32 pixelX, pixelY;
-};
-
 struct HitRecord
 {
     Vec3f normal;

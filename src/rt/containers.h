@@ -832,6 +832,13 @@ struct ChunkedLinkedList
             ptr += node->count;
         }
     }
+    inline void Merge(ChunkedLinkedList<T, numPerChunk, memoryTag> *list)
+    {
+        Assert(list->first && last);
+        last->next = list->first;
+        last       = list->last;
+        totalCount += list->totalCount;
+    }
 };
 
 } // namespace rt

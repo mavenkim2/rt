@@ -678,6 +678,10 @@ __forceinline bool operator==(const AffineSpace &a, const AffineSpace &b)
 {
     return a.c0 == b.c0 && a.c1 == b.c1 && a.c2 == b.c2 && a.c3 == b.c3;
 }
+__forceinline bool operator!=(const AffineSpace &a, const AffineSpace &b)
+{
+    return a.c0 != b.c0 || a.c1 != b.c1 || a.c2 != b.c2 || a.c3 != b.c3;
+}
 
 __forceinline Vec3f TransformV(const AffineSpace &t, const Vec3f &v)
 {

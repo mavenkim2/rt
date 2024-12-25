@@ -712,6 +712,8 @@ void TestRender(Arena *arena, Options *options = 0)
         arenas[i] = ArenaAlloc(16);
     }
 
+    PerformanceCounter counter = OS_StartCounter();
+
     // Camera
     u32 width  = 1920;
     u32 height = 804;
@@ -742,7 +744,7 @@ void TestRender(Arena *arena, Options *options = 0)
         NullShader());
     scene->materials.Set<CoatedDiffuseMaterial2>(&mat, 1);
 
-    LoadScene(arenas, "../data/island/pbrt-v4/", "isBayCedarA1/isBayCedarA1.rtscene", &renderFromWorld);
+    LoadScene(arenas, "../data/island/pbrt-v4/", options->filename, &renderFromWorld);
 
     // environment map
     Bounds bounds              = scene->scene.GetBounds();
@@ -760,6 +762,9 @@ void TestRender(Arena *arena, Options *options = 0)
     scene->lights.Set<ImageInfiniteLight>(&infLight, 1);
     scene->numLights = 1;
 
+    f32 time = OS_GetMilliseconds(counter);
+    printf("setup time: %fms\n", time);
+
     RenderParams2 params;
     params.cameraFromRaster = cameraFromRaster;
     params.renderFromCamera = renderFromCamera;
@@ -773,14 +778,17 @@ void TestRender(Arena *arena, Options *options = 0)
 
     if (options)
     {
-        params.pixelMin = Vec2u(options->pixelX, options->pixelY);
-        params.pixelMax = params.pixelMin + Vec2u(1, 1);
+        if (options->pixelX != -1 && options->pixelY != -1)
+        {
+            params.pixelMin = Vec2u(options->pixelX, options->pixelY);
+            params.pixelMax = params.pixelMin + Vec2u(1, 1);
+        }
     }
 
-    PerformanceCounter counter = OS_StartCounter();
+    counter = OS_StartCounter();
     Render(arena, params);
-    f32 time = OS_GetMilliseconds(counter);
-    printf("total time: %fms\n", time);
+    time = OS_GetMilliseconds(counter);
+    printf("total render time: %fms\n", time);
 
     f64 totalMiscTime = 0;
     for (u32 i = 0; i < numProcessors; i++)

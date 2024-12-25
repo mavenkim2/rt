@@ -70,17 +70,13 @@ struct ScenePacket
         }
         return -1;
     }
-    // inline u8 *GetByParamName(const string &name) const
-    // {
-    //     for (u32 i = 0; i < parameterCount; i++)
-    //     {
-    //         if (*parameterNames[i] == name)
-    //         {
-    //             return bytes[i];
-    //         }
-    //     }
-    //     return 0;
-    // }
+};
+
+struct Options
+{
+    string filename;
+    i32 pixelX = -1;
+    i32 pixelY = -1;
 };
 
 bool CheckQuadPLY(string filename)

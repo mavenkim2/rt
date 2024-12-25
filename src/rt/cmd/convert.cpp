@@ -439,9 +439,9 @@ string ConvertPBRTToRTScene(Arena *arena, string file)
     return PushStr8F(arena, "%S.rtscene", out);
 }
 
-void LoadPBRT(Arena **arenas, string directory, string filename,
-              GraphicsState graphicsState = {}, bool inWorldBegin = false,
-              bool imported = false)
+PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
+                       GraphicsState graphicsState = {}, bool inWorldBegin = false,
+                       bool imported = false, bool write = true)
 {
     enum class ScopeType
     {
@@ -453,8 +453,6 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
     ScopeType scope[32] = {};
     u32 scopeCount      = 0;
 
-    // TODO
-    inWorldBegin               = true;
     Scheduler::Counter counter = {};
     TempArena temp             = ScratchStart(0, 0);
     u32 threadIndex            = GetThreadIndex();
@@ -464,8 +462,8 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
     tokenizer.input  = OS_MapFileRead(StrConcat(temp.arena, directory, filename));
     tokenizer.cursor = tokenizer.input.str;
 
-    PBRTFileInfo *state = PushStruct(temp.arena, PBRTFileInfo);
-    state->Init(ConvertPBRTToRTScene(tempArena, filename), temp.arena);
+    PBRTFileInfo *state = PushStruct(tempArena, PBRTFileInfo);
+    state->Init(ConvertPBRTToRTScene(tempArena, filename), tempArena);
     auto *shapes     = &state->shapes;
     auto *materials  = &state->materials;
     auto *textures   = &state->textures;
@@ -473,7 +471,7 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
     auto *transforms = &state->transforms;
 
     bool worldBegin = inWorldBegin;
-    bool writeFile  = true;
+    bool writeFile  = write;
 
     struct ObjectToFile
     {
@@ -493,6 +491,9 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
     u32 numFileStackEntries = 0;
     PBRTFileInfo *fileInfoStack[32];
     u32 numFileInfoStackEntries = 0;
+
+    PBRTFileInfo *importedFileInfo[32];
+    u32 numImports = 0;
 
     GraphicsState graphicsStateStack[64];
     u32 graphicsStateCount = 0;
@@ -522,6 +523,7 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
         if (EndOfBuffer(&tokenizer))
         {
             OS_UnmapFile(tokenizer.input.str);
+            if (numFileStackEntries == 0) break;
 
             if (writeFile)
             {
@@ -534,7 +536,6 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
                 }
             }
 
-            if (numFileStackEntries == 0) break;
             FileStackEntry entry = fileStack[--numFileStackEntries];
             tokenizer            = entry.tokenizer;
             writeFile            = entry.writeFile;
@@ -579,6 +580,7 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
                       "%S cannot be specified before WorldBegin "
                       "statement\n",
                       word);
+                Error(scopeCount, "Unmatched AttributeEnd statement.\n");
                 ScopeType type = scope[--scopeCount];
                 Error(type == ScopeType::Attribute,
                       "Unmatched AttributeEnd statement. Aborting...\n");
@@ -588,7 +590,6 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
                 currentGraphicsState = graphicsStateStack[--graphicsStateCount];
             }
             break;
-            // TODO: area light count is reported as 23 when there's 22
             case "AreaLightSource"_sid:
             {
                 Error(worldBegin,
@@ -678,8 +679,7 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
             break;
             case "Import"_sid:
             {
-                Assert(0);
-                Error(scope[scopeCount - 1] != ScopeType::Object,
+                Error(!scopeCount || scope[scopeCount - 1] != ScopeType::Object,
                       "Cannot use Import in an ObjectBegin/End block.\n");
 
                 string importedFilename;
@@ -689,9 +689,11 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
                 string importedFullPath = StrConcat(tempArena, directory, importedFilename);
                 string newFilename      = ConvertPBRTToRTScene(tempArena, importedFilename);
 
-                bool checkFileInstance = graphicsStateCount &&
-                                         currentGraphicsState.transformIndex != -1 &&
-                                         scope[scopeCount - 1] == ScopeType::Attribute;
+                bool checkFileInstance =
+                    graphicsStateCount &&
+                    (currentGraphicsState.transform != AffineSpace::Identity() &&
+                     currentGraphicsState.transformIndex != -1) &&
+                    (scopeCount && scope[scopeCount - 1] == ScopeType::Attribute);
 
                 if (checkFileInstance)
                 {
@@ -719,11 +721,18 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
                     AddTransform();
                 }
 
-                string copiedFilename = PushStr8Copy(temp.arena, importedFilename);
-                scheduler.Schedule(&counter, [arenas, copiedFilename, directory,
-                                              currentGraphicsState, worldBegin](u32 jobID) {
-                    LoadPBRT(arenas, directory, copiedFilename, currentGraphicsState,
-                             worldBegin, true);
+                string copiedFilename = PushStr8Copy(tempArena, importedFilename);
+                u32 index             = numImports++;
+
+                GraphicsState importedState  = currentGraphicsState;
+                importedState.transform      = AffineSpace::Identity();
+                importedState.transformIndex = -1;
+
+                scheduler.Schedule(&counter, [&importedFileInfo, index, arenas, copiedFilename,
+                                              directory, importedState,
+                                              worldBegin](u32 jobID) {
+                    importedFileInfo[index] = LoadPBRT(arenas, directory, copiedFilename,
+                                                       importedState, worldBegin, true, false);
                 });
             }
             break;
@@ -736,9 +745,11 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
                 string importedFullPath = StrConcat(tempArena, directory, importedFilename);
                 string newFilename      = ConvertPBRTToRTScene(tempArena, importedFilename);
 
-                bool checkFileInstance = graphicsStateCount &&
-                                         currentGraphicsState.transformIndex != -1 &&
-                                         scope[scopeCount - 1] == ScopeType::Attribute;
+                bool checkFileInstance =
+                    graphicsStateCount &&
+                    (currentGraphicsState.transform != AffineSpace::Identity() &&
+                     currentGraphicsState.transformIndex != -1) &&
+                    (scopeCount && scope[scopeCount - 1] == ScopeType::Attribute);
                 bool skipFile = false;
                 if (checkFileInstance)
                 {
@@ -862,7 +873,7 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
             case "ObjectBegin"_sid:
             {
                 Error(worldBegin, "Tried to specify %S before WorldBegin\n", word);
-                Error(scope[scopeCount - 1] != ScopeType::Object,
+                Error(!scopeCount || scope[scopeCount - 1] != ScopeType::Object,
                       "ObjectBegin cannot be called recursively.");
                 Error(currentGraphicsState.areaLightIndex == -1,
                       "Area lights instancing not supported.");
@@ -905,6 +916,7 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
             case "ObjectEnd"_sid:
             {
                 Error(worldBegin, "Tried to specify %S before WorldBegin\n", word);
+                Error(scopeCount, "Unmatched AttributeEnd statement. Aborting...\n");
                 ScopeType type = scope[--scopeCount];
                 Error(type == ScopeType::Object,
                       "Unmatched AttributeEnd statement. Aborting...\n");
@@ -917,7 +929,7 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
             case "ObjectInstance"_sid:
             {
                 Error(worldBegin, "Tried to specify %S after WorldBegin\n", word);
-                Error(scope[scopeCount - 1] != ScopeType::Object,
+                Error(!scopeCount || scope[scopeCount - 1] != ScopeType::Object,
                       "Cannot have object instance in object definition block.\n");
                 string objectName;
                 b32 result = GetBetweenPair(objectName, &tokenizer, '"');
@@ -1158,7 +1170,7 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
                 // TODO: instantiate the camera with the current
                 // transform
                 currentGraphicsState.transform      = AffineSpace::Identity();
-                currentGraphicsState.transformIndex = 0;
+                currentGraphicsState.transformIndex = -1;
             }
             break;
             default:
@@ -1173,8 +1185,30 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
         }
     }
     scheduler.Wait(&counter);
+    u32 transformOffset = state->transforms.totalCount;
+    for (u32 i = 0; i < numImports; i++)
+    {
+        PBRTFileInfo *import = importedFileInfo[i];
+        state->includedFiles.Merge(&import->includedFiles);
+        for (auto *node = import->fileInstances.first; node != 0; node = node->next)
+        {
+            for (u32 j = 0; j < node->count; j++)
+            {
+                FileInstance *instance = &node->values[j];
+                instance->transformIndex += transformOffset;
+            }
+        }
+        state->fileInstances.Merge(&import->fileInstances);
+        transformOffset += import->transforms.totalCount;
+        state->transforms.Merge(&import->transforms);
+    }
+    if (numImports)
+    {
+        WriteFile(directory, state);
+    }
 
     ScratchEnd(temp);
+    return state;
 }
 
 struct MaterialHashNode
@@ -1579,60 +1613,6 @@ void WriteFile(string directory, PBRTFileInfo *info)
     WriteFileMapped(&finalBuilder, outFile);
     ScratchEnd(temp);
 }
-
-#if 0
-void WriteRTSceneFile(string filename, string directory, SceneLoadState *state)
-{
-    u32 numProcessors     = OS_NumProcessors();
-    TempArena temp        = ScratchStart(0, 0);
-    StringBuilder builder = {};
-    builder.arena         = temp.arena;
-
-    // Magic
-    Put(&builder, "RTF_START");
-    FileOffsets offsets = {};
-    offsets.metaOffset  = builder.totalSize + sizeof(FileOffsets);
-    PutPointerValue(&builder, &offsets);
-
-    // Materials
-    Put(&builder, "MATERIALS_START");
-    u32 materialTotal = 0;
-    for (u32 pIndex = 0; pIndex < numProcessors; pIndex++)
-    {
-        auto *list = &state->materials[pIndex];
-        for (auto *node = list->first; node != 0; node = node->next)
-        {
-            for (u32 i = 0; i < node->count; i++)
-            {
-                ScenePacket *packet = &node->values[i];
-                switch (packet->type)
-                {
-                    case "diffuse"_id:
-                    {
-                    }
-                    break;
-                    case "diffusetransmission"_id:
-                    {
-                    }
-                    break;
-                    case "dielectric"_id:
-                    {
-                    }
-                    break;
-                    case "coateddiffuse"_id:
-                    {
-                    }
-                    break;
-                    default: Error(0, "Material type string is invalid. Aborting...\n");
-                }
-            }
-        }
-    }
-    // Put(&builder, "#DIFFUSE_MATERIAL$");
-    // Put(&builder, "MATERIALS_END");
-    // Lights
-}
-#endif
 
 void LoadPBRT(Arena *arena, string filename)
 {

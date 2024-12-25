@@ -1080,7 +1080,7 @@ int main(int argc, char *argv[])
 
     const u32 count = 3000000;
 
-    Options options;
+    Options options = {};
     bool setOptions = false;
     for (int i = 1; i < argc; i++)
     {
@@ -1103,16 +1103,18 @@ int main(int argc, char *argv[])
             options.pixelY = ConvertToUint(y);
             setOptions     = true;
         }
+        else
+        {
+            options.filename = arg;
+        }
     }
+    if (options.filename.size == 0 || !(GetFileExtension(options.filename) == "rtscene"))
+    {
+        printf("Must pass in a .rtscene file.\n");
+        return 1;
+    }
+    TestRender(arena, &options);
 
-    if (setOptions)
-    {
-        TestRender(arena, &options);
-    }
-    else
-    {
-        TestRender(arena);
-    }
     // CameraRayTest(arena);
     // BVHTraverse4Test();
 
