@@ -642,6 +642,7 @@ struct SceneLoadTable
     struct Node
     {
         string filename;
+        Scheduler::Counter *counter = 0;
         ScenePrimitives *scene;
         Node *next;
     };
@@ -651,15 +652,17 @@ struct SceneLoadTable
 };
 
 void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
-                 string directory, string filename)
+                 string directory, string filename, AffineSpace *renderFromWorld = 0,
+                 bool baseFile = false)
 
 {
     Scheduler::Counter counter = {};
     TempArena temp             = ScratchStart(0, 0);
     Arena *arena               = arenas[GetThreadIndex()];
 
+    string fullFilePath = StrConcat(temp.arena, directory, filename);
     Tokenizer tokenizer;
-    tokenizer.input  = OS_MapFileRead(StrConcat(temp.arena, directory, filename));
+    tokenizer.input  = OS_MapFileRead(fullFilePath);
     tokenizer.cursor = tokenizer.input.str;
 
     bool hasMagic = Advance(&tokenizer, "RTSCENE_START ");
@@ -668,7 +671,7 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
     u64 dataOffset;
     GetPointerValue(&tokenizer, &dataOffset);
 
-    string data = OS_ReadFile(arena, filename, dataOffset);
+    string data = OS_ReadFile(arena, fullFilePath, dataOffset);
 
     Tokenizer dataTokenizer;
     dataTokenizer.input  = data;
@@ -679,110 +682,132 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
     bool hasTransforms = Advance(&dataTokenizer, "TRANSFORM_START ");
     if (hasTransforms)
     {
+        Advance(&dataTokenizer, "Count ");
+        u32 count = ReadInt(&dataTokenizer);
+        SkipToNextChar(&dataTokenizer);
         scene->affineTransforms = (AffineSpace *)(dataTokenizer.cursor);
+        if (baseFile && renderFromWorld)
+        {
+            for (u32 i = 0; i < count; i++)
+            {
+                scene->affineTransforms[i] = *renderFromWorld * scene->affineTransforms[i];
+            }
+        }
     }
 
     bool isLeaf = true;
-    if (Advance(&tokenizer, "INCLUDE_START "))
+    for (;;)
     {
-        ChunkedLinkedList<Instance, 1024, MemoryType_Instance> instances(temp.arena);
-        ChunkedLinkedList<ScenePrimitives *, 32, MemoryType_Instance> files(temp.arena);
-        isLeaf = false;
-        while (!Advance(&tokenizer, "INCLUDE_END "))
+        if (Advance(&tokenizer, "RTSCENE_END")) break;
+        if (Advance(&tokenizer, "INCLUDE_START "))
         {
-            Advance(&tokenizer, "File: ");
-            u32 fileOffset     = 0;
-            string includeFile = ReadWord(&tokenizer);
-            StringId hash      = Hash(includeFile);
-            u32 index          = hash & (table->count - 1);
-
-            BeginTicketMutex(&table->mutexes[index]);
-            auto *node = &table->nodes[index];
-            SceneLoadTable::Node *prev = 0;
-            while (node)
+            ChunkedLinkedList<Instance, 1024, MemoryType_Instance> instances(temp.arena);
+            ChunkedLinkedList<ScenePrimitives *, 32, MemoryType_Instance> files(temp.arena);
+            isLeaf = false;
+            while (!Advance(&tokenizer, "INCLUDE_END "))
             {
-                if (node->filename.size && node->filename == includeFile)
+                Advance(&tokenizer, "File: ");
+                string includeFile = ReadWord(&tokenizer);
+                StringId hash      = Hash(includeFile);
+                u32 index          = hash & (table->count - 1);
+
+                u32 id = files.Length();
+                BeginTicketMutex(&table->mutexes[index]);
+                auto *node                 = &table->nodes[index];
+                SceneLoadTable::Node *prev = 0;
+                while (node)
                 {
-                    scene->childScenes[fileOffset++] = node->scene;
-                    break;
+                    if (node->filename.size && node->filename == includeFile) break;
+                    prev = node;
+                    node = node->next;
                 }
-                prev = node;
-                node = node->next;
-            }
-            if (!node)
-            {
-                prev->filename                = PushStr8Copy(temp.arena, includeFile);
-                ScenePrimitives *includeScene = PushStruct(arena, ScenePrimitives);
-                prev->scene                   = includeScene;
-                prev->next                    = PushStruct(temp.arena, SceneLoadTable::Node);
-                node                          = prev;
-                EndTicketMutex(&table->mutexes[index]);
-                scheduler.Schedule(&counter, [&](u32 jobID) {
-                    LoadRTScene(arenas, table, includeScene, directory, filename);
-                });
-            }
-            EndTicketMutex(&table->mutexes[index]);
-            u32 id          = files.Length();
-            files.AddBack() = node->scene;
-
-            // Load instances
-            while (CharIsDigit(*tokenizer.cursor))
-            {
-                u32 transformIndex  = ReadInt(&tokenizer);
-                instances.AddBack() = {id, transformIndex};
-                SkipToNextChar(&tokenizer);
-            }
-        }
-        scene->numPrimitives = instances.totalCount;
-        scene->primitives    = PushArrayNoZero(arena, Instance *, instances.totalCount);
-        scene->childScenes   = PushArrayNoZero(arena, ScenePrimitives *, files.totalCount);
-
-        instances.Flatten((Instance *)scene->primitives);
-        files.Flatten(scene->childScenes);
-    }
-    else if (Advance(&tokenizer, "SHAPE_START "))
-    {
-        Assert(isLeaf);
-        ChunkedLinkedList<QuadMesh, 1024, MemoryType_Shape> shapes(temp.arena);
-        while (!Advance(&tokenizer, "SHAPE_END "))
-        {
-            if (Advance(&tokenizer, "Quad "))
-            {
-                QuadMesh &mesh = shapes.AddBack();
-                for (;;)
+                if (!node)
                 {
-                    if (Advance(&tokenizer, "p "))
-                    {
-                        u32 pOffset = ReadInt(&tokenizer);
-                        mesh.p      = (Vec3f *)(dataTokenizer.input.str + pOffset);
-                    }
-                    else if (Advance(&tokenizer, "n "))
-                    {
-                        u32 pOffset = ReadInt(&tokenizer);
-                        mesh.p      = (Vec3f *)(dataTokenizer.input.str + pOffset);
-                    }
-                    else if (Advance(&tokenizer, "c "))
-                    {
-                        u32 num          = ReadInt(&tokenizer);
-                        mesh.numVertices = num;
-                    }
-                    else
-                    {
-                        break;
-                    }
+                    prev->filename                = PushStr8Copy(temp.arena, includeFile);
+                    ScenePrimitives *includeScene = PushStruct(arena, ScenePrimitives);
+                    prev->scene                   = includeScene;
+                    prev->counter                 = &counter;
+                    prev->next      = PushStruct(temp.arena, SceneLoadTable::Node);
+                    files.AddBack() = includeScene;
+                    EndTicketMutex(&table->mutexes[index]);
+                    scheduler.Schedule(&counter, [=](u32 jobID) {
+                        LoadRTScene(arenas, table, includeScene, directory, prev->filename);
+                    });
+                }
+                else
+                {
+                    files.AddBack() = node->scene;
+                    EndTicketMutex(&table->mutexes[index]);
+                    scheduler.Wait(node->counter);
+                }
+
+                // Load instances
+                while (CharIsDigit(*tokenizer.cursor))
+                {
+                    u32 transformIndex  = ReadInt(&tokenizer);
+                    instances.AddBack() = {id, transformIndex};
+                    SkipToNextChar(&tokenizer);
                 }
             }
-            else
-            {
-                Assert(0);
-            }
+            scene->numPrimitives = instances.totalCount;
+            scene->primitives    = PushArrayNoZero(arena, Instance, instances.totalCount);
+            scene->childScenes   = PushArrayNoZero(arena, ScenePrimitives *, files.totalCount);
+
+            instances.Flatten((Instance *)scene->primitives);
+            files.Flatten(scene->childScenes);
         }
-        scene->numPrimitives = shapes.totalCount;
-        scene->primitives    = PushArrayNoZero(arena, QuadMesh *, shapes.totalCount);
-        shapes.Flatten((QuadMesh *)scene->primitives);
+        else if (Advance(&tokenizer, "SHAPE_START "))
+        {
+            Assert(isLeaf);
+            ChunkedLinkedList<QuadMesh, 1024, MemoryType_Shape> shapes(temp.arena);
+            while (!Advance(&tokenizer, "SHAPE_END "))
+            {
+                if (Advance(&tokenizer, "Quad "))
+                {
+                    QuadMesh &mesh = shapes.AddBack();
+                    for (;;)
+                    {
+                        if (Advance(&tokenizer, "p "))
+                        {
+                            u32 pOffset = ReadInt(&tokenizer);
+                            mesh.p      = (Vec3f *)(dataTokenizer.input.str + pOffset);
+                        }
+                        else if (Advance(&tokenizer, "n "))
+                        {
+                            u32 nOffset = ReadInt(&tokenizer);
+                            mesh.n      = (Vec3f *)(dataTokenizer.input.str + nOffset);
+                        }
+                        else if (Advance(&tokenizer, "c "))
+                        {
+                            u32 num          = ReadInt(&tokenizer);
+                            mesh.numVertices = num;
+                        }
+                        else
+                        {
+                            break;
+                        }
+                        SkipToNextChar(&tokenizer);
+                    }
+                }
+                else
+                {
+                    Assert(0);
+                }
+            }
+            scene->numPrimitives = shapes.totalCount;
+            scene->primitives    = PushArrayNoZero(arena, QuadMesh, shapes.totalCount);
+            shapes.Flatten((QuadMesh *)scene->primitives);
+        }
+        else
+        {
+            Error(0, "Invalid section header.\n");
+        }
     }
 
     scheduler.Wait(&counter);
+    OS_UnmapFile(tokenizer.input.str);
+    PrimitiveIndices *ids = PushStructConstruct(arena, PrimitiveIndices)(
+        LightHandle(), MaterialHandle(MaterialType::CoatedDiffuseMaterial2, 0));
     BuildSettings settings;
     if (!isLeaf)
     {
@@ -790,6 +815,8 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
     }
     else
     {
+        Assert(!hasTransforms);
+        scene->primIndices = ids;
         // TODO: hardcoded
         BuildQuadBVH(arenas, settings, scene);
     }
@@ -797,7 +824,7 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
     ScratchEnd(temp);
 }
 
-void LoadScene(Arena **arenas, string directory, string filename)
+void LoadScene(Arena **arenas, string directory, string filename, AffineSpace *t)
 {
     TempArena temp = ScratchStart(0, 0);
     Arena *arena   = arenas[GetThreadIndex()];
@@ -807,7 +834,7 @@ void LoadScene(Arena **arenas, string directory, string filename)
     table.mutexes = PushArray(temp.arena, TicketMutex, table.count);
 
     Scene *scene = GetScene();
-    LoadRTScene(arenas, &table, &scene->scene, directory, filename);
+    LoadRTScene(arenas, &table, &scene->scene, directory, filename, t, true);
     ScratchEnd(temp);
 }
 

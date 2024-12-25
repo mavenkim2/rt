@@ -1459,7 +1459,10 @@ void WriteFile(string directory, PBRTFileInfo *info)
     builder.arena          = temp.arena;
     u32 totalMaterialCount = 0;
 
-    Put(&builder, "RTSCENE_START ");
+    StringBuilder offsetBuilder = {};
+    offsetBuilder.arena         = temp.arena;
+
+    Put(&offsetBuilder, "RTSCENE_START ");
 
     if (info->includedFiles.totalCount && info->shapes.totalCount)
     {
@@ -1496,6 +1499,16 @@ void WriteFile(string directory, PBRTFileInfo *info)
     dataBuilder.arena         = temp.arena;
     Put(&dataBuilder, "DATA_START ");
 
+    if (info->transforms.totalCount)
+    {
+        Put(&dataBuilder, "TRANSFORM_START ");
+        Put(&dataBuilder, "Count %u ", info->transforms.totalCount);
+        for (auto *node = info->transforms.first; node != 0; node = node->next)
+        {
+            Put(&dataBuilder, node->values, sizeof(node->values[0]) * node->count);
+        }
+        Put(&dataBuilder, "TRANSFORM_END");
+    }
     if (info->shapes.totalCount)
     {
         Put(&builder, "SHAPE_START ");
@@ -1517,7 +1530,7 @@ void WriteFile(string directory, PBRTFileInfo *info)
                                     temp.arena,
                                     StrConcat(temp.arena, directory,
                                               Str8(packet->bytes[c], packet->sizes[c])));
-                                Put(&builder, "c %u ", &mesh.numVertices);
+                                Put(&builder, "c %u ", mesh.numVertices);
                                 u64 pOffset = dataBuilder.totalSize;
                                 Put(&dataBuilder, mesh.p, mesh.numVertices * sizeof(Vec3f));
                                 u64 nOffset = dataBuilder.totalSize;
@@ -1547,18 +1560,13 @@ void WriteFile(string directory, PBRTFileInfo *info)
         Put(&builder, "SHAPE_END ");
         Put(&dataBuilder, "DATA_END");
     }
-    if (info->transforms.totalCount)
-    {
-        Put(&dataBuilder, "TRANSFORM_START ");
-        Put(&dataBuilder, "Count %u ", info->transforms.totalCount);
-        for (auto *node = info->transforms.first; node != 0; node = node->next)
-        {
-            Put(&dataBuilder, node->values, sizeof(node->values[0]) * node->count);
-        }
-        Put(&dataBuilder, "TRANSFORM_END");
-    }
 
-    StringBuilder finalBuilder = ConcatBuilders(&builder, &dataBuilder);
+    Put(&builder, "RTSCENE_END");
+    u64 dataOffset = builder.totalSize + offsetBuilder.totalSize + sizeof(u64);
+    PutPointerValue(&offsetBuilder, &dataOffset);
+
+    StringBuilder finalBuilder = ConcatBuilders(&offsetBuilder, &builder);
+    finalBuilder               = ConcatBuilders(&finalBuilder, &dataBuilder);
     WriteFileMapped(&finalBuilder, outFile);
     ScratchEnd(temp);
 }

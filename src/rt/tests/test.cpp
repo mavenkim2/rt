@@ -734,11 +734,6 @@ void TestRender(Arena *arena, Options *options = 0)
     AffineSpace renderFromWorld = AffineSpace::Translate(-pCamera);
     AffineSpace worldFromRender = AffineSpace::Translate(pCamera);
 
-    // for (u32 i = 0; i < ArrayLength(transforms); i++)
-    // {
-    //     transforms[i] = renderFromWorld * transforms[i]; // * worldFromRender;
-    // }
-
     CoatedDiffuseMaterial2 mat(
         CoatedDiffuseMaterialBase(ConstantTexture(.65),
                                   ConstantSpectrumTexture(RGBAlbedoSpectrum(
@@ -746,13 +741,8 @@ void TestRender(Arena *arena, Options *options = 0)
                                   ConstantTexture(0.f), ConstantSpectrum(1.5f)),
         NullShader());
     scene->materials.Set<CoatedDiffuseMaterial2>(&mat, 1);
-    PrimitiveIndices ids[] = {
-        PrimitiveIndices(LightHandle(),
-                         MaterialHandle(MaterialType::CoatedDiffuseMaterial2, 0)),
-    };
-    scene->scene.primIndices = ids;
 
-    LoadScene(arenas, "../data/island/pbrt-v4/", "isBayCedarA1/isBayCedarA1.rtscene");
+    LoadScene(arenas, "../data/island/pbrt-v4/", "isBayCedarA1/isBayCedarA1.rtscene", &renderFromWorld);
 
     // environment map
     Bounds bounds              = scene->scene.GetBounds();
