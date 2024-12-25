@@ -1105,18 +1105,14 @@ int main(int argc, char *argv[])
         }
     }
 
-#if 0
-    TestRay(arena, &options);
-#else
     if (setOptions)
     {
         TestRender(arena, &options);
     }
     else
     {
-        TestRender(arena, &options);
+        TestRender(arena);
     }
-#endif
     // CameraRayTest(arena);
     // BVHTraverse4Test();
 

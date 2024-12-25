@@ -308,12 +308,6 @@ struct QuadMesh
 
 //////////////////////////////
 
-struct SceneHandle
-{
-    u32 offset;
-    u32 count;
-};
-
 #if 0
 struct PrimitiveIndices
 {
@@ -339,7 +333,6 @@ struct HomogeneousTransform
     Vec3f translation;
     f32 rotateAngleY;
 };
-#endif
 
 struct GeometryID
 {
@@ -370,6 +363,7 @@ struct GeometryID
     u32 GetIndex() const { return id & indexMask; }
     u32 GetType() const { return id >> typeShift; }
 };
+#endif
 
 struct Volume
 {
@@ -612,15 +606,6 @@ struct NanoVDBVolume
     }
 };
 
-// template <typename Shape>
-// struct Primitive
-// {
-//     ShapeHandle handle;
-//     u32 lightIndex;
-//     u32 volumeIndex;
-//     u32 materialID;
-// };
-
 struct Instance
 {
     // TODO: materials
@@ -678,27 +663,6 @@ struct ScenePrimitives
         boundsMin = ToVec3f(inBounds.minP);
         boundsMax = ToVec3f(inBounds.maxP);
     }
-};
-
-// deranged ideas
-// basis: instead of having a bunch of different material types with data, we have a single
-// material data struct that just contains a pointer to data, and the subroutines are what
-// interprets this data differently
-
-// problems: extra indirection (actually nevermind not even.... instead of storing material ids
-// shapes would store offsets into a constant buffer plus an index for the kernel (table of
-// functions). is this an unhinged idea?) and then the file itself could contain what kernels
-// each function represents
-//
-// how would I represent kernels that could call other kernels??? i feel like the fundamental
-// problem with a system like this though is the presence of function pointers. i think (?) if
-// i do some crazy jit compile though, i could create a table, and then JIT compile so that the
-// table is "known" at runtime.
-
-//
-struct Material
-{
-    u8 **data;
 };
 
 struct Scene

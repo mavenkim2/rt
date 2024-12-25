@@ -448,6 +448,7 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
         None,
         Attribute,
         Object,
+        Include,
     };
     ScopeType scope[32] = {};
     u32 scopeCount      = 0;
@@ -524,6 +525,8 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
 
             if (writeFile)
             {
+                Error(!scopeCount || scope[--scopeCount] == ScopeType::Include,
+                      "Unmatched scope.\n");
                 WriteFile(directory, state);
                 if (numFileInfoStackEntries)
                 {
@@ -768,6 +771,12 @@ void LoadPBRT(Arena **arenas, string directory, string filename,
                     fileInfoStack[numFileInfoStackEntries++] = state;
                     SetNewState(newState);
                     writeFile = true;
+
+                    GraphicsState *gs              = &graphicsStateStack[graphicsStateCount++];
+                    *gs                            = currentGraphicsState;
+                    currentGraphicsState.transform = AffineSpace::Identity();
+                    currentGraphicsState.transformIndex = -1;
+                    scope[scopeCount++]                 = ScopeType::Include;
                 }
                 else
                 {

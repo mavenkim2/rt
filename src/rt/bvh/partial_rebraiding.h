@@ -302,7 +302,7 @@ struct HeuristicPartialRebraid
                 {
                     record.extEnd = record.start + record.count;
                 }
-                else if (count <= record.ExtSize())
+                else if (count && count <= record.ExtSize())
                 {
                     RecordAOSSplits openRecord;
                     OpenBraid(scene, openRecord, buildRefs, record.start, record.count,

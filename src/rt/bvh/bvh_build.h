@@ -262,12 +262,11 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(const BuildSettings &settings
                                                    Record &record, bool parallel)
 {
 
-    u32 total = record.count;
-    Assert(total > 0);
+    Assert(record.count > 0);
 
     Record childRecords[N];
     u32 numChildren = 0;
-    if (total == 1)
+    if (record.count == 1)
     {
         return 0;
     }
@@ -278,10 +277,11 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(const BuildSettings &settings
     const u32 blockShift = settings.logBlockSize;
     // NOTE: multiply both by the area instead of dividing
     f32 area     = HalfArea(record.geomBounds);
-    f32 leafSAH  = settings.intCost * area * ((total + blockAdd) >> blockShift);
+    f32 leafSAH  = settings.intCost * area * ((record.count + blockAdd) >> blockShift);
     f32 splitSAH = settings.travCost * area + settings.intCost * split.bestSAH;
 
-    if (((total + blockAdd) >> blockShift) <= settings.maxLeafSize && leafSAH <= splitSAH)
+    if (((record.count + blockAdd) >> blockShift) <= settings.maxLeafSize &&
+        leafSAH <= splitSAH)
     {
         heuristic.FlushState(split);
         return 0;
