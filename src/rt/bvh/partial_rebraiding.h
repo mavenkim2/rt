@@ -16,7 +16,7 @@ void GenerateBuildRefs(BRef *refs, ScenePrimitives *scene, u32 start, u32 count,
         u32 index                = instance.id;
         // Assert(index < scene->numScenes);
         Assert(scene->childScenes);
-        ScenePrimitives *inScene = &scene->childScenes[index];
+        ScenePrimitives *inScene = scene->childScenes[index];
         BRef *ref                = &refs[i];
 
         Bounds bounds = Transform(transform, inScene->GetBounds());

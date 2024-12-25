@@ -558,6 +558,7 @@ struct RGBAlbedoSpectrum
         }
         return s;
     }
+    RGBAlbedoSpectrum() {}
     RGBAlbedoSpectrum(const RGBColorSpace &cs, Vec3f rgb) { coeffs = cs.ToRGBCoeffs(rgb); }
 
     Vec3f coeffs;

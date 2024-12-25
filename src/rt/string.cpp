@@ -943,6 +943,25 @@ b32 WriteEntireFile(StringBuilder *builder, string filename)
     return success;
 }
 
+b32 WriteFileMapped(StringBuilder *builder, string filename)
+{
+    u8 *ptr = OS_MapFileWrite(filename, builder->totalSize);
+    if (ptr == 0) return false;
+    u8 *begin = ptr;
+
+    for (StringBuilderChunkNode *node = builder->first; node != 0; node = node->next)
+    {
+        for (u32 i = 0; i < node->count; i++)
+        {
+            StringBuilderNode *n = &node->values[i];
+            MemoryCopy(ptr, n->str.str, n->str.size);
+            ptr += n->str.size;
+        }
+    }
+    OS_UnmapFile(begin);
+    return true;
+}
+
 inline u64 PutPointer(StringBuilder *builder, u64 address)
 {
     u64 offset = builder->totalSize;

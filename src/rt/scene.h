@@ -660,7 +660,7 @@ struct ScenePrimitives
     void *primitives;
 
     // NOTE: only set if not a leaf node in the scene hierarchy
-    ScenePrimitives *childScenes;
+    ScenePrimitives **childScenes;
     union
     {
         AffineSpace *affineTransforms;

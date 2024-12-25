@@ -1110,11 +1110,11 @@ int main(int argc, char *argv[])
 #else
     if (setOptions)
     {
-        TriangleMeshBVHTest(arena, &options);
+        TestRender(arena, &options);
     }
     else
     {
-        TriangleMeshBVHTest(arena);
+        TestRender(arena, &options);
     }
 #endif
     // CameraRayTest(arena);

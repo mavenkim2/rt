@@ -83,99 +83,6 @@ struct Instance
 
 CREATE_ENUM_AND_TYPE_PACK(PrimitiveTypes, GeometryType, QuadMesh, TriangleMesh, Instance);
 
-template <typename T, i32 numPerChunk, i32 memoryTag = 0>
-struct ChunkedLinkedList
-{
-    Arena *arena;
-    struct ChunkNode
-    {
-        T values[numPerChunk];
-        u32 count;
-        ChunkNode *next;
-    };
-    ChunkNode *first;
-    ChunkNode *last;
-    u32 totalCount;
-
-    struct Iterator
-    {
-        ChunkNode *node;
-        u32 localIndex;
-        u32 numRemaining;
-
-        bool End() { return numRemaining == 0; }
-
-        void Next()
-        {
-            localIndex++;
-            numRemaining--;
-            if (localIndex = numPerChunk)
-            {
-                node = node->next;
-            }
-        }
-        T *Get() { return node->values[localIndex]; }
-    };
-
-    Iterator Itr(u32 start = 0, u32 end = totalCount)
-    {
-        Iterator itr;
-        itr.node         = first;
-        itr.numRemaining = end - start;
-        u32 index        = start;
-        while (index > numPerChunk)
-        {
-            itr.node = itr.node->next;
-            index -= numPerChunk;
-        }
-        itr.localIndex = index;
-        return itr;
-    }
-
-    ChunkedLinkedList(Arena *arena) : arena(arena), first(0), last(0), totalCount(0)
-    {
-        AddNode();
-    }
-    T &AddBack()
-    {
-        if (last->count >= numPerChunk)
-        {
-            AddNode();
-        }
-        T &result = last->values[last->count++];
-        totalCount++;
-        return result;
-    }
-    T &operator[](u32 i)
-    {
-        Assert(i < totalCount);
-        ChunkNode *node = first;
-        for (;;)
-        {
-            Assert(node);
-            if (i >= node->count)
-            {
-                i -= node->count;
-                node = node->next;
-            }
-            else
-            {
-                return node->values[i];
-            }
-        }
-    }
-    inline void Push(const T &val) { AddBack() = val; }
-    inline void Push(const T &&val) { AddBack() = std::move(val); }
-    inline const T &Last() const { return last->values[last->count - 1]; }
-
-    inline void AddNode()
-    {
-        ChunkNode *newNode = PushStructTagged(arena, ChunkNode, memoryTag);
-        QueuePush(first, last, newNode);
-    }
-    inline u32 Length() const { return totalCount; }
-};
-
 struct SceneInstance
 {
     StringId name;
@@ -1552,7 +1459,7 @@ void WriteFile(string directory, PBRTFileInfo *info)
     builder.arena          = temp.arena;
     u32 totalMaterialCount = 0;
 
-    Put(&builder, "RTSCENE_START");
+    Put(&builder, "RTSCENE_START ");
 
     if (info->includedFiles.totalCount && info->shapes.totalCount)
     {
@@ -1582,16 +1489,16 @@ void WriteFile(string directory, PBRTFileInfo *info)
                 }
             }
         }
-        Put(&builder, "INCLUDE_END");
+        Put(&builder, "INCLUDE_END ");
     }
 
     StringBuilder dataBuilder = {};
     dataBuilder.arena         = temp.arena;
-    Put(&dataBuilder, "DATA_START");
+    Put(&dataBuilder, "DATA_START ");
 
     if (info->shapes.totalCount)
     {
-        Put(&builder, "SHAPE_START");
+        Put(&builder, "SHAPE_START ");
         for (auto *node = info->shapes.first; node != 0; node = node->next)
         {
             for (u32 i = 0; i < node->count; i++)
@@ -1610,6 +1517,7 @@ void WriteFile(string directory, PBRTFileInfo *info)
                                     temp.arena,
                                     StrConcat(temp.arena, directory,
                                               Str8(packet->bytes[c], packet->sizes[c])));
+                                Put(&builder, "c %u ", &mesh.numVertices);
                                 u64 pOffset = dataBuilder.totalSize;
                                 Put(&dataBuilder, mesh.p, mesh.numVertices * sizeof(Vec3f));
                                 u64 nOffset = dataBuilder.totalSize;
@@ -1621,6 +1529,7 @@ void WriteFile(string directory, PBRTFileInfo *info)
                                 u64 pOffset = dataBuilder.totalSize;
                                 Put(&dataBuilder, packet->bytes[c], packet->sizes[c]);
                                 Put(&builder, "p %llu ", pOffset);
+                                Put(&builder, "c %u ", packet->sizes[c] / sizeof(Vec3f));
                             }
                             else if (packet->parameterNames[c] == "N"_sid)
                             {
@@ -1635,7 +1544,7 @@ void WriteFile(string directory, PBRTFileInfo *info)
                 }
             }
         }
-        Put(&builder, "SHAPE_END");
+        Put(&builder, "SHAPE_END ");
         Put(&dataBuilder, "DATA_END");
     }
     if (info->transforms.totalCount)
@@ -1646,11 +1555,11 @@ void WriteFile(string directory, PBRTFileInfo *info)
         {
             Put(&dataBuilder, node->values, sizeof(node->values[0]) * node->count);
         }
-        Put(&dataBuilder, " TRANSFORM_END");
+        Put(&dataBuilder, "TRANSFORM_END");
     }
 
     StringBuilder finalBuilder = ConcatBuilders(&builder, &dataBuilder);
-    WriteEntireFile(&finalBuilder, outFile);
+    WriteFileMapped(&finalBuilder, outFile);
     ScratchEnd(temp);
 }
 

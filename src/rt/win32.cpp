@@ -154,16 +154,25 @@ void OS_SetThreadName(string name)
     ScratchEnd(scratch);
 }
 
-string OS_ReadFile(Arena *arena, string filename)
+string OS_ReadFile(Arena *arena, string filename, u64 offset)
 {
     HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0,
                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     Error(file != INVALID_HANDLE_VALUE, "Could not open file: %S\n", filename);
     u64 size;
     GetFileSizeEx(file, (LARGE_INTEGER *)&size);
+    size -= offset;
     string result;
     result.str  = PushArrayTagged(arena, u8, size, MemoryType_File);
     result.size = size;
+
+    if (offset)
+    {
+        LARGE_INTEGER dist;
+        dist.QuadPart = offset;
+        BOOL flag     = SetFilePointerEx(file, dist, 0, FILE_BEGIN);
+        Error(flag, "Error while offsetting file pointer for file %S\n", filename);
+    }
 
     u64 totalReadSize = 0;
     for (; totalReadSize < size;)

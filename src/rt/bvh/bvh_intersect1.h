@@ -403,7 +403,8 @@ static void SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
     si.shading.dpdv = ts;
     si.uv           = u * uv[1] + v * uv[2] + w * uv[0];
     // TODO: get index based on type
-    const PrimitiveIndices *indices = scene->primIndices + geomID;
+    // const PrimitiveIndices *indices = scene->primIndices + geomID;
+    const PrimitiveIndices *indices = scene->primIndices;
     si.materialIDs                  = indices->materialID.data;
     // TODO: properly obtain the light handle
     si.lightIndices = 0;

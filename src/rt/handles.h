@@ -84,12 +84,16 @@ using DielectricMaterialBumpMapPtex = Material2<DielectricMaterialConstant, Bump
 using CoatedDiffuseMaterialPtex =
     CoatedDiffuseMaterial<ConstantTexture, PtexTexture, ConstantSpectrumTexture,
                           ConstantSpectrum>;
+using CoatedDiffuseMaterialBase =
+    CoatedDiffuseMaterial<ConstantTexture, ConstantSpectrumTexture, ConstantTexture,
+                          ConstantSpectrum>;
 
 using CoatedDiffuseMaterial1 = Material2<CoatedDiffuseMaterialPtex, NullShader>;
+using CoatedDiffuseMaterial2 = Material2<CoatedDiffuseMaterialBase, NullShader>;
 using DielectricMaterialBase = Material2<DielectricMaterialConstant, NullShader>;
 
 CREATE_ENUM_AND_TYPE_PACK(MaterialTypes, MaterialType, DielectricMaterialBase,
-                          CoatedDiffuseMaterial1, DiffuseMaterialBase);
+                          CoatedDiffuseMaterial1, CoatedDiffuseMaterial2, DiffuseMaterialBase);
 
 struct MaterialHandle
 {

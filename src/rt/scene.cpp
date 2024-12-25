@@ -637,6 +637,180 @@ void SerializeMeshes(Vec3f *&dataPtr, u8 *mappedPtr, QuadMesh *mesh, QuadMesh *n
     }
 }
 
+struct SceneLoadTable
+{
+    struct Node
+    {
+        string filename;
+        ScenePrimitives *scene;
+        Node *next;
+    };
+    Node *nodes;
+    u32 count;
+    TicketMutex *mutexes;
+};
+
+void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
+                 string directory, string filename)
+
+{
+    Scheduler::Counter counter = {};
+    TempArena temp             = ScratchStart(0, 0);
+    Arena *arena               = arenas[GetThreadIndex()];
+
+    Tokenizer tokenizer;
+    tokenizer.input  = OS_MapFileRead(StrConcat(temp.arena, directory, filename));
+    tokenizer.cursor = tokenizer.input.str;
+
+    bool hasMagic = Advance(&tokenizer, "RTSCENE_START ");
+    Error(hasMagic, "RTScene file missing magic.\n");
+
+    u64 dataOffset;
+    GetPointerValue(&tokenizer, &dataOffset);
+
+    string data = OS_ReadFile(arena, filename, dataOffset);
+
+    Tokenizer dataTokenizer;
+    dataTokenizer.input  = data;
+    dataTokenizer.cursor = dataTokenizer.input.str;
+
+    hasMagic = Advance(&dataTokenizer, "DATA_START ");
+    Error(hasMagic, "RTScene data section missing magic.\n");
+    bool hasTransforms = Advance(&dataTokenizer, "TRANSFORM_START ");
+    if (hasTransforms)
+    {
+        scene->affineTransforms = (AffineSpace *)(dataTokenizer.cursor);
+    }
+
+    bool isLeaf = true;
+    if (Advance(&tokenizer, "INCLUDE_START "))
+    {
+        ChunkedLinkedList<Instance, 1024, MemoryType_Instance> instances(temp.arena);
+        ChunkedLinkedList<ScenePrimitives *, 32, MemoryType_Instance> files(temp.arena);
+        isLeaf = false;
+        while (!Advance(&tokenizer, "INCLUDE_END "))
+        {
+            Advance(&tokenizer, "File: ");
+            u32 fileOffset     = 0;
+            string includeFile = ReadWord(&tokenizer);
+            StringId hash      = Hash(includeFile);
+            u32 index          = hash & (table->count - 1);
+
+            BeginTicketMutex(&table->mutexes[index]);
+            auto *node = &table->nodes[index];
+            SceneLoadTable::Node *prev = 0;
+            while (node)
+            {
+                if (node->filename.size && node->filename == includeFile)
+                {
+                    scene->childScenes[fileOffset++] = node->scene;
+                    break;
+                }
+                prev = node;
+                node = node->next;
+            }
+            if (!node)
+            {
+                prev->filename                = PushStr8Copy(temp.arena, includeFile);
+                ScenePrimitives *includeScene = PushStruct(arena, ScenePrimitives);
+                prev->scene                   = includeScene;
+                prev->next                    = PushStruct(temp.arena, SceneLoadTable::Node);
+                node                          = prev;
+                EndTicketMutex(&table->mutexes[index]);
+                scheduler.Schedule(&counter, [&](u32 jobID) {
+                    LoadRTScene(arenas, table, includeScene, directory, filename);
+                });
+            }
+            EndTicketMutex(&table->mutexes[index]);
+            u32 id          = files.Length();
+            files.AddBack() = node->scene;
+
+            // Load instances
+            while (CharIsDigit(*tokenizer.cursor))
+            {
+                u32 transformIndex  = ReadInt(&tokenizer);
+                instances.AddBack() = {id, transformIndex};
+                SkipToNextChar(&tokenizer);
+            }
+        }
+        scene->numPrimitives = instances.totalCount;
+        scene->primitives    = PushArrayNoZero(arena, Instance *, instances.totalCount);
+        scene->childScenes   = PushArrayNoZero(arena, ScenePrimitives *, files.totalCount);
+
+        instances.Flatten((Instance *)scene->primitives);
+        files.Flatten(scene->childScenes);
+    }
+    else if (Advance(&tokenizer, "SHAPE_START "))
+    {
+        Assert(isLeaf);
+        ChunkedLinkedList<QuadMesh, 1024, MemoryType_Shape> shapes(temp.arena);
+        while (!Advance(&tokenizer, "SHAPE_END "))
+        {
+            if (Advance(&tokenizer, "Quad "))
+            {
+                QuadMesh &mesh = shapes.AddBack();
+                for (;;)
+                {
+                    if (Advance(&tokenizer, "p "))
+                    {
+                        u32 pOffset = ReadInt(&tokenizer);
+                        mesh.p      = (Vec3f *)(dataTokenizer.input.str + pOffset);
+                    }
+                    else if (Advance(&tokenizer, "n "))
+                    {
+                        u32 pOffset = ReadInt(&tokenizer);
+                        mesh.p      = (Vec3f *)(dataTokenizer.input.str + pOffset);
+                    }
+                    else if (Advance(&tokenizer, "c "))
+                    {
+                        u32 num          = ReadInt(&tokenizer);
+                        mesh.numVertices = num;
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                Assert(0);
+            }
+        }
+        scene->numPrimitives = shapes.totalCount;
+        scene->primitives    = PushArrayNoZero(arena, QuadMesh *, shapes.totalCount);
+        shapes.Flatten((QuadMesh *)scene->primitives);
+    }
+
+    scheduler.Wait(&counter);
+    BuildSettings settings;
+    if (!isLeaf)
+    {
+        BuildTLASBVH(arenas, settings, scene);
+    }
+    else
+    {
+        // TODO: hardcoded
+        BuildQuadBVH(arenas, settings, scene);
+    }
+
+    ScratchEnd(temp);
+}
+
+void LoadScene(Arena **arenas, string directory, string filename)
+{
+    TempArena temp = ScratchStart(0, 0);
+    Arena *arena   = arenas[GetThreadIndex()];
+    SceneLoadTable table;
+    table.count   = 1024;
+    table.nodes   = PushArray(temp.arena, SceneLoadTable::Node, table.count);
+    table.mutexes = PushArray(temp.arena, TicketMutex, table.count);
+
+    Scene *scene = GetScene();
+    LoadRTScene(arenas, &table, &scene->scene, directory, filename);
+    ScratchEnd(temp);
+}
+
 #if 0
 void CreatePBRTScene(Arena *arena, string directory, SceneLoadState *state)
 {

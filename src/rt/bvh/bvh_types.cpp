@@ -178,6 +178,6 @@ void QuadCompressed<N>::GetData(const ScenePrimitives *scene, Lane4F32 v0[N], La
 void TLASLeaf::GetData(const ScenePrimitives *scene, AffineSpace *&t, ScenePrimitives *&childScene)
 {
     t          = &scene->affineTransforms[transformIndex];
-    childScene = &scene->childScenes[sceneIndex];
+    childScene = scene->childScenes[sceneIndex];
 }
 } // namespace rt

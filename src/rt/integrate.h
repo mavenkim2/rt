@@ -129,8 +129,8 @@ struct ConstantTexture
 
     ConstantTexture() {}
     ConstantTexture(const f32 &t) : c(t) {}
-    static LaneNF32 EvaluateFloat(SurfaceInteractionsN &, ConstantTexture **textures,
-                                  Vec4lfn &, SampledWavelengthsN &)
+    static LaneNF32 Evaluate(SurfaceInteractionsN &, ConstantTexture **textures, Vec4lfn &,
+                             SampledWavelengthsN &)
     {
         LaneNF32 result;
         for (u32 i = 0; i < IntN; i++)
@@ -139,24 +139,38 @@ struct ConstantTexture
         }
         return result;
     }
+    __forceinline static LaneNF32 EvaluateFloat(SurfaceInteractionsN &intr,
+                                                ConstantTexture **textures, Vec4lfn &v,
+                                                SampledWavelengthsN &lambda)
+    {
+        return Evaluate(intr, textures, v, lambda);
+    }
+
+    __forceinline static LaneNF32 EvaluateAlbedo(SurfaceInteractionsN &intr,
+                                                 ConstantTexture **textures, Vec4lfn &v,
+                                                 SampledWavelengthsN &lambda)
+    {
+        return Evaluate(intr, textures, v, lambda);
+    }
 };
 
 struct ConstantSpectrumTexture
 {
-    SampledSpectrum c;
+    RGBAlbedoSpectrum c;
     ConstantSpectrumTexture() {}
-    ConstantSpectrumTexture(const SampledSpectrumN &t) : c(t) {}
+    ConstantSpectrumTexture(RGBAlbedoSpectrum c) : c(c) {}
     static SampledSpectrumN EvaluateAlbedo(SurfaceInteractionsN &,
                                            ConstantSpectrumTexture **textures, Vec4lfn &,
-                                           SampledWavelengthsN &)
+                                           SampledWavelengthsN &lambda)
     {
         SampledSpectrumN result;
         for (u32 i = 0; i < IntN; i++)
         {
             ConstantSpectrumTexture *tex = textures[i];
+            SampledSpectrum out          = tex->c.Sample(lambda);
             for (u32 j = 0; j < NSampledWavelengths; j++)
             {
-                Set(result.values[j], i) = tex->c.values[j];
+                Set(result.values[j], i) = out.values[j];
             }
         }
         return result;

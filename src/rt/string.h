@@ -152,6 +152,7 @@ u64 Put(StringBuilder *builder, string str);
 u64 Put(StringBuilder *builder, u32 value);
 string CombineBuilderNodes(StringBuilder *builder);
 b32 WriteEntireFile(StringBuilder *builder, string filename);
+b32 WriteFileMapped(StringBuilder *builder, string filename);
 inline u64 PutPointer(StringBuilder *builder, u64 address);
 inline void ConvertPointerToOffset(u8 *buffer, u64 location, u64 offset);
 inline u8 *ConvertOffsetToPointer(u8 *base, u64 offset);

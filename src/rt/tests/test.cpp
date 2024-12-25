@@ -439,6 +439,7 @@ void VolumeRenderingTest(Arena *arena, string filename)
 //                                             TransportMode::Radiance, BxDFFlags::RT);
 // }
 
+#if 0
 void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
 {
     // DONE:
@@ -620,6 +621,141 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
 
     // environment map
     Bounds bounds              = baseScenePrims->GetBounds();
+    f32 sceneRadius            = Length(ToVec3f(bounds.Centroid() - bounds.maxP));
+    AffineSpace worldFromLight = AffineSpace::Scale(-1, 1, 1) *
+                                 AffineSpace::Rotate(Vec3f(-1, 0, 0), Radians(90)) *
+                                 AffineSpace::Rotate(Vec3f(0, 0, 1), Radians(65));
+    AffineSpace renderFromLight = worldFromLight;
+
+    f32 scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
+    Assert(scale == 0.00935831666f);
+    ImageInfiniteLight infLight(
+        arena, LoadFile("../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png"),
+        &renderFromLight, RGBColorSpace::sRGB, sceneRadius, scale);
+    scene->lights.Set<ImageInfiniteLight>(&infLight, 1);
+    scene->numLights = 1;
+
+    RenderParams2 params;
+    params.cameraFromRaster = cameraFromRaster;
+    params.renderFromCamera = renderFromCamera;
+    params.width            = width;
+    params.height           = height;
+    params.filterRadius     = Vec2f(0.5f);
+    params.spp              = 64;
+    params.maxDepth         = 10;
+    params.lensRadius       = 0.003125;
+    params.focalLength      = 1675.3383;
+
+    if (options)
+    {
+        params.pixelMin = Vec2u(options->pixelX, options->pixelY);
+        params.pixelMax = params.pixelMin + Vec2u(1, 1);
+    }
+
+    PerformanceCounter counter = OS_StartCounter();
+    Render(arena, params);
+    f32 time = OS_GetMilliseconds(counter);
+    printf("total time: %fms\n", time);
+
+    f64 totalMiscTime = 0;
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        totalMiscTime += threadLocalStatistics[i].miscF;
+        printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
+    }
+    printf("total misc time: %fms \n", totalMiscTime);
+}
+#endif
+
+void TestRender(Arena *arena, Options *options = 0)
+{
+    // DONE:
+    // - make the materials polymorphic so that the integrator can access them
+    // - fix the compressed leaf intersector
+    // - instantiate the water material and attach the triangle mesh to it
+    // - have the intersector handle the case where there are no geomIDs (only primIDs)
+    // - make sure traversal code works
+    // - add material index when intersecting
+    // - make sure the environment map works properly and returns the right radiances
+    // - make sure i'm calculating the final rgb value correctly for each pixel
+    // - make sure i'm shooting the right camera rays
+    // - coated materials
+    // - render a mesh w/ ptex
+    // - change the bvh build process to support N-wide leaves (need to change the sah to
+    // account for this)
+    // - render a quad mesh properly
+    // - the ironwood tree seems to be a bit brighter than it's supposed to be?
+    // - add the second ocean layer
+    // - render two instances of a quad mesh properly (i.e. test partial rebraiding)
+    // - need to support a bvh with quad/triangle mesh instances (i.e. different instance
+    // types)
+    // - render diffuse material properly
+
+    // TODO:
+    // - add area lights (making sure they cannot be intersected, but are sampled properly)
+    // - verify all code paths in partial rebraiding (i.e. more instances)
+    // - render the diffuse transmission materials properly
+    // - load the scene description and properly instantiate lights/materials/textures
+
+    // - render the scene with all quad meshes, then add support for the bspline curves
+
+    // once moana is rendered
+    // - ray differentials
+
+    scene_       = PushStruct(arena, Scene);
+    Scene *scene = GetScene();
+    // ScenePrimitives *scenePrims     = PushStruct(arena, ScenePrimitives);
+    u32 numProcessors = OS_NumProcessors();
+    Arena **arenas    = PushArray(arena, Arena *, numProcessors);
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        arenas[i] = ArenaAlloc(16);
+    }
+
+    // Camera
+    u32 width  = 1920;
+    u32 height = 804;
+    Vec3f pCamera(-1139.0159, 23.286734, 1479.7947);
+    Vec3f look(244.81433, 238.80714, 560.3801);
+    Vec3f up(-0.107149, .991691, .07119);
+
+    Mat4 cameraFromRender = LookAt(pCamera, look, up) * Translate(pCamera);
+
+    Mat4 renderFromCamera = Inverse(cameraFromRender);
+    // TODO: going to have to figure out how to handle this automatically
+    Mat4 NDCFromCamera = Mat4::Perspective2(Radians(69.50461), 2.386946);
+    // maps to raster coordinates
+    Mat4 rasterFromNDC = Scale(Vec3f(f32(width), -f32(height), 1.f)) *
+                         Scale(Vec3f(1.f / 2.f, 1.f / 2.f, 1.f)) *
+                         Translate(Vec3f(1.f, -1.f, 0.f));
+    Mat4 rasterFromCamera = rasterFromNDC * NDCFromCamera;
+    Mat4 cameraFromRaster = Inverse(rasterFromCamera);
+
+    AffineSpace renderFromWorld = AffineSpace::Translate(-pCamera);
+    AffineSpace worldFromRender = AffineSpace::Translate(pCamera);
+
+    // for (u32 i = 0; i < ArrayLength(transforms); i++)
+    // {
+    //     transforms[i] = renderFromWorld * transforms[i]; // * worldFromRender;
+    // }
+
+    CoatedDiffuseMaterial2 mat(
+        CoatedDiffuseMaterialBase(ConstantTexture(.65),
+                                  ConstantSpectrumTexture(RGBAlbedoSpectrum(
+                                      *RGBColorSpace::sRGB, Vec3f(.24, .2, .17))),
+                                  ConstantTexture(0.f), ConstantSpectrum(1.5f)),
+        NullShader());
+    scene->materials.Set<CoatedDiffuseMaterial2>(&mat, 1);
+    PrimitiveIndices ids[] = {
+        PrimitiveIndices(LightHandle(),
+                         MaterialHandle(MaterialType::CoatedDiffuseMaterial2, 0)),
+    };
+    scene->scene.primIndices = ids;
+
+    LoadScene(arenas, "../data/island/pbrt-v4/", "isBayCedarA1/isBayCedarA1.rtscene");
+
+    // environment map
+    Bounds bounds              = scene->scene.GetBounds();
     f32 sceneRadius            = Length(ToVec3f(bounds.Centroid() - bounds.maxP));
     AffineSpace worldFromLight = AffineSpace::Scale(-1, 1, 1) *
                                  AffineSpace::Rotate(Vec3f(-1, 0, 0), Radians(90)) *

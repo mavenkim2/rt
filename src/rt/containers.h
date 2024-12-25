@@ -732,4 +732,106 @@ const T *HashSet<T, numSlots, chunkSize, numStripes, tag>::GetOrCreate(Arena *ar
     return out;
 }
 
+template <typename T, i32 numPerChunk, i32 memoryTag = 0>
+struct ChunkedLinkedList
+{
+    Arena *arena;
+    struct ChunkNode
+    {
+        T values[numPerChunk];
+        u32 count;
+        ChunkNode *next;
+    };
+    ChunkNode *first;
+    ChunkNode *last;
+    u32 totalCount;
+
+    // struct Iterator
+    // {
+    //     ChunkNode *node;
+    //     u32 localIndex;
+    //     u32 numRemaining;
+    //
+    //     bool End() { return numRemaining == 0; }
+    //
+    //     void Next()
+    //     {
+    //         localIndex++;
+    //         numRemaining--;
+    //         if (localIndex = numPerChunk)
+    //         {
+    //             node = node->next;
+    //         }
+    //     }
+    //     T *Get() { return node->values[localIndex]; }
+    // };
+    //
+    // Iterator Itr(u32 start = 0, u32 end = totalCount)
+    // {
+    //     Iterator itr;
+    //     itr.node         = first;
+    //     itr.numRemaining = end - start;
+    //     u32 index        = start;
+    //     while (index > numPerChunk)
+    //     {
+    //         itr.node = itr.node->next;
+    //         index -= numPerChunk;
+    //     }
+    //     itr.localIndex = index;
+    //     return itr;
+    // }
+
+    ChunkedLinkedList(Arena *arena) : arena(arena), first(0), last(0), totalCount(0)
+    {
+        AddNode();
+    }
+    T &AddBack()
+    {
+        if (last->count >= numPerChunk)
+        {
+            AddNode();
+        }
+        T &result = last->values[last->count++];
+        totalCount++;
+        return result;
+    }
+    T &operator[](u32 i)
+    {
+        Assert(i < totalCount);
+        ChunkNode *node = first;
+        for (;;)
+        {
+            Assert(node);
+            if (i >= node->count)
+            {
+                i -= node->count;
+                node = node->next;
+            }
+            else
+            {
+                return node->values[i];
+            }
+        }
+    }
+    inline void Push(const T &val) { AddBack() = val; }
+    inline void Push(const T &&val) { AddBack() = std::move(val); }
+    inline const T &Last() const { return last->values[last->count - 1]; }
+
+    inline void AddNode()
+    {
+        ChunkNode *newNode = PushStructTagged(arena, ChunkNode, memoryTag);
+        QueuePush(first, last, newNode);
+    }
+    inline u32 Length() const { return totalCount; }
+    inline void Flatten(T *out)
+    {
+        T *ptr = out;
+        for (ChunkNode *node = first; node != 0; node = node->next)
+        {
+            MemoryCopy(ptr, node->values, node->count * sizeof(T));
+            ptr += node->count;
+        }
+    }
+};
+
 } // namespace rt
