@@ -816,6 +816,7 @@ struct ChunkedLinkedList
     inline void Push(const T &val) { AddBack() = val; }
     inline void Push(const T &&val) { AddBack() = std::move(val); }
     inline const T &Last() const { return last->values[last->count - 1]; }
+    inline T &Last() { return last->values[last->count - 1]; }
 
     inline void AddNode()
     {
@@ -834,10 +835,13 @@ struct ChunkedLinkedList
     }
     inline void Merge(ChunkedLinkedList<T, numPerChunk, memoryTag> *list)
     {
-        Assert(list->first && last);
-        last->next = list->first;
-        last       = list->last;
-        totalCount += list->totalCount;
+        if (list->totalCount)
+        {
+            Assert(list->first && last);
+            last->next = list->first;
+            last       = list->last;
+            totalCount += list->totalCount;
+        }
     }
 };
 

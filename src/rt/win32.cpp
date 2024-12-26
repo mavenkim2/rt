@@ -154,6 +154,18 @@ void OS_SetThreadName(string name)
     ScratchEnd(scratch);
 }
 
+bool OS_DirectoryExists(string filename)
+{
+    DWORD attributes = GetFileAttributesA((char *)filename.str);
+    return (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY));
+}
+
+bool OS_CreateDirectory(string filename)
+{
+    if (!OS_DirectoryExists(filename)) return CreateDirectoryA((char *)filename.str, 0);
+    return false;
+}
+
 string OS_ReadFile(Arena *arena, string filename, u64 offset)
 {
     HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0,

@@ -65,6 +65,8 @@ b32 OS_WriteFile(string filename, void *fileMemory, u64 fileSize);
 b32 OS_WriteFile(string filename, string buffer);
 string OS_MapFileRead(string filename);
 void OS_UnmapFile(void *ptr);
+bool OS_DirectoryExists(string filename);
+bool OS_CreateDirectory(string filename);
 OS_Handle GetMainThreadHandle();
 void OS_SetThreadAffinity(OS_Handle input, i32 index);
 OS_Handle OS_ThreadStart(OS_ThreadFunction *func, void *ptr);

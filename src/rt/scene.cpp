@@ -82,26 +82,25 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
 
                 u32 id = files.Length();
                 BeginTicketMutex(&table->mutexes[index]);
-                auto *node                 = &table->nodes[index];
-                SceneLoadTable::Node *prev = 0;
-                while (node)
+                auto *node = &table->nodes[index];
+                while (node->next)
                 {
                     if (node->filename.size && node->filename == includeFile) break;
-                    prev = node;
                     node = node->next;
                 }
-                if (!node)
+                if (!node->next)
                 {
-                    prev->filename                = PushStr8Copy(temp.arena, includeFile);
+                    Assert(node->filename.size == 0);
+                    node->filename                = PushStr8Copy(temp.arena, includeFile);
                     ScenePrimitives *includeScene = PushStruct(arena, ScenePrimitives);
-                    prev->scene                   = includeScene;
-                    prev->counter                 = &counter;
-                    prev->next      = PushStruct(temp.arena, SceneLoadTable::Node);
-                    files.AddBack() = includeScene;
-                    EndTicketMutex(&table->mutexes[index]);
+                    node->scene                   = includeScene;
+                    node->counter                 = &counter;
+                    node->next = PushStruct(temp.arena, SceneLoadTable::Node);
                     scheduler.Schedule(&counter, [=](u32 jobID) {
-                        LoadRTScene(arenas, table, includeScene, directory, prev->filename);
+                        LoadRTScene(arenas, table, includeScene, directory, node->filename);
                     });
+                    EndTicketMutex(&table->mutexes[index]);
+                    files.AddBack() = includeScene;
                 }
                 else
                 {
@@ -113,8 +112,14 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                 // Load instances
                 while (CharIsDigit(*tokenizer.cursor))
                 {
-                    u32 transformIndex  = ReadInt(&tokenizer);
-                    instances.AddBack() = {id, transformIndex};
+                    u32 transformIndexStart = ReadInt(&tokenizer);
+                    Assert(*tokenizer.cursor == '-');
+                    tokenizer.cursor++;
+                    u32 transformIndexEnd = ReadInt(&tokenizer);
+                    for (u32 i = transformIndexStart; i <= transformIndexEnd; i++)
+                    {
+                        instances.AddBack() = {id, i};
+                    }
                     SkipToNextChar(&tokenizer);
                 }
             }
@@ -174,6 +179,7 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
     }
 
     scheduler.Wait(&counter);
+
     OS_UnmapFile(tokenizer.input.str);
     PrimitiveIndices *ids = PushStructConstruct(arena, PrimitiveIndices)(
         LightHandle(), MaterialHandle(MaterialType::CoatedDiffuseMaterial2, 0));

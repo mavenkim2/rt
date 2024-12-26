@@ -494,6 +494,7 @@ struct Scheduler
     }
     void Wait(Counter *counter)
     {
+        if (counter->count.load(std::memory_order_acq_rel) == 0) return;
         Worker *worker = &workers[GetThreadIndex()];
         Task t;
         for (;;)
