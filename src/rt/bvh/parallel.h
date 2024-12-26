@@ -376,6 +376,17 @@ struct Scheduler
             }
         } while (w->queue.Pop(*t));
     }
+    void ExploitTask(Worker *w, Task *t, Counter *counter)
+    {
+        do
+        {
+            if (t->id != Task::INVALID_ID)
+            {
+                ExecuteTask(t);
+            }
+        } while (counter->count.load(std::memory_order_acq_rel) != 0 && w->queue.Pop(*t));
+    }
+
     void ExecuteTask(Task *t)
     {
         t->func(t->id);
@@ -499,7 +510,8 @@ struct Scheduler
         Task t;
         for (;;)
         {
-            ExploitTask(worker, &t);
+            // ExploitTask(worker, &t);
+            ExploitTask(worker, &t, counter);
             if (!WaitForTask(worker, &t, counter)) break;
         }
     }

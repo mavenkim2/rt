@@ -11,7 +11,7 @@ struct SceneLoadTable
     struct Node
     {
         string filename;
-        Scheduler::Counter *counter = 0;
+        Scheduler::Counter counter = {};
         ScenePrimitives *scene;
         Node *next;
     };
@@ -25,9 +25,8 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                  bool baseFile = false)
 
 {
-    Scheduler::Counter counter = {};
-    TempArena temp             = ScratchStart(0, 0);
-    Arena *arena               = arenas[GetThreadIndex()];
+    TempArena temp = ScratchStart(0, 0);
+    Arena *arena   = arenas[GetThreadIndex()];
 
     string fullFilePath = StrConcat(temp.arena, directory, filename);
     Tokenizer tokenizer;
@@ -64,21 +63,44 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
         }
     }
 
-    bool isLeaf = true;
+    Scheduler::Counter *counters[64];
+    u32 numIncludes = 0;
+    bool isLeaf     = true;
     for (;;)
     {
         if (Advance(&tokenizer, "RTSCENE_END")) break;
         if (Advance(&tokenizer, "INCLUDE_START "))
         {
-            ChunkedLinkedList<Instance, 1024, MemoryType_Instance> instances(temp.arena);
+            Advance(&tokenizer, "Count: ");
+            u32 instanceCount = ReadInt(&tokenizer);
+            SkipToNextChar(&tokenizer);
+
             ChunkedLinkedList<ScenePrimitives *, 32, MemoryType_Instance> files(temp.arena);
+            scene->numPrimitives = instanceCount;
+            scene->primitives    = PushArrayNoZero(arena, Instance, instanceCount);
+            Instance *instances  = (Instance *)scene->primitives;
+            u32 instanceOffset   = 0;
+
             isLeaf = false;
             while (!Advance(&tokenizer, "INCLUDE_END "))
             {
                 Advance(&tokenizer, "File: ");
                 string includeFile = ReadWord(&tokenizer);
-                StringId hash      = Hash(includeFile);
-                u32 index          = hash & (table->count - 1);
+                // TODO: this is a band aid until I get curves working
+                if (!OS_FileExists(includeFile))
+                {
+                    while (CharIsDigit(*tokenizer.cursor))
+                    {
+                        ReadInt(&tokenizer);
+                        Assert(*tokenizer.cursor == '-');
+                        tokenizer.cursor++;
+                        ReadInt(&tokenizer);
+                        SkipToNextChar(&tokenizer);
+                    }
+                    continue;
+                }
+                StringId hash = Hash(includeFile);
+                u32 index     = hash & (table->count - 1);
 
                 u32 id = files.Length();
                 BeginTicketMutex(&table->mutexes[index]);
@@ -91,22 +113,22 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                 if (!node->next)
                 {
                     Assert(node->filename.size == 0);
-                    node->filename                = PushStr8Copy(temp.arena, includeFile);
+                    node->filename                = PushStr8Copy(arena, includeFile);
                     ScenePrimitives *includeScene = PushStruct(arena, ScenePrimitives);
                     node->scene                   = includeScene;
-                    node->counter                 = &counter;
-                    node->next = PushStruct(temp.arena, SceneLoadTable::Node);
-                    scheduler.Schedule(&counter, [=](u32 jobID) {
+                    node->next                    = PushStruct(arena, SceneLoadTable::Node);
+                    scheduler.Schedule(&node->counter, [=](u32 jobID) {
                         LoadRTScene(arenas, table, includeScene, directory, node->filename);
                     });
                     EndTicketMutex(&table->mutexes[index]);
-                    files.AddBack() = includeScene;
+                    counters[numIncludes++] = &node->counter;
+                    files.AddBack()         = includeScene;
                 }
                 else
                 {
-                    files.AddBack() = node->scene;
                     EndTicketMutex(&table->mutexes[index]);
-                    scheduler.Wait(node->counter);
+                    files.AddBack() = node->scene;
+                    scheduler.Wait(&node->counter);
                 }
 
                 // Load instances
@@ -118,16 +140,14 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                     u32 transformIndexEnd = ReadInt(&tokenizer);
                     for (u32 i = transformIndexStart; i <= transformIndexEnd; i++)
                     {
-                        instances.AddBack() = {id, i};
+                        Assert(instanceOffset < instanceCount);
+                        instances[instanceOffset++] = {id, i};
                     }
                     SkipToNextChar(&tokenizer);
                 }
             }
-            scene->numPrimitives = instances.totalCount;
-            scene->primitives    = PushArrayNoZero(arena, Instance, instances.totalCount);
-            scene->childScenes   = PushArrayNoZero(arena, ScenePrimitives *, files.totalCount);
+            scene->childScenes = PushArrayNoZero(arena, ScenePrimitives *, files.totalCount);
 
-            instances.Flatten((Instance *)scene->primitives);
             files.Flatten(scene->childScenes);
         }
         else if (Advance(&tokenizer, "SHAPE_START "))
@@ -178,7 +198,10 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
         }
     }
 
-    scheduler.Wait(&counter);
+    for (u32 i = 0; i < numIncludes; i++)
+    {
+        scheduler.Wait(counters[i]);
+    }
 
     OS_UnmapFile(tokenizer.input.str);
     PrimitiveIndices *ids = PushStructConstruct(arena, PrimitiveIndices)(
@@ -193,7 +216,10 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
         Assert(!hasTransforms);
         scene->primIndices = ids;
         // TODO: hardcoded
-        BuildQuadBVH(arenas, settings, scene);
+        if (scene->numPrimitives)
+        {
+            BuildQuadBVH(arenas, settings, scene);
+        }
     }
 
     ScratchEnd(temp);

@@ -949,11 +949,18 @@ b32 WriteFileMapped(StringBuilder *builder, string filename)
     if (ptr == 0) return false;
     u8 *begin = ptr;
 
+    const u64 maxFlushSize = megabytes(64);
+    u8 *flushPtr           = begin;
     for (StringBuilderChunkNode *node = builder->first; node != 0; node = node->next)
     {
         for (u32 i = 0; i < node->count; i++)
         {
             StringBuilderNode *n = &node->values[i];
+            if ((u64)(ptr - flushPtr) > maxFlushSize)
+            {
+                OS_FlushMappedFile(flushPtr, (u64)(ptr - flushPtr));
+                flushPtr = ptr;
+            }
             MemoryCopy(ptr, n->str.str, n->str.size);
             ptr += n->str.size;
         }

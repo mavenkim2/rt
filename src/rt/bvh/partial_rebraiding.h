@@ -14,7 +14,6 @@ void GenerateBuildRefs(BRef *refs, ScenePrimitives *scene, u32 start, u32 count,
         const Instance &instance = instances[i];
         AffineSpace &transform   = scene->affineTransforms[instance.transformIndex];
         u32 index                = instance.id;
-        // Assert(index < scene->numScenes);
         Assert(scene->childScenes);
         ScenePrimitives *inScene = scene->childScenes[index];
         BRef *ref                = &refs[i];

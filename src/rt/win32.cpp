@@ -154,6 +154,12 @@ void OS_SetThreadName(string name)
     ScratchEnd(scratch);
 }
 
+bool OS_FileExists(string filename)
+{
+    DWORD attributes = GetFileAttributesA((char *)filename.str);
+    return (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY));
+}
+
 bool OS_DirectoryExists(string filename)
 {
     DWORD attributes = GetFileAttributesA((char *)filename.str);
@@ -164,6 +170,21 @@ bool OS_CreateDirectory(string filename)
 {
     if (!OS_DirectoryExists(filename)) return CreateDirectoryA((char *)filename.str, 0);
     return false;
+}
+
+enum OS_CreateFileProps
+{
+    OS_CreateFileProps_Append,
+};
+
+OS_Handle OS_CreateFile(string filename)
+{
+    HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    Error(file != INVALID_HANDLE_VALUE, "Could not open file: %S\n", filename);
+    OS_Handle outHandle;
+    outHandle.handle = (u64)file;
+    return outHandle;
 }
 
 string OS_ReadFile(Arena *arena, string filename, u64 offset)
@@ -268,6 +289,32 @@ u8 *OS_MapFileWrite(string filename, u64 size)
     CloseHandle(mapping);
 
     return (u8 *)ptr;
+}
+
+u8 *OS_MapFileAppend(string filename, u64 size)
+{
+    HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ | GENERIC_WRITE, 0, 0,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    Error(file != INVALID_HANDLE_VALUE, "Could not create file: %S\n", filename);
+
+    LARGE_INTEGER currentSize;
+    bool success = GetFileSizeEx(file, &currentSize);
+    Error(success, "Failed to get file size\n");
+
+    LARGE_INTEGER newFileSize;
+    newFileSize.QuadPart = size + currentSize.QuadPart;
+    SetFilePointerEx(file, newFileSize, 0, FILE_BEGIN);
+    SetEndOfFile(file);
+
+    HANDLE mapping = CreateFileMapping(file, 0, PAGE_READWRITE, newFileSize.HighPart,
+                                       newFileSize.LowPart, 0);
+    CloseHandle(file);
+    Error(mapping != INVALID_HANDLE_VALUE, "Could not map file: %S\n", filename);
+
+    LPVOID ptr = MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+    CloseHandle(mapping);
+
+    return (u8 *)ptr + currentSize.QuadPart;
 }
 
 void OS_ResizeFile(string filename, u64 size)

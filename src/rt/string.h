@@ -124,6 +124,25 @@ struct StringBuilder
     Arena *arena;
 };
 
+// struct StringBuilderMapped
+// {
+//     string filename;
+//     u8 *ptr;
+//     u64 totalSize;
+//     u64 currentSize;
+//     u32 currentLimit;
+// };
+//
+// StringBuilderMapped StartStringBuilder(string filename)
+// {
+//     StringBuilderMapped strB = {};
+//     strB.fileHandle          = OS_MapFileWrite(filename, megabytes(512));
+//     strB.currentLimit        = megabytes(512);
+//     return strB;
+// }
+//
+// void EndStringBuilder(StringBuilderMapped &builder) {}
+
 struct Tokenizer
 {
     string input;
