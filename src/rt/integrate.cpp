@@ -471,6 +471,8 @@ void Render(Arena *arena, RenderParams2 &params)
     image.bytesPerPixel = sizeof(u32);
     image.contents      = PushArrayNoZero(arena, u8, GetImageSize(&image));
 
+    std::atomic<u32> numTiles = 0;
+
     scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
         u32 tileX = jobID % tileCountX;
         u32 tileY = jobID / tileCountX;
@@ -560,6 +562,9 @@ void Render(Arena *arena, RenderParams2 &params)
                 *out++ = color;
             }
         }
+        u32 n = numTiles.fetch_add(1);
+        fprintf(stderr, "\rRaycasting %d%%...    ", u32(100.f * n / taskCount));
+        fflush(stdout);
     });
     WriteImage(&image, "image.bmp");
     printf("done\n");

@@ -951,6 +951,7 @@ b32 WriteFileMapped(StringBuilder *builder, string filename)
 
     const u64 maxFlushSize = megabytes(64);
     u8 *flushPtr           = begin;
+    u64 runningSize        = 0;
     for (StringBuilderChunkNode *node = builder->first; node != 0; node = node->next)
     {
         for (u32 i = 0; i < node->count; i++)
@@ -962,52 +963,14 @@ b32 WriteFileMapped(StringBuilder *builder, string filename)
                 flushPtr = ptr;
             }
             MemoryCopy(ptr, n->str.str, n->str.size);
+            Assert(runningSize + n->str.size <= builder->totalSize);
             ptr += n->str.size;
+            runningSize += n->str.size;
         }
     }
     OS_UnmapFile(begin);
     return true;
 }
-
-// b32 WriteFileMapped(StringBuilder *builder, StringBuilderMapped *mappedBuilder,
-//                     string filename)
-// {
-//     u8 *ptr = OS_MapFileWrite(filename, builder->totalSize + mappedBuilder->totalSize);
-//     if (ptr == 0) return false;
-//     u8 *begin = ptr;
-//
-//     const u64 maxFlushSize = megabytes(64);
-//     u8 *flushPtr           = begin;
-//     for (StringBuilderChunkNode *node = builder->first; node != 0; node = node->next)
-//     {
-//         for (u32 i = 0; i < node->count; i++)
-//         {
-//             StringBuilderNode *n = &node->values[i];
-//             if ((u64)(ptr - flushPtr) > maxFlushSize)
-//             {
-//                 OS_FlushMappedFile(flushPtr, (u64)(ptr - flushPtr));
-//                 flushPtr = ptr;
-//             }
-//             MemoryCopy(ptr, n->str.str, n->str.size);
-//             ptr += n->str.size;
-//         }
-//     }
-//     u64 mappedSize     = mappedBuilder->totalSize;
-//     u8 *startMappedPtr = mappedBuilder->ptr;
-//     u8 *mappedPtr      = startMappedPtr;
-//     while (mappedSize > maxFlushSize)
-//     {
-//         MemoryCopy(ptr, mappedPtr, maxFlushSize);
-//         OS_FlushMappedFile(ptr, maxFlushSize);
-//         ptr += maxFlushSize;
-//         mappedPtr += maxFlushSize;
-//         mappedSize -= maxFlushSize;
-//     }
-//     if (mappedSize) MemoryCopy(ptr, mappedPtr, mappedSize);
-//     OS_UnmapFile(startMappedPtr);
-//     OS_UnmapFile(begin);
-//     return true;
-// }
 
 inline u64 PutPointer(StringBuilder *builder, u64 address)
 {
@@ -1032,9 +995,10 @@ u64 Put(StringBuilderMapped *builder, void *data, u64 size)
         Assert(builder->totalSize == u64(builder->writePtr - builder->ptr));
         OS_UnmapFile(builder->ptr);
         OS_ResizeFile(builder->filename, builder->totalSize);
-        builder->ptr      = OS_MapFileAppend(builder->filename, megabytes(512) + size);
-        builder->writePtr = builder->ptr + builder->totalSize;
-        builder->currentLimit += megabytes(512) + size;
+        builder->ptr          = OS_MapFileAppend(builder->filename, megabytes(512) + size);
+        builder->writePtr     = builder->ptr + builder->totalSize;
+        builder->currentLimit = builder->totalSize + megabytes(512) + size;
+        Assert((u64)(builder->writePtr - builder->ptr) < builder->currentLimit);
     }
     MemoryCopy(builder->writePtr, data, size);
     builder->writePtr += size;

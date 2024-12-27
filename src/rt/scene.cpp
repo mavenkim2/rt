@@ -91,6 +91,7 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                     !OS_FileExists(PushStr8F(temp.arena, "%S%S.rtdata", directory,
                                              RemoveFileExtension(includeFile))))
                 {
+                    Print("Skipped %S\n", includeFile);
                     while (CharIsDigit(*tokenizer.cursor))
                     {
                         ReadInt(&tokenizer);
@@ -217,10 +218,8 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
         Assert(!hasTransforms);
         scene->primIndices = ids;
         // TODO: hardcoded
-        if (scene->numPrimitives)
-        {
-            BuildQuadBVH(arenas, settings, scene);
-        }
+        Assert(scene->numPrimitives);
+        BuildQuadBVH(arenas, settings, scene);
     }
 
     ScratchEnd(temp);
