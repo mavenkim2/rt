@@ -122,6 +122,7 @@ struct PBRTFileInfo
 
     PBRTFileInfo *imports[32];
     u32 numImports;
+    Scheduler::Counter counter = {};
 
     void Init(string inFilename)
     {
@@ -519,13 +520,14 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
     ScopeType scope[32] = {};
     u32 scopeCount      = 0;
 
-    Scheduler::Counter counter = {};
-    TempArena temp             = ScratchStart(0, 0);
-    u32 threadIndex            = GetThreadIndex();
+    TempArena temp  = ScratchStart(0, 0);
+    u32 threadIndex = GetThreadIndex();
 
     Tokenizer tokenizer;
     tokenizer.input  = OS_MapFileRead(StrConcat(temp.arena, directory, filename));
     tokenizer.cursor = tokenizer.input.str;
+
+    string currentFilename = filename;
 
     Arena *threadArena = arenas[GetThreadIndex()];
 
@@ -543,13 +545,14 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
     bool worldBegin = inWorldBegin;
     bool writeFile  = write;
 
-    struct FileStackEntry
-    {
-        Tokenizer tokenizer;
-        bool writeFile;
-    };
-    FileStackEntry fileStack[32];
-    u32 numFileStackEntries = 0;
+    // struct FileStackEntry
+    // {
+    //     Tokenizer tokenizer;
+    //     string filename;
+    //     bool writeFile;
+    // };
+    // FileStackEntry fileStack[32];
+    // u32 numFileStackEntries = 0;
     PBRTFileInfo *fileInfoStack[32];
     u32 numFileInfoStackEntries = 0;
 
@@ -583,14 +586,10 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
         if (EndOfBuffer(&tokenizer))
         {
             OS_UnmapFile(tokenizer.input.str);
-            scheduler.Wait(&counter);
+            scheduler.Wait(&state->counter);
 
             for (u32 i = 0; i < state->numImports; i++)
             {
-                if (state->imports[i]->filename == "isBeach/xgGroundCover/isBeach_xgGroundCover-a.rtscene")
-                {
-                    int stop = 5;
-                }
                 state->Merge(state->imports[i]);
             }
             if (writeFile)
@@ -609,12 +608,14 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                     currentGraphicsState = graphicsStateStack[--graphicsStateCount];
                 }
             }
+            break;
 
-            if (numFileStackEntries == 0) break;
-            FileStackEntry entry = fileStack[--numFileStackEntries];
-            tokenizer            = entry.tokenizer;
-            writeFile            = entry.writeFile;
-            continue;
+            // if (numFileStackEntries == 0) break;
+            // FileStackEntry entry = fileStack[--numFileStackEntries];
+            // tokenizer            = entry.tokenizer;
+            // currentFilename      = entry.filename;
+            // writeFile            = entry.writeFile;
+            // continue;
         }
 
         string word = ReadWordAndSkipToNextChar(&tokenizer);
@@ -643,8 +644,8 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                       "statement\n",
                       word);
                 Assert(graphicsStateCount < ArrayLength(graphicsStateStack));
-                GraphicsState *gs   = &graphicsStateStack[graphicsStateCount++];
-                *gs                 = currentGraphicsState;
+                GraphicsState *gs = &graphicsStateStack[graphicsStateCount++];
+                *gs               = currentGraphicsState;
                 Assert(scopeCount < ArrayLength(scope));
                 scope[scopeCount++] = ScopeType::Attribute;
             }
@@ -753,6 +754,7 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
             }
             break;
             case "Import"_sid:
+            case "Include"_sid:
             {
                 string importedFilename;
                 b32 result = GetBetweenPair(importedFilename, &tokenizer, '"');
@@ -766,7 +768,6 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                      currentGraphicsState.transformIndex != -1) &&
                     (scopeCount && scope[scopeCount - 1] == ScopeType::Attribute);
 
-                bool importWriteFile = false;
                 if (checkFileInstance)
                 {
                     state->numInstances++;
@@ -784,7 +785,6 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                     inst.transformIndexStart = currentGraphicsState.transformIndex;
                     inst.transformIndexEnd   = currentGraphicsState.transformIndex;
                     AddTransform();
-                    importWriteFile = true;
 
                     if (includeMap->FindOrAddFile(threadArena, newFilename)) goto loop_start;
                 }
@@ -799,93 +799,101 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                 {
                     u32 index = state->numImports++;
 
-                    scheduler.Schedule(&counter, [=](u32 jobID) {
+                    scheduler.Schedule(&state->counter, [=](u32 jobID) {
                         state->imports[index] =
                             LoadPBRT(arenas, directory, copiedFilename, includeMap,
-                                     importedState, worldBegin, true, importWriteFile);
+                                     importedState, worldBegin, true, false);
                     });
                 }
                 else
                 {
-                    scheduler.Schedule(&counter, [=](u32 jobID) {
-                        LoadPBRT(arenas, directory, copiedFilename, includeMap, importedState,
-                                 worldBegin, true, importWriteFile);
-                    });
-                }
-            }
-            break;
-            case "Include"_sid:
-            {
-                string importedFilename;
-                b32 result = GetBetweenPair(importedFilename, &tokenizer, '"');
-                Assert(result);
-                Assert(GetFileExtension(importedFilename) == "pbrt");
-
-                string importedFullPath = StrConcat(temp.arena, directory, importedFilename);
-                string newFilename      = ConvertPBRTToRTScene(tempArena, importedFilename);
-
-                bool checkFileInstance =
-                    graphicsStateCount &&
-                    (currentGraphicsState.transform != AffineSpace::Identity() &&
-                     currentGraphicsState.transformIndex != -1) &&
-                    (scopeCount && scope[scopeCount - 1] == ScopeType::Attribute);
-                bool skipFile = false;
-                if (checkFileInstance)
-                {
-                    state->numInstances++;
-                    if (state->fileInstances.totalCount &&
-                        state->fileInstances.Last().filename == newFilename)
-                    {
-                        state->fileInstances.Last().transformIndexEnd =
-                            currentGraphicsState.transformIndex;
-                        AddTransform();
-                        goto loop_start;
-                    }
-
-                    InstanceType &inst       = state->fileInstances.AddBack();
-                    inst.filename            = newFilename;
-                    inst.transformIndexStart = currentGraphicsState.transformIndex;
-                    inst.transformIndexEnd   = currentGraphicsState.transformIndex;
-                    AddTransform();
-
-                    if (includeMap->FindOrAddFile(threadArena, newFilename)) goto loop_start;
-
-#if 0
-                    PBRTFileInfo *newState = PushStruct(tempArena, PBRTFileInfo);
-                    newState->Init(newFilename);
-
-                    Assert(numFileStackEntries < ArrayLength(fileStack));
-                    Assert(numFileInfoStackEntries < ArrayLength(fileInfoStack));
-                    fileStack[numFileStackEntries++]         = {tokenizer, writeFile};
-                    fileInfoStack[numFileInfoStackEntries++] = state;
-                    SetNewState(newState);
-                    writeFile = true;
-                    GraphicsState *gs              = &graphicsStateStack[graphicsStateCount++];
-                    *gs                            = currentGraphicsState;
-                    currentGraphicsState.transform = AffineSpace::Identity();
-                    currentGraphicsState.transformIndex = -1;
-#endif
-                    string copiedFilename        = PushStr8Copy(threadArena, importedFilename);
-                    GraphicsState importedState  = currentGraphicsState;
-                    importedState.transform      = AffineSpace::Identity();
-                    importedState.transformIndex = -1;
-
-                    scheduler.Schedule(&counter, [=](u32 jobID) {
+                    scheduler.Schedule(&state->counter, [=](u32 jobID) {
                         LoadPBRT(arenas, directory, copiedFilename, includeMap, importedState,
                                  worldBegin, true, true);
                     });
                 }
-                else
-                {
-                    Assert(numFileStackEntries < ArrayLength(fileStack));
-                    fileStack[numFileStackEntries++] = {tokenizer, writeFile};
-                    writeFile                        = false;
-
-                    tokenizer.input  = OS_MapFileRead(importedFullPath);
-                    tokenizer.cursor = tokenizer.input.str;
-                }
             }
             break;
+                //             case "Include"_sid:
+                //             {
+                //                 string importedFilename;
+                //                 b32 result = GetBetweenPair(importedFilename, &tokenizer,
+                //                 '"'); Assert(result);
+                //
+                //                 string importedFullPath = StrConcat(temp.arena, directory,
+                //                 importedFilename); string newFilename      =
+                //                 ConvertPBRTToRTScene(tempArena, importedFilename);
+                //
+                //                 bool checkFileInstance =
+                //                     graphicsStateCount &&
+                //                     (currentGraphicsState.transform !=
+                //                     AffineSpace::Identity() &&
+                //                      currentGraphicsState.transformIndex != -1) &&
+                //                     (scopeCount && scope[scopeCount - 1] ==
+                //                     ScopeType::Attribute);
+                //                 bool skipFile = false;
+                //                 if (checkFileInstance)
+                //                 {
+                //                     state->numInstances++;
+                //                     if (state->fileInstances.totalCount &&
+                //                         state->fileInstances.Last().filename == newFilename)
+                //                     {
+                //                         state->fileInstances.Last().transformIndexEnd =
+                //                             currentGraphicsState.transformIndex;
+                //                         AddTransform();
+                //                         goto loop_start;
+                //                     }
+                //
+                //                     InstanceType &inst       =
+                //                     state->fileInstances.AddBack(); inst.filename =
+                //                     newFilename; inst.transformIndexStart =
+                //                     currentGraphicsState.transformIndex;
+                //                     inst.transformIndexEnd   =
+                //                     currentGraphicsState.transformIndex; AddTransform();
+                //
+                //                     if (includeMap->FindOrAddFile(threadArena, newFilename))
+                //                     goto loop_start;
+                //
+                // #if 0
+                //                     PBRTFileInfo *newState = PushStruct(tempArena,
+                //                     PBRTFileInfo); newState->Init(newFilename);
+                //
+                //                     Assert(numFileStackEntries < ArrayLength(fileStack));
+                //                     Assert(numFileInfoStackEntries <
+                //                     ArrayLength(fileInfoStack));
+                //                     fileStack[numFileStackEntries++]         = {tokenizer,
+                //                     writeFile}; fileInfoStack[numFileInfoStackEntries++] =
+                //                     state; SetNewState(newState); writeFile = true;
+                //                     GraphicsState *gs              =
+                //                     &graphicsStateStack[graphicsStateCount++]; *gs =
+                //                     currentGraphicsState; currentGraphicsState.transform =
+                //                     AffineSpace::Identity();
+                //                     currentGraphicsState.transformIndex = -1;
+                // #endif
+                //                     string copiedFilename        = PushStr8Copy(threadArena,
+                //                     importedFilename); GraphicsState importedState  =
+                //                     currentGraphicsState; importedState.transform      =
+                //                     AffineSpace::Identity(); importedState.transformIndex =
+                //                     -1;
+                //
+                //                     scheduler.Schedule(&counter, [=](u32 jobID) {
+                //                         LoadPBRT(arenas, directory, copiedFilename,
+                //                         includeMap, importedState,
+                //                                  worldBegin, true, true);
+                //                     });
+                //                 }
+                //                 else
+                //                 {
+                //                     Assert(numFileStackEntries < ArrayLength(fileStack));
+                //                     fileStack[numFileStackEntries++] = {tokenizer,
+                //                     currentFilename, writeFile}; currentFilename =
+                //                     newFilename; writeFile                        = false;
+                //
+                //                     tokenizer.input  = OS_MapFileRead(importedFullPath);
+                //                     tokenizer.cursor = tokenizer.input.str;
+                //                 }
+                //             }
+                break;
             case "LookAt"_sid:
             {
                 currentGraphicsState.transformIndex = transforms->Length();
@@ -971,7 +979,7 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                 b32 result = GetBetweenPair(objectName, &tokenizer, '"');
                 Assert(result);
 
-                PBRTFileInfo *newState = PushStruct(tempArena, PBRTFileInfo);
+                PBRTFileInfo *newState = PushStruct(threadArena, PBRTFileInfo);
                 string objectFileName =
                     PushStr8F(tempArena, "objects/%S_obj.rtscene", objectName);
 
@@ -992,7 +1000,12 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                 Error(type == ScopeType::Object,
                       "Unmatched AttributeEnd statement. Aborting...\n");
 
+                scheduler.Wait(&state->counter);
+                for (u32 i = 0; i < state->numImports; i++) state->Merge(state->imports[i]);
                 WriteFile(directory, state);
+                ArenaRelease(state->arena);
+                for (u32 i = 0; i < state->numImports; i++)
+                    ArenaRelease(state->imports[i]->arena);
                 Assert(numFileInfoStackEntries > 0);
                 PBRTFileInfo *oldState = state;
                 SetNewState(fileInfoStack[--numFileInfoStackEntries]);

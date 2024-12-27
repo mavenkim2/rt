@@ -736,7 +736,6 @@ void TestRender(Arena *arena, Options *options = 0)
     AffineSpace renderFromWorld = AffineSpace::Translate(-pCamera);
     AffineSpace worldFromRender = AffineSpace::Translate(pCamera);
 
-#if 0
     CoatedDiffuseMaterial2 mat(
         CoatedDiffuseMaterialBase(ConstantTexture(.65),
                                   ConstantSpectrumTexture(RGBAlbedoSpectrum(
@@ -744,14 +743,6 @@ void TestRender(Arena *arena, Options *options = 0)
                                   ConstantTexture(0.f), ConstantSpectrum(1.5f)),
         NullShader());
     scene->materials.Set<CoatedDiffuseMaterial2>(&mat, 1);
-#endif
-    CoatedDiffuseMaterial2 mat(
-        CoatedDiffuseMaterialBase(ConstantTexture(.65),
-                                  ConstantSpectrumTexture(RGBAlbedoSpectrum(
-                                      *RGBColorSpace::sRGB, Vec3f(.24, .2, .17))),
-                                  ConstantTexture(0.f), ConstantSpectrum(1.5f)),
-        NullShader());
-    scene->materials.Set<DiffuseMaterialBase>(&mat, 1);
 
     LoadScene(arenas, "../data/island/pbrt-v4/", options->filename, &renderFromWorld);
 

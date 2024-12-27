@@ -64,7 +64,7 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
     }
 
     Scheduler::Counter counter = {};
-    bool isLeaf = true;
+    bool isLeaf                = true;
     for (;;)
     {
         if (Advance(&tokenizer, "RTSCENE_END")) break;
@@ -87,7 +87,9 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                 string includeFile = ReadWord(&tokenizer);
                 // TODO: this is a band aid until I get curves working
 #if 1
-                if (!OS_FileExists(StrConcat(temp.arena, directory, includeFile)))
+                if (!OS_FileExists(StrConcat(temp.arena, directory, includeFile)) ||
+                    !OS_FileExists(PushStr8F(temp.arena, "%S%S.rtdata", directory,
+                                             RemoveFileExtension(includeFile))))
                 {
                     while (CharIsDigit(*tokenizer.cursor))
                     {
