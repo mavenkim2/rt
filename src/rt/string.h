@@ -124,23 +124,20 @@ struct StringBuilder
     Arena *arena;
 };
 
-// struct StringBuilderMapped
-// {
-//     string filename;
-//     u8 *ptr;
-//     u64 totalSize;
-//     u64 currentSize;
-//     u32 currentLimit;
-// };
-//
-// StringBuilderMapped StartStringBuilder(string filename)
-// {
-//     StringBuilderMapped strB = {};
-//     strB.fileHandle          = OS_MapFileWrite(filename, megabytes(512));
-//     strB.currentLimit        = megabytes(512);
-//     return strB;
-// }
-//
+struct StringBuilderMapped
+{
+    string filename;
+    u8 *ptr;
+    u8 *writePtr;
+    u64 totalSize;
+    u64 currentLimit;
+
+    StringBuilderMapped(string filename);
+};
+
+u64 Put(StringBuilderMapped *builder, void *data, u64 size);
+u64 Put(StringBuilderMapped *builder, string str);
+
 // void EndStringBuilder(StringBuilderMapped &builder) {}
 
 struct Tokenizer
@@ -172,6 +169,8 @@ u64 Put(StringBuilder *builder, u32 value);
 string CombineBuilderNodes(StringBuilder *builder);
 b32 WriteEntireFile(StringBuilder *builder, string filename);
 b32 WriteFileMapped(StringBuilder *builder, string filename);
+b32 WriteFileMapped(StringBuilder *builder, StringBuilderMapped *mappedBuilder,
+                    string filename);
 inline u64 PutPointer(StringBuilder *builder, u64 address);
 inline void ConvertPointerToOffset(u8 *buffer, u64 location, u64 offset);
 inline u8 *ConvertOffsetToPointer(u8 *base, u64 offset);

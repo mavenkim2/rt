@@ -21,14 +21,17 @@ struct SceneLoadTable
 };
 
 void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
-                 string directory, string filename, AffineSpace *renderFromWorld = 0,
-                 bool baseFile = false)
+                 string directory, string filename, Scheduler::Counter *c = 0,
+                 AffineSpace *renderFromWorld = 0, bool baseFile = false)
 
 {
+    Assert(GetFileExtension(filename) == "rtscene");
     TempArena temp = ScratchStart(0, 0);
     Arena *arena   = arenas[GetThreadIndex()];
 
     string fullFilePath = StrConcat(temp.arena, directory, filename);
+    string dataPath =
+        PushStr8F(temp.arena, "%S%S.rtdata", directory, RemoveFileExtension(filename));
     Tokenizer tokenizer;
     tokenizer.input  = OS_MapFileRead(fullFilePath);
     tokenizer.cursor = tokenizer.input.str;
@@ -36,10 +39,7 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
     bool hasMagic = Advance(&tokenizer, "RTSCENE_START ");
     Error(hasMagic, "RTScene file missing magic.\n");
 
-    u64 dataOffset;
-    GetPointerValue(&tokenizer, &dataOffset);
-
-    string data = OS_ReadFile(arena, fullFilePath, dataOffset);
+    string data = OS_ReadFile(arena, dataPath);
 
     Tokenizer dataTokenizer;
     dataTokenizer.input  = data;
@@ -63,9 +63,8 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
         }
     }
 
-    Scheduler::Counter *counters[64];
-    u32 numIncludes = 0;
-    bool isLeaf     = true;
+    Scheduler::Counter counter = {};
+    bool isLeaf = true;
     for (;;)
     {
         if (Advance(&tokenizer, "RTSCENE_END")) break;
@@ -87,7 +86,8 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                 Advance(&tokenizer, "File: ");
                 string includeFile = ReadWord(&tokenizer);
                 // TODO: this is a band aid until I get curves working
-                if (!OS_FileExists(includeFile))
+#if 1
+                if (!OS_FileExists(StrConcat(temp.arena, directory, includeFile)))
                 {
                     while (CharIsDigit(*tokenizer.cursor))
                     {
@@ -99,6 +99,7 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                     }
                     continue;
                 }
+#endif
                 StringId hash = Hash(includeFile);
                 u32 index     = hash & (table->count - 1);
 
@@ -115,14 +116,15 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                     Assert(node->filename.size == 0);
                     node->filename                = PushStr8Copy(arena, includeFile);
                     ScenePrimitives *includeScene = PushStruct(arena, ScenePrimitives);
+                    node->counter.count           = 1;
                     node->scene                   = includeScene;
                     node->next                    = PushStruct(arena, SceneLoadTable::Node);
-                    scheduler.Schedule(&node->counter, [=](u32 jobID) {
-                        LoadRTScene(arenas, table, includeScene, directory, node->filename);
+                    scheduler.Schedule(&counter, [=](u32 jobID) {
+                        LoadRTScene(arenas, table, includeScene, directory, node->filename,
+                                    &node->counter);
                     });
                     EndTicketMutex(&table->mutexes[index]);
-                    counters[numIncludes++] = &node->counter;
-                    files.AddBack()         = includeScene;
+                    files.AddBack() = includeScene;
                 }
                 else
                 {
@@ -198,10 +200,7 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
         }
     }
 
-    for (u32 i = 0; i < numIncludes; i++)
-    {
-        scheduler.Wait(counters[i]);
-    }
+    scheduler.Wait(&counter);
 
     OS_UnmapFile(tokenizer.input.str);
     PrimitiveIndices *ids = PushStructConstruct(arena, PrimitiveIndices)(
@@ -223,6 +222,7 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
     }
 
     ScratchEnd(temp);
+    if (c) c->count.fetch_sub(1, std::memory_order_acq_rel);
 }
 
 void LoadScene(Arena **arenas, string directory, string filename, AffineSpace *t)
@@ -235,7 +235,7 @@ void LoadScene(Arena **arenas, string directory, string filename, AffineSpace *t
     table.mutexes = PushArray(temp.arena, TicketMutex, table.count);
 
     Scene *scene = GetScene();
-    LoadRTScene(arenas, &table, &scene->scene, directory, filename, t, true);
+    LoadRTScene(arenas, &table, &scene->scene, directory, filename, 0, t, true);
     ScratchEnd(temp);
 }
 

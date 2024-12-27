@@ -840,6 +840,7 @@ struct ChunkedLinkedList
             Assert(list->first && last);
             last->next = list->first;
             last       = list->last;
+            Assert(last->next == 0);
             totalCount += list->totalCount;
         }
     }

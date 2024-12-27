@@ -314,7 +314,7 @@ u8 *OS_MapFileAppend(string filename, u64 size)
     LPVOID ptr = MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, 0);
     CloseHandle(mapping);
 
-    return (u8 *)ptr + currentSize.QuadPart;
+    return (u8 *)ptr;
 }
 
 void OS_ResizeFile(string filename, u64 size)
@@ -338,6 +338,8 @@ void OS_ResizeFile(string filename, u64 size)
 }
 
 void OS_FlushMappedFile(void *ptr, size_t size) { FlushViewOfFile(ptr, size); }
+
+bool OS_DeleteFile(string filename) { return DeleteFile((char *)filename.str); }
 
 // OS_FileIter OS_DirectoryIterStart(string path, OS_FileIterFlags flags)
 // {

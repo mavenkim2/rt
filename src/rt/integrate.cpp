@@ -720,10 +720,16 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
             break;
         }
 
-        TempArena temp = ScratchStart(0, 0);
-        // BSDF bsdf; // = si.GetBSDF();
+        struct ScratchArena
+        {
+            TempArena temp;
+            ScratchArena() { temp = ScratchStart(0, 0); }
+            ~ScratchArena() { ScratchEnd(temp); }
+        };
+
+        ScratchArena scratch;
         BSDF bsdf;
-        EvaluateMaterial(temp.arena, si, &bsdf, lambda);
+        EvaluateMaterial(scratch.temp.arena, si, &bsdf, lambda);
 
         // Next Event Estimation
         // Choose light source for direct lighting calculation
@@ -791,7 +797,6 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
             beta /= q;
             // TODO: infinity check for beta
         }
-        ScratchEnd(temp);
     }
     return L;
 }

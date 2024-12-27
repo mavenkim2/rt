@@ -63,6 +63,7 @@ void OS_SetThreadName(string name);
 string OS_ReadFile(Arena *arena, string filename, u64 offset = 0);
 b32 OS_WriteFile(string filename, void *fileMemory, u64 fileSize);
 b32 OS_WriteFile(string filename, string buffer);
+bool OS_DeleteFile(string filename);
 string OS_MapFileRead(string filename);
 u8 *OS_MapFileWrite(string filename, u64 size);
 u8 *OS_MapFileAppend(string filename, u64 size);

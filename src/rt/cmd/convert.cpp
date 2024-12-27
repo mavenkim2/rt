@@ -142,6 +142,7 @@ struct PBRTFileInfo
         numInstances += import->numInstances;
         shapes.Merge(&import->shapes);
         u32 transformOffset = transforms.totalCount;
+
         for (auto *node = import->fileInstances.first; node != 0; node = node->next)
         {
             for (u32 j = 0; j < node->count; j++)
@@ -509,6 +510,12 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
         Attribute,
         Object,
     };
+
+    if (filename == "isBeach/isBeach.pbrt")
+    {
+        int stop = 5;
+    }
+
     ScopeType scope[32] = {};
     u32 scopeCount      = 0;
 
@@ -523,7 +530,7 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
     Arena *threadArena = arenas[GetThreadIndex()];
 
     PBRTFileInfo *state = PushStruct(threadArena, PBRTFileInfo);
-    state->Init(ConvertPBRTToRTScene(temp.arena, filename));
+    state->Init(ConvertPBRTToRTScene(threadArena, filename));
 
     Arena *tempArena = state->arena;
 
@@ -580,6 +587,10 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
 
             for (u32 i = 0; i < state->numImports; i++)
             {
+                if (state->imports[i]->filename == "isBeach/xgGroundCover/isBeach_xgGroundCover-a.rtscene")
+                {
+                    int stop = 5;
+                }
                 state->Merge(state->imports[i]);
             }
             if (writeFile)
@@ -634,6 +645,7 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                 Assert(graphicsStateCount < ArrayLength(graphicsStateStack));
                 GraphicsState *gs   = &graphicsStateStack[graphicsStateCount++];
                 *gs                 = currentGraphicsState;
+                Assert(scopeCount < ArrayLength(scope));
                 scope[scopeCount++] = ScopeType::Attribute;
             }
             break;
@@ -746,7 +758,6 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                 b32 result = GetBetweenPair(importedFilename, &tokenizer, '"');
                 Assert(result);
 
-                u64 popPos         = ArenaPos(tempArena);
                 string newFilename = ConvertPBRTToRTScene(tempArena, importedFilename);
 
                 bool checkFileInstance =
@@ -765,7 +776,6 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                         state->fileInstances.Last().transformIndexEnd =
                             currentGraphicsState.transformIndex;
                         AddTransform();
-                        ArenaPopTo(tempArena, popPos);
                         goto loop_start;
                     }
 
@@ -779,7 +789,7 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                     if (includeMap->FindOrAddFile(threadArena, newFilename)) goto loop_start;
                 }
 
-                string copiedFilename = PushStr8Copy(temp.arena, importedFilename);
+                string copiedFilename = PushStr8Copy(threadArena, importedFilename);
 
                 GraphicsState importedState  = currentGraphicsState;
                 importedState.transform      = AffineSpace::Identity();
@@ -809,9 +819,9 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                 string importedFilename;
                 b32 result = GetBetweenPair(importedFilename, &tokenizer, '"');
                 Assert(result);
+                Assert(GetFileExtension(importedFilename) == "pbrt");
 
                 string importedFullPath = StrConcat(temp.arena, directory, importedFilename);
-                u64 popPos              = ArenaPos(tempArena);
                 string newFilename      = ConvertPBRTToRTScene(tempArena, importedFilename);
 
                 bool checkFileInstance =
@@ -829,7 +839,6 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                         state->fileInstances.Last().transformIndexEnd =
                             currentGraphicsState.transformIndex;
                         AddTransform();
-                        ArenaPopTo(tempArena, popPos);
                         goto loop_start;
                     }
 
@@ -841,6 +850,7 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
 
                     if (includeMap->FindOrAddFile(threadArena, newFilename)) goto loop_start;
 
+#if 0
                     PBRTFileInfo *newState = PushStruct(tempArena, PBRTFileInfo);
                     newState->Init(newFilename);
 
@@ -850,21 +860,30 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                     fileInfoStack[numFileInfoStackEntries++] = state;
                     SetNewState(newState);
                     writeFile = true;
-
                     GraphicsState *gs              = &graphicsStateStack[graphicsStateCount++];
                     *gs                            = currentGraphicsState;
                     currentGraphicsState.transform = AffineSpace::Identity();
                     currentGraphicsState.transformIndex = -1;
+#endif
+                    string copiedFilename        = PushStr8Copy(threadArena, importedFilename);
+                    GraphicsState importedState  = currentGraphicsState;
+                    importedState.transform      = AffineSpace::Identity();
+                    importedState.transformIndex = -1;
+
+                    scheduler.Schedule(&counter, [=](u32 jobID) {
+                        LoadPBRT(arenas, directory, copiedFilename, includeMap, importedState,
+                                 worldBegin, true, true);
+                    });
                 }
                 else
                 {
                     Assert(numFileStackEntries < ArrayLength(fileStack));
                     fileStack[numFileStackEntries++] = {tokenizer, writeFile};
                     writeFile                        = false;
-                }
 
-                tokenizer.input  = OS_MapFileRead(importedFullPath);
-                tokenizer.cursor = tokenizer.input.str;
+                    tokenizer.input  = OS_MapFileRead(importedFullPath);
+                    tokenizer.cursor = tokenizer.input.str;
+                }
             }
             break;
             case "LookAt"_sid:
@@ -986,7 +1005,6 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                       "Cannot have object instance in object definition block.\n");
                 string objectName;
                 b32 result = GetBetweenPair(objectName, &tokenizer, '"');
-                u64 popPos = ArenaPos(temp.arena);
                 string objectFileName =
                     PushStr8F(temp.arena, "objects/%S_obj.rtscene", objectName);
                 Assert(result);
@@ -1005,7 +1023,6 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                     inst.transformIndexEnd   = currentGraphicsState.transformIndex;
                 }
                 state->numInstances++;
-                ArenaPopTo(temp.arena, popPos);
                 AddTransform();
             }
             break;
@@ -1057,6 +1074,7 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                 // TODO: temp
                 if (packet->type == "curve"_sid)
                 {
+                    shapes->Last() = {};
                     shapes->last->count--;
                     shapes->totalCount--;
                     continue;
@@ -1526,11 +1544,7 @@ void WriteFile(string directory, PBRTFileInfo *info)
     StringBuilder builder  = {};
     builder.arena          = temp.arena;
     u32 totalMaterialCount = 0;
-
-    StringBuilder offsetBuilder = {};
-    offsetBuilder.arena         = temp.arena;
-
-    Put(&offsetBuilder, "RTSCENE_START ");
+    Put(&builder, "RTSCENE_START ");
 
     if (info->fileInstances.totalCount && info->shapes.totalCount)
     {
@@ -1541,6 +1555,7 @@ void WriteFile(string directory, PBRTFileInfo *info)
     {
         string filename;
         StringBuilder builder = {};
+        u64 prevEnd;
         BuilderNode *next;
     };
 
@@ -1566,23 +1581,36 @@ void WriteFile(string directory, PBRTFileInfo *info)
                     node->filename      = fileInst->filename;
                     node->builder.arena = temp.arena;
                     node->next          = PushStruct(temp.arena, BuilderNode);
-                    Put(&node->builder, "File: %S ", node->filename);
+                    node->prevEnd       = fileInst->transformIndexEnd;
+                    Put(&node->builder, "File: %S %u-", node->filename,
+                        fileInst->transformIndexStart);
                 }
-                Put(&node->builder, "%u-%u ", fileInst->transformIndexStart,
-                    fileInst->transformIndexEnd);
+                else
+                {
+                    if (node->prevEnd + 1 == fileInst->transformIndexStart) node->prevEnd++;
+                    else
+                    {
+                        Put(&node->builder, "%u %u-", node->prevEnd,
+                            fileInst->transformIndexStart);
+                        node->prevEnd = fileInst->transformIndexEnd;
+                    }
+                }
             }
         }
         BuilderNode *node = &bNode;
         while (node->next)
         {
+            Put(&node->builder, "%u ", node->prevEnd);
             builder = ConcatBuilders(&builder, &node->builder);
             node    = node->next;
         }
         Put(&builder, "INCLUDE_END ");
     }
 
-    StringBuilder dataBuilder = {};
-    dataBuilder.arena         = temp.arena;
+    string dataBuilderFile =
+        PushStr8F(temp.arena, "%S%S.rtdata", directory, RemoveFileExtension(info->filename));
+    StringBuilderMapped dataBuilder(dataBuilderFile);
+
     Put(&dataBuilder, "DATA_START ");
 
     if (info->transforms.totalCount)
@@ -1652,12 +1680,9 @@ void WriteFile(string directory, PBRTFileInfo *info)
     }
 
     Put(&builder, "RTSCENE_END");
-    u64 dataOffset = builder.totalSize + offsetBuilder.totalSize + sizeof(u64);
-    PutPointerValue(&offsetBuilder, &dataOffset);
-
-    StringBuilder finalBuilder = ConcatBuilders(&offsetBuilder, &builder);
-    finalBuilder               = ConcatBuilders(&finalBuilder, &dataBuilder);
-    WriteFileMapped(&finalBuilder, outFile);
+    WriteFileMapped(&builder, outFile);
+    OS_UnmapFile(dataBuilder.ptr);
+    OS_ResizeFile(dataBuilder.filename, dataBuilder.totalSize);
     ScratchEnd(temp);
 }
 
