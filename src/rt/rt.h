@@ -119,6 +119,7 @@ struct RayQueueItem
 
 inline u32 *GetPixelPointer(Image *image, u32 x, u32 y)
 {
+    Assert(x < (u32)image->width && y < (u32)image->height);
     u32 *ptr = (u32 *)(image->contents + x * image->bytesPerPixel +
                        (image->height - y - 1) * image->width * image->bytesPerPixel);
     return ptr;

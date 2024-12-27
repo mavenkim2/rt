@@ -1531,7 +1531,8 @@ void WriteFile(string directory, PBRTFileInfo *info)
                 }
                 else
                 {
-                    if (node->prevEnd + 1 == fileInst->transformIndexStart) node->prevEnd++;
+                    if (node->prevEnd + 1 == fileInst->transformIndexStart)
+                        node->prevEnd = fileInst->transformIndexEnd;
                     else
                     {
                         Put(&node->builder, "%u %u-", node->prevEnd,

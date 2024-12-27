@@ -259,7 +259,7 @@ struct HeuristicPartialRebraid
                 {
                     record.extEnd = record.start + record.count;
                 }
-                else if (prop.count <= record.ExtSize())
+                else if (prop.count && prop.count <= record.ExtSize())
                 {
                     u32 offset   = record.End();
                     Props *props = (Props *)output.out;
@@ -270,7 +270,7 @@ struct HeuristicPartialRebraid
                         Assert(offset < record.ExtEnd());
                         offset += splits;
                     }
-                    RecordAOSSplits openRecord;
+                    RecordAOSSplits openRecord(neg_inf);
                     ParallelReduce(
                         &openRecord, record.start, record.count, PARALLEL_THRESHOLD,
                         [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
@@ -303,7 +303,7 @@ struct HeuristicPartialRebraid
                 }
                 else if (count && count <= record.ExtSize())
                 {
-                    RecordAOSSplits openRecord;
+                    RecordAOSSplits openRecord(neg_inf);
                     OpenBraid(scene, openRecord, buildRefs, record.start, record.count,
                               record.End(), record.End() + count, heuristic, getNode);
                     record.SafeMerge(openRecord);

@@ -487,17 +487,23 @@ void Render(Arena *arena, RenderParams2 &params)
                maxPixelBounds.x <= width);
         Assert(maxPixelBounds.y >= minPixelBounds.y && minPixelBounds.y >= 0 &&
                maxPixelBounds.y <= height);
+        SceneDebug *debug = GetDebug();
+        debug->tileCount  = taskCount;
 
         ZSobolSampler sampler(spp, Vec2i(width, height));
         for (u32 y = minPixelBounds.y; y < maxPixelBounds.y; y++)
         {
-            u32 *out = GetPixelPointer(&image, minPixelBounds.x, y);
             for (u32 x = minPixelBounds.x; x < maxPixelBounds.x; x++)
             {
+                u32 *out = GetPixelPointer(&image, x, y);
                 Vec2u pPixel(x, y);
                 Vec3f rgb(0.f);
                 for (u32 i = 0; i < spp; i++)
                 {
+                    debug->pixel     = Vec2i(x, y);
+                    debug->sampleNum = i;
+                    debug->numTiles  = &numTiles;
+
                     sampler.StartPixelSample(Vec2i(x, y), i);
                     SampledWavelengths lambda = SampleVisible(sampler.Get1D());
                     Vec2f u                   = sampler.GetPixel2D();
@@ -559,7 +565,7 @@ void Render(Arena *arena, RenderParams2 &params)
 
                 u32 color = (RoundFloatToU32(a) << 24) | (RoundFloatToU32(r) << 16) |
                             (RoundFloatToU32(g) << 8) | (RoundFloatToU32(b) << 0);
-                *out++ = color;
+                *out = color;
             }
         }
         u32 n = numTiles.fetch_add(1);

@@ -22,6 +22,7 @@ auto GetNode(BVHNode4 node);
 template <>
 auto GetNode<4, BVH_QN>(BVHNode<4> node)
 {
+    Assert(node.IsQuantizedNode());
     QuantizedNode<4> *qNode = node.GetQuantizedNode();
     return qNode;
 }
@@ -29,6 +30,7 @@ auto GetNode<4, BVH_QN>(BVHNode<4> node)
 template <>
 auto GetNode<4, BVH_QNLF>(BVHNode<4> node)
 {
+    Assert(node.IsCompressedLeaf());
     CompressedLeafNode<4> *qNode = node.GetCompressedLeaf();
     return qNode;
 }
@@ -36,6 +38,7 @@ auto GetNode<4, BVH_QNLF>(BVHNode<4> node)
 template <>
 auto GetNode<4, BVH_AQ>(BVHNode<4> node)
 {
+    Assert(node.IsQuantizedNode());
     QuantizedNode<4> *qNode = node.GetQuantizedNode();
     return qNode;
 }
@@ -183,10 +186,19 @@ struct BVHIntersector<4, types, Intersector>
         stack[0]     = {nodePtr, ray.tFar};
         bool result  = false;
         Intersector intersector;
+        SceneDebug *dbg = GetDebug();
         while (stackPtr > 0)
         {
             Assert(stackPtr <= ArrayLength(stack));
             StackEntry entry = stack[--stackPtr];
+            if (u32(100.f * dbg->numTiles->load() / dbg->tileCount) == 99 &&
+                scene->filename == "test.rtscene" && dbg->pixel.x == 208 &&
+                dbg->pixel.y == 700)
+            {
+                // printf("%u %u\n", dbg->pixel.x, dbg->pixel.y);
+                // Print("%llu node\n", entry.ptr.data);
+                int stop = 5;
+            }
             Assert(entry.ptr.data);
             if (entry.dist > ray.tFar) continue;
 
@@ -698,6 +710,8 @@ struct CompressedLeafIntersector
                    TravRay<N> &tray)
     {
         bool result = false;
+
+        SceneDebug *dbg = GetDebug();
         switch (ptr.GetType())
         {
             case BVHNode<N>::tyCompressedLeaf:

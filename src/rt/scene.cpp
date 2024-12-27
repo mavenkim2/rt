@@ -25,6 +25,7 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                  AffineSpace *renderFromWorld = 0, bool baseFile = false)
 
 {
+    scene->filename = filename;
     Assert(GetFileExtension(filename) == "rtscene");
     TempArena temp = ScratchStart(0, 0);
     Arena *arena   = arenas[GetThreadIndex()];
@@ -51,7 +52,8 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
     if (hasTransforms)
     {
         Advance(&dataTokenizer, "Count ");
-        u32 count = ReadInt(&dataTokenizer);
+        u32 count            = ReadInt(&dataTokenizer);
+        scene->numTransforms = count;
         SkipToNextChar(&dataTokenizer);
         scene->affineTransforms = (AffineSpace *)(dataTokenizer.cursor);
         if (baseFile && renderFromWorld)
@@ -151,7 +153,9 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                     SkipToNextChar(&tokenizer);
                 }
             }
+            Error(instanceOffset == instanceCount, "inst offset %u\n", instanceOffset);
             scene->childScenes = PushArrayNoZero(arena, ScenePrimitives *, files.totalCount);
+            scene->numChildScenes = files.totalCount;
 
             files.Flatten(scene->childScenes);
         }
@@ -245,13 +249,20 @@ void BuildTLASBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scen
     TempArena temp = ScratchStart(0, 0);
     // build tlas
     RecordAOSSplits record(neg_inf);
-    BRef *refs            = GenerateBuildRefs(scene, temp.arena, record);
+
+    BRef *refs = GenerateBuildRefs(scene, temp.arena, record);
+    Bounds b   = Bounds(record.geomBounds);
+    Assert((Movemask(b.maxP >= b.minP) & 0x7) == 0x7);
+
+    // NOTE: record is being corrupted somehow during this routine.
     scene->nodePtr        = BuildTLASQuantized(settings, arenas, scene, refs, record);
     using IntersectorType = typename IntersectorHelper<Instance, BRef>::IntersectorType;
     scene->intersectFunc  = &IntersectorType::Intersect;
     scene->occludedFunc   = &IntersectorType::Occluded;
 
-    scene->SetBounds(Bounds(record.geomBounds));
+    b = Bounds(record.geomBounds);
+    scene->SetBounds(b);
+    Assert((Movemask(b.maxP >= b.minP) & 0x7) == 0x7);
     ScratchEnd(temp);
 }
 
@@ -338,7 +349,9 @@ void BuildBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
         scene->intersectFunc = &IntersectorType::Intersect;
         scene->occludedFunc  = &IntersectorType::Occluded;
     }
-    scene->SetBounds(Bounds(record.geomBounds));
+    Bounds b(record.geomBounds);
+    Assert((Movemask(b.maxP >= b.minP) & 0x7) == 0x7);
+    scene->SetBounds(b);
     scene->numFaces = totalNumFaces;
     ScratchEnd(temp);
 }

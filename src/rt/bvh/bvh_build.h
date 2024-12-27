@@ -233,12 +233,13 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVHRoot(BuildSettings settings, R
     BVHNode<N> root   = BuildBVH(settings, record, parallel);
     if (root.data != 0) return root;
 
-    Arena *currentArena      = arenas[GetThreadIndex()];
-    u32 offset               = 0;
-    u32 count                = (record.count + settings.blockAdd) >> settings.logBlockSize;
-    u8 *bytes                = PushArrayNoZeroTagged(currentArena, u8,
-                                                     sizeof(CompressedNodeType) + sizeof(LeafType) * count,
-                                                     MemoryType_BVH);
+    Arena *currentArena = arenas[GetThreadIndex()];
+    u32 offset          = 0;
+    u32 count           = (record.count + settings.blockAdd) >> settings.logBlockSize;
+    u8 *bytes           = PushArrayNoZeroTagged(currentArena, u8,
+                                                sizeof(CompressedNodeType) + sizeof(LeafType) * count,
+                                                MemoryType_BVH);
+    Assert(currentArena->current->align == 16);
     CompressedNodeType *node = (CompressedNodeType *)bytes;
     LeafType *primIDs        = (LeafType *)(bytes + sizeof(CompressedNodeType));
 
@@ -355,6 +356,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(const BuildSettings &settings
             u8 *bytes  = PushArrayNoZeroTagged(
                 currentArena, u8, sizeof(CompressedNodeType) + sizeof(LeafType) * primTotal,
                 MemoryType_BVH);
+            Assert(currentArena->current->align == 16);
             CompressedNodeType *node = (CompressedNodeType *)bytes;
             LeafType *primIDs        = (LeafType *)(bytes + sizeof(CompressedNodeType));
 
@@ -389,6 +391,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(const BuildSettings &settings
             Assert(numPrims <= settings.maxLeafSize);
             LeafType *primIDs =
                 PushArrayNoZeroTagged(currentArena, LeafType, numPrims, MemoryType_BVH);
+            Assert(currentArena->current->align == 16);
             u32 begin = childRecord.start;
             u32 end   = childRecord.start + childRecord.count;
             while (begin < end)
@@ -402,6 +405,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(const BuildSettings &settings
         }
     }
     NodeType *node = PushStructNoZeroTagged(currentArena, NodeType, MemoryType_BVH);
+    Assert(currentArena->current->align == 16);
     f.createNode(childRecords, numChildren, node);
     f.updateNode(node, childNodes, numChildren);
 

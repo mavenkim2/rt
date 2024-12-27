@@ -2,7 +2,8 @@
 namespace rt
 {
 template <i32 N>
-__forceinline void LeafPrim<N>::Fill(const ScenePrimitives *, PrimRef *refs, u32 &begin, u32 end)
+__forceinline void LeafPrim<N>::Fill(const ScenePrimitives *, PrimRef *refs, u32 &begin,
+                                     u32 end)
 {
     Assert(end > begin);
     for (u32 i = 0; i < N; i++)
@@ -24,8 +25,8 @@ __forceinline void LeafPrim<N>::Fill(const ScenePrimitives *, PrimRef *refs, u32
 }
 
 template <i32 N>
-__forceinline void LeafPrimCompressed<N>::Fill(const ScenePrimitives *, PrimRefCompressed *refs,
-                                               u32 &begin, u32 end)
+__forceinline void LeafPrimCompressed<N>::Fill(const ScenePrimitives *,
+                                               PrimRefCompressed *refs, u32 &begin, u32 end)
 {
     Assert(end > begin);
     for (u32 i = 0; i < N; i++)
@@ -76,8 +77,9 @@ void Triangle<N>::GetData(const ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32
     }
 }
 template <i32 N>
-void TriangleCompressed<N>::GetData(const ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N],
-                                    Lane4F32 v2[N], u32 outGeomIDs[N], u32 outPrimIDs[N]) const
+void TriangleCompressed<N>::GetData(const ScenePrimitives *scene, Lane4F32 v0[N],
+                                    Lane4F32 v1[N], Lane4F32 v2[N], u32 outGeomIDs[N],
+                                    u32 outPrimIDs[N]) const
 {
     // TODO: reconsider this later
     TriangleMesh *mesh = (TriangleMesh *)scene->primitives;
@@ -106,8 +108,9 @@ void TriangleCompressed<N>::GetData(const ScenePrimitives *scene, Lane4F32 v0[N]
     }
 }
 template <i32 N>
-void Quad<N>::GetData(const ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N], Lane4F32 v2[N],
-                      Lane4F32 v3[N], u32 outGeomIDs[N], u32 outPrimIDs[N]) const
+void Quad<N>::GetData(const ScenePrimitives *scene, Lane4F32 v0[N], Lane4F32 v1[N],
+                      Lane4F32 v2[N], Lane4F32 v3[N], u32 outGeomIDs[N],
+                      u32 outPrimIDs[N]) const
 {
     QuadMesh *meshes = (QuadMesh *)scene->primitives;
     for (u32 i = 0; i < N; i++)
@@ -175,7 +178,8 @@ void QuadCompressed<N>::GetData(const ScenePrimitives *scene, Lane4F32 v0[N], La
     }
 }
 
-void TLASLeaf::GetData(const ScenePrimitives *scene, AffineSpace *&t, ScenePrimitives *&childScene)
+void TLASLeaf::GetData(const ScenePrimitives *scene, AffineSpace *&t,
+                       ScenePrimitives *&childScene)
 {
     t          = &scene->affineTransforms[transformIndex];
     childScene = scene->childScenes[sceneIndex];

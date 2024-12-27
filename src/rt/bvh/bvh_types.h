@@ -613,8 +613,11 @@ struct TLASLeaf
         BuildRef<N> *ref  = &refs[begin];
         u32 instanceIndex = ref->instanceID;
         nodePtr           = ref->nodePtr;
-        sceneIndex        = instances[instanceIndex].id;
-        transformIndex    = instances[instanceIndex].transformIndex;
+        Assert(instanceIndex < scene->numPrimitives);
+        sceneIndex = instances[instanceIndex].id;
+        Assert(sceneIndex < scene->numChildScenes);
+        transformIndex = instances[instanceIndex].transformIndex;
+        Assert(transformIndex < scene->numTransforms);
         begin++;
     }
     void GetData(const ScenePrimitives *scene, AffineSpace *&t, ScenePrimitives *&childScene);

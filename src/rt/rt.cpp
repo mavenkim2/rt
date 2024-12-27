@@ -1082,7 +1082,7 @@ int main(int argc, char *argv[])
 
     Options options = {};
     bool setOptions = false;
-    for (int i = 1; i < argc; i++)
+    for (int i = 1; i < argc;)
     {
         string arg = Str8C(argv[i]);
         if (Contains(arg, "-pixel"))
@@ -1102,10 +1102,12 @@ int main(int argc, char *argv[])
             options.pixelX = ConvertToUint(x);
             options.pixelY = ConvertToUint(y);
             setOptions     = true;
+            i += 3;
         }
         else
         {
             options.filename = arg;
+            i++;
         }
     }
     if (options.filename.size == 0 || !(GetFileExtension(options.filename) == "rtscene"))

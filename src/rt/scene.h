@@ -631,11 +631,24 @@ struct Ray2;
 template <i32 K>
 struct SurfaceInteractions;
 
+struct SceneDebug
+{
+    Vec2i pixel;
+    u32 sampleNum;
+    std::atomic<u32> *numTiles;
+    u32 tileCount;
+};
+
+thread_local SceneDebug debug_;
+static SceneDebug *GetDebug() { return &debug_; }
+
 struct ScenePrimitives
 {
     typedef bool (*IntersectFunc)(ScenePrimitives *, BVHNodeN, Ray2 &,
                                   SurfaceInteractions<1> &);
     typedef bool (*OccludedFunc)(ScenePrimitives *, BVHNodeN, Ray2 &);
+
+    string filename;
 
     Vec3f boundsMin;
     Vec3f boundsMax;
@@ -646,12 +659,14 @@ struct ScenePrimitives
 
     // NOTE: only set if not a leaf node in the scene hierarchy
     ScenePrimitives **childScenes;
+    u32 numChildScenes;
     union
     {
         AffineSpace *affineTransforms;
         const PrimitiveIndices *primIndices;
     };
 
+    u32 numTransforms;
     IntersectFunc intersectFunc;
     OccludedFunc occludedFunc;
     u32 numPrimitives, numFaces;
