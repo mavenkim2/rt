@@ -1018,6 +1018,7 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
 
                         if (CheckQuadPLY(StrConcat(temp.arena, directory, plyMeshFile)))
                             packet->type = "quadmesh"_sid;
+                        else packet->type = "trianglemesh"_sid;
                     }
                 }
                 if (packet->type == "trianglemesh"_sid && numVertices && numIndices &&
@@ -1469,6 +1470,12 @@ void WriteFile(string directory, PBRTFileInfo *info)
         Print("%S has both instances and shapes\n", info->filename);
     }
 
+    string dataBuilderFile =
+        PushStr8F(temp.arena, "%S%S.rtdata", directory, RemoveFileExtension(info->filename));
+    StringBuilderMapped dataBuilder(dataBuilderFile);
+
+    Put(&dataBuilder, "DATA_START ");
+
     struct BuilderNode
     {
         string filename;
@@ -1479,70 +1486,7 @@ void WriteFile(string directory, PBRTFileInfo *info)
 
     BuilderNode bNode = {};
 
-    if (info->fileInstances.totalCount)
-    {
-        Put(&builder, "INCLUDE_START ");
-        Assert(info->numInstances);
-        Put(&builder, "Count: %u ", info->numInstances);
-        u32 count = 0;
-        for (auto *instNode = info->fileInstances.first; instNode != 0;
-             instNode       = instNode->next)
-        {
-            for (u32 i = 0; i < instNode->count; i++)
-            {
-                InstanceType *fileInst = &instNode->values[i];
-                BuilderNode *node      = &bNode;
-                while (!(node->filename == fileInst->filename) && node->next)
-                    node = node->next;
-                if (!node->next)
-                {
-                    node->filename      = fileInst->filename;
-                    node->builder.arena = temp.arena;
-                    node->next          = PushStruct(temp.arena, BuilderNode);
-                    node->prevEnd       = fileInst->transformIndexEnd;
-                    Put(&node->builder, "File: %S %u-", node->filename,
-                        fileInst->transformIndexStart);
-                }
-                else
-                {
-                    if (node->prevEnd + 1 == fileInst->transformIndexStart)
-                        node->prevEnd = fileInst->transformIndexEnd;
-                    else
-                    {
-                        Put(&node->builder, "%u %u-", node->prevEnd,
-                            fileInst->transformIndexStart);
-                        node->prevEnd = fileInst->transformIndexEnd;
-                    }
-                }
-            }
-        }
-        BuilderNode *node = &bNode;
-        while (node->next)
-        {
-            Put(&node->builder, "%u ", node->prevEnd);
-            builder = ConcatBuilders(&builder, &node->builder);
-            node    = node->next;
-        }
-        Put(&builder, "INCLUDE_END ");
-    }
-
-    string dataBuilderFile =
-        PushStr8F(temp.arena, "%S%S.rtdata", directory, RemoveFileExtension(info->filename));
-    StringBuilderMapped dataBuilder(dataBuilderFile);
-
-    Put(&dataBuilder, "DATA_START ");
-
-    if (info->transforms.totalCount)
-    {
-        Put(&dataBuilder, "TRANSFORM_START ");
-        Put(&dataBuilder, "Count %u ", info->transforms.totalCount);
-        for (auto *node = info->transforms.first; node != 0; node = node->next)
-        {
-            Put(&dataBuilder, node->values, sizeof(node->values[0]) * node->count);
-        }
-        Put(&dataBuilder, "TRANSFORM_END");
-    }
-    if (info->shapes.totalCount)
+    if (info->shapes.totalCount && info->fileInstances.totalCount == 0)
     {
         Put(&builder, "SHAPE_START ");
         for (auto *node = info->shapes.first; node != 0; node = node->next)
@@ -1597,12 +1541,28 @@ void WriteFile(string directory, PBRTFileInfo *info)
                                     temp.arena,
                                     StrConcat(temp.arena, directory,
                                               Str8(packet->bytes[c], packet->sizes[c])));
-                                Put(&builder, "v %u ", mesh.numVertices);
+                                Put(&builder, "v %u", mesh.numVertices, mesh.numIndices);
                                 u64 pOffset = dataBuilder.totalSize;
                                 Put(&dataBuilder, mesh.p, mesh.numVertices * sizeof(Vec3f));
                                 u64 nOffset = dataBuilder.totalSize;
                                 Put(&dataBuilder, mesh.n, mesh.numVertices * sizeof(Vec3f));
+
                                 Put(&builder, "p %llu n %llu ", pOffset, nOffset);
+                                if (mesh.uv)
+                                {
+                                    u64 uvOffset = dataBuilder.totalSize;
+                                    Put(&dataBuilder, mesh.uv,
+                                        mesh.numVertices * sizeof(Vec2f));
+                                    Put(&builder, "uv %llu ", uvOffset);
+                                }
+                                if (mesh.indices)
+                                {
+                                    u64 indexOffset = dataBuilder.totalSize;
+                                    Put(&dataBuilder, mesh.indices,
+                                        mesh.numIndices * sizeof(u32));
+                                    Put(&builder, "i %u indices %llu ", mesh.numIndices,
+                                        indexOffset);
+                                }
                             }
                             else if (packet->parameterNames[c] == "P"_sid)
                             {
@@ -1643,6 +1603,76 @@ void WriteFile(string directory, PBRTFileInfo *info)
         }
         Put(&builder, "SHAPE_END ");
         Put(&dataBuilder, "DATA_END");
+    }
+    else if (info->shapes.totalCount)
+    {
+        PBRTFileInfo *shapeInfo = PushStruct(temp.arena, PBRTFileInfo);
+        shapeInfo->filename =
+            PushStr8F(temp.arena, "%S_shape.rtscene", RemoveFileExtension(info->filename));
+        shapeInfo->shapes = info->shapes;
+        WriteFile(directory, shapeInfo);
+
+        u32 transformIndex            = info->transforms.Length();
+        info->transforms.AddBack()    = AffineSpace::Identity();
+        info->fileInstances.AddBack() = {shapeInfo->filename, transformIndex, transformIndex};
+    }
+
+    if (info->fileInstances.totalCount)
+    {
+        Put(&builder, "INCLUDE_START ");
+        Assert(info->numInstances);
+        Put(&builder, "Count: %u ", info->numInstances);
+        u32 count = 0;
+        for (auto *instNode = info->fileInstances.first; instNode != 0;
+             instNode       = instNode->next)
+        {
+            for (u32 i = 0; i < instNode->count; i++)
+            {
+                InstanceType *fileInst = &instNode->values[i];
+                BuilderNode *node      = &bNode;
+                while (!(node->filename == fileInst->filename) && node->next)
+                    node = node->next;
+                if (!node->next)
+                {
+                    node->filename      = fileInst->filename;
+                    node->builder.arena = temp.arena;
+                    node->next          = PushStruct(temp.arena, BuilderNode);
+                    node->prevEnd       = fileInst->transformIndexEnd;
+                    Put(&node->builder, "File: %S %u-", node->filename,
+                        fileInst->transformIndexStart);
+                }
+                else
+                {
+                    if (node->prevEnd + 1 == fileInst->transformIndexStart)
+                        node->prevEnd = fileInst->transformIndexEnd;
+                    else
+                    {
+                        Put(&node->builder, "%u %u-", node->prevEnd,
+                            fileInst->transformIndexStart);
+                        node->prevEnd = fileInst->transformIndexEnd;
+                    }
+                }
+            }
+        }
+        BuilderNode *node = &bNode;
+        while (node->next)
+        {
+            Put(&node->builder, "%u ", node->prevEnd);
+            builder = ConcatBuilders(&builder, &node->builder);
+            node    = node->next;
+        }
+        Put(&builder, "INCLUDE_END ");
+    }
+
+    if (info->transforms.totalCount)
+    {
+        Put(&dataBuilder, "TRANSFORM_START ");
+        Put(&dataBuilder, "Count %u ", info->transforms.totalCount);
+        for (auto *node = info->transforms.first; node != 0; node = node->next)
+        {
+            Put(&dataBuilder, node->values, sizeof(node->values[0]) * node->count);
+        }
+        Put(&dataBuilder, "TRANSFORM_END");
     }
 
     Put(&builder, "RTSCENE_END");

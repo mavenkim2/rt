@@ -67,6 +67,8 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
 
     Scheduler::Counter counter = {};
     bool isLeaf                = true;
+    GeometryType type          = GeometryType::Max;
+    ChunkedLinkedList<ScenePrimitives *, 32, MemoryType_Instance> files(temp.arena);
     for (;;)
     {
         if (Advance(&tokenizer, "RTSCENE_END")) break;
@@ -76,11 +78,9 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
             u32 instanceCount = ReadInt(&tokenizer);
             SkipToNextChar(&tokenizer);
 
-            ChunkedLinkedList<ScenePrimitives *, 32, MemoryType_Instance> files(temp.arena);
-            scene->numPrimitives = instanceCount;
-            scene->primitives    = PushArrayNoZero(arena, Instance, instanceCount);
-            Instance *instances  = (Instance *)scene->primitives;
-            u32 instanceOffset   = 0;
+            scene->primitives   = PushArrayNoZero(arena, Instance, instanceCount);
+            Instance *instances = (Instance *)scene->primitives;
+            u32 instanceOffset  = 0;
 
             isLeaf = false;
             while (!Advance(&tokenizer, "INCLUDE_END "))
@@ -153,11 +153,10 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                     SkipToNextChar(&tokenizer);
                 }
             }
-            Error(instanceOffset == instanceCount, "inst offset %u\n", instanceOffset);
-            scene->childScenes = PushArrayNoZero(arena, ScenePrimitives *, files.totalCount);
+            // Error(instanceOffset == instanceCount, "inst offset %u\n", instanceOffset);
+            scene->numPrimitives = instanceOffset;
+            scene->childScenes   = PushArrayNoZero(arena, ScenePrimitives *, files.totalCount);
             scene->numChildScenes = files.totalCount;
-
-            files.Flatten(scene->childScenes);
         }
         else if (Advance(&tokenizer, "SHAPE_START "))
         {
@@ -167,6 +166,7 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
             {
                 if (Advance(&tokenizer, "Quad "))
                 {
+                    type       = GeometryType::QuadMesh;
                     Mesh &mesh = shapes.AddBack();
                     for (;;)
                     {
@@ -195,6 +195,7 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                 }
                 else if (Advance(&tokenizer, "Tri "))
                 {
+                    type       = GeometryType::TriangleMesh;
                     Mesh &mesh = shapes.AddBack();
                     for (;;)
                     {
@@ -224,7 +225,7 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                             mesh.numVertices = num;
                             mesh.numFaces    = num / 3;
                         }
-                        else if (Advance(&tokenzier, "indices"))
+                        else if (Advance(&tokenizer, "indices "))
                         {
                             u32 indOffset = ReadInt(&tokenizer);
                             mesh.indices  = dataTokenizer.input.str + indOffset;
@@ -245,11 +246,21 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
             scene->primitives    = PushArrayNoZero(arena, Mesh, shapes.totalCount);
             shapes.Flatten((Mesh *)scene->primitives);
         }
+        else if (Advance(&tokenizer, "TEXTURES_START"))
+        {
+        }
+        else if (Advance(&tokenizer, "MATERIALS_START"))
+        {
+            while (!Advance(&tokenizer, "MATERIALS_END "))
+            {
+            }
+        }
         else
         {
             Error(0, "Invalid section header.\n");
         }
     }
+    files.Flatten(scene->childScenes);
 
     scheduler.Wait(&counter);
 
@@ -265,9 +276,19 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
     {
         Assert(!hasTransforms);
         scene->primIndices = ids;
-        // TODO: hardcoded
         Assert(scene->numPrimitives);
-        BuildQuadBVH(arenas, settings, scene);
+        if (type == GeometryType::QuadMesh)
+        {
+            BuildQuadBVH(arenas, settings, scene);
+        }
+        else if (type == GeometryType::TriangleMesh)
+        {
+            BuildTriangleBVH(arenas, settings, scene);
+        }
+        else
+        {
+            Error(0, "No shapes specified\n");
+        }
     }
 
     ScratchEnd(temp);
