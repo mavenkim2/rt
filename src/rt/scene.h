@@ -178,120 +178,105 @@ enum class IndexType
     u32,
 };
 
-struct TriangleMesh
+// struct TriangleMesh
+// {
+//     Vec3f *p;
+//     Vec3f *n;
+//     // Vec3f *t;
+//     Vec2f *uv;
+//     u32 *indices;
+//     u32 numVertices;
+//     u32 numIndices;
+//
+//     u32 GetNumFaces() const
+//     {
+//         if (indices) return numIndices / 3;
+//         return numVertices / 3;
+//     }
+// };
+
+template <typename T>
+struct MeshPointer
 {
-    Vec3f *p;
-    Vec3f *n;
-    // Vec3f *t;
-    Vec2f *uv;
-    u32 *indices;
-    u32 numVertices;
-    u32 numIndices;
-
-    u32 GetNumFaces() const
+    union
     {
-        if (indices) return numIndices / 3;
-        return numVertices / 3;
-    }
-    template <typename PrimRefType>
-    void GenerateMeshRefs(PrimRefType *refs, u32 offset, u32 geomID, u32 start, u32 count,
-                          RecordAOSSplits &record) const
-    {
-#define UseGeomIDs !std::is_same_v<PrimRefType, PrimRefCompressed>
-        Bounds geomBounds;
-        Bounds centBounds;
-        for (u32 i = start; i < start + count; i++, offset++)
+        uintptr_t data;
+        struct
         {
-            u32 i0, i1, i2;
-            if (indices)
-            {
-                i0 = indices[i * 3];
-                i1 = indices[i * 3 + 1];
-                i2 = indices[i * 3 + 2];
-            }
-            else
-            {
-                i0 = i * 3;
-                i1 = i * 3 + 1;
-                i2 = i * 3 + 2;
-            }
-
-            PrimRefType *prim = &refs[offset];
-            Vec3f v0          = p[i0];
-            Vec3f v1          = p[i1];
-            Vec3f v2          = p[i2];
-
-            Vec3f min = Min(Min(v0, v1), v2);
-            Vec3f max = Max(Max(v0, v1), v2);
-
-            Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
-            Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
-            Lane4F32::StoreU(prim->min, -mins);
-            prim->maxX = max.x;
-            prim->maxY = max.y;
-            prim->maxZ = max.z;
-
-            if constexpr (UseGeomIDs) prim->geomID = geomID;
-            prim->primID = i;
-
-            geomBounds.Extend(mins, maxs);
-            centBounds.Extend((maxs + mins));
-        }
-        record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
-        record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
-#undef UseGeomIDs
-    }
+            f32 a;
+            f32 b;
+        };
+    };
+    MeshPointer() : data(0) {}
+    MeshPointer(uintptr_t data) : data(data) {}
+    MeshPointer(void *data) : data(uintptr_t(data)) {}
+    // T operator[](u32 index) const { return ((T *)data)[index]; }
+    T &operator[](u32 index) { return ((T *)data)[index]; }
+    const T &operator[](u32 index) const { return ((T *)data)[index]; }
+    operator bool() const { return bool(data); }
 };
 
-struct QuadMesh
+template <typename T>
+__forceinline T *operator+(const MeshPointer<T> &p, u32 index)
 {
-    Vec3f *p     = 0;
-    Vec3f *n     = 0;
-    Vec2f *uv    = 0;
-    u32 *indices = 0;
+    return (T *)p.data + index;
+}
+
+struct Mesh
+{
+    MeshPointer<Vec3f> p;
+    MeshPointer<Vec3f> n;
+    MeshPointer<Vec2f> uv;
+    MeshPointer<u32> indices;
     u32 numIndices;
     u32 numVertices;
+    u32 numFaces;
 
-    u32 GetNumFaces() const
-    {
-        if (indices) return numIndices / 4;
-        return numVertices / 4;
-    }
+    u32 GetNumFaces() const { return numFaces; }
+};
 
-    template <typename PrimRefType>
-    void GenerateMeshRefs(PrimRefType *refs, u32 offset, u32 geomID, u32 start, u32 count,
-                          RecordAOSSplits &record)
+template <GeometryType type, typename PrimRefType>
+struct GenerateMeshRefsHelper
+{
+    MeshPointer<Vec3f> p;
+    MeshPointer<u32> indices;
+
+    __forceinline void operator()(PrimRefType *refs, u32 offset, u32 geomID, u32 start,
+                                  u32 count, RecordAOSSplits &record)
     {
-#define UseGeomIDs !std::is_same_v<PrimRefType, PrimRefCompressed>
+        static_assert(type == GeometryType::TriangleMesh || type == GeometryType::QuadMesh);
+        constexpr u32 numVerticesPerFace = type == GeometryType::QuadMesh ? 4 : 3;
         Bounds geomBounds;
         Bounds centBounds;
         for (u32 i = start; i < start + count; i++, offset++)
         {
             PrimRefType *prim = &refs[offset];
-            Vec3f v0, v1, v2, v3;
+            Vec3f v[numVerticesPerFace];
             if (indices)
             {
-                v0 = p[indices[4 * i + 0]];
-                v1 = p[indices[4 * i + 1]];
-                v2 = p[indices[4 * i + 2]];
-                v3 = p[indices[4 * i + 3]];
+                for (u32 j = 0; j < numVerticesPerFace; j++)
+                    v[j] = p[indices[numVerticesPerFace * i + j]];
             }
             else
             {
-                v0 = p[4 * i + 0];
-                v1 = p[4 * i + 1];
-                v2 = p[4 * i + 2];
-                v3 = p[4 * i + 3];
+                for (u32 j = 0; j < numVerticesPerFace; j++)
+                    v[j] = p[numVerticesPerFace * i + j];
             }
 
-            Vec3f min = Min(Min(v0, v1), Min(v2, v3));
-            Vec3f max = Max(Max(v0, v1), Max(v2, v3));
+            Vec3f min(pos_inf);
+            Vec3f max(neg_inf);
+            for (u32 j = 0; j < numVerticesPerFace; j++)
+            {
+                min = Min(min, v[j]);
+                max = Max(max, v[j]);
+            }
 
             Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
             Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
             Lane4F32::StoreU(prim->min, -mins);
 
-            if constexpr (UseGeomIDs) prim->geomID = geomID;
+            if constexpr (!std::is_same_v<PrimRefType, PrimRefCompressed>)
+                prim->geomID = geomID;
             prim->maxX   = max.x;
             prim->maxY   = max.y;
             prim->maxZ   = max.z;
@@ -303,67 +288,7 @@ struct QuadMesh
         record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
         record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
     }
-#undef UseGeomIDs
 };
-
-//////////////////////////////
-
-#if 0
-struct PrimitiveIndices
-{
-    i32 transformIndex     = -1;
-    i32 constantMediaIndex = -1;
-};
-
-struct Light
-{
-    PrimitiveType type;
-    void *primitive;
-};
-
-struct ScatterRecord
-{
-    Vec3f attenuation;
-    Ray skipPDFRay;
-    Vec3f sample;
-};
-
-struct HomogeneousTransform
-{
-    Vec3f translation;
-    f32 rotateAngleY;
-};
-
-struct GeometryID
-{
-    static const u32 indexMask = 0x0fffffff;
-    static const u32 typeShift = 28;
-
-    static const u32 quadMeshType = (u32)GeometryType::QuadMesh;
-    static const u32 instanceType = (u32)GeometryType::TriangleMesh;
-
-    static_assert(instanceType < 16, "Not enough bits for geometry types");
-
-    u32 id;
-
-    GeometryID() {}
-    GeometryID(u32 id) : id(id) {}
-
-    static GeometryID CreateInstanceID(u32 index)
-    {
-        Assert(index < (1 << 28));
-        return (instanceType << typeShift) | (index & indexMask);
-    }
-    static GeometryID CreateQuadMeshID(u32 index)
-    {
-        Assert(index < (1 << 28));
-        return (quadMeshType << typeShift) | (index & indexMask);
-    }
-
-    u32 GetIndex() const { return id & indexMask; }
-    u32 GetType() const { return id >> typeShift; }
-};
-#endif
 
 struct Volume
 {
@@ -704,10 +629,6 @@ void BuildQuadBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scen
 void BuildTriangleBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
 template <typename Mesh>
 void LoadMesh();
-
-template <typename PrimRefType, typename Mesh>
-void GenerateMeshRefs(Mesh *meshes, PrimRef *refs, u32 offset, u32 offsetMax, u32 start,
-                      u32 count, RecordAOSSplits &record);
 
 } // namespace rt
 #endif

@@ -422,38 +422,38 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Arena
     return head;
 }
 
-template <i32 N, typename Mesh, typename PrimRefType>
+template <i32 N, GeometryType type, typename PrimRefType>
 struct BVHHelper;
 
 template <i32 N>
-struct BVHHelper<N, TriangleMesh, PrimRefCompressed>
+struct BVHHelper<N, GeometryType::TriangleMesh, PrimRefCompressed>
 {
     using Polygon8 = Triangle8;
     using PrimType = TriangleCompressed<N>;
 };
 
 template <i32 N>
-struct BVHHelper<N, TriangleMesh, PrimRef>
+struct BVHHelper<N, GeometryType::TriangleMesh, PrimRef>
 {
     using Polygon8 = Triangle8;
     using PrimType = Triangle<N>;
 };
 
 template <i32 N>
-struct BVHHelper<N, QuadMesh, PrimRefCompressed>
+struct BVHHelper<N, GeometryType::QuadMesh, PrimRefCompressed>
 {
     using Polygon8 = Quad8;
     using PrimType = QuadCompressed<N>;
 };
 
 template <i32 N>
-struct BVHHelper<N, QuadMesh, PrimRef>
+struct BVHHelper<N, GeometryType::QuadMesh, PrimRef>
 {
     using Polygon8 = Quad8;
     using PrimType = Quad<N>;
 };
 
-template <i32 N, i32 K, typename Mesh, typename PrimRef>
+template <i32 N, i32 K, GeometryType type, typename PrimRef>
 BVHNode<N> BuildQuantizedSBVH(BuildSettings settings, Arena **inArenas,
                               const ScenePrimitives *scene, PrimRef *ref,
                               RecordAOSSplits &record)
@@ -461,7 +461,7 @@ BVHNode<N> BuildQuantizedSBVH(BuildSettings settings, Arena **inArenas,
 
     // template <i32 N, i32 K>
     // using BLAS_SBVH_QuantizedNode_TriangleLeaf_Funcs =
-    using BVHHelper = BVHHelper<K, Mesh, PrimRef>;
+    using BVHHelper = BVHHelper<K, type, PrimRef>;
     using Polygon8  = typename BVHHelper::Polygon8;
     using Prim      = typename BVHHelper::PrimType;
     using BuildType = BuildFuncs<N, HeuristicSpatialSplits<PrimRef, Polygon8>,
@@ -484,9 +484,11 @@ __forceinline BVHNodeN BuildQuantizedTriSBVH(BuildSettings settings, Arena **inA
                                              RecordAOSSplits &record)
 {
 #if defined(USE_BVH4)
-    return BuildQuantizedSBVH<4, 8, TriangleMesh>(settings, inArenas, scene, refs, record);
+    return BuildQuantizedSBVH<4, 8, GeometryType::TriangleMesh>(settings, inArenas, scene,
+                                                                refs, record);
 #elif defined(USE_BVH8)
-    return BuildQuantizedSBVH<8, 8, TriangleMesh>(settings, inArenas, scene, refs, record);
+    return BuildQuantizedSBVH<8, 8, GeometryType::TriangleMesh>(settings, inArenas, scene,
+                                                                refs, record);
 #endif
 }
 
@@ -496,21 +498,23 @@ __forceinline BVHNodeN BuildQuantizedQuadSBVH(BuildSettings settings, Arena **in
                                               RecordAOSSplits &record)
 {
 #if defined(USE_BVH4)
-    return BuildQuantizedSBVH<4, 8, QuadMesh>(settings, inArenas, scene, refs, record);
+    return BuildQuantizedSBVH<4, 8, GeometryType::QuadMesh>(settings, inArenas, scene, refs,
+                                                            record);
 #elif defined(USE_BVH8)
-    return BuildQuantizedSBVH<8, 8, QuadMesh>(settings, inArenas, scene, refs, record);
+    return BuildQuantizedSBVH<8, 8, GeometryType::QuadMesh>(settings, inArenas, scene, refs,
+                                                            record);
 #endif
 }
 
-template <typename Mesh, typename PrimRef>
+template <GeometryType type, typename PrimRef>
 __forceinline BVHNodeN BuildQuantizedSBVH(BuildSettings settings, Arena **inArenas,
                                           const ScenePrimitives *scene, PrimRef *refs,
                                           RecordAOSSplits &record)
 {
 #if defined(USE_BVH4)
-    return BuildQuantizedSBVH<4, 8, Mesh>(settings, inArenas, scene, refs, record);
+    return BuildQuantizedSBVH<4, 8, type>(settings, inArenas, scene, refs, record);
 #elif defined(USE_BVH8)
-    return BuildQuantizedSBVH<8, 8, Mesh>(settings, inArenas, scene, refs, record);
+    return BuildQuantizedSBVH<8, 8, type>(settings, inArenas, scene, refs, record);
 #endif
 }
 

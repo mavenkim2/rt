@@ -71,7 +71,7 @@ struct Quad8
                      Quad8 *out)
     {
         Assert(scene->numPrimitives == 1);
-        QuadMesh *mesh = (QuadMesh *)scene->primitives;
+        Mesh *mesh = (Mesh *)scene->primitives;
         u32 faceIndexA = faceIndices[0];
         u32 faceIndexB = faceIndices[1];
         u32 faceIndexC = faceIndices[2];
@@ -164,8 +164,8 @@ struct Quad8
     static void Load(const ScenePrimitives *scene, const u32 dim, const u32 geomIDs[8],
                      const u32 faceIndices[8], Quad8 *out)
     {
-        QuadMesh *primitives = (QuadMesh *)scene->primitives;
-        QuadMesh *meshes[8]  = {primitives + geomIDs[0], primitives + geomIDs[1],
+        Mesh *primitives = (Mesh *)scene->primitives;
+        Mesh *meshes[8]  = {primitives + geomIDs[0], primitives + geomIDs[1],
                                 primitives + geomIDs[2], primitives + geomIDs[3],
                                 primitives + geomIDs[4], primitives + geomIDs[5],
                                 primitives + geomIDs[6], primitives + geomIDs[7]};
@@ -303,13 +303,13 @@ struct Triangle8
     static void Load(const ScenePrimitives *scene, const u32 dim, const u32 geomIDs[8],
                      const u32 faceIndices[8], Triangle8 *out)
     {
-        TriangleMesh *primitives = (TriangleMesh *)scene->primitives;
+        Mesh *primitives = (Mesh *)scene->primitives;
         u32 faceIndexA           = faceIndices[0];
         u32 faceIndexB           = faceIndices[1];
         u32 faceIndexC           = faceIndices[2];
         u32 faceIndexD           = faceIndices[3];
 
-        TriangleMesh *meshes[8] = {primitives + geomIDs[0], primitives + geomIDs[1],
+        Mesh *meshes[8] = {primitives + geomIDs[0], primitives + geomIDs[1],
                                    primitives + geomIDs[2], primitives + geomIDs[3],
                                    primitives + geomIDs[4], primitives + geomIDs[5],
                                    primitives + geomIDs[6], primitives + geomIDs[7]};
@@ -406,7 +406,7 @@ struct Triangle8
                      Triangle8 *out)
     {
         Assert(scene->numPrimitives == 1);
-        TriangleMesh *mesh = (TriangleMesh *)scene->primitives;
+        Mesh *mesh = (Mesh *)scene->primitives;
         u32 faceIndexA     = faceIndices[0];
         u32 faceIndexB     = faceIndices[1];
         u32 faceIndexC     = faceIndices[2];

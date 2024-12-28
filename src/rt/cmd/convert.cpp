@@ -28,17 +28,7 @@
 namespace rt
 {
 
-struct TriangleMesh
-{
-    Vec3f *p;
-    Vec3f *n;
-    // Vec3f *t;
-    Vec2f *uv;
-    u32 *indices;
-    u32 numVertices;
-    u32 numIndices;
-};
-struct QuadMesh
+struct Mesh
 {
     Vec3f *p     = 0;
     Vec3f *n     = 0;
@@ -46,6 +36,7 @@ struct QuadMesh
     u32 *indices = 0;
     u32 numIndices;
     u32 numVertices;
+    u32 numFaces;
 };
 } // namespace rt
 
@@ -55,33 +46,17 @@ namespace rt
 {
 struct Instance
 {
-    // TODO: materials
     u32 id;
-    // GeometryID geomID;
     u32 transformIndex;
 };
 
-#define CREATE_ENUM_AND_TYPE_PACK(packName, enumName, ...)                                    \
-    using packName = TypePack<COMMA_SEPARATED_LIST(__VA_ARGS__)>;                             \
-    enum class enumName                                                                       \
-    {                                                                                         \
-        COMMA_SEPARATED_LIST(__VA_ARGS__),                                                    \
-        Max,                                                                                  \
-    };                                                                                        \
-    ENUM_CLASS_FLAGS(enumName)
-
-#define COMMA_SEPARATED_LIST(...)                                                             \
-    COMMA_SEPARATED_LIST_HELPER(COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
-#define COMMA_SEPARATED_LIST_HELPER(x, ...) EXPAND(CONCAT(RECURSE__, x)(EXPAND, __VA_ARGS__))
-
-#define COUNT_ARGS_IMPL(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15,     \
-                        _16, _17, _18, _19, _20, N, ...)                                      \
-    N
-#define COUNT_ARGS(...)                                                                       \
-    EXPAND(COUNT_ARGS_IMPL(__VA_ARGS__, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7,  \
-                           6, 5, 4, 3, 2, 1))
-
-CREATE_ENUM_AND_TYPE_PACK(PrimitiveTypes, GeometryType, QuadMesh, TriangleMesh, Instance);
+enum class GeometryType
+{
+    QuadMesh,
+    TriangleMesh,
+    Instance,
+    Max,
+};
 
 struct SceneInstance
 {
@@ -464,7 +439,6 @@ string ConvertPBRTToRTScene(Arena *arena, string file)
 
 string ReplaceColons(Arena *arena, string str)
 {
-
     string newString = PushStr8Copy(arena, str);
     for (u64 i = 0; i < newString.size; i++)
     {
@@ -1585,11 +1559,11 @@ void WriteFile(string directory, PBRTFileInfo *info)
                         {
                             if (packet->parameterNames[c] == "filename"_sid)
                             {
-                                QuadMesh mesh = LoadQuadPLY(
+                                Mesh mesh = LoadQuadPLY(
                                     temp.arena,
                                     StrConcat(temp.arena, directory,
                                               Str8(packet->bytes[c], packet->sizes[c])));
-                                Put(&builder, "c %u ", mesh.numVertices);
+                                Put(&builder, "v %u ", mesh.numVertices);
                                 u64 pOffset = dataBuilder.totalSize;
                                 Put(&dataBuilder, mesh.p, mesh.numVertices * sizeof(Vec3f));
                                 u64 nOffset = dataBuilder.totalSize;
@@ -1601,13 +1575,60 @@ void WriteFile(string directory, PBRTFileInfo *info)
                                 u64 pOffset = dataBuilder.totalSize;
                                 Put(&dataBuilder, packet->bytes[c], packet->sizes[c]);
                                 Put(&builder, "p %llu ", pOffset);
-                                Put(&builder, "c %u ", packet->sizes[c] / sizeof(Vec3f));
+                                Put(&builder, "v %u ", packet->sizes[c] / sizeof(Vec3f));
                             }
                             else if (packet->parameterNames[c] == "N"_sid)
                             {
                                 u64 nOffset = dataBuilder.totalSize;
                                 Put(&dataBuilder, packet->bytes[c], packet->sizes[c]);
                                 Put(&builder, "n %llu ", nOffset);
+                            }
+                        }
+                    }
+                    break;
+                    case "trianglemesh"_sid:
+                    {
+                        Put(&builder, "Tri ");
+                        for (u32 c = 0; c < packet->parameterCount; c++)
+                        {
+                            if (packet->parameterNames[c] == "filename"_sid)
+                            {
+                                Mesh mesh = LoadPLY(
+                                    temp.arena,
+                                    StrConcat(temp.arena, directory,
+                                              Str8(packet->bytes[c], packet->sizes[c])));
+                                Put(&builder, "v %u ", mesh.numVertices);
+                                u64 pOffset = dataBuilder.totalSize;
+                                Put(&dataBuilder, mesh.p, mesh.numVertices * sizeof(Vec3f));
+                                u64 nOffset = dataBuilder.totalSize;
+                                Put(&dataBuilder, mesh.n, mesh.numVertices * sizeof(Vec3f));
+                                Put(&builder, "p %llu n %llu ", pOffset, nOffset);
+                            }
+                            else if (packet->parameterNames[c] == "P"_sid)
+                            {
+                                u64 pOffset = dataBuilder.totalSize;
+                                Put(&dataBuilder, packet->bytes[c], packet->sizes[c]);
+                                Put(&builder, "p %llu ", pOffset);
+                                Put(&builder, "v %u ", packet->sizes[c] / sizeof(Vec3f));
+                            }
+                            else if (packet->parameterNames[c] == "N"_sid)
+                            {
+                                u64 nOffset = dataBuilder.totalSize;
+                                Put(&dataBuilder, packet->bytes[c], packet->sizes[c]);
+                                Put(&builder, "n %llu ", nOffset);
+                            }
+                            else if (packet->parameterNames[c] == "indices"_sid)
+                            {
+                                u64 indOffset = dataBuilder.totalSize;
+                                Put(&dataBuilder, packet->bytes[c], packet->sizes[c]);
+                                Put(&builder, "indices %llu ", indOffset);
+                                Put(&builder, "i %u ", packet->sizes[c] / sizeof(u32));
+                            }
+                            else if (packet->parameterNames[c] == "uv"_sid)
+                            {
+                                u64 uvOffset = dataBuilder.totalSize;
+                                Put(&dataBuilder, packet->bytes[c], packet->sizes[c]);
+                                Put(&builder, "uv %llu ", uvOffset);
                             }
                         }
                     }

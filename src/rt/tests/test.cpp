@@ -8,6 +8,7 @@
 #include "../integrate.h"
 namespace rt
 {
+#if 0
 TriangleMesh *GenerateMesh(Arena *arena, u32 count, f32 min = -100.f, f32 max = 100.f)
 {
     arena->align       = 64;
@@ -99,7 +100,6 @@ PrimRefCompressed *GenerateQuadData(Arena *arena, QuadMesh *mesh, u32 numFaces,
     return refs;
 }
 
-#if 0
 void AOSSBVHBuilderTest(Arena *arena, TriangleMesh *mesh)
 {
     arena->align = 64;

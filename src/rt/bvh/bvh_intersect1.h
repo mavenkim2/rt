@@ -323,7 +323,6 @@ static Mask<LaneF32<N>> TriangleIntersect(const Ray2 &ray, const LaneF32<N> &tFa
     return mask;
 }
 
-template <typename Mesh>
 static void SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
                                                        const u32 geomID, const u32 primID,
                                                        const u32 ids[3], f32 u, f32 v, f32 w,
@@ -495,8 +494,8 @@ struct TriangleIntersectorBase<N, Prim<N>>
                 3 * primID + 1,
                 3 * primID + 2,
             };
-            SurfaceInteractionFromTriangleIntersection<TriangleMesh>(
-                scene, Get(itr.geomIDs, index), primID / 2, ids, u, v, w, si);
+            SurfaceInteractionFromTriangleIntersection(scene, Get(itr.geomIDs, index),
+                                                       primID / 2, ids, u, v, w, si);
             return true;
         }
         return false;
@@ -613,8 +612,8 @@ struct QuadIntersectorBase<N, Prim<N>>
                 ids[1] = 4 * primID + 1;
                 ids[2] = 4 * primID + 2;
             }
-            SurfaceInteractionFromTriangleIntersection<QuadMesh>(
-                scene, Get(itr.geomIDs, index), primID, ids, u, v, w, si, isSecondTri);
+            SurfaceInteractionFromTriangleIntersection(scene, Get(itr.geomIDs, index), primID,
+                                                       ids, u, v, w, si, isSecondTri);
 
             return true;
         }
@@ -794,45 +793,45 @@ typedef BVHInstanceCLIntersector<4, BVH_AQ> BVH4InstanceCLIntersector;
 
 // Helpers
 
-template <i32 N, typename Prim, typename PrimRefType>
+template <i32 N, GeometryType type, typename PrimRefType>
 struct IntersectorHelperBase;
 
 template <>
-struct IntersectorHelperBase<4, TriangleMesh, PrimRefCompressed>
+struct IntersectorHelperBase<4, GeometryType::TriangleMesh, PrimRefCompressed>
 {
     using IntersectorType = BVH4TriangleCLIntersectorCmp8;
 };
 
 template <>
-struct IntersectorHelperBase<4, TriangleMesh, PrimRef>
+struct IntersectorHelperBase<4, GeometryType::TriangleMesh, PrimRef>
 {
     using IntersectorType = BVH4TriangleCLIntersector8;
 };
 
 template <>
-struct IntersectorHelperBase<4, QuadMesh, PrimRefCompressed>
+struct IntersectorHelperBase<4, GeometryType::QuadMesh, PrimRefCompressed>
 {
     using IntersectorType = BVH4QuadCLIntersectorCmp8;
 };
 
 template <>
-struct IntersectorHelperBase<4, QuadMesh, PrimRef>
+struct IntersectorHelperBase<4, GeometryType::QuadMesh, PrimRef>
 {
     using IntersectorType = BVH4QuadCLIntersector8;
 };
 
 template <>
-struct IntersectorHelperBase<4, Instance, BRef>
+struct IntersectorHelperBase<4, GeometryType::Instance, BRef>
 {
     using IntersectorType = BVH4InstanceCLIntersector;
 };
 
 #ifdef USE_BVH4
-template <typename Prim, typename PrimRefType>
-using IntersectorHelper = IntersectorHelperBase<4, Prim, PrimRefType>;
+template <GeometryType type, typename PrimRefType>
+using IntersectorHelper = IntersectorHelperBase<4, type, PrimRefType>;
 #elif defined(USE_BVH8)
-template <typename Mesh, typename PrimRefType>
-using IntersectorHelper = IntersectorHelperBase<8, Mesh, PrimRefType>;
+template <GeometryType type, typename PrimRefType>
+using IntersectorHelper = IntersectorHelperBase<8, type, PrimRefType>;
 #endif
 
 } // namespace rt

@@ -162,28 +162,72 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
         else if (Advance(&tokenizer, "SHAPE_START "))
         {
             Assert(isLeaf);
-            ChunkedLinkedList<QuadMesh, 1024, MemoryType_Shape> shapes(temp.arena);
+            ChunkedLinkedList<Mesh, 1024, MemoryType_Shape> shapes(temp.arena);
             while (!Advance(&tokenizer, "SHAPE_END "))
             {
                 if (Advance(&tokenizer, "Quad "))
                 {
-                    QuadMesh &mesh = shapes.AddBack();
+                    Mesh &mesh = shapes.AddBack();
                     for (;;)
                     {
                         if (Advance(&tokenizer, "p "))
                         {
                             u32 pOffset = ReadInt(&tokenizer);
-                            mesh.p      = (Vec3f *)(dataTokenizer.input.str + pOffset);
+                            mesh.p      = dataTokenizer.input.str + pOffset;
                         }
                         else if (Advance(&tokenizer, "n "))
                         {
                             u32 nOffset = ReadInt(&tokenizer);
-                            mesh.n      = (Vec3f *)(dataTokenizer.input.str + nOffset);
+                            mesh.n      = dataTokenizer.input.str + nOffset;
                         }
-                        else if (Advance(&tokenizer, "c "))
+                        else if (Advance(&tokenizer, "v "))
                         {
                             u32 num          = ReadInt(&tokenizer);
                             mesh.numVertices = num;
+                            mesh.numFaces    = num / 4;
+                        }
+                        else
+                        {
+                            break;
+                        }
+                        SkipToNextChar(&tokenizer);
+                    }
+                }
+                else if (Advance(&tokenizer, "Tri "))
+                {
+                    Mesh &mesh = shapes.AddBack();
+                    for (;;)
+                    {
+                        if (Advance(&tokenizer, "p "))
+                        {
+                            u32 pOffset = ReadInt(&tokenizer);
+                            mesh.p      = dataTokenizer.input.str + pOffset;
+                        }
+                        else if (Advance(&tokenizer, "n "))
+                        {
+                            u32 nOffset = ReadInt(&tokenizer);
+                            mesh.n      = dataTokenizer.input.str + nOffset;
+                        }
+                        else if (Advance(&tokenizer, "uv "))
+                        {
+                            u32 uvOffset = ReadInt(&tokenizer);
+                            mesh.uv      = dataTokenizer.input.str + uvOffset;
+                        }
+                        else if (Advance(&tokenizer, "v "))
+                        {
+                            u32 num          = ReadInt(&tokenizer);
+                            mesh.numVertices = num;
+                        }
+                        else if (Advance(&tokenizer, "i "))
+                        {
+                            u32 num          = ReadInt(&tokenizer);
+                            mesh.numVertices = num;
+                            mesh.numFaces    = num / 3;
+                        }
+                        else if (Advance(&tokenzier, "indices"))
+                        {
+                            u32 indOffset = ReadInt(&tokenizer);
+                            mesh.indices  = dataTokenizer.input.str + indOffset;
                         }
                         else
                         {
@@ -198,8 +242,8 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                 }
             }
             scene->numPrimitives = shapes.totalCount;
-            scene->primitives    = PushArrayNoZero(arena, QuadMesh, shapes.totalCount);
-            shapes.Flatten((QuadMesh *)scene->primitives);
+            scene->primitives    = PushArrayNoZero(arena, Mesh, shapes.totalCount);
+            shapes.Flatten((Mesh *)scene->primitives);
         }
         else
         {
@@ -255,10 +299,11 @@ void BuildTLASBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scen
     Assert((Movemask(b.maxP >= b.minP) & 0x7) == 0x7);
 
     // NOTE: record is being corrupted somehow during this routine.
-    scene->nodePtr        = BuildTLASQuantized(settings, arenas, scene, refs, record);
-    using IntersectorType = typename IntersectorHelper<Instance, BRef>::IntersectorType;
-    scene->intersectFunc  = &IntersectorType::Intersect;
-    scene->occludedFunc   = &IntersectorType::Occluded;
+    scene->nodePtr = BuildTLASQuantized(settings, arenas, scene, refs, record);
+    using IntersectorType =
+        typename IntersectorHelper<GeometryType::Instance, BRef>::IntersectorType;
+    scene->intersectFunc = &IntersectorType::Intersect;
+    scene->occludedFunc  = &IntersectorType::Occluded;
 
     b = Bounds(record.geomBounds);
     scene->SetBounds(b);
@@ -266,7 +311,7 @@ void BuildTLASBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scen
     ScratchEnd(temp);
 }
 
-template <typename Mesh>
+template <GeometryType type>
 void BuildBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
 
 {
@@ -312,10 +357,10 @@ void BuildBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
             ParallelReduce<RecordAOSSplits>(
                 &record, 0, scene->numPrimitives, PARALLEL_THRESHOLD,
                 [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
-                    GenerateMeshRefs(meshes, refs, offsets[jobID],
-                                     jobID == output.num - 1 ? totalNumFaces
-                                                             : offsets[jobID + 1],
-                                     start, count, record);
+                    GenerateMeshRefs<type>(meshes, refs, offsets[jobID],
+                                           jobID == output.num - 1 ? totalNumFaces
+                                                                   : offsets[jobID + 1],
+                                           start, count, record);
                 },
                 [&](RecordAOSSplits &l, const RecordAOSSplits &r) { l.Merge(r); });
         }
@@ -328,11 +373,12 @@ void BuildBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
             }
             extEnd = u32(totalNumFaces * GROW_AMOUNT);
             refs   = PushArrayNoZero(temp.arena, PrimRef, extEnd);
-            GenerateMeshRefs(meshes, refs, 0, totalNumFaces, 0, scene->numPrimitives, record);
+            GenerateMeshRefs<type>(meshes, refs, 0, totalNumFaces, 0, scene->numPrimitives,
+                                   record);
         }
         record.SetRange(0, totalNumFaces, extEnd);
-        scene->nodePtr = BuildQuantizedSBVH<Mesh>(settings, arenas, scene, refs, record);
-        using IntersectorType = typename IntersectorHelper<Mesh, PrimRef>::IntersectorType;
+        scene->nodePtr = BuildQuantizedSBVH<type>(settings, arenas, scene, refs, record);
+        using IntersectorType = typename IntersectorHelper<type, PrimRef>::IntersectorType;
         scene->intersectFunc  = &IntersectorType::Intersect;
         scene->occludedFunc   = &IntersectorType::Occluded;
     }
@@ -341,11 +387,11 @@ void BuildBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
         totalNumFaces           = meshes->GetNumFaces();
         u32 extEnd              = u32(totalNumFaces * GROW_AMOUNT);
         PrimRefCompressed *refs = PushArrayNoZero(temp.arena, PrimRefCompressed, extEnd);
-        GenerateMeshRefs<PrimRefCompressed>(meshes, refs, 0, totalNumFaces, 0, 1, record);
+        GenerateMeshRefs<type>(meshes, refs, 0, totalNumFaces, 0, 1, record);
         record.SetRange(0, totalNumFaces, extEnd);
-        scene->nodePtr = BuildQuantizedSBVH<Mesh>(settings, arenas, scene, refs, record);
+        scene->nodePtr = BuildQuantizedSBVH<type>(settings, arenas, scene, refs, record);
         using IntersectorType =
-            typename IntersectorHelper<Mesh, PrimRefCompressed>::IntersectorType;
+            typename IntersectorHelper<type, PrimRefCompressed>::IntersectorType;
         scene->intersectFunc = &IntersectorType::Intersect;
         scene->occludedFunc  = &IntersectorType::Occluded;
     }
@@ -358,15 +404,15 @@ void BuildBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
 
 void BuildTriangleBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
 {
-    BuildBVH<TriangleMesh>(arenas, settings, scene);
+    BuildBVH<GeometryType::TriangleMesh>(arenas, settings, scene);
 }
 
 void BuildQuadBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
 {
-    BuildBVH<QuadMesh>(arenas, settings, scene);
+    BuildBVH<GeometryType::QuadMesh>(arenas, settings, scene);
 }
 
-template <typename PrimRef, typename Mesh>
+template <GeometryType type, typename PrimRef>
 void GenerateMeshRefs(Mesh *meshes, PrimRef *refs, u32 offset, u32 offsetMax, u32 start,
                       u32 count, RecordAOSSplits &record)
 {
@@ -383,14 +429,16 @@ void GenerateMeshRefs(Mesh *meshes, PrimRef *refs, u32 offset, u32 offsetMax, u3
                 &tempRecord, 0, numFaces, PARALLEL_THRESHOLD,
                 [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
                     Assert(offset + start < offsetMax);
-                    mesh->GenerateMeshRefs(refs, offset + start, i, start, count, record);
+                    GenerateMeshRefsHelper<type, PrimRef>{mesh->p, mesh->indices}(
+                        refs, offset + start, i, start, count, record);
                 },
                 [&](RecordAOSSplits &l, const RecordAOSSplits &r) { l.Merge(r); });
         }
         else
         {
             Assert(offset < offsetMax);
-            mesh->GenerateMeshRefs(refs, offset, i, 0, numFaces, tempRecord);
+            GenerateMeshRefsHelper<type, PrimRef>{mesh->p, mesh->indices}(
+                refs, offset, i, 0, numFaces, tempRecord);
         }
         r.Merge(tempRecord);
         offset += numFaces;

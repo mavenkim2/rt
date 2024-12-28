@@ -159,7 +159,16 @@ inline u32 GetTypeStride(string word)
     return 0;
 }
 
-QuadMesh LoadQuadPLY(Arena *arena, string filename)
+enum class PlyLoadFlags
+{
+    None,
+    IgnoreUv,
+    IgnoreIndices,
+};
+ENUM_CLASS_FLAGS(PlyLoadFlags)
+
+template <PlyLoadFlags flags = PlyLoadFlags::None>
+Mesh LoadPLY(Arena *arena, string filename)
 {
     string buffer = OS_MapFileRead(filename); // OS_ReadFile(arena, filename);
     Tokenizer tokenizer;
@@ -169,7 +178,6 @@ QuadMesh LoadQuadPLY(Arena *arena, string filename)
     string line = ReadLine(&tokenizer);
     Assert(line == "ply");
     line = ReadLine(&tokenizer);
-    // TODO: really need to handle big endian, used in some of the stanford models
     Assert(line == "format binary_little_endian 1.0");
 
     u32 numVertices = 0;
@@ -267,156 +275,17 @@ QuadMesh LoadQuadPLY(Arena *arena, string filename)
         else if (word == "end_header") break;
     }
 
+    constexpr bool allowUv      = !EnumHasAnyFlags(flags, PlyLoadFlags::IgnoreUv);
+    constexpr bool allowIndices = !EnumHasAnyFlags(flags, PlyLoadFlags::IgnoreIndices);
     // Read binary data
-    QuadMesh mesh    = {};
+    Mesh mesh        = {};
     mesh.numVertices = numVertices;
-
-    // 2 triangles/1 quad for every 4 vertices. If this condition isn't met, it isn't a quad
-    // mesh
-    if (numFaces != numVertices / 2) return mesh;
-
-    // mesh.numQuads    = numFaces / 2;
-    if (hasVertices) mesh.p = PushArrayNoZero(arena, Vec3f, numVertices);
-    if (hasNormals) mesh.n = PushArrayNoZero(arena, Vec3f, numVertices);
-
-    for (u32 i = 0; i < numVertices; i++)
-    {
-        string bytes = ReadBytes(&tokenizer, totalVertexStride);
-        if (hasVertices)
-        {
-            Assert(totalVertexStride >= 12);
-            f32 *pos  = (f32 *)bytes.str;
-            mesh.p[i] = Vec3f(pos[0], pos[1], pos[2]);
-        }
-        if (hasNormals)
-        {
-            Assert(totalVertexStride >= 24);
-            f32 *norm = (f32 *)bytes.str + 3;
-            mesh.n[i] = Vec3f(norm[0], norm[1], norm[2]);
-        }
-    }
-
-    Assert(countStride == 1);
-    Assert(faceIndicesStride == 4);
-    // Assert(otherStride == 4);
-    OS_UnmapFile(buffer.str);
-    return mesh;
-}
-TriangleMesh LoadPLY(Arena *arena, string filename)
-{
-    string buffer = OS_MapFileRead(filename); // OS_ReadFile(arena, filename);
-    Tokenizer tokenizer;
-    tokenizer.input  = buffer;
-    tokenizer.cursor = buffer.str;
-
-    string line = ReadLine(&tokenizer);
-    Assert(line == "ply");
-    line = ReadLine(&tokenizer);
-    Assert(line == "format binary_little_endian 1.0");
-
-    u32 numVertices = 0;
-    u32 numFaces    = 0;
-
-    u32 totalVertexStride = 0;
-
-    // Face
-    u32 countStride       = 0;
-    u32 faceIndicesStride = 0;
-    u32 otherStride       = 0;
-
-    bool hasVertices = 0;
-    bool hasNormals  = 0;
-    bool hasUv       = 0;
-    for (;;)
-    {
-        string word = ReadWord(&tokenizer);
-        if (word == "element")
-        {
-            string elementType = ReadWord(&tokenizer);
-            if (elementType == "vertex")
-            {
-                numVertices = ConvertToUint(ReadWord(&tokenizer));
-                for (;;)
-                {
-                    word = CheckWord(&tokenizer);
-                    if (word == "element") break;
-                    ReadWord(&tokenizer);
-                    word = ReadWord(&tokenizer);
-                    Assert(word == "float");
-                    word = ReadWord(&tokenizer);
-
-                    if (word == "x")
-                    {
-                        hasVertices = 1;
-                        totalVertexStride += 12;
-                    }
-                    if (word == "nx")
-                    {
-                        hasNormals = 1;
-                        totalVertexStride += 12;
-                    }
-                    if (word == "u")
-                    {
-                        hasUv = 1;
-                        totalVertexStride += 8;
-                    }
-                }
-            }
-            else if (elementType == "face")
-            {
-                numFaces = ConvertToUint(ReadWord(&tokenizer));
-                for (;;)
-                {
-                    word = CheckWord(&tokenizer);
-                    if (word == "element" || word == "end_header") break;
-                    // Skips the word "property"
-                    ReadWord(&tokenizer);
-                    word = ReadWord(&tokenizer);
-                    if (word == "list")
-                    {
-                        string countType    = ReadWord(&tokenizer);
-                        string listType     = ReadWord(&tokenizer);
-                        string propertyType = ReadWord(&tokenizer);
-                        if (propertyType == "vertex_indices")
-                        {
-                            countStride       = GetTypeStride(countType);
-                            faceIndicesStride = GetTypeStride(listType);
-                        }
-                        else
-                        {
-                            Assert(0);
-                        }
-                    }
-                    else
-                    {
-                        string propertyType = ReadWord(&tokenizer);
-                        if (propertyType == "face_indices")
-                        {
-                            otherStride = GetTypeStride(word);
-                        }
-                        else
-                        {
-                            Assert(0);
-                        }
-                    }
-                }
-            }
-            else
-            {
-                Error(0, "elementType: %s\n", (char *)elementType.str);
-            }
-        }
-        else if (word == "end_header") break;
-    }
-
-    // Read binary data
-    TriangleMesh mesh = {};
-    mesh.numVertices  = numVertices;
-    mesh.numIndices   = numFaces * 3;
+    mesh.numIndices  = numFaces * 3;
+    mesh.numFaces    = numFaces;
     if (hasVertices) mesh.p = PushArray(arena, Vec3f, numVertices);
     if (hasNormals) mesh.n = PushArray(arena, Vec3f, numVertices);
-    if (hasUv) mesh.uv = PushArray(arena, Vec2f, numVertices);
-    mesh.indices = PushArray(arena, u32, numFaces * 3);
+    if (hasUv && allowUv) mesh.uv = PushArray(arena, Vec2f, numVertices);
+    if constexpr (allowIndices) mesh.indices = PushArray(arena, u32, numFaces * 3);
 
     for (u32 i = 0; i < numVertices; i++)
     {
@@ -433,7 +302,7 @@ TriangleMesh LoadPLY(Arena *arena, string filename)
             f32 *norm = (f32 *)bytes.str + 3;
             mesh.n[i] = Vec3f(norm[0], norm[1], norm[2]);
         }
-        if (hasUv)
+        if (hasUv && allowUv)
         {
             Assert(totalVertexStride >= 32);
             f32 *uv    = (f32 *)bytes.str + 6;
@@ -444,23 +313,31 @@ TriangleMesh LoadPLY(Arena *arena, string filename)
     Assert(countStride == 1);
     Assert(faceIndicesStride == 4);
     // Assert(otherStride == 4);
-    for (u32 i = 0; i < numFaces; i++)
+    if constexpr (allowIndices)
     {
-        u8 *bytes = tokenizer.cursor;
-        u8 count  = bytes[0];
-        Assert(count == 3);
-        u32 *indices            = (u32 *)(bytes + 1);
-        mesh.indices[3 * i + 0] = indices[0];
-        mesh.indices[3 * i + 1] = indices[1];
-        mesh.indices[3 * i + 2] = indices[2];
+        for (u32 i = 0; i < numFaces; i++)
+        {
+            u8 *bytes    = tokenizer.cursor;
+            u8 count     = bytes[0];
+            u32 *indices = (u32 *)(bytes + 1);
+            for (u32 j = 0; j < count; j++)
+            {
+                mesh.indices[count * i + j] = indices[j];
+            }
 
-        // what is this value? I think it's for ptex or something??? where are the materials?
-        u32 faceIndex = indices[3];
-        Advance(&tokenizer, countStride + count * faceIndicesStride + otherStride);
+            u32 faceIndex = indices[3];
+            Advance(&tokenizer, countStride + count * faceIndicesStride + otherStride);
+        }
+        Assert(EndOfBuffer(&tokenizer));
     }
-    Assert(EndOfBuffer(&tokenizer));
     OS_UnmapFile(buffer.str);
     return mesh;
+}
+
+Mesh LoadQuadPLY(Arena *arena, string filename)
+{
+    constexpr PlyLoadFlags flags = PlyLoadFlags::IgnoreUv | PlyLoadFlags::IgnoreIndices;
+    return LoadPLY<flags>(arena, filename);
 }
 
 } // namespace rt
