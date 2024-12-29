@@ -1,6 +1,7 @@
 #ifndef BXDF_H
 #define BXDF_H
 
+#include "spectrum.h"
 namespace rt
 {
 
@@ -15,10 +16,10 @@ MaskF32 Refract(Vec3lfn wi, Vec3lfn n, LaneNF32 eta, LaneNF32 *etap, Vec3lfn *wt
 {
     LaneNF32 cosTheta_i = Dot(wi, n);
 
-    MaskF32 mask = cosTheta_i < 0;
-    n            = Select(mask, -n, n);
-    eta          = Select(mask, 1 / eta, eta);
-    cosTheta_i   = Select(mask, -cosTheta_i, cosTheta_i);
+    MaskF32 mask = cosTheta_i > 0;
+    n            = Select(mask, n, -n);
+    eta          = Select(mask, eta, 1 / eta);
+    cosTheta_i   = Select(mask, cosTheta_i, -cosTheta_i);
 
     LaneNF32 sin2Theta_i = Max(0.f, 1 - cosTheta_i * cosTheta_i);
     // Snell's law
@@ -1278,6 +1279,272 @@ struct CoatedBxDF
 
         return u32(flags);
     }
+};
+
+struct DisneyMaterial
+{
+    f32 metallic;
+    f32 roughness;
+    f32 anisotropic;
+    f32 specularTint;
+    f32 sheen;
+    f32 sheenTint;
+    f32 clearcoat;
+    f32 clearcoatGloss;
+    f32 specTrans;
+    f32 ior;
+    // Solid
+    Vec3f scatterDistance;
+    // Thin
+    f32 flatness;
+    f32 diffTrans;
+};
+
+f32 SchlickWeight(f32 cosValue)
+{
+    f32 c = Clamp(1.f - cosValue, 0.f, 1.f);
+    return (c * c) * (c * c) * c;
+}
+
+f32 FrSchlick(f32 f0, f32 cosH)
+{
+    // F0 + (1 - F0)(1 - cosH)^5
+    return Lerp(f0, SchlickWeight(cosH), 1.f); // F0 + (1 - F0) * SchlickWeight(cosH);
+}
+
+f32 GTR1(f32 cosH, f32 a)
+{
+    f32 a2 = a * a;
+    return (a2 - 1) / (PI * Log(a2) * (1 + (a2 - 1) * cosH * cosH));
+}
+
+Vec3f SampleGTR1(f32 a, const Vec2f &u)
+{
+    f32 a2      = a * a;
+    f32 cosH2   = (1 - Pow(a2, 1 - u[0])) / (1 - a2));
+    f32 sinH    = Clamp(Sqrt(1 - cos2H), 0.f, 1.f);
+    f32 cosH    = Sqrt(cosH2);
+    f32 phi     = 2 * PI * u[1];
+    f32 sinPhi  = Sin(phi);
+    f32 cosPhi  = Cos(phi);
+
+    return Vec3f(cosPhi * sinH, sinPhi * sinH, cosH);
+}
+
+f32 SmithG(const Vec3f &v, const Vec3f &wm, f32 a)
+{
+    f32 a2        = a * a;
+    f32 cos2Theta = cosTheta * cosTheta;
+    f32 tan2Theta = (1 - cos2Theta) / cos2Theta;
+
+    return Select(Dot(v, wm) <= 0.f, 0.f, 2.f * Rcp(1.f + Sqrt(1 + a2 * tan2Theta)));
+}
+
+// https://jcgt.org/published/0003/02/03/paper.pdf
+f32 GTR2Aniso(const Vec3f &wm, f32 alphaX, f32 alphaY)
+{
+    return Rcp(PI * alphaX * alphaY + Sqr(wm.x / alphaX) + Sqr(wm.y / alphaY) + Sqr(wm.z));
+}
+
+f32 SmithGAniso(const Vec3f &v, const Vec3f &wm, f32 alphaX, f32 alphaY)
+{
+    f32 tan2Theta = (Sqr(v.x * alphaX) + Sqr(v.y) * alphaY) / Sqr(v.z);
+    return Select(Dot(v, wm) <= 0.f, 0.f, 2 * Rcp(1 + Sqrt(1.f + tan2Theta)));
+}
+
+f32 EvalDisneyClearcoat(const Vec3f &wo, const Vec3f &wi, const Vec3f &wm, f32 clearcoat,
+                        f32 clearcoatGloss, f32 &pdf)
+{
+    Vec3f wm;
+    f32 NdotH = AbsCosTheta(wm);
+    f32 VdotH = Dot(wo, wm);
+
+    f32 D = GTR1(NdotH, gloss);
+    f32 G = SmithG(wo, 0.25f) * SmithG(wi, 0.25f);
+    // f32 fh    = FrDielectric(dotVH,  wm), 1.5f);
+    f32 F = FrSchlick(.04f, VdotH);
+
+    f32 jacobian = 1 / (4 * AbsDot(wo, wm));
+    pdf          = D * NdotH * jacobian;
+    // reversePdf = D * dotNH / (4 * AbsDot(wi, wm));
+    return clearcoat * D * G * F * 0.25f;
+}
+
+BSDFSample SampleDisneyClearcoat(const Vec3f &wo, const Vec2f &u, f32 clearcoat,
+                                 f32 clearcoatGloss)
+{
+    Vec3f wm = SampleGTR1(gloss, u);
+    wm       = FaceForward(wm, wo);
+    Vec3f wi = Reflect(wo, wm);
+    if (!SameHemisphere(wo, wi)) return {};
+
+    f32 pdf;
+    SampledSpectrumN f = EvalDisneyClearcoat(wo, wi, wm, clearcoat, clearcoatGloss, pdf);
+    return BSDFSample(f, wi, pdf, (u32)BxDFFlags::DiffuseReflection);
+}
+
+struct DisneySolidBxDF
+{
+    Vec3f baseColor;
+    f32 roughness;
+    f32 sheen;
+    f32 sheenTint;
+    f32 clearcoatGloss;
+    f32 flatness;
+    f32 anisotropy;
+    bool isThin;
+
+    SampledSpectrum EvaluateSample(const Vec3f &wo, const Vec3f &wi, f32 &pdf,
+                                   TransportMode mode) const
+    {
+        SampledSpectrum result(0.f);
+        // NOTE: L is wo, V is wi
+        // etaP = nt/ni
+        // invEtaP = ni/nt
+        f32 bsdf    = (1 - metallic) * specTrans;
+        f32 brdf    = (1 - metallic) * (1 - specTrans);
+        f32 invEtaP = Rcp(etaP);
+        f32 NdotV   = AbsCosTheta(wo);
+        f32 NdotL   = AbsCosTheta(wi);
+
+        f32 R    = FrDielectric(Dot(wo, wm), eta);
+        Vec3f wm = wo + wi * etap;
+        if (LengthSquared(wm) == 0.f) return {};
+
+        wm        = Normalize(wm);
+        f32 LdotH = Dot(wi, wm);
+
+        // Anisotropy
+        f32 aspect = Sqrt(1 - .9f * anisotropy);
+        f32 alphaX = Sqr(roughness) / aspect;
+        f32 alphaY = Sqr(roughness) / aspect;
+
+        f32 D = GTR2Aniso(wm, alphaX, alphaY);
+        f32 G = SmithGAniso(wo, alphaX, alphaY) * SmithGAniso(wi, alphaX, alphaY);
+        // Disney Diffuse
+        {
+            f32 Fo                  = SchlickWeight(NdotL);
+            f32 Fi                  = SchlickWeight(NdotV);
+            SampledSpectrum diffuse = (1.f - 0.5f * Fo) * (1.f - 0.5f * Fi);
+            if (LengthSquared(wm) == 0.f) return SampledSpectrum(0.f);
+            f32 rr                = 2 * roughness * Sqr(LdotH);
+            SampledSpectrum retro = rr * (Fo + Fi + Fo * Fi * (rr - 1));
+
+            // TODO: I'm pretty sure this is an entirely separate model
+            Assert(!isThin && flatness == 0.f);
+#if 0
+            if (isThin && flatness > 0.f)
+            {
+                // Fake SSS
+                f32 Fss90 = rr / 2.f;
+                f32 Fss   = Lerp(Fo, 1.f, Fss90) * Lerp(Fi, 1.f, Fss90);
+                f32 fss   = 1.25f * (Fss * (1.f / (NdotV + NdotL) - .5f) + .5f);
+                result += brdf * baseColor * InvPi * Lerp(diffuse + retro, fss, flatness);
+            }
+#endif
+            // TODO: path traced subsurface scattering
+            result += brdf * baseColor * InvPi * (diffuse + retro);
+
+            // Sheen
+
+            f32 lum;
+            Assert(0);
+            f32 cTint  = Select(lum > 0.f, baseColor / lum, 1.f);
+            f32 cSheen = Lerp(sheenTint, 1.f, cTint);
+            f32 Fd     = SchlickWeight(LdotH);
+            result += sheen * (1.f - metallic) * Fd * cSheen;
+        }
+
+        // Disney specular reflection
+        {
+            f32 F = brdf * R;
+            if (metallic > 0.f)
+            {
+                F += metallic * FrSchlick(wo, CosTheta(wo));
+            }
+            if (specTrans > 0.f)
+            {
+                F += (1 - metallic) * FrSchlick(
+            }
+
+            result += D * G * F / (4 * Abs(NdotL) * Abs(NdotV));
+        }
+        // Disney specular transmission
+        {
+            f32 T = 1 - R;
+
+            f32 VdotH         = Dot(wo, wm);
+            f32 specTransComp = D * G * T * VdotH * LdotH /
+                                (Abs(NdotL) * Abs(NdotV) * Sqr(LdotH + VdotH * invEtaP));
+            result += Sqrt(baseColor) * bsdf * specTransComp *
+                      Select(mode == TransportMode::Radiance, 1.f, Sqr(invEtaP));
+        }
+
+        // Disney Clearcoat
+        {
+            f32 clearcoatPdf;
+            f32 gloss      = Lerp(clearcoatGloss, .1f, .001f);
+            f32 clearcoatC = EvalDisneyClearcoat(wo, wi, wm, clearcoat, gloss, clearcoatPdf);
+        }
+
+        // SampledSpectrum Ctint = lum > 0 ? c / lum : SampledSpectrum(1);
+        // Vec3f result          = Lerp(sheenTint, SampledSpectrum(1.f), Ctint);
+
+        return diffuse + retro;
+    }
+};
+
+struct DisneyThinBxDF
+{
+};
+
+void diffuseweight()
+{
+    f32 diffuseWeight = (1 - metallic) * (1 - specTrans);
+    return diffuseWeight;
+    // spec trans lerps between a specular bsdf and a dielectric w/ sss bsdf. metallic lerps
+    // between a metallic bsdf and that. these sum to the value of the bsdf. however, to
+    // importance sample, i think we build a cdf over all of these lobes, choose one of them,
+    // and then importance sample that lobe?
+}
+void DisneyDiffuse()
+{
+    // "rgb reflectance" [ 0.3 0.38 0.16 ]
+    //         "baseColor": [
+    //     0.796,
+    //     0.878,
+    //     0.608,
+    //     1.0
+    // ],
+    //     "rgb transmittance" [ 0.3 0.38 0.16 ]
+    // #    "float spectrans" [ 0 ]
+    // #    "float clearcoatgloss" [ 1 ]
+    // #    "float speculartint" [ 0 ]
+    // #    "float eta" [ 1.5 ]
+    // #    "float sheentint" [ 0.5 ]
+    // #    "float metallic" [ 0 ]
+    // #    "float anisotropic" [ 0 ]
+    // #    "float clearcoat" [ 0 ]
+    // #    "float roughness" [ 0.8 ]
+    // #    "float sheen" [ 1 ]
+    // #    "bool thin" [ true ]
+    // #    "float difftrans" [ 0.85 ]
+    // #    "float flatness" [ 0 ]
+}
+
+void DisneySheen()
+{
+    f32 sheenTint;
+    f32 cosD;
+    f32 sheen;
+    f32 sqrCosD = Sqr(1 - cosD);
+    Vec3f baseColor;
+
+    Vec3f c;
+}
+
+struct DisneyBxDF
+{
 };
 
 } // namespace rt
