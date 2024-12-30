@@ -1306,10 +1306,11 @@ f32 SchlickWeight(f32 cosValue)
     return (c * c) * (c * c) * c;
 }
 
-f32 FrSchlick(f32 f0, f32 cosH)
+f32 FrSchlick(f32 f0, f32 cosH, f32 etaP, f32 invEtaP)
 {
-    // F0 + (1 - F0)(1 - cosH)^5
-    return Lerp(f0, SchlickWeight(cosH), 1.f); // F0 + (1 - F0) * SchlickWeight(cosH);
+    f32 cosTheta2_t = (1 - (1 - Sqr(cosH)) * Sqr(invEtaP));
+    return Select(etaP > 1.f, Lerp(f0, SchlickWeight(cosH), 1.f),
+                  Lerp(f0, SchlickWeight(SafeSqrt(cosTheta2_t)), 1.f));
 }
 
 f32 GTR1(f32 cosH, f32 a)
@@ -1320,13 +1321,13 @@ f32 GTR1(f32 cosH, f32 a)
 
 Vec3f SampleGTR1(f32 a, const Vec2f &u)
 {
-    f32 a2      = a * a;
-    f32 cosH2   = (1 - Pow(a2, 1 - u[0])) / (1 - a2));
-    f32 sinH    = Clamp(Sqrt(1 - cos2H), 0.f, 1.f);
-    f32 cosH    = Sqrt(cosH2);
-    f32 phi     = 2 * PI * u[1];
-    f32 sinPhi  = Sin(phi);
-    f32 cosPhi  = Cos(phi);
+    f32 a2     = a * a;
+    f32 cosH2  = (1 - Pow(a2, 1 - u[0])) / (1 - a2);
+    f32 sinH   = Clamp(Sqrt(1 - cosH2), 0.f, 1.f);
+    f32 cosH   = Sqrt(cosH2);
+    f32 phi    = 2 * PI * u[1];
+    f32 sinPhi = Sin(phi);
+    f32 cosPhi = Cos(phi);
 
     return Vec3f(cosPhi * sinH, sinPhi * sinH, cosH);
 }
@@ -1334,6 +1335,7 @@ Vec3f SampleGTR1(f32 a, const Vec2f &u)
 f32 SmithG(const Vec3f &v, const Vec3f &wm, f32 a)
 {
     f32 a2        = a * a;
+    f32 cosTheta  = CosTheta(wm);
     f32 cos2Theta = cosTheta * cosTheta;
     f32 tan2Theta = (1 - cos2Theta) / cos2Theta;
 
@@ -1346,89 +1348,253 @@ f32 GTR2Aniso(const Vec3f &wm, f32 alphaX, f32 alphaY)
     return Rcp(PI * alphaX * alphaY + Sqr(wm.x / alphaX) + Sqr(wm.y / alphaY) + Sqr(wm.z));
 }
 
+Vec3lfn SampleGGXVNDF(const Vec3lfn &w, const Vec2lfn &u, f32 alphaX, f32 alphaY)
+{
+    Vec3lfn wh = Normalize(Vec3lfn(alphaX * w.x, alphaY * w.y, w.z));
+    wh         = Select(wh.z < 0, -wh, wh);
+    Vec2lfn p  = SampleUniformDiskPolar(u);
+    Vec3lfn T1 =
+        Select(wh.z < 0.99999f, Normalize(Cross(Vec3lfn(0, 0, 1), wh)), Vec3lfn(1, 0, 0));
+    Vec3lfn T2 = Cross(wh, T1);
+    LaneNF32 h = Sqrt(1 - p.x * p.x);
+    p.y        = Lerp((1.f + wh.z) / 2.f, h, p.y);
+
+    // Project point to hemisphere, transform to ellipsoid.
+    LaneNF32 pz = Sqrt(Max(0.f, 1 - p.x * p.x - p.y * p.y));
+    Vec3lfn nh  = p.x * T1 + p.y * T2 + pz * wh;
+    return Normalize(Vec3lfn(alphaX * nh.x, alphaY * nh.y, Max(1e-6f, nh.z)));
+}
+
 f32 SmithGAniso(const Vec3f &v, const Vec3f &wm, f32 alphaX, f32 alphaY)
 {
     f32 tan2Theta = (Sqr(v.x * alphaX) + Sqr(v.y) * alphaY) / Sqr(v.z);
     return Select(Dot(v, wm) <= 0.f, 0.f, 2 * Rcp(1 + Sqrt(1.f + tan2Theta)));
 }
 
-f32 EvalDisneyClearcoat(const Vec3f &wo, const Vec3f &wi, const Vec3f &wm, f32 clearcoat,
-                        f32 clearcoatGloss, f32 &pdf)
-{
-    Vec3f wm;
-    f32 NdotH = AbsCosTheta(wm);
-    f32 VdotH = Dot(wo, wm);
-
-    f32 D = GTR1(NdotH, gloss);
-    f32 G = SmithG(wo, 0.25f) * SmithG(wi, 0.25f);
-    // f32 fh    = FrDielectric(dotVH,  wm), 1.5f);
-    f32 F = FrSchlick(.04f, VdotH);
-
-    f32 jacobian = 1 / (4 * AbsDot(wo, wm));
-    pdf          = D * NdotH * jacobian;
-    // reversePdf = D * dotNH / (4 * AbsDot(wi, wm));
-    return clearcoat * D * G * F * 0.25f;
-}
-
-BSDFSample SampleDisneyClearcoat(const Vec3f &wo, const Vec2f &u, f32 clearcoat,
-                                 f32 clearcoatGloss)
-{
-    Vec3f wm = SampleGTR1(gloss, u);
-    wm       = FaceForward(wm, wo);
-    Vec3f wi = Reflect(wo, wm);
-    if (!SameHemisphere(wo, wi)) return {};
-
-    f32 pdf;
-    SampledSpectrumN f = EvalDisneyClearcoat(wo, wi, wm, clearcoat, clearcoatGloss, pdf);
-    return BSDFSample(f, wi, pdf, (u32)BxDFFlags::DiffuseReflection);
-}
+Vec3f Luminance(const Vec3f &color) { return Dot(Vec3f(.3f, .6f, 1.f), color); }
 
 struct DisneySolidBxDF
 {
     Vec3f baseColor;
+    f32 metallic;
+    f32 specTrans;
     f32 roughness;
     f32 sheen;
     f32 sheenTint;
+    f32 specularTint;
     f32 clearcoatGloss;
     f32 flatness;
     f32 anisotropy;
+    f32 eta;
     bool isThin;
 
-    SampledSpectrum EvaluateSample(const Vec3f &wo, const Vec3f &wi, f32 &pdf,
-                                   TransportMode mode) const
+    void CalculateAnisotropicRoughness(f32 &alphaX, f32 &alphaY)
     {
-        SampledSpectrum result(0.f);
-        // NOTE: L is wo, V is wi
-        // etaP = nt/ni
-        // invEtaP = ni/nt
-        f32 bsdf    = (1 - metallic) * specTrans;
-        f32 brdf    = (1 - metallic) * (1 - specTrans);
-        f32 invEtaP = Rcp(etaP);
-        f32 NdotV   = AbsCosTheta(wo);
-        f32 NdotL   = AbsCosTheta(wi);
+        f32 aspect = Sqrt(1 - .9f * anisotropy);
+        alphaX     = Sqr(roughness) / aspect;
+        alphaY     = Sqr(roughness) / aspect;
+    }
 
-        f32 R    = FrDielectric(Dot(wo, wm), eta);
-        Vec3f wm = wo + wi * etap;
+    Vec3f EvalDiffuse(f32 NdotL, f32 NdotV, f32 LdotH)
+    {
+        f32 Fo        = SchlickWeight(NdotL);
+        f32 Fi        = SchlickWeight(NdotV);
+        Vec3f diffuse = (1.f - 0.5f * Fo) * (1.f - 0.5f * Fi);
+        f32 rr        = 2 * roughness * Sqr(LdotH);
+        Vec3f retro   = rr * (Fo + Fi + Fo * Fi * (rr - 1));
+
+        return (diffuse + retro) * baseColor * InvPi;
+    }
+    Vec3f EvalSheen(const Vec3f &c, f32 LdotH)
+    {
+        return sheen * Lerp(sheenTint, Vec3f(1.f), c) * SchlickWeight(LdotH);
+    }
+
+    f32 EvalDisneyClearcoat(const Vec3f &wo, const Vec3f &wi, const Vec3f &wm, f32 glossFactor,
+                            f32 etaP, f32 invEtaP, f32 &pdf)
+    {
+        f32 NdotH = AbsCosTheta(wm);
+        f32 VdotH = Dot(wo, wm);
+
+        f32 D = GTR1(NdotH, glossFactor);
+        f32 G = SmithG(wo, 0.25f) * SmithG(wi, 0.25f);
+        // f32 fh    = FrDielectric(dotVH,  wm), 1.5f);
+        f32 F = FrSchlick(.04f, VdotH, etaP, invEtaP);
+
+        f32 jacobian = 1 / (4 * Abs(VdotH));
+        pdf          = D * NdotH * jacobian;
+        // reversePdf = D * dotNH / (4 * AbsDot(wi, wm));
+        return clearcoat * D * G * F * 0.25f;
+    }
+
+    BSDFSample SampleDisneyClearcoat(const Vec3f &wo, const Vec2f &u, f32 clearcoat,
+                                     f32 clearcoatGloss, f32 etaP, f32 invEtaP)
+    {
+        Vec3f wm = SampleGTR1(gloss, u);
+        wm       = FaceForward(wm, wo);
+        Vec3f wi = Reflect(wo, wm);
+        if (!SameHemisphere(wo, wi)) return {};
+
+        f32 pdf;
+        SampledSpectrumN f = EvalDisneyClearcoat(wo, wi, wm, clearcoat, clearcoatGloss, pdf);
+        return BSDFSample(f, wi, pdf, (u32)BxDFFlags::DiffuseReflection);
+    }
+
+    bool EvalDisneySpecTrans(const Vec3f &wo, f32 invEtaP, Vec3f &result, Vec3f &wi, f32 &pdf)
+    {
+        f32 denom = Sqr(wi + wo * invEtaP);
+
+        f32 D        = GTR2Aniso(wm, alphaX, alphaY);
+        f32 G1       = SmithGAniso(wo, wm, alphaX, alphaY);
+        f32 G        = G1 * SmithGAniso(wi, wm, alphaX, alphaY);
+        f32 absLdotH = AbsDot(wi, wm);
+        f32 VdotH    = Dot(wo, wm);
+
+        pdf    = D * G1 * Max(0.f, VdotH) * absLdotH / (denom * AbsCosTheta(wo));
+        result = Sqrt(baseColor) D * G * (1 - F) * Abs(VdotH) * absLdotH * /
+                 (denom * Abs(NdotV) * AbsCosTheta(wi));
+        return true;
+    }
+
+    BSDFSample GenerateSample(const Vec3f &wo, const f32 &uc, const Vec2f &u,
+                              TransportMode mode    = TransportMode::Radiance,
+                              BxDFFlags sampleFlags = BxDFFlags::RT) const
+    {
+        f32 NdotV = CosTheta(wo);
+        f32 Fr    = FrDielectric(NdotV, eta);
+
+        f32 pDiffuse, pSpecRfl, pSpecTrans;
+        f32 pClearcoat = .25f * clearcoat;
+        f32 cdf[4];
+        cdf[0] = pDiffuse;
+        cdf[1] = cdf[0] + pSpecRfl;
+        cdf[2] = cdf[1] + pSpecTrans;
+        cdf[3] = cdf[2] + pClearcoat;
+
+        f32 pdf;
+        // Diffuse
+        if (uc < weights[0])
+        {
+            // Remap random variable
+            // uc = (uc - weights[0]) / (weights[1] - weights[0]);
+            Vec3f wi = SampleCosineHemisphere(u);
+            wi.z     = Select(wo.z < 0, -wi.z, wi.z);
+            Vec3f wm = wo + wi;
+            if (LengthSquared(wm) == 0.f) return {};
+            wm = Normalize(wm);
+
+            f32 NdotV = CosTheta(wi);
+            f32 LdotH = Dot(wi, wm);
+
+            pdf = CosineHemispherePDF(AbsCosTheta(wi));
+            pdf *= pDiffuse;
+
+            Vec3f result = EvalDiffuse(NdotL, NdotV, LdotH);
+
+            // Sheen
+            Vec3f lum = Luminance(baseColor);
+            Vec3f c   = Select(lum > 0.f, baseColor / lum, 1.f);
+            result += EvalSheen(c, LdotH);
+
+            return BSDFSample(result, wi, pdf, LaneNU32(u32(BxDFFlags::DiffuseReflection)));
+        }
+        // Dielectric
+        else if (uc < weights[1])
+        {
+            // Remap random variable
+            // uc = (uc - weights[1]) / (weights[2] - weights[1]);
+            f32 alphaX, alphaY;
+            CalculateAnisotropicRoughness(alphaX, alphaY);
+            Vec3f wm, wi;
+            u32 flags;
+            if (alphaX > 0.f && alphaY > 0.f)
+            {
+                wm    = SampleGGXVNDF(wo, u, alphaX, alphaY);
+                wi    = Reflect(wo, wm);
+                flags = (u32)(BxDFFlags::GlossyReflection);
+            }
+            else
+            {
+                wi    = Vec3f(-wo.x, -wo.y, wo.z);
+                flags = (u32)(BxDFFlags::SpecularReflection);
+            }
+            pdf *= pSpecRfl;
+            return BSDFSample(EvalDisneySpecRfl(), wi, pdf, flags);
+        }
+        // Specular BSDF
+        else if (uc < weights[2])
+        {
+            uc = (uc - weights[2]) / (weights[3] - weights[2]);
+            Vec3f result, wi;
+            Vec3f wm = SampleGGXVNDF(wo, u, alphaX, alphaY);
+            f32 etaP;
+            if (!Refract(wo, wm, eta, &etaP, &wi) || wi.z == 0 || SameHemisphere(wo, wi))
+                return false;
+            f32 invEtaP = 1.f / etaP;
+
+            f32 Fr = FrDielectric(CosTheta(wo), etaP);
+
+            // Importance sample fresnel
+            if (uc < Fr)
+            {
+            }
+            else
+            {
+            }
+
+            if (EvalDisneySpecTrans(wo, result, wi pdf))
+            {
+                pdf *= pSpecTrans;
+                return BSDFSample(result, wi, pdf, flags);
+            }
+            return {};
+        }
+        // Clearcoat
+        else
+        {
+            Vec3f wm = SampleGTR1(.25f, u);
+            Vec3f wi = Reflect(wo, wm);
+            f32 pdf;
+            f32 glossFactor = Lerp(clearcoatGloss, .1f, .001f);
+            EvalDisneyClearcoat(wo, wi, wm, glossFactor, etaP, invEtaP, pdf);
+            pdf *= pClearcoat;
+        }
+    }
+
+    Vec3f EvaluateSample(const Vec3f &wo, const Vec3f &wi, f32 &pdf, TransportMode mode) const
+    {
+        Vec3f result(0.f);
+        // NOTE: V is wo, L is wi
+        // etaP = ni/nt
+        // invEtaP = nt/ni
+        f32 bsdf     = (1 - metallic) * specTrans;
+        f32 brdf     = (1 - metallic) * (1 - specTrans);
+        f32 NdotV    = CosTheta(wo);
+        f32 NdotL    = CosTheta(wi);
+        bool reflect = NdotV * NdotL > 0.f;
+        bool refract = NdotV * NdotL < 0.f;
+
+        f32 invEta  = Rcp(eta);
+        f32 etaP    = Select(NdotV > 0.0f, eta, invEta);
+        f32 invEtaP = Select(NdotV > 0.0f, invEta, eta);
+
+        Vec3f wm = wo + wi * etaP;
         if (LengthSquared(wm) == 0.f) return {};
 
         wm        = Normalize(wm);
+        f32 R     = FrDielectric(Dot(wo, wm), eta);
         f32 LdotH = Dot(wi, wm);
 
         // Anisotropy
-        f32 aspect = Sqrt(1 - .9f * anisotropy);
-        f32 alphaX = Sqr(roughness) / aspect;
-        f32 alphaY = Sqr(roughness) / aspect;
+        f32 alphaX, alphaY;
+        CalculateAnisotropicRoughness(alphaX, alphaY);
 
-        f32 D = GTR2Aniso(wm, alphaX, alphaY);
-        f32 G = SmithGAniso(wo, alphaX, alphaY) * SmithGAniso(wi, alphaX, alphaY);
+        f32 D  = GTR2Aniso(wm, alphaX, alphaY);
+        f32 G1 = SmithGAniso(wo, alphaX, alphaY);
+        f32 G  = G1 * SmithGAniso(wi, alphaX, alphaY);
         // Disney Diffuse
         {
-            f32 Fo                  = SchlickWeight(NdotL);
-            f32 Fi                  = SchlickWeight(NdotV);
-            SampledSpectrum diffuse = (1.f - 0.5f * Fo) * (1.f - 0.5f * Fi);
-            if (LengthSquared(wm) == 0.f) return SampledSpectrum(0.f);
-            f32 rr                = 2 * roughness * Sqr(LdotH);
-            SampledSpectrum retro = rr * (Fo + Fi + Fo * Fi * (rr - 1));
+            result += EvalDisneyDiffuse(NdotL, NdotV, LdotH);
 
             // TODO: I'm pretty sure this is an entirely separate model
             Assert(!isThin && flatness == 0.f);
@@ -1444,40 +1610,49 @@ struct DisneySolidBxDF
 #endif
             // TODO: path traced subsurface scattering
             result += brdf * baseColor * InvPi * (diffuse + retro);
-
-            // Sheen
-
-            f32 lum;
-            Assert(0);
-            f32 cTint  = Select(lum > 0.f, baseColor / lum, 1.f);
-            f32 cSheen = Lerp(sheenTint, 1.f, cTint);
-            f32 Fd     = SchlickWeight(LdotH);
-            result += sheen * (1.f - metallic) * Fd * cSheen;
         }
 
+        // Disney Sheen
+
+        f32 lum    = Luminance(baseColor);
+        f32 cTint  = Select(lum > 0.f, baseColor / lum, 1.f);
+        f32 cSheen = Lerp(sheenTint, 1.f, cTint);
+        f32 Fd     = SchlickWeight(LdotH);
+        result += sheen * (1.f - metallic) * Fd * cSheen;
+
         // Disney specular reflection
+        if (reflect)
         {
+            // f32 F = brdf * R;
+            // NOTE: if intersecting from the back, disable metallic lobe
             f32 F = brdf * R;
-            if (metallic > 0.f)
+            if (NdotV >= 0.f)
             {
-                F += metallic * FrSchlick(wo, CosTheta(wo));
-            }
-            if (specTrans > 0.f)
-            {
-                F += (1 - metallic) * FrSchlick(
+                if (metallic > 0.f) F += metallic * FrSchlick(baseColor, NdotV, etaP, invEtaP);
+                if (specularTint > 0.f)
+                {
+                    f32 F0 = Sqr((1 - etaP) / (1 + etaP)) * Lerp(specularTint, 1.f, cTint);
+                    F0     = Lerp(metallic, F0 *, baseColor);
+                    F += (1 - metallic) * FrSchlick(F0, NdotV, etaP, invEtaP);
+                }
             }
 
             result += D * G * F / (4 * Abs(NdotL) * Abs(NdotV));
         }
         // Disney specular transmission
+        if (refract && specTrans > 0.0f)
         {
             f32 T = 1 - R;
 
-            f32 VdotH         = Dot(wo, wm);
-            f32 specTransComp = D * G * T * VdotH * LdotH /
-                                (Abs(NdotL) * Abs(NdotV) * Sqr(LdotH + VdotH * invEtaP));
+            f32 denom = Sqr(LdotH + VdotH * invEtaP);
+
+            pdf = D * G1 * Abs(LdotH) * AbsDot(VdotH) / (NdotV * denom);
+
+            f32 VdotH = Dot(wo, wm);
+            f32 specTransComp =
+                D * G * T * Abs(VdotH) * Abs(LdotH) / (Abs(NdotV) * Abs(NdotL) * denom);
             result += Sqrt(baseColor) * bsdf * specTransComp *
-                      Select(mode == TransportMode::Radiance, 1.f, Sqr(invEtaP));
+                      Select(mode == TransportMode::Radiance, Sqr(invEtaP), 1.f);
         }
 
         // Disney Clearcoat
@@ -1485,12 +1660,10 @@ struct DisneySolidBxDF
             f32 clearcoatPdf;
             f32 gloss      = Lerp(clearcoatGloss, .1f, .001f);
             f32 clearcoatC = EvalDisneyClearcoat(wo, wi, wm, clearcoat, gloss, clearcoatPdf);
+            result += Vec3f(clearcoatC);
         }
 
-        // SampledSpectrum Ctint = lum > 0 ? c / lum : SampledSpectrum(1);
-        // Vec3f result          = Lerp(sheenTint, SampledSpectrum(1.f), Ctint);
-
-        return diffuse + retro;
+        return result;
     }
 };
 
@@ -1498,15 +1671,6 @@ struct DisneyThinBxDF
 {
 };
 
-void diffuseweight()
-{
-    f32 diffuseWeight = (1 - metallic) * (1 - specTrans);
-    return diffuseWeight;
-    // spec trans lerps between a specular bsdf and a dielectric w/ sss bsdf. metallic lerps
-    // between a metallic bsdf and that. these sum to the value of the bsdf. however, to
-    // importance sample, i think we build a cdf over all of these lobes, choose one of them,
-    // and then importance sample that lobe?
-}
 void DisneyDiffuse()
 {
     // "rgb reflectance" [ 0.3 0.38 0.16 ]
@@ -1531,21 +1695,6 @@ void DisneyDiffuse()
     // #    "float difftrans" [ 0.85 ]
     // #    "float flatness" [ 0 ]
 }
-
-void DisneySheen()
-{
-    f32 sheenTint;
-    f32 cosD;
-    f32 sheen;
-    f32 sqrCosD = Sqr(1 - cosD);
-    Vec3f baseColor;
-
-    Vec3f c;
-}
-
-struct DisneyBxDF
-{
-};
 
 } // namespace rt
 
