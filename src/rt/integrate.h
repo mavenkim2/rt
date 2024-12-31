@@ -1,6 +1,7 @@
 #ifndef INTEGRATE_H
 #define INTEGRATE_H
 
+#include "bxdf.h"
 #include "color.h"
 #include "math/simd_include.h"
 #include "spectrum.h"
@@ -456,6 +457,20 @@ struct DielectricMaterial
 
     MaterialHeaders(DielectricMaterial);
     DielectricMaterial(RghShader rghShader, Spectrum ior) : rghShader(rghShader), ior(ior) {}
+};
+
+struct MSDielectricMaterial
+{
+    using BxDF = MSDielectricBxDF;
+    // RghShader rghShader;
+    f32 alphaX, alphaY;
+    ConstantSpectrum ior;
+
+    MaterialHeaders(MSDielectricMaterial);
+    MSDielectricMaterial(f32 alphaX, f32 alphaY, ConstantSpectrum ior)
+        : alphaX(alphaX), alphaY(alphaY), ior(ior)
+    {
+    }
 };
 
 // NOTE: dielectric interface above a diffuse

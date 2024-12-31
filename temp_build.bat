@@ -10,7 +10,7 @@ if "%1" == "release" (
 
 IF NOT EXIST build mkdir build
 pushd build 
-clang++ -std=c++17 -march=native %Definitions% -g -D DEBUG -ferror-limit=5 -ffp-contract=off -o "convert.exe" "../src/rt/cmd/convert.cpp"
+clang++ -std=c++17 -march=native %Definitions% -g -D NOMINMAX -D DEBUG -ferror-limit=5 -ffp-contract=off -o "convert.exe" "../src/rt/cmd/convert.cpp"
 popd build
 
 popd

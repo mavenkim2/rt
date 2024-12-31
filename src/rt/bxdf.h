@@ -12,7 +12,7 @@ inline Vec3f Reflect(const Vec3f &v, const Vec3f &norm)
 }
 
 // NOTE: wi and wt point away from the surface point
-MaskF32 Refract(Vec3lfn wi, Vec3lfn n, LaneNF32 eta, LaneNF32 *etap, Vec3lfn *wt)
+MaskF32 Refract(Vec3lfn wi, Vec3lfn n, LaneNF32 eta, LaneNF32 *etap = 0, Vec3lfn *wt = 0)
 {
     LaneNF32 cosTheta_i = Dot(wi, n);
 
@@ -1281,24 +1281,26 @@ struct CoatedBxDF
     }
 };
 
-struct DisneyMaterial
+#define SQRT_2     1.41421356237309504880f /* sqrt(2) */
+#define INV_SQRT_2 0.7071067811865475244f  /* 1/sqrt(2) */
+// https://drive.google.com/file/d/0BzvWIdpUpRx_cFVlUkFhWXdleEU/view?resourcekey=0-DUQ5GMyc-cvSNBKFCA3LlQ
+
+// https://jcgt.org/published/0003/02/03/paper.pdf
+f32 GTR2Aniso(const Vec3f &wm, f32 alphaX, f32 alphaY)
 {
-    f32 metallic;
-    f32 roughness;
-    f32 anisotropic;
-    f32 specularTint;
-    f32 sheen;
-    f32 sheenTint;
-    f32 clearcoat;
-    f32 clearcoatGloss;
-    f32 specTrans;
-    f32 ior;
-    // Solid
-    Vec3f scatterDistance;
-    // Thin
-    f32 flatness;
-    f32 diffTrans;
-};
+    return 1.f / (PI * alphaX * alphaY + Sqr(wm.x / alphaX) + Sqr(wm.y / alphaY) + Sqr(wm.z));
+}
+
+f32 GGXD_wi(Vec3f wo, Vec3f wm, f32 alphaX, f32 alphaY)
+{
+    f32 NdotV = CosTheta(wo);
+    // NOTE: G1(wo) / AbsCosTheta(wo)
+    // TODO: this is probably wrong
+    f32 sign = Copysign(1, NdotV);
+    f32 term = 2.f / (Abs(NdotV) + sign * Sqrt(NdotV * NdotV + sign * Sqr(wo.x * alphaX) +
+                                               sign * Sqr(wo.y * alphaY)));
+    return GTR2Aniso(wm, alphaX, alphaY) * Max(0.f, Dot(wo, wm)) * term;
+}
 
 f32 SchlickWeight(f32 cosValue)
 {
@@ -1342,12 +1344,6 @@ f32 SmithG(const Vec3f &v, const Vec3f &wm, f32 a)
     return Select(Dot(v, wm) <= 0.f, 0.f, 2.f * Rcp(1.f + Sqrt(1 + a2 * tan2Theta)));
 }
 
-// https://jcgt.org/published/0003/02/03/paper.pdf
-f32 GTR2Aniso(const Vec3f &wm, f32 alphaX, f32 alphaY)
-{
-    return Rcp(PI * alphaX * alphaY + Sqr(wm.x / alphaX) + Sqr(wm.y / alphaY) + Sqr(wm.z));
-}
-
 Vec3lfn SampleGGXVNDF(const Vec3lfn &w, const Vec2lfn &u, f32 alphaX, f32 alphaY)
 {
     Vec3lfn wh = Normalize(Vec3lfn(alphaX * w.x, alphaY * w.y, w.z));
@@ -1367,12 +1363,32 @@ Vec3lfn SampleGGXVNDF(const Vec3lfn &w, const Vec2lfn &u, f32 alphaX, f32 alphaY
 
 f32 SmithGAniso(const Vec3f &v, const Vec3f &wm, f32 alphaX, f32 alphaY)
 {
-    f32 tan2Theta = (Sqr(v.x * alphaX) + Sqr(v.y) * alphaY) / Sqr(v.z);
+    f32 tan2Theta = (Sqr(v.x * alphaX) + Sqr(v.y * alphaY)) / Sqr(v.z);
     return Select(Dot(v, wm) <= 0.f, 0.f, 2 * Rcp(1 + Sqrt(1.f + tan2Theta)));
 }
 
+struct DisneyMaterial
+{
+    f32 metallic;
+    f32 roughness;
+    f32 anisotropic;
+    f32 specularTint;
+    f32 sheen;
+    f32 sheenTint;
+    f32 clearcoat;
+    f32 clearcoatGloss;
+    f32 specTrans;
+    f32 ior;
+    // Solid
+    Vec3f scatterDistance;
+    // Thin
+    f32 flatness;
+    f32 diffTrans;
+};
+
 Vec3f Luminance(const Vec3f &color) { return Dot(Vec3f(.3f, .6f, 1.f), color); }
 
+#if 0
 struct DisneySolidBxDF
 {
     Vec3f baseColor;
@@ -1666,36 +1682,170 @@ struct DisneySolidBxDF
         return result;
     }
 };
+#endif
 
 struct DisneyThinBxDF
 {
 };
 
-void DisneyDiffuse()
+struct DielectricPhaseFunction
 {
-    // "rgb reflectance" [ 0.3 0.38 0.16 ]
-    //         "baseColor": [
-    //     0.796,
-    //     0.878,
-    //     0.608,
-    //     1.0
-    // ],
-    //     "rgb transmittance" [ 0.3 0.38 0.16 ]
-    // #    "float spectrans" [ 0 ]
-    // #    "float clearcoatgloss" [ 1 ]
-    // #    "float speculartint" [ 0 ]
-    // #    "float eta" [ 1.5 ]
-    // #    "float sheentint" [ 0.5 ]
-    // #    "float metallic" [ 0 ]
-    // #    "float anisotropic" [ 0 ]
-    // #    "float clearcoat" [ 0 ]
-    // #    "float roughness" [ 0.8 ]
-    // #    "float sheen" [ 1 ]
-    // #    "bool thin" [ true ]
-    // #    "float difftrans" [ 0.85 ]
-    // #    "float flatness" [ 0 ]
-}
+    f32 alphaX, alphaY;
+    f32 eta;
+    DielectricPhaseFunction(f32 alphaX, f32 alphaY, f32 eta)
+        : alphaX(alphaX), alphaY(alphaY), eta(eta)
+    {
+    }
+    f32 Eval(Vec3f wo, Vec3f wi, u32 outside)
+    {
+        f32 sign[] = {-1, 1};
+        f32 invEta = Rcp(eta);
 
+        f32 etaP    = outside > 0 ? eta : invEta;
+        f32 invEtaP = outside > 0 ? invEta : eta;
+
+        wo = sign[outside] * wo;
+        wi = sign[outside] * wi;
+        // Reflection
+        if (Dot(wo, wi) > 0.f)
+        {
+            Vec3f wm = Normalize(wo + wi);
+            return .25f * GGXD_wi(wo, wm, alphaX, alphaY) * FrDielectric(Dot(wo, wm), etaP) /
+                   Dot(wo, wm);
+        }
+        else
+        {
+            Vec3f wm  = wo + wi * etaP;
+            f32 VdotH = Dot(wo, wm);
+            f32 LdotH = Dot(wi, wm);
+            return Max(0.f, LdotH) * GGXD_wi(wo, wm, alphaX, alphaY) *
+                   (1.f - FrDielectric(VdotH, etaP)) / Sqr(VdotH * invEtaP + LdotH);
+        }
+    }
+    Vec3f Sample(RNG &rng, Vec3f wr, f32 &outside)
+    {
+        Vec2f u(rng.Uniform<float>(), rng.Uniform<float>());
+        Vec3f wm = SampleGGXVNDF(wr, u, alphaX, alphaY);
+        f32 Fr   = FrDielectric(Dot(wr, wm), eta);
+        if (rng.Uniform<float>() < Fr)
+        {
+            // Reflect
+            return Reflect(wr, wm);
+        }
+        else
+        {
+            outside = -outside;
+            Vec3f wi;
+            if (!Refract(wr, wm, eta, 0, &wi)) return {};
+            return Normalize(wi);
+        }
+    }
+    f32 PDF(const Vec3f &wo, const Vec3f &wi)
+    {
+        f32 invEta    = Rcp(eta);
+        f32 cosThetaO = CosTheta(wo);
+        bool outside  = cosThetaO > 0.f;
+        f32 etaP      = outside ? eta : invEta;
+        f32 invEtaP   = outside ? invEta : eta;
+        Vec3f wm      = wo + wi * etaP;
+        f32 pdf       = GGXD_wi(wo, wm, alphaX, alphaY);
+
+        bool reflect = CosTheta(wo) * CosTheta(wi) > 0.f;
+        f32 Fr       = FrDielectric(Dot(wo, wm), etaP);
+
+        if (reflect)
+        {
+            pdf *= Fr * 0.25f / AbsDot(wo, wm);
+        }
+        else
+        {
+            f32 denom = Sqr(Dot(wi, wm) * Dot(wo, wm) * invEtaP);
+            denom *= CosTheta(wi) * CosTheta(wo);
+            pdf *= (1.f - Fr) * AbsDot(wi, wm) / denom;
+        }
+        return pdf;
+    }
+};
+
+template <typename PhaseFunction>
+struct MSBxDF
+{
+    PhaseFunction p;
+    // Smith GGX
+
+    f32 Lambda(const Vec3f &v)
+    {
+        // NOTE: tantheta * cosphi = sintheta * cosphi / costheta = v.x / v.z
+        f32 a = (Sqr(v.x * alphaX) + Sqr(v.y * alphaY)) / v.z;
+        return 0.5f + (1 + Copysign(1, a) * Sqrt(1 + a * a));
+    }
+    f32 InvC1(f32 u) { return SQRT_2 * ErfInv(2.f * u - 1.f); }
+    f32 C1(f32 h) { return 0.5f + 0.5f * (f32)Erf(INV_SQRT_2 * h); }
+    f32 G1(const Vec3f &w, f32 hr) { return Pow(C1(h), Lambda(w)); }
+    f32 SampleHeight(const Vec3f &wr, f32 hr, f32 u)
+    {
+        if (wr.z > .9999f) return pos_inf;
+        if (wr.z < -.9999f) return InvC1(u * C1(hr));
+        if (Abs(wr.z) < .0001f) return hr;
+
+        f32 G = G1(wr, hr);
+        if (u > 1.f - G) return pos_inf;
+        return InvC1(C1(hr) / Pow(1 - u, 1 / Lambda(wr)));
+    }
+
+    SampledSpectrumN EvaluateSample(const Vec3f &wo, const Vec3f &wi, f32 &pdf,
+                                    TransportMode mode) const
+    {
+        f32 hr   = pos_inf;
+        Vec3f wr = -wOut;
+        f32 sum  = 0.f;
+        f32 sign = 1.f;
+
+        RNG rng(Hash(uc, u));
+        auto r = [&rng]() { return Min(rng.Uniform<f32>(), oneMinusEpsilon); };
+        for (;;)
+        {
+            hr = SampleHeight(wr * sign, hr * sign);
+            if (hr == pos_inf) break;
+
+            f32 phaseVal = p.Eval(-wr, wi * sign, outside);
+            sum += phaseVal * G1(wi * sign, hr * sign);
+
+            Assert(!IsNaN(wr.z) && !IsNaN(hr));
+            wr = p.Sample(rng, -wr, outside);
+        }
+        return wr;
+    }
+
+    BSDFSample GenerateSample(const Vec3f &wOut, const f32 &uc, const Vec2f &u,
+                              TransportMode mode    = TransportMode::Radiance,
+                              BxDFFlags sampleFlags = BxDFFlags::RT)
+    {
+        f32 hr   = pos_inf;
+        Vec3f wr = -wOut;
+
+        f32 sign = 1.f;
+
+        RNG rng(Hash(uc, u));
+        auto r = [&rng]() { return Min(rng.Uniform<f32>(), oneMinusEpsilon); };
+        for (;;)
+        {
+            hr = SampleHeight(wr * sign, hr * sign);
+            if (hr == pos_inf) break;
+
+            wr = p.SamplePhaseFunction(rng, -wr, outside);
+            Assert(!IsNaN(wr.z) && !IsNaN(hr));
+        }
+        f32 pdf = PDF(wo, wi, mode, sampleFlags);
+        return BSDFSample(EvaluateSample(wOut, wr, pdf, mode), wr, 1.f, 0, etaP);
+    }
+    f32 PDF(const Vec3f &wo, const Vec3f &wi, TransportMode mode,
+            BxDFFlags sampleFlags = BxDFFlags ::RT)
+    {
+        return p.PDF(wo, wi);
+    }
+};
+using MSDielectricBxDF = MSBxDF<DielectricPhaseFunction>;
 } // namespace rt
 
 #endif

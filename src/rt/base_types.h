@@ -206,6 +206,10 @@ struct CoatedBxDF;
 typedef CoatedBxDF<DielectricBxDF, DiffuseBxDF> CoatedDiffuseBxDF;
 typedef CoatedBxDF<DielectricBxDF, ConductorBxDF> CoatedConductorBxDF;
 
+template <typename T>
+struct MSBxDF;
+struct DielectricPhaseFunction;
+
 // struct ThinDielectricBxDF;
 
 enum class TransportMode;
@@ -214,7 +218,7 @@ enum class BxDFFlags;
 
 using BxDFTaggedPointer =
     TaggedPointer<DiffuseBxDF, ConductorBxDF, DielectricBxDF, DiffuseTransmissionBxDF,
-                  CoatedDiffuseBxDF>; //, ThinDielectricBxDF>;
+                  CoatedDiffuseBxDF, MSBxDF<DielectricPhaseFunction>>; //, ThinDielectricBxDF>;
 struct BxDFMethods
 {
     SampledSpectrumBase<LaneNF32> (*EvaluateSample)(void *, const Vec3lfn &, const Vec3lfn &,

@@ -1,4 +1,5 @@
 #include "integrate.h"
+#include "bxdf.h"
 #include "lights.h"
 #include "bsdf.h"
 #include "scene.h"
@@ -125,6 +126,41 @@ DielectricBxDF DielectricMaterial<RghShader, IORShader>::GetBxDF(SurfaceInteract
                                                                  SampledWavelengthsN &lambda)
 {
     return DielectricMaterial::GetBxDF(intr, &this);
+}
+
+MSDielectricBxDF MSDielectricMaterial::GetBxDF(SurfaceInteractionsN &intr,
+                                               MSDielectricMaterial **materials,
+                                               Vec4lfn &filterWidths,
+                                               SampledWavelengthsN &lambda)
+{
+    f32 alphaX, alphaY;
+    LaneNF32 eta;
+    for (u32 i = 0; i < IntN; i++)
+    {
+        alphaX      = materials[i]->alphaX;
+        alphaY      = materials[i]->alphaY;
+        Set(eta, i) = materials[i]->ior(Get(lambda[0], i));
+    }
+    // NOTE: for dispersion (i.e. wavelength dependent IORs), we terminate every wavelength
+    // except the first
+    // if constexpr (!std::is_same_v<IORShader, ConstantSpectrum>)
+    // {
+    //     lambda.TerminateSecondary();
+    // }
+
+    // TODO: anisotropic roughness
+    // LaneNF32 roughnessX = RghShader::EvaluateFloat(intr, rghShaders, filterWidths, lambda);
+    // LaneNF32 roughnessX = RghShader::EvaluateFloat(intr, rghShaders, filterWidths, lambda);
+    // roughness = TrowbridgeReitzDistribution::RoughnessToAlpha(roughness);
+    // TrowbridgeReitzDistribution distrib(roughness, roughness);
+    return MSDielectricBxDF{DielectricPhaseFunction(alphaX, alphaX, eta)};
+}
+MSDielectricBxDF MSDielectricMaterial::GetBxDF(SurfaceInteractionsN &intr,
+                                               Vec4lfn &filterWidths,
+                                               SampledWavelengthsN &lambda)
+{
+    MSDielectricMaterial *mat[] = {this};
+    return MSDielectricMaterial::GetBxDF(intr, mat, filterWidths, lambda);
 }
 
 template <typename RghShader, typename RflShader, typename AlbedoShader, typename Spectrum>

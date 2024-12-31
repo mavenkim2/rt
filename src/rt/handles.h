@@ -67,6 +67,7 @@ template <typename RghShader, typename Spectrum>
 struct DielectricMaterial;
 template <typename RghShader, typename RflShader, typename AlbedoShader, typename Spectrum>
 struct CoatedDiffuseMaterial;
+struct MSDielectricMaterial;
 
 // TODO: automate this :)
 using BumpMapPtex                     = BumpMap<PtexTexture>;
@@ -94,8 +95,11 @@ using CoatedDiffuseMaterial1 = Material2<CoatedDiffuseMaterialPtex, NullShader>;
 using CoatedDiffuseMaterial2 = Material2<CoatedDiffuseMaterialBase, NullShader>;
 using DielectricMaterialBase = Material2<DielectricMaterialConstant, NullShader>;
 
+using MSDielectricMaterial1 = Material2<MSDielectricMaterial, NullShader>;
+
 CREATE_ENUM_AND_TYPE_PACK(MaterialTypes, MaterialType, DielectricMaterialBase,
-                          CoatedDiffuseMaterial1, CoatedDiffuseMaterial2, DiffuseMaterialBase);
+                          CoatedDiffuseMaterial1, CoatedDiffuseMaterial2, DiffuseMaterialBase,
+                          MSDielectricMaterial1);
 
 struct MaterialHandle
 {

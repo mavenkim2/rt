@@ -736,6 +736,9 @@ void TestRender(Arena *arena, Options *options = 0)
     AffineSpace renderFromWorld = AffineSpace::Translate(-pCamera);
     AffineSpace worldFromRender = AffineSpace::Translate(pCamera);
 
+    MSDielectricMaterial1 mat(MSDielectricMaterial(0.3f, 0.5f, 1.1f), NullShader());
+    scene->materials.Set<MSDielectricMaterial1>(&mat, 1);
+#if 0
     CoatedDiffuseMaterial2 mat(
         CoatedDiffuseMaterialBase(ConstantTexture(.65),
                                   ConstantSpectrumTexture(RGBAlbedoSpectrum(
@@ -743,6 +746,7 @@ void TestRender(Arena *arena, Options *options = 0)
                                   ConstantTexture(0.f), ConstantSpectrum(1.5f)),
         NullShader());
     scene->materials.Set<CoatedDiffuseMaterial2>(&mat, 1);
+#endif
 
     LoadScene(arenas, "../data/island/pbrt-v4/", options->filename, &renderFromWorld);
 
