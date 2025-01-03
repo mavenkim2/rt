@@ -611,6 +611,7 @@ struct Scene
 
     ArrayTuple<LightTypes> lights;
     ArrayTuple<MaterialTypes> materials;
+    // Material materials;
     // Bounds bounds;
     u32 numLights;
 
