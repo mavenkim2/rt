@@ -1541,7 +1541,7 @@ void WriteFile(string directory, PBRTFileInfo *info)
                                     temp.arena,
                                     StrConcat(temp.arena, directory,
                                               Str8(packet->bytes[c], packet->sizes[c])));
-                                Put(&builder, "v %u", mesh.numVertices, mesh.numIndices);
+                                Put(&builder, "v %u ", mesh.numVertices, mesh.numIndices);
                                 u64 pOffset = dataBuilder.totalSize;
                                 Put(&dataBuilder, mesh.p, mesh.numVertices * sizeof(Vec3f));
                                 u64 nOffset = dataBuilder.totalSize;

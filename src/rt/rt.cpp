@@ -1115,7 +1115,8 @@ int main(int argc, char *argv[])
         printf("Must pass in a .rtscene file.\n");
         return 1;
     }
-    TestRender(arena, &options);
+    // TestRender(arena, &options);
+    WhiteFurnaceTest(arena, &options);
 
     // CameraRayTest(arena);
     // BVHTraverse4Test();

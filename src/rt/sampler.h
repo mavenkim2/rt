@@ -88,7 +88,7 @@ struct SobolSampler
                  i32 seed = 0)
         : samplesPerPixel(samplesPerPixel), seed(seed), randomize(randomize)
     {
-        assert(IsPow2(samplesPerPixel));
+        Assert(IsPow2(samplesPerPixel));
         scale = Max(NextPowerOfTwo(fullResolution.x), NextPowerOfTwo(fullResolution.y));
     }
     i32 SamplesPerPixel() const { return samplesPerPixel; }
@@ -148,7 +148,7 @@ struct PaddedSobolSampler
     PaddedSobolSampler(i32 samplesPerPixel, RandomizeStrategy randomize, i32 seed = 0)
         : samplesPerPixel(samplesPerPixel), seed(seed), randomize(randomize)
     {
-        assert(IsPow2(samplesPerPixel));
+        Assert(IsPow2(samplesPerPixel));
     }
     i32 SamplesPerPixel() const { return samplesPerPixel; }
     void StartPixelSample(Vec2i p, i32 index, i32 dim)
@@ -200,7 +200,7 @@ struct ZSobolSampler
                   RandomizeStrategy randomize = RandomizeStrategy::FastOwen, i32 seed = 0)
         : randomize(randomize), seed(seed)
     {
-        assert(IsPow2(samplesPerPixel));
+        Assert(IsPow2(samplesPerPixel));
         log2SamplesPerPixel     = Log2Int(samplesPerPixel);
         i32 res                 = NextPowerOfTwo(Max(fullResolution.x, fullResolution.y));
         i32 log4SamplesPerPixel = (log2SamplesPerPixel + 1) / 2;
@@ -300,7 +300,7 @@ struct ZSobolSampler
 //     i32 seed = 0)
 //         : randomize(randomize), seed(seed)
 //     {
-//         assert(IsPow2(samplesPerPixel));
+//         Assert(IsPow2(samplesPerPixel));
 //         log2SamplesPerPixel     = Log2Int(samplesPerPixel);
 //         i32 res                 = NextPowerOfTwo(Max(fullResolution.x, fullResolution.y));
 //         i32 log4SamplesPerPixel = (log2SamplesPerPixel + 1) / 2;

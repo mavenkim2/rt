@@ -221,9 +221,9 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                         }
                         else if (Advance(&tokenizer, "i "))
                         {
-                            u32 num          = ReadInt(&tokenizer);
-                            mesh.numVertices = num;
-                            mesh.numFaces    = num / 3;
+                            u32 num         = ReadInt(&tokenizer);
+                            mesh.numIndices = num;
+                            mesh.numFaces   = num / 3;
                         }
                         else if (Advance(&tokenizer, "indices "))
                         {
@@ -266,8 +266,22 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
 
     OS_UnmapFile(tokenizer.input.str);
     PrimitiveIndices *ids = PushStructConstruct(arena, PrimitiveIndices)(
-        LightHandle(), MaterialHandle(MaterialType::CoatedDiffuseMaterial2, 0));
+        LightHandle(), MaterialHandle(MaterialType::MSDielectricMaterial1, 0));
     BuildSettings settings;
+
+    if (baseFile && !hasTransforms)
+    {
+        Mesh *meshes = (Mesh *)scene->primitives;
+        for (u32 i = 0; i < scene->numPrimitives; i++)
+        {
+            Mesh *mesh = &meshes[i];
+            for (u32 v = 0; v < mesh->numVertices; v++)
+            {
+                mesh->p[v] = TransformP(*renderFromWorld, mesh->p[v]);
+            }
+        }
+    }
+
     if (!isLeaf)
     {
         BuildTLASBVH(arenas, settings, scene);

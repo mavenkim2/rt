@@ -31,7 +31,7 @@ f32 Blackbody(f32 lambda, f32 T)
     const f32 kb = 1.3806488e-23f;
     f32 l        = lambda * 1e-9f;
     f32 Le       = (2 * h * c * c) / (Pow<5>(l) * (FastExp((h * c) / (l * kb * T)) - 1));
-    assert(!IsNaN(Le));
+    Assert(!IsNaN(Le));
     return Le;
 }
 
@@ -90,7 +90,7 @@ struct SampledSpectrumBase
     }
     SampledSpectrumBase operator+(f32 a) const
     {
-        assert(!IsNaN(a));
+        Assert(!IsNaN(a));
         SampledSpectrumBase ret;
         for (i32 i = 0; i < NSampledWavelengths; i++)
         {
@@ -100,7 +100,7 @@ struct SampledSpectrumBase
     }
     friend SampledSpectrumBase operator-(f32 a, const SampledSpectrumBase<T> &s)
     {
-        assert(!IsNaN(a));
+        Assert(!IsNaN(a));
         SampledSpectrumBase ret;
         for (i32 i = 0; i < NSampledWavelengths; i++)
         {
@@ -123,7 +123,7 @@ struct SampledSpectrumBase
     }
     SampledSpectrumBase operator*(f32 a) const
     {
-        assert(!IsNaN(a));
+        Assert(!IsNaN(a));
         SampledSpectrumBase ret = *this;
         for (i32 i = 0; i < NSampledWavelengths; i++)
         {
@@ -133,7 +133,7 @@ struct SampledSpectrumBase
     }
     SampledSpectrumBase &operator*=(f32 a)
     {
-        assert(!IsNaN(a));
+        Assert(!IsNaN(a));
         for (i32 i = 0; i < NSampledWavelengths; i++)
         {
             values[i] *= a;
@@ -153,7 +153,7 @@ struct SampledSpectrumBase
     {
         for (int i = 0; i < NSampledWavelengths; ++i)
         {
-            assert(s.values[i] != 0.f);
+            Assert(s.values[i] != 0.f);
             values[i] /= s.values[i];
         }
         return *this;
@@ -165,8 +165,8 @@ struct SampledSpectrumBase
     }
     SampledSpectrumBase &operator/=(f32 a)
     {
-        assert(a != 0.f);
-        assert(!IsNaN(a));
+        Assert(a != 0.f);
+        Assert(!IsNaN(a));
         for (i32 i = 0; i < NSampledWavelengths; ++i) values[i] /= a;
         return *this;
     }

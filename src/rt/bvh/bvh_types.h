@@ -333,7 +333,7 @@ template <i32 N>
 void BVHNode<N>::CheckAlignment(void *ptr)
 {
     Assert(!((size_t)ptr & alignMask));
-    assert(!((size_t)ptr & alignMask));
+    Assert(!((size_t)ptr & alignMask));
 }
 
 template <i32 N>

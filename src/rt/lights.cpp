@@ -372,14 +372,14 @@ SAMPLE_LI(UniformInfiniteLight)
     if (allowIncompletePDF) return {};
     Vec3f wi = SampleUniformSphere(u);
     f32 pdf  = UniformSpherePDF();
-    return LightSample(light->scale * light->Lemit->Sample(lambda),
+    return LightSample(light->scale * light->Lemit.Sample(lambda),
                        Vec3f(intr.p) + 2.f * wi * light->sceneRadius, wi, pdf,
                        LightType::Infinite);
 }
 
 PDF_LI_INF(UniformInfiniteLight) { return allowIncompletePDF ? 0.f : UniformSpherePDF(); }
 
-LE_INF(UniformInfiniteLight) { return light->scale * light->Lemit->Sample(lambda); }
+LE_INF(UniformInfiniteLight) { return light->scale * light->Lemit.Sample(lambda); }
 
 // ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image) : image(image)
 ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image,

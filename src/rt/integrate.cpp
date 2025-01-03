@@ -9,25 +9,20 @@
 namespace rt
 {
 // TODO
-// - loading volumes
-// - volumetric
+// - volumetric rendering
 //      - ratio tracking, residual ratio tracking, delta tracking <-- done but untested
 //      - virtual density segments?
-// - bvh intersection and triangle intersection
-// - shading, ptex, materials, textures
-//      - ray differentials
-
-// after that's done:
-// what I think is reasonable
+// - ray differentials
+// - disney bsdf
+// - multiple scattering
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
-// - multi level instancing using the original json format
 // - vcm
 // - adaptive sampling
 // - equiangular sampling
 // - bdpt, metropolis, upbp, mcm?
 //
-// - memory mapped files for treelets??? (i.e. single level massive bvh)
 // maybe unreasonable:
+// - memory mapped files for treelets??? (i.e. single level massive bvh)
 // - covariance tracing
 // - actual displacement mapping (instead of bump mapping)
 // - subdivision surfaces
@@ -148,13 +143,13 @@ MSDielectricBxDF MSDielectricMaterial::GetBxDF(SurfaceInteractionsN &intr,
     //     lambda.TerminateSecondary();
     // }
 
-    // TODO: anisotropic roughness
     // LaneNF32 roughnessX = RghShader::EvaluateFloat(intr, rghShaders, filterWidths, lambda);
     // LaneNF32 roughnessX = RghShader::EvaluateFloat(intr, rghShaders, filterWidths, lambda);
     // roughness = TrowbridgeReitzDistribution::RoughnessToAlpha(roughness);
     // TrowbridgeReitzDistribution distrib(roughness, roughness);
     return MSDielectricBxDF{DielectricPhaseFunction(alphaX, alphaX, eta)};
 }
+
 MSDielectricBxDF MSDielectricMaterial::GetBxDF(SurfaceInteractionsN &intr,
                                                Vec4lfn &filterWidths,
                                                SampledWavelengthsN &lambda)
@@ -819,6 +814,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         f32 u             = sampler.Get1D();
         BSDFSample sample = bsdf.GenerateSample(-ray.d, u, sampler.Get2D());
         if (sample.pdf == 0.f) break;
+        // beta *= sample.f / sample.pdf;
         beta *= sample.f * AbsDot(si.shading.n, sample.wi) / sample.pdf;
         bsdfPdf        = sample.pdf;
         specularBounce = sample.IsSpecular();

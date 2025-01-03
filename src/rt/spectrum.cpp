@@ -83,7 +83,7 @@ inline Vec3f FromxyY(Vec2f xy, f32 Y = 1.f)
 DenselySampledSpectrum::DenselySampledSpectrum(Spectrum spec, i32 lambdaMin, i32 lambdaMax)
     : lambdaMin((u16)lambdaMin), lambdaMax((u16)lambdaMax)
 {
-    assert(lambdaMin >= LambdaMin && lambdaMax <= LambdaMax);
+    Assert(lambdaMin >= LambdaMin && lambdaMax <= LambdaMax);
     numValues = lambdaMax + lambdaMin + 1;
     // values    = PushArray(arena, f32, numValues);
     if (spec)

@@ -111,7 +111,7 @@ struct TaggedPointer
         using Type = typename std::remove_cv_t<T>;
         if constexpr (std::is_same_v<Type, std::nullptr_t>)
         {
-            assert("Null");
+            Assert(0);
             return 0;
         }
         else return IndexOf<Type, Types>::count;

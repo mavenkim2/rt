@@ -667,33 +667,149 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
 }
 #endif
 
+void WhiteFurnaceTest(Arena *arena, Options *options = 0)
+{
+    scene_       = PushStruct(arena, Scene);
+    Scene *scene = GetScene();
+    // ScenePrimitives *scenePrims     = PushStruct(arena, ScenePrimitives);
+    u32 numProcessors = OS_NumProcessors();
+    Arena **arenas    = PushArray(arena, Arena *, numProcessors);
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        arenas[i] = ArenaAlloc(16);
+    }
+
+    PerformanceCounter counter = OS_StartCounter();
+
+    // Camera
+    u32 width  = 1920;
+    u32 height = 804;
+    Vec3f pCamera(0.f, -10.f, 0.f);
+    Vec3f look(0.f, 1.f, 0.f);
+    Vec3f up(0.f, 0.f, 1.f);
+
+    Mat4 cameraFromRender = LookAt(pCamera, look, up) * Translate(pCamera);
+
+    Mat4 renderFromCamera = Inverse(cameraFromRender);
+    // TODO: going to have to figure out how to handle this automatically
+    Mat4 NDCFromCamera = Mat4::Perspective2(Radians(69.50461), 2.386946);
+    // maps to raster coordinates
+    Mat4 rasterFromNDC = Scale(Vec3f(f32(width), -f32(height), 1.f)) *
+                         Scale(Vec3f(1.f / 2.f, 1.f / 2.f, 1.f)) *
+                         Translate(Vec3f(1.f, -1.f, 0.f));
+    Mat4 rasterFromCamera = rasterFromNDC * NDCFromCamera;
+    Mat4 cameraFromRaster = Inverse(rasterFromCamera);
+
+    AffineSpace renderFromWorld = AffineSpace::Translate(-pCamera);
+    AffineSpace worldFromRender = AffineSpace::Translate(pCamera);
+
+    // MSDielectricMaterial1 mat(MSDielectricMaterial(0.3f, 0.3f, 1.2f), NullShader());
+    // scene->materials.Set<MSDielectricMaterial1>(&mat, 1);
+
+    ConstantTexture ct(0.3f);
+    ConstantSpectrum spec(1.2f);
+    DielectricMaterialBase dielMat(DielectricMaterialConstant(ct, spec), NullShader());
+    scene->materials.Set<DielectricMaterialBase>(&dielMat, 1);
+
+    PrimitiveIndices *ids = PushStructConstruct(arena, PrimitiveIndices)(
+        LightHandle(), MaterialHandle(MaterialType::DielectricMaterialBase, 0));
+    scene->scene.primIndices = ids;
+
+    Vec3f p[] = {
+        // Front
+        // Vec3f(-1.f, -1.f, -1.f),
+        // Vec3f(1.f, -1.f, -1.f),
+        // Vec3f(1.f, -1.f, 1.f),
+        // Vec3f(-1.f, -1.f, 1.f),
+        // // // Right
+        // Vec3f(1.f, -1.f, -1.f),
+        // Vec3f(1.f, 1.f, -1.f),
+        // Vec3f(1.f, 1.f, 1.f),
+        // Vec3f(1.f, -1.f, 1.f),
+        // // // Back
+        // Vec3f(1.f, 1.f, -1.f),
+        // Vec3f(-1.f, 1.f, -1.f),
+        // Vec3f(-1.f, 1.f, 1.f),
+        // Vec3f(1.f, 1.f, 1.f),
+        // // // Left
+        // Vec3f(-1.f, 1.f, -1.f),
+        // Vec3f(-1.f, -1.f, -1.f),
+        // Vec3f(-1.f, -1.f, 1.f),
+        // Vec3f(-1.f, 1.f, 1.f),
+        // Top
+        Vec3f(-1.f, -1.f, 1.f), Vec3f(1.f, -1.f, 1.f), Vec3f(1.f, 1.f, 1.f),
+        Vec3f(-1.f, 1.f, 1.f),
+        // Bottom
+        // Vec3f(-1.f, -1.f, -1.f),
+        // Vec3f(1.f, -1.f, -1.f),
+        // Vec3f(1.f, 1.f, -1.f),
+        // Vec3f(-1.f, 1.f, -1.f),
+
+    };
+    AffineSpace t = renderFromWorld * AffineSpace::Rotate(Vec3f(1, 0, 0), Radians(45.f));
+    for (u32 i = 0; i < ArrayLength(p); i++)
+    {
+        p[i] = TransformP(t, p[i]);
+    }
+
+    Mesh mesh;
+    mesh.p           = p;
+    mesh.numVertices = ArrayLength(p);
+    mesh.numFaces    = 1;
+
+    BuildSettings settings;
+
+    scene->scene.primitives    = &mesh;
+    scene->scene.numPrimitives = 1;
+    BuildQuadBVH(arenas, settings, &scene->scene);
+
+    f32 scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
+    ConstantSpectrum spec2(1.f);
+    UniformInfiniteLight infLight(&spec2, scale);
+    scene->lights.Set<UniformInfiniteLight>(&infLight, 1);
+    scene->numLights = 1;
+
+    f32 time = OS_GetMilliseconds(counter);
+    printf("setup time: %fms\n", time);
+
+    RenderParams2 params;
+    params.cameraFromRaster = cameraFromRaster;
+    params.renderFromCamera = renderFromCamera;
+    params.width            = width;
+    params.height           = height;
+    params.filterRadius     = Vec2f(0.5f);
+    params.spp              = 64;
+    params.maxDepth         = 10;
+    params.lensRadius       = 0.003125;
+    params.focalLength      = 1675.3383;
+
+    if (options)
+    {
+        if (options->pixelX != -1 && options->pixelY != -1)
+        {
+            params.pixelMin = Vec2u(options->pixelX, options->pixelY);
+            params.pixelMax = params.pixelMin + Vec2u(1, 1);
+        }
+    }
+
+    counter = OS_StartCounter();
+    Render(arena, params);
+    time = OS_GetMilliseconds(counter);
+    printf("total render time: %fms\n", time);
+
+    f64 totalMiscTime = 0;
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        totalMiscTime += threadLocalStatistics[i].miscF;
+        printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
+    }
+    printf("total misc time: %fms \n", totalMiscTime);
+}
+
 void TestRender(Arena *arena, Options *options = 0)
 {
-    // DONE:
-    // - make the materials polymorphic so that the integrator can access them
-    // - fix the compressed leaf intersector
-    // - instantiate the water material and attach the triangle mesh to it
-    // - have the intersector handle the case where there are no geomIDs (only primIDs)
-    // - make sure traversal code works
-    // - add material index when intersecting
-    // - make sure the environment map works properly and returns the right radiances
-    // - make sure i'm calculating the final rgb value correctly for each pixel
-    // - make sure i'm shooting the right camera rays
-    // - coated materials
-    // - render a mesh w/ ptex
-    // - change the bvh build process to support N-wide leaves (need to change the sah to
-    // account for this)
-    // - render a quad mesh properly
-    // - the ironwood tree seems to be a bit brighter than it's supposed to be?
-    // - add the second ocean layer
-    // - render two instances of a quad mesh properly (i.e. test partial rebraiding)
-    // - need to support a bvh with quad/triangle mesh instances (i.e. different instance
-    // types)
-    // - render diffuse material properly
-
     // TODO:
     // - add area lights (making sure they cannot be intersected, but are sampled properly)
-    // - verify all code paths in partial rebraiding (i.e. more instances)
     // - render the diffuse transmission materials properly
     // - load the scene description and properly instantiate lights/materials/textures
 
@@ -736,8 +852,17 @@ void TestRender(Arena *arena, Options *options = 0)
     AffineSpace renderFromWorld = AffineSpace::Translate(-pCamera);
     AffineSpace worldFromRender = AffineSpace::Translate(pCamera);
 
-    MSDielectricMaterial1 mat(MSDielectricMaterial(0.3f, 0.5f, 1.1f), NullShader());
+    // MSDielectricMaterial1 mat(MSDielectricMaterial(0.f, 0.f, 1.1f), NullShader());
+    // scene->materials.Set<MSDielectricMaterial1>(&mat, 1);
+
+    ConstantTexture ct(0.3f);
+    ConstantSpectrum spec(1.1f);
+    // DielectricMaterialBase dielMat(DielectricMaterialConstant(ct, spec), NullShader());
+    // scene->materials.Set<DielectricMaterialBase>(&dielMat, 1);
+
+    MSDielectricMaterial1 mat(MSDielectricMaterial(0.3f, 0.3f, 1.2f), NullShader());
     scene->materials.Set<MSDielectricMaterial1>(&mat, 1);
+
 #if 0
     CoatedDiffuseMaterial2 mat(
         CoatedDiffuseMaterialBase(ConstantTexture(.65),
@@ -751,6 +876,7 @@ void TestRender(Arena *arena, Options *options = 0)
     LoadScene(arenas, "../data/island/pbrt-v4/", options->filename, &renderFromWorld);
 
     // environment map
+#if 0
     Bounds bounds              = scene->scene.GetBounds();
     f32 sceneRadius            = Length(ToVec3f(bounds.Centroid() - bounds.maxP));
     AffineSpace worldFromLight = AffineSpace::Scale(-1, 1, 1) *
@@ -764,6 +890,13 @@ void TestRender(Arena *arena, Options *options = 0)
         arena, LoadFile("../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png"),
         &renderFromLight, RGBColorSpace::sRGB, sceneRadius, scale);
     scene->lights.Set<ImageInfiniteLight>(&infLight, 1);
+    scene->numLights = 1;
+#endif
+
+    f32 scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
+    ConstantSpectrum spec2(1.f);
+    UniformInfiniteLight infLight(&spec2, scale);
+    scene->lights.Set<UniformInfiniteLight>(&infLight, 1);
     scene->numLights = 1;
 
     f32 time = OS_GetMilliseconds(counter);

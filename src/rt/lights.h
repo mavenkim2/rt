@@ -23,7 +23,7 @@ struct LightSample
     SampledSpectrum L;
     Vec3lfn samplePoint;
     Vec3lfn wi;
-    LaneNF32 pdf;
+    LaneNF32 pdf = LaneNF32(0.f);
     // TODO: simd
     LightType lightType;
 
@@ -124,12 +124,12 @@ struct DistantLight
 // TODO: render from light?
 struct UniformInfiniteLight
 {
-    const DenselySampledSpectrum *Lemit;
+    const DenselySampledSpectrum Lemit;
     f32 scale;
     f32 sceneRadius;
 
     UniformInfiniteLight(Spectrum Lemit, f32 scale = 1.f)
-        : Lemit(LookupSpectrum(Lemit)), scale(scale)
+        : Lemit(DenselySampledSpectrum(Lemit)), scale(scale)
     {
     }
     LightFunctionsInf(UniformInfiniteLight);
