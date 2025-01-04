@@ -1,5 +1,6 @@
 #include "scene.h"
 #include "bvh/bvh_types.h"
+#include "integrate.h"
 namespace rt
 {
 
@@ -19,6 +20,236 @@ struct SceneLoadTable
     u32 count;
     TicketMutex *mutexes;
 };
+
+enum class TextureType
+{
+    None,
+    ConstantFloat,
+    ConstantSpectrum,
+    Ptex,
+};
+
+TextureType GetTextureType(Tokenizer *tokenizer)
+{
+    TextureType type;
+    if (Advance(tokenizer, "cf "))
+    {
+        type = TextureType::ConstantFloat;
+    }
+    else if (Advance(tokenizer, "ptex "))
+    {
+        type = TextureType::Ptex;
+    }
+    else if (Advance(tokenizer, "cs "))
+    {
+        type = TextureType::ConstantSpectrum;
+    }
+    return type;
+}
+
+enum class AttributeType
+{
+    Float,
+    // Spectrum,
+    RGB,
+    String,
+};
+
+struct AttributeTable
+{
+    u8 *buffer;
+
+#ifdef DEBUG
+    AttributeType *types;
+    u32 attributeCount;
+#endif
+};
+
+struct AttributeIterator
+{
+    AttributeTable *table;
+    u64 offset;
+#ifdef DEBUG
+    u32 countOffset = 0;
+#endif
+
+    AttributeIterator(AttributeTable *table) : table(table) {}
+    AttributeIterator(AttributeTable *table, u64 offset) : table(table), offset(offset) {}
+    void DebugCheck(AttributeType type)
+    {
+#ifdef DEBUG
+        Assert(table->types);
+        Assert(countOffset < table->attributeCount);
+        Assert(table->types[countOffset++] == type);
+#endif
+    }
+    f32 ReadFloat()
+    {
+        u64 o = offset;
+        offset += sizeof(f32);
+        DebugCheck(AttributeType::Float);
+        return *(f32 *)(table->buffer + o);
+    }
+    string ReadString()
+    {
+        u32 size = *(u32 *)(table->buffer + offset);
+        offset += sizeof(size);
+        string result = Str8(table->buffer + offset, size);
+        offset += size;
+        DebugCheck(AttributeType::String);
+        return result;
+    }
+};
+
+template <TextureType type>
+auto ProcessTexture(AttributeIterator *iterator)
+{
+    if constexpr (type == TextureType::None)
+    {
+        return 0.f;
+    }
+    else if constexpr (type == TextureType::ConstantFloat)
+    {
+        return iterator->ReadFloat();
+    }
+    else if constexpr (type == TextureType::ConstantSpectrum)
+    {
+    }
+    else if constexpr (type == TextureType::Ptex)
+    {
+        string filename = iterator->ReadString();
+    }
+}
+
+template <TextureType u, TextureType r>
+f32 ProcessRoughness(AttributeIterator *iterator)
+{
+    static_assert(u == TextureType::None || r == TextureType::None,
+                  "Cannot specify both anisotropic and isotropic roughness\n");
+    if constexpr (u == TextureType::None)
+    {
+        return ProcessTexture<r>(iterator);
+    }
+    return ProcessTexture<u>(iterator);
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+
+#define MATERIAL_TEMPLATE_DECL(...)                                                           \
+    MATERIAL_TEMPLATE_DECL_HELPER(COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
+
+#define USE_ROUGHNESS_TMPL(...)    TextureType ur, TextureType vr, TextureType r
+#define USE_IOR_TMPL(...)          TextureType ior __VA_ARGS__
+#define USE_DISPLACEMENT_TMPL(...) TextureType disp __VA_ARGS__
+
+#define IIF(c, falseVal, ...) CONCAT(IF_, c)(falseVal, __VA_ARGS__)
+#define IF_0(falseVal, ...)   EXPAND(falseVal)
+#define IF_1(falseVal, ...)   __VA_ARGS__
+
+#define CHECK_HAS_COMMA(...)                            CHECK_HAS_COMMA_HELPER(__VA_ARGS__, 1, 1, 0)
+#define CHECK_HAS_COMMA_HELPER(_1, _2, _3, result, ...) result
+#define IS_EMPTY(...)                                   CHECK_HAS_COMMA(__VA_ARGS__)
+#define CHECK(x)                                        IS_EMPTY(CONCAT(x, _TMPL)(, ))
+
+#define TMPL_DECL(x) IIF(CHECK(x), TextureType x, CONCAT(x, _TMPL)())
+
+#define MATERIAL_TEMPLATE_DECL_HELPER(x, ...)                                                 \
+    EXPAND(CONCAT(RECURSE__, x)(TMPL_DECL, __VA_ARGS__))
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+
+#define MATERIAL_FUNC_DECL(...) MATERIAL_FUNC_DECL_HELPER(COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
+
+#define START_MATERIAL_SHADER(name, BxDFType, ...)                                            \
+    template <MATERIAL_TEMPLATE_DECL(__VA_ARGS__)>                                            \
+    void ShaderEvaluate_##name(AttributeTable *table)
+
+#define DEFINE_MATERIAL_SHADER(name, BxDFType, ...)                                           \
+    START_MATERIAL_SHADER(name, BxDFType, __VA_ARGS__)                                        \
+    {                                                                                         \
+        typedef BxDFType BxDF;                                                                \
+        AttributeIterator itr(table);                                                         \
+    }
+
+// template <TextureType ur, TextureType vr, TextureType r, TextureType eta, TextureType disp>
+// DielectricBxDF EvaluateDielectric(AttributeTable *mat)
+
+DEFINE_MATERIAL_SHADER(Dielectric, DielectricBxDF, //
+                       USE_ROUGHNESS,              //
+                       USE_IOR,                    //
+                       USE_DISPLACEMENT, foo)
+// {
+//     AttributeIterator itr(mat);
+//     f32 urResult = ProcessRoughness<ur, r>(&itr);
+//     f32 vrResult = ProcessRoughness<vr, r>(&itr);
+//
+//     auto etaResult  = ProcessTexture<eta>(&itr);
+//     auto dispResult = ProcessDisplacement<disp>(&itr);
+// }
+
+// Material CreateDielectricMaterial(TextureType ur, TextureType vr, TextureType r,
+//                                   TextureType eta, TextureType displacement)
+// {
+//
+//     u32 foo = CHECK(foo);
+//     if (ur == TextureType::None && vr == TextureType::None && r == TextureType::None &&
+//         eta == TextureType::ConstantFloat && displacement == TextureType::None)
+//     {
+//         Dielectric DielectricConstant
+//     }
+// }
+
+void CreateMaterials(Arena *arena, Tokenizer *tokenizer)
+{
+    u32 foo      = CHECK(USE_IOR);
+    Scene *scene = GetScene();
+    while (!Advance(tokenizer, "MATERIALS_END "))
+    {
+        // the fun begins :)
+        if (Advance(tokenizer, "dielectric "))
+        {
+            u32 isAnisotropic = 0;
+            TextureType ur    = TextureType::None;
+            TextureType vr    = TextureType::None;
+            TextureType r     = TextureType::None;
+            TextureType eta   = TextureType::None;
+            for (;;)
+            {
+                if (Advance(tokenizer, "ur "))
+                {
+                    Error(isAnisotropic != 1,
+                          "Cannot specify both roughness and anisotropic roughness\n");
+                    isAnisotropic = 2;
+                    ur            = GetTextureType(tokenizer);
+                }
+                else if (Advance(tokenizer, "vr "))
+                {
+                    Error(isAnisotropic != 1,
+                          "Cannot specify both roughness and anisotropic roughness\n");
+                    isAnisotropic = 2;
+                    vr            = GetTextureType(tokenizer);
+                }
+                else if (Advance(tokenizer, "r "))
+                {
+                    Error(isAnisotropic != 2,
+                          "Cannot specify both roughness and anisotropic roughness\n");
+                    isAnisotropic = 1;
+                    r             = GetTextureType(tokenizer);
+                }
+                else if (Advance(tokenizer, "eta "))
+                {
+                    eta = GetTextureType(tokenizer);
+                }
+                else
+                {
+                    break;
+                }
+            }
+            // Create appropriate texture
+            // Material *material = CreateDielectricMaterial(arena, Tokenizer * tokenizer);
+        }
+    }
+}
 
 void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                  string directory, string filename, Scheduler::Counter *c = 0,
@@ -251,9 +482,7 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
         }
         else if (Advance(&tokenizer, "MATERIALS_START"))
         {
-            while (!Advance(&tokenizer, "MATERIALS_END "))
-            {
-            }
+            // CreateMaterials(arena);
         }
         else
         {

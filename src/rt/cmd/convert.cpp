@@ -62,7 +62,9 @@ struct ShapeType
 {
     ScenePacket packet;
     u32 *transformIndex;
-    u32 *materialId;
+
+    MaterialHashNode *material;
+    // u32 *materialId;
 };
 
 struct InstanceType
@@ -74,8 +76,7 @@ struct InstanceType
 
 struct MaterialHashNode
 {
-    // TODO: I'm not checking for hash collisions.
-    StringId name;
+    string name;
     u32 id;
     u32 hash;
     string buffer;
@@ -88,6 +89,7 @@ static const StringId diffuseParameterIds[] = {
     "reflectance"_sid,
     "displacement"_sid,
 };
+
 static const string diffuseParameterNames[] = {
     "reflectance",
     "displacement",
@@ -633,8 +635,9 @@ struct IncludeMap
 };
 
 PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
-                       IncludeMap *includeMap, GraphicsState graphicsState = {},
-                       bool inWorldBegin = false, bool imported = false, bool write = true)
+                       IncludeMap *includeMap, MaterialHashNode **materialMap = 0,
+                       GraphicsState graphicsState = {}, bool inWorldBegin = false,
+                       bool imported = false, bool write = true)
 {
     enum class ScopeType
     {
@@ -659,6 +662,14 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
 
     PBRTFileInfo *state = PushStruct(threadArena, PBRTFileInfo);
     state->Init(ConvertPBRTToRTScene(threadArena, filename));
+
+    if (materialMap)
+    {
+        for (u32 i = 0; i < 1024; i++)
+        {
+            state->materialMap[i] = materialMap[i];
+        }
+    }
 
     Arena *tempArena = state->arena;
 
@@ -911,16 +922,16 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                     if (isImport)
                     {
                         scheduler.Schedule(&state->counter, [=](u32 jobID) {
-                            state->imports[index] =
-                                LoadPBRT(arenas, directory, copiedFilename, includeMap,
-                                         importedState, worldBegin, true, false);
+                            state->imports[index] = LoadPBRT(
+                                arenas, directory, copiedFilename, includeMap,
+                                state->materialMap, importedState, worldBegin, true, false);
                         });
                     }
                     else
                     {
-                        state->imports[index] =
-                            LoadPBRT(arenas, directory, copiedFilename, includeMap,
-                                     importedState, worldBegin, false, false);
+                        state->imports[index] = LoadPBRT(
+                            arenas, directory, copiedFilename, includeMap, state->materialMap,
+                            importedState, worldBegin, false, false);
                     }
                 }
                 else
@@ -940,7 +951,6 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                 }
             }
             break;
-                break;
             case "LookAt"_sid:
             {
                 currentGraphicsState.transformIndex = transforms->Length();
@@ -977,6 +987,12 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                 b32 result = GetBetweenPair(materialNameOrType, &tokenizer, '"');
                 Assert(result);
 
+                if (!isNamedMaterial)
+                {
+                    materialNameOrType =
+                        StrConcat(temp.arena, materialNameOrType,
+                                  PathSkipLastSlash(RemoveFileExtension(state->filename)));
+                }
                 ScenePacket *packet = PushStruct(tempArena, ScenePacket);
                 packet->type        = Hash(materialNameOrType);
                 PBRTSkipToNextChar(&tokenizer);
