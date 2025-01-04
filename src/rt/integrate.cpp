@@ -815,7 +815,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         BSDFSample sample = bsdf.GenerateSample(-ray.d, u, sampler.Get2D());
         if (sample.pdf == 0.f) break;
         // beta *= sample.f / sample.pdf;
-        beta *= sample.f * AbsDot(si.shading.n, sample.wi) / sample.pdf;
+        // beta *= sample.f * AbsDot(si.shading.n, sample.wi) / sample.pdf;
         bsdfPdf        = sample.pdf;
         specularBounce = sample.IsSpecular();
         if (sample.IsTransmissive()) etaScale *= Sqr(sample.eta);

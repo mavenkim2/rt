@@ -517,25 +517,26 @@ struct Material2
     static void Evaluate(Arena *arena, SurfaceInteractionsN &intr, SampledWavelengthsN &lambda,
                          BSDFBase<BxDFOut> *result)
     {
-        BxDFShader *bxdfs[IntN];
-        const NormalShader *normalShaders[IntN];
-
-        using MaterialType = Material2<BxDFShader, NormalShader>;
-        auto *materials    = GetScene()->materials.Get<MaterialType>();
-        for (u32 i = 0; i < IntN; i++)
-        {
-            MaterialHandle handle = Get(intr.materialIDs, i);
-            u32 index             = handle.GetIndex();
-            Assert(index < GetScene()->materials.GetCount<MaterialType>());
-            auto &material   = materials[index];
-            bxdfs[i]         = &material.bxdfShader;
-            normalShaders[i] = &material.normalShader;
-        }
+        Assert(0);
+        // BxDFShader *bxdfs[IntN];
+        // const NormalShader *normalShaders[IntN];
+        //
+        // using MaterialType = Material2<BxDFShader, NormalShader>;
+        // // void *materials    = GetScene()->materials.Get<MaterialType>();
+        // for (u32 i = 0; i < IntN; i++)
+        // {
+        //     MaterialHandle handle = Get(intr.materialIDs, i);
+        //     u32 index             = handle.GetIndex();
+        //     Assert(index < GetScene()->materials.GetCount<MaterialType>());
+        //     auto &material   = materials[index];
+        //     bxdfs[i]         = &material.bxdfShader;
+        //     normalShaders[i] = &material.normalShader;
+        // }
         // auto bxdf = BxDFShader::GetBxDF(intr, bxdfs);
         BxDF *bxdf = PushStruct(arena, BxDF);
-        Vec4lfn filterWidths(zero);
-        *bxdf = BxDFShader::GetBxDF(intr, bxdfs, filterWidths, lambda);
-        NormalShader::Evaluate(intr, filterWidths, normalShaders);
+        // Vec4lfn filterWidths(zero);
+        // *bxdf = BxDFShader::GetBxDF(intr, bxdfs, filterWidths, lambda);
+        // NormalShader::Evaluate(intr, filterWidths, normalShaders);
 
         new (result) BSDFBase<BxDFOut>(bxdf, intr.shading.dpdu, intr.shading.n);
     }

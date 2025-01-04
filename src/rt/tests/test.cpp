@@ -706,10 +706,10 @@ void WhiteFurnaceTest(Arena *arena, Options *options = 0)
     // MSDielectricMaterial1 mat(MSDielectricMaterial(0.3f, 0.3f, 1.2f), NullShader());
     // scene->materials.Set<MSDielectricMaterial1>(&mat, 1);
 
-    ConstantTexture ct(0.3f);
-    ConstantSpectrum spec(1.2f);
-    DielectricMaterialBase dielMat(DielectricMaterialConstant(ct, spec), NullShader());
-    scene->materials.Set<DielectricMaterialBase>(&dielMat, 1);
+    // ConstantTexture ct(0.3f);
+    // ConstantSpectrum spec(1.2f);
+    // DielectricMaterialBase dielMat(DielectricMaterialConstant(ct, spec), NullShader());
+    // scene->materials.Set<DielectricMaterialBase>(&dielMat, 1);
 
     PrimitiveIndices *ids = PushStructConstruct(arena, PrimitiveIndices)(
         LightHandle(), MaterialHandle(MaterialType::DielectricMaterialBase, 0));
@@ -860,8 +860,8 @@ void TestRender(Arena *arena, Options *options = 0)
     // DielectricMaterialBase dielMat(DielectricMaterialConstant(ct, spec), NullShader());
     // scene->materials.Set<DielectricMaterialBase>(&dielMat, 1);
 
-    MSDielectricMaterial1 mat(MSDielectricMaterial(0.3f, 0.3f, 1.2f), NullShader());
-    scene->materials.Set<MSDielectricMaterial1>(&mat, 1);
+    // MSDielectricMaterial1 mat(MSDielectricMaterial(0.3f, 0.3f, 1.2f), NullShader());
+    // scene->materials.Set<MSDielectricMaterial1>(&mat, 1);
 
 #if 0
     CoatedDiffuseMaterial2 mat(

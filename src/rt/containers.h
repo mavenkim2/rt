@@ -833,6 +833,16 @@ struct ChunkedLinkedList
             ptr += node->count;
         }
     }
+    inline void Flatten(StaticArray<T> &array)
+    {
+        u32 runningCount = 0;
+        for (ChunkNode *node = first; node != 0; node = node->next)
+        {
+            Assert(runningCount + node->count < (u32)array.capacity);
+            MemoryCopy(array.data + runningCount, node->values, node->count * sizeof(T));
+            runningCount += node->count;
+        }
+    }
     inline void Merge(ChunkedLinkedList<T, numPerChunk, memoryTag> *list)
     {
         if (list->totalCount)

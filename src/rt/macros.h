@@ -17,6 +17,14 @@
 #define RECURSE__6(macro, first, ...) macro(first), EXPAND(RECURSE__5(macro, __VA_ARGS__))
 #define RECURSE__7(macro, first, ...) macro(first), EXPAND(RECURSE__6(macro, __VA_ARGS__))
 
+#define RECURSE2_1(macro, first)      macro(first, 0)
+#define RECURSE2_2(macro, first, ...) macro(first, 1) EXPAND(RECURSE2_1(macro, __VA_ARGS__))
+#define RECURSE2_3(macro, first, ...) macro(first, 1) EXPAND(RECURSE2_2(macro, __VA_ARGS__))
+#define RECURSE2_4(macro, first, ...) macro(first, 1) EXPAND(RECURSE2_3(macro, __VA_ARGS__))
+#define RECURSE2_5(macro, first, ...) macro(first, 1) EXPAND(RECURSE2_4(macro, __VA_ARGS__))
+#define RECURSE2_6(macro, first, ...) macro(first, 1) EXPAND(RECURSE2_5(macro, __VA_ARGS__))
+#define RECURSE2_7(macro, first, ...) macro(first, 1) EXPAND(RECURSE2_6(macro, __VA_ARGS__))
+
 #define EXPAND(x)    x
 #define CONCAT(a, b) a##b
 
@@ -30,4 +38,8 @@
 #define COUNT_ARGS(...)                                                                       \
     EXPAND(COUNT_ARGS_IMPL(__VA_ARGS__, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7,  \
                            6, 5, 4, 3, 2, 1))
+
+#define BOOL_ARGS(...)                                                                        \
+    EXPAND(COUNT_ARGS_IMPL(__VA_ARGS__, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, \
+                           1, 0))
 #endif
