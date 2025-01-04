@@ -2,6 +2,7 @@
 #define RT_H
 
 #include "base.h"
+#include "macros.h"
 #include "template.h"
 #include "math/basemath.h"
 #include "math/simd_include.h"

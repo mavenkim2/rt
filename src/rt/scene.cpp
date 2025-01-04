@@ -1,5 +1,6 @@
 #include "scene.h"
 #include "bvh/bvh_types.h"
+#include "macros.h"
 #include "integrate.h"
 namespace rt
 {
@@ -135,12 +136,9 @@ f32 ProcessRoughness(AttributeIterator *iterator)
 
 //////////////////////////////////////////////////////////////////////////////////////////////
 
-#define MATERIAL_TEMPLATE_DECL(...)                                                           \
-    MATERIAL_TEMPLATE_DECL_HELPER(COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
-
-#define USE_ROUGHNESS_TMPL(...)    TextureType ur, TextureType vr, TextureType r
-#define USE_IOR_TMPL(...)          TextureType ior __VA_ARGS__
-#define USE_DISPLACEMENT_TMPL(...) TextureType disp __VA_ARGS__
+#define ROUGHNESS_TMPL(...)    TextureType ur, TextureType vr, TextureType r
+#define IOR_TMPL(...)          Spectrum ior __VA_ARGS__
+#define DISPLACEMENT_TMPL(...) TextureType disp __VA_ARGS__
 
 #define IIF(c, falseVal, ...) CONCAT(IF_, c)(falseVal, __VA_ARGS__)
 #define IF_0(falseVal, ...)   EXPAND(falseVal)
@@ -149,16 +147,52 @@ f32 ProcessRoughness(AttributeIterator *iterator)
 #define CHECK_HAS_COMMA(...)                            CHECK_HAS_COMMA_HELPER(__VA_ARGS__, 1, 1, 0)
 #define CHECK_HAS_COMMA_HELPER(_1, _2, _3, result, ...) result
 #define IS_EMPTY(...)                                   CHECK_HAS_COMMA(__VA_ARGS__)
-#define CHECK(x)                                        IS_EMPTY(CONCAT(x, _TMPL)(, ))
+#define CHECK_TMPL(x)                                   IS_EMPTY(CONCAT(x, _TMPL)(, ))
 
-#define TMPL_DECL(x) IIF(CHECK(x), TextureType x, CONCAT(x, _TMPL)())
+#define TMPL_DECL(x) IIF(CHECK_TMPL(x), TextureType x, CONCAT(x, _TMPL)())
 
 #define MATERIAL_TEMPLATE_DECL_HELPER(x, ...)                                                 \
     EXPAND(CONCAT(RECURSE__, x)(TMPL_DECL, __VA_ARGS__))
+#define MATERIAL_TEMPLATE_DECL(...)                                                           \
+    MATERIAL_TEMPLATE_DECL_HELPER(COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
 
 //////////////////////////////////////////////////////////////////////////////////////////////
 
-#define MATERIAL_FUNC_DECL(...) MATERIAL_FUNC_DECL_HELPER(COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
+#define SHADER_PARAMETER_FUNC_ROUGHNESS(...)                                                  \
+    f32 uRoughness;                                                                           \
+    f32 vRoughness;                                                                           \
+    if constexpr (r == TextureType::None)                                                     \
+    {                                                                                         \
+        uRoughness = ProcessTexture<r>(&itr);                                                 \
+        uRoughness = Sqr(uRoughness);                                                         \
+        vRoughness = uRoughness;                                                              \
+    }                                                                                         \
+    else                                                                                      \
+    {                                                                                         \
+        uRoughness = Sqr(ProcessTexture<ur>(&itr));                                           \
+        vRoughness = Sqr(ProcessTexture<vr>(&itr));                                           \
+    }                                                                                         \
+    __VA_ARGS__
+
+#define SHADER_PARAMETER_FUNC_IOR(...)                                                        \
+    if constexpr (!std::is_same_v<Spectrum, ConstantSpectrum>)                                \
+    {                                                                                         \
+        lambda.TerminateSecondary();                                                          \
+    }                                                                                         \
+    f32 eta = ProcessIOR<ior>(&itr);                                                          \
+    __VA_ARGS__
+
+#define SHADER_PARAMETER_FUNC_DISPLACEMENT(...)
+
+#define DEFAULT_SHADER_PARAMETER_FUNC(x) auto x##_var = ProcessTexture<x>(&itr);
+
+#define CHECK_FUNC(x) IS_EMPTY(CONCAT(SHADER_PARAMETER_FUNC_, x)(, ))
+
+#define FUNC_DECL(x)                                                                          \
+    IIF(CHECK_FUNC(x), DEFAULT_SHADER_PARAMETER_FUNC(x), SHADER_PARAMETER_FUNC_##x())
+
+#define MATERIAL_FUNC_DECL_HELPER(x, ...) EXPAND(CONCAT(RECURSE_, x)(FUNC_DECL, __VA_ARGS__))
+#define MATERIAL_FUNC_DECL(...)           MATERIAL_FUNC_DECL_HELPER(COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
 
 #define START_MATERIAL_SHADER(name, BxDFType, ...)                                            \
     template <MATERIAL_TEMPLATE_DECL(__VA_ARGS__)>                                            \
@@ -169,15 +203,14 @@ f32 ProcessRoughness(AttributeIterator *iterator)
     {                                                                                         \
         typedef BxDFType BxDF;                                                                \
         AttributeIterator itr(table);                                                         \
+        MATERIAL_FUNC_DECL(__VA_ARGS__);                                                      \
     }
 
-// template <TextureType ur, TextureType vr, TextureType r, TextureType eta, TextureType disp>
-// DielectricBxDF EvaluateDielectric(AttributeTable *mat)
-
 DEFINE_MATERIAL_SHADER(Dielectric, DielectricBxDF, //
-                       USE_ROUGHNESS,              //
-                       USE_IOR,                    //
-                       USE_DISPLACEMENT, foo)
+                       ROUGHNESS,                  //
+                       IOR,                        //
+                       DISPLACEMENT)
+
 // {
 //     AttributeIterator itr(mat);
 //     f32 urResult = ProcessRoughness<ur, r>(&itr);
@@ -201,7 +234,6 @@ DEFINE_MATERIAL_SHADER(Dielectric, DielectricBxDF, //
 
 void CreateMaterials(Arena *arena, Tokenizer *tokenizer)
 {
-    u32 foo      = CHECK(USE_IOR);
     Scene *scene = GetScene();
     while (!Advance(tokenizer, "MATERIALS_END "))
     {
