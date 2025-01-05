@@ -1,4 +1,5 @@
 #include "../base.h"
+#include "../macros.h"
 #include "../template.h"
 #include "../math/basemath.h"
 #include "../math/simd_include.h"
@@ -63,8 +64,7 @@ struct ShapeType
     ScenePacket packet;
     u32 *transformIndex;
 
-    MaterialHashNode *material;
-    // u32 *materialId;
+    struct MaterialPacket *material;
 };
 
 struct InstanceType
@@ -74,15 +74,51 @@ struct InstanceType
     u32 transformIndexEnd;
 };
 
+enum class MaterialTypes
+{
+    Diffuse,
+    DiffuseTransmission,
+    CoatedDiffuse,
+    Dielectric,
+    Max,
+};
+
+struct MaterialID
+{
+    MaterialTypes type;
+    u32 index;
+};
+
 struct MaterialHashNode
 {
-    string name;
-    u32 id;
+    // StringId name;
     u32 hash;
     string buffer;
-    ScenePacket *packet;
+    struct MaterialPacket *packet;
 
     MaterialHashNode *next;
+};
+
+struct MaterialPacket
+{
+    ScenePacket packet;
+    MaterialID id;
+};
+
+// Tables
+
+static const string materialTypeNames[] = {
+    "diffuse",
+    "diffusetransmission",
+    "coateddiffuse",
+    "dielectric",
+};
+
+static const StringId materialTypeIDs[] = {
+    "diffuse"_sid,
+    "diffusetransmission"_sid,
+    "coateddiffuse"_sid,
+    "dielectric"_sid,
 };
 
 static const StringId diffuseParameterIds[] = {
@@ -126,9 +162,115 @@ const string coatedDiffuseNames[] = {
     "albedo",    "g",          "maxdepth",   "nsamples",       "thickness",
 };
 
-void CheckDuplicateMaterial(Arena *arena, ScenePacket *packet, MaterialHashNode **map,
-                            u32 hashMask, string materialType, const StringId *parameterNames,
-                            u32 count, u32 &materialTotalCount, u32 **id, bool addBack = true)
+static const StringId *materialParameterIDs[]   = {diffuseParameterIds, diffuseTransmissionIds,
+                                                   coatedDiffuseIds, dielectricIds};
+static const StringId materialParameterCounts[] = {
+    ArrayLength(diffuseParameterIds), ArrayLength(diffuseTransmissionIds),
+    ArrayLength(coatedDiffuseIds), ArrayLength(dielectricIds)};
+};
+
+static const string *materialParameterNames[] = {
+    diffuseParameterNames, diffuseTransmissionNames, coatedDiffuseNames, dielectricNames};
+
+typedef StaticArray<MaterialHashNode *> MaterialHashMap;
+
+struct PBRTFileInfo
+{
+    enum Type
+    {
+        Film,
+        Camera,
+        Sampler,
+        Integrator,
+        Accelerator,
+        MAX,
+    };
+    Arena *arena;
+    string filename;
+    ScenePacket packets[MAX] = {};
+    ChunkedLinkedList<ShapeType, 1024, MemoryType_Shape> shapes;
+    // ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape> shapes;
+    // ChunkedLinkedList<ScenePacket, 1024, MemoryType_Material> materials;
+    ChunkedLinkedList<ScenePacket, 1024, MemoryType_Texture> textures;
+    ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light> lights;
+
+    // Materials
+    ChunkedLinkedList<MaterialPacket, 1024, MemoryType_Material> materials;
+    MaterialHashMap *materialMap;
+    MaterialHashMap *materialNameMap;
+    u32 materialTypeCounts[(u32)MaterialTypes::Max];
+    const u32 materialMapSize  = 1024;
+    const u32 materialHashMask = materialMapSize - 1;
+
+    ChunkedLinkedList<InstanceType, 1024, MemoryType_Instance> fileInstances;
+    u32 numInstances;
+
+    ChunkedLinkedList<AffineSpace, 16384, MemoryType_Transform> transforms;
+
+    PBRTFileInfo *imports[32];
+    u32 numImports;
+    Scheduler::Counter counter = {};
+
+    void Init(string inFilename)
+    {
+        arena    = ArenaAlloc(8);
+        filename = PushStr8Copy(arena, inFilename);
+        shapes   = decltype(shapes)(arena);
+        // materials = decltype(materials)(arena);
+        textures = decltype(textures)(arena);
+        lights   = decltype(lights)(arena);
+
+        fileInstances = decltype(fileInstances)(arena);
+
+        materialMap     = 0;
+        materialNameMap = 0;
+
+        transforms   = decltype(transforms)(arena);
+        numInstances = 0;
+    }
+
+    void Merge(PBRTFileInfo *import, bool parallel = false)
+    {
+        if (parallel)
+        {
+            for (auto *node = import->materials.first; node != 0; node = node->next)
+            {
+                for (u32 j = 0; j < node->count; j++)
+                {
+                    MaterialPacket &mat = node->values[j];
+                    mat.id.index += materialTypeCounts[(u32)matID.type];
+                }
+            }
+            materials.Merge(&import->materials);
+        }
+
+        numInstances += import->numInstances;
+        shapes.Merge(&import->shapes);
+        u32 transformOffset = transforms.totalCount;
+
+        for (auto *node = import->fileInstances.first; node != 0; node = node->next)
+        {
+            for (u32 j = 0; j < node->count; j++)
+            {
+                InstanceType *instance = &node->values[j];
+                instance->transformIndexStart += transformOffset;
+                instance->transformIndexEnd += transformOffset;
+            }
+        }
+
+        for (u32 i = 0; i < MaterialTypes::Count; i++)
+        {
+            materialTypeCounts[i] += import->materialTypeCounts[i];
+        }
+
+        fileInstances.Merge(&import->fileInstances);
+        transforms.Merge(&import->transforms);
+    }
+};
+
+void CheckDuplicateMaterial(Arena *arena, PBRTFileInfo *info, ScenePacket *packet,
+                            string materialType, const StringId *parameterNames, u32 count,
+                            MaterialID *&id)
 {
     TempArena temp = ScratchStart(&arena, 1);
 
@@ -161,8 +303,9 @@ void CheckDuplicateMaterial(Arena *arena, ScenePacket *packet, MaterialHashNode 
     }
     u64 hash = MurmurHash64A(buffer, totalSize, 0);
 
-    MaterialHashNode *node     = map[hash & hashMask];
-    MaterialHashNode **nodePtr = &node;
+    MaterialHashMap &map   = *info->materialMap;
+    u32 hashMask           = info->materialHashMask;
+    MaterialHashNode *node = map[hash & hashMask];
     while (node)
     {
         if (node->hash == hash && node->buffer.size == totalSize)
@@ -174,114 +317,83 @@ void CheckDuplicateMaterial(Arena *arena, ScenePacket *packet, MaterialHashNode 
                 return;
             }
         }
-        nodePtr = &node->next;
-        node    = node->next;
+        node = node->next;
     }
     if (!node)
     {
+        MaterialPacket &mat = info->materials.AddBack();
+        MaterialType type   = GetMaterialTypeFromStringID(packet->type);
+        mat.packet          = *packet;
+        mat.id              = {type, info->materialTypeCounts[(u32)type]++};
+
         MaterialHashNode *newNode = PushStruct(arena, MaterialHashNode);
-        newNode->name             = packet->type;
-        newNode->id               = materialTotalCount++;
         newNode->hash             = hash;
         newNode->buffer.str       = PushArrayNoZero(arena, u8, totalSize);
         newNode->buffer.size      = totalSize;
         MemoryCopy(newNode->buffer.str, buffer, totalSize);
-        *id = &newNode->id;
+        newNode->packet = &mat;
 
-        if (addBack)
-        {
-            *nodePtr = newNode;
-        }
-        else
-        {
-            newNode->next        = map[hash & hashMask];
-            map[hash & hashMask] = newNode;
-        }
+        // add to front
+        newNode->next        = map[hash & hashMask];
+        map[hash & hashMask] = newNode;
     }
     ScratchEnd(temp);
 }
 
-u32 *GetMaterialId(MaterialHashNode **map, u32 hashMask, string materialName)
+void AddToNamedMap(Arena *arena, PBRTFileInfo *info, string name, MaterialPacket *packet)
 {
-    StringId name = Hash(materialName);
+    u32 hash = Hash(type);
+
+    MaterialHashMap &map = *info->materialNameMap;
+    u32 hashMask         = info->materialHashMask;
+
+    MaterialHashNode *node = map[hash & hashMask];
+    while (node)
+    {
+        if (node->hash == hash && name == node->buffer)
+        {
+            Error(0, "Cannot reuse the same name for different materials.\n");
+            return;
+        }
+        node = node->next;
+    }
+    if (!node)
+    {
+        MaterialHashNode *newNode = PushStruct(arena, MaterialHashNode);
+        newNode->hash             = hash;
+        newNode->buffer           = PushStr8Copy(arena, name);
+        newNode->packet           = packet;
+
+        newNode->next        = map[hash & hashMask];
+        map[hash & hashMask] = newNode;
+    }
 }
 
-struct PBRTFileInfo
+MaterialPacket *GetFromNamedMap(PBRTFileInfo *info, string name)
 {
-    enum Type
+    u32 hash = Hash(type);
+
+    MaterialHashMap &map = *info->materialNameMap;
+    u32 hashMask         = info->materialHashMask;
+
+    MaterialHashNode *node = map[hash & hashMask];
+    while (node)
     {
-        Film,
-        Camera,
-        Sampler,
-        Integrator,
-        Accelerator,
-        MAX,
-    };
-    Arena *arena;
-    string filename;
-    ScenePacket packets[MAX] = {};
-    ChunkedLinkedList<ShapeType, 1024, MemoryType_Shape> shapes;
-    // ChunkedLinkedList<ScenePacket, 1024, MemoryType_Shape> shapes;
-    ChunkedLinkedList<ScenePacket, 1024, MemoryType_Material> materials;
-    ChunkedLinkedList<ScenePacket, 1024, MemoryType_Texture> textures;
-    ChunkedLinkedList<ScenePacket, 1024, MemoryType_Light> lights;
-
-    MaterialHashNode **materialMap;
-    u32 materialHashMask;
-    u32 materialTotalCount;
-
-    ChunkedLinkedList<InstanceType, 1024, MemoryType_Instance> fileInstances;
-    u32 numInstances;
-
-    ChunkedLinkedList<AffineSpace, 16384, MemoryType_Transform> transforms;
-
-    PBRTFileInfo *imports[32];
-    u32 numImports;
-    Scheduler::Counter counter = {};
-
-    void Init(string inFilename)
-    {
-        arena    = ArenaAlloc(8);
-        filename = PushStr8Copy(arena, inFilename);
-        shapes   = decltype(shapes)(arena);
-        // materials = decltype(materials)(arena);
-        textures = decltype(textures)(arena);
-        lights   = decltype(lights)(arena);
-
-        fileInstances = decltype(fileInstances)(arena);
-
-        materialMap        = PushArray(arena, MaterialHashNode *, 1024);
-        materialHashMask   = 1023;
-        materialTotalCount = 0;
-
-        transforms   = decltype(transforms)(arena);
-        numInstances = 0;
-    }
-    void Merge(PBRTFileInfo *import)
-    {
-        numInstances += import->numInstances;
-        shapes.Merge(&import->shapes);
-        u32 transformOffset = transforms.totalCount;
-
-        for (auto *node = import->fileInstances.first; node != 0; node = node->next)
+        if (node->hash == hash && name == node->buffer)
         {
-            for (u32 j = 0; j < node->count; j++)
-            {
-                InstanceType *instance = &node->values[j];
-                instance->transformIndexStart += transformOffset;
-                instance->transformIndexEnd += transformOffset;
-            }
+            return node->packet;
         }
-        fileInstances.Merge(&import->fileInstances);
-        transforms.Merge(&import->transforms);
+        node = node->next;
     }
-};
+    Error(0, "Material with specified name not defined\n");
+    return;
+}
 
 struct GraphicsState
 {
     // StringId materialId = 0;
     // i32 materialIndex   = -1;
-    u32 *materialId = 0;
+    MaterialPacket *materialPacket = 0;
     // Mat4 transform      = Mat4::Identity();
     AffineSpace transform = AffineSpace::Identity();
 
@@ -635,9 +747,9 @@ struct IncludeMap
 };
 
 PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
-                       IncludeMap *includeMap, MaterialHashNode **materialMap = 0,
-                       GraphicsState graphicsState = {}, bool inWorldBegin = false,
-                       bool imported = false, bool write = true)
+                       IncludeMap *includeMap, MaterialHashMap *materialMap = 0,
+                       MaterialHashMap *materialNameMap = 0, GraphicsState graphicsState = {},
+                       bool inWorldBegin = false, bool imported = false, bool write = true)
 {
     enum class ScopeType
     {
@@ -665,10 +777,9 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
 
     if (materialMap)
     {
-        for (u32 i = 0; i < 1024; i++)
-        {
-            state->materialMap[i] = materialMap[i];
-        }
+        Assert(materialNameMap);
+        state->materialMap     = materialMap;
+        state->materialNameMap = materialNameMap;
     }
 
     Arena *tempArena = state->arena;
@@ -682,8 +793,7 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
     bool worldBegin = inWorldBegin;
     bool writeFile  = write;
 
-    PBRTFileInfo *fileInfoStack[32];
-    u32 numFileInfoStackEntries = 0;
+    PBRTFileInfo *tempStateHolder = 0;
 
     GraphicsState graphicsStateStack[64];
     u32 graphicsStateCount = 0;
@@ -707,6 +817,13 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
         tempArena  = state->arena;
     };
 
+    auto CopyMaterialMap = [&](Arena *arena, MaterialHashMap &map) -> MaterialHashMap * {
+        MaterialHashMap *newMap =
+            PushStructConstruct(arena, MaterialHashMap)(arena, state->materialMapSize);
+        Copy(*newMap, map);
+        return newMap;
+    };
+
     // TODO: media
     for (;;)
     {
@@ -719,7 +836,7 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
 
             for (u32 i = 0; i < state->numImports; i++)
             {
-                state->Merge(state->imports[i]);
+                state->Merge(state->imports[i], imported);
             }
             if (writeFile)
             {
@@ -915,39 +1032,27 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                 importedState.transform      = AffineSpace::Identity();
                 importedState.transformIndex = -1;
 
-                if (!checkFileInstance)
+                u32 index = state->numImports + checkFileInstance;
+                if (isImport)
                 {
-                    u32 index = state->numImports++;
+                    MaterialHashMap *map = CopyMaterialMap(tempArena, state->materialMap);
+                    MaterialHashMap *namedMap =
+                        CopyMaterialMap(tempArena, state->materialNameMap);
 
-                    if (isImport)
-                    {
-                        scheduler.Schedule(&state->counter, [=](u32 jobID) {
-                            state->imports[index] = LoadPBRT(
-                                arenas, directory, copiedFilename, includeMap,
-                                state->materialMap, importedState, worldBegin, true, false);
-                        });
-                    }
-                    else
-                    {
-                        state->imports[index] = LoadPBRT(
-                            arenas, directory, copiedFilename, includeMap, state->materialMap,
-                            importedState, worldBegin, false, false);
-                    }
+                    scheduler.Schedule(&state->counter, [=](u32 jobID) {
+                        PBRTFileInfo *state = LoadPBRT(
+                            arenas, directory, copiedFilename, includeMap, map, namedMap,
+                            importedState, worldBegin, true, checkFileInstance);
+                        if (!checkFileInstance) state->imports[index] = state;
+                    });
                 }
                 else
                 {
-                    if (isImport)
-                    {
-                        scheduler.Schedule(&state->counter, [=](u32 jobID) {
-                            LoadPBRT(arenas, directory, copiedFilename, includeMap,
-                                     importedState, worldBegin, true, true);
-                        });
-                    }
-                    else
-                    {
-                        LoadPBRT(arenas, directory, copiedFilename, includeMap, importedState,
-                                 worldBegin, false, true);
-                    }
+                    PBRTFileInfo *state =
+                        LoadPBRT(arenas, directory, copiedFilename, includeMap,
+                                 state->materialMap, state->materialNameMap, importedState,
+                                 worldBegin, false, checkFileInstance);
+                    if (!checkFileInstance) state->imports[index] = state;
                 }
             }
             break;
@@ -982,17 +1087,19 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
             case "Material"_sid:
             case "MakeNamedMaterial"_sid:
             {
+                if (state->materialMap == 0)
+                    state->materialMap = PushStructConstruct(tempArena, MaterialHashMap)(
+                        arena, state->materialMapSize);
+
+                if (isNamedMaterial && state->materialNameMap == 0)
+                    state->materialNameMap = PushStructConstruct(tempArena, MaterialHashMap)(
+                        arena, state->materialMapSize);
+
                 bool isNamedMaterial = (sid == "MakeNamedMaterial"_sid);
                 string materialNameOrType;
                 b32 result = GetBetweenPair(materialNameOrType, &tokenizer, '"');
                 Assert(result);
 
-                if (!isNamedMaterial)
-                {
-                    materialNameOrType =
-                        StrConcat(temp.arena, materialNameOrType,
-                                  PathSkipLastSlash(RemoveFileExtension(state->filename)));
-                }
                 ScenePacket *packet = PushStruct(tempArena, ScenePacket);
                 packet->type        = Hash(materialNameOrType);
                 PBRTSkipToNextChar(&tokenizer);
@@ -1000,49 +1107,29 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
 
                 // u32 materialIndex = materials->Length();
 
-                u32 *id;
-                bool addBack = !imported;
-                switch (packet->type)
-                {
-                    case "diffuse"_sid:
-                    {
-                        CheckDuplicateMaterial(
-                            tempArena, packet, state->materialMap, state->materialMask,
-                            "diffuse", diffuseParameterIds, ArrayLength(diffuseParameterIds),
-                            state->materialTotalCount, &id, addBack);
-                    };
-                    break;
-                    case "diffusetransmission"_sid:
-                    {
-                        CheckDuplicateMaterial(tempArena, packet, state->materialMap,
-                                               state->materialMask, "diffusetransmission",
-                                               diffuseTransmissionIds,
-                                               ArrayLength(diffuseTransmissionIds),
-                                               state->materialTotalCount, &id, addBack);
-                    }
-                    break;
-                    case "coateddiffuse"_sid:
-                    {
-                        CheckDuplicateMaterial(tempArena, packet, state->materialMap,
-                                               state->materialMask, "coateddiffuse",
-                                               coatedDiffuseIds, ArrayLength(coatedDiffuseIds),
-                                               state->materialTotalCount, &id, addBack);
-                    }
-                    break;
-                    case "dielectric"_sid:
-                    {
-                        CheckDuplicateMaterial(tempArena, packet, state->materialMap,
-                                               state->materialMask, "dielectric",
-                                               dielectricIds, ArrayLength(dielectricIds),
-                                               state->materialTotalCount, &id, addBack);
-                    }
-                    break;
-                    default: Error(0, "Material type not supported.\n");
-                }
+                MaterialPacket *packet;
 
+                bool found = false;
+                for (u32 i = 0; i < (u32)MaterialTypes::Max; i++)
+                {
+                    if (packet->type == materialTypesIDs[i])
+                    {
+                        CheckDuplicateMaterial(tempArena, state, packet, materialTypeNames[i],
+                                               materialParameterIds[i],
+                                               materialParameterCounts[i], packet);
+                        found = true;
+                        break;
+                    }
+                }
+                Error(found, "Material type is unknown/not supported.\n");
+
+                if (isNamedMaterial)
+                {
+                    AddToNamedMap(tempArena, state, materialNameOrType, packet);
+                }
                 if (!isNamedMaterial)
                 {
-                    currentGraphicsState.materialId = id;
+                    currentGraphicsState.materialPacket = packet;
                 }
             }
             break;
@@ -1059,8 +1146,7 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                 b32 result = GetBetweenPair(materialName, &tokenizer, '"');
                 Assert(result);
 
-                currentGraphicsState.materialId =
-                    GetMaterialId(state->materialMap, state->materialHashMask, materialName);
+                currentGraphicsState.materialPacket = GetFromNamedMap(state, materialName);
             }
             break;
             case "ObjectBegin"_sid:
@@ -1083,8 +1169,8 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
 
                 newState->Init(objectFileName);
 
-                Assert(numFileInfoStackEntries < ArrayLength(fileInfoStack));
-                fileInfoStack[numFileInfoStackEntries++] = state;
+                Assert(tempStateHolder == 0);
+                tempStateHolder = state;
 
                 SetNewState(newState);
                 AddTransform();
@@ -1099,14 +1185,18 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                       "Unmatched AttributeEnd statement. Aborting...\n");
 
                 scheduler.Wait(&state->counter);
-                for (u32 i = 0; i < state->numImports; i++) state->Merge(state->imports[i]);
+                for (u32 i = 0; i < state->numImports; i++)
+                {
+                    state->Merge(state->imports[i]);
+                }
                 WriteFile(directory, state);
                 ArenaRelease(state->arena);
                 for (u32 i = 0; i < state->numImports; i++)
                     ArenaRelease(state->imports[i]->arena);
-                Assert(numFileInfoStackEntries > 0);
-                PBRTFileInfo *oldState = state;
-                SetNewState(fileInfoStack[--numFileInfoStackEntries]);
+
+                Assert(tempStateHolder);
+                SetNewState(tempStateHolder);
+                tempStateHolder = 0;
             }
             break;
             case "ObjectInstance"_sid:
@@ -1222,7 +1312,7 @@ PBRTFileInfo *LoadPBRT(Arena **arenas, string directory, string filename,
                     packet->type = "quadmesh"_sid;
                 }
 
-                shape.materialId = currentGraphicsState.materialId;
+                shape.material = currentGraphicsState.materialPacket;
 
 #if 0
                 i32 *indices = PushArray(tempArena, i32, 4);

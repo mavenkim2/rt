@@ -121,6 +121,14 @@ struct StaticArray
     T *data;
 };
 
+template <typename T>
+void Copy(StaticArray<T> &to, StaticArray<T> &from)
+{
+    Assert(to.capacity >= from.capacity && to.capacity >= from.size);
+    MemoryCopy(to.data, from.data, sizeof(T) * from.size);
+    to.size = from.size;
+}
+
 template <typename T, u32 capacity>
 struct FixedArray
 {

@@ -466,7 +466,6 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
 
     // TODO:
     // - add area lights (making sure they cannot be intersected, but are sampled properly)
-    // - verify all code paths in partial rebraiding (i.e. more instances)
     // - render the diffuse transmission materials properly
     // - load the scene description and properly instantiate lights/materials/textures
 

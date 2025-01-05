@@ -85,6 +85,8 @@ f32 ProcessIOR(AttributeIterator *iterator)
     return 1.5f;
 }
 
+// TODO: instead of this junk I should just create a preprocessor (i.e. write a text file
+// that is code)
 //////////////////////////////////////////////////////////////////////////////////////////////
 
 #define ROUGHNESS_TMPL(...)    TextureType ur, TextureType vr, TextureType r
@@ -96,15 +98,10 @@ f32 ProcessIOR(AttributeIterator *iterator)
 #define IF_0(falseVal, ...)   falseVal
 #define IF_1(falseVal, ...)   __VA_ARGS__
 
-// NOTE: this doesn't work on MSVC
-// #define CHECK_HAS_COMMA(...)                            CHECK_HAS_COMMA_HELPER(__VA_ARGS__,
-// 1, 1, 0)
-
-#define CHECK_HAS_COMMA(...)                            BOOL_ARGS(__VA_ARGS__)
-#define CHECK_HAS_COMMA_HELPER(_1, _2, _3, result, ...) result
-#define IS_EMPTY(...)                                   IS_EMPTY_HELPER(__VA_ARGS__)
-#define IS_EMPTY_HELPER(...)                            CHECK_HAS_COMMA(__VA_ARGS__)
-#define CHECK_TMPL(x)                                   IS_EMPTY(CONCAT(x, _TMPL)(, ))
+#define CHECK_HAS_COMMA(...) BOOL_ARGS(__VA_ARGS__)
+#define IS_EMPTY(...)        IS_EMPTY_HELPER(__VA_ARGS__)
+#define IS_EMPTY_HELPER(...) CHECK_HAS_COMMA(__VA_ARGS__)
+#define CHECK_TMPL(x)        IS_EMPTY(CONCAT(x, _TMPL)(, ))
 
 static_assert(CHECK_TMPL(IOR) == 1, "CHECK_TMPL SHOULD BE 1");
 
