@@ -19,6 +19,8 @@ namespace rt
 // - vcm
 // - adaptive sampling
 // - equiangular sampling
+// - manifold next event estimation
+// - wave optics :D
 // - bdpt, metropolis, upbp, mcm?
 //
 // maybe unreasonable:
@@ -762,13 +764,6 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
             break;
         }
 
-        struct ScratchArena
-        {
-            TempArena temp;
-            ScratchArena() { temp = ScratchStart(0, 0); }
-            ~ScratchArena() { ScratchEnd(temp); }
-        };
-
         ScratchArena scratch;
         BSDF bsdf;
         EvaluateMaterial(scratch.temp.arena, si, &bsdf, lambda);
@@ -842,6 +837,90 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         }
     }
     return L;
+}
+
+template <typename Sampler>
+void ManifoldNextEventEstimation(Sampler &sampler, u32 currentDepth, u32 maxDepth,
+                                 SampledWavelengths &lambda)
+{
+    struct ManifoldSurfaceInteraction
+    {
+        SurfaceInteraction si;
+    };
+    const u32 MAX_MANIFOLD_OCCLUDERS = 2;
+    ManifoldSurfaceInteraction msiData[MAX_MANIFOLD_OCCLUDERS];
+    u32 msiDataCount = 0;
+
+    if (!IsSpecular(bsdf.Flags()))
+    {
+        // Sample light source
+        f32 lightU = sampler.Get1D();
+        f32 pmf;
+        LightHandle handle = UniformLightSample(scene, lightU, &pmf);
+        Vec2f sample       = sampler.Get2D();
+        if (!bool(handle)) return;
+        // Sample point on the light source
+        LightSample ls = SampleLi(scene, handle, si, lambda, sample, true);
+        if (!ls.pdf) return;
+
+        Assert(maxDepth >= currentDepth);
+        u32 numBounces = maxDepth - currentDepth;
+        if (numBounces == 0)
+        {
+            // normal NEE
+        }
+        else
+        {
+        }
+
+        // Generate seed path
+        for (;;)
+        {
+            ManifoldSurfaceInteraction &msi = msiData[msiDataCount];
+            bool intersect                  = Intersect(scene, ray, msi.si);
+            if (!intersect)
+            {
+                break;
+            }
+            else
+            {
+                ScratchArena scratch;
+                BSDF bsdf;
+                EvaluateMaterial(scratch.temp.arena, si, &bsdf, lambda);
+                if (!EnumHasAnyFlags(bsdf.Flags(), BxDFFlags::SpecularTransmission)) return;
+
+                Vec3f wo = -ray.d;
+                f32 pdf;
+                BSDFSample sample = bsdf.GenerateSample(
+                    -ray.d, sampler.Get1D(), sampler.Get2D(), TransportMode::Radiance,
+                    BxDFFlags::SpecularTransmission);
+                if (!sample.f || !sample.pdf) return;
+
+                ray.d = sample.wi;
+                msiDataCount++;
+            }
+        }
+
+        // Evaluate BSDF for light sample, check visibility with shadow ray
+        f32 p_b;
+        SampledSpectrum f =
+            bsdf.EvaluateSample(-ray.d, ls.wi, p_b) * AbsDot(si.shading.n, ls.wi);
+        if (f && !Occluded(scene, ray, si, ls))
+        {
+            // Calculate contribution
+            f32 lightPdf = pmf * ls.pdf;
+
+            if (IsDeltaLight(ls.lightType))
+            {
+                L += beta * f * ls.L / lightPdf;
+            }
+            else
+            {
+                f32 w_l = PowerHeuristic(1, lightPdf, 1, p_b);
+                L += beta * f * w_l * ls.L / lightPdf;
+            }
+        }
+    }
 }
 
 //////////////////////////////
