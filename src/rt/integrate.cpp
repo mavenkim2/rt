@@ -839,6 +839,7 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
     return L;
 }
 
+#if 0
 template <typename Sampler>
 void ManifoldNextEventEstimation(Sampler &sampler, u32 currentDepth, u32 maxDepth,
                                  SampledWavelengths &lambda)
@@ -851,6 +852,13 @@ void ManifoldNextEventEstimation(Sampler &sampler, u32 currentDepth, u32 maxDept
     ManifoldSurfaceInteraction msiData[MAX_MANIFOLD_OCCLUDERS];
     u32 msiDataCount = 0;
 
+    auto helper =
+        [&]() {
+            f32 theta = Acos(w.z);
+            f32 phi   = Atan2(w.y, w.x);
+        }
+
+    Vec3f rayOrigin;
     if (!IsSpecular(bsdf.Flags()))
     {
         // Sample light source
@@ -901,6 +909,23 @@ void ManifoldNextEventEstimation(Sampler &sampler, u32 currentDepth, u32 maxDept
             }
         }
 
+        // Handle paths
+        for (u32 index = 0; index < msiDataCount; index++)
+        {
+            Vec3f p0 = index == 0 ? rayOrigin : msiData[index - 1].si.p;
+            Vec3f p2 = index + 1 == msiDataCount ? ls.samplePoint : msiData[index + 1].si.p;
+            ManifoldSurfaceInteraction &currentHit = msiData[index];
+            // TODO: change differential geometry?
+            Vec3f wo     = p0 - currentHit.si.p;
+            Vec3f wi     = p2 - currentHit.si.p;
+            bool outside = Dot(wo, currentHit.si.shading.n) > 0.f;
+            if (!outside) Swap(wo, wi);
+
+            // Manifold walk
+            RefractPartialDerivatives(wo);
+                // Constraint solving until under a threshold between these computed partial derivatives and 
+        }
+
         // Evaluate BSDF for light sample, check visibility with shadow ray
         f32 p_b;
         SampledSpectrum f =
@@ -922,6 +947,7 @@ void ManifoldNextEventEstimation(Sampler &sampler, u32 currentDepth, u32 maxDept
         }
     }
 }
+#endif
 
 //////////////////////////////
 // Volumes
