@@ -12,6 +12,7 @@
 namespace rt
 {
 
+#if 0
 class Sphere
 {
 public:
@@ -170,6 +171,7 @@ struct ConstantMedium
         return true;
     }
 };
+#endif
 
 enum class IndexType
 {
@@ -178,23 +180,7 @@ enum class IndexType
     u32,
 };
 
-// struct TriangleMesh
-// {
-//     Vec3f *p;
-//     Vec3f *n;
-//     // Vec3f *t;
-//     Vec2f *uv;
-//     u32 *indices;
-//     u32 numVertices;
-//     u32 numIndices;
-//
-//     u32 GetNumFaces() const
-//     {
-//         if (indices) return numIndices / 3;
-//         return numVertices / 3;
-//     }
-// };
-
+// TODO: convert this to an attribute
 template <typename T>
 struct MeshPointer
 {
@@ -552,6 +538,91 @@ struct PrimitiveIndices
     }
 };
 
+////////////////////////////////////////////////////////
+
+enum class AttributeType
+{
+    Float,
+    // Spectrum,
+    RGB,
+    String,
+};
+
+struct AttributeTable
+{
+    u8 *buffer;
+
+#ifdef DEBUG
+    AttributeType *types;
+    u32 attributeCount;
+#endif
+};
+
+struct AttributeTableKey
+{
+    u32 tableIndex;
+    u32 offset;
+};
+
+AttributeTable *GetMaterialTable(u32 tableIndex);
+
+struct AttributeIterator
+{
+    AttributeTable *table;
+    u64 offset;
+#ifdef DEBUG
+    u32 countOffset = 0;
+#endif
+
+    AttributeIterator() {}
+    AttributeIterator(AttributeTableKey key)
+        : table(GetMaterialTable(key.tableIndex)), offset(key.offset)
+    {
+    }
+    void DebugCheck(AttributeType type)
+    {
+#ifdef DEBUG
+        Assert(table->types);
+        Assert(countOffset < table->attributeCount);
+        Assert(table->types[countOffset++] == type);
+#endif
+    }
+    f32 ReadFloat()
+    {
+        u64 o = offset;
+        offset += sizeof(f32);
+        DebugCheck(AttributeType::Float);
+        return *(f32 *)(table->buffer + o);
+    }
+    string ReadString()
+    {
+        u32 size = *(u32 *)(table->buffer + offset);
+        offset += sizeof(size);
+        string result = Str8(table->buffer + offset, size);
+        offset += size;
+        DebugCheck(AttributeType::String);
+        return result;
+    }
+};
+
+#define MATERIAL_FUNCTION_HEADER(name)                                                        \
+    void name(Arena *arena, AttributeIterator *itr, SurfaceInteraction &si,                   \
+              SampledWavelengths &lambda, BSDFBase<BxDF> *result)
+typedef MATERIAL_FUNCTION_HEADER((*MaterialEvalFunc));
+
+struct Material
+{
+    AttributeTableKey key;
+
+    MaterialEvalFunc eval;
+    __forceinline void Shade(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                             BSDFBase<BxDF> *result)
+    {
+        AttributeIterator itr(key);
+        eval(arena, &itr, si, lambda, result);
+    }
+};
+
 struct Ray2;
 template <i32 K>
 struct SurfaceInteractions;
@@ -610,7 +681,11 @@ struct Scene
     ScenePrimitives scene;
 
     ArrayTuple<LightTypes> lights;
-    ArrayTuple<MaterialTypes> materials;
+
+    StaticArray<AttributeTable> materialTables;
+    StaticArray<Material> materials;
+
+    // ArrayTuple<MaterialTypes> materials;
     // Material materials;
     // Bounds bounds;
     u32 numLights;
@@ -622,6 +697,12 @@ struct Scene
 
 struct Scene *scene_;
 Scene *GetScene() { return scene_; }
+
+AttributeTable *GetMaterialTable(u32 tableIndex)
+{
+    Scene *scene = GetScene();
+    return &scene->materialTables[tableIndex];
+}
 
 void BuildTLASBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
 template <typename Mesh>

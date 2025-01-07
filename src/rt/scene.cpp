@@ -1,5 +1,8 @@
 #include "scene.h"
 #include "bvh/bvh_types.h"
+#include "macros.h"
+#include "integrate.h"
+#include <cwchar>
 namespace rt
 {
 
@@ -19,6 +22,250 @@ struct SceneLoadTable
     u32 count;
     TicketMutex *mutexes;
 };
+
+enum class TextureType
+{
+    None,
+    ConstantFloat,
+    ConstantSpectrum,
+    Ptex,
+};
+
+TextureType GetTextureType(Tokenizer *tokenizer)
+{
+    TextureType type;
+    if (Advance(tokenizer, "cf "))
+    {
+        type = TextureType::ConstantFloat;
+    }
+    else if (Advance(tokenizer, "ptex "))
+    {
+        type = TextureType::Ptex;
+    }
+    else if (Advance(tokenizer, "cs "))
+    {
+        type = TextureType::ConstantSpectrum;
+    }
+    return type;
+}
+
+template <TextureType type>
+auto ProcessTexture(AttributeIterator *iterator)
+{
+    if constexpr (type == TextureType::None)
+    {
+        return 0.f;
+    }
+    else if constexpr (type == TextureType::ConstantFloat)
+    {
+        return iterator->ReadFloat();
+    }
+    else if constexpr (type == TextureType::ConstantSpectrum)
+    {
+    }
+    else if constexpr (type == TextureType::Ptex)
+    {
+        string filename = iterator->ReadString();
+    }
+}
+
+template <TextureType u, TextureType r>
+f32 ProcessRoughness(AttributeIterator *iterator)
+{
+    if constexpr (u == TextureType::None)
+    {
+        return ProcessTexture<r>(iterator);
+    }
+    return ProcessTexture<u>(iterator);
+}
+
+template <typename Spectrum>
+f32 ProcessIOR(AttributeIterator *iterator)
+{
+    return 1.5f;
+}
+
+// TODO: instead of this junk I should just create a preprocessor (i.e. write a text file
+// that is code)
+//////////////////////////////////////////////////////////////////////////////////////////////
+
+#define ROUGHNESS_TMPL(...)    TextureType ur, TextureType vr, TextureType r
+#define IOR_TMPL(...)          typename Spectrum __VA_ARGS__
+#define DISPLACEMENT_TMPL(...) TextureType disp __VA_ARGS__
+
+#define EXPAND_2(...)         __VA_ARGS__
+#define IIF(c, falseVal, ...) CONCAT(IF_, c)(falseVal, __VA_ARGS__)
+#define IF_0(falseVal, ...)   falseVal
+#define IF_1(falseVal, ...)   __VA_ARGS__
+
+#define CHECK_HAS_COMMA(...) BOOL_ARGS(__VA_ARGS__)
+#define IS_EMPTY(...)        IS_EMPTY_HELPER(__VA_ARGS__)
+#define IS_EMPTY_HELPER(...) CHECK_HAS_COMMA(__VA_ARGS__)
+#define CHECK_TMPL(x)        IS_EMPTY(CONCAT(x, _TMPL)(, ))
+
+static_assert(CHECK_TMPL(IOR) == 1, "CHECK_TMPL SHOULD BE 1");
+
+#define TMPL_DECL(x) IIF(CHECK_TMPL(x), TextureType x, CONCAT(x, _TMPL)())
+
+#define MATERIAL_TEMPLATE_DECL_HELPER(x, ...)                                                 \
+    EXPAND(CONCAT(RECURSE__, x)(TMPL_DECL, __VA_ARGS__))
+#define MATERIAL_TEMPLATE_DECL(...)                                                           \
+    MATERIAL_TEMPLATE_DECL_HELPER(COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+
+#define SHADER_PARAMETER_FUNC_ROUGHNESS(...)                                                  \
+    static_assert(                                                                            \
+        (ur != TextureType::None && vr != TextureType::None && r == TextureType::None) ||     \
+            (ur == TextureType::None && vr == TextureType::None && r != TextureType::None),   \
+        "Cannot specify both anisotropic and isotropic roughness");                           \
+    f32 uRoughness;                                                                           \
+    f32 vRoughness;                                                                           \
+    if constexpr (r == TextureType::None)                                                     \
+    {                                                                                         \
+        uRoughness = ProcessTexture<r>(itr);                                                  \
+        uRoughness = Sqr(uRoughness);                                                         \
+        vRoughness = uRoughness;                                                              \
+    }                                                                                         \
+    else                                                                                      \
+    {                                                                                         \
+        uRoughness = Sqr(ProcessTexture<ur>(itr));                                            \
+        vRoughness = Sqr(ProcessTexture<vr>(itr));                                            \
+    }                                                                                         \
+    __VA_ARGS__
+
+#define SHADER_PARAMETER_FUNC_IOR(...)                                                        \
+    if constexpr (!std::is_same_v<Spectrum, ConstantSpectrum>)                                \
+    {                                                                                         \
+        lambda.TerminateSecondary();                                                          \
+    }                                                                                         \
+    f32 eta = ProcessIOR<Spectrum>(itr);                                                      \
+    __VA_ARGS__
+
+#define SHADER_PARAMETER_FUNC_DISPLACEMENT(...)                                               \
+    (void)0;                                                                                  \
+    __VA_ARGS__
+
+// #define DEFAULT_SHADER_PARAMETER_FUNC(x) auto x##_var = ProcessTexture<x>(itr);
+
+#define CHECK_FUNC(x) IS_EMPTY(CONCAT(SHADER_PARAMETER_FUNC_, x)(, ))
+
+static_assert(CHECK_FUNC(ROUGHNESS) == 1, "CHECK_FUNC SHOULD BE 1");
+
+#define FUNC_DECL(x)                                                                          \
+    IIF(CHECK_FUNC(x), DEFAULT_SHADER_PARAMETER_FUNC(x), CONCAT(SHADER_PARAMETER_FUNC_, x)())
+#define MATERIAL_FUNC_DECL_HELPER(x, ...) EXPAND(CONCAT(RECURSE_, x)(FUNC_DECL, __VA_ARGS__))
+#define MATERIAL_FUNC_DECL(...)           MATERIAL_FUNC_DECL_HELPER(COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+
+#define RETURN_TYPE_ROUGHNESS(...)                                                            \
+    TrowbridgeReitzDistribution(uRoughness, vRoughness) __VA_ARGS__
+#define RETURN_TYPE_IOR(...) eta __VA_ARGS__
+#define RETURN_TYPE_DISPLACEMENT(...)
+
+#define CHECK_RETURN(x) IS_EMPTY(CONCAT(RETURN_TYPE_, x)(, ))
+
+static_assert(CHECK_RETURN(ROUGHNESS) == 1, "CHECK_RETURN SHOULD BE 1");
+
+#define RETURN_DECL(x, count)                                                                 \
+    IIF(CHECK_RETURN(x), , IIF(count, CONCAT(RETURN_TYPE_, x)(), CONCAT(RETURN_TYPE_, x)(, )))
+
+#define MATERIAL_RETURN_DECL_HELPER(x, ...)                                                   \
+    EXPAND(CONCAT(RECURSE2_, x)(RETURN_DECL, __VA_ARGS__))
+#define MATERIAL_RETURN_DECL(...)                                                             \
+    MATERIAL_RETURN_DECL_HELPER(COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+#define MATERIAL_FUNCTION_HEADER(name)                                                        \
+    void name(Arena *arena, AttributeIterator *itr, SurfaceInteraction &si,                   \
+              SampledWavelengths &lambda, BSDFBase<BxDF> *result)
+
+#define START_MATERIAL_SHADER(name, BxDFType, ...)                                            \
+    template <MATERIAL_TEMPLATE_DECL(__VA_ARGS__)>                                            \
+    MATERIAL_FUNCTION_HEADER(CONCAT(ShaderEvaluate_, name))
+
+#define DEFINE_MATERIAL_SHADER(name, BxDFType, ...)                                           \
+    START_MATERIAL_SHADER(name, BxDFType, __VA_ARGS__)                                        \
+    {                                                                                         \
+        MATERIAL_FUNC_DECL(__VA_ARGS__)                                                       \
+        BxDFType *bxdf = PushStruct(arena, BxDFType);                                         \
+        Vec4lfn filterWidths(.75f);                                                           \
+        new (bxdf) BxDFType(MATERIAL_RETURN_DECL(__VA_ARGS__));                               \
+        new (result) BSDF(bxdf, si.shading.dpdu, si.shading.n);                               \
+    }
+
+DEFINE_MATERIAL_SHADER(Dielectric, DielectricBxDF, DISPLACEMENT, IOR, ROUGHNESS)
+
+void CreateMaterials(Arena *arena, Tokenizer *tokenizer)
+{
+    TempArena temp = ScratchStart(0, 0);
+    Scene *scene   = GetScene();
+    ChunkedLinkedList<Material, 1024> materialsList(temp.arena);
+    while (!Advance(tokenizer, "MATERIALS_END "))
+    {
+        // the fun begins :)
+        if (Advance(tokenizer, "dielectric "))
+        {
+            u32 isAnisotropic = 0;
+            TextureType ur, vr, r, eta, disp = TextureType::None;
+            for (;;)
+            {
+                if (Advance(tokenizer, "ur "))
+                {
+                    Error(isAnisotropic != 1, "Cannot specify both roughness and "
+                                              "anisotropic roughness\n");
+                    isAnisotropic = 2;
+                    ur            = GetTextureType(tokenizer);
+                }
+                else if (Advance(tokenizer, "vr "))
+                {
+                    Error(isAnisotropic != 1, "Cannot specify both roughness and "
+                                              "anisotropic roughness\n");
+                    isAnisotropic = 2;
+                    vr            = GetTextureType(tokenizer);
+                }
+                else if (Advance(tokenizer, "r "))
+                {
+                    Error(isAnisotropic != 2, "Cannot specify both roughness and "
+                                              "anisotropic roughness\n");
+                    isAnisotropic = 1;
+                    r             = GetTextureType(tokenizer);
+                }
+                else if (Advance(tokenizer, "ior "))
+                {
+                    eta = GetTextureType(tokenizer);
+                }
+                else
+                {
+                    break;
+                }
+            }
+            // TODO: surely there's a better way of doing this than just if elsing
+            // every single combination
+            if (ur == TextureType::None && vr == TextureType::None &&
+                r == TextureType::ConstantFloat && eta == TextureType::ConstantFloat &&
+                disp == TextureType::None)
+            {
+                Material &mat = materialsList.AddBack();
+                mat.eval      = ShaderEvaluate_Dielectric<TextureType::None, ConstantSpectrum,
+                                                          TextureType::None, TextureType::None,
+                                                          TextureType::ConstantFloat>;
+            }
+            else
+            {
+                Error(0, "Dielectric version not supported.\n");
+            }
+            // Create appropriate texture
+            // Material *material = CreateDielectricMaterial(arena, Tokenizer *
+            // tokenizer);
+        }
+    }
+    scene->materials = StaticArray<Material>(arena, materialsList.totalCount);
+    materialsList.Flatten(scene->materials);
+
+    ScratchEnd(temp);
+}
 
 void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                  string directory, string filename, Scheduler::Counter *c = 0,
@@ -153,7 +400,8 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                     SkipToNextChar(&tokenizer);
                 }
             }
-            // Error(instanceOffset == instanceCount, "inst offset %u\n", instanceOffset);
+            // Error(instanceOffset == instanceCount, "inst offset %u\n",
+            // instanceOffset);
             scene->numPrimitives = instanceOffset;
             scene->childScenes   = PushArrayNoZero(arena, ScenePrimitives *, files.totalCount);
             scene->numChildScenes = files.totalCount;
@@ -251,9 +499,7 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
         }
         else if (Advance(&tokenizer, "MATERIALS_START"))
         {
-            while (!Advance(&tokenizer, "MATERIALS_END "))
-            {
-            }
+            // CreateMaterials(arena);
         }
         else
         {

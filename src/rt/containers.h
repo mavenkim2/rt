@@ -121,6 +121,14 @@ struct StaticArray
     T *data;
 };
 
+template <typename T>
+void Copy(StaticArray<T> &to, StaticArray<T> &from)
+{
+    Assert(to.capacity >= from.capacity && to.capacity >= from.size);
+    MemoryCopy(to.data, from.data, sizeof(T) * from.size);
+    to.size = from.size;
+}
+
 template <typename T, u32 capacity>
 struct FixedArray
 {
@@ -831,6 +839,16 @@ struct ChunkedLinkedList
         {
             MemoryCopy(ptr, node->values, node->count * sizeof(T));
             ptr += node->count;
+        }
+    }
+    inline void Flatten(StaticArray<T> &array)
+    {
+        u32 runningCount = 0;
+        for (ChunkNode *node = first; node != 0; node = node->next)
+        {
+            Assert(runningCount + node->count < (u32)array.capacity);
+            MemoryCopy(array.data + runningCount, node->values, node->count * sizeof(T));
+            runningCount += node->count;
         }
     }
     inline void Merge(ChunkedLinkedList<T, numPerChunk, memoryTag> *list)
