@@ -25,6 +25,14 @@ u32 GetThreadIndex();
 void BaseThreadEntry(OS_ThreadFunction *func, void *params);
 
 #define ScratchStart(conflicts, count) TempBegin(GetThreadContextScratch((conflicts), (count)))
+
+struct ScratchArena
+{
+    TempArena temp;
+    ScratchArena() { temp = ScratchStart(0, 0); }
+    ~ScratchArena() { ScratchEnd(temp); }
+};
+
 } // namespace rt
 
 #endif

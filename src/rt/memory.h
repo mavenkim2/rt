@@ -119,13 +119,6 @@ __forceinline T *PushArrayDefaultTagged(Arena *arena, u32 count, MemoryType type
 
 #define ScratchEnd(temp) TempEnd(temp)
 
-struct ScratchArena
-{
-    TempArena temp;
-    ScratchArena() { temp = ScratchStart(0, 0); }
-    ~ScratchArena() { ScratchEnd(temp); }
-};
-
 #define IsZero(instance) CheckZero(sizeof(instance), (u8 *)(&instance))
 } // namespace rt
 

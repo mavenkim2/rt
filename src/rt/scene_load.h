@@ -32,6 +32,7 @@ enum class DataType
     Int,
     Bool,
     String,
+    Texture,
     Blackbody,
     Spectrum,
 };
@@ -56,7 +57,7 @@ struct ScenePacket
         parameterNames = PushArray(arena, StringId, count);
         bytes          = PushArray(arena, u8 *, count);
         sizes          = PushArray(arena, u32, count);
-        // types          = PushArray(arena, SceneByteType, count);
+        types          = PushArray(arena, DataType, count);
     }
 
     inline i32 GetInt(i32 i) const { return *(i32 *)(bytes[i]); }
