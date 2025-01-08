@@ -910,7 +910,7 @@ StringBuilder ConcatBuilders(StringBuilder *a, StringBuilder *b)
 {
     StringBuilder result = {};
     result.first         = a->first;
-    result.last          = b->last;
+    result.last          = b->last ? b->last : a->last;
     a->last->next        = b->first;
     result.totalSize     = a->totalSize + b->totalSize;
     result.arena         = a->arena;

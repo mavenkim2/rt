@@ -27,6 +27,7 @@ bool GetSectionOffsets(Tokenizer *tokenizer, FileOffsets *offsets)
 enum class DataType
 {
     Float,
+    Floats,
     Vec2,
     Vec3,
     Int,

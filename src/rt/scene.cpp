@@ -197,69 +197,129 @@ static_assert(CHECK_RETURN(ROUGHNESS) == 1, "CHECK_RETURN SHOULD BE 1");
 
 DEFINE_MATERIAL_SHADER(Dielectric, DielectricBxDF, DISPLACEMENT, IOR, ROUGHNESS)
 
+enum class MaterialTypes
+{
+    Interface,
+    Diffuse,
+    DiffuseTransmission,
+    CoatedDiffuse,
+    Dielectric,
+    Max,
+};
+
+template <>
+MaterialCallback GenerateMaterialCallback()
+{
+    // i feel like literally the logical conclusion of what I'm doing is dr. jit, no? like,
+    // i want to construct megakernel callbacks at runtime for each material type.
+    // why not just go all the way and do it for literally every computation? for simd
+    // queues, why have per type queues? it really should just be one massive kernel for
+    // each type no?
+}
+
 void CreateMaterials(Arena *arena, Tokenizer *tokenizer)
 {
     TempArena temp = ScratchStart(0, 0);
     Scene *scene   = GetScene();
-    ChunkedLinkedList<Material, 1024> materialsList(temp.arena);
+    // ChunkedLinkedList<Material, 1024> materialsList(temp.arena);
+    ChunkedLinkedList<ScenePacket, 1024> materialPackets(temp.arena);
     while (!Advance(tokenizer, "MATERIALS_END "))
     {
-        // the fun begins :)
-        if (Advance(tokenizer, "dielectric "))
+        string materialName = ReadWord(tokenizer);
+        SkipToNextChar(tokenizer);
+
+        // Get the type of material
+        i32 index = -1;
+        for (u32 materialTypeIndex = 0; materialTypeIndex < (u32)MaterialTypes::Max;
+             materialTypeIndex++)
         {
-            u32 isAnisotropic = 0;
-            TextureType ur, vr, r, eta, disp = TextureType::None;
-            for (;;)
+            if (Advance(tokenizer, materialTypeNames[materialTypeIndex]))
             {
-                if (Advance(tokenizer, "ur "))
+                index = materialTypeIndex;
+                break;
+            }
+        }
+        SkipToNextChar(tokenizer);
+
+        const string *materialParamNames = materialParameterNames[index];
+        u32 parameterCount               = materialParameterCounts[index];
+        Assert(index != -1);
+
+        TextureType *types      = PushArray(temp.arena, TextureType, parameterCount);
+        TextureEvalFunc **funcs = PushArray(arena, TextureEvalFunc *, parameterCount);
+
+        for (u32 i = 0; i < parameterCount; i++)
+        {
+            bool result = Advance(tokenizer, materialParamNames[i]);
+            Assert(result);
+            SkipToNextChar(tokenizer);
+
+            i32 textureIndex = -1;
+
+            // Parse a texture
+            for (u32 textureTypeIndex = 0; textureTypeIndex < (u32)TextureType::Max;
+                 textureTypeIndex++)
+            {
+                if (Advance(tokenizer, textureTypeNames[textureTypeIndex]))
                 {
-                    Error(isAnisotropic != 1, "Cannot specify both roughness and "
-                                              "anisotropic roughness\n");
-                    isAnisotropic = 2;
-                    ur            = GetTextureType(tokenizer);
-                }
-                else if (Advance(tokenizer, "vr "))
-                {
-                    Error(isAnisotropic != 1, "Cannot specify both roughness and "
-                                              "anisotropic roughness\n");
-                    isAnisotropic = 2;
-                    vr            = GetTextureType(tokenizer);
-                }
-                else if (Advance(tokenizer, "r "))
-                {
-                    Error(isAnisotropic != 2, "Cannot specify both roughness and "
-                                              "anisotropic roughness\n");
-                    isAnisotropic = 1;
-                    r             = GetTextureType(tokenizer);
-                }
-                else if (Advance(tokenizer, "ior "))
-                {
-                    eta = GetTextureType(tokenizer);
-                }
-                else
-                {
+                    textureIndex        = textureTypeNames[textureTypeIndex];
+                    funcs[textureIndex] = ;
                     break;
                 }
             }
-            // TODO: surely there's a better way of doing this than just if elsing
-            // every single combination
-            if (ur == TextureType::None && vr == TextureType::None &&
-                r == TextureType::ConstantFloat && eta == TextureType::ConstantFloat &&
-                disp == TextureType::None)
+
+            // get the function pointer
+        }
+        for (;;)
+        {
+            if (Advance(tokenizer, "ur "))
             {
-                Material &mat = materialsList.AddBack();
-                mat.eval      = ShaderEvaluate_Dielectric<TextureType::None, ConstantSpectrum,
-                                                          TextureType::None, TextureType::None,
-                                                          TextureType::ConstantFloat>;
+                Error(isAnisotropic != 1, "Cannot specify both roughness and "
+                                          "anisotropic roughness\n");
+                isAnisotropic = 2;
+                ur            = GetTextureType(tokenizer);
+            }
+            else if (Advance(tokenizer, "vr "))
+            {
+                Error(isAnisotropic != 1, "Cannot specify both roughness and "
+                                          "anisotropic roughness\n");
+                isAnisotropic = 2;
+                vr            = GetTextureType(tokenizer);
+            }
+            else if (Advance(tokenizer, "r "))
+            {
+                Error(isAnisotropic != 2, "Cannot specify both roughness and "
+                                          "anisotropic roughness\n");
+                isAnisotropic = 1;
+                r             = GetTextureType(tokenizer);
+            }
+            else if (Advance(tokenizer, "ior "))
+            {
+                eta = GetTextureType(tokenizer);
             }
             else
             {
-                Error(0, "Dielectric version not supported.\n");
+                break;
             }
-            // Create appropriate texture
-            // Material *material = CreateDielectricMaterial(arena, Tokenizer *
-            // tokenizer);
         }
+        // TODO: surely there's a better way of doing this than just if elsing
+        // every single combination
+        if (ur == TextureType::None && vr == TextureType::None &&
+            r == TextureType::ConstantFloat && eta == TextureType::ConstantFloat &&
+            disp == TextureType::None)
+        {
+            Material &mat = materialsList.AddBack();
+            mat.eval      = ShaderEvaluate_Dielectric<TextureType::None, ConstantSpectrum,
+                                                      TextureType::None, TextureType::None,
+                                                      TextureType::ConstantFloat>;
+        }
+        else
+        {
+            Error(0, "Dielectric version not supported.\n");
+        }
+        // Create appropriate texture
+        // Material *material = CreateDielectricMaterial(arena, Tokenizer *
+        // tokenizer);
     }
     scene->materials = StaticArray<Material>(arena, materialsList.totalCount);
     materialsList.Flatten(scene->materials);

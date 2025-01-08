@@ -610,6 +610,12 @@ struct AttributeIterator
               SampledWavelengths &lambda, BSDFBase<BxDF> *result)
 typedef MATERIAL_FUNCTION_HEADER((*MaterialEvalFunc));
 
+struct MaterialEvalFunc
+{
+    TextureEvalFunc **funcs;
+    u32 count;
+};
+
 struct Material
 {
     AttributeTableKey key;

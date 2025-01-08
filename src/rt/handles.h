@@ -86,9 +86,9 @@ using DielectricMaterialBase = Material2<DielectricMaterialConstant, NullShader>
 
 using MSDielectricMaterial1 = Material2<MSDielectricMaterial, NullShader>;
 
-CREATE_ENUM_AND_TYPE_PACK(MaterialTypes, MaterialType, DielectricMaterialBase,
-                          CoatedDiffuseMaterial1, CoatedDiffuseMaterial2, DiffuseMaterialBase,
-                          MSDielectricMaterial1);
+// CREATE_ENUM_AND_TYPE_PACK(MaterialTypes, MaterialType, DielectricMaterialBase,
+//                           CoatedDiffuseMaterial1, CoatedDiffuseMaterial2,
+//                           DiffuseMaterialBase, MSDielectricMaterial1);
 
 struct MaterialHandle
 {
