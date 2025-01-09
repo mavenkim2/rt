@@ -917,10 +917,10 @@ StringBuilder ConcatBuilders(StringBuilder *a, StringBuilder *b)
     return result;
 }
 
-string CombineBuilderNodes(StringBuilder *builder)
+string CombineBuilderNodes(Arena *arena, StringBuilder *builder)
 {
     string result;
-    result.str  = PushArray(builder->arena, u8, builder->totalSize);
+    result.str  = PushArray(arena, u8, builder->totalSize);
     result.size = builder->totalSize;
 
     u8 *cursor = result.str;
@@ -934,13 +934,6 @@ string CombineBuilderNodes(StringBuilder *builder)
         }
     }
     return result;
-}
-
-b32 WriteEntireFile(StringBuilder *builder, string filename)
-{
-    string result = CombineBuilderNodes(builder);
-    b32 success   = OS_WriteFile(filename, result);
-    return success;
 }
 
 b32 WriteFileMapped(StringBuilder *builder, string filename)

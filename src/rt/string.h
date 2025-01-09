@@ -166,8 +166,7 @@ inline u8 *GetPointer_(Tokenizer *tokenizer);
 u64 Put(StringBuilder *builder, void *data, u64 size);
 u64 Put(StringBuilder *builder, string str);
 u64 Put(StringBuilder *builder, u32 value);
-string CombineBuilderNodes(StringBuilder *builder);
-b32 WriteEntireFile(StringBuilder *builder, string filename);
+string CombineBuilderNodes(Arena *arena, StringBuilder *builder);
 b32 WriteFileMapped(StringBuilder *builder, string filename);
 b32 WriteFileMapped(StringBuilder *builder, StringBuilderMapped *mappedBuilder,
                     string filename);

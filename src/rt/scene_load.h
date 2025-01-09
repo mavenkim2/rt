@@ -3,6 +3,177 @@
 
 namespace rt
 {
+
+static const u32 MAX_PARAMETER_COUNT = 16;
+
+enum class MaterialTypes
+{
+    Interface,
+    Diffuse,
+    DiffuseTransmission,
+    CoatedDiffuse,
+    Dielectric,
+    Max,
+};
+
+static const u32 textureParameterCounts[] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, ArrayLength(ptexParameterNames), 0, 0, 0,
+};
+
+MaterialTypes ConvertStringToMaterialType(string type)
+{
+    if (type == "diffuse") return MaterialTypes::Diffuse;
+    else if (type == "diffusetransmission") return MaterialTypes::DiffuseTransmission;
+    else if (type == "coateddiffuse") return MaterialTypes::CoatedDiffuse;
+    else if (type == "dielectric") return MaterialTypes::Dielectric;
+    else if (type == "interface") return MaterialTypes::Interface;
+    else
+    {
+        Error(0, "Material type not supported or valid.\n");
+        return MaterialTypes(0);
+    }
+}
+
+enum class TextureType
+{
+    bilerp,
+    checkerboard,
+    constant,
+    directionmix,
+    dots,
+    fbm,
+    imagemap,
+    marble,
+    mix,
+    ptex,
+    scale,
+    windy,
+    wrinkled,
+    Max,
+};
+ENUM_CLASS_FLAGS(TextureType)
+
+TextureType ConvertStringToTextureType(string type)
+{
+    if (type == "ptex") return TextureType::ptex;
+    // else if (type == "imagemap") return TextureType::imagemap;
+    else Error(0, "Texture type not supported or valid\n");
+    return TextureType(0);
+}
+
+// Tables
+
+static const string materialTypeNames[] = {
+    "interface", "diffuse", "diffusetransmission", "coateddiffuse", "dielectric",
+};
+
+static const StringId materialTypeIDs[] = {
+    "interface"_sid,     "diffuse"_sid,    "diffusetransmission"_sid,
+    "coateddiffuse"_sid, "dielectric"_sid,
+};
+
+static const StringId diffuseParameterIds[] = {
+    "reflectance"_sid,
+    "displacement"_sid,
+};
+
+static const string diffuseParameterNames[] = {
+    "reflectance",
+    "displacement",
+};
+
+static const StringId diffuseTransmissionIds[] = {
+    "reflectance"_sid,
+    "transmittance"_sid,
+    "scale"_sid,
+    "displacement"_sid,
+};
+
+static const string diffuseTransmissionNames[] = {
+    "reflectance",
+    "transmittance",
+    "scale",
+    "displacement",
+};
+
+static const StringId dielectricIds[] = {
+    "roughness"_sid,      "uroughness"_sid, "vroughness"_sid,
+    "remaproughness"_sid, "eta"_sid,        "displacement"_sid,
+};
+
+static const string dielectricNames[] = {
+    "roughness", "uroughness", "vroughness", "remaproughness", "eta", "displacement",
+};
+
+static const StringId coatedDiffuseIds[] = {
+    "roughness"_sid, "uroughness"_sid,  "vroughness"_sid, "remaproughness"_sid,
+    "eta"_sid,       "reflectance"_sid, "albedo"_sid,     "g"_sid,
+    "maxdepth"_sid,  "nsamples"_sid,    "thickness"_sid,  "displacement"_sid,
+};
+
+static const string coatedDiffuseNames[] = {
+    "roughness", "uroughness", "vroughness", "remaproughness", "eta",       "reflectance",
+    "albedo",    "g",          "maxdepth",   "nsamples",       "thickness", "displacement",
+};
+
+static const StringId *materialParameterIDs[] = {
+    0, diffuseParameterIds, diffuseTransmissionIds, coatedDiffuseIds, dielectricIds};
+
+static const StringId materialParameterCounts[] = {
+    0,
+    ArrayLength(diffuseParameterIds),
+    ArrayLength(diffuseTransmissionIds),
+    ArrayLength(coatedDiffuseIds),
+    ArrayLength(dielectricIds),
+};
+
+static const string *materialParameterNames[] = {
+    0, diffuseParameterNames, diffuseTransmissionNames, coatedDiffuseNames, dielectricNames,
+};
+
+static const string textureTypeNames[] = {
+    "bilerp", "checkerboard", "constant", "directionmix", "dots",  "fbm",      "imagemap",
+    "marble", "mix",          "ptex",     "scale",        "windy", "wrinkled",
+};
+
+static const string ptexParameterNames[] = {
+    "filename",
+    "encoding",
+    "scale",
+};
+
+static const StringId ptexParameterIDs[] = {
+    "filename"_sid,
+    "encoding"_sid,
+    "scale"_sid,
+};
+
+static const string *textureParameterArrays[] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, ptexParameterNames, 0, 0, 0,
+};
+
+static const StringId *textureParameterIds[] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, ptexParameterIDs, 0, 0, 0,
+};
+
+static const u32 textureParameterCounts[] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, ArrayLength(ptexParameterIDs), 0, 0, 0,
+};
+
+static const DataType ptexDataTypes[] = {
+    DataType::String,
+    DataType::String,
+    DataType::Float,
+};
+
+static const DataType constantTexDataTypes[] = {
+    DataType::Float,
+};
+
+static const DataType *textureDataTypes[] = {
+
+};
+
 struct FileOffsets
 {
     u64 metaOffset;

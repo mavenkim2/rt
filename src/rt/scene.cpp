@@ -2,6 +2,8 @@
 #include "bvh/bvh_types.h"
 #include "macros.h"
 #include "integrate.h"
+#include "scene_load.h"
+#include "spectrum.h"
 #include <cwchar>
 namespace rt
 {
@@ -23,72 +25,106 @@ struct SceneLoadTable
     TicketMutex *mutexes;
 };
 
-enum class TextureType
-{
-    None,
-    ConstantFloat,
-    ConstantSpectrum,
-    Ptex,
-};
+// f32 ProcessFloatTexture(AttributeIterator *iterator, Vec2f uv, const Vec4f &filterWidths)
+TEXTURE_CALLBACK(ProcessFloatTexture) { *result = iterator->ReadFloat(); }
 
-TextureType GetTextureType(Tokenizer *tokenizer)
+__forceinline SampledSpectrum ProcessAlbedoTexture(TextureCallback &callback,
+                                                   AttributeIterator *iterator,
+                                                   SurfaceInteraction &intr,
+                                                   SampledWavelengths &lambda,
+                                                   const Vec4f &filterWidths)
 {
-    TextureType type;
-    if (Advance(tokenizer, "cf "))
-    {
-        type = TextureType::ConstantFloat;
-    }
-    else if (Advance(tokenizer, "ptex "))
-    {
-        type = TextureType::Ptex;
-    }
-    else if (Advance(tokenizer, "cs "))
-    {
-        type = TextureType::ConstantSpectrum;
-    }
-    return type;
+    Vec3f result;
+    callback(iterator, intr, lambda, filterWidths, result.e);
+    return RGBAlbedoSpectrum(*RGBColorSpace::sRGB, result).Sample(lambda);
 }
 
-template <TextureType type>
-auto ProcessTexture(AttributeIterator *iterator)
+TEXTURE_CALLBACK(ProcessIOR)
 {
-    if constexpr (type == TextureType::None)
-    {
-        return 0.f;
-    }
-    else if constexpr (type == TextureType::ConstantFloat)
-    {
-        return iterator->ReadFloat();
-    }
-    else if constexpr (type == TextureType::ConstantSpectrum)
-    {
-    }
-    else if constexpr (type == TextureType::Ptex)
-    {
-        string filename = iterator->ReadString();
-    }
+    lambda.TerminateSecondary();
+    auto spec = (PiecewiseLinearSpectrum *)iterator->ReadPointer();
+    *result   = spec->Evaluate(lambda);
 }
 
-template <TextureType u, TextureType r>
-f32 ProcessRoughness(AttributeIterator *iterator)
+__forceinline void ProcessRoughness(TextureCallback *callbacks, AttributeIterator *iterator,
+                                    SurfaceInteraction &intr, SampledWavelengths &lambda,
+                                    const Vec4f &filterWidths, f32 &u, f32 &v)
 {
-    if constexpr (u == TextureType::None)
-    {
-        return ProcessTexture<r>(iterator);
-    }
-    return ProcessTexture<u>(iterator);
+    callbacks[iterator->callbackCount++](iterator, intr, lambda, filterWidths, &u);
+    f32 vR = -1.f;
+    callbacks[iterator->callbackCount++](iterator, intr, lambda, filterWidths, &vR);
+    if (vR == -1.f) vR = u;
 }
 
-template <typename Spectrum>
-f32 ProcessIOR(AttributeIterator *iterator)
+void ProcessPtexTexture(AttributeIterator *iterator, SurfaceInteraction &intr,
+                        const Vec4f &filterWidths, f32 *result)
 {
-    return 1.5f;
+    string filename = iterator->ReadString();
+    const Vec2f &uv = intr.uv;
+    u32 faceIndex   = intr.faceIndices;
+
+    Assert(cache);
+    Ptex::String error;
+    Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
+    Assert(texture);
+    u32 numFaces = texture->getInfo().numFaces;
+    Assert(faceIndex < numFaces);
+    Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
+    Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
+
+    u32 nc = texture->numChannels();
+    Assert(texture->numChannels() == nc);
+
+    // TODO: ray differentials
+    // Vec2f uv(0.5f, 0.5f);
+
+    f32 out[3];
+    filter->eval(out, 0, nc, faceIndex, uv[0], uv[1], filterWidth[0], filterWidth[1],
+                 filterWidth[2], filterWidth[3]);
+
+    texture->release();
+    filter->release();
+
+    // Convert to srgb
+
+    if (nc == 1) *result = out[0];
+    else
+    {
+        // if (tex->encoding == ColorEncoding::SRGB)
+        // {
+        //     u8 rgb[3];
+        //     for (i32 i = 0; i < nc; i++)
+        //     {
+        //         rgb[i] = u8(Clamp(out[i] * 255.f + 0.5f, 0.f, 255.f));
+        //     }
+        //     Vec3f rgbF = SRGBToLinear(rgb);
+        //     out[0]     = rgbF.x;
+        //     out[1]     = rgbF.y;
+        //     out[2]     = rgbF.z;
+        // }
+        // else
+        // {
+        out[0] = Pow(out[0], 2.2f);
+        out[1] = Pow(out[1], 2.2f);
+        out[2] = Pow(out[2], 2.2f);
+        // }
+        for (i32 i = 0; i < nc; i++)
+        {
+            out[i] *= iterator->ReadFloat(1.f);
+        }
+
+        result[0] = out[0];
+        result[1] = out[1];
+        result[2] = out[2];
+    }
 }
 
 // TODO: instead of this junk I should just create a preprocessor (i.e. write a text file
 // that is code)
 //////////////////////////////////////////////////////////////////////////////////////////////
 
+#if 0
+{
 #define ROUGHNESS_TMPL(...)    TextureType ur, TextureType vr, TextureType r
 #define IOR_TMPL(...)          typename Spectrum __VA_ARGS__
 #define DISPLACEMENT_TMPL(...) TextureType disp __VA_ARGS__
@@ -195,136 +231,260 @@ static_assert(CHECK_RETURN(ROUGHNESS) == 1, "CHECK_RETURN SHOULD BE 1");
         new (result) BSDF(bxdf, si.shading.dpdu, si.shading.n);                               \
     }
 
-DEFINE_MATERIAL_SHADER(Dielectric, DielectricBxDF, DISPLACEMENT, IOR, ROUGHNESS)
+// DEFINE_MATERIAL_SHADER(Dielectric, DielectricBxDF, DISPLACEMENT, IOR, ROUGHNESS)
+}
+#endif
 
-enum class MaterialTypes
+MATERIAL_FUNCTION_HEADER(ShaderEvaluate_Diffuse)
 {
-    Interface,
-    Diffuse,
-    DiffuseTransmission,
-    CoatedDiffuse,
-    Dielectric,
-    Max,
-};
+    Vec4f filterWidths(.75f);
+    SampledSpectrum s = ProcessAlbedoTexture(callbacks[0], itr, si, lambda, filterWidths);
 
-template <>
-MaterialCallback GenerateMaterialCallback()
-{
-    // i feel like literally the logical conclusion of what I'm doing is dr. jit, no? like,
-    // i want to construct megakernel callbacks at runtime for each material type.
-    // why not just go all the way and do it for literally every computation? for simd
-    // queues, why have per type queues? it really should just be one massive kernel for
-    // each type no?
+    DiffuseBxDF *bxdf = PushStruct(arena, DiffuseBxDF);
+    new (bxdf) DiffuseBxDF(s);
+    result = bxdf;
 }
 
-void CreateMaterials(Arena *arena, Tokenizer *tokenizer)
+MATERIAL_FUNCTION_HEADER(ShaderEvaluate_DiffuseTransmission)
 {
-    TempArena temp = ScratchStart(0, 0);
+    Vec4f filterWidths(.75f);
+    SampledSpectrum r = ProcessAlbedoTexture(callbacks[0], itr, si, lambda, filterWidths);
+    SampledSpectrum t = ProcessAlbedoTexture(callbacks[1], itr, si, lambda, filterWidths);
+
+    DiffuseTransmissionBxDF *bxdf = PushStruct(arena, DiffuseBxDF);
+    new (bxdf) DiffuseTransmissionBxDF(r, t);
+    result = bxdf;
+}
+
+void ShaderEvaluate_DielectricHelper(TextureCallback *callbacks, Arena *arena,
+                                     AttributeIterator *itr, SurfaceInteraction &si,
+                                     SampledWavelengths &lambda, DielectricBxDF *result)
+{
+    Vec4lfn filterWidths(.75f);
+    f32 eta;
+    callbacks[itr->callbackCount++](itr, si, lambda, filterWidths, &eta);
+
+    f32 uRoughness, vRoughness;
+    ProcessRoughness(callbacks, itr, si, lambda, filterWidths, uRoughness, vRoughness);
+
+    bool remapRoughness = itr->ReadBool(true);
+
+    uRoughness = remapRoughness ? TrowbridgeReitzDistribution::RoughnessToAlpha(uRoughness)
+                                : uRoughness;
+    vRoughness = remapRoughness ? TrowbridgeReitzDistribution::RoughnessToAlpha(vRoughness)
+                                : vRoughness;
+
+    new (result) DielectricBxDF(eta, TrowbridgeReitzDistribution(uRoughness, vRoughness));
+}
+
+MATERIAL_FUNCTION_HEADER(ShaderEvaluate_Dielectric)
+{
+    DielectricBxDF *bxdf = PushStruct(arena, DielectricBxDF);
+    ShaderEvaluate_DielectricHelper(callbacks, arena, itr, si, lambda, bxdf);
+    result = bxdf;
+}
+
+MATERIAL_FUNCTION_HEADER(ShaderEvaluate_CoatedDiffuse)
+{
+    DielectricBxDF diBxDF;
+    ShaderEvaluate_DielectricHelper(callbacks, arena, itr, si, lambda, &diBxDF);
+
+    SampledSpectrumN reflectance =
+        ProcsesAlbedoTexture(callbacks[itr->callbackCount++], itr, si, lambda, filterWidths);
+    SampledSpectrumN albedo =
+        ProcsesAlbedoTexture(callbacks[itr->callbackCount++], itr, si, lambda, filterWidths);
+
+    f32 g;
+    callbacks[itr->callbackCount++](itr, si, lambda, filterWidths, &g);
+
+    i32 maxDepth  = itr->ReadInt(10);
+    i32 nSamples  = itr->ReadInt(1);
+    f32 thickness = itr->ReadFloat(.01);
+
+    CoatedDiffuseBxDF *bxdf = PushStruct(arena, CoatedDiffuseBxDF);
+    new (bxdf) CoatedDiffuseBxDF(diBxDF, DiffuseBxDF(reflectance), a, gg, thickness, maxDepth,
+                                 nSamples);
+    result = bxdf;
+}
+
+struct MaterialNode
+{
+    string str;
+    u32 index;
+
+    u32 Hash() const { return Hash(str); }
+    bool operator==(const MaterialNode &a, const MaterialNode &b) const
+    {
+        return a.str == b.str;
+    }
+    bool operator==(string s, const MaterialNode &m) const { return s == m.str; }
+    bool operator==(const MaterialNode &m, string s) const { return s == m.str; }
+};
+
+typedef HashMap<MaterialNode> MaterialHashMap;
+MaterialHashMap CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *tokenizer)
+{
+    TempArena temp = ScratchStart(&tempArena, 1);
     Scene *scene   = GetScene();
-    // ChunkedLinkedList<Material, 1024> materialsList(temp.arena);
-    ChunkedLinkedList<ScenePacket, 1024> materialPackets(temp.arena);
+
+    ChunkedLinkedList<Material, 1024> materialsList(temp.arena);
+    MaterialHashMap table(tempArena, 8192);
+
+    StringBuilder builders[(u32)(MaterialTypes::Max)];
+    for (u32 i = 0; i < (u32)MaterialTypes::Max; i++)
+    {
+        builders[i].arena = temp.arena;
+    }
+
+    u64 totalSizes[(u32)MaterialTypes::Max];
+    // u32 totalCounts[(u32)MaterialTypes::Max];
     while (!Advance(tokenizer, "MATERIALS_END "))
     {
+        bool advanceResult = Advance(tokenizer, "m ");
+        Assert(advanceResult);
         string materialName = ReadWord(tokenizer);
+
+        // Add to hash table
+        table.Add(tempArena, MaterialNode{materialName, materialsList.totalCount});
+
         SkipToNextChar(tokenizer);
 
         // Get the type of material
-        i32 index = -1;
-        for (u32 materialTypeIndex = 0; materialTypeIndex < (u32)MaterialTypes::Max;
-             materialTypeIndex++)
+        i32 materialTypeIndex = -1;
+        for (u32 m = 0; m < (u32)MaterialTypes::Max; m++)
         {
-            if (Advance(tokenizer, materialTypeNames[materialTypeIndex]))
+            if (Advance(tokenizer, materialTypeNames[m]))
             {
-                index = materialTypeIndex;
+                materialTypeIndex = m;
                 break;
             }
         }
         SkipToNextChar(tokenizer);
 
-        const string *materialParamNames = materialParameterNames[index];
-        u32 parameterCount               = materialParameterCounts[index];
+        Material *material = &materialsList.AddBack();
+
+        const string *materialParamNames = materialParameterNames[materialTypeIndex];
+        u32 parameterCount               = materialParameterCounts[materialTypeIndex];
         Assert(index != -1);
 
-        TextureType *types      = PushArray(temp.arena, TextureType, parameterCount);
-        TextureEvalFunc **funcs = PushArray(arena, TextureEvalFunc *, parameterCount);
+        material->funcs = PushArray(arena, TextureCallback, parameterCount);
+        // TODO: it's not this exactly
+        material->count = parameterCount;
 
-        for (u32 i = 0; i < parameterCount; i++)
+        // NOTE: 0 means float, 1 means spectrum
+        auto ParseDataType = [&[(StringBuilder *builder, DataType type, u32 p) -> u32 
         {
-            bool result = Advance(tokenizer, materialParamNames[i]);
-            Assert(result);
-            SkipToNextChar(tokenizer);
-
-            i32 textureIndex = -1;
-
-            // Parse a texture
-            for (u32 textureTypeIndex = 0; textureTypeIndex < (u32)TextureType::Max;
-                 textureTypeIndex++)
+            u32 size = 0;
+            switch (type)
             {
-                if (Advance(tokenizer, textureTypeNames[textureTypeIndex]))
+                case DataType::Float:
                 {
-                    textureIndex        = textureTypeNames[textureTypeIndex];
-                    funcs[textureIndex] = ;
-                    break;
+                    u8 *start = tokenizer.cursor;
+                    while (!CharIsBlank(*tokenizer.cursor))
+                    {
+                        tokenizer->cursor += sizeof(f32);
+                        size += sizeof(f32);
+                    }
+                    Put(builder, start, size);
+                }
+                break;
+                case DataType::String:
+                {
+                    u32 strSize = *(u32 *)tokenizer->cursor;
+                    tokenizer->cursor += sizeof(u32);
+                    Put(builder, tokenizer->cursor, strSize);
+                    tokenizer->cursor += strSize;
+                    size += strSize + sizeof(u32);
+                }
+                break;
+                default: Error(0, "forgot");
+            }
+            return size;
+        };
+
+        auto ParseTexture = [&](StringBuilder *builder, u32 p, u32 textureTypeIndex) -> u32 {
+            DataType *types = textureDataTypes[textureTypeIndex];
+            string *params  = textureParameterArrays[textureTypeIndex];
+            u32 count       = textureParameterCounts[textureTypeIndex];
+            u32 totalSize   = 0;
+            u64 startSize   = builder->totalSize;
+            for (u32 i = 0; i < count; i++)
+            {
+                if (Advance(tokenizer, params[i]))
+                {
+                    SkipToNextChar(tokenizer);
+                    totalSize += ParseDataType(types[i], p);
+                    SkipToNextChar(tokenizer);
                 }
             }
+            return totalSize;
+        };
 
-            // get the function pointer
-        }
-        for (;;)
+        // convert the file description into the appropriate byte format, join into the
+        // attribute table, write material callbacks that properly process the attribute table.
+        // problems:
+        // - hash table to link shapes to materials
+        // - process material tables properly at runtime (i.e. surface interaction gets material pointer/index,
+        // get that material then call shade, should be straightforward)
+        // - fix string builder to be more efficient (less allocations)
+
+        u32 totalSize = 0;
+        for (u32 i = 0; i < parameterCount; i++)
         {
-            if (Advance(tokenizer, "ur "))
+            if (!Advance(tokenizer, materialParamNames[i])) continue;
+
+            if (Advance(tokenizer, "t "))
             {
-                Error(isAnisotropic != 1, "Cannot specify both roughness and "
-                                          "anisotropic roughness\n");
-                isAnisotropic = 2;
-                ur            = GetTextureType(tokenizer);
+                // Parse a texture
+                for (u32 textureTypeIndex = 0; textureTypeIndex < (u32)TextureType::Max;
+                     textureTypeIndex++)
+                {
+                    if (Advance(tokenizer, textureTypeNames[textureTypeIndex]))
+                    {
+                        DataType *textureDataTypes;
+                        func.funcs[i] = textureFuncs[textureTypeIndex];
+                        totalSize +=
+                            ParseTexture(&builders[materialTypeIndex], i, textureTypeIndex);
+                        break;
+                    }
+                }
             }
-            else if (Advance(tokenizer, "vr "))
+            else if (Advance(tokenizer, "s "))
             {
-                Error(isAnisotropic != 1, "Cannot specify both roughness and "
-                                          "anisotropic roughness\n");
-                isAnisotropic = 2;
-                vr            = GetTextureType(tokenizer);
+                f32 *start = tokenizer.cursor;
+                u32 count  = 0;
+                while (!CharIsBlank(*tokenizer.cursor)) tokenizer.cursor += sizeof(f32);
+                Assert((count & 1) == 0);
+
+                PiecewiseLinearSpectrum *spec =
+                    PiecewiseLinearSpectrum::FromInterleaved(arena, start, samples, false);
+                Put(builder, &spec, sizeof(spec));
+                if (materialParamNames[i] == "eta")
+                {
+                    func.funcs[i] = ProcessIOR;
+                }
+                else
+                {
+                    Error(0, "%S \n", materialParamNames[i]);
+                }
             }
-            else if (Advance(tokenizer, "r "))
-            {
-                Error(isAnisotropic != 2, "Cannot specify both roughness and "
-                                          "anisotropic roughness\n");
-                isAnisotropic = 1;
-                r             = GetTextureType(tokenizer);
-            }
-            else if (Advance(tokenizer, "ior "))
-            {
-                eta = GetTextureType(tokenizer);
-            }
-            else
-            {
-                break;
-            }
+            SkipToNextChar(tokenizer);
         }
-        // TODO: surely there's a better way of doing this than just if elsing
-        // every single combination
-        if (ur == TextureType::None && vr == TextureType::None &&
-            r == TextureType::ConstantFloat && eta == TextureType::ConstantFloat &&
-            disp == TextureType::None)
-        {
-            Material &mat = materialsList.AddBack();
-            mat.eval      = ShaderEvaluate_Dielectric<TextureType::None, ConstantSpectrum,
-                                                      TextureType::None, TextureType::None,
-                                                      TextureType::ConstantFloat>;
-        }
-        else
-        {
-            Error(0, "Dielectric version not supported.\n");
-        }
-        // Create appropriate texture
-        // Material *material = CreateDielectricMaterial(arena, Tokenizer *
-        // tokenizer);
     }
-    scene->materials = StaticArray<Material>(arena, materialsList.totalCount);
+
+    // Join
+    scene->materialTables = StaticArray<AttributeTable>(arena, MaterialTypes::Max);
+    scene->materials      = StaticArray<Material>(arena, materialsList.totalCount);
+
     materialsList.Flatten(scene->materials);
 
+    for (u32 index = 0; index < (u32)MaterialTypes::Max; index++)
+    {
+        scene->materialTables[index].buffer = CombineBuilderNodes(arena, &builders[index]).str;
+    }
+
     ScratchEnd(temp);
+    return table;
 }
 
 void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
@@ -554,12 +714,10 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
             scene->primitives    = PushArrayNoZero(arena, Mesh, shapes.totalCount);
             shapes.Flatten((Mesh *)scene->primitives);
         }
-        else if (Advance(&tokenizer, "TEXTURES_START"))
-        {
-        }
         else if (Advance(&tokenizer, "MATERIALS_START"))
         {
-            // CreateMaterials(arena);
+            // TODO: multithread this
+            CreateMaterials(arena, temp.arena, tokenizer);
         }
         else
         {
@@ -569,6 +727,8 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
     files.Flatten(scene->childScenes);
 
     scheduler.Wait(&counter);
+
+    // TODO: must match shapes to materials before unmapping
 
     OS_UnmapFile(tokenizer.input.str);
     PrimitiveIndices *ids = PushStructConstruct(arena, PrimitiveIndices)(

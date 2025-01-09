@@ -178,6 +178,7 @@ struct ConstantSpectrumTexture
     }
 };
 
+#if 0
 struct PtexTexture
 {
     string filename;
@@ -295,6 +296,7 @@ struct PtexTexture
         return RGBAlbedoSpectrum::Sample(*RGBColorSpace::sRGB, results, lambda);
     }
 };
+#endif
 
 // template <typename Texture>
 struct NormalMap

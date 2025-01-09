@@ -74,211 +74,23 @@ struct InstanceType
     u32 transformIndexEnd;
 };
 
-MaterialTypes ConvertStringToMaterialType(string type)
-{
-    if (type == "diffuse") return MaterialTypes::Diffuse;
-    else if (type == "diffusetransmission") return MaterialTypes::DiffuseTransmission;
-    else if (type == "coateddiffuse") return MaterialTypes::CoatedDiffuse;
-    else if (type == "dielectric") return MaterialTypes::Dielectric;
-    else if (type == "interface") return MaterialTypes::Interface;
-    else
-    {
-        Error(0, "Material type not supported or valid.\n");
-        return MaterialTypes(0);
-    }
-}
-
-enum class TextureType
-{
-    bilerp,
-    checkerboard,
-    constant,
-    directionmix,
-    dots,
-    fbm,
-    imagemap,
-    marble,
-    mix,
-    ptex,
-    scale,
-    windy,
-    wrinkled,
-    Max,
-};
-ENUM_CLASS_FLAGS(TextureType)
-
-TextureType ConvertStringToTextureType(string type)
-{
-    if (type == "ptex") return TextureType::ptex;
-    // else if (type == "imagemap") return TextureType::imagemap;
-    else Error(0, "Texture type not supported or valid\n");
-    return TextureType(0);
-}
-
-// struct MaterialID
-// {
-//     MaterialTypes type;
-//     u32 index;
-// };
-
 // NOTE: for materials and textures
 struct NamedPacket
 {
     ScenePacket packet;
     string name;
     string type;
-};
 
-struct SceneHashNode
-{
-    u32 hash;
-    NamedPacket *packet;
-
-    SceneHashNode *next;
-};
-
-struct SceneHashList
-{
-    SceneHashNode *first;
-    SceneHashNode *last;
-};
-
-// Tables
-
-static const string materialTypeNames[] = {
-    "interface", "diffuse", "diffusetransmission", "coateddiffuse", "dielectric",
-};
-
-static const StringId materialTypeIDs[] = {
-    "interface"_sid,     "diffuse"_sid,    "diffusetransmission"_sid,
-    "coateddiffuse"_sid, "dielectric"_sid,
-};
-
-static const StringId diffuseParameterIds[] = {
-    "reflectance"_sid,
-    "displacement"_sid,
-};
-
-static const string diffuseParameterNames[] = {
-    "reflectance",
-    "displacement",
-};
-
-static const StringId diffuseTransmissionIds[] = {
-    "reflectance"_sid,
-    "transmittance"_sid,
-    "scale"_sid,
-    "displacement"_sid,
-};
-
-static const string diffuseTransmissionNames[] = {
-    "reflectance",
-    "transmittance",
-    "scale",
-    "displacement",
-};
-
-static const StringId dielectricIds[] = {
-    "roughness"_sid,      "uroughness"_sid, "vroughness"_sid,
-    "remaproughness"_sid, "eta"_sid,        "displacement"_sid,
-};
-
-static const string dielectricNames[] = {
-    "roughness", "uroughness", "vroughness", "remaproughness", "eta", "displacement",
-};
-
-static const StringId coatedDiffuseIds[] = {
-    "roughness"_sid,   "uroughness"_sid,   "vroughness"_sid, "remaproughness"_sid,
-    "reflectance"_sid, "displacement"_sid, "albedo"_sid,     "g"_sid,
-    "maxdepth"_sid,    "nsamples"_sid,     "thickness"_sid,
-};
-
-static const string coatedDiffuseNames[] = {
-    "roughness", "uroughness", "vroughness", "remaproughness", "reflectance", "displacement",
-    "albedo",    "g",          "maxdepth",   "nsamples",       "thickness",
-};
-
-static const StringId *materialParameterIDs[] = {
-    0, diffuseParameterIds, diffuseTransmissionIds, coatedDiffuseIds, dielectricIds};
-
-static const StringId materialParameterCounts[] = {
-    0,
-    ArrayLength(diffuseParameterIds),
-    ArrayLength(diffuseTransmissionIds),
-    ArrayLength(coatedDiffuseIds),
-    ArrayLength(dielectricIds),
-};
-
-static const string *materialParameterNames[] = {
-    0, diffuseParameterNames, diffuseTransmissionNames, coatedDiffuseNames, dielectricNames,
-};
-
-typedef SceneHashList *SceneHashMap;
-SceneHashNode *LookupHashMap(SceneHashMap &map, string name, u32 hashMask)
-{
-    u32 hash            = Hash(name);
-    SceneHashList &list = map[hash & hashMask];
-    SceneHashNode *node = list.first;
-    while (node)
+    u32 Hash() const { return Hash(name); }
+    bool operator==(const NamedPacket &a, const NamedPacket &b) const
     {
-        if (node->hash == hash)
-        {
-            if (name == node->packet->name) return node;
-        }
-        node = node->next;
+        return a.name == b.name;
     }
-    if (!node)
-    {
-        Error(0, "Name not found in hashmap\n");
-    }
-    return 0;
-}
+    bool operator==(string str, const NamedPacket &n) const { return str == n.name; }
+    bool operator==(const NamedPacket &n, string str) const { return str == n.name; }
+};
 
-void AddHashMap(Arena *arena, SceneHashMap &map, NamedPacket *packet, u32 hashMask)
-{
-    u32 hash            = Hash(packet->name);
-    SceneHashList &list = map[hash & hashMask];
-    SceneHashNode *node = list.first;
-    while (node)
-    {
-        if (node->hash == hash)
-        {
-            if (node->packet->name == packet->name)
-            {
-                Error(0, "Error: Using a duplicate name.\n");
-            }
-            else
-            {
-                Error(0, "Hash collision\n");
-            }
-        }
-        node = node->next;
-    }
-    Assert(!node);
-
-    node         = PushStruct(arena, SceneHashNode);
-    node->hash   = hash;
-    node->packet = packet;
-
-    QueuePush(list.first, list.last, node);
-}
-
-void MergeSceneHashMap(SceneHashMap &to, SceneHashMap &from, u32 size)
-{
-    for (u32 i = 0; i < size; i++)
-    {
-        if (to[i].first == 0)
-        {
-            to[i].first = from[i].first;
-        }
-        else
-        {
-            Assert(to[i].last);
-            to[i].last->next = from[i].first;
-            if (from[i].last) to[i].last = from[i].last;
-        }
-    }
-}
+typedef HashMap<NamedPacket> SceneHashMap;
 
 struct PBRTFileInfo
 {
@@ -387,10 +199,6 @@ struct SceneLoadState
 
     IncludeMap includeMap;
 
-    // typedef ChunkedLinkedList<NamedPacket, 1024, MemoryType_Material> MaterialLL;
-    // typedef ChunkedLinkedList<NamedPacket, 1024, MemoryType_Texture> TextureLL;
-    // typedef ChunkedLinkedList<NamedPacket, 1024, MemoryType_Light> LightLL;
-
     void Init(Arena *arena)
     {
         u32 threadIndex = GetThreadIndex();
@@ -409,7 +217,7 @@ struct SceneLoadState
             arenas[i]    = ArenaAlloc(16);
             materials[i] = ChunkedLinkedList<NamedPacket, 1024, MemoryType_Material>(arena);
             lights[i]    = ChunkedLinkedList<NamedPacket, 1024, MemoryType_Light>(arena);
-            textureHashMaps[i] = PushArray(arena, SceneHashList, hashMapSize);
+            textureHashMaps[i] = SceneHashMap(arena, hashMapSize);
         }
 
         includeMap.count   = 1024;
@@ -575,8 +383,6 @@ string ReadWordAndSkipToNextChar(Tokenizer *tokenizer)
 void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
                     MemoryType memoryType)
 {
-    static const u32 MAX_PARAMETER_COUNT = 16;
-
     string infoType;
     b8 result;
     u32 numVertices = 0;
@@ -1431,8 +1237,8 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 Assert(result);
                 PBRTSkipToNextChar(&tokenizer);
 
-                NamedPacket *nPacket = PushStruct(threadArena, NamedPacket);
-                ScenePacket *packet  = &nPacket->packet;
+                NamedPacket nPacket;
+                ScenePacket *packet = &nPacket->packet;
                 packet->type =
                     "texture"_sid; // Hash(StrConcat(tempArena, textureType, textureClass));
 
@@ -1441,7 +1247,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 ReadParameters(threadArena, packet, &tokenizer, MemoryType_Texture);
                 nPacket->name = PushStr8Copy(threadArena, textureName);
                 nPacket->type = PushStr8Copy(threadArena, textureClass);
-                AddHashMap(threadArena, textureHashMap, nPacket, sls->hashMapSize - 1);
+                textureHashmap.Add(threadArena, nPacket, sls->hashMapSize - 1);
             }
             break;
             case "WorldBegin"_sid:
@@ -1498,56 +1304,12 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
     return state;
 } // namespace rt
 
-struct MaterialHashNode
-{
-    u64 hash;
-    u32 id;
-    string buffer;
-    MaterialHashNode *next;
-};
-
-struct TextureHashNode
-{
-    u64 hash;
-    u32 id;
-    string name;
-    TextureHashNode *next;
-};
-
-static const string textureTypeNames[] = {
-    "bilerp", "checkerboard", "constant", "directionmix", "dots",  "fbm",      "imagemap",
-    "marble", "mix",          "ptex",     "scale",        "windy", "wrinkled",
-};
-
-static const string ptexParameterNames[] = {
-    "encoding",
-    "filename",
-    "scale",
-};
-
-static const StringId ptexParameterIDs[] = {
-    "encoding"_sid,
-    "filename"_sid,
-    "scale"_sid,
-};
-
-static const string *textureParameterArrays[] = {
-    0, 0, 0, 0, 0, 0, 0, 0, 0, ptexParameterNames, 0, 0, 0,
-};
-
-static const StringId *textureParameterIds[] = {
-    0, 0, 0, 0, 0, 0, 0, 0, 0, ptexParameterIDs, 0, 0, 0,
-};
-
-static const u32 textureParameterCounts[] = {
-    0, 0, 0, 0, 0, 0, 0, 0, 0, ArrayLength(ptexParameterNames), 0, 0, 0,
-};
-
 void WriteTexture(StringBuilder *builder, SceneHashNode *texture)
 {
     NamedPacket *packet      = texture->packet;
     ScenePacket *scenePacket = &packet->packet;
-    Put(builder, "t name %S type %S ", packet->name, packet->type);
+    // Put(builder, "t name %S type %S ", packet->name, packet->type);
+    Put(builder, "t %S ", packet->type);
     u32 index = (u32)ConvertStringToTextureType(packet->type);
 
     const string *parameterNames = textureParameterArrays[index];
@@ -1593,7 +1355,7 @@ void WriteMaterials(StringBuilder *builder, SceneHashMap *textureHashMap, NamedP
                     {
                         u32 count = scenePacket->sizes[p] / sizeof(f32);
                         Assert(count == 1);
-                        Put(builder, "f ");
+                        Put(builder, "t constant ");
                         Put(builder, scenePacket->bytes[p], scenePacket->sizes[p]);
                         Put(builder, " ");
                     }
@@ -1601,17 +1363,20 @@ void WriteMaterials(StringBuilder *builder, SceneHashMap *textureHashMap, NamedP
                     case DataType::Vec3:
                     {
                         Assert(scenePacket->sizes[p] == sizeof(Vec3f));
-                        Put(builder, "vec3 ");
+                        Put(builder, "t constant ");
                         Put(builder, scenePacket->bytes[p], scenePacket->sizes[p]);
                         Put(builder, " ");
+                    }
+                    break;
+                    case DataType::Spectrum:
+                    {
                     }
                     break;
                     case DataType::Texture:
                     {
                         string textureName =
                             Str8(scenePacket->bytes[p], scenePacket->sizes[p]);
-                        SceneHashNode *node =
-                            LookupHashMap(*textureHashMap, textureName, hashMask);
+                        SceneHashNode *node = textureHashMap->Get(textureName, hashMask);
                         WriteTexture(builder, node);
                     }
                     break;
@@ -1665,7 +1430,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
         SceneHashMap *textureHashMap = &state->textureHashMaps[0];
         for (u32 i = 1; i < state->numProcessors; i++)
         {
-            MergeSceneHashMap(*textureHashMap, state->textureHashMaps[i], state->hashMapSize);
+            textureHashMap->Merge(state->textureHashMaps[i], state->hashMapSize);
         }
 
         scheduler.Schedule(&counter, state->numProcessors, 1, [=](u32 jobID) {

@@ -360,180 +360,6 @@ private:
     }
 };
 
-#if 0 
-template <u32 hashSize, u32 indexSize>
-struct AtomicFixedHashTable
-{
-    std::atomic<u8> locks[hashSize]; // TODO: maybe could have "stripes", which would save memory but some buckets
-                                     // would be locked even if they are unused
-    u32 hash[hashSize];
-    u32 nextIndex[hashSize];
-
-    AtomicFixedHashTable();
-    void Clear();
-    void BeginLock(u32 lockIndex);
-    void EndLock(u32 lockIndex);
-    u32 First(u32 key) const;
-    u32 FirstConcurrent(u32 key);
-    u32 Next(u32 index) const;
-    b8 IsValid(u32 index) const;
-    b8 IsValidConcurrent(u32 key, u32 index);
-
-    void Add(u32 key, u32 index);
-    void AddConcurrent(u32 key, u32 index);
-    void RemoveConcurrent(u32 key, u32 index);
-
-    u32 Find(const u32 inHash, const u32 *array) const;
-
-    template <typename T>
-    u32 Find(const u32 inHash, const T *array, const T element) const;
-};
-
-template <u32 hashSize, u32 indexSize>
-inline AtomicFixedHashTable<hashSize, indexSize>::AtomicFixedHashTable()
-{
-    StaticAssert(indexSize < 0xffffffff, IndexIsNotU32Max);
-    StaticAssert((hashSize & (hashSize - 1)) == 0, HashIsPowerOfTwo);
-    Clear();
-}
-
-template <u32 hashSize, u32 indexSize>
-inline b8 AtomicFixedHashTable<hashSize, indexSize>::IsValid(u32 index) const
-{
-    return index != 0xffffffff;
-}
-
-template <u32 hashSize, u32 indexSize>
-inline b8 AtomicFixedHashTable<hashSize, indexSize>::IsValidConcurrent(u32 key, u32 index)
-{
-    if (index == 0xffffffff)
-    {
-        key &= (hashSize - 1);
-        EndLock(key);
-    }
-    return index != 0xffffffff;
-}
-
-template <u32 hashSize, u32 indexSize>
-inline void AtomicFixedHashTable<hashSize, indexSize>::Clear()
-{
-    MemorySet(hash, 0xff, sizeof(hash));
-    MemorySet(locks, 0, sizeof(locks));
-}
-
-template <u32 hashSize, u32 indexSize>
-inline void AtomicFixedHashTable<hashSize, indexSize>::BeginLock(u32 lockIndex)
-{
-    u8 val = 0;
-    while (!locks[lockIndex].compare_exchange_weak(val, val + 1))
-    {
-        _mm_pause();
-    }
-}
-
-template <u32 hashSize, u32 indexSize>
-inline void AtomicFixedHashTable<hashSize, indexSize>::EndLock(u32 lockIndex)
-{
-    locks[lockIndex].store(0);
-}
-
-template <u32 hashSize, u32 indexSize>
-inline u32 AtomicFixedHashTable<hashSize, indexSize>::FirstConcurrent(u32 key)
-{
-    key &= (hashSize - 1);
-    BeginLock(key);
-    return hash[key];
-}
-
-template <u32 hashSize, u32 indexSize>
-inline u32 AtomicFixedHashTable<hashSize, indexSize>::First(u32 key) const
-{
-    key &= (hashSize - 1);
-    return hash[key];
-}
-
-template <u32 hashSize, u32 indexSize>
-inline u32 AtomicFixedHashTable<hashSize, indexSize>::Next(u32 index) const
-{
-    return nextIndex[index];
-}
-
-template <u32 hashSize, u32 indexSize>
-inline void AtomicFixedHashTable<hashSize, indexSize>::AddConcurrent(u32 key, u32 index)
-{
-    Assert(index < indexSize);
-    key &= (hashSize - 1);
-    BeginLock(key);
-    nextIndex[index] = hash[key];
-    hash[key]        = index;
-    EndLock(key);
-}
-
-template <u32 hashSize, u32 indexSize>
-inline void AtomicFixedHashTable<hashSize, indexSize>::Add(u32 key, u32 index)
-{
-    Assert(index < indexSize);
-    key &= (hashSize - 1);
-    nextIndex[index] = hash[key];
-    hash[key]        = index;
-}
-
-template <u32 hashSize, u32 indexSize>
-inline void AtomicFixedHashTable<hashSize, indexSize>::RemoveConcurrent(u32 key, u32 index)
-{
-    key &= (hashSize - 1);
-    BeginLock(key);
-    if (hash[key] == index)
-    {
-        hash[key] = nextIndex[index];
-    }
-    else
-    {
-        for (u32 i = hash[key]; IsValidLock(key, i); i = Next(i))
-        {
-            if (nextIndex[i] == index)
-            {
-                nextIndex[i] = nextIndex[index];
-                break;
-            }
-        }
-    }
-}
-
-template <u32 hashSize, u32 indexSize>
-inline u32 AtomicFixedHashTable<hashSize, indexSize>::Find(const u32 inHash, const u32 *array) const
-{
-    u32 index = 0xffffffff;
-    u32 key   = inHash & (hashSize - 1);
-    for (u32 i = First(key); IsValid(i); i = Next(i))
-    {
-        if (array[i] == inHash)
-        {
-            index = i;
-            break;
-        }
-    }
-    return index;
-}
-
-template <u32 hashSize, u32 indexSize>
-template <typename T>
-inline u32 AtomicFixedHashTable<hashSize, indexSize>::Find(const u32 inHash, const T *array, const T element) const
-{
-    u32 index = 0xffffffff;
-    u32 key   = inHash & (hashSize - 1);
-    for (u32 i = First(key); IsValid(i); i = Next(i))
-    {
-        if (array[i] == element)
-        {
-            index = i;
-            break;
-        }
-    }
-    return index;
-}
-#endif
-
 struct HashIndex
 {
     Arena *arena;
@@ -860,6 +686,103 @@ struct ChunkedLinkedList
             last       = list->last;
             Assert(last->next == 0);
             totalCount += list->totalCount;
+        }
+    }
+};
+
+template <typename T>
+struct HashMap
+{
+    struct HashNode
+    {
+        u32 hash;
+        T value;
+
+        HashNode *next;
+    };
+
+    struct HashList
+    {
+        HashNode<T> *first;
+        HashNode<T> *last;
+    };
+    HashList *map;
+    u32 count;
+    u32 hashMask;
+
+    HashMap(Arena *arena, u32 count) : count(count)
+    {
+        map = PushArray(arena, HashList, count);
+        Assert(IsPow2(count));
+        u32 hashMask = count - 1;
+    }
+
+    T &Get(string name)
+    {
+        u32 hash       = Hash(name);
+        HashList &list = map[hash & hashMask];
+        HashNode *node = list.first;
+        while (node)
+        {
+            if (node->hash == hash)
+            {
+                if (name == node->value) return node->value;
+            }
+            node = node->next;
+        }
+        if (!node)
+        {
+            Error(0, "Name not found in hashmap\n");
+        }
+        return 0;
+    }
+
+    void Add(Arena *arena, T &val)
+    {
+        u32 hash            = val.Hash(); // Hash(packet->name);
+        SceneHashList &list = map[hash & hashMask];
+        SceneHashNode *node = list.first;
+        while (node)
+        {
+            if (node->hash == hash)
+            {
+                if (node->value == val)
+                {
+                    Error(0, "Error: Using a duplicate name.\n");
+                }
+                else
+                {
+                    Error(0, "Hash collision\n");
+                }
+            }
+            node = node->next;
+        }
+        Assert(!node);
+
+        node       = PushStruct(arena, SceneHashNode);
+        node->hash = hash;
+        node->val  = val;
+
+        QueuePush(list.first, list.last, node);
+    }
+
+    void Merge(HashMap<T> &from)
+    {
+        Assert(from.count == count);
+        for (u32 i = 0; i < size; i++)
+        {
+            HashList *toList   = &map[i];
+            HashList *fromList = &from.map[i];
+            if (toList->first == 0)
+            {
+                toList->first = fromList->first;
+            }
+            else
+            {
+                Assert(toList->last);
+                toList->last->next = fromList->first;
+                if (fromList->last) toList->last = fromList->last;
+            }
         }
     }
 };

@@ -546,11 +546,14 @@ enum class AttributeType
     // Spectrum,
     RGB,
     String,
+    Int,
+    Bool,
 };
 
 struct AttributeTable
 {
     u8 *buffer;
+    // defaults
 
 #ifdef DEBUG
     AttributeType *types;
@@ -560,9 +563,34 @@ struct AttributeTable
 
 struct AttributeTableKey
 {
-    u32 tableIndex;
+    static u32 indexBits;
+    static u32 indexMask;
+    static u32 indexShift;
+    u32 tableIndex_Size;
     u32 offset;
+
+    void SetIndexAndSize(u32 index, u32 size)
+    {
+        Assert(size < (1 << (32 - indexBits)));
+        Assert(index < (1 << indexBits));
+
+        tableIndex_Size = (index << (32 - indexBits)) | size;
+    }
+
+    AttributeTableKey(u32 index, u32 size, u32 offset)
+        : tableIndex_Size(SetIndexAndSize(index, size)), offset(offset)
+    {
+    }
+
+    u32 GetSize() const { return tableIndex_Size & (~indexMask); }
+    u32 GetIndex() const { return (tableIndex_Size & indexMask) >> indexShift; }
 };
+
+AttributeTableKey::indexBits  = Bsf(NextPowerOfTwo((u32)MaterialTypes::Max));
+AttributeTableKey::indexShift = 32 - indexBits;
+AttributeTableKey::indexMask  = ((1 << AttributeTableKey::indexBits) - 1)
+                               << AttributeTableKey::indexShift;
+static_assert(AttributeTableKey::indexBits < 8, "too many materials\n");
 
 AttributeTable *GetMaterialTable(u32 tableIndex);
 
@@ -570,13 +598,16 @@ struct AttributeIterator
 {
     AttributeTable *table;
     u64 offset;
+    u64 limit;
+    i32 callbackCount = 0;
 #ifdef DEBUG
     u32 countOffset = 0;
 #endif
 
     AttributeIterator() {}
     AttributeIterator(AttributeTableKey key)
-        : table(GetMaterialTable(key.tableIndex)), offset(key.offset)
+        : table(GetMaterialTable(key.GetIndex()), offset(key.offset),
+          limit(key.offset + key.GetSize())
     {
     }
     void DebugCheck(AttributeType type)
@@ -594,38 +625,71 @@ struct AttributeIterator
         DebugCheck(AttributeType::Float);
         return *(f32 *)(table->buffer + o);
     }
-    string ReadString()
+    string ReadString(string default = {})
     {
         u32 size = *(u32 *)(table->buffer + offset);
+        if (offset >= limit) return default;
         offset += sizeof(size);
         string result = Str8(table->buffer + offset, size);
         offset += size;
         DebugCheck(AttributeType::String);
         return result;
     }
+    i32 ReadInt(i32 default = 0)
+    {
+        u64 o = offset;
+        if (o >= limit) return default;
+        offset += sizeof(i32);
+        DebugCheck(AttributeType::Int);
+        return *(i32 *)(table->buffer + o);
+    }
+    bool ReadBool(bool default = 0)
+    {
+        u64 o = offset;
+        if (o >= limit) return default;
+        offset += sizeof(bool);
+        DebugCheck(AttributeType::Bool);
+        return *(bool *)(table->buffer + o);
+    }
 };
 
 #define MATERIAL_FUNCTION_HEADER(name)                                                        \
-    void name(Arena *arena, AttributeIterator *itr, SurfaceInteraction &si,                   \
-              SampledWavelengths &lambda, BSDFBase<BxDF> *result)
+    void name(TextureCallback *callbacks, Arena *arena, AttributeIterator *itr,               \
+              SurfaceInteraction &si, SampledWavelengths &lambda, BxDF &result)
 typedef MATERIAL_FUNCTION_HEADER((*MaterialEvalFunc));
 
-struct MaterialEvalFunc
-{
-    TextureEvalFunc **funcs;
-    u32 count;
+#define TEXTURE_CALLBACK(name)                                                                \
+    void name(AttributeIterator *iterator, SurfaceInteraction &intr,                          \
+              SampledWavelengths &lambda, const Vec4f &filterWidths, f32 *result)
+
+typedef MATERIAL_FUNCTION_HEADER((*MaterialCallback));
+typedef TEXTURE_CALLBACK((*TextureCallback));
+
+TEXTURE_CALLBACK(ProcessNullTexture) {}
+
+TEXTURE_CALLBACK(ProcessPtexTexture);
+
+TextureCallback textureFuncs = {
+    ProcessNullTexture, ProcessNullTexture, ProcessFloatTexture, ProcessNullTexture,
+    ProcessNullTexture, ProcessNullTexture, ProcessNullTexture,  ProcessNullTexture,
+    ProcessNullTexture, ProcessPtexTexture, ProcessNullTexture,  ProcessNullTexture,
+    ProcessNullTexture,
 };
 
 struct Material
 {
     AttributeTableKey key;
+    MaterialCallback shade;
+    TextureCallback *funcs;
+    u32 count;
 
-    MaterialEvalFunc eval;
     __forceinline void Shade(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
                              BSDFBase<BxDF> *result)
     {
         AttributeIterator itr(key);
-        eval(arena, &itr, si, lambda, result);
+        BxDF bxdf;
+        shade(funcs, arena, &itr, si, lambda, bxdf);
+        new (result) BSDF(bxdf, si.shading.dpdu, si.shading.n);
     }
 };
 
