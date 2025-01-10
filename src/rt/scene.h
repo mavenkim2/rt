@@ -738,7 +738,7 @@ struct ScenePrimitives
     union
     {
         AffineSpace *affineTransforms;
-        const PrimitiveIndices *primIndices;
+        PrimitiveIndices *primIndices;
     };
 
     u32 numTransforms;

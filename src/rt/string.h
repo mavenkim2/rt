@@ -103,23 +103,19 @@ constexpr u32 operator""_sid(const char *ptr, size_t count);
 
 struct StringBuilderNode
 {
-    string str;
-};
+    u8 *bytes;
+    u64 count;
+    u64 cap;
 
-struct StringBuilderChunkNode
-{
-    StringBuilderNode *values;
-    StringBuilderChunkNode *next;
-
-    u32 count;
-    u32 cap;
+    StringBuilderNode *next;
 };
 
 struct StringBuilder
 {
-    StringBuilderChunkNode *first;
-    StringBuilderChunkNode *last;
+    StringBuilderNode *first;
+    StringBuilderNode *last;
 
+    u64 cap = megabytes(2);
     u64 totalSize;
     Arena *arena;
 };

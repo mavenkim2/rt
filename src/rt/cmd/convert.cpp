@@ -11,8 +11,8 @@
 #include "../math/math.h"
 
 #include "../memory.h"
-#include "../containers.h"
 #include "../string.h"
+#include "../containers.h"
 #include "../win32.h"
 #include "../thread_context.h"
 #include "../hash.h"
@@ -81,13 +81,9 @@ struct NamedPacket
     string name;
     string type;
 
-    u32 Hash() const { return Hash(name); }
-    bool operator==(const NamedPacket &a, const NamedPacket &b) const
-    {
-        return a.name == b.name;
-    }
-    bool operator==(string str, const NamedPacket &n) const { return str == n.name; }
-    bool operator==(const NamedPacket &n, string str) const { return str == n.name; }
+    u32 Hash() const { return rt::Hash(name); }
+    bool operator==(const NamedPacket &other) const { return name == other.name; }
+    bool operator==(string str) const { return str == name; }
 };
 
 typedef HashMap<NamedPacket> SceneHashMap;
@@ -1238,16 +1234,16 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 PBRTSkipToNextChar(&tokenizer);
 
                 NamedPacket nPacket;
-                ScenePacket *packet = &nPacket->packet;
+                ScenePacket *packet = &nPacket.packet;
                 packet->type =
                     "texture"_sid; // Hash(StrConcat(tempArena, textureType, textureClass));
 
                 PBRTSkipToNextChar(&tokenizer);
 
                 ReadParameters(threadArena, packet, &tokenizer, MemoryType_Texture);
-                nPacket->name = PushStr8Copy(threadArena, textureName);
-                nPacket->type = PushStr8Copy(threadArena, textureClass);
-                textureHashmap.Add(threadArena, nPacket, sls->hashMapSize - 1);
+                nPacket.name = PushStr8Copy(threadArena, textureName);
+                nPacket.type = PushStr8Copy(threadArena, textureClass);
+                textureHashMap.Add(threadArena, nPacket);
             }
             break;
             case "WorldBegin"_sid:
@@ -1304,10 +1300,9 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
     return state;
 } // namespace rt
 
-void WriteTexture(StringBuilder *builder, SceneHashNode *texture)
+void WriteTexture(StringBuilder *builder, const NamedPacket *packet)
 {
-    NamedPacket *packet      = texture->packet;
-    ScenePacket *scenePacket = &packet->packet;
+    const ScenePacket *scenePacket = &packet->packet;
     // Put(builder, "t name %S type %S ", packet->name, packet->type);
     Put(builder, "t %S ", packet->type);
     u32 index = (u32)ConvertStringToTextureType(packet->type);
@@ -1376,8 +1371,8 @@ void WriteMaterials(StringBuilder *builder, SceneHashMap *textureHashMap, NamedP
                     {
                         string textureName =
                             Str8(scenePacket->bytes[p], scenePacket->sizes[p]);
-                        SceneHashNode *node = textureHashMap->Get(textureName, hashMask);
-                        WriteTexture(builder, node);
+                        const NamedPacket *packet = textureHashMap->Get(textureName);
+                        WriteTexture(builder, packet);
                     }
                     break;
                     default: Error(0, "not supported yet\n");
@@ -1394,10 +1389,13 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
     Assert(GetFileExtension(info->filename) == "rtscene");
     string outFile = StrConcat(temp.arena, directory, info->filename);
 
-    StringBuilder builder  = {};
-    builder.arena          = temp.arena;
+    StringBuilder preBuilder = {};
+    preBuilder.arena         = temp.arena;
+    StringBuilder builder    = {};
+    builder.arena            = temp.arena;
+
     u32 totalMaterialCount = 0;
-    Put(&builder, "RTSCENE_START ");
+    Put(&preBuilder, "RTSCENE_START ");
 
     if (info->fileInstances.totalCount && info->shapes.totalCount)
     {
@@ -1430,7 +1428,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
         SceneHashMap *textureHashMap = &state->textureHashMaps[0];
         for (u32 i = 1; i < state->numProcessors; i++)
         {
-            textureHashMap->Merge(state->textureHashMaps[i], state->hashMapSize);
+            textureHashMap->Merge(state->textureHashMaps[i]);
         }
 
         scheduler.Schedule(&counter, state->numProcessors, 1, [=](u32 jobID) {
@@ -1565,7 +1563,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                     break;
                     default: Assert(0);
                 }
-                Put(&builder, "%S ", shapeType->materialName);
+                Put(&builder, "m %S ", shapeType->materialName);
             }
         }
         Put(&builder, "SHAPE_END ");
@@ -1645,15 +1643,16 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
     if (state)
     {
         Assert(builders);
-        Put(&builder, "MATERIALS_START ");
+        Put(&preBuilder, "MATERIALS_START ");
         for (u32 i = 0; i < state->numProcessors; i++)
         {
-            builder = ConcatBuilders(&builder, &builders[i]);
+            preBuilder = ConcatBuilders(&preBuilder, &builders[i]);
         }
-        Put(&builder, "MATERIALS_END ");
+        Put(&preBuilder, "MATERIALS_END ");
     }
 
     Put(&builder, "RTSCENE_END");
+    builder = ConcatBuilders(&preBuilder, &builder);
     WriteFileMapped(&builder, outFile);
     OS_UnmapFile(dataBuilder.ptr);
     OS_ResizeFile(dataBuilder.filename, dataBuilder.totalSize);

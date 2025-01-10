@@ -113,6 +113,7 @@ Vec3lfn FaceForward(Vec3lfn n, Vec3lfn v) { return Select(Dot(n, v) < 0.f, -n, n
 
 struct TrowbridgeReitzDistribution
 {
+    TrowbridgeReitzDistribution() {}
     TrowbridgeReitzDistribution(const LaneNF32 &alphaX, const LaneNF32 &alphaY)
         : alphaX(alphaX), alphaY(alphaY)
     {
@@ -444,7 +445,7 @@ struct DielectricBxDF
     // NOTE: spectrally varying IORs are handled by randomly sampling a single wavelength
     LaneNF32 eta;
 
-    DielectricBxDF() = delete;
+    DielectricBxDF() {}
     DielectricBxDF(const LaneNF32 &eta, const TrowbridgeReitzDistribution &mfDistrib)
         : eta(eta), mfDistrib(mfDistrib)
     {

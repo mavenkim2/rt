@@ -715,10 +715,10 @@ struct HashMap
     {
         map = PushArray(arena, HashList, count);
         Assert(IsPow2(count));
-        u32 hashMask = count - 1;
+        hashMask = count - 1;
     }
 
-    T &Get(string name)
+    const T *Get(string name)
     {
         u32 hash       = Hash(name);
         HashList &list = map[hash & hashMask];
@@ -727,7 +727,7 @@ struct HashMap
         {
             if (node->hash == hash)
             {
-                if (name == node->value) return node->value;
+                if (node->value == name) return &node->value;
             }
             node = node->next;
         }
@@ -738,11 +738,11 @@ struct HashMap
         return 0;
     }
 
-    void Add(Arena *arena, T &val)
+    void Add(Arena *arena, const T &val)
     {
-        u32 hash            = val.Hash(); // Hash(packet->name);
-        SceneHashList &list = map[hash & hashMask];
-        SceneHashNode *node = list.first;
+        u32 hash       = val.Hash(); // Hash(packet->name);
+        HashList &list = map[hash & hashMask];
+        HashNode *node = list.first;
         while (node)
         {
             if (node->hash == hash)
@@ -760,9 +760,9 @@ struct HashMap
         }
         Assert(!node);
 
-        node       = PushStruct(arena, SceneHashNode);
-        node->hash = hash;
-        node->val  = val;
+        node        = PushStruct(arena, HashNode);
+        node->hash  = hash;
+        node->value = val;
 
         QueuePush(list.first, list.last, node);
     }
@@ -770,7 +770,7 @@ struct HashMap
     void Merge(HashMap<T> &from)
     {
         Assert(from.count == count);
-        for (u32 i = 0; i < size; i++)
+        for (u32 i = 0; i < count; i++)
         {
             HashList *toList   = &map[i];
             HashList *fromList = &from.map[i];

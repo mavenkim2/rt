@@ -666,6 +666,7 @@ void TriangleMeshBVHTest(Arena *arena, Options *options = 0)
 }
 #endif
 
+#if 0
 void WhiteFurnaceTest(Arena *arena, Options *options = 0)
 {
     scene_       = PushStruct(arena, Scene);
@@ -804,6 +805,7 @@ void WhiteFurnaceTest(Arena *arena, Options *options = 0)
     }
     printf("total misc time: %fms \n", totalMiscTime);
 }
+#endif
 
 void TestRender(Arena *arena, Options *options = 0)
 {
@@ -851,31 +853,10 @@ void TestRender(Arena *arena, Options *options = 0)
     AffineSpace renderFromWorld = AffineSpace::Translate(-pCamera);
     AffineSpace worldFromRender = AffineSpace::Translate(pCamera);
 
-    // MSDielectricMaterial1 mat(MSDielectricMaterial(0.f, 0.f, 1.1f), NullShader());
-    // scene->materials.Set<MSDielectricMaterial1>(&mat, 1);
-
-    ConstantTexture ct(0.3f);
-    ConstantSpectrum spec(1.1f);
-    // DielectricMaterialBase dielMat(DielectricMaterialConstant(ct, spec), NullShader());
-    // scene->materials.Set<DielectricMaterialBase>(&dielMat, 1);
-
-    // MSDielectricMaterial1 mat(MSDielectricMaterial(0.3f, 0.3f, 1.2f), NullShader());
-    // scene->materials.Set<MSDielectricMaterial1>(&mat, 1);
-
-#if 0
-    CoatedDiffuseMaterial2 mat(
-        CoatedDiffuseMaterialBase(ConstantTexture(.65),
-                                  ConstantSpectrumTexture(RGBAlbedoSpectrum(
-                                      *RGBColorSpace::sRGB, Vec3f(.24, .2, .17))),
-                                  ConstantTexture(0.f), ConstantSpectrum(1.5f)),
-        NullShader());
-    scene->materials.Set<CoatedDiffuseMaterial2>(&mat, 1);
-#endif
-
     LoadScene(arenas, "../data/island/pbrt-v4/", options->filename, &renderFromWorld);
 
     // environment map
-#if 0
+#if 1
     Bounds bounds              = scene->scene.GetBounds();
     f32 sceneRadius            = Length(ToVec3f(bounds.Centroid() - bounds.maxP));
     AffineSpace worldFromLight = AffineSpace::Scale(-1, 1, 1) *
@@ -892,11 +873,11 @@ void TestRender(Arena *arena, Options *options = 0)
     scene->numLights = 1;
 #endif
 
-    f32 scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
-    ConstantSpectrum spec2(1.f);
-    UniformInfiniteLight infLight(&spec2, scale);
-    scene->lights.Set<UniformInfiniteLight>(&infLight, 1);
-    scene->numLights = 1;
+    // f32 scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
+    // ConstantSpectrum spec2(1.f);
+    // UniformInfiniteLight infLight(&spec2, scale);
+    // scene->lights.Set<UniformInfiniteLight>(&infLight, 1);
+    // scene->numLights = 1;
 
     f32 time = OS_GetMilliseconds(counter);
     printf("setup time: %fms\n", time);

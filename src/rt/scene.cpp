@@ -57,8 +57,7 @@ __forceinline void ProcessRoughness(TextureCallback *callbacks, AttributeIterato
     if (vR == -1.f) vR = u;
 }
 
-void ProcessPtexTexture(AttributeIterator *iterator, SurfaceInteraction &intr,
-                        const Vec4f &filterWidths, f32 *result)
+TEXTURE_CALLBACK(ProcessPtexTexture)
 {
     string filename = iterator->ReadString();
     const Vec2f &uv = intr.uv;
@@ -73,8 +72,7 @@ void ProcessPtexTexture(AttributeIterator *iterator, SurfaceInteraction &intr,
     Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
     Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
 
-    u32 nc = texture->numChannels();
-    Assert(texture->numChannels() == nc);
+    i32 nc = texture->numChannels();
 
     // TODO: ray differentials
     // Vec2f uv(0.5f, 0.5f);
@@ -245,7 +243,7 @@ __forceinline void Material::Shade(Arena *arena, SurfaceInteraction &si,
     new (result) BSDF(bxdf, si.shading.dpdu, si.shading.n);
 }
 
-MATERIAL_FUNCTION_HEADER(ShaderEvaluate_Null) { result = BxDF(0); }
+MATERIAL_FUNCTION_HEADER(ShaderEvaluate_Null) { result = {}; }
 MATERIAL_FUNCTION_HEADER(ShaderEvaluate_Diffuse)
 {
     Vec4f filterWidths(.75f);
@@ -259,10 +257,12 @@ MATERIAL_FUNCTION_HEADER(ShaderEvaluate_Diffuse)
 MATERIAL_FUNCTION_HEADER(ShaderEvaluate_DiffuseTransmission)
 {
     Vec4f filterWidths(.75f);
-    SampledSpectrum r = ProcessAlbedoTexture(callbacks[0], itr, si, lambda, filterWidths);
-    SampledSpectrum t = ProcessAlbedoTexture(callbacks[1], itr, si, lambda, filterWidths);
+    SampledSpectrum r =
+        ProcessAlbedoTexture(callbacks[itr->callbackCount++], itr, si, lambda, filterWidths);
+    SampledSpectrum t =
+        ProcessAlbedoTexture(callbacks[itr->callbackCount++], itr, si, lambda, filterWidths);
 
-    DiffuseTransmissionBxDF *bxdf = PushStruct(arena, DiffuseBxDF);
+    DiffuseTransmissionBxDF *bxdf = PushStruct(arena, DiffuseTransmissionBxDF);
     new (bxdf) DiffuseTransmissionBxDF(r, t);
     result = bxdf;
 }
@@ -297,13 +297,14 @@ MATERIAL_FUNCTION_HEADER(ShaderEvaluate_Dielectric)
 
 MATERIAL_FUNCTION_HEADER(ShaderEvaluate_CoatedDiffuse)
 {
+    Vec4f filterWidths(.75f);
     DielectricBxDF diBxDF;
     ShaderEvaluate_DielectricHelper(callbacks, arena, itr, si, lambda, &diBxDF);
 
     SampledSpectrumN reflectance =
-        ProcsesAlbedoTexture(callbacks[itr->callbackCount++], itr, si, lambda, filterWidths);
+        ProcessAlbedoTexture(callbacks[itr->callbackCount++], itr, si, lambda, filterWidths);
     SampledSpectrumN albedo =
-        ProcsesAlbedoTexture(callbacks[itr->callbackCount++], itr, si, lambda, filterWidths);
+        ProcessAlbedoTexture(callbacks[itr->callbackCount++], itr, si, lambda, filterWidths);
 
     f32 g;
     callbacks[itr->callbackCount++](itr, si, lambda, filterWidths, &g);
@@ -313,8 +314,8 @@ MATERIAL_FUNCTION_HEADER(ShaderEvaluate_CoatedDiffuse)
     f32 thickness = itr->ReadFloat(.01);
 
     CoatedDiffuseBxDF *bxdf = PushStruct(arena, CoatedDiffuseBxDF);
-    new (bxdf) CoatedDiffuseBxDF(diBxDF, DiffuseBxDF(reflectance), a, gg, thickness, maxDepth,
-                                 nSamples);
+    new (bxdf) CoatedDiffuseBxDF(diBxDF, DiffuseBxDF(reflectance), albedo, g, thickness,
+                                 maxDepth, nSamples);
     result = bxdf;
 }
 
@@ -323,13 +324,9 @@ struct MaterialNode
     string str;
     u32 index;
 
-    u32 Hash() const { return Hash(str); }
-    bool operator==(const MaterialNode &a, const MaterialNode &b) const
-    {
-        return a.str == b.str;
-    }
-    bool operator==(string s, const MaterialNode &m) const { return s == m.str; }
-    bool operator==(const MaterialNode &m, string s) const { return s == m.str; }
+    u32 Hash() const { return rt::Hash(str); }
+    bool operator==(const MaterialNode &m) const { return str == m.str; }
+    bool operator==(string s) const { return s == str; }
 };
 
 typedef HashMap<MaterialNode> MaterialHashMap;
@@ -346,8 +343,7 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
     Scene *scene   = GetScene();
 
     ChunkedLinkedList<Material, 1024> materialsList(temp.arena);
-    MaterialHashMap *table =
-        PushStructConstruct(tempArena, MaterialHashTable)(tempArena, 8192);
+    MaterialHashMap *table = PushStructConstruct(tempArena, MaterialHashMap)(tempArena, 8192);
 
     StringBuilder builders[(u32)(MaterialTypes::Max)];
     for (u32 i = 0; i < (u32)MaterialTypes::Max; i++)
@@ -355,8 +351,6 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
         builders[i].arena = temp.arena;
     }
 
-    u64 totalSizes[(u32)MaterialTypes::Max];
-    // u32 totalCounts[(u32)MaterialTypes::Max];
     while (!Advance(tokenizer, "MATERIALS_END "))
     {
         bool advanceResult = Advance(tokenizer, "m ");
@@ -379,16 +373,16 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
             }
         }
         SkipToNextChar(tokenizer);
+        Assert(materialTypeIndex != -1);
 
         Material *material     = &materialsList.AddBack();
         StringBuilder *builder = &builders[materialTypeIndex];
 
         const string *materialParamNames = materialParameterNames[materialTypeIndex];
         u32 parameterCount               = materialParameterCounts[materialTypeIndex];
-        Assert(index != -1);
 
         material->shade      = materialFuncs[materialTypeIndex];
-        material->key.offset = builder->totalSize;
+        material->key.offset = SafeTruncateU64ToU32(builder->totalSize);
         material->funcs      = PushArray(arena, TextureCallback, parameterCount);
         // TODO: it's not this exactly
         material->count = parameterCount;
@@ -399,12 +393,12 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
             {
                 case DataType::Float:
                 {
-                    u8 *start = tokenizer.cursor;
-                    while (!CharIsBlank(*tokenizer.cursor))
+                    u8 *start = tokenizer->cursor;
+                    while (!CharIsBlank(*tokenizer->cursor))
                     {
                         tokenizer->cursor += sizeof(f32);
                     }
-                    Put(builder, start, size);
+                    Put(builder, start, (u64)(tokenizer->cursor - start));
                 }
                 break;
                 case DataType::String:
@@ -420,9 +414,9 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
         };
 
         auto ParseTexture = [&](StringBuilder *builder, u32 p, u32 textureTypeIndex) {
-            DataType *types = textureDataTypes[textureTypeIndex];
-            string *params  = textureParameterArrays[textureTypeIndex];
-            u32 count       = textureParameterCounts[textureTypeIndex];
+            const DataType *types = textureDataTypes[textureTypeIndex];
+            const string *params  = textureParameterArrays[textureTypeIndex];
+            u32 count             = textureParameterCounts[textureTypeIndex];
             for (u32 i = 0; i < count; i++)
             {
                 if (Advance(tokenizer, params[i]))
@@ -452,8 +446,7 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
                 {
                     if (Advance(tokenizer, textureTypeNames[textureTypeIndex]))
                     {
-                        DataType *textureDataTypes;
-                        func.funcs[i] = textureFuncs[textureTypeIndex];
+                        material->funcs[i] = textureFuncs[textureTypeIndex];
                         ParseTexture(builder, i, textureTypeIndex);
                         break;
                     }
@@ -461,17 +454,17 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
             }
             else if (Advance(tokenizer, "s "))
             {
-                f32 *start = tokenizer.cursor;
-                u32 count  = 0;
-                while (!CharIsBlank(*tokenizer.cursor)) tokenizer.cursor += sizeof(f32);
+                u8 *start = tokenizer->cursor;
+                u32 count = 0;
+                while (!CharIsBlank(*tokenizer->cursor)) tokenizer->cursor += sizeof(f32);
                 Assert((count & 1) == 0);
 
-                PiecewiseLinearSpectrum *spec =
-                    PiecewiseLinearSpectrum::FromInterleaved(arena, start, samples, false);
+                PiecewiseLinearSpectrum *spec = PiecewiseLinearSpectrum::FromInterleaved(
+                    arena, (f32 *)start, count, false);
                 Put(builder, &spec, sizeof(spec));
                 if (materialParamNames[i] == "eta")
                 {
-                    func.funcs[i] = ProcessIOR;
+                    material->funcs[i] = ProcessIOR;
                 }
                 else
                 {
@@ -480,12 +473,13 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
             }
             SkipToNextChar(tokenizer);
         }
-        material->key.SetIndexAndSize(materialTypeIndex,
-                                      builder->totalSize - material->key.offset);
+        material->key.SetIndexAndSize(
+            materialTypeIndex,
+            SafeTruncateU64ToU32(builder->totalSize - material->key.offset));
     }
 
     // Join
-    scene->materialTables = StaticArray<AttributeTable>(arena, MaterialTypes::Max);
+    scene->materialTables = StaticArray<AttributeTable>(arena, (u32)MaterialTypes::Max);
     scene->materials      = StaticArray<Material>(arena, materialsList.totalCount);
 
     materialsList.Flatten(scene->materials);
@@ -514,8 +508,6 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
 
     auto *table           = &state->table;
     auto *materialHashMap = state->map;
-
-    Arena *tempArena = state->arenas[threadIndex];
 
     string fullFilePath = StrConcat(temp.arena, directory, filename);
     string dataPath =
@@ -557,8 +549,7 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
     GeometryType type          = GeometryType::Max;
     ChunkedLinkedList<ScenePrimitives *, 32, MemoryType_Instance> files(temp.arena);
 
-    bool hasMaterials        = false;
-    MaterialHashTable *table = 0;
+    bool hasMaterials = false;
     for (;;)
     {
         if (Advance(&tokenizer, "RTSCENE_END")) break;
@@ -657,10 +648,10 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                 if (Advance(&tokenizer, "m "))
                 {
                     Assert(materialHashMap);
-                    string materialName   = ReadWord(tokenizer);
-                    MaterialNode &node    = materialHashTable.Get(materialName);
-                    PrimitiveIndices &ids = indices.AddBack();
-                    ids                   = PrimitiveIndices(LightHandle(), node.index);
+                    string materialName      = ReadWord(&tokenizer);
+                    const MaterialNode *node = materialHashMap->Get(materialName);
+                    PrimitiveIndices &ids    = indices.AddBack();
+                    ids                      = PrimitiveIndices(LightHandle(), node->index);
                 }
                 if (Advance(&tokenizer, "Quad "))
                 {
@@ -746,11 +737,11 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
             shapes.Flatten((Mesh *)scene->primitives);
             indices.Flatten(scene->primIndices);
         }
-        else if (Advance(&tokenizer, "MATERIALS_START"))
+        else if (Advance(&tokenizer, "MATERIALS_START "))
         {
             hasMaterials = true;
             // TODO: multithread this
-            materialHashMap = CreateMaterials(arena, temp.arena, tokenizer);
+            materialHashMap = CreateMaterials(arena, temp.arena, &tokenizer);
             state->map      = materialHashMap;
         }
         else
@@ -785,7 +776,6 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
     else
     {
         Assert(!hasTransforms);
-        scene->primIndices = ids;
         Assert(scene->numPrimitives);
         if (type == GeometryType::QuadMesh)
         {
@@ -809,13 +799,14 @@ void LoadScene(Arena **arenas, string directory, string filename, AffineSpace *t
 {
     TempArena temp = ScratchStart(0, 0);
     Arena *arena   = arenas[GetThreadIndex()];
-    SceneLoadTable table;
-    table.count   = 1024;
-    table.nodes   = PushArray(temp.arena, SceneLoadTable::Node, table.count);
-    table.mutexes = PushArray(temp.arena, TicketMutex, table.count);
+
+    RTSceneLoadState state;
+    state.table.count   = 1024;
+    state.table.nodes   = PushArray(temp.arena, SceneLoadTable::Node, state.table.count);
+    state.table.mutexes = PushArray(temp.arena, TicketMutex, state.table.count);
 
     Scene *scene = GetScene();
-    LoadRTScene(arenas, &table, &scene->scene, directory, filename, 0, t, true);
+    LoadRTScene(arenas, &state, &scene->scene, directory, filename, 0, t, true);
     ScratchEnd(temp);
 }
 

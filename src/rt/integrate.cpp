@@ -620,7 +620,7 @@ void EvaluateMaterial(Arena *arena, SurfaceInteraction &si, BSDF *bsdf,
                       SampledWavelengths &lambda)
 {
     Scene *scene       = GetScene();
-    Material *material = scene->materials[si.materialIDs];
+    Material *material = &scene->materials[si.materialIDs];
     material->Shade(arena, si, lambda, bsdf);
 }
 

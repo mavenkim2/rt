@@ -35,6 +35,17 @@ struct BSDFBase
 
 typedef BSDFBase<BxDF> BSDF;
 
+// struct BSDFTest
+// {
+//     typedef SampledSpectrum (*EvaluateSample)(Vec3f wo, Vec3f wi, f32 &pdf, TransportMode mode);
+//     EvaluateSample eval;
+//     Evaluate(Vec3f wo, Vec3f wi, f32 &pdf, TransportMode mode)
+//     {
+//
+//     }
+//
+// };
+
 } // namespace rt
 
 #endif
