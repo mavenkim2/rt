@@ -3,8 +3,8 @@
 #include "tables/primes.h"
 
 #include "memory.h"
-#include "containers.h"
 #include "string.h"
+#include "containers.h"
 #include "win32.h"
 #include "jobsystem.h"
 #include "debug.h"

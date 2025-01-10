@@ -80,7 +80,7 @@ if not exist .\rgbspectrum_srgb.obj (
 
 if "%1" == "cl" (
     echo Compiling with Clang
-    clang++ -std=c++17 -march=native -ffp-contract=off %Definitions% %Dependencies% -L %LibraryPathZlib% -L %LibraryPathPtex% -l %LibraryNameZlib% -l %LibraryNamePtex% -o rt.exe ../src/rt/rt.cpp rgbspectrum_srgb.obj
+    clang++ -std=c++17 -ferror-limit=5 -march=native -ffp-contract=off %Definitions% %Dependencies% -L %LibraryPathZlib% -L %LibraryPathPtex% -l %LibraryNameZlib% -l %LibraryNamePtex% -o rt.exe ../src/rt/rt.cpp rgbspectrum_srgb.obj
 ) else (
     echo Compiling with MSVC
     cl %DefaultCompilerFlags% %Definitions% %AVX2% %Dependencies% ../src/rt/rt.cpp /std:c++17 /link %DefaultLinkerFlags% rgbspectrum_srgb.obj /LIBPATH:%LibraryPathZlib% /LIBPATH:%LibraryPathPtex% %LibraryNameZlib% %LibraryNamePtex% /out:rt.exe

@@ -6,6 +6,20 @@ namespace rt
 
 static const u32 MAX_PARAMETER_COUNT = 16;
 
+enum class DataType
+{
+    Float,
+    Floats,
+    Vec2,
+    Vec3,
+    Int,
+    Bool,
+    String,
+    Texture,
+    Blackbody,
+    Spectrum,
+};
+
 enum class MaterialTypes
 {
     Interface,
@@ -14,10 +28,6 @@ enum class MaterialTypes
     CoatedDiffuse,
     Dielectric,
     Max,
-};
-
-static const u32 textureParameterCounts[] = {
-    0, 0, 0, 0, 0, 0, 0, 0, 0, ArrayLength(ptexParameterNames), 0, 0, 0,
 };
 
 MaterialTypes ConvertStringToMaterialType(string type)
@@ -171,7 +181,7 @@ static const DataType constantTexDataTypes[] = {
 };
 
 static const DataType *textureDataTypes[] = {
-
+    0, 0, 0, 0, 0, 0, 0, 0, 0, ptexDataTypes, 0, 0, 0,
 };
 
 struct FileOffsets
@@ -194,20 +204,6 @@ bool GetSectionOffsets(Tokenizer *tokenizer, FileOffsets *offsets)
     GetPointerValue(tokenizer, &offsets->dataOffset);
     return true;
 }
-
-enum class DataType
-{
-    Float,
-    Floats,
-    Vec2,
-    Vec3,
-    Int,
-    Bool,
-    String,
-    Texture,
-    Blackbody,
-    Spectrum,
-};
 
 struct ScenePacket
 {

@@ -530,10 +530,10 @@ struct PrimitiveIndices
     // TODO: these are actaully ids (type + index)
     LightHandle lightID;
     // u32 volumeIndex;
-    MaterialHandle materialID;
+    u32 materialIndex;
     PrimitiveIndices() {}
-    PrimitiveIndices(LightHandle lightID, MaterialHandle materialID)
-        : lightID(lightID), materialID(materialID)
+    PrimitiveIndices(LightHandle lightID, u32 materialIndex)
+        : lightID(lightID), materialIndex(materialIndex)
     {
     }
 };
@@ -563,34 +563,28 @@ struct AttributeTable
 
 struct AttributeTableKey
 {
-    static u32 indexBits;
-    static u32 indexMask;
-    static u32 indexShift;
+    static const u32 indexBits  = 8;
+    static const u32 indexMask  = 0xff000000;
+    static const u32 indexShift = 24;
     u32 tableIndex_Size;
     u32 offset;
 
     void SetIndexAndSize(u32 index, u32 size)
     {
-        Assert(size < (1 << (32 - indexBits)));
-        Assert(index < (1 << indexBits));
+        Assert(size < (1u << indexShift));
+        Assert(index < (1u << indexBits));
 
-        tableIndex_Size = (index << (32 - indexBits)) | size;
+        tableIndex_Size = (index << indexShift) | size;
     }
 
-    AttributeTableKey(u32 index, u32 size, u32 offset)
-        : tableIndex_Size(SetIndexAndSize(index, size)), offset(offset)
+    AttributeTableKey(u32 index, u32 size, u32 offset) : offset(offset)
     {
+        SetIndexAndSize(index, size);
     }
 
     u32 GetSize() const { return tableIndex_Size & (~indexMask); }
     u32 GetIndex() const { return (tableIndex_Size & indexMask) >> indexShift; }
 };
-
-AttributeTableKey::indexBits  = Bsf(NextPowerOfTwo((u32)MaterialTypes::Max));
-AttributeTableKey::indexShift = 32 - indexBits;
-AttributeTableKey::indexMask  = ((1 << AttributeTableKey::indexBits) - 1)
-                               << AttributeTableKey::indexShift;
-static_assert(AttributeTableKey::indexBits < 8, "too many materials\n");
 
 AttributeTable *GetMaterialTable(u32 tableIndex);
 
@@ -606,47 +600,55 @@ struct AttributeIterator
 
     AttributeIterator() {}
     AttributeIterator(AttributeTableKey key)
-        : table(GetMaterialTable(key.GetIndex()), offset(key.offset),
+        : table(GetMaterialTable(key.GetIndex())), offset(key.offset),
           limit(key.offset + key.GetSize())
     {
     }
     void DebugCheck(AttributeType type)
     {
-#ifdef DEBUG
-        Assert(table->types);
-        Assert(countOffset < table->attributeCount);
-        Assert(table->types[countOffset++] == type);
-#endif
+        // #ifdef DEBUG
+        //         Assert(table->types);
+        //         Assert(countOffset < table->attributeCount);
+        //         Assert(table->types[countOffset++] == type);
+        // #endif
     }
-    f32 ReadFloat()
+    void *ReadPointer()
     {
         u64 o = offset;
+        offset += sizeof(void *);
+        DebugCheck(AttributeType::Float);
+        return (void *)(table->buffer + o);
+    }
+    f32 ReadFloat(f32 d = 0.f)
+    {
+        u64 o = offset;
+        if (offset >= limit) return d;
         offset += sizeof(f32);
         DebugCheck(AttributeType::Float);
         return *(f32 *)(table->buffer + o);
     }
-    string ReadString(string default = {})
+    string ReadString(string d = {})
     {
         u32 size = *(u32 *)(table->buffer + offset);
-        if (offset >= limit) return default;
+        if (offset >= limit) return d;
         offset += sizeof(size);
         string result = Str8(table->buffer + offset, size);
         offset += size;
         DebugCheck(AttributeType::String);
         return result;
     }
-    i32 ReadInt(i32 default = 0)
+    i32 ReadInt(i32 d = 0)
     {
         u64 o = offset;
-        if (o >= limit) return default;
+        if (o >= limit) return d;
         offset += sizeof(i32);
         DebugCheck(AttributeType::Int);
         return *(i32 *)(table->buffer + o);
     }
-    bool ReadBool(bool default = 0)
+    bool ReadBool(bool d = 0)
     {
         u64 o = offset;
-        if (o >= limit) return default;
+        if (o >= limit) return d;
         offset += sizeof(bool);
         DebugCheck(AttributeType::Bool);
         return *(bool *)(table->buffer + o);
@@ -656,24 +658,37 @@ struct AttributeIterator
 #define MATERIAL_FUNCTION_HEADER(name)                                                        \
     void name(TextureCallback *callbacks, Arena *arena, AttributeIterator *itr,               \
               SurfaceInteraction &si, SampledWavelengths &lambda, BxDF &result)
-typedef MATERIAL_FUNCTION_HEADER((*MaterialEvalFunc));
 
 #define TEXTURE_CALLBACK(name)                                                                \
     void name(AttributeIterator *iterator, SurfaceInteraction &intr,                          \
               SampledWavelengths &lambda, const Vec4f &filterWidths, f32 *result)
 
-typedef MATERIAL_FUNCTION_HEADER((*MaterialCallback));
 typedef TEXTURE_CALLBACK((*TextureCallback));
+typedef MATERIAL_FUNCTION_HEADER((*MaterialCallback));
 
 TEXTURE_CALLBACK(ProcessNullTexture) {}
-
+TEXTURE_CALLBACK(ProcessFloatTexture);
 TEXTURE_CALLBACK(ProcessPtexTexture);
 
-TextureCallback textureFuncs = {
+TextureCallback textureFuncs[] = {
     ProcessNullTexture, ProcessNullTexture, ProcessFloatTexture, ProcessNullTexture,
     ProcessNullTexture, ProcessNullTexture, ProcessNullTexture,  ProcessNullTexture,
     ProcessNullTexture, ProcessPtexTexture, ProcessNullTexture,  ProcessNullTexture,
     ProcessNullTexture,
+};
+
+MATERIAL_FUNCTION_HEADER(ShaderEvaluate_Null);
+MATERIAL_FUNCTION_HEADER(ShaderEvaluate_Diffuse);
+MATERIAL_FUNCTION_HEADER(ShaderEvaluate_DiffuseTransmission);
+MATERIAL_FUNCTION_HEADER(ShaderEvaluate_Dielectric);
+MATERIAL_FUNCTION_HEADER(ShaderEvaluate_CoatedDiffuse);
+
+MaterialCallback materialFuncs[] = {
+    ShaderEvaluate_Null,
+    ShaderEvaluate_Diffuse,
+    ShaderEvaluate_DiffuseTransmission,
+    ShaderEvaluate_CoatedDiffuse,
+    ShaderEvaluate_Dielectric,
 };
 
 struct Material
@@ -684,13 +699,7 @@ struct Material
     u32 count;
 
     __forceinline void Shade(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
-                             BSDFBase<BxDF> *result)
-    {
-        AttributeIterator itr(key);
-        BxDF bxdf;
-        shade(funcs, arena, &itr, si, lambda, bxdf);
-        new (result) BSDF(bxdf, si.shading.dpdu, si.shading.n);
-    }
+                             struct BSDFBase<BxDF> *result);
 };
 
 struct Ray2;

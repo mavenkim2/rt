@@ -6,27 +6,6 @@
 //
 namespace rt
 {
-struct BVH;
-struct BVH4;
-struct CompressedBVH4;
-
-struct PrimitiveMethods
-{
-    bool (*Hit)(void *ptr, const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record);
-};
-
-extern PrimitiveMethods primitiveMethods[];
-
-struct Primitive : TaggedPointer<BVH, BVH4, CompressedBVH4>
-{
-    using TaggedPointer::TaggedPointer;
-    inline bool Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const
-    {
-        void *ptr   = GetPtr();
-        bool result = primitiveMethods[GetTag()].Hit(ptr, r, tMin, tMax, record);
-        return result;
-    }
-};
 
 //////////////////////////////
 // Sampler

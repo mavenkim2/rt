@@ -703,9 +703,10 @@ struct HashMap
 
     struct HashList
     {
-        HashNode<T> *first;
-        HashNode<T> *last;
+        HashNode *first;
+        HashNode *last;
     };
+
     HashList *map;
     u32 count;
     u32 hashMask;

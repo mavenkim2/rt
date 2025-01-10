@@ -11,6 +11,7 @@ namespace rt
 //////////////////////////////
 // Scene
 //
+
 struct SceneLoadTable
 {
     struct Node
@@ -43,7 +44,7 @@ TEXTURE_CALLBACK(ProcessIOR)
 {
     lambda.TerminateSecondary();
     auto spec = (PiecewiseLinearSpectrum *)iterator->ReadPointer();
-    *result   = spec->Evaluate(lambda);
+    *result   = spec->Evaluate(lambda[0]);
 }
 
 __forceinline void ProcessRoughness(TextureCallback *callbacks, AttributeIterator *iterator,
@@ -79,8 +80,8 @@ void ProcessPtexTexture(AttributeIterator *iterator, SurfaceInteraction &intr,
     // Vec2f uv(0.5f, 0.5f);
 
     f32 out[3];
-    filter->eval(out, 0, nc, faceIndex, uv[0], uv[1], filterWidth[0], filterWidth[1],
-                 filterWidth[2], filterWidth[3]);
+    filter->eval(out, 0, nc, faceIndex, uv[0], uv[1], filterWidths[0], filterWidths[1],
+                 filterWidths[2], filterWidths[3]);
 
     texture->release();
     filter->release();
@@ -235,6 +236,16 @@ static_assert(CHECK_RETURN(ROUGHNESS) == 1, "CHECK_RETURN SHOULD BE 1");
 }
 #endif
 
+__forceinline void Material::Shade(Arena *arena, SurfaceInteraction &si,
+                                   SampledWavelengths &lambda, BSDF *result)
+{
+    AttributeIterator itr(key);
+    BxDF bxdf;
+    shade(funcs, arena, &itr, si, lambda, bxdf);
+    new (result) BSDF(bxdf, si.shading.dpdu, si.shading.n);
+}
+
+MATERIAL_FUNCTION_HEADER(ShaderEvaluate_Null) { result = BxDF(0); }
 MATERIAL_FUNCTION_HEADER(ShaderEvaluate_Diffuse)
 {
     Vec4f filterWidths(.75f);
@@ -261,8 +272,6 @@ void ShaderEvaluate_DielectricHelper(TextureCallback *callbacks, Arena *arena,
                                      SampledWavelengths &lambda, DielectricBxDF *result)
 {
     Vec4lfn filterWidths(.75f);
-    f32 eta;
-    callbacks[itr->callbackCount++](itr, si, lambda, filterWidths, &eta);
 
     f32 uRoughness, vRoughness;
     ProcessRoughness(callbacks, itr, si, lambda, filterWidths, uRoughness, vRoughness);
@@ -273,6 +282,8 @@ void ShaderEvaluate_DielectricHelper(TextureCallback *callbacks, Arena *arena,
                                 : uRoughness;
     vRoughness = remapRoughness ? TrowbridgeReitzDistribution::RoughnessToAlpha(vRoughness)
                                 : vRoughness;
+    f32 eta;
+    callbacks[itr->callbackCount++](itr, si, lambda, filterWidths, &eta);
 
     new (result) DielectricBxDF(eta, TrowbridgeReitzDistribution(uRoughness, vRoughness));
 }
@@ -322,13 +333,21 @@ struct MaterialNode
 };
 
 typedef HashMap<MaterialNode> MaterialHashMap;
-MaterialHashMap CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *tokenizer)
+
+struct RTSceneLoadState
+{
+    SceneLoadTable table;
+    MaterialHashMap *map = 0;
+};
+
+MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *tokenizer)
 {
     TempArena temp = ScratchStart(&tempArena, 1);
     Scene *scene   = GetScene();
 
     ChunkedLinkedList<Material, 1024> materialsList(temp.arena);
-    MaterialHashMap table(tempArena, 8192);
+    MaterialHashMap *table =
+        PushStructConstruct(tempArena, MaterialHashTable)(tempArena, 8192);
 
     StringBuilder builders[(u32)(MaterialTypes::Max)];
     for (u32 i = 0; i < (u32)MaterialTypes::Max; i++)
@@ -345,7 +364,7 @@ MaterialHashMap CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *token
         string materialName = ReadWord(tokenizer);
 
         // Add to hash table
-        table.Add(tempArena, MaterialNode{materialName, materialsList.totalCount});
+        table->Add(tempArena, MaterialNode{materialName, materialsList.totalCount});
 
         SkipToNextChar(tokenizer);
 
@@ -361,20 +380,21 @@ MaterialHashMap CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *token
         }
         SkipToNextChar(tokenizer);
 
-        Material *material = &materialsList.AddBack();
+        Material *material     = &materialsList.AddBack();
+        StringBuilder *builder = &builders[materialTypeIndex];
 
         const string *materialParamNames = materialParameterNames[materialTypeIndex];
         u32 parameterCount               = materialParameterCounts[materialTypeIndex];
         Assert(index != -1);
 
-        material->funcs = PushArray(arena, TextureCallback, parameterCount);
+        material->shade      = materialFuncs[materialTypeIndex];
+        material->key.offset = builder->totalSize;
+        material->funcs      = PushArray(arena, TextureCallback, parameterCount);
         // TODO: it's not this exactly
         material->count = parameterCount;
 
         // NOTE: 0 means float, 1 means spectrum
-        auto ParseDataType = [&[(StringBuilder *builder, DataType type, u32 p) -> u32 
-        {
-            u32 size = 0;
+        auto ParseDataType = [&](StringBuilder *builder, DataType type, u32 p) {
             switch (type)
             {
                 case DataType::Float:
@@ -383,7 +403,6 @@ MaterialHashMap CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *token
                     while (!CharIsBlank(*tokenizer.cursor))
                     {
                         tokenizer->cursor += sizeof(f32);
-                        size += sizeof(f32);
                     }
                     Put(builder, start, size);
                 }
@@ -394,41 +413,33 @@ MaterialHashMap CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *token
                     tokenizer->cursor += sizeof(u32);
                     Put(builder, tokenizer->cursor, strSize);
                     tokenizer->cursor += strSize;
-                    size += strSize + sizeof(u32);
                 }
                 break;
                 default: Error(0, "forgot");
             }
-            return size;
         };
 
-        auto ParseTexture = [&](StringBuilder *builder, u32 p, u32 textureTypeIndex) -> u32 {
+        auto ParseTexture = [&](StringBuilder *builder, u32 p, u32 textureTypeIndex) {
             DataType *types = textureDataTypes[textureTypeIndex];
             string *params  = textureParameterArrays[textureTypeIndex];
             u32 count       = textureParameterCounts[textureTypeIndex];
-            u32 totalSize   = 0;
-            u64 startSize   = builder->totalSize;
             for (u32 i = 0; i < count; i++)
             {
                 if (Advance(tokenizer, params[i]))
                 {
                     SkipToNextChar(tokenizer);
-                    totalSize += ParseDataType(types[i], p);
+                    ParseDataType(builder, types[i], p);
                     SkipToNextChar(tokenizer);
                 }
             }
-            return totalSize;
         };
 
         // convert the file description into the appropriate byte format, join into the
         // attribute table, write material callbacks that properly process the attribute table.
         // problems:
-        // - hash table to link shapes to materials
-        // - process material tables properly at runtime (i.e. surface interaction gets material pointer/index,
-        // get that material then call shade, should be straightforward)
+        // - need to actually create the material tables
         // - fix string builder to be more efficient (less allocations)
 
-        u32 totalSize = 0;
         for (u32 i = 0; i < parameterCount; i++)
         {
             if (!Advance(tokenizer, materialParamNames[i])) continue;
@@ -443,8 +454,7 @@ MaterialHashMap CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *token
                     {
                         DataType *textureDataTypes;
                         func.funcs[i] = textureFuncs[textureTypeIndex];
-                        totalSize +=
-                            ParseTexture(&builders[materialTypeIndex], i, textureTypeIndex);
+                        ParseTexture(builder, i, textureTypeIndex);
                         break;
                     }
                 }
@@ -470,6 +480,8 @@ MaterialHashMap CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *token
             }
             SkipToNextChar(tokenizer);
         }
+        material->key.SetIndexAndSize(materialTypeIndex,
+                                      builder->totalSize - material->key.offset);
     }
 
     // Join
@@ -487,15 +499,23 @@ MaterialHashMap CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *token
     return table;
 }
 
-void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
+void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene,
                  string directory, string filename, Scheduler::Counter *c = 0,
                  AffineSpace *renderFromWorld = 0, bool baseFile = false)
 
 {
+    // TODO: add totals so we don't have to use linked lists
     scene->filename = filename;
     Assert(GetFileExtension(filename) == "rtscene");
     TempArena temp = ScratchStart(0, 0);
-    Arena *arena   = arenas[GetThreadIndex()];
+
+    u32 threadIndex = GetThreadIndex();
+    Arena *arena    = arenas[threadIndex];
+
+    auto *table           = &state->table;
+    auto *materialHashMap = state->map;
+
+    Arena *tempArena = state->arenas[threadIndex];
 
     string fullFilePath = StrConcat(temp.arena, directory, filename);
     string dataPath =
@@ -536,6 +556,9 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
     bool isLeaf                = true;
     GeometryType type          = GeometryType::Max;
     ChunkedLinkedList<ScenePrimitives *, 32, MemoryType_Instance> files(temp.arena);
+
+    bool hasMaterials        = false;
+    MaterialHashTable *table = 0;
     for (;;)
     {
         if (Advance(&tokenizer, "RTSCENE_END")) break;
@@ -592,7 +615,7 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                     node->scene                   = includeScene;
                     node->next                    = PushStruct(arena, SceneLoadTable::Node);
                     scheduler.Schedule(&counter, [=](u32 jobID) {
-                        LoadRTScene(arenas, table, includeScene, directory, node->filename,
+                        LoadRTScene(arenas, state, includeScene, directory, node->filename,
                                     &node->counter);
                     });
                     EndTicketMutex(&table->mutexes[index]);
@@ -620,8 +643,6 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
                     SkipToNextChar(&tokenizer);
                 }
             }
-            // Error(instanceOffset == instanceCount, "inst offset %u\n",
-            // instanceOffset);
             scene->numPrimitives = instanceOffset;
             scene->childScenes   = PushArrayNoZero(arena, ScenePrimitives *, files.totalCount);
             scene->numChildScenes = files.totalCount;
@@ -630,8 +651,17 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
         {
             Assert(isLeaf);
             ChunkedLinkedList<Mesh, 1024, MemoryType_Shape> shapes(temp.arena);
+            ChunkedLinkedList<PrimitiveIndices, 1024, MemoryType_Shape> indices(temp.arena);
             while (!Advance(&tokenizer, "SHAPE_END "))
             {
+                if (Advance(&tokenizer, "m "))
+                {
+                    Assert(materialHashMap);
+                    string materialName   = ReadWord(tokenizer);
+                    MaterialNode &node    = materialHashTable.Get(materialName);
+                    PrimitiveIndices &ids = indices.AddBack();
+                    ids                   = PrimitiveIndices(LightHandle(), node.index);
+                }
                 if (Advance(&tokenizer, "Quad "))
                 {
                     type       = GeometryType::QuadMesh;
@@ -712,12 +742,16 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
             }
             scene->numPrimitives = shapes.totalCount;
             scene->primitives    = PushArrayNoZero(arena, Mesh, shapes.totalCount);
+            scene->primIndices = PushArrayNoZero(arena, PrimitiveIndices, indices.totalCount);
             shapes.Flatten((Mesh *)scene->primitives);
+            indices.Flatten(scene->primIndices);
         }
         else if (Advance(&tokenizer, "MATERIALS_START"))
         {
+            hasMaterials = true;
             // TODO: multithread this
-            CreateMaterials(arena, temp.arena, tokenizer);
+            materialHashMap = CreateMaterials(arena, temp.arena, tokenizer);
+            state->map      = materialHashMap;
         }
         else
         {
@@ -728,11 +762,7 @@ void LoadRTScene(Arena **arenas, SceneLoadTable *table, ScenePrimitives *scene,
 
     scheduler.Wait(&counter);
 
-    // TODO: must match shapes to materials before unmapping
-
     OS_UnmapFile(tokenizer.input.str);
-    PrimitiveIndices *ids = PushStructConstruct(arena, PrimitiveIndices)(
-        LightHandle(), MaterialHandle(MaterialType::MSDielectricMaterial1, 0));
     BuildSettings settings;
 
     if (baseFile && !hasTransforms)

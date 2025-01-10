@@ -619,16 +619,12 @@ f32 PowerHeuristic(u32 numA, f32 pdfA, u32 numB, f32 pdfB)
 void EvaluateMaterial(Arena *arena, SurfaceInteraction &si, BSDF *bsdf,
                       SampledWavelengths &lambda)
 {
-    Dispatch(
-        [&](auto t) {
-            using MaterialType = std::decay_t<decltype(t)>;
-            MaterialType::Evaluate(arena, si, lambda, bsdf);
-        },
-        MaterialTypes(), u32(MaterialHandle::GetType(si.materialIDs)));
+    Scene *scene       = GetScene();
+    Material *material = scene->materials[si.materialIDs];
+    material->Shade(arena, si, lambda, bsdf);
 }
 
-Vec3f OffsetRayOrigin(const Vec3f &p, const Vec3f &err, const Vec3f &n,
-                      const Vec3f &wi) // const Vec3f &v)
+Vec3f OffsetRayOrigin(const Vec3f &p, const Vec3f &err, const Vec3f &n, const Vec3f &wi)
 {
     f32 d        = Dot(err, Abs(n));
     d            = Select(Dot(wi, n) < 0, -d, d);
