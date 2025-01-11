@@ -364,9 +364,10 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
 
         // Get the type of material
         i32 materialTypeIndex = -1;
+        string materialType   = ReadWord(tokenizer);
         for (u32 m = 0; m < (u32)MaterialTypes::Max; m++)
         {
-            if (Advance(tokenizer, materialTypeNames[m]))
+            if (materialType == materialTypeNames[m])
             {
                 materialTypeIndex = m;
                 break;
@@ -383,8 +384,28 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
 
         material->shade      = materialFuncs[materialTypeIndex];
         material->key.offset = SafeTruncateU64ToU32(builder->totalSize);
-        material->funcs      = PushArray(arena, TextureCallback, parameterCount);
-        // TODO: it's not this exactly
+
+        switch (materialTypeIndex)
+        {
+            case MaterialTypes::Diffuse:
+            {
+            }
+            break;
+            case MaterialTypes::DiffuseTransmission:
+            {
+            }
+            break;
+            case MaterialTypes::Dielectric:
+            {
+                material->funcs = PushArray(arena, TextureCallback, parameterCount);
+            }
+            break;
+            case MaterialTypes::CoatedDiffuse:
+            {
+            }
+            break;
+        }
+
         material->count = parameterCount;
 
         // NOTE: 0 means float, 1 means spectrum
@@ -414,18 +435,18 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
         };
 
         auto ParseTexture = [&](StringBuilder *builder, u32 p, u32 textureTypeIndex) {
-            const DataType *types = textureDataTypes[textureTypeIndex];
-            const string *params  = textureParameterArrays[textureTypeIndex];
-            u32 count             = textureParameterCounts[textureTypeIndex];
-            for (u32 i = 0; i < count; i++)
-            {
-                if (Advance(tokenizer, params[i]))
-                {
-                    SkipToNextChar(tokenizer);
-                    ParseDataType(builder, types[i], p);
-                    SkipToNextChar(tokenizer);
-                }
-            }
+            // const DataType *types = textureDataTypes[textureTypeIndex];
+            const string *params = textureParameterArrays[textureTypeIndex];
+            u32 count            = textureParameterCounts[textureTypeIndex];
+            // for (u32 i = 0; i < count; i++)
+            // {
+            //     if (Advance(tokenizer, params[i]))
+            //     {
+            //         SkipToNextChar(tokenizer);
+            //         ParseDataType(builder, types[i], p);
+            //         SkipToNextChar(tokenizer);
+            //     }
+            // }
         };
 
         // convert the file description into the appropriate byte format, join into the
@@ -491,6 +512,27 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
 
     ScratchEnd(temp);
     return table;
+}
+
+u8 *ReadDataPointer(Tokenizer *tokenizer, Tokenizer *dataTokenizer, string p)
+{
+    if (Advance(tokenizer, p))
+    {
+        u32 offset = ReadInt(tokenizer);
+        SkipToNextChar(tokenizer);
+        return dataTokenizer->input.str + offset;
+    }
+    return 0;
+}
+
+Vec2f *ReadVec2Pointer(Tokenizer *tokenizer, Tokenizer *dataTokenizer, string p)
+{
+    return (Vec2f *)ReadDataPointer(tokenizer, dataTokenizer, p);
+}
+
+Vec3f *ReadVec3Pointer(Tokenizer *tokenizer, Tokenizer *dataTokenizer, string p)
+{
+    return (Vec3f *)ReadDataPointer(tokenizer, dataTokenizer, p);
 }
 
 void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene,
@@ -655,76 +697,28 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                 }
                 if (Advance(&tokenizer, "Quad "))
                 {
-                    type       = GeometryType::QuadMesh;
-                    Mesh &mesh = shapes.AddBack();
-                    for (;;)
-                    {
-                        if (Advance(&tokenizer, "p "))
-                        {
-                            u32 pOffset = ReadInt(&tokenizer);
-                            mesh.p      = dataTokenizer.input.str + pOffset;
-                        }
-                        else if (Advance(&tokenizer, "n "))
-                        {
-                            u32 nOffset = ReadInt(&tokenizer);
-                            mesh.n      = dataTokenizer.input.str + nOffset;
-                        }
-                        else if (Advance(&tokenizer, "v "))
-                        {
-                            u32 num          = ReadInt(&tokenizer);
-                            mesh.numVertices = num;
-                            mesh.numFaces    = num / 4;
-                        }
-                        else
-                        {
-                            break;
-                        }
-                        SkipToNextChar(&tokenizer);
-                    }
+                    type             = GeometryType::QuadMesh;
+                    Mesh &mesh       = shapes.AddBack();
+                    mesh.p           = ReadVec3Pointer(&tokenizer, &dataTokenizer, "p ");
+                    mesh.n           = ReadVec3Pointer(&tokenizer, &dataTokenizer, "n ");
+                    mesh.numVertices = ReadInt(&tokenizer, "v ");
+                    mesh.numFaces    = mesh.numVertices / 4;
                 }
                 else if (Advance(&tokenizer, "Tri "))
                 {
-                    type       = GeometryType::TriangleMesh;
-                    Mesh &mesh = shapes.AddBack();
-                    for (;;)
-                    {
-                        if (Advance(&tokenizer, "p "))
-                        {
-                            u32 pOffset = ReadInt(&tokenizer);
-                            mesh.p      = dataTokenizer.input.str + pOffset;
-                        }
-                        else if (Advance(&tokenizer, "n "))
-                        {
-                            u32 nOffset = ReadInt(&tokenizer);
-                            mesh.n      = dataTokenizer.input.str + nOffset;
-                        }
-                        else if (Advance(&tokenizer, "uv "))
-                        {
-                            u32 uvOffset = ReadInt(&tokenizer);
-                            mesh.uv      = dataTokenizer.input.str + uvOffset;
-                        }
-                        else if (Advance(&tokenizer, "v "))
-                        {
-                            u32 num          = ReadInt(&tokenizer);
-                            mesh.numVertices = num;
-                        }
-                        else if (Advance(&tokenizer, "i "))
-                        {
-                            u32 num         = ReadInt(&tokenizer);
-                            mesh.numIndices = num;
-                            mesh.numFaces   = num / 3;
-                        }
-                        else if (Advance(&tokenizer, "indices "))
-                        {
-                            u32 indOffset = ReadInt(&tokenizer);
-                            mesh.indices  = dataTokenizer.input.str + indOffset;
-                        }
-                        else
-                        {
-                            break;
-                        }
-                        SkipToNextChar(&tokenizer);
-                    }
+                    type             = GeometryType::TriangleMesh;
+                    Mesh &mesh       = shapes.AddBack();
+                    mesh.p           = ReadVec3Pointer(&tokenizer, &dataTokenizer, "p ");
+                    mesh.n           = ReadVec3Pointer(&tokenizer, &dataTokenizer, "n ");
+                    mesh.uv          = ReadVec2Pointer(&tokenizer, &dataTokenizer, "uv ");
+                    mesh.numVertices = ReadInt(&tokenizer);
+                    SkipToNextChar(&tokenizer);
+                    mesh.numIndices = ReadInt(&tokenizer);
+                    SkipToNextChar(&tokenizer);
+                    mesh.numFaces =
+                        mesh.numIndices ? mesh.numIndices / 3 : mesh.numVertices / 3;
+                    mesh.indices =
+                        (u32 *)ReadDataPointer(&tokenizer, &dataTokenizer, "indices ");
                 }
                 else
                 {
