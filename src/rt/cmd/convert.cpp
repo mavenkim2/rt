@@ -1304,7 +1304,7 @@ void WriteTexture(StringBuilder *builder, const NamedPacket *packet)
 {
     const ScenePacket *scenePacket = &packet->packet;
     // Put(builder, "t name %S type %S ", packet->name, packet->type);
-    Put(builder, "t %S ", packet->type);
+    Put(builder, "%S ", packet->type);
     u32 index = (u32)ConvertStringToTextureType(packet->type);
 
     const string *parameterNames = textureParameterArrays[index];
@@ -1350,21 +1350,22 @@ void WriteMaterials(StringBuilder *builder, SceneHashMap *textureHashMap, NamedP
                     {
                         u32 count = scenePacket->sizes[p] / sizeof(f32);
                         Assert(count == 1);
-                        Put(builder, "t constant ");
+
+                        Put(builder, scenePacket->types + p, sizeof(DataType));
                         Put(builder, scenePacket->bytes[p], scenePacket->sizes[p]);
                         Put(builder, " ");
                     }
                     break;
                     case DataType::Vec3:
                     {
-                        Assert(scenePacket->sizes[p] == sizeof(Vec3f));
-                        Put(builder, "t constant ");
+                        Put(builder, scenePacket->types + p, sizeof(DataType));
                         Put(builder, scenePacket->bytes[p], scenePacket->sizes[p]);
                         Put(builder, " ");
                     }
                     break;
                     case DataType::Spectrum:
                     {
+                        Assert(0);
                     }
                     break;
                     case DataType::Texture:
