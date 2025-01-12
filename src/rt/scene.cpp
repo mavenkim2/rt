@@ -34,20 +34,16 @@ struct Texture
         Error(0, "EvaluateFloat is not defined for sub class \n");
         return 0.f;
     }
-    virtual Vec3f EvaluateVector(SurfaceInteraction &si, SampledWavelengths &lambda,
-                                 const Vec4f &filterWidths)
+    virtual SampledSpectrum EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
+                                           const Vec4f &filterWidths)
     {
-        Error(0, "EvaluateVector is not defined for sub class\n");
+        Error(0, "EvaluateAlbedo is not defined for sub class\n");
         return {};
     }
-
-    __forceinline SampledSpectrum EvaluateAlbedo(SurfaceInteraction &intr,
-                                                 SampledWavelengths &lambda,
-                                                 const Vec4f &filterWidths)
+    SampledSpectrum EvaluateAlbedo(const Vec3f &color, SampledWavelengths &lambda)
     {
-        Vec3f result = EvaluateVector(intr, lambda, filterWidths);
-        if (result == Vec3f(0.f)) return SampledSpectrum(0.f);
-        return RGBAlbedoSpectrum(*RGBColorSpace::sRGB, result).Sample(lambda);
+        if (color == Vec3f(0.f)) return SampledSpectrum(0.f);
+        return RGBAlbedoSpectrum(*RGBColorSpace::sRGB, color).Sample(lambda);
     }
 };
 
@@ -62,20 +58,19 @@ struct PtexTexture : Texture
                       const Vec4f &filterWidths) override
     {
         f32 result;
-        EvaluateHelper(si, lambda, filterWidths, &result);
+        EvaluateHelper(si, filterWidths, &result);
         return result * scale;
     }
 
-    Vec3f EvaluateVector(SurfaceInteraction &si, SampledWavelengths &lambda,
-                         const Vec4f &filterWidths) override
+    SampledSpectrum EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
+                                   const Vec4f &filterWidths) override
     {
         Vec3f result;
-        EvaluateHelper(si, lambda, filterWidths, result.e);
-        return result * scale;
+        EvaluateHelper(si, filterWidths, result.e);
+        return Texture::EvaluateAlbedo(result * scale, lambda);
     }
 
-    void EvaluateHelper(SurfaceInteraction &intr, SampledWavelengths &lambda,
-                        const Vec4f &filterWidths, f32 *result)
+    void EvaluateHelper(SurfaceInteraction &intr, const Vec4f &filterWidths, f32 *result)
     {
         const Vec2f &uv = intr.uv;
         u32 faceIndex   = intr.faceIndices;
@@ -85,7 +80,11 @@ struct PtexTexture : Texture
         Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
         Assert(texture);
         u32 numFaces = texture->getInfo().numFaces;
-        Assert(faceIndex < numFaces);
+        if (faceIndex >= numFaces)
+        {
+            printf("faceIndex: %u, numFaces: %u\n", faceIndex, numFaces);
+            Assert(0);
+        }
         Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
         Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
 
@@ -142,6 +141,11 @@ struct ConstantTexture : Texture
     {
         return constant;
     }
+    SampledSpectrum EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
+                                   const Vec4f &filterWidths) override
+    {
+        return SampledSpectrum(constant);
+    }
 };
 
 struct ConstantVectorTexture : Texture
@@ -150,10 +154,10 @@ struct ConstantVectorTexture : Texture
 
     ConstantVectorTexture(Vec3f constant) : constant(constant) {}
 
-    Vec3f EvaluateVector(SurfaceInteraction &si, SampledWavelengths &lambda,
-                         const Vec4f &filterWidths) override
+    SampledSpectrum EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
+                                   const Vec4f &filterWidths) override
     {
-        return constant;
+        return Texture::EvaluateAlbedo(constant, lambda);
     }
 };
 
@@ -333,7 +337,7 @@ Vec3f ReadVec3Bytes(Tokenizer *tokenizer)
     return value;
 }
 
-Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer)
+Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer, string directory)
 {
     string textureType = ReadWord(tokenizer);
     if (textureType == "ptex")
@@ -346,7 +350,8 @@ Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer)
         {
             scale = ReadFloatBytes(tokenizer);
         }
-        return PushStructConstruct(arena, PtexTexture)(PushStr8Copy(arena, filename), scale);
+        return PushStructConstruct(arena, PtexTexture)(StrConcat(arena, directory, filename),
+                                                       scale);
     }
     else
     {
@@ -355,10 +360,10 @@ Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer)
     return 0;
 }
 
-Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer)
+Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory)
 {
     if (!CharIsDigit(*tokenizer->cursor)) return 0;
-    u32 dataType = ReadInt(tokenizer);
+    DataType dataType = (DataType)ReadInt(tokenizer);
     SkipToNextChar(tokenizer);
 
     switch (dataType)
@@ -375,23 +380,24 @@ Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer)
             return PushStructConstruct(arena, ConstantVectorTexture)(value);
         }
         break;
-        case DataType::String:
+        case DataType::Texture:
         {
-            return ReadTexture(arena, tokenizer);
+            return ReadTexture(arena, tokenizer, directory);
         }
         break;
         default: Assert(0); return 0;
     }
 }
 
-void ReadDielectricMaterial(Arena *arena, Tokenizer *tokenizer, DielectricMaterial *mat)
+void ReadDielectricMaterial(Arena *arena, Tokenizer *tokenizer, string directory,
+                            DielectricMaterial *mat)
 {
     bool isIsotropic = Advance(tokenizer, "roughness ");
     Texture *uRoughness;
     Texture *vRoughness;
     if (isIsotropic)
     {
-        uRoughness = vRoughness = ParseTexture(arena, tokenizer);
+        uRoughness = vRoughness = ParseTexture(arena, tokenizer, directory);
     }
     else
     {
@@ -402,20 +408,24 @@ void ReadDielectricMaterial(Arena *arena, Tokenizer *tokenizer, DielectricMateri
         }
         else
         {
-            uRoughness = ParseTexture(arena, tokenizer);
+            uRoughness = ParseTexture(arena, tokenizer, directory);
 
             result = Advance(tokenizer, "vroughness ");
             Assert(result);
-            vRoughness = ParseTexture(arena, tokenizer);
+            vRoughness = ParseTexture(arena, tokenizer, directory);
         }
     }
-    bool result = Advance(tokenizer, "eta ");
-    f32 eta     = 1.5f;
+    bool result   = Advance(tokenizer, "eta ");
+    DataType type = (DataType)ReadInt(tokenizer);
+    Assert(type == DataType::Float);
+    SkipToNextChar(tokenizer);
+    f32 eta = 1.5f;
     if (result) eta = ReadFloatBytes(tokenizer);
     new (mat) DielectricMaterial(uRoughness, vRoughness, eta);
 }
 
-MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *tokenizer)
+MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *tokenizer,
+                                 string directory)
 {
     TempArena temp = ScratchStart(&tempArena, 1);
     Scene *scene   = GetScene();
@@ -435,18 +445,18 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
         SkipToNextChar(tokenizer);
 
         // Get the type of material
-        i32 materialTypeIndex = -1;
-        string materialType   = ReadWord(tokenizer);
+        MaterialTypes materialTypeIndex = MaterialTypes::Max;
+        string materialType             = ReadWord(tokenizer);
         for (u32 m = 0; m < (u32)MaterialTypes::Max; m++)
         {
             if (materialType == materialTypeNames[m])
             {
-                materialTypeIndex = m;
+                materialTypeIndex = (MaterialTypes)m;
                 break;
             }
         }
         SkipToNextChar(tokenizer);
-        Assert(materialTypeIndex != -1);
+        Assert(materialTypeIndex != MaterialTypes::Max);
 
         Material **material = &materialsList.AddBack();
 
@@ -455,21 +465,25 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
             case MaterialTypes::Diffuse:
             {
                 bool result = Advance(tokenizer, "reflectance ");
-                Assert(result);
+                Texture *reflectance;
+                if (!result) reflectance = PushStructConstruct(arena, ConstantTexture)(0.5f);
+                else reflectance = ParseTexture(arena, tokenizer, directory);
 
-                Texture *reflectance = ParseTexture(arena, tokenizer);
                 *material = PushStructConstruct(arena, DiffuseMaterial)(reflectance);
             }
             break;
             case MaterialTypes::DiffuseTransmission:
             {
                 bool result = Advance(tokenizer, "reflectance ");
-                Assert(result);
-                Texture *reflectance = ParseTexture(arena, tokenizer);
+                Texture *reflectance;
+                if (!result) reflectance = PushStructConstruct(arena, ConstantTexture)(0.25f);
+                else reflectance = ParseTexture(arena, tokenizer, directory);
 
                 result = Advance(tokenizer, "transmittance ");
-                Assert(result);
-                Texture *transmittance = ParseTexture(arena, tokenizer);
+                Texture *transmittance;
+                if (!result)
+                    transmittance = PushStructConstruct(arena, ConstantTexture)(0.25f);
+                else transmittance = ParseTexture(arena, tokenizer, directory);
 
                 result    = Advance(tokenizer, "scale ");
                 f32 scale = 1.f;
@@ -481,24 +495,25 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
             break;
             case MaterialTypes::Dielectric:
             {
-                DielectricMaterial *out = (DielectricMaterial *)(*material);
-                ReadDielectricMaterial(arena, tokenizer, out);
+                *material = (Material *)PushStruct(arena, DielectricMaterial);
+                ReadDielectricMaterial(arena, tokenizer, directory,
+                                       (DielectricMaterial *)(*material));
             }
             break;
             case MaterialTypes::CoatedDiffuse:
             {
                 DielectricMaterial dm;
-                ReadDielectricMaterial(arena, tokenizer, &dm);
+                ReadDielectricMaterial(arena, tokenizer, directory, &dm);
 
                 bool result = Advance(tokenizer, "reflectance ");
                 Assert(result);
-                Texture *reflectance = ParseTexture(arena, tokenizer);
+                Texture *reflectance = ParseTexture(arena, tokenizer, directory);
 
-                Texture *albedo = ParseTexture(arena, tokenizer);
+                Texture *albedo = ParseTexture(arena, tokenizer, directory);
                 if (!albedo)
                     albedo = PushStructConstruct(arena, ConstantVectorTexture)(Vec3f(0.f));
 
-                Texture *g = ParseTexture(arena, tokenizer);
+                Texture *g = ParseTexture(arena, tokenizer, directory);
                 if (!g) g = PushStructConstruct(arena, ConstantTexture)(0.f);
 
                 i32 maxDepth = 10;
@@ -671,12 +686,24 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                     node->counter.count           = 1;
                     node->scene                   = includeScene;
                     node->next                    = PushStruct(arena, SceneLoadTable::Node);
+
+                    // string dataFilename = PushStr8F(temp.arena, "%S%S.rtdata", directory,
+                    //                                 RemoveFileExtension(node->filename));
+                    files.AddBack() = includeScene;
+                    EndTicketMutex(&table->mutexes[index]);
+                    // TODO: maybe use a better heuristic
+                    // if (OS_GetFileSize(dataFilename) > megabytes(1))
+                    // {
                     scheduler.Schedule(&counter, [=](u32 jobID) {
                         LoadRTScene(arenas, state, includeScene, directory, node->filename,
                                     &node->counter);
                     });
-                    EndTicketMutex(&table->mutexes[index]);
-                    files.AddBack() = includeScene;
+                    // }
+                    // else
+                    // {
+                    //     LoadRTScene(arenas, state, includeScene, directory, node->filename,
+                    //                 &node->counter);
+                    // }
                 }
                 else
                 {
@@ -709,16 +736,20 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
             Assert(isLeaf);
             ChunkedLinkedList<Mesh, 1024, MemoryType_Shape> shapes(temp.arena);
             ChunkedLinkedList<PrimitiveIndices, 1024, MemoryType_Shape> indices(temp.arena);
-            while (!Advance(&tokenizer, "SHAPE_END "))
-            {
+
+            auto AddMaterial = [&]() {
+                PrimitiveIndices &ids = indices.AddBack();
                 if (Advance(&tokenizer, "m "))
                 {
                     Assert(materialHashMap);
                     string materialName      = ReadWord(&tokenizer);
                     const MaterialNode *node = materialHashMap->Get(materialName);
-                    PrimitiveIndices &ids    = indices.AddBack();
                     ids                      = PrimitiveIndices(LightHandle(), node->index);
                 }
+            };
+
+            while (!Advance(&tokenizer, "SHAPE_END "))
+            {
                 if (Advance(&tokenizer, "Quad "))
                 {
                     type             = GeometryType::QuadMesh;
@@ -727,20 +758,22 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                     mesh.n           = ReadVec3Pointer(&tokenizer, &dataTokenizer, "n ");
                     mesh.numVertices = ReadInt(&tokenizer, "v ");
                     mesh.numFaces    = mesh.numVertices / 4;
+                    AddMaterial();
                 }
                 else if (Advance(&tokenizer, "Tri "))
                 {
-                    type             = GeometryType::TriangleMesh;
-                    Mesh &mesh       = shapes.AddBack();
-                    mesh.p           = ReadVec3Pointer(&tokenizer, &dataTokenizer, "p ");
-                    mesh.n           = ReadVec3Pointer(&tokenizer, &dataTokenizer, "n ");
-                    mesh.uv          = ReadVec2Pointer(&tokenizer, &dataTokenizer, "uv ");
+                    type       = GeometryType::TriangleMesh;
+                    Mesh &mesh = shapes.AddBack();
+                    mesh.p     = ReadVec3Pointer(&tokenizer, &dataTokenizer, "p ");
+                    mesh.n     = ReadVec3Pointer(&tokenizer, &dataTokenizer, "n ");
+                    mesh.uv    = ReadVec2Pointer(&tokenizer, &dataTokenizer, "uv ");
+                    mesh.indices =
+                        (u32 *)ReadDataPointer(&tokenizer, &dataTokenizer, "indices ");
                     mesh.numVertices = ReadInt(&tokenizer, "v ");
                     mesh.numIndices  = ReadInt(&tokenizer, "i ");
                     mesh.numFaces =
                         mesh.numIndices ? mesh.numIndices / 3 : mesh.numVertices / 3;
-                    mesh.indices =
-                        (u32 *)ReadDataPointer(&tokenizer, &dataTokenizer, "indices ");
+                    AddMaterial();
                 }
                 else
                 {
@@ -757,7 +790,7 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
         {
             hasMaterials = true;
             // TODO: multithread this
-            materialHashMap = CreateMaterials(arena, temp.arena, &tokenizer);
+            materialHashMap = CreateMaterials(arena, temp.arena, &tokenizer, directory);
             state->map      = materialHashMap;
         }
         else

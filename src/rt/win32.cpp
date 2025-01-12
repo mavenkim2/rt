@@ -187,6 +187,17 @@ OS_Handle OS_CreateFile(string filename)
     return outHandle;
 }
 
+u64 OS_GetFileSize(string filename)
+{
+    HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    Error(file != INVALID_HANDLE_VALUE, "Could not open file: %S\n", filename);
+    u64 size;
+    GetFileSizeEx(file, (LARGE_INTEGER *)&size);
+    CloseHandle(file);
+    return size;
+}
+
 string OS_ReadFile(Arena *arena, string filename, u64 offset)
 {
     HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0,
@@ -218,6 +229,7 @@ string OS_ReadFile(Arena *arena, string filename, u64 offset)
         if (readSize != sizeToRead) break;
     }
     Assert(totalReadSize == size);
+    CloseHandle(file);
     return result;
 }
 
@@ -273,7 +285,13 @@ u8 *OS_MapFileWrite(string filename, u64 size)
 {
     HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ | GENERIC_WRITE, 0, 0,
                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
-    Error(file != INVALID_HANDLE_VALUE, "Could not create file: %S\n", filename);
+    // Error(file != INVALID_HANDLE_VALUE, "Could not create file: %S\n", filename);
+    if (file == INVALID_HANDLE_VALUE)
+    {
+        DWORD lastError = GetLastError();
+        printf("error code %lu\n", lastError);
+        Assert(0);
+    }
 
     LARGE_INTEGER newFileSize;
     newFileSize.QuadPart = size;
@@ -295,7 +313,13 @@ u8 *OS_MapFileAppend(string filename, u64 size)
 {
     HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ | GENERIC_WRITE, 0, 0,
                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    Error(file != INVALID_HANDLE_VALUE, "Could not create file: %S\n", filename);
+    // Error(file != INVALID_HANDLE_VALUE, "Could not create file: %S\n", filename);
+    if (file == INVALID_HANDLE_VALUE)
+    {
+        DWORD lastError = GetLastError();
+        printf("error code %lu\n", lastError);
+        Assert(0);
+    }
 
     LARGE_INTEGER currentSize;
     bool success = GetFileSizeEx(file, &currentSize);
@@ -326,6 +350,7 @@ void OS_ResizeFile(string filename, u64 size)
     {
         DWORD lastError = GetLastError();
         printf("error code %lu\n", lastError);
+        Assert(0);
     }
 
     LARGE_INTEGER newFileSize;

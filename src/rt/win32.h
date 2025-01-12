@@ -60,6 +60,7 @@ DWORD Win32ThreadProc(void *parameter);
 Win32Thread *Win32GetFreeThread();
 inline void Win32FreeThread(Win32Thread *thread);
 void OS_SetThreadName(string name);
+u64 OS_GetFileSize(string filename);
 string OS_ReadFile(Arena *arena, string filename, u64 offset = 0);
 b32 OS_WriteFile(string filename, void *fileMemory, u64 fileSize);
 b32 OS_WriteFile(string filename, string buffer);

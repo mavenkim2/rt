@@ -1021,7 +1021,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 Assert(result);
 
                 PBRTFileInfo *newState = PushStruct(threadArena, PBRTFileInfo);
-                string objectFileName  = PushStr8F(tempArena, "objects/%S_obj.rtscene",
+                string objectFileName  = PushStr8F(threadArena, "objects/%S_obj.rtscene",
                                                    ReplaceColons(tempArena, objectName));
 
                 newState->Init(objectFileName);
@@ -1233,7 +1233,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 Assert(result);
                 PBRTSkipToNextChar(&tokenizer);
 
-                NamedPacket nPacket;
+                NamedPacket nPacket = {};
                 ScenePacket *packet = &nPacket.packet;
                 packet->type =
                     "texture"_sid; // Hash(StrConcat(tempArena, textureType, textureClass));
@@ -1298,30 +1298,37 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
 
     ScratchEnd(temp);
     return state;
-} // namespace rt
+}
 
 void WriteTexture(StringBuilder *builder, const NamedPacket *packet)
 {
     const ScenePacket *scenePacket = &packet->packet;
     // Put(builder, "t name %S type %S ", packet->name, packet->type);
     Put(builder, "%S ", packet->type);
-    u32 index = (u32)ConvertStringToTextureType(packet->type);
-
-    const string *parameterNames = textureParameterArrays[index];
-    const StringId *parameterIds = textureParameterIds[index];
-    u32 count                    = textureParameterCounts[index];
-    Assert(parameterNames);
-    for (u32 i = 0; i < count; i++)
+    TextureType type = ConvertStringToTextureType(packet->type);
+    switch (type)
     {
-        for (u32 j = 0; j < scenePacket->parameterCount; j++)
+        case TextureType::ptex:
         {
-            if (scenePacket->parameterNames[j] == parameterIds[i])
+            const string parameterNames[] = {"filename", "scale"};
+            const StringId parameterIds[] = {"filename"_sid, "scale"_sid};
+            u32 count                     = 2;
+            Assert(parameterNames);
+            for (u32 i = 0; i < count; i++)
             {
-                Put(builder, "%S ", parameterNames[i]);
-                Put(builder, scenePacket->bytes[j], scenePacket->sizes[j]);
-                Put(builder, " ");
+                for (u32 j = 0; j < scenePacket->parameterCount; j++)
+                {
+                    if (scenePacket->parameterNames[j] == parameterIds[i])
+                    {
+                        Put(builder, "%S ", parameterNames[i]);
+                        Put(builder, scenePacket->bytes[j], scenePacket->sizes[j]);
+                        Put(builder, " ");
+                    }
+                }
             }
         }
+        break;
+        default: Assert(0);
     }
 }
 
@@ -1344,6 +1351,7 @@ void WriteMaterials(StringBuilder *builder, SceneHashMap *textureHashMap, NamedP
             if (scenePacket->parameterNames[p] == ids[i])
             {
                 Put(builder, "%S ", names[i]);
+                Put(builder, "%u ", scenePacket->types[p]);
                 switch (scenePacket->types[p])
                 {
                     case DataType::Float:
@@ -1351,14 +1359,12 @@ void WriteMaterials(StringBuilder *builder, SceneHashMap *textureHashMap, NamedP
                         u32 count = scenePacket->sizes[p] / sizeof(f32);
                         Assert(count == 1);
 
-                        Put(builder, scenePacket->types + p, sizeof(DataType));
                         Put(builder, scenePacket->bytes[p], scenePacket->sizes[p]);
                         Put(builder, " ");
                     }
                     break;
                     case DataType::Vec3:
                     {
-                        Put(builder, scenePacket->types + p, sizeof(DataType));
                         Put(builder, scenePacket->bytes[p], scenePacket->sizes[p]);
                         Put(builder, " ");
                     }
@@ -1383,6 +1389,30 @@ void WriteMaterials(StringBuilder *builder, SceneHashMap *textureHashMap, NamedP
         }
     }
 }
+
+void WriteData(StringBuilder *builder, StringBuilderMapped *dataBuilder, void *ptr, u64 size,
+               string out)
+{
+    Assert(ptr);
+    u64 offset = dataBuilder->totalSize;
+    Put(dataBuilder, ptr, size);
+    Put(builder, "%S %llu ", out, offset);
+}
+
+i32 WriteData(ScenePacket *packet, StringBuilder *builder, StringBuilderMapped *dataBuilder,
+              StringId matchId, string out)
+{
+    for (u32 c = 0; c < packet->parameterCount; c++)
+    {
+        if (packet->parameterNames[c] == matchId)
+        {
+            WriteData(builder, dataBuilder, packet->bytes[c], packet->sizes[c], out);
+            return c;
+        }
+    }
+    return -1;
+}
+
 void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
 {
     if (info->shapes.totalCount == 0 && info->numInstances == 0) return;
@@ -1464,6 +1494,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                     case "quadmesh"_sid:
                     {
                         Put(&builder, "Quad ");
+                        bool plyMesh = false;
                         for (u32 c = 0; c < packet->parameterCount; c++)
                         {
                             if (packet->parameterNames[c] == "filename"_sid)
@@ -1472,32 +1503,34 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                                     temp.arena,
                                     StrConcat(temp.arena, directory,
                                               Str8(packet->bytes[c], packet->sizes[c])));
+                                WriteData(&builder, &dataBuilder, mesh.p,
+                                          mesh.numVertices * sizeof(Vec3f), "p");
+                                WriteData(&builder, &dataBuilder, mesh.n,
+                                          mesh.numVertices * sizeof(Vec3f), "n");
+                                // if (mesh.uv)
+                                //     WriteData(&builder, &dataBuilder, mesh.uv,
+                                //               mesh.numVertices * sizeof(Vec2f), "uv");
                                 Put(&builder, "v %u ", mesh.numVertices);
-                                u64 pOffset = dataBuilder.totalSize;
-                                Put(&dataBuilder, mesh.p, mesh.numVertices * sizeof(Vec3f));
-                                u64 nOffset = dataBuilder.totalSize;
-                                Put(&dataBuilder, mesh.n, mesh.numVertices * sizeof(Vec3f));
-                                Put(&builder, "p %llu n %llu ", pOffset, nOffset);
+                                plyMesh = true;
+                                break;
                             }
-                            else if (packet->parameterNames[c] == "P"_sid)
-                            {
-                                u64 pOffset = dataBuilder.totalSize;
-                                Put(&dataBuilder, packet->bytes[c], packet->sizes[c]);
-                                Put(&builder, "p %llu ", pOffset);
-                                Put(&builder, "v %u ", packet->sizes[c] / sizeof(Vec3f));
-                            }
-                            else if (packet->parameterNames[c] == "N"_sid)
-                            {
-                                u64 nOffset = dataBuilder.totalSize;
-                                Put(&dataBuilder, packet->bytes[c], packet->sizes[c]);
-                                Put(&builder, "n %llu ", nOffset);
-                            }
+                        }
+                        if (!plyMesh)
+                        {
+                            i32 numVertices = 0;
+                            i32 c = WriteData(packet, &builder, &dataBuilder, "P"_sid, "p");
+                            if (c != -1) numVertices = packet->sizes[c] / sizeof(Vec3f);
+                            WriteData(packet, &builder, &dataBuilder, "N"_sid, "n");
+                            // WriteData(packet, &builder, &dataBuilder, "uv"_sid, "uv");
+                            if (numVertices) Put(&builder, "v %u ", numVertices);
                         }
                     }
                     break;
                     case "trianglemesh"_sid:
                     {
                         Put(&builder, "Tri ");
+
+                        bool plyMesh = false;
                         for (u32 c = 0; c < packet->parameterCount; c++)
                         {
                             if (packet->parameterNames[c] == "filename"_sid)
@@ -1506,55 +1539,36 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                                     temp.arena,
                                     StrConcat(temp.arena, directory,
                                               Str8(packet->bytes[c], packet->sizes[c])));
-                                Put(&builder, "v %u ", mesh.numVertices, mesh.numIndices);
-                                u64 pOffset = dataBuilder.totalSize;
-                                Put(&dataBuilder, mesh.p, mesh.numVertices * sizeof(Vec3f));
-                                u64 nOffset = dataBuilder.totalSize;
-                                Put(&dataBuilder, mesh.n, mesh.numVertices * sizeof(Vec3f));
-
-                                Put(&builder, "p %llu n %llu ", pOffset, nOffset);
+                                WriteData(&builder, &dataBuilder, mesh.p,
+                                          mesh.numVertices * sizeof(Vec3f), "p");
+                                WriteData(&builder, &dataBuilder, mesh.n,
+                                          mesh.numVertices * sizeof(Vec3f), "n");
                                 if (mesh.uv)
-                                {
-                                    u64 uvOffset = dataBuilder.totalSize;
-                                    Put(&dataBuilder, mesh.uv,
-                                        mesh.numVertices * sizeof(Vec2f));
-                                    Put(&builder, "uv %llu ", uvOffset);
-                                }
+                                    WriteData(&builder, &dataBuilder, mesh.uv,
+                                              mesh.numVertices * sizeof(Vec2f), "uv");
                                 if (mesh.indices)
-                                {
-                                    u64 indexOffset = dataBuilder.totalSize;
-                                    Put(&dataBuilder, mesh.indices,
-                                        mesh.numIndices * sizeof(u32));
-                                    Put(&builder, "i %u indices %llu ", mesh.numIndices,
-                                        indexOffset);
-                                }
+                                    WriteData(&builder, &dataBuilder, mesh.indices,
+                                              mesh.numIndices * sizeof(u32), "indices");
+                                Put(&builder, "v %u ", mesh.numVertices);
+                                if (mesh.indices) Put(&builder, "i %u ", mesh.numIndices);
+                                plyMesh = true;
+                                break;
                             }
-                            else if (packet->parameterNames[c] == "P"_sid)
-                            {
-                                u64 pOffset = dataBuilder.totalSize;
-                                Put(&dataBuilder, packet->bytes[c], packet->sizes[c]);
-                                Put(&builder, "p %llu ", pOffset);
-                                Put(&builder, "v %u ", packet->sizes[c] / sizeof(Vec3f));
-                            }
-                            else if (packet->parameterNames[c] == "N"_sid)
-                            {
-                                u64 nOffset = dataBuilder.totalSize;
-                                Put(&dataBuilder, packet->bytes[c], packet->sizes[c]);
-                                Put(&builder, "n %llu ", nOffset);
-                            }
-                            else if (packet->parameterNames[c] == "indices"_sid)
-                            {
-                                u64 indOffset = dataBuilder.totalSize;
-                                Put(&dataBuilder, packet->bytes[c], packet->sizes[c]);
-                                Put(&builder, "indices %llu ", indOffset);
-                                Put(&builder, "i %u ", packet->sizes[c] / sizeof(u32));
-                            }
-                            else if (packet->parameterNames[c] == "uv"_sid)
-                            {
-                                u64 uvOffset = dataBuilder.totalSize;
-                                Put(&dataBuilder, packet->bytes[c], packet->sizes[c]);
-                                Put(&builder, "uv %llu ", uvOffset);
-                            }
+                        }
+                        if (!plyMesh)
+                        {
+                            u32 numVertices = 0;
+                            u32 numIndices  = 0;
+                            i32 c           = -1;
+                            c = WriteData(packet, &builder, &dataBuilder, "P"_sid, "p");
+                            if (c != -1) numVertices = packet->sizes[c] / sizeof(Vec3f);
+                            WriteData(packet, &builder, &dataBuilder, "N"_sid, "n");
+                            WriteData(packet, &builder, &dataBuilder, "uv"_sid, "uv");
+                            c = WriteData(packet, &builder, &dataBuilder, "indices"_sid,
+                                          "indices");
+                            if (c != -1) numIndices = packet->sizes[c] / sizeof(u32);
+                            if (numVertices) Put(&builder, "v %u ", numVertices);
+                            if (numIndices) Put(&builder, "i %u ", numIndices);
                         }
                     }
                     break;
@@ -1564,7 +1578,8 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                     break;
                     default: Assert(0);
                 }
-                Put(&builder, "m %S ", shapeType->materialName);
+                if (shapeType->materialName.size)
+                    Put(&builder, "m %S ", shapeType->materialName);
             }
         }
         Put(&builder, "SHAPE_END ");

@@ -672,10 +672,11 @@ struct ChunkedLinkedList
         u32 runningCount = 0;
         for (ChunkNode *node = first; node != 0; node = node->next)
         {
-            Assert(runningCount + node->count < (u32)array.capacity);
+            Assert(runningCount + node->count <= (u32)array.capacity);
             MemoryCopy(array.data + runningCount, node->values, node->count * sizeof(T));
             runningCount += node->count;
         }
+        array.size = runningCount;
     }
     inline void Merge(ChunkedLinkedList<T, numPerChunk, memoryTag> *list)
     {
@@ -733,7 +734,7 @@ struct HashMap
         }
         if (!node)
         {
-            Error(0, "Name not found in hashmap\n");
+            Error(0, "Name not found in hashmap: %S\n", name);
         }
         return 0;
     }
@@ -774,15 +775,17 @@ struct HashMap
         {
             HashList *toList   = &map[i];
             HashList *fromList = &from.map[i];
+            if (fromList->first == 0) continue;
+
             if (toList->first == 0)
             {
                 toList->first = fromList->first;
+                toList->last  = fromList->last;
             }
             else
             {
-                Assert(toList->last);
                 toList->last->next = fromList->first;
-                if (fromList->last) toList->last = fromList->last;
+                toList->last       = fromList->last;
             }
         }
     }
