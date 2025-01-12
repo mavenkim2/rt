@@ -550,6 +550,7 @@ enum class AttributeType
     Bool,
 };
 
+#if 0
 struct AttributeTable
 {
     u8 *buffer;
@@ -691,15 +692,23 @@ MaterialCallback materialFuncs[] = {
     ShaderEvaluate_Dielectric,
 };
 
+// struct Material
+// {
+//     AttributeTableKey key;
+//     MaterialCallback shade;
+//     TextureCallback *funcs;
+//     u32 count;
+//
+//     __forceinline void Shade(Arena *arena, SurfaceInteraction &si, SampledWavelengths
+//     &lambda,
+//                              struct BSDFBase<BxDF> *result);
+// };
+#endif
+
 struct Material
 {
-    AttributeTableKey key;
-    MaterialCallback shade;
-    TextureCallback *funcs;
-    u32 count;
-
-    __forceinline void Shade(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
-                             struct BSDFBase<BxDF> *result);
+    virtual BxDF Evaluate(Arena *arena, SurfaceInteraction &si,
+                          SampledWavelengths &lambda) = 0;
 };
 
 struct Ray2;
@@ -761,8 +770,7 @@ struct Scene
 
     ArrayTuple<LightTypes> lights;
 
-    StaticArray<AttributeTable> materialTables;
-    StaticArray<Material> materials;
+    StaticArray<Material *> materials;
 
     // ArrayTuple<MaterialTypes> materials;
     // Material materials;
@@ -777,11 +785,11 @@ struct Scene
 struct Scene *scene_;
 Scene *GetScene() { return scene_; }
 
-AttributeTable *GetMaterialTable(u32 tableIndex)
-{
-    Scene *scene = GetScene();
-    return &scene->materialTables[tableIndex];
-}
+// AttributeTable *GetMaterialTable(u32 tableIndex)
+// {
+//     Scene *scene = GetScene();
+//     return &scene->materialTables[tableIndex];
+// }
 
 void BuildTLASBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
 template <typename Mesh>

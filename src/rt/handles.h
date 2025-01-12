@@ -42,6 +42,7 @@ struct VecBase<3>
 template <i32 K>
 using Veclfn = typename VecBase<K>::Type;
 
+#if 0
 struct NullShader;
 struct ConstantTexture;
 struct ConstantSpectrumTexture;
@@ -85,10 +86,10 @@ using CoatedDiffuseMaterial2 = Material2<CoatedDiffuseMaterialBase, NullShader>;
 using DielectricMaterialBase = Material2<DielectricMaterialConstant, NullShader>;
 
 using MSDielectricMaterial1 = Material2<MSDielectricMaterial, NullShader>;
-
-// CREATE_ENUM_AND_TYPE_PACK(MaterialTypes, MaterialType, DielectricMaterialBase,
-//                           CoatedDiffuseMaterial1, CoatedDiffuseMaterial2,
-//                           DiffuseMaterialBase, MSDielectricMaterial1);
+CREATE_ENUM_AND_TYPE_PACK(MaterialTypes, MaterialType, DielectricMaterialBase,
+        CoatedDiffuseMaterial1, CoatedDiffuseMaterial2,
+        DiffuseMaterialBase, MSDielectricMaterial1);
+#endif
 
 struct VolumeHandle
 {

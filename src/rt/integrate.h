@@ -124,6 +124,7 @@ enum class ColorEncoding
     SRGB,
 };
 
+#if 0
 struct ConstantTexture
 {
     f32 c;
@@ -178,7 +179,6 @@ struct ConstantSpectrumTexture
     }
 };
 
-#if 0
 struct PtexTexture
 {
     string filename;
@@ -386,7 +386,6 @@ struct ImageTextureShader
         }
     }
 };
-#endif
 
 template <typename TextureShader>
 struct BumpMap
@@ -543,6 +542,7 @@ struct Material2
         new (result) BSDFBase<BxDFOut>(bxdf, intr.shading.dpdu, intr.shading.n);
     }
 };
+#endif
 
 static const u32 invalidVolume = 0xffffffff;
 struct Ray2

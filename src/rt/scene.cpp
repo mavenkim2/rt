@@ -26,298 +26,271 @@ struct SceneLoadTable
     TicketMutex *mutexes;
 };
 
-// f32 ProcessFloatTexture(AttributeIterator *iterator, Vec2f uv, const Vec4f &filterWidths)
-TEXTURE_CALLBACK(ProcessFloatTexture) { *result = iterator->ReadFloat(); }
-
-__forceinline SampledSpectrum ProcessAlbedoTexture(TextureCallback &callback,
-                                                   AttributeIterator *iterator,
-                                                   SurfaceInteraction &intr,
-                                                   SampledWavelengths &lambda,
-                                                   const Vec4f &filterWidths)
+struct Texture
 {
-    Vec3f result;
-    callback(iterator, intr, lambda, filterWidths, result.e);
-    return RGBAlbedoSpectrum(*RGBColorSpace::sRGB, result).Sample(lambda);
-}
-
-TEXTURE_CALLBACK(ProcessIOR)
-{
-    lambda.TerminateSecondary();
-    auto spec = (PiecewiseLinearSpectrum *)iterator->ReadPointer();
-    *result   = spec->Evaluate(lambda[0]);
-}
-
-__forceinline void ProcessRoughness(TextureCallback *callbacks, AttributeIterator *iterator,
-                                    SurfaceInteraction &intr, SampledWavelengths &lambda,
-                                    const Vec4f &filterWidths, f32 &u, f32 &v)
-{
-    callbacks[iterator->callbackCount++](iterator, intr, lambda, filterWidths, &u);
-    f32 vR = -1.f;
-    callbacks[iterator->callbackCount++](iterator, intr, lambda, filterWidths, &vR);
-    if (vR == -1.f) vR = u;
-}
-
-TEXTURE_CALLBACK(ProcessPtexTexture)
-{
-    string filename = iterator->ReadString();
-    const Vec2f &uv = intr.uv;
-    u32 faceIndex   = intr.faceIndices;
-
-    Assert(cache);
-    Ptex::String error;
-    Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
-    Assert(texture);
-    u32 numFaces = texture->getInfo().numFaces;
-    Assert(faceIndex < numFaces);
-    Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
-    Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
-
-    i32 nc = texture->numChannels();
-
-    // TODO: ray differentials
-    // Vec2f uv(0.5f, 0.5f);
-
-    f32 out[3];
-    filter->eval(out, 0, nc, faceIndex, uv[0], uv[1], filterWidths[0], filterWidths[1],
-                 filterWidths[2], filterWidths[3]);
-
-    texture->release();
-    filter->release();
-
-    // Convert to srgb
-
-    if (nc == 1) *result = out[0];
-    else
+    virtual f32 EvaluateFloat(SurfaceInteraction &si, SampledWavelengths &lambda,
+                              const Vec4f &filterWidths)
     {
-        // if (tex->encoding == ColorEncoding::SRGB)
-        // {
-        //     u8 rgb[3];
-        //     for (i32 i = 0; i < nc; i++)
-        //     {
-        //         rgb[i] = u8(Clamp(out[i] * 255.f + 0.5f, 0.f, 255.f));
-        //     }
-        //     Vec3f rgbF = SRGBToLinear(rgb);
-        //     out[0]     = rgbF.x;
-        //     out[1]     = rgbF.y;
-        //     out[2]     = rgbF.z;
-        // }
-        // else
-        // {
-        out[0] = Pow(out[0], 2.2f);
-        out[1] = Pow(out[1], 2.2f);
-        out[2] = Pow(out[2], 2.2f);
-        // }
-        for (i32 i = 0; i < nc; i++)
+        Error(0, "EvaluateFloat is not defined for sub class \n");
+        return 0.f;
+    }
+    virtual Vec3f EvaluateVector(SurfaceInteraction &si, SampledWavelengths &lambda,
+                                 const Vec4f &filterWidths)
+    {
+        Error(0, "EvaluateVector is not defined for sub class\n");
+        return {};
+    }
+
+    __forceinline SampledSpectrum EvaluateAlbedo(SurfaceInteraction &intr,
+                                                 SampledWavelengths &lambda,
+                                                 const Vec4f &filterWidths)
+    {
+        Vec3f result = EvaluateVector(intr, lambda, filterWidths);
+        if (result == Vec3f(0.f)) return SampledSpectrum(0.f);
+        return RGBAlbedoSpectrum(*RGBColorSpace::sRGB, result).Sample(lambda);
+    }
+};
+
+struct PtexTexture : Texture
+{
+    string filename;
+    f32 scale = 1.f;
+    // TODO: encoding
+    PtexTexture(string filename, f32 scale = 1.f) : filename(filename), scale(scale) {}
+
+    f32 EvaluateFloat(SurfaceInteraction &si, SampledWavelengths &lambda,
+                      const Vec4f &filterWidths) override
+    {
+        f32 result;
+        EvaluateHelper(si, lambda, filterWidths, &result);
+        return result * scale;
+    }
+
+    Vec3f EvaluateVector(SurfaceInteraction &si, SampledWavelengths &lambda,
+                         const Vec4f &filterWidths) override
+    {
+        Vec3f result;
+        EvaluateHelper(si, lambda, filterWidths, result.e);
+        return result * scale;
+    }
+
+    void EvaluateHelper(SurfaceInteraction &intr, SampledWavelengths &lambda,
+                        const Vec4f &filterWidths, f32 *result)
+    {
+        const Vec2f &uv = intr.uv;
+        u32 faceIndex   = intr.faceIndices;
+
+        Assert(cache);
+        Ptex::String error;
+        Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
+        Assert(texture);
+        u32 numFaces = texture->getInfo().numFaces;
+        Assert(faceIndex < numFaces);
+        Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
+        Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
+
+        i32 nc = texture->numChannels();
+
+        // TODO: ray differentials
+        // Vec2f uv(0.5f, 0.5f);
+
+        f32 out[3];
+        filter->eval(out, 0, nc, faceIndex, uv[0], uv[1], filterWidths[0], filterWidths[1],
+                     filterWidths[2], filterWidths[3]);
+
+        texture->release();
+        filter->release();
+
+        // Convert to srgb
+
+        if (nc == 1) *result = out[0];
+        else
         {
-            out[i] *= iterator->ReadFloat(1.f);
+            // if (tex->encoding == ColorEncoding::SRGB)
+            // {
+            //     u8 rgb[3];
+            //     for (i32 i = 0; i < nc; i++)
+            //     {
+            //         rgb[i] = u8(Clamp(out[i] * 255.f + 0.5f, 0.f, 255.f));
+            //     }
+            //     Vec3f rgbF = SRGBToLinear(rgb);
+            //     out[0]     = rgbF.x;
+            //     out[1]     = rgbF.y;
+            //     out[2]     = rgbF.z;
+            // }
+            // else
+            // {
+            out[0] = Pow(out[0], 2.2f);
+            out[1] = Pow(out[1], 2.2f);
+            out[2] = Pow(out[2], 2.2f);
+
+            result[0] = out[0];
+            result[1] = out[1];
+            result[2] = out[2];
+        }
+    }
+};
+
+struct ConstantTexture : Texture
+{
+    f32 constant;
+
+    ConstantTexture(f32 constant) : constant(constant) {}
+
+    f32 EvaluateFloat(SurfaceInteraction &si, SampledWavelengths &lambda,
+                      const Vec4f &filterWidths) override
+    {
+        return constant;
+    }
+};
+
+struct ConstantVectorTexture : Texture
+{
+    Vec3f constant;
+
+    ConstantVectorTexture(Vec3f constant) : constant(constant) {}
+
+    Vec3f EvaluateVector(SurfaceInteraction &si, SampledWavelengths &lambda,
+                         const Vec4f &filterWidths) override
+    {
+        return constant;
+    }
+};
+
+// TODO: I don't want to do this long term but I also hate how I have terminally over thought
+// this for no reason
+struct DiffuseMaterial : Material
+{
+    Texture *reflectance;
+    DiffuseMaterial(Texture *reflectance) : reflectance(reflectance) {}
+    BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda) override
+    {
+        DiffuseBxDF *bxdf = PushStruct(arena, DiffuseBxDF);
+        *bxdf             = EvaluateHelper(si, lambda);
+        return bxdf;
+    }
+    DiffuseBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda)
+
+    {
+        Vec4f filterWidths(.75f);
+        SampledSpectrum s = reflectance->EvaluateAlbedo(si, lambda, filterWidths);
+
+        return DiffuseBxDF(s);
+    }
+};
+
+struct DiffuseTransmissionMaterial : Material
+{
+    Texture *reflectance;
+    Texture *transmittance;
+    f32 scale;
+    DiffuseTransmissionMaterial(Texture *reflectance, Texture *transmittance, f32 scale)
+        : reflectance(reflectance), transmittance(transmittance), scale(scale)
+    {
+    }
+    BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda) override
+    {
+        DiffuseTransmissionBxDF *bxdf = PushStruct(arena, DiffuseTransmissionBxDF);
+        *bxdf                         = EvaluateHelper(si, lambda);
+        return bxdf;
+    }
+
+    DiffuseTransmissionBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda)
+    {
+        Vec4f filterWidths(.75f);
+        SampledSpectrum r = reflectance->EvaluateAlbedo(si, lambda, filterWidths);
+        SampledSpectrum t = transmittance->EvaluateAlbedo(si, lambda, filterWidths);
+
+        return DiffuseTransmissionBxDF(r, t);
+    }
+};
+
+struct DielectricMaterial : Material
+{
+    Texture *uRoughnessTexture;
+    Texture *vRoughnessTexture;
+    // ConstantSpectrum eta;
+    f32 eta;
+    // Spectrum eta;
+
+    DielectricMaterial() = default;
+    DielectricMaterial(Texture *u, Texture *v, f32 eta)
+        : uRoughnessTexture(u), vRoughnessTexture(v), eta(eta)
+    {
+    }
+
+    BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda) override
+    {
+        DielectricBxDF *bxdf = PushStruct(arena, DielectricBxDF);
+        *bxdf                = EvaluateHelper(si, lambda);
+        return bxdf;
+    }
+
+    DielectricBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda)
+    {
+        Vec4lfn filterWidths(.75f);
+
+        f32 uRoughness, vRoughness;
+        if (uRoughnessTexture == vRoughnessTexture)
+        {
+            uRoughness = vRoughness =
+                uRoughnessTexture->EvaluateFloat(si, lambda, filterWidths);
+        }
+        else
+        {
+            uRoughness = uRoughnessTexture->EvaluateFloat(si, lambda, filterWidths);
+            vRoughness = vRoughnessTexture->EvaluateFloat(si, lambda, filterWidths);
         }
 
-        result[0] = out[0];
-        result[1] = out[1];
-        result[2] = out[2];
+        uRoughness = TrowbridgeReitzDistribution::RoughnessToAlpha(uRoughness);
+        vRoughness = TrowbridgeReitzDistribution::RoughnessToAlpha(vRoughness);
+
+        // if (eta.TypeIndex<ConstantSpectrum>() == eta.GetTag())
+        // {
+        //     lambda.TerminateSecondary();
+        // }
+        f32 ior = eta; // eta(lambda[0]);
+        return DielectricBxDF(ior, TrowbridgeReitzDistribution(uRoughness, vRoughness));
     }
-}
+};
 
-// TODO: instead of this junk I should just create a preprocessor (i.e. write a text file
-// that is code)
-//////////////////////////////////////////////////////////////////////////////////////////////
-
-#if 0
+struct CoatedDiffuseMaterial : Material
 {
-#define ROUGHNESS_TMPL(...)    TextureType ur, TextureType vr, TextureType r
-#define IOR_TMPL(...)          typename Spectrum __VA_ARGS__
-#define DISPLACEMENT_TMPL(...) TextureType disp __VA_ARGS__
+    DielectricMaterial dielectric;
+    DiffuseMaterial diffuse;
+    Texture *albedo;
+    Texture *g;
+    i32 maxDepth;
+    i32 nSamples;
+    f32 thickness;
 
-#define EXPAND_2(...)         __VA_ARGS__
-#define IIF(c, falseVal, ...) CONCAT(IF_, c)(falseVal, __VA_ARGS__)
-#define IF_0(falseVal, ...)   falseVal
-#define IF_1(falseVal, ...)   __VA_ARGS__
-
-#define CHECK_HAS_COMMA(...) BOOL_ARGS(__VA_ARGS__)
-#define IS_EMPTY(...)        IS_EMPTY_HELPER(__VA_ARGS__)
-#define IS_EMPTY_HELPER(...) CHECK_HAS_COMMA(__VA_ARGS__)
-#define CHECK_TMPL(x)        IS_EMPTY(CONCAT(x, _TMPL)(, ))
-
-static_assert(CHECK_TMPL(IOR) == 1, "CHECK_TMPL SHOULD BE 1");
-
-#define TMPL_DECL(x) IIF(CHECK_TMPL(x), TextureType x, CONCAT(x, _TMPL)())
-
-#define MATERIAL_TEMPLATE_DECL_HELPER(x, ...)                                                 \
-    EXPAND(CONCAT(RECURSE__, x)(TMPL_DECL, __VA_ARGS__))
-#define MATERIAL_TEMPLATE_DECL(...)                                                           \
-    MATERIAL_TEMPLATE_DECL_HELPER(COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
-
-//////////////////////////////////////////////////////////////////////////////////////////////
-
-#define SHADER_PARAMETER_FUNC_ROUGHNESS(...)                                                  \
-    static_assert(                                                                            \
-        (ur != TextureType::None && vr != TextureType::None && r == TextureType::None) ||     \
-            (ur == TextureType::None && vr == TextureType::None && r != TextureType::None),   \
-        "Cannot specify both anisotropic and isotropic roughness");                           \
-    f32 uRoughness;                                                                           \
-    f32 vRoughness;                                                                           \
-    if constexpr (r == TextureType::None)                                                     \
-    {                                                                                         \
-        uRoughness = ProcessTexture<r>(itr);                                                  \
-        uRoughness = Sqr(uRoughness);                                                         \
-        vRoughness = uRoughness;                                                              \
-    }                                                                                         \
-    else                                                                                      \
-    {                                                                                         \
-        uRoughness = Sqr(ProcessTexture<ur>(itr));                                            \
-        vRoughness = Sqr(ProcessTexture<vr>(itr));                                            \
-    }                                                                                         \
-    __VA_ARGS__
-
-#define SHADER_PARAMETER_FUNC_IOR(...)                                                        \
-    if constexpr (!std::is_same_v<Spectrum, ConstantSpectrum>)                                \
-    {                                                                                         \
-        lambda.TerminateSecondary();                                                          \
-    }                                                                                         \
-    f32 eta = ProcessIOR<Spectrum>(itr);                                                      \
-    __VA_ARGS__
-
-#define SHADER_PARAMETER_FUNC_DISPLACEMENT(...)                                               \
-    (void)0;                                                                                  \
-    __VA_ARGS__
-
-// #define DEFAULT_SHADER_PARAMETER_FUNC(x) auto x##_var = ProcessTexture<x>(itr);
-
-#define CHECK_FUNC(x) IS_EMPTY(CONCAT(SHADER_PARAMETER_FUNC_, x)(, ))
-
-static_assert(CHECK_FUNC(ROUGHNESS) == 1, "CHECK_FUNC SHOULD BE 1");
-
-#define FUNC_DECL(x)                                                                          \
-    IIF(CHECK_FUNC(x), DEFAULT_SHADER_PARAMETER_FUNC(x), CONCAT(SHADER_PARAMETER_FUNC_, x)())
-#define MATERIAL_FUNC_DECL_HELPER(x, ...) EXPAND(CONCAT(RECURSE_, x)(FUNC_DECL, __VA_ARGS__))
-#define MATERIAL_FUNC_DECL(...)           MATERIAL_FUNC_DECL_HELPER(COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
-
-//////////////////////////////////////////////////////////////////////////////////////////////
-
-#define RETURN_TYPE_ROUGHNESS(...)                                                            \
-    TrowbridgeReitzDistribution(uRoughness, vRoughness) __VA_ARGS__
-#define RETURN_TYPE_IOR(...) eta __VA_ARGS__
-#define RETURN_TYPE_DISPLACEMENT(...)
-
-#define CHECK_RETURN(x) IS_EMPTY(CONCAT(RETURN_TYPE_, x)(, ))
-
-static_assert(CHECK_RETURN(ROUGHNESS) == 1, "CHECK_RETURN SHOULD BE 1");
-
-#define RETURN_DECL(x, count)                                                                 \
-    IIF(CHECK_RETURN(x), , IIF(count, CONCAT(RETURN_TYPE_, x)(), CONCAT(RETURN_TYPE_, x)(, )))
-
-#define MATERIAL_RETURN_DECL_HELPER(x, ...)                                                   \
-    EXPAND(CONCAT(RECURSE2_, x)(RETURN_DECL, __VA_ARGS__))
-#define MATERIAL_RETURN_DECL(...)                                                             \
-    MATERIAL_RETURN_DECL_HELPER(COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
-
-//////////////////////////////////////////////////////////////////////////////////////////////
-#define MATERIAL_FUNCTION_HEADER(name)                                                        \
-    void name(Arena *arena, AttributeIterator *itr, SurfaceInteraction &si,                   \
-              SampledWavelengths &lambda, BSDFBase<BxDF> *result)
-
-#define START_MATERIAL_SHADER(name, BxDFType, ...)                                            \
-    template <MATERIAL_TEMPLATE_DECL(__VA_ARGS__)>                                            \
-    MATERIAL_FUNCTION_HEADER(CONCAT(ShaderEvaluate_, name))
-
-#define DEFINE_MATERIAL_SHADER(name, BxDFType, ...)                                           \
-    START_MATERIAL_SHADER(name, BxDFType, __VA_ARGS__)                                        \
-    {                                                                                         \
-        MATERIAL_FUNC_DECL(__VA_ARGS__)                                                       \
-        BxDFType *bxdf = PushStruct(arena, BxDFType);                                         \
-        Vec4lfn filterWidths(.75f);                                                           \
-        new (bxdf) BxDFType(MATERIAL_RETURN_DECL(__VA_ARGS__));                               \
-        new (result) BSDF(bxdf, si.shading.dpdu, si.shading.n);                               \
+    CoatedDiffuseMaterial(DielectricMaterial die, DiffuseMaterial diff, Texture *albedo,
+                          Texture *g, i32 maxDepth, i32 nSamples, f32 thickness)
+        : dielectric(die), diffuse(diff), albedo(albedo), g(g), maxDepth(maxDepth),
+          nSamples(nSamples), thickness(thickness)
+    {
     }
 
-// DEFINE_MATERIAL_SHADER(Dielectric, DielectricBxDF, DISPLACEMENT, IOR, ROUGHNESS)
-}
-#endif
+    BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda) override
+    {
+        CoatedDiffuseBxDF *bxdf = PushStruct(arena, CoatedDiffuseBxDF);
+        *bxdf                   = EvaluateHelper(si, lambda);
+        return bxdf;
+    }
 
-__forceinline void Material::Shade(Arena *arena, SurfaceInteraction &si,
-                                   SampledWavelengths &lambda, BSDF *result)
-{
-    AttributeIterator itr(key);
-    BxDF bxdf;
-    shade(funcs, arena, &itr, si, lambda, bxdf);
-    new (result) BSDF(bxdf, si.shading.dpdu, si.shading.n);
-}
+    CoatedDiffuseBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda)
 
-MATERIAL_FUNCTION_HEADER(ShaderEvaluate_Null) { result = {}; }
-MATERIAL_FUNCTION_HEADER(ShaderEvaluate_Diffuse)
-{
-    Vec4f filterWidths(.75f);
-    SampledSpectrum s = ProcessAlbedoTexture(callbacks[0], itr, si, lambda, filterWidths);
+    {
+        Vec4f filterWidths(.75f);
+        SampledSpectrum albedoValue = albedo->EvaluateAlbedo(si, lambda, filterWidths);
 
-    DiffuseBxDF *bxdf = PushStruct(arena, DiffuseBxDF);
-    new (bxdf) DiffuseBxDF(s);
-    result = bxdf;
-}
+        f32 gValue = g->EvaluateFloat(si, lambda, filterWidths);
 
-MATERIAL_FUNCTION_HEADER(ShaderEvaluate_DiffuseTransmission)
-{
-    Vec4f filterWidths(.75f);
-    SampledSpectrum r =
-        ProcessAlbedoTexture(callbacks[itr->callbackCount++], itr, si, lambda, filterWidths);
-    SampledSpectrum t =
-        ProcessAlbedoTexture(callbacks[itr->callbackCount++], itr, si, lambda, filterWidths);
-
-    DiffuseTransmissionBxDF *bxdf = PushStruct(arena, DiffuseTransmissionBxDF);
-    new (bxdf) DiffuseTransmissionBxDF(r, t);
-    result = bxdf;
-}
-
-void ShaderEvaluate_DielectricHelper(TextureCallback *callbacks, Arena *arena,
-                                     AttributeIterator *itr, SurfaceInteraction &si,
-                                     SampledWavelengths &lambda, DielectricBxDF *result)
-{
-    Vec4lfn filterWidths(.75f);
-
-    f32 uRoughness, vRoughness;
-    ProcessRoughness(callbacks, itr, si, lambda, filterWidths, uRoughness, vRoughness);
-
-    bool remapRoughness = itr->ReadBool(true);
-
-    uRoughness = remapRoughness ? TrowbridgeReitzDistribution::RoughnessToAlpha(uRoughness)
-                                : uRoughness;
-    vRoughness = remapRoughness ? TrowbridgeReitzDistribution::RoughnessToAlpha(vRoughness)
-                                : vRoughness;
-    f32 eta;
-    callbacks[itr->callbackCount++](itr, si, lambda, filterWidths, &eta);
-
-    new (result) DielectricBxDF(eta, TrowbridgeReitzDistribution(uRoughness, vRoughness));
-}
-
-MATERIAL_FUNCTION_HEADER(ShaderEvaluate_Dielectric)
-{
-    DielectricBxDF *bxdf = PushStruct(arena, DielectricBxDF);
-    ShaderEvaluate_DielectricHelper(callbacks, arena, itr, si, lambda, bxdf);
-    result = bxdf;
-}
-
-MATERIAL_FUNCTION_HEADER(ShaderEvaluate_CoatedDiffuse)
-{
-    Vec4f filterWidths(.75f);
-    DielectricBxDF diBxDF;
-    ShaderEvaluate_DielectricHelper(callbacks, arena, itr, si, lambda, &diBxDF);
-
-    SampledSpectrumN reflectance =
-        ProcessAlbedoTexture(callbacks[itr->callbackCount++], itr, si, lambda, filterWidths);
-    SampledSpectrumN albedo =
-        ProcessAlbedoTexture(callbacks[itr->callbackCount++], itr, si, lambda, filterWidths);
-
-    f32 g;
-    callbacks[itr->callbackCount++](itr, si, lambda, filterWidths, &g);
-
-    i32 maxDepth  = itr->ReadInt(10);
-    i32 nSamples  = itr->ReadInt(1);
-    f32 thickness = itr->ReadFloat(.01);
-
-    CoatedDiffuseBxDF *bxdf = PushStruct(arena, CoatedDiffuseBxDF);
-    new (bxdf) CoatedDiffuseBxDF(diBxDF, DiffuseBxDF(reflectance), albedo, g, thickness,
-                                 maxDepth, nSamples);
-    result = bxdf;
-}
+        return CoatedDiffuseBxDF(dielectric.EvaluateHelper(si, lambda),
+                                 diffuse.EvaluateHelper(si, lambda), albedoValue, gValue,
+                                 thickness, maxDepth, nSamples);
+    }
+};
 
 struct MaterialNode
 {
@@ -337,19 +310,118 @@ struct RTSceneLoadState
     MaterialHashMap *map = 0;
 };
 
+i32 ReadIntBytes(Tokenizer *tokenizer)
+{
+    i32 value = *(i32 *)(tokenizer->cursor);
+    tokenizer->cursor += sizeof(i32);
+    SkipToNextChar(tokenizer);
+    return value;
+}
+f32 ReadFloatBytes(Tokenizer *tokenizer)
+{
+    f32 value = *(f32 *)(tokenizer->cursor);
+    tokenizer->cursor += sizeof(f32);
+    SkipToNextChar(tokenizer);
+    return value;
+}
+
+Vec3f ReadVec3Bytes(Tokenizer *tokenizer)
+{
+    Vec3f value = *(Vec3f *)(tokenizer->cursor);
+    tokenizer->cursor += sizeof(Vec3f);
+    SkipToNextChar(tokenizer);
+    return value;
+}
+
+Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer)
+{
+    string textureType = ReadWord(tokenizer);
+    if (textureType == "ptex")
+    {
+        f32 scale   = 1.f;
+        bool result = Advance(tokenizer, "filename ");
+        Assert(result);
+        string filename = ReadWord(tokenizer);
+        if (Advance(tokenizer, "scale "))
+        {
+            scale = ReadFloatBytes(tokenizer);
+        }
+        return PushStructConstruct(arena, PtexTexture)(PushStr8Copy(arena, filename), scale);
+    }
+    else
+    {
+        Error(0, "Texture type not supported yet");
+    }
+    return 0;
+}
+
+Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer)
+{
+    if (!CharIsDigit(*tokenizer->cursor)) return 0;
+    u32 dataType = ReadInt(tokenizer);
+    SkipToNextChar(tokenizer);
+
+    switch (dataType)
+    {
+        case DataType::Float:
+        {
+            f32 value = ReadFloatBytes(tokenizer);
+            return PushStructConstruct(arena, ConstantTexture)(value);
+        }
+        break;
+        case DataType::Vec3:
+        {
+            Vec3f value = ReadVec3Bytes(tokenizer);
+            return PushStructConstruct(arena, ConstantVectorTexture)(value);
+        }
+        break;
+        case DataType::String:
+        {
+            return ReadTexture(arena, tokenizer);
+        }
+        break;
+        default: Assert(0); return 0;
+    }
+}
+
+void ReadDielectricMaterial(Arena *arena, Tokenizer *tokenizer, DielectricMaterial *mat)
+{
+    bool isIsotropic = Advance(tokenizer, "roughness ");
+    Texture *uRoughness;
+    Texture *vRoughness;
+    if (isIsotropic)
+    {
+        uRoughness = vRoughness = ParseTexture(arena, tokenizer);
+    }
+    else
+    {
+        bool result = Advance(tokenizer, "uroughness ");
+        if (!result)
+        {
+            uRoughness = vRoughness = PushStructConstruct(arena, ConstantTexture)(0.f);
+        }
+        else
+        {
+            uRoughness = ParseTexture(arena, tokenizer);
+
+            result = Advance(tokenizer, "vroughness ");
+            Assert(result);
+            vRoughness = ParseTexture(arena, tokenizer);
+        }
+    }
+    bool result = Advance(tokenizer, "eta ");
+    f32 eta     = 1.5f;
+    if (result) eta = ReadFloatBytes(tokenizer);
+    new (mat) DielectricMaterial(uRoughness, vRoughness, eta);
+}
+
 MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *tokenizer)
 {
     TempArena temp = ScratchStart(&tempArena, 1);
     Scene *scene   = GetScene();
 
-    ChunkedLinkedList<Material, 1024> materialsList(temp.arena);
+    ChunkedLinkedList<Material *, 1024> materialsList(temp.arena);
     MaterialHashMap *table = PushStructConstruct(tempArena, MaterialHashMap)(tempArena, 8192);
-
-    StringBuilder builders[(u32)(MaterialTypes::Max)];
-    for (u32 i = 0; i < (u32)MaterialTypes::Max; i++)
-    {
-        builders[i].arena = temp.arena;
-    }
 
     while (!Advance(tokenizer, "MATERIALS_END "))
     {
@@ -376,139 +448,80 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
         SkipToNextChar(tokenizer);
         Assert(materialTypeIndex != -1);
 
-        Material *material     = &materialsList.AddBack();
-        StringBuilder *builder = &builders[materialTypeIndex];
-
-        const string *materialParamNames = materialParameterNames[materialTypeIndex];
-        u32 parameterCount               = materialParameterCounts[materialTypeIndex];
-
-        material->shade      = materialFuncs[materialTypeIndex];
-        material->key.offset = SafeTruncateU64ToU32(builder->totalSize);
+        Material **material = &materialsList.AddBack();
 
         switch (materialTypeIndex)
         {
             case MaterialTypes::Diffuse:
             {
+                bool result = Advance(tokenizer, "reflectance ");
+                Assert(result);
+
+                Texture *reflectance = ParseTexture(arena, tokenizer);
+                *material = PushStructConstruct(arena, DiffuseMaterial)(reflectance);
             }
             break;
             case MaterialTypes::DiffuseTransmission:
             {
+                bool result = Advance(tokenizer, "reflectance ");
+                Assert(result);
+                Texture *reflectance = ParseTexture(arena, tokenizer);
+
+                result = Advance(tokenizer, "transmittance ");
+                Assert(result);
+                Texture *transmittance = ParseTexture(arena, tokenizer);
+
+                result    = Advance(tokenizer, "scale ");
+                f32 scale = 1.f;
+                if (result) scale = ReadFloatBytes(tokenizer);
+
+                *material = PushStructConstruct(arena, DiffuseTransmissionMaterial)(
+                    reflectance, transmittance, scale);
             }
             break;
             case MaterialTypes::Dielectric:
             {
-                material->funcs = PushArray(arena, TextureCallback, parameterCount);
+                DielectricMaterial *out = (DielectricMaterial *)(*material);
+                ReadDielectricMaterial(arena, tokenizer, out);
             }
             break;
             case MaterialTypes::CoatedDiffuse:
             {
+                DielectricMaterial dm;
+                ReadDielectricMaterial(arena, tokenizer, &dm);
+
+                bool result = Advance(tokenizer, "reflectance ");
+                Assert(result);
+                Texture *reflectance = ParseTexture(arena, tokenizer);
+
+                Texture *albedo = ParseTexture(arena, tokenizer);
+                if (!albedo)
+                    albedo = PushStructConstruct(arena, ConstantVectorTexture)(Vec3f(0.f));
+
+                Texture *g = ParseTexture(arena, tokenizer);
+                if (!g) g = PushStructConstruct(arena, ConstantTexture)(0.f);
+
+                i32 maxDepth = 10;
+                if (Advance(tokenizer, "maxdepth ")) maxDepth = ReadIntBytes(tokenizer);
+                i32 nSamples = 1;
+                if (Advance(tokenizer, "nsamples ")) nSamples = ReadIntBytes(tokenizer);
+                f32 thickness = 0.01f;
+                if (Advance(tokenizer, "thickness ")) thickness = ReadFloatBytes(tokenizer);
+
+                // Texture if (Advance(tokenizer, "albedo "))
+                *material = PushStructConstruct(arena, CoatedDiffuseMaterial)(
+                    dm, DiffuseMaterial(reflectance), albedo, g, maxDepth, nSamples,
+                    thickness);
             }
             break;
+            default: Assert(0);
         }
-
-        material->count = parameterCount;
-
-        // NOTE: 0 means float, 1 means spectrum
-        auto ParseDataType = [&](StringBuilder *builder, DataType type, u32 p) {
-            switch (type)
-            {
-                case DataType::Float:
-                {
-                    u8 *start = tokenizer->cursor;
-                    while (!CharIsBlank(*tokenizer->cursor))
-                    {
-                        tokenizer->cursor += sizeof(f32);
-                    }
-                    Put(builder, start, (u64)(tokenizer->cursor - start));
-                }
-                break;
-                case DataType::String:
-                {
-                    u32 strSize = *(u32 *)tokenizer->cursor;
-                    tokenizer->cursor += sizeof(u32);
-                    Put(builder, tokenizer->cursor, strSize);
-                    tokenizer->cursor += strSize;
-                }
-                break;
-                default: Error(0, "forgot");
-            }
-        };
-
-        auto ParseTexture = [&](StringBuilder *builder, u32 p, u32 textureTypeIndex) {
-            // const DataType *types = textureDataTypes[textureTypeIndex];
-            const string *params = textureParameterArrays[textureTypeIndex];
-            u32 count            = textureParameterCounts[textureTypeIndex];
-            // for (u32 i = 0; i < count; i++)
-            // {
-            //     if (Advance(tokenizer, params[i]))
-            //     {
-            //         SkipToNextChar(tokenizer);
-            //         ParseDataType(builder, types[i], p);
-            //         SkipToNextChar(tokenizer);
-            //     }
-            // }
-        };
-
-        // convert the file description into the appropriate byte format, join into the
-        // attribute table, write material callbacks that properly process the attribute table.
-        // problems:
-        // - need to actually create the material tables
-        // - fix string builder to be more efficient (less allocations)
-
-        for (u32 i = 0; i < parameterCount; i++)
-        {
-            if (!Advance(tokenizer, materialParamNames[i])) continue;
-
-            if (Advance(tokenizer, "t "))
-            {
-                // Parse a texture
-                for (u32 textureTypeIndex = 0; textureTypeIndex < (u32)TextureType::Max;
-                     textureTypeIndex++)
-                {
-                    if (Advance(tokenizer, textureTypeNames[textureTypeIndex]))
-                    {
-                        material->funcs[i] = textureFuncs[textureTypeIndex];
-                        ParseTexture(builder, i, textureTypeIndex);
-                        break;
-                    }
-                }
-            }
-            else if (Advance(tokenizer, "s "))
-            {
-                u8 *start = tokenizer->cursor;
-                u32 count = 0;
-                while (!CharIsBlank(*tokenizer->cursor)) tokenizer->cursor += sizeof(f32);
-                Assert((count & 1) == 0);
-
-                PiecewiseLinearSpectrum *spec = PiecewiseLinearSpectrum::FromInterleaved(
-                    arena, (f32 *)start, count, false);
-                Put(builder, &spec, sizeof(spec));
-                if (materialParamNames[i] == "eta")
-                {
-                    material->funcs[i] = ProcessIOR;
-                }
-                else
-                {
-                    Error(0, "%S \n", materialParamNames[i]);
-                }
-            }
-            SkipToNextChar(tokenizer);
-        }
-        material->key.SetIndexAndSize(
-            materialTypeIndex,
-            SafeTruncateU64ToU32(builder->totalSize - material->key.offset));
     }
 
     // Join
-    scene->materialTables = StaticArray<AttributeTable>(arena, (u32)MaterialTypes::Max);
-    scene->materials      = StaticArray<Material>(arena, materialsList.totalCount);
+    scene->materials = StaticArray<Material *>(arena, materialsList.totalCount);
 
     materialsList.Flatten(scene->materials);
-
-    for (u32 index = 0; index < (u32)MaterialTypes::Max; index++)
-    {
-        scene->materialTables[index].buffer = CombineBuilderNodes(arena, &builders[index]).str;
-    }
 
     ScratchEnd(temp);
     return table;
@@ -533,6 +546,17 @@ Vec2f *ReadVec2Pointer(Tokenizer *tokenizer, Tokenizer *dataTokenizer, string p)
 Vec3f *ReadVec3Pointer(Tokenizer *tokenizer, Tokenizer *dataTokenizer, string p)
 {
     return (Vec3f *)ReadDataPointer(tokenizer, dataTokenizer, p);
+}
+
+i32 ReadInt(Tokenizer *tokenizer, string p)
+{
+    if (Advance(tokenizer, p))
+    {
+        i32 result = ReadInt(tokenizer);
+        SkipToNextChar(tokenizer);
+        return result;
+    }
+    return 0;
 }
 
 void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene,
@@ -711,10 +735,8 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                     mesh.p           = ReadVec3Pointer(&tokenizer, &dataTokenizer, "p ");
                     mesh.n           = ReadVec3Pointer(&tokenizer, &dataTokenizer, "n ");
                     mesh.uv          = ReadVec2Pointer(&tokenizer, &dataTokenizer, "uv ");
-                    mesh.numVertices = ReadInt(&tokenizer);
-                    SkipToNextChar(&tokenizer);
-                    mesh.numIndices = ReadInt(&tokenizer);
-                    SkipToNextChar(&tokenizer);
+                    mesh.numVertices = ReadInt(&tokenizer, "v ");
+                    mesh.numIndices  = ReadInt(&tokenizer, "i ");
                     mesh.numFaces =
                         mesh.numIndices ? mesh.numIndices / 3 : mesh.numVertices / 3;
                     mesh.indices =

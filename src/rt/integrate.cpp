@@ -42,6 +42,7 @@ void InitializePtex()
     cache         = Ptex::PtexCache::create(maxFiles, maxMem, true, 0, &errorHandler);
 }
 
+#if 0
 template <typename RflShader>
 DiffuseBxDF
 DiffuseMaterial<RflShader>::GetBxDF(SurfaceInteractionsN &intr, DiffuseMaterial **materials,
@@ -211,6 +212,7 @@ CoatedDiffuseBxDF CoatedDiffuseMaterial<RghShader, RflShader, AlbedoShader, Spec
 {
     return CoatedDiffuseMaterial::GetBxDF(intr, &this);
 }
+#endif
 
 typedef u32 PathFlags;
 enum
@@ -616,14 +618,6 @@ f32 PowerHeuristic(u32 numA, f32 pdfA, u32 numB, f32 pdfB)
     return a / (a + b);
 }
 
-void EvaluateMaterial(Arena *arena, SurfaceInteraction &si, BSDF *bsdf,
-                      SampledWavelengths &lambda)
-{
-    Scene *scene       = GetScene();
-    Material *material = &scene->materials[si.materialIDs];
-    material->Shade(arena, si, lambda, bsdf);
-}
-
 Vec3f OffsetRayOrigin(const Vec3f &p, const Vec3f &err, const Vec3f &n, const Vec3f &wi)
 {
     f32 d        = Dot(err, Abs(n));
@@ -761,8 +755,10 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         }
 
         ScratchArena scratch;
-        BSDF bsdf;
-        EvaluateMaterial(scratch.temp.arena, si, &bsdf, lambda);
+
+        Material *material = scene->materials[si.materialIDs];
+        BxDF bxdf          = material->Evaluate(scratch.temp.arena, si, lambda);
+        BSDF bsdf(bxdf, si.shading.dpdu, si.shading.n);
 
         // Next Event Estimation
         // Choose light source for direct lighting calculation
