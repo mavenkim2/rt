@@ -636,6 +636,9 @@ Vec3f RGBToSpectrumTable::operator()(Vec3f rgb) const
     i32 xi = Min((i32)x, res - 2);
     i32 yi = Min((i32)y, res - 2);
     i32 zi = FindInterval(res, [&](i32 i) { return zNodes[i] < z; });
+    Assert(xi >= 0);
+    Assert(yi >= 0);
+    Assert(zi >= 0);
     f32 dx = x - xi;
     f32 dy = y - yi;
     f32 dz = (z - zNodes[zi]) / (zNodes[zi + 1] - zNodes[zi]);
@@ -644,6 +647,11 @@ Vec3f RGBToSpectrumTable::operator()(Vec3f rgb) const
     for (i32 i = 0; i < 3; i++)
     {
         auto co = [&](i32 dx, i32 dy, i32 dz) {
+            Assert(zi + dz < res);
+            Assert(yi + dy < res);
+            Assert(xi + dx < res);
+            Assert(maxC < 3);
+            Assert(coeffs);
             return (*coeffs)[maxC][zi + dz][yi + dy][xi + dx][i];
         };
         // clang-format off

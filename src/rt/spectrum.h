@@ -471,7 +471,7 @@ struct RGBToSpectrumTable
     static void Init(Arena *arena);
 
     const f32 *zNodes;
-    const CoefficientArray *coeffs;
+    const CoefficientArray *const coeffs;
 };
 
 struct RGBColorSpace

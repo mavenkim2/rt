@@ -43,7 +43,9 @@ struct Texture
     SampledSpectrum EvaluateAlbedo(const Vec3f &color, SampledWavelengths &lambda)
     {
         if (color == Vec3f(0.f)) return SampledSpectrum(0.f);
-        return RGBAlbedoSpectrum(*RGBColorSpace::sRGB, color).Sample(lambda);
+        GetDebug()->color = color;
+        return RGBAlbedoSpectrum(*RGBColorSpace::sRGB, Clamp(color, Vec3f(0.f), Vec3f(1.f)))
+            .Sample(lambda);
     }
 };
 
@@ -65,7 +67,7 @@ struct PtexTexture : Texture
     SampledSpectrum EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
                                    const Vec4f &filterWidths) override
     {
-        Vec3f result;
+        Vec3f result = {};
         EvaluateHelper(si, filterWidths, result.e);
         return Texture::EvaluateAlbedo(result * scale, lambda);
     }
@@ -75,6 +77,7 @@ struct PtexTexture : Texture
         const Vec2f &uv = intr.uv;
         u32 faceIndex   = intr.faceIndices;
 
+        GetDebug()->filename = filename;
         Assert(cache);
         Ptex::String error;
         // TODO: I get the version of ptex I'm using is just broken
@@ -104,7 +107,7 @@ struct PtexTexture : Texture
         // TODO: ray differentials
         // Vec2f uv(0.5f, 0.5f);
 
-        f32 out[3];
+        f32 out[3] = {};
         filter->eval(out, 0, nc, faceIndex, uv[0], uv[1], filterWidths[0], filterWidths[1],
                      filterWidths[2], filterWidths[3]);
 

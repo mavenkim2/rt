@@ -720,6 +720,7 @@ struct SceneDebug
     string filename;
     u32 geomID;
     struct ScenePrimitives *scene;
+    Vec3f color;
     // Vec2i pixel;
     // u32 sampleNum;
     // std::atomic<u32> *numTiles;
