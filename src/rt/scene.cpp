@@ -361,8 +361,8 @@ Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer, string directory)
         {
             scale = ReadFloatBytes(tokenizer);
         }
-        return PushStructConstruct(arena, PtexTexture)(StrConcat(arena, directory, filename),
-                                                       scale);
+        return PushStructConstruct(arena, PtexTexture)(
+            PushStr8F(arena, "%S%S\0", directory, filename), scale);
     }
     else
     {

@@ -2,9 +2,6 @@
 	path = src/third_party/openvdb
 	url = https://github.com/mavenkim2/openvdb.git
 	branch = main
-[submodule "src/third_party/ptex"]
-	path = src/third_party/ptex
-	url = https://github.com/wdas/ptex.git
 [submodule "src/third_party/zlib"]
 	path = src/third_party/zlib
 	url = https://github.com/mitsuba-renderer/zlib.git
