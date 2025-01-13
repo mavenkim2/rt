@@ -143,7 +143,7 @@ endfunction ()
 
 # target_link_libraries(Ptex_static PRIVATE ${ZLIB_LIBRARIES})
 set(deps STATIC 
-    ${ZLIB_LIBRARIES}
+    ${ZLIB_LIBRARY}
     Ptex_static)
 
 # target_compile_definitions(Ptex_static PRIVATE "PTEX_STATIC")
@@ -164,7 +164,7 @@ message(STATUS "${ZLIB_INCLUDE_DIRS}")
 message(STATUS "${PTEX_INCLUDE}")
 
 target_include_directories(rt_lib INTERFACE 
-    ${ZLIB_INCLUDE_DIRS}
+    ${ZLIB_INCLUDE_DIR}
     ${PTEX_INCLUDE})
 target_compile_options(rt_lib INTERFACE ${RT_CXX_FLAGS})
 target_link_libraries(rt_lib INTERFACE ${deps})

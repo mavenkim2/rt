@@ -9,23 +9,31 @@ if (NOT ZLIB_FOUND)
   set (ZLIB_BUILD_SHARED_LIBS OFF CACHE BOOL " " FORCE)
   add_subdirectory (zlib)
 
-  set (ZLIB_LIBRARIES zlibstatic)
-  set (ZLIB_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/zlib ${CMAKE_CURRENT_BINARY_DIR}/zlib)
-
+  # set (ZLIB_LIBRARIES zlibstatic)
+  # set (ZLIB_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/zlib ${CMAKE_CURRENT_BINARY_DIR}/zlib)
+  
   set (ZLIB_LIBRARY zlibstatic)
   set (ZLIB_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/zlib ${CMAKE_CURRENT_BINARY_DIR}/zlib)
-  set (ZLIB_FOUND TRUE)
+  include_directories(${ZLIB_INCLUDE_DIR})
+  # set (ZLIB_FOUND TRUE)
 
-  # set_property (TARGET zlibstatic PROPERTY FOLDER "third_party")
+  set_property (TARGET zlibstatic PROPERTY FOLDER "third_party")
 
   add_library (ZLIB::ZLIB ALIAS zlibstatic)
-  include_directories(${ZLIB_INCLUDE_DIRS})  # yuck, but so openexr/ptex can find zlib.h...
+
+  install(TARGETS zlibstatic EXPORT ZLIBTargets DESTINATION ${CMAKE_INSTALL_LIBDIR})
+  install(EXPORT ZLIBTargets
+          FILE ZLIBTargets.cmake
+          NAMESPACE ZLIB::
+          DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ZLIB)
+  # include_directories(${ZLIB_INCLUDE_DIRS})  # yuck, but so openexr/ptex can find zlib.h...
 endif ()
 
-set (ZLIB_INCLUDE_DIRS ${ZLIB_INCLUDE_DIRS} PARENT_SCOPE)
-set (ZLIB_LIBRARIES ${ZLIB_LIBARIES} PARENT_SCOPE)
+set (ZLIB_INCLUDE_DIR ${ZLIB_INCLUDE_DIR} PARENT_SCOPE)
+set (ZLIB_LIBRARY ${ZLIB_LIBRARY} PARENT_SCOPE)
 
 set (PTEX_BUILD_SHARED_LIBS OFF CACHE BOOL " " FORCE)
+set (PTEX_BUILD_STATIC_LIBS ON CACHE BOOL " " FORCE)
 if (WIN32)
     add_definitions(-DPTEX_STATIC)
 endif()
