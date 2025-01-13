@@ -1078,6 +1078,14 @@ int main(int argc, char *argv[])
     threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, numProcessors);
     scheduler.Init(numProcessors);
 
+    // Mesh mesh = LoadPLY(arena, "../data/island/pbrt-v4/isDunesA/xgPalmDebris/"
+    //                            "xgPalmDebris_archivePalmdead0004_mod_geometry_00002.ply");
+    //
+    // Ptex::String error;
+    // Ptex::PtexTexture *texture =
+    //     cache->get("../data/island/textures/isDunesA/Color/stem0004_geo.ptx", error);
+    // u32 numFaces = texture->getInfo().numFaces;
+
     const u32 count = 3000000;
 
     Options options = {};
@@ -1124,11 +1132,11 @@ int main(int argc, char *argv[])
     // BVHIntersectionTest(arena);
     // VolumeRenderingTest(arena, "wdas_cloud_quarter.nvdb");
     // BVHSortingTest();
-    // TriangleMesh mesh = LoadPLY(arena, "data/isKava_geometry_00001.ply");
 
     // TriangleMesh mesh = LoadPLY(arena,
     // "data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply"); QuadMesh mesh =
-    // LoadQuadPLY(arena, "data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
+    // LoadQuadPLY(arena,
+    // "data/island/pbrt-v4/isIronwoodA1/isIronwoodA1_geometry_00001.ply");
 
     // TriangleMesh mesh = LoadPLY(arena,
     // "data/island/pbrt-v4/osOcean/osOcean_geometry_00001.ply"); TriangleMesh mesh =

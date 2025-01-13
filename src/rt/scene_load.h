@@ -507,6 +507,7 @@ Mesh LoadPLY(Arena *arena, string filename)
     Assert(countStride == 1);
     Assert(faceIndicesStride == 4);
     // Assert(otherStride == 4);
+    // u32 *faceIndices = PushArray(arena, u32, numFaces);
     if constexpr (allowIndices)
     {
         for (u32 i = 0; i < numFaces; i++)
@@ -520,6 +521,7 @@ Mesh LoadPLY(Arena *arena, string filename)
             }
 
             u32 faceIndex = indices[3];
+            // faceIndices[i] = faceIndex;
             Advance(&tokenizer, countStride + count * faceIndicesStride + otherStride);
         }
         Assert(EndOfBuffer(&tokenizer));

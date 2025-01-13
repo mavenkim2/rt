@@ -717,10 +717,13 @@ struct SurfaceInteractions;
 
 struct SceneDebug
 {
-    Vec2i pixel;
-    u32 sampleNum;
-    std::atomic<u32> *numTiles;
-    u32 tileCount;
+    string filename;
+    u32 geomID;
+    struct ScenePrimitives *scene;
+    // Vec2i pixel;
+    // u32 sampleNum;
+    // std::atomic<u32> *numTiles;
+    // u32 tileCount;
 };
 
 thread_local SceneDebug debug_;

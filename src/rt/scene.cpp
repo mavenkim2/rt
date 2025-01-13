@@ -77,14 +77,25 @@ struct PtexTexture : Texture
 
         Assert(cache);
         Ptex::String error;
+        // TODO: I get the version of ptex I'm using is just broken
         Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
-        Assert(texture);
-        u32 numFaces = texture->getInfo().numFaces;
-        if (faceIndex >= numFaces)
+        if (!texture)
         {
-            printf("faceIndex: %u, numFaces: %u\n", faceIndex, numFaces);
+            Print("ptex filename: %S\n", filename);
+            Print("scene filename: %S\n", GetDebug()->filename);
+            Print("geomID: %u\n", GetDebug()->geomID);
             Assert(0);
         }
+        u32 numFaces = texture->getInfo().numFaces;
+        // TODO: some of the pbrt material -> shape pairings don't match?
+        // if (faceIndex >= numFaces)
+        // {
+        //     Print("faceIndex: %u, numFaces: %u\n", faceIndex, numFaces);
+        //     Print("scene filename: %S\n", GetDebug()->filename);
+        //     Print("geomID: %u\n", GetDebug()->geomID);
+        //     Print("filename: %S\n", filename);
+        //     Assert(0);
+        // }
         Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
         Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
 

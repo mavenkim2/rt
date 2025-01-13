@@ -186,19 +186,10 @@ struct BVHIntersector<4, types, Intersector>
         stack[0]     = {nodePtr, ray.tFar};
         bool result  = false;
         Intersector intersector;
-        SceneDebug *dbg = GetDebug();
         while (stackPtr > 0)
         {
             Assert(stackPtr <= ArrayLength(stack));
             StackEntry entry = stack[--stackPtr];
-            if (u32(100.f * dbg->numTiles->load() / dbg->tileCount) == 99 &&
-                scene->filename == "test.rtscene" && dbg->pixel.x == 208 &&
-                dbg->pixel.y == 700)
-            {
-                // printf("%u %u\n", dbg->pixel.x, dbg->pixel.y);
-                // Print("%llu node\n", entry.ptr.data);
-                int stop = 5;
-            }
             Assert(entry.ptr.data);
             if (entry.dist > ray.tFar) continue;
 
@@ -494,8 +485,8 @@ struct TriangleIntersectorBase<N, Prim<N>>
                 3 * primID + 1,
                 3 * primID + 2,
             };
-            SurfaceInteractionFromTriangleIntersection(scene, Get(itr.geomIDs, index),
-                                                       primID / 2, ids, u, v, w, si);
+            SurfaceInteractionFromTriangleIntersection(scene, Get(itr.geomIDs, index), primID,
+                                                       ids, u, v, w, si);
             return true;
         }
         return false;
@@ -612,8 +603,12 @@ struct QuadIntersectorBase<N, Prim<N>>
                 ids[1] = 4 * primID + 1;
                 ids[2] = 4 * primID + 2;
             }
-            SurfaceInteractionFromTriangleIntersection(scene, Get(itr.geomIDs, index), primID,
-                                                       ids, u, v, w, si, isSecondTri);
+            SurfaceInteractionFromTriangleIntersection(
+                scene, Get(itr.geomIDs, index), primID / 2, ids, u, v, w, si, isSecondTri);
+
+            GetDebug()->filename = scene->filename;
+            GetDebug()->geomID   = Get(itr.geomIDs, index);
+            GetDebug()->scene    = scene;
 
             return true;
         }
@@ -710,7 +705,6 @@ struct CompressedLeafIntersector
     {
         bool result = false;
 
-        SceneDebug *dbg = GetDebug();
         switch (ptr.GetType())
         {
             case BVHNode<N>::tyCompressedLeaf:
