@@ -464,6 +464,64 @@ inline Mat4 Inverse(const Mat4 &a)
     return res;
 }
 
+inline bool Inverse(const Mat4 &a, Mat4 &res)
+{
+    f32 invdet = Determinant(a);
+    if (invdet == 0) return false;
+    invdet = 1.f / invdet;
+    // NOTE: transpose
+    res.a1 =
+        invdet * (a.b2 * (a.c3 * a.d4 - a.d3 * a.c4) - a.c2 * (a.b3 * a.d4 - a.d3 * a.b4) +
+                  a.d2 * (a.b3 * a.c4 - a.c3 * a.b4));
+    res.a2 =
+        -invdet * (a.a2 * (a.c3 * a.d4 - a.d3 * a.c4) - a.c2 * (a.a3 * a.d4 - a.d3 * a.a4) +
+                   a.d2 * (a.a3 * a.c4 - a.c3 * a.a4));
+    res.a3 =
+        invdet * (a.a2 * (a.b3 * a.d4 - a.d3 * a.b4) - a.b2 * (a.a3 * a.d4 - a.d3 * a.a4) +
+                  a.d2 * (a.a3 * a.b4 - a.b3 * a.a4));
+    res.a4 =
+        -invdet * (a.a2 * (a.b3 * a.c4 - a.b4 * a.c3) - a.b2 * (a.a3 * a.c4 - a.c3 * a.a4) +
+                   a.c2 * (a.a3 * a.b4 - a.b3 * a.a4));
+    res.b1 =
+        -invdet * (a.b1 * (a.c3 * a.d4 - a.d3 * a.c4) - a.c1 * (a.b3 * a.d4 - a.d3 * a.b4) +
+                   a.d1 * (a.b3 * a.c4 - a.c3 * a.b4));
+    res.b2 =
+        invdet * (a.a1 * (a.c3 * a.d4 - a.d3 * a.c4) - a.c1 * (a.a3 * a.d4 - a.d3 * a.a4) +
+                  a.d1 * (a.a3 * a.c4 - a.c3 * a.a4));
+    res.b3 =
+        -invdet * (a.a1 * (a.b3 * a.d4 - a.d3 * a.b4) - a.b1 * (a.a3 * a.d4 - a.d3 * a.a4) +
+                   a.d1 * (a.a3 * a.b4 - a.b3 * a.a4));
+    res.b4 =
+        invdet * (a.a1 * (a.b3 * a.c4 - a.b4 * a.c3) - a.b1 * (a.a3 * a.c4 - a.c3 * a.a4) +
+                  a.c1 * (a.a3 * a.b4 - a.b3 * a.a4));
+    res.c1 =
+        invdet * (a.b1 * (a.c2 * a.d4 - a.d2 * a.c4) - a.c1 * (a.b2 * a.d4 - a.d2 * a.b4) +
+                  a.d1 * (a.b2 * a.c4 - a.c2 * a.b4));
+    res.c2 =
+        -invdet * (a.a1 * (a.c2 * a.d4 - a.d2 * a.c4) - a.c1 * (a.a2 * a.d4 - a.d2 * a.a4) +
+                   a.d1 * (a.a2 * a.c4 - a.c2 * a.a4));
+    res.c3 =
+        invdet * (a.a1 * (a.b2 * a.d4 - a.d2 * a.b4) - a.b1 * (a.a2 * a.d4 - a.d2 * a.a4) +
+                  a.d1 * (a.a2 * a.b4 - a.b2 * a.a4));
+    res.c4 =
+        -invdet * (a.a1 * (a.b2 * a.c4 - a.c2 * a.b4) - a.b1 * (a.a2 * a.c4 - a.c2 * a.a4) +
+                   a.c1 * (a.a2 * a.b4 - a.b2 * a.a4));
+    res.d1 =
+        -invdet * (a.b1 * (a.c2 * a.d3 - a.d2 * a.c3) - a.c1 * (a.b2 * a.d3 - a.d2 * a.b3) +
+                   a.d1 * (a.b2 * a.c3 - a.c2 * a.b3));
+    res.d2 =
+        invdet * (a.a1 * (a.c2 * a.d3 - a.c3 * a.d2) - a.c1 * (a.a2 * a.d3 - a.d2 * a.a3) +
+                  a.d1 * (a.a2 * a.c3 - a.c2 * a.a3));
+    res.d3 =
+        -invdet * (a.a1 * (a.b2 * a.d3 - a.d2 * a.b3) - a.b1 * (a.a2 * a.d3 - a.d2 * a.a3) +
+                   a.d1 * (a.a2 * a.b3 - a.b2 * a.a3));
+    res.d4 =
+        invdet * (a.a1 * (a.b2 * a.c3 - a.c2 * a.b3) - a.b1 * (a.a2 * a.c3 - a.c2 * a.a3) +
+                  a.c1 * (a.a2 * a.b3 - a.b2 * a.a3));
+
+    return true;
+}
+
 template <typename T>
 struct LinearSpace
 {
