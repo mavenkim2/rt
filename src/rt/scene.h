@@ -707,8 +707,8 @@ MaterialCallback materialFuncs[] = {
 
 struct Material
 {
-    virtual BxDF Evaluate(Arena *arena, SurfaceInteraction &si,
-                          SampledWavelengths &lambda) = 0;
+    virtual BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                          const Vec4f &filterWidths) = 0;
 };
 
 struct Ray2;

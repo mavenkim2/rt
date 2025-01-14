@@ -181,16 +181,17 @@ struct DiffuseMaterial : Material
 {
     Texture *reflectance;
     DiffuseMaterial(Texture *reflectance) : reflectance(reflectance) {}
-    BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda) override
+    BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                  const Vec4f &filterWidths) override
     {
         DiffuseBxDF *bxdf = PushStruct(arena, DiffuseBxDF);
-        *bxdf             = EvaluateHelper(si, lambda);
+        *bxdf             = EvaluateHelper(si, lambda, filterWidths);
         return bxdf;
     }
-    DiffuseBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda)
+    DiffuseBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda,
+                               const Vec4f &filterWidths)
 
     {
-        Vec4f filterWidths(.75f);
         SampledSpectrum s = reflectance->EvaluateAlbedo(si, lambda, filterWidths);
 
         return DiffuseBxDF(s);
@@ -206,16 +207,17 @@ struct DiffuseTransmissionMaterial : Material
         : reflectance(reflectance), transmittance(transmittance), scale(scale)
     {
     }
-    BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda) override
+    BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                  const Vec4f &filterWidths) override
     {
         DiffuseTransmissionBxDF *bxdf = PushStruct(arena, DiffuseTransmissionBxDF);
-        *bxdf                         = EvaluateHelper(si, lambda);
+        *bxdf                         = EvaluateHelper(si, lambda, filterWidths);
         return bxdf;
     }
 
-    DiffuseTransmissionBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda)
+    DiffuseTransmissionBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda,
+                                           const Vec4f &filterWidths)
     {
-        Vec4f filterWidths(.75f);
         SampledSpectrum r = reflectance->EvaluateAlbedo(si, lambda, filterWidths);
         SampledSpectrum t = transmittance->EvaluateAlbedo(si, lambda, filterWidths);
 
@@ -237,17 +239,17 @@ struct DielectricMaterial : Material
     {
     }
 
-    BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda) override
+    BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                  const Vec4f &filterWidths) override
     {
         DielectricBxDF *bxdf = PushStruct(arena, DielectricBxDF);
-        *bxdf                = EvaluateHelper(si, lambda);
+        *bxdf                = EvaluateHelper(si, lambda, filterWidths);
         return bxdf;
     }
 
-    DielectricBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda)
+    DielectricBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda,
+                                  const Vec4f &filterWidths)
     {
-        Vec4lfn filterWidths(.75f);
-
         f32 uRoughness, vRoughness;
         if (uRoughnessTexture == vRoughnessTexture)
         {
@@ -289,24 +291,25 @@ struct CoatedDiffuseMaterial : Material
     {
     }
 
-    BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda) override
+    BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                  const Vec4f &filterWidths) override
     {
         CoatedDiffuseBxDF *bxdf = PushStruct(arena, CoatedDiffuseBxDF);
-        *bxdf                   = EvaluateHelper(si, lambda);
+        *bxdf                   = EvaluateHelper(si, lambda, filterWidths);
         return bxdf;
     }
 
-    CoatedDiffuseBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda)
+    CoatedDiffuseBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda,
+                                     const Vec4f &filterWidths)
 
     {
-        Vec4f filterWidths(.75f);
         SampledSpectrum albedoValue = albedo->EvaluateAlbedo(si, lambda, filterWidths);
 
         f32 gValue = g->EvaluateFloat(si, lambda, filterWidths);
 
-        return CoatedDiffuseBxDF(dielectric.EvaluateHelper(si, lambda),
-                                 diffuse.EvaluateHelper(si, lambda), albedoValue, gValue,
-                                 thickness, maxDepth, nSamples);
+        return CoatedDiffuseBxDF(dielectric.EvaluateHelper(si, lambda, filterWidths),
+                                 diffuse.EvaluateHelper(si, lambda, filterWidths), albedoValue,
+                                 gValue, thickness, maxDepth, nSamples);
     }
 };
 

@@ -558,7 +558,11 @@ void Render(Arena *arena, RenderParams2 &params)
                         // ensure ray intersects focal point
                         ray.d = Normalize(pFocus - ray.o);
                     }
-                    ray               = Transform(renderFromCamera, ray);
+                    ray        = Transform(renderFromCamera, ray);
+                    ray.radius = 0.f;
+                    Vec3f temp = TransformP(cameraFromRaster, Vec3f(0.25f, 0.25f, 0.f));
+                    ray.spread = Max(temp[0], temp[1]);
+                    printf("%f spread\n", ray.spread);
                     f32 cameraWeight  = 1.f;
                     SampledSpectrum L = cameraWeight * Li(ray, sampler, maxDepth, lambda);
                     // convert radiance to rgb, add and divide
@@ -750,8 +754,10 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
 
         ScratchArena scratch;
 
+        f32 newRadius = ray.radius + ray.spread * si.tHit;
+        printf("%f new radius\n", newRadius);
         Material *material = scene->materials[si.materialIDs];
-        BxDF bxdf          = material->Evaluate(scratch.temp.arena, si, lambda);
+        BxDF bxdf = material->Evaluate(scratch.temp.arena, si, lambda, Vec4f(newRadius));
         BSDF bsdf(bxdf, si.shading.dpdu, si.shading.n);
 
         // Next Event Estimation
@@ -804,6 +810,29 @@ SampledSpectrum Li(Ray2 &ray, Sampler &sampler, u32 maxDepth, SampledWavelengths
         // Spawn new ray
         prevSi = si;
         // ray.o  = si.p;
+
+        // Update spread
+        {
+            BxDFFlags flags = (BxDFFlags)sample.flags;
+            f32 newSpread;
+
+            f32 pdfSpread = .125f / Sqrt(sample.pdf);
+            if (EnumHasAnyFlags(flags, BxDFFlags::Reflection))
+            {
+                Assert(sample.pdf > 0.f);
+                f32 spread = 2.f * si.curvature * ray.radius;
+                newSpread  = Max(pdfSpread, spread);
+            }
+            else if (EnumHasAnyFlags(flags, BxDFFlags::Transmission))
+            {
+                f32 spread =
+                    sample.eta * ray.spread - (1.f - sample.eta) * si.curvature * ray.radius;
+                newSpread = Max(pdfSpread, ray.spread);
+            }
+
+            ray.radius = newRadius;
+            ray.spread = Clamp(newSpread, -1.f, 1.f);
+        }
 
         // Offset ray along geometric normal
         ray.o = OffsetRayOrigin(si.p, si.pError, si.n, sample.wi);

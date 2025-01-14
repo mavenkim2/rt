@@ -241,6 +241,38 @@ struct TriangleIntersection
     TriangleIntersection() {}
 };
 
+Vec4f BsplineBasis(f32 u)
+{
+    f32 u2 = u * u;
+    f32 u3 = u2 * u;
+    return Vec4f(1.f / 6.f * (-u3 + 3.f * u2 - 3.f * u + 1),
+                 1.f / 6.f * (3.f * u3 - 6.f * u2 + 4.f),
+                 1.f / 6.f * (-3 * u3 + 3 * u2 + 3 * u + 1), 1.f / 6.f * u3);
+}
+
+Vec4f BsplineDerivativeBasis(f32 u)
+{
+    f32 u2 = u * u;
+    return Vec4f(1.f / 6.f * (-3.f * u2 + 6.f * u - 3.f), 1.f / 6.f * (9.f * u2 - 12.f * u),
+                 1.f / 6.f * (-9.f * u2 + 6.f * u + 3.f), 0.5f * u2);
+}
+
+// f32 CalculateCatmullClarkCurvature(const Vec3f *points, const Vec2f &uv)
+f32 CalculateCurvature(const Vec3f &dpdu, const Vec3f &dpdv, const Vec3f &dndu,
+                       const Vec3f &dndv)
+{
+    f32 E = Dot(dpdu, dpdu);
+    f32 F = Dot(dpdu, dpdv);
+    f32 G = Dot(dpdv, dpdv);
+
+    f32 e = Dot(-dndu, dpdu);
+    f32 f = Dot(-dndv, dpdu);
+    f32 g = Dot(-dndv, dpdv);
+
+    f32 curvature = E * g - 2.f * F * f + G * e / (2.f * (E * G - Sqr(F)));
+    return curvature;
+}
+
 template <i32 N>
 static Mask<LaneF32<N>> TriangleIntersect(const Ray2 &ray, const LaneF32<N> &tFar,
                                           const Vec3lf<N> &v0, const Vec3lf<N> &v1,
@@ -362,13 +394,30 @@ static void SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
     si.p      = u * p[1] + v * p[2] + w * p[0];
     si.pError = gamma(6) * (Abs(u * p[1]) + Abs(v * p[2]) + Abs(w * p[0]));
 
-    Vec3f dp02  = p[0] - p[2];
-    Vec3f dp12  = p[1] - p[2];
-    si.n        = Normalize(Cross(dp02, dp12));
+    Vec3f dp02 = p[0] - p[2];
+    Vec3f dp12 = p[1] - p[2];
+    si.n       = Normalize(Cross(dp02, dp12));
+    Vec3f dn02 = {};
+    Vec3f dn12 = {};
+
+    if (mesh->n)
+    {
+        si.shading.n = u * mesh->n[vertexIndices[1]] + v * mesh->n[vertexIndices[2]] +
+                       w * mesh->n[vertexIndices[0]];
+        si.shading.n = LengthSquared(si.shading.n) > 0 ? Normalize(si.shading.n) : si.n;
+
+        dn02 = mesh->n[vertexIndices[0]] - mesh->n[vertexIndices[2]];
+        dn12 = mesh->n[vertexIndices[1]] - mesh->n[vertexIndices[2]];
+    }
+    else
+    {
+        si.shading.n = si.n;
+    }
+
     Vec2f duv02 = uv[0] - uv[2];
     Vec2f duv12 = uv[1] - uv[2];
     f32 det     = FMS(duv02[0], duv12[1], duv02[1] * duv12[0]);
-    Vec3f dpdu, dpdv;
+    Vec3f dpdu, dpdv, dndu, dndv;
     if (det < 1e-9f)
     {
         CoordinateSystem(si.n, &dpdu, &dpdv);
@@ -378,18 +427,11 @@ static void SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
         f32 invDet = 1 / det;
         dpdu       = FMS(Vec3f(duv12[1]), dp02, duv02[1] * dp12) * invDet;
         dpdv       = FMS(Vec3f(duv02[0]), dp12, duv12[0] * dp02) * invDet;
+
+        dndu = FMS(Vec3f(duv12[1]), dn02, duv02[1] * dn12) * invDet;
+        dndv = FMS(Vec3f(duv02[0]), dn12, duv12[0] * dn02) * invDet;
     }
 
-    if (mesh->n)
-    {
-        si.shading.n = u * mesh->n[vertexIndices[1]] + v * mesh->n[vertexIndices[2]] +
-                       w * mesh->n[vertexIndices[0]];
-        si.shading.n = LengthSquared(si.shading.n) > 0 ? Normalize(si.shading.n) : si.n;
-    }
-    else
-    {
-        si.shading.n = si.n;
-    }
     Vec3f ss = dpdu;
     Vec3f ts = Cross(si.shading.n, ss);
     if (LengthSquared(ts) > 0)
@@ -403,6 +445,8 @@ static void SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
 
     si.shading.dpdu = ss;
     si.shading.dpdv = ts;
+    si.shading.dndu = dndu;
+    si.shading.dndv = dndv;
     si.uv           = u * uv[1] + v * uv[2] + w * uv[0];
     Assert(geomID < scene->numPrimitives);
     const PrimitiveIndices *indices = scene->primIndices + geomID;
@@ -411,6 +455,8 @@ static void SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
     // TODO: properly obtain the light handle
     si.lightIndices = 0;
     si.faceIndices  = primID;
+    si.curvature =
+        CalculateCurvature(si.shading.dpdu, si.shading.dpdv, si.shading.dndu, si.shading.dndv);
 }
 
 template <i32 N, typename T>

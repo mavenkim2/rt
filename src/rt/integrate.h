@@ -95,6 +95,7 @@ struct SurfaceInteractions
     LaneKU32 materialIDs;
     LaneKU32 faceIndices;
     LaneKU32 rayStateHandles;
+    f32 curvature;
     // LaneIU32 volumeIndices;
 
     SurfaceInteractions() {}
@@ -550,6 +551,8 @@ struct Ray2
     Vec3f o;
     Vec3f d;
     f32 tFar;
+    f32 spread;
+    f32 radius;
     u32 volumeIndex = invalidVolume;
 
     Ray2() {}
