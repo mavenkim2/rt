@@ -46,18 +46,61 @@ struct CovarianceMatrix
     // 1. how do I handle bsdfs? how do I handle transmission?
     // - it seems that specular reflection at least has an infinite hessian lmao
     // 2. do I have to have a change of bases or something?
+    // - i think this is just the projection, see the example code
     // 3. how do I handle lights? do i have to do a FFT or something?
+    // - i have no idea
     // 4. curvature
 
     void InverseProjection(f32 d) {}
 
-    bool Inverse(Mat4 *result)
+    __forceinline Mat4 ConvertToMatrix() const
     {
-        Mat4 inv(matrix[0], matrix[1], matrix[3], matrix[6],  //
-                 matrix[1], matrix[2], matrix[4], matrix[7],  //
-                 matrix[3], matrix[4], matrix[5], matrix[8],  //
-                 matrix[6], matrix[7], matrix[8], matrix[9]); //
-        return Inverse(inv, *result);
+        return Mat4(matrix[0], matrix[1], matrix[3], matrix[6],  //
+                    matrix[1], matrix[2], matrix[4], matrix[7],  //
+                    matrix[3], matrix[4], matrix[5], matrix[8],  //
+                    matrix[6], matrix[7], matrix[8], matrix[9]); //
+    }
+    _forceinline void ConvertFromMatrix(const Mat4 &mat)
+    {
+        matrix[0] = mat[0];
+        matrix[1] = mat[1];
+        matrix[2] = mat[5];
+        matrix[3] = mat[8];
+        matrix[4] = mat[9];
+        matrix[5] = mat[10];
+        matrix[6] = mat[12];
+        matrix[7] = mat[13];
+        matrix[8] = mat[14];
+        matrix[9] = mat[15];
+    }
+
+    bool Inverse(Mat4 *result) { return Inverse(ConvertToMatrix(), *result); }
+
+    void Reflection(f32 h11, f32 h22)
+    {
+        if (h11 == pos_inf && h22 == pos_inf) return;
+        // TODO: ensure this handles 0 case properly (i.e brdf doesn't change)
+
+        Mat4 invCov;
+        bool result = Inverse(&invCov);
+        invCov[10] += 1.f / Max(h11, COV_MIN_FLOAT);
+        invCov[15] += 1.f / Max(h22, COV_MIN_FLOAT);
+
+        Mat4 cov;
+        Inverse(invCov, &cov);
+        ConvertFromMatrix(cov);
+    }
+
+    // curvature, symmetry, and alignment must be performed
+    // how do you do alignment?
+    void Refraction()
+    {
+        // for specular transmission:
+        // St * (cov  + W) * S
+        // see pg. 81 of belcour's thesis
+
+        // "rough refraction is done like the brdf operator"
+        //
     }
 
     void ConvertMatrixToDifferentials(Vec3f &dpdx, Vec3f &dpdy, f32 x00, f32 x01,
