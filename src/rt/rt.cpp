@@ -1085,6 +1085,9 @@ int main(int argc, char *argv[])
     // Ptex::PtexTexture *texture =
     //     cache->get("../data/island/textures/isDunesA/Color/stem0004_geo.ptx", error);
     // u32 numFaces = texture->getInfo().numFaces;
+    //
+
+    DualTest();
 
     const u32 count = 3000000;
 

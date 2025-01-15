@@ -916,4 +916,77 @@ void TestRender(Arena *arena, Options *options = 0)
     printf("total misc time: %fms \n", totalMiscTime);
 }
 
+template <typename T>
+T Func(const T &x)
+{
+    T x2 = x * x;
+    T x3 = x2 * x;
+    return T(3.f) * x3 - T(2.f) * x2 + T(1.f);
+}
+
+template <typename T>
+T Func2(const T &x, const T &y)
+{
+    T x2 = x * x;
+    T y2 = y * y;
+    return y2 / x2;
+}
+
+template <typename T>
+T Func3(const T &x)
+{
+    return x * x * x;
+}
+
+template <typename T>
+T Func4(const T &x, const T &y)
+{
+    T x2 = x * x;
+    T y2 = y * y;
+    return y2 * x2;
+}
+
+template <typename T>
+inline Vec3<T> ReflectTest(const Vec3<T> &v, const Vec3<T> &norm)
+{
+    return -v + 2 * Dot(v, norm) * norm;
+}
+
+template <i32 N>
+using Vec3df = Vec3<Dual<f32, N>>;
+void DualTest()
+{
+#if 0
+    Vec3df<1> dual(Dual<f32, 1>(5.f, 1.f), Dual<f32, 1>(3.f, 1.f), Dual<f32, 1>(2.f, 1.f));
+    auto result = Func(dual);
+
+    Dual<f32, 2> dual1(5.f, 1.f, 0.f);
+    Dual<f32, 2> dual2(3.f, 0.f, 1.f);
+
+    auto result2 = Func2(dual1, dual2);
+
+    HyperDual<f32, 1> dual3(5.f, 1.f, 1.f);
+    auto result3 = Func3(dual3);
+
+    HyperDual<f32, 2> dual4(5.f, 1.f, 1.f, 0.f, 0.f);
+    HyperDual<f32, 2> dual5(3.f, 0.f, 0.f, 1.f, 1.f);
+    auto result4 = Func4(dual4, dual5);
+#else
+    // Ray2 ray;
+    // ray.pxOffset = si.p + dpdx;
+    // ray.pyOffset = si.p + dpdy;
+
+    // Compute differential reflected directions
+    // TODO: see if you get the same result with duals as with igehy's formulation
+    // it should work, right?
+    f32 dwoDotn_dx = Dot(dwodx, n) + Dot(wo, dndx);
+    f32 dwoDotn_dy = Dot(dwody, n) + Dot(wo, dndy);
+    ray.dxOffset   = wi - dwodx + 2 * Vec3f(Dot(wo, n) * dndx + dwoDotn_dx * n);
+    ray.dyOffset   = wi - dwody + 2 * Vec3f(Dot(wo, n) * dndy + dwoDotn_dy * n);
+
+#endif
+
+    int stop = 5;
+}
+
 } // namespace rt

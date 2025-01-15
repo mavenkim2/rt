@@ -42,7 +42,112 @@ struct CovarianceMatrix
         matrix[7] -= matrix[9] * cy;
     }
 
-    // 2 problems:
+    void Projection(const Vec3f &n)
+    {
+        const f32 cx = Dot(x, n);
+        const f32 cy = Dot(y, n);
+
+        // Rotate the Frame to be aligned with plane.
+        const f32 alpha = (cx != 0.0) ? Atan2(cx, cy) : 0.0;
+        const f32 c     = Cos(alpha);
+        const f32 s     = -Sin(alpha);
+        Rotate(c, s);
+
+        // Scale the componnent that project by the cosine of the ray direction
+        // and the normal.
+        const f32 cosine = Dot(z, n);
+        ScaleY(Abs(cosine));
+
+        // Update direction vectors.
+        x = c * x + s * y;
+        z = (cosine < 0.0f) ? -n : n;
+        y = (cosine < 0.0f) ? Cross(x, z) : Cross(z, x);
+    }
+
+    inline void InverseProjection(const Vec3f &d)
+    {
+        const f32 cx = Dot(x, d);
+        const f32 cy = Dot(y, d);
+
+        // Rotate the Frame to be aligned with plane.
+        const f32 alpha = (cx != 0.0) ? Atan2(cx, cy) : 0.0;
+        const f32 c = Cos(alpha), s = -Sin(alpha);
+        Rotate(c, s); // Rotate of -alpha
+
+        // Scale the componnent that project by the inverse cosine of the ray
+        // direction and the normal.
+        const f32 cosine = Dot(z, d);
+        if (cosine < 0.0f)
+        {
+            ScaleV(-1.0f);
+            ScaleU(-1.0f);
+        }
+        ScaleY(1.0 / Max(Abs(cosine), COV_MIN_FLOAT));
+
+        // Update direction vectors.
+        x = c * x + s * y;
+        z = d;
+        y = Cross(z, x);
+    }
+
+    inline void ScaleY(f32 alpha)
+    {
+        matrix[1] *= alpha;
+        matrix[2] *= alpha * alpha;
+        matrix[4] *= alpha;
+        matrix[7] *= alpha;
+    }
+    inline void ScaleU(f32 alpha)
+    {
+        matrix[3] *= alpha;
+        matrix[4] *= alpha;
+        matrix[5] *= alpha * alpha;
+        matrix[8] *= alpha;
+    }
+
+    inline void ScaleV(f32 alpha)
+    {
+        matrix[6] *= alpha;
+        matrix[7] *= alpha;
+        matrix[8] *= alpha;
+        matrix[9] *= alpha * alpha;
+    }
+
+    inline void Rotate(f32 c, f32 s)
+    {
+        const f32 cs = c * s;
+        const f32 c2 = c * c;
+        const f32 s2 = s * s;
+
+        const f32 cov_xx = matrix[0];
+        const f32 cov_xy = matrix[1];
+        const f32 cov_yy = matrix[2];
+        const f32 cov_xu = matrix[3];
+        const f32 cov_yu = matrix[4];
+        const f32 cov_uu = matrix[5];
+        const f32 cov_xv = matrix[6];
+        const f32 cov_yv = matrix[7];
+        const f32 cov_uv = matrix[8];
+        const f32 cov_vv = matrix[9];
+
+        // Rotation of the space
+        matrix[0] = c2 * cov_xx + 2 * cs * cov_xy + s2 * cov_yy;
+        matrix[1] = (c2 - s2) * cov_xy + cs * (cov_yy - cov_xx);
+        matrix[2] = c2 * cov_yy - 2 * cs * cov_xy + s2 * cov_xx;
+
+        // Rotation of the angle
+        matrix[5] = c2 * cov_uu + 2 * cs * cov_uv + s2 * cov_vv;
+        matrix[8] = (c2 - s2) * cov_uv + cs * (cov_vv - cov_uu);
+        matrix[9] = c2 * cov_vv - 2 * cs * cov_uv + s2 * cov_uu;
+
+        // Covariances
+        matrix[3] = c2 * cov_xu + cs * (cov_xv + cov_yu) + s2 * cov_yv;
+        matrix[4] = c2 * cov_yu + cs * (cov_yv - cov_xu) - s2 * cov_xv;
+        matrix[6] = c2 * cov_xv + cs * (cov_yv - cov_xu) - s2 * cov_yu;
+        matrix[7] = c2 * cov_yv - cs * (cov_xv + cov_yu) + s2 * cov_xu;
+    }
+
+    // problems:
     // 1. how do I handle bsdfs? how do I handle transmission?
     // - it seems that specular reflection at least has an infinite hessian lmao
     // 2. do I have to have a change of bases or something?
@@ -50,8 +155,6 @@ struct CovarianceMatrix
     // 3. how do I handle lights? do i have to do a FFT or something?
     // - i have no idea
     // 4. curvature
-
-    void InverseProjection(f32 d) {}
 
     __forceinline Mat4 ConvertToMatrix() const
     {

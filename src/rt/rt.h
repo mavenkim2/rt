@@ -5,6 +5,7 @@
 #include "macros.h"
 #include "template.h"
 #include "math/basemath.h"
+#include "math/dual.h"
 #include "math/simd_include.h"
 #include "math/vec2.h"
 #include "math/vec3.h"

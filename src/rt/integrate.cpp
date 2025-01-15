@@ -1095,7 +1095,7 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
                     f32 dmudy =
                         dwoDotn_dy * (1 / eta + 1 / Sqr(eta) * Dot(wo, n) / Dot(wi, n));
 
-                    ray.dxOffset    = wi - eta * dwodx + mu * dndx + dmudx * n;
+                    ray.dxOffset = wi - eta * dwodx + mu * dndx + dmudx * n;
                     ray.dyOffset = wi - eta * dwody + mu * dndy + dmudy * n;
                 }
                 else

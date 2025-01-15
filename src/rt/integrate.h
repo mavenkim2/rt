@@ -11,59 +11,6 @@ namespace rt
 {
 static const f32 tMinEpsilon = 0.0001f;
 
-#if 0
-template <typename T, i32 i>
-struct Dual;
-
-template <typename T>
-struct Dual<T, 1>
-{
-    T a; // real
-    T d; // infinitesimal
-    Dual() {}
-    Dual(T a, T d = T(1.f)) : a(a), d(d) {}
-};
-
-template <typename T>
-struct Dual<T, 2>
-{
-    T a;    // real
-    T d[2]; // infinitesimal
-    Dual() {}
-    Dual(T a, T d0 = T(1.f), T d1 = T(1.f)) : a(a), d{d0, d1} {}
-};
-
-template <typename T>
-__forceinline Dual<T, 1> operator+(const Dual<T, 1> &a, const Dual<T, 1> &b)
-{
-    return Dual<T, 1>(a.a + b.a, a.d + b.d);
-}
-
-template <typename T>
-__forceinline Dual<T, 1> operator*(const Dual<T, 1> &a, const Dual<T, 1> &b)
-{
-    return Dual<T, 1>(a.a * b.a, a.a * b.b + a.b * b.a);
-}
-
-template <typename T>
-__forceinline Dual<T, 2> operator+(const Dual<T, 2> &a, const Dual<T, 2> &b)
-{
-    return Dual<T, 2>(a.a + b.a, a.d[0] + b.d[0], a.d[1] + b.d[1]);
-}
-
-template <typename T>
-__forceinline Dual<T, 2> operator*(const Dual<T, 2> &a, const Dual<T, 2> &b)
-{
-    return Dual<T, 2>(a.a * b.a, a.a * b.d[0] + a.d[0] * b.a, a.a * b.d[1] + a.d[1] * b.a);
-}
-
-template <typename T>
-T ReflectTest(T &wo, T &n)
-{
-    return -wo + 2 * Dot(wo, n) * n;
-}
-#endif
-
 struct SortKey
 {
     u32 value;
