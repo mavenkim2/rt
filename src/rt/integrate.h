@@ -11,12 +11,6 @@ namespace rt
 {
 static const f32 tMinEpsilon = 0.0001f;
 
-struct SortKey
-{
-    u32 value;
-    u32 index;
-};
-
 template <typename BxDF>
 struct BSDFBase;
 
@@ -28,6 +22,7 @@ struct SurfaceInteractions
     Vec3lf<K> p;
     Vec3lf<K> pError;
     Vec3lf<K> n;
+    Vec3lf<K> dpdu, dpdv;
     Vec2lf<K> uv;
     struct
     {

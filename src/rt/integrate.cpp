@@ -9,13 +9,14 @@
 namespace rt
 {
 // TODO
+// - ray differentials
+// - simd queues for everything (radiance evaluation, shading, ray streams?)
+
 // - volumetric rendering
 //      - ratio tracking, residual ratio tracking, delta tracking <-- done but untested
 //      - virtual density segments?
-// - ray differentials
 // - disney bsdf
 // - multiple scattering
-// - simd queues for everything (radiance evaluation, shading, ray streams?)
 // - vcm
 // - adaptive sampling
 // - equiangular sampling
@@ -220,250 +221,6 @@ enum
     PathFlags_SpecularBounce,
 };
 
-struct RayState
-{
-    Ray2 ray;
-    SampledSpectrum L;
-    SampledSpectrum beta;
-    SampledSpectrum etaScale;
-    PathFlags pathFlags;
-    u32 depth;
-    Sampler sampler;
-};
-
-typedef u32 RayStateHandle;
-
-static const u32 simdQueueLength = 512;
-struct RayQueue
-{
-    // lightpdf, le
-    RayStateHandle queue[simdQueueLength];
-    u32 count;
-    void Flush(u32 add)
-    {
-        if (count + add <= simdQueueLength) return;
-
-        u32 alignedCount = count & (IntN - 1);
-        u32 start        = count - alignedCount;
-        for (u32 i = start; i < start + alignedCount; i++)
-        {
-        }
-    }
-    void Push() {}
-};
-
-// TODO: one for each type of material
-// TODO: if no intersection, then shove to the end? beginning? of the queue
-template <typename Material>
-struct ShadingQueuePtex
-{
-    using BxDF = typename Material::BxDF;
-    SurfaceInteraction queue[simdQueueLength];
-    u32 count = 0;
-    ShadingQueuePtex() {}
-    void Flush() // SortKey *keys, SurfaceInteraction *values, u32 num)
-    {
-        TempArena temp = ScratchStart(0, 0);
-
-        u32 alignedCount = count & (IntN - 1);
-        count -= alignedCount;
-        u32 start = count;
-
-        // IMPORTANT:
-        // for ptex, radix sort using:
-        // light type, mesh id, face id
-        // for no ptex, radix sort using:
-        // light type, uv
-        // Create radix sort keys, get the light type
-
-        SortKey *keys0 = PushArrayNoZero(temp.arena, SortKey, alignedCount);
-        SortKey *keys1 = PushArrayNoZero(temp.arena, SortKey, alignedCount);
-        SortKey keys0[queueFlushSize];
-        SortKey keys1[queueFlushSize];
-        f32 *pmfs            = PushArrayNoZero(temp.arena, f32, alignedCount);
-        LightHandle *handles = PushArrayNoZero(temp.arena, LightHandle, alignedCount);
-        for (u32 i = 0; i < alignedCount; i++)
-        {
-            SurfaceInteraction &intr = queue[start + i];
-            // TODO: get this somehow
-            Sampler sampler;
-            LightHandle handle = UniformLightSample(sampler.Get1D(), &pmfs[i]);
-            handles[i]         = handle;
-
-            keys0[i].value = GenerateKey(intr, handle.GetType());
-            keys0[i].index = start + i;
-        }
-
-        // Radix sort
-        for (u32 iter = 3; iter >= 0; iter--)
-        {
-            u32 shift        = iter * 8;
-            u32 buckets[255] = {};
-            // Calculate # in each radix
-            for (u32 i = 0; i < queueFlushSize; i++)
-            {
-                SortKey *key = &keys0[i];
-                buckets[(key->value >> shift) & 0xff]++;
-            }
-            // Prefix sum
-            u32 total = 0;
-            for (u32 i = 0; i < 255; i++)
-            {
-                u32 count  = buckets[i];
-                buckets[i] = total;
-                total += count;
-            }
-            // Place in correct position
-            for (u32 i = 0; i < queueFlushSize; i++)
-            {
-                SortKey &sortKey      = &keys0[i];
-                u32 key               = (sortKey.value >> shift) & 0xff;
-                keys1[buckets[key]++] = sortKey;
-            }
-            Swap(keys0, keys1);
-        }
-
-        // Convert to AOSOA
-        u32 limit = queueFlushSize % (IntN);
-        // SurfaceInteractionsN aosoaIntrs[queueFlushSize / IntN];
-        for (u32 i = 0;
-             i <
-             alignedCount;) //, aosoaIndex = 0; i < queueFlushSize; i += IntN, aosoaIndex++)
-        {
-            const u32 prefetchDistance = IntN * 2;
-            alignas(32) SurfaceInteraction intrs[IntN];
-            if (i + prefetchDistance < alignedCount)
-            {
-                for (u32 j = 0; j < IntN; j++)
-                {
-                    _mm_prefetch((char *)&queue[keys[i + prefetchDistance + j].index],
-                                 _MM_HINT_T0);
-                    intrs[j] = queue[keys0[i + j].index];
-                }
-            }
-            SurfaceInteractionsN aosoaIntrs; //&out = aosoaIntrs[aosoaIndex];
-                                             // Transpose p, n, uv
-            Transpose(intrs, aosoaIntrs);
-            // Transpose8x8(Lane8F32::Load(&intrs[0]), Lane8F32::Load(&intrs[1]),
-            // Lane8F32::Load(&intrs[2]), Lane8F32::Load(&intrs[3]),
-            //              Lane8F32::Load(&intrs[4]), Lane8F32::Load(&intrs[5]),
-            //              Lane8F32::Load(&intrs[6]), Lane8F32::Load(&intrs[7]), out.p.x,
-            //              out.p.y, out.p.z, out.n.x, out.n.y, out.n.z, out.uv.x, out.uv.y);
-            // Transpose the rest
-
-            MaskF32 continuationMask = LaneNF32::Mask<true>();
-            BSDFBase<BxDF> bsdf      = Material::Evaluate(aosoaIntrs);
-
-            template <i32 width>
-            struct LightSamples
-            {
-                SampledSpectrum Le;
-                Vec3IF32 samplePoint;
-                LaneNF32 pdf;
-            };
-
-            Sampler samplers[];
-
-            //////////////////////////////
-            // Next event estimation
-            //
-            if (Any(!IsSpecular(bsdf.Flags())))
-            {
-                RayStateHandle rayStateHandles[IntN];
-
-                // Sample lights
-                alignas(32) LightHandle itrHandles[IntN];
-                alignas(32) f32 pdfs[IntN];
-                for (u32 j = 0; j < IntN; j++)
-                {
-                    u32 index     = keys[i + j].index - start;
-                    itrHandles[j] = handles[index];
-                    pdfs[j]       = pmfs[index];
-                }
-                LaneIU32 handles  = LaneIU32::Load(itrHandles);
-                u32 type          = itrHandles[0].GetType();
-                LaneIU32 laneType = LaneIU32(itrHandles[0].GetType());
-                MaskF32 mask      = (handles & laneType) == laneType;
-                u32 maskBits      = Movemask(mask);
-                u32 add           = PopCount(maskBits);
-                LaneNF32 lightPdf = LaneNF32::Load(pdfs);
-
-                // TODO: get samplers
-                LightSamples sample = SampleLi(type, handles, add, aosoaIntrs, lambda?, samplers);//scene, lightHandle, intr, lambda, u);
-                mask &= sample.pdf == 0.f;
-                lightPdf *= sample.pdf;
-                // f32 scatterPdf;
-                // SampledSpectrum f_hat;
-                Vec3IF32 wi = Normalize(sample.samplePoint - aosoaIntrs.p);
-
-                LaneNF32 scatterPdf;
-                SampledSpectrum f =
-                    BxDF::EvaluateSample(-ray.d, wi, scatterPdf, TransportMode::Radiance) *
-                    AbsDot(aosoaIntrs.shading.n, wi);
-                // TODO: need to == with 0.f for every wavelength, and then combine together
-                mask &= f.GetMask();
-
-                maskBits = Movemask(mask);
-                // Shoot occlusion rays
-                for (u32 j = 0; j < IntN; j++)
-                {
-                    if (maskBits & (1 << j))
-                    {
-                        // Shoot occlusion ray
-                        // maskBits &= Occluded();
-                    }
-                }
-
-                // Power heuristic
-                LaneNF32 w_l = lightPdf / (Sqr(lightPdf) + Sqr(scatterPdf));
-                // TODO: to prevent atomics, need to basically have thread permanently take a
-                // tile
-                L += Select(LaneNF32::Mask(maskbits), f * beta * w_l * sample.Le, 0.f);
-                i += add;
-            }
-            else
-            {
-                i += IntN;
-            }
-
-            // TODO: things I need to simd:
-            // - sampler
-            // - ray
-            // - path throughput weight
-            // - path flags
-            // - path eta scale for russian roulette
-
-            // TODO: should I copy data (e.g. path throughput weights) so that stages can
-            // happen in whatever order? otherwise, i need to ensure that next event
-            // estimation, etc. happens before the bsdf sample is generated, otherwise the path
-            // throughput weight needed for nee is lost
-            Sampler *samplers[IntN];
-            Ray2 *rays[IntN];
-            LaneF32<IntN> u;
-            Vec2lf<IntN> uv;
-
-            BSDFSample<IntN> sample =
-                bsdf.GenerateSample(-ray.d, u, uv, TransportMode ::Radiance, BSDFFlags::RT);
-            MaskF32 mask;
-            mask = Select(sample.pdf == 0.f, 1, 0);
-            beta *= sample.f * AbsDot(intr.shading.n, sample.wi) / sample.pdf;
-
-            // store back path throughput
-            // store back radiance
-            // store back depth
-            // store back eta scale
-
-            // TODO: path flags, set specular bounce to true
-            // pathFlags &= bsdf.IsSpecular();
-
-            // Spawn a new ray, push to the ray queue
-            // Russian roulette
-        }
-
-        ScratchEnd(temp);
-    }
-};
-
 void DefocusBlur(const Vec3f &dIn, const Vec2f &pLens, const f32 focalLength, Vec3f &o,
                  Vec3f &d)
 {
@@ -477,8 +234,8 @@ Vec3f IntersectRayPlane(const Vec3f &planeN, const Vec3f &planeP, const Vec3f &r
                         const Vec3f &rayD)
 {
     f32 d   = Dot(planeN, planeP);
-    Vec3f t = (d - Dot(planeN, rayP)) / Dot(planeN, rayD);
-    Vec3f p = rayP * t * rayD;
+    f32 t   = (d - Dot(planeN, rayP)) / Dot(planeN, rayD);
+    Vec3f p = rayP + t * rayD;
     return p;
 }
 
@@ -691,19 +448,6 @@ void Render(Arena *arena, RenderParams2 &params)
                     Vec2f pLens = sampler.Get2D();
 
                     Ray2 ray = camera.GenerateRayDifferentials(filterSample, pLens);
-                    // Vec3f pCamera = TransformP(cameraFromRaster, Vec3f(filterSample, 0.f));
-                    // Ray2 ray(Vec3f(0.f, 0.f, 0.f), Normalize(pCamera), pos_inf);
-                    // if (lensRadius > 0.f)
-                    // {
-                    //     pLens = lensRadius * SampleUniformDiskConcentric(pLens);
-                    //
-                    //     DefocusBlur(ray.d, pLens, focalLength, ray.o, ray.d);
-                    //     DefocusBlur(Normalize(pCamera + dxCamera), pLens, focalLength,
-                    //                 ray.pxOffset, ray.dxOffset);
-                    //     DefocusBlur(Normalize(pCamera + dyCamera), pLens, focalLength,
-                    //                 ray.pyOffset, ray.dyOffset);
-                    // }
-                    // ray = Transform(renderFromCamera, ray);
 
                     // Vec3f temp = TransformP(cameraFromRaster, Vec3f(0.25f, 0.25f, 0.f));
                     // ray.radius = 0.f;
@@ -912,8 +656,8 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
         {
             if (ray.pxOffset != Vec3f(pos_inf))
             {
-                Vec3f px = IntersectRayPlane(si.shading.n, si.p, ray.pxOffset, ray.dxOffset);
-                Vec3f py = IntersectRayPlane(si.shading.n, si.p, ray.pyOffset, ray.dyOffset);
+                Vec3f px = IntersectRayPlane(si.n, si.p, ray.pxOffset, ray.dxOffset);
+                Vec3f py = IntersectRayPlane(si.n, si.p, ray.pyOffset, ray.dyOffset);
 
                 dpdx = px - si.p;
                 dpdy = py - si.p;
@@ -921,9 +665,9 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
             else
             {
                 // Estimate ray differentials from camera
-                Vec3f px = IntersectRayPlane(si.shading.n, si.p, ray.o + camera.diff.minPosX,
+                Vec3f px = IntersectRayPlane(si.n, si.p, ray.o + camera.diff.minPosX,
                                              ray.d + camera.diff.minDirX);
-                Vec3f py = IntersectRayPlane(si.shading.n, si.p, ray.o + camera.diff.minPosY,
+                Vec3f py = IntersectRayPlane(si.n, si.p, ray.o + camera.diff.minPosY,
                                              ray.d + camera.diff.minDirY);
 
                 dpdx = camera.sppScale * (px - si.p);
@@ -935,29 +679,29 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
             // dpdx = dpdv * dvdx
             // Solve using linear least squares
             // (At * A)^-1 * At * b = x
-            f32 ata00  = Dot(si.shading.dpdu, si.shading.dpdu);
-            f32 ata01  = Dot(si.shading.dpdu, si.shading.dpdv);
-            f32 ata11  = Dot(si.shading.dpdv, si.shading.dpdv);
+            f32 ata00  = Dot(si.dpdu, si.dpdu);
+            f32 ata01  = Dot(si.dpdu, si.dpdv);
+            f32 ata11  = Dot(si.dpdv, si.dpdv);
             f32 det    = FMS(ata00, ata11, Sqr(ata01));
-            f32 invDet = 1.f / det;
+            f32 invDet = det == 0.f ? 0.f : 1.f / det;
 
-            f32 atb0x = Dot(si.shading.dpdu, dpdx);
-            f32 atb1x = Dot(si.shading.dpdv, dpdx);
-            f32 atb0y = Dot(si.shading.dpdu, dpdy);
-            f32 atb1y = Dot(si.shading.dpdv, dpdy);
+            f32 atb0x = Dot(si.dpdu, dpdx);
+            f32 atb1x = Dot(si.dpdv, dpdx);
+            f32 atb0y = Dot(si.dpdu, dpdy);
+            f32 atb1y = Dot(si.dpdv, dpdy);
 
             // dudx = invDet * (ata11 * atb0x - atb1x * ata01);
-            dudx = invDet * FMS(ata11, atb0x, ata01 * atb1x);
-            dudy = invDet * FMS(ata11, atb0y, ata01 * atb1y);
+            dudx = Clamp(invDet * FMS(ata11, atb0x, ata01 * atb1x), -1e8f, 1e8f);
+            dudy = Clamp(invDet * FMS(ata11, atb0y, ata01 * atb1y), -1e8f, 1e8f);
 
             // dvdx =invDet * (-ata01 * atb0x + ata00 * atb1x)
-            dvdx = invDet * FMS(ata00, atb1x, ata01 * atb0x);
-            dvdy = invDet * FMS(ata00, atb1y, ata01 * atb0y);
+            dvdx = Clamp(invDet * FMS(ata00, atb1x, ata01 * atb0x), -1e8f, 1e8f);
+            dvdy = Clamp(invDet * FMS(ata00, atb1y, ata01 * atb0y), -1e8f, 1e8f);
         }
 
         Material *material = scene->materials[si.materialIDs];
         BxDF bxdf =
-            material->Evaluate(scratch.temp.arena, si, lambda, Vec4f(dudx, dudy, dvdx, dvdy));
+            material->Evaluate(scratch.temp.arena, si, lambda, Vec4f(dudx, dvdx, dudy, dvdy));
         BSDF bsdf(bxdf, si.shading.dpdu, si.shading.n);
 
         // Next Event Estimation

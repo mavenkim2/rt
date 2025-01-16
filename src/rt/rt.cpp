@@ -1087,7 +1087,7 @@ int main(int argc, char *argv[])
     // u32 numFaces = texture->getInfo().numFaces;
     //
 
-    DualTest();
+    // DualTest();
 
     const u32 count = 3000000;
 

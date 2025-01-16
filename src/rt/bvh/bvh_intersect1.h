@@ -443,6 +443,8 @@ static void SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
         CoordinateSystem(si.shading.n, &ss, &ts);
     }
 
+    si.dpdu         = dpdu;
+    si.dpdv         = dpdv;
     si.shading.dpdu = ss;
     si.shading.dpdv = ts;
     si.shading.dndu = dndu;
@@ -652,9 +654,11 @@ struct QuadIntersectorBase<N, Prim<N>>
             SurfaceInteractionFromTriangleIntersection(
                 scene, Get(itr.geomIDs, index), primID / 2, ids, u, v, w, si, isSecondTri);
 
+#if DEBUG
             GetDebug()->filename = scene->filename;
             GetDebug()->geomID   = Get(itr.geomIDs, index);
             GetDebug()->scene    = scene;
+#endif
 
             return true;
         }

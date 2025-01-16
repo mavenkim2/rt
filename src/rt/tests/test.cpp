@@ -881,6 +881,13 @@ void TestRender(Arena *arena, Options *options = 0)
 
     f32 time = OS_GetMilliseconds(counter);
     printf("setup time: %fms\n", time);
+    f64 totalMiscTime = 0;
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        totalMiscTime += threadLocalStatistics[i].miscF;
+        printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
+    }
+    printf("total misc time: %fms \n", totalMiscTime);
 
     RenderParams2 params;
     params.cameraFromRaster = cameraFromRaster;
@@ -906,14 +913,6 @@ void TestRender(Arena *arena, Options *options = 0)
     Render(arena, params);
     time = OS_GetMilliseconds(counter);
     printf("total render time: %fms\n", time);
-
-    f64 totalMiscTime = 0;
-    for (u32 i = 0; i < numProcessors; i++)
-    {
-        totalMiscTime += threadLocalStatistics[i].miscF;
-        printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
-    }
-    printf("total misc time: %fms \n", totalMiscTime);
 }
 
 template <typename T>
@@ -956,7 +955,7 @@ template <i32 N>
 using Vec3df = Vec3<Dual<f32, N>>;
 void DualTest()
 {
-#if 0
+#if 1
     Vec3df<1> dual(Dual<f32, 1>(5.f, 1.f), Dual<f32, 1>(3.f, 1.f), Dual<f32, 1>(2.f, 1.f));
     auto result = Func(dual);
 
@@ -979,10 +978,6 @@ void DualTest()
     // Compute differential reflected directions
     // TODO: see if you get the same result with duals as with igehy's formulation
     // it should work, right?
-    f32 dwoDotn_dx = Dot(dwodx, n) + Dot(wo, dndx);
-    f32 dwoDotn_dy = Dot(dwody, n) + Dot(wo, dndy);
-    ray.dxOffset   = wi - dwodx + 2 * Vec3f(Dot(wo, n) * dndx + dwoDotn_dx * n);
-    ray.dyOffset   = wi - dwody + 2 * Vec3f(Dot(wo, n) * dndy + dwoDotn_dy * n);
 
 #endif
 

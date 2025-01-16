@@ -416,7 +416,10 @@ typedef bool MaskF32;
 typedef LaneF32<IntN> MaskF32;
 #endif
 typedef LaneF32<IntN> LaneNF32;
+typedef LaneF32<IntN> Float;
+
 typedef LaneU32<IntN> LaneNU32;
+typedef LaneU32<IntN> UInt;
 template <typename T>
 struct MaskBase;
 

@@ -21,9 +21,9 @@ struct SceneLoadTable
         ScenePrimitives *scene;
         Node *next;
     };
-    Node *nodes;
+
+    std::atomic<Node *> *nodes;
     u32 count;
-    TicketMutex *mutexes;
 };
 
 struct Texture
@@ -43,7 +43,8 @@ struct Texture
     SampledSpectrum EvaluateAlbedo(const Vec3f &color, SampledWavelengths &lambda)
     {
         if (color == Vec3f(0.f)) return SampledSpectrum(0.f);
-        GetDebug()->color = color;
+        Assert(!IsNaN(color[0]) && !IsNaN(color[1]) && !IsNaN(color[2]));
+        // GetDebug()->color = color;
         return RGBAlbedoSpectrum(*RGBColorSpace::sRGB, Clamp(color, Vec3f(0.f), Vec3f(1.f)))
             .Sample(lambda);
     }
@@ -59,8 +60,8 @@ struct PtexTexture : Texture
     f32 EvaluateFloat(SurfaceInteraction &si, SampledWavelengths &lambda,
                       const Vec4f &filterWidths) override
     {
-        f32 result;
-        EvaluateHelper(si, filterWidths, &result);
+        f32 result = 0.f;
+        EvaluateHelper<1>(si, filterWidths, &result);
         return result * scale;
     }
 
@@ -68,19 +69,20 @@ struct PtexTexture : Texture
                                    const Vec4f &filterWidths) override
     {
         Vec3f result = {};
-        EvaluateHelper(si, filterWidths, result.e);
+        EvaluateHelper<3>(si, filterWidths, result.e);
+        Assert(!IsNaN(result[0]) && !IsNaN(result[1]) && !IsNaN(result[2]));
         return Texture::EvaluateAlbedo(result * scale, lambda);
     }
 
+    template <i32 c>
     void EvaluateHelper(SurfaceInteraction &intr, const Vec4f &filterWidths, f32 *result)
     {
         const Vec2f &uv = intr.uv;
         u32 faceIndex   = intr.faceIndices;
 
-        GetDebug()->filename = filename;
+        // GetDebug()->filename = filename;
         Assert(cache);
         Ptex::String error;
-        // TODO: I get the version of ptex I'm using is just broken
         Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
         if (!texture)
         {
@@ -103,20 +105,23 @@ struct PtexTexture : Texture
         Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
 
         i32 nc = texture->numChannels();
+        Assert(nc == c);
 
         // TODO: ray differentials
         // Vec2f uv(0.5f, 0.5f);
 
         f32 out[3] = {};
-        filter->eval(out, 0, nc, faceIndex, uv[0], uv[1], filterWidths[0], filterWidths[1],
+        filter->eval(out, 0, c, faceIndex, uv[0], uv[1], filterWidths[0], filterWidths[1],
                      filterWidths[2], filterWidths[3]);
+
+        Assert(!IsNaN(out[0]) && !IsNaN(out[1]) && !IsNaN(out[2]));
 
         texture->release();
         filter->release();
 
         // Convert to srgb
 
-        if (nc == 1) *result = out[0];
+        if constexpr (c == 1) *result = out[0];
         else
         {
             // if (tex->encoding == ColorEncoding::SRGB)
@@ -133,9 +138,11 @@ struct PtexTexture : Texture
             // }
             // else
             // {
-            out[0] = Pow(out[0], 2.2f);
-            out[1] = Pow(out[1], 2.2f);
-            out[2] = Pow(out[2], 2.2f);
+            out[0] = Pow(Max(out[0], 0.f), 2.2f);
+            out[1] = Pow(Max(out[1], 0.f), 2.2f);
+            out[2] = Pow(Max(out[2], 0.f), 2.2f);
+
+            Assert(!IsNaN(out[0]) && !IsNaN(out[1]) && !IsNaN(out[2]));
 
             result[0] = out[0];
             result[1] = out[1];
@@ -175,8 +182,6 @@ struct ConstantVectorTexture : Texture
     }
 };
 
-// TODO: I don't want to do this long term but I also hate how I have terminally over thought
-// this for no reason
 struct DiffuseMaterial : Material
 {
     Texture *reflectance;
@@ -687,46 +692,41 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                 StringId hash = Hash(includeFile);
                 u32 index     = hash & (table->count - 1);
 
-                u32 id = files.Length();
-                BeginTicketMutex(&table->mutexes[index]);
-                auto *node = &table->nodes[index];
-                while (node->next)
+                u32 id                     = files.Length();
+                SceneLoadTable::Node *head = table->nodes[index].load();
+                for (;;)
                 {
-                    if (node->filename.size && node->filename == includeFile) break;
-                    node = node->next;
-                }
-                if (!node->next)
-                {
-                    Assert(node->filename.size == 0);
-                    node->filename                = PushStr8Copy(arena, includeFile);
-                    ScenePrimitives *includeScene = PushStruct(arena, ScenePrimitives);
-                    node->counter.count           = 1;
-                    node->scene                   = includeScene;
-                    node->next                    = PushStruct(arena, SceneLoadTable::Node);
+                    auto *node = head;
+                    while (node)
+                    {
+                        if (node->filename.size && node->filename == includeFile)
+                        {
+                            files.AddBack() = node->scene;
+                            scheduler.Wait(&node->counter);
+                            break;
+                        }
+                        node = node->next;
+                    }
 
-                    // string dataFilename = PushStr8F(temp.arena, "%S%S.rtdata", directory,
-                    //                                 RemoveFileExtension(node->filename));
-                    files.AddBack() = includeScene;
-                    EndTicketMutex(&table->mutexes[index]);
-                    // TODO: maybe use a better heuristic
-                    // if (OS_GetFileSize(dataFilename) > megabytes(1))
-                    // {
-                    scheduler.Schedule(&counter, [=](u32 jobID) {
-                        LoadRTScene(arenas, state, includeScene, directory, node->filename,
-                                    &node->counter);
-                    });
-                    // }
-                    // else
-                    // {
-                    //     LoadRTScene(arenas, state, includeScene, directory, node->filename,
-                    //                 &node->counter);
-                    // }
-                }
-                else
-                {
-                    EndTicketMutex(&table->mutexes[index]);
-                    files.AddBack() = node->scene;
-                    scheduler.Wait(&node->counter);
+                    u64 pos = ArenaPos(arena);
+
+                    auto *newNode                 = PushStruct(arena, SceneLoadTable::Node);
+                    newNode->filename             = PushStr8Copy(arena, includeFile);
+                    ScenePrimitives *includeScene = PushStruct(arena, ScenePrimitives);
+                    newNode->counter.count        = 1;
+                    newNode->scene                = includeScene;
+                    newNode->next                 = head;
+
+                    if (table->nodes[index].compare_exchange_weak(head, newNode))
+                    {
+                        files.AddBack() = includeScene;
+                        scheduler.Schedule(&counter, [=](u32 jobID) {
+                            LoadRTScene(arenas, state, includeScene, directory,
+                                        newNode->filename, &newNode->counter);
+                        });
+                        break;
+                    }
+                    ArenaPopTo(arena, pos);
                 }
 
                 // Load instances
@@ -822,15 +822,17 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
     OS_UnmapFile(tokenizer.input.str);
     BuildSettings settings;
 
-    if (baseFile && !hasTransforms)
     {
-        Mesh *meshes = (Mesh *)scene->primitives;
-        for (u32 i = 0; i < scene->numPrimitives; i++)
+        if (baseFile && !hasTransforms)
         {
-            Mesh *mesh = &meshes[i];
-            for (u32 v = 0; v < mesh->numVertices; v++)
+            Mesh *meshes = (Mesh *)scene->primitives;
+            for (u32 i = 0; i < scene->numPrimitives; i++)
             {
-                mesh->p[v] = TransformP(*renderFromWorld, mesh->p[v]);
+                Mesh *mesh = &meshes[i];
+                for (u32 v = 0; v < mesh->numVertices; v++)
+                {
+                    mesh->p[v] = TransformP(*renderFromWorld, mesh->p[v]);
+                }
             }
         }
     }
@@ -867,9 +869,9 @@ void LoadScene(Arena **arenas, string directory, string filename, AffineSpace *t
     Arena *arena   = arenas[GetThreadIndex()];
 
     RTSceneLoadState state;
-    state.table.count   = 1024;
-    state.table.nodes   = PushArray(temp.arena, SceneLoadTable::Node, state.table.count);
-    state.table.mutexes = PushArray(temp.arena, TicketMutex, state.table.count);
+    state.table.count = 1024;
+    state.table.nodes =
+        PushArray(temp.arena, std::atomic<SceneLoadTable::Node *>, state.table.count);
 
     Scene *scene = GetScene();
     LoadRTScene(arenas, &state, &scene->scene, directory, filename, 0, t, true);
