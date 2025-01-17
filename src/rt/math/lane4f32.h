@@ -485,6 +485,14 @@ __forceinline Lane4F32 ReduceMinV(const Lane4F32 &l)
 
 __forceinline f32 ReduceMin(const Lane4F32 &l) { return _mm_cvtss_f32(ReduceMinV(l)); }
 
+__forceinline Lane4F32 ReduceMaxV(const Lane4F32 &l)
+{
+    Lane4F32 a = Max(l, Shuffle<1, 0, 3, 2>(l));
+    return Max(a, Shuffle<2, 3, 0, 1>(a));
+}
+
+__forceinline f32 ReduceMax(const Lane4F32 &l) { return _mm_cvtss_f32(ReduceMaxV(l)); }
+
 __forceinline void TruncateToU8(u8 *out, const Lane4F32 &lane)
 {
     u32 result  = TruncateToU8(lane);

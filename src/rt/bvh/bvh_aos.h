@@ -71,7 +71,7 @@ struct Quad8
                      Quad8 *out)
     {
         Assert(scene->numPrimitives == 1);
-        Mesh *mesh = (Mesh *)scene->primitives;
+        Mesh *mesh     = (Mesh *)scene->primitives;
         u32 faceIndexA = faceIndices[0];
         u32 faceIndexB = faceIndices[1];
         u32 faceIndexC = faceIndices[2];
@@ -166,9 +166,9 @@ struct Quad8
     {
         Mesh *primitives = (Mesh *)scene->primitives;
         Mesh *meshes[8]  = {primitives + geomIDs[0], primitives + geomIDs[1],
-                                primitives + geomIDs[2], primitives + geomIDs[3],
-                                primitives + geomIDs[4], primitives + geomIDs[5],
-                                primitives + geomIDs[6], primitives + geomIDs[7]};
+                            primitives + geomIDs[2], primitives + geomIDs[3],
+                            primitives + geomIDs[4], primitives + geomIDs[5],
+                            primitives + geomIDs[6], primitives + geomIDs[7]};
 
         u32 faceIndexA = faceIndices[0];
         u32 faceIndexB = faceIndices[1];
@@ -304,15 +304,15 @@ struct Triangle8
                      const u32 faceIndices[8], Triangle8 *out)
     {
         Mesh *primitives = (Mesh *)scene->primitives;
-        u32 faceIndexA           = faceIndices[0];
-        u32 faceIndexB           = faceIndices[1];
-        u32 faceIndexC           = faceIndices[2];
-        u32 faceIndexD           = faceIndices[3];
+        u32 faceIndexA   = faceIndices[0];
+        u32 faceIndexB   = faceIndices[1];
+        u32 faceIndexC   = faceIndices[2];
+        u32 faceIndexD   = faceIndices[3];
 
         Mesh *meshes[8] = {primitives + geomIDs[0], primitives + geomIDs[1],
-                                   primitives + geomIDs[2], primitives + geomIDs[3],
-                                   primitives + geomIDs[4], primitives + geomIDs[5],
-                                   primitives + geomIDs[6], primitives + geomIDs[7]};
+                           primitives + geomIDs[2], primitives + geomIDs[3],
+                           primitives + geomIDs[4], primitives + geomIDs[5],
+                           primitives + geomIDs[6], primitives + geomIDs[7]};
 
         Lane4F32 v0a =
             Lane4F32::LoadU((float *)(&meshes[0]->p[meshes[0]->indices[faceIndexA * 3]]));
@@ -406,11 +406,11 @@ struct Triangle8
                      Triangle8 *out)
     {
         Assert(scene->numPrimitives == 1);
-        Mesh *mesh = (Mesh *)scene->primitives;
-        u32 faceIndexA     = faceIndices[0];
-        u32 faceIndexB     = faceIndices[1];
-        u32 faceIndexC     = faceIndices[2];
-        u32 faceIndexD     = faceIndices[3];
+        Mesh *mesh     = (Mesh *)scene->primitives;
+        u32 faceIndexA = faceIndices[0];
+        u32 faceIndexB = faceIndices[1];
+        u32 faceIndexC = faceIndices[2];
+        u32 faceIndexD = faceIndices[3];
 
         Lane4F32 v0a = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3]]));
         Lane4F32 v1a = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3 + 1]]));

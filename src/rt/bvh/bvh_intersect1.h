@@ -2,6 +2,7 @@
 #define BVH_INTERSECT1_H
 #include "bvh_types.h"
 #include "../scene.h"
+#include <immintrin.h>
 
 namespace rt
 {
@@ -82,8 +83,8 @@ struct TravRay
     LaneF32<K> tFar;
     TravRay(Ray2 &r)
         : o(Vec3lf<K>(r.o)),
-          invRayD(Vec3lf4(Select(r.d.x == 0, 0, 1 / r.d.x), Select(r.d.y == 0, 0, 1 / r.d.y),
-                          Select(r.d.z == 0, 0, 1 / r.d.z))),
+          invRayD(Vec3lf<K>(Select(r.d.x == 0, 0, 1 / r.d.x), Select(r.d.y == 0, 0, 1 / r.d.y),
+                            Select(r.d.z == 0, 0, 1 / r.d.z))),
           tFar(LaneF32<K>(r.tFar))
     {
     }
@@ -242,11 +243,10 @@ struct BVHTraverser<8, types>
         Lane8F32 t_hgfedcba = Select(mask, tEntry, pos_inf);
         const u32 numNodes  = PopCount(intersectFlags);
 
-        if (numNodes <= 1)
+        if (numNodes == 0) return;
+        else if (numNodes == 1)
         {
-            // If numNodes <= 1, then numNode will be 0, 1, 2, 4, or 8. x/2 - x/8 maps to
-            // 0, 0, 1, 2, 3
-            u32 nodeIndex   = (intersectFlags >> 1) - (intersectFlags >> 3);
+            u32 nodeIndex   = Bsf(intersectFlags);
             stack[stackPtr] = {node->Child(nodeIndex), t_hgfedcba[nodeIndex]};
             stackPtr += numNodes;
         }
@@ -279,10 +279,10 @@ struct BVHTraverser<8, types>
             stack[stackPtr + ((numNodes - 1 - indexC) & 7)] = {node->Child(2), t_hgfedcba[2]};
             stack[stackPtr + ((numNodes - 1 - indexD) & 7)] = {node->Child(3), t_hgfedcba[3]};
 
-            stack[stackPtr + ((numNodes - 1 - indexA) & 7)] = {node->Child(4), t_hgfedcba[4]};
-            stack[stackPtr + ((numNodes - 1 - indexB) & 7)] = {node->Child(5), t_hgfedcba[5]};
-            stack[stackPtr + ((numNodes - 1 - indexC) & 7)] = {node->Child(6), t_hgfedcba[6]};
-            stack[stackPtr + ((numNodes - 1 - indexD) & 7)] = {node->Child(7), t_hgfedcba[7]};
+            stack[stackPtr + ((numNodes - 1 - indexE) & 7)] = {node->Child(4), t_hgfedcba[4]};
+            stack[stackPtr + ((numNodes - 1 - indexF) & 7)] = {node->Child(5), t_hgfedcba[5]};
+            stack[stackPtr + ((numNodes - 1 - indexG) & 7)] = {node->Child(6), t_hgfedcba[6]};
+            stack[stackPtr + ((numNodes - 1 - indexH) & 7)] = {node->Child(7), t_hgfedcba[7]};
 
             stackPtr += numNodes;
         }

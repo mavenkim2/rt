@@ -37,6 +37,7 @@ struct alignas(CACHE_LINE_SIZE) ThreadStatistics
     u64 samplingTime;
 
     u64 misc;
+    u64 misc2;
     f64 miscF;
 };
 

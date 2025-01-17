@@ -775,6 +775,8 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                     mesh.n           = ReadVec3Pointer(&tokenizer, &dataTokenizer, "n ");
                     mesh.numVertices = ReadInt(&tokenizer, "v ");
                     mesh.numFaces    = mesh.numVertices / 4;
+                    threadMemoryStatistics[threadIndex].totalShapeMemory +=
+                        sizeof(Vec3f) * mesh.numVertices * 2;
                     AddMaterial();
                 }
                 else if (Advance(&tokenizer, "Tri "))
@@ -791,6 +793,10 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                     mesh.numFaces =
                         mesh.numIndices ? mesh.numIndices / 3 : mesh.numVertices / 3;
                     AddMaterial();
+
+                    threadMemoryStatistics[threadIndex].totalShapeMemory +=
+                        mesh.numVertices * (sizeof(Vec3f) * 2 + sizeof(Vec2f)) +
+                        mesh.numIndices * sizeof(u32);
                 }
                 else
                 {

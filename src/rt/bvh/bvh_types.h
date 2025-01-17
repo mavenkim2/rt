@@ -6,6 +6,8 @@ static const u32 LANE_WIDTH         = 8;
 static const i32 LANE_WIDTHi        = 8;
 static const u32 GROW_AMOUNT        = 2;         // 1.2f;
 static const u32 PARALLEL_THRESHOLD = 32 * 1024; // 32 * 1024; // 64 * 1024;
+                                                 //
+// #define EXPONENTIAL_QUANTIZE
 
 struct BuildSettings
 {
@@ -296,16 +298,16 @@ void GetBounds(const Node<N> *node, LaneF32<N> *outMin, LaneF32<N> *outMax)
     LaneF32<N> minY(node->minP.y);
     LaneF32<N> minZ(node->minP.z);
 
+#ifdef EXPONENTIAL_QUANTIZE
     LaneF32<N> scaleX = AsFloat(LaneU32<N>(node->scale[0] << 23));
     LaneF32<N> scaleY = AsFloat(LaneU32<N>(node->scale[1] << 23));
     LaneF32<N> scaleZ = AsFloat(LaneU32<N>(node->scale[2] << 23));
+#else
+    LaneF32<N> scaleX = LaneF32<N>(node->scale[0]);
+    LaneF32<N> scaleY = LaneF32<N>(node->scale[1]);
+    LaneF32<N> scaleZ = LaneF32<N>(node->scale[2]);
+#endif
 
-    //     LaneF32<N>::Store(outMinX, minX + LaneF32<N>(lExpandedMinX) * scaleX);
-    //     LaneF32<N>::Store(outMinY, minY + LaneF32<N>(lExpandedMinY) * scaleY);
-    //     LaneF32<N>::Store(outMinZ, minZ + LaneF32<N>(lExpandedMinZ) * scaleZ);
-    //     LaneF32<N>::Store(outMaxX, minX + LaneF32<N>(lExpandedMaxX) * scaleX);
-    //     LaneF32<N>::Store(outMaxY, minY + LaneF32<N>(lExpandedMaxY) * scaleY);
-    //     LaneF32<N>::Store(outMaxZ, minZ + LaneF32<N>(lExpandedMaxZ) * scaleZ);
     outMin[0] = FMA(LaneF32<N>(lExpandedMinX), scaleX, minX);
     outMin[1] = FMA(LaneF32<N>(lExpandedMinY), scaleY, minY);
     outMin[2] = FMA(LaneF32<N>(lExpandedMinZ), scaleZ, minZ);
@@ -427,7 +429,11 @@ struct QuantizedNode
     StaticAssert(N == 4 || N == 8, NMustBe4Or8);
 
     BVHNode<N> children[N];
+#ifdef EXPONENTIAL_QUANTIZE
     u8 scale[3];
+#else
+    Vec3f scale;
+#endif
     u8 meta;
 
     u8 lowerX[N];
@@ -452,7 +458,44 @@ struct QuantizedNode
     {
         ::GetBounds(this, outMin, outMax);
     }
-    // }
+    QuantizedNode<N> GetBaseChildPtr() const
+    {
+        return (QuantizedNode<N> *)(internalOffset & ~(0xf));
+    }
+};
+
+template <i32 N>
+struct QuantizedCompressedNode
+{
+    StaticAssert(N == 4 || N == 8, NMustBe4Or8);
+
+    // BVHNode<N> children[N];
+    BVHNode<N> ptr;
+    u8 scale[3];
+    u8 meta[N / 2];
+
+    u8 lowerX[N];
+    u8 lowerY[N];
+    u8 lowerZ[N];
+
+    // NOTE: upperX = 255 when node is invalid
+    u8 upperX[N];
+    u8 upperY[N];
+    u8 upperZ[N];
+
+    Vec3f minP;
+
+    // NOTE: nodes + leaves
+    u32 GetNumChildren() const { return PopCount(meta); }
+
+    const BVHNode<N> &Child(u32 i) const { return children[i]; }
+
+    u32 GetType(u32 childIndex) const { return children[childIndex].GetType(); }
+
+    void GetBounds(LaneF32<N> *outMin, LaneF32<N> *outMax) const
+    {
+        ::GetBounds(this, outMin, outMax);
+    }
     QuantizedNode<N> GetBaseChildPtr() const
     {
         return (QuantizedNode<N> *)(internalOffset & ~(0xf));
@@ -469,7 +512,11 @@ struct CompressedLeafNode
 {
     StaticAssert(N == 4 || N == 8, NMustBe4Or8);
 
+#ifdef EXPONENTIAL_QUANTIZE
     u8 scale[3];
+#else
+    Vec3f scale;
+#endif
     u8 meta;
 
     u8 offsets[N];

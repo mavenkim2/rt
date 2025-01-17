@@ -839,7 +839,7 @@ __forceinline void TruncateToU8(u8 *out, const Lane8F32 &lane)
     i32 result1 =
         _mm_cvtsi128_si32(_mm_castps_si128(_mm256_extractf128_ps(_mm256_castsi256_ps(m), 1)));
     *(u32 *)out         = result0;
-    *((u32 *)(out) + 4) = result1;
+    *((u32 *)(out) + 1) = result1;
 }
 
 f32 &Set(Lane8F32 &val, u32 index)

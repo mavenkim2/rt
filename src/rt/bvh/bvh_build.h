@@ -5,6 +5,41 @@ namespace rt
 {
 
 template <i32 N>
+Lane4U32 ExponentialQuantize(const Lane4F32 &diff, Vec3lf<N> &scaleVec)
+{
+    const f32 divisor = 1 / 255.f;
+
+    f32 expX = diff[0] == 0.f ? 0.f : Ceil(Log2f(diff[0] * divisor));
+    f32 expY = diff[1] == 0.f ? 0.f : Ceil(Log2f(diff[1] * divisor));
+    f32 expZ = diff[2] == 0.f ? 0.f : Ceil(Log2f(diff[2] * divisor));
+
+    Lane4U32 shift = Flooru(Lane4F32(expX, expY, expZ, 0.f)) + 127;
+
+    Lane4F32 pow = AsFloat(shift << 23);
+
+    scaleVec.x = Shuffle<0>(LaneF32<N>(pow));
+    scaleVec.y = Shuffle<1>(LaneF32<N>(pow));
+    scaleVec.z = Shuffle<2>(LaneF32<N>(pow));
+    return shift;
+}
+
+template <i32 N>
+Vec3f ScalarQuantize(const Lane4F32 &diff, Vec3lf<N> &scaleVec)
+{
+    const f32 divisor = 1 / 255.f;
+
+    f32 scaleX = diff[0] == 0.f ? 0.f : diff[0] * divisor;
+    f32 scaleY = diff[1] == 0.f ? 0.f : diff[1] * divisor;
+    f32 scaleZ = diff[2] == 0.f ? 0.f : diff[2] * divisor;
+
+    scaleVec.x = Shuffle<0>(LaneF32<N>(scaleX));
+    scaleVec.y = Shuffle<1>(LaneF32<N>(scaleY));
+    scaleVec.z = Shuffle<2>(LaneF32<N>(scaleZ));
+
+    return Vec3f(scaleX, scaleY, scaleZ);
+}
+
+template <i32 N>
 struct CreateQuantizedNode
 {
     template <typename Record, typename NodeType>
@@ -25,21 +60,17 @@ struct CreateQuantizedNode
         result->minP        = ToVec3f(boundsMinP);
 
         Lane4F32 diff = boundsMaxP - boundsMinP;
-
-        const f32 divisor = 1 / 255.f;
-
-        f32 expX = diff[0] == 0.f ? 0.f : Ceil(Log2f(diff[0] * divisor));
-        f32 expY = diff[1] == 0.f ? 0.f : Ceil(Log2f(diff[1] * divisor));
-        f32 expZ = diff[2] == 0.f ? 0.f : Ceil(Log2f(diff[2] * divisor));
-
-        Lane4U32 shift = Flooru(Lane4F32(expX, expY, expZ, 0.f)) + 127;
-
-        Lane4F32 pow = AsFloat(shift << 23);
-
-        Vec3lf<N> powVec;
-        powVec.x = Shuffle<0>(LaneF32<N>(pow));
-        powVec.y = Shuffle<1>(LaneF32<N>(pow));
-        powVec.z = Shuffle<2>(LaneF32<N>(pow));
+        Vec3lf<N> scaleVec;
+#ifdef EXPONENTIAL_QUANTIZE
+        Lane4U32 scale = ExponentialQuantize<N>(diff, scaleVec);
+        Assert(scale[0] <= 255 && scale[1] <= 255 && scale[2] <= 255);
+        result->scale[0] = (u8)scale[0];
+        result->scale[1] = (u8)scale[1];
+        result->scale[2] = (u8)scale[2];
+#else
+        Vec3f scale   = ScalarQuantize<N>(diff, scaleVec);
+        result->scale = scale;
+#endif
 
         Assert(numRecords <= N);
         Vec3lf<N> min;
@@ -89,33 +120,28 @@ struct CreateQuantizedNode
         nodeMin.y = Shuffle<1>(LaneF32<N>(boundsMinP));
         nodeMin.z = Shuffle<2>(LaneF32<N>(boundsMinP));
 
-        Vec3lf<N> qNodeMin = Floor((min - nodeMin) / powVec);
-        Vec3lf<N> qNodeMax = Ceil((max - nodeMin) / powVec);
+        Vec3lf<N> qNodeMin = Floor((min - nodeMin) / scaleVec);
+        Vec3lf<N> qNodeMax = Ceil((max - nodeMin) / scaleVec);
 
-        LaneF32<N> maskMinX = FMA(powVec.x, qNodeMin.x, nodeMin.x) > min.x;
+        LaneF32<N> maskMinX = FMA(scaleVec.x, qNodeMin.x, nodeMin.x) > min.x;
         TruncateToU8(result->lowerX,
                      Max(Select(maskMinX, qNodeMin.x - 1, qNodeMin.x), MIN_QUAN));
-        LaneF32<N> maskMinY = FMA(powVec.y, qNodeMin.y, nodeMin.y) > min.y;
+        LaneF32<N> maskMinY = FMA(scaleVec.y, qNodeMin.y, nodeMin.y) > min.y;
         TruncateToU8(result->lowerY,
                      Max(Select(maskMinY, qNodeMin.y - 1, qNodeMin.y), MIN_QUAN));
-        LaneF32<N> maskMinZ = FMA(powVec.z, qNodeMin.z, nodeMin.z) > min.z;
+        LaneF32<N> maskMinZ = FMA(scaleVec.z, qNodeMin.z, nodeMin.z) > min.z;
         TruncateToU8(result->lowerZ,
                      Max(Select(maskMinZ, qNodeMin.z - 1, qNodeMin.z), MIN_QUAN));
 
-        LaneF32<N> maskMaxX = FMA(powVec.x, qNodeMax.x, nodeMin.x) < max.x;
+        LaneF32<N> maskMaxX = FMA(scaleVec.x, qNodeMax.x, nodeMin.x) < max.x;
         TruncateToU8(result->upperX,
                      Min(Select(maskMaxX, qNodeMax.x + 1, qNodeMax.x), MAX_QUAN));
-        LaneF32<N> maskMaxY = FMA(powVec.y, qNodeMax.y, nodeMin.y) < max.y;
+        LaneF32<N> maskMaxY = FMA(scaleVec.y, qNodeMax.y, nodeMin.y) < max.y;
         TruncateToU8(result->upperY,
                      Min(Select(maskMaxY, qNodeMax.y + 1, qNodeMax.y), MAX_QUAN));
-        LaneF32<N> maskMaxZ = FMA(powVec.z, qNodeMax.z, nodeMin.z) < max.z;
+        LaneF32<N> maskMaxZ = FMA(scaleVec.z, qNodeMax.z, nodeMin.z) < max.z;
         TruncateToU8(result->upperZ,
                      Min(Select(maskMaxZ, qNodeMax.z + 1, qNodeMax.z), MAX_QUAN));
-
-        Assert(shift[0] <= 255 && shift[1] <= 255 && shift[2] <= 255);
-        result->scale[0] = (u8)shift[0];
-        result->scale[1] = (u8)shift[1];
-        result->scale[2] = (u8)shift[2];
     }
 };
 
@@ -316,6 +342,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(const BuildSettings &settings
         childRecords[bestChild] = out;
     }
 
+    // BVHNode<N> childNodes[N];
     BVHNode<N> childNodes[N];
 
     if (parallel)
@@ -333,7 +360,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(const BuildSettings &settings
         }
     }
 
-    threadLocalStatistics[GetThreadIndex()].misc += 1;
+    // current memory: 4 pointers and the
 
     Arena *currentArena = arenas[GetThreadIndex()];
     if constexpr (HasCompressedNode)
@@ -352,6 +379,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(const BuildSettings &settings
         // Create a compressed leaf
         if (leafCount == numChildren)
         {
+            threadLocalStatistics[GetThreadIndex()].misc += 1;
             u32 offset = 0;
             u8 *bytes  = PushArrayNoZeroTagged(
                 currentArena, u8, sizeof(CompressedNodeType) + sizeof(LeafType) * primTotal,
@@ -404,6 +432,8 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(const BuildSettings &settings
             childNodes[i] = BVHNode<N>::EncodeLeaf(primIDs, numPrims);
         }
     }
+    threadLocalStatistics[GetThreadIndex()].misc2 += 1;
+
     NodeType *node = PushStructNoZeroTagged(currentArena, NodeType, MemoryType_BVH);
     Assert(currentArena->current->align == 16);
     f.createNode(childRecords, numChildren, node);
@@ -483,13 +513,8 @@ __forceinline BVHNodeN BuildQuantizedTriSBVH(BuildSettings settings, Arena **inA
                                              const ScenePrimitives *scene, PrimRef *refs,
                                              RecordAOSSplits &record)
 {
-#if defined(USE_BVH4)
-    return BuildQuantizedSBVH<4, 8, GeometryType::TriangleMesh>(settings, inArenas, scene,
-                                                                refs, record);
-#elif defined(USE_BVH8)
-    return BuildQuantizedSBVH<8, 8, GeometryType::TriangleMesh>(settings, inArenas, scene,
-                                                                refs, record);
-#endif
+    return BuildQuantizedSBVH<DefaultN, 8, GeometryType::TriangleMesh>(settings, inArenas,
+                                                                       scene, refs, record);
 }
 
 template <typename PrimRef>
@@ -497,13 +522,8 @@ __forceinline BVHNodeN BuildQuantizedQuadSBVH(BuildSettings settings, Arena **in
                                               const ScenePrimitives *scene, PrimRef *refs,
                                               RecordAOSSplits &record)
 {
-#if defined(USE_BVH4)
-    return BuildQuantizedSBVH<4, 8, GeometryType::QuadMesh>(settings, inArenas, scene, refs,
-                                                            record);
-#elif defined(USE_BVH8)
-    return BuildQuantizedSBVH<8, 8, GeometryType::QuadMesh>(settings, inArenas, scene, refs,
-                                                            record);
-#endif
+    return BuildQuantizedSBVH<DefaultN, 8, GeometryType::QuadMesh>(settings, inArenas, scene,
+                                                                   refs, record);
 }
 
 template <GeometryType type, typename PrimRef>
@@ -511,11 +531,7 @@ __forceinline BVHNodeN BuildQuantizedSBVH(BuildSettings settings, Arena **inAren
                                           const ScenePrimitives *scene, PrimRef *refs,
                                           RecordAOSSplits &record)
 {
-#if defined(USE_BVH4)
-    return BuildQuantizedSBVH<4, 8, type>(settings, inArenas, scene, refs, record);
-#elif defined(USE_BVH8)
-    return BuildQuantizedSBVH<8, 8, type>(settings, inArenas, scene, refs, record);
-#endif
+    return BuildQuantizedSBVH<DefaultN, 8, type>(settings, inArenas, scene, refs, record);
 }
 
 template <i32 N>

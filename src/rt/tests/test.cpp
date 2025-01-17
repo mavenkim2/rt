@@ -881,13 +881,25 @@ void TestRender(Arena *arena, Options *options = 0)
 
     f32 time = OS_GetMilliseconds(counter);
     printf("setup time: %fms\n", time);
-    f64 totalMiscTime = 0;
+    f64 totalMiscTime            = 0;
+    u64 totalCompressedNodeCount = 0;
+    u64 totalNodeCount           = 0;
+    u64 totalBVHMemory           = 0;
+    u64 totalShapeMemory         = 0;
     for (u32 i = 0; i < numProcessors; i++)
     {
         totalMiscTime += threadLocalStatistics[i].miscF;
+        totalCompressedNodeCount += threadLocalStatistics[i].misc;
+        totalNodeCount += threadLocalStatistics[i].misc2;
+        totalBVHMemory += threadMemoryStatistics[i].totalBVHMemory;
+        totalShapeMemory += threadMemoryStatistics[i].totalShapeMemory;
         printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
     }
     printf("total misc time: %fms \n", totalMiscTime);
+    printf("total c node#: %llu \n", totalCompressedNodeCount);
+    printf("total node#: %llu \n", totalNodeCount);
+    printf("total bvh bytes: %llu \n", totalBVHMemory);
+    printf("total shape bytes: %llu \n", totalShapeMemory);
 
     RenderParams2 params;
     params.cameraFromRaster = cameraFromRaster;
