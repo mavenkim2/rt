@@ -23,6 +23,7 @@
 #include "lights.h"
 #include "scene.h"
 #include "scene_load.h"
+#include "simd_integrate.h"
 // #include "bvh.h"
 #include "bxdf.h"
 #include "bsdf.h"
@@ -50,6 +51,7 @@
 
 #include "lights.cpp"
 #include "integrate.cpp"
+#include "simd_integrate.cpp"
 
 #include "tests/test.cpp"
 #include "tests/sampling_test.cpp"

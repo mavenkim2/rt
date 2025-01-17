@@ -649,6 +649,12 @@ struct ChunkedLinkedList
     }
     inline void Push(const T &val) { AddBack() = val; }
     inline void Push(const T &&val) { AddBack() = std::move(val); }
+
+    inline T Pop()
+    {
+        Assert(last && last->count);
+        return last->values[--last->count];
+    }
     inline const T &Last() const { return last->values[last->count - 1]; }
     inline T &Last() { return last->values[last->count - 1]; }
 

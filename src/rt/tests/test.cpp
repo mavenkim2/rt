@@ -922,7 +922,14 @@ void TestRender(Arena *arena, Options *options = 0)
     }
 
     counter = OS_StartCounter();
+#if 0
     Render(arena, params);
+#else
+    // shadingQueues[(u32)MaterialTypes::Diffuse].handler =
+    // ShadingQueueHandler<DiffuseMaterial>;
+
+    // RenderSIMD(arena, params);
+#endif
     time = OS_GetMilliseconds(counter);
     printf("total render time: %fms\n", time);
 }

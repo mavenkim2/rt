@@ -125,5 +125,31 @@ struct LightHandle
     u32 GetIndex() const { return data & 0x0fffffff; }
     __forceinline operator bool() { return data != 0xffffffff; }
 };
+
+enum class MaterialTypes
+{
+    Interface,
+    Diffuse,
+    DiffuseTransmission,
+    CoatedDiffuse,
+    Dielectric,
+    Max,
+};
+
+struct MaterialHandle
+{
+    static_assert((u32)MaterialTypes::Max < 16, "too many material types");
+    u32 data;
+    MaterialHandle() : data(0xffffffff) {}
+    explicit MaterialHandle(u32 a) : data(a) {}
+    MaterialHandle(MaterialTypes type, u32 index)
+    {
+        data = ((u32)type << 28) | (index & 0x0fffffff);
+    }
+    MaterialTypes GetType() const { return MaterialTypes(data >> 28); }
+    u32 GetIndex() const { return data & 0x0fffffff; }
+    __forceinline operator bool() { return data != 0xffffffff; }
+};
+
 } // namespace rt
 #endif

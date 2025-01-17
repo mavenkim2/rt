@@ -530,10 +530,10 @@ struct PrimitiveIndices
     // TODO: these are actaully ids (type + index)
     LightHandle lightID;
     // u32 volumeIndex;
-    u32 materialIndex;
+    MaterialHandle materialID;
     PrimitiveIndices() {}
-    PrimitiveIndices(LightHandle lightID, u32 materialIndex)
-        : lightID(lightID), materialIndex(materialIndex)
+    PrimitiveIndices(LightHandle lightID, MaterialHandle materialID)
+        : lightID(lightID), materialID(materialID)
     {
     }
 };

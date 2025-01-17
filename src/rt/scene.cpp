@@ -321,7 +321,7 @@ struct CoatedDiffuseMaterial : Material
 struct MaterialNode
 {
     string str;
-    u32 index;
+    MaterialHandle handle;
 
     u32 Hash() const { return rt::Hash(str); }
     bool operator==(const MaterialNode &m) const { return str == m.str; }
@@ -461,9 +461,6 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
         Assert(advanceResult);
         string materialName = ReadWord(tokenizer);
 
-        // Add to hash table
-        table->Add(tempArena, MaterialNode{materialName, materialsList.totalCount});
-
         SkipToNextChar(tokenizer);
 
         // Get the type of material
@@ -477,6 +474,11 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
                 break;
             }
         }
+        // Add to hash table
+        table->Add(tempArena,
+                   MaterialNode{materialName,
+                                MaterialHandle(materialTypeIndex, materialsList.totalCount)});
+
         SkipToNextChar(tokenizer);
         Assert(materialTypeIndex != MaterialTypes::Max);
 
@@ -761,7 +763,7 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                     Assert(materialHashMap);
                     string materialName      = ReadWord(&tokenizer);
                     const MaterialNode *node = materialHashMap->Get(materialName);
-                    ids                      = PrimitiveIndices(LightHandle(), node->index);
+                    ids                      = PrimitiveIndices(LightHandle(), node->handle);
                 }
             };
 

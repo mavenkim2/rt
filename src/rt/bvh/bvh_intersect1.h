@@ -592,7 +592,7 @@ static void SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
     si.uv           = u * uv[1] + v * uv[2] + w * uv[0];
     Assert(geomID < scene->numPrimitives);
     const PrimitiveIndices *indices = scene->primIndices + geomID;
-    si.materialIDs                  = indices->materialIndex;
+    si.materialIDs                  = indices->materialID.data;
 
     // TODO: properly obtain the light handle
     si.lightIndices = 0;

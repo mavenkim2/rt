@@ -683,5 +683,73 @@ __forceinline void Transpose(const Lane4F32 lanes[N], Vec3lf<N> &out)
     else Assert(0);
 }
 
+f32 PowerHeuristic(u32 numA, f32 pdfA, u32 numB, f32 pdfB);
+void DefocusBlur(const Vec3f &dIn, const Vec2f &pLens, const f32 focalLength, Vec3f &o,
+                 Vec3f &d);
+Vec3f IntersectRayPlane(const Vec3f &planeN, const Vec3f &planeP, const Vec3f &rayP,
+                        const Vec3f &rayD);
+
+struct CameraDifferentials
+{
+    Vec3f minPosX;
+    Vec3f minPosY;
+    Vec3f minDirX;
+    Vec3f minDirY;
+
+    CameraDifferentials()
+        : minPosX(pos_inf), minPosY(pos_inf), minDirX(pos_inf), minDirY(pos_inf)
+    {
+    }
+
+    void Merge(const CameraDifferentials &other)
+    {
+        minPosX = Min(minPosX, other.minPosX);
+        minPosY = Min(minPosY, other.minPosY);
+        minDirX = Min(minDirX, other.minDirX);
+        minDirY = Min(minDirY, other.minDirY);
+    }
+};
+
+struct Camera
+{
+    Mat4 cameraFromRaster;
+    Mat4 renderFromCamera;
+    Vec3f dxCamera;
+    Vec3f dyCamera;
+    f32 focalLength;
+    f32 lensRadius;
+
+    CameraDifferentials diff;
+    f32 sppScale;
+
+    Camera() {}
+    Camera(const Mat4 &cameraFromRaster, const Mat4 &renderFromCamera, const Vec3f &dxCamera,
+           const Vec3f &dyCamera, f32 focalLength, f32 lensRadius, u32 spp)
+        : cameraFromRaster(cameraFromRaster), renderFromCamera(renderFromCamera),
+          dxCamera(dxCamera), dyCamera(dyCamera), focalLength(focalLength),
+          lensRadius(lensRadius)
+    {
+        sppScale = Max(.125f, 1.f / Sqrt((f32)spp));
+    }
+
+    Ray2 GenerateRayDifferentials(const Vec2f &pFilm, Vec2f pLens)
+    {
+        Vec3f pCamera = TransformP(cameraFromRaster, Vec3f(pFilm, 0.f));
+        Ray2 ray(Vec3f(0.f, 0.f, 0.f), Normalize(pCamera), pos_inf);
+        if (lensRadius > 0.f)
+        {
+            pLens = lensRadius * SampleUniformDiskConcentric(pLens);
+
+            DefocusBlur(ray.d, pLens, focalLength, ray.o, ray.d);
+            DefocusBlur(Normalize(pCamera + dxCamera), pLens, focalLength, ray.pxOffset,
+                        ray.dxOffset);
+            DefocusBlur(Normalize(pCamera + dyCamera), pLens, focalLength, ray.pyOffset,
+                        ray.dyOffset);
+        }
+        ray = Transform(renderFromCamera, ray);
+        return ray;
+    }
+};
+
 } // namespace rt
 #endif

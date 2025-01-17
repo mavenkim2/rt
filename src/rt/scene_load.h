@@ -20,16 +20,6 @@ enum class DataType
     Spectrum,
 };
 
-enum class MaterialTypes
-{
-    Interface,
-    Diffuse,
-    DiffuseTransmission,
-    CoatedDiffuse,
-    Dielectric,
-    Max,
-};
-
 MaterialTypes ConvertStringToMaterialType(string type)
 {
     if (type == "diffuse") return MaterialTypes::Diffuse;

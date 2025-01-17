@@ -13,19 +13,18 @@ namespace rt
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
 // - remove duplicate materials and geometry
 
+// - bdpt, metropolis, vcm, upbp, mcm?
 // - volumetric rendering
 //      - ratio tracking, residual ratio tracking, delta tracking <-- done but untested
 //      - virtual density segments?
 // - disney bsdf
 // - multiple scattering
-// - vcm
-// - adaptive sampling
+// - adaptive sampling + path splitting
 // - equiangular sampling
 // - manifold next event estimation
 // - wave optics :D
-// - bdpt, metropolis, upbp, mcm?
+// - cache points
 //
-// maybe unreasonable:
 // - memory mapped files for treelets??? (i.e. single level massive bvh)
 // - covariance tracing
 // - actual displacement mapping (instead of bump mapping)
@@ -33,6 +32,8 @@ namespace rt
 // - path guiding
 // - non exponential free flight
 // - photon planes & volumes
+
+// - what is zero variance theory? half space light transport? dwivedi sampling?
 
 //////////////////////////////
 // Textures and materials
@@ -240,120 +241,14 @@ Vec3f IntersectRayPlane(const Vec3f &planeN, const Vec3f &planeP, const Vec3f &r
     return p;
 }
 
-struct CameraDifferentials
-{
-    Vec3f minPosX;
-    Vec3f minPosY;
-    Vec3f minDirX;
-    Vec3f minDirY;
-
-    CameraDifferentials()
-        : minPosX(pos_inf), minPosY(pos_inf), minDirX(pos_inf), minDirY(pos_inf)
-    {
-    }
-
-    void Merge(const CameraDifferentials &other)
-    {
-        minPosX = Min(minPosX, other.minPosX);
-        minPosY = Min(minPosY, other.minPosY);
-        minDirX = Min(minDirX, other.minDirX);
-        minDirY = Min(minDirY, other.minDirY);
-    }
-};
-
-struct Camera
-{
-    Mat4 cameraFromRaster;
-    Mat4 renderFromCamera;
-    Vec3f dxCamera;
-    Vec3f dyCamera;
-    f32 focalLength;
-    f32 lensRadius;
-
-    CameraDifferentials diff;
-    f32 sppScale;
-
-    Camera() {}
-    Camera(const Mat4 &cameraFromRaster, const Mat4 &renderFromCamera, const Vec3f &dxCamera,
-           const Vec3f &dyCamera, f32 focalLength, f32 lensRadius, u32 spp)
-        : cameraFromRaster(cameraFromRaster), renderFromCamera(renderFromCamera),
-          dxCamera(dxCamera), dyCamera(dyCamera), focalLength(focalLength),
-          lensRadius(lensRadius)
-    {
-        sppScale = Max(.125f, 1.f / Sqrt((f32)spp));
-    }
-
-    Ray2 GenerateRayDifferentials(const Vec2f &pFilm, Vec2f pLens)
-    {
-        Vec3f pCamera = TransformP(cameraFromRaster, Vec3f(pFilm, 0.f));
-        Ray2 ray(Vec3f(0.f, 0.f, 0.f), Normalize(pCamera), pos_inf);
-        if (lensRadius > 0.f)
-        {
-            pLens = lensRadius * SampleUniformDiskConcentric(pLens);
-
-            DefocusBlur(ray.d, pLens, focalLength, ray.o, ray.d);
-            DefocusBlur(Normalize(pCamera + dxCamera), pLens, focalLength, ray.pxOffset,
-                        ray.dxOffset);
-            DefocusBlur(Normalize(pCamera + dyCamera), pLens, focalLength, ray.pyOffset,
-                        ray.dyOffset);
-        }
-        ray = Transform(renderFromCamera, ray);
-        return ray;
-    }
-};
-
 template <typename Sampler>
 SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
                    SampledWavelengths &lambda);
 
-void Render(Arena *arena, RenderParams2 &params)
+void GenerateMinimumDifferentials(Camera &camera, RenderParams2 &params, u32 width, u32 height,
+                                  u32 taskCount, u32 tileCountX, u32 tileWidth, u32 tileHeight,
+                                  u32 pixelWidth, u32 pixelHeight)
 {
-    u32 width              = params.width;
-    u32 height             = params.height;
-    u32 spp                = params.spp;
-    Vec2f &filterRadius    = params.filterRadius;
-    Mat4 &cameraFromRaster = params.cameraFromRaster;
-    Mat4 &renderFromCamera = params.renderFromCamera;
-    u32 maxDepth           = params.maxDepth;
-    f32 lensRadius         = params.lensRadius;
-    f32 focalLength        = params.focalLength;
-    f32 maxComponentValue  = 10.f;
-
-    // parallel for over tiles
-    u32 pixelWidth  = width;
-    u32 pixelHeight = height;
-    if (params.pixelMin != params.pixelMax)
-    {
-        params.pixelMax = Min(params.pixelMax, Vec2u(width, height));
-        params.pixelMin = Min(params.pixelMin, Vec2u(width, height));
-        Assert(params.pixelMax[0] > params.pixelMin[0]);
-        Assert(params.pixelMax[1] > params.pixelMin[1]);
-        pixelWidth  = params.pixelMax[0] - params.pixelMin[0];
-        pixelHeight = params.pixelMax[1] - params.pixelMin[1];
-    }
-    u32 tileWidth  = 64;
-    u32 tileHeight = 64;
-    u32 tileCountX = (pixelWidth + tileWidth - 1) / tileWidth;
-    u32 tileCountY = (pixelHeight + tileHeight - 1) / tileHeight;
-    u32 taskCount  = tileCountX * tileCountY;
-
-    // TODO: instead of adding all tasks at once, add them to the thread queue
-    // once the # queued is under a certain threshold (to save space)
-    Image image;
-    image.width         = width;
-    image.height        = height;
-    image.bytesPerPixel = sizeof(u32);
-    image.contents      = PushArrayNoZero(arena, u8, GetImageSize(&image));
-
-    std::atomic<u32> numTiles = 0;
-
-    // Camera differentials
-    Vec3f dxCamera = TransformV(cameraFromRaster, Vec3f(1.f, 0.f, 0.f));
-    Vec3f dyCamera = TransformV(cameraFromRaster, Vec3f(0.f, 1.f, 0.f));
-
-    Camera camera(cameraFromRaster, renderFromCamera, dxCamera, dyCamera, focalLength,
-                  lensRadius, spp);
-
     ParallelReduce(
         &camera.diff, 0, taskCount, 1,
         [&](CameraDifferentials &camDiffs, u32 jobID, u32 start, u32 count) {
@@ -410,10 +305,79 @@ void Render(Arena *arena, RenderParams2 &params)
             }
         },
         [&](CameraDifferentials &l, const CameraDifferentials &r) { l.Merge(r); });
+}
+
+Vec3f ConvertRadianceToRGB(const SampledSpectrum &Lin, const SampledWavelengths &lambda,
+                           u32 maxComponentValue = 10)
+{
+    SampledSpectrum L = SafeDiv(Lin, lambda.PDF());
+    f32 r             = (Spectra::X().Sample(lambda) * L).Average();
+    f32 g             = (Spectra::Y().Sample(lambda) * L).Average();
+    f32 b             = (Spectra::Z().Sample(lambda) * L).Average();
+    f32 m             = Max(r, Max(g, b));
+    Vec3f sampleRgb   = Vec3f(r, g, b);
+    if (m > maxComponentValue)
+    {
+        sampleRgb *= maxComponentValue / m;
+    }
+    return sampleRgb;
+}
+
+void Render(Arena *arena, RenderParams2 &params)
+{
+    u32 width              = params.width;
+    u32 height             = params.height;
+    u32 spp                = params.spp;
+    Vec2f &filterRadius    = params.filterRadius;
+    Mat4 &cameraFromRaster = params.cameraFromRaster;
+    Mat4 &renderFromCamera = params.renderFromCamera;
+    u32 maxDepth           = params.maxDepth;
+    f32 lensRadius         = params.lensRadius;
+    f32 focalLength        = params.focalLength;
+    f32 maxComponentValue  = 10.f;
+
+    // parallel for over tiles
+    u32 pixelWidth  = width;
+    u32 pixelHeight = height;
+    if (params.pixelMin != params.pixelMax)
+    {
+        params.pixelMax = Min(params.pixelMax, Vec2u(width, height));
+        params.pixelMin = Min(params.pixelMin, Vec2u(width, height));
+        Assert(params.pixelMax[0] > params.pixelMin[0]);
+        Assert(params.pixelMax[1] > params.pixelMin[1]);
+        pixelWidth  = params.pixelMax[0] - params.pixelMin[0];
+        pixelHeight = params.pixelMax[1] - params.pixelMin[1];
+    }
+    u32 tileWidth  = 64;
+    u32 tileHeight = 64;
+    u32 tileCountX = (pixelWidth + tileWidth - 1) / tileWidth;
+    u32 tileCountY = (pixelHeight + tileHeight - 1) / tileHeight;
+    u32 taskCount  = tileCountX * tileCountY;
+
+    // TODO: instead of adding all tasks at once, add them to the thread queue
+    // once the # queued is under a certain threshold (to save space)
+    Image image;
+    image.width         = width;
+    image.height        = height;
+    image.bytesPerPixel = sizeof(u32);
+    image.contents      = PushArrayNoZero(arena, u8, GetImageSize(&image));
+
+    std::atomic<u32> numTiles = 0;
+
+    // Camera differentials
+    Vec3f dxCamera = TransformV(cameraFromRaster, Vec3f(1.f, 0.f, 0.f));
+    Vec3f dyCamera = TransformV(cameraFromRaster, Vec3f(0.f, 1.f, 0.f));
+
+    Camera camera(cameraFromRaster, renderFromCamera, dxCamera, dyCamera, focalLength,
+                  lensRadius, spp);
+
+    GenerateMinimumDifferentials(camera, params, width, height, taskCount, tileCountX,
+                                 tileWidth, tileHeight, pixelWidth, pixelHeight);
 
     scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
-        u32 tileX = jobID % tileCountX;
-        u32 tileY = jobID / tileCountX;
+        ShadingThreadState *shadingThreadState = GetShadingThreadState();
+        u32 tileX                              = jobID % tileCountX;
+        u32 tileY                              = jobID / tileCountX;
         Vec2u minPixelBounds(params.pixelMin[0] + tileWidth * tileX,
                              params.pixelMin[1] + tileHeight * tileY);
         Vec2u maxPixelBounds(
@@ -455,20 +419,12 @@ void Render(Arena *arena, RenderParams2 &params)
                     // ray.spread = Max(temp[0], temp[1]);
                     // printf("%f spread\n", ray.spread);
                     f32 cameraWeight = 1.f;
+
                     SampledSpectrum L =
                         cameraWeight * Li(ray, camera, sampler, maxDepth, lambda);
+
+                    rgb += ConvertRadianceToRGB(L, lambda);
                     // convert radiance to rgb, add and divide
-                    L               = SafeDiv(L, lambda.PDF());
-                    f32 r           = (Spectra::X().Sample(lambda) * L).Average();
-                    f32 g           = (Spectra::Y().Sample(lambda) * L).Average();
-                    f32 b           = (Spectra::Z().Sample(lambda) * L).Average();
-                    f32 m           = Max(r, Max(g, b));
-                    Vec3f sampleRgb = Vec3f(r, g, b);
-                    if (m > maxComponentValue)
-                    {
-                        sampleRgb *= maxComponentValue / m;
-                    }
-                    rgb += sampleRgb;
                 }
                 // TODO: filter importance sampling
                 rgb /= f32(spp);
@@ -543,6 +499,119 @@ bool Intersect(Scene *scene, Ray2 &ray, SurfaceInteraction &si)
 {
     Assert(scene->scene.intersectFunc);
     return scene->scene.intersectFunc(&scene->scene, scene->scene.nodePtr, ray, si);
+}
+
+void CalculateFilterWidths(const Ray2 &ray, const Camera &camera, const Vec3f &p,
+                           const Vec3f &n, const Vec3f &dpdu, const Vec3f &dpdv, Vec3f &dpdx,
+                           Vec3f &dpdy, f32 &dudx, f32 &dvdx, f32 &dudy, f32 &dvdy)
+{
+    if (ray.pxOffset != Vec3f(pos_inf))
+    {
+        Vec3f px = IntersectRayPlane(n, p, ray.pxOffset, ray.dxOffset);
+        Vec3f py = IntersectRayPlane(n, p, ray.pyOffset, ray.dyOffset);
+
+        dpdx = px - p;
+        dpdy = py - p;
+    }
+    else
+    {
+        // Estimate ray differentials from camera
+        Vec3f px =
+            IntersectRayPlane(n, p, ray.o + camera.diff.minPosX, ray.d + camera.diff.minDirX);
+        Vec3f py =
+            IntersectRayPlane(n, p, ray.o + camera.diff.minPosY, ray.d + camera.diff.minDirY);
+
+        dpdx = camera.sppScale * (px - p);
+        dpdy = camera.sppScale * (py - p);
+    }
+
+    // Solve overdetermined linear system
+    // dpdx = dpdu * dudx
+    // dpdx = dpdv * dvdx
+    // Solve using linear least squares
+    // (At * A)^-1 * At * b = x
+    f32 ata00  = Dot(dpdu, dpdu);
+    f32 ata01  = Dot(dpdu, dpdv);
+    f32 ata11  = Dot(dpdv, dpdv);
+    f32 det    = FMS(ata00, ata11, Sqr(ata01));
+    f32 invDet = det == 0.f ? 0.f : 1.f / det;
+
+    f32 atb0x = Dot(dpdu, dpdx);
+    f32 atb1x = Dot(dpdv, dpdx);
+    f32 atb0y = Dot(dpdu, dpdy);
+    f32 atb1y = Dot(dpdv, dpdy);
+
+    // dudx = invDet * (ata11 * atb0x - atb1x * ata01);
+    dudx = Clamp(invDet * FMS(ata11, atb0x, ata01 * atb1x), -1e8f, 1e8f);
+    dvdx = Clamp(invDet * FMS(ata00, atb1x, ata01 * atb0x), -1e8f, 1e8f);
+
+    // dvdx =invDet * (-ata01 * atb0x + ata00 * atb1x)
+    dudy = Clamp(invDet * FMS(ata11, atb0y, ata01 * atb1y), -1e8f, 1e8f);
+    dvdy = Clamp(invDet * FMS(ata00, atb1y, ata01 * atb0y), -1e8f, 1e8f);
+}
+
+__forceinline void UpdateRayDifferentials(Ray2 &ray, const Vec3f &wi, const Vec3f &p, Vec3f n,
+                                          const Vec3f &dndu, const Vec3f &dndv,
+                                          const Vec3f &dpdx, const Vec3f &dpdy, const f32 dudx,
+                                          const f32 dvdx, const f32 dudy, const f32 dvdy,
+                                          f32 eta, u32 flags)
+{
+    if (ray.pxOffset != Vec3f(pos_inf))
+    {
+        Vec3f dndx = dndu * dudx + dndv * dvdx;
+        Vec3f dndy = dndu * dudy + dndv * dvdy;
+
+        Vec3f wo = -ray.d;
+
+        Vec3f dwodx = -ray.dxOffset - wo;
+        Vec3f dwody = -ray.dyOffset - wo;
+
+        if (flags == (u32)BxDFFlags::SpecularReflection)
+        {
+            // Initialize origins of specular differential rays
+            ray.pxOffset = p + dpdx;
+            ray.pyOffset = p + dpdy;
+
+            // Compute differential reflected directions
+            f32 dwoDotn_dx = Dot(dwodx, n) + Dot(wo, dndx);
+            f32 dwoDotn_dy = Dot(dwody, n) + Dot(wo, dndy);
+            ray.dxOffset   = wi - dwodx + 2 * Vec3f(Dot(wo, n) * dndx + dwoDotn_dx * n);
+            ray.dyOffset   = wi - dwody + 2 * Vec3f(Dot(wo, n) * dndy + dwoDotn_dy * n);
+        }
+        else if (flags == (u32)BxDFFlags::SpecularTransmission)
+        {
+            // Initialize origins of specular differential rays
+            ray.pxOffset = p + dpdx;
+            ray.pyOffset = p + dpdy;
+
+            // Compute differential transmitted directions
+            // Find oriented surface normal for transmission
+            if (Dot(wo, n) < 0)
+            {
+                n    = -n;
+                dndx = -dndx;
+                dndy = -dndy;
+            }
+
+            // Compute partial derivatives of $\mu$
+            f32 dwoDotn_dx = Dot(dwodx, n) + Dot(wo, dndx);
+            f32 dwoDotn_dy = Dot(dwody, n) + Dot(wo, dndy);
+            f32 mu         = Dot(wo, n) / eta - AbsDot(wi, n);
+            f32 dmudx      = dwoDotn_dx * (1 / eta + 1 / Sqr(eta) * Dot(wo, n) / Dot(wi, n));
+            f32 dmudy      = dwoDotn_dy * (1 / eta + 1 / Sqr(eta) * Dot(wo, n) / Dot(wi, n));
+
+            ray.dxOffset = wi - eta * dwodx + mu * dndx + dmudx * n;
+            ray.dyOffset = wi - eta * dwody + mu * dndy + dmudy * n;
+        }
+        else
+        {
+            ray.pxOffset = Vec3f(pos_inf);
+        }
+        // Squash potentially troublesome differentials
+        if (LengthSquared(ray.pxOffset) > 1e16f || LengthSquared(ray.pyOffset) > 1e16f ||
+            LengthSquared(ray.dxOffset) > 1e16f || LengthSquared(ray.dyOffset) > 1e16f)
+            ray.pxOffset = Vec3f(pos_inf);
+    }
 }
 
 template <typename Sampler>
@@ -649,56 +718,13 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
 
         f32 dudx, dudy, dvdx, dvdy = 0.f;
         Vec3f dpdx, dpdy;
+        CalculateFilterWidths(ray, camera, si.p, si.n, si.dpdu, si.dpdv, dpdx, dpdy, dudx,
+                              dudy, dvdx, dvdy);
         // f32 newRadius = ray.radius + ray.spread * si.tHit;
 
         // Calculate differential of surface parameterization w.r.t image plane (i.e.
         // dudx, dudy, dvdx, dvdy)
         // TODO: is it wrong to do this with the shading normal?
-        {
-            if (ray.pxOffset != Vec3f(pos_inf))
-            {
-                Vec3f px = IntersectRayPlane(si.n, si.p, ray.pxOffset, ray.dxOffset);
-                Vec3f py = IntersectRayPlane(si.n, si.p, ray.pyOffset, ray.dyOffset);
-
-                dpdx = px - si.p;
-                dpdy = py - si.p;
-            }
-            else
-            {
-                // Estimate ray differentials from camera
-                Vec3f px = IntersectRayPlane(si.n, si.p, ray.o + camera.diff.minPosX,
-                                             ray.d + camera.diff.minDirX);
-                Vec3f py = IntersectRayPlane(si.n, si.p, ray.o + camera.diff.minPosY,
-                                             ray.d + camera.diff.minDirY);
-
-                dpdx = camera.sppScale * (px - si.p);
-                dpdy = camera.sppScale * (py - si.p);
-            }
-
-            // Solve overdetermined linear system
-            // dpdx = dpdu * dudx
-            // dpdx = dpdv * dvdx
-            // Solve using linear least squares
-            // (At * A)^-1 * At * b = x
-            f32 ata00  = Dot(si.dpdu, si.dpdu);
-            f32 ata01  = Dot(si.dpdu, si.dpdv);
-            f32 ata11  = Dot(si.dpdv, si.dpdv);
-            f32 det    = FMS(ata00, ata11, Sqr(ata01));
-            f32 invDet = det == 0.f ? 0.f : 1.f / det;
-
-            f32 atb0x = Dot(si.dpdu, dpdx);
-            f32 atb1x = Dot(si.dpdv, dpdx);
-            f32 atb0y = Dot(si.dpdu, dpdy);
-            f32 atb1y = Dot(si.dpdv, dpdy);
-
-            // dudx = invDet * (ata11 * atb0x - atb1x * ata01);
-            dudx = Clamp(invDet * FMS(ata11, atb0x, ata01 * atb1x), -1e8f, 1e8f);
-            dudy = Clamp(invDet * FMS(ata11, atb0y, ata01 * atb1y), -1e8f, 1e8f);
-
-            // dvdx =invDet * (-ata01 * atb0x + ata00 * atb1x)
-            dvdx = Clamp(invDet * FMS(ata00, atb1x, ata01 * atb0x), -1e8f, 1e8f);
-            dvdy = Clamp(invDet * FMS(ata00, atb1y, ata01 * atb0y), -1e8f, 1e8f);
-        }
 
         Material *material = scene->materials[si.materialIDs];
         BxDF bxdf =
@@ -789,70 +815,10 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
 
             // Compute ray differentials for specular reflection or transmission
             // Compute common factors for specular ray differentials
+            UpdateRayDifferentials(ray, sample.wi, si.shading.n, si.shading.dndu,
+                                   si.shading.dndv, dudx, dvdx, dudy, dvdy, sample.eta);
 
             // if there is a non-specular interaction, revert to using
-            if (ray.pxOffset != Vec3f(pos_inf))
-            {
-                Vec3f n    = si.shading.n;
-                Vec3f dndx = si.shading.dndu * dudx + si.shading.dndv * dvdx;
-                Vec3f dndy = si.shading.dndu * dudy + si.shading.dndv * dvdy;
-
-                Vec3f wo = -ray.d;
-                Vec3f wi = sample.wi;
-                f32 eta  = sample.eta;
-
-                Vec3f dwodx = -ray.dxOffset - wo;
-                Vec3f dwody = -ray.dyOffset - wo;
-
-                if (sample.flags == (u32)BxDFFlags::SpecularReflection)
-                {
-                    // Initialize origins of specular differential rays
-                    ray.pxOffset = si.p + dpdx;
-                    ray.pyOffset = si.p + dpdy;
-
-                    // Compute differential reflected directions
-                    f32 dwoDotn_dx = Dot(dwodx, n) + Dot(wo, dndx);
-                    f32 dwoDotn_dy = Dot(dwody, n) + Dot(wo, dndy);
-                    ray.dxOffset = wi - dwodx + 2 * Vec3f(Dot(wo, n) * dndx + dwoDotn_dx * n);
-                    ray.dyOffset = wi - dwody + 2 * Vec3f(Dot(wo, n) * dndy + dwoDotn_dy * n);
-                }
-                else if (sample.flags == (u32)BxDFFlags::SpecularTransmission)
-                {
-                    // Initialize origins of specular differential rays
-                    ray.pxOffset = si.p + dpdx;
-                    ray.pyOffset = si.p + dpdy;
-
-                    // Compute differential transmitted directions
-                    // Find oriented surface normal for transmission
-                    if (Dot(wo, n) < 0)
-                    {
-                        n    = -n;
-                        dndx = -dndx;
-                        dndy = -dndy;
-                    }
-
-                    // Compute partial derivatives of $\mu$
-                    f32 dwoDotn_dx = Dot(dwodx, n) + Dot(wo, dndx);
-                    f32 dwoDotn_dy = Dot(dwody, n) + Dot(wo, dndy);
-                    f32 mu         = Dot(wo, n) / eta - AbsDot(wi, n);
-                    f32 dmudx =
-                        dwoDotn_dx * (1 / eta + 1 / Sqr(eta) * Dot(wo, n) / Dot(wi, n));
-                    f32 dmudy =
-                        dwoDotn_dy * (1 / eta + 1 / Sqr(eta) * Dot(wo, n) / Dot(wi, n));
-
-                    ray.dxOffset = wi - eta * dwodx + mu * dndx + dmudx * n;
-                    ray.dyOffset = wi - eta * dwody + mu * dndy + dmudy * n;
-                }
-                else
-                {
-                    ray.pxOffset = Vec3f(pos_inf);
-                }
-                // Squash potentially troublesome differentials
-                if (LengthSquared(ray.pxOffset) > 1e16f ||
-                    LengthSquared(ray.pyOffset) > 1e16f ||
-                    LengthSquared(ray.dxOffset) > 1e16f || LengthSquared(ray.dyOffset) > 1e16f)
-                    ray.pxOffset = Vec3f(pos_inf);
-            }
         }
 
         // Russian Roulette
