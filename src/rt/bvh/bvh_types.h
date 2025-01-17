@@ -242,13 +242,29 @@ struct CompressedLeafNode;
 template <template <i32> class Node, i32 N>
 void GetBounds(const Node<N> *node, LaneF32<N> *outMin, LaneF32<N> *outMax)
 {
-    LaneU32<N> lX = LaneU32<N>(*(u32 *)node->lowerX);
-    LaneU32<N> lY = LaneU32<N>(*(u32 *)node->lowerY);
-    LaneU32<N> lZ = LaneU32<N>(*(u32 *)node->lowerZ);
+    Lane4U32 lX, lY, lZ;
+    Lane4U32 uX, uY, uZ;
 
-    LaneU32<N> uX = LaneU32<N>(*(u32 *)node->upperX);
-    LaneU32<N> uY = LaneU32<N>(*(u32 *)node->upperY);
-    LaneU32<N> uZ = LaneU32<N>(*(u32 *)node->upperZ);
+    if constexpr (N == 4)
+    {
+        lX = _mm_cvtsi32_si128(*(u32 *)node->lowerX);
+        lY = _mm_cvtsi32_si128(*(u32 *)node->lowerY);
+        lZ = _mm_cvtsi32_si128(*(u32 *)node->lowerZ);
+
+        uX = _mm_cvtsi32_si128(*(u32 *)node->upperX);
+        uY = _mm_cvtsi32_si128(*(u32 *)node->upperY);
+        uZ = _mm_cvtsi32_si128(*(u32 *)node->upperZ);
+    }
+    else
+    {
+        lX = _mm_set_epi64x(0, *(u64 *)node->lowerX);
+        lY = _mm_set_epi64x(0, *(u64 *)node->lowerY);
+        lZ = _mm_set_epi64x(0, *(u64 *)node->lowerZ);
+
+        uX = _mm_set_epi64x(0, *(u64 *)node->upperX);
+        uY = _mm_set_epi64x(0, *(u64 *)node->upperY);
+        uZ = _mm_set_epi64x(0, *(u64 *)node->upperZ);
+    }
 
     LaneU32<N> lExpandedMinX;
     LaneU32<N> lExpandedMinY;
@@ -477,8 +493,12 @@ struct CompressedLeafNode
     }
 };
 
+// #define USE_BVH4
+#define USE_BVH8
+
+#if !defined(USE_BVH4) && !defined(USE_BVH8)
 #define USE_BVH4
-// #define USE_BVH8
+#endif
 
 #if defined(USE_BVH4) && defined(USE_BVH8)
 #undef USE_BVH4

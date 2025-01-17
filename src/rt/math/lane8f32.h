@@ -67,7 +67,7 @@ struct LaneF32_<8>
     {
         if constexpr (i1)
         {
-            return _mm256_cmpeq_ps(_mm256_setzero_ps(), _mm256_setzero_ps());
+            return _mm256_cmp_ps(_mm256_setzero_ps(), _mm256_setzero_ps(), _CMP_EQ_OQ);
         }
         else
         {
@@ -125,6 +125,10 @@ struct LaneF32_<8>
     }
 };
 
+__forceinline Lane8F32 operator!(const Lane8F32 &a)
+{
+    return _mm256_xor_ps(a, Lane8F32::Mask<true>());
+}
 __forceinline Lane8F32 operator+(const Lane8F32 &a, const Lane8F32 &b)
 {
     return _mm256_add_ps(a, b);
@@ -142,6 +146,11 @@ __forceinline Lane8F32 operator-(const Lane8F32 &a, f32 b) { return a - Lane8F32
 __forceinline Lane8F32 operator*(const Lane8F32 &a, const Lane8F32 &b)
 {
     return _mm256_mul_ps(a, b);
+}
+__forceinline Lane8F32 &operator*=(Lane8F32 &a, const Lane8F32 &b)
+{
+    a = a * b;
+    return a;
 }
 __forceinline Lane8F32 operator*(f32 a, const Lane8F32 &b) { return Lane8F32(a) * b; }
 __forceinline Lane8F32 operator*(const Lane8F32 &a, f32 b) { return a * Lane8F32(b); }
@@ -271,6 +280,13 @@ __forceinline Lane8F32 operator!=(const Lane8F32 &a, const Lane8F32 &b)
 {
     return _mm256_cmp_ps(a, b, _CMP_NEQ_UQ);
 }
+
+__forceinline Lane8F32 operator==(const Lane8U32 &a, const Lane8U32 &b)
+{
+    return _mm256_castsi256_ps(_mm256_cmpeq_epi32(a, b));
+}
+
+__forceinline Lane8F32 operator!=(const Lane8U32 &a, const Lane8U32 &b) { return !(a == b); }
 
 // __forceinline Lane8F32 operator<(const Lane8F32 &a, const Lane8F32 &b) { return
 // _mm256_cmp_ps(a, b, _CMP_LT_OQ); }

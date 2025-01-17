@@ -11,6 +11,7 @@ namespace rt
 // TODO
 // - ray differentials
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
+// - remove duplicate materials, 8 wide bvh
 
 // - volumetric rendering
 //      - ratio tracking, residual ratio tracking, delta tracking <-- done but untested
