@@ -9,6 +9,7 @@
 namespace rt
 {
 // TODO
+// - COHERENT TEXTURE READS
 // - ray differentials
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
 // - remove duplicate materials and geometry

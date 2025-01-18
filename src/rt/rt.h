@@ -120,6 +120,7 @@ struct RayQueueItem
     i32 radianceIndex;
 };
 
+
 inline u32 *GetPixelPointer(Image *image, u32 x, u32 y)
 {
     Assert(x < (u32)image->width && y < (u32)image->height);

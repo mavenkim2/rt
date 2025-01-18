@@ -14,13 +14,13 @@ struct RayState
     Vec2u pixel;
     SampledSpectrum L;
     SampledSpectrum beta;
-    SampledSpectrum etaScale;
+    f32 etaScale;
     SampledWavelengths lambda;
     // PathFlags pathFlags;
     f32 bsdfPdf;
     bool specularBounce;
     u32 depth;
-    Sampler sampler;
+    struct ZSobolSampler sampler;
     SurfaceInteraction si;
 };
 
@@ -29,11 +29,11 @@ typedef RayStateList::ChunkNode RayStateNode;
 
 struct RayStateHandle
 {
-    RayStateNode *node;
-    u32 index;
+    RayState *state = 0;
 
-    const RayState *GetRayState() const { return &node->values[index]; }
-    RayState *GetRayState() { return &node->values[index]; }
+    bool IsValid() const { return state != 0; }
+    const RayState *GetRayState() const { return state; }
+    RayState *GetRayState() { return state; }
 };
 
 typedef ChunkedLinkedList<RayStateHandle, 8192> RayStateFreeList;
@@ -44,8 +44,8 @@ struct ShadingHandle
     RayStateHandle rayStateHandle;
 };
 
-static const u32 QUEUE_LENGTH    = 1024;
-static const u32 FLUSH_THRESHOLD = 512;
+static const u32 QUEUE_LENGTH    = 2048; // 1024;
+static const u32 FLUSH_THRESHOLD = 1024; // 512;
 
 // 1. intersect ray, add to shading queue
 // 2. shading queue can either be per material instance or per material type
@@ -64,35 +64,27 @@ static const u32 FLUSH_THRESHOLD = 512;
 // - do I want to construct megakernels? from what I'm envisioning, either we have a lot of
 // queues (representing one combination of kernels), or a lot of masking/wasted execution
 
+#define QUEUE_HANDLER(name)                                                                   \
+    void name(struct ShadingThreadState *state, void *values, u32 count, u32 &finalCount)
+
 template <typename T>
 struct ThreadLocalQueue
 {
-    typedef void (*Handler)(void *values, u32 count);
+    typedef QUEUE_HANDLER((*Handler));
     Handler handler;
 
     T values[QUEUE_LENGTH];
     u32 count;
 
-    void Flush()
-    {
-        if (count > FLUSH_THRESHOLD)
-        {
-            count -= FLUSH_THRESHOLD;
-            handler(values + count, count);
-        }
-    }
-    void Finalize() { handler(values, count); }
-    void Push(const T &item)
-    {
-        Assert(count < QUEUE_LENGTH);
-        values[count++] = item;
-    }
+    void Flush(ShadingThreadState *state);
+    bool Finalize(ShadingThreadState *state);
+    bool Push(ShadingThreadState *state, const T &item);
 };
 
 typedef ThreadLocalQueue<ShadingHandle> ShadingQueue;
 typedef ThreadLocalQueue<RayStateHandle> RayQueue;
 
-struct ShadingThreadState
+struct alignas(CACHE_LINE_SIZE) ShadingThreadState
 {
     // Queues:
     ShadingQueue shadingQueues[(u32)MaterialTypes::Max];
@@ -105,13 +97,20 @@ struct ShadingThreadState
 
 struct ShadingGlobals
 {
+    Vec3f *rgbValues;
+    Camera *camera;
+    u32 width;
+    u32 height;
     u32 maxDepth;
 };
 
-thread_local ShadingThreadState *shadingThreadState_;
+// thread_local ShadingThreadState *shadingThreadState_;
+static ShadingThreadState *shadingThreadState_;
 static ShadingGlobals *shadingGlobals_;
 
-ShadingThreadState *GetShadingThreadState() { return shadingThreadState_; }
+ShadingThreadState *GetShadingThreadState() { return &shadingThreadState_[GetThreadIndex()]; }
+ShadingThreadState *GetShadingThreadState(u32 index) { return &shadingThreadState_[index]; }
 ShadingGlobals *GetShadingGlobals() { return shadingGlobals_; }
+
 } // namespace rt
 #endif

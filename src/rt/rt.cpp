@@ -23,7 +23,6 @@
 #include "lights.h"
 #include "scene.h"
 #include "scene_load.h"
-#include "simd_integrate.h"
 // #include "bvh.h"
 #include "bxdf.h"
 #include "bsdf.h"
@@ -34,6 +33,7 @@
 #include "bvh/bvh_build.h"
 #include "bvh/bvh_intersect1.h"
 #include <algorithm>
+#include "simd_integrate.h"
 
 #include "base.cpp"
 #include "win32.cpp"
@@ -51,7 +51,7 @@
 
 #include "lights.cpp"
 #include "integrate.cpp"
-// #include "simd_integrate.cpp"
+#include "simd_integrate.cpp"
 
 #include "tests/test.cpp"
 #include "tests/sampling_test.cpp"
@@ -1074,6 +1074,8 @@ int main(int argc, char *argv[])
     RGBToSpectrumTable::Init(arena);
     RGBColorSpace::Init(arena);
     InitializePtex();
+
+    shadingGlobals_ = PushStruct(arena, ShadingGlobals);
 
     u32 numProcessors      = OS_NumProcessors();
     threadLocalStatistics  = PushArray(arena, ThreadStatistics, numProcessors);

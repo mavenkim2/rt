@@ -58,7 +58,7 @@ if "%1" == "release" (
     )
 ) 
 
-set DefaultCompilerFlags=-FC -Zi -EHsc -nologo -Oi -WX -W4 -wd4305 -wd4324 -wd4127 -wd4700 -wd4701 -wd4505 -wd4189 -wd4201 -wd4100
+set DefaultCompilerFlags=-FC -Zi -EHsc -nologo -Oi -WX -W4 -wd4305 -wd4324 -wd4127 -wd4700 -wd4701 -wd4505 -wd4189 -wd4201 -wd4100 -wd4702
 set DefaultLinkerFlags= -STACK:0x100000,0x100000 -incremental:no -opt:ref 
 REM user32.lib gdi32.lib ole32.lib winmm.lib Advapi32.lib
 

@@ -182,6 +182,16 @@ struct ConstantVectorTexture : Texture
     }
 };
 
+struct NullMaterial : Material
+{
+    NullMaterial() {}
+    BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                  const Vec4f &filterWidths) override
+    {
+        return {};
+    }
+};
+
 struct DiffuseMaterial : Material
 {
     Texture *reflectance;
@@ -764,6 +774,10 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                     string materialName      = ReadWord(&tokenizer);
                     const MaterialNode *node = materialHashMap->Get(materialName);
                     ids                      = PrimitiveIndices(LightHandle(), node->handle);
+                }
+                else
+                {
+                    ids = PrimitiveIndices(LightHandle(), MaterialHandle());
                 }
             };
 

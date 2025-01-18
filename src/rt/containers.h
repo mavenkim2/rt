@@ -650,10 +650,17 @@ struct ChunkedLinkedList
     inline void Push(const T &val) { AddBack() = val; }
     inline void Push(const T &&val) { AddBack() = std::move(val); }
 
-    inline T Pop()
+    inline void Pop(T *result)
     {
-        Assert(last && last->count);
-        return last->values[--last->count];
+        if (last && last->count)
+        {
+            *result = last->values[--last->count];
+            totalCount--;
+        }
+        else
+        {
+            *result = {};
+        }
     }
     inline const T &Last() const { return last->values[last->count - 1]; }
     inline T &Last() { return last->values[last->count - 1]; }

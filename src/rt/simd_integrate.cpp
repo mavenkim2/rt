@@ -2,16 +2,52 @@
 namespace rt
 {
 
-void FreeRayState(RayStateHandle handle)
+template <typename T>
+void ThreadLocalQueue<T>::Flush(ShadingThreadState *state)
 {
-    ShadingThreadState *state    = GetShadingThreadState();
+    if (count >= FLUSH_THRESHOLD)
+    {
+        Error(count <= QUEUE_LENGTH, "count flush: %u\n", count);
+        handler(state, values + count - FLUSH_THRESHOLD, FLUSH_THRESHOLD, count);
+    }
+}
+
+template <typename T>
+bool ThreadLocalQueue<T>::Finalize(ShadingThreadState *state)
+{
+    if (count == 0) return false;
+    handler(state, values, count, count);
+    return true;
+}
+
+template <typename T>
+bool ThreadLocalQueue<T>::Push(ShadingThreadState *state, const T &item)
+{
+    Error(count < QUEUE_LENGTH, "count push: %u\n", count);
+    values[count++] = item;
+    if (count == QUEUE_LENGTH) return true;
+    return false;
+}
+
+void FreeRayState(ShadingThreadState *state, RayStateHandle handle)
+{
     state->rayFreeList.AddBack() = handle;
 }
 
-RayStateHandle AllocRayState()
+RayStateHandle AllocRayState(ShadingThreadState *state)
 {
-    ShadingThreadState *state = GetShadingThreadState();
-    RayStateHandle handle     = state->rayFreeList.Pop();
+    RayStateHandle handle;
+    state->rayFreeList.Pop(&handle);
+    if (!handle.IsValid())
+    {
+        for (u32 i = 0; i < 8192; i++)
+        {
+            RayState *rayState           = &state->rayStates.AddBack();
+            state->rayFreeList.AddBack() = RayStateHandle{rayState};
+        }
+        state->rayFreeList.Pop(&handle);
+        Assert(handle.IsValid());
+    }
     MemoryZero(handle.GetRayState(), sizeof(RayState));
     return handle;
 }
@@ -21,15 +57,18 @@ void WriteRadiance(const Vec2u &pixel, const SampledSpectrum &L,
 {
     Vec3f rgb               = ConvertRadianceToRGB(L, lambda);
     ShadingGlobals *globals = GetShadingGlobals();
-    globals->radiances[pixel.x + (height - pixel.y - 1) * width] += rgb;
+    globals->rgbValues[pixel.x + globals->width * pixel.y] += rgb;
 }
 
-void TerminateRay(RayStateHandle handle)
+void TerminateRay(ShadingThreadState *shadeState, RayStateHandle handle)
 {
-    WriteRadiance();
-    FreeRayState(handle);
+    RayState *state = handle.GetRayState();
+    WriteRadiance(state->pixel, state->L, state->lambda);
+    FreeRayState(shadeState, handle);
 }
 
+// that's the problem. basically it's ray1->material1->ray2->material2,
+// so  if ray1 fills materials2, then material1 can also fill material2...
 void RenderSIMD(Arena *arena, RenderParams2 &params)
 {
     u32 width              = params.width;
@@ -81,6 +120,13 @@ void RenderSIMD(Arena *arena, RenderParams2 &params)
     GenerateMinimumDifferentials(camera, params, width, height, taskCount, tileCountX,
                                  tileWidth, tileHeight, pixelWidth, pixelHeight);
 
+    ShadingGlobals *globals = GetShadingGlobals();
+    globals->rgbValues      = PushArray(arena, Vec3f, width * height);
+    globals->camera         = &camera;
+    globals->width          = width;
+    globals->height         = height;
+    globals->maxDepth       = maxDepth;
+
     scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
         ShadingThreadState *shadingThreadState = GetShadingThreadState();
         u32 tileX                              = jobID % tileCountX;
@@ -123,32 +169,64 @@ void RenderSIMD(Arena *arena, RenderParams2 &params)
 
                     f32 cameraWeight = 1.f;
 
-                    RayStateHandle handle = AllocRayState();
+                    RayStateHandle handle = AllocRayState(shadingThreadState);
                     RayState *rayState    = handle.GetRayState();
-                    rayState->ray         = ray;
-                    rayState->pixel       = pPixel;
+                    Assert(rayState->depth == 0);
+                    rayState->ray      = ray;
+                    rayState->beta     = SampledSpectrum(1.f);
+                    rayState->etaScale = 1.f;
+                    rayState->pixel    = pPixel;
+                    rayState->lambda   = lambda;
 
-                    // Clone sampler
-                    rayState->sampler = sampler.Clone();
-                    shadingThreadState->rayQueue.Push(handle);
-                    shadingThreadState->rayQueue.Flush();
-
-                    SampledSpectrum L =
-                        cameraWeight * Li(ray, camera, sampler, maxDepth, lambda);
-                    // convert radiance to rgb, add and divide
-                    L               = SafeDiv(L, lambda.PDF());
-                    f32 r           = (Spectra::X().Sample(lambda) * L).Average();
-                    f32 g           = (Spectra::Y().Sample(lambda) * L).Average();
-                    f32 b           = (Spectra::Z().Sample(lambda) * L).Average();
-                    f32 m           = Max(r, Max(g, b));
-                    Vec3f sampleRgb = Vec3f(r, g, b);
-                    if (m > maxComponentValue)
-                    {
-                        sampleRgb *= maxComponentValue / m;
-                    }
-                    rgb += sampleRgb;
+                    MemoryCopy(&rayState->sampler, &sampler, sizeof(ZSobolSampler));
+                    shadingThreadState->rayQueue.Push(shadingThreadState, handle);
+                    shadingThreadState->rayQueue.Flush(shadingThreadState);
                 }
-                // TODO: filter importance sampling
+            }
+        }
+        u32 n = numTiles.fetch_add(1);
+        fprintf(stderr, "\rRaycasting %d%%...    ", u32(100.f * n / taskCount));
+        fflush(stdout);
+    });
+
+    scheduler.ScheduleAndWait(OS_NumProcessors(), 1, [&](u32 jobID) {
+        ShadingThreadState *state = GetShadingThreadState(jobID);
+        bool remaining            = false;
+        do
+        {
+            remaining = false;
+            for (u32 i = 0; i < ArrayLength(state->shadingQueues); i++)
+            {
+                remaining |= state->rayQueue.Finalize(state);
+                remaining |= state->shadingQueues[i].Finalize(state);
+            }
+        } while (remaining);
+    });
+
+    // TODO: write rgb to image
+    scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
+        u32 tileX = jobID % tileCountX;
+        u32 tileY = jobID / tileCountX;
+        Vec2u minPixelBounds(params.pixelMin[0] + tileWidth * tileX,
+                             params.pixelMin[1] + tileHeight * tileY);
+        Vec2u maxPixelBounds(
+            Min(params.pixelMin[0] + tileWidth * (tileX + 1), params.pixelMin[0] + pixelWidth),
+            Min(params.pixelMin[1] + tileHeight * (tileY + 1),
+                params.pixelMin[1] + pixelHeight));
+
+        Assert(maxPixelBounds.x >= minPixelBounds.x && minPixelBounds.x >= 0 &&
+               maxPixelBounds.x <= width);
+        Assert(maxPixelBounds.y >= minPixelBounds.y && minPixelBounds.y >= 0 &&
+               maxPixelBounds.y <= height);
+
+        for (u32 y = minPixelBounds.y; y < maxPixelBounds.y; y++)
+        {
+            for (u32 x = minPixelBounds.x; x < maxPixelBounds.x; x++)
+            {
+                u32 *out = GetPixelPointer(&image, x, y);
+
+                Vec3f rgb = globals->rgbValues[x + image.width * y];
+
                 rgb /= f32(spp);
                 rgb = Mul(RGBColorSpace::sRGB->XYZToRGB, rgb);
                 if (rgb.x != rgb.x) rgb.x = 0.f;
@@ -170,26 +248,21 @@ void RenderSIMD(Arena *arena, RenderParams2 &params)
                 *out = color;
             }
         }
-        u32 n = numTiles.fetch_add(1);
-        fprintf(stderr, "\rRaycasting %d%%...    ", u32(100.f * n / taskCount));
-        fflush(stdout);
     });
-
-    // TODO: write rgb to image
-    // scheduler.ScheduleAndWait()
-    // {
-    // }
     WriteImage(&image, "image.bmp");
     printf("done\n");
 }
 
-void RayIntersectionHandler(RayStateHandle *handles, u32 count)
+QUEUE_HANDLER(RayIntersectionHandler)
 {
-    ShadingThreadState *state = GetShadingThreadState();
-    Scene *scene              = GetScene();
+    RayStateHandle *handles = (RayStateHandle *)values;
+    ShadingGlobals *globals = GetShadingGlobals();
+    Scene *scene            = GetScene();
 
-    for (u32 i = 0; i < count; i++)
+    for (u32 index = 0; index < count; index++)
     {
+        u32 i = count - 1 - index;
+        Assert(i < QUEUE_LENGTH);
         RayStateHandle handle = handles[i];
         RayState *rayState    = handle.GetRayState();
         SurfaceInteraction si;
@@ -205,8 +278,9 @@ void RayIntersectionHandler(RayStateHandle *handles, u32 count)
                         using Light = std::remove_reference_t<decltype(*array)>;
                         for (u32 i = 0; i < count; i++)
                         {
-                            Light &light       = array[i];
-                            SampledSpectrum Le = Light::Le(&light, ray.d, lambda);
+                            Light &light = array[i];
+                            SampledSpectrum Le =
+                                Light::Le(&light, rayState->ray.d, rayState->lambda);
                             rayState->L += rayState->beta * Le;
                         }
                     },
@@ -220,11 +294,13 @@ void RayIntersectionHandler(RayStateHandle *handles, u32 count)
                         using Light = std::remove_reference_t<decltype(*array)>;
                         for (u32 i = 0; i < count; i++)
                         {
-                            Light &light       = array[i];
-                            SampledSpectrum Le = Light::Le(&light, ray.d, rayState->lambda);
+                            Light &light = array[i];
+                            SampledSpectrum Le =
+                                Light::Le(&light, rayState->ray.d, rayState->lambda);
 
-                            f32 pdf      = LightPDF(scene);
-                            f32 lightPdf = pdf * (f32)Light::PDF_Li(&light, ray.d, true);
+                            f32 pdf = LightPDF(scene);
+                            f32 lightPdf =
+                                pdf * (f32)Light::PDF_Li(&light, rayState->ray.d, true);
 
                             f32 w_l = PowerHeuristic(1, rayState->bsdfPdf, 1, lightPdf);
                             // NOTE: beta already contains the cosine, bsdf, and pdf terms
@@ -234,11 +310,7 @@ void RayIntersectionHandler(RayStateHandle *handles, u32 count)
                     InfiniteLightTypes());
             }
 
-            TerminateRay(handle);
-        }
-        else if (rayState->depth++ >= maxDepth)
-        {
-            return;
+            TerminateRay(state, handle);
         }
         else
         {
@@ -246,93 +318,118 @@ void RayIntersectionHandler(RayStateHandle *handles, u32 count)
             MaterialHandle materialHandle = (MaterialHandle)si.materialIDs;
             u32 materialType              = (u32)materialHandle.GetType();
             u32 materiaIndex              = materialHandle.GetIndex();
-            u64 shadingKey                = ((u64)materiaIndex << 32) | si.faceIndices;
-            state->shadingQueues[materialType].Push(ShadingHandle{shadingKey, handle});
+            Assert(materialType == 0 || materiaIndex < scene->materials.Length());
+            u64 shadingKey = ((u64)materiaIndex << 32) | si.faceIndices;
+            bool filled    = state->shadingQueues[materialType].Push(
+                state, ShadingHandle{shadingKey, handle});
+            if (filled)
+            {
+                finalCount -= (index + 1);
+                Assert(finalCount < QUEUE_LENGTH);
+                // printf("index: %u, ray queue count: %u\n", index, finalCount);
+                state->shadingQueues[materialType].Flush(state);
+                return;
+            }
         }
     }
+
+    Assert(finalCount >= count);
+    finalCount -= count;
+    Assert(finalCount < QUEUE_LENGTH);
     for (u32 i = 0; i < (u32)MaterialTypes::Max; i++)
     {
-        state->shadingQueues[i].Flush();
+        state->shadingQueues[i].Flush(state);
     }
 }
 
 template <typename MaterialType>
-void ShadingQueueHandler(void *values, u32 count)
+QUEUE_HANDLER(ShadingQueueHandler)
 {
-    ShadingThreadState *state = GetShadingThreadState();
-    ShadingHandle *keys0      = (ShadingHandle *)values;
-    ShadingHandle *keys1      = PushArrayNoZero(temp.arena, SortKey, alignedCount);
+    if constexpr (std::is_same_v<MaterialType, NullMaterial>)
+    {
+        finalCount -= count;
+        return;
+    }
+
+    ScratchArena temp;
+    ShadingGlobals *globals = GetShadingGlobals();
+    ShadingHandle *keys0    = (ShadingHandle *)values;
+    ShadingHandle *keys1    = PushArrayNoZero(temp.temp.arena, ShadingHandle, count);
 
     // Radix sort
-    for (u32 iter = 3; iter >= 0; iter--)
+    for (i32 iter = 7; iter >= 0; iter--)
     {
-        u32 shift        = iter * 8;
-        u32 buckets[255] = {};
+        u32 shift = iter * 8;
+        Assert(shift < 64);
+        u32 buckets[256] = {};
         // Calculate # in each radix
-        for (u32 i = 0; i < queueFlushSize; i++)
+        for (u32 i = 0; i < count; i++)
         {
             ShadingHandle *key = &keys0[i];
-            buckets[(key->shadingKey >> shift) & 0xff]++;
+            u32 bucket         = (key->shadingKey >> shift) & 0xff;
+            Assert(bucket < 256);
+            buckets[bucket]++;
         }
         // Prefix sum
         u32 total = 0;
-        for (u32 i = 0; i < 255; i++)
+        for (u32 i = 0; i < 256; i++)
         {
-            u32 count  = buckets[i];
-            buckets[i] = total;
-            total += count;
+            u32 bucketCount = buckets[i];
+            buckets[i]      = total;
+            total += bucketCount;
         }
 
         // TODO: calculate ranges here
         // Place in correct position
-        for (u32 i = 0; i < queueFlushSize; i++)
+        for (u32 i = 0; i < count; i++)
         {
-            ShadingHandle &sortKey = &keys0[i];
+            ShadingHandle &sortKey = keys0[i];
             u32 key                = (sortKey.shadingKey >> shift) & 0xff;
-            keys1[buckets[key]++]  = sortKey;
+            u32 index              = buckets[key]++;
+            Assert(index < count);
+            keys1[index] = sortKey;
         }
         Swap(keys0, keys1);
     }
 
     Scene *scene = GetScene();
-    for (u32 i = 0; i < count; i++)
+    for (u32 index = 0; index < count; index++)
     {
+        u32 i = count - 1 - index;
+        Assert(i < QUEUE_LENGTH);
         ShadingHandle handle   = keys0[i];
         MaterialType *material = (MaterialType *)scene->materials[handle.shadingKey >> 32];
-        RayState *rayState     = state->rayStates[handle];
+        RayState *rayState     = handle.rayStateHandle.GetRayState();
 
         // Ray state stuff
-        Ray2 &ray                 = rayState->ray;
-        SurfaceInteraction &si    = rayState->si;
-        Sampler &sampler          = rayState->sampler;
-        SampledSpectrum &beta     = rayState->beta;
-        SampledSpectrum &etaScale = rayState->etaScale;
-        bool &specularBounce      = rayState->specularBounce;
+        Ray2 &ray                  = rayState->ray;
+        SurfaceInteraction &si     = rayState->si;
+        ZSobolSampler &sampler     = rayState->sampler;
+        SampledSpectrum &beta      = rayState->beta;
+        f32 &etaScale              = rayState->etaScale;
+        SampledWavelengths &lambda = rayState->lambda;
+        SampledSpectrum &L         = rayState->L;
+        f32 &bsdfPdf               = rayState->bsdfPdf;
+        bool &specularBounce       = rayState->specularBounce;
 
         Vec3f dpdx, dpdy;
         f32 dudx, dvdx, dudy, dvdy;
-        CalculateFilterWidths(rayState->ray, rayState->si.p, rayState->si.n, dpdx, dpdy, dudx,
-                              dvdx, dudy, dvdy);
+        CalculateFilterWidths(rayState->ray, *globals->camera, si.p, si.n, si.dpdu, si.dpdv,
+                              dpdx, dpdy, dudx, dvdx, dudy, dvdy);
 
         ScratchArena scratch;
 
-        // Offset ray and compute ray diferentials if necessary
-        {
-            ray.o = OffsetRayOrigin(si.p, si.pError, si.n, sample.wi);
-
-            ray.d    = sample.wi;
-            ray.tFar = pos_inf;
-
-            // Compute ray differentials for specular reflection or transmission
-            // Compute common factors for specular ray differentials
-            UpdateRayDifferentials(ray, sample.wi, si.shading.n, si.shading.dndu,
-                                   si.shading.dndv, dudx, dvdx, dudy, dvdy, sample.eta);
-        }
         {
             // BxDF evaluation
             BxDF bxdf = material->Evaluate(scratch.temp.arena, si, lambda,
                                            Vec4f(dudx, dvdx, dudy, dvdy));
             BSDF bsdf(bxdf, si.shading.dpdu, si.shading.n);
+
+            if (rayState->depth++ >= globals->maxDepth)
+            {
+                TerminateRay(state, handle.rayStateHandle);
+                continue;
+            }
 
             // Next Event Estimation
             // Choose light source for direct lighting calculation
@@ -376,7 +473,7 @@ void ShadingQueueHandler(void *values, u32 count)
             BSDFSample sample = bsdf.GenerateSample(-ray.d, u, sampler.Get2D());
             if (sample.pdf == 0.f)
             {
-                TerminateRay(handle.rayStateHandle);
+                TerminateRay(state, handle.rayStateHandle);
                 continue;
             }
             // beta *= sample.f / sample.pdf;
@@ -384,16 +481,28 @@ void ShadingQueueHandler(void *values, u32 count)
             bsdfPdf        = sample.pdf;
             specularBounce = sample.IsSpecular();
             if (sample.IsTransmissive()) etaScale *= Sqr(sample.eta);
+
+            // Offset ray and compute ray diferentials if necessary
+            ray.o = OffsetRayOrigin(si.p, si.pError, si.n, sample.wi);
+
+            ray.d    = sample.wi;
+            ray.tFar = pos_inf;
+
+            // Compute ray differentials for specular reflection or transmission
+            // Compute common factors for specular ray differentials
+            UpdateRayDifferentials(ray, sample.wi, si.p, si.shading.n, si.shading.dndu,
+                                   si.shading.dndv, dpdx, dpdy, dudx, dvdx, dudy, dvdy,
+                                   sample.eta, sample.flags);
         }
         // Russian roulette
         {
             SampledSpectrum rrBeta = beta * etaScale;
             f32 q                  = rrBeta.MaxComponentValue();
-            if (depth > 1 && q < 1.f)
+            if (rayState->depth > 1 && q < 1.f)
             {
                 if (sampler.Get1D() < Max(0.f, 1 - q))
                 {
-                    TerminateRay(handle.rayStateHandle);
+                    TerminateRay(state, handle.rayStateHandle);
                     continue;
                 }
 
@@ -403,9 +512,16 @@ void ShadingQueueHandler(void *values, u32 count)
         }
 
         // Push to secondary ray queue
-        state->rayQueue.Push(handle.rayStateHandle);
+        bool filled = state->rayQueue.Push(state, handle.rayStateHandle);
+        if (filled)
+        {
+            finalCount -= (index + 1);
+            state->rayQueue.Flush(state);
+            return;
+        }
     }
-    state->rayQueue.Flush();
+    finalCount -= count;
+    state->rayQueue.Flush(state);
 }
 
 #if 0

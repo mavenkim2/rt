@@ -140,7 +140,7 @@ struct MaterialHandle
 {
     static_assert((u32)MaterialTypes::Max < 16, "too many material types");
     u32 data;
-    MaterialHandle() : data(0xffffffff) {}
+    MaterialHandle() : data(0x0fffffff) {}
     explicit MaterialHandle(u32 a) : data(a) {}
     MaterialHandle(MaterialTypes type, u32 index)
     {
