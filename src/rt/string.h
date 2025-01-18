@@ -103,19 +103,23 @@ constexpr u32 operator""_sid(const char *ptr, size_t count);
 
 struct StringBuilderNode
 {
-    u8 *bytes;
-    u64 count;
-    u64 cap;
+    string str;
+};
 
-    StringBuilderNode *next;
+struct StringBuilderChunkNode
+{
+    StringBuilderNode *values;
+    StringBuilderChunkNode *next;
+
+    u32 count;
+    u32 cap;
 };
 
 struct StringBuilder
 {
-    StringBuilderNode *first;
-    StringBuilderNode *last;
+    StringBuilderChunkNode *first;
+    StringBuilderChunkNode *last;
 
-    u64 cap = megabytes(2);
     u64 totalSize;
     Arena *arena;
 };
@@ -162,7 +166,7 @@ inline u8 *GetPointer_(Tokenizer *tokenizer);
 u64 Put(StringBuilder *builder, void *data, u64 size);
 u64 Put(StringBuilder *builder, string str);
 u64 Put(StringBuilder *builder, u32 value);
-string CombineBuilderNodes(Arena *arena, StringBuilder *builder);
+string CombineBuilderNodes(StringBuilder *builder);
 b32 WriteFileMapped(StringBuilder *builder, string filename);
 b32 WriteFileMapped(StringBuilder *builder, StringBuilderMapped *mappedBuilder,
                     string filename);

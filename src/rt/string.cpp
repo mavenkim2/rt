@@ -843,42 +843,24 @@ u32 GetSID(string str)
 // String writing
 //
 
-StringBuilderNode *InitBuilderNode(StringBuilder *builder, u64 size)
-{
-    StringBuilderNode *node = PushStruct(builder->arena, StringBuilderNode);
-    QueuePush(builder->first, builder->last, node);
-    u64 cap = builder->cap;
-    if (size > builder->cap) cap = size * 2;
-    node->cap   = cap;
-    node->bytes = PushArray(builder->arena, u8, node->cap);
-    return node;
-}
-
 u64 Put(StringBuilder *builder, void *data, u64 size)
 {
-    u64 cursor              = builder->totalSize;
-    StringBuilderNode *node = builder->last;
-
-    u8 *srcPtr = (u8 *)data;
-
-    if (node == 0) node = InitBuilderNode(builder, size);
-    if (node->count + size > node->cap)
+    u64 cursor                        = builder->totalSize;
+    StringBuilderChunkNode *chunkNode = builder->last;
+    if (chunkNode == 0 || chunkNode->count >= chunkNode->cap)
     {
-        u64 remainingSize = node->cap - node->count;
-        size -= remainingSize;
-        MemoryCopy(node->bytes + node->count, srcPtr, remainingSize);
-
-        builder->totalSize += remainingSize;
-        srcPtr += remainingSize;
-        node->count = node->cap;
-
-        node = InitBuilderNode(builder, size);
+        chunkNode = PushStruct(builder->arena, StringBuilderChunkNode);
+        QueuePush(builder->first, builder->last, chunkNode);
+        chunkNode->cap    = 256;
+        chunkNode->values = PushArray(builder->arena, StringBuilderNode, chunkNode->cap);
     }
+    StringBuilderNode *node = &chunkNode->values[chunkNode->count++];
+    node->str.str           = PushArray(builder->arena, u8, size);
+    node->str.size          = size;
 
-    Assert(node->count + size <= node->cap);
-    MemoryCopy(node->bytes + node->count, srcPtr, size);
-    node->count += size;
     builder->totalSize += size;
+
+    MemoryCopy(node->str.str, data, size);
     return cursor;
 }
 
@@ -935,18 +917,21 @@ StringBuilder ConcatBuilders(StringBuilder *a, StringBuilder *b)
     return result;
 }
 
-string CombineBuilderNodes(Arena *arena, StringBuilder *builder)
+string CombineBuilderNodes(StringBuilder *builder)
 {
     string result;
-    result.str  = PushArray(arena, u8, builder->totalSize);
+    result.str  = PushArray(builder->arena, u8, builder->totalSize);
     result.size = builder->totalSize;
 
     u8 *cursor = result.str;
-    for (StringBuilderNode *node = builder->first; node != 0; node = node->next)
+    for (StringBuilderChunkNode *node = builder->first; node != 0; node = node->next)
     {
-        Assert(node->count <= node->cap);
-        MemoryCopy(cursor, node->bytes, node->count);
-        cursor += node->count;
+        for (u32 i = 0; i < node->count; i++)
+        {
+            StringBuilderNode *n = &node->values[i];
+            MemoryCopy(cursor, n->str.str, n->str.size);
+            cursor += n->str.size;
+        }
     }
     return result;
 }
@@ -960,18 +945,21 @@ b32 WriteFileMapped(StringBuilder *builder, string filename)
     const u64 maxFlushSize = megabytes(64);
     u8 *flushPtr           = begin;
     u64 runningSize        = 0;
-    for (StringBuilderNode *node = builder->first; node != 0; node = node->next)
+    for (StringBuilderChunkNode *node = builder->first; node != 0; node = node->next)
     {
-        Assert(node->count <= node->cap);
-        if ((u64)(ptr - flushPtr) > maxFlushSize)
+        for (u32 i = 0; i < node->count; i++)
         {
-            OS_FlushMappedFile(flushPtr, (u64)(ptr - flushPtr));
-            flushPtr = ptr;
+            StringBuilderNode *n = &node->values[i];
+            if ((u64)(ptr - flushPtr) > maxFlushSize)
+            {
+                OS_FlushMappedFile(flushPtr, (u64)(ptr - flushPtr));
+                flushPtr = ptr;
+            }
+            MemoryCopy(ptr, n->str.str, n->str.size);
+            Assert(runningSize + n->str.size <= builder->totalSize);
+            ptr += n->str.size;
+            runningSize += n->str.size;
         }
-        MemoryCopy(ptr, node->bytes, node->count);
-        Assert(runningSize + node->count <= builder->totalSize);
-        ptr += node->count;
-        runningSize += node->count;
     }
     OS_UnmapFile(begin);
     return true;

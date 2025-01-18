@@ -51,7 +51,7 @@
 
 #include "lights.cpp"
 #include "integrate.cpp"
-#include "simd_integrate.cpp"
+// #include "simd_integrate.cpp"
 
 #include "tests/test.cpp"
 #include "tests/sampling_test.cpp"

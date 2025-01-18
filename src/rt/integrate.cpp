@@ -375,9 +375,8 @@ void Render(Arena *arena, RenderParams2 &params)
                                  tileWidth, tileHeight, pixelWidth, pixelHeight);
 
     scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
-        ShadingThreadState *shadingThreadState = GetShadingThreadState();
-        u32 tileX                              = jobID % tileCountX;
-        u32 tileY                              = jobID / tileCountX;
+        u32 tileX = jobID % tileCountX;
+        u32 tileY = jobID / tileCountX;
         Vec2u minPixelBounds(params.pixelMin[0] + tileWidth * tileX,
                              params.pixelMin[1] + tileHeight * tileY);
         Vec2u maxPixelBounds(
@@ -726,7 +725,7 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
         // dudx, dudy, dvdx, dvdy)
         // TODO: is it wrong to do this with the shading normal?
 
-        Material *material = scene->materials[si.materialIDs];
+        Material *material = scene->materials[MaterialHandle(si.materialIDs).GetIndex()];
         BxDF bxdf =
             material->Evaluate(scratch.temp.arena, si, lambda, Vec4f(dudx, dvdx, dudy, dvdy));
         BSDF bsdf(bxdf, si.shading.dpdu, si.shading.n);
@@ -815,8 +814,9 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
 
             // Compute ray differentials for specular reflection or transmission
             // Compute common factors for specular ray differentials
-            UpdateRayDifferentials(ray, sample.wi, si.shading.n, si.shading.dndu,
-                                   si.shading.dndv, dudx, dvdx, dudy, dvdy, sample.eta);
+            UpdateRayDifferentials(ray, sample.wi, si.p, si.shading.n, si.shading.dndu,
+                                   si.shading.dndv, dpdx, dpdy, dudx, dvdx, dudy, dvdy,
+                                   sample.eta, sample.flags);
 
             // if there is a non-specular interaction, revert to using
         }

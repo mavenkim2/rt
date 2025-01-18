@@ -41,6 +41,7 @@ struct Mesh
 };
 } // namespace rt
 
+#include "../handles.h"
 #include "../scene_load.h"
 
 namespace rt
@@ -49,14 +50,6 @@ struct Instance
 {
     u32 id;
     u32 transformIndex;
-};
-
-enum class GeometryType
-{
-    QuadMesh,
-    TriangleMesh,
-    Instance,
-    Max,
 };
 
 struct ShapeType
