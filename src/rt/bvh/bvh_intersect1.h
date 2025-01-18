@@ -73,6 +73,7 @@ struct StackEntry
 {
     T ptr;
     f32 dist;
+    // u32 dist;
 };
 
 template <i32 K>
@@ -191,6 +192,55 @@ struct BVHTraverser<4, types>
     }
 };
 
+// embree kernels
+__forceinline static void cmp_xchg(Lane4U32 &a, Lane4U32 &b)
+{
+    const Lane4F32 mask0 = b < a;
+    const Lane4F32 mask(Shuffle<2, 2, 2, 2>(mask0));
+
+    const Lane4U32 c = Select(mask, b, a);
+    const Lane4U32 d = Select(mask, a, b);
+    a                = c;
+    b                = d;
+}
+
+/*! Sort 3 stack items. */
+__forceinline static void sort3(Lane4U32 &s1, Lane4U32 &s2, Lane4U32 &s3)
+{
+    cmp_xchg(s2, s1);
+    cmp_xchg(s3, s2);
+    cmp_xchg(s2, s1);
+}
+
+/*! Sort 4 stack items. */
+__forceinline static void sort4(Lane4U32 &s1, Lane4U32 &s2, Lane4U32 &s3, Lane4U32 &s4)
+{
+    cmp_xchg(s2, s1);
+    cmp_xchg(s4, s3);
+    cmp_xchg(s3, s1);
+    cmp_xchg(s4, s2);
+    cmp_xchg(s3, s2);
+}
+
+template <typename T>
+__forceinline void sort(StackEntry<T> *begin, StackEntry<T> *end)
+{
+    for (StackEntry<T> *i = begin + 1; i != end; ++i)
+    {
+        const Lane4F32 item = Lane4F32::LoadU((float *)i);
+        const u32 dist      = i->dist;
+        StackEntry<T> *j    = i;
+
+        while ((j != begin) && ((j - 1)->dist < dist))
+        {
+            Lane4F32::StoreU(j, Lane4F32::LoadU((float *)(j - 1)));
+            --j;
+        }
+
+        Lane4F32::StoreU(j, item);
+    }
+}
+
 template <i32 types>
 struct BVHTraverser<8, types>
 {
@@ -234,6 +284,7 @@ struct BVHTraverser<8, types>
     }
     static void Traverse(StackEntry entry, StackEntry *stack, i32 &stackPtr, TravRay<8> &ray)
     {
+#if 1
         Lane8F32 tEntry, mask;
         auto node = GetNode<8, types>(entry.ptr);
         Intersect(node, ray, tEntry, mask);
@@ -284,9 +335,124 @@ struct BVHTraverser<8, types>
             stack[stackPtr + ((numNodes - 1 - indexG) & 7)] = {node->Child(6), t_hgfedcba[6]};
             stack[stackPtr + ((numNodes - 1 - indexH) & 7)] = {node->Child(7), t_hgfedcba[7]};
 
+#if 0
+            for (u32 i = 0; i < numNodes; i++)
+            {
+                _mm_prefetch((char *)stack[stackPtr + i].ptr.data, _MM_HINT_T0);
+                _mm_prefetch((char *)stack[stackPtr + i].ptr.data + 64, _MM_HINT_T0);
+                _mm_prefetch((char *)stack[stackPtr + i].ptr.data + 2 * 64, _MM_HINT_T0);
+            }
+#endif
             stackPtr += numNodes;
         }
+#else
+        {
+            Lane8F32 tEntry, laneMask;
+            auto node = GetNode<8, types>(entry.ptr);
+            Intersect(node, ray, tEntry, laneMask);
+
+            u32 mask = Movemask(laneMask);
+            if (mask == 0) return;
+            Lane8F32 tNear = Select(laneMask, tEntry, pos_inf);
+
+            Assert(mask != 0);
+
+            /*! one child is hit, continue with that child */
+            u32 r        = Bscf(mask);
+            BVHNode8 cur = node->Child(r);
+            // BVH::prefetch(cur, types);
+            if (mask == 0)
+            {
+                stack[stackPtr] = {cur, (u32)tNear[r]};
+                stackPtr += 1;
+                return;
+            }
+
+            /*! two children are hit, push far child, and continue with closer child */
+            BVHNode8 c0  = cur;
+            const u32 d0 = (u32)tNear[r];
+            r            = Bscf(mask);
+            BVHNode8 c1  = node->Child(r);
+            // BVH::prefetch(c1, types);
+            const u32 d1 = (u32)tNear[r];
+
+            // Assert(c0 != BVH::emptyNode);
+            // Assert(c1 != BVH::emptyNode);
+            if (mask == 0)
+            {
+                if (d0 < d1)
+                {
+                    stack[stackPtr]     = {c1, d1};
+                    stack[stackPtr + 1] = {c0, d0};
+                    stackPtr += 2;
+                    return;
+                }
+                else
+                {
+                    stack[stackPtr]     = {c0, d0};
+                    stack[stackPtr + 1] = {c1, d1};
+                    stackPtr += 2;
+                    return;
+                }
+            }
+            Lane4U32 s0 = _mm_set_epi64x((size_t)d0, (size_t)c0.data);
+            Lane4U32 s1 = _mm_set_epi64x((size_t)d1, (size_t)c1.data);
+
+            r           = Bscf(mask);
+            BVHNode8 c2 = node->Child(r);
+            // BVH::prefetch(c2, types);
+            u32 d2      = (u32)tNear[r];
+            Lane4U32 s2 = _mm_set_epi64x((size_t)d2, (size_t)c2.data);
+            /* 3 hits */
+            if (mask == 0)
+            {
+                sort3(s0, s1, s2);
+                *(Lane4U32 *)&stack[stackPtr]     = s0;
+                *(Lane4U32 *)&stack[stackPtr + 1] = s1;
+                *(Lane4U32 *)&stack[stackPtr + 2] = s2;
+                stackPtr += 3;
+                return;
+            }
+            r           = Bscf(mask);
+            BVHNode8 c3 = node->Child(r);
+            // BVH::prefetch(c3, types);
+            u32 d3      = (u32)tNear[r];
+            Lane4U32 s3 = _mm_set_epi64x((size_t)d3, (size_t)c3.data);
+            /* 4 hits */
+            if (mask == 0)
+            {
+                sort4(s0, s1, s2, s3);
+                *(Lane4U32 *)&stack[stackPtr]     = s0;
+                *(Lane4U32 *)&stack[stackPtr + 1] = s1;
+                *(Lane4U32 *)&stack[stackPtr + 2] = s2;
+                *(Lane4U32 *)&stack[stackPtr + 3] = s3;
+                stackPtr += 4;
+                return;
+            }
+            *(Lane4U32 *)&stack[stackPtr + 0] = s0;
+            *(Lane4U32 *)&stack[stackPtr + 1] = s1;
+            *(Lane4U32 *)&stack[stackPtr + 2] = s2;
+            *(Lane4U32 *)&stack[stackPtr + 3] = s3;
+            /*! fallback case if more than 4 children are hit */
+            StackEntry *stackFirst = stack + stackPtr;
+            stackPtr += 4;
+            for (;;)
+            {
+                // assert(stackPtr < stackEnd);
+                r          = Bscf(mask);
+                BVHNode8 c = node->Child(r);
+                // BVH::prefetch(c, types);
+                unsigned int d                  = *(unsigned int *)&tNear[r];
+                const Lane4U32 s                = _mm_set_epi64x((size_t)d, (size_t)c.data);
+                *(Lane4U32 *)&stack[stackPtr++] = s;
+                // assert(c != BVH::emptyNode);
+                if (mask == 0) break;
+            }
+            sort(stackFirst, &stack[stackPtr]);
+        }
+#endif
     }
+
     static void TraverseAny(BVHNode8 entry, BVHNode8 *stack, i32 &stackPtr, TravRay<8> &ray)
     {
         auto node = GetNode<8, types>(entry);

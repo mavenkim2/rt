@@ -12,6 +12,7 @@ namespace rt
 // - ray differentials
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
 // - remove duplicate materials and geometry
+// - optimize bvh memory consumption?
 
 // - bdpt, metropolis, vcm, upbp, mcm?
 // - volumetric rendering

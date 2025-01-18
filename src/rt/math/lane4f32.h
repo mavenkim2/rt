@@ -308,6 +308,16 @@ __forceinline Lane4F32 operator==(const Lane4U32 &a, const Lane4U32 &b)
     return _mm_castsi128_ps(_mm_cmpeq_epi32(a, b));
 }
 __forceinline Lane4F32 operator!=(const Lane4U32 &a, const Lane4U32 &b) { return !(a == b); }
+__forceinline Lane4F32 operator<(const Lane4U32 &a, const Lane4U32 &b)
+{
+    return _mm_castsi128_ps(_mm_cmplt_epi32(a, b));
+}
+__forceinline Lane4F32 operator>=(const Lane4U32 &a, const Lane4U32 &b) { return !(a < b); }
+__forceinline Lane4F32 operator>(const Lane4U32 &a, const Lane4U32 &b)
+{
+    return _mm_castsi128_ps(_mm_cmpgt_epi32(a, b));
+}
+__forceinline Lane4F32 operator<=(const Lane4U32 &a, const Lane4U32 &b) { return !(a > b); }
 
 __forceinline Lane4F32 operator&(const Lane4F32 &a, const Lane4F32 &b)
 {
