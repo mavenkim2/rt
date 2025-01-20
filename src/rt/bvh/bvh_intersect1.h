@@ -1028,7 +1028,13 @@ struct InstanceIntersector
                 si.p            = TransformP(*t, si.p, si.pError);
                 si.n            = Normalize(invTp * si.n);
                 si.shading.n    = Normalize(invTp * si.shading.n);
+                si.shading.dndu = invTp * si.shading.dndu;
+                si.shading.dndv = invTp * si.shading.dndv;
+                si.dpdu         = TransformV(*t, si.dpdu);
+                si.dpdv         = TransformV(*t, si.dpdv);
                 si.shading.dpdu = TransformV(*t, si.shading.dpdu);
+                si.shading.dpdv = TransformV(*t, si.shading.dpdv);
+                si.shading.n    = FaceForward(si.shading.n, si.n);
 
                 result = true;
             }

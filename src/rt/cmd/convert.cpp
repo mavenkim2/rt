@@ -1586,7 +1586,8 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
         shapeInfo->shapes = info->shapes;
         WriteFile(directory, shapeInfo);
 
-        u32 transformIndex            = info->transforms.Length();
+        u32 transformIndex = info->transforms.Length();
+        info->numInstances++;
         info->transforms.AddBack()    = AffineSpace::Identity();
         info->fileInstances.AddBack() = {shapeInfo->filename, transformIndex, transformIndex};
     }

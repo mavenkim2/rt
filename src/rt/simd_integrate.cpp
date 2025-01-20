@@ -345,11 +345,11 @@ QUEUE_HANDLER(RayIntersectionHandler)
 template <typename MaterialType>
 QUEUE_HANDLER(ShadingQueueHandler)
 {
-    if constexpr (std::is_same_v<MaterialType, NullMaterial>)
-    {
-        finalCount -= count;
-        return;
-    }
+    // if constexpr (std::is_same_v<MaterialType, NullMaterial>)
+    // {
+    //     finalCount -= count;
+    //     return;
+    // }
 
     ScratchArena temp;
     ShadingGlobals *globals = GetShadingGlobals();
@@ -357,7 +357,7 @@ QUEUE_HANDLER(ShadingQueueHandler)
     ShadingHandle *keys1    = PushArrayNoZero(temp.temp.arena, ShadingHandle, count);
 
     // Radix sort
-    for (i32 iter = 7; iter >= 0; iter--)
+    for (i32 iter = sizeof(keys0[0].shadingKey) - 1; iter >= 0; iter--)
     {
         u32 shift = iter * 8;
         Assert(shift < 64);
@@ -412,102 +412,118 @@ QUEUE_HANDLER(ShadingQueueHandler)
         f32 &bsdfPdf               = rayState->bsdfPdf;
         bool &specularBounce       = rayState->specularBounce;
 
-        Vec3f dpdx, dpdy;
-        f32 dudx, dvdx, dudy, dvdy;
-        CalculateFilterWidths(rayState->ray, *globals->camera, si.p, si.n, si.dpdu, si.dpdv,
-                              dpdx, dpdy, dudx, dvdx, dudy, dvdy);
-
-        ScratchArena scratch;
-
+        if constexpr (std::is_same_v<MaterialType, NullMaterial>)
         {
-            // BxDF evaluation
-            BxDF bxdf = material->Evaluate(scratch.temp.arena, si, lambda,
-                                           Vec4f(dudx, dvdx, dudy, dvdy));
-            BSDF bsdf(bxdf, si.shading.dpdu, si.shading.n);
-
-            if (rayState->depth++ >= globals->maxDepth)
+            specularBounce = true;
+            ray.o          = OffsetRayOrigin(si.p, si.pError, si.n, ray.d);
+            ray.tFar       = pos_inf;
+            if (ray.pxOffset != Vec3f(pos_inf))
             {
-                TerminateRay(state, handle.rayStateHandle);
-                continue;
+                ray.pxOffset = ray.pxOffset + si.tHit * ray.dxOffset;
+                ray.pyOffset = ray.pyOffset + si.tHit * ray.dyOffset;
             }
-
-            // Next Event Estimation
-            // Choose light source for direct lighting calculation
-            if (!IsSpecular(bsdf.Flags()))
-            {
-                f32 lightU = sampler.Get1D();
-                f32 pmf;
-                LightHandle lightHandle = UniformLightSample(scene, lightU, &pmf);
-                Vec2f sample            = sampler.Get2D();
-                if (bool(lightHandle))
-                {
-                    // Sample point on the light source
-                    LightSample ls = SampleLi(scene, lightHandle, si, lambda, sample, true);
-                    if (ls.pdf)
-                    {
-                        // Evaluate BSDF for light sample, check visibility with shadow ray
-                        f32 p_b;
-                        SampledSpectrum f = bsdf.EvaluateSample(-ray.d, ls.wi, p_b) *
-                                            AbsDot(si.shading.n, ls.wi);
-                        if (f && !Occluded(scene, ray, si, ls))
-                        {
-                            // Calculate contribution
-                            f32 lightPdf = pmf * ls.pdf;
-
-                            if (IsDeltaLight(ls.lightType))
-                            {
-                                L += beta * f * ls.L / lightPdf;
-                            }
-                            else
-                            {
-                                f32 w_l = PowerHeuristic(1, lightPdf, 1, p_b);
-                                L += beta * f * w_l * ls.L / lightPdf;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // sample bsdf, calculate pdf
-            f32 u             = sampler.Get1D();
-            BSDFSample sample = bsdf.GenerateSample(-ray.d, u, sampler.Get2D());
-            if (sample.pdf == 0.f)
-            {
-                TerminateRay(state, handle.rayStateHandle);
-                continue;
-            }
-            // beta *= sample.f / sample.pdf;
-            beta *= sample.f * AbsDot(si.shading.n, sample.wi) / sample.pdf;
-            bsdfPdf        = sample.pdf;
-            specularBounce = sample.IsSpecular();
-            if (sample.IsTransmissive()) etaScale *= Sqr(sample.eta);
-
-            // Offset ray and compute ray diferentials if necessary
-            ray.o = OffsetRayOrigin(si.p, si.pError, si.n, sample.wi);
-
-            ray.d    = sample.wi;
-            ray.tFar = pos_inf;
-
-            // Compute ray differentials for specular reflection or transmission
-            // Compute common factors for specular ray differentials
-            UpdateRayDifferentials(ray, sample.wi, si.p, si.shading.n, si.shading.dndu,
-                                   si.shading.dndv, dpdx, dpdy, dudx, dvdx, dudy, dvdy,
-                                   sample.eta, sample.flags);
         }
-        // Russian roulette
+        else
         {
-            SampledSpectrum rrBeta = beta * etaScale;
-            f32 q                  = rrBeta.MaxComponentValue();
-            if (rayState->depth > 1 && q < 1.f)
+
+            Vec3f dpdx, dpdy;
+            f32 dudx, dvdx, dudy, dvdy;
+            CalculateFilterWidths(rayState->ray, *globals->camera, si.p, si.n, si.dpdu,
+                                  si.dpdv, dpdx, dpdy, dudx, dvdx, dudy, dvdy);
+
+            ScratchArena scratch;
+
             {
-                if (sampler.Get1D() < Max(0.f, 1 - q))
+                // BxDF evaluation
+                BxDF bxdf = material->Evaluate(scratch.temp.arena, si, lambda,
+                                               Vec4f(dudx, dvdx, dudy, dvdy));
+                BSDF bsdf(bxdf, si.shading.dpdu, si.shading.n);
+
+                if (rayState->depth++ >= globals->maxDepth)
                 {
                     TerminateRay(state, handle.rayStateHandle);
                     continue;
                 }
 
-                beta /= q;
-                // TODO: infinity check for beta
+                // Next Event Estimation
+                // Choose light source for direct lighting calculation
+                if (!IsSpecular(bsdf.Flags()))
+                {
+                    f32 lightU = sampler.Get1D();
+                    f32 pmf;
+                    LightHandle lightHandle = UniformLightSample(scene, lightU, &pmf);
+                    Vec2f sample            = sampler.Get2D();
+                    if (bool(lightHandle))
+                    {
+                        // Sample point on the light source
+                        LightSample ls =
+                            SampleLi(scene, lightHandle, si, lambda, sample, true);
+                        if (ls.pdf)
+                        {
+                            // Evaluate BSDF for light sample, check visibility with shadow ray
+                            f32 p_b;
+                            SampledSpectrum f = bsdf.EvaluateSample(-ray.d, ls.wi, p_b) *
+                                                AbsDot(si.shading.n, ls.wi);
+                            if (f && !Occluded(scene, ray, si, ls))
+                            {
+                                // Calculate contribution
+                                f32 lightPdf = pmf * ls.pdf;
+
+                                if (IsDeltaLight(ls.lightType))
+                                {
+                                    L += beta * f * ls.L / lightPdf;
+                                }
+                                else
+                                {
+                                    f32 w_l = PowerHeuristic(1, lightPdf, 1, p_b);
+                                    L += beta * f * w_l * ls.L / lightPdf;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // sample bsdf, calculate pdf
+                f32 u             = sampler.Get1D();
+                BSDFSample sample = bsdf.GenerateSample(-ray.d, u, sampler.Get2D());
+                if (sample.pdf == 0.f)
+                {
+                    TerminateRay(state, handle.rayStateHandle);
+                    continue;
+                }
+                // beta *= sample.f / sample.pdf;
+                beta *= sample.f * AbsDot(si.shading.n, sample.wi) / sample.pdf;
+                bsdfPdf        = sample.pdf;
+                specularBounce = sample.IsSpecular();
+                if (sample.IsTransmissive()) etaScale *= Sqr(sample.eta);
+
+                // Offset ray and compute ray diferentials if necessary
+                ray.o = OffsetRayOrigin(si.p, si.pError, si.n, sample.wi);
+
+                ray.d    = sample.wi;
+                ray.tFar = pos_inf;
+
+                // Compute ray differentials for specular reflection or transmission
+                // Compute common factors for specular ray differentials
+                UpdateRayDifferentials(ray, sample.wi, si.p, si.shading.n, si.shading.dndu,
+                                       si.shading.dndv, dpdx, dpdy, dudx, dvdx, dudy, dvdy,
+                                       sample.eta, sample.flags);
+            }
+            // Russian roulette
+            {
+                SampledSpectrum rrBeta = beta * etaScale;
+                f32 q                  = rrBeta.MaxComponentValue();
+                if (rayState->depth > 1 && q < 1.f)
+                {
+                    if (sampler.Get1D() < Max(0.f, 1 - q))
+                    {
+                        TerminateRay(state, handle.rayStateHandle);
+                        continue;
+                    }
+
+                    beta /= q;
+                    // TODO: infinity check for beta
+                }
             }
         }
 

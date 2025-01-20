@@ -1085,10 +1085,16 @@ int main(int argc, char *argv[])
     // Mesh mesh = LoadPLY(arena, "../data/island/pbrt-v4/isDunesA/xgPalmDebris/"
     //                            "xgPalmDebris_archivePalmdead0004_mod_geometry_00002.ply");
     //
-    // Ptex::String error;
-    // Ptex::PtexTexture *texture =
-    //     cache->get("../data/island/textures/isDunesA/Color/stem0004_geo.ptx", error);
-    // u32 numFaces = texture->getInfo().numFaces;
+    Ptex::String error;
+    Ptex::PtexTexture *texture = cache->get(
+        "../data/island/textures/isMountainB/Displacement/mountainb0001_geo.ptx", error);
+    u32 numFaces = texture->getInfo().numFaces;
+    u32 c        = texture->numChannels();
+
+    f32 out[3] = {};
+    Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
+    Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
+    filter->eval(out, 0, c, 0, 0.75f, 0.75f, 0.f, 0.f, 0.f, 0.f);
     //
 
     // DualTest();

@@ -9,10 +9,11 @@
 namespace rt
 {
 // TODO
-// - COHERENT TEXTURE READS
-// - ray differentials
+// - order:
+// - fix ray differentials
+// - remove duplicate materials (and maybe geometry), see if this leads to coherent texture
+// reads
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
-// - remove duplicate materials and geometry
 // - optimize bvh memory consumption?
 
 // - bdpt, metropolis, vcm, upbp, mcm?
@@ -549,6 +550,10 @@ void CalculateFilterWidths(const Ray2 &ray, const Camera &camera, const Vec3f &p
     // dvdx =invDet * (-ata01 * atb0x + ata00 * atb1x)
     dudy = Clamp(invDet * FMS(ata11, atb0y, ata01 * atb1y), -1e8f, 1e8f);
     dvdy = Clamp(invDet * FMS(ata00, atb1y, ata01 * atb0y), -1e8f, 1e8f);
+
+    // printf("dpdx: %f %f %f, dpdy: %f %f %f, dudx: %f, dvdx: %f, dudy: %f, dvdy: %f\n",
+    // dpdx.x,
+    //        dpdx.y, dpdx.z, dpdy.x, dpdy.y, dpdy.z, dudx, dvdx, dudy, dvdy);
 }
 
 __forceinline void UpdateRayDifferentials(Ray2 &ray, const Vec3f &wi, const Vec3f &p, Vec3f n,
@@ -720,16 +725,27 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
         f32 dudx, dudy, dvdx, dvdy = 0.f;
         Vec3f dpdx, dpdy;
         CalculateFilterWidths(ray, camera, si.p, si.n, si.dpdu, si.dpdv, dpdx, dpdy, dudx,
-                              dudy, dvdx, dvdy);
+                              dvdx, dudy, dvdy);
         // f32 newRadius = ray.radius + ray.spread * si.tHit;
 
         // Calculate differential of surface parameterization w.r.t image plane (i.e.
         // dudx, dudy, dvdx, dvdy)
-        // TODO: is it wrong to do this with the shading normal?
+        if (MaterialHandle(si.materialIDs).GetType() == MaterialTypes::Interface)
+        {
+            specularBounce = true;
+            ray.o          = OffsetRayOrigin(si.p, si.pError, si.n, ray.d);
+            ray.tFar       = pos_inf;
+            if (ray.pxOffset != Vec3f(pos_inf))
+            {
+                ray.pxOffset = ray.pxOffset + si.tHit * ray.dxOffset;
+                ray.pyOffset = ray.pyOffset + si.tHit * ray.dyOffset;
+            }
+            continue;
+        }
 
         Material *material = scene->materials[MaterialHandle(si.materialIDs).GetIndex()];
-        BxDF bxdf =
-            material->Evaluate(scratch.temp.arena, si, lambda, Vec4f(dudx, dvdx, dudy, dvdy));
+        BxDF bxdf          = material->Evaluate(scratch.temp.arena, si, lambda,
+                                                        Vec4f(dudx, dvdx, dudy, dvdy));
         BSDF bsdf(bxdf, si.shading.dpdu, si.shading.n);
 
         // Next Event Estimation

@@ -818,6 +818,12 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                 {
                     Assert(0);
                 }
+
+                PrimitiveIndices &ids = indices.Last();
+                // if (baseScene->materials[ids.GetIndex()])
+                // {
+                //     Displace
+                // }
             }
             scene->numPrimitives = shapes.totalCount;
             scene->primitives    = PushArrayNoZero(arena, Mesh, shapes.totalCount);

@@ -707,8 +707,30 @@ MaterialCallback materialFuncs[] = {
 
 struct Material
 {
+    // TODO: actually displacement map
+    struct Texture *displacement;
+    BxDF EvaluateMaterial(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                          const Vec4f &filterWidths)
+    {
+        if (displacement) BumpMap(si, lambda, filterWidths);
+        return Evaluate(arena, si, lambda, filterWidths);
+    }
+
     virtual BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
                           const Vec4f &filterWidths) = 0;
+
+    void BumpMap(SurfaceInteraction &si, SampledWavelengths &lambda, const Vec4f &filterWidths)
+    {
+        // f32 dddu, dddv;
+        // f32 d = displacement->EvaluateFloat(si, lambda, filterWidths);
+        //
+        // Vec3f dpdu = si.shading.dpdu + dddu * si.shading.n + displacement * si.shading.dndu;
+        // Vec3f dpdv = si.shading.dpdv + dddv * si.shading.n + displacement * si.shading.dndv;
+        //
+        // si.shading.n    = Cross(dpdu, dpdv);
+        // si.shading.dpdu = dpdu;
+        // si.shading.dpdv = dpdv;
+    }
 };
 
 struct Ray2;

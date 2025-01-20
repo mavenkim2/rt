@@ -61,61 +61,6 @@ TextureType ConvertStringToTextureType(string type)
     return TextureType(0);
 }
 
-// Tables
-// struct DefaultParameter
-// {
-//     bool hasDefault;
-//     DataType type;
-//     union
-//     {
-//         u32 u;
-//         i32 i;
-//         f32 f;
-//         bool b;
-//     };
-//
-//     static DefaultParameter SetFloatDefault(f32 value)
-//     {
-//         DefaultParameter d;
-//         d.type = DataType::Float;
-//         d.f    = value;
-//         return d;
-//     }
-// };
-//
-// struct MaterialParameters
-// {
-//     static const u32 MAX_PARAMETER_COUNT = 16;
-//     string name;
-//     StringId id;
-//
-//     string parameterNames[MAX_PARAMETER_COUNT];
-//     DataType parameterDataTypes[MAX_PARAMETER_COUNT];
-//     u32 parameterCount;
-// };
-//
-// static const MaterialParameters materialParameters[] = {
-//     MaterialParameters{
-//         "diffuse",
-//         "diffuse"_sid,
-//         {"reflectance", "displacement"},
-//         {DataType::Texture, DataType::Texture},
-//         2,
-//     },
-//     MaterialParameters{
-//         "diffusetransmission",
-//         "diffusetransmission"_sid,
-//         {"reflectance", "transmittance", "scale", "displacement"},
-//         {DataType::Texture, DataType::Texture, DataType::Float, DataType::Texture},
-//         4,
-//     },
-//     MaterialParameters{
-//         "dielectric",
-//         "dielectic"_sid,
-//         {"roughness", "eta", "displacement"},
-//     },
-// };
-
 static const string materialTypeNames[] = {
     "interface", "diffuse", "diffusetransmission", "coateddiffuse", "dielectric",
 };
@@ -127,42 +72,46 @@ static const StringId materialTypeIDs[] = {
 
 static const StringId diffuseParameterIds[] = {
     "reflectance"_sid,
-    //"displacement"_sid,
+    "displacement"_sid,
 };
 
 static const string diffuseParameterNames[] = {
     "reflectance",
-    //"displacement",
+    "displacement",
 };
 
 static const StringId diffuseTransmissionIds[] = {
-    "reflectance"_sid, "transmittance"_sid, "scale"_sid,
-    //"displacement"_sid,
+    "reflectance"_sid,
+    "transmittance"_sid,
+    "scale"_sid,
+    "displacement"_sid,
 };
 
 static const string diffuseTransmissionNames[] = {
-    "reflectance", "transmittance", "scale",
-    //"displacement",
+    "reflectance",
+    "transmittance",
+    "scale",
+    "displacement",
 };
 
 static const StringId dielectricIds[] = {
     "roughness"_sid,      "uroughness"_sid, "vroughness"_sid,
-    "remaproughness"_sid, "eta"_sid, //"displacement"_sid,
+    "remaproughness"_sid, "eta"_sid,        "displacement"_sid,
 };
 
 static const string dielectricNames[] = {
-    "roughness", "uroughness", "vroughness", "remaproughness", "eta", //"displacement",
+    "roughness", "uroughness", "vroughness", "remaproughness", "eta", "displacement",
 };
 
 static const StringId coatedDiffuseIds[] = {
     "roughness"_sid, "uroughness"_sid,  "vroughness"_sid, "remaproughness"_sid,
     "eta"_sid,       "reflectance"_sid, "albedo"_sid,     "g"_sid,
-    "maxdepth"_sid,  "nsamples"_sid,    "thickness"_sid, //"displacement"_sid,
+    "maxdepth"_sid,  "nsamples"_sid,    "thickness"_sid,  "displacement"_sid,
 };
 
 static const string coatedDiffuseNames[] = {
     "roughness", "uroughness", "vroughness", "remaproughness", "eta",       "reflectance",
-    "albedo",    "g",          "maxdepth",   "nsamples",       "thickness", //"displacement",
+    "albedo",    "g",          "maxdepth",   "nsamples",       "thickness", "displacement",
 };
 
 static const StringId *materialParameterIDs[] = {
@@ -184,20 +133,6 @@ static const string textureTypeNames[] = {
     "bilerp", "checkerboard", "constant", "directionmix", "dots",  "fbm",      "imagemap",
     "marble", "mix",          "ptex",     "scale",        "windy", "wrinkled",
 };
-
-// static const DataType ptexDataTypes[] = {
-//     DataType::String,
-//     DataType::String,
-//     DataType::Float,
-// };
-//
-// static const DataType constantTexDataTypes[] = {
-//     DataType::Float,
-// };
-//
-// static const DataType *textureDataTypes[] = {
-//     0, 0, 0, 0, 0, 0, 0, 0, 0, ptexDataTypes, 0, 0, 0,
-// };
 
 struct FileOffsets
 {

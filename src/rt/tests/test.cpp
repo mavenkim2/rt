@@ -942,8 +942,8 @@ void TestRender(Arena *arena, Options *options = 0)
     }
 
     counter = OS_StartCounter();
-    // Render(arena, params);
-    RenderSIMD(arena, params);
+    Render(arena, params);
+    // RenderSIMD(arena, params);
     time = OS_GetMilliseconds(counter);
     printf("total render time: %fms\n", time);
 }
