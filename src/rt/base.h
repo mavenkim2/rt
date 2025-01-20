@@ -65,7 +65,7 @@ void Print(const char *fmt, va_list args);
         printf("Expression: %s\nFile: %s\nLine Num: %u\n", #expression, __FILE__, __LINE__);  \
         Trap();                                                                               \
     }
-#define Error(expression, str, ...)                                                           \
+#define ErrorExit(expression, str, ...)                                                       \
     if (expression)                                                                           \
     {                                                                                         \
     }                                                                                         \
@@ -80,7 +80,7 @@ void Print(const char *fmt, va_list args);
 #define NotImplemented         Assert(0)
 #else
 #define Assert(expression)
-#define Error(expression, str, ...)
+#define ErrorExit(expression, str, ...)
 #define StaticAssert(expr, ID)
 #define NotImplemented
 #endif

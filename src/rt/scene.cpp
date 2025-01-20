@@ -31,13 +31,13 @@ struct Texture
     virtual f32 EvaluateFloat(SurfaceInteraction &si, SampledWavelengths &lambda,
                               const Vec4f &filterWidths)
     {
-        Error(0, "EvaluateFloat is not defined for sub class \n");
+        ErrorExit(0, "EvaluateFloat is not defined for sub class \n");
         return 0.f;
     }
     virtual SampledSpectrum EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
                                            const Vec4f &filterWidths)
     {
-        Error(0, "EvaluateAlbedo is not defined for sub class\n");
+        ErrorExit(0, "EvaluateAlbedo is not defined for sub class\n");
         return {};
     }
     SampledSpectrum EvaluateAlbedo(const Vec3f &color, SampledWavelengths &lambda)
@@ -387,7 +387,7 @@ Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer, string directory)
     }
     else
     {
-        Error(0, "Texture type not supported yet");
+        ErrorExit(0, "Texture type not supported yet");
     }
     return 0;
 }
@@ -632,7 +632,7 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
     tokenizer.cursor = tokenizer.input.str;
 
     bool hasMagic = Advance(&tokenizer, "RTSCENE_START ");
-    Error(hasMagic, "RTScene file missing magic.\n");
+    ErrorExit(hasMagic, "RTScene file missing magic.\n");
 
     string data = OS_ReadFile(arena, dataPath);
 
@@ -641,7 +641,7 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
     dataTokenizer.cursor = dataTokenizer.input.str;
 
     hasMagic = Advance(&dataTokenizer, "DATA_START ");
-    Error(hasMagic, "RTScene data section missing magic.\n");
+    ErrorExit(hasMagic, "RTScene data section missing magic.\n");
     bool hasTransforms = Advance(&dataTokenizer, "TRANSFORM_START ");
     if (hasTransforms)
     {
@@ -840,7 +840,7 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
         }
         else
         {
-            Error(0, "Invalid section header.\n");
+            ErrorExit(0, "Invalid section header.\n");
         }
     }
     files.Flatten(scene->childScenes);
@@ -883,7 +883,7 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
         }
         else
         {
-            Error(0, "No shapes specified\n");
+            ErrorExit(0, "No shapes specified\n");
         }
     }
 

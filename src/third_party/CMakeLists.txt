@@ -40,3 +40,9 @@ endif()
 
 add_subdirectory(ptex)
 set (PTEX_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/ptex/src/ptex PARENT_SCOPE)
+
+# For opensubdiv visibility
+set (PTEX_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ptex/src/ptex)
+set (PTEX_LIBRARY Ptex_static)
+
+add_subdirectory(OpenSubdiv)

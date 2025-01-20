@@ -29,7 +29,7 @@ MaterialTypes ConvertStringToMaterialType(string type)
     else if (type == "interface") return MaterialTypes::Interface;
     else
     {
-        Error(0, "Material type not supported or valid.\n");
+        ErrorExit(0, "Material type not supported or valid.\n");
         return MaterialTypes(0);
     }
 }
@@ -57,7 +57,7 @@ TextureType ConvertStringToTextureType(string type)
 {
     if (type == "ptex") return TextureType::ptex;
     // else if (type == "imagemap") return TextureType::imagemap;
-    else Error(0, "Texture type not supported or valid\n");
+    else ErrorExit(0, "Texture type not supported or valid\n");
     return TextureType(0);
 }
 
@@ -257,7 +257,7 @@ bool CheckQuadPLY(string filename)
             }
             else
             {
-                Error(0, "elementType: %s\n", (char *)elementType.str);
+                ErrorExit(0, "elementType: %s\n", (char *)elementType.str);
             }
         }
         else if (word == "end_header") break;
@@ -274,7 +274,7 @@ inline u32 GetTypeStride(string word)
     else if (word == "short" || word == "ushort") return 2;
     else if (word == "int" || word == "uint" || word == "float") return 4;
     else if (word == "double") return 8;
-    Error(0, "Invalid type: %s\n", (char *)word.str);
+    ErrorExit(0, "Invalid type: %s\n", (char *)word.str);
     return 0;
 }
 
@@ -388,7 +388,7 @@ Mesh LoadPLY(Arena *arena, string filename)
             }
             else
             {
-                Error(0, "elementType: %s\n", (char *)elementType.str);
+                ErrorExit(0, "elementType: %s\n", (char *)elementType.str);
             }
         }
         else if (word == "end_header") break;

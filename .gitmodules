@@ -8,3 +8,6 @@
 [submodule "src/third_party/zlib"]
 	path = src/third_party/zlib
 	url = https://github.com/mitsuba-renderer/zlib.git
+[submodule "src/third_party/OpenSubdiv"]
+	path = src/third_party/OpenSubdiv
+	url = https://github.com/PixarAnimationStudios/OpenSubdiv.git

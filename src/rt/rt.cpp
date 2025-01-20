@@ -52,6 +52,8 @@
 #include "lights.cpp"
 #include "integrate.cpp"
 #include "simd_integrate.cpp"
+#include "subdivision.h"
+#include "subdivision.cpp"
 
 #include "tests/test.cpp"
 #include "tests/sampling_test.cpp"
@@ -1095,7 +1097,6 @@ int main(int argc, char *argv[])
     Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
     Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
     filter->eval(out, 0, c, 0, 0.75f, 0.75f, 0.f, 0.f, 0.f, 0.f);
-    //
 
     // DualTest();
 

@@ -181,7 +181,7 @@ OS_Handle OS_CreateFile(string filename)
 {
     HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0,
                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    Error(file != INVALID_HANDLE_VALUE, "Could not open file: %S\n", filename);
+    ErrorExit(file != INVALID_HANDLE_VALUE, "Could not open file: %S\n", filename);
     OS_Handle outHandle;
     outHandle.handle = (u64)file;
     return outHandle;
@@ -191,7 +191,7 @@ u64 OS_GetFileSize(string filename)
 {
     HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0,
                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    Error(file != INVALID_HANDLE_VALUE, "Could not open file: %S\n", filename);
+    ErrorExit(file != INVALID_HANDLE_VALUE, "Could not open file: %S\n", filename);
     u64 size;
     GetFileSizeEx(file, (LARGE_INTEGER *)&size);
     CloseHandle(file);
@@ -202,7 +202,7 @@ string OS_ReadFile(Arena *arena, string filename, u64 offset)
 {
     HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0,
                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    Error(file != INVALID_HANDLE_VALUE, "Could not open file: %S\n", filename);
+    ErrorExit(file != INVALID_HANDLE_VALUE, "Could not open file: %S\n", filename);
     u64 size;
     GetFileSizeEx(file, (LARGE_INTEGER *)&size);
     size -= offset;
@@ -215,7 +215,7 @@ string OS_ReadFile(Arena *arena, string filename, u64 offset)
         LARGE_INTEGER dist;
         dist.QuadPart = offset;
         BOOL flag     = SetFilePointerEx(file, dist, 0, FILE_BEGIN);
-        Error(flag, "Error while offsetting file pointer for file %S\n", filename);
+        ErrorExit(flag, "Error while offsetting file pointer for file %S\n", filename);
     }
 
     u64 totalReadSize = 0;
@@ -262,13 +262,13 @@ string OS_MapFileRead(string filename)
 {
     HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0,
                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
-    Error(file != INVALID_HANDLE_VALUE, "Could not open file: %S\n", filename);
+    ErrorExit(file != INVALID_HANDLE_VALUE, "Could not open file: %S\n", filename);
     u64 size;
     GetFileSizeEx(file, (LARGE_INTEGER *)&size);
 
     HANDLE mapping = CreateFileMapping(file, 0, PAGE_READONLY, 0, 0, 0);
     CloseHandle(file);
-    Error(mapping != INVALID_HANDLE_VALUE, "Could not map file: %S\n", filename);
+    ErrorExit(mapping != INVALID_HANDLE_VALUE, "Could not map file: %S\n", filename);
 
     LPVOID ptr = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
     CloseHandle(mapping);
@@ -288,8 +288,8 @@ u8 *OS_MapFileWrite(string filename, u64 size)
     // Error(file != INVALID_HANDLE_VALUE, "Could not create file: %S\n", filename);
     if (file == INVALID_HANDLE_VALUE)
     {
-        DWORD lastError = GetLastError();
-        printf("error code %lu\n", lastError);
+        DWORD lastErrorExit = GetLastError();
+        printf("error code %lu\n", lastErrorExit);
         Assert(0);
     }
 
@@ -301,7 +301,7 @@ u8 *OS_MapFileWrite(string filename, u64 size)
     HANDLE mapping = CreateFileMapping(file, 0, PAGE_READWRITE, newFileSize.HighPart,
                                        newFileSize.LowPart, 0);
     CloseHandle(file);
-    Error(mapping != INVALID_HANDLE_VALUE, "Could not map file: %S\n", filename);
+    ErrorExit(mapping != INVALID_HANDLE_VALUE, "Could not map file: %S\n", filename);
 
     LPVOID ptr = MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, 0);
     CloseHandle(mapping);
@@ -323,7 +323,7 @@ u8 *OS_MapFileAppend(string filename, u64 size)
 
     LARGE_INTEGER currentSize;
     bool success = GetFileSizeEx(file, &currentSize);
-    Error(success, "Failed to get file size\n");
+    ErrorExit(success, "Failed to get file size\n");
 
     LARGE_INTEGER newFileSize;
     newFileSize.QuadPart = size + currentSize.QuadPart;
@@ -333,7 +333,7 @@ u8 *OS_MapFileAppend(string filename, u64 size)
     HANDLE mapping = CreateFileMapping(file, 0, PAGE_READWRITE, newFileSize.HighPart,
                                        newFileSize.LowPart, 0);
     CloseHandle(file);
-    Error(mapping != INVALID_HANDLE_VALUE, "Could not map file: %S\n", filename);
+    ErrorExit(mapping != INVALID_HANDLE_VALUE, "Could not map file: %S\n", filename);
 
     LPVOID ptr = MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, 0);
     CloseHandle(mapping);

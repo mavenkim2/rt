@@ -79,7 +79,7 @@ Sampler Sampler::Create(Arena *arena, const ScenePacket *packet, const Vec2i ful
             break;
             default:
             {
-                Error(0, "Invalid option encountered during Sampler creation\n");
+                ErrorExit(0, "Invalid option encountered during Sampler creation\n");
             }
         }
     }
@@ -96,7 +96,7 @@ Sampler Sampler::Create(Arena *arena, const ScenePacket *packet, const Vec2i ful
         case "stratified"_sid:
             return PushStructConstruct(arena, StratifiedSampler)(xSamples, ySamples, jitter,
                                                                  seed);
-        case "halton"_sid: Error(0, "Halton sampler not implemented.");
+        case "halton"_sid: ErrorExit(0, "Halton sampler not implemented.");
         default:
             return PushStructConstruct(arena, ZSobolSampler)(samplesPerPixel, fullResolution,
                                                              strategy);

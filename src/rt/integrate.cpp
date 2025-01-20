@@ -10,6 +10,8 @@ namespace rt
 {
 // TODO
 // - order:
+// - actual displacement mapping (instead of bump mapping)
+// - subdivision surfaces
 // - fix ray differentials
 // - remove duplicate materials (and maybe geometry), see if this leads to coherent texture
 // reads
@@ -30,8 +32,6 @@ namespace rt
 //
 // - memory mapped files for treelets??? (i.e. single level massive bvh)
 // - covariance tracing
-// - actual displacement mapping (instead of bump mapping)
-// - subdivision surfaces
 // - path guiding
 // - non exponential free flight
 // - photon planes & volumes
@@ -744,8 +744,8 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
         }
 
         Material *material = scene->materials[MaterialHandle(si.materialIDs).GetIndex()];
-        BxDF bxdf          = material->Evaluate(scratch.temp.arena, si, lambda,
-                                                        Vec4f(dudx, dvdx, dudy, dvdy));
+        BxDF bxdf =
+            material->Evaluate(scratch.temp.arena, si, lambda, Vec4f(dudx, dvdx, dudy, dvdy));
         BSDF bsdf(bxdf, si.shading.dpdu, si.shading.n);
 
         // Next Event Estimation

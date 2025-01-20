@@ -29,7 +29,7 @@ void GenerateBuildRefs(BRef *refs, ScenePrimitives *scene, u32 start, u32 count,
         ref->nodePtr    = inScene->nodePtr;
         ref->numPrims   = inScene->numFaces;
 
-        Error(ref->nodePtr.data, "Invalid scene: %u\n", index);
+        ErrorExit(ref->nodePtr.data, "Invalid scene: %u\n", index);
     }
     record.geomBounds = Lane8F32(-geom.minP, geom.maxP);
     record.centBounds = Lane8F32(-cent.minP, cent.maxP);

@@ -57,7 +57,7 @@ typedef SurfaceInteractions<IntN> SurfaceInteractionsN;
 static Ptex::PtexCache *cache;
 struct : public PtexErrorHandler
 {
-    void reportError(const char *error) override { Error(0, "%s", error); }
+    void reportError(const char *error) override { ErrorExit(0, "%s", error); }
 } errorHandler;
 
 enum class ColorEncoding
@@ -182,7 +182,7 @@ struct ImageTextureShader
             }
             else
             {
-                Error(0, "RGBSpectrum must be RGBAlbedoSpectrum or RGBUnboundedSpectrum");
+                ErrorExit(0, "RGBSpectrum must be RGBAlbedoSpectrum or RGBUnboundedSpectrum");
             }
         }
     }

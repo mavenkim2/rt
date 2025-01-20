@@ -34,11 +34,15 @@ if not exist .\build\src\third_party\zlib\Release\zlibstatic.lib (
 )
 
 set Dependencies=-I ..\src\third_party\openvdb\nanovdb -I ..\src\third_party\ptex\src\ptex -I ..\src\third_party\zlib ^
--I .\src\third_party\zlib
+-I .\src\third_party\zlib -I "..\src\third_party\OpenSubdiv"
 set LibraryPathPtex=.\src\third_party\ptex\src\ptex\Release
 set LibraryPathZlib=.\src\third_party\zlib\Release
+set LibraryPathOsd=.\src\third_party\OpenSubdiv\opensubdiv\Release
+REM set LibraryPathFar=".\src\third_party\OpenSubdiv\opensubdiv\far\far_obj.dir\Release"
 set LibraryNamePtex=Ptex.lib 
 set LibraryNameZlib=zlibstatic.lib
+set LibraryNameOsd=osdCPU.lib
+REM set LibraryNameFar=far_obj.lib
 
 if "%1" == "release" (
     call :AddReleaseFlags
@@ -80,10 +84,10 @@ if not exist .\rgbspectrum_srgb.obj (
 
 if "%1" == "cl" (
     echo Compiling with Clang
-    clang++ -std=c++17 -ferror-limit=5 -march=native -ffp-contract=off %Definitions% %Dependencies% -L %LibraryPathZlib% -L %LibraryPathPtex% -l %LibraryNameZlib% -l %LibraryNamePtex% -o rt.exe ../src/rt/rt.cpp rgbspectrum_srgb.obj
+    clang++ -std=c++17 -ferror-limit=5 -march=native -ffp-contract=off %Definitions% %Dependencies% -L %LibraryPathZlib% -L %LibraryPathPtex% -L %LibraryPathOsd% -l %LibraryNameZlib% -l %LibraryNamePtex% -l %LibraryNameOsd% -o rt.exe ../src/rt/rt.cpp rgbspectrum_srgb.obj
 ) else (
     echo Compiling with MSVC
-    cl %DefaultCompilerFlags% %Definitions% %AVX2% %Dependencies% ../src/rt/rt.cpp /std:c++17 /link %DefaultLinkerFlags% rgbspectrum_srgb.obj /LIBPATH:%LibraryPathZlib% /LIBPATH:%LibraryPathPtex% %LibraryNameZlib% %LibraryNamePtex% /out:rt.exe
+    cl %DefaultCompilerFlags% %Definitions% %AVX2% %Dependencies% ../src/rt/rt.cpp /std:c++17 /link %DefaultLinkerFlags% rgbspectrum_srgb.obj /LIBPATH:%LibraryPathZlib% /LIBPATH:%LibraryPathPtex% /LIBPATH:%LibraryPathOsd% /LIBPATH:%LibraryPathFar% %LibraryNameZlib% %LibraryNamePtex% %LibraryNameOsd% %LibraryNameFar% /out:rt.exe
 )
 
 REM cl %DefaultCompilerFlags% ../src/rgb2spec.cpp /std:c++17 /link %DefaultLinkerFlags% /out:rgb2spec.exe
