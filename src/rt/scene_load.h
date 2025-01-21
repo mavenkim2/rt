@@ -453,6 +453,112 @@ Mesh LoadQuadPLY(Arena *arena, string filename)
     return LoadPLY<GeometryType::QuadMesh>(arena, filename);
 }
 
+Mesh LoadQuadObj(Arena *arena, string filename)
+{
+    string buffer = OS_MapFileRead(filename); // OS_ReadFile(arena, filename);
+    Tokenizer tokenizer;
+    tokenizer.input  = buffer;
+    tokenizer.cursor = buffer.str;
+
+    std::vector<Vec3f> vertices;
+    vertices.reserve(128);
+    std::vector<Vec3f> normals;
+    normals.reserve(128);
+    std::vector<Vec3i> indices;
+    indices.reserve(128);
+
+    auto Skip = [&]() { SkipToNextChar(&tokenizer, '#'); };
+
+    for (;;)
+    {
+        Skip();
+        if (EndOfBuffer(&tokenizer)) break;
+
+        string word = ReadWord(&tokenizer);
+        if (word == "g")
+        {
+            SkipToNextLine(&tokenizer);
+        }
+        else if (word == "mtllib")
+        {
+            SkipToNextLine(&tokenizer);
+        }
+        else if (word == "usemtl")
+        {
+            SkipToNextLine(&tokenizer);
+        }
+        else if (word == "v")
+        {
+            Skip();
+            f32 x = ReadFloat(&tokenizer);
+            f32 y = ReadFloat(&tokenizer);
+            f32 z = ReadFloat(&tokenizer);
+            vertices.push_back(Vec3f(x, y, z));
+        }
+        else if (word == "vn")
+        {
+            Skip();
+            f32 x = ReadFloat(&tokenizer);
+            f32 y = ReadFloat(&tokenizer);
+            f32 z = ReadFloat(&tokenizer);
+            normals.push_back(Vec3f(x, y, z));
+        }
+        else if (word == "f")
+        {
+            Skip();
+            u32 faceVertexCount = 0;
+            while (CharIsDigit(tokenizer.cursor[0]))
+            {
+                faceVertexCount++;
+
+                u32 vertexIndex = ReadUint(&tokenizer);
+                bool result     = Advance(&tokenizer, "/");
+                Assert(result);
+                u32 texIndex = ReadUint(&tokenizer);
+                result       = Advance(&tokenizer, "/");
+                Assert(result);
+                u32 normalIndex = ReadUint(&tokenizer);
+                indices.push_back(Vec3i(vertexIndex - 1, texIndex - 1, normalIndex - 1));
+                Skip();
+            }
+            Assert(faceVertexCount == 4)
+        }
+        else
+        {
+            Assert(0);
+        }
+    }
+
+    Mesh mesh        = {};
+    mesh.numVertices = (u32)vertices.size();
+    mesh.numIndices  = (u32)indices.size();
+    ErrorExit(mesh.numVertices > 0, "OBJ Mesh has no vertices\n");
+    mesh.p = PushArrayNoZero(arena, Vec3f, mesh.numVertices);
+    if (normals.size()) mesh.n = PushArray(arena, Vec3f, normals.size());
+    if (indices.size()) mesh.indices = PushArrayNoZero(arena, u32, indices.size());
+
+    i32 *normalIndices = PushArray(arena, i32, mesh.numVertices);
+    MemorySet(normalIndices, 0xff, sizeof(i32) * mesh.numVertices);
+
+    // Ensure that vertex index and normal index pairings are consistent
+    for (u32 i = 0; i < mesh.numIndices; i++)
+    {
+        i32 vertexIndex = indices[i][0];
+        i32 normalIndex = indices[i][2];
+
+        if (normalIndices[vertexIndex] != 0xffffffff)
+        {
+            ErrorExit(normalIndices[vertexIndex] == normalIndex,
+                      "Face-varying normals currently unsupported.\n");
+        }
+        normalIndices[vertexIndex] = normalIndex;
+        mesh.n[vertexIndex]        = normals[normalIndex];
+        mesh.indices[i]            = vertexIndex;
+    }
+    MemoryCopy(mesh.p, vertices.data(), sizeof(Vec3f) * mesh.numVertices);
+    return mesh;
+}
+
 } // namespace rt
 
 #endif

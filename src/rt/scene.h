@@ -180,40 +180,12 @@ enum class IndexType
     u32,
 };
 
-// TODO: convert this to an attribute
-template <typename T>
-struct MeshPointer
-{
-    union
-    {
-        uintptr_t data;
-        struct
-        {
-            f32 a;
-            f32 b;
-        };
-    };
-    MeshPointer() : data(0) {}
-    MeshPointer(uintptr_t data) : data(data) {}
-    MeshPointer(void *data) : data(uintptr_t(data)) {}
-    // T operator[](u32 index) const { return ((T *)data)[index]; }
-    T &operator[](u32 index) { return ((T *)data)[index]; }
-    const T &operator[](u32 index) const { return ((T *)data)[index]; }
-    operator bool() const { return bool(data); }
-};
-
-template <typename T>
-__forceinline T *operator+(const MeshPointer<T> &p, u32 index)
-{
-    return (T *)p.data + index;
-}
-
 struct Mesh
 {
-    MeshPointer<Vec3f> p;
-    MeshPointer<Vec3f> n;
-    MeshPointer<Vec2f> uv;
-    MeshPointer<u32> indices;
+    Vec3f *p;
+    Vec3f *n;
+    Vec2f *uv;
+    u32 *indices;
     u32 numIndices;
     u32 numVertices;
     u32 numFaces;
@@ -224,8 +196,8 @@ struct Mesh
 template <GeometryType type, typename PrimRefType>
 struct GenerateMeshRefsHelper
 {
-    MeshPointer<Vec3f> p;
-    MeshPointer<u32> indices;
+    Vec3f *p;
+    u32 *indices;
 
     __forceinline void operator()(PrimRefType *refs, u32 offset, u32 geomID, u32 start,
                                   u32 count, RecordAOSSplits &record)

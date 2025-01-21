@@ -304,18 +304,7 @@ struct GraphicsState
     // ObjectInstanceType *instanceType = 0;
 };
 
-void PBRTSkipToNextChar(Tokenizer *tokenizer)
-{
-    for (;;)
-    {
-        while (!EndOfBuffer(tokenizer) && CharIsBlank(*tokenizer->cursor))
-        {
-            tokenizer->cursor++;
-        }
-        if (*tokenizer->cursor != '#') break;
-        SkipToNextLine(tokenizer);
-    }
-}
+void PBRTSkipToNextChar(Tokenizer *tokenizer) { SkipToNextChar(tokenizer, '#'); }
 
 void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
                     MemoryType memoryType);
@@ -1492,10 +1481,13 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                         {
                             if (packet->parameterNames[c] == "filename"_sid)
                             {
+                                // string filename = ConvertPlyToObj(
+                                //     temp.arena, Str8(packet->bytes[c], packet->sizes[c]));
                                 Mesh mesh = LoadQuadPLY(
                                     temp.arena,
                                     StrConcat(temp.arena, directory,
                                               Str8(packet->bytes[c], packet->sizes[c])));
+
                                 WriteData(&builder, &dataBuilder, mesh.p,
                                           mesh.numVertices * sizeof(Vec3f), "p");
                                 WriteData(&builder, &dataBuilder, mesh.n,

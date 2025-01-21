@@ -62,7 +62,7 @@ void Subdivide(Mesh *mesh)
 
     u32 size         = refiner->GetNumVerticesTotal();
     Vertex *vertices = PushArrayNoZero(temp.arena, Vertex, size);
-    MemoryCopy(vertices, (void *)mesh->p.data, sizeof(Vec3f) * mesh->numVertices);
+    MemoryCopy(vertices, mesh->p, sizeof(Vec3f) * mesh->numVertices);
 
     Vertex *src        = vertices;
     i32 nRefinedLevels = refiner->GetNumLevels();

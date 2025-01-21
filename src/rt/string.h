@@ -157,6 +157,8 @@ string ReadWord(Tokenizer *tokenizer);
 string CheckWord(Tokenizer *tokenizer);
 string ReadBytes(Tokenizer *tokenizer, u64 numBytes);
 inline void SkipToNextLine(Tokenizer *iter);
+inline void SkipToNextChar(Tokenizer *tokenizer, char token);
+inline void SkipToNextDigit(Tokenizer *tokenizer);
 inline u8 *GetCursor_(Tokenizer *tokenizer);
 inline b32 EndOfBuffer(Tokenizer *tokenizer);
 string ReadLine(Tokenizer *tokenizer);

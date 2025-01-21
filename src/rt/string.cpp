@@ -658,6 +658,19 @@ inline void SkipToNextLine(Tokenizer *iter)
     iter->cursor++;
 }
 
+inline void SkipToNextChar(Tokenizer *tokenizer, char token)
+{
+    for (;;)
+    {
+        while (!EndOfBuffer(tokenizer) && CharIsBlank(*tokenizer->cursor))
+        {
+            tokenizer->cursor++;
+        }
+        if (*tokenizer->cursor != token) break;
+        SkipToNextLine(tokenizer);
+    }
+}
+
 inline void SkipToNextWord(Tokenizer *iter)
 {
     bool findChar = false;

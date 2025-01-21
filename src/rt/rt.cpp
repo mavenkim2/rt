@@ -1084,8 +1084,10 @@ int main(int argc, char *argv[])
     threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, numProcessors);
     scheduler.Init(numProcessors);
 
-    Mesh mesh = LoadQuadPLY(arena, "../data/island/pbrt-v4/isDunesA/xgPalmDebris/"
-                               "xgPalmDebris_archivePalmdead0004_mod_geometry_00002.ply");
+    // Mesh mesh = LoadQuadPLY(arena, "../data/island/pbrt-v4/isDunesA/xgPalmDebris/"
+    //                            "xgPalmDebris_archivePalmdead0004_mod_geometry_00002.ply");
+    Mesh mesh =
+        LoadQuadObj(arena, "../data/island/island/obj/isBayCedarA1/isBayCedarA1_bonsaiA.obj");
 
     // Subdivide(&mesh);
 
