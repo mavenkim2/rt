@@ -487,6 +487,11 @@ Mesh LoadQuadObj(Arena *arena, string filename)
         {
             SkipToNextLine(&tokenizer);
         }
+        else if (word == "s")
+        {
+            // TODO: what does smooth shading mean? subdivision? sharp corners?
+            SkipToNextLine(&tokenizer);
+        }
         else if (word == "v")
         {
             Skip();

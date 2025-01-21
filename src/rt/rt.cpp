@@ -1084,12 +1084,16 @@ int main(int argc, char *argv[])
     threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, numProcessors);
     scheduler.Init(numProcessors);
 
-    // Mesh mesh = LoadQuadPLY(arena, "../data/island/pbrt-v4/isDunesA/xgPalmDebris/"
-    //                            "xgPalmDebris_archivePalmdead0004_mod_geometry_00002.ply");
-    Mesh mesh =
-        LoadQuadObj(arena, "../data/island/island/obj/isBayCedarA1/isBayCedarA1_bonsaiA.obj");
+    Mesh mesh1 =
+        LoadQuadPLY(arena, "../data/island/pbrt-v4/isBeach/isBeach_geometry_00001.ply");
+    Mesh mesh2 =
+        LoadQuadPLY(arena, "../data/island/pbrt-v4/isBeach/isBeach_geometry_00002.ply");
 
-    // Subdivide(&mesh);
+    // TODO: it seems that geometry within obj files can be duplicated
+    Mesh mesh     = LoadQuadObj(arena, "../data/island/pbrt-v4/obj/isBeach/isBeach.obj");
+    mesh.numFaces = mesh.numIndices / 4;
+
+    Subdivide(&mesh);
 
     // DualTest();
 
