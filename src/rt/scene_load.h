@@ -278,15 +278,7 @@ inline u32 GetTypeStride(string word)
     return 0;
 }
 
-enum class PlyLoadFlags
-{
-    None,
-    IgnoreUv,
-    IgnoreIndices,
-};
-ENUM_CLASS_FLAGS(PlyLoadFlags)
-
-template <PlyLoadFlags flags = PlyLoadFlags::None>
+template <GeometryType type>
 Mesh LoadPLY(Arena *arena, string filename)
 {
     string buffer = OS_MapFileRead(filename); // OS_ReadFile(arena, filename);
@@ -394,17 +386,18 @@ Mesh LoadPLY(Arena *arena, string filename)
         else if (word == "end_header") break;
     }
 
-    constexpr bool allowUv      = !EnumHasAnyFlags(flags, PlyLoadFlags::IgnoreUv);
-    constexpr bool allowIndices = !EnumHasAnyFlags(flags, PlyLoadFlags::IgnoreIndices);
+    constexpr bool isQuad = type == GeometryType::QuadMesh;
+
     // Read binary data
     Mesh mesh        = {};
     mesh.numVertices = numVertices;
     mesh.numIndices  = numFaces * 3;
     mesh.numFaces    = numFaces;
+    if constexpr (isQuad) mesh.numFaces /= 2;
     if (hasVertices) mesh.p = PushArray(arena, Vec3f, numVertices);
     if (hasNormals) mesh.n = PushArray(arena, Vec3f, numVertices);
-    if (hasUv && allowUv) mesh.uv = PushArray(arena, Vec2f, numVertices);
-    if constexpr (allowIndices) mesh.indices = PushArray(arena, u32, numFaces * 3);
+    if (hasUv && !isQuad) mesh.uv = PushArray(arena, Vec2f, numVertices);
+    if constexpr (!isQuad) mesh.indices = PushArray(arena, u32, numFaces * 3);
 
     for (u32 i = 0; i < numVertices; i++)
     {
@@ -421,7 +414,7 @@ Mesh LoadPLY(Arena *arena, string filename)
             f32 *norm = (f32 *)bytes.str + 3;
             mesh.n[i] = Vec3f(norm[0], norm[1], norm[2]);
         }
-        if (hasUv && allowUv)
+        if (hasUv && !isQuad)
         {
             Assert(totalVertexStride >= 32);
             f32 *uv    = (f32 *)bytes.str + 6;
@@ -433,7 +426,7 @@ Mesh LoadPLY(Arena *arena, string filename)
     Assert(faceIndicesStride == 4);
     // Assert(otherStride == 4);
     // u32 *faceIndices = PushArray(arena, u32, numFaces);
-    if constexpr (allowIndices)
+    if constexpr (!isQuad)
     {
         for (u32 i = 0; i < numFaces; i++)
         {
@@ -457,8 +450,7 @@ Mesh LoadPLY(Arena *arena, string filename)
 
 Mesh LoadQuadPLY(Arena *arena, string filename)
 {
-    constexpr PlyLoadFlags flags = PlyLoadFlags::IgnoreUv | PlyLoadFlags::IgnoreIndices;
-    return LoadPLY<flags>(arena, filename);
+    return LoadPLY<GeometryType::QuadMesh>(arena, filename);
 }
 
 } // namespace rt

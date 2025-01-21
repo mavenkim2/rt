@@ -7,7 +7,7 @@ void ThreadLocalQueue<T>::Flush(ShadingThreadState *state)
 {
     if (count >= FLUSH_THRESHOLD)
     {
-        Error(count <= QUEUE_LENGTH, "count flush: %u\n", count);
+        ErrorExit(count <= QUEUE_LENGTH, "count flush: %u\n", count);
         handler(state, values + count - FLUSH_THRESHOLD, FLUSH_THRESHOLD, count);
     }
 }
@@ -23,7 +23,7 @@ bool ThreadLocalQueue<T>::Finalize(ShadingThreadState *state)
 template <typename T>
 bool ThreadLocalQueue<T>::Push(ShadingThreadState *state, const T &item)
 {
-    Error(count < QUEUE_LENGTH, "count push: %u\n", count);
+    ErrorExit(count < QUEUE_LENGTH, "count push: %u\n", count);
     values[count++] = item;
     if (count == QUEUE_LENGTH) return true;
     return false;

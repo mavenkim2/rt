@@ -747,7 +747,7 @@ struct HashMap
         }
         if (!node)
         {
-            Error(0, "Name not found in hashmap: %S\n", name);
+            ErrorExit(0, "Name not found in hashmap: %S\n", name);
         }
         return 0;
     }
@@ -763,11 +763,11 @@ struct HashMap
             {
                 if (node->value == val)
                 {
-                    Error(0, "Error: Using a duplicate name.\n");
+                    ErrorExit(0, "Error: Using a duplicate name.\n");
                 }
                 else
                 {
-                    Error(0, "Hash collision\n");
+                    ErrorExit(0, "Hash collision\n");
                 }
             }
             node = node->next;

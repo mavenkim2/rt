@@ -784,7 +784,7 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, const Split &split, u
 
     maxIndex = Min(maxIndex, start + count - 1);
     minIndex = Max(minIndex, start);
-    Error(maxIndex > minIndex, "max: %u, min %u, start %u, count %u\n", maxIndex, minIndex,
+    ErrorExit(maxIndex > minIndex, "max: %u, min %u, start %u, count %u\n", maxIndex, minIndex,
           start, count);
     // Assert(maxIndex < start + count);
     // Assert(minIndex >= start);
