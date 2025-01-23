@@ -67,63 +67,6 @@ enum class ColorEncoding
     SRGB,
 };
 
-#if 0
-struct ConstantTexture
-{
-    f32 c;
-
-    ConstantTexture() {}
-    ConstantTexture(const f32 &t) : c(t) {}
-    static LaneNF32 Evaluate(SurfaceInteractionsN &, ConstantTexture **textures, Vec4lfn &,
-                             SampledWavelengthsN &)
-    {
-        LaneNF32 result;
-        for (u32 i = 0; i < IntN; i++)
-        {
-            Set(result, i) = textures[i]->c;
-        }
-        return result;
-    }
-    __forceinline static LaneNF32 EvaluateFloat(SurfaceInteractionsN &intr,
-                                                ConstantTexture **textures, Vec4lfn &v,
-                                                SampledWavelengthsN &lambda)
-    {
-        return Evaluate(intr, textures, v, lambda);
-    }
-
-    __forceinline static LaneNF32 EvaluateAlbedo(SurfaceInteractionsN &intr,
-                                                 ConstantTexture **textures, Vec4lfn &v,
-                                                 SampledWavelengthsN &lambda)
-    {
-        return Evaluate(intr, textures, v, lambda);
-    }
-};
-
-struct ConstantSpectrumTexture
-{
-    RGBAlbedoSpectrum c;
-    ConstantSpectrumTexture() {}
-    ConstantSpectrumTexture(RGBAlbedoSpectrum c) : c(c) {}
-    static SampledSpectrumN EvaluateAlbedo(SurfaceInteractionsN &,
-                                           ConstantSpectrumTexture **textures, Vec4lfn &,
-                                           SampledWavelengthsN &lambda)
-    {
-        SampledSpectrumN result;
-        for (u32 i = 0; i < IntN; i++)
-        {
-            ConstantSpectrumTexture *tex = textures[i];
-            SampledSpectrum out          = tex->c.Sample(lambda);
-            for (u32 j = 0; j < NSampledWavelengths; j++)
-            {
-                Set(result.values[j], i) = out.values[j];
-            }
-        }
-        return result;
-    }
-};
-
-#endif
-
 // template <typename Texture>
 struct NormalMap
 {

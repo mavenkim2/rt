@@ -21,6 +21,7 @@
 #include "handles.h"
 #include "integrate.h"
 #include "lights.h"
+#include "subdivision.h"
 #include "scene.h"
 #include "scene_load.h"
 // #include "bvh.h"
@@ -52,7 +53,6 @@
 #include "lights.cpp"
 #include "integrate.cpp"
 #include "simd_integrate.cpp"
-#include "subdivision.h"
 #include "subdivision.cpp"
 
 #include "tests/test.cpp"
@@ -1084,16 +1084,17 @@ int main(int argc, char *argv[])
     threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, numProcessors);
     scheduler.Init(numProcessors);
 
-    Mesh mesh1 =
-        LoadQuadPLY(arena, "../data/island/pbrt-v4/isBeach/isBeach_geometry_00001.ply");
-    Mesh mesh2 =
-        LoadQuadPLY(arena, "../data/island/pbrt-v4/isBeach/isBeach_geometry_00002.ply");
-
-    // TODO: it seems that geometry within obj files can be duplicated
-    Mesh mesh     = LoadQuadObj(arena, "../data/island/pbrt-v4/obj/isBeach/isBeach.obj");
-    mesh.numFaces = mesh.numIndices / 4;
-
-    Subdivide(&mesh);
+    // Mesh mesh1 =
+    //     LoadQuadPLY(arena, "../data/island/pbrt-v4/isBeach/isBeach_geometry_00001.ply");
+    // Mesh mesh2 =
+    //     LoadQuadPLY(arena, "../data/island/pbrt-v4/isBeach/isBeach_geometry_00002.ply");
+    //
+    // // TODO: it seems that geometry within obj files can be duplicated
+    // Mesh mesh     = LoadQuadObj(arena, "../data/island/pbrt-v4/obj/isBeach/isBeach.obj");
+    // mesh.numFaces = mesh.numIndices / 4;
+    //
+    // Subdivide(&mesh);
+    EdgeStitchTest();
 
     // DualTest();
 

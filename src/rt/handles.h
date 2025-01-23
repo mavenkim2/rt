@@ -18,6 +18,7 @@ enum class GeometryType
     QuadMesh,
     TriangleMesh,
     Instance,
+    CatmullClark,
     Max,
 };
 
@@ -42,55 +43,6 @@ struct VecBase<3>
 template <i32 K>
 using Veclfn = typename VecBase<K>::Type;
 
-#if 0
-struct NullShader;
-struct ConstantTexture;
-struct ConstantSpectrumTexture;
-struct PtexTexture;
-template <typename TextureShader>
-struct BumpMap;
-template <typename RflShader>
-struct DiffuseMaterial;
-template <typename RflShader, typename TrmShader>
-struct DiffuseTransmissionMaterial;
-template <typename RghShader, typename Spectrum>
-struct DielectricMaterial;
-template <typename RghShader, typename RflShader, typename AlbedoShader, typename Spectrum>
-struct CoatedDiffuseMaterial;
-struct MSDielectricMaterial;
-
-// TODO: automate this :)
-using BumpMapPtex                     = BumpMap<PtexTexture>;
-using DiffuseMaterialPtex             = DiffuseMaterial<PtexTexture>;
-using DiffuseTransmissionMaterialPtex = DiffuseTransmissionMaterial<PtexTexture, PtexTexture>;
-
-// NOTE: isotropic roughness, constant ior
-using DielectricMaterialConstant = DielectricMaterial<ConstantTexture, ConstantSpectrum>;
-
-// Material types
-using DiffuseMaterialBumpMapPtex = Material2<DiffuseMaterialPtex, BumpMapPtex>;
-using DiffuseMaterialBase        = Material2<DiffuseMaterialPtex, NullShader>;
-using DiffuseTransmissionMaterialBumpMapPtex =
-    Material2<DiffuseTransmissionMaterialPtex, BumpMapPtex>;
-using DielectricMaterialBumpMapPtex = Material2<DielectricMaterialConstant, BumpMapPtex>;
-
-using CoatedDiffuseMaterialPtex =
-    CoatedDiffuseMaterial<ConstantTexture, PtexTexture, ConstantSpectrumTexture,
-                          ConstantSpectrum>;
-using CoatedDiffuseMaterialBase =
-    CoatedDiffuseMaterial<ConstantTexture, ConstantSpectrumTexture, ConstantTexture,
-                          ConstantSpectrum>;
-
-using CoatedDiffuseMaterial1 = Material2<CoatedDiffuseMaterialPtex, NullShader>;
-using CoatedDiffuseMaterial2 = Material2<CoatedDiffuseMaterialBase, NullShader>;
-using DielectricMaterialBase = Material2<DielectricMaterialConstant, NullShader>;
-
-using MSDielectricMaterial1 = Material2<MSDielectricMaterial, NullShader>;
-CREATE_ENUM_AND_TYPE_PACK(MaterialTypes, MaterialType, DielectricMaterialBase,
-        CoatedDiffuseMaterial1, CoatedDiffuseMaterial2,
-        DiffuseMaterialBase, MSDielectricMaterial1);
-#endif
-
 struct VolumeHandle
 {
     u32 index;
@@ -105,15 +57,6 @@ struct ImageInfiniteLight;
 CREATE_ENUM_AND_TYPE_PACK(LightTypes, LightClass, DiffuseAreaLight, DistantLight,
                           UniformInfiniteLight, ImageInfiniteLight);
 using InfiniteLightTypes = TypePack<UniformInfiniteLight, ImageInfiniteLight>;
-
-// enum LightClass
-// {
-//     LightClass_Area,    // diffuse area light
-//     LightClass_Distant, // dirac delta direction
-//     LightClass_InfUnf,  // uniform infinite light
-//     LightClass_InfImg,  // environment map
-//     LightClass_Count,
-// };
 
 struct LightHandle
 {

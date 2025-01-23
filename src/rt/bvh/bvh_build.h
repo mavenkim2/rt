@@ -483,14 +483,53 @@ struct BVHHelper<N, GeometryType::QuadMesh, PrimRef>
     using PrimType = Quad<N>;
 };
 
+template <i32 N>
+struct BVHHelper<N, GeometryType::CatmullClark, PrimRef>
+{
+    using PrimType = LeafPrim<N>;
+};
+
+template <i32 N>
+struct BVHHelper<N, GeometryType::CatmullClark, PrimRefCompressed>
+{
+    using PrimType = LeafPrimCompressed<N>;
+};
+
+template <i32 N, typename PrimRef>
+BVHNode<N> BuildQuantizedBVH(BuildSettings settings, Arena **inArenas,
+                             const ScenePrimitives *scene, PrimRef *ref,
+                             RecordAOSSplits &record)
+{
+    using BVHHelper = BVHHelper<K, type, PrimRef>;
+    using Prim      = typename BVHHelper::PrimType;
+    using BuildType = BuildFuncs<N, HeuristicObjectBinning<PrimRef>, QuantizedNode<N>,
+                                 CreateQuantizedNode<N>, UpdateQuantizedNode<N>, Prim,
+                                 CompressedLeafNode<N>>;
+
+    using Builder = BVHBuilder<N, BuildType>;
+    Builder builder;
+    using Heuristic       = typename Builder::Heuristic;
+    settings.logBlockSize = Bsf(K);
+    new (&builder.heuristic) Heuristic(ref, scene, settings.logBlockSize);
+    builder.primRefs = ref;
+    builder.scene    = scene;
+    return builder.BuildBVH(settings, inArenas, record);
+}
+
+template <typename PrimRef>
+__forceinline BVHNodeN BuildQuantizedCatmullClarkBVH(BuildSettings settings, Arena **inArenas,
+                                                     const ScenePrimitives *scene,
+                                                     PrimRef *refs, RecordAOSSplits &record)
+{
+    return BuildQuantizedBVH<DefaultN, 8, GeometryType::CatmullClark>(settings, inArenas,
+                                                                      scene, refs, record);
+}
+
 template <i32 N, i32 K, GeometryType type, typename PrimRef>
 BVHNode<N> BuildQuantizedSBVH(BuildSettings settings, Arena **inArenas,
                               const ScenePrimitives *scene, PrimRef *ref,
                               RecordAOSSplits &record)
 {
-
-    // template <i32 N, i32 K>
-    // using BLAS_SBVH_QuantizedNode_TriangleLeaf_Funcs =
     using BVHHelper = BVHHelper<K, type, PrimRef>;
     using Polygon8  = typename BVHHelper::Polygon8;
     using Prim      = typename BVHHelper::PrimType;

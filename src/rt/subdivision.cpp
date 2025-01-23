@@ -40,10 +40,11 @@ void Subdivide(Mesh *mesh)
     desc.vertIndicesPerFace = (int *)mesh->indices;
 
     // TODOs:
-    // 1. how do you interpolate the normals durign subdivision?
+    // 1. how do you interpolate the normals during subdivision?
     // 2. make this work with ptex
     // 3. adaptive subdivision based on screen space heuristics?
     // 4. multi resolution geometry cache?
+
     Far::TopologyRefiner *refiner = Far::TopologyRefinerFactory<Descriptor>::Create(
         desc, Far::TopologyRefinerFactory<Descriptor>::Options(type, options));
 
@@ -119,56 +120,10 @@ void Subdivide(Mesh *mesh)
     delete refiner;
 }
 
-// void IntersectCatmullClarkPatch(const Vec3f &dpdx, const Vec3f &dpdy)
-// {
-//     // Calculate level in the multi resolution geometry cache
-//     // so many questions
-// }
-
-// MORETON, H. 2001. Watertight tessellation using forward
-// differencing. In HWWS ’01: Proceedings of the ACM SIG-
-// GRAPH/EUROGRAPHICS workshop on Graphics hardware,
-// ACM, New York, NY, USA, 25–32
-
 u64 ComputeEdgeId(u32 id0, u32 id1)
 {
     return id0 < id1 ? ((u64)id1 << 32) | id0 : ((u64)id0 << 32) | id1;
 }
-
-// TODO: patch memory savings
-#if 0
-struct OpenSubdivMesh
-{
-    struct OpenSubdivPatch
-    {
-        // 3 --e2-- 2
-        // |        |
-        // e3       e1
-        // |        |
-        // 0 --e0-- 1
-        u32 gridStart;
-        u32 numRows;
-        u32 numCols;
-        // Mask contains num rows, num cols, and bitmask representing whether the
-        // number vertices on the edge equals numRows or numCols
-        int mask;
-
-        // Stitching indices, forms triangles
-        u32 stichingIndexStart;
-        u32 stitchingIndexCount;
-
-        int edgeIndexStart[2];
-        // If this value is -1, that means that there is no stitching
-        int edgeIndexCount[2];
-    };
-
-    // Contains "inner grid" vertices that are specific to a patch, and
-    // corner/edge vertices that are shared by 4+/2+ patches. Each grid is
-    // contiguous in memory, and corner/edge data occurs after the grid vertices
-    Vec3f *vertices;
-    u32 *indices;
-};
-#endif
 
 struct LimitSurfaceSample
 {
@@ -202,8 +157,69 @@ Vec3f EvaluateLimitSurfacePosition(const Vertex *vertices, const Far::PatchMap *
     return pos;
 }
 
+// Edge vertices (shared by edges)
+struct EdgeInfo
+{
+    int indexStart;
+    int edgeFactor;
+    int id0, id1;
+
+    int GetVertexId(int edgeStep) const
+    {
+        Assert(edgeStep >= 0 && edgeStep <= edgeFactor);
+        return edgeStep == 0 ? id0
+                             : (edgeStep == edgeFactor ? id1 : indexStart + (edgeStep - 1));
+    }
+};
+
+struct FaceInfo
+{
+    int edgeInfoId[4];
+};
+
+struct TessellatedVertices
+{
+    std::vector<Vec3f> vertices;
+    // Stitching triangles
+    std::vector<int> stitchingIndices;
+    std::vector<EdgeInfo> edgeInfos;
+
+    // stack variables
+    int currentGridOffset;
+    int uMax;
+    int vMax;
+
+    // uMax is the max edge rate in the u direction, same for vMax
+    // "Inner grid" contains the (uMax - 1) x (vMax - 1) inner tessellated vertices
+    // specific to a patch
+    // NOTE: this must be called AFTER all corner/edge vertices are added for a given patch
+    void StartNewGrid(int maxU, int maxV)
+    {
+        uMax              = maxU;
+        vMax              = maxV;
+        currentGridOffset = (int)vertices.size();
+        vertices.resize(vertices.size() + ((uMax - 1) * (vMax - 1)));
+    }
+    int GetInnerGridIndex(int u, int v) const
+    {
+        Assert(u >= 0 && v >= 0 && u < uMax - 1 && v < vMax - 1);
+        int gridIndex = currentGridOffset + v * (uMax - 1) + u;
+        Assert(gridIndex < (int)vertices.size());
+        return gridIndex;
+    }
+    Vec3f &SetInnerGrid(int u, int v)
+    {
+        int gridIndex = GetInnerGridIndex(u, v);
+        return vertices[gridIndex];
+    }
+};
+
+// MORETON, H. 2001. Watertight tessellation using forward
+// differencing. In HWWS ’01: Proceedings of the ACM SIG-
+// GRAPH/EUROGRAPHICS workshop on Graphics hardware,
+// ACM, New York, NY, USA, 25–32
 // See Figure 7 from above for how this works
-void AdaptiveTessellation(const Mat4 &c2s, Mesh *controlMeshes, u32 numMeshes)
+void AdaptiveTessellation(Arena *arena, const Mat4 &c2s, Mesh *controlMeshes, u32 numMeshes)
 {
     typedef Far::TopologyDescriptor Descriptor;
     Sdc::SchemeType type = OpenSubdiv::Sdc::SCHEME_CATMARK;
@@ -212,27 +228,6 @@ void AdaptiveTessellation(const Mat4 &c2s, Mesh *controlMeshes, u32 numMeshes)
 
     u32 edgesPerHeight       = 1;
     u32 edgesPerScreenHeight = 2; // screenHeight / edgesPerHeight;
-
-    // Edge vertices (shared by edges)
-    struct EdgeInfo
-    {
-        int indexStart;
-        int edgeFactor;
-        int id0, id1;
-
-        int GetVertexId(int edgeStep) const
-        {
-            Assert(edgeStep >= 0 && edgeStep <= edgeFactor);
-            return edgeStep == 0
-                       ? id0
-                       : (edgeStep == edgeFactor ? id1 : indexStart + (edgeStep - 1));
-        }
-    };
-
-    struct FaceInfo
-    {
-        int edgeInfoId[4];
-    };
 
     Vec2f uvTable[] = {
         Vec2f(0.f, 0.f),
@@ -247,57 +242,22 @@ void AdaptiveTessellation(const Mat4 &c2s, Mesh *controlMeshes, u32 numMeshes)
         Vec2i(0, -1),
     };
 
-    struct TessellatedVertices
-    {
-        std::vector<Vec3f> cornerAndEdgeVertices;
-        std::vector<Vec3f> gridVertices;
-        // triangles
-        std::vector<int> stitchingIndices;
-
-        // stack variables
-        int currentGridOffset;
-        int uMax;
-        int vMax;
-
-        // uMax is the max edge rate in the u direction, same for vMax
-        // "Inner grid" contains the (uMax - 1) x (vMax - 1) inner tessellated vertices
-        // specific to a patch
-        // "Full grid"
-        void StartNewGrid(int maxU, int maxV)
-        {
-            uMax              = maxU;
-            vMax              = maxV;
-            currentGridOffset = (int)gridVertices.size();
-            gridVertices.resize(gridVertices.size() + ((uMax - 1) * (vMax - 1)));
-        }
-        int GetInnerGridIndex(int u, int v) const
-        {
-            Assert(u >= 0 && v >= 0 && u < uMax - 1 && v < vMax - 1);
-            int gridIndex = currentGridOffset + v * (uMax - 1) + u;
-            Assert(gridIndex < (int)gridVertices.size());
-            return gridIndex;
-        }
-        Vec3f &SetInnerGrid(int u, int v)
-        {
-            int gridIndex = GetInnerGridIndex(u, v);
-            return gridVertices[gridIndex];
-        }
-    };
-
-    TessellatedVertices tessellatedVertices;
+    OpenSubdivMesh *outputMeshes = PushArray(arena, OpenSubdivMesh, numMeshes);
 
     for (u32 meshIndex = 0; meshIndex < numMeshes; meshIndex++)
     {
+        OpenSubdivMesh *outputMesh = &outputMeshes[meshIndex];
+
+        TessellatedVertices tessellatedVertices;
         Mesh *controlMesh = &controlMeshes[meshIndex];
-        tessellatedVertices.cornerAndEdgeVertices.reserve(
-            tessellatedVertices.cornerAndEdgeVertices.capacity() + controlMesh->numVertices);
+        tessellatedVertices.vertices.reserve(tessellatedVertices.vertices.capacity() +
+                                             controlMesh->numVertices);
 
         std::vector<FaceInfo> faceInfos(controlMesh->numFaces);
         std::vector<EdgeInfo> edgeInfos;
         edgeInfos.reserve(controlMesh->numIndices / 4);
 
-        int edgeCount        = 0;
-        int edgeVertexOffset = controlMesh->numVertices;
+        int edgeCount = 0;
 
         ScratchArena scratch;
 
@@ -353,12 +313,10 @@ void AdaptiveTessellation(const Mat4 &c2s, Mesh *controlMeshes, u32 numMeshes)
                     maxMeshEdgeRate = Max(maxMeshEdgeRate, edgeFactor);
 
                     edgeIndex                       = edgeCount++;
-                    edgeInfos[edgeIndex].indexStart = edgeVertexOffset;
+                    edgeInfos[edgeIndex].indexStart = (int)samples.size();
                     edgeInfos[edgeIndex].edgeFactor = edgeFactor;
                     edgeInfos[edgeIndex].id0        = id0;
                     edgeInfos[edgeIndex].id1        = id1;
-
-                    edgeVertexOffset += edgeFactor - 1;
 
                     // Add edge samples for evaluation
                     f32 stepSize = 1.f / edgeFactor;
@@ -396,7 +354,7 @@ void AdaptiveTessellation(const Mat4 &c2s, Mesh *controlMeshes, u32 numMeshes)
         OpenSubdiv::Far::PatchMap patchMap(*patchTable);
 
         // Feature adaptive refinment
-        u32 size         = refiner->GetNumVerticesTotal();
+        int size         = refiner->GetNumVerticesTotal();
         Vertex *vertices = PushArrayNoZero(scratch.temp.arena, Vertex, size);
         MemoryCopy(vertices, controlMesh->p, sizeof(Vec3f) * controlMesh->numVertices);
 
@@ -404,6 +362,7 @@ void AdaptiveTessellation(const Mat4 &c2s, Mesh *controlMeshes, u32 numMeshes)
         i32 nRefinedLevels = refiner->GetNumLevels();
         Far::PrimvarRefiner primvarRefiner(*refiner);
 
+        Assert(nRefinedLevels == 1);
         for (i32 i = 1; i < nRefinedLevels; i++)
         {
             Vertex *dst = src + refiner->GetLevel(i - 1).GetNumVertices();
@@ -415,9 +374,12 @@ void AdaptiveTessellation(const Mat4 &c2s, Mesh *controlMeshes, u32 numMeshes)
         for (auto &sample : samples)
         {
             Vec3f pos = EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable, sample);
-            tessellatedVertices.cornerAndEdgeVertices.push_back(pos);
+            tessellatedVertices.vertices.push_back(pos);
         }
 
+        int totalNumPatchFaces = 0;
+        std::vector<OpenSubdivPatch> patches;
+        patches.reserve(controlMesh->numFaces);
         for (int f = 0; f < (int)controlMesh->numFaces; f++)
         {
             FaceInfo &faceInfo = faceInfos[f];
@@ -437,9 +399,41 @@ void AdaptiveTessellation(const Mat4 &c2s, Mesh *controlMeshes, u32 numMeshes)
                 1.f / maxEdgeRates[1],
             };
 
-            // Inner grid of vertices (local to a patch)
+            if (maxEdgeRates[0] == 1 && maxEdgeRates[1] == 1)
+            {
+                tessellatedVertices.stitchingIndices.push_back(
+                    edgeInfos[faceInfo.edgeInfoId[0]].id0);
+                tessellatedVertices.stitchingIndices.push_back(
+                    edgeInfos[faceInfo.edgeInfoId[0]].id1);
+                tessellatedVertices.stitchingIndices.push_back(
+                    edgeInfos[faceInfo.edgeInfoId[1]].id1);
+                tessellatedVertices.stitchingIndices.push_back(
+                    edgeInfos[faceInfo.edgeInfoId[0]].id0);
+                tessellatedVertices.stitchingIndices.push_back(
+                    edgeInfos[faceInfo.edgeInfoId[1]].id1);
+                tessellatedVertices.stitchingIndices.push_back(
+                    edgeInfos[faceInfo.edgeInfoId[2]].id1);
 
+                continue;
+            }
+
+            // Effectively adds a center point
+            if (maxEdgeRates[0] == 1 || maxEdgeRates[1] == 1)
+            {
+                maxEdgeRates[0] = 2;
+                maxEdgeRates[1] = 2;
+                scale[0]        = 0.5f;
+                scale[1]        = 0.5f;
+            }
+            // Inner grid of vertices (local to a patch)
             tessellatedVertices.StartNewGrid(maxEdgeRates[0], maxEdgeRates[1]);
+            if (maxEdgeRates[0] > 2 && maxEdgeRates[1] > 2)
+            {
+                patches.emplace_back(OpenSubdivPatch{tessellatedVertices.currentGridOffset,
+                                                     maxEdgeRates[0] - 1,
+                                                     maxEdgeRates[1] - 1});
+                totalNumPatchFaces += (maxEdgeRates[0] - 2) * (maxEdgeRates[1] - 2);
+            }
 
             // Generate n x m interior grid of points
             for (int vStep = 0; vStep < maxEdgeRates[1] - 1; vStep++)
@@ -502,12 +496,11 @@ void AdaptiveTessellation(const Mat4 &c2s, Mesh *controlMeshes, u32 numMeshes)
                 Vec2i uvStartInnerGrid = Vec2i(uvTable[edgeIndex]) * gridStep;
                 Vec2i uvEnd            = uvStartInnerGrid + uvDiffTable[edgeIndex] * gridStep;
 
-                while (edgeStep < currentEdge.edgeFactor && uvStartInnerGrid != uvEnd)
+                while (edgeStep < currentEdge.edgeFactor || uvStartInnerGrid != uvEnd)
                 {
                     bool currentSide = q >= 0;
-                    if (currentSide)
+                    if (currentSide && uvStartInnerGrid != uvEnd)
                     {
-                        Assert(uvStartInnerGrid != uvEnd);
                         int id0 = tessellatedVertices.GetInnerGridIndex(uvStartInnerGrid[0],
                                                                         uvStartInnerGrid[1]);
                         uvStartInnerGrid += uvDiffTable[edgeIndex];
@@ -539,6 +532,24 @@ void AdaptiveTessellation(const Mat4 &c2s, Mesh *controlMeshes, u32 numMeshes)
                 }
             }
         }
+
+        outputMesh->vertices =
+            PushArrayNoZero(arena, Vec3f, tessellatedVertices.vertices.size());
+        MemoryCopy(outputMesh->vertices, tessellatedVertices.vertices.data(),
+                   sizeof(Vec3f) * tessellatedVertices.vertices.size());
+
+        int numIndices               = (int)tessellatedVertices.stitchingIndices.size();
+        outputMesh->stitchingIndices = PushArrayNoZero(arena, u32, numIndices);
+        MemoryCopy(outputMesh->stitchingIndices, tessellatedVertices.stitchingIndices.data(),
+                   sizeof(int) * numIndices);
+
+        outputMesh->numPatches = (int)patches.size();
+        outputMesh->patches = PushArrayNoZero(arena, OpenSubdivPatch, outputMesh->numPatches);
+        MemoryCopy(outputMesh->patches, patches.data(),
+                   sizeof(OpenSubdivPatch) * outputMesh->numPatches);
+
+        outputMesh->totalNumFaces = numIndices / 3 + totalNumPatchFaces;
+
         delete refiner;
         delete patchTable;
     }

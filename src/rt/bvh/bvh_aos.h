@@ -785,7 +785,7 @@ u32 PartitionParallel(Heuristic *heuristic, PrimRef *data, const Split &split, u
     maxIndex = Min(maxIndex, start + count - 1);
     minIndex = Max(minIndex, start);
     ErrorExit(maxIndex > minIndex, "max: %u, min %u, start %u, count %u\n", maxIndex, minIndex,
-          start, count);
+              start, count);
     // Assert(maxIndex < start + count);
     // Assert(minIndex >= start);
     u32 out = heuristic->Partition(data, split, minIndex, maxIndex);
@@ -2032,6 +2032,114 @@ struct HeuristicSpatialSplits
                 }
                 break;
             }
+        }
+
+#endif
+        ArenaPopTo(temp.arena, split.allocPos);
+    }
+};
+
+template <typename PrimRefType, i32 numObjectBins = 32>
+struct HeuristicObjectBinning
+{
+    using Record  = RecordAOSSplits;
+    using PrimRef = PrimRefType;
+    using OBin    = HeuristicAOSObjectBinning<numObjectBins, PrimRef>;
+
+    const ScenePrimitives *scene;
+    u32 logBlockSize;
+    PrimRef *primRefs;
+
+    HeuristicObjectBinning() {}
+    HeuristicObjectBinning(PrimRef *data, const ScenePrimitives *scene, u32 logBlockSize = 0)
+        : primRefs(data), scene(scene), logBlockSize(logBlockSize)
+    {
+    }
+
+    Split Bin(const Record &record, u32 blockSize = 1)
+    {
+        // Object splits
+        TempArena temp = ScratchStart(0, 0);
+        u64 popPos     = ArenaPos(temp.arena);
+        OBin *objectBinHeuristic;
+
+        struct Split objectSplit =
+            SAHObjectBinning(record, primRefs, objectBinHeuristic, popPos, logBlockSize);
+
+        Bounds8 geomBoundsL;
+        for (u32 i = 0; i < objectSplit.bestPos; i++)
+        {
+            geomBoundsL.Extend(objectBinHeuristic->bins[objectSplit.bestDim][i]);
+        }
+        Bounds8 geomBoundsR;
+        for (u32 i = objectSplit.bestPos; i < numObjectBins; i++)
+        {
+            geomBoundsR.Extend(objectBinHeuristic->bins[objectSplit.bestDim][i]);
+        }
+
+        FinalizeObjectSplit(objectBinHeuristic, objectSplit, popPos);
+        return objectSplit;
+    }
+    void FlushState(struct Split split)
+    {
+        TempArena temp = ScratchStart(0, 0);
+        ArenaPopTo(temp.arena, split.allocPos);
+    }
+    void Split(struct Split split, const Record &record, Record &outLeft, Record &outRight)
+    {
+        // NOTE: Split must be called from the same thread as Bin
+        TempArena temp = ScratchStart(0, 0);
+        u32 mid;
+        u32 newEnd;
+
+        if (split.bestSAH == f32(pos_inf))
+        {
+            mid    = SplitFallback(record, split, primRefs, outLeft, outRight);
+            newEnd = record.End();
+        }
+        else
+        {
+            OBin *heuristic = (OBin *)(split.ptr);
+            mid    = PartitionParallel(heuristic, primRefs, split, record.start, record.count,
+                                       outLeft, outRight);
+            newEnd = record.End();
+
+            Assert((Movemask(outLeft.geomBounds <= record.geomBounds) & 0x77) == 0x77);
+            Assert((Movemask(outRight.geomBounds <= record.geomBounds) & 0x77) == 0x77);
+        }
+
+        Assert(outLeft.count > 0);
+        Assert(outRight.count > 0);
+
+        // error check
+#ifdef DEBUG
+        {
+            OBin *heuristic = (OBin *)(split.ptr);
+            for (u32 i = outLeft.start; i < outLeft.End(); i++)
+            {
+                const PrimRef *ref = &primRefs[i];
+                Lane8F32 v         = Lane8F32::LoadU(ref);
+                Lane8F32 centroid  = ((Shuffle4<1, 1>(v) - Shuffle4<0, 0>(v))) ^ signFlipMask;
+                u32 pos = heuristic->binner->Bin(centroid[4 + split.bestDim], split.bestDim);
+                Assert(pos < split.bestPos);
+                u32 gMask = Movemask(v <= outLeft.geomBounds) & 0x77;
+                Assert(gMask == 0x77);
+                u32 cMask = Movemask(centroid <= outLeft.centBounds) & 0x77;
+                Assert(cMask == 0x77);
+            }
+            for (u32 i = outRight.start; i < outRight.End(); i++)
+            {
+                const PrimRef *ref = &primRefs[i];
+                Lane8F32 v         = Lane8F32::LoadU(ref);
+                Lane8F32 centroid  = ((Shuffle4<1, 1>(v) - Shuffle4<0, 0>(v))) ^ signFlipMask;
+                u32 pos = heuristic->binner->Bin(centroid[4 + split.bestDim], split.bestDim);
+                Assert(pos >= split.bestPos);
+                u32 gMask = Movemask(v <= outRight.geomBounds) & 0x77;
+                u32 cMask = Movemask(centroid <= outRight.centBounds) & 0x77;
+                Assert(gMask == 0x77);
+                Assert(cMask == 0x77);
+            }
+            break;
         }
 
 #endif

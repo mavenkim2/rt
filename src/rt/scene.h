@@ -194,6 +194,51 @@ struct Mesh
 };
 
 template <GeometryType type, typename PrimRefType>
+struct GenerateMeshRefsHelper;
+
+template <typename PrimRefType>
+struct GenerateMeshRefsHelper<GeometryType::CatmullClark, PrimRefType>
+{
+    OpenSubdivMesh *mesh;
+    __forceinline void operator()(PrimRefType *refs, u32 offset, u32 geomID, u32 start,
+                                  u32 count, RecordAOSSplits &record)
+    {
+        Bounds geomBounds;
+        Bounds centBounds;
+        for (u32 i = start; i < start + count; i++, offset++)
+        {
+            PrimRefType *prim = &refs[offset];
+            Vec3f v[4];
+            u32 numVertices = mesh->GetVertices(i, v);
+
+            Vec3f min(pos_inf);
+            Vec3f max(neg_inf);
+            for (u32 j = 0; j < numVertices; j++)
+            {
+                min = Min(min, v[j]);
+                max = Max(max, v[j]);
+            }
+
+            Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
+            Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
+            Lane4F32::StoreU(prim->min, -mins);
+
+            if constexpr (!std::is_same_v<PrimRefType, PrimRefCompressed>)
+                prim->geomID = geomID;
+            prim->maxX   = max.x;
+            prim->maxY   = max.y;
+            prim->maxZ   = max.z;
+            prim->primID = i;
+
+            geomBounds.Extend(mins, maxs);
+            centBounds.Extend(maxs + mins);
+        }
+        record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+        record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+    }
+};
+
+template <GeometryType type, typename PrimRefType>
 struct GenerateMeshRefsHelper
 {
     Vec3f *p;
@@ -418,7 +463,8 @@ struct NanoVDBVolume
         return LeScale * BlackbodySpectrum(temp).Sample(lambda);
     }
     void Extinction(Vec3f p, const SampledWavelengths &lambda, SampledSpectrum &outAbs,
-                    SampledSpectrum &outScatter, SampledSpectrum &le) const //, f32, f32) const
+                    SampledSpectrum &outScatter,
+                    SampledSpectrum &le) const //, f32, f32) const
     {
         // p = ApplyInverse(*renderFromMedium, p);
         p = TransformP(mediumFromRender, p);
@@ -466,8 +512,8 @@ struct NanoVDBVolume
                 f32 cMin      = pos_inf;
                 f32 cMax      = neg_inf;
 
-                // TODO: see if loop carried dependency, or index computation, is significant
-                // overhead vs access time
+                // TODO: see if loop carried dependency, or index computation, is
+                // significant overhead vs access time
                 for (u32 i = start; i < count; i++)
                 {
                     i32 nx    = begin[0] + (i % width[0]);
@@ -522,161 +568,6 @@ enum class AttributeType
     Bool,
 };
 
-#if 0
-struct AttributeTable
-{
-    u8 *buffer;
-    // defaults
-
-#ifdef DEBUG
-    AttributeType *types;
-    u32 attributeCount;
-#endif
-};
-
-struct AttributeTableKey
-{
-    static const u32 indexBits  = 8;
-    static const u32 indexMask  = 0xff000000;
-    static const u32 indexShift = 24;
-    u32 tableIndex_Size;
-    u32 offset;
-
-    void SetIndexAndSize(u32 index, u32 size)
-    {
-        Assert(size < (1u << indexShift));
-        Assert(index < (1u << indexBits));
-
-        tableIndex_Size = (index << indexShift) | size;
-    }
-
-    AttributeTableKey(u32 index, u32 size, u32 offset) : offset(offset)
-    {
-        SetIndexAndSize(index, size);
-    }
-
-    u32 GetSize() const { return tableIndex_Size & (~indexMask); }
-    u32 GetIndex() const { return (tableIndex_Size & indexMask) >> indexShift; }
-};
-
-AttributeTable *GetMaterialTable(u32 tableIndex);
-
-struct AttributeIterator
-{
-    AttributeTable *table;
-    u64 offset;
-    u64 limit;
-    i32 callbackCount = 0;
-#ifdef DEBUG
-    u32 countOffset = 0;
-#endif
-
-    AttributeIterator() {}
-    AttributeIterator(AttributeTableKey key)
-        : table(GetMaterialTable(key.GetIndex())), offset(key.offset),
-          limit(key.offset + key.GetSize())
-    {
-    }
-    void DebugCheck(AttributeType type)
-    {
-        // #ifdef DEBUG
-        //         Assert(table->types);
-        //         Assert(countOffset < table->attributeCount);
-        //         Assert(table->types[countOffset++] == type);
-        // #endif
-    }
-    void *ReadPointer()
-    {
-        u64 o = offset;
-        offset += sizeof(void *);
-        DebugCheck(AttributeType::Float);
-        return (void *)(table->buffer + o);
-    }
-    f32 ReadFloat(f32 d = 0.f)
-    {
-        u64 o = offset;
-        if (offset >= limit) return d;
-        offset += sizeof(f32);
-        DebugCheck(AttributeType::Float);
-        return *(f32 *)(table->buffer + o);
-    }
-    string ReadString(string d = {})
-    {
-        u32 size = *(u32 *)(table->buffer + offset);
-        if (offset >= limit) return d;
-        offset += sizeof(size);
-        string result = Str8(table->buffer + offset, size);
-        offset += size;
-        DebugCheck(AttributeType::String);
-        return result;
-    }
-    i32 ReadInt(i32 d = 0)
-    {
-        u64 o = offset;
-        if (o >= limit) return d;
-        offset += sizeof(i32);
-        DebugCheck(AttributeType::Int);
-        return *(i32 *)(table->buffer + o);
-    }
-    bool ReadBool(bool d = 0)
-    {
-        u64 o = offset;
-        if (o >= limit) return d;
-        offset += sizeof(bool);
-        DebugCheck(AttributeType::Bool);
-        return *(bool *)(table->buffer + o);
-    }
-};
-
-#define MATERIAL_FUNCTION_HEADER(name)                                                        \
-    void name(TextureCallback *callbacks, Arena *arena, AttributeIterator *itr,               \
-              SurfaceInteraction &si, SampledWavelengths &lambda, BxDF &result)
-
-#define TEXTURE_CALLBACK(name)                                                                \
-    void name(AttributeIterator *iterator, SurfaceInteraction &intr,                          \
-              SampledWavelengths &lambda, const Vec4f &filterWidths, f32 *result)
-
-typedef TEXTURE_CALLBACK((*TextureCallback));
-typedef MATERIAL_FUNCTION_HEADER((*MaterialCallback));
-
-TEXTURE_CALLBACK(ProcessNullTexture) {}
-TEXTURE_CALLBACK(ProcessFloatTexture);
-TEXTURE_CALLBACK(ProcessPtexTexture);
-
-TextureCallback textureFuncs[] = {
-    ProcessNullTexture, ProcessNullTexture, ProcessFloatTexture, ProcessNullTexture,
-    ProcessNullTexture, ProcessNullTexture, ProcessNullTexture,  ProcessNullTexture,
-    ProcessNullTexture, ProcessPtexTexture, ProcessNullTexture,  ProcessNullTexture,
-    ProcessNullTexture,
-};
-
-MATERIAL_FUNCTION_HEADER(ShaderEvaluate_Null);
-MATERIAL_FUNCTION_HEADER(ShaderEvaluate_Diffuse);
-MATERIAL_FUNCTION_HEADER(ShaderEvaluate_DiffuseTransmission);
-MATERIAL_FUNCTION_HEADER(ShaderEvaluate_Dielectric);
-MATERIAL_FUNCTION_HEADER(ShaderEvaluate_CoatedDiffuse);
-
-MaterialCallback materialFuncs[] = {
-    ShaderEvaluate_Null,
-    ShaderEvaluate_Diffuse,
-    ShaderEvaluate_DiffuseTransmission,
-    ShaderEvaluate_CoatedDiffuse,
-    ShaderEvaluate_Dielectric,
-};
-
-// struct Material
-// {
-//     AttributeTableKey key;
-//     MaterialCallback shade;
-//     TextureCallback *funcs;
-//     u32 count;
-//
-//     __forceinline void Shade(Arena *arena, SurfaceInteraction &si, SampledWavelengths
-//     &lambda,
-//                              struct BSDFBase<BxDF> *result);
-// };
-#endif
-
 struct Material
 {
     // TODO: actually displacement map
@@ -696,8 +587,9 @@ struct Material
         // f32 dddu, dddv;
         // f32 d = displacement->EvaluateFloat(si, lambda, filterWidths);
         //
-        // Vec3f dpdu = si.shading.dpdu + dddu * si.shading.n + displacement * si.shading.dndu;
-        // Vec3f dpdv = si.shading.dpdv + dddv * si.shading.n + displacement * si.shading.dndv;
+        // Vec3f dpdu = si.shading.dpdu + dddu * si.shading.n + displacement *
+        // si.shading.dndu; Vec3f dpdv = si.shading.dpdv + dddv * si.shading.n +
+        // displacement * si.shading.dndv;
         //
         // si.shading.n    = Cross(dpdu, dpdv);
         // si.shading.dpdu = dpdu;
