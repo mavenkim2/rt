@@ -194,6 +194,7 @@ struct Mat4
     }
 
     Lane4F32 &operator[](const i32 index) { return columns[index]; }
+    const Lane4F32 &operator[](const i32 index) const { return columns[index]; }
 
     static __forceinline Mat4 Identity()
     {
