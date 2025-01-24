@@ -92,15 +92,16 @@ struct PtexTexture : Texture
             Assert(0);
         }
         u32 numFaces = texture->getInfo().numFaces;
+        // Assert(faceIndex < numFaces);
         // TODO: some of the pbrt material -> shape pairings don't match?
-        // if (faceIndex >= numFaces)
-        // {
-        //     Print("faceIndex: %u, numFaces: %u\n", faceIndex, numFaces);
-        //     Print("scene filename: %S\n", GetDebug()->filename);
-        //     Print("geomID: %u\n", GetDebug()->geomID);
-        //     Print("filename: %S\n", filename);
-        //     Assert(0);
-        // }
+        if (faceIndex >= numFaces)
+        {
+            Print("faceIndex: %u, numFaces: %u\n", faceIndex, numFaces);
+            Print("scene filename: %S\n", GetDebug()->filename);
+            Print("geomID: %u\n", GetDebug()->geomID);
+            Print("filename: %S\n", filename);
+            Assert(0);
+        }
         Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
         Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
 
@@ -885,10 +886,11 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
         Assert(scene->numPrimitives);
         if (type == GeometryType::QuadMesh)
         {
-            // AdaptiveTessellation(arena, NDCFromCamera, screenHeight, (Mesh
-            // *)scene->primitives,
-            //                      scene->numPrimitives);
-            BuildQuadBVH(arenas, settings, scene);
+            scene->primitives =
+                AdaptiveTessellation(arena, NDCFromCamera, screenHeight,
+                                     (Mesh *)scene->primitives, scene->numPrimitives);
+            BuildTriangleBVH(arenas, settings, scene);
+            // BuildQuadBVH(arenas, settings, scene);
         }
         else if (type == GeometryType::TriangleMesh)
         {

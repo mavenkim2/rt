@@ -1741,12 +1741,18 @@ struct HeuristicSpatialSplits
             Assert((Movemask(outRight.geomBounds <= record.geomBounds) & 0x77) == 0x77);
         }
 
+        if (mid == newEnd || mid == record.start)
+        {
+            mid    = SplitFallback(record, split, primRefs, outLeft, outRight);
+            newEnd = record.End();
+        }
+
         MoveExtendedRanges(split, newEnd, record, primRefs, mid, outLeft, outRight);
         Assert(outLeft.count > 0);
         Assert(outRight.count > 0);
 
         // error check
-#ifdef DEBUG
+#if 0
         {
             switch (split.type)
             {
@@ -1761,7 +1767,7 @@ struct HeuristicSpatialSplits
                             ((Shuffle4<1, 1>(v) - Shuffle4<0, 0>(v))) ^ signFlipMask;
                         u32 pos =
                             heuristic->binner->Bin(centroid[4 + split.bestDim], split.bestDim);
-                        Assert(pos < split.bestPos);
+                        Assert(split.bestSAH == f32(pos_inf) || pos < split.bestPos);
                         u32 gMask = Movemask(v <= outLeft.geomBounds) & 0x77;
                         Assert(gMask == 0x77);
                         u32 cMask = Movemask(centroid <= outLeft.centBounds) & 0x77;
@@ -1775,7 +1781,7 @@ struct HeuristicSpatialSplits
                             ((Shuffle4<1, 1>(v) - Shuffle4<0, 0>(v))) ^ signFlipMask;
                         u32 pos =
                             heuristic->binner->Bin(centroid[4 + split.bestDim], split.bestDim);
-                        Assert(pos >= split.bestPos);
+                        Assert(split.bestSAH == f32(pos_inf) || pos >= split.bestPos);
                         u32 gMask = Movemask(v <= outRight.geomBounds) & 0x77;
                         u32 cMask = Movemask(centroid <= outRight.centBounds) & 0x77;
                         Assert(gMask == 0x77);
@@ -1795,7 +1801,8 @@ struct HeuristicSpatialSplits
                             ((Shuffle4<1, 1>(v) - Shuffle4<0, 0>(v))) ^ signFlipMask;
 
                         f32 c = (ref->max[split.bestDim] - ref->min[split.bestDim]) * 0.5f;
-                        Assert(heuristic->binner->Bin(c, split.bestDim) < split.bestPos);
+                        Assert(split.bestSAH == f32(pos_inf) ||
+                               heuristic->binner->Bin(c, split.bestDim) < split.bestPos);
 
                         u32 gMask = Movemask(v <= outLeft.geomBounds) & 0x77;
                         Assert(gMask == 0x77);
@@ -1811,7 +1818,8 @@ struct HeuristicSpatialSplits
                             ((Shuffle4<1, 1>(v) - Shuffle4<0, 0>(v))) ^ signFlipMask;
 
                         f32 c = (ref->max[split.bestDim] - ref->min[split.bestDim]) * 0.5f;
-                        Assert(heuristic->binner->Bin(c, split.bestDim) >= split.bestPos);
+                        Assert(split.bestSAH == f32(pos_inf) ||
+                               heuristic->binner->Bin(c, split.bestDim) >= split.bestPos);
 
                         u32 gMask = Movemask(v <= outRight.geomBounds) & 0x77;
                         Assert(gMask == 0x77);

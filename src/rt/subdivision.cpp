@@ -165,29 +165,52 @@ void EvaluateLimitSurfacePosition(const Vertex *vertices, const Far::PatchMap *p
 }
 
 // Edge vertices (shared by edges)
+// TODO: use half-edge structure?
 struct EdgeInfo
 {
     int indexStart;
     int edgeFactor;
     int id0, id1;
 
+    int GetFirst(bool reversed) const { return reversed ? id1 : id0; }
+    int GetLast(bool reversed) const { return reversed ? id0 : id1; }
+};
+
+struct EdgeIterator
+{
+    EdgeInfo info;
+
+    int id0, id1;
+    int start, diff;
+
+    EdgeIterator(EdgeInfo info, bool reversed)
+    {
+        id0   = reversed ? info.id1 : info.id0;
+        id1   = reversed ? info.id0 : info.id1;
+        start = reversed ? info.indexStart + info.edgeFactor - 2 : info.indexStart;
+        diff  = reversed ? -1 : 1;
+    }
     int GetVertexId(int edgeStep) const
     {
-        Assert(edgeStep >= 0 && edgeStep <= edgeFactor);
-        return edgeStep == 0 ? id0
-                             : (edgeStep == edgeFactor ? id1 : indexStart + (edgeStep - 1));
+        Assert(edgeStep >= 0 && edgeStep <= info.edgeFactor);
+        return edgeStep == 0
+                   ? id0
+                   : (edgeStep == info.edgeFactor ? id1 : start + diff * (edgeStep - 1));
     }
 };
 
 struct FaceInfo
 {
     int edgeInfoId[4];
+    bool reversed[4];
 };
 
 struct TessellatedVertices
 {
     std::vector<Vec3f> vertices;
     std::vector<Vec3f> normals;
+    std::vector<Vec2f> uvs;
+    std::vector<int> faceIDs;
     // Stitching triangles
     std::vector<int> stitchingIndices;
     std::vector<EdgeInfo> edgeInfos;
@@ -251,6 +274,10 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
         Vec2i(0, -1),
     };
 
+    int quadTable[] = {
+        0, 1, 2, 0, 2, 3,
+    };
+
     // TODO: catmull clark primitive
     // OpenSubdivMesh *outputMeshes = PushArray(arena, OpenSubdivMesh, numMeshes);
     Mesh *outputMeshes = PushArray(arena, Mesh, numMeshes);
@@ -264,12 +291,16 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
         Mesh *controlMesh = &controlMeshes[meshIndex];
         tessellatedVertices.vertices.reserve(tessellatedVertices.vertices.capacity() +
                                              controlMesh->numVertices);
+        tessellatedVertices.normals.reserve(tessellatedVertices.normals.capacity() +
+                                            controlMesh->numVertices);
+        tessellatedVertices.uvs.reserve(tessellatedVertices.uvs.capacity() +
+                                        controlMesh->numVertices);
+        tessellatedVertices.faceIDs.reserve(tessellatedVertices.faceIDs.capacity() +
+                                            controlMesh->numIndices / 3);
 
         std::vector<FaceInfo> faceInfos(controlMesh->numFaces);
         std::vector<EdgeInfo> edgeInfos;
         edgeInfos.reserve(controlMesh->numIndices / 4);
-
-        int edgeCount = 0;
 
         ScratchArena scratch;
 
@@ -297,9 +328,10 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
             int indexOffset = 4 * f;
             for (int i = 0; i < 4; i++)
             {
-                int id0    = controlMesh->indices[indexOffset + i];
-                int id1    = controlMesh->indices[indexOffset + ((i + 1) & 3)];
-                u64 edgeId = ComputeEdgeId(id0, id1);
+                int id0       = controlMesh->indices[indexOffset + i];
+                int id1       = controlMesh->indices[indexOffset + ((i + 1) & 3)];
+                u64 edgeId    = ComputeEdgeId(id0, id1);
+                bool reversed = false;
 
                 // Add vertex samples for evaluation
                 Assert(id0 < (int)samples.size());
@@ -324,11 +356,10 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
 
                     maxMeshEdgeRate = Max(maxMeshEdgeRate, edgeFactor);
 
-                    edgeIndex                       = edgeCount++;
-                    edgeInfos[edgeIndex].indexStart = (int)samples.size();
-                    edgeInfos[edgeIndex].edgeFactor = edgeFactor;
-                    edgeInfos[edgeIndex].id0        = id0;
-                    edgeInfos[edgeIndex].id1        = id1;
+                    edgeIndex = (int)edgeInfos.size();
+                    edgeInfos.emplace_back(
+                        EdgeInfo{(int)samples.size(), edgeFactor, id0, id1});
+                    edgeIDMap[edgeId] = edgeIndex;
 
                     // Add edge samples for evaluation
                     f32 stepSize = 1.f / edgeFactor;
@@ -339,15 +370,15 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
                             uvTable[i] + Vec2f(uvDiffTable[i]) * (edgeVertexIndex * stepSize);
                         samples.push_back(LimitSurfaceSample{f, uv});
                     }
-
-                    edgeIDMap[edgeId] = edgeCount++;
                 }
                 else
                 {
                     edgeIndex = edgeIDMap[edgeId];
+                    reversed  = true;
                 }
                 Assert(edgeIndex != -1);
                 faceInfos[f].edgeInfoId[i] = edgeIndex;
+                faceInfos[f].reversed[i]   = reversed;
             }
         }
 
@@ -388,9 +419,10 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
             Vec3f pos, dpdu, dpdv;
             EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable, sample, pos, dpdu,
                                          dpdv);
-            Vec3f normal = Cross(dpdu, dpdv);
+            Vec3f normal = Normalize(Cross(dpdu, dpdv));
             tessellatedVertices.vertices.push_back(pos);
             tessellatedVertices.normals.push_back(normal);
+            tessellatedVertices.uvs.push_back(sample.uv);
         }
 
         int totalNumPatchFaces = 0;
@@ -398,6 +430,11 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
         patches.reserve(controlMesh->numFaces);
         for (int f = 0; f < (int)controlMesh->numFaces; f++)
         {
+            // int face = f;
+            // TODO THIS IS A HACK
+            int face =
+                f >= (int)controlMesh->numFaces / 2 ? f - (int)controlMesh->numFaces / 2 : f;
+
             FaceInfo &faceInfo = faceInfos[f];
             // Compute limit surface samples
             int edgeRates[4] = {
@@ -417,18 +454,16 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
 
             if (maxEdgeRates[0] == 1 && maxEdgeRates[1] == 1)
             {
-                tessellatedVertices.stitchingIndices.push_back(
-                    edgeInfos[faceInfo.edgeInfoId[0]].id0);
-                tessellatedVertices.stitchingIndices.push_back(
-                    edgeInfos[faceInfo.edgeInfoId[0]].id1);
-                tessellatedVertices.stitchingIndices.push_back(
-                    edgeInfos[faceInfo.edgeInfoId[1]].id1);
-                tessellatedVertices.stitchingIndices.push_back(
-                    edgeInfos[faceInfo.edgeInfoId[0]].id0);
-                tessellatedVertices.stitchingIndices.push_back(
-                    edgeInfos[faceInfo.edgeInfoId[1]].id1);
-                tessellatedVertices.stitchingIndices.push_back(
-                    edgeInfos[faceInfo.edgeInfoId[2]].id1);
+                for (int triIndex = 0; triIndex < ArrayLength(quadTable); triIndex++)
+                {
+                    int index = quadTable[triIndex];
+                    tessellatedVertices.stitchingIndices.push_back(
+                        edgeInfos[faceInfo.edgeInfoId[index]].GetFirst(
+                            faceInfo.reversed[index]));
+                }
+
+                tessellatedVertices.faceIDs.push_back(face);
+                tessellatedVertices.faceIDs.push_back(face);
 
                 continue;
             }
@@ -461,9 +496,9 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
                     Vec3f pos, dpdu, dpdv;
                     EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable,
                                                  LimitSurfaceSample{f, uv}, pos, dpdu, dpdv);
-                    Vec3f normal = Cross(dpdu, dpdv);
-                    tessellatedVertices.vertices.push_back(pos);
+                    Vec3f normal = Normalize(Cross(dpdu, dpdv));
                     tessellatedVertices.normals.push_back(normal);
+                    tessellatedVertices.uvs.push_back(uv);
 
                     // Vector Displacement mapping
                     // Vec3f normal = Normalize(Cross(dpdu, dpdv));
@@ -477,7 +512,7 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
                     tessellatedVertices.SetInnerGrid(uStep, vStep) = pos;
 
                     // TODO: create a new catmull clark primitive
-                    if (uStep != maxEdgeRates[0] - 2 && vStep != maxEdgeRates[0] - 2)
+                    if (uStep != maxEdgeRates[0] - 2 && vStep != maxEdgeRates[1] - 2)
                     {
                         int v0 = tessellatedVertices.GetInnerGridIndex(uStep, vStep);
                         int v1 = tessellatedVertices.GetInnerGridIndex(uStep + 1, vStep);
@@ -488,9 +523,13 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
                         tessellatedVertices.stitchingIndices.push_back(v1);
                         tessellatedVertices.stitchingIndices.push_back(v2);
 
+                        tessellatedVertices.faceIDs.push_back(face);
+
                         tessellatedVertices.stitchingIndices.push_back(v0);
                         tessellatedVertices.stitchingIndices.push_back(v2);
                         tessellatedVertices.stitchingIndices.push_back(v3);
+
+                        tessellatedVertices.faceIDs.push_back(face);
                     }
                 }
             }
@@ -500,6 +539,8 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
             {
                 int edgeRate                = edgeRates[edgeIndex];
                 const EdgeInfo &currentEdge = edgeInfos[faceInfo.edgeInfoId[edgeIndex]];
+
+                EdgeIterator itr(currentEdge, faceInfo.reversed[edgeIndex]);
 
                 int maxEdgeRate = maxEdgeRates[edgeIndex & 1];
                 // Generate indices
@@ -519,29 +560,33 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
                     {
                         int id0 = tessellatedVertices.GetInnerGridIndex(uvStartInnerGrid[0],
                                                                         uvStartInnerGrid[1]);
+                        int id1 = itr.GetVertexId(edgeStep);
                         uvStartInnerGrid += uvDiffTable[edgeIndex];
-                        int id1 = tessellatedVertices.GetInnerGridIndex(uvStartInnerGrid[0],
-                                                                        uvStartInnerGrid[1]);
-                        int id2 = currentEdge.GetVertexId(edgeStep);
-
-                        tessellatedVertices.stitchingIndices.push_back(id0);
-                        tessellatedVertices.stitchingIndices.push_back(id1);
-                        tessellatedVertices.stitchingIndices.push_back(id2);
-
-                        q -= 2 * edgeRate;
-                    }
-                    else
-                    {
-                        int id0 = currentEdge.GetVertexId(edgeStep);
-                        edgeStep++;
-                        Assert(edgeStep <= currentEdge.edgeFactor);
-                        int id1 = currentEdge.GetVertexId(edgeStep);
                         int id2 = tessellatedVertices.GetInnerGridIndex(uvStartInnerGrid[0],
                                                                         uvStartInnerGrid[1]);
 
                         tessellatedVertices.stitchingIndices.push_back(id0);
                         tessellatedVertices.stitchingIndices.push_back(id1);
                         tessellatedVertices.stitchingIndices.push_back(id2);
+
+                        tessellatedVertices.faceIDs.push_back(face);
+
+                        q -= 2 * edgeRate;
+                    }
+                    else
+                    {
+                        int id0 = itr.GetVertexId(edgeStep);
+                        edgeStep++;
+                        Assert(edgeStep <= currentEdge.edgeFactor);
+                        int id1 = itr.GetVertexId(edgeStep);
+                        int id2 = tessellatedVertices.GetInnerGridIndex(uvStartInnerGrid[0],
+                                                                        uvStartInnerGrid[1]);
+
+                        tessellatedVertices.stitchingIndices.push_back(id0);
+                        tessellatedVertices.stitchingIndices.push_back(id1);
+                        tessellatedVertices.stitchingIndices.push_back(id2);
+
+                        tessellatedVertices.faceIDs.push_back(face);
 
                         q += 2 * maxEdgeRate;
                     }
@@ -552,20 +597,35 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
         outputMesh->p = PushArrayNoZero(arena, Vec3f, tessellatedVertices.vertices.size());
         MemoryCopy(outputMesh->p, tessellatedVertices.vertices.data(),
                    sizeof(Vec3f) * tessellatedVertices.vertices.size());
+        outputMesh->numVertices = (int)tessellatedVertices.vertices.size();
 
         outputMesh->indices =
             PushArrayNoZero(arena, u32, tessellatedVertices.stitchingIndices.size());
         MemoryCopy(outputMesh->indices, tessellatedVertices.stitchingIndices.data(),
                    sizeof(int) * tessellatedVertices.stitchingIndices.size());
+        outputMesh->numIndices = (u32)tessellatedVertices.stitchingIndices.size();
+        outputMesh->numFaces   = outputMesh->numIndices / 3;
 
         Assert(tessellatedVertices.normals.size() == tessellatedVertices.vertices.size());
         outputMesh->n = PushArrayNoZero(arena, Vec3f, tessellatedVertices.normals.size());
         MemoryCopy(outputMesh->n, tessellatedVertices.normals.data(),
                    sizeof(Vec3f) * tessellatedVertices.normals.size());
+
+        Assert(tessellatedVertices.vertices.size() == tessellatedVertices.uvs.size());
+        outputMesh->uv = PushArrayNoZero(arena, Vec2f, tessellatedVertices.uvs.size());
+        MemoryCopy(outputMesh->uv, tessellatedVertices.uvs.data(),
+                   sizeof(Vec2f) * tessellatedVertices.uvs.size());
+
         // outputMesh->vertices = StaticArray<Vec3f>(arena, tessellatedVertices.vertices);
         // outputMesh->stitchingIndices =
         //     StaticArray<int>(arena, tessellatedVertices.stitchingIndices);
         // outputMesh->patches = StaticArray<OpenSubdivPatch>(arena, patches);
+
+        Assert(tessellatedVertices.stitchingIndices.size() ==
+               tessellatedVertices.faceIDs.size() * 3);
+        outputMesh->faceIDs = PushArrayNoZero(arena, int, tessellatedVertices.faceIDs.size());
+        MemoryCopy(outputMesh->faceIDs, tessellatedVertices.faceIDs.data(),
+                   sizeof(int) * tessellatedVertices.faceIDs.size());
 
         delete refiner;
         delete patchTable;

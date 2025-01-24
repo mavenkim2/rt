@@ -186,6 +186,7 @@ struct Mesh
     Vec3f *n;
     Vec2f *uv;
     u32 *indices;
+    int *faceIDs;
     u32 numIndices;
     u32 numVertices;
     u32 numFaces;

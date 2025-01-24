@@ -762,7 +762,7 @@ static void SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
 
     // TODO: properly obtain the light handle
     si.lightIndices = 0;
-    si.faceIndices  = primID;
+    si.faceIndices  = mesh->faceIDs ? mesh->faceIDs[primID] : primID;
     si.curvature =
         CalculateCurvature(si.shading.dpdu, si.shading.dpdv, si.shading.dndu, si.shading.dndv);
 }
