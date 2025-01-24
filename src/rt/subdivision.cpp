@@ -533,22 +533,10 @@ void AdaptiveTessellation(Arena *arena, const Mat4 &c2s, Mesh *controlMeshes, u3
             }
         }
 
-        outputMesh->vertices =
-            PushArrayNoZero(arena, Vec3f, tessellatedVertices.vertices.size());
-        MemoryCopy(outputMesh->vertices, tessellatedVertices.vertices.data(),
-                   sizeof(Vec3f) * tessellatedVertices.vertices.size());
-
-        int numIndices               = (int)tessellatedVertices.stitchingIndices.size();
-        outputMesh->stitchingIndices = PushArrayNoZero(arena, u32, numIndices);
-        MemoryCopy(outputMesh->stitchingIndices, tessellatedVertices.stitchingIndices.data(),
-                   sizeof(int) * numIndices);
-
-        outputMesh->numPatches = (int)patches.size();
-        outputMesh->patches = PushArrayNoZero(arena, OpenSubdivPatch, outputMesh->numPatches);
-        MemoryCopy(outputMesh->patches, patches.data(),
-                   sizeof(OpenSubdivPatch) * outputMesh->numPatches);
-
-        outputMesh->totalNumFaces = numIndices / 3 + totalNumPatchFaces;
+        outputMesh->vertices = StaticArray<Vec3f>(arena, tessellatedVertices.vertices);
+        outputMesh->stitchingIndices =
+            StaticArray<int>(arena, tessellatedVertices.stitchingIndices);
+        outputMesh->patches = StaticArray<OpenSubdivPatch>(arena, patches);
 
         delete refiner;
         delete patchTable;

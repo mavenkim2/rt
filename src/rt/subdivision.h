@@ -15,6 +15,9 @@ struct OpenSubdivPatch
     int gridIndexStart;
     // Minimum 2 for each
     int numRows, numCols;
+    int stitchingStart, stitchingCount;
+
+    int GetNumPrims() const { return (numRows - 1) * (numCols - 1) + stitchingCount / 3; }
 };
 
 // TODO: can have stitching quads (for edges that match the
@@ -22,32 +25,37 @@ struct OpenSubdivPatch
 // and a grid offset step size. this may or may not be worth it
 struct OpenSubdivMesh
 {
-    Vec3f *vertices;
-    u32 *stitchingIndices;
-    OpenSubdivPatch *patches;
-    u32 numPatches;
+    StaticArray<Vec3f> vertices;
+    StaticArray<int> stitchingIndices;
+    StaticArray<OpenSubdivPatch> patches;
 
-    u32 numPatchFaces;
-    u32 totalNumFaces;
-
-    u32 GetVertices(u32 primID, Vec3f *v) const
+    Bounds GetPatchBounds(u32 primID) const
     {
-        if (primID > numPatchFaces)
+        Assert(primID < patches.Length());
+        const OpenSubdivPatch *patch = &patches[primID];
+
+        Bounds bounds;
+
+        // Extend grid vertices
+        for (int r = 0; r < patch->numRows; r++)
         {
-            // TODO
-            return 4;
+            for (int c = 0; c < patch->numCols; c++)
+            {
+                Vec3f p = vertices[patch->gridIndexStart + patch->numCols * r + c];
+                bounds.Extend(Lane4F32(p.x, p.y, p.z, 0.f));
+            }
         }
-        else
+        Assert(patch->stitchingCount % 3 == 0);
+        // Extend stitching vertices
+        for (int stitchIndex = 0; stitchIndex < patch->stitchingCount; stitchIndex++)
         {
-            int triangleIndex = primID - numPatchFaces;
-            v[0]              = vertices[stitchingIndices[triangleIndex * 3 + 0]];
-            v[1]              = vertices[stitchingIndices[triangleIndex * 3 + 1]];
-            v[2]              = vertices[stitchingIndices[triangleIndex * 3 + 2]];
-            return 3;
+            Vec3f p = vertices[stitchingIndices[patch->stitchingStart + stitchIndex]];
+            bounds.Extend(Lane4F32(p.x, p.y, p.z, 0.f));
         }
+        return bounds;
     }
 
-    u32 GetNumFaces() const { return totalNumFaces; }
+    u32 GetNumFaces() const { return patches.Length(); }
 };
 
 } // namespace rt

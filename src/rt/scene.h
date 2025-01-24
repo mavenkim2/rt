@@ -209,29 +209,19 @@ struct GenerateMeshRefsHelper<GeometryType::CatmullClark, PrimRefType>
         {
             PrimRefType *prim = &refs[offset];
             Vec3f v[4];
-            u32 numVertices = mesh->GetVertices(i, v);
 
-            Vec3f min(pos_inf);
-            Vec3f max(neg_inf);
-            for (u32 j = 0; j < numVertices; j++)
-            {
-                min = Min(min, v[j]);
-                max = Max(max, v[j]);
-            }
-
-            Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
-            Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
-            Lane4F32::StoreU(prim->min, -mins);
+            Bounds bounds = mesh->GetPatchBounds(i);
+            Lane4F32::StoreU(prim->min, -bounds.minP);
 
             if constexpr (!std::is_same_v<PrimRefType, PrimRefCompressed>)
                 prim->geomID = geomID;
-            prim->maxX   = max.x;
-            prim->maxY   = max.y;
-            prim->maxZ   = max.z;
+            prim->maxX   = bounds.maxP.x;
+            prim->maxY   = bounds.maxP.y;
+            prim->maxZ   = bounds.maxP.z;
             prim->primID = i;
 
-            geomBounds.Extend(mins, maxs);
-            centBounds.Extend(maxs + mins);
+            geomBounds.Extend(bounds);
+            centBounds.Extend(bounds.minP + bounds.maxP);
         }
         record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
         record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);

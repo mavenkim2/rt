@@ -57,6 +57,12 @@ struct StaticArray
     {
         data = (T *)PushArray(arena, u8, sizeof(T) * capacity);
     }
+    StaticArray(Arena *arena, std::vector<T> &vector)
+        : size((int)vector.size()), capacity((int)vector.size())
+    {
+        data = (T *)PushArrayNoZero(arena, u8, sizeof(T) * size);
+        MemoryCopy(data, vector.data(), sizeof(T) * size);
+    }
 
     FORCEINLINE void Init(Arena *arena, i32 inCap)
     {
@@ -80,7 +86,7 @@ struct StaticArray
         return result;
     }
 
-    FORCEINLINE u32 Length() { return size; }
+    FORCEINLINE u32 Length() const { return size; }
 
     FORCEINLINE b8 Empty() { return size != 0; }
 
@@ -127,6 +133,14 @@ void Copy(StaticArray<T> &to, StaticArray<T> &from)
     Assert(to.capacity >= from.capacity && to.capacity >= from.size);
     MemoryCopy(to.data, from.data, sizeof(T) * from.size);
     to.size = from.size;
+}
+
+template <typename T>
+void Copy(StaticArray<T> &to, std::vector<T> &from)
+{
+    Assert(to.capacity >= from.size());
+    MemoryCopy(to.data, from.data(), sizeof(T) * from.size());
+    to.size = (int)from.size();
 }
 
 template <typename T, u32 capacity>
