@@ -421,6 +421,12 @@ Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory)
     }
 }
 
+Texture *ParseDisplacement(Arena *arena, Tokenizer *tokenizer, string directory)
+{
+    if (Advance(tokenizer, "displacement ")) ParseTexture(arena, tokenizer, directory);
+    return 0;
+}
+
 void ReadDielectricMaterial(Arena *arena, Tokenizer *tokenizer, string directory,
                             DielectricMaterial *mat)
 {
@@ -504,6 +510,7 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
                 else reflectance = ParseTexture(arena, tokenizer, directory);
 
                 *material = PushStructConstruct(arena, DiffuseMaterial)(reflectance);
+                (*material)->displacement = ParseDisplacement(arena, tokenizer, directory);
             }
             break;
             case MaterialTypes::DiffuseTransmission:
@@ -525,6 +532,7 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
 
                 *material = PushStructConstruct(arena, DiffuseTransmissionMaterial)(
                     reflectance, transmittance, scale);
+                (*material)->displacement = ParseDisplacement(arena, tokenizer, directory);
             }
             break;
             case MaterialTypes::Dielectric:
@@ -532,6 +540,7 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
                 *material = (Material *)PushStruct(arena, DielectricMaterial);
                 ReadDielectricMaterial(arena, tokenizer, directory,
                                        (DielectricMaterial *)(*material));
+                (*material)->displacement = ParseDisplacement(arena, tokenizer, directory);
             }
             break;
             case MaterialTypes::CoatedDiffuse:
@@ -561,6 +570,7 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
                 *material = PushStructConstruct(arena, CoatedDiffuseMaterial)(
                     dm, DiffuseMaterial(reflectance), albedo, g, maxDepth, nSamples,
                     thickness);
+                (*material)->displacement = ParseDisplacement(arena, tokenizer, directory);
             }
             break;
             default: Assert(0);
@@ -609,8 +619,9 @@ i32 ReadInt(Tokenizer *tokenizer, string p)
 }
 
 void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene,
-                 string directory, string filename, Scheduler::Counter *c = 0,
-                 AffineSpace *renderFromWorld = 0, bool baseFile = false)
+                 string directory, string filename, const Mat4 &NDCFromCamera,
+                 int screenHeight, Scheduler::Counter *c = 0, AffineSpace *renderFromWorld = 0,
+                 bool baseFile = false)
 
 {
     // TODO: add totals so we don't have to use linked lists
@@ -734,7 +745,8 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                         files.AddBack() = includeScene;
                         scheduler.Schedule(&counter, [=](u32 jobID) {
                             LoadRTScene(arenas, state, includeScene, directory,
-                                        newNode->filename, &newNode->counter);
+                                        newNode->filename, NDCFromCamera, screenHeight,
+                                        &newNode->counter);
                         });
                         break;
                     }
@@ -781,38 +793,36 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                 }
             };
 
+            auto AddMesh = [&](int numVerticesPerFace) {
+                Mesh &mesh   = shapes.AddBack();
+                mesh.p       = ReadVec3Pointer(&tokenizer, &dataTokenizer, "p ");
+                mesh.n       = ReadVec3Pointer(&tokenizer, &dataTokenizer, "n ");
+                mesh.uv      = ReadVec2Pointer(&tokenizer, &dataTokenizer, "uv ");
+                mesh.indices = (u32 *)ReadDataPointer(&tokenizer, &dataTokenizer, "indices ");
+                mesh.numVertices = ReadInt(&tokenizer, "v ");
+                mesh.numIndices  = ReadInt(&tokenizer, "i ");
+                mesh.numFaces    = mesh.numIndices ? mesh.numIndices / numVerticesPerFace
+                                                   : mesh.numVertices / numVerticesPerFace;
+                AddMaterial();
+
+                threadMemoryStatistics[threadIndex].totalShapeMemory +=
+                    mesh.numVertices * (sizeof(Vec3f) * 2 + sizeof(Vec2f)) +
+                    mesh.numIndices * sizeof(u32);
+            };
+
             while (!Advance(&tokenizer, "SHAPE_END "))
             {
                 if (Advance(&tokenizer, "Quad "))
                 {
-                    type             = GeometryType::QuadMesh;
-                    Mesh &mesh       = shapes.AddBack();
-                    mesh.p           = ReadVec3Pointer(&tokenizer, &dataTokenizer, "p ");
-                    mesh.n           = ReadVec3Pointer(&tokenizer, &dataTokenizer, "n ");
-                    mesh.numVertices = ReadInt(&tokenizer, "v ");
-                    mesh.numFaces    = mesh.numVertices / 4;
-                    threadMemoryStatistics[threadIndex].totalShapeMemory +=
-                        sizeof(Vec3f) * mesh.numVertices * 2;
+                    type = GeometryType::QuadMesh;
+                    AddMesh(4);
                     AddMaterial();
                 }
                 else if (Advance(&tokenizer, "Tri "))
                 {
-                    type       = GeometryType::TriangleMesh;
-                    Mesh &mesh = shapes.AddBack();
-                    mesh.p     = ReadVec3Pointer(&tokenizer, &dataTokenizer, "p ");
-                    mesh.n     = ReadVec3Pointer(&tokenizer, &dataTokenizer, "n ");
-                    mesh.uv    = ReadVec2Pointer(&tokenizer, &dataTokenizer, "uv ");
-                    mesh.indices =
-                        (u32 *)ReadDataPointer(&tokenizer, &dataTokenizer, "indices ");
-                    mesh.numVertices = ReadInt(&tokenizer, "v ");
-                    mesh.numIndices  = ReadInt(&tokenizer, "i ");
-                    mesh.numFaces =
-                        mesh.numIndices ? mesh.numIndices / 3 : mesh.numVertices / 3;
+                    type = GeometryType::TriangleMesh;
+                    AddMesh(3);
                     AddMaterial();
-
-                    threadMemoryStatistics[threadIndex].totalShapeMemory +=
-                        mesh.numVertices * (sizeof(Vec3f) * 2 + sizeof(Vec2f)) +
-                        mesh.numIndices * sizeof(u32);
                 }
                 else
                 {
@@ -875,6 +885,9 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
         Assert(scene->numPrimitives);
         if (type == GeometryType::QuadMesh)
         {
+            // AdaptiveTessellation(arena, NDCFromCamera, screenHeight, (Mesh
+            // *)scene->primitives,
+            //                      scene->numPrimitives);
             BuildQuadBVH(arenas, settings, scene);
         }
         else if (type == GeometryType::TriangleMesh)
@@ -891,7 +904,8 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
     if (c) c->count.fetch_sub(1, std::memory_order_acq_rel);
 }
 
-void LoadScene(Arena **arenas, string directory, string filename, AffineSpace *t)
+void LoadScene(Arena **arenas, string directory, string filename, const Mat4 &NDCFromCamera,
+               int screenHeight, AffineSpace *t)
 {
     TempArena temp = ScratchStart(0, 0);
     Arena *arena   = arenas[GetThreadIndex()];
@@ -902,7 +916,8 @@ void LoadScene(Arena **arenas, string directory, string filename, AffineSpace *t
         PushArray(temp.arena, std::atomic<SceneLoadTable::Node *>, state.table.count);
 
     Scene *scene = GetScene();
-    LoadRTScene(arenas, &state, &scene->scene, directory, filename, 0, t, true);
+    LoadRTScene(arenas, &state, &scene->scene, directory, filename, NDCFromCamera,
+                screenHeight, 0, t, true);
     ScratchEnd(temp);
 }
 

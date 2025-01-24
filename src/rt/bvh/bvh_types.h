@@ -664,6 +664,21 @@ struct QuadCompressed : LeafPrimCompressed<N>
 //     u32 instanceIndex[N];
 // }
 
+struct CatmullClarkPatch
+{
+    BVHNodeN nodePtr;
+    u32 primID;
+
+    CatmullClarkPatch() {}
+    template <i32 N>
+    __forceinline void Fill(const ScenePrimitives *scene, PrimRef *ref, u32 &begin, u32 end)
+    {
+        Assert(end > begin);
+        primID = ref->primID;
+        begin++;
+    }
+};
+
 struct TLASLeaf
 {
     BVHNodeN nodePtr;

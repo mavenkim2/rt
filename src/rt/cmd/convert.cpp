@@ -264,7 +264,7 @@ string CheckDuplicateMaterial(Arena *arena, MaterialLL &matList, MaterialHashMap
             }
             else
             {
-                Error(0, "Hash is equal but contents are different.");
+                ErrorExit(0, "Hash is equal but contents are different.");
             }
         }
         node = node->next;
@@ -573,7 +573,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
         }
         else
         {
-            Error(0, "Invalid data type: %S\n", dataType);
+            ErrorExit(0, "Invalid data type: %S\n", dataType);
         }
         parameterNames[currentParam] = Hash(parameterName);
         bytes[currentParam]          = out;
@@ -706,10 +706,10 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
         {
             case "Accelerator"_sid:
             {
-                Error(!worldBegin,
-                      "%S cannot be specified after WorldBegin "
-                      "statement\n",
-                      word);
+                ErrorExit(!worldBegin,
+                          "%S cannot be specified after WorldBegin "
+                          "statement\n",
+                          word);
                 PBRTFileInfo::Type type = PBRTFileInfo::Type::Accelerator;
                 ScenePacket *packet     = &state->packets[type];
                 CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Other);
@@ -718,10 +718,10 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             break;
             case "AttributeBegin"_sid:
             {
-                Error(worldBegin,
-                      "%S cannot be specified before WorldBegin "
-                      "statement\n",
-                      word);
+                ErrorExit(worldBegin,
+                          "%S cannot be specified before WorldBegin "
+                          "statement\n",
+                          word);
                 Assert(graphicsStateCount < ArrayLength(graphicsStateStack));
                 GraphicsState *gs = &graphicsStateStack[graphicsStateCount++];
                 *gs               = currentGraphicsState;
@@ -731,14 +731,14 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             break;
             case "AttributeEnd"_sid:
             {
-                Error(worldBegin,
-                      "%S cannot be specified before WorldBegin "
-                      "statement\n",
-                      word);
-                Error(scopeCount, "Unmatched AttributeEnd statement.\n");
+                ErrorExit(worldBegin,
+                          "%S cannot be specified before WorldBegin "
+                          "statement\n",
+                          word);
+                ErrorExit(scopeCount, "Unmatched AttributeEnd statement.\n");
                 ScopeType type = scope[--scopeCount];
-                Error(type == ScopeType::Attribute,
-                      "Unmatched AttributeEnd statement. Aborting...\n");
+                ErrorExit(type == ScopeType::Attribute,
+                          "Unmatched AttributeEnd statement. Aborting...\n");
                 Assert(graphicsStateCount > 0);
 
                 // Pop stack
@@ -747,10 +747,10 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             break;
             case "AreaLightSource"_sid:
             {
-                Error(worldBegin,
-                      "%S cannot be specified before WorldBegin "
-                      "statement\n",
-                      word);
+                ErrorExit(worldBegin,
+                          "%S cannot be specified before WorldBegin "
+                          "statement\n",
+                          word);
                 currentGraphicsState.areaLightIndex = lights->Length();
                 NamedPacket *packet                 = &lights->AddBack();
                 CreateScenePacket(tempArena, word, &packet->packet, &tokenizer,
@@ -759,15 +759,15 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             break;
             case "Attribute"_sid:
             {
-                Error(0, "Not implemented Attribute");
+                ErrorExit(0, "Not implemented Attribute");
             }
             break;
             case "Camera"_sid:
             {
-                Error(!worldBegin,
-                      "%S cannot be specified after WorldBegin "
-                      "statement\n",
-                      word);
+                ErrorExit(!worldBegin,
+                          "%S cannot be specified after WorldBegin "
+                          "statement\n",
+                          word);
                 PBRTFileInfo::Type type = PBRTFileInfo::Type::Camera;
                 ScenePacket *packet     = &state->packets[type];
                 CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Other);
@@ -809,12 +809,12 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             case "CoordinateSystem"_sid:
             case "CoordSysTransform"_sid:
             {
-                Error(0, "Not implemented %S\n", word);
+                ErrorExit(0, "Not implemented %S\n", word);
             }
             break;
             case "Film"_sid:
             {
-                Error(!worldBegin, "Tried to specify %S after WorldBegin\n", word);
+                ErrorExit(!worldBegin, "Tried to specify %S after WorldBegin\n", word);
                 PBRTFileInfo::Type type = PBRTFileInfo::Type::Film;
                 ScenePacket *packet     = &state->packets[type];
                 CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Other);
@@ -822,7 +822,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             }
             case "Integrator"_sid:
             {
-                Error(!worldBegin, "Tried to specify %S after WorldBegin\n", word);
+                ErrorExit(!worldBegin, "Tried to specify %S after WorldBegin\n", word);
                 PBRTFileInfo::Type type = PBRTFileInfo::Type::Integrator;
                 ScenePacket *packet     = &state->packets[type];
                 CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Other);
@@ -922,7 +922,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             break;
             case "LightSource"_sid:
             {
-                Error(worldBegin, "Tried to specify %S before WorldBegin\n", word);
+                ErrorExit(worldBegin, "Tried to specify %S before WorldBegin\n", word);
                 NamedPacket *packet = &lights->AddBack();
                 CreateScenePacket(tempArena, word, &packet->packet, &tokenizer,
                                   MemoryType_Light);
@@ -961,7 +961,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                             break;
                         }
                     }
-                    Error(found, "Named material must have a type\n");
+                    ErrorExit(found, "Named material must have a type\n");
                 }
                 else
                 {
@@ -976,7 +976,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             case "MediumInterface"_sid:
             {
                 // not implemented yet
-                Error(0, "Not implemented %S\n", word);
+                ErrorExit(0, "Not implemented %S\n", word);
             }
             break;
             case "NamedMaterial"_sid:
@@ -990,11 +990,11 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             break;
             case "ObjectBegin"_sid:
             {
-                Error(worldBegin, "Tried to specify %S before WorldBegin\n", word);
-                Error(!scopeCount || scope[scopeCount - 1] != ScopeType::Object,
-                      "ObjectBegin cannot be called recursively.");
-                Error(currentGraphicsState.areaLightIndex == -1,
-                      "Area lights instancing not supported.");
+                ErrorExit(worldBegin, "Tried to specify %S before WorldBegin\n", word);
+                ErrorExit(!scopeCount || scope[scopeCount - 1] != ScopeType::Object,
+                          "ObjectBegin cannot be called recursively.");
+                ErrorExit(currentGraphicsState.areaLightIndex == -1,
+                          "Area lights instancing not supported.");
                 scope[scopeCount++] = ScopeType::Object;
 
                 string objectName;
@@ -1017,11 +1017,11 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             break;
             case "ObjectEnd"_sid:
             {
-                Error(worldBegin, "Tried to specify %S before WorldBegin\n", word);
-                Error(scopeCount, "Unmatched AttributeEnd statement. Aborting...\n");
+                ErrorExit(worldBegin, "Tried to specify %S before WorldBegin\n", word);
+                ErrorExit(scopeCount, "Unmatched AttributeEnd statement. Aborting...\n");
                 ScopeType type = scope[--scopeCount];
-                Error(type == ScopeType::Object,
-                      "Unmatched AttributeEnd statement. Aborting...\n");
+                ErrorExit(type == ScopeType::Object,
+                          "Unmatched AttributeEnd statement. Aborting...\n");
 
                 scheduler.Wait(&state->counter);
                 for (u32 i = 0; i < state->numImports; i++)
@@ -1040,9 +1040,9 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             break;
             case "ObjectInstance"_sid:
             {
-                Error(worldBegin, "Tried to specify %S after WorldBegin\n", word);
-                Error(!scopeCount || scope[scopeCount - 1] != ScopeType::Object,
-                      "Cannot have object instance in object definition block.\n");
+                ErrorExit(worldBegin, "Tried to specify %S after WorldBegin\n", word);
+                ErrorExit(!scopeCount || scope[scopeCount - 1] != ScopeType::Object,
+                          "Cannot have object instance in object definition block.\n");
                 string objectName;
                 b32 result            = GetBetweenPair(objectName, &tokenizer, '"');
                 string objectFileName = PushStr8F(tempArena, "objects/%S_obj.rtscene",
@@ -1087,7 +1087,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             break;
             case "Sampler"_sid:
             {
-                Error(!worldBegin, "Tried to specify %S after WorldBegin\n", word);
+                ErrorExit(!worldBegin, "Tried to specify %S after WorldBegin\n", word);
                 PBRTFileInfo::Type type = PBRTFileInfo::Type::Sampler;
                 ScenePacket *packet     = &state->packets[type];
                 CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Other);
@@ -1107,7 +1107,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             break;
             case "Shape"_sid:
             {
-                Error(worldBegin, "Tried to specify %S after WorldBegin\n", word);
+                ErrorExit(worldBegin, "Tried to specify %S after WorldBegin\n", word);
                 ShapeType *shape    = &shapes->AddBack();
                 ScenePacket *packet = &shape->packet;
                 CreateScenePacket(tempArena, word, packet, &tokenizer,
@@ -1140,7 +1140,9 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                         plyMeshFile.str  = packet->bytes[i];
                         plyMeshFile.size = packet->sizes[i];
 
-                        if (CheckQuadPLY(StrConcat(temp.arena, directory, plyMeshFile)))
+                        // TODO: this is hardcoded for the moana island scene
+                        if (GetFileExtension(plyMeshFile) == "obj" ||
+                            CheckQuadPLY(StrConcat(temp.arena, directory, plyMeshFile)))
                             packet->type = "quadmesh"_sid;
                         else packet->type = "trianglemesh"_sid;
                     }
@@ -1269,7 +1271,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             default:
             {
                 string line = ReadLine(&tokenizer);
-                Error(0, "Error while parsing scene. Buffer: %S", line);
+                ErrorExit(0, "ErrorExit while parsing scene. Buffer: %S", line);
             }
                 // TODO IMPORTANT: the indices are clockwise since PBRT
                 // uses a left-handed coordinate system. either need to
@@ -1364,7 +1366,7 @@ void WriteMaterials(StringBuilder *builder, SceneHashMap *textureHashMap, NamedP
                         WriteTexture(builder, packet);
                     }
                     break;
-                    default: Error(0, "not supported yet\n");
+                    default: ErrorExit(0, "not supported yet\n");
                 }
                 break;
             }
@@ -1393,6 +1395,58 @@ i32 WriteData(ScenePacket *packet, StringBuilder *builder, StringBuilderMapped *
         }
     }
     return -1;
+}
+
+void WriteMesh(StringBuilder &builder, StringBuilderMapped &dataBuilder, ScenePacket *packet,
+               string directory, GeometryType type)
+{
+    TempArena temp = ScratchStart(0, 0);
+    bool fileMesh  = false;
+    for (u32 c = 0; c < packet->parameterCount; c++)
+    {
+        if (packet->parameterNames[c] == "filename"_sid)
+        {
+            string filename =
+                StrConcat(temp.arena, directory, Str8(packet->bytes[c], packet->sizes[c]));
+            Mesh mesh;
+            if (GetFileExtension(filename) == "ply")
+                mesh = LoadPLY(temp.arena, filename, type);
+            else if (GetFileExtension(filename) == "obj")
+                mesh = LoadObj(temp.arena, filename, type);
+            else Assert(0);
+
+            WriteData(&builder, &dataBuilder, mesh.p, mesh.numVertices * sizeof(Vec3f), "p");
+            WriteData(&builder, &dataBuilder, mesh.n, mesh.numVertices * sizeof(Vec3f), "n");
+
+            if (mesh.uv)
+                WriteData(&builder, &dataBuilder, mesh.uv, mesh.numVertices * sizeof(Vec2f),
+                          "uv");
+            if (mesh.indices)
+                WriteData(&builder, &dataBuilder, mesh.indices, mesh.numIndices * sizeof(u32),
+                          "indices");
+            Put(&builder, "v %u ", mesh.numVertices);
+            if (mesh.indices) Put(&builder, "i %u ", mesh.numIndices);
+            fileMesh = true;
+            break;
+        }
+    }
+    if (!fileMesh)
+    {
+        u32 numVertices = 0;
+        Assert(numVertices);
+        u32 numIndices = 0;
+        i32 c          = -1;
+        c              = WriteData(packet, &builder, &dataBuilder, "P"_sid, "p");
+        Assert(c != -1);
+        numVertices = packet->sizes[c] / sizeof(Vec3f);
+        WriteData(packet, &builder, &dataBuilder, "N"_sid, "n");
+        WriteData(packet, &builder, &dataBuilder, "uv"_sid, "uv");
+        c = WriteData(packet, &builder, &dataBuilder, "indices"_sid, "indices");
+        if (c != -1) numIndices = packet->sizes[c] / sizeof(u32);
+        Put(&builder, "v %u ", numVertices);
+        if (numIndices) Put(&builder, "i %u ", numIndices);
+    }
+    ScratchEnd(temp);
 }
 
 void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
@@ -1476,85 +1530,15 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                     case "quadmesh"_sid:
                     {
                         Put(&builder, "Quad ");
-                        bool plyMesh = false;
-                        for (u32 c = 0; c < packet->parameterCount; c++)
-                        {
-                            if (packet->parameterNames[c] == "filename"_sid)
-                            {
-                                // string filename = ConvertPlyToObj(
-                                //     temp.arena, Str8(packet->bytes[c], packet->sizes[c]));
-                                Mesh mesh = LoadQuadPLY(
-                                    temp.arena,
-                                    StrConcat(temp.arena, directory,
-                                              Str8(packet->bytes[c], packet->sizes[c])));
-
-                                WriteData(&builder, &dataBuilder, mesh.p,
-                                          mesh.numVertices * sizeof(Vec3f), "p");
-                                WriteData(&builder, &dataBuilder, mesh.n,
-                                          mesh.numVertices * sizeof(Vec3f), "n");
-                                // if (mesh.uv)
-                                //     WriteData(&builder, &dataBuilder, mesh.uv,
-                                //               mesh.numVertices * sizeof(Vec2f), "uv");
-                                Put(&builder, "v %u ", mesh.numVertices);
-                                plyMesh = true;
-                                break;
-                            }
-                        }
-                        if (!plyMesh)
-                        {
-                            i32 numVertices = 0;
-                            i32 c = WriteData(packet, &builder, &dataBuilder, "P"_sid, "p");
-                            if (c != -1) numVertices = packet->sizes[c] / sizeof(Vec3f);
-                            WriteData(packet, &builder, &dataBuilder, "N"_sid, "n");
-                            // WriteData(packet, &builder, &dataBuilder, "uv"_sid, "uv");
-                            if (numVertices) Put(&builder, "v %u ", numVertices);
-                        }
+                        WriteMesh(builder, dataBuilder, packet, directory,
+                                  GeometryType::QuadMesh);
                     }
                     break;
                     case "trianglemesh"_sid:
                     {
                         Put(&builder, "Tri ");
-
-                        bool plyMesh = false;
-                        for (u32 c = 0; c < packet->parameterCount; c++)
-                        {
-                            if (packet->parameterNames[c] == "filename"_sid)
-                            {
-                                Mesh mesh = LoadPLY(
-                                    temp.arena,
-                                    StrConcat(temp.arena, directory,
-                                              Str8(packet->bytes[c], packet->sizes[c])));
-                                WriteData(&builder, &dataBuilder, mesh.p,
-                                          mesh.numVertices * sizeof(Vec3f), "p");
-                                WriteData(&builder, &dataBuilder, mesh.n,
-                                          mesh.numVertices * sizeof(Vec3f), "n");
-                                if (mesh.uv)
-                                    WriteData(&builder, &dataBuilder, mesh.uv,
-                                              mesh.numVertices * sizeof(Vec2f), "uv");
-                                if (mesh.indices)
-                                    WriteData(&builder, &dataBuilder, mesh.indices,
-                                              mesh.numIndices * sizeof(u32), "indices");
-                                Put(&builder, "v %u ", mesh.numVertices);
-                                if (mesh.indices) Put(&builder, "i %u ", mesh.numIndices);
-                                plyMesh = true;
-                                break;
-                            }
-                        }
-                        if (!plyMesh)
-                        {
-                            u32 numVertices = 0;
-                            u32 numIndices  = 0;
-                            i32 c           = -1;
-                            c = WriteData(packet, &builder, &dataBuilder, "P"_sid, "p");
-                            if (c != -1) numVertices = packet->sizes[c] / sizeof(Vec3f);
-                            WriteData(packet, &builder, &dataBuilder, "N"_sid, "n");
-                            WriteData(packet, &builder, &dataBuilder, "uv"_sid, "uv");
-                            c = WriteData(packet, &builder, &dataBuilder, "indices"_sid,
-                                          "indices");
-                            if (c != -1) numIndices = packet->sizes[c] / sizeof(u32);
-                            if (numVertices) Put(&builder, "v %u ", numVertices);
-                            if (numIndices) Put(&builder, "i %u ", numIndices);
-                        }
+                        WriteMesh(builder, dataBuilder, packet, directory,
+                                  GeometryType::TriangleMesh);
                     }
                     break;
                     case "curve"_sid:

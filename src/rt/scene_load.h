@@ -278,8 +278,7 @@ inline u32 GetTypeStride(string word)
     return 0;
 }
 
-template <GeometryType type>
-Mesh LoadPLY(Arena *arena, string filename)
+Mesh LoadPLY(Arena *arena, string filename, GeometryType type)
 {
     string buffer = OS_MapFileRead(filename); // OS_ReadFile(arena, filename);
     Tokenizer tokenizer;
@@ -386,18 +385,18 @@ Mesh LoadPLY(Arena *arena, string filename)
         else if (word == "end_header") break;
     }
 
-    constexpr bool isQuad = type == GeometryType::QuadMesh;
+    bool isQuad = type == GeometryType::QuadMesh;
 
     // Read binary data
     Mesh mesh        = {};
     mesh.numVertices = numVertices;
     mesh.numIndices  = numFaces * 3;
-    mesh.numFaces    = numFaces;
-    if constexpr (isQuad) mesh.numFaces /= 2;
+    mesh.numFaces    = isQuad ? mesh.numFaces / 2 : numFaces;
+
     if (hasVertices) mesh.p = PushArray(arena, Vec3f, numVertices);
     if (hasNormals) mesh.n = PushArray(arena, Vec3f, numVertices);
     if (hasUv && !isQuad) mesh.uv = PushArray(arena, Vec2f, numVertices);
-    if constexpr (!isQuad) mesh.indices = PushArray(arena, u32, numFaces * 3);
+    if (!isQuad) mesh.indices = PushArray(arena, u32, numFaces * 3);
 
     for (u32 i = 0; i < numVertices; i++)
     {
@@ -426,7 +425,7 @@ Mesh LoadPLY(Arena *arena, string filename)
     Assert(faceIndicesStride == 4);
     // Assert(otherStride == 4);
     // u32 *faceIndices = PushArray(arena, u32, numFaces);
-    if constexpr (!isQuad)
+    if (!isQuad)
     {
         for (u32 i = 0; i < numFaces; i++)
         {
@@ -450,7 +449,12 @@ Mesh LoadPLY(Arena *arena, string filename)
 
 Mesh LoadQuadPLY(Arena *arena, string filename)
 {
-    return LoadPLY<GeometryType::QuadMesh>(arena, filename);
+    return LoadPLY(arena, filename, GeometryType::QuadMesh);
+}
+
+Mesh LoadTrianglePLY(Arena *arena, string filename)
+{
+    return LoadPLY(arena, filename, GeometryType::TriangleMesh);
 }
 
 Mesh LoadQuadObj(Arena *arena, string filename)
@@ -562,6 +566,13 @@ Mesh LoadQuadObj(Arena *arena, string filename)
     }
     MemoryCopy(mesh.p, vertices.data(), sizeof(Vec3f) * mesh.numVertices);
     return mesh;
+}
+
+Mesh LoadObj(Arena *arena, string filename, GeometryType type)
+{
+    // TODO: make this not restricted to quads
+    Assert(type == GeometryType::QuadMesh);
+    return LoadQuadObj(arena, filename);
 }
 
 } // namespace rt

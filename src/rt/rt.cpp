@@ -1094,7 +1094,7 @@ int main(int argc, char *argv[])
     // mesh.numFaces = mesh.numIndices / 4;
     //
     // Subdivide(&mesh);
-    EdgeStitchTest();
+    // EdgeStitchTest();
 
     // DualTest();
 

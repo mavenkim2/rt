@@ -15,6 +15,7 @@ namespace rt
 // - fix ray differentials
 // - remove duplicate materials (and maybe geometry), see if this leads to coherent texture
 // reads
+// - curves, area lights
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
 // - optimize bvh memory consumption?
 

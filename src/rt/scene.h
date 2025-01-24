@@ -191,6 +191,17 @@ struct Mesh
     u32 numFaces;
 
     u32 GetNumFaces() const { return numFaces; }
+
+    __forceinline const Vec3f &GetIndexedVertex(u32 index) const
+    {
+        if (indices)
+        {
+            Assert(index < numIndices);
+            return p[indices[index]];
+        }
+        Assert(index < numVertices);
+        return p[index];
+    }
 };
 
 template <GeometryType type, typename PrimRefType>

@@ -853,7 +853,8 @@ void TestRender(Arena *arena, Options *options = 0)
     AffineSpace renderFromWorld = AffineSpace::Translate(-pCamera);
     AffineSpace worldFromRender = AffineSpace::Translate(pCamera);
 
-    LoadScene(arenas, "../data/island/pbrt-v4/", options->filename, &renderFromWorld);
+    LoadScene(arenas, "../data/island/pbrt-v4/", options->filename, NDCFromCamera, height,
+              &renderFromWorld);
 
     // environment map
 #if 1

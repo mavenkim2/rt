@@ -132,9 +132,10 @@ struct LimitSurfaceSample
     bool IsValid() const { return faceID != -1; }
 };
 
-Vec3f EvaluateLimitSurfacePosition(const Vertex *vertices, const Far::PatchMap *patchMap,
-                                   const Far::PatchTable *patchTable,
-                                   LimitSurfaceSample &sample)
+void EvaluateLimitSurfacePosition(const Vertex *vertices, const Far::PatchMap *patchMap,
+                                  const Far::PatchTable *patchTable,
+                                  const LimitSurfaceSample &sample, Vec3f &outP,
+                                  Vec3f &outDpdu, Vec3f &outDpdv)
 {
     const Far::PatchTable::PatchHandle *handle =
         patchMap->FindPatch(sample.faceID, sample.uv[0], sample.uv[1]);
@@ -148,13 +149,19 @@ Vec3f EvaluateLimitSurfacePosition(const Vertex *vertices, const Far::PatchMap *
     patchTable->EvaluateBasis(*handle, sample.uv[0], sample.uv[1], pWeights, duWeights,
                               dvWeights);
 
-    Vec3f pos = {};
+    Vec3f pos  = {};
+    Vec3f dpdu = {};
+    Vec3f dpdv = {};
     for (int j = 0; j < cvIndices.size(); j++)
     {
         const Vec3f &p = vertices[cvIndices[j]].p;
         pos += pWeights[j] * p;
+        dpdu += duWeights[j] * p;
+        dpdv += dvWeights[j] * p;
     }
-    return pos;
+    outP    = pos;
+    outDpdu = dpdu;
+    outDpdv = dpdv;
 }
 
 // Edge vertices (shared by edges)
@@ -180,6 +187,7 @@ struct FaceInfo
 struct TessellatedVertices
 {
     std::vector<Vec3f> vertices;
+    std::vector<Vec3f> normals;
     // Stitching triangles
     std::vector<int> stitchingIndices;
     std::vector<EdgeInfo> edgeInfos;
@@ -219,15 +227,16 @@ struct TessellatedVertices
 // GRAPH/EUROGRAPHICS workshop on Graphics hardware,
 // ACM, New York, NY, USA, 25–32
 // See Figure 7 from above for how this works
-void AdaptiveTessellation(Arena *arena, const Mat4 &c2s, Mesh *controlMeshes, u32 numMeshes)
+Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHeight,
+                           Mesh *controlMeshes, u32 numMeshes)
 {
     typedef Far::TopologyDescriptor Descriptor;
     Sdc::SchemeType type = OpenSubdiv::Sdc::SCHEME_CATMARK;
     Sdc::Options options;
     options.SetVtxBoundaryInterpolation(Sdc::Options::VTX_BOUNDARY_EDGE_AND_CORNER);
 
-    u32 edgesPerHeight       = 1;
-    u32 edgesPerScreenHeight = 2; // screenHeight / edgesPerHeight;
+    u32 pixelsPerEdge        = 2;
+    u32 edgesPerScreenHeight = screenHeight / pixelsPerEdge;
 
     Vec2f uvTable[] = {
         Vec2f(0.f, 0.f),
@@ -242,11 +251,14 @@ void AdaptiveTessellation(Arena *arena, const Mat4 &c2s, Mesh *controlMeshes, u3
         Vec2i(0, -1),
     };
 
-    OpenSubdivMesh *outputMeshes = PushArray(arena, OpenSubdivMesh, numMeshes);
+    // TODO: catmull clark primitive
+    // OpenSubdivMesh *outputMeshes = PushArray(arena, OpenSubdivMesh, numMeshes);
+    Mesh *outputMeshes = PushArray(arena, Mesh, numMeshes);
 
     for (u32 meshIndex = 0; meshIndex < numMeshes; meshIndex++)
     {
-        OpenSubdivMesh *outputMesh = &outputMeshes[meshIndex];
+        // OpenSubdivMesh *outputMesh = &outputMeshes[meshIndex];
+        Mesh *outputMesh = &outputMeshes[meshIndex];
 
         TessellatedVertices tessellatedVertices;
         Mesh *controlMesh = &controlMeshes[meshIndex];
@@ -306,9 +318,9 @@ void AdaptiveTessellation(Arena *arena, const Mat4 &c2s, Mesh *controlMeshes, u3
                     Vec3f midPoint = (p0 + p1) / 2.f;
                     f32 radius     = Length(p0 - p1) / 2.f;
 
-                    int edgeFactor =
-                        int(edgesPerScreenHeight * radius * Abs(c2s[1][1] / midPoint.z));
-                    edgeFactor = Max(1, edgeFactor);
+                    int edgeFactor = int(edgesPerScreenHeight * radius *
+                                         Abs(NDCFromCamera[1][1] / midPoint.z));
+                    edgeFactor     = Max(1, edgeFactor);
 
                     maxMeshEdgeRate = Max(maxMeshEdgeRate, edgeFactor);
 
@@ -373,8 +385,12 @@ void AdaptiveTessellation(Arena *arena, const Mat4 &c2s, Mesh *controlMeshes, u3
         // Evaluate limit surface positons for corners
         for (auto &sample : samples)
         {
-            Vec3f pos = EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable, sample);
+            Vec3f pos, dpdu, dpdv;
+            EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable, sample, pos, dpdu,
+                                         dpdv);
+            Vec3f normal = Cross(dpdu, dpdv);
             tessellatedVertices.vertices.push_back(pos);
+            tessellatedVertices.normals.push_back(normal);
         }
 
         int totalNumPatchFaces = 0;
@@ -441,28 +457,13 @@ void AdaptiveTessellation(Arena *arena, const Mat4 &c2s, Mesh *controlMeshes, u3
                 for (int uStep = 0; uStep < maxEdgeRates[0] - 1; uStep++)
                 {
                     Vec2f uv(scale[0] * (uStep + 1), scale[1] * (vStep + 1));
-                    const Far::PatchTable::PatchHandle *handle =
-                        patchMap.FindPatch(f, uv[0], uv[1]);
 
-                    Assert(handle);
-                    const auto &cvIndices = patchTable->GetPatchVertices(*handle);
-
-                    f32 pWeights[20];
-                    f32 duWeights[20];
-                    f32 dvWeights[20];
-                    patchTable->EvaluateBasis(*handle, uv[0], uv[1], pWeights, duWeights,
-                                              dvWeights);
-
-                    Vec3f pos  = {};
-                    Vec3f dpdu = {};
-                    Vec3f dpdv = {};
-                    for (int j = 0; j < cvIndices.size(); j++)
-                    {
-                        const Vec3f &p = vertices[cvIndices[j]].p;
-                        pos += pWeights[j] * p;
-                        dpdu += duWeights[j] * p;
-                        dpdv += dvWeights[j] * p;
-                    }
+                    Vec3f pos, dpdu, dpdv;
+                    EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable,
+                                                 LimitSurfaceSample{f, uv}, pos, dpdu, dpdv);
+                    Vec3f normal = Cross(dpdu, dpdv);
+                    tessellatedVertices.vertices.push_back(pos);
+                    tessellatedVertices.normals.push_back(normal);
 
                     // Vector Displacement mapping
                     // Vec3f normal = Normalize(Cross(dpdu, dpdv));
@@ -474,8 +475,23 @@ void AdaptiveTessellation(Arena *arena, const Mat4 &c2s, Mesh *controlMeshes, u3
                     // pos += displacement;
 
                     tessellatedVertices.SetInnerGrid(uStep, vStep) = pos;
-                    // grid[
-                    // grid[vStep * (maxEdgeRates[0] - 1) + uStep] = pos;
+
+                    // TODO: create a new catmull clark primitive
+                    if (uStep != maxEdgeRates[0] - 2 && vStep != maxEdgeRates[0] - 2)
+                    {
+                        int v0 = tessellatedVertices.GetInnerGridIndex(uStep, vStep);
+                        int v1 = tessellatedVertices.GetInnerGridIndex(uStep + 1, vStep);
+                        int v2 = tessellatedVertices.GetInnerGridIndex(uStep + 1, vStep + 1);
+                        int v3 = tessellatedVertices.GetInnerGridIndex(uStep, vStep + 1);
+
+                        tessellatedVertices.stitchingIndices.push_back(v0);
+                        tessellatedVertices.stitchingIndices.push_back(v1);
+                        tessellatedVertices.stitchingIndices.push_back(v2);
+
+                        tessellatedVertices.stitchingIndices.push_back(v0);
+                        tessellatedVertices.stitchingIndices.push_back(v2);
+                        tessellatedVertices.stitchingIndices.push_back(v3);
+                    }
                 }
             }
 
@@ -533,14 +549,28 @@ void AdaptiveTessellation(Arena *arena, const Mat4 &c2s, Mesh *controlMeshes, u3
             }
         }
 
-        outputMesh->vertices = StaticArray<Vec3f>(arena, tessellatedVertices.vertices);
-        outputMesh->stitchingIndices =
-            StaticArray<int>(arena, tessellatedVertices.stitchingIndices);
-        outputMesh->patches = StaticArray<OpenSubdivPatch>(arena, patches);
+        outputMesh->p = PushArrayNoZero(arena, Vec3f, tessellatedVertices.vertices.size());
+        MemoryCopy(outputMesh->p, tessellatedVertices.vertices.data(),
+                   sizeof(Vec3f) * tessellatedVertices.vertices.size());
+
+        outputMesh->indices =
+            PushArrayNoZero(arena, u32, tessellatedVertices.stitchingIndices.size());
+        MemoryCopy(outputMesh->indices, tessellatedVertices.stitchingIndices.data(),
+                   sizeof(int) * tessellatedVertices.stitchingIndices.size());
+
+        Assert(tessellatedVertices.normals.size() == tessellatedVertices.vertices.size());
+        outputMesh->n = PushArrayNoZero(arena, Vec3f, tessellatedVertices.normals.size());
+        MemoryCopy(outputMesh->n, tessellatedVertices.normals.data(),
+                   sizeof(Vec3f) * tessellatedVertices.normals.size());
+        // outputMesh->vertices = StaticArray<Vec3f>(arena, tessellatedVertices.vertices);
+        // outputMesh->stitchingIndices =
+        //     StaticArray<int>(arena, tessellatedVertices.stitchingIndices);
+        // outputMesh->patches = StaticArray<OpenSubdivPatch>(arena, patches);
 
         delete refiner;
         delete patchTable;
     }
+    return outputMeshes;
 }
 
 } // namespace rt

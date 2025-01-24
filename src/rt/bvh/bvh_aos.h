@@ -30,6 +30,43 @@ namespace rt
 // Clipping
 //
 
+template <i32 N>
+void LoadFaceVertices(Mesh *mesh, const u32 faceIndex, Lane4F32 v[N])
+{
+    for (int i = 0; i < N; i++)
+    {
+        v[i] = Lane4F32::LoadU((const float *)(&mesh->GetIndexedVertex(faceIndex * N + i)));
+    }
+}
+
+template <i32 N>
+void LoadVertices(Mesh *meshes[4], const u32 faceIndices[4], Vec3lf4 p[N])
+{
+    Lane4F32 v[4][N];
+    for (int i = 0; i < 4; i++)
+    {
+        LoadFaceVertices<N>(meshes[i], faceIndices[i], v[i]);
+    }
+    for (int i = 0; i < N; i++)
+    {
+        Transpose4x3(v[0][i], v[1][i], v[2][i], v[3][i], p[i].x, p[i].y, p[i].z);
+    }
+}
+
+template <i32 N>
+void LoadVertices(Mesh *mesh, const u32 faceIndices[4], Vec3lf4 p[N])
+{
+    Lane4F32 v[4][N];
+    for (int i = 0; i < 4; i++)
+    {
+        LoadFaceVertices<N>(mesh, faceIndices[i], v[i]);
+    }
+    for (int i = 0; i < N; i++)
+    {
+        Transpose4x3(v[0][i], v[1][i], v[2][i], v[3][i], p[i].x, p[i].y, p[i].z);
+    }
+}
+
 struct Quad8
 {
     static const u32 N = 4;
@@ -71,94 +108,31 @@ struct Quad8
                      Quad8 *out)
     {
         Assert(scene->numPrimitives == 1);
-        Mesh *mesh     = (Mesh *)scene->primitives;
-        u32 faceIndexA = faceIndices[0];
-        u32 faceIndexB = faceIndices[1];
-        u32 faceIndexC = faceIndices[2];
-        u32 faceIndexD = faceIndices[3];
+        Mesh *mesh = (Mesh *)scene->primitives;
 
-        Lane4F32 v0a = Lane4F32::LoadU((float *)(&mesh->p[faceIndexA * 4 + 0]));
-        Lane4F32 v1a = Lane4F32::LoadU((float *)(&mesh->p[faceIndexA * 4 + 1]));
-        Lane4F32 v2a = Lane4F32::LoadU((float *)(&mesh->p[faceIndexA * 4 + 2]));
-        Lane4F32 v3a = Lane4F32::LoadU((float *)(&mesh->p[faceIndexA * 4 + 3]));
+        Vec3lf4 p0[4];
+        LoadVertices<4>(mesh, faceIndices, p0);
 
-        Lane4F32 v0b = Lane4F32::LoadU((float *)(&mesh->p[faceIndexB * 4 + 0]));
-        Lane4F32 v1b = Lane4F32::LoadU((float *)(&mesh->p[faceIndexB * 4 + 1]));
-        Lane4F32 v2b = Lane4F32::LoadU((float *)(&mesh->p[faceIndexB * 4 + 2]));
-        Lane4F32 v3b = Lane4F32::LoadU((float *)(&mesh->p[faceIndexB * 4 + 3]));
-
-        Lane4F32 v0c = Lane4F32::LoadU((float *)(&mesh->p[faceIndexC * 4 + 0]));
-        Lane4F32 v1c = Lane4F32::LoadU((float *)(&mesh->p[faceIndexC * 4 + 1]));
-        Lane4F32 v2c = Lane4F32::LoadU((float *)(&mesh->p[faceIndexC * 4 + 2]));
-        Lane4F32 v3c = Lane4F32::LoadU((float *)(&mesh->p[faceIndexC * 4 + 3]));
-
-        Lane4F32 v0d = Lane4F32::LoadU((float *)(&mesh->p[faceIndexD * 4 + 0]));
-        Lane4F32 v1d = Lane4F32::LoadU((float *)(&mesh->p[faceIndexD * 4 + 1]));
-        Lane4F32 v2d = Lane4F32::LoadU((float *)(&mesh->p[faceIndexD * 4 + 2]));
-        Lane4F32 v3d = Lane4F32::LoadU((float *)(&mesh->p[faceIndexD * 4 + 3]));
-
-        Vec3lf4 p0;
-        Vec3lf4 p1;
-        Vec3lf4 p2;
-        Vec3lf4 p3;
-
-        Transpose4x3(v0a, v0b, v0c, v0d, p0.x, p0.y, p0.z);
-        Transpose4x3(v1a, v1b, v1c, v1d, p1.x, p1.y, p1.z);
-        Transpose4x3(v2a, v2b, v2c, v2d, p2.x, p2.y, p2.z);
-        Transpose4x3(v3a, v3b, v3c, v3d, p3.x, p3.y, p3.z);
-
-        faceIndexA = faceIndices[4];
-        faceIndexB = faceIndices[5];
-        faceIndexC = faceIndices[6];
-        faceIndexD = faceIndices[7];
-
-        v0a = Lane4F32::LoadU((float *)(&mesh->p[faceIndexA * 4 + 0]));
-        v1a = Lane4F32::LoadU((float *)(&mesh->p[faceIndexA * 4 + 1]));
-        v2a = Lane4F32::LoadU((float *)(&mesh->p[faceIndexA * 4 + 2]));
-        v3a = Lane4F32::LoadU((float *)(&mesh->p[faceIndexA * 4 + 3]));
-
-        v0b = Lane4F32::LoadU((float *)(&mesh->p[faceIndexB * 4 + 0]));
-        v1b = Lane4F32::LoadU((float *)(&mesh->p[faceIndexB * 4 + 1]));
-        v2b = Lane4F32::LoadU((float *)(&mesh->p[faceIndexB * 4 + 2]));
-        v3b = Lane4F32::LoadU((float *)(&mesh->p[faceIndexB * 4 + 3]));
-
-        v0c = Lane4F32::LoadU((float *)(&mesh->p[faceIndexC * 4 + 0]));
-        v1c = Lane4F32::LoadU((float *)(&mesh->p[faceIndexC * 4 + 1]));
-        v2c = Lane4F32::LoadU((float *)(&mesh->p[faceIndexC * 4 + 2]));
-        v3c = Lane4F32::LoadU((float *)(&mesh->p[faceIndexC * 4 + 3]));
-
-        v0d = Lane4F32::LoadU((float *)(&mesh->p[faceIndexD * 4 + 0]));
-        v1d = Lane4F32::LoadU((float *)(&mesh->p[faceIndexD * 4 + 1]));
-        v2d = Lane4F32::LoadU((float *)(&mesh->p[faceIndexD * 4 + 2]));
-        v3d = Lane4F32::LoadU((float *)(&mesh->p[faceIndexD * 4 + 3]));
-
-        Vec3lf4 p4;
-        Vec3lf4 p5;
-        Vec3lf4 p6;
-        Vec3lf4 p7;
-
-        Transpose4x3(v0a, v0b, v0c, v0d, p4.x, p4.y, p4.z);
-        Transpose4x3(v1a, v1b, v1c, v1d, p5.x, p5.y, p5.z);
-        Transpose4x3(v2a, v2b, v2c, v2d, p6.x, p6.y, p6.z);
-        Transpose4x3(v3a, v3b, v3c, v3d, p7.x, p7.y, p7.z);
+        Vec3lf4 p1[4];
+        LoadVertices<4>(mesh, faceIndices + 4, p1);
 
         u32 v = LUTAxis[dim];
         u32 w = LUTAxis[v];
 
-        out->v0u = Lane8F32(p0[dim], p4[dim]);
-        out->v1u = Lane8F32(p1[dim], p5[dim]);
-        out->v2u = Lane8F32(p2[dim], p6[dim]);
-        out->v3u = Lane8F32(p3[dim], p7[dim]);
+        out->v0u = Lane8F32(p0[0][dim], p1[0][dim]);
+        out->v1u = Lane8F32(p0[1][dim], p1[1][dim]);
+        out->v2u = Lane8F32(p0[2][dim], p1[2][dim]);
+        out->v3u = Lane8F32(p0[3][dim], p1[3][dim]);
 
-        out->v0v = Lane8F32(p0[v], p4[v]);
-        out->v1v = Lane8F32(p1[v], p5[v]);
-        out->v2v = Lane8F32(p2[v], p6[v]);
-        out->v3v = Lane8F32(p3[v], p7[v]);
+        out->v0v = Lane8F32(p0[0][v], p1[0][v]);
+        out->v1v = Lane8F32(p0[1][v], p1[1][v]);
+        out->v2v = Lane8F32(p0[2][v], p1[2][v]);
+        out->v3v = Lane8F32(p0[3][v], p1[3][v]);
 
-        out->v0w = Lane8F32(p0[w], p4[w]);
-        out->v1w = Lane8F32(p1[w], p5[w]);
-        out->v2w = Lane8F32(p2[w], p6[w]);
-        out->v3w = Lane8F32(p3[w], p7[w]);
+        out->v0w = Lane8F32(p0[0][w], p1[0][w]);
+        out->v1w = Lane8F32(p0[1][w], p1[1][w]);
+        out->v2w = Lane8F32(p0[2][w], p1[2][w]);
+        out->v3w = Lane8F32(p0[3][w], p1[3][w]);
     }
 
     static void Load(const ScenePrimitives *scene, const u32 dim, const u32 geomIDs[8],
@@ -170,93 +144,29 @@ struct Quad8
                             primitives + geomIDs[4], primitives + geomIDs[5],
                             primitives + geomIDs[6], primitives + geomIDs[7]};
 
-        u32 faceIndexA = faceIndices[0];
-        u32 faceIndexB = faceIndices[1];
-        u32 faceIndexC = faceIndices[2];
-        u32 faceIndexD = faceIndices[3];
+        Vec3lf4 p0[4];
+        LoadVertices<4>(meshes, faceIndices, p0);
 
-        Lane4F32 v0a = Lane4F32::LoadU((float *)(&meshes[0]->p[faceIndexA * 4 + 0]));
-        Lane4F32 v1a = Lane4F32::LoadU((float *)(&meshes[0]->p[faceIndexA * 4 + 1]));
-        Lane4F32 v2a = Lane4F32::LoadU((float *)(&meshes[0]->p[faceIndexA * 4 + 2]));
-        Lane4F32 v3a = Lane4F32::LoadU((float *)(&meshes[0]->p[faceIndexA * 4 + 3]));
-
-        Lane4F32 v0b = Lane4F32::LoadU((float *)(&meshes[1]->p[faceIndexB * 4 + 0]));
-        Lane4F32 v1b = Lane4F32::LoadU((float *)(&meshes[1]->p[faceIndexB * 4 + 1]));
-        Lane4F32 v2b = Lane4F32::LoadU((float *)(&meshes[1]->p[faceIndexB * 4 + 2]));
-        Lane4F32 v3b = Lane4F32::LoadU((float *)(&meshes[1]->p[faceIndexB * 4 + 3]));
-
-        Lane4F32 v0c = Lane4F32::LoadU((float *)(&meshes[2]->p[faceIndexC * 4 + 0]));
-        Lane4F32 v1c = Lane4F32::LoadU((float *)(&meshes[2]->p[faceIndexC * 4 + 1]));
-        Lane4F32 v2c = Lane4F32::LoadU((float *)(&meshes[2]->p[faceIndexC * 4 + 2]));
-        Lane4F32 v3c = Lane4F32::LoadU((float *)(&meshes[2]->p[faceIndexC * 4 + 3]));
-
-        Lane4F32 v0d = Lane4F32::LoadU((float *)(&meshes[3]->p[faceIndexD * 4 + 0]));
-        Lane4F32 v1d = Lane4F32::LoadU((float *)(&meshes[3]->p[faceIndexD * 4 + 1]));
-        Lane4F32 v2d = Lane4F32::LoadU((float *)(&meshes[3]->p[faceIndexD * 4 + 2]));
-        Lane4F32 v3d = Lane4F32::LoadU((float *)(&meshes[3]->p[faceIndexD * 4 + 3]));
-
-        Vec3lf4 p0;
-        Vec3lf4 p1;
-        Vec3lf4 p2;
-        Vec3lf4 p3;
-
-        Transpose4x3(v0a, v0b, v0c, v0d, p0.x, p0.y, p0.z);
-        Transpose4x3(v1a, v1b, v1c, v1d, p1.x, p1.y, p1.z);
-        Transpose4x3(v2a, v2b, v2c, v2d, p2.x, p2.y, p2.z);
-        Transpose4x3(v3a, v3b, v3c, v3d, p3.x, p3.y, p3.z);
-
-        faceIndexA = faceIndices[4];
-        faceIndexB = faceIndices[5];
-        faceIndexC = faceIndices[6];
-        faceIndexD = faceIndices[7];
-
-        v0a = Lane4F32::LoadU((float *)(&meshes[4]->p[faceIndexA * 4 + 0]));
-        v1a = Lane4F32::LoadU((float *)(&meshes[4]->p[faceIndexA * 4 + 1]));
-        v2a = Lane4F32::LoadU((float *)(&meshes[4]->p[faceIndexA * 4 + 2]));
-        v3a = Lane4F32::LoadU((float *)(&meshes[4]->p[faceIndexA * 4 + 3]));
-
-        v0b = Lane4F32::LoadU((float *)(&meshes[5]->p[faceIndexB * 4 + 0]));
-        v1b = Lane4F32::LoadU((float *)(&meshes[5]->p[faceIndexB * 4 + 1]));
-        v2b = Lane4F32::LoadU((float *)(&meshes[5]->p[faceIndexB * 4 + 2]));
-        v3b = Lane4F32::LoadU((float *)(&meshes[5]->p[faceIndexB * 4 + 3]));
-
-        v0c = Lane4F32::LoadU((float *)(&meshes[6]->p[faceIndexC * 4 + 0]));
-        v1c = Lane4F32::LoadU((float *)(&meshes[6]->p[faceIndexC * 4 + 1]));
-        v2c = Lane4F32::LoadU((float *)(&meshes[6]->p[faceIndexC * 4 + 2]));
-        v3c = Lane4F32::LoadU((float *)(&meshes[6]->p[faceIndexC * 4 + 3]));
-
-        v0d = Lane4F32::LoadU((float *)(&meshes[7]->p[faceIndexD * 4 + 0]));
-        v1d = Lane4F32::LoadU((float *)(&meshes[7]->p[faceIndexD * 4 + 1]));
-        v2d = Lane4F32::LoadU((float *)(&meshes[7]->p[faceIndexD * 4 + 2]));
-        v3d = Lane4F32::LoadU((float *)(&meshes[7]->p[faceIndexD * 4 + 3]));
-
-        Vec3lf4 p4;
-        Vec3lf4 p5;
-        Vec3lf4 p6;
-        Vec3lf4 p7;
-
-        Transpose4x3(v0a, v0b, v0c, v0d, p4.x, p4.y, p4.z);
-        Transpose4x3(v1a, v1b, v1c, v1d, p5.x, p5.y, p5.z);
-        Transpose4x3(v2a, v2b, v2c, v2d, p6.x, p6.y, p6.z);
-        Transpose4x3(v3a, v3b, v3c, v3d, p7.x, p7.y, p7.z);
+        Vec3lf4 p1[4];
+        LoadVertices<4>(meshes + 4, faceIndices + 4, p1);
 
         u32 v = LUTAxis[dim];
         u32 w = LUTAxis[v];
 
-        out->v0u = Lane8F32(p0[dim], p4[dim]);
-        out->v1u = Lane8F32(p1[dim], p5[dim]);
-        out->v2u = Lane8F32(p2[dim], p6[dim]);
-        out->v3u = Lane8F32(p3[dim], p7[dim]);
+        out->v0u = Lane8F32(p0[0][dim], p1[0][dim]);
+        out->v1u = Lane8F32(p0[1][dim], p1[1][dim]);
+        out->v2u = Lane8F32(p0[2][dim], p1[2][dim]);
+        out->v3u = Lane8F32(p0[3][dim], p1[3][dim]);
 
-        out->v0v = Lane8F32(p0[v], p4[v]);
-        out->v1v = Lane8F32(p1[v], p5[v]);
-        out->v2v = Lane8F32(p2[v], p6[v]);
-        out->v3v = Lane8F32(p3[v], p7[v]);
+        out->v0v = Lane8F32(p0[0][v], p1[0][v]);
+        out->v1v = Lane8F32(p0[1][v], p1[1][v]);
+        out->v2v = Lane8F32(p0[2][v], p1[2][v]);
+        out->v3v = Lane8F32(p0[3][v], p1[3][v]);
 
-        out->v0w = Lane8F32(p0[w], p4[w]);
-        out->v1w = Lane8F32(p1[w], p5[w]);
-        out->v2w = Lane8F32(p2[w], p6[w]);
-        out->v3w = Lane8F32(p3[w], p7[w]);
+        out->v0w = Lane8F32(p0[0][w], p1[0][w]);
+        out->v1w = Lane8F32(p0[1][w], p1[1][w]);
+        out->v2w = Lane8F32(p0[2][w], p1[2][w]);
+        out->v3w = Lane8F32(p0[3][w], p1[3][w]);
     }
 };
 
@@ -304,180 +214,60 @@ struct Triangle8
                      const u32 faceIndices[8], Triangle8 *out)
     {
         Mesh *primitives = (Mesh *)scene->primitives;
-        u32 faceIndexA   = faceIndices[0];
-        u32 faceIndexB   = faceIndices[1];
-        u32 faceIndexC   = faceIndices[2];
-        u32 faceIndexD   = faceIndices[3];
 
         Mesh *meshes[8] = {primitives + geomIDs[0], primitives + geomIDs[1],
                            primitives + geomIDs[2], primitives + geomIDs[3],
                            primitives + geomIDs[4], primitives + geomIDs[5],
                            primitives + geomIDs[6], primitives + geomIDs[7]};
 
-        Lane4F32 v0a =
-            Lane4F32::LoadU((float *)(&meshes[0]->p[meshes[0]->indices[faceIndexA * 3]]));
-        Lane4F32 v1a =
-            Lane4F32::LoadU((float *)(&meshes[0]->p[meshes[0]->indices[faceIndexA * 3 + 1]]));
-        Lane4F32 v2a =
-            Lane4F32::LoadU((float *)(&meshes[0]->p[meshes[0]->indices[faceIndexA * 3 + 2]]));
+        Vec3lf4 p0[3];
+        LoadVertices<3>(meshes, faceIndices, p0);
 
-        Lane4F32 v0b =
-            Lane4F32::LoadU((float *)(&meshes[1]->p[meshes[1]->indices[faceIndexB * 3]]));
-        Lane4F32 v1b =
-            Lane4F32::LoadU((float *)(&meshes[1]->p[meshes[1]->indices[faceIndexB * 3 + 1]]));
-        Lane4F32 v2b =
-            Lane4F32::LoadU((float *)(&meshes[1]->p[meshes[1]->indices[faceIndexB * 3 + 2]]));
-
-        Lane4F32 v0c =
-            Lane4F32::LoadU((float *)(&meshes[2]->p[meshes[2]->indices[faceIndexC * 3]]));
-        Lane4F32 v1c =
-            Lane4F32::LoadU((float *)(&meshes[2]->p[meshes[2]->indices[faceIndexC * 3 + 1]]));
-        Lane4F32 v2c =
-            Lane4F32::LoadU((float *)(&meshes[2]->p[meshes[2]->indices[faceIndexC * 3 + 2]]));
-
-        Lane4F32 v0d =
-            Lane4F32::LoadU((float *)(&meshes[3]->p[meshes[3]->indices[faceIndexD * 3]]));
-        Lane4F32 v1d =
-            Lane4F32::LoadU((float *)(&meshes[3]->p[meshes[3]->indices[faceIndexD * 3 + 1]]));
-        Lane4F32 v2d =
-            Lane4F32::LoadU((float *)(&meshes[3]->p[meshes[3]->indices[faceIndexD * 3 + 2]]));
-
-        Vec3lf4 p0;
-        Vec3lf4 p1;
-        Vec3lf4 p2;
-
-        Transpose4x3(v0a, v0b, v0c, v0d, p0.x, p0.y, p0.z);
-        Transpose4x3(v1a, v1b, v1c, v1d, p1.x, p1.y, p1.z);
-        Transpose4x3(v2a, v2b, v2c, v2d, p2.x, p2.y, p2.z);
-
-        faceIndexA = faceIndices[4];
-        faceIndexB = faceIndices[5];
-        faceIndexC = faceIndices[6];
-        faceIndexD = faceIndices[7];
-        v0a = Lane4F32::LoadU((float *)(&meshes[4]->p[meshes[4]->indices[faceIndexA * 3]]));
-        v1a =
-            Lane4F32::LoadU((float *)(&meshes[4]->p[meshes[4]->indices[faceIndexA * 3 + 1]]));
-        v2a =
-            Lane4F32::LoadU((float *)(&meshes[4]->p[meshes[4]->indices[faceIndexA * 3 + 2]]));
-
-        v0b = Lane4F32::LoadU((float *)(&meshes[5]->p[meshes[5]->indices[faceIndexB * 3]]));
-        v1b =
-            Lane4F32::LoadU((float *)(&meshes[5]->p[meshes[5]->indices[faceIndexB * 3 + 1]]));
-        v2b =
-            Lane4F32::LoadU((float *)(&meshes[5]->p[meshes[5]->indices[faceIndexB * 3 + 2]]));
-
-        v0c = Lane4F32::LoadU((float *)(&meshes[6]->p[meshes[6]->indices[faceIndexC * 3]]));
-        v1c =
-            Lane4F32::LoadU((float *)(&meshes[6]->p[meshes[6]->indices[faceIndexC * 3 + 1]]));
-        v2c =
-            Lane4F32::LoadU((float *)(&meshes[6]->p[meshes[6]->indices[faceIndexC * 3 + 2]]));
-
-        v0d = Lane4F32::LoadU((float *)(&meshes[7]->p[meshes[7]->indices[faceIndexD * 3]]));
-        v1d =
-            Lane4F32::LoadU((float *)(&meshes[7]->p[meshes[7]->indices[faceIndexD * 3 + 1]]));
-        v2d =
-            Lane4F32::LoadU((float *)(&meshes[7]->p[meshes[7]->indices[faceIndexD * 3 + 2]]));
-
-        Vec3lf4 p3;
-        Vec3lf4 p4;
-        Vec3lf4 p5;
-
-        Transpose4x3(v0a, v0b, v0c, v0d, p3.x, p3.y, p3.z);
-        Transpose4x3(v1a, v1b, v1c, v1d, p4.x, p4.y, p4.z);
-        Transpose4x3(v2a, v2b, v2c, v2d, p5.x, p5.y, p5.z);
+        Vec3lf4 p1[3];
+        LoadVertices<3>(meshes + 4, faceIndices + 4, p1);
 
         u32 v = LUTAxis[dim];
         u32 w = LUTAxis[v];
 
-        out->v0u = Lane8F32(p0[dim], p3[dim]);
-        out->v1u = Lane8F32(p1[dim], p4[dim]);
-        out->v2u = Lane8F32(p2[dim], p5[dim]);
+        out->v0u = Lane8F32(p0[0][dim], p1[0][dim]);
+        out->v1u = Lane8F32(p0[1][dim], p1[1][dim]);
+        out->v2u = Lane8F32(p0[2][dim], p1[2][dim]);
 
-        out->v0v = Lane8F32(p0[v], p3[v]);
-        out->v1v = Lane8F32(p1[v], p4[v]);
-        out->v2v = Lane8F32(p2[v], p5[v]);
+        out->v0v = Lane8F32(p0[0][v], p1[0][v]);
+        out->v1v = Lane8F32(p0[1][v], p1[1][v]);
+        out->v2v = Lane8F32(p0[2][v], p1[2][v]);
 
-        out->v0w = Lane8F32(p0[w], p3[w]);
-        out->v1w = Lane8F32(p1[w], p4[w]);
-        out->v2w = Lane8F32(p2[w], p5[w]);
+        out->v0w = Lane8F32(p0[0][w], p1[0][w]);
+        out->v1w = Lane8F32(p0[1][w], p1[1][w]);
+        out->v2w = Lane8F32(p0[2][w], p1[2][w]);
     }
 
     static void Load(const ScenePrimitives *scene, const u32 dim, const u32 faceIndices[8],
                      Triangle8 *out)
     {
         Assert(scene->numPrimitives == 1);
-        Mesh *mesh     = (Mesh *)scene->primitives;
-        u32 faceIndexA = faceIndices[0];
-        u32 faceIndexB = faceIndices[1];
-        u32 faceIndexC = faceIndices[2];
-        u32 faceIndexD = faceIndices[3];
+        Mesh *mesh = (Mesh *)scene->primitives;
 
-        Lane4F32 v0a = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3]]));
-        Lane4F32 v1a = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3 + 1]]));
-        Lane4F32 v2a = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3 + 2]]));
+        Vec3lf4 p0[3];
+        LoadVertices<3>(mesh, faceIndices, p0);
 
-        Lane4F32 v0b = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexB * 3]]));
-        Lane4F32 v1b = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexB * 3 + 1]]));
-        Lane4F32 v2b = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexB * 3 + 2]]));
-
-        Lane4F32 v0c = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexC * 3]]));
-        Lane4F32 v1c = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexC * 3 + 1]]));
-        Lane4F32 v2c = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexC * 3 + 2]]));
-
-        Lane4F32 v0d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3]]));
-        Lane4F32 v1d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 1]]));
-        Lane4F32 v2d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 2]]));
-
-        Vec3lf4 p0;
-        Vec3lf4 p1;
-        Vec3lf4 p2;
-
-        Transpose4x3(v0a, v0b, v0c, v0d, p0.x, p0.y, p0.z);
-        Transpose4x3(v1a, v1b, v1c, v1d, p1.x, p1.y, p1.z);
-        Transpose4x3(v2a, v2b, v2c, v2d, p2.x, p2.y, p2.z);
-
-        faceIndexA = faceIndices[4];
-        faceIndexB = faceIndices[5];
-        faceIndexC = faceIndices[6];
-        faceIndexD = faceIndices[7];
-        v0a        = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3]]));
-        v1a        = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3 + 1]]));
-        v2a        = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexA * 3 + 2]]));
-
-        v0b = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexB * 3]]));
-        v1b = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexB * 3 + 1]]));
-        v2b = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexB * 3 + 2]]));
-
-        v0c = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexC * 3]]));
-        v1c = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexC * 3 + 1]]));
-        v2c = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexC * 3 + 2]]));
-
-        v0d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3]]));
-        v1d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 1]]));
-        v2d = Lane4F32::LoadU((float *)(&mesh->p[mesh->indices[faceIndexD * 3 + 2]]));
-
-        Vec3lf4 p3;
-        Vec3lf4 p4;
-        Vec3lf4 p5;
-
-        Transpose4x3(v0a, v0b, v0c, v0d, p3.x, p3.y, p3.z);
-        Transpose4x3(v1a, v1b, v1c, v1d, p4.x, p4.y, p4.z);
-        Transpose4x3(v2a, v2b, v2c, v2d, p5.x, p5.y, p5.z);
+        Vec3lf4 p1[3];
+        LoadVertices<3>(mesh, faceIndices + 4, p1);
 
         u32 v = LUTAxis[dim];
         u32 w = LUTAxis[v];
 
-        out->v0u = Lane8F32(p0[dim], p3[dim]);
-        out->v1u = Lane8F32(p1[dim], p4[dim]);
-        out->v2u = Lane8F32(p2[dim], p5[dim]);
+        out->v0u = Lane8F32(p0[0][dim], p1[0][dim]);
+        out->v1u = Lane8F32(p0[1][dim], p1[1][dim]);
+        out->v2u = Lane8F32(p0[2][dim], p1[2][dim]);
 
-        out->v0v = Lane8F32(p0[v], p3[v]);
-        out->v1v = Lane8F32(p1[v], p4[v]);
-        out->v2v = Lane8F32(p2[v], p5[v]);
+        out->v0v = Lane8F32(p0[0][v], p1[0][v]);
+        out->v1v = Lane8F32(p0[1][v], p1[1][v]);
+        out->v2v = Lane8F32(p0[2][v], p1[2][v]);
 
-        out->v0w = Lane8F32(p0[w], p3[w]);
-        out->v1w = Lane8F32(p1[w], p4[w]);
-        out->v2w = Lane8F32(p2[w], p5[w]);
+        out->v0w = Lane8F32(p0[0][w], p1[0][w]);
+        out->v1w = Lane8F32(p0[1][w], p1[1][w]);
+        out->v2w = Lane8F32(p0[2][w], p1[2][w]);
     }
 };
 
