@@ -1636,6 +1636,7 @@ struct HeuristicSpatialSplits
             if (spatialSplit.bestSAH < objectSplit.bestSAH &&
                 totalNumSplits <= record.ExtSize())
             {
+                threadLocalStatistics[GetThreadIndex()].misc3++;
                 if (record.count > PARALLEL_THRESHOLD)
                 {
                     u32 *splitCounts = PushArrayNoZero(temp.arena, u32, output.num + 1);

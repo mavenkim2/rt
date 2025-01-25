@@ -424,7 +424,7 @@ Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory)
 
 Texture *ParseDisplacement(Arena *arena, Tokenizer *tokenizer, string directory)
 {
-    if (Advance(tokenizer, "displacement ")) ParseTexture(arena, tokenizer, directory);
+    if (Advance(tokenizer, "displacement ")) return ParseTexture(arena, tokenizer, directory);
     return 0;
 }
 
@@ -794,8 +794,7 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                 }
             };
 
-            auto AddMesh = [&](int numVerticesPerFace) {
-                Mesh &mesh   = shapes.AddBack();
+            auto AddMesh = [&](Mesh &mesh, int numVerticesPerFace) {
                 mesh.p       = ReadVec3Pointer(&tokenizer, &dataTokenizer, "p ");
                 mesh.n       = ReadVec3Pointer(&tokenizer, &dataTokenizer, "n ");
                 mesh.uv      = ReadVec2Pointer(&tokenizer, &dataTokenizer, "uv ");
@@ -805,36 +804,43 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                 mesh.numFaces    = mesh.numIndices ? mesh.numIndices / numVerticesPerFace
                                                    : mesh.numVertices / numVerticesPerFace;
                 AddMaterial();
-
-                threadMemoryStatistics[threadIndex].totalShapeMemory +=
-                    mesh.numVertices * (sizeof(Vec3f) * 2 + sizeof(Vec2f)) +
-                    mesh.numIndices * sizeof(u32);
             };
 
             while (!Advance(&tokenizer, "SHAPE_END "))
             {
                 if (Advance(&tokenizer, "Quad "))
                 {
-                    type = GeometryType::QuadMesh;
-                    AddMesh(4);
+                    type       = GeometryType::QuadMesh;
+                    Mesh &mesh = shapes.AddBack();
+                    AddMesh(mesh, 4);
                     AddMaterial();
+
+                    threadMemoryStatistics[threadIndex].totalShapeMemory +=
+                        mesh.numVertices * (sizeof(Vec3f) * 2 + sizeof(Vec2f)) +
+                        mesh.numIndices * sizeof(u32);
                 }
                 else if (Advance(&tokenizer, "Tri "))
                 {
-                    type = GeometryType::TriangleMesh;
-                    AddMesh(3);
+                    type       = GeometryType::TriangleMesh;
+                    Mesh &mesh = shapes.AddBack();
+                    AddMesh(mesh, 3);
+                    AddMaterial();
+
+                    threadMemoryStatistics[threadIndex].totalShapeMemory +=
+                        mesh.numVertices * (sizeof(Vec3f) * 2 + sizeof(Vec2f)) +
+                        mesh.numIndices * sizeof(u32);
+                }
+                else if (Advance(&tokenizer, "Catclark "))
+                {
+                    type       = GeometryType::CatmullClark;
+                    Mesh &mesh = shapes.AddBack();
+                    AddMesh(mesh, 4);
                     AddMaterial();
                 }
                 else
                 {
                     Assert(0);
                 }
-
-                PrimitiveIndices &ids = indices.Last();
-                // if (baseScene->materials[ids.GetIndex()])
-                // {
-                //     Displace
-                // }
             }
             scene->numPrimitives = shapes.totalCount;
             scene->primitives    = PushArrayNoZero(arena, Mesh, shapes.totalCount);
@@ -845,7 +851,7 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
         else if (Advance(&tokenizer, "MATERIALS_START "))
         {
             hasMaterials = true;
-            // TODO: multithread this
+            // TODO: multithread this?
             materialHashMap = CreateMaterials(arena, temp.arena, &tokenizer, directory);
             state->map      = materialHashMap;
         }
@@ -886,14 +892,17 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
         Assert(scene->numPrimitives);
         if (type == GeometryType::QuadMesh)
         {
-            scene->primitives =
-                AdaptiveTessellation(arena, NDCFromCamera, screenHeight,
-                                     (Mesh *)scene->primitives, scene->numPrimitives);
-            BuildTriangleBVH(arenas, settings, scene);
-            // BuildQuadBVH(arenas, settings, scene);
+            BuildQuadBVH(arenas, settings, scene);
         }
         else if (type == GeometryType::TriangleMesh)
         {
+            BuildTriangleBVH(arenas, settings, scene);
+        }
+        else if (type == GeometryType::CatmullClark)
+        {
+            scene->primitives =
+                AdaptiveTessellation(arena, scene, NDCFromCamera, screenHeight,
+                                     (Mesh *)scene->primitives, scene->numPrimitives);
             BuildTriangleBVH(arenas, settings, scene);
         }
         else

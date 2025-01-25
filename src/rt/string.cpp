@@ -409,6 +409,15 @@ string PathSkipLastSlash(string str)
     return str;
 }
 
+string PathBaseDirectory(string str)
+{
+    for (u64 size = 0; size < str.size; size++)
+    {
+        if (CharIsSlash(str.str[size])) return Substr8(str, 0, size);
+    }
+    return {};
+}
+
 bool IsInt(string str)
 {
     for (u64 i = 0; i < str.size; i++)

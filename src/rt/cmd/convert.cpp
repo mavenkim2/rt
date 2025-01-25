@@ -81,6 +81,14 @@ struct NamedPacket
 
 typedef HashMap<NamedPacket> SceneHashMap;
 
+// MOANA ONLY
+struct MoanaOBJMeshes
+{
+    Mesh *meshes;
+    int numMeshes;
+    int offset;
+};
+
 struct PBRTFileInfo
 {
     enum Type
@@ -96,6 +104,8 @@ struct PBRTFileInfo
     string filename;
     ScenePacket packets[MAX] = {};
     ChunkedLinkedList<ShapeType, 1024, MemoryType_Shape> shapes;
+    // MOANA ONLY
+    std::vector<MoanaOBJMeshes> objMeshes;
     ChunkedLinkedList<InstanceType, 1024, MemoryType_Instance> fileInstances;
     u32 numInstances;
 
@@ -119,6 +129,15 @@ struct PBRTFileInfo
     void Merge(PBRTFileInfo *import)
     {
         numInstances += import->numInstances;
+
+        // MOANA ONLY
+        u32 shapeOffset = shapes.totalCount;
+        for (auto &objMesh : import->objMeshes)
+        {
+            objMeshes.push_back(objMesh);
+            objMeshes.end()->offset += shapeOffset;
+        }
+
         shapes.Merge(&import->shapes);
         u32 transformOffset = transforms.totalCount;
 
@@ -646,6 +665,40 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
     auto &textureHashMap = sls->textureHashMaps[threadIndex];
     auto *lights         = &sls->lights[threadIndex];
 
+    // TODO: moana only
+    {
+        string baseFilename = PathSkipLastSlash(currentFilename);
+        u64 offset = FindSubstring(baseFilename, "geometry", 0, MatchFlag_CaseInsensitive);
+        if (offset != baseFilename.size)
+        {
+            // First check /archives
+            string objFromPbrt  = Substr8(baseFilename, 0, offset - 1);
+            string subDirectory = PathBaseDirectory(currentFilename);
+            string objFile      = PushStr8F(temp.arena, "%Sobj/%S/archives/%S.obj", directory,
+                                            subDirectory, objFromPbrt);
+            int num;
+            if (OS_FileExists(objFile))
+            {
+                Mesh *meshes = LoadQuadObj(tempArena, objFile, num);
+                Assert(state->objMeshes.size() == 0);
+                Assert(state->shapes.totalCount == 0);
+                state->objMeshes.emplace_back(MoanaOBJMeshes{meshes, num, 0});
+            }
+            else
+            {
+                objFile = PushStr8F(temp.arena, "%Sobj/%S/%S.obj", directory, subDirectory,
+                                    objFromPbrt);
+                if (OS_FileExists(objFile))
+                {
+                    Mesh *meshes = LoadQuadObj(tempArena, objFile, num);
+                    Assert(state->objMeshes.size() == 0);
+                    Assert(state->shapes.totalCount == 0);
+                    state->objMeshes.emplace_back(MoanaOBJMeshes{meshes, num, 0});
+                }
+            }
+        }
+    }
+
     bool worldBegin = inWorldBegin;
     bool writeFile  = write;
 
@@ -1110,6 +1163,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 ErrorExit(worldBegin, "Tried to specify %S after WorldBegin\n", word);
                 ShapeType *shape    = &shapes->AddBack();
                 ScenePacket *packet = &shape->packet;
+
                 CreateScenePacket(tempArena, word, packet, &tokenizer,
                                   MemoryType_Shape); //, 1);
 
@@ -1397,10 +1451,24 @@ i32 WriteData(ScenePacket *packet, StringBuilder *builder, StringBuilderMapped *
     return -1;
 }
 
+void WriteMesh(Mesh &mesh, StringBuilder &builder, StringBuilderMapped &dataBuilder)
+{
+    WriteData(&builder, &dataBuilder, mesh.p, mesh.numVertices * sizeof(Vec3f), "p");
+    WriteData(&builder, &dataBuilder, mesh.n, mesh.numVertices * sizeof(Vec3f), "n");
+
+    if (mesh.uv)
+        WriteData(&builder, &dataBuilder, mesh.uv, mesh.numVertices * sizeof(Vec2f), "uv");
+    if (mesh.indices)
+        WriteData(&builder, &dataBuilder, mesh.indices, mesh.numIndices * sizeof(u32),
+                  "indices");
+    Put(&builder, "v %u ", mesh.numVertices);
+    if (mesh.indices) Put(&builder, "i %u ", mesh.numIndices);
+}
+
 void WriteMesh(StringBuilder &builder, StringBuilderMapped &dataBuilder, ScenePacket *packet,
                string directory, GeometryType type)
 {
-    TempArena temp = ScratchStart(0, 0);
+    TempArena temp = ScratchStart(&builder.arena, 1);
     bool fileMesh  = false;
     for (u32 c = 0; c < packet->parameterCount; c++)
     {
@@ -1408,24 +1476,10 @@ void WriteMesh(StringBuilder &builder, StringBuilderMapped &dataBuilder, ScenePa
         {
             string filename =
                 StrConcat(temp.arena, directory, Str8(packet->bytes[c], packet->sizes[c]));
-            Mesh mesh;
-            if (GetFileExtension(filename) == "ply")
-                mesh = LoadPLY(temp.arena, filename, type);
-            else if (GetFileExtension(filename) == "obj")
-                mesh = LoadObj(temp.arena, filename, type);
-            else Assert(0);
+            Mesh mesh = LoadPLY(temp.arena, filename, type);
+            Assert(GetFileExtension(filename) == "ply");
 
-            WriteData(&builder, &dataBuilder, mesh.p, mesh.numVertices * sizeof(Vec3f), "p");
-            WriteData(&builder, &dataBuilder, mesh.n, mesh.numVertices * sizeof(Vec3f), "n");
-
-            if (mesh.uv)
-                WriteData(&builder, &dataBuilder, mesh.uv, mesh.numVertices * sizeof(Vec2f),
-                          "uv");
-            if (mesh.indices)
-                WriteData(&builder, &dataBuilder, mesh.indices, mesh.numIndices * sizeof(u32),
-                          "indices");
-            Put(&builder, "v %u ", mesh.numVertices);
-            if (mesh.indices) Put(&builder, "i %u ", mesh.numIndices);
+            WriteMesh(mesh, builder, dataBuilder);
             fileMesh = true;
             break;
         }
@@ -1433,12 +1487,12 @@ void WriteMesh(StringBuilder &builder, StringBuilderMapped &dataBuilder, ScenePa
     if (!fileMesh)
     {
         u32 numVertices = 0;
-        Assert(numVertices);
-        u32 numIndices = 0;
-        i32 c          = -1;
-        c              = WriteData(packet, &builder, &dataBuilder, "P"_sid, "p");
+        u32 numIndices  = 0;
+        i32 c           = -1;
+        c               = WriteData(packet, &builder, &dataBuilder, "P"_sid, "p");
         Assert(c != -1);
         numVertices = packet->sizes[c] / sizeof(Vec3f);
+        Assert(numVertices);
         WriteData(packet, &builder, &dataBuilder, "N"_sid, "n");
         WriteData(packet, &builder, &dataBuilder, "uv"_sid, "uv");
         c = WriteData(packet, &builder, &dataBuilder, "indices"_sid, "indices");
@@ -1518,37 +1572,80 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
     if (info->shapes.totalCount && info->fileInstances.totalCount == 0)
     {
         Put(&builder, "SHAPE_START ");
-        for (auto *node = info->shapes.first; node != 0; node = node->next)
-        {
-            for (u32 i = 0; i < node->count; i++)
-            {
-                ShapeType *shapeType = node->values + i;
-                ScenePacket *packet  = &shapeType->packet;
 
-                switch (packet->type)
+        // MOANA ONLY
+        if (info->objMeshes.size() != 0)
+        {
+            for (auto &objMesh : info->objMeshes)
+            {
+                int offset = objMesh.offset;
+                int count  = objMesh.numMeshes;
+                bool done  = false;
+                for (auto *node = info->shapes.first; node != 0; node = node->next)
                 {
-                    case "quadmesh"_sid:
+                    for (u32 i = 0; i < node->count; i++)
                     {
-                        Put(&builder, "Quad ");
-                        WriteMesh(builder, dataBuilder, packet, directory,
-                                  GeometryType::QuadMesh);
+                        ShapeType *shapeType = node->values + i;
+                        ScenePacket *packet  = &shapeType->packet;
+
+                        if (offset)
+                        {
+                            offset--;
+                            continue;
+                        }
+                        else if (count == 0)
+                        {
+                            done = true;
+                            break;
+                        }
+
+                        Assert(packet->type == "quadmesh"_sid);
+                        count--;
+                        Put(&builder, "Catclark ");
+                        WriteMesh(objMesh.meshes[i], builder, dataBuilder);
+
+                        if (shapeType->materialName.size)
+                            Put(&builder, "m %S ", shapeType->materialName);
                     }
-                    break;
-                    case "trianglemesh"_sid:
-                    {
-                        Put(&builder, "Tri ");
-                        WriteMesh(builder, dataBuilder, packet, directory,
-                                  GeometryType::TriangleMesh);
-                    }
-                    break;
-                    case "curve"_sid:
-                    {
-                    }
-                    break;
-                    default: Assert(0);
+                    if (done) break;
                 }
-                if (shapeType->materialName.size)
-                    Put(&builder, "m %S ", shapeType->materialName);
+                Assert(count == 0);
+            }
+        }
+        else
+        {
+            for (auto *node = info->shapes.first; node != 0; node = node->next)
+            {
+                for (u32 i = 0; i < node->count; i++)
+                {
+                    ShapeType *shapeType = node->values + i;
+                    ScenePacket *packet  = &shapeType->packet;
+
+                    switch (packet->type)
+                    {
+                        case "quadmesh"_sid:
+                        {
+                            Put(&builder, "Quad ");
+                            WriteMesh(builder, dataBuilder, packet, directory,
+                                      GeometryType::QuadMesh);
+                        }
+                        break;
+                        case "trianglemesh"_sid:
+                        {
+                            Put(&builder, "Tri ");
+                            WriteMesh(builder, dataBuilder, packet, directory,
+                                      GeometryType::TriangleMesh);
+                        }
+                        break;
+                        case "curve"_sid:
+                        {
+                        }
+                        break;
+                        default: Assert(0);
+                    }
+                    if (shapeType->materialName.size)
+                        Put(&builder, "m %S ", shapeType->materialName);
+                }
             }
         }
         Put(&builder, "SHAPE_END ");

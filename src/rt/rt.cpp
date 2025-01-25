@@ -1092,6 +1092,9 @@ int main(int argc, char *argv[])
     // // TODO: it seems that geometry within obj files can be duplicated
     // Mesh mesh     = LoadQuadObj(arena, "../data/island/pbrt-v4/obj/isBeach/isBeach.obj");
     // mesh.numFaces = mesh.numIndices / 4;
+    Mesh mesh2 =
+        LoadQuadPLY(arena, "../data/island/pbrt-v4/isBeach/xgHibiscus/"
+                           "xgHibiscus_archiveHibiscusFlower0004_mod_geometry_00001.ply");
     //
     // Subdivide(&mesh);
     // EdgeStitchTest();
@@ -1164,42 +1167,6 @@ int main(int argc, char *argv[])
     // Loading PBRT File Test
     //
 
-#if 0
-    PerformanceCounter counter = OS_StartCounter();
-    LoadPBRT(arena, "data/island/pbrt-v4/island.pbrt");
-    printf("Total time: %fms\n", OS_GetMilliseconds(counter));
-
-    u64 totalFileMemory      = 0;
-    u64 totalShapeMemory     = 0;
-    u64 totalMaterialMemory  = 0;
-    u64 totalTextureMemory   = 0;
-    u64 totalLightMemory     = 0;
-    u64 totalInstanceMemory  = 0;
-    u64 totalTransformMemory = 0;
-    u64 totalStringMemory    = 0;
-    u64 totalOtherMemory     = 0;
-    for (u32 i = 0; i < OS_NumProcessors(); i++)
-    {
-        totalFileMemory += threadMemoryStatistics[i].totalFileMemory;
-        totalShapeMemory += threadMemoryStatistics[i].totalShapeMemory;
-        totalMaterialMemory += threadMemoryStatistics[i].totalMaterialMemory;
-        totalTextureMemory += threadMemoryStatistics[i].totalTextureMemory;
-        totalLightMemory += threadMemoryStatistics[i].totalLightMemory;
-        totalInstanceMemory += threadMemoryStatistics[i].totalInstanceMemory;
-        totalTransformMemory += threadMemoryStatistics[i].totalTransformMemory;
-        totalStringMemory += threadMemoryStatistics[i].totalStringMemory;
-        totalOtherMemory += threadMemoryStatistics[i].totalOtherMemory;
-    }
-    printf("Total file memory: %lld\n", totalFileMemory);
-    printf("Total shape memory: %lld\n", totalShapeMemory);
-    printf("Total material memory: %lld\n", totalMaterialMemory);
-    printf("Total texture memory: %lld\n", totalTextureMemory);
-    printf("Total light memory: %lld\n", totalLightMemory);
-    printf("Total instance memory: %lld\n", totalInstanceMemory);
-    printf("Total transform memory: %lld\n", totalTransformMemory);
-    printf("Total string memory: %lld\n", totalStringMemory);
-    printf("Total other memory: %lld\n", totalOtherMemory);
-#endif
 //////////////////////////////
 // SIMD Octahedral Encoding Test
 //

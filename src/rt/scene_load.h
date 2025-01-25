@@ -457,9 +457,10 @@ Mesh LoadTrianglePLY(Arena *arena, string filename)
     return LoadPLY(arena, filename, GeometryType::TriangleMesh);
 }
 
-Mesh LoadQuadObj(Arena *arena, string filename)
+Mesh *LoadQuadObj(Arena *arena, string filename, int &numMeshes)
 {
-    string buffer = OS_MapFileRead(filename); // OS_ReadFile(arena, filename);
+    TempArena temp = ScratchStart(0, 0);
+    string buffer  = OS_MapFileRead(filename);
     Tokenizer tokenizer;
     tokenizer.input  = buffer;
     tokenizer.cursor = buffer.str;
@@ -471,14 +472,72 @@ Mesh LoadQuadObj(Arena *arena, string filename)
     std::vector<Vec3i> indices;
     indices.reserve(128);
 
+    std::vector<Mesh> meshes;
+    int vertexOffset = 1;
+    int normalOffset = 1;
+
+    bool processingMesh = false;
+
     auto Skip = [&]() { SkipToNextChar(&tokenizer, '#'); };
 
     for (;;)
     {
         Skip();
-        if (EndOfBuffer(&tokenizer)) break;
 
         string word = ReadWord(&tokenizer);
+        if (word == "f")
+        {
+            if (!processingMesh)
+            {
+                processingMesh = true;
+            }
+        }
+        else
+        {
+            if (processingMesh)
+            {
+                Mesh mesh;
+                mesh.numVertices = (u32)vertices.size();
+                mesh.numIndices  = (u32)indices.size();
+
+                mesh.p = PushArrayNoZero(arena, Vec3f, vertices.size());
+                vertexOffset += (int)vertices.size();
+                MemoryCopy(mesh.p, vertices.data(), sizeof(Vec3f) * vertices.size());
+
+                Assert(normals.size() == vertices.size());
+
+                int *normalIndices = PushArray(temp.arena, int, mesh.numVertices);
+                MemorySet(normalIndices, 0xff, sizeof(int) * mesh.numVertices);
+
+                mesh.n = PushArrayNoZero(arena, Vec3f, normals.size());
+                normalOffset += (int)normals.size();
+                mesh.indices = PushArrayNoZero(arena, u32, indices.size());
+                // Ensure that vertex index and normal index pairings are consistent
+                for (u32 i = 0; i < mesh.numIndices; i++)
+                {
+                    i32 vertexIndex = indices[i][0];
+                    i32 normalIndex = indices[i][2];
+
+                    if (normalIndices[vertexIndex] != 0xffffffff)
+                    {
+                        ErrorExit(normalIndices[vertexIndex] == normalIndex,
+                                  "Face-varying normals currently unsupported.\n");
+                    }
+                    normalIndices[vertexIndex] = normalIndex;
+                    mesh.n[vertexIndex]        = normals[normalIndex];
+                    mesh.indices[i]            = vertexIndex;
+                }
+
+                meshes.push_back(mesh);
+
+                vertices.clear();
+                normals.clear();
+                indices.clear();
+                processingMesh = false;
+            }
+        }
+        if (EndOfBuffer(&tokenizer)) break;
+
         if (word == "g")
         {
             SkipToNextLine(&tokenizer);
@@ -526,7 +585,9 @@ Mesh LoadQuadObj(Arena *arena, string filename)
                 result       = Advance(&tokenizer, "/");
                 Assert(result);
                 u32 normalIndex = ReadUint(&tokenizer);
-                indices.push_back(Vec3i(vertexIndex - 1, texIndex - 1, normalIndex - 1));
+                Assert(vertexIndex - vertexOffset >= 0 && normalIndex - normalOffset >= 0);
+                indices.push_back(Vec3i(vertexIndex - vertexOffset, texIndex - 1,
+                                        normalIndex - normalOffset));
                 Skip();
             }
             Assert(faceVertexCount == 4)
@@ -537,41 +598,11 @@ Mesh LoadQuadObj(Arena *arena, string filename)
         }
     }
 
-    Mesh mesh        = {};
-    mesh.numVertices = (u32)vertices.size();
-    mesh.numIndices  = (u32)indices.size();
-    ErrorExit(mesh.numVertices > 0, "OBJ Mesh has no vertices\n");
-    mesh.p = PushArrayNoZero(arena, Vec3f, mesh.numVertices);
-    if (normals.size()) mesh.n = PushArray(arena, Vec3f, normals.size());
-    if (indices.size()) mesh.indices = PushArrayNoZero(arena, u32, indices.size());
-
-    i32 *normalIndices = PushArray(arena, i32, mesh.numVertices);
-    MemorySet(normalIndices, 0xff, sizeof(i32) * mesh.numVertices);
-
-    // Ensure that vertex index and normal index pairings are consistent
-    for (u32 i = 0; i < mesh.numIndices; i++)
-    {
-        i32 vertexIndex = indices[i][0];
-        i32 normalIndex = indices[i][2];
-
-        if (normalIndices[vertexIndex] != 0xffffffff)
-        {
-            ErrorExit(normalIndices[vertexIndex] == normalIndex,
-                      "Face-varying normals currently unsupported.\n");
-        }
-        normalIndices[vertexIndex] = normalIndex;
-        mesh.n[vertexIndex]        = normals[normalIndex];
-        mesh.indices[i]            = vertexIndex;
-    }
-    MemoryCopy(mesh.p, vertices.data(), sizeof(Vec3f) * mesh.numVertices);
-    return mesh;
-}
-
-Mesh LoadObj(Arena *arena, string filename, GeometryType type)
-{
-    // TODO: make this not restricted to quads
-    Assert(type == GeometryType::QuadMesh);
-    return LoadQuadObj(arena, filename);
+    ScratchEnd(temp);
+    numMeshes          = (int)meshes.size();
+    Mesh *outputMeshes = PushArrayNoZero(arena, Mesh, numMeshes);
+    MemoryCopy(outputMeshes, meshes.data(), sizeof(Mesh) * numMeshes);
+    return outputMeshes;
 }
 
 } // namespace rt

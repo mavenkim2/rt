@@ -3,8 +3,8 @@
 namespace rt
 {
 void Subdivide(struct Mesh *mesh);
-Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHeight,
-                           Mesh *controlMeshes, u32 numMeshes);
+Mesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
+                           int screenHeight, Mesh *controlMeshes, u32 numMeshes);
 
 struct OpenSubdivPatch
 {

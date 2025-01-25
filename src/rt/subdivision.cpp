@@ -164,6 +164,52 @@ void EvaluateLimitSurfacePosition(const Vertex *vertices, const Far::PatchMap *p
     outDpdv = dpdv;
 }
 
+void EvaluateLimitSurfacePosition(const Vertex *vertices, const Far::PatchMap *patchMap,
+                                  const Far::PatchTable *patchTable,
+                                  const LimitSurfaceSample &sample, Vec3f &outP,
+                                  Vec3f &outDpdu, Vec3f &outDpdv, Vec3f &outDpduu,
+                                  Vec3f &outDpduv, Vec3f &outDpdvv)
+{
+    const Far::PatchTable::PatchHandle *handle =
+        patchMap->FindPatch(sample.faceID, sample.uv[0], sample.uv[1]);
+
+    Assert(handle);
+    const auto &cvIndices = patchTable->GetPatchVertices(*handle);
+
+    f32 pWeights[20];
+    f32 duWeights[20];
+    f32 dvWeights[20];
+    f32 duuWeights[20];
+    f32 duvWeights[20];
+    f32 dvvWeights[20];
+    patchTable->EvaluateBasis(*handle, sample.uv[0], sample.uv[1], pWeights, duWeights,
+                              dvWeights, duuWeights, duvWeights, dvvWeights);
+
+    Vec3f pos   = {};
+    Vec3f dpdu  = {};
+    Vec3f dpdv  = {};
+    Vec3f dpduu = {};
+    Vec3f dpduv = {};
+    Vec3f dpdvv = {};
+    for (int j = 0; j < cvIndices.size(); j++)
+    {
+        const Vec3f &p = vertices[cvIndices[j]].p;
+        pos += pWeights[j] * p;
+        dpdu += duWeights[j] * p;
+        dpdv += dvWeights[j] * p;
+
+        dpduu += duuWeights[j] * p;
+        dpduv += duvWeights[j] * p;
+        dpdvv += dvvWeights[j] * p;
+    }
+    outP     = pos;
+    outDpdu  = dpdu;
+    outDpdv  = dpdv;
+    outDpduu = dpduu;
+    outDpduv = dpduv;
+    outDpdvv = dpdvv;
+}
+
 // Edge vertices (shared by edges)
 // TODO: use half-edge structure?
 struct EdgeInfo
@@ -174,28 +220,12 @@ struct EdgeInfo
 
     int GetFirst(bool reversed) const { return reversed ? id1 : id0; }
     int GetLast(bool reversed) const { return reversed ? id0 : id1; }
-};
 
-struct EdgeIterator
-{
-    EdgeInfo info;
-
-    int id0, id1;
-    int start, diff;
-
-    EdgeIterator(EdgeInfo info, bool reversed)
-    {
-        id0   = reversed ? info.id1 : info.id0;
-        id1   = reversed ? info.id0 : info.id1;
-        start = reversed ? info.indexStart + info.edgeFactor - 2 : info.indexStart;
-        diff  = reversed ? -1 : 1;
-    }
     int GetVertexId(int edgeStep) const
     {
-        Assert(edgeStep >= 0 && edgeStep <= info.edgeFactor);
-        return edgeStep == 0
-                   ? id0
-                   : (edgeStep == info.edgeFactor ? id1 : start + diff * (edgeStep - 1));
+        Assert(edgeStep >= 0 && edgeStep <= edgeFactor);
+        return edgeStep == 0 ? id0
+                             : (edgeStep == edgeFactor ? id1 : indexStart + edgeStep - 1);
     }
 };
 
@@ -250,9 +280,10 @@ struct TessellatedVertices
 // GRAPH/EUROGRAPHICS workshop on Graphics hardware,
 // ACM, New York, NY, USA, 25–32
 // See Figure 7 from above for how this works
-Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHeight,
-                           Mesh *controlMeshes, u32 numMeshes)
+Mesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
+                           int screenHeight, Mesh *controlMeshes, u32 numMeshes)
 {
+    Scene *baseScene = GetScene();
     typedef Far::TopologyDescriptor Descriptor;
     Sdc::SchemeType type = OpenSubdiv::Sdc::SCHEME_CATMARK;
     Sdc::Options options;
@@ -413,6 +444,11 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
             src = dst;
         }
 
+        PtexTexture *texture =
+            (PtexTexture *)baseScene
+                ->materials[scene->primIndices[meshIndex].materialID.GetIndex()]
+                ->displacement;
+
         // Evaluate limit surface positons for corners
         for (auto &sample : samples)
         {
@@ -430,10 +466,11 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
         patches.reserve(controlMesh->numFaces);
         for (int f = 0; f < (int)controlMesh->numFaces; f++)
         {
-            // int face = f;
+            int face = f;
             // TODO THIS IS A HACK
-            int face =
-                f >= (int)controlMesh->numFaces / 2 ? f - (int)controlMesh->numFaces / 2 : f;
+            // int face =
+            //     f >= (int)controlMesh->numFaces / 2 ? f - (int)controlMesh->numFaces / 2 :
+            //     f;
 
             FaceInfo &faceInfo = faceInfos[f];
             // Compute limit surface samples
@@ -493,22 +530,66 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
                 {
                     Vec2f uv(scale[0] * (uStep + 1), scale[1] * (vStep + 1));
 
-                    Vec3f pos, dpdu, dpdv;
+                    Vec3f pos, dpdu, dpdv, dpduu, dpduv, dpdvv;
                     EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable,
-                                                 LimitSurfaceSample{f, uv}, pos, dpdu, dpdv);
+                                                 LimitSurfaceSample{f, uv}, pos, dpdu, dpdv,
+                                                 dpduu, dpduv, dpdvv);
                     Vec3f normal = Normalize(Cross(dpdu, dpdv));
+
+                    if (texture)
+                    {
+                        // Vector Displacement mapping
+                        auto frame = LinearSpace3f::FromXZ(Normalize(dpdu), normal);
+                        Vec3f displacement, uDisplacement, vDisplacement;
+                        Vec4f filterWidths(.5f * scale[0], 0, 0, .5f * scale[1]);
+                        SurfaceInteraction intr;
+                        intr.uv          = uv;
+                        intr.faceIndices = face;
+                        texture->EvaluateHelper<3>(intr, filterWidths, displacement.e);
+
+                        f32 du  = .5f * scale[0];
+                        intr.uv = uv + Vec2f(du, 0.f);
+                        texture->EvaluateHelper<3>(intr, filterWidths, uDisplacement.e);
+
+                        f32 dv  = .5f * scale[1];
+                        intr.uv = uv + Vec2f(0.f, dv);
+                        texture->EvaluateHelper<3>(intr, filterWidths, vDisplacement.e);
+
+                        // Calculate dndu and dndv using weingarten equations
+#if 0
+                        f32 E = Dot(dpdu, dpdu);
+                        f32 F = Dot(dpdu, dpdv);
+                        f32 G = Dot(dpdv, dpdv);
+
+                        f32 e    = Dot(normal, dpduu);
+                        f32 fvar = Dot(normal, dpduv);
+                        f32 g    = Dot(normal, dpdvv);
+
+                        f32 invEGF2 = Rcp(FMS(E, G, Sqr(F)));
+                        Vec3f dndu =
+                            invEGF2 * (dpdu * (fvar * F - e * G) + dpdv * (e * F - fvar * E));
+                        Vec3f dndv =
+                            invEGF2 * (dpdu * (g * F - fvar * G) + dpdv * (fvar * F - g * E));
+                        dndu = Normalize(dndu - normal * Dot(dndu, normal));
+                        dndv = Normalize(dndv - normal * Dot(dndv, normal));
+#endif
+
+                        displacement  = frame.FromLocal(displacement);
+                        uDisplacement = frame.FromLocal(uDisplacement);
+                        vDisplacement = frame.FromLocal(vDisplacement);
+
+                        pos += displacement;
+                        // dpdu = dpdu + (uDisplacement - displacement) / du * normal +
+                        //        displacement * dndu;
+                        // dpdv = dpdv + (vDisplacement - displacement) / dv * normal +
+                        //        displacement * dndv;
+                        dpdu += (uDisplacement - displacement) / du;
+                        dpdv += (vDisplacement - displacement) / dv;
+                        normal = Normalize(Cross(dpdu, dpdv));
+                    }
+
                     tessellatedVertices.normals.push_back(normal);
                     tessellatedVertices.uvs.push_back(uv);
-
-                    // Vector Displacement mapping
-                    // Vec3f normal = Normalize(Cross(dpdu, dpdv));
-                    // auto frame   = LinearSpace3f::FromXZ(Normalize(dpdu), normal);
-                    // // TODO get from texture. need footprints somehow
-                    // Vec3f displacement;
-                    //
-                    // displacement = frame.FromLocal(displacement);
-                    // pos += displacement;
-
                     tessellatedVertices.SetInnerGrid(uStep, vStep) = pos;
 
                     // TODO: create a new catmull clark primitive
@@ -540,27 +621,28 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
                 int edgeRate                = edgeRates[edgeIndex];
                 const EdgeInfo &currentEdge = edgeInfos[faceInfo.edgeInfoId[edgeIndex]];
 
-                EdgeIterator itr(currentEdge, faceInfo.reversed[edgeIndex]);
-
                 int maxEdgeRate = maxEdgeRates[edgeIndex & 1];
                 // Generate indices
                 int q = maxEdgeRate - edgeRate - 2 * edgeRate;
 
-                int edgeStep = 0;
+                int edgeStep = faceInfo.reversed[edgeIndex] ? currentEdge.edgeFactor : 0;
+                int edgeDiff = faceInfo.reversed[edgeIndex] ? -1 : 1;
+                int edgeEnd  = faceInfo.reversed[edgeIndex] ? 0 : currentEdge.edgeFactor;
+
                 Vec2i gridStep =
                     Vec2i(Max(maxEdgeRates[0] - 2, 0), Max(maxEdgeRates[1] - 2, 0));
 
                 Vec2i uvStartInnerGrid = Vec2i(uvTable[edgeIndex]) * gridStep;
                 Vec2i uvEnd            = uvStartInnerGrid + uvDiffTable[edgeIndex] * gridStep;
 
-                while (edgeStep < currentEdge.edgeFactor || uvStartInnerGrid != uvEnd)
+                while (edgeStep != edgeEnd || uvStartInnerGrid != uvEnd)
                 {
                     bool currentSide = q >= 0;
                     if (currentSide && uvStartInnerGrid != uvEnd)
                     {
                         int id0 = tessellatedVertices.GetInnerGridIndex(uvStartInnerGrid[0],
                                                                         uvStartInnerGrid[1]);
-                        int id1 = itr.GetVertexId(edgeStep);
+                        int id1 = currentEdge.GetVertexId(edgeStep);
                         uvStartInnerGrid += uvDiffTable[edgeIndex];
                         int id2 = tessellatedVertices.GetInnerGridIndex(uvStartInnerGrid[0],
                                                                         uvStartInnerGrid[1]);
@@ -575,10 +657,10 @@ Mesh *AdaptiveTessellation(Arena *arena, const Mat4 &NDCFromCamera, int screenHe
                     }
                     else
                     {
-                        int id0 = itr.GetVertexId(edgeStep);
-                        edgeStep++;
-                        Assert(edgeStep <= currentEdge.edgeFactor);
-                        int id1 = itr.GetVertexId(edgeStep);
+                        int id0 = currentEdge.GetVertexId(edgeStep);
+                        edgeStep += edgeDiff;
+                        Assert(edgeStep <= currentEdge.edgeFactor && edgeStep >= 0);
+                        int id1 = currentEdge.GetVertexId(edgeStep);
                         int id2 = tessellatedVertices.GetInnerGridIndex(uvStartInnerGrid[0],
                                                                         uvStartInnerGrid[1]);
 
