@@ -486,21 +486,15 @@ struct BVHHelper<N, GeometryType::QuadMesh, PrimRef>
 template <i32 N>
 struct BVHHelper<N, GeometryType::CatmullClark, PrimRef>
 {
-    using PrimType = LeafPrim<N>;
+    using PrimType = CatmullClarkPatch;
 };
 
-template <i32 N>
-struct BVHHelper<N, GeometryType::CatmullClark, PrimRefCompressed>
-{
-    using PrimType = LeafPrimCompressed<N>;
-};
-
-template <i32 N, typename PrimRef>
+template <i32 N, GeometryType type, typename PrimRef>
 BVHNode<N> BuildQuantizedBVH(BuildSettings settings, Arena **inArenas,
                              const ScenePrimitives *scene, PrimRef *ref,
                              RecordAOSSplits &record)
 {
-    using BVHHelper = BVHHelper<K, type, PrimRef>;
+    using BVHHelper = BVHHelper<N, type, PrimRef>;
     using Prim      = typename BVHHelper::PrimType;
     using BuildType = BuildFuncs<N, HeuristicObjectBinning<PrimRef>, QuantizedNode<N>,
                                  CreateQuantizedNode<N>, UpdateQuantizedNode<N>, Prim,
@@ -509,7 +503,7 @@ BVHNode<N> BuildQuantizedBVH(BuildSettings settings, Arena **inArenas,
     using Builder = BVHBuilder<N, BuildType>;
     Builder builder;
     using Heuristic       = typename Builder::Heuristic;
-    settings.logBlockSize = Bsf(K);
+    settings.logBlockSize = Bsf(N);
     new (&builder.heuristic) Heuristic(ref, scene, settings.logBlockSize);
     builder.primRefs = ref;
     builder.scene    = scene;
@@ -521,8 +515,8 @@ __forceinline BVHNodeN BuildQuantizedCatmullClarkBVH(BuildSettings settings, Are
                                                      const ScenePrimitives *scene,
                                                      PrimRef *refs, RecordAOSSplits &record)
 {
-    return BuildQuantizedBVH<DefaultN, 8, GeometryType::CatmullClark>(settings, inArenas,
-                                                                      scene, refs, record);
+    return BuildQuantizedBVH<DefaultN, GeometryType::CatmullClark>(settings, inArenas, scene,
+                                                                   refs, record);
 }
 
 template <i32 N, i32 K, GeometryType type, typename PrimRef>

@@ -1092,9 +1092,9 @@ int main(int argc, char *argv[])
     // // TODO: it seems that geometry within obj files can be duplicated
     // Mesh mesh     = LoadQuadObj(arena, "../data/island/pbrt-v4/obj/isBeach/isBeach.obj");
     // mesh.numFaces = mesh.numIndices / 4;
-    Mesh mesh2 =
-        LoadQuadPLY(arena, "../data/island/pbrt-v4/isBeach/xgHibiscus/"
-                           "xgHibiscus_archiveHibiscusFlower0004_mod_geometry_00001.ply");
+    // Mesh mesh2 =
+    //     LoadQuadPLY(arena, "../data/island/pbrt-v4/isBeach/xgHibiscus/"
+    //                        "xgHibiscus_archiveHibiscusFlower0004_mod_geometry_00001.ply");
     //
     // Subdivide(&mesh);
     // EdgeStitchTest();

@@ -459,7 +459,7 @@ Mesh LoadTrianglePLY(Arena *arena, string filename)
     return LoadPLY(arena, filename, GeometryType::TriangleMesh);
 }
 
-Mesh *LoadQuadObj(Arena *arena, string filename, int &numMeshes, int &actualNumMeshes)
+Mesh *LoadObj(Arena *arena, string filename, int &numMeshes, int &actualNumMeshes)
 {
     TempArena temp = ScratchStart(0, 0);
     string buffer  = OS_MapFileRead(filename);
@@ -507,16 +507,12 @@ Mesh *LoadQuadObj(Arena *arena, string filename, int &numMeshes, int &actualNumM
                         mesh.numIndices  = (u32)indices.size();
 
                         mesh.p = PushArrayNoZero(arena, Vec3f, vertices.size());
-                        vertexOffset += (int)vertices.size();
                         MemoryCopy(mesh.p, vertices.data(), sizeof(Vec3f) * vertices.size());
-
-                        Assert(normals.size() == vertices.size());
 
                         int *normalIndices = PushArray(temp.arena, int, mesh.numVertices);
                         MemorySet(normalIndices, 0xff, sizeof(int) * mesh.numVertices);
 
-                        mesh.n = PushArrayNoZero(arena, Vec3f, normals.size());
-                        normalOffset += (int)normals.size();
+                        mesh.n       = PushArrayNoZero(arena, Vec3f, vertices.size());
                         mesh.indices = PushArrayNoZero(arena, u32, indices.size());
                         // Ensure that vertex index and normal index pairings are consistent
                         for (u32 i = 0; i < mesh.numIndices; i++)
@@ -526,9 +522,14 @@ Mesh *LoadQuadObj(Arena *arena, string filename, int &numMeshes, int &actualNumM
 
                             if (normalIndices[vertexIndex] != 0xffffffff)
                             {
-                                ErrorExit(normalIndices[vertexIndex] == normalIndex,
-                                          "Face-varying normals currently unsupported.\n");
+                                ErrorExit(
+                                    normalIndices[vertexIndex] == normalIndex,
+                                    "Face-varying normals currently unsupported. file: %S\n",
+                                    filename);
                             }
+
+                            Assert(normalIndex < (int)normals.size());
+                            Assert(vertexIndex < (int)vertices.size());
                             normalIndices[vertexIndex] = normalIndex;
                             mesh.n[vertexIndex]        = normals[normalIndex];
                             mesh.indices[i]            = vertexIndex;
@@ -536,6 +537,8 @@ Mesh *LoadQuadObj(Arena *arena, string filename, int &numMeshes, int &actualNumM
 
                         meshes.push_back(mesh);
 
+                        vertexOffset += (int)vertices.size();
+                        normalOffset += (int)normals.size();
                         vertices.clear();
                         normals.clear();
                         indices.clear();
@@ -602,7 +605,7 @@ Mesh *LoadQuadObj(Arena *arena, string filename, int &numMeshes, int &actualNumM
                                         normalIndex - normalOffset));
                 Skip();
             }
-            Assert(faceVertexCount == 4)
+            // Assert(faceVertexCount == 4)
         }
         else
         {
@@ -613,8 +616,8 @@ Mesh *LoadQuadObj(Arena *arena, string filename, int &numMeshes, int &actualNumM
     ScratchEnd(temp);
     numMeshes          = totalNumMeshes;
     actualNumMeshes    = (int)meshes.size();
-    Mesh *outputMeshes = PushArrayNoZero(arena, Mesh, numMeshes);
-    MemoryCopy(outputMeshes, meshes.data(), sizeof(Mesh) * numMeshes);
+    Mesh *outputMeshes = PushArrayNoZero(arena, Mesh, actualNumMeshes);
+    MemoryCopy(outputMeshes, meshes.data(), sizeof(Mesh) * actualNumMeshes);
     return outputMeshes;
 }
 

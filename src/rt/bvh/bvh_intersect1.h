@@ -981,6 +981,132 @@ struct QuadIntersectorBase<N, Prim<N>>
     }
 };
 
+struct CatClarkPatchIntersector
+{
+    typedef CatmullClarkPatch Primitive;
+    static const int N = 8;
+    static bool Intersect(ScenePrimitives *scene, Ray2 &ray, Primitive *primitives, u32 num,
+                          SurfaceInteraction &si)
+
+    {
+        auto trueMask  = Mask<Lane8F32>(TrueTy());
+        auto falseMask = Mask<Lane8F32>(FalseTy());
+        Lane4F32 v0[N];
+        Lane4F32 v1[N];
+        Lane4F32 v2[N];
+        alignas(4 * N) u32 geomIDs[N];
+        alignas(4 * N) u32 primIDs[N];
+
+        int queueCount = 0;
+
+        Lane8F32 t(ray.tFar);
+        Mask<LaneF32<N>> outMask(false);
+
+        TriangleIntersection<N> itr;
+        itr.t = LaneF32<N>(ray.tFar);
+
+        OpenSubdivMesh *meshes = (OpenSubdivMesh *)scene->primitives;
+
+        auto EmptyQueue = [&]() {
+            Vec3lf8 triV0, triV1, triV2;
+            Transpose<N>(v0, triV0);
+            Transpose<N>(v1, triV1);
+            Transpose<N>(v2, triV2);
+
+            TriangleIntersection<N> triItr;
+
+            Mask<LaneF32<N>> mask = TriangleIntersect(ray, itr.t, triV0, triV1, triV2, triItr);
+            outMask |= mask;
+            itr.u       = Select(mask, triItr.u, itr.u);
+            itr.v       = Select(mask, triItr.v, itr.v);
+            itr.t       = Select(mask, triItr.t, itr.t);
+            itr.geomIDs = AsUInt(
+                Select(mask, AsFloat(MemSimdU32<N>::LoadU(geomIDs)), AsFloat(itr.geomIDs)));
+            itr.primIDs = AsUInt(
+                Select(mask, AsFloat(MemSimdU32<N>::LoadU(primIDs)), AsFloat(itr.primIDs)));
+
+            queueCount = 0;
+        };
+        auto FlushQueue = [&]() {
+            if (queueCount == N) EmptyQueue();
+        };
+
+        for (u32 i = 0; i < num; i++)
+        {
+            Primitive &prim     = primitives[i];
+            u32 primID          = prim.primID;
+            u32 geomID          = prim.geomID & 0x7fffffff;
+            u32 isUntessellated = prim.geomID & 0x80000000;
+
+            Assert(geomID < scene->numPrimitives);
+            OpenSubdivMesh *mesh         = meshes + geomID;
+            const OpenSubdivPatch *patch = &mesh->patches[primID];
+            const auto &indices          = mesh->stitchingIndices;
+            const auto &vertices         = mesh->vertices;
+
+            auto PushQueue = [&](int id0, int id1, int id2) {
+                Vec3f p0 = vertices[id0];
+                Vec3f p1 = vertices[id1];
+                Vec3f p2 = vertices[id2];
+
+                geomIDs[queueCount] = geomID;
+                primIDs[queueCount] = primID;
+                Lane4F32::Store(v0 + queueCount, Lane4F32(p0));
+                Lane4F32::Store(v1 + queueCount, Lane4F32(p1));
+                Lane4F32::Store(v2 + queueCount, Lane4F32(p2));
+                queueCount++;
+
+                FlushQueue();
+            };
+
+            for (int triIndex = 0; triIndex < patch->stitchingCount / 3; triIndex++)
+            {
+                int index = patch->stitchingStart + 3 * triIndex;
+                PushQueue(indices[index + 0], indices[index + 1], indices[index + 2]);
+            }
+
+            int edgeU = Max(patch->edgeRates[0], patch->edgeRates[2]);
+            int edgeV = Max(patch->edgeRates[1], patch->edgeRates[3]);
+
+            auto GetGridIndex = [&](u32 u, u32 v) -> int {
+                int gridIndex = patch->gridIndexStart + v * (edgeU - 1) + u;
+                Assert(gridIndex < patch->gridIndexStart + (edgeU - 1) * (edgeV - 1));
+                return gridIndex;
+            };
+
+            Vec2f uvStep(1.f / edgeU, 1.f / edgeV);
+            for (int v = 0; v < edgeV - 2; v++)
+            {
+                for (int u = 0; u < edgeU - 2; u++)
+                {
+                    int id00   = GetGridIndex(u, v);
+                    Vec2f uv00 = uvStep * Vec2f((f32)u, (f32)v);
+                    int id10   = GetGridIndex(u + 1, v);
+                    Vec2f uv10 = uvStep * Vec2f((f32)(u + 1), (f32)v);
+                    int id11   = GetGridIndex(u + 1, v + 1);
+                    Vec2f uv11 = uvStep * Vec2f((f32)(u + 1), (f32)(v + 1));
+                    int id01   = GetGridIndex(u, v + 1);
+                    Vec2f uv01 = uvStep * Vec2f((f32)(u), (f32)(v + 1));
+
+                    PushQueue(id00, id10, id11);
+                    PushQueue(id00, id11, id01);
+                }
+            }
+        }
+
+        return false;
+    }
+    template <i32 K>
+    static bool Intersect(ScenePrimitives *scene, Ray2 &ray, BVHNode<K> ptr,
+                          SurfaceInteraction &si, TravRay<K> &)
+    {
+        Assert(ptr.IsLeaf());
+        Primitive *primitives = (Primitive *)ptr.GetPtr();
+        u32 num               = ptr.GetNum();
+        return Intersect(scene, ray, primitives, num, si);
+    }
+};
+
 template <i32 N>
 using TriangleIntersector = TriangleIntersectorBase<N, Triangle<N>>;
 
@@ -1156,6 +1282,11 @@ using BVHInstanceCLIntersector =
 typedef BVHInstanceCLIntersector<4, BVH_AQ> BVH4InstanceCLIntersector;
 typedef BVHInstanceCLIntersector<8, BVH_AQ> BVH8InstanceCLIntersector;
 
+template <i32 K, i32 types>
+
+using CatClarkIntersector = BVHIntersector<K, types, CatClarkPatchIntersector>;
+typedef CatClarkIntersector<8, BVH_AQ> BVH8PatchIntersector;
+
 // Helpers
 template <i32 N, GeometryType type, typename PrimRefType>
 struct IntersectorHelperBase;
@@ -1218,6 +1349,12 @@ template <>
 struct IntersectorHelperBase<8, GeometryType::Instance, BRef>
 {
     using IntersectorType = BVH8InstanceCLIntersector;
+};
+
+template <>
+struct IntersectorHelperBase<8, GeometryType::CatmullClark, PrimRef>
+{
+    using IntersectorType = BVH8PatchIntersector;
 };
 
 #ifdef USE_BVH4

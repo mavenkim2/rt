@@ -138,40 +138,6 @@ struct ExtRange
     __forceinline u32 TotalSize() const { return extEnd - start; }
 };
 
-struct ScalarBounds
-{
-    f32 minX;
-    f32 minY;
-    f32 minZ;
-    f32 maxX;
-    f32 maxY;
-    f32 maxZ;
-
-    Bounds ToBounds() const
-    {
-        Bounds result;
-        result.minP = Lane4F32::LoadU(&minX);
-        result.maxP = Lane4F32::LoadU(&maxX);
-        return result;
-    }
-    // NOTE: geomBounds must be set first, then cent bounds, and then the range in
-    // RecordSOASplits must be updated
-    void FromBounds(const Bounds &b)
-    {
-        Lane4F32::StoreU(&minX, b.minP);
-        Lane4F32::StoreU(&maxX, b.maxP);
-    }
-    f32 HalfArea() const
-    {
-        f32 diffX = maxX - minX;
-        f32 diffY = maxY - minY;
-        f32 diffZ = maxZ - minZ;
-        return FMA(diffX, diffY + diffZ, diffY * diffZ);
-    }
-};
-
-f32 HalfArea(const ScalarBounds &b) { return b.HalfArea(); }
-
 struct alignas(CACHE_LINE_SIZE) RecordAOSSplits
 {
     using PrimitiveData = PrimRef;
@@ -208,6 +174,11 @@ struct alignas(CACHE_LINE_SIZE) RecordAOSSplits
     u32 End() const { return start + count; }
     u32 ExtEnd() const { return extEnd; }
     u32 ExtSize() const { return extEnd - (start + count); }
+    void SetRange(u32 inStart, u32 inCount)
+    {
+        start = inStart;
+        count = inCount;
+    }
     void SetRange(u32 inStart, u32 inCount, u32 inExtEnd)
     {
         start  = inStart;
@@ -666,14 +637,16 @@ struct QuadCompressed : LeafPrimCompressed<N>
 
 struct CatmullClarkPatch
 {
-    BVHNodeN nodePtr;
+    // BVHNodeN nodePtr;
+    u32 geomID;
     u32 primID;
 
     CatmullClarkPatch() {}
-    template <i32 N>
     __forceinline void Fill(const ScenePrimitives *scene, PrimRef *ref, u32 &begin, u32 end)
     {
         Assert(end > begin);
+
+        geomID = ref->geomID;
         primID = ref->primID;
         begin++;
     }

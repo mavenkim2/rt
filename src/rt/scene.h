@@ -208,38 +208,6 @@ struct Mesh
 template <GeometryType type, typename PrimRefType>
 struct GenerateMeshRefsHelper;
 
-template <typename PrimRefType>
-struct GenerateMeshRefsHelper<GeometryType::CatmullClark, PrimRefType>
-{
-    OpenSubdivMesh *mesh;
-    __forceinline void operator()(PrimRefType *refs, u32 offset, u32 geomID, u32 start,
-                                  u32 count, RecordAOSSplits &record)
-    {
-        Bounds geomBounds;
-        Bounds centBounds;
-        for (u32 i = start; i < start + count; i++, offset++)
-        {
-            PrimRefType *prim = &refs[offset];
-            Vec3f v[4];
-
-            Bounds bounds = mesh->GetPatchBounds(i);
-            Lane4F32::StoreU(prim->min, -bounds.minP);
-
-            if constexpr (!std::is_same_v<PrimRefType, PrimRefCompressed>)
-                prim->geomID = geomID;
-            prim->maxX   = bounds.maxP.x;
-            prim->maxY   = bounds.maxP.y;
-            prim->maxZ   = bounds.maxP.z;
-            prim->primID = i;
-
-            geomBounds.Extend(bounds);
-            centBounds.Extend(bounds.minP + bounds.maxP);
-        }
-        record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
-        record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
-    }
-};
-
 template <GeometryType type, typename PrimRefType>
 struct GenerateMeshRefsHelper
 {
@@ -685,12 +653,12 @@ Scene *GetScene() { return scene_; }
 // }
 
 void BuildTLASBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
-template <typename Mesh>
+
+template <GeometryType type>
 void BuildBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
 void BuildQuadBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
 void BuildTriangleBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
-template <typename Mesh>
-void LoadMesh();
+void BuildCatClarkBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
 
 } // namespace rt
 #endif

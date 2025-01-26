@@ -62,11 +62,11 @@ __forceinline bool Intersects(const Bounds &a, const Bounds &b)
     return None(test.minP > test.maxP);
 }
 
-__forceinline f32 HalfArea(const Bounds &b)
-{
-    Lane4F32 extent = b.maxP - b.minP;
-    return FMA(extent[0], extent[1] + extent[2], extent[1] * extent[2]);
-}
+// __forceinline f32 HalfArea(const Bounds &b)
+// {
+//     Lane4F32 extent = b.maxP - b.minP;
+//     return FMA(extent[0], extent[1] + extent[2], extent[1] * extent[2]);
+// }
 
 static const Lane8F32 signFlipMask(-0.f, -0.f, -0.f, 0.f, 0.f, 0.f, 0.f, 0.f);
 static const u32 LUTAxis[] = {1, 2, 0};
@@ -124,7 +124,8 @@ __forceinline f32 HalfArea(const Lane8F32 &b)
     Lane4F32 mins   = Extract4<0>(b);
     Lane4F32 maxs   = Extract4<1>(b);
     Lane4F32 extent = (maxs + mins);
-    return FMA(extent[0], extent[1] + extent[2], extent[1] * extent[2]);
+    f32 result      = FMA(extent[0], extent[1] + extent[2], extent[1] * extent[2]);
+    return result;
 }
 
 template <i32 N>

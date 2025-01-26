@@ -832,17 +832,33 @@ void TestRender(Arena *arena, Options *options = 0)
     PerformanceCounter counter = OS_StartCounter();
 
     // Camera
+
     u32 width  = 1920;
     u32 height = 804;
-    Vec3f pCamera(-1139.0159, 23.286734, 1479.7947);
-    Vec3f look(244.81433, 238.80714, 560.3801);
-    Vec3f up(-0.107149, .991691, .07119);
+
+    // beach cam
+    Vec3f pCamera(-510.523907, 87.308744, 181.770197);
+    Vec3f look(152.465305, 30.939795, -72.727517);
+    Vec3f up(0.073871, 0.996865, -0.028356);
+
+    f32 lensRadius    = .003125;
+    f32 focalDistance = 712.391212;
+    f32 fov           = 54.43222;
+    f32 aspectRatio   = 2.386946;
+
+    // base cam
+    // Vec3f pCamera(-1139.0159, 23.286734, 1479.7947);
+    // Vec3f look(244.81433, 238.80714, 560.3801);
+    // Vec3f up(-0.107149, .991691, .07119);
+    // f32 fov = 69.50461;
+    // f32 focalDistance = 1675.3383;
 
     Mat4 cameraFromRender = LookAt(pCamera, look, up) * Translate(pCamera);
 
     Mat4 renderFromCamera = Inverse(cameraFromRender);
     // TODO: going to have to figure out how to handle this automatically
-    Mat4 NDCFromCamera = Mat4::Perspective2(Radians(69.50461), 2.386946);
+    Mat4 NDCFromCamera = Mat4::Perspective2(Radians(fov), aspectRatio);
+
     // maps to raster coordinates
     Mat4 rasterFromNDC = Scale(Vec3f(f32(width), -f32(height), 1.f)) *
                          Scale(Vec3f(1.f / 2.f, 1.f / 2.f, 1.f)) *
@@ -913,8 +929,8 @@ void TestRender(Arena *arena, Options *options = 0)
     params.filterRadius     = Vec2f(0.5f);
     params.spp              = 64;
     params.maxDepth         = 10;
-    params.lensRadius       = 0.003125;
-    params.focalLength      = 1675.3383;
+    params.lensRadius       = lensRadius;
+    params.focalLength      = focalDistance;
 
     if (options)
     {

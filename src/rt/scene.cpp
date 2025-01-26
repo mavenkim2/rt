@@ -803,7 +803,6 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                 mesh.numIndices  = ReadInt(&tokenizer, "i ");
                 mesh.numFaces    = mesh.numIndices ? mesh.numIndices / numVerticesPerFace
                                                    : mesh.numVertices / numVerticesPerFace;
-                AddMaterial();
             };
 
             while (!Advance(&tokenizer, "SHAPE_END "))
@@ -903,7 +902,7 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
             scene->primitives =
                 AdaptiveTessellation(arena, scene, NDCFromCamera, screenHeight,
                                      (Mesh *)scene->primitives, scene->numPrimitives);
-            BuildTriangleBVH(arenas, settings, scene);
+            BuildCatClarkBVH(arenas, settings, scene);
         }
         else
         {
@@ -952,6 +951,120 @@ void BuildTLASBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scen
     b = Bounds(record.geomBounds);
     scene->SetBounds(b);
     Assert((Movemask(b.maxP >= b.minP) & 0x7) == 0x7);
+    ScratchEnd(temp);
+}
+
+template <>
+void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &settings,
+                                          ScenePrimitives *scene)
+{
+    TempArena temp         = ScratchStart(0, 0);
+    OpenSubdivMesh *meshes = (OpenSubdivMesh *)scene->primitives;
+    u32 totalNumFaces      = 0;
+
+    int untessellatedPatchCount = 0;
+    int tessellatedPatchCount   = 0;
+
+    for (u32 i = 0; i < scene->numPrimitives; i++)
+    {
+        untessellatedPatchCount += (int)meshes[i].untessellatedPatches.Length();
+        tessellatedPatchCount += (int)meshes[i].patches.Length();
+    }
+
+    PrimRef *refs =
+        PushArrayNoZero(temp.arena, PrimRef, untessellatedPatchCount + tessellatedPatchCount);
+
+    PrimRef *untessellatedRefs = refs;
+    int untessellatedRefOffset = 0;
+    PrimRef *tessellatedRefs   = refs + untessellatedPatchCount;
+    int tessellatedRefOffset   = 0;
+
+    Bounds geomBounds;
+    Bounds centBounds;
+
+    for (u32 i = 0; i < scene->numPrimitives; i++)
+    {
+        auto *mesh           = &meshes[i];
+        const auto &indices  = mesh->stitchingIndices;
+        const auto &vertices = mesh->vertices;
+        for (u32 j = 0; j < mesh->untessellatedPatches.Length(); j++)
+        {
+            int indexStart = mesh->untessellatedPatches[j].stitchingStart;
+            Vec3f p0       = vertices[indices[indexStart + 0]];
+            Vec3f p1       = vertices[indices[indexStart + 1]];
+            Vec3f p2       = vertices[indices[indexStart + 2]];
+            Vec3f p3       = vertices[indices[indexStart + 3]];
+
+            Vec3f minP = Min(Min(p0, p1), Min(p2, p3));
+            Vec3f maxP = Max(Max(p0, p1), Max(p2, p3));
+
+            geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
+            centBounds.Extend(Lane4F32(minP + maxP));
+
+            PrimRef *ref = &untessellatedRefs[untessellatedRefOffset++];
+            ref->minX    = minP.x;
+            ref->minY    = minP.y;
+            ref->minZ    = minP.z;
+            ref->geomID  = 0x80000000u | i;
+            ref->maxX    = maxP.x;
+            ref->maxY    = maxP.y;
+            ref->maxZ    = maxP.z;
+            ref->primID  = j;
+        }
+        for (u32 j = 0; j < mesh->patches.Length(); j++)
+        {
+            OpenSubdivPatch *patch = &mesh->patches[j];
+            Vec3f minP(pos_inf);
+            Vec3f maxP(neg_inf);
+
+            int edgeRateU = Max(patch->edgeRates[0], patch->edgeRates[2]);
+            int edgeRateV = Max(patch->edgeRates[1], patch->edgeRates[3]);
+
+            int gridCount = (edgeRateU - 1) * (edgeRateV - 1);
+
+            for (int index = patch->stitchingStart;
+                 index < patch->stitchingStart + patch->stitchingCount; index++)
+            {
+                minP = Min(minP, vertices[indices[index]]);
+                maxP = Max(maxP, vertices[indices[index]]);
+            }
+
+            for (int index = patch->gridIndexStart; index < patch->gridIndexStart + gridCount;
+                 index++)
+            {
+                minP = Min(minP, vertices[indices[index]]);
+                maxP = Max(maxP, vertices[indices[index]]);
+            }
+
+            geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
+            centBounds.Extend(Lane4F32(minP + maxP));
+
+            PrimRef *ref = &tessellatedRefs[tessellatedRefOffset++];
+            ref->minX    = minP.x;
+            ref->minY    = minP.y;
+            ref->minZ    = minP.z;
+            ref->geomID  = i;
+            ref->maxX    = maxP.x;
+            ref->maxY    = maxP.y;
+            ref->maxZ    = maxP.z;
+            ref->primID  = j;
+        }
+    }
+
+    RecordAOSSplits record;
+    record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+    record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+    record.SetRange(0, untessellatedPatchCount + tessellatedPatchCount);
+
+    scene->nodePtr = BuildQuantizedCatmullClarkBVH(settings, arenas, scene, refs, record);
+    using IntersectorType =
+        typename IntersectorHelper<GeometryType::CatmullClark, PrimRef>::IntersectorType;
+    scene->intersectFunc = &IntersectorType::Intersect;
+    scene->occludedFunc  = &IntersectorType::Occluded;
+    Bounds b(record.geomBounds);
+    Assert((Movemask(b.maxP >= b.minP) & 0x7) == 0x7);
+    scene->SetBounds(b);
+    scene->numFaces = totalNumFaces;
     ScratchEnd(temp);
 }
 
@@ -1054,6 +1167,11 @@ void BuildTriangleBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *
 void BuildQuadBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
 {
     BuildBVH<GeometryType::QuadMesh>(arenas, settings, scene);
+}
+
+void BuildCatClarkBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
+{
+    BuildBVH<GeometryType::CatmullClark>(arenas, settings, scene);
 }
 
 template <GeometryType type, typename PrimRef>

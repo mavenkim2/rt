@@ -669,32 +669,36 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
     // TODO: moana only
     {
         string baseFilename = PathSkipLastSlash(currentFilename);
-        u64 offset = FindSubstring(baseFilename, "geometry", 0, MatchFlag_CaseInsensitive);
-        if (offset != baseFilename.size)
+        if (!(baseFilename == "osOcean_geometry.pbrt"))
         {
-            // First check /archives
-            string objFromPbrt  = Substr8(baseFilename, 0, offset - 1);
-            string subDirectory = PathBaseDirectory(currentFilename);
-            string objFile      = PushStr8F(temp.arena, "%Sobj/%S/archives/%S.obj", directory,
-                                            subDirectory, objFromPbrt);
-            int total, num;
-            if (OS_FileExists(objFile))
+            u64 offset =
+                FindSubstring(baseFilename, "geometry.pbrt", 0, MatchFlag_CaseInsensitive);
+            if (offset != baseFilename.size)
             {
-                Mesh *meshes = LoadQuadObj(tempArena, objFile, total, num);
-                Assert(state->objMeshes.size() == 0);
-                Assert(state->shapes.totalCount == 0);
-                state->objMeshes.emplace_back(MoanaOBJMeshes{meshes, total, num, 0});
-            }
-            else
-            {
-                objFile = PushStr8F(temp.arena, "%Sobj/%S/%S.obj", directory, subDirectory,
-                                    objFromPbrt);
+                // First check /archives
+                string objFromPbrt  = Substr8(baseFilename, 0, offset - 1);
+                string subDirectory = PathBaseDirectory(currentFilename);
+                string objFile = PushStr8F(temp.arena, "%Sobj/%S/archives/%S.obj", directory,
+                                           subDirectory, objFromPbrt);
+                int total, num;
                 if (OS_FileExists(objFile))
                 {
-                    Mesh *meshes = LoadQuadObj(tempArena, objFile, total, num);
+                    Mesh *meshes = LoadObj(tempArena, objFile, total, num);
                     Assert(state->objMeshes.size() == 0);
                     Assert(state->shapes.totalCount == 0);
                     state->objMeshes.emplace_back(MoanaOBJMeshes{meshes, total, num, 0});
+                }
+                else
+                {
+                    objFile = PushStr8F(temp.arena, "%Sobj/%S/%S.obj", directory, subDirectory,
+                                        objFromPbrt);
+                    if (OS_FileExists(objFile))
+                    {
+                        Mesh *meshes = LoadObj(tempArena, objFile, total, num);
+                        Assert(state->objMeshes.size() == 0);
+                        Assert(state->shapes.totalCount == 0);
+                        state->objMeshes.emplace_back(MoanaOBJMeshes{meshes, total, num, 0});
+                    }
                 }
             }
         }
@@ -1580,7 +1584,9 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
             {
                 total += objMesh.total;
             }
-            Assert(total == info->shapes.totalCount);
+            ErrorExit(total == info->shapes.totalCount,
+                      "filename: %S, total: %i, shape total: %i\n", info->filename, total,
+                      info->shapes.totalCount);
             for (auto &objMesh : info->objMeshes)
             {
                 int offset = objMesh.offset;
@@ -1604,10 +1610,17 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                             break;
                         }
 
-                        Assert(packet->type == "quadmesh"_sid);
                         count--;
-                        Put(&builder, "Catclark ");
-                        WriteMesh(objMesh.meshes[i], builder, dataBuilder);
+                        if (packet->type == "quadmesh"_sid)
+                        {
+                            Put(&builder, "Catclark ");
+                            WriteMesh(objMesh.meshes[i], builder, dataBuilder);
+                        }
+                        else if (packet->type == "trianglemesh"_sid)
+                        {
+                            Put(&builder, "Tri ");
+                            WriteMesh(objMesh.meshes[i], builder, dataBuilder);
+                        }
 
                         if (shapeType->materialName.size)
                             Put(&builder, "m %S ", shapeType->materialName);

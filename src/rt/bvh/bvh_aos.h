@@ -1497,8 +1497,9 @@ void MoveExtendedRanges(const Split &split, const u32 newEnd, const Record &reco
         }
     }
 
-    Assert(numLeft <= record.count);
-    Assert(numRight <= record.count);
+    // Assert(numLeft <= record.count);
+    // Assert(numRight <= record.count);
+    // Assert(numLeft + numRight < newEnd - record.start);
 
     outLeft.SetRange(record.start, numLeft, record.start + numLeft + extSizeLeft);
     outRight.SetRange(outLeft.extEnd, numRight, record.extEnd);
@@ -1938,7 +1939,6 @@ struct HeuristicObjectBinning
                 Assert(gMask == 0x77);
                 Assert(cMask == 0x77);
             }
-            break;
         }
 
 #endif

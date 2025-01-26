@@ -91,7 +91,7 @@ struct MaterialHandle
     }
     MaterialTypes GetType() const { return MaterialTypes(data >> 28); }
     u32 GetIndex() const { return data & 0x0fffffff; }
-    __forceinline operator bool() { return data != 0xffffffff; }
+    __forceinline operator bool() { return data != 0x0fffffff; }
 };
 
 } // namespace rt
