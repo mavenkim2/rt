@@ -1,6 +1,8 @@
 #ifndef SCENE_LOAD_H
 #define SCENE_LOAD_H
 
+#include <unordered_set>
+
 namespace rt
 {
 
@@ -457,7 +459,7 @@ Mesh LoadTrianglePLY(Arena *arena, string filename)
     return LoadPLY(arena, filename, GeometryType::TriangleMesh);
 }
 
-Mesh *LoadQuadObj(Arena *arena, string filename, int &numMeshes)
+Mesh *LoadQuadObj(Arena *arena, string filename, int &numMeshes, int &actualNumMeshes)
 {
     TempArena temp = ScratchStart(0, 0);
     string buffer  = OS_MapFileRead(filename);
@@ -476,7 +478,10 @@ Mesh *LoadQuadObj(Arena *arena, string filename, int &numMeshes)
     int vertexOffset = 1;
     int normalOffset = 1;
 
+    std::unordered_set<string> meshHashSet;
+    bool repeatedMesh   = false;
     bool processingMesh = false;
+    int totalNumMeshes  = 0;
 
     auto Skip = [&]() { SkipToNextChar(&tokenizer, '#'); };
 
@@ -485,62 +490,69 @@ Mesh *LoadQuadObj(Arena *arena, string filename, int &numMeshes)
         Skip();
 
         string word = ReadWord(&tokenizer);
-        if (word == "f")
+
+        bool isEndOfBuffer = EndOfBuffer(&tokenizer);
+        if (word == "g" || isEndOfBuffer)
         {
-            if (!processingMesh)
+            Skip();
+            string groupName = ReadWord(&tokenizer);
+            if (groupName == "default" || isEndOfBuffer)
             {
-                processingMesh = true;
-            }
-        }
-        else
-        {
-            if (processingMesh)
-            {
-                Mesh mesh;
-                mesh.numVertices = (u32)vertices.size();
-                mesh.numIndices  = (u32)indices.size();
-
-                mesh.p = PushArrayNoZero(arena, Vec3f, vertices.size());
-                vertexOffset += (int)vertices.size();
-                MemoryCopy(mesh.p, vertices.data(), sizeof(Vec3f) * vertices.size());
-
-                Assert(normals.size() == vertices.size());
-
-                int *normalIndices = PushArray(temp.arena, int, mesh.numVertices);
-                MemorySet(normalIndices, 0xff, sizeof(int) * mesh.numVertices);
-
-                mesh.n = PushArrayNoZero(arena, Vec3f, normals.size());
-                normalOffset += (int)normals.size();
-                mesh.indices = PushArrayNoZero(arena, u32, indices.size());
-                // Ensure that vertex index and normal index pairings are consistent
-                for (u32 i = 0; i < mesh.numIndices; i++)
+                if (processingMesh)
                 {
-                    i32 vertexIndex = indices[i][0];
-                    i32 normalIndex = indices[i][2];
-
-                    if (normalIndices[vertexIndex] != 0xffffffff)
+                    if (!repeatedMesh)
                     {
-                        ErrorExit(normalIndices[vertexIndex] == normalIndex,
-                                  "Face-varying normals currently unsupported.\n");
+                        Mesh mesh;
+                        mesh.numVertices = (u32)vertices.size();
+                        mesh.numIndices  = (u32)indices.size();
+
+                        mesh.p = PushArrayNoZero(arena, Vec3f, vertices.size());
+                        vertexOffset += (int)vertices.size();
+                        MemoryCopy(mesh.p, vertices.data(), sizeof(Vec3f) * vertices.size());
+
+                        Assert(normals.size() == vertices.size());
+
+                        int *normalIndices = PushArray(temp.arena, int, mesh.numVertices);
+                        MemorySet(normalIndices, 0xff, sizeof(int) * mesh.numVertices);
+
+                        mesh.n = PushArrayNoZero(arena, Vec3f, normals.size());
+                        normalOffset += (int)normals.size();
+                        mesh.indices = PushArrayNoZero(arena, u32, indices.size());
+                        // Ensure that vertex index and normal index pairings are consistent
+                        for (u32 i = 0; i < mesh.numIndices; i++)
+                        {
+                            i32 vertexIndex = indices[i][0];
+                            i32 normalIndex = indices[i][2];
+
+                            if (normalIndices[vertexIndex] != 0xffffffff)
+                            {
+                                ErrorExit(normalIndices[vertexIndex] == normalIndex,
+                                          "Face-varying normals currently unsupported.\n");
+                            }
+                            normalIndices[vertexIndex] = normalIndex;
+                            mesh.n[vertexIndex]        = normals[normalIndex];
+                            mesh.indices[i]            = vertexIndex;
+                        }
+
+                        meshes.push_back(mesh);
+
+                        vertices.clear();
+                        normals.clear();
+                        indices.clear();
                     }
-                    normalIndices[vertexIndex] = normalIndex;
-                    mesh.n[vertexIndex]        = normals[normalIndex];
-                    mesh.indices[i]            = vertexIndex;
+                    repeatedMesh = false;
+                    totalNumMeshes++;
                 }
-
-                meshes.push_back(mesh);
-
-                vertices.clear();
-                normals.clear();
-                indices.clear();
                 processingMesh = false;
             }
-        }
-        if (EndOfBuffer(&tokenizer)) break;
-
-        if (word == "g")
-        {
-            SkipToNextLine(&tokenizer);
+            else
+            {
+                processingMesh     = true;
+                const auto &result = meshHashSet.find(groupName);
+                if (result != meshHashSet.end()) repeatedMesh = true;
+                else meshHashSet.insert(groupName);
+            }
+            if (isEndOfBuffer) break;
         }
         else if (word == "mtllib")
         {
@@ -599,7 +611,8 @@ Mesh *LoadQuadObj(Arena *arena, string filename, int &numMeshes)
     }
 
     ScratchEnd(temp);
-    numMeshes          = (int)meshes.size();
+    numMeshes          = totalNumMeshes;
+    actualNumMeshes    = (int)meshes.size();
     Mesh *outputMeshes = PushArrayNoZero(arena, Mesh, numMeshes);
     MemoryCopy(outputMeshes, meshes.data(), sizeof(Mesh) * numMeshes);
     return outputMeshes;

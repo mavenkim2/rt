@@ -77,7 +77,7 @@ T Lerp(F t, T a, T b)
 }
 
 template <typename T>
-T Clamp(const T &min, const T &max, const T &x)
+T Clamp(const T &x, const T &min, const T &max)
 {
     return Max(Min(max, x), min);
 }

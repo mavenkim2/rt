@@ -155,8 +155,8 @@ Image LoadHDR(const char *file)
 
 u8 *GetColor(const Image *image, i32 x, i32 y)
 {
-    x = Clamp(0, image->width - 1, x);
-    y = Clamp(0, image->height - 1, y);
+    x = Clamp(x, 0, image->width - 1);
+    y = Clamp(y, 0, image->height - 1);
 
     return image->contents + x * image->bytesPerPixel +
            y * image->width * image->bytesPerPixel;

@@ -199,4 +199,11 @@ inline i32 PermutationElement(u32 i, u32 l, u32 p)
     } while (i >= l);
     return (i + p) % l;
 }
+
 } // namespace rt
+
+template <>
+struct std::hash<rt::string>
+{
+    size_t operator()(const rt::string &k) const { return rt::Hash(k); }
+};

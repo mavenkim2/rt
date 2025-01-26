@@ -85,7 +85,8 @@ typedef HashMap<NamedPacket> SceneHashMap;
 struct MoanaOBJMeshes
 {
     Mesh *meshes;
-    int numMeshes;
+    int total;
+    int num;
     int offset;
 };
 
@@ -676,13 +677,13 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             string subDirectory = PathBaseDirectory(currentFilename);
             string objFile      = PushStr8F(temp.arena, "%Sobj/%S/archives/%S.obj", directory,
                                             subDirectory, objFromPbrt);
-            int num;
+            int total, num;
             if (OS_FileExists(objFile))
             {
-                Mesh *meshes = LoadQuadObj(tempArena, objFile, num);
+                Mesh *meshes = LoadQuadObj(tempArena, objFile, total, num);
                 Assert(state->objMeshes.size() == 0);
                 Assert(state->shapes.totalCount == 0);
-                state->objMeshes.emplace_back(MoanaOBJMeshes{meshes, num, 0});
+                state->objMeshes.emplace_back(MoanaOBJMeshes{meshes, total, num, 0});
             }
             else
             {
@@ -690,10 +691,10 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                                     objFromPbrt);
                 if (OS_FileExists(objFile))
                 {
-                    Mesh *meshes = LoadQuadObj(tempArena, objFile, num);
+                    Mesh *meshes = LoadQuadObj(tempArena, objFile, total, num);
                     Assert(state->objMeshes.size() == 0);
                     Assert(state->shapes.totalCount == 0);
-                    state->objMeshes.emplace_back(MoanaOBJMeshes{meshes, num, 0});
+                    state->objMeshes.emplace_back(MoanaOBJMeshes{meshes, total, num, 0});
                 }
             }
         }
@@ -854,9 +855,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                     currentGraphicsState.transform *
                     AffineSpace(Vec3f(r0c0, r0c1, r0c2), Vec3f(r1c0, r1c1, r1c2),
                                 Vec3f(r2c0, r2c1, r2c2), Vec3f(r3c0, r3c1, r3c2));
-                SkipToNextChar(&tokenizer);
-                bool result = Advance(&tokenizer, "]\n");
-                Assert(result);
+                AdvanceToNextParameter(&tokenizer);
             }
             break;
             case "CoordinateSystem"_sid:
@@ -1539,8 +1538,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
 
     BuilderNode bNode = {};
 
-    Scheduler::Counter counter = {};
-    StringBuilder *builders    = 0;
+    StringBuilder *builders = 0;
 
     if (state)
     {
@@ -1552,11 +1550,12 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
             textureHashMap->Merge(state->textureHashMaps[i]);
         }
 
-        scheduler.Schedule(&counter, state->numProcessors, 1, [=](u32 jobID) {
-            StringBuilder *builder = &builders[jobID];
-            Arena *arena           = state->arenas[jobID];
+        for (u32 i = 0; i < state->numProcessors; i++)
+        {
+            StringBuilder *builder = &builders[i];
+            Arena *arena           = state->arenas[i];
             builder->arena         = arena;
-            auto &list             = state->materials[jobID];
+            auto &list             = state->materials[i];
 
             for (auto *node = list.first; node != 0; node = node->next)
             {
@@ -1566,7 +1565,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                     WriteMaterials(builder, textureHashMap, packet, state->hashMapSize - 1);
                 }
             }
-        });
+        }
     }
 
     if (info->shapes.totalCount && info->fileInstances.totalCount == 0)
@@ -1576,10 +1575,16 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
         // MOANA ONLY
         if (info->objMeshes.size() != 0)
         {
+            int total = 0;
+            for (auto &objMesh : info->objMeshes)
+            {
+                total += objMesh.total;
+            }
+            Assert(total == info->shapes.totalCount);
             for (auto &objMesh : info->objMeshes)
             {
                 int offset = objMesh.offset;
-                int count  = objMesh.numMeshes;
+                int count  = objMesh.num;
                 bool done  = false;
                 for (auto *node = info->shapes.first; node != 0; node = node->next)
                 {

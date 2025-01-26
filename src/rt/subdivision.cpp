@@ -12,7 +12,7 @@ namespace rt
 struct Vertex
 {
     void Clear(void * = 0) { p = Vec3f(0.f); }
-    void AddWithWeight(Vertex &src, f32 weight) { p += weight * src.p; }
+    void AddWithWeight(const Vertex &src, f32 weight) { p += weight * src.p; }
     Vec3f p;
 };
 
@@ -417,7 +417,8 @@ Mesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene, const Mat4 &NDC
         Far::TopologyRefiner *refiner = Far::TopologyRefinerFactory<Descriptor>::Create(
             desc, Far::TopologyRefinerFactory<Descriptor>::Options(type, options));
 
-        Far::PatchTableFactory::Options patchOptions(maxMeshEdgeRate);
+        int tessDepth = Clamp(Log2Int(maxMeshEdgeRate) + 1, 1, 10);
+        Far::PatchTableFactory::Options patchOptions(tessDepth);
         patchOptions.SetEndCapType(Far::PatchTableFactory::Options::ENDCAP_GREGORY_BASIS);
 
         Far::TopologyRefiner::AdaptiveOptions adaptiveOptions =
@@ -428,21 +429,23 @@ Mesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene, const Mat4 &NDC
         OpenSubdiv::Far::PatchMap patchMap(*patchTable);
 
         // Feature adaptive refinment
-        int size         = refiner->GetNumVerticesTotal();
-        Vertex *vertices = PushArrayNoZero(scratch.temp.arena, Vertex, size);
+        int size           = refiner->GetNumVerticesTotal();
+        int numLocalPoints = patchTable->GetNumLocalPoints();
+        Vertex *vertices = PushArrayNoZero(scratch.temp.arena, Vertex, size + numLocalPoints);
         MemoryCopy(vertices, controlMesh->p, sizeof(Vec3f) * controlMesh->numVertices);
 
         Vertex *src        = vertices;
         i32 nRefinedLevels = refiner->GetNumLevels();
         Far::PrimvarRefiner primvarRefiner(*refiner);
 
-        Assert(nRefinedLevels == 1);
         for (i32 i = 1; i < nRefinedLevels; i++)
         {
             Vertex *dst = src + refiner->GetLevel(i - 1).GetNumVertices();
             primvarRefiner.Interpolate(i, src, dst);
             src = dst;
         }
+
+        patchTable->ComputeLocalPointValues(&vertices[0], &vertices[size]);
 
         PtexTexture *texture =
             (PtexTexture *)baseScene
