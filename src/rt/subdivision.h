@@ -34,67 +34,74 @@ struct OpenSubdivPatch
     {
     }
 
-#if 0
-    void Split4(OpenSubdivMesh *mesh, OpenSubdivPatch &out0, OpenSubdivPatch &out1,
-                OpenSubdivPatch &out2, OpenSubdivPatch &out3)
+    __forceinline int GetGridIndex(int u, int v) const
     {
-        TempArena temp = ScratchStart(0, 0);
-        int edgeRateU  = Max(edgeRates[0], edgeRates[2]);
-        int edgeRateV  = Max(edgeRates[1], edgeRates[3]);
-
-        int numTriangles[] = {
-            (edgeRates[0] - 1) + (edgeRateU - 1),
-            (edgeRates[1] - 1) + (edgeRateV - 1),
-            (edgeRates[2] - 1) + (edgeRateU - 1),
-            (edgeRates[3] - 1) + (edgeRateV - 1),
-        };
-
-        int totalNumTriangles = numTriangles0 + numTriangles1 + numTriangles2 + numTriangles3;
-        Assert(3 * totalNumTriangles == stitchingCount);
-
-        int *tempIndices = PushArrayNoZero(temp.arena, int, totalNumTriangles);
-
-        int counts[4] = {
-            numTriangles0 / 2 + numTriangles3 / 2 + numTriangles3 & 1,
-            numTriangles0 / 2 + numTriangles0 & 1 + numTriangles1 / 2,
-            numTriangles1 / 2 + numTriangles1 & 1 + numTriangles2 / 2,
-            numTriangles2 / 2 + numTriangles2 & 1 + numTriangles3 / 2,
-        };
-        int offsets[4] = {};
-
-        int total = 0;
-        for (int i = 0; i < 4; i++)
-        {
-            int offset = counts[i];
-            offsets[i] = total;
-            total += offset;
-        }
-        Assert(total == stitchingCount);
-
-        for (int side = 0; side < 4; side++)
-        {
-            int num = numTriangles[side];
-            for (int i = 0; i < num; i++)
-            {
-                int quadrant        = (side + (i >= num / 2)) & 3;
-                int offset          = offsets[quadrant]++;
-                tempIndices[offset] = mesh->stitchingIndices[stitchingStart + offset];
-            }
-        }
-
-        Assert(offsets[3] == totalNumTriangles);
-        out0.stitchingStart = 0;
-        out0.stitchingCount = offsets[0];
-        out1.stitchingStart = offsets[0];
-        out1.stitchingCount = offsets[1] - offsets[0];
-        out2.stitchingStart = offsets[1];
-        out2.stitchingCount = offsets[2] - offsets[1];
-        out3.stitchingCount = offsets[2];
-        out3.stitchingCount = offsets[3] - offsets[2];
-
-        ScratchEnd(temp);
+        int edgeU     = Max(edgeRates[0], edgeRates[2]);
+        int edgeV     = Max(edgeRates[1], edgeRates[3]);
+        int gridIndex = gridIndexStart + v * (edgeU - 1) + u;
+        Assert(gridIndex < gridIndexStart + (edgeU - 1) * (edgeV - 1));
+        return gridIndex;
     }
-#endif
+
+// void Split4(OpenSubdivMesh *mesh, OpenSubdivPatch &out0, OpenSubdivPatch &out1,
+//             OpenSubdivPatch &out2, OpenSubdivPatch &out3)
+// {
+//     TempArena temp = ScratchStart(0, 0);
+//     int edgeRateU  = Max(edgeRates[0], edgeRates[2]);
+//     int edgeRateV  = Max(edgeRates[1], edgeRates[3]);
+//
+//     int numTriangles[] = {
+//         (edgeRates[0] - 1) + (edgeRateU - 1),
+//         (edgeRates[1] - 1) + (edgeRateV - 1),
+//         (edgeRates[2] - 1) + (edgeRateU - 1),
+//         (edgeRates[3] - 1) + (edgeRateV - 1),
+//     };
+//
+//     int totalNumTriangles = numTriangles0 + numTriangles1 + numTriangles2 +
+//     numTriangles3; Assert(3 * totalNumTriangles == stitchingCount);
+//
+//     int *tempIndices = PushArrayNoZero(temp.arena, int, totalNumTriangles);
+//
+//     int counts[4] = {
+//         numTriangles0 / 2 + numTriangles3 / 2 + numTriangles3 & 1,
+//         numTriangles0 / 2 + numTriangles0 & 1 + numTriangles1 / 2,
+//         numTriangles1 / 2 + numTriangles1 & 1 + numTriangles2 / 2,
+//         numTriangles2 / 2 + numTriangles2 & 1 + numTriangles3 / 2,
+//     };
+//     int offsets[4] = {};
+//
+//     int total = 0;
+//     for (int i = 0; i < 4; i++)
+//     {
+//         int offset = counts[i];
+//         offsets[i] = total;
+//         total += offset;
+//     }
+//     Assert(total == stitchingCount);
+//
+//     for (int side = 0; side < 4; side++)
+//     {
+//         int num = numTriangles[side];
+//         for (int i = 0; i < num; i++)
+//         {
+//             int quadrant        = (side + (i >= num / 2)) & 3;
+//             int offset          = offsets[quadrant]++;
+//             tempIndices[offset] = mesh->stitchingIndices[stitchingStart + offset];
+//         }
+//     }
+//
+//     Assert(offsets[3] == totalNumTriangles);
+//     out0.stitchingStart = 0;
+//     out0.stitchingCount = offsets[0];
+//     out1.stitchingStart = offsets[0];
+//     out1.stitchingCount = offsets[1] - offsets[0];
+//     out2.stitchingStart = offsets[1];
+//     out2.stitchingCount = offsets[2] - offsets[1];
+//     out3.stitchingCount = offsets[2];
+//     out3.stitchingCount = offsets[3] - offsets[2];
+//
+//     ScratchEnd(temp);
+// }
 };
 
 // TODO: can have stitching quads (for edges that match the
