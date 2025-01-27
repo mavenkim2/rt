@@ -105,16 +105,11 @@ void Subdivide(Mesh *mesh)
             Vec3f pos = {};
             for (int j = 0; j < cvIndices.size(); j++)
             {
-                int index = cvIndices[j];
-                if (index == 25618 && c == 0)
-                {
-                    int stop = 5;
-                }
+                int index      = cvIndices[j];
                 const Vec3f &p = vertices[index].p;
                 pos += pWeights[j] * p;
             }
             cornerPos[c] = pos;
-            int stop     = 5;
         }
     }
     delete refiner;
@@ -241,12 +236,9 @@ struct TessellatedVertices
 {
     std::vector<Vec3f> vertices;
     std::vector<Vec3f> normals;
-    std::vector<Vec2f> uvs;
-    // std::vector<int> faceIDs;
 
     // Stitching triangles
     std::vector<int> stitchingIndices;
-    std::vector<EdgeInfo> edgeInfos;
 
     // stack variables
     int currentGridOffset;
@@ -314,10 +306,6 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
         Vec2i(0, -1),
     };
 
-    int quadTable[] = {
-        0, 1, 2, 0, 2, 3,
-    };
-
     // TODO: catmull clark primitive
     OpenSubdivMesh *outputMeshes = PushArray(arena, OpenSubdivMesh, numMeshes);
 
@@ -331,8 +319,6 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
                                              controlMesh->numVertices);
         tessellatedVertices.normals.reserve(tessellatedVertices.normals.capacity() +
                                             controlMesh->numVertices);
-        tessellatedVertices.uvs.reserve(tessellatedVertices.uvs.capacity() +
-                                        controlMesh->numVertices);
 
         std::vector<FaceInfo> faceInfos(controlMesh->numFaces);
         std::vector<EdgeInfo> edgeInfos;
@@ -387,7 +373,8 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
                     f32 radius     = Length(p0 - p1) / 2.f;
 
                     int edgeFactor = int(edgesPerScreenHeight * radius *
-                                         Abs(NDCFromCamera[1][1] / midPoint.z));
+                                         Abs(NDCFromCamera[1][1] / midPoint.z)) -
+                                     1;
 
                     edgeFactor = Clamp(edgeFactor, 1, 8);
                     // edgeFactor     = Clamp(edgeFactor, 1, 64);
@@ -477,7 +464,6 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
             Vec3f normal = Normalize(Cross(dpdu, dpdv));
             tessellatedVertices.vertices.push_back(pos);
             tessellatedVertices.normals.push_back(normal);
-            tessellatedVertices.uvs.push_back(sample.uv);
         }
 
         int totalNumPatchFaces = 0;
@@ -488,7 +474,6 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
         for (int f = 0; f < (int)controlMesh->numFaces; f++)
         {
             int face = f;
-            // TODO THIS IS A HACK
             // int face =
             //     f >= (int)controlMesh->numFaces / 2 ? f - (int)controlMesh->numFaces / 2 :
             //     f;
@@ -526,11 +511,14 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
             }
 
             // Effectively adds a center point
-            if (maxEdgeRates[0] == 1 || maxEdgeRates[1] == 1)
+            if (maxEdgeRates[0] == 1)
             {
                 maxEdgeRates[0] = 2;
-                maxEdgeRates[1] = 2;
                 scale[0]        = 0.5f;
+            }
+            if (maxEdgeRates[1] == 1)
+            {
+                maxEdgeRates[1] = 2;
                 scale[1]        = 0.5f;
             }
             // Inner grid of vertices (local to a patch)
@@ -607,6 +595,12 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
                     tessellatedVertices.normals.push_back(normal);
                     tessellatedVertices.SetInnerGrid(uStep, vStep) = pos;
                 }
+            }
+
+            if (edgeRates[0] == 1 && edgeRates[1] == 8 && edgeRates[2] == 1 &&
+                edgeRates[3] == 8)
+            {
+                int stop = 5;
             }
 
             // Generate stitching triangles to compensate for differing edge rates
@@ -695,6 +689,9 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
         outputMesh->normals  = StaticArray<Vec3f>(arena, tessellatedVertices.normals);
         outputMesh->stitchingIndices =
             StaticArray<int>(arena, tessellatedVertices.stitchingIndices);
+        outputMesh->untessellatedPatches =
+            StaticArray<UntessellatedPatch>(arena, untessellatedPatches);
+
         outputMesh->patches = StaticArray<OpenSubdivPatch>(arena, patches);
 
         // Assert(tessellatedVertices.stitchingIndices.size() ==

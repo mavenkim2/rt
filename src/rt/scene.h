@@ -206,9 +206,6 @@ struct Mesh
 };
 
 template <GeometryType type, typename PrimRefType>
-struct GenerateMeshRefsHelper;
-
-template <GeometryType type, typename PrimRefType>
 struct GenerateMeshRefsHelper
 {
     Vec3f *p;

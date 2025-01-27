@@ -646,8 +646,8 @@ struct CatmullClarkPatch
     {
         Assert(end > begin);
 
-        geomID = ref->geomID;
-        primID = ref->primID;
+        geomID = ref[begin].geomID;
+        primID = ref[begin].primID;
         begin++;
     }
 };

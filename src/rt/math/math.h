@@ -250,43 +250,6 @@ inline u64 LeftShift2(u64 x)
 
 inline u64 EncodeMorton2(u32 x, u32 y) { return (LeftShift2(y) << 1) | LeftShift2(x); }
 
-#if 0
-inline LaneVec2i EncodeMorton2(LaneU32 x, LaneU32 y)
-{
-    LaneVec2i vecs[2];
-
-    vecs[0].x = SignExtend(x);
-    vecs[0].y = SignExtend(y);
-    vecs[1].x = SignExtend(PermuteU32(x, 2, 3, 2, 3));
-    vecs[1].y = SignExtend(PermuteU32(y, 2, 3, 2, 3));
-
-    LaneU32 mask0 = LaneU32FromU64(0xffffffffull);
-    LaneU32 mask1 = LaneU32FromU64(0x0000ffff0000ffffull);
-    LaneU32 mask2 = LaneU32FromU64(0x00ff00ff00ff00ffull);
-    LaneU32 mask3 = LaneU32FromU64(0x0f0f0f0f0f0f0f0full);
-    LaneU32 mask4 = LaneU32FromU64(0x3333333333333333ull);
-    LaneU32 mask5 = LaneU32FromU64(0x5555555555555555ull);
-
-    for (u32 i = 0; i < ArrayLength(vecs); i++)
-    {
-        for (u32 j = 0; j < 2; j++)
-        {
-            vecs[i][j] = vecs[i][j] & mask0;
-            vecs[i][j] = (vecs[i][j] ^ (vecs[i][j] << 16ull)) & mask1;
-            vecs[i][j] = (vecs[i][j] ^ (vecs[i][j] << 8ull)) & mask2;
-            vecs[i][j] = (vecs[i][j] ^ (vecs[i][j] << 4ull)) & mask3;
-            vecs[i][j] = (vecs[i][j] ^ (vecs[i][j] << 2ull)) & mask4;
-            vecs[i][j] = (vecs[i][j] ^ (vecs[i][j] << 1ull)) & mask5;
-        }
-    }
-
-    LaneVec2i result;
-    result.x = (vecs[0].y << 1ull) | vecs[0].x;
-    result.y = (vecs[1].y << 1ull) | vecs[1].x;
-    return result;
-}
-#endif
-
 //////////////////////////////
 // Complex numbers
 //

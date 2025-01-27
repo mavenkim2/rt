@@ -428,35 +428,6 @@ bool IsInt(string str)
 }
 
 //////////////////////////////
-// Hash
-//
-i32 HashFromString(string string)
-{
-#if 0
-    i32 result = 5381;
-    for (u64 i = 0; i < string.size; i += 1)
-    {
-        result = ((result << 5) + result) + string.str[i];
-    }
-#endif
-    i32 result = 0;
-    for (u64 i = 0; i < string.size; i++)
-    {
-        result += (string.str[i]) * ((i32)i + 119);
-    }
-    return result;
-}
-
-u64 HashStruct_(void *ptr, u64 size)
-{
-    string str;
-    str.str    = (u8 *)(ptr);
-    str.size   = size;
-    u64 result = HashFromString(str);
-    return result;
-}
-
-//////////////////////////////
 // String reading
 //
 inline b32 Advance(Tokenizer *tokenizer, string check)
@@ -753,15 +724,6 @@ bool GetBetweenPair(string &out, Tokenizer *tokenizer, const u8 ch)
     u8 left  = ch;
     u8 right = CharGetPair(ch);
 
-#if 0
-    for (; cursor < tokenizer->input.str + tokenizer->input.size && CharIsBlank(*cursor) &&
-           *cursor != '#' && *cursor != left;)
-    {
-        if (*cursor == '\n') return 0;
-        cursor++;
-    }
-    if (*cursor == '#') return 2;
-#endif
     if (*tokenizer->cursor != left) return false;
     tokenizer->cursor++;
 

@@ -15,34 +15,6 @@ inline Vec3f RandomVec3(f32 min, f32 max)
     return Vec3f(RandomFloat(min, max), RandomFloat(min, max), RandomFloat(min, max));
 }
 
-#if 0
-inline Vec3f RandomUnitVector()
-{
-    while (true)
-    {
-        Vec3f result = RandomVec3(-1, 1);
-        if (result.lengthSquared() < 1)
-        {
-            return normalize(result);
-        }
-    }
-}
-#endif
-
-#if 0
-inline Vec3f RandomInUnitDisk()
-{
-    while (true)
-    {
-        Vec3f p = Vec3f(RandomFloat(-1, 1), RandomFloat(-1, 1), 0);
-        if (p.lengthSquared() < 1)
-        {
-            return p;
-        }
-    }
-}
-#endif
-
 inline Vec3f RandomCosineDirection()
 {
     f32 r1 = RandomFloat();

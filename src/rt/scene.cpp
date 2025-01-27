@@ -960,7 +960,6 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
 {
     TempArena temp         = ScratchStart(0, 0);
     OpenSubdivMesh *meshes = (OpenSubdivMesh *)scene->primitives;
-    u32 totalNumFaces      = 0;
 
     int untessellatedPatchCount = 0;
     int tessellatedPatchCount   = 0;
@@ -971,8 +970,8 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
         tessellatedPatchCount += (int)meshes[i].patches.Length();
     }
 
-    PrimRef *refs =
-        PushArrayNoZero(temp.arena, PrimRef, untessellatedPatchCount + tessellatedPatchCount);
+    int size      = untessellatedPatchCount + tessellatedPatchCount;
+    PrimRef *refs = PushArrayNoZero(temp.arena, PrimRef, size);
 
     PrimRef *untessellatedRefs = refs;
     int untessellatedRefOffset = 0;
@@ -1002,9 +1001,9 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
             centBounds.Extend(Lane4F32(minP + maxP));
 
             PrimRef *ref = &untessellatedRefs[untessellatedRefOffset++];
-            ref->minX    = minP.x;
-            ref->minY    = minP.y;
-            ref->minZ    = minP.z;
+            ref->minX    = -minP.x;
+            ref->minY    = -minP.y;
+            ref->minZ    = -minP.z;
             ref->geomID  = 0x80000000u | i;
             ref->maxX    = maxP.x;
             ref->maxY    = maxP.y;
@@ -1032,17 +1031,18 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
             for (int index = patch->gridIndexStart; index < patch->gridIndexStart + gridCount;
                  index++)
             {
-                minP = Min(minP, vertices[indices[index]]);
-                maxP = Max(maxP, vertices[indices[index]]);
+                minP = Min(minP, vertices[index]);
+                maxP = Max(maxP, vertices[index]);
             }
 
             geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
             centBounds.Extend(Lane4F32(minP + maxP));
 
+            // TODO: make it so that I can't forget to make these negative
             PrimRef *ref = &tessellatedRefs[tessellatedRefOffset++];
-            ref->minX    = minP.x;
-            ref->minY    = minP.y;
-            ref->minZ    = minP.z;
+            ref->minX    = -minP.x;
+            ref->minY    = -minP.y;
+            ref->minZ    = -minP.z;
             ref->geomID  = i;
             ref->maxX    = maxP.x;
             ref->maxY    = maxP.y;
@@ -1054,7 +1054,7 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
     RecordAOSSplits record;
     record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
     record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
-    record.SetRange(0, untessellatedPatchCount + tessellatedPatchCount);
+    record.SetRange(0, size);
 
     scene->nodePtr = BuildQuantizedCatmullClarkBVH(settings, arenas, scene, refs, record);
     using IntersectorType =
@@ -1064,7 +1064,7 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
     Bounds b(record.geomBounds);
     Assert((Movemask(b.maxP >= b.minP) & 0x7) == 0x7);
     scene->SetBounds(b);
-    scene->numFaces = totalNumFaces;
+    scene->numFaces = size;
     ScratchEnd(temp);
 }
 
