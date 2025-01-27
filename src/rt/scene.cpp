@@ -1016,17 +1016,30 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
             Vec3f minP(pos_inf);
             Vec3f maxP(neg_inf);
 
-            int edgeRateU = Max(patch->edgeRates[0], patch->edgeRates[2]);
-            int edgeRateV = Max(patch->edgeRates[1], patch->edgeRates[3]);
+            int edgeRateU = patch->GetMaxEdgeFactorU();
+            int edgeRateV = patch->GetMaxEdgeFactorV();
 
             int gridCount = (edgeRateU - 1) * (edgeRateV - 1);
 
-            for (int index = patch->stitchingStart;
-                 index < patch->stitchingStart + patch->stitchingCount; index++)
+            for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
             {
-                minP = Min(minP, vertices[indices[index]]);
-                maxP = Max(maxP, vertices[indices[index]]);
+                auto itr = patch->CreateIterator(edgeIndex);
+                minP     = Min(Min(minP, vertices[itr.indices[0]]),
+                               Min(vertices[itr.indices[1]], vertices[itr.indices[2]]));
+                maxP     = Max(Max(maxP, vertices[itr.indices[0]]),
+                               Max(vertices[itr.indices[1]], vertices[itr.indices[2]]));
+                for (; itr.IsNotFinished(); itr.Next())
+                {
+                    minP = Min(minP, vertices[itr.indices[itr.newIndex]]);
+                    maxP = Max(maxP, vertices[itr.indices[itr.newIndex]]);
+                }
             }
+            // for (int index = patch->stitchingStart;
+            //      index < patch->stitchingStart + patch->stitchingCount; index++)
+            // {
+            //     minP = Min(minP, vertices[indices[index]]);
+            //     maxP = Max(maxP, vertices[indices[index]]);
+            // }
 
             for (int index = patch->gridIndexStart; index < patch->gridIndexStart + gridCount;
                  index++)

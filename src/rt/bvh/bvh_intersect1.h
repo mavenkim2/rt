@@ -987,16 +987,22 @@ enum class CatClarkTriangleType
     Untess,
     TessStitching,
     TessGrid,
+
+    Max,
 };
 
-u32 CreatePatchID(CatClarkTriangleType type, int index)
+static_assert((u32)CatClarkTriangleType::Max <= 4, "enum is too large\n");
+
+u32 CreatePatchID(CatClarkTriangleType type, int meta, int index)
 {
     Assert(index >= 0 && index < 0x0fffffff);
-    return ((u32)type << 28) | index;
+    Assert(meta >= 0 && meta < 4);
+    return ((u32)type << 30) | (meta << 28) | index;
 }
 
-CatClarkTriangleType GetPatchType(u32 val) { return CatClarkTriangleType(val >> 28); }
+CatClarkTriangleType GetPatchType(u32 val) { return CatClarkTriangleType(val >> 30); }
 int GetTriangleIndex(u32 val) { return val & 0x0fffffff; }
+int GetMeta(u32 val) { return (val >> 28) & 0x3; }
 
 struct CatClarkPatchIntersector
 {
@@ -1008,11 +1014,23 @@ struct CatClarkPatchIntersector
     {
         auto trueMask  = Mask<Lane8F32>(TrueTy());
         auto falseMask = Mask<Lane8F32>(FalseTy());
+
+        Vec2f uvTable[] = {
+            Vec2f(0.f, 0.f),
+            Vec2f(1.f, 0.f),
+            Vec2f(1.f, 1.f),
+            Vec2f(0.f, 1.f),
+        };
+        Vec2i uvDiffTable[] = {
+            Vec2i(1, 0),
+            Vec2i(0, 1),
+            Vec2i(-1, 0),
+            Vec2i(0, -1),
+        };
+
         Lane4F32 v0[N] = {};
         Lane4F32 v1[N] = {};
         Lane4F32 v2[N] = {};
-        alignas(4 * N) u32 geomIDs[N];
-        alignas(4 * N) u32 primIDs[N];
         alignas(4 * N) u32 patchIDs[N];
 
         int queueCount = 0;
@@ -1028,7 +1046,7 @@ struct CatClarkPatchIntersector
 
         OpenSubdivMesh *meshes = (OpenSubdivMesh *)scene->primitives;
 
-        auto EmptyQueue = [&]() {
+        auto EmptyQueue = [&](u32 geomID, u32 primID) {
             Vec3lf8 triV0, triV1, triV2;
             Transpose<N>(v0, triV0);
             Transpose<N>(v1, triV1);
@@ -1038,20 +1056,20 @@ struct CatClarkPatchIntersector
 
             Mask<LaneF32<N>> mask = TriangleIntersect(ray, itr.t, triV0, triV1, triV2, triItr);
             outMask |= mask;
-            itr.u       = Select(mask, triItr.u, itr.u);
-            itr.v       = Select(mask, triItr.v, itr.v);
-            itr.t       = Select(mask, triItr.t, itr.t);
-            itr.geomIDs = AsUInt(
-                Select(mask, AsFloat(MemSimdU32<N>::LoadU(geomIDs)), AsFloat(itr.geomIDs)));
-            itr.primIDs = AsUInt(
-                Select(mask, AsFloat(MemSimdU32<N>::LoadU(primIDs)), AsFloat(itr.primIDs)));
+            itr.u = Select(mask, triItr.u, itr.u);
+            itr.v = Select(mask, triItr.v, itr.v);
+            itr.t = Select(mask, triItr.t, itr.t);
+            itr.geomIDs =
+                AsUInt(Select(mask, AsFloat(LaneU32<N>(geomID)), AsFloat(itr.geomIDs)));
+            itr.primIDs =
+                AsUInt(Select(mask, AsFloat(LaneU32<N>(primID)), AsFloat(itr.primIDs)));
             patchID = AsUInt(
                 Select(mask, AsFloat(MemSimdU32<N>::LoadU(patchIDs)), AsFloat(patchID)));
 
             queueCount = 0;
         };
-        auto FlushQueue = [&]() {
-            if (queueCount == N) EmptyQueue();
+        auto FlushQueue = [&](u32 geomID, u32 primID) {
+            if (queueCount == N) EmptyQueue(geomID, primID);
         };
 
         for (u32 i = 0; i < num; i++)
@@ -1066,21 +1084,19 @@ struct CatClarkPatchIntersector
             const auto &indices  = mesh->stitchingIndices;
             const auto &vertices = mesh->vertices;
 
-            auto PushQueue = [&](CatClarkTriangleType type, int id, int id0, int id1,
-                                 int id2) {
+            auto PushQueue = [&](CatClarkTriangleType type, int id, int id0, int id1, int id2,
+                                 int meta = 0) {
                 Vec3f p0 = vertices[id0];
                 Vec3f p1 = vertices[id1];
                 Vec3f p2 = vertices[id2];
 
-                geomIDs[queueCount]  = geomID;
-                primIDs[queueCount]  = primID;
-                patchIDs[queueCount] = CreatePatchID(type, id);
+                patchIDs[queueCount] = CreatePatchID(type, meta, id);
                 Lane4F32::Store(v0 + queueCount, Lane4F32(p0));
                 Lane4F32::Store(v1 + queueCount, Lane4F32(p1));
                 Lane4F32::Store(v2 + queueCount, Lane4F32(p2));
                 queueCount++;
 
-                FlushQueue();
+                FlushQueue(geomID, primID);
             };
 
             if (isUntessellated)
@@ -1099,30 +1115,43 @@ struct CatClarkPatchIntersector
                 const OpenSubdivPatch *patch = &mesh->patches[primID];
 
                 int count = 0;
-                for (int triIndex = 0; triIndex < patch->stitchingCount / 3; triIndex++)
+
+                // TODO: once this is working I can make stitching indices
+                // completely implicit
+                // for (int triIndex = 0; triIndex < patch->stitchingCount / 3; triIndex++)
+                // {
+                //     int index = patch->stitchingStart + 3 * triIndex;
+                //     PushQueue(CatClarkTriangleType::TessStitching, count++,
+                //     indices[index + 0],
+                //               indices[index + 1], indices[index + 2]);
+                // }
+
+                // Step stitching indices
+                for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
                 {
-                    int index = patch->stitchingStart + 3 * triIndex;
-                    PushQueue(CatClarkTriangleType::TessStitching, count++, indices[index + 0],
-                              indices[index + 1], indices[index + 2]);
-                    if (num == 2 && primitives[0].primID == 27178 &&
-                        primitives[1].primID == 7038 && (Movemask(outMask) & 0x20) &&
-                        patchID[5] == 268435485)
+                    auto iterator = patch->CreateIterator(edgeIndex);
+                    for (; iterator.IsNotFinished(); iterator.Next())
                     {
-                        int stop = 5;
+                        PushQueue(CatClarkTriangleType::TessStitching, count++,
+                                  iterator.indices[0], iterator.indices[1],
+                                  iterator.indices[2], edgeIndex);
                     }
                 }
 
-                Assert(3 * count == patch->stitchingCount);
+                // Step inner grid
+                int maxEdgeRates[2] = {
+                    Max(patch->edgeInfo[0].GetEdgeFactor(),
+                        patch->edgeInfo[2].GetEdgeFactor()),
+                    Max(patch->edgeInfo[1].GetEdgeFactor(),
+                        patch->edgeInfo[3].GetEdgeFactor()),
+                };
 
-                int edgeU = Max(patch->edgeRates[0], patch->edgeRates[2]);
-                int edgeV = Max(patch->edgeRates[1], patch->edgeRates[3]);
-
-                Vec2f uvStep(1.f / edgeU, 1.f / edgeV);
+                Vec2f uvStep(1.f / maxEdgeRates[0], 1.f / maxEdgeRates[1]);
 
                 count = 0;
-                for (int v = 0; v < edgeV - 2; v++)
+                for (int v = 0; v < maxEdgeRates[1] - 2; v++)
                 {
-                    for (int u = 0; u < edgeU - 2; u++)
+                    for (int u = 0; u < maxEdgeRates[0] - 2; u++)
                     {
                         const int id00 = patch->GetGridIndex(u, v);
                         const int id10 = patch->GetGridIndex(u + 1, v);
@@ -1130,21 +1159,12 @@ struct CatClarkPatchIntersector
                         const int id01 = patch->GetGridIndex(u, v + 1);
 
                         PushQueue(CatClarkTriangleType::TessGrid, count++, id00, id10, id11);
-                        if ((Movemask(outMask) & 0x20) && patchID[5] == 268435485)
-                        {
-                            int stop = 5;
-                        }
                         PushQueue(CatClarkTriangleType::TessGrid, count++, id00, id11, id01);
-                        if ((Movemask(outMask) & 0x20) && patchID[5] == 268435485)
-                        {
-                            int stop = 5;
-                        }
                     }
                 }
             }
+            EmptyQueue(geomID, primID);
         }
-
-        EmptyQueue();
 
         if (Any(outMask))
         {
@@ -1213,8 +1233,10 @@ struct CatClarkPatchIntersector
                     OpenSubdivPatch *patch = &mesh->patches[primID];
                     faceID                 = patch->faceID;
 
-                    int edgeU = Max(patch->edgeRates[0], patch->edgeRates[2]);
-                    int edgeV = Max(patch->edgeRates[1], patch->edgeRates[3]);
+                    int edgeU = Max(patch->edgeInfo[0].GetEdgeFactor(),
+                                    patch->edgeInfo[2].GetEdgeFactor());
+                    int edgeV = Max(patch->edgeInfo[1].GetEdgeFactor(),
+                                    patch->edgeInfo[3].GetEdgeFactor());
 
                     Vec2f uvStep(1.f / edgeU, 1.f / edgeV);
 
@@ -1247,102 +1269,16 @@ struct CatClarkPatchIntersector
                 break;
                 case CatClarkTriangleType::TessStitching:
                 {
-                    // TODO: it might be worth doing this just once per
-                    // ray intersection query, instead of per intersection
-                    Vec2f uvTable[] = {
-                        Vec2f(0.f, 0.f),
-                        Vec2f(1.f, 0.f),
-                        Vec2f(1.f, 1.f),
-                        Vec2f(0.f, 1.f),
-                    };
-                    Vec2i uvDiffTable[] = {
-                        Vec2i(1, 0),
-                        Vec2i(0, 1),
-                        Vec2i(-1, 0),
-                        Vec2i(0, -1),
-                    };
-
                     OpenSubdivPatch *patch = &mesh->patches[primID];
                     faceID                 = patch->faceID;
-                    Assert(3 * id < patch->stitchingCount);
-                    int start = patch->stitchingStart + 3 * id;
-
-                    vertexIndices[0] = mesh->stitchingIndices[start + 0];
-                    vertexIndices[1] = mesh->stitchingIndices[start + 1];
-                    vertexIndices[2] = mesh->stitchingIndices[start + 2];
 
                     // Reconstruct uvs
-                    int edgeU = Max(2, Max(patch->edgeRates[0], patch->edgeRates[2]));
-                    int edgeV = Max(2, Max(patch->edgeRates[1], patch->edgeRates[3]));
-
-                    Vec2f edgeDiv(1.f / edgeU, 1.f / edgeV);
-
-                    int numTriangles[] = {
-                        (patch->edgeRates[0] - 1) + (edgeU - 1),
-                        (patch->edgeRates[1] - 1) + (edgeV - 1),
-                        (patch->edgeRates[2] - 1) + (edgeU - 1),
-                        (patch->edgeRates[3] - 1) + (edgeV - 1),
-                    };
-                    int offsets[4] = {};
-
-                    int offset = 0;
-                    for (int i = 0; i < 4; i++)
-                    {
-                        int n      = numTriangles[i];
-                        offsets[i] = offset;
-                        offset += n;
-                    }
-
-                    Assert(3 * offset == patch->stitchingCount);
-
-                    int edgeIndex =
-                        (id >= offsets[1]) + (id >= offsets[2]) + (id >= offsets[3]);
-                    Assert(edgeIndex >= 0 && edgeIndex < 4);
-                    int triangleID    = id - offsets[edgeIndex];
-                    int maxEdge       = (edgeIndex & 1) ? edgeV : edgeU;
-                    int edgeFactor    = patch->edgeRates[edgeIndex];
-                    f32 edgeFactorInv = 1.f / edgeFactor;
-
-                    Vec2i uvStart =
-                        uvTable[edgeIndex] * Vec2f((f32)edgeU, (f32)edgeV) +
-                        Vec2f(uvDiffTable[edgeIndex] + uvDiffTable[(edgeIndex + 1) & 3]);
-                    int edgeStep = 0;
-
-                    int q = maxEdge - edgeFactor * 3;
-
-                    for (int _ = 0; _ < triangleID; _++)
-                    {
-                        if (q >= 0)
-                        {
-                            uvStart += uvDiffTable[edgeIndex];
-                            q -= 2 * edgeFactor;
-                        }
-                        else
-                        {
-                            edgeStep++;
-                            q += 2 * edgeFactor;
-                        }
-                    }
-
-                    if (q >= 0)
-                    {
-                        uvs[0] = Vec2f(uvStart) * edgeDiv;
-                        uvs[1] =
-                            (uvTable[edgeIndex] + Vec2f(uvDiffTable[edgeIndex] * edgeStep)) *
-                            edgeFactorInv;
-                        uvs[2] = Vec2f(uvStart + uvDiffTable[edgeIndex]) * edgeDiv;
-                    }
-                    else
-                    {
-                        Assert(edgeStep < edgeFactor);
-                        uvs[0] =
-                            (uvTable[edgeIndex] + Vec2f(uvDiffTable[edgeIndex] * edgeStep)) *
-                            edgeFactorInv;
-                        uvs[1] = (uvTable[edgeIndex] +
-                                  Vec2f(uvDiffTable[edgeIndex] * (edgeStep + 1))) *
-                                 edgeFactorInv;
-                        uvs[2] = Vec2f(uvStart) * edgeDiv;
-                    }
+                    int edgeIndex = GetMeta(patchIndex);
+                    Vec2f uv[3];
+                    auto iterator    = patch->GetUVs(edgeIndex, uv);
+                    vertexIndices[0] = iterator.indices[0];
+                    vertexIndices[1] = iterator.indices[1];
+                    vertexIndices[2] = iterator.indices[2];
                 }
                 break;
             }

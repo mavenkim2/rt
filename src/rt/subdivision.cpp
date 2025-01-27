@@ -9,6 +9,22 @@
 namespace rt
 {
 
+PatchItr OpenSubdivPatch::CreateIterator(int edge) const
+{
+    PatchItr itr = PatchItr(this, edge);
+
+    Assert(itr.IsNotFinished());
+    itr.Next();
+    return itr;
+}
+
+PatchItr OpenSubdivPatch::GetUVs(int id, Vec2f uv[3]) const
+{
+    PatchItr itr = PatchItr(this, id);
+    itr.GetUVs(id, uv);
+    return itr;
+}
+
 struct Vertex
 {
     void Clear(void * = 0) { p = Vec3f(0.f); }
@@ -209,22 +225,6 @@ void EvaluateLimitSurfacePosition(const Vertex *vertices, const Far::PatchMap *p
 
 // Edge vertices (shared by edges)
 // TODO: use half-edge structure?
-struct EdgeInfo
-{
-    int indexStart;
-    int edgeFactor;
-    int id0, id1;
-
-    int GetFirst(bool reversed) const { return reversed ? id1 : id0; }
-    int GetLast(bool reversed) const { return reversed ? id0 : id1; }
-
-    int GetVertexId(int edgeStep) const
-    {
-        Assert(edgeStep >= 0 && edgeStep <= edgeFactor);
-        return edgeStep == 0 ? id0
-                             : (edgeStep == edgeFactor ? id1 : indexStart + edgeStep - 1);
-    }
-};
 
 struct FaceInfo
 {
@@ -475,8 +475,8 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
         {
             int face = f;
             // int face =
-            //     f >= (int)controlMesh->numFaces / 2 ? f - (int)controlMesh->numFaces / 2 :
-            //     f;
+            //     f >= (int)controlMesh->numFaces / 2 ? f - (int)controlMesh->numFaces / 2
+            //     : f;
 
             FaceInfo &faceInfo = faceInfos[f];
             // Compute limit surface samples
@@ -523,9 +523,10 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
             }
             // Inner grid of vertices (local to a patch)
             tessellatedVertices.StartNewGrid(maxEdgeRates[0], maxEdgeRates[1]);
-            OpenSubdivPatch patch(face, tessellatedVertices.currentGridOffset, edgeRates[0],
-                                  edgeRates[1], edgeRates[2], edgeRates[3],
-                                  (int)tessellatedVertices.stitchingIndices.size(), 0);
+
+            OpenSubdivPatch patch;
+            patch.faceID         = face;
+            patch.gridIndexStart = tessellatedVertices.currentGridOffset;
 
             // Generate n x m interior grid of points
             for (int vStep = 0; vStep < maxEdgeRates[1] - 1; vStep++)
@@ -597,74 +598,75 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
                 }
             }
 
-            if (edgeRates[0] == 1 && edgeRates[1] == 8 && edgeRates[2] == 1 &&
-                edgeRates[3] == 8)
-            {
-                int stop = 5;
-            }
-
             // Generate stitching triangles to compensate for differing edge rates
             for (u32 edgeIndex = 0; edgeIndex < 4; edgeIndex++)
             {
                 int edgeRate                = edgeRates[edgeIndex];
                 const EdgeInfo &currentEdge = edgeInfos[faceInfo.edgeInfoId[edgeIndex]];
 
-                int maxEdgeRate = maxEdgeRates[edgeIndex & 1];
+                // int maxEdgeRate = maxEdgeRates[edgeIndex & 1];
                 // Generate indices
-                int q = maxEdgeRate - edgeRate - 2 * edgeRate;
+                // int q = maxEdgeRate - edgeRate - 2 * edgeRate;
 
-                int edgeStep = faceInfo.reversed[edgeIndex] ? currentEdge.edgeFactor : 0;
-                int edgeDiff = faceInfo.reversed[edgeIndex] ? -1 : 1;
-                int edgeEnd  = faceInfo.reversed[edgeIndex] ? 0 : currentEdge.edgeFactor;
+                patch.edgeInfo[edgeIndex] =
+                    faceInfo.reversed[edgeIndex] ? currentEdge.Opposite() : currentEdge;
+                // int edgeStep = faceInfo.reversed[edgeIndex] ? currentEdge.edgeFactor :
+                // 0; int edgeDiff = faceInfo.reversed[edgeIndex] ? -1 : 1; int edgeEnd  =
+                // faceInfo.reversed[edgeIndex] ? 0 : currentEdge.edgeFactor;
 
-                Vec2i gridStep =
-                    Vec2i(Max(maxEdgeRates[0] - 2, 0), Max(maxEdgeRates[1] - 2, 0));
-
-                Vec2i uvStartInnerGrid = Vec2i(uvTable[edgeIndex]) * gridStep;
-                Vec2i uvEnd            = uvStartInnerGrid + uvDiffTable[edgeIndex] * gridStep;
-
-                while (edgeStep != edgeEnd || uvStartInnerGrid != uvEnd)
-                {
-                    bool currentSide = q >= 0;
-                    if (currentSide && uvStartInnerGrid != uvEnd)
-                    {
-                        int id0 = tessellatedVertices.GetInnerGridIndex(uvStartInnerGrid[0],
-                                                                        uvStartInnerGrid[1]);
-                        int id1 = currentEdge.GetVertexId(edgeStep);
-                        uvStartInnerGrid += uvDiffTable[edgeIndex];
-                        int id2 = tessellatedVertices.GetInnerGridIndex(uvStartInnerGrid[0],
-                                                                        uvStartInnerGrid[1]);
-
-                        tessellatedVertices.stitchingIndices.push_back(id0);
-                        tessellatedVertices.stitchingIndices.push_back(id1);
-                        tessellatedVertices.stitchingIndices.push_back(id2);
-
-                        q -= 2 * edgeRate;
-                    }
-                    else
-                    {
-                        int id0 = currentEdge.GetVertexId(edgeStep);
-                        edgeStep += edgeDiff;
-                        Assert(edgeStep <= currentEdge.edgeFactor && edgeStep >= 0);
-                        int id1 = currentEdge.GetVertexId(edgeStep);
-                        int id2 = tessellatedVertices.GetInnerGridIndex(uvStartInnerGrid[0],
-                                                                        uvStartInnerGrid[1]);
-
-                        tessellatedVertices.stitchingIndices.push_back(id0);
-                        tessellatedVertices.stitchingIndices.push_back(id1);
-                        tessellatedVertices.stitchingIndices.push_back(id2);
-
-                        q += 2 * maxEdgeRate;
-                    }
-                }
+                // Vec2i gridStep =
+                //     Vec2i(Max(maxEdgeRates[0] - 2, 0), Max(maxEdgeRates[1] - 2, 0));
+                //
+                // Vec2i uvStartInnerGrid = Vec2i(uvTable[edgeIndex]) * gridStep;
+                // Vec2i uvEnd            = uvStartInnerGrid + uvDiffTable[edgeIndex] *
+                // gridStep;
+                //
+                // while (edgeStep != edgeEnd || uvStartInnerGrid != uvEnd)
+                // {
+                //     bool currentSide = q >= 0;
+                //     if (currentSide && uvStartInnerGrid != uvEnd)
+                //     {
+                //         int id0 =
+                //         tessellatedVertices.GetInnerGridIndex(uvStartInnerGrid[0],
+                //                                                         uvStartInnerGrid[1]);
+                //         int id1 = currentEdge.GetVertexId(edgeStep);
+                //         uvStartInnerGrid += uvDiffTable[edgeIndex];
+                //         int id2 =
+                //         tessellatedVertices.GetInnerGridIndex(uvStartInnerGrid[0],
+                //                                                         uvStartInnerGrid[1]);
+                //
+                //         tessellatedVertices.stitchingIndices.push_back(id0);
+                //         tessellatedVertices.stitchingIndices.push_back(id1);
+                //         tessellatedVertices.stitchingIndices.push_back(id2);
+                //
+                //         q -= 2 * edgeRate;
+                //     }
+                //     else
+                //     {
+                //         int id0 = currentEdge.GetVertexId(edgeStep);
+                //         edgeStep += edgeDiff;
+                //         Assert(edgeStep <= currentEdge.edgeFactor && edgeStep >= 0);
+                //         int id1 = currentEdge.GetVertexId(edgeStep);
+                //         int id2 =
+                //         tessellatedVertices.GetInnerGridIndex(uvStartInnerGrid[0],
+                //                                                         uvStartInnerGrid[1]);
+                //
+                //         tessellatedVertices.stitchingIndices.push_back(id0);
+                //         tessellatedVertices.stitchingIndices.push_back(id1);
+                //         tessellatedVertices.stitchingIndices.push_back(id2);
+                //
+                //         q += 2 * maxEdgeRate;
+                //     }
+                // }
             }
-            patch.stitchingCount =
-                (int)tessellatedVertices.stitchingIndices.size() - patch.stitchingStart;
+            // patch.stitchingCount =
+            //     (int)tessellatedVertices.stitchingIndices.size() - patch.stitchingStart;
             patches.push_back(patch);
         }
 
-        // outputMesh->p = PushArrayNoZero(arena, Vec3f, tessellatedVertices.vertices.size());
-        // MemoryCopy(outputMesh->p, tessellatedVertices.vertices.data(),
+        // outputMesh->p = PushArrayNoZero(arena, Vec3f,
+        // tessellatedVertices.vertices.size()); MemoryCopy(outputMesh->p,
+        // tessellatedVertices.vertices.data(),
         //            sizeof(Vec3f) * tessellatedVertices.vertices.size());
         // outputMesh->numVertices = (int)tessellatedVertices.vertices.size();
         //
@@ -675,9 +677,10 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
         // outputMesh->numIndices = (u32)tessellatedVertices.stitchingIndices.size();
         // outputMesh->numFaces   = outputMesh->numIndices / 3;
         //
-        // Assert(tessellatedVertices.normals.size() == tessellatedVertices.vertices.size());
-        // outputMesh->n = PushArrayNoZero(arena, Vec3f, tessellatedVertices.normals.size());
-        // MemoryCopy(outputMesh->n, tessellatedVertices.normals.data(),
+        // Assert(tessellatedVertices.normals.size() ==
+        // tessellatedVertices.vertices.size()); outputMesh->n = PushArrayNoZero(arena,
+        // Vec3f, tessellatedVertices.normals.size()); MemoryCopy(outputMesh->n,
+        // tessellatedVertices.normals.data(),
         //            sizeof(Vec3f) * tessellatedVertices.normals.size());
         //
         // Assert(tessellatedVertices.vertices.size() == tessellatedVertices.uvs.size());
