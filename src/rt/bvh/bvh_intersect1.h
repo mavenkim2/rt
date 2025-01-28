@@ -1015,10 +1015,12 @@ struct CatClarkPatchIntersector
         auto trueMask  = Mask<Lane8F32>(TrueTy());
         auto falseMask = Mask<Lane8F32>(FalseTy());
 
-        Lane4F32 v0[N] = {};
-        Lane4F32 v1[N] = {};
-        Lane4F32 v2[N] = {};
-        alignas(4 * N) u32 patchIDs[N];
+        Lane4F32 v0[N]                 = {};
+        Lane4F32 v1[N]                 = {};
+        Lane4F32 v2[N]                 = {};
+        alignas(4 * N) u32 patchIDs[N] = {};
+        alignas(4 * N) u32 geomIDs[N]  = {};
+        alignas(4 * N) u32 primIDs[N]  = {};
 
         int queueCount = 0;
 
@@ -1033,7 +1035,7 @@ struct CatClarkPatchIntersector
 
         OpenSubdivMesh *meshes = (OpenSubdivMesh *)scene->primitives;
 
-        auto EmptyQueue = [&](u32 geomID, u32 primID) {
+        auto EmptyQueue = [&]() {
             Vec3lf8 triV0, triV1, triV2;
             Transpose<N>(v0, triV0);
             Transpose<N>(v1, triV1);
@@ -1043,20 +1045,20 @@ struct CatClarkPatchIntersector
 
             Mask<LaneF32<N>> mask = TriangleIntersect(ray, itr.t, triV0, triV1, triV2, triItr);
             outMask |= mask;
-            itr.u = Select(mask, triItr.u, itr.u);
-            itr.v = Select(mask, triItr.v, itr.v);
-            itr.t = Select(mask, triItr.t, itr.t);
-            itr.geomIDs =
-                AsUInt(Select(mask, AsFloat(LaneU32<N>(geomID)), AsFloat(itr.geomIDs)));
-            itr.primIDs =
-                AsUInt(Select(mask, AsFloat(LaneU32<N>(primID)), AsFloat(itr.primIDs)));
+            itr.u       = Select(mask, triItr.u, itr.u);
+            itr.v       = Select(mask, triItr.v, itr.v);
+            itr.t       = Select(mask, triItr.t, itr.t);
+            itr.geomIDs = AsUInt(
+                Select(mask, AsFloat(MemSimdU32<N>::LoadU(geomIDs)), AsFloat(itr.geomIDs)));
+            itr.primIDs = AsUInt(
+                Select(mask, AsFloat(MemSimdU32<N>::LoadU(primIDs)), AsFloat(itr.primIDs)));
             patchID = AsUInt(
                 Select(mask, AsFloat(MemSimdU32<N>::LoadU(patchIDs)), AsFloat(patchID)));
 
             queueCount = 0;
         };
-        auto FlushQueue = [&](u32 geomID, u32 primID) {
-            if (queueCount == N) EmptyQueue(geomID, primID);
+        auto FlushQueue = [&]() {
+            if (queueCount == N) EmptyQueue();
         };
 
         for (u32 i = 0; i < num; i++)
@@ -1078,12 +1080,14 @@ struct CatClarkPatchIntersector
                 Vec3f p2 = vertices[id2];
 
                 patchIDs[queueCount] = CreatePatchID(type, meta, id);
+                geomIDs[queueCount]  = geomID;
+                primIDs[queueCount]  = primID;
                 Lane4F32::Store(v0 + queueCount, Lane4F32(p0));
                 Lane4F32::Store(v1 + queueCount, Lane4F32(p1));
                 Lane4F32::Store(v2 + queueCount, Lane4F32(p2));
                 queueCount++;
 
-                FlushQueue(geomID, primID);
+                FlushQueue();
             };
 
             if (isUntessellated)
@@ -1137,8 +1141,8 @@ struct CatClarkPatchIntersector
                     }
                 }
             }
-            EmptyQueue(geomID, primID);
         }
+        EmptyQueue();
 
         if (Any(outMask))
         {
@@ -1165,6 +1169,7 @@ struct CatClarkPatchIntersector
             CatClarkTriangleType type = GetPatchType(patchIndex);
             int id                    = GetTriangleIndex(patchIndex);
 
+            Assert(geomID < scene->numPrimitives);
             OpenSubdivMesh *mesh = meshes + geomID;
 
             int faceID = -1;
@@ -1207,15 +1212,13 @@ struct CatClarkPatchIntersector
                     OpenSubdivPatch *patch = &mesh->patches[primID];
                     faceID                 = patch->faceID;
 
-                    int edgeU = Max(patch->edgeInfo[0].GetEdgeFactor(),
-                                    patch->edgeInfo[2].GetEdgeFactor());
-                    int edgeV = Max(patch->edgeInfo[1].GetEdgeFactor(),
-                                    patch->edgeInfo[3].GetEdgeFactor());
+                    int edgeU = patch->GetMaxEdgeFactorU();
+                    int edgeV = patch->GetMaxEdgeFactorV();
 
                     Vec2f uvStep(1.f / edgeU, 1.f / edgeV);
 
                     int quadIndex = id / 2;
-                    int divisor   = edgeU - 1;
+                    int divisor   = edgeU - 2;
                     Assert(divisor);
                     int v = quadIndex / divisor;
                     int u = quadIndex % divisor;
@@ -1226,18 +1229,18 @@ struct CatClarkPatchIntersector
                         vertexIndices[0] = patch->GetGridIndex(u, v);
                         vertexIndices[1] = patch->GetGridIndex(u + 1, v + 1);
                         vertexIndices[2] = patch->GetGridIndex(u, v + 1);
-                        uvs[0]           = uvStep * Vec2f((f32)u, (f32)v);
-                        uvs[1]           = uvStep * Vec2f((f32)(u + 1), (f32)(v + 1));
-                        uvs[2]           = uvStep * Vec2f((f32)u, (f32)(v + 1));
+                        uvs[0]           = uvStep * Vec2f((f32)(u + 1), (f32)(v + 1));
+                        uvs[1]           = uvStep * Vec2f((f32)(u + 2), (f32)(v + 2));
+                        uvs[2]           = uvStep * Vec2f((f32)(u + 1), (f32)(v + 2));
                     }
                     else
                     {
                         vertexIndices[0] = patch->GetGridIndex(u, v);
                         vertexIndices[1] = patch->GetGridIndex(u + 1, v);
                         vertexIndices[2] = patch->GetGridIndex(u + 1, v + 1);
-                        uvs[0]           = uvStep * Vec2f((f32)u, (f32)v);
-                        uvs[1]           = uvStep * Vec2f((f32)(u + 1), (f32)v);
-                        uvs[2]           = uvStep * Vec2f((f32)(u + 1), (f32)(v + 1));
+                        uvs[0]           = uvStep * Vec2f((f32)(u + 1), (f32)(v + 1));
+                        uvs[1]           = uvStep * Vec2f((f32)(u + 2), (f32)(v + 1));
+                        uvs[2]           = uvStep * Vec2f((f32)(u + 2), (f32)(v + 2));
                     }
                 }
                 break;
@@ -1254,7 +1257,7 @@ struct CatClarkPatchIntersector
                     vertexIndices[2] = iterator.indices[2];
                 }
                 break;
-                default: Assert(0);
+                default: ErrorExit(0, "type :%u id : %u\n", (u32)type, id);
             }
 
             // Recalculate uv of

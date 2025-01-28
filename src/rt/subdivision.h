@@ -32,9 +32,9 @@ struct EdgeInfo
 
     int GetVertexID(u32 edgeStep) const
     {
-        Assert(edgeStep >= 0 && edgeStep <= edgeFactor);
-        return edgeStep == 0 ? id0
-                             : (edgeStep == edgeFactor ? id1 : indexStart + edgeStep - 1);
+        u32 ef = GetEdgeFactor();
+        Assert(edgeStep >= 0 && edgeStep <= ef);
+        return edgeStep == 0 ? id0 : (edgeStep == ef ? id1 : indexStart + edgeStep - 1);
     }
 };
 
@@ -186,14 +186,15 @@ struct PatchItr
 
     void GetUVs(int id, Vec2f uv[3])
     {
+        int edgeFactor = patch->edgeInfo[edge].GetEdgeFactor();
         for (int i = 0; i < id; i++)
         {
-            Assert(IsNotFinished());
+            ErrorExit(IsNotFinished(), "edge %u factor %u maxu %u maxv %u", edge, edgeFactor,
+                      patch->GetMaxEdgeFactorU(), patch->GetMaxEdgeFactorV());
             Next();
         }
         Vec2f edgeDiv(1.f / Max(2, patch->GetMaxEdgeFactorU()),
                       1.f / Max(2, patch->GetMaxEdgeFactorV()));
-        int edgeFactor    = patch->edgeInfo[edge].GetEdgeFactor();
         f32 edgeFactorInv = 1.f / edgeFactor;
 
         int edgeStepCount = Abs(edgeStep - edgeStart);
