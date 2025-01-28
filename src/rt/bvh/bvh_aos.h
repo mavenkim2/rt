@@ -20,10 +20,6 @@
 // - subdivision surfaces
 // - systematically handling floating point error
 
-// NOTEs on moana data set:
-// - each triangle pair is a quad (not sure if coplanar, I think so?), representing the base
-// cage of the subdivison surface. don't actually need the indices, uvs, or face indices
-
 namespace rt
 {
 //////////////////////////////

@@ -1,3 +1,5 @@
+#include <initializer_list>
+#include <array>
 namespace rt
 {
 template <typename ElementType>
@@ -146,7 +148,16 @@ void Copy(StaticArray<T> &to, std::vector<T> &from)
 template <typename T, u32 capacity>
 struct FixedArray
 {
+    i32 size;
+    T data[capacity];
     FixedArray() : size(0) {}
+    FixedArray(std::initializer_list<T> list) : size((int)list.size())
+    {
+        Assert(list.size() <= capacity);
+        std::array<T, capacity> ar;
+        std::copy(list.begin(), list.end(), ar.begin());
+        MemoryCopy(data, ar.data(), sizeof(T) * capacity);
+    }
 
     FORCEINLINE void Push(T element)
     {
@@ -179,7 +190,7 @@ struct FixedArray
 
     FORCEINLINE b8 Empty() const { return size != 0; }
 
-    FORCEINLINE u32 Clear() { size = 0; }
+    FORCEINLINE void Clear() { size = 0; }
 
     FORCEINLINE u32 Capacity() const { return capacity; }
 
@@ -218,9 +229,6 @@ struct FixedArray
     {
         return ReversedCheckedIterator<const T>(data, size);
     }
-
-    i32 size;
-    T data[capacity];
 };
 
 // Basic dynamic array implementation

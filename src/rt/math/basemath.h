@@ -24,6 +24,7 @@ f64 IsNaN(f64 x) { return std::isnan(x); }
 
 f32 Sqr(f32 x) { return x * x; }
 
+__forceinline int Abs(const int x) { return ::abs(x); }
 __forceinline f32 Abs(const f32 x) { return ::fabsf(x); }
 __forceinline f32 Sqrt(const f32 x) { return ::sqrtf(x); }
 __forceinline f32 Rsqrt(const f32 x)

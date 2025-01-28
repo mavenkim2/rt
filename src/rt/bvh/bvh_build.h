@@ -342,7 +342,6 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(const BuildSettings &settings
         childRecords[bestChild] = out;
     }
 
-    // BVHNode<N> childNodes[N];
     BVHNode<N> childNodes[N];
 
     if (parallel)
@@ -437,7 +436,8 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(const BuildSettings &settings
     f.createNode(childRecords, numChildren, node);
     f.updateNode(node, childNodes, numChildren);
 
-    return BVHNode<N>::EncodeNode(node);
+    auto result = BVHNode<N>::EncodeNode(node);
+    return result;
 }
 
 template <i32 N, typename BuildFunctions>

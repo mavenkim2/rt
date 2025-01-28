@@ -1015,19 +1015,6 @@ struct CatClarkPatchIntersector
         auto trueMask  = Mask<Lane8F32>(TrueTy());
         auto falseMask = Mask<Lane8F32>(FalseTy());
 
-        Vec2f uvTable[] = {
-            Vec2f(0.f, 0.f),
-            Vec2f(1.f, 0.f),
-            Vec2f(1.f, 1.f),
-            Vec2f(0.f, 1.f),
-        };
-        Vec2i uvDiffTable[] = {
-            Vec2i(1, 0),
-            Vec2i(0, 1),
-            Vec2i(-1, 0),
-            Vec2i(0, -1),
-        };
-
         Lane4F32 v0[N] = {};
         Lane4F32 v1[N] = {};
         Lane4F32 v2[N] = {};
@@ -1114,23 +1101,12 @@ struct CatClarkPatchIntersector
             {
                 const OpenSubdivPatch *patch = &mesh->patches[primID];
 
-                int count = 0;
-
-                // TODO: once this is working I can make stitching indices
-                // completely implicit
-                // for (int triIndex = 0; triIndex < patch->stitchingCount / 3; triIndex++)
-                // {
-                //     int index = patch->stitchingStart + 3 * triIndex;
-                //     PushQueue(CatClarkTriangleType::TessStitching, count++,
-                //     indices[index + 0],
-                //               indices[index + 1], indices[index + 2]);
-                // }
-
                 // Step stitching indices
                 for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
                 {
+                    int count     = 0;
                     auto iterator = patch->CreateIterator(edgeIndex);
-                    for (; iterator.IsNotFinished(); iterator.Next())
+                    for (; iterator.Next();)
                     {
                         PushQueue(CatClarkTriangleType::TessStitching, count++,
                                   iterator.indices[0], iterator.indices[1],
@@ -1140,15 +1116,13 @@ struct CatClarkPatchIntersector
 
                 // Step inner grid
                 int maxEdgeRates[2] = {
-                    Max(patch->edgeInfo[0].GetEdgeFactor(),
-                        patch->edgeInfo[2].GetEdgeFactor()),
-                    Max(patch->edgeInfo[1].GetEdgeFactor(),
-                        patch->edgeInfo[3].GetEdgeFactor()),
+                    patch->GetMaxEdgeFactorU(),
+                    patch->GetMaxEdgeFactorV(),
                 };
 
                 Vec2f uvStep(1.f / maxEdgeRates[0], 1.f / maxEdgeRates[1]);
 
-                count = 0;
+                int count = 0;
                 for (int v = 0; v < maxEdgeRates[1] - 2; v++)
                 {
                     for (int u = 0; u < maxEdgeRates[0] - 2; u++)
@@ -1273,14 +1247,14 @@ struct CatClarkPatchIntersector
                     faceID                 = patch->faceID;
 
                     // Reconstruct uvs
-                    int edgeIndex = GetMeta(patchIndex);
-                    Vec2f uv[3];
-                    auto iterator    = patch->GetUVs(edgeIndex, uv);
+                    int edgeIndex    = GetMeta(patchIndex);
+                    auto iterator    = patch->GetUVs(edgeIndex, id, uvs);
                     vertexIndices[0] = iterator.indices[0];
                     vertexIndices[1] = iterator.indices[1];
                     vertexIndices[2] = iterator.indices[2];
                 }
                 break;
+                default: Assert(0);
             }
 
             // Recalculate uv of
@@ -1333,15 +1307,16 @@ struct CatClarkPatchIntersector
             else
             {
                 f32 invDet = 1 / det;
-                dpdu       = FMS(Vec3f(duv12[1]), dp02, duv02[1] * dp12) * invDet;
-                dpdv       = FMS(Vec3f(duv02[0]), dp12, duv12[0] * dp02) * invDet;
+                si.dpdu    = FMS(Vec3f(duv12[1]), dp02, duv02[1] * dp12) * invDet;
+                si.dpdv    = FMS(Vec3f(duv02[0]), dp12, duv12[0] * dp02) * invDet;
 
-                dndu = FMS(Vec3f(duv12[1]), dn02, duv02[1] * dn12) * invDet;
-                dndv = FMS(Vec3f(duv02[0]), dn12, duv12[0] * dn02) * invDet;
+                si.shading.dndu = FMS(Vec3f(duv12[1]), dn02, duv02[1] * dn12) * invDet;
+                si.shading.dndv = FMS(Vec3f(duv02[0]), dn12, duv12[0] * dn02) * invDet;
             }
 
             si.shading.dpdu = si.dpdu;
             si.shading.dpdv = si.dpdv;
+            return true;
         }
 
         return false;

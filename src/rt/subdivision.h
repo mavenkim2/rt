@@ -15,7 +15,7 @@ struct EdgeInfo
     static const int reverseBit = 0x80000000;
 
     int indexStart;
-    int edgeFactor;
+    u32 edgeFactor;
     int id0, id1;
 
     int GetFirst(bool reversed) const { return reversed ? id1 : id0; }
@@ -28,16 +28,9 @@ struct EdgeInfo
     }
 
     int GetEdgeFactor() const { return edgeFactor & ~reverseBit; }
-    int GetReversed() const { return edgeFactor & reverseBit; }
+    int GetReversed() const { return (edgeFactor & reverseBit) >> 31; }
 
-    // int GetVertexId(int edgeStep) const
-    // {
-    //     Assert(edgeStep >= 0 && edgeStep <= edgeFactor);
-    //     return edgeStep == 0 ? id0
-    //                          : (edgeStep == edgeFactor ? id1 : indexStart + edgeStep - 1);
-    // }
-
-    int GetVertexID(int edgeStep) const
+    int GetVertexID(u32 edgeStep) const
     {
         Assert(edgeStep >= 0 && edgeStep <= edgeFactor);
         return edgeStep == 0 ? id0
@@ -56,14 +49,14 @@ struct OpenSubdivPatch
 
     int faceID;
     int gridIndexStart;
-    EdgeInfo edgeInfo[4];
+    FixedArray<EdgeInfo, 4> edgeInfo;
 
     // Generates stitching indices instead of manually having to store them
 
     OpenSubdivPatch() {}
 
     PatchItr CreateIterator(int edge) const;
-    PatchItr GetUVs(int id, Vec2f uv[3]) const;
+    PatchItr GetUVs(int edge, int id, Vec2f uv[3]) const;
 
     __forceinline int GetMaxEdgeFactorU() const
     {
@@ -80,83 +73,23 @@ struct OpenSubdivPatch
         int edgeU     = GetMaxEdgeFactorU();
         int edgeV     = GetMaxEdgeFactorV();
         int gridIndex = gridIndexStart + v * (edgeU - 1) + u;
-        Assert(gridIndex < gridIndexStart + (edgeU - 1) * (edgeV - 1));
+        Assert(gridIndex < gridIndexStart + Max(1, (edgeU - 1)) * Max(1, (edgeV - 1)));
         return gridIndex;
     }
-
-    // void Split4(OpenSubdivMesh *mesh, OpenSubdivPatch &out0, OpenSubdivPatch &out1,
-    //             OpenSubdivPatch &out2, OpenSubdivPatch &out3)
-    // {
-    //     TempArena temp = ScratchStart(0, 0);
-    //     int edgeRateU  = Max(edgeRates[0], edgeRates[2]);
-    //     int edgeRateV  = Max(edgeRates[1], edgeRates[3]);
-    //
-    //     int numTriangles[] = {
-    //         (edgeRates[0] - 1) + (edgeRateU - 1),
-    //         (edgeRates[1] - 1) + (edgeRateV - 1),
-    //         (edgeRates[2] - 1) + (edgeRateU - 1),
-    //         (edgeRates[3] - 1) + (edgeRateV - 1),
-    //     };
-    //
-    //     int totalNumTriangles = numTriangles0 + numTriangles1 + numTriangles2 +
-    //     numTriangles3; Assert(3 * totalNumTriangles == stitchingCount);
-    //
-    //     int *tempIndices = PushArrayNoZero(temp.arena, int, totalNumTriangles);
-    //
-    //     int counts[4] = {
-    //         numTriangles0 / 2 + numTriangles3 / 2 + numTriangles3 & 1,
-    //         numTriangles0 / 2 + numTriangles0 & 1 + numTriangles1 / 2,
-    //         numTriangles1 / 2 + numTriangles1 & 1 + numTriangles2 / 2,
-    //         numTriangles2 / 2 + numTriangles2 & 1 + numTriangles3 / 2,
-    //     };
-    //     int offsets[4] = {};
-    //
-    //     int total = 0;
-    //     for (int i = 0; i < 4; i++)
-    //     {
-    //         int offset = counts[i];
-    //         offsets[i] = total;
-    //         total += offset;
-    //     }
-    //     Assert(total == stitchingCount);
-    //
-    //     for (int side = 0; side < 4; side++)
-    //     {
-    //         int num = numTriangles[side];
-    //         for (int i = 0; i < num; i++)
-    //         {
-    //             int quadrant        = (side + (i >= num / 2)) & 3;
-    //             int offset          = offsets[quadrant]++;
-    //             tempIndices[offset] = mesh->stitchingIndices[stitchingStart + offset];
-    //         }
-    //     }
-    //
-    //     Assert(offsets[3] == totalNumTriangles);
-    //     out0.stitchingStart = 0;
-    //     out0.stitchingCount = offsets[0];
-    //     out1.stitchingStart = offsets[0];
-    //     out1.stitchingCount = offsets[1] - offsets[0];
-    //     out2.stitchingStart = offsets[1];
-    //     out2.stitchingCount = offsets[2] - offsets[1];
-    //     out3.stitchingCount = offsets[2];
-    //     out3.stitchingCount = offsets[3] - offsets[2];
-    //
-    //     ScratchEnd(temp);
-    // }
 };
 
 struct PatchItr
 {
-    const int diff[2]  = {1, -1};
-    const int start[2] = {0, 1};
+    const FixedArray<int, 2> diff  = {1, -1};
+    const FixedArray<int, 2> start = {0, 1};
 
-    const Vec2f uvTable[4] = {
+    const FixedArray<Vec2f, 4> uvTable = {
         Vec2f(0.f, 0.f),
         Vec2f(1.f, 0.f),
         Vec2f(1.f, 1.f),
         Vec2f(0.f, 1.f),
     };
-    const Vec2i uvDiffTable[4] = {
+    const FixedArray<Vec2i, 4> uvDiffTable = {
         Vec2i(1, 0),
         Vec2i(0, 1),
         Vec2i(-1, 0),
@@ -165,9 +98,10 @@ struct PatchItr
 
     const OpenSubdivPatch *patch;
     int edge;
-    int indices[3];
+    FixedArray<int, 3> indices;
 
     // Edge
+    int edgeStart;
     int edgeStep;
     int edgeDiff;
     int edgeEnd;
@@ -185,9 +119,12 @@ struct PatchItr
         int edgeFactor           = edgeInfo.GetEdgeFactor();
         int reversed             = edgeInfo.GetReversed();
 
-        edgeStep = start[reversed] * edgeFactor;
-        edgeDiff = diff[reversed];
-        edgeEnd  = start[!reversed] * edgeFactor;
+        Assert(reversed == 0 || reversed == 1);
+
+        edgeStep  = start[reversed] * edgeFactor;
+        edgeStart = edgeStep;
+        edgeDiff  = diff[reversed];
+        edgeEnd   = start[!reversed] * edgeFactor;
 
         int edgeU     = patch->GetMaxEdgeFactorU();
         int edgeV     = patch->GetMaxEdgeFactorV();
@@ -200,9 +137,12 @@ struct PatchItr
         uvEnd   = uvStart + uvDiffTable[edge] * gridStep;
     }
     bool IsNotFinished() { return edgeStep != edgeEnd || uvStart != uvEnd; }
-    void Next()
+    bool Next()
     {
+        if (!IsNotFinished()) return false;
+
         const EdgeInfo &edgeInfo = patch->edgeInfo[edge];
+        indices.Clear();
         if (q >= 0 && uvStart != uvEnd)
         {
             int id0 = patch->GetGridIndex(uvStart[0], uvStart[1]);
@@ -210,10 +150,10 @@ struct PatchItr
             uvStart += uvDiffTable[edge];
             int id2 = patch->GetGridIndex(uvStart[0], uvStart[1]);
 
-            newIndex   = 2;
-            indices[0] = id0;
-            indices[1] = id1;
-            indices[2] = id2;
+            newIndex = 2;
+            indices.Push(id0);
+            indices.Push(id1);
+            indices.Push(id2);
             q -= 2 * edgeInfo.GetEdgeFactor();
         }
         else
@@ -224,12 +164,24 @@ struct PatchItr
             int id1 = edgeInfo.GetVertexID(edgeStep);
             int id2 = patch->GetGridIndex(uvStart[0], uvStart[1]);
 
-            newIndex   = 1;
-            indices[0] = id0;
-            indices[1] = id1;
-            indices[2] = id2;
+            newIndex = 1;
+            indices.Push(id0);
+            indices.Push(id1);
+            indices.Push(id2);
             q += 2 * maxEdgeFactor;
         }
+        return true;
+    }
+
+    __forceinline Vec2f GetGridUV(Vec2i gridLoc, Vec2f edgeDiv) const
+    {
+        return (Vec2f(gridLoc + Vec2i(1, 1))) * edgeDiv;
+    }
+    __forceinline Vec2f GetEdgeUV(int edgeStepCount, f32 edgeFactorInv) const
+    {
+        Vec2f result = Vec2f(uvDiffTable[edge] * edgeStepCount);
+        result[edge & 1] *= edgeFactorInv;
+        return uvTable[edge] + result;
     }
 
     void GetUVs(int id, Vec2f uv[3])
@@ -239,22 +191,24 @@ struct PatchItr
             Assert(IsNotFinished());
             Next();
         }
-        Vec2f edgeDiv(1.f / patch->GetMaxEdgeFactorU(), 1.f / patch->GetMaxEdgeFactorV());
+        Vec2f edgeDiv(1.f / Max(2, patch->GetMaxEdgeFactorU()),
+                      1.f / Max(2, patch->GetMaxEdgeFactorV()));
         int edgeFactor    = patch->edgeInfo[edge].GetEdgeFactor();
         f32 edgeFactorInv = 1.f / edgeFactor;
+
+        int edgeStepCount = Abs(edgeStep - edgeStart);
         if (q >= 0 && uvStart != uvEnd)
         {
-            uv[0] = Vec2f(uvStart) * edgeDiv;
-            uv[1] = (uvTable[edge] + Vec2f(uvDiffTable[edge] * edgeStep)) * edgeFactorInv;
-            uv[2] = Vec2f(uvStart + uvDiffTable[edge]) * edgeDiv;
+            uv[0] = GetGridUV(uvStart, edgeDiv);
+            uv[1] = GetEdgeUV(edgeStepCount, edgeFactorInv);
+            uv[2] = GetGridUV(uvStart + uvDiffTable[edge], edgeDiv);
         }
         else
         {
-            Assert(edgeStep < edgeFactor);
-            uv[0] = (uvTable[edge] + Vec2f(uvDiffTable[edge] * edgeStep)) * edgeFactorInv;
-            uv[1] =
-                (uvTable[edge] + Vec2f(uvDiffTable[edge] * (edgeStep + 1))) * edgeFactorInv;
-            uv[2] = Vec2f(uvStart) * edgeDiv;
+            Assert(edgeStepCount < edgeFactor);
+            uv[0] = GetEdgeUV(edgeStepCount, edgeFactorInv);
+            uv[1] = GetEdgeUV(edgeStepCount + 1, edgeFactorInv);
+            uv[2] = GetGridUV(uvStart, edgeDiv);
         }
         Next();
     }
@@ -271,32 +225,6 @@ struct OpenSubdivMesh
 
     StaticArray<UntessellatedPatch> untessellatedPatches;
     StaticArray<OpenSubdivPatch> patches;
-
-    // Bounds GetPatchBounds(u32 primID) const
-    // {
-    //     Assert(primID < patches.Length());
-    //     const OpenSubdivPatch *patch = &patches[primID];
-    //
-    //     Bounds bounds;
-    //
-    //     // Extend grid vertices
-    //     for (int r = 0; r < patch->numRows; r++)
-    //     {
-    //         for (int c = 0; c < patch->numCols; c++)
-    //         {
-    //             Vec3f p = vertices[patch->gridIndexStart + patch->numCols * r + c];
-    //             bounds.Extend(Lane4F32(p.x, p.y, p.z, 0.f));
-    //         }
-    //     }
-    //     Assert(patch->stitchingCount % 3 == 0);
-    //     // Extend stitching vertices
-    //     for (int stitchIndex = 0; stitchIndex < patch->stitchingCount; stitchIndex++)
-    //     {
-    //         Vec3f p = vertices[stitchingIndices[patch->stitchingStart + stitchIndex]];
-    //         bounds.Extend(Lane4F32(p.x, p.y, p.z, 0.f));
-    //     }
-    //     return bounds;
-    // }
 
     u32 GetNumFaces() const { return untessellatedPatches.Length() + patches.Length(); }
 };

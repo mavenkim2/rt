@@ -1024,11 +1024,12 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
             for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
             {
                 auto itr = patch->CreateIterator(edgeIndex);
-                minP     = Min(Min(minP, vertices[itr.indices[0]]),
-                               Min(vertices[itr.indices[1]], vertices[itr.indices[2]]));
-                maxP     = Max(Max(maxP, vertices[itr.indices[0]]),
-                               Max(vertices[itr.indices[1]], vertices[itr.indices[2]]));
-                for (; itr.IsNotFinished(); itr.Next())
+                itr.Next();
+                minP = Min(Min(minP, vertices[itr.indices[0]]),
+                           Min(vertices[itr.indices[1]], vertices[itr.indices[2]]));
+                maxP = Max(Max(maxP, vertices[itr.indices[0]]),
+                           Max(vertices[itr.indices[1]], vertices[itr.indices[2]]));
+                for (; itr.Next();)
                 {
                     minP = Min(minP, vertices[itr.indices[itr.newIndex]]);
                     maxP = Max(maxP, vertices[itr.indices[itr.newIndex]]);

@@ -13,14 +13,12 @@ PatchItr OpenSubdivPatch::CreateIterator(int edge) const
 {
     PatchItr itr = PatchItr(this, edge);
 
-    Assert(itr.IsNotFinished());
-    itr.Next();
     return itr;
 }
 
-PatchItr OpenSubdivPatch::GetUVs(int id, Vec2f uv[3]) const
+PatchItr OpenSubdivPatch::GetUVs(int edge, int id, Vec2f uv[3]) const
 {
-    PatchItr itr = PatchItr(this, id);
+    PatchItr itr = PatchItr(this, edge);
     itr.GetUVs(id, uv);
     return itr;
 }
@@ -33,103 +31,6 @@ struct Vertex
 };
 
 using namespace OpenSubdiv;
-void Subdivide(Mesh *mesh)
-{
-    TempArena temp = ScratchStart(0, 0);
-    typedef Far::TopologyDescriptor Descriptor;
-    typedef Far::TopologyDescriptor Descriptor;
-    Sdc::SchemeType type = OpenSubdiv::Sdc::SCHEME_CATMARK;
-    Sdc::Options options;
-    options.SetVtxBoundaryInterpolation(Sdc::Options::VTX_BOUNDARY_EDGE_AND_CORNER);
-
-    int maxLevel         = 3;
-    i32 *numVertsPerFace = PushArrayNoZero(temp.arena, i32, mesh->numFaces);
-    for (u32 i = 0; i < mesh->numFaces; i++)
-    {
-        numVertsPerFace[i] = 4;
-    }
-
-    Descriptor desc;
-    desc.numVertices        = mesh->numVertices;
-    desc.numFaces           = mesh->numFaces;
-    desc.numVertsPerFace    = numVertsPerFace;
-    desc.vertIndicesPerFace = (int *)mesh->indices;
-
-    // TODOs:
-    // 1. how do you interpolate the normals during subdivision?
-    // 2. make this work with ptex
-    // 3. adaptive subdivision based on screen space heuristics?
-    // 4. multi resolution geometry cache?
-
-    Far::TopologyRefiner *refiner = Far::TopologyRefinerFactory<Descriptor>::Create(
-        desc, Far::TopologyRefinerFactory<Descriptor>::Options(type, options));
-
-    Far::PatchTableFactory::Options patchOptions(maxLevel);
-    patchOptions.SetEndCapType(Far::PatchTableFactory::Options::ENDCAP_GREGORY_BASIS);
-
-    Far::TopologyRefiner::AdaptiveOptions adaptiveOptions =
-        patchOptions.GetRefineAdaptiveOptions();
-    refiner->RefineAdaptive(adaptiveOptions);
-
-    u32 size         = refiner->GetNumVerticesTotal();
-    Vertex *vertices = PushArrayNoZero(temp.arena, Vertex, size);
-    MemoryCopy(vertices, mesh->p, sizeof(Vec3f) * mesh->numVertices);
-
-    Vertex *src        = vertices;
-    i32 nRefinedLevels = refiner->GetNumLevels();
-    Far::PrimvarRefiner primvarRefiner(*refiner);
-
-    for (i32 i = 1; i < nRefinedLevels; i++)
-    {
-        Vertex *dst = src + refiner->GetLevel(i - 1).GetNumVertices();
-        primvarRefiner.Interpolate(i, src, dst);
-        src = dst;
-    }
-
-    auto *patchTable = Far::PatchTableFactory::Create(*refiner, patchOptions);
-    OpenSubdiv::Far::PatchMap patchMap(*patchTable);
-
-    u32 numPatches = patchTable->GetNumPatchesTotal();
-
-    Far::PtexIndices ptexIndices(*refiner);
-    int numFaces = ptexIndices.GetNumFaces();
-
-    for (int i = 0; i < numFaces; i++)
-    {
-        i32 faceID = ptexIndices.GetFaceId(i);
-        f32 pWeights[20];
-        f32 duWeights[20];
-        f32 dvWeights[20];
-        Vec3f cornerPos[4] = {};
-
-        Vec2f uvs[4] = {
-            Vec2f(0.f, 0.f),
-            Vec2f(1.f, 0.f),
-            Vec2f(1.f, 1.f),
-            Vec2f(0.f, 1.f),
-        };
-
-        for (int c = 0; c < 4; c++)
-        {
-            const Far::PatchTable::PatchHandle *handle =
-                patchMap.FindPatch(faceID, uvs[c][0], uvs[c][1]);
-            Assert(handle);
-            const auto &cvIndices = patchTable->GetPatchVertices(*handle);
-
-            patchTable->EvaluateBasis(*handle, uvs[c][0], uvs[c][1], pWeights, duWeights,
-                                      dvWeights);
-            Vec3f pos = {};
-            for (int j = 0; j < cvIndices.size(); j++)
-            {
-                int index      = cvIndices[j];
-                const Vec3f &p = vertices[index].p;
-                pos += pWeights[j] * p;
-            }
-            cornerPos[c] = pos;
-        }
-    }
-    delete refiner;
-}
 
 u64 ComputeEdgeId(u32 id0, u32 id1)
 {
@@ -383,7 +284,7 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
 
                     edgeIndex = (int)edgeInfos.size();
                     edgeInfos.emplace_back(
-                        EdgeInfo{(int)samples.size(), edgeFactor, id0, id1});
+                        EdgeInfo{(int)samples.size(), (u32)edgeFactor, id0, id1});
                     edgeIDMap[edgeId] = edgeIndex;
 
                     // Add edge samples for evaluation
@@ -481,10 +382,10 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
             FaceInfo &faceInfo = faceInfos[f];
             // Compute limit surface samples
             int edgeRates[4] = {
-                edgeInfos[faceInfo.edgeInfoId[0]].edgeFactor,
-                edgeInfos[faceInfo.edgeInfoId[1]].edgeFactor,
-                edgeInfos[faceInfo.edgeInfoId[2]].edgeFactor,
-                edgeInfos[faceInfo.edgeInfoId[3]].edgeFactor,
+                (int)edgeInfos[faceInfo.edgeInfoId[0]].edgeFactor,
+                (int)edgeInfos[faceInfo.edgeInfoId[1]].edgeFactor,
+                (int)edgeInfos[faceInfo.edgeInfoId[2]].edgeFactor,
+                (int)edgeInfos[faceInfo.edgeInfoId[3]].edgeFactor,
             };
             int maxEdgeRates[2] = {
                 Max(edgeRates[0], edgeRates[2]),
@@ -604,89 +505,11 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
                 int edgeRate                = edgeRates[edgeIndex];
                 const EdgeInfo &currentEdge = edgeInfos[faceInfo.edgeInfoId[edgeIndex]];
 
-                // int maxEdgeRate = maxEdgeRates[edgeIndex & 1];
-                // Generate indices
-                // int q = maxEdgeRate - edgeRate - 2 * edgeRate;
-
-                patch.edgeInfo[edgeIndex] =
-                    faceInfo.reversed[edgeIndex] ? currentEdge.Opposite() : currentEdge;
-                // int edgeStep = faceInfo.reversed[edgeIndex] ? currentEdge.edgeFactor :
-                // 0; int edgeDiff = faceInfo.reversed[edgeIndex] ? -1 : 1; int edgeEnd  =
-                // faceInfo.reversed[edgeIndex] ? 0 : currentEdge.edgeFactor;
-
-                // Vec2i gridStep =
-                //     Vec2i(Max(maxEdgeRates[0] - 2, 0), Max(maxEdgeRates[1] - 2, 0));
-                //
-                // Vec2i uvStartInnerGrid = Vec2i(uvTable[edgeIndex]) * gridStep;
-                // Vec2i uvEnd            = uvStartInnerGrid + uvDiffTable[edgeIndex] *
-                // gridStep;
-                //
-                // while (edgeStep != edgeEnd || uvStartInnerGrid != uvEnd)
-                // {
-                //     bool currentSide = q >= 0;
-                //     if (currentSide && uvStartInnerGrid != uvEnd)
-                //     {
-                //         int id0 =
-                //         tessellatedVertices.GetInnerGridIndex(uvStartInnerGrid[0],
-                //                                                         uvStartInnerGrid[1]);
-                //         int id1 = currentEdge.GetVertexId(edgeStep);
-                //         uvStartInnerGrid += uvDiffTable[edgeIndex];
-                //         int id2 =
-                //         tessellatedVertices.GetInnerGridIndex(uvStartInnerGrid[0],
-                //                                                         uvStartInnerGrid[1]);
-                //
-                //         tessellatedVertices.stitchingIndices.push_back(id0);
-                //         tessellatedVertices.stitchingIndices.push_back(id1);
-                //         tessellatedVertices.stitchingIndices.push_back(id2);
-                //
-                //         q -= 2 * edgeRate;
-                //     }
-                //     else
-                //     {
-                //         int id0 = currentEdge.GetVertexId(edgeStep);
-                //         edgeStep += edgeDiff;
-                //         Assert(edgeStep <= currentEdge.edgeFactor && edgeStep >= 0);
-                //         int id1 = currentEdge.GetVertexId(edgeStep);
-                //         int id2 =
-                //         tessellatedVertices.GetInnerGridIndex(uvStartInnerGrid[0],
-                //                                                         uvStartInnerGrid[1]);
-                //
-                //         tessellatedVertices.stitchingIndices.push_back(id0);
-                //         tessellatedVertices.stitchingIndices.push_back(id1);
-                //         tessellatedVertices.stitchingIndices.push_back(id2);
-                //
-                //         q += 2 * maxEdgeRate;
-                //     }
-                // }
+                patch.edgeInfo.Push(faceInfo.reversed[edgeIndex] ? currentEdge.Opposite()
+                                                                 : currentEdge);
             }
-            // patch.stitchingCount =
-            //     (int)tessellatedVertices.stitchingIndices.size() - patch.stitchingStart;
             patches.push_back(patch);
         }
-
-        // outputMesh->p = PushArrayNoZero(arena, Vec3f,
-        // tessellatedVertices.vertices.size()); MemoryCopy(outputMesh->p,
-        // tessellatedVertices.vertices.data(),
-        //            sizeof(Vec3f) * tessellatedVertices.vertices.size());
-        // outputMesh->numVertices = (int)tessellatedVertices.vertices.size();
-        //
-        // outputMesh->indices =
-        //     PushArrayNoZero(arena, u32, tessellatedVertices.stitchingIndices.size());
-        // MemoryCopy(outputMesh->indices, tessellatedVertices.stitchingIndices.data(),
-        //            sizeof(int) * tessellatedVertices.stitchingIndices.size());
-        // outputMesh->numIndices = (u32)tessellatedVertices.stitchingIndices.size();
-        // outputMesh->numFaces   = outputMesh->numIndices / 3;
-        //
-        // Assert(tessellatedVertices.normals.size() ==
-        // tessellatedVertices.vertices.size()); outputMesh->n = PushArrayNoZero(arena,
-        // Vec3f, tessellatedVertices.normals.size()); MemoryCopy(outputMesh->n,
-        // tessellatedVertices.normals.data(),
-        //            sizeof(Vec3f) * tessellatedVertices.normals.size());
-        //
-        // Assert(tessellatedVertices.vertices.size() == tessellatedVertices.uvs.size());
-        // outputMesh->uv = PushArrayNoZero(arena, Vec2f, tessellatedVertices.uvs.size());
-        // MemoryCopy(outputMesh->uv, tessellatedVertices.uvs.data(),
-        //            sizeof(Vec2f) * tessellatedVertices.uvs.size());
 
         outputMesh->vertices = StaticArray<Vec3f>(arena, tessellatedVertices.vertices);
         outputMesh->normals  = StaticArray<Vec3f>(arena, tessellatedVertices.normals);
@@ -696,13 +519,6 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
             StaticArray<UntessellatedPatch>(arena, untessellatedPatches);
 
         outputMesh->patches = StaticArray<OpenSubdivPatch>(arena, patches);
-
-        // Assert(tessellatedVertices.stitchingIndices.size() ==
-        //        tessellatedVertices.faceIDs.size() * 3);
-        // outputMesh->faceIDs = PushArrayNoZero(arena, int,
-        // tessellatedVertices.faceIDs.size()); MemoryCopy(outputMesh->faceIDs,
-        // tessellatedVertices.faceIDs.data(),
-        //            sizeof(int) * tessellatedVertices.faceIDs.size());
 
         delete refiner;
         delete patchTable;
