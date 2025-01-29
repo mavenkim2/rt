@@ -222,20 +222,12 @@ const FixedArray<Vec2i, 4> PatchItr::uvDiffTable = {
     Vec2i(0, -1),
 };
 
-struct BVHPatch
+struct BVHEdge
 {
-    OpenSubdivPatch *patch;
-    // Lower left start
-    Vec2i uvStart;
-    // Upper right end
-    Vec2i uvEnd;
-    EdgeInfo edgeInfo[4] = {};
+    EdgeInfo edgeInfo;
+    int edge;
 
-    int bitMask;
-
-    static const FixedArray<u32, 4> edgeMasks;
-
-    void SplitEdge(BVHPatch &patch0, BVHPatch &patch1, int edge) const
+    void Split(BVHEdge &edge0, BVHEdge &edge1) const
     {
         bool hasEdge                = bitMask & edgeMasks[edge];
         const EdgeInfo &currentEdge = edgeInfo[edge];
@@ -251,83 +243,19 @@ struct BVHPatch
             int oddEdgeFactor = edgeFactor & 1;
             int midIndex      = currentEdge.indexStart + edgeMid - 1;
 
-            patch0.edgeInfo[edge] = EdgeInfo{indexStart, edgeMid, id0, midIndex};
-            patch1.edgeInfo[edge] =
+            edge0.edgeInfo = EdgeInfo{indexStart, edgeMid, id0, midIndex};
+            edge0.edgeInfo =
                 EdgeInfo{indexStart + (int)edgeMid, edgeMid + oddEdgeFactor, midIndex, id1};
 
-            if (currentEdge.GetReversed())
-            {
-                Swap(patch0.edgeInfo[edge], patch1.edgeInfo[edge]);
-                patch0.edgeInfo[edge] = patch0.edgeInfo[edge].Opposite();
-                patch1.edgeInfo[edge] = patch1.edgeInfo[edge].Opposite();
-            }
+            // if (currentEdge.GetReversed())
+            // {
+            //     Swap(patch0.edgeInfo[edge], patch1.edgeInfo[edge]);
+            //     patch0.edgeInfo[edge] = patch0.edgeInfo[edge].Opposite();
+            //     patch1.edgeInfo[edge] = patch1.edgeInfo[edge].Opposite();
+            // }
         }
     }
-
-    // i mean naively we just store 3 iterators
-    bool Split(BVHPatch &patch0, BVHPatch &patch1) const
-    {
-        int edgeU = Max(1, Max(edgeInfo[0].GetEdgeFactor(), edgeInfo[2].GetEdgeFactor()));
-        int edgeV = Max(1, Max(edgeInfo[1].GetEdgeFactor(), edgeInfo[3].GetEdgeFactor()));
-
-        Vec2i diff   = uvEnd - uvStart;
-        int numQuads = diff[0] * diff[1];
-        // TODO: this is wrong but maybe it's ok
-        int numTriangles = (edgeU - 1) + Max(edgeInfo[0].GetEdgeFactor() - 1, 0) +
-                           (edgeV - 1) + Max(edgeInfo[1].GetEdgeFactor() - 1, 0) +
-                           (edgeU - 1) + Max(edgeInfo[2].GetEdgeFactor() - 1, 0) +
-                           (edgeV - 1) + Max(edgeInfo[3].GetEdgeFactor() - 1, 0) +
-                           2 * numQuads;
-
-        if (numTriangles <= 8 || (edgeU == 1 && edgeV == 1)) return false;
-
-        patch0.patch = patch;
-        patch1.patch = patch;
-
-        // Vertical split
-        if (edgeU + diff[0] > edgeV + diff[1])
-        {
-            SplitEdge(patch0, patch1, 0);
-            SplitEdge(patch1, patch0, 2);
-
-            patch0.uvStart = uvStart;
-            patch0.uvEnd   = Vec2i((uvStart[0] + uvEnd[0]) / 2, uvEnd[1]);
-            // Unset 2nd for edge 1
-            patch0.bitMask     = bitMask & ~edgeMasks[1];
-            patch0.edgeInfo[3] = edgeInfo[3];
-            patch0.edgeInfo[1] = {};
-
-            patch1.uvStart = Vec2i((uvStart[0] + uvEnd[0]) / 2, uvStart[1]);
-            patch1.uvEnd   = uvEnd;
-            // Unset 4th bit for edge 3
-            patch1.bitMask     = bitMask & ~edgeMasks[3];
-            patch1.edgeInfo[1] = edgeInfo[1];
-            patch1.edgeInfo[3] = {};
-        }
-        // Horizontal split
-        else
-        {
-            SplitEdge(patch0, patch1, 1);
-            SplitEdge(patch1, patch0, 3);
-
-            patch0.uvStart = uvStart;
-            patch0.uvEnd   = Vec2i(uvEnd[0], (uvStart[1] + uvEnd[1]) / 2);
-            // Unset 2nd for edge 1
-            patch0.bitMask     = bitMask & ~edgeMasks[2];
-            patch0.edgeInfo[0] = edgeInfo[0];
-            patch0.edgeInfo[2] = {};
-
-            patch1.uvStart = Vec2i(uvStart[0], (uvStart[1] + uvEnd[1]) / 2);
-            patch1.uvEnd   = uvEnd;
-            // Unset 1st bit for edge 0
-            patch1.bitMask     = bitMask & ~edgeMasks[0];
-            patch1.edgeInfo[2] = edgeInfo[2];
-            patch1.edgeInfo[0] = {};
-        }
-        return true;
-    }
-
-    PatchItr CreateIterator(int edge) const
+    PatchItr CreateIterator() const
     {
         PatchItr itr;
         itr.patch = patch;
@@ -377,6 +305,51 @@ struct BVHPatch
         PatchItr itr = CreateIterator(edge);
         itr.GetUVs(id, uv);
         return itr;
+    }
+};
+
+struct BVHPatch
+{
+    // TODO: reference this somehow implicitly
+    OpenSubdivPatch *patch;
+
+    // TODO: fit this into 32 bits, maximum edge factor clamped to 255
+    // Lower left start
+    Vec2i uvStart;
+    // Upper right end
+    Vec2i uvEnd;
+
+    // i mean naively we just store 3 iterators
+    bool Split(BVHPatch &patch0, BVHPatch &patch1) const
+    {
+        Vec2i diff       = uvEnd - uvStart;
+        int numQuads     = diff[0] * diff[1];
+        int numTriangles = 2 * numQuads;
+
+        if (numTriangles <= 8) return false;
+
+        patch0.patch = patch;
+        patch1.patch = patch;
+
+        // Vertical split
+        if (diff[0] > diff[1])
+        {
+            patch0.uvStart = uvStart;
+            patch0.uvEnd   = Vec2i((uvStart[0] + uvEnd[0]) / 2, uvEnd[1]);
+
+            patch1.uvStart = Vec2i((uvStart[0] + uvEnd[0]) / 2, uvStart[1]);
+            patch1.uvEnd   = uvEnd;
+        }
+        // Horizontal split
+        else
+        {
+            patch0.uvStart = uvStart;
+            patch0.uvEnd   = Vec2i(uvEnd[0], (uvStart[1] + uvEnd[1]) / 2);
+
+            patch1.uvStart = Vec2i(uvStart[0], (uvStart[1] + uvEnd[1]) / 2);
+            patch1.uvEnd   = uvEnd;
+        }
+        return true;
     }
 };
 

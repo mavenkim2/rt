@@ -993,6 +993,9 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
         std::vector<BVHPatch> bvhPatches;
         bvhPatches.reserve((int)mesh->patches.Length());
 
+        std::vector<BVHEdge> bvhEdges;
+        bvhEdges.reserve((int)mesh->patches.Length() * 4);
+
         const auto &indices  = mesh->stitchingIndices;
         const auto &vertices = mesh->vertices;
         for (u32 j = 0; j < mesh->untessellatedPatches.Length(); j++)
@@ -1028,18 +1031,73 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
 
             int gridCount = (edgeRateU - 1) * (edgeRateV - 1);
 
+            int bvhEdgeIndex = (int)bvhEdges.size();
+            int bvhEdgeStart = bvhEdgeIndex;
+            // Individually split each edge into smaller triangles
+            for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
+            {
+                EdgeInfo &currentEdge = patch->edgeInfo[edgeIndex];
+
+                BVHEdge bvhEdge;
+                bvhEdge.edgeInfo = currentEdge;
+                bvhEdge.edge     = edgeIndex;
+
+                while (bvhEdgeIndex < (int)bvhEdges.size())
+                {
+                    EdgeInfo edge0, edge1;
+                    if (currentEdge.Split(edge0, edge1, edgeIndex))
+                    {
+                        bvhEdges.push_back(edge1);
+                        bvhEdgeIndex[bvhEdgeIndex] = edge0;
+                    }
+                    else
+                    {
+                        bvhEdgeIndex++;
+                    }
+                }
+            }
+
+            for (int k = bvhEdgeStart; k < (int)bvhEdges.size(); k++)
+            {
+                const BVHPatch &bvhPatch = bvhPatches[k];
+                Vec3f minP(pos_inf);
+                Vec3f maxP(neg_inf);
+
+                for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
+                {
+                    auto itr = bvhPatch.CreateIterator(edgeIndex);
+                    for (; itr.Next();)
+                    {
+                        minP = Min(Min(minP, vertices[itr.indices[0]]),
+                                   Min(vertices[itr.indices[1]], vertices[itr.indices[2]]));
+                        maxP = Max(Max(maxP, vertices[itr.indices[0]]),
+                                   Max(vertices[itr.indices[1]], vertices[itr.indices[2]]));
+                    }
+                }
+
+                geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
+                centBounds.Extend(Lane4F32(minP + maxP));
+
+                refs.emplace_back();
+                PrimRef *ref = &refs.back();
+                ref->minX    = -minP.x;
+                ref->minY    = -minP.y;
+                ref->minZ    = -minP.z;
+                ref->geomID  = i;
+                ref->maxX    = maxP.x;
+                ref->maxY    = maxP.y;
+                ref->maxZ    = maxP.z;
+                ref->primID  = k;
+            }
+
+            // Split internal grid into smaller grids
             int bvhPatchIndex = (int)bvhPatches.size();
             int bvhPatchStart = bvhPatchIndex;
             {
                 BVHPatch bvhPatch;
-                bvhPatch.patch       = patch;
-                bvhPatch.uvStart     = Vec2i(0, 0);
-                bvhPatch.uvEnd       = Vec2i(Max(edgeRateU - 2, 0), Max(edgeRateV - 2, 0));
-                bvhPatch.edgeInfo[0] = patch->edgeInfo[0];
-                bvhPatch.edgeInfo[1] = patch->edgeInfo[1];
-                bvhPatch.edgeInfo[2] = patch->edgeInfo[2];
-                bvhPatch.edgeInfo[3] = patch->edgeInfo[3];
-                bvhPatch.bitMask     = 0xf;
+                bvhPatch.patch   = patch;
+                bvhPatch.uvStart = Vec2i(0, 0);
+                bvhPatch.uvEnd   = Vec2i(Max(edgeRateU - 2, 0), Max(edgeRateV - 2, 0));
 
                 bvhPatches.push_back(bvhPatch);
             }
@@ -1064,18 +1122,6 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
                 const BVHPatch &bvhPatch = bvhPatches[k];
                 Vec3f minP(pos_inf);
                 Vec3f maxP(neg_inf);
-
-                for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
-                {
-                    auto itr = bvhPatch.CreateIterator(edgeIndex);
-                    for (; itr.Next();)
-                    {
-                        minP = Min(Min(minP, vertices[itr.indices[0]]),
-                                   Min(vertices[itr.indices[1]], vertices[itr.indices[2]]));
-                        maxP = Max(Max(maxP, vertices[itr.indices[0]]),
-                                   Max(vertices[itr.indices[1]], vertices[itr.indices[2]]));
-                    }
-                }
 
                 for (int v = bvhPatch.uvStart[1]; v <= bvhPatch.uvEnd[1]; v++)
                 {
