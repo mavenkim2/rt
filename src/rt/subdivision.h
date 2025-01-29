@@ -51,12 +51,9 @@ struct OpenSubdivPatch
     int gridIndexStart;
     FixedArray<EdgeInfo, 4> edgeInfo;
 
-    // Generates stitching indices instead of manually having to store them
-
     OpenSubdivPatch() {}
 
     PatchItr CreateIterator(int edge) const;
-    // PatchItr GetUVs(int edge, int id, Vec2f uv[3]) const;
 
     __forceinline int GetMaxEdgeFactorU() const
     {
@@ -156,7 +153,6 @@ struct PatchItr
     Vec2i uvStart;
     Vec2i uvEnd;
     int q;
-    int newIndex;
 
     // Bit trail
     int bitTrail = 0;
@@ -227,7 +223,6 @@ struct PatchItr
             uvStart += uvDiffTable[edge];
             int id2 = patch->GetGridIndex(uvStart[0], uvStart[1]);
 
-            newIndex = 2;
             indices.Push(id0);
             indices.Push(id1);
             indices.Push(id2);
@@ -241,7 +236,6 @@ struct PatchItr
             int id1 = edgeInfo.GetVertexID(edgeStep);
             int id2 = patch->GetGridIndex(uvStart[0], uvStart[1]);
 
-            newIndex = 1;
             indices.Push(id0);
             indices.Push(id1);
             indices.Push(id2);
@@ -272,7 +266,7 @@ struct PatchItr
         }
         else
         {
-            int id0 = edgeInfo.GetVertexID(edgeStep); // edge0
+            int id0 = edgeInfo.GetVertexID(edgeStep);
             edgeStep += edgeDiff;
             int id1 = edgeInfo.GetVertexID(edgeStep);
             int id2 = patch->GetGridIndex(uvStart[0], uvStart[1]);

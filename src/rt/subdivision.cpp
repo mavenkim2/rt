@@ -17,13 +17,6 @@ PatchItr OpenSubdivPatch::CreateIterator(int edge) const
     return itr;
 }
 
-// PatchItr OpenSubdivPatch::GetUVs(int edge, int id, Vec2f uv[3]) const
-// {
-//     PatchItr itr = PatchItr(this, edge);
-//     itr.GetUVs(id, uv);
-//     return itr;
-// }
-
 struct Vertex
 {
     void Clear(void * = 0) { p = Vec3f(0.f); }

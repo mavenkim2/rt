@@ -1206,12 +1206,6 @@ struct CatClarkPatchIntersector
                     int edgeV = patch->GetMaxEdgeFactorV();
 
                     Vec2f uvStep(1.f / edgeU, 1.f / edgeV);
-                    //
-                    // int quadIndex = id / 2;
-                    // int divisor   = edgeU - 2;
-                    // Assert(divisor);
-                    // int v = quadIndex / divisor;
-                    // int u = quadIndex % divisor;
 
                     int meta = GetMeta(patchIndex);
                     int u    = id & 0xffff;
@@ -1240,7 +1234,6 @@ struct CatClarkPatchIntersector
                 break;
                 case CatClarkTriangleType::TessStitching:
                 {
-                    // OpenSubdivPatch *patch = &mesh->patches[primID];
                     const BVHEdge *bvhEdge       = &mesh->bvhEdges[primID];
                     const OpenSubdivPatch *patch = bvhEdge->patch;
                     faceID                       = patch->faceID;
@@ -1287,13 +1280,15 @@ struct CatClarkPatchIntersector
             si.lightIndices                 = 0;
             si.faceIndices                  = faceID;
 
-            si.n         = u * n[1] + v * n[2] + w * n[0];
-            si.shading.n = si.n;
+            Vec3f dp02 = p[0] - p[2];
+            Vec3f dp12 = p[1] - p[2];
+            si.n       = Normalize(Cross(dp02, dp12));
+
+            si.shading.n = u * n[1] + v * n[2] + w * n[0];
+            si.shading.n = LengthSquared(si.shading.n) > 0 ? Normalize(si.shading.n) : si.n;
 
             Vec3f dpdu, dpdv, dndu, dndv;
 
-            Vec3f dp02 = p[0] - p[2];
-            Vec3f dp12 = p[1] - p[2];
             Vec3f dn02 = n[0] - n[2];
             Vec3f dn12 = n[1] - n[2];
 
@@ -1314,8 +1309,18 @@ struct CatClarkPatchIntersector
                 si.shading.dndv = FMS(Vec3f(duv02[0]), dn12, duv12[0] * dn02) * invDet;
             }
 
-            si.shading.dpdu = si.dpdu;
-            si.shading.dpdv = si.dpdv;
+            Vec3f ss = si.dpdu;
+            Vec3f ts = Cross(si.shading.n, ss);
+            if (LengthSquared(ts) > 0)
+            {
+                ss = Cross(ts, si.shading.n);
+            }
+            else
+            {
+                CoordinateSystem(si.shading.n, &ss, &ts);
+            }
+            si.shading.dpdu = ss;
+            si.shading.dpdv = ts;
             return true;
         }
 

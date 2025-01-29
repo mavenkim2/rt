@@ -903,6 +903,7 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                 AdaptiveTessellation(arena, scene, NDCFromCamera, screenHeight,
                                      (Mesh *)scene->primitives, scene->numPrimitives);
             BuildCatClarkBVH(arenas, settings, scene);
+            // BuildQuadBVH(arenas, settings, scene);
         }
         else
         {
