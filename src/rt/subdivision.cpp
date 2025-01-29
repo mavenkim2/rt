@@ -1,4 +1,5 @@
 #include "math/matx.h"
+#include "thread_context.h"
 #define M_PI 3.1415926535897932
 #include <opensubdiv/far/topologyDescriptor.h>
 #include <opensubdiv/far/primvarRefiner.h>
@@ -16,12 +17,12 @@ PatchItr OpenSubdivPatch::CreateIterator(int edge) const
     return itr;
 }
 
-PatchItr OpenSubdivPatch::GetUVs(int edge, int id, Vec2f uv[3]) const
-{
-    PatchItr itr = PatchItr(this, edge);
-    itr.GetUVs(id, uv);
-    return itr;
-}
+// PatchItr OpenSubdivPatch::GetUVs(int edge, int id, Vec2f uv[3]) const
+// {
+//     PatchItr itr = PatchItr(this, edge);
+//     itr.GetUVs(id, uv);
+//     return itr;
+// }
 
 struct Vertex
 {
@@ -519,6 +520,15 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
             StaticArray<UntessellatedPatch>(arena, untessellatedPatches);
 
         outputMesh->patches = StaticArray<OpenSubdivPatch>(arena, patches);
+
+        threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
+            sizeof(Vec3f) * 2 * outputMesh->vertices.Length();
+        threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
+            sizeof(UntessellatedPatch) * outputMesh->untessellatedPatches.Length();
+        threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
+            sizeof(OpenSubdivPatch) * outputMesh->patches.Length();
+        threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
+            sizeof(int) * outputMesh->stitchingIndices.Length();
 
         delete refiner;
         delete patchTable;

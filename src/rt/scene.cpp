@@ -1016,7 +1016,7 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
             ref->minX    = -minP.x;
             ref->minY    = -minP.y;
             ref->minZ    = -minP.z;
-            ref->geomID  = 0x80000000u | i;
+            ref->geomID  = CreatePatchID(CatClarkTriangleType::Untess, 0, i);
             ref->maxX    = maxP.x;
             ref->maxY    = maxP.y;
             ref->maxZ    = maxP.z;
@@ -1026,78 +1026,66 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
         {
             OpenSubdivPatch *patch = &mesh->patches[j];
 
-            int edgeRateU = patch->GetMaxEdgeFactorU();
-            int edgeRateV = patch->GetMaxEdgeFactorV();
-
-            int gridCount = (edgeRateU - 1) * (edgeRateV - 1);
-
-            int bvhEdgeIndex = (int)bvhEdges.size();
-            int bvhEdgeStart = bvhEdgeIndex;
             // Individually split each edge into smaller triangles
             for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
             {
                 EdgeInfo &currentEdge = patch->edgeInfo[edgeIndex];
 
-                BVHEdge bvhEdge;
-                bvhEdge.edgeInfo = currentEdge;
-                bvhEdge.edge     = edgeIndex;
+                auto itr = patch->CreateIterator(edgeIndex);
 
-                while (bvhEdgeIndex < (int)bvhEdges.size())
+                while (itr.IsNotFinished())
                 {
-                    EdgeInfo edge0, edge1;
-                    if (currentEdge.Split(edge0, edge1, edgeIndex))
-                    {
-                        bvhEdges.push_back(edge1);
-                        bvhEdgeIndex[bvhEdgeIndex] = edge0;
-                    }
-                    else
-                    {
-                        bvhEdgeIndex++;
-                    }
-                }
-            }
+                    Vec3f minP(pos_inf);
+                    Vec3f maxP(neg_inf);
 
-            for (int k = bvhEdgeStart; k < (int)bvhEdges.size(); k++)
-            {
-                const BVHPatch &bvhPatch = bvhPatches[k];
-                Vec3f minP(pos_inf);
-                Vec3f maxP(neg_inf);
+                    // save start state
+                    BVHEdge bvhEdge;
+                    bvhEdge.patch    = patch;
+                    Vec2i uvStart    = itr.uvStart;
+                    bvhEdge.edgeStep = itr.edgeStep;
 
-                for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
-                {
-                    auto itr = bvhPatch.CreateIterator(edgeIndex);
-                    for (; itr.Next();)
+                    for (int triIndex = 0; triIndex < 8 && itr.Next(); triIndex++)
                     {
                         minP = Min(Min(minP, vertices[itr.indices[0]]),
                                    Min(vertices[itr.indices[1]], vertices[itr.indices[2]]));
                         maxP = Max(Max(maxP, vertices[itr.indices[0]]),
                                    Max(vertices[itr.indices[1]], vertices[itr.indices[2]]));
                     }
+
+                    bvhEdge.edgeEnd  = itr.edgeStep;
+                    bvhEdge.grid     = UVGrid::Compress(uvStart, itr.uvStart);
+                    bvhEdge.bitTrail = itr.GetBitTrail();
+
+                    geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
+                    centBounds.Extend(Lane4F32(minP + maxP));
+
+                    int bvhEdgeIndex = (int)bvhEdges.size();
+                    bvhEdges.push_back(bvhEdge);
+
+                    refs.emplace_back();
+                    PrimRef *ref = &refs.back();
+                    ref->minX    = -minP.x;
+                    ref->minY    = -minP.y;
+                    ref->minZ    = -minP.z;
+                    ref->geomID =
+                        CreatePatchID(CatClarkTriangleType::TessStitching, edgeIndex, i);
+                    ref->maxX   = maxP.x;
+                    ref->maxY   = maxP.y;
+                    ref->maxZ   = maxP.z;
+                    ref->primID = bvhEdgeIndex;
                 }
-
-                geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
-                centBounds.Extend(Lane4F32(minP + maxP));
-
-                refs.emplace_back();
-                PrimRef *ref = &refs.back();
-                ref->minX    = -minP.x;
-                ref->minY    = -minP.y;
-                ref->minZ    = -minP.z;
-                ref->geomID  = i;
-                ref->maxX    = maxP.x;
-                ref->maxY    = maxP.y;
-                ref->maxZ    = maxP.z;
-                ref->primID  = k;
             }
 
             // Split internal grid into smaller grids
+            int edgeRateU     = patch->GetMaxEdgeFactorU();
+            int edgeRateV     = patch->GetMaxEdgeFactorV();
             int bvhPatchIndex = (int)bvhPatches.size();
             int bvhPatchStart = bvhPatchIndex;
             {
                 BVHPatch bvhPatch;
-                bvhPatch.patch   = patch;
-                bvhPatch.uvStart = Vec2i(0, 0);
-                bvhPatch.uvEnd   = Vec2i(Max(edgeRateU - 2, 0), Max(edgeRateV - 2, 0));
+                bvhPatch.patch = patch;
+                bvhPatch.grid  = UVGrid::Compress(
+                    Vec2i(0, 0), Vec2i(Max(edgeRateU - 2, 0), Max(edgeRateV - 2, 0)));
 
                 bvhPatches.push_back(bvhPatch);
             }
@@ -1123,9 +1111,11 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
                 Vec3f minP(pos_inf);
                 Vec3f maxP(neg_inf);
 
-                for (int v = bvhPatch.uvStart[1]; v <= bvhPatch.uvEnd[1]; v++)
+                Vec2i uvStart, uvEnd;
+                bvhPatch.grid.Decompress(uvStart, uvEnd);
+                for (int v = uvStart[1]; v <= uvEnd[1]; v++)
                 {
-                    for (int u = bvhPatch.uvStart[0]; u <= bvhPatch.uvEnd[0]; u++)
+                    for (int u = uvStart[0]; u <= uvEnd[0]; u++)
                     {
                         int index = patch->GetGridIndex(u, v);
                         minP      = Min(minP, vertices[index]);
@@ -1142,7 +1132,7 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
                 ref->minX    = -minP.x;
                 ref->minY    = -minP.y;
                 ref->minZ    = -minP.z;
-                ref->geomID  = i;
+                ref->geomID  = CreatePatchID(CatClarkTriangleType::TessGrid, 0, i);
                 ref->maxX    = maxP.x;
                 ref->maxY    = maxP.y;
                 ref->maxZ    = maxP.z;
@@ -1150,6 +1140,12 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
             }
         }
         mesh->bvhPatches = StaticArray<BVHPatch>(arena, bvhPatches);
+        mesh->bvhEdges   = StaticArray<BVHEdge>(arena, bvhEdges);
+
+        threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
+            sizeof(BVHPatch) * mesh->bvhPatches.Length();
+        threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
+            sizeof(BVHEdge) * mesh->bvhEdges.Length();
     }
 
     RecordAOSSplits record;

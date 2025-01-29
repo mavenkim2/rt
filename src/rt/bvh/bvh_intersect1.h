@@ -982,28 +982,6 @@ struct QuadIntersectorBase<N, Prim<N>>
     }
 };
 
-enum class CatClarkTriangleType
-{
-    Untess,
-    TessStitching,
-    TessGrid,
-
-    Max,
-};
-
-static_assert((u32)CatClarkTriangleType::Max <= 4, "enum is too large\n");
-
-u32 CreatePatchID(CatClarkTriangleType type, int meta, int index)
-{
-    Assert(index >= 0 && index < 0x0fffffff);
-    Assert(meta >= 0 && meta < 4);
-    return ((u32)type << 30) | (meta << 28) | index;
-}
-
-CatClarkTriangleType GetPatchType(u32 val) { return CatClarkTriangleType(val >> 30); }
-int GetTriangleIndex(u32 val) { return val & 0x0fffffff; }
-int GetMeta(u32 val) { return (val >> 28) & 0x3; }
-
 struct CatClarkPatchIntersector
 {
     typedef CatmullClarkPatch Primitive;
@@ -1063,10 +1041,13 @@ struct CatClarkPatchIntersector
 
         for (u32 i = 0; i < num; i++)
         {
-            Primitive &prim     = primitives[i];
-            u32 primID          = prim.primID;
-            u32 geomID          = prim.geomID & 0x7fffffff;
-            u32 isUntessellated = prim.geomID & 0x80000000;
+            Primitive &prim = primitives[i];
+            u32 primID      = prim.primID;
+            u32 bits        = prim.geomID;
+
+            CatClarkTriangleType type = GetPatchType(bits);
+            u32 geomID                = GetTriangleIndex(bits);
+            int edgeIndex             = GetMeta(bits);
 
             Assert(geomID < scene->numPrimitives);
             OpenSubdivMesh *mesh = meshes + geomID;
@@ -1090,56 +1071,63 @@ struct CatClarkPatchIntersector
                 FlushQueue();
             };
 
-            if (isUntessellated)
+            switch (type)
             {
-                const UntessellatedPatch *patch = &mesh->untessellatedPatches[primID];
-
-                int indexStart = patch->stitchingStart;
-
-                PushQueue(CatClarkTriangleType::Untess, 0, indices[indexStart + 0],
-                          indices[indexStart + 1], indices[indexStart + 2]);
-                PushQueue(CatClarkTriangleType::Untess, 1, indices[indexStart + 0],
-                          indices[indexStart + 2], indices[indexStart + 3]);
-            }
-            else
-            {
-                // const OpenSubdivPatch *patch = &mesh->patches[primID];
-                const BVHPatch *patch = &mesh->bvhPatches[primID];
-
-                // Step stitching indices
-                for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
+                case CatClarkTriangleType::Untess:
                 {
-                    int count     = 0;
-                    auto iterator = patch->CreateIterator(edgeIndex);
-                    for (; iterator.Next();)
+                    const UntessellatedPatch *patch = &mesh->untessellatedPatches[primID];
+
+                    int indexStart = patch->stitchingStart;
+
+                    PushQueue(CatClarkTriangleType::Untess, 0, indices[indexStart + 0],
+                              indices[indexStart + 1], indices[indexStart + 2]);
+                    PushQueue(CatClarkTriangleType::Untess, 1, indices[indexStart + 0],
+                              indices[indexStart + 2], indices[indexStart + 3]);
+                }
+                break;
+                case CatClarkTriangleType::TessStitching:
+                {
+                    const BVHEdge *edge = &mesh->bvhEdges[primID];
+                    auto iterator       = PatchItr(edge->patch, edge, edgeIndex);
+                    int count           = 0;
+                    for (; iterator.EdgeItrNext();)
                     {
                         PushQueue(CatClarkTriangleType::TessStitching, count++,
                                   iterator.indices[0], iterator.indices[1],
                                   iterator.indices[2], edgeIndex);
                     }
                 }
-
-                // Step inner grid
-
-                // for (int v = 0; v < maxEdgeRates[1] - 2; v++)
-                for (int v = patch->uvStart[1]; v < patch->uvEnd[1]; v++)
+                break;
+                case CatClarkTriangleType::TessGrid:
                 {
-                    for (int u = patch->uvStart[0]; u < patch->uvEnd[0]; u++)
+                    // Step inner grid
+                    const BVHPatch *bvhPatch     = &mesh->bvhPatches[primID];
+                    const OpenSubdivPatch *patch = bvhPatch->patch;
+
+                    Vec2i uvStart, uvEnd;
+                    bvhPatch->grid.Decompress(uvStart, uvEnd);
+
+                    for (int v = uvStart[1]; v < uvEnd[1]; v++)
                     {
-                        const int id00 = patch->patch->GetGridIndex(u, v);
-                        const int id10 = patch->patch->GetGridIndex(u + 1, v);
-                        const int id11 = patch->patch->GetGridIndex(u + 1, v + 1);
-                        const int id01 = patch->patch->GetGridIndex(u, v + 1);
+                        for (int u = uvStart[0]; u < uvEnd[0]; u++)
+                        {
+                            const int id00 = patch->GetGridIndex(u, v);
+                            const int id10 = patch->GetGridIndex(u + 1, v);
+                            const int id11 = patch->GetGridIndex(u + 1, v + 1);
+                            const int id01 = patch->GetGridIndex(u, v + 1);
 
-                        Assert(u < 0xffff && v < 0xffff);
+                            Assert(u < 0xffff && v < 0xffff);
 
-                        u32 count = ((u32)v << 16u) | (u32)u;
+                            u32 count = ((u32)v << 16u) | (u32)u;
 
-                        PushQueue(CatClarkTriangleType::TessGrid, count, id00, id10, id11);
-                        PushQueue(CatClarkTriangleType::TessGrid, count | 0x80000000, id00,
-                                  id11, id01);
+                            PushQueue(CatClarkTriangleType::TessGrid, count, id00, id10, id11);
+                            PushQueue(CatClarkTriangleType::TessGrid, count, id00, id11, id01,
+                                      1);
+                        }
                     }
                 }
+                break;
+                default: Assert(0);
             }
         }
         EmptyQueue();
@@ -1225,11 +1213,12 @@ struct CatClarkPatchIntersector
                     // int v = quadIndex / divisor;
                     // int u = quadIndex % divisor;
 
-                    int u = id & 0xffff;
-                    int v = (id >> 16) & 0x7fff;
+                    int meta = GetMeta(patchIndex);
+                    int u    = id & 0xffff;
+                    int v    = (id >> 16) & 0x7fff;
 
                     // Second triangle
-                    if (id & 0x80000000)
+                    if (meta)
                     {
                         vertexIndices[0] = patch->GetGridIndex(u, v);
                         vertexIndices[1] = patch->GetGridIndex(u + 1, v + 1);
@@ -1252,13 +1241,14 @@ struct CatClarkPatchIntersector
                 case CatClarkTriangleType::TessStitching:
                 {
                     // OpenSubdivPatch *patch = &mesh->patches[primID];
-                    const BVHPatch *bvhPatch     = &mesh->bvhPatches[primID];
-                    const OpenSubdivPatch *patch = bvhPatch->patch;
+                    const BVHEdge *bvhEdge       = &mesh->bvhEdges[primID];
+                    const OpenSubdivPatch *patch = bvhEdge->patch;
                     faceID                       = patch->faceID;
 
                     // Reconstruct uvs
-                    int edgeIndex    = GetMeta(patchIndex);
-                    auto iterator    = bvhPatch->GetUVs(edgeIndex, id, uvs);
+                    int edgeIndex = GetMeta(patchIndex);
+                    auto iterator = PatchItr(patch, bvhEdge, edgeIndex);
+                    iterator.GetUV(id, uvs);
                     vertexIndices[0] = iterator.indices[0];
                     vertexIndices[1] = iterator.indices[1];
                     vertexIndices[2] = iterator.indices[2];
