@@ -151,18 +151,29 @@ struct TessellatedVertices
         currentGridOffset = (int)vertices.size();
         vertices.resize(vertices.size() + ((uMax - 1) * (vMax - 1)));
     }
-    int GetInnerGridIndex(int u, int v) const
+    void StartNewGrid(int totalSize, int maxU, int maxV)
     {
-        Assert(u >= 0 && v >= 0 && u < uMax - 1 && v < vMax - 1);
-        int gridIndex = currentGridOffset + v * (uMax - 1) + u;
-        Assert(gridIndex < (int)vertices.size());
-        return gridIndex;
+        uMax              = maxU;
+        vMax              = maxV;
+        currentGridOffset = totalSize;
     }
-    Vec3f &SetInnerGrid(int u, int v)
-    {
-        int gridIndex = GetInnerGridIndex(u, v);
-        return vertices[gridIndex];
-    }
+    // int GetInnerGridIndex(int u, int v) const
+    // {
+    //     Assert(u >= 0 && v >= 0 && u < uMax - 1 && v < vMax - 1);
+    //     int gridIndex = currentGridOffset + v * (uMax - 1) + u;
+    //     Assert(gridIndex < (int)vertices.size());
+    //     return gridIndex;
+    // }
+    // Vec3f &SetNormal(int u, int v)
+    // {
+    //     int gridIndex = GetInnerGridIndex(u, v);
+    //     return normals[gridIndex];
+    // }
+    // Vec3f &SetInnerGrid(int u, int v)
+    // {
+    //     int gridIndex = GetInnerGridIndex(u, v);
+    //     return vertices[gridIndex];
+    // }
 };
 
 // TODO:
@@ -204,328 +215,376 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
     // TODO: catmull clark primitive
     OpenSubdivMesh *outputMeshes = PushArray(arena, OpenSubdivMesh, numMeshes);
 
-    for (u32 meshIndex = 0; meshIndex < numMeshes; meshIndex++)
-    {
-        OpenSubdivMesh *outputMesh = &outputMeshes[meshIndex];
+    // for (u32 meshIndex = 0; meshIndex < numMeshes; meshIndex++)
 
-        TessellatedVertices tessellatedVertices;
-        Mesh *controlMesh = &controlMeshes[meshIndex];
-        tessellatedVertices.vertices.reserve(tessellatedVertices.vertices.capacity() +
-                                             controlMesh->numVertices);
-        tessellatedVertices.normals.reserve(tessellatedVertices.normals.capacity() +
-                                            controlMesh->numVertices);
-
-        std::vector<FaceInfo> faceInfos(controlMesh->numFaces);
-        std::vector<EdgeInfo> edgeInfos;
-        edgeInfos.reserve(controlMesh->numIndices / 4);
-
-        ScratchArena scratch;
-
-        std::vector<LimitSurfaceSample> samples(controlMesh->numVertices);
-
-        i32 *numVertsPerFace = PushArrayNoZero(scratch.temp.arena, i32, controlMesh->numFaces);
-        for (u32 i = 0; i < controlMesh->numFaces; i++)
+    ParallelFor(0, numMeshes, PARALLEL_THRESHOLD, 1, [&](u32 jobID, u32 start, u32 count) {
+        for (u32 meshIndex = start; meshIndex < start + count; meshIndex++)
         {
-            numVertsPerFace[i] = 4;
-        }
+            OpenSubdivMesh *outputMesh = &outputMeshes[meshIndex];
 
-        Descriptor desc;
-        desc.numVertices        = controlMesh->numVertices;
-        desc.numFaces           = controlMesh->numFaces;
-        desc.numVertsPerFace    = numVertsPerFace;
-        desc.vertIndicesPerFace = (int *)controlMesh->indices;
+            TessellatedVertices tessellatedVertices;
+            Mesh *controlMesh = &controlMeshes[meshIndex];
+            tessellatedVertices.vertices.reserve(tessellatedVertices.vertices.capacity() +
+                                                 controlMesh->numVertices);
+            tessellatedVertices.normals.reserve(tessellatedVertices.normals.capacity() +
+                                                controlMesh->numVertices);
 
-        int maxMeshEdgeRate = 0;
+            std::vector<FaceInfo> faceInfos(controlMesh->numFaces);
+            std::vector<EdgeInfo> edgeInfos;
+            edgeInfos.reserve(controlMesh->numIndices / 4);
 
-        // NOTE: this assumes everything is a quad
-        // Compute edge rates
-        std::unordered_map<u64, int> edgeIDMap;
-        for (int f = 0; f < (int)controlMesh->numFaces; f++)
-        {
-            int indexOffset = 4 * f;
-            for (int i = 0; i < 4; i++)
+            ScratchArena scratch;
+
+            std::vector<LimitSurfaceSample> samples(controlMesh->numVertices);
+
+            i32 *numVertsPerFace =
+                PushArrayNoZero(scratch.temp.arena, i32, controlMesh->numFaces);
+            for (u32 i = 0; i < controlMesh->numFaces; i++)
             {
-                int id0       = controlMesh->indices[indexOffset + i];
-                int id1       = controlMesh->indices[indexOffset + ((i + 1) & 3)];
-                u64 edgeId    = ComputeEdgeId(id0, id1);
-                bool reversed = false;
+                numVertsPerFace[i] = 4;
+            }
 
-                // Add vertex samples for evaluation
-                Assert(id0 < (int)samples.size());
-                if (!samples[id0].IsValid())
+            Descriptor desc;
+            desc.numVertices        = controlMesh->numVertices;
+            desc.numFaces           = controlMesh->numFaces;
+            desc.numVertsPerFace    = numVertsPerFace;
+            desc.vertIndicesPerFace = (int *)controlMesh->indices;
+
+            int maxMeshEdgeRate = 0;
+
+            // NOTE: this assumes everything is a quad
+            // Compute edge rates
+            std::unordered_map<u64, int> edgeIDMap;
+            for (int f = 0; f < (int)controlMesh->numFaces; f++)
+            {
+                int indexOffset = 4 * f;
+                for (int i = 0; i < 4; i++)
                 {
-                    samples[id0] = LimitSurfaceSample{f, uvTable[i]};
-                }
-                // Set edge rate
-                const auto &result = edgeIDMap.find(edgeId);
-                int edgeIndex      = -1;
-                if (result == edgeIDMap.end())
-                {
-                    // Compute tessellation factor
-                    Vec3f p0       = controlMesh->p[id0];
-                    Vec3f p1       = controlMesh->p[id1];
-                    Vec3f midPoint = (p0 + p1) / 2.f;
-                    f32 radius     = Length(p0 - p1) / 2.f;
+                    int id0       = controlMesh->indices[indexOffset + i];
+                    int id1       = controlMesh->indices[indexOffset + ((i + 1) & 3)];
+                    u64 edgeId    = ComputeEdgeId(id0, id1);
+                    bool reversed = false;
 
-                    int edgeFactor = int(edgesPerScreenHeight * radius *
-                                         Abs(NDCFromCamera[1][1] / midPoint.z)) -
-                                     1;
-
-                    edgeFactor = Clamp(edgeFactor, 1, 8);
-                    // edgeFactor     = Clamp(edgeFactor, 1, 64);
-
-                    maxMeshEdgeRate = Max(maxMeshEdgeRate, edgeFactor);
-
-                    edgeIndex = (int)edgeInfos.size();
-                    edgeInfos.emplace_back(
-                        EdgeInfo{(int)samples.size(), (u32)edgeFactor, id0, id1});
-                    edgeIDMap[edgeId] = edgeIndex;
-
-                    // Add edge samples for evaluation
-                    f32 stepSize = 1.f / edgeFactor;
-                    for (int edgeVertexIndex = 1; edgeVertexIndex < edgeFactor;
-                         edgeVertexIndex++)
+                    // Add vertex samples for evaluation
+                    Assert(id0 < (int)samples.size());
+                    if (!samples[id0].IsValid())
                     {
-                        Vec2f uv =
-                            uvTable[i] + Vec2f(uvDiffTable[i]) * (edgeVertexIndex * stepSize);
-                        samples.push_back(LimitSurfaceSample{f, uv});
+                        samples[id0] = LimitSurfaceSample{f, uvTable[i]};
                     }
-                }
-                else
-                {
-                    edgeIndex = edgeIDMap[edgeId];
-                    reversed  = true;
-                }
-                Assert(edgeIndex != -1);
-                faceInfos[f].edgeInfoId[i] = edgeIndex;
-                faceInfos[f].reversed[i]   = reversed;
-            }
-        }
-
-        // Create OpenSubdiv objects
-        Far::TopologyRefiner *refiner = Far::TopologyRefinerFactory<Descriptor>::Create(
-            desc, Far::TopologyRefinerFactory<Descriptor>::Options(type, options));
-
-        int tessDepth = Clamp(Log2Int(maxMeshEdgeRate), 1, 10);
-        Far::PatchTableFactory::Options patchOptions(tessDepth);
-        patchOptions.SetEndCapType(Far::PatchTableFactory::Options::ENDCAP_GREGORY_BASIS);
-
-        Far::TopologyRefiner::AdaptiveOptions adaptiveOptions =
-            patchOptions.GetRefineAdaptiveOptions();
-        refiner->RefineAdaptive(adaptiveOptions);
-
-        int maxLevel                    = refiner->GetMaxLevel();
-        const Far::TopologyLevel &level = refiner->GetLevel(0);
-        int faces                       = level.GetNumFaces();
-
-        auto *patchTable = Far::PatchTableFactory::Create(*refiner, patchOptions);
-        OpenSubdiv::Far::PatchMap patchMap(*patchTable);
-
-        // Feature adaptive refinment
-        int size           = refiner->GetNumVerticesTotal();
-        int numLocalPoints = patchTable->GetNumLocalPoints();
-        Vertex *vertices = PushArrayNoZero(scratch.temp.arena, Vertex, size + numLocalPoints);
-        MemoryCopy(vertices, controlMesh->p, sizeof(Vec3f) * controlMesh->numVertices);
-
-        Vertex *src        = vertices;
-        i32 nRefinedLevels = refiner->GetNumLevels();
-        Far::PrimvarRefiner primvarRefiner(*refiner);
-
-        for (i32 i = 1; i < nRefinedLevels; i++)
-        {
-            Vertex *dst = src + refiner->GetLevel(i - 1).GetNumVertices();
-            primvarRefiner.Interpolate(i, src, dst);
-            src = dst;
-        }
-
-        patchTable->ComputeLocalPointValues(&vertices[0], &vertices[size]);
-
-        int numPatches = patchTable->GetNumPatchesTotal();
-
-        MaterialHandle handle = scene->primIndices[meshIndex].materialID;
-        PtexTexture *texture  = 0;
-        if (handle)
-        {
-            int materialIndex = handle.GetIndex();
-            texture = (PtexTexture *)baseScene->materials[materialIndex]->displacement;
-        }
-
-        // Evaluate limit surface positons for corners
-        for (auto &sample : samples)
-        {
-            Vec3f pos, dpdu, dpdv;
-            EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable, sample, pos, dpdu,
-                                         dpdv);
-            Vec3f normal = Normalize(Cross(dpdu, dpdv));
-            tessellatedVertices.vertices.push_back(pos);
-            tessellatedVertices.normals.push_back(normal);
-        }
-
-        int totalNumPatchFaces = 0;
-        std::vector<OpenSubdivPatch> patches;
-        std::vector<UntessellatedPatch> untessellatedPatches;
-        patches.reserve(controlMesh->numFaces);
-        untessellatedPatches.reserve(controlMesh->numFaces);
-        for (int f = 0; f < (int)controlMesh->numFaces; f++)
-        {
-            int face = f;
-            // int face =
-            //     f >= (int)controlMesh->numFaces / 2 ? f - (int)controlMesh->numFaces / 2
-            //     : f;
-
-            FaceInfo &faceInfo = faceInfos[f];
-            // Compute limit surface samples
-            int edgeRates[4] = {
-                (int)edgeInfos[faceInfo.edgeInfoId[0]].edgeFactor,
-                (int)edgeInfos[faceInfo.edgeInfoId[1]].edgeFactor,
-                (int)edgeInfos[faceInfo.edgeInfoId[2]].edgeFactor,
-                (int)edgeInfos[faceInfo.edgeInfoId[3]].edgeFactor,
-            };
-            int maxEdgeRates[2] = {
-                Max(edgeRates[0], edgeRates[2]),
-                Max(edgeRates[1], edgeRates[3]),
-            };
-            f32 scale[2] = {
-                1.f / maxEdgeRates[0],
-                1.f / maxEdgeRates[1],
-            };
-
-            if (maxEdgeRates[0] == 1 && maxEdgeRates[1] == 1)
-            {
-                untessellatedPatches.emplace_back(UntessellatedPatch{
-                    face, (int)tessellatedVertices.stitchingIndices.size()});
-
-                for (int quadIndex = 0; quadIndex < 4; quadIndex++)
-                {
-                    tessellatedVertices.stitchingIndices.push_back(
-                        edgeInfos[faceInfo.edgeInfoId[quadIndex]].GetFirst(
-                            faceInfo.reversed[quadIndex]));
-                }
-
-                continue;
-            }
-
-            // Effectively adds a center point
-            if (maxEdgeRates[0] == 1)
-            {
-                maxEdgeRates[0] = 2;
-                scale[0]        = 0.5f;
-            }
-            if (maxEdgeRates[1] == 1)
-            {
-                maxEdgeRates[1] = 2;
-                scale[1]        = 0.5f;
-            }
-            // Inner grid of vertices (local to a patch)
-            tessellatedVertices.StartNewGrid(maxEdgeRates[0], maxEdgeRates[1]);
-
-            OpenSubdivPatch patch;
-            patch.faceID         = face;
-            patch.gridIndexStart = tessellatedVertices.currentGridOffset;
-
-            // Generate n x m interior grid of points
-            for (int vStep = 0; vStep < maxEdgeRates[1] - 1; vStep++)
-            {
-                for (int uStep = 0; uStep < maxEdgeRates[0] - 1; uStep++)
-                {
-                    Vec2f uv(scale[0] * (uStep + 1), scale[1] * (vStep + 1));
-
-                    Vec3f pos, dpdu, dpdv, dpduu, dpduv, dpdvv;
-                    EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable,
-                                                 LimitSurfaceSample{f, uv}, pos, dpdu, dpdv,
-                                                 dpduu, dpduv, dpdvv);
-                    Vec3f normal = Normalize(Cross(dpdu, dpdv));
-
-                    if (texture)
+                    // Set edge rate
+                    const auto &result = edgeIDMap.find(edgeId);
+                    int edgeIndex      = -1;
+                    if (result == edgeIDMap.end())
                     {
-                        // Vector Displacement mapping
-                        auto frame = LinearSpace3f::FromXZ(Normalize(dpdu), normal);
-                        Vec3f displacement, uDisplacement, vDisplacement;
-                        Vec4f filterWidths(.5f * scale[0], 0, 0, .5f * scale[1]);
-                        SurfaceInteraction intr;
-                        intr.uv          = uv;
-                        intr.faceIndices = face;
-                        texture->EvaluateHelper<3>(intr, filterWidths, displacement.e);
+                        // Compute tessellation factor
+                        Vec3f p0       = controlMesh->p[id0];
+                        Vec3f p1       = controlMesh->p[id1];
+                        Vec3f midPoint = (p0 + p1) / 2.f;
+                        f32 radius     = Length(p0 - p1) / 2.f;
 
-                        f32 du  = .5f * scale[0];
-                        intr.uv = uv + Vec2f(du, 0.f);
-                        texture->EvaluateHelper<3>(intr, filterWidths, uDisplacement.e);
+                        int edgeFactor = int(edgesPerScreenHeight * radius *
+                                             Abs(NDCFromCamera[1][1] / midPoint.z)) -
+                                         1;
 
-                        f32 dv  = .5f * scale[1];
-                        intr.uv = uv + Vec2f(0.f, dv);
-                        texture->EvaluateHelper<3>(intr, filterWidths, vDisplacement.e);
+                        edgeFactor = Clamp(edgeFactor, 1, 8);
+                        // edgeFactor     = Clamp(edgeFactor, 1, 64);
 
-                        // Calculate dndu and dndv using weingarten equations
-#if 0
-                        f32 E = Dot(dpdu, dpdu);
-                        f32 F = Dot(dpdu, dpdv);
-                        f32 G = Dot(dpdv, dpdv);
+                        maxMeshEdgeRate = Max(maxMeshEdgeRate, edgeFactor);
 
-                        f32 e    = Dot(normal, dpduu);
-                        f32 fvar = Dot(normal, dpduv);
-                        f32 g    = Dot(normal, dpdvv);
+                        edgeIndex = (int)edgeInfos.size();
+                        edgeInfos.emplace_back(
+                            EdgeInfo{(int)samples.size(), (u32)edgeFactor, id0, id1});
+                        edgeIDMap[edgeId] = edgeIndex;
 
-                        f32 invEGF2 = Rcp(FMS(E, G, Sqr(F)));
-                        Vec3f dndu =
-                            invEGF2 * (dpdu * (fvar * F - e * G) + dpdv * (e * F - fvar * E));
-                        Vec3f dndv =
-                            invEGF2 * (dpdu * (g * F - fvar * G) + dpdv * (fvar * F - g * E));
-                        dndu = Normalize(dndu - normal * Dot(dndu, normal));
-                        dndv = Normalize(dndv - normal * Dot(dndv, normal));
-#endif
+                        // Add edge samples for evaluation
+                        f32 stepSize = 1.f / edgeFactor;
+                        for (int edgeVertexIndex = 1; edgeVertexIndex < edgeFactor;
+                             edgeVertexIndex++)
+                        {
+                            Vec2f uv = uvTable[i] +
+                                       Vec2f(uvDiffTable[i]) * (edgeVertexIndex * stepSize);
+                            samples.push_back(LimitSurfaceSample{f, uv});
+                        }
+                    }
+                    else
+                    {
+                        edgeIndex = edgeIDMap[edgeId];
+                        reversed  = true;
+                    }
+                    Assert(edgeIndex != -1);
+                    faceInfos[f].edgeInfoId[i] = edgeIndex;
+                    faceInfos[f].reversed[i]   = reversed;
+                }
+            }
 
-                        displacement  = frame.FromLocal(displacement);
-                        uDisplacement = frame.FromLocal(uDisplacement);
-                        vDisplacement = frame.FromLocal(vDisplacement);
+            // Create OpenSubdiv objects
+            Far::TopologyRefiner *refiner = Far::TopologyRefinerFactory<Descriptor>::Create(
+                desc, Far::TopologyRefinerFactory<Descriptor>::Options(type, options));
 
-                        pos += displacement;
-                        // dpdu = dpdu + (uDisplacement - displacement) / du * normal +
-                        //        displacement * dndu;
-                        // dpdv = dpdv + (vDisplacement - displacement) / dv * normal +
-                        //        displacement * dndv;
-                        dpdu += (uDisplacement - displacement) / du;
-                        dpdv += (vDisplacement - displacement) / dv;
-                        normal = Normalize(Cross(dpdu, dpdv));
+            int tessDepth = Clamp(Log2Int(maxMeshEdgeRate), 1, 10);
+            Far::PatchTableFactory::Options patchOptions(tessDepth);
+            patchOptions.SetEndCapType(Far::PatchTableFactory::Options::ENDCAP_GREGORY_BASIS);
+
+            Far::TopologyRefiner::AdaptiveOptions adaptiveOptions =
+                patchOptions.GetRefineAdaptiveOptions();
+            refiner->RefineAdaptive(adaptiveOptions);
+
+            int maxLevel                    = refiner->GetMaxLevel();
+            const Far::TopologyLevel &level = refiner->GetLevel(0);
+            int faces                       = level.GetNumFaces();
+
+            auto *patchTable = Far::PatchTableFactory::Create(*refiner, patchOptions);
+            OpenSubdiv::Far::PatchMap patchMap(*patchTable);
+
+            // Feature adaptive refinment
+            int size           = refiner->GetNumVerticesTotal();
+            int numLocalPoints = patchTable->GetNumLocalPoints();
+            Vertex *vertices =
+                PushArrayNoZero(scratch.temp.arena, Vertex, size + numLocalPoints);
+            MemoryCopy(vertices, controlMesh->p, sizeof(Vec3f) * controlMesh->numVertices);
+
+            Vertex *src        = vertices;
+            i32 nRefinedLevels = refiner->GetNumLevels();
+            Far::PrimvarRefiner primvarRefiner(*refiner);
+
+            for (i32 i = 1; i < nRefinedLevels; i++)
+            {
+                Vertex *dst = src + refiner->GetLevel(i - 1).GetNumVertices();
+                primvarRefiner.Interpolate(i, src, dst);
+                src = dst;
+            }
+
+            patchTable->ComputeLocalPointValues(&vertices[0], &vertices[size]);
+
+            int numPatches = patchTable->GetNumPatchesTotal();
+
+            MaterialHandle handle = scene->primIndices[meshIndex].materialID;
+            PtexTexture *texture  = 0;
+            if (handle)
+            {
+                int materialIndex = handle.GetIndex();
+                texture = (PtexTexture *)baseScene->materials[materialIndex]->displacement;
+            }
+
+            tessellatedVertices.vertices.resize(samples.size());
+            tessellatedVertices.normals.resize(samples.size());
+            // Evaluate limit surface positons for corners
+            ParallelFor(0, (u32)samples.size(), 8092, 8092,
+                        [&](int jobID, int start, int count) {
+                            for (int i = start; i < start + count; i++)
+                            {
+                                const LimitSurfaceSample &sample = samples[i];
+                                Vec3f pos, dpdu, dpdv;
+                                EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable,
+                                                             sample, pos, dpdu, dpdv);
+                                Vec3f normal                    = Normalize(Cross(dpdu, dpdv));
+                                tessellatedVertices.vertices[i] = pos;
+                                tessellatedVertices.normals[i]  = normal;
+                            }
+                        });
+
+            int totalNumPatchFaces = 0;
+            std::vector<OpenSubdivPatch> patches;
+            std::vector<UntessellatedPatch> untessellatedPatches;
+            patches.reserve(controlMesh->numFaces);
+            untessellatedPatches.reserve(controlMesh->numFaces);
+
+            int totalSize = 0;
+
+            int vSize = (int)tessellatedVertices.vertices.size();
+            Assert(vSize == (int)tessellatedVertices.normals.size());
+
+            for (int f = 0; f < (int)controlMesh->numFaces; f++)
+            {
+                int face = f;
+
+                FaceInfo &faceInfo = faceInfos[f];
+                // Compute limit surface samples
+                int edgeRates[4] = {
+                    (int)edgeInfos[faceInfo.edgeInfoId[0]].edgeFactor,
+                    (int)edgeInfos[faceInfo.edgeInfoId[1]].edgeFactor,
+                    (int)edgeInfos[faceInfo.edgeInfoId[2]].edgeFactor,
+                    (int)edgeInfos[faceInfo.edgeInfoId[3]].edgeFactor,
+                };
+                int maxEdgeRates[2] = {
+                    Max(edgeRates[0], edgeRates[2]),
+                    Max(edgeRates[1], edgeRates[3]),
+                };
+                f32 scale[2] = {
+                    1.f / maxEdgeRates[0],
+                    1.f / maxEdgeRates[1],
+                };
+
+                if (maxEdgeRates[0] == 1 && maxEdgeRates[1] == 1)
+                {
+                    untessellatedPatches.emplace_back(UntessellatedPatch{
+                        face, (int)tessellatedVertices.stitchingIndices.size()});
+
+                    for (int quadIndex = 0; quadIndex < 4; quadIndex++)
+                    {
+                        tessellatedVertices.stitchingIndices.push_back(
+                            edgeInfos[faceInfo.edgeInfoId[quadIndex]].GetFirst(
+                                faceInfo.reversed[quadIndex]));
                     }
 
-                    tessellatedVertices.normals.push_back(normal);
-                    tessellatedVertices.SetInnerGrid(uStep, vStep) = pos;
+                    continue;
                 }
+
+                // Effectively adds a center point
+                if (maxEdgeRates[0] == 1)
+                {
+                    maxEdgeRates[0] = 2;
+                    scale[0]        = 0.5f;
+                }
+                if (maxEdgeRates[1] == 1)
+                {
+                    maxEdgeRates[1] = 2;
+                    scale[1]        = 0.5f;
+                }
+                // Inner grid of vertices (local to a patch)
+                tessellatedVertices.StartNewGrid(vSize + totalSize, maxEdgeRates[0],
+                                                 maxEdgeRates[1]);
+
+                OpenSubdivPatch patch;
+                patch.faceID         = face;
+                patch.gridIndexStart = tessellatedVertices.currentGridOffset;
+
+                totalSize += (maxEdgeRates[1] - 1) * (maxEdgeRates[0] - 1);
+
+                // Generate stitching triangles to compensate for differing edge rates
+                for (u32 edgeIndex = 0; edgeIndex < 4; edgeIndex++)
+                {
+                    int edgeRate                = edgeRates[edgeIndex];
+                    const EdgeInfo &currentEdge = edgeInfos[faceInfo.edgeInfoId[edgeIndex]];
+
+                    patch.edgeInfo.Push(faceInfo.reversed[edgeIndex] ? currentEdge.Opposite()
+                                                                     : currentEdge);
+                }
+                patches.push_back(patch);
             }
 
-            // Generate stitching triangles to compensate for differing edge rates
-            for (u32 edgeIndex = 0; edgeIndex < 4; edgeIndex++)
-            {
-                int edgeRate                = edgeRates[edgeIndex];
-                const EdgeInfo &currentEdge = edgeInfos[faceInfo.edgeInfoId[edgeIndex]];
+            // tessellatedVertices.vertices.resize(vSize + totalSize);
+            // tessellatedVertices.normals.resize(vSize + totalSize);
 
-                patch.edgeInfo.Push(faceInfo.reversed[edgeIndex] ? currentEdge.Opposite()
-                                                                 : currentEdge);
-            }
-            patches.push_back(patch);
+            outputMesh->vertices      = StaticArray<Vec3f>(arena, vSize + totalSize);
+            outputMesh->normals       = StaticArray<Vec3f>(arena, vSize + totalSize);
+            outputMesh->vertices.size = vSize + totalSize;
+            outputMesh->normals.size  = vSize + totalSize;
+            MemoryCopy(outputMesh->vertices.data, tessellatedVertices.vertices.data(),
+                       sizeof(Vec3f) * vSize);
+            MemoryCopy(outputMesh->normals.data, tessellatedVertices.normals.data(),
+                       sizeof(Vec3f) * vSize);
+
+            ParallelFor(
+                0, (u32)patches.size(), 8092, 8092, [&](int jobID, int start, int count) {
+                    for (int i = start; i < start + count; i++)
+                    {
+                        OpenSubdivPatch *patch = &patches[i];
+                        int f                  = patch->faceID;
+                        FaceInfo &faceInfo     = faceInfos[f];
+                        // Compute limit surface samples
+                        int edgeRates[4] = {
+                            (int)edgeInfos[faceInfo.edgeInfoId[0]].GetEdgeFactor(),
+                            (int)edgeInfos[faceInfo.edgeInfoId[1]].GetEdgeFactor(),
+                            (int)edgeInfos[faceInfo.edgeInfoId[2]].GetEdgeFactor(),
+                            (int)edgeInfos[faceInfo.edgeInfoId[3]].GetEdgeFactor(),
+                        };
+                        int maxEdgeRates[2] = {
+                            Max(edgeRates[0], edgeRates[2]),
+                            Max(edgeRates[1], edgeRates[3]),
+                        };
+
+                        // Effectively adds a center point
+                        if (maxEdgeRates[0] == 1) maxEdgeRates[0] = 2;
+                        if (maxEdgeRates[1] == 1) maxEdgeRates[1] = 2;
+
+                        f32 scale[2] = {
+                            1.f / maxEdgeRates[0],
+                            1.f / maxEdgeRates[1],
+                        };
+                        // Generate n x m interior grid of points
+                        for (int vStep = 0; vStep < maxEdgeRates[1] - 1; vStep++)
+                        {
+                            for (int uStep = 0; uStep < maxEdgeRates[0] - 1; uStep++)
+                            {
+                                Vec2f uv(scale[0] * (uStep + 1), scale[1] * (vStep + 1));
+
+                                Vec3f pos, dpdu, dpdv, dpduu, dpduv, dpdvv;
+                                EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable,
+                                                             LimitSurfaceSample{f, uv}, pos,
+                                                             dpdu, dpdv, dpduu, dpduv, dpdvv);
+                                Vec3f normal = Normalize(Cross(dpdu, dpdv));
+
+                                if (texture)
+                                {
+                                    // Vector Displacement mapping
+                                    auto frame =
+                                        LinearSpace3f::FromXZ(Normalize(dpdu), normal);
+                                    Vec3f displacement, uDisplacement, vDisplacement;
+                                    Vec4f filterWidths(.5f * scale[0], 0, 0, .5f * scale[1]);
+                                    SurfaceInteraction intr;
+                                    intr.uv          = uv;
+                                    intr.faceIndices = f;
+                                    texture->EvaluateHelper<3>(intr, filterWidths,
+                                                               displacement.e);
+
+                                    f32 du  = .5f * scale[0];
+                                    intr.uv = uv + Vec2f(du, 0.f);
+                                    texture->EvaluateHelper<3>(intr, filterWidths,
+                                                               uDisplacement.e);
+
+                                    f32 dv  = .5f * scale[1];
+                                    intr.uv = uv + Vec2f(0.f, dv);
+                                    texture->EvaluateHelper<3>(intr, filterWidths,
+                                                               vDisplacement.e);
+
+                                    // Calculate dndu and dndv using weingarten equations
+
+                                    displacement  = frame.FromLocal(displacement);
+                                    uDisplacement = frame.FromLocal(uDisplacement);
+                                    vDisplacement = frame.FromLocal(vDisplacement);
+
+                                    pos += displacement;
+                                    // dpdu = dpdu + (uDisplacement - displacement) / du *
+                                    // normal +
+                                    //        displacement * dndu;
+                                    // dpdv = dpdv + (vDisplacement - displacement) / dv *
+                                    // normal +
+                                    //        displacement * dndv;
+                                    dpdu += (uDisplacement - displacement) / du;
+                                    dpdv += (vDisplacement - displacement) / dv;
+                                    normal = Normalize(Cross(dpdu, dpdv));
+                                }
+
+                                int index = patch->GetGridIndex(uStep, vStep);
+                                // tessellatedVertices.normals.push_back(normal);
+                                outputMesh->normals[index]  = normal;
+                                outputMesh->vertices[index] = pos;
+                            }
+                        }
+                    }
+                });
+
+            outputMesh->stitchingIndices =
+                StaticArray<int>(arena, tessellatedVertices.stitchingIndices);
+            outputMesh->untessellatedPatches =
+                StaticArray<UntessellatedPatch>(arena, untessellatedPatches);
+
+            outputMesh->patches = StaticArray<OpenSubdivPatch>(arena, patches);
+
+            threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
+                sizeof(Vec3f) * 2 * outputMesh->vertices.Length();
+            threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
+                sizeof(UntessellatedPatch) * outputMesh->untessellatedPatches.Length();
+            threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
+                sizeof(OpenSubdivPatch) * outputMesh->patches.Length();
+            threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
+                sizeof(int) * outputMesh->stitchingIndices.Length();
+
+            delete refiner;
+            delete patchTable;
         }
-
-        outputMesh->vertices = StaticArray<Vec3f>(arena, tessellatedVertices.vertices);
-        outputMesh->normals  = StaticArray<Vec3f>(arena, tessellatedVertices.normals);
-        outputMesh->stitchingIndices =
-            StaticArray<int>(arena, tessellatedVertices.stitchingIndices);
-        outputMesh->untessellatedPatches =
-            StaticArray<UntessellatedPatch>(arena, untessellatedPatches);
-
-        outputMesh->patches = StaticArray<OpenSubdivPatch>(arena, patches);
-
-        threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
-            sizeof(Vec3f) * 2 * outputMesh->vertices.Length();
-        threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
-            sizeof(UntessellatedPatch) * outputMesh->untessellatedPatches.Length();
-        threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
-            sizeof(OpenSubdivPatch) * outputMesh->patches.Length();
-        threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
-            sizeof(int) * outputMesh->stitchingIndices.Length();
-
-        delete refiner;
-        delete patchTable;
-    }
+    });
     return outputMeshes;
 }
 

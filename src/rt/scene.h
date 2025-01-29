@@ -575,7 +575,13 @@ struct SceneDebug
     struct ScenePrimitives *scene;
     Vec3f color;
     Vec4f filterWidths;
-    // Vec2i pixel;
+
+    Vec2i pixel;
+
+    CatmullClarkPatch *patch;
+    u32 num;
+    u32 primID;
+    u32 index;
     // u32 sampleNum;
     // std::atomic<u32> *numTiles;
     // u32 tileCount;

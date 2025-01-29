@@ -542,6 +542,13 @@ void ParallelFor(u32 start, u32 count, u32 groupSize, const Func &func)
     });
 }
 
+template <typename Func>
+void ParallelFor(u32 start, u32 count, u32 threshold, u32 groupSize, const Func &func)
+{
+    if (count > threshold) ParallelFor(start, count, groupSize, func);
+    else func(0, start, count);
+}
+
 struct ParallelForOutput
 {
     void *out;

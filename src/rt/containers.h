@@ -96,7 +96,7 @@ struct StaticArray
 
     FORCEINLINE T &operator[](i32 index)
     {
-        Assert(index >= 0 && index < size);
+        ErrorExit(index >= 0 && index < size, "index: %u, size %u\n", index, size);
         return data[index];
     }
 

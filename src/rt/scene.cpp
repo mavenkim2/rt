@@ -987,167 +987,172 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
 
     Arena *arena = arenas[GetThreadIndex()];
 
-    for (u32 i = 0; i < scene->numPrimitives; i++)
-    {
-        auto *mesh = &meshes[i];
-
-        std::vector<BVHPatch> bvhPatches;
-        bvhPatches.reserve((int)mesh->patches.Length());
-
-        std::vector<BVHEdge> bvhEdges;
-        bvhEdges.reserve((int)mesh->patches.Length() * 4);
-
-        const auto &indices  = mesh->stitchingIndices;
-        const auto &vertices = mesh->vertices;
-        for (u32 j = 0; j < mesh->untessellatedPatches.Length(); j++)
-        {
-            int indexStart = mesh->untessellatedPatches[j].stitchingStart;
-            Vec3f p0       = vertices[indices[indexStart + 0]];
-            Vec3f p1       = vertices[indices[indexStart + 1]];
-            Vec3f p2       = vertices[indices[indexStart + 2]];
-            Vec3f p3       = vertices[indices[indexStart + 3]];
-
-            Vec3f minP = Min(Min(p0, p1), Min(p2, p3));
-            Vec3f maxP = Max(Max(p0, p1), Max(p2, p3));
-
-            geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
-            centBounds.Extend(Lane4F32(minP + maxP));
-
-            PrimRef *ref = &refs[untessellatedRefOffset++];
-            ref->minX    = -minP.x;
-            ref->minY    = -minP.y;
-            ref->minZ    = -minP.z;
-            ref->geomID  = CreatePatchID(CatClarkTriangleType::Untess, 0, i);
-            ref->maxX    = maxP.x;
-            ref->maxY    = maxP.y;
-            ref->maxZ    = maxP.z;
-            ref->primID  = j;
-        }
-        for (u32 j = 0; j < mesh->patches.Length(); j++)
-        {
-            OpenSubdivPatch *patch = &mesh->patches[j];
-
-            // Individually split each edge into smaller triangles
-            for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
+    ParallelFor(
+        0, scene->numPrimitives, PARALLEL_THRESHOLD, 1, [&](u32 jobID, u32 start, u32 count) {
+            for (u32 i = start; i < start + count; i++)
             {
-                EdgeInfo &currentEdge = patch->edgeInfo[edgeIndex];
+                auto *mesh = &meshes[i];
 
-                auto itr = patch->CreateIterator(edgeIndex);
+                std::vector<BVHPatch> bvhPatches;
+                bvhPatches.reserve((int)mesh->patches.Length());
 
-                while (itr.IsNotFinished())
+                std::vector<BVHEdge> bvhEdges;
+                bvhEdges.reserve((int)mesh->patches.Length() * 4);
+
+                const auto &indices  = mesh->stitchingIndices;
+                const auto &vertices = mesh->vertices;
+                for (u32 j = 0; j < mesh->untessellatedPatches.Length(); j++)
                 {
-                    Vec3f minP(pos_inf);
-                    Vec3f maxP(neg_inf);
+                    int indexStart = mesh->untessellatedPatches[j].stitchingStart;
+                    Vec3f p0       = vertices[indices[indexStart + 0]];
+                    Vec3f p1       = vertices[indices[indexStart + 1]];
+                    Vec3f p2       = vertices[indices[indexStart + 2]];
+                    Vec3f p3       = vertices[indices[indexStart + 3]];
 
-                    // save start state
-                    BVHEdge bvhEdge;
-                    bvhEdge.patch    = patch;
-                    Vec2i uvStart    = itr.uvStart;
-                    bvhEdge.edgeStep = itr.edgeStep;
-
-                    for (int triIndex = 0; triIndex < 8 && itr.Next(); triIndex++)
-                    {
-                        minP = Min(Min(minP, vertices[itr.indices[0]]),
-                                   Min(vertices[itr.indices[1]], vertices[itr.indices[2]]));
-                        maxP = Max(Max(maxP, vertices[itr.indices[0]]),
-                                   Max(vertices[itr.indices[1]], vertices[itr.indices[2]]));
-                    }
-
-                    bvhEdge.edgeEnd  = itr.edgeStep;
-                    bvhEdge.grid     = UVGrid::Compress(uvStart, itr.uvStart);
-                    bvhEdge.bitTrail = itr.GetBitTrail();
+                    Vec3f minP = Min(Min(p0, p1), Min(p2, p3));
+                    Vec3f maxP = Max(Max(p0, p1), Max(p2, p3));
 
                     geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
                     centBounds.Extend(Lane4F32(minP + maxP));
 
-                    int bvhEdgeIndex = (int)bvhEdges.size();
-                    bvhEdges.push_back(bvhEdge);
-
-                    refs.emplace_back();
-                    PrimRef *ref = &refs.back();
+                    PrimRef *ref = &refs[untessellatedRefOffset++];
                     ref->minX    = -minP.x;
                     ref->minY    = -minP.y;
                     ref->minZ    = -minP.z;
-                    ref->geomID =
-                        CreatePatchID(CatClarkTriangleType::TessStitching, edgeIndex, i);
-                    ref->maxX   = maxP.x;
-                    ref->maxY   = maxP.y;
-                    ref->maxZ   = maxP.z;
-                    ref->primID = bvhEdgeIndex;
+                    ref->geomID  = CreatePatchID(CatClarkTriangleType::Untess, 0, i);
+                    ref->maxX    = maxP.x;
+                    ref->maxY    = maxP.y;
+                    ref->maxZ    = maxP.z;
+                    ref->primID  = j;
                 }
-            }
-
-            // Split internal grid into smaller grids
-            int edgeRateU     = patch->GetMaxEdgeFactorU();
-            int edgeRateV     = patch->GetMaxEdgeFactorV();
-            int bvhPatchIndex = (int)bvhPatches.size();
-            int bvhPatchStart = bvhPatchIndex;
-            {
-                BVHPatch bvhPatch;
-                bvhPatch.patch = patch;
-                bvhPatch.grid  = UVGrid::Compress(
-                    Vec2i(0, 0), Vec2i(Max(edgeRateU - 2, 0), Max(edgeRateV - 2, 0)));
-
-                bvhPatches.push_back(bvhPatch);
-            }
-
-            while (bvhPatchIndex < (int)bvhPatches.size())
-            {
-                const BVHPatch &bvhPatch = bvhPatches[bvhPatchIndex];
-                BVHPatch patch0, patch1;
-                if (bvhPatch.Split(patch0, patch1))
+                for (u32 j = 0; j < mesh->patches.Length(); j++)
                 {
-                    bvhPatches.push_back(patch1);
-                    bvhPatches[bvhPatchIndex] = patch0;
-                }
-                else
-                {
-                    bvhPatchIndex++;
-                }
-            }
+                    OpenSubdivPatch *patch = &mesh->patches[j];
 
-            for (int k = bvhPatchStart; k < (int)bvhPatches.size(); k++)
-            {
-                const BVHPatch &bvhPatch = bvhPatches[k];
-                Vec3f minP(pos_inf);
-                Vec3f maxP(neg_inf);
-
-                Vec2i uvStart, uvEnd;
-                bvhPatch.grid.Decompress(uvStart, uvEnd);
-                for (int v = uvStart[1]; v <= uvEnd[1]; v++)
-                {
-                    for (int u = uvStart[0]; u <= uvEnd[0]; u++)
+                    // Individually split each edge into smaller triangles
+                    for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
                     {
-                        int index = patch->GetGridIndex(u, v);
-                        minP      = Min(minP, vertices[index]);
-                        maxP      = Max(maxP, vertices[index]);
+                        EdgeInfo &currentEdge = patch->edgeInfo[edgeIndex];
+
+                        auto itr = patch->CreateIterator(edgeIndex);
+
+                        while (itr.IsNotFinished())
+                        {
+                            Vec3f minP(pos_inf);
+                            Vec3f maxP(neg_inf);
+
+                            // save start state
+                            BVHEdge bvhEdge;
+                            bvhEdge.patch    = patch;
+                            Vec2i uvStart    = itr.uvStart;
+                            bvhEdge.edgeStep = itr.edgeStep;
+
+                            for (int triIndex = 0; triIndex < 8 && itr.Next(); triIndex++)
+                            {
+                                minP = Min(
+                                    Min(minP, vertices[itr.indices[0]]),
+                                    Min(vertices[itr.indices[1]], vertices[itr.indices[2]]));
+                                maxP = Max(
+                                    Max(maxP, vertices[itr.indices[0]]),
+                                    Max(vertices[itr.indices[1]], vertices[itr.indices[2]]));
+                            }
+
+                            bvhEdge.edgeEnd  = itr.edgeStep;
+                            bvhEdge.grid     = UVGrid::Compress(uvStart, itr.uvStart);
+                            bvhEdge.bitTrail = itr.GetBitTrail();
+
+                            geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
+                            centBounds.Extend(Lane4F32(minP + maxP));
+
+                            int bvhEdgeIndex = (int)bvhEdges.size();
+                            bvhEdges.push_back(bvhEdge);
+
+                            refs.emplace_back();
+                            PrimRef *ref = &refs.back();
+                            ref->minX    = -minP.x;
+                            ref->minY    = -minP.y;
+                            ref->minZ    = -minP.z;
+                            ref->geomID  = CreatePatchID(CatClarkTriangleType::TessStitching,
+                                                         edgeIndex, i);
+                            ref->maxX    = maxP.x;
+                            ref->maxY    = maxP.y;
+                            ref->maxZ    = maxP.z;
+                            ref->primID  = bvhEdgeIndex;
+                        }
+                    }
+
+                    // Split internal grid into smaller grids
+                    int edgeRateU     = patch->GetMaxEdgeFactorU();
+                    int edgeRateV     = patch->GetMaxEdgeFactorV();
+                    int bvhPatchIndex = (int)bvhPatches.size();
+                    int bvhPatchStart = bvhPatchIndex;
+                    {
+                        BVHPatch bvhPatch;
+                        bvhPatch.patch = patch;
+                        bvhPatch.grid  = UVGrid::Compress(
+                            Vec2i(0, 0), Vec2i(Max(edgeRateU - 2, 0), Max(edgeRateV - 2, 0)));
+
+                        bvhPatches.push_back(bvhPatch);
+                    }
+
+                    while (bvhPatchIndex < (int)bvhPatches.size())
+                    {
+                        const BVHPatch &bvhPatch = bvhPatches[bvhPatchIndex];
+                        BVHPatch patch0, patch1;
+                        if (bvhPatch.Split(patch0, patch1))
+                        {
+                            bvhPatches.push_back(patch1);
+                            bvhPatches[bvhPatchIndex] = patch0;
+                        }
+                        else
+                        {
+                            bvhPatchIndex++;
+                        }
+                    }
+
+                    for (int k = bvhPatchStart; k < (int)bvhPatches.size(); k++)
+                    {
+                        const BVHPatch &bvhPatch = bvhPatches[k];
+                        Vec3f minP(pos_inf);
+                        Vec3f maxP(neg_inf);
+
+                        Vec2i uvStart, uvEnd;
+                        bvhPatch.grid.Decompress(uvStart, uvEnd);
+                        for (int v = uvStart[1]; v <= uvEnd[1]; v++)
+                        {
+                            for (int u = uvStart[0]; u <= uvEnd[0]; u++)
+                            {
+                                int index = patch->GetGridIndex(u, v);
+                                minP      = Min(minP, vertices[index]);
+                                maxP      = Max(maxP, vertices[index]);
+                            }
+                        }
+
+                        geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
+                        centBounds.Extend(Lane4F32(minP + maxP));
+
+                        // TODO: make it so that I can't forget to make these negative
+                        refs.emplace_back();
+                        PrimRef *ref = &refs.back();
+                        ref->minX    = -minP.x;
+                        ref->minY    = -minP.y;
+                        ref->minZ    = -minP.z;
+                        ref->geomID  = CreatePatchID(CatClarkTriangleType::TessGrid, 0, i);
+                        ref->maxX    = maxP.x;
+                        ref->maxY    = maxP.y;
+                        ref->maxZ    = maxP.z;
+                        ref->primID  = k;
                     }
                 }
+                mesh->bvhPatches = StaticArray<BVHPatch>(arena, bvhPatches);
+                mesh->bvhEdges   = StaticArray<BVHEdge>(arena, bvhEdges);
 
-                geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
-                centBounds.Extend(Lane4F32(minP + maxP));
-
-                // TODO: make it so that I can't forget to make these negative
-                refs.emplace_back();
-                PrimRef *ref = &refs.back();
-                ref->minX    = -minP.x;
-                ref->minY    = -minP.y;
-                ref->minZ    = -minP.z;
-                ref->geomID  = CreatePatchID(CatClarkTriangleType::TessGrid, 0, i);
-                ref->maxX    = maxP.x;
-                ref->maxY    = maxP.y;
-                ref->maxZ    = maxP.z;
-                ref->primID  = k;
+                threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
+                    sizeof(BVHPatch) * mesh->bvhPatches.Length();
+                threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
+                    sizeof(BVHEdge) * mesh->bvhEdges.Length();
             }
-        }
-        mesh->bvhPatches = StaticArray<BVHPatch>(arena, bvhPatches);
-        mesh->bvhEdges   = StaticArray<BVHEdge>(arena, bvhEdges);
-
-        threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
-            sizeof(BVHPatch) * mesh->bvhPatches.Length();
-        threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
-            sizeof(BVHEdge) * mesh->bvhEdges.Length();
-    }
+        });
 
     RecordAOSSplits record;
     record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);

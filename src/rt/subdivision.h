@@ -359,6 +359,7 @@ struct BVHPatch
         // Vertical split
         if (diff[0] > diff[1])
         {
+            if (diff[0] == 1) return false;
             patch0.grid.uvStart = uvStart;
             patch0.grid.uvEnd   = Vec2<u8>((uvStart[0] + uvEnd[0]) / 2, uvEnd[1]);
 
@@ -368,12 +369,18 @@ struct BVHPatch
         // Horizontal split
         else
         {
+            if (diff[1] == 1) return false;
             patch0.grid.uvStart = uvStart;
             patch0.grid.uvEnd   = Vec2<u8>(uvEnd[0], (uvStart[1] + uvEnd[1]) / 2);
 
             patch1.grid.uvStart = Vec2<u8>(uvStart[0], (uvStart[1] + uvEnd[1]) / 2);
             patch1.grid.uvEnd   = uvEnd;
         }
+
+        Assert(patch0.grid.uvStart[0] != patch0.grid.uvEnd[0]);
+        Assert(patch0.grid.uvStart[1] != patch0.grid.uvEnd[1]);
+        Assert(patch1.grid.uvStart[0] != patch1.grid.uvEnd[0]);
+        Assert(patch1.grid.uvStart[1] != patch1.grid.uvEnd[1]);
         return true;
     }
 };

@@ -229,6 +229,8 @@ void Render(Arena *arena, RenderParams2 &params)
                 u32 *out = GetPixelPointer(&image, x, y);
                 Vec2u pPixel(x, y);
                 Vec3f rgb(0.f);
+
+                GetDebug()->pixel = pPixel;
                 for (u32 i = 0; i < spp; i++)
                 {
                     sampler.StartPixelSample(Vec2i(x, y), i);

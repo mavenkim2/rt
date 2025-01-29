@@ -990,15 +990,18 @@ struct CatClarkPatchIntersector
                           SurfaceInteraction &si)
 
     {
+        GetDebug()->patch = primitives;
+        GetDebug()->num   = num;
+
         auto trueMask  = Mask<Lane8F32>(TrueTy());
         auto falseMask = Mask<Lane8F32>(FalseTy());
 
-        Lane4F32 v0[N]                 = {};
-        Lane4F32 v1[N]                 = {};
-        Lane4F32 v2[N]                 = {};
-        alignas(4 * N) u32 patchIDs[N] = {};
-        alignas(4 * N) u32 geomIDs[N]  = {};
-        alignas(4 * N) u32 primIDs[N]  = {};
+        Lane4F32 v0[N];
+        Lane4F32 v1[N];
+        Lane4F32 v2[N];
+        alignas(4 * N) u32 patchIDs[N];
+        alignas(4 * N) u32 geomIDs[N];
+        alignas(4 * N) u32 primIDs[N];
 
         int queueCount = 0;
 
@@ -1022,7 +1025,9 @@ struct CatClarkPatchIntersector
             TriangleIntersection<N> triItr;
 
             Mask<LaneF32<N>> mask = TriangleIntersect(ray, itr.t, triV0, triV1, triV2, triItr);
+            mask &= Lane8F32::Mask((1u << queueCount) - 1);
             outMask |= mask;
+
             itr.u       = Select(mask, triItr.u, itr.u);
             itr.v       = Select(mask, triItr.v, itr.v);
             itr.t       = Select(mask, triItr.t, itr.t);
@@ -1130,7 +1135,7 @@ struct CatClarkPatchIntersector
                 default: Assert(0);
             }
         }
-        EmptyQueue();
+        if (queueCount) EmptyQueue();
 
         if (Any(outMask))
         {
@@ -1153,6 +1158,8 @@ struct CatClarkPatchIntersector
             Assert(index != -1);
             u32 patchIndex            = patchID[index];
             u32 primID                = itr.primIDs[index];
+            GetDebug()->primID        = primID;
+            GetDebug()->index         = index;
             u32 geomID                = itr.geomIDs[index];
             CatClarkTriangleType type = GetPatchType(patchIndex);
             int id                    = GetTriangleIndex(patchIndex);
@@ -1287,6 +1294,7 @@ struct CatClarkPatchIntersector
             si.shading.n = u * n[1] + v * n[2] + w * n[0];
             si.shading.n = LengthSquared(si.shading.n) > 0 ? Normalize(si.shading.n) : si.n;
 
+#if 0
             Vec3f dpdu, dpdv, dndu, dndv;
 
             Vec3f dn02 = n[0] - n[2];
@@ -1319,6 +1327,7 @@ struct CatClarkPatchIntersector
             {
                 CoordinateSystem(si.shading.n, &ss, &ts);
             }
+#endif
             si.shading.dpdu = ss;
             si.shading.dpdv = ts;
             return true;
