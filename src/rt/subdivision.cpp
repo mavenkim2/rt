@@ -134,52 +134,7 @@ struct TessellatedVertices
 
     // Stitching triangles
     std::vector<int> stitchingIndices;
-
-    // stack variables
-    int currentGridOffset;
-    int uMax;
-    int vMax;
-
-    // uMax is the max edge rate in the u direction, same for vMax
-    // "Inner grid" contains the (uMax - 1) x (vMax - 1) inner tessellated vertices
-    // specific to a patch
-    // NOTE: this must be called AFTER all corner/edge vertices are added for a given patch
-    void StartNewGrid(int maxU, int maxV)
-    {
-        uMax              = maxU;
-        vMax              = maxV;
-        currentGridOffset = (int)vertices.size();
-        vertices.resize(vertices.size() + ((uMax - 1) * (vMax - 1)));
-    }
-    void StartNewGrid(int totalSize, int maxU, int maxV)
-    {
-        uMax              = maxU;
-        vMax              = maxV;
-        currentGridOffset = totalSize;
-    }
-    // int GetInnerGridIndex(int u, int v) const
-    // {
-    //     Assert(u >= 0 && v >= 0 && u < uMax - 1 && v < vMax - 1);
-    //     int gridIndex = currentGridOffset + v * (uMax - 1) + u;
-    //     Assert(gridIndex < (int)vertices.size());
-    //     return gridIndex;
-    // }
-    // Vec3f &SetNormal(int u, int v)
-    // {
-    //     int gridIndex = GetInnerGridIndex(u, v);
-    //     return normals[gridIndex];
-    // }
-    // Vec3f &SetInnerGrid(int u, int v)
-    // {
-    //     int gridIndex = GetInnerGridIndex(u, v);
-    //     return vertices[gridIndex];
-    // }
 };
-
-// TODO:
-// 1. patch bvh instead of triangles, fix uvs
-// 2. reduce memory usage
-// 3. set edge rates per instance
 
 // MORETON, H. 2001. Watertight tessellation using forward
 // differencing. In HWWS ’01: Proceedings of the ACM SIG-
@@ -188,7 +143,8 @@ struct TessellatedVertices
 // See Figure 7 from above for how this works
 OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
                                      const Mat4 &NDCFromCamera, int screenHeight,
-                                     Mesh *controlMeshes, u32 numMeshes)
+                                     TessellationParams *params, Mesh *controlMeshes,
+                                     u32 numMeshes)
 {
     Scene *baseScene = GetScene();
     typedef Far::TopologyDescriptor Descriptor;
@@ -220,7 +176,8 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
     ParallelFor(0, numMeshes, PARALLEL_THRESHOLD, 1, [&](u32 jobID, u32 start, u32 count) {
         for (u32 meshIndex = start; meshIndex < start + count; meshIndex++)
         {
-            OpenSubdivMesh *outputMesh = &outputMeshes[meshIndex];
+            OpenSubdivMesh *outputMesh           = &outputMeshes[meshIndex];
+            const TessellationParams *tessParams = params + meshIndex;
 
             TessellatedVertices tessellatedVertices;
             Mesh *controlMesh = &controlMeshes[meshIndex];
@@ -258,6 +215,34 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
             for (int f = 0; f < (int)controlMesh->numFaces; f++)
             {
                 int indexOffset = 4 * f;
+
+                if (!tessParams->instanced)
+                {
+                    Bounds bounds;
+                    for (int i = 0; i < 4; i++)
+                    {
+                        int id = controlMesh->indices[indexOffset + i];
+                        bounds.Extend(
+                            Lane4F32(TransformP(tessParams->transform, controlMesh->p[id])));
+                    }
+                    // frustum cull
+                    if (FrustumCull(NDCFromCamera, bounds))
+                    {
+                        for (int i = 0; i < 4; i++)
+                        {
+                            int id0    = controlMesh->indices[indexOffset + i];
+                            int id1    = controlMesh->indices[indexOffset + ((i + 1) & 3)];
+                            u64 edgeId = ComputeEdgeId(id0, id1);
+                        }
+                        const auto &result = edgeIDMap.find(edgeId);
+                        int edgeIndex      = -1;
+                        if (result == edgeIDMap.end())
+                        {
+                        }
+                        continue;
+                    }
+                }
+                // For uninstanced meshes,
                 for (int i = 0; i < 4; i++)
                 {
                     int id0       = controlMesh->indices[indexOffset + i];
@@ -328,10 +313,6 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
             Far::TopologyRefiner::AdaptiveOptions adaptiveOptions =
                 patchOptions.GetRefineAdaptiveOptions();
             refiner->RefineAdaptive(adaptiveOptions);
-
-            int maxLevel                    = refiner->GetMaxLevel();
-            const Far::TopologyLevel &level = refiner->GetLevel(0);
-            int faces                       = level.GetNumFaces();
 
             auto *patchTable = Far::PatchTableFactory::Create(*refiner, patchOptions);
             OpenSubdiv::Far::PatchMap patchMap(*patchTable);
@@ -441,13 +422,11 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
                     maxEdgeRates[1] = 2;
                     scale[1]        = 0.5f;
                 }
-                // Inner grid of vertices (local to a patch)
-                tessellatedVertices.StartNewGrid(vSize + totalSize, maxEdgeRates[0],
-                                                 maxEdgeRates[1]);
 
+                // Inner grid of vertices (local to a patch)
                 OpenSubdivPatch patch;
                 patch.faceID         = face;
-                patch.gridIndexStart = tessellatedVertices.currentGridOffset;
+                patch.gridIndexStart = totalSize + vSize;
 
                 totalSize += (maxEdgeRates[1] - 1) * (maxEdgeRates[0] - 1);
 
@@ -463,9 +442,6 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
                 patches.push_back(patch);
             }
 
-            // tessellatedVertices.vertices.resize(vSize + totalSize);
-            // tessellatedVertices.normals.resize(vSize + totalSize);
-
             outputMesh->vertices      = StaticArray<Vec3f>(arena, vSize + totalSize);
             outputMesh->normals       = StaticArray<Vec3f>(arena, vSize + totalSize);
             outputMesh->vertices.size = vSize + totalSize;
@@ -474,6 +450,11 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
                        sizeof(Vec3f) * vSize);
             MemoryCopy(outputMesh->normals.data, tessellatedVertices.normals.data(),
                        sizeof(Vec3f) * vSize);
+
+            // tessellatedVertices.vertices.clear();
+            // tessellatedVertices.vertices.shrink_to_fit();
+            // tessellatedVertices.normals.clear();
+            // tessellatedVertices.normals.shrink_to_fit();
 
             ParallelFor(
                 0, (u32)patches.size(), 8092, 8092, [&](int jobID, int start, int count) {

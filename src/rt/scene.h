@@ -590,6 +590,14 @@ struct SceneDebug
 thread_local SceneDebug debug_;
 static SceneDebug *GetDebug() { return &debug_; }
 
+struct TessellationParams
+{
+    Bounds bounds;
+    AffineSpace transforms;
+    f32 currentMinDistance;
+    bool instanced;
+};
+
 struct ScenePrimitives
 {
     typedef bool (*IntersectFunc)(ScenePrimitives *, BVHNodeN, Ray2 &,
@@ -597,6 +605,8 @@ struct ScenePrimitives
     typedef bool (*OccludedFunc)(ScenePrimitives *, BVHNodeN, Ray2 &);
 
     string filename;
+
+    GeometryType geometryType;
 
     Vec3f boundsMin;
     Vec3f boundsMax;
@@ -606,7 +616,11 @@ struct ScenePrimitives
     void *primitives;
 
     // NOTE: only set if not a leaf node in the scene hierarchy
-    ScenePrimitives **childScenes;
+    union
+    {
+        ScenePrimitives **childScenes;
+        TessellationParams *tessellationParams;
+    };
     u32 numChildScenes;
     union
     {

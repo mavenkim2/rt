@@ -915,6 +915,55 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
     if (c) c->count.fetch_sub(1, std::memory_order_acq_rel);
 }
 
+void FindClosestInstance(ScenePrimitives *scene, const Vec3f &cameraPos,
+                         const AffineSpace &transform)
+{
+    switch (scene->geometryType)
+    {
+        case GeometryType::Instance:
+        {
+            Instance *instances = (Instance *)scene->primitives;
+            ParallelFor(
+                0, scene->numPrimitives, PARALLEL_THRESHOLD, PARALLEL_THRESHOLD,
+                [&](int jobID, int start, int count) {
+                    for (int i = start; i < start + count; i++)
+                    {
+                        const Instance &instance = instances[i];
+                        AffineSpace t =
+                            transform * scene->affineTransforms[instance.transformIndex];
+                        FindClosestInstance(scene->childScenes[instance.id], cameraPos, t);
+                    }
+                });
+        }
+        break;
+        case GeometryType::CatmullClark:
+        {
+            Mesh *controlMeshes = (Mesh *)scene->primitives;
+            ParallelFor(0, scene->numPrimitives, PARALLEL_THRESHOLD, PARALLEL_THRESHOLD,
+                        [&](int jobID, int start, int count) {
+                            for (int i = start; i < start + count; i++)
+                            {
+                                TessellationParams &params = scene->tessellationParams[i];
+                                Vec3f centroid             = ToVec3f(params.bounds.Centroid());
+                                centroid                   = TransformP(transform, centroid);
+
+                                f32 distance = Length(centroid - cameraPos);
+                                if (distance < params.currentMinDistance)
+                                {
+                                    params.transforms         = transform;
+                                    params.currentMinDistance = distance;
+                                }
+                            }
+                        });
+        }
+        break;
+        default:
+        {
+        }
+        break;
+    }
+}
+
 void LoadScene(Arena **arenas, string directory, string filename, const Mat4 &NDCFromCamera,
                int screenHeight, AffineSpace *t)
 {
@@ -1147,9 +1196,9 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
                 mesh->bvhPatches = StaticArray<BVHPatch>(arena, bvhPatches);
                 mesh->bvhEdges   = StaticArray<BVHEdge>(arena, bvhEdges);
 
-                threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
+                threadMemoryStatistics[GetThreadIndex()].totalBVHMemory +=
                     sizeof(BVHPatch) * mesh->bvhPatches.Length();
-                threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
+                threadMemoryStatistics[GetThreadIndex()].totalBVHMemory +=
                     sizeof(BVHEdge) * mesh->bvhEdges.Length();
             }
         });

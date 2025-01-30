@@ -1294,7 +1294,7 @@ struct CatClarkPatchIntersector
             si.shading.n = u * n[1] + v * n[2] + w * n[0];
             si.shading.n = LengthSquared(si.shading.n) > 0 ? Normalize(si.shading.n) : si.n;
 
-#if 0
+#if 1
             Vec3f dpdu, dpdv, dndu, dndv;
 
             Vec3f dn02 = n[0] - n[2];
