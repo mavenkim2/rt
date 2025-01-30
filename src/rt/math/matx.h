@@ -723,7 +723,6 @@ __forceinline Vec3f operator*(const AffineSpace &t, const Vec3f &v)
     return FMA(t.c0, Vec3f(v.x), FMA(t.c1, Vec3f(v.y), FMA(t.c2, Vec3f(v.z), t.c3)));
 }
 
-// NOTE: can only be used when there is at least 4 bytes of padding after AffineSpace
 // __forceinline Lane4F32 operator*(const AffineSpace &t, const Lane4F32 &v)
 // {
 //     return FMA(Lane4F32::LoadU(&t.c0), v[0],
