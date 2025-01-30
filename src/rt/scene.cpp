@@ -44,7 +44,6 @@ struct Texture
     {
         if (color == Vec3f(0.f)) return SampledSpectrum(0.f);
         Assert(!IsNaN(color[0]) && !IsNaN(color[1]) && !IsNaN(color[2]));
-        // GetDebug()->color = color;
         return RGBAlbedoSpectrum(*RGBColorSpace::sRGB, Clamp(color, Vec3f(0.f), Vec3f(1.f)))
             .Sample(lambda);
     }
@@ -80,7 +79,7 @@ struct PtexTexture : Texture
         const Vec2f &uv = intr.uv;
         u32 faceIndex   = intr.faceIndices;
 
-        // GetDebug()->filename = filename;
+        GetDebug()->filename = filename;
         Assert(cache);
         Ptex::String error;
         Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
@@ -619,9 +618,9 @@ i32 ReadInt(Tokenizer *tokenizer, string p)
     return 0;
 }
 
-void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene,
-                 string directory, string filename, const Mat4 &NDCFromCamera,
-                 int screenHeight, Scheduler::Counter *c = 0, AffineSpace *renderFromWorld = 0,
+void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
+                 ScenePrimitives *scene, string directory, string filename,
+                 Scheduler::Counter *c = 0, AffineSpace *renderFromWorld = 0,
                  bool baseFile = false)
 
 {
@@ -682,6 +681,7 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
         if (Advance(&tokenizer, "RTSCENE_END")) break;
         if (Advance(&tokenizer, "INCLUDE_START "))
         {
+            type = GeometryType::Instance;
             Advance(&tokenizer, "Count: ");
             u32 instanceCount = ReadInt(&tokenizer);
             SkipToNextChar(&tokenizer);
@@ -745,9 +745,8 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                     {
                         files.AddBack() = includeScene;
                         scheduler.Schedule(&counter, [=](u32 jobID) {
-                            LoadRTScene(arenas, state, includeScene, directory,
-                                        newNode->filename, NDCFromCamera, screenHeight,
-                                        &newNode->counter);
+                            LoadRTScene(arenas, tempArenas, state, includeScene, directory,
+                                        newNode->filename, &newNode->counter);
                         });
                         break;
                     }
@@ -841,16 +840,27 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
                     Assert(0);
                 }
             }
+
             scene->numPrimitives = shapes.totalCount;
             scene->primitives    = PushArrayNoZero(arena, Mesh, shapes.totalCount);
             scene->primIndices = PushArrayNoZero(arena, PrimitiveIndices, indices.totalCount);
             shapes.Flatten((Mesh *)scene->primitives);
             indices.Flatten(scene->primIndices);
+
+            if (type == GeometryType::CatmullClark)
+            {
+                Arena *tempArena = tempArenas[threadIndex];
+                scene->tessellationParams =
+                    PushArray(tempArena, TessellationParams, scene->numPrimitives);
+
+                ComputeTessellationParams<GeometryType::QuadMesh>((Mesh *)scene->primitives,
+                                                                  scene->tessellationParams, 0,
+                                                                  scene->numPrimitives);
+            }
         }
         else if (Advance(&tokenizer, "MATERIALS_START "))
         {
-            hasMaterials = true;
-            // TODO: multithread this?
+            hasMaterials    = true;
             materialHashMap = CreateMaterials(arena, temp.arena, &tokenizer, directory);
             state->map      = materialHashMap;
         }
@@ -864,7 +874,6 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
     scheduler.Wait(&counter);
 
     OS_UnmapFile(tokenizer.input.str);
-    BuildSettings settings;
 
     {
         if (baseFile && !hasTransforms)
@@ -881,59 +890,90 @@ void LoadRTScene(Arena **arenas, RTSceneLoadState *state, ScenePrimitives *scene
         }
     }
 
-    if (!isLeaf)
-    {
-        BuildTLASBVH(arenas, settings, scene);
-    }
-    else
-    {
-        Assert(!hasTransforms);
-        Assert(scene->numPrimitives);
-        if (type == GeometryType::QuadMesh)
-        {
-            BuildQuadBVH(arenas, settings, scene);
-        }
-        else if (type == GeometryType::TriangleMesh)
-        {
-            BuildTriangleBVH(arenas, settings, scene);
-        }
-        else if (type == GeometryType::CatmullClark)
-        {
-            scene->primitives =
-                AdaptiveTessellation(arena, scene, NDCFromCamera, screenHeight,
-                                     (Mesh *)scene->primitives, scene->numPrimitives);
-            BuildCatClarkBVH(arenas, settings, scene);
-            // BuildQuadBVH(arenas, settings, scene);
-        }
-        else
-        {
-            ErrorExit(0, "No shapes specified\n");
-        }
-    }
+    scene->geometryType = type;
 
     ScratchEnd(temp);
     if (c) c->count.fetch_sub(1, std::memory_order_acq_rel);
 }
 
-void FindClosestInstance(ScenePrimitives *scene, const Vec3f &cameraPos,
-                         const AffineSpace &transform)
+void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
+                    int screenHeight)
+{
+    u32 expected = 0;
+    if (scene->counter.count.compare_exchange_strong(expected, 1, std::memory_order_acquire))
+    {
+        if (scene->nodePtr.data == 0)
+        {
+            switch (scene->geometryType)
+            {
+                case GeometryType::Instance:
+                {
+                    if (!scene->nodePtr.data)
+                    {
+                        ParallelFor(0, scene->numChildScenes, 1,
+                                    [&](int jobID, int start, int count) {
+                                        for (int i = start; i < start + count; i++)
+                                        {
+                                            BuildSceneBVHs(arenas, scene->childScenes[i],
+                                                           NDCFromCamera, screenHeight);
+                                        }
+                                    });
+                        BuildTLASBVH(arenas, scene);
+                    }
+                    break;
+                    case GeometryType::QuadMesh:
+                    {
+                        BuildQuadBVH(arenas, scene);
+                    }
+                    break;
+                    case GeometryType::TriangleMesh:
+                    {
+                        BuildTriangleBVH(arenas, scene);
+                    }
+                    break;
+                    case GeometryType::CatmullClark:
+                    {
+                        scene->primitives = AdaptiveTessellation(
+                            arenas, scene, NDCFromCamera, screenHeight,
+                            scene->tessellationParams, (Mesh *)scene->primitives,
+                            scene->numPrimitives);
+                        BuildCatClarkBVH(arenas, scene);
+                    }
+                    break;
+                    default: Assert(0);
+                }
+            }
+        }
+        else
+        {
+            int stop = 5;
+        }
+        scene->counter.count.fetch_sub(1, std::memory_order_release);
+    }
+    else
+    {
+        scheduler.Wait(&scene->counter);
+    }
+}
+
+void FindClosestInstance(ScenePrimitives *scene, const AffineSpace &transform)
 {
     switch (scene->geometryType)
     {
         case GeometryType::Instance:
         {
             Instance *instances = (Instance *)scene->primitives;
-            ParallelFor(
-                0, scene->numPrimitives, PARALLEL_THRESHOLD, PARALLEL_THRESHOLD,
-                [&](int jobID, int start, int count) {
-                    for (int i = start; i < start + count; i++)
-                    {
-                        const Instance &instance = instances[i];
-                        AffineSpace t =
-                            transform * scene->affineTransforms[instance.transformIndex];
-                        FindClosestInstance(scene->childScenes[instance.id], cameraPos, t);
-                    }
-                });
+            ParallelFor(0, scene->numPrimitives, PARALLEL_THRESHOLD, PARALLEL_THRESHOLD,
+                        [&](int jobID, int start, int count) {
+                            for (int i = start; i < start + count; i++)
+                            {
+                                const Instance &instance = instances[i];
+                                AffineSpace t =
+                                    transform *
+                                    scene->affineTransforms[instance.transformIndex];
+                                FindClosestInstance(scene->childScenes[instance.id], t);
+                            }
+                        });
         }
         break;
         case GeometryType::CatmullClark:
@@ -944,14 +984,23 @@ void FindClosestInstance(ScenePrimitives *scene, const Vec3f &cameraPos,
                             for (int i = start; i < start + count; i++)
                             {
                                 TessellationParams &params = scene->tessellationParams[i];
-                                Vec3f centroid             = ToVec3f(params.bounds.Centroid());
-                                centroid                   = TransformP(transform, centroid);
 
-                                f32 distance = Length(centroid - cameraPos);
-                                if (distance < params.currentMinDistance)
+                                BeginRMutex(&params.mutex);
+                                Vec3f centroid = TransformP(transform, params.centroid);
+                                f32 currentMinDistance = params.currentMinDistance;
+                                f32 distance           = Length(centroid);
+                                EndRMutex(&params.mutex);
+
+                                // Camera is at origin in this coordinate space
+                                if (distance < currentMinDistance)
                                 {
-                                    params.transforms         = transform;
-                                    params.currentMinDistance = distance;
+                                    BeginWMutex(&params.mutex);
+                                    if (distance < params.currentMinDistance)
+                                    {
+                                        params.transform          = transform;
+                                        params.currentMinDistance = distance;
+                                    }
+                                    EndWMutex(&params.mutex);
                                 }
                             }
                         });
@@ -964,8 +1013,8 @@ void FindClosestInstance(ScenePrimitives *scene, const Vec3f &cameraPos,
     }
 }
 
-void LoadScene(Arena **arenas, string directory, string filename, const Mat4 &NDCFromCamera,
-               int screenHeight, AffineSpace *t)
+void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string filename,
+               const Mat4 &NDCFromCamera, int screenHeight, AffineSpace *t)
 {
     TempArena temp = ScratchStart(0, 0);
     Arena *arena   = arenas[GetThreadIndex()];
@@ -976,14 +1025,24 @@ void LoadScene(Arena **arenas, string directory, string filename, const Mat4 &ND
         PushArray(temp.arena, std::atomic<SceneLoadTable::Node *>, state.table.count);
 
     Scene *scene = GetScene();
-    LoadRTScene(arenas, &state, &scene->scene, directory, filename, NDCFromCamera,
-                screenHeight, 0, t, true);
+    LoadRTScene(arenas, tempArenas, &state, &scene->scene, directory, filename, 0, t, true);
+
+    AffineSpace space = AffineSpace::Identity();
+    FindClosestInstance(&scene->scene, space);
+    BuildSceneBVHs(arenas, &scene->scene, NDCFromCamera, screenHeight);
+
+    for (u32 i = 0; i < OS_NumProcessors(); i++)
+    {
+        ArenaClear(tempArenas[i]);
+    }
+
     ScratchEnd(temp);
 }
 
-void BuildTLASBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
+void BuildTLASBVH(Arena **arenas, ScenePrimitives *scene)
 {
     TempArena temp = ScratchStart(0, 0);
+    BuildSettings settings;
     // build tlas
     RecordAOSSplits record(neg_inf);
 
@@ -1005,10 +1064,10 @@ void BuildTLASBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scen
 }
 
 template <>
-void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &settings,
-                                          ScenePrimitives *scene)
+void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, ScenePrimitives *scene)
 {
-    TempArena temp         = ScratchStart(0, 0);
+    TempArena temp = ScratchStart(0, 0);
+    BuildSettings settings;
     OpenSubdivMesh *meshes = (OpenSubdivMesh *)scene->primitives;
 
     int untessellatedPatchCount = 0;
@@ -1024,184 +1083,175 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
     std::vector<PrimRef> refs;
     refs.reserve(size);
     refs.resize(untessellatedPatchCount);
-    // PrimRef *refs = PushArrayNoZero(temp.arena, PrimRef, size);
 
-    // PrimRef *untessellatedRefs = refs;
     int untessellatedRefOffset = 0;
-    // PrimRef *tessellatedRefs   = refs + untessellatedPatchCount;
-    // int tessellatedRefOffset   = 0;
 
     Bounds geomBounds;
     Bounds centBounds;
 
     Arena *arena = arenas[GetThreadIndex()];
 
-    ParallelFor(
-        0, scene->numPrimitives, PARALLEL_THRESHOLD, 1, [&](u32 jobID, u32 start, u32 count) {
-            for (u32 i = start; i < start + count; i++)
+    // ParallelFor(
+    //     0, scene->numPrimitives, PARALLEL_THRESHOLD, 1, [&](u32 jobID, u32 start, u32 count)
+    //     {
+    // for (u32 i = start; i < start + count; i++)
+    for (u32 i = 0; i < scene->numPrimitives; i++)
+    {
+        auto *mesh = &meshes[i];
+
+        std::vector<BVHPatch> bvhPatches;
+        bvhPatches.reserve((int)mesh->patches.Length());
+
+        std::vector<BVHEdge> bvhEdges;
+        bvhEdges.reserve((int)mesh->patches.Length() * 4);
+
+        const auto &indices  = mesh->stitchingIndices;
+        const auto &vertices = mesh->vertices;
+        for (u32 j = 0; j < mesh->untessellatedPatches.Length(); j++)
+        {
+            int indexStart = mesh->untessellatedPatches[j].stitchingStart;
+            Vec3f p0       = vertices[indices[indexStart + 0]];
+            Vec3f p1       = vertices[indices[indexStart + 1]];
+            Vec3f p2       = vertices[indices[indexStart + 2]];
+            Vec3f p3       = vertices[indices[indexStart + 3]];
+
+            Vec3f minP = Min(Min(p0, p1), Min(p2, p3));
+            Vec3f maxP = Max(Max(p0, p1), Max(p2, p3));
+
+            geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
+            centBounds.Extend(Lane4F32(minP + maxP));
+
+            PrimRef *ref = &refs[untessellatedRefOffset++];
+            ref->minX    = -minP.x;
+            ref->minY    = -minP.y;
+            ref->minZ    = -minP.z;
+            ref->geomID  = CreatePatchID(CatClarkTriangleType::Untess, 0, i);
+            ref->maxX    = maxP.x;
+            ref->maxY    = maxP.y;
+            ref->maxZ    = maxP.z;
+            ref->primID  = j;
+        }
+        for (u32 j = 0; j < mesh->patches.Length(); j++)
+        {
+            OpenSubdivPatch *patch = &mesh->patches[j];
+
+            // Individually split each edge into smaller triangles
+            for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
             {
-                auto *mesh = &meshes[i];
+                EdgeInfo &currentEdge = patch->edgeInfo[edgeIndex];
 
-                std::vector<BVHPatch> bvhPatches;
-                bvhPatches.reserve((int)mesh->patches.Length());
+                auto itr = patch->CreateIterator(edgeIndex);
 
-                std::vector<BVHEdge> bvhEdges;
-                bvhEdges.reserve((int)mesh->patches.Length() * 4);
-
-                const auto &indices  = mesh->stitchingIndices;
-                const auto &vertices = mesh->vertices;
-                for (u32 j = 0; j < mesh->untessellatedPatches.Length(); j++)
+                while (itr.IsNotFinished())
                 {
-                    int indexStart = mesh->untessellatedPatches[j].stitchingStart;
-                    Vec3f p0       = vertices[indices[indexStart + 0]];
-                    Vec3f p1       = vertices[indices[indexStart + 1]];
-                    Vec3f p2       = vertices[indices[indexStart + 2]];
-                    Vec3f p3       = vertices[indices[indexStart + 3]];
+                    Vec3f minP(pos_inf);
+                    Vec3f maxP(neg_inf);
 
-                    Vec3f minP = Min(Min(p0, p1), Min(p2, p3));
-                    Vec3f maxP = Max(Max(p0, p1), Max(p2, p3));
+                    // save start state
+                    BVHEdge bvhEdge;
+                    bvhEdge.patchIndex = j;
+                    bvhEdge.steps      = itr.steps;
+
+                    for (int triIndex = 0; triIndex < 8 && itr.Next(); triIndex++)
+                    {
+                        minP = Min(Min(minP, vertices[itr.indices[0]]),
+                                   Min(vertices[itr.indices[1]], vertices[itr.indices[2]]));
+                        maxP = Max(Max(maxP, vertices[itr.indices[0]]),
+                                   Max(vertices[itr.indices[1]], vertices[itr.indices[2]]));
+                    }
 
                     geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
                     centBounds.Extend(Lane4F32(minP + maxP));
 
-                    PrimRef *ref = &refs[untessellatedRefOffset++];
+                    int bvhEdgeIndex = (int)bvhEdges.size();
+                    bvhEdges.push_back(bvhEdge);
+
+                    refs.emplace_back();
+                    PrimRef *ref = &refs.back();
                     ref->minX    = -minP.x;
                     ref->minY    = -minP.y;
                     ref->minZ    = -minP.z;
-                    ref->geomID  = CreatePatchID(CatClarkTriangleType::Untess, 0, i);
-                    ref->maxX    = maxP.x;
-                    ref->maxY    = maxP.y;
-                    ref->maxZ    = maxP.z;
-                    ref->primID  = j;
+                    ref->geomID =
+                        CreatePatchID(CatClarkTriangleType::TessStitching, edgeIndex, i);
+                    ref->maxX   = maxP.x;
+                    ref->maxY   = maxP.y;
+                    ref->maxZ   = maxP.z;
+                    ref->primID = bvhEdgeIndex;
                 }
-                for (u32 j = 0; j < mesh->patches.Length(); j++)
-                {
-                    OpenSubdivPatch *patch = &mesh->patches[j];
-
-                    // Individually split each edge into smaller triangles
-                    for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
-                    {
-                        EdgeInfo &currentEdge = patch->edgeInfo[edgeIndex];
-
-                        auto itr = patch->CreateIterator(edgeIndex);
-
-                        while (itr.IsNotFinished())
-                        {
-                            Vec3f minP(pos_inf);
-                            Vec3f maxP(neg_inf);
-
-                            // save start state
-                            BVHEdge bvhEdge;
-                            bvhEdge.patch    = patch;
-                            Vec2i uvStart    = itr.uvStart;
-                            bvhEdge.edgeStep = itr.edgeStep;
-
-                            for (int triIndex = 0; triIndex < 8 && itr.Next(); triIndex++)
-                            {
-                                minP = Min(
-                                    Min(minP, vertices[itr.indices[0]]),
-                                    Min(vertices[itr.indices[1]], vertices[itr.indices[2]]));
-                                maxP = Max(
-                                    Max(maxP, vertices[itr.indices[0]]),
-                                    Max(vertices[itr.indices[1]], vertices[itr.indices[2]]));
-                            }
-
-                            bvhEdge.edgeEnd  = itr.edgeStep;
-                            bvhEdge.grid     = UVGrid::Compress(uvStart, itr.uvStart);
-                            bvhEdge.bitTrail = itr.GetBitTrail();
-
-                            geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
-                            centBounds.Extend(Lane4F32(minP + maxP));
-
-                            int bvhEdgeIndex = (int)bvhEdges.size();
-                            bvhEdges.push_back(bvhEdge);
-
-                            refs.emplace_back();
-                            PrimRef *ref = &refs.back();
-                            ref->minX    = -minP.x;
-                            ref->minY    = -minP.y;
-                            ref->minZ    = -minP.z;
-                            ref->geomID  = CreatePatchID(CatClarkTriangleType::TessStitching,
-                                                         edgeIndex, i);
-                            ref->maxX    = maxP.x;
-                            ref->maxY    = maxP.y;
-                            ref->maxZ    = maxP.z;
-                            ref->primID  = bvhEdgeIndex;
-                        }
-                    }
-
-                    // Split internal grid into smaller grids
-                    int edgeRateU     = patch->GetMaxEdgeFactorU();
-                    int edgeRateV     = patch->GetMaxEdgeFactorV();
-                    int bvhPatchIndex = (int)bvhPatches.size();
-                    int bvhPatchStart = bvhPatchIndex;
-                    {
-                        BVHPatch bvhPatch;
-                        bvhPatch.patch = patch;
-                        bvhPatch.grid  = UVGrid::Compress(
-                            Vec2i(0, 0), Vec2i(Max(edgeRateU - 2, 0), Max(edgeRateV - 2, 0)));
-
-                        bvhPatches.push_back(bvhPatch);
-                    }
-
-                    while (bvhPatchIndex < (int)bvhPatches.size())
-                    {
-                        const BVHPatch &bvhPatch = bvhPatches[bvhPatchIndex];
-                        BVHPatch patch0, patch1;
-                        if (bvhPatch.Split(patch0, patch1))
-                        {
-                            bvhPatches.push_back(patch1);
-                            bvhPatches[bvhPatchIndex] = patch0;
-                        }
-                        else
-                        {
-                            bvhPatchIndex++;
-                        }
-                    }
-
-                    for (int k = bvhPatchStart; k < (int)bvhPatches.size(); k++)
-                    {
-                        const BVHPatch &bvhPatch = bvhPatches[k];
-                        Vec3f minP(pos_inf);
-                        Vec3f maxP(neg_inf);
-
-                        Vec2i uvStart, uvEnd;
-                        bvhPatch.grid.Decompress(uvStart, uvEnd);
-                        for (int v = uvStart[1]; v <= uvEnd[1]; v++)
-                        {
-                            for (int u = uvStart[0]; u <= uvEnd[0]; u++)
-                            {
-                                int index = patch->GetGridIndex(u, v);
-                                minP      = Min(minP, vertices[index]);
-                                maxP      = Max(maxP, vertices[index]);
-                            }
-                        }
-
-                        geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
-                        centBounds.Extend(Lane4F32(minP + maxP));
-
-                        // TODO: make it so that I can't forget to make these negative
-                        refs.emplace_back();
-                        PrimRef *ref = &refs.back();
-                        ref->minX    = -minP.x;
-                        ref->minY    = -minP.y;
-                        ref->minZ    = -minP.z;
-                        ref->geomID  = CreatePatchID(CatClarkTriangleType::TessGrid, 0, i);
-                        ref->maxX    = maxP.x;
-                        ref->maxY    = maxP.y;
-                        ref->maxZ    = maxP.z;
-                        ref->primID  = k;
-                    }
-                }
-                mesh->bvhPatches = StaticArray<BVHPatch>(arena, bvhPatches);
-                mesh->bvhEdges   = StaticArray<BVHEdge>(arena, bvhEdges);
-
-                threadMemoryStatistics[GetThreadIndex()].totalBVHMemory +=
-                    sizeof(BVHPatch) * mesh->bvhPatches.Length();
-                threadMemoryStatistics[GetThreadIndex()].totalBVHMemory +=
-                    sizeof(BVHEdge) * mesh->bvhEdges.Length();
             }
-        });
+
+            // Split internal grid into smaller grids
+            int edgeRateU     = patch->GetMaxEdgeFactorU();
+            int edgeRateV     = patch->GetMaxEdgeFactorV();
+            int bvhPatchIndex = (int)bvhPatches.size();
+            int bvhPatchStart = bvhPatchIndex;
+            {
+                BVHPatch bvhPatch;
+                bvhPatch.patchIndex = j;
+                bvhPatch.grid       = UVGrid::Compress(
+                    Vec2i(0, 0), Vec2i(Max(edgeRateU - 2, 0), Max(edgeRateV - 2, 0)));
+
+                bvhPatches.push_back(bvhPatch);
+            }
+
+            while (bvhPatchIndex < (int)bvhPatches.size())
+            {
+                const BVHPatch &bvhPatch = bvhPatches[bvhPatchIndex];
+                BVHPatch patch0, patch1;
+                if (bvhPatch.Split(patch0, patch1))
+                {
+                    bvhPatches.push_back(patch1);
+                    bvhPatches[bvhPatchIndex] = patch0;
+                }
+                else
+                {
+                    bvhPatchIndex++;
+                }
+            }
+
+            for (int k = bvhPatchStart; k < (int)bvhPatches.size(); k++)
+            {
+                const BVHPatch &bvhPatch = bvhPatches[k];
+                Vec3f minP(pos_inf);
+                Vec3f maxP(neg_inf);
+
+                Vec2i uvStart, uvEnd;
+                bvhPatch.grid.Decompress(uvStart, uvEnd);
+                for (int v = uvStart[1]; v <= uvEnd[1]; v++)
+                {
+                    for (int u = uvStart[0]; u <= uvEnd[0]; u++)
+                    {
+                        int index = patch->GetGridIndex(u, v);
+                        minP      = Min(minP, vertices[index]);
+                        maxP      = Max(maxP, vertices[index]);
+                    }
+                }
+
+                geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
+                centBounds.Extend(Lane4F32(minP + maxP));
+
+                // TODO: make it so that I can't forget to make these negative
+                refs.emplace_back();
+                PrimRef *ref = &refs.back();
+                ref->minX    = -minP.x;
+                ref->minY    = -minP.y;
+                ref->minZ    = -minP.z;
+                ref->geomID  = CreatePatchID(CatClarkTriangleType::TessGrid, 0, i);
+                ref->maxX    = maxP.x;
+                ref->maxY    = maxP.y;
+                ref->maxZ    = maxP.z;
+                ref->primID  = k;
+            }
+        }
+        mesh->bvhPatches = StaticArray<BVHPatch>(arena, bvhPatches);
+        mesh->bvhEdges   = StaticArray<BVHEdge>(arena, bvhEdges);
+
+        threadMemoryStatistics[GetThreadIndex()].totalBVHMemory +=
+            sizeof(BVHPatch) * mesh->bvhPatches.Length();
+        threadMemoryStatistics[GetThreadIndex()].totalBVHMemory +=
+            sizeof(BVHEdge) * mesh->bvhEdges.Length();
+    }
+    // });
 
     RecordAOSSplits record;
     record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
@@ -1222,11 +1272,12 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
 }
 
 template <GeometryType type>
-void BuildBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
+void BuildBVH(Arena **arenas, ScenePrimitives *scene)
 
 {
     TempArena temp = ScratchStart(0, 0);
-    Mesh *meshes   = (Mesh *)scene->primitives;
+    BuildSettings settings;
+    Mesh *meshes = (Mesh *)scene->primitives;
     RecordAOSSplits record(neg_inf);
 
     u32 totalNumFaces = 0;
@@ -1312,19 +1363,19 @@ void BuildBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
     ScratchEnd(temp);
 }
 
-void BuildTriangleBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
+void BuildTriangleBVH(Arena **arenas, ScenePrimitives *scene)
 {
-    BuildBVH<GeometryType::TriangleMesh>(arenas, settings, scene);
+    BuildBVH<GeometryType::TriangleMesh>(arenas, scene);
 }
 
-void BuildQuadBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
+void BuildQuadBVH(Arena **arenas, ScenePrimitives *scene)
 {
-    BuildBVH<GeometryType::QuadMesh>(arenas, settings, scene);
+    BuildBVH<GeometryType::QuadMesh>(arenas, scene);
 }
 
-void BuildCatClarkBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene)
+void BuildCatClarkBVH(Arena **arenas, ScenePrimitives *scene)
 {
-    BuildBVH<GeometryType::CatmullClark>(arenas, settings, scene);
+    BuildBVH<GeometryType::CatmullClark>(arenas, scene);
 }
 
 template <GeometryType type, typename PrimRef>
@@ -1360,6 +1411,33 @@ void GenerateMeshRefs(Mesh *meshes, PrimRef *refs, u32 offset, u32 offsetMax, u3
     }
     Assert(offsetMax == offset);
     record = r;
+}
+
+template <GeometryType type>
+void ComputeTessellationParams(Mesh *meshes, TessellationParams *params, u32 start, u32 count)
+{
+    for (u32 i = start; i < start + count; i++)
+    {
+        Bounds bounds;
+        Mesh *mesh = &meshes[i];
+
+        u32 numFaces = mesh->GetNumFaces();
+        if (numFaces > PARALLEL_THRESHOLD)
+        {
+            ParallelReduce<Bounds>(
+                &bounds, 0, numFaces, PARALLEL_THRESHOLD,
+                [&](Bounds &b, int jobID, int start, int count) {
+                    b = GenerateMeshRefsHelper<type>{mesh->p, mesh->indices}(start, count);
+                },
+                [&](Bounds &l, const Bounds &r) { l.Extend(r); });
+        }
+        else
+        {
+            bounds = GenerateMeshRefsHelper<type>{mesh->p, mesh->indices}(0, numFaces);
+        }
+        params[i].centroid           = ToVec3f(bounds.Centroid());
+        params[i].currentMinDistance = pos_inf;
+    }
 }
 
 } // namespace rt

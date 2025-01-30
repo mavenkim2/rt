@@ -205,6 +205,12 @@ void TestRender(Arena *arena, Options *options = 0)
         arenas[i] = ArenaAlloc(16);
     }
 
+    Arena **tempArenas = PushArray(arena, Arena *, numProcessors);
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        tempArenas[i] = ArenaAlloc(16);
+    }
+
     PerformanceCounter counter = OS_StartCounter();
 
     // Camera
@@ -245,8 +251,8 @@ void TestRender(Arena *arena, Options *options = 0)
     AffineSpace renderFromWorld = AffineSpace::Translate(-pCamera);
     AffineSpace worldFromRender = AffineSpace::Translate(pCamera);
 
-    LoadScene(arenas, "../data/island/pbrt-v4/", options->filename, NDCFromCamera, height,
-              &renderFromWorld);
+    LoadScene(arenas, tempArenas, "../data/island/pbrt-v4/", options->filename, NDCFromCamera,
+              height, &renderFromWorld);
 
     // environment map
 #if 1

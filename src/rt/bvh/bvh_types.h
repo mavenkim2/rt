@@ -16,7 +16,6 @@ struct BuildSettings
     i32 maxDepth     = 32;
     f32 intCost      = 1.f;
     f32 travCost     = 1.f;
-    bool twoLevel    = true;
 
     u32 blockAdd;
 };

@@ -205,7 +205,7 @@ struct Mesh
     }
 };
 
-template <GeometryType type, typename PrimRefType>
+template <GeometryType type, typename PrimRefType = PrimRef>
 struct GenerateMeshRefsHelper
 {
     Vec3f *p;
@@ -257,6 +257,41 @@ struct GenerateMeshRefsHelper
         }
         record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
         record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+    }
+    // Computes bounds only
+    __forceinline Bounds operator()(u32 start, u32 count)
+    {
+        static_assert(type == GeometryType::TriangleMesh || type == GeometryType::QuadMesh);
+        constexpr u32 numVerticesPerFace = type == GeometryType::QuadMesh ? 4 : 3;
+        Bounds geomBounds;
+        for (u32 i = start; i < start + count; i++)
+        {
+            Vec3f v[numVerticesPerFace];
+            if (indices)
+            {
+                for (u32 j = 0; j < numVerticesPerFace; j++)
+                    v[j] = p[indices[numVerticesPerFace * i + j]];
+            }
+            else
+            {
+                for (u32 j = 0; j < numVerticesPerFace; j++)
+                    v[j] = p[numVerticesPerFace * i + j];
+            }
+
+            Vec3f min(pos_inf);
+            Vec3f max(neg_inf);
+            for (u32 j = 0; j < numVerticesPerFace; j++)
+            {
+                min = Min(min, v[j]);
+                max = Max(max, v[j]);
+            }
+
+            Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
+            Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
+
+            geomBounds.Extend(mins, maxs);
+        }
+        return geomBounds;
     }
 };
 
@@ -577,10 +612,12 @@ struct SceneDebug
     Vec4f filterWidths;
 
     Vec2i pixel;
+    OpenSubdivMesh *mesh;
 
-    CatmullClarkPatch *patch;
-    u32 num;
-    u32 primID;
+
+    // CatmullClarkPatch *patch;
+    // u32 num;
+    // u32 primID;
     u32 index;
     // u32 sampleNum;
     // std::atomic<u32> *numTiles;
@@ -592,9 +629,11 @@ static SceneDebug *GetDebug() { return &debug_; }
 
 struct TessellationParams
 {
-    Bounds bounds;
-    AffineSpace transforms;
+    // Bounds bounds;
+    Vec3f centroid;
+    AffineSpace transform;
     f32 currentMinDistance;
+    Mutex mutex;
     bool instanced;
 };
 
@@ -628,6 +667,7 @@ struct ScenePrimitives
         PrimitiveIndices *primIndices;
     };
 
+    Scheduler::Counter counter = {};
     u32 numTransforms;
     IntersectFunc intersectFunc;
     OccludedFunc occludedFunc;
@@ -650,9 +690,6 @@ struct Scene
 
     StaticArray<Material *> materials;
 
-    // ArrayTuple<MaterialTypes> materials;
-    // Material materials;
-    // Bounds bounds;
     u32 numLights;
 
     Bounds BuildBVH(Arena **arenas, BuildSettings &settings);
@@ -669,13 +706,15 @@ Scene *GetScene() { return scene_; }
 //     return &scene->materialTables[tableIndex];
 // }
 
-void BuildTLASBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
+void BuildTLASBVH(Arena **arenas, ScenePrimitives *scene);
 
 template <GeometryType type>
-void BuildBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
-void BuildQuadBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
-void BuildTriangleBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
-void BuildCatClarkBVH(Arena **arenas, BuildSettings &settings, ScenePrimitives *scene);
+void BuildBVH(Arena **arenas, ScenePrimitives *scene);
+void BuildQuadBVH(Arena **arenas, ScenePrimitives *scene);
+void BuildTriangleBVH(Arena **arenas, ScenePrimitives *scene);
+void BuildCatClarkBVH(Arena **arenas, ScenePrimitives *scene);
+template <GeometryType type>
+void ComputeTessellationParams(Mesh *meshes, TessellationParams *params, u32 start, u32 count);
 
 } // namespace rt
 #endif

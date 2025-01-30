@@ -119,15 +119,8 @@ struct UVGrid
 
 struct BVHEdge
 {
-    struct OpenSubdivPatch *patch;
-    // Bit trail represents whether to advance on edge (0) or on grid (1)
-    // for stitching index
-    int bitTrail;
-
-    UVGrid grid;
-
-    int edgeStep;
-    int edgeEnd;
+    int patchIndex;
+    int steps;
 };
 
 struct PatchItr
@@ -139,6 +132,7 @@ struct PatchItr
     static const FixedArray<Vec2i, 4> uvDiffTable;
 
     const OpenSubdivPatch *patch;
+    const EdgeInfo *edgeInfo;
     int edge;
     FixedArray<int, 3> indices;
 
@@ -155,15 +149,15 @@ struct PatchItr
     int q;
 
     // Bit trail
-    int bitTrail = 0;
-    int steps    = 0;
+    // int bitTrail = 0;
+    int steps = 0;
 
     PatchItr() {}
     PatchItr(const OpenSubdivPatch *patch, int edge) : patch(patch), edge(edge)
     {
-        const EdgeInfo &edgeInfo = patch->edgeInfo[edge];
-        int edgeFactor           = edgeInfo.GetEdgeFactor();
-        int reversed             = edgeInfo.GetReversed();
+        edgeInfo       = &patch->edgeInfo[edge];
+        int edgeFactor = edgeInfo->GetEdgeFactor();
+        int reversed   = edgeInfo->GetReversed();
 
         Assert(reversed == 0 || reversed == 1);
 
@@ -183,30 +177,22 @@ struct PatchItr
         uvEnd   = uvStart + uvDiffTable[edge] * gridStep;
     }
 
-    PatchItr(const OpenSubdivPatch *patch, const BVHEdge *bvhEdge, int edge)
-        : patch(patch), edge(edge)
+    void StepForward(int stepIn)
     {
-        const EdgeInfo &edgeInfo = patch->edgeInfo[edge];
-        int edgeFactor           = edgeInfo.GetEdgeFactor();
-        int reversed             = edgeInfo.GetReversed();
-
-        edgeStart = start[reversed] * edgeFactor;
-        edgeStep  = bvhEdge->edgeStep;
-        edgeDiff  = diff[reversed];
-        edgeEnd   = bvhEdge->edgeEnd;
-
-        bvhEdge->grid.Decompress(uvStart, uvEnd);
-
-        bitTrail = bvhEdge->bitTrail;
-    }
-
-    int GetBitTrail()
-    {
-        Assert(steps <= 32);
-        int result = bitTrail;
-        bitTrail   = 0;
-        steps      = 0;
-        return result;
+        int edgeFactor = edgeInfo->GetEdgeFactor();
+        for (int i = 0; i < stepIn; i++)
+        {
+            if (q >= 0 && uvStart != uvEnd)
+            {
+                uvStart += uvDiffTable[edge];
+                q -= 2 * edgeFactor;
+            }
+            else
+            {
+                edgeStep += edgeDiff;
+                q += 2 * maxEdgeFactor;
+            }
+        }
     }
 
     bool IsNotFinished() { return edgeStep != edgeEnd || uvStart != uvEnd; }
@@ -214,68 +200,33 @@ struct PatchItr
     {
         if (!IsNotFinished()) return false;
 
-        const EdgeInfo &edgeInfo = patch->edgeInfo[edge];
         indices.Clear();
         if (q >= 0 && uvStart != uvEnd)
         {
             int id0 = patch->GetGridIndex(uvStart[0], uvStart[1]);
-            int id1 = edgeInfo.GetVertexID(edgeStep);
+            int id1 = edgeInfo->GetVertexID(edgeStep);
             uvStart += uvDiffTable[edge];
             int id2 = patch->GetGridIndex(uvStart[0], uvStart[1]);
 
             indices.Push(id0);
             indices.Push(id1);
             indices.Push(id2);
-            q -= 2 * edgeInfo.GetEdgeFactor();
+            q -= 2 * edgeInfo->GetEdgeFactor();
         }
         else
         {
-            int id0 = edgeInfo.GetVertexID(edgeStep);
+            int id0 = edgeInfo->GetVertexID(edgeStep);
             edgeStep += edgeDiff;
-            Assert(edgeStep <= edgeInfo.GetEdgeFactor() && edgeStep >= 0);
-            int id1 = edgeInfo.GetVertexID(edgeStep);
+            Assert(edgeStep <= edgeInfo->GetEdgeFactor() && edgeStep >= 0);
+            int id1 = edgeInfo->GetVertexID(edgeStep);
             int id2 = patch->GetGridIndex(uvStart[0], uvStart[1]);
 
             indices.Push(id0);
             indices.Push(id1);
             indices.Push(id2);
             q += 2 * maxEdgeFactor;
-
-            bitTrail |= (1 << steps);
         }
         steps++;
-        return true;
-    }
-
-    bool EdgeItrNext()
-    {
-        if (!IsNotFinished()) return false;
-        const EdgeInfo &edgeInfo = patch->edgeInfo[edge];
-        indices.Clear();
-        // Advance along edge
-        if (!(bitTrail & 1))
-        {
-            int id0 = patch->GetGridIndex(uvStart[0], uvStart[1]);
-            int id1 = edgeInfo.GetVertexID(edgeStep);
-            uvStart += uvDiffTable[edge];
-            int id2 = patch->GetGridIndex(uvStart[0], uvStart[1]);
-
-            indices.Push(id0);
-            indices.Push(id1);
-            indices.Push(id2);
-        }
-        else
-        {
-            int id0 = edgeInfo.GetVertexID(edgeStep);
-            edgeStep += edgeDiff;
-            int id1 = edgeInfo.GetVertexID(edgeStep);
-            int id2 = patch->GetGridIndex(uvStart[0], uvStart[1]);
-
-            indices.Push(id0);
-            indices.Push(id1);
-            indices.Push(id2);
-        }
-        bitTrail >>= 1;
         return true;
     }
 
@@ -295,14 +246,15 @@ struct PatchItr
         {
             ErrorExit(IsNotFinished(), "edge %u factor %u maxu %u maxv %u", edge, edgeFactor,
                       patch->GetMaxEdgeFactorU(), patch->GetMaxEdgeFactorV());
-            EdgeItrNext();
+            // EdgeItrNext();
+            Next();
         }
         Vec2f edgeDiv(1.f / Max(2, patch->GetMaxEdgeFactorU()),
                       1.f / Max(2, patch->GetMaxEdgeFactorV()));
         f32 edgeFactorInv = 1.f / edgeFactor;
 
         int edgeStepCount = Abs(edgeStep - edgeStart);
-        if (!(bitTrail & 1))
+        if (q >= 0 && uvStart != uvEnd)
         {
             uv[0] = GetGridUV(uvStart, edgeDiv);
             uv[1] = GetEdgeUV(edgeStepCount, edgeFactorInv);
@@ -315,7 +267,7 @@ struct PatchItr
             uv[1] = GetEdgeUV(edgeStepCount + 1, edgeFactorInv);
             uv[2] = GetGridUV(uvStart, edgeDiv);
         }
-        EdgeItrNext();
+        Next();
     }
 };
 
@@ -337,9 +289,7 @@ const FixedArray<Vec2i, 4> PatchItr::uvDiffTable = {
 
 struct BVHPatch
 {
-    // TODO: reference this somehow implicitly
-    OpenSubdivPatch *patch;
-
+    int patchIndex;
     UVGrid grid;
 
     // i mean naively we just store 3 iterators
@@ -353,8 +303,8 @@ struct BVHPatch
 
         if (numTriangles <= 8) return false;
 
-        patch0.patch = patch;
-        patch1.patch = patch;
+        patch0.patchIndex = patchIndex;
+        patch1.patchIndex = patchIndex;
 
         // Vertical split
         if (diff[0] > diff[1])
@@ -385,9 +335,6 @@ struct BVHPatch
     }
 };
 
-// TODO: can have stitching quads (for edges that match the
-// maximum u/v edge rate), by specifying an edge index start, grid index start,
-// and a grid offset step size. this may or may not be worth it
 struct OpenSubdivMesh
 {
     StaticArray<Vec3f> vertices;
@@ -403,8 +350,9 @@ struct OpenSubdivMesh
     u32 GetNumFaces() const { return untessellatedPatches.Length() + patches.Length(); }
 };
 
-OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
+OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                                      const Mat4 &NDCFromCamera, int screenHeight,
+                                     struct TessellationParams *param,
                                      struct Mesh *controlMeshes, u32 numMeshes);
 
 } // namespace rt

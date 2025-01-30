@@ -13,7 +13,6 @@ namespace rt
 PatchItr OpenSubdivPatch::CreateIterator(int edge) const
 {
     PatchItr itr = PatchItr(this, edge);
-
     return itr;
 }
 
@@ -118,9 +117,6 @@ void EvaluateLimitSurfacePosition(const Vertex *vertices, const Far::PatchMap *p
     outDpdvv = dpdvv;
 }
 
-// Edge vertices (shared by edges)
-// TODO: use half-edge structure?
-
 struct FaceInfo
 {
     int edgeInfoId[4];
@@ -141,7 +137,7 @@ struct TessellatedVertices
 // GRAPH/EUROGRAPHICS workshop on Graphics hardware,
 // ACM, New York, NY, USA, 25–32
 // See Figure 7 from above for how this works
-OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
+OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                                      const Mat4 &NDCFromCamera, int screenHeight,
                                      TessellationParams *params, Mesh *controlMeshes,
                                      u32 numMeshes)
@@ -168,10 +164,8 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
         Vec2i(0, -1),
     };
 
-    // TODO: catmull clark primitive
-    OpenSubdivMesh *outputMeshes = PushArray(arena, OpenSubdivMesh, numMeshes);
-
-    // for (u32 meshIndex = 0; meshIndex < numMeshes; meshIndex++)
+    OpenSubdivMesh *outputMeshes =
+        PushArray(arenas[GetThreadIndex()], OpenSubdivMesh, numMeshes);
 
     ParallelFor(0, numMeshes, PARALLEL_THRESHOLD, 1, [&](u32 jobID, u32 start, u32 count) {
         for (u32 meshIndex = start; meshIndex < start + count; meshIndex++)
@@ -216,32 +210,33 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
             {
                 int indexOffset = 4 * f;
 
-                if (!tessParams->instanced)
-                {
-                    Bounds bounds;
-                    for (int i = 0; i < 4; i++)
-                    {
-                        int id = controlMesh->indices[indexOffset + i];
-                        bounds.Extend(
-                            Lane4F32(TransformP(tessParams->transform, controlMesh->p[id])));
-                    }
-                    // frustum cull
-                    if (FrustumCull(NDCFromCamera, bounds))
-                    {
-                        for (int i = 0; i < 4; i++)
-                        {
-                            int id0    = controlMesh->indices[indexOffset + i];
-                            int id1    = controlMesh->indices[indexOffset + ((i + 1) & 3)];
-                            u64 edgeId = ComputeEdgeId(id0, id1);
-                        }
-                        const auto &result = edgeIDMap.find(edgeId);
-                        int edgeIndex      = -1;
-                        if (result == edgeIDMap.end())
-                        {
-                        }
-                        continue;
-                    }
-                }
+                // if (!tessParams->instanced)
+                // {
+                //     Bounds bounds;
+                //     for (int i = 0; i < 4; i++)
+                //     {
+                //         int id = controlMesh->indices[indexOffset + i];
+                //         bounds.Extend(
+                //             Lane4F32(TransformP(tessParams->transform,
+                //             controlMesh->p[id])));
+                //     }
+                //     // frustum cull
+                //     if (FrustumCull(NDCFromCamera, bounds))
+                //     {
+                //         for (int i = 0; i < 4; i++)
+                //         {
+                //             int id0    = controlMesh->indices[indexOffset + i];
+                //             int id1    = controlMesh->indices[indexOffset + ((i + 1) & 3)];
+                //             u64 edgeId = ComputeEdgeId(id0, id1);
+                //         }
+                //         const auto &result = edgeIDMap.find(edgeId);
+                //         int edgeIndex      = -1;
+                //         if (result == edgeIDMap.end())
+                //         {
+                //         }
+                //         continue;
+                //     }
+                // }
                 // For uninstanced meshes,
                 for (int i = 0; i < 4; i++)
                 {
@@ -262,8 +257,11 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
                     if (result == edgeIDMap.end())
                     {
                         // Compute tessellation factor
-                        Vec3f p0       = controlMesh->p[id0];
-                        Vec3f p1       = controlMesh->p[id1];
+                        Vec3f p0 = controlMesh->p[id0];
+                        Vec3f p1 = controlMesh->p[id1];
+
+                        p0             = TransformP(tessParams->transform, p0);
+                        p1             = TransformP(tessParams->transform, p1);
                         Vec3f midPoint = (p0 + p1) / 2.f;
                         f32 radius     = Length(p0 - p1) / 2.f;
 
@@ -272,7 +270,6 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
                                          1;
 
                         edgeFactor = Clamp(edgeFactor, 1, 8);
-                        // edgeFactor     = Clamp(edgeFactor, 1, 64);
 
                         maxMeshEdgeRate = Max(maxMeshEdgeRate, edgeFactor);
 
@@ -391,10 +388,6 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
                     Max(edgeRates[0], edgeRates[2]),
                     Max(edgeRates[1], edgeRates[3]),
                 };
-                f32 scale[2] = {
-                    1.f / maxEdgeRates[0],
-                    1.f / maxEdgeRates[1],
-                };
 
                 if (maxEdgeRates[0] == 1 && maxEdgeRates[1] == 1)
                 {
@@ -412,16 +405,13 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
                 }
 
                 // Effectively adds a center point
-                if (maxEdgeRates[0] == 1)
-                {
-                    maxEdgeRates[0] = 2;
-                    scale[0]        = 0.5f;
-                }
-                if (maxEdgeRates[1] == 1)
-                {
-                    maxEdgeRates[1] = 2;
-                    scale[1]        = 0.5f;
-                }
+                if (maxEdgeRates[0] == 1) maxEdgeRates[0] = 2;
+                if (maxEdgeRates[1] == 1) maxEdgeRates[1] = 2;
+
+                f32 scale[2] = {
+                    1.f / maxEdgeRates[0],
+                    1.f / maxEdgeRates[1],
+                };
 
                 // Inner grid of vertices (local to a patch)
                 OpenSubdivPatch patch;
@@ -442,6 +432,7 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
                 patches.push_back(patch);
             }
 
+            Arena *arena              = arenas[GetThreadIndex()];
             outputMesh->vertices      = StaticArray<Vec3f>(arena, vSize + totalSize);
             outputMesh->normals       = StaticArray<Vec3f>(arena, vSize + totalSize);
             outputMesh->vertices.size = vSize + totalSize;
@@ -450,11 +441,6 @@ OpenSubdivMesh *AdaptiveTessellation(Arena *arena, ScenePrimitives *scene,
                        sizeof(Vec3f) * vSize);
             MemoryCopy(outputMesh->normals.data, tessellatedVertices.normals.data(),
                        sizeof(Vec3f) * vSize);
-
-            // tessellatedVertices.vertices.clear();
-            // tessellatedVertices.vertices.shrink_to_fit();
-            // tessellatedVertices.normals.clear();
-            // tessellatedVertices.normals.shrink_to_fit();
 
             ParallelFor(
                 0, (u32)patches.size(), 8092, 8092, [&](int jobID, int start, int count) {

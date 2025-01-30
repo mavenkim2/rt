@@ -961,12 +961,6 @@ struct QuadIntersectorBase<N, Prim<N>>
             SurfaceInteractionFromTriangleIntersection(
                 scene, Get(itr.geomIDs, index), primID / 2, ids, u, v, w, si, isSecondTri);
 
-#if DEBUG
-            GetDebug()->filename = scene->filename;
-            GetDebug()->geomID   = Get(itr.geomIDs, index);
-            GetDebug()->scene    = scene;
-#endif
-
             return true;
         }
         return false;
@@ -990,9 +984,6 @@ struct CatClarkPatchIntersector
                           SurfaceInteraction &si)
 
     {
-        GetDebug()->patch = primitives;
-        GetDebug()->num   = num;
-
         auto trueMask  = Mask<Lane8F32>(TrueTy());
         auto falseMask = Mask<Lane8F32>(FalseTy());
 
@@ -1092,10 +1083,12 @@ struct CatClarkPatchIntersector
                 break;
                 case CatClarkTriangleType::TessStitching:
                 {
-                    const BVHEdge *edge = &mesh->bvhEdges[primID];
-                    auto iterator       = PatchItr(edge->patch, edge, edgeIndex);
-                    int count           = 0;
-                    for (; iterator.EdgeItrNext();)
+                    const BVHEdge *edge          = &mesh->bvhEdges[primID];
+                    const OpenSubdivPatch *patch = &mesh->patches[edge->patchIndex];
+                    auto iterator                = patch->CreateIterator(edgeIndex);
+                    iterator.StepForward(edge->steps);
+                    int count = 0;
+                    for (; iterator.steps < 8 && iterator.Next();)
                     {
                         PushQueue(CatClarkTriangleType::TessStitching, count++,
                                   iterator.indices[0], iterator.indices[1],
@@ -1107,7 +1100,7 @@ struct CatClarkPatchIntersector
                 {
                     // Step inner grid
                     const BVHPatch *bvhPatch     = &mesh->bvhPatches[primID];
-                    const OpenSubdivPatch *patch = bvhPatch->patch;
+                    const OpenSubdivPatch *patch = &mesh->patches[bvhPatch->patchIndex];
 
                     Vec2i uvStart, uvEnd;
                     bvhPatch->grid.Decompress(uvStart, uvEnd);
@@ -1158,14 +1151,16 @@ struct CatClarkPatchIntersector
             Assert(index != -1);
             u32 patchIndex            = patchID[index];
             u32 primID                = itr.primIDs[index];
-            GetDebug()->primID        = primID;
-            GetDebug()->index         = index;
             u32 geomID                = itr.geomIDs[index];
             CatClarkTriangleType type = GetPatchType(patchIndex);
             int id                    = GetTriangleIndex(patchIndex);
 
             Assert(geomID < scene->numPrimitives);
             OpenSubdivMesh *mesh = meshes + geomID;
+
+            GetDebug()->mesh   = mesh;
+            GetDebug()->geomID = geomID;
+            GetDebug()->scene  = scene;
 
             int faceID = -1;
 
@@ -1204,9 +1199,8 @@ struct CatClarkPatchIntersector
                 break;
                 case CatClarkTriangleType::TessGrid:
                 {
-                    // OpenSubdivPatch *patch = &mesh->patches[primID];
                     const BVHPatch *bvhPatch     = &mesh->bvhPatches[primID];
-                    const OpenSubdivPatch *patch = bvhPatch->patch;
+                    const OpenSubdivPatch *patch = &mesh->patches[bvhPatch->patchIndex];
                     faceID                       = patch->faceID;
 
                     int edgeU = patch->GetMaxEdgeFactorU();
@@ -1242,12 +1236,13 @@ struct CatClarkPatchIntersector
                 case CatClarkTriangleType::TessStitching:
                 {
                     const BVHEdge *bvhEdge       = &mesh->bvhEdges[primID];
-                    const OpenSubdivPatch *patch = bvhEdge->patch;
+                    const OpenSubdivPatch *patch = &mesh->patches[bvhEdge->patchIndex];
                     faceID                       = patch->faceID;
 
                     // Reconstruct uvs
                     int edgeIndex = GetMeta(patchIndex);
-                    auto iterator = PatchItr(patch, bvhEdge, edgeIndex);
+                    auto iterator = patch->CreateIterator(edgeIndex);
+                    iterator.StepForward(bvhEdge->steps);
                     iterator.GetUV(id, uvs);
                     vertexIndices[0] = iterator.indices[0];
                     vertexIndices[1] = iterator.indices[1];
@@ -1294,7 +1289,7 @@ struct CatClarkPatchIntersector
             si.shading.n = u * n[1] + v * n[2] + w * n[0];
             si.shading.n = LengthSquared(si.shading.n) > 0 ? Normalize(si.shading.n) : si.n;
 
-#if 0
+#if 1
             Vec3f dpdu, dpdv, dndu, dndv;
 
             Vec3f dn02 = n[0] - n[2];
