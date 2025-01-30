@@ -1092,12 +1092,9 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
 
                             // save start state
                             BVHEdge bvhEdge;
-                            bvhEdge.faceID         = patch->faceID;
-                            bvhEdge.gridIndexStart = patch->gridIndexStart;
-                            bvhEdge.edge           = currentEdge;
-                            bvhEdge.edgeU          = patch->GetMaxEdgeFactorU();
-                            Vec2i uvStart          = itr.uvStart;
-                            bvhEdge.edgeStep       = itr.edgeStep;
+                            bvhEdge.patch    = patch;
+                            Vec2i uvStart    = itr.uvStart;
+                            bvhEdge.edgeStep = itr.edgeStep;
 
                             for (int triIndex = 0; triIndex < 8 && itr.Next(); triIndex++)
                             {
@@ -1140,11 +1137,8 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, BuildSettings &setting
                     int bvhPatchStart = bvhPatchIndex;
                     {
                         BVHPatch bvhPatch;
-                        bvhPatch.edgeU          = edgeRateU;
-                        bvhPatch.edgeV          = edgeRateV;
-                        bvhPatch.gridIndexStart = patch->gridIndexStart;
-                        bvhPatch.faceID         = patch->faceID;
-                        bvhPatch.grid           = UVGrid::Compress(
+                        bvhPatch.patch = patch;
+                        bvhPatch.grid  = UVGrid::Compress(
                             Vec2i(0, 0), Vec2i(Max(edgeRateU - 2, 0), Max(edgeRateV - 2, 0)));
 
                         bvhPatches.push_back(bvhPatch);
