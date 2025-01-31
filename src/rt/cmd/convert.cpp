@@ -1576,6 +1576,12 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
 
     BuilderNode bNode = {};
 
+    Arena **arenas = PushArray(temp.arena, Arena *, 32);
+    for (u32 i = 0; i < 32; i++)
+    {
+        arenas[i] = ArenaAlloc(16);
+    }
+
     if (state)
     {
         SceneHashMap *textureHashMap = &state->textureHashMaps[0];
@@ -1621,6 +1627,10 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                 int offset = objMesh.offset;
                 int count  = objMesh.num;
 
+                if (count > 1024)
+                {
+                    int stop = 5;
+                }
                 int meshOffset = 0;
                 for (auto *node = info->shapes.first; node != 0; node = node->next)
                 {
@@ -1635,14 +1645,19 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                     int taskCount       = (num + groupSize - 1) / groupSize;
 
                     StringBuilder *builders = PushArray(temp.arena, StringBuilder, taskCount);
+                    Assert(taskCount <= 32);
+                    for (int i = 0; i < taskCount; i++)
+                    {
+                        builders[i].arena = arenas[i];
+                    }
 
                     // Precalculate offsets into mapped buffer
-                    int *offsets = PushArray(temp.arena, int, taskCount);
+                    u64 *offsets = PushArray(temp.arena, u64, taskCount);
                     for (int taskIndex = 0; taskIndex < taskCount; taskIndex++)
                     {
                         int total = 0;
                         int start = taskIndex * groupSize;
-                        int end   = Min(taskIndex * (groupSize + 1), num);
+                        int end   = Min((taskIndex + 1) * groupSize, num);
                         for (int i = start; i < end; i++)
                         {
                             int packetIndex      = i + offset;
@@ -1650,22 +1665,26 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                             ScenePacket *packet  = &shapeType->packet;
                             total += ComputeMeshSize(objMesh.meshes[meshOffset + i]);
                         }
+                        offsets[taskIndex] = total;
                     }
 
-                    int tempOffset = dataBuilder.totalSize;
+                    u64 tempOffset = dataBuilder.totalSize;
                     for (int taskIndex = 0; taskIndex < taskCount; taskIndex++)
                     {
-                        int tempTotal      = offsets[taskIndex];
+                        u64 tempTotal      = offsets[taskIndex];
                         offsets[taskIndex] = tempOffset;
                         tempOffset += tempTotal;
                     }
 
                     Expand(&dataBuilder, tempOffset - dataBuilder.totalSize);
+                    dataBuilder.totalSize = tempOffset;
 
-                    scheduler.ScheduleAndWait(taskCount, 1, [&](int jobID) {
+                    ParallelFor(0, taskCount, 1, 1, [&](int jobID, int id, int count) {
+                        Assert(count == 1);
+                        Assert(jobID < taskCount);
                         StringBuilder &builder = builders[jobID];
                         int start              = jobID * groupSize;
-                        int end                = Min(jobID * (groupSize + 1), num);
+                        int end                = Min((jobID + 1) * groupSize, num);
 
                         int builderOffset = offsets[jobID];
                         for (int i = start; i < end; i++)
@@ -1821,6 +1840,11 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
     WriteFileMapped(&builder, outFile);
     OS_UnmapFile(dataBuilder.ptr);
     OS_ResizeFile(dataBuilder.filename, dataBuilder.totalSize);
+
+    for (int i = 0; i < 32; i++)
+    {
+        ArenaClear(arenas[i]);
+    }
     ScratchEnd(temp);
 }
 

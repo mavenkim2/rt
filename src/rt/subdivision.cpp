@@ -395,12 +395,12 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
 
             // Displacement
 
-            Mutex *cornerMutexes =
-                PushArray(scratch.temp.arena, Mutex, controlMesh->numVertices);
-            int *cornerCounts = PushArray(scratch.temp.arena, int, controlMesh->numVertices);
-
-            int *edgeCount     = PushArray(scratch.temp.arena, int, edgeInfos.size());
-            Mutex *edgeMutexes = PushArray(scratch.temp.arena, Mutex, edgeInfos.size());
+            // Mutex *cornerMutexes =
+            //     PushArray(scratch.temp.arena, Mutex, controlMesh->numVertices);
+            // int *cornerCounts = PushArray(scratch.temp.arena, int, controlMesh->numVertices);
+            //
+            // int *edgeCount     = PushArray(scratch.temp.arena, int, edgeInfos.size());
+            // Mutex *edgeMutexes = PushArray(scratch.temp.arena, Mutex, edgeInfos.size());
 
             // ParallelFor(0, controlMesh->numFaces, 8092, 8092,
             //             [&](int jobID, int start, int count) {

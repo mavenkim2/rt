@@ -969,7 +969,7 @@ void Expand(StringBuilderMapped *builder, u64 size)
 {
     if (builder->totalSize + size > builder->currentLimit)
     {
-        Assert(builder->totalSize == u64(builder->writePtr - builder->ptr));
+        // Assert(builder->totalSize == u64(builder->writePtr - builder->ptr));
         OS_UnmapFile(builder->ptr);
         OS_ResizeFile(builder->filename, builder->totalSize);
         builder->ptr          = OS_MapFileAppend(builder->filename, megabytes(512) + size);
@@ -991,7 +991,7 @@ u64 Put(StringBuilderMapped *builder, void *data, u64 size)
 
 void Put(StringBuilderMapped *builder, void *data, u64 size, u64 offset)
 {
-    Assert(offset < builder->totalSize);
+    Assert(offset + size <= builder->totalSize);
     MemoryCopy(builder->ptr + offset, data, size);
 }
 

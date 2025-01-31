@@ -1096,10 +1096,6 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, ScenePrimitives *scene
 
     Arena *arena = arenas[GetThreadIndex()];
 
-    // ParallelFor(
-    //     0, scene->numPrimitives, PARALLEL_THRESHOLD, 1, [&](u32 jobID, u32 start, u32 count)
-    //     {
-    // for (u32 i = start; i < start + count; i++)
     for (u32 i = 0; i < scene->numPrimitives; i++)
     {
         auto *mesh = &meshes[i];
