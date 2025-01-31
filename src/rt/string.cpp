@@ -989,9 +989,9 @@ u64 Put(StringBuilderMapped *builder, void *data, u64 size)
     return offset;
 }
 
-void Put(StringBuilderMapped *builder, void *data, u64 size, u64 offset)
+void Put(StringBuilderMapped *builder, void *data, u64 size, u64 offset, u64 cap)
 {
-    Assert(offset + size <= builder->totalSize);
+    Assert(offset + size <= cap);
     MemoryCopy(builder->ptr + offset, data, size);
 }
 

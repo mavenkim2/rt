@@ -949,10 +949,6 @@ void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromC
                 }
             }
         }
-        else
-        {
-            int stop = 5;
-        }
         scene->counter.count.fetch_sub(1, std::memory_order_release);
     }
     else

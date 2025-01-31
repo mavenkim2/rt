@@ -81,6 +81,10 @@ struct NamedPacket
 
 typedef HashMap<NamedPacket> SceneHashMap;
 
+// NOTE:
+// "island\pbrt-v4\isDunesA\xgPalmDebris\xgPalmDebris_archivePalmdead0004_mod_geometry.pbrt"
+// leaflet0123 is improperly mapped to stem0004. switched material to isDunes:archivePalm
+
 // MOANA ONLY
 struct MoanaOBJMeshes
 {
@@ -666,7 +670,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
     auto &textureHashMap = sls->textureHashMaps[threadIndex];
     auto *lights         = &sls->lights[threadIndex];
 
-    // TODO: moana only
+    // MOANA ONLY
     {
         string baseFilename = PathSkipLastSlash(currentFilename);
         if (!(baseFilename == "osOcean_geometry.pbrt"))
@@ -1330,10 +1334,6 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 string line = ReadLine(&tokenizer);
                 ErrorExit(0, "ErrorExit while parsing scene. Buffer: %S", line);
             }
-                // TODO IMPORTANT: the indices are clockwise since PBRT
-                // uses a left-handed coordinate system. either need to
-                // revert the winding or use a left handed system as
-                // well
         }
     }
 
@@ -1455,28 +1455,28 @@ void WriteMesh(Mesh &mesh, StringBuilder &builder, StringBuilderMapped &dataBuil
 }
 
 void WriteData(StringBuilder *builder, StringBuilderMapped *dataBuilder, void *ptr, u64 size,
-               string out, int &builderOffset)
+               string out, u64 &builderOffset, u64 cap)
 {
     Assert(ptr);
-    Put(dataBuilder, ptr, size, builderOffset);
-    Put(builder, "%S %llu ", out, builderOffset);
+    Put(dataBuilder, ptr, size, builderOffset, cap);
+    Put(builder, "%S %llu ", out, builderOffset, cap);
     builderOffset += size;
 }
 
 void WriteMesh(Mesh &mesh, StringBuilder &builder, StringBuilderMapped &dataBuilder,
-               int &builderOffset)
+               u64 &builderOffset, u64 cap)
 {
     WriteData(&builder, &dataBuilder, mesh.p, mesh.numVertices * sizeof(Vec3f), "p",
-              builderOffset);
+              builderOffset, cap);
     WriteData(&builder, &dataBuilder, mesh.n, mesh.numVertices * sizeof(Vec3f), "n",
-              builderOffset);
+              builderOffset, cap);
 
     if (mesh.uv)
         WriteData(&builder, &dataBuilder, mesh.uv, mesh.numVertices * sizeof(Vec2f), "uv",
-                  builderOffset);
+                  builderOffset, cap);
     if (mesh.indices)
         WriteData(&builder, &dataBuilder, mesh.indices, mesh.numIndices * sizeof(u32),
-                  "indices", builderOffset);
+                  "indices", builderOffset, cap);
     Put(&builder, "v %u ", mesh.numVertices);
     if (mesh.indices) Put(&builder, "i %u ", mesh.numIndices);
 }
@@ -1627,10 +1627,6 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                 int offset = objMesh.offset;
                 int count  = objMesh.num;
 
-                if (count > 1024)
-                {
-                    int stop = 5;
-                }
                 int meshOffset = 0;
                 for (auto *node = info->shapes.first; node != 0; node = node->next)
                 {
@@ -1678,6 +1674,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
 
                     Expand(&dataBuilder, tempOffset - dataBuilder.totalSize);
                     dataBuilder.totalSize = tempOffset;
+                    dataBuilder.writePtr  = dataBuilder.ptr + dataBuilder.totalSize;
 
                     ParallelFor(0, taskCount, 1, 1, [&](int jobID, int id, int count) {
                         Assert(count == 1);
@@ -1686,7 +1683,8 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                         int start              = jobID * groupSize;
                         int end                = Min((jobID + 1) * groupSize, num);
 
-                        int builderOffset = offsets[jobID];
+                        u64 builderOffset = offsets[jobID];
+                        u64 cap = jobID == taskCount - 1 ? tempOffset : offsets[jobID + 1];
                         for (int i = start; i < end; i++)
                         {
                             int packetIndex = offset + i;
@@ -1700,13 +1698,13 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                             {
                                 Put(&builder, "Catclark ");
                                 WriteMesh(objMesh.meshes[meshIndex], builder, dataBuilder,
-                                          builderOffset);
+                                          builderOffset, cap);
                             }
                             else if (packet->type == "trianglemesh"_sid)
                             {
                                 Put(&builder, "Tri ");
                                 WriteMesh(objMesh.meshes[meshIndex], builder, dataBuilder,
-                                          builderOffset);
+                                          builderOffset, cap);
                             }
 
                             if (shapeType->materialName.size)

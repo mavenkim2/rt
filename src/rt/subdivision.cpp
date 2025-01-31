@@ -127,9 +127,25 @@ struct TessellatedVertices
 {
     std::vector<Vec3f> vertices;
     std::vector<Vec3f> normals;
+    std::vector<Vec3f> dpdu;
+    std::vector<Vec3f> dpdv;
 
     // Stitching triangles
     std::vector<int> stitchingIndices;
+
+    void Clear()
+    {
+        vertices.clear();
+        vertices.shrink_to_fit();
+        normals.clear();
+        normals.shrink_to_fit();
+        stitchingIndices.clear();
+        stitchingIndices.shrink_to_fit();
+        dpdu.clear();
+        dpdu.shrink_to_fit();
+        dpdv.clear();
+        dpdv.shrink_to_fit();
+    }
 };
 
 void EvaluateDisplacement(const PtexTexture *texture, int f, const Vec2f &uv,
@@ -305,6 +321,8 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                         maxMeshEdgeRate = Max(maxMeshEdgeRate, edgeFactor);
 
                         edgeIndex = (int)edgeInfos.size();
+                        // Assert(samples.size() - controlMesh->numVertices ==
+                        // edgeInfos.size());
                         edgeInfos.emplace_back(
                             EdgeInfo{(int)samples.size(), (u32)edgeFactor, id0, id1});
                         edgeIDMap[edgeId] = edgeIndex;
@@ -377,6 +395,8 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
 
             tessellatedVertices.vertices.resize(samples.size());
             tessellatedVertices.normals.resize(samples.size());
+            tessellatedVertices.dpdu.resize(samples.size());
+            tessellatedVertices.dpdv.resize(samples.size());
 
             // Evaluate limit surface positons for corners
             ParallelFor(0, (u32)samples.size(), 8092, 8092,
@@ -390,34 +410,99 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                                 Vec3f normal                    = Normalize(Cross(dpdu, dpdv));
                                 tessellatedVertices.vertices[i] = pos;
                                 tessellatedVertices.normals[i]  = normal;
+                                tessellatedVertices.dpdu[i]     = dpdu;
+                                tessellatedVertices.dpdv[i]     = dpdv;
                             }
                         });
 
-            // Displacement
+            // Displacement of shared vertices
+            struct TempVertex
+            {
+                Vec3f pos;
+                Vec3f normal;
+                // Vec3f dpdu;
+                // Vec3f dpdv;
+                // f32 areaWeight;
+                int count = 0;
+            };
 
-            // Mutex *cornerMutexes =
-            //     PushArray(scratch.temp.arena, Mutex, controlMesh->numVertices);
-            // int *cornerCounts = PushArray(scratch.temp.arena, int, controlMesh->numVertices);
-            //
-            // int *edgeCount     = PushArray(scratch.temp.arena, int, edgeInfos.size());
-            // Mutex *edgeMutexes = PushArray(scratch.temp.arena, Mutex, edgeInfos.size());
+            // Evaluate displacements for shared vertices
+            TempVertex *tempVertices = 0;
+            if (texture)
+            {
+                tempVertices   = PushArray(scratch.temp.arena, TempVertex, samples.size());
+                Mutex *mutexes = PushArray(scratch.temp.arena, Mutex, samples.size());
 
-            // ParallelFor(0, controlMesh->numFaces, 8092, 8092,
-            //             [&](int jobID, int start, int count) {
-            //                 for (int f = start; f < start + count; f++)
-            //                 {
-            //                     const FaceInfo &faceInfo = faceInfos[f];
-            //                     for (int i = 0; i < 4; i++)
-            //                     {
-            //                         int id    = controlMesh->indices[4 * f + i];
-            //                         Vec3f pos = {};
-            //                         EvaluateDisplacement(texture, f, uvTable[i],
-            //                                 Vec4f(0.5f, 0.f, ?, ?), pos,
-            //                         BeginMutex
-            //                     }
-            //                 }
-            //             });
+                auto EvaluateDisplacementHelper = [&](const Vec4f &filterWidths,
+                                                      const Vec2f &uv, int f, int id) {
+                    Vec3f pos    = tessellatedVertices.vertices[id];
+                    Vec3f normal = tessellatedVertices.normals[id];
+                    Vec3f dpdu   = tessellatedVertices.dpdu[id];
+                    Vec3f dpdv   = tessellatedVertices.dpdv[id];
 
+                    EvaluateDisplacement(texture, f, uv, filterWidths, pos, dpdu, dpdv,
+                                         normal);
+
+                    BeginMutex(&mutexes[id]);
+                    TempVertex &vertex = tempVertices[id];
+                    vertex.pos += pos;
+                    vertex.normal += normal;
+                    vertex.count++;
+                    EndMutex(&mutexes[id]);
+                };
+                ParallelFor(
+                    0, controlMesh->numFaces, 8092, 8092,
+                    [&](int jobID, int start, int count) {
+                        for (int f = start; f < start + count; f++)
+                        {
+                            const FaceInfo &faceInfo = faceInfos[f];
+
+                            int edgeRates[4] = {
+                                (int)edgeInfos[faceInfo.edgeInfoId[0]].edgeFactor,
+                                (int)edgeInfos[faceInfo.edgeInfoId[1]].edgeFactor,
+                                (int)edgeInfos[faceInfo.edgeInfoId[2]].edgeFactor,
+                                (int)edgeInfos[faceInfo.edgeInfoId[3]].edgeFactor,
+                            };
+
+                            int edgeU  = Max(edgeRates[0], edgeRates[2]);
+                            int edgeV  = Max(edgeRates[1], edgeRates[3]);
+                            f32 scaleU = 1.f / edgeU;
+                            f32 scaleV = 1.f / edgeV;
+
+                            Vec4f filterWidths(.5f * scaleU, 0.f, 0.f, .5f * scaleV);
+                            for (int i = 0; i < 4; i++)
+                            {
+                                int id = controlMesh->indices[4 * f + i];
+                                EvaluateDisplacementHelper(filterWidths, uvTable[i], f, id);
+
+                                const EdgeInfo &edgeInfo = edgeInfos[faceInfo.edgeInfoId[i]];
+                                int reversed             = faceInfo.reversed[i];
+                                int edgeFactor           = edgeInfo.edgeFactor;
+
+                                int edgeStep = PatchItr::start[reversed] * edgeFactor;
+                                int edgeDiff = PatchItr::diff[reversed];
+                                int edgeEnd  = PatchItr::start[!reversed] * edgeFactor;
+
+                                edgeStep += edgeDiff;
+                                Vec2f uvDiff = Vec2f(uvDiffTable[i]) / (f32)edgeFactor;
+                                Vec2f uv     = uvTable[i];
+
+                                for (; edgeStep != edgeEnd; edgeStep += edgeDiff)
+                                {
+                                    uv += uvDiff;
+                                    int edgeVertexId = edgeInfo.GetVertexID(edgeStep);
+                                    Assert(edgeVertexId < samples.size());
+
+                                    EvaluateDisplacementHelper(filterWidths, uv, f,
+                                                               edgeVertexId);
+                                }
+                            }
+                        }
+                    });
+            }
+
+            // Allocate 1x1 and tessellated patches, calculate number of tessellated grid
+            // vertices
             int totalNumPatchFaces = 0;
             std::vector<OpenSubdivPatch> patches;
             std::vector<UntessellatedPatch> untessellatedPatches;
@@ -493,16 +578,58 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
             outputMesh->normals       = StaticArray<Vec3f>(arena, vSize + totalSize);
             outputMesh->vertices.size = vSize + totalSize;
             outputMesh->normals.size  = vSize + totalSize;
-            MemoryCopy(outputMesh->vertices.data, tessellatedVertices.vertices.data(),
-                       sizeof(Vec3f) * vSize);
-            MemoryCopy(outputMesh->normals.data, tessellatedVertices.normals.data(),
-                       sizeof(Vec3f) * vSize);
 
+            // Resolve displacements now that full buffer size is known
+            if (texture)
+            {
+                ParallelFor(0, (u32)samples.size(), 8092, 8092,
+                            [&](int jobID, int start, int count) {
+                                for (int i = start; i < start + count; i++)
+                                {
+                                    TempVertex &vertex      = tempVertices[i];
+                                    Vec3f pos               = vertex.pos / (f32)vertex.count;
+                                    Vec3f testPos           = tessellatedVertices.vertices[i];
+                                    Vec3f testNormal        = tessellatedVertices.normals[i];
+                                    Vec3f normal            = Normalize(vertex.normal);
+                                    outputMesh->vertices[i] = pos;
+                                    outputMesh->normals[i]  = normal;
+                                }
+                            });
+            }
+            else
+            {
+                MemoryCopy(outputMesh->vertices.data, tessellatedVertices.vertices.data(),
+                           sizeof(Vec3f) * vSize);
+                MemoryCopy(outputMesh->normals.data, tessellatedVertices.normals.data(),
+                           sizeof(Vec3f) * vSize);
+            }
+
+            outputMesh->stitchingIndices =
+                StaticArray<int>(arena, tessellatedVertices.stitchingIndices);
+            outputMesh->untessellatedPatches =
+                StaticArray<UntessellatedPatch>(arena, untessellatedPatches);
+            outputMesh->patches = StaticArray<OpenSubdivPatch>(arena, patches);
+
+            threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
+                sizeof(Vec3f) * 2 * outputMesh->vertices.Length();
+            threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
+                sizeof(UntessellatedPatch) * outputMesh->untessellatedPatches.Length();
+            threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
+                sizeof(OpenSubdivPatch) * outputMesh->patches.Length();
+            threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
+                sizeof(int) * outputMesh->stitchingIndices.Length();
+
+            tessellatedVertices.Clear();
+            untessellatedPatches.clear();
+            patches.clear();
+
+            // Evaluate and displace grid vertices
             ParallelFor(
-                0, (u32)patches.size(), 8092, 8092, [&](int jobID, int start, int count) {
+                0, outputMesh->patches.Length(), 8092, 8092,
+                [&](int jobID, int start, int count) {
                     for (int i = start; i < start + count; i++)
                     {
-                        OpenSubdivPatch *patch = &patches[i];
+                        OpenSubdivPatch *patch = &outputMesh->patches[i];
                         int f                  = patch->faceID;
                         FaceInfo &faceInfo     = faceInfos[f];
                         // Compute limit surface samples
@@ -545,30 +672,13 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                                                          dpdu, dpdv, normal);
                                 }
 
-                                int index = patch->GetGridIndex(uStep, vStep);
-                                // tessellatedVertices.normals.push_back(normal);
-                                outputMesh->normals[index]  = normal;
+                                int index                  = patch->GetGridIndex(uStep, vStep);
+                                outputMesh->normals[index] = normal;
                                 outputMesh->vertices[index] = pos;
                             }
                         }
                     }
                 });
-
-            outputMesh->stitchingIndices =
-                StaticArray<int>(arena, tessellatedVertices.stitchingIndices);
-            outputMesh->untessellatedPatches =
-                StaticArray<UntessellatedPatch>(arena, untessellatedPatches);
-
-            outputMesh->patches = StaticArray<OpenSubdivPatch>(arena, patches);
-
-            threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
-                sizeof(Vec3f) * 2 * outputMesh->vertices.Length();
-            threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
-                sizeof(UntessellatedPatch) * outputMesh->untessellatedPatches.Length();
-            threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
-                sizeof(OpenSubdivPatch) * outputMesh->patches.Length();
-            threadMemoryStatistics[GetThreadIndex()].totalShapeMemory +=
-                sizeof(int) * outputMesh->stitchingIndices.Length();
 
             delete refiner;
             delete patchTable;

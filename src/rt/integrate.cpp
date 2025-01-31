@@ -19,6 +19,9 @@ namespace rt
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
 // - optimize bvh memory consumption?
 
+// - BUG: when the build process receives garbage data, it produces a bvh that
+// causes the intersection to infinite loop?
+
 // - bdpt, metropolis, vcm, upbp, mcm?
 // - volumetric rendering
 //      - ratio tracking, residual ratio tracking, delta tracking <-- done but untested
@@ -197,8 +200,9 @@ void Render(Arena *arena, RenderParams2 &params)
     std::atomic<u32> numTiles = 0;
 
     // Camera differentials
-    Vec3f dxCamera = TransformV(cameraFromRaster, Vec3f(1.f, 0.f, 0.f));
-    Vec3f dyCamera = TransformV(cameraFromRaster, Vec3f(0.f, 1.f, 0.f));
+    Vec3f org      = TransformP(cameraFromRaster, Vec3f(0.f, 0.f, 0.f));
+    Vec3f dxCamera = TransformP(cameraFromRaster, Vec3f(1.f, 0.f, 0.f)) - org;
+    Vec3f dyCamera = TransformP(cameraFromRaster, Vec3f(0.f, 1.f, 0.f)) - org;
 
     Camera camera(cameraFromRaster, renderFromCamera, dxCamera, dyCamera, focalLength,
                   lensRadius, spp);
