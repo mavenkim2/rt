@@ -1440,20 +1440,6 @@ void WriteData(StringBuilder *builder, StringBuilderMapped *dataBuilder, void *p
     Put(builder, "%S %llu ", out, offset);
 }
 
-i32 WriteData(ScenePacket *packet, StringBuilder *builder, StringBuilderMapped *dataBuilder,
-              StringId matchId, string out)
-{
-    for (u32 c = 0; c < packet->parameterCount; c++)
-    {
-        if (packet->parameterNames[c] == matchId)
-        {
-            WriteData(builder, dataBuilder, packet->bytes[c], packet->sizes[c], out);
-            return c;
-        }
-    }
-    return -1;
-}
-
 void WriteMesh(Mesh &mesh, StringBuilder &builder, StringBuilderMapped &dataBuilder)
 {
     WriteData(&builder, &dataBuilder, mesh.p, mesh.numVertices * sizeof(Vec3f), "p");
@@ -1466,6 +1452,56 @@ void WriteMesh(Mesh &mesh, StringBuilder &builder, StringBuilderMapped &dataBuil
                   "indices");
     Put(&builder, "v %u ", mesh.numVertices);
     if (mesh.indices) Put(&builder, "i %u ", mesh.numIndices);
+}
+
+void WriteData(StringBuilder *builder, StringBuilderMapped *dataBuilder, void *ptr, u64 size,
+               string out, int &builderOffset)
+{
+    Assert(ptr);
+    Put(dataBuilder, ptr, size, builderOffset);
+    Put(builder, "%S %llu ", out, builderOffset);
+    builderOffset += size;
+}
+
+void WriteMesh(Mesh &mesh, StringBuilder &builder, StringBuilderMapped &dataBuilder,
+               int &builderOffset)
+{
+    WriteData(&builder, &dataBuilder, mesh.p, mesh.numVertices * sizeof(Vec3f), "p",
+              builderOffset);
+    WriteData(&builder, &dataBuilder, mesh.n, mesh.numVertices * sizeof(Vec3f), "n",
+              builderOffset);
+
+    if (mesh.uv)
+        WriteData(&builder, &dataBuilder, mesh.uv, mesh.numVertices * sizeof(Vec2f), "uv",
+                  builderOffset);
+    if (mesh.indices)
+        WriteData(&builder, &dataBuilder, mesh.indices, mesh.numIndices * sizeof(u32),
+                  "indices", builderOffset);
+    Put(&builder, "v %u ", mesh.numVertices);
+    if (mesh.indices) Put(&builder, "i %u ", mesh.numIndices);
+}
+
+int ComputeMeshSize(Mesh &mesh)
+{
+    int total = mesh.numVertices * sizeof(Vec3f);
+    total += mesh.n ? mesh.numVertices * sizeof(Vec3f) : 0;
+    total += mesh.uv ? mesh.numVertices * sizeof(Vec2f) : 0;
+    total += mesh.indices ? mesh.numIndices * sizeof(int) : 0;
+    return total;
+}
+
+i32 WriteData(ScenePacket *packet, StringBuilder *builder, StringBuilderMapped *dataBuilder,
+              StringId matchId, string out)
+{
+    for (u32 c = 0; c < packet->parameterCount; c++)
+    {
+        if (packet->parameterNames[c] == matchId)
+        {
+            WriteData(builder, dataBuilder, packet->bytes[c], packet->sizes[c], out);
+            return c;
+        }
+    }
+    return -1;
 }
 
 void WriteMesh(StringBuilder &builder, StringBuilderMapped &dataBuilder, ScenePacket *packet,
@@ -1513,13 +1549,11 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
     Assert(GetFileExtension(info->filename) == "rtscene");
     string outFile = StrConcat(temp.arena, directory, info->filename);
 
-    StringBuilder preBuilder = {};
-    preBuilder.arena         = temp.arena;
-    StringBuilder builder    = {};
-    builder.arena            = temp.arena;
+    StringBuilder builder = {};
+    builder.arena         = temp.arena;
 
     u32 totalMaterialCount = 0;
-    Put(&preBuilder, "RTSCENE_START ");
+    Put(&builder, "RTSCENE_START ");
 
     if (info->fileInstances.totalCount && info->shapes.totalCount)
     {
@@ -1542,34 +1576,29 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
 
     BuilderNode bNode = {};
 
-    StringBuilder *builders = 0;
-
     if (state)
     {
-        builders = PushArray(temp.arena, StringBuilder, state->numProcessors);
-
         SceneHashMap *textureHashMap = &state->textureHashMaps[0];
         for (u32 i = 1; i < state->numProcessors; i++)
         {
             textureHashMap->Merge(state->textureHashMaps[i]);
         }
 
+        Put(&builder, "MATERIALS_START ");
         for (u32 i = 0; i < state->numProcessors; i++)
         {
-            StringBuilder *builder = &builders[i];
-            Arena *arena           = state->arenas[i];
-            builder->arena         = arena;
-            auto &list             = state->materials[i];
+            auto &list = state->materials[i];
 
             for (auto *node = list.first; node != 0; node = node->next)
             {
                 for (u32 j = 0; j < node->count; j++)
                 {
                     auto &packet = node->values[j];
-                    WriteMaterials(builder, textureHashMap, packet, state->hashMapSize - 1);
+                    WriteMaterials(&builder, textureHashMap, packet, state->hashMapSize - 1);
                 }
             }
         }
+        Put(&builder, "MATERIALS_END ");
     }
 
     if (info->shapes.totalCount && info->fileInstances.totalCount == 0)
@@ -1591,41 +1620,88 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
             {
                 int offset = objMesh.offset;
                 int count  = objMesh.num;
-                bool done  = false;
+
+                int meshOffset = 0;
                 for (auto *node = info->shapes.first; node != 0; node = node->next)
                 {
-                    for (u32 i = 0; i < node->count; i++)
+                    if (count == 0) break;
+                    if (offset >= node->count)
                     {
-                        ShapeType *shapeType = node->values + i;
-                        ScenePacket *packet  = &shapeType->packet;
-
-                        if (offset)
-                        {
-                            offset--;
-                            continue;
-                        }
-                        else if (count == 0)
-                        {
-                            done = true;
-                            break;
-                        }
-
-                        count--;
-                        if (packet->type == "quadmesh"_sid)
-                        {
-                            Put(&builder, "Catclark ");
-                            WriteMesh(objMesh.meshes[i], builder, dataBuilder);
-                        }
-                        else if (packet->type == "trianglemesh"_sid)
-                        {
-                            Put(&builder, "Tri ");
-                            WriteMesh(objMesh.meshes[i], builder, dataBuilder);
-                        }
-
-                        if (shapeType->materialName.size)
-                            Put(&builder, "m %S ", shapeType->materialName);
+                        offset -= node->count;
+                        continue;
                     }
-                    if (done) break;
+                    int num             = Min(count, (int)node->count - offset);
+                    const int groupSize = 32;
+                    int taskCount       = (num + groupSize - 1) / groupSize;
+
+                    StringBuilder *builders = PushArray(temp.arena, StringBuilder, taskCount);
+
+                    // Precalculate offsets into mapped buffer
+                    int *offsets = PushArray(temp.arena, int, taskCount);
+                    for (int taskIndex = 0; taskIndex < taskCount; taskIndex++)
+                    {
+                        int total = 0;
+                        int start = taskIndex * groupSize;
+                        int end   = Min(taskIndex * (groupSize + 1), num);
+                        for (int i = start; i < end; i++)
+                        {
+                            int packetIndex      = i + offset;
+                            ShapeType *shapeType = node->values + packetIndex;
+                            ScenePacket *packet  = &shapeType->packet;
+                            total += ComputeMeshSize(objMesh.meshes[meshOffset + i]);
+                        }
+                    }
+
+                    int tempOffset = dataBuilder.totalSize;
+                    for (int taskIndex = 0; taskIndex < taskCount; taskIndex++)
+                    {
+                        int tempTotal      = offsets[taskIndex];
+                        offsets[taskIndex] = tempOffset;
+                        tempOffset += tempTotal;
+                    }
+
+                    Expand(&dataBuilder, tempOffset - dataBuilder.totalSize);
+
+                    scheduler.ScheduleAndWait(taskCount, 1, [&](int jobID) {
+                        StringBuilder &builder = builders[jobID];
+                        int start              = jobID * groupSize;
+                        int end                = Min(jobID * (groupSize + 1), num);
+
+                        int builderOffset = offsets[jobID];
+                        for (int i = start; i < end; i++)
+                        {
+                            int packetIndex = offset + i;
+                            Assert(packetIndex < node->count);
+                            int meshIndex = i + meshOffset;
+                            Assert(meshIndex < objMesh.num);
+                            ShapeType *shapeType = node->values + packetIndex;
+                            ScenePacket *packet  = &shapeType->packet;
+
+                            if (packet->type == "quadmesh"_sid)
+                            {
+                                Put(&builder, "Catclark ");
+                                WriteMesh(objMesh.meshes[meshIndex], builder, dataBuilder,
+                                          builderOffset);
+                            }
+                            else if (packet->type == "trianglemesh"_sid)
+                            {
+                                Put(&builder, "Tri ");
+                                WriteMesh(objMesh.meshes[meshIndex], builder, dataBuilder,
+                                          builderOffset);
+                            }
+
+                            if (shapeType->materialName.size)
+                                Put(&builder, "m %S ", shapeType->materialName);
+                        }
+                    });
+
+                    offset = 0;
+                    count -= num;
+                    meshOffset += num;
+                    for (int i = 0; i < taskCount; i++)
+                    {
+                        builder = ConcatBuilders(&builder, &builders[i]);
+                    }
                 }
                 Assert(count == 0);
             }
@@ -1741,19 +1817,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
         Put(&dataBuilder, "TRANSFORM_END");
     }
 
-    if (state)
-    {
-        Assert(builders);
-        Put(&preBuilder, "MATERIALS_START ");
-        for (u32 i = 0; i < state->numProcessors; i++)
-        {
-            preBuilder = ConcatBuilders(&preBuilder, &builders[i]);
-        }
-        Put(&preBuilder, "MATERIALS_END ");
-    }
-
     Put(&builder, "RTSCENE_END");
-    builder = ConcatBuilders(&preBuilder, &builder);
     WriteFileMapped(&builder, outFile);
     OS_UnmapFile(dataBuilder.ptr);
     OS_ResizeFile(dataBuilder.filename, dataBuilder.totalSize);

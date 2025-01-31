@@ -1073,7 +1073,7 @@ struct CatClarkPatchIntersector
                 {
                     const UntessellatedPatch *patch = &mesh->untessellatedPatches[primID];
 
-                    int indexStart = patch->stitchingStart;
+                    int indexStart = 4 * primID;
 
                     PushQueue(CatClarkTriangleType::Untess, 0, indices[indexStart + 0],
                               indices[indexStart + 1], indices[indexStart + 2]);
@@ -1173,7 +1173,7 @@ struct CatClarkPatchIntersector
                 {
                     UntessellatedPatch *patch = &mesh->untessellatedPatches[primID];
                     faceID                    = patch->faceID;
-                    int start                 = patch->stitchingStart;
+                    int start                 = 4 * primID;
 
                     if (id == 0)
                     {
@@ -1281,6 +1281,8 @@ struct CatClarkPatchIntersector
             si.materialIDs                  = indices->materialID.data;
             si.lightIndices                 = 0;
             si.faceIndices                  = faceID;
+
+            GetDebug()->index = indices->materialID.data;
 
             Vec3f dp02 = p[0] - p[2];
             Vec3f dp12 = p[1] - p[2];

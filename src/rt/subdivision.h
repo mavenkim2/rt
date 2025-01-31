@@ -7,7 +7,7 @@ namespace rt
 struct UntessellatedPatch
 {
     int faceID;
-    int stitchingStart;
+    // int stitchingStart;
 };
 
 struct EdgeInfo

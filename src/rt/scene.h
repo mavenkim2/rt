@@ -602,6 +602,7 @@ struct Material
 struct Ray2;
 template <i32 K>
 struct SurfaceInteractions;
+struct PtexTexture;
 
 struct SceneDebug
 {
@@ -614,6 +615,7 @@ struct SceneDebug
     Vec2i pixel;
     OpenSubdivMesh *mesh;
 
+    PtexTexture *texture;
 
     // CatmullClarkPatch *patch;
     // u32 num;

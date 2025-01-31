@@ -135,7 +135,9 @@ struct StringBuilderMapped
     StringBuilderMapped(string filename);
 };
 
+void Expand(StringBuilderMapped *builder, u64 size);
 u64 Put(StringBuilderMapped *builder, void *data, u64 size);
+void Put(StringBuilderMapped *builder, void *data, u64 size, u64 offset);
 u64 Put(StringBuilderMapped *builder, string str);
 
 // void EndStringBuilder(StringBuilderMapped &builder) {}

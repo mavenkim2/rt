@@ -132,6 +132,36 @@ struct TessellatedVertices
     std::vector<int> stitchingIndices;
 };
 
+void EvaluateDisplacement(const PtexTexture *texture, int f, const Vec2f &uv,
+                          const Vec4f &filterWidths, Vec3f &pos, Vec3f &dpdu, Vec3f &dpdv,
+                          Vec3f &normal)
+{
+    // Vector Displacement mapping
+    auto frame = LinearSpace3f::FromXZ(Normalize(dpdu), normal);
+    Vec3f displacement, uDisplacement, vDisplacement;
+    SurfaceInteraction intr;
+    intr.uv          = uv;
+    intr.faceIndices = f;
+    texture->EvaluateHelper<3>(intr, filterWidths, displacement.e);
+
+    f32 du  = filterWidths[0] + filterWidths[1];
+    intr.uv = uv + Vec2f(du, 0.f);
+    texture->EvaluateHelper<3>(intr, filterWidths, uDisplacement.e);
+
+    f32 dv  = filterWidths[2] + filterWidths[3];
+    intr.uv = uv + Vec2f(0.f, dv);
+    texture->EvaluateHelper<3>(intr, filterWidths, vDisplacement.e);
+
+    displacement  = frame.FromLocal(displacement);
+    uDisplacement = frame.FromLocal(uDisplacement);
+    vDisplacement = frame.FromLocal(vDisplacement);
+
+    pos += displacement;
+    dpdu += (uDisplacement - displacement) / du;
+    dpdv += (vDisplacement - displacement) / dv;
+    normal = Normalize(Cross(dpdu, dpdv));
+}
+
 // MORETON, H. 2001. Watertight tessellation using forward
 // differencing. In HWWS ’01: Proceedings of the ACM SIG-
 // GRAPH/EUROGRAPHICS workshop on Graphics hardware,
@@ -206,6 +236,7 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
             // NOTE: this assumes everything is a quad
             // Compute edge rates
             std::unordered_map<u64, int> edgeIDMap;
+
             for (int f = 0; f < (int)controlMesh->numFaces; f++)
             {
                 int indexOffset = 4 * f;
@@ -346,6 +377,7 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
 
             tessellatedVertices.vertices.resize(samples.size());
             tessellatedVertices.normals.resize(samples.size());
+
             // Evaluate limit surface positons for corners
             ParallelFor(0, (u32)samples.size(), 8092, 8092,
                         [&](int jobID, int start, int count) {
@@ -360,6 +392,31 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                                 tessellatedVertices.normals[i]  = normal;
                             }
                         });
+
+            // Displacement
+
+            Mutex *cornerMutexes =
+                PushArray(scratch.temp.arena, Mutex, controlMesh->numVertices);
+            int *cornerCounts = PushArray(scratch.temp.arena, int, controlMesh->numVertices);
+
+            int *edgeCount     = PushArray(scratch.temp.arena, int, edgeInfos.size());
+            Mutex *edgeMutexes = PushArray(scratch.temp.arena, Mutex, edgeInfos.size());
+
+            // ParallelFor(0, controlMesh->numFaces, 8092, 8092,
+            //             [&](int jobID, int start, int count) {
+            //                 for (int f = start; f < start + count; f++)
+            //                 {
+            //                     const FaceInfo &faceInfo = faceInfos[f];
+            //                     for (int i = 0; i < 4; i++)
+            //                     {
+            //                         int id    = controlMesh->indices[4 * f + i];
+            //                         Vec3f pos = {};
+            //                         EvaluateDisplacement(texture, f, uvTable[i],
+            //                                 Vec4f(0.5f, 0.f, ?, ?), pos,
+            //                         BeginMutex
+            //                     }
+            //                 }
+            //             });
 
             int totalNumPatchFaces = 0;
             std::vector<OpenSubdivPatch> patches;
@@ -391,8 +448,7 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
 
                 if (maxEdgeRates[0] == 1 && maxEdgeRates[1] == 1)
                 {
-                    untessellatedPatches.emplace_back(UntessellatedPatch{
-                        face, (int)tessellatedVertices.stitchingIndices.size()});
+                    untessellatedPatches.emplace_back(UntessellatedPatch{face});
 
                     for (int quadIndex = 0; quadIndex < 4; quadIndex++)
                     {
@@ -484,43 +540,9 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
 
                                 if (texture)
                                 {
-                                    // Vector Displacement mapping
-                                    auto frame =
-                                        LinearSpace3f::FromXZ(Normalize(dpdu), normal);
-                                    Vec3f displacement, uDisplacement, vDisplacement;
                                     Vec4f filterWidths(.5f * scale[0], 0, 0, .5f * scale[1]);
-                                    SurfaceInteraction intr;
-                                    intr.uv          = uv;
-                                    intr.faceIndices = f;
-                                    texture->EvaluateHelper<3>(intr, filterWidths,
-                                                               displacement.e);
-
-                                    f32 du  = .5f * scale[0];
-                                    intr.uv = uv + Vec2f(du, 0.f);
-                                    texture->EvaluateHelper<3>(intr, filterWidths,
-                                                               uDisplacement.e);
-
-                                    f32 dv  = .5f * scale[1];
-                                    intr.uv = uv + Vec2f(0.f, dv);
-                                    texture->EvaluateHelper<3>(intr, filterWidths,
-                                                               vDisplacement.e);
-
-                                    // Calculate dndu and dndv using weingarten equations
-
-                                    displacement  = frame.FromLocal(displacement);
-                                    uDisplacement = frame.FromLocal(uDisplacement);
-                                    vDisplacement = frame.FromLocal(vDisplacement);
-
-                                    pos += displacement;
-                                    // dpdu = dpdu + (uDisplacement - displacement) / du *
-                                    // normal +
-                                    //        displacement * dndu;
-                                    // dpdv = dpdv + (vDisplacement - displacement) / dv *
-                                    // normal +
-                                    //        displacement * dndv;
-                                    dpdu += (uDisplacement - displacement) / du;
-                                    dpdv += (vDisplacement - displacement) / dv;
-                                    normal = Normalize(Cross(dpdu, dpdv));
+                                    EvaluateDisplacement(texture, f, uv, filterWidths, pos,
+                                                         dpdu, dpdv, normal);
                                 }
 
                                 int index = patch->GetGridIndex(uStep, vStep);

@@ -74,7 +74,7 @@ struct PtexTexture : Texture
     }
 
     template <i32 c>
-    void EvaluateHelper(SurfaceInteraction &intr, const Vec4f &filterWidths, f32 *result)
+    void EvaluateHelper(SurfaceInteraction &intr, const Vec4f &filterWidths, f32 *result) const
     {
         const Vec2f &uv = intr.uv;
         u32 faceIndex   = intr.faceIndices;
@@ -785,7 +785,12 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     Assert(materialHashMap);
                     string materialName      = ReadWord(&tokenizer);
                     const MaterialNode *node = materialHashMap->Get(materialName);
-                    ids                      = PrimitiveIndices(LightHandle(), node->handle);
+                    if (node->handle.data == 268442233)
+                    {
+                        Material *m = GetScene()->materials[node->handle.GetIndex()];
+                        int stp     = 5;
+                    }
+                    ids = PrimitiveIndices(LightHandle(), node->handle);
                 }
                 else
                 {
@@ -1109,7 +1114,7 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, ScenePrimitives *scene
         const auto &vertices = mesh->vertices;
         for (u32 j = 0; j < mesh->untessellatedPatches.Length(); j++)
         {
-            int indexStart = mesh->untessellatedPatches[j].stitchingStart;
+            int indexStart = 4 * j;
             Vec3f p0       = vertices[indices[indexStart + 0]];
             Vec3f p1       = vertices[indices[indexStart + 1]];
             Vec3f p2       = vertices[indices[indexStart + 2]];

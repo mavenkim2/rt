@@ -965,7 +965,7 @@ StringBuilderMapped::StringBuilderMapped(string filename) : filename(filename)
     totalSize    = 0;
 }
 
-u64 Put(StringBuilderMapped *builder, void *data, u64 size)
+void Expand(StringBuilderMapped *builder, u64 size)
 {
     if (builder->totalSize + size > builder->currentLimit)
     {
@@ -977,11 +977,22 @@ u64 Put(StringBuilderMapped *builder, void *data, u64 size)
         builder->currentLimit = builder->totalSize + megabytes(512) + size;
         Assert((u64)(builder->writePtr - builder->ptr) < builder->currentLimit);
     }
+}
+
+u64 Put(StringBuilderMapped *builder, void *data, u64 size)
+{
+    Expand(builder, size);
     MemoryCopy(builder->writePtr, data, size);
     builder->writePtr += size;
     u64 offset = builder->totalSize;
     builder->totalSize += size;
     return offset;
+}
+
+void Put(StringBuilderMapped *builder, void *data, u64 size, u64 offset)
+{
+    Assert(offset < builder->totalSize);
+    MemoryCopy(builder->ptr + offset, data, size);
 }
 
 u64 Put(StringBuilderMapped *builder, string str)
