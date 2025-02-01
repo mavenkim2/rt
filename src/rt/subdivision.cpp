@@ -129,10 +129,21 @@ struct TessellatedVertices
     std::vector<Vec3f> normals;
     std::vector<Vec3f> dpdu;
     std::vector<Vec3f> dpdv;
+    std::vector<Vec3f> dndu;
+    std::vector<Vec3f> dndv;
 
     // Stitching triangles
     std::vector<int> stitchingIndices;
 
+    void Resize(size_t size)
+    {
+        vertices.resize(size);
+        normals.resize(size);
+        dpdu.resize(size);
+        dpdv.resize(size);
+        dndu.resize(size);
+        dndv.resize(size);
+    }
     void Clear()
     {
         vertices.clear();
@@ -145,36 +156,62 @@ struct TessellatedVertices
         dpdu.shrink_to_fit();
         dpdv.clear();
         dpdv.shrink_to_fit();
+        dndu.clear();
+        dndu.shrink_to_fit();
+        dndv.clear();
+        dndv.shrink_to_fit();
     }
 };
 
-void EvaluateDisplacement(const PtexTexture *texture, int f, const Vec2f &uv,
+void CalculateWeingarten(const Vec3f &normal, const Vec3f &dpdu, const Vec3f &dpdv,
+                         const Vec3f &dpduu, const Vec3f &dpduv, const Vec3f &dpdvv,
+                         Vec3f &dndu, Vec3f &dndv)
+{
+    // Calculate dndu and dndv using weingarten equations
+    f32 E = Dot(dpdu, dpdu);
+    f32 F = Dot(dpdu, dpdv);
+    f32 G = Dot(dpdv, dpdv);
+
+    f32 e = Dot(normal, dpduu);
+    f32 f = Dot(normal, dpduv);
+    f32 g = Dot(normal, dpdvv);
+
+    f32 denom = E * G - Sqr(F);
+    denom     = denom == 0.f ? 0.f : 1.f / denom;
+
+    dndu = denom * ((f * F - e * G) * dpdu + (e * F - f * E) * dpdv);
+    dndv = denom * ((g * F - f * G) * dpdu + (f * F - g * E) * dpdv);
+}
+
+void EvaluateDisplacement(const PtexTexture *texture, int faceID, const Vec2f &uv,
                           const Vec4f &filterWidths, Vec3f &pos, Vec3f &dpdu, Vec3f &dpdv,
-                          Vec3f &normal)
+                          const Vec3f &dndu, const Vec3f &dndv, Vec3f &normal)
 {
     // Vector Displacement mapping
-    auto frame = LinearSpace3f::FromXZ(Normalize(dpdu), normal);
     Vec3f displacement, uDisplacement, vDisplacement;
     SurfaceInteraction intr;
     intr.uv          = uv;
-    intr.faceIndices = f;
+    intr.faceIndices = faceID;
     texture->EvaluateHelper<3>(intr, filterWidths, displacement.e);
+
+    Assert(displacement[0] == displacement[1] && displacement[1] == displacement[2]);
+    f32 disp = displacement[0];
 
     f32 du  = filterWidths[0] + filterWidths[1];
     intr.uv = uv + Vec2f(du, 0.f);
     texture->EvaluateHelper<3>(intr, filterWidths, uDisplacement.e);
+    Assert(uDisplacement[0] == uDisplacement[1] && uDisplacement[1] == uDisplacement[2]);
+    f32 uDisp = uDisplacement[0];
 
     f32 dv  = filterWidths[2] + filterWidths[3];
     intr.uv = uv + Vec2f(0.f, dv);
     texture->EvaluateHelper<3>(intr, filterWidths, vDisplacement.e);
+    Assert(vDisplacement[0] == vDisplacement[1] && vDisplacement[1] == vDisplacement[2]);
+    f32 vDisp = vDisplacement[0];
 
-    displacement  = frame.FromLocal(displacement);
-    uDisplacement = frame.FromLocal(uDisplacement);
-    vDisplacement = frame.FromLocal(vDisplacement);
-
-    pos += displacement;
-    dpdu += (uDisplacement - displacement) / du;
-    dpdv += (vDisplacement - displacement) / dv;
+    pos += disp * normal;
+    dpdu += (uDisp - disp) / du * normal + dndu * disp;
+    dpdv += (vDisp - disp) / dv * normal + dndv * disp;
     normal = Normalize(Cross(dpdu, dpdv));
 }
 
@@ -316,7 +353,7 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                                              Abs(NDCFromCamera[1][1] / midPoint.z)) -
                                          1;
 
-                        edgeFactor = Clamp(edgeFactor, 1, 8);
+                        edgeFactor = Clamp(edgeFactor, 1, 64);
 
                         maxMeshEdgeRate = Max(maxMeshEdgeRate, edgeFactor);
 
@@ -393,27 +430,31 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                 texture = (PtexTexture *)baseScene->materials[materialIndex]->displacement;
             }
 
-            tessellatedVertices.vertices.resize(samples.size());
-            tessellatedVertices.normals.resize(samples.size());
-            tessellatedVertices.dpdu.resize(samples.size());
-            tessellatedVertices.dpdv.resize(samples.size());
+            tessellatedVertices.Resize(samples.size());
 
             // Evaluate limit surface positons for corners
-            ParallelFor(0, (u32)samples.size(), 8092, 8092,
-                        [&](int jobID, int start, int count) {
-                            for (int i = start; i < start + count; i++)
-                            {
-                                const LimitSurfaceSample &sample = samples[i];
-                                Vec3f pos, dpdu, dpdv;
-                                EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable,
-                                                             sample, pos, dpdu, dpdv);
-                                Vec3f normal                    = Normalize(Cross(dpdu, dpdv));
-                                tessellatedVertices.vertices[i] = pos;
-                                tessellatedVertices.normals[i]  = normal;
-                                tessellatedVertices.dpdu[i]     = dpdu;
-                                tessellatedVertices.dpdv[i]     = dpdv;
-                            }
-                        });
+            ParallelFor(
+                0, (u32)samples.size(), 8092, 8092, [&](int jobID, int start, int count) {
+                    for (int i = start; i < start + count; i++)
+                    {
+                        const LimitSurfaceSample &sample = samples[i];
+                        Vec3f pos, dpdu, dpdv, dpduu, dpduv, dpdvv, dndu, dndv;
+                        EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable, sample,
+                                                     pos, dpdu, dpdv, dpduu, dpduv, dpdvv);
+                        Vec3f normal = Normalize(Cross(dpdu, dpdv));
+                        CalculateWeingarten(normal, dpdu, dpdv, dpduu, dpduv, dpdvv, dndu,
+                                            dndv);
+                        dndu = Normalize(dndu - normal * Dot(dndu, normal));
+                        dndv = Normalize(dndv - normal * Dot(dndv, normal));
+
+                        tessellatedVertices.vertices[i] = pos;
+                        tessellatedVertices.normals[i]  = normal;
+                        tessellatedVertices.dpdu[i]     = dpdu;
+                        tessellatedVertices.dpdv[i]     = dpdv;
+                        tessellatedVertices.dndu[i]     = dndu;
+                        tessellatedVertices.dndv[i]     = dndv;
+                    }
+                });
 
             // Displacement of shared vertices
             struct TempVertex
@@ -439,9 +480,11 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                     Vec3f normal = tessellatedVertices.normals[id];
                     Vec3f dpdu   = tessellatedVertices.dpdu[id];
                     Vec3f dpdv   = tessellatedVertices.dpdv[id];
+                    Vec3f dndu   = tessellatedVertices.dndu[id];
+                    Vec3f dndv   = tessellatedVertices.dndv[id];
 
-                    EvaluateDisplacement(texture, f, uv, filterWidths, pos, dpdu, dpdv,
-                                         normal);
+                    EvaluateDisplacement(texture, f, uv, filterWidths, pos, dpdu, dpdv, dndu,
+                                         dndv, normal);
 
                     BeginMutex(&mutexes[id]);
                     TempVertex &vertex = tempVertices[id];
@@ -660,16 +703,28 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                                 Vec2f uv(scale[0] * (uStep + 1), scale[1] * (vStep + 1));
 
                                 Vec3f pos, dpdu, dpdv, dpduu, dpduv, dpdvv;
-                                EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable,
-                                                             LimitSurfaceSample{f, uv}, pos,
-                                                             dpdu, dpdv, dpduu, dpduv, dpdvv);
+                                if (texture)
+                                    EvaluateLimitSurfacePosition(
+                                        vertices, &patchMap, patchTable,
+                                        LimitSurfaceSample{f, uv}, pos, dpdu, dpdv, dpduu,
+                                        dpduv, dpdvv);
+                                else
+                                    EvaluateLimitSurfacePosition(
+                                        vertices, &patchMap, patchTable,
+                                        LimitSurfaceSample{f, uv}, pos, dpdu, dpdv);
+
                                 Vec3f normal = Normalize(Cross(dpdu, dpdv));
 
                                 if (texture)
                                 {
                                     Vec4f filterWidths(.5f * scale[0], 0, 0, .5f * scale[1]);
+
+                                    Vec3f dndu, dndv;
+                                    CalculateWeingarten(normal, dpdu, dpdv, dpduu, dpduv,
+                                                        dpdvv, dndu, dndv);
+
                                     EvaluateDisplacement(texture, f, uv, filterWidths, pos,
-                                                         dpdu, dpdv, normal);
+                                                         dpdu, dpdv, dndu, dndv, normal);
                                 }
 
                                 int index                  = patch->GetGridIndex(uStep, vStep);

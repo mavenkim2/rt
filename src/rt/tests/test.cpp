@@ -188,12 +188,6 @@ void TestRender(Arena *arena, Options *options = 0)
     // TODO:
     // - add area lights (making sure they cannot be intersected, but are sampled properly)
     // - render the diffuse transmission materials properly
-    // - load the scene description and properly instantiate lights/materials/textures
-
-    // - render the scene with all quad meshes, then add support for the bspline curves
-
-    // once moana is rendered
-    // - ray differentials
 
     scene_       = PushStruct(arena, Scene);
     Scene *scene = GetScene();

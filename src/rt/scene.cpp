@@ -53,8 +53,13 @@ struct PtexTexture : Texture
 {
     string filename;
     f32 scale = 1.f;
+    ColorEncoding encoding;
     // TODO: encoding
-    PtexTexture(string filename, f32 scale = 1.f) : filename(filename), scale(scale) {}
+    PtexTexture(string filename, ColorEncoding encoding = ColorEncoding::Gamma,
+                f32 scale = 1.f)
+        : filename(filename), scale(scale)
+    {
+    }
 
     f32 EvaluateFloat(SurfaceInteraction &si, SampledWavelengths &lambda,
                       const Vec4f &filterWidths) override
@@ -91,8 +96,6 @@ struct PtexTexture : Texture
             Assert(0);
         }
         u32 numFaces = texture->getInfo().numFaces;
-        // Assert(faceIndex < numFaces);
-        // TODO: some of the pbrt material -> shape pairings don't match?
         if (faceIndex >= numFaces)
         {
             Print("faceIndex: %u, numFaces: %u\n", faceIndex, numFaces);
@@ -106,9 +109,6 @@ struct PtexTexture : Texture
 
         i32 nc = texture->numChannels();
         Assert(nc == c);
-
-        // TODO: ray differentials
-        // Vec2f uv(0.5f, 0.5f);
 
         f32 out[3] = {};
         filter->eval(out, 0, c, faceIndex, uv[0], uv[1], filterWidths[0], filterWidths[1],
@@ -124,23 +124,24 @@ struct PtexTexture : Texture
         if constexpr (c == 1) *result = out[0];
         else
         {
-            // if (tex->encoding == ColorEncoding::SRGB)
-            // {
-            //     u8 rgb[3];
-            //     for (i32 i = 0; i < nc; i++)
-            //     {
-            //         rgb[i] = u8(Clamp(out[i] * 255.f + 0.5f, 0.f, 255.f));
-            //     }
-            //     Vec3f rgbF = SRGBToLinear(rgb);
-            //     out[0]     = rgbF.x;
-            //     out[1]     = rgbF.y;
-            //     out[2]     = rgbF.z;
-            // }
-            // else
-            // {
-            out[0] = Pow(Max(out[0], 0.f), 2.2f);
-            out[1] = Pow(Max(out[1], 0.f), 2.2f);
-            out[2] = Pow(Max(out[2], 0.f), 2.2f);
+            if (encoding == ColorEncoding::SRGB)
+            {
+                u8 rgb[3];
+                for (i32 i = 0; i < nc; i++)
+                {
+                    rgb[i] = u8(Clamp(out[i] * 255.f + 0.5f, 0.f, 255.f));
+                }
+                Vec3f rgbF = SRGBToLinear(rgb);
+                out[0]     = rgbF.x;
+                out[1]     = rgbF.y;
+                out[2]     = rgbF.z;
+            }
+            else if (encoding == ColorEncoding::Gamma)
+            {
+                out[0] = Pow(Max(out[0], 0.f), 2.2f);
+                out[1] = Pow(Max(out[1], 0.f), 2.2f);
+                out[2] = Pow(Max(out[2], 0.f), 2.2f);
+            }
 
             Assert(!IsNaN(out[0]) && !IsNaN(out[1]) && !IsNaN(out[2]));
 
@@ -369,7 +370,8 @@ Vec3f ReadVec3Bytes(Tokenizer *tokenizer)
     return value;
 }
 
-Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer, string directory)
+Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer, string directory,
+                     ColorEncoding encoding = ColorEncoding::None)
 {
     string textureType = ReadWord(tokenizer);
     if (textureType == "ptex")
@@ -382,8 +384,13 @@ Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer, string directory)
         {
             scale = ReadFloatBytes(tokenizer);
         }
+        if (Advance(tokenizer, "encoding "))
+        {
+            ErrorExit(0, "Not supported yet.\n");
+        }
+        encoding = encoding == ColorEncoding::None ? ColorEncoding::Gamma : encoding;
         return PushStructConstruct(arena, PtexTexture)(
-            PushStr8F(arena, "%S%S\0", directory, filename), scale);
+            PushStr8F(arena, "%S%S\0", directory, filename), encoding, scale);
     }
     else
     {
@@ -392,7 +399,8 @@ Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer, string directory)
     return 0;
 }
 
-Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory)
+Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory,
+                      ColorEncoding encoding = ColorEncoding::None)
 {
     if (!CharIsDigit(*tokenizer->cursor)) return 0;
     DataType dataType = (DataType)ReadInt(tokenizer);
@@ -414,7 +422,7 @@ Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory)
         break;
         case DataType::Texture:
         {
-            return ReadTexture(arena, tokenizer, directory);
+            return ReadTexture(arena, tokenizer, directory, encoding);
         }
         break;
         default: Assert(0); return 0;
@@ -423,7 +431,8 @@ Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory)
 
 Texture *ParseDisplacement(Arena *arena, Tokenizer *tokenizer, string directory)
 {
-    if (Advance(tokenizer, "displacement ")) return ParseTexture(arena, tokenizer, directory);
+    if (Advance(tokenizer, "displacement "))
+        return ParseTexture(arena, tokenizer, directory, ColorEncoding::Linear);
     return 0;
 }
 

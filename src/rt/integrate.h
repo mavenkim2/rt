@@ -62,6 +62,7 @@ struct : public PtexErrorHandler
 
 enum class ColorEncoding
 {
+    None,
     Linear,
     Gamma,
     SRGB,
