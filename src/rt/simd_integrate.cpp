@@ -2,6 +2,11 @@
 namespace rt
 {
 
+// TODO:
+// 1. properly flush shading queues
+// 2. consider stack overflows???
+// 3. instantiate materials
+
 template <typename T>
 void ThreadLocalQueue<T>::Flush(ShadingThreadState *state)
 {
@@ -21,12 +26,47 @@ bool ThreadLocalQueue<T>::Finalize(ShadingThreadState *state)
 }
 
 template <typename T>
-bool ThreadLocalQueue<T>::Push(ShadingThreadState *state, const T &item)
+void ThreadLocalQueue<T>::Push(ShadingThreadState *state, T *entries, int numEntries)
 {
-    ErrorExit(count < QUEUE_LENGTH, "count push: %u\n", count);
-    values[count++] = item;
-    if (count == QUEUE_LENGTH) return true;
-    return false;
+    TempArena temp = ScratchStart(0, 0);
+    u32 total      = numEntries + count;
+    if (total > ArrayLength(values))
+    {
+        T *newEntries = PushArrayNoZero(temp.arena, u8, sizeof(T) * total);
+        MemoryCopy(newEntries, values, sizeof(T) * count);
+        MemoryCopy(newEntries + count, entries, sizeof(T) * numEntries);
+        handler(state, newEntries, total);
+    }
+    else
+    {
+        MemoryCopy(values + count, entries, sizeof(T) * numEntries);
+        count += numEntries;
+    }
+    ScratchEnd(temp);
+}
+
+template <typename T>
+void SharedShadeQueue<T>::Push(ShadingThreadState *state, T *entries, int numEntries)
+{
+    TempArena temp = ScratchStart(0, 0);
+    BeginMutex(&mutex);
+    u32 total = numEntries + count;
+    if (total > ArrayLength(values))
+    {
+        T *newEntries = PushArrayNoZero(temp.arena, u8, sizeof(T) * total);
+        MemoryCopy(newEntries, values, sizeof(T) * count);
+        EndMutex(&mutex);
+
+        MemoryCopy(newEntries + count, entries, sizeof(T) * numEntries);
+        handler(state, newEntries, total);
+    }
+    else
+    {
+        MemoryCopy(values + count, entries, sizeof(T) * numEntries);
+        count += numEntries;
+        EndMutex(&mutex);
+    }
+    ScratchEnd(temp);
 }
 
 void FreeRayState(ShadingThreadState *state, RayStateHandle handle)
@@ -111,8 +151,9 @@ void RenderSIMD(Arena *arena, RenderParams2 &params)
     std::atomic<u32> numTiles = 0;
 
     // Camera differentials
-    Vec3f dxCamera = TransformV(cameraFromRaster, Vec3f(1.f, 0.f, 0.f));
-    Vec3f dyCamera = TransformV(cameraFromRaster, Vec3f(0.f, 1.f, 0.f));
+    Vec3f org      = TransformP(cameraFromRaster, Vec3f(0.f, 0.f, 0.f));
+    Vec3f dxCamera = TransformP(cameraFromRaster, Vec3f(1.f, 0.f, 0.f)) - org;
+    Vec3f dyCamera = TransformP(cameraFromRaster, Vec3f(0.f, 1.f, 0.f)) - org;
 
     Camera camera(cameraFromRaster, renderFromCamera, dxCamera, dyCamera, focalLength,
                   lensRadius, spp);
@@ -253,17 +294,73 @@ void RenderSIMD(Arena *arena, RenderParams2 &params)
     printf("done\n");
 }
 
+template <typename Handle>
+void SortHandles(Handle *shadingHandles, u32 count)
+{
+    TempArena temp    = ScratchStart(0, 0);
+    size_t handleSize = sizeof(shadingHandles[0].sortKey);
+    Assert(handleSize == 4 || handleSize == 8);
+
+    Handle *keys0 = (Handle *)shadingHandles;
+    Handle *keys1 = PushArrayNoZero(temp.arena, Handle, count);
+
+    // Radix sort
+    for (i32 iter = handleSize - 1; iter >= 0; iter--)
+    {
+        u32 shift = iter * 8;
+        Assert(shift < 64);
+        u32 buckets[256] = {};
+        // Calculate # in each radix
+        for (u32 i = 0; i < count; i++)
+        {
+            const Handle &key = keys0[i];
+            u32 bucket        = (key.sortKey >> shift) & 0xff;
+            Assert(bucket < 256);
+            buckets[bucket]++;
+        }
+        // Prefix sum
+        u32 total = 0;
+        for (u32 i = 0; i < 256; i++)
+        {
+            u32 bucketCount = buckets[i];
+            buckets[i]      = total;
+            total += bucketCount;
+        }
+
+        // Place in correct position
+        for (u32 i = 0; i < count; i++)
+        {
+            const Handle &key = &keys0[i];
+            u32 key           = (key.sortKey >> shift) & 0xff;
+            u32 index         = buckets[key]++;
+            Assert(index < count);
+            keys1[index] = sortKey;
+        }
+        Swap(keys0, keys1);
+    }
+    ScratchEnd(temp.arena);
+}
+
 QUEUE_HANDLER(RayIntersectionHandler)
 {
     RayStateHandle *handles = (RayStateHandle *)values;
     ShadingGlobals *globals = GetShadingGlobals();
     Scene *scene            = GetScene();
 
+    struct SortEntry
+    {
+        u32 sortKey;
+        u32 faceID;
+        RayStateHandle handle;
+    };
+
+    TempArena temp         = ScratchStart(0, 0);
+    SortEntry *nextHandles = PushArray(temp.arena, SortEntry, count);
+    u32 nextHandleCount    = 0;
+
     for (u32 index = 0; index < count; index++)
     {
-        u32 i = count - 1 - index;
-        Assert(i < QUEUE_LENGTH);
-        RayStateHandle handle = handles[i];
+        RayStateHandle handle = handles[index];
         RayState *rayState    = handle.GetRayState();
         SurfaceInteraction si;
         bool intersect = Intersect(scene, rayState->ray, si);
@@ -316,90 +413,62 @@ QUEUE_HANDLER(RayIntersectionHandler)
         {
             rayState->si                  = si;
             MaterialHandle materialHandle = (MaterialHandle)si.materialIDs;
-            u32 materialType              = (u32)materialHandle.GetType();
-            u32 materiaIndex              = materialHandle.GetIndex();
-            Assert(materialType == 0 || materiaIndex < scene->materials.Length());
-            u64 shadingKey = ((u64)materiaIndex << 32) | si.faceIndices;
-            bool filled    = state->shadingQueues[materialType].Push(
-                state, ShadingHandle{shadingKey, handle});
-            if (filled)
-            {
-                finalCount -= (index + 1);
-                Assert(finalCount < QUEUE_LENGTH);
-                // printf("index: %u, ray queue count: %u\n", index, finalCount);
-                state->shadingQueues[materialType].Flush(state);
-                return;
-            }
+            u32 materialIndex             = materialHandle.GetIndex();
+
+            nextHandles[nextHandleCount].sortKey = materialIndex;
+            nextHandles[nextHandleCount].faceID  = si.faceIndices;
+            nextHandles[nextHandleCount].handle  = handle;
+            nextHandleCount++;
         }
     }
 
-    Assert(finalCount >= count);
-    finalCount -= count;
-    Assert(finalCount < QUEUE_LENGTH);
-    for (u32 i = 0; i < (u32)MaterialTypes::Max; i++)
+    // Sort by material index
+    SortHandles(nextHandles, nextHandleCount);
+    SortEntry *handleStop  = nextHandles + nextHandleCount;
+    SortEntry *handleStart = nextHandles;
+    while (handleStart != handleStop)
     {
-        state->shadingQueues[i].Flush(state);
+        // Contiguous ranges of the same material get pushed together
+        u32 materialIndex    = handleStart->sortKey;
+        SortEntry *handleEnd = handleStart;
+        while (handleEnd->sortKey == materialIndex && handleEnd != handleStop)
+        {
+            handleEnd++;
+        }
+
+        unsigned range                = unsigned(handleEnd - handleStart);
+        ShadingHandle *shadingHandles = PushArrayNoZero(temp.arena, ShadingHandle, range);
+
+        for (unsigned index = 0; index < range; index++)
+        {
+            shadingHandles[index].sortKey        = handleStart[index].faceID;
+            shadingHandles[index].rayStateHandle = handleStart[index].handle;
+        }
+
+        ShadingQueue *queue = GetShadingQueue(materialIndex);
+        queue->Push(state, shadingHandles, range);
+
+        handleStart = handleEnd;
     }
+    ScratchEnd(temp);
 }
 
-template <typename MaterialType>
-QUEUE_HANDLER(ShadingQueueHandler)
+void ShadingQueueHandler(struct ShadingThreadState *state, void *values, u32 count,
+                         Material *material)
 {
-    // if constexpr (std::is_same_v<MaterialType, NullMaterial>)
-    // {
-    //     finalCount -= count;
-    //     return;
-    // }
-
     ScratchArena temp;
     ShadingGlobals *globals = GetShadingGlobals();
-    ShadingHandle *keys0    = (ShadingHandle *)values;
-    ShadingHandle *keys1    = PushArrayNoZero(temp.temp.arena, ShadingHandle, count);
 
-    // Radix sort
-    for (i32 iter = sizeof(keys0[0].shadingKey) - 1; iter >= 0; iter--)
-    {
-        u32 shift = iter * 8;
-        Assert(shift < 64);
-        u32 buckets[256] = {};
-        // Calculate # in each radix
-        for (u32 i = 0; i < count; i++)
-        {
-            ShadingHandle *key = &keys0[i];
-            u32 bucket         = (key->shadingKey >> shift) & 0xff;
-            Assert(bucket < 256);
-            buckets[bucket]++;
-        }
-        // Prefix sum
-        u32 total = 0;
-        for (u32 i = 0; i < 256; i++)
-        {
-            u32 bucketCount = buckets[i];
-            buckets[i]      = total;
-            total += bucketCount;
-        }
-
-        // TODO: calculate ranges here
-        // Place in correct position
-        for (u32 i = 0; i < count; i++)
-        {
-            ShadingHandle &sortKey = keys0[i];
-            u32 key                = (sortKey.shadingKey >> shift) & 0xff;
-            u32 index              = buckets[key]++;
-            Assert(index < count);
-            keys1[index] = sortKey;
-        }
-        Swap(keys0, keys1);
-    }
+    ShadingHandle *handles = (ShadingHandle *)values;
 
     Scene *scene = GetScene();
-    for (u32 index = 0; index < count; index++)
+
+    material->Start();
+
+    for (u32 i = 0; i < count; i++)
     {
-        u32 i = count - 1 - index;
-        Assert(i < QUEUE_LENGTH);
-        ShadingHandle handle   = keys0[i];
-        MaterialType *material = (MaterialType *)scene->materials[handle.shadingKey >> 32];
-        RayState *rayState     = handle.rayStateHandle.GetRayState();
+        ShadingHandle handle = handles[i];
+        RayState *rayState   = handle.rayStateHandle.GetRayState();
 
         // Ray state stuff
         Ray2 &ray                  = rayState->ray;
@@ -435,6 +504,7 @@ QUEUE_HANDLER(ShadingQueueHandler)
 
             {
                 // BxDF evaluation
+
                 BxDF bxdf = material->Evaluate(scratch.temp.arena, si, lambda,
                                                Vec4f(dudx, dvdx, dudy, dvdy));
                 BSDF bsdf(bxdf, si.shading.dpdu, si.shading.n);
@@ -526,18 +596,7 @@ QUEUE_HANDLER(ShadingQueueHandler)
                 }
             }
         }
-
-        // Push to secondary ray queue
-        bool filled = state->rayQueue.Push(state, handle.rayStateHandle);
-        if (filled)
-        {
-            finalCount -= (index + 1);
-            state->rayQueue.Flush(state);
-            return;
-        }
     }
-    finalCount -= count;
-    state->rayQueue.Flush(state);
 }
 
 #if 0

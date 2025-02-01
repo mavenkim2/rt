@@ -28,6 +28,8 @@ struct SceneLoadTable
 
 struct Texture
 {
+    virtual void Start() {}
+    virtual void Stop() {}
     virtual f32 EvaluateFloat(SurfaceInteraction &si, SampledWavelengths &lambda,
                               const Vec4f &filterWidths)
     {
@@ -54,6 +56,9 @@ struct PtexTexture : Texture
     string filename;
     f32 scale = 1.f;
     ColorEncoding encoding;
+
+    Ptex::PtexTexture *cachedTexture;
+    Ptex::PtexFilter *cachedFilter;
     // TODO: encoding
     PtexTexture(string filename, ColorEncoding encoding = ColorEncoding::Gamma,
                 f32 scale = 1.f)
@@ -76,6 +81,27 @@ struct PtexTexture : Texture
         EvaluateHelper<3>(si, filterWidths, result.e);
         Assert(!IsNaN(result[0]) && !IsNaN(result[1]) && !IsNaN(result[2]));
         return Texture::EvaluateAlbedo(result * scale, lambda);
+    }
+
+    virtual void Start()
+    {
+        Ptex::String error;
+        cachedTexture = cache->get((char *)filename.str, error);
+
+        Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
+        cachedFilter = Ptex::PtexFilter::getFilter(cachedTexture, opts);
+    }
+
+    virtual void Stop()
+    {
+        cachedTexture->release();
+        cachedFilter->release();
+    }
+
+    template <i32 c>
+    void EvaluateHelper(Ptex::PtexTexture *texture, Ptex::PtexFilter *filter,
+                        SurfaceInteraction &intr, const Vec4f &filterWidths, f32 *result) const
+    {
     }
 
     template <i32 c>
@@ -212,6 +238,8 @@ struct DiffuseMaterial : Material
 
         return DiffuseBxDF(s);
     }
+    virtual void Start() { reflectance->Start(); }
+    virtual void Stop() { reflectance->Stop(); }
 };
 
 struct DiffuseTransmissionMaterial : Material
@@ -238,6 +266,16 @@ struct DiffuseTransmissionMaterial : Material
         SampledSpectrum t = transmittance->EvaluateAlbedo(si, lambda, filterWidths);
 
         return DiffuseTransmissionBxDF(r, t);
+    }
+    virtual void Start()
+    {
+        reflectance->Start();
+        transmittance->Start();
+    }
+    virtual void Stop()
+    {
+        reflectance->Stop();
+        transmittance->Stop();
     }
 };
 
@@ -288,6 +326,16 @@ struct DielectricMaterial : Material
         f32 ior = eta; // eta(lambda[0]);
         return DielectricBxDF(ior, TrowbridgeReitzDistribution(uRoughness, vRoughness));
     }
+    virtual void Start()
+    {
+        uRoughnessTexture->Start();
+        if (uRoughnessTexture != vRoughnessTexture) vRoughnessTexture->Start();
+    }
+    virtual void Stop()
+    {
+        uRoughnessTexture->Stop();
+        if (uRoughnessTexture != vRoughnessTexture) vRoughnessTexture->Stop();
+    }
 };
 
 struct CoatedDiffuseMaterial : Material
@@ -326,6 +374,20 @@ struct CoatedDiffuseMaterial : Material
         return CoatedDiffuseBxDF(dielectric.EvaluateHelper(si, lambda, filterWidths),
                                  diffuse.EvaluateHelper(si, lambda, filterWidths), albedoValue,
                                  gValue, thickness, maxDepth, nSamples);
+    }
+    virtual void Start()
+    {
+        dielectric.Start();
+        diffuse.Start();
+        albedo->Start();
+        g->Start();
+    }
+    virtual void Stop()
+    {
+        dielectric.Stop();
+        diffuse.Stop();
+        albedo->Stop();
+        g->Stop();
     }
 };
 
@@ -966,7 +1028,14 @@ void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromC
     }
 }
 
-void FindClosestInstance(ScenePrimitives *scene, const AffineSpace &transform)
+enum class TessellationStyle
+{
+    ClosestInstance,
+    PerInViewInstancePerEdge,
+};
+
+void ComputeEdgeRates(ScenePrimitives *scene, const AffineSpace &transform,
+                      TessellationStyle style)
 {
     switch (scene->geometryType)
     {
@@ -981,7 +1050,7 @@ void FindClosestInstance(ScenePrimitives *scene, const AffineSpace &transform)
                                 AffineSpace t =
                                     transform *
                                     scene->affineTransforms[instance.transformIndex];
-                                FindClosestInstance(scene->childScenes[instance.id], t);
+                                ComputeEdgeRates(scene->childScenes[instance.id], t, style);
                             }
                         });
         }
@@ -995,22 +1064,35 @@ void FindClosestInstance(ScenePrimitives *scene, const AffineSpace &transform)
                             {
                                 TessellationParams &params = scene->tessellationParams[i];
 
-                                BeginRMutex(&params.mutex);
-                                Vec3f centroid = TransformP(transform, params.centroid);
-                                f32 currentMinDistance = params.currentMinDistance;
-                                f32 distance           = Length(centroid);
-                                EndRMutex(&params.mutex);
-
-                                // Camera is at origin in this coordinate space
-                                if (distance < currentMinDistance)
+                                switch (style)
                                 {
-                                    BeginWMutex(&params.mutex);
-                                    if (distance < params.currentMinDistance)
+                                    case TessellationStyle::ClosestInstance:
                                     {
-                                        params.transform          = transform;
-                                        params.currentMinDistance = distance;
+                                        BeginRMutex(&params.mutex);
+                                        Vec3f centroid = TransformP(
+                                            transform, ToVec3f(params.bounds.Centroid()));
+                                        f32 currentMinDistance = params.currentMinDistance;
+                                        f32 distance           = Length(centroid);
+                                        EndRMutex(&params.mutex);
+
+                                        // Camera is at origin in this coordinate space
+                                        if (distance < currentMinDistance)
+                                        {
+                                            BeginWMutex(&params.mutex);
+                                            if (distance < params.currentMinDistance)
+                                            {
+                                                params.transform          = transform;
+                                                params.currentMinDistance = distance;
+                                            }
+                                            EndWMutex(&params.mutex);
+                                        }
                                     }
-                                    EndWMutex(&params.mutex);
+                                    break;
+                                    case TessellationStyle::PerInViewInstancePerEdge:
+                                    {
+                                        Assert(0);
+                                    }
+                                    break;
                                 }
                             }
                         });
@@ -1038,7 +1120,7 @@ void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string file
     LoadRTScene(arenas, tempArenas, &state, &scene->scene, directory, filename, 0, t, true);
 
     AffineSpace space = AffineSpace::Identity();
-    FindClosestInstance(&scene->scene, space);
+    ComputeEdgeRates(&scene->scene, space, TessellationStyle::ClosestInstance);
     BuildSceneBVHs(arenas, &scene->scene, NDCFromCamera, screenHeight);
 
     for (u32 i = 0; i < OS_NumProcessors(); i++)
@@ -1420,7 +1502,8 @@ void GenerateMeshRefs(Mesh *meshes, PrimRef *refs, u32 offset, u32 offsetMax, u3
 }
 
 template <GeometryType type>
-void ComputeTessellationParams(Mesh *meshes, TessellationParams *params, u32 start, u32 count)
+void ComputeTessellationParams(/*Arena *tempArena,*/ Mesh *meshes, TessellationParams *params,
+                               u32 start, u32 count)
 {
     for (u32 i = start; i < start + count; i++)
     {
@@ -1441,7 +1524,11 @@ void ComputeTessellationParams(Mesh *meshes, TessellationParams *params, u32 sta
         {
             bounds = GenerateMeshRefsHelper<type>{mesh->p, mesh->indices}(0, numFaces);
         }
-        params[i].centroid           = ToVec3f(bounds.Centroid());
+        params[i].bounds = bounds;
+        // TODO: hardcoded for quads
+        // params[i].edgeIndexMap = AtomicHashIndex(tempArena, mesh->numFaces * 4);
+        // params[i].edgeKeyValues =
+        //     PushArray(tempArena, TessellationParams::EdgeKeyValue, mesh->numFaces * 4);
         params[i].currentMinDistance = pos_inf;
     }
 }

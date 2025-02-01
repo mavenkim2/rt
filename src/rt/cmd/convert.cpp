@@ -29,6 +29,22 @@
 namespace rt
 {
 
+struct alignas(CACHE_LINE_SIZE) ThreadStatistics
+{
+    // u64 rayPrimitiveTests;
+    // u64 rayAABBTests;
+    u64 bvhIntersectionTime;
+    u64 primitiveIntersectionTime;
+    u64 integrationTime;
+    u64 samplingTime;
+
+    u64 misc;
+    u64 misc2;
+    u64 misc3;
+    f64 miscF;
+};
+static ThreadStatistics *threadLocalStatistics;
+
 struct Mesh
 {
     Vec3f *p     = 0;
@@ -200,6 +216,48 @@ struct IncludeMap
     }
 };
 
+struct MaterialHashNode
+{
+    string name;
+    string buffer;
+    MaterialHashNode *next;
+};
+
+struct MaterialMap
+{
+    MaterialHashNode *map;
+    Mutex *mutexes;
+    u32 count;
+
+    bool FindOrAdd(Arena *arena, string buffer, string &name)
+    {
+        u32 hash  = Hash(buffer);
+        u32 index = hash & (count - 1);
+        BeginRMutex(&mutexes[index]);
+        MaterialHashNode *node = &map[index];
+        MaterialHashNode *prev;
+        while (node)
+        {
+            if (node->buffer == buffer)
+            {
+                name = node->name;
+                EndRMutex(&mutexes[index]);
+                return true;
+            }
+            prev = node;
+            node = node->next;
+        }
+        Assert(!node);
+        EndRMutex(&mutexes[index]);
+        BeginWMutex(&mutexes[index]);
+        prev->name   = PushStr8Copy(arena, name);
+        prev->buffer = PushStr8Copy(arena, buffer);
+        prev->next   = PushStruct(arena, MaterialHashNode);
+        EndWMutex(&mutexes[index]);
+        return false;
+    }
+};
+
 struct SceneLoadState
 {
     Arena **arenas;
@@ -211,6 +269,8 @@ struct SceneLoadState
     const u32 hashMapSize = 8192;
 
     IncludeMap includeMap;
+
+    MaterialMap materialMap;
 
     void Init(Arena *arena)
     {
@@ -236,19 +296,21 @@ struct SceneLoadState
         includeMap.count   = 1024;
         includeMap.map     = PushArray(arena, IncludeHashNode, includeMap.count);
         includeMap.mutexes = PushArray(arena, Mutex, includeMap.count);
+
+        materialMap.count   = 8192;
+        materialMap.map     = PushArray(arena, MaterialHashNode, materialMap.count);
+        materialMap.mutexes = PushArray(arena, Mutex, materialMap.count);
     }
 };
 
-// NOTE: this is kind of a hack
-#if 0
-string CheckDuplicateMaterial(Arena *arena, MaterialLL &matList, MaterialHashMap &map,
-                              u32 hashMask, ScenePacket *packet, string materialName,
-                              string materialType, const StringId *parameterNames, u32 count)
+string GetMaterialBuffer(Arena *arena, ScenePacket *packet, string materialType)
 {
-    TempArena temp = ScratchStart(&arena, 1);
-
     u32 typeSize  = (u32)materialType.size;
     u32 totalSize = typeSize;
+
+    u32 type                       = (u32)ConvertStringToMaterialType(materialType);
+    u32 count                      = materialParameterCounts[type];
+    const StringId *parameterNames = materialParameterIDs[type];
 
     for (u32 c = 0; c < count; c++)
     {
@@ -260,7 +322,8 @@ string CheckDuplicateMaterial(Arena *arena, MaterialLL &matList, MaterialHashMap
             }
         }
     }
-    u8 *buffer = PushArrayNoZero(temp.arena, u8, totalSize);
+
+    u8 *buffer = PushArrayNoZero(arena, u8, totalSize);
     MemoryCopy(buffer, materialType.str, typeSize);
     u32 offset = typeSize;
     for (u32 c = 0; c < count; c++)
@@ -274,58 +337,17 @@ string CheckDuplicateMaterial(Arena *arena, MaterialLL &matList, MaterialHashMap
             }
         }
     }
-    u64 hash = MurmurHash64A(buffer, totalSize, 0);
-
-    MaterialHashNode *node = map[hash & hashMask];
-    while (node)
-    {
-        if (node->hash == hash && node->buffer.size == totalSize)
-        {
-            if (memcmp(node->buffer.str, buffer, totalSize) == 0)
-            {
-                ScratchEnd(temp);
-                return node->packet->id;
-            }
-            else
-            {
-                ErrorExit(0, "Hash is equal but contents are different.");
-            }
-        }
-        node = node->next;
-    }
-    if (!node)
-    {
-        MaterialPacket &mat = matList.AddBack();
-        mat.packet          = packet;
-        mat.id              = materialName;
-
-        MaterialHashNode *newNode = PushStruct(arena, MaterialHashNode);
-        newNode->hash             = hash;
-        newNode->buffer.str       = PushArrayNoZero(arena, u8, totalSize);
-        newNode->buffer.size      = totalSize;
-        MemoryCopy(newNode->buffer.str, buffer, totalSize);
-        newNode->packet = &mat;
-
-        // add to front
-        newNode->next        = map[hash & hashMask];
-        map[hash & hashMask] = newNode;
-    }
-    ScratchEnd(temp);
-    return materialName;
+    return Str8(buffer, offset);
 }
-#endif
 
 struct GraphicsState
 {
-    string materialName = {};
-    // Mat4 transform      = Mat4::Identity();
+    string materialName   = {};
     AffineSpace transform = AffineSpace::Identity();
 
     i32 transformIndex = -1;
     i32 areaLightIndex = -1;
     i32 mediaIndex     = -1;
-
-    // ObjectInstanceType *instanceType = 0;
 };
 
 void PBRTSkipToNextChar(Tokenizer *tokenizer) { SkipToNextChar(tokenizer, '#'); }
@@ -1002,12 +1024,14 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                                                 RemoveFileExtension(state->filename),
                                                 (u64)(tokenizer.cursor - tokenizer.input.str));
 
-                NamedPacket *nPacket = &materials->AddBack();
-                ScenePacket *packet  = &nPacket->packet;
-                packet->type         = "material"_sid; // Hash(materialNameOrType);
+                NamedPacket nPacket;
+                ScenePacket *packet = &nPacket.packet;
+                *packet             = {};
+                packet->type        = "material"_sid; // Hash(materialNameOrType);
 
                 PBRTSkipToNextChar(&tokenizer);
                 ReadParameters(threadArena, packet, &tokenizer, MemoryType_Material);
+
                 if (isNamedMaterial)
                 {
                     bool found = false;
@@ -1015,7 +1039,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                     {
                         if (packet->parameterNames[i] == "type"_sid)
                         {
-                            nPacket->type = PushStr8Copy(
+                            nPacket.type = PushStr8Copy(
                                 threadArena, Str8(packet->bytes[i], packet->sizes[i]));
                             found = true;
                             break;
@@ -1025,9 +1049,22 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 }
                 else
                 {
-                    nPacket->type = PushStr8Copy(threadArena, materialNameOrType);
+                    nPacket.type = PushStr8Copy(threadArena, materialNameOrType);
                 }
-                nPacket->name = materialName;
+
+                nPacket.name = materialName;
+
+                // NOTE: the names aren't deterministic
+                string buffer = GetMaterialBuffer(temp.arena, packet, nPacket.type);
+                // NOTE: this changes the material name if a duplicate is found
+                if (!sls->materialMap.FindOrAdd(threadArena, buffer, materialName))
+                {
+                    materials->AddBack() = nPacket;
+                }
+                else
+                {
+                    threadLocalStatistics[threadIndex].misc++;
+                }
 
                 currentGraphicsState.materialName = materialName;
             }
@@ -1872,7 +1909,8 @@ int main(int argc, char **argv)
     Arena *arena = ArenaAlloc();
     InitThreadContext(arena, "[Main Thread]", 1);
     OS_Init();
-    u32 numProcessors = OS_NumProcessors();
+    u32 numProcessors     = OS_NumProcessors();
+    threadLocalStatistics = PushArray(arena, ThreadStatistics, numProcessors);
     scheduler.Init(numProcessors);
     TempArena temp        = ScratchStart(0, 0);
     StringBuilder builder = {};
@@ -1891,6 +1929,13 @@ int main(int argc, char **argv)
         return 1;
     }
     LoadPBRT(arena, filename);
+
+    u64 count = 0;
+    for (int i = 0; i < numProcessors; i++)
+    {
+        count += threadLocalStatistics[i].misc;
+    }
+    printf("num materials pruned: %llu\n", count);
 
     // read pbrt as i've done before, getting scene packets
     // list of things to do

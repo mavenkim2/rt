@@ -40,7 +40,7 @@ typedef ChunkedLinkedList<RayStateHandle, 8192> RayStateFreeList;
 
 struct ShadingHandle
 {
-    u64 shadingKey;
+    u32 sortKey;
     RayStateHandle rayStateHandle;
 };
 
@@ -65,7 +65,7 @@ static const u32 FLUSH_THRESHOLD = 1024; // 512;
 // queues (representing one combination of kernels), or a lot of masking/wasted execution
 
 #define QUEUE_HANDLER(name)                                                                   \
-    void name(struct ShadingThreadState *state, void *values, u32 count, u32 &finalCount)
+    void name(struct ShadingThreadState *state, void *values, u32 count)
 
 template <typename T>
 struct ThreadLocalQueue
@@ -78,10 +78,26 @@ struct ThreadLocalQueue
 
     void Flush(ShadingThreadState *state);
     bool Finalize(ShadingThreadState *state);
-    bool Push(ShadingThreadState *state, const T &item);
+    // bool Push(ShadingThreadState *state, const T &item);
+
+    void Push(ShadingThreadState *state, T *entries, int numEntries);
 };
 
-typedef ThreadLocalQueue<ShadingHandle> ShadingQueue;
+template <typename T>
+struct SharedShadeQueue
+{
+    T values[QUEUE_LENGTH];
+    u32 count;
+
+    Material *material;
+    Mutex mutex;
+
+    void Push(ShadingThreadState *state, T *entries, int numEntries);
+    void Flush(ShadingThreadState *state);
+};
+
+// typedef ThreadLocalQueue<ShadingHandle> ShadingQueue;
+typedef SharedShadeQueue<ShadingHandle> ShadingQueue;
 typedef ThreadLocalQueue<RayStateHandle> RayQueue;
 
 struct alignas(CACHE_LINE_SIZE) ShadingThreadState
@@ -97,6 +113,7 @@ struct alignas(CACHE_LINE_SIZE) ShadingThreadState
 
 struct ShadingGlobals
 {
+    ShadingQueue *shadingQueues;
     Vec3f *rgbValues;
     Camera *camera;
     u32 width;
@@ -111,6 +128,7 @@ static ShadingGlobals *shadingGlobals_;
 ShadingThreadState *GetShadingThreadState() { return &shadingThreadState_[GetThreadIndex()]; }
 ShadingThreadState *GetShadingThreadState(u32 index) { return &shadingThreadState_[index]; }
 ShadingGlobals *GetShadingGlobals() { return shadingGlobals_; }
+ShadingQueue *GetShadingQueue(u32 index) { return &shadingGlobals_->shadingQueues[index]; }
 
 } // namespace rt
 #endif

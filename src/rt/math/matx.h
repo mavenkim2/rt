@@ -817,5 +817,28 @@ __forceinline AffineSpace Inverse(const AffineSpace &a)
     return AffineSpace(result, -translation);
 }
 
+// void ExtractPlanes(Vec4f *planes, Mat4 &NDCFromCamera)
+// {
+//     Vec4f row0 = GetRow(NDCFromCamera, 0);
+//     Vec4f row1 = GetRow(NDCFromCamera, 1);
+//     Vec4f row2 = GetRow(NDCFromCamera, 2);
+//     Vec4f row3 = GetRow(NDCFromCamera, 3);
+//
+//     planes[0] = row3 + row0;
+//     planes[1] = row3 - row0;
+//     planes[2] = row3 + row1;
+//     planes[3] = row3 - row1;
+//     planes[4] = row3 + row2;
+//     planes[5] = row3 - row2;
+//
+//     for (u32 i = 0; i < 6; i++)
+//     {
+//         f32 oneOverLength = Length(planes[i].xyz);
+//         Assert(oneOverLength != 0);
+//         oneOverLength = 1 / (oneOverLength);
+//         planes[i] *= oneOverLength;
+//     }
+// }
+
 } // namespace rt
 #endif

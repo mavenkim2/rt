@@ -1,3 +1,4 @@
+#include "math/basemath.h"
 #include <initializer_list>
 #include <array>
 namespace rt
@@ -602,41 +603,6 @@ struct ChunkedLinkedList
     ChunkNode *last;
     u32 totalCount;
 
-    // struct Iterator
-    // {
-    //     ChunkNode *node;
-    //     u32 localIndex;
-    //     u32 numRemaining;
-    //
-    //     bool End() { return numRemaining == 0; }
-    //
-    //     void Next()
-    //     {
-    //         localIndex++;
-    //         numRemaining--;
-    //         if (localIndex = numPerChunk)
-    //         {
-    //             node = node->next;
-    //         }
-    //     }
-    //     T *Get() { return node->values[localIndex]; }
-    // };
-    //
-    // Iterator Itr(u32 start = 0, u32 end = totalCount)
-    // {
-    //     Iterator itr;
-    //     itr.node         = first;
-    //     itr.numRemaining = end - start;
-    //     u32 index        = start;
-    //     while (index > numPerChunk)
-    //     {
-    //         itr.node = itr.node->next;
-    //         index -= numPerChunk;
-    //     }
-    //     itr.localIndex = index;
-    //     return itr;
-    // }
-
     ChunkedLinkedList(Arena *arena) : arena(arena), first(0), last(0), totalCount(0)
     {
         AddNode();
@@ -825,5 +791,120 @@ struct HashMap
         }
     }
 };
+
+struct AtomicHashIndex
+{
+    static const u32 invalidIndex = 0xffffffff;
+    std::atomic<u8> *locks;
+    int *hash;
+    int *nextIndex;
+    int hashCount;
+    int indexCount;
+
+    AtomicHashIndex(Arena *arena, int hashSize);
+
+    void Clear();
+    void BeginLock(int lockIndex);
+    void EndLock(int lockIndex);
+
+    int First(int key) const;
+    int Next(int index) const;
+
+    void Add(int key, int index);
+    void AddConcurrent(int key, int index);
+
+    template <typename Predicate>
+    inline int Find(int inHash, Predicate &predicate) const;
+
+    template <typename Predicate>
+    inline int FindConcurrent(int hash, Predicate &predicate) const;
+};
+
+AtomicHashIndex::AtomicHashIndex(Arena *arena, int hashSize)
+{
+    hashCount  = NextPowerOfTwo(hashSize);
+    indexCount = hashCount;
+
+    hash      = PushArrayNoZero(arena, int, hashCount);
+    nextIndex = PushArrayNoZero(arena, int, indexCount);
+    locks     = PushArray(arena, std::atomic<u8>, hashCount);
+    Clear();
+}
+
+inline void AtomicHashIndex::Clear() { MemorySet(hash, 0xff, sizeof(int) * hashCount); }
+
+inline void AtomicHashIndex::BeginLock(int lockIndex)
+{
+    u8 val = 0;
+    while (!locks[lockIndex].compare_exchange_weak(val, 1, std::memory_order_acquire))
+    {
+        val = 0;
+        _mm_pause();
+    }
+}
+
+inline void AtomicHashIndex::EndLock(int lockIndex)
+{
+    locks[lockIndex].store(0, std::memory_order_release);
+}
+
+inline int AtomicHashIndex::First(int key) const
+{
+    key &= (hashCount - 1);
+    return hash[key];
+}
+
+inline int AtomicHashIndex::Next(int index) const { return nextIndex[index]; }
+
+inline void AtomicHashIndex::AddConcurrent(int key, int index)
+{
+    Assert(index < indexCount);
+    key &= (hashCount - 1);
+    BeginLock(key);
+    nextIndex[index] = hash[key];
+    hash[key]        = index;
+    EndLock(key);
+}
+
+inline void AtomicHashIndex::Add(int key, int index)
+{
+    Assert(index < indexCount);
+    key &= (hashCount - 1);
+    nextIndex[index] = hash[key];
+    hash[key]        = index;
+}
+
+template <typename Predicate>
+inline int AtomicHashIndex::Find(int inHash, Predicate &predicate) const
+{
+    int key = inHash & (hashSize - 1);
+    for (int i = First(key); i != invalidIndex; i = Next(i))
+    {
+        if (predicate(i))
+        {
+            return i;
+        }
+    }
+    return invalidIndex;
+}
+
+template <typename Predicate>
+inline int AtomicHashIndex::FindConcurrent(int inHash, Predicate &predicate) const
+{
+    int key   = inHash & (hashSize - 1);
+    int index = invalidIndex;
+
+    BeginLock(key);
+    for (int i = First(key); i != invalidIndex; i = Next(i))
+    {
+        if (predicate(i))
+        {
+            index = i;
+            break;
+        }
+    }
+    EndLock(key);
+    return index;
+}
 
 } // namespace rt
