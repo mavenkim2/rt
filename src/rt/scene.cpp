@@ -3,6 +3,7 @@
 #include "macros.h"
 #include "integrate.h"
 #include "scene_load.h"
+#include "simd_integrate.h"
 #include "spectrum.h"
 #include <cwchar>
 namespace rt
@@ -652,6 +653,15 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
     scene->materials = StaticArray<Material *>(arena, materialsList.totalCount);
 
     materialsList.Flatten(scene->materials);
+
+    // Create SIMD queues
+    ShadingGlobals *globals   = GetShadingGlobals();
+    globals->numShadingQueues = scene->materials.Length();
+    globals->shadingQueues    = PushArray(arena, ShadingQueue, globals->numShadingQueues);
+    for (u32 i = 0; i < scene->materials.Length(); i++)
+    {
+        globals->shadingQueues[i].material = scene->materials[i];
+    }
 
     ScratchEnd(temp);
     return table;

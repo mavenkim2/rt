@@ -44,8 +44,8 @@ struct ShadingHandle
     RayStateHandle rayStateHandle;
 };
 
-static const u32 QUEUE_LENGTH    = 2048; // 1024;
-static const u32 FLUSH_THRESHOLD = 1024; // 512;
+static const u32 QUEUE_LENGTH = 2048; // 1024;
+// static const u32 FLUSH_THRESHOLD = 1024; // 512;
 
 // 1. intersect ray, add to shading queue
 // 2. shading queue can either be per material instance or per material type
@@ -76,24 +76,30 @@ struct ThreadLocalQueue
     T values[QUEUE_LENGTH];
     u32 count;
 
-    void Flush(ShadingThreadState *state);
-    bool Finalize(ShadingThreadState *state);
     // bool Push(ShadingThreadState *state, const T &item);
 
     void Push(ShadingThreadState *state, T *entries, int numEntries);
+    bool Flush(ShadingThreadState *state);
 };
+
+// template <typename T>
 
 template <typename T>
 struct SharedShadeQueue
 {
     T values[QUEUE_LENGTH];
+    typedef void (*Handler)(struct ShadingThreadState *state, void *values, u32 count,
+                            Material *material);
+
+    Handler handler;
+
     u32 count;
 
     Material *material;
     Mutex mutex;
 
     void Push(ShadingThreadState *state, T *entries, int numEntries);
-    void Flush(ShadingThreadState *state);
+    bool Flush(ShadingThreadState *state);
 };
 
 // typedef ThreadLocalQueue<ShadingHandle> ShadingQueue;
@@ -103,7 +109,7 @@ typedef ThreadLocalQueue<RayStateHandle> RayQueue;
 struct alignas(CACHE_LINE_SIZE) ShadingThreadState
 {
     // Queues:
-    ShadingQueue shadingQueues[(u32)MaterialTypes::Max];
+    // ShadingQueue shadingQueues[(u32)MaterialTypes::Max];
     // TODO: distinction b/t primary and secondary rays?
     RayQueue rayQueue;
 
@@ -114,6 +120,7 @@ struct alignas(CACHE_LINE_SIZE) ShadingThreadState
 struct ShadingGlobals
 {
     ShadingQueue *shadingQueues;
+    u32 numShadingQueues;
     Vec3f *rgbValues;
     Camera *camera;
     u32 width;

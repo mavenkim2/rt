@@ -317,24 +317,6 @@ void TestRender(Arena *arena, Options *options = 0)
     }
 
     shadingThreadState_ = PushArray(arena, ShadingThreadState, numProcessors);
-    for (u32 i = 0; i < numProcessors; i++)
-    {
-        ShadingThreadState *state = &shadingThreadState_[i];
-        state->rayStates          = RayStateList(arenas[i]);
-        state->rayFreeList        = RayStateFreeList(arenas[i]);
-
-        state->rayQueue.handler = RayIntersectionHandler;
-        state->shadingQueues[(u32)MaterialTypes::Interface].handler =
-            ShadingQueueHandler<NullMaterial>;
-        state->shadingQueues[(u32)MaterialTypes::Diffuse].handler =
-            ShadingQueueHandler<DiffuseMaterial>;
-        state->shadingQueues[(u32)MaterialTypes::DiffuseTransmission].handler =
-            ShadingQueueHandler<DiffuseTransmissionMaterial>;
-        state->shadingQueues[(u32)MaterialTypes::CoatedDiffuse].handler =
-            ShadingQueueHandler<CoatedDiffuseMaterial>;
-        state->shadingQueues[(u32)MaterialTypes::Dielectric].handler =
-            ShadingQueueHandler<DielectricMaterial>;
-    }
 
     counter = OS_StartCounter();
     // Render(arena, params);

@@ -8,31 +8,13 @@ namespace rt
 // 3. instantiate materials
 
 template <typename T>
-void ThreadLocalQueue<T>::Flush(ShadingThreadState *state)
-{
-    if (count >= FLUSH_THRESHOLD)
-    {
-        ErrorExit(count <= QUEUE_LENGTH, "count flush: %u\n", count);
-        handler(state, values + count - FLUSH_THRESHOLD, FLUSH_THRESHOLD, count);
-    }
-}
-
-template <typename T>
-bool ThreadLocalQueue<T>::Finalize(ShadingThreadState *state)
-{
-    if (count == 0) return false;
-    handler(state, values, count, count);
-    return true;
-}
-
-template <typename T>
 void ThreadLocalQueue<T>::Push(ShadingThreadState *state, T *entries, int numEntries)
 {
     TempArena temp = ScratchStart(0, 0);
     u32 total      = numEntries + count;
     if (total > ArrayLength(values))
     {
-        T *newEntries = PushArrayNoZero(temp.arena, u8, sizeof(T) * total);
+        T *newEntries = (T *)PushArrayNoZero(temp.arena, u8, sizeof(T) * total);
         MemoryCopy(newEntries, values, sizeof(T) * count);
         MemoryCopy(newEntries + count, entries, sizeof(T) * numEntries);
         handler(state, newEntries, total);
@@ -43,6 +25,14 @@ void ThreadLocalQueue<T>::Push(ShadingThreadState *state, T *entries, int numEnt
         count += numEntries;
     }
     ScratchEnd(temp);
+}
+
+template <typename T>
+bool ThreadLocalQueue<T>::Flush(ShadingThreadState *state)
+{
+    if (count == 0) return true;
+    handler(state, values, count);
+    return false;
 }
 
 template <typename T>
@@ -53,12 +43,13 @@ void SharedShadeQueue<T>::Push(ShadingThreadState *state, T *entries, int numEnt
     u32 total = numEntries + count;
     if (total > ArrayLength(values))
     {
-        T *newEntries = PushArrayNoZero(temp.arena, u8, sizeof(T) * total);
+        T *newEntries = (T *)PushArrayNoZero(temp.arena, u8, sizeof(T) * total);
         MemoryCopy(newEntries, values, sizeof(T) * count);
         EndMutex(&mutex);
 
         MemoryCopy(newEntries + count, entries, sizeof(T) * numEntries);
-        handler(state, newEntries, total);
+
+        handler(state, newEntries, total, material);
     }
     else
     {
@@ -67,6 +58,28 @@ void SharedShadeQueue<T>::Push(ShadingThreadState *state, T *entries, int numEnt
         EndMutex(&mutex);
     }
     ScratchEnd(temp);
+}
+
+template <typename T>
+bool SharedShadeQueue<T>::Flush(ShadingThreadState *state)
+{
+    TempArena temp = ScratchStart(0, 0);
+    BeginMutex(&mutex);
+    u32 total = count;
+    if (count == 0)
+    {
+        EndMutex(&mutex);
+        return true;
+    }
+
+    T *newEntries = (T *)PushArrayNoZero(temp.arena, u8, sizeof(T) * count);
+    MemoryCopy(newEntries, values, sizeof(T) * count);
+    EndMutex(&mutex);
+
+    handler(state, newEntries, total, material);
+
+    ScratchEnd(temp);
+    return false;
 }
 
 void FreeRayState(ShadingThreadState *state, RayStateHandle handle)
@@ -169,6 +182,7 @@ void RenderSIMD(Arena *arena, RenderParams2 &params)
     globals->maxDepth       = maxDepth;
 
     scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
+        TempArena temp                         = ScratchStart(0, 0);
         ShadingThreadState *shadingThreadState = GetShadingThreadState();
         u32 tileX                              = jobID % tileCountX;
         u32 tileY                              = jobID / tileCountX;
@@ -185,6 +199,10 @@ void RenderSIMD(Arena *arena, RenderParams2 &params)
                maxPixelBounds.y <= height);
 
         ZSobolSampler sampler(spp, Vec2i(width, height));
+
+        RayStateHandle *handles = PushArrayNoZero(temp.arena, RayStateHandle, QUEUE_LENGTH);
+        u32 handleCount         = 0;
+
         for (u32 y = minPixelBounds.y; y < maxPixelBounds.y; y++)
         {
             for (u32 x = minPixelBounds.x; x < maxPixelBounds.x; x++)
@@ -220,31 +238,47 @@ void RenderSIMD(Arena *arena, RenderParams2 &params)
                     rayState->lambda   = lambda;
 
                     MemoryCopy(&rayState->sampler, &sampler, sizeof(ZSobolSampler));
-                    shadingThreadState->rayQueue.Push(shadingThreadState, handle);
-                    shadingThreadState->rayQueue.Flush(shadingThreadState);
+
+                    handles[handleCount++] = handle;
+                    if (handleCount == QUEUE_LENGTH)
+                    {
+                        shadingThreadState->rayQueue.Push(shadingThreadState, handles,
+                                                          handleCount);
+                        handleCount = 0;
+                    }
                 }
             }
         }
+        shadingThreadState->rayQueue.Push(shadingThreadState, handles, handleCount);
+
+        ScratchEnd(temp);
         u32 n = numTiles.fetch_add(1);
         fprintf(stderr, "\rRaycasting %d%%...    ", u32(100.f * n / taskCount));
         fflush(stdout);
     });
 
-    scheduler.ScheduleAndWait(OS_NumProcessors(), 1, [&](u32 jobID) {
+    u32 numProcessors = OS_NumProcessors();
+    // Flush all queues
+    scheduler.ScheduleAndWait(numProcessors, 1, [&](u32 jobID) {
         ShadingThreadState *state = GetShadingThreadState(jobID);
-        bool remaining            = false;
+        ShadingGlobals *globals   = GetShadingGlobals();
+        bool done                 = true;
+        u32 numShadingQueues      = globals->numShadingQueues;
+        u32 start                 = u32((f32)jobID / numProcessors);
+
         do
         {
-            remaining = false;
-            for (u32 i = 0; i < ArrayLength(state->shadingQueues); i++)
+            done = true;
+            done &= state->rayQueue.Flush(state);
+
+            for (u32 i = 0; i < numShadingQueues; i++)
             {
-                remaining |= state->rayQueue.Finalize(state);
-                remaining |= state->shadingQueues[i].Finalize(state);
+                done &= globals->shadingQueues[(start + i) % numShadingQueues].Flush(state);
             }
-        } while (remaining);
+
+        } while (!done);
     });
 
-    // TODO: write rgb to image
     scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
         u32 tileX = jobID % tileCountX;
         u32 tileY = jobID / tileCountX;
@@ -305,7 +339,7 @@ void SortHandles(Handle *shadingHandles, u32 count)
     Handle *keys1 = PushArrayNoZero(temp.arena, Handle, count);
 
     // Radix sort
-    for (i32 iter = handleSize - 1; iter >= 0; iter--)
+    for (u32 iter = (u32)handleSize - 1; iter >= 0; iter--)
     {
         u32 shift = iter * 8;
         Assert(shift < 64);
@@ -330,15 +364,15 @@ void SortHandles(Handle *shadingHandles, u32 count)
         // Place in correct position
         for (u32 i = 0; i < count; i++)
         {
-            const Handle &key = &keys0[i];
-            u32 key           = (key.sortKey >> shift) & 0xff;
-            u32 index         = buckets[key]++;
+            const Handle &key = keys0[i];
+            u32 bucket        = (key.sortKey >> shift) & 0xff;
+            u32 index         = buckets[bucket]++;
             Assert(index < count);
-            keys1[index] = sortKey;
+            keys1[index] = key;
         }
         Swap(keys0, keys1);
     }
-    ScratchEnd(temp.arena);
+    ScratchEnd(temp);
 }
 
 QUEUE_HANDLER(RayIntersectionHandler)
@@ -453,8 +487,9 @@ QUEUE_HANDLER(RayIntersectionHandler)
     ScratchEnd(temp);
 }
 
+template <typename MaterialType>
 void ShadingQueueHandler(struct ShadingThreadState *state, void *values, u32 count,
-                         Material *material)
+                         MaterialType *material)
 {
     ScratchArena temp;
     ShadingGlobals *globals = GetShadingGlobals();
@@ -464,6 +499,9 @@ void ShadingQueueHandler(struct ShadingThreadState *state, void *values, u32 cou
     Scene *scene = GetScene();
 
     material->Start();
+
+    RayStateHandle *rayStateHandles = PushArrayNoZero(temp.temp.arena, RayStateHandle, count);
+    u32 rayStateHandleCount         = 0;
 
     for (u32 i = 0; i < count; i++)
     {
@@ -595,8 +633,10 @@ void ShadingQueueHandler(struct ShadingThreadState *state, void *values, u32 cou
                     // TODO: infinity check for beta
                 }
             }
+            rayStateHandles[rayStateHandleCount++] = handle.rayStateHandle;
         }
     }
+    state->rayQueue.Push(state, rayStateHandles, rayStateHandleCount);
 }
 
 #if 0
