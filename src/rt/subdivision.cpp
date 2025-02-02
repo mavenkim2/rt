@@ -183,7 +183,7 @@ void CalculateWeingarten(const Vec3f &normal, const Vec3f &dpdu, const Vec3f &dp
     dndv = denom * ((g * F - f * G) * dpdu + (f * F - g * E) * dpdv);
 }
 
-void EvaluateDisplacement(const PtexTexture *texture, int faceID, const Vec2f &uv,
+void EvaluateDisplacement(PtexTexture *texture, int faceID, const Vec2f &uv,
                           const Vec4f &filterWidths, Vec3f &pos, Vec3f &dpdu, Vec3f &dpdv,
                           const Vec3f &dndu, const Vec3f &dndv, Vec3f &normal)
 {
@@ -194,20 +194,17 @@ void EvaluateDisplacement(const PtexTexture *texture, int faceID, const Vec2f &u
     intr.faceIndices = faceID;
     texture->EvaluateHelper<3>(intr, filterWidths, displacement.e);
 
-    Assert(displacement[0] == displacement[1] && displacement[1] == displacement[2]);
-    f32 disp = displacement[0];
+    f32 disp = (displacement[0] + displacement[1] + displacement[2]) / 3.f;
 
     f32 du  = filterWidths[0] + filterWidths[1];
     intr.uv = uv + Vec2f(du, 0.f);
     texture->EvaluateHelper<3>(intr, filterWidths, uDisplacement.e);
-    Assert(uDisplacement[0] == uDisplacement[1] && uDisplacement[1] == uDisplacement[2]);
-    f32 uDisp = uDisplacement[0];
+    f32 uDisp = (uDisplacement[0] + uDisplacement[1] + uDisplacement[2]) / 3.f;
 
     f32 dv  = filterWidths[2] + filterWidths[3];
     intr.uv = uv + Vec2f(0.f, dv);
     texture->EvaluateHelper<3>(intr, filterWidths, vDisplacement.e);
-    Assert(vDisplacement[0] == vDisplacement[1] && vDisplacement[1] == vDisplacement[2]);
-    f32 vDisp = vDisplacement[0];
+    f32 vDisp = (vDisplacement[0] + vDisplacement[1] + vDisplacement[2]) / 3.f;
 
     pos += disp * normal;
     dpdu += (uDisp - disp) / du * normal + dndu * disp;
@@ -221,7 +218,8 @@ void EvaluateDisplacement(const PtexTexture *texture, int faceID, const Vec2f &u
 // ACM, New York, NY, USA, 25–32
 // See Figure 7 from above for how this works
 OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
-                                     const Mat4 &NDCFromCamera, int screenHeight,
+                                     const Mat4 &NDCFromCamera,
+                                     const Mat4 &cameraFromRender, int screenHeight,
                                      TessellationParams *params, Mesh *controlMeshes,
                                      u32 numMeshes)
 {
@@ -349,8 +347,9 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                         Vec3f midPoint = (p0 + p1) / 2.f;
                         f32 radius     = Length(p0 - p1) / 2.f;
 
+                        f32 midPointW  = Transform(cameraFromRender, Vec4f(midPoint, 1.f)).z;
                         int edgeFactor = int(edgesPerScreenHeight * radius *
-                                             Abs(NDCFromCamera[1][1] / midPoint.z)) -
+                                             Abs(NDCFromCamera[1][1] / midPointW)) -
                                          1;
 
                         edgeFactor = Clamp(edgeFactor, 1, 64);

@@ -2,6 +2,7 @@
 #include "bvh/bvh_types.h"
 #include "macros.h"
 #include "integrate.h"
+#include "math/matx.h"
 #include "scene_load.h"
 #include "simd_integrate.h"
 #include "spectrum.h"
@@ -32,13 +33,13 @@ struct Texture
     virtual void Start() {}
     virtual void Stop() {}
     virtual f32 EvaluateFloat(SurfaceInteraction &si, SampledWavelengths &lambda,
-                              const Vec4f &filterWidths)
+                              const Vec4f &filterWidths, void *data = 0)
     {
         ErrorExit(0, "EvaluateFloat is not defined for sub class \n");
         return 0.f;
     }
     virtual SampledSpectrum EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
-                                           const Vec4f &filterWidths)
+                                           const Vec4f &filterWidths, void *data = 0)
     {
         ErrorExit(0, "EvaluateAlbedo is not defined for sub class\n");
         return {};
@@ -52,14 +53,51 @@ struct Texture
     }
 };
 
+struct PtexData
+{
+    Ptex::PtexTexture *texture;
+    Ptex::PtexFilter *filter;
+};
+
+struct PtexCache
+{
+    Ptex::PtexTexture *texture;
+    // Ptex::PtexFilter *filter;
+
+    int count;
+    Mutex mutex;
+
+    void Load(string filename) //, Ptex::PtexTexture **t)
+    {
+        BeginMutex(&mutex);
+        Ptex::String error;
+        if (count++ == 0)
+        {
+            texture = cache->get((char *)filename.str, error);
+        }
+        // *t = texture;
+        EndMutex(&mutex);
+    }
+    void Release()
+    {
+        BeginMutex(&mutex);
+        if (--count == 0)
+        {
+            texture->release();
+            // texture = 0;
+        }
+        EndMutex(&mutex);
+    }
+};
+
 struct PtexTexture : Texture
 {
     string filename;
     f32 scale = 1.f;
     ColorEncoding encoding;
 
-    Ptex::PtexTexture *cachedTexture;
-    Ptex::PtexFilter *cachedFilter;
+    PtexCache ptexCache;
+
     // TODO: encoding
     PtexTexture(string filename, ColorEncoding encoding = ColorEncoding::Gamma,
                 f32 scale = 1.f)
@@ -68,53 +106,51 @@ struct PtexTexture : Texture
     }
 
     f32 EvaluateFloat(SurfaceInteraction &si, SampledWavelengths &lambda,
-                      const Vec4f &filterWidths) override
+                      const Vec4f &filterWidths, void *data) override
     {
         f32 result = 0.f;
-        EvaluateHelper<1>(si, filterWidths, &result);
+        if (ptexCache.texture)
+        {
+            // PtexData *d = (PtexData *)data;
+            EvaluateHelper<1>(ptexCache.texture, si, filterWidths, &result);
+        }
+        else
+        {
+            EvaluateHelper<1>(si, filterWidths, &result);
+        }
         return result * scale;
     }
 
     SampledSpectrum EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
-                                   const Vec4f &filterWidths) override
+                                   const Vec4f &filterWidths, void *data) override
     {
         Vec3f result = {};
-        EvaluateHelper<3>(si, filterWidths, result.e);
+        if (ptexCache.texture)
+        {
+            // PtexData *d = (PtexData *)data;
+            EvaluateHelper<3>(ptexCache.texture, si, filterWidths, result.e);
+        }
+        else
+        {
+            EvaluateHelper<3>(si, filterWidths, result.e);
+        }
         Assert(!IsNaN(result[0]) && !IsNaN(result[1]) && !IsNaN(result[2]));
         return Texture::EvaluateAlbedo(result * scale, lambda);
     }
 
-    virtual void Start()
-    {
-        Ptex::String error;
-        cachedTexture = cache->get((char *)filename.str, error);
+    virtual void Start() override { ptexCache.Load(filename); }
 
+    virtual void Stop() override { ptexCache.Release(); }
+
+    template <i32 c>
+    void EvaluateHelper(Ptex::PtexTexture *texture, SurfaceInteraction &intr,
+                        const Vec4f &filterWidths, f32 *result) const
+    {
         Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
-        cachedFilter = Ptex::PtexFilter::getFilter(cachedTexture, opts);
-    }
+        Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
+        const Vec2f &uv          = intr.uv;
+        u32 faceIndex            = intr.faceIndices;
 
-    virtual void Stop()
-    {
-        cachedTexture->release();
-        cachedFilter->release();
-    }
-
-    template <i32 c>
-    void EvaluateHelper(Ptex::PtexTexture *texture, Ptex::PtexFilter *filter,
-                        SurfaceInteraction &intr, const Vec4f &filterWidths, f32 *result) const
-    {
-    }
-
-    template <i32 c>
-    void EvaluateHelper(SurfaceInteraction &intr, const Vec4f &filterWidths, f32 *result) const
-    {
-        const Vec2f &uv = intr.uv;
-        u32 faceIndex   = intr.faceIndices;
-
-        GetDebug()->filename = filename;
-        Assert(cache);
-        Ptex::String error;
-        Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
         if (!texture)
         {
             Print("ptex filename: %S\n", filename);
@@ -131,8 +167,6 @@ struct PtexTexture : Texture
             Print("filename: %S\n", filename);
             Assert(0);
         }
-        Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
-        Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
 
         i32 nc = texture->numChannels();
         Assert(nc == c);
@@ -142,8 +176,6 @@ struct PtexTexture : Texture
                      filterWidths[2], filterWidths[3]);
 
         Assert(!IsNaN(out[0]) && !IsNaN(out[1]) && !IsNaN(out[2]));
-
-        texture->release();
         filter->release();
 
         // Convert to srgb
@@ -177,6 +209,22 @@ struct PtexTexture : Texture
             result[2] = out[2];
         }
     }
+
+    template <i32 c>
+    void EvaluateHelper(SurfaceInteraction &intr, const Vec4f &filterWidths, f32 *result)
+    {
+        GetDebug()->filename = filename;
+        Assert(cache);
+        Ptex::String error;
+        Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
+
+        // ptexCache.Load(filename, &texture);
+
+        EvaluateHelper<c>(texture, intr, filterWidths, result);
+
+        // ptexCache.Release();
+        texture->release();
+    }
 };
 
 struct ConstantTexture : Texture
@@ -186,12 +234,12 @@ struct ConstantTexture : Texture
     ConstantTexture(f32 constant) : constant(constant) {}
 
     f32 EvaluateFloat(SurfaceInteraction &si, SampledWavelengths &lambda,
-                      const Vec4f &filterWidths) override
+                      const Vec4f &filterWidths, void *) override
     {
         return constant;
     }
     SampledSpectrum EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
-                                   const Vec4f &filterWidths) override
+                                   const Vec4f &filterWidths, void *) override
     {
         return SampledSpectrum(constant);
     }
@@ -204,7 +252,7 @@ struct ConstantVectorTexture : Texture
     ConstantVectorTexture(Vec3f constant) : constant(constant) {}
 
     SampledSpectrum EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
-                                   const Vec4f &filterWidths) override
+                                   const Vec4f &filterWidths, void *) override
     {
         return Texture::EvaluateAlbedo(constant, lambda);
     }
@@ -239,8 +287,8 @@ struct DiffuseMaterial : Material
 
         return DiffuseBxDF(s);
     }
-    virtual void Start() { reflectance->Start(); }
-    virtual void Stop() { reflectance->Stop(); }
+    virtual void Start() override { reflectance->Start(); }
+    virtual void Stop() override { reflectance->Stop(); }
 };
 
 struct DiffuseTransmissionMaterial : Material
@@ -268,12 +316,12 @@ struct DiffuseTransmissionMaterial : Material
 
         return DiffuseTransmissionBxDF(r, t);
     }
-    virtual void Start()
+    virtual void Start() override
     {
         reflectance->Start();
         transmittance->Start();
     }
-    virtual void Stop()
+    virtual void Stop() override
     {
         reflectance->Stop();
         transmittance->Stop();
@@ -314,6 +362,7 @@ struct DielectricMaterial : Material
         else
         {
             uRoughness = uRoughnessTexture->EvaluateFloat(si, lambda, filterWidths);
+
             vRoughness = vRoughnessTexture->EvaluateFloat(si, lambda, filterWidths);
         }
 
@@ -327,12 +376,12 @@ struct DielectricMaterial : Material
         f32 ior = eta; // eta(lambda[0]);
         return DielectricBxDF(ior, TrowbridgeReitzDistribution(uRoughness, vRoughness));
     }
-    virtual void Start()
+    virtual void Start() override
     {
         uRoughnessTexture->Start();
         if (uRoughnessTexture != vRoughnessTexture) vRoughnessTexture->Start();
     }
-    virtual void Stop()
+    virtual void Stop() override
     {
         uRoughnessTexture->Stop();
         if (uRoughnessTexture != vRoughnessTexture) vRoughnessTexture->Stop();
@@ -376,19 +425,15 @@ struct CoatedDiffuseMaterial : Material
                                  diffuse.EvaluateHelper(si, lambda, filterWidths), albedoValue,
                                  gValue, thickness, maxDepth, nSamples);
     }
-    virtual void Start()
+    virtual void Start() override
     {
         dielectric.Start();
         diffuse.Start();
-        albedo->Start();
-        g->Start();
     }
-    virtual void Stop()
+    virtual void Stop() override
     {
         dielectric.Stop();
         diffuse.Stop();
-        albedo->Stop();
-        g->Stop();
     }
 };
 
@@ -543,6 +588,8 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
     ChunkedLinkedList<Material *, 1024> materialsList(temp.arena);
     MaterialHashMap *table = PushStructConstruct(tempArena, MaterialHashMap)(tempArena, 8192);
 
+    std::vector<MaterialTypes> types;
+
     while (!Advance(tokenizer, "MATERIALS_END "))
     {
         bool advanceResult = Advance(tokenizer, "m ");
@@ -647,6 +694,7 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
             break;
             default: Assert(0);
         }
+        types.push_back(materialTypeIndex);
     }
 
     // Join
@@ -661,6 +709,34 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
     for (u32 i = 0; i < scene->materials.Length(); i++)
     {
         globals->shadingQueues[i].material = scene->materials[i];
+        switch (types[i])
+        {
+            case MaterialTypes::Diffuse:
+            {
+                globals->shadingQueues[i].handler = ShadingQueueHandler<DiffuseMaterial>;
+            }
+            break;
+            case MaterialTypes::DiffuseTransmission:
+            {
+                globals->shadingQueues[i].handler =
+                    ShadingQueueHandler<DiffuseTransmissionMaterial>;
+            }
+            break;
+            case MaterialTypes::CoatedDiffuse:
+            {
+                globals->shadingQueues[i].handler = ShadingQueueHandler<CoatedDiffuseMaterial>;
+            }
+            break;
+            case MaterialTypes::Dielectric:
+            {
+                globals->shadingQueues[i].handler = ShadingQueueHandler<DielectricMaterial>;
+            }
+            break;
+            default:
+            {
+                globals->shadingQueues[i].handler = ShadingQueueHandler<NullMaterial>;
+            }
+        }
     }
 
     ScratchEnd(temp);
@@ -983,7 +1059,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
 }
 
 void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
-                    int screenHeight)
+                    const Mat4 &cameraFromRender, int screenHeight)
 {
     u32 expected = 0;
     if (scene->counter.count.compare_exchange_strong(expected, 1, std::memory_order_acquire))
@@ -1001,7 +1077,8 @@ void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromC
                                         for (int i = start; i < start + count; i++)
                                         {
                                             BuildSceneBVHs(arenas, scene->childScenes[i],
-                                                           NDCFromCamera, screenHeight);
+                                                           NDCFromCamera, cameraFromRender,
+                                                           screenHeight);
                                         }
                                     });
                         BuildTLASBVH(arenas, scene);
@@ -1020,7 +1097,7 @@ void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromC
                     case GeometryType::CatmullClark:
                     {
                         scene->primitives = AdaptiveTessellation(
-                            arenas, scene, NDCFromCamera, screenHeight,
+                            arenas, scene, NDCFromCamera, cameraFromRender, screenHeight,
                             scene->tessellationParams, (Mesh *)scene->primitives,
                             scene->numPrimitives);
                         BuildCatClarkBVH(arenas, scene);
@@ -1045,24 +1122,24 @@ enum class TessellationStyle
 };
 
 void ComputeEdgeRates(ScenePrimitives *scene, const AffineSpace &transform,
-                      TessellationStyle style)
+                      const Vec4f *planes, TessellationStyle style)
 {
     switch (scene->geometryType)
     {
         case GeometryType::Instance:
         {
             Instance *instances = (Instance *)scene->primitives;
-            ParallelFor(0, scene->numPrimitives, PARALLEL_THRESHOLD, PARALLEL_THRESHOLD,
-                        [&](int jobID, int start, int count) {
-                            for (int i = start; i < start + count; i++)
-                            {
-                                const Instance &instance = instances[i];
-                                AffineSpace t =
-                                    transform *
-                                    scene->affineTransforms[instance.transformIndex];
-                                ComputeEdgeRates(scene->childScenes[instance.id], t, style);
-                            }
-                        });
+            ParallelFor(
+                0, scene->numPrimitives, PARALLEL_THRESHOLD, PARALLEL_THRESHOLD,
+                [&](int jobID, int start, int count) {
+                    for (int i = start; i < start + count; i++)
+                    {
+                        const Instance &instance = instances[i];
+                        AffineSpace t =
+                            transform * scene->affineTransforms[instance.transformIndex];
+                        ComputeEdgeRates(scene->childScenes[instance.id], t, planes, style);
+                    }
+                });
         }
         break;
         case GeometryType::CatmullClark:
@@ -1079,14 +1156,16 @@ void ComputeEdgeRates(ScenePrimitives *scene, const AffineSpace &transform,
                                     case TessellationStyle::ClosestInstance:
                                     {
                                         BeginRMutex(&params.mutex);
-                                        Vec3f centroid = TransformP(
-                                            transform, ToVec3f(params.bounds.Centroid()));
+                                        Bounds bounds  = Transform(transform, params.bounds);
+                                        Vec3f centroid = ToVec3f(bounds.Centroid());
                                         f32 currentMinDistance = params.currentMinDistance;
-                                        f32 distance           = Length(centroid);
                                         EndRMutex(&params.mutex);
 
+                                        int result = IntersectFrustumAABB<1>(planes, &bounds);
+                                        f32 distance = Length(centroid);
+
                                         // Camera is at origin in this coordinate space
-                                        if (distance < currentMinDistance)
+                                        if (result && distance < currentMinDistance)
                                         {
                                             BeginWMutex(&params.mutex);
                                             if (distance < params.currentMinDistance)
@@ -1116,7 +1195,8 @@ void ComputeEdgeRates(ScenePrimitives *scene, const AffineSpace &transform,
 }
 
 void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string filename,
-               const Mat4 &NDCFromCamera, int screenHeight, AffineSpace *t)
+               const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender, int screenHeight,
+               AffineSpace *t)
 {
     TempArena temp = ScratchStart(0, 0);
     Arena *arena   = arenas[GetThreadIndex()];
@@ -1130,8 +1210,12 @@ void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string file
     LoadRTScene(arenas, tempArenas, &state, &scene->scene, directory, filename, 0, t, true);
 
     AffineSpace space = AffineSpace::Identity();
-    ComputeEdgeRates(&scene->scene, space, TessellationStyle::ClosestInstance);
-    BuildSceneBVHs(arenas, &scene->scene, NDCFromCamera, screenHeight);
+
+    Vec4f planes[6];
+    ExtractPlanes(planes, NDCFromCamera * cameraFromRender);
+
+    ComputeEdgeRates(&scene->scene, space, planes, TessellationStyle::ClosestInstance);
+    BuildSceneBVHs(arenas, &scene->scene, NDCFromCamera, cameraFromRender, screenHeight);
 
     for (u32 i = 0; i < OS_NumProcessors(); i++)
     {

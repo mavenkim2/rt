@@ -12,11 +12,12 @@ void ThreadLocalQueue<T>::Push(ShadingThreadState *state, T *entries, int numEnt
 {
     TempArena temp = ScratchStart(0, 0);
     u32 total      = numEntries + count;
-    if (total > ArrayLength(values))
+    if (total >= ArrayLength(values))
     {
         T *newEntries = (T *)PushArrayNoZero(temp.arena, u8, sizeof(T) * total);
         MemoryCopy(newEntries, values, sizeof(T) * count);
         MemoryCopy(newEntries + count, entries, sizeof(T) * numEntries);
+        count = 0;
         handler(state, newEntries, total);
     }
     else
@@ -31,7 +32,14 @@ template <typename T>
 bool ThreadLocalQueue<T>::Flush(ShadingThreadState *state)
 {
     if (count == 0) return true;
-    handler(state, values, count);
+
+    TempArena temp = ScratchStart(0, 0);
+    u32 total      = count;
+    T *newEntries  = (T *)PushArrayNoZero(temp.arena, u8, sizeof(T) * total);
+    MemoryCopy(newEntries, values, sizeof(T) * total);
+    count = 0;
+    handler(state, values, total);
+    ScratchEnd(temp);
     return false;
 }
 
@@ -40,16 +48,20 @@ void SharedShadeQueue<T>::Push(ShadingThreadState *state, T *entries, int numEnt
 {
     TempArena temp = ScratchStart(0, 0);
     BeginMutex(&mutex);
-    u32 total = numEntries + count;
-    if (total > ArrayLength(values))
+    u32 total  = numEntries + count;
+    u32 offset = count;
+    if (total >= ArrayLength(values))
     {
         T *newEntries = (T *)PushArrayNoZero(temp.arena, u8, sizeof(T) * total);
         MemoryCopy(newEntries, values, sizeof(T) * count);
+        count = 0;
         EndMutex(&mutex);
 
-        MemoryCopy(newEntries + count, entries, sizeof(T) * numEntries);
+        MemoryCopy(newEntries + offset, entries, sizeof(T) * numEntries);
 
+        material->Start();
         handler(state, newEntries, total, material);
+        material->Stop();
     }
     else
     {
@@ -74,8 +86,10 @@ bool SharedShadeQueue<T>::Flush(ShadingThreadState *state)
 
     T *newEntries = (T *)PushArrayNoZero(temp.arena, u8, sizeof(T) * count);
     MemoryCopy(newEntries, values, sizeof(T) * count);
+    count = 0;
     EndMutex(&mutex);
 
+    material->Start();
     handler(state, newEntries, total, material);
 
     ScratchEnd(temp);
@@ -93,6 +107,7 @@ RayStateHandle AllocRayState(ShadingThreadState *state)
     state->rayFreeList.Pop(&handle);
     if (!handle.IsValid())
     {
+        Assert(state->rayFreeList.totalCount == 0);
         for (u32 i = 0; i < 8192; i++)
         {
             RayState *rayState           = &state->rayStates.AddBack();
@@ -339,7 +354,7 @@ void SortHandles(Handle *shadingHandles, u32 count)
     Handle *keys1 = PushArrayNoZero(temp.arena, Handle, count);
 
     // Radix sort
-    for (u32 iter = (u32)handleSize - 1; iter >= 0; iter--)
+    for (int iter = (int)handleSize - 1; iter >= 0; iter--)
     {
         u32 shift = iter * 8;
         Assert(shift < 64);
@@ -462,6 +477,7 @@ QUEUE_HANDLER(RayIntersectionHandler)
     SortEntry *handleStart = nextHandles;
     while (handleStart != handleStop)
     {
+        TempArena scratch = ScratchStart(0, 0);
         // Contiguous ranges of the same material get pushed together
         u32 materialIndex    = handleStart->sortKey;
         SortEntry *handleEnd = handleStart;
@@ -471,7 +487,7 @@ QUEUE_HANDLER(RayIntersectionHandler)
         }
 
         unsigned range                = unsigned(handleEnd - handleStart);
-        ShadingHandle *shadingHandles = PushArrayNoZero(temp.arena, ShadingHandle, range);
+        ShadingHandle *shadingHandles = PushArrayNoZero(scratch.arena, ShadingHandle, range);
 
         for (unsigned index = 0; index < range; index++)
         {
@@ -483,22 +499,26 @@ QUEUE_HANDLER(RayIntersectionHandler)
         queue->Push(state, shadingHandles, range);
 
         handleStart = handleEnd;
+        ScratchEnd(scratch);
     }
     ScratchEnd(temp);
 }
 
 template <typename MaterialType>
-void ShadingQueueHandler(struct ShadingThreadState *state, void *values, u32 count,
-                         MaterialType *material)
+void ShadingQueueHandler(struct ShadingThreadState *state, ShadingHandle *values, u32 count,
+                         Material *m)
 {
     ScratchArena temp;
     ShadingGlobals *globals = GetShadingGlobals();
 
-    ShadingHandle *handles = (ShadingHandle *)values;
+    ShadingHandle *handles = values;
+    SortHandles(handles, count);
 
     Scene *scene = GetScene();
 
-    material->Start();
+    MaterialType *material = (MaterialType *)m;
+
+    void *materialData = 0;
 
     RayStateHandle *rayStateHandles = PushArrayNoZero(temp.temp.arena, RayStateHandle, count);
     u32 rayStateHandleCount         = 0;
@@ -542,7 +562,8 @@ void ShadingQueueHandler(struct ShadingThreadState *state, void *values, u32 cou
 
             {
                 // BxDF evaluation
-
+                ErrorExit(si.faceIndices == handle.sortKey, "face: %u, sort: %u\n",
+                          si.faceIndices, handle.sortKey);
                 BxDF bxdf = material->Evaluate(scratch.temp.arena, si, lambda,
                                                Vec4f(dudx, dvdx, dudy, dvdy));
                 BSDF bsdf(bxdf, si.shading.dpdu, si.shading.n);
@@ -633,9 +654,10 @@ void ShadingQueueHandler(struct ShadingThreadState *state, void *values, u32 cou
                     // TODO: infinity check for beta
                 }
             }
-            rayStateHandles[rayStateHandleCount++] = handle.rayStateHandle;
         }
+        rayStateHandles[rayStateHandleCount++] = handle.rayStateHandle;
     }
+
     state->rayQueue.Push(state, rayStateHandles, rayStateHandleCount);
 }
 

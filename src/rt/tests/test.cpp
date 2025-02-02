@@ -245,7 +245,7 @@ void TestRender(Arena *arena, Options *options = 0)
     AffineSpace worldFromRender = AffineSpace::Translate(pCamera);
 
     LoadScene(arenas, tempArenas, "../data/island/pbrt-v4/", options->filename, NDCFromCamera,
-              height, &renderFromWorld);
+              cameraFromRender, height, &renderFromWorld);
 
     // environment map
 #if 1
@@ -317,6 +317,14 @@ void TestRender(Arena *arena, Options *options = 0)
     }
 
     shadingThreadState_ = PushArray(arena, ShadingThreadState, numProcessors);
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        ShadingThreadState *state = &shadingThreadState_[i];
+        state->rayStates          = RayStateList(arenas[i]);
+        state->rayFreeList        = RayStateFreeList(arenas[i]);
+
+        state->rayQueue.handler = RayIntersectionHandler;
+    }
 
     counter = OS_StartCounter();
     // Render(arena, params);

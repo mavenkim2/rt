@@ -645,6 +645,18 @@ struct ChunkedLinkedList
             *result = last->values[--last->count];
             totalCount--;
         }
+        else if (first != last)
+        {
+            ChunkNode *prev = first;
+            ChunkNode *node = first;
+            while (node != last)
+            {
+                prev = node;
+                node = node->next;
+            }
+            last = prev;
+            Pop(result);
+        }
         else
         {
             *result = {};
@@ -655,8 +667,15 @@ struct ChunkedLinkedList
 
     inline void AddNode()
     {
-        ChunkNode *newNode = PushStructTagged(arena, ChunkNode, memoryTag);
-        QueuePush(first, last, newNode);
+        if (last && last->next)
+        {
+            last = last->next;
+        }
+        else
+        {
+            ChunkNode *newNode = PushStructTagged(arena, ChunkNode, memoryTag);
+            QueuePush(first, last, newNode);
+        }
     }
     inline u32 Length() const { return totalCount; }
     inline void Flatten(T *out)

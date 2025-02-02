@@ -135,6 +135,143 @@ struct UniformInfiniteLight
     LightFunctionsInf(UniformInfiniteLight);
 };
 
+#if 0
+struct AliasTable
+{
+    struct AliasEntry
+    {
+        f32 threshold;
+        f32 p;
+        int alias;
+    };
+    AliasEntry *entries;
+    u32 numValues;
+    AliasTable() {}
+    // https://citeseerx.ist.psu.edu/document?repid=rep1&type=pdf&doi=f65bcde1fcf82e05388b31de80cba10bf65acc07
+    AliasTable(Arena *arena, const f32 *values, u32 numValues) : numValues(numValues)
+    {
+        TempArena temp = ScratchStart(0, 0);
+        entries        = PushArray(arena, AliasEntry, numValues);
+        f32 total      = 0;
+        for (u32 i = 0; i < numValues; i++)
+        {
+            total += values[i];
+        }
+        Assert(total);
+        total = 1.f / total;
+        for (u32 i = 0; i < numValues; i++)
+        {
+            entries[i].p = values[i] * total;
+        }
+
+        int *under     = PushArray(temp.arena, int, numValues);
+        int *over      = PushArray(temp.arena, int, numValues);
+        int *indices[] = {
+            under,
+            over,
+        };
+
+        // i have 3 open loops
+        //     1. this
+        //     2. simd quasi monte carlo sample generation
+        //     3. adaptive tessellation choosing better edge rates when off screen
+
+        int counts[2] = {};
+
+        // Divide indices into two bins based on probability
+        f32 threshold = 1.f / numValues;
+        for (u32 i = 0; i < numValues; i++)
+        {
+            int choice                        = values[i] > threshold;
+            indices[choice][counts[choice]++] = i;
+        }
+
+        while (counts[0] != 0 && counts[1] != 0)
+        {
+            int s = counts[0]--;
+            int l = counts[1]--;
+
+            int smallIndex = indices[0][s];
+            int largeIndex = indices[1][l];
+
+            f32 probSmall     = numValues * probs[smallIndex];
+            AliasEntry *entry = &entries[smallIndex];
+            entry->alias      = largeIndex;
+            entry->threshold  = probSmall;
+
+            entries[largeIndex].p = probs[largeIndex] += (probs[smallIndex] - threshold);
+
+            int choice                        = entries[largeIndex].p > threshold;
+            indices[choice][counts[choice]++] = largeIndex;
+        }
+
+        while (counts[0] > 0)
+        {
+            counts[0]--;
+            probs[indices[0][counts[0]]] = 1;
+        }
+        while (counts[1] > 0)
+        {
+            counts[1]--;
+            probs[indices[1][counts[1]]] = 1;
+        }
+
+        ScratchEnd(temp);
+    }
+
+    int Sample(f32 u, f32 *pdf, f32 *du) const
+    {
+        f32 index               = u * numValues;
+        u32 flooredIndex        = (u32)Floor(index);
+        const AliasEntry *entry = &entries[Min(flooredIndex, numValues - 1)];
+
+        f32 q = Min(index - flooredIndex, oneMinusEpsilon);
+        if (q < entry->threshold)
+        {
+            *pdf = entry->p;
+            *du  = Min((index - flooredIndex) / triplet->threshold, oneMinusEpsilon);
+            return flooredIndex;
+        }
+        *pdf = entries[entry->alias].p;
+        *du  = Min((q - entry->threshold) / (1.f - entry->threshold), oneMinusEpsilon);
+        return entry->alias;
+    }
+};
+#endif
+
+// struct AliasTable2D
+// {
+//     AliasTable marginal;
+//     AliasTable *conditional;
+//     AliasTable2D() {}
+//     AliasTable2D(Arena *arena, const f32 *values, u32 nu, u32 nv)
+//     {
+//         conditional = PushArrayNoZero(arena, AliasTable, nv);
+//         for (u32 v = 0; v < nv; v++)
+//         {
+//             conditional[v] = AliasTable(arena, values + v * nu, nu);
+//         }
+//         f32 *marginalFunc = PushArrayNoZero(arena, f32, nv);
+//         for (u32 v = 0; v < nv; v++)
+//         {
+//             // marginalFunc[v] = ? ;
+//         }
+//         marginal = AliasTable(arena, marginalFunc, nv);
+//     }
+//     Vec2f Sample(Vec2f u, f32 *pdf = 0, Vec2u *offset = 0) const
+//     {
+//         f32 pdfs[2];
+//         Vec2u p;
+//         f32 d1, d0;
+//         p[1] = marginal.Sample(u[1], &pdfs[1], &d1);
+//         // d1 *= marginal.numValues;
+//         p[0] = conditional[p[1]].Sample(u[0], &pdfs[0], &d0);
+//         if (pdf) *pdf = pdfs[0] * pdfs[1];
+//         if (offset) *offset = p;
+//         return Vec2f(d0, d1);
+//     }
+// };
+
 struct PiecewiseConstant1D
 {
     f32 *cdf;

@@ -177,6 +177,12 @@ struct Mat4
         return *this;
     }
 
+    Vec4f GetRow(int i) const
+    {
+        Assert(i >= 0 && i < 4);
+        return Vec4f(columns[0][i], columns[1][i], columns[2][i], columns[3][i]);
+    }
+
     b32 operator==(const Mat4 &other)
     {
         return a1 == other.a1 && a2 == other.a2 && a3 == other.a3 && a4 == other.a4 &&
@@ -276,7 +282,7 @@ inline Mat4 Translate(const Vec3f &value)
     return m;
 }
 
-Vec4f Mul(const Mat4 &a, const Vec4f &b)
+Vec4f Transform(const Mat4 &a, const Vec4f &b)
 {
     Vec4f result;
 #ifdef __SSE2__
@@ -311,7 +317,7 @@ Vec4f Mul(const Mat4 &a, const Vec4f &b)
 Vec3f Mul(const Mat4 &a, const Vec3f &b)
 {
     Vec4f vec(b.x, b.y, b.z, 1);
-    Vec4f result = Mul(a, vec);
+    Vec4f result = Transform(a, vec);
     return Vec3f(result.x, result.y, result.z) / result.w;
 }
 __forceinline Vec3f TransformP(const Mat4 &a, const Vec3f &b) { return Mul(a, b); }
@@ -817,28 +823,114 @@ __forceinline AffineSpace Inverse(const AffineSpace &a)
     return AffineSpace(result, -translation);
 }
 
-// void ExtractPlanes(Vec4f *planes, Mat4 &NDCFromCamera)
-// {
-//     Vec4f row0 = GetRow(NDCFromCamera, 0);
-//     Vec4f row1 = GetRow(NDCFromCamera, 1);
-//     Vec4f row2 = GetRow(NDCFromCamera, 2);
-//     Vec4f row3 = GetRow(NDCFromCamera, 3);
-//
-//     planes[0] = row3 + row0;
-//     planes[1] = row3 - row0;
-//     planes[2] = row3 + row1;
-//     planes[3] = row3 - row1;
-//     planes[4] = row3 + row2;
-//     planes[5] = row3 - row2;
-//
-//     for (u32 i = 0; i < 6; i++)
-//     {
-//         f32 oneOverLength = Length(planes[i].xyz);
-//         Assert(oneOverLength != 0);
-//         oneOverLength = 1 / (oneOverLength);
-//         planes[i] *= oneOverLength;
-//     }
-// }
+void ExtractPlanes(Vec4f *planes, const Mat4 &NDCFromRender)
+{
+    Vec4f row0 = NDCFromRender.GetRow(0);
+    Vec4f row1 = NDCFromRender.GetRow(1);
+    Vec4f row2 = NDCFromRender.GetRow(2);
+    Vec4f row3 = NDCFromRender.GetRow(3);
+
+    planes[0] = row3 + row0;
+    planes[1] = row3 - row0;
+    planes[2] = row3 + row1;
+    planes[3] = row3 - row1;
+    planes[4] = row3 + row2;
+    planes[5] = row3 - row2;
+
+    for (u32 i = 0; i < 6; i++)
+    {
+        f32 oneOverLength = Length(planes[i].xyz);
+        Assert(oneOverLength != 0);
+        oneOverLength = 1 / (oneOverLength);
+        planes[i] *= oneOverLength;
+    }
+}
+
+template <i32 N>
+int IntersectFrustumAABB(const Vec4f *planes, Bounds *bounds)
+{
+    LaneF32<N> minX, minY, minZ, maxX, maxY, maxZ;
+    if constexpr (N == 4)
+    {
+        Transpose4x3(bounds[0].minP, bounds[1].minP, bounds[2].minP, bounds[3].minP, minX,
+                     minY, minZ);
+        Transpose4x3(bounds[0].maxP, bounds[1].maxP, bounds[2].maxP, bounds[3].maxP, maxX,
+                     maxY, maxZ);
+    }
+    else if constexpr (N == 8)
+    {
+        Transpose8x3(bounds[0].minP, bounds[1].minP, bounds[2].minP, bounds[3].minP,
+                     bounds[4].minP, bounds[5].minP, bounds[6].minP, bounds[7].minP, minX,
+                     minY, minZ);
+        Transpose8x3(bounds[0].maxP, bounds[1].maxP, bounds[2].maxP, bounds[3].maxP,
+                     bounds[4].maxP, bounds[5].maxP, bounds[6].maxP, bounds[7].maxP, maxX,
+                     maxY, maxZ);
+    }
+    else if constexpr (N == 1)
+    {
+        minX = bounds[0].minP[0];
+        minY = bounds[0].minP[1];
+        minZ = bounds[0].minP[2];
+
+        maxX = bounds[0].maxP[0];
+        maxY = bounds[0].maxP[1];
+        maxZ = bounds[0].maxP[2];
+    }
+    else
+    {
+        Assert(0);
+    }
+
+    // NOTE: need to compare against - plane.w * 2
+    LaneF32<N> centerY = maxY + minY;
+    LaneF32<N> centerX = maxX + minX;
+    LaneF32<N> centerZ = maxZ + minZ;
+
+    LaneF32<N> extentX = maxX - minX;
+    LaneF32<N> extentY = maxY - minY;
+    LaneF32<N> extentZ = maxZ - minZ;
+
+    LaneF32<N> signMask(-0.f);
+
+    Mask<LaneF32<N>> results = Mask<LaneF32<N>>(true);
+    Assert(All(results));
+
+    for (int i = 0; i < 6; i++)
+    {
+        LaneF32<N> planeX(planes[i].x);
+        LaneF32<N> planeY(planes[i].y);
+        LaneF32<N> planeZ(planes[i].z);
+        LaneF32<N> planeW(planes[i].w * -2);
+
+        // dot(center + extent, plane) > -plane.w
+        // NOTE: to see if the box is partially inside, need to maximize the dot product.
+        // dot(center + extent, plane) = dot(center, plane) + dot(extent, plane) <-- this needs
+        // to be maximized. this can be done by xor the extent with the sign bit of the plane,
+        // so the dot product is always +
+
+        LaneF32<N> test = planeX + signMask;
+        LaneF32<N> dot, t;
+
+        if constexpr (N == 1)
+        {
+            dot = FMA(extentX, Copysign(planeX, extentX), centerX);
+            dot += FMA(extentY, Copysign(planeY, extentY), centerY);
+            dot += FMA(extentZ, Copysign(planeZ, extentZ), centerZ);
+            results = results && (dot > planeW);
+        }
+        else
+        {
+            t       = centerX + (extentX ^ (planeX & signMask));
+            dot     = t * planeX;
+            t       = centerY + (extentY ^ (planeY & signMask));
+            dot     = FMA(t, planeY, dot);
+            t       = centerZ + (extentZ ^ (planeZ & signMask));
+            dot     = FMA(t, planeZ, dot);
+            results = results & (dot > planeW);
+        }
+    }
+    return Movemask(results);
+}
 
 } // namespace rt
 #endif

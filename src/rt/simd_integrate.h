@@ -88,7 +88,7 @@ template <typename T>
 struct SharedShadeQueue
 {
     T values[QUEUE_LENGTH];
-    typedef void (*Handler)(struct ShadingThreadState *state, void *values, u32 count,
+    typedef void (*Handler)(struct ShadingThreadState *state, T *values, u32 count,
                             Material *material);
 
     Handler handler;
@@ -131,6 +131,10 @@ struct ShadingGlobals
 // thread_local ShadingThreadState *shadingThreadState_;
 static ShadingThreadState *shadingThreadState_;
 static ShadingGlobals *shadingGlobals_;
+
+template <typename MaterialType>
+void ShadingQueueHandler(struct ShadingThreadState *state, ShadingHandle *values, u32 count,
+                         Material *material);
 
 ShadingThreadState *GetShadingThreadState() { return &shadingThreadState_[GetThreadIndex()]; }
 ShadingThreadState *GetShadingThreadState(u32 index) { return &shadingThreadState_[index]; }

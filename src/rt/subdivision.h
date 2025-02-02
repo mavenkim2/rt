@@ -351,8 +351,8 @@ struct OpenSubdivMesh
 };
 
 OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
-                                     const Mat4 &NDCFromCamera, int screenHeight,
-                                     struct TessellationParams *param,
+                                     const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender,
+                                     int screenHeight, struct TessellationParams *params,
                                      struct Mesh *controlMeshes, u32 numMeshes);
 
 } // namespace rt

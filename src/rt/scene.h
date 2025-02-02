@@ -575,16 +575,11 @@ struct Material
 {
     // TODO: actually displacement map
     struct Texture *displacement;
-    BxDF EvaluateMaterial(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
-                          const Vec4f &filterWidths)
-    {
-        // if (displacement) BumpMap(si, lambda, filterWidths);
-        return Evaluate(arena, si, lambda, filterWidths);
-    }
 
     virtual BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
                           const Vec4f &filterWidths) = 0;
 
+    // Used in SIMD mode, loads and caches data that may be used across multiple calls
     virtual void Start() {}
     virtual void Stop() {}
 };
@@ -693,72 +688,6 @@ struct Scene
     DiffuseAreaLight *GetAreaLights() { return lights.Get<DiffuseAreaLight>(); }
     const DiffuseAreaLight *GetAreaLights() const { return lights.Get<DiffuseAreaLight>(); }
 };
-
-template <i32 N>
-int IntersectFrustumAABB(Vec4f *planes, Bounds *bounds)
-{
-    LaneF32<N> minX, minY, minZ, maxX, maxY, maxZ;
-    if constexpr (N == 4)
-    {
-        Transpose4x3(bounds[0].minP, bounds[1].minP, bounds[2].minP, bounds[3].minP, minX,
-                     minY, minZ);
-        Transpose4x3(bounds[0].maxP, bounds[1].maxP, bounds[2].maxP, bounds[3].maxP, maxX,
-                     maxY, maxZ);
-    }
-    else if constexpr (N == 8)
-    {
-        Transpose8x3(bounds[0].minP, bounds[1].minP, bounds[2].minP, bounds[3].minP,
-                     bounds[4].minP, bounds[5].minP, bounds[6].minP, bounds[7].minP, minX,
-                     minY, minZ);
-        Transpose8x3(bounds[0].maxP, bounds[1].maxP, bounds[2].maxP, bounds[3].maxP,
-                     bounds[4].maxP, bounds[5].maxP, bounds[6].maxP, bounds[7].maxP, maxX,
-                     maxY, maxZ);
-    }
-    else
-    {
-        Assert(0);
-    }
-
-    // NOTE: need to compare against - plane.w * 2
-    LaneF32<N> centerY = maxY + minY;
-    LaneF32<N> centerX = maxX + minX;
-    LaneF32<N> centerZ = maxZ + minZ;
-
-    LaneF32<N> extentX = maxX - minX;
-    LaneF32<N> extentY = maxY - minY;
-    LaneF32<N> extentZ = maxZ - minZ;
-
-    LaneF32<N> signMask(-0.f);
-
-    LaneF32<N> results(TrueTy);
-
-    for (int i = 0; i < 6; i++)
-    {
-        LaneF32<N> planeX(planes[i].x);
-        LaneF32<N> planeY(planes[i].y);
-        LaneF32<N> planeZ(planes[i].z);
-        LaneF32<N> planeW(planes[i].w * -2);
-
-        // dot(center + extent, plane) > -plane.w
-        // NOTE: to see if the box is partially inside, need to maximize the dot product.
-        // dot(center + extent, plane) = dot(center, plane) + dot(extent, plane) <-- this needs
-        // to be maximized. this can be done by xor the extent with the sign bit of the plane,
-        // so the dot product is always +
-
-        LaneF32<N> test = planeX + signMask;
-        LaneF32<N> t    = centerX + (extentX ^ (planeX & signMask));
-        LaneF32<N> dot  = t * planeX;
-        t               = centerY + (extentY ^ (planeY & signMask));
-        dot             = FMA(t, planeY, dot);
-        t               = centerZ + (extentZ ^ (planeZ & signMask));
-        dot             = FMA(t, planeZ, dot);
-
-        results = results & (dot > planeW);
-
-        results = results & (dot);
-    }
-    return Movemask(results);
-}
 
 struct Scene *scene_;
 Scene *GetScene() { return scene_; }

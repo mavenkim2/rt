@@ -54,7 +54,7 @@ struct CreateQuantizedNode
         {
             bounds = Max(bounds, Lane8F32::Load(&records[i].geomBounds));
         }
-        result->meta        = u8((1u << numRecords) - 1);
+        // result->meta        = u8((1u << numRecords) - 1);
         Lane4F32 boundsMinP = -Extract4<0>(bounds);
         Lane4F32 boundsMaxP = Extract4<1>(bounds);
         result->minP        = ToVec3f(boundsMinP);
@@ -378,7 +378,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(const BuildSettings &settings
         {
             threadLocalStatistics[GetThreadIndex()].misc += 1;
             u32 offset = 0;
-            u8 *bytes  = PushArrayNoZeroTagged(
+            u8 *bytes  = PushArrayTagged(
                 currentArena, u8, sizeof(CompressedNodeType) + sizeof(LeafType) * primTotal,
                 MemoryType_BVH);
             Assert(currentArena->current->align == 16);

@@ -404,7 +404,7 @@ struct QuantizedNode
 #else
     Vec3f scale;
 #endif
-    u8 meta;
+    // u8 meta;
 
     u8 lowerX[N];
     u8 lowerY[N];
@@ -418,7 +418,15 @@ struct QuantizedNode
     Vec3f minP;
 
     // NOTE: nodes + leaves
-    u32 GetNumChildren() const { return PopCount(meta); }
+    u32 GetNumChildren() const
+    {
+        int count = 0;
+        for (int i = 0; i < N; i++)
+        {
+            count += (children[i].GetType() != BVHNode<N>::tyEmpty);
+        }
+        return count;
+    }
 
     const BVHNode<N> &Child(u32 i) const { return children[i]; }
 
@@ -487,7 +495,6 @@ struct CompressedLeafNode
 #else
     Vec3f scale;
 #endif
-    u8 meta;
 
     u8 offsets[N];
     u8 lowerX[N];
@@ -506,7 +513,7 @@ struct CompressedLeafNode
     BVHNode<N> Child(u32 index) { return BVHNode<N>(index); }
     u32 GetType(u32 childIndex) const
     {
-        return (meta & (1 << childIndex)) ? 0 : BVHNode<N>::tyEmpty;
+        return offsets[childIndex] == 0 ? BVHNode<N>::tyEmpty : 0;
     }
 };
 

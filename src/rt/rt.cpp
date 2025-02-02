@@ -1099,6 +1099,8 @@ int main(int argc, char *argv[])
     // Subdivide(&mesh);
     // EdgeStitchTest();
 
+    size_t help = sizeof(QuantizedNode<8>);
+    help        = sizeof(CompressedLeafNode<8>);
     Ptex::String error;
     Ptex::PtexTexture *texture =
         cache->get("../data/island/textures/isBeach/Displacement/beach_geo.ptx", error);

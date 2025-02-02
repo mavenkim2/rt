@@ -1,3 +1,5 @@
+#include <emmintrin.h>
+#include <immintrin.h>
 namespace rt
 {
 
@@ -66,6 +68,23 @@ u32 FastOwenScrambler(u32 v, u32 seed)
 //////////////////////////////
 // Sobol
 //
+
+// inline Lane4F32 SobolSample(Lane8U32 sobolIndices, Lane4U32 dimension,
+//                             Lane4U32 (*randomizer)(Lane4U32, u32), u32 seed = 0)
+// {
+//     Lane4U32 v = 0;
+//     Lane4U32 z(ZeroTy);
+//     Lane8U32 o(1);
+//     for (Lane8U32 i = _mm256_mul_epi32(_mm256_castsi128_si256(dimension),
+//                                        _mm256_set1_epi32(sobolMatrixSize));
+//          All(sobolIndices != 0);
+//          sobolIndices = _mm256_srli_si256(sobolIndices, 1), i = _mm256_add_epi64(i, o))
+//     {
+//         v ^= _mm256_mask_i32gather_epi32(z, sobolMatrices32, i, sobolIndices & 1, 4);
+//     }
+//     v = randomizer(v, seed);
+//     return Min(_mm_castsi128_ps(v) * 0x1p-32f, Lane4F32(oneMinusEpsilon));
+// }
 
 inline f32 SobolSample(i64 a, i32 dimension, u32 (*randomizer)(u32, u32), u32 seed = 0)
 {
