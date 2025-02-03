@@ -847,7 +847,7 @@ void ExtractPlanes(Vec4f *planes, const Mat4 &NDCFromRender)
 }
 
 template <i32 N>
-int IntersectFrustumAABB(const Vec4f *planes, Bounds *bounds)
+int IntersectFrustumAABB(const Vec4f *planes, Bounds *bounds, int numPlanes = 6)
 {
     LaneF32<N> minX, minY, minZ, maxX, maxY, maxZ;
     if constexpr (N == 4)
@@ -895,7 +895,7 @@ int IntersectFrustumAABB(const Vec4f *planes, Bounds *bounds)
     Mask<LaneF32<N>> results = Mask<LaneF32<N>>(true);
     Assert(All(results));
 
-    for (int i = 0; i < 6; i++)
+    for (int i = 0; i < numPlanes; i++)
     {
         LaneF32<N> planeX(planes[i].x);
         LaneF32<N> planeY(planes[i].y);
@@ -913,9 +913,9 @@ int IntersectFrustumAABB(const Vec4f *planes, Bounds *bounds)
 
         if constexpr (N == 1)
         {
-            dot = FMA(extentX, Copysign(planeX, extentX), centerX);
-            dot += FMA(extentY, Copysign(planeY, extentY), centerY);
-            dot += FMA(extentZ, Copysign(planeZ, extentZ), centerZ);
+            dot = planeX * (centerX + Copysign(extentX, planeX));
+            dot += planeY * (centerY + Copysign(extentY, planeY));
+            dot += planeZ * (centerZ + Copysign(extentZ, planeZ));
             results = results && (dot > planeW);
         }
         else
@@ -928,6 +928,8 @@ int IntersectFrustumAABB(const Vec4f *planes, Bounds *bounds)
             dot     = FMA(t, planeZ, dot);
             results = results & (dot > planeW);
         }
+
+        if (None(results)) return 0;
     }
     return Movemask(results);
 }

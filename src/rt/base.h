@@ -250,6 +250,12 @@ struct alignas(CACHE_LINE_SIZE) AlignedMutex
     Mutex mutex;
 };
 
+inline bool TryMutex(Mutex *mutex)
+{
+    u32 expected = 0;
+    return mutex->count.compare_exchange_weak(expected, 1, std::memory_order_acq_rel);
+}
+
 inline void BeginMutex(Mutex *mutex)
 {
     u32 expected = 0;

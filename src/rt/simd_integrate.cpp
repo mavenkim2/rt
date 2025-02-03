@@ -76,12 +76,13 @@ template <typename T>
 bool SharedShadeQueue<T>::Flush(ShadingThreadState *state)
 {
     TempArena temp = ScratchStart(0, 0);
-    BeginMutex(&mutex);
+    bool result    = TryMutex(&mutex);
+    if (!result) BeginMutex(&mutex);
     u32 total = count;
     if (count == 0)
     {
         EndMutex(&mutex);
-        return true;
+        return result;
     }
 
     T *newEntries = (T *)PushArrayNoZero(temp.arena, u8, sizeof(T) * count);
@@ -293,6 +294,16 @@ void RenderSIMD(Arena *arena, RenderParams2 &params)
 
         } while (!done);
     });
+
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        ShadingThreadState *state = GetShadingThreadState(i);
+        Assert(state->rayQueue.count == 0);
+    }
+    for (u32 i = 0; i < globals->numShadingQueues; i++)
+    {
+        Assert(globals->shadingQueues[i].count == 0);
+    }
 
     scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
         u32 tileX = jobID % tileCountX;

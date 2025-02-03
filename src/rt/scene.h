@@ -639,6 +639,9 @@ struct ScenePrimitives
 
     GeometryType geometryType;
 
+    // temp
+    Tokenizer dataTokenizer;
+
     Vec3f boundsMin;
     Vec3f boundsMax;
     BVHNodeN nodePtr;

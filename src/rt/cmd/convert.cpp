@@ -297,7 +297,7 @@ struct SceneLoadState
         includeMap.map     = PushArray(arena, IncludeHashNode, includeMap.count);
         includeMap.mutexes = PushArray(arena, Mutex, includeMap.count);
 
-        materialMap.count   = 8192;
+        materialMap.count   = 16384;
         materialMap.map     = PushArray(arena, MaterialHashNode, materialMap.count);
         materialMap.mutexes = PushArray(arena, Mutex, materialMap.count);
     }
@@ -1054,16 +1054,23 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
 
                 nPacket.name = materialName;
 
-                // NOTE: the names aren't deterministic
-                string buffer = GetMaterialBuffer(temp.arena, packet, nPacket.type);
-                // NOTE: this changes the material name if a duplicate is found
-                if (!sls->materialMap.FindOrAdd(threadArena, buffer, materialName))
+                if (!isNamedMaterial)
                 {
-                    materials->AddBack() = nPacket;
+                    // NOTE: the names aren't deterministic
+                    string buffer = GetMaterialBuffer(temp.arena, packet, nPacket.type);
+                    // NOTE: this changes the material name if a duplicate is found
+                    if (!sls->materialMap.FindOrAdd(threadArena, buffer, materialName))
+                    {
+                        materials->AddBack() = nPacket;
+                    }
+                    else
+                    {
+                        threadLocalStatistics[threadIndex].misc++;
+                    }
                 }
                 else
                 {
-                    threadLocalStatistics[threadIndex].misc++;
+                    materials->AddBack() = nPacket;
                 }
 
                 currentGraphicsState.materialName = materialName;

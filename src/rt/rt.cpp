@@ -1099,17 +1099,6 @@ int main(int argc, char *argv[])
     // Subdivide(&mesh);
     // EdgeStitchTest();
 
-    size_t help = sizeof(QuantizedNode<8>);
-    help        = sizeof(CompressedLeafNode<8>);
-    Ptex::String error;
-    Ptex::PtexTexture *texture =
-        cache->get("../data/island/textures/isBeach/Displacement/beach_geo.ptx", error);
-    Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
-    Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
-
-    f32 out[3] = {};
-    filter->eval(out, 0, 3, 20, .5f, .5f, .01f, .01f, .01f, .01f);
-
     // DualTest();
 
     const u32 count = 3000000;

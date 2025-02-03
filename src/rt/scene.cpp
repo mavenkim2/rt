@@ -98,10 +98,9 @@ struct PtexTexture : Texture
 
     PtexCache ptexCache;
 
-    // TODO: encoding
     PtexTexture(string filename, ColorEncoding encoding = ColorEncoding::Gamma,
                 f32 scale = 1.f)
-        : filename(filename), scale(scale)
+        : filename(filename), encoding(encoding), scale(scale)
     {
     }
 
@@ -218,11 +217,8 @@ struct PtexTexture : Texture
         Ptex::String error;
         Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
 
-        // ptexCache.Load(filename, &texture);
-
         EvaluateHelper<c>(texture, intr, filterWidths, result);
 
-        // ptexCache.Release();
         texture->release();
     }
 };
@@ -777,7 +773,7 @@ i32 ReadInt(Tokenizer *tokenizer, string p)
 
 void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                  ScenePrimitives *scene, string directory, string filename,
-                 Scheduler::Counter *c = 0, AffineSpace *renderFromWorld = 0,
+                 Scheduler::Counter *c, AffineSpace *renderFromWorld = 0,
                  bool baseFile = false)
 
 {
@@ -805,7 +801,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     string data = OS_ReadFile(arena, dataPath);
 
     Tokenizer dataTokenizer;
-    dataTokenizer.input  = data;
+    dataTokenizer.input  = data; // OS_MapFileRead(dataPath); // data;
     dataTokenizer.cursor = dataTokenizer.input.str;
 
     hasMagic = Advance(&dataTokenizer, "DATA_START ");
@@ -817,19 +813,20 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
         u32 count            = ReadInt(&dataTokenizer);
         scene->numTransforms = count;
         SkipToNextChar(&dataTokenizer);
-        scene->affineTransforms = (AffineSpace *)(dataTokenizer.cursor);
+        // scene->affineTransforms     = PushArrayNoZero(arena, AffineSpace, count);
+        scene->affineTransforms     = (AffineSpace *)(dataTokenizer.cursor);
+        AffineSpace *dataTransforms = (AffineSpace *)(dataTokenizer.cursor);
         if (baseFile && renderFromWorld)
         {
             for (u32 i = 0; i < count; i++)
             {
-                scene->affineTransforms[i] = *renderFromWorld * scene->affineTransforms[i];
+                scene->affineTransforms[i] = *renderFromWorld * dataTransforms[i];
             }
         }
     }
 
-    Scheduler::Counter counter = {};
-    bool isLeaf                = true;
-    GeometryType type          = GeometryType::Max;
+    bool isLeaf       = true;
+    GeometryType type = GeometryType::Max;
     ChunkedLinkedList<ScenePrimitives *, 32, MemoryType_Instance> files(temp.arena);
 
     bool hasMaterials = false;
@@ -883,7 +880,6 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                         if (node->filename.size && node->filename == includeFile)
                         {
                             files.AddBack() = node->scene;
-                            scheduler.Wait(&node->counter);
                             break;
                         }
                         node = node->next;
@@ -894,16 +890,15 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     auto *newNode                 = PushStruct(arena, SceneLoadTable::Node);
                     newNode->filename             = PushStr8Copy(arena, includeFile);
                     ScenePrimitives *includeScene = PushStruct(arena, ScenePrimitives);
-                    newNode->counter.count        = 1;
                     newNode->scene                = includeScene;
                     newNode->next                 = head;
 
                     if (table->nodes[index].compare_exchange_weak(head, newNode))
                     {
                         files.AddBack() = includeScene;
-                        scheduler.Schedule(&counter, [=](u32 jobID) {
+                        scheduler.Schedule(c, [=](u32 jobID) {
                             LoadRTScene(arenas, tempArenas, state, includeScene, directory,
-                                        newNode->filename, &newNode->counter);
+                                        newNode->filename, c);
                         });
                         break;
                     }
@@ -1008,17 +1003,6 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
             scene->primIndices = PushArrayNoZero(arena, PrimitiveIndices, indices.totalCount);
             shapes.Flatten((Mesh *)scene->primitives);
             indices.Flatten(scene->primIndices);
-
-            if (type == GeometryType::CatmullClark)
-            {
-                Arena *tempArena = tempArenas[threadIndex];
-                scene->tessellationParams =
-                    PushArray(tempArena, TessellationParams, scene->numPrimitives);
-
-                ComputeTessellationParams<GeometryType::QuadMesh>((Mesh *)scene->primitives,
-                                                                  scene->tessellationParams, 0,
-                                                                  scene->numPrimitives);
-            }
         }
         else if (Advance(&tokenizer, "MATERIALS_START "))
         {
@@ -1033,29 +1017,39 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     }
     files.Flatten(scene->childScenes);
 
-    scheduler.Wait(&counter);
+    scene->dataTokenizer = dataTokenizer;
 
     OS_UnmapFile(tokenizer.input.str);
 
+    // If there are no transforms and no two level-bvhs, then we need to manually convert
+    // meshes to render space.
+    if (baseFile && !hasTransforms)
     {
-        if (baseFile && !hasTransforms)
+        Mesh *meshes = (Mesh *)scene->primitives;
+        for (u32 i = 0; i < scene->numPrimitives; i++)
         {
-            Mesh *meshes = (Mesh *)scene->primitives;
-            for (u32 i = 0; i < scene->numPrimitives; i++)
+            Mesh *mesh = &meshes[i];
+            for (u32 v = 0; v < mesh->numVertices; v++)
             {
-                Mesh *mesh = &meshes[i];
-                for (u32 v = 0; v < mesh->numVertices; v++)
-                {
-                    mesh->p[v] = TransformP(*renderFromWorld, mesh->p[v]);
-                }
+                mesh->p[v] = TransformP(*renderFromWorld, mesh->p[v]);
             }
         }
+    }
+
+    if (type == GeometryType::CatmullClark)
+    {
+        Arena *tempArena = tempArenas[threadIndex];
+        scene->tessellationParams =
+            PushArray(tempArena, TessellationParams, scene->numPrimitives);
+
+        ComputeTessellationParams<GeometryType::QuadMesh>(
+            (Mesh *)scene->primitives, scene->tessellationParams, 0, scene->numPrimitives);
     }
 
     scene->geometryType = type;
 
     ScratchEnd(temp);
-    if (c) c->count.fetch_sub(1, std::memory_order_acq_rel);
+    // if (c) c->count.fetch_sub(1, std::memory_order_acq_rel);
 }
 
 void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
@@ -1161,7 +1155,9 @@ void ComputeEdgeRates(ScenePrimitives *scene, const AffineSpace &transform,
                                         f32 currentMinDistance = params.currentMinDistance;
                                         EndRMutex(&params.mutex);
 
-                                        int result = IntersectFrustumAABB<1>(planes, &bounds);
+                                        // NOTE: this skips the far plane test
+                                        int result =
+                                            IntersectFrustumAABB<1>(planes, &bounds, 5);
                                         f32 distance = Length(centroid);
 
                                         // Camera is at origin in this coordinate space
@@ -1207,7 +1203,10 @@ void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string file
         PushArray(temp.arena, std::atomic<SceneLoadTable::Node *>, state.table.count);
 
     Scene *scene = GetScene();
-    LoadRTScene(arenas, tempArenas, &state, &scene->scene, directory, filename, 0, t, true);
+
+    Scheduler::Counter counter = {};
+    LoadRTScene(arenas, tempArenas, &state, &scene->scene, directory, filename, &counter, t,
+                true);
 
     AffineSpace space = AffineSpace::Identity();
 

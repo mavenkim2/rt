@@ -212,21 +212,21 @@ void TestRender(Arena *arena, Options *options = 0)
     u32 height = 804;
 
     // beach cam
-    Vec3f pCamera(-510.523907, 87.308744, 181.770197);
-    Vec3f look(152.465305, 30.939795, -72.727517);
-    Vec3f up(0.073871, 0.996865, -0.028356);
+    // Vec3f pCamera(-510.523907, 87.308744, 181.770197);
+    // Vec3f look(152.465305, 30.939795, -72.727517);
+    // Vec3f up(0.073871, 0.996865, -0.028356);
 
     f32 lensRadius    = .003125;
-    f32 focalDistance = 712.391212;
-    f32 fov           = 54.43222;
+    // f32 focalDistance = 712.391212;
+    // f32 fov           = 54.43222;
     f32 aspectRatio   = 2.386946;
 
     // base cam
-    // Vec3f pCamera(-1139.0159, 23.286734, 1479.7947);
-    // Vec3f look(244.81433, 238.80714, 560.3801);
-    // Vec3f up(-0.107149, .991691, .07119);
-    // f32 fov           = 69.50461;
-    // f32 focalDistance = 1675.3383;
+    Vec3f pCamera(-1139.0159, 23.286734, 1479.7947);
+    Vec3f look(244.81433, 238.80714, 560.3801);
+    Vec3f up(-0.107149, .991691, .07119);
+    f32 fov           = 69.50461;
+    f32 focalDistance = 1675.3383;
 
     Mat4 cameraFromRender = LookAt(pCamera, look, up) * Translate(pCamera);
 
@@ -327,8 +327,8 @@ void TestRender(Arena *arena, Options *options = 0)
     }
 
     counter = OS_StartCounter();
-    // Render(arena, params);
-    RenderSIMD(arena, params);
+    Render(arena, params);
+    // RenderSIMD(arena, params);
     time = OS_GetMilliseconds(counter);
     printf("total render time: %fms\n", time);
 }

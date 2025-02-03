@@ -218,10 +218,9 @@ void EvaluateDisplacement(PtexTexture *texture, int faceID, const Vec2f &uv,
 // ACM, New York, NY, USA, 25–32
 // See Figure 7 from above for how this works
 OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
-                                     const Mat4 &NDCFromCamera,
-                                     const Mat4 &cameraFromRender, int screenHeight,
-                                     TessellationParams *params, Mesh *controlMeshes,
-                                     u32 numMeshes)
+                                     const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender,
+                                     int screenHeight, TessellationParams *params,
+                                     Mesh *controlMeshes, u32 numMeshes)
 {
     Scene *baseScene = GetScene();
     typedef Far::TopologyDescriptor Descriptor;
@@ -248,7 +247,7 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
     OpenSubdivMesh *outputMeshes =
         PushArray(arenas[GetThreadIndex()], OpenSubdivMesh, numMeshes);
 
-    ParallelFor(0, numMeshes, PARALLEL_THRESHOLD, 1, [&](u32 jobID, u32 start, u32 count) {
+    ParallelFor(0, numMeshes, 1, 1, [&](u32 jobID, u32 start, u32 count) {
         for (u32 meshIndex = start; meshIndex < start + count; meshIndex++)
         {
             OpenSubdivMesh *outputMesh           = &outputMeshes[meshIndex];
@@ -282,7 +281,7 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
             desc.numVertsPerFace    = numVertsPerFace;
             desc.vertIndicesPerFace = (int *)controlMesh->indices;
 
-            int maxMeshEdgeRate = 0;
+            int maxMeshEdgeRate = 1;
 
             // NOTE: this assumes everything is a quad
             // Compute edge rates
@@ -338,23 +337,29 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                     int edgeIndex      = -1;
                     if (result == edgeIDMap.end())
                     {
-                        // Compute tessellation factor
-                        Vec3f p0 = controlMesh->p[id0];
-                        Vec3f p1 = controlMesh->p[id1];
+                        int edgeFactor = 1;
+                        // Only set edge factor if there is a valid transform
+                        if (tessParams->currentMinDistance != (f32)pos_inf)
+                        {
+                            // Compute tessellation factor
+                            Vec3f p0 = controlMesh->p[id0];
+                            Vec3f p1 = controlMesh->p[id1];
 
-                        p0             = TransformP(tessParams->transform, p0);
-                        p1             = TransformP(tessParams->transform, p1);
-                        Vec3f midPoint = (p0 + p1) / 2.f;
-                        f32 radius     = Length(p0 - p1) / 2.f;
+                            p0             = TransformP(tessParams->transform, p0);
+                            p1             = TransformP(tessParams->transform, p1);
+                            Vec3f midPoint = (p0 + p1) / 2.f;
+                            f32 radius     = Length(p0 - p1) / 2.f;
 
-                        f32 midPointW  = Transform(cameraFromRender, Vec4f(midPoint, 1.f)).z;
-                        int edgeFactor = int(edgesPerScreenHeight * radius *
+                            f32 midPointW =
+                                Transform(cameraFromRender, Vec4f(midPoint, 1.f)).z;
+                            edgeFactor = int(edgesPerScreenHeight * radius *
                                              Abs(NDCFromCamera[1][1] / midPointW)) -
                                          1;
 
-                        edgeFactor = Clamp(edgeFactor, 1, 64);
+                            edgeFactor = Clamp(edgeFactor, 1, 64);
 
-                        maxMeshEdgeRate = Max(maxMeshEdgeRate, edgeFactor);
+                            maxMeshEdgeRate = Max(maxMeshEdgeRate, edgeFactor);
+                        }
 
                         edgeIndex = (int)edgeInfos.size();
                         // Assert(samples.size() - controlMesh->numVertices ==
