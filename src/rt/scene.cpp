@@ -937,12 +937,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     Assert(materialHashMap);
                     string materialName      = ReadWord(&tokenizer);
                     const MaterialNode *node = materialHashMap->Get(materialName);
-                    if (node->handle.data == 268442233)
-                    {
-                        Material *m = GetScene()->materials[node->handle.GetIndex()];
-                        int stp     = 5;
-                    }
-                    ids = PrimitiveIndices(LightHandle(), node->handle);
+                    ids                      = PrimitiveIndices(LightHandle(), node->handle);
                 }
                 else
                 {
@@ -965,6 +960,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
             {
                 if (Advance(&tokenizer, "Quad "))
                 {
+                    // MOANA: everything should be catclark
+                    Assert(0);
                     type       = GeometryType::QuadMesh;
                     Mesh &mesh = shapes.AddBack();
                     AddMesh(mesh, 4);
