@@ -2,11 +2,6 @@
 namespace rt
 {
 
-// TODO:
-// 1. properly flush shading queues
-// 2. consider stack overflows???
-// 3. instantiate materials
-
 template <typename T>
 void ThreadLocalQueue<T>::Push(ShadingThreadState *state, T *entries, int numEntries)
 {
@@ -59,6 +54,7 @@ void SharedShadeQueue<T>::Push(ShadingThreadState *state, T *entries, int numEnt
 
         MemoryCopy(newEntries + offset, entries, sizeof(T) * numEntries);
 
+        Assert(material);
         material->Start();
         handler(state, newEntries, total, material);
         material->Stop();
@@ -505,8 +501,9 @@ QUEUE_HANDLER(RayIntersectionHandler)
             shadingHandles[index].sortKey        = handleStart[index].faceID;
             shadingHandles[index].rayStateHandle = handleStart[index].handle;
         }
-
-        ShadingQueue *queue = GetShadingQueue(materialIndex);
+        u32 index = MaterialHandle(materialIndex) ? materialIndex : 0;
+        Assert(index < globals->numShadingQueues);
+        ShadingQueue *queue = GetShadingQueue(index);
         queue->Push(state, shadingHandles, range);
 
         handleStart = handleEnd;

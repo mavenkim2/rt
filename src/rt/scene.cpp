@@ -19,7 +19,7 @@ struct SceneLoadTable
     struct Node
     {
         string filename;
-        Scheduler::Counter counter = {};
+        // Scheduler::Counter counter = {};
         ScenePrimitives *scene;
         Node *next;
     };
@@ -582,9 +582,12 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
     Scene *scene   = GetScene();
 
     ChunkedLinkedList<Material *, 1024> materialsList(temp.arena);
+    NullMaterial *nullMaterial = PushStruct(arena, NullMaterial);
+    materialsList.AddBack()    = nullMaterial;
     MaterialHashMap *table = PushStructConstruct(tempArena, MaterialHashMap)(tempArena, 8192);
 
     std::vector<MaterialTypes> types;
+    types.push_back(MaterialTypes::Interface);
 
     while (!Advance(tokenizer, "MATERIALS_END "))
     {
@@ -607,7 +610,7 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
         }
         // Add to hash table
         table->Add(tempArena,
-                   MaterialNode{materialName,
+                   MaterialNode{PushStr8Copy(tempArena, materialName),
                                 MaterialHandle(materialTypeIndex, materialsList.totalCount)});
 
         SkipToNextChar(tokenizer);
@@ -773,7 +776,7 @@ i32 ReadInt(Tokenizer *tokenizer, string p)
 
 void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                  ScenePrimitives *scene, string directory, string filename,
-                 Scheduler::Counter *c, AffineSpace *renderFromWorld = 0,
+                 Scheduler::Counter *counter, AffineSpace *renderFromWorld = 0,
                  bool baseFile = false)
 
 {
@@ -782,8 +785,9 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     Assert(GetFileExtension(filename) == "rtscene");
     TempArena temp = ScratchStart(0, 0);
 
-    u32 threadIndex = GetThreadIndex();
-    Arena *arena    = arenas[threadIndex];
+    u32 threadIndex  = GetThreadIndex();
+    Arena *arena     = arenas[threadIndex];
+    Arena *tempArena = tempArenas[threadIndex];
 
     auto *table           = &state->table;
     auto *materialHashMap = state->map;
@@ -896,9 +900,9 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     if (table->nodes[index].compare_exchange_weak(head, newNode))
                     {
                         files.AddBack() = includeScene;
-                        scheduler.Schedule(c, [=](u32 jobID) {
+                        scheduler.Schedule(counter, [=](u32 jobID) {
                             LoadRTScene(arenas, tempArenas, state, includeScene, directory,
-                                        newNode->filename, c);
+                                        newNode->filename, counter);
                         });
                         break;
                     }
@@ -930,7 +934,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
             ChunkedLinkedList<Mesh, 1024, MemoryType_Shape> shapes(temp.arena);
             ChunkedLinkedList<PrimitiveIndices, 1024, MemoryType_Shape> indices(temp.arena);
 
-            auto AddMaterial = [&]() {
+            int noMaterialCount = 0;
+            auto AddMaterial    = [&]() {
                 PrimitiveIndices &ids = indices.AddBack();
                 if (Advance(&tokenizer, "m "))
                 {
@@ -942,6 +947,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 else
                 {
                     ids = PrimitiveIndices(LightHandle(), MaterialHandle());
+                    noMaterialCount++;
                 }
             };
 
@@ -1000,11 +1006,13 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
             scene->primIndices = PushArrayNoZero(arena, PrimitiveIndices, indices.totalCount);
             shapes.Flatten((Mesh *)scene->primitives);
             indices.Flatten(scene->primIndices);
+
+            threadLocalStatistics[threadIndex].misc4 += noMaterialCount;
         }
         else if (Advance(&tokenizer, "MATERIALS_START "))
         {
             hasMaterials    = true;
-            materialHashMap = CreateMaterials(arena, temp.arena, &tokenizer, directory);
+            materialHashMap = CreateMaterials(arena, tempArena, &tokenizer, directory);
             state->map      = materialHashMap;
         }
         else
@@ -1035,7 +1043,6 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
 
     if (type == GeometryType::CatmullClark)
     {
-        Arena *tempArena = tempArenas[threadIndex];
         scene->tessellationParams =
             PushArray(tempArena, TessellationParams, scene->numPrimitives);
 
@@ -1046,7 +1053,6 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     scene->geometryType = type;
 
     ScratchEnd(temp);
-    // if (c) c->count.fetch_sub(1, std::memory_order_acq_rel);
 }
 
 void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
@@ -1204,6 +1210,8 @@ void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string file
     Scheduler::Counter counter = {};
     LoadRTScene(arenas, tempArenas, &state, &scene->scene, directory, filename, &counter, t,
                 true);
+
+    scheduler.Wait(&counter);
 
     AffineSpace space = AffineSpace::Identity();
 

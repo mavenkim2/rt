@@ -1158,10 +1158,6 @@ struct CatClarkPatchIntersector
             Assert(geomID < scene->numPrimitives);
             OpenSubdivMesh *mesh = meshes + geomID;
 
-            GetDebug()->mesh   = mesh;
-            GetDebug()->geomID = geomID;
-            GetDebug()->scene  = scene;
-
             int faceID = -1;
 
             Vec2f uvs[3];
@@ -1281,8 +1277,6 @@ struct CatClarkPatchIntersector
             si.materialIDs                  = indices->materialID.data;
             si.lightIndices                 = 0;
             si.faceIndices                  = faceID;
-
-            GetDebug()->index = indices->materialID.data;
 
             Vec3f dp02 = p[0] - p[2];
             Vec3f dp12 = p[1] - p[2];

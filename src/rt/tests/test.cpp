@@ -216,10 +216,10 @@ void TestRender(Arena *arena, Options *options = 0)
     // Vec3f look(152.465305, 30.939795, -72.727517);
     // Vec3f up(0.073871, 0.996865, -0.028356);
 
-    f32 lensRadius    = .003125;
+    f32 lensRadius = .003125;
     // f32 focalDistance = 712.391212;
     // f32 fov           = 54.43222;
-    f32 aspectRatio   = 2.386946;
+    f32 aspectRatio = 2.386946;
 
     // base cam
     Vec3f pCamera(-1139.0159, 23.286734, 1479.7947);
@@ -279,6 +279,7 @@ void TestRender(Arena *arena, Options *options = 0)
     u64 totalBVHMemory           = 0;
     u64 totalShapeMemory         = 0;
     u64 totalNumSpatialSplits    = 0;
+    u64 totalNumNoMaterials      = 0;
     for (u32 i = 0; i < numProcessors; i++)
     {
         totalMiscTime += threadLocalStatistics[i].miscF;
@@ -287,6 +288,7 @@ void TestRender(Arena *arena, Options *options = 0)
         totalBVHMemory += threadMemoryStatistics[i].totalBVHMemory;
         totalShapeMemory += threadMemoryStatistics[i].totalShapeMemory;
         totalNumSpatialSplits += threadLocalStatistics[i].misc3;
+        totalNumNoMaterials += threadLocalStatistics[i].misc4;
         printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
     }
     printf("total misc time: %fms \n", totalMiscTime);
@@ -295,6 +297,7 @@ void TestRender(Arena *arena, Options *options = 0)
     printf("total bvh bytes: %llu \n", totalBVHMemory);
     printf("total shape bytes: %llu \n", totalShapeMemory);
     printf("total # spatial splits: %llu\n", totalNumSpatialSplits);
+    printf("total # no materials: %llu\n", totalNumNoMaterials);
 
     RenderParams2 params;
     params.cameraFromRaster = cameraFromRaster;
@@ -327,8 +330,8 @@ void TestRender(Arena *arena, Options *options = 0)
     }
 
     counter = OS_StartCounter();
-    Render(arena, params);
-    // RenderSIMD(arena, params);
+    // Render(arena, params);
+    RenderSIMD(arena, params);
     time = OS_GetMilliseconds(counter);
     printf("total render time: %fms\n", time);
 }

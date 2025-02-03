@@ -601,6 +601,7 @@ struct SceneDebug
     OpenSubdivMesh *mesh;
 
     PtexTexture *texture;
+    void *queue;
 
     // CatmullClarkPatch *patch;
     // u32 num;

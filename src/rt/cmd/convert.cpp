@@ -697,6 +697,23 @@ bool LoadMoanaOBJ(Arena *arena, PBRTFileInfo *state, string objFile)
     return false;
 }
 
+bool CheckMoanaOBJ(Arena *arena, PBRTFileInfo *state, string directory, string subDirectory,
+                   string filename)
+{
+    TempArena temp = ScratchStart(0, 0);
+    string objFile =
+        PushStr8F(temp.arena, "%Sobj/%S/%S.obj", directory, subDirectory, filename);
+    bool result = LoadMoanaOBJ(arena, state, objFile);
+    if (!result)
+    {
+        objFile = PushStr8F(temp.arena, "%Sobj/%S/archives/%S.obj", directory, subDirectory,
+                            filename);
+        result  = LoadMoanaOBJ(arena, state, objFile);
+    }
+    ScratchEnd(temp);
+    return result;
+}
+
 string CheckMoanaVariant(Arena *arena, string directory, string filename)
 {
     TempArena temp      = ScratchStart(0, 0);
@@ -787,6 +804,8 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
 
     // MOANA ONLY. this is kind of a hack to remap the geometry pbrt files to
     // obj files...
+    // TODO: fix hibiscusyoung mapping.
+    bool isMoana = false;
     {
         string baseFilename = PathSkipLastSlash(currentFilename);
         if (!(baseFilename == "osOcean_geometry.pbrt"))
@@ -798,33 +817,28 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 // First check /archives
                 string objFromPbrt  = Substr8(baseFilename, 0, offset - 1);
                 string subDirectory = PathBaseDirectory(currentFilename);
-                string objFile = PushStr8F(temp.arena, "%Sobj/%S/archives/%S.obj", directory,
-                                           subDirectory, objFromPbrt);
-                int total, num;
-                if (!LoadMoanaOBJ(tempArena, state, objFile))
-                {
-                    objFile = PushStr8F(temp.arena, "%Sobj/%S/%S.obj", directory, subDirectory,
-                                        objFromPbrt);
-                    if (!LoadMoanaOBJ(tempArena, state, objFile))
-                    {
-                        // Handle variant
-                        u64 undOffset =
-                            FindSubstring(baseFilename, "_", 0, MatchFlag_CaseInsensitive);
-                        u64 slashOffset =
-                            FindSubstring(currentFilename, "/", 0, MatchFlag_CaseInsensitive);
 
-                        string rootGroup = Substr8(currentFilename, 0, slashOffset);
-                        string rawGroup  = Substr8(baseFilename, 0, undOffset);
-                        if (!(rootGroup == rawGroup))
+                isMoana =
+                    CheckMoanaOBJ(tempArena, state, directory, subDirectory, objFromPbrt);
+                if (!isMoana)
+                {
+                    // Handle variant
+                    u64 undOffset =
+                        FindSubstring(baseFilename, "_", 0, MatchFlag_CaseInsensitive);
+                    u64 slashOffset =
+                        FindSubstring(currentFilename, "/", 0, MatchFlag_CaseInsensitive);
+
+                    string rootGroup = Substr8(currentFilename, 0, slashOffset);
+                    string rawGroup  = Substr8(baseFilename, 0, undOffset);
+                    if (!(rootGroup == rawGroup))
+                    {
+                        isMoana =
+                            CheckMoanaOBJ(tempArena, state, directory, rawGroup, objFromPbrt);
+                        if (!isMoana && rootGroup == "isHibiscusYoung")
                         {
-                            objFile = PushStr8F(temp.arena, "%Sobj/%S/%S.obj", directory,
-                                                rawGroup, objFromPbrt);
-                            if (!LoadMoanaOBJ(tempArena, state, objFile))
-                            {
-                                objFile = PushStr8F(temp.arena, "%Sobj/%S/archives/%S.obj",
-                                                    directory, rawGroup, objFromPbrt);
-                                LoadMoanaOBJ(tempArena, state, objFile);
-                            }
+                            rawGroup = "isHibiscus";
+                            isMoana  = CheckMoanaOBJ(tempArena, state, directory, rawGroup,
+                                                     objFromPbrt);
                         }
                     }
                 }
@@ -1210,8 +1224,16 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 Assert(result);
 
                 PBRTFileInfo *newState = PushStruct(threadArena, PBRTFileInfo);
-                string objectFileName  = PushStr8F(threadArena, "objects/%S_obj.rtscene",
-                                                   ReplaceColons(tempArena, objectName));
+
+                if (isMoana)
+                {
+                    newState->objMeshes = std::move(state->objMeshes);
+                    state->objMeshes.clear();
+                    int stop = 5;
+                }
+
+                string objectFileName = PushStr8F(threadArena, "objects/%S_obj.rtscene",
+                                                  ReplaceColons(tempArena, objectName));
 
                 newState->Init(objectFileName);
 
