@@ -1324,7 +1324,8 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, ScenePrimitives *scene
             // Individually split each edge into smaller triangles
             for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
             {
-                EdgeInfo &currentEdge = patch->edgeInfo[edgeIndex];
+                // EdgeInfo &currentEdge = patch->edgeInfo[edgeIndex];
+                EdgeInfo currentEdge = patch->edgeInfos.GetEdgeInfo(edgeIndex);
 
                 auto itr = patch->CreateIterator(edgeIndex);
 

@@ -614,8 +614,15 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                     int edgeRate                = edgeRates[edgeIndex];
                     const EdgeInfo &currentEdge = edgeInfos[faceInfo.edgeInfoId[edgeIndex]];
 
-                    patch.edgeInfo.Push(faceInfo.reversed[edgeIndex] ? currentEdge.Opposite()
-                                                                     : currentEdge);
+                    if (faceInfo.reversed[edgeIndex])
+                    {
+                        int stop = 5;
+                    }
+                    patch.edgeInfos.indexStart[edgeIndex] = currentEdge.indexStart;
+                    patch.edgeInfos.edgeFactors[edgeIndex] =
+                        currentEdge.GetStoredEdgeFactor(faceInfo.reversed[edgeIndex]);
+                    patch.edgeInfos.ids[edgeIndex] =
+                        faceInfo.reversed[edgeIndex] ? currentEdge.id1 : currentEdge.id0;
                 }
                 patches.push_back(patch);
             }

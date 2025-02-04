@@ -7,7 +7,6 @@ namespace rt
 struct UntessellatedPatch
 {
     int faceID;
-    // int stitchingStart;
 };
 
 struct EdgeInfo
@@ -21,20 +20,41 @@ struct EdgeInfo
     int GetFirst(bool reversed) const { return reversed ? id1 : id0; }
     int GetLast(bool reversed) const { return reversed ? id0 : id1; }
 
-    EdgeInfo Opposite() const
+    int GetStoredEdgeFactor(bool reversed) const
     {
-        Assert(edgeFactor < 0xffffffff);
-        return EdgeInfo{indexStart, edgeFactor | reverseBit, id0, id1};
+        return reversed ? (edgeFactor | reverseBit) : edgeFactor;
     }
+    static int GetEdgeFactor(u32 edgeFactor) { return edgeFactor & ~reverseBit; }
+    static int GetReversed(u32 edgeFactor) { return (edgeFactor & reverseBit) >> 31; }
 
-    int GetEdgeFactor() const { return edgeFactor & ~reverseBit; }
-    int GetReversed() const { return (edgeFactor & reverseBit) >> 31; }
+    int GetEdgeFactor() const { return GetEdgeFactor(edgeFactor); }
+    int GetReversed() const { return GetReversed(edgeFactor); }
 
     int GetVertexID(u32 edgeStep) const
     {
         u32 ef = GetEdgeFactor();
         Assert(edgeStep >= 0 && edgeStep <= ef);
         return edgeStep == 0 ? id0 : (edgeStep == ef ? id1 : indexStart + edgeStep - 1);
+    }
+};
+
+struct EdgeInfos
+{
+    int indexStart[4];
+    u32 edgeFactors[4];
+    int ids[4];
+
+    int GetEdgeFactor(int edge) const
+    {
+        Assert(edge >= 0 && edge < 4);
+        return EdgeInfo::GetEdgeFactor(edgeFactors[edge]);
+    }
+    EdgeInfo GetEdgeInfo(int edge) const
+    {
+        Assert(edge >= 0 && edge < 4);
+        int increment = EdgeInfo::GetReversed(edgeFactors[edge]);
+        return EdgeInfo{indexStart[edge], edgeFactors[edge], ids[(edge + increment) & 3],
+                        ids[(edge + !increment) & 3]};
     }
 };
 
@@ -49,7 +69,8 @@ struct OpenSubdivPatch
 
     int faceID;
     int gridIndexStart;
-    FixedArray<EdgeInfo, 4> edgeInfo;
+    // FixedArray<EdgeInfo, 4> edgeInfo;
+    EdgeInfos edgeInfos;
 
     OpenSubdivPatch() {}
 
@@ -57,12 +78,12 @@ struct OpenSubdivPatch
 
     __forceinline int GetMaxEdgeFactorU() const
     {
-        return Max(edgeInfo[0].GetEdgeFactor(), edgeInfo[2].GetEdgeFactor());
+        return Max(edgeInfos.GetEdgeFactor(0), edgeInfos.GetEdgeFactor(2));
     }
 
     __forceinline int GetMaxEdgeFactorV() const
     {
-        return Max(edgeInfo[1].GetEdgeFactor(), edgeInfo[3].GetEdgeFactor());
+        return Max(edgeInfos.GetEdgeFactor(1), edgeInfos.GetEdgeFactor(3));
     }
 
     __forceinline int GetGridIndex(int u, int v) const
@@ -132,7 +153,7 @@ struct PatchItr
     static const FixedArray<Vec2i, 4> uvDiffTable;
 
     const OpenSubdivPatch *patch;
-    const EdgeInfo *edgeInfo;
+    EdgeInfo edgeInfo;
     int edge;
     FixedArray<int, 3> indices;
 
@@ -155,9 +176,9 @@ struct PatchItr
     PatchItr() {}
     PatchItr(const OpenSubdivPatch *patch, int edge) : patch(patch), edge(edge)
     {
-        edgeInfo       = &patch->edgeInfo[edge];
-        int edgeFactor = edgeInfo->GetEdgeFactor();
-        int reversed   = edgeInfo->GetReversed();
+        edgeInfo       = patch->edgeInfos.GetEdgeInfo(edge);
+        int edgeFactor = edgeInfo.GetEdgeFactor();
+        int reversed   = edgeInfo.GetReversed();
 
         Assert(reversed == 0 || reversed == 1);
 
@@ -179,7 +200,7 @@ struct PatchItr
 
     void StepForward(int stepIn)
     {
-        int edgeFactor = edgeInfo->GetEdgeFactor();
+        int edgeFactor = edgeInfo.GetEdgeFactor();
         for (int i = 0; i < stepIn; i++)
         {
             if (q >= 0 && uvStart != uvEnd)
@@ -204,21 +225,21 @@ struct PatchItr
         if (q >= 0 && uvStart != uvEnd)
         {
             int id0 = patch->GetGridIndex(uvStart[0], uvStart[1]);
-            int id1 = edgeInfo->GetVertexID(edgeStep);
+            int id1 = edgeInfo.GetVertexID(edgeStep);
             uvStart += uvDiffTable[edge];
             int id2 = patch->GetGridIndex(uvStart[0], uvStart[1]);
 
             indices.Push(id0);
             indices.Push(id1);
             indices.Push(id2);
-            q -= 2 * edgeInfo->GetEdgeFactor();
+            q -= 2 * edgeInfo.GetEdgeFactor();
         }
         else
         {
-            int id0 = edgeInfo->GetVertexID(edgeStep);
+            int id0 = edgeInfo.GetVertexID(edgeStep);
             edgeStep += edgeDiff;
-            Assert(edgeStep <= edgeInfo->GetEdgeFactor() && edgeStep >= 0);
-            int id1 = edgeInfo->GetVertexID(edgeStep);
+            Assert(edgeStep <= edgeInfo.GetEdgeFactor() && edgeStep >= 0);
+            int id1 = edgeInfo.GetVertexID(edgeStep);
             int id2 = patch->GetGridIndex(uvStart[0], uvStart[1]);
 
             indices.Push(id0);
@@ -241,7 +262,7 @@ struct PatchItr
 
     void GetUV(int id, Vec2f uv[3])
     {
-        int edgeFactor = patch->edgeInfo[edge].GetEdgeFactor();
+        int edgeFactor = patch->edgeInfos.GetEdgeFactor(edge);
         for (int i = 0; i < id; i++)
         {
             ErrorExit(IsNotFinished(), "edge %u factor %u maxu %u maxv %u", edge, edgeFactor,
