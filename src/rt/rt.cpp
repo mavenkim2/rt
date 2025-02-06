@@ -5,7 +5,7 @@
 #include "memory.h"
 #include "string.h"
 #include "containers.h"
-#include "win32.h"
+// #include "win32.h"
 #include "jobsystem.h"
 #include "debug.h"
 #include "thread_context.h"
@@ -37,7 +37,7 @@
 #include "simd_integrate.h"
 
 #include "base.cpp"
-#include "win32.cpp"
+// #include "win32.cpp"
 #include "jobsystem.cpp"
 #include "string.cpp"
 #include "debug.cpp"
@@ -1100,6 +1100,18 @@ int main(int argc, char *argv[])
     // EdgeStitchTest();
 
     // DualTest();
+
+    // string result = OS_ReadFile(
+    //     arena, "../data/island/textures/isPandanusA/Displacement/trunkb_temp_geo.ptx",
+    //     10899948);
+    string ptexFilename =
+        "../data/island/textures/isPandanusA/Displacement/trunkb_temp_geo.ptx";
+    Ptex::String error;
+    Ptex::PtexTexture *texture = cache->get((char *)ptexFilename.str, error);
+    Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
+    Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
+    f32 out[3]               = {};
+    filter->eval(out, 0, 3, 14, 0.f, 0.f, .5f, 0.f, 0.f, .5f);
 
     const u32 count = 3000000;
 

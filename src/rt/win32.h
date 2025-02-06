@@ -1,8 +1,13 @@
+#ifndef RT_WIN32_H
+#define RT_WIN32_H
+
+#include <windows.h>
+#include "types.h"
+#include "memory.h"
+#include "string.h"
+
 namespace rt
 {
-struct ThreadContext;
-#define THREAD_ENTRY_POINT(name) void name(void *parameter, ThreadContext *ctx)
-typedef THREAD_ENTRY_POINT(OS_ThreadFunction);
 
 struct OS_Handle
 {
@@ -55,12 +60,17 @@ b8 OS_Commit(void *ptr, u64 size);
 void OS_Release(void *memory);
 void *OS_Alloc(u64 size, void *ptr = 0);
 u64 OS_PageSize();
+size_t OS_GetLargePageSize();
 void OS_CreateWorkThread(OS_ThreadFunction func, void *parameter);
 DWORD Win32ThreadProc(void *parameter);
 Win32Thread *Win32GetFreeThread();
 inline void Win32FreeThread(Win32Thread *thread);
 void OS_SetThreadName(string name);
+OS_Handle OS_CreateFile(string filename);
+bool OS_CloseFile(OS_Handle handle);
 u64 OS_GetFileSize(string filename);
+u64 OS_GetFileSize2(string filename);
+bool OS_ReadFile(OS_Handle handle, void *buffer, size_t size, u64 offset = 0);
 string OS_ReadFile(Arena *arena, string filename, u64 offset = 0);
 b32 OS_WriteFile(string filename, void *fileMemory, u64 fileSize);
 b32 OS_WriteFile(string filename, string buffer);
@@ -68,7 +78,7 @@ bool OS_DeleteFile(string filename);
 string OS_MapFileRead(string filename);
 u8 *OS_MapFileWrite(string filename, u64 size);
 u8 *OS_MapFileAppend(string filename, u64 size);
-void OS_UnmapFile(void *ptr);
+bool OS_UnmapFile(void *ptr);
 bool OS_DirectoryExists(string filename);
 bool OS_FileExists(string filename);
 bool OS_CreateDirectory(string filename);
@@ -82,3 +92,5 @@ void OS_ThreadJoin(OS_Handle handle);
 b32 OS_SignalWait(OS_Handle input);
 void OS_Init();
 } // namespace rt
+
+#endif

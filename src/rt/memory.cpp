@@ -1,3 +1,7 @@
+#include "base.h"
+#include "memory.h"
+#include "win32.h"
+
 namespace rt
 {
 Arena *ArenaAlloc(u64 resSize, u64 cmtSize, u64 align, b32 largePages)

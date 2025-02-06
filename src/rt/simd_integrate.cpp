@@ -55,9 +55,7 @@ void SharedShadeQueue<T>::Push(ShadingThreadState *state, T *entries, int numEnt
         MemoryCopy(newEntries + offset, entries, sizeof(T) * numEntries);
 
         Assert(material);
-        material->Start();
-        handler(state, newEntries, total, material);
-        material->Stop();
+        handler(state, newEntries, total, material, true);
     }
     else
     {
@@ -86,8 +84,7 @@ bool SharedShadeQueue<T>::Flush(ShadingThreadState *state)
     count = 0;
     EndMutex(&mutex);
 
-    material->Start();
-    handler(state, newEntries, total, material);
+    handler(state, newEntries, total, material, false);
 
     ScratchEnd(temp);
     return false;
@@ -514,7 +511,7 @@ QUEUE_HANDLER(RayIntersectionHandler)
 
 template <typename MaterialType>
 void ShadingQueueHandler(struct ShadingThreadState *state, ShadingHandle *values, u32 count,
-                         Material *m)
+                         Material *m, bool stop)
 {
     ScratchArena temp;
     ShadingGlobals *globals = GetShadingGlobals();
@@ -526,7 +523,7 @@ void ShadingQueueHandler(struct ShadingThreadState *state, ShadingHandle *values
 
     MaterialType *material = (MaterialType *)m;
 
-    void *materialData = 0;
+    material->Start(state);
 
     RayStateHandle *rayStateHandles = PushArrayNoZero(temp.temp.arena, RayStateHandle, count);
     u32 rayStateHandleCount         = 0;
@@ -664,6 +661,10 @@ void ShadingQueueHandler(struct ShadingThreadState *state, ShadingHandle *values
             }
         }
         rayStateHandles[rayStateHandleCount++] = handle.rayStateHandle;
+    }
+    if (stop)
+    {
+        material->Stop();
     }
 
     state->rayQueue.Push(state, rayStateHandles, rayStateHandleCount);

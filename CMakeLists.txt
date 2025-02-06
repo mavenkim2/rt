@@ -9,6 +9,23 @@ if (MSVC)
         /wd4018 /wd4100 /wd4101 /wd4127 /wd4146 /wd4232 /wd4242 /wd4244 /wd4245 /wd4267 /wd4305 /wd4309 
         /wd4310 /wd4334 /wd4456 /wd4464 /wd4668 /wd4701 /wd4703 /wd4711 /wd4756 /wd4820 /wd5045 /wd5250)
 endif ()
+
+# Windows specific
+if (CMAKE_SYSTEM_NAME STREQUAL Windows)
+    if (CMAKE_BUILD_TYPE MATCHES "Debug")
+        set (CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDebug)
+    else()
+        set (CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
+    endif()
+    list (APPEND RT_DEFINITIONS "WIN32_LEAN_AND_MEAN")
+    list (APPEND deps ws2_32)
+else()
+    message (FATAL_ERROR "Sorry, only windows supported for now.")
+endif()
+
+set (MEM_INCLUDE_DIR
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt)
+
 add_subdirectory (${CMAKE_CURRENT_SOURCE_DIR}/src/third_party)
 
 set (FlagsSSE2 "-D __SSE__ -D __SSE2__")
@@ -141,38 +158,49 @@ endfunction ()
 
 # check_ext ("OpenVDB" "openvdb/nanovdb" 3ce7f9ca2533e9186f984c4d08455d5abb4f0b45)
 
-# target_link_libraries(Ptex_static PRIVATE ${ZLIB_LIBRARIES})
 set(deps STATIC 
     ${ZLIB_LIBRARY}
     Ptex_static)
 
-# target_compile_definitions(Ptex_static PRIVATE "PTEX_STATIC")
-add_library(rt_lib INTERFACE)# STATIC 
-    # src/rt/rt.cpp)
+set (MEM_SOURCE_FILES 
+    src/rt/base.cpp
+    src/rt/win32.cpp
+    src/rt/thread_context.cpp
+    src/rt/memory.cpp
+    src/rt/string.cpp)
 
-# target_link_libraries(deps PRIVATE Ptex_static)
+set (MEM_HEADER_FILES
+    src/rt/types.h
+    src/rt/base.h
+    src/rt/win32.h
+    src/rt/string.h
+    src/rt/memory.h
+    src/rt/thread_context.h)
 
-# add_library(rt_lib STATIC 
-#     src/rt/rt.cpp) 
-#     # ${RT_HEADER_FILES}
-#     # ${RT_SOURCE_FILES})
+add_library(thread_context STATIC
+    src/rt/thread_context.cpp)
 
+target_compile_definitions(thread_context PRIVATE ${RT_DEFINITIONS})
+target_include_directories(thread_context PRIVATE ${MEM_INCLUDE_DIR})
+
+install (TARGETS thread_context EXPORT THREAD_CONTEXT DESTINATION lib)
+install (EXPORT THREAD_CONTEXT DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/thread_context")
+
+# add_library(rt_lib INTERFACE)# STATIC 
+
+# convert
+# add_executable(convert src/rt/cmd/convert.cpp)
+# target_compile_definitions
+
+# rgb2spec
+
+# Main executable
+add_executable(rt_exe ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/rt.cpp)
 list (APPEND RT_DEFINITIONS "PTEX_STATIC")
-target_compile_definitions(rt_lib INTERFACE ${RT_DEFINITIONS})
-
-message(STATUS "${ZLIB_INCLUDE_DIRS}")
-message(STATUS "${PTEX_INCLUDE}")
-
-target_include_directories(rt_lib INTERFACE 
+target_compile_definitions(rt_exe PRIVATE ${RT_DEFINITIONS})
+target_include_directories(rt_exe PRIVATE 
     ${ZLIB_INCLUDE_DIR}
-    ${PTEX_INCLUDE})
-target_compile_options(rt_lib INTERFACE ${RT_CXX_FLAGS})
-target_link_libraries(rt_lib INTERFACE ${deps})
-# target_link_libraries(rt PRIVATE rt_lib)
-#     
-# target_compile_definitions(rt PRIVATE ${RT_DEFINITIONS})
-# target_compile_options(rt PRIVATE ${RT_CXX_FLAGS})
-install (TARGETS 
-    rt_lib 
-    DESTINATION 
-    lib)
+    ${PTEX_INCLUDE}
+)
+target_compile_options(rt_exe PRIVATE ${RT_CXX_FLAGS})
+target_link_libraries(rt_exe PRIVATE ${deps} ${thread_context})

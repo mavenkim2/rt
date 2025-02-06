@@ -51,7 +51,9 @@ void InitializePtex()
 {
     u32 maxFiles  = 100;
     size_t maxMem = gigabytes(4);
-    cache         = Ptex::PtexCache::create(maxFiles, maxMem, true, 0, &errorHandler);
+    // cache         = Ptex::PtexCache::create(maxFiles, maxMem, true, 0, &errorHandler);
+    cache = Ptex::PtexCache::create(maxFiles, maxMem, true, &ptexInputHandler, &errorHandler);
+    // cache = Ptex::PtexCache::create(maxFiles, maxMem, true, &handler2, &errorHandler);
 }
 
 typedef u32 PathFlags;

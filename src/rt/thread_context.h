@@ -1,11 +1,18 @@
 #ifndef THREAD_CONTEXT_H
 #define THREAD_CONTEXT_H
+
+#include "types.h"
+#include "string.h"
+#include "memory.h"
+#include "platform.h"
+
 namespace rt
 {
 
 struct ThreadContext
 {
-    Arena *arenas[2];
+    static const int numScratchArenas = 2;
+    Arena *arenas[numScratchArenas];
     u8 threadName[64];
     u64 threadNameSize;
 

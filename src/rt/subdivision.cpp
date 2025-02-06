@@ -353,8 +353,12 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                             f32 midPointW =
                                 Transform(cameraFromRender, Vec4f(midPoint, 1.f)).z;
                             edgeFactor = int(edgesPerScreenHeight * radius *
-                                             Abs(NDCFromCamera[1][1] / midPointW)) -
+                                             Abs(NDCFromCamera[1][1] / midPointW)) +
                                          1;
+
+                            threadLocalStatistics[GetThreadIndex()].misc4 =
+                                Max((u64)edgeFactor,
+                                    threadLocalStatistics[GetThreadIndex()].misc4);
 
                             edgeFactor = Clamp(edgeFactor, 1, 64);
 
@@ -614,10 +618,6 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                     int edgeRate                = edgeRates[edgeIndex];
                     const EdgeInfo &currentEdge = edgeInfos[faceInfo.edgeInfoId[edgeIndex]];
 
-                    if (faceInfo.reversed[edgeIndex])
-                    {
-                        int stop = 5;
-                    }
                     patch.edgeInfos.indexStart[edgeIndex] = currentEdge.indexStart;
                     patch.edgeInfos.edgeFactors[edgeIndex] =
                         currentEdge.GetStoredEdgeFactor(faceInfo.reversed[edgeIndex]);

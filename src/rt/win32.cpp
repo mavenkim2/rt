@@ -1,6 +1,9 @@
 #ifdef _WIN32
 /**/
 #include <windows.h>
+#include "base.h"
+#include "thread_context.h"
+#include "win32.h"
 namespace rt
 {
 
@@ -187,15 +190,54 @@ OS_Handle OS_CreateFile(string filename)
     return outHandle;
 }
 
+bool OS_CloseFile(OS_Handle handle) { return CloseHandle((HANDLE)handle.handle); }
+
 u64 OS_GetFileSize(string filename)
 {
     HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0,
                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     ErrorExit(file != INVALID_HANDLE_VALUE, "Could not open file: %S\n", filename);
-    u64 size;
-    GetFileSizeEx(file, (LARGE_INTEGER *)&size);
+
+    LARGE_INTEGER result;
+    GetFileSizeEx(file, (LARGE_INTEGER *)&result);
     CloseHandle(file);
+    u64 size = (u64)result.QuadPart;
     return size;
+}
+
+u64 OS_GetFileSize2(string filename)
+{
+    HANDLE file = CreateFileA((char *)filename.str, GENERIC_READ, FILE_SHARE_READ, 0,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    ErrorExit(file != INVALID_HANDLE_VALUE, "Could not open file: %S\n", filename);
+
+    DWORD high;
+    DWORD low  = GetCompressedFileSizeA((char *)filename.str, &high);
+    u64 result = ((u64)high << 32) | (u64)low;
+    return result;
+}
+
+bool OS_ReadFile(OS_Handle handle, void *buffer, size_t size, u64 offset)
+{
+    HANDLE file = (HANDLE)handle.handle;
+
+    u64 totalReadSize = 0;
+    for (; totalReadSize < size;)
+    {
+        OVERLAPPED overlapped = {};
+        overlapped.Offset     = (u32)((offset >> 0) & 0xffffffff);
+        overlapped.OffsetHigh = (u32)((offset >> 32) & 0xffffffff);
+
+        u64 readAmount = size - totalReadSize;
+        u32 sizeToRead = (readAmount > 0xffffffff) ? 0xffffffff : (u32)readAmount;
+        DWORD readSize = 0;
+        ReadFile(file, (u8 *)buffer + totalReadSize, sizeToRead, &readSize, &overlapped);
+        offset += readSize;
+        totalReadSize += readSize;
+        if (readSize != sizeToRead) return false;
+    }
+    Assert(totalReadSize == size);
+    return true;
 }
 
 string OS_ReadFile(Arena *arena, string filename, u64 offset)
@@ -210,21 +252,18 @@ string OS_ReadFile(Arena *arena, string filename, u64 offset)
     result.str  = PushArrayTagged(arena, u8, size, MemoryType_File);
     result.size = size;
 
-    if (offset)
-    {
-        LARGE_INTEGER dist;
-        dist.QuadPart = offset;
-        BOOL flag     = SetFilePointerEx(file, dist, 0, FILE_BEGIN);
-        ErrorExit(flag, "Error while offsetting file pointer for file %S\n", filename);
-    }
-
     u64 totalReadSize = 0;
     for (; totalReadSize < size;)
     {
+        OVERLAPPED overlapped = {};
+        overlapped.Offset     = (u32)((offset >> 0) & 0xffffffff);
+        overlapped.OffsetHigh = (u32)((offset >> 32) & 0xffffffff);
+
         u64 readAmount = size - totalReadSize;
         u32 sizeToRead = (readAmount > 0xffffffff) ? 0xffffffff : (u32)readAmount;
         DWORD readSize = 0;
-        if (!ReadFile(file, (u8 *)result.str + totalReadSize, sizeToRead, &readSize, 0)) break;
+        ReadFile(file, (u8 *)result.str + totalReadSize, sizeToRead, &readSize, &overlapped);
+        offset += readSize;
         totalReadSize += readSize;
         if (readSize != sizeToRead) break;
     }
@@ -242,7 +281,8 @@ b32 OS_WriteFile(string filename, void *fileMemory, u64 fileSize)
     {
         for (; totalWritten < fileSize;)
         {
-            DWORD bytesToWrite = (DWORD)Min(fileSize - totalWritten, 0xffffffffull);
+            u64 writeAmount    = fileSize - totalWritten;
+            DWORD bytesToWrite = (writeAmount > 0xffffffff) ? 0xffffffff : (DWORD)writeAmount;
             DWORD bytesWritten;
             if (!WriteFile(fileHandle, (u8 *)fileMemory, bytesToWrite, &bytesWritten, NULL))
                 break;
@@ -279,7 +319,7 @@ string OS_MapFileRead(string filename)
     return result;
 }
 
-void OS_UnmapFile(void *ptr) { UnmapViewOfFile(ptr); }
+bool OS_UnmapFile(void *ptr) { return UnmapViewOfFile(ptr); }
 
 u8 *OS_MapFileWrite(string filename, u64 size)
 {

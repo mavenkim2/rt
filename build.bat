@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 
 pushd %~dp0
 set SSE2=-D __SSE__ -D __SSE2__
@@ -35,9 +36,12 @@ if not exist .\build\src\third_party\zlib\Release\zlibstatic.lib (
 
 set Dependencies=-I ..\src\third_party\openvdb\nanovdb -I ..\src\third_party\ptex\src\ptex -I ..\src\third_party\zlib ^
 -I .\src\third_party\zlib -I "..\src\third_party\OpenSubdiv"
-set LibraryPathPtex=.\src\third_party\ptex\src\ptex\Release
-set LibraryPathZlib=.\src\third_party\zlib\Release
-set LibraryPathOsd=.\src\third_party\OpenSubdiv\opensubdiv\Release
+set "LibraryPathPtex=.\src\third_party\ptex\src\ptex\"
+set "LibraryPathZlib=.\src\third_party\zlib\"
+set "LibraryPathOsd=.\src\third_party\OpenSubdiv\opensubdiv\"
+
+REM set "libPaths=%LibraryPathPtex% %LibraryPathZlib% %LibraryPathOsd%"
+set "libPaths=LibraryPathPtex LibraryPathZlib LibraryPathOsd"
 set LibraryNamePtex=Ptex.lib 
 set LibraryNameZlib=zlibstatic.lib
 set LibraryNameOsd=osdCPU.lib
@@ -103,6 +107,12 @@ exit /b
 :AddDebugFlags
 echo Compiling Debug
 set Definitions=%Definitions% -D DEBUG -D TRACK_MEMORY 
+for %%p in (%libPaths%) do ( 
+    set "fullPath=!%%p!"
+    set "fullPath=!fullPath!Debug"
+    set "%%p=!fullPath!"
+)
+
 if "%1" == "cl" (
     set Definitions=%Definitions% -g
 ) else (
@@ -112,6 +122,12 @@ exit /b
 
 :AddReleaseFlags 
 echo Compiling Release
+for %%p in (%libPaths%) do ( 
+    set "fullPath=!%%p!"
+    set "fullPath=!fullPath!Release"
+    set "%%p=!fullPath!"
+)
+
 if "%1" == "cl" (
     set Definitions=%Definitions% -O3
 ) else (
@@ -122,6 +138,12 @@ exit /b
 :AddRelDebugFlags 
 echo Compiling RelDebug (currently only works for clang)
 set Definitions=%Definitions% -D DEBUG -D TRACK_MEMORY
+for %%p in (%libPaths%) do ( 
+    set "fullPath=!%%p!"
+    set "fullPath=!fullPath!RelWithDebInfo"
+    set "%%p=!fullPath!"
+)
+
 if "%1" == "cl" (
     set Definitions=%Definitions% -O3 -g
 ) else (

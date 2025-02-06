@@ -60,6 +60,142 @@ struct : public PtexErrorHandler
     void reportError(const char *error) override { ErrorExit(0, "%s", error); }
 } errorHandler;
 
+struct PtexHandle
+{
+    u64 offset;
+    OS_Handle osHandle;
+};
+
+struct : public PtexInputHandler
+{
+
+public:
+    /** Open a file in read mode.
+        Returns null if there was an error.
+        If an error occurs, the error string is available via lastError().
+    */
+    virtual Handle open(const char *path) override
+    {
+        // TODO: free list pool this
+        PtexHandle *handle = (PtexHandle *)malloc(sizeof(PtexHandle));
+        handle->offset     = 0;
+        handle->osHandle   = OS_CreateFile(Str8C(path));
+        return handle;
+    }
+
+    /** Seek to an absolute byte position in the input stream. */
+    // virtual void seek(Handle handle, int64_t pos) override
+    // {
+    //     u8 **ptr = (u8 **)handle;
+    //     // Assert(pos < (int64_t)str.size);
+    //     *ptr = str.str + pos;
+    // }
+    virtual void seek(Handle handle, int64_t pos) override
+    {
+        PtexHandle *offset = (PtexHandle *)handle;
+        offset->offset     = pos;
+        // u8 **ptr = (u8 **)handle;
+        // Assert(pos < (int64_t)str.size);
+        // *ptr = str.str + pos;
+    }
+
+    /** Read a number of bytes from the file.
+        Returns the number of bytes successfully read.
+        If less than the requested number of bytes is read, the error string
+        is available via lastError().
+    */
+    virtual size_t read(void *buffer, size_t size, Handle handle) override
+    {
+        // u8 **ptr = (u8 **)handle;
+        // Assert(size_t(*ptr - str.str) + size < (size_t)str.size);
+        PtexHandle *ptexHandle = (PtexHandle *)handle;
+        u64 offset             = ptexHandle->offset;
+        Assert(ptexHandle->osHandle.handle);
+        size_t result = OS_ReadFile(ptexHandle->osHandle, buffer, size, offset) ? size : 0;
+        ptexHandle->offset += result;
+        return result;
+    }
+
+    /** Close a file.  Returns false if an error occurs, and the error
+        string is available via lastError().  */
+    virtual bool close(Handle handle) override
+    {
+        PtexHandle *h = (PtexHandle *)handle;
+        bool result   = OS_CloseFile(h->osHandle);
+        free((PtexHandle *)handle);
+        return result;
+    }
+    virtual const char *lastError() override { return 0; }
+
+    /** Return the last error message encountered. */
+} ptexInputHandler;
+
+// struct HelpMeGod : public PtexInputHandler
+// {
+//     char *buffer;
+//
+//     char *filename;
+//     size_t fileSize;
+//     size_t fileSize2;
+//
+// public:
+//     HelpMeGod() : buffer(0) {}
+//     virtual Handle open(const char *path)
+//     {
+//         FILE *fp;
+//         fopen_s(&fp, path, "rb");
+//         fileSize  = OS_GetFileSize(Str8C(path));
+//         fileSize2 = OS_GetFileSize2(Str8C(path));
+//
+//         u64 size = CalculateCStringLength(path);
+//         filename = (char *)malloc(size);
+//         MemoryCopy(filename, path, size);
+//
+//         if (fp)
+//         {
+//             buffer = new char[8192];
+//             setvbuf(fp, buffer, _IOFBF, 8192);
+//         }
+//         else buffer = 0;
+//         return (Handle)fp;
+//     }
+//     virtual void seek(Handle handle, int64_t pos)
+//     {
+//         // Assert(pos < (int64_t)fileSize);
+//         if (pos >= (int64_t)fileSize)
+//         {
+//             int stop = 5;
+//         }
+//         int result = fseeko((FILE *)handle, pos, SEEK_SET);
+//         if (result != 0)
+//         {
+//             int stop = 5;
+//         }
+//     }
+//     virtual size_t read(void *bufferArg, size_t size, Handle handle)
+//     {
+//         // Assert(size < fileSize);
+//         size_t result = fread(bufferArg, size, 1, (FILE *)handle) == 1 ? size : 0;
+//         if (result == 0)
+//         {
+//             int stop = 5;
+//         }
+//         return result;
+//     }
+//     virtual bool close(Handle handle)
+//     {
+//         bool ok = handle && (fclose((FILE *)handle) == 0);
+//         if (buffer)
+//         {
+//             delete[] buffer;
+//             buffer = 0;
+//         }
+//         return ok;
+//     }
+//     virtual const char *lastError() { return 0; } // strerror_s(errno); }
+//
+// } handler2;
+
 enum class ColorEncoding
 {
     None,

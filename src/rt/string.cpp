@@ -1,3 +1,6 @@
+#include "string.h"
+#include "base.h"
+
 namespace rt
 {
 string::string(const char *c) { *this = Str8C(c); }

@@ -580,7 +580,7 @@ struct Material
                           const Vec4f &filterWidths) = 0;
 
     // Used in SIMD mode, loads and caches data that may be used across multiple calls
-    virtual void Start() {}
+    virtual void Start(struct ShadingThreadState *state) {}
     virtual void Stop() {}
 };
 

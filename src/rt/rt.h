@@ -1,6 +1,7 @@
 #ifndef RT_H
 #define RT_H
 
+#include "types.h"
 #include "base.h"
 #include "macros.h"
 #include "template.h"

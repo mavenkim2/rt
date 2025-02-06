@@ -30,7 +30,7 @@ struct SceneLoadTable
 
 struct Texture
 {
-    virtual void Start() {}
+    virtual void Start(ShadingThreadState *state) {}
     virtual void Stop() {}
     virtual f32 EvaluateFloat(SurfaceInteraction &si, SampledWavelengths &lambda,
                               const Vec4f &filterWidths, void *data = 0)
@@ -62,45 +62,43 @@ struct PtexData
 struct PtexCache
 {
     Ptex::PtexTexture *texture;
+    // Scheduler::Counter counter = {};
     // Ptex::PtexFilter *filter;
 
     int count;
     Mutex mutex;
 
-    void Load(string filename) //, Ptex::PtexTexture **t)
-    {
-        BeginMutex(&mutex);
-        Ptex::String error;
-        if (count++ == 0)
-        {
-            texture = cache->get((char *)filename.str, error);
-        }
-        // *t = texture;
-        EndMutex(&mutex);
-    }
+    void Load(string filename, ShadingThreadState *state, PtexTexture *parent);
     void Release()
     {
+        // u32 expected = 1;
+        // counter.count.compare_exchange_strong(expected, 0u, std::memory_order_release);
         BeginMutex(&mutex);
         if (--count == 0)
         {
             texture->release();
-            // texture = 0;
         }
         EndMutex(&mutex);
     }
 };
 
+enum FilterType
+{
+    Bspline,
+    CatmullRom,
+};
 struct PtexTexture : Texture
 {
     string filename;
     f32 scale = 1.f;
     ColorEncoding encoding;
+    FilterType filterType;
 
     PtexCache ptexCache;
 
-    PtexTexture(string filename, ColorEncoding encoding = ColorEncoding::Gamma,
-                f32 scale = 1.f)
-        : filename(filename), encoding(encoding), scale(scale)
+    PtexTexture(string filename, FilterType filterType = FilterType::Bspline,
+                ColorEncoding encoding = ColorEncoding::Gamma, f32 scale = 1.f)
+        : filename(filename), filterType(filterType), encoding(encoding), scale(scale)
     {
     }
 
@@ -137,7 +135,11 @@ struct PtexTexture : Texture
         return Texture::EvaluateAlbedo(result * scale, lambda);
     }
 
-    virtual void Start() override { ptexCache.Load(filename); }
+    virtual void Start(ShadingThreadState *state) override
+    {
+        GetDebug()->texture = this;
+        ptexCache.Load(filename, state, this);
+    }
 
     virtual void Stop() override { ptexCache.Release(); }
 
@@ -145,7 +147,23 @@ struct PtexTexture : Texture
     void EvaluateHelper(Ptex::PtexTexture *texture, SurfaceInteraction &intr,
                         const Vec4f &filterWidths, f32 *result) const
     {
-        Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
+        GetDebug()->filename = filename;
+        Ptex::PtexFilter::FilterType fType;
+        switch (filterType)
+        {
+            case FilterType::Bspline:
+            {
+                fType = Ptex::PtexFilter::FilterType::f_bspline;
+            }
+            break;
+            case FilterType::CatmullRom:
+            {
+                fType = Ptex::PtexFilter::FilterType::f_catmullrom;
+            }
+            break;
+        }
+
+        Ptex::PtexFilter::Options opts(fType);
         Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
         const Vec2f &uv          = intr.uv;
         u32 faceIndex            = intr.faceIndices;
@@ -216,12 +234,60 @@ struct PtexTexture : Texture
         Assert(cache);
         Ptex::String error;
         Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
+        if (!texture)
+        {
+            printf("%s\n", error.c_str());
+            Assert(0);
+        }
 
         EvaluateHelper<c>(texture, intr, filterWidths, result);
 
         texture->release();
     }
 };
+
+void PtexCache::Load(string filename, ShadingThreadState *state, PtexTexture *parent)
+{
+    int spins = 0;
+
+    BeginMutex(&mutex);
+    if (count++ == 0)
+    {
+        Ptex::String error;
+        texture = cache->get((char *)filename.str, error);
+        if (!texture)
+        {
+            printf("%s\n", error.c_str());
+            Assert(0);
+        }
+    }
+    EndMutex(&mutex);
+
+    // const int maxSpins = 1;
+    // for (int spin = 0; spin <= maxSpins; spin++)
+    // {
+    //     u32 expected = 0;
+    //     if (counter.count.compare_exchange_weak(expected, 1, std::memory_order_acquire) ||
+    //         spin == maxSpins)
+    //     {
+    //         state->texture = parent;
+    //         break;
+    //     }
+    //     else
+    //     {
+    //         GetDebug()->texture = parent;
+    //         if (state->texture)
+    //         {
+    //             expected    = 1;
+    //             bool result =
+    //             state->texture->ptexCache.counter.count.compare_exchange_strong(
+    //                 expected, 0, std::memory_order_release);
+    //             state->texture = 0;
+    //         }
+    //         scheduler.WaitUntilEmpty(&counter);
+    //     }
+    // }
+}
 
 struct ConstantTexture : Texture
 {
@@ -283,7 +349,7 @@ struct DiffuseMaterial : Material
 
         return DiffuseBxDF(s);
     }
-    virtual void Start() override { reflectance->Start(); }
+    virtual void Start(ShadingThreadState *state) override { reflectance->Start(state); }
     virtual void Stop() override { reflectance->Stop(); }
 };
 
@@ -312,10 +378,10 @@ struct DiffuseTransmissionMaterial : Material
 
         return DiffuseTransmissionBxDF(r, t);
     }
-    virtual void Start() override
+    virtual void Start(ShadingThreadState *state) override
     {
-        reflectance->Start();
-        transmittance->Start();
+        reflectance->Start(state);
+        transmittance->Start(state);
     }
     virtual void Stop() override
     {
@@ -372,10 +438,10 @@ struct DielectricMaterial : Material
         f32 ior = eta; // eta(lambda[0]);
         return DielectricBxDF(ior, TrowbridgeReitzDistribution(uRoughness, vRoughness));
     }
-    virtual void Start() override
+    virtual void Start(ShadingThreadState *state) override
     {
-        uRoughnessTexture->Start();
-        if (uRoughnessTexture != vRoughnessTexture) vRoughnessTexture->Start();
+        uRoughnessTexture->Start(state);
+        if (uRoughnessTexture != vRoughnessTexture) vRoughnessTexture->Start(state);
     }
     virtual void Stop() override
     {
@@ -421,10 +487,10 @@ struct CoatedDiffuseMaterial : Material
                                  diffuse.EvaluateHelper(si, lambda, filterWidths), albedoValue,
                                  gValue, thickness, maxDepth, nSamples);
     }
-    virtual void Start() override
+    virtual void Start(ShadingThreadState *state) override
     {
-        dielectric.Start();
-        diffuse.Start();
+        dielectric.Start(state);
+        diffuse.Start(state);
     }
     virtual void Stop() override
     {
@@ -475,6 +541,7 @@ Vec3f ReadVec3Bytes(Tokenizer *tokenizer)
 }
 
 Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer, string directory,
+                     FilterType type        = FilterType::CatmullRom,
                      ColorEncoding encoding = ColorEncoding::None)
 {
     string textureType = ReadWord(tokenizer);
@@ -494,7 +561,7 @@ Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer, string directory,
         }
         encoding = encoding == ColorEncoding::None ? ColorEncoding::Gamma : encoding;
         return PushStructConstruct(arena, PtexTexture)(
-            PushStr8F(arena, "%S%S\0", directory, filename), encoding, scale);
+            PushStr8F(arena, "%S%S\0", directory, filename), type, encoding, scale);
     }
     else
     {
@@ -504,6 +571,7 @@ Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer, string directory,
 }
 
 Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory,
+                      FilterType type        = FilterType::CatmullRom,
                       ColorEncoding encoding = ColorEncoding::None)
 {
     if (!CharIsDigit(*tokenizer->cursor)) return 0;
@@ -526,7 +594,7 @@ Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory,
         break;
         case DataType::Texture:
         {
-            return ReadTexture(arena, tokenizer, directory, encoding);
+            return ReadTexture(arena, tokenizer, directory, type, encoding);
         }
         break;
         default: Assert(0); return 0;
@@ -536,7 +604,8 @@ Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory,
 Texture *ParseDisplacement(Arena *arena, Tokenizer *tokenizer, string directory)
 {
     if (Advance(tokenizer, "displacement "))
-        return ParseTexture(arena, tokenizer, directory, ColorEncoding::Linear);
+        return ParseTexture(arena, tokenizer, directory, FilterType::Bspline,
+                            ColorEncoding::Linear);
     return 0;
 }
 
@@ -582,7 +651,7 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
     Scene *scene   = GetScene();
 
     ChunkedLinkedList<Material *, 1024> materialsList(temp.arena);
-    NullMaterial *nullMaterial = PushStruct(arena, NullMaterial);
+    NullMaterial *nullMaterial = PushStructConstruct(arena, NullMaterial)();
     materialsList.AddBack()    = nullMaterial;
     MaterialHashMap *table = PushStructConstruct(tempArena, MaterialHashMap)(tempArena, 8192);
 
@@ -1007,7 +1076,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
             shapes.Flatten((Mesh *)scene->primitives);
             indices.Flatten(scene->primIndices);
 
-            threadLocalStatistics[threadIndex].misc4 += noMaterialCount;
+            // threadLocalStatistics[threadIndex].misc4 += noMaterialCount;
         }
         else if (Advance(&tokenizer, "MATERIALS_START "))
         {
@@ -1059,6 +1128,7 @@ void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromC
                     const Mat4 &cameraFromRender, int screenHeight)
 {
     u32 expected = 0;
+    // TODO: circular dependencies?
     if (scene->counter.count.compare_exchange_strong(expected, 1, std::memory_order_acquire))
     {
         if (scene->nodePtr.data == 0)

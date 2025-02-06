@@ -7,6 +7,8 @@
 #define ARENA_RESERVE_SIZE_LARGE_PAGES megabytes(8)
 #define ARENA_COMMIT_SIZE_LARGE_PAGES  megabytes(2)
 
+#include "types.h"
+
 namespace rt
 {
 

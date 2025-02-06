@@ -42,6 +42,12 @@ add_subdirectory(ptex)
 set (PTEX_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/ptex/src/ptex PARENT_SCOPE)
 
 # For opensubdiv visibility
+set (NO_TESTS ON CACHE BOOL " " FORCE)
+set (NO_EXAMPLES ON CACHE BOOL " " FORCE)
+set (NO_TUTORIALS ON CACHE BOOL " " FORCE)
+set (NO_REGRESSION ON CACHE BOOL " " FORCE)
+set (NO_PTEX ON)
+
 set (PTEX_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ptex/src/ptex)
 set (PTEX_LIBRARY Ptex_static)
 

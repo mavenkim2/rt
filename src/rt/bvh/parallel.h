@@ -426,6 +426,13 @@ struct Scheduler
         notifier.CommitWait(w->waiter);
         goto begin;
     }
+
+    bool StealUntilEmpty(Worker *w, Task *t)
+    {
+        if (ExploreTask(w, t, [&]() { return false; })) return true;
+        return false;
+    }
+
     bool WaitForTask(Worker *w, Task *t, Counter *counter)
     {
     begin:
@@ -493,6 +500,20 @@ struct Scheduler
         Schedule(&counter, func);
         Wait(&counter);
     }
+
+    // NOTE: use when want to delay, instead of needing jobs to run to completion
+    void WaitUntilEmpty(Counter *counter)
+    {
+        if (counter->count.load(std::memory_order_acq_rel) == 0) return;
+        Worker *worker = &workers[GetThreadIndex()];
+        Task t;
+        for (;;)
+        {
+            ExploitTask(worker, &t);
+            if (!StealUntilEmpty(worker, &t)) break;
+        }
+    }
+
     void Wait(Counter *counter)
     {
         if (counter->count.load(std::memory_order_acq_rel) == 0) return;

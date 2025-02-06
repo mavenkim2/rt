@@ -1,3 +1,6 @@
+#include "thread_context.h"
+#include <stdio.h>
+
 namespace rt
 {
 thread_local ThreadContext *tLocalContext;
@@ -16,7 +19,7 @@ void InitThreadContext(Arena *arena, const char *name, b32 isMainThread)
 
 void InitThreadContext(ThreadContext *t, b32 isMainThread)
 {
-    for (u32 i = 0; i < ArrayLength(t->arenas); i++)
+    for (u32 i = 0; i < t->numScratchArenas; i++)
     {
         t->arenas[i] = ArenaAlloc(threadArenaAlign);
     }
@@ -27,7 +30,7 @@ void InitThreadContext(ThreadContext *t, b32 isMainThread)
 void ReleaseThreadContext()
 {
     ThreadContext *t = GetThreadContext();
-    for (u32 i = 0; i < ArrayLength(t->arenas); i++)
+    for (u32 i = 0; i < t->numScratchArenas; i++)
     {
         ArenaRelease(t->arenas[i]);
     }
@@ -41,7 +44,7 @@ Arena *GetThreadContextScratch(Arena **conflicts, u32 count)
 {
     ThreadContext *t = GetThreadContext();
     Arena *result    = 0;
-    for (u32 i = 0; i < ArrayLength(t->arenas); i++)
+    for (u32 i = 0; i < t->numScratchArenas; i++)
     {
         Arena *arenaPtr = t->arenas[i];
         b32 hasConflict = 0;
@@ -65,10 +68,11 @@ Arena *GetThreadContextScratch(Arena **conflicts, u32 count)
 
 void SetThreadName(string name)
 {
-    ThreadContext *context  = GetThreadContext();
-    context->threadNameSize = Min(name.size, sizeof(context->threadName));
-    MemoryCopy(context->threadName, name.str, context->threadNameSize);
-    OS_SetThreadName(name);
+    ThreadContext *context = GetThreadContext();
+    context->threadNameSize =
+        name.size < sizeof(context->threadName) ? name.size : sizeof(context->threadName);
+    memcpy(context->threadName, name.str, context->threadNameSize);
+    // OS_SetThreadName(name);
 }
 
 void SetThreadIndex(u32 index)

@@ -1,3 +1,9 @@
+#ifndef STRING_H
+#define STRING_H
+
+#include "types.h"
+#include "memory.h"
+
 namespace rt
 {
 static const i32 MAX_OS_PATH = 256;
@@ -196,3 +202,5 @@ void PutLine(StringBuilder *builder, u32 indents, char *fmt, ...);
 
 #define GetTokenCursor(tokenizer, type) (type *)GetCursor_(tokenizer)
 } // namespace rt
+
+#endif

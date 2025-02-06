@@ -89,7 +89,7 @@ struct SharedShadeQueue
 {
     T values[QUEUE_LENGTH];
     typedef void (*Handler)(struct ShadingThreadState *state, T *values, u32 count,
-                            Material *material);
+                            Material *material, bool stop);
 
     Handler handler;
 
@@ -115,6 +115,8 @@ struct alignas(CACHE_LINE_SIZE) ShadingThreadState
 
     RayStateList rayStates;
     RayStateFreeList rayFreeList;
+
+    PtexTexture *texture;
 };
 
 struct ShadingGlobals
@@ -134,7 +136,7 @@ static ShadingGlobals *shadingGlobals_;
 
 template <typename MaterialType>
 void ShadingQueueHandler(struct ShadingThreadState *state, ShadingHandle *values, u32 count,
-                         Material *material);
+                         Material *material, bool stop = true);
 
 ShadingThreadState *GetShadingThreadState() { return &shadingThreadState_[GetThreadIndex()]; }
 ShadingThreadState *GetShadingThreadState(u32 index) { return &shadingThreadState_[index]; }
