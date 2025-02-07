@@ -113,7 +113,7 @@ add_executable(rt_exe
 )
 target_compile_definitions(rt_exe PRIVATE ${RT_DEFINITIONS})
 target_include_directories(rt_exe PRIVATE 
-    ${ZLIB_INCLUDE_DIR}
+    # ${ZLIB_INCLUDE_DIR}
     ${PTEX_INCLUDE}
     ${OPENSUBDIV_INCLUDE_DIR}
     ${NANOVDB_INCLUDE_DIR}
