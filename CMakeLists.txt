@@ -13,12 +13,12 @@ endif ()
 # Windows specific
 if (CMAKE_SYSTEM_NAME STREQUAL Windows)
     if (CMAKE_BUILD_TYPE MATCHES "Debug")
-        set (CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDebug)
+        set (CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLLDebug)
     else()
-        set (CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
+        set (CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
     endif()
     list (APPEND RT_DEFINITIONS "WIN32_LEAN_AND_MEAN")
-    list (APPEND deps ws2_32)
+    set (deps "ws2_32")
 else()
     message (FATAL_ERROR "Sorry, only windows supported for now.")
 endif()
@@ -68,7 +68,7 @@ set(RT_SOURCE_FILES
     src/rt/string.cpp
     src/rt/debug.cpp
     src/rt/base_types.cpp
-    src/rt/thread_context.cpp
+    # src/rt/thread_context.cpp
     src/rt/spectrum.cpp
     src/rt/memory.cpp
     src/rt/scene.cpp
@@ -158,30 +158,40 @@ endfunction ()
 
 # check_ext ("OpenVDB" "openvdb/nanovdb" 3ce7f9ca2533e9186f984c4d08455d5abb4f0b45)
 
-set(deps STATIC 
-    ${ZLIB_LIBRARY}
-    Ptex_static)
-
 set (MEM_SOURCE_FILES 
-    src/rt/base.cpp
-    src/rt/win32.cpp
     src/rt/thread_context.cpp
     src/rt/memory.cpp
-    src/rt/string.cpp)
+    src/rt/string.cpp
+    # src/rt/base.cpp
+)
+
+if (CMAKE_SYSTEM_NAME STREQUAL Windows)
+    list (APPEND MEM_SOURCE_FILES "src/rt/win32.cpp")
+endif()
 
 set (MEM_HEADER_FILES
-    src/rt/types.h
-    src/rt/base.h
-    src/rt/win32.h
-    src/rt/string.h
-    src/rt/memory.h
+    # src/rt/types.h
+    # src/rt/base.h
+    # src/rt/win32.h
+    # src/rt/string.h
+    # src/rt/memory.h
     src/rt/thread_context.h)
 
 add_library(thread_context STATIC
-    src/rt/thread_context.cpp)
+    ${MEM_SOURCE_FILES}
+)
 
 target_compile_definitions(thread_context PRIVATE ${RT_DEFINITIONS})
-target_include_directories(thread_context PRIVATE ${MEM_INCLUDE_DIR})
+# target_include_directories(thread_context PRIVATE ${MEM_INCLUDE_DIR})
+target_link_libraries(thread_context PRIVATE ${deps})
+
+set(deps STATIC 
+    ${deps}
+    thread_context
+    ${ZLIB_LIBRARY}
+    Ptex_dynamic)
+
+message (STATUS ${deps})
 
 install (TARGETS thread_context EXPORT THREAD_CONTEXT DESTINATION lib)
 install (EXPORT THREAD_CONTEXT DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/thread_context")
@@ -196,11 +206,12 @@ install (EXPORT THREAD_CONTEXT DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/thread
 
 # Main executable
 add_executable(rt_exe ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/rt.cpp)
-list (APPEND RT_DEFINITIONS "PTEX_STATIC")
+# list (APPEND RT_DEFINITIONS "PTEX_STATIC")
 target_compile_definitions(rt_exe PRIVATE ${RT_DEFINITIONS})
 target_include_directories(rt_exe PRIVATE 
     ${ZLIB_INCLUDE_DIR}
     ${PTEX_INCLUDE}
 )
 target_compile_options(rt_exe PRIVATE ${RT_CXX_FLAGS})
-target_link_libraries(rt_exe PRIVATE ${deps} ${thread_context})
+target_link_libraries(rt_exe PRIVATE ${deps})
+set_target_properties(rt_exe PROPERTIES OUTPUT_NAME rt)

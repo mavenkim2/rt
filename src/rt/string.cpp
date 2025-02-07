@@ -1,8 +1,15 @@
-#include "string.h"
 #include "base.h"
+#include "string.h"
+#include "thread_context.h"
+#include "platform.h"
+#include "hash.h"
 
 namespace rt
 {
+
+#define STB_SPRINTF_IMPLEMENTATION
+#include "../third_party/stb_sprintf.h"
+
 string::string(const char *c) { *this = Str8C(c); }
 
 //////////////////////////////

@@ -1,10 +1,10 @@
 #ifndef THREAD_CONTEXT_H
 #define THREAD_CONTEXT_H
 
-#include "types.h"
+#include "base.h"
+#include "platform.h"
 #include "string.h"
 #include "memory.h"
-#include "platform.h"
 
 namespace rt
 {
@@ -20,6 +20,8 @@ struct ThreadContext
     u32 index;
 };
 
+extern thread_local ThreadContext *tLocalContext;
+
 void InitThreadContext(Arena *arena, const char *name, b32 isMainThread = 0);
 void InitThreadContext(ThreadContext *t, b32 isMainThread = 0);
 void ReleaseThreadContext();
@@ -31,7 +33,8 @@ void SetThreadIndex(u32 index);
 u32 GetThreadIndex();
 void BaseThreadEntry(OS_ThreadFunction *func, void *params);
 
-#define ScratchStart(conflicts, count) TempBegin(GetThreadContextScratch((conflicts), (count)))
+#define ScratchStart(conflicts, count)                                                        \
+    rt::TempBegin(rt::GetThreadContextScratch((conflicts), (count)))
 
 struct ScratchArena
 {

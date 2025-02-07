@@ -1,5 +1,4 @@
 #include "thread_context.h"
-#include <stdio.h>
 
 namespace rt
 {
@@ -71,8 +70,8 @@ void SetThreadName(string name)
     ThreadContext *context = GetThreadContext();
     context->threadNameSize =
         name.size < sizeof(context->threadName) ? name.size : sizeof(context->threadName);
-    memcpy(context->threadName, name.str, context->threadNameSize);
-    // OS_SetThreadName(name);
+    MemoryCopy(context->threadName, name.str, context->threadNameSize);
+    OS_SetThreadName(name);
 }
 
 void SetThreadIndex(u32 index)

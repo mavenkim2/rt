@@ -1,7 +1,7 @@
 #ifndef STRING_H
 #define STRING_H
 
-#include "types.h"
+#include "base.h"
 #include "memory.h"
 
 namespace rt
@@ -20,9 +20,6 @@ struct string
     b32 operator==(const string &a);
     b32 operator==(const char *text);
 };
-
-#define STB_SPRINTF_IMPLEMENTATION
-#include "../third_party/stb_sprintf.h"
 
 //////////////////////////////
 // Char

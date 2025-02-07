@@ -1,8 +1,7 @@
 #ifndef RT_WIN32_H
 #define RT_WIN32_H
 
-#include <windows.h>
-#include "types.h"
+#include "base.h"
 #include "memory.h"
 #include "string.h"
 
@@ -56,6 +55,7 @@ f32 OS_GetMilliseconds(PerformanceCounter counter);
 u64 OS_GetCounts(PerformanceCounter counter);
 u32 OS_NumProcessors();
 void *OS_Reserve(u64 size, void *ptr = 0);
+void *OS_ReserveLarge(u64 size);
 b8 OS_Commit(void *ptr, u64 size);
 void OS_Release(void *memory);
 void *OS_Alloc(u64 size, void *ptr = 0);
@@ -79,6 +79,8 @@ string OS_MapFileRead(string filename);
 u8 *OS_MapFileWrite(string filename, u64 size);
 u8 *OS_MapFileAppend(string filename, u64 size);
 bool OS_UnmapFile(void *ptr);
+void OS_ResizeFile(string filename, u64 size);
+void OS_FlushMappedFile(void *ptr, size_t size);
 bool OS_DirectoryExists(string filename);
 bool OS_FileExists(string filename);
 bool OS_CreateDirectory(string filename);

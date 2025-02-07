@@ -83,18 +83,6 @@ T Clamp(const T &x, const T &min, const T &max)
     return Max(Min(max, x), min);
 }
 
-template <typename T>
-T Min(const T &a, const T &b)
-{
-    return a < b ? a : b;
-}
-
-template <typename T>
-T Max(const T &a, const T &b)
-{
-    return a > b ? a : b;
-}
-
 f32 Select(bool mask, f32 a, f32 b) { return mask ? a : b; }
 
 u32 Select(bool mask, u32 a, u32 b) { return mask ? a : b; }

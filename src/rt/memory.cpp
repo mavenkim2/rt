@@ -1,6 +1,6 @@
-#include "base.h"
 #include "memory.h"
-#include "win32.h"
+#include "platform.h"
+#include <algorithm>
 
 namespace rt
 {
@@ -124,7 +124,7 @@ void *ArenaPushNoZero(Arena *arena, u64 size)
         if (!current->largePagesEnabled)
         {
             u64 cmtAligned = AlignPow2(newPos, ARENA_COMMIT_SIZE);
-            cmtAligned     = Min(cmtAligned, current->res);
+            cmtAligned     = std::min(cmtAligned, current->res);
             u64 cmtSize    = cmtAligned - current->cmt;
             b8 result      = OS_Commit((u8 *)current + current->cmt, cmtSize);
             Assert(result);
@@ -133,7 +133,7 @@ void *ArenaPushNoZero(Arena *arena, u64 size)
         else
         {
             u64 cmtAligned = AlignPow2(newPos, ARENA_COMMIT_SIZE_LARGE_PAGES);
-            cmtAligned     = Min(cmtAligned, current->res);
+            cmtAligned     = std::min(cmtAligned, current->res);
             u64 cmtSize    = cmtAligned - current->cmt;
             current->cmt   = cmtAligned;
         }

@@ -1,6 +1,5 @@
 #ifdef _WIN32
 /**/
-#include <windows.h>
 #include "base.h"
 #include "thread_context.h"
 #include "win32.h"
