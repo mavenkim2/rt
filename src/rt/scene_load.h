@@ -143,20 +143,6 @@ struct FileOffsets
     u64 dataOffset;
 };
 
-bool GetSectionOffsets(Tokenizer *tokenizer, FileOffsets *offsets)
-{
-    bool result = Advance(tokenizer, "META");
-    if (!result) return false;
-    GetPointerValue(tokenizer, &offsets->metaOffset);
-    result = Advance(tokenizer, "INFO");
-    if (!result) return false;
-    GetPointerValue(tokenizer, &offsets->infoOffset);
-    result = Advance(tokenizer, "DATA");
-    if (!result) return false;
-    GetPointerValue(tokenizer, &offsets->dataOffset);
-    return true;
-}
-
 struct ScenePacket
 {
     StringId *parameterNames;

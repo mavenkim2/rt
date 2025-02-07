@@ -24,7 +24,7 @@ struct string
 //////////////////////////////
 // Char
 //
-inline b32 CharIsWhitespace(u8 c);
+b32 CharIsWhitespace(u8 c);
 b32 CharIsAlpha(u8 c);
 b32 CharIsAlphaUpper(u8 c);
 b32 CharIsAlphaLower(u8 c);
@@ -36,7 +36,7 @@ u8 CharToUpper(u8 c);
 // Creating Strings
 //
 string Str8(u8 *str, u64 size);
-inline string Substr8(string str, u64 min, u64 max);
+string Substr8(string str, u64 min, u64 max);
 u64 CalculateCStringLength(const char *cstr);
 string PushStr8F(Arena *arena, const char *fmt, ...);
 string PushStr8FV(Arena *arena, const char *fmt, va_list args);
@@ -75,6 +75,7 @@ string PathSkipLastSlash(string str);
 string GetFileExtension(string path);
 string Str8PathChopPastLastSlash(string string);
 string Str8PathChopLastSlash(string string);
+string RemoveFileExtension(string str);
 
 //////////////////////////////
 // Hash
@@ -97,8 +98,6 @@ struct StringId
     StringId(u32 id) : id(id) {}
     operator u32() const { return id; }
 };
-
-constexpr u32 operator""_sid(const char *ptr, size_t count);
 
 //////////////////////////////
 // String token building/reading
@@ -153,22 +152,26 @@ struct Tokenizer
     Tokenizer(string data) : input(data), cursor(data.str) {}
 };
 
-inline void Advance(Tokenizer *tokenizer, size_t size);
-inline b32 Advance(Tokenizer *tokenizer, string check);
+void Advance(Tokenizer *tokenizer, size_t size);
+b32 Advance(Tokenizer *tokenizer, string check);
 string ReadLine(Tokenizer *tokenizer);
-inline u32 ReadUint(Tokenizer *iter);
-inline f32 ReadFloat(Tokenizer *iter);
+u32 ReadUint(Tokenizer *iter);
+f32 ReadFloat(Tokenizer *iter);
+i32 ReadInt(Tokenizer *iter);
+bool IsInt(string str);
 string ReadWord(Tokenizer *tokenizer);
 string CheckWord(Tokenizer *tokenizer);
 string ReadBytes(Tokenizer *tokenizer, u64 numBytes);
-inline void SkipToNextLine(Tokenizer *iter);
-inline void SkipToNextChar(Tokenizer *tokenizer, char token);
-inline void SkipToNextDigit(Tokenizer *tokenizer);
-inline u8 *GetCursor_(Tokenizer *tokenizer);
-inline b32 EndOfBuffer(Tokenizer *tokenizer);
+void SkipToNextLine(Tokenizer *iter);
+void SkipToNextChar(Tokenizer *tokenizer);
+void SkipToNextChar(Tokenizer *tokenizer, char token);
+void SkipToNextDigit(Tokenizer *tokenizer);
+u8 *GetCursor_(Tokenizer *tokenizer);
+b32 EndOfBuffer(Tokenizer *tokenizer);
 string ReadLine(Tokenizer *tokenizer);
 void Get(Tokenizer *tokenizer, void *ptr, u32 size);
-inline u8 *GetPointer_(Tokenizer *tokenizer);
+u8 *GetPointer_(Tokenizer *tokenizer);
+b32 Compare(u8 *ptr, string str);
 
 u64 Put(StringBuilder *builder, void *data, u64 size);
 u64 Put(StringBuilder *builder, string str);
@@ -177,9 +180,9 @@ string CombineBuilderNodes(StringBuilder *builder);
 b32 WriteFileMapped(StringBuilder *builder, string filename);
 b32 WriteFileMapped(StringBuilder *builder, StringBuilderMapped *mappedBuilder,
                     string filename);
-inline u64 PutPointer(StringBuilder *builder, u64 address);
-inline void ConvertPointerToOffset(u8 *buffer, u64 location, u64 offset);
-inline u8 *ConvertOffsetToPointer(u8 *base, u64 offset);
+u64 PutPointer(StringBuilder *builder, u64 address);
+void ConvertPointerToOffset(u8 *buffer, u64 location, u64 offset);
+u8 *ConvertOffsetToPointer(u8 *base, u64 offset);
 void Put(StringBuilder *builder, const char *fmt, ...);
 void PutLine(StringBuilder *builder, u32 indents, char *fmt, ...);
 

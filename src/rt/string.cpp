@@ -2,13 +2,12 @@
 #include "string.h"
 #include "thread_context.h"
 #include "platform.h"
-#include "hash.h"
-
-namespace rt
-{
 
 #define STB_SPRINTF_IMPLEMENTATION
 #include "../third_party/stb_sprintf.h"
+
+namespace rt
+{
 
 string::string(const char *c) { *this = Str8C(c); }
 
@@ -26,9 +25,9 @@ u8 CharGetPair(const u8 ch)
     return 'x';
 }
 
-inline b32 CharIsWhitespace(u8 c) { return c == ' '; }
+b32 CharIsWhitespace(u8 c) { return c == ' '; }
 
-inline b32 CharIsBlank(u8 c) { return c == ' ' || c == '\n' || c == '\r' || c == '\t'; }
+b32 CharIsBlank(u8 c) { return c == ' ' || c == '\n' || c == '\r' || c == '\t'; }
 
 b32 CharIsAlpha(u8 c) { return CharIsAlphaUpper(c) || CharIsAlphaLower(c); }
 
@@ -67,7 +66,7 @@ string Str8(u8 *str, u64 size)
     result.size = size;
     return result;
 }
-inline string Substr8(string str, u64 min, u64 max)
+string Substr8(string str, u64 min, u64 max)
 {
     if (max > str.size)
     {
@@ -440,7 +439,7 @@ bool IsInt(string str)
 //////////////////////////////
 // String reading
 //
-inline b32 Advance(Tokenizer *tokenizer, string check)
+b32 Advance(Tokenizer *tokenizer, string check)
 {
     string token;
     if ((u64)(tokenizer->input.str + tokenizer->input.size - tokenizer->cursor) < check.size)
@@ -458,7 +457,7 @@ inline b32 Advance(Tokenizer *tokenizer, string check)
     return false;
 }
 
-inline void Advance(Tokenizer *tokenizer, size_t size)
+void Advance(Tokenizer *tokenizer, size_t size)
 {
     if (tokenizer->cursor + size <= tokenizer->input.str + tokenizer->input.size)
     {
@@ -470,28 +469,25 @@ inline void Advance(Tokenizer *tokenizer, size_t size)
     }
 }
 
-inline u8 *GetCursor_(Tokenizer *tokenizer)
+u8 *GetCursor_(Tokenizer *tokenizer)
 {
     u8 *result = tokenizer->cursor;
     return result;
 }
 
-inline b32 EndOfBuffer(Tokenizer *tokenizer)
+b32 EndOfBuffer(Tokenizer *tokenizer)
 {
     b32 result = tokenizer->cursor >= tokenizer->input.str + tokenizer->input.size;
     return result;
 }
 
-inline b32 IsAlpha(Tokenizer *tokenizer) { return CharIsAlpha(tokenizer->cursor[0]); }
+b32 IsAlpha(Tokenizer *tokenizer) { return CharIsAlpha(tokenizer->cursor[0]); }
 
-inline b32 IsDigit(Tokenizer *tokenizer) { return CharIsDigit(tokenizer->cursor[0]); }
+b32 IsDigit(Tokenizer *tokenizer) { return CharIsDigit(tokenizer->cursor[0]); }
 
-inline b32 IsAlphaNumeric(Tokenizer *tokenizer)
-{
-    return IsAlpha(tokenizer) || IsDigit(tokenizer);
-}
+b32 IsAlphaNumeric(Tokenizer *tokenizer) { return IsAlpha(tokenizer) || IsDigit(tokenizer); }
 
-inline b32 IsBlank(Tokenizer *tokenizer) { return CharIsBlank(tokenizer->cursor[0]); }
+b32 IsBlank(Tokenizer *tokenizer) { return CharIsBlank(tokenizer->cursor[0]); }
 
 // TODO: carriage returns?
 string ReadLine(Tokenizer *tokenizer)
@@ -525,7 +521,7 @@ string ReadWord(Tokenizer *tokenizer)
     return result;
 }
 
-inline void SkipToNextChar(Tokenizer *tokenizer)
+void SkipToNextChar(Tokenizer *tokenizer)
 {
     while (!EndOfBuffer(tokenizer) && IsBlank(tokenizer)) tokenizer->cursor++;
 }
@@ -555,7 +551,7 @@ string CheckWord(Tokenizer *tokenizer)
     return result;
 }
 
-inline f32 ReadFloat(Tokenizer *iter)
+f32 ReadFloat(Tokenizer *iter)
 {
     f32 value    = 0;
     i32 exponent = 0;
@@ -608,7 +604,7 @@ inline f32 ReadFloat(Tokenizer *iter)
     return value;
 }
 
-inline i32 ReadInt(Tokenizer *iter)
+i32 ReadInt(Tokenizer *iter)
 {
     b32 valueSign = (*iter->cursor == '-');
     if (valueSign) iter->cursor++;
@@ -622,7 +618,7 @@ inline i32 ReadInt(Tokenizer *iter)
     return valueSign ? -result : result;
 }
 
-inline u32 ReadUint(Tokenizer *iter)
+u32 ReadUint(Tokenizer *iter)
 {
     u32 result = 0;
     while (CharIsDigit(*iter->cursor))
@@ -633,13 +629,13 @@ inline u32 ReadUint(Tokenizer *iter)
     return result;
 }
 
-inline void SkipToNextDigit(Tokenizer *tokenizer)
+void SkipToNextDigit(Tokenizer *tokenizer)
 {
     while (!EndOfBuffer(tokenizer) && (!IsDigit(tokenizer) && *tokenizer->cursor != '-'))
         tokenizer->cursor++;
 }
 
-inline void SkipToNextLine(Tokenizer *iter)
+void SkipToNextLine(Tokenizer *iter)
 {
     while (!EndOfBuffer(iter) && *iter->cursor != '\n')
     {
@@ -648,7 +644,7 @@ inline void SkipToNextLine(Tokenizer *iter)
     iter->cursor++;
 }
 
-inline void SkipToNextChar(Tokenizer *tokenizer, char token)
+void SkipToNextChar(Tokenizer *tokenizer, char token)
 {
     for (;;)
     {
@@ -661,7 +657,7 @@ inline void SkipToNextChar(Tokenizer *tokenizer, char token)
     }
 }
 
-inline void SkipToNextWord(Tokenizer *iter)
+void SkipToNextWord(Tokenizer *iter)
 {
     bool findChar = false;
     while (!EndOfBuffer(iter) && !(findChar && CharIsAlpha(*iter->cursor)))
@@ -678,7 +674,7 @@ void Get(Tokenizer *tokenizer, void *ptr, u32 size)
     Advance(tokenizer, size);
 }
 
-inline u8 *GetPointer_(Tokenizer *tokenizer)
+u8 *GetPointer_(Tokenizer *tokenizer)
 {
     u64 offset;
     GetPointerValue(tokenizer, &offset);
@@ -694,7 +690,7 @@ b32 Compare(u8 *ptr, string str)
 
 // NOTE: counts the number of lines starting with ch, ignoring whitespace
 // TODO: hardcoded
-inline u32 CountLinesStartWith(Tokenizer *tokenizer, u8 ch)
+u32 CountLinesStartWith(Tokenizer *tokenizer, u8 ch)
 {
     u8 *cursor = tokenizer->cursor;
     while (CharIsBlank(*cursor)) cursor++;
@@ -783,10 +779,6 @@ b32 IsEndOfLine(Tokenizer *tokenizer) { return (*tokenizer->cursor == '\n'); }
 //////////////////////////////
 // Global string table
 //
-constexpr u32 operator""_sid(const char *ptr, size_t count)
-{
-    return MurmurHash32((const char *)ptr, (int)count, 0);
-}
 
 #if 0
 u32 stringIds[1024];
@@ -959,7 +951,7 @@ b32 WriteFileMapped(StringBuilder *builder, string filename)
     return true;
 }
 
-inline u64 PutPointer(StringBuilder *builder, u64 address)
+u64 PutPointer(StringBuilder *builder, u64 address)
 {
     u64 offset = builder->totalSize;
     offset += sizeof(offset) + address;
@@ -1022,13 +1014,13 @@ void Put(StringBuilderMapped *builder, const char *fmt, ...)
     ScratchEnd(temp);
 }
 
-inline void ConvertPointerToOffset(u8 *buffer, u64 location, u64 offset)
+void ConvertPointerToOffset(u8 *buffer, u64 location, u64 offset)
 {
     // MemoryCopy(buffer + location, &offset, sizeof(offset));
     *(u64 *)(buffer + location) = offset;
 }
 
-inline u8 *ConvertOffsetToPointer(u8 *base, u64 offset)
+u8 *ConvertOffsetToPointer(u8 *base, u64 offset)
 {
     u8 *ptr = base + offset;
     return ptr;

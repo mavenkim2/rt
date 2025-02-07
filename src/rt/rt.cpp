@@ -6,7 +6,6 @@
 #include "string.h"
 #include "containers.h"
 // #include "win32.h"
-#include "jobsystem.h"
 #include "debug.h"
 #include "thread_context.h"
 
@@ -36,16 +35,14 @@
 #include <algorithm>
 #include "simd_integrate.h"
 
+// #include "string.cpp"
 #include "base.cpp"
 // #include "win32.cpp"
-#include "jobsystem.cpp"
-#include "string.cpp"
 #include "debug.cpp"
 #include "base_types.cpp"
 #include "bvh/bvh_types.cpp"
-#include "thread_context.cpp"
 #include "spectrum.cpp"
-#include "memory.cpp"
+// #include "memory.cpp"
 #include "scene.cpp"
 // #include "bvh.cpp"
 #include "bsdf.cpp"
@@ -1105,7 +1102,7 @@ int main(int argc, char *argv[])
     //     arena, "../data/island/textures/isPandanusA/Displacement/trunkb_temp_geo.ptx",
     //     10899948);
     string ptexFilename =
-        "../data/island/textures/isPandanusA/Displacement/trunkb_temp_geo.ptx";
+        "../../data/island/textures/isPandanusA/Displacement/trunkb_temp_geo.ptx";
     Ptex::String error;
     Ptex::PtexTexture *texture = cache->get((char *)ptexFilename.str, error);
     Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);

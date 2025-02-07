@@ -1,3 +1,6 @@
+#include "string.h"
+#include "../third_party/stb_sprintf.h"
+
 namespace rt
 {
 void Print(const char *fmt, va_list args)

@@ -10,13 +10,13 @@ struct CheckedIterator
         : ptr(inPtr), initialNum(inNum), currentNum(inNum)
     {
     }
-    FORCEINLINE ElementType &operator*() const { return *ptr; }
-    FORCEINLINE CheckedIterator &operator++()
+    __forceinline ElementType &operator*() const { return *ptr; }
+    __forceinline CheckedIterator &operator++()
     {
         ++ptr;
         return *this;
     }
-    FORCEINLINE bool operator!=(const CheckedIterator &rhs) const
+    __forceinline bool operator!=(const CheckedIterator &rhs) const
     {
         Assert(initialNum == currentNum);
         return rhs.ptr != ptr;
@@ -34,13 +34,13 @@ struct ReversedCheckedIterator
         : ptr(inPtr), initialNum(inNum), currentNum(inNum)
     {
     }
-    FORCEINLINE ElementType &operator*() const { return *(ptr - 1); }
-    FORCEINLINE ReversedCheckedIterator &operator++()
+    __forceinline ElementType &operator*() const { return *(ptr - 1); }
+    __forceinline ReversedCheckedIterator &operator++()
     {
         --ptr;
         return *this;
     }
-    FORCEINLINE bool operator!=(const ReversedCheckedIterator &rhs) const
+    __forceinline bool operator!=(const ReversedCheckedIterator &rhs) const
     {
         Assert(initialNum == currentNum);
         return rhs.ptr != ptr;
@@ -67,21 +67,21 @@ struct StaticArray
         MemoryCopy(data, vector.data(), sizeof(T) * size);
     }
 
-    FORCEINLINE void Init(Arena *arena, i32 inCap)
+    __forceinline void Init(Arena *arena, i32 inCap)
     {
         size     = 0;
         capacity = inCap;
         data     = (T *)PushArray(arena, u8, sizeof(T) * capacity);
     }
 
-    FORCEINLINE void Push(T element)
+    __forceinline void Push(T element)
     {
         Assert(size < capacity);
         data[size] = element;
         size++;
     }
 
-    FORCEINLINE T Pop()
+    __forceinline T Pop()
     {
         Assert(size > 0);
         T result = std::move(data[size - 1]);
@@ -89,19 +89,19 @@ struct StaticArray
         return result;
     }
 
-    FORCEINLINE u32 Length() const { return size; }
+    __forceinline u32 Length() const { return size; }
 
-    FORCEINLINE b8 Empty() { return size != 0; }
+    __forceinline b8 Empty() { return size != 0; }
 
-    FORCEINLINE u32 Clear() { size = 0; }
+    __forceinline u32 Clear() { size = 0; }
 
-    FORCEINLINE T &operator[](i32 index)
+    __forceinline T &operator[](i32 index)
     {
         ErrorExit(index >= 0 && index < size, "index: %u, size %u\n", index, size);
         return data[index];
     }
 
-    FORCEINLINE const T &operator[](i32 index) const
+    __forceinline const T &operator[](i32 index) const
     {
         Assert(index >= 0 && index < size);
         return data[index];
@@ -160,26 +160,26 @@ struct FixedArray
         MemoryCopy(data, ar.data(), sizeof(T) * capacity);
     }
 
-    FORCEINLINE void Push(T element)
+    __forceinline void Push(T element)
     {
         Assert(size < capacity);
         data[size] = element;
         size++;
     }
 
-    FORCEINLINE void Add(T element) { Push(element); }
+    __forceinline void Add(T element) { Push(element); }
 
-    FORCEINLINE void Emplace()
+    __forceinline void Emplace()
     {
         Assert(size < capacity);
         size += 1;
     }
 
-    FORCEINLINE T &Back() { return data[size - 1]; }
+    __forceinline T &Back() { return data[size - 1]; }
 
-    FORCEINLINE const T &Back() const { return data[size - 1]; }
+    __forceinline const T &Back() const { return data[size - 1]; }
 
-    FORCEINLINE T Pop()
+    __forceinline T Pop()
     {
         Assert(size > 0);
         T result = std::move(data[size - 1]);
@@ -187,27 +187,27 @@ struct FixedArray
         return
     }
 
-    FORCEINLINE u32 Length() const { return size; }
+    __forceinline u32 Length() const { return size; }
 
-    FORCEINLINE b8 Empty() const { return size != 0; }
+    __forceinline b8 Empty() const { return size != 0; }
 
-    FORCEINLINE void Clear() { size = 0; }
+    __forceinline void Clear() { size = 0; }
 
-    FORCEINLINE u32 Capacity() const { return capacity; }
+    __forceinline u32 Capacity() const { return capacity; }
 
-    FORCEINLINE void Resize(u32 inSize)
+    __forceinline void Resize(u32 inSize)
     {
         Assert(inSize <= capacity);
         size = inSize;
     }
 
-    FORCEINLINE const T &operator[](i32 index) const
+    __forceinline const T &operator[](i32 index) const
     {
         Assert(index >= 0 && index < size);
         return data[index];
     }
 
-    FORCEINLINE T &operator[](i32 index)
+    __forceinline T &operator[](i32 index)
     {
         Assert(index >= 0 && index < size);
         return data[index];

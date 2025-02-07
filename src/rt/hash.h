@@ -96,6 +96,10 @@ constexpr u32 MurmurHash32(const char *key, const u32 len, const u32 seed)
 
     return h1;
 }
+constexpr u32 operator""_sid(const char *ptr, size_t count)
+{
+    return MurmurHash32((const char *)ptr, (int)count, 0);
+}
 
 inline u64 MurmurHash64A(const u8 *key, size_t len, u64 seed)
 {

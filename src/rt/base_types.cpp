@@ -2,6 +2,8 @@
 // Primitive Methods
 //
 
+#include "string.h"
+
 namespace rt
 {
 // PrimitiveMethods primitiveMethods[] = {
@@ -28,6 +30,7 @@ Sampler Sampler::Create(Arena *arena, const ScenePacket *packet, const Vec2i ful
     i32 xSamples = 4;
     i32 ySamples = 4;
 
+    constexpr auto help = "pixelsamples"_sid;
     for (u32 i = 0; i < packet->parameterCount; i++)
     {
         switch (packet->parameterNames[i])

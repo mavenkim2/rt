@@ -1,6 +1,8 @@
 #ifndef DEBUG_H
 #define DEBUG_H
 
+#include "platform.h"
+
 namespace rt
 {
 struct Event

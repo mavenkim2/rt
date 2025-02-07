@@ -1,5 +1,6 @@
 #include <atomic>
 #include <mutex>
+#include <functional>
 namespace rt
 {
 template <typename T, i32 logBlockSize = 10>

@@ -12,11 +12,11 @@ endif ()
 
 # Windows specific
 if (CMAKE_SYSTEM_NAME STREQUAL Windows)
-    if (CMAKE_BUILD_TYPE MATCHES "Debug")
-        set (CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLLDebug)
-    else()
-        set (CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
-    endif()
+    # if (CMAKE_BUILD_TYPE MATCHES "Debug")
+    #     set (CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLLDebug)
+    # else()
+    #     set (CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
+    # endif()
     list (APPEND RT_DEFINITIONS "WIN32_LEAN_AND_MEAN")
     set (deps "ws2_32")
 else()
@@ -61,157 +61,64 @@ else()
     message (SEND_ERROR "Windows only supported")
 endif()
 
-set(RT_SOURCE_FILES
-    src/rt/base.cpp
-    src/rt/win32.cpp
-    src/rt/jobsystem.cpp
-    src/rt/string.cpp
-    src/rt/debug.cpp
-    src/rt/base_types.cpp
-    # src/rt/thread_context.cpp
-    src/rt/spectrum.cpp
-    src/rt/memory.cpp
-    src/rt/scene.cpp
-    src/rt/bvh.cpp
-    src/rt/lights.cpp
-)
-
-set(RT_HEADER_FILES
-    src/rt/bvh/bvh_aos.h
-    src/rt/bvh/bvh_build.h
-    src/rt/bvh/bvh_types.h
-    src/rt/bvh/parallel.h
-    src/rt/bvh/partial_rebraiding.h
-    src/rt/geometry/bspline.h
-    src/rt/math/basemath.h
-    src/rt/math/bounds.h
-    src/rt/math/lane4f32.h
-    src/rt/math/lane4u32.h
-    src/rt/math/lane8f32.h
-    src/rt/math/lane8u32.h
-    src/rt/math/math.h
-    src/rt/math/matx.h
-    src/rt/math/simd_base.h
-    src/rt/math/simd_include.h
-    src/rt/math/vec2.h
-    src/rt/math/vec3.h
-    src/rt/math/vec4.h
-    src/rt/tables/primes.h
-    src/rt/tables/sobolmatrices.h
-    src/rt/tests/sampling_test.cpp
-    src/rt/tests/test.cpp
-    src/rt/algo.h
-    src/rt/base.h
-    src/rt/base_types.h
-    src/rt/bsdf.h
-    src/rt/bvh.h
-    src/rt/containers.h
-    src/rt/debug.h
-    src/rt/hash.h
-    src/rt/integrate.h
-    src/rt/jobsystem.h
-    src/rt/lights.h
-    src/rt/low_discrepancy.h
-    src/rt/memory.h
-    src/rt/random.h
-    src/rt/rt.h
-    src/rt/sampler.h
-    src/rt/sampling.h
-    src/rt/scene.h
-    src/rt/spectrum.h
-    src/rt/string.h
-    src/rt/template.h
-    src/rt/thread_context.h
-    src/rt/win32.h
-)
-
 list (APPEND RT_DEFINITIONS "__SSE3__" "__SSE4_1__")
 
-function (CHECK_EXT NAME DIR HASH)
-  if (NOT IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/${DIR}")
-    message (FATAL_ERROR "The ${NAME} submodule directory is missing! "
-      "Either that submodule was recently added to pbrt or you did not clone the project with --recursive. "
-      "In order to update the submodules, run:\n"
-      "  \"git submodule update --init --recursive\"")
-  endif ()
-
-  find_package(Git)
-  if (GIT_FOUND)
-    execute_process (
-      COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
-      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/${DIR}"
-      RESULT_VARIABLE "git_return"
-      ERROR_QUIET
-      OUTPUT_STRIP_TRAILING_WHITESPACE
-      OUTPUT_VARIABLE "git_hash")
-    if (NOT ${git_hash} MATCHES "^${HASH}")
-      message (FATAL_ERROR "The ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/${DIR} "
-        "submodule isn't up to date (${git_hash} vs ${HASH}). Please run:\n"
-        "  \"git submodule update --recursive\"")
-    else ()
-      message (STATUS "${NAME} at commit: ${git_hash}")
-    endif()
-  else (GIT_FOUND)
-    message (STATUS "git not found: unable to verify revisions in submodules")
-  endif (GIT_FOUND)
-endfunction ()
-
-# check_ext ("OpenVDB" "openvdb/nanovdb" 3ce7f9ca2533e9186f984c4d08455d5abb4f0b45)
-
+# Create thread context static lib (shared w/ ptex)
 set (MEM_SOURCE_FILES 
     src/rt/thread_context.cpp
     src/rt/memory.cpp
     src/rt/string.cpp
-    # src/rt/base.cpp
 )
 
 if (CMAKE_SYSTEM_NAME STREQUAL Windows)
     list (APPEND MEM_SOURCE_FILES "src/rt/win32.cpp")
 endif()
 
-set (MEM_HEADER_FILES
-    # src/rt/types.h
-    # src/rt/base.h
-    # src/rt/win32.h
-    # src/rt/string.h
-    # src/rt/memory.h
-    src/rt/thread_context.h)
-
-add_library(thread_context STATIC
+add_library(thread_context OBJECT
     ${MEM_SOURCE_FILES}
 )
 
 target_compile_definitions(thread_context PRIVATE ${RT_DEFINITIONS})
-# target_include_directories(thread_context PRIVATE ${MEM_INCLUDE_DIR})
 target_link_libraries(thread_context PRIVATE ${deps})
 
-set(deps STATIC 
+set(deps  
     ${deps}
     thread_context
     ${ZLIB_LIBRARY}
-    Ptex_dynamic)
-
-message (STATUS ${deps})
+    ${PTEX_LIBRARY}
+    osd_static_cpu
+    Ptex_static
+)
 
 install (TARGETS thread_context EXPORT THREAD_CONTEXT DESTINATION lib)
 install (EXPORT THREAD_CONTEXT DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/thread_context")
-
-# add_library(rt_lib INTERFACE)# STATIC 
 
 # convert
 # add_executable(convert src/rt/cmd/convert.cpp)
 # target_compile_definitions
 
 # rgb2spec
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/gen)
+add_executable(rgb2spec_exe ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/rgb2spec.cpp)
+target_compile_definitions(rgb2spec_exe PRIVATE ${RT_DEFINITIONS})
+add_custom_command(OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/src/gen/rgbspectrum_srgb.cpp 
+    COMMAND rgb2spec_exe ${CMAKE_CURRENT_SOURCE_DIR}/src/gen/rgbspectrum_srgb.cpp
+    DEPENDS rgb2spec_exe
+)
 
 # Main executable
-add_executable(rt_exe ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/rt.cpp)
-# list (APPEND RT_DEFINITIONS "PTEX_STATIC")
+add_executable(rt_exe 
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/rt.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/gen/rgbspectrum_srgb.cpp
+)
 target_compile_definitions(rt_exe PRIVATE ${RT_DEFINITIONS})
 target_include_directories(rt_exe PRIVATE 
     ${ZLIB_INCLUDE_DIR}
     ${PTEX_INCLUDE}
+    ${OPENSUBDIV_INCLUDE_DIR}
+    ${NANOVDB_INCLUDE_DIR}
 )
+
 target_compile_options(rt_exe PRIVATE ${RT_CXX_FLAGS})
 target_link_libraries(rt_exe PRIVATE ${deps})
 set_target_properties(rt_exe PROPERTIES OUTPUT_NAME rt)

@@ -584,12 +584,12 @@ cl = lg;                                 \
    case 'S': // string8
    {
     //- rjf: pull out string
-    string str = va_arg(va, string);
+    rt::string str = va_arg(va, rt::string);
     
     //- rjf: get string length
     s = (char *)str.str;
     sn = (const char *)(str.str + str.size);
-    l = (u32)str.size;
+    l = (stbsp__uint32)str.size;
     
     //- rjf: clamp to precision
     lead[0] = 0;

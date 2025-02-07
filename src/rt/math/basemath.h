@@ -95,7 +95,7 @@ inline int Log2Int(u64 v)
 {
 #if _WIN32
     unsigned long lz = 0;
-    BitScanReverse64(&lz, v);
+    _BitScanReverse64(&lz, v);
     return lz;
 #else
 #error
