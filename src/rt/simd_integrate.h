@@ -117,6 +117,8 @@ struct alignas(CACHE_LINE_SIZE) ShadingThreadState
     RayStateFreeList rayFreeList;
 
     PtexTexture *texture;
+
+    void *buffer;
 };
 
 struct ShadingGlobals

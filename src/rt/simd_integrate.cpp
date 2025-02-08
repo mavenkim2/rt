@@ -668,10 +668,10 @@ void ShadingQueueHandler(struct ShadingThreadState *state, ShadingHandle *values
         }
         rayStateHandles[rayStateHandleCount++] = handle.rayStateHandle;
     }
-    if (stop)
-    {
+    // if (stop)
+    // {
         material->Stop();
-    }
+    // }
 
     state->rayQueue.Push(state, rayStateHandles, rayStateHandleCount);
 }

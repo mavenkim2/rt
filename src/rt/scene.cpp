@@ -61,24 +61,21 @@ struct PtexData
 
 struct PtexCache
 {
-    Ptex::PtexTexture *texture;
+    // Ptex::PtexTexture *texture;
     // Scheduler::Counter counter = {};
     // Ptex::PtexFilter *filter;
 
-    int count;
+    std::atomic<int> count;
+    // int count;
     Mutex mutex;
 
     void Load(string filename, ShadingThreadState *state, PtexTexture *parent);
-    void Release()
+    void Release(Ptex::PtexTexture *texture)
     {
         // u32 expected = 1;
         // counter.count.compare_exchange_strong(expected, 0u, std::memory_order_release);
-        BeginMutex(&mutex);
-        if (--count == 0)
-        {
-            texture->release();
-        }
-        EndMutex(&mutex);
+        int result = count.fetch_sub(1, std::memory_order_release);
+        if (result == 1) texture->release();
     }
 };
 
@@ -94,6 +91,8 @@ struct PtexTexture : Texture
     ColorEncoding encoding;
     FilterType filterType;
 
+    bool simd;
+
     PtexCache ptexCache;
 
     PtexTexture(string filename, FilterType filterType = FilterType::Bspline,
@@ -106,10 +105,17 @@ struct PtexTexture : Texture
                       const Vec4f &filterWidths, void *data) override
     {
         f32 result = 0.f;
-        if (ptexCache.texture)
+        if (simd)
         {
             // PtexData *d = (PtexData *)data;
-            EvaluateHelper<1>(ptexCache.texture, si, filterWidths, &result);
+            Ptex::String error;
+            Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
+            if (!texture)
+            {
+                printf("%s\n", error.c_str());
+                Assert(0);
+            }
+            EvaluateHelper<1>(texture, si, filterWidths, &result);
         }
         else
         {
@@ -122,10 +128,16 @@ struct PtexTexture : Texture
                                    const Vec4f &filterWidths, void *data) override
     {
         Vec3f result = {};
-        if (ptexCache.texture)
+        if (simd)
         {
-            // PtexData *d = (PtexData *)data;
-            EvaluateHelper<3>(ptexCache.texture, si, filterWidths, result.e);
+            Ptex::String error;
+            Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
+            if (!texture)
+            {
+                printf("%s\n", error.c_str());
+                Assert(0);
+            }
+            EvaluateHelper<3>(texture, si, filterWidths, result.e);
         }
         else
         {
@@ -138,10 +150,21 @@ struct PtexTexture : Texture
     virtual void Start(ShadingThreadState *state) override
     {
         GetDebug()->texture = this;
+        simd                = true;
         ptexCache.Load(filename, state, this);
     }
 
-    virtual void Stop() override { ptexCache.Release(); }
+    virtual void Stop() override
+    {
+        Ptex::String error;
+        Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
+        if (!texture)
+        {
+            printf("%s\n", error.c_str());
+            Assert(0);
+        }
+        ptexCache.Release(texture);
+    }
 
     template <i32 c>
     void EvaluateHelper(Ptex::PtexTexture *texture, SurfaceInteraction &intr,
@@ -250,18 +273,22 @@ void PtexCache::Load(string filename, ShadingThreadState *state, PtexTexture *pa
 {
     int spins = 0;
 
-    BeginMutex(&mutex);
-    if (count++ == 0)
-    {
-        Ptex::String error;
-        texture = cache->get((char *)filename.str, error);
-        if (!texture)
-        {
-            printf("%s\n", error.c_str());
-            Assert(0);
-        }
-    }
-    EndMutex(&mutex);
+    // BeginMutex(&mutex);
+    // BeginRMutex(&mutex);
+    count.fetch_add(1, std::memory_order_acquire);
+    // int c = count.fetch_add(1, std::memory_order_acquire);
+    // if (c == 0)
+    // if (c == 0)
+    // {
+    //     Ptex::String error;
+    //     texture = cache->get((char *)filename.str, error);
+    //     if (!texture)
+    //     {
+    //         printf("%s\n", error.c_str());
+    //         Assert(0);
+    //     }
+    // }
+    // EndMutex(&mutex);
 
     // const int maxSpins = 1;
     // for (int spin = 0; spin <= maxSpins; spin++)
@@ -1124,8 +1151,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     ScratchEnd(temp);
 }
 
-// TODO IMPORTANT: there's a race condition in here that occurs very rarely, where some of the counters never 
-// reach zero, leading to a deadlock.
+// TODO IMPORTANT: there's a race condition in here that occurs very rarely, where some of the
+// counters never reach zero, leading to a deadlock.
 void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
                     const Mat4 &cameraFromRender, int screenHeight)
 {

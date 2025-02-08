@@ -62,8 +62,13 @@ struct : public PtexErrorHandler
 
 struct PtexHandle
 {
-    u64 offset;
+    i64 offset;
     OS_Handle osHandle;
+
+    i64 bufferOffset;
+    i64 fileSize;
+    static const i64 bufferSize = 8192;
+    void *buffer;
 };
 
 struct : public PtexInputHandler
@@ -77,9 +82,12 @@ public:
     virtual Handle open(const char *path) override
     {
         // TODO: free list pool this
-        PtexHandle *handle = (PtexHandle *)malloc(sizeof(PtexHandle));
+        PtexHandle *handle = (PtexHandle *)malloc(sizeof(PtexHandle) + PtexHandle::bufferSize);
         handle->offset     = 0;
         handle->osHandle   = OS_CreateFile(Str8C(path));
+        handle->buffer     = (void *)(handle + 1);
+        handle->bufferOffset = -1;
+        handle->fileSize     = OS_GetFileSize2(Str8C(path));
         return handle;
     }
 
@@ -108,8 +116,39 @@ public:
         PtexHandle *ptexHandle = (PtexHandle *)handle;
         u64 offset             = ptexHandle->offset;
         Assert(ptexHandle->osHandle.handle);
-        size_t result = OS_ReadFile(ptexHandle->osHandle, buffer, size, offset) ? size : 0;
-        ptexHandle->offset += result;
+
+        size_t result = 0;
+        if (ptexHandle->buffer && ptexHandle->bufferOffset != -1 &&
+            ptexHandle->offset >= ptexHandle->bufferOffset &&
+            ptexHandle->offset + size <= Min(ptexHandle->bufferOffset + ptexHandle->bufferSize, ptexHandle->fileSize))
+        {
+            MemoryCopy(buffer,
+                       (u8 *)ptexHandle->buffer +
+                           (ptexHandle->offset - ptexHandle->bufferOffset),
+                       size);
+            result = size;
+            ptexHandle->offset += size;
+        }
+        else
+        {
+            if (size <= ptexHandle->bufferSize)
+            {
+                i64 readSize =
+                    Min(ptexHandle->bufferSize, ptexHandle->fileSize - ptexHandle->offset);
+                result =
+                    OS_ReadFile(ptexHandle->osHandle, ptexHandle->buffer, readSize, offset)
+                        ? size
+                        : 0;
+                MemoryCopy(buffer, ptexHandle->buffer, size);
+            }
+            else
+            {
+                result = OS_ReadFile(ptexHandle->osHandle, buffer, size, offset) ? size : 0;
+            }
+            ptexHandle->bufferOffset = offset;
+            ptexHandle->offset += result;
+        }
+        Assert(result);
         return result;
     }
 
