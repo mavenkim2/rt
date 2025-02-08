@@ -138,11 +138,9 @@ struct StringBuilderMapped
 };
 
 void Expand(StringBuilderMapped *builder, u64 size);
-u64 Put(StringBuilderMapped *builder, void *data, u64 size);
+u64 PutData(StringBuilderMapped *builder, void *data, u64 size);
 void Put(StringBuilderMapped *builder, void *data, u64 size, u64 offset, u64 cap);
 u64 Put(StringBuilderMapped *builder, string str);
-
-// void EndStringBuilder(StringBuilderMapped &builder) {}
 
 struct Tokenizer
 {
@@ -173,7 +171,8 @@ void Get(Tokenizer *tokenizer, void *ptr, u32 size);
 u8 *GetPointer_(Tokenizer *tokenizer);
 b32 Compare(u8 *ptr, string str);
 
-u64 Put(StringBuilder *builder, void *data, u64 size);
+u64 Put_(StringBuilder *builder, void *data, u64 size);
+u64 PutData(StringBuilder *builder, void *data, u64 size);
 u64 Put(StringBuilder *builder, string str);
 u64 Put(StringBuilder *builder, u32 value);
 string CombineBuilderNodes(StringBuilder *builder);
@@ -186,7 +185,7 @@ u8 *ConvertOffsetToPointer(u8 *base, u64 offset);
 void Put(StringBuilder *builder, const char *fmt, ...);
 void PutLine(StringBuilder *builder, u32 indents, char *fmt, ...);
 
-#define PutPointerValue(builder, ptr)    Put(builder, ptr, sizeof(*ptr))
+#define PutPointerValue(builder, ptr)    Put_(builder, ptr, sizeof(*ptr))
 #define PutStruct(builder, s)            PutPointerValue(builder, &s);
 #define AppendArray(builder, ptr, count) Put(builder, ptr, sizeof(*ptr) * count)
 #define PutArray(builder, array, count)  Put((builder), (array), sizeof((array)[0]) * (count));

@@ -48,4 +48,5 @@ data/
 *.asm
 *.ilk
 build/
+build_clang/
 gen/

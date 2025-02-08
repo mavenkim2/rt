@@ -288,7 +288,7 @@ Vec4f Transform(const Mat4 &a, const Vec4f &b)
 #ifdef __SSE2__
     Lane4F32 laneResult =
         a.columns[0] * b.x + a.columns[1] * b.y + a.columns[2] * b.z + a.columns[3] * b.w;
-    Lane4F32::Store(&result, laneResult);
+    Lane4F32::StoreU(&result, laneResult);
     return result;
 #else
     result.x = a.columns[0][0] * b.x;

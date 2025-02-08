@@ -438,9 +438,9 @@ struct Scheduler
     {
     begin:
         if (ExploreTask(w, t,
-                        [&]() { return counter->count.load(std::memory_order_acq_rel) == 0; }))
+                        [&]() { return counter->count.load(std::memory_order_acquire) == 0; }))
             return true;
-        if (counter->count.load(std::memory_order_acq_rel) == 0) return false;
+        if (counter->count.load(std::memory_order_acquire) == 0) return false;
         for (u32 i = 0; i < numWorkers; i++)
         {
             if (!workers[i].queue.Empty())
@@ -505,7 +505,7 @@ struct Scheduler
     // NOTE: use when want to delay, instead of needing jobs to run to completion
     void WaitUntilEmpty(Counter *counter)
     {
-        if (counter->count.load(std::memory_order_acq_rel) == 0) return;
+        if (counter->count.load(std::memory_order_acquire) == 0) return;
         Worker *worker = &workers[GetThreadIndex()];
         Task t;
         for (;;)
@@ -517,7 +517,7 @@ struct Scheduler
 
     void Wait(Counter *counter)
     {
-        if (counter->count.load(std::memory_order_acq_rel) == 0) return;
+        if (counter->count.load(std::memory_order_acquire) == 0) return;
         Worker *worker = &workers[GetThreadIndex()];
         Task t;
         for (;;)

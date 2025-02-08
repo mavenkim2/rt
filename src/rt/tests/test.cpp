@@ -244,8 +244,10 @@ void TestRender(Arena *arena, Options *options = 0)
     AffineSpace renderFromWorld = AffineSpace::Translate(-pCamera);
     AffineSpace worldFromRender = AffineSpace::Translate(pCamera);
 
-    LoadScene(arenas, tempArenas, "../data/island/pbrt-v4/", options->filename, NDCFromCamera,
-              cameraFromRender, height, &renderFromWorld);
+    string directory = Str8PathChopPastLastSlash(options->filename);
+    string filename  = PathSkipLastSlash(options->filename);
+    LoadScene(arenas, tempArenas, directory, filename, NDCFromCamera, cameraFromRender, height,
+              &renderFromWorld);
 
     // environment map
 #if 1
@@ -259,7 +261,7 @@ void TestRender(Arena *arena, Options *options = 0)
     f32 scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
     Assert(scale == 0.00935831666f);
     ImageInfiniteLight infLight(
-        arena, LoadFile("../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png"),
+        arena, LoadFile("../../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png"),
         &renderFromLight, RGBColorSpace::sRGB, sceneRadius, scale);
     scene->lights.Set<ImageInfiniteLight>(&infLight, 1);
     scene->numLights = 1;

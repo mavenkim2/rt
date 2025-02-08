@@ -554,6 +554,12 @@ void ShadingQueueHandler(struct ShadingThreadState *state, ShadingHandle *values
                 ray.pxOffset = ray.pxOffset + si.tHit * ray.dxOffset;
                 ray.pyOffset = ray.pyOffset + si.tHit * ray.dyOffset;
             }
+            // TODO: handle empty materials differently from medium interfaces
+            if (rayState->depth++ >= globals->maxDepth)
+            {
+                TerminateRay(state, handle.rayStateHandle);
+                continue;
+            }
         }
         else
         {

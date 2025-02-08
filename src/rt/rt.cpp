@@ -1110,6 +1110,8 @@ int main(int argc, char *argv[])
     f32 out[3]               = {};
     filter->eval(out, 0, 3, 14, 0.f, 0.f, .5f, 0.f, 0.f, .5f);
 
+    texture->release();
+
     const u32 count = 3000000;
 
     Options options = {};

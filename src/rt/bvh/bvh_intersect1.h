@@ -275,6 +275,7 @@ struct BVHTraverser<8, types>
         const u32 childType5 = node->GetType(5);
         const u32 childType6 = node->GetType(6);
         const u32 childType7 = node->GetType(7);
+        // TODO: on cmake msvc this bugs out?
         Lane8F32 validNodeMask =
             Lane8U32(childType0, childType1, childType2, childType3, childType4, childType5,
                      childType6, childType7) != Lane8U32(BVHNode8::tyEmpty);
@@ -496,7 +497,7 @@ struct BVHIntersector
         {
             Assert(stackPtr <= ArrayLength(stack));
             StackEntry entry = stack[--stackPtr];
-            Assert(entry.ptr.data);
+            Assert(entry.ptr.data && entry.ptr != BVHNode<K>::tyEmpty);
             if (entry.dist > ray.tFar) continue;
 
             if (entry.ptr.IsLeaf())

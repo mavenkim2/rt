@@ -26,10 +26,49 @@ endif()
 set (MEM_INCLUDE_DIR
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt)
 
+string(TOUPPER "${CMAKE_BUILD_TYPE}" uppercase_CMAKE_BUILD_TYPE)
+
+# Visual Studio uses run time configs, so handle that
+if (CMAKE_CONFIGURATION_TYPES)
+    foreach(config ${CMAKE_CONFIGURATION_TYPES})
+        string(TOUPPER "${config}" config_upper)
+        # allow asserts in relwithdebinfo mode
+        if(config_upper STREQUAL "RELWITHDEBINFO")
+        if (NOT MSVC)
+            add_definitions(-D_DEBUG)
+        endif()
+        add_compile_options($<$<OR:$<COMPILE_LANGUAGE:C>,$<COMPILE_LANGUAGE:CXX>>:-UNDEBUG>)
+        foreach (flags_var_to_scrub
+                # CMAKE_CXX_FLAGS_RELEASE
+                CMAKE_CXX_FLAGS_RELWITHDEBINFO
+                CMAKE_CXX_FLAGS_MINSIZEREL)
+            string (REGEX REPLACE "(^| )[/-]D*NDEBUG($| )" " "
+                "${flags_var_to_scrub}" "${${flags_var_to_scrub}}")
+        endforeach()
+        endif()
+    endforeach()
+else()
+    if (uppercase_CMAKE_BUILD_TYPE STREQUAL "RELWITHDEBINFO")
+        if (NOT MSVC)
+            add_definitions(-D_DEBUG)
+        endif()
+        add_compile_options($<$<OR:$<COMPILE_LANGUAGE:C>,$<COMPILE_LANGUAGE:CXX>>:-UNDEBUG>)
+        foreach (flags_var_to_scrub
+                # CMAKE_CXX_FLAGS_RELEASE
+                CMAKE_CXX_FLAGS_RELWITHDEBINFO
+                CMAKE_CXX_FLAGS_MINSIZEREL)
+            string (REGEX REPLACE "(^| )[/-]D*NDEBUG($| )" " "
+                "${flags_var_to_scrub}" "${${flags_var_to_scrub}}")
+        endforeach()
+        # string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
+    endif()
+endif()
+
+
 add_subdirectory (${CMAKE_CURRENT_SOURCE_DIR}/src/third_party)
 
-set (FlagsSSE2 "-D __SSE__ -D __SSE2__")
-set (FlagsSSE42 "${FlagsSSE2} -D __SSE3__ -D __SSSE3__ -D __SSE4_1__ -D __SSE4_2__")
+# set (FlagsSSE2 "-D __SSE__ -D __SSE2__")
+# set (FlagsSSE42 "${FlagsSSE2} -D __SSE3__ -D __SSSE3__ -D __SSE4_1__ -D __SSE4_2__")
 
 include (CheckCXXCompilerFlag)
 check_cxx_compiler_flag("-march=native" COMPILER_SUPPORTS_MARCH_NATIVE)
@@ -39,6 +78,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     if (CMAKE_CXX_COMPILER_VERSION GREATER_EQUAL 14)
         message (STATUS "Disabling -ffp-contract")
         list (APPEND RT_CXX_FLAGS "-ffp-contract=off")
+        list (APPEND RT_CXX_FLAGS "-fp:precise")
         endif()
     if (COMPILER_SUPPORTS_MARCH_NATIVE)
         list (APPEND RT_CXX_FLAGS "-march=native")
@@ -51,7 +91,7 @@ endif ()
 
 # add_executable(rt "src/rt/rt.cpp")
 
-if (CMAKE_BUILD_TYPE MATCHES "Debug")
+if (CMAKE_BUILD_TYPE MATCHES "Debug" OR CMAKE_BUILD_TYPE MATCHES "RelWithDebInfo")
     list (APPEND RT_DEFINITIONS "TRACK_MEMORY" "DEBUG")
 endif()
 
@@ -71,11 +111,12 @@ set (MEM_SOURCE_FILES
 )
 
 if (CMAKE_SYSTEM_NAME STREQUAL Windows)
-    list (APPEND MEM_SOURCE_FILES "src/rt/win32.cpp")
+    list (APPEND PLATFORM_SOURCE_FILES "src/rt/win32.cpp")
 endif()
 
 add_library(thread_context OBJECT
     ${MEM_SOURCE_FILES}
+    ${PLATFORM_SOURCE_FILES}
 )
 
 target_compile_definitions(thread_context PRIVATE ${RT_DEFINITIONS})
@@ -83,7 +124,7 @@ target_link_libraries(thread_context PRIVATE ${deps})
 
 set(deps  
     ${deps}
-    thread_context
+    # thread_context
     ${ZLIB_LIBRARY}
     ${PTEX_LIBRARY}
     osd_static_cpu
@@ -94,17 +135,23 @@ install (TARGETS thread_context EXPORT THREAD_CONTEXT DESTINATION lib)
 install (EXPORT THREAD_CONTEXT DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/thread_context")
 
 # convert
-# add_executable(convert src/rt/cmd/convert.cpp)
-# target_compile_definitions
+add_executable(convert 
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/cmd/convert.cpp
+    ${PLATFORM_SOURCE_FILES}
+)
+target_compile_definitions(convert PRIVATE ${RT_DEFINITIONS})
+target_compile_options(convert PRIVATE ${RT_CXX_FLAGS})
 
 # rgb2spec
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/gen)
 add_executable(rgb2spec_exe ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/rgb2spec.cpp)
 target_compile_definitions(rgb2spec_exe PRIVATE ${RT_DEFINITIONS})
-add_custom_command(OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/src/gen/rgbspectrum_srgb.cpp 
-    COMMAND rgb2spec_exe ${CMAKE_CURRENT_SOURCE_DIR}/src/gen/rgbspectrum_srgb.cpp
-    DEPENDS rgb2spec_exe
-)
+if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/gen/rgbspectrum_srgb.cpp")
+    add_custom_command(OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/src/gen/rgbspectrum_srgb.cpp 
+        COMMAND rgb2spec_exe ${CMAKE_CURRENT_SOURCE_DIR}/src/gen/rgbspectrum_srgb.cpp
+        DEPENDS rgb2spec_exe
+    )
+endif()
 
 # Main executable
 add_executable(rt_exe 

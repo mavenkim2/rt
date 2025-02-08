@@ -1124,6 +1124,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     ScratchEnd(temp);
 }
 
+// TODO IMPORTANT: there's a race condition in here that occurs very rarely, where some of the counters never 
+// reach zero, leading to a deadlock.
 void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
                     const Mat4 &cameraFromRender, int screenHeight)
 {

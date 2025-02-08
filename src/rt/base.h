@@ -264,19 +264,19 @@ struct alignas(CACHE_LINE_SIZE) AlignedMutex
 inline bool TryMutex(Mutex *mutex)
 {
     u32 expected = 0;
-    return mutex->count.compare_exchange_weak(expected, 1, std::memory_order_acq_rel);
+    return mutex->count.compare_exchange_weak(expected, 1, std::memory_order_acquire);
 }
 
 inline void BeginMutex(Mutex *mutex)
 {
     u32 expected = 0;
-    while (!mutex->count.compare_exchange_weak(expected, 1, std::memory_order_acq_rel))
+    while (!mutex->count.compare_exchange_weak(expected, 1, std::memory_order_acquire))
     {
         expected = 0;
         _mm_pause();
     }
 }
-inline void EndMutex(Mutex *mutex) { mutex->count.store(0, std::memory_order_acq_rel); }
+inline void EndMutex(Mutex *mutex) { mutex->count.store(0, std::memory_order_release); }
 
 inline void BeginMutex(AlignedMutex *mutex) { BeginMutex(&mutex->mutex); }
 inline void EndMutex(AlignedMutex *mutex) { EndMutex(&mutex->mutex); }

@@ -829,7 +829,7 @@ u32 GetSID(string str)
 // String writing
 //
 
-u64 Put(StringBuilder *builder, void *data, u64 size)
+u64 Put_(StringBuilder *builder, void *data, u64 size)
 {
     u64 cursor                        = builder->totalSize;
     StringBuilderChunkNode *chunkNode = builder->last;
@@ -850,10 +850,15 @@ u64 Put(StringBuilder *builder, void *data, u64 size)
     return cursor;
 }
 
+u64 PutData(StringBuilder *builder, void *data, u64 size)
+{
+    return Put_(builder, data, size);
+}
+
 u64 Put(StringBuilder *builder, string str)
 {
     Assert((u32)str.size == str.size);
-    u64 result = Put(builder, str.str, (u32)str.size);
+    u64 result = Put_(builder, str.str, (u32)str.size);
     return result;
 }
 
@@ -981,7 +986,7 @@ void Expand(StringBuilderMapped *builder, u64 size)
     }
 }
 
-u64 Put(StringBuilderMapped *builder, void *data, u64 size)
+u64 PutData(StringBuilderMapped *builder, void *data, u64 size)
 {
     Expand(builder, size);
     MemoryCopy(builder->writePtr, data, size);
@@ -999,7 +1004,7 @@ void Put(StringBuilderMapped *builder, void *data, u64 size, u64 offset, u64 cap
 
 u64 Put(StringBuilderMapped *builder, string str)
 {
-    u64 result = Put(builder, str.str, str.size);
+    u64 result = PutData(builder, str.str, str.size);
     return result;
 }
 

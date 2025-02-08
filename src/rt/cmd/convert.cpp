@@ -10,10 +10,11 @@
 #include "../math/matx.h"
 #include "../math/math.h"
 
+#include "../platform.h"
 #include "../memory.h"
 #include "../string.h"
 #include "../containers.h"
-#include "../win32.h"
+// #include "../win32.h"
 #include "../thread_context.h"
 #include "../hash.h"
 #include <functional>
@@ -21,7 +22,7 @@
 #include "../bvh/parallel.h"
 // #include "../handles.h"
 #include "../base.cpp"
-#include "../win32.cpp"
+// #include "../win32.cpp"
 #include "../memory.cpp"
 #include "../string.cpp"
 #include "../thread_context.cpp"
@@ -857,7 +858,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
     GraphicsState currentGraphicsState = graphicsState;
 
     auto AddTransform = [&]() {
-        if (currentGraphicsState.transformIndex == transforms->Length())
+        if (currentGraphicsState.transformIndex == (i32)transforms->Length())
         {
             transforms->Push(currentGraphicsState.transform);
         }
@@ -1531,7 +1532,7 @@ void WriteTexture(StringBuilder *builder, const NamedPacket *packet)
                     if (scenePacket->parameterNames[j] == parameterIds[i])
                     {
                         Put(builder, "%S ", parameterNames[i]);
-                        Put(builder, scenePacket->bytes[j], scenePacket->sizes[j]);
+                        PutData(builder, scenePacket->bytes[j], scenePacket->sizes[j]);
                         Put(builder, " ");
                     }
                 }
@@ -1569,13 +1570,13 @@ void WriteMaterials(StringBuilder *builder, SceneHashMap *textureHashMap, NamedP
                         u32 count = scenePacket->sizes[p] / sizeof(f32);
                         Assert(count == 1);
 
-                        Put(builder, scenePacket->bytes[p], scenePacket->sizes[p]);
+                        PutData(builder, scenePacket->bytes[p], scenePacket->sizes[p]);
                         Put(builder, " ");
                     }
                     break;
                     case DataType::Vec3:
                     {
-                        Put(builder, scenePacket->bytes[p], scenePacket->sizes[p]);
+                        PutData(builder, scenePacket->bytes[p], scenePacket->sizes[p]);
                         Put(builder, " ");
                     }
                     break;
@@ -1588,8 +1589,8 @@ void WriteMaterials(StringBuilder *builder, SceneHashMap *textureHashMap, NamedP
                     {
                         string textureName =
                             Str8(scenePacket->bytes[p], scenePacket->sizes[p]);
-                        const NamedPacket *packet = textureHashMap->Get(textureName);
-                        WriteTexture(builder, packet);
+                        const NamedPacket *nPacket = textureHashMap->Get(textureName);
+                        WriteTexture(builder, nPacket);
                     }
                     break;
                     default: ErrorExit(0, "not supported yet\n");
@@ -1605,7 +1606,7 @@ void WriteData(StringBuilder *builder, StringBuilderMapped *dataBuilder, void *p
 {
     Assert(ptr);
     u64 offset = dataBuilder->totalSize;
-    Put(dataBuilder, ptr, size);
+    PutData(dataBuilder, ptr, size);
     Put(builder, "%S %llu ", out, offset);
 }
 
@@ -1998,7 +1999,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
         Put(&dataBuilder, "Count %u ", info->transforms.totalCount);
         for (auto *node = info->transforms.first; node != 0; node = node->next)
         {
-            Put(&dataBuilder, node->values, sizeof(node->values[0]) * node->count);
+            PutData(&dataBuilder, node->values, sizeof(node->values[0]) * node->count);
         }
         Put(&dataBuilder, "TRANSFORM_END");
     }
@@ -2023,11 +2024,13 @@ void LoadPBRT(Arena *arena, string filename)
     SceneLoadState sls;
     sls.Init(arena);
 
-    string directory = "../data/island/pbrt-v4/";
+    string directory = Str8PathChopPastLastSlash(filename);
+    string baseFile  = PathSkipLastSlash(filename);
+
     OS_CreateDirectory(StrConcat(temp.arena, directory, "objects"));
 
     PerformanceCounter counter = OS_StartCounter();
-    LoadPBRT(&sls, "../data/island/pbrt-v4/", filename);
+    LoadPBRT(&sls, directory, baseFile);
     f32 time = OS_GetMilliseconds(counter);
     printf("convert time: %fms\n", time);
 
