@@ -3,6 +3,7 @@
 #include "macros.h"
 #include "integrate.h"
 #include "math/matx.h"
+#include "memory.h"
 #include "scene_load.h"
 #include "simd_integrate.h"
 #include "spectrum.h"
@@ -61,19 +62,15 @@ struct PtexData
 
 struct PtexCache
 {
-    // Ptex::PtexTexture *texture;
-    // Scheduler::Counter counter = {};
-    // Ptex::PtexFilter *filter;
-
     std::atomic<int> count;
-    // int count;
     Mutex mutex;
 
-    void Load(string filename, ShadingThreadState *state, PtexTexture *parent);
+    void Load(string filename, ShadingThreadState *state, PtexTexture *parent)
+    {
+        count.fetch_add(1, std::memory_order_acquire);
+    }
     void Release(Ptex::PtexTexture *texture)
     {
-        // u32 expected = 1;
-        // counter.count.compare_exchange_strong(expected, 0u, std::memory_order_release);
         int result = count.fetch_sub(1, std::memory_order_release);
         if (result == 1) texture->release();
     }
@@ -268,53 +265,6 @@ struct PtexTexture : Texture
         texture->release();
     }
 };
-
-void PtexCache::Load(string filename, ShadingThreadState *state, PtexTexture *parent)
-{
-    int spins = 0;
-
-    // BeginMutex(&mutex);
-    // BeginRMutex(&mutex);
-    count.fetch_add(1, std::memory_order_acquire);
-    // int c = count.fetch_add(1, std::memory_order_acquire);
-    // if (c == 0)
-    // if (c == 0)
-    // {
-    //     Ptex::String error;
-    //     texture = cache->get((char *)filename.str, error);
-    //     if (!texture)
-    //     {
-    //         printf("%s\n", error.c_str());
-    //         Assert(0);
-    //     }
-    // }
-    // EndMutex(&mutex);
-
-    // const int maxSpins = 1;
-    // for (int spin = 0; spin <= maxSpins; spin++)
-    // {
-    //     u32 expected = 0;
-    //     if (counter.count.compare_exchange_weak(expected, 1, std::memory_order_acquire) ||
-    //         spin == maxSpins)
-    //     {
-    //         state->texture = parent;
-    //         break;
-    //     }
-    //     else
-    //     {
-    //         GetDebug()->texture = parent;
-    //         if (state->texture)
-    //         {
-    //             expected    = 1;
-    //             bool result =
-    //             state->texture->ptexCache.counter.count.compare_exchange_strong(
-    //                 expected, 0, std::memory_order_release);
-    //             state->texture = 0;
-    //         }
-    //         scheduler.WaitUntilEmpty(&counter);
-    //     }
-    // }
-}
 
 struct ConstantTexture : Texture
 {
@@ -634,6 +584,41 @@ Texture *ParseDisplacement(Arena *arena, Tokenizer *tokenizer, string directory)
         return ParseTexture(arena, tokenizer, directory, FilterType::Bspline,
                             ColorEncoding::Linear);
     return 0;
+}
+
+DiffuseAreaLight ParseAreaLight(Arena *arena, Tokenizer *tokenizer, Mesh *mesh)
+{
+    DiffuseAreaLight light;
+
+    if (Advance(tokenizer, "filename "))
+    {
+        ErrorExit(0, "sorry, not supported yet\n");
+    }
+    if (Advance(tokenizer, "L "))
+    {
+        // TODO: right now this only supportrs a one quad mesh with constant RGB
+        DataType dataType = (DataType)ReadInt(tokenizer);
+        SkipToNextChar(tokenizer);
+
+        ErrorExit(dataType == DataType::Vec3,
+                  "sorry, only constant radiance lights supported\n");
+
+        Vec3f value = ReadVec3Bytes(tokenizer);
+
+        // RGBIlluminantSpectrum *spec =
+        RGBIlluminantSpectrum spec(*RGBColorSpace::sRGB, value);
+        DenselySampledSpectrum *dss =
+            PushStructConstruct(arena, DenselySampledSpectrum)(&spec);
+        light.Lemit = dss;
+        light.scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
+        light.area  = Length(Cross(mesh->p[1] - mesh->p[0], mesh->p[3] - mesh->p[0]));
+        // light.renderFromLight = 0;
+    }
+    if (Advance(tokenizer, "twosided "))
+    {
+        ErrorExit(0, "sorry, not supported yet\n");
+    }
+    return light;
 }
 
 void ReadDielectricMaterial(Arena *arena, Tokenizer *tokenizer, string directory,
@@ -1029,22 +1014,48 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
             Assert(isLeaf);
             ChunkedLinkedList<Mesh, 1024, MemoryType_Shape> shapes(temp.arena);
             ChunkedLinkedList<PrimitiveIndices, 1024, MemoryType_Shape> indices(temp.arena);
+            ChunkedLinkedList<DiffuseAreaLight, 1024, MemoryType_Light> areaLights(temp.arena);
+            ChunkedLinkedList<Texture *, 1024, MemoryType_Texture> alphaTextures(temp.arena);
 
-            int noMaterialCount = 0;
-            auto AddMaterial    = [&]() {
+            int noMaterialCount       = 0;
+            auto AddMaterialAndLights = [&](Mesh &mesh) {
                 PrimitiveIndices &ids = indices.AddBack();
+
+                MaterialHandle mHandle;
+                LightHandle lHandle;
+                int alphaIndex = -1;
+
+                // Check for material
                 if (Advance(&tokenizer, "m "))
                 {
                     Assert(materialHashMap);
                     string materialName      = ReadWord(&tokenizer);
                     const MaterialNode *node = materialHashMap->Get(materialName);
-                    ids                      = PrimitiveIndices(LightHandle(), node->handle);
+                    mHandle                  = node->handle;
                 }
                 else
                 {
-                    ids = PrimitiveIndices(LightHandle(), MaterialHandle());
+                    mHandle = MaterialHandle();
                     noMaterialCount++;
                 }
+
+                // Check for area light
+                if (Advance(&tokenizer, "a "))
+                {
+                    ErrorExit(type == GeometryType::QuadMesh,
+                              "Only quad area lights supported for now\n");
+                    areaLights.AddBack() = ParseAreaLight(arena, &tokenizer, &mesh);
+                }
+
+                // Check for alpha
+                Texture *alphaTexture = ParseTexture(arena, &tokenizer, directory);
+                if (alphaTexture)
+                {
+                    alphaIndex              = alphaTextures.Length();
+                    alphaTextures.AddBack() = alphaTexture;
+                }
+
+                ids = PrimitiveIndices(lHandle, mHandle, alphaIndex);
             };
 
             auto AddMesh = [&](Mesh &mesh, int numVerticesPerFace) {
@@ -1063,11 +1074,11 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 if (Advance(&tokenizer, "Quad "))
                 {
                     // MOANA: everything should be catclark
-                    Assert(0);
+                    // Assert(0);
                     type       = GeometryType::QuadMesh;
                     Mesh &mesh = shapes.AddBack();
                     AddMesh(mesh, 4);
-                    AddMaterial();
+                    AddMaterialAndLights(mesh);
 
                     threadMemoryStatistics[threadIndex].totalShapeMemory +=
                         mesh.numVertices * (sizeof(Vec3f) * 2 + sizeof(Vec2f)) +
@@ -1078,7 +1089,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     type       = GeometryType::TriangleMesh;
                     Mesh &mesh = shapes.AddBack();
                     AddMesh(mesh, 3);
-                    AddMaterial();
+                    AddMaterialAndLights(mesh);
 
                     threadMemoryStatistics[threadIndex].totalShapeMemory +=
                         mesh.numVertices * (sizeof(Vec3f) * 2 + sizeof(Vec2f)) +
@@ -1089,7 +1100,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     type       = GeometryType::CatmullClark;
                     Mesh &mesh = shapes.AddBack();
                     AddMesh(mesh, 4);
-                    AddMaterial();
+                    AddMaterialAndLights(mesh);
                 }
                 else
                 {

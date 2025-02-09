@@ -267,6 +267,249 @@ void TestRender(Arena *arena, Options *options = 0)
     scene->numLights = 1;
 #endif
 
+    // lights: 
+    // TODO: don't hard code this 
+
+    // AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 0.144612 2 1.688784 ]
+//     Transform [ 0.877798 -0.06858 0.474097 0 -0.479031 -0.125669 0.868756 0 0 -0.989699 -0.143164 0 5791.998 30.147938 1147.3087 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 50 50 0 -50 50 0 -50 -50 0 50 -50 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: distantPalm_key_0001_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 32 18.161215 5.55058 ]
+//     Transform [ 0.966224 -0.121583 -0.227218 0 -0.071151 0.721572 -0.688673 0 0.247685 0.68158 0.68855 0 4384.44 2008.4838 1063.3832 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 250 250 0 -250 250 0 -250 -250 0 250 -250 0 ]
+// AttributeEnd
+
+//     AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 64 36.322426 11.10116 ]
+//     Transform [ 0.973579 0 -0.228351 0 -0.134221 0.809017 -0.572255 0 0.18474 0.587785 0.787642 0 1.459472 726.1523 82.182785 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 20 20 0 -20 20 0 -20 -20 0 20 -20 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: palm_key_0002_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 64 36.322426 11.10116 ]
+//     Transform [ 0.866025 0 -0.5 0 -0.263478 0.849893 -0.456357 0 0.424946 0.526956 0.736029 0 272.9517 602.51416 165.92653 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 20 20 0 -20 20 0 -20 -20 0 20 -20 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: palm_bounce_0007_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 0.144612 2 1.688784 ]
+//     Transform [ 0.877798 -0.06858 0.474097 0 -0.479031 -0.125669 0.868756 0 0 -0.989699 -0.143164 0 4826.319 30.147938 407.92764 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 50 50 0 -50 50 0 -50 -50 0 50 -50 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: distantPalm_key_0002_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 32 18.161215 5.55058 ]
+//     Transform [ 0.966224 -0.121583 -0.227218 0 -0.071151 0.721572 -0.688673 0 0.247685 0.68158 0.68855 0 4022.4065 1324.5935 656.12604 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 250 250 0 -250 250 0 -250 -250 0 250 -250 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: sun_quad_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 891.4438 505.92816 154.62595 ]
+//     Transform [ 0.906308 0 -0.422618 0 -0.271654 0.766044 -0.582563 0 0.323744 0.642788 0.694272 0 95000 195000 200000 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 10000 10000 0 -10000 10000 0 -10000 -10000 0 10000 -10000 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: palm_key_0003_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 64 36.322426 11.10116 ]
+//     Transform [ 0.663926 0 -0.747798 0 -0.439545 0.809017 -0.390246 0 0.604981 0.587785 0.537128 0 -273.4717 388.39133 236.2653 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 20 20 0 -20 20 0 -20 -20 0 20 -20 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: distantPalm_key_0003_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 16 9.080607 2.77529 ]
+//     Transform [ 0.966224 -0.121583 -0.227218 0 -0.071151 0.721572 -0.688673 0 0.247685 0.68158 0.68855 0 6416.284 1845.6516 2646.959 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 250 250 0 -250 250 0 -250 -250 0 250 -250 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: palm_key_0005_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 64 36.322426 11.10116 ]
+//     Transform [ 0.921863 0 -0.387516 0 -0.263294 0.73373 -0.626352 0 0.284332 0.679441 0.676399 0 635.25916 582.98285 321.60913 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 20 20 0 -20 20 0 -20 -20 0 20 -20 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: palm_bounce_0005_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 0.144612 2 1.688784 ]
+//     Transform [ 0.877798 -0.06858 0.474097 0 -0.479031 -0.125669 0.868756 0 0 -0.989699 -0.143164 0 5152.9746 39.179268 732.2823 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 50 50 0 -50 50 0 -50 -50 0 50 -50 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: palm_key_0009_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 64 36.322426 11.10116 ]
+//     Transform [ 0.85896 0 0.512043 0 0.277378 0.840567 -0.465306 0 -0.430406 0.541708 0.722013 0 5787.167 500.0962 1224.9753 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 20 20 0 -20 20 0 -20 -20 0 20 -20 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: palm_key_0007_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 64 36.322426 11.10116 ]
+//     Transform [ 0.866025 0 -0.5 0 -0.288216 0.817145 -0.499205 0 0.408572 0.576432 0.707668 0 1250.6256 710.8533 289.97858 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 20 20 0 -20 20 0 -20 -20 0 20 -20 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: palm_key_0006_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 64 36.322426 11.10116 ]
+//     Transform [ 0.756995 0 -0.653421 0 -0.437224 0.743145 -0.506529 0 0.485586 0.669131 0.562557 0 694.6131 781.1826 -10.946265 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 20 20 0 -20 20 0 -20 -20 0 20 -20 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: palm_bounce_0003_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 0.144612 2 1.688784 ]
+//     Transform [ 1 0 0 0 0 -0.143164 0.989699 0 0 -0.989699 -0.143164 0 859.4387 23.969145 182.02992 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 50 50 0 -50 50 0 -50 -50 0 50 -50 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: palm_bounce_0002_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 0.144612 2 1.688784 ]
+//     Transform [ 1 0 0 0 0 -0.143164 0.989699 0 0 -0.989699 -0.143164 0 548.57416 8.972369 161.69945 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 50 50 0 -50 50 0 -50 -50 0 50 -50 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: palm_key_0010_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 64 36.322426 11.10116 ]
+//     Transform [ 0.848048 0 0.529919 0 0.340626 0.766044 -0.545115 0 -0.405942 0.642788 0.649643 0 5412.32 666.92957 923.0553 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 20 20 0 -20 20 0 -20 -20 0 20 -20 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: palm_bounce_0004_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 0.144612 2 1.688784 ]
+//     Transform [ 1 0 0 0 0 -0.143164 0.989699 0 0 -0.989699 -0.143164 0 3603.8794 23.969145 -66.078415 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 50 50 0 -50 50 0 -50 -50 0 50 -50 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: beach_key_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 11.313708 6.420959 1.962426 ]
+//     Transform [ 0.988228 -0 -0.152986 0 -0.119894 0.621148 -0.774468 0 0.095027 0.783693 0.613836 0 -54.08259 154.21344 175.75452 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 5 5 0 -5 5 0 -5 -5 0 5 -5 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: palm_key_0004_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 64 36.322426 11.10116 ]
+//     Transform [ 0.541708 0 -0.840567 0 -0.465162 0.832921 -0.299777 0 0.700126 0.553392 0.4512 0 513.7678 860.97144 -124.38911 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 20 20 0 -20 20 0 -20 -20 0 20 -20 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: palm_bounce_0001_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 0.144612 2 1.688784 ]
+//     Transform [ 1 0 0 0 0 -0.148451 0.98892 0 0 -0.98892 -0.148451 0 -370.74753 23.60033 59.582645 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 50 50 0 -50 50 0 -50 -50 0 50 -50 0 ]
+// AttributeEnd
+// # quad light w/ simple triangle mesh: palm_key_0008_llc
+//
+// AttributeBegin
+//     AreaLightSource "diffuse"
+//         "rgb L" [ 64 36.322426 11.10116 ]
+//     Transform [ 0.988228 -0 -0.152986 0 -0.080162 0.851727 -0.517818 0 0.130302 0.523986 0.841701 0 5462.852 611.56915 1081.965 1  ]
+//     Shape "trianglemesh"
+//         "integer indices" [ 0 2 1 0 3 2 ]
+//         "float alpha" [ 0 ]
+//         "point3 P" [ 20 20 0 -20 20 0 -20 -20 0 20 -20 0 ]
+// AttributeEnd
+
     // f32 scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
     // ConstantSpectrum spec2(1.f);
     // UniformInfiniteLight infLight(&spec2, scale);

@@ -72,8 +72,8 @@ struct Instance
 struct ShapeType
 {
     ScenePacket packet;
-    u32 *transformIndex;
 
+    ScenePacket *areaLight;
     string materialName;
 };
 
@@ -374,8 +374,9 @@ struct GraphicsState
     AffineSpace transform = AffineSpace::Identity();
 
     i32 transformIndex = -1;
-    i32 areaLightIndex = -1;
-    i32 mediaIndex     = -1;
+    // i32 areaLightIndex = -1;
+    ScenePacket *areaLightPacket;
+    i32 mediaIndex = -1;
 };
 
 void PBRTSkipToNextChar(Tokenizer *tokenizer) { SkipToNextChar(tokenizer, '#'); }
@@ -952,10 +953,13 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                           "%S cannot be specified before WorldBegin "
                           "statement\n",
                           word);
-                currentGraphicsState.areaLightIndex = lights->Length();
-                NamedPacket *packet                 = &lights->AddBack();
-                CreateScenePacket(tempArena, word, &packet->packet, &tokenizer,
-                                  MemoryType_Light);
+                // currentGraphicsState.areaLightIndex = lights->Length();
+                // NamedPacket *packet                 = &lights->AddBack();
+
+                // TODO: make sure this is the right arena
+                ScenePacket *packet = PushStruct(tempArena, ScenePacket);
+                CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Light);
+                currentGraphicsState.areaLightPacket = packet;
             }
             break;
             case "Attribute"_sid:
@@ -1341,8 +1345,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 ShapeType *shape    = &shapes->AddBack();
                 ScenePacket *packet = &shape->packet;
 
-                CreateScenePacket(tempArena, word, packet, &tokenizer,
-                                  MemoryType_Shape); //, 1);
+                CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Shape);
 
                 // TODO: temp
                 if (packet->type == "curve"_sid)
@@ -1385,6 +1388,9 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 }
 
                 shape->materialName = currentGraphicsState.materialName;
+                shape->areaLight    = currentGraphicsState.areaLightPacket
+                                          ? currentGraphicsState.areaLightPacket
+                                          : 0;
 
                 AddTransform();
             }
@@ -1543,6 +1549,63 @@ void WriteTexture(StringBuilder *builder, const NamedPacket *packet)
     }
 }
 
+void WriteDataType(StringBuilder *builder, ScenePacket *scenePacket, int p,
+                   SceneHashMap *textureHashMap = 0)
+{
+    switch (scenePacket->types[p])
+    {
+        case DataType::Float:
+        {
+            u32 count = scenePacket->sizes[p] / sizeof(f32);
+            Assert(count == 1);
+
+            PutData(builder, scenePacket->bytes[p], scenePacket->sizes[p]);
+            Put(builder, " ");
+        }
+        break;
+        case DataType::Vec3:
+        {
+            PutData(builder, scenePacket->bytes[p], scenePacket->sizes[p]);
+            Put(builder, " ");
+        }
+        break;
+        case DataType::Spectrum:
+        {
+            Assert(0);
+        }
+        break;
+        case DataType::Texture:
+        {
+            Assert(textureHashMap);
+            string textureName         = Str8(scenePacket->bytes[p], scenePacket->sizes[p]);
+            const NamedPacket *nPacket = textureHashMap->Get(textureName);
+            WriteTexture(builder, nPacket);
+        }
+        break;
+        default: ErrorExit(0, "not supported yet\n");
+    }
+}
+
+int CheckForID(ScenePacket *packet, StringId id)
+{
+    for (u32 p = 0; p < packet->parameterCount; p++)
+    {
+        if (packet->parameterNames[p] == id) return p;
+    }
+    return -1;
+}
+
+void WriteNameTypeAndData(StringBuilder *builder, ScenePacket *packet, string name, int p,
+                          SceneHashMap *textureHashMap = 0)
+{
+    if (p >= 0 && p < packet->parameterCount)
+    {
+        Put(builder, "%S ", name);
+        Put(builder, "%u ", packet->types[p]);
+        WriteDataType(builder, packet, p, textureHashMap);
+    }
+}
+
 void WriteMaterials(StringBuilder *builder, SceneHashMap *textureHashMap, NamedPacket &packet,
                     u32 hashMask)
 {
@@ -1557,47 +1620,8 @@ void WriteMaterials(StringBuilder *builder, SceneHashMap *textureHashMap, NamedP
     for (u32 i = 0; i < count; i++)
     {
         ScenePacket *scenePacket = &packet.packet;
-        for (u32 p = 0; p < scenePacket->parameterCount; p++)
-        {
-            if (scenePacket->parameterNames[p] == ids[i])
-            {
-                Put(builder, "%S ", names[i]);
-                Put(builder, "%u ", scenePacket->types[p]);
-                switch (scenePacket->types[p])
-                {
-                    case DataType::Float:
-                    {
-                        u32 count = scenePacket->sizes[p] / sizeof(f32);
-                        Assert(count == 1);
-
-                        PutData(builder, scenePacket->bytes[p], scenePacket->sizes[p]);
-                        Put(builder, " ");
-                    }
-                    break;
-                    case DataType::Vec3:
-                    {
-                        PutData(builder, scenePacket->bytes[p], scenePacket->sizes[p]);
-                        Put(builder, " ");
-                    }
-                    break;
-                    case DataType::Spectrum:
-                    {
-                        Assert(0);
-                    }
-                    break;
-                    case DataType::Texture:
-                    {
-                        string textureName =
-                            Str8(scenePacket->bytes[p], scenePacket->sizes[p]);
-                        const NamedPacket *nPacket = textureHashMap->Get(textureName);
-                        WriteTexture(builder, nPacket);
-                    }
-                    break;
-                    default: ErrorExit(0, "not supported yet\n");
-                }
-                break;
-            }
-        }
+        int p                    = CheckForID(scenePacket, ids[i]);
+        WriteNameTypeAndData(builder, scenePacket, names[i], p, textureHashMap);
     }
 }
 
@@ -1710,6 +1734,36 @@ void WriteMesh(StringBuilder &builder, StringBuilderMapped &dataBuilder, ScenePa
         if (numIndices) Put(&builder, "i %u ", numIndices);
     }
     ScratchEnd(temp);
+}
+
+void WriteAreaLight(StringBuilder *builder, ScenePacket *light)
+{
+    Put(builder, "a ");
+    const string areaLightNames[] = {
+        "filename",
+        "L",
+        "twosided",
+    };
+
+    const StringId areaLightIDs[] = {
+        "filename"_sid,
+        "L"_sid,
+        "twosided"_sid,
+    };
+
+    for (int i = 0; i < ArrayLength(areaLightNames); i++)
+    {
+        for (int j = 0; j < light->parameterCount; j++)
+        {
+            if (light->parameterNames[j] == areaLightIDs[i])
+            {
+                Put(builder, "%S ", areaLightNames[i]);
+                Put(builder, "%u ", light->types[j]);
+                WriteDataType(builder, light, j);
+                break;
+            }
+        }
+    }
 }
 
 void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
@@ -1879,6 +1933,11 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
 
                             if (shapeType->materialName.size)
                                 Put(&builder, "m %S ", shapeType->materialName);
+                            if (shapeType->areaLight)
+                                WriteAreaLight(&builder, shapeType->areaLight);
+
+                            int alphaID = CheckForID(packet, "alpha"_sid);
+                            WriteNameTypeAndData(&builder, packet, "alpha", alphaID);
                         }
                     });
 
@@ -1926,6 +1985,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                     }
                     if (shapeType->materialName.size)
                         Put(&builder, "m %S ", shapeType->materialName);
+                    if (shapeType->areaLight) WriteAreaLight(&builder, shapeType->areaLight);
                 }
             }
         }

@@ -89,13 +89,16 @@ const DenselySampledSpectrum *LookupSpectrum(Spectrum s) { return 0; }
 
 struct DiffuseAreaLight
 {
-    Vec3f *p;
+    // Vec3f *p;
+    // Mesh *mesh;
     f32 scale = 1.f;
     const AffineSpace *renderFromLight;
-    const DenselySampledSpectrum *Lemit;
+    // const DenselySampledSpectrum *Lemit;
+    Spectrum Lemit;
     static constexpr f32 MinSphericalArea = 1e-4;
     f32 area;
 
+    DiffuseAreaLight() {}
     DiffuseAreaLight(Vec3f *p, f32 scale, Spectrum Lemit)
         : p(p), scale(scale), Lemit(LookupSpectrum(Lemit))
     {

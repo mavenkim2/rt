@@ -9,18 +9,17 @@
 namespace rt
 {
 // TODO
-// - order:
-// - actual displacement mapping (instead of bump mapping)
-// - subdivision surfaces
-// - fix ray differentials
+// BUGS: 
+// - shading normals seem wrong for some elements, check subdivision code
+// - when the build process receives garbage data, it produces a bvh that
+// causes the intersection to infinite loop?
+// - rare deadlock in bvh construction code
+//  
 // - remove duplicate materials (and maybe geometry), see if this leads to coherent texture
 // reads
 // - curves, area lights
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
 // - optimize bvh memory consumption?
-
-// - BUG: when the build process receives garbage data, it produces a bvh that
-// causes the intersection to infinite loop?
 
 // - bdpt, metropolis, vcm, upbp, mcm?
 // - volumetric rendering

@@ -552,9 +552,15 @@ struct PrimitiveIndices
     LightHandle lightID;
     // u32 volumeIndex;
     MaterialHandle materialID;
+    int alphaIndex;
+
     PrimitiveIndices() {}
     PrimitiveIndices(LightHandle lightID, MaterialHandle materialID)
-        : lightID(lightID), materialID(materialID)
+        : lightID(lightID), materialID(materialID), alphaIndex(-1)
+    {
+    }
+    PrimitiveIndices(LightHandle lightID, MaterialHandle materialID, int alphaIndex)
+        : lightID(lightID), materialID(materialID), alphaIndex(alphaIndex)
     {
     }
 };
@@ -685,6 +691,7 @@ struct Scene
     ArrayTuple<LightTypes> lights;
 
     StaticArray<Material *> materials;
+    StaticArray<Texture *> textures;
 
     u32 numLights;
 
