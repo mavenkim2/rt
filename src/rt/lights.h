@@ -109,7 +109,7 @@ struct DiffuseAreaLight
     LightFunctions(DiffuseAreaLight);
 };
 
-// TODO: loop over all of these after the scene is fullly instantiated and add the scene radius
+// TODO: loop over all of these after the scene is fully instantiated and add the scene radius
 struct DistantLight
 {
     Vec3f d;

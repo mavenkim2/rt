@@ -2,22 +2,26 @@
 #include "bxdf.h"
 #include "lights.h"
 #include "bsdf.h"
+#include "math/basemath.h"
 #include "scene.h"
 #include "spectrum.h"
+#include <cstring>
 #include <type_traits>
 
 namespace rt
 {
 // TODO
-// BUGS: 
+// BUGS:
 // - shading normals seem wrong for some elements, check subdivision code
 // - when the build process receives garbage data, it produces a bvh that
 // causes the intersection to infinite loop?
 // - rare deadlock in bvh construction code
-//  
+//
+// - area lights w/ light tree traversal, adaptive splitting, and accounting for BSDF
+// - https://fpsunflower.github.io/ckulla/data/many-lights-hpg2018.pdf
 // - remove duplicate materials (and maybe geometry), see if this leads to coherent texture
 // reads
-// - curves, area lights
+// - curves
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
 // - optimize bvh memory consumption?
 
@@ -689,6 +693,233 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
         }
     }
     return L;
+}
+
+struct KDTreeNode
+{
+    union
+    {
+        struct
+        {
+            int axis;
+            f32 split;
+        };
+        struct
+        {
+            int start;
+            int count;
+        };
+    };
+
+    KDTreeNode *left;
+    KDTreeNode *right;
+
+    bool IsLeaf() const { return left == 0; }
+};
+
+void CachePoints()
+{
+    // Step 1: Generate 100,000 candidate points randomly distributed within the
+    // individual bounding boxes
+
+    const int totalNumCandidatePoints = 100000;
+
+    // TODO: get list of bounds of all objects
+    Bounds *bounds = 0;
+
+    const f64 totalVolume = 0.f;
+
+    int numCandidatePoints = totalNumCandidatePoints * bounds->Volume() / totalVolume;
+
+    // TODO: make sure the object we're looking at is one
+    // where nee is actually computed (i.e. no area lights, no null material objects)
+    RNG rng(?, ?);
+    for (int i = 0; i < numCandidatePoints; i++)
+    {
+        // Generate random points within the bounding box
+        f32 x = rng.Uniform<f32>();
+        f32 y = rng.Uniform<f32>();
+        f32 z = rng.Uniform<f32>();
+
+        Vec3f p;
+        p.x = Lerp(x, bounds.minP[0], bounds.maxP[0]);
+        p.y = Lerp(y, bounds.minP[1], bounds.maxP[1]);
+        p.z = Lerp(z, bounds.minP[2], bounds.maxP[2]);
+
+        // TODO: trace pilot paths?
+    }
+}
+
+// double buffer
+void BuildKDTree(Arena *arena, Vec3f *cachePoints, Vec3f *cachePointsBuffer, int start,
+                 int num)
+{
+    Bounds geomBounds;
+    // Calculate the maximum extent to split by
+    // TODO: parallel for this when num is sufficiently large
+    for (int i = start; i < start + num; i++)
+    {
+        geomBounds.Extend(Lane4F32(cachePoints[i]));
+    }
+
+    // Calculate the maximum extent
+    int axis      = -1;
+    f32 maxExtent = neg_inf;
+    for (int i = 0; i < 3; i++)
+    {
+        f32 extent = geomBounds.maxP[i] - geomBounds.minP[i];
+        if (extent > maxExtent)
+        {
+            maxExtent = extent;
+            axis      = i;
+        }
+    }
+
+    // TODO: calculate a splitting plane that evenly subdivides the points?
+    f32 splitPlane = (geomBounds.maxP[axis] + geomBounds.minP[axis]) / 2.f;
+
+    KDTreeNode *node = PushStruct(arena, KDTreeNode);
+    node->split      = splitPlane;
+
+    // TODO: parallel for
+    int numLeft  = 0;
+    int numRight = 0;
+    for (int i = start; i < start + num; i++)
+    {
+        if (cachePoints[i][axis] >= splitPlane) numRight++;
+        else numLeft++;
+    }
+    int leftOffset  = start;
+    int rightOffset = start + numLeft;
+    for (int i = start; i < start + num; i++)
+    {
+        int choice = cachePoints[i][axis] >= splitPlane;
+        cachePointsBuffer[choice ? rightOffset++ : leftOffset++] = cachePoints[i];
+    }
+}
+
+struct KNN
+{
+    int index;
+    f32 distance;
+};
+
+void FindKNearestNeighbors(KDTreeNode *node, const Vec3f &candidatePoint, int index, KNN *kNN,
+                           int &k, const int *cachePointIndexList, const Vec3f *cachePoints,
+                           const f32 &maxMinDistance)
+{
+    // Remove 20 kNN
+    const f32 searchRadius = 1e-5;
+    const int numToPrune   = 20;
+
+    int stackPtr     = 1;
+    KDTreeNode *node = stack[--stackPtr];
+    if (node->IsLeaf())
+    {
+        for (int i = node->start; i < node->start + node->count; i++)
+        {
+            int index          = cachePointIndexList[i];
+            const Vec3f &point = cachePoints[index];
+            f32 distance       = Length(point - candidatePoint);
+            if (distance < maxMinDistance)
+            {
+                int replaceIndex = 0;
+                // Maintain sorted list of 20 closest neighbors within search radius
+                for (; replaceIndex < k; replaceIndex++)
+                {
+                    if (distance < kNN[replaceIndex].distance)
+                    {
+                        // Shift to the right
+                        memmove(kNN + replaceIndex + 1, kNN + replaceIndex,
+                                sizeof(KNN) * (k - replaceIndex - 1));
+                        break;
+                    }
+                }
+                kNN[replaceIndex] = {index, disance};
+                maxMinDistance    = kNN[k].distance;
+                k += k < numToPrune;
+            }
+        }
+    }
+    else
+    {
+        int choice = p[node->axis] >= node->split;
+        FindKNearestNeighbors(choice ? node->right : node->left);
+        // Backtrack through the tree
+        if (Abs(p[node->axis] - node->split) < maxMinDistance)
+        {
+            FindKNearestNeighbors(choice ? node->left : node->right);
+        }
+    }
+
+    // Atomically mark for deletion all except the lowest index value
+    for (int i = 0; i < k; i++)
+    {
+        const KNN &knn = kNN[i];
+    }
+}
+
+struct LightDistribution
+{
+    std::vector<Light *> nearbyLights;
+    struct FarLight
+    {
+        Light *light;
+        Vec3f irradianceEstimate;
+    };
+    std::vector<FarLight> farLights;
+    f32 radius;
+};
+
+void ConstructBins(const Vec3f *cachePoints, LightDistribution *distributions)
+{
+    // How do I estimate the contribution of a light to a point? what even is
+    // fluence?
+    // fluence is only used for curves/volume points where surface normal isn't defined.
+    // otherwise, use irradiance at the point
+
+    // TODO: handle radiance varying over the surface of the
+    // like sample a point on the light source, get the radiance and cosines and
+
+    Scene *scene = GetScene();
+
+    const f32 D = 4.f;
+
+    for (int i = 0; i < numCachePoints; i++)
+    {
+        LightDistribution &distribution = distributions[i];
+        const Vec3f &point              = cachePoints[i];
+
+        for (int lightIndex = 0; lightIndex < scene->numLights; lightIndex++)
+        {
+            Light *light = scene->lights[lightIndex];
+            bool isNear  = LengthSquared(light->Centroid() - point) < radius * D;
+            if (isNear)
+            {
+                distribution.nearbyLights.push_back(light);
+            }
+            else
+            {
+                Vec3f cardinalNormals[] = {
+                    Vec3f(1, 0, 0),  Vec3f(-1, 0, 0), Vec3f(0, 1, 0),
+                    Vec3f(0, -1, 0), Vec3f(0, 0, 1),  Vec3f(0, 0, -1),
+                };
+                // TODO: we're sampling visible wavelengths here since we're
+                // using spectral, maybe there's a better way?
+                // Compute irradiance estimate for six cardinal bins
+
+                for (int i = 0; i < 6; i++)
+                {
+                    LightSample sample = light->SampleLi();
+                    // TODO: convert to RGB
+                    SampledSpectrum irradiance =
+                        sample.L * Max(0.f, Dot(sample.samplePoint, cardinalNormals)) /
+                        sample.pdf;
+                    Vec3f xyz = ConvertRadianceToRGB(irradiance, lambda);
+                }
+            }
+        }
+    }
 }
 
 #if 0
