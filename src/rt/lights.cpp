@@ -213,135 +213,85 @@ LaneNF32 SphericalQuadArea(const Vec3lfn &a, const Vec3lfn &b, const Vec3lfn &c,
 //////////////////////////////
 // Diffuse Area Light
 //
-SAMPLE_LI(DiffuseAreaLight)
+
+LightSample DiffuseAreaLight::SampleLi(SurfaceInteraction &intr, Vec2f &u,
+                                       SampledWavelengths &lambda, bool allowIncompletePDF)
 {
-    const DiffuseAreaLight *lights[IntN];
-    for (u32 i = 0; i < IntN; i++)
-    {
-        lights[i] = &scene->GetAreaLights()[Get(lightIndices, i)];
-    }
-
-    Vec3lfn p[4];
-    LaneNF32 area;
-    for (u32 i = 0; i < 4; i++)
-    {
-        Lane4F32 pI[IntN];
-        for (u32 lightIndex = 0; lightIndex < IntN; lightIndex++)
-        {
-            const DiffuseAreaLight *light = lights[lightIndex];
-            // Lane4F32 pTemp                = Lane4F32::LoadU(light->p + i);
-
-            // TODO: maybe transform the vertices once
-            pI[lightIndex]        = Lane4F32(TransformP(*light->renderFromLight, light->p[i]));
-            Set(area, lightIndex) = light->area;
-        }
-        Transpose<IntN>(pI, p[i]);
-    }
-
-    Vec3lfn v00 = Normalize(p[0] - Vec3lfn(intr.p));
-    Vec3lfn v10 = Normalize(p[1] - Vec3lfn(intr.p));
-    Vec3lfn v01 = Normalize(p[3] - Vec3lfn(intr.p));
-    Vec3lfn v11 = Normalize(p[2] - Vec3lfn(intr.p));
-
-    Vec3lfn eu = p[1] - p[0];
-    Vec3lfn ev = p[3] - p[0];
-    Vec3lfn n  = Normalize(Cross(eu, ev));
-
-    LightSample result;
-    // If the solid angle is small
-    MaskF32 mask = SphericalQuadArea(v00, v10, v01, v11) < DiffuseAreaLight::MinSphericalArea;
-    Vec3lfn wi   = intr.p - result.samplePoint;
-    if (All(mask))
-    {
-        result.samplePoint = Lerp(u[0], Lerp(u[1], p[0], p[3]), Lerp(u[1], p[1], p[2]));
-        result.pdf         = LengthSquared(wi) / (LaneNF32(area) * AbsDot(Normalize(wi), n));
-    }
-    else if (None(mask))
-    {
-        LaneNF32 pdf;
-        result.samplePoint = SampleSphericalRectangle(intr.p, p[0], eu, ev, u, &pdf);
-
-        // add projected solid angle measure (n dot wi) to pdf
-        Vec4lfn w(AbsDot(v00, intr.shading.n), AbsDot(v10, intr.shading.n),
-                  AbsDot(v01, intr.shading.n), AbsDot(v11, intr.shading.n));
-        Vec2lfn uNew = SampleBilinear(u, w);
-        pdf *= BilinearPDF(uNew, w);
-        result.pdf = pdf;
-    }
-    else
-    {
-        NotImplemented;
-    }
-    result.wi        = -wi;
-    result.lightType = LightType::Area;
-    result.L         = DiffuseAreaLight::Le(lights[0], n, wi, lambda);
-    if (!result.L) return {};
-    return result;
+    ScenePrimitive **scenes = GetScenes();
+    ShapeSample sample      = scenes[sceneID]->Sample(intr, renderFromLight, u, geomID);
+    SampledSpectrum L       = Le(sample.n, sample.wi, lambda);
+    if (!L) return {};
+    return LightSample(sample, L, type);
 }
 
 // TODO: I don't think this is going to be invoked for the moana scene
-PDF_LI(DiffuseAreaLight)
+f32 DiffuseAreaLight::PDF_Li(const Vec3f &prevIntrP, const SurfaceInteraction &intr,
+                             bool allowIncompletePDF)
 {
-    const DiffuseAreaLight *lights[IntN];
-    for (u32 i = 0; i < IntN; i++)
-    {
-        lights[i] = &scene->GetAreaLights()[Get(lightIndices, i)];
-    }
-    Vec3lfn p[4];
-    LaneNF32 area;
-    // TODO: maybe have to spawn a ray??? but I feel like this is only called (at least for
-    // now) when it already has intersected, and we need the pdf for MIS
-    for (u32 i = 0; i < 4; i++)
-    {
-        Lane4F32 pI[IntN];
-        for (u32 lightIndex = 0; lightIndex < IntN; lightIndex++)
-        {
-            const DiffuseAreaLight *light = lights[lightIndex];
-
-            pI[lightIndex]        = Lane4F32(TransformP(*light->renderFromLight, light->p[i]));
-            Set(area, lightIndex) = light->area;
-        }
-        Transpose<IntN>(pI, p[i]);
-    }
-    Vec3lfn v00 = Normalize(p[0] - Vec3lfn(prevIntrP));
-    Vec3lfn v10 = Normalize(p[1] - Vec3lfn(prevIntrP));
-    Vec3lfn v01 = Normalize(p[3] - Vec3lfn(prevIntrP));
-    Vec3lfn v11 = Normalize(p[2] - Vec3lfn(prevIntrP));
-
-    Vec3lfn eu = p[1] - p[0];
-    Vec3lfn ev = p[3] - p[0];
-    // If the solid angle is small
-    LaneNF32 sphArea = SphericalQuadArea(v00, v10, v01, v11);
-    MaskF32 mask     = sphArea < DiffuseAreaLight::MinSphericalArea;
-
-    LaneNF32 pdf;
-    if (All(mask))
-    {
-        Vec3lfn n  = Normalize(Cross(eu, ev));
-        Vec3lfn wi = prevIntrP - intr.p;
-        pdf        = LengthSquared(wi) / (area * AbsDot(Normalize(wi), n));
-    }
-    else if (None(mask))
-    {
-        pdf = 1.f / sphArea;
-
-        NotImplemented;
-#if 0
-        Vec2lfn u = InvertSphericalRectangleSample(intrP, prevIntrP, eu, ev);
-        Vec4lfn w(AbsDot(v00, intr.shading.n), AbsDot(v10, intr.shading.n),
-                   AbsDot(v01, intr.shading.n), AbsDot(v11, intr.shading.n));
-        pdf *= BilinearPDF(u, w);
-#endif
-    }
-    else
-    {
-        NotImplemented;
-        pdf = 0.f;
-    }
-    return pdf;
+    Assert(0);
+    return 0.f;
+    //     const DiffuseAreaLight *lights[IntN];
+    //     for (u32 i = 0; i < IntN; i++)
+    //     {
+    //         lights[i] = &scene->GetAreaLights()[Get(lightIndices, i)];
+    //     }
+    //     Vec3lfn p[4];
+    //     LaneNF32 area;
+    //     // TODO: maybe have to spawn a ray??? but I feel like this is only called (at least
+    //     for
+    //     // now) when it already has intersected, and we need the pdf for MIS
+    //     for (u32 i = 0; i < 4; i++)
+    //     {
+    //         Lane4F32 pI[IntN];
+    //         for (u32 lightIndex = 0; lightIndex < IntN; lightIndex++)
+    //         {
+    //             const DiffuseAreaLight *light = lights[lightIndex];
+    //
+    //             pI[lightIndex]        = Lane4F32(TransformP(*light->renderFromLight,
+    //             light->p[i])); Set(area, lightIndex) = light->area;
+    //         }
+    //         Transpose<IntN>(pI, p[i]);
+    //     }
+    //     Vec3lfn v00 = Normalize(p[0] - Vec3lfn(prevIntrP));
+    //     Vec3lfn v10 = Normalize(p[1] - Vec3lfn(prevIntrP));
+    //     Vec3lfn v01 = Normalize(p[3] - Vec3lfn(prevIntrP));
+    //     Vec3lfn v11 = Normalize(p[2] - Vec3lfn(prevIntrP));
+    //
+    //     Vec3lfn eu = p[1] - p[0];
+    //     Vec3lfn ev = p[3] - p[0];
+    //     // If the solid angle is small
+    //     LaneNF32 sphArea = SphericalQuadArea(v00, v10, v01, v11);
+    //     MaskF32 mask     = sphArea < DiffuseAreaLight::MinSphericalArea;
+    //
+    //     LaneNF32 pdf;
+    //     if (All(mask))
+    //     {
+    //         Vec3lfn n  = Normalize(Cross(eu, ev));
+    //         Vec3lfn wi = prevIntrP - intr.p;
+    //         pdf        = LengthSquared(wi) / (area * AbsDot(Normalize(wi), n));
+    //     }
+    //     else if (None(mask))
+    //     {
+    //         pdf = 1.f / sphArea;
+    //
+    //         NotImplemented;
+    // #if 0
+    //         Vec2lfn u = InvertSphericalRectangleSample(intrP, prevIntrP, eu, ev);
+    //         Vec4lfn w(AbsDot(v00, intr.shading.n), AbsDot(v10, intr.shading.n),
+    //                    AbsDot(v01, intr.shading.n), AbsDot(v11, intr.shading.n));
+    //         pdf *= BilinearPDF(u, w);
+    // #endif
+    //     }
+    //     else
+    //     {
+    //         NotImplemented;
+    //         pdf = 0.f;
+    //     }
+    //     return pdf;
 }
 
-LE(DiffuseAreaLight)
+SampledSpectrum DiffuseAreaLight::Le(const Vec3f &n, const Vec3f &w,
+                                     const SampledWavelengths &lambda)
 {
     if (Dot(n, w) < 0) return SampledSpectrum(0.f);
     return light->scale * light->Lemit->Sample(lambda);
@@ -351,35 +301,35 @@ LE(DiffuseAreaLight)
 // Distant Light
 //
 
-SAMPLE_LI(DistantLight)
-{
-    const DistantLight *light = &scene->lights.Get<DistantLight>()[u32(lightIndices)];
-    Vec3f wi                  = -light->d;
-
-    return LightSample(light->scale * light->Lemit->Sample(lambda),
-                       Vec3f(intr.p) + 2.f * wi * light->sceneRadius, wi, 1.f,
-                       LightType::DeltaDirection);
-}
+// SAMPLE_LI(DistantLight)
+// {
+//     const DistantLight *light = &scene->lights.Get<DistantLight>()[u32(lightIndices)];
+//     Vec3f wi                  = -light->d;
+//
+//     return LightSample(light->scale * light->Lemit->Sample(lambda),
+//                        Vec3f(intr.p) + 2.f * wi * light->sceneRadius, wi, 1.f,
+//                        LightType::DeltaDirection);
+// }
 
 //////////////////////////////
 // Infinite Lights
 //
 // TODO: the scene radius should not have to be stored per infinite light
-SAMPLE_LI(UniformInfiniteLight)
-{
-    const UniformInfiniteLight *light =
-        &scene->lights.Get<UniformInfiniteLight>()[u32(lightIndices)];
-    if (allowIncompletePDF) return {};
-    Vec3f wi = SampleUniformSphere(u);
-    f32 pdf  = UniformSpherePDF();
-    return LightSample(light->scale * light->Lemit.Sample(lambda),
-                       Vec3f(intr.p) + 2.f * wi * light->sceneRadius, wi, pdf,
-                       LightType::Infinite);
-}
+// SAMPLE_LI(UniformInfiniteLight)
+// {
+//     const UniformInfiniteLight *light =
+//         &scene->lights.Get<UniformInfiniteLight>()[u32(lightIndices)];
+//     if (allowIncompletePDF) return {};
+//     Vec3f wi = SampleUniformSphere(u);
+//     f32 pdf  = UniformSpherePDF();
+//     return LightSample(light->scale * light->Lemit.Sample(lambda),
+//                        Vec3f(intr.p) + 2.f * wi * light->sceneRadius, wi, pdf,
+//                        LightType::Infinite);
+// }
 
-PDF_LI_INF(UniformInfiniteLight) { return allowIncompletePDF ? 0.f : UniformSpherePDF(); }
+// PDF_LI_INF(UniformInfiniteLight) { return allowIncompletePDF ? 0.f : UniformSpherePDF(); }
 
-LE_INF(UniformInfiniteLight) { return light->scale * light->Lemit.Sample(lambda); }
+// LE_INF(UniformInfiniteLight) { return light->scale * light->Lemit.Sample(lambda); }
 
 // ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image) : image(image)
 ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image,
@@ -407,7 +357,7 @@ ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image,
         avg += values[i];
     }
     avg /= size;
-    avg                    = 0.3282774686813354f;
+    // avg                    = 0.3282774686813354f;
     f32 *compensatedValues = PushArrayNoZero(arena, f32, size);
     if (allSame)
     {
@@ -435,32 +385,31 @@ SampledSpectrum ImageInfiniteLight::ImageLe(Vec2f uv, const SampledWavelengths &
     return scale * spec.Sample(lambda);
 }
 
-SAMPLE_LI(ImageInfiniteLight)
+LightSample ImageInfiniteLight::SampleLi(SurfaceInteraction &intr, Vec2f &u,
+                                         SampledWavelengths &lambda, bool allowIncompletePDF)
 {
-    const ImageInfiniteLight *light =
-        &scene->lights.Get<ImageInfiniteLight>()[u32(lightIndices)];
+    Scene *scene = GetScene();
 
     f32 pdf;
     Vec2f uv;
     if (allowIncompletePDF)
     {
-        uv = light->compensatedDistribution.Sample(u, &pdf);
+        uv = compensatedDistribution.Sample(u, &pdf);
     }
     else
     {
-        uv = light->distribution.Sample(u, &pdf);
+        uv = distribution.Sample(u, &pdf);
     }
     if (pdf == 0.f) return {};
-    Vec3f wi = TransformV(*light->renderFromLight, EqualAreaSquareToSphere(uv));
+    Vec3f wi = TransformV(*renderFromLight, EqualAreaSquareToSphere(uv));
     pdf /= 4 * PI;
-    return LightSample(light->ImageLe(uv, lambda),
-                       Vec3f(intr.p) + 2.f * wi * light->sceneRadius, wi, pdf,
+    return LightSample(ImageLe(uv, lambda), Vec3f(intr.p) + 2.f * wi * sceneRadius, wi, pdf,
                        LightType::Infinite);
 }
 
-PDF_LI_INF(ImageInfiniteLight)
+f32 ImageInfiniteLight::PDF_Li(Vec3f &w, bool allowIncompletePDF)
 {
-    Vec3f wi = Normalize(ApplyInverseV(*light->renderFromLight, w));
+    Vec3f wi = Normalize(ApplyInverseV(*renderFromLight, w));
     Vec2f uv = EqualAreaSphereToSquare(wi);
     f32 pdf;
     if (allowIncompletePDF)
@@ -474,105 +423,25 @@ PDF_LI_INF(ImageInfiniteLight)
     return pdf / (4 * PI);
 }
 
-LE_INF(ImageInfiniteLight)
+SampledSpectrum ImageInfiniteLight::Le(const Vec3f &w, const SampledWavelengths &lambda)
 {
-    Vec3f wi = Normalize(ApplyInverseV(*light->renderFromLight, w));
+    Vec3f wi = Normalize(ApplyInverseV(*renderFromLight, w));
     Vec2f uv = EqualAreaSphereToSquare(wi);
-    return light->ImageLe(uv, lambda);
+    return ImageLe(uv, lambda);
 }
 
 //////////////////////////////
 // Morphism
 //
-// TODO: find the class of each sample, add to a corresponding queue, when the queue is
-// full enough, generate the samples
-static LightSample SampleLi(Scene *scene, LightHandle lightHandle,
-                            const SurfaceInteraction &intr, const SampledWavelengths &lambda,
-                            Vec2f &u, bool allowIncompletePDF = false)
-{
-    LightClass lClass = lightHandle.GetType();
-    switch (lClass)
-    {
-        case LightClass::DiffuseAreaLight:
-            return DiffuseAreaLight::SampleLi(scene, lightHandle.GetIndex(), intr, lambda, u,
-                                              allowIncompletePDF);
-        case LightClass::DistantLight:
-            return DistantLight::SampleLi(scene, lightHandle.GetIndex(), intr, lambda, u,
-                                          allowIncompletePDF);
-        case LightClass::UniformInfiniteLight:
-            return UniformInfiniteLight::SampleLi(scene, lightHandle.GetIndex(), intr, lambda,
-                                                  u, allowIncompletePDF);
-        case LightClass::ImageInfiniteLight:
-            return ImageInfiniteLight::SampleLi(scene, lightHandle.GetIndex(), intr, lambda, u,
-                                                allowIncompletePDF);
-        default: Assert(0); return LightSample();
-    }
-}
 
-static f32 PDF_Li(Scene *scene, LightHandle lightHandle, Vec3f &prevIntrP,
-                  SurfaceInteraction &intr, bool allowIncompletePDF = false)
-{
-    LightClass lClass = lightHandle.GetType();
-    u32 lightIndex    = lightHandle.GetIndex();
-    switch (lClass)
-    {
-        case LightClass::DiffuseAreaLight:
-            Assert(0);
-            return (f32)DiffuseAreaLight::PDF_Li(scene, lightIndex, prevIntrP, intr,
-                                                 allowIncompletePDF);
-        case LightClass::DistantLight:
-            return (f32)DistantLight::PDF_Li(scene, lightIndex, prevIntrP, intr,
-                                             allowIncompletePDF);
-        // case LightClass_InfUnf: return (f32)UniformInfiniteLight::PDF_Li(scene,
-        // lightIndex, prevIntrP, intr, allowIncompletePDF); case LightClass_InfImg: return
-        // (f32)ImageInfiniteLight::PDF_Li(scene, lightIndex, prevIntrP, intr,
-        // allowIncompletePDF);
-        default: Assert(0); return 0.f;
-    }
-}
+f32 LightPDF(Scene *scene) { return 1.f / scene->lights.Length(); }
 
-// NOTE: other pdfs cannot sample dirac delta distributions (unless they have the same
-// direction)
-static SampledSpectrum Le(Scene *scene, LightHandle lightHandle, Vec3f &n, Vec3f &w,
-                          SampledWavelengths &lambda)
-{
-    LightClass lClass = lightHandle.GetType();
-    u32 lightIndex    = lightHandle.GetIndex();
-    switch (lClass)
-    {
-        case LightClass::DiffuseAreaLight:
-            return DiffuseAreaLight::Le(&scene->GetAreaLights()[lightIndex], n, w, lambda);
-        case LightClass::DistantLight:
-            return DistantLight::Le(&scene->lights.Get<DistantLight>()[lightIndex], n, w,
-                                    lambda);
-        // case LightClass_InfUnf: return
-        // UniformInfiniteLight::Le(&scene->uniformInfLights[lightIndex], n, w, lambda);
-        // case LightClass_InfImg: return
-        // ImageInfiniteLight::Le(&scene->imageInfLights[lightIndex], n, w, lambda);
-        default: Assert(0); return SampledSpectrum(0.f);
-    }
-}
-
-// void BuildLightPDF(Scene *scene)
-// {
-//     u32 total = 0;
-//     for (u32 i = 0; i < LightClass_Count; i++)
-//     {
-//         total += scene->lightCount[i];
-//         scene->lightPDF[i] = total;
-//     }
-// }
-
-f32 LightPDF(Scene *scene) { return 1.f / scene->numLights; }
-
-LightHandle UniformLightSample(Scene *scene, f32 u, f32 *pmf = 0)
+Light *UniformLightSample(Scene *scene, f32 u, f32 *pmf = 0)
 {
     if (scene->numLights == 0) return LightHandle();
     u32 lightIndex = Min(u32(u * scene->numLights), scene->numLights - 1);
     Assert(lightIndex >= 0 && lightIndex < scene->numLights);
-    u32 localIndex;
-    u32 type = scene->lights.ConvertIndexToType(lightIndex, &localIndex);
     if (pmf) *pmf = LightPDF(scene);
-    return LightHandle(LightClass(type), localIndex);
+    return scene->lights[lightIndex];
 }
 } // namespace rt

@@ -495,39 +495,25 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
             // wasn't previously sampled, or it wasn't sampled with MIS)
             if (specularBounce || depth == 0)
             {
-                ForEachTypeSubset(
-                    scene->lights,
-                    [&](auto *array, u32 count) {
-                        using Light = std::remove_reference_t<decltype(*array)>;
-                        for (u32 i = 0; i < count; i++)
-                        {
-                            Light &light       = array[i];
-                            SampledSpectrum Le = Light::Le(&light, ray.d, lambda);
-                            L += beta * Le;
-                        }
-                    },
-                    InfiniteLightTypes());
+                for (auto &light : scene->infiniteLights)
+                {
+                    SampledSpectrum Le = light.Le(ray.d, lambda);
+                    L += beta * Le;
+                }
             }
             else
             {
-                ForEachTypeSubset(
-                    scene->lights,
-                    [&](auto *array, u32 count) {
-                        using Light = std::remove_reference_t<decltype(*array)>;
-                        for (u32 i = 0; i < count; i++)
-                        {
-                            Light &light       = array[i];
-                            SampledSpectrum Le = Light::Le(&light, ray.d, lambda);
+                for (auto &light : scene->infiniteLights)
+                {
+                    SampledSpectrum Le = light.Le(ray.d, lambda);
 
-                            f32 pdf      = LightPDF(scene);
-                            f32 lightPdf = pdf * (f32)Light::PDF_Li(&light, ray.d, true);
+                    f32 pdf      = LightPDF(scene);
+                    f32 lightPdf = pdf * (f32)light.PDF_Li(ray.d, true);
 
-                            f32 w_l = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
-                            // NOTE: beta already contains the cosine, bsdf, and pdf terms
-                            L += beta * w_l * Le;
-                        }
-                    },
-                    InfiniteLightTypes());
+                    f32 w_l = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
+                    // NOTE: beta already contains the cosine, bsdf, and pdf terms
+                    L += beta * w_l * Le;
+                }
             }
 
             break;
@@ -537,24 +523,24 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
         if (si.lightIndices)
         {
             Assert(0);
-            DiffuseAreaLight *light =
-                &scene->GetAreaLights()[LightHandle(si.lightIndices).GetIndex()];
-            if (specularBounce || depth == 0)
-            {
-                SampledSpectrum Le = DiffuseAreaLight::Le(light, si.n, -ray.d, lambda);
-                L += beta * Le;
-            }
-            else
-            {
-                SampledSpectrum Le = DiffuseAreaLight::Le(light, si.n, -ray.d, lambda);
-                // probability of sampling the light * probability of sampling point on light
-                f32 pmf = LightPDF(scene);
-                f32 lightPdf =
-                    pmf * DiffuseAreaLight::PDF_Li(scene, si.lightIndices, prevSi.p, si, true);
-                f32 w_l = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
-                // NOTE: beta already contains the cosine, bsdf, and pdf terms
-                L += beta * w_l * Le;
-            }
+            // DiffuseAreaLight *light =
+            //     &scene->GetAreaLights()[LightHandle(si.lightIndices).GetIndex()];
+            // if (specularBounce || depth == 0)
+            // {
+            //     SampledSpectrum Le = DiffuseAreaLight::Le(light, si.n, -ray.d, lambda);
+            //     L += beta * Le;
+            // }
+            // else
+            // {
+            //     SampledSpectrum Le = DiffuseAreaLight::Le(light, si.n, -ray.d, lambda);
+            //     // probability of sampling the light * probability of sampling point on
+            //     light f32 pmf = LightPDF(scene); f32 lightPdf =
+            //         pmf * DiffuseAreaLight::PDF_Li(scene, si.lightIndices, prevSi.p, si,
+            //         true);
+            //     f32 w_l = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
+            //     // NOTE: beta already contains the cosine, bsdf, and pdf terms
+            //     L += beta * w_l * Le;
+            // }
         }
 
         if (depth++ >= maxDepth)
@@ -596,12 +582,12 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
         {
             f32 lightU = sampler.Get1D();
             f32 pmf;
-            LightHandle handle = UniformLightSample(scene, lightU, &pmf);
-            Vec2f sample       = sampler.Get2D();
-            if (bool(handle))
+            Light *light = UniformLightSample(scene, lightU, &pmf);
+            Vec2f sample = sampler.Get2D();
+            if (light)
             {
                 // Sample point on the light source
-                LightSample ls = SampleLi(scene, handle, si, lambda, sample, true);
+                LightSample ls = light->SampleLi(si, lambda, sample, true);
                 if (ls.pdf)
                 {
                     // Evaluate BSDF for light sample, check visibility with shadow ray

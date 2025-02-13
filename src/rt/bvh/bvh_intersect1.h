@@ -759,6 +759,7 @@ static void SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
     si.shading.dndv = dndv;
     si.uv           = u * uv[1] + v * uv[2] + w * uv[0];
     Assert(geomID < scene->numPrimitives);
+    const PrimitiveData *primData   = &scene->primData[geomID];
     const PrimitiveIndices *indices = scene->primIndices + geomID;
     si.materialIDs                  = indices->materialID.data;
 

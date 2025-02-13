@@ -8,6 +8,16 @@ namespace rt
 
 static const u32 MAX_PARAMETER_COUNT = 16;
 
+GeometryType ConvertStringIDToGeometryType(StringId id)
+{
+    switch (id)
+    {
+        case "quadmesh"_sid: return GeometryType::QuadMesh;
+        case "trianglemesh"_sid: return GeometryType::TriangleMesh;
+        default: Assert(0); return GeometryType::Max;
+    }
+}
+
 enum class DataType
 {
     Float,
@@ -500,7 +510,8 @@ Mesh *LoadObj(Arena *arena, string filename, int &numMeshes, int &actualNumMeshe
 
                         mesh.n       = PushArrayNoZero(arena, Vec3f, vertices.size());
                         mesh.indices = PushArrayNoZero(arena, u32, indices.size());
-                        // Ensure that vertex index and normal index pairings are consistent
+                        // Ensure that vertex index and normal index pairings are
+                        // consistent
                         for (u32 i = 0; i < mesh.numIndices; i++)
                         {
                             i32 vertexIndex = indices[i][0];
@@ -508,10 +519,10 @@ Mesh *LoadObj(Arena *arena, string filename, int &numMeshes, int &actualNumMeshe
 
                             if (normalIndices[vertexIndex] != 0xffffffff)
                             {
-                                ErrorExit(
-                                    normalIndices[vertexIndex] == normalIndex,
-                                    "Face-varying normals currently unsupported. file: %S\n",
-                                    filename);
+                                ErrorExit(normalIndices[vertexIndex] == normalIndex,
+                                          "Face-varying normals currently unsupported. "
+                                          "file: %S\n",
+                                          filename);
                             }
 
                             Assert(normalIndex < (int)normals.size());

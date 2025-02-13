@@ -1081,37 +1081,6 @@ int main(int argc, char *argv[])
     threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, numProcessors);
     scheduler.Init(numProcessors);
 
-    // Mesh mesh1 =
-    //     LoadQuadPLY(arena, "../data/island/pbrt-v4/isBeach/isBeach_geometry_00001.ply");
-    // Mesh mesh2 =
-    //     LoadQuadPLY(arena, "../data/island/pbrt-v4/isBeach/isBeach_geometry_00002.ply");
-    //
-    // // TODO: it seems that geometry within obj files can be duplicated
-    // Mesh mesh     = LoadQuadObj(arena, "../data/island/pbrt-v4/obj/isBeach/isBeach.obj");
-    // mesh.numFaces = mesh.numIndices / 4;
-    // Mesh mesh2 =
-    //     LoadQuadPLY(arena, "../data/island/pbrt-v4/isBeach/xgHibiscus/"
-    //                        "xgHibiscus_archiveHibiscusFlower0004_mod_geometry_00001.ply");
-    //
-    // Subdivide(&mesh);
-    // EdgeStitchTest();
-
-    // DualTest();
-
-    // string result = OS_ReadFile(
-    //     arena, "../data/island/textures/isPandanusA/Displacement/trunkb_temp_geo.ptx",
-    //     10899948);
-    string ptexFilename =
-        "../../data/island/textures/isPandanusA/Displacement/trunkb_temp_geo.ptx";
-    Ptex::String error;
-    Ptex::PtexTexture *texture = cache->get((char *)ptexFilename.str, error);
-    Ptex::PtexFilter::Options opts(Ptex::PtexFilter::FilterType::f_bspline);
-    Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
-    f32 out[3]               = {};
-    filter->eval(out, 0, 3, 14, 0.f, 0.f, .5f, 0.f, 0.f, .5f);
-
-    texture->release();
-
     const u32 count = 3000000;
 
     Options options = {};

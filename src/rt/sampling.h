@@ -1,6 +1,23 @@
 namespace rt
 {
 
+Vec3f SampleUniformTriangle(const Vec2f &u)
+{
+    Vec3f result;
+    if (u[0] < u[1])
+    {
+        result[0] = u[0] / 2;
+        result[1] = u[1] - result[0];
+    }
+    else
+    {
+        result[1] = u[1] / 2;
+        result[0] = u[0] - result[1];
+    }
+    result[2] = 1 - result[0] - result[1];
+    return result;
+}
+
 template <typename T>
 inline Vec2<T> SampleUniformDiskPolar(Vec2<T> u)
 {

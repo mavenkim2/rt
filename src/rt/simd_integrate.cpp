@@ -412,42 +412,25 @@ QUEUE_HANDLER(RayIntersectionHandler)
         {
             if (rayState->specularBounce || rayState->depth == 0)
             {
-                ForEachTypeSubset(
-                    scene->lights,
-                    [&](auto *array, u32 count) {
-                        using Light = std::remove_reference_t<decltype(*array)>;
-                        for (u32 i = 0; i < count; i++)
-                        {
-                            Light &light = array[i];
-                            SampledSpectrum Le =
-                                Light::Le(&light, rayState->ray.d, rayState->lambda);
-                            rayState->L += rayState->beta * Le;
-                        }
-                    },
-                    InfiniteLightTypes());
+                for (auto &light : scene->infiniteLights)
+                {
+                    SampledSpectrum Le = light.Le(rayState->ray.d, rayState->lambda);
+                    rayState->L += rayState->beta * Le;
+                }
             }
             else
             {
-                ForEachTypeSubset(
-                    scene->lights,
-                    [&](auto *array, u32 count) {
-                        using Light = std::remove_reference_t<decltype(*array)>;
-                        for (u32 i = 0; i < count; i++)
-                        {
-                            Light &light = array[i];
-                            SampledSpectrum Le =
-                                Light::Le(&light, rayState->ray.d, rayState->lambda);
+                for (auto &light : scene->infiniteLights)
+                {
+                    SampledSpectrum Le = light.Le(rayState->ray.d, rayState->lambda);
 
-                            f32 pdf = LightPDF(scene);
-                            f32 lightPdf =
-                                pdf * (f32)Light::PDF_Li(&light, rayState->ray.d, true);
+                    f32 pdf      = LightPDF(scene);
+                    f32 lightPdf = pdf * (f32)light.PDF_Li(rayState->ray.d, true);
 
-                            f32 w_l = PowerHeuristic(1, rayState->bsdfPdf, 1, lightPdf);
-                            // NOTE: beta already contains the cosine, bsdf, and pdf terms
-                            rayState->L += rayState->beta * w_l * Le;
-                        }
-                    },
-                    InfiniteLightTypes());
+                    f32 w_l = PowerHeuristic(1, rayState->bsdfPdf, 1, lightPdf);
+                    // NOTE: beta already contains the cosine, bsdf, and pdf terms
+                    rayState->L += rayState->beta * w_l * Le;
+                }
             }
 
             TerminateRay(state, handle);
@@ -581,13 +564,12 @@ void ShadingQueueHandler(struct ShadingThreadState *state, ShadingHandle *values
                 {
                     f32 lightU = sampler.Get1D();
                     f32 pmf;
-                    LightHandle lightHandle = UniformLightSample(scene, lightU, &pmf);
-                    Vec2f sample            = sampler.Get2D();
+                    Light *light = UniformLightSample(scene, lightU, &pmf);
+                    Vec2f sample = sampler.Get2D();
                     if (bool(lightHandle))
                     {
                         // Sample point on the light source
-                        LightSample ls =
-                            SampleLi(scene, lightHandle, si, lambda, sample, true);
+                        LightSample ls = light->SampleLi(si, lambda, sample, true);
                         if (ls.pdf)
                         {
                             // Evaluate BSDF for light sample, check visibility with shadow ray

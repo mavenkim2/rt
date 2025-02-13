@@ -36,6 +36,10 @@ struct SurfaceInteractions
     LaneKU32 lightIndices;
     LaneKU32 materialIDs;
     LaneKU32 faceIndices;
+
+    LaneKU32 geomID;
+    LaneKU32 primID;
+
     LaneKU32 rayStateHandles;
     f32 curvature;
     // LaneIU32 volumeIndices;
@@ -120,7 +124,8 @@ public:
         size_t result = 0;
         if (ptexHandle->buffer && ptexHandle->bufferOffset != -1 &&
             ptexHandle->offset >= ptexHandle->bufferOffset &&
-            ptexHandle->offset + size <= Min(ptexHandle->bufferOffset + ptexHandle->bufferSize, ptexHandle->fileSize))
+            ptexHandle->offset + size <=
+                Min(ptexHandle->bufferOffset + ptexHandle->bufferSize, ptexHandle->fileSize))
         {
             MemoryCopy(buffer,
                        (u8 *)ptexHandle->buffer +

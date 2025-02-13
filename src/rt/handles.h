@@ -22,6 +22,22 @@ enum class GeometryType
     Max,
 };
 
+string ConvertGeometryTypeToString(GeometryType type)
+{
+    switch (type)
+    {
+        case GeometryType::QuadMesh: return "quad";
+        case GeometryType::TriangleMesh: return "tri";
+        case GeometryType::Instance: return "inst";
+        case GeometryType::CatmullClark: return "catclark";
+        default: return "invalid";
+    }
+}
+
+GeometryType ConvertStringIDToGeometryType(StringId id)
+{
+}
+
 template <typename BxDFShader, typename NormalShader>
 struct Material2;
 

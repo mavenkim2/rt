@@ -614,7 +614,8 @@ void ParallelFor2D(Vec2i start, Vec2i end, Vec2i tileSize, const Func &func)
                 jobID += offset;
                 int tileX = jobID % tileCountX;
                 int tileY = jobID / tileCountX;
-                Vec2i startBounds(start[0] + tileSize[0] * tileX);
+                Vec2i startBounds(start[0] + tileSize[0] * tileX,
+                                  start[1] + tileSize[1] * tileY);
                 Vec2i endBounds(Min(start[0] + tileSize[0] * (tileX + 1), end[0]),
                                 Min(start[1] + tileSize[1] * (tileY + 1), end[1]));
                 func(jobID, startBounds, endBounds);

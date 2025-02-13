@@ -21,18 +21,22 @@ enum class LightType : u32
 struct LightSample
 {
     SampledSpectrum L;
-    Vec3lfn samplePoint;
-    Vec3lfn wi;
-    LaneNF32 pdf = LaneNF32(0.f);
-    // TODO: simd
+    Vec3f samplePoint;
+    Vec3f wi;
+    f32 pdf;
     LightType lightType;
 
     LightSample() {}
-    LightSample(SampledSpectrum L, Vec3lfn samplePoint, Vec3lfn wi, LaneNF32 pdf,
-                LightType lightType)
-        : L(L), samplePoint(samplePoint), wi(wi), pdf(pdf), lightType(lightType)
+    LightSample(const ShapeSample &sample, const SampledSpecturm &L, LightType type)
+        : samplePoint(sample.p), wi(sample.w), L(L), pdf(sample.pdf), lightType(type)
     {
     }
+
+    // LightSample(SampledSpectrum L, Vec3lfn samplePoint, Vec3lfn wi, LaneNF32 pdf,
+    //             LightType lightType)
+    //     : L(L), samplePoint(samplePoint), wi(wi), pdf(pdf), lightType(lightType)
+    // {
+    // }
 };
 
 bool IsDeltaLight(LightType type)
@@ -41,34 +45,6 @@ bool IsDeltaLight(LightType type)
 }
 
 struct Scene;
-
-// clang-format off
-#define SAMPLE_LI_HEADER() static LightSample SAMPLE_LI_BODY
-#define SAMPLE_LI(type)    LightSample type::SAMPLE_LI_BODY
-#define SAMPLE_LI_BODY                                                                         \
-    SampleLi(const Scene *scene, const LaneNU32 lightIndices, const SurfaceInteractionsN &intr, \
-             const SampledWavelengths &lambda, const Vec2lfn &u, bool allowIncompletePDF)
-
-#define PDF_LI_HEADER() static LaneNF32 PDF_LI_BODY
-#define PDF_LI(type)    LaneNF32 type::PDF_LI_BODY 
-#define PDF_LI_BODY \
-    PDF_Li(const Scene *scene, const LaneNU32 lightIndices, \
-           const Vec3lfn &prevIntrP, const SurfaceInteractionsN &intr, bool allowIncompletePDF)
-
-#define PDF_LI_INF_HEADER(type) static LaneNF32 PDF_LI_INF_BODY(type)
-#define PDF_LI_INF(type)    LaneNF32 type::PDF_LI_INF_BODY(type)
-#define PDF_LI_INF_BODY(type) \
-    PDF_Li(type *light, Vec3f &w, bool allowIncompletePDF)
-
-#define LE_HEADER(type) static SampledSpectrum LE_BODY(type)
-#define LE(type)    SampledSpectrum type::LE_BODY(type)
-#define LE_BODY(type) Le(const type *light, const Vec3f &n, const Vec3f &w, const SampledWavelengths &lambda)
-
-#define LE_INF_HEADER(type) static SampledSpectrum LE_INF_BODY(type)
-#define LE_INF(type)    SampledSpectrum type::LE_INF_BODY(type)
-#define LE_INF_BODY(type) Le(type *light, const Vec3f &w, const SampledWavelengths &lambda)
-
-// clang-format on
 
 #define LightFunctions(type)                                                                  \
     SAMPLE_LI_HEADER();                                                                       \
@@ -87,15 +63,42 @@ struct Scene;
 
 const DenselySampledSpectrum *LookupSpectrum(Spectrum s) { return 0; }
 
-struct DiffuseAreaLight
+struct Light
 {
-    Vec3f *p;
-    // Mesh *mesh;
+    virtual LightSample SampleLi(SurfaceInteraction &intr, Vec2f &u,
+                                 SampledWavelengths &lambda, bool allowIncompletePDF = 0) = 0;
+
+    virtual f32 PDF_Li(const Vec3f &prevIntrP, const SurfaceInteraction &intr,
+                       bool allowIncompletePDF = 0)              = 0;
+    virtual SampledSpectrum Le(const Vec3f &n, const Vec3f &w,
+                               const SampledWavelengths &lambda) = 0;
+};
+
+struct InfiniteLight : Light
+{
+    virtual f32 PDF_Li(Vec3f &w, bool allowIncompletePDF)                        = 0;
+    virtual SampledSpectrum Le(const Vec3f &w, const SampledWavelengths &lambda) = 0;
+
+    f32 PDF_Li(const Vec3f &prevIntrP, const SurfaceInteraction &intr, bool allowIncompletePdf)
+    {
+        return PDF_Li(Normalize(intr.p - prevIntrP), allowIncompletePdf);
+    }
+    SampledSpectrum Le(const Vec3f &n, const Vec3f &w,
+                       const SampledSpectrumWavelengths &lambda)
+    {
+        return Le(w, lambda);
+    }
+};
+
+struct DiffuseAreaLight : Light
+{
     f32 scale = 1.f;
-    const AffineSpace *renderFromLight;
+    AffineSpace *renderFromLight;
+
+    int geomID, sceneID;
     const DenselySampledSpectrum *Lemit;
-    static constexpr f32 MinSphericalArea = 1e-4;
-    f32 area;
+
+    LightType type;
 
     DiffuseAreaLight() {}
     DiffuseAreaLight(Vec3f *p, f32 scale, Spectrum Lemit)
@@ -103,39 +106,36 @@ struct DiffuseAreaLight
     {
         area = Length(Cross(p[1] - p[0], p[3] - p[0]));
     }
-
-    LightType GetLightType() const { return LightType::Area; }
-    LightFunctions(DiffuseAreaLight);
 };
 
 // TODO: loop over all of these after the scene is fully instantiated and add the scene radius
-struct DistantLight
-{
-    Vec3f d;
-    const DenselySampledSpectrum *Lemit;
-    f32 sceneRadius;
-    f32 scale;
-
-    DistantLight(Vec3f d, Spectrum Lemit, f32 scale = 1.f)
-        : d(d), Lemit(LookupSpectrum(Lemit)), scale(scale)
-    {
-    }
-    LightFunctionsDirac(DistantLight);
-};
+// struct DistantLight
+// {
+//     Vec3f d;
+//     const DenselySampledSpectrum *Lemit;
+//     f32 sceneRadius;
+//     f32 scale;
+//
+//     DistantLight(Vec3f d, Spectrum Lemit, f32 scale = 1.f)
+//         : d(d), Lemit(LookupSpectrum(Lemit)), scale(scale)
+//     {
+//     }
+//     LightFunctionsDirac(DistantLight);
+// };
 
 // TODO: render from light?
-struct UniformInfiniteLight
-{
-    const DenselySampledSpectrum Lemit;
-    f32 scale;
-    f32 sceneRadius;
-
-    UniformInfiniteLight(Spectrum Lemit, f32 scale = 1.f)
-        : Lemit(DenselySampledSpectrum(Lemit)), scale(scale)
-    {
-    }
-    LightFunctionsInf(UniformInfiniteLight);
-};
+// struct UniformInfiniteLight
+// {
+//     const DenselySampledSpectrum Lemit;
+//     f32 scale;
+//     f32 sceneRadius;
+//
+//     UniformInfiniteLight(Spectrum Lemit, f32 scale = 1.f)
+//         : Lemit(DenselySampledSpectrum(Lemit)), scale(scale)
+//     {
+//     }
+//     LightFunctionsInf(UniformInfiniteLight);
+// };
 
 #if 0
 struct AliasTable

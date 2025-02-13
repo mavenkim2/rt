@@ -479,7 +479,7 @@ struct CoatedDiffuseMaterial : Material
 struct MaterialNode
 {
     string str;
-    MaterialHandle handle;
+    Material *material;
 
     u32 Hash() const { return rt::Hash(str); }
     bool operator==(const MaterialNode &m) const { return str == m.str; }
@@ -492,6 +492,11 @@ struct RTSceneLoadState
 {
     SceneLoadTable table;
     MaterialHashMap *map = 0;
+
+    ChunkedLinkedList<Light *, 1024, MemoryType_Light> *lights;
+
+    Mutex mutex;
+    std::vector<ScenePrimitives *> scenes;
 };
 
 i32 ReadIntBytes(Tokenizer *tokenizer)
@@ -586,9 +591,10 @@ Texture *ParseDisplacement(Arena *arena, Tokenizer *tokenizer, string directory)
     return 0;
 }
 
-DiffuseAreaLight ParseAreaLight(Arena *arena, Tokenizer *tokenizer, Mesh *mesh)
+DiffuseAreaLight *ParseAreaLight(Arena *arena, Tokenizer *tokenizer, AffineSpace *space,
+                                 int sceneID, int geomID)
 {
-    DiffuseAreaLight light;
+    DiffuseAreaLight *light = PushStruct(arena, DiffuseAreaLight);
 
     if (Advance(tokenizer, "filename "))
     {
@@ -609,10 +615,13 @@ DiffuseAreaLight ParseAreaLight(Arena *arena, Tokenizer *tokenizer, Mesh *mesh)
         RGBIlluminantSpectrum spec(*RGBColorSpace::sRGB, value);
         DenselySampledSpectrum *dss =
             PushStructConstruct(arena, DenselySampledSpectrum)(&spec);
-        light.Lemit = dss;
-        light.scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
-        light.area  = Length(Cross(mesh->p[1] - mesh->p[0], mesh->p[3] - mesh->p[0]));
-        // light.renderFromLight = 0;
+        light->Lemit           = dss;
+        light->scale           = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
+        light->sceneID         = sceneID;
+        light->geomID          = geomID;
+        light->renderFromLight = space;
+        // light->area  = Length(Cross(mesh->p[1] - mesh->p[0], mesh->p[3] - mesh->p[0]));
+        // light->renderFromLight = 0;
     }
     if (Advance(tokenizer, "twosided "))
     {
@@ -689,15 +698,14 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
                 break;
             }
         }
-        // Add to hash table
-        table->Add(tempArena,
-                   MaterialNode{PushStr8Copy(tempArena, materialName),
-                                MaterialHandle(materialTypeIndex, materialsList.totalCount)});
 
         SkipToNextChar(tokenizer);
         Assert(materialTypeIndex != MaterialTypes::Max);
 
         Material **material = &materialsList.AddBack();
+
+        // Add to hash table
+        table->Add(tempArena, MaterialNode{PushStr8Copy(tempArena, materialName), *material});
 
         switch (materialTypeIndex)
         {
@@ -864,6 +872,12 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     // TODO: add totals so we don't have to use linked lists
     scene->filename = filename;
     Assert(GetFileExtension(filename) == "rtscene");
+
+    BeginMutex(&state->mutex);
+    int sceneID = (int)state->scenes.size();
+    state->scenes.push_back(scene);
+    EndMutex(&state->mutex);
+
     TempArena temp = ScratchStart(0, 0);
 
     u32 threadIndex  = GetThreadIndex();
@@ -908,6 +922,11 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 scene->affineTransforms[i] = *renderFromWorld * dataTransforms[i];
             }
         }
+    }
+    // TODO: this is a bit messy
+    else if (FindSubstring(filename, "shape", 0, MatchFlag_CaseInsensitive) != filename.size)
+    {
+        scene->affineTransforms = GetScene()->affineTransforms;
     }
 
     bool isLeaf       = true;
@@ -1013,17 +1032,24 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
         {
             Assert(isLeaf);
             ChunkedLinkedList<Mesh, 1024, MemoryType_Shape> shapes(temp.arena);
-            ChunkedLinkedList<PrimitiveIndices, 1024, MemoryType_Shape> indices(temp.arena);
-            ChunkedLinkedList<DiffuseAreaLight, 1024, MemoryType_Light> areaLights(temp.arena);
-            ChunkedLinkedList<Texture *, 1024, MemoryType_Texture> alphaTextures(temp.arena);
+            ChunkedLinkedList<PrimitiveData, 1024, MemoryType_Shape> primData(temp.arena);
+            // ChunkedLinkedList<DiffuseAreaLight, 1024, MemoryType_Light>
+            // areaLights(temp.arena);
+            // ChunkedLinkedList<Texture *, 1024, MemoryType_Texture>
+            // alphaTextures(temp.arena);
+
+            auto &lights = state->lights[threadIndex];
 
             int noMaterialCount       = 0;
             auto AddMaterialAndLights = [&](Mesh &mesh) {
-                PrimitiveIndices &ids = indices.AddBack();
+                PrimitiveData &data = primData.AddBack();
 
-                MaterialHandle mHandle;
-                LightHandle lHandle;
-                int alphaIndex = -1;
+                Material *material    = 0;
+                Light *light          = 0;
+                Texture *alphaTexture = 0;
+
+                // TODO: handle instanced mesh lights
+                AffineSpace *transform = 0;
 
                 // Check for material
                 if (Advance(&tokenizer, "m "))
@@ -1031,12 +1057,17 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     Assert(materialHashMap);
                     string materialName      = ReadWord(&tokenizer);
                     const MaterialNode *node = materialHashMap->Get(materialName);
-                    mHandle                  = node->handle;
+                    material                 = node->material;
                 }
                 else
                 {
-                    mHandle = MaterialHandle();
                     noMaterialCount++;
+                }
+
+                if (Advance(&tokenizer, "transform "))
+                {
+                    u32 transformIndex = ReadInt(&tokenizer);
+                    transform          = &scene->affineTransforms[transformIndex];
                 }
 
                 // Check for area light
@@ -1044,18 +1075,18 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 {
                     ErrorExit(type == GeometryType::QuadMesh,
                               "Only quad area lights supported for now\n");
-                    areaLights.AddBack() = ParseAreaLight(arena, &tokenizer, &mesh);
+                    Assert(transform);
+                    DiffuseAreaLight *areaLight = ParseAreaLight(
+                        arena, &tokenizer, transform, sceneID, shapes.totalCount - 1);
+                    light = (Light *)areaLight;
                 }
 
                 // Check for alpha
-                Texture *alphaTexture = ParseTexture(arena, &tokenizer, directory);
-                if (alphaTexture)
+                if (Advance(&tokenizer, "alpha "))
                 {
-                    alphaIndex              = alphaTextures.Length();
-                    alphaTextures.AddBack() = alphaTexture;
+                    Texture *alphaTexture = ParseTexture(arena, &tokenizer, directory);
                 }
-
-                ids = PrimitiveIndices(lHandle, mHandle, alphaIndex);
+                data = PrimitiveData(material, light, alphaTexture);
             };
 
             auto AddMesh = [&](Mesh &mesh, int numVerticesPerFace) {
@@ -1109,10 +1140,11 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
             }
 
             scene->numPrimitives = shapes.totalCount;
-            scene->primitives    = PushArrayNoZero(arena, Mesh, shapes.totalCount);
-            scene->primIndices = PushArrayNoZero(arena, PrimitiveIndices, indices.totalCount);
+            Assert(shapes.totalCount == primData.totalCount);
+            scene->primitives = PushArrayNoZero(arena, Mesh, shapes.totalCount);
+            scene->primData   = PushArrayNoZero(arena, PrimitiveData, primData.totalCount);
             shapes.Flatten((Mesh *)scene->primitives);
-            indices.Flatten(scene->primIndices);
+            primData.Flatten(scene->primData);
 
             // threadLocalStatistics[threadIndex].misc4 += noMaterialCount;
         }
@@ -1310,16 +1342,24 @@ void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string file
     TempArena temp = ScratchStart(0, 0);
     Arena *arena   = arenas[GetThreadIndex()];
 
+    u32 numProcessors = OS_NumProcessors();
     RTSceneLoadState state;
     state.table.count = 1024;
     state.table.nodes =
         PushArray(temp.arena, std::atomic<SceneLoadTable::Node *>, state.table.count);
+    state.lights = PushArray(
+        arena, ChunkedLinkedList<Light * COMMA 1024 COMMA MemoryType_Light>, numProcessors);
 
     Scene *scene = GetScene();
 
     Scheduler::Counter counter = {};
     LoadRTScene(arenas, tempArenas, &state, &scene->scene, directory, filename, &counter, t,
                 true);
+
+    ScenePrimitives **scenes = PushArrayNoZero(arena, ScenePrimitives *, state.scenes.size());
+    MemoryCopy(scenes, state.scenes.data(), sizeof(ScenePrimitives *) * state.scenes.size());
+    state.scenes.clear();
+    SetScenes(scenes);
 
     scheduler.Wait(&counter);
 
@@ -1331,7 +1371,7 @@ void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string file
     ComputeEdgeRates(&scene->scene, space, planes, TessellationStyle::ClosestInstance);
     BuildSceneBVHs(arenas, &scene->scene, NDCFromCamera, cameraFromRender, screenHeight);
 
-    for (u32 i = 0; i < OS_NumProcessors(); i++)
+    for (u32 i = 0; i < numProcessors; i++)
     {
         ArenaClear(tempArenas[i]);
     }
@@ -1739,6 +1779,117 @@ void ComputeTessellationParams(/*Arena *tempArena,*/ Mesh *meshes, TessellationP
         // params[i].edgeKeyValues =
         //     PushArray(tempArena, TessellationParams::EdgeKeyValue, mesh->numFaces * 4);
         params[i].currentMinDistance = pos_inf;
+    }
+}
+
+// NOTE: this assumes the quad is planar
+ShapeSample ScenePrimitives::SampleQuad(SurfaceInteraction &intr, Vec2f &u,
+                                        AffineTransform *transform, int geomID)
+{
+    static const f32 MinSphericalSampleArea = 3e-4;
+    static const f32 MaxSphericalSampleArea = 6.22;
+    Mesh *mesh                              = ((Mesh *)primitives) + geomID;
+
+    Vec3f p[4];
+
+    // TODO: handle mesh lights
+    Assert(mesh->GetNumFaces() == 1);
+    int primID = 0;
+
+    if (mesh->indices)
+    {
+        p[0] = mesh->p[mesh->indices[4 * primID + 0]];
+        p[1] = mesh->p[mesh->indices[4 * primID + 1]];
+        p[2] = mesh->p[mesh->indices[4 * primID + 2]];
+        p[3] = mesh->p[mesh->indices[4 * primID + 3]];
+    }
+    else
+    {
+        p[0] = mesh->p[4 * primID + 0];
+        p[1] = mesh->p[4 * primID + 1];
+        p[2] = mesh->p[4 * primID + 2];
+        p[3] = mesh->p[4 * primID + 3];
+    }
+
+    if (transform)
+    {
+        for (int i = 0; i < 4; i++)
+        {
+            p[i] = TransformP(*transform, p[i]);
+        }
+    }
+
+    Vec3lfn v00 = Normalize(p[0] - Vec3f(intr.p));
+    Vec3lfn v10 = Normalize(p[1] - Vec3f(intr.p));
+    Vec3lfn v01 = Normalize(p[3] - Vec3f(intr.p));
+    Vec3lfn v11 = Normalize(p[2] - Vec3f(intr.p));
+
+    Vec3lfn eu = p[1] - p[0];
+    Vec3lfn ev = p[3] - p[0];
+    Vec3lfn n  = Normalize(Cross(eu, ev));
+
+    ShapeSample result;
+    // If the solid angle is small
+    f32 area = SphericalQuadArea(v00, v10, v01, v11);
+    // Vec3lfn wi   = intr.p - result.samplePoint;
+    if (area < MinSphericalSampleArea || area > MaxSphericalSampleArea)
+    {
+        // First, sample a triangle based on area
+        bool isSecondTri = false;
+        Vec3f p01        = p[1] - p[0];
+        Vec3f p02        = p[2] - p[0];
+        Vec3f p03        = p[3] - p[0];
+        f32 area0        = Cross(p01, p02);
+        f32 area1        = Cross(p02, p03);
+
+        f32 div = 1.f / (area0 + area1);
+        f32 p   = area0 * div;
+        // Then sample the triangle by area
+        if (u[0] < p)
+        {
+            u[0]       = u[0] / area0;
+            Vec3f bary = SampleUniformTriangle(u);
+            result.p   = bary[0] * p[0] + bary[1] * p[1] + bary[2] * p[2];
+        }
+        else
+        {
+            u[0]       = (1 - u[0]) / (1 - p);
+            Vec3f bary = SampledUniformTriangle(u);
+            result.p   = bary[0] * p[0] + bary[1] * p[2] + bary[2] * p[3];
+        }
+        result.n   = n;
+        Vec3f wi   = Normalize(intr.p - result.p);
+        result.w   = wi;
+        result.pdf = div * LengthSquared(intr.p - result.samplePoint) / AbsDot(intr.n, wi);
+    }
+    else
+    {
+        f32 pdf;
+        result.p = SampleSphericalRectangle(intr.p, p[0], eu, ev, u, &pdf);
+        result.n = n;
+        result.w = Normalize(intr.p - result.p);
+
+        // add projected solid angle measure (n dot wi) to pdf
+        Vec4f w(AbsDot(v00, intr.shading.n), AbsDot(v10, intr.shading.n),
+                AbsDot(v01, intr.shading.n), AbsDot(v11, intr.shading.n));
+        Vec2f uNew = SampleBilinear(u, w);
+        pdf *= BilinearPDF(uNew, w);
+        result.pdf = pdf;
+    }
+    return result;
+}
+
+ShapeSample ScenePrimitives::Sample(SurfaceInteraction &intr, AffineSpace *space, Vec2f &u,
+                                    int geomID)
+{
+    switch (geometryType)
+    {
+        case GeometryType::QuadMesh:
+        {
+            return SampleQuad(intr, u, space, geomID);
+        }
+        break;
+        default: Assert(0); return {};
     }
 }
 

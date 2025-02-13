@@ -565,6 +565,19 @@ struct PrimitiveIndices
     }
 };
 
+struct PrimitiveData
+{
+    Light *light;
+    Material *material;
+    Texture *alphaTexture;
+
+    PrimitiveData() {}
+    PrimitiveData(Light *light, Material *material, Texture *alpha)
+        : light(light), material(material), alphaTexture(alpha)
+    {
+    }
+};
+
 ////////////////////////////////////////////////////////
 
 enum class AttributeType
@@ -636,8 +649,17 @@ struct TessellationParams
     EdgeKeyValue *edgeKeyValues;
 };
 
+struct ShapeSample
+{
+    Vec3f p;
+    Vec3f n;
+    Vec3f w;
+    f32 pdf;
+};
+
 struct ScenePrimitives
 {
+    static const int maxSceneDepth = 4;
     typedef bool (*IntersectFunc)(ScenePrimitives *, BVHNodeN, Ray2 &,
                                   SurfaceInteractions<1> &);
     typedef bool (*OccludedFunc)(ScenePrimitives *, BVHNodeN, Ray2 &);
@@ -663,11 +685,8 @@ struct ScenePrimitives
         TessellationParams *tessellationParams;
     };
     u32 numChildScenes;
-    union
-    {
-        AffineSpace *affineTransforms;
-        PrimitiveIndices *primIndices;
-    };
+    AffineSpace *affineTransforms;
+    PrimitiveData *primData;
 
     Scheduler::Counter counter = {};
     u32 numTransforms;
@@ -682,26 +701,41 @@ struct ScenePrimitives
         boundsMin = ToVec3f(inBounds.minP);
         boundsMax = ToVec3f(inBounds.maxP);
     }
+
+    ShapeSample SampleQuad(SurfaceInteraction &intr, Vec2f &u, AffineTransform *transform,
+                           int geomID);
+    ShapeSample Sample(SurfaceInteraction &intr, AffineSpaace *space, Vec2f &u);
 };
 
 struct Scene
 {
     ScenePrimitives scene;
 
-    ArrayTuple<LightTypes> lights;
+    // ArrayTuple<LightTypes> lights;
+
+    // StaticArray<Light *> lights;
+    // StaticArray<InfiniteLight *> infiniteLights;
+
+    // TODO: use my own allocators?
+    std::vector<Light *> lights;
+    std::vector<InfiniteLight *> infiniteLights;
 
     StaticArray<Material *> materials;
     StaticArray<Texture *> textures;
 
-    u32 numLights;
+    // u32 numLights;
 
     Bounds BuildBVH(Arena **arenas, BuildSettings &settings);
-    DiffuseAreaLight *GetAreaLights() { return lights.Get<DiffuseAreaLight>(); }
-    const DiffuseAreaLight *GetAreaLights() const { return lights.Get<DiffuseAreaLight>(); }
+    // DiffuseAreaLight *GetAreaLights() { return lights.Get<DiffuseAreaLight>(); }
+    // const DiffuseAreaLight *GetAreaLights() const { return lights.Get<DiffuseAreaLight>(); }
 };
 
 struct Scene *scene_;
 Scene *GetScene() { return scene_; }
+
+ScenePrimitives **scenes_;
+ScenePrimitives **GetScenes() { return scenes_; }
+void SetScenes(ScenePrimitives **scenes) { scenes_ = scenes; }
 
 // AttributeTable *GetMaterialTable(u32 tableIndex)
 // {
