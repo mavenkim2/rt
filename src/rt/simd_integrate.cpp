@@ -190,81 +190,71 @@ void RenderSIMD(Arena *arena, RenderParams2 &params)
     globals->height         = height;
     globals->maxDepth       = maxDepth;
 
-    scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
-        TempArena temp                         = ScratchStart(0, 0);
-        ShadingThreadState *shadingThreadState = GetShadingThreadState();
-        u32 tileX                              = jobID % tileCountX;
-        u32 tileY                              = jobID / tileCountX;
-        Vec2u minPixelBounds(params.pixelMin[0] + tileWidth * tileX,
-                             params.pixelMin[1] + tileHeight * tileY);
-        Vec2u maxPixelBounds(
-            Min(params.pixelMin[0] + tileWidth * (tileX + 1), params.pixelMin[0] + pixelWidth),
-            Min(params.pixelMin[1] + tileHeight * (tileY + 1),
-                params.pixelMin[1] + pixelHeight));
+    ParallelFor2D(
+        Vec2i(params.pixelMin),
+        Vec2i(params.pixelMin) + Vec2i((int)pixelWidth, (int)pixelHeight),
+        Vec2i(tileWidth, tileHeight), [&](int jobID, Vec2i start, Vec2i end) {
+            TempArena temp                         = ScratchStart(0, 0);
+            ShadingThreadState *shadingThreadState = GetShadingThreadState();
+            RayStateHandle *handles =
+                PushArrayNoZero(temp.arena, RayStateHandle, QUEUE_LENGTH);
+            u32 handleCount = 0;
 
-        Assert(maxPixelBounds.x >= minPixelBounds.x && minPixelBounds.x >= 0 &&
-               maxPixelBounds.x <= width);
-        Assert(maxPixelBounds.y >= minPixelBounds.y && minPixelBounds.y >= 0 &&
-               maxPixelBounds.y <= height);
-
-        ZSobolSampler sampler(spp, Vec2i(width, height));
-
-        RayStateHandle *handles = PushArrayNoZero(temp.arena, RayStateHandle, QUEUE_LENGTH);
-        u32 handleCount         = 0;
-
-        for (u32 y = minPixelBounds.y; y < maxPixelBounds.y; y++)
-        {
-            for (u32 x = minPixelBounds.x; x < maxPixelBounds.x; x++)
+            ZSobolSampler sampler(spp, Vec2i(width, height));
+            for (u32 y = start.y; y < end.y; y++)
             {
-                u32 *out = GetPixelPointer(&image, x, y);
-                Vec2u pPixel(x, y);
-                Vec3f rgb(0.f);
-                for (u32 i = 0; i < spp; i++)
+                for (u32 x = start.x; x < end.x; x++)
                 {
-                    sampler.StartPixelSample(Vec2i(x, y), i);
-                    SampledWavelengths lambda = SampleVisible(sampler.Get1D());
-                    Vec2f u                   = sampler.GetPixel2D();
-                    // TODO: motion blur
-                    sampler.Get1D();
-                    // box filter
-                    Vec2f filterSample = Vec2f(Lerp(u[0], -filterRadius.x, filterRadius.x),
-                                               Lerp(u[1], -filterRadius.y, filterRadius.y));
-                    // converts from continuous to discrete coordinates
-                    filterSample += Vec2f(0.5f, 0.5f) + Vec2f(pPixel);
-                    Vec2f pLens = sampler.Get2D();
-
-                    Ray2 ray = camera.GenerateRayDifferentials(filterSample, pLens);
-
-                    f32 cameraWeight = 1.f;
-
-                    RayStateHandle handle = AllocRayState(shadingThreadState);
-                    RayState *rayState    = handle.GetRayState();
-                    Assert(rayState->depth == 0);
-                    rayState->ray      = ray;
-                    rayState->beta     = SampledSpectrum(1.f);
-                    rayState->etaScale = 1.f;
-                    rayState->pixel    = pPixel;
-                    rayState->lambda   = lambda;
-
-                    MemoryCopy(&rayState->sampler, &sampler, sizeof(ZSobolSampler));
-
-                    handles[handleCount++] = handle;
-                    if (handleCount == QUEUE_LENGTH)
+                    u32 *out = GetPixelPointer(&image, x, y);
+                    Vec2u pPixel(x, y);
+                    Vec3f rgb(0.f);
+                    for (u32 i = 0; i < spp; i++)
                     {
-                        shadingThreadState->rayQueue.Push(shadingThreadState, handles,
-                                                          handleCount);
-                        handleCount = 0;
+                        sampler.StartPixelSample(Vec2i(x, y), i);
+                        SampledWavelengths lambda = SampleVisible(sampler.Get1D());
+                        Vec2f u                   = sampler.GetPixel2D();
+                        // TODO: motion blur
+                        sampler.Get1D();
+                        // box filter
+                        Vec2f filterSample =
+                            Vec2f(Lerp(u[0], -filterRadius.x, filterRadius.x),
+                                  Lerp(u[1], -filterRadius.y, filterRadius.y));
+                        // converts from continuous to discrete coordinates
+                        filterSample += Vec2f(0.5f, 0.5f) + Vec2f(pPixel);
+                        Vec2f pLens = sampler.Get2D();
+
+                        Ray2 ray = camera.GenerateRayDifferentials(filterSample, pLens);
+
+                        f32 cameraWeight = 1.f;
+
+                        RayStateHandle handle = AllocRayState(shadingThreadState);
+                        RayState *rayState    = handle.GetRayState();
+                        Assert(rayState->depth == 0);
+                        rayState->ray      = ray;
+                        rayState->beta     = SampledSpectrum(1.f);
+                        rayState->etaScale = 1.f;
+                        rayState->pixel    = pPixel;
+                        rayState->lambda   = lambda;
+
+                        MemoryCopy(&rayState->sampler, &sampler, sizeof(ZSobolSampler));
+
+                        handles[handleCount++] = handle;
+                        if (handleCount == QUEUE_LENGTH)
+                        {
+                            shadingThreadState->rayQueue.Push(shadingThreadState, handles,
+                                                              handleCount);
+                            handleCount = 0;
+                        }
                     }
                 }
             }
-        }
-        shadingThreadState->rayQueue.Push(shadingThreadState, handles, handleCount);
+            shadingThreadState->rayQueue.Push(shadingThreadState, handles, handleCount);
 
-        ScratchEnd(temp);
-        u32 n = numTiles.fetch_add(1);
-        fprintf(stderr, "\rRaycasting %d%%...    ", u32(100.f * n / taskCount));
-        fflush(stdout);
-    });
+            ScratchEnd(temp);
+            u32 n = numTiles.fetch_add(1);
+            fprintf(stderr, "\rRaycasting %d%%...    ", u32(100.f * n / taskCount));
+            fflush(stdout);
+        });
 
     u32 numProcessors = OS_NumProcessors();
     // Flush all queues
@@ -670,7 +660,7 @@ void ShadingQueueHandler(struct ShadingThreadState *state, ShadingHandle *values
     }
     // if (stop)
     // {
-        material->Stop();
+    material->Stop();
     // }
 
     state->rayQueue.Push(state, rayStateHandles, rayStateHandleCount);

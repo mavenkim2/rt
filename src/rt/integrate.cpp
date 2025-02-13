@@ -695,6 +695,7 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
     return L;
 }
 
+#if 0
 struct KDTreeNode
 {
     union
@@ -717,42 +718,9 @@ struct KDTreeNode
     bool IsLeaf() const { return left == 0; }
 };
 
-void CachePoints()
-{
-    // Step 1: Generate 100,000 candidate points randomly distributed within the
-    // individual bounding boxes
-
-    const int totalNumCandidatePoints = 100000;
-
-    // TODO: get list of bounds of all objects
-    Bounds *bounds = 0;
-
-    const f64 totalVolume = 0.f;
-
-    int numCandidatePoints = totalNumCandidatePoints * bounds->Volume() / totalVolume;
-
-    // TODO: make sure the object we're looking at is one
-    // where nee is actually computed (i.e. no area lights, no null material objects)
-    RNG rng(?, ?);
-    for (int i = 0; i < numCandidatePoints; i++)
-    {
-        // Generate random points within the bounding box
-        f32 x = rng.Uniform<f32>();
-        f32 y = rng.Uniform<f32>();
-        f32 z = rng.Uniform<f32>();
-
-        Vec3f p;
-        p.x = Lerp(x, bounds.minP[0], bounds.maxP[0]);
-        p.y = Lerp(y, bounds.minP[1], bounds.maxP[1]);
-        p.z = Lerp(z, bounds.minP[2], bounds.maxP[2]);
-
-        // TODO: trace pilot paths?
-    }
-}
-
 // double buffer
-void BuildKDTree(Arena *arena, Vec3f *cachePoints, Vec3f *cachePointsBuffer, int start,
-                 int num)
+void BuildKDTreeHelper(Arena *arena, Vec3f *cachePoints, Vec3f *cachePointsBuffer, int start,
+                       int num)
 {
     Bounds geomBounds;
     // Calculate the maximum extent to split by
@@ -775,7 +743,8 @@ void BuildKDTree(Arena *arena, Vec3f *cachePoints, Vec3f *cachePointsBuffer, int
         }
     }
 
-    // TODO: calculate a splitting plane that evenly subdivides the points?
+    // TODO: calculate a splitting plane that evenly subdivides the points? vs
+    // just splitting in the middle
     f32 splitPlane = (geomBounds.maxP[axis] + geomBounds.minP[axis]) / 2.f;
 
     KDTreeNode *node = PushStruct(arena, KDTreeNode);
@@ -798,19 +767,21 @@ void BuildKDTree(Arena *arena, Vec3f *cachePoints, Vec3f *cachePointsBuffer, int
     }
 }
 
+void BuildKDTree(Arena **arenas, const Vec3f *cachePoints) {}
+
 struct KNN
 {
     int index;
-    f32 distance;
+    f32 distanceSqr;
 };
 
+template <i32 kMax>
 void FindKNearestNeighbors(KDTreeNode *node, const Vec3f &candidatePoint, int index, KNN *kNN,
                            int &k, const int *cachePointIndexList, const Vec3f *cachePoints,
                            const f32 &maxMinDistance)
 {
     // Remove 20 kNN
     const f32 searchRadius = 1e-5;
-    const int numToPrune   = 20;
 
     int stackPtr     = 1;
     KDTreeNode *node = stack[--stackPtr];
@@ -820,14 +791,14 @@ void FindKNearestNeighbors(KDTreeNode *node, const Vec3f &candidatePoint, int in
         {
             int index          = cachePointIndexList[i];
             const Vec3f &point = cachePoints[index];
-            f32 distance       = Length(point - candidatePoint);
+            f32 distance       = LengthSquared(point - candidatePoint);
             if (distance < maxMinDistance)
             {
                 int replaceIndex = 0;
                 // Maintain sorted list of 20 closest neighbors within search radius
                 for (; replaceIndex < k; replaceIndex++)
                 {
-                    if (distance < kNN[replaceIndex].distance)
+                    if (distance < kNN[replaceIndex].distanceSquared)
                     {
                         // Shift to the right
                         memmove(kNN + replaceIndex + 1, kNN + replaceIndex,
@@ -837,7 +808,7 @@ void FindKNearestNeighbors(KDTreeNode *node, const Vec3f &candidatePoint, int in
                 }
                 kNN[replaceIndex] = {index, disance};
                 maxMinDistance    = kNN[k].distance;
-                k += k < numToPrune;
+                k += k < kMax;
             }
         }
     }
@@ -851,28 +822,108 @@ void FindKNearestNeighbors(KDTreeNode *node, const Vec3f &candidatePoint, int in
             FindKNearestNeighbors(choice ? node->left : node->right);
         }
     }
-
-    // Atomically mark for deletion all except the lowest index value
-    for (int i = 0; i < k; i++)
-    {
-        const KNN &knn = kNN[i];
-    }
 }
 
 struct LightDistribution
 {
-    std::vector<Light *> nearbyLights;
-    struct FarLight
+    struct LightEstimate
     {
         Light *light;
-        Vec3f irradianceEstimate;
+        f32 pdf;
     };
-    std::vector<FarLight> farLights;
+
+    std::vector<Light *> nearbyLights;
+    std::vector<LightEstimate> farLights[6];
     f32 radius;
+
+    void MergeFarDistributions(LightDistribution &ld, f32 weight = 1.f)
+    {
+        for (int i = 0; i < 6; i++)
+        {
+            farLights[i].reserve(farLights[i].size() + ld.farLights[i].size());
+            for (auto lightEst : ld.farLights[i])
+            {
+                lightEst.pdf *= weight;
+                farLights[i].push_back(lightEst);
+            }
+        }
+    }
 };
 
-void ConstructBins(const Vec3f *cachePoints, LightDistribution *distributions)
+// TODO: atomically mark for deletion all except the lowest index
+template <typename F>
+void MarkForDeletion(KNN *knn, int numNeighbors, std::atomic<int> *flags, F func)
 {
+    int minIndex = (int)pos_inf;
+    for (int i = 0; i < numNeighbors; i++)
+    {
+        if (func(knn[i])) minIndex = Min(knn[i].index);
+    }
+    for (int i = 0; i < numNeighbors; i++)
+    {
+        if (func(knn) && knn[i].index != minIndex)
+        {
+            flags[knn[i].index].store(1, std::memory_order_relaxed);
+        }
+    }
+}
+
+// idea for later: do this at runtime
+// 1. when you hit an object for the first time, that's when you distribute points
+// within the bounding box of that object
+// 2. weighted reservoir sampling with a russian roulette termination based on the ratio
+// between an additional light's probability and the total running weight. does this
+// even make any sense?
+// 3.
+
+struct CachePoints
+{
+    StaticArray<KDTreeNode> kdTreeNodes;
+};
+
+void ConstructCachePoints(Arena **arenas, const Camera &camera,
+                          LightDistribution *distributions, int seed = 0)
+{
+    // Step 1: Generate 100,000 candidate points randomly distributed within the
+    // individual bounding boxes
+
+    const int totalNumCandidatePoints = 100000;
+
+    // TODO: get list of bounds of all objects
+    Bounds *bounds = 0;
+
+    const f64 totalVolume = 0.f;
+
+    int numCandidatePoints = totalNumCandidatePoints * bounds->Volume() / totalVolume;
+
+    // TODO: make sure the object we're looking at is one
+    // where nee is actually computed (i.e. no area lights, no null material objects)
+    RNG rng(seed);
+    for (int i = 0; i < numCandidatePoints; i++)
+    {
+        // Generate random points within the bounding box
+        f32 x = rng.Uniform<f32>();
+        f32 y = rng.Uniform<f32>();
+        f32 z = rng.Uniform<f32>();
+
+        Vec3f p;
+        p.x = Lerp(x, bounds.minP[0], bounds.maxP[0]);
+        p.y = Lerp(y, bounds.minP[1], bounds.maxP[1]);
+        p.z = Lerp(z, bounds.minP[2], bounds.maxP[2]);
+
+        // TODO: trace pilot paths?
+    }
+
+    // Step 2: Trace pilot paths
+
+
+    // Step 2: Build KD Tree over points
+    Arena *kdTreeArena = ArenaAlloc();
+    StaticArray<KDTreeNode> kdTreeNodes(kdTreeArena, totalNumCandidiatePoints);
+    kdTreeNodes.Resize(totalNumCandidatePoints);
+
+    BuildKDTree();
+
     // How do I estimate the contribution of a light to a point? what even is
     // fluence?
     // fluence is only used for curves/volume points where surface normal isn't defined.
@@ -883,6 +934,9 @@ void ConstructBins(const Vec3f *cachePoints, LightDistribution *distributions)
 
     Scene *scene = GetScene();
 
+    // TODO: for the similarity metric, how do you calaculate the probability for
+    // "near" lights? for far lights, it's obvious that you use the irradiance estimates.
+    // but
     const f32 D = 4.f;
 
     for (int i = 0; i < numCachePoints; i++)
@@ -890,12 +944,39 @@ void ConstructBins(const Vec3f *cachePoints, LightDistribution *distributions)
         LightDistribution &distribution = distributions[i];
         const Vec3f &point              = cachePoints[i];
 
+        const int k = 20;
+        KNN kNN[k];
+        FindKNearestNeighbors<k>(root, point, ?, kNN, etc.);
+
+        // Calculate radius as average of the distance to the k nearest neighbors
+        f32 radius = 0.f;
+        for (int i = 0; i < k; i++)
+        {
+            radius += kNN[i].distance;
+        }
+        radius /= f32(k);
+
+        distribution.radius = radius;
+
+        // Calculate importance of all lights in scene
+
+        static const int farLightBinMax = 256;
+        FarLight farLights[6][farLightBinMax];
+        int farLightCount[6] = {};
+        f32 importance[6]    = {};
+        f32 minContribution[6];
+        for (int cardinalIndex = 0; cardinalIndex < 6; cardinalIndex++)
+        {
+            minContribution[cardinalIndex] = pos_inf;
+        }
+
         for (int lightIndex = 0; lightIndex < scene->numLights; lightIndex++)
         {
             Light *light = scene->lights[lightIndex];
             bool isNear  = LengthSquared(light->Centroid() - point) < radius * D;
             if (isNear)
             {
+                // girard's theorem for the solid angle?
                 distribution.nearbyLights.push_back(light);
             }
             else
@@ -908,19 +989,189 @@ void ConstructBins(const Vec3f *cachePoints, LightDistribution *distributions)
                 // using spectral, maybe there's a better way?
                 // Compute irradiance estimate for six cardinal bins
 
-                for (int i = 0; i < 6; i++)
+                SurfaceInteraction intr;
+                intr.p = point;
+                // Store list accounting for 97% of the energy reaching the point
+                for (int cardinalIndex = 0; cardinalIndex < 6; cardinalIndex++)
                 {
+                    intr.n             = cardinalNormals[cardinalIndex];
                     LightSample sample = light->SampleLi();
-                    // TODO: convert to RGB
-                    SampledSpectrum irradiance =
-                        sample.L * Max(0.f, Dot(sample.samplePoint, cardinalNormals)) /
-                        sample.pdf;
-                    Vec3f xyz = ConvertRadianceToRGB(irradiance, lambda);
+                    f32 estimate       = sample.L.MaxValue() *
+                                   AbsDot(sample.samplePoint, cardinalNormals[cardinalIndex]) /
+                                   sample.pdf;
+
+                    // Find "far lights" with greatest contribution to current bin
+                    auto &farLights = distribution.farLights[cardinalIndex];
+                    if (farLightCount[cardinalIndex] < farLightBinMax)
+                    {
+                        farLights[cardinalIndex][farLightCount[cardinalIndex]++] = {light,
+                                                                                    estimate};
+                        minContribution[cardinalIndex] =
+                            Min(minContribution[cardinalIndex], estimate);
+                    }
+                    else if (estimate > minContribution[cardinalIndex])
+                    {
+                        f32 newMin = pos_inf;
+                        for (int cullLightIndex = 0; cullLightIndex < farLightBinMax;
+                             cullLightIndex++)
+                        {
+                            newMin = Min(newMin, farLights[cardinalIndex][cullLightIndex]);
+                            if (farLights[cardinalIndex][cullLightIndex].estimate ==
+                                minContribution[cardinalIndex])
+                            {
+                                farLights[cardinalIndex][cullLightIndex] = {light, estimate};
+                            }
+                        }
+                    }
                 }
             }
         }
     }
+
+    // Calculate similarity metric between point and its neighbors
+    for (int i = 0; i < numCachePoints; i++)
+    {
+        const int k = 20;
+        KNN kNN[k];
+        int numNeighbors = FindKNearestNeighbors<k>(root, point, ?, kNN, etc.);
+        // TODO: should I also consider the nearby lights???
+        LightDistribution &distribution = distributions[i];
+
+        int sizeA = distribution.nearbyLightCount;
+        for (int cardinalIndex = 0; cardinalIndex < 6; cardinalIndex++)
+        {
+            sizeA += farLightCounts[cardinalIndex];
+        }
+
+        f32 M = 0.f;
+
+        // TODO: maybe should consider the total probability of a light in all bins
+        for (int neighborIndex = 0; neighborIndex < k; neighborIndex++)
+        {
+            const KNN &neighbor                     = kNN[neighborIndex];
+            LightDistribution &neighborDistribution = distributions[neighbor.index];
+            int sizeB                               = neighborDistribution.nearbyLightCount;
+
+            f32 S = 0.f;
+            for (int cardinalIndex = 0; cardinalIndex < 6; cardinalIndex++)
+            {
+                sizeB += neighborDistribution.farLightCounts[cardinalIndex];
+
+                for (int farLightIndex = 0;
+                     farLightIndex < distribution.farLightCounts[cardinalIndex];
+                     farLightIndex++)
+                {
+                    const FarLight &light =
+                        distribution.farLights[cardinalIndex][farLightIndex];
+                    for (int neighborLightIndex = 0;
+                         neighborLightIndex <
+                         neighborDistribution.farLightCounts[cardinalIndex];
+                         neighborLightIndex++)
+                    {
+                        const FarLight &neighborLight =
+                            neighborDistribution.farLights[cardinalIndex][neighborLightIndex];
+                        if (light.light == neighborLight.light)
+                        {
+                            S += 1 - Abs(light.pdf - neighborLight.pdf) /
+                                         (light.pdf + neighborLight.pdf);
+                        }
+                    }
+                }
+            }
+            M += 2 * S / (sizeA + sizeB);
+        }
+        M /= f32(k);
+        // TODO: minimum projected screen space size of 3 pixels
+        distribution.radius = Max(distribution.radius * M, .25f * distribution.radius);
+
+        MarkForDeletion(kNN, numNeighbors, flags, [&](const KNN &neighbor) {
+            return neighbor.distance < distribution.radius;
+        });
+    }
+
+    int rootIndex = BuildKDTree();
+
+    // Last step: blur light distributions across cache points
+    ParallelFor([&](int jobID, int start, int count) {
+        for (int i = start; i < start + count; i++)
+        {
+            static const int k = 16;
+
+            LightDistribution &distribution = distributions[i];
+            KNN knn[k];
+            int numNeighbors = FindKNearestNeighbors<k>(
+                nodes, rootIndex, const int &candidatePoint, int index, KNN *kNN, int &k,
+                const int *cachePointIndexList, const int *cachePoints,
+                const f32 &maxMinDistance);
+
+            f32 maxDistance = neg_inf;
+            f32 minDistance = pos_inf;
+            for (int kIndex = 0; kIndex < k; kIndex++)
+            {
+                maxDistance = Max(maxDistance, knn[kIndex].distanceSquared);
+                minDistance = Min(minDistance, knn[kIndex].distanceSquared);
+            }
+            maxDistance = Sqrt(maxDistance);
+
+            f32 weights[17];
+            weights[0] = 1.f;
+
+            f32 total = 1.f;
+            for (int kIndex = 0; kIndex < k; kIndex++)
+            {
+                if (knn[kIndex].distanceSquared == minDistance)
+                {
+                    weights[kIndex + 1] = 1.f;
+                    total += 1.f;
+                }
+                else if (knn[kIndex].distanceSquared == maxDistance)
+                {
+                    weights[kIndex + 1] = 1.f / 16.f;
+                    total += 1.f / 16.f;
+                }
+                else
+                {
+                    f32 weight =
+                        Lerp(1.f, 1.f / 16.f, knn[kIndex].distanceSquared / maxDistance);
+                    weights[kIndex + 1] = weight;
+                    total += weight;
+                }
+            }
+            total                 = 1.f / total;
+            int farLightTotals[6] = {};
+            int nearCount         = 0;
+
+            for (int kIndex = 0; kIndex < ArrayLength(weights); kIndex++)
+            {
+                weights[kIndex] *= total;
+                const LightDistribution &neighborDistribution =
+                    distributions[knn[kIndex].index];
+                nearCount += neighborDistribution.nearbyLightCount;
+                for (int farIndex = 0; farIndex < 6; farIndex++)
+                {
+                    farLightTotals[farIndex] += neighborDistribution.farLightCounts[farIndex];
+                }
+            }
+
+            // Merge far distributions
+            LightDistribution &newDistribution = newDistributions[i];
+            newDistribution.nearbyLights       = distribution.nearbyLights;
+            newDistribution.radius             = distribution.radius;
+            newDistribution.nearbyLightCount   = nearCount;
+
+            newDistribution.SetFarLightData(arena, farLightTotals);
+
+            newDistribution.MergeFarDistributions(distribution, weights[0]);
+            for (int kIndex = 0; kIndex < numNeighbors; kIndex++)
+            {
+                newDistribution.MergeFarDistributions(distributions[knn[kIndex].index],
+                                                      weights[kIndex + 1]);
+            }
+        }
+    });
+    distributions.clear();
 }
+#endif
 
 #if 0
 template <typename Sampler>

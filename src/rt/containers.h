@@ -95,6 +95,8 @@ struct StaticArray
 
     __forceinline u32 Clear() { size = 0; }
 
+    __forceinline void Resize(int s) { size = s; }
+
     __forceinline T &operator[](i32 index)
     {
         ErrorExit(index >= 0 && index < size, "index: %u, size %u\n", index, size);
