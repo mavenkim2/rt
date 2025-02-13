@@ -1907,7 +1907,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                         for (int i = offset; i < end; i++)
                         {
                             ShapeType *shapeType = &node->values[i];
-                            WriteShape(shapeType, builder, dataBuilder, directory);
+                            WriteShape(info, shapeType, builder, dataBuilder, directory);
                         }
                         if (moanaOffset < node->count)
                         {
@@ -2020,7 +2020,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                 for (u32 i = 0; i < node->count; i++)
                 {
                     ShapeType *shapeType = node->values + i;
-                    WriteShape(shapeType, builder, dataBuilder, directory);
+                    WriteShape(info, shapeType, builder, dataBuilder, directory);
                 }
             }
         }
@@ -2033,18 +2033,18 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
         info->transforms.AddBack() = AffineSpace::Identity();
         for (int type = 0; type < (int)GeometryType::Max; type++)
         {
-            if (type == GeometryType::Instance) continue;
             GeometryType ty = (GeometryType)type;
+            if (ty == GeometryType::Instance) continue;
 
             PBRTFileInfo *shapeInfo = PushStruct(temp.arena, PBRTFileInfo);
             for (auto *node = info->shapes.first; node != 0; node = node->next)
             {
                 for (int i = 0; i < node->count; i++)
                 {
-                    ShapeType *type = node->values + i;
-                    if (ty == ConvertStringIdToGeometryType(type->packet.type))
+                    ShapeType *shape = node->values + i;
+                    if (ty == ConvertStringIDToGeometryType(shape->packet.type))
                     {
-                        shapeInfo->shapes.AddBack() = type;
+                        shapeInfo->shapes.AddBack() = *shape;
                     }
                 }
             }

@@ -34,10 +34,6 @@ string ConvertGeometryTypeToString(GeometryType type)
     }
 }
 
-GeometryType ConvertStringIDToGeometryType(StringId id)
-{
-}
-
 template <typename BxDFShader, typename NormalShader>
 struct Material2;
 

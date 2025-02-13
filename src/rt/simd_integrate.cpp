@@ -414,7 +414,7 @@ QUEUE_HANDLER(RayIntersectionHandler)
             {
                 for (auto &light : scene->infiniteLights)
                 {
-                    SampledSpectrum Le = light.Le(rayState->ray.d, rayState->lambda);
+                    SampledSpectrum Le = light->Le(rayState->ray.d, rayState->lambda);
                     rayState->L += rayState->beta * Le;
                 }
             }
@@ -422,10 +422,10 @@ QUEUE_HANDLER(RayIntersectionHandler)
             {
                 for (auto &light : scene->infiniteLights)
                 {
-                    SampledSpectrum Le = light.Le(rayState->ray.d, rayState->lambda);
+                    SampledSpectrum Le = light->Le(rayState->ray.d, rayState->lambda);
 
                     f32 pdf      = LightPDF(scene);
-                    f32 lightPdf = pdf * (f32)light.PDF_Li(rayState->ray.d, true);
+                    f32 lightPdf = pdf * (f32)light->PDF_Li(rayState->ray.d, true);
 
                     f32 w_l = PowerHeuristic(1, rayState->bsdfPdf, 1, lightPdf);
                     // NOTE: beta already contains the cosine, bsdf, and pdf terms

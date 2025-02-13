@@ -18,6 +18,7 @@ enum class LightType : u32
     Infinite,
 };
 
+struct ShapeSample;
 struct LightSample
 {
     SampledSpectrum L;
@@ -27,16 +28,12 @@ struct LightSample
     LightType lightType;
 
     LightSample() {}
-    LightSample(const ShapeSample &sample, const SampledSpecturm &L, LightType type)
-        : samplePoint(sample.p), wi(sample.w), L(L), pdf(sample.pdf), lightType(type)
+    LightSample(const ShapeSample &sample, const SampledSpectrum &L, LightType type);
+
+    LightSample(SampledSpectrum L, Vec3f samplePoint, Vec3f wi, f32 pdf, LightType lightType)
+        : L(L), samplePoint(samplePoint), wi(wi), pdf(pdf), lightType(lightType)
     {
     }
-
-    // LightSample(SampledSpectrum L, Vec3lfn samplePoint, Vec3lfn wi, LaneNF32 pdf,
-    //             LightType lightType)
-    //     : L(L), samplePoint(samplePoint), wi(wi), pdf(pdf), lightType(lightType)
-    // {
-    // }
 };
 
 bool IsDeltaLight(LightType type)
@@ -76,15 +73,14 @@ struct Light
 
 struct InfiniteLight : Light
 {
-    virtual f32 PDF_Li(Vec3f &w, bool allowIncompletePDF)                        = 0;
+    virtual f32 PDF_Li(const Vec3f &w, bool allowIncompletePDF)                  = 0;
     virtual SampledSpectrum Le(const Vec3f &w, const SampledWavelengths &lambda) = 0;
 
     f32 PDF_Li(const Vec3f &prevIntrP, const SurfaceInteraction &intr, bool allowIncompletePdf)
     {
         return PDF_Li(Normalize(intr.p - prevIntrP), allowIncompletePdf);
     }
-    SampledSpectrum Le(const Vec3f &n, const Vec3f &w,
-                       const SampledSpectrumWavelengths &lambda)
+    SampledSpectrum Le(const Vec3f &n, const Vec3f &w, const SampledWavelengths &lambda)
     {
         return Le(w, lambda);
     }
@@ -101,11 +97,17 @@ struct DiffuseAreaLight : Light
     LightType type;
 
     DiffuseAreaLight() {}
-    DiffuseAreaLight(Vec3f *p, f32 scale, Spectrum Lemit)
-        : p(p), scale(scale), Lemit(LookupSpectrum(Lemit))
-    {
-        area = Length(Cross(p[1] - p[0], p[3] - p[0]));
-    }
+    virtual LightSample SampleLi(SurfaceInteraction &intr, Vec2f &u,
+                                 SampledWavelengths &lambda, bool allowIncompletePDF) override;
+    virtual f32 PDF_Li(const Vec3f &prevIntrP, const SurfaceInteraction &intr,
+                       bool allowIncompletePDF) override;
+    virtual SampledSpectrum Le(const Vec3f &n, const Vec3f &w,
+                               const SampledWavelengths &lambda) override;
+    // DiffuseAreaLight(Vec3f *p, f32 scale, Spectrum Lemit)
+    //     : p(p), scale(scale), Lemit(LookupSpectrum(Lemit))
+    // {
+    //     area = Length(Cross(p[1] - p[0], p[3] - p[0]));
+    // }
 };
 
 // TODO: loop over all of these after the scene is fully instantiated and add the scene radius
@@ -363,7 +365,7 @@ struct PiecewiseConstant2D
     }
 };
 
-struct ImageInfiniteLight
+struct ImageInfiniteLight : InfiniteLight
 {
     Image image;
     const AffineSpace *renderFromLight;
@@ -375,7 +377,10 @@ struct ImageInfiniteLight
 
     ImageInfiniteLight(Arena *arena, Image image, const AffineSpace *renderFromLight,
                        const RGBColorSpace *imageColorSpace, f32 sceneRadius, f32 scale = 1.f);
-    LightFunctionsInf(ImageInfiniteLight);
+    virtual LightSample SampleLi(SurfaceInteraction &intr, Vec2f &u,
+                                 SampledWavelengths &lambda, bool allowIncompletePDF) override;
+    virtual f32 PDF_Li(const Vec3f &w, bool allowIncompletePDF) override;
+    virtual SampledSpectrum Le(const Vec3f &w, const SampledWavelengths &lambda) override;
     SampledSpectrum ImageLe(Vec2f uv, const SampledWavelengths &lambda) const;
 };
 

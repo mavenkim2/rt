@@ -565,18 +565,18 @@ struct PrimitiveIndices
     }
 };
 
-struct PrimitiveData
-{
-    Light *light;
-    Material *material;
-    Texture *alphaTexture;
-
-    PrimitiveData() {}
-    PrimitiveData(Light *light, Material *material, Texture *alpha)
-        : light(light), material(material), alphaTexture(alpha)
-    {
-    }
-};
+// struct PrimitiveData
+// {
+//     Light *light;
+//     Material *material;
+//     Texture *alphaTexture;
+//
+//     PrimitiveData() {}
+//     PrimitiveData(Light *light, Material *material, Texture *alpha)
+//         : light(light), material(material), alphaTexture(alpha)
+//     {
+//     }
+// };
 
 ////////////////////////////////////////////////////////
 
@@ -588,6 +588,31 @@ enum class AttributeType
     String,
     Int,
     Bool,
+};
+
+struct Texture
+{
+    virtual void Start(struct ShadingThreadState *);
+    virtual void Stop() {}
+    virtual f32 EvaluateFloat(SurfaceInteraction &si, SampledWavelengths &lambda,
+                              const Vec4f &filterWidths, void *data = 0)
+    {
+        ErrorExit(0, "EvaluateFloat is not defined for sub class \n");
+        return 0.f;
+    }
+    virtual SampledSpectrum EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
+                                           const Vec4f &filterWidths, void *data = 0)
+    {
+        ErrorExit(0, "EvaluateAlbedo is not defined for sub class\n");
+        return {};
+    }
+    SampledSpectrum EvaluateAlbedo(const Vec3f &color, SampledWavelengths &lambda)
+    {
+        if (color == Vec3f(0.f)) return SampledSpectrum(0.f);
+        Assert(!IsNaN(color[0]) && !IsNaN(color[1]) && !IsNaN(color[2]));
+        return RGBAlbedoSpectrum(*RGBColorSpace::sRGB, Clamp(color, Vec3f(0.f), Vec3f(1.f)))
+            .Sample(lambda);
+    }
 };
 
 struct Material
@@ -686,7 +711,8 @@ struct ScenePrimitives
     };
     u32 numChildScenes;
     AffineSpace *affineTransforms;
-    PrimitiveData *primData;
+    PrimitiveIndices *primIndices;
+    // PrimitiveData *primData;
 
     Scheduler::Counter counter = {};
     u32 numTransforms;
@@ -702,9 +728,9 @@ struct ScenePrimitives
         boundsMax = ToVec3f(inBounds.maxP);
     }
 
-    ShapeSample SampleQuad(SurfaceInteraction &intr, Vec2f &u, AffineTransform *transform,
+    ShapeSample SampleQuad(SurfaceInteraction &intr, Vec2f &u, AffineSpace *transform,
                            int geomID);
-    ShapeSample Sample(SurfaceInteraction &intr, AffineSpaace *space, Vec2f &u);
+    ShapeSample Sample(SurfaceInteraction &intr, AffineSpace *space, Vec2f &u, int geomID);
 };
 
 struct Scene

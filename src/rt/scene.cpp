@@ -29,30 +29,7 @@ struct SceneLoadTable
     u32 count;
 };
 
-struct Texture
-{
-    virtual void Start(ShadingThreadState *state) {}
-    virtual void Stop() {}
-    virtual f32 EvaluateFloat(SurfaceInteraction &si, SampledWavelengths &lambda,
-                              const Vec4f &filterWidths, void *data = 0)
-    {
-        ErrorExit(0, "EvaluateFloat is not defined for sub class \n");
-        return 0.f;
-    }
-    virtual SampledSpectrum EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
-                                           const Vec4f &filterWidths, void *data = 0)
-    {
-        ErrorExit(0, "EvaluateAlbedo is not defined for sub class\n");
-        return {};
-    }
-    SampledSpectrum EvaluateAlbedo(const Vec3f &color, SampledWavelengths &lambda)
-    {
-        if (color == Vec3f(0.f)) return SampledSpectrum(0.f);
-        Assert(!IsNaN(color[0]) && !IsNaN(color[1]) && !IsNaN(color[2]));
-        return RGBAlbedoSpectrum(*RGBColorSpace::sRGB, Clamp(color, Vec3f(0.f), Vec3f(1.f)))
-            .Sample(lambda);
-    }
-};
+void Texture::Start(ShadingThreadState *) {}
 
 struct PtexData
 {
@@ -926,7 +903,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     // TODO: this is a bit messy
     else if (FindSubstring(filename, "shape", 0, MatchFlag_CaseInsensitive) != filename.size)
     {
-        scene->affineTransforms = GetScene()->affineTransforms;
+        scene->affineTransforms = GetScene()->scene.affineTransforms;
     }
 
     bool isLeaf       = true;
@@ -1032,7 +1009,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
         {
             Assert(isLeaf);
             ChunkedLinkedList<Mesh, 1024, MemoryType_Shape> shapes(temp.arena);
-            ChunkedLinkedList<PrimitiveData, 1024, MemoryType_Shape> primData(temp.arena);
+            ChunkedLinkedList<PrimitiveIndices, 1024, MemoryType_Shape> indices(temp.arena);
             // ChunkedLinkedList<DiffuseAreaLight, 1024, MemoryType_Light>
             // areaLights(temp.arena);
             // ChunkedLinkedList<Texture *, 1024, MemoryType_Texture>
@@ -1057,7 +1034,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     Assert(materialHashMap);
                     string materialName      = ReadWord(&tokenizer);
                     const MaterialNode *node = materialHashMap->Get(materialName);
-                    material                 = node->material;
+                    // node->handle
+                    material = node->material;
                 }
                 else
                 {
@@ -1784,7 +1762,7 @@ void ComputeTessellationParams(/*Arena *tempArena,*/ Mesh *meshes, TessellationP
 
 // NOTE: this assumes the quad is planar
 ShapeSample ScenePrimitives::SampleQuad(SurfaceInteraction &intr, Vec2f &u,
-                                        AffineTransform *transform, int geomID)
+                                        AffineSpace *transform, int geomID)
 {
     static const f32 MinSphericalSampleArea = 3e-4;
     static const f32 MaxSphericalSampleArea = 6.22;
@@ -1839,13 +1817,13 @@ ShapeSample ScenePrimitives::SampleQuad(SurfaceInteraction &intr, Vec2f &u,
         Vec3f p01        = p[1] - p[0];
         Vec3f p02        = p[2] - p[0];
         Vec3f p03        = p[3] - p[0];
-        f32 area0        = Cross(p01, p02);
-        f32 area1        = Cross(p02, p03);
+        f32 area0        = Length(Cross(p01, p02));
+        f32 area1        = Length(Cross(p02, p03));
 
-        f32 div = 1.f / (area0 + area1);
-        f32 p   = area0 * div;
+        f32 div  = 1.f / (area0 + area1);
+        f32 prob = area0 * div;
         // Then sample the triangle by area
-        if (u[0] < p)
+        if (u[0] < prob)
         {
             u[0]       = u[0] / area0;
             Vec3f bary = SampleUniformTriangle(u);
@@ -1860,7 +1838,7 @@ ShapeSample ScenePrimitives::SampleQuad(SurfaceInteraction &intr, Vec2f &u,
         result.n   = n;
         Vec3f wi   = Normalize(intr.p - result.p);
         result.w   = wi;
-        result.pdf = div * LengthSquared(intr.p - result.samplePoint) / AbsDot(intr.n, wi);
+        result.pdf = div * LengthSquared(intr.p - result.p) / AbsDot(intr.n, wi);
     }
     else
     {

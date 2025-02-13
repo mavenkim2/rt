@@ -18,6 +18,77 @@ Vec3f SampleUniformTriangle(const Vec2f &u)
     return result;
 }
 
+Vec3lfn SampleSphericalRectangle(const Vec3lfn &p, const Vec3lfn &base, const Vec3lfn &eu,
+                                 const Vec3lfn &ev, const Vec2lfn &samples, LaneNF32 *pdf)
+{
+    LaneNF32 euLength = Length(eu);
+    LaneNF32 evLength = Length(ev);
+
+    // Calculate local coordinate system where sampling is done
+    // NOTE: rX and rY must be perpendicular
+    Vec3lfn rX = eu / euLength;
+    Vec3lfn rY = ev / evLength;
+    Vec3lfn rZ = Cross(rX, rY);
+
+    Vec3lfn d0  = base - p;
+    LaneNF32 x0 = Dot(d0, rX);
+    LaneNF32 y0 = Dot(d0, rY);
+    LaneNF32 z0 = Dot(d0, rZ);
+    if (z0 > 0)
+    {
+        z0 *= -1.f;
+        rZ *= LaneNF32(-1.f);
+    }
+
+    LaneNF32 x1 = x0 + euLength;
+    LaneNF32 y1 = y0 + evLength;
+
+    Vec3lfn v00(x0, y0, z0);
+    Vec3lfn v01(x0, y1, z0);
+    Vec3lfn v10(x1, y0, z0);
+    Vec3lfn v11(x1, y1, z0);
+
+    // Compute normals to edges (i.e, normal of plane containing edge and p)
+    Vec3lfn n0 = Normalize(Cross(v00, v10));
+    Vec3lfn n1 = Normalize(Cross(v10, v11));
+    Vec3lfn n2 = Normalize(Cross(v11, v01));
+    Vec3lfn n3 = Normalize(Cross(v01, v00));
+
+    // Calculate the angle between the plane normals
+    LaneNF32 g0 = AngleBetween(-n0, n1);
+    LaneNF32 g1 = AngleBetween(-n1, n2);
+    LaneNF32 g2 = AngleBetween(-n2, n3);
+    LaneNF32 g3 = AngleBetween(-n3, n0);
+
+    // Compute solid angle subtended by rectangle
+    LaneNF32 k = TwoPi * PI - g2 - g3;
+    LaneNF32 S = g0 + g1 - k;
+    *pdf       = 1.f / S;
+
+    LaneNF32 b0 = n0.z;
+    LaneNF32 b1 = n2.z;
+
+    // Compute cu
+    // LaneNF32 au = samples[0] * S + k;
+    LaneNF32 au = samples[0] * (g0 + g1 - TwoPi) + (samples[0] - 1) * (g2 + g3);
+    LaneNF32 fu = (Cos(au) * b0 - b1) / Sin(au);
+    LaneNF32 cu = Clamp(Copysign(1 / Sqrt(fu * fu + b0 * b0), fu), -1.f, 1.f);
+
+    // Compute xu
+    LaneNF32 xu = -(cu * z0) / Sqrt(1.f - cu * cu);
+    xu          = Clamp(xu, x0, x1);
+    // Compute yv
+    LaneNF32 d  = Sqrt(xu * xu + z0 * z0);
+    LaneNF32 h0 = y0 / Sqrt(d * d + y0 * y0);
+    LaneNF32 h1 = y1 / Sqrt(d * d + y1 * y1);
+    // Linearly interpolate between h0 and h1
+    LaneNF32 hv   = h0 + (h1 - h0) * samples[1];
+    LaneNF32 hvsq = hv * hv;
+    LaneNF32 yv   = (hvsq < 1 - 1e-6f) ? (hv * d / Sqrt(1 - hvsq)) : y1;
+    // Convert back to world space
+    return p + rX * xu + rY * yv + rZ * z0;
+}
+
 template <typename T>
 inline Vec2<T> SampleUniformDiskPolar(Vec2<T> u)
 {

@@ -3,6 +3,12 @@
 
 namespace rt
 {
+
+LightSample::LightSample(const ShapeSample &sample, const SampledSpectrum &L, LightType type)
+    : samplePoint(sample.p), wi(sample.w), L(L), pdf(sample.pdf), lightType(type)
+{
+}
+
 Vec3f EqualAreaSquareToSphere(Vec2f p)
 {
     Assert(p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1);
@@ -79,76 +85,6 @@ Vec2f EqualAreaSphereToSquare(Vec3f d)
 // rectangle onto the unit sphere centered at point p
 // https://blogs.autodesk.com/media-and-entertainment/wp-content/uploads/sites/162/egsr2013_spherical_rectangle.pdf
 // TODO: simd sin, cos, and arcsin
-Vec3lfn SampleSphericalRectangle(const Vec3lfn &p, const Vec3lfn &base, const Vec3lfn &eu,
-                                 const Vec3lfn &ev, const Vec2lfn &samples, LaneNF32 *pdf)
-{
-    LaneNF32 euLength = Length(eu);
-    LaneNF32 evLength = Length(ev);
-
-    // Calculate local coordinate system where sampling is done
-    // NOTE: rX and rY must be perpendicular
-    Vec3lfn rX = eu / euLength;
-    Vec3lfn rY = ev / evLength;
-    Vec3lfn rZ = Cross(rX, rY);
-
-    Vec3lfn d0  = base - p;
-    LaneNF32 x0 = Dot(d0, rX);
-    LaneNF32 y0 = Dot(d0, rY);
-    LaneNF32 z0 = Dot(d0, rZ);
-    if (z0 > 0)
-    {
-        z0 *= -1.f;
-        rZ *= LaneNF32(-1.f);
-    }
-
-    LaneNF32 x1 = x0 + euLength;
-    LaneNF32 y1 = y0 + evLength;
-
-    Vec3lfn v00(x0, y0, z0);
-    Vec3lfn v01(x0, y1, z0);
-    Vec3lfn v10(x1, y0, z0);
-    Vec3lfn v11(x1, y1, z0);
-
-    // Compute normals to edges (i.e, normal of plane containing edge and p)
-    Vec3lfn n0 = Normalize(Cross(v00, v10));
-    Vec3lfn n1 = Normalize(Cross(v10, v11));
-    Vec3lfn n2 = Normalize(Cross(v11, v01));
-    Vec3lfn n3 = Normalize(Cross(v01, v00));
-
-    // Calculate the angle between the plane normals
-    LaneNF32 g0 = AngleBetween(-n0, n1);
-    LaneNF32 g1 = AngleBetween(-n1, n2);
-    LaneNF32 g2 = AngleBetween(-n2, n3);
-    LaneNF32 g3 = AngleBetween(-n3, n0);
-
-    // Compute solid angle subtended by rectangle
-    LaneNF32 k = TwoPi * PI - g2 - g3;
-    LaneNF32 S = g0 + g1 - k;
-    *pdf       = 1.f / S;
-
-    LaneNF32 b0 = n0.z;
-    LaneNF32 b1 = n2.z;
-
-    // Compute cu
-    // LaneNF32 au = samples[0] * S + k;
-    LaneNF32 au = samples[0] * (g0 + g1 - TwoPi) + (samples[0] - 1) * (g2 + g3);
-    LaneNF32 fu = (Cos(au) * b0 - b1) / Sin(au);
-    LaneNF32 cu = Clamp(Copysign(1 / Sqrt(fu * fu + b0 * b0), fu), -1.f, 1.f);
-
-    // Compute xu
-    LaneNF32 xu = -(cu * z0) / Sqrt(1.f - cu * cu);
-    xu          = Clamp(xu, x0, x1);
-    // Compute yv
-    LaneNF32 d  = Sqrt(xu * xu + z0 * z0);
-    LaneNF32 h0 = y0 / Sqrt(d * d + y0 * y0);
-    LaneNF32 h1 = y1 / Sqrt(d * d + y1 * y1);
-    // Linearly interpolate between h0 and h1
-    LaneNF32 hv   = h0 + (h1 - h0) * samples[1];
-    LaneNF32 hvsq = hv * hv;
-    LaneNF32 yv   = (hvsq < 1 - 1e-6f) ? (hv * d / Sqrt(1 - hvsq)) : y1;
-    // Convert back to world space
-    return p + rX * xu + rY * yv + rZ * z0;
-}
 
 template <typename T>
 T LinearPDF(T x, T a, T b)
@@ -217,9 +153,9 @@ LaneNF32 SphericalQuadArea(const Vec3lfn &a, const Vec3lfn &b, const Vec3lfn &c,
 LightSample DiffuseAreaLight::SampleLi(SurfaceInteraction &intr, Vec2f &u,
                                        SampledWavelengths &lambda, bool allowIncompletePDF)
 {
-    ScenePrimitive **scenes = GetScenes();
-    ShapeSample sample      = scenes[sceneID]->Sample(intr, renderFromLight, u, geomID);
-    SampledSpectrum L       = Le(sample.n, sample.wi, lambda);
+    ScenePrimitives **scenes = GetScenes();
+    ShapeSample sample       = scenes[sceneID]->Sample(intr, renderFromLight, u, geomID);
+    SampledSpectrum L        = Le(sample.n, sample.w, lambda);
     if (!L) return {};
     return LightSample(sample, L, type);
 }
@@ -294,7 +230,7 @@ SampledSpectrum DiffuseAreaLight::Le(const Vec3f &n, const Vec3f &w,
                                      const SampledWavelengths &lambda)
 {
     if (Dot(n, w) < 0) return SampledSpectrum(0.f);
-    return light->scale * light->Lemit->Sample(lambda);
+    return scale * Lemit->Sample(lambda);
 }
 
 //////////////////////////////
@@ -407,18 +343,18 @@ LightSample ImageInfiniteLight::SampleLi(SurfaceInteraction &intr, Vec2f &u,
                        LightType::Infinite);
 }
 
-f32 ImageInfiniteLight::PDF_Li(Vec3f &w, bool allowIncompletePDF)
+f32 ImageInfiniteLight::PDF_Li(const Vec3f &w, bool allowIncompletePDF)
 {
     Vec3f wi = Normalize(ApplyInverseV(*renderFromLight, w));
     Vec2f uv = EqualAreaSphereToSquare(wi);
     f32 pdf;
     if (allowIncompletePDF)
     {
-        pdf = light->compensatedDistribution.PDF(uv);
+        pdf = compensatedDistribution.PDF(uv);
     }
     else
     {
-        pdf = light->distribution.PDF(uv);
+        pdf = distribution.PDF(uv);
     }
     return pdf / (4 * PI);
 }
@@ -434,13 +370,14 @@ SampledSpectrum ImageInfiniteLight::Le(const Vec3f &w, const SampledWavelengths 
 // Morphism
 //
 
-f32 LightPDF(Scene *scene) { return 1.f / scene->lights.Length(); }
+f32 LightPDF(Scene *scene) { return 1.f / scene->lights.size(); }
 
 Light *UniformLightSample(Scene *scene, f32 u, f32 *pmf = 0)
 {
-    if (scene->numLights == 0) return LightHandle();
-    u32 lightIndex = Min(u32(u * scene->numLights), scene->numLights - 1);
-    Assert(lightIndex >= 0 && lightIndex < scene->numLights);
+    size_t numLights = scene->lights.size();
+    if (numLights == 0) return 0;
+    size_t lightIndex = Min(size_t(u * numLights), numLights - 1);
+    Assert(lightIndex >= 0 && lightIndex < numLights);
     if (pmf) *pmf = LightPDF(scene);
     return scene->lights[lightIndex];
 }
