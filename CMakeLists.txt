@@ -96,7 +96,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 elseif (MSVC)
     message(STATUS "Using MSVC Compiler")
     list (APPEND RT_CXX_FLAGS "-FC" "-Zi" "-EHsc" "-nologo" "-Oi" "-WX" "-W4" "-wd4305" "-wd4324" "-wd4127" 
-        "-wd4700" "-wd4701" "-wd4505" "-wd4189" "-wd4201" "-wd4100" "/arch:AVX2")
+        "-wd4700" "-wd4701" "-wd4505" "-wd4189" "-wd4201" "-wd4100" "/arch:SSE2" "/arch:AVX2")
 endif ()
 
 if (CMAKE_SYSTEM_NAME STREQUAL Windows)

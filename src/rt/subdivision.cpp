@@ -209,7 +209,8 @@ void EvaluateDisplacement(PtexTexture *texture, int faceID, const Vec2f &uv,
     pos += disp * normal;
     dpdu += (uDisp - disp) / du * normal + dndu * disp;
     dpdv += (vDisp - disp) / dv * normal + dndv * disp;
-    normal = Normalize(Cross(dpdu, dpdv));
+    // normal = Normalize(Cross(dpdu, dpdv));
+    normal = Cross(dpdu, dpdv);
 }
 
 // MORETON, H. 2001. Watertight tessellation using forward
@@ -736,6 +737,7 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
 
                                     EvaluateDisplacement(texture, f, uv, filterWidths, pos,
                                                          dpdu, dpdv, dndu, dndv, normal);
+                                    normal = Normalize(normal);
                                 }
 
                                 int index                  = patch->GetGridIndex(uStep, vStep);

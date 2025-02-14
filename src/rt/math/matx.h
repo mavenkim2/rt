@@ -309,7 +309,7 @@ Vec4f Transform(const Mat4 &a, const Vec4f &b)
     result.x += a.columns[3][0] * b.w;
     result.y += a.columns[3][1] * b.w;
     result.z += a.columns[3][2] * b.w;
-    result.w += a.columns[3][2] * b.w;
+    result.w += a.columns[3][3] * b.w;
     return result;
 #endif
 }

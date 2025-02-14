@@ -1908,6 +1908,7 @@ struct HeuristicObjectBinning
         Assert(outRight.count > 0);
 
         // error check
+#if 0
 #ifdef DEBUG
         {
             if (split.bestSAH != f32(pos_inf))
@@ -1944,6 +1945,7 @@ struct HeuristicObjectBinning
             }
         }
 
+#endif
 #endif
         ArenaPopTo(temp.arena, split.allocPos);
     }

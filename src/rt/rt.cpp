@@ -1061,7 +1061,6 @@ using namespace rt;
 
 int main(int argc, char *argv[])
 {
-    Assert(0);
     BuildPackMask();
     // OS_SetLargePages();
     Arena *dataArena = ArenaAlloc();

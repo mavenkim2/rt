@@ -698,7 +698,6 @@ struct ScenePrimitives
     u32 numChildScenes;
     AffineSpace *affineTransforms;
     PrimitiveIndices *primIndices;
-    // PrimitiveData *primData;
 
     Scheduler::Counter counter = {};
     u32 numTransforms;

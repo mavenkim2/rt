@@ -1046,10 +1046,6 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     SkipToNextChar(&tokenizer);
                 }
 
-                // two options:
-                // one, somehow split all the quads into another bvh/scene struct
-                // two, allow > 1 type in each scene
-
                 // Check for area light
                 if (Advance(&tokenizer, "a "))
                 {
@@ -1095,6 +1091,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 {
                     // MOANA: everything should be catclark
                     // Assert(0);
+                    Assert(type == GeometryType::Max || type == GeometryType::QuadMesh);
                     type       = GeometryType::QuadMesh;
                     Mesh &mesh = shapes.AddBack();
                     AddMesh(mesh, 4);
@@ -1114,6 +1111,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 }
                 else if (Advance(&tokenizer, "Tri "))
                 {
+                    Assert(type == GeometryType::Max || type == GeometryType::TriangleMesh);
                     type       = GeometryType::TriangleMesh;
                     Mesh &mesh = shapes.AddBack();
                     AddMesh(mesh, 3);
@@ -1125,6 +1123,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 }
                 else if (Advance(&tokenizer, "Catclark "))
                 {
+                    Assert(type == GeometryType::Max || type == GeometryType::CatmullClark);
                     type       = GeometryType::CatmullClark;
                     Mesh &mesh = shapes.AddBack();
                     AddMesh(mesh, 4);
@@ -1141,26 +1140,28 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
             scene->primitives = PushArrayNoZero(arena, Mesh, shapes.totalCount);
             shapes.Flatten((Mesh *)scene->primitives);
 
-            BeginMutex(&state->lightMutex);
-            int size = state->lights->size();
-            state->lights->resize(size + lights.totalCount);
-            lights.Flatten(state->lights->data() + size);
-            EndMutex(&state->lightMutex);
-
-            scene->primIndices = PushArrayNoZero(arena, PrimitiveIndices, indices.totalCount);
-            for (auto *node = indices.first; node != 0; node = node->next)
+            if (lights.totalCount)
             {
-                for (int i = 0; i < node->count; i++)
+                int size = state->lights->size();
+                BeginMutex(&state->lightMutex);
+                state->lights->resize(size + lights.totalCount);
+                lights.Flatten(state->lights->data() + size);
+                EndMutex(&state->lightMutex);
+                for (auto *node = indices.first; node != 0; node = node->next)
                 {
-                    if (node->values[i].lightID)
+                    for (int i = 0; i < node->count; i++)
                     {
-                        int index               = size + node->values[i].lightID.GetIndex();
-                        LightClass type         = node->values[i].lightID.GetType();
-                        node->values[i].lightID = LightHandle(type, index + size);
+                        if (node->values[i].lightID)
+                        {
+                            int index       = size + node->values[i].lightID.GetIndex();
+                            LightClass type = node->values[i].lightID.GetType();
+                            node->values[i].lightID = LightHandle(type, index + size);
+                        }
                     }
                 }
             }
 
+            scene->primIndices = PushArrayNoZero(arena, PrimitiveIndices, indices.totalCount);
             indices.Flatten(scene->primIndices);
         }
         else if (Advance(&tokenizer, "MATERIALS_START "))
@@ -1182,7 +1183,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
 
     // If there are no transforms and no two level-bvhs, then we need to manually convert
     // meshes to render space.
-    if (baseFile && !hasTransforms)
+    if (baseFile && isLeaf)
     {
         Mesh *meshes = (Mesh *)scene->primitives;
         for (u32 i = 0; i < scene->numPrimitives; i++)
@@ -1357,9 +1358,9 @@ void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string file
     TempArena temp = ScratchStart(0, 0);
     Arena *arena   = arenas[GetThreadIndex()];
 
-    u32 numProcessors = OS_NumProcessors();
-    RTSceneLoadState state;
-    state.table.count = 1024;
+    u32 numProcessors      = OS_NumProcessors();
+    RTSceneLoadState state = {};
+    state.table.count      = 1024;
     state.table.nodes =
         PushArray(temp.arena, std::atomic<SceneLoadTable::Node *>, state.table.count);
     state.lights = &GetScene()->lights;
@@ -1369,13 +1370,12 @@ void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string file
     Scheduler::Counter counter = {};
     LoadRTScene(arenas, tempArenas, &state, &scene->scene, directory, filename, &counter, t,
                 true);
+    scheduler.Wait(&counter);
 
     ScenePrimitives **scenes = PushArrayNoZero(arena, ScenePrimitives *, state.scenes.size());
     MemoryCopy(scenes, state.scenes.data(), sizeof(ScenePrimitives *) * state.scenes.size());
     state.scenes.clear();
     SetScenes(scenes);
-
-    scheduler.Wait(&counter);
 
     AffineSpace space = AffineSpace::Identity();
 

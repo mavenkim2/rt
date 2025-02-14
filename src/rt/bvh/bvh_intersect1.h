@@ -770,7 +770,8 @@ static bool SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
         CalculateCurvature(si.shading.dpdu, si.shading.dpdv, si.shading.dndu, si.shading.dndv);
 
     // TODO: actual stochastic alpha testing
-    if (indices->alphaTexture->EvaluateFloat(si, Vec4f{0.f, 0.f, 0.f, 0.f}) == 0.f)
+    if (indices->alphaTexture &&
+        indices->alphaTexture->EvaluateFloat(si, Vec4f{0.f, 0.f, 0.f, 0.f}) == 0.f)
     {
         return false;
     }
@@ -853,9 +854,14 @@ struct TriangleIntersectorBase<N, Prim<N>>
                     3 * primID + 2,
                 };
                 // NOTE: if alpha testing fails, then need to reevaluate
+                SurfaceInteraction siitr;
                 bool result = SurfaceInteractionFromTriangleIntersection(
-                    scene, Get(itr.geomIDs, index), primID, ids, u, v, w, si);
-                if (result) return true;
+                    scene, Get(itr.geomIDs, index), primID, ids, u, v, w, siitr);
+                if (result)
+                {
+                    si = siitr;
+                    return true;
+                }
                 else
                 {
                     outMask &= !LaneF32<N>::Mask(1u << index);
@@ -979,10 +985,16 @@ struct QuadIntersectorBase<N, Prim<N>>
                     ids[1] = 4 * primID + 1;
                     ids[2] = 4 * primID + 2;
                 }
+                SurfaceInteraction siitr;
                 bool result = SurfaceInteractionFromTriangleIntersection(
-                    scene, Get(itr.geomIDs, index), primID / 2, ids, u, v, w, si, isSecondTri);
+                    scene, Get(itr.geomIDs, index), primID / 2, ids, u, v, w, siitr,
+                    isSecondTri);
 
-                if (result) return true;
+                if (result)
+                {
+                    si = siitr;
+                    return true;
+                }
                 else
                 {
                     outMask &= !LaneF32<N>::Mask(1u << index);
