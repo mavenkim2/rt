@@ -74,7 +74,11 @@ include (CheckCXXCompilerFlag)
 check_cxx_compiler_flag("-march=native" COMPILER_SUPPORTS_MARCH_NATIVE)
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     message(STATUS "Using Clang Compiler")
-    list (APPEND RT_CXX_FLAGS "-Wno-unused-variable")
+    list (APPEND RT_CXX_FLAGS 
+        "-Wno-unused-variable" 
+        "-Wno-unused-but-set-variable" 
+        "-Wno-reorder-ctor"
+    )
     if (CMAKE_CXX_COMPILER_VERSION GREATER_EQUAL 14)
         message (STATUS "Disabling -ffp-contract")
         list (APPEND RT_CXX_FLAGS "-ffp-contract=off")
@@ -91,7 +95,7 @@ endif ()
 
 # add_executable(rt "src/rt/rt.cpp")
 
-if (CMAKE_BUILD_TYPE MATCHES "Debug" OR CMAKE_BUILD_TYPE MATCHES "RelWithDebInfo")
+if (uppercase_CMAKE_BUILD_TYPE MATCHES "Debug" OR uppercase_CMAKE_BUILD_TYPE MATCHES "RELWITHDEBINFO")
     list (APPEND RT_DEFINITIONS "TRACK_MEMORY" "DEBUG")
 endif()
 
@@ -120,6 +124,7 @@ add_library(thread_context OBJECT
 )
 
 target_compile_definitions(thread_context PRIVATE ${RT_DEFINITIONS})
+target_compile_options(thread_context PRIVATE ${RT_CXX_FLAGS})
 target_link_libraries(thread_context PRIVATE ${deps})
 
 set(deps  

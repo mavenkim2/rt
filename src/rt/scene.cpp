@@ -75,8 +75,7 @@ struct PtexTexture : Texture
     {
     }
 
-    f32 EvaluateFloat(SurfaceInteraction &si, SampledWavelengths &lambda,
-                      const Vec4f &filterWidths, void *data) override
+    f32 EvaluateFloat(SurfaceInteraction &si, const Vec4f &filterWidths) override
     {
         f32 result = 0.f;
         if (simd)
@@ -99,7 +98,7 @@ struct PtexTexture : Texture
     }
 
     SampledSpectrum EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
-                                   const Vec4f &filterWidths, void *data) override
+                                   const Vec4f &filterWidths) override
     {
         Vec3f result = {};
         if (simd)
@@ -249,13 +248,12 @@ struct ConstantTexture : Texture
 
     ConstantTexture(f32 constant) : constant(constant) {}
 
-    f32 EvaluateFloat(SurfaceInteraction &si, SampledWavelengths &lambda,
-                      const Vec4f &filterWidths, void *) override
+    f32 EvaluateFloat(SurfaceInteraction &si, const Vec4f &filterWidths) override
     {
         return constant;
     }
     SampledSpectrum EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
-                                   const Vec4f &filterWidths, void *) override
+                                   const Vec4f &filterWidths) override
     {
         return SampledSpectrum(constant);
     }
@@ -268,7 +266,7 @@ struct ConstantVectorTexture : Texture
     ConstantVectorTexture(Vec3f constant) : constant(constant) {}
 
     SampledSpectrum EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
-                                   const Vec4f &filterWidths, void *) override
+                                   const Vec4f &filterWidths) override
     {
         return Texture::EvaluateAlbedo(constant, lambda);
     }
@@ -372,14 +370,13 @@ struct DielectricMaterial : Material
         f32 uRoughness, vRoughness;
         if (uRoughnessTexture == vRoughnessTexture)
         {
-            uRoughness = vRoughness =
-                uRoughnessTexture->EvaluateFloat(si, lambda, filterWidths);
+            uRoughness = vRoughness = uRoughnessTexture->EvaluateFloat(si, filterWidths);
         }
         else
         {
-            uRoughness = uRoughnessTexture->EvaluateFloat(si, lambda, filterWidths);
+            uRoughness = uRoughnessTexture->EvaluateFloat(si, filterWidths);
 
-            vRoughness = vRoughnessTexture->EvaluateFloat(si, lambda, filterWidths);
+            vRoughness = vRoughnessTexture->EvaluateFloat(si, filterWidths);
         }
 
         uRoughness = TrowbridgeReitzDistribution::RoughnessToAlpha(uRoughness);
@@ -435,7 +432,7 @@ struct CoatedDiffuseMaterial : Material
     {
         SampledSpectrum albedoValue = albedo->EvaluateAlbedo(si, lambda, filterWidths);
 
-        f32 gValue = g->EvaluateFloat(si, lambda, filterWidths);
+        f32 gValue = g->EvaluateFloat(si, filterWidths);
 
         return CoatedDiffuseBxDF(dielectric.EvaluateHelper(si, lambda, filterWidths),
                                  diffuse.EvaluateHelper(si, lambda, filterWidths), albedoValue,
@@ -456,7 +453,7 @@ struct CoatedDiffuseMaterial : Material
 struct MaterialNode
 {
     string str;
-    Material *material;
+    MaterialHandle handle;
 
     u32 Hash() const { return rt::Hash(str); }
     bool operator==(const MaterialNode &m) const { return str == m.str; }
@@ -470,10 +467,11 @@ struct RTSceneLoadState
     SceneLoadTable table;
     MaterialHashMap *map = 0;
 
-    ChunkedLinkedList<Light *, 1024, MemoryType_Light> *lights;
-
     Mutex mutex;
     std::vector<ScenePrimitives *> scenes;
+
+    Mutex lightMutex;
+    std::vector<Light *> *lights;
 };
 
 i32 ReadIntBytes(Tokenizer *tokenizer)
@@ -679,10 +677,12 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
         SkipToNextChar(tokenizer);
         Assert(materialTypeIndex != MaterialTypes::Max);
 
-        Material **material = &materialsList.AddBack();
-
         // Add to hash table
-        table->Add(tempArena, MaterialNode{PushStr8Copy(tempArena, materialName), *material});
+        table->Add(tempArena,
+                   MaterialNode{PushStr8Copy(tempArena, materialName),
+                                MaterialHandle(materialTypeIndex, materialsList.totalCount)});
+
+        Material **material = &materialsList.AddBack();
 
         switch (materialTypeIndex)
         {
@@ -1010,20 +1010,18 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
             Assert(isLeaf);
             ChunkedLinkedList<Mesh, 1024, MemoryType_Shape> shapes(temp.arena);
             ChunkedLinkedList<PrimitiveIndices, 1024, MemoryType_Shape> indices(temp.arena);
-            // ChunkedLinkedList<DiffuseAreaLight, 1024, MemoryType_Light>
-            // areaLights(temp.arena);
+            ChunkedLinkedList<Light *, 1024, MemoryType_Light> lights(temp.arena);
             // ChunkedLinkedList<Texture *, 1024, MemoryType_Texture>
             // alphaTextures(temp.arena);
 
-            auto &lights = state->lights[threadIndex];
-
             int noMaterialCount       = 0;
             auto AddMaterialAndLights = [&](Mesh &mesh) {
-                PrimitiveData &data = primData.AddBack();
+                PrimitiveIndices &primIndices = indices.AddBack();
 
-                Material *material    = 0;
-                Light *light          = 0;
-                Texture *alphaTexture = 0;
+                MaterialHandle materialHandle;
+                LightHandle lightHandle;
+                Texture *alphaTexture   = 0;
+                DiffuseAreaLight *light = 0;
 
                 // TODO: handle instanced mesh lights
                 AffineSpace *transform = 0;
@@ -1034,8 +1032,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     Assert(materialHashMap);
                     string materialName      = ReadWord(&tokenizer);
                     const MaterialNode *node = materialHashMap->Get(materialName);
-                    // node->handle
-                    material = node->material;
+                    materialHandle           = node->handle;
                 }
                 else
                 {
@@ -1056,15 +1053,21 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     Assert(transform);
                     DiffuseAreaLight *areaLight = ParseAreaLight(
                         arena, &tokenizer, transform, sceneID, shapes.totalCount - 1);
-                    light = (Light *)areaLight;
+                    lightHandle = LightHandle(LightClass::DiffuseAreaLight, lights.totalCount);
+                    lights.AddBack() = areaLight;
+                    light            = areaLight;
                 }
 
                 // Check for alpha
                 if (Advance(&tokenizer, "alpha "))
                 {
                     Texture *alphaTexture = ParseTexture(arena, &tokenizer, directory);
+                    if (lightHandle)
+                    {
+                        light->type = LightType::DeltaPosition;
+                    }
                 }
-                data = PrimitiveData(material, light, alphaTexture);
+                primIndices = PrimitiveIndices(lightHandle, materialHandle, alphaTexture);
             };
 
             auto AddMesh = [&](Mesh &mesh, int numVerticesPerFace) {
@@ -1120,11 +1123,29 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
             scene->numPrimitives = shapes.totalCount;
             Assert(shapes.totalCount == primData.totalCount);
             scene->primitives = PushArrayNoZero(arena, Mesh, shapes.totalCount);
-            scene->primData   = PushArrayNoZero(arena, PrimitiveData, primData.totalCount);
             shapes.Flatten((Mesh *)scene->primitives);
-            primData.Flatten(scene->primData);
 
-            // threadLocalStatistics[threadIndex].misc4 += noMaterialCount;
+            BeginMutex(&state->lightMutex);
+            int size = state->lights->size();
+            state->lights->resize(size + lights.totalCount);
+            lights.Flatten(state->lights->data() + size);
+            EndMutex(&state->lightMutex);
+
+            scene->primIndices = PushArrayNoZero(arena, PrimitiveIndices, indices.totalCount);
+            for (auto *node = indices.first; node != 0; node = node->next)
+            {
+                for (int i = 0; i < node->count; i++)
+                {
+                    if (node->values[i].lightID)
+                    {
+                        int index               = size + node->values[i].lightID.GetIndex();
+                        LightClass type         = node->values[i].lightID.GetType();
+                        node->values[i].lightID = LightHandle(type, index + size);
+                    }
+                }
+            }
+
+            indices.Flatten(scene->primIndices);
         }
         else if (Advance(&tokenizer, "MATERIALS_START "))
         {
@@ -1325,8 +1346,7 @@ void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string file
     state.table.count = 1024;
     state.table.nodes =
         PushArray(temp.arena, std::atomic<SceneLoadTable::Node *>, state.table.count);
-    state.lights = PushArray(
-        arena, ChunkedLinkedList<Light * COMMA 1024 COMMA MemoryType_Light>, numProcessors);
+    state.lights = &GetScene()->lights;
 
     Scene *scene = GetScene();
 
@@ -1831,8 +1851,8 @@ ShapeSample ScenePrimitives::SampleQuad(SurfaceInteraction &intr, Vec2f &u,
         }
         else
         {
-            u[0]       = (1 - u[0]) / (1 - p);
-            Vec3f bary = SampledUniformTriangle(u);
+            u[0]       = (1 - u[0]) / (1 - prob);
+            Vec3f bary = SampleUniformTriangle(u);
             result.p   = bary[0] * p[0] + bary[1] * p[2] + bary[2] * p[3];
         }
         result.n   = n;

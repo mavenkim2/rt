@@ -112,40 +112,6 @@ T Bilerp(const Vec2<T> &u, const Vec4<T> &w)
     return result;
 }
 
-template <typename T>
-T BilinearPDF(const Vec2<T> &u, const Vec4<T> &w)
-{
-    T zeroMask = u.x < 0 || u.x > 1 || u.y < 0 || u.y > 1;
-    T denom    = w[0] + w[1] + w[2] + w[3];
-    T oneMask  = denom == 0;
-    T result   = Select(zeroMask, T(0), Select(oneMask, T(1), 4 * Bilerp(u, w) / denom));
-    return result;
-}
-
-template <typename T>
-Vec2<T> SampleBilinear(const Vec2<T> &u, const Vec4<T> &w)
-{
-    Vec2<T> result;
-    result.y = SampleLinear(u[1], w[0] + w[1], w[2] + w[3]);
-    result.x = SampleLinear(u[0], Lerp(result.y, w[0], w[2]), Lerp(result.y, w[1], w[3]));
-    return result;
-}
-
-LaneNF32 SphericalQuadArea(const Vec3lfn &a, const Vec3lfn &b, const Vec3lfn &c,
-                           const Vec3lfn &d)
-{
-    Vec3lfn axb = Normalize(Cross(a, b));
-    Vec3lfn bxc = Normalize(Cross(b, c));
-    Vec3lfn cxd = Normalize(Cross(c, d));
-    Vec3lfn dxa = Normalize(Cross(d, a));
-
-    LaneNF32 g0 = AngleBetween(-axb, bxc);
-    LaneNF32 g1 = AngleBetween(-bxc, cxd);
-    LaneNF32 g2 = AngleBetween(-cxd, dxa);
-    LaneNF32 g3 = AngleBetween(-dxa, axb);
-    return Abs(g0 + g1 + g2 + g3 - 2 * PI);
-}
-
 //////////////////////////////
 // Diffuse Area Light
 //

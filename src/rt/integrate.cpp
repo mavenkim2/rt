@@ -497,7 +497,7 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
             {
                 for (auto &light : scene->infiniteLights)
                 {
-                    SampledSpectrum Le = light.Le(ray.d, lambda);
+                    SampledSpectrum Le = light->Le(ray.d, lambda);
                     L += beta * Le;
                 }
             }
@@ -505,10 +505,10 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
             {
                 for (auto &light : scene->infiniteLights)
                 {
-                    SampledSpectrum Le = light.Le(ray.d, lambda);
+                    SampledSpectrum Le = light->Le(ray.d, lambda);
 
                     f32 pdf      = LightPDF(scene);
-                    f32 lightPdf = pdf * (f32)light.PDF_Li(ray.d, true);
+                    f32 lightPdf = pdf * (f32)light->PDF_Li(ray.d, true);
 
                     f32 w_l = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
                     // NOTE: beta already contains the cosine, bsdf, and pdf terms
@@ -587,7 +587,7 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
             if (light)
             {
                 // Sample point on the light source
-                LightSample ls = light->SampleLi(si, lambda, sample, true);
+                LightSample ls = light->SampleLi(si, sample, lambda, true);
                 if (ls.pdf)
                 {
                     // Evaluate BSDF for light sample, check visibility with shadow ray

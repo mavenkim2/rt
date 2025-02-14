@@ -653,13 +653,15 @@ static Mask<LaneF32<N>> TriangleIntersect(const Ray2 &ray, const LaneF32<N> &tFa
     return mask;
 }
 
-static void SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
+static bool SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
                                                        const u32 geomID, const u32 primID,
                                                        const u32 ids[3], f32 u, f32 v, f32 w,
                                                        SurfaceInteraction &si,
                                                        bool isSecondTri = false)
 {
-    Mesh *mesh = (Mesh *)scene->primitives + geomID;
+    Mesh *mesh                      = (Mesh *)scene->primitives + geomID;
+    const PrimitiveIndices *indices = scene->primIndices + geomID;
+
     u32 vertexIndices[3];
     if (mesh->indices)
     {
@@ -759,14 +761,21 @@ static void SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
     si.shading.dndv = dndv;
     si.uv           = u * uv[1] + v * uv[2] + w * uv[0];
     Assert(geomID < scene->numPrimitives);
-    const PrimitiveIndices *indices = scene->primIndices + geomID;
-    si.materialIDs                  = indices->materialID.data;
+    si.materialIDs = indices->materialID.data;
 
     // TODO: properly obtain the light handle
-    si.lightIndices = 0;
+    si.lightIndices = indices->lightID.data;
     si.faceIndices  = mesh->faceIDs ? mesh->faceIDs[primID] : primID;
     si.curvature =
         CalculateCurvature(si.shading.dpdu, si.shading.dpdv, si.shading.dndu, si.shading.dndv);
+
+    // TODO: actual stochastic alpha testing
+    if (indices->alphaTexture->EvaluateFloat(si, Vec4f{0.f, 0.f, 0.f, 0.f}) == 0.f)
+    {
+        return false;
+    }
+
+    return true;
 }
 
 template <i32 N, typename T>
@@ -814,36 +823,45 @@ struct TriangleIntersectorBase<N, Prim<N>>
         }
         if (Any(outMask))
         {
-            u32 maskBits = Movemask(outMask);
-            f32 tFar     = ReduceMin(itr.t);
-            ray.tFar     = tFar;
-            u32 index;
             for (;;)
             {
-                if (maskBits == 0) return false;
-                u32 i = Bsf(maskBits);
-                maskBits &= maskBits - 1;
-                if (tFar == Get(itr.t, i))
+                u32 maskBits = Movemask(outMask);
+                f32 tFar     = ReduceMin(itr.t);
+                ray.tFar     = tFar;
+                u32 index;
+                for (;;)
                 {
-                    index = i;
-                    break;
+                    if (maskBits == 0) return false;
+                    u32 i = Bsf(maskBits);
+                    maskBits &= maskBits - 1;
+                    if (tFar == Get(itr.t, i))
+                    {
+                        index = i;
+                        break;
+                    }
+                }
+                f32 u   = Get(itr.u, index);
+                f32 v   = Get(itr.v, index);
+                f32 w   = 1 - u - v;
+                si.tHit = tFar;
+                // Assert(u >= 0 && u <= 1 && v >= 0 && v <= 1 && w >= 0 && w <= 1);
+
+                u32 primID = Get(itr.primIDs, index);
+                u32 ids[]  = {
+                    3 * primID + 0,
+                    3 * primID + 1,
+                    3 * primID + 2,
+                };
+                // NOTE: if alpha testing fails, then need to reevaluate
+                bool result = SurfaceInteractionFromTriangleIntersection(
+                    scene, Get(itr.geomIDs, index), primID, ids, u, v, w, si);
+                if (result) return true;
+                else
+                {
+                    outMask &= !LaneF32<N>::Mask(1u << index);
+                    itr.t[index] = pos_inf;
                 }
             }
-            f32 u   = Get(itr.u, index);
-            f32 v   = Get(itr.v, index);
-            f32 w   = 1 - u - v;
-            si.tHit = tFar;
-            // Assert(u >= 0 && u <= 1 && v >= 0 && v <= 1 && w >= 0 && w <= 1);
-
-            u32 primID = Get(itr.primIDs, index);
-            u32 ids[]  = {
-                3 * primID + 0,
-                3 * primID + 1,
-                3 * primID + 2,
-            };
-            SurfaceInteractionFromTriangleIntersection(scene, Get(itr.geomIDs, index), primID,
-                                                       ids, u, v, w, si);
-            return true;
         }
         return false;
     }
@@ -923,46 +941,54 @@ struct QuadIntersectorBase<N, Prim<N>>
 
         if (Any(outMask))
         {
-            u32 maskBits = Movemask(outMask);
-            f32 tFar     = ReduceMin(itr.t);
-            ray.tFar     = tFar;
-            u32 index;
             for (;;)
             {
-                if (maskBits == 0) return false;
-                u32 i = Bsf(maskBits);
-                maskBits &= maskBits - 1;
-                if (tFar == Get(itr.t, i))
+                u32 maskBits = Movemask(outMask);
+                f32 tFar     = ReduceMin(itr.t);
+                ray.tFar     = tFar;
+                u32 index;
+                for (;;)
                 {
-                    index = i;
-                    break;
+                    if (maskBits == 0) return false;
+                    u32 i = Bsf(maskBits);
+                    maskBits &= maskBits - 1;
+                    if (tFar == Get(itr.t, i))
+                    {
+                        index = i;
+                        break;
+                    }
+                }
+                u32 isSecondTri = Movemask(triMask) & (1 << index);
+                si.tHit         = tFar;
+                f32 u           = Get(itr.u, index);
+                f32 v           = Get(itr.v, index);
+                f32 w           = 1 - u - v;
+                // Assert(u >= 0 && u <= 1 && v >= 0 && v <= 1 && w >= 0 && w <= 1);
+
+                u32 ids[3];
+                u32 primID = Get(itr.primIDs, index);
+                if (isSecondTri)
+                {
+                    ids[0] = 4 * primID + 0;
+                    ids[1] = 4 * primID + 2;
+                    ids[2] = 4 * primID + 3;
+                }
+                else
+                {
+                    ids[0] = 4 * primID + 0;
+                    ids[1] = 4 * primID + 1;
+                    ids[2] = 4 * primID + 2;
+                }
+                bool result = SurfaceInteractionFromTriangleIntersection(
+                    scene, Get(itr.geomIDs, index), primID / 2, ids, u, v, w, si, isSecondTri);
+
+                if (result) return true;
+                else
+                {
+                    outMask &= !LaneF32<N>::Mask(1u << index);
+                    itr.t[index] = pos_inf;
                 }
             }
-            u32 isSecondTri = Movemask(triMask) & (1 << index);
-            si.tHit         = tFar;
-            f32 u           = Get(itr.u, index);
-            f32 v           = Get(itr.v, index);
-            f32 w           = 1 - u - v;
-            // Assert(u >= 0 && u <= 1 && v >= 0 && v <= 1 && w >= 0 && w <= 1);
-
-            u32 ids[3];
-            u32 primID = Get(itr.primIDs, index);
-            if (isSecondTri)
-            {
-                ids[0] = 4 * primID + 0;
-                ids[1] = 4 * primID + 2;
-                ids[2] = 4 * primID + 3;
-            }
-            else
-            {
-                ids[0] = 4 * primID + 0;
-                ids[1] = 4 * primID + 1;
-                ids[2] = 4 * primID + 2;
-            }
-            SurfaceInteractionFromTriangleIntersection(
-                scene, Get(itr.geomIDs, index), primID / 2, ids, u, v, w, si, isSecondTri);
-
-            return true;
         }
         return false;
     }
@@ -1133,6 +1159,7 @@ struct CatClarkPatchIntersector
 
         if (Any(outMask))
         {
+            // TODO: add alpha testing
             u32 maskBits = Movemask(outMask);
             f32 tFar     = ReduceMin(itr.t);
             ray.tFar     = tFar;

@@ -1216,7 +1216,7 @@ struct alignas(32) HeuristicAOSSplitBinning
                 for (u32 queueIndex = 0; queueIndex < LANE_WIDTH; queueIndex++)
                 {
                     const u32 refID = refIDQueue[splitCount + queueIndex];
-                    bool notEmpty   = !(gR[queueIndex].Empty() | gL[queueIndex].Empty());
+                    bool notEmpty   = !(gR[queueIndex].Empty() || gL[queueIndex].Empty());
                     if (notEmpty)
                     {
                         const u32 splitLoc = splitOffset++;
@@ -1255,7 +1255,7 @@ struct alignas(32) HeuristicAOSSplitBinning
             for (u32 queueIndex = 0; queueIndex < numPrims; queueIndex++)
             {
                 const u32 refID = refIDQueue[qStart + queueIndex];
-                bool notEmpty   = !(gR[queueIndex].Empty() | gL[queueIndex].Empty());
+                bool notEmpty   = !(gR[queueIndex].Empty() || gL[queueIndex].Empty());
                 if (notEmpty)
                 {
                     const u32 splitLoc = splitOffset++;

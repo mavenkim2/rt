@@ -566,10 +566,10 @@ void ShadingQueueHandler(struct ShadingThreadState *state, ShadingHandle *values
                     f32 pmf;
                     Light *light = UniformLightSample(scene, lightU, &pmf);
                     Vec2f sample = sampler.Get2D();
-                    if (bool(lightHandle))
+                    if (light)
                     {
                         // Sample point on the light source
-                        LightSample ls = light->SampleLi(si, lambda, sample, true);
+                        LightSample ls = light->SampleLi(si, sample, lambda, true);
                         if (ls.pdf)
                         {
                             // Evaluate BSDF for light sample, check visibility with shadow ray

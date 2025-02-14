@@ -546,38 +546,6 @@ struct Instance
     u32 transformIndex;
 };
 
-struct PrimitiveIndices
-{
-    // TODO: these are actaully ids (type + index)
-    LightHandle lightID;
-    // u32 volumeIndex;
-    MaterialHandle materialID;
-    int alphaIndex;
-
-    PrimitiveIndices() {}
-    PrimitiveIndices(LightHandle lightID, MaterialHandle materialID)
-        : lightID(lightID), materialID(materialID), alphaIndex(-1)
-    {
-    }
-    PrimitiveIndices(LightHandle lightID, MaterialHandle materialID, int alphaIndex)
-        : lightID(lightID), materialID(materialID), alphaIndex(alphaIndex)
-    {
-    }
-};
-
-// struct PrimitiveData
-// {
-//     Light *light;
-//     Material *material;
-//     Texture *alphaTexture;
-//
-//     PrimitiveData() {}
-//     PrimitiveData(Light *light, Material *material, Texture *alpha)
-//         : light(light), material(material), alphaTexture(alpha)
-//     {
-//     }
-// };
-
 ////////////////////////////////////////////////////////
 
 enum class AttributeType
@@ -594,14 +562,13 @@ struct Texture
 {
     virtual void Start(struct ShadingThreadState *);
     virtual void Stop() {}
-    virtual f32 EvaluateFloat(SurfaceInteraction &si, SampledWavelengths &lambda,
-                              const Vec4f &filterWidths, void *data = 0)
+    virtual f32 EvaluateFloat(SurfaceInteraction &si, const Vec4f &filterWidths)
     {
         ErrorExit(0, "EvaluateFloat is not defined for sub class \n");
         return 0.f;
     }
     virtual SampledSpectrum EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
-                                           const Vec4f &filterWidths, void *data = 0)
+                                           const Vec4f &filterWidths)
     {
         ErrorExit(0, "EvaluateAlbedo is not defined for sub class\n");
         return {};
@@ -626,6 +593,25 @@ struct Material
     // Used in SIMD mode, loads and caches data that may be used across multiple calls
     virtual void Start(struct ShadingThreadState *state) {}
     virtual void Stop() {}
+};
+
+struct PrimitiveIndices
+{
+    // TODO: these are actaully ids (type + index)
+    LightHandle lightID;
+    // u32 volumeIndex;
+    MaterialHandle materialID;
+    Texture *alphaTexture;
+
+    PrimitiveIndices() {}
+    PrimitiveIndices(LightHandle lightID, MaterialHandle materialID)
+        : lightID(lightID), materialID(materialID), alphaTexture(0)
+    {
+    }
+    PrimitiveIndices(LightHandle lightID, MaterialHandle materialID, Texture *alpha)
+        : lightID(lightID), materialID(materialID), alphaTexture(alpha)
+    {
+    }
 };
 
 struct Ray2;
