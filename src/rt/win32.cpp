@@ -248,7 +248,7 @@ string OS_ReadFile(Arena *arena, string filename, u64 offset)
     GetFileSizeEx(file, (LARGE_INTEGER *)&size);
     size -= offset;
     string result;
-    result.str  = PushArrayTagged(arena, u8, size, MemoryType_File);
+    result.str  = PushArray(arena, u8, size);
     result.size = size;
 
     u64 totalReadSize = 0;

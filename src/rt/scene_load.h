@@ -14,6 +14,7 @@ GeometryType ConvertStringIDToGeometryType(StringId id)
     {
         case "quadmesh"_sid: return GeometryType::QuadMesh;
         case "trianglemesh"_sid: return GeometryType::TriangleMesh;
+        case "catclark"_sid: return GeometryType::CatmullClark;
         default: Assert(0); return GeometryType::Max;
     }
 }

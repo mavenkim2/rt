@@ -36,7 +36,7 @@
 #include "simd_integrate.h"
 
 // #include "string.cpp"
-#include "base.cpp"
+// #include "base.cpp"
 // #include "win32.cpp"
 #include "debug.cpp"
 #include "base_types.cpp"
@@ -1061,6 +1061,7 @@ using namespace rt;
 
 int main(int argc, char *argv[])
 {
+    Assert(0);
     BuildPackMask();
     // OS_SetLargePages();
     Arena *dataArena = ArenaAlloc();

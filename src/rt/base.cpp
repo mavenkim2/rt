@@ -1,5 +1,6 @@
 #include "string.h"
 #include "../third_party/stb_sprintf.h"
+#include "platform.h"
 
 namespace rt
 {

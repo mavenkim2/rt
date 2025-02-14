@@ -109,7 +109,7 @@ string PushStr8Copy(Arena *arena, string str)
 {
     string res;
     res.size = str.size;
-    res.str  = PushArrayTagged(arena, u8, str.size + 1, MemoryType_String);
+    res.str  = PushArray(arena, u8, str.size + 1);
     MemoryCopy(res.str, str.str, str.size);
     res.str[str.size] = 0;
     return res;
@@ -129,7 +129,7 @@ string StrConcat(Arena *arena, string s1, string s2)
 {
     string result;
     result.size = s1.size + s2.size;
-    result.str  = PushArrayTagged(arena, u8, result.size + 1, MemoryType_String);
+    result.str  = PushArray(arena, u8, result.size + 1);
     MemoryCopy(result.str, s1.str, s1.size);
     MemoryCopy(result.str + s1.size, s2.str, s2.size);
     result.str[result.size] = 0;
@@ -850,10 +850,7 @@ u64 Put_(StringBuilder *builder, void *data, u64 size)
     return cursor;
 }
 
-u64 PutData(StringBuilder *builder, void *data, u64 size)
-{
-    return Put_(builder, data, size);
-}
+u64 PutData(StringBuilder *builder, void *data, u64 size) { return Put_(builder, data, size); }
 
 u64 Put(StringBuilder *builder, string str)
 {
@@ -996,9 +993,8 @@ u64 PutData(StringBuilderMapped *builder, void *data, u64 size)
     return offset;
 }
 
-void Put(StringBuilderMapped *builder, void *data, u64 size, u64 offset, u64 cap)
+void Put(StringBuilderMapped *builder, void *data, u64 size, u64 offset)
 {
-    Assert(offset + size <= cap);
     MemoryCopy(builder->ptr + offset, data, size);
 }
 

@@ -44,8 +44,6 @@ namespace rt
 // - photon planes & volumes
 
 // - what is zero variance theory? half space light transport? dwivedi sampling?
-// - crazy idea: render this on the gpu (investigate how nanite handles the cpu-gpu
-// intercommunication to retrieve the right LODs)
 
 //////////////////////////////
 // Textures and materials

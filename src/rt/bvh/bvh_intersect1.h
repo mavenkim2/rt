@@ -497,7 +497,7 @@ struct BVHIntersector
         {
             Assert(stackPtr <= ArrayLength(stack));
             StackEntry entry = stack[--stackPtr];
-            Assert(entry.ptr.data && entry.ptr != BVHNode<K>::tyEmpty);
+            Assert(entry.ptr.data && entry.ptr.data != BVHNode<K>::tyEmpty);
             if (entry.dist > ray.tFar) continue;
 
             if (entry.ptr.IsLeaf())

@@ -33,21 +33,27 @@ if (CMAKE_CONFIGURATION_TYPES)
     foreach(config ${CMAKE_CONFIGURATION_TYPES})
         string(TOUPPER "${config}" config_upper)
         # allow asserts in relwithdebinfo mode
-        if(config_upper STREQUAL "RELWITHDEBINFO")
-        if (NOT MSVC)
-            add_definitions(-D_DEBUG)
+        if (config_upper STREQUAL "DEBUG" OR config_upper STREQUAL "RELWITHDEBINFO")
+            list (APPEND RT_DEFINITIONS "TRACK_MEMORY" "DEBUG")
         endif()
-        add_compile_options($<$<OR:$<COMPILE_LANGUAGE:C>,$<COMPILE_LANGUAGE:CXX>>:-UNDEBUG>)
-        foreach (flags_var_to_scrub
-                # CMAKE_CXX_FLAGS_RELEASE
-                CMAKE_CXX_FLAGS_RELWITHDEBINFO
-                CMAKE_CXX_FLAGS_MINSIZEREL)
-            string (REGEX REPLACE "(^| )[/-]D*NDEBUG($| )" " "
-                "${flags_var_to_scrub}" "${${flags_var_to_scrub}}")
-        endforeach()
+        if(config_upper STREQUAL "RELWITHDEBINFO")
+            if (NOT MSVC)
+                add_definitions(-D_DEBUG)
+            endif()
+            add_compile_options($<$<OR:$<COMPILE_LANGUAGE:C>,$<COMPILE_LANGUAGE:CXX>>:-UNDEBUG>)
+            foreach (flags_var_to_scrub
+                    # CMAKE_CXX_FLAGS_RELEASE
+                    CMAKE_CXX_FLAGS_RELWITHDEBINFO
+                    CMAKE_CXX_FLAGS_MINSIZEREL)
+                string (REGEX REPLACE "(^| )[/-]D*NDEBUG($| )" " "
+                    "${flags_var_to_scrub}" "${${flags_var_to_scrub}}")
+            endforeach()
         endif()
     endforeach()
 else()
+    if (uppercase_CMAKE_BUILD_TYPE STREQUAL "DEBUG" OR uppercase_CMAKE_BUILD_TYPE STREQUAL "RELWITHDEBINFO")
+        list (APPEND RT_DEFINITIONS "TRACK_MEMORY" "DEBUG")
+    endif()
     if (uppercase_CMAKE_BUILD_TYPE STREQUAL "RELWITHDEBINFO")
         if (NOT MSVC)
             add_definitions(-D_DEBUG)
@@ -93,12 +99,6 @@ elseif (MSVC)
         "-wd4700" "-wd4701" "-wd4505" "-wd4189" "-wd4201" "-wd4100" "/arch:AVX2")
 endif ()
 
-# add_executable(rt "src/rt/rt.cpp")
-
-if (uppercase_CMAKE_BUILD_TYPE MATCHES "Debug" OR uppercase_CMAKE_BUILD_TYPE MATCHES "RELWITHDEBINFO")
-    list (APPEND RT_DEFINITIONS "TRACK_MEMORY" "DEBUG")
-endif()
-
 if (CMAKE_SYSTEM_NAME STREQUAL Windows)
     list (APPEND RT_DEFINITIONS "NOMINMAX")
 else()
@@ -112,6 +112,7 @@ set (MEM_SOURCE_FILES
     src/rt/thread_context.cpp
     src/rt/memory.cpp
     src/rt/string.cpp
+    src/rt/base.cpp
 )
 
 if (CMAKE_SYSTEM_NAME STREQUAL Windows)

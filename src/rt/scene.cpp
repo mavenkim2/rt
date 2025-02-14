@@ -900,8 +900,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
             }
         }
     }
-    // TODO: this is a bit messy
-    else if (FindSubstring(filename, "shape", 0, MatchFlag_CaseInsensitive) != filename.size)
+    else if (FindSubstring(filename, "_rtshape_", 0, MatchFlag_CaseInsensitive) !=
+             filename.size)
     {
         scene->affineTransforms = GetScene()->scene.affineTransforms;
     }
@@ -1043,7 +1043,12 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 {
                     u32 transformIndex = ReadInt(&tokenizer);
                     transform          = &scene->affineTransforms[transformIndex];
+                    SkipToNextChar(&tokenizer);
                 }
+
+                // two options:
+                // one, somehow split all the quads into another bvh/scene struct
+                // two, allow > 1 type in each scene
 
                 // Check for area light
                 if (Advance(&tokenizer, "a "))
@@ -1062,6 +1067,9 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 if (Advance(&tokenizer, "alpha "))
                 {
                     Texture *alphaTexture = ParseTexture(arena, &tokenizer, directory);
+
+                    // TODO: this is also a hack: properly evaluate whether the alpha is
+                    // always 0
                     if (lightHandle)
                     {
                         light->type = LightType::DeltaPosition;
@@ -1090,6 +1098,14 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     type       = GeometryType::QuadMesh;
                     Mesh &mesh = shapes.AddBack();
                     AddMesh(mesh, 4);
+
+                    // TODO: this is a hack
+                    if (mesh.numFaces == 1 && mesh.numVertices == 4 && mesh.numIndices == 6)
+                    {
+                        mesh.indices    = 0;
+                        mesh.numIndices = 0;
+                    }
+
                     AddMaterialAndLights(mesh);
 
                     threadMemoryStatistics[threadIndex].totalShapeMemory +=
@@ -1121,7 +1137,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
             }
 
             scene->numPrimitives = shapes.totalCount;
-            Assert(shapes.totalCount == primData.totalCount);
+            Assert(shapes.totalCount == indices.totalCount);
             scene->primitives = PushArrayNoZero(arena, Mesh, shapes.totalCount);
             shapes.Flatten((Mesh *)scene->primitives);
 
