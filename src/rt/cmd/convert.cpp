@@ -61,6 +61,7 @@ struct ShapeType
 
     // Moana only
     Mesh *mesh;
+    bool cancelled;
 };
 
 struct InstanceType
@@ -870,7 +871,10 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             OS_UnmapFile(tokenizer.input.str);
             scheduler.Wait(&state->counter);
 
-            Assert(!isMoana || (isMoana && moanaMeshIndex == state->objMeshes.back().total));
+            // ErrorExit(!isMoana || (isMoana && moanaMeshIndex ==
+            // state->objMeshes.back().num),
+            //           "index: %i, total: %llu\n", moanaMeshIndex,
+            //           state->objMeshes.back().num);
             for (u32 i = 0; i < state->numImports; i++)
             {
                 state->Merge(state->imports[i]);
@@ -1354,18 +1358,18 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                     {
                         numIndices = packet->sizes[i] / sizeof(u32);
                     }
-                    //     else if (packet->parameterNames[i] == "filename"_sid)
-                    //     {
-                    //         string plyMeshFile;
-                    //         plyMeshFile.str  = packet->bytes[i];
-                    //         plyMeshFile.size = packet->sizes[i];
-                    //
-                    //         // TODO: this is hardcoded for the moana island scene
-                    //         if (GetFileExtension(plyMeshFile) == "obj" ||
-                    //             CheckQuadPLY(StrConcat(temp.arena, directory, plyMeshFile)))
-                    //             packet->type = "quadmesh"_sid;
-                    //         else packet->type = "trianglemesh"_sid;
-                    //     }
+                    else if (packet->parameterNames[i] == "filename"_sid)
+                    {
+                        string plyMeshFile;
+                        plyMeshFile.str  = packet->bytes[i];
+                        plyMeshFile.size = packet->sizes[i];
+
+                        // TODO: this is hardcoded for the moana island scene
+                        if (GetFileExtension(plyMeshFile) == "obj" ||
+                            CheckQuadPLY(StrConcat(temp.arena, directory, plyMeshFile)))
+                            packet->type = "quadmesh"_sid;
+                        else packet->type = "trianglemesh"_sid;
+                    }
                 }
                 if (packet->type == "trianglemesh"_sid && numVertices && numIndices &&
                     numVertices / 2 == numIndices / 3)
@@ -1378,12 +1382,22 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                                             ? currentGraphicsState.areaLightPacket
                                             : 0;
                 shape->transformIndex = currentGraphicsState.transformIndex;
+
+                shape->cancelled = false;
                 if (isMoana)
                 {
                     MoanaOBJMeshes &meshes = state->objMeshes.back();
                     Assert(moanaMeshIndex < meshes.total);
-                    shape->mesh  = &meshes.meshes[moanaMeshIndex++];
                     packet->type = "catclark"_sid;
+                    if (moanaMeshIndex >= meshes.num)
+                    {
+                        shape->cancelled = true;
+                        shape->mesh      = 0;
+                    }
+                    else
+                    {
+                        shape->mesh = &meshes.meshes[moanaMeshIndex++];
+                    }
                 }
                 else
                 {
@@ -1629,7 +1643,8 @@ void WriteData(StringBuilder *builder, StringBuilderMapped *dataBuilder, void *p
     Assert(ptr);
     if (builderOffset)
     {
-        Assert(*builderOffset + size <= cap);
+        ErrorExit(*builderOffset + size <= cap, "offset: %llu, size, %llu, cap: %llu\n",
+                  *builderOffset, size, cap);
         Put(dataBuilder, ptr, size, *builderOffset);
         Put(builder, "%S %llu ", out, *builderOffset);
         *builderOffset += size;
@@ -1660,8 +1675,9 @@ void WriteMesh(Mesh &mesh, StringBuilder &builder, StringBuilderMapped &dataBuil
     if (mesh.indices) Put(&builder, "i %u ", mesh.numIndices);
 }
 
-int ComputeShapeSize(ShapeType *shape)
+int ComputeShapeSize(Arena *arena, ShapeType *shape, string directory)
 {
+    if (shape->cancelled) return 0;
     if (shape->mesh)
     {
         Mesh &mesh = *shape->mesh;
@@ -1673,7 +1689,26 @@ int ComputeShapeSize(ShapeType *shape)
     }
     else
     {
-        const StringId table[] = {"p"_sid, "n"_sid, "uv"_sid, "indices"_sid};
+        for (int i = 0; i < shape->packet.parameterCount; i++)
+        {
+            if (shape->packet.parameterNames[i] == "filename"_sid)
+            {
+                string filename = StrConcat(
+                    arena, directory, Str8(shape->packet.bytes[i], shape->packet.sizes[i]));
+
+                Assert(GetFileExtension(filename) == "ply");
+                GeometryType type = ConvertStringIDToGeometryType(shape->packet.type);
+                Assert(type == GeometryType::TriangleMesh);
+
+                Mesh mesh    = LoadPLY(arena, filename, type);
+                shape->mesh  = PushStruct(arena, Mesh);
+                *shape->mesh = mesh;
+
+                return ComputeShapeSize(arena, shape, directory);
+            }
+        }
+
+        const StringId table[] = {"P"_sid, "N"_sid, "uv"_sid, "indices"_sid};
         int total              = 0;
         for (int i = 0; i < ArrayLength(table); i++)
         {
@@ -1785,6 +1820,7 @@ void WriteShape(PBRTFileInfo *info, ShapeType *shapeType, StringBuilder &builder
                 StringBuilderMapped &dataBuilder, string directory, u64 *builderOffset = 0,
                 u64 cap = 0)
 {
+    if (shapeType->cancelled) return;
     ScenePacket *packet = &shapeType->packet;
     switch (packet->type)
     {
@@ -1928,17 +1964,6 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
         Put(&builder, "MATERIALS_END ");
     }
 
-    if (info->transforms.totalCount)
-    {
-        Put(&dataBuilder, "TRANSFORM_START ");
-        Put(&dataBuilder, "Count %u ", info->transforms.totalCount);
-        for (auto *node = info->transforms.first; node != 0; node = node->next)
-        {
-            PutData(&dataBuilder, node->values, sizeof(node->values[0]) * node->count);
-        }
-        Put(&dataBuilder, "TRANSFORM_END");
-    }
-
     if (info->shapes.totalCount && info->fileInstances.totalCount == 0)
     {
         // First, loop to see if all the types are the same
@@ -1964,9 +1989,31 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
         if (differentTypes)
         {
             SeparateShapeTypes(temp.arena, info, directory);
+
+            if (info->transforms.totalCount)
+            {
+                Put(&dataBuilder, "TRANSFORM_START ");
+                Put(&dataBuilder, "Count %u ", info->transforms.totalCount);
+                for (auto *node = info->transforms.first; node != 0; node = node->next)
+                {
+                    PutData(&dataBuilder, node->values, sizeof(node->values[0]) * node->count);
+                }
+                Put(&dataBuilder, "TRANSFORM_END");
+            }
         }
         else
         {
+            if (info->transforms.totalCount)
+            {
+                Put(&dataBuilder, "TRANSFORM_START ");
+                Put(&dataBuilder, "Count %u ", info->transforms.totalCount);
+                for (auto *node = info->transforms.first; node != 0; node = node->next)
+                {
+                    PutData(&dataBuilder, node->values, sizeof(node->values[0]) * node->count);
+                }
+                Put(&dataBuilder, "TRANSFORM_END");
+            }
+
             Put(&builder, "SHAPE_START ");
             // TODO: need to handle duplicates as well
             for (auto *node = info->shapes.first; node != 0; node = node->next)
@@ -2002,7 +2049,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
                     {
                         int packetIndex      = i;
                         ShapeType *shapeType = node->values + packetIndex;
-                        total += ComputeShapeSize(shapeType);
+                        total += ComputeShapeSize(temp.arena, shapeType, directory);
                     }
                     offsets[taskIndex] = total;
                 }
@@ -2051,6 +2098,29 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
     else if (info->shapes.totalCount)
     {
         SeparateShapeTypes(temp.arena, info, directory);
+        if (info->transforms.totalCount)
+        {
+            Put(&dataBuilder, "TRANSFORM_START ");
+            Put(&dataBuilder, "Count %u ", info->transforms.totalCount);
+            for (auto *node = info->transforms.first; node != 0; node = node->next)
+            {
+                PutData(&dataBuilder, node->values, sizeof(node->values[0]) * node->count);
+            }
+            Put(&dataBuilder, "TRANSFORM_END");
+        }
+    }
+    else
+    {
+        if (info->transforms.totalCount)
+        {
+            Put(&dataBuilder, "TRANSFORM_START ");
+            Put(&dataBuilder, "Count %u ", info->transforms.totalCount);
+            for (auto *node = info->transforms.first; node != 0; node = node->next)
+            {
+                PutData(&dataBuilder, node->values, sizeof(node->values[0]) * node->count);
+            }
+            Put(&dataBuilder, "TRANSFORM_END");
+        }
     }
 
     if (info->fileInstances.totalCount)

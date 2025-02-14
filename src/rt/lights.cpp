@@ -233,7 +233,6 @@ SampledSpectrum DiffuseAreaLight::Le(const Vec3f &n, const Vec3f &w,
 
 // LE_INF(UniformInfiniteLight) { return light->scale * light->Lemit.Sample(lambda); }
 
-// ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image) : image(image)
 ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image,
                                        const AffineSpace *renderFromLight,
                                        const RGBColorSpace *imageColorSpace, f32 sceneRadius,
@@ -258,8 +257,8 @@ ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image,
         }
         avg += values[i];
     }
-    // avg /= size;
-    avg                    = 0.3282774686813354f;
+    avg /= size;
+    // avg                    = 0.3282774686813354f;
     f32 *compensatedValues = PushArrayNoZero(arena, f32, size);
     if (allSame)
     {
@@ -345,6 +344,8 @@ Light *UniformLightSample(Scene *scene, f32 u, f32 *pmf = 0)
     size_t lightIndex = Min(size_t(u * numLights), numLights - 1);
     Assert(lightIndex >= 0 && lightIndex < numLights);
     if (pmf) *pmf = LightPDF(scene);
-    return scene->lights[lightIndex];
+    Light *light = scene->lights[lightIndex];
+    ErrorExit(light, "lightIndex: %i, total: %llu\n", lightIndex, numLights);
+    return light;
 }
 } // namespace rt

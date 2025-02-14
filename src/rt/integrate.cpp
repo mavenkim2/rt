@@ -518,28 +518,28 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
         }
 
         // If intersected with a light
-        if (si.lightIndices)
-        {
-            Assert(0);
-            // DiffuseAreaLight *light =
-            //     &scene->GetAreaLights()[LightHandle(si.lightIndices).GetIndex()];
-            // if (specularBounce || depth == 0)
-            // {
-            //     SampledSpectrum Le = DiffuseAreaLight::Le(light, si.n, -ray.d, lambda);
-            //     L += beta * Le;
-            // }
-            // else
-            // {
-            //     SampledSpectrum Le = DiffuseAreaLight::Le(light, si.n, -ray.d, lambda);
-            //     // probability of sampling the light * probability of sampling point on
-            //     light f32 pmf = LightPDF(scene); f32 lightPdf =
-            //         pmf * DiffuseAreaLight::PDF_Li(scene, si.lightIndices, prevSi.p, si,
-            //         true);
-            //     f32 w_l = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
-            //     // NOTE: beta already contains the cosine, bsdf, and pdf terms
-            //     L += beta * w_l * Le;
-            // }
-        }
+        // if (si.lightIndices)
+        // {
+        //     Assert(0);
+        //     DiffuseAreaLight *light =
+        //         &scene->GetAreaLights()[LightHandle(si.lightIndices).GetIndex()];
+        //     if (specularBounce || depth == 0)
+        //     {
+        //         SampledSpectrum Le = DiffuseAreaLight::Le(light, si.n, -ray.d, lambda);
+        //         L += beta * Le;
+        //     }
+        //     else
+        //     {
+        //         SampledSpectrum Le = DiffuseAreaLight::Le(light, si.n, -ray.d, lambda);
+        //         // probability of sampling the light * probability of sampling point on
+        //         light f32 pmf = LightPDF(scene); f32 lightPdf =
+        //             pmf * DiffuseAreaLight::PDF_Li(scene, si.lightIndices, prevSi.p, si,
+        //             true);
+        //         f32 w_l = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
+        //         // NOTE: beta already contains the cosine, bsdf, and pdf terms
+        //         L += beta * w_l * Le;
+        //     }
+        // }
 
         if (depth++ >= maxDepth)
         {

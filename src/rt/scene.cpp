@@ -569,7 +569,7 @@ Texture *ParseDisplacement(Arena *arena, Tokenizer *tokenizer, string directory)
 DiffuseAreaLight *ParseAreaLight(Arena *arena, Tokenizer *tokenizer, AffineSpace *space,
                                  int sceneID, int geomID)
 {
-    DiffuseAreaLight *light = PushStruct(arena, DiffuseAreaLight);
+    DiffuseAreaLight *light = PushStructConstruct(arena, DiffuseAreaLight)();
 
     if (Advance(tokenizer, "filename "))
     {
@@ -904,6 +904,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
              filename.size)
     {
         scene->affineTransforms = GetScene()->scene.affineTransforms;
+        scene->numTransforms    = GetScene()->scene.numTransforms;
     }
 
     bool isLeaf       = true;
@@ -1052,6 +1053,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     ErrorExit(type == GeometryType::QuadMesh,
                               "Only quad area lights supported for now\n");
                     Assert(transform);
+
                     DiffuseAreaLight *areaLight = ParseAreaLight(
                         arena, &tokenizer, transform, sceneID, shapes.totalCount - 1);
                     lightHandle = LightHandle(LightClass::DiffuseAreaLight, lights.totalCount);
@@ -1256,6 +1258,7 @@ void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromC
                             scene->tessellationParams, (Mesh *)scene->primitives,
                             scene->numPrimitives);
                         BuildCatClarkBVH(arenas, scene);
+                        // BuildQuadBVH(arenas, scene);
                     }
                     break;
                     default: Assert(0);

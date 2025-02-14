@@ -678,7 +678,8 @@ struct TLASLeaf
         sceneIndex = instances[instanceIndex].id;
         Assert(sceneIndex < scene->numChildScenes);
         transformIndex = instances[instanceIndex].transformIndex;
-        Assert(transformIndex < scene->numTransforms);
+        ErrorExit(transformIndex < scene->numTransforms, "transformIndex: %i\n",
+                  transformIndex);
         begin++;
     }
     void GetData(const ScenePrimitives *scene, AffineSpace *&t, ScenePrimitives *&childScene);

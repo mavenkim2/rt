@@ -37,6 +37,30 @@ struct LimitSurfaceSample
     bool IsValid() const { return faceID != -1; }
 };
 
+void EvaluateLimitAttribute(const Vertex *attrib, const Far::PatchMap *patchMap,
+                            const Far::PatchTable *patchTable,
+                            const LimitSurfaceSample &sample, Vec3f &out)
+{
+    const Far::PatchTable::PatchHandle *handle =
+        patchMap->FindPatch(sample.faceID, sample.uv[0], sample.uv[1]);
+
+    Assert(handle);
+    const auto &cvIndices = patchTable->GetPatchVertices(*handle);
+
+    f32 vWeights[20];
+    patchTable->EvaluateBasis(*handle, sample.uv[0], sample.uv[1], vWeights);
+
+    Vec3f result = {};
+
+    for (int j = 0; j < cvIndices.size(); j++)
+    {
+        int index      = cvIndices[j];
+        const Vec3f &v = attrib[cvIndices[j]].p;
+        result += vWeights[j] * v;
+    }
+    out = result;
+}
+
 void EvaluateLimitSurfacePosition(const Vertex *vertices, const Far::PatchMap *patchMap,
                                   const Far::PatchTable *patchTable,
                                   const LimitSurfaceSample &sample, Vec3f &outP,
@@ -416,7 +440,13 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                 PushArrayNoZero(scratch.temp.arena, Vertex, size + numLocalPoints);
             MemoryCopy(vertices, controlMesh->p, sizeof(Vec3f) * controlMesh->numVertices);
 
+            // TODO: actually handle prim vars
+            Vertex *normals =
+                PushArrayNoZero(scratch.temp.arena, Vertex, size + numLocalPoints);
+            MemoryCopy(normals, controlMesh->n, sizeof(Vec3f) * controlMesh->numVertices);
+
             Vertex *src        = vertices;
+            Vertex *srcNormal  = normals;
             i32 nRefinedLevels = refiner->GetNumLevels();
             Far::PrimvarRefiner primvarRefiner(*refiner);
 
@@ -425,9 +455,14 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                 Vertex *dst = src + refiner->GetLevel(i - 1).GetNumVertices();
                 primvarRefiner.Interpolate(i, src, dst);
                 src = dst;
+
+                Vertex *dstNormal = srcNormal + refiner->GetLevel(i - 1).GetNumVertices();
+                primvarRefiner.Interpolate(i, srcNormal, dstNormal);
+                srcNormal = dstNormal;
             }
 
             patchTable->ComputeLocalPointValues(&vertices[0], &vertices[size]);
+            patchTable->ComputeLocalPointValues(&normals[0], &normals[size]);
 
             int numPatches = patchTable->GetNumPatchesTotal();
 
@@ -441,29 +476,44 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
 
             tessellatedVertices.Resize(samples.size());
 
+            static const int SUBDIVISION_PARALLEL_THRESHOLD = 1024;
             // Evaluate limit surface positons for corners
-            ParallelFor(
-                0, (u32)samples.size(), 8092, 8092, [&](int jobID, int start, int count) {
-                    for (int i = start; i < start + count; i++)
-                    {
-                        const LimitSurfaceSample &sample = samples[i];
-                        Vec3f pos, dpdu, dpdv, dpduu, dpduv, dpdvv, dndu, dndv;
-                        EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable, sample,
-                                                     pos, dpdu, dpdv, dpduu, dpduv, dpdvv);
-                        Vec3f normal = Normalize(Cross(dpdu, dpdv));
-                        CalculateWeingarten(normal, dpdu, dpdv, dpduu, dpduv, dpdvv, dndu,
-                                            dndv);
-                        dndu = Normalize(dndu - normal * Dot(dndu, normal));
-                        dndv = Normalize(dndv - normal * Dot(dndv, normal));
+            ParallelFor(0, (u32)samples.size(), SUBDIVISION_PARALLEL_THRESHOLD,
+                        SUBDIVISION_PARALLEL_THRESHOLD, [&](int jobID, int start, int count) {
+                            for (int i = start; i < start + count; i++)
+                            {
+                                const LimitSurfaceSample &sample = samples[i];
+                                Vec3f pos, dpdu, dpdv, dpduu, dpduv, dpdvv, dndu, dndv;
+                                Vec3f testPos    = controlMesh->p[i];
+                                Vec3f testNormal = controlMesh->n[i];
+                                // EvaluateLimitSurfacePosition(vertices, &patchMap,
+                                // patchTable,
+                                //                              sample, pos, dpdu, dpdv, dpduu,
+                                //                              dpduv, dpdvv);
 
-                        tessellatedVertices.vertices[i] = pos;
-                        tessellatedVertices.normals[i]  = normal;
-                        tessellatedVertices.dpdu[i]     = dpdu;
-                        tessellatedVertices.dpdv[i]     = dpdv;
-                        tessellatedVertices.dndu[i]     = dndu;
-                        tessellatedVertices.dndv[i]     = dndv;
-                    }
-                });
+                                EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable,
+                                                             sample, pos, dpdu, dpdv);
+                                Vec3f normal;
+                                EvaluateLimitSurfacePosition(normals, &patchMap, patchTable,
+                                                             sample, normal, dndu, dndv);
+                                normal = Normalize(normal);
+
+                                // Vec3f normal = Cross(dpdu, dpdv);
+                                // f32 test     = 1.f / Length(normal);
+                                // normal       = Normalize(normal);
+                                // CalculateWeingarten(normal, dpdu, dpdv, dpduu, dpduv, dpdvv,
+                                //                     dndu, dndv);
+                                // dndu = test * (dndu - normal * Dot(dndu, normal));
+                                // dndv = test * (dndv - normal * Dot(dndv, normal));
+
+                                tessellatedVertices.vertices[i] = pos;
+                                tessellatedVertices.normals[i]  = normal;
+                                tessellatedVertices.dpdu[i]     = dpdu;
+                                tessellatedVertices.dpdv[i]     = dpdv;
+                                tessellatedVertices.dndu[i]     = dndu;
+                                tessellatedVertices.dndv[i]     = dndv;
+                            }
+                        });
 
             // Displacement of shared vertices
             struct TempVertex
@@ -503,8 +553,8 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                     EndMutex(&mutexes[id]);
                 };
                 ParallelFor(
-                    0, controlMesh->numFaces, 8092, 8092,
-                    [&](int jobID, int start, int count) {
+                    0, controlMesh->numFaces, SUBDIVISION_PARALLEL_THRESHOLD,
+                    SUBDIVISION_PARALLEL_THRESHOLD, [&](int jobID, int start, int count) {
                         for (int f = start; f < start + count; f++)
                         {
                             const FaceInfo &faceInfo = faceInfos[f];
@@ -637,7 +687,8 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
             // Resolve displacements now that full buffer size is known
             if (texture)
             {
-                ParallelFor(0, (u32)samples.size(), 8092, 8092,
+                ParallelFor(0, (u32)samples.size(), SUBDIVISION_PARALLEL_THRESHOLD,
+                            SUBDIVISION_PARALLEL_THRESHOLD,
                             [&](int jobID, int start, int count) {
                                 for (int i = start; i < start + count; i++)
                                 {
@@ -680,8 +731,8 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
 
             // Evaluate and displace grid vertices
             ParallelFor(
-                0, outputMesh->patches.Length(), 8092, 8092,
-                [&](int jobID, int start, int count) {
+                0, outputMesh->patches.Length(), SUBDIVISION_PARALLEL_THRESHOLD,
+                SUBDIVISION_PARALLEL_THRESHOLD, [&](int jobID, int start, int count) {
                     for (int i = start; i < start + count; i++)
                     {
                         OpenSubdivPatch *patch = &outputMesh->patches[i];
@@ -715,25 +766,30 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                                 Vec2f uv(scale[0] * (uStep + 1), scale[1] * (vStep + 1));
 
                                 Vec3f pos, dpdu, dpdv, dpduu, dpduv, dpdvv;
-                                if (texture)
-                                    EvaluateLimitSurfacePosition(
-                                        vertices, &patchMap, patchTable,
-                                        LimitSurfaceSample{f, uv}, pos, dpdu, dpdv, dpduu,
-                                        dpduv, dpdvv);
-                                else
-                                    EvaluateLimitSurfacePosition(
-                                        vertices, &patchMap, patchTable,
-                                        LimitSurfaceSample{f, uv}, pos, dpdu, dpdv);
+                                // if (texture)
+                                //     EvaluateLimitSurfacePosition(
+                                //         vertices, &patchMap, patchTable,
+                                //         LimitSurfaceSample{f, uv}, pos, dpdu, dpdv, dpduu,
+                                //         dpduv, dpdvv);
+                                // else
+                                EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable,
+                                                             LimitSurfaceSample{f, uv}, pos,
+                                                             dpdu, dpdv);
 
-                                Vec3f normal = Normalize(Cross(dpdu, dpdv));
+                                Vec3f normal, dndu, dndv;
+                                EvaluateLimitSurfacePosition(normals, &patchMap, patchTable,
+                                                             LimitSurfaceSample{f, uv}, normal,
+                                                             dndu, dndv);
+
+                                normal = Normalize(normal);
 
                                 if (texture)
                                 {
                                     Vec4f filterWidths(.5f * scale[0], 0, 0, .5f * scale[1]);
 
-                                    Vec3f dndu, dndv;
-                                    CalculateWeingarten(normal, dpdu, dpdv, dpduu, dpduv,
-                                                        dpdvv, dndu, dndv);
+                                    // Vec3f dndu, dndv;
+                                    // CalculateWeingarten(normal, dpdu, dpdv, dpduu, dpduv,
+                                    //                     dpdvv, dndu, dndv);
 
                                     EvaluateDisplacement(texture, f, uv, filterWidths, pos,
                                                          dpdu, dpdv, dndu, dndv, normal);
