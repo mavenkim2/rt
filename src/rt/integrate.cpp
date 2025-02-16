@@ -20,6 +20,7 @@ namespace rt
 // - reduce create file contention in ptex
 // - reduce mem alloc contention in ptex?
 // - parallelize prim ref code for cat clark patches
+// - reduce size of quantized node by using indices
 //
 // - area lights w/ light tree traversal, adaptive splitting, and accounting for BSDF
 // - https://fpsunflower.github.io/ckulla/data/many-lights-hpg2018.pdf

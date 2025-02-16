@@ -1621,7 +1621,8 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, ScenePrimitives *scene
     record.SetRange(0, (int)refs.size());
 
     scene->nodePtr =
-        BuildQuantizedCatmullClarkBVH(settings, arenas, scene, refs.data(), record);
+        // BuildQuantizedCatmullClarkBVH(settings, arenas, scene, refs.data(), record);
+        BuildQuantizedCompressedCatmullClarkBVH(settings, arenas, scene, refs.data(), record);
     using IntersectorType =
         typename IntersectorHelper<GeometryType::CatmullClark, PrimRef>::IntersectorType;
     scene->intersectFunc = &IntersectorType::Intersect;

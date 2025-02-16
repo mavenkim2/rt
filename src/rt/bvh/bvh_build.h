@@ -159,28 +159,29 @@ struct UpdateQuantizedNode
     }
 };
 
-// NOTE: ptr MUST be aligned to 16 bytes, bottom 4 bits store the type, top 7 bits store the
-// count
-
-// template <i32 N>
-// struct AABBNode
-// {
-//     struct Create
-//     {
-//         using NodeType = AABBNode;
-//         CREATE_NODE()
-//         {
-//         }
-//     };
-//
-//     LaneF32<N> lowerX;
-//     LaneF32<N> lowerY;
-//     LaneF32<N> lowerZ;
-//
-//     LaneF32<N> upperX;
-//     LaneF32<N> upperY;
-//     LaneF32<N> upperZ;
-// };
+template <i32 N>
+struct UpdateQuantizedCompressedNode
+{
+    using NodeType = QuantizedCompressedNode<N>;
+    __forceinline void operator()(NodeType *parent, BVHNode<N> &childNodes,
+                                  BVHNode<N> &childLeaves, int offsets[N], int numChildren,
+                                  int childLeafMask)
+    {
+        parent->childrenBase = childNodes;
+        parent->leafBase     = childLeaves;
+        parent->baseMeta     = (u8)childLeafMask;
+        int total            = 0;
+        for (int i = 0; i < numChildren; i++)
+        {
+            total += offsets[i];
+            parent->meta[i] = total;
+        }
+        for (u32 j = numChildren; j < N; j++)
+        {
+            parent->meta[j] = 0xff;
+        }
+    }
+};
 
 template <i32 N, typename NodeType>
 struct BVHN
@@ -243,6 +244,12 @@ struct BVHBuilder
 
     BVHNode<N> BuildBVHRoot(BuildSettings settings, Record &record);
     BVHNode<N> BuildBVH(const BuildSettings &settings, Record &record, bool parallel);
+
+    void BuildCompressedBVH(const BuildSettings &settings, Record &record,
+                            Record *childRecords, int &numChildren, BVHNode<N> &childNode,
+                            BVHNode<N> &childLeaf, int offsets[N], bool parallel);
+
+    BVHNode<N> BuildCompressedBVH(BuildSettings settings, Arena **inArenas, Record &record);
 };
 
 template <i32 N>
@@ -447,6 +454,238 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Arena
     return head;
 }
 
+template <i32 N, typename BuildFunctions>
+void BVHBuilder<N, BuildFunctions>::BuildCompressedBVH(const BuildSettings &settings,
+                                                       Record &record, Record *childRecords,
+                                                       int &numChildren, BVHNode<N> &childNode,
+                                                       BVHNode<N> &childLeaf, int offsets[N],
+                                                       bool parallel)
+{
+    Assert(record.count > 0);
+
+    if (record.count == 1)
+    {
+        return;
+    }
+
+    Split split = heuristic.Bin(record);
+
+    const u32 blockAdd   = settings.blockAdd;
+    const u32 blockShift = settings.logBlockSize;
+    // NOTE: multiply both by the area instead of dividing
+    f32 area     = HalfArea(record.geomBounds);
+    f32 leafSAH  = settings.intCost * area * ((record.count + blockAdd) >> blockShift);
+    f32 splitSAH = settings.travCost * area + settings.intCost * split.bestSAH;
+
+    if (((record.count + blockAdd) >> blockShift) <= settings.maxLeafSize &&
+        leafSAH <= splitSAH)
+    {
+        heuristic.FlushState(split);
+        return;
+    }
+    heuristic.Split(split, record, childRecords[0], childRecords[1]);
+
+    // N - 1 splits produces N children
+    for (numChildren = 2; numChildren < N; numChildren++)
+    {
+        i32 bestChild = -1;
+        f32 maxArea   = neg_inf;
+        for (u32 recordIndex = 0; recordIndex < numChildren; recordIndex++)
+        {
+            Record &childRecord = childRecords[recordIndex];
+            if (childRecord.count <= settings.maxLeafSize) continue;
+
+            f32 childArea = HalfArea(childRecord.geomBounds);
+            if (childArea > maxArea)
+            {
+                bestChild = recordIndex;
+                maxArea   = childArea;
+            }
+        }
+        if (bestChild == -1) break;
+
+        split = heuristic.Bin(childRecords[bestChild]);
+
+        Record out;
+        heuristic.Split(split, childRecords[bestChild], out, childRecords[numChildren]);
+
+        childRecords[bestChild] = out;
+    }
+
+    BVHNode<N> childNodes[N];
+    BVHNode<N> leafNodes[N];
+
+    int numGrandChildren[N] = {};
+    Record grandChildRecords[N][N];
+    int grandChildOffsets[N][N] = {};
+
+    if (parallel)
+    {
+        scheduler.ScheduleAndWait(numChildren, 1, [&](u32 jobID) {
+            bool childParallel = childRecords[jobID].count >= 8 * 1024;
+            BuildCompressedBVH(settings, childRecords[jobID], grandChildRecords[jobID],
+                               numGrandChildren[jobID], childNodes[jobID], leafNodes[jobID],
+                               grandChildOffsets[jobID], childParallel);
+        });
+    }
+    else
+    {
+        for (u32 i = 0; i < numChildren; i++)
+        {
+            BuildCompressedBVH(settings, childRecords[i], grandChildRecords[i],
+                               numGrandChildren[i], childNodes[i], leafNodes[i],
+                               grandChildOffsets[i], false);
+        }
+    }
+
+    Arena *currentArena = arenas[GetThreadIndex()];
+
+    // Calculate the number of leaves:
+    int primTotal = 0;
+
+    u32 childNodeMask = 0;
+    int numChildNodes = 0;
+
+    u32 childLeafMask  = 0;
+    int numChildLeaves = 0;
+
+    for (int i = 0; i < numChildren; i++)
+    {
+        // If the child is a leaf, then there are no grand children
+        int grandChildCount = numGrandChildren[i];
+        if (grandChildCount == 0)
+        {
+            int count = (childRecords[i].count + blockAdd) >> blockShift;
+            Assert(count <= settings.maxLeafSize);
+            primTotal += count;
+            childLeafMask |= (1 << i);
+            numChildLeaves++;
+        }
+        // Otherwise, the child is an internal node
+        else
+        {
+            childNodeMask |= (1 << i);
+            numChildNodes++;
+        }
+    }
+    Assert(primTotal < 64);
+
+    // Allocate the children
+    NodeType *node    = 0;
+    LeafType *primIDs = 0;
+    if (numChildNodes)
+    {
+        node = PushArrayNoZeroTagged(currentArena, NodeType, numChildNodes, MemoryType_BVH);
+        int mask = childNodeMask;
+        // Fill out node information
+        for (int i = 0; i < numChildNodes; i++)
+        {
+            int index = Bsf(mask);
+            mask &= mask - 1;
+            f.createNode(grandChildRecords[index], (u32)numGrandChildren[index], &node[i]);
+            f.updateNode(&node[i], childNodes[index], leafNodes[index],
+                         grandChildOffsets[index], numGrandChildren[index], childLeafMask);
+        }
+        threadLocalStatistics[GetThreadIndex()].misc2 += numChildNodes;
+        childNode = BVHNode<N>::EncodeQuantizedCompressedNode(node);
+    }
+    else
+    {
+        childNode = BVHNode<N>::EncodeEmpty();
+    }
+    // Allocate the leaves
+    if (primTotal)
+    {
+        primIDs = PushArrayNoZeroTagged(currentArena, LeafType, primTotal, MemoryType_BVH);
+        int leafMask = childLeafMask;
+        int offset   = 0;
+        // Fill out leaf information
+        for (int i = 0; i < numChildLeaves; i++)
+        {
+            int index = Bsf(leafMask);
+            leafMask &= leafMask - 1;
+            int numPrims = (childRecords[index].count + blockAdd) >> blockShift;
+
+            int offsetStart = offset;
+            u32 begin       = childRecords[index].start;
+            u32 end         = childRecords[index].start + childRecords[index].count;
+            while (begin < end)
+            {
+                Assert(offset < primTotal);
+                primIDs[offset++].Fill(scene, primRefs, begin, end);
+            }
+            Assert(offset - offsetStart == numPrims);
+            Assert(begin == end);
+            offsets[index] = offset;
+        }
+        // NOTE: this count isn't used
+        childLeaf = BVHNode<N>::EncodeLeaf(primIDs, 1);
+    }
+    else
+    {
+        childLeaf = BVHNode<N>::EncodeEmpty();
+    }
+}
+
+template <i32 N, typename BuildFunctions>
+BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildCompressedBVH(BuildSettings settings,
+                                                             Arena **inArenas, Record &record)
+{
+
+    arenas            = inArenas;
+    settings.blockAdd = (1 << settings.logBlockSize) - 1;
+
+    bool parallel = record.count >= 8 * 1024;
+
+    Record childRecords[N];
+    int numChildren = 0;
+    BVHNode<N> childNode;
+    childNode.data = 0;
+    BVHNode<N> leafNode;
+    leafNode.data  = 0;
+    int offsets[N] = {};
+    BuildCompressedBVH(settings, record, childRecords, numChildren, childNode, leafNode,
+                       offsets, parallel);
+
+    Arena *currentArena = arenas[GetThreadIndex()];
+    // If the root is not a leaf (normal case)
+    if (numChildren)
+    {
+        int leafMask = 0;
+        for (int i = 0; i < numChildren; i++)
+        {
+            // If the child is a leaf, the offset is nonzero
+            if (offsets[i] != 0)
+            {
+                leafMask |= (1 << i);
+            }
+        }
+        NodeType *rootNode = PushStructNoZeroTagged(currentArena, NodeType, MemoryType_BVH);
+        f.createNode(childRecords, numChildren, rootNode);
+        f.updateNode(rootNode, childNode, leafNode, offsets, numChildren, leafMask);
+        return BVHNode<N>::EncodeQuantizedCompressedNode(rootNode);
+    }
+    else
+    {
+        u32 offset   = 0;
+        u32 numPrims = (record.count + settings.blockAdd) >> settings.logBlockSize;
+        Assert(numPrims <= settings.maxLeafSize);
+        LeafType *primIDs =
+            PushArrayNoZeroTagged(currentArena, LeafType, numPrims, MemoryType_BVH);
+        Assert(currentArena->current->align == 16);
+        u32 begin = record.start;
+        u32 end   = record.start + record.count;
+        while (begin < end)
+        {
+            Assert(offset < numPrims);
+            primIDs[offset++].Fill(scene, primRefs, begin, end);
+        }
+        Assert(begin == end);
+        Assert(offset == numPrims);
+        return BVHNode<N>::EncodeLeaf(primIDs, numPrims);
+    }
+}
+
 template <i32 N, GeometryType type, typename PrimRefType>
 struct BVHHelper;
 
@@ -483,6 +722,37 @@ struct BVHHelper<N, GeometryType::CatmullClark, PrimRef>
 {
     using PrimType = CatmullClarkPatch;
 };
+
+template <i32 N, i32 K, GeometryType type, typename PrimRef>
+BVHNode<N> BuildQuantizedCompressedBVH(BuildSettings settings, Arena **inArenas,
+                                       const ScenePrimitives *scene, PrimRef *ref,
+                                       RecordAOSSplits &record)
+{
+    using BVHHelper = BVHHelper<K, type, PrimRef>;
+    using Prim      = typename BVHHelper::PrimType;
+    using BuildType =
+        BuildFuncs<N, HeuristicObjectBinning<PrimRef>, QuantizedCompressedNode<N>,
+                   CreateQuantizedNode<N>, UpdateQuantizedCompressedNode<N>, Prim>;
+
+    using Builder = BVHBuilder<N, BuildType>;
+    Builder builder;
+    using Heuristic       = typename Builder::Heuristic;
+    settings.logBlockSize = Bsf(K);
+    new (&builder.heuristic) Heuristic(ref, scene, settings.logBlockSize);
+    builder.primRefs = ref;
+    builder.scene    = scene;
+    return builder.BuildCompressedBVH(settings, inArenas, record);
+}
+
+template <typename PrimRef>
+__forceinline BVHNodeN
+BuildQuantizedCompressedCatmullClarkBVH(BuildSettings settings, Arena **inArenas,
+                                        const ScenePrimitives *scene, PrimRef *refs,
+                                        RecordAOSSplits &record)
+{
+    return BuildQuantizedCompressedBVH<8, 1, GeometryType::CatmullClark>(settings, inArenas,
+                                                                         scene, refs, record);
+}
 
 template <i32 N, i32 K, GeometryType type, typename PrimRef>
 BVHNode<N> BuildQuantizedBVH(BuildSettings settings, Arena **inArenas,

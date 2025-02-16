@@ -120,7 +120,8 @@ void OpenBraid(const ScenePrimitives *scene, RecordAOSSplits &record, BRef *refs
 
             ref.SafeStoreBounds(bounds0);
             ref.numPrims = Max(ref.numPrims / numC, 1u);
-            ref.nodePtr  = node->Child(0);
+            // TODO: don't hardcode this
+            ref.nodePtr = node->template Child<TLASLeaf>(0);
             Assert(ref.nodePtr.data != 0);
 
             for (u32 b = 1; b < numC; b++)
@@ -133,7 +134,7 @@ void OpenBraid(const ScenePrimitives *scene, RecordAOSSplits &record, BRef *refs
                 refs[offset].StoreBounds(bounds);
                 refs[offset].instanceID = ref.instanceID;
                 refs[offset].numPrims   = ref.numPrims;
-                refs[offset].nodePtr    = node->Child(b);
+                refs[offset].nodePtr    = node->template Child<TLASLeaf>(b);
 
                 Assert(refs[offset].nodePtr.data != 0);
 

@@ -10,8 +10,9 @@ namespace rt
 typedef u32 BVHNodeType;
 enum
 {
-    BVHNodeType_Quantized       = 1 << 0,
-    BVHNodeType_QuantizedLeaves = 1 << 1,
+    BVHNodeType_Quantized           = 1 << 0,
+    BVHNodeType_QuantizedLeaves     = 1 << 1,
+    BVHNodeType_CompressedQuantized = 1 << 2,
 
     BVH_QN   = BVHNodeType_Quantized,
     BVH_QNLF = BVHNodeType_QuantizedLeaves,
@@ -68,12 +69,32 @@ auto GetNode<8, BVH_AQ>(BVHNode<8> node)
     return qNode;
 }
 
+template <>
+auto GetNode<8, BVHNodeType_CompressedQuantized>(BVHNode<8> node)
+{
+    Assert(node.IsQuantizedNode());
+    QuantizedCompressedNode<8> *qNode = node.GetQuantizedCompressedNode();
+    return qNode;
+}
+
 template <typename T>
 struct StackEntry
 {
+    static const bool typed = false;
     T ptr;
     f32 dist;
+    bool IsLeaf() const { return ptr.IsLeaf(); }
     // u32 dist;
+};
+
+template <typename T>
+struct TypedStackEntry
+{
+    static const bool typed = true;
+    T ptr;
+    u32 type;
+    f32 dist;
+    bool IsLeaf() const { return type >= T::tyLeaf; }
 };
 
 template <i32 K>
@@ -91,13 +112,12 @@ struct TravRay
     }
 };
 
-template <i32 K, i32 types>
+template <i32 K, i32 types, typename Prim>
 struct BVHTraverser;
 
-template <i32 types>
-struct BVHTraverser<4, types>
+template <i32 types, typename Prim>
+struct BVHTraverser<4, types, Prim>
 {
-    using StackEntry = StackEntry<BVHNode4>;
     template <typename Node>
     static void Intersect(const Node *node, const TravRay<4> &ray, Lane4F32 &tEntryOut,
                           Lane4F32 &mask)
@@ -130,6 +150,7 @@ struct BVHTraverser<4, types>
         tEntryOut = tEntry;
         mask      = validNodeMask & intersectMask;
     }
+    template <typename StackEntry>
     static void Traverse(StackEntry entry, StackEntry *stack, i32 &stackPtr, TravRay<4> &ray)
     {
         Lane4F32 tEntry, mask;
@@ -145,8 +166,12 @@ struct BVHTraverser<4, types>
         {
             // If numNodes <= 1, then numNode will be 0, 1, 2, 4, or 8. x/2 - x/8 maps to
             // 0, 0, 1, 2, 3
-            u32 nodeIndex   = (intersectFlags >> 1) - (intersectFlags >> 3);
-            stack[stackPtr] = {node->Child(nodeIndex), t_dcba[nodeIndex]};
+            u32 nodeIndex = (intersectFlags >> 1) - (intersectFlags >> 3);
+            if constexpr (StackEntry::typed == false)
+                stack[stackPtr] = {node->Child(nodeIndex), t_dcba[nodeIndex]};
+            else
+                stack[stackPtr] = {node->Child(nodeIndex), node->GetType(nodeIndex),
+                                   t_dcba[nodeIndex]};
             stackPtr += numNodes;
         }
         else
@@ -165,15 +190,34 @@ struct BVHTraverser<4, types>
             u32 indexC = PopCount((da_cb_ba_db_ca_dc ^ 0x12) & 0x13);
             u32 indexD = PopCount((~da_cb_ba_db_ca_dc) & 0x25);
 
-            stack[stackPtr + ((numNodes - 1 - indexA) & 3)] = {node->Child(0), t_dcba[0]};
-            stack[stackPtr + ((numNodes - 1 - indexB) & 3)] = {node->Child(1), t_dcba[1]};
-            stack[stackPtr + ((numNodes - 1 - indexC) & 3)] = {node->Child(2), t_dcba[2]};
-            stack[stackPtr + ((numNodes - 1 - indexD) & 3)] = {node->Child(3), t_dcba[3]};
+            if constexpr (StackEntry::typed == false)
+            {
+                stack[stackPtr + ((numNodes - 1 - indexA) & 3)] = {node->Child<Prim>(0),
+                                                                   t_dcba[0]};
+                stack[stackPtr + ((numNodes - 1 - indexB) & 3)] = {node->Child<Prim>(1),
+                                                                   t_dcba[1]};
+                stack[stackPtr + ((numNodes - 1 - indexC) & 3)] = {node->Child<Prim>(2),
+                                                                   t_dcba[2]};
+                stack[stackPtr + ((numNodes - 1 - indexD) & 3)] = {node->Child<Prim>(3),
+                                                                   t_dcba[3]};
+            }
+            else
+            {
+                stack[stackPtr + ((numNodes - 1 - indexA) & 3)] = {
+                    node->Child<Prim>(0), node->GetType(0), t_dcba[0]};
+                stack[stackPtr + ((numNodes - 1 - indexB) & 3)] = {
+                    node->Child<Prim>(1), node->GetType(1), t_dcba[1]};
+                stack[stackPtr + ((numNodes - 1 - indexC) & 3)] = {
+                    node->Child<Prim>(2), node->GetType(2), t_dcba[2]};
+                stack[stackPtr + ((numNodes - 1 - indexD) & 3)] = {
+                    node->Child<Prim>(3), node->GetType(3), t_dcba[3]};
+            }
 
             stackPtr += numNodes;
         }
     }
-    static void TraverseAny(BVHNode4 entry, BVHNode4 *stack, i32 &stackPtr, TravRay<4> &ray)
+    template <typename StackEntry>
+    static void TraverseAny(BVHNode4 entry, StackEntry *stack, i32 &stackPtr, TravRay<4> &ray)
     {
         auto node = GetNode<4, types>(entry);
         Lane4F32 tEntry, mask;
@@ -186,7 +230,9 @@ struct BVHTraverser<4, types>
         {
             i32 bit = Bsf(intersectFlags);
             intersectFlags &= intersectFlags - 1;
-            stack[oldPtr++] = node->Child(bit);
+            if constexpr (StackEntry::typed == false)
+                stack[oldPtr++] = {node->Child<Prim>(bit)};
+            else stack[oldPtr++] = {node->Child<Prim>(bit), node->GetType(bit)};
             if (intersectFlags == 0) return;
         }
     }
@@ -241,10 +287,9 @@ __forceinline void sort(StackEntry<T> *begin, StackEntry<T> *end)
     }
 }
 
-template <i32 types>
-struct BVHTraverser<8, types>
+template <i32 types, typename Prim>
+struct BVHTraverser<8, types, Prim>
 {
-    using StackEntry = StackEntry<BVHNode8>;
     template <typename Node>
     static void Intersect(const Node *node, const TravRay<8> &ray, Lane8F32 &tEntryOut,
                           Lane8F32 &mask)
@@ -283,6 +328,7 @@ struct BVHTraverser<8, types>
         tEntryOut = tEntry;
         mask      = validNodeMask & intersectMask;
     }
+    template <typename StackEntry>
     static void Traverse(StackEntry entry, StackEntry *stack, i32 &stackPtr, TravRay<8> &ray)
     {
 #if 1
@@ -298,8 +344,13 @@ struct BVHTraverser<8, types>
         if (numNodes == 0) return;
         else if (numNodes == 1)
         {
-            u32 nodeIndex   = Bsf(intersectFlags);
-            stack[stackPtr] = {node->Child(nodeIndex), t_hgfedcba[nodeIndex]};
+            u32 nodeIndex = Bsf(intersectFlags);
+            if constexpr (StackEntry::typed == false)
+                stack[stackPtr] = {node->template Child<Prim>(nodeIndex),
+                                   t_hgfedcba[nodeIndex]};
+            else
+                stack[stackPtr] = {node->template Child<Prim>(nodeIndex),
+                                   node->GetType(nodeIndex), t_hgfedcba[nodeIndex]};
             stackPtr += numNodes;
         }
         else
@@ -326,15 +377,46 @@ struct BVHTraverser<8, types>
             u32 indexG = PopCount((nodeMask ^ 0x80000000) & 0x94148080);
             u32 indexH = PopCount(nodeMask & 0xe0e10000);
 
-            stack[stackPtr + ((numNodes - 1 - indexA) & 7)] = {node->Child(0), t_hgfedcba[0]};
-            stack[stackPtr + ((numNodes - 1 - indexB) & 7)] = {node->Child(1), t_hgfedcba[1]};
-            stack[stackPtr + ((numNodes - 1 - indexC) & 7)] = {node->Child(2), t_hgfedcba[2]};
-            stack[stackPtr + ((numNodes - 1 - indexD) & 7)] = {node->Child(3), t_hgfedcba[3]};
+            if constexpr (StackEntry::typed == false)
+            {
+                stack[stackPtr + ((numNodes - 1 - indexA) & 7)] = {
+                    node->template Child<Prim>(0), t_hgfedcba[0]};
+                stack[stackPtr + ((numNodes - 1 - indexB) & 7)] = {
+                    node->template Child<Prim>(1), t_hgfedcba[1]};
+                stack[stackPtr + ((numNodes - 1 - indexC) & 7)] = {
+                    node->template Child<Prim>(2), t_hgfedcba[2]};
+                stack[stackPtr + ((numNodes - 1 - indexD) & 7)] = {
+                    node->template Child<Prim>(3), t_hgfedcba[3]};
 
-            stack[stackPtr + ((numNodes - 1 - indexE) & 7)] = {node->Child(4), t_hgfedcba[4]};
-            stack[stackPtr + ((numNodes - 1 - indexF) & 7)] = {node->Child(5), t_hgfedcba[5]};
-            stack[stackPtr + ((numNodes - 1 - indexG) & 7)] = {node->Child(6), t_hgfedcba[6]};
-            stack[stackPtr + ((numNodes - 1 - indexH) & 7)] = {node->Child(7), t_hgfedcba[7]};
+                stack[stackPtr + ((numNodes - 1 - indexE) & 7)] = {
+                    node->template Child<Prim>(4), t_hgfedcba[4]};
+                stack[stackPtr + ((numNodes - 1 - indexF) & 7)] = {
+                    node->template Child<Prim>(5), t_hgfedcba[5]};
+                stack[stackPtr + ((numNodes - 1 - indexG) & 7)] = {
+                    node->template Child<Prim>(6), t_hgfedcba[6]};
+                stack[stackPtr + ((numNodes - 1 - indexH) & 7)] = {
+                    node->template Child<Prim>(7), t_hgfedcba[7]};
+            }
+            else
+            {
+                stack[stackPtr + ((numNodes - 1 - indexA) & 7)] = {
+                    node->template Child<Prim>(0), node->GetType(0), t_hgfedcba[0]};
+                stack[stackPtr + ((numNodes - 1 - indexB) & 7)] = {
+                    node->template Child<Prim>(1), node->GetType(1), t_hgfedcba[1]};
+                stack[stackPtr + ((numNodes - 1 - indexC) & 7)] = {
+                    node->template Child<Prim>(2), node->GetType(2), t_hgfedcba[2]};
+                stack[stackPtr + ((numNodes - 1 - indexD) & 7)] = {
+                    node->template Child<Prim>(3), node->GetType(3), t_hgfedcba[3]};
+
+                stack[stackPtr + ((numNodes - 1 - indexE) & 7)] = {
+                    node->template Child<Prim>(4), node->GetType(4), t_hgfedcba[4]};
+                stack[stackPtr + ((numNodes - 1 - indexF) & 7)] = {
+                    node->template Child<Prim>(5), node->GetType(5), t_hgfedcba[5]};
+                stack[stackPtr + ((numNodes - 1 - indexG) & 7)] = {
+                    node->template Child<Prim>(6), node->GetType(6), t_hgfedcba[6]};
+                stack[stackPtr + ((numNodes - 1 - indexH) & 7)] = {
+                    node->template Child<Prim>(7), node->GetType(7), t_hgfedcba[7]};
+            }
 
 #if 0
             for (u32 i = 0; i < numNodes; i++)
@@ -454,7 +536,8 @@ struct BVHTraverser<8, types>
 #endif
     }
 
-    static void TraverseAny(BVHNode8 entry, BVHNode8 *stack, i32 &stackPtr, TravRay<8> &ray)
+    template <typename StackEntry>
+    static void TraverseAny(BVHNode8 entry, StackEntry *stack, i32 &stackPtr, TravRay<8> &ray)
     {
         auto node = GetNode<8, types>(entry);
         Lane8F32 tEntry, mask;
@@ -467,19 +550,21 @@ struct BVHTraverser<8, types>
         {
             i32 bit = Bsf(intersectFlags);
             intersectFlags &= intersectFlags - 1;
-            stack[oldPtr++] = node->Child(bit);
+            if constexpr (StackEntry::typed == false)
+                stack[oldPtr++] = {node->template Child<Prim>(bit)};
+            else stack[oldPtr++] = {node->template Child<Prim>(bit), node->GetType(bit)};
             if (intersectFlags == 0) return;
         }
     }
 };
 
 template <i32 K, i32 types, typename Intersector>
-struct BVHIntersector;
-
-template <i32 K, i32 types, typename Intersector>
 struct BVHIntersector
 {
-    using StackEntry = StackEntry<BVHNode<K>>;
+    // using StackEntry = StackEntry<BVHNode<K>>;
+    using StackEntry = std::conditional_t<types == BVHNodeType_CompressedQuantized,
+                                          TypedStackEntry<BVHNode<K>>, StackEntry<BVHNode<K>>>;
+    using Prim       = typename Intersector::Primitive;
 
     BVHIntersector() {}
     static bool Intersect(ScenePrimitives *scene, BVHNode<K> nodePtr, Ray2 &ray,
@@ -490,8 +575,9 @@ struct BVHIntersector
 
         StackEntry stack[K == 4 ? 256 : 512];
         i32 stackPtr = 1;
-        stack[0]     = {nodePtr, ray.tFar};
-        bool result  = false;
+        if constexpr (StackEntry::typed) stack[0] = {nodePtr, nodePtr.GetType(), ray.tFar};
+        else stack[0] = {nodePtr, ray.tFar};
+        bool result = false;
         Intersector intersector;
         while (stackPtr > 0)
         {
@@ -500,14 +586,14 @@ struct BVHIntersector
             Assert(entry.ptr.data && entry.ptr.data != BVHNode<K>::tyEmpty);
             if (entry.dist > ray.tFar) continue;
 
-            if (entry.ptr.IsLeaf())
+            if (entry.IsLeaf())
             {
                 result |= intersector.Intersect(scene, ray, entry.ptr, itr, r);
                 r.tFar = ray.tFar;
                 continue;
             }
 
-            BVHTraverser<K, types>::Traverse(entry, stack, stackPtr, r);
+            BVHTraverser<K, types, Prim>::Traverse(entry, stack, stackPtr, r);
         }
         return result;
     }
@@ -515,25 +601,28 @@ struct BVHIntersector
     {
         TravRay<K> r(ray);
 
-        BVHNode<K> stack[K == 4 ? 256 : 512];
+        // BVHNode<K> stack[K == 4 ? 256 : 512];
+        StackEntry stack[K == 4 ? 256 : 512];
         i32 stackPtr = 1;
-        stack[0]     = nodePtr;
-        bool result  = false;
+        if constexpr (StackEntry::typed) stack[0] = {nodePtr, nodePtr.GetType()};
+        else stack[0] = {nodePtr};
+        bool result = false;
         Intersector intersector;
         while (stackPtr > 0)
         {
             Assert(stackPtr <= ArrayLength(stack));
-            BVHNode<K> entry = stack[--stackPtr];
+            // BVHNode<K> entry = stack[--stackPtr];
+            StackEntry entry = stack[--stackPtr];
 
             if (entry.IsLeaf())
             {
                 SurfaceInteraction itr;
                 // TODO: implement Occluded for intersectors
-                if (intersector.Intersect(scene, ray, entry, itr, r)) return true;
+                if (intersector.Intersect(scene, ray, entry.ptr, itr, r)) return true;
                 continue;
             }
 
-            BVHTraverser<K, types>::TraverseAny(entry, stack, stackPtr, r);
+            BVHTraverser<K, types, Prim>::TraverseAny(entry.ptr, stack, stackPtr, r);
         }
         return false;
     }
@@ -1470,7 +1559,8 @@ struct CompressedLeafIntersector
             {
                 StackEntry stack[N];
                 i32 stackPtr = 0;
-                BVHTraverser<N, BVH_QNLF>::Traverse({ptr, ray.tFar}, stack, stackPtr, tray);
+                BVHTraverser<N, BVH_QNLF, Primitive>::Traverse({ptr, ray.tFar}, stack,
+                                                               stackPtr, tray);
 
                 stackPtr--;
                 CompressedLeafNode<N> *node = ptr.GetCompressedLeaf();
@@ -1553,10 +1643,14 @@ using BVHInstanceCLIntersector =
 typedef BVHInstanceCLIntersector<4, BVH_AQ> BVH4InstanceCLIntersector;
 typedef BVHInstanceCLIntersector<8, BVH_AQ> BVH8InstanceCLIntersector;
 
+// template <i32 K, i32 types>
+// using CatClarkIntersector =
+//     BVHIntersector<K, types, CompressedLeafIntersector<K, CatClarkPatchIntersector>>;
+// typedef CatClarkIntersector<8, BVH_AQ> BVH8PatchIntersector;
+
 template <i32 K, i32 types>
-using CatClarkIntersector =
-    BVHIntersector<K, types, CompressedLeafIntersector<K, CatClarkPatchIntersector>>;
-typedef CatClarkIntersector<8, BVH_AQ> BVH8PatchIntersector;
+using CatClarkIntersector = BVHIntersector<K, types, CatClarkPatchIntersector>;
+typedef CatClarkIntersector<8, BVHNodeType_CompressedQuantized> BVH8PatchIntersector;
 
 // Helpers
 template <i32 N, GeometryType type, typename PrimRefType>
