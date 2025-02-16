@@ -15,7 +15,11 @@ namespace rt
 // - shading normals seem wrong for some elements, check subdivision code
 // - when the build process receives garbage data, it produces a bvh that
 // causes the intersection to infinite loop?
+
 // - rare deadlock in bvh construction code
+// - reduce create file contention in ptex
+// - reduce mem alloc contention in ptex?
+// - parallelize prim ref code for cat clark patches
 //
 // - area lights w/ light tree traversal, adaptive splitting, and accounting for BSDF
 // - https://fpsunflower.github.io/ckulla/data/many-lights-hpg2018.pdf

@@ -76,14 +76,17 @@ struct CreateQuantizedNode
         Vec3lf<N> min;
         Vec3lf<N> max;
 
+        Lane8F32 geomBounds[N];
+        int offset = 0;
+        for (int i = 0; i < N; i++)
+        {
+            bool advance       = offset < numRecords;
+            geomBounds[offset] = LaneF32<N>::Load(&records[offset].geomBounds);
+            offset += advance;
+        }
+
         if constexpr (N == 4)
         {
-            Lane8F32 geomBounds[4] = {
-                Lane8F32::Load(&records[0].geomBounds),
-                Lane8F32::Load(&records[1].geomBounds),
-                Lane8F32::Load(&records[2].geomBounds),
-                Lane8F32::Load(&records[3].geomBounds),
-            };
             Lane4F32 mins[4] = {
                 Extract4<0>(geomBounds[0]),
                 Extract4<0>(geomBounds[1]),
@@ -101,12 +104,6 @@ struct CreateQuantizedNode
         }
         else if constexpr (N == 8)
         {
-            Lane8F32 geomBounds[8] = {
-                Lane8F32::Load(&records[0].geomBounds), Lane8F32::Load(&records[1].geomBounds),
-                Lane8F32::Load(&records[2].geomBounds), Lane8F32::Load(&records[3].geomBounds),
-                Lane8F32::Load(&records[4].geomBounds), Lane8F32::Load(&records[5].geomBounds),
-                Lane8F32::Load(&records[6].geomBounds), Lane8F32::Load(&records[7].geomBounds),
-            };
             Transpose8x6(geomBounds[0], geomBounds[1], geomBounds[2], geomBounds[3],
                          geomBounds[4], geomBounds[5], geomBounds[6], geomBounds[7], min.x,
                          min.y, min.z, max.x, max.y, max.z);

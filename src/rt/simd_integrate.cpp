@@ -156,8 +156,8 @@ void RenderSIMD(Arena *arena, RenderParams2 &params)
         pixelWidth  = params.pixelMax[0] - params.pixelMin[0];
         pixelHeight = params.pixelMax[1] - params.pixelMin[1];
     }
-    u32 tileWidth  = 64;
-    u32 tileHeight = 64;
+    u32 tileWidth  = 16;
+    u32 tileHeight = 16;
     u32 tileCountX = (pixelWidth + tileWidth - 1) / tileWidth;
     u32 tileCountY = (pixelHeight + tileHeight - 1) / tileHeight;
     u32 taskCount  = tileCountX * tileCountY;

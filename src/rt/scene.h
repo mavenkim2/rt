@@ -242,6 +242,8 @@ struct GenerateMeshRefsHelper
                 max = Max(max, v[j]);
             }
 
+            Assert(min != max);
+
             Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
             Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
             Lane4F32::StoreU(prim->min, -mins);
@@ -286,6 +288,8 @@ struct GenerateMeshRefsHelper
                 min = Min(min, v[j]);
                 max = Max(max, v[j]);
             }
+
+            Assert(min != max);
 
             Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
             Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);

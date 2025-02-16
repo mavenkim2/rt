@@ -1474,6 +1474,8 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, ScenePrimitives *scene
             geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
             centBounds.Extend(Lane4F32(minP + maxP));
 
+            Assert(minP != maxP);
+
             PrimRef *ref = &refs[untessellatedRefOffset++];
             ref->minX    = -minP.x;
             ref->minY    = -minP.y;
@@ -1520,6 +1522,8 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, ScenePrimitives *scene
                     int bvhEdgeIndex = (int)bvhEdges.size();
                     bvhEdges.push_back(bvhEdge);
 
+                    Assert(minP != maxP);
+
                     refs.emplace_back();
                     PrimRef *ref = &refs.back();
                     ref->minX    = -minP.x;
@@ -1535,8 +1539,10 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, ScenePrimitives *scene
             }
 
             // Split internal grid into smaller grids
-            int edgeRateU     = patch->GetMaxEdgeFactorU();
-            int edgeRateV     = patch->GetMaxEdgeFactorV();
+            int edgeRateU = patch->GetMaxEdgeFactorU();
+            int edgeRateV = patch->GetMaxEdgeFactorV();
+
+            if (edgeRateU <= 2 || edgeRateV <= 2) continue;
             int bvhPatchIndex = (int)bvhPatches.size();
             int bvhPatchStart = bvhPatchIndex;
             {
@@ -1583,6 +1589,8 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, ScenePrimitives *scene
 
                 geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
                 centBounds.Extend(Lane4F32(minP + maxP));
+
+                Assert(minP != maxP);
 
                 // TODO: make it so that I can't forget to make these negative
                 refs.emplace_back();

@@ -484,8 +484,6 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                             {
                                 const LimitSurfaceSample &sample = samples[i];
                                 Vec3f pos, dpdu, dpdv, dpduu, dpduv, dpdvv, dndu, dndv;
-                                Vec3f testPos    = controlMesh->p[i];
-                                Vec3f testNormal = controlMesh->n[i];
                                 // EvaluateLimitSurfacePosition(vertices, &patchMap,
                                 // patchTable,
                                 //                              sample, pos, dpdu, dpdv, dpduu,
@@ -694,8 +692,8 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                                 {
                                     TempVertex &vertex      = tempVertices[i];
                                     Vec3f pos               = vertex.pos / (f32)vertex.count;
-                                    Vec3f testPos           = tessellatedVertices.vertices[i];
-                                    Vec3f testNormal        = tessellatedVertices.normals[i];
+                                    // Vec3f testPos           = tessellatedVertices.vertices[i];
+                                    // Vec3f testNormal        = tessellatedVertices.normals[i];
                                     Vec3f normal            = Normalize(vertex.normal);
                                     outputMesh->vertices[i] = pos;
                                     outputMesh->normals[i]  = normal;

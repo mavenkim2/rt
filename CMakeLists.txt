@@ -133,8 +133,9 @@ set(deps
     # thread_context
     ${ZLIB_LIBRARY}
     ${PTEX_LIBRARY}
-    osd_static_cpu
-    Ptex_static
+    ${OSD_LIBRARY}
+    # osd_static_cpu
+    # Ptex_static
 )
 
 install (TARGETS thread_context EXPORT THREAD_CONTEXT DESTINATION lib)
