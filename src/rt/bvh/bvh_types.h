@@ -390,6 +390,7 @@ struct BuildRef
     f32 max[3];
     u32 numPrims;
     BVHNode<N> nodePtr;
+    u32 type;
 
     __forceinline Lane8F32 Load() const { return Lane8F32::LoadU(min); }
     __forceinline void StoreBounds(const Bounds &b)
@@ -495,8 +496,7 @@ struct QuantizedCompressedNode
         if (!type)
         {
             int index = PopCount(~baseMeta & ((1 << i) - 1));
-            return BVHNode<N>::EncodeQuantizedCompressedNode(
-                childrenBase.GetQuantizedCompressedNode() + index);
+            return BVHNode<N>((uintptr_t)(childrenBase.GetQuantizedCompressedNode() + index));
         }
 
         int index = PopCount(baseMeta & ((1 << i) - 1));
@@ -504,7 +504,7 @@ struct QuantizedCompressedNode
         Assert((int)meta[i] > start);
         int count = (int)meta[i] - start;
         Assert(count);
-        return BVHNode<N>::EncodeLeaf((Prim *)leafBase.GetPtr() + start, count);
+        return BVHNode<N>((uintptr_t)((Prim *)leafBase.GetPtr() + start, count));
     }
 
     // NOTE: nodes + leaves
@@ -520,7 +520,21 @@ struct QuantizedCompressedNode
 
     u32 GetType(u32 childIndex) const
     {
-        return meta[childIndex] == 255 ? BVHNode<N>::tyEmpty : 0;
+        if (meta[childIndex] == 255) return BVHNode<N>::tyEmpty;
+        u32 type = baseMeta & (1 << childIndex);
+        if (!type)
+        {
+            return BVHNode<N>::tyQuantizedNode;
+        }
+        else
+        {
+            int index = PopCount(baseMeta & ((1 << childIndex) - 1));
+            int start = index == 0 ? 0 : meta[index - 1];
+            Assert((int)meta[childIndex] > start);
+            int count = (int)meta[childIndex] - start;
+            Assert(count && count <= 7);
+            return BVHNode<N>::tyLeaf + count;
+        }
     }
 
     void GetBounds(LaneF32<N> *outMin, LaneF32<N> *outMax) const

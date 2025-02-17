@@ -84,7 +84,9 @@ struct StackEntry
     T ptr;
     f32 dist;
     bool IsLeaf() const { return ptr.IsLeaf(); }
-    // u32 dist;
+    void *GetPtr() const { return ptr.GetPtr(); }
+    u32 GetNum() const { return ptr.GetNum(); }
+    u32 GetType() const { return ptr.GetType(); }
 };
 
 template <typename T>
@@ -95,16 +97,24 @@ struct TypedStackEntry
     u32 type;
     f32 dist;
     bool IsLeaf() const { return type >= T::tyLeaf; }
+    void *GetPtr() const { return (void *)ptr.data; }
+    u32 GetType() const { return type; }
+    u32 GetNum() const
+    {
+        Assert(IsLeaf());
+        return type - T::tyLeaf;
+    }
 };
 
 template <i32 K>
 struct TravRay
 {
     Vec3lf<K> o;
+    Vec3lf<K> d;
     Vec3lf<K> invRayD;
     LaneF32<K> tFar;
     TravRay(Ray2 &r)
-        : o(Vec3lf<K>(r.o)),
+        : o(Vec3lf<K>(r.o)), d(Vec3lf<K>(r.d)),
           invRayD(Vec3lf<K>(Select(r.d.x == 0, 0, 1 / r.d.x), Select(r.d.y == 0, 0, 1 / r.d.y),
                             Select(r.d.z == 0, 0, 1 / r.d.z))),
           tFar(LaneF32<K>(r.tFar))
@@ -588,7 +598,7 @@ struct BVHIntersector
 
             if (entry.IsLeaf())
             {
-                result |= intersector.Intersect(scene, ray, entry.ptr, itr, r);
+                result |= intersector.Intersect(scene, ray, entry, itr, r);
                 r.tFar = ray.tFar;
                 continue;
             }
@@ -618,7 +628,7 @@ struct BVHIntersector
             {
                 SurfaceInteraction itr;
                 // TODO: implement Occluded for intersectors
-                if (intersector.Intersect(scene, ray, entry.ptr, itr, r)) return true;
+                if (intersector.Intersect(scene, ray, entry, itr, r)) return true;
                 continue;
             }
 
@@ -670,12 +680,12 @@ f32 CalculateCurvature(const Vec3f &dpdu, const Vec3f &dpdv, const Vec3f &dndu,
 }
 
 template <i32 N>
-static Mask<LaneF32<N>> TriangleIntersect(const Ray2 &ray, const LaneF32<N> &tFar,
+static Mask<LaneF32<N>> TriangleIntersect(const TravRay<N> &ray, const LaneF32<N> &tFar,
                                           const Vec3lf<N> &v0, const Vec3lf<N> &v1,
                                           const Vec3lf<N> &v2, TriangleIntersection<N> &itr)
 {
-    Vec3lf<N> o  = Vec3lf<N>(ray.o);
-    Vec3lf<N> d  = Vec3lf<N>(ray.d);
+    Vec3lf<N> o  = ray.o;
+    Vec3lf<N> d  = ray.d;
     Vec3lf<N> e1 = v0 - v1;
     Vec3lf<N> e2 = v2 - v0;
     Vec3lf<N> ng = Cross(e2, e1); // 4
@@ -877,8 +887,9 @@ struct TriangleIntersectorBase<N, Prim<N>>
     using Primitive           = Prim<N>;
     TriangleIntersectorBase() = default;
     // https://www.graphics.cornell.edu/pubs/1997/MT97.pdf
+    template <i32 K>
     static bool Intersect(ScenePrimitives *scene, Ray2 &ray, Primitive *primitives, u32 num,
-                          SurfaceInteraction &si)
+                          SurfaceInteraction &si, TravRay<K> &r)
     {
         Vec3lf<N> triV0, triV1, triV2;
         Lane4F32 v0[N];
@@ -901,7 +912,7 @@ struct TriangleIntersectorBase<N, Prim<N>>
             Transpose<N>(v1, triV1);
             Transpose<N>(v2, triV2);
 
-            Mask<LaneF32<N>> mask = TriangleIntersect(ray, itr.t, triV0, triV1, triV2, triItr);
+            Mask<LaneF32<N>> mask = TriangleIntersect(r, itr.t, triV0, triV1, triV2, triItr);
             itr.u                 = Select(mask, triItr.u, itr.u);
             itr.v                 = Select(mask, triItr.v, itr.v);
             itr.t                 = Select(mask, triItr.t, itr.t);
@@ -960,14 +971,13 @@ struct TriangleIntersectorBase<N, Prim<N>>
         }
         return false;
     }
-    template <i32 K>
-    static bool Intersect(ScenePrimitives *scene, Ray2 &ray, BVHNode<K> ptr,
-                          SurfaceInteraction &si, TravRay<K> &)
+    template <typename StackEntry, i32 K>
+    static bool Intersect(ScenePrimitives *scene, Ray2 &ray, StackEntry entry,
+                          SurfaceInteraction &si, TravRay<K> &r)
     {
-        Assert(ptr.IsLeaf());
-        Primitive *primitives = (Primitive *)ptr.GetPtr();
-        u32 num               = ptr.GetNum();
-        return Intersect(scene, ray, primitives, num, si);
+        Primitive *primitives = (Primitive *)entry.GetPtr();
+        u32 num               = entry.GetNum();
+        return Intersect(scene, ray, primitives, num, si, r);
     }
 };
 
@@ -980,8 +990,9 @@ struct QuadIntersectorBase<N, Prim<N>>
     using Primitive       = Prim<N>;
     QuadIntersectorBase() = default;
 
+    template <i32 K>
     static bool Intersect(ScenePrimitives *scene, Ray2 &ray, Primitive *primitives, u32 num,
-                          SurfaceInteraction &si)
+                          SurfaceInteraction &si, TravRay<K> &r)
 
     {
         auto trueMask  = Mask<LaneF32<N>>(TrueTy());
@@ -1011,7 +1022,7 @@ struct QuadIntersectorBase<N, Prim<N>>
             Transpose<N>(v2, triV2);
             Transpose<N>(v3, triV3);
 
-            Mask<LaneF32<N>> mask = TriangleIntersect(ray, itr.t, triV0, triV1, triV2, triItr);
+            Mask<LaneF32<N>> mask = TriangleIntersect(r, itr.t, triV0, triV1, triV2, triItr);
             triMask               = Select(mask, falseMask, triMask);
             itr.u                 = Select(mask, triItr.u, itr.u);
             itr.v                 = Select(mask, triItr.v, itr.v);
@@ -1022,7 +1033,7 @@ struct QuadIntersectorBase<N, Prim<N>>
                 Select(mask, AsFloat(MemSimdU32<N>::LoadU(primIDs)), AsFloat(itr.primIDs)));
             outMask |= mask;
 
-            mask        = TriangleIntersect(ray, itr.t, triV0, triV2, triV3, triItr);
+            mask        = TriangleIntersect(r, itr.t, triV0, triV2, triV3, triItr);
             triMask     = Select(mask, trueMask, triMask);
             itr.u       = Select(mask, triItr.u, itr.u);
             itr.v       = Select(mask, triItr.v, itr.v);
@@ -1093,14 +1104,13 @@ struct QuadIntersectorBase<N, Prim<N>>
         }
         return false;
     }
-    template <i32 K>
-    static bool Intersect(ScenePrimitives *scene, Ray2 &ray, BVHNode<K> ptr,
-                          SurfaceInteraction &si, TravRay<K> &)
+    template <typename StackEntry, i32 K>
+    static bool Intersect(ScenePrimitives *scene, Ray2 &ray, StackEntry entry,
+                          SurfaceInteraction &si, TravRay<K> &r)
     {
-        Assert(ptr.IsLeaf());
-        Primitive *primitives = (Primitive *)ptr.GetPtr();
-        u32 num               = ptr.GetNum();
-        return Intersect(scene, ray, primitives, num, si);
+        Primitive *primitives = (Primitive *)entry.GetPtr();
+        u32 num               = entry.GetNum();
+        return Intersect(scene, ray, primitives, num, si, r);
     }
 };
 
@@ -1108,8 +1118,9 @@ struct CatClarkPatchIntersector
 {
     typedef CatmullClarkPatch Primitive;
     static const int N = 8;
+    template <i32 K>
     static bool Intersect(ScenePrimitives *scene, Ray2 &ray, Primitive *primitives, u32 num,
-                          SurfaceInteraction &si)
+                          SurfaceInteraction &si, TravRay<K> &r)
 
     {
         auto trueMask  = Mask<Lane8F32>(TrueTy());
@@ -1143,7 +1154,7 @@ struct CatClarkPatchIntersector
 
             TriangleIntersection<N> triItr;
 
-            Mask<LaneF32<N>> mask = TriangleIntersect(ray, itr.t, triV0, triV1, triV2, triItr);
+            Mask<LaneF32<N>> mask = TriangleIntersect(r, itr.t, triV0, triV1, triV2, triItr);
             mask &= Lane8F32::Mask((1u << queueCount) - 1);
             outMask |= mask;
 
@@ -1455,15 +1466,13 @@ struct CatClarkPatchIntersector
 
         return false;
     }
-
-    template <i32 K>
-    static bool Intersect(ScenePrimitives *scene, Ray2 &ray, BVHNode<K> ptr,
-                          SurfaceInteraction &si, TravRay<K> &)
+    template <typename StackEntry, i32 K>
+    static bool Intersect(ScenePrimitives *scene, Ray2 &ray, StackEntry entry,
+                          SurfaceInteraction &si, TravRay<K> &r)
     {
-        Assert(ptr.IsLeaf());
-        Primitive *primitives = (Primitive *)ptr.GetPtr();
-        u32 num               = ptr.GetNum();
-        return Intersect(scene, ray, primitives, num, si);
+        Primitive *primitives = (Primitive *)entry.GetPtr();
+        u32 num               = entry.GetNum();
+        return Intersect(scene, ray, primitives, num, si, r);
     }
 };
 
@@ -1484,8 +1493,9 @@ struct InstanceIntersector
     using Primitive = TLASLeaf;
 
     InstanceIntersector() {}
+    template <i32 K>
     static bool Intersect(ScenePrimitives *scene, Ray2 &ray, Primitive *primitives, u32 num,
-                          SurfaceInteraction &si)
+                          SurfaceInteraction &si, TravRay<K> &)
     {
         // intersect the bounds
         // get the leaves to intersect
@@ -1529,14 +1539,13 @@ struct InstanceIntersector
         }
         return result;
     }
-    template <i32 K>
-    static bool Intersect(ScenePrimitives *scene, Ray2 &ray, BVHNode<K> ptr,
-                          SurfaceInteraction &si, TravRay<K> &)
+    template <typename StackEntry, i32 K>
+    static bool Intersect(ScenePrimitives *scene, Ray2 &ray, StackEntry entry,
+                          SurfaceInteraction &si, TravRay<K> &r)
     {
-        Assert(ptr.IsLeaf());
-        Primitive *primitives = (Primitive *)ptr.GetPtr();
-        u32 num               = ptr.GetNum();
-        return Intersect(scene, ray, primitives, num, si);
+        Primitive *primitives = (Primitive *)entry.GetPtr();
+        u32 num               = entry.GetNum();
+        return Intersect(scene, ray, primitives, num, si, r);
     }
 };
 
@@ -1548,37 +1557,36 @@ struct CompressedLeafIntersector
     Intersector intersector;
     CompressedLeafIntersector() {}
     template <typename Scene>
-    bool Intersect(Scene *scene, Ray2 &ray, BVHNode<N> ptr, SurfaceInteraction &itr,
+    bool Intersect(Scene *scene, Ray2 &ray, StackEntry entry, SurfaceInteraction &itr,
                    TravRay<N> &tray)
     {
         bool result = false;
 
-        switch (ptr.GetType())
+        switch (entry.GetType())
         {
             case BVHNode<N>::tyCompressedLeaf:
             {
                 StackEntry stack[N];
                 i32 stackPtr = 0;
-                BVHTraverser<N, BVH_QNLF, Primitive>::Traverse({ptr, ray.tFar}, stack,
-                                                               stackPtr, tray);
+                BVHTraverser<N, BVH_QNLF, Primitive>::Traverse(entry, stack, stackPtr, tray);
 
                 stackPtr--;
-                CompressedLeafNode<N> *node = ptr.GetCompressedLeaf();
+                CompressedLeafNode<N> *node = entry.ptr.GetCompressedLeaf();
                 for (; stackPtr >= 0; stackPtr--)
                 {
                     // TODO: this is kind of hacky
-                    StackEntry entry = stack[stackPtr];
-                    if (entry.dist > ray.tFar) continue;
-                    uintptr_t child       = entry.ptr.data;
+                    StackEntry e = stack[stackPtr];
+                    if (e.dist > ray.tFar) continue;
+                    uintptr_t child       = e.ptr.data;
                     u32 start             = (child == 0 ? 0 : node->offsets[child - 1]);
                     Primitive *primitives = (Primitive *)(node + 1) + start;
                     u32 num               = node->offsets[child] - start;
 
-                    result |= intersector.Intersect(scene, ray, primitives, num, itr);
+                    result |= intersector.Intersect(scene, ray, primitives, num, itr, tray);
                 }
             }
             break;
-            default: result |= intersector.Intersect(scene, ray, ptr, itr, tray);
+            default: result |= intersector.Intersect(scene, ray, entry, itr, tray);
         }
         return result;
     }
