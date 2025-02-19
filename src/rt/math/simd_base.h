@@ -505,6 +505,13 @@ __forceinline u32 Bsf(u32 val)
     return result;
 }
 
+__forceinline u32 Bsf64(u64 val)
+{
+    unsigned long result = 0;
+    _BitScanForward64(&result, val);
+    return result;
+}
+
 __forceinline u32 Bscf(u32 &val)
 {
     unsigned long result = 0;

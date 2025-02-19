@@ -27,6 +27,7 @@ void GenerateBuildRefs(BRef *refs, ScenePrimitives *scene, u32 start, u32 count,
 
         ref->instanceID = i;
 #ifdef USE_QUANTIZE_COMPRESS
+        auto *node   = inScene->nodePtr.GetQuantizedCompressedNode();
         ref->nodePtr = uintptr_t(inScene->nodePtr.GetPtr());
         ref->type    = inScene->nodePtr.GetType();
 #else
@@ -62,6 +63,20 @@ BRef *GenerateBuildRefs(ScenePrimitives *scene, Arena *arena, RecordAOSSplits &r
     }
     record.SetRange(0, numInstances, extEnd);
     return b;
+}
+
+template <typename Node>
+void SetNodePtr(BRef *ref, Node *node, int childIndex, const ScenePrimitives *scene,
+                int instanceID)
+{
+#ifdef USE_QUANTIZE_COMPRESS
+    int size     = scene->childScenes[instanceID]->bvhPrimSize;
+    ref->nodePtr = node->Child(childIndex, size);
+    ref->type    = node->GetType(childIndex);
+    Assert(scene->childScenes);
+#else
+    ref->nodePtr = node->template Child(childIndex);
+#endif
 }
 
 static const f32 REBRAID_THRESHOLD = .1f;
@@ -125,10 +140,7 @@ void OpenBraid(const ScenePrimitives *scene, RecordAOSSplits &record, BRef *refs
 
             ref.SafeStoreBounds(bounds0);
             ref.numPrims = Max(ref.numPrims / numC, 1u);
-            ref.nodePtr  = node->template Child<TLASLeaf>(0);
-#ifdef USE_QUANTIZE_COMPRESS
-            ref.type = node->GetType(0);
-#endif
+            SetNodePtr(&ref, node, 0, scene, instance.id);
             Assert(ref.nodePtr.data != 0);
 
             for (u32 b = 1; b < numC; b++)
@@ -141,11 +153,7 @@ void OpenBraid(const ScenePrimitives *scene, RecordAOSSplits &record, BRef *refs
                 refs[offset].StoreBounds(bounds);
                 refs[offset].instanceID = ref.instanceID;
                 refs[offset].numPrims   = ref.numPrims;
-                refs[offset].nodePtr    = node->template Child<TLASLeaf>(b);
-#ifdef USE_QUANTIZE_COMPRESS
-                refs[offset].type = node->GetType(b);
-#endif
-
+                SetNodePtr(&refs[offset], node, b, scene, instance.id);
                 Assert(refs[offset].nodePtr.data != 0);
 
                 offset++;

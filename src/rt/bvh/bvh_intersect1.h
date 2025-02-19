@@ -41,9 +41,9 @@ struct StackEntry
     }
 
     template <typename Prim, typename Node>
-    static StackEntry<N> Create(Node *node, int index, f32 d = 0.f)
+    __forceinline static StackEntry<N> Create(Node *node, int index, f32 d = 0.f)
     {
-        return StackEntry<N>{node->template Child<Prim>(index), node->GetType(index), d};
+        return StackEntry<N>{node->Child(index, (int)sizeof(Prim)), node->GetType(index), d};
     }
 
     bool IsLeaf() const { return type >= BVHNode<N>::tyLeaf; }
@@ -78,10 +78,10 @@ struct StackEntry
     StackEntry() = default;
     StackEntry(const BVHNode<N> &ptr, f32 dist) : ptr(ptr), dist(dist) {}
 
-    template <typename Node, typename Prim>
+    template <typename Prim, typename Node>
     static StackEntry<N> Create(Node *node, int index, f32 d = 0.f)
     {
-        return StackEntry<N>{node->template Child<Prim>(index), d};
+        return StackEntry<N>{node->Child(index), d};
     }
 
     bool IsLeaf() const { return ptr.IsLeaf(); }
@@ -159,12 +159,7 @@ struct BVHTraverser<4, types, Prim>
 
         const Lane4F32 intersectMask = tEntry <= tLeave;
 
-        const u32 childType0   = node->GetType(0);
-        const u32 childType1   = node->GetType(1);
-        const u32 childType2   = node->GetType(2);
-        const u32 childType3   = node->GetType(3);
-        Lane4F32 validNodeMask = Lane4U32(childType0, childType1, childType2, childType3) !=
-                                 Lane4U32(BVHNode4::tyEmpty);
+        Lane4F32 validNodeMask = node->GetValid();
 
         tEntryOut = tEntry;
         mask      = validNodeMask & intersectMask;
@@ -228,13 +223,11 @@ struct BVHTraverser<4, types, Prim>
         i32 intersectFlags = Movemask(mask);
         u32 oldPtr         = stackPtr;
         stackPtr += PopCount(intersectFlags);
-        if (intersectFlags == 0) return;
-        for (;;)
+        while (intersectFlags)
         {
             i32 bit = Bsf(intersectFlags);
             intersectFlags &= intersectFlags - 1;
             stack[oldPtr++] = StackEntry::template Create<Prim>(node, bit);
-            if (intersectFlags == 0) return;
         }
     }
 };
@@ -313,18 +306,7 @@ struct BVHTraverser<8, types, Prim>
 
         const Lane8F32 intersectMask = tEntry <= tLeave;
 
-        const u32 childType0 = node->GetType(0);
-        const u32 childType1 = node->GetType(1);
-        const u32 childType2 = node->GetType(2);
-        const u32 childType3 = node->GetType(3);
-        const u32 childType4 = node->GetType(4);
-        const u32 childType5 = node->GetType(5);
-        const u32 childType6 = node->GetType(6);
-        const u32 childType7 = node->GetType(7);
-        // TODO: on cmake msvc this bugs out?
-        Lane8F32 validNodeMask =
-            Lane8U32(childType0, childType1, childType2, childType3, childType4, childType5,
-                     childType6, childType7) != Lane8U32(BVHNode8::tyEmpty);
+        Lane8F32 validNodeMask = node->GetValid();
 
         tEntryOut = tEntry;
         mask      = validNodeMask & intersectMask;
@@ -520,13 +502,11 @@ struct BVHTraverser<8, types, Prim>
         i32 intersectFlags = Movemask(mask);
         u32 oldPtr         = stackPtr;
         stackPtr += PopCount(intersectFlags);
-        if (intersectFlags == 0) return;
-        for (;;)
+        while (intersectFlags)
         {
             i32 bit = Bsf(intersectFlags);
             intersectFlags &= intersectFlags - 1;
             stack[oldPtr++] = StackEntry::template Create<Prim>(node, bit);
-            if (intersectFlags == 0) return;
         }
     }
 };
@@ -549,6 +529,10 @@ struct BVHIntersector
         stack[0]     = stackEntry;
         bool result  = false;
         Intersector intersector;
+
+        Lane8F32 entry;
+        Lane4F32 mask;
+
         while (stackPtr > 0)
         {
             Assert(stackPtr <= ArrayLength(stack));
@@ -590,7 +574,6 @@ struct BVHIntersector
                 if (intersector.Intersect(scene, ray, entry, itr, r)) return true;
                 continue;
             }
-
             BVHTraverser<K, types, Prim>::TraverseAny(entry, stack, stackPtr, r);
         }
         return false;
@@ -622,7 +605,6 @@ Vec4f BsplineDerivativeBasis(f32 u)
                  1.f / 6.f * (-9.f * u2 + 6.f * u + 3.f), 0.5f * u2);
 }
 
-// f32 CalculateCatmullClarkCurvature(const Vec3f *points, const Vec2f &uv)
 f32 CalculateCurvature(const Vec3f &dpdu, const Vec3f &dpdv, const Vec3f &dndu,
                        const Vec3f &dndv)
 {
@@ -1143,6 +1125,11 @@ struct CatClarkPatchIntersector
             u32 geomID                = GetTriangleIndex(bits);
             int edgeIndex             = GetMeta(bits);
 
+            if (geomID >= scene->numPrimitives)
+            {
+                auto ptr = (QuantizedCompressedNode<8> *)(&primitives[0]);
+                int stop = 5;
+            }
             Assert(geomID < scene->numPrimitives);
             OpenSubdivMesh *mesh = meshes + geomID;
             const auto &indices  = mesh->stitchingIndices;
@@ -1641,41 +1628,41 @@ typedef CatClarkIntersector<8, BVH_QN> BVH8PatchIntersector;
 template <i32 K, i32 N, i32 types>
 using BVHTriangleIntersector =
     BVHIntersector<K, types, CompressedLeafIntersector<K, TriangleIntersector<N>>>;
-typedef BVHTriangleIntersector<4, 1, BVH_AQ> BVH4TriangleIntersector1;
-typedef BVHTriangleIntersector<4, 8, BVH_AQ> BVH4TriangleIntersector8;
-typedef BVHTriangleIntersector<8, 8, BVH_AQ> BVH8TriangleIntersector8;
+typedef BVHTriangleIntersector<4, 1, BVH_QN> BVH4TriangleIntersector1;
+typedef BVHTriangleIntersector<4, 8, BVH_QN> BVH4TriangleIntersector8;
+typedef BVHTriangleIntersector<8, 8, BVH_QN> BVH8TriangleIntersector8;
 
 template <i32 K, i32 N, i32 types>
 using BVHTriangleIntersectorCmp =
     BVHIntersector<K, types, CompressedLeafIntersector<K, TriangleIntersectorCmp<N>>>;
-typedef BVHTriangleIntersectorCmp<4, 1, BVH_AQ> BVH4TriangleIntersectorCmp1;
-typedef BVHTriangleIntersectorCmp<4, 8, BVH_AQ> BVH4TriangleIntersectorCmp8;
-typedef BVHTriangleIntersectorCmp<8, 8, BVH_AQ> BVH8TriangleIntersectorCmp8;
+typedef BVHTriangleIntersectorCmp<4, 1, BVH_QN> BVH4TriangleIntersectorCmp1;
+typedef BVHTriangleIntersectorCmp<4, 8, BVH_QN> BVH4TriangleIntersectorCmp8;
+typedef BVHTriangleIntersectorCmp<8, 8, BVH_QN> BVH8TriangleIntersectorCmp8;
 
 template <i32 K, i32 N, i32 types>
 using BVHQuadIntersector =
     BVHIntersector<K, types, CompressedLeafIntersector<K, QuadIntersector<N>>>;
-typedef BVHQuadIntersector<4, 1, BVH_AQ> BVH4QuadIntersector1;
-typedef BVHQuadIntersector<4, 8, BVH_AQ> BVH4QuadIntersector8;
-typedef BVHQuadIntersector<8, 8, BVH_AQ> BVH8QuadIntersector8;
+typedef BVHQuadIntersector<4, 1, BVH_QN> BVH4QuadIntersector1;
+typedef BVHQuadIntersector<4, 8, BVH_QN> BVH4QuadIntersector8;
+typedef BVHQuadIntersector<8, 8, BVH_QN> BVH8QuadIntersector8;
 
 template <i32 K, i32 N, i32 types>
 using BVHQuadIntersectorCmp =
     BVHIntersector<K, types, CompressedLeafIntersector<K, QuadIntersectorCmp<N>>>;
-typedef BVHQuadIntersectorCmp<4, 1, BVH_AQ> BVH4QuadIntersectorCmp1;
-typedef BVHQuadIntersectorCmp<4, 8, BVH_AQ> BVH4QuadIntersectorCmp8;
-typedef BVHQuadIntersectorCmp<8, 8, BVH_AQ> BVH8QuadIntersectorCmp8;
+typedef BVHQuadIntersectorCmp<4, 1, BVH_QN> BVH4QuadIntersectorCmp1;
+typedef BVHQuadIntersectorCmp<4, 8, BVH_QN> BVH4QuadIntersectorCmp8;
+typedef BVHQuadIntersectorCmp<8, 8, BVH_QN> BVH8QuadIntersectorCmp8;
 
 template <i32 K, i32 types>
 using BVHInstanceIntersector =
     BVHIntersector<K, types, CompressedLeafIntersector<K, InstanceIntersector>>;
-typedef BVHInstanceIntersector<4, BVH_AQ> BVH4InstanceIntersector;
-typedef BVHInstanceIntersector<8, BVH_AQ> BVH8InstanceIntersector;
+typedef BVHInstanceIntersector<4, BVH_QN> BVH4InstanceIntersector;
+typedef BVHInstanceIntersector<8, BVH_QN> BVH8InstanceIntersector;
 
 template <i32 K, i32 types>
 using CatClarkIntersector =
     BVHIntersector<K, types, CompressedLeafIntersector<K, CatClarkPatchIntersector>>;
-typedef CatClarkIntersector<8, BVH_AQ> BVH8PatchIntersector;
+typedef CatClarkIntersector<8, BVH_QN> BVH8PatchIntersector;
 #endif
 
 // Helpers

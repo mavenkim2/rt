@@ -1179,8 +1179,6 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     }
     files.Flatten(scene->childScenes);
 
-    scene->dataTokenizer = dataTokenizer;
-
     OS_UnmapFile(tokenizer.input.str);
 
     // If there are no transforms and no two level-bvhs, then we need to manually convert
@@ -1413,6 +1411,7 @@ void BuildTLASBVH(Arena **arenas, ScenePrimitives *scene)
         typename IntersectorHelper<GeometryType::Instance, BRef>::IntersectorType;
     scene->intersectFunc = &IntersectorType::Intersect;
     scene->occludedFunc  = &IntersectorType::Occluded;
+    scene->bvhPrimSize   = (int)sizeof(typename IntersectorType::Prim);
 
     b = Bounds(record.geomBounds);
     scene->SetBounds(b);
@@ -1626,6 +1625,7 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, ScenePrimitives *scene
         typename IntersectorHelper<GeometryType::CatmullClark, PrimRef>::IntersectorType;
     scene->intersectFunc = &IntersectorType::Intersect;
     scene->occludedFunc  = &IntersectorType::Occluded;
+    scene->bvhPrimSize   = (int)sizeof(typename IntersectorType::Prim);
     Bounds b(record.geomBounds);
     Assert((Movemask(b.maxP >= b.minP) & 0x7) == 0x7);
     scene->SetBounds(b);
@@ -1704,6 +1704,7 @@ void BuildBVH(Arena **arenas, ScenePrimitives *scene)
         using IntersectorType = typename IntersectorHelper<type, PrimRef>::IntersectorType;
         scene->intersectFunc  = &IntersectorType::Intersect;
         scene->occludedFunc   = &IntersectorType::Occluded;
+        scene->bvhPrimSize    = (int)sizeof(typename IntersectorType::Prim);
     }
     else
     {
@@ -1717,6 +1718,7 @@ void BuildBVH(Arena **arenas, ScenePrimitives *scene)
             typename IntersectorHelper<type, PrimRefCompressed>::IntersectorType;
         scene->intersectFunc = &IntersectorType::Intersect;
         scene->occludedFunc  = &IntersectorType::Occluded;
+        scene->bvhPrimSize   = (int)sizeof(typename IntersectorType::Prim);
     }
     Bounds b(record.geomBounds);
     Assert((Movemask(b.maxP >= b.minP) & 0x7) == 0x7);

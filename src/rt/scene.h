@@ -686,15 +686,13 @@ struct ScenePrimitives
 
     GeometryType geometryType;
 
-    // temp
-    Tokenizer dataTokenizer;
-
     Vec3f boundsMin;
     Vec3f boundsMax;
     BVHNodeN nodePtr;
 
     // NOTE: is one of PrimitiveType
     void *primitives;
+    int bvhPrimSize;
 
     // NOTE: only set if not a leaf node in the scene hierarchy
     union

@@ -1,5 +1,6 @@
 #ifndef BVH_TYPES_H
 #define BVH_TYPES_H
+#include <immintrin.h>
 namespace rt
 {
 static const u32 LANE_WIDTH         = 8;
@@ -451,11 +452,7 @@ struct QuantizedNode
         return count;
     }
 
-    template <typename Prim>
-    BVHNode<N> Child(u32 i) const
-    {
-        return children[i];
-    }
+    BVHNode<N> Child(u32 i) const { return children[i]; }
 
     u32 GetType(u32 childIndex) const { return children[childIndex].GetType(); }
 
@@ -472,8 +469,8 @@ struct QuantizedCompressedNode
 
     static const int EmptyNodeValue = 0xff;
 
-    BVHNode<N> childrenBase;
-    BVHNode<N> leafBase;
+    u8 meta[N];
+    BVHNode<N> basePtr;
 #ifdef EXPONENTIAL_QUANTIZE
     u8 scale[3];
 #else
@@ -481,7 +478,6 @@ struct QuantizedCompressedNode
 #endif
 
     u8 baseMeta;
-    u8 meta[N];
     u8 lowerX[N];
     u8 lowerY[N];
     u8 lowerZ[N];
@@ -493,24 +489,26 @@ struct QuantizedCompressedNode
 
     Vec3f minP;
 
-    template <typename Prim>
-    BVHNode<N> Child(u32 i) const
+    BVHNode<N> Child(u32 i, int size) const
     {
         if (meta[i] == EmptyNodeValue) return BVHNode<N>::EncodeEmpty();
         u32 type = baseMeta & (1 << i);
 
         // Calculates the index
-        if (!type)
+        if (type)
         {
-            int index = PopCount(~((u32)baseMeta) & ((1 << i) - 1));
+            int index = PopCount(((u32)baseMeta) & ((1 << i) - 1));
             Assert(index < N);
-            Assert(!childrenBase.IsEmpty());
-            return BVHNode<N>((uintptr_t)(childrenBase.GetQuantizedCompressedNode() + index));
+            Assert(!basePtr.IsEmpty());
+            auto *node = basePtr.GetQuantizedCompressedNode() + index;
+            return BVHNode<N>((uintptr_t)node);
         }
 
-        int start = i == 0 ? 0 : meta[i - 1];
-        Assert(!leafBase.IsEmpty());
-        return BVHNode<N>((uintptr_t)((Prim *)leafBase.GetPtr() + start));
+        int numNodes = PopCount(baseMeta);
+        int start    = i == 0 ? 0 : meta[i - 1];
+        Assert(!basePtr.IsEmpty());
+        auto *ptr = basePtr.GetQuantizedCompressedNode() + numNodes;
+        return BVHNode<N>((uintptr_t)((u8 *)ptr + size * start));
     }
 
     // NOTE: nodes + leaves
@@ -524,11 +522,11 @@ struct QuantizedCompressedNode
         return count;
     }
 
-    u32 GetType(u32 childIndex) const
+    __forceinline u32 GetType(u32 childIndex) const
     {
         if (meta[childIndex] == EmptyNodeValue) return BVHNode<N>::tyEmpty;
         u32 type = baseMeta & (1 << childIndex);
-        if (!type)
+        if (type)
         {
             return BVHNode<N>::tyQuantizedNode;
         }
@@ -540,6 +538,20 @@ struct QuantizedCompressedNode
             int count = meta[childIndex] - start;
             ErrorExit(count && count <= 7, "count: %i\n", count);
             return BVHNode<N>::tyLeaf + count;
+        }
+    }
+
+    LaneF32<N> GetValid() const
+    {
+        if constexpr (N == 4)
+        {
+            Lane4U32 lane = _mm_cvtsi32_si128(*(u32 *)meta);
+            return lane != Lane4U32(EmptyNodeValue);
+        }
+        else
+        {
+            Lane8U32 lane = _mm256_cvtepu8_epi32(_mm_set_epi64x(0, *(u64 *)meta));
+            return lane != Lane8U32(EmptyNodeValue);
         }
     }
 
@@ -579,11 +591,7 @@ struct CompressedLeafNode
     {
         ::GetBounds(this, outMin, outMax);
     }
-    template <typename Prim>
-    BVHNode<N> Child(u32 index) const
-    {
-        return BVHNode<N>(index);
-    }
+    BVHNode<N> Child(u32 index) const { return BVHNode<N>(index); }
     u32 GetType(u32 childIndex) const
     {
         return offsets[childIndex] == 0 ? BVHNode<N>::tyEmpty : 0;
@@ -708,17 +716,8 @@ struct QuadCompressed : LeafPrimCompressed<N>
                  Lane4F32 v3[N], u32 outGeomIDs[N], u32 outPrimIDs[N]) const;
 };
 
-// TODO: maybe also do this?
-// template <i32 N>
-// struct TLASLeaf
-// {
-//     BVHNodeN nodePtr[N];
-//     u32 instanceIndex[N];
-// }
-
 struct CatmullClarkPatch
 {
-    // BVHNodeN nodePtr;
     u32 geomID;
     u32 primID;
 

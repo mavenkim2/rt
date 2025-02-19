@@ -162,16 +162,15 @@ template <i32 N>
 struct UpdateQuantizedCompressedNode
 {
     using NodeType = QuantizedCompressedNode<N>;
-    __forceinline void operator()(NodeType *parent, BVHNode<N> &childNodes,
-                                  BVHNode<N> &childLeaves, int offsets[N], int numChildren)
+    __forceinline void operator()(NodeType *parent, BVHNode<N> &ptr, int offsets[N],
+                                  int numChildren)
     {
-        parent->childrenBase = childNodes;
-        parent->leafBase     = childLeaves;
-        parent->baseMeta     = 0;
-        int currentOffset    = 0;
+        parent->basePtr   = ptr;
+        parent->baseMeta  = 0;
+        int currentOffset = 0;
         for (int i = 0; i < numChildren; i++)
         {
-            parent->baseMeta |= bool(offsets[i]) << i;
+            parent->baseMeta |= (!offsets[i]) << i;
             currentOffset = Max(offsets[i], currentOffset);
             Assert(!i || (currentOffset - parent->meta[i - 1] <= 7));
             parent->meta[i] = currentOffset;
@@ -240,8 +239,8 @@ struct BVHBuilder
     BVHNode<N> BuildBVH(const BuildSettings &settings, Record &record, bool parallel);
 
     void BuildCompressedBVH(const BuildSettings &settings, Record &record,
-                            Record *childRecords, int &numChildren, BVHNode<N> &childNode,
-                            BVHNode<N> &childLeaf, int offsets[N], bool parallel);
+                            Record *childRecords, int &numChildren, BVHNode<N> &basePtr,
+                            int offsets[N], bool parallel);
 
     BVHNode<N> BuildCompressedBVH(BuildSettings settings, Arena **inArenas, Record &record);
 };
@@ -448,9 +447,8 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(BuildSettings settings, Arena
 template <i32 N, typename BuildFunctions>
 void BVHBuilder<N, BuildFunctions>::BuildCompressedBVH(const BuildSettings &settings,
                                                        Record &record, Record *childRecords,
-                                                       int &numChildren, BVHNode<N> &childNode,
-                                                       BVHNode<N> &childLeaf, int offsets[N],
-                                                       bool parallel)
+                                                       int &numChildren, BVHNode<N> &basePtr,
+                                                       int offsets[N], bool parallel)
 {
     Assert(record.count > 0);
 
@@ -503,8 +501,7 @@ void BVHBuilder<N, BuildFunctions>::BuildCompressedBVH(const BuildSettings &sett
         childRecords[bestChild] = out;
     }
 
-    BVHNode<N> childNodes[N];
-    BVHNode<N> leafNodes[N];
+    BVHNode<N> basePtrs[N];
 
     int numGrandChildren[N] = {};
     Record grandChildRecords[N][N];
@@ -515,7 +512,7 @@ void BVHBuilder<N, BuildFunctions>::BuildCompressedBVH(const BuildSettings &sett
         scheduler.ScheduleAndWait(numChildren, 1, [&](u32 jobID) {
             bool childParallel = childRecords[jobID].count >= 8 * 1024;
             BuildCompressedBVH(settings, childRecords[jobID], grandChildRecords[jobID],
-                               numGrandChildren[jobID], childNodes[jobID], leafNodes[jobID],
+                               numGrandChildren[jobID], basePtrs[jobID],
                                grandChildOffsets[jobID], childParallel);
         });
     }
@@ -524,8 +521,7 @@ void BVHBuilder<N, BuildFunctions>::BuildCompressedBVH(const BuildSettings &sett
         for (u32 i = 0; i < numChildren; i++)
         {
             BuildCompressedBVH(settings, childRecords[i], grandChildRecords[i],
-                               numGrandChildren[i], childNodes[i], leafNodes[i],
-                               grandChildOffsets[i], false);
+                               numGrandChildren[i], basePtrs[i], grandChildOffsets[i], false);
         }
     }
 
@@ -564,9 +560,13 @@ void BVHBuilder<N, BuildFunctions>::BuildCompressedBVH(const BuildSettings &sett
     // Allocate the children
     NodeType *node    = 0;
     LeafType *primIDs = 0;
+
+    u8 *allocPtr = PushArrayNoZeroTagged(
+        currentArena, u8, sizeof(NodeType) * numChildNodes + sizeof(LeafType) * primTotal,
+        MemoryType_BVH);
     if (numChildNodes)
     {
-        node = PushArrayNoZeroTagged(currentArena, NodeType, numChildNodes, MemoryType_BVH);
+        node     = (NodeType *)allocPtr;
         int mask = childNodeMask;
         // Fill out node information
         for (int i = 0; i < numChildNodes; i++)
@@ -574,20 +574,15 @@ void BVHBuilder<N, BuildFunctions>::BuildCompressedBVH(const BuildSettings &sett
             int index = Bsf(mask);
             mask &= mask - 1;
             f.createNode(grandChildRecords[index], (u32)numGrandChildren[index], &node[i]);
-            f.updateNode(&node[i], childNodes[index], leafNodes[index],
-                         grandChildOffsets[index], numGrandChildren[index]);
+            f.updateNode(&node[i], basePtrs[index], grandChildOffsets[index],
+                         numGrandChildren[index]);
         }
         threadLocalStatistics[GetThreadIndex()].misc2 += numChildNodes;
-        childNode = BVHNode<N>::EncodeQuantizedCompressedNode(node);
-    }
-    else
-    {
-        childNode = BVHNode<N>::EncodeEmpty();
     }
     // Allocate the leaves
     if (primTotal)
     {
-        primIDs = PushArrayNoZeroTagged(currentArena, LeafType, primTotal, MemoryType_BVH);
+        primIDs      = (LeafType *)((NodeType *)allocPtr + numChildNodes);
         int leafMask = childLeafMask;
         int offset   = 0;
         // Fill out leaf information
@@ -610,13 +605,9 @@ void BVHBuilder<N, BuildFunctions>::BuildCompressedBVH(const BuildSettings &sett
             Assert(begin == end);
             offsets[index] = offset;
         }
-        // NOTE: this count isn't used
-        childLeaf = BVHNode<N>::EncodeLeaf(primIDs, 1);
+        threadLocalStatistics[GetThreadIndex()].misc += primTotal;
     }
-    else
-    {
-        childLeaf = BVHNode<N>::EncodeEmpty();
-    }
+    basePtr = BVHNode<N>::EncodeQuantizedCompressedNode((NodeType *)allocPtr);
 }
 
 template <i32 N, typename BuildFunctions>
@@ -630,14 +621,11 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildCompressedBVH(BuildSettings setti
     bool parallel = record.count >= 8 * 1024;
 
     Record childRecords[N];
-    int numChildren = 0;
-    BVHNode<N> childNode;
-    childNode.data = 0;
-    BVHNode<N> leafNode;
-    leafNode.data  = 0;
-    int offsets[N] = {};
-    BuildCompressedBVH(settings, record, childRecords, numChildren, childNode, leafNode,
-                       offsets, parallel);
+    int numChildren    = 0;
+    BVHNode<N> basePtr = {};
+    int offsets[N]     = {};
+    BuildCompressedBVH(settings, record, childRecords, numChildren, basePtr, offsets,
+                       parallel);
 
     Arena *currentArena = arenas[GetThreadIndex()];
     // If the root is not a leaf (normal case)
@@ -645,7 +633,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildCompressedBVH(BuildSettings setti
     {
         NodeType *rootNode = PushStructNoZeroTagged(currentArena, NodeType, MemoryType_BVH);
         f.createNode(childRecords, numChildren, rootNode);
-        f.updateNode(rootNode, childNode, leafNode, offsets, numChildren);
+        f.updateNode(rootNode, basePtr, offsets, numChildren);
         return BVHNode<N>::EncodeQuantizedCompressedNode(rootNode);
     }
     else
