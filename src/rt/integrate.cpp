@@ -329,23 +329,23 @@ Vec3f OffsetRayOrigin(const Vec3f &p, const Vec3f &err, const Vec3f &n, const Ve
 bool Occluded(Scene *scene, Ray2 &ray)
 {
     Assert(scene->scene.occludedFunc);
-    return scene->scene.occludedFunc(&scene->scene, scene->scene.nodePtr, ray);
+    return scene->scene.occludedFunc(&scene->scene, StackEntry(scene->scene.nodePtr, ray.tFar),
+                                     ray);
 }
 bool Occluded(Scene *scene, Ray2 &r, SurfaceInteraction &si, LightSample &ls)
 {
     const f32 shadowRayEpsilon = 1 - .0001f;
 
     Vec3f from = OffsetRayOrigin(si.p, si.pError, si.n, ls.wi);
-    // Vec3f to                   = OffsetRayOrigin(ls.p, ls.rayOrigin);
     Ray2 ray(from, ls.samplePoint - from, shadowRayEpsilon);
-    // return BVH4QuadCLIntersectorCmp8::Occluded(ray, nodePtr);
     return Occluded(scene, ray);
 }
 
 bool Intersect(Scene *scene, Ray2 &ray, SurfaceInteraction &si)
 {
     Assert(scene->scene.intersectFunc);
-    return scene->scene.intersectFunc(&scene->scene, scene->scene.nodePtr, ray, si);
+    return scene->scene.intersectFunc(&scene->scene,
+                                      StackEntry(scene->scene.nodePtr, ray.tFar), ray, si);
 }
 
 void CalculateFilterWidths(const Ray2 &ray, const Camera &camera, const Vec3f &p,

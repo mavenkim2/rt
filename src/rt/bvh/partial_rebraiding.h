@@ -26,8 +26,13 @@ void GenerateBuildRefs(BRef *refs, ScenePrimitives *scene, u32 start, u32 count,
         cent.Extend(bounds.minP + bounds.maxP);
 
         ref->instanceID = i;
-        ref->nodePtr    = inScene->nodePtr;
-        ref->numPrims   = inScene->numFaces;
+#ifdef USE_QUANTIZE_COMPRESS
+        ref->nodePtr = uintptr_t(inScene->nodePtr.GetPtr());
+        ref->type    = inScene->nodePtr.GetType();
+#else
+        ref->nodePtr = inScene->nodePtr;
+#endif
+        ref->numPrims = inScene->numFaces;
 
         ErrorExit(ref->nodePtr.data, "Invalid scene: %u\n", index);
     }
@@ -78,7 +83,7 @@ void OpenBraid(const ScenePrimitives *scene, RecordAOSSplits &record, BRef *refs
         BRef &ref = refs[i];
         if (heuristic(ref))
         {
-            NodeType *node = getNode(ref.nodePtr);
+            NodeType *node = getNode(ref);
 
             LaneF32<DefaultN> min[3];
             LaneF32<DefaultN> max[3];
@@ -120,8 +125,10 @@ void OpenBraid(const ScenePrimitives *scene, RecordAOSSplits &record, BRef *refs
 
             ref.SafeStoreBounds(bounds0);
             ref.numPrims = Max(ref.numPrims / numC, 1u);
-            // TODO: don't hardcode this
-            ref.nodePtr = node->template Child<TLASLeaf>(0);
+            ref.nodePtr  = node->template Child<TLASLeaf>(0);
+#ifdef USE_QUANTIZE_COMPRESS
+            ref.type = node->GetType(0);
+#endif
             Assert(ref.nodePtr.data != 0);
 
             for (u32 b = 1; b < numC; b++)
@@ -135,6 +142,9 @@ void OpenBraid(const ScenePrimitives *scene, RecordAOSSplits &record, BRef *refs
                 refs[offset].instanceID = ref.instanceID;
                 refs[offset].numPrims   = ref.numPrims;
                 refs[offset].nodePtr    = node->template Child<TLASLeaf>(b);
+#ifdef USE_QUANTIZE_COMPRESS
+                refs[offset].type = node->GetType(b);
+#endif
 
                 Assert(refs[offset].nodePtr.data != 0);
 
@@ -151,13 +161,27 @@ struct GetQuantizedNode
 {
     using NodeType = QNode;
 
-    __forceinline NodeType *operator()(const BVHNodeN ptr)
+    __forceinline NodeType *operator()(const BRef &ref)
     {
-        Assert(ptr.data);
-        Assert(ptr.IsQuantizedNode());
-        return ptr.GetQuantizedNode();
+        Assert(ref.nodePtr.data);
+        Assert(ref.nodePtr.IsQuantizedNode());
+        return ref.nodePtr.GetQuantizedNode();
     }
 };
+
+#ifdef USE_QUANTIZE_COMPRESS
+struct GetQuantizedCompressedNode
+{
+    using NodeType = QCNode;
+    __forceinline QCNode *operator()(const BRef &ref)
+    {
+        Assert(ref.nodePtr.data);
+        Assert(ref.type == BVHNodeN::tyQuantizedNode);
+        // Assert(ptr.IsQuantizedNode());
+        return (QCNode *)ref.nodePtr.data;
+    }
+};
+#endif
 
 // TODO: the number of nodes that this generates can vary very very wildly (like ~6 mil), find
 // out why
@@ -192,11 +216,18 @@ struct HeuristicPartialRebraid
                 choiceDim = d;
             }
         }
-        f32 threshold  = REBRAID_THRESHOLD * maxExtent;
+        f32 threshold = REBRAID_THRESHOLD * maxExtent;
+#ifdef USE_QUANTIZE_COMPRESS
+        auto heuristic = [&](const BRef &ref) -> bool {
+            return ref.type < BVHNodeN::tyLeaf &&
+                   ref.max[choiceDim] + ref.min[choiceDim] > threshold;
+        };
+#else
         auto heuristic = [&](const BRef &ref) -> bool {
             return !ref.nodePtr.IsLeaf() &&
                    ref.max[choiceDim] + ref.min[choiceDim] > threshold;
         };
+#endif
 
         u64 popPos = 0;
         // conditions to test:
@@ -233,25 +264,26 @@ struct HeuristicPartialRebraid
                     bool sameType = true;
                 };
                 Props prop;
-                ParallelForOutput output = ParallelFor<Props>(
-                    temp, record.start, record.count, PARALLEL_THRESHOLD,
-                    [&](Props &props, u32 jobID, u32 start, u32 count) {
-                        bool commonGeomID = true;
-                        u32 openCount     = 0;
-                        for (u32 i = start; i < start + count; i++)
-                        {
-                            const BRef &ref = buildRefs[i];
-                            u32 objectID    = instances[ref.instanceID].id;
-                            commonGeomID &= objectID == geomID;
-                            if (heuristic(ref))
-                            {
-                                u32 numToAdd = getNode(ref.nodePtr)->GetNumChildren() - 1;
-                                openCount += numToAdd;
-                            }
-                        }
-                        props.sameType &= commonGeomID;
-                        props.count = openCount;
-                    });
+                ParallelForOutput output =
+                    ParallelFor<Props>(temp, record.start, record.count, PARALLEL_THRESHOLD,
+                                       [&](Props &props, u32 jobID, u32 start, u32 count) {
+                                           bool commonGeomID = true;
+                                           u32 openCount     = 0;
+                                           for (u32 i = start; i < start + count; i++)
+                                           {
+                                               const BRef &ref = buildRefs[i];
+                                               u32 objectID    = instances[ref.instanceID].id;
+                                               commonGeomID &= objectID == geomID;
+                                               if (heuristic(ref))
+                                               {
+                                                   u32 numToAdd =
+                                                       getNode(ref)->GetNumChildren() - 1;
+                                                   openCount += numToAdd;
+                                               }
+                                           }
+                                           props.sameType &= commonGeomID;
+                                           props.count = openCount;
+                                       });
                 Reduce(prop, output, [&](Props &l, const Props &r) {
                     l.sameType &= r.sameType;
                     l.count += r.count;
@@ -296,7 +328,7 @@ struct HeuristicPartialRebraid
                     const BRef &ref = buildRefs[i];
                     u32 objectID    = instances[ref.instanceID].id;
                     commonGeomID &= objectID == geomID;
-                    if (heuristic(ref)) count += getNode(ref.nodePtr)->GetNumChildren() - 1;
+                    if (heuristic(ref)) count += getNode(ref)->GetNumChildren() - 1;
                 }
                 if (commonGeomID)
                 {

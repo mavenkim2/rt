@@ -672,12 +672,15 @@ struct ShapeSample
     f32 pdf;
 };
 
+template <int N>
+struct StackEntry;
+
 struct ScenePrimitives
 {
     static const int maxSceneDepth = 4;
-    typedef bool (*IntersectFunc)(ScenePrimitives *, BVHNodeN, Ray2 &,
+    typedef bool (*IntersectFunc)(ScenePrimitives *, StackEntry<DefaultN>, Ray2 &,
                                   SurfaceInteractions<1> &);
-    typedef bool (*OccludedFunc)(ScenePrimitives *, BVHNodeN, Ray2 &);
+    typedef bool (*OccludedFunc)(ScenePrimitives *, StackEntry<DefaultN>, Ray2 &);
 
     string filename;
 

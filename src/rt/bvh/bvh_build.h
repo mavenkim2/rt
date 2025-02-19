@@ -54,7 +54,6 @@ struct CreateQuantizedNode
         {
             bounds = Max(bounds, Lane8F32::Load(&records[i].geomBounds));
         }
-        // result->meta        = u8((1u << numRecords) - 1);
         Lane4F32 boundsMinP = -Extract4<0>(bounds);
         Lane4F32 boundsMaxP = Extract4<1>(bounds);
         result->minP        = ToVec3f(boundsMinP);
@@ -164,21 +163,22 @@ struct UpdateQuantizedCompressedNode
 {
     using NodeType = QuantizedCompressedNode<N>;
     __forceinline void operator()(NodeType *parent, BVHNode<N> &childNodes,
-                                  BVHNode<N> &childLeaves, int offsets[N], int numChildren,
-                                  int childLeafMask)
+                                  BVHNode<N> &childLeaves, int offsets[N], int numChildren)
     {
         parent->childrenBase = childNodes;
         parent->leafBase     = childLeaves;
-        parent->baseMeta     = (u8)childLeafMask;
-        int total            = 0;
+        parent->baseMeta     = 0;
+        int currentOffset    = 0;
         for (int i = 0; i < numChildren; i++)
         {
-            total += offsets[i];
-            parent->meta[i] = total;
+            parent->baseMeta |= bool(offsets[i]) << i;
+            currentOffset = Max(offsets[i], currentOffset);
+            Assert(!i || (currentOffset - parent->meta[i - 1] <= 7));
+            parent->meta[i] = currentOffset;
         }
         for (u32 j = numChildren; j < N; j++)
         {
-            parent->meta[j] = 0xff;
+            parent->meta[j] = NodeType::EmptyNodeValue;
         }
     }
 };
@@ -213,12 +213,6 @@ struct BuildFuncs
     Heuristic heuristic;
 };
 
-template <i32 N>
-using TLAS_PRB_QuantizedNode_Funcs =
-    BuildFuncs<N, HeuristicPartialRebraid<GetQuantizedNode>, QuantizedNode<N>,
-               CreateQuantizedNode<N>, UpdateQuantizedNode<N>, TLASLeaf,
-               CompressedLeafNode<N>>;
-
 template <i32 N, typename BuildFunctions>
 struct BVHBuilder
 {
@@ -251,9 +245,6 @@ struct BVHBuilder
 
     BVHNode<N> BuildCompressedBVH(BuildSettings settings, Arena **inArenas, Record &record);
 };
-
-template <i32 N>
-using PartialRebraidBuilder = BVHBuilder<N, TLAS_PRB_QuantizedNode_Funcs<N>>;
 
 template <i32 N, typename BuildFunctions>
 BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVHRoot(BuildSettings settings, Record &record)
@@ -584,7 +575,7 @@ void BVHBuilder<N, BuildFunctions>::BuildCompressedBVH(const BuildSettings &sett
             mask &= mask - 1;
             f.createNode(grandChildRecords[index], (u32)numGrandChildren[index], &node[i]);
             f.updateNode(&node[i], childNodes[index], leafNodes[index],
-                         grandChildOffsets[index], numGrandChildren[index], childLeafMask);
+                         grandChildOffsets[index], numGrandChildren[index]);
         }
         threadLocalStatistics[GetThreadIndex()].misc2 += numChildNodes;
         childNode = BVHNode<N>::EncodeQuantizedCompressedNode(node);
@@ -605,6 +596,7 @@ void BVHBuilder<N, BuildFunctions>::BuildCompressedBVH(const BuildSettings &sett
             int index = Bsf(leafMask);
             leafMask &= leafMask - 1;
             int numPrims = (childRecords[index].count + blockAdd) >> blockShift;
+            Assert(numPrims <= settings.maxLeafSize);
 
             int offsetStart = offset;
             u32 begin       = childRecords[index].start;
@@ -651,18 +643,9 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildCompressedBVH(BuildSettings setti
     // If the root is not a leaf (normal case)
     if (numChildren)
     {
-        int leafMask = 0;
-        for (int i = 0; i < numChildren; i++)
-        {
-            // If the child is a leaf, the offset is nonzero
-            if (offsets[i] != 0)
-            {
-                leafMask |= (1 << i);
-            }
-        }
         NodeType *rootNode = PushStructNoZeroTagged(currentArena, NodeType, MemoryType_BVH);
         f.createNode(childRecords, numChildren, rootNode);
-        f.updateNode(rootNode, childNode, leafNode, offsets, numChildren, leafMask);
+        f.updateNode(rootNode, childNode, leafNode, offsets, numChildren);
         return BVHNode<N>::EncodeQuantizedCompressedNode(rootNode);
     }
     else
@@ -724,46 +707,21 @@ struct BVHHelper<N, GeometryType::CatmullClark, PrimRef>
 };
 
 template <i32 N, i32 K, GeometryType type, typename PrimRef>
-BVHNode<N> BuildQuantizedCompressedBVH(BuildSettings settings, Arena **inArenas,
-                                       const ScenePrimitives *scene, PrimRef *ref,
-                                       RecordAOSSplits &record)
-{
-    using BVHHelper = BVHHelper<K, type, PrimRef>;
-    using Prim      = typename BVHHelper::PrimType;
-    using BuildType =
-        BuildFuncs<N, HeuristicObjectBinning<PrimRef>, QuantizedCompressedNode<N>,
-                   CreateQuantizedNode<N>, UpdateQuantizedCompressedNode<N>, Prim>;
-
-    using Builder = BVHBuilder<N, BuildType>;
-    Builder builder;
-    using Heuristic       = typename Builder::Heuristic;
-    settings.logBlockSize = Bsf(K);
-    new (&builder.heuristic) Heuristic(ref, scene, settings.logBlockSize);
-    builder.primRefs = ref;
-    builder.scene    = scene;
-    return builder.BuildCompressedBVH(settings, inArenas, record);
-}
-
-template <typename PrimRef>
-__forceinline BVHNodeN
-BuildQuantizedCompressedCatmullClarkBVH(BuildSettings settings, Arena **inArenas,
-                                        const ScenePrimitives *scene, PrimRef *refs,
-                                        RecordAOSSplits &record)
-{
-    return BuildQuantizedCompressedBVH<8, 1, GeometryType::CatmullClark>(settings, inArenas,
-                                                                         scene, refs, record);
-}
-
-template <i32 N, i32 K, GeometryType type, typename PrimRef>
 BVHNode<N> BuildQuantizedBVH(BuildSettings settings, Arena **inArenas,
                              const ScenePrimitives *scene, PrimRef *ref,
                              RecordAOSSplits &record)
 {
     using BVHHelper = BVHHelper<K, type, PrimRef>;
     using Prim      = typename BVHHelper::PrimType;
+#ifdef USE_QUANTIZE_COMPRESS
+    using BuildType =
+        BuildFuncs<N, HeuristicObjectBinning<PrimRef>, QuantizedCompressedNode<N>,
+                   CreateQuantizedNode<N>, UpdateQuantizedCompressedNode<N>, Prim>;
+#else
     using BuildType = BuildFuncs<N, HeuristicObjectBinning<PrimRef>, QuantizedNode<N>,
                                  CreateQuantizedNode<N>, UpdateQuantizedNode<N>, Prim,
                                  CompressedLeafNode<N>>;
+#endif
 
     using Builder = BVHBuilder<N, BuildType>;
     Builder builder;
@@ -772,7 +730,11 @@ BVHNode<N> BuildQuantizedBVH(BuildSettings settings, Arena **inArenas,
     new (&builder.heuristic) Heuristic(ref, scene, settings.logBlockSize);
     builder.primRefs = ref;
     builder.scene    = scene;
+#ifdef USE_QUANTIZE_COMPRESS
+    return builder.BuildCompressedBVH(settings, inArenas, record);
+#else
     return builder.BuildBVH(settings, inArenas, record);
+#endif
 }
 
 template <typename PrimRef>
@@ -792,10 +754,16 @@ BVHNode<N> BuildQuantizedSBVH(BuildSettings settings, Arena **inArenas,
     using BVHHelper = BVHHelper<K, type, PrimRef>;
     using Polygon8  = typename BVHHelper::Polygon8;
     using Prim      = typename BVHHelper::PrimType;
+#ifdef USE_QUANTIZE_COMPRESS
+    using BuildType =
+        BuildFuncs<N, HeuristicSpatialSplits<PrimRef, Polygon8>, QuantizedCompressedNode<N>,
+                   CreateQuantizedNode<N>, UpdateQuantizedCompressedNode<N>, Prim>;
+#else
     using BuildType = BuildFuncs<N, HeuristicSpatialSplits<PrimRef, Polygon8>,
                                  QuantizedNode<N>, CreateQuantizedNode<N>,
                                  UpdateQuantizedNode<N>, Prim, CompressedLeafNode<N>>;
-    using Builder   = BVHBuilder<N, BuildType>;
+#endif
+    using Builder = BVHBuilder<N, BuildType>;
     Builder builder;
     using Heuristic       = typename Builder::Heuristic;
     settings.logBlockSize = Bsf(K);
@@ -803,25 +771,11 @@ BVHNode<N> BuildQuantizedSBVH(BuildSettings settings, Arena **inArenas,
         Heuristic(ref, scene, HalfArea(record.geomBounds), settings.logBlockSize);
     builder.primRefs = ref;
     builder.scene    = scene;
+#ifdef USE_QUANTIZE_COMPRESS
+    return builder.BuildCompressedBVH(settings, inArenas, record);
+#else
     return builder.BuildBVH(settings, inArenas, record);
-}
-
-template <typename PrimRef>
-__forceinline BVHNodeN BuildQuantizedTriSBVH(BuildSettings settings, Arena **inArenas,
-                                             const ScenePrimitives *scene, PrimRef *refs,
-                                             RecordAOSSplits &record)
-{
-    return BuildQuantizedSBVH<DefaultN, 8, GeometryType::TriangleMesh>(settings, inArenas,
-                                                                       scene, refs, record);
-}
-
-template <typename PrimRef>
-__forceinline BVHNodeN BuildQuantizedQuadSBVH(BuildSettings settings, Arena **inArenas,
-                                              const ScenePrimitives *scene, PrimRef *refs,
-                                              RecordAOSSplits &record)
-{
-    return BuildQuantizedSBVH<DefaultN, 8, GeometryType::QuadMesh>(settings, inArenas, scene,
-                                                                   refs, record);
+#endif
 }
 
 template <GeometryType type, typename PrimRef>
@@ -836,13 +790,29 @@ template <i32 N>
 BVHNode<N> BuildTLASQuantized(BuildSettings settings, Arena **inArenas, ScenePrimitives *scene,
                               BuildRef<N> *refs, RecordAOSSplits &record)
 {
-    PartialRebraidBuilder<N> builder;
-    using Heuristic = typename decltype(builder)::Heuristic;
+#ifdef USE_QUANTIZE_COMPRESS
+    using BuildType = BuildFuncs<N, HeuristicPartialRebraid<GetQuantizedCompressedNode>,
+                                 QuantizedCompressedNode<N>, CreateQuantizedNode<N>,
+                                 UpdateQuantizedCompressedNode<N>, TLASLeaf>;
+#else
+    using BuildType = BuildFuncs<N, HeuristicPartialRebraid<GetQuantizedNode>,
+                                 QuantizedNode<N>, CreateQuantizedNode<N>,
+                                 UpdateQuantizedNode<N>, TLASLeaf, CompressedLeafNode<N>>;
+#endif
+
+    using Builder = BVHBuilder<N, BuildType>;
+
+    Builder builder;
+    using Heuristic = typename Builder::Heuristic;
     new (&builder.heuristic) Heuristic(scene, refs, settings.logBlockSize);
     settings.logBlockSize = 0;
     builder.primRefs      = refs;
     builder.scene         = scene;
+#ifdef USE_QUANTIZE_COMPRESS
+    return builder.BuildCompressedBVH(settings, inArenas, record);
+#else
     return builder.BuildBVH(settings, inArenas, record);
+#endif
 }
 
 } // namespace rt

@@ -288,51 +288,40 @@ void RenderSIMD(Arena *arena, RenderParams2 &params)
         Assert(globals->shadingQueues[i].count == 0);
     }
 
-    scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
-        u32 tileX = jobID % tileCountX;
-        u32 tileY = jobID / tileCountX;
-        Vec2u minPixelBounds(params.pixelMin[0] + tileWidth * tileX,
-                             params.pixelMin[1] + tileHeight * tileY);
-        Vec2u maxPixelBounds(
-            Min(params.pixelMin[0] + tileWidth * (tileX + 1), params.pixelMin[0] + pixelWidth),
-            Min(params.pixelMin[1] + tileHeight * (tileY + 1),
-                params.pixelMin[1] + pixelHeight));
+    ParallelFor2D(Vec2i(params.pixelMin),
+                  Vec2i(params.pixelMin) + Vec2i((int)pixelWidth, (int)pixelHeight),
+                  Vec2i(tileWidth, tileHeight), [&](int jobID, Vec2i start, Vec2i end) {
+                      for (u32 y = start.y; y < end.y; y++)
+                      {
+                          for (u32 x = start.x; x < end.x; x++)
+                          {
+                              u32 *out = GetPixelPointer(&image, x, y);
 
-        Assert(maxPixelBounds.x >= minPixelBounds.x && minPixelBounds.x >= 0 &&
-               maxPixelBounds.x <= width);
-        Assert(maxPixelBounds.y >= minPixelBounds.y && minPixelBounds.y >= 0 &&
-               maxPixelBounds.y <= height);
+                              Vec3f rgb = globals->rgbValues[x + image.width * y];
 
-        for (u32 y = minPixelBounds.y; y < maxPixelBounds.y; y++)
-        {
-            for (u32 x = minPixelBounds.x; x < maxPixelBounds.x; x++)
-            {
-                u32 *out = GetPixelPointer(&image, x, y);
+                              rgb /= f32(spp);
+                              rgb = Mul(RGBColorSpace::sRGB->XYZToRGB, rgb);
+                              if (rgb.x != rgb.x) rgb.x = 0.f;
+                              if (rgb.y != rgb.y) rgb.y = 0.f;
+                              if (rgb.z != rgb.z) rgb.z = 0.f;
 
-                Vec3f rgb = globals->rgbValues[x + image.width * y];
+                              // f32 r = 255.f * rgb.x;
+                              // f32 g = 255.f * rgb.y;
+                              // f32 b = 255.f * rgb.z;
+                              f32 r = 255.f * ExactLinearToSRGB(rgb.x);
+                              f32 g = 255.f * ExactLinearToSRGB(rgb.y);
+                              f32 b = 255.f * ExactLinearToSRGB(rgb.z);
+                              f32 a = 255.f;
 
-                rgb /= f32(spp);
-                rgb = Mul(RGBColorSpace::sRGB->XYZToRGB, rgb);
-                if (rgb.x != rgb.x) rgb.x = 0.f;
-                if (rgb.y != rgb.y) rgb.y = 0.f;
-                if (rgb.z != rgb.z) rgb.z = 0.f;
+                              Assert(r <= 255.f && g <= 255.f && b <= 255.f);
 
-                // f32 r = 255.f * rgb.x;
-                // f32 g = 255.f * rgb.y;
-                // f32 b = 255.f * rgb.z;
-                f32 r = 255.f * ExactLinearToSRGB(rgb.x);
-                f32 g = 255.f * ExactLinearToSRGB(rgb.y);
-                f32 b = 255.f * ExactLinearToSRGB(rgb.z);
-                f32 a = 255.f;
-
-                Assert(r <= 255.f && g <= 255.f && b <= 255.f);
-
-                u32 color = (RoundFloatToU32(a) << 24) | (RoundFloatToU32(r) << 16) |
-                            (RoundFloatToU32(g) << 8) | (RoundFloatToU32(b) << 0);
-                *out = color;
-            }
-        }
-    });
+                              u32 color =
+                                  (RoundFloatToU32(a) << 24) | (RoundFloatToU32(r) << 16) |
+                                  (RoundFloatToU32(g) << 8) | (RoundFloatToU32(b) << 0);
+                              *out = color;
+                          }
+                      }
+                  });
     WriteImage(&image, "image.bmp");
     printf("done\n");
 }

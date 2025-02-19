@@ -182,7 +182,7 @@ void TLASLeaf::GetData(const ScenePrimitives *scene, AffineSpace *&t,
                        ScenePrimitives *&childScene)
 {
     t          = &scene->affineTransforms[transformIndex];
-    childScene = scene->childScenes[sceneIndex];
+    childScene = scene->childScenes[GetSceneIndex()];
 }
 
 } // namespace rt
