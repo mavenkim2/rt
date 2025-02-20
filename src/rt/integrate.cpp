@@ -334,11 +334,14 @@ bool Occluded(Scene *scene, Ray2 &ray)
 }
 bool Occluded(Scene *scene, Ray2 &r, SurfaceInteraction &si, LightSample &ls)
 {
-    const f32 shadowRayEpsilon = 1 - .0001f;
+    const f32 shadowRayEpsilon = 1 - .001f; // 01f;
 
     Vec3f from = OffsetRayOrigin(si.p, si.pError, si.n, ls.wi);
+
+    f32 maxT = Length(ls.samplePoint - from);
     // TODO: normalize the direction
-    Ray2 ray(from, ls.samplePoint - from, shadowRayEpsilon);
+    Ray2 ray(from, Normalize(ls.samplePoint - from), maxT * .99f); // shadowRayEpsilon);
+    // Ray2 ray(from, ls.samplePoint - from, shadowRayEpsilon);
     return Occluded(scene, ray);
 }
 

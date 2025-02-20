@@ -649,6 +649,7 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
     ChunkedLinkedList<Material *, 1024> materialsList(temp.arena);
     NullMaterial *nullMaterial = PushStructConstruct(arena, NullMaterial)();
     materialsList.AddBack()    = nullMaterial;
+
     MaterialHashMap *table = PushStructConstruct(tempArena, MaterialHashMap)(tempArena, 8192);
 
     std::vector<MaterialTypes> types;
@@ -980,7 +981,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                         files.AddBack() = includeScene;
                         scheduler.Schedule(counter, [=](u32 jobID) {
                             LoadRTScene(arenas, tempArenas, state, includeScene, directory,
-                                        newNode->filename, counter);
+                                        newNode->filename, counter, renderFromWorld);
                         });
                         break;
                     }
@@ -1015,8 +1016,9 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
             // ChunkedLinkedList<Texture *, 1024, MemoryType_Texture>
             // alphaTextures(temp.arena);
 
-            int noMaterialCount       = 0;
-            auto AddMaterialAndLights = [&](Mesh &mesh) {
+            AffineSpace worldFromRender = Inverse(*renderFromWorld);
+            int noMaterialCount         = 0;
+            auto AddMaterialAndLights   = [&](Mesh &mesh) {
                 PrimitiveIndices &primIndices = indices.AddBack();
 
                 MaterialHandle materialHandle;
@@ -1044,6 +1046,22 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 {
                     u32 transformIndex = ReadInt(&tokenizer);
                     transform          = &scene->affineTransforms[transformIndex];
+                    Assert(mesh.n == 0);
+                    // Convert points to world space for BVH (since object space is
+                    // world space in this case)
+                    Assert(mesh.numVertices == 4);
+                    Vec3f newV[4];
+                    for (int i = 0; i < mesh.numVertices; i++)
+                    {
+                        newV[i] = TransformP(worldFromRender * *transform, mesh.p[i]);
+                    }
+                    mesh.p[0] = newV[0];
+                    mesh.p[1] = newV[1];
+                    mesh.p[2] = newV[2];
+                    mesh.p[3] = newV[3];
+
+                    transform = renderFromWorld;
+
                     SkipToNextChar(&tokenizer);
                 }
 
@@ -1051,7 +1069,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 if (Advance(&tokenizer, "a "))
                 {
                     ErrorExit(type == GeometryType::QuadMesh,
-                              "Only quad area lights supported for now\n");
+                                "Only quad area lights supported for now\n");
                     Assert(transform);
 
                     DiffuseAreaLight *areaLight = ParseAreaLight(
@@ -1811,7 +1829,7 @@ void ComputeTessellationParams(/*Arena *tempArena,*/ Mesh *meshes, TessellationP
 
 // NOTE: this assumes the quad is planar
 ShapeSample ScenePrimitives::SampleQuad(SurfaceInteraction &intr, Vec2f &u,
-                                        AffineSpace *transform, int geomID)
+                                        AffineSpace *renderFromObject, int geomID)
 {
     static const f32 MinSphericalSampleArea = 3e-4;
     static const f32 MaxSphericalSampleArea = 6.22;
@@ -1838,11 +1856,11 @@ ShapeSample ScenePrimitives::SampleQuad(SurfaceInteraction &intr, Vec2f &u,
         p[3] = mesh->p[4 * primID + 3];
     }
 
-    if (transform)
+    if (renderFromObject)
     {
         for (int i = 0; i < 4; i++)
         {
-            p[i] = TransformP(*transform, p[i]);
+            p[i] = TransformP(*renderFromObject, p[i]);
         }
     }
 
@@ -1874,7 +1892,7 @@ ShapeSample ScenePrimitives::SampleQuad(SurfaceInteraction &intr, Vec2f &u,
         // Then sample the triangle by area
         if (u[0] < prob)
         {
-            u[0]       = u[0] / area0;
+            u[0]       = u[0] / prob;
             Vec3f bary = SampleUniformTriangle(u);
             result.p   = bary[0] * p[0] + bary[1] * p[1] + bary[2] * p[2];
         }
@@ -1885,16 +1903,15 @@ ShapeSample ScenePrimitives::SampleQuad(SurfaceInteraction &intr, Vec2f &u,
             result.p   = bary[0] * p[0] + bary[1] * p[2] + bary[2] * p[3];
         }
         result.n   = n;
-        Vec3f wi   = Normalize(intr.p - result.p);
-        result.w   = wi;
-        result.pdf = div * LengthSquared(intr.p - result.p) / AbsDot(intr.n, wi);
+        result.w   = Normalize(result.p - intr.p);
+        result.pdf = div * LengthSquared(intr.p - result.p) / AbsDot(intr.n, result.w);
     }
     else
     {
         f32 pdf;
         result.p = SampleSphericalRectangle(intr.p, p[0], eu, ev, u, &pdf);
         result.n = n;
-        result.w = Normalize(intr.p - result.p);
+        result.w = Normalize(result.p - intr.p);
 
         // add projected solid angle measure (n dot wi) to pdf
         Vec4f w(AbsDot(v00, intr.shading.n), AbsDot(v10, intr.shading.n),

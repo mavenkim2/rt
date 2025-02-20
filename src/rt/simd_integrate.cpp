@@ -551,6 +551,7 @@ void ShadingQueueHandler(struct ShadingThreadState *state, ShadingHandle *values
                 // Choose light source for direct lighting calculation
                 if (!IsSpecular(bsdf.Flags()))
                 {
+                    // DebugBreak();
                     f32 lightU = sampler.Get1D();
                     f32 pmf;
                     Light *light = UniformLightSample(scene, lightU, &pmf);

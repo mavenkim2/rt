@@ -95,9 +95,15 @@ Vec3lfn SampleSphericalRectangle(const Vec3lfn &p, const Vec3lfn &base, const Ve
     LaneNF32 g3 = AngleBetween(-n3, n0);
 
     // Compute solid angle subtended by rectangle
-    LaneNF32 k = TwoPi * PI - g2 - g3;
+    LaneNF32 k = TwoPi - g2 - g3;
     LaneNF32 S = g0 + g1 - k;
-    *pdf       = 1.f / S;
+
+    if (S <= 0)
+    {
+        *pdf = 0.f;
+        return {};
+    }
+    *pdf = 1.f / S;
 
     LaneNF32 b0 = n0.z;
     LaneNF32 b1 = n2.z;

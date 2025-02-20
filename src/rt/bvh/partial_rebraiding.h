@@ -27,7 +27,6 @@ void GenerateBuildRefs(BRef *refs, ScenePrimitives *scene, u32 start, u32 count,
 
         ref->instanceID = i;
 #ifdef USE_QUANTIZE_COMPRESS
-        auto *node   = inScene->nodePtr.GetQuantizedCompressedNode();
         ref->nodePtr = uintptr_t(inScene->nodePtr.GetPtr());
         ref->type    = inScene->nodePtr.GetType();
 #else
@@ -75,7 +74,7 @@ void SetNodePtr(BRef *ref, Node *node, int childIndex, const ScenePrimitives *sc
     ref->type    = node->GetType(childIndex);
     Assert(scene->childScenes);
 #else
-    ref->nodePtr = node->template Child(childIndex);
+    ref->nodePtr = node->Child(childIndex);
 #endif
 }
 
@@ -103,7 +102,7 @@ void OpenBraid(const ScenePrimitives *scene, RecordAOSSplits &record, BRef *refs
             LaneF32<DefaultN> min[3];
             LaneF32<DefaultN> max[3];
 
-            node->GetBounds(min, max);
+            node->GetBounds(min[0], min[1], min[2], max[0], max[1], max[2]);
 
             Lane4F32 aosMin[DefaultN];
             Lane4F32 aosMax[DefaultN];

@@ -216,58 +216,13 @@ template <i32 N>
 struct CompressedLeafNode;
 
 template <template <i32> class Node, i32 N>
-void GetBounds(const Node<N> *node, LaneF32<N> *outMin, LaneF32<N> *outMax)
+__forceinline void GetBounds(const Node<N> *node, LaneF32<N> &outMinX, LaneF32<N> &outMinY,
+                             LaneF32<N> &outMinZ, LaneF32<N> &outMaxX, LaneF32<N> &outMaxY,
+                             LaneF32<N> &outMaxZ)
 {
     Lane4U32 lX, lY, lZ;
     Lane4U32 uX, uY, uZ;
 
-    if constexpr (N == 4)
-    {
-        lX = _mm_cvtsi32_si128(*(u32 *)node->lowerX);
-        lY = _mm_cvtsi32_si128(*(u32 *)node->lowerY);
-        lZ = _mm_cvtsi32_si128(*(u32 *)node->lowerZ);
-
-        uX = _mm_cvtsi32_si128(*(u32 *)node->upperX);
-        uY = _mm_cvtsi32_si128(*(u32 *)node->upperY);
-        uZ = _mm_cvtsi32_si128(*(u32 *)node->upperZ);
-    }
-    else
-    {
-        lX = _mm_set_epi64x(0, *(u64 *)node->lowerX);
-        lY = _mm_set_epi64x(0, *(u64 *)node->lowerY);
-        lZ = _mm_set_epi64x(0, *(u64 *)node->lowerZ);
-
-        uX = _mm_set_epi64x(0, *(u64 *)node->upperX);
-        uY = _mm_set_epi64x(0, *(u64 *)node->upperY);
-        uZ = _mm_set_epi64x(0, *(u64 *)node->upperZ);
-    }
-
-    LaneU32<N> lExpandedMinX;
-    LaneU32<N> lExpandedMinY;
-    LaneU32<N> lExpandedMinZ;
-
-    LaneU32<N> lExpandedMaxX;
-    LaneU32<N> lExpandedMaxY;
-    LaneU32<N> lExpandedMaxZ;
-    if constexpr (N == 4)
-    {
-        lExpandedMinX = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lX));
-        lExpandedMinY = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lY));
-        lExpandedMinZ = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lZ));
-
-        lExpandedMaxX = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uX));
-        lExpandedMaxY = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uY));
-        lExpandedMaxZ = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uZ));
-    }
-    else
-    {
-        lExpandedMinX = _mm256_cvtepu8_epi32(lX);
-        lExpandedMinY = _mm256_cvtepu8_epi32(lY);
-        lExpandedMinZ = _mm256_cvtepu8_epi32(lZ);
-        lExpandedMaxX = _mm256_cvtepu8_epi32(uX);
-        lExpandedMaxY = _mm256_cvtepu8_epi32(uY);
-        lExpandedMaxZ = _mm256_cvtepu8_epi32(uZ);
-    }
     LaneF32<N> minX(node->minP.x);
     LaneF32<N> minY(node->minP.y);
     LaneF32<N> minZ(node->minP.z);
@@ -282,12 +237,55 @@ void GetBounds(const Node<N> *node, LaneF32<N> *outMin, LaneF32<N> *outMax)
     LaneF32<N> scaleZ = LaneF32<N>(node->scale[2]);
 #endif
 
-    outMin[0] = FMA(LaneF32<N>(lExpandedMinX), scaleX, minX);
-    outMin[1] = FMA(LaneF32<N>(lExpandedMinY), scaleY, minY);
-    outMin[2] = FMA(LaneF32<N>(lExpandedMinZ), scaleZ, minZ);
-    outMax[0] = FMA(LaneF32<N>(lExpandedMaxX), scaleX, minX);
-    outMax[1] = FMA(LaneF32<N>(lExpandedMaxY), scaleY, minY);
-    outMax[2] = FMA(LaneF32<N>(lExpandedMaxZ), scaleZ, minZ);
+    LaneU32<N> lExpandedMinX;
+    LaneU32<N> lExpandedMinY;
+    LaneU32<N> lExpandedMinZ;
+
+    LaneU32<N> lExpandedMaxX;
+    LaneU32<N> lExpandedMaxY;
+    LaneU32<N> lExpandedMaxZ;
+
+    if constexpr (N == 4)
+    {
+        lX = _mm_cvtsi32_si128(*(u32 *)node->lowerX);
+        lY = _mm_cvtsi32_si128(*(u32 *)node->lowerY);
+        lZ = _mm_cvtsi32_si128(*(u32 *)node->lowerZ);
+
+        uX = _mm_cvtsi32_si128(*(u32 *)node->upperX);
+        uY = _mm_cvtsi32_si128(*(u32 *)node->upperY);
+        uZ = _mm_cvtsi32_si128(*(u32 *)node->upperZ);
+
+        lExpandedMinX = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lX));
+        lExpandedMinY = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lY));
+        lExpandedMinZ = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(lZ));
+        lExpandedMaxX = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uX));
+        lExpandedMaxY = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uY));
+        lExpandedMaxZ = _mm_cvtepu16_epi32(_mm_cvtepu8_epi16(uZ));
+    }
+    else
+    {
+        lX = _mm_set_epi64x(0, *(u64 *)node->lowerX);
+        lY = _mm_set_epi64x(0, *(u64 *)node->lowerY);
+        lZ = _mm_set_epi64x(0, *(u64 *)node->lowerZ);
+
+        uX = _mm_set_epi64x(0, *(u64 *)node->upperX);
+        uY = _mm_set_epi64x(0, *(u64 *)node->upperY);
+        uZ = _mm_set_epi64x(0, *(u64 *)node->upperZ);
+
+        lExpandedMinX = _mm256_cvtepu8_epi32(lX);
+        lExpandedMinY = _mm256_cvtepu8_epi32(lY);
+        lExpandedMinZ = _mm256_cvtepu8_epi32(lZ);
+        lExpandedMaxX = _mm256_cvtepu8_epi32(uX);
+        lExpandedMaxY = _mm256_cvtepu8_epi32(uY);
+        lExpandedMaxZ = _mm256_cvtepu8_epi32(uZ);
+    }
+
+    outMinX = FMA(LaneF32<N>(lExpandedMinX), scaleX, minX);
+    outMinY = FMA(LaneF32<N>(lExpandedMinY), scaleY, minY);
+    outMinZ = FMA(LaneF32<N>(lExpandedMinZ), scaleZ, minZ);
+    outMaxX = FMA(LaneF32<N>(lExpandedMaxX), scaleX, minX);
+    outMaxY = FMA(LaneF32<N>(lExpandedMaxY), scaleY, minY);
+    outMaxZ = FMA(LaneF32<N>(lExpandedMaxZ), scaleZ, minZ);
 }
 
 template <i32 N>
@@ -456,9 +454,29 @@ struct QuantizedNode
 
     u32 GetType(u32 childIndex) const { return children[childIndex].GetType(); }
 
-    void GetBounds(LaneF32<N> *outMin, LaneF32<N> *outMax) const
+    __forceinline void GetBounds(LaneF32<N> &outMinX, LaneF32<N> &outMinY, LaneF32<N> &outMinZ,
+                                 LaneF32<N> &outMaxX, LaneF32<N> &outMaxY,
+                                 LaneF32<N> &outMaxZ) const
     {
-        ::GetBounds(this, outMin, outMax);
+        ::GetBounds(this, outMinX, outMinY, outMinZ, outMaxX, outMaxY, outMaxZ);
+    }
+
+    LaneF32<N> GetValid() const
+    {
+        const Lane8F32 compare = AsFloat(Lane8U32(BVHNode<N>::tyEmpty));
+        if constexpr (N == 4)
+        {
+            Assert(0);
+            // Lane8U32 lane = Lane8U32::LoadU(children);
+        }
+        else
+        {
+            Lane8F32 lane1 = Abs(Lane8F32::LoadU(children));
+            Lane8F32 lane2 = Abs(Lane8F32::LoadU(children + 4));
+            Lane8F32 r1    = Shuffle<0, 2, 4, 6, 0, 0, 0, 0>(lane1 > compare);
+            Lane8F32 r2    = Shuffle<0, 0, 0, 0, 0, 2, 4, 6>(lane2 > compare);
+            return Blend<0xf0>(r1, r2);
+        }
     }
 };
 
@@ -573,9 +591,11 @@ struct QuantizedCompressedNode
         }
     }
 
-    void GetBounds(LaneF32<N> *outMin, LaneF32<N> *outMax) const
+    __forceinline void GetBounds(LaneF32<N> &outMinX, LaneF32<N> &outMinY, LaneF32<N> &outMinZ,
+                                 LaneF32<N> &outMaxX, LaneF32<N> &outMaxY,
+                                 LaneF32<N> &outMaxZ) const
     {
-        ::GetBounds(this, outMin, outMax);
+        ::GetBounds(this, outMinX, outMinY, outMinZ, outMaxX, outMaxY, outMaxZ);
     }
 };
 
@@ -605,14 +625,29 @@ struct CompressedLeafNode
     u8 upperZ[N];
 
     Vec3f minP;
-    void GetBounds(LaneF32<N> *outMin, LaneF32<N> *outMax) const
+    __forceinline void GetBounds(LaneF32<N> &outMinX, LaneF32<N> &outMinY, LaneF32<N> &outMinZ,
+                                 LaneF32<N> &outMaxX, LaneF32<N> &outMaxY,
+                                 LaneF32<N> &outMaxZ) const
     {
-        ::GetBounds(this, outMin, outMax);
+        ::GetBounds(this, outMinX, outMinY, outMinZ, outMaxX, outMaxY, outMaxZ);
     }
     BVHNode<N> Child(u32 index) const { return BVHNode<N>(index); }
     u32 GetType(u32 childIndex) const
     {
         return offsets[childIndex] == 0 ? BVHNode<N>::tyEmpty : 0;
+    }
+    LaneF32<N> GetValid() const
+    {
+        if constexpr (N == 4)
+        {
+            Lane4U32 lane = _mm_cvtsi32_si128(*(u32 *)offsets);
+            return lane != Lane4U32(0);
+        }
+        else
+        {
+            Lane8U32 lane = _mm256_cvtepu8_epi32(_mm_set_epi64x(0, *(u64 *)offsets));
+            return lane != Lane8U32(0);
+        }
     }
 };
 
@@ -651,25 +686,6 @@ struct LeafPrim
     u32 primIDs[N];
     LeafPrim() {}
     __forceinline void Fill(const ScenePrimitives *, PrimRef *refs, u32 &begin, u32 end);
-    __forceinline void Fill(LeafPrim<1> *prims, u32 num)
-    {
-        Assert(num);
-        u32 last;
-        for (u32 i = 0; i < N; i++)
-        {
-            if (i < num)
-            {
-                geomIDs[i] = prims[i].geomIDs[0];
-                primIDs[i] = prims[i].primIDs[0];
-                last       = i;
-            }
-            else
-            {
-                geomIDs[i] = prims[last].geomIDs[0];
-                primIDs[i] = prims[last].primIDs[0];
-            }
-        }
-    }
 };
 
 template <i32 N>
@@ -679,23 +695,6 @@ struct LeafPrimCompressed
     LeafPrimCompressed() {}
     __forceinline void Fill(const ScenePrimitives *, PrimRefCompressed *refs, u32 &begin,
                             u32 end);
-    __forceinline void Fill(LeafPrimCompressed<1> *prims, u32 num)
-    {
-        Assert(num);
-        u32 last;
-        for (u32 i = 0; i < N; i++)
-        {
-            if (i < num)
-            {
-                primIDs[i] = prims[i].primIDs[0];
-                last       = i;
-            }
-            else
-            {
-                primIDs[i] = prims[last].primIDs[0];
-            }
-        }
-    }
 };
 
 template <i32 N>
