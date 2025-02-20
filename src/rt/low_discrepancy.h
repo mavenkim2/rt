@@ -1,6 +1,6 @@
 #include <emmintrin.h>
 #include <immintrin.h>
-#include <popcntintrin.h>
+// #include <popcntintrin.h>
 namespace rt
 {
 

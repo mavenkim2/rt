@@ -492,7 +492,8 @@ struct QuantizedCompressedNode
     BVHNode<N> Child(u32 i, int size) const
     {
         if (meta[i] == EmptyNodeValue) return BVHNode<N>::EncodeEmpty();
-        u32 type = baseMeta & (1 << i);
+        // u32 type = baseMeta & (1 << i);
+        bool type = (baseMeta >> i) & 1;
 
         // Calculates the index
         if (type)
@@ -509,6 +510,23 @@ struct QuantizedCompressedNode
         Assert(!basePtr.IsEmpty());
         auto *ptr = basePtr.GetQuantizedCompressedNode() + numNodes;
         return BVHNode<N>((uintptr_t)((u8 *)ptr + size * start));
+    }
+
+    void GetChildren(BVHNode<N> children[N], int size) const
+    {
+        int nodeMask  = (int)baseMeta;
+        uintptr_t ptr = (uintptr_t)basePtr.GetPtr();
+        int leafStart = PopCount(baseMeta) * sizeof(QuantizedCompressedNode<N>);
+        int nodeCount = 0;
+        for (int i = 0; i < N; i++)
+        {
+            bool type       = (nodeMask >> i) & 1;
+            int leafOffset  = leafStart + (i == 0 ? 0 : meta[i - 1] * size);
+            int childOffset = nodeCount * (int)sizeof(QuantizedCompressedNode<N>);
+            nodeCount += type;
+            int offset  = leafOffset ^ ((leafOffset ^ childOffset) & (0 - type));
+            children[i] = BVHNode<N>(ptr + offset);
+        }
     }
 
     // NOTE: nodes + leaves

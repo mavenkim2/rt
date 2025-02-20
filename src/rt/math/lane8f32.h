@@ -854,6 +854,11 @@ f32 Get(const Lane8F32 &val, u32 index)
     return val[index];
 }
 
+Lane8F32 GatherFloat(void *ptr, Lane8U32 indices)
+{
+    return _mm256_i32gather_ps((f32 *)ptr, indices, 4);
+}
+
 #if 0
 #if defined(__AVX512VL__)
 template <i32 R>

@@ -347,15 +347,25 @@ struct BVHTraverser<8, types, Prim>
 
             const u32 nodeMask = mask0 | (mask1 << 8) | (mask2 << 16) | (mask3 << 24);
 
-            u32 indexA = PopCount(~nodeMask & 0x000100ed);
-            u32 indexB = PopCount((nodeMask ^ 0x002c2c00) & 0x002c2d00);
-            u32 indexC = PopCount((nodeMask ^ 0x20121200) & 0x20123220);
-            u32 indexD = PopCount((nodeMask ^ 0x06404000) & 0x06404602);
-            u32 indexE = PopCount((nodeMask ^ 0x08808000) & 0x0a828808);
-            u32 indexF = PopCount((nodeMask ^ 0x50000000) & 0x58085010);
-            u32 indexG = PopCount((nodeMask ^ 0x80000000) & 0x94148080);
-            u32 indexH = PopCount(nodeMask & 0xe0e10000);
+            u32 indices[8] = {PopCount(~nodeMask & 0x000100ed),
+                              PopCount((nodeMask ^ 0x002c2c00) & 0x002c2d00),
+                              PopCount((nodeMask ^ 0x20121200) & 0x20123220),
+                              PopCount((nodeMask ^ 0x06404000) & 0x06404602),
+                              PopCount((nodeMask ^ 0x08808000) & 0x0a828808),
+                              PopCount((nodeMask ^ 0x50000000) & 0x58085010),
+                              PopCount((nodeMask ^ 0x80000000) & 0x94148080),
+                              PopCount(nodeMask & 0xe0e10000)};
 
+            BVHNode8 childNodes[8];
+            node->GetChildren(childNodes, sizeof(Prim));
+
+            for (int i = 0; i < 8; i++)
+            {
+                stack[stackPtr + ((numNodes - 1 - indices[i]) & 7)] =
+                    StackEntry(childNodes[i], node->GetType(i), t_hgfedcba[i]);
+            }
+
+#if 0
             stack[stackPtr + ((numNodes - 1 - indexA) & 7)] =
                 StackEntry::template Create<Prim>(node, 0, t_hgfedcba[0]);
             stack[stackPtr + ((numNodes - 1 - indexB) & 7)] =
@@ -373,6 +383,7 @@ struct BVHTraverser<8, types, Prim>
                 StackEntry::template Create<Prim>(node, 6, t_hgfedcba[6]);
             stack[stackPtr + ((numNodes - 1 - indexH) & 7)] =
                 StackEntry::template Create<Prim>(node, 7, t_hgfedcba[7]);
+#endif
 
 #if 0
             for (u32 i = 0; i < numNodes; i++)
@@ -1067,9 +1078,6 @@ struct CatClarkPatchIntersector
         auto trueMask  = Mask<Lane8F32>(TrueTy());
         auto falseMask = Mask<Lane8F32>(FalseTy());
 
-        Lane4F32 v0[N];
-        Lane4F32 v1[N];
-        Lane4F32 v2[N];
         alignas(4 * N) u32 patchIDs[N];
         alignas(4 * N) u32 geomIDs[N];
         alignas(4 * N) u32 primIDs[N];
@@ -1087,36 +1095,45 @@ struct CatClarkPatchIntersector
 
         OpenSubdivMesh *meshes = (OpenSubdivMesh *)scene->primitives;
 
-        auto EmptyQueue = [&]() {
-            Vec3lf8 triV0, triV1, triV2;
-            Transpose<N>(v0, triV0);
-            Transpose<N>(v1, triV1);
-            Transpose<N>(v2, triV2);
-
-            TriangleIntersection<N> triItr;
-
-            Mask<LaneF32<N>> mask = TriangleIntersect(r, itr.t, triV0, triV1, triV2, triItr);
-            mask &= Lane8F32::Mask((1u << queueCount) - 1);
-            outMask |= mask;
-
-            itr.u       = Select(mask, triItr.u, itr.u);
-            itr.v       = Select(mask, triItr.v, itr.v);
-            itr.t       = Select(mask, triItr.t, itr.t);
-            itr.geomIDs = AsUInt(
-                Select(mask, AsFloat(MemSimdU32<N>::LoadU(geomIDs)), AsFloat(itr.geomIDs)));
-            itr.primIDs = AsUInt(
-                Select(mask, AsFloat(MemSimdU32<N>::LoadU(primIDs)), AsFloat(itr.primIDs)));
-            patchID = AsUInt(
-                Select(mask, AsFloat(MemSimdU32<N>::LoadU(patchIDs)), AsFloat(patchID)));
-
-            queueCount = 0;
-        };
-        auto FlushQueue = [&]() {
-            if (queueCount == N) EmptyQueue();
-        };
-
         for (u32 i = 0; i < num; i++)
         {
+            alignas(4 * N) u32 triIndices[3][N] = {};
+            auto EmptyQueue                     = [&](f32 *vertices) {
+                Vec3lf8 triV0, triV1, triV2;
+                Lane8U32 v0Indices = Lane8U32::Load(triIndices[0]);
+                Lane8U32 v1Indices = Lane8U32::Load(triIndices[1]);
+                Lane8U32 v2Indices = Lane8U32::Load(triIndices[2]);
+                triV0.x            = GatherFloat(vertices, v0Indices);
+                triV0.y            = GatherFloat(vertices, v0Indices + 1);
+                triV0.z            = GatherFloat(vertices, v0Indices + 2);
+
+                triV1.x = GatherFloat(vertices, v1Indices);
+                triV1.y = GatherFloat(vertices, v1Indices + 1);
+                triV1.z = GatherFloat(vertices, v1Indices + 2);
+
+                triV2.x = GatherFloat(vertices, v2Indices);
+                triV2.y = GatherFloat(vertices, v2Indices + 1);
+                triV2.z = GatherFloat(vertices, v2Indices + 2);
+
+                TriangleIntersection<N> triItr;
+
+                Mask<LaneF32<N>> mask =
+                    TriangleIntersect(r, itr.t, triV0, triV1, triV2, triItr);
+                mask &= Lane8F32::Mask((1u << queueCount) - 1);
+                outMask |= mask;
+
+                itr.u       = Select(mask, triItr.u, itr.u);
+                itr.v       = Select(mask, triItr.v, itr.v);
+                itr.t       = Select(mask, triItr.t, itr.t);
+                itr.geomIDs = AsUInt(Select(mask, AsFloat(MemSimdU32<N>::LoadU(geomIDs)),
+                                                                AsFloat(itr.geomIDs)));
+                itr.primIDs = AsUInt(Select(mask, AsFloat(MemSimdU32<N>::LoadU(primIDs)),
+                                                                AsFloat(itr.primIDs)));
+                patchID     = AsUInt(
+                    Select(mask, AsFloat(MemSimdU32<N>::LoadU(patchIDs)), AsFloat(patchID)));
+
+                queueCount = 0;
+            };
             Primitive &prim = primitives[i];
             u32 primID      = prim.primID;
             u32 bits        = prim.geomID;
@@ -1125,11 +1142,6 @@ struct CatClarkPatchIntersector
             u32 geomID                = GetTriangleIndex(bits);
             int edgeIndex             = GetMeta(bits);
 
-            if (geomID >= scene->numPrimitives)
-            {
-                auto ptr = (QuantizedCompressedNode<8> *)(&primitives[0]);
-                int stop = 5;
-            }
             Assert(geomID < scene->numPrimitives);
             OpenSubdivMesh *mesh = meshes + geomID;
             const auto &indices  = mesh->stitchingIndices;
@@ -1137,19 +1149,15 @@ struct CatClarkPatchIntersector
 
             auto PushQueue = [&](CatClarkTriangleType type, int id, int id0, int id1, int id2,
                                  int meta = 0) {
-                Vec3f p0 = vertices[id0];
-                Vec3f p1 = vertices[id1];
-                Vec3f p2 = vertices[id2];
-
-                patchIDs[queueCount] = CreatePatchID(type, meta, id);
-                geomIDs[queueCount]  = geomID;
-                primIDs[queueCount]  = primID;
-                Lane4F32::Store(v0 + queueCount, Lane4F32(p0));
-                Lane4F32::Store(v1 + queueCount, Lane4F32(p1));
-                Lane4F32::Store(v2 + queueCount, Lane4F32(p2));
+                triIndices[0][queueCount] = 3 * id0;
+                triIndices[1][queueCount] = 3 * id1;
+                triIndices[2][queueCount] = 3 * id2;
+                patchIDs[queueCount]      = CreatePatchID(type, meta, id);
+                geomIDs[queueCount]       = geomID;
+                primIDs[queueCount]       = primID;
                 queueCount++;
 
-                FlushQueue();
+                if (queueCount == N) EmptyQueue((f32 *)vertices.data);
             };
 
             switch (type)
@@ -1212,8 +1220,8 @@ struct CatClarkPatchIntersector
                 break;
                 default: Assert(0);
             }
+            if (queueCount) EmptyQueue((f32 *)vertices.data);
         }
-        if (queueCount) EmptyQueue();
 
         if (Any(outMask))
         {
