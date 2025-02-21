@@ -37,8 +37,8 @@
 *.obj
 *.jpg
 *.ppm
+
 *.png
-*.bmp
 *.exr
 data/
 .vs/
