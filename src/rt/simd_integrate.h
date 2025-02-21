@@ -65,7 +65,7 @@ static const u32 QUEUE_LENGTH = 2048; // 1024;
 // queues (representing one combination of kernels), or a lot of masking/wasted execution
 
 #define QUEUE_HANDLER(name)                                                                   \
-    void name(struct ShadingThreadState *state, void *values, u32 count)
+    void name(TempArena inScratch, struct ShadingThreadState *state, void *values, u32 count)
 
 template <typename T>
 struct ThreadLocalQueue
@@ -78,7 +78,7 @@ struct ThreadLocalQueue
 
     // bool Push(ShadingThreadState *state, const T &item);
 
-    void Push(ShadingThreadState *state, T *entries, int numEntries);
+    void Push(TempArena temp, ShadingThreadState *state, T *entries, int numEntries);
     bool Flush(ShadingThreadState *state);
 };
 
@@ -88,8 +88,8 @@ template <typename T>
 struct SharedShadeQueue
 {
     T values[QUEUE_LENGTH];
-    typedef void (*Handler)(struct ShadingThreadState *state, T *values, u32 count,
-                            Material *material, bool stop);
+    typedef void (*Handler)(TempArena temp, struct ShadingThreadState *state, T *values,
+                            u32 count, Material *material);
 
     Handler handler;
 
@@ -98,7 +98,7 @@ struct SharedShadeQueue
     Material *material;
     Mutex mutex;
 
-    void Push(ShadingThreadState *state, T *entries, int numEntries);
+    void Push(TempArena temp, ShadingThreadState *state, T *entries, int numEntries);
     bool Flush(ShadingThreadState *state);
 };
 
@@ -119,6 +119,25 @@ struct alignas(CACHE_LINE_SIZE) ShadingThreadState
     PtexTexture *texture;
 
     void *buffer;
+
+    Arena *scratchArenas[2];
+    u64 pos[2];
+    u32 last;
+    u32 current;
+
+    Arena *GetArena()
+    {
+        Assert(current != last);
+        pos[current] = ArenaPos(scratchArenas[current]);
+        current      = !current;
+    }
+
+    void FreeAndSwap()
+    {
+        Assert(current == last);
+        ArenaPopTo(scratchArenas[last], pos[last]);
+        last = !last;
+    }
 };
 
 struct ShadingGlobals
@@ -137,8 +156,8 @@ static ShadingThreadState *shadingThreadState_;
 static ShadingGlobals *shadingGlobals_;
 
 template <typename MaterialType>
-void ShadingQueueHandler(struct ShadingThreadState *state, ShadingHandle *values, u32 count,
-                         Material *material, bool stop = true);
+void ShadingQueueHandler(TempArena inScratch, struct ShadingThreadState *state,
+                         ShadingHandle *values, u32 count, Material *m);
 
 ShadingThreadState *GetShadingThreadState() { return &shadingThreadState_[GetThreadIndex()]; }
 ShadingThreadState *GetShadingThreadState(u32 index) { return &shadingThreadState_[index]; }

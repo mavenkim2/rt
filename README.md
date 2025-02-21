@@ -32,6 +32,12 @@ Currently for personal use only.
 - Ptex
 - STB
 
+## Renders: 
+NOTE: Currently missing curves and one of the trees.
+
+Rendered in 446 seconds, 1920x804, 64 spp on [Intel 32-core](https://www.lenovo.com/us/en/p/laptops/legion-laptops/legion-5-series/legion-pro-5i-gen-9-16-inch-intel/83df00apus)
+![Moana](images/image.bmp)
+
 ## Sources: 
 Includes papers, blogs, books, and other links that were helpful.
 ### Foundational
