@@ -118,7 +118,7 @@ struct PBRTFileInfo
     ChunkedLinkedList<InstanceType, 1024, MemoryType_Instance> fileInstances;
     u32 numInstances;
 
-    ChunkedLinkedList<AffineSpace, 16384, MemoryType_Transform> transforms;
+    ChunkedLinkedList<AffineSpace, 16384, MemoryType_Instance> transforms;
 
     PBRTFileInfo *imports[32];
     u32 numImports;

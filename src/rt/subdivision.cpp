@@ -690,10 +690,11 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                             [&](int jobID, int start, int count) {
                                 for (int i = start; i < start + count; i++)
                                 {
-                                    TempVertex &vertex      = tempVertices[i];
-                                    Vec3f pos               = vertex.pos / (f32)vertex.count;
-                                    // Vec3f testPos           = tessellatedVertices.vertices[i];
-                                    // Vec3f testNormal        = tessellatedVertices.normals[i];
+                                    TempVertex &vertex = tempVertices[i];
+                                    Vec3f pos          = vertex.pos / (f32)vertex.count;
+                                    // Vec3f testPos           =
+                                    // tessellatedVertices.vertices[i]; Vec3f testNormal =
+                                    // tessellatedVertices.normals[i];
                                     Vec3f normal            = Normalize(vertex.normal);
                                     outputMesh->vertices[i] = pos;
                                     outputMesh->normals[i]  = normal;

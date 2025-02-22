@@ -35,7 +35,7 @@ Currently for personal use only.
 ## Renders: 
 NOTE: Currently missing curves and one of the trees.
 
-Rendered in 446 seconds, 1920x804, 64 spp on [Intel 32-core](https://www.lenovo.com/us/en/p/laptops/legion-laptops/legion-5-series/legion-pro-5i-gen-9-16-inch-intel/83df00apus)
+Rendered in 153 seconds, 1920x804, 64 spp on [Intel 24-core](https://www.lenovo.com/us/en/p/laptops/legion-laptops/legion-5-series/legion-pro-5i-gen-9-16-inch-intel/83df00apus)
 ![Moana](images/image.bmp)
 
 ## Sources: 
@@ -43,7 +43,6 @@ Includes papers, blogs, books, and other links that were helpful.
 ### Foundational
 - [PBRT](https://pbr-book.org/4ed/contents)
 - [Robust Monte Carlo Methods for Light Transport Simulation](https://graphics.stanford.edu/papers/veach_thesis/thesis.pdf)
-- 
 
 ### BVH
 - [Compressed-Leaf Bounding Volume Hierarchies](https://www.embree.org/papers/2018-HPG-compressedleafbvh.pdf)

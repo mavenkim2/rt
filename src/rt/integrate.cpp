@@ -13,16 +13,12 @@ namespace rt
 // TODO
 // BUGS:
 // - shading normals seem wrong for some elements, check subdivision code
-// - when the build process receives garbage data, it produces a bvh that
-// causes the intersection to infinite loop?
 
 // - rare deadlock in bvh construction code
-// - reduce create file contention in ptex
-// - reduce mem alloc contention in ptex?
 // - parallelize prim ref code for cat clark patches
 // - reduce size of quantized node by using indices
 //
-// - area lights w/ light tree traversal, adaptive splitting, and accounting for BSDF
+// - light tree traversal, adaptive splitting, and accounting for BSDF
 // - https://fpsunflower.github.io/ckulla/data/many-lights-hpg2018.pdf
 // - remove duplicate materials (and maybe geometry), see if this leads to coherent texture
 // reads
@@ -59,7 +55,6 @@ void InitializePtex()
     size_t maxMem = gigabytes(4);
     // cache         = Ptex::PtexCache::create(maxFiles, maxMem, true, 0, &errorHandler);
     cache = Ptex::PtexCache::create(maxFiles, maxMem, true, &ptexInputHandler, &errorHandler);
-    // cache = Ptex::PtexCache::create(maxFiles, maxMem, true, &handler2, &errorHandler);
 }
 
 typedef u32 PathFlags;
@@ -487,13 +482,8 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
     for (;;)
     {
         SurfaceInteraction si;
-        // TODO IMPORTANT: need to robustly prevent self intersections. right now at grazing
-        // angles the reflected ray is re-intersecting with the ocean, which causes the ray to
-        // effectively transmit when it should reflect
 
-        // bool intersect = BVH4QuadCLIntersectorCmp8::Intersect(ray, scene->nodePtr, si);
         bool intersect = Intersect(scene, ray, si);
-        // BVH4TriangleCLIntersectorCmp1::Intersect(ray, scene->nodePtr, si);
 
         // If no intersection, sample "infinite" lights (e.g environment maps, sun, etc.)
         if (!intersect)
@@ -561,7 +551,6 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
         Vec3f dpdx, dpdy;
         CalculateFilterWidths(ray, camera, si.p, si.n, si.dpdu, si.dpdv, dpdx, dpdy, dudx,
                               dvdx, dudy, dvdy);
-        // f32 newRadius = ray.radius + ray.spread * si.tHit;
 
         // Calculate differential of surface parameterization w.r.t image plane (i.e.
         // dudx, dudy, dvdx, dvdy)
@@ -632,31 +621,6 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
 
         // Spawn new ray
         prevSi = si;
-        // ray.o  = si.p;
-
-        // Update spread
-        // {
-        //     BxDFFlags flags = (BxDFFlags)sample.flags;
-        //     f32 newSpread;
-        //
-        //     f32 pdfSpread = .125f / Sqrt(sample.pdf);
-        //     if (EnumHasAnyFlags(flags, BxDFFlags::Reflection))
-        //     {
-        //         Assert(sample.pdf > 0.f);
-        //         f32 spread = 2.f * si.curvature * ray.radius;
-        //         newSpread  = Max(pdfSpread, spread);
-        //     }
-        //     else if (EnumHasAnyFlags(flags, BxDFFlags::Transmission))
-        //     {
-        //         f32 spread =
-        //             sample.eta * ray.spread - (1.f - sample.eta) * si.curvature *
-        //             ray.radius;
-        //         newSpread = Max(pdfSpread, ray.spread);
-        //     }
-        //
-        //     ray.radius = newRadius;
-        //     ray.spread = Clamp(newSpread, -1.f, 1.f);
-        // }
 
         // Offset ray along geometric normal + compute specular ray differentials
         {
@@ -670,7 +634,6 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
             UpdateRayDifferentials(ray, sample.wi, si.p, si.shading.n, si.shading.dndu,
                                    si.shading.dndv, dpdx, dpdy, dudx, dvdx, dudy, dvdy,
                                    sample.eta, sample.flags);
-
             // if there is a non-specular interaction, revert to using
         }
 
@@ -1164,9 +1127,7 @@ void ConstructCachePoints(Arena **arenas, const Camera &camera,
     });
     distributions.clear();
 }
-#endif
 
-#if 0
 template <typename Sampler>
 void ManifoldNextEventEstimation(Sampler &sampler, u32 currentDepth, u32 maxDepth,
                                  SampledWavelengths &lambda)
@@ -1274,13 +1235,11 @@ void ManifoldNextEventEstimation(Sampler &sampler, u32 currentDepth, u32 maxDept
         }
     }
 }
-#endif
 
 //////////////////////////////
 // Volumes
 //
 
-#if 0
 void VolumeAggregate::Build(Arena *arena)
 {
     Scene2 *scene = GetScene();
@@ -1909,9 +1868,6 @@ NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Sam
     //     return beta * t_ray * sample.L * MISWeight(p_l, p_u);
     // }
 }
-#endif
-
-#if 0
 void VirtualDensitySegments(const RayDifferential &ray)
 {
     // TODO: things I don't understand

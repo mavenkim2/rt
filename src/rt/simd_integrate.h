@@ -14,17 +14,17 @@ struct RayState
     Vec2u pixel;
     SampledSpectrum L;
     SampledSpectrum beta;
-    f32 etaScale;
     SampledWavelengths lambda;
     // PathFlags pathFlags;
+    f32 etaScale;
     f32 bsdfPdf;
-    bool specularBounce;
     u32 depth;
+    bool specularBounce;
     struct ZSobolSampler sampler;
     SurfaceInteraction si;
 };
 
-typedef ChunkedLinkedList<RayState, 8192> RayStateList;
+typedef ChunkedLinkedList<RayState, 4096> RayStateList;
 typedef RayStateList::ChunkNode RayStateNode;
 
 struct RayStateHandle
@@ -36,7 +36,7 @@ struct RayStateHandle
     RayState *GetRayState() { return state; }
 };
 
-typedef ChunkedLinkedList<RayStateHandle, 8192> RayStateFreeList;
+typedef ChunkedLinkedList<RayStateHandle, 4096> RayStateFreeList;
 
 struct ShadingHandle
 {
@@ -44,8 +44,7 @@ struct ShadingHandle
     RayStateHandle rayStateHandle;
 };
 
-static const u32 QUEUE_LENGTH = 2048; // 1024;
-// static const u32 FLUSH_THRESHOLD = 1024; // 512;
+static const u32 QUEUE_LENGTH = 1024;
 
 // 1. intersect ray, add to shading queue
 // 2. shading queue can either be per material instance or per material type
@@ -124,20 +123,6 @@ struct alignas(CACHE_LINE_SIZE) ShadingThreadState
     u64 pos[2];
     u32 last;
     u32 current;
-
-    Arena *GetArena()
-    {
-        Assert(current != last);
-        pos[current] = ArenaPos(scratchArenas[current]);
-        current      = !current;
-    }
-
-    void FreeAndSwap()
-    {
-        Assert(current == last);
-        ArenaPopTo(scratchArenas[last], pos[last]);
-        last = !last;
-    }
 };
 
 struct ShadingGlobals

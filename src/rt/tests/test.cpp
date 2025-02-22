@@ -281,6 +281,7 @@ void TestRender(Arena *arena, Options *options = 0)
     u64 totalNodeCount           = 0;
     u64 totalBVHMemory           = 0;
     u64 totalShapeMemory         = 0;
+    u64 totalInstanceMemory      = 0;
     u64 totalNumSpatialSplits    = 0;
     u64 maxEdgeFactor            = 0;
     for (u32 i = 0; i < numProcessors; i++)
@@ -290,6 +291,7 @@ void TestRender(Arena *arena, Options *options = 0)
         totalNodeCount += threadLocalStatistics[i].misc2;
         totalBVHMemory += threadMemoryStatistics[i].totalBVHMemory;
         totalShapeMemory += threadMemoryStatistics[i].totalShapeMemory;
+        totalInstanceMemory += threadMemoryStatistics[i].totalInstanceMemory;
         totalNumSpatialSplits += threadLocalStatistics[i].misc3;
         maxEdgeFactor = Max(maxEdgeFactor, threadLocalStatistics[i].misc4);
         printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
@@ -299,6 +301,7 @@ void TestRender(Arena *arena, Options *options = 0)
     printf("total node#: %llu \n", totalNodeCount);
     printf("total bvh bytes: %llu \n", totalBVHMemory);
     printf("total shape bytes: %llu \n", totalShapeMemory);
+    printf("total instance bytes: %llu\n", totalInstanceMemory);
     printf("total # spatial splits: %llu\n", totalNumSpatialSplits);
     printf("max edge factor:  %llu\n", maxEdgeFactor);
 

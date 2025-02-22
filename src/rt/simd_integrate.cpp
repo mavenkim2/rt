@@ -106,7 +106,7 @@ RayStateHandle AllocRayState(ShadingThreadState *state)
     if (!handle.IsValid())
     {
         Assert(state->rayFreeList.totalCount == 0);
-        for (u32 i = 0; i < 8192; i++)
+        for (u32 i = 0; i < 4096; i++)
         {
             RayState *rayState           = &state->rayStates.AddBack();
             state->rayFreeList.AddBack() = RayStateHandle{rayState};

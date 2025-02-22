@@ -875,7 +875,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     bool hasMagic = Advance(&tokenizer, "RTSCENE_START ");
     ErrorExit(hasMagic, "RTScene file missing magic.\n");
 
-    string data = OS_ReadFile(arena, dataPath);
+    string data = OS_ReadFile(tempArena, dataPath);
 
     Tokenizer dataTokenizer;
     dataTokenizer.input  = data; // OS_MapFileRead(dataPath); // data;
@@ -890,8 +890,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
         u32 count            = ReadInt(&dataTokenizer);
         scene->numTransforms = count;
         SkipToNextChar(&dataTokenizer);
-        // scene->affineTransforms     = PushArrayNoZero(arena, AffineSpace, count);
-        scene->affineTransforms     = (AffineSpace *)(dataTokenizer.cursor);
+        scene->affineTransforms =
+            PushArrayNoZeroTagged(arena, AffineSpace, count, MemoryType_Instance);
         AffineSpace *dataTransforms = (AffineSpace *)(dataTokenizer.cursor);
         if (baseFile && renderFromWorld)
         {
@@ -923,7 +923,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
             u32 instanceCount = ReadInt(&tokenizer);
             SkipToNextChar(&tokenizer);
 
-            scene->primitives   = PushArrayNoZero(arena, Instance, instanceCount);
+            scene->primitives =
+                PushArrayNoZeroTagged(arena, Instance, instanceCount, MemoryType_Instance);
             Instance *instances = (Instance *)scene->primitives;
             u32 instanceOffset  = 0;
 
@@ -1105,6 +1106,34 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                                                    : mesh.numVertices / numVerticesPerFace;
             };
 
+            auto CopyMesh = [&](Arena *arena, Mesh &mesh) -> Mesh {
+                Mesh newMesh        = {};
+                newMesh.numVertices = mesh.numVertices;
+                newMesh.numIndices  = mesh.numIndices;
+                newMesh.numFaces    = mesh.numFaces;
+                newMesh.p =
+                    PushArrayNoZeroTagged(arena, Vec3f, mesh.numVertices, MemoryType_Shape);
+                MemoryCopy(newMesh.p, mesh.p, sizeof(Vec3f) * mesh.numVertices);
+                if (mesh.n)
+                {
+                    newMesh.n = PushArrayNoZeroTagged(arena, Vec3f, mesh.numVertices,
+                                                      MemoryType_Shape);
+                    MemoryCopy(newMesh.n, mesh.n, sizeof(Vec3f) * mesh.numVertices);
+                }
+                if (mesh.uv)
+                {
+                    newMesh.uv = PushArrayNoZeroTagged(arena, Vec2f, mesh.numVertices,
+                                                       MemoryType_Shape);
+                    MemoryCopy(newMesh.uv, mesh.uv, sizeof(Vec2f) * mesh.numVertices);
+                }
+                if (mesh.indices)
+                {
+                    newMesh.indices = PushArrayNoZero(arena, u32, mesh.numIndices);
+                    MemoryCopy(newMesh.indices, mesh.indices, sizeof(u32) * mesh.numIndices);
+                }
+                return newMesh;
+            };
+
             while (!Advance(&tokenizer, "SHAPE_END "))
             {
                 if (Advance(&tokenizer, "Quad "))
@@ -1123,6 +1152,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                         mesh.numIndices = 0;
                     }
 
+                    mesh = CopyMesh(arena, mesh);
                     AddMaterialAndLights(mesh);
 
                     threadMemoryStatistics[threadIndex].totalShapeMemory +=
@@ -1135,6 +1165,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     type       = GeometryType::TriangleMesh;
                     Mesh &mesh = shapes.AddBack();
                     AddMesh(mesh, 3);
+                    mesh = CopyMesh(arena, mesh);
                     AddMaterialAndLights(mesh);
 
                     threadMemoryStatistics[threadIndex].totalShapeMemory +=
@@ -1157,7 +1188,14 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
 
             scene->numPrimitives = shapes.totalCount;
             Assert(shapes.totalCount == indices.totalCount);
-            scene->primitives = PushArrayNoZero(arena, Mesh, shapes.totalCount);
+            if (type == GeometryType::TriangleMesh || type == GeometryType::QuadMesh)
+            {
+                scene->primitives = PushArrayNoZero(arena, Mesh, shapes.totalCount);
+            }
+            else
+            {
+                scene->primitives = PushArrayNoZero(tempArena, Mesh, shapes.totalCount);
+            }
             shapes.Flatten((Mesh *)scene->primitives);
 
             if (lights.totalCount)
@@ -1181,7 +1219,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 }
             }
 
-            scene->primIndices = PushArrayNoZero(arena, PrimitiveIndices, indices.totalCount);
+            scene->primIndices = PushArrayNoZeroTagged(arena, PrimitiveIndices,
+                                                       indices.totalCount, MemoryType_Shape);
             indices.Flatten(scene->primIndices);
         }
         else if (Advance(&tokenizer, "MATERIALS_START "))
@@ -1198,6 +1237,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     files.Flatten(scene->childScenes);
 
     OS_UnmapFile(tokenizer.input.str);
+    ScratchEnd(temp);
 
     // If there are no transforms and no two level-bvhs, then we need to manually convert
     // meshes to render space.
@@ -1224,8 +1264,6 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     }
 
     scene->geometryType = type;
-
-    ScratchEnd(temp);
 }
 
 // TODO IMPORTANT: there's a race condition in here that occurs very rarely, where some of the
@@ -1406,7 +1444,7 @@ void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string file
 
     for (u32 i = 0; i < numProcessors; i++)
     {
-        ArenaClear(tempArenas[i]);
+        ArenaRelease(tempArenas[i]);
     }
 
     ScratchEnd(temp);
@@ -1630,7 +1668,6 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, ScenePrimitives *scene
         threadMemoryStatistics[GetThreadIndex()].totalBVHMemory +=
             sizeof(BVHEdge) * mesh->bvhEdges.Length();
     }
-    // });
 
     RecordAOSSplits record;
     record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
@@ -1796,8 +1833,7 @@ void GenerateMeshRefs(Mesh *meshes, PrimRef *refs, u32 offset, u32 offsetMax, u3
 }
 
 template <GeometryType type>
-void ComputeTessellationParams(/*Arena *tempArena,*/ Mesh *meshes, TessellationParams *params,
-                               u32 start, u32 count)
+void ComputeTessellationParams(Mesh *meshes, TessellationParams *params, u32 start, u32 count)
 {
     for (u32 i = start; i < start + count; i++)
     {
@@ -1818,11 +1854,7 @@ void ComputeTessellationParams(/*Arena *tempArena,*/ Mesh *meshes, TessellationP
         {
             bounds = GenerateMeshRefsHelper<type>{mesh->p, mesh->indices}(0, numFaces);
         }
-        params[i].bounds = bounds;
-        // TODO: hardcoded for quads
-        // params[i].edgeIndexMap = AtomicHashIndex(tempArena, mesh->numFaces * 4);
-        // params[i].edgeKeyValues =
-        //     PushArray(tempArena, TessellationParams::EdgeKeyValue, mesh->numFaces * 4);
+        params[i].bounds             = bounds;
         params[i].currentMinDistance = pos_inf;
     }
 }

@@ -5,7 +5,6 @@
 #include "memory.h"
 #include "string.h"
 #include "containers.h"
-// #include "win32.h"
 #include "debug.h"
 #include "thread_context.h"
 
@@ -23,7 +22,6 @@
 #include "subdivision.h"
 #include "scene.h"
 #include "scene_load.h"
-// #include "bvh.h"
 #include "bxdf.h"
 #include "bsdf.h"
 #include "low_discrepancy.h"
@@ -35,16 +33,11 @@
 #include <algorithm>
 #include "simd_integrate.h"
 
-// #include "string.cpp"
-// #include "base.cpp"
-// #include "win32.cpp"
 #include "debug.cpp"
 #include "base_types.cpp"
 #include "bvh/bvh_types.cpp"
 #include "spectrum.cpp"
-// #include "memory.cpp"
 #include "scene.cpp"
-// #include "bvh.cpp"
 #include "bsdf.cpp"
 
 #include "lights.cpp"
@@ -55,9 +48,6 @@
 #include "tests/test.cpp"
 #include "tests/sampling_test.cpp"
 #include "tests/bvh_test.cpp"
-
-// #include <openvdb/openvdb.h>
-// #include <nanovdb/NanoVDB.h>
 
 namespace rt
 {

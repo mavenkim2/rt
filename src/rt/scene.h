@@ -655,13 +655,6 @@ struct TessellationParams
     AffineSpace transform;
     f32 currentMinDistance;
     Mutex mutex;
-    AtomicHashIndex edgeIndexMap;
-    struct EdgeKeyValue
-    {
-        u64 edgeID;
-        int edgeRate;
-    };
-    EdgeKeyValue *edgeKeyValues;
 };
 
 struct ShapeSample

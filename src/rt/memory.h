@@ -59,10 +59,8 @@ enum MemoryType
     MemoryType_Texture,
     MemoryType_Light,
     MemoryType_Instance,
-    MemoryType_Transform,
     MemoryType_String,
     MemoryType_BVH,
-    MemoryType_Record,
     MemoryType_Other,
 };
 
