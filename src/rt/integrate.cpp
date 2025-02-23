@@ -1,8 +1,10 @@
 #include "integrate.h"
+#include "base.h"
 #include "bxdf.h"
 #include "lights.h"
 #include "bsdf.h"
 #include "math/basemath.h"
+#include "math/simd_base.h"
 #include "scene.h"
 #include "spectrum.h"
 #include <cstring>
@@ -504,7 +506,7 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
                 {
                     SampledSpectrum Le = light->Le(ray.d, lambda);
 
-                    f32 pdf      = LightPDF(scene);
+                    f32 pdf      = LightPDF(scene, prevSi, light);
                     f32 lightPdf = pdf * (f32)light->PDF_Li(ray.d, true);
 
                     f32 w_l = PowerHeuristic(1, bsdfPdf, 1, lightPdf);
@@ -578,7 +580,7 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
         {
             f32 lightU = sampler.Get1D();
             f32 pmf;
-            Light *light = UniformLightSample(scene, lightU, &pmf);
+            Light *light = SampleLight(scene, si, lightU, &pmf);
             Vec2f sample = sampler.Get2D();
             if (light)
             {
@@ -837,6 +839,37 @@ struct CachePoints
     StaticArray<KDTreeNode> kdTreeNodes;
 };
 
+template <typename T>
+__forceinline T SinArcCos(const T &x)
+{
+    return Sqrt(T(1) - Sqr(x));
+}
+
+template <typename T>
+__forceinline T CosArcSin(const T &x)
+{
+    return Sqrt(T(1) - Sqr(x));
+}
+
+template <typename T>
+__forceinline T CosArcTan(const T &x)
+{
+    return T(1) / Sqrt(T(1) + Sqr(x));
+}
+
+template <typename T>
+__forceinline T SinArcTan(const T &x)
+{
+    return x / Sqrt(T(1) + Sqr(x));
+}
+
+template <typename T>
+__forceinline T CosAngleSub(const T &cosThetaA, const T &cosThetaB, const T &sinThetaA,
+                            const T &sinThetaB)
+{
+    return cosThetaA * cosThetaB + sinThetaA * sinThetaB;
+}
+
 void ConstructCachePoints(Arena **arenas, const Camera &camera,
                           LightDistribution *distributions, int seed = 0)
 {
@@ -871,7 +904,6 @@ void ConstructCachePoints(Arena **arenas, const Camera &camera,
     }
 
     // Step 2: Trace pilot paths
-
 
     // Step 2: Build KD Tree over points
     Arena *kdTreeArena = ArenaAlloc();
@@ -941,27 +973,20 @@ void ConstructCachePoints(Arena **arenas, const Camera &camera,
                     Vec3f(1, 0, 0),  Vec3f(-1, 0, 0), Vec3f(0, 1, 0),
                     Vec3f(0, -1, 0), Vec3f(0, 0, 1),  Vec3f(0, 0, -1),
                 };
-                // TODO: we're sampling visible wavelengths here since we're
-                // using spectral, maybe there's a better way?
-                // Compute irradiance estimate for six cardinal bins
 
                 SurfaceInteraction intr;
                 intr.p = point;
                 // Store list accounting for 97% of the energy reaching the point
                 for (int cardinalIndex = 0; cardinalIndex < 6; cardinalIndex++)
                 {
-                    intr.n             = cardinalNormals[cardinalIndex];
-                    LightSample sample = light->SampleLi();
-                    f32 estimate       = sample.L.MaxValue() *
-                                   AbsDot(sample.samplePoint, cardinalNormals[cardinalIndex]) /
-                                   sample.pdf;
+                    intr.n       = cardinalNormals[cardinalIndex];
+                    f32 estimate = light->Importance(point, cardinalNormals[cardinalIndex]);
 
                     // Find "far lights" with greatest contribution to current bin
                     auto &farLights = distribution.farLights[cardinalIndex];
                     if (farLightCount[cardinalIndex] < farLightBinMax)
                     {
-                        farLights[cardinalIndex][farLightCount[cardinalIndex]++] = {light,
-                                                                                    estimate};
+                        farLights[cardinalIndex].push_back({light, estimate});
                         minContribution[cardinalIndex] =
                             Min(minContribution[cardinalIndex], estimate);
                     }
@@ -1127,7 +1152,9 @@ void ConstructCachePoints(Arena **arenas, const Camera &camera,
     });
     distributions.clear();
 }
+#endif
 
+#if 0
 template <typename Sampler>
 void ManifoldNextEventEstimation(Sampler &sampler, u32 currentDepth, u32 maxDepth,
                                  SampledWavelengths &lambda)

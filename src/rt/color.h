@@ -84,5 +84,10 @@ Vec3f GetOctahedralRGB(const Image *image, Vec2f uv)
     return SRGBToLinear(GetColor(image, p[0], p[1]));
 }
 
+f32 CalculateLuminance(const Vec3f &rgb)
+{
+    return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+}
+
 } // namespace rt
 #endif

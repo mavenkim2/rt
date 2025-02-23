@@ -569,7 +569,7 @@ Texture *ParseDisplacement(Arena *arena, Tokenizer *tokenizer, string directory)
 DiffuseAreaLight *ParseAreaLight(Arena *arena, Tokenizer *tokenizer, AffineSpace *space,
                                  int sceneID, int geomID)
 {
-    DiffuseAreaLight *light = PushStructConstruct(arena, DiffuseAreaLight)();
+    DiffuseAreaLight *light = 0;
 
     if (Advance(tokenizer, "filename "))
     {
@@ -590,11 +590,9 @@ DiffuseAreaLight *ParseAreaLight(Arena *arena, Tokenizer *tokenizer, AffineSpace
         RGBIlluminantSpectrum spec(*RGBColorSpace::sRGB, value);
         DenselySampledSpectrum *dss =
             PushStructConstruct(arena, DenselySampledSpectrum)(&spec);
-        light->Lemit           = dss;
-        light->scale           = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
-        light->sceneID         = sceneID;
-        light->geomID          = geomID;
-        light->renderFromLight = space;
+        f32 scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
+        light     = PushStructConstruct(arena, DiffuseAreaLight)(dss, space, scale, geomID,
+                                                             sceneID, LightType::Area);
         // light->area  = Length(Cross(mesh->p[1] - mesh->p[0], mesh->p[3] - mesh->p[0]));
         // light->renderFromLight = 0;
     }

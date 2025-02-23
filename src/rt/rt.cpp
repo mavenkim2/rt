@@ -18,6 +18,7 @@
 #include "spectrum.h"
 #include "handles.h"
 #include "integrate.h"
+#include "math/spherical_harmonics.h"
 #include "lights.h"
 #include "subdivision.h"
 #include "scene.h"

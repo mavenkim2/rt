@@ -1,5 +1,6 @@
 #include "lights.h"
 #include "color.h"
+#include "spectrum.h"
 
 namespace rt
 {
@@ -115,6 +116,14 @@ T Bilerp(const Vec2<T> &u, const Vec4<T> &w)
 //////////////////////////////
 // Diffuse Area Light
 //
+DiffuseAreaLight::DiffuseAreaLight(const DenselySampledSpectrum *Lemit,
+                                   AffineSpace *renderFromLight, f32 scale, int geomID,
+                                   int sceneID, LightType type)
+    : Lemit(Lemit), renderFromLight(renderFromLight), scale(scale), geomID(geomID),
+      sceneID(sceneID), type(type)
+{
+    luminance = SpectrumToPhotometric(*Lemit);
+}
 
 LightSample DiffuseAreaLight::SampleLi(SurfaceInteraction &intr, Vec2f &u,
                                        SampledWavelengths &lambda, bool allowIncompletePDF)
@@ -132,64 +141,6 @@ f32 DiffuseAreaLight::PDF_Li(const Vec3f &prevIntrP, const SurfaceInteraction &i
 {
     Assert(0);
     return 0.f;
-    //     const DiffuseAreaLight *lights[IntN];
-    //     for (u32 i = 0; i < IntN; i++)
-    //     {
-    //         lights[i] = &scene->GetAreaLights()[Get(lightIndices, i)];
-    //     }
-    //     Vec3lfn p[4];
-    //     LaneNF32 area;
-    //     // TODO: maybe have to spawn a ray??? but I feel like this is only called (at least
-    //     for
-    //     // now) when it already has intersected, and we need the pdf for MIS
-    //     for (u32 i = 0; i < 4; i++)
-    //     {
-    //         Lane4F32 pI[IntN];
-    //         for (u32 lightIndex = 0; lightIndex < IntN; lightIndex++)
-    //         {
-    //             const DiffuseAreaLight *light = lights[lightIndex];
-    //
-    //             pI[lightIndex]        = Lane4F32(TransformP(*light->renderFromLight,
-    //             light->p[i])); Set(area, lightIndex) = light->area;
-    //         }
-    //         Transpose<IntN>(pI, p[i]);
-    //     }
-    //     Vec3lfn v00 = Normalize(p[0] - Vec3lfn(prevIntrP));
-    //     Vec3lfn v10 = Normalize(p[1] - Vec3lfn(prevIntrP));
-    //     Vec3lfn v01 = Normalize(p[3] - Vec3lfn(prevIntrP));
-    //     Vec3lfn v11 = Normalize(p[2] - Vec3lfn(prevIntrP));
-    //
-    //     Vec3lfn eu = p[1] - p[0];
-    //     Vec3lfn ev = p[3] - p[0];
-    //     // If the solid angle is small
-    //     LaneNF32 sphArea = SphericalQuadArea(v00, v10, v01, v11);
-    //     MaskF32 mask     = sphArea < DiffuseAreaLight::MinSphericalArea;
-    //
-    //     LaneNF32 pdf;
-    //     if (All(mask))
-    //     {
-    //         Vec3lfn n  = Normalize(Cross(eu, ev));
-    //         Vec3lfn wi = prevIntrP - intr.p;
-    //         pdf        = LengthSquared(wi) / (area * AbsDot(Normalize(wi), n));
-    //     }
-    //     else if (None(mask))
-    //     {
-    //         pdf = 1.f / sphArea;
-    //
-    //         NotImplemented;
-    // #if 0
-    //         Vec2lfn u = InvertSphericalRectangleSample(intrP, prevIntrP, eu, ev);
-    //         Vec4lfn w(AbsDot(v00, intr.shading.n), AbsDot(v10, intr.shading.n),
-    //                    AbsDot(v01, intr.shading.n), AbsDot(v11, intr.shading.n));
-    //         pdf *= BilinearPDF(u, w);
-    // #endif
-    //     }
-    //     else
-    //     {
-    //         NotImplemented;
-    //         pdf = 0.f;
-    //     }
-    //     return pdf;
 }
 
 SampledSpectrum DiffuseAreaLight::Le(const Vec3f &n, const Vec3f &w,
@@ -197,6 +148,43 @@ SampledSpectrum DiffuseAreaLight::Le(const Vec3f &n, const Vec3f &w,
 {
     if (Dot(n, w) < 0) return SampledSpectrum(0.f);
     return scale * Lemit->Sample(lambda);
+}
+
+// https://fpsunflower.github.io/ckulla/data/many-lights-hpg2018.pdf
+// See page 8
+f32 DiffuseAreaLight::Importance(const Vec3f &point, const Vec3f &n)
+{
+    Vec3f p[4];
+
+    ScenePrimitives **scenes = GetScenes();
+    Mesh *mesh               = (Mesh *)scenes[sceneID]->primitives + geomID;
+    Assert(mesh->numVertices == 4 && !mesh->indices);
+
+    p[0] = mesh->p[0];
+    p[1] = mesh->p[1];
+    p[2] = mesh->p[2];
+    p[3] = mesh->p[3];
+    if (renderFromLight)
+    {
+        for (int i = 0; i < 4; i++)
+        {
+            p[i] = TransformP(*renderFromLight, p[i]);
+        }
+    }
+    p[0] -= point;
+    p[1] -= point;
+    p[2] -= point;
+    p[3] -= point;
+
+    f32 irradiance = 0.f;
+    for (int i = 0; i < 4; i++)
+    {
+        int nextIndex = (i + 1) & 3;
+        irradiance += AngleBetween(Normalize(p[i]), Normalize(p[nextIndex])) *
+                      AbsDot(Normalize(Cross(p[i], p[nextIndex])), n);
+    }
+    irradiance *= .5 * InvPi * luminance * scale;
+    return irradiance;
 }
 
 //////////////////////////////
@@ -258,7 +246,6 @@ ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image,
         avg += values[i];
     }
     avg /= size;
-    // avg                    = 0.3282774686813354f;
     f32 *compensatedValues = PushArrayNoZero(arena, f32, size);
     if (allSame)
     {
@@ -276,6 +263,34 @@ ImageInfiniteLight::ImageInfiniteLight(Arena *arena, Image image,
     }
     compensatedDistribution = PiecewiseConstant2D(
         arena, compensatedValues, image.width, image.height, Vec2f(0.f, 0.f), Vec2f(1.f, 1.f));
+
+    CalculateSHFromEnvironmentMap();
+}
+
+void ImageInfiniteLight::CalculateSHFromEnvironmentMap()
+{
+    L2 c       = {};
+    f32 weight = f32(FourPiTy()) / (image.width * image.height);
+
+    for (i32 h = 0; h < image.height; h++)
+    {
+        for (i32 w = 0; w < image.width; w++)
+        {
+            Vec2f uv(f32(w) / image.width, f32(h) / image.height);
+            Vec3f dir = EqualAreaSquareToSphere(uv);
+
+            Vec3f values = SRGBToLinear(GetColor(&image, w, h));
+
+            f32 lum  = CalculateLuminance(values) * scale;
+            L2 basis = EvaluateL2Basis(dir);
+
+            for (int i = 0; i < 9; i++)
+            {
+                c[i] = lum * basis[i] * weight;
+            }
+        }
+    }
+    coefficients = c;
 }
 
 SampledSpectrum ImageInfiniteLight::ImageLe(Vec2f uv, const SampledWavelengths &lambda) const
@@ -331,11 +346,14 @@ SampledSpectrum ImageInfiniteLight::Le(const Vec3f &w, const SampledWavelengths 
     return ImageLe(uv, lambda);
 }
 
-//////////////////////////////
-// Morphism
-//
+f32 ImageInfiniteLight::Importance(const Vec3f &p, const Vec3f &n)
+{
+    f32 irradiance = EvaluateIrradiance(coefficients, n);
+    return irradiance;
+}
 
-f32 LightPDF(Scene *scene) { return 1.f / scene->lights.size(); }
+// Light sampling
+f32 UniformLightPDF(Scene *scene) { return 1.f / scene->lights.size(); }
 
 Light *UniformLightSample(Scene *scene, f32 u, f32 *pmf = 0)
 {
@@ -343,9 +361,72 @@ Light *UniformLightSample(Scene *scene, f32 u, f32 *pmf = 0)
     if (numLights == 0) return 0;
     size_t lightIndex = Min(size_t(u * numLights), numLights - 1);
     Assert(lightIndex >= 0 && lightIndex < numLights);
-    if (pmf) *pmf = LightPDF(scene);
+    if (pmf) *pmf = UniformLightPDF(scene);
     Light *light = scene->lights[lightIndex];
     ErrorExit(light, "lightIndex: %i, total: %llu\n", lightIndex, numLights);
     return light;
 }
+
+Light *ExhaustiveLightSample(Scene *scene, const Vec3f &p, const Vec3f &n, f32 u, f32 &pdf)
+{
+    f32 weight             = 0.f;
+    Light *selectedLight   = 0;
+    f32 selectedImportance = 0.f;
+
+    for (auto &light : scene->lights)
+    {
+        f32 importance = light->Importance(p, n);
+        weight += importance;
+        f32 prob = importance / weight;
+        if (u < prob)
+        {
+            selectedLight = light;
+            u /= prob;
+            selectedImportance = importance;
+        }
+        else
+        {
+            u = (u - prob) / (1 - prob);
+        }
+    }
+    pdf = selectedImportance / weight;
+    return selectedLight;
+}
+
+f32 ExhaustiveLightPDF(Scene *scene, Light *light, const Vec3f &p, const Vec3f &n)
+{
+    f32 selectedImportance = 0.f;
+    f32 weight             = 0.f;
+    for (auto &l : scene->lights)
+    {
+        f32 importance = light->Importance(p, n);
+        weight += importance;
+        if (l == light)
+        {
+            selectedImportance = importance;
+        }
+    }
+    return selectedImportance / weight;
+}
+
+#define USE_EXHAUSTIVE_LIGHT_SAMPLER
+
+Light *SampleLight(Scene *scene, SurfaceInteraction &intr, f32 u, f32 *pmf)
+{
+#ifdef USE_EXHAUSTIVE_LIGHT_SAMPLER
+    return ExhaustiveLightSample(scene, intr.p, intr.n, u, *pmf);
+#else
+    return UniformLightSample(scene, u, pmf);
+#endif
+}
+
+f32 LightPDF(Scene *scene, SurfaceInteraction &intr, Light *light)
+{
+#ifdef USE_EXHAUSTIVE_LIGHT_SAMPLER
+    return ExhaustiveLightPDF(scene, light, intr.p, intr.n);
+#else
+    return UniformLightPDF(scene);
+#endif
+}
+
 } // namespace rt

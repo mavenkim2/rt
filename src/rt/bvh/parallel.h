@@ -584,26 +584,6 @@ void ParallelFor2D(Vec2i start, Vec2i end, Vec2i tileSize, const Func &func)
 
     int taskCount = tileCountX * tileCountY;
     int offset    = 0;
-    //         });
-    //
-    // scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
-    //     TempArena temp                         = ScratchStart(0, 0);
-    //     ShadingThreadState *shadingThreadState = GetShadingThreadState();
-    //     u32 tileX                              = jobID % tileCountX;
-    //     u32 tileY                              = jobID / tileCountX;
-    //     Vec2u minPixelBounds(params.pixelMin[0] + tileWidth * tileX,
-    //                          params.pixelMin[1] + tileHeight * tileY);
-    //     Vec2u maxPixelBounds(
-    //         Min(params.pixelMin[0] + tileWidth * (tileX + 1), params.pixelMin[0] +
-    //         pixelWidth), Min(params.pixelMin[1] + tileHeight * (tileY + 1),
-    //             params.pixelMin[1] + pixelHeight));
-    //
-    //     Assert(maxPixelBounds.x >= minPixelBounds.x && minPixelBounds.x >= 0 &&
-    //            maxPixelBounds.x <= width);
-    //     Assert(maxPixelBounds.y >= minPixelBounds.y && minPixelBounds.y >= 0 &&
-    //            maxPixelBounds.y <= height);
-    //
-    //     ZSobolSampler sampler(spp, Vec2i(width, height));
     for (; taskCount;)
     {
         int jobsToRun = Min(taskCount, JobDeque<Scheduler::Task>::size);
@@ -619,13 +599,6 @@ void ParallelFor2D(Vec2i start, Vec2i end, Vec2i tileSize, const Func &func)
                 Vec2i endBounds(Min(start[0] + tileSize[0] * (tileX + 1), end[0]),
                                 Min(start[1] + tileSize[1] * (tileY + 1), end[1]));
                 func(jobID, startBounds, endBounds);
-                // for (int y = startBounds[1]; y < endBounds[1]; y++)
-                // {
-                //     for (int x = startBounds[0]; x < endBounds[0]; x++)
-                //     {
-                //         func(x, y);
-                //     }
-                // }
             });
         });
         offset += jobsToRun;
@@ -690,6 +663,12 @@ void ParallelReduce(T *out, u32 start, u32 count, u32 groupSize, Func func, Redu
         ParallelFor<T>(temp, start, count, groupSize, func, std::forward<Args>(inArgs)...);
     Reduce<T>(*out, output, reduce, std::forward<Args>(inArgs)...);
     ScratchEnd(temp);
+}
+
+template <typename T, typename Func, typename ReduceFunc, typename... Args>
+void Parallel2DReduce(T *out, u32 start, u32 count, u32 groupSize, Func func,
+                      ReduceFunc reduce, Args... inArgs)
+{
 }
 
 } // namespace rt

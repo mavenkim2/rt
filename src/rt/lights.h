@@ -69,6 +69,7 @@ struct Light
                        bool allowIncompletePDF = 0)              = 0;
     virtual SampledSpectrum Le(const Vec3f &n, const Vec3f &w,
                                const SampledWavelengths &lambda) = 0;
+    virtual f32 Importance(const Vec3f &p, const Vec3f &n)       = 0;
 };
 
 struct InfiniteLight : Light
@@ -88,21 +89,27 @@ struct InfiniteLight : Light
 
 struct DiffuseAreaLight : Light
 {
-    f32 scale = 1.f;
+    const DenselySampledSpectrum *Lemit;
     AffineSpace *renderFromLight;
 
+    f32 scale = 1.f;
+
     int geomID, sceneID;
-    const DenselySampledSpectrum *Lemit;
 
     LightType type;
 
+    f32 luminance;
+
     DiffuseAreaLight() {}
+    DiffuseAreaLight(const DenselySampledSpectrum *Lemit, AffineSpace *renderFromLight,
+                     f32 scale, int geomID, int sceneID, LightType type);
     virtual LightSample SampleLi(SurfaceInteraction &intr, Vec2f &u,
                                  SampledWavelengths &lambda, bool allowIncompletePDF) override;
     virtual f32 PDF_Li(const Vec3f &prevIntrP, const SurfaceInteraction &intr,
                        bool allowIncompletePDF) override;
     virtual SampledSpectrum Le(const Vec3f &n, const Vec3f &w,
                                const SampledWavelengths &lambda) override;
+    virtual f32 Importance(const Vec3f &p, const Vec3f &n) override;
     // DiffuseAreaLight(Vec3f *p, f32 scale, Spectrum Lemit)
     //     : p(p), scale(scale), Lemit(LookupSpectrum(Lemit))
     // {
@@ -375,6 +382,8 @@ struct ImageInfiniteLight : InfiniteLight
     PiecewiseConstant2D distribution;
     PiecewiseConstant2D compensatedDistribution;
 
+    L2 coefficients;
+
     ImageInfiniteLight(Arena *arena, Image image, const AffineSpace *renderFromLight,
                        const RGBColorSpace *imageColorSpace, f32 sceneRadius, f32 scale = 1.f);
     virtual LightSample SampleLi(SurfaceInteraction &intr, Vec2f &u,
@@ -382,6 +391,9 @@ struct ImageInfiniteLight : InfiniteLight
     virtual f32 PDF_Li(const Vec3f &w, bool allowIncompletePDF) override;
     virtual SampledSpectrum Le(const Vec3f &w, const SampledWavelengths &lambda) override;
     SampledSpectrum ImageLe(Vec2f uv, const SampledWavelengths &lambda) const;
+    virtual f32 Importance(const Vec3f &p, const Vec3f &n) override;
+
+    void CalculateSHFromEnvironmentMap();
 };
 
 } // namespace rt

@@ -109,7 +109,7 @@ f32 DenselySampledSpectrum::MaxValue() const
     f32 maxValue = 0.f;
     for (u32 i = 0; i < numValues; i++)
     {
-        if (values[i] > maxValue) maxValue = values[i];
+        maxValue = Max(maxValue, values[i]);
     }
     return maxValue;
 }

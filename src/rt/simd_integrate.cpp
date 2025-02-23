@@ -422,7 +422,7 @@ QUEUE_HANDLER(RayIntersectionHandler)
                 {
                     SampledSpectrum Le = light->Le(rayState->ray.d, rayState->lambda);
 
-                    f32 pdf      = LightPDF(scene);
+                    f32 pdf      = LightPDF(scene, rayState->si, light);
                     f32 lightPdf = pdf * (f32)light->PDF_Li(rayState->ray.d, true);
 
                     f32 w_l = PowerHeuristic(1, rayState->bsdfPdf, 1, lightPdf);
@@ -565,7 +565,7 @@ void ShadingQueueHandler(TempArena inScratch, struct ShadingThreadState *state,
                     // DebugBreak();
                     f32 lightU = sampler.Get1D();
                     f32 pmf;
-                    Light *light = UniformLightSample(scene, lightU, &pmf);
+                    Light *light = SampleLight(scene, si, lightU, &pmf);
                     Vec2f sample = sampler.Get2D();
                     if (light)
                     {

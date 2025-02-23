@@ -48,6 +48,11 @@ Includes papers, blogs, books, and other links that were helpful.
 - [Compressed-Leaf Bounding Volume Hierarchies](https://www.embree.org/papers/2018-HPG-compressedleafbvh.pdf)
 - [Spatial Splits in Bounding Volume Hierarchies](https://www.nvidia.in/docs/IO/77714/sbvh.pdf)
 
+
+### Light sampling 
+- [Importance Sampling of Many Lights with Adaptive Tree Splitting](https://fpsunflower.github.io/ckulla/data/many-lights-hpg2018.pdf)
+- [Cache Points for Production-Scale Occlusion-Aware Many-Lights Sampling and Volumetric Scattering](https://www.yiningkarlli.com/projects/cachepoints/cachepoints.pdf)
+
 ### Subdivision, tessellation & displacement
 - [Watertight Tessellation using Forward Differencing](https://www.cs.cmu.edu/afs/cs/academic/class/15869-f11/www/readings/moreton01_tessellation.pdf)
 - [Feature Adadptive GPU Rendering of Catmull-Clark Subdivision Surfaces](https://niessnerlab.org/papers/2012/3feature/niessner2012feature.pdf)
