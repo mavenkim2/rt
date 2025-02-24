@@ -7,7 +7,9 @@
 #include "scene_load.h"
 #include "simd_integrate.h"
 #include "spectrum.h"
+#include <atomic>
 #include <cwchar>
+#include <iterator>
 namespace rt
 {
 
@@ -873,10 +875,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     bool hasMagic = Advance(&tokenizer, "RTSCENE_START ");
     ErrorExit(hasMagic, "RTScene file missing magic.\n");
 
-    string data = OS_ReadFile(tempArena, dataPath);
-
     Tokenizer dataTokenizer;
-    dataTokenizer.input  = data; // OS_MapFileRead(dataPath); // data;
+    dataTokenizer.input  = OS_MapFileRead(dataPath);
     dataTokenizer.cursor = dataTokenizer.input.str;
 
     hasMagic = Advance(&dataTokenizer, "DATA_START ");
@@ -908,7 +908,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
 
     bool isLeaf       = true;
     GeometryType type = GeometryType::Max;
-    ChunkedLinkedList<ScenePrimitives *, 32, MemoryType_Instance> files(temp.arena);
+    ChunkedLinkedList<ScenePrimitives *, MemoryType_Instance> files(temp.arena, 32);
 
     bool hasMaterials = false;
     for (;;)
@@ -952,8 +952,9 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 StringId hash = Hash(includeFile);
                 u32 index     = hash & (table->count - 1);
 
-                u32 id                     = files.Length();
-                SceneLoadTable::Node *head = table->nodes[index].load();
+                u32 id = files.Length();
+                SceneLoadTable::Node *head =
+                    table->nodes[index].load(std::memory_order_acquire);
                 for (;;)
                 {
                     auto *node = head;
@@ -962,20 +963,30 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                         if (node->filename.size && node->filename == includeFile)
                         {
                             files.AddBack() = node->scene;
+
+                            int depth = node->scene->depth.load(std::memory_order_acquire);
+                            while (depth > scene->depth + 1 &&
+                                   !node->scene->depth.compare_exchange_weak(
+                                       depth, scene->depth + 1, std::memory_order_release,
+                                       std::memory_order_relaxed));
                             break;
                         }
                         node = node->next;
                     }
+                    if (node) break;
 
                     u64 pos = ArenaPos(arena);
 
                     auto *newNode                 = PushStruct(arena, SceneLoadTable::Node);
                     newNode->filename             = PushStr8Copy(arena, includeFile);
                     ScenePrimitives *includeScene = PushStruct(arena, ScenePrimitives);
+                    includeScene->depth           = scene->depth + 1;
                     newNode->scene                = includeScene;
                     newNode->next                 = head;
 
-                    if (table->nodes[index].compare_exchange_weak(head, newNode))
+                    if (table->nodes[index].compare_exchange_weak(head, newNode,
+                                                                  std::memory_order_release,
+                                                                  std::memory_order_relaxed))
                     {
                         files.AddBack() = includeScene;
                         scheduler.Schedule(counter, [=](u32 jobID) {
@@ -1009,11 +1020,9 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
         else if (Advance(&tokenizer, "SHAPE_START "))
         {
             Assert(isLeaf);
-            ChunkedLinkedList<Mesh, 1024, MemoryType_Shape> shapes(temp.arena);
-            ChunkedLinkedList<PrimitiveIndices, 1024, MemoryType_Shape> indices(temp.arena);
-            ChunkedLinkedList<Light *, 1024, MemoryType_Light> lights(temp.arena);
-            // ChunkedLinkedList<Texture *, 1024, MemoryType_Texture>
-            // alphaTextures(temp.arena);
+            ChunkedLinkedList<Mesh, MemoryType_Shape> shapes(temp.arena, 1024);
+            ChunkedLinkedList<PrimitiveIndices, MemoryType_Shape> indices(temp.arena, 1024);
+            ChunkedLinkedList<Light *, MemoryType_Light> lights(temp.arena);
 
             AffineSpace worldFromRender = Inverse(*renderFromWorld);
             int noMaterialCount         = 0;
@@ -1143,6 +1152,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     Mesh &mesh = shapes.AddBack();
                     AddMesh(mesh, 4);
 
+                    Assert(mesh.numVertices == 4);
                     // TODO: this is a hack
                     if (mesh.numFaces == 1 && mesh.numVertices == 4 && mesh.numIndices == 6)
                     {
@@ -1176,6 +1186,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     type       = GeometryType::CatmullClark;
                     Mesh &mesh = shapes.AddBack();
                     AddMesh(mesh, 4);
+                    mesh = CopyMesh(tempArena, mesh);
                     AddMaterialAndLights(mesh);
                 }
                 else
@@ -1235,6 +1246,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     files.Flatten(scene->childScenes);
 
     OS_UnmapFile(tokenizer.input.str);
+    OS_UnmapFile(dataTokenizer.input.str);
     ScratchEnd(temp);
 
     // If there are no transforms and no two level-bvhs, then we need to manually convert
@@ -1271,57 +1283,32 @@ void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromC
 {
     u32 expected = 0;
     // TODO: circular dependencies?
-    if (scene->counter.count.compare_exchange_strong(expected, 1, std::memory_order_acquire))
+    switch (scene->geometryType)
     {
-        if (scene->nodePtr.data == 0)
+        case GeometryType::Instance:
         {
-            switch (scene->geometryType)
-            {
-                case GeometryType::Instance:
-                {
-                    if (!scene->nodePtr.data)
-                    {
-                        ParallelFor(0, scene->numChildScenes, 1,
-                                    [&](int jobID, int start, int count) {
-                                        for (int i = start; i < start + count; i++)
-                                        {
-                                            BuildSceneBVHs(arenas, scene->childScenes[i],
-                                                           NDCFromCamera, cameraFromRender,
-                                                           screenHeight);
-                                        }
-                                    });
-                        BuildTLASBVH(arenas, scene);
-                    }
-                    break;
-                    case GeometryType::QuadMesh:
-                    {
-                        BuildQuadBVH(arenas, scene);
-                    }
-                    break;
-                    case GeometryType::TriangleMesh:
-                    {
-                        BuildTriangleBVH(arenas, scene);
-                    }
-                    break;
-                    case GeometryType::CatmullClark:
-                    {
-                        scene->primitives = AdaptiveTessellation(
-                            arenas, scene, NDCFromCamera, cameraFromRender, screenHeight,
-                            scene->tessellationParams, (Mesh *)scene->primitives,
-                            scene->numPrimitives);
-                        BuildCatClarkBVH(arenas, scene);
-                        // BuildQuadBVH(arenas, scene);
-                    }
-                    break;
-                    default: Assert(0);
-                }
-            }
+            BuildTLASBVH(arenas, scene);
         }
-        scene->counter.count.fetch_sub(1, std::memory_order_release);
-    }
-    else
-    {
-        scheduler.Wait(&scene->counter);
+        break;
+        case GeometryType::QuadMesh:
+        {
+            BuildQuadBVH(arenas, scene);
+        }
+        break;
+        case GeometryType::TriangleMesh:
+        {
+            BuildTriangleBVH(arenas, scene);
+        }
+        break;
+        case GeometryType::CatmullClark:
+        {
+            scene->primitives = AdaptiveTessellation(
+                arenas, scene, NDCFromCamera, cameraFromRender, screenHeight,
+                scene->tessellationParams, (Mesh *)scene->primitives, scene->numPrimitives);
+            BuildCatClarkBVH(arenas, scene);
+        }
+        break;
+        default: Assert(0);
     }
 }
 
@@ -1368,13 +1355,16 @@ void ComputeEdgeRates(ScenePrimitives *scene, const AffineSpace &transform,
                                         BeginRMutex(&params.mutex);
                                         Bounds bounds  = Transform(transform, params.bounds);
                                         Vec3f centroid = ToVec3f(bounds.Centroid());
-                                        f32 currentMinDistance = params.currentMinDistance;
+                                        f64 currentMinDistance = params.currentMinDistance;
                                         EndRMutex(&params.mutex);
 
                                         // NOTE: this skips the far plane test
                                         int result =
                                             IntersectFrustumAABB<1>(planes, &bounds, 5);
-                                        f32 distance = Length(centroid);
+
+                                        Vec3<f64> centroidDouble(
+                                            (f64)centroid.x, (f64)centroid.y, (f64)centroid.z);
+                                        f64 distance = Length(centroidDouble);
 
                                         // Camera is at origin in this coordinate space
                                         if (result && distance < currentMinDistance)
@@ -1427,6 +1417,7 @@ void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string file
                 true);
     scheduler.Wait(&counter);
 
+    int numScenes            = (int)state.scenes.size();
     ScenePrimitives **scenes = PushArrayNoZero(arena, ScenePrimitives *, state.scenes.size());
     MemoryCopy(scenes, state.scenes.data(), sizeof(ScenePrimitives *) * state.scenes.size());
     state.scenes.clear();
@@ -1438,7 +1429,24 @@ void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string file
     ExtractPlanes(planes, NDCFromCamera * cameraFromRender);
 
     ComputeEdgeRates(&scene->scene, space, planes, TessellationStyle::ClosestInstance);
-    BuildSceneBVHs(arenas, &scene->scene, NDCFromCamera, cameraFromRender, screenHeight);
+
+    int maxDepth = 0;
+    for (int i = 0; i < numScenes; i++)
+    {
+        maxDepth = Max(maxDepth, scenes[i]->depth.load(std::memory_order_acquire));
+    }
+
+    for (int depth = maxDepth; depth >= 0; depth--)
+    {
+        ParallelFor(0, numScenes, 1, [&](int jobID, int start, int count) {
+            for (int i = start; i < start + count; i++)
+            {
+                if (scenes[i]->depth.load(std::memory_order_acquire) == depth)
+                    BuildSceneBVHs(arenas, scenes[i], NDCFromCamera, cameraFromRender,
+                                   screenHeight);
+            }
+        });
+    }
 
     for (u32 i = 0; i < numProcessors; i++)
     {
@@ -1490,190 +1498,244 @@ void BuildBVH<GeometryType::CatmullClark>(Arena **arenas, ScenePrimitives *scene
     }
 
     int size = untessellatedPatchCount + tessellatedPatchCount;
-    std::vector<PrimRef> refs;
-    refs.reserve(size);
-    refs.resize(untessellatedPatchCount);
 
-    int untessellatedRefOffset = 0;
-
-    Bounds geomBounds;
-    Bounds centBounds;
-
-    Arena *arena = arenas[GetThreadIndex()];
-
-    for (u32 i = 0; i < scene->numPrimitives; i++)
+    struct alignas(CACHE_LINE_SIZE) ThreadBounds
     {
-        auto *mesh = &meshes[i];
+        Bounds geomBounds;
+        Bounds centBounds;
 
-        std::vector<BVHPatch> bvhPatches;
-        bvhPatches.reserve((int)mesh->patches.Length());
-
-        std::vector<BVHEdge> bvhEdges;
-        bvhEdges.reserve((int)mesh->patches.Length() * 4);
-
-        const auto &indices  = mesh->stitchingIndices;
-        const auto &vertices = mesh->vertices;
-        for (u32 j = 0; j < mesh->untessellatedPatches.Length(); j++)
+        void Merge(ThreadBounds &r)
         {
-            int indexStart = 4 * j;
-            Vec3f p0       = vertices[indices[indexStart + 0]];
-            Vec3f p1       = vertices[indices[indexStart + 1]];
-            Vec3f p2       = vertices[indices[indexStart + 2]];
-            Vec3f p3       = vertices[indices[indexStart + 3]];
-
-            Vec3f minP = Min(Min(p0, p1), Min(p2, p3));
-            Vec3f maxP = Max(Max(p0, p1), Max(p2, p3));
-
-            geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
-            centBounds.Extend(Lane4F32(minP + maxP));
-
-            Assert(minP != maxP);
-
-            PrimRef *ref = &refs[untessellatedRefOffset++];
-            ref->minX    = -minP.x;
-            ref->minY    = -minP.y;
-            ref->minZ    = -minP.z;
-            ref->geomID  = CreatePatchID(CatClarkTriangleType::Untess, 0, i);
-            ref->maxX    = maxP.x;
-            ref->maxY    = maxP.y;
-            ref->maxZ    = maxP.z;
-            ref->primID  = j;
+            geomBounds.Extend(r.geomBounds);
+            centBounds.Extend(r.centBounds);
         }
-        for (u32 j = 0; j < mesh->patches.Length(); j++)
+    };
+
+    struct alignas(CACHE_LINE_SIZE) ThreadData
+    {
+        ChunkedLinkedList<PrimRef> refs;
+        ThreadBounds bounds;
+        int refOffset;
+
+        void Merge(ThreadData &r)
         {
-            OpenSubdivPatch *patch = &mesh->patches[j];
+            bounds.Merge(r.bounds);
+            refs.Merge(&r.refs);
+        }
+    };
 
-            // Individually split each edge into smaller triangles
-            for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
+    Arena **tempArenas = GetArenaArray(temp.arena);
+
+    ParallelForOutput output = ParallelFor<ThreadData>(
+        temp, 0, scene->numPrimitives, 1,
+        [&](ThreadData &data, int jobID, int start, int count) {
+            int threadIndex  = GetThreadIndex();
+            Arena *arena     = arenas[threadIndex];
+            Arena *tempArena = tempArenas[threadIndex];
+            tempArena->align = 32;
+
+            ThreadBounds threadBounds;
+            auto &threadRefs = data.refs;
+            threadRefs       = ChunkedLinkedList<PrimRef>(tempArena, 1024);
+
+            for (int i = start; i < start + count; i++)
             {
-                // EdgeInfo &currentEdge = patch->edgeInfo[edgeIndex];
-                EdgeInfo currentEdge = patch->edgeInfos.GetEdgeInfo(edgeIndex);
+                auto *mesh = &meshes[i];
 
-                auto itr = patch->CreateIterator(edgeIndex);
+                std::vector<BVHPatch> bvhPatches;
+                std::vector<BVHEdge> bvhEdges;
+                bvhPatches.reserve((int)mesh->patches.Length());
+                bvhEdges.reserve((int)mesh->patches.Length() * 4);
 
-                while (itr.IsNotFinished())
+                const auto &indices  = mesh->stitchingIndices;
+                const auto &vertices = mesh->vertices;
+
+                if (mesh->untessellatedPatches.Length())
                 {
-                    Vec3f minP(pos_inf);
-                    Vec3f maxP(neg_inf);
+                    auto *threadRefsNode =
+                        threadRefs.AddNode(mesh->untessellatedPatches.Length());
 
-                    // save start state
-                    BVHEdge bvhEdge;
-                    bvhEdge.patchIndex = j;
-                    bvhEdge.steps      = itr.steps;
+                    ThreadBounds untessellatedBounds;
+                    ParallelReduce(
+                        &untessellatedBounds, 0, mesh->untessellatedPatches.Length(), 512,
+                        [&](ThreadBounds &bounds, int jobID, int start, int count) {
+                            ThreadBounds threadBounds;
+                            for (int j = start; j < start + count; j++)
+                            {
+                                int indexStart = 4 * j;
+                                Vec3f p0       = vertices[indices[indexStart + 0]];
+                                Vec3f p1       = vertices[indices[indexStart + 1]];
+                                Vec3f p2       = vertices[indices[indexStart + 2]];
+                                Vec3f p3       = vertices[indices[indexStart + 3]];
 
-                    for (int triIndex = 0; triIndex < 8 && itr.Next(); triIndex++)
+                                Vec3f minP = Min(Min(p0, p1), Min(p2, p3));
+                                Vec3f maxP = Max(Max(p0, p1), Max(p2, p3));
+
+                                threadBounds.geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
+                                threadBounds.centBounds.Extend(Lane4F32(minP + maxP));
+
+                                Assert(minP != maxP);
+
+                                threadRefsNode->values[j] =
+                                    PrimRef(-minP.x, -minP.y, -minP.z,
+                                            CreatePatchID(CatClarkTriangleType::Untess, 0, i),
+                                            maxP.x, maxP.y, maxP.z, j);
+                            }
+                            bounds = threadBounds;
+                        },
+                        [&](ThreadBounds &l, ThreadBounds &r) { l.Merge(r); });
+
+                    threadBounds.Merge(untessellatedBounds);
+                }
+
+                for (u32 j = 0; j < mesh->patches.Length(); j++)
+                {
+                    OpenSubdivPatch *patch = &mesh->patches[j];
+
+                    // Individually split each edge into smaller triangles
+                    for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
                     {
-                        minP = Min(Min(minP, vertices[itr.indices[0]]),
-                                   Min(vertices[itr.indices[1]], vertices[itr.indices[2]]));
-                        maxP = Max(Max(maxP, vertices[itr.indices[0]]),
-                                   Max(vertices[itr.indices[1]], vertices[itr.indices[2]]));
+                        // EdgeInfo &currentEdge = patch->edgeInfo[edgeIndex];
+                        EdgeInfo currentEdge = patch->edgeInfos.GetEdgeInfo(edgeIndex);
+
+                        auto itr = patch->CreateIterator(edgeIndex);
+
+                        while (itr.IsNotFinished())
+                        {
+                            Vec3f minP(pos_inf);
+                            Vec3f maxP(neg_inf);
+
+                            // save start state
+                            BVHEdge bvhEdge;
+                            bvhEdge.patchIndex = j;
+                            bvhEdge.steps      = itr.steps;
+
+                            for (int triIndex = 0; triIndex < 8 && itr.Next(); triIndex++)
+                            {
+                                minP = Min(
+                                    Min(minP, vertices[itr.indices[0]]),
+                                    Min(vertices[itr.indices[1]], vertices[itr.indices[2]]));
+                                maxP = Max(
+                                    Max(maxP, vertices[itr.indices[0]]),
+                                    Max(vertices[itr.indices[1]], vertices[itr.indices[2]]));
+                            }
+
+                            threadBounds.geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
+                            threadBounds.centBounds.Extend(Lane4F32(minP + maxP));
+
+                            int bvhEdgeIndex = (int)bvhEdges.size();
+                            bvhEdges.push_back(bvhEdge);
+
+                            Assert(minP != maxP);
+
+                            threadRefs.AddBack(
+                                PrimRef(-minP.x, -minP.y, -minP.z,
+                                        CreatePatchID(CatClarkTriangleType::TessStitching,
+                                                      edgeIndex, i),
+                                        maxP.x, maxP.y, maxP.z, bvhEdgeIndex));
+                        }
                     }
 
-                    geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
-                    centBounds.Extend(Lane4F32(minP + maxP));
+                    // Split internal grid into smaller grids
+                    int edgeRateU = patch->GetMaxEdgeFactorU();
+                    int edgeRateV = patch->GetMaxEdgeFactorV();
 
-                    int bvhEdgeIndex = (int)bvhEdges.size();
-                    bvhEdges.push_back(bvhEdge);
-
-                    Assert(minP != maxP);
-
-                    refs.emplace_back();
-                    PrimRef *ref = &refs.back();
-                    ref->minX    = -minP.x;
-                    ref->minY    = -minP.y;
-                    ref->minZ    = -minP.z;
-                    ref->geomID =
-                        CreatePatchID(CatClarkTriangleType::TessStitching, edgeIndex, i);
-                    ref->maxX   = maxP.x;
-                    ref->maxY   = maxP.y;
-                    ref->maxZ   = maxP.z;
-                    ref->primID = bvhEdgeIndex;
-                }
-            }
-
-            // Split internal grid into smaller grids
-            int edgeRateU = patch->GetMaxEdgeFactorU();
-            int edgeRateV = patch->GetMaxEdgeFactorV();
-
-            if (edgeRateU <= 2 || edgeRateV <= 2) continue;
-            int bvhPatchIndex = (int)bvhPatches.size();
-            int bvhPatchStart = bvhPatchIndex;
-            {
-                BVHPatch bvhPatch;
-                bvhPatch.patchIndex = j;
-                bvhPatch.grid       = UVGrid::Compress(
-                    Vec2i(0, 0), Vec2i(Max(edgeRateU - 2, 0), Max(edgeRateV - 2, 0)));
-
-                bvhPatches.push_back(bvhPatch);
-            }
-
-            while (bvhPatchIndex < (int)bvhPatches.size())
-            {
-                const BVHPatch &bvhPatch = bvhPatches[bvhPatchIndex];
-                BVHPatch patch0, patch1;
-                if (bvhPatch.Split(patch0, patch1))
-                {
-                    bvhPatches.push_back(patch1);
-                    bvhPatches[bvhPatchIndex] = patch0;
-                }
-                else
-                {
-                    bvhPatchIndex++;
-                }
-            }
-
-            for (int k = bvhPatchStart; k < (int)bvhPatches.size(); k++)
-            {
-                const BVHPatch &bvhPatch = bvhPatches[k];
-                Vec3f minP(pos_inf);
-                Vec3f maxP(neg_inf);
-
-                Vec2i uvStart, uvEnd;
-                bvhPatch.grid.Decompress(uvStart, uvEnd);
-                for (int v = uvStart[1]; v <= uvEnd[1]; v++)
-                {
-                    for (int u = uvStart[0]; u <= uvEnd[0]; u++)
+                    if (edgeRateU <= 2 || edgeRateV <= 2) continue;
+                    int bvhPatchIndex = (int)bvhPatches.size();
+                    int bvhPatchStart = bvhPatchIndex;
                     {
-                        int index = patch->GetGridIndex(u, v);
-                        minP      = Min(minP, vertices[index]);
-                        maxP      = Max(maxP, vertices[index]);
+                        BVHPatch bvhPatch;
+                        bvhPatch.patchIndex = j;
+                        bvhPatch.grid       = UVGrid::Compress(
+                            Vec2i(0, 0), Vec2i(Max(edgeRateU - 2, 0), Max(edgeRateV - 2, 0)));
+
+                        bvhPatches.push_back(bvhPatch);
+                    }
+
+                    while (bvhPatchIndex < (int)bvhPatches.size())
+                    {
+                        const BVHPatch &bvhPatch = bvhPatches[bvhPatchIndex];
+                        BVHPatch patch0, patch1;
+                        if (bvhPatch.Split(patch0, patch1))
+                        {
+                            bvhPatches.push_back(patch1);
+                            bvhPatches[bvhPatchIndex] = patch0;
+                        }
+                        else
+                        {
+                            bvhPatchIndex++;
+                        }
+                    }
+
+                    for (int k = bvhPatchStart; k < (int)bvhPatches.size(); k++)
+                    {
+                        const BVHPatch &bvhPatch = bvhPatches[k];
+                        Vec3f minP(pos_inf);
+                        Vec3f maxP(neg_inf);
+
+                        Vec2i uvStart, uvEnd;
+                        bvhPatch.grid.Decompress(uvStart, uvEnd);
+                        for (int v = uvStart[1]; v <= uvEnd[1]; v++)
+                        {
+                            for (int u = uvStart[0]; u <= uvEnd[0]; u++)
+                            {
+                                int index = patch->GetGridIndex(u, v);
+                                minP      = Min(minP, vertices[index]);
+                                maxP      = Max(maxP, vertices[index]);
+                            }
+                        }
+
+                        threadBounds.geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
+                        threadBounds.centBounds.Extend(Lane4F32(minP + maxP));
+
+                        Assert(minP != maxP);
+
+                        threadRefs.AddBack(
+                            PrimRef(-minP.x, -minP.y, -minP.z,
+                                    CreatePatchID(CatClarkTriangleType::TessGrid, 0, i),
+                                    maxP.x, maxP.y, maxP.z, k));
                     }
                 }
+                mesh->bvhPatches = StaticArray<BVHPatch>(arena, bvhPatches);
+                mesh->bvhEdges   = StaticArray<BVHEdge>(arena, bvhEdges);
 
-                geomBounds.Extend(Lane4F32(minP), Lane4F32(maxP));
-                centBounds.Extend(Lane4F32(minP + maxP));
-
-                Assert(minP != maxP);
-
-                // TODO: make it so that I can't forget to make these negative
-                refs.emplace_back();
-                PrimRef *ref = &refs.back();
-                ref->minX    = -minP.x;
-                ref->minY    = -minP.y;
-                ref->minZ    = -minP.z;
-                ref->geomID  = CreatePatchID(CatClarkTriangleType::TessGrid, 0, i);
-                ref->maxX    = maxP.x;
-                ref->maxY    = maxP.y;
-                ref->maxZ    = maxP.z;
-                ref->primID  = k;
+                threadMemoryStatistics[GetThreadIndex()].totalBVHMemory +=
+                    sizeof(BVHPatch) * mesh->bvhPatches.Length();
+                threadMemoryStatistics[GetThreadIndex()].totalBVHMemory +=
+                    sizeof(BVHEdge) * mesh->bvhEdges.Length();
             }
-        }
-        mesh->bvhPatches = StaticArray<BVHPatch>(arena, bvhPatches);
-        mesh->bvhEdges   = StaticArray<BVHEdge>(arena, bvhEdges);
+            data.bounds = threadBounds;
+        });
 
-        threadMemoryStatistics[GetThreadIndex()].totalBVHMemory +=
-            sizeof(BVHPatch) * mesh->bvhPatches.Length();
-        threadMemoryStatistics[GetThreadIndex()].totalBVHMemory +=
-            sizeof(BVHEdge) * mesh->bvhEdges.Length();
+    int totalRefCount = 0;
+    ThreadBounds threadBounds;
+    ThreadData *threadData = (ThreadData *)output.out;
+    for (int i = 0; i < output.num; i++)
+    {
+        threadData[i].refOffset = totalRefCount;
+        totalRefCount += threadData[i].refs.totalCount;
+        threadBounds.Merge(threadData[i].bounds);
     }
 
-    RecordAOSSplits record;
-    record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
-    record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
-    record.SetRange(0, (int)refs.size());
+    PrimRef *refs = PushArrayNoZero(temp.arena, PrimRef, totalRefCount);
 
-    scene->nodePtr =
-        BuildQuantizedCatmullClarkBVH(settings, arenas, scene, refs.data(), record);
+    // Join
+    ParallelFor(0, output.num, 1, [&](int jobID, int start, int count) {
+        for (int i = start; i < start + count; i++)
+        {
+            ThreadData &data = threadData[i];
+            data.refs.Flatten(refs + data.refOffset);
+        }
+    });
+
+    ReleaseArenaArray(tempArenas);
+
+    RecordAOSSplits record;
+    record.geomBounds = Lane8F32(-threadBounds.geomBounds.minP, threadBounds.geomBounds.maxP);
+    record.centBounds = Lane8F32(-threadBounds.centBounds.minP, threadBounds.centBounds.maxP);
+    record.SetRange(0, totalRefCount);
+
+    scene->nodePtr = BuildQuantizedCatmullClarkBVH(settings, arenas, scene, refs, record);
     using IntersectorType =
         typename IntersectorHelper<GeometryType::CatmullClark, PrimRef>::IntersectorType;
     scene->intersectFunc = &IntersectorType::Intersect;

@@ -229,4 +229,25 @@ void ArenaRelease(Arena *arena)
         OS_Release(a);
     }
 }
+
+Arena **GetArenaArray(Arena *arena)
+{
+    int numProcessors = OS_NumProcessors();
+    Arena **arenas    = PushArrayNoZero(arena, Arena *, numProcessors);
+    for (int i = 0; i < numProcessors; i++)
+    {
+        arenas[i] = ArenaAlloc();
+    }
+    return arenas;
+}
+
+void ReleaseArenaArray(Arena **arenas)
+{
+    int numProcessors = OS_NumProcessors();
+    for (int i = 0; i < numProcessors; i++)
+    {
+        ArenaRelease(arenas[i]);
+    }
+}
+
 } // namespace rt

@@ -27,10 +27,8 @@ struct ThreadMemoryStatistics
     u64 totalTextureMemory;
     u64 totalLightMemory;
     u64 totalInstanceMemory;
-    u64 totalTransformMemory;
     u64 totalStringMemory;
     u64 totalBVHMemory;
-    u64 totalRecordMemory;
     u64 totalOtherMemory;
 };
 

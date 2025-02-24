@@ -93,6 +93,11 @@ struct PrimRef
         };
     };
     PrimRef() {}
+    PrimRef(f32 minX, f32 minY, f32 minZ, u32 geomID, f32 maxX, f32 maxY, f32 maxZ, u32 primID)
+        : minX(minX), minY(minY), minZ(minZ), geomID(geomID), maxX(maxX), maxY(maxY),
+          maxZ(maxZ), primID(primID)
+    {
+    }
     PrimRef(const Lane8F32 &l) { MemoryCopy(this, &l, sizeof(PrimRef)); }
     __forceinline Lane8F32 Load() const { return Lane8F32::Load(&m256); }
 };

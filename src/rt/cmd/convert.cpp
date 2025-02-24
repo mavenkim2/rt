@@ -112,13 +112,13 @@ struct PBRTFileInfo
     Arena *arena;
     string filename;
     ScenePacket packets[MAX] = {};
-    ChunkedLinkedList<ShapeType, 1024, MemoryType_Shape> shapes;
+    ChunkedLinkedList<ShapeType, MemoryType_Shape> shapes;
     // MOANA ONLY
     std::vector<MoanaOBJMeshes> objMeshes;
-    ChunkedLinkedList<InstanceType, 1024, MemoryType_Instance> fileInstances;
+    ChunkedLinkedList<InstanceType, MemoryType_Instance> fileInstances;
     u32 numInstances;
 
-    ChunkedLinkedList<AffineSpace, 16384, MemoryType_Instance> transforms;
+    ChunkedLinkedList<AffineSpace, MemoryType_Instance> transforms;
 
     PBRTFileInfo *imports[32];
     u32 numImports;
@@ -128,10 +128,10 @@ struct PBRTFileInfo
     {
         arena    = ArenaAlloc(8);
         filename = PushStr8Copy(arena, inFilename);
-        shapes   = decltype(shapes)(arena);
+        shapes   = ChunkedLinkedList<ShapeType, MemoryType_Shape>(arena, 1024);
 
-        fileInstances = decltype(fileInstances)(arena);
-        transforms    = decltype(transforms)(arena);
+        fileInstances = ChunkedLinkedList<InstanceType, MemoryType_Instance>(arena, 1024);
+        transforms    = ChunkedLinkedList<AffineSpace, MemoryType_Instance>(arena, 16384);
         numInstances  = 0;
     }
 
@@ -277,8 +277,8 @@ struct SceneLoadState
 {
     Arena **arenas;
     u32 numProcessors;
-    ChunkedLinkedList<NamedPacket, 1024, MemoryType_Material> *materials;
-    ChunkedLinkedList<NamedPacket, 1024, MemoryType_Light> *lights;
+    ChunkedLinkedList<NamedPacket, MemoryType_Material> *materials;
+    ChunkedLinkedList<NamedPacket, MemoryType_Light> *lights;
 
     SceneHashMap *textureHashMaps;
     const u32 hashMapSize = 8192;
@@ -292,19 +292,17 @@ struct SceneLoadState
         u32 threadIndex = GetThreadIndex();
         numProcessors   = OS_NumProcessors();
         arenas          = PushArray(arena, Arena *, numProcessors);
-        materials       = PushArray(
-            arena, ChunkedLinkedList<NamedPacket COMMA 1024 COMMA MemoryType_Material>,
-            numProcessors);
+        materials = PushArray(arena, ChunkedLinkedList<NamedPacket COMMA MemoryType_Material>,
+                              numProcessors);
         textureHashMaps = PushArray(arena, SceneHashMap, numProcessors);
-        lights =
-            PushArray(arena, ChunkedLinkedList<NamedPacket COMMA 1024 COMMA MemoryType_Light>,
-                      numProcessors);
+        lights = PushArray(arena, ChunkedLinkedList<NamedPacket COMMA MemoryType_Light>,
+                           numProcessors);
 
         for (u32 i = 0; i < numProcessors; i++)
         {
             arenas[i]    = ArenaAlloc(16);
-            materials[i] = ChunkedLinkedList<NamedPacket, 1024, MemoryType_Material>(arena);
-            lights[i]    = ChunkedLinkedList<NamedPacket, 1024, MemoryType_Light>(arena);
+            materials[i] = ChunkedLinkedList<NamedPacket, MemoryType_Material>(arena, 1024);
+            lights[i]    = ChunkedLinkedList<NamedPacket, MemoryType_Light>(arena, 1024);
             textureHashMaps[i] = SceneHashMap(arena, hashMapSize);
         }
 
@@ -635,6 +633,7 @@ void ReadParameters(Arena *arena, ScenePacket *packet, Tokenizer *tokenizer,
         }
         else
         {
+            dt = {};
             ErrorExit(0, "Invalid data type: %S\n", dataType);
         }
         parameterNames[currentParam] = Hash(parameterName);
@@ -687,78 +686,59 @@ bool LoadMoanaOBJ(Arena *arena, PBRTFileInfo *state, string objFile)
     return false;
 }
 
-bool CheckMoanaOBJ(Arena *arena, PBRTFileInfo *state, string directory, string subDirectory,
-                   string filename)
+string CheckMoanaOBJ(Arena *arena, string directory, string subDirectory, string filename)
 {
-    TempArena temp = ScratchStart(0, 0);
+    ScratchArena scratch;
+
     string objFile =
-        PushStr8F(temp.arena, "%Sobj/%S/%S.obj", directory, subDirectory, filename);
-    bool result = LoadMoanaOBJ(arena, state, objFile);
-    if (!result)
+        PushStr8F(scratch.temp.arena, "%Sobj/%S/%S.obj", directory, subDirectory, filename);
+    if (OS_FileExists(objFile))
     {
-        objFile = PushStr8F(temp.arena, "%Sobj/%S/archives/%S.obj", directory, subDirectory,
-                            filename);
-        result  = LoadMoanaOBJ(arena, state, objFile);
+        return PushStr8Copy(arena, objFile);
     }
-    ScratchEnd(temp);
-    return result;
+
+    objFile = PushStr8F(scratch.temp.arena, "%Sobj/%S/archives/%S.obj", directory,
+                        subDirectory, filename);
+    if (OS_FileExists(objFile))
+    {
+        return PushStr8Copy(arena, objFile);
+    }
+    return {};
 }
 
 string CheckMoanaVariant(Arena *arena, string directory, string filename)
 {
-    TempArena temp      = ScratchStart(0, 0);
     string baseFilename = PathSkipLastSlash(filename);
+    if (baseFilename == "osOcean_geometry.pbrt") return {};
 
     u64 offset = FindSubstring(baseFilename, "geometry.pbrt", 0, MatchFlag_CaseInsensitive);
-    if (offset != baseFilename.size)
-    {
-        string objFromPbrt = Substr8(baseFilename, 0, offset - 1);
-        u64 undOffset      = FindSubstring(baseFilename, "_", 0, MatchFlag_CaseInsensitive);
-        u64 slashOffset    = FindSubstring(filename, "/", 0, MatchFlag_CaseInsensitive);
+    if (offset == baseFilename.size) return {};
 
-        string rootGroup = Substr8(filename, 0, slashOffset);
-        string rawGroup  = Substr8(baseFilename, 0, undOffset);
-        if (!(rootGroup == rawGroup))
-        {
-            string objFile =
-                PushStr8F(temp.arena, "%Sobj/%S/%S.obj", directory, rawGroup, objFromPbrt);
-            if (OS_FileExists(objFile))
-            {
-                objFile = PushStr8F(arena, "%S%S/%S", directory, rawGroup, baseFilename);
-                if (OS_FileExists(objFile))
-                {
-                    int stop = 5;
-                    return objFile;
-                }
-                else
-                {
-                    int stop = 5;
-                }
-            }
-            objFile = PushStr8F(temp.arena, "%Sobj/%S/archives/%S.obj", directory, rawGroup,
-                                objFromPbrt);
-            if (OS_FileExists(objFile))
-            {
-                objFile = PushStr8F(arena, "%S%S/%S", directory, rawGroup, baseFilename);
-                if (OS_FileExists(objFile))
-                {
-                    int stop = 5;
-                    return objFile;
-                }
-                else
-                {
-                    int stop = 5;
-                }
-            }
-        }
+    string objFromPbrt = Substr8(baseFilename, 0, offset - 1);
+    u64 undOffset      = FindSubstring(baseFilename, "_", 0, MatchFlag_CaseInsensitive);
+    u64 slashOffset    = FindSubstring(filename, "/", 0, MatchFlag_CaseInsensitive);
+
+    string rootGroup = Substr8(filename, 0, slashOffset);
+    string rawGroup  = Substr8(baseFilename, 0, undOffset);
+
+    string objFile = CheckMoanaOBJ(arena, directory, rootGroup, objFromPbrt);
+    if (objFile.size) return objFile;
+
+    objFile = CheckMoanaOBJ(arena, directory, rawGroup, objFromPbrt);
+    if (objFile.size) return objFile;
+
+    if (rootGroup == "isHibiscusYoung")
+    {
+        rawGroup = "isHibiscus";
+        objFile  = CheckMoanaOBJ(arena, directory, rawGroup, objFromPbrt);
     }
-    ScratchEnd(temp);
-    return filename;
+
+    return objFile;
 }
 
 PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
-                       GraphicsState graphicsState = {}, bool originFile = true,
-                       bool inWorldBegin = false, bool write = true)
+                       string moanaObjFile = {}, GraphicsState graphicsState = {},
+                       bool originFile = true, bool inWorldBegin = false, bool write = true)
 {
     enum class ScopeType
     {
@@ -792,49 +772,13 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
     auto &textureHashMap = sls->textureHashMaps[threadIndex];
     auto *lights         = &sls->lights[threadIndex];
 
-    // MOANA ONLY. this is kind of a hack to remap the geometry pbrt files to
-    // obj files...
-    // TODO: fix hibiscusyoung mapping.
     bool isMoana       = false;
     int moanaMeshIndex = 0;
+
+    if (moanaObjFile.size)
     {
-        string baseFilename = PathSkipLastSlash(currentFilename);
-        if (!(baseFilename == "osOcean_geometry.pbrt"))
-        {
-            u64 offset =
-                FindSubstring(baseFilename, "geometry.pbrt", 0, MatchFlag_CaseInsensitive);
-            if (offset != baseFilename.size)
-            {
-                // First check /archives
-                string objFromPbrt  = Substr8(baseFilename, 0, offset - 1);
-                string subDirectory = PathBaseDirectory(currentFilename);
-
-                isMoana =
-                    CheckMoanaOBJ(tempArena, state, directory, subDirectory, objFromPbrt);
-                if (!isMoana)
-                {
-                    // Handle variant
-                    u64 undOffset =
-                        FindSubstring(baseFilename, "_", 0, MatchFlag_CaseInsensitive);
-                    u64 slashOffset =
-                        FindSubstring(currentFilename, "/", 0, MatchFlag_CaseInsensitive);
-
-                    string rootGroup = Substr8(currentFilename, 0, slashOffset);
-                    string rawGroup  = Substr8(baseFilename, 0, undOffset);
-                    if (!(rootGroup == rawGroup))
-                    {
-                        isMoana =
-                            CheckMoanaOBJ(tempArena, state, directory, rawGroup, objFromPbrt);
-                        if (!isMoana && rootGroup == "isHibiscusYoung")
-                        {
-                            rawGroup = "isHibiscus";
-                            isMoana  = CheckMoanaOBJ(tempArena, state, directory, rawGroup,
-                                                     objFromPbrt);
-                        }
-                    }
-                }
-            }
-        }
+        LoadMoanaOBJ(tempArena, state, moanaObjFile);
+        isMoana = true;
     }
 
     bool worldBegin = inWorldBegin;
@@ -871,10 +815,35 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             OS_UnmapFile(tokenizer.input.str);
             scheduler.Wait(&state->counter);
 
-            // ErrorExit(!isMoana || (isMoana && moanaMeshIndex ==
-            // state->objMeshes.back().num),
-            //           "index: %i, total: %llu\n", moanaMeshIndex,
-            //           state->objMeshes.back().num);
+            if (isMoana && !state->objMeshes.empty())
+            {
+                MoanaOBJMeshes &meshes = state->objMeshes.back();
+                if (moanaMeshIndex != meshes.num)
+                {
+                    Print("%S, num: %i, imports: %i\n", currentFilename, meshes.num,
+                          state->numImports);
+                    for (int i = 0; i < state->numImports; i++)
+                    {
+                        PBRTFileInfo *import = state->imports[i];
+                        for (auto *node = import->shapes.first; node != 0; node = node->next)
+                        {
+                            for (int j = 0; j < node->count; j++)
+                            {
+                                node->values[j].packet.type = "catclark"_sid;
+                                if (moanaMeshIndex >= meshes.num)
+                                {
+                                    node->values[j].cancelled = true;
+                                    node->values[j].mesh      = 0;
+                                }
+                                else
+                                {
+                                    node->values[j].mesh = &meshes.meshes[moanaMeshIndex++];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             for (u32 i = 0; i < state->numImports; i++)
             {
                 state->Merge(state->imports[i]);
@@ -1039,8 +1008,9 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 b32 result = GetBetweenPair(importedFilename, &tokenizer, '"');
                 Assert(result);
 
-                string newFilename = CheckMoanaVariant(tempArena, directory, importedFilename);
-                newFilename        = ConvertPBRTToRTScene(tempArena, newFilename);
+                string importedMoanaObjFile =
+                    CheckMoanaVariant(tempArena, directory, importedFilename);
+                string newFilename = ConvertPBRTToRTScene(tempArena, importedFilename);
 
                 bool checkFileInstance =
                     graphicsStateCount &&
@@ -1082,16 +1052,16 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 {
                     scheduler.Schedule(&state->counter, [=](u32 jobID) {
                         PBRTFileInfo *newState =
-                            LoadPBRT(sls, directory, copiedFilename, importedState, false,
-                                     worldBegin, checkFileInstance);
+                            LoadPBRT(sls, directory, copiedFilename, importedMoanaObjFile,
+                                     importedState, false, worldBegin, checkFileInstance);
                         if (!checkFileInstance) state->imports[index] = newState;
                     });
                 }
                 else
                 {
                     PBRTFileInfo *newState =
-                        LoadPBRT(sls, directory, copiedFilename, importedState, false,
-                                 worldBegin, checkFileInstance);
+                        LoadPBRT(sls, directory, copiedFilename, importedMoanaObjFile,
+                                 importedState, false, worldBegin, checkFileInstance);
                     if (!checkFileInstance) state->imports[index] = newState;
                 }
             }
@@ -1142,7 +1112,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 NamedPacket nPacket;
                 ScenePacket *packet = &nPacket.packet;
                 *packet             = {};
-                packet->type        = "material"_sid; // Hash(materialNameOrType);
+                packet->type        = "material"_sid;
 
                 PBRTSkipToNextChar(&tokenizer);
                 ReadParameters(threadArena, packet, &tokenizer, MemoryType_Material);
@@ -1468,8 +1438,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
 
                 NamedPacket nPacket = {};
                 ScenePacket *packet = &nPacket.packet;
-                packet->type =
-                    "texture"_sid; // Hash(StrConcat(tempArena, textureType, textureClass));
+                packet->type        = "texture"_sid;
 
                 PBRTSkipToNextChar(&tokenizer);
 
@@ -1988,6 +1957,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
         }
         if (differentTypes)
         {
+            Assert(info->filename == "test.rtscene");
             SeparateShapeTypes(temp.arena, info, directory);
 
             if (info->transforms.totalCount)

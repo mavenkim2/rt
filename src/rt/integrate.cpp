@@ -15,18 +15,18 @@ namespace rt
 // TODO
 // BUGS:
 // - shading normals seem wrong for some elements, check subdivision code
-
-// - rare deadlock in bvh construction code
 // - parallelize prim ref code for cat clark patches
-// - reduce size of quantized node by using indices
-//
+// - investigate why the green light under one of the palm trees is noisier with
+// the exhaustive sampler
+// - get the proper material back on the ironwood tree
+// - reduce size of RayStates in simd integrators
+
 // - light tree traversal, adaptive splitting, and accounting for BSDF
 // - https://fpsunflower.github.io/ckulla/data/many-lights-hpg2018.pdf
 // - remove duplicate materials (and maybe geometry), see if this leads to coherent texture
 // reads
 // - curves
 // - simd queues for everything (radiance evaluation, shading, ray streams?)
-// - optimize bvh memory consumption?
 
 // - bdpt, metropolis, vcm, upbp, mcm?
 // - volumetric rendering
@@ -39,12 +39,13 @@ namespace rt
 // - manifold next event estimation
 // - wave optics :D
 // - cache points
-//
+
 // - memory mapped files for treelets??? (i.e. single level massive bvh)
 // - covariance tracing
 // - path guiding
 // - non exponential free flight
 // - photon planes & volumes
+// - reduce build time by adaptively tessellating only after intersection, not upfront
 
 // - what is zero variance theory? half space light transport? dwivedi sampling?
 

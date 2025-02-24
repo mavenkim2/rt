@@ -44,6 +44,8 @@ void TempEnd(TempArena temp);
 b32 CheckZero(u32 size, u8 *instance);
 void ArenaRelease(Arena *arena);
 void ArenaClear(Arena *arena);
+Arena **GetArenaArray(Arena *arena);
+void ReleaseArenaArray(Arena **arenas);
 
 #define PushArrayNoZero(arena, type, count)                                                   \
     (type *)ArenaPushNoZero(arena, sizeof(type) * (count))

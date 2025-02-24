@@ -653,7 +653,7 @@ struct TessellationParams
 {
     Bounds bounds;
     AffineSpace transform;
-    f32 currentMinDistance;
+    f64 currentMinDistance;
     Mutex mutex;
 };
 
@@ -697,7 +697,7 @@ struct ScenePrimitives
     AffineSpace *affineTransforms;
     PrimitiveIndices *primIndices;
 
-    Scheduler::Counter counter = {};
+    std::atomic<int> depth;
     u32 numTransforms;
     IntersectFunc intersectFunc;
     OccludedFunc occludedFunc;

@@ -591,27 +591,34 @@ const T *HashSet<T, numSlots, chunkSize, numStripes, tag>::GetOrCreate(Arena *ar
     return out;
 }
 
-template <typename T, i32 numPerChunk, i32 memoryTag = 0>
+template <typename T, i32 memoryTag = 0>
 struct ChunkedLinkedList
 {
     Arena *arena;
     struct ChunkNode
     {
-        T values[numPerChunk];
+        T *values;
         u32 count;
+        u32 cap;
         ChunkNode *next;
     };
     ChunkNode *first;
     ChunkNode *last;
     u32 totalCount;
+    u32 numPerChunk;
 
-    ChunkedLinkedList(Arena *arena) : arena(arena), first(0), last(0), totalCount(0)
+    ChunkedLinkedList() {}
+    ChunkedLinkedList(Arena *arena)
+        : arena(arena), first(0), last(0), totalCount(0), numPerChunk(512)
     {
-        AddNode();
+    }
+    ChunkedLinkedList(Arena *arena, u32 numPerChunk)
+        : arena(arena), first(0), last(0), totalCount(0), numPerChunk(numPerChunk)
+    {
     }
     T &AddBack()
     {
-        if (last->count >= numPerChunk)
+        if (!last || last->count >= last->cap)
         {
             AddNode();
         }
@@ -619,24 +626,29 @@ struct ChunkedLinkedList
         totalCount++;
         return result;
     }
-    T &operator[](u32 i)
+    void AddBack(T &&val)
     {
-        Assert(i < totalCount);
-        ChunkNode *node = first;
-        for (;;)
+        if (!last || last->count >= last->cap)
         {
-            Assert(node);
-            if (i >= node->count)
+            if (last && last->next)
             {
-                i -= node->count;
-                node = node->next;
+                last = last->next;
             }
             else
             {
-                return node->values[i];
+                ChunkNode *newNode = PushStructTagged(arena, ChunkNode, memoryTag);
+                newNode->values =
+                    (T *)PushArrayNoZeroTagged(arena, u8, sizeof(T) * numPerChunk, memoryTag);
+                newNode->cap = numPerChunk;
+                QueuePush(first, last, newNode);
             }
         }
+        Assert(last && last->values);
+        Assert(last->count < last->cap);
+        last->values[last->count++] = std::move(val);
+        totalCount++;
     }
+
     inline void Push(const T &val) { AddBack() = val; }
     inline void Push(const T &&val) { AddBack() = std::move(val); }
 
@@ -676,9 +688,24 @@ struct ChunkedLinkedList
         else
         {
             ChunkNode *newNode = PushStructTagged(arena, ChunkNode, memoryTag);
+            newNode->values =
+                (T *)PushArrayNoZeroTagged(arena, u8, sizeof(T) * numPerChunk, memoryTag);
+            newNode->cap = numPerChunk;
             QueuePush(first, last, newNode);
         }
     }
+
+    inline ChunkNode *AddNode(int count)
+    {
+        ChunkNode *newNode = PushStructTagged(arena, ChunkNode, memoryTag);
+        newNode->values = (T *)PushArrayNoZeroTagged(arena, u8, sizeof(T) * count, memoryTag);
+        newNode->count  = count;
+        newNode->cap    = count;
+        QueuePush(first, last, newNode);
+        totalCount += count;
+        return newNode;
+    }
+
     inline u32 Length() const { return totalCount; }
     inline void Flatten(T *out)
     {
@@ -700,7 +727,7 @@ struct ChunkedLinkedList
         }
         array.size = runningCount;
     }
-    inline void Merge(ChunkedLinkedList<T, numPerChunk, memoryTag> *list)
+    inline void Merge(ChunkedLinkedList<T, memoryTag> *list)
     {
         if (list->totalCount)
         {
@@ -761,9 +788,35 @@ struct HashMap
         return 0;
     }
 
+    T *Find(const T &value)
+    {
+        u32 hash       = value.Hash();
+        HashList &list = map[hash & hashMask];
+        HashNode *node = list.first;
+        int loops      = 0;
+        while (node)
+        {
+            if (node->hash == hash)
+            {
+                if (node->value == value)
+                {
+                    if (loops > 5)
+                    {
+                        Print("%i %i \n", loops, count);
+                    }
+                    return &node->value;
+                }
+            }
+            node = node->next;
+            loops++;
+        }
+        Assert(!node);
+        return 0;
+    }
+
     void Add(Arena *arena, const T &val)
     {
-        u32 hash       = val.Hash(); // Hash(packet->name);
+        u32 hash       = val.Hash();
         HashList &list = map[hash & hashMask];
         HashNode *node = list.first;
         while (node)
@@ -773,10 +826,6 @@ struct HashMap
                 if (node->value == val)
                 {
                     ErrorExit(0, "Error: Using a duplicate name.\n");
-                }
-                else
-                {
-                    ErrorExit(0, "Hash collision\n");
                 }
             }
             node = node->next;

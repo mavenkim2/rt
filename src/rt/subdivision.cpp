@@ -310,39 +310,23 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
 
             // NOTE: this assumes everything is a quad
             // Compute edge rates
-            std::unordered_map<u64, int> edgeIDMap;
+
+            struct EdgeKeyValue
+            {
+                u64 key;
+                int value;
+                u32 Hash() const { return MixBits(key); }
+
+                bool operator==(const EdgeKeyValue &other) const { return key == other.key; }
+            };
+
+            HashMap<EdgeKeyValue> edgeIDMap(scratch.temp.arena,
+                                            NextPowerOfTwo(controlMesh->numIndices));
 
             for (int f = 0; f < (int)controlMesh->numFaces; f++)
             {
                 int indexOffset = 4 * f;
 
-                // if (!tessParams->instanced)
-                // {
-                //     Bounds bounds;
-                //     for (int i = 0; i < 4; i++)
-                //     {
-                //         int id = controlMesh->indices[indexOffset + i];
-                //         bounds.Extend(
-                //             Lane4F32(TransformP(tessParams->transform,
-                //             controlMesh->p[id])));
-                //     }
-                //     // frustum cull
-                //     if (FrustumCull(NDCFromCamera, bounds))
-                //     {
-                //         for (int i = 0; i < 4; i++)
-                //         {
-                //             int id0    = controlMesh->indices[indexOffset + i];
-                //             int id1    = controlMesh->indices[indexOffset + ((i + 1) & 3)];
-                //             u64 edgeId = ComputeEdgeId(id0, id1);
-                //         }
-                //         const auto &result = edgeIDMap.find(edgeId);
-                //         int edgeIndex      = -1;
-                //         if (result == edgeIDMap.end())
-                //         {
-                //         }
-                //         continue;
-                //     }
-                // }
                 // For uninstanced meshes,
                 for (int i = 0; i < 4; i++)
                 {
@@ -358,9 +342,9 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                         samples[id0] = LimitSurfaceSample{f, uvTable[i]};
                     }
                     // Set edge rate
-                    const auto &result = edgeIDMap.find(edgeId);
-                    int edgeIndex      = -1;
-                    if (result == edgeIDMap.end())
+                    auto result   = edgeIDMap.Find({edgeId});
+                    int edgeIndex = -1;
+                    if (result == 0)
                     {
                         int edgeFactor = 1;
                         // Only set edge factor if there is a valid transform
@@ -395,7 +379,8 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                         // edgeInfos.size());
                         edgeInfos.emplace_back(
                             EdgeInfo{(int)samples.size(), (u32)edgeFactor, id0, id1});
-                        edgeIDMap[edgeId] = edgeIndex;
+
+                        edgeIDMap.Add(scratch.temp.arena, {edgeId, edgeIndex});
 
                         // Add edge samples for evaluation
                         f32 stepSize = 1.f / edgeFactor;
@@ -409,7 +394,7 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                     }
                     else
                     {
-                        edgeIndex = edgeIDMap[edgeId];
+                        edgeIndex = result->value;
                         reversed  = true;
                     }
                     Assert(edgeIndex != -1);
@@ -486,8 +471,8 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                                 Vec3f pos, dpdu, dpdv, dpduu, dpduv, dpdvv, dndu, dndv;
                                 // EvaluateLimitSurfacePosition(vertices, &patchMap,
                                 // patchTable,
-                                //                              sample, pos, dpdu, dpdv, dpduu,
-                                //                              dpduv, dpdvv);
+                                //                              sample, pos, dpdu, dpdv,
+                                //                              dpduu, dpduv, dpdvv);
 
                                 EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable,
                                                              sample, pos, dpdu, dpdv);
@@ -499,7 +484,8 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                                 // Vec3f normal = Cross(dpdu, dpdv);
                                 // f32 test     = 1.f / Length(normal);
                                 // normal       = Normalize(normal);
-                                // CalculateWeingarten(normal, dpdu, dpdv, dpduu, dpduv, dpdvv,
+                                // CalculateWeingarten(normal, dpdu, dpdv, dpduu, dpduv,
+                                // dpdvv,
                                 //                     dndu, dndv);
                                 // dndu = test * (dndu - normal * Dot(dndu, normal));
                                 // dndv = test * (dndv - normal * Dot(dndv, normal));
@@ -768,8 +754,8 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                                 // if (texture)
                                 //     EvaluateLimitSurfacePosition(
                                 //         vertices, &patchMap, patchTable,
-                                //         LimitSurfaceSample{f, uv}, pos, dpdu, dpdv, dpduu,
-                                //         dpduv, dpdvv);
+                                //         LimitSurfaceSample{f, uv}, pos, dpdu, dpdv,
+                                //         dpduu, dpduv, dpdvv);
                                 // else
                                 EvaluateLimitSurfacePosition(vertices, &patchMap, patchTable,
                                                              LimitSurfaceSample{f, uv}, pos,
@@ -787,7 +773,8 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                                     Vec4f filterWidths(.5f * scale[0], 0, 0, .5f * scale[1]);
 
                                     // Vec3f dndu, dndv;
-                                    // CalculateWeingarten(normal, dpdu, dpdv, dpduu, dpduv,
+                                    // CalculateWeingarten(normal, dpdu, dpdv, dpduu,
+                                    // dpduv,
                                     //                     dpdvv, dndu, dndv);
 
                                     EvaluateDisplacement(texture, f, uv, filterWidths, pos,
