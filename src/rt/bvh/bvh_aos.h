@@ -4,22 +4,6 @@
 #include <atomic>
 #include <utility>
 
-// TODO:
-// - stream (Fuetterling 2015, frusta)/packet traversal
-// - ray sorting/binning(hyperion, or individually in each thread).
-// - curves
-//     - it seems that PBRT doesn't supported instanced curves, so the scene description files
-//     handle these weirdly. look at converting these to instances?
-// - support both BVH over all primitives and two level BVH.
-//     - for BVH over all primitives, need polymorphism. will implement by indexing into an
-//     array of indices,
-//     - can instances contain multiple types of primitives?
-// - expand current BVH4 traversal code to BVH8
-
-// far future TODOs (after moana is rendered)
-// - subdivision surfaces
-// - systematically handling floating point error
-
 namespace rt
 {
 //////////////////////////////
@@ -753,12 +737,29 @@ struct HeuristicAOSObjectBinning
         i32 end   = r;
 
         Lane8F32 lanes[8];
+
+        Lane8F32 lVal;
+        Lane8F32 rVal;
+
+        Lane8F32 oldLVal;
+        Lane8F32 oldRVal;
+        u32 lIndex;
+        u32 rIndex;
+
+        lIndex  = getIndex(l);
+        oldLVal = data[lIndex].Load();
+        Lane8F32 oldLCentroid =
+            ((Shuffle4<1, 1>(oldLVal) - Shuffle4<0, 0>(oldLVal))) ^ signFlipMask;
+        l++;
+
+        rIndex  = getIndex(r);
+        oldRVal = data[rIndex].Load();
+        Lane8F32 oldRCentroid =
+            ((Shuffle4<1, 1>(oldRVal) - Shuffle4<0, 0>(oldRVal))) ^ signFlipMask;
+        r--;
+
         for (;;)
         {
-            Lane8F32 lVal;
-            Lane8F32 rVal;
-            u32 lIndex;
-            u32 rIndex;
             while (l <= r)
             {
                 lIndex = getIndex(l);
@@ -766,16 +767,23 @@ struct HeuristicAOSObjectBinning
                 Lane8F32 centroid =
                     ((Shuffle4<1, 1>(lVal) - Shuffle4<0, 0>(lVal))) ^ signFlipMask;
 
-                u32 bin      = binner->Bin(centroid[4 + dim], dim);
+                u32 bin      = binner->Bin(oldLCentroid[4 + dim], dim);
                 bool isRight = bin >= bestPos;
                 if (isRight)
                 {
-                    centRight = Max(centRight, centroid);
-                    geomRight = Max(geomRight, lVal);
+                    centRight = Max(centRight, oldLCentroid);
+                    geomRight = Max(geomRight, oldLVal);
+
+                    oldLCentroid = centroid;
+                    oldLVal      = lVal;
                     break;
                 }
-                centLeft = Max(centLeft, centroid);
-                geomLeft = Max(geomLeft, lVal);
+                centLeft = Max(centLeft, oldLCentroid);
+                geomLeft = Max(geomLeft, oldLVal);
+
+                oldLCentroid = centroid;
+                oldLVal      = lVal;
+
                 l++;
             }
             while (l <= r)
@@ -787,21 +795,77 @@ struct HeuristicAOSObjectBinning
                 Lane8F32 centroid =
                     ((Shuffle4<1, 1>(rVal) - Shuffle4<0, 0>(rVal))) ^ signFlipMask;
 
-                u32 bin     = binner->Bin(centroid[4 + dim], dim);
+                u32 bin     = binner->Bin(oldRCentroid[4 + dim], dim);
                 bool isLeft = bin < bestPos;
                 if (isLeft)
                 {
-                    centLeft = Max(centLeft, centroid);
-                    geomLeft = Max(geomLeft, rVal);
+                    centLeft = Max(centLeft, oldRCentroid);
+                    geomLeft = Max(geomLeft, oldRVal);
+
+                    oldRCentroid = centroid;
+                    oldRVal      = rVal;
                     break;
                 }
-                centRight = Max(centRight, centroid);
-                geomRight = Max(geomRight, rVal);
+                centRight = Max(centRight, oldRCentroid);
+                geomRight = Max(geomRight, oldRVal);
+
+                oldRCentroid = centroid;
+                oldRVal      = rVal;
                 r--;
             }
-            if (l > r) break;
+            if (l > r)
+            {
+                Lane8F32 val = data[l].Load();
+                Lane8F32 centroid =
+                    ((Shuffle4<1, 1>(val) - Shuffle4<0, 0>(val))) ^ signFlipMask;
+                bool isLeft = binner->Bin(centroid[4 + dim], dim) < bestPos;
 
-            Swap(data[lIndex], data[rIndex]);
+                val          = data[r].Load();
+                centroid     = ((Shuffle4<1, 1>(val) - Shuffle4<0, 0>(val))) ^ signFlipMask;
+                bool isRight = binner->Bin(centroid[4 + dim], dim) >= bestPos;
+                if (isLeft && isRight) Swap(data[l], data[r]);
+
+                u32 bin = binner->Bin(oldLCentroid[4 + dim], dim);
+                isLeft  = bin < bestPos;
+                if (isLeft)
+                {
+                    centLeft = Max(centLeft, oldLCentroid);
+                    geomLeft = Max(geomLeft, oldLVal);
+                }
+                else
+                {
+                    centRight = Max(centRight, oldLCentroid);
+                    geomRight = Max(geomRight, oldLVal);
+                }
+
+                bin          = binner->Bin(oldRCentroid[4 + dim], dim);
+                bool rIsLeft = bin < bestPos;
+                if (rIsLeft)
+                {
+                    centLeft = Max(centLeft, oldRCentroid);
+                    geomLeft = Max(geomLeft, oldRVal);
+                }
+                else
+                {
+                    centRight = Max(centRight, oldRCentroid);
+                    geomRight = Max(geomRight, oldRVal);
+                }
+
+                val      = data[l].Load();
+                centroid = ((Shuffle4<1, 1>(val) - Shuffle4<0, 0>(val))) ^ signFlipMask;
+                if (binner->Bin(centroid[4 + dim], dim) < bestPos) l++;
+                else
+                {
+                    val      = data[l - 1].Load();
+                    centroid = ((Shuffle4<1, 1>(val) - Shuffle4<0, 0>(val))) ^ signFlipMask;
+
+                    if (binner->Bin(centroid[4 + dim], dim) >= bestPos) l--;
+                }
+
+                break;
+            }
+
+            Swap(data[lIndex - 1], data[rIndex + 1]);
             l++;
             r--;
         }
@@ -1894,6 +1958,7 @@ struct HeuristicObjectBinning
         else
         {
             OBin *heuristic = (OBin *)(split.ptr);
+
             mid = PartitionParallel(heuristic, primRefs, split, record.start, record.count,
                                     outLeft, outRight);
 
@@ -1904,11 +1969,14 @@ struct HeuristicObjectBinning
         outLeft.SetRange(record.start, mid - record.start);
         outRight.SetRange(mid, record.End() - mid);
 
+        Assert(split.numLeft == outLeft.Count());
+        Assert(split.numRight == outRight.Count());
+
         Assert(outLeft.count > 0);
         Assert(outRight.count > 0);
 
         // error check
-#if 0
+#if 1
 #ifdef DEBUG
         {
             if (split.bestSAH != f32(pos_inf))

@@ -286,7 +286,7 @@ void ImageInfiniteLight::CalculateSHFromEnvironmentMap()
 
             for (int i = 0; i < 9; i++)
             {
-                c[i] = lum * basis[i] * weight;
+                c[i] += lum * basis[i] * weight;
             }
         }
     }

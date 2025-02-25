@@ -1052,6 +1052,7 @@ using namespace rt;
 
 int main(int argc, char *argv[])
 {
+    size_t size = sizeof(RayState);
     BuildPackMask();
     // OS_SetLargePages();
     Arena *dataArena = ArenaAlloc();

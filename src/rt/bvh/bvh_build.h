@@ -1,6 +1,9 @@
 #ifndef BVH_BUILD_H
 #define BVH_BUILD_H
 #include "bvh_types.h"
+
+#define BUILD_PARALLEL_THRESHOLD 2 * 1024
+
 namespace rt
 {
 
@@ -249,7 +252,7 @@ template <i32 N, typename BuildFunctions>
 BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVHRoot(BuildSettings settings, Record &record)
 {
     settings.blockAdd = (1 << settings.logBlockSize) - 1;
-    bool parallel     = record.count >= 8 * 1024;
+    bool parallel     = record.count >= BUILD_PARALLEL_THRESHOLD;
     BVHNode<N> root   = BuildBVH(settings, record, parallel);
     if (root.data != 0) return root;
 
@@ -341,7 +344,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildBVH(const BuildSettings &settings
     if (parallel)
     {
         scheduler.ScheduleAndWait(numChildren, 1, [&](u32 jobID) {
-            bool childParallel = childRecords[jobID].count >= 8 * 1024;
+            bool childParallel = childRecords[jobID].count >= BUILD_PARALLEL_THRESHOLD;
             childNodes[jobID]  = BuildBVH(settings, childRecords[jobID], childParallel);
         });
     }
@@ -509,12 +512,21 @@ void BVHBuilder<N, BuildFunctions>::BuildCompressedBVH(const BuildSettings &sett
 
     if (parallel)
     {
-        scheduler.ScheduleAndWait(numChildren, 1, [&](u32 jobID) {
-            bool childParallel = childRecords[jobID].count >= 8 * 1024;
-            BuildCompressedBVH(settings, childRecords[jobID], grandChildRecords[jobID],
-                               numGrandChildren[jobID], basePtrs[jobID],
-                               grandChildOffsets[jobID], childParallel);
-        });
+        Scheduler::Counter counter = {};
+        if (numChildren - 1)
+            scheduler.Schedule(&counter, numChildren - 1, 1, [&](u32 jobID) {
+                bool childParallel = childRecords[jobID].count >= BUILD_PARALLEL_THRESHOLD;
+                BuildCompressedBVH(settings, childRecords[jobID], grandChildRecords[jobID],
+                                   numGrandChildren[jobID], basePtrs[jobID],
+                                   grandChildOffsets[jobID], childParallel);
+            });
+
+        BuildCompressedBVH(settings, childRecords[numChildren - 1],
+                           grandChildRecords[numChildren - 1],
+                           numGrandChildren[numChildren - 1], basePtrs[numChildren - 1],
+                           grandChildOffsets[numChildren - 1],
+                           childRecords[numChildren - 1].count >= BUILD_PARALLEL_THRESHOLD);
+        scheduler.Wait(&counter);
     }
     else
     {
@@ -618,7 +630,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildCompressedBVH(BuildSettings setti
     arenas            = inArenas;
     settings.blockAdd = (1 << settings.logBlockSize) - 1;
 
-    bool parallel = record.count >= 8 * 1024;
+    bool parallel = record.count >= BUILD_PARALLEL_THRESHOLD;
 
     Record childRecords[N];
     int numChildren    = 0;

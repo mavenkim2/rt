@@ -553,13 +553,12 @@ template <typename Func>
 void ParallelFor(u32 start, u32 count, u32 groupSize, const Func &func)
 {
     u32 taskCount = (count + groupSize - 1) / groupSize;
-    taskCount     = Min(taskCount, 512u);
+    taskCount     = Min(taskCount, 768u);
     u32 end       = start + count;
     u32 stepSize  = count / taskCount;
     scheduler.ScheduleAndWait(taskCount, 1, [&](u32 jobID) {
         u32 tStart = start + jobID * stepSize;
         u32 size   = jobID == taskCount - 1 ? end - tStart : stepSize;
-        // u32 end  = jobID == taskCount - 1 ? start + count : tStart + stepSize;
         func(jobID, tStart, size);
     });
 }
@@ -619,7 +618,7 @@ ParallelForOutput ParallelFor(TempArena temp, u32 start, u32 count, u32 groupSiz
                               Args... inArgs)
 {
     u32 taskCount = (count + groupSize - 1) / groupSize;
-    taskCount     = Min(taskCount, 512u);
+    taskCount     = Min(taskCount, 768u);
     T *values     = (T *)PushArrayNoZero(temp.arena, u8, sizeof(T) * taskCount);
     for (u32 i = 0; i < taskCount; i++)
     {
@@ -671,12 +670,6 @@ void ParallelReduce(T *out, u32 start, u32 count, u32 groupSize, Func func, Redu
         ParallelFor<T>(temp, start, count, groupSize, func, std::forward<Args>(inArgs)...);
     Reduce<T>(*out, output, reduce, std::forward<Args>(inArgs)...);
     ScratchEnd(temp);
-}
-
-template <typename T, typename Func, typename ReduceFunc, typename... Args>
-void Parallel2DReduce(T *out, u32 start, u32 count, u32 groupSize, Func func,
-                      ReduceFunc reduce, Args... inArgs)
-{
 }
 
 } // namespace rt

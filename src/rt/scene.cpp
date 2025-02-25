@@ -39,22 +39,6 @@ struct PtexData
     Ptex::PtexFilter *filter;
 };
 
-struct PtexCache
-{
-    std::atomic<int> count;
-    Mutex mutex;
-
-    void Load(string filename, ShadingThreadState *state, PtexTexture *parent)
-    {
-        count.fetch_add(1, std::memory_order_acquire);
-    }
-    void Release(Ptex::PtexTexture *texture)
-    {
-        int result = count.fetch_sub(1, std::memory_order_release);
-        if (result == 1) texture->release();
-    }
-};
-
 enum FilterType
 {
     Bspline,
@@ -67,10 +51,6 @@ struct PtexTexture : Texture
     ColorEncoding encoding;
     FilterType filterType;
 
-    bool simd;
-
-    PtexCache ptexCache;
-
     PtexTexture(string filename, FilterType filterType = FilterType::Bspline,
                 ColorEncoding encoding = ColorEncoding::Gamma, f32 scale = 1.f)
         : filename(filename), filterType(filterType), encoding(encoding), scale(scale)
@@ -80,22 +60,7 @@ struct PtexTexture : Texture
     f32 EvaluateFloat(SurfaceInteraction &si, const Vec4f &filterWidths) override
     {
         f32 result = 0.f;
-        if (simd)
-        {
-            // PtexData *d = (PtexData *)data;
-            Ptex::String error;
-            Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
-            if (!texture)
-            {
-                printf("%s\n", error.c_str());
-                Assert(0);
-            }
-            EvaluateHelper<1>(texture, si, filterWidths, &result);
-        }
-        else
-        {
-            EvaluateHelper<1>(si, filterWidths, &result);
-        }
+        EvaluateHelper<1>(si, filterWidths, &result);
         return result * scale;
     }
 
@@ -103,21 +68,7 @@ struct PtexTexture : Texture
                                    const Vec4f &filterWidths) override
     {
         Vec3f result = {};
-        if (simd)
-        {
-            Ptex::String error;
-            Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
-            if (!texture)
-            {
-                printf("%s\n", error.c_str());
-                Assert(0);
-            }
-            EvaluateHelper<3>(texture, si, filterWidths, result.e);
-        }
-        else
-        {
-            EvaluateHelper<3>(si, filterWidths, result.e);
-        }
+        EvaluateHelper<3>(si, filterWidths, result.e);
         Assert(!IsNaN(result[0]) && !IsNaN(result[1]) && !IsNaN(result[2]));
         return Texture::EvaluateAlbedo(result * scale, lambda);
     }
@@ -125,8 +76,14 @@ struct PtexTexture : Texture
     virtual void Start(ShadingThreadState *state) override
     {
         GetDebug()->texture = this;
-        simd                = true;
-        ptexCache.Load(filename, state, this);
+
+        Ptex::String error;
+        Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
+        if (!texture)
+        {
+            printf("%s\n", error.c_str());
+            Assert(0);
+        }
     }
 
     virtual void Stop() override
@@ -138,7 +95,8 @@ struct PtexTexture : Texture
             printf("%s\n", error.c_str());
             Assert(0);
         }
-        ptexCache.Release(texture);
+        texture->release();
+        texture->release();
     }
 
     template <i32 c>
@@ -1276,13 +1234,9 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     scene->geometryType = type;
 }
 
-// TODO IMPORTANT: there's a race condition in here that occurs very rarely, where some of the
-// counters never reach zero, leading to a deadlock.
 void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
                     const Mat4 &cameraFromRender, int screenHeight)
 {
-    u32 expected = 0;
-    // TODO: circular dependencies?
     switch (scene->geometryType)
     {
         case GeometryType::Instance:

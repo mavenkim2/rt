@@ -15,12 +15,12 @@ namespace rt
 // TODO
 // BUGS:
 // - shading normals seem wrong for some elements, check subdivision code
-// - parallelize prim ref code for cat clark patches
 // - investigate why the green light under one of the palm trees is noisier with
 // the exhaustive sampler
 // - get the proper material back on the ironwood tree
 // - reduce size of RayStates in simd integrators
 
+// - load balancing
 // - light tree traversal, adaptive splitting, and accounting for BSDF
 // - https://fpsunflower.github.io/ckulla/data/many-lights-hpg2018.pdf
 // - remove duplicate materials (and maybe geometry), see if this leads to coherent texture
@@ -54,8 +54,8 @@ namespace rt
 //
 void InitializePtex()
 {
-    u32 maxFiles  = 100;
-    size_t maxMem = gigabytes(4);
+    u32 maxFiles  = 400;
+    size_t maxMem = gigabytes(8);
     // cache         = Ptex::PtexCache::create(maxFiles, maxMem, true, 0, &errorHandler);
     cache = Ptex::PtexCache::create(maxFiles, maxMem, true, &ptexInputHandler, &errorHandler);
 }

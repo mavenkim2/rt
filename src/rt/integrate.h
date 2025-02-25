@@ -49,10 +49,6 @@ struct SurfaceInteractions
         : p(p), n(n), uv(uv)
     {
     }
-    // SurfaceInteraction(const Vec3f &p, const Vec3f &n, Vec2f u, f32 tHit) : p(p), n(n),
-    // uv(u), tHit(tHit) {}
-
-    u32 GenerateKey() { return {}; }
 };
 
 typedef SurfaceInteractions<1> SurfaceInteraction;

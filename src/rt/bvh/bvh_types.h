@@ -5,9 +5,8 @@ namespace rt
 {
 static const u32 LANE_WIDTH         = 8;
 static const i32 LANE_WIDTHi        = 8;
-static const u32 GROW_AMOUNT        = 2;         // 1.2f;
-static const u32 PARALLEL_THRESHOLD = 32 * 1024; // 32 * 1024; // 64 * 1024;
-                                                 //
+static const u32 GROW_AMOUNT        = 2;
+static const u32 PARALLEL_THRESHOLD = 8 * 1024;
 #define EXPONENTIAL_QUANTIZE
 #define USE_QUANTIZE_COMPRESS
 
