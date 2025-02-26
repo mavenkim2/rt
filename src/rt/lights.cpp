@@ -176,12 +176,22 @@ f32 DiffuseAreaLight::Importance(const Vec3f &point, const Vec3f &n)
     p[2] -= point;
     p[3] -= point;
 
+    f32 d = Dot(n, point);
+
+    // TODO: differentiate between sphere vs hemisphere?
+    // Clip to hemisphere by projecting onto plane
+    for (int i = 0; i < 4; i++)
+    {
+        f32 signedDistance = Dot(p[i], n);
+        p[i] -= Min(signedDistance, 0.f) * n;
+    }
+
     f32 irradiance = 0.f;
     for (int i = 0; i < 4; i++)
     {
         int nextIndex = (i + 1) & 3;
         irradiance += AngleBetween(Normalize(p[i]), Normalize(p[nextIndex])) *
-                      AbsDot(Normalize(Cross(p[i], p[nextIndex])), n);
+                      Max(Dot(Normalize(Cross(p[i], p[nextIndex])), n), 0.f);
     }
     irradiance *= .5 * InvPi * luminance * scale;
     return irradiance;
@@ -204,7 +214,6 @@ f32 DiffuseAreaLight::Importance(const Vec3f &point, const Vec3f &n)
 //////////////////////////////
 // Infinite Lights
 //
-// TODO: the scene radius should not have to be stored per infinite light
 // SAMPLE_LI(UniformInfiniteLight)
 // {
 //     const UniformInfiniteLight *light =

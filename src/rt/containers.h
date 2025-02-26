@@ -793,17 +793,12 @@ struct HashMap
         u32 hash       = value.Hash();
         HashList &list = map[hash & hashMask];
         HashNode *node = list.first;
-        int loops      = 0;
         while (node)
         {
             if (node->hash == hash)
             {
                 if (node->value == value)
                 {
-                    if (loops > 5)
-                    {
-                        Print("%i %i \n", loops, count);
-                    }
                     return &node->value;
                 }
             }

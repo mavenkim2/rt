@@ -16,11 +16,10 @@ namespace rt
 // BUGS:
 // - shading normals seem wrong for some elements, check subdivision code
 // - investigate why the green light under one of the palm trees is noisier with
-// the exhaustive sampler
+// the exhaustive sampler. it's probably because of occlusion/
 // - get the proper material back on the ironwood tree
-// - reduce size of RayStates in simd integrators
 
-// - load balancing
+// - load balancing to improve loading time?
 // - light tree traversal, adaptive splitting, and accounting for BSDF
 // - https://fpsunflower.github.io/ckulla/data/many-lights-hpg2018.pdf
 // - remove duplicate materials (and maybe geometry), see if this leads to coherent texture
@@ -1155,10 +1154,33 @@ void ConstructCachePoints(Arena **arenas, const Camera &camera,
 }
 #endif
 
-#if 0
+Vec2f SphCoords(const Vec3f &w)
+{
+    f32 theta = ArcCos(w.z);
+    f32 phi   = Atan2(w.y, w.x);
+
+    phi += phi < 0.f ? TwoPi : 0.f;
+    return Vec2f(theta, phi);
+}
+
+Vec4f DSphCoords(const Vec3f &w, const Vec3f &dwdu, const Vec3f &dwdv)
+{
+    // Apply chain rule to ArcCos(w[2])
+    Vec2f dTheta = -Rcp(Sqrt(1 - Sqr(w[2]))) * Vec2f(dwdu[2], dwdv[2]);
+
+    // Apply chain rule & quotient rule to ArcTan(w[1]/w[0])
+    f32 denom  = Sqr(w[0]);
+    denom      = denom == 0.f ? 0.f : Rcp(denom);
+    Vec2f dPhi = Rcp(1 + Sqr(w[1] / w[0])) *
+                 Vec2f((w[0] * dwdu[1] - w[1] * dwdu[0]), (w[0] * dwdv[1] - w[1] * dwdv[0])) *
+                 denom;
+
+    return Vec4f(dTheta[0], dPhi[0], dTheta[1], dPhi[1]);
+}
+
 template <typename Sampler>
-void ManifoldNextEventEstimation(Sampler &sampler, u32 currentDepth, u32 maxDepth,
-                                 SampledWavelengths &lambda)
+void ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray, Sampler &sampler,
+                                 u32 currentDepth, u32 maxDepth, SampledWavelengths &lambda)
 {
     struct ManifoldSurfaceInteraction
     {
@@ -1168,101 +1190,175 @@ void ManifoldNextEventEstimation(Sampler &sampler, u32 currentDepth, u32 maxDept
     ManifoldSurfaceInteraction msiData[MAX_MANIFOLD_OCCLUDERS];
     u32 msiDataCount = 0;
 
-    auto helper =
-        [&]() {
-            f32 theta = Acos(w.z);
-            f32 phi   = Atan2(w.y, w.x);
-        }
+    // I don't know:
+    // 1. the constraint and how to apply it to solve for the new points
+    // 2. I assume the seed path is just a straight line through specular tranmissive
+    // materials to the lights?
+    // 3. why do I need derivatives?
+
+    Scene *scene = GetScene();
 
     Vec3f rayOrigin;
-    if (!IsSpecular(bsdf.Flags()))
-    {
-        // Sample light source
-        f32 lightU = sampler.Get1D();
-        f32 pmf;
-        LightHandle handle = UniformLightSample(scene, lightU, &pmf);
-        Vec2f sample       = sampler.Get2D();
-        if (!bool(handle)) return;
-        // Sample point on the light source
-        LightSample ls = SampleLi(scene, handle, si, lambda, sample, true);
-        if (!ls.pdf) return;
 
-        Assert(maxDepth >= currentDepth);
-        u32 numBounces = maxDepth - currentDepth;
-        if (numBounces == 0)
+    if (IsSpecular(bsdf.Flags())) return;
+    // Sample light source
+    f32 lightU = sampler.Get1D();
+    f32 pmf;
+    Light *light = SampleLight(scene, lightU, &pmf);
+    Vec2f sample = sampler.Get2D();
+    if (!light) return;
+
+    // Sample point on the light source
+    LightSample ls = light->SampleLi(si, sample, lambda, true);
+    if (ls.pdf == 0) return;
+
+    SampledSpectrum f = bsdf.EvaluateSample(-ray.d, ls.wi, p_b) * AbsDot(si.shading.n, ls.wi);
+
+    if (!f) return;
+
+    // Generate seed path
+    for (;;)
+    {
+        ManifoldSurfaceInteraction &msi = msiData[msiDataCount];
+        bool intersect                  = Intersect(scene, ray, msi.si);
+        if (!intersect) break;
+        else
         {
-            // normal NEE
+            ScratchArena scratch;
+            BxDF bxdf = material->Evaluate(scratch.temp.arena, si, lambda,
+                                           Vec4f(dudx, dvdx, dudy, dvdy));
+            BSDF bsdf(bxdf, si.shading.dpdu, si.shading.n);
+
+            if (!EnumHasAnyFlags(bsdf.Flags(), BxDFFlags::SpecularTransmission)) return;
+
+            Vec3f wo = -ray.d;
+            f32 pdf;
+            BSDFSample sample =
+                bsdf.GenerateSample(-ray.d, sampler.Get1D(), sampler.Get2D(),
+                                    TransportMode::Radiance, BxDFFlags::SpecularTransmission);
+            if (!sample.f || !sample.pdf) return;
+
+            ray.d = sample.wi;
+            msiDataCount++;
+        }
+    }
+
+    f32 beta                       = 0.f;
+    int numIterations              = 0;
+    static const int maxIterations = 10;
+
+    ManifoldSurfaceInteraction &hit = msiData[0];
+    while (numIterations < maxIterations)
+    {
+        // From manifold vertex to shading point
+        Vec3f wo        = si.p - hit.si.p;
+        f32 invLengthWo = Length(wo);
+        if (invLengthWo < 1e-3f) return;
+
+        wo *= invLengthWo;
+
+        // Compute partial
+        Vec3f dwo_du = -invLengthWo * (hit.si.dpdu - wo * Dot(wo, hit.si.dpdu));
+        Vec3f dwo_dv = -invLengthWo * (hit.si.dpdv - wo * Dot(wo, hit.si.dpdv));
+
+        // From manifold vertex to emitter
+        Vec3f wi        = ls.samplePoint - hit.si.p;
+        f32 invLengthWi = Length(wi);
+        if (invLengthWi < 1e-3f) return;
+
+        wi *= invLengthWi;
+
+        Vec3f dwi_du = -invLengthWi * (hit.si.dpdu - wi * Dot(wi, hit.si.dpdu));
+        Vec3f dwi_dv = -invLengthWi * (hit.si.dpdv - wi * Dot(wi, hit.si.dpdv));
+
+        // it's actually just partial derivatives all the way down.
+
+        // TODO: conditionally reflect or refract based on index of refraction
+        Vec3f woi = Refract(wo, hit.si.n, hit.si.eta);
+
+        Vec3f dwoi_du;
+        Vec3f dwoi_dv;
+
+        Vec2f woiCoords = SphCoords(woi);
+        Vec2f wiCoords  = SphCoords(wi);
+
+        Vec4f dwoi = DSphCoords(woi, dwoi_du, dwoi_dv);
+        Vec4f dwi  = DSphCoords(wi, dwi_du, dwi_dv);
+
+        Vec2f constraint = wiCoords - woiCoords;
+        if (constraint[1] > Pi) constraint -= TwoPi;
+        else if (constraint < -Pi) constraint += TwoPi;
+
+        Vec4f dConstraint = dwi - dwoi;
+
+        // Inverse of jacobian multiplied by residual gives step size
+        f32 determinant = FMS(dConstraint[0], dConstraint[3], dConstraint[1] * dConstraint[2]);
+        if (Abs(determinant) < 1e-6f) return;
+
+        Vec2f dX = Rcp(determinant) *
+                   Vec2f(FMS(constraint[0], dConstraint[3], constraint[1] * dConstraint[1]),
+                         FMS(constraint[1], dConstraint[0], constraint[0] * dConstraint[2]));
+
+        Vec3f proposal =
+            hit.p - stepScale * beta * (hit.si.dpdu * dX[0] + hit.si.dpdv * dX[1]);
+        Vec3f dProposal = Normalize(proposal - si.p);
+
+        Vec3f from = OffsetRayOrigin(si.p, si.pError, si.n, dProposal);
+        f32 maxT   = Length(proposal - dProposal);
+        Ray2 rayProposal(from, dProposal, maxT * .99f);
+
+        if (Occluded(scene, rayProposal) || shapeIsDifferent)
+        {
+            beta *= .5f;
+            iterations++;
+            continue;
+        }
+
+        beta = Min(1, 2 * beta);
+
+        iterations++;
+    }
+
+    // Solve for path
+    for (u32 index = 0; index < msiDataCount; index++)
+    {
+        Vec3f p0 = index == 0 ? rayOrigin : msiData[index - 1].si.p;
+        Vec3f p2 = index + 1 == msiDataCount ? ls.samplePoint : msiData[index + 1].si.p;
+        ManifoldSurfaceInteraction &currentHit = msiData[index];
+
+        // TODO: change differential geometry?
+        Vec3f wo     = p0 - currentHit.si.p;
+        Vec3f wi     = p2 - currentHit.si.p;
+        bool outside = Dot(wo, currentHit.si.shading.n) > 0.f;
+        if (!outside) Swap(wo, wi);
+
+        // Manifold walk
+        RefractPartialDerivatives(wo);
+        // Constraint solving until under a threshold between these computed partial
+        // derivatives and
+    }
+
+    // Evaluate BSDF for light sample, check visibility with shadow ray
+    f32 p_b;
+    SampledSpectrum f = bsdf.EvaluateSample(-ray.d, ls.wi, p_b) * AbsDot(si.shading.n, ls.wi);
+    if (f && !Occluded(scene, ray, si, ls))
+    {
+        // Calculate contribution
+        f32 lightPdf = pmf * ls.pdf;
+
+        if (IsDeltaLight(ls.lightType))
+        {
+            L += beta * f * ls.L / lightPdf;
         }
         else
         {
-        }
-
-        // Generate seed path
-        for (;;)
-        {
-            ManifoldSurfaceInteraction &msi = msiData[msiDataCount];
-            bool intersect                  = Intersect(scene, ray, msi.si);
-            if (!intersect)
-            {
-                break;
-            }
-            else
-            {
-                ScratchArena scratch;
-                BSDF bsdf;
-                EvaluateMaterial(scratch.temp.arena, si, &bsdf, lambda);
-                if (!EnumHasAnyFlags(bsdf.Flags(), BxDFFlags::SpecularTransmission)) return;
-
-                Vec3f wo = -ray.d;
-                f32 pdf;
-                BSDFSample sample = bsdf.GenerateSample(
-                    -ray.d, sampler.Get1D(), sampler.Get2D(), TransportMode::Radiance,
-                    BxDFFlags::SpecularTransmission);
-                if (!sample.f || !sample.pdf) return;
-
-                ray.d = sample.wi;
-                msiDataCount++;
-            }
-        }
-
-        // Handle paths
-        for (u32 index = 0; index < msiDataCount; index++)
-        {
-            Vec3f p0 = index == 0 ? rayOrigin : msiData[index - 1].si.p;
-            Vec3f p2 = index + 1 == msiDataCount ? ls.samplePoint : msiData[index + 1].si.p;
-            ManifoldSurfaceInteraction &currentHit = msiData[index];
-            // TODO: change differential geometry?
-            Vec3f wo     = p0 - currentHit.si.p;
-            Vec3f wi     = p2 - currentHit.si.p;
-            bool outside = Dot(wo, currentHit.si.shading.n) > 0.f;
-            if (!outside) Swap(wo, wi);
-
-            // Manifold walk
-            RefractPartialDerivatives(wo);
-                // Constraint solving until under a threshold between these computed partial derivatives and 
-        }
-
-        // Evaluate BSDF for light sample, check visibility with shadow ray
-        f32 p_b;
-        SampledSpectrum f =
-            bsdf.EvaluateSample(-ray.d, ls.wi, p_b) * AbsDot(si.shading.n, ls.wi);
-        if (f && !Occluded(scene, ray, si, ls))
-        {
-            // Calculate contribution
-            f32 lightPdf = pmf * ls.pdf;
-
-            if (IsDeltaLight(ls.lightType))
-            {
-                L += beta * f * ls.L / lightPdf;
-            }
-            else
-            {
-                f32 w_l = PowerHeuristic(1, lightPdf, 1, p_b);
-                L += beta * f * w_l * ls.L / lightPdf;
-            }
+            f32 w_l = PowerHeuristic(1, lightPdf, 1, p_b);
+            L += beta * f * w_l * ls.L / lightPdf;
         }
     }
 }
+}
+#if 0
 
 //////////////////////////////
 // Volumes

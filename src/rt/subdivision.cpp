@@ -479,6 +479,9 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                                 Vec3f normal;
                                 EvaluateLimitSurfacePosition(normals, &patchMap, patchTable,
                                                              sample, normal, dndu, dndv);
+
+                                // f32 invLength = 1.f / Length(normal);
+                                // normal        = invLength * normal;
                                 normal = Normalize(normal);
 
                                 // Vec3f normal = Cross(dpdu, dpdv);
@@ -487,9 +490,10 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                                 // CalculateWeingarten(normal, dpdu, dpdv, dpduu, dpduv,
                                 // dpdvv,
                                 //                     dndu, dndv);
-                                // dndu = test * (dndu - normal * Dot(dndu, normal));
-                                // dndv = test * (dndv - normal * Dot(dndv, normal));
 
+                                // dndu = invLength * (dndu - normal * Dot(dndu, normal));
+                                // dndv = invLength * (dndv - normal * Dot(dndv, normal));
+                                //
                                 tessellatedVertices.vertices[i] = pos;
                                 tessellatedVertices.normals[i]  = normal;
                                 tessellatedVertices.dpdu[i]     = dpdu;

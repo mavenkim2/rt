@@ -737,135 +737,55 @@ struct HeuristicAOSObjectBinning
         i32 end   = r;
 
         Lane8F32 lanes[8];
-
-        Lane8F32 lVal;
-        Lane8F32 rVal;
-
-        Lane8F32 oldLVal;
-        Lane8F32 oldRVal;
-        u32 lIndex;
-        u32 rIndex;
-
-        lIndex  = getIndex(l);
-        oldLVal = data[lIndex].Load();
-        Lane8F32 oldLCentroid =
-            ((Shuffle4<1, 1>(oldLVal) - Shuffle4<0, 0>(oldLVal))) ^ signFlipMask;
-        l++;
-
-        rIndex  = getIndex(r);
-        oldRVal = data[rIndex].Load();
-        Lane8F32 oldRCentroid =
-            ((Shuffle4<1, 1>(oldRVal) - Shuffle4<0, 0>(oldRVal))) ^ signFlipMask;
-        r--;
-
         for (;;)
         {
+            Lane8F32 lVal;
+            Lane8F32 rVal;
+            u32 lIndex;
+            u32 rIndex;
             while (l <= r)
             {
-                lIndex = getIndex(l);
-                lVal   = data[lIndex].Load();
+                lIndex       = getIndex(l);
+                PrimRef &ref = data[lIndex];
+                lVal         = ref.Load();
                 Lane8F32 centroid =
                     ((Shuffle4<1, 1>(lVal) - Shuffle4<0, 0>(lVal))) ^ signFlipMask;
+                f32 testCentroid = (ref.max[dim] - ref.min[dim]);
 
-                u32 bin      = binner->Bin(oldLCentroid[4 + dim], dim);
-                bool isRight = bin >= bestPos;
-                if (isRight)
+                if (binner->Bin(testCentroid, dim) >= bestPos)
                 {
-                    centRight = Max(centRight, oldLCentroid);
-                    geomRight = Max(geomRight, oldLVal);
-
-                    oldLCentroid = centroid;
-                    oldLVal      = lVal;
+                    centRight = Max(centRight, centroid);
+                    geomRight = Max(geomRight, lVal);
                     break;
                 }
-                centLeft = Max(centLeft, oldLCentroid);
-                geomLeft = Max(geomLeft, oldLVal);
-
-                oldLCentroid = centroid;
-                oldLVal      = lVal;
-
+                centLeft = Max(centLeft, centroid);
+                geomLeft = Max(geomLeft, lVal);
                 l++;
             }
             while (l <= r)
             {
                 Assert(r >= 0);
 
-                rIndex = getIndex(r);
-                rVal   = data[rIndex].Load();
+                rIndex       = getIndex(r);
+                PrimRef &ref = data[rIndex];
+                rVal         = ref.Load();
                 Lane8F32 centroid =
                     ((Shuffle4<1, 1>(rVal) - Shuffle4<0, 0>(rVal))) ^ signFlipMask;
 
-                u32 bin     = binner->Bin(oldRCentroid[4 + dim], dim);
-                bool isLeft = bin < bestPos;
-                if (isLeft)
+                f32 testCentroid = (ref.max[dim] - ref.min[dim]);
+                if (binner->Bin(testCentroid, dim) < bestPos)
                 {
-                    centLeft = Max(centLeft, oldRCentroid);
-                    geomLeft = Max(geomLeft, oldRVal);
-
-                    oldRCentroid = centroid;
-                    oldRVal      = rVal;
+                    centLeft = Max(centLeft, centroid);
+                    geomLeft = Max(geomLeft, rVal);
                     break;
                 }
-                centRight = Max(centRight, oldRCentroid);
-                geomRight = Max(geomRight, oldRVal);
-
-                oldRCentroid = centroid;
-                oldRVal      = rVal;
+                centRight = Max(centRight, centroid);
+                geomRight = Max(geomRight, rVal);
                 r--;
             }
-            if (l > r)
-            {
-                Lane8F32 val = data[l].Load();
-                Lane8F32 centroid =
-                    ((Shuffle4<1, 1>(val) - Shuffle4<0, 0>(val))) ^ signFlipMask;
-                bool isLeft = binner->Bin(centroid[4 + dim], dim) < bestPos;
+            if (l > r) break;
 
-                val          = data[r].Load();
-                centroid     = ((Shuffle4<1, 1>(val) - Shuffle4<0, 0>(val))) ^ signFlipMask;
-                bool isRight = binner->Bin(centroid[4 + dim], dim) >= bestPos;
-                if (isLeft && isRight) Swap(data[l], data[r]);
-
-                u32 bin = binner->Bin(oldLCentroid[4 + dim], dim);
-                isLeft  = bin < bestPos;
-                if (isLeft)
-                {
-                    centLeft = Max(centLeft, oldLCentroid);
-                    geomLeft = Max(geomLeft, oldLVal);
-                }
-                else
-                {
-                    centRight = Max(centRight, oldLCentroid);
-                    geomRight = Max(geomRight, oldLVal);
-                }
-
-                bin          = binner->Bin(oldRCentroid[4 + dim], dim);
-                bool rIsLeft = bin < bestPos;
-                if (rIsLeft)
-                {
-                    centLeft = Max(centLeft, oldRCentroid);
-                    geomLeft = Max(geomLeft, oldRVal);
-                }
-                else
-                {
-                    centRight = Max(centRight, oldRCentroid);
-                    geomRight = Max(geomRight, oldRVal);
-                }
-
-                val      = data[l].Load();
-                centroid = ((Shuffle4<1, 1>(val) - Shuffle4<0, 0>(val))) ^ signFlipMask;
-                if (binner->Bin(centroid[4 + dim], dim) < bestPos) l++;
-                else
-                {
-                    val      = data[l - 1].Load();
-                    centroid = ((Shuffle4<1, 1>(val) - Shuffle4<0, 0>(val))) ^ signFlipMask;
-
-                    if (binner->Bin(centroid[4 + dim], dim) >= bestPos) l--;
-                }
-
-                break;
-            }
-
-            Swap(data[lIndex - 1], data[rIndex + 1]);
+            Swap(data[lIndex], data[rIndex]);
             l++;
             r--;
         }
@@ -1958,7 +1878,6 @@ struct HeuristicObjectBinning
         else
         {
             OBin *heuristic = (OBin *)(split.ptr);
-
             mid = PartitionParallel(heuristic, primRefs, split, record.start, record.count,
                                     outLeft, outRight);
 
