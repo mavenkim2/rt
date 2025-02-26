@@ -1646,7 +1646,6 @@ Vec3f SamplePhaseDielectric(RNG &rng, const Vec3f &wo, f32 alphaX, f32 alphaY, f
     }
 }
 
-
 struct RayInfo
 {
     // direction

@@ -3,6 +3,7 @@
 
 #include "bvh/bvh_types.h"
 #include "handles.h"
+#include "lights.h"
 #include "math/lane4f32.h"
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/util/GridHandle.h>
@@ -181,6 +182,7 @@ enum class IndexType
     u32,
 };
 
+// Megastruct for geometry
 struct Mesh
 {
     Vec3f *p;
@@ -192,7 +194,55 @@ struct Mesh
     u32 numVertices;
     u32 numFaces;
 
+    // PDF for area sampling
+    PiecewiseConstant1D areaPDF;
     u32 GetNumFaces() const { return numFaces; }
+
+    void GetFaceIndices(int faceIndex, int outIndices[3])
+    {
+        if (indices)
+        {
+            outIndices[0] = indices[3 * f + 0];
+            outIndices[1] = indices[3 * f + 1];
+            outIndices[2] = indices[3 * f + 2];
+        }
+        else
+        {
+            outIndices[0] = 3 * f + 0;
+            outIndices[1] = 3 * f + 1;
+            outIndices[2] = 3 * f + 2;
+        }
+    }
+
+    void CreateTriangleAreaPDF(Arena *arena)
+    {
+        Assert(p && indices);
+        f32 *areas = PushArrayNoZero(arena, f32, numFaces);
+        for (int f = 0; f < numFaces; f++)
+        {
+            int triIndices[3];
+            GetFaceIndices(f, triIndices);
+            f32 area = 0.5f * Cross(p[triIndices[1]] - p[triIndices[0]],
+                                    p[triIndices[2]] - p[triIndices[0]]);
+            areas[f] = area;
+        }
+        areaPDF = PiecewiseConstant1D(arena, areas, numFaces, 0.f, 1.f);
+    }
+
+    Vec3f SamplePosition(Vec2f u)
+    {
+        f32 pdf;
+        u32 faceIndex = 0;
+        f32 result    = areaPDF.Sample(u[0], &pdf, &faceIndex);
+
+        int triIndices[3];
+        GetFaceIndices(faceIndex, triIndices);
+
+        Vec3f bary        = SampleUniformTriangle(u[1]);
+        Vec3f samplePoint = bary[0] * p[triIndices[0]] + bary[1] * p[triIndices[1]] +
+                            bary[2] * p[triIndices[2]];
+        return samplePoint;
+    }
 
     __forceinline const Vec3f &GetIndexedVertex(u32 index) const
     {
@@ -732,6 +782,8 @@ struct Scene
     StaticArray<Material *> materials;
     StaticArray<Texture *> textures;
 
+    StaticArray<Mesh *> causticCasters;
+
     // u32 numLights;
 
     Bounds BuildBVH(Arena **arenas, BuildSettings &settings);
@@ -746,11 +798,13 @@ ScenePrimitives **scenes_;
 ScenePrimitives **GetScenes() { return scenes_; }
 void SetScenes(ScenePrimitives **scenes) { scenes_ = scenes; }
 
-// AttributeTable *GetMaterialTable(u32 tableIndex)
-// {
-//     Scene *scene = GetScene();
-//     return &scene->materialTables[tableIndex];
-// }
+Mesh *GetMesh(int sceneID, int geomID)
+{
+    Assert(scenes_);
+    ScenePrimitives *s = scenes_[sceneID];
+    Assert(s->geometryType != GeometryType::Instance);
+    return (Mesh *)s->primitives + geomID;
+}
 
 void BuildTLASBVH(Arena **arenas, ScenePrimitives *scene);
 

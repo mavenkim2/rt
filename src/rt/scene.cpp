@@ -1127,12 +1127,15 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 }
                 else if (Advance(&tokenizer, "Tri "))
                 {
+                    // TODO: this is hardcoded for moana
                     Assert(type == GeometryType::Max || type == GeometryType::TriangleMesh);
                     type       = GeometryType::TriangleMesh;
                     Mesh &mesh = shapes.AddBack();
                     AddMesh(mesh, 3);
                     mesh = CopyMesh(arena, mesh);
                     AddMaterialAndLights(mesh);
+
+                    mesh.CreateTriangleAreaPDF(arena);
 
                     threadMemoryStatistics[threadIndex].totalShapeMemory +=
                         mesh.numVertices * (sizeof(Vec3f) * 2 + sizeof(Vec2f)) +

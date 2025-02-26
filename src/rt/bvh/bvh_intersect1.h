@@ -824,6 +824,9 @@ static bool SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
     Assert(geomID < scene->numPrimitives);
     si.materialIDs = indices->materialID.data;
 
+    si.sceneID = scene->sceneIndex;
+    si.geomID  = geomID;
+
     // TODO: properly obtain the light handle
     si.lightIndices = indices->lightID.data;
     si.faceIndices  = mesh->faceIDs ? mesh->faceIDs[primID] : primID;
@@ -1353,6 +1356,7 @@ struct CatClarkPatchIntersector
                 default: ErrorExit(0, "type :%u id : %u\n", (u32)type, id);
             }
 
+            // TODO: compress this into SurfaceInteractionFromTriangleIntersection
             // Recalculate uv of
             f32 u   = Get(itr.u, index);
             f32 v   = Get(itr.v, index);
@@ -1426,6 +1430,8 @@ struct CatClarkPatchIntersector
 #endif
             si.shading.dpdu = ss;
             si.shading.dpdv = ts;
+            si.sceneID      = scene->sceneIndex;
+            si.geomID       = geomID;
             return true;
         }
 
