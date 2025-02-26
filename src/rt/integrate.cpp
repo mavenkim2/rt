@@ -1178,9 +1178,109 @@ Vec4f DSphCoords(const Vec3f &w, const Vec3f &dwdu, const Vec3f &dwdv)
     return Vec4f(dTheta[0], dPhi[0], dTheta[1], dPhi[1]);
 }
 
+f32 Determinant(const Vec4f &matrix)
+{
+    return FMS(matrix[0], matrix[3], matrix[1] * matrix[2]);
+}
+
+Vec4f Inverse(const Vec4f &matrix, f32 det)
+{
+    return 1.f / det * Vec4f(matrix[3], -matrix[1], -matrix[2], matrix[0]);
+}
+
+Vec4f Mult2x2(const Vec4f &m1, const Vec4f &m2)
+{
+    return Vec4f(FMA(m1[0], m2[0], m1[1] * m2[2]), FMA(m1[0], m2[1], m1[1] * m2[3]),
+                 FMA(m1[2], m2[0], m1[3] * m2[2]), FMA(m1[2], m2[1], m1[3] * m2[3]));
+}
+
+// TODO: this doesn't handle delta direction lights
+// https://www.mitsuba-renderer.org/~wenzel/papers/phdthesis.pdf, Appendix A2
+f32 GeometryTerm(SurfaceInteraction &v0, SurfaceInteraction &v1, LigthSample &v2)
+{
+    // Normalize direction vectors from v1
+    wo = v0.p - v1.p;
+
+    f32 invR2 = 1.f / LengthSquared(wo);
+    f32 ilo   = Length(wo);
+    if (ilo < 1e-3f) return 0.f;
+
+    ilo = Rcp(ilo);
+    wo *= ilo;
+
+    wi      = v2.p - v1.p;
+    f32 ili = Length(wi);
+    if (ili < 1e-3f) return 0.f;
+
+    ili = Rcp(ili);
+    wi *= ili;
+
+    f32 eta = v1.etaP;
+
+    Vec3f h = wo + wi * eta;
+    // TODO: why?
+    if (eta != 1.f) h *= -1.f;
+    f32 ilh = Rcp(Length(h));
+    h *= ilh;
+
+    // TODO: why?
+    ilo *= ilh;
+    ili *= eta * ilh;
+
+    Vec dh_du =
+        -v1.dpdu * (ilo + ili) + (wo * Dot(wo, v1.dpdu) * ilo) + (wi * Dot(wi, v1.dpdu) * ili);
+
+    Vec dh_dv =
+        -v1.dpdu * (ilo + ili) + (wo * Dot(wo, v1.dpdv) * ilo) + (wi * Dot(wi, v1.dpdv) * ili);
+
+    dh_du -= h * Dot(h, dh_du);
+    dh_dv -= h * Dot(h, dh_dv);
+
+    if (eta != 1.f)
+    {
+        dh_du *= -1.f;
+        dh_dv *= -1.f;
+    }
+
+    f32 dpdu_dot_n = Dot(v1.dpdu, v1.n);
+    f32 dpdv_dot_n = Dot(v1.dpdv, v1.n);
+    // TODO: is this necessary? if we don't need to do this then
+    Vec3f s = v1.dpdu - v1.n * dpdu_dot_n;
+    Vec3f t = v1.dpdv - v1.n * dpdv_dot_n;
+    // Derivative of (<h, s>)
+
+    Vec4f dc1_dx1(
+        Dot(dh_du, s) - Dot(h, (Dot(v1.dpdu, v1.dndu) * v1.n - dpdu_dot_n * v1.dndu)),
+        Dot(dh_dv, s) - Dot(h, (Dot(v1.dpdv, v1.dndv) * v1.n - dpdv_dot_n * v1.dndv)),
+        Dot(dh_du, t) - Dot(h, (Dot(v1.dpdu, v1.dndu) * v1.n - dpdu_dot_n * v1.dndu)),
+        Dot(dh_dv, t) - Dot(h, (Dot(v1.dpdv, v1.dndv) * v1.n - dpdv_dot_n * v1.dndv)));
+
+    dh_du = ili * (v2.dpdu - wi * Dot(wi, v2.dpdu));
+    dh_dv = ili * (v2.dpdv - wi * Dot(wi, v2.dpdv));
+    dh_du -= h * Dot(dh_du, h);
+    dh_dv -= h * Dot(dh_dv, h);
+
+    if (eta != 1.f)
+    {
+        dh_du *= -1.f;
+        dh_dv *= -1.f;
+    }
+
+    Vec4f dc1_dx2(Dot(dh_du, s), Dot(dh_dv, s), Dot(dh_du, t), Dot(dh_dv, t));
+
+    f32 det = Determinant(dc1_dx1);
+    if (Abs(det) < 1e-6f) return 0.f;
+
+    f32 dx1_dx2 = Min(Determinant(Mult2x2(Inverse(dc1_dx1, det), dc1_dx2)), 1.f);
+
+    f32 G = AbsDot(v1.n, wo) * dx1_dx2 * invR2;
+    return G;
+}
+
 template <typename Sampler>
 void ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray, Sampler &sampler,
-                                 u32 currentDepth, u32 maxDepth, SampledWavelengths &lambda)
+                                 BSDF &bsdf, u32 currentDepth, u32 maxDepth,
+                                 SampledWavelengths &lambda)
 {
     struct ManifoldSurfaceInteraction
     {
@@ -1189,12 +1289,6 @@ void ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray, Sampler &sam
     const u32 MAX_MANIFOLD_OCCLUDERS = 2;
     ManifoldSurfaceInteraction msiData[MAX_MANIFOLD_OCCLUDERS];
     u32 msiDataCount = 0;
-
-    // I don't know:
-    // 1. the constraint and how to apply it to solve for the new points
-    // 2. I assume the seed path is just a straight line through specular tranmissive
-    // materials to the lights?
-    // 3. why do I need derivatives?
 
     Scene *scene = GetScene();
 
@@ -1243,120 +1337,166 @@ void ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray, Sampler &sam
         }
     }
 
-    f32 beta                       = 0.f;
-    int numIterations              = 0;
-    static const int maxIterations = 10;
+    f32 beta          = 1.f;
+    int numIterations = 0;
+
+    static const f32 stepScale           = 1.f;
+    static const int maxTrials           = 5;
+    static const int maxIterations       = 20;
+    static const f32 uniquenessThreshold = 1e-4f;
+    static const f32 solverThreshold     = 1e-5f;
 
     ManifoldSurfaceInteraction &hit = msiData[0];
-    while (numIterations < maxIterations)
+
+    SampledSpectrum result = {};
+    // Biased variant of specular manifold sampling
+    for (int trialIndex = 0; trialIndex < maxTrials; trialIndex++)
     {
-        // From manifold vertex to shading point
-        Vec3f wo        = si.p - hit.si.p;
-        f32 invLengthWo = Length(wo);
-        if (invLengthWo < 1e-3f) return;
+        FixedArray<Vec3f, maxTrials> solutions;
 
-        wo *= invLengthWo;
-
-        // Compute partial
-        Vec3f dwo_du = -invLengthWo * (hit.si.dpdu - wo * Dot(wo, hit.si.dpdu));
-        Vec3f dwo_dv = -invLengthWo * (hit.si.dpdv - wo * Dot(wo, hit.si.dpdv));
-
-        // From manifold vertex to emitter
-        Vec3f wi        = ls.samplePoint - hit.si.p;
-        f32 invLengthWi = Length(wi);
-        if (invLengthWi < 1e-3f) return;
-
-        wi *= invLengthWi;
-
-        Vec3f dwi_du = -invLengthWi * (hit.si.dpdu - wi * Dot(wi, hit.si.dpdu));
-        Vec3f dwi_dv = -invLengthWi * (hit.si.dpdv - wi * Dot(wi, hit.si.dpdv));
-
-        // it's actually just partial derivatives all the way down.
-
-        // TODO: conditionally reflect or refract based on index of refraction
-        Vec3f woi = Refract(wo, hit.si.n, hit.si.eta);
-
-        Vec3f dwoi_du;
-        Vec3f dwoi_dv;
-
-        Vec2f woiCoords = SphCoords(woi);
-        Vec2f wiCoords  = SphCoords(wi);
-
-        Vec4f dwoi = DSphCoords(woi, dwoi_du, dwoi_dv);
-        Vec4f dwi  = DSphCoords(wi, dwi_du, dwi_dv);
-
-        Vec2f constraint = wiCoords - woiCoords;
-        if (constraint[1] > Pi) constraint -= TwoPi;
-        else if (constraint < -Pi) constraint += TwoPi;
-
-        Vec4f dConstraint = dwi - dwoi;
-
-        // Inverse of jacobian multiplied by residual gives step size
-        f32 determinant = FMS(dConstraint[0], dConstraint[3], dConstraint[1] * dConstraint[2]);
-        if (Abs(determinant) < 1e-6f) return;
-
-        Vec2f dX = Rcp(determinant) *
-                   Vec2f(FMS(constraint[0], dConstraint[3], constraint[1] * dConstraint[1]),
-                         FMS(constraint[1], dConstraint[0], constraint[0] * dConstraint[2]));
-
-        Vec3f proposal =
-            hit.p - stepScale * beta * (hit.si.dpdu * dX[0] + hit.si.dpdv * dX[1]);
-        Vec3f dProposal = Normalize(proposal - si.p);
-
-        Vec3f from = OffsetRayOrigin(si.p, si.pError, si.n, dProposal);
-        f32 maxT   = Length(proposal - dProposal);
-        Ray2 rayProposal(from, dProposal, maxT * .99f);
-
-        if (Occluded(scene, rayProposal) || shapeIsDifferent)
+        Vec3f proposal;
+        bool success = false;
+        SurfaceInteraction newSi;
+        // Newton solver using angle constraints
+        while (numIterations < maxIterations)
         {
-            beta *= .5f;
-            iterations++;
-            continue;
+            // From manifold vertex to shading point
+            Vec3f wo        = si.p - hit.si.p;
+            f32 invLengthWo = Length(wo);
+            if (invLengthWo < 1e-3f) break;
+
+            wo *= invLengthWo;
+
+            // Compute partial
+            Vec3f dwo_du = -invLengthWo * (hit.si.dpdu - wo * Dot(wo, hit.si.dpdu));
+            Vec3f dwo_dv = -invLengthWo * (hit.si.dpdv - wo * Dot(wo, hit.si.dpdv));
+
+            // From manifold vertex to emitter
+            Vec3f wi        = ls.samplePoint - hit.si.p;
+            f32 invLengthWi = Length(wi);
+            if (invLengthWi < 1e-3f) break;
+
+            wi *= invLengthWi;
+
+            Vec3f dwi_du = -invLengthWi * (hit.si.dpdu - wi * Dot(wi, hit.si.dpdu));
+            Vec3f dwi_dv = -invLengthWi * (hit.si.dpdv - wi * Dot(wi, hit.si.dpdv));
+
+            // it's actually just partial derivatives all the way down.
+
+            // TODO: conditionally reflect or refract based on index of refraction Vec3f woi =
+            // Refract(wo, hit.si.n, hit.si.eta);
+            Vec3f dwoi_du;
+            Vec3f dwoi_dv;
+
+            Vec2f woiCoords = SphCoords(woi);
+            Vec2f wiCoords  = SphCoords(wi);
+
+            Vec4f dwoi = DSphCoords(woi, dwoi_du, dwoi_dv);
+            Vec4f dwi  = DSphCoords(wi, dwi_du, dwi_dv);
+
+            Vec2f constraint = wiCoords - woiCoords;
+            if (constraint[1] > Pi) constraint -= TwoPi;
+            else if (constraint < -Pi) constraint += TwoPi;
+
+            Vec4f dConstraint = dwi - dwoi;
+
+            // Inverse of jacobian multiplied by residual gives step size
+            f32 determinant =
+                FMS(dConstraint[0], dConstraint[3], dConstraint[1] * dConstraint[2]);
+            if (Abs(determinant) < 1e-6f) break;
+
+            Vec2f dX =
+                Rcp(determinant) *
+                Vec2f(FMS(constraint[0], dConstraint[3], constraint[1] * dConstraint[1]),
+                      FMS(constraint[1], dConstraint[0], constraint[0] * dConstraint[2]));
+
+            // Newton raphson
+            proposal = hit.p - stepScale * beta * (hit.si.dpdu * dX[0] + hit.si.dpdv * dX[1]);
+            Vec3f dProposal = Normalize(proposal - si.p);
+
+            if (constraint < constraintThreshold)
+            {
+                success = true;
+                break;
+            }
+
+            // Ensure
+            Vec3f from = OffsetRayOrigin(si.p, si.pError, si.n, dProposal);
+            f32 maxT   = Length(proposal - dProposal);
+            Ray2 rayProposal(from, dProposal, maxT * .99f);
+
+            // If a different shape was intersected, then fail
+            bool result = Intersect(scene, rayProposal, newSi);
+            if (!result || newSi.sceneID != hit.sceneID && newSi.geomID != hit.geomID)
+            {
+                beta *= .5f;
+                iterations++;
+                continue;
+            }
+
+            beta = Min(1, 2 * beta);
+            hit  = newSi;
+            numIterations++;
         }
+        if (!success) continue;
 
-        beta = Min(1, 2 * beta);
-
-        iterations++;
-    }
-
-    // Solve for path
-    for (u32 index = 0; index < msiDataCount; index++)
-    {
-        Vec3f p0 = index == 0 ? rayOrigin : msiData[index - 1].si.p;
-        Vec3f p2 = index + 1 == msiDataCount ? ls.samplePoint : msiData[index + 1].si.p;
-        ManifoldSurfaceInteraction &currentHit = msiData[index];
-
-        // TODO: change differential geometry?
-        Vec3f wo     = p0 - currentHit.si.p;
-        Vec3f wi     = p2 - currentHit.si.p;
-        bool outside = Dot(wo, currentHit.si.shading.n) > 0.f;
-        if (!outside) Swap(wo, wi);
-
-        // Manifold walk
-        RefractPartialDerivatives(wo);
-        // Constraint solving until under a threshold between these computed partial
-        // derivatives and
-    }
-
-    // Evaluate BSDF for light sample, check visibility with shadow ray
-    f32 p_b;
-    SampledSpectrum f = bsdf.EvaluateSample(-ray.d, ls.wi, p_b) * AbsDot(si.shading.n, ls.wi);
-    if (f && !Occluded(scene, ray, si, ls))
-    {
-        // Calculate contribution
-        f32 lightPdf = pmf * ls.pdf;
-
-        if (IsDeltaLight(ls.lightType))
+        for (auto &solution : solutions)
         {
-            L += beta * f * ls.L / lightPdf;
+            if (AbsDot(solution, proposal) - 1.f < uniquenessThreshold)
+            {
+                success = false;
+                break;
+            }
         }
-        else
+        if (!success) continue;
+
+        solutions.Push(proposal);
+
+        // Evaluate contribution
+        Material *material = scene->materials[MaterialHandle(newSi.materialIDs).GetIndex()];
+
+        f32 p_b;
+        Vec3f wi = Normalize(ls.samplePoint - newSi.p);
+        Vec3f wo = si.p - newSi.p;
+        SampledSpectrum bsdfVal =
+            bsdf.EvaluateSample(wo, wi, p_b); // * AbsDot(si.shading.n, wi);
+
+        SampledSpectrum specularVal = {};
+
+        // Calculate |do/dh| (see Eq.6 MNEE original paper)
+        if (EnumHasAllFlags(bsdf.Flags(), BxDFFlags::GlossyReflection))
         {
-            f32 w_l = PowerHeuristic(1, lightPdf, 1, p_b);
-            L += beta * f * w_l * ls.L / lightPdf;
+            Vec3f wm    = Normalize(wo + wi);
+            specularVal = 4 * AbsDot(wi, wm);
         }
+        else if (EnumHasAllFlags(bsdf.Flags(), BxDFFlags::GlossyTransmission))
+        {
+            Vec3f wm    = wo + wi * newSi.etaP;
+            specularVal = Sqr(Dot(wi, wm) + Dot(wo, wm) / etaP) / AbsDot(wi, wm);
+        }
+        // TODO: handle conductor case?
+        else if (EnumHasAllFlags(bsdf.Flags(), BxDFFlags::SpecularReflection))
+        {
+            f32 cosTheta_i = Dot(newSi.shading.n, wi);
+            f32 F          = FrDielectric(cosTheta_i, etaP);
+            specularVal    = F;
+        }
+        else if (EnumHasAllFlags(bsdf.Flags(), BxDFFlags::SpecularTransmission))
+        {
+            f32 cosTheta_i = Dot(newSi.shading.n, wi);
+            f32 F          = FrDielectric(cosTheta_i, etaP);
+            specularVal    = (1 - F) * Sqr(newSi.etaP);
+        }
+        else Assert(0);
+
+        specularVal *= AbsDot(newSi.shading.n, wi);
+
+        // Calculate geometry term multiplied by determinant of transfer matrix
+        specularVal *= GeometryTerm(si, newSi, ls);
+
+        // TODO: what is this non-visible normal sampling thing in the sms code?
+        result += bsdfVal * specularVal / p_b;
     }
-}
 }
 #if 0
 
