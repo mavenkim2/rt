@@ -306,9 +306,7 @@ struct DielectricMaterial : Material
 {
     Texture *uRoughnessTexture;
     Texture *vRoughnessTexture;
-    // ConstantSpectrum eta;
     f32 eta;
-    // Spectrum eta;
 
     DielectricMaterial() = default;
     DielectricMaterial(Texture *u, Texture *v, f32 eta)
@@ -316,6 +314,7 @@ struct DielectricMaterial : Material
     {
     }
 
+    virtual f32 GetIOR() override { return eta; }
     BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
                   const Vec4f &filterWidths) override
     {
@@ -1984,6 +1983,11 @@ ShapeSample ScenePrimitives::Sample(SurfaceInteraction &intr, AffineSpace *space
         break;
         default: Assert(0); return {};
     }
+}
+
+Material *Scene::GetMaterial(SurfaceInteraction &si)
+{
+    return materials[MaterialHandle(si.materialIDs).GetIndex()];
 }
 
 } // namespace rt

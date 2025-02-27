@@ -37,8 +37,8 @@ struct SurfaceInteractions
     LaneKU32 materialIDs;
     LaneKU32 faceIndices;
 
+    LaneKU32 sceneID;
     LaneKU32 geomID;
-    LaneKU32 primID;
 
     LaneKU32 rayStateHandles;
     f32 curvature;

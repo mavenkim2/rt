@@ -198,7 +198,7 @@ struct Mesh
     PiecewiseConstant1D areaPDF;
     u32 GetNumFaces() const { return numFaces; }
 
-    void GetFaceIndices(int faceIndex, int outIndices[3])
+    void GetFaceIndices(int f, int outIndices[3])
     {
         if (indices)
         {
@@ -222,8 +222,8 @@ struct Mesh
         {
             int triIndices[3];
             GetFaceIndices(f, triIndices);
-            f32 area = 0.5f * Cross(p[triIndices[1]] - p[triIndices[0]],
-                                    p[triIndices[2]] - p[triIndices[0]]);
+            f32 area = 0.5f * Length(Cross(p[triIndices[1]] - p[triIndices[0]],
+                                           p[triIndices[2]] - p[triIndices[0]]));
             areas[f] = area;
         }
         areaPDF = PiecewiseConstant1D(arena, areas, numFaces, 0.f, 1.f);
@@ -644,6 +644,8 @@ struct Material
     virtual BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
                           const Vec4f &filterWidths) = 0;
 
+    virtual f32 GetIOR() { return 1.f; }
+
     // Used in SIMD mode, loads and caches data that may be used across multiple calls
     virtual void Start(struct ShadingThreadState *state) {}
     virtual void Stop() {}
@@ -752,6 +754,7 @@ struct ScenePrimitives
     IntersectFunc intersectFunc;
     OccludedFunc occludedFunc;
     u32 numPrimitives, numFaces;
+    int sceneIndex;
 
     ScenePrimitives() {}
     Bounds GetBounds() const { return Bounds(Lane4F32(boundsMin), Lane4F32(boundsMax)); }
@@ -787,6 +790,7 @@ struct Scene
     // u32 numLights;
 
     Bounds BuildBVH(Arena **arenas, BuildSettings &settings);
+    Material *GetMaterial(SurfaceInteraction &si);
     // DiffuseAreaLight *GetAreaLights() { return lights.Get<DiffuseAreaLight>(); }
     // const DiffuseAreaLight *GetAreaLights() const { return lights.Get<DiffuseAreaLight>(); }
 };

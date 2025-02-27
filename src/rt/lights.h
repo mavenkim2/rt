@@ -24,6 +24,7 @@ struct LightSample
     SampledSpectrum L;
     Vec3f samplePoint;
     Vec3f wi;
+    Vec3f n;
     f32 pdf;
     LightType lightType;
 

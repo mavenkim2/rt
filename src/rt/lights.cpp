@@ -6,7 +6,7 @@ namespace rt
 {
 
 LightSample::LightSample(const ShapeSample &sample, const SampledSpectrum &L, LightType type)
-    : samplePoint(sample.p), wi(sample.w), L(L), pdf(sample.pdf), lightType(type)
+    : samplePoint(sample.p), wi(sample.w), n(sample.n), L(L), pdf(sample.pdf), lightType(type)
 {
 }
 

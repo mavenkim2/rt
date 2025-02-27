@@ -558,6 +558,12 @@ void ShadingQueueHandler(TempArena inScratch, struct ShadingThreadState *state,
                     continue;
                 }
 
+                // Manifold next event estimations
+                if (!IsSpecular(bsdf.Flags()) && depth < globals->maxDepth)
+                {
+                    L += beta * ManifoldNextEventEstimation(si, ray, sampler, bsdf, lambda);
+                }
+
                 // Next Event Estimation
                 // Choose light source for direct lighting calculation
                 if (!IsSpecular(bsdf.Flags()))

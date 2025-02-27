@@ -803,7 +803,6 @@ struct HashMap
                 }
             }
             node = node->next;
-            loops++;
         }
         Assert(!node);
         return 0;

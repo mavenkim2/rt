@@ -5,6 +5,7 @@
 #include "bsdf.h"
 #include "math/basemath.h"
 #include "math/simd_base.h"
+#include "rt.h"
 #include "scene.h"
 #include "spectrum.h"
 #include <cstring>
@@ -401,18 +402,18 @@ void CalculateFilterWidths(const Ray2 &ray, const Camera &camera, const Vec3f &p
     //        dpdx.y, dpdx.z, dpdy.x, dpdy.y, dpdy.z, dudx, dvdx, dudy, dvdy);
 }
 
-void CalculateRayDifferentials(const Vec3f &wo, const Vec3f &wi, const Vec3f &dwdu,
-                               const Vec3f &dwdv, Vec3f n, Vec3f dndu, Vec3f dndv, f32 eta,
-                               BxDFFlags flags, Vec3f &dwrdu, const Vec3f &dwrdv)
+void CalculateRayDifferentials(const Vec3f &wo, const Vec3f &wi, const Vec3f &dwodu,
+                               const Vec3f &dwodv, Vec3f n, Vec3f dndu, Vec3f dndv, f32 eta,
+                               BxDFFlags flags, Vec3f &dwrdu, Vec3f &dwrdv)
 {
-    if (flags == (u32)BxDFFlags::SpecularReflection)
+    if (flags == BxDFFlags::SpecularReflection)
     {
         f32 dwoDotn_du = Dot(dwodu, n) + Dot(wo, dndu);
         f32 dwoDotn_dv = Dot(dwodv, n) + Dot(wo, dndv);
-        dwrdu          = wi - dwodu + 2 * Vec3f(Dot(wo, n) * dndu + dwoDotn_du * n);
-        dwrdv          = wi - dwodv + 2 * Vec3f(Dot(wo, n) * dndy + dwoDotn_dv * n);
+        dwrdu          = -dwodu + 2 * Vec3f(Dot(wo, n) * dndu + dwoDotn_du * n);
+        dwrdv          = -dwodv + 2 * Vec3f(Dot(wo, n) * dndv + dwoDotn_dv * n);
     }
-    else if (flags == (u32)BxDFFlags::SpecularTransmission)
+    else if (flags == BxDFFlags::SpecularTransmission)
     {
         f32 etaP = 1.f / eta;
 
@@ -421,8 +422,8 @@ void CalculateRayDifferentials(const Vec3f &wo, const Vec3f &wi, const Vec3f &dw
         if (Dot(wo, n) < 0)
         {
             n    = -n;
-            dndu = -dndx;
-            dndv = -dndy;
+            dndu = -dndu;
+            dndv = -dndv;
         }
 
         // Compute partial derivatives of $\mu$
@@ -1232,20 +1233,40 @@ Vec4f Mult2x2(const Vec4f &m1, const Vec4f &m2)
 void MakeOrthonormal(SurfaceInteraction &si)
 {
     f32 invNorm = Rcp(Length(si.dpdu));
-    si.shading.dndu
+    si.dpdu *= invNorm;
+    si.shading.dndu *= invNorm;
+    f32 dp          = Dot(si.dpdu, si.dpdv);
+    Vec3f dp_dv_tmp = si.dpdv - dp * si.dpdu;
+    Vec3f dn_dv_tmp = si.shading.dndv - dp * si.shading.dndu;
+    invNorm         = Rcp(Length(dp_dv_tmp));
+    si.dpdv         = dp_dv_tmp * invNorm;
+    si.shading.dndv = dn_dv_tmp * invNorm;
 }
 
 // what's left?
 // 1. handling orthonormal
-// 2. sampling caustic casters
-// 3.
+// 2. why is there a negative sign?
 
 // TODO: this doesn't handle delta direction lights
 // https://www.mitsuba-renderer.org/~wenzel/papers/phdthesis.pdf, Appendix A2
-f32 GeometryTerm(SurfaceInteraction &v0, SurfaceInteraction &v1, LigthSample &v2)
+// TODO: fix
+f32 GeometryTerm(SurfaceInteraction &v0, SurfaceInteraction &v1, LightSample &v2, f32 eta)
 {
+    Vec3f v2dpdu, v2dpdv;
+
+    // TODO: this is wrong, need to constrain the direction vector too
+    if (v2.lightType == LightType::Infinite)
+    {
+        Vec3f d = Normalize(v2.samplePoint - v1.p);
+        CoordinateSystem(-d, &v2dpdu, &v2dpdv);
+    }
+    else
+    {
+        CoordinateSystem(v2.n, &v2dpdu, &v2dpdv);
+    }
+
     // Normalize direction vectors from v1
-    wo = v0.p - v1.p;
+    Vec3f wo = v0.p - v1.p;
 
     f32 invR2 = 1.f / LengthSquared(wo);
     f32 ilo   = Length(wo);
@@ -1254,39 +1275,35 @@ f32 GeometryTerm(SurfaceInteraction &v0, SurfaceInteraction &v1, LigthSample &v2
     ilo = Rcp(ilo);
     wo *= ilo;
 
-    wi      = v2.p - v1.p;
-    f32 ili = Length(wi);
+    Vec3f wi = v2.samplePoint - v1.p;
+    f32 ili  = Length(wi);
     if (ili < 1e-3f) return 0.f;
 
     ili = Rcp(ili);
     wi *= ili;
 
-    f32 eta = v1.etaP;
-
     Vec3f h = wo + wi * eta;
-    // TODO: why?
-    if (eta != 1.f) h *= -1.f;
+    // if (eta != 1.f) h *= -1.f;
     f32 ilh = Rcp(Length(h));
     h *= ilh;
 
-    // TODO: why?
     ilo *= ilh;
     ili *= eta * ilh;
 
-    Vec dh_du =
+    Vec3f dh_du =
         -v1.dpdu * (ilo + ili) + (wo * Dot(wo, v1.dpdu) * ilo) + (wi * Dot(wi, v1.dpdu) * ili);
 
-    Vec dh_dv =
-        -v1.dpdu * (ilo + ili) + (wo * Dot(wo, v1.dpdv) * ilo) + (wi * Dot(wi, v1.dpdv) * ili);
+    Vec3f dh_dv =
+        -v1.dpdv * (ilo + ili) + (wo * Dot(wo, v1.dpdv) * ilo) + (wi * Dot(wi, v1.dpdv) * ili);
 
     dh_du -= h * Dot(h, dh_du);
     dh_dv -= h * Dot(h, dh_dv);
 
-    if (eta != 1.f)
-    {
-        dh_du *= -1.f;
-        dh_dv *= -1.f;
-    }
+    // if (eta != 1.f)
+    // {
+    //     dh_du *= -1.f;
+    //     dh_dv *= -1.f;
+    // }
 
     // Gram schmidt w.r.t. shading normal
     f32 dpdu_dot_n = Dot(v1.dpdu, v1.shading.n);
@@ -1307,16 +1324,16 @@ f32 GeometryTerm(SurfaceInteraction &v0, SurfaceInteraction &v1, LigthSample &v2
         Dot(dh_dv, t) -
             Dot(h, (Dot(v1.dpdv, v1.shading.dndv) * v1.n - dpdv_dot_n * v1.shading.dndv)));
 
-    dh_du = ili * (v2.dpdu - wi * Dot(wi, v2.dpdu));
-    dh_dv = ili * (v2.dpdv - wi * Dot(wi, v2.dpdv));
+    dh_du = ili * (v2dpdu - wi * Dot(wi, v2dpdu));
+    dh_dv = ili * (v2dpdv - wi * Dot(wi, v2dpdv));
     dh_du -= h * Dot(dh_du, h);
     dh_dv -= h * Dot(dh_dv, h);
 
-    if (eta != 1.f)
-    {
-        dh_du *= -1.f;
-        dh_dv *= -1.f;
-    }
+    // if (eta != 1.f)
+    // {
+    //     dh_du *= -1.f;
+    //     dh_dv *= -1.f;
+    // }
 
     Vec4f dc1_dx2(Dot(dh_du, s), Dot(dh_dv, s), Dot(dh_du, t), Dot(dh_dv, t));
 
@@ -1337,22 +1354,20 @@ SampledSpectrum ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray,
     Scene *scene = GetScene();
 
     Vec3f rayOrigin;
+    SampledSpectrum result = {};
 
-    if (IsSpecular(bsdf.Flags())) return;
+    if (IsSpecular(bsdf.Flags())) return result;
     // Sample light source
     f32 lightU = sampler.Get1D();
     f32 pmf;
-    Light *light = SampleLight(scene, lightU, &pmf);
+    Light *light = SampleLight(scene, si, lightU, &pmf);
     Vec2f sample = sampler.Get2D();
-    if (!light) return;
+
+    if (!light) return result;
 
     // Sample point on the light source
     LightSample ls = light->SampleLi(si, sample, lambda, true);
-    if (ls.pdf == 0) return;
-
-    SampledSpectrum f = bsdf.EvaluateSample(-ray.d, ls.wi, p_b) * AbsDot(si.shading.n, ls.wi);
-
-    if (!f) return;
+    if (ls.pdf == 0) return result;
 
     f32 beta          = 1.f;
     int numIterations = 0;
@@ -1363,7 +1378,8 @@ SampledSpectrum ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray,
     static const f32 uniquenessThreshold = 1e-4f;
     static const f32 solverThreshold     = 1e-5f;
 
-    SampledSpectrum result = {};
+    SurfaceInteraction orthonormalizedSi = si;
+    MakeOrthonormal(orthonormalizedSi);
 
     for (auto &shape : scene->causticCasters)
     {
@@ -1377,7 +1393,7 @@ SampledSpectrum ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray,
             SurfaceInteraction newSi;
 
             // Randomly sample position on shape
-            Vec3f shapePos = shape.SamplePosition(sampler.Get2D());
+            Vec3f shapePos = shape->SamplePosition(sampler.Get2D());
             Vec3f d        = Normalize(shapePos - si.p);
             Vec3f origin   = OffsetRayOrigin(si.p, si.pError, si.n, d);
             Ray2 shapeRay(origin, d, pos_inf);
@@ -1386,6 +1402,15 @@ SampledSpectrum ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray,
             bool intersect = Intersect(scene, shapeRay, newSi);
             Mesh *mesh     = GetMesh(newSi.sceneID, newSi.geomID);
             if (!intersect || mesh != shape) continue;
+
+            Material *material = scene->GetMaterial(newSi);
+
+            f32 eta = material->GetIOR();
+            if (Dot(newSi.n, -d) < 0)
+            {
+                eta = Rcp(eta);
+            }
+            f32 etaP = eta;
 
             // Newton solver using angle constraints
             while (numIterations < maxIterations)
@@ -1415,19 +1440,19 @@ SampledSpectrum ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray,
                                                const Vec3f &dwdv, Vec2f &constraint,
                                                Vec4f &dConstraint) {
                     Vec3f wr, dwrdu, dwrdv;
-                    if (newSi.eta == 1.f)
+                    if (eta == 1.f)
                     {
                         wr = Reflect(w, newSi.n);
-                        CalculateRayDifferentials(w, wr, dwdu, dwdv, newSi.n, newSi.dndu,
-                                                  newSi.dndv, newSi.eta,
+                        CalculateRayDifferentials(w, wr, dwdu, dwdv, newSi.n,
+                                                  newSi.shading.dndu, newSi.shading.dndv, eta,
                                                   BxDFFlags::SpecularReflection, dwrdu, dwrdv);
                     }
                     else
                     {
-                        if (!Refract(w, newSi.n, newSi.eta, 0, &wr)) return false;
+                        if (!Refract(w, newSi.n, eta, &etaP, &wr)) return false;
                         CalculateRayDifferentials(
-                            w, wr, dwdu, dwdv, newSi.n, newSi.dndu, newSi.dndv, newSi.eta,
-                            BxDFFlags::SpecularTransmission, dwrdu, dwrdv);
+                            w, wr, dwdu, dwdv, newSi.n, newSi.shading.dndu, newSi.shading.dndv,
+                            eta, BxDFFlags::SpecularTransmission, dwrdu, dwrdv);
                     }
 
                     Vec2f wrCoords = SphCoords(wr);
@@ -1437,8 +1462,8 @@ SampledSpectrum ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray,
                     Vec4f dw  = DSphCoords(w, dwdu, dwdv);
 
                     constraint = wCoords - wrCoords;
-                    if (constraint[1] > Pi) constraint -= TwoPi;
-                    else if (constraint < -Pi) constraint += TwoPi;
+                    if (constraint[1] > PI) constraint[1] -= TwoPi;
+                    else if (constraint[1] < -PI) constraint[1] += TwoPi;
 
                     dConstraint = dw - dwr;
 
@@ -1459,14 +1484,18 @@ SampledSpectrum ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray,
                 f32 determinant = Determinant(dConstraint);
                 if (Abs(determinant) < 1e-6f) continue;
 
-                Vec2f dX = Mult2x2(Inverse(dConstraint, determinant), constraint);
+                // Vec2f dX = Inverse(dConstraint, determinant), constraint);
+                Vec2f dX =
+                    1.f / determinant *
+                    Vec2f(FMS(dConstraint[3], constraint[0], dConstraint[1] * constraint[1]),
+                          FMS(dConstraint[0], constraint[1], dConstraint[2] * constraint[0]));
 
                 // Newton raphson
                 proposal =
-                    hit.p - stepScale * beta * (hit.si.dpdu * dX[0] + hit.si.dpdv * dX[1]);
+                    newSi.p - stepScale * beta * (newSi.dpdu * dX[0] + newSi.dpdv * dX[1]);
                 Vec3f dProposal = Normalize(proposal - si.p);
 
-                if (constraint < constraintThreshold)
+                if (Length(constraint) < solverThreshold)
                 {
                     success = true;
                     break;
@@ -1483,20 +1512,21 @@ SampledSpectrum ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray,
                 if (!result || mesh != shape)
                 {
                     beta *= .5f;
-                    iterations++;
+                    numIterations++;
                     continue;
                 }
 
-                beta = Min(1, 2 * beta);
-                hit  = newSi;
+                beta = Min(1.f, 2 * beta);
                 numIterations++;
             }
             if (!success) continue;
 
+            Vec3f proposedDirection = Normalize(newSi.p - si.p);
+
             // Only use unique solutions
             for (auto &solution : solutions)
             {
-                if (AbsDot(solution, proposal) - 1.f < uniquenessThreshold)
+                if (AbsDot(solution, proposedDirection) - 1.f < uniquenessThreshold)
                 {
                     success = false;
                     break;
@@ -1513,50 +1543,58 @@ SampledSpectrum ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray,
 
             if (Occluded(scene, toLightRay)) continue;
 
-            solutions.Push(proposal);
+            solutions.Push(proposedDirection);
 
+            MakeOrthonormal(newSi);
             // Evaluate contribution
-            Material *material =
-                scene->materials[MaterialHandle(newSi.materialIDs).GetIndex()];
 
             f32 p_b;
             Vec3f wi                = Normalize(ls.samplePoint - newSi.p);
             Vec3f wo                = si.p - newSi.p;
-            SampledSpectrum bsdfVal = bsdf.EvaluateSample(wo, wi, p_b);
+            SampledSpectrum bsdfVal = bsdf.EvaluateSample(-ray.d, proposedDirection, p_b);
 
-            // TODO: everything has to be orthonormal?
-            SampledSpectrum specularVal = {};
+            ScratchArena scratch;
+            material     = scene->GetMaterial(newSi);
+            BxDF newBxdf = material->Evaluate(scratch.temp.arena, newSi, lambda, Vec4f(0.f));
+            BSDF newBsdf(newBxdf, newSi.shading.dpdu, newSi.shading.n);
+
+            f32 p_b_2;
+            SampledSpectrum specularVal = newBsdf.EvaluateSample(wo, wi, p_b_2);
+            specularVal *= AbsDot(newSi.shading.n, wi) / p_b_2;
 
             // Calculate |do/dh| (see Eq.6 MNEE original paper)
-            if (EnumHasAllFlags(bsdf.Flags(), BxDFFlags::GlossyReflection))
-            {
-                Vec3f wm    = Normalize(wo + wi);
-                specularVal = 4 * AbsDot(wi, wm);
-                specularVal *= AbsDot(newSi.shading.n, wi);
-            }
-            else if (EnumHasAllFlags(bsdf.Flags(), BxDFFlags::GlossyTransmission))
-            {
-                Vec3f wm    = wo + wi * newSi.etaP;
-                specularVal = Sqr(Dot(wi, wm) + Dot(wo, wm) / etaP) / AbsDot(wi, wm);
-                specularVal *= AbsDot(newSi.shading.n, wi);
-            }
-            // TODO: handle conductor case?
-            else if (EnumHasAllFlags(bsdf.Flags(), BxDFFlags::SpecularReflection))
-            {
-                f32 cosTheta_i = Dot(newSi.shading.n, wi);
-                f32 F          = FrDielectric(cosTheta_i, etaP);
-                specularVal    = F;
-            }
-            else if (EnumHasAllFlags(bsdf.Flags(), BxDFFlags::SpecularTransmission))
-            {
-                f32 cosTheta_i = Dot(newSi.shading.n, wi);
-                f32 F          = FrDielectric(cosTheta_i, etaP);
-                specularVal    = (1 - F) * Sqr(newSi.etaP);
-            }
-            else Assert(0);
+            // if (EnumHasAllFlags(bsdf.Flags(), BxDFFlags::GlossyReflection))
+            // {
+            //     Vec3f wm    = Normalize(wo + wi);
+            //     specularVal = SampledSpectrum(4.f * AbsDot(wi, wm));
+            // }
+            // else if (EnumHasAllFlags(bsdf.Flags(), BxDFFlags::GlossyTransmission))
+            // {
+            //     Vec3f wm = wo + wi * eta;
+            //     specularVal =
+            //         SampledSpectrum(Sqr(Dot(wi, wm) + Dot(wo, wm) / etaP) / AbsDot(wi, wm));
+            //     specularVal *= AbsDot(newSi.shading.n, wi);
+            // }
+            // // TODO: handle conductor case?
+            // else if (EnumHasAllFlags(bsdf.Flags(), BxDFFlags::SpecularReflection))
+            // {
+            //     f32 cosTheta_i = Dot(newSi.shading.n, wi);
+            //     f32 F          = FrDielectric(cosTheta_i, etaP);
+            //     specularVal    = F;
+            // }
+            // else if (EnumHasAllFlags(bsdf.Flags(), BxDFFlags::SpecularTransmission))
+            // {
+            //     f32 cosTheta_i = Dot(newSi.shading.n, wi);
+            //     f32 F          = FrDielectric(cosTheta_i, etaP);
+            //     specularVal    = (1 - F) * Sqr(newSi.etaP);
+            // }
+            // else Assert(0);
 
             // Calculate geometry term multiplied by determinant of transfer matrix
-            specularVal *= GeometryTerm(si, newSi, ls);
+            specularVal *= GeometryTerm(orthonormalizedSi, newSi, ls, etaP);
+
+            f32 lightPdf = ls.pdf * pmf;
+            specularVal *= ls.L / lightPdf;
 
             // TODO: what is this non-visible normal sampling thing in the sms code?
             result += bsdfVal * specularVal / p_b;
