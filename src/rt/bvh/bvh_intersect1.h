@@ -924,7 +924,8 @@ struct TriangleIntersectorBase<N, Prim<N>>
                     scene, Get(itr.geomIDs, index), primID, ids, u, v, w, siitr);
                 if (result)
                 {
-                    si = siitr;
+                    si                = siitr;
+                    GetDebug()->scene = scene;
                     return true;
                 }
                 else
@@ -1428,10 +1429,11 @@ struct CatClarkPatchIntersector
                 CoordinateSystem(si.shading.n, &ss, &ts);
             }
 #endif
-            si.shading.dpdu = ss;
-            si.shading.dpdv = ts;
-            si.sceneID      = scene->sceneIndex;
-            si.geomID       = geomID;
+            si.shading.dpdu   = ss;
+            si.shading.dpdv   = ts;
+            si.sceneID        = scene->sceneIndex;
+            si.geomID         = geomID;
+            GetDebug()->scene = scene;
             return true;
         }
 

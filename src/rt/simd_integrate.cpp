@@ -559,10 +559,10 @@ void ShadingQueueHandler(TempArena inScratch, struct ShadingThreadState *state,
                 }
 
                 // Manifold next event estimations
-                if (!IsSpecular(bsdf.Flags()) && depth < globals->maxDepth)
-                {
-                    L += beta * ManifoldNextEventEstimation(si, ray, sampler, bsdf, lambda);
-                }
+                // if (!IsSpecular(bsdf.Flags()) && rayState->depth < globals->maxDepth)
+                // {
+                //     L += beta * ManifoldNextEventEstimation(si, ray, sampler, bsdf, lambda);
+                // }
 
                 // Next Event Estimation
                 // Choose light source for direct lighting calculation
@@ -583,7 +583,7 @@ void ShadingQueueHandler(TempArena inScratch, struct ShadingThreadState *state,
                             f32 p_b;
                             SampledSpectrum f = bsdf.EvaluateSample(-ray.d, ls.wi, p_b) *
                                                 AbsDot(si.shading.n, ls.wi);
-                            if (f && !Occluded(scene, ray, si, ls))
+                            if (f && !OccludedByOpaqueSurface(scene, ray, si, ls))
                             {
                                 // Calculate contribution
                                 f32 lightPdf = pmf * ls.pdf;

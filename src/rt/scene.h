@@ -645,6 +645,7 @@ struct Material
                           const Vec4f &filterWidths) = 0;
 
     virtual f32 GetIOR() { return 1.f; }
+    virtual bool IsTransmissive() { return false; }
 
     // Used in SIMD mode, loads and caches data that may be used across multiple calls
     virtual void Start(struct ShadingThreadState *state) {}
@@ -785,7 +786,7 @@ struct Scene
     StaticArray<Material *> materials;
     StaticArray<Texture *> textures;
 
-    StaticArray<Mesh *> causticCasters;
+    std::vector<Mesh> causticCasters;
 
     // u32 numLights;
 

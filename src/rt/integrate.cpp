@@ -261,10 +261,6 @@ void Render(Arena *arena, RenderParams2 &params)
 
                     Ray2 ray = camera.GenerateRayDifferentials(filterSample, pLens);
 
-                    // Vec3f temp = TransformP(cameraFromRaster, Vec3f(0.25f, 0.25f, 0.f));
-                    // ray.radius = 0.f;
-                    // ray.spread = Max(temp[0], temp[1]);
-                    // printf("%f spread\n", ray.spread);
                     f32 cameraWeight = 1.f;
 
                     SampledSpectrum L =
@@ -337,7 +333,6 @@ bool Occluded(Scene *scene, Ray2 &r, SurfaceInteraction &si, LightSample &ls)
     Vec3f from = OffsetRayOrigin(si.p, si.pError, si.n, ls.wi);
 
     f32 maxT = Length(ls.samplePoint - from);
-    // TODO: normalize the direction
     Ray2 ray(from, Normalize(ls.samplePoint - from), maxT * ShadowRayEpsilon);
     return Occluded(scene, ray);
 }
@@ -347,6 +342,24 @@ bool Intersect(Scene *scene, Ray2 &ray, SurfaceInteraction &si)
     Assert(scene->scene.intersectFunc);
     return scene->scene.intersectFunc(&scene->scene,
                                       StackEntry(scene->scene.nodePtr, ray.tFar), ray, si);
+}
+
+// Non physical solution that allows NEE to pass through transmissive surfaces
+bool OccludedByOpaqueSurface(Scene *scene, Ray2 &r, SurfaceInteraction &si, LightSample &ls)
+{
+    SurfaceInteraction testSi = si;
+    for (;;)
+    {
+        Vec3f from = OffsetRayOrigin(testSi.p, testSi.pError, testSi.n, ls.wi);
+
+        f32 maxT = Length(ls.samplePoint - from);
+        Ray2 ray(from, Normalize(ls.samplePoint - from), maxT * ShadowRayEpsilon);
+
+        if (!Intersect(scene, ray, testSi) || !((MaterialHandle)testSi.materialIDs))
+            return false;
+
+        if (!scene->GetMaterial(testSi)->IsTransmissive()) return true;
+    }
 }
 
 void CalculateFilterWidths(const Ray2 &ray, const Camera &camera, const Vec3f &p,
@@ -396,10 +409,6 @@ void CalculateFilterWidths(const Ray2 &ray, const Camera &camera, const Vec3f &p
     // dvdx =invDet * (-ata01 * atb0x + ata00 * atb1x)
     dudy = Clamp(invDet * FMS(ata11, atb0y, ata01 * atb1y), -1e8f, 1e8f);
     dvdy = Clamp(invDet * FMS(ata00, atb1y, ata01 * atb0y), -1e8f, 1e8f);
-
-    // printf("dpdx: %f %f %f, dpdy: %f %f %f, dudx: %f, dvdx: %f, dudy: %f, dvdy: %f\n",
-    // dpdx.x,
-    //        dpdx.y, dpdx.z, dpdy.x, dpdy.y, dpdy.z, dudx, dvdx, dudy, dvdy);
 }
 
 void CalculateRayDifferentials(const Vec3f &wo, const Vec3f &wi, const Vec3f &dwodu,
@@ -1369,9 +1378,6 @@ SampledSpectrum ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray,
     LightSample ls = light->SampleLi(si, sample, lambda, true);
     if (ls.pdf == 0) return result;
 
-    f32 beta          = 1.f;
-    int numIterations = 0;
-
     static const f32 stepScale           = 1.f;
     static const int maxTrials           = 5;
     static const int maxIterations       = 20;
@@ -1381,27 +1387,51 @@ SampledSpectrum ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray,
     SurfaceInteraction orthonormalizedSi = si;
     MakeOrthonormal(orthonormalizedSi);
 
+    f32 tMax        = Length(ls.samplePoint - si.p);
+    Vec3f siToLight = Normalize(ls.samplePoint - si.p);
+    Vec3f rayStart  = OffsetRayOrigin(si.p, si.pError, si.n, siToLight);
+    Ray2 toLightRay(rayStart, siToLight, tMax * ShadowRayEpsilon);
+
+    // TODO: reflective caustics?
+    SurfaceInteraction checkIntersectCausticSi;
+    bool intersect = Intersect(scene, toLightRay, checkIntersectCausticSi);
+
+    if (!intersect)
+    {
+        return result;
+    }
+
     for (auto &shape : scene->causticCasters)
     {
         // Biased variant of specular manifold sampling
         for (int trialIndex = 0; trialIndex < maxTrials; trialIndex++)
         {
+            f32 beta = 1.f;
             FixedArray<Vec3f, maxTrials> solutions;
 
             Vec3f proposal;
-            bool success = false;
-            SurfaceInteraction newSi;
+            bool success             = false;
+            SurfaceInteraction newSi = checkIntersectCausticSi;
 
             // Randomly sample position on shape
-            Vec3f shapePos = shape->SamplePosition(sampler.Get2D());
-            Vec3f d        = Normalize(shapePos - si.p);
-            Vec3f origin   = OffsetRayOrigin(si.p, si.pError, si.n, d);
-            Ray2 shapeRay(origin, d, pos_inf);
+            // Vec3f shapePos = shape.SamplePosition(sampler.Get2D());
+            // TODO IMPORTANT: yikes
+            // Vec3f pCamera(-1139.0159, 23.286734, 1479.7947);
+            // shapePos -= pCamera;
+            // Vec3f d      = Normalize(shapePos - si.p);
+            // Vec3f origin = OffsetRayOrigin(si.p, si.pError, si.n, d);
+            // Ray2 shapeRay(origin, d, pos_inf);
+            Vec3f d = -toLightRay.d;
 
             // Make sure ray actually intersects caustic casting shape
-            bool intersect = Intersect(scene, shapeRay, newSi);
-            Mesh *mesh     = GetMesh(newSi.sceneID, newSi.geomID);
-            if (!intersect || mesh != shape) continue;
+            // bool intersect = Intersect(scene, shapeRay, newSi);
+            // if (!intersect) continue;
+            // Mesh *mesh = GetMesh(newSi.sceneID, newSi.geomID);
+
+            Mesh *mesh = GetMesh(newSi.sceneID, newSi.geomID);
+            if (mesh->p != shape.p) continue;
+
+            Print("%i, %i\n", newSi.sceneID, newSi.geomID);
 
             Material *material = scene->GetMaterial(newSi);
 
@@ -1413,12 +1443,14 @@ SampledSpectrum ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray,
             f32 etaP = eta;
 
             // Newton solver using angle constraints
-            while (numIterations < maxIterations)
+            for (int numIterations = 0; numIterations < maxIterations; numIterations++)
             {
                 // From manifold vertex to shading point
                 Vec3f wo        = si.p - newSi.p;
                 f32 invLengthWo = Length(wo);
                 if (invLengthWo < 1e-3f) break;
+
+                invLengthWo = Rcp(invLengthWo);
 
                 wo *= invLengthWo;
 
@@ -1431,35 +1463,39 @@ SampledSpectrum ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray,
                 f32 invLengthWi = Length(wi);
                 if (invLengthWi < 1e-3f) break;
 
+                invLengthWi = Rcp(invLengthWi);
+
                 wi *= invLengthWi;
 
                 Vec3f dwi_du = -invLengthWi * (newSi.dpdu - wi * Dot(wi, newSi.dpdu));
                 Vec3f dwi_dv = -invLengthWi * (newSi.dpdv - wi * Dot(wi, newSi.dpdv));
 
-                auto CalculateConstraint = [&](const Vec3f &w, const Vec3f &dwdu,
-                                               const Vec3f &dwdv, Vec2f &constraint,
-                                               Vec4f &dConstraint) {
+                auto CalculateConstraint = [&](const Vec3f &wo, const Vec3f &dwodu,
+                                               const Vec3f &dwodv, const Vec3f &wi,
+                                               const Vec3f &dwidu, const Vec3f &dwidv,
+                                               Vec2f &constraint, Vec4f &dConstraint) {
                     Vec3f wr, dwrdu, dwrdv;
                     if (eta == 1.f)
                     {
-                        wr = Reflect(w, newSi.n);
-                        CalculateRayDifferentials(w, wr, dwdu, dwdv, newSi.n,
+                        wr = Reflect(wo, newSi.n);
+                        CalculateRayDifferentials(wo, wr, dwodu, dwodv, newSi.n,
                                                   newSi.shading.dndu, newSi.shading.dndv, eta,
                                                   BxDFFlags::SpecularReflection, dwrdu, dwrdv);
                     }
                     else
                     {
-                        if (!Refract(w, newSi.n, eta, &etaP, &wr)) return false;
-                        CalculateRayDifferentials(
-                            w, wr, dwdu, dwdv, newSi.n, newSi.shading.dndu, newSi.shading.dndv,
-                            eta, BxDFFlags::SpecularTransmission, dwrdu, dwrdv);
+                        if (!Refract(wo, newSi.n, eta, &etaP, &wr)) return false;
+                        CalculateRayDifferentials(wo, wr, dwodu, dwodv, newSi.n,
+                                                  newSi.shading.dndu, newSi.shading.dndv, eta,
+                                                  BxDFFlags::SpecularTransmission, dwrdu,
+                                                  dwrdv);
                     }
 
                     Vec2f wrCoords = SphCoords(wr);
-                    Vec2f wCoords  = SphCoords(w);
+                    Vec2f wCoords  = SphCoords(wi);
 
                     Vec4f dwr = DSphCoords(wr, dwrdu, dwrdv);
-                    Vec4f dw  = DSphCoords(w, dwdu, dwdv);
+                    Vec4f dw  = DSphCoords(wi, dwidu, dwidv);
 
                     constraint = wCoords - wrCoords;
                     if (constraint[1] > PI) constraint[1] -= TwoPi;
@@ -1472,19 +1508,20 @@ SampledSpectrum ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray,
 
                 Vec2f constraint;
                 Vec4f dConstraint;
-                bool constraintSuccess =
-                    CalculateConstraint(wo, dwo_du, dwo_dv, constraint, dConstraint);
+                bool constraintSuccess = CalculateConstraint(wo, dwo_du, dwo_dv, wi, dwi_du,
+                                                             dwi_dv, constraint, dConstraint);
                 if (!constraintSuccess)
-                    constraintSuccess =
-                        CalculateConstraint(wi, dwi_du, dwi_dv, constraint, dConstraint);
+                    constraintSuccess = CalculateConstraint(wi, dwi_du, dwi_dv, wo, dwo_du,
+                                                            dwo_dv, constraint, dConstraint);
 
-                if (!constraintSuccess) continue;
+                if (!constraintSuccess) break;
+
+                Print("constraint: %f %f\n", constraint[0], constraint[1]);
 
                 // Inverse of jacobian multiplied by residual gives step size
                 f32 determinant = Determinant(dConstraint);
-                if (Abs(determinant) < 1e-6f) continue;
+                if (Abs(determinant) < 1e-6f) break;
 
-                // Vec2f dX = Inverse(dConstraint, determinant), constraint);
                 Vec2f dX =
                     1.f / determinant *
                     Vec2f(FMS(dConstraint[3], constraint[0], dConstraint[1] * constraint[1]),
@@ -1493,6 +1530,8 @@ SampledSpectrum ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray,
                 // Newton raphson
                 proposal =
                     newSi.p - stepScale * beta * (newSi.dpdu * dX[0] + newSi.dpdv * dX[1]);
+                Print("proposal: %f %f %f\n", proposal[0], proposal[1], proposal[2]);
+                Print("beta: %f\n", beta);
                 Vec3f dProposal = Normalize(proposal - si.p);
 
                 if (Length(constraint) < solverThreshold)
@@ -1502,25 +1541,34 @@ SampledSpectrum ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray,
                 }
 
                 Vec3f from = OffsetRayOrigin(si.p, si.pError, si.n, dProposal);
-                f32 maxT   = Length(proposal - dProposal);
-                Ray2 rayProposal(from, dProposal, maxT * ShadowRayEpsilon);
+                Ray2 rayProposal(from, dProposal, pos_inf);
 
                 // If a different shape was intersected, then fail
-                bool result = Intersect(scene, rayProposal, newSi);
+                SurfaceInteraction proposedSi;
+                bool result = Intersect(scene, rayProposal, proposedSi);
 
-                mesh = GetMesh(newSi.sceneID, newSi.geomID);
-                if (!result || mesh != shape)
+                if (!result)
                 {
                     beta *= .5f;
-                    numIterations++;
                     continue;
                 }
+                else
+                {
+                    mesh = GetMesh(proposedSi.sceneID, proposedSi.geomID);
+                    Print("%i, %i\n", proposedSi.sceneID, proposedSi.geomID);
+                    if (mesh->p != shape.p)
+                    {
+                        beta *= .5f;
+                        continue;
+                    }
+                }
 
-                beta = Min(1.f, 2 * beta);
-                numIterations++;
+                beta  = Min(1.f, 2 * beta);
+                newSi = proposedSi;
             }
             if (!success) continue;
 
+            Print("success\n");
             Vec3f proposedDirection = Normalize(newSi.p - si.p);
 
             // Only use unique solutions

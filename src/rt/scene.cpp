@@ -348,6 +348,7 @@ struct DielectricMaterial : Material
         f32 ior = eta; // eta(lambda[0]);
         return DielectricBxDF(ior, TrowbridgeReitzDistribution(uRoughness, vRoughness));
     }
+    virtual bool IsTransmissive() override { return true; }
     virtual void Start(ShadingThreadState *state) override
     {
         uRoughnessTexture->Start(state);
@@ -813,7 +814,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     state->scenes.push_back(scene);
     EndMutex(&state->mutex);
 
-    TempArena temp = ScratchStart(0, 0);
+    scene->sceneIndex = sceneID;
+    TempArena temp    = ScratchStart(0, 0);
 
     u32 threadIndex  = GetThreadIndex();
     Arena *arena     = arenas[threadIndex];
@@ -1135,6 +1137,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     AddMaterialAndLights(mesh);
 
                     mesh.CreateTriangleAreaPDF(arena);
+                    GetScene()->causticCasters.push_back(mesh);
 
                     threadMemoryStatistics[threadIndex].totalShapeMemory +=
                         mesh.numVertices * (sizeof(Vec3f) * 2 + sizeof(Vec2f)) +
