@@ -388,6 +388,8 @@ struct BVHTraverser<8, types, Prim>
             const u32 nodeMask = mask0 | (mask1 << 8) | (mask2 << 16) | (mask3 << 24);
 
             // TODO: revisit this, see if there's anything faster
+            // NOTE: in avx 512, this can be replaced with: 
+            // _mm256_popcnt_epi32
             u32 indexA = PopCount(~nodeMask & 0x000100ed);
             u32 indexB = PopCount((nodeMask ^ 0x002c2c00) & 0x002c2d00);
             u32 indexC = PopCount((nodeMask ^ 0x20121200) & 0x20123220);

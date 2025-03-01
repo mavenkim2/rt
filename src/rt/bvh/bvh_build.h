@@ -669,6 +669,180 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildCompressedBVH(BuildSettings setti
     }
 }
 
+template <i32 N, typename BuildFunctions>
+void BVHBuilder<N, BuildFunctions>::BuildCurveBVH(const BuildSettings &settings,
+                                                  Record &record, bool parallel)
+{
+    Assert(record.count > 0);
+
+    if (record.count == 1)
+    {
+        return;
+    }
+
+    Split split = heuristic.Bin(record);
+
+    const u32 blockAdd   = settings.blockAdd;
+    const u32 blockShift = settings.logBlockSize;
+    // NOTE: multiply both by the area instead of dividing
+    f32 area     = HalfArea(record.geomBounds);
+    f32 leafSAH  = settings.intCost * area * ((record.count + blockAdd) >> blockShift);
+    f32 splitSAH = settings.travCost * area + settings.intCost * split.bestSAH;
+
+    if (((record.count + blockAdd) >> blockShift) <= settings.maxLeafSize &&
+        leafSAH <= splitSAH)
+    {
+        heuristic.FlushState(split);
+        return;
+    }
+    heuristic.Split(split, record, childRecords[0], childRecords[1]);
+
+    // N - 1 splits produces N children
+    for (numChildren = 2; numChildren < N; numChildren++)
+    {
+        i32 bestChild = -1;
+        f32 maxArea   = neg_inf;
+        for (u32 recordIndex = 0; recordIndex < numChildren; recordIndex++)
+        {
+            Record &childRecord = childRecords[recordIndex];
+            if (childRecord.count <= settings.maxLeafSize) continue;
+
+            f32 childArea = HalfArea(childRecord.geomBounds);
+            if (childArea > maxArea)
+            {
+                bestChild = recordIndex;
+                maxArea   = childArea;
+            }
+        }
+        if (bestChild == -1) break;
+
+        split = heuristic.Bin(childRecords[bestChild]);
+
+        Record out;
+        heuristic.Split(split, childRecords[bestChild], out, childRecords[numChildren]);
+
+        childRecords[bestChild] = out;
+    }
+
+    BVHNode<N> basePtrs[N];
+
+    int numGrandChildren[N] = {};
+    Record grandChildRecords[N][N];
+    int grandChildOffsets[N][N] = {};
+
+    if (parallel)
+    {
+        Scheduler::Counter counter = {};
+        if (numChildren - 1)
+            scheduler.Schedule(&counter, numChildren - 1, 1, [&](u32 jobID) {
+                bool childParallel = childRecords[jobID].count >= BUILD_PARALLEL_THRESHOLD;
+                BuildCompressedBVH(settings, childRecords[jobID], grandChildRecords[jobID],
+                                   numGrandChildren[jobID], basePtrs[jobID],
+                                   grandChildOffsets[jobID], childParallel);
+            });
+
+        BuildCurveBVH(settings, childRecords[numChildren - 1],
+                      grandChildRecords[numChildren - 1], numGrandChildren[numChildren - 1],
+                      basePtrs[numChildren - 1], grandChildOffsets[numChildren - 1],
+                      childRecords[numChildren - 1].count >= BUILD_PARALLEL_THRESHOLD);
+        scheduler.Wait(&counter);
+    }
+    else
+    {
+        for (u32 i = 0; i < numChildren; i++)
+        {
+            BuildCompressedBVH(settings, childRecords[i], grandChildRecords[i],
+                               numGrandChildren[i], basePtrs[i], grandChildOffsets[i], false);
+        }
+    }
+
+    Arena *currentArena = arenas[GetThreadIndex()];
+
+    // Calculate the number of leaves:
+    int primTotal = 0;
+
+    u32 childNodeMask = 0;
+    int numChildNodes = 0;
+
+    u32 childLeafMask  = 0;
+    int numChildLeaves = 0;
+
+    for (int i = 0; i < numChildren; i++)
+    {
+        // If the child is a leaf, then there are no grand children
+        int grandChildCount = numGrandChildren[i];
+        if (grandChildCount == 0)
+        {
+            int count = (childRecords[i].count + blockAdd) >> blockShift;
+            Assert(count <= settings.maxLeafSize);
+            primTotal += count;
+            childLeafMask |= (1 << i);
+            numChildLeaves++;
+        }
+        // Otherwise, the child is an internal node
+        else
+        {
+            childNodeMask |= (1 << i);
+            numChildNodes++;
+        }
+    }
+    Assert(primTotal < 64);
+
+    // Allocate the children
+    NodeType *node    = 0;
+    LeafType *primIDs = 0;
+
+    u8 *allocPtr = PushArrayNoZeroTagged(
+        currentArena, u8, sizeof(NodeType) * numChildNodes + sizeof(LeafType) * primTotal,
+        MemoryType_BVH);
+    if (numChildNodes)
+    {
+        node     = (NodeType *)allocPtr;
+        int mask = childNodeMask;
+        // Fill out node information
+        for (int i = 0; i < numChildNodes; i++)
+        {
+            int index = Bsf(mask);
+            mask &= mask - 1;
+            f.createNode(grandChildRecords[index], (u32)numGrandChildren[index], &node[i]);
+            f.updateNode(&node[i], basePtrs[index], grandChildOffsets[index],
+                         numGrandChildren[index]);
+        }
+        threadLocalStatistics[GetThreadIndex()].misc2 += numChildNodes;
+    }
+    // Allocate the leaves
+    if (primTotal)
+    {
+        primIDs      = (LeafType *)((NodeType *)allocPtr + numChildNodes);
+        int leafMask = childLeafMask;
+        int offset   = 0;
+        // Fill out leaf information
+        for (int i = 0; i < numChildLeaves; i++)
+        {
+            int index = Bsf(leafMask);
+            leafMask &= leafMask - 1;
+            int numPrims = (childRecords[index].count + blockAdd) >> blockShift;
+            Assert(numPrims <= settings.maxLeafSize);
+
+            int offsetStart = offset;
+            u32 begin       = childRecords[index].start;
+            u32 end         = childRecords[index].start + childRecords[index].count;
+            while (begin < end)
+            {
+                Assert(offset < primTotal);
+                primIDs[offset++].Fill(scene, primRefs, begin, end);
+            }
+            Assert(offset - offsetStart == numPrims);
+            Assert(begin == end);
+            offsets[index] = offset;
+        }
+        threadLocalStatistics[GetThreadIndex()].misc += primTotal;
+    }
+    basePtr = BVHNode<N>::EncodeQuantizedCompressedNode((NodeType *)allocPtr);
+}
+
+/////////////////////////////////////////////////////////////////////
+
 template <i32 N, GeometryType type, typename PrimRefType>
 struct BVHHelper;
 

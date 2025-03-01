@@ -420,6 +420,16 @@ typedef BuildRef<4> BuildRef4;
 typedef BuildRef<8> BuildRef8;
 
 template <i32 N>
+struct AABBNode 
+{
+};
+
+template <i32 N>
+struct OrientedBBNode 
+{
+};
+
+template <i32 N>
 struct QuantizedNode
 {
     StaticAssert(N == 4 || N == 8, NMustBe4Or8);

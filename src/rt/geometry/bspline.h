@@ -178,108 +178,158 @@ void IntersectCurve(const CurvePrecalculations &pre, const Ray &ray, const Curve
     }
 }
 
-// https://research.nvidia.com/sites/default/files/pubs/2018-08_Phantom-Ray-Hair-Intersector//Phantom-HPG%202018.pdf
-#if 0
-void IntersectCurve(const Ray &ray, BSpline &curve)
+struct Cylinder
 {
-    // Intersect against cylinder first
+    Vec3f o;
+    Vec3f dir;
+    f32 dist;
+};
 
-    // Transform curve into ray space (i.e, o = (0, 0, 0), d = (0, 0, 1))
-    f32 t    = 0;
-    Vec4f c0 = curve.Eval(t);
-    Vec4f cd = curve.Derivative(t);
+Cylinder ComputeCurveCylinder(BSpline &curve)
+{
+    Vec3f c0   = curve.Eval(0);
+    Vec3f c1   = curve.Eval(1);
+    Vec3f cMid = curve.Eval(0.5f);
 
-    f32 r  = c0.w;
-    f32 dr = ? ;
+    Vec3f dir = Normalize(c1 - c0);
+    Vec3f oe  = ((c0 + c1) / 2.f + cMid) / 2.f;
 
-    f32 dt = 0;
-    f32 prevT;
-    f32 prevDt;
+    // TODO: subdivide for tighter bounds?
+    f32 distSq = 0.f;
+    distSq     = Max(distSq, LengthSquared(Cross(curve.v0 - oe, dir)));
+    distSq     = Max(distSq, LengthSquared(Cross(curve.v1 - oe, dir)));
+    distSq     = Max(distSq, LengthSquared(Cross(curve.v2 - oe, dir)));
+    distSq     = Max(distSq, LengthSquared(Cross(curve.v3 - oe, dir)));
 
-    f32 dc;
-    f32 sp;
-    f32 dp;
+    return Cylinder{oe, dir, distSq};
+}
 
-    // Recursively intersect until abs(dt) < 1e-5
-    // https://www.highperformancegraphics.org/wp-content/uploads/2018/Papers-Session4/HPG2018_PhantomRayHairIntersection.pdf
-    u32 iteration = 0;
-    for (;;)
+bool IntersectCurve(const Ray &ray, BSpline &curve, SurfaceInteraction &si)
+{
+    f32 t      = 0.f;
+    f32 prevDt = 0.f;
+
+    // First intersect against enclosing cylinder
+    Cylinder cylinder;
+
+    Vec3f n    = Cross(ray.d, cylinder.dir);
+    f32 distSq = Sqr(Dot(ray.o - cylinder.o, n)) / Dot(n, n);
+    if (distSq > cylinder.distSq) return false;
+
+    // Choose end to start
+    Vec3f w0 = curve.Eval(0);
+    Vec3f w1 = curve.Eval(1.f);
+
+    f32 sign = 1.f;
+    // Start at other end
+    if (Dot(w1 - w0, ray.d) <= 0.f)
     {
-        // a = c0(t) + c'(t)dt
-        // p1 = o + sd (o is (0, 0, 0)), p1 is intersection of ray with cone base plane
-        // |p1 - a| = r(t) + r'(t)dt, intersection with cone
-        // (p1 - a) dot c'(t) = 0 (since p1 and a are coplanar)
-        Vec3f cr         = c0 - ray.o;
-        f32 cdcd         = Dot(cd, cd);
-        f32 crcd         = Dot(cr, cd);
-        f32 crcr         = Dot(cr, cr);
-        f32 crrd         = Dot(cr, ray.d);
-        f32 cdrd         = Dot(cd, ray.d);
-        f32 oneover_cdcd = 1.f / cdcd;
-        f32 cdrdn        = cdrd * oneover_cdcd;
-        f32 crcdn        = crcd * oneover_cdcd;
-        r                = r - dr * crcdn;
-        dr               = dr * cdrdn;
-        f32 q00          = crcr - crcd * crcdn;
-        f32 q01          = cdrd * crcdn - crrd;
-        f32 q11          = 1 - cdrd * cdrdn;
-        // NOTE: coefficients of quadratic equation, cx^2 - 2bx + a = 0
-        f32 a = q00 - r * r;
-        f32 b = q01 - r * dr;
-        f32 c = dr * dr - q11;
+        t    = 1.f;
+        sign = -1.f;
+    }
 
-        // Solve the quadratic equation for s
-        f32 det = b * b - a * c;
-        s       = (b + (det < 0 ? 0 : Sqrt(det))) / c; // ray.s for ray ^ cone
+    // NOTE: this assumes that c' * (w3 - w0) > 0 for all t (0, 1)
+    // Then, begin cone intersection
+    // TODO: I'm not sure if this is the best
+    bool intersect                 = false;
+    f32 minT                       = 0.f;
+    f32 hitWidth                   = 0.f;
+    static const int maxIterations = 50;
+    for (int i = 0; i < maxIterations; i++)
+    {
+        Vec3f c0 = curve.Eval(t);
+        Vec3f cd = curve.Derivative(t); // * sign;
 
-        prevDt = dt;
-        prevT  = t;
-        dt     = cdrdn * s - crcdn; // dt to the (ray ^ cone) from t
+        f32 r = curve.Radius(t);
+        f32 dr;
 
-        // TODO: what are these values supposed to be used for???
-        // also ray direction needs to be normalized
-        // dc     = crcr - 2 * crrd * s + s * s;    // |((ray ^ cone) - c0)|^2
-        sp = crcd / cdrd; // ray.s for ray ^ plane
-        // dp     = crcr - 2 * crrd * sp + sp * sp; // |((ray ^ plane) - c0)|^2
+        // Solve quadratic equation to find s
+        Vec3f cr = c0 - ray.o;
+        f32 cdcd = Dot(cd, cd);
+        f32 crcd = Dot(cr, cd);
+        f32 crcr = Dot(cr, cr);
+        f32 crrd = Dot(cr, ray.d);
+        f32 cdrd = Dot(cd, ray.d);
 
+        f32 cdrdn = cdrd / cdcd;
+        f32 crcdn = crcd / cdcd;
+        r         = r - dr * crcdn;
+        dr        = dr * cdrdn;
+        f32 q00   = crcr - crcd * crcdn;
+        f32 q01   = cdrd * crcdn - crrd;
+        f32 q11   = 1 - cdrd * cdrdn;
+        f32 a     = q00 - r * r;
+        f32 b     = q01 - r * dr;
+        f32 c     = dr * dr - q11;
+        f32 det   = b * b + a * c;
+
+        f32 s  = (b + (det < 0 ? 0 : Sqrt(det))) / c;
+        f32 dt = cdrdn * s - crcdn;
+
+        if (t == 0.f && dt < 0.f || t == 1.f && dt > 1.f) break;
+
+        // Compute |cr - s rd|, i.e. length of c0 - ray(s)
+        f32 dc = crcr - 2 * crrd * s + s * s;
+        f32 sp = crcd / cdrd;
+        f32 dp = crcr - 2 * crrd * sp + sp * sp;
+
+        // Buttend check
+        if (dt > ?)
+        {
+        }
         dt = Clamp(dt, -0.5f, 0.5f);
 
         const f32 threshold = 5e-5;
-        if (det > 0.f && Abs(dt) < thresold) break;
+        if (det > 0.f && Abs(dt) < threshold)
+        {
+            intersect = true;
+            hitWidth  = r;
+            break;
+        }
 
-        // regula falsi
+        // Regula falsi
         if (dt * prevDt < 0)
         {
-            // bisection every 4th iteration
+            f32 newT;
+            // Bisection every 4th iteration
             if ((iteration & 3) == 0)
             {
-                t = 0.5f * (prevT + t);
+                newT = 0.5f * (prevT + t);
             }
             else
             {
-                t = (dt * prevT - prevDt * t) / (dt - prevDt);
+                newT = (dt * prevT - prevDt * t) / (dt - prevDt);
             }
+            prevT  = t;
+            prevDt = dt;
+            t      = newT;
         }
-        // normal case
         else
         {
-            t += dt;
+            f32 newT = t + dt;
+            prevT    = t;
+            prevDt   = dt;
+            t        = newT;
         }
-        c0 = curve.Eval(t);
-        cd = curve.Derivative(t);
-
-        iteration++;
     }
+    if (intersect)
+    {
+        if (curveType == CurveType::Cylinder)
+        {
+            Vec3f n =
+        }
 
-    // final regula falsi
-    t = (dt * prevT - prevDt * t) / (dt - prevDt);
-    // Intersection point
-    Vec3f p = ray.at(sp);
-    // Normal (for cylinder)
-    // TODO: orient towards ray for "flat" curves, handle ribbons
-    Vec3f ng = Normalize(p - c0);
+        f32 u              = minT;
+        f32 curvePoint     = curve.Eval(u);
+        f32 intersectPoint = ray(u);
+
+        f32 hitWidth = curve.Radius(u) / 2.f;
+
+        // TODO: this needs to be a projected distance
+        f32 v = .5f + Length(intersectPoint - curvePoint) / hitWidth;
+    }
 }
-#endif
+
 } // namespace curve
 } // namespace rt
 #endif

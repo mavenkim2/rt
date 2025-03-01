@@ -1308,13 +1308,13 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Shape);
 
                 // TODO: temp
-                if (packet->type == "curve"_sid)
-                {
-                    shapes->Last() = {};
-                    shapes->last->count--;
-                    shapes->totalCount--;
-                    continue;
-                }
+                // if (packet->type == "curve"_sid)
+                // {
+                //     shapes->Last() = {};
+                //     shapes->last->count--;
+                //     shapes->totalCount--;
+                //     continue;
+                // }
 
                 u32 numVertices = 0;
                 u32 numIndices  = 0;
@@ -1816,6 +1816,7 @@ void WriteShape(PBRTFileInfo *info, ShapeType *shapeType, StringBuilder &builder
         break;
         case "curve"_sid:
         {
+            Put(&builder, "Curve ");
         }
         break;
         default: Assert(0);

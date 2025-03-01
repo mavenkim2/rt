@@ -846,6 +846,14 @@ struct HeuristicAOSObjectBinning
     }
 };
 
+template <i32 numBins = 32, typename PrimRef = PrimRef>
+struct alignas(32) HeuristicAOSOrientedObjectBinning
+{
+    void Bin(const PrimRef *data, u32 start, u32 count) {
+
+    }
+};
+
 template <i32 numBins, typename PrimRefType, typename Polygon8>
 struct alignas(32) HeuristicAOSSplitBinning
 {
