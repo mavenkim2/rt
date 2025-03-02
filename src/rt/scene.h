@@ -258,10 +258,18 @@ struct Mesh
 
 struct GPUMesh
 {
-    Mesh mesh;
     GPUBuffer vertexBuffer;
     GPUBuffer indexBuffer;
+    u32 numIndices;
+    u32 numVertices;
+    u32 numFaces;
 };
+
+#ifdef USE_GPU
+typedef GPUMesh MeshType;
+#else
+typedef Mesh MeshType;
+#endif
 
 template <GeometryType type, typename PrimRefType = PrimRef>
 struct GenerateMeshRefsHelper
@@ -827,6 +835,9 @@ void BuildTriangleBVH(Arena **arenas, ScenePrimitives *scene);
 void BuildCatClarkBVH(Arena **arenas, ScenePrimitives *scene);
 template <GeometryType type>
 void ComputeTessellationParams(Mesh *meshes, TessellationParams *params, u32 start, u32 count);
+
+Mesh CopyMesh(Arena *arena, Mesh &mesh);
+void BuildSceneBVHs(ScenePrimitives **scenes, int numScenes, int maxDepth);
 
 } // namespace rt
 #endif

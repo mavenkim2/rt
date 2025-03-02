@@ -1,5 +1,6 @@
 #ifndef RT_VULKAN_H
 #define RT_VULKAN_H
+#include "base.h"
 #include "scene_load.h"
 #include <vulkan.h>
 
@@ -22,6 +23,67 @@
 namespace rt
 {
 
+using CopyFunction = std::function<void(void *)>;
+
+enum class ResourceUsage : u32
+{
+    None     = 0,
+    Graphics = 1 << 1,
+    Depth    = 1 << 4,
+    Stencil  = 1 << 5,
+
+    // Pipeline stages
+    Indirect       = 1 << 8,
+    Vertex         = 1 << 9,
+    Fragment       = 1 << 10,
+    Index          = 1 << 11,
+    Input          = 1 << 12,
+    Shader         = 1 << 13,
+    VertexInput    = Vertex | Input,
+    IndexInput     = Index | Input,
+    VertexShader   = Vertex | Shader,
+    FragmentShader = Fragment | Shader,
+
+    // Transfer
+    TransferSrc = 1 << 14,
+    TransferDst = 1 << 15,
+
+    // Bindless
+    Bindless = (1 << 16) | TransferDst,
+
+    // Attachments
+    ColorAttachment = 1 << 17,
+
+    ShaderRead  = 1 << 25,
+    UniformRead = 1 << 2,
+
+    ComputeRead  = 1 << 3,
+    ComputeWrite = 1 << 26,
+
+    VertexBuffer = (1 << 6) | Vertex,
+    IndexBuffer  = (1 << 7) | Index,
+
+    DepthStencil = Depth | Stencil,
+
+    UniformBuffer = (1 << 18),
+    UniformTexel  = (1 << 19),
+
+    StorageBufferRead = (1 << 20),
+    StorageBuffer     = (1 << 21),
+    StorageTexel      = (1 << 22),
+
+    SampledImage = (1 << 23),
+    StorageImage = (1 << 24),
+
+    ReadOnly  = ComputeRead | ShaderRead | SampledImage,
+    WriteOnly = ComputeWrite | StorageImage,
+
+    ShaderGlobals = StorageBufferRead | Bindless,
+    Reset         = 0xffffffff,
+};
+
+ENUM_CLASS_FLAGS(ResourceUsage)
+
 enum class ValidationMode
 {
     Disabled,
@@ -33,6 +95,35 @@ enum class GPUDevicePreference
 {
     Discrete,
     Integrated,
+};
+
+struct GPUBufferDesc
+{
+    u64 size;
+    // BindFlag mFlags    = 0;
+    MemoryUsage usage = MemoryUsage::GPU_ONLY;
+    ResourceUsage resourceUsage;
+};
+
+struct GraphicsObject
+{
+    void *internalState = 0;
+
+    b32 IsValid() { return internalState != 0; }
+};
+
+struct GPUBuffer : GraphicsObject
+{
+    GPUBufferDesc desc;
+    void *mappedData;
+};
+
+struct GPUBVH : GraphicsObject
+{
+};
+
+struct CommandList : GraphicsObject
+{
 };
 
 struct Vulkan
@@ -145,7 +236,7 @@ struct Vulkan
         return *(CommandListVulkan *)(cmd.internalState);
     }
 
-    u32 GetCurrentBuffer() override { return frameCount % cNumBuffers; }
+    u32 GetCurrentBuffer() { return frameCount % cNumBuffers; }
 
     u32 GetNextBuffer() { return (frameCount + 1) % cNumBuffers; }
 
@@ -313,11 +404,11 @@ struct Vulkan
     } frameAllocator[cNumBuffers];
 
     // The gpu buffer should already be created
-    FrameAllocation FrameAllocate(u64 size) override;
+    FrameAllocation FrameAllocate(u64 size);
     void FrameAllocate(GPUBuffer *inBuf, void *inData, CommandList cmd, u64 inSize = ~0,
-                       u64 srcOffset = 0) override;
+                       u64 srcOffset = 0);
     void CommitFrameAllocation(CommandList cmd, FrameAllocation &alloc, GPUBuffer *dstBuffer,
-                               u64 dstOffset = 0) override;
+                               u64 dstOffset = 0);
 
     //////////////////////////////
     // Functions
@@ -386,80 +477,92 @@ struct Vulkan
     }
 
     mkGraphicsVulkan(ValidationMode validationMode, GPUDevicePreference preference);
-    u64 GetMinAlignment(GPUBufferDesc *inDesc) override;
-    b32 CreateSwapchain(Window window, SwapchainDesc *desc, Swapchain *swapchain) override;
-    void CreatePipeline(PipelineStateDesc *inDesc, PipelineState *outPS, string name) override;
-    void CreateComputePipeline(PipelineStateDesc *inDesc, PipelineState *outPS,
-                               string name) override;
-    void CreateShader(Shader *shader, string shaderData) override;
-    void AddPCTemp(Shader *shader, u32 offset, u32 size) override;
+    u64 GetMinAlignment(GPUBufferDesc *inDesc);
+    b32 CreateSwapchain(Window window, SwapchainDesc *desc, Swapchain *swapchain);
+    void CreatePipeline(PipelineStateDesc *inDesc, PipelineState *outPS, string name);
+    void CreateComputePipeline(PipelineStateDesc *inDesc, PipelineState *outPS, string name);
+    void CreateShader(Shader *shader, string shaderData);
+    void AddPCTemp(Shader *shader, u32 offset, u32 size);
     void CreateBufferCopy(GPUBuffer *inBuffer, GPUBufferDesc inDesc,
-                          CopyFunction initCallback) override;
-    void CopyBuffer(CommandList cmd, GPUBuffer *dest, GPUBuffer *src, u32 size) override;
-    void ClearBuffer(CommandList cmd, GPUBuffer *dst) override;
-    void CopyTexture(CommandList cmd, Texture *dst, Texture *src, Rect3U32 *rect = 0) override;
-    void CopyImage(CommandList cmd, Swapchain *dst, Texture *src) override;
-    void DeleteBuffer(GPUBuffer *buffer) override;
-    void CreateTexture(Texture *outTexture, TextureDesc desc, void *inData) override;
-    void DeleteTexture(Texture *texture) override;
-    void CreateSampler(Sampler *sampler, SamplerDesc desc) override;
-    void BindSampler(CommandList cmd, Sampler *sampler, u32 slot) override;
+                          CopyFunction initCallback);
+
+    void CreateBuffer(GPUBuffer *inBuffer, GPUBufferDesc inDesc, void *inData = 0)
+    {
+        if (inData == 0)
+        {
+            CreateBufferCopy(inBuffer, inDesc, 0);
+        }
+        else
+        {
+            CopyFunction func = [&](void *dest) { MemoryCopy(dest, inData, inDesc.size); };
+            CreateBufferCopy(inBuffer, inDesc, func);
+        }
+    }
+
+    void CopyBuffer(CommandList cmd, GPUBuffer *dest, GPUBuffer *src, u32 size);
+    void ClearBuffer(CommandList cmd, GPUBuffer *dst);
+    void CopyTexture(CommandList cmd, Texture *dst, Texture *src, Rect3U32 *rect = 0);
+    void CopyImage(CommandList cmd, Swapchain *dst, Texture *src);
+    void DeleteBuffer(GPUBuffer *buffer);
+    void CreateTexture(Texture *outTexture, TextureDesc desc, void *inData);
+    void DeleteTexture(Texture *texture);
+    void CreateSampler(Sampler *sampler, SamplerDesc desc);
+    void BindSampler(CommandList cmd, Sampler *sampler, u32 slot);
     void BindResource(GPUResource *resource, ResourceViewType type, u32 slot, CommandList cmd,
-                      i32 subresource = -1) override;
+                      i32 subresource = -1);
     i32 GetDescriptorIndex(GPUResource *resource, ResourceViewType type,
-                           i32 subresourceIndex = -1) override;
+                           i32 subresourceIndex = -1);
     i32 CreateSubresource(GPUBuffer *buffer, ResourceViewType type, u64 offset = 0ull,
                           u64 size = ~0ull, Format format = Format::Null,
-                          const char *name = 0) override;
+                          const char *name = 0);
     i32 CreateSubresource(Texture *texture, u32 baseLayer = 0, u32 numLayers = ~0u,
-                          u32 baseMip = 0, u32 numMips = ~0u) override;
+                          u32 baseMip = 0, u32 numMips = ~0u);
     void UpdateDescriptorSet(CommandList cmd, b8 isCompute = 0);
-    CommandList BeginCommandList(QueueType queue) override;
-    void BeginRenderPass(Swapchain *inSwapchain, CommandList inCommandList) override;
-    void BeginRenderPass(RenderPassImage *images, u32 count, CommandList cmd) override;
-    void Draw(CommandList cmd, u32 vertexCount, u32 firstVertex) override;
-    void DrawIndexed(CommandList cmd, u32 indexCount, u32 firstVertex,
-                     u32 baseVertex) override;
+    CommandList BeginCommandList(QueueType queue);
+    void BeginRenderPass(Swapchain *inSwapchain, CommandList inCommandList);
+    void BeginRenderPass(RenderPassImage *images, u32 count, CommandList cmd);
+    void Draw(CommandList cmd, u32 vertexCount, u32 firstVertex);
+    void DrawIndexed(CommandList cmd, u32 indexCount, u32 firstVertex, u32 baseVertex);
     void DrawIndexedIndirect(CommandList cmd, GPUBuffer *indirectBuffer, u32 drawCount,
-                             u32 offset = 0, u32 stride = 20) override;
+                             u32 offset = 0, u32 stride = 20);
     void DrawIndexedIndirectCount(CommandList cmd, GPUBuffer *indirectBuffer,
                                   GPUBuffer *countBuffer, u32 maxDrawCount,
                                   u32 indirectOffset = 0, u32 countOffset = 0,
-                                  u32 stride = 20) override;
+                                  u32 stride = 20);
     void BindVertexBuffer(CommandList cmd, GPUBuffer **buffers, u32 count = 1,
-                          u32 *offsets = 0) override;
-    void BindIndexBuffer(CommandList cmd, GPUBuffer *buffer, u64 offset = 0) override;
-    void Dispatch(CommandList cmd, u32 groupCountX, u32 groupCountY, u32 groupCountZ) override;
-    void DispatchIndirect(CommandList cmd, GPUBuffer *buffer, u32 offset = 0) override;
-    void SetViewport(CommandList cmd, Viewport *viewport) override;
-    void SetScissor(CommandList cmd, Rect2 scissor) override;
-    void EndRenderPass(CommandList cmd) override;
-    void EndRenderPass(Swapchain *swapchain, CommandList cmd) override;
-    void SubmitCommandLists() override;
-    void BindPipeline(PipelineState *ps, CommandList cmd) override;
-    void BindCompute(PipelineState *ps, CommandList cmd) override;
-    void PushConstants(CommandList cmd, u32 size, void *data, u32 offset = 0) override;
-    void WaitForGPU() override;
-    void Wait(CommandList waitFor, CommandList cmd) override;
-    void Wait(CommandList wait) override;
-    void Barrier(CommandList cmd, GPUBarrier *barriers, u32 count) override;
-    b32 IsSignaled(FenceTicket ticket) override;
-    b32 IsLoaded(GPUResource *resource) override;
+                          u32 *offsets = 0);
+    void BindIndexBuffer(CommandList cmd, GPUBuffer *buffer, u64 offset = 0);
+    void Dispatch(CommandList cmd, u32 groupCountX, u32 groupCountY, u32 groupCountZ);
+    void DispatchIndirect(CommandList cmd, GPUBuffer *buffer, u32 offset = 0);
+    void SetViewport(CommandList cmd, Viewport *viewport);
+    void SetScissor(CommandList cmd, Rect2 scissor);
+    void EndRenderPass(CommandList cmd);
+    void EndRenderPass(Swapchain *swapchain, CommandList cmd);
+    void SubmitCommandLists();
+    void BindPipeline(PipelineState *ps, CommandList cmd);
+    void BindCompute(PipelineState *ps, CommandList cmd);
+    void PushConstants(CommandList cmd, u32 size, void *data, u32 offset = 0);
+    void WaitForGPU();
+    void Wait(CommandList waitFor, CommandList cmd);
+    void Wait(CommandList wait);
+    void Barrier(CommandList cmd, GPUBarrier *barriers, u32 count);
+    b32 IsSignaled(FenceTicket ticket);
+    b32 IsLoaded(GPUResource *resource);
 
     // Query pool
-    void CreateQueryPool(QueryPool *queryPool, QueryType type, u32 queryCount) override;
-    void BeginQuery(QueryPool *queryPool, CommandList cmd, u32 queryIndex) override;
-    void EndQuery(QueryPool *queryPool, CommandList cmd, u32 queryIndex) override;
+    void CreateQueryPool(QueryPool *queryPool, QueryType type, u32 queryCount);
+    void BeginQuery(QueryPool *queryPool, CommandList cmd, u32 queryIndex);
+    void EndQuery(QueryPool *queryPool, CommandList cmd, u32 queryIndex);
     void ResolveQuery(QueryPool *queryPool, CommandList cmd, GPUBuffer *buffer, u32 queryIndex,
-                      u32 count, u32 destOffset) override;
-    void ResetQuery(QueryPool *queryPool, CommandList cmd, u32 index, u32 count) override;
-    u32 GetCount(Fence f) override;
+                      u32 count, u32 destOffset);
+    void ResetQuery(QueryPool *queryPool, CommandList cmd, u32 index, u32 count);
+    u32 GetCount(Fence f);
 
     // Debug
-    void BeginEvent(CommandList cmd, string name) override;
-    void EndEvent(CommandList cmd) override;
-    void SetName(GPUResource *resource, const char *name) override;
-    void SetName(GPUResource *resource, string name) override;
+    void BeginEvent(CommandList cmd, string name);
+    void EndEvent(CommandList cmd);
+    void SetName(GPUResource *resource, const char *name);
+    void SetName(GPUResource *resource, string name);
 
 private:
     const i32 cPoolSize = 128;
@@ -598,1056 +701,16 @@ private:
     //////////////////////////////
     // Ray tracing
     //
+    struct GPUBVHVulkan
+    {
+        VkAccelerationStructureKHR as;
+    };
+
     void CreateRayTracingPipeline();
+    GPUBVH *CreateBLAS(const GPUMesh *meshes, int count);
 };
 
 static Vulkan *device;
-
-Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
-{
-    arena           = ArenaAlloc();
-    const i32 major = 0;
-    const i32 minor = 0;
-    const i32 patch = 1;
-
-    VK_CHECK(volkInitialize());
-
-    // Create the application
-    VkApplicationInfo appInfo  = {};
-    appInfo.sType              = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    appInfo.pApplicationName   = "RT";
-    appInfo.applicationVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);
-    appInfo.pEngineName        = "RT";
-    appInfo.engineVersion      = VK_MAKE_API_VERSION(0, major, minor, patch);
-    appInfo.apiVersion         = VK_API_VERSION_1_4;
-
-    // Load available layers
-    u32 layerCount = 0;
-    VK_CHECK(vkEnumerateInstanceLayerProperties(&layerCount, 0));
-    list<VkLayerProperties> availableLayers(layerCount);
-    VK_CHECK(vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data()));
-
-    // Load extension info
-    u32 extensionCount = 0;
-    VK_CHECK(vkEnumerateInstanceExtensionProperties(0, &extensionCount, 0));
-    list<VkExtensionProperties> extensionProperties(extensionCount);
-    VK_CHECK(vkEnumerateInstanceExtensionProperties(0, &extensionCount,
-                                                    extensionProperties.data()));
-
-    list<const char *> instanceExtensions;
-    list<const char *> instanceLayers;
-    // Add extensions
-    for (auto &availableExtension : extensionProperties)
-    {
-        if (strcmp(availableExtension.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0)
-        {
-            debugUtils = true;
-            instanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-        }
-    }
-    instanceExtensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
-#ifdef WINDOWS
-    instanceExtensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
-#else
-#error not supported
-#endif
-
-    // Add layers
-    if (validationMode != ValidationMode::Disabled)
-    {
-        static const list<const char *> validationPriorityList[] = {
-            // Preferred
-            {"VK_LAYER_KHRONOS_validation"},
-            // Fallback
-            {"VK_LAYER_LUNARG_standard_validation"},
-            // Individual
-            {
-                "VK_LAYER_GOOGLE_threading",
-                "VK_LAYER_LUNARG_parameter_validation",
-                "VK_LAYER_LUNARG_object_tracker",
-                "VK_LAYER_LUNARG_core_validation",
-                "VK_LAYER_GOOGLE_unique_objects",
-            },
-            // Last resort
-            {
-                "VK_LAYER_LUNARG_core_validation",
-            },
-        };
-        for (auto &validationLayers : validationPriorityList)
-        {
-            bool validated = true;
-            for (auto &layer : validationLayers)
-            {
-                bool found = false;
-                for (auto &availableLayer : availableLayers)
-                {
-                    if (strcmp(availableLayer.layerName, layer) == 0)
-                    {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found)
-                {
-                    validated = false;
-                    break;
-                }
-            }
-
-            if (validated)
-            {
-                for (auto &c : validationLayers)
-                {
-                    instanceLayers.push_back(c);
-                }
-                break;
-            }
-        }
-    }
-
-    // Create instance
-    {
-        Assert(volkGetInstanceVersion() >= VK_API_VERSION_1_4);
-        VkInstanceCreateInfo instInfo    = {};
-        instInfo.sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-        instInfo.pApplicationInfo        = &appInfo;
-        instInfo.enabledLayerCount       = (u32)instanceLayers.size();
-        instInfo.ppEnabledLayerNames     = instanceLayers.data();
-        instInfo.enabledExtensionCount   = (u32)instanceExtensions.size();
-        instInfo.ppEnabledExtensionNames = instanceExtensions.data();
-
-        VkDebugUtilsMessengerCreateInfoEXT debugUtilsCreateInfo = {};
-
-        debugUtilsCreateInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-        if (validationMode != ValidationMode::Disabled && debugUtils)
-        {
-            debugUtilsCreateInfo.messageSeverity =
-                VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT |
-                VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT;
-            debugUtilsCreateInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                                               VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-            if (validationMode == ValidationMode::Verbose)
-            {
-                debugUtilsCreateInfo.messageSeverity |=
-                    (VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
-                     VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT);
-            }
-
-            debugUtilsCreateInfo.pfnUserCallback = DebugUtilsMessengerCallback;
-            instInfo.pNext                       = &debugUtilsCreateInfo;
-        }
-
-        VK_CHECK(vkCreateInstance(&instInfo, 0, &instance));
-        volkLoadInstanceOnly(instance);
-
-        if (validationMode != ValidationMode::Disabled && debugUtils)
-        {
-            VK_CHECK(vkCreateDebugUtilsMessengerEXT(instance, &debugUtilsCreateInfo, 0,
-                                                    &debugMessenger));
-        }
-    }
-
-    // Enumerate physical devices
-    {
-        u32 deviceCount = 0;
-        VK_CHECK(vkEnumeratePhysicalDevices(instance, &deviceCount, 0));
-        Assert(deviceCount != 0);
-
-        list<VkPhysicalDevice> devices(deviceCount);
-        VK_CHECK(vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data()));
-
-        list<const char *> deviceExtensions = {
-            VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-        };
-
-        VkPhysicalDevice preferred = VK_NULL_HANDLE;
-        VkPhysicalDevice fallback  = VK_NULL_HANDLE;
-
-        for (auto &testDevice : devices)
-        {
-            VkPhysicalDeviceProperties2 props = {
-                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-            vkGetPhysicalDeviceProperties2(testDevice, &props);
-            if (props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) continue;
-
-            u32 queueFamilyCount = 0;
-            vkGetPhysicalDeviceQueueFamilyProperties2(testDevice, &queueFamilyCount, 0);
-
-            list<VkQueueFamilyProperties2> queueFamilyProps;
-            queueFamilyProps.resize(queueFamilyCount);
-            for (u32 i = 0; i < queueFamilyCount; i++)
-            {
-                queueFamilyProps[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
-            }
-
-            vkGetPhysicalDeviceQueueFamilyProperties2(testDevice, &queueFamilyCount,
-                                                      queueFamilyProps.data());
-
-            u32 graphicsIndex = VK_QUEUE_FAMILY_IGNORED;
-            for (u32 i = 0; i < queueFamilyCount; i++)
-            {
-                if (queueFamilyProps[i].queueFamilyProperties.queueFlags &
-                    VK_QUEUE_GRAPHICS_BIT)
-                {
-                    graphicsIndex = i;
-                    break;
-                }
-            }
-            if (graphicsIndex == VK_QUEUE_FAMILY_IGNORED) continue;
-
-#ifdef _WIN32
-            if (!vkGetPhysicalDeviceWin32PresentationSupportKHR(testDevice, graphicsIndex))
-                continue;
-#endif
-            if (props.properties.apiVersion < VK_API_VERSION_1_4) continue;
-
-            b32 suitable = props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
-            if (preference == GPUDevicePreference::Integrated)
-            {
-                suitable =
-                    props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
-            }
-            if (!preferred && suitable)
-            {
-                preferred = testDevice;
-            }
-            if (!fallback)
-            {
-                fallback = testDevice;
-            }
-        }
-        physicalDevice = preferred ? preferred : fallback;
-        if (!physicalDevice)
-        {
-            Print("Error: No GPU selected\n");
-            Assert(0);
-        }
-        // Printf("Selected GPU: %s\n", deviceProperties.properties.deviceName);
-
-        deviceFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        features11.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
-        features12.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-        features13.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-        features14.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES;
-        deviceFeatures.pNext = &features11;
-        features11.pNext     = &features12;
-        features12.pNext     = &features13;
-        features13.pNext     = &features14;
-
-        void **featuresChain = &features14.pNext;
-        *featuresChain       = 0;
-
-        deviceProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-        properties11.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES;
-        properties12.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES;
-        properties13.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES;
-        properties14.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_PROPERTIES;
-        deviceProperties.pNext = &properties11;
-        properties11.pNext     = &properties12;
-        properties12.pNext     = &properties13;
-        properties13.pNext     = &properties14;
-        void **propertiesChain = &properties14.pNext;
-
-        u32 deviceExtCount = 0;
-        VK_CHECK(vkEnumerateDeviceExtensionProperties(physicalDevice, 0, &deviceExtCount, 0));
-        list<VkExtensionProperties> availableDevExt(deviceExtCount);
-        VK_CHECK(vkEnumerateDeviceExtensionProperties(physicalDevice, 0, &deviceExtCount,
-                                                      availableDevExt.data()));
-
-        auto checkAndAddExtension = [&](const char *extName, auto *prop = 0, auto *feat = 0) {
-            for (auto &extension : availableDevExt)
-            {
-                if (strcmp(extension.extensionName, extName) == 0)
-                {
-                    if (prop)
-                    {
-                        *propertiesChain = prop;
-                        propertiesChain  = &prop->pNext;
-                    }
-                    if (feat)
-                    {
-                        *featuresChain = &feat;
-                        featuresChain  = &feat->pNext;
-                    }
-                    deviceExtensions.push_back(extName);
-                    return true;
-                }
-            }
-            return false;
-        };
-
-        if (checkExtension(VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME))
-        {
-            deviceExtensions.push_back(VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME);
-        }
-
-        meshShaderProperties = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT};
-        meshShaderFeatures   = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
-        if (checkAndAddExtension(VK_EXT_MESH_SHADER_EXTENSION_NAME, &meshShaderProperties,
-                                 &meshShaderFeatures))
-        {
-            capabilities |= DeviceCapabilities_MeshShader;
-        }
-        variableShadingRateProperties = {
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR};
-        variableShadingRateFeatures = {
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR};
-        if (checkAndAddExtension(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME,
-                                 &variableShadingRateProperties, &variableShadingRateFeatures))
-        {
-            capabilities |= DeviceCapabilities_VariableShading;
-        }
-
-        // Ray tracing extensions
-        {
-            accelStructProps = {
-                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
-            accelStructFeats = {
-                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
-            bool result = checkAndAddExtension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
-                                               &accelStructProps, &accelStructFeats);
-            ErrorExit(result,
-                      "Machine doesn't support VK_KHR_acceleration_structure. Exiting\n");
-
-            rtPipeProperties = {
-                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR};
-            rtPipeFeatures = {
-                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR};
-            result = checkAndAddExtension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
-                                          &rtPipeProperties, &rtPipeFeatures);
-            ErrorExit(result,
-                      "Machine doesn't support VK_KHR_acceleration_structure. Exiting\n");
-
-            checkAndAddExtension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
-
-            clasPropertiesNV = {
-                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_PROPERTIES_NV};
-            clasFeaturesNV = {
-                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_FEATURES_NV};
-            bool result =
-                checkAndAddExtension(VK_NV_CLUSTER_ACCELERATION_STRUCTURE_EXTENSION_NAME,
-                                     &clasPropertiesNV, &clasFeaturesNV);
-            ErrorExit(
-                result,
-                "Machine doesn't support VK_NV_cluster_acceleration_structure. Exiting\n");
-        }
-
-        vkGetPhysicalDeviceFeatures2(physicalDevice, &deviceFeatures);
-
-        // Ensure core functionlity is supported
-        Assert(deviceFeatures.features.multiDrawIndirect == VK_TRUE);
-        Assert(deviceFeatures.features.pipelineStatisticsQuery == VK_TRUE);
-        Assert(features13.dynamicRendering == VK_TRUE);
-        Assert(features12.descriptorIndexing == VK_TRUE);
-        Assert(features12.bufferDeviceAddress == VK_TRUE);
-
-        if (capabilities & DeviceCapabilities_MeshShader)
-        {
-            Assert(meshShaderFeatures.meshShader == VK_TRUE);
-            Assert(meshShaderFeatures.taskShader == VK_TRUE);
-        }
-
-        vkGetPhysicalDeviceProperties2(physicalDevice, &deviceProperties);
-        cTimestampPeriod = (f64)deviceProperties.properties.limits.timestampPeriod * 1e-9;
-
-        u32 queueFamilyCount = 0;
-        vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, &queueFamilyCount, 0);
-        queueFamilyProperties.resize(queueFamilyCount);
-        for (u32 i = 0; i < queueFamilyCount; i++)
-        {
-            queueFamilyProperties[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
-        }
-        vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, &queueFamilyCount,
-                                                  queueFamilyProperties.data());
-
-        // Device exposes 1+ queue families, queue families have 1+ queues. Each family
-        // supports a combination of the below:
-        // 1. Graphics
-        // 2. Compute
-        // 3. Transfer
-        // 4. Sparse Memory Management
-
-        // Find queues in queue family
-        for (u32 i = 0; i < queueFamilyProperties.size(); i++)
-        {
-            auto &queueFamily = queueFamilyProperties[i];
-            if (queueFamily.queueFamilyProperties.queueCount > 0)
-            {
-                if (graphicsFamily == VK_QUEUE_FAMILY_IGNORED &&
-                    queueFamily.queueFamilyProperties.queueFlags & VK_QUEUE_GRAPHICS_BIT)
-                {
-                    graphicsFamily = i;
-                }
-                if ((queueFamily.queueFamilyProperties.queueFlags & VK_QUEUE_TRANSFER_BIT) &&
-                    (copyFamily == VK_QUEUE_FAMILY_IGNORED ||
-                     (!(queueFamily.queueFamilyProperties.queueFlags &
-                        VK_QUEUE_GRAPHICS_BIT) &&
-                      !(queueFamily.queueFamilyProperties.queueFlags & VK_QUEUE_COMPUTE_BIT))))
-
-                {
-                    copyFamily = i;
-                }
-                if ((queueFamily.queueFamilyProperties.queueFlags & VK_QUEUE_COMPUTE_BIT) &&
-                    (computeFamily == VK_QUEUE_FAMILY_IGNORED ||
-                     !(queueFamily.queueFamilyProperties.queueFlags & VK_QUEUE_GRAPHICS_BIT)))
-
-                {
-                    computeFamily = i;
-                }
-            }
-        }
-
-        // Create the device queues
-        list<VkDeviceQueueCreateInfo> queueCreateInfos;
-        f32 queuePriority = 1.f;
-        for (u32 i = 0; i < 3; i++)
-        {
-            u32 queueFamily = 0;
-            if (i == 0)
-            {
-                queueFamily = graphicsFamily;
-            }
-            else if (i == 1)
-            {
-                if (graphicsFamily == computeFamily)
-                {
-                    continue;
-                }
-                queueFamily = computeFamily;
-            }
-            else if (i == 2)
-            {
-                if (graphicsFamily == copyFamily || computeFamily == copyFamily)
-                {
-                    continue;
-                }
-                queueFamily = copyFamily;
-            }
-            VkDeviceQueueCreateInfo queueCreateInfo = {};
-            queueCreateInfo.sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-            queueCreateInfo.queueFamilyIndex = queueFamily;
-            queueCreateInfo.queueCount       = 1;
-            queueCreateInfo.pQueuePriorities = &queuePriority;
-            queueCreateInfos.push_back(queueCreateInfo);
-
-            families.push_back(queueFamily);
-        }
-
-        VkDeviceCreateInfo createInfo      = {};
-        createInfo.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        createInfo.queueCreateInfoCount    = (u32)queueCreateInfos.size();
-        createInfo.pQueueCreateInfos       = queueCreateInfos.data();
-        createInfo.pEnabledFeatures        = 0;
-        createInfo.pNext                   = &deviceFeatures;
-        createInfo.enabledExtensionCount   = (u32)deviceExtensions.size();
-        createInfo.ppEnabledExtensionNames = deviceExtensions.data();
-
-        VK_CHECK(vkCreateDevice(physicalDevice, &createInfo, 0, &device));
-
-        volkLoadDevice(device);
-    }
-
-    memoryProperties = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
-    vkGetPhysicalDeviceMemoryProperties2(physicalDevice, &memoryProperties);
-
-    // Get the device queues
-    vkGetDeviceQueue(device, graphicsFamily, 0, &queues[QueueType_Graphics].queue);
-    vkGetDeviceQueue(device, computeFamily, 0, &queues[QueueType_Compute].queue);
-    vkGetDeviceQueue(device, copyFamily, 0, &queues[QueueType_Copy].queue);
-
-    SetName(queues[QueueType_Graphics].queue, "Graphics Queue");
-    SetName(queues[QueueType_Copy].queue, "Transfer Queue");
-
-    // TODO: unified memory access architectures
-    memProperties       = {};
-    memProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
-    vkGetPhysicalDeviceMemoryProperties2(physicalDevice, &memProperties);
-
-    VmaAllocatorCreateInfo allocCreateInfo = {};
-    allocCreateInfo.physicalDevice         = physicalDevice;
-    allocCreateInfo.device                 = device;
-    allocCreateInfo.instance               = instance;
-    allocCreateInfo.vulkanApiVersion       = VK_API_VERSION_1_4;
-    // these are promoted to core, so this doesn't do anything
-    allocCreateInfo.flags = VMA_ALLOCATOR_CREATE_KHR_BIND_MEMORY2_BIT;
-
-#if VMA_DYNAMIC_VULKAN_FUNCTIONS
-    VmaVulkanFunctions vulkanFunctions    = {};
-    vulkanFunctions.vkGetDeviceProcAddr   = vkGetDeviceProcAddr;
-    vulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
-    allocCreateInfo.pVulkanFunctions      = &vulkanFunctions;
-#else
-#error
-#endif
-
-    VK_CHECK(vmaCreateAllocator(&allocCreateInfo, &allocator));
-
-    // Set up dynamic pso
-    dynamicStates = {
-        VK_DYNAMIC_STATE_SCISSOR,
-        VK_DYNAMIC_STATE_VIEWPORT,
-    };
-
-    // Set up frame fences
-    for (u32 buffer = 0; buffer < cNumBuffers; buffer++)
-    {
-        for (u32 queue = 0; queue < QueueType_Count; queue++)
-        {
-            if (queues[queue].queue == VK_NULL_HANDLE)
-            {
-                continue;
-            }
-            VkFenceCreateInfo fenceInfo = {};
-            fenceInfo.sType             = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-            VK_CHECK(vkCreateFence(device, &fenceInfo, 0, &frameFences[buffer][queue]));
-        }
-    }
-
-    dynamicStateInfo                   = {};
-    dynamicStateInfo.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamicStateInfo.dynamicStateCount = (u32)dynamicStates.size();
-    dynamicStateInfo.pDynamicStates    = dynamicStates.data();
-
-    // Init descriptor pool
-    {
-        VkDescriptorPoolSize poolSizes[2];
-
-        u32 count = 0;
-        // Uniform buffers
-        poolSizes[count].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        poolSizes[count].descriptorCount = cPoolSize;
-        count++;
-
-        // Combined samplers
-        poolSizes[count].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSizes[count].descriptorCount = cPoolSize;
-
-        VkDescriptorPoolCreateInfo createInfo = {};
-        createInfo.sType                      = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        createInfo.poolSizeCount              = count;
-        createInfo.pPoolSizes                 = poolSizes;
-        createInfo.maxSets                    = cPoolSize;
-
-        VK_CHECK(vkCreateDescriptorPool(device, &createInfo, 0, &pool));
-    }
-
-    // Bindless descriptor pools
-    {
-        for (DescriptorType type = (DescriptorType)0; type < DescriptorType_Count;
-             type                = (DescriptorType)(type + 1))
-        {
-            VkDescriptorType descriptorType;
-            switch (type)
-            {
-                case DescriptorType_SampledImage:
-                    descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                    break;
-                case DescriptorType_UniformTexel:
-                    descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
-                    break;
-                case DescriptorType_StorageBuffer:
-                    descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                    break;
-                case DescriptorType_StorageTexelBuffer:
-                    descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
-                    break;
-                default: Assert(0);
-            }
-
-            BindlessDescriptorPool &bindlessDescriptorPool = bindlessDescriptorPools[type];
-            VkDescriptorPoolSize poolSize                  = {};
-            poolSize.type                                  = descriptorType;
-            if (type == DescriptorType_StorageBuffer ||
-                type == DescriptorType_StorageTexelBuffer)
-            {
-                poolSize.descriptorCount =
-                    Min(10000,
-                        deviceProperties.properties.limits.maxDescriptorSetStorageBuffers / 4);
-            }
-            else if (type == DescriptorType_SampledImage)
-            {
-                poolSize.descriptorCount =
-                    Min(10000,
-                        deviceProperties.properties.limits.maxDescriptorSetSampledImages / 4);
-            }
-            else if (type == DescriptorType_UniformTexel)
-            {
-                poolSize.descriptorCount =
-                    Min(10000,
-                        deviceProperties.properties.limits.maxDescriptorSetUniformBuffers / 4);
-            }
-            bindlessDescriptorPool.descriptorCount = poolSize.descriptorCount;
-
-            VkDescriptorPoolCreateInfo createInfo = {};
-            createInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            createInfo.poolSizeCount = 1;
-            createInfo.pPoolSizes    = &poolSize;
-            createInfo.maxSets       = 1;
-            createInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
-            VK_CHECK(
-                vkCreateDescriptorPool(device, &createInfo, 0, &bindlessDescriptorPool.pool));
-
-            VkDescriptorSetLayoutBinding binding = {};
-            binding.binding                      = 0;
-            binding.pImmutableSamplers           = 0;
-            binding.stageFlags                   = VK_SHADER_STAGE_ALL;
-            binding.descriptorType               = descriptorType;
-            binding.descriptorCount              = bindlessDescriptorPool.descriptorCount;
-
-            // These flags enable bindless:
-            // https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkDescriptorBindingFlagBits.html
-            VkDescriptorBindingFlags bindingFlags =
-                VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
-                VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT |
-                VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-            VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsCreate = {};
-            bindingFlagsCreate.sType =
-                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-            bindingFlagsCreate.bindingCount  = 1;
-            bindingFlagsCreate.pBindingFlags = &bindingFlags;
-
-            VkDescriptorSetLayoutCreateInfo createSetLayout = {};
-            createSetLayout.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            createSetLayout.bindingCount = 1;
-            createSetLayout.pBindings    = &binding;
-            createSetLayout.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-            createSetLayout.pNext = &bindingFlagsCreate;
-
-            VK_CHECK(vkCreateDescriptorSetLayout(device, &createSetLayout, 0,
-                                                 &bindlessDescriptorPool.layout));
-
-            VkDescriptorSetAllocateInfo allocInfo = {};
-            allocInfo.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            allocInfo.descriptorPool     = bindlessDescriptorPool.pool;
-            allocInfo.descriptorSetCount = 1;
-            allocInfo.pSetLayouts        = &bindlessDescriptorPool.layout;
-            VK_CHECK(
-                vkAllocateDescriptorSets(device, &allocInfo, &bindlessDescriptorPool.set));
-
-            for (u32 i = 0; i < poolSize.descriptorCount; i++)
-            {
-                bindlessDescriptorPool.freeList.push_back(poolSize.descriptorCount - i - 1);
-            }
-            bindlessDescriptorSets.push_back(bindlessDescriptorPool.set);
-            bindlessDescriptorSetLayouts.push_back(bindlessDescriptorPool.layout);
-
-            // Set debug names
-            TempArena temp = ScratchStart(0, 0);
-            string typeName;
-            switch (type)
-            {
-                case DescriptorType_SampledImage: typeName = "Sampled Image"; break;
-                case DescriptorType_StorageBuffer: typeName = "Storage Buffer"; break;
-                case DescriptorType_UniformTexel: typeName = "Uniform Texel Buffer"; break;
-                case DescriptorType_StorageTexelBuffer:
-                    typeName = "Storage Texel Buffer";
-                    break;
-            }
-            string name =
-                PushStr8F(temp.arena, "Bindless Descriptor Set Layout: %S", typeName);
-            SetName(bindlessDescriptorPool.layout, (const char *)name.str);
-
-            name = PushStr8F(temp.arena, "Bindless Descriptor Set: %S", typeName);
-            SetName(bindlessDescriptorPool.set, (const char *)name.str);
-            ScratchEnd(temp);
-        }
-    }
-
-    // Init frame allocators
-    {
-        GPUBufferDesc desc;
-        desc.usage         = MemoryUsage::CPU_TO_GPU;
-        desc.size          = megabytes(32);
-        desc.resourceUsage = ResourceUsage_TransferSrc;
-        for (u32 i = 0; i < cNumBuffers; i++)
-        {
-            CreateBuffer(&frameAllocator[i].buffer, desc, 0);
-            frameAllocator[i].alignment = 16;
-        }
-    }
-
-    // Initialize ring buffer
-    {
-        u32 ringBufferSize = megabytes(128);
-        GPUBufferDesc desc;
-        desc.usage         = MemoryUsage::CPU_TO_GPU;
-        desc.size          = ringBufferSize;
-        desc.resourceUsage = ResourceUsage_TransferSrc;
-
-        for (u32 i = 0; i < ArrayLength(stagingRingAllocators); i++)
-        {
-            RingAllocator &stagingRingAllocator = stagingRingAllocators[i];
-            CreateBuffer(&stagingRingAllocator.transferRingBuffer, desc, 0);
-            SetName(&stagingRingAllocator.transferRingBuffer, "Transfer Staging Buffer");
-
-            stagingRingAllocator.ringBufferSize = ringBufferSize;
-            stagingRingAllocator.writePos = stagingRingAllocator.readPos = 0;
-            stagingRingAllocator.allocationReadPos                       = 0;
-            stagingRingAllocator.allocationWritePos                      = 0;
-            stagingRingAllocator.alignment                               = 16;
-            stagingRingAllocator.lock.Init();
-        }
-    }
-
-    // Default samplers
-    {
-        // Null sampler
-        VkSamplerCreateInfo samplerCreate = {};
-        samplerCreate.sType               = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-
-        VK_CHECK(vkCreateSampler(device, &samplerCreate, 0, &nullSampler));
-
-        samplerCreate.anisotropyEnable        = VK_FALSE;
-        samplerCreate.maxAnisotropy           = 0;
-        samplerCreate.minLod                  = 0;
-        samplerCreate.maxLod                  = FLT_MAX;
-        samplerCreate.mipLodBias              = 0;
-        samplerCreate.unnormalizedCoordinates = VK_FALSE;
-        samplerCreate.compareEnable           = VK_FALSE;
-        samplerCreate.compareOp               = VK_COMPARE_OP_NEVER;
-
-        samplerCreate.minFilter    = VK_FILTER_LINEAR;
-        samplerCreate.magFilter    = VK_FILTER_LINEAR;
-        samplerCreate.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        samplerCreate.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerCreate.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerCreate.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-
-        // sampler linear wrap
-        immutableSamplers.emplace_back();
-        VK_CHECK(vkCreateSampler(device, &samplerCreate, 0, &immutableSamplers.back()));
-
-        // samler nearest wrap
-        samplerCreate.minFilter  = VK_FILTER_NEAREST;
-        samplerCreate.magFilter  = VK_FILTER_NEAREST;
-        samplerCreate.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-        immutableSamplers.emplace_back();
-        VK_CHECK(vkCreateSampler(device, &samplerCreate, 0, &immutableSamplers.back()));
-
-        // sampler linear clamp
-        samplerCreate.minFilter    = VK_FILTER_LINEAR;
-        samplerCreate.magFilter    = VK_FILTER_LINEAR;
-        samplerCreate.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        samplerCreate.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        samplerCreate.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        samplerCreate.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        immutableSamplers.emplace_back();
-        VK_CHECK(vkCreateSampler(device, &samplerCreate, 0, &immutableSamplers.back()));
-
-        // sampler nearest clamp
-        samplerCreate.minFilter  = VK_FILTER_NEAREST;
-        samplerCreate.magFilter  = VK_FILTER_NEAREST;
-        samplerCreate.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-        immutableSamplers.emplace_back();
-        VK_CHECK(vkCreateSampler(device, &samplerCreate, 0, &immutableSamplers.back()));
-
-        // sampler nearest compare
-        samplerCreate.compareEnable = VK_TRUE;
-        samplerCreate.compareOp     = VK_COMPARE_OP_GREATER_OR_EQUAL;
-        immutableSamplers.emplace_back();
-        VK_CHECK(vkCreateSampler(device, &samplerCreate, 0, &immutableSamplers.back()));
-    }
-
-    // Default views
-    {
-        VkImageCreateInfo imageInfo = {};
-        imageInfo.sType             = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        imageInfo.imageType         = VK_IMAGE_TYPE_2D;
-        imageInfo.extent.width      = 1;
-        imageInfo.extent.height     = 1;
-        imageInfo.extent.depth      = 1;
-        imageInfo.mipLevels         = 1;
-        imageInfo.arrayLayers       = 1;
-        imageInfo.format            = VK_FORMAT_R8G8B8A8_UNORM;
-        imageInfo.tiling            = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.initialLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
-        imageInfo.samples           = VK_SAMPLE_COUNT_1_BIT;
-        imageInfo.usage             = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
-
-        VmaAllocationCreateInfo allocInfo = {};
-        allocInfo.usage                   = VMA_MEMORY_USAGE_GPU_ONLY;
-        VK_CHECK(vmaCreateImage(allocator, &imageInfo, &allocInfo, &nullImage2D,
-                                &nullImage2DAllocation, 0));
-
-        VkImageViewCreateInfo createInfo           = {};
-        createInfo.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        createInfo.subresourceRange.baseArrayLayer = 0;
-        createInfo.subresourceRange.layerCount     = 1;
-        createInfo.subresourceRange.baseMipLevel   = 0;
-        createInfo.subresourceRange.levelCount     = 1;
-        createInfo.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-        createInfo.format                          = VK_FORMAT_R8G8B8A8_UNORM;
-
-        createInfo.image    = nullImage2D;
-        createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-
-        VK_CHECK(vkCreateImageView(device, &createInfo, 0, &nullImageView2D));
-
-        createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-        VK_CHECK(vkCreateImageView(device, &createInfo, 0, &nullImageView2DArray));
-
-        // Transitions
-        TransferCommand cmd = Stage(0);
-
-        VkImageMemoryBarrier2 imageBarrier       = {};
-        imageBarrier.sType                       = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        imageBarrier.image                       = nullImage2D;
-        imageBarrier.oldLayout                   = imageInfo.initialLayout;
-        imageBarrier.newLayout                   = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        imageBarrier.srcAccessMask               = VK_ACCESS_2_NONE;
-        imageBarrier.dstAccessMask               = VK_ACCESS_2_SHADER_READ_BIT;
-        imageBarrier.srcStageMask                = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-        imageBarrier.dstStageMask                = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        imageBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        imageBarrier.subresourceRange.baseArrayLayer = 0;
-        imageBarrier.subresourceRange.baseMipLevel   = 0;
-        imageBarrier.subresourceRange.layerCount     = 1;
-        imageBarrier.subresourceRange.levelCount     = 1;
-        imageBarrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-        imageBarrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-
-        VkDependencyInfo dependencyInfo        = {};
-        dependencyInfo.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        dependencyInfo.imageMemoryBarrierCount = 1;
-        dependencyInfo.pImageMemoryBarriers    = &imageBarrier;
-
-        vkCmdPipelineBarrier2(cmd.transitionBuffer, &dependencyInfo);
-
-        Submit(cmd);
-    }
-
-    // Null buffer
-    {
-        VkBufferCreateInfo bufferInfo = {};
-        bufferInfo.sType              = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bufferInfo.size               = 4;
-        bufferInfo.usage =
-            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
-            VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-        VmaAllocationCreateInfo allocInfo = {};
-        allocInfo.preferredFlags          = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-
-        VK_CHECK(vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &nullBuffer,
-                                 &nullBufferAllocation, 0));
-    }
-}
-
-void mkGraphicsVulkan::SetName(GPUResource *resource, string name)
-{
-    SetName(resource, (char *)name.str);
-}
-
-void mkGraphicsVulkan::SetName(u64 handle, VkObjectType type, const char *name)
-{
-    if (!debugUtils || handle == 0)
-    {
-        return;
-    }
-    VkDebugUtilsObjectNameInfoEXT info = {};
-    info.sType                         = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
-    info.pObjectName                   = name;
-    info.objectType                    = type;
-    info.objectHandle                  = handle;
-    VK_CHECK(vkSetDebugUtilsObjectNameEXT(device, &info));
-}
-
-void Vulkan::SetName(VkDescriptorSetLayout handle, const char *name)
-{
-    SetName((u64)handle, VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, name);
-}
-
-void Vulkan::SetName(VkDescriptorSet handle, const char *name)
-{
-    SetName((u64)handle, VK_OBJECT_TYPE_DESCRIPTOR_SET, name);
-}
-
-void Vulkan::SetName(VkShaderModule handle, const char *name)
-{
-    SetName((u64)handle, VK_OBJECT_TYPE_SHADER_MODULE, name);
-}
-
-void Vulkan::SetName(VkPipeline handle, const char *name)
-{
-    SetName((u64)handle, VK_OBJECT_TYPE_PIPELINE, name);
-}
-
-void Vulkan::SetName(VkQueue handle, const char *name)
-{
-    SetName((u64)handle, VK_OBJECT_TYPE_QUEUE, name);
-}
-
-void Vulkan::CreateRayTracingPipeline(u32 maxDepth)
-{
-
-    enum RayShaderType
-    {
-        RST_Raygen,
-        RST_Miss,
-        RST_ClosestHit,
-        RST_Intersection,
-        RST_Max,
-    };
-
-    std::vector<VkPipelineShaderStageCreateInfo> pipelineInfos(RST_Max);
-    std::vector<VkRayTracingShaderGroupCreateInfoKHR> shaderGroups(RST_Max);
-    // Create pipeline infos
-    {
-        VkPipelineShaderStageCreateInfo info = {
-            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        info.pName                = "main";
-        info.stage                = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-        info.module               = ;
-        pipelineInfos[RST_Raygen] = info;
-
-        info.stage              = VK_SHADER_STAGE_MISS_BIT_KHR;
-        info.module             = ;
-        pipelineInfos[RST_Miss] = info;
-
-        info.stage                    = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-        info.module                   = ;
-        pipelineInfos[RST_ClosestHit] = info;
-
-        info.stage                      = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
-        info.module                     = ;
-        pipelineInfos[RST_Intersection] = info;
-
-        SetName(info.module, ?);
-    }
-    // Create shader groups
-    {
-        VkRayTracingShaderGroupCreateInfoKHR group = {
-            VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR};
-        group.type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-        group.generalShader      = VK_SHADER_UNUSED_KHR;
-        group.closestHitShader   = VK_SHADER_UNUSED_KHR;
-        group.anyHitShader       = VK_SHADER_UNUSED_KHR;
-        group.intersectionShader = VK_SHADER_UNUSED_KHR;
-
-        group.generalShader = RST_Raygen;
-        shaderGroups.push_back(group);
-
-        group.generalShader = RST_Miss;
-        shaderGroups.push_back(group);
-
-        group.type             = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-        group.generalShader    = VK_SHADER_UNUSED_KH;
-        group.closestHitShader = RST_ClosestHit;
-        shaderGroups.push_back(group);
-
-        // Intersection shader
-        group.type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR;
-        group.closestHitShader   = VK_SHADER_UNUSED_KHR;
-        group.intersectionShader = RST_Intersection;
-        shaderGroups.push_back(group);
-    }
-
-    // Create pipeline
-    {
-        VkPipelineLayoutCreateInfo layoutCreateInfo = {
-            VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-
-        VkRayTracingPipelineCreateInfoKHR pipelineInfo = {
-            VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR};
-
-        pipelineInfo.pStages                      = stages.data();
-        pipelineInfo.stageCount                   = static_cast<u32>(stages.size());
-        pipelineInfo.pGroups                      = shaderGroups.data();
-        pipelineInfo.groupCount                   = static_cast<u32>(shaderGroups.size());
-        pipelineInfo.maxPipelineRayRecursionDepth = maxDepth;
-        pipelineInfo.layout                       = ? ;
-
-        {
-            VkRayTracingPipelineClusterAccelerationStructureCreateInfoNV clusterInfo{
-                VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CLUSTER_ACCELERATION_STRUCTURE_CREATE_INFO_NV};
-            clusterInfo.allowClusterAccelerationStructure = true;
-            pipelineInfo.pNext                            = &clusterInfo;
-        }
-
-        VkResult result = vkCreateRayTracingPipelinesKHR(device, {}, {}, 1, &pipelineInfo, 0,
-                                                         need a pipeline here);
-    }
-    Assert(result == VK_SUCCESS);
-
-    // Create shader binding table
-    {
-    }
-
-    // VkAccelerationStructureGeometryInstancesDataKHR instance;
-    // instance.arrayOfPointers
-
-    // Build acceleration structures, trace rays
-}
-
-void Vulkan::CreateBLAS(const GPUMesh *meshes, int count)
-{
-    VkStructureType sType;
-    const void *pNext;
-    VkGeometryTypeKHR geometryType;
-    VkAccelerationStructureGeometryDataKHR geometry;
-    VkGeometryFlagsKHR flags;
-
-    VkAccelerationStructureGeometryTrianglesDataKHR data = {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR};
-    data.transformData;
-    data.indexData;
-
-    std::vector<VkAccelerationStructureGeometryKHR> geometries;
-    std::vector<VkAccelerationStructureBuildRangeInfoKHR> buildRanges;
-
-    VkAccelerationStructureGeometryKHR geometry = {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
-    geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-    auto &triangles       = geometry.geometry.triangles;
-    triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-
-    for (int i = 0; i < count; i++)
-    {
-        GPUMesh &mesh                   = meshes[i];
-        VkBufferDeviceAddressInfo pInfo = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
-        pInfo.buffer                    = ToInternal(buffer)->buffer;
-
-        VkDeviceAddress deviceAddress = vkGetBufferDeviceAddress(device, &pInfo);
-        VkDeviceOrHostAddressConstKHR address;
-        address.deviceAddress = deviceAddress;
-
-        triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-        triangles.vertexData   = ;
-        triangles.vertexStride = sizeof(Vec3f);
-        triangles.maxVertex    = mesh.mesh.numVertices - 1;
-        triangles.indexType    = VK_INDEX_TYPE_UINT32;
-        triangles.indexData    = ;
-
-        geometries.push_back(geometry);
-
-        VkAccelerationStructureBuildRangeInfoKHR rangeInfo = {
-            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_RANGE_INFO};
-        rangeInfo.primitiveCount = mesh.mesh.numIndices / 3;
-        buildRanges.push_back(rangeInfo);
-    }
-
-    VkAccelerationStructureBuildGeometryInfoKHR buildInfo = {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
-    buildInfo.type          = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    buildInfo.flags         = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-    buildInfo.pGeometries   = geometries.data();
-    buildInfo.geometryCount = static_cast<u32>(geometries.size());
-    // buildInfo.
-
-    VkAccelerationStructureBuildSizesInfoKHR sizeInfo = {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
-
-    vkGetAccelerationStructureBuildSizesKHR(
-        device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo,
-        const uint32_t *pMaxPrimitiveCounts, &sizeInfo);
-
-    sizeInfo.buildScratchSize;
-
-    vkCmdBuildAccelerationStructuresKHR(
-        VkCommandBuffer commandBuffer, 1, &buildInfo,
-        const VkAccelerationStructureBuildRangeInfoKHR *const *ppBuildRangeInfos);
-}
 
 } // namespace rt
 #endif

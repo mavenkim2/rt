@@ -979,7 +979,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
         else if (Advance(&tokenizer, "SHAPE_START "))
         {
             Assert(isLeaf);
-            ChunkedLinkedList<Mesh, MemoryType_Shape> shapes(temp.arena, 1024);
+            ChunkedLinkedList<MeshType, MemoryType_Shape> shapes(temp.arena, 1024);
+
             ChunkedLinkedList<PrimitiveIndices, MemoryType_Shape> indices(temp.arena, 1024);
             ChunkedLinkedList<Light *, MemoryType_Light> lights(temp.arena);
 
@@ -1072,34 +1073,6 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                                                    : mesh.numVertices / numVerticesPerFace;
             };
 
-            auto CopyMesh = [&](Arena *arena, Mesh &mesh) -> Mesh {
-                Mesh newMesh        = {};
-                newMesh.numVertices = mesh.numVertices;
-                newMesh.numIndices  = mesh.numIndices;
-                newMesh.numFaces    = mesh.numFaces;
-                newMesh.p =
-                    PushArrayNoZeroTagged(arena, Vec3f, mesh.numVertices, MemoryType_Shape);
-                MemoryCopy(newMesh.p, mesh.p, sizeof(Vec3f) * mesh.numVertices);
-                if (mesh.n)
-                {
-                    newMesh.n = PushArrayNoZeroTagged(arena, Vec3f, mesh.numVertices,
-                                                      MemoryType_Shape);
-                    MemoryCopy(newMesh.n, mesh.n, sizeof(Vec3f) * mesh.numVertices);
-                }
-                if (mesh.uv)
-                {
-                    newMesh.uv = PushArrayNoZeroTagged(arena, Vec2f, mesh.numVertices,
-                                                       MemoryType_Shape);
-                    MemoryCopy(newMesh.uv, mesh.uv, sizeof(Vec2f) * mesh.numVertices);
-                }
-                if (mesh.indices)
-                {
-                    newMesh.indices = PushArrayNoZero(arena, u32, mesh.numIndices);
-                    MemoryCopy(newMesh.indices, mesh.indices, sizeof(u32) * mesh.numIndices);
-                }
-                return newMesh;
-            };
-
             while (!Advance(&tokenizer, "SHAPE_END "))
             {
                 if (Advance(&tokenizer, "Quad "))
@@ -1107,8 +1080,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     // MOANA: everything should be catclark
                     // Assert(0);
                     Assert(type == GeometryType::Max || type == GeometryType::QuadMesh);
-                    type       = GeometryType::QuadMesh;
-                    Mesh &mesh = shapes.AddBack();
+                    type = GeometryType::QuadMesh;
+                    Mesh mesh;
                     AddMesh(mesh, 4);
 
                     Assert(mesh.numVertices == 4);
@@ -1119,7 +1092,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                         mesh.numIndices = 0;
                     }
 
-                    mesh = CopyMesh(arena, mesh);
+                    shapes.AddBack() = CopyMesh(arena, mesh);
                     AddMaterialAndLights(mesh);
 
                     threadMemoryStatistics[threadIndex].totalShapeMemory +=
@@ -1128,16 +1101,13 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 }
                 else if (Advance(&tokenizer, "Tri "))
                 {
-                    // TODO: this is hardcoded for moana
                     Assert(type == GeometryType::Max || type == GeometryType::TriangleMesh);
-                    type       = GeometryType::TriangleMesh;
-                    Mesh &mesh = shapes.AddBack();
+                    type = GeometryType::TriangleMesh;
+                    Mesh mesh;
                     AddMesh(mesh, 3);
-                    mesh = CopyMesh(arena, mesh);
-                    AddMaterialAndLights(mesh);
 
-                    // mesh.CreateTriangleAreaPDF(arena);
-                    // GetScene()->causticCasters.push_back(mesh);
+                    shapes.AddBack() = CopyMesh(arena, mesh);
+                    AddMaterialAndLights(mesh);
 
                     threadMemoryStatistics[threadIndex].totalShapeMemory +=
                         mesh.numVertices * (sizeof(Vec3f) * 2 + sizeof(Vec2f)) +
@@ -1146,10 +1116,11 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 else if (Advance(&tokenizer, "Catclark "))
                 {
                     Assert(type == GeometryType::Max || type == GeometryType::CatmullClark);
-                    type       = GeometryType::CatmullClark;
-                    Mesh &mesh = shapes.AddBack();
+                    type = GeometryType::CatmullClark;
+                    Mesh mesh;
                     AddMesh(mesh, 4);
-                    mesh = CopyMesh(tempArena, mesh);
+
+                    shapes.AddBack() = CopyMesh(tempArena, mesh);
                     AddMaterialAndLights(mesh);
                 }
                 else
@@ -1409,17 +1380,7 @@ void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string file
         maxDepth = Max(maxDepth, scenes[i]->depth.load(std::memory_order_acquire));
     }
 
-    for (int depth = maxDepth; depth >= 0; depth--)
-    {
-        ParallelFor(0, numScenes, 1, [&](int jobID, int start, int count) {
-            for (int i = start; i < start + count; i++)
-            {
-                if (scenes[i]->depth.load(std::memory_order_acquire) == depth)
-                    BuildSceneBVHs(arenas, scenes[i], NDCFromCamera, cameraFromRender,
-                                   screenHeight);
-            }
-        });
-    }
+    BuildSceneBVHs(scenes, numScenes, maxDepth);
 
     for (u32 i = 0; i < numProcessors; i++)
     {

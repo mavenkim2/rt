@@ -1,3 +1,5 @@
+#define USE_GPU
+
 #include "rt.h"
 #include "tables/sobolmatrices.h"
 #include "tables/primes.h"
@@ -39,6 +41,13 @@
 #include "bvh/bvh_types.cpp"
 #include "spectrum.cpp"
 #include "scene.cpp"
+
+#ifdef USE_GPU
+#include "gpu_scene.cpp"
+#else
+#include "cpu_scene.cpp"
+#endif
+
 #include "bsdf.cpp"
 
 #include "lights.cpp"
