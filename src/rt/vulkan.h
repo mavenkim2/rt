@@ -1,5 +1,6 @@
 #ifndef RT_VULKAN_H
 #define RT_VULKAN_H
+#include "scene_load.h"
 #include <vulkan.h>
 
 #define VK_USE_PLATFORM_WIN32_KHR
@@ -7,6 +8,16 @@
 #include "../third_party/vulkan/vulkan.h"
 #include "../third_party/vulkan/volk.h"
 #include "../third_party/vulkan/vk_mem_alloc.h"
+
+// List of things to do:
+// 1. create shaders in HLSL and compile
+// 2. shader binding table
+// 3. create acceleration structures (TLAS and BLAS, how do I handle overlaps? multi
+// level instancing?)
+// 4. subdivision surfaces using opensubdiv on gpu?
+//
+// START: render JUST the ocean with real time path tracing. No clusters, no
+// subdivision, just triangles.
 
 namespace rt
 {
@@ -583,7 +594,14 @@ private:
     // Memory
     //
     i32 GetMemoryTypeIndex(u32 typeBits, VkMemoryPropertyFlags flags);
+
+    //////////////////////////////
+    // Ray tracing
+    //
+    void CreateRayTracingPipeline();
 };
+
+static Vulkan *device;
 
 Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
 {
@@ -1416,13 +1434,220 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
     }
 }
 
-void RT()
+void mkGraphicsVulkan::SetName(GPUResource *resource, string name)
 {
+    SetName(resource, (char *)name.str);
+}
+
+void mkGraphicsVulkan::SetName(u64 handle, VkObjectType type, const char *name)
+{
+    if (!debugUtils || handle == 0)
+    {
+        return;
+    }
+    VkDebugUtilsObjectNameInfoEXT info = {};
+    info.sType                         = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+    info.pObjectName                   = name;
+    info.objectType                    = type;
+    info.objectHandle                  = handle;
+    VK_CHECK(vkSetDebugUtilsObjectNameEXT(device, &info));
+}
+
+void Vulkan::SetName(VkDescriptorSetLayout handle, const char *name)
+{
+    SetName((u64)handle, VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, name);
+}
+
+void Vulkan::SetName(VkDescriptorSet handle, const char *name)
+{
+    SetName((u64)handle, VK_OBJECT_TYPE_DESCRIPTOR_SET, name);
+}
+
+void Vulkan::SetName(VkShaderModule handle, const char *name)
+{
+    SetName((u64)handle, VK_OBJECT_TYPE_SHADER_MODULE, name);
+}
+
+void Vulkan::SetName(VkPipeline handle, const char *name)
+{
+    SetName((u64)handle, VK_OBJECT_TYPE_PIPELINE, name);
+}
+
+void Vulkan::SetName(VkQueue handle, const char *name)
+{
+    SetName((u64)handle, VK_OBJECT_TYPE_QUEUE, name);
+}
+
+void Vulkan::CreateRayTracingPipeline(u32 maxDepth)
+{
+
+    enum RayShaderType
+    {
+        RST_Raygen,
+        RST_Miss,
+        RST_ClosestHit,
+        RST_Intersection,
+        RST_Max,
+    };
+
+    std::vector<VkPipelineShaderStageCreateInfo> pipelineInfos(RST_Max);
+    std::vector<VkRayTracingShaderGroupCreateInfoKHR> shaderGroups(RST_Max);
+    // Create pipeline infos
+    {
+        VkPipelineShaderStageCreateInfo info = {
+            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        info.pName                = "main";
+        info.stage                = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+        info.module               = ;
+        pipelineInfos[RST_Raygen] = info;
+
+        info.stage              = VK_SHADER_STAGE_MISS_BIT_KHR;
+        info.module             = ;
+        pipelineInfos[RST_Miss] = info;
+
+        info.stage                    = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+        info.module                   = ;
+        pipelineInfos[RST_ClosestHit] = info;
+
+        info.stage                      = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+        info.module                     = ;
+        pipelineInfos[RST_Intersection] = info;
+
+        SetName(info.module, ?);
+    }
+    // Create shader groups
+    {
+        VkRayTracingShaderGroupCreateInfoKHR group = {
+            VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR};
+        group.type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        group.generalShader      = VK_SHADER_UNUSED_KHR;
+        group.closestHitShader   = VK_SHADER_UNUSED_KHR;
+        group.anyHitShader       = VK_SHADER_UNUSED_KHR;
+        group.intersectionShader = VK_SHADER_UNUSED_KHR;
+
+        group.generalShader = RST_Raygen;
+        shaderGroups.push_back(group);
+
+        group.generalShader = RST_Miss;
+        shaderGroups.push_back(group);
+
+        group.type             = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        group.generalShader    = VK_SHADER_UNUSED_KH;
+        group.closestHitShader = RST_ClosestHit;
+        shaderGroups.push_back(group);
+
+        // Intersection shader
+        group.type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR;
+        group.closestHitShader   = VK_SHADER_UNUSED_KHR;
+        group.intersectionShader = RST_Intersection;
+        shaderGroups.push_back(group);
+    }
+
+    // Create pipeline
+    {
+        VkPipelineLayoutCreateInfo layoutCreateInfo = {
+            VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+
+        VkRayTracingPipelineCreateInfoKHR pipelineInfo = {
+            VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR};
+
+        pipelineInfo.pStages                      = stages.data();
+        pipelineInfo.stageCount                   = static_cast<u32>(stages.size());
+        pipelineInfo.pGroups                      = shaderGroups.data();
+        pipelineInfo.groupCount                   = static_cast<u32>(shaderGroups.size());
+        pipelineInfo.maxPipelineRayRecursionDepth = maxDepth;
+        pipelineInfo.layout                       = ? ;
+
+        {
+            VkRayTracingPipelineClusterAccelerationStructureCreateInfoNV clusterInfo{
+                VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CLUSTER_ACCELERATION_STRUCTURE_CREATE_INFO_NV};
+            clusterInfo.allowClusterAccelerationStructure = true;
+            pipelineInfo.pNext                            = &clusterInfo;
+        }
+
+        VkResult result = vkCreateRayTracingPipelinesKHR(device, {}, {}, 1, &pipelineInfo, 0,
+                                                         need a pipeline here);
+    }
+    Assert(result == VK_SUCCESS);
+
+    // Create shader binding table
+    {
+    }
+
+    // VkAccelerationStructureGeometryInstancesDataKHR instance;
+    // instance.arrayOfPointers
+
+    // Build acceleration structures, trace rays
+}
+
+void Vulkan::CreateBLAS(const GPUMesh *meshes, int count)
+{
+    VkStructureType sType;
+    const void *pNext;
+    VkGeometryTypeKHR geometryType;
+    VkAccelerationStructureGeometryDataKHR geometry;
+    VkGeometryFlagsKHR flags;
+
+    VkAccelerationStructureGeometryTrianglesDataKHR data = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR};
+    data.transformData;
+    data.indexData;
+
+    std::vector<VkAccelerationStructureGeometryKHR> geometries;
+    std::vector<VkAccelerationStructureBuildRangeInfoKHR> buildRanges;
+
     VkAccelerationStructureGeometryKHR geometry = {
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
-    geometry.geometryType = ;
+    geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+    auto &triangles       = geometry.geometry.triangles;
+    triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
 
-    vkCmdBuildkj
+    for (int i = 0; i < count; i++)
+    {
+        GPUMesh &mesh                   = meshes[i];
+        VkBufferDeviceAddressInfo pInfo = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+        pInfo.buffer                    = ToInternal(buffer)->buffer;
+
+        VkDeviceAddress deviceAddress = vkGetBufferDeviceAddress(device, &pInfo);
+        VkDeviceOrHostAddressConstKHR address;
+        address.deviceAddress = deviceAddress;
+
+        triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+        triangles.vertexData   = ;
+        triangles.vertexStride = sizeof(Vec3f);
+        triangles.maxVertex    = mesh.mesh.numVertices - 1;
+        triangles.indexType    = VK_INDEX_TYPE_UINT32;
+        triangles.indexData    = ;
+
+        geometries.push_back(geometry);
+
+        VkAccelerationStructureBuildRangeInfoKHR rangeInfo = {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_RANGE_INFO};
+        rangeInfo.primitiveCount = mesh.mesh.numIndices / 3;
+        buildRanges.push_back(rangeInfo);
+    }
+
+    VkAccelerationStructureBuildGeometryInfoKHR buildInfo = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+    buildInfo.type          = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    buildInfo.flags         = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    buildInfo.pGeometries   = geometries.data();
+    buildInfo.geometryCount = static_cast<u32>(geometries.size());
+    // buildInfo.
+
+    VkAccelerationStructureBuildSizesInfoKHR sizeInfo = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+
+    vkGetAccelerationStructureBuildSizesKHR(
+        device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo,
+        const uint32_t *pMaxPrimitiveCounts, &sizeInfo);
+
+    sizeInfo.buildScratchSize;
+
+    vkCmdBuildAccelerationStructuresKHR(
+        VkCommandBuffer commandBuffer, 1, &buildInfo,
+        const VkAccelerationStructureBuildRangeInfoKHR *const *ppBuildRangeInfos);
 }
+
 } // namespace rt
 #endif

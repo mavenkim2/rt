@@ -256,6 +256,13 @@ struct Mesh
     }
 };
 
+struct GPUMesh
+{
+    Mesh mesh;
+    GPUBuffer vertexBuffer;
+    GPUBuffer indexBuffer;
+};
+
 template <GeometryType type, typename PrimRefType = PrimRef>
 struct GenerateMeshRefsHelper
 {
@@ -734,7 +741,7 @@ struct ScenePrimitives
 
     Vec3f boundsMin;
     Vec3f boundsMax;
-    BVHNodeN nodePtr;
+    BVH nodePtr;
 
     // NOTE: is one of PrimitiveType
     void *primitives;

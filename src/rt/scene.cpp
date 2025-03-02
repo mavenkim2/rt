@@ -1136,8 +1136,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     mesh = CopyMesh(arena, mesh);
                     AddMaterialAndLights(mesh);
 
-                    mesh.CreateTriangleAreaPDF(arena);
-                    GetScene()->causticCasters.push_back(mesh);
+                    // mesh.CreateTriangleAreaPDF(arena);
+                    // GetScene()->causticCasters.push_back(mesh);
 
                     threadMemoryStatistics[threadIndex].totalShapeMemory +=
                         mesh.numVertices * (sizeof(Vec3f) * 2 + sizeof(Vec2f)) +
@@ -1266,6 +1266,20 @@ void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromC
                 scene->tessellationParams, (Mesh *)scene->primitives, scene->numPrimitives);
             BuildCatClarkBVH(arenas, scene);
         }
+        break;
+        default: Assert(0);
+    }
+}
+
+// GPU build
+void BuildSceneBVHs(ScenePrimitives *scene)
+{
+    switch (scene->geometryType)
+    {
+        case GeometryType::TriangleMesh:
+        {
+            device->BuildBVH();
+        };
         break;
         default: Assert(0);
     }
