@@ -3,18 +3,33 @@
 namespace rt
 {
 
-GPUMesh CopyMesh(Arena *arena, Mesh &mesh)
+GPUMesh CopyMesh(CommandBuffer *buffer, Arena *arena, Mesh &mesh)
 {
     GPUMesh result;
     GPUBuffer &vertexBuffer = result.vertexBuffer;
-    buffer.desc.size        = sizeof(mesh.p[0]) * mesh.numVertiices;
+    buffer.desc.size =
 
-    device->CreateBuffer(&vertexBuffer, buffer.desc, mesh.p);
+        device->CreateBuffer(&vertexBuffer, buffer.desc, mesh.p);
 
     GPUBuffer &indexBuffer = result.indexBuffer;
-    indexBuffer.desc.size  = sizeof(mesh.indices[0]) * mesh.numIndices;
+    indexBuffer.desc.size =
 
-    device->CreateBuffer(&indexBuffer, indexBuffer.desc, mesh.indices);
+        device->CreateBuffer(&indexBuffer, indexBuffer.desc, mesh.indices);
+
+    size_t vertexSize  = sizeof(mesh.p[0]) * mesh.numVertices;
+    size_t indicesSize = sizeof(mesh.indices[0]) * mesh.numIndices;
+    size_t totalSize   = vertexSize + sizeof(mesh.indices[0]) * mesh.numIndices;
+
+    int numBuffers = 2;
+
+    device->TransferData(totalSize, numBuffers, [&](void *ptr, u32 *alignment) {
+        MemoryCopy(ptr, mesh.p, vertexSize);
+
+        uintptr_t indexOutPtr =
+            ((uintptr_t)ptr + vertexSize + alignment - 1) & ~(alignment - 1);
+
+        MemoryCopy((void *)indexOutPtr, mesh.indices, indicesSize)
+    });
 
     result.numIndices  = mesh.numIndices;
     result.numVertices = mesh.numVertices;

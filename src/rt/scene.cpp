@@ -1073,6 +1073,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                                                    : mesh.numVertices / numVerticesPerFace;
             };
 
+            CommandBuffer buffer = device->BeginCommandBuffer(QueueType_Copy);
             while (!Advance(&tokenizer, "SHAPE_END "))
             {
                 if (Advance(&tokenizer, "Quad "))
@@ -1092,7 +1093,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                         mesh.numIndices = 0;
                     }
 
-                    shapes.AddBack() = CopyMesh(arena, mesh);
+                    shapes.AddBack() = CopyMesh(&buffer, arena, mesh);
                     AddMaterialAndLights(mesh);
 
                     threadMemoryStatistics[threadIndex].totalShapeMemory +=
@@ -1106,7 +1107,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     Mesh mesh;
                     AddMesh(mesh, 3);
 
-                    shapes.AddBack() = CopyMesh(arena, mesh);
+                    shapes.AddBack() = CopyMesh(&buffer, arena, mesh);
                     AddMaterialAndLights(mesh);
 
                     threadMemoryStatistics[threadIndex].totalShapeMemory +=
@@ -1120,7 +1121,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     Mesh mesh;
                     AddMesh(mesh, 4);
 
-                    shapes.AddBack() = CopyMesh(tempArena, mesh);
+                    shapes.AddBack() = CopyMesh(&buffer, tempArena, mesh);
                     AddMaterialAndLights(mesh);
                 }
                 else
@@ -1128,6 +1129,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     Assert(0);
                 }
             }
+
+            commandBuffer->Submit();
 
             scene->numPrimitives = shapes.totalCount;
             Assert(shapes.totalCount == indices.totalCount);

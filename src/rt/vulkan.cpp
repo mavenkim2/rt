@@ -45,7 +45,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
         }
     }
     instanceExtensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
-#ifdef WINDOWS
+#ifdef _WIN32
     instanceExtensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
 #else
 #error not supported
@@ -831,6 +831,189 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
         VK_CHECK(vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &nullBuffer,
                                  &nullBufferAllocation, 0));
     }
+
+    // Initialize command pools
+    {
+        int numProcessors = OS_NumProcessors();
+        commandPools      = StaticArray<CommandPool>(arena, numProcessors);
+    }
+}
+
+void Vulkan::AllocateCommandBuffers(ThreadCommandPool &pool, QueueType type)
+{
+    auto *node = pool.buffers.AddNode(ThreadCommandPool::commandBufferPoolSize);
+    VkCommandBufferAllocateInfo bufferInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    bufferInfo.commandPool                 = pool.pool[i];
+    bufferInfo.commandBufferCount          = ThreadCommandPool::commandBufferPoolSize;
+    bufferInfo.level                       = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    VK_CHECK(vkAllocateCommandBuffers(device, &bufferInfo, node->values));
+}
+
+void Vulkan::CheckInitializedThreadCommandPool(int threadIndex)
+{
+    ThreadCommandPool &pool = &commandPools[threadIndex];
+    if (pool.arena == 0)
+    {
+        pool.arena = ArenaAlloc();
+        pool.pool  = StaticArray<VkCommandPool>(pool.arena, QueueType_Count, QueueType_Count);
+        pool.buffers  = CommandBufferPool(pool.arena, QueueType_Count, QueueType_Count);
+        pool.freeList = CommandBufferPool(pool.arena, QueueType_Count, QueueType_Count);
+
+        for (int i = 0; i < QueueType_Count; i++)
+        {
+            if (families[i] != VK_QUEUE_FAMILY_IGNORED)
+            {
+                VkCommandPoolCreateInfo poolInfo = {
+                    VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+                poolInfo.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+                poolInfo.queueFamilyIndex = families[i];
+                VK_CHECK(vkCreateCommandPool(device, &poolInfo, 0, &pool.pool[i]));
+
+                AllocateCommandBuffers(pool, i);
+            }
+        }
+    }
+}
+
+VkCommandBuffer BeginCommandBuffer(QueueType queue)
+{
+    int threadIndex         = GetThreadIndex();
+    ThreadCommandPool &pool = commandPools[threadIndex];
+
+    VkCommandBuffer buffer = VK_NULL_HANDLE;
+    buffer                 = pool.buffers[queue].Pop();
+    if (buffer == VK_NULL_HANDLE)
+    {
+        AllocateCommandBuffers(pool, queue);
+        buffer = pool.buffers[queue].Pop();
+    }
+
+    vkResetCommandBuffer(buffer, 0);
+    VkCommandBufferBeginInfo beginInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags                    = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(buffer, &beginInfo);
+}
+
+GPUBuffer Vulkan::TransferData(CommandBuffer buffer, size_t totalSize, int numBuffers,
+                               void (*copy)(void *, u32 *))
+{
+    int threadIndex = GetThreadIndex();
+    CheckInitializedThreadCommandPool(threadIndex);
+
+    VkBufferCreateInfo createInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    createInfo.size               = size;
+    createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    if (families.size() > 1)
+    {
+        createInfo.sharingMode           = VK_SHARING_MODE_CONCURRENT;
+        createInfo.queueFamilyIndexCount = (u32)families.size();
+        createInfo.pQueueFamilyIndices   = families.data();
+    }
+    else
+    {
+        createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    }
+
+    VmaAllocationCreateInfo allocCreateInfo = {};
+    allocCreateInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
+
+    VkBuffer temp;
+    VK_CHECK(vmaCreateBuffer(allocator, &createInfo, &allocCreateInfo, temp,
+                             &buffer->allocation, 0));
+
+    for (int i = 0; i < numBuffers; i++)
+    {
+        createInfo.size = createInfo.size;
+        VkBuffer result;
+        vkCreateBuffer(device, &createInfo, 0, &result);
+                       const VkAllocationCallbacks *pAllocator, VkBuffer *pBuffer);
+                       vkMapMemory(device, VkDeviceMemory memory, VkDeviceSize offset,
+                                   VkDeviceSize size, VkMemoryMapFlags flags, void **ppData);
+    }
+
+    VK_CHECK(vkEndCommandBuffer(cmd.cmdBuffer));
+    VK_CHECK(vkEndCommandBuffer(cmd.transitionBuffer));
+
+    VkCommandBufferSubmitInfo bufSubmitInfo = {};
+    bufSubmitInfo.sType                     = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+
+    VkSemaphoreSubmitInfo waitSemInfo = {};
+    waitSemInfo.sType                 = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+
+    VkSemaphoreSubmitInfo submitSemInfo = {};
+    submitSemInfo.sType                 = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+
+    VkSubmitInfo2 submitInfo = {};
+    submitInfo.sType         = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+
+    // Submit the copy command to the transfer queue.
+    {
+        bufSubmitInfo.commandBuffer = cmd.cmdBuffer;
+
+        submitSemInfo.semaphore = cmd.semaphores[0];
+        submitSemInfo.value     = 0;
+        submitSemInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+
+        submitInfo.commandBufferInfoCount = 1;
+        submitInfo.pCommandBufferInfos    = &bufSubmitInfo;
+
+        submitInfo.signalSemaphoreInfoCount = 1;
+        submitInfo.pSignalSemaphoreInfos    = &submitSemInfo;
+
+        MutexScope(&queues[QueueType_Copy].lock)
+        {
+            VK_CHECK(
+                vkQueueSubmit2(queues[QueueType_Copy].queue, 1, &submitInfo, VK_NULL_HANDLE));
+        }
+    }
+    // Insert the execution dependency (semaphores) and memory dependency (barrier) on the
+    // graphics queue
+    {
+        bufSubmitInfo.commandBuffer = cmd.transitionBuffer;
+
+        waitSemInfo.semaphore = cmd.semaphores[0];
+        waitSemInfo.value     = 0;
+        waitSemInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+
+        submitSemInfo.semaphore = cmd.semaphores[1];
+        submitSemInfo.value     = 0;
+        submitSemInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+
+        submitInfo.commandBufferInfoCount   = 1;
+        submitInfo.pCommandBufferInfos      = &bufSubmitInfo;
+        submitInfo.waitSemaphoreInfoCount   = 1;
+        submitInfo.pWaitSemaphoreInfos      = &waitSemInfo;
+        submitInfo.signalSemaphoreInfoCount = 1;
+        submitInfo.pSignalSemaphoreInfos    = &submitSemInfo;
+
+        MutexScope(&queues[QueueType_Graphics].lock)
+        {
+            VK_CHECK(vkQueueSubmit2(queues[QueueType_Graphics].queue, 1, &submitInfo,
+                                    VK_NULL_HANDLE));
+        }
+    }
+    // Execution dependency on compute queue
+    {
+        waitSemInfo.semaphore = cmd.semaphores[1];
+        waitSemInfo.value     = 0;
+        waitSemInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+
+        submitInfo.commandBufferInfoCount   = 0;
+        submitInfo.pCommandBufferInfos      = 0;
+        submitInfo.waitSemaphoreInfoCount   = 1;
+        submitInfo.pWaitSemaphoreInfos      = &waitSemInfo;
+        submitInfo.signalSemaphoreInfoCount = 0;
+        submitInfo.pSignalSemaphoreInfos    = 0;
+
+        MutexScope(&queues[QueueType_Compute].lock)
+        {
+            VK_CHECK(vkQueueSubmit2(queues[QueueType_Compute].queue, 1, &submitInfo,
+                                    ToInternal(&cmd.fence)->fence));
+        }
+    }
+    MutexScope(&mTransferMutex) { transferFreeList.push_back(cmd); }
+    // TODO: compute
 }
 
 void Vulkan::CreateBufferCopy(GPUBuffer *inBuffer, GPUBufferDesc inDesc,
@@ -1195,6 +1378,7 @@ GPUBVH *Vulkan::CreateBLAS(CommandList cmd, const GPUMesh *meshes, int count)
 
     StaticArray<VkAccelerationStructureGeometryKHR> geometries(temp.temp.arena, count);
     StaticArray<VkAccelerationStructureBuildRangeInfoKHR> buildRanges(temp.temp.arena, count);
+    StaticArray<u32> maxPrimitiveCounts(temp.temp.arena, count);
 
     VkAccelerationStructureGeometryKHR geometry = {
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
@@ -1222,10 +1406,13 @@ GPUBVH *Vulkan::CreateBLAS(CommandList cmd, const GPUMesh *meshes, int count)
 
         geometries.Push(geometry);
 
+        int primitiveCount                                 = mesh.mesh.numIndices / 3;
         VkAccelerationStructureBuildRangeInfoKHR rangeInfo = {
             VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_RANGE_INFO};
-        rangeInfo.primitiveCount = mesh.mesh.numIndices / 3;
+        rangeInfo.primitiveCount = primitiveCount;
         buildRanges.Push(rangeInfo);
+
+        maxPrimitivesCounts
     }
 
     VkAccelerationStructureBuildGeometryInfoKHR buildInfo = {
@@ -1238,9 +1425,9 @@ GPUBVH *Vulkan::CreateBLAS(CommandList cmd, const GPUMesh *meshes, int count)
     VkAccelerationStructureBuildSizesInfoKHR sizeInfo = {
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
 
-    vkGetAccelerationStructureBuildSizesKHR(
-        device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo,
-        const uint32_t *pMaxPrimitiveCounts, &sizeInfo);
+    vkGetAccelerationStructureBuildSizesKHR(device,
+                                            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                                            &buildInfo, maxPrimitiveCounts.data, &sizeInfo);
 
     GPUBufferDesc desc;
     desc.size          = sizeInfo.buildScratchSize;

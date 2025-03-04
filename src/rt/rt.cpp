@@ -23,6 +23,9 @@
 #include "math/spherical_harmonics.h"
 #include "lights.h"
 #include "subdivision.h"
+
+#include "vulkan.h"
+
 #include "scene.h"
 #include "scene_load.h"
 #include "bxdf.h"

@@ -23,6 +23,13 @@
 namespace rt
 {
 
+#define VK_CHECK(check)                                                                       \
+    do                                                                                        \
+    {                                                                                         \
+        VkResult result_ = check;                                                             \
+        Assert(result_ == VK_SUCCESS);                                                        \
+    } while (0);
+
 using CopyFunction = std::function<void(void *)>;
 
 enum class ResourceUsage : u32
@@ -112,18 +119,38 @@ struct GraphicsObject
     b32 IsValid() { return internalState != 0; }
 };
 
-struct GPUBuffer : GraphicsObject
+struct GPUBuffer
 {
     GPUBufferDesc desc;
     void *mappedData;
 };
 
-struct GPUBVH : GraphicsObject
+struct GPUBVH
 {
 };
 
-struct CommandList : GraphicsObject
+struct CommandList
 {
+};
+
+enum QueueType
+{
+    QueueType_Graphics,
+    QueueType_Compute,
+    QueueType_Copy,
+
+    QueueType_Count,
+};
+
+typedef StaticArray<ChunkedLinkedList<VkCommandBuffer>> CommandBufferPool;
+
+struct alignas(CACHE_LINE_SIZE) ThreadCommandPool
+{
+    Arena *arena;
+    static const int commandBufferPoolSize = 16;
+
+    StaticArray<VkCommandPool> pool;
+    CommandBufferPool buffers;
 };
 
 struct Vulkan
@@ -142,7 +169,7 @@ struct Vulkan
     VkDevice device;
     VkDebugUtilsMessengerEXT debugMessenger;
     list<VkQueueFamilyProperties2> queueFamilyProperties;
-    list<u32> families;
+    StaticArray<u32> families;
     u32 graphicsFamily = VK_QUEUE_FAMILY_IGNORED;
     u32 computeFamily  = VK_QUEUE_FAMILY_IGNORED;
     u32 copyFamily     = VK_QUEUE_FAMILY_IGNORED;
@@ -579,23 +606,26 @@ private:
         u32 ringId;
         b8 freed;
     };
-    Mutex mTransferMutex = {};
-    struct TransferCommand
-    {
-        VkCommandPool cmdPool     = VK_NULL_HANDLE; // command pool to issue transfer request
-        VkCommandBuffer cmdBuffer = VK_NULL_HANDLE;
-        VkCommandPool transitionPool =
-            VK_NULL_HANDLE; // command pool to issue transfer request
-        VkCommandBuffer transitionBuffer = VK_NULL_HANDLE;
-        // VkFence mFence                               = VK_NULL_HANDLE; // signals cpu that
-        // transfer is complete
-        Fence fence;
-        VkSemaphore semaphores[QueueType_Count - 1] = {}; // graphics, compute
-        RingAllocation *ringAllocation;
+    // Mutex mTransferMutex = {};
+    // struct TransferCommand
+    // {
+    //     VkCommandPool cmdPool     = VK_NULL_HANDLE; // command pool to issue transfer
+    //     request VkCommandBuffer cmdBuffer = VK_NULL_HANDLE; VkCommandPool transitionPool =
+    //         VK_NULL_HANDLE; // command pool to issue transfer request
+    //     VkCommandBuffer transitionBuffer = VK_NULL_HANDLE;
+    //     // VkFence mFence                               = VK_NULL_HANDLE; // signals cpu
+    //     that
+    //     // transfer is complete
+    //     Fence fence;
+    //     VkSemaphore semaphores[QueueType_Count - 1] = {}; // graphics, compute
+    //     RingAllocation *ringAllocation;
+    //
+    //     const b32 IsValid() { return cmdPool != VK_NULL_HANDLE; }
+    // };
+    // list<TransferCommand> transferFreeList;
 
-        const b32 IsValid() { return cmdPool != VK_NULL_HANDLE; }
-    };
-    list<TransferCommand> transferFreeList;
+    StaticArray<ThreadCommandPool> commandPools;
+    void CheckInitializedThreadCommandPool();
 
     TransferCommand Stage(u64 size);
 

@@ -60,6 +60,10 @@ struct StaticArray
     {
         data = (T *)PushArray(arena, u8, sizeof(T) * capacity);
     }
+    StaticArray(Arena *arena, i32 inCap, i32 size) : size(size), capacity(inCap)
+    {
+        data = (T *)PushArray(arena, u8, sizeof(T) * capacity);
+    }
     StaticArray(Arena *arena, std::vector<T> &vector)
         : size((int)vector.size()), capacity((int)vector.size())
     {
