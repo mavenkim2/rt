@@ -51,6 +51,11 @@ namespace rt
 
 // - what is zero variance theory? half space light transport? dwivedi sampling?
 
+// - gpu ray tracing using vulkan
+// - gpu ray tracing of adaptively tessellated subdivision surfaces
+//      - using new CLAS nv extension
+// - dense geometry compression on both cpu/gpu
+
 //////////////////////////////
 // Textures and materials
 //
