@@ -895,43 +895,120 @@ VkCommandBuffer BeginCommandBuffer(QueueType queue)
     vkBeginCommandBuffer(buffer, &beginInfo);
 }
 
-GPUBuffer Vulkan::TransferData(CommandBuffer buffer, size_t totalSize, int numBuffers,
-                               void (*copy)(void *, u32 *))
+TransferCommandBuffer BeginTransfers()
 {
     int threadIndex = GetThreadIndex();
     CheckInitializedThreadCommandPool(threadIndex);
+    ThreadCommandPool &pool = commandPools[threadIndex];
 
-    VkBufferCreateInfo createInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    createInfo.size               = size;
-    createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    if (families.size() > 1)
+    bool success = false;
+
+    TransferCommandBuffer buffer;
+    for (auto *node = pool.freeTransferBuffers.first; node != 0; node = node->next)
     {
-        createInfo.sharingMode           = VK_SHARING_MODE_CONCURRENT;
-        createInfo.queueFamilyIndexCount = (u32)families.size();
-        createInfo.pQueueFamilyIndices   = families.data();
-    }
-    else
-    {
-        createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    }
+        for (int i = 0; i < node->values; i++)
+        {
+            TransferCommandBuffer &testCmd = node->values[i];
+            if (vkGetFenceStatus(device, testCmd.fence) == VK_SUCCESS)
+            {
+                cmd                = testCmd;
+                cmd.ringAllocation = 0;
 
-    VmaAllocationCreateInfo allocCreateInfo = {};
-    allocCreateInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
+                node->values[i] = pool.freeTransferBuffers.Last();
+                pool.freeTransferBuffers.totalCount--;
+                pool.freeTransferBuffers.last->count--;
 
-    VkBuffer temp;
-    VK_CHECK(vmaCreateBuffer(allocator, &createInfo, &allocCreateInfo, temp,
-                             &buffer->allocation, 0));
-
-    for (int i = 0; i < numBuffers; i++)
-    {
-        createInfo.size = createInfo.size;
-        VkBuffer result;
-        vkCreateBuffer(device, &createInfo, 0, &result);
-                       const VkAllocationCallbacks *pAllocator, VkBuffer *pBuffer);
-                       vkMapMemory(device, VkDeviceMemory memory, VkDeviceSize offset,
-                                   VkDeviceSize size, VkMemoryMapFlags flags, void **ppData);
+                success = true;
+                break;
+            }
+        }
+        if (success) break;
     }
 
+    if (!success)
+    {
+        AllocateTransferCommandBuffers(pool);
+    }
+
+    VK_CHECK(vkResetCommandBuffer(buffer, 0));
+    VkCommandBufferBeginInfo beginInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags                    = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    VK_CHECK(vkBeginCommandBuffer(buffer.buffer, &beginInfo));
+    VK_CHECK(vkBeginCommandBuffer(buffer.transitionBuffer, &beginInfo));
+
+    VK_CHECK(vkResetFences(device, 1, &buffer.fence));
+
+    return buffer;
+}
+
+GPUBuffer Vulkan::TransferData(CommandBuffer buffer, void *ptr, size_t totalSize)
+{
+    int threadIndex = GetThreadIndex();
+
+    VkBuffer buffer;
+    {
+        VkBufferCreateInfo createInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        createInfo.size               = size;
+        createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        if (families.size() > 1)
+        {
+            createInfo.sharingMode           = VK_SHARING_MODE_CONCURRENT;
+            createInfo.queueFamilyIndexCount = (u32)families.size();
+            createInfo.pQueueFamilyIndices   = families.data();
+        }
+        else
+        {
+            createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        }
+
+        VmaAllocationCreateInfo allocCreateInfo = {};
+        allocCreateInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
+
+        VK_CHECK(vmaCreateBuffer(allocator, &createInfo, &allocCreateInfo, temp,
+                                 &buffer->allocation, 0));
+    }
+
+    // Create staging buffer
+    VkBuffer stageBuffer;
+    VmaAllocation stagingAllocation;
+    {
+        VkBufferCreateInfo createInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        createInfo.size               = size;
+        createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        if (families.size() > 1)
+        {
+            createInfo.sharingMode           = VK_SHARING_MODE_CONCURRENT;
+            createInfo.queueFamilyIndexCount = (u32)families.size();
+            createInfo.pQueueFamilyIndices   = families.data();
+        }
+        else
+        {
+            createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        }
+        VmaAllocationCreateInfo allocCreateInfo = {};
+        allocCreateInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
+        allocCreateInfo                         = {};
+        allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+        VK_CHECK(vmaCreateBuffer(allocator, &createInfo, &allocCreateInfo, &stageBuffer,
+                                 &stagingAllocation, 0));
+    }
+
+    void *mappedPtr = stagingAllocation->GetMappedData();
+    MemoryCopy(mappedPtr, ptr, totalSize);
+
+    VkBufferCopy bufferCopy = {};
+    bufferCopy.srcOffset    = 0;
+    bufferCopy.dstOffset    = 0;
+    bufferCopy.size         = totalSize;
+
+    vkCmdCopyBuffer(cmd.cmdBuffer, stageBuffer, buffer, 1, &bufferCopy);
+}
+
+void Vulkan::FinalizeTransfer(TransferCommandBuffer *buffer)
+{
     VK_CHECK(vkEndCommandBuffer(cmd.cmdBuffer));
     VK_CHECK(vkEndCommandBuffer(cmd.transitionBuffer));
 
