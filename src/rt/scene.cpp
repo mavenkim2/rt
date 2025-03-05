@@ -1073,7 +1073,8 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                                                    : mesh.numVertices / numVerticesPerFace;
             };
 
-            // CommandBuffer buffer = device->BeginCommandBuffer(QueueType_Copy);
+            SceneShapeParse parse = StartSceneShapeParse();
+
             while (!Advance(&tokenizer, "SHAPE_END "))
             {
                 if (Advance(&tokenizer, "Quad "))
@@ -1130,7 +1131,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 }
             }
 
-            // commandBuffer->Submit();
+            EndSceneShapeParse(&parse);
 
             scene->numPrimitives = shapes.totalCount;
             Assert(shapes.totalCount == indices.totalCount);

@@ -1,39 +1,45 @@
+#include "gpu_scene.h"
+#include "scene.h"
 #include "vulkan.h"
 
 namespace rt
 {
 
-GPUMesh CopyMesh(CommandBuffer *buffer, Arena *arena, Mesh &mesh)
+SceneShapeParse StartSceneShapeParse()
 {
-    GPUMesh result;
+    return SceneShapeParse { .buffer = device->BeginTransfers(); };
+}
+
+void EndSceneShapeParse(SceneShapeParse *parse) { parse->buffer->SubmitToQueue(); }
+
+GPUMesh CopyMesh(TransferCommandBuffer *buffer, Arena *arena, Mesh &mesh)
+{
     GPUBuffer &vertexBuffer = result.vertexBuffer;
-    buffer.desc.size =
-
-        device->CreateBuffer(&vertexBuffer, buffer.desc, mesh.p);
-
-    GPUBuffer &indexBuffer = result.indexBuffer;
-    indexBuffer.desc.size =
-
-        device->CreateBuffer(&indexBuffer, indexBuffer.desc, mesh.indices);
 
     size_t vertexSize  = sizeof(mesh.p[0]) * mesh.numVertices;
     size_t indicesSize = sizeof(mesh.indices[0]) * mesh.numIndices;
     size_t totalSize   = vertexSize + sizeof(mesh.indices[0]) * mesh.numIndices;
 
-    int numBuffers = 2;
+    TransferBuffer transferBuffer = device->GetStagingBuffer(
+        buffer, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        totalSize);
 
-    device->TransferData(totalSize, numBuffers, [&](void *ptr, u32 *alignment) {
-        MemoryCopy(ptr, mesh.p, vertexSize);
+    u64 deviceAddress = device->GetDeviceAddress(transferBuffer.buffer);
 
-        uintptr_t indexOutPtr =
-            ((uintptr_t)ptr + vertexSize + alignment - 1) & ~(alignment - 1);
+    u8 *ptr = (u8 *)transferBuffer.mappedPtr;
+    MemoryCopy(ptr, mesh.p, vertexSize);
+    ptr += vertexSize;
+    MemoryCopy(ptr, mesh.indices, indicesSize);
 
-        MemoryCopy((void *)indexOutPtr, mesh.indices, indicesSize)
-    });
+    buffer->SubmitTransfer(&transferBuffer);
 
-    result.numIndices  = mesh.numIndices;
-    result.numVertices = mesh.numVertices;
-    result.numFaces    = mesh.numFaces;
+    GPUMesh result = {
+        .vertexAddress = deviceAddress,
+        .indexAddress  = deviceAddress + vertexSize,
+        .numIndices    = mesh.numIndices,
+        .numVertices   = mesh.numVertices,
+        .numFaces      = mesh.numFaces,
+    };
 
     return result;
 }

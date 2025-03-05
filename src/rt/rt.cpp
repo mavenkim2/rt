@@ -1,4 +1,4 @@
-// #define USE_GPU
+#define USE_GPU
 
 #include "rt.h"
 #include "tables/sobolmatrices.h"
@@ -24,7 +24,7 @@
 #include "lights.h"
 #include "subdivision.h"
 
-// #include "vulkan.h"
+#include "vulkan.h"
 
 #include "scene.h"
 #include "scene_load.h"
@@ -45,6 +45,7 @@
 #include "spectrum.cpp"
 #include "scene.cpp"
 
+#include "vulkan.cpp"
 #ifdef USE_GPU
 #include "gpu_scene.cpp"
 #else

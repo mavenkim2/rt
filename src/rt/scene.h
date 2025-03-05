@@ -256,14 +256,15 @@ struct Mesh
     }
 };
 
-// struct GPUMesh
-// {
-//     GPUBuffer vertexBuffer;
-//     GPUBuffer indexBuffer;
-//     u32 numIndices;
-//     u32 numVertices;
-//     u32 numFaces;
-// };
+struct GPUMesh
+{
+    u64 vertexAddress;
+    u64 indexAddress;
+
+    u32 numIndices;
+    u32 numVertices;
+    u32 numFaces;
+};
 
 #ifdef USE_GPU
 typedef GPUMesh MeshType;

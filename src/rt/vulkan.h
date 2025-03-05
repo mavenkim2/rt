@@ -1,12 +1,9 @@
 #ifndef RT_VULKAN_H
 #define RT_VULKAN_H
-#include "base.h"
-#include "scene_load.h"
-#include <vulkan.h>
 
 #define VK_USE_PLATFORM_WIN32_KHR
 #define VK_NO_PROTOTYPES
-#include "../third_party/vulkan/vulkan.h"
+#include "../third_party/vulkan/vulkan/vulkan.h"
 #include "../third_party/vulkan/volk.h"
 #include "../third_party/vulkan/vk_mem_alloc.h"
 
@@ -30,7 +27,8 @@ namespace rt
         Assert(result_ == VK_SUCCESS);                                                        \
     } while (0);
 
-using CopyFunction = std::function<void(void *)>;
+static const int cNumBuffers = 2;
+using CopyFunction           = std::function<void(void *)>;
 
 enum class ResourceUsage : u32
 {
@@ -104,13 +102,20 @@ enum class GPUDevicePreference
     Integrated,
 };
 
-struct GPUBufferDesc
+typedef u32 DeviceCapabilities;
+enum
 {
-    u64 size;
-    // BindFlag mFlags    = 0;
-    MemoryUsage usage = MemoryUsage::GPU_ONLY;
-    ResourceUsage resourceUsage;
+    DeviceCapabilities_MeshShader,
+    DeviceCapabilities_VariableShading,
 };
+
+// struct GPUBufferDesc
+// {
+//     u64 size;
+//     // BindFlag mFlags    = 0;
+//     MemoryUsage usage = MemoryUsage::GPU_ONLY;
+//     ResourceUsage resourceUsage;
+// };
 
 struct GraphicsObject
 {
@@ -119,11 +124,11 @@ struct GraphicsObject
     b32 IsValid() { return internalState != 0; }
 };
 
-struct GPUBuffer
-{
-    GPUBufferDesc desc;
-    void *mappedData;
-};
+// struct GPUBuffer
+// {
+//     GPUBufferDesc desc;
+//     void *mappedData;
+// };
 
 struct GPUBVH
 {
@@ -133,12 +138,24 @@ struct TransferBuffer
 {
     VkBuffer buffer;
     VmaAllocation allocation;
+
+    VkBuffer stageBuffer;
+    VmaAllocation stageAllocation;
+    void *mappedPtr;
 };
 
 struct TransferCommandBuffer
 {
     VkCommandBuffer buffer;
-    VkCommandBuffer transitionBuffer;
+    VkFence fence;
+    VkSemaphore semaphore;
+    void SubmitTransfer(TransferBuffer *buffer);
+    void SubmitToQueue();
+};
+
+struct CommandBuffer
+{
+    VkCommandBuffer buffer;
 };
 
 enum QueueType
@@ -152,15 +169,6 @@ enum QueueType
 
 typedef StaticArray<ChunkedLinkedList<VkCommandBuffer>> CommandBufferPool;
 
-struct TransferCommandBuffer
-{
-    VkCommandBuffer buffer;
-    VkCommandBuffer transferBuffer;
-
-    VkSemaphore semaphores[2];
-    VkFence fence;
-};
-
 struct alignas(CACHE_LINE_SIZE) ThreadCommandPool
 {
     Arena *arena;
@@ -169,7 +177,7 @@ struct alignas(CACHE_LINE_SIZE) ThreadCommandPool
     StaticArray<VkCommandPool> pool;
     CommandBufferPool buffers;
 
-    ChunkedLinkedList<FreeTransferCommandBuffer> freeTransferBuffers;
+    ChunkedLinkedList<TransferCommandBuffer> freeTransferBuffers;
 };
 
 struct Vulkan
@@ -187,7 +195,7 @@ struct Vulkan
     VkPhysicalDevice physicalDevice;
     VkDevice device;
     VkDebugUtilsMessengerEXT debugMessenger;
-    list<VkQueueFamilyProperties2> queueFamilyProperties;
+    StaticArray<VkQueueFamilyProperties2> queueFamilyProperties;
     StaticArray<u32> families;
     u32 graphicsFamily = VK_QUEUE_FAMILY_IGNORED;
     u32 computeFamily  = VK_QUEUE_FAMILY_IGNORED;
@@ -212,6 +220,9 @@ struct Vulkan
     VkPhysicalDeviceFragmentShadingRateFeaturesKHR variableShadingRateFeatures;
 
     // RT + CLAS
+    VkPhysicalDeviceBufferDeviceAddressFeatures deviceAddressFeatures;
+    VkPhysicalDeviceBufferDeviceAddressProperties deviceAddressProperties;
+
     VkPhysicalDeviceAccelerationStructurePropertiesKHR accelStructProps;
     VkPhysicalDeviceAccelerationStructureFeaturesKHR accelStructFeats;
 
@@ -531,6 +542,7 @@ struct Vulkan
     void AddPCTemp(Shader *shader, u32 offset, u32 size);
     void CreateBufferCopy(GPUBuffer *inBuffer, GPUBufferDesc inDesc,
                           CopyFunction initCallback);
+    u64 GetDeviceAddress(VkBuffer buffer);
 
     void CreateBuffer(GPUBuffer *inBuffer, GPUBufferDesc inDesc, void *inData = 0)
     {
@@ -564,7 +576,8 @@ struct Vulkan
     i32 CreateSubresource(Texture *texture, u32 baseLayer = 0, u32 numLayers = ~0u,
                           u32 baseMip = 0, u32 numMips = ~0u);
     void UpdateDescriptorSet(CommandList cmd, b8 isCompute = 0);
-    CommandList BeginCommandList(QueueType queue);
+    CommandBuffer BeginCommandBuffer(QueueType queue);
+    TransferCommandBuffer BeginTransfers();
     void BeginRenderPass(Swapchain *inSwapchain, CommandList inCommandList);
     void BeginRenderPass(RenderPassImage *images, u32 count, CommandList cmd);
     void Draw(CommandList cmd, u32 vertexCount, u32 firstVertex);
@@ -645,6 +658,7 @@ private:
 
     StaticArray<ThreadCommandPool> commandPools;
     void CheckInitializedThreadCommandPool();
+    ThreadCommandPool &GetThreadCommandPool();
 
     TransferCommand Stage(u64 size);
 

@@ -1,6 +1,8 @@
-#ifndef USE_GPU
 namespace rt
 {
+
+SceneShapeParse StartSceneShapeParse() { return {}; }
+void EndSceneShapeParse() {}
 
 Mesh CopyMesh(Arena *arena, Mesh &mesh)
 {
@@ -44,4 +46,3 @@ void BuildSceneBVHs(ScenePrimitives **scenes, int numScenes, int maxDepth)
 }
 
 } // namespace rt
-#endif

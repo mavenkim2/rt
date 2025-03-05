@@ -678,18 +678,12 @@ struct CompressedLeafNode
 
 #ifdef USE_GPU
 
-struct BLAS
+struct GPUAccelerationStructure
 {
-    struct Geometry
-    {
-        GPUBuffer vertex;
-        GPUBuffer index;
-    };
-    std::vector<GPUBuffer> vertexBuffers;
-    std::vector<GPUBuffer> indexBuffers;
 };
 
-#else
+typedef GPUAccelerationStructure BVH;
+#endif
 
 #ifdef USE_BVH4
 typedef BVHNode<4> BVHNodeN;
@@ -707,6 +701,7 @@ static const u32 DefaultN    = 8;
 static const u32 DefaultLogN = 3;
 #endif
 
+#ifndef USE_GPU
 typedef BVHNodeN BVH;
 #endif
 
