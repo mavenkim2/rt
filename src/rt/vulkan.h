@@ -129,8 +129,16 @@ struct GPUBVH
 {
 };
 
-struct CommandList
+struct TransferBuffer
 {
+    VkBuffer buffer;
+    VmaAllocation allocation;
+};
+
+struct TransferCommandBuffer
+{
+    VkCommandBuffer buffer;
+    VkCommandBuffer transitionBuffer;
 };
 
 enum QueueType
@@ -144,6 +152,15 @@ enum QueueType
 
 typedef StaticArray<ChunkedLinkedList<VkCommandBuffer>> CommandBufferPool;
 
+struct TransferCommandBuffer
+{
+    VkCommandBuffer buffer;
+    VkCommandBuffer transferBuffer;
+
+    VkSemaphore semaphores[2];
+    VkFence fence;
+};
+
 struct alignas(CACHE_LINE_SIZE) ThreadCommandPool
 {
     Arena *arena;
@@ -151,6 +168,8 @@ struct alignas(CACHE_LINE_SIZE) ThreadCommandPool
 
     StaticArray<VkCommandPool> pool;
     CommandBufferPool buffers;
+
+    ChunkedLinkedList<FreeTransferCommandBuffer> freeTransferBuffers;
 };
 
 struct Vulkan
