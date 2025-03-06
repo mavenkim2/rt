@@ -10,6 +10,10 @@ if (MSVC)
         /wd4310 /wd4334 /wd4456 /wd4464 /wd4668 /wd4701 /wd4703 /wd4711 /wd4756 /wd4820 /wd5045 /wd5250)
 endif ()
 
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options("-Wno-unsafe-buffer-usage")
+endif()
+
 # Windows specific
 if (CMAKE_SYSTEM_NAME STREQUAL Windows)
     # if (CMAKE_BUILD_TYPE MATCHES "Debug")
@@ -84,6 +88,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         "-Wno-unused-variable" 
         "-Wno-unused-but-set-variable" 
         "-Wno-reorder-ctor"
+        "-Wno-nullability-completeness"
     )
     if (CMAKE_CXX_COMPILER_VERSION GREATER_EQUAL 14)
         message (STATUS "Disabling -ffp-contract")

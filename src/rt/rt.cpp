@@ -23,10 +23,15 @@
 #include "math/spherical_harmonics.h"
 #include "lights.h"
 #include "subdivision.h"
-
 #include "vulkan.h"
-
 #include "scene.h"
+
+#ifdef USE_GPU
+#include "gpu_scene.h"
+#else
+#include "cpu_scene.h"
+#endif
+
 #include "scene_load.h"
 #include "bxdf.h"
 #include "bsdf.h"

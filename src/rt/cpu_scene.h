@@ -5,5 +5,8 @@ namespace rt
 struct SceneShapeParse
 {
 };
+Mesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh);
+SceneShapeParse StartSceneShapeParse();
+void EndSceneShapeParse(SceneShapeParse *parse);
 } // namespace rt
 #endif

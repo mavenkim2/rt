@@ -4,7 +4,7 @@ namespace rt
 SceneShapeParse StartSceneShapeParse() { return {}; }
 void EndSceneShapeParse() {}
 
-Mesh CopyMesh(Arena *arena, Mesh &mesh)
+Mesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
 {
     Mesh newMesh        = {};
     newMesh.numVertices = mesh.numVertices;

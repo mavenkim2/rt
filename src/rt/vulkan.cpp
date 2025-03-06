@@ -1,8 +1,28 @@
 #include "vulkan.h"
+#include "bvh/bvh_types.h"
+#include "../third_party/vulkan/vulkan/volk.c"
 
 namespace rt
 {
-Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
+
+VkBool32 DebugUtilsMessengerCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+                                     VkDebugUtilsMessageTypeFlagsEXT messageType,
+                                     const VkDebugUtilsMessengerCallbackDataEXT *callbackData,
+                                     void *userData)
+{
+    if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
+    {
+        Print("[Vulkan Warning]: %s\n", callbackData->pMessage);
+    }
+    else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+    {
+        Print("[Vulkan Error]: %s\n", callbackData->pMessage);
+    }
+
+    return VK_FALSE;
+}
+
+Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : frameCount(0)
 {
     arena           = ArenaAlloc();
     const i32 major = 0;
@@ -23,18 +43,18 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
     // Load available layers
     u32 layerCount = 0;
     VK_CHECK(vkEnumerateInstanceLayerProperties(&layerCount, 0));
-    list<VkLayerProperties> availableLayers(layerCount);
+    std::vector<VkLayerProperties> availableLayers(layerCount);
     VK_CHECK(vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data()));
 
     // Load extension info
     u32 extensionCount = 0;
     VK_CHECK(vkEnumerateInstanceExtensionProperties(0, &extensionCount, 0));
-    list<VkExtensionProperties> extensionProperties(extensionCount);
+    std::vector<VkExtensionProperties> extensionProperties(extensionCount);
     VK_CHECK(vkEnumerateInstanceExtensionProperties(0, &extensionCount,
                                                     extensionProperties.data()));
 
-    list<const char *> instanceExtensions;
-    list<const char *> instanceLayers;
+    std::vector<const char *> instanceExtensions;
+    std::vector<const char *> instanceLayers;
     // Add extensions
     for (auto &availableExtension : extensionProperties)
     {
@@ -54,7 +74,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
     // Add layers
     if (validationMode != ValidationMode::Disabled)
     {
-        static const list<const char *> validationPriorityList[] = {
+        static const std::vector<const char *> validationPriorityList[] = {
             // Preferred
             {"VK_LAYER_KHRONOS_validation"},
             // Fallback
@@ -152,10 +172,10 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
         VK_CHECK(vkEnumeratePhysicalDevices(instance, &deviceCount, 0));
         Assert(deviceCount != 0);
 
-        list<VkPhysicalDevice> devices(deviceCount);
+        std::vector<VkPhysicalDevice> devices(deviceCount);
         VK_CHECK(vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data()));
 
-        list<const char *> deviceExtensions = {
+        std::vector<const char *> deviceExtensions = {
             VK_KHR_SWAPCHAIN_EXTENSION_NAME,
         };
 
@@ -172,7 +192,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
             u32 queueFamilyCount = 0;
             vkGetPhysicalDeviceQueueFamilyProperties2(testDevice, &queueFamilyCount, 0);
 
-            list<VkQueueFamilyProperties2> queueFamilyProps;
+            std::vector<VkQueueFamilyProperties2> queueFamilyProps;
             queueFamilyProps.resize(queueFamilyCount);
             for (u32 i = 0; i < queueFamilyCount; i++)
             {
@@ -249,11 +269,11 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
 
         u32 deviceExtCount = 0;
         VK_CHECK(vkEnumerateDeviceExtensionProperties(physicalDevice, 0, &deviceExtCount, 0));
-        list<VkExtensionProperties> availableDevExt(deviceExtCount);
+        std::vector<VkExtensionProperties> availableDevExt(deviceExtCount);
         VK_CHECK(vkEnumerateDeviceExtensionProperties(physicalDevice, 0, &deviceExtCount,
                                                       availableDevExt.data()));
 
-        auto checkAndAddExtension = [&](const char *extName, auto *prop = 0, auto *feat = 0) {
+        auto checkAndAddExtension = [&](const char *extName, void *prop = 0, void *feat = 0) {
             for (auto &extension : availableDevExt)
             {
                 if (strcmp(extension.extensionName, extName) == 0)
@@ -261,12 +281,14 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
                     if (prop)
                     {
                         *propertiesChain = prop;
-                        propertiesChain  = &prop->pNext;
+                        propertiesChain  = reinterpret_cast<void **>(
+                            &reinterpret_cast<VkBaseOutStructure *>(prop)->pNext);
                     }
                     if (feat)
                     {
                         *featuresChain = &feat;
-                        featuresChain  = &feat->pNext;
+                        featuresChain  = reinterpret_cast<void **>(
+                            &reinterpret_cast<VkBaseOutStructure *>(feat)->pNext);
                     }
                     deviceExtensions.push_back(extName);
                     return true;
@@ -275,7 +297,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
             return false;
         };
 
-        if (checkExtension(VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME))
+        if (checkAndAddExtension(VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME))
         {
             deviceExtensions.push_back(VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME);
         }
@@ -299,9 +321,8 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
 
         deviceAddressFeatures = {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES};
-        deviceAddressProperties = {
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_PROPERTIES};
-        checkAndAddExtension(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME, );
+        checkAndAddExtension(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME, nullptr,
+                             &deviceAddressFeatures);
 
         // Ray tracing extensions
         {
@@ -329,9 +350,8 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_PROPERTIES_NV};
             clasFeaturesNV = {
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_FEATURES_NV};
-            bool result =
-                checkAndAddExtension(VK_NV_CLUSTER_ACCELERATION_STRUCTURE_EXTENSION_NAME,
-                                     &clasPropertiesNV, &clasFeaturesNV);
+            result = checkAndAddExtension(VK_NV_CLUSTER_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+                                          &clasPropertiesNV, &clasFeaturesNV);
             ErrorExit(
                 result,
                 "Machine doesn't support VK_NV_cluster_acceleration_structure. Exiting\n");
@@ -357,13 +377,13 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
 
         u32 queueFamilyCount = 0;
         vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, &queueFamilyCount, 0);
-        queueFamilyProperties.resize(queueFamilyCount);
+        queueFamilyProperties = StaticArray<VkQueueFamilyProperties2>(arena, queueFamilyCount);
         for (u32 i = 0; i < queueFamilyCount; i++)
         {
             queueFamilyProperties[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
         }
         vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, &queueFamilyCount,
-                                                  queueFamilyProperties.data());
+                                                  queueFamilyProperties.data);
 
         // Device exposes 1+ queue families, queue families have 1+ queues. Each family
         // supports a combination of the below:
@@ -373,7 +393,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
         // 4. Sparse Memory Management
 
         // Find queues in queue family
-        for (u32 i = 0; i < queueFamilyProperties.size(); i++)
+        for (u32 i = 0; i < queueFamilyProperties.Length(); i++)
         {
             auto &queueFamily = queueFamilyProperties[i];
             if (queueFamily.queueFamilyProperties.queueCount > 0)
@@ -403,16 +423,17 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
         }
 
         // Create the device queues
-        list<VkDeviceQueueCreateInfo> queueCreateInfos;
+        std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
+        families          = StaticArray<u32>(arena, QueueType_Count);
         f32 queuePriority = 1.f;
-        for (u32 i = 0; i < 3; i++)
+        for (u32 i = 0; i < QueueType_Count; i++)
         {
             u32 queueFamily = 0;
-            if (i == 0)
+            if (i == QueueType_Graphics)
             {
                 queueFamily = graphicsFamily;
             }
-            else if (i == 1)
+            else if (i == QueueType_Compute)
             {
                 if (graphicsFamily == computeFamily)
                 {
@@ -420,7 +441,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
                 }
                 queueFamily = computeFamily;
             }
-            else if (i == 2)
+            else if (i == QueueType_Copy)
             {
                 if (graphicsFamily == copyFamily || computeFamily == copyFamily)
                 {
@@ -435,7 +456,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
             queueCreateInfo.pQueuePriorities = &queuePriority;
             queueCreateInfos.push_back(queueCreateInfo);
 
-            families.push_back(queueFamily);
+            families.Push(queueFamily);
         }
 
         VkDeviceCreateInfo createInfo      = {};
@@ -476,14 +497,10 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
     // these are promoted to core, so this doesn't do anything
     allocCreateInfo.flags = VMA_ALLOCATOR_CREATE_KHR_BIND_MEMORY2_BIT;
 
-#if VMA_DYNAMIC_VULKAN_FUNCTIONS
     VmaVulkanFunctions vulkanFunctions    = {};
     vulkanFunctions.vkGetDeviceProcAddr   = vkGetDeviceProcAddr;
     vulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
     allocCreateInfo.pVulkanFunctions      = &vulkanFunctions;
-#else
-#error
-#endif
 
     VK_CHECK(vmaCreateAllocator(&allocCreateInfo, &allocator));
 
@@ -541,7 +558,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
         for (DescriptorType type = (DescriptorType)0; type < DescriptorType_Count;
              type                = (DescriptorType)(type + 1))
         {
-            VkDescriptorType descriptorType;
+            VkDescriptorType descriptorType = VK_DESCRIPTOR_TYPE_MAX_ENUM;
             switch (type)
             {
                 case DescriptorType_SampledImage:
@@ -566,19 +583,19 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
                 type == DescriptorType_StorageTexelBuffer)
             {
                 poolSize.descriptorCount =
-                    Min(10000,
+                    Min(10000u,
                         deviceProperties.properties.limits.maxDescriptorSetStorageBuffers / 4);
             }
             else if (type == DescriptorType_SampledImage)
             {
                 poolSize.descriptorCount =
-                    Min(10000,
+                    Min(10000u,
                         deviceProperties.properties.limits.maxDescriptorSetSampledImages / 4);
             }
             else if (type == DescriptorType_UniformTexel)
             {
                 poolSize.descriptorCount =
-                    Min(10000,
+                    Min(10000u,
                         deviceProperties.properties.limits.maxDescriptorSetUniformBuffers / 4);
             }
             bindlessDescriptorPool.descriptorCount = poolSize.descriptorCount;
@@ -647,6 +664,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
                 case DescriptorType_StorageTexelBuffer:
                     typeName = "Storage Texel Buffer";
                     break;
+                default: Assert(0);
             }
             string name =
                 PushStr8F(temp.arena, "Bindless Descriptor Set Layout: %S", typeName);
@@ -659,6 +677,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
     }
 
     // Init frame allocators
+#if 0
     {
         GPUBufferDesc desc;
         desc.usage         = MemoryUsage::CPU_TO_GPU;
@@ -693,6 +712,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
             stagingRingAllocator.lock.Init();
         }
     }
+#endif
 
     // Default samplers
     {
@@ -792,33 +812,33 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
         VK_CHECK(vkCreateImageView(device, &createInfo, 0, &nullImageView2DArray));
 
         // Transitions
-        TransferCommand cmd = Stage(0);
-
-        VkImageMemoryBarrier2 imageBarrier       = {};
-        imageBarrier.sType                       = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        imageBarrier.image                       = nullImage2D;
-        imageBarrier.oldLayout                   = imageInfo.initialLayout;
-        imageBarrier.newLayout                   = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        imageBarrier.srcAccessMask               = VK_ACCESS_2_NONE;
-        imageBarrier.dstAccessMask               = VK_ACCESS_2_SHADER_READ_BIT;
-        imageBarrier.srcStageMask                = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-        imageBarrier.dstStageMask                = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        imageBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        imageBarrier.subresourceRange.baseArrayLayer = 0;
-        imageBarrier.subresourceRange.baseMipLevel   = 0;
-        imageBarrier.subresourceRange.layerCount     = 1;
-        imageBarrier.subresourceRange.levelCount     = 1;
-        imageBarrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-        imageBarrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-
-        VkDependencyInfo dependencyInfo        = {};
-        dependencyInfo.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        dependencyInfo.imageMemoryBarrierCount = 1;
-        dependencyInfo.pImageMemoryBarriers    = &imageBarrier;
-
-        vkCmdPipelineBarrier2(cmd.transitionBuffer, &dependencyInfo);
-
-        Submit(cmd);
+        // TransferCommand cmd = Stage(0);
+        //
+        // VkImageMemoryBarrier2 imageBarrier       = {};
+        // imageBarrier.sType                       = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        // imageBarrier.image                       = nullImage2D;
+        // imageBarrier.oldLayout                   = imageInfo.initialLayout;
+        // imageBarrier.newLayout                   = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        // imageBarrier.srcAccessMask               = VK_ACCESS_2_NONE;
+        // imageBarrier.dstAccessMask               = VK_ACCESS_2_SHADER_READ_BIT;
+        // imageBarrier.srcStageMask                = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        // imageBarrier.dstStageMask                = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        // imageBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        // imageBarrier.subresourceRange.baseArrayLayer = 0;
+        // imageBarrier.subresourceRange.baseMipLevel   = 0;
+        // imageBarrier.subresourceRange.layerCount     = 1;
+        // imageBarrier.subresourceRange.levelCount     = 1;
+        // imageBarrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+        // imageBarrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+        //
+        // VkDependencyInfo dependencyInfo        = {};
+        // dependencyInfo.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        // dependencyInfo.imageMemoryBarrierCount = 1;
+        // dependencyInfo.pImageMemoryBarriers    = &imageBarrier;
+        //
+        // vkCmdPipelineBarrier2(cmd.transitionBuffer, &dependencyInfo);
+        //
+        // Submit(cmd);
     }
 
     // Null buffer
@@ -837,39 +857,11 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference)
         VK_CHECK(vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &nullBuffer,
                                  &nullBufferAllocation, 0));
     }
-
-    // Initialize command pools
-    {
-        int numProcessors = OS_NumProcessors();
-        commandPools      = StaticArray<CommandPool>(arena, numProcessors);
-    }
 }
 
-bool Vulkan::CreateSwapchain(Window window, SwapchainDesc *desc, Swapchain *inSwapchain)
+Swapchain Vulkan::CreateSwapchain(Window window, u32 width, u32 height)
 {
-    SwapchainVulkan *swapchain = 0;
-    if (inSwapchain->IsValid())
-    {
-        swapchain = ToInternal(inSwapchain);
-    }
-    else
-    {
-        MutexScope(&arenaMutex)
-        {
-            swapchain = freeSwapchain;
-            if (swapchain)
-            {
-                StackPop(freeSwapchain);
-            }
-            else
-            {
-                swapchain = PushStruct(arena, SwapchainVulkan);
-            }
-        }
-    }
-    inSwapchain->desc          = *desc;
-    inSwapchain->internalState = swapchain;
-// Create surface
+    Swapchain swapchain = {};
 #if _WIN32
     VkWin32SurfaceCreateInfoKHR win32SurfaceCreateInfo = {};
     win32SurfaceCreateInfo.sType     = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
@@ -877,14 +869,14 @@ bool Vulkan::CreateSwapchain(Window window, SwapchainDesc *desc, Swapchain *inSw
     win32SurfaceCreateInfo.hinstance = GetModuleHandleW(0);
 
     VK_CHECK(
-        vkCreateWin32SurfaceKHR(instance, &win32SurfaceCreateInfo, 0, &swapchain->surface));
+        vkCreateWin32SurfaceKHR(instance, &win32SurfaceCreateInfo, 0, &swapchain.surface));
 #else
 #error not supported
 #endif
 
     // Check whether physical device has a queue family that supports presenting to the surface
     u32 presentFamily = VK_QUEUE_FAMILY_IGNORED;
-    for (u32 familyIndex = 0; familyIndex < queueFamilyProperties.size(); familyIndex++)
+    for (u32 familyIndex = 0; familyIndex < queueFamilyProperties.Length(); familyIndex++)
     {
         VkBool32 supported = false;
         // TODO: why is this function pointer null?
@@ -894,7 +886,7 @@ bool Vulkan::CreateSwapchain(Window window, SwapchainDesc *desc, Swapchain *inSw
         // }
         Assert(vkGetPhysicalDeviceSurfaceSupportKHR);
         VK_CHECK(vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, familyIndex,
-                                                      swapchain->surface, &supported));
+                                                      swapchain.surface, &supported));
 
         if (queueFamilyProperties[familyIndex].queueFamilyProperties.queueCount > 0 &&
             supported)
@@ -905,24 +897,23 @@ bool Vulkan::CreateSwapchain(Window window, SwapchainDesc *desc, Swapchain *inSw
     }
     if (presentFamily == VK_QUEUE_FAMILY_IGNORED)
     {
-        return false;
+        return {};
     }
 
-    CreateSwapchain(inSwapchain);
+    CreateSwapchain(&swapchain);
 
-    return true;
+    return swapchain;
 }
 
 // Recreates the swap chain if it becomes invalid
-b32 mkGraphicsVulkan::CreateSwapchain(Swapchain *inSwapchain)
+b32 Vulkan::CreateSwapchain(Swapchain *swapchain)
 {
-    SwapchainVulkan *swapchain = ToInternal(inSwapchain);
     Assert(swapchain);
 
     u32 formatCount = 0;
     VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, swapchain->surface,
                                                   &formatCount, 0));
-    list<VkSurfaceFormatKHR> surfaceFormats(formatCount);
+    std::vector<VkSurfaceFormatKHR> surfaceFormats(formatCount);
     VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, swapchain->surface,
                                                   &formatCount, surfaceFormats.data()));
 
@@ -940,10 +931,10 @@ b32 mkGraphicsVulkan::CreateSwapchain(Swapchain *inSwapchain)
     // Pick one of the supported formats
     VkSurfaceFormatKHR surfaceFormat = {};
     {
-        surfaceFormat.format     = ConvertFormat(inSwapchain->desc.format);
+        surfaceFormat.format     = swapchain->format;
         surfaceFormat.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 
-        VkFormat requestedFormat = ConvertFormat(inSwapchain->desc.format);
+        VkFormat requestedFormat = swapchain->format;
 
         b32 valid = false;
         for (auto &checkedFormat : surfaceFormats)
@@ -957,7 +948,7 @@ b32 mkGraphicsVulkan::CreateSwapchain(Swapchain *inSwapchain)
         }
         if (!valid)
         {
-            inSwapchain->desc.format = Format::B8G8R8A8_UNORM;
+            swapchain->format = VK_FORMAT_B8G8R8A8_UNORM;
         }
     }
 
@@ -970,16 +961,16 @@ b32 mkGraphicsVulkan::CreateSwapchain(Swapchain *inSwapchain)
         }
         else
         {
-            swapchain->extent = {inSwapchain->desc.width, inSwapchain->desc.height};
+            swapchain->extent = {swapchain->width, swapchain->height};
             swapchain->extent.width =
-                Clamp(inSwapchain->desc.width, surfaceCapabilities.minImageExtent.width,
+                Clamp(swapchain->width, surfaceCapabilities.minImageExtent.width,
                       surfaceCapabilities.maxImageExtent.width);
             swapchain->extent.height =
-                Clamp(inSwapchain->desc.height, surfaceCapabilities.minImageExtent.height,
+                Clamp(swapchain->height, surfaceCapabilities.minImageExtent.height,
                       surfaceCapabilities.maxImageExtent.height);
         }
     }
-    u32 imageCount = max(2, surfaceCapabilities.minImageCount);
+    u32 imageCount = Max(2u, surfaceCapabilities.minImageCount);
     if (surfaceCapabilities.maxImageCount > 0 &&
         imageCount > surfaceCapabilities.maxImageCount)
     {
@@ -1099,9 +1090,9 @@ b32 mkGraphicsVulkan::CreateSwapchain(Swapchain *inSwapchain)
 
 void Vulkan::AllocateCommandBuffers(ThreadCommandPool &pool, QueueType type)
 {
-    auto *node = pool.buffers.AddNode(ThreadCommandPool::commandBufferPoolSize);
+    auto *node = pool.buffers[type].AddNode(ThreadCommandPool::commandBufferPoolSize);
     VkCommandBufferAllocateInfo bufferInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    bufferInfo.commandPool                 = pool.pool[i];
+    bufferInfo.commandPool                 = pool.pool[type];
     bufferInfo.commandBufferCount          = ThreadCommandPool::commandBufferPoolSize;
     bufferInfo.level                       = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     VK_CHECK(vkAllocateCommandBuffers(device, &bufferInfo, node->values));
@@ -1111,68 +1102,75 @@ void Vulkan::AllocateTransferCommandBuffers(ThreadCommandPool &pool)
 {
     auto *node = pool.freeTransferBuffers.AddNode(ThreadCommandPool::commandBufferPoolSize);
 
-    VkBuffer commandBuffers[ThreadCommandPool::commandBufferPoolSize];
+    VkCommandBuffer commandBuffers[ThreadCommandPool::commandBufferPoolSize];
     VkCommandBufferAllocateInfo bufferInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    bufferInfo.commandPool                 = pool.pool[i];
+    bufferInfo.commandPool                 = pool.pool[QueueType_Copy];
     bufferInfo.commandBufferCount          = ThreadCommandPool::commandBufferPoolSize;
     bufferInfo.level                       = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     VK_CHECK(vkAllocateCommandBuffers(device, &bufferInfo, commandBuffers));
 
-    VkSemaphoreCreateInfo semaphoreInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    VkFenceCreateInfo fenceInfo         = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    VkSemaphoreTypeCreateInfo timelineInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+    timelineInfo.semaphoreType             = VK_SEMAPHORE_TYPE_TIMELINE;
+    VkSemaphoreCreateInfo semaphoreInfo    = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    semaphoreInfo.pNext                    = &timelineInfo;
 
     for (int i = 0; i < ThreadCommandPool::commandBufferPoolSize; i++)
     {
         VkSemaphore semaphore;
         vkCreateSemaphore(device, &semaphoreInfo, 0, &semaphore);
-        VkFence fence;
-        vkCreateFence(device, &fenceInfo, 0, &fence);
 
         node->values[i] = TransferCommandBuffer{
             .buffer    = commandBuffers[i],
             .semaphore = semaphore,
-            .fence     = fence,
         };
     }
 }
 
 void Vulkan::CheckInitializedThreadCommandPool(int threadIndex)
 {
-    ThreadCommandPool &pool = &commandPools[threadIndex];
+    ThreadCommandPool &pool = GetThreadCommandPool(threadIndex);
     if (pool.arena == 0)
     {
         pool.arena = ArenaAlloc();
         pool.pool  = StaticArray<VkCommandPool>(pool.arena, QueueType_Count, QueueType_Count);
-        pool.buffers  = CommandBufferPool(pool.arena, QueueType_Count, QueueType_Count);
-        pool.freeList = CommandBufferPool(pool.arena, QueueType_Count, QueueType_Count);
+        pool.buffers = CommandBufferPool(pool.arena, QueueType_Count - 1, QueueType_Count - 1);
+        pool.freeTransferBuffers = TransferCommandBufferPool(pool.arena);
 
-        for (int i = 0; i < QueueType_Count; i++)
+        VkCommandPoolCreateInfo poolInfo = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+        poolInfo.flags                   = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        poolInfo.queueFamilyIndex        = graphicsFamily;
+        VK_CHECK(vkCreateCommandPool(device, &poolInfo, 0, &pool.pool[QueueType_Graphics]));
+
+        pool.buffers[QueueType_Graphics] = ChunkedLinkedList<VkCommandBuffer>(pool.arena);
+        AllocateCommandBuffers(pool, QueueType_Graphics);
+
+        Assert(computeFamily != VK_QUEUE_FAMILY_IGNORED);
         {
-            if (i != QueueType_Copy && families[i] != VK_QUEUE_FAMILY_IGNORED)
-            {
-                VkCommandPoolCreateInfo poolInfo = {
-                    VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-                poolInfo.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-                poolInfo.queueFamilyIndex = families[i];
-                VK_CHECK(vkCreateCommandPool(device, &poolInfo, 0, &pool.pool[i]));
-
-                AllocateCommandBuffers(pool, i);
-            }
+            poolInfo.queueFamilyIndex = computeFamily;
+            VK_CHECK(vkCreateCommandPool(device, &poolInfo, 0, &pool.pool[QueueType_Compute]));
+            pool.buffers[QueueType_Compute] = ChunkedLinkedList<VkCommandBuffer>(pool.arena);
+            AllocateCommandBuffers(pool, QueueType_Graphics);
+        }
+        Assert(copyFamily != VK_QUEUE_FAMILY_IGNORED);
+        {
+            poolInfo.queueFamilyIndex = copyFamily;
+            VK_CHECK(vkCreateCommandPool(device, &poolInfo, 0, &pool.pool[QueueType_Copy]));
+            AllocateTransferCommandBuffers(pool);
         }
     }
 }
 
-VkCommandBuffer BeginCommandBuffer(QueueType queue)
+CommandBuffer Vulkan::BeginCommandBuffer(QueueType queue)
 {
     int threadIndex         = GetThreadIndex();
-    ThreadCommandPool &pool = commandPools[threadIndex];
+    ThreadCommandPool &pool = GetThreadCommandPool(threadIndex);
 
     VkCommandBuffer buffer = VK_NULL_HANDLE;
-    buffer                 = pool.buffers[queue].Pop();
+    pool.buffers[queue].Pop(&buffer);
     if (buffer == VK_NULL_HANDLE)
     {
         AllocateCommandBuffers(pool, queue);
-        buffer = pool.buffers[queue].Pop();
+        pool.buffers[queue].Pop(&buffer);
     }
 
     vkResetCommandBuffer(buffer, 0);
@@ -1180,9 +1178,13 @@ VkCommandBuffer BeginCommandBuffer(QueueType queue)
     beginInfo.flags                    = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
     vkBeginCommandBuffer(buffer, &beginInfo);
+    return CommandBuffer{.buffer = buffer};
 }
 
-ThreadCommandPool &GetThreadCommandPool(int threadIndex) { return commandPools[threadIndex]; }
+ThreadCommandPool &Vulkan::GetThreadCommandPool(int threadIndex)
+{
+    return commandPools[threadIndex];
+}
 
 TransferCommandBuffer Vulkan::BeginTransfers()
 {
@@ -1195,12 +1197,14 @@ TransferCommandBuffer Vulkan::BeginTransfers()
     TransferCommandBuffer buffer;
     for (auto *node = pool.freeTransferBuffers.first; node != 0; node = node->next)
     {
-        for (int i = 0; i < node->values; i++)
+        for (int i = 0; i < node->count; i++)
         {
             TransferCommandBuffer &testCmd = node->values[i];
-            if (vkGetFenceStatus(device, testCmd.fence) == VK_SUCCESS)
+            u64 value;
+            vkGetSemaphoreCounterValue(device, testCmd.semaphore, &value);
+            if (value >= testCmd.submissionID)
             {
-                cmd = testCmd;
+                buffer = testCmd;
 
                 node->values[i] = pool.freeTransferBuffers.Last();
                 pool.freeTransferBuffers.totalCount--;
@@ -1216,98 +1220,76 @@ TransferCommandBuffer Vulkan::BeginTransfers()
     if (!success)
     {
         AllocateTransferCommandBuffers(pool);
-        buffer = pool.freeTransferBuffers.Pop();
+        pool.freeTransferBuffers.Pop(&buffer);
     }
 
-    VK_CHECK(vkResetCommandBuffer(buffer, 0));
+    VK_CHECK(vkResetCommandBuffer(buffer.buffer, 0));
     VkCommandBufferBeginInfo beginInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     beginInfo.flags                    = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
     VK_CHECK(vkBeginCommandBuffer(buffer.buffer, &beginInfo));
-    VK_CHECK(vkResetFences(device, 1, &buffer.fence));
 
     return buffer;
 }
 
-TransferBuffer Vulkan::GetStagingBuffer(CommandBuffer *buffer, VkBufferUsageFlags flags,
-                                        size_t totalSize)
+GPUBuffer Vulkan::CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
+                               VmaAllocationCreateFlags vmaFlags)
+{
+    GPUBuffer buffer;
+    VkBufferCreateInfo createInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    createInfo.size               = totalSize;
+    createInfo.usage |=
+        flags | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+    if (families.Length() > 1)
+    {
+        createInfo.sharingMode           = VK_SHARING_MODE_CONCURRENT;
+        createInfo.queueFamilyIndexCount = families.Length();
+        createInfo.pQueueFamilyIndices   = families.data;
+    }
+    else
+    {
+        createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    }
+
+    VmaAllocationCreateInfo allocCreateInfo = {};
+    allocCreateInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
+    allocCreateInfo.flags                   = vmaFlags;
+
+    VK_CHECK(vmaCreateBuffer(allocator, &createInfo, &allocCreateInfo, &buffer.buffer,
+                             &buffer.allocation, 0));
+    return buffer;
+}
+
+TransferBuffer Vulkan::GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize)
 {
     int threadIndex = GetThreadIndex();
 
-    VkBuffer buffer;
-    VmaAllocation bufferAllocation;
-    {
-        VkBufferCreateInfo createInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        createInfo.size               = size;
-        // TODO: add the device address extension?
-        createInfo.usage |= flags | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-        if (families.size() > 1)
-        {
-            createInfo.sharingMode           = VK_SHARING_MODE_CONCURRENT;
-            createInfo.queueFamilyIndexCount = (u32)families.size();
-            createInfo.pQueueFamilyIndices   = families.data();
-        }
-        else
-        {
-            createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        }
+    GPUBuffer buffer = CreateBuffer(flags | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                    totalSize);
+    GPUBuffer stagingBuffer =
+        CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, totalSize,
+                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
 
-        VmaAllocationCreateInfo allocCreateInfo = {};
-        allocCreateInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
-
-        VK_CHECK(vmaCreateBuffer(allocator, &createInfo, &allocCreateInfo, &buffer,
-                                 &bufferAllocation, 0));
-    }
-
-    // Create staging buffer
-    VkBuffer stageBuffer;
-    VmaAllocation stagingAllocation;
-    {
-        VkBufferCreateInfo createInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        createInfo.size               = size;
-        createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-        if (families.size() > 1)
-        {
-            createInfo.sharingMode           = VK_SHARING_MODE_CONCURRENT;
-            createInfo.queueFamilyIndexCount = (u32)families.size();
-            createInfo.pQueueFamilyIndices   = families.data();
-        }
-        else
-        {
-            createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        }
-        VmaAllocationCreateInfo allocCreateInfo = {};
-        allocCreateInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
-        allocCreateInfo                         = {};
-        allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                                VMA_ALLOCATION_CREATE_MAPPED_BIT;
-
-        VK_CHECK(vmaCreateBuffer(allocator, &createInfo, &allocCreateInfo, &stageBuffer,
-                                 &stagingAllocation, 0));
-    }
-
-    void *mappedPtr = stagingAllocation->GetMappedData();
-    MemoryCopy(mappedPtr, ptr, totalSize);
+    void *mappedPtr = stagingBuffer.allocation->GetMappedData();
 
     TransferBuffer transferBuffer = {
-        .buffer          = buffer,
-        .allocation      = bufferAllocation,
-        .stageBuffer     = stageBuffer,
-        .stageAllocation = stageAllocation,
-        .mappedPtr       = mappedPtr,
+        .buffer        = buffer,
+        .stagingBuffer = stagingBuffer,
+        .mappedPtr     = mappedPtr,
     };
     return transferBuffer;
 }
 
-void TransferCommandBuffer::SubmitTransfer(TransferBuffer *buffer)
+void TransferCommandBuffer::SubmitTransfer(TransferBuffer *transferBuffer)
 {
     VkBufferCopy bufferCopy = {};
     bufferCopy.srcOffset    = 0;
     bufferCopy.dstOffset    = 0;
-    bufferCopy.size         = buffer->allocation->GetSize();
+    bufferCopy.size         = transferBuffer->buffer.allocation->GetSize();
 
-    vkCmdCopyBuffer(buffer, buffer->stageBuffer, buffer, 1, &bufferCopy);
+    vkCmdCopyBuffer(buffer, transferBuffer->stagingBuffer.buffer,
+                    transferBuffer->buffer.buffer, 1, &bufferCopy);
 }
 
 u64 Vulkan::GetDeviceAddress(VkBuffer buffer)
@@ -1331,12 +1313,19 @@ void TransferCommandBuffer::SubmitToQueue()
     VkSemaphoreSubmitInfo submitSemInfo = {};
     submitSemInfo.sType                 = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
 
+    VkTimelineSemaphoreSubmitInfo timelineInfo = {
+        VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+    timelineInfo.signalSemaphoreValueCount = 1;
+
     VkSubmitInfo2 submitInfo = {};
     submitInfo.sType         = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+    submitInfo.pNext         = &timelineInfo;
+
+    u64 value = 0;
 
     // Submit the copy command to the transfer queue.
     {
-        bufSubmitInfo.commandBuffer = cmd.cmdBuffer;
+        bufSubmitInfo.commandBuffer = buffer;
 
         submitSemInfo.semaphore = semaphore;
         submitSemInfo.value     = 0;
@@ -1348,16 +1337,26 @@ void TransferCommandBuffer::SubmitToQueue()
         submitInfo.signalSemaphoreInfoCount = 1;
         submitInfo.pSignalSemaphoreInfos    = &submitSemInfo;
 
-        MutexScope(&queues[QueueType_Copy].lock)
+        CommandQueue &queue = device->queues[QueueType_Copy];
+        MutexScope(&queue.lock)
         {
-            VK_CHECK(
-                vkQueueSubmit2(device->queues[QueueType_Copy].queue, 1, &submitInfo, fence));
+            value                               = ++queue.submissionID;
+            timelineInfo.pSignalSemaphoreValues = &value;
+            VK_CHECK(vkQueueSubmit2(queue.queue, 1, &submitInfo, VK_NULL_HANDLE));
         }
+        CommandQueue &graphicsQueue = device->queues[QueueType_Graphics];
+        MutexScope(&graphicsQueue.lock)
+        {
+            graphicsQueue.waitSemaphores.push_back(semaphore);
+            graphicsQueue.waitSemaphoreValues.push_back(value);
+        }
+
+        submissionID = value;
     }
 
     int threadIndex                    = GetThreadIndex();
     ThreadCommandPool &pool            = device->GetThreadCommandPool(threadIndex);
-    pool.freeTransferBuffers.AddBack() = this;
+    pool.freeTransferBuffers.AddBack() = *this;
 
 #if 0
     // Insert the execution dependency (semaphores) and memory dependency (barrier) on the
@@ -1408,211 +1407,206 @@ void TransferCommandBuffer::SubmitToQueue()
 #endif
 }
 
-void Vulkan::CreateBufferCopy(GPUBuffer *inBuffer, GPUBufferDesc inDesc,
-                              CopyFunction initCallback)
-{
-    GPUBufferVulkan *buffer = 0;
-    MutexScope(&arenaMutex)
-    {
-        buffer = freeBuffer;
-        if (buffer)
-        {
-            StackPop(freeBuffer);
-        }
-        else
-        {
-            buffer = PushStruct(arena, GPUBufferVulkan);
-        }
-    }
+// void Vulkan::CreateBufferCopy(GPUBuffer *inBuffer, GPUBufferDesc inDesc,
+//                               CopyFunction initCallback)
+// {
+//     GPUBufferVulkan *buffer = 0;
+//     MutexScope(&arenaMutex)
+//     {
+//         buffer = freeBuffer;
+//         if (buffer)
+//         {
+//             StackPop(freeBuffer);
+//         }
+//         else
+//         {
+//             buffer = PushStruct(arena, GPUBufferVulkan);
+//         }
+//     }
+//
+//     buffer->subresourceSrv  = -1;
+//     buffer->subresourceUav  = -1;
+//     inBuffer->internalState = buffer;
+//     inBuffer->desc          = inDesc;
+//     inBuffer->mappedData    = 0;
+//     inBuffer->resourceType  = GPUResource::ResourceType::Buffer;
+//     inBuffer->ticket.ticket = 0;
+//
+//     VkBufferCreateInfo createInfo = {};
+//     createInfo.sType              = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+//     createInfo.size               = inBuffer->desc.size;
+//
+//     if (HasFlags(inDesc.resourceUsage, ResourceUsage_Vertex))
+//     {
+//         createInfo.usage |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+//     }
+//     if (HasFlags(inDesc.resourceUsage, ResourceUsage_Index))
+//     {
+//         createInfo.usage |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+//     }
+//
+//     if (HasFlags(inDesc.resourceUsage, ResourceUsage_StorageTexel))
+//     {
+//         createInfo.usage |= VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT;
+//     }
+//     if (HasFlags(inDesc.resourceUsage, ResourceUsage_StorageBuffer) ||
+//         HasFlags(inDesc.resourceUsage, ResourceUsage_StorageBufferRead))
+//     {
+//         createInfo.usage |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+//     }
+//     if (HasFlags(inDesc.resourceUsage, ResourceUsage_UniformTexel))
+//     {
+//         createInfo.usage |= VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT;
+//     }
+//     if (HasFlags(inDesc.resourceUsage, ResourceUsage_UniformBuffer))
+//     {
+//         createInfo.usage |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+//     }
+//
+//     if (HasFlags(inDesc.resourceUsage, ResourceUsage_Indirect))
+//     {
+//         createInfo.usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+//     }
+//     if (HasFlags(inDesc.resourceUsage, ResourceUsage_TransferSrc))
+//     {
+//         createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+//     }
+//     if (HasFlags(inDesc.resourceUsage, ResourceUsage_TransferDst))
+//     {
+//         createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+//     }
+//
+//     // Sharing
+//     if (families.size() > 1)
+//     {
+//         createInfo.sharingMode           = VK_SHARING_MODE_CONCURRENT;
+//         createInfo.queueFamilyIndexCount = (u32)families.size();
+//         createInfo.pQueueFamilyIndices   = families.data();
+//     }
+//     else
+//     {
+//         createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+//     }
+//
+//     VmaAllocationCreateInfo allocCreateInfo = {};
+//     allocCreateInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
+//
+//     if (inDesc.usage == MemoryUsage::CPU_TO_GPU)
+//     {
+//         allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+//                                 VMA_ALLOCATION_CREATE_MAPPED_BIT;
+//         createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+//     }
+//     else if (inDesc.usage == MemoryUsage::GPU_TO_CPU)
+//     {
+//         allocCreateInfo.flags =
+//             VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+//         createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT; // TODO: not necessary?
+//     }
+//
+//     // Buffers only on GPU must be copied to using a staging buffer
+//     else if (inDesc.usage == MemoryUsage::GPU_ONLY)
+//     {
+//         createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+//     }
+//
+//     VK_CHECK(vmaCreateBuffer(allocator, &createInfo, &allocCreateInfo, &buffer->buffer,
+//                              &buffer->allocation, 0));
+//
+//     // Map the buffer if it's a staging buffer
+//     if (inDesc.usage == MemoryUsage::CPU_TO_GPU || inDesc.usage == MemoryUsage::GPU_TO_CPU)
+//     {
+//         inBuffer->mappedData = buffer->allocation->GetMappedData();
+//         inBuffer->desc.size  = buffer->allocation->GetSize();
+//     }
+//
+//     if (initCallback != 0)
+//     {
+//         TransferCommand cmd;
+//         void *mappedData = 0;
+//         if (inBuffer->desc.usage == MemoryUsage::CPU_TO_GPU)
+//         {
+//             mappedData = inBuffer->mappedData;
+//         }
+//         else
+//         {
+//             cmd        = Stage(inBuffer->desc.size);
+//             mappedData = cmd.ringAllocation->mappedData;
+//         }
+//
+//         initCallback(mappedData);
+//
+//         if (cmd.IsValid())
+//         {
+//             if (inBuffer->desc.size != 0)
+//             {
+//                 // Memory copy data to the staging buffer
+//                 VkBufferCopy bufferCopy = {};
+//                 bufferCopy.srcOffset    = cmd.ringAllocation->offset;
+//                 bufferCopy.dstOffset    = 0;
+//                 bufferCopy.size         = inBuffer->desc.size;
+//
+//                 RingAllocator *ringAllocator =
+//                     &stagingRingAllocators[cmd.ringAllocation->ringId];
+//
+//                 // Copy from the staging buffer to the allocated buffer
+//                 vkCmdCopyBuffer(cmd.cmdBuffer,
+//                                 ToInternal(&ringAllocator->transferRingBuffer)->buffer,
+//                                 buffer->buffer, 1, &bufferCopy);
+//             }
+//             FenceVulkan *fenceVulkan = ToInternal(&cmd.fence);
+//             inBuffer->ticket.fence   = cmd.fence;
+//             inBuffer->ticket.ticket  = fenceVulkan->count;
+//             Submit(cmd);
+//         }
+//     }
+//
+//     if (!HasFlags(inDesc.resourceUsage, ResourceUsage_Bindless))
+//     {
+//         GPUBufferVulkan::Subresource subresource;
+//         subresource.info.buffer = buffer->buffer;
+//         subresource.info.offset = 0;
+//         subresource.info.range  = VK_WHOLE_SIZE;
+//         buffer->subresources.push_back(subresource);
+//
+//         // TODO: is this fine that they reference the same subresource?
+//         if (HasFlags(inDesc.resourceUsage, ResourceUsage_StorageTexel) ||
+//             HasFlags(inDesc.resourceUsage, ResourceUsage_StorageBuffer))
+//         {
+//             buffer->subresourceUav = 0;
+//         }
+//         if (HasFlags(inDesc.resourceUsage, ResourceUsage_UniformBuffer) ||
+//             HasFlags(inDesc.resourceUsage, ResourceUsage_UniformTexel) ||
+//             HasFlags(inDesc.resourceUsage, ResourceUsage_StorageBufferRead))
+//         {
+//             buffer->subresourceSrv = 0;
+//         }
+//         if (HasFlags(inDesc.resourceUsage, ResourceUsage_StorageTexel) ||
+//             HasFlags(inDesc.resourceUsage, ResourceUsage_UniformTexel))
+//         {
+//             Assert(0);
+//         }
+//     }
+//     else
+//     {
+//         Assert(!HasFlags(inDesc.resourceUsage, ResourceUsage_UniformBuffer));
+//         i32 subresourceIndex = -1;
+//         if (HasFlags(inDesc.resourceUsage, ResourceUsage_StorageTexel) ||
+//             HasFlags(inDesc.resourceUsage, ResourceUsage_StorageBuffer))
+//         {
+//             subresourceIndex       = CreateSubresource(inBuffer, ResourceViewType::UAV);
+//             buffer->subresourceUav = subresourceIndex;
+//         }
+//         if (HasFlags(inDesc.resourceUsage, ResourceUsage_UniformTexel) ||
+//             HasFlags(inDesc.resourceUsage, ResourceUsage_StorageBufferRead))
+//         {
+//             subresourceIndex       = CreateSubresource(inBuffer, ResourceViewType::SRV);
+//             buffer->subresourceSrv = subresourceIndex;
+//         }
+//     }
+// }
 
-    buffer->subresourceSrv  = -1;
-    buffer->subresourceUav  = -1;
-    inBuffer->internalState = buffer;
-    inBuffer->desc          = inDesc;
-    inBuffer->mappedData    = 0;
-    inBuffer->resourceType  = GPUResource::ResourceType::Buffer;
-    inBuffer->ticket.ticket = 0;
-
-    VkBufferCreateInfo createInfo = {};
-    createInfo.sType              = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    createInfo.size               = inBuffer->desc.size;
-
-    if (HasFlags(inDesc.resourceUsage, ResourceUsage_Vertex))
-    {
-        createInfo.usage |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    }
-    if (HasFlags(inDesc.resourceUsage, ResourceUsage_Index))
-    {
-        createInfo.usage |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-    }
-
-    if (HasFlags(inDesc.resourceUsage, ResourceUsage_StorageTexel))
-    {
-        createInfo.usage |= VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT;
-    }
-    if (HasFlags(inDesc.resourceUsage, ResourceUsage_StorageBuffer) ||
-        HasFlags(inDesc.resourceUsage, ResourceUsage_StorageBufferRead))
-    {
-        createInfo.usage |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-    }
-    if (HasFlags(inDesc.resourceUsage, ResourceUsage_UniformTexel))
-    {
-        createInfo.usage |= VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT;
-    }
-    if (HasFlags(inDesc.resourceUsage, ResourceUsage_UniformBuffer))
-    {
-        createInfo.usage |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-    }
-
-    if (HasFlags(inDesc.resourceUsage, ResourceUsage_Indirect))
-    {
-        createInfo.usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
-    }
-    if (HasFlags(inDesc.resourceUsage, ResourceUsage_TransferSrc))
-    {
-        createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-    }
-    if (HasFlags(inDesc.resourceUsage, ResourceUsage_TransferDst))
-    {
-        createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    }
-
-    // Sharing
-    if (families.size() > 1)
-    {
-        createInfo.sharingMode           = VK_SHARING_MODE_CONCURRENT;
-        createInfo.queueFamilyIndexCount = (u32)families.size();
-        createInfo.pQueueFamilyIndices   = families.data();
-    }
-    else
-    {
-        createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    }
-
-    VmaAllocationCreateInfo allocCreateInfo = {};
-    allocCreateInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
-
-    if (inDesc.usage == MemoryUsage::CPU_TO_GPU)
-    {
-        allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                                VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-    }
-    else if (inDesc.usage == MemoryUsage::GPU_TO_CPU)
-    {
-        allocCreateInfo.flags =
-            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT; // TODO: not necessary?
-    }
-
-    // Buffers only on GPU must be copied to using a staging buffer
-    else if (inDesc.usage == MemoryUsage::GPU_ONLY)
-    {
-        createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    }
-
-    VK_CHECK(vmaCreateBuffer(allocator, &createInfo, &allocCreateInfo, &buffer->buffer,
-                             &buffer->allocation, 0));
-
-    // Map the buffer if it's a staging buffer
-    if (inDesc.usage == MemoryUsage::CPU_TO_GPU || inDesc.usage == MemoryUsage::GPU_TO_CPU)
-    {
-        inBuffer->mappedData = buffer->allocation->GetMappedData();
-        inBuffer->desc.size  = buffer->allocation->GetSize();
-    }
-
-    if (initCallback != 0)
-    {
-        TransferCommand cmd;
-        void *mappedData = 0;
-        if (inBuffer->desc.usage == MemoryUsage::CPU_TO_GPU)
-        {
-            mappedData = inBuffer->mappedData;
-        }
-        else
-        {
-            cmd        = Stage(inBuffer->desc.size);
-            mappedData = cmd.ringAllocation->mappedData;
-        }
-
-        initCallback(mappedData);
-
-        if (cmd.IsValid())
-        {
-            if (inBuffer->desc.size != 0)
-            {
-                // Memory copy data to the staging buffer
-                VkBufferCopy bufferCopy = {};
-                bufferCopy.srcOffset    = cmd.ringAllocation->offset;
-                bufferCopy.dstOffset    = 0;
-                bufferCopy.size         = inBuffer->desc.size;
-
-                RingAllocator *ringAllocator =
-                    &stagingRingAllocators[cmd.ringAllocation->ringId];
-
-                // Copy from the staging buffer to the allocated buffer
-                vkCmdCopyBuffer(cmd.cmdBuffer,
-                                ToInternal(&ringAllocator->transferRingBuffer)->buffer,
-                                buffer->buffer, 1, &bufferCopy);
-            }
-            FenceVulkan *fenceVulkan = ToInternal(&cmd.fence);
-            inBuffer->ticket.fence   = cmd.fence;
-            inBuffer->ticket.ticket  = fenceVulkan->count;
-            Submit(cmd);
-        }
-    }
-
-    if (!HasFlags(inDesc.resourceUsage, ResourceUsage_Bindless))
-    {
-        GPUBufferVulkan::Subresource subresource;
-        subresource.info.buffer = buffer->buffer;
-        subresource.info.offset = 0;
-        subresource.info.range  = VK_WHOLE_SIZE;
-        buffer->subresources.push_back(subresource);
-
-        // TODO: is this fine that they reference the same subresource?
-        if (HasFlags(inDesc.resourceUsage, ResourceUsage_StorageTexel) ||
-            HasFlags(inDesc.resourceUsage, ResourceUsage_StorageBuffer))
-        {
-            buffer->subresourceUav = 0;
-        }
-        if (HasFlags(inDesc.resourceUsage, ResourceUsage_UniformBuffer) ||
-            HasFlags(inDesc.resourceUsage, ResourceUsage_UniformTexel) ||
-            HasFlags(inDesc.resourceUsage, ResourceUsage_StorageBufferRead))
-        {
-            buffer->subresourceSrv = 0;
-        }
-        if (HasFlags(inDesc.resourceUsage, ResourceUsage_StorageTexel) ||
-            HasFlags(inDesc.resourceUsage, ResourceUsage_UniformTexel))
-        {
-            Assert(0);
-        }
-    }
-    else
-    {
-        Assert(!HasFlags(inDesc.resourceUsage, ResourceUsage_UniformBuffer));
-        i32 subresourceIndex = -1;
-        if (HasFlags(inDesc.resourceUsage, ResourceUsage_StorageTexel) ||
-            HasFlags(inDesc.resourceUsage, ResourceUsage_StorageBuffer))
-        {
-            subresourceIndex       = CreateSubresource(inBuffer, ResourceViewType::UAV);
-            buffer->subresourceUav = subresourceIndex;
-        }
-        if (HasFlags(inDesc.resourceUsage, ResourceUsage_UniformTexel) ||
-            HasFlags(inDesc.resourceUsage, ResourceUsage_StorageBufferRead))
-        {
-            subresourceIndex       = CreateSubresource(inBuffer, ResourceViewType::SRV);
-            buffer->subresourceSrv = subresourceIndex;
-        }
-    }
-}
-
-void mkGraphicsVulkan::SetName(GPUResource *resource, string name)
-{
-    SetName(resource, (char *)name.str);
-}
-
-void mkGraphicsVulkan::SetName(u64 handle, VkObjectType type, const char *name)
+void Vulkan::SetName(u64 handle, VkObjectType type, const char *name)
 {
     if (!debugUtils || handle == 0)
     {
@@ -1650,6 +1644,22 @@ void Vulkan::SetName(VkQueue handle, const char *name)
 {
     SetName((u64)handle, VK_OBJECT_TYPE_QUEUE, name);
 }
+
+void Vulkan::BeginEvent(CommandBuffer *cmd, string name)
+{
+    if (!debugUtils) return;
+
+    VkDebugUtilsLabelEXT label = {VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT};
+    label.pLabelName           = (const char *)name.str;
+    label.color[0]             = 0.f;
+    label.color[1]             = 0.f;
+    label.color[2]             = 0.f;
+    label.color[3]             = 0.f;
+
+    vkCmdBeginDebugUtilsLabelEXT(cmd->buffer, &label);
+}
+
+void Vulkan::EndEvent(CommandBuffer *cmd) { vkCmdEndDebugUtilsLabelEXT(cmd->buffer); }
 
 // void Vulkan::CreateRayTracingPipeline(u32 maxDepth)
 // {
@@ -1754,20 +1764,10 @@ void Vulkan::SetName(VkQueue handle, const char *name)
 //     // Build acceleration structures, trace rays
 // }
 
-GPUBVH *Vulkan::CreateBLAS(CommandList cmd, const GPUMesh *meshes, int count)
+GPUAccelerationStructure Vulkan::CreateBLAS(CommandBuffer *cmd, const GPUMesh *meshes,
+                                            int count)
 {
     ScratchArena temp;
-
-    VkStructureType sType;
-    const void *pNext;
-    VkGeometryTypeKHR geometryType;
-    VkAccelerationStructureGeometryDataKHR geometry;
-    VkGeometryFlagsKHR flags;
-
-    VkAccelerationStructureGeometryTrianglesDataKHR data = {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR};
-    data.transformData;
-    data.indexData;
 
     StaticArray<VkAccelerationStructureGeometryKHR> geometries(temp.temp.arena, count);
     StaticArray<VkAccelerationStructureBuildRangeInfoKHR> buildRanges(temp.temp.arena, count);
@@ -1781,28 +1781,21 @@ GPUBVH *Vulkan::CreateBLAS(CommandList cmd, const GPUMesh *meshes, int count)
 
     for (int i = 0; i < count; i++)
     {
-        GPUMesh &mesh                   = meshes[i];
+        const GPUMesh &mesh             = meshes[i];
         VkBufferDeviceAddressInfo pInfo = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
-        pInfo.buffer                    = ToInternal(buffer)->buffer;
-
-        VkDeviceAddress vertexAddress = vkGetBufferDeviceAddress(device, &pInfo);
-
-        pInfo.buffer                 = ToInternal(buffer)->buffer;
-        VkDeviceAddress indexAddress = vkGetBufferDeviceAddress(device, &pInfo);
 
         triangles.vertexFormat             = VK_FORMAT_R32G32B32_SFLOAT;
-        triangles.vertexData.deviceAddress = vertexAddress;
+        triangles.vertexData.deviceAddress = mesh.vertexAddress;
         triangles.vertexStride             = sizeof(Vec3f);
-        triangles.maxVertex                = mesh.mesh.numVertices - 1;
+        triangles.maxVertex                = mesh.numVertices - 1;
         triangles.indexType                = VK_INDEX_TYPE_UINT32;
-        triangles.indexData.deviceAddress  = indexAddress;
+        triangles.indexData.deviceAddress  = mesh.indexAddress;
 
         geometries.Push(geometry);
 
-        int primitiveCount                                 = mesh.mesh.numIndices / 3;
-        VkAccelerationStructureBuildRangeInfoKHR rangeInfo = {
-            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_RANGE_INFO};
-        rangeInfo.primitiveCount = primitiveCount;
+        int primitiveCount                                 = mesh.numIndices / 3;
+        VkAccelerationStructureBuildRangeInfoKHR rangeInfo = {};
+        rangeInfo.primitiveCount                           = primitiveCount;
         buildRanges.Push(rangeInfo);
     }
 
@@ -1810,8 +1803,8 @@ GPUBVH *Vulkan::CreateBLAS(CommandList cmd, const GPUMesh *meshes, int count)
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
     buildInfo.type          = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
     buildInfo.flags         = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-    buildInfo.pGeometries   = geometries.data();
-    buildInfo.geometryCount = static_cast<u32>(geometries.size());
+    buildInfo.pGeometries   = geometries.data;
+    buildInfo.geometryCount = geometries.Length();
 
     VkAccelerationStructureBuildSizesInfoKHR sizeInfo = {
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
@@ -1820,29 +1813,34 @@ GPUBVH *Vulkan::CreateBLAS(CommandList cmd, const GPUMesh *meshes, int count)
                                             VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                                             &buildInfo, maxPrimitiveCounts.data, &sizeInfo);
 
-    GPUBufferDesc desc;
-    desc.size          = sizeInfo.buildScratchSize;
-    desc.usage         = MemoryUsage::GPU_ONLY;
-    desc.resourceUsage = ResourceUsage::;
-
-    GPUBuffer scratch;
-    CreateBuffer(&scratch, desc);
+    GPUBuffer scratch = CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                     sizeInfo.buildScratchSize);
 
     VkBufferDeviceAddressInfo info = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
-    info.buffer                    = ToInternal(scratch)->buffer;
+    info.buffer                    = scratch.buffer;
+    VkDeviceAddress scratchAddress = vkGetBufferDeviceAddress(device, &info);
 
-    GPUBVH bvh;
-    GPUBVHVulkan *bvhVulkan = PushStruct(arena, GPUBufferVulkan);
+    GPUAccelerationStructure bvh;
 
-    VkDeviceAddress scratchAddress      = vkGetBufferDeviceAddress(device, &info);
+    {
+        bvh.buffer = CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
+                                  sizeInfo.accelerationStructureSize);
+        VkAccelerationStructureCreateInfoKHR accelCreateInfo = {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+
+        accelCreateInfo.buffer = bvh.buffer.buffer;
+        accelCreateInfo.size   = sizeInfo.accelerationStructureSize;
+        accelCreateInfo.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+
+        vkCreateAccelerationStructureKHR(device, &accelCreateInfo, 0, &bvh.as);
+    }
+
     buildInfo.scratchData.deviceAddress = scratchAddress;
-    buildInfo.dstAccelerationStructure  = as;
+    buildInfo.dstAccelerationStructure  = bvh.as;
 
-    CommandListVulkan *cmdVulkan = ToInternal(cmd);
-    vkCmdBuildAccelerationStructuresKHR(cmdVulkan->GetCommandBuffer(), 1, &buildInfo,
-                                        &buildRanges.data());
+    vkCmdBuildAccelerationStructuresKHR(cmd->buffer, 1, &buildInfo, &buildRanges.data);
 
-    bvh.internalState = bvhVulkan;
     return bvh;
 }
 

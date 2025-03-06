@@ -256,16 +256,6 @@ struct Mesh
     }
 };
 
-struct GPUMesh
-{
-    u64 vertexAddress;
-    u64 indexAddress;
-
-    u32 numIndices;
-    u32 numVertices;
-    u32 numFaces;
-};
-
 #ifdef USE_GPU
 typedef GPUMesh MeshType;
 #else
@@ -750,7 +740,9 @@ struct ScenePrimitives
 
     Vec3f boundsMin;
     Vec3f boundsMax;
-    BVH nodePtr;
+    BVHNodeN nodePtr;
+
+    GPUAccelerationStructure gpuBVH;
 
     // NOTE: is one of PrimitiveType
     void *primitives;
@@ -837,7 +829,6 @@ void BuildCatClarkBVH(Arena **arenas, ScenePrimitives *scene);
 template <GeometryType type>
 void ComputeTessellationParams(Mesh *meshes, TessellationParams *params, u32 start, u32 count);
 
-Mesh CopyMesh(Arena *arena, Mesh &mesh);
 void BuildSceneBVHs(ScenePrimitives **scenes, int numScenes, int maxDepth);
 
 } // namespace rt

@@ -676,15 +676,6 @@ struct CompressedLeafNode
 #undef USE_BVH4
 #endif
 
-#ifdef USE_GPU
-
-struct GPUAccelerationStructure
-{
-};
-
-typedef GPUAccelerationStructure BVH;
-#endif
-
 #ifdef USE_BVH4
 typedef BVHNode<4> BVHNodeN;
 typedef BuildRef<4> BRef;
@@ -699,10 +690,6 @@ typedef QuantizedNode<8> QNode;
 typedef QuantizedCompressedNode<8> QCNode;
 static const u32 DefaultN    = 8;
 static const u32 DefaultLogN = 3;
-#endif
-
-#ifndef USE_GPU
-typedef BVHNodeN BVH;
 #endif
 
 struct ScenePrimitives;

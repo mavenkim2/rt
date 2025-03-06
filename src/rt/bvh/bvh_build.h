@@ -669,6 +669,7 @@ BVHNode<N> BVHBuilder<N, BuildFunctions>::BuildCompressedBVH(BuildSettings setti
     }
 }
 
+#if 0
 template <i32 N, typename BuildFunctions>
 void BVHBuilder<N, BuildFunctions>::BuildCurveBVH(const BuildSettings &settings,
                                                   Record &record, bool parallel)
@@ -840,6 +841,7 @@ void BVHBuilder<N, BuildFunctions>::BuildCurveBVH(const BuildSettings &settings,
     }
     basePtr = BVHNode<N>::EncodeQuantizedCompressedNode((NodeType *)allocPtr);
 }
+#endif
 
 /////////////////////////////////////////////////////////////////////
 

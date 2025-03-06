@@ -317,5 +317,9 @@ inline void EndWMutex(Mutex *mutex)
     b32 result   = mutex->count.compare_exchange_strong(expected, 0);
     Assert(result);
 }
+
+#define DeferLoop(begin, end) for (int _i_ = ((begin), 0); !_i_; _i_ += 1, (end))
+#define MutexScope(mutex)     DeferLoop(BeginMutex(mutex), EndMutex(mutex))
+
 } // namespace rt
 #endif

@@ -1094,7 +1094,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                         mesh.numIndices = 0;
                     }
 
-                    shapes.AddBack() = CopyMesh(&buffer, arena, mesh);
+                    shapes.AddBack() = CopyMesh(&parse, arena, mesh);
                     AddMaterialAndLights(mesh);
 
                     threadMemoryStatistics[threadIndex].totalShapeMemory +=
@@ -1108,7 +1108,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     Mesh mesh;
                     AddMesh(mesh, 3);
 
-                    shapes.AddBack() = CopyMesh(&buffer, arena, mesh);
+                    shapes.AddBack() = CopyMesh(&parse, arena, mesh);
                     AddMaterialAndLights(mesh);
 
                     threadMemoryStatistics[threadIndex].totalShapeMemory +=
@@ -1122,7 +1122,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     Mesh mesh;
                     AddMesh(mesh, 4);
 
-                    shapes.AddBack() = CopyMesh(&buffer, tempArena, mesh);
+                    shapes.AddBack() = CopyMesh(&parse, tempArena, mesh);
                     AddMaterialAndLights(mesh);
                 }
                 else
@@ -1143,7 +1143,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
             {
                 scene->primitives = PushArrayNoZero(tempArena, Mesh, shapes.totalCount);
             }
-            shapes.Flatten((Mesh *)scene->primitives);
+            shapes.Flatten((MeshType *)scene->primitives);
 
             if (lights.totalCount)
             {
@@ -1241,20 +1241,6 @@ void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromC
                 scene->tessellationParams, (Mesh *)scene->primitives, scene->numPrimitives);
             BuildCatClarkBVH(arenas, scene);
         }
-        break;
-        default: Assert(0);
-    }
-}
-
-// GPU build
-void BuildSceneBVHs(ScenePrimitives *scene)
-{
-    switch (scene->geometryType)
-    {
-        case GeometryType::TriangleMesh:
-        {
-            device->BuildBVH();
-        };
         break;
         default: Assert(0);
     }
