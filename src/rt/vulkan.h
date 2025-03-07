@@ -2,8 +2,10 @@
 #define RT_VULKAN_H
 
 #include "bvh/bvh_types.h"
-#define VK_USE_PLATFORM_WIN32_KHR
+
 #define VK_NO_PROTOTYPES
+
+#include "../third_party/vulkan/vulkan/vulkan.h"
 #include "../third_party/vulkan/volk.h"
 
 #define VMA_IMPLEMENTATION

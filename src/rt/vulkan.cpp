@@ -1,6 +1,5 @@
 #include "vulkan.h"
 #include "bvh/bvh_types.h"
-#include "../third_party/vulkan/vulkan/volk.c"
 
 namespace rt
 {

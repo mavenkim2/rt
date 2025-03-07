@@ -16,11 +16,6 @@ endif()
 
 # Windows specific
 if (CMAKE_SYSTEM_NAME STREQUAL Windows)
-    # if (CMAKE_BUILD_TYPE MATCHES "Debug")
-    #     set (CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLLDebug)
-    # else()
-    #     set (CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
-    # endif()
     list (APPEND RT_DEFINITIONS "WIN32_LEAN_AND_MEAN")
     set (deps "ws2_32")
 else()
@@ -109,6 +104,7 @@ endif ()
 
 if (CMAKE_SYSTEM_NAME STREQUAL Windows)
     list (APPEND RT_DEFINITIONS "NOMINMAX")
+    list (APPEND RT_DEFINITIONS "VK_USE_PLATFORM_WIN32_KHR")
 else()
     message (SEND_ERROR "Windows only supported")
 endif()
@@ -170,6 +166,7 @@ endif()
 add_executable(rt_exe 
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/rt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/gen/rgbspectrum_srgb.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/vulkan/volk.c
 )
 target_compile_definitions(rt_exe PRIVATE ${RT_DEFINITIONS})
 target_include_directories(rt_exe PRIVATE 
@@ -177,6 +174,7 @@ target_include_directories(rt_exe PRIVATE
     ${PTEX_INCLUDE}
     ${OPENSUBDIV_INCLUDE_DIR}
     ${NANOVDB_INCLUDE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/vulkan
 )
 
 target_compile_options(rt_exe PRIVATE ${RT_CXX_FLAGS})
