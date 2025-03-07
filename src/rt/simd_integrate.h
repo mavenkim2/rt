@@ -1,5 +1,12 @@
 #ifndef SIMD_INTEGRATE_H
 #define SIMD_INTEGRATE_H
+
+#include "base.h"
+#include "containers.h"
+#include "integrate.h"
+#include "memory.h"
+#include "parallel.h"
+
 namespace rt
 {
 struct SortKey
@@ -144,10 +151,21 @@ template <typename MaterialType>
 void ShadingQueueHandler(TempArena inScratch, struct ShadingThreadState *state,
                          ShadingHandle *values, u32 count, Material *m);
 
-ShadingThreadState *GetShadingThreadState() { return &shadingThreadState_[GetThreadIndex()]; }
-ShadingThreadState *GetShadingThreadState(u32 index) { return &shadingThreadState_[index]; }
-ShadingGlobals *GetShadingGlobals() { return shadingGlobals_; }
-ShadingQueue *GetShadingQueue(u32 index) { return &shadingGlobals_->shadingQueues[index]; }
+inline ShadingThreadState *GetShadingThreadState()
+{
+    return &shadingThreadState_[GetThreadIndex()];
+}
+inline ShadingThreadState *GetShadingThreadState(u32 index)
+{
+    return &shadingThreadState_[index];
+}
+inline ShadingGlobals *GetShadingGlobals() { return shadingGlobals_; }
+inline ShadingQueue *GetShadingQueue(u32 index)
+{
+    return &shadingGlobals_->shadingQueues[index];
+}
+QUEUE_HANDLER(RayIntersectionHandler);
+void RenderSIMD(Arena **arenas, Arena *arena, RenderParams2 &params);
 
 } // namespace rt
 #endif

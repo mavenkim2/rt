@@ -1,6 +1,7 @@
 #ifndef HANDLES_H
 #define HANDLES_H
 #include "template.h"
+#include "string.h"
 namespace rt
 {
 
@@ -22,7 +23,7 @@ enum class GeometryType
     Max,
 };
 
-string ConvertGeometryTypeToString(GeometryType type)
+inline string ConvertGeometryTypeToString(GeometryType type)
 {
     switch (type)
     {

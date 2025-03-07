@@ -1,14 +1,16 @@
 #ifndef RT_VULKAN_H
 #define RT_VULKAN_H
 
+#include <functional>
+
 #include "bvh/bvh_types.h"
+#include "containers.h"
 
 #define VK_NO_PROTOTYPES
 
 #include "../third_party/vulkan/vulkan/vulkan.h"
 #include "../third_party/vulkan/volk.h"
 
-#define VMA_IMPLEMENTATION
 #define VMA_STATIC_VULKAN_FUNCTIONS  0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
 #include "../third_party/vulkan/vk_mem_alloc.h"

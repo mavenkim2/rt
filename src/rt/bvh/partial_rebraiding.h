@@ -1,5 +1,8 @@
 #ifndef PARTIAL_REBRAID_H
 #define PARTIAL_REBRAID_H
+
+#include "bvh_types.h"
+
 namespace rt
 {
 

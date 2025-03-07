@@ -1,5 +1,9 @@
 #ifndef MATX_H
 #define MATX_H
+
+#include "bounds.h"
+#include "vec4.h"
+
 namespace rt
 {
 //////////////////////////////
@@ -282,7 +286,7 @@ inline Mat4 Translate(const Vec3f &value)
     return m;
 }
 
-Vec4f Transform(const Mat4 &a, const Vec4f &b)
+inline Vec4f Transform(const Mat4 &a, const Vec4f &b)
 {
     Vec4f result;
 #ifdef __SSE2__
@@ -314,7 +318,7 @@ Vec4f Transform(const Mat4 &a, const Vec4f &b)
 #endif
 }
 
-Vec3f Mul(const Mat4 &a, const Vec3f &b)
+inline Vec3f Mul(const Mat4 &a, const Vec3f &b)
 {
     Vec4f vec(b.x, b.y, b.z, 1);
     Vec4f result = Transform(a, vec);
@@ -355,7 +359,7 @@ inline Mat4 Mul(const Mat4 &a, const Mat4 &b)
     return result;
 }
 
-Mat4 operator*(const Mat4 &a, const Mat4 &b)
+inline Mat4 operator*(const Mat4 &a, const Mat4 &b)
 {
     Mat4 result = Mul(a, b);
     return result;
@@ -823,7 +827,7 @@ __forceinline AffineSpace Inverse(const AffineSpace &a)
     return AffineSpace(result, -translation);
 }
 
-void ExtractPlanes(Vec4f *planes, const Mat4 &NDCFromRender)
+inline void ExtractPlanes(Vec4f *planes, const Mat4 &NDCFromRender)
 {
     Vec4f row0 = NDCFromRender.GetRow(0);
     Vec4f row1 = NDCFromRender.GetRow(1);

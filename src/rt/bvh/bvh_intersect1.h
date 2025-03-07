@@ -388,7 +388,7 @@ struct BVHTraverser<8, types, Prim>
             const u32 nodeMask = mask0 | (mask1 << 8) | (mask2 << 16) | (mask3 << 24);
 
             // TODO: revisit this, see if there's anything faster
-            // NOTE: in avx 512, this can be replaced with: 
+            // NOTE: in avx 512, this can be replaced with:
             // _mm256_popcnt_epi32
             u32 indexA = PopCount(~nodeMask & 0x000100ed);
             u32 indexB = PopCount((nodeMask ^ 0x002c2c00) & 0x002c2d00);
@@ -612,7 +612,7 @@ struct TriangleIntersection
     TriangleIntersection() {}
 };
 
-Vec4f BsplineBasis(f32 u)
+inline Vec4f BsplineBasis(f32 u)
 {
     f32 u2 = u * u;
     f32 u3 = u2 * u;
@@ -621,14 +621,14 @@ Vec4f BsplineBasis(f32 u)
                  1.f / 6.f * (-3 * u3 + 3 * u2 + 3 * u + 1), 1.f / 6.f * u3);
 }
 
-Vec4f BsplineDerivativeBasis(f32 u)
+inline Vec4f BsplineDerivativeBasis(f32 u)
 {
     f32 u2 = u * u;
     return Vec4f(1.f / 6.f * (-3.f * u2 + 6.f * u - 3.f), 1.f / 6.f * (9.f * u2 - 12.f * u),
                  1.f / 6.f * (-9.f * u2 + 6.f * u + 3.f), 0.5f * u2);
 }
 
-f32 CalculateCurvature(const Vec3f &dpdu, const Vec3f &dpdv, const Vec3f &dndu,
+inline f32 CalculateCurvature(const Vec3f &dpdu, const Vec3f &dpdv, const Vec3f &dndu,
                        const Vec3f &dndv)
 {
     f32 E = Dot(dpdu, dpdu);
@@ -644,9 +644,9 @@ f32 CalculateCurvature(const Vec3f &dpdu, const Vec3f &dpdv, const Vec3f &dndu,
 }
 
 template <i32 N>
-static Mask<LaneF32<N>> TriangleIntersect(const TravRay<N> &ray, const LaneF32<N> &tFar,
-                                          const Vec3lf<N> &v0, const Vec3lf<N> &v1,
-                                          const Vec3lf<N> &v2, TriangleIntersection<N> &itr)
+Mask<LaneF32<N>> TriangleIntersect(const TravRay<N> &ray, const LaneF32<N> &tFar,
+                                   const Vec3lf<N> &v0, const Vec3lf<N> &v1,
+                                   const Vec3lf<N> &v2, TriangleIntersection<N> &itr)
 {
     Vec3lf<N> o  = ray.o;
     Vec3lf<N> d  = ray.d;
@@ -716,11 +716,10 @@ static Mask<LaneF32<N>> TriangleIntersect(const TravRay<N> &ray, const LaneF32<N
     return mask;
 }
 
-static bool SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
-                                                       const u32 geomID, const u32 primID,
-                                                       const u32 ids[3], f32 u, f32 v, f32 w,
-                                                       SurfaceInteraction &si,
-                                                       bool isSecondTri = false)
+inline bool SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene, const u32 geomID,
+                                                const u32 primID, const u32 ids[3], f32 u,
+                                                f32 v, f32 w, SurfaceInteraction &si,
+                                                bool isSecondTri = false)
 {
     Mesh *mesh                      = (Mesh *)scene->primitives + geomID;
     const PrimitiveIndices *indices = scene->primIndices + geomID;

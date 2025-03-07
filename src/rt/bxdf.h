@@ -3,6 +3,7 @@
 
 #include "base.h"
 #include "spectrum.h"
+#include "sampling.h"
 #include <cmath>
 namespace rt
 {
@@ -14,7 +15,7 @@ inline Vec3f Reflect(const Vec3f &v, const Vec3f &norm)
 }
 
 // NOTE: wi and wt point away from the surface point
-MaskF32 Refract(Vec3lfn wi, Vec3lfn n, LaneNF32 eta, LaneNF32 *etap = 0, Vec3lfn *wt = 0)
+inline MaskF32 Refract(Vec3lfn wi, Vec3lfn n, LaneNF32 eta, LaneNF32 *etap = 0, Vec3lfn *wt = 0)
 {
     LaneNF32 cosTheta_i = Dot(wi, n);
 
@@ -42,7 +43,7 @@ MaskF32 Refract(Vec3lfn wi, Vec3lfn n, LaneNF32 eta, LaneNF32 *etap = 0, Vec3lfn
     return mask;
 }
 
-LaneNF32 FrDielectric(LaneNF32 cosTheta_i, LaneNF32 eta)
+inline LaneNF32 FrDielectric(LaneNF32 cosTheta_i, LaneNF32 eta)
 {
     cosTheta_i           = Clamp(cosTheta_i, -1.f, 1.f);
     MaskF32 mask         = cosTheta_i < 0;
@@ -59,7 +60,7 @@ LaneNF32 FrDielectric(LaneNF32 cosTheta_i, LaneNF32 eta)
 
 // Conductors have refractive index with imaginary component: eta - ik, where k is the
 // absoroption coefficient
-LaneNF32 FrComplex(LaneNF32 cosTheta_i, const Complex<LaneNF32> &eta)
+inline LaneNF32 FrComplex(LaneNF32 cosTheta_i, const Complex<LaneNF32> &eta)
 {
     cosTheta_i           = Clamp(cosTheta_i, 0.f, 1.f);
     LaneNF32 sin2Theta_i = Max(0.f, 1 - cosTheta_i * cosTheta_i);
@@ -71,7 +72,7 @@ LaneNF32 FrComplex(LaneNF32 cosTheta_i, const Complex<LaneNF32> &eta)
     return Fr;
 }
 
-SampledSpectrumN FrComplex(LaneNF32 cosTheta_i, SampledSpectrumN eta, SampledSpectrumN k)
+inline SampledSpectrumN FrComplex(LaneNF32 cosTheta_i, SampledSpectrumN eta, SampledSpectrumN k)
 {
     SampledSpectrumN result;
     for (i32 i = 0; i < NSampledWavelengths; ++i)
@@ -81,35 +82,30 @@ SampledSpectrumN FrComplex(LaneNF32 cosTheta_i, SampledSpectrumN eta, SampledSpe
 
 // NOTE: BSDF calculations operate in the frame where the geometric normal is the z axis. Thus,
 // the angle between the surface normal and a vector in that frame is just the z component.
-LaneNF32 CosTheta(Vec3lfn w) { return w.z; }
+inline LaneNF32 CosTheta(Vec3lfn w) { return w.z; }
 
-LaneNF32 Cos2Theta(Vec3lfn w) { return w.z * w.z; }
+inline LaneNF32 Cos2Theta(Vec3lfn w) { return w.z * w.z; }
 
-LaneNF32 AbsCosTheta(Vec3lfn w) { return Abs(w.z); }
-
-LaneNF32 Sin2Theta(Vec3lfn w) { return Max(0.f, 1 - Cos2Theta(w)); }
-
-LaneNF32 SinTheta(Vec3lfn w) { return Sqrt(Sin2Theta(w)); }
-
-LaneNF32 TanTheta(Vec3lfn w) { return SinTheta(w) / CosTheta(w); }
-
-LaneNF32 Tan2Theta(Vec3lfn w) { return Sin2Theta(w) / Cos2Theta(w); }
-
-LaneNF32 CosPhi(Vec3lfn w)
+inline LaneNF32 AbsCosTheta(Vec3lfn w) { return Abs(w.z); }
+inline LaneNF32 Sin2Theta(Vec3lfn w) { return Max(0.f, 1 - Cos2Theta(w)); }
+inline LaneNF32 SinTheta(Vec3lfn w) { return Sqrt(Sin2Theta(w)); }
+inline LaneNF32 TanTheta(Vec3lfn w) { return SinTheta(w) / CosTheta(w); }
+inline LaneNF32 Tan2Theta(Vec3lfn w) { return Sin2Theta(w) / Cos2Theta(w); }
+inline LaneNF32 CosPhi(Vec3lfn w)
 {
     LaneNF32 sinTheta = SinTheta(w);
     return Select(sinTheta == 0, 1, Clamp(w.x / sinTheta, -1.f, 1.f));
 }
 
-LaneNF32 SinPhi(Vec3lfn w)
+inline LaneNF32 SinPhi(Vec3lfn w)
 {
     LaneNF32 sinTheta = SinTheta(w);
     return Select(sinTheta == 0, 0, Clamp(w.y / sinTheta, -1.f, 1.f));
 }
 
-MaskF32 SameHemisphere(Vec3lfn w, Vec3lfn wp) { return w.z * wp.z > 0; }
+inline MaskF32 SameHemisphere(Vec3lfn w, Vec3lfn wp) { return w.z * wp.z > 0; }
 
-Vec3lfn FaceForward(Vec3lfn n, Vec3lfn v) { return Select(Dot(n, v) < 0.f, -n, n); }
+inline Vec3lfn FaceForward(Vec3lfn n, Vec3lfn v) { return Select(Dot(n, v) < 0.f, -n, n); }
 
 struct TrowbridgeReitzDistribution
 {
@@ -262,24 +258,36 @@ enum class TransportMode
     Radiance   = 1,
 };
 
+struct BxDF
+{
+    virtual SampledSpectrumBase<LaneNF32> EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi,
+                                                         LaneNF32 &pdf,
+                                                         TransportMode mode) const = 0;
+    virtual BSDFSample GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u,
+                                      TransportMode mode, BxDFFlags inFlags) const = 0;
+    virtual f32 PDF(const Vec3f &wo, const Vec3f &wi, TransportMode mode,
+                    BxDFFlags sampleFlags = BxDFFlags::RT) const                   = 0;
+    virtual LaneNU32 Flags() const                                                 = 0;
+};
+
 // Lambertian model, light is scattered in all directions equally
-struct DiffuseBxDF
+struct DiffuseBxDF : BxDF
 {
     SampledSpectrumN R;
     DiffuseBxDF() = default;
     DiffuseBxDF(const SampledSpectrumN &R) : R(R) {}
 
-    SampledSpectrumN EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf,
-                                    TransportMode mode) const
+    virtual SampledSpectrumN EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi,
+                                            LaneNF32 &pdf, TransportMode mode) const override
     {
         MaskF32 mask = SameHemisphere(wo, wi);
         pdf          = Select(mask, CosineHemispherePDF(AbsCosTheta(wi)), 0.f);
         return Select(mask, R * InvPi, SampledSpectrumN(0.f));
     }
 
-    BSDFSample GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u,
-                              TransportMode mode    = TransportMode::Radiance,
-                              BxDFFlags sampleFlags = BxDFFlags::RT) const
+    virtual BSDFSample GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u,
+                                      TransportMode mode    = TransportMode::Radiance,
+                                      BxDFFlags sampleFlags = BxDFFlags::RT) const override
     {
         if (!EnumHasAnyFlags(sampleFlags, BxDFFlags::Reflection)) return {};
         Vec3lfn wi   = SampleCosineHemisphere(u);
@@ -287,22 +295,22 @@ struct DiffuseBxDF
         LaneNF32 pdf = CosineHemispherePDF(AbsCosTheta(wi));
         return BSDFSample(R * InvPi, wi, pdf, LaneNU32(u32(BxDFFlags::DiffuseReflection)));
     }
-    LaneNF32 PDF(const Vec3lfn &wo, const Vec3lfn &wi, TransportMode mode,
-                 BxDFFlags sampleFlags = BxDFFlags::RT) const
+    virtual f32 PDF(const Vec3f &wo, const Vec3f &wi, TransportMode mode,
+                    BxDFFlags sampleFlags = BxDFFlags::RT) const override
     {
         if (!EnumHasAnyFlags(sampleFlags, BxDFFlags::Reflection) || !SameHemisphere(wo, wi))
             return 0.f;
         return CosineHemispherePDF(AbsCosTheta(wi));
     }
 
-    LaneNU32 Flags() const
+    virtual LaneNU32 Flags() const override
     {
         return Select(MaskF32(R), LaneNU32(u32(BxDFFlags::DiffuseReflection)),
                       LaneNU32(u32(BxDFFlags::Unset)));
     }
 };
 
-struct DiffuseTransmissionBxDF
+struct DiffuseTransmissionBxDF : BxDF
 {
     SampledSpectrumN R, T;
     DiffuseTransmissionBxDF() = default;
@@ -310,8 +318,8 @@ struct DiffuseTransmissionBxDF
     {
     }
 
-    SampledSpectrumN EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf,
-                                    TransportMode mode) const
+    virtual SampledSpectrumN EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi,
+                                            LaneNF32 &pdf, TransportMode mode) const override
     {
         MaskF32 reflectMask = SameHemisphere(wo, wi);
         LaneNF32 pr         = R.MaxComponentValue();
@@ -320,9 +328,9 @@ struct DiffuseTransmissionBxDF
         return Select(reflectMask, R, T) * InvPi;
     }
 
-    BSDFSample GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u,
-                              TransportMode mode    = TransportMode::Radiance,
-                              BxDFFlags sampleFlags = BxDFFlags::RT) const
+    virtual BSDFSample GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u,
+                                      TransportMode mode    = TransportMode::Radiance,
+                                      BxDFFlags sampleFlags = BxDFFlags::RT) const override
     {
         if (!EnumHasAnyFlags(sampleFlags, BxDFFlags::Reflection)) return {};
         LaneNF32 pr = R.MaxComponentValue();
@@ -338,7 +346,13 @@ struct DiffuseTransmissionBxDF
                           Select(reflectMask, LaneNU32(u32(BxDFFlags::DiffuseReflection)),
                                  LaneNU32(u32(BxDFFlags::DiffuseTransmission))));
     }
-    LaneNU32 Flags() const
+    virtual f32 PDF(const Vec3f &wo, const Vec3f &wi, TransportMode mode,
+                    BxDFFlags sampleFlags = BxDFFlags::RT) const override
+    {
+        Assert(0);
+        return 0.f;
+    }
+    virtual LaneNU32 Flags() const override
     {
         return Select(MaskF32(R), LaneNU32(u32(BxDFFlags::DiffuseReflection)),
                       LaneNU32(u32(BxDFFlags::Unset))) |
@@ -347,7 +361,7 @@ struct DiffuseTransmissionBxDF
     }
 };
 
-struct ConductorBxDF
+struct ConductorBxDF : BxDF
 {
     ConductorBxDF() = delete;
     ConductorBxDF(const TrowbridgeReitzDistribution &mfDistrib, const SampledSpectrumN &eta,
@@ -358,8 +372,8 @@ struct ConductorBxDF
     TrowbridgeReitzDistribution mfDistrib;
     SampledSpectrumN eta, k;
 
-    SampledSpectrumN EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf,
-                                    TransportMode mode) const
+    virtual SampledSpectrumN EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi,
+                                            LaneNF32 &pdf, TransportMode mode) const override
     {
         MaskF32 mask = SameHemisphere(wo, wi);
         mask &= mfDistrib.EffectivelySmooth();
@@ -380,8 +394,8 @@ struct ConductorBxDF
         pdf = Select(mask, mfDistrib.PDF(wo, wm) / (4 * AbsDot(wo, wm)), 0.f);
         return f;
     }
-    BSDFSample GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u,
-                              TransportMode mode, BxDFFlags sampleFlags) const
+    virtual BSDFSample GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u,
+                                      TransportMode mode, BxDFFlags sampleFlags) const override
     {
         if (!EnumHasAnyFlags(sampleFlags, BxDFFlags::Reflection)) return {};
 
@@ -419,7 +433,8 @@ struct ConductorBxDF
                                 LaneNU32(u32(BxDFFlags::GlossyReflection)));
         return BSDFSample(f, wi, pdf, flags);
     }
-    f32 PDF(const Vec3f &wo, const Vec3f &wi, TransportMode mode, BxDFFlags sampleFlags) const
+    virtual f32 PDF(const Vec3f &wo, const Vec3f &wi, TransportMode mode,
+                    BxDFFlags sampleFlags) const override
     {
         if (!(sampleFlags & BxDFFlags::Reflection)) return 0;
         if (!SameHemisphere(wo, wi)) return 0;
@@ -431,7 +446,7 @@ struct ConductorBxDF
         return mfDistrib.PDF(wo, wm) / (4 * AbsDot(wo, wm));
     }
 
-    LaneNU32 Flags() const
+    virtual LaneNU32 Flags() const override
     {
         return Select(mfDistrib.EffectivelySmooth(),
                       LaneNU32(u32(BxDFFlags::SpecularReflection)),
@@ -439,7 +454,7 @@ struct ConductorBxDF
     }
 };
 
-struct DielectricBxDF
+struct DielectricBxDF : BxDF
 {
     TrowbridgeReitzDistribution mfDistrib;
     // NOTE: spectrally varying IORs are handled by randomly sampling a single wavelength
@@ -451,10 +466,9 @@ struct DielectricBxDF
     {
     }
 
-    // TODO: simd this
-    BSDFSample GenerateSample(const Vec3f &wo, const f32 &uc, const Vec2f &u,
-                              TransportMode mode    = TransportMode::Radiance,
-                              BxDFFlags sampleFlags = BxDFFlags::RT) const
+    virtual BSDFSample GenerateSample(const Vec3f &wo, const f32 &uc, const Vec2f &u,
+                                      TransportMode mode    = TransportMode::Radiance,
+                                      BxDFFlags sampleFlags = BxDFFlags::RT) const override
     {
         if (eta == 1 || mfDistrib.EffectivelySmooth())
         {
@@ -541,8 +555,8 @@ struct DielectricBxDF
         }
     }
 
-    SampledSpectrum EvaluateSample(const Vec3f &wo, const Vec3f &wi, f32 &pdf,
-                                   TransportMode mode) const
+    virtual SampledSpectrum EvaluateSample(const Vec3f &wo, const Vec3f &wi, f32 &pdf,
+                                           TransportMode mode) const override
     {
         if (eta == 1 || mfDistrib.EffectivelySmooth()) return SampledSpectrum(0.f);
         // Evaluate rough dielectric BSDF
@@ -583,14 +597,14 @@ struct DielectricBxDF
             return SampledSpectrum(ft);
         }
     }
-    LaneNU32 Flags() const
+    virtual LaneNU32 Flags() const override
     {
         LaneNU32 flags = Select(eta == 1.f, u32(BxDFFlags::Transmission), u32(BxDFFlags::RT));
         return flags | Select(mfDistrib.EffectivelySmooth(), u32(BxDFFlags::Specular),
                               u32(BxDFFlags::Glossy));
     }
-    f32 PDF(Vec3f wo, Vec3f wi, TransportMode mode,
-            BxDFFlags sampleFlags = BxDFFlags::RT) const
+    virtual f32 PDF(const Vec3f &wo, const Vec3f &wi, TransportMode mode,
+                    BxDFFlags sampleFlags = BxDFFlags::RT) const override
     {
         if (eta == 1 || mfDistrib.EffectivelySmooth()) return 0;
         // Evaluate sampling PDF of rough dielectric BSDF
@@ -634,56 +648,7 @@ struct DielectricBxDF
     }
 };
 
-// NOTE: only models perfect specular scattering
-// struct ThinDielectricBxDF
-// {
-//     ThinDielectricBxDF() = default;
-//     ThinDielectricBxDF(LaneNF32 eta) : eta(eta) {}
-//     SampledSpectrumN EvaluateSample(Vec3lfn wo, Vec3lfn wi, LaneNF32 &pdf, TransportMode
-//     mode) const
-//     {
-//         pdf = 0.f;
-//         return SampledSpectrumN(0.f);
-//     }
-//     BSDFSample GenerateSample(Vec3lfn wo, LaneNF32 uc, Vec2lfn u, TransportMode mode,
-//     BxDFFlags sampleFlags) const
-//     {
-//         LaneNF32 R = FrDielectric(AbsCosTheta(wo), eta);
-//         LaneNF32 T = 1 - R;
-//         if (R < 1)
-//         {
-//             R += Sqr(T) * R / (1 - Sqr(R));
-//             T = 1 - R;
-//         }
-//         LaneNF32 pr = R;
-//         LaneNF32 pt = T;
-//         if (!EnumHasAnyFlags(sampleFlags, BxDFFlags::Reflection)) pr = 0.f;
-//         if (!EnumHasAnyFlags(sampleFlags, BxDFFlags::Transmission)) pt = 0.f;
-//         if (pr == 0.f && pt == 0.f) return {};
-//         // TODO: this is the same as in the dielectric case. Compress?
-//         if (uc < pr / (pr + pt))
-//         {
-//             Vec3lfn wi(-wo.x, -wo.y, wo.z);
-//             SampledSpectrumN fr(R / AbsCosTheta(wi));
-//             return BSDFSample(fr, wi, pr / (pr + pt), BxDFFlags::SpecularReflection);
-//         }
-//         Vec3lfn wi = -wo;
-//         SampledSpectrumN ft(T / AbsCosTheta(wi));
-//         return BSDFSample(ft, wi, pt / (pr + pt), BxDFFlags::SpecularTransmission);
-//     }
-//     LaneNF32 PDF(Vec3lfn wo, Vec3lfn wi, TransportMode mode, BxDFFlags sampleFlags) const
-//     {
-//         return 0.f;
-//     }
-//     BxDFFlags Flags() const
-//     {
-//         return BxDFFlags::Reflection | BxDFFlags::Transmission | BxDFFlags::Specular;
-//     }
-//
-//     LaneNF32 eta;
-// };
-
-f32 SampleExponential(f32 u, f32 a) { return -std::log(1 - u) / a; }
+inline f32 SampleExponential(f32 u, f32 a) { return -std::log(1 - u) / a; }
 
 template <typename TopBxDF, typename BottomBxDF>
 class TopOrBottomBxDF
@@ -736,7 +701,7 @@ private:
 };
 
 template <typename TopBxDF, typename BottomBxDF>
-struct CoatedBxDF
+struct CoatedBxDF : BxDF
 {
     TopBxDF top;
     BottomBxDF bot;
@@ -750,9 +715,10 @@ struct CoatedBxDF
           nSamples(nSamples)
     {
     }
-    BSDFSample GenerateSample(const Vec3lfn &wOut, const LaneNF32 &uc, const Vec2lfn &u,
-                              TransportMode mode    = TransportMode::Radiance,
-                              BxDFFlags sampleFlags = BxDFFlags::RT) const
+    virtual BSDFSample GenerateSample(const Vec3lfn &wOut, const LaneNF32 &uc,
+                                      const Vec2lfn &u,
+                                      TransportMode mode    = TransportMode::Radiance,
+                                      BxDFFlags sampleFlags = BxDFFlags::RT) const override
     {
         // NOTE: assumes two sided, meaning that it always first intersects the top layer
         bool flipWi = false;
@@ -851,8 +817,8 @@ struct CoatedBxDF
         return {};
     }
 
-    SampledSpectrum EvaluateSample(const Vec3f &wOut, const Vec3f &wIn, f32 &outPdf,
-                                   TransportMode mode) const
+    virtual SampledSpectrum EvaluateSample(const Vec3f &wOut, const Vec3f &wIn, f32 &outPdf,
+                                           TransportMode mode) const override
     {
         Vec3f wo = wOut;
         Vec3f wi = wIn;
@@ -1029,10 +995,12 @@ struct CoatedBxDF
         return f / f32(nSamples);
     }
 
-    f32 PDF(Vec3f wo, Vec3f wi, TransportMode mode,
-            BxDFFlags sampleFlags = BxDFFlags::RT) const
+    virtual f32 PDF(const Vec3f &wOut, const Vec3f &wIn, TransportMode mode,
+                    BxDFFlags sampleFlags = BxDFFlags::RT) const override
     {
         // Set _wo_ and _wi_ for layered BSDF evaluation
+        Vec3f wo = wOut;
+        Vec3f wi = wIn;
         if (wo.z < 0)
         {
             wo = -wo;
@@ -1116,7 +1084,7 @@ struct CoatedBxDF
         return FastExp(-Abs(dz / w.z));
     }
 
-    LaneNU32 Flags() const
+    virtual LaneNU32 Flags() const override
     {
         BxDFFlags topFlags = BxDFFlags(top.Flags()), bottomFlags = BxDFFlags(bot.Flags());
 
@@ -1135,19 +1103,22 @@ struct CoatedBxDF
     }
 };
 
+typedef CoatedBxDF<DielectricBxDF, DiffuseBxDF> CoatedDiffuseBxDF;
+typedef CoatedBxDF<DielectricBxDF, ConductorBxDF> CoatedConductorBxDF;
+
 #define SQRT_2     1.41421356237309504880f /* sqrt(2) */
 #define INV_SQRT_2 0.7071067811865475244f  /* 1/sqrt(2) */
 // https://drive.google.com/file/d/0BzvWIdpUpRx_cFVlUkFhWXdleEU/view?resourcekey=0-DUQ5GMyc-cvSNBKFCA3LlQ
 
 // https://jcgt.org/published/0003/02/03/paper.pdf
-f32 GTR2Aniso(const Vec3f &wm, f32 alphaX, f32 alphaY)
+inline f32 GTR2Aniso(const Vec3f &wm, f32 alphaX, f32 alphaY)
 {
     return 1.f /
            (PI * alphaX * alphaY * (Sqr(wm.x / alphaX) + Sqr(wm.y / alphaY) + Sqr(wm.z)));
 }
 
 // Smith GGX masking function
-f32 G1_GGX(const Vec3f &w, f32 alphaX, f32 alphaY)
+inline f32 G1_GGX(const Vec3f &w, f32 alphaX, f32 alphaY)
 {
     LaneNF32 tanTheta = TanTheta(w);
     LaneNF32 alpha    = (Sqr(CosPhi(w) * alphaX) + Sqr(SinPhi(w) * alphaY)) * tanTheta;
@@ -1156,7 +1127,7 @@ f32 G1_GGX(const Vec3f &w, f32 alphaX, f32 alphaY)
     return 1 / (1 + lambda);
 }
 
-f32 GGXD_wi(Vec3f wo, Vec3f wm, f32 alphaX, f32 alphaY)
+inline f32 GGXD_wi(Vec3f wo, Vec3f wm, f32 alphaX, f32 alphaY)
 {
     f32 NdotV = CosTheta(wo);
     // NOTE: G1(wo) / AbsCosTheta(wo)
@@ -1169,26 +1140,26 @@ f32 GGXD_wi(Vec3f wo, Vec3f wm, f32 alphaX, f32 alphaY)
            AbsCosTheta(wo);
 }
 
-f32 SchlickWeight(f32 cosValue)
+inline f32 SchlickWeight(f32 cosValue)
 {
     f32 c = Clamp(1.f - cosValue, 0.f, 1.f);
     return (c * c) * (c * c) * c;
 }
 
-f32 FrSchlick(f32 f0, f32 cosH, f32 etaP, f32 invEtaP)
+inline f32 FrSchlick(f32 f0, f32 cosH, f32 etaP, f32 invEtaP)
 {
     f32 cosTheta2_t = (1 - (1 - Sqr(cosH)) * Sqr(invEtaP));
     return Select(etaP > 1.f, Lerp(f0, SchlickWeight(cosH), 1.f),
                   Lerp(f0, SchlickWeight(SafeSqrt(cosTheta2_t)), 1.f));
 }
 
-f32 GTR1(f32 cosH, f32 a)
+inline f32 GTR1(f32 cosH, f32 a)
 {
     f32 a2 = a * a;
     return (a2 - 1) / (PI * Log(a2) * (1 + (a2 - 1) * cosH * cosH));
 }
 
-Vec3f SampleGTR1(f32 a, const Vec2f &u)
+inline Vec3f SampleGTR1(f32 a, const Vec2f &u)
 {
     f32 a2     = a * a;
     f32 cosH2  = (1 - Pow(a2, 1 - u[0])) / (1 - a2);
@@ -1201,7 +1172,7 @@ Vec3f SampleGTR1(f32 a, const Vec2f &u)
     return Vec3f(cosPhi * sinH, sinPhi * sinH, cosH);
 }
 
-f32 SmithG(const Vec3f &v, const Vec3f &wm, f32 a)
+inline f32 SmithG(const Vec3f &v, const Vec3f &wm, f32 a)
 {
     f32 a2        = a * a;
     f32 cosTheta  = CosTheta(wm);
@@ -1211,7 +1182,7 @@ f32 SmithG(const Vec3f &v, const Vec3f &wm, f32 a)
     return Select(Dot(v, wm) <= 0.f, 0.f, 2.f * Rcp(1.f + Sqrt(1 + a2 * tan2Theta)));
 }
 
-Vec3lfn SampleGGXVNDF(const Vec3lfn &w, const Vec2lfn &u, f32 alphaX, f32 alphaY)
+inline Vec3lfn SampleGGXVNDF(const Vec3lfn &w, const Vec2lfn &u, f32 alphaX, f32 alphaY)
 {
     Vec3lfn wh = Normalize(Vec3lfn(alphaX * w.x, alphaY * w.y, w.z));
     wh         = Select(wh.z < 0, -wh, wh);
@@ -1228,7 +1199,7 @@ Vec3lfn SampleGGXVNDF(const Vec3lfn &w, const Vec2lfn &u, f32 alphaX, f32 alphaY
     return Normalize(Vec3lfn(alphaX * nh.x, alphaY * nh.y, Max(1e-6f, nh.z)));
 }
 
-f32 SmithGAniso(const Vec3f &v, const Vec3f &wm, f32 alphaX, f32 alphaY)
+inline f32 SmithGAniso(const Vec3f &v, const Vec3f &wm, f32 alphaX, f32 alphaY)
 {
     f32 tan2Theta = (Sqr(v.x * alphaX) + Sqr(v.y * alphaY)) / Sqr(v.z);
     return Select(Dot(v, wm) <= 0.f, 0.f, 2 * Rcp(1 + Sqrt(1.f + tan2Theta)));
@@ -1253,7 +1224,7 @@ struct DisneyMaterial
     f32 diffTrans;
 };
 
-Vec3f Luminance(const Vec3f &color) { return Dot(Vec3f(.3f, .6f, 1.f), color); }
+inline Vec3f Luminance(const Vec3f &color) { return Dot(Vec3f(.3f, .6f, 1.f), color); }
 
 #if 0
 struct DisneySolidBxDF

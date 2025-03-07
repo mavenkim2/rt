@@ -1,6 +1,7 @@
 #ifndef SUBDIVISION_H
 #define SUBDIVISION_H
 #include "base.h"
+#include "containers.h"
 namespace rt
 {
 
@@ -106,16 +107,16 @@ enum class CatClarkTriangleType
 };
 static_assert((u32)CatClarkTriangleType::Max <= 4, "enum is too large\n");
 
-u32 CreatePatchID(CatClarkTriangleType type, int meta, int index)
+inline u32 CreatePatchID(CatClarkTriangleType type, int meta, int index)
 {
     Assert(index >= 0 && index < 0x0fffffff);
     Assert(meta >= 0 && meta < 4);
     return ((u32)type << 30) | (meta << 28) | index;
 }
 
-CatClarkTriangleType GetPatchType(u32 val) { return CatClarkTriangleType(val >> 30); }
-int GetTriangleIndex(u32 val) { return val & 0x0fffffff; }
-int GetMeta(u32 val) { return (val >> 28) & 0x3; }
+inline CatClarkTriangleType GetPatchType(u32 val) { return CatClarkTriangleType(val >> 30); }
+inline int GetTriangleIndex(u32 val) { return val & 0x0fffffff; }
+inline int GetMeta(u32 val) { return (val >> 28) & 0x3; }
 
 struct UVGrid
 {
@@ -292,22 +293,6 @@ struct PatchItr
     }
 };
 
-const FixedArray<int, 2> PatchItr::diff  = {1, -1};
-const FixedArray<int, 2> PatchItr::start = {0, 1};
-
-const FixedArray<Vec2f, 4> PatchItr::uvTable = {
-    Vec2f(0.f, 0.f),
-    Vec2f(1.f, 0.f),
-    Vec2f(1.f, 1.f),
-    Vec2f(0.f, 1.f),
-};
-const FixedArray<Vec2i, 4> PatchItr::uvDiffTable = {
-    Vec2i(1, 0),
-    Vec2i(0, 1),
-    Vec2i(-1, 0),
-    Vec2i(0, -1),
-};
-
 struct BVHPatch
 {
     int patchIndex;
@@ -371,6 +356,7 @@ struct OpenSubdivMesh
     u32 GetNumFaces() const { return untessellatedPatches.Length() + patches.Length(); }
 };
 
+struct ScenePrimitives;
 OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                                      const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender,
                                      int screenHeight, struct TessellationParams *params,

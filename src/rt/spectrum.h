@@ -1,7 +1,13 @@
 #ifndef SPECTRUM_H
 #define SPECTRUM_H
 
-// #include "../build/rgbspectrum_srgb.cpp"
+#include "base.h"
+#include "math/basemath.h"
+#include "math/simd_include.h"
+#include "math/vec3.h"
+#include "math/matx.h"
+#include "memory.h"
+
 namespace rt
 {
 
@@ -11,16 +17,9 @@ constexpr u32 NSampledWavelengths = 4;
 
 static constexpr f32 CIE_Y_integral = 106.856895f;
 
-namespace Spectra
-{
-const DenselySampledSpectrum &X();
-const DenselySampledSpectrum &Y();
-const DenselySampledSpectrum &Z();
-} // namespace Spectra
-
 // Compute emitted radiance of a blackbody emitter given an input temperature T and wavelength
 // lambda
-f32 Blackbody(f32 lambda, f32 T)
+inline f32 Blackbody(f32 lambda, f32 T)
 {
     if (T <= 0) return 0;
     // Speed of light
@@ -37,6 +36,10 @@ f32 Blackbody(f32 lambda, f32 T)
 
 struct Spectrum;
 struct RGBColorSpace;
+
+template <typename T>
+struct SampledWavelengthsBase;
+typedef SampledWavelengthsBase<f32> SampledWavelengths;
 
 template <typename T>
 struct SampledSpectrumBase
@@ -368,14 +371,21 @@ typedef SampledWavelengthsBase<LaneNF32> SampledWavelengthsN;
 // Spectrum Implementations
 //
 
-struct ConstantSpectrum
+struct Spectrum
+{
+    virtual f32 Evaluate(f32 lambda) const                                          = 0;
+    virtual f32 MaxValue() const                                                    = 0;
+    virtual SampledSpectrumBase<f32> Sample(const SampledWavelengths &lambda) const = 0;
+};
+
+struct ConstantSpectrum : Spectrum
 {
     ConstantSpectrum() {}
     ConstantSpectrum(f32 c) : c(c) {}
     f32 operator()(f32 lambda) const { return Evaluate(lambda); }
-    f32 Evaluate(f32 lambda) const { return c; }
-    f32 MaxValue() const { return c; }
-    SampledSpectrum Sample(const SampledWavelengths &lambda) const
+    virtual f32 Evaluate(f32 lambda) const override { return c; }
+    virtual f32 MaxValue() const override { return c; }
+    virtual SampledSpectrum Sample(const SampledWavelengths &lambda) const override
     {
         return SampledSpectrum(c);
     }
@@ -383,10 +393,10 @@ struct ConstantSpectrum
 };
 
 // Spectrum sampled at 1nm increments
-struct DenselySampledSpectrum
+struct DenselySampledSpectrum : Spectrum
 {
     DenselySampledSpectrum() = default;
-    DenselySampledSpectrum(Spectrum spec, i32 lambdaMin = (i32)LambdaMin,
+    DenselySampledSpectrum(Spectrum *spec, i32 lambdaMin = (i32)LambdaMin,
                            i32 lambdaMax = (i32)LambdaMax);
     template <typename F>
     static DenselySampledSpectrum SampleFunction(Arena *arena, F func,
@@ -400,9 +410,9 @@ struct DenselySampledSpectrum
         }
     }
     f32 operator()(f32 lambda) const;
-    f32 Evaluate(f32 lambda) const;
-    f32 MaxValue() const;
-    SampledSpectrum Sample(const SampledWavelengths &lambda) const;
+    virtual f32 Evaluate(f32 lambda) const override;
+    virtual f32 MaxValue() const override;
+    virtual SampledSpectrum Sample(const SampledWavelengths &lambda) const override;
     bool operator==(const DenselySampledSpectrum &spec) const;
 
     // f32 *values;
@@ -412,7 +422,16 @@ struct DenselySampledSpectrum
     u16 lambdaMax;
 };
 
-struct PiecewiseLinearSpectrum
+namespace Spectra
+{
+const DenselySampledSpectrum &X();
+const DenselySampledSpectrum &Y();
+const DenselySampledSpectrum &Z();
+
+void Init(Arena *arena);
+} // namespace Spectra
+
+struct PiecewiseLinearSpectrum : Spectrum
 {
     PiecewiseLinearSpectrum() = default;
     PiecewiseLinearSpectrum(f32 *lambdas, f32 *values, u32 numValues)
@@ -427,9 +446,9 @@ struct PiecewiseLinearSpectrum
         }
     }
     f32 operator()(f32 lambda) const;
-    f32 Evaluate(f32 lambda) const;
-    f32 MaxValue() const;
-    SampledSpectrum Sample(const SampledWavelengths &lambda) const;
+    virtual f32 Evaluate(f32 lambda) const override;
+    virtual f32 MaxValue() const override;
+    virtual SampledSpectrum Sample(const SampledWavelengths &lambda) const override;
     static PiecewiseLinearSpectrum *FromInterleaved(Arena *arena, const f32 *samples,
                                                     u32 numSamples, bool normalize);
 
@@ -438,7 +457,7 @@ struct PiecewiseLinearSpectrum
     u32 numValues;
 };
 
-struct BlackbodySpectrum
+struct BlackbodySpectrum : Spectrum
 {
     BlackbodySpectrum(f32 T) : T(T)
     {
@@ -446,9 +465,12 @@ struct BlackbodySpectrum
         normalizationFactor = 1.f / Blackbody(lambdaMax * 1e9f, T);
     }
     f32 operator()(f32 lambda) { return Evaluate(lambda); }
-    f32 Evaluate(f32 lambda) const { return Blackbody(lambda, T) * normalizationFactor; }
-    SampledSpectrum Sample(const SampledWavelengths &lambda);
-    f32 MaxValue() const { return 1.f; }
+    virtual f32 Evaluate(f32 lambda) const override
+    {
+        return Blackbody(lambda, T) * normalizationFactor;
+    }
+    virtual SampledSpectrum Sample(const SampledWavelengths &lambda) const override;
+    virtual f32 MaxValue() const override { return 1.f; }
 
     f32 T;
     // Using Wien's displacement law, find the wavelength where emission is maximum
@@ -489,7 +511,7 @@ struct RGBColorSpace
     static const RGBColorSpace *sRGB;
     static void Init(Arena *arena);
 
-    RGBColorSpace(Vec2f r, Vec2f g, Vec2f b, Spectrum illuminant,
+    RGBColorSpace(Vec2f r, Vec2f g, Vec2f b, Spectrum *illuminant,
                   const RGBToSpectrumTable *rgbToSpec);
     Vec3f ToRGB(Vec3f xyz) const { return Mul(XYZToRGB, xyz); }
     Vec3f ToXYZ(Vec3f rgb) const { return Mul(RGBToXYZ, rgb); }
@@ -609,20 +631,27 @@ struct RGBUnboundedSpectrum
     Vec3f coeffs;
 };
 
-struct RGBIlluminantSpectrum
+struct RGBIlluminantSpectrum : Spectrum
 {
+    RGBIlluminantSpectrum(const RGBColorSpace &cs, Vec3f rgb) : illuminant(&cs.illuminant)
+    {
+        f32 m  = Max(rgb.x, Max(rgb.y, rgb.z));
+        scale  = 2 * m;
+        coeffs = cs.ToRGBCoeffs(scale ? rgb / scale : Vec3f(0, 0, 0));
+    }
+
     f32 operator()(f32 lambda) const { return Evaluate(lambda); }
-    f32 Evaluate(f32 lambda) const
+    f32 Evaluate(f32 lambda) const override
     {
         if (!illuminant) return 0.f;
         return scale * EvaluateSpectral<1>(coeffs, lambda) * (*illuminant)(lambda);
     }
-    f32 MaxValue() const
+    f32 MaxValue() const override
     {
         if (!illuminant) return 0.f;
         return scale * SigmoidPolynomialMaxValue(coeffs) * illuminant->MaxValue();
     }
-    SampledSpectrum Sample(const SampledWavelengths &lambda) const
+    SampledSpectrum Sample(const SampledWavelengths &lambda) const override
     {
         if (!illuminant) return SampledSpectrum(0.f);
         SampledSpectrum s;
@@ -633,17 +662,14 @@ struct RGBIlluminantSpectrum
         return s * illuminant->Sample(lambda);
     }
 
-    RGBIlluminantSpectrum(const RGBColorSpace &cs, Vec3f rgb) : illuminant(&cs.illuminant)
-    {
-        f32 m  = Max(rgb.x, Max(rgb.y, rgb.z));
-        scale  = 2 * m;
-        coeffs = cs.ToRGBCoeffs(scale ? rgb / scale : Vec3f(0, 0, 0));
-    }
-
     f32 scale = 1;
     Vec3f coeffs;
     const DenselySampledSpectrum *illuminant;
 };
+
+f32 SpectrumToPhotometric(const RGBIlluminantSpectrum &s);
+f32 SpectrumToPhotometric(const DenselySampledSpectrum &s);
+
 } // namespace rt
 
 #endif

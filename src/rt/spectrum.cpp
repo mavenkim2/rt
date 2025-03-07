@@ -1,27 +1,16 @@
-#include "spectrum.h"
 #include <map>
-// #include <rgbspectrum_srgb.cpp>
+#include "algo.h"
+#include "string.h"
+#include "spectrum.h"
 namespace rt
 {
 
-// f32 SpectrumToPhotometric(Spectrum s)
-// {
-//     // We have to handle RGBIlluminantSpectrum separately here as it's composed of an
-//     // illuminant spectrum and an RGB multiplier. We only want to consider the
-//     // illuminant for the sake of this calculation, and we should consider the
-//     // RGB separately for the purposes of target power/illuminance computation
-//     // in the lights themselves (but we currently don't)
-//     if (s.Is<RGBIlluminantSpectrum>()) s = s.Cast<RGBIlluminantSpectrum>()->Illuminant();
-//
-//     return InnerProduct(&Spectra::Y(), s);
-// }
-
-inline f32 InnerProduct(Spectrum f, Spectrum g)
+f32 InnerProduct(const Spectrum *f, const Spectrum *g)
 {
     f32 integral = 0.f;
     for (f32 lambda = LambdaMin; lambda <= LambdaMax; lambda++)
     {
-        integral += f(lambda) * g(lambda);
+        integral += f->Evaluate(lambda) * g->Evaluate(lambda);
     }
     return integral;
 }
@@ -36,7 +25,7 @@ f32 SpectrumToPhotometric(const DenselySampledSpectrum &s)
     return InnerProduct(&Spectra::Y(), &s);
 }
 
-Vec3f SpectrumToXYZ(Spectrum s)
+Vec3f SpectrumToXYZ(Spectrum *s)
 {
     return Vec3f(InnerProduct(&Spectra::X(), s), InnerProduct(&Spectra::Y(), s),
                  InnerProduct(&Spectra::Z(), s)) /
@@ -80,7 +69,7 @@ inline Vec3f FromxyY(Vec2f xy, f32 Y = 1.f)
     return Vec3f(xy.x * Y / xy.y, Y, (1 - xy.x - xy.y) * Y / xy.y);
 }
 
-DenselySampledSpectrum::DenselySampledSpectrum(Spectrum spec, i32 lambdaMin, i32 lambdaMax)
+DenselySampledSpectrum::DenselySampledSpectrum(Spectrum *spec, i32 lambdaMin, i32 lambdaMax)
     : lambdaMin((u16)lambdaMin), lambdaMax((u16)lambdaMax)
 {
     Assert(lambdaMin >= LambdaMin && lambdaMax <= LambdaMax);
@@ -90,7 +79,7 @@ DenselySampledSpectrum::DenselySampledSpectrum(Spectrum spec, i32 lambdaMin, i32
     {
         for (i32 lambda = lambdaMin; lambda <= lambdaMax; lambda++)
         {
-            values[lambda - lambdaMin] = spec((f32)lambda);
+            values[lambda - lambdaMin] = spec->Evaluate((f32)lambda);
         }
     }
 }
@@ -201,7 +190,7 @@ PiecewiseLinearSpectrum *PiecewiseLinearSpectrum::FromInterleaved(Arena *arena,
     return spec;
 }
 
-SampledSpectrum BlackbodySpectrum::Sample(const SampledWavelengths &lambda)
+SampledSpectrum BlackbodySpectrum::Sample(const SampledWavelengths &lambda) const
 {
     SampledSpectrum s;
     for (u32 i = 0; i < NSampledWavelengths; i++)
@@ -583,7 +572,7 @@ const DenselySampledSpectrum &Y() { return *y; }
 
 const DenselySampledSpectrum &Z() { return *z; }
 
-std::map<std::string, Spectrum> namedSpectra;
+std::map<std::string, PiecewiseLinearSpectrum *> namedSpectra;
 void Init(Arena *arena)
 {
     PiecewiseLinearSpectrum xpls(CIE_lambda, CIE_X, nCIESamples);
@@ -595,7 +584,7 @@ void Init(Arena *arena)
     PiecewiseLinearSpectrum zpls(CIE_lambda, CIE_Z, nCIESamples);
     z = PushStructConstruct(arena, DenselySampledSpectrum)(&zpls);
 
-    Spectrum illumd65 = PiecewiseLinearSpectrum::FromInterleaved(
+    PiecewiseLinearSpectrum *illumd65 = PiecewiseLinearSpectrum::FromInterleaved(
         arena, CIE_Illum_D6500, ArrayLength(CIE_Illum_D6500), true);
     namedSpectra = {
         {"stdillum-D65", illumd65},
@@ -604,7 +593,7 @@ void Init(Arena *arena)
 
 } // namespace Spectra
 
-Spectrum GetNamedSpectrum(string name)
+PiecewiseLinearSpectrum *GetNamedSpectrum(string name)
 {
     auto iter = Spectra::namedSpectra.find(std::string((const char *)name.str, name.size));
     if (iter != Spectra::namedSpectra.end())
@@ -676,7 +665,7 @@ void RGBToSpectrumTable::Init(Arena *arena)
                                                           &sRGBToSpectrumTable_Data);
 }
 
-RGBColorSpace::RGBColorSpace(Vec2f r, Vec2f g, Vec2f b, Spectrum illuminant,
+RGBColorSpace::RGBColorSpace(Vec2f r, Vec2f g, Vec2f b, Spectrum *illuminant,
                              const RGBToSpectrumTable *rgbToSpec)
     : r(r), g(g), b(b), illuminant(illuminant), rgbToSpec(rgbToSpec)
 {

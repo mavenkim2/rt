@@ -1,5 +1,7 @@
 #ifndef TEMPLATE_H
 #define TEMPLATE_H
+
+#include "macros.h"
 namespace rt
 {
 

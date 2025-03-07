@@ -3,6 +3,8 @@
 
 #include <limits>
 
+#include "../base.h"
+
 namespace rt
 {
 #if 1
@@ -453,27 +455,27 @@ struct MemSimdU32<1>
     static u32 LoadU(void *ptr) { return *(u32 *)(ptr); }
 };
 
-f32 ReduceMin(LaneF32<1> f) { return f; }
+inline f32 ReduceMin(LaneF32<1> f) { return f; }
 
-f32 &Set(f32 &val, u32 index)
+inline f32 &Set(f32 &val, u32 index)
 {
     Assert(index == 0);
     return val;
 }
 
-u32 &Set(u32 &val, u32 index)
+inline u32 &Set(u32 &val, u32 index)
 {
     Assert(index == 0);
     return val;
 }
 
-f32 Get(f32 val, u32 index)
+inline f32 Get(f32 val, u32 index)
 {
     Assert(index == 0);
     return val;
 }
 
-u32 Get(u32 val, u32 index)
+inline u32 Get(u32 val, u32 index)
 {
     Assert(index == 0);
     return val;

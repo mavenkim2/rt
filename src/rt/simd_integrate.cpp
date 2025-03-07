@@ -1,3 +1,5 @@
+#include "scene.h"
+#include "win32.h"
 #include "simd_integrate.h"
 namespace rt
 {
@@ -135,8 +137,20 @@ void TerminateRay(ShadingThreadState *shadeState, RayStateHandle handle)
 
 // that's the problem. basically it's ray1->material1->ray2->material2,
 // so  if ray1 fills materials2, then material1 can also fill material2...
-void RenderSIMD(Arena *arena, RenderParams2 &params)
+void RenderSIMD(Arena **arenas, Arena *arena, RenderParams2 &params)
 {
+    shadingGlobals_     = PushStruct(arena, ShadingGlobals);
+    u32 numProcessors   = OS_NumProcessors();
+    shadingThreadState_ = PushArray(arena, ShadingThreadState, numProcessors);
+    for (u32 i = 0; i < numProcessors; i++)
+    {
+        ShadingThreadState *state = &shadingThreadState_[i];
+        state->rayStates          = RayStateList(arenas[i]);
+        state->rayFreeList        = RayStateFreeList(arenas[i]);
+
+        state->rayQueue.handler = RayIntersectionHandler;
+    }
+
     u32 width              = params.width;
     u32 height             = params.height;
     u32 spp                = params.spp;
@@ -264,7 +278,6 @@ void RenderSIMD(Arena *arena, RenderParams2 &params)
             fflush(stdout);
         });
 
-    u32 numProcessors = OS_NumProcessors();
     // Flush all queues
     scheduler.ScheduleAndWait(numProcessors, 1, [&](u32 jobID) {
         ShadingThreadState *state = GetShadingThreadState(jobID);
@@ -548,8 +561,8 @@ void ShadingQueueHandler(TempArena inScratch, struct ShadingThreadState *state,
                 // BxDF evaluation
                 ErrorExit(si.faceIndices == handle.sortKey, "face: %u, sort: %u\n",
                           si.faceIndices, handle.sortKey);
-                BxDF bxdf = material->Evaluate(scratch.temp.arena, si, lambda,
-                                               Vec4f(dudx, dvdx, dudy, dvdy));
+                auto *bxdf = static_cast<MaterialType::BxDFType *>(material->Evaluate(
+                    scratch.temp.arena, si, lambda, Vec4f(dudx, dvdx, dudy, dvdy)));
                 BSDF bsdf(bxdf, si.shading.dpdu, si.shading.n);
 
                 if (rayState->depth++ >= globals->maxDepth)

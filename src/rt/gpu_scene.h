@@ -1,8 +1,12 @@
 #ifndef GPU_SCENE_H
 #define GPU_SCENE_H
+
 #include "vulkan.h"
+
 namespace rt
 {
+struct Mesh;
+
 struct SceneShapeParse
 {
     TransferCommandBuffer buffer;

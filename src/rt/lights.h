@@ -1,6 +1,12 @@
 #ifndef LIGHTS_H
 #define LIGHTS_H
 
+#include "algo.h"
+#include "math/spherical_harmonics.h"
+#include "rt.h"
+#include "surface_interaction.h"
+#include "spectrum.h"
+
 namespace rt
 {
 // NOTE: rectangle area light, invisible, not two sided
@@ -37,7 +43,7 @@ struct LightSample
     }
 };
 
-bool IsDeltaLight(LightType type)
+inline bool IsDeltaLight(LightType type)
 {
     return type == LightType::DeltaPosition || type == LightType::DeltaDirection;
 }
@@ -59,7 +65,7 @@ struct Scene;
     PDF_LI_INF_HEADER(type);                                                                  \
     LE_INF_HEADER(type);
 
-const DenselySampledSpectrum *LookupSpectrum(Spectrum s) { return 0; }
+inline const DenselySampledSpectrum *LookupSpectrum(Spectrum *s) { return 0; }
 
 struct Light
 {
@@ -396,6 +402,9 @@ struct ImageInfiniteLight : InfiniteLight
 
     void CalculateSHFromEnvironmentMap();
 };
+
+Light *SampleLight(Scene *scene, SurfaceInteraction &intr, f32 u, f32 *pmf);
+f32 LightPDF(Scene *scene, SurfaceInteraction &intr, Light *light);
 
 } // namespace rt
 #endif

@@ -1,6 +1,11 @@
+#ifndef HASH_H_
+#define HASH_H_
+
+#include "string.h"
+
 namespace rt
 {
-u64 MixBits(u64 v)
+inline u64 MixBits(u64 v)
 {
     v ^= (v >> 31);
     v *= 0x7fb5d329728ea185;
@@ -211,3 +216,5 @@ struct std::hash<rt::string>
 {
     size_t operator()(const rt::string &k) const { return rt::Hash(k); }
 };
+
+#endif

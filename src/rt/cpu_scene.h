@@ -1,5 +1,8 @@
 #ifndef CPU_SCENE_H
 #define CPU_SCENE_H
+
+#include "scene.h"
+
 namespace rt
 {
 struct SceneShapeParse

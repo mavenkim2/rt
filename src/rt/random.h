@@ -1,4 +1,9 @@
+#ifndef RANDOM_H
+#define RANDOM_H
+
 #include <limits>
+#include "hash.h"
+
 namespace rt
 {
 
@@ -154,3 +159,4 @@ inline i64 RNG::operator-(const RNG &other) const
     return (i64)distance;
 }
 } // namespace rt
+#endif

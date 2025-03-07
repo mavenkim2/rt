@@ -1,10 +1,12 @@
-#ifndef BASEMATH_H
-#define BASEMATH_H
+#ifndef BASEMATH_H_
+#define BASEMATH_H_
 
 #include <cmath>
 #include <emmintrin.h>
 #include <xmmintrin.h>
 #include <immintrin.h>
+
+#include "../base.h"
 
 namespace rt
 {
@@ -16,13 +18,13 @@ const f32 infinity = std::numeric_limits<f32>::infinity();
 
 static const __m128 SIMDInfinity = _mm_set1_ps(infinity);
 
-f32 IsInf(f32 x) { return std::isinf(x); }
+__forceinline f32 IsInf(f32 x) { return std::isinf(x); }
 
-f32 IsNaN(f32 x) { return std::isnan(x); }
+__forceinline f32 IsNaN(f32 x) { return std::isnan(x); }
 
-f64 IsNaN(f64 x) { return std::isnan(x); }
+__forceinline f64 IsNaN(f64 x) { return std::isnan(x); }
 
-f32 Sqr(f32 x) { return x * x; }
+__forceinline f32 Sqr(f32 x) { return x * x; }
 
 __forceinline int Abs(const int x) { return ::abs(x); }
 __forceinline f32 Abs(const f32 x) { return ::fabsf(x); }
@@ -84,13 +86,13 @@ T Clamp(const T &x, const T &min, const T &max)
     return Max(Min(max, x), min);
 }
 
-f32 Select(bool mask, f32 a, f32 b) { return mask ? a : b; }
+__forceinline f32 Select(bool mask, f32 a, f32 b) { return mask ? a : b; }
 
-u32 Select(bool mask, u32 a, u32 b) { return mask ? a : b; }
+__forceinline u32 Select(bool mask, u32 a, u32 b) { return mask ? a : b; }
 
-u32 Movemask(bool mask) { return mask; }
+__forceinline u32 Movemask(bool mask) { return mask; }
 
-bool Select(bool mask, bool a, bool b) { return mask ? a : b; }
+__forceinline bool Select(bool mask, bool a, bool b) { return mask ? a : b; }
 
 inline int Log2Int(u64 v)
 {
@@ -103,7 +105,7 @@ inline int Log2Int(u64 v)
 #endif
 }
 
-f32 SafeSqrt(f32 x) { return std::sqrt(Max(0.f, x)); }
+__forceinline f32 SafeSqrt(f32 x) { return std::sqrt(Max(0.f, x)); }
 
 template <int n>
 constexpr f32 Pow(f32 v)
@@ -171,7 +173,7 @@ inline u32 AsUInt(f32 src) { return _mm_cvtsi128_si32(_mm_castps_si128(_mm_set_s
 
 inline i32 Exponent(f32 v) { return (FloatToBits(v) >> 23) - 127; }
 
-f32 FastExp(f32 x)
+ inline f32 FastExp(f32 x)
 {
     f32 xp  = x * 1.442695041f;
     f32 fxp = std::floor(xp), f = xp - fxp;

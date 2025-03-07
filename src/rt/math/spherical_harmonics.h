@@ -1,7 +1,11 @@
 #ifndef SPHERICAL_HARMONICS_H
 #define SPHERICAL_HARMONICS_H
 
+#include "../base.h"
+#include "basemath.h"
+#include "vec3.h"
 #include "simd_base.h"
+
 namespace rt
 {
 
@@ -35,7 +39,7 @@ static const f32 BasisL2_M0  = Sqrt(5) / (4 * SqrtPi);
 static const f32 BasisL2_M1  = Sqrt(15) / (2 * SqrtPi);
 static const f32 BasisL2_M2  = Sqrt(15) / (4 * SqrtPi);
 
-L2 EvaluateL2Basis(const Vec3f &direction)
+inline L2 EvaluateL2Basis(const Vec3f &direction)
 {
     L2 sh;
 
@@ -57,7 +61,7 @@ L2 EvaluateL2Basis(const Vec3f &direction)
     return sh;
 }
 
-f32 EvaluateIrradiance(const L2 &c, const Vec3f &n)
+inline f32 EvaluateIrradiance(const L2 &c, const Vec3f &n)
 {
     L2 l2 = EvaluateL2Basis(n);
 

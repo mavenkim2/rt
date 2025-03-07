@@ -1,5 +1,6 @@
 #include "lights.h"
 #include "color.h"
+#include "scene.h"
 #include "spectrum.h"
 
 namespace rt
@@ -86,32 +87,6 @@ Vec2f EqualAreaSphereToSquare(Vec3f d)
 // rectangle onto the unit sphere centered at point p
 // https://blogs.autodesk.com/media-and-entertainment/wp-content/uploads/sites/162/egsr2013_spherical_rectangle.pdf
 // TODO: simd sin, cos, and arcsin
-
-template <typename T>
-T LinearPDF(T x, T a, T b)
-{
-    T mask   = x < 0 || x > 1;
-    T result = Select(mask, T(0), 2 * Lerp(x, a, b) / (a + b));
-    return result;
-}
-
-template <typename T>
-T SampleLinear(T u, T a, T b)
-{
-    T mask = u == 0 && a == 0;
-    T x    = Select(mask, T(0), u * (a + b) / (a + Sqrt(Lerp(u, a * a, b * b))));
-    return Min(x, T(oneMinusEpsilon));
-}
-
-// p2 ---- p3
-// |       |
-// p0 ---- p1
-template <typename T>
-T Bilerp(const Vec2<T> &u, const Vec4<T> &w)
-{
-    T result = Lerp(u[0], Lerp(u[1], w[0], w[2]), Lerp(u[1], w[1], w[3]));
-    return result;
-}
 
 //////////////////////////////
 // Diffuse Area Light

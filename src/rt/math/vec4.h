@@ -1,6 +1,8 @@
 #ifndef VEC_4_H
 #define VEC_4_H
 
+#include "vec3.h"
+
 namespace rt
 {
 template <typename T>

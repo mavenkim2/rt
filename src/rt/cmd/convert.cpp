@@ -19,7 +19,7 @@
 #include "../hash.h"
 #include <functional>
 #include "../random.h"
-#include "../bvh/parallel.h"
+#include "../parallel.h"
 #include "../base.cpp"
 #include "../memory.cpp"
 #include "../string.cpp"

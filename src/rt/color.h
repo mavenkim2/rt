@@ -1,5 +1,8 @@
 #ifndef COLOR_H
 #define COLOR_H
+
+#include "rt.h"
+
 namespace rt
 {
 
@@ -48,12 +51,12 @@ const f32 SRGBToLinearLUT[256] = {
     0.9215820432, 0.9301108718, 0.9386858940, 0.9473065734, 0.9559735060, 0.9646862745,
     0.9734454751, 0.9822505713, 0.9911022186, 1.0000000000};
 
-Vec3f SRGBToLinear(const u8 rgb[3])
+inline Vec3f SRGBToLinear(const u8 rgb[3])
 {
     return Vec3f(SRGBToLinearLUT[rgb[0]], SRGBToLinearLUT[rgb[1]], SRGBToLinearLUT[rgb[2]]);
 }
 
-Vec3f GetOctahedralRGB(const Image *image, Vec2f uv)
+inline Vec3f GetOctahedralRGB(const Image *image, Vec2f uv)
 {
     Vec2i p(i32(uv[0] * image->width), i32(uv[1] * image->height));
     if (p[0] < 0)
@@ -84,7 +87,7 @@ Vec3f GetOctahedralRGB(const Image *image, Vec2f uv)
     return SRGBToLinear(GetColor(image, p[0], p[1]));
 }
 
-f32 CalculateLuminance(const Vec3f &rgb)
+inline f32 CalculateLuminance(const Vec3f &rgb)
 {
     return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
 }

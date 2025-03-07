@@ -1,6 +1,12 @@
+#ifndef PARALLEL_H_
+#define PARALLEL_H_
 #include <atomic>
 #include <mutex>
 #include <functional>
+
+#include "random.h"
+#include "thread_context.h"
+
 namespace rt
 {
 template <typename T, i32 logBlockSize = 10>
@@ -528,7 +534,7 @@ struct Scheduler
     }
 };
 static Scheduler scheduler;
-THREAD_ENTRY_POINT(WorkerLoop)
+inline THREAD_ENTRY_POINT(WorkerLoop)
 {
     Scheduler::Worker *w = (Scheduler::Worker *)parameter;
 
@@ -673,3 +679,4 @@ void ParallelReduce(T *out, u32 start, u32 count, u32 groupSize, Func func, Redu
 }
 
 } // namespace rt
+#endif

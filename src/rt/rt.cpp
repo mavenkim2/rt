@@ -1,75 +1,41 @@
-#define USE_GPU
-
 #include "rt.h"
-#include "tables/sobolmatrices.h"
-#include "tables/primes.h"
 
 #include "memory.h"
-#include "string.h"
 #include "containers.h"
 #include "debug.h"
 #include "thread_context.h"
 
 #include "hash.h"
 #include "color.h"
-#include "random.h"
 #include "sampling.h"
-#include "bvh/parallel.h"
-#include "base_types.h"
-#include "bvh/bvh_types.h"
-#include "spectrum.h"
-#include "handles.h"
+#include "parallel.h"
 #include "integrate.h"
-#include "math/spherical_harmonics.h"
-#include "lights.h"
-#include "subdivision.h"
-#include "vulkan.h"
-#include "scene.h"
-
-#ifdef USE_GPU
-#include "gpu_scene.h"
-#else
-#include "cpu_scene.h"
-#endif
-
-#include "scene_load.h"
-#include "bxdf.h"
-#include "bsdf.h"
-#include "low_discrepancy.h"
-#include "sampler.h"
-#include "bvh/bvh_aos.h"
-#include "bvh/partial_rebraiding.h"
-#include "bvh/bvh_build.h"
-#include "bvh/bvh_intersect1.h"
 #include <algorithm>
-#include "simd_integrate.h"
+#include "tests/test.h"
 
-#include "debug.cpp"
-#include "base_types.cpp"
-#include "bvh/bvh_types.cpp"
-#include "spectrum.cpp"
-#include "scene.cpp"
-
-#include "vulkan.cpp"
-#ifdef USE_GPU
-#include "gpu_scene.cpp"
-#else
-#include "cpu_scene.cpp"
-#endif
-
-#include "bsdf.cpp"
-
-#include "lights.cpp"
-#include "integrate.cpp"
-#include "simd_integrate.cpp"
-#include "subdivision.cpp"
-
-#include "tests/test.cpp"
-#include "tests/sampling_test.cpp"
-#include "tests/bvh_test.cpp"
+#define STB_IMAGE_IMPLEMENTATION
+#include "../third_party/stb_image.h"
 
 namespace rt
 {
+
+Image LoadFile(const char *file)
+{
+    Image image;
+    i32 nComponents;
+    image.contents      = (u8 *)stbi_load(file, &image.width, &image.height, &nComponents, 0);
+    image.bytesPerPixel = nComponents;
+    return image;
+}
+
+Image LoadHDR(const char *file)
+{
+    Image image;
+    i32 nComponents;
+    image.contents      = (u8 *)stbi_loadf(file, &image.width, &image.height, &nComponents, 0);
+    image.bytesPerPixel = nComponents * sizeof(f32);
+    return image;
+}
 
 inline f32 DegreesToRadians(f32 degrees) { return degrees * PI / 180.f; }
 
@@ -1070,7 +1036,6 @@ using namespace rt;
 
 int main(int argc, char *argv[])
 {
-    size_t size = sizeof(RayState);
     BuildPackMask();
     // OS_SetLargePages();
     Arena *dataArena = ArenaAlloc();
@@ -1083,8 +1048,6 @@ int main(int argc, char *argv[])
     RGBToSpectrumTable::Init(arena);
     RGBColorSpace::Init(arena);
     InitializePtex();
-
-    shadingGlobals_ = PushStruct(arena, ShadingGlobals);
 
     u32 numProcessors      = OS_NumProcessors();
     threadLocalStatistics  = PushArray(arena, ThreadStatistics, numProcessors);

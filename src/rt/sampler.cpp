@@ -1,22 +1,11 @@
-//////////////////////////////
-// Primitive Methods
-//
-
-#include "string.h"
+#include "base.h"
+#include "math/vec2.h"
+#include "memory.h"
 
 namespace rt
 {
-// PrimitiveMethods primitiveMethods[] = {
-//     {BVHHit},
-//     {BVH4Hit},
-//     {CompressedBVH4Hit},
-// };
-
-//////////////////////////////
-// Creation from scene description
-//
-
-Sampler Sampler::Create(Arena *arena, const ScenePacket *packet, const Vec2i fullResolution)
+#if 0
+Sampler *Sampler::Create(Arena *arena, const ScenePacket *packet, const Vec2i fullResolution)
 {
     i32 samplesPerPixel        = 16;
     RandomizeStrategy strategy = RandomizeStrategy::FastOwen;
@@ -105,84 +94,5 @@ Sampler Sampler::Create(Arena *arena, const ScenePacket *packet, const Vec2i ful
                                                              strategy);
     }
 }
-
-//////////////////////////////
-// Spectrum Methods
-//
-
-f32 Spectrum::operator()(f32 lambda) const
-{
-    void *ptr  = GetPtr();
-    f32 result = spectrumMethods[GetTag()].Evaluate(ptr, lambda);
-    return result;
-}
-
-f32 Spectrum::MaxValue() const
-{
-    void *ptr  = GetPtr();
-    f32 result = spectrumMethods[GetTag()].MaxValue(ptr);
-    return result;
-}
-
-SampledSpectrum Spectrum::Sample(const SampledWavelengths &lambda) const
-{
-    void *ptr              = GetPtr();
-    SampledSpectrum result = spectrumMethods[GetTag()].Sample(ptr, lambda);
-    return result;
-}
-
-// template <class T>
-// f32 SpectrumCRTP<T>::Evaluate(void *ptr, f32 lambda)
-// {
-//     return static_cast<T *>(ptr)->Evaluate(lambda);
-// }
-
-template <class T>
-SampledSpectrum SpectrumCRTP<T>::Sample(void *ptr, const SampledWavelengths &lambda)
-{
-    return static_cast<T *>(ptr)->Sample(lambda);
-}
-
-SampledSpectrumN BxDF::EvaluateSample(const Vec3lfn &wo, const Vec3lfn &wi, LaneNF32 &pdf,
-                                      TransportMode mode) const
-{
-    void *ptr = GetPtr();
-    return bxdfMethods[GetTag()].EvaluateSample(ptr, wo, wi, pdf, mode);
-}
-
-BSDFSample BxDF::GenerateSample(const Vec3lfn &wo, const LaneNF32 &uc, const Vec2lfn &u,
-                                TransportMode mode, BxDFFlags inFlags) const
-{
-    void *ptr = GetPtr();
-    return bxdfMethods[GetTag()].GenerateSample(ptr, wo, uc, u, mode, inFlags);
-}
-
-LaneNU32 BxDF::Flags() const
-{
-    void *ptr = GetPtr();
-    return bxdfMethods[GetTag()].Flags(ptr);
-}
-
-template <class T>
-SampledSpectrum BxDFCRTP<T>::EvaluateSample(void *ptr, const Vec3lfn &wo, const Vec3lfn &wi,
-                                            LaneNF32 &pdf, TransportMode mode)
-{
-    return static_cast<T *>(ptr)->EvaluateSample(wo, wi, pdf, mode);
-}
-template <class T>
-BSDFSample BxDFCRTP<T>::GenerateSample(void *ptr, const Vec3lfn &wo, const LaneNF32 &uc,
-                                       const Vec2lfn &u, TransportMode mode, BxDFFlags flags)
-{
-    return static_cast<T *>(ptr)->GenerateSample(wo, uc, u, mode, flags);
-}
-// template <class T>
-// f32 BxDFCRTP<T>::PDF(void *ptr, Vec3f wo, Vec3f wi, TransportMode mode, BxDFFlags flags)
-// {
-//     return static_cast<T *>(ptr)->PDF(wo, wi, mode, flags);
-// }
-template <class T>
-LaneNU32 BxDFCRTP<T>::Flags(void *ptr)
-{
-    return static_cast<T *>(ptr)->Flags();
-}
+#endif
 } // namespace rt

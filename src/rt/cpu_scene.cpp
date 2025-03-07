@@ -1,3 +1,5 @@
+#include "cpu_scene.h"
+
 namespace rt
 {
 

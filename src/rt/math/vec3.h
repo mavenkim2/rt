@@ -1,4 +1,9 @@
+#ifndef VEC3_H_ 
+#define VEC3_H_
+
 #include <cmath>
+#include "vec2.h"
+
 namespace rt
 {
 template <typename T>
@@ -380,3 +385,4 @@ inline void CoordinateSystem(const Vec3<T> &v1, Vec3<T> *v2, Vec3<T> *v3)
 }
 
 } // namespace rt
+#endif

@@ -4,26 +4,23 @@
 #include "base.h"
 #include "thread_statistics.h"
 #include "macros.h"
+#include "string.h"
 #include "template.h"
-#include "math/basemath.h"
-#include "math/dual.h"
-#include "math/simd_include.h"
-#include "math/vec2.h"
-#include "math/vec3.h"
-#include "math/vec4.h"
-#include "math/bounds.h"
-#include "math/matx.h"
-#include "math/math.h"
 #include "algo.h"
-
-#define STB_IMAGE_IMPLEMENTATION
-#include "../third_party/stb_image.h"
+#include "math/math_include.h"
 
 #define CORNELL 1
 #define EMISSIVE
 
 namespace rt
 {
+
+struct Options
+{
+    string filename;
+    i32 pixelX = -1;
+    i32 pixelY = -1;
+};
 
 const Vec3f INVALID_VEC = Vec3f((f32)U32Max, (f32)U32Max, (f32)U32Max);
 
@@ -102,25 +99,10 @@ inline u32 GetImageSize(Image *image)
     return size;
 }
 
-Image LoadFile(const char *file)
-{
-    Image image;
-    i32 nComponents;
-    image.contents      = (u8 *)stbi_load(file, &image.width, &image.height, &nComponents, 0);
-    image.bytesPerPixel = nComponents;
-    return image;
-}
+Image LoadFile(const char *file);
+Image LoadHDR(const char *file);
 
-Image LoadHDR(const char *file)
-{
-    Image image;
-    i32 nComponents;
-    image.contents      = (u8 *)stbi_loadf(file, &image.width, &image.height, &nComponents, 0);
-    image.bytesPerPixel = nComponents * sizeof(f32);
-    return image;
-}
-
-u8 *GetColor(const Image *image, i32 x, i32 y)
+inline u8 *GetColor(const Image *image, i32 x, i32 y)
 {
     x = Clamp(x, 0, image->width - 1);
     y = Clamp(y, 0, image->height - 1);
@@ -129,13 +111,13 @@ u8 *GetColor(const Image *image, i32 x, i32 y)
            y * image->width * image->bytesPerPixel;
 }
 
-Vec3f GetRGB(const Image *image, i32 x, i32 y)
+inline Vec3f GetRGB(const Image *image, i32 x, i32 y)
 {
     Assert(x < image->width && x >= 0 && y < image->height && y >= 0);
     return *(Vec3f *)(image->contents + image->bytesPerPixel * (x + y * image->width));
 }
 
-void WriteImage(Image *image, const char *filename)
+inline void WriteImage(Image *image, const char *filename)
 {
     u32 imageSize = GetImageSize(image);
     BitmapHeader header;

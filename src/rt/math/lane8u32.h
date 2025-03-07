@@ -212,13 +212,13 @@ struct MemSimdU32<8>
     static Lane8U32 LoadU(void *ptr) { return Lane8U32::LoadU(ptr); }
 };
 
-u32 &Set(Lane8U32 &val, u32 index)
+inline u32 &Set(Lane8U32 &val, u32 index)
 {
     Assert(index < 8);
     return val[index];
 }
 
-u32 Get(const Lane8U32 &val, u32 index)
+inline u32 Get(const Lane8U32 &val, u32 index)
 {
     Assert(index < 8);
     return val[index];

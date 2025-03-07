@@ -1,3 +1,8 @@
+#ifndef VEC2_H
+#define VEC2_H
+
+#include "simd_include.h"
+
 namespace rt
 {
 template <typename T>
@@ -234,3 +239,4 @@ Vec2f Get(const Vec2<LaneF32<K>> &v, u32 index)
 __forceinline Vec2f Get(const Vec2lfn &v, u32 index) { return Get<IntN>(v, index); }
 
 } // namespace rt
+#endif

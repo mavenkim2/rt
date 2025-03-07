@@ -3,8 +3,12 @@
 
 #include "bxdf.h"
 #include "color.h"
+#include "handles.h"
 #include "math/simd_include.h"
+#include "platform.h"
+#include "sampler.h"
 #include "spectrum.h"
+#include "surface_interaction.h"
 #include <Ptexture.h>
 
 namespace rt
@@ -13,46 +17,6 @@ static const f32 tMinEpsilon = 0.0001f;
 
 template <typename BxDF>
 struct BSDFBase;
-
-template <i32 K>
-struct SurfaceInteractions
-{
-    using LaneKF32 = LaneF32<K>;
-    using LaneKU32 = LaneU32<K>;
-    Vec3lf<K> p;
-    Vec3lf<K> pError;
-    Vec3lf<K> n;
-    Vec3lf<K> dpdu, dpdv;
-    Vec2lf<K> uv;
-    struct
-    {
-        Vec3lf<K> n;
-        Vec3lf<K> dpdu;
-        Vec3lf<K> dpdv;
-        Vec3lf<K> dndu;
-        Vec3lf<K> dndv;
-    } shading;
-    LaneKF32 tHit;
-    LaneKU32 lightIndices;
-    LaneKU32 materialIDs;
-    LaneKU32 faceIndices;
-
-    LaneKU32 sceneID;
-    LaneKU32 geomID;
-
-    LaneKU32 rayStateHandles;
-    f32 curvature;
-    // LaneIU32 volumeIndices;
-
-    SurfaceInteractions() {}
-    SurfaceInteractions(const Vec3lf<K> &p, const Vec3lf<K> &n, const Vec2lf<K> &uv)
-        : p(p), n(n), uv(uv)
-    {
-    }
-};
-
-typedef SurfaceInteractions<1> SurfaceInteraction;
-typedef SurfaceInteractions<IntN> SurfaceInteractionsN;
 
 static Ptex::PtexCache *cache;
 struct : public PtexErrorHandler
@@ -167,34 +131,26 @@ public:
     /** Return the last error message encountered. */
 } ptexInputHandler;
 
-enum class ColorEncoding
-{
-    None,
-    Linear,
-    Gamma,
-    SRGB,
-};
-
 // template <typename Texture>
-struct NormalMap
-{
-    template <i32 K>
-    void Evaluate(SurfaceInteractions<K> &intrs)
-    {
-        Vec3f ns(2 * normalMap.BilerpChannel(uv, wrap), -1);
-        ns = Normalize(ns);
-
-        f32 dpduLength    = Length(dpdu);
-        f32 dpdvLength    = Length(dpdv);
-        dpdu              = dpdu / length;
-        LinearSpace frame = LinearSpace::FromXZ(
-            dpdu, intrs.shading.ns); // Cross(ns, intrs.shading.dpdu), intrs.shading.ns);
-        // Transform to world space
-        ns   = TransformV(frame, ns);
-        dpdu = Normalize(dpdu - Dot(dpdu, ns) * ns) * dpduLength;
-        dpdv = Normalize(Cross(ns, dpdu)) * dpdvLength;
-    }
-};
+// struct NormalMap
+// {
+//     template <i32 K>
+//     void Evaluate(SurfaceInteractions<K> &intrs)
+//     {
+//         Vec3f ns(2 * normalMap.BilerpChannel(uv, wrap), -1);
+//         ns = Normalize(ns);
+//
+//         f32 dpduLength    = Length(dpdu);
+//         f32 dpdvLength    = Length(dpdv);
+//         dpdu              = dpdu / length;
+//         LinearSpace frame = LinearSpace::FromXZ(
+//             dpdu, intrs.shading.ns); // Cross(ns, intrs.shading.dpdu), intrs.shading.ns);
+//         // Transform to world space
+//         ns   = TransformV(frame, ns);
+//         dpdu = Normalize(dpdu - Dot(dpdu, ns) * ns) * dpduLength;
+//         dpdv = Normalize(Cross(ns, dpdu)) * dpdvLength;
+//     }
+// };
 
 static const u32 invalidVolume = 0xffffffff;
 struct Ray2
@@ -215,7 +171,7 @@ struct Ray2
     Vec3f operator()(f32 t) const { return o + t * d; }
 };
 
-Ray2 Transform(const Mat4 &m, const Ray2 &r)
+inline Ray2 Transform(const Mat4 &m, const Ray2 &r)
 {
     Ray2 newRay     = r;
     newRay.o        = TransformP(m, r.o);
@@ -229,7 +185,7 @@ Ray2 Transform(const Mat4 &m, const Ray2 &r)
     return newRay;
 }
 
-Ray2 Transform(const AffineSpace &m, const Ray2 &r)
+inline Ray2 Transform(const AffineSpace &m, const Ray2 &r)
 {
     Ray2 newRay = r;
     newRay.o    = TransformP(m, r.o);
@@ -350,9 +306,9 @@ struct RenderParams2
 NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Sampler sampler,
                                   SampledSpectrum beta, const SampledSpectrum &p,
                                   const SampledWavelengths &lambda, Vec3f &wi);
-static SampledWavelengths SampleVisible(f32 u);
+SampledWavelengths SampleVisible(f32 u);
 
-f32 VisibleWavelengthsPDF(f32 lambda)
+inline f32 VisibleWavelengthsPDF(f32 lambda)
 {
     if (lambda < LambdaMin || lambda > LambdaMax)
     {
@@ -361,13 +317,13 @@ f32 VisibleWavelengthsPDF(f32 lambda)
     return 0.0039398042f / Sqr(std::cosh(0.0072f * (lambda - 538)));
 }
 
-f32 SampleVisibleWavelengths(f32 u)
+inline f32 SampleVisibleWavelengths(f32 u)
 {
     return 538 - 138.888889f * std::atanh(0.85691062f - 1.82750197f * u);
 }
 
 // Importance sampling the
-static SampledWavelengths SampleVisible(f32 u)
+inline SampledWavelengths SampleVisible(f32 u)
 {
     SampledWavelengths swl;
     for (i32 i = 0; i < NSampledWavelengths; i++)
@@ -459,6 +415,17 @@ struct Camera
         return ray;
     }
 };
+
+void InitializePtex();
+Vec3f ConvertRadianceToRGB(const SampledSpectrum &Lin, const SampledWavelengths &lambda,
+                           u32 maxComponentValue = 10);
+void GenerateMinimumDifferentials(Camera &camera, RenderParams2 &params, u32 width, u32 height,
+                                  u32 taskCount, u32 tileCountX, u32 tileWidth, u32 tileHeight,
+                                  u32 pixelWidth, u32 pixelHeight);
+struct Scene;
+bool Intersect(Scene *scene, Ray2 &ray, SurfaceInteraction &si);
+bool Occluded(Scene *scene, Ray2 &ray);
+void Render(Arena *arena, RenderParams2 &params);
 
 } // namespace rt
 #endif

@@ -1,3 +1,8 @@
+#ifndef ALGO_H_
+#define ALGO_H_
+
+#include "base.h"
+
 namespace rt
 {
 
@@ -31,3 +36,4 @@ u32 FindInterval(u32 sz, const Predicate &pred)
 //     return (u32)Clamp(first - 1, 0, (i32)sz - 2);
 // }
 } // namespace rt
+#endif

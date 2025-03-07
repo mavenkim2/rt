@@ -1,6 +1,15 @@
-#include "math/basemath.h"
+#ifndef CONTAINERS_H_
+#define CONTAINERS_H_
+
 #include <initializer_list>
 #include <array>
+
+#include "base.h"
+#include "math/basemath.h"
+#include "memory.h"
+#include "string.h"
+#include "thread_statistics.h"
+
 namespace rt
 {
 template <typename ElementType>
@@ -735,11 +744,19 @@ struct ChunkedLinkedList
     {
         if (list->totalCount)
         {
-            Assert(list->first && last);
-            last->next = list->first;
-            last       = list->last;
-            Assert(last->next == 0);
-            totalCount += list->totalCount;
+            if (!first)
+            {
+                QueuePush(first, last, list->first);
+                totalCount = list->totalCount;
+            }
+            else
+            {
+                Assert(list->first && last);
+                last->next = list->first;
+                last       = list->last;
+                Assert(last->next == 0);
+                totalCount += list->totalCount;
+            }
         }
     }
 };
@@ -888,7 +905,7 @@ struct AtomicHashIndex
     inline int FindConcurrent(int hash, Predicate &predicate) const;
 };
 
-AtomicHashIndex::AtomicHashIndex(Arena *arena, int hashSize)
+inline AtomicHashIndex::AtomicHashIndex(Arena *arena, int hashSize)
 {
     hashCount  = NextPowerOfTwo(hashSize);
     indexCount = hashCount;
@@ -976,3 +993,4 @@ inline int AtomicHashIndex::FindConcurrent(int inHash, Predicate &predicate) con
 }
 
 } // namespace rt
+#endif

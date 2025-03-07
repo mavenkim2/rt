@@ -1,7 +1,40 @@
+#ifndef SAMPLING_H
+#define SAMPLING_H
+
+#include "random.h"
+#include "math/vec4.h"
+#include "math/math.h"
+
 namespace rt
 {
 
-Vec3f SampleUniformTriangle(const Vec2f &u)
+template <typename T>
+T LinearPDF(T x, T a, T b)
+{
+    T mask   = x < 0 || x > 1;
+    T result = Select(mask, T(0), 2 * Lerp(x, a, b) / (a + b));
+    return result;
+}
+
+template <typename T>
+T SampleLinear(T u, T a, T b)
+{
+    T mask = u == 0 && a == 0;
+    T x    = Select(mask, T(0), u * (a + b) / (a + Sqrt(Lerp(u, a * a, b * b))));
+    return Min(x, T(oneMinusEpsilon));
+}
+
+// p2 ---- p3
+// |       |
+// p0 ---- p1
+template <typename T>
+T Bilerp(const Vec2<T> &u, const Vec4<T> &w)
+{
+    T result = Lerp(u[0], Lerp(u[1], w[0], w[2]), Lerp(u[1], w[1], w[3]));
+    return result;
+}
+
+inline Vec3f SampleUniformTriangle(const Vec2f &u)
 {
     Vec3f result;
     if (u[0] < u[1])
@@ -37,7 +70,7 @@ Vec2<T> SampleBilinear(const Vec2<T> &u, const Vec4<T> &w)
     return result;
 }
 
-LaneNF32 SphericalQuadArea(const Vec3lfn &a, const Vec3lfn &b, const Vec3lfn &c,
+inline LaneNF32 SphericalQuadArea(const Vec3lfn &a, const Vec3lfn &b, const Vec3lfn &c,
                            const Vec3lfn &d)
 {
     Vec3lfn axb = Normalize(Cross(a, b));
@@ -52,7 +85,7 @@ LaneNF32 SphericalQuadArea(const Vec3lfn &a, const Vec3lfn &b, const Vec3lfn &c,
     return Abs(g0 + g1 + g2 + g3 - 2 * PI);
 }
 
-Vec3lfn SampleSphericalRectangle(const Vec3lfn &p, const Vec3lfn &base, const Vec3lfn &eu,
+inline Vec3lfn SampleSphericalRectangle(const Vec3lfn &p, const Vec3lfn &base, const Vec3lfn &eu,
                                  const Vec3lfn &ev, const Vec2lfn &samples, LaneNF32 *pdf)
 {
     LaneNF32 euLength = Length(eu);
@@ -245,3 +278,4 @@ inline Vec3f RandomInUnitDisk()
 // return InvertUniformDisk
 // }
 } // namespace rt
+#endif

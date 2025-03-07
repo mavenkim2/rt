@@ -1,38 +1,55 @@
 #ifndef SAMPLER_H
 #define SAMPLER_H
+
+#include "low_discrepancy.h"
+
 namespace rt
 {
+
+struct ScenePacket;
+
+struct Sampler
+{
+    // static Sampler *Create(Arena *arena, const ScenePacket *packet,
+    // const Vec2i fullResolution);
+    virtual i32 SamplesPerPixel() const                                  = 0;
+    virtual void StartPixelSample(Vec2i p, i32 index, i32 dimension = 0) = 0;
+    virtual f32 Get1D()                                                  = 0;
+    virtual Vec2f Get2D()                                                = 0;
+    virtual Vec2f GetPixel2D()                                           = 0;
+};
+
 // NOTE: independent uniform samplers without any care for discrepancy
-struct IndependentSampler
+struct IndependentSampler : Sampler
 {
     IndependentSampler(i32 samplesPerPixel, i32 seed = 0)
         : samplesPerPixel(samplesPerPixel), seed(seed)
     {
     }
 
-    i32 SamplesPerPixel() const { return samplesPerPixel; }
-    void StartPixelSample(Vec2i p, i32 sampleIndex, i32 dimension = 0)
+    i32 SamplesPerPixel() const override { return samplesPerPixel; }
+    void StartPixelSample(Vec2i p, i32 sampleIndex, i32 dimension = 0) override
     {
         rng.SetSequence(Hash(p, seed));
         rng.Advance(sampleIndex * 65536ull + dimension);
     }
-    f32 Get1D() { return rng.Uniform<f32>(); }
-    Vec2f Get2D() { return {rng.Uniform<f32>(), rng.Uniform<f32>()}; }
-    Vec2f GetPixel2D() { return Get2D(); }
+    f32 Get1D() override { return rng.Uniform<f32>(); }
+    Vec2f Get2D() override { return {rng.Uniform<f32>(), rng.Uniform<f32>()}; }
+    Vec2f GetPixel2D() override { return Get2D(); }
 
     i32 samplesPerPixel, seed;
     RNG rng;
 };
 
-struct StratifiedSampler
+struct StratifiedSampler : Sampler
 {
     StratifiedSampler(i32 xPixelSamples, i32 yPixelSamples, bool jitter, i32 seed = 0)
         : xSamples(xPixelSamples), ySamples(yPixelSamples), jitter(jitter), seed(seed)
     {
     }
 
-    i32 SamplesPerPixel() const { return xSamples * ySamples; }
-    void StartPixelSample(Vec2i p, i32 index, i32 dimension)
+    i32 SamplesPerPixel() const override { return xSamples * ySamples; }
+    void StartPixelSample(Vec2i p, i32 index, i32 dimension) override
     {
         pixel       = p;
         sampleIndex = index;
@@ -40,7 +57,7 @@ struct StratifiedSampler
         rng.SetSequence(Hash(p, seed));
         rng.Advance(sampleIndex * 65536ull + dimension);
     }
-    f32 Get1D()
+    f32 Get1D() override
     {
         u64 hash    = Hash(pixel, dimensions, seed);
         i32 stratum = PermutationElement(sampleIndex, SamplesPerPixel(), (u32)hash);
@@ -48,7 +65,7 @@ struct StratifiedSampler
         f32 delta = jitter ? rng.Uniform<f32>() : 0.5f;
         return (stratum + delta) / SamplesPerPixel();
     }
-    Vec2f Get2D()
+    Vec2f Get2D() override
     {
         u64 hash    = Hash(pixel, dimensions, seed);
         i32 stratum = PermutationElement(sampleIndex, SamplesPerPixel(), (u32)hash);
@@ -61,7 +78,7 @@ struct StratifiedSampler
 
         return Vec2f((x + deltaX) / xSamples, (y + deltaY) / ySamples);
     }
-    Vec2f GetPixel2D() { return Get2D(); }
+    Vec2f GetPixel2D() override { return Get2D(); }
 
     i32 xSamples, ySamples, seed;
     b8 jitter;
@@ -78,11 +95,7 @@ enum class RandomizeStrategy
     FastOwen,
 };
 
-struct HaltonSampler
-{
-};
-
-struct SobolSampler
+struct SobolSampler : Sampler
 {
     SobolSampler(i32 samplesPerPixel, Vec2i fullResolution, RandomizeStrategy randomize,
                  i32 seed = 0)
@@ -91,26 +104,26 @@ struct SobolSampler
         Assert(IsPow2(samplesPerPixel));
         scale = Max(NextPowerOfTwo(fullResolution.x), NextPowerOfTwo(fullResolution.y));
     }
-    i32 SamplesPerPixel() const { return samplesPerPixel; }
-    void StartPixelSample(Vec2i p, i32 sampleIndex, i32 d = 0)
+    i32 SamplesPerPixel() const override { return samplesPerPixel; }
+    void StartPixelSample(Vec2i p, i32 sampleIndex, i32 d = 0) override
     {
         pixel      = p;
         dimension  = std::max<i32>(2, d);
         sobolIndex = SobolIntervalToIndex(Log2Int(scale), sampleIndex, pixel);
     }
-    f32 Get1D()
+    f32 Get1D() override
     {
         if (dimension >= nSobolDimensions) dimension = 2;
         return SampleDimension(dimension++);
     }
-    Vec2f Get2D()
+    Vec2f Get2D() override
     {
         if (dimension + 1 >= nSobolDimensions) dimension = 2;
         Vec2f u(SampleDimension(dimension), SampleDimension(dimension + 1));
         dimension += 2;
         return u;
     }
-    Vec2f GetPixel2D()
+    Vec2f GetPixel2D() override
     {
         Vec2f u(SobolSample(sobolIndex, 0, NoRandomizer),
                 SobolSample(sobolIndex, 1, NoRandomizer));
@@ -143,28 +156,28 @@ struct SobolSampler
     i64 sobolIndex;
 };
 
-struct PaddedSobolSampler
+struct PaddedSobolSampler : Sampler
 {
     PaddedSobolSampler(i32 samplesPerPixel, RandomizeStrategy randomize, i32 seed = 0)
         : samplesPerPixel(samplesPerPixel), seed(seed), randomize(randomize)
     {
         Assert(IsPow2(samplesPerPixel));
     }
-    i32 SamplesPerPixel() const { return samplesPerPixel; }
-    void StartPixelSample(Vec2i p, i32 index, i32 dim)
+    i32 SamplesPerPixel() const override { return samplesPerPixel; }
+    void StartPixelSample(Vec2i p, i32 index, i32 dim) override
     {
         pixel       = p;
         sampleIndex = index;
         dimension   = dim;
     }
-    f32 Get1D()
+    f32 Get1D() override
     {
         u64 hash  = Hash(pixel, dimension, seed);
         i32 index = PermutationElement(sampleIndex, samplesPerPixel, (u32)hash);
         int dim   = dimension++;
         return SampleDimension(0, index, hash >> 32);
     }
-    Vec2f Get2D()
+    Vec2f Get2D() override
     {
         u64 hash  = Hash(pixel, dimension, seed);
         i32 index = PermutationElement(sampleIndex, samplesPerPixel, (u32)hash);
@@ -173,7 +186,7 @@ struct PaddedSobolSampler
         return Vec2f(SampleDimension(0, index, (u32)hash),
                      SampleDimension(1, index, hash >> 32));
     }
-    Vec2f GetPixel2D() { return Get2D(); }
+    Vec2f GetPixel2D() override { return Get2D(); }
 
     f32 SampleDimension(i32 dim, u32 a, u32 hash) const
     {
@@ -194,7 +207,7 @@ struct PaddedSobolSampler
     i32 dimension, sampleIndex;
 };
 
-struct ZSobolSampler
+struct ZSobolSampler : Sampler
 {
     ZSobolSampler(i32 samplesPerPixel, Vec2i fullResolution,
                   RandomizeStrategy randomize = RandomizeStrategy::FastOwen, i32 seed = 0)
@@ -206,13 +219,13 @@ struct ZSobolSampler
         i32 log4SamplesPerPixel = (log2SamplesPerPixel + 1) / 2;
         nBase4Digits            = log4SamplesPerPixel + Log2Int(res);
     }
-    i32 SamplesPerPixel() const { return 1 << log2SamplesPerPixel; }
-    void StartPixelSample(Vec2i p, i32 index, i32 dim = 0)
+    i32 SamplesPerPixel() const override { return 1 << log2SamplesPerPixel; }
+    void StartPixelSample(Vec2i p, i32 index, i32 dim = 0) override
     {
         dimension   = dim;
         mortonIndex = (EncodeMorton2(p.x, p.y) << log2SamplesPerPixel) | index;
     }
-    f32 Get1D()
+    f32 Get1D() override
     {
         u64 sampleIndex = GetSampleIndex();
         dimension++;
@@ -228,7 +241,7 @@ struct ZSobolSampler
         // Default is owen scrambling
         return SobolSample(sampleIndex, 0, OwenScrambler, hash);
     }
-    Vec2f Get2D()
+    Vec2f Get2D() override
     {
         u64 sampleIndex = GetSampleIndex();
         dimension += 2;
@@ -253,7 +266,7 @@ struct ZSobolSampler
         return Vec2f(SobolSample(sampleIndex, 0, OwenScrambler, sampleHash[0]),
                      SobolSample(sampleIndex, 1, OwenScrambler, sampleHash[1]));
     }
-    Vec2f GetPixel2D() { return Get2D(); }
+    Vec2f GetPixel2D() override { return Get2D(); }
     u64 GetSampleIndex() const
     {
         static const u8 permutations[24][4] = {

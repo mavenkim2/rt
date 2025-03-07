@@ -1,6 +1,7 @@
 #include "integrate.h"
 #include "base.h"
 #include "bxdf.h"
+#include "bvh/bvh_intersect1.h"
 #include "lights.h"
 #include "bsdf.h"
 #include "math/basemath.h"
@@ -158,7 +159,7 @@ void GenerateMinimumDifferentials(Camera &camera, RenderParams2 &params, u32 wid
 }
 
 Vec3f ConvertRadianceToRGB(const SampledSpectrum &Lin, const SampledWavelengths &lambda,
-                           u32 maxComponentValue = 10)
+                           u32 maxComponentValue)
 {
     SampledSpectrum L = SafeDiv(Lin, lambda.PDF());
     f32 r             = (Spectra::X().Sample(lambda) * L).Average();
@@ -619,7 +620,7 @@ SampledSpectrum Li(Ray2 &ray, Camera &camera, Sampler &sampler, u32 maxDepth,
         }
 
         Material *material = scene->materials[MaterialHandle(si.materialIDs).GetIndex()];
-        BxDF bxdf =
+        BxDF *bxdf =
             material->Evaluate(scratch.temp.arena, si, lambda, Vec4f(dudx, dvdx, dudy, dvdy));
         BSDF bsdf(bxdf, si.shading.dpdu, si.shading.n);
 

@@ -687,13 +687,13 @@ __forceinline void Transpose3x4(const Lane4F32 &a, const Lane4F32 &b, const Lane
     out3        = UnpackHi(t1, t3);
 }
 
-f32 &Set(Lane4F32 &val, u32 index)
+inline f32 &Set(Lane4F32 &val, u32 index)
 {
     Assert(index < 4);
     return val[index];
 }
 
-f32 Get(const Lane4F32 &val, u32 index)
+inline f32 Get(const Lane4F32 &val, u32 index)
 {
     Assert(index < 4);
     return val[index];

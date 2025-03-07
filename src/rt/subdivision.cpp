@@ -1,6 +1,10 @@
 #include "math/matx.h"
+#include "scene.h"
+#include "subdivision.h"
 #include "thread_context.h"
+
 #define M_PI 3.1415926535897932
+#include <Ptexture.h>
 #include <opensubdiv/far/topologyDescriptor.h>
 #include <opensubdiv/far/primvarRefiner.h>
 #include <opensubdiv/far/patchTableFactory.h>
@@ -9,6 +13,22 @@
 
 namespace rt
 {
+
+const FixedArray<int, 2> PatchItr::diff  = {1, -1};
+const FixedArray<int, 2> PatchItr::start = {0, 1};
+
+const FixedArray<Vec2f, 4> PatchItr::uvTable = {
+    Vec2f(0.f, 0.f),
+    Vec2f(1.f, 0.f),
+    Vec2f(1.f, 1.f),
+    Vec2f(0.f, 1.f),
+};
+const FixedArray<Vec2i, 4> PatchItr::uvDiffTable = {
+    Vec2i(1, 0),
+    Vec2i(0, 1),
+    Vec2i(-1, 0),
+    Vec2i(0, -1),
+};
 
 PatchItr OpenSubdivPatch::CreateIterator(int edge) const
 {

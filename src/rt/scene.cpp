@@ -1,5 +1,8 @@
 #include "scene.h"
+#include "bvh/bvh_build.h"
+#include "bvh/bvh_intersect1.h"
 #include "bvh/bvh_types.h"
+#include "bvh/partial_rebraiding.h"
 #include "macros.h"
 #include "integrate.h"
 #include "math/matx.h"
@@ -33,174 +36,156 @@ struct SceneLoadTable
 
 void Texture::Start(ShadingThreadState *) {}
 
-struct PtexData
+PtexTexture::PtexTexture(string filename, FilterType filterType, ColorEncoding encoding,
+                         f32 scale)
+    : filename(filename), filterType(filterType), encoding(encoding), scale(scale)
 {
-    Ptex::PtexTexture *texture;
-    Ptex::PtexFilter *filter;
-};
+}
 
-enum FilterType
+f32 PtexTexture::EvaluateFloat(SurfaceInteraction &si, const Vec4f &filterWidths)
 {
-    Bspline,
-    CatmullRom,
-};
-struct PtexTexture : Texture
+    f32 result = 0.f;
+    EvaluateHelper<1>(si, filterWidths, &result);
+    return result * scale;
+}
+
+SampledSpectrum PtexTexture::EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
+                                            const Vec4f &filterWidths)
 {
-    string filename;
-    f32 scale = 1.f;
-    ColorEncoding encoding;
-    FilterType filterType;
+    Vec3f result = {};
+    EvaluateHelper<3>(si, filterWidths, result.e);
+    Assert(!IsNaN(result[0]) && !IsNaN(result[1]) && !IsNaN(result[2]));
+    return Texture::EvaluateAlbedo(result * scale, lambda);
+}
 
-    PtexTexture(string filename, FilterType filterType = FilterType::Bspline,
-                ColorEncoding encoding = ColorEncoding::Gamma, f32 scale = 1.f)
-        : filename(filename), filterType(filterType), encoding(encoding), scale(scale)
+void PtexTexture::Start(ShadingThreadState *state)
+{
+    GetDebug()->texture = this;
+
+    Ptex::String error;
+    Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
+    if (!texture)
     {
+        printf("%s\n", error.c_str());
+        Assert(0);
     }
+}
 
-    f32 EvaluateFloat(SurfaceInteraction &si, const Vec4f &filterWidths) override
+void PtexTexture::Stop()
+{
+    Ptex::String error;
+    Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
+    if (!texture)
     {
-        f32 result = 0.f;
-        EvaluateHelper<1>(si, filterWidths, &result);
-        return result * scale;
+        printf("%s\n", error.c_str());
+        Assert(0);
     }
+    texture->release();
+    texture->release();
+}
 
-    SampledSpectrum EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
-                                   const Vec4f &filterWidths) override
+template <i32 c>
+void PtexTexture::EvaluateHelper(Ptex::PtexTexture *texture, SurfaceInteraction &intr,
+                                 const Vec4f &filterWidths, f32 *result) const
+{
+    GetDebug()->filename = filename;
+    Ptex::PtexFilter::FilterType fType;
+    switch (filterType)
     {
-        Vec3f result = {};
-        EvaluateHelper<3>(si, filterWidths, result.e);
-        Assert(!IsNaN(result[0]) && !IsNaN(result[1]) && !IsNaN(result[2]));
-        return Texture::EvaluateAlbedo(result * scale, lambda);
-    }
-
-    virtual void Start(ShadingThreadState *state) override
-    {
-        GetDebug()->texture = this;
-
-        Ptex::String error;
-        Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
-        if (!texture)
+        case FilterType::Bspline:
         {
-            printf("%s\n", error.c_str());
-            Assert(0);
+            fType = Ptex::PtexFilter::FilterType::f_bspline;
         }
-    }
-
-    virtual void Stop() override
-    {
-        Ptex::String error;
-        Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
-        if (!texture)
+        break;
+        case FilterType::CatmullRom:
         {
-            printf("%s\n", error.c_str());
-            Assert(0);
+            fType = Ptex::PtexFilter::FilterType::f_catmullrom;
         }
-        texture->release();
-        texture->release();
+        break;
     }
 
-    template <i32 c>
-    void EvaluateHelper(Ptex::PtexTexture *texture, SurfaceInteraction &intr,
-                        const Vec4f &filterWidths, f32 *result) const
+    Ptex::PtexFilter::Options opts(fType);
+    Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
+    const Vec2f &uv          = intr.uv;
+    u32 faceIndex            = intr.faceIndices;
+
+    if (!texture)
     {
-        GetDebug()->filename = filename;
-        Ptex::PtexFilter::FilterType fType;
-        switch (filterType)
+        Print("ptex filename: %S\n", filename);
+        Print("scene filename: %S\n", GetDebug()->filename);
+        Print("geomID: %u\n", GetDebug()->geomID);
+        Assert(0);
+    }
+    u32 numFaces = texture->getInfo().numFaces;
+    if (faceIndex >= numFaces)
+    {
+        Print("faceIndex: %u, numFaces: %u\n", faceIndex, numFaces);
+        Print("scene filename: %S\n", GetDebug()->filename);
+        Print("geomID: %u\n", GetDebug()->geomID);
+        Print("filename: %S\n", filename);
+        Assert(0);
+    }
+
+    i32 nc = texture->numChannels();
+    Assert(nc == c);
+
+    f32 out[3] = {};
+    filter->eval(out, 0, c, faceIndex, uv[0], uv[1], filterWidths[0], filterWidths[1],
+                 filterWidths[2], filterWidths[3]);
+
+    Assert(!IsNaN(out[0]) && !IsNaN(out[1]) && !IsNaN(out[2]));
+    filter->release();
+
+    // Convert to srgb
+
+    if constexpr (c == 1) *result = out[0];
+    else
+    {
+        if (encoding == ColorEncoding::SRGB)
         {
-            case FilterType::Bspline:
+            u8 rgb[3];
+            for (i32 i = 0; i < nc; i++)
             {
-                fType = Ptex::PtexFilter::FilterType::f_bspline;
+                rgb[i] = u8(Clamp(out[i] * 255.f + 0.5f, 0.f, 255.f));
             }
-            break;
-            case FilterType::CatmullRom:
-            {
-                fType = Ptex::PtexFilter::FilterType::f_catmullrom;
-            }
-            break;
+            Vec3f rgbF = SRGBToLinear(rgb);
+            out[0]     = rgbF.x;
+            out[1]     = rgbF.y;
+            out[2]     = rgbF.z;
         }
-
-        Ptex::PtexFilter::Options opts(fType);
-        Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(texture, opts);
-        const Vec2f &uv          = intr.uv;
-        u32 faceIndex            = intr.faceIndices;
-
-        if (!texture)
+        else if (encoding == ColorEncoding::Gamma)
         {
-            Print("ptex filename: %S\n", filename);
-            Print("scene filename: %S\n", GetDebug()->filename);
-            Print("geomID: %u\n", GetDebug()->geomID);
-            Assert(0);
+            out[0] = Pow(Max(out[0], 0.f), 2.2f);
+            out[1] = Pow(Max(out[1], 0.f), 2.2f);
+            out[2] = Pow(Max(out[2], 0.f), 2.2f);
         }
-        u32 numFaces = texture->getInfo().numFaces;
-        if (faceIndex >= numFaces)
-        {
-            Print("faceIndex: %u, numFaces: %u\n", faceIndex, numFaces);
-            Print("scene filename: %S\n", GetDebug()->filename);
-            Print("geomID: %u\n", GetDebug()->geomID);
-            Print("filename: %S\n", filename);
-            Assert(0);
-        }
-
-        i32 nc = texture->numChannels();
-        Assert(nc == c);
-
-        f32 out[3] = {};
-        filter->eval(out, 0, c, faceIndex, uv[0], uv[1], filterWidths[0], filterWidths[1],
-                     filterWidths[2], filterWidths[3]);
 
         Assert(!IsNaN(out[0]) && !IsNaN(out[1]) && !IsNaN(out[2]));
-        filter->release();
 
-        // Convert to srgb
-
-        if constexpr (c == 1) *result = out[0];
-        else
-        {
-            if (encoding == ColorEncoding::SRGB)
-            {
-                u8 rgb[3];
-                for (i32 i = 0; i < nc; i++)
-                {
-                    rgb[i] = u8(Clamp(out[i] * 255.f + 0.5f, 0.f, 255.f));
-                }
-                Vec3f rgbF = SRGBToLinear(rgb);
-                out[0]     = rgbF.x;
-                out[1]     = rgbF.y;
-                out[2]     = rgbF.z;
-            }
-            else if (encoding == ColorEncoding::Gamma)
-            {
-                out[0] = Pow(Max(out[0], 0.f), 2.2f);
-                out[1] = Pow(Max(out[1], 0.f), 2.2f);
-                out[2] = Pow(Max(out[2], 0.f), 2.2f);
-            }
-
-            Assert(!IsNaN(out[0]) && !IsNaN(out[1]) && !IsNaN(out[2]));
-
-            result[0] = out[0];
-            result[1] = out[1];
-            result[2] = out[2];
-        }
+        result[0] = out[0];
+        result[1] = out[1];
+        result[2] = out[2];
     }
+}
 
-    template <i32 c>
-    void EvaluateHelper(SurfaceInteraction &intr, const Vec4f &filterWidths, f32 *result)
+template <i32 c>
+void PtexTexture::EvaluateHelper(SurfaceInteraction &intr, const Vec4f &filterWidths,
+                                 f32 *result)
+{
+    GetDebug()->filename = filename;
+    Assert(cache);
+    Ptex::String error;
+    Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
+    if (!texture)
     {
-        GetDebug()->filename = filename;
-        Assert(cache);
-        Ptex::String error;
-        Ptex::PtexTexture *texture = cache->get((char *)filename.str, error);
-        if (!texture)
-        {
-            printf("%s\n", error.c_str());
-            Assert(0);
-        }
-
-        EvaluateHelper<c>(texture, intr, filterWidths, result);
-
-        texture->release();
+        printf("%s\n", error.c_str());
+        Assert(0);
     }
-};
+
+    EvaluateHelper<c>(texture, intr, filterWidths, result);
+
+    texture->release();
+}
 
 struct ConstantTexture : Texture
 {
@@ -234,20 +219,22 @@ struct ConstantVectorTexture : Texture
 
 struct NullMaterial : Material
 {
+    typedef BxDF BxDFType;
     NullMaterial() {}
-    BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
-                  const Vec4f &filterWidths) override
+    BxDF *Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                   const Vec4f &filterWidths) override
     {
-        return {};
+        return 0;
     }
 };
 
 struct DiffuseMaterial : Material
 {
+    typedef DiffuseBxDF BxDFType;
     Texture *reflectance;
     DiffuseMaterial(Texture *reflectance) : reflectance(reflectance) {}
-    BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
-                  const Vec4f &filterWidths) override
+    BxDF *Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                   const Vec4f &filterWidths) override
     {
         DiffuseBxDF *bxdf = PushStruct(arena, DiffuseBxDF);
         *bxdf             = EvaluateHelper(si, lambda, filterWidths);
@@ -267,6 +254,7 @@ struct DiffuseMaterial : Material
 
 struct DiffuseTransmissionMaterial : Material
 {
+    typedef DiffuseTransmissionBxDF BxDFType;
     Texture *reflectance;
     Texture *transmittance;
     f32 scale;
@@ -274,8 +262,8 @@ struct DiffuseTransmissionMaterial : Material
         : reflectance(reflectance), transmittance(transmittance), scale(scale)
     {
     }
-    BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
-                  const Vec4f &filterWidths) override
+    BxDF *Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                   const Vec4f &filterWidths) override
     {
         DiffuseTransmissionBxDF *bxdf = PushStruct(arena, DiffuseTransmissionBxDF);
         *bxdf                         = EvaluateHelper(si, lambda, filterWidths);
@@ -304,6 +292,8 @@ struct DiffuseTransmissionMaterial : Material
 
 struct DielectricMaterial : Material
 {
+    typedef DielectricBxDF BxDFType;
+
     Texture *uRoughnessTexture;
     Texture *vRoughnessTexture;
     f32 eta;
@@ -315,8 +305,8 @@ struct DielectricMaterial : Material
     }
 
     virtual f32 GetIOR() override { return eta; }
-    BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
-                  const Vec4f &filterWidths) override
+    BxDF *Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                   const Vec4f &filterWidths) override
     {
         DielectricBxDF *bxdf = PushStruct(arena, DielectricBxDF);
         *bxdf                = EvaluateHelper(si, lambda, filterWidths);
@@ -363,6 +353,8 @@ struct DielectricMaterial : Material
 
 struct CoatedDiffuseMaterial : Material
 {
+    typedef CoatedDiffuseBxDF BxDFType;
+
     DielectricMaterial dielectric;
     DiffuseMaterial diffuse;
     Texture *albedo;
@@ -378,8 +370,8 @@ struct CoatedDiffuseMaterial : Material
     {
     }
 
-    BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
-                  const Vec4f &filterWidths) override
+    BxDF *Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                   const Vec4f &filterWidths) override
     {
         CoatedDiffuseBxDF *bxdf = PushStruct(arena, CoatedDiffuseBxDF);
         *bxdf                   = EvaluateHelper(si, lambda, filterWidths);

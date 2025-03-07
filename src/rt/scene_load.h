@@ -190,13 +190,6 @@ struct ScenePacket
     }
 };
 
-struct Options
-{
-    string filename;
-    i32 pixelX = -1;
-    i32 pixelY = -1;
-};
-
 bool CheckQuadPLY(string filename)
 {
     string buffer = OS_MapFileRead(filename); // OS_ReadFile(arena, filename);

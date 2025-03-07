@@ -1,5 +1,7 @@
 #ifndef BVH_BUILD_H
 #define BVH_BUILD_H
+
+#include "bvh_aos.h"
 #include "bvh_types.h"
 
 #define BUILD_PARALLEL_THRESHOLD 2 * 1024

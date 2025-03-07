@@ -1,179 +1,25 @@
 #ifndef SCENE_H
 #define SCENE_H
 
+#define USE_GPU
+
 #include "bvh/bvh_types.h"
+#include "bxdf.h"
+#include "gpu_scene.h"
 #include "handles.h"
 #include "lights.h"
-#include "math/lane4f32.h"
+#include "parallel.h"
+#include "subdivision.h"
+#include "vulkan.h"
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/util/GridHandle.h>
 #include <nanovdb/util/IO.h>
 #include <nanovdb/util/SampleFromVoxels.h>
+#include <Ptexture.h>
 
 // #include "lights.h"
 namespace rt
 {
-
-#if 0
-class Sphere
-{
-public:
-    Sphere() {}
-    Sphere(Vec3f c, f32 r, Material *m) : center(c), radius(fmax(0.f, r)), material(m)
-    {
-        centerVec = Vec3f(0, 0, 0);
-    }
-    Sphere(Vec3f c1, Vec3f c2, f32 r, Material *m)
-        : center(c1), radius(fmax(0.f, r)), material(m)
-    {
-        centerVec = c2 - c1;
-    }
-    bool Hit(const Ray &r, const f32 tMin, const f32 tMax, HitRecord &record) const;
-    Vec3f Center(f32 time) const;
-    AABB GetAABB() const;
-    static void GetUV(f32 &u, f32 &v, const Vec3f &p)
-    {
-        f32 zenith  = acos(-p.y);
-        f32 azimuth = atan2(-p.z, p.x) + PI;
-
-        u = azimuth / (2 * PI);
-        v = zenith / PI;
-    }
-    f32 PdfValue(const Vec3f &origin, const Vec3f &direction) const;
-    Vec3f Random(const Vec3f &origin, Vec2f u) const;
-
-    Vec3f center;
-    f32 radius;
-
-private:
-    Material *material;
-    Vec3f centerVec;
-};
-
-typedef u32 PrimitiveType;
-enum
-{
-    PrimitiveType_Sphere,
-    PrimitiveType_Quad,
-    PrimitiveType_Box,
-    PrimitiveType_Triangle,
-    PrimitiveType_Curve,
-    PrimitiveType_Subdiv,
-
-    // NOTE: triangle mesh instances only (for now)
-    PrimitiveType_Instance     = 16,
-    PrimitiveType_InstanceMask = PrimitiveType_Instance - 1,
-
-    PrimitiveType_Count,
-};
-
-__forceinline b32 IsInstanced(u32 i) { return ~PrimitiveType_InstanceMask & i; }
-__forceinline PrimitiveType GetBaseType(u32 i)
-{
-    return PrimitiveType(i & PrimitiveType_InstanceMask);
-}
-
-struct Disk
-{
-    f32 radius, height;
-    const AffineSpace *objectFromRender;
-
-    Disk(const AffineSpace *t, f32 radius = 1.f, f32 height = 0.f)
-        : objectFromRender(t), radius(radius), height(height)
-    {
-    }
-    bool Intersect(const Ray2 &r, SurfaceInteraction &intr, f32 tMax = pos_inf)
-    {
-        Vec3f oi = TransformP(*objectFromRender, Vec3f(r.o));
-        Vec3f di = TransformV(*objectFromRender, Vec3f(r.d));
-
-        // Compute plane intersection for disk
-        // Reject disk intersections for rays parallel to the disk's plane
-        if (f32(di.z) == 0) return false;
-
-        f32 tShapeHit = (height - f32(oi.z)) / f32(di.z);
-        if (tShapeHit <= 0 || tShapeHit >= tMax) return false;
-
-        // See if hit point is inside disk radii and $\phimax$
-        Vec3f pHit = Vec3f(oi) + (f32)tShapeHit * Vec3f(di);
-        f32 dist2  = Sqr(pHit.x) + Sqr(pHit.y);
-        if (dist2 > Sqr(radius)) return false;
-
-        f32 phi = std::atan2(pHit.y, pHit.x);
-        if (phi < 0) phi += 2 * PI;
-
-        const f32 phiMax = 2 * PI;
-        // Find parametric representation of disk hit
-        f32 u    = phi / phiMax;
-        f32 rHit = Sqrt(dist2);
-        f32 v    = (radius - rHit) / radius; //(radius - innerRadius);
-
-        Vec3f dpdu(-phiMax * pHit.y, phiMax * pHit.x, 0);
-        Vec3f dpdv = Vec3f(pHit.x, pHit.y, 0) * (-radius) / rHit;
-        // Vec3f dndu(0, 0, 0), dndv(0, 0, 0);
-
-        // Refine disk intersection point
-        pHit.z = height;
-
-        // Return _SurfaceInteraction_ for quadric intersection
-        intr = SurfaceInteraction(pHit, Normalize(Cross(dpdu, dpdv)), Vec2f(u, v));
-        return true;
-
-        // Return _QuadricIntersection_ for disk intersection
-        // return QuadricIntersection{tShapeHit, pHit, phi};
-    }
-};
-
-struct ConstantMedium
-{
-    f32 negInvDensity;
-    Material *phaseFunction;
-
-    ConstantMedium(f32 density, Material *material)
-        : negInvDensity(-1 / density), phaseFunction(material)
-    {
-    }
-
-    template <typename T>
-    bool Hit(const T &primitive, const Ray &r, const f32 tMin, const f32 tMax,
-             HitRecord &record) const
-    {
-        HitRecord rec1, rec2;
-        if (!primitive.Hit(r, -infinity, infinity, rec1)) return false;
-        // std::clog << "\n1. tMin=" << rec1.t;
-        if (!primitive.Hit(r, rec1.t + 0.0001f, infinity, rec2))
-        {
-            // std::clog << "\ntMin=" << rec1.t << '\n'; //", tMax=" << rec2.t << '\n';
-            return false;
-        }
-
-        if (rec1.t < tMin) rec1.t = tMin;
-        if (rec2.t > tMax) rec2.t = tMax;
-
-        if (rec1.t >= rec2.t)
-        {
-            // std::clog << "\ntMin=" << rec1.t << ", tMax=" << rec2.t;
-            return false;
-        }
-        // std::clog << "\n2.";
-
-        if (rec1.t < 0) rec1.t = 0;
-
-        f32 rayLength              = Length(r.d);
-        f32 distanceInsideBoundary = (rec2.t - rec1.t) * rayLength;
-        f32 hitDistance            = negInvDensity * log(RandomFloat());
-
-        if (hitDistance > distanceInsideBoundary) return false;
-
-        record.t           = rec1.t + hitDistance / rayLength;
-        record.p           = r.at(record.t);
-        record.normal      = Vec3f(1, 0, 0);
-        record.isFrontFace = true;
-        record.material    = phaseFunction;
-        return true;
-    }
-};
-#endif
 
 enum class IndexType
 {
@@ -396,16 +242,19 @@ struct NanoVDBBuffer
     }
 };
 
-f32 HenyeyGreenstein(f32 cosTheta, f32 g)
+inline f32 HenyeyGreenstein(f32 cosTheta, f32 g)
 {
     g         = Clamp(g, -.99f, .99f);
     f32 denom = 1 + Sqr(g) + 2 * g * cosTheta;
     return Inv4Pi * (1 - Sqr(g)) / (denom * SafeSqrt(denom));
 }
 
-f32 HenyeyGreenstein(Vec3f wo, Vec3f wi, f32 g) { return HenyeyGreenstein(Dot(wo, wi), g); }
+inline f32 HenyeyGreenstein(Vec3f wo, Vec3f wi, f32 g)
+{
+    return HenyeyGreenstein(Dot(wo, wi), g);
+}
 
-Vec3f SampleHenyeyGreenstein(const Vec3f &wo, f32 g, Vec2f u, f32 *pdf = 0)
+inline Vec3f SampleHenyeyGreenstein(const Vec3f &wo, f32 g, Vec2f u, f32 *pdf = 0)
 {
     f32 cosTheta;
     if (Abs(g) < 1e-3f) cosTheta = 1 - 2 * u[0];
@@ -487,8 +336,8 @@ struct NanoVDBVolume
     PhaseFunction phaseFunction;
 
     NanoVDBVolume() {}
-    NanoVDBVolume(string filename, const AffineSpace *renderFromMedium, Spectrum cAbs,
-                  Spectrum cScatter, f32 g, f32 cScale, f32 LeScale = 1.f,
+    NanoVDBVolume(string filename, const AffineSpace *renderFromMedium, Spectrum *cAbs,
+                  Spectrum *cScatter, f32 g, f32 cScale, f32 LeScale = 1.f,
                   f32 temperatureOffset = 0.f, f32 temperatureScale = 1.f)
         : mediumFromRender(Inverse(*renderFromMedium)), cAbs(DenselySampledSpectrum(cAbs)),
           cScatter(DenselySampledSpectrum(cScatter)), phaseFunction(g), cScale(cScale),
@@ -647,8 +496,8 @@ struct Material
     // TODO: actually displacement map
     struct Texture *displacement;
 
-    virtual BxDF Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
-                          const Vec4f &filterWidths) = 0;
+    virtual BxDF *Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                           const Vec4f &filterWidths) = 0;
 
     virtual f32 GetIOR() { return 1.f; }
     virtual bool IsTransmissive() { return false; }
@@ -680,7 +529,46 @@ struct PrimitiveIndices
 struct Ray2;
 template <i32 K>
 struct SurfaceInteractions;
-struct PtexTexture;
+
+enum class ColorEncoding
+{
+    None,
+    Linear,
+    Gamma,
+    SRGB,
+};
+
+enum FilterType
+{
+    Bspline,
+    CatmullRom,
+};
+
+struct PtexTexture : Texture
+{
+    string filename;
+    f32 scale = 1.f;
+    ColorEncoding encoding;
+    FilterType filterType;
+
+    PtexTexture(string filename, FilterType filterType = FilterType::Bspline,
+                ColorEncoding encoding = ColorEncoding::Gamma, f32 scale = 1.f);
+
+    f32 EvaluateFloat(SurfaceInteraction &si, const Vec4f &filterWidths) override;
+
+    SampledSpectrum EvaluateAlbedo(SurfaceInteraction &si, SampledWavelengths &lambda,
+                                   const Vec4f &filterWidths) override;
+
+    virtual void Start(ShadingThreadState *state) override;
+
+    virtual void Stop() override;
+
+    template <i32 c>
+    void EvaluateHelper(Ptex::PtexTexture *texture, SurfaceInteraction &intr,
+                        const Vec4f &filterWidths, f32 *result) const;
+    template <i32 c>
+    void EvaluateHelper(SurfaceInteraction &intr, const Vec4f &filterWidths, f32 *result);
+};
 
 struct SceneDebug
 {
@@ -705,8 +593,8 @@ struct SceneDebug
     // u32 tileCount;
 };
 
-thread_local SceneDebug debug_;
-static SceneDebug *GetDebug() { return &debug_; }
+static thread_local SceneDebug debug_;
+inline SceneDebug *GetDebug() { return &debug_; }
 
 struct TessellationParams
 {
@@ -804,14 +692,14 @@ struct Scene
     // const DiffuseAreaLight *GetAreaLights() const { return lights.Get<DiffuseAreaLight>(); }
 };
 
-struct Scene *scene_;
-Scene *GetScene() { return scene_; }
+static Scene *scene_;
+inline Scene *GetScene() { return scene_; }
 
-ScenePrimitives **scenes_;
-ScenePrimitives **GetScenes() { return scenes_; }
-void SetScenes(ScenePrimitives **scenes) { scenes_ = scenes; }
+static ScenePrimitives **scenes_;
+inline ScenePrimitives **GetScenes() { return scenes_; }
+inline void SetScenes(ScenePrimitives **scenes) { scenes_ = scenes; }
 
-Mesh *GetMesh(int sceneID, int geomID)
+inline Mesh *GetMesh(int sceneID, int geomID)
 {
     Assert(scenes_);
     ScenePrimitives *s = scenes_[sceneID];
@@ -830,6 +718,10 @@ template <GeometryType type>
 void ComputeTessellationParams(Mesh *meshes, TessellationParams *params, u32 start, u32 count);
 
 void BuildSceneBVHs(ScenePrimitives **scenes, int numScenes, int maxDepth);
+
+void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string filename,
+               const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender, int screenHeight,
+               AffineSpace *t);
 
 } // namespace rt
 #endif

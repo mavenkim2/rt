@@ -6,6 +6,8 @@
 #include <xmmintrin.h>
 #include <immintrin.h>
 
+#include "vec3.h"
+
 namespace rt
 {
 __forceinline f32 AngleBetween(Vec3f v1, Vec3f v2)
@@ -368,7 +370,7 @@ inline u16 Encode(f32 f) { return (u16)((f + 1) / 2 * 65535.f + 0.5f); }
 inline f32 Decode(u16 u) { return (f32)(u / 65535.f * 2 - 1); }
 
 // TODO: simd
-OctahedralVector EncodeOctahedral(Vec3f v)
+inline OctahedralVector EncodeOctahedral(Vec3f v)
 {
     v /= Abs(v.x) + Abs(v.y) + Abs(v.z);
     OctahedralVector result;
@@ -386,7 +388,7 @@ OctahedralVector EncodeOctahedral(Vec3f v)
     return result;
 }
 
-Vec3f DecodeOctahedral(OctahedralVector in)
+inline Vec3f DecodeOctahedral(OctahedralVector in)
 {
     Vec3f result;
     result.x = Decode(in.x);

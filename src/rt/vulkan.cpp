@@ -1,5 +1,8 @@
+#include "memory.h"
+#include "thread_context.h"
 #include "vulkan.h"
-#include "bvh/bvh_types.h"
+#define VMA_IMPLEMENTATION
+#include "../third_party/vulkan/vk_mem_alloc.h"
 
 namespace rt
 {

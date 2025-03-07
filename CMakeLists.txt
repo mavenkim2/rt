@@ -119,6 +119,25 @@ set (MEM_SOURCE_FILES
     src/rt/base.cpp
 )
 
+set (RT_SOURCE_FILES
+    # ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/cpu_scene.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/debug.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/gpu_scene.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/integrate.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/lights.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/scene.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/simd_integrate.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/spectrum.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/subdivision.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/vulkan.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/tests/test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bvh/bvh_types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/low_discrepancy.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/tables/primes.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/tables/sobolmatrices.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/sampler.cpp
+)
+
 if (CMAKE_SYSTEM_NAME STREQUAL Windows)
     list (APPEND PLATFORM_SOURCE_FILES "src/rt/win32.cpp")
 endif()
@@ -167,10 +186,10 @@ add_executable(rt_exe
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/rt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/gen/rgbspectrum_srgb.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/vulkan/volk.c
+    ${RT_SOURCE_FILES}
 )
 target_compile_definitions(rt_exe PRIVATE ${RT_DEFINITIONS})
 target_include_directories(rt_exe PRIVATE 
-    # ${ZLIB_INCLUDE_DIR}
     ${PTEX_INCLUDE}
     ${OPENSUBDIV_INCLUDE_DIR}
     ${NANOVDB_INCLUDE_DIR}

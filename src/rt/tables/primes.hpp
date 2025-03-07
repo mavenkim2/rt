@@ -1,7 +1,9 @@
+#ifndef PRIMES_H
+#define PRIMES_H
 namespace rt 
 {
 static constexpr int primeTableSize = 1000;
-int primes[primeTableSize] = 
+static int primes[primeTableSize] = 
 {
     2, 3, 5, 7, 11,
     13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97, 101,
@@ -75,3 +77,4 @@ int primes[primeTableSize] =
     7829, 7841, 7853, 7867, 7873, 7877, 7879, 7883, 7901, 7907, 7919,
 };
 }
+#endif

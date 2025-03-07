@@ -1,6 +1,10 @@
 #ifndef BOUNDS_H
 #define BOUNDS_H
 
+#include "basemath.h"
+#include "simd_include.h"
+#include "vec3.h"
+
 namespace rt
 {
 struct Bounds

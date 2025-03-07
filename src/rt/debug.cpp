@@ -1,3 +1,7 @@
+#include "debug.h"
+#include "thread_context.h"
+#include "thread_statistics.h"
+
 namespace rt
 {
 Event::Event(u32 offset) : offset(offset) { counter = OS_StartCounter(); }

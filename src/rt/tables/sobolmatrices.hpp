@@ -6,12 +6,17 @@
 // The tabulated direction numbers are available here:
 // http://web.maths.unsw.edu.au/~fkuo/sobol/new-joe-kuo-6.21201
 
+#ifndef SOBOLMATRICES_H_
+#define SOBOLMATRICES_H_
+
+#include <stdint.h>
+
 namespace rt {
 
-static constexpr i32 nSobolDimensions = 1024;
-static constexpr i32 sobolMatrixSize  = 52;
+static constexpr int nSobolDimensions = 1024;
+static constexpr int sobolMatrixSize  = 52;
 // clang-format off
-const u32 sobolMatrices32[nSobolDimensions * sobolMatrixSize] = {
+const uint32_t sobolMatrices32[nSobolDimensions * sobolMatrixSize] = {
     0x80000000, 0x40000000, 0x20000000, 0x10000000, 0x08000000, 0x04000000,
     0x02000000, 0x01000000, 0x00800000, 0x00400000, 0x00200000, 0x00100000,
     0x00080000, 0x00040000, 0x00020000, 0x00010000, 0x00008000, 0x00004000,
@@ -8889,7 +8894,7 @@ const u32 sobolMatrices32[nSobolDimensions * sobolMatrixSize] = {
     0x6d8253b0, 0x59c0d35a, 0x34a32b93, 0x1397876e,
 };
 
-const u64 vdCSobolMatrices[][sobolMatrixSize] = {
+const uint64_t vdCSobolMatrices[][sobolMatrixSize] = {
     {// m = 1
      0x1ULL, 0x1ULL, 0x1ULL, 0x1ULL, 0x1ULL, 0x1ULL, 0x1ULL, 0x1ULL, 0x1ULL,
      0x1ULL, 0x1ULL, 0x1ULL, 0x1ULL, 0x1ULL, 0x1ULL, 0x1ULL, 0x1ULL, 0x1ULL,
@@ -9015,7 +9020,7 @@ const u64 vdCSobolMatrices[][sobolMatrixSize] = {
     {// m = 25
      0x1400140ULL, 0x1e001e0ULL}};
 
-const u64 vdCSobolMatricesInv[][sobolMatrixSize] = {
+const uint64_t vdCSobolMatricesInv[][sobolMatrixSize] = {
     {// m = 1
      0x2ULL, 0x3ULL},
     {// m = 2
@@ -9219,3 +9224,4 @@ const u64 vdCSobolMatricesInv[][sobolMatrixSize] = {
 }
 
 // clang-format on
+#endif

@@ -6,6 +6,7 @@
 #include "../spectrum.h"
 #include "../template.h"
 #include "../integrate.h"
+#include "../simd_integrate.h"
 namespace rt
 {
 
@@ -325,19 +326,9 @@ void TestRender(Arena *arena, Options *options = 0)
         }
     }
 
-    shadingThreadState_ = PushArray(arena, ShadingThreadState, numProcessors);
-    for (u32 i = 0; i < numProcessors; i++)
-    {
-        ShadingThreadState *state = &shadingThreadState_[i];
-        state->rayStates          = RayStateList(arenas[i]);
-        state->rayFreeList        = RayStateFreeList(arenas[i]);
-
-        state->rayQueue.handler = RayIntersectionHandler;
-    }
-
     counter = OS_StartCounter();
     // Render(arena, params);
-    RenderSIMD(arena, params);
+    RenderSIMD(arenas, arena, params);
     time = OS_GetMilliseconds(counter);
     printf("total render time: %fms\n", time);
 }
