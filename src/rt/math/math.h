@@ -403,6 +403,15 @@ inline Vec3f DecodeOctahedral(OctahedralVector in)
     return Normalize(result);
 }
 
+inline f32 PowerHeuristic(u32 numA, f32 pdfA, u32 numB, f32 pdfB)
+{
+    f32 a = Sqr(numA * pdfA);
+    f32 b = Sqr(numB * pdfB);
+    return a / (a + b);
+}
+
+
+
 } // namespace rt
 
 #endif

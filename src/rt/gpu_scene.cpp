@@ -41,7 +41,9 @@ GPUMesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
     return result;
 }
 
-void BuildSceneBVHs(ScenePrimitives **scenes, int numScenes, int maxDepth)
+void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, int maxDepth,
+                       const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender,
+                       int screenHeight)
 {
     CommandBuffer cmd = device->BeginCommandBuffer(QueueType_Graphics);
     device->BeginEvent(&cmd, "BLAS Build");

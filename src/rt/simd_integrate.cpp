@@ -1,8 +1,12 @@
+#include "bsdf.h"
 #include "scene.h"
 #include "win32.h"
 #include "simd_integrate.h"
+
 namespace rt
 {
+static ShadingThreadState *shadingThreadState_;
+static ShadingGlobals *shadingGlobals_;
 
 template <typename T>
 void ThreadLocalQueue<T>::Push(TempArena scratch, ShadingThreadState *state, T *entries,
@@ -151,6 +155,44 @@ void RenderSIMD(Arena **arenas, Arena *arena, RenderParams2 &params)
         state->rayQueue.handler = RayIntersectionHandler;
     }
 
+    Scene *scene = GetScene();
+    // Create SIMD queues
+    ShadingGlobals *globals   = GetShadingGlobals();
+    globals->numShadingQueues = scene->materials.Length();
+    globals->shadingQueues    = PushArray(arena, ShadingQueue, globals->numShadingQueues);
+    for (u32 i = 0; i < scene->materials.Length(); i++)
+    {
+        globals->shadingQueues[i].material = scene->materials[i];
+        switch (scene->materials[i]->GetType())
+        {
+            case MaterialTypes::Diffuse:
+            {
+                globals->shadingQueues[i].handler = ShadingQueueHandler<DiffuseMaterial>;
+            }
+            break;
+            case MaterialTypes::DiffuseTransmission:
+            {
+                globals->shadingQueues[i].handler =
+                    ShadingQueueHandler<DiffuseTransmissionMaterial>;
+            }
+            break;
+            case MaterialTypes::CoatedDiffuse:
+            {
+                globals->shadingQueues[i].handler = ShadingQueueHandler<CoatedDiffuseMaterial>;
+            }
+            break;
+            case MaterialTypes::Dielectric:
+            {
+                globals->shadingQueues[i].handler = ShadingQueueHandler<DielectricMaterial>;
+            }
+            break;
+            default:
+            {
+                globals->shadingQueues[i].handler = ShadingQueueHandler<NullMaterial>;
+            }
+        }
+    }
+
     u32 width              = params.width;
     u32 height             = params.height;
     u32 spp                = params.spp;
@@ -201,12 +243,11 @@ void RenderSIMD(Arena **arenas, Arena *arena, RenderParams2 &params)
     GenerateMinimumDifferentials(camera, params, width, height, taskCount, tileCountX,
                                  tileWidth, tileHeight, pixelWidth, pixelHeight);
 
-    ShadingGlobals *globals = GetShadingGlobals();
-    globals->rgbValues      = PushArray(arena, Vec3f, width * height);
-    globals->camera         = &camera;
-    globals->width          = width;
-    globals->height         = height;
-    globals->maxDepth       = maxDepth;
+    globals->rgbValues = PushArray(arena, Vec3f, width * height);
+    globals->camera    = &camera;
+    globals->width     = width;
+    globals->height    = height;
+    globals->maxDepth  = maxDepth;
 
     ParallelFor2D(
         Vec2i(params.pixelMin),

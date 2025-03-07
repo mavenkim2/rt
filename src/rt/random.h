@@ -2,6 +2,7 @@
 #define RANDOM_H
 
 #include <limits>
+#include "math/math_include.h"
 #include "hash.h"
 
 namespace rt

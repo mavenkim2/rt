@@ -1,5 +1,8 @@
 #ifndef THREAD_STATISTICS_H
 #define THREAD_STATISTICS_H
+
+#include "base.h"
+
 namespace rt
 {
 // NOTE: all member have to be u64
@@ -32,7 +35,8 @@ struct ThreadMemoryStatistics
     u64 totalOtherMemory;
 };
 
-static ThreadStatistics *threadLocalStatistics;
-static ThreadMemoryStatistics *threadMemoryStatistics;
+extern ThreadStatistics *threadLocalStatistics;
+extern ThreadMemoryStatistics *threadMemoryStatistics;
+
 } // namespace rt
 #endif

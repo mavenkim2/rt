@@ -143,9 +143,8 @@ struct ShadingGlobals
     u32 maxDepth;
 };
 
-// thread_local ShadingThreadState *shadingThreadState_;
-static ShadingThreadState *shadingThreadState_;
-static ShadingGlobals *shadingGlobals_;
+extern ShadingThreadState *shadingThreadState_;
+extern ShadingGlobals *shadingGlobals_;
 
 template <typename MaterialType>
 void ShadingQueueHandler(TempArena inScratch, struct ShadingThreadState *state,

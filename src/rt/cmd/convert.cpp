@@ -21,6 +21,8 @@
 #include "../random.h"
 #include "../parallel.h"
 #include "../base.cpp"
+#include "../parallel.cpp"
+#include "../thread_statistics.cpp"
 #include "../memory.cpp"
 #include "../string.cpp"
 #include "../thread_context.cpp"

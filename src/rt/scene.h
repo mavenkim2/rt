@@ -1,16 +1,16 @@
 #ifndef SCENE_H
 #define SCENE_H
 
-#define USE_GPU
+// #define USE_GPU
 
 #include "bvh/bvh_types.h"
 #include "bxdf.h"
-#include "gpu_scene.h"
+// #include "gpu_scene.h"
+#include "cpu_scene.h"
 #include "handles.h"
 #include "lights.h"
 #include "parallel.h"
 #include "subdivision.h"
-#include "vulkan.h"
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/util/GridHandle.h>
 #include <nanovdb/util/IO.h>
@@ -501,10 +501,200 @@ struct Material
 
     virtual f32 GetIOR() { return 1.f; }
     virtual bool IsTransmissive() { return false; }
+    virtual MaterialTypes GetType() { return MaterialTypes::Interface; }
 
     // Used in SIMD mode, loads and caches data that may be used across multiple calls
     virtual void Start(struct ShadingThreadState *state) {}
     virtual void Stop() {}
+};
+
+struct NullMaterial : Material
+{
+    typedef BxDF BxDFType;
+    NullMaterial() {}
+    BxDF *Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                   const Vec4f &filterWidths) override
+    {
+        return 0;
+    }
+};
+
+struct DiffuseMaterial : Material
+{
+    typedef DiffuseBxDF BxDFType;
+    Texture *reflectance;
+    DiffuseMaterial(Texture *reflectance) : reflectance(reflectance) {}
+    BxDF *Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                   const Vec4f &filterWidths) override
+    {
+        DiffuseBxDF *bxdf = PushStructConstruct(arena, DiffuseBxDF)();
+        *bxdf             = EvaluateHelper(si, lambda, filterWidths);
+        return bxdf;
+    }
+    DiffuseBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda,
+                               const Vec4f &filterWidths)
+
+    {
+        SampledSpectrum s = reflectance->EvaluateAlbedo(si, lambda, filterWidths);
+
+        return DiffuseBxDF(s);
+    }
+    virtual void Start(ShadingThreadState *state) override { reflectance->Start(state); }
+    virtual void Stop() override { reflectance->Stop(); }
+    virtual MaterialTypes GetType() override { return MaterialTypes::Diffuse; }
+};
+
+struct DiffuseTransmissionMaterial : Material
+{
+    typedef DiffuseTransmissionBxDF BxDFType;
+    Texture *reflectance;
+    Texture *transmittance;
+    f32 scale;
+    DiffuseTransmissionMaterial(Texture *reflectance, Texture *transmittance, f32 scale)
+        : reflectance(reflectance), transmittance(transmittance), scale(scale)
+    {
+    }
+    BxDF *Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                   const Vec4f &filterWidths) override
+    {
+        DiffuseTransmissionBxDF *bxdf = PushStructConstruct(arena, DiffuseTransmissionBxDF)();
+        *bxdf                         = EvaluateHelper(si, lambda, filterWidths);
+        return bxdf;
+    }
+
+    DiffuseTransmissionBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda,
+                                           const Vec4f &filterWidths)
+    {
+        SampledSpectrum r = reflectance->EvaluateAlbedo(si, lambda, filterWidths);
+        SampledSpectrum t = transmittance->EvaluateAlbedo(si, lambda, filterWidths);
+
+        return DiffuseTransmissionBxDF(r, t);
+    }
+    virtual void Start(ShadingThreadState *state) override
+    {
+        reflectance->Start(state);
+        transmittance->Start(state);
+    }
+    virtual void Stop() override
+    {
+        reflectance->Stop();
+        transmittance->Stop();
+    }
+    virtual MaterialTypes GetType() override { return MaterialTypes::DiffuseTransmission; }
+};
+
+struct DielectricMaterial : Material
+{
+    typedef DielectricBxDF BxDFType;
+
+    Texture *uRoughnessTexture;
+    Texture *vRoughnessTexture;
+    f32 eta;
+
+    DielectricMaterial() = default;
+    DielectricMaterial(Texture *u, Texture *v, f32 eta)
+        : uRoughnessTexture(u), vRoughnessTexture(v), eta(eta)
+    {
+    }
+
+    virtual f32 GetIOR() override { return eta; }
+    BxDF *Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                   const Vec4f &filterWidths) override
+    {
+        DielectricBxDF *bxdf = PushStructConstruct(arena, DielectricBxDF)();
+        *bxdf                = EvaluateHelper(si, lambda, filterWidths);
+        return bxdf;
+    }
+
+    DielectricBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda,
+                                  const Vec4f &filterWidths)
+    {
+        f32 uRoughness, vRoughness;
+        if (uRoughnessTexture == vRoughnessTexture)
+        {
+            uRoughness = vRoughness = uRoughnessTexture->EvaluateFloat(si, filterWidths);
+        }
+        else
+        {
+            uRoughness = uRoughnessTexture->EvaluateFloat(si, filterWidths);
+
+            vRoughness = vRoughnessTexture->EvaluateFloat(si, filterWidths);
+        }
+
+        uRoughness = TrowbridgeReitzDistribution::RoughnessToAlpha(uRoughness);
+        vRoughness = TrowbridgeReitzDistribution::RoughnessToAlpha(vRoughness);
+
+        // if (eta.TypeIndex<ConstantSpectrum>() == eta.GetTag())
+        // {
+        //     lambda.TerminateSecondary();
+        // }
+        f32 ior = eta; // eta(lambda[0]);
+        return DielectricBxDF(ior, TrowbridgeReitzDistribution(uRoughness, vRoughness));
+    }
+    virtual bool IsTransmissive() override { return true; }
+    virtual void Start(ShadingThreadState *state) override
+    {
+        uRoughnessTexture->Start(state);
+        if (uRoughnessTexture != vRoughnessTexture) vRoughnessTexture->Start(state);
+    }
+    virtual void Stop() override
+    {
+        uRoughnessTexture->Stop();
+        if (uRoughnessTexture != vRoughnessTexture) vRoughnessTexture->Stop();
+    }
+    virtual MaterialTypes GetType() override { return MaterialTypes::Dielectric; }
+};
+
+struct CoatedDiffuseMaterial : Material
+{
+    typedef CoatedDiffuseBxDF BxDFType;
+
+    DielectricMaterial dielectric;
+    DiffuseMaterial diffuse;
+    Texture *albedo;
+    Texture *g;
+    i32 maxDepth;
+    i32 nSamples;
+    f32 thickness;
+
+    CoatedDiffuseMaterial(DielectricMaterial die, DiffuseMaterial diff, Texture *albedo,
+                          Texture *g, i32 maxDepth, i32 nSamples, f32 thickness)
+        : dielectric(die), diffuse(diff), albedo(albedo), g(g), maxDepth(maxDepth),
+          nSamples(nSamples), thickness(thickness)
+    {
+    }
+
+    BxDF *Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
+                   const Vec4f &filterWidths) override
+    {
+        CoatedDiffuseBxDF *bxdf = PushStructConstruct(arena, CoatedDiffuseBxDF)();
+        *bxdf                   = EvaluateHelper(si, lambda, filterWidths);
+        return bxdf;
+    }
+
+    CoatedDiffuseBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda,
+                                     const Vec4f &filterWidths)
+
+    {
+        SampledSpectrum albedoValue = albedo->EvaluateAlbedo(si, lambda, filterWidths);
+
+        f32 gValue = g->EvaluateFloat(si, filterWidths);
+
+        return CoatedDiffuseBxDF(dielectric.EvaluateHelper(si, lambda, filterWidths),
+                                 diffuse.EvaluateHelper(si, lambda, filterWidths), albedoValue,
+                                 gValue, thickness, maxDepth, nSamples);
+    }
+    virtual void Start(ShadingThreadState *state) override
+    {
+        dielectric.Start(state);
+        diffuse.Start(state);
+    }
+    virtual void Stop() override
+    {
+        dielectric.Stop();
+        diffuse.Stop();
+    }
+    virtual MaterialTypes GetType() override { return MaterialTypes::CoatedDiffuse; }
 };
 
 struct PrimitiveIndices
@@ -630,7 +820,9 @@ struct ScenePrimitives
     Vec3f boundsMax;
     BVHNodeN nodePtr;
 
+#ifdef USE_GPU
     GPUAccelerationStructure gpuBVH;
+#endif
 
     // NOTE: is one of PrimitiveType
     void *primitives;
@@ -692,10 +884,10 @@ struct Scene
     // const DiffuseAreaLight *GetAreaLights() const { return lights.Get<DiffuseAreaLight>(); }
 };
 
-static Scene *scene_;
+extern Scene *scene_;
 inline Scene *GetScene() { return scene_; }
 
-static ScenePrimitives **scenes_;
+extern ScenePrimitives **scenes_;
 inline ScenePrimitives **GetScenes() { return scenes_; }
 inline void SetScenes(ScenePrimitives **scenes) { scenes_ = scenes; }
 
@@ -717,7 +909,11 @@ void BuildCatClarkBVH(Arena **arenas, ScenePrimitives *scene);
 template <GeometryType type>
 void ComputeTessellationParams(Mesh *meshes, TessellationParams *params, u32 start, u32 count);
 
-void BuildSceneBVHs(ScenePrimitives **scenes, int numScenes, int maxDepth);
+void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
+                    const Mat4 &cameraFromRender, int screenHeight);
+void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, int maxDepth,
+                       const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender,
+                       int screenHeight);
 
 void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string filename,
                const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender, int screenHeight,

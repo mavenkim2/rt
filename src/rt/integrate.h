@@ -348,7 +348,6 @@ __forceinline void Transpose(const Lane4F32 lanes[N], Vec3lf<N> &out)
     else Assert(0);
 }
 
-f32 PowerHeuristic(u32 numA, f32 pdfA, u32 numB, f32 pdfB);
 void DefocusBlur(const Vec3f &dIn, const Vec2f &pLens, const f32 focalLength, Vec3f &o,
                  Vec3f &d);
 Vec3f IntersectRayPlane(const Vec3f &planeN, const Vec3f &planeP, const Vec3f &rayP,
@@ -426,6 +425,18 @@ struct Scene;
 bool Intersect(Scene *scene, Ray2 &ray, SurfaceInteraction &si);
 bool Occluded(Scene *scene, Ray2 &ray);
 void Render(Arena *arena, RenderParams2 &params);
+
+void CalculateFilterWidths(const Ray2 &ray, const Camera &camera, const Vec3f &p,
+                           const Vec3f &n, const Vec3f &dpdu, const Vec3f &dpdv, Vec3f &dpdx,
+                           Vec3f &dpdy, f32 &dudx, f32 &dvdx, f32 &dudy, f32 &dvdy);
+Vec3f OffsetRayOrigin(const Vec3f &p, const Vec3f &err, const Vec3f &n, const Vec3f &wi);
+void UpdateRayDifferentials(Ray2 &ray, const Vec3f &wi, const Vec3f &p, Vec3f n,
+                            const Vec3f &dndu, const Vec3f &dndv, const Vec3f &dpdx,
+                            const Vec3f &dpdy, const f32 dudx, const f32 dvdx, const f32 dudy,
+                            const f32 dvdy, f32 eta, u32 flags);
+
+struct LightSample;
+bool OccludedByOpaqueSurface(Scene *scene, Ray2 &r, SurfaceInteraction &si, LightSample &ls);
 
 } // namespace rt
 #endif

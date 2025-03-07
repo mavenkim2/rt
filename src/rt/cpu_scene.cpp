@@ -1,10 +1,11 @@
 #include "cpu_scene.h"
+#include "scene.h"
 
 namespace rt
 {
 
 SceneShapeParse StartSceneShapeParse() { return {}; }
-void EndSceneShapeParse() {}
+void EndSceneShapeParse(SceneShapeParse *parse) {}
 
 Mesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
 {
@@ -32,7 +33,9 @@ Mesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
     return newMesh;
 }
 
-void BuildSceneBVHs(ScenePrimitives **scenes, int numScenes, int maxDepth)
+void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, int maxDepth,
+                       const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender,
+                       int screenHeight)
 {
     for (int depth = maxDepth; depth >= 0; depth--)
     {

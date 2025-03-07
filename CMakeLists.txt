@@ -120,15 +120,17 @@ set (MEM_SOURCE_FILES
 )
 
 set (RT_SOURCE_FILES
-    # ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/cpu_scene.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/cpu_scene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/debug.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/gpu_scene.cpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/gpu_scene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/integrate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/lights.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/scene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/simd_integrate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/spectrum.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/thread_statistics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/subdivision.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/parallel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/vulkan.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/tests/test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bvh/bvh_types.cpp

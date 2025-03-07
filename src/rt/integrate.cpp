@@ -306,13 +306,6 @@ void Render(Arena *arena, RenderParams2 &params)
     printf("done\n");
 }
 
-f32 PowerHeuristic(u32 numA, f32 pdfA, u32 numB, f32 pdfB)
-{
-    f32 a = Sqr(numA * pdfA);
-    f32 b = Sqr(numB * pdfB);
-    return a / (a + b);
-}
-
 Vec3f OffsetRayOrigin(const Vec3f &p, const Vec3f &err, const Vec3f &n, const Vec3f &wi)
 {
     f32 d        = Dot(err, Abs(n));
@@ -452,7 +445,7 @@ void CalculateRayDifferentials(const Vec3f &w, const Vec3f &dw_du, const Vec3f &
     dwrdv = a_v + b_v;
 }
 
-__forceinline void UpdateRayDifferentials(Ray2 &ray, const Vec3f &wi, const Vec3f &p, Vec3f n,
+void UpdateRayDifferentials(Ray2 &ray, const Vec3f &wi, const Vec3f &p, Vec3f n,
                                           const Vec3f &dndu, const Vec3f &dndv,
                                           const Vec3f &dpdx, const Vec3f &dpdy, const f32 dudx,
                                           const f32 dvdx, const f32 dudy, const f32 dvdy,

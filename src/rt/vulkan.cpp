@@ -6,6 +6,7 @@
 
 namespace rt
 {
+static Vulkan *device;
 
 VkBool32 DebugUtilsMessengerCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
                                      VkDebugUtilsMessageTypeFlagsEXT messageType,

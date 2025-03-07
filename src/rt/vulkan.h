@@ -677,7 +677,7 @@ private:
     i32 GetMemoryTypeIndex(u32 typeBits, VkMemoryPropertyFlags flags);
 };
 
-static Vulkan *device;
+extern Vulkan *device;
 
 } // namespace rt
 #endif

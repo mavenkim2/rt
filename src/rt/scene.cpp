@@ -19,6 +19,8 @@ namespace rt
 //////////////////////////////
 // Scene
 //
+static Scene *scene_;
+static ScenePrimitives **scenes_;
 
 struct SceneLoadTable
 {
@@ -214,191 +216,6 @@ struct ConstantVectorTexture : Texture
                                    const Vec4f &filterWidths) override
     {
         return Texture::EvaluateAlbedo(constant, lambda);
-    }
-};
-
-struct NullMaterial : Material
-{
-    typedef BxDF BxDFType;
-    NullMaterial() {}
-    BxDF *Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
-                   const Vec4f &filterWidths) override
-    {
-        return 0;
-    }
-};
-
-struct DiffuseMaterial : Material
-{
-    typedef DiffuseBxDF BxDFType;
-    Texture *reflectance;
-    DiffuseMaterial(Texture *reflectance) : reflectance(reflectance) {}
-    BxDF *Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
-                   const Vec4f &filterWidths) override
-    {
-        DiffuseBxDF *bxdf = PushStruct(arena, DiffuseBxDF);
-        *bxdf             = EvaluateHelper(si, lambda, filterWidths);
-        return bxdf;
-    }
-    DiffuseBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda,
-                               const Vec4f &filterWidths)
-
-    {
-        SampledSpectrum s = reflectance->EvaluateAlbedo(si, lambda, filterWidths);
-
-        return DiffuseBxDF(s);
-    }
-    virtual void Start(ShadingThreadState *state) override { reflectance->Start(state); }
-    virtual void Stop() override { reflectance->Stop(); }
-};
-
-struct DiffuseTransmissionMaterial : Material
-{
-    typedef DiffuseTransmissionBxDF BxDFType;
-    Texture *reflectance;
-    Texture *transmittance;
-    f32 scale;
-    DiffuseTransmissionMaterial(Texture *reflectance, Texture *transmittance, f32 scale)
-        : reflectance(reflectance), transmittance(transmittance), scale(scale)
-    {
-    }
-    BxDF *Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
-                   const Vec4f &filterWidths) override
-    {
-        DiffuseTransmissionBxDF *bxdf = PushStruct(arena, DiffuseTransmissionBxDF);
-        *bxdf                         = EvaluateHelper(si, lambda, filterWidths);
-        return bxdf;
-    }
-
-    DiffuseTransmissionBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda,
-                                           const Vec4f &filterWidths)
-    {
-        SampledSpectrum r = reflectance->EvaluateAlbedo(si, lambda, filterWidths);
-        SampledSpectrum t = transmittance->EvaluateAlbedo(si, lambda, filterWidths);
-
-        return DiffuseTransmissionBxDF(r, t);
-    }
-    virtual void Start(ShadingThreadState *state) override
-    {
-        reflectance->Start(state);
-        transmittance->Start(state);
-    }
-    virtual void Stop() override
-    {
-        reflectance->Stop();
-        transmittance->Stop();
-    }
-};
-
-struct DielectricMaterial : Material
-{
-    typedef DielectricBxDF BxDFType;
-
-    Texture *uRoughnessTexture;
-    Texture *vRoughnessTexture;
-    f32 eta;
-
-    DielectricMaterial() = default;
-    DielectricMaterial(Texture *u, Texture *v, f32 eta)
-        : uRoughnessTexture(u), vRoughnessTexture(v), eta(eta)
-    {
-    }
-
-    virtual f32 GetIOR() override { return eta; }
-    BxDF *Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
-                   const Vec4f &filterWidths) override
-    {
-        DielectricBxDF *bxdf = PushStruct(arena, DielectricBxDF);
-        *bxdf                = EvaluateHelper(si, lambda, filterWidths);
-        return bxdf;
-    }
-
-    DielectricBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda,
-                                  const Vec4f &filterWidths)
-    {
-        f32 uRoughness, vRoughness;
-        if (uRoughnessTexture == vRoughnessTexture)
-        {
-            uRoughness = vRoughness = uRoughnessTexture->EvaluateFloat(si, filterWidths);
-        }
-        else
-        {
-            uRoughness = uRoughnessTexture->EvaluateFloat(si, filterWidths);
-
-            vRoughness = vRoughnessTexture->EvaluateFloat(si, filterWidths);
-        }
-
-        uRoughness = TrowbridgeReitzDistribution::RoughnessToAlpha(uRoughness);
-        vRoughness = TrowbridgeReitzDistribution::RoughnessToAlpha(vRoughness);
-
-        // if (eta.TypeIndex<ConstantSpectrum>() == eta.GetTag())
-        // {
-        //     lambda.TerminateSecondary();
-        // }
-        f32 ior = eta; // eta(lambda[0]);
-        return DielectricBxDF(ior, TrowbridgeReitzDistribution(uRoughness, vRoughness));
-    }
-    virtual bool IsTransmissive() override { return true; }
-    virtual void Start(ShadingThreadState *state) override
-    {
-        uRoughnessTexture->Start(state);
-        if (uRoughnessTexture != vRoughnessTexture) vRoughnessTexture->Start(state);
-    }
-    virtual void Stop() override
-    {
-        uRoughnessTexture->Stop();
-        if (uRoughnessTexture != vRoughnessTexture) vRoughnessTexture->Stop();
-    }
-};
-
-struct CoatedDiffuseMaterial : Material
-{
-    typedef CoatedDiffuseBxDF BxDFType;
-
-    DielectricMaterial dielectric;
-    DiffuseMaterial diffuse;
-    Texture *albedo;
-    Texture *g;
-    i32 maxDepth;
-    i32 nSamples;
-    f32 thickness;
-
-    CoatedDiffuseMaterial(DielectricMaterial die, DiffuseMaterial diff, Texture *albedo,
-                          Texture *g, i32 maxDepth, i32 nSamples, f32 thickness)
-        : dielectric(die), diffuse(diff), albedo(albedo), g(g), maxDepth(maxDepth),
-          nSamples(nSamples), thickness(thickness)
-    {
-    }
-
-    BxDF *Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
-                   const Vec4f &filterWidths) override
-    {
-        CoatedDiffuseBxDF *bxdf = PushStruct(arena, CoatedDiffuseBxDF);
-        *bxdf                   = EvaluateHelper(si, lambda, filterWidths);
-        return bxdf;
-    }
-
-    CoatedDiffuseBxDF EvaluateHelper(SurfaceInteraction &si, SampledWavelengths &lambda,
-                                     const Vec4f &filterWidths)
-
-    {
-        SampledSpectrum albedoValue = albedo->EvaluateAlbedo(si, lambda, filterWidths);
-
-        f32 gValue = g->EvaluateFloat(si, filterWidths);
-
-        return CoatedDiffuseBxDF(dielectric.EvaluateHelper(si, lambda, filterWidths),
-                                 diffuse.EvaluateHelper(si, lambda, filterWidths), albedoValue,
-                                 gValue, thickness, maxDepth, nSamples);
-    }
-    virtual void Start(ShadingThreadState *state) override
-    {
-        dielectric.Start(state);
-        diffuse.Start(state);
-    }
-    virtual void Stop() override
-    {
-        dielectric.Stop();
-        diffuse.Stop();
     }
 };
 
@@ -602,9 +419,6 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
 
     MaterialHashMap *table = PushStructConstruct(tempArena, MaterialHashMap)(tempArena, 8192);
 
-    std::vector<MaterialTypes> types;
-    types.push_back(MaterialTypes::Interface);
-
     while (!Advance(tokenizer, "MATERIALS_END "))
     {
         bool advanceResult = Advance(tokenizer, "m ");
@@ -710,50 +524,12 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
             break;
             default: Assert(0);
         }
-        types.push_back(materialTypeIndex);
     }
 
     // Join
     scene->materials = StaticArray<Material *>(arena, materialsList.totalCount);
 
     materialsList.Flatten(scene->materials);
-
-    // Create SIMD queues
-    ShadingGlobals *globals   = GetShadingGlobals();
-    globals->numShadingQueues = scene->materials.Length();
-    globals->shadingQueues    = PushArray(arena, ShadingQueue, globals->numShadingQueues);
-    for (u32 i = 0; i < scene->materials.Length(); i++)
-    {
-        globals->shadingQueues[i].material = scene->materials[i];
-        switch (types[i])
-        {
-            case MaterialTypes::Diffuse:
-            {
-                globals->shadingQueues[i].handler = ShadingQueueHandler<DiffuseMaterial>;
-            }
-            break;
-            case MaterialTypes::DiffuseTransmission:
-            {
-                globals->shadingQueues[i].handler =
-                    ShadingQueueHandler<DiffuseTransmissionMaterial>;
-            }
-            break;
-            case MaterialTypes::CoatedDiffuse:
-            {
-                globals->shadingQueues[i].handler = ShadingQueueHandler<CoatedDiffuseMaterial>;
-            }
-            break;
-            case MaterialTypes::Dielectric:
-            {
-                globals->shadingQueues[i].handler = ShadingQueueHandler<DielectricMaterial>;
-            }
-            break;
-            default:
-            {
-                globals->shadingQueues[i].handler = ShadingQueueHandler<NullMaterial>;
-            }
-        }
-    }
 
     ScratchEnd(temp);
     return table;
@@ -1010,15 +786,14 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     // Convert points to world space for BVH (since object space is
                     // world space in this case)
                     Assert(mesh.numVertices == 4);
-                    Vec3f newV[4];
+
+                    // TODO: no clue why CopyMesh fails here...
+                    mesh.p = (Vec3f *)malloc(sizeof(Vec3f) * 4);
                     for (int i = 0; i < mesh.numVertices; i++)
                     {
-                        newV[i] = TransformP(worldFromRender * *transform, mesh.p[i]);
+                        Vec3f result = TransformP(worldFromRender * *transform, mesh.p[i]);
+                        mesh.p[i]    = result;
                     }
-                    mesh.p[0] = newV[0];
-                    mesh.p[1] = newV[1];
-                    mesh.p[2] = newV[2];
-                    mesh.p[3] = newV[3];
 
                     transform = renderFromWorld;
 
@@ -1362,7 +1137,8 @@ void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string file
         maxDepth = Max(maxDepth, scenes[i]->depth.load(std::memory_order_acquire));
     }
 
-    BuildSceneBVHs(scenes, numScenes, maxDepth);
+    BuildAllSceneBVHs(arenas, scenes, numScenes, maxDepth, NDCFromCamera, cameraFromRender,
+                      screenHeight);
 
     for (u32 i = 0; i < numProcessors; i++)
     {

@@ -533,27 +533,8 @@ struct Scheduler
         }
     }
 };
-static Scheduler scheduler;
-inline THREAD_ENTRY_POINT(WorkerLoop)
-{
-    Scheduler::Worker *w = (Scheduler::Worker *)parameter;
 
-    SetThreadContext(ctx);
-    u64 threadIndex = (u64)(w - scheduler.workers);
-    SetThreadIndex((u32)threadIndex);
-
-    TempArena temp = ScratchStart(0, 0);
-    SetThreadName(PushStr8F(temp.arena, "[Jobsystem] Worker %u", threadIndex));
-    ScratchEnd(temp);
-
-    Scheduler::Task t;
-
-    for (;;)
-    {
-        scheduler.ExploitTask(w, &t);
-        if (!scheduler.WaitForTask(w, &t)) break;
-    }
-}
+extern Scheduler scheduler;
 
 template <typename Func>
 void ParallelFor(u32 start, u32 count, u32 groupSize, const Func &func)
