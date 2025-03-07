@@ -1,5 +1,6 @@
 #include "rt.h"
 
+#include <algorithm>
 #include "memory.h"
 #include "containers.h"
 #include "debug.h"
@@ -10,7 +11,7 @@
 #include "sampling.h"
 #include "parallel.h"
 #include "integrate.h"
-#include <algorithm>
+#include "vulkan.h"
 #include "tests/test.h"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -1037,12 +1038,20 @@ using namespace rt;
 int main(int argc, char *argv[])
 {
     BuildPackMask();
-    // OS_SetLargePages();
     Arena *dataArena = ArenaAlloc();
     Arena *arena     = ArenaAlloc();
     InitThreadContext(arena, "[Main Thread]", 1);
     OS_Init();
-    // jobsystem::InitializeJobsystem();
+
+#ifdef USE_GPU
+#ifdef DEBUG
+    ValidationMode mode = ValidationMode::Verbose;
+#else
+    ValidationMode mode = ValidationMode::Disabled;
+#endif
+    Vulkan *v = PushStructConstruct(arena, Vulkan)(mode);
+    device    = v;
+#endif
 
     Spectra::Init(arena);
     RGBToSpectrumTable::Init(arena);

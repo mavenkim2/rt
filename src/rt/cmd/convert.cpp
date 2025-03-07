@@ -1310,13 +1310,13 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Shape);
 
                 // TODO: temp
-                // if (packet->type == "curve"_sid)
-                // {
-                //     shapes->Last() = {};
-                //     shapes->last->count--;
-                //     shapes->totalCount--;
-                //     continue;
-                // }
+                if (packet->type == "curve"_sid)
+                {
+                    shapes->Last() = {};
+                    shapes->last->count--;
+                    shapes->totalCount--;
+                    continue;
+                }
 
                 u32 numVertices = 0;
                 u32 numIndices  = 0;
@@ -1816,11 +1816,11 @@ void WriteShape(PBRTFileInfo *info, ShapeType *shapeType, StringBuilder &builder
                       builderOffset, cap);
         }
         break;
-        case "curve"_sid:
-        {
-            Put(&builder, "Curve ");
-        }
-        break;
+        // case "curve"_sid:
+        // {
+        //     Put(&builder, "Curve ");
+        // }
+        // break;
         default: Assert(0);
     }
     if (shapeType->materialName.size) Put(&builder, "m %S ", shapeType->materialName);
@@ -1868,6 +1868,25 @@ void SeparateShapeTypes(Arena *arena, PBRTFileInfo *info, string directory)
             info->fileInstances.AddBack() = {shapeInfo->filename, transformIndex,
                                              transformIndex};
         }
+    }
+}
+
+void WriteTransforms(PBRTFileInfo *info, StringBuilderMapped &dataBuilder)
+{
+    if (info->transforms.totalCount)
+    {
+        Put(&dataBuilder, "TRANSFORM_START ");
+        Put(&dataBuilder, "Count %u ", info->transforms.totalCount);
+
+        int runningCount = 0;
+        for (auto *node = info->transforms.first; node != 0; node = node->next)
+        {
+            runningCount += node->count;
+            PutData(&dataBuilder, node->values, sizeof(node->values[0]) * node->count);
+        }
+        ErrorExit(runningCount == info->transforms.totalCount, "running: %i, total: %i\n",
+                  runningCount, info->transforms.totalCount);
+        Put(&dataBuilder, "TRANSFORM_END");
     }
 }
 
@@ -1962,31 +1981,11 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
         {
             Assert(info->filename == "test.rtscene");
             SeparateShapeTypes(temp.arena, info, directory);
-
-            if (info->transforms.totalCount)
-            {
-                Put(&dataBuilder, "TRANSFORM_START ");
-                Put(&dataBuilder, "Count %u ", info->transforms.totalCount);
-                for (auto *node = info->transforms.first; node != 0; node = node->next)
-                {
-                    PutData(&dataBuilder, node->values, sizeof(node->values[0]) * node->count);
-                }
-                Put(&dataBuilder, "TRANSFORM_END");
-            }
+            WriteTransforms(info, dataBuilder);
         }
         else
         {
-            if (info->transforms.totalCount)
-            {
-                Put(&dataBuilder, "TRANSFORM_START ");
-                Put(&dataBuilder, "Count %u ", info->transforms.totalCount);
-                for (auto *node = info->transforms.first; node != 0; node = node->next)
-                {
-                    PutData(&dataBuilder, node->values, sizeof(node->values[0]) * node->count);
-                }
-                Put(&dataBuilder, "TRANSFORM_END");
-            }
-
+            WriteTransforms(info, dataBuilder);
             Put(&builder, "SHAPE_START ");
             // TODO: need to handle duplicates as well
             for (auto *node = info->shapes.first; node != 0; node = node->next)
@@ -2071,29 +2070,11 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
     else if (info->shapes.totalCount)
     {
         SeparateShapeTypes(temp.arena, info, directory);
-        if (info->transforms.totalCount)
-        {
-            Put(&dataBuilder, "TRANSFORM_START ");
-            Put(&dataBuilder, "Count %u ", info->transforms.totalCount);
-            for (auto *node = info->transforms.first; node != 0; node = node->next)
-            {
-                PutData(&dataBuilder, node->values, sizeof(node->values[0]) * node->count);
-            }
-            Put(&dataBuilder, "TRANSFORM_END");
-        }
+        WriteTransforms(info, dataBuilder);
     }
     else
     {
-        if (info->transforms.totalCount)
-        {
-            Put(&dataBuilder, "TRANSFORM_START ");
-            Put(&dataBuilder, "Count %u ", info->transforms.totalCount);
-            for (auto *node = info->transforms.first; node != 0; node = node->next)
-            {
-                PutData(&dataBuilder, node->values, sizeof(node->values[0]) * node->count);
-            }
-            Put(&dataBuilder, "TRANSFORM_END");
-        }
+        WriteTransforms(info, dataBuilder);
     }
 
     if (info->fileInstances.totalCount)

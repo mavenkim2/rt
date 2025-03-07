@@ -480,7 +480,8 @@ struct Vulkan
     // Functions
     //
 
-    Vulkan(ValidationMode validationMode, GPUDevicePreference preference);
+    Vulkan(ValidationMode validationMode,
+           GPUDevicePreference preference = GPUDevicePreference::Discrete);
     // u64 GetMinAlignment(GPUBufferDesc *inDesc);
     Swapchain CreateSwapchain(Window window, u32 width, u32 height);
     // void CreatePipeline(PipelineStateDesc *inDesc, PipelineState *outPS, string name);

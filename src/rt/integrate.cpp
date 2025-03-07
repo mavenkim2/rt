@@ -60,11 +60,12 @@ namespace rt
 //////////////////////////////
 // Textures and materials
 //
+
+static Ptex::PtexCache *cache;
 void InitializePtex()
 {
     u32 maxFiles  = 400;
     size_t maxMem = gigabytes(8);
-    // cache         = Ptex::PtexCache::create(maxFiles, maxMem, true, 0, &errorHandler);
     cache = Ptex::PtexCache::create(maxFiles, maxMem, true, &ptexInputHandler, &errorHandler);
 }
 
@@ -446,10 +447,9 @@ void CalculateRayDifferentials(const Vec3f &w, const Vec3f &dw_du, const Vec3f &
 }
 
 void UpdateRayDifferentials(Ray2 &ray, const Vec3f &wi, const Vec3f &p, Vec3f n,
-                                          const Vec3f &dndu, const Vec3f &dndv,
-                                          const Vec3f &dpdx, const Vec3f &dpdy, const f32 dudx,
-                                          const f32 dvdx, const f32 dudy, const f32 dvdy,
-                                          f32 eta, u32 flags)
+                            const Vec3f &dndu, const Vec3f &dndv, const Vec3f &dpdx,
+                            const Vec3f &dpdy, const f32 dudx, const f32 dvdx, const f32 dudy,
+                            const f32 dvdy, f32 eta, u32 flags)
 {
     if (ray.pxOffset != Vec3f(pos_inf))
     {

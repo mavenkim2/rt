@@ -111,6 +111,9 @@ endif()
 
 list (APPEND RT_DEFINITIONS "__SSE3__" "__SSE4_1__")
 
+# GPU or CPU path
+option(USE_GPU "USE_GPU" OFF)
+
 # Create thread context static lib (shared w/ ptex)
 set (MEM_SOURCE_FILES 
     src/rt/thread_context.cpp
@@ -120,9 +123,7 @@ set (MEM_SOURCE_FILES
 )
 
 set (RT_SOURCE_FILES
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/cpu_scene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/debug.cpp
-    # ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/gpu_scene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/integrate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/lights.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/scene.cpp
@@ -139,6 +140,13 @@ set (RT_SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/tables/sobolmatrices.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/sampler.cpp
 )
+
+if (USE_GPU)
+    list (APPEND RT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/gpu_scene.cpp)
+    list (APPEND RT_DEFINITIONS "USE_GPU")
+else()
+    list (APPEND RT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/cpu_scene.cpp)
+endif()
 
 if (CMAKE_SYSTEM_NAME STREQUAL Windows)
     list (APPEND PLATFORM_SOURCE_FILES "src/rt/win32.cpp")

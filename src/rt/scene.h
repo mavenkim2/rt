@@ -1,12 +1,13 @@
 #ifndef SCENE_H
 #define SCENE_H
 
-// #define USE_GPU
-
 #include "bvh/bvh_types.h"
 #include "bxdf.h"
-// #include "gpu_scene.h"
+#ifdef USE_GPU
+#include "gpu_scene.h"
+#else
 #include "cpu_scene.h"
+#endif
 #include "handles.h"
 #include "lights.h"
 #include "parallel.h"
@@ -899,6 +900,18 @@ inline Mesh *GetMesh(int sceneID, int geomID)
     return (Mesh *)s->primitives + geomID;
 }
 
+struct MaterialNode
+{
+    string str;
+    MaterialHandle handle;
+
+    u32 Hash() const { return rt::Hash(str); }
+    bool operator==(const MaterialNode &m) const { return str == m.str; }
+    bool operator==(string s) const { return s == str; }
+};
+
+typedef HashMap<MaterialNode> MaterialHashMap;
+
 void BuildTLASBVH(Arena **arenas, ScenePrimitives *scene);
 
 template <GeometryType type>
@@ -918,6 +931,11 @@ void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, 
 void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string filename,
                const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender, int screenHeight,
                AffineSpace *t);
+DiffuseAreaLight *ParseAreaLight(Arena *arena, Tokenizer *tokenizer, AffineSpace *space,
+                                 int sceneID, int geomID);
+Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory,
+                      FilterType type        = FilterType::CatmullRom,
+                      ColorEncoding encoding = ColorEncoding::None);
 
 } // namespace rt
 #endif

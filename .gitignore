@@ -49,4 +49,5 @@ data/
 *.ilk
 build/
 build_clang/
+build_clang_gpu/
 gen/

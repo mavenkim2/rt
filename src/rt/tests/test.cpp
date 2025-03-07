@@ -327,8 +327,11 @@ void TestRender(Arena *arena, Options *options = 0)
     }
 
     counter = OS_StartCounter();
+#ifdef USE_GPU
+#else
     // Render(arena, params);
     RenderSIMD(arenas, arena, params);
+#endif
     time = OS_GetMilliseconds(counter);
     printf("total render time: %fms\n", time);
 }

@@ -41,6 +41,17 @@ GPUMesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
     return result;
 }
 
+void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, GeometryType type,
+                          string directory, AffineSpace &worldFromRender,
+                          AffineSpace &renderFromWorld, Tokenizer &tokenizer,
+                          HashMap<MaterialNode> *materialHashMap, GPUMesh &mesh,
+                          ChunkedLinkedList<GPUMesh, MemoryType_Shape> &shapes,
+                          ChunkedLinkedList<PrimitiveIndices, MemoryType_Shape> &indices,
+                          ChunkedLinkedList<Light *, MemoryType_Light> &lights)
+{
+    return;
+}
+
 void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, int maxDepth,
                        const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender,
                        int screenHeight)

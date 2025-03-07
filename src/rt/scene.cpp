@@ -219,18 +219,6 @@ struct ConstantVectorTexture : Texture
     }
 };
 
-struct MaterialNode
-{
-    string str;
-    MaterialHandle handle;
-
-    u32 Hash() const { return rt::Hash(str); }
-    bool operator==(const MaterialNode &m) const { return str == m.str; }
-    bool operator==(string s) const { return s == str; }
-};
-
-typedef HashMap<MaterialNode> MaterialHashMap;
-
 struct RTSceneLoadState
 {
     SceneLoadTable table;
@@ -296,9 +284,8 @@ Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer, string directory,
     return 0;
 }
 
-Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory,
-                      FilterType type        = FilterType::CatmullRom,
-                      ColorEncoding encoding = ColorEncoding::None)
+Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory, FilterType type,
+                      ColorEncoding encoding)
 {
     if (!CharIsDigit(*tokenizer->cursor)) return 0;
     DataType dataType = (DataType)ReadInt(tokenizer);
@@ -617,7 +604,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
         SkipToNextChar(&dataTokenizer);
         scene->affineTransforms =
             PushArrayNoZeroTagged(arena, AffineSpace, count, MemoryType_Instance);
-        AffineSpace *dataTransforms = (AffineSpace *)(dataTokenizer.cursor);
+        AffineSpace *dataTransforms = reinterpret_cast<AffineSpace *>(dataTokenizer.cursor);
         if (baseFile && renderFromWorld)
         {
             for (u32 i = 0; i < count; i++)
@@ -748,86 +735,10 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
         {
             Assert(isLeaf);
             ChunkedLinkedList<MeshType, MemoryType_Shape> shapes(temp.arena, 1024);
-
             ChunkedLinkedList<PrimitiveIndices, MemoryType_Shape> indices(temp.arena, 1024);
             ChunkedLinkedList<Light *, MemoryType_Light> lights(temp.arena);
 
             AffineSpace worldFromRender = Inverse(*renderFromWorld);
-            int noMaterialCount         = 0;
-            auto AddMaterialAndLights   = [&](Mesh &mesh) {
-                PrimitiveIndices &primIndices = indices.AddBack();
-
-                MaterialHandle materialHandle;
-                LightHandle lightHandle;
-                Texture *alphaTexture   = 0;
-                DiffuseAreaLight *light = 0;
-
-                // TODO: handle instanced mesh lights
-                AffineSpace *transform = 0;
-
-                // Check for material
-                if (Advance(&tokenizer, "m "))
-                {
-                    Assert(materialHashMap);
-                    string materialName      = ReadWord(&tokenizer);
-                    const MaterialNode *node = materialHashMap->Get(materialName);
-                    materialHandle           = node->handle;
-                }
-                else
-                {
-                    noMaterialCount++;
-                }
-
-                if (Advance(&tokenizer, "transform "))
-                {
-                    u32 transformIndex = ReadInt(&tokenizer);
-                    transform          = &scene->affineTransforms[transformIndex];
-                    Assert(mesh.n == 0);
-                    // Convert points to world space for BVH (since object space is
-                    // world space in this case)
-                    Assert(mesh.numVertices == 4);
-
-                    // TODO: no clue why CopyMesh fails here...
-                    mesh.p = (Vec3f *)malloc(sizeof(Vec3f) * 4);
-                    for (int i = 0; i < mesh.numVertices; i++)
-                    {
-                        Vec3f result = TransformP(worldFromRender * *transform, mesh.p[i]);
-                        mesh.p[i]    = result;
-                    }
-
-                    transform = renderFromWorld;
-
-                    SkipToNextChar(&tokenizer);
-                }
-
-                // Check for area light
-                if (Advance(&tokenizer, "a "))
-                {
-                    ErrorExit(type == GeometryType::QuadMesh,
-                                "Only quad area lights supported for now\n");
-                    Assert(transform);
-
-                    DiffuseAreaLight *areaLight = ParseAreaLight(
-                        arena, &tokenizer, transform, sceneID, shapes.totalCount - 1);
-                    lightHandle = LightHandle(LightClass::DiffuseAreaLight, lights.totalCount);
-                    lights.AddBack() = areaLight;
-                    light            = areaLight;
-                }
-
-                // Check for alpha
-                if (Advance(&tokenizer, "alpha "))
-                {
-                    Texture *alphaTexture = ParseTexture(arena, &tokenizer, directory);
-
-                    // TODO: this is also a hack: properly evaluate whether the alpha is
-                    // always 0
-                    if (lightHandle)
-                    {
-                        light->type = LightType::DeltaPosition;
-                    }
-                }
-                primIndices = PrimitiveIndices(lightHandle, materialHandle, alphaTexture);
-            };
 
             auto AddMesh = [&](Mesh &mesh, int numVerticesPerFace) {
                 mesh.p       = ReadVec3Pointer(&tokenizer, &dataTokenizer, "p ");
@@ -862,7 +773,10 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     }
 
                     shapes.AddBack() = CopyMesh(&parse, arena, mesh);
-                    AddMaterialAndLights(mesh);
+                    AddMaterialAndLights(arena, scene, sceneID, type, directory,
+                                         worldFromRender, *renderFromWorld, tokenizer,
+                                         materialHashMap, shapes.Last(), shapes, indices,
+                                         lights);
 
                     threadMemoryStatistics[threadIndex].totalShapeMemory +=
                         mesh.numVertices * (sizeof(Vec3f) * 2 + sizeof(Vec2f)) +
@@ -876,7 +790,10 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     AddMesh(mesh, 3);
 
                     shapes.AddBack() = CopyMesh(&parse, arena, mesh);
-                    AddMaterialAndLights(mesh);
+                    AddMaterialAndLights(arena, scene, sceneID, type, directory,
+                                         worldFromRender, *renderFromWorld, tokenizer,
+                                         materialHashMap, shapes.Last(), shapes, indices,
+                                         lights);
 
                     threadMemoryStatistics[threadIndex].totalShapeMemory +=
                         mesh.numVertices * (sizeof(Vec3f) * 2 + sizeof(Vec2f)) +
@@ -890,7 +807,10 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     AddMesh(mesh, 4);
 
                     shapes.AddBack() = CopyMesh(&parse, tempArena, mesh);
-                    AddMaterialAndLights(mesh);
+                    AddMaterialAndLights(arena, scene, sceneID, type, directory,
+                                         worldFromRender, *renderFromWorld, tokenizer,
+                                         materialHashMap, shapes.Last(), shapes, indices,
+                                         lights);
                 }
                 else
                 {

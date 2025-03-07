@@ -643,18 +643,7 @@ struct ChunkedLinkedList
     {
         if (!last || last->count >= last->cap)
         {
-            if (last && last->next)
-            {
-                last = last->next;
-            }
-            else
-            {
-                ChunkNode *newNode = PushStructTagged(arena, ChunkNode, memoryTag);
-                newNode->values =
-                    (T *)PushArrayNoZeroTagged(arena, u8, sizeof(T) * numPerChunk, memoryTag);
-                newNode->cap = numPerChunk;
-                QueuePush(first, last, newNode);
-            }
+            AddNode();
         }
         Assert(last && last->values);
         Assert(last->count < last->cap);
@@ -746,8 +735,10 @@ struct ChunkedLinkedList
         {
             if (!first)
             {
-                QueuePush(first, last, list->first);
-                totalCount = list->totalCount;
+                Assert(!last);
+                first = list->first;
+                last  = list->last;
+                totalCount += list->totalCount;
             }
             else
             {

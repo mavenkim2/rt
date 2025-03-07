@@ -18,7 +18,7 @@ static const f32 tMinEpsilon = 0.0001f;
 template <typename BxDF>
 struct BSDFBase;
 
-static Ptex::PtexCache *cache;
+extern Ptex::PtexCache *cache;
 struct : public PtexErrorHandler
 {
     void reportError(const char *error) override { ErrorExit(0, "%s", error); }
