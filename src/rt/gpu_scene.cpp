@@ -120,8 +120,19 @@ void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, 
 
     for (int depth = maxDepth; depth >= 0; depth--)
     {
+        ScratchArena scratch;
         CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics);
         device->BeginEvent(cmd, "BLAS Build");
+        int bvhCount = 0;
+
+        Semaphore semaphore   = device->CreateGraphicsSemaphore();
+        semaphore.signalValue = 1;
+        cmd->Signal(semaphore);
+
+        QueryPool query = device->CreateQuery(QueryType_CompactSize, numScenes);
+        GPUAccelerationStructure **as =
+            PushArrayNoZero(scratch.temp.arena, GPUAccelerationStructure *, numScenes);
+
         for (int i = 0; i < numScenes; i++)
         {
             ScenePrimitives *scene = scenes[i];
@@ -133,7 +144,8 @@ void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, 
                     case GeometryType::TriangleMesh:
                     {
                         GPUMesh *meshes = (GPUMesh *)scene->primitives;
-                        scene->gpuBVH = device->CreateBLAS(cmd, meshes, scene->numPrimitives);
+                        scene->gpuBVH  = device->CreateBLAS(cmd, meshes, scene->numPrimitives);
+                        as[bvhCount++] = &scene->gpuBVH;
                     }
                     break;
                     default: Assert(0);
@@ -141,8 +153,14 @@ void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, 
             }
         }
 
+        QueryPool queryPool = device->GetCompactionSizes(cmd, as, bvhCount);
         device->SubmitCommandBuffer(cmd);
         device->EndEvent(cmd);
+
+        CommandBuffer *compactCmd = device->BeginCommandBuffer(QueueType_Graphics);
+        compactCmd->Wait(semaphore);
+        device->CompactBLASes(compactCmd, queryPool, as, bvhCount);
+        device->SubmitCommandBuffer(compactCmd);
     }
 }
 } // namespace rt

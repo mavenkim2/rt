@@ -130,6 +130,14 @@ enum DescriptorType
     DescriptorType_Count,
 };
 
+enum QueryType
+{
+    QueryType_Occlusion,
+    QueryType_Timestamp,
+    QueryType_PipelineStatistics,
+    QueryType_CompactSize,
+};
+
 // struct GPUBufferDesc
 // {
 //     u64 size;
@@ -158,6 +166,11 @@ struct GPUBuffer
 //     void *mappedData;
 // };
 //
+struct QueryPool
+{
+    VkQueryPool queryPool;
+    int count;
+};
 
 struct Swapchain
 {
@@ -501,6 +514,10 @@ struct Vulkan
     TransferBuffer GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize);
     u64 GetDeviceAddress(VkBuffer buffer);
     GPUAccelerationStructure CreateBLAS(CommandBuffer *cmd, const GPUMesh *meshes, int count);
+    QueryPool CreateQuery(QueryType type, int count);
+    QueryPool GetCompactionSizes(CommandBuffer *cmd, GPUAccelerationStructure **as, int count);
+    void CompactBLASes(CommandBuffer *cmd, QueryPool &pool, GPUAccelerationStructure **as,
+                       int count);
     void BeginEvent(CommandBuffer *cmd, string name);
     void EndEvent(CommandBuffer *cmd);
 

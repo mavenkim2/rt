@@ -1234,19 +1234,19 @@ void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd)
 
     u32 signalSize = static_cast<u32>(cmd->signalSemaphores.size());
     VkSemaphoreSubmitInfo *signalSubmitInfo =
-        PushArrayNoZero(scratch.temp.arena, VkSemaphoreSubmitInfo, signalSize + 1);
+        PushArray(scratch.temp.arena, VkSemaphoreSubmitInfo, signalSize + 1);
 
     for (u32 i = 0; i < signalSize; i++)
     {
-        submitInfo[i].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        submitInfo[i].value     = cmd->signalSemaphores[i].signalValue;
-        submitInfo[i].semaphore = cmd->signalSemaphores[i].semaphore;
-        submitInfo[i].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        signalSubmitInfo[i].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        signalSubmitInfo[i].value     = cmd->signalSemaphores[i].signalValue;
+        signalSubmitInfo[i].semaphore = cmd->signalSemaphores[i].semaphore;
+        signalSubmitInfo[i].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     }
-    submitInfo[signalSize].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-    submitInfo[signalSize].value     = ++queue.submissionID;
-    submitInfo[signalSize].semaphore = queue.submitSemaphore;
-    submitInfo[signalSize].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    signalSubmitInfo[signalSize].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+    signalSubmitInfo[signalSize].value     = ++queue.submissionID;
+    signalSubmitInfo[signalSize].semaphore = queue.submitSemaphore;
+    signalSubmitInfo[signalSize].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 
     VkCommandBufferSubmitInfo bufferSubmitInfo = {
         VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
@@ -1254,7 +1254,7 @@ void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd)
 
     info.waitSemaphoreInfoCount   = waitSize;
     info.pWaitSemaphoreInfos      = submitInfo;
-    info.signalSemaphoreInfoCount = signalSize;
+    info.signalSemaphoreInfoCount = signalSize + 1;
     info.pSignalSemaphoreInfos    = signalSubmitInfo;
     info.commandBufferInfoCount   = 1;
     info.pCommandBufferInfos      = &bufferSubmitInfo;
@@ -1600,108 +1600,110 @@ void Vulkan::BeginEvent(CommandBuffer *cmd, string name)
 
 void Vulkan::EndEvent(CommandBuffer *cmd) { vkCmdEndDebugUtilsLabelEXT(cmd->buffer); }
 
-// void Vulkan::CreateRayTracingPipeline(u32 maxDepth)
-// {
-//
-//     enum RayShaderType
-//     {
-//         RST_Raygen,
-//         RST_Miss,
-//         RST_ClosestHit,
-//         RST_Intersection,
-//         RST_Max,
-//     };
-//
-//     std::vector<VkPipelineShaderStageCreateInfo> pipelineInfos(RST_Max);
-//     std::vector<VkRayTracingShaderGroupCreateInfoKHR> shaderGroups(RST_Max);
-//     // Create pipeline infos
-//     {
-//         VkPipelineShaderStageCreateInfo info = {
-//             VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-//         info.pName                = "main";
-//         info.stage                = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-//         info.module               = ;
-//         pipelineInfos[RST_Raygen] = info;
-//
-//         info.stage              = VK_SHADER_STAGE_MISS_BIT_KHR;
-//         info.module             = ;
-//         pipelineInfos[RST_Miss] = info;
-//
-//         info.stage                    = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-//         info.module                   = ;
-//         pipelineInfos[RST_ClosestHit] = info;
-//
-//         info.stage                      = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
-//         info.module                     = ;
-//         pipelineInfos[RST_Intersection] = info;
-//
-//         SetName(info.module, ?);
-//     }
-//     // Create shader groups
-//     {
-//         VkRayTracingShaderGroupCreateInfoKHR group = {
-//             VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR};
-//         group.type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-//         group.generalShader      = VK_SHADER_UNUSED_KHR;
-//         group.closestHitShader   = VK_SHADER_UNUSED_KHR;
-//         group.anyHitShader       = VK_SHADER_UNUSED_KHR;
-//         group.intersectionShader = VK_SHADER_UNUSED_KHR;
-//
-//         group.generalShader = RST_Raygen;
-//         shaderGroups.push_back(group);
-//
-//         group.generalShader = RST_Miss;
-//         shaderGroups.push_back(group);
-//
-//         group.type             = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-//         group.generalShader    = VK_SHADER_UNUSED_KH;
-//         group.closestHitShader = RST_ClosestHit;
-//         shaderGroups.push_back(group);
-//
-//         // Intersection shader
-//         group.type               =
-//         VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR; group.closestHitShader =
-//         VK_SHADER_UNUSED_KHR; group.intersectionShader = RST_Intersection;
-//         shaderGroups.push_back(group);
-//     }
-//
-//     // Create pipeline
-//     {
-//         VkPipelineLayoutCreateInfo layoutCreateInfo = {
-//             VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-//
-//         VkRayTracingPipelineCreateInfoKHR pipelineInfo = {
-//             VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR};
-//
-//         pipelineInfo.pStages                      = stages.data();
-//         pipelineInfo.stageCount                   = static_cast<u32>(stages.size());
-//         pipelineInfo.pGroups                      = shaderGroups.data();
-//         pipelineInfo.groupCount                   = static_cast<u32>(shaderGroups.size());
-//         pipelineInfo.maxPipelineRayRecursionDepth = maxDepth;
-//         pipelineInfo.layout                       = ? ;
-//
-//         {
-//             VkRayTracingPipelineClusterAccelerationStructureCreateInfoNV clusterInfo{
-//                 VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CLUSTER_ACCELERATION_STRUCTURE_CREATE_INFO_NV};
-//             clusterInfo.allowClusterAccelerationStructure = true;
-//             pipelineInfo.pNext                            = &clusterInfo;
-//         }
-//
-//         VkResult result = vkCreateRayTracingPipelinesKHR(device, {}, {}, 1, &pipelineInfo,
-//         0,
-//                                                          need a pipeline here);
-//     }
-//     Assert(result == VK_SUCCESS);
-//
-//     // Create shader binding table
-//     {
-//     }
-//
-//     // VkAccelerationStructureGeometryInstancesDataKHR instance;
-//     // instance.arrayOfPointers
-//
-//     // Build acceleration structures, trace rays
-// }
+#if 0
+void Vulkan::CreateRayTracingPipeline(u32 maxDepth)
+{
+
+    enum RayShaderType
+    {
+        RST_Raygen,
+        RST_Miss,
+        RST_ClosestHit,
+        RST_Intersection,
+        RST_Max,
+    };
+
+    std::vector<VkPipelineShaderStageCreateInfo> pipelineInfos(RST_Max);
+    std::vector<VkRayTracingShaderGroupCreateInfoKHR> shaderGroups(RST_Max);
+    // Create pipeline infos
+    {
+        VkPipelineShaderStageCreateInfo info = {
+            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        info.pName                = "main";
+        info.stage                = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+        info.module               = ;
+        pipelineInfos[RST_Raygen] = info;
+
+        info.stage              = VK_SHADER_STAGE_MISS_BIT_KHR;
+        info.module             = ;
+        pipelineInfos[RST_Miss] = info;
+
+        info.stage                    = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+        info.module                   = ;
+        pipelineInfos[RST_ClosestHit] = info;
+
+        info.stage                      = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+        info.module                     = ;
+        pipelineInfos[RST_Intersection] = info;
+
+        SetName(info.module, ?);
+    }
+    // Create shader groups
+    {
+        VkRayTracingShaderGroupCreateInfoKHR group = {
+            VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR};
+        group.type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        group.generalShader      = VK_SHADER_UNUSED_KHR;
+        group.closestHitShader   = VK_SHADER_UNUSED_KHR;
+        group.anyHitShader       = VK_SHADER_UNUSED_KHR;
+        group.intersectionShader = VK_SHADER_UNUSED_KHR;
+
+        group.generalShader = RST_Raygen;
+        shaderGroups.push_back(group);
+
+        group.generalShader = RST_Miss;
+        shaderGroups.push_back(group);
+
+        group.type             = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        group.generalShader    = VK_SHADER_UNUSED_KH;
+        group.closestHitShader = RST_ClosestHit;
+        shaderGroups.push_back(group);
+
+        // Intersection shader
+        group.type               =
+        VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR; group.closestHitShader =
+        VK_SHADER_UNUSED_KHR; group.intersectionShader = RST_Intersection;
+        shaderGroups.push_back(group);
+    }
+
+    // Create pipeline
+    {
+        VkPipelineLayoutCreateInfo layoutCreateInfo = {
+            VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+
+        VkRayTracingPipelineCreateInfoKHR pipelineInfo = {
+            VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR};
+
+        pipelineInfo.pStages                      = stages.data();
+        pipelineInfo.stageCount                   = static_cast<u32>(stages.size());
+        pipelineInfo.pGroups                      = shaderGroups.data();
+        pipelineInfo.groupCount                   = static_cast<u32>(shaderGroups.size());
+        pipelineInfo.maxPipelineRayRecursionDepth = maxDepth;
+        pipelineInfo.layout                       = ? ;
+
+        {
+            VkRayTracingPipelineClusterAccelerationStructureCreateInfoNV clusterInfo{
+                VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CLUSTER_ACCELERATION_STRUCTURE_CREATE_INFO_NV};
+            clusterInfo.allowClusterAccelerationStructure = true;
+            pipelineInfo.pNext                            = &clusterInfo;
+        }
+
+        VkResult result = vkCreateRayTracingPipelinesKHR(device, {}, {}, 1, &pipelineInfo,
+        0,
+                                                         need a pipeline here);
+    }
+    Assert(result == VK_SUCCESS);
+
+    // Create shader binding table
+    {
+    }
+
+    // VkAccelerationStructureGeometryInstancesDataKHR instance;
+    // instance.arrayOfPointers
+
+    // Build acceleration structures, trace rays
+}
+#endif
 
 GPUAccelerationStructure Vulkan::CreateBLAS(CommandBuffer *cmd, const GPUMesh *meshes,
                                             int count)
@@ -1741,8 +1743,9 @@ GPUAccelerationStructure Vulkan::CreateBLAS(CommandBuffer *cmd, const GPUMesh *m
 
     VkAccelerationStructureBuildGeometryInfoKHR buildInfo = {
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
-    buildInfo.type          = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    buildInfo.flags         = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    buildInfo.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                      VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
     buildInfo.pGeometries   = geometries.data;
     buildInfo.geometryCount = geometries.Length();
 
@@ -1782,6 +1785,95 @@ GPUAccelerationStructure Vulkan::CreateBLAS(CommandBuffer *cmd, const GPUMesh *m
     vkCmdBuildAccelerationStructuresKHR(cmd->buffer, 1, &buildInfo, &buildRanges.data);
 
     return bvh;
+}
+
+QueryPool Vulkan::CreateQuery(QueryType type, int count)
+{
+    VkQueryPoolCreateInfo info = {VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+    switch (type)
+    {
+        case QueryType_CompactSize:
+        {
+            info.queryType  = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR;
+            info.queryCount = count;
+        }
+        break;
+        default: Assert(0);
+    }
+    QueryPool result;
+    VK_CHECK(vkCreateQueryPool(device, &info, 0, &result.queryPool));
+    result.count = count;
+    return result;
+}
+
+QueryPool Vulkan::GetCompactionSizes(CommandBuffer *cmd, GPUAccelerationStructure **as,
+                                     int count)
+{
+    QueryPool pool = CreateQuery(QueryType_CompactSize, count);
+    vkCmdResetQueryPool(cmd->buffer, pool.queryPool, 0, count);
+    ScratchArena scratch;
+
+    VkAccelerationStructureKHR *vkAs =
+        PushArrayNoZero(scratch.temp.arena, VkAccelerationStructureKHR, count);
+    for (int i = 0; i < count; i++)
+    {
+        vkAs[i] = as[i]->as;
+    }
+
+    VkMemoryBarrier2 barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    barrier.srcStageMask     = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+    barrier.dstStageMask     = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+    barrier.srcAccessMask    = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+    barrier.dstAccessMask    = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+
+    VkDependencyInfo dependencyInfo   = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dependencyInfo.memoryBarrierCount = 1;
+    dependencyInfo.pMemoryBarriers    = &barrier;
+
+    vkCmdPipelineBarrier2(cmd->buffer, &dependencyInfo);
+
+    vkCmdWriteAccelerationStructuresPropertiesKHR(
+        cmd->buffer, count, vkAs, VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
+        pool.queryPool, 0);
+    return pool;
+}
+
+void Vulkan::CompactBLASes(CommandBuffer *cmd, QueryPool &pool, GPUAccelerationStructure **as,
+                           int count)
+{
+    ScratchArena scratch;
+    VkDeviceSize *compactedSizes =
+        PushArrayNoZero(scratch.temp.arena, VkDeviceSize, pool.count);
+    vkGetQueryPoolResults(device, pool.queryPool, 0, count, sizeof(VkDeviceSize) * count,
+                          compactedSizes, 0,
+                          VK_QUERY_RESULT_WAIT_BIT | VK_QUERY_RESULT_64_BIT);
+
+    for (int i = 0; i < count; i++)
+    {
+        GPUBuffer newBuffer = CreateBuffer(
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, compactedSizes[i]);
+        VkAccelerationStructureKHR newAs;
+
+        VkAccelerationStructureCreateInfoKHR accelCreateInfo = {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+
+        accelCreateInfo.buffer = newBuffer.buffer;
+        accelCreateInfo.size   = compactedSizes[i];
+        accelCreateInfo.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        vkCreateAccelerationStructureKHR(device, &accelCreateInfo, 0, &newAs);
+
+        VkCopyAccelerationStructureInfoKHR copyInfo = {
+            VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR};
+        copyInfo.src  = as[i]->as;
+        copyInfo.dst  = newAs;
+        copyInfo.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
+
+        vkCmdCopyAccelerationStructureKHR(cmd->buffer, &copyInfo);
+
+        // TODO: delete old resources
+        as[i]->as     = newAs;
+        as[i]->buffer = newBuffer;
+    }
 }
 
 } // namespace rt
