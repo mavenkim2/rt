@@ -700,9 +700,9 @@ struct ChunkedLinkedList
     inline ChunkNode *AddNode(int count)
     {
         ChunkNode *newNode = PushStructTagged(arena, ChunkNode, memoryTag);
-        newNode->values = (T *)PushArrayNoZeroTagged(arena, u8, sizeof(T) * count, memoryTag);
-        newNode->count  = count;
-        newNode->cap    = count;
+        newNode->values    = (T *)PushArrayTagged(arena, u8, sizeof(T) * count, memoryTag);
+        newNode->count     = count;
+        newNode->cap       = count;
         QueuePush(first, last, newNode);
         totalCount += count;
         return newNode;
@@ -736,6 +736,7 @@ struct ChunkedLinkedList
             if (!first)
             {
                 Assert(!last);
+                Assert(totalCount == 0);
                 first = list->first;
                 last  = list->last;
                 totalCount += list->totalCount;

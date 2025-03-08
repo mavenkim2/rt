@@ -13,7 +13,7 @@ struct PrimitiveIndices;
 
 struct SceneShapeParse
 {
-    TransferCommandBuffer buffer;
+    CommandBuffer *buffer;
     Semaphore semaphore;
 };
 

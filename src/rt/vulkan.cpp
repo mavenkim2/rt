@@ -41,7 +41,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
     appInfo.applicationVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);
     appInfo.pEngineName        = "RT";
     appInfo.engineVersion      = VK_MAKE_API_VERSION(0, major, minor, patch);
-    appInfo.apiVersion         = VK_API_VERSION_1_4;
+    appInfo.apiVersion         = VK_API_VERSION_1_3;
 
     // Load available layers
     u32 layerCount = 0;
@@ -129,7 +129,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
 
     // Create instance
     {
-        Assert(volkGetInstanceVersion() >= VK_API_VERSION_1_4);
+        Assert(volkGetInstanceVersion() >= VK_API_VERSION_1_3);
         VkInstanceCreateInfo instInfo    = {};
         instInfo.sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         instInfo.pApplicationInfo        = &appInfo;
@@ -221,7 +221,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
             if (!vkGetPhysicalDeviceWin32PresentationSupportKHR(testDevice, graphicsIndex))
                 continue;
 #endif
-            if (props.properties.apiVersion < VK_API_VERSION_1_4) continue;
+            if (props.properties.apiVersion < VK_API_VERSION_1_3) continue;
 
             b32 suitable = props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
             if (preference == GPUDevicePreference::Integrated)
@@ -250,25 +250,21 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         features11.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
         features12.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         features13.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-        features14.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES;
+        // features14.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES;
         deviceFeatures.pNext = &features11;
         features11.pNext     = &features12;
         features12.pNext     = &features13;
-        features13.pNext     = &features14;
-
-        void **featuresChain = &features14.pNext;
-        *featuresChain       = 0;
+        void **featuresChain = &features13.pNext;
 
         deviceProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
         properties11.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES;
         properties12.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES;
         properties13.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES;
-        properties14.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_PROPERTIES;
+        // properties14.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_PROPERTIES;
         deviceProperties.pNext = &properties11;
         properties11.pNext     = &properties12;
         properties12.pNext     = &properties13;
-        properties13.pNext     = &properties14;
-        void **propertiesChain = &properties14.pNext;
+        void **propertiesChain = &properties13.pNext;
 
         u32 deviceExtCount = 0;
         VK_CHECK(vkEnumerateDeviceExtensionProperties(physicalDevice, 0, &deviceExtCount, 0));
@@ -289,7 +285,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
                     }
                     if (feat)
                     {
-                        *featuresChain = &feat;
+                        *featuresChain = feat;
                         featuresChain  = reinterpret_cast<void **>(
                             &reinterpret_cast<VkBaseOutStructure *>(feat)->pNext);
                     }
@@ -322,11 +318,6 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
             capabilities |= DeviceCapabilities_VariableShading;
         }
 
-        deviceAddressFeatures = {
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES};
-        checkAndAddExtension(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME, nullptr,
-                             &deviceAddressFeatures);
-
         // Ray tracing extensions
         {
             accelStructProps = {
@@ -347,19 +338,24 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
             ErrorExit(result,
                       "Machine doesn't support VK_KHR_acceleration_structure. Exiting\n");
 
-            checkAndAddExtension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+            result = checkAndAddExtension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+            Assert(result);
 
-            clasPropertiesNV = {
-                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_PROPERTIES_NV};
-            clasFeaturesNV = {
-                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_FEATURES_NV};
-            result = checkAndAddExtension(VK_NV_CLUSTER_ACCELERATION_STRUCTURE_EXTENSION_NAME,
-                                          &clasPropertiesNV, &clasFeaturesNV);
-            ErrorExit(
-                result,
-                "Machine doesn't support VK_NV_cluster_acceleration_structure. Exiting\n");
+            // TODO: update my drivers
+            // clasPropertiesNV = {
+            //     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_PROPERTIES_NV};
+            // clasFeaturesNV = {
+            //     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_FEATURES_NV};
+            // result =
+            // checkAndAddExtension(VK_NV_CLUSTER_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+            //                               &clasPropertiesNV, &clasFeaturesNV);
+            // ErrorExit(
+            //     result,
+            //     "Machine doesn't support VK_NV_cluster_acceleration_structure. Exiting\n");
         }
 
+        *featuresChain   = 0;
+        *propertiesChain = 0;
         vkGetPhysicalDeviceFeatures2(physicalDevice, &deviceFeatures);
 
         // Ensure core functionlity is supported
@@ -380,7 +376,8 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
 
         u32 queueFamilyCount = 0;
         vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, &queueFamilyCount, 0);
-        queueFamilyProperties = StaticArray<VkQueueFamilyProperties2>(arena, queueFamilyCount);
+        queueFamilyProperties =
+            StaticArray<VkQueueFamilyProperties2>(arena, queueFamilyCount, queueFamilyCount);
         for (u32 i = 0; i < queueFamilyCount; i++)
         {
             queueFamilyProperties[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
@@ -485,7 +482,17 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
     vkGetDeviceQueue(device, copyFamily, 0, &queues[QueueType_Copy].queue);
 
     SetName(queues[QueueType_Graphics].queue, "Graphics Queue");
+    SetName(queues[QueueType_Compute].queue, "Compute Queue");
     SetName(queues[QueueType_Copy].queue, "Transfer Queue");
+
+    for (int i = 0; i < QueueType_Count; i++)
+    {
+        Semaphore s               = CreateGraphicsSemaphore();
+        queues[i].submissionID    = 0;
+        queues[i].submitSemaphore = s.semaphore;
+    }
+    u32 numProcessors = OS_NumProcessors();
+    commandPools      = StaticArray<ThreadCommandPool>(arena, numProcessors, numProcessors);
 
     // TODO: unified memory access architectures
     memProperties       = {};
@@ -496,9 +503,10 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
     allocCreateInfo.physicalDevice         = physicalDevice;
     allocCreateInfo.device                 = device;
     allocCreateInfo.instance               = instance;
-    allocCreateInfo.vulkanApiVersion       = VK_API_VERSION_1_4;
+    allocCreateInfo.vulkanApiVersion       = VK_API_VERSION_1_3;
     // these are promoted to core, so this doesn't do anything
-    allocCreateInfo.flags = VMA_ALLOCATOR_CREATE_KHR_BIND_MEMORY2_BIT;
+    allocCreateInfo.flags = VMA_ALLOCATOR_CREATE_KHR_BIND_MEMORY2_BIT |
+                            VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
 
     VmaVulkanFunctions vulkanFunctions    = {};
     vulkanFunctions.vkGetDeviceProcAddr   = vkGetDeviceProcAddr;
@@ -1091,7 +1099,7 @@ b32 Vulkan::CreateSwapchain(Swapchain *swapchain)
     return true;
 }
 
-Semaphore Vulkan::CreateSemaphore()
+Semaphore Vulkan::CreateGraphicsSemaphore()
 {
     VkSemaphoreTypeCreateInfo timelineInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
     timelineInfo.semaphoreType             = VK_SEMAPHORE_TYPE_TIMELINE;
@@ -1110,34 +1118,13 @@ void Vulkan::AllocateCommandBuffers(ThreadCommandPool &pool, QueueType type)
     bufferInfo.commandPool                 = pool.pool[type];
     bufferInfo.commandBufferCount          = ThreadCommandPool::commandBufferPoolSize;
     bufferInfo.level                       = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    VK_CHECK(vkAllocateCommandBuffers(device, &bufferInfo, node->values));
-}
 
-void Vulkan::AllocateTransferCommandBuffers(ThreadCommandPool &pool)
-{
-    auto *node = pool.freeTransferBuffers.AddNode(ThreadCommandPool::commandBufferPoolSize);
+    VkCommandBuffer buffers[ThreadCommandPool::commandBufferPoolSize];
 
-    VkCommandBuffer commandBuffers[ThreadCommandPool::commandBufferPoolSize];
-    VkCommandBufferAllocateInfo bufferInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    bufferInfo.commandPool                 = pool.pool[QueueType_Copy];
-    bufferInfo.commandBufferCount          = ThreadCommandPool::commandBufferPoolSize;
-    bufferInfo.level                       = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    VK_CHECK(vkAllocateCommandBuffers(device, &bufferInfo, commandBuffers));
-
-    VkSemaphoreTypeCreateInfo timelineInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
-    timelineInfo.semaphoreType             = VK_SEMAPHORE_TYPE_TIMELINE;
-    VkSemaphoreCreateInfo semaphoreInfo    = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    semaphoreInfo.pNext                    = &timelineInfo;
-
+    VK_CHECK(vkAllocateCommandBuffers(device, &bufferInfo, buffers));
     for (int i = 0; i < ThreadCommandPool::commandBufferPoolSize; i++)
     {
-        VkSemaphore semaphore;
-        vkCreateSemaphore(device, &semaphoreInfo, 0, &semaphore);
-
-        node->values[i] = TransferCommandBuffer{
-            .buffer    = commandBuffers[i],
-            .semaphore = semaphore,
-        };
+        node->values[i].buffer = buffers[i];
     }
 }
 
@@ -1148,108 +1135,36 @@ void Vulkan::CheckInitializedThreadCommandPool(int threadIndex)
     {
         pool.arena = ArenaAlloc();
         pool.pool  = StaticArray<VkCommandPool>(pool.arena, QueueType_Count, QueueType_Count);
-        pool.buffers = CommandBufferPool(pool.arena, QueueType_Count - 1, QueueType_Count - 1);
-        pool.freeTransferBuffers = TransferCommandBufferPool(pool.arena);
+        pool.buffers  = CommandBufferPool(pool.arena, QueueType_Count, QueueType_Count);
+        pool.freeList = CommandBufferFreeList(pool.arena, QueueType_Count, QueueType_Count);
 
         VkCommandPoolCreateInfo poolInfo = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-        poolInfo.flags                   = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-        poolInfo.queueFamilyIndex        = graphicsFamily;
-        VK_CHECK(vkCreateCommandPool(device, &poolInfo, 0, &pool.pool[QueueType_Graphics]));
+        poolInfo.flags                   = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT |
+                         VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 
-        pool.buffers[QueueType_Graphics] = ChunkedLinkedList<VkCommandBuffer>(pool.arena);
-        AllocateCommandBuffers(pool, QueueType_Graphics);
+        int pools[QueueType_Count];
+        pools[QueueType_Graphics] = graphicsFamily;
+        pools[QueueType_Compute]  = computeFamily;
+        pools[QueueType_Copy]     = copyFamily;
 
-        Assert(computeFamily != VK_QUEUE_FAMILY_IGNORED);
+        for (int i = 0; i < QueueType_Count; i++)
         {
-            poolInfo.queueFamilyIndex = computeFamily;
-            VK_CHECK(vkCreateCommandPool(device, &poolInfo, 0, &pool.pool[QueueType_Compute]));
-            pool.buffers[QueueType_Compute] = ChunkedLinkedList<VkCommandBuffer>(pool.arena);
-            AllocateCommandBuffers(pool, QueueType_Graphics);
+            Assert(pools[i] != VK_QUEUE_FAMILY_IGNORED);
+            poolInfo.queueFamilyIndex = pools[i];
+            VK_CHECK(vkCreateCommandPool(device, &poolInfo, 0, &pool.pool[i]));
+            pool.buffers[i]  = CommandBufferList(pool.arena);
+            pool.freeList[i] = ChunkedLinkedList<CommandBuffer *>(pool.arena);
+            AllocateCommandBuffers(pool, QueueType(i));
+            auto *node = pool.buffers[i].last;
+            for (int j = 0; j < node->count; j++)
+            {
+                pool.freeList[i].AddBack() = &node->values[j];
+            }
         }
-        Assert(copyFamily != VK_QUEUE_FAMILY_IGNORED);
-        {
-            poolInfo.queueFamilyIndex = copyFamily;
-            VK_CHECK(vkCreateCommandPool(device, &poolInfo, 0, &pool.pool[QueueType_Copy]));
-            AllocateTransferCommandBuffers(pool);
-        }
     }
 }
 
-CommandBuffer Vulkan::BeginCommandBuffer(QueueType queue)
-{
-    int threadIndex         = GetThreadIndex();
-    ThreadCommandPool &pool = GetThreadCommandPool(threadIndex);
-
-    VkCommandBuffer buffer = VK_NULL_HANDLE;
-    pool.buffers[queue].Pop(&buffer);
-    if (buffer == VK_NULL_HANDLE)
-    {
-        AllocateCommandBuffers(pool, queue);
-        pool.buffers[queue].Pop(&buffer);
-    }
-
-    vkResetCommandBuffer(buffer, 0);
-    VkCommandBufferBeginInfo beginInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    beginInfo.flags                    = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-    vkBeginCommandBuffer(buffer, &beginInfo);
-    return CommandBuffer{.buffer = buffer};
-}
-
-void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd)
-{
-    ScratchArena scratch;
-    CommandQueue &queue = queues[cmd->type];
-    VkSubmitInfo2 info  = {VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-
-    u32 waitSize = static_cast<u32>(cmd->waitSemaphores.size());
-    VkSemaphoreSubmitInfo *submitInfo =
-        PushArrayNoZero(scratch.temp.arena, VkSemaphoreSubmitInfo, size);
-
-    for (u32 i = 0; i < size; i++)
-    {
-        submitInfo[i].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        submitInfo[i].value     = cmd->waitSemaphores[i].semaphore;
-        submitInfo[i].semaphore = cmd->waitSemaphores[i].signalValue;
-        submitInfo[i].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    }
-
-    u32 signalSize = static_cast<u32>(cmd->signalSemaphores.size());
-    VkSemaphoreSubmitInfo *signalSubmitInfo =
-        PushArrayNoZero(scratch.temp.arena, VkSemaphoreSubmitInfo, size);
-
-    for (u32 i = 0; i < size; i++)
-    {
-        submitInfo[i].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        submitInfo[i].value     = cmd->signalSemaphores[i].semaphore;
-        submitInfo[i].semaphore = cmd->signalSemaphores[i].signalValue;
-        submitInfo[i].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    }
-
-    VkCommandBufferSubmitInfo bufferSubmitInfo = {
-        VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
-    bufferSubmitInfo.commandBuffer = cmd->buffer;
-
-    info.waitSemaphoreInfoCount   = size;
-    info.pWaitSemaphoreInfos      = submitInfo;
-    info.signalSemaphoreInfoCount = signalSize;
-    info.pSignalSemaphoreInfos    = signalSubmitInfo;
-    info.commandBufferInfoCount   = 1;
-    info.pCommandBufferInfos      = &bufferSubmitInfo;
-
-    vkQueueSubmit2(queue.queue, 1, &info, VK_NULL_HANDLE);
-
-    int threadIndex         = GetThreadIndex();
-    ThreadCommandPool &pool = device->GetThreadCommandPool(threadIndex);
-    pool.buffers.AddBack()  = ? ;
-}
-
-ThreadCommandPool &Vulkan::GetThreadCommandPool(int threadIndex)
-{
-    return commandPools[threadIndex];
-}
-
-TransferCommandBuffer Vulkan::BeginTransfers()
+CommandBuffer *Vulkan::BeginCommandBuffer(QueueType queue)
 {
     int threadIndex = GetThreadIndex();
     CheckInitializedThreadCommandPool(threadIndex);
@@ -1257,21 +1172,21 @@ TransferCommandBuffer Vulkan::BeginTransfers()
 
     bool success = false;
 
-    TransferCommandBuffer buffer;
-    for (auto *node = pool.freeTransferBuffers.first; node != 0; node = node->next)
+    CommandBuffer *cmd = 0;
+    for (auto *node = pool.freeList[queue].first; node != 0; node = node->next)
     {
         for (int i = 0; i < node->count; i++)
         {
-            TransferCommandBuffer &testCmd = node->values[i];
+            CommandBuffer *test = node->values[i];
             u64 value;
-            vkGetSemaphoreCounterValue(device, testCmd.semaphore, &value);
-            if (value >= testCmd.submissionID)
+            if (test->semaphore != VK_NULL_HANDLE)
+                vkGetSemaphoreCounterValue(device, test->semaphore, &value);
+            if (test->semaphore == VK_NULL_HANDLE || value >= test->submissionID)
             {
-                buffer = testCmd;
-
-                node->values[i] = pool.freeTransferBuffers.Last();
-                pool.freeTransferBuffers.totalCount--;
-                pool.freeTransferBuffers.last->count--;
+                cmd             = test;
+                node->values[i] = pool.freeList[queue].Last();
+                pool.freeList[queue].totalCount--;
+                pool.freeList[queue].last->count--;
 
                 success = true;
                 break;
@@ -1282,23 +1197,90 @@ TransferCommandBuffer Vulkan::BeginTransfers()
 
     if (!success)
     {
-        AllocateTransferCommandBuffers(pool);
-        pool.freeTransferBuffers.Pop(&buffer);
+        AllocateCommandBuffers(pool, queue);
+        pool.freeList[queue].Pop(&cmd);
     }
 
-    VK_CHECK(vkResetCommandBuffer(buffer.buffer, 0));
+    Assert(cmd);
+
+    cmd->type = queue;
+    VK_CHECK(vkResetCommandBuffer(cmd->buffer, 0));
     VkCommandBufferBeginInfo beginInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     beginInfo.flags                    = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-    VK_CHECK(vkBeginCommandBuffer(buffer.buffer, &beginInfo));
+    VK_CHECK(vkBeginCommandBuffer(cmd->buffer, &beginInfo));
 
-    return buffer;
+    return cmd;
+}
+
+void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd)
+{
+    VK_CHECK(vkEndCommandBuffer(cmd->buffer));
+    ScratchArena scratch;
+    CommandQueue &queue = queues[cmd->type];
+    VkSubmitInfo2 info  = {VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+
+    u32 waitSize = static_cast<u32>(cmd->waitSemaphores.size());
+    VkSemaphoreSubmitInfo *submitInfo =
+        PushArrayNoZero(scratch.temp.arena, VkSemaphoreSubmitInfo, waitSize);
+
+    for (u32 i = 0; i < waitSize; i++)
+    {
+        submitInfo[i].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        submitInfo[i].value     = cmd->waitSemaphores[i].signalValue;
+        submitInfo[i].semaphore = cmd->waitSemaphores[i].semaphore;
+        submitInfo[i].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    }
+
+    u32 signalSize = static_cast<u32>(cmd->signalSemaphores.size());
+    VkSemaphoreSubmitInfo *signalSubmitInfo =
+        PushArrayNoZero(scratch.temp.arena, VkSemaphoreSubmitInfo, signalSize + 1);
+
+    for (u32 i = 0; i < signalSize; i++)
+    {
+        submitInfo[i].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        submitInfo[i].value     = cmd->signalSemaphores[i].signalValue;
+        submitInfo[i].semaphore = cmd->signalSemaphores[i].semaphore;
+        submitInfo[i].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    }
+    submitInfo[signalSize].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+    submitInfo[signalSize].value     = ++queue.submissionID;
+    submitInfo[signalSize].semaphore = queue.submitSemaphore;
+    submitInfo[signalSize].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+
+    VkCommandBufferSubmitInfo bufferSubmitInfo = {
+        VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    bufferSubmitInfo.commandBuffer = cmd->buffer;
+
+    info.waitSemaphoreInfoCount   = waitSize;
+    info.pWaitSemaphoreInfos      = submitInfo;
+    info.signalSemaphoreInfoCount = signalSize;
+    info.pSignalSemaphoreInfos    = signalSubmitInfo;
+    info.commandBufferInfoCount   = 1;
+    info.pCommandBufferInfos      = &bufferSubmitInfo;
+
+    vkQueueSubmit2(queue.queue, 1, &info, VK_NULL_HANDLE);
+
+    cmd->waitSemaphores.clear();
+    cmd->signalSemaphores.clear();
+    cmd->semaphore    = queue.submitSemaphore;
+    cmd->submissionID = queue.submissionID;
+
+    int threadIndex                    = GetThreadIndex();
+    ThreadCommandPool &pool            = GetThreadCommandPool(threadIndex);
+    pool.freeList[cmd->type].AddBack() = cmd;
+}
+
+ThreadCommandPool &Vulkan::GetThreadCommandPool(int threadIndex)
+{
+    return commandPools[threadIndex];
 }
 
 GPUBuffer Vulkan::CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
                                VmaAllocationCreateFlags vmaFlags)
 {
     GPUBuffer buffer;
+    buffer.size                   = totalSize;
     VkBufferCreateInfo createInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     createInfo.size               = totalSize;
     createInfo.usage |=
@@ -1332,7 +1314,8 @@ TransferBuffer Vulkan::GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSi
                                     totalSize);
     GPUBuffer stagingBuffer =
         CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, totalSize,
-                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                         VMA_ALLOCATION_CREATE_MAPPED_BIT);
 
     void *mappedPtr = stagingBuffer.allocation->GetMappedData();
 
@@ -1344,12 +1327,12 @@ TransferBuffer Vulkan::GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSi
     return transferBuffer;
 }
 
-void TransferCommandBuffer::SubmitTransfer(TransferBuffer *transferBuffer)
+void CommandBuffer::SubmitTransfer(TransferBuffer *transferBuffer)
 {
     VkBufferCopy bufferCopy = {};
     bufferCopy.srcOffset    = 0;
     bufferCopy.dstOffset    = 0;
-    bufferCopy.size         = transferBuffer->buffer.allocation->GetSize();
+    bufferCopy.size         = transferBuffer->buffer.size;
 
     vkCmdCopyBuffer(buffer, transferBuffer->stagingBuffer.buffer,
                     transferBuffer->buffer.buffer, 1, &bufferCopy);
@@ -1359,6 +1342,7 @@ u64 Vulkan::GetDeviceAddress(VkBuffer buffer)
 {
     VkBufferDeviceAddressInfo info = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
     info.buffer                    = buffer;
+
     return vkGetBufferDeviceAddress(device, &info);
 }
 
@@ -1752,6 +1736,7 @@ GPUAccelerationStructure Vulkan::CreateBLAS(CommandBuffer *cmd, const GPUMesh *m
         VkAccelerationStructureBuildRangeInfoKHR rangeInfo = {};
         rangeInfo.primitiveCount                           = primitiveCount;
         buildRanges.Push(rangeInfo);
+        maxPrimitiveCounts.Push(primitiveCount);
     }
 
     VkAccelerationStructureBuildGeometryInfoKHR buildInfo = {

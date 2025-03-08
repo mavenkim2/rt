@@ -37,7 +37,7 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
                           string directory, AffineSpace &worldFromRender,
                           AffineSpace &renderFromWorld, Tokenizer &tokenizer,
                           MaterialHashMap *materialHashMap, Mesh &mesh,
-                          ChunkedLinkedList<MeshType, MemoryType_Shape> &shapes,
+                          ChunkedLinkedList<Mesh, MemoryType_Shape> &shapes,
                           ChunkedLinkedList<PrimitiveIndices, MemoryType_Shape> &indices,
                           ChunkedLinkedList<Light *, MemoryType_Light> &lights)
 {

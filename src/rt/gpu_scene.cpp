@@ -8,8 +8,8 @@ namespace rt
 SceneShapeParse StartSceneShapeParse()
 {
     SceneShapeParse result = SceneShapeParse{
-        .buffer    = device->BeginTransfers(),
-        .semaphore = device->CreateSemaphore(),
+        .buffer    = device->BeginCommandBuffer(QueueType_Copy),
+        .semaphore = device->CreateGraphicsSemaphore(),
     };
     result.semaphore.signalValue = 1;
     return result;
@@ -17,9 +17,9 @@ SceneShapeParse StartSceneShapeParse()
 
 void EndSceneShapeParse(ScenePrimitives *scene, SceneShapeParse *parse)
 {
-    parse->buffer.Signal(parse->semaphore);
+    parse->buffer->Signal(parse->semaphore);
     scene->semaphore = parse->semaphore;
-    parse->buffer.SubmitToQueue();
+    device->SubmitCommandBuffer(parse->buffer);
 }
 
 GPUMesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
@@ -34,11 +34,12 @@ GPUMesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
     u64 deviceAddress = device->GetDeviceAddress(transferBuffer.buffer.buffer);
 
     u8 *ptr = (u8 *)transferBuffer.mappedPtr;
+    Assert(ptr);
     MemoryCopy(ptr, mesh.p, vertexSize);
     ptr += vertexSize;
     MemoryCopy(ptr, mesh.indices, indicesSize);
 
-    parse->buffer.SubmitTransfer(&transferBuffer);
+    parse->buffer->SubmitTransfer(&transferBuffer);
 
     GPUMesh result = {
         .vertexAddress = deviceAddress,
@@ -54,12 +55,62 @@ GPUMesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
 void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, GeometryType type,
                           string directory, AffineSpace &worldFromRender,
                           AffineSpace &renderFromWorld, Tokenizer &tokenizer,
-                          HashMap<MaterialNode> *materialHashMap, GPUMesh &mesh,
+                          MaterialHashMap *materialHashMap, GPUMesh &mesh,
                           ChunkedLinkedList<GPUMesh, MemoryType_Shape> &shapes,
                           ChunkedLinkedList<PrimitiveIndices, MemoryType_Shape> &indices,
                           ChunkedLinkedList<Light *, MemoryType_Light> &lights)
 {
-    return;
+    PrimitiveIndices &primIndices = indices.AddBack();
+
+    MaterialHandle materialHandle;
+    LightHandle lightHandle;
+    Texture *alphaTexture   = 0;
+    DiffuseAreaLight *light = 0;
+
+    // TODO: handle instanced mesh lights
+    AffineSpace *transform = 0;
+
+    // Check for material
+    if (Advance(&tokenizer, "m "))
+    {
+        Assert(materialHashMap);
+        string materialName      = ReadWord(&tokenizer);
+        const MaterialNode *node = materialHashMap->Get(materialName);
+        materialHandle           = node->handle;
+    }
+
+    if (Advance(&tokenizer, "transform "))
+    {
+        u32 transformIndex = ReadInt(&tokenizer);
+        SkipToNextChar(&tokenizer);
+    }
+
+    // Check for area light
+    if (Advance(&tokenizer, "a "))
+    {
+        ErrorExit(type == GeometryType::QuadMesh, "Only quad area lights supported for now\n");
+        Assert(transform);
+
+        DiffuseAreaLight *areaLight =
+            ParseAreaLight(arena, &tokenizer, transform, sceneID, shapes.totalCount - 1);
+        lightHandle      = LightHandle(LightClass::DiffuseAreaLight, lights.totalCount);
+        lights.AddBack() = areaLight;
+        light            = areaLight;
+    }
+
+    // Check for alpha
+    if (Advance(&tokenizer, "alpha "))
+    {
+        Texture *alphaTexture = ParseTexture(arena, &tokenizer, directory);
+
+        // TODO: this is also a hack: properly evaluate whether the alpha is
+        // always 0
+        if (lightHandle)
+        {
+            light->type = LightType::DeltaPosition;
+        }
+    }
+    primIndices = PrimitiveIndices(lightHandle, materialHandle, alphaTexture);
 }
 
 void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, int maxDepth,
@@ -69,12 +120,12 @@ void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, 
 
     for (int depth = maxDepth; depth >= 0; depth--)
     {
-        CommandBuffer cmd = device->BeginCommandBuffer(QueueType_Graphics);
-        device->BeginEvent(&cmd, "BLAS Build");
+        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics);
+        device->BeginEvent(cmd, "BLAS Build");
         for (int i = 0; i < numScenes; i++)
         {
             ScenePrimitives *scene = scenes[i];
-            cmd.Wait(scene->semaphore);
+            cmd->Wait(scene->semaphore);
             if (scene->depth.load(std::memory_order_acquire) == depth)
             {
                 switch (scene->geometryType)
@@ -82,7 +133,7 @@ void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, 
                     case GeometryType::TriangleMesh:
                     {
                         GPUMesh *meshes = (GPUMesh *)scene->primitives;
-                        scene->gpuBVH = device->CreateBLAS(&cmd, meshes, scene->numPrimitives);
+                        scene->gpuBVH = device->CreateBLAS(cmd, meshes, scene->numPrimitives);
                     }
                     break;
                     default: Assert(0);
@@ -90,8 +141,8 @@ void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, 
             }
         }
 
-        device->SubmitCommandBuffer(&cmd);
-        device->EndEvent(&cmd);
+        device->SubmitCommandBuffer(cmd);
+        device->EndEvent(cmd);
     }
 }
 } // namespace rt

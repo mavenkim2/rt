@@ -85,6 +85,9 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         "-Wno-reorder-ctor"
         "-Wno-nullability-completeness"
     )
+    if (uppercase_CMAKE_BUILD_TYPE STREQUAL "DEBUG")
+        list (APPEND RT_CXX_FLAGS "-O0")
+    endif()
     if (CMAKE_CXX_COMPILER_VERSION GREATER_EQUAL 14)
         message (STATUS "Disabling -ffp-contract")
         if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")

@@ -12,7 +12,7 @@
 #include "../third_party/vulkan/volk.h"
 
 #define VMA_STATIC_VULKAN_FUNCTIONS  0
-#define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 #include "../third_party/vulkan/vk_mem_alloc.h"
 
 // std::vector of things to do:
@@ -149,6 +149,7 @@ struct GPUBuffer
 {
     VkBuffer buffer;
     VmaAllocation allocation;
+    size_t size;
 };
 
 // struct GPUBuffer
@@ -208,9 +209,12 @@ struct CommandBuffer
 {
     QueueType type;
     VkCommandBuffer buffer;
+
+    VkSemaphore semaphore;
+    u64 submissionID;
+
     u32 currentBuffer = 0;
     // PipelineState *currentPipeline              = 0;
-    VkSemaphore semaphore;
     std::atomic_bool waitedOn{false};
 
     std::vector<VkImageMemoryBarrier2> endPassImageMemoryBarriers;
@@ -233,9 +237,12 @@ struct CommandBuffer
 
     void Wait(Semaphore semaphore) { waitSemaphores.push_back(semaphore); }
     void Signal(Semaphore semaphore) { signalSemaphores.push_back(semaphore); }
+    void SubmitTransfer(TransferBuffer *buffer);
 };
 
-typedef StaticArray<ChunkedLinkedList<VkCommandBuffer>> CommandBufferPool;
+typedef ChunkedLinkedList<CommandBuffer> CommandBufferList;
+typedef StaticArray<CommandBufferList> CommandBufferPool;
+typedef StaticArray<ChunkedLinkedList<CommandBuffer *>> CommandBufferFreeList;
 
 struct alignas(CACHE_LINE_SIZE) ThreadCommandPool
 {
@@ -244,12 +251,15 @@ struct alignas(CACHE_LINE_SIZE) ThreadCommandPool
 
     StaticArray<VkCommandPool> pool;
     CommandBufferPool buffers;
+    CommandBufferFreeList freeList;
 };
 
 struct CommandQueue
 {
     VkQueue queue;
     Mutex lock = {};
+
+    VkSemaphore submitSemaphore;
     u64 submissionID;
 };
 
@@ -309,8 +319,6 @@ struct Vulkan
     VkPhysicalDeviceFragmentShadingRateFeaturesKHR variableShadingRateFeatures;
 
     // RT + CLAS
-    VkPhysicalDeviceBufferDeviceAddressFeatures deviceAddressFeatures;
-
     VkPhysicalDeviceAccelerationStructurePropertiesKHR accelStructProps;
     VkPhysicalDeviceAccelerationStructureFeaturesKHR accelStructFeats;
 
@@ -327,10 +335,6 @@ struct Vulkan
     //
     CommandQueue queues[QueueType_Count];
     VkFence frameFences[cNumBuffers][QueueType_Count] = {};
-
-    u32 numCommandLists;
-    std::vector<CommandBuffer> commandLists;
-    TicketMutex commandMutex = {};
 
     b32 debugUtils = false;
 
@@ -481,25 +485,21 @@ struct Vulkan
            GPUDevicePreference preference = GPUDevicePreference::Discrete);
     // u64 GetMinAlignment(GPUBufferDesc *inDesc);
     Swapchain CreateSwapchain(Window window, u32 width, u32 height);
-    Semaphore CreateSemaphore();
+    Semaphore CreateGraphicsSemaphore();
     // void CreatePipeline(PipelineStateDesc *inDesc, PipelineState *outPS, string name);
     // void CreateComputePipeline(PipelineStateDesc *inDesc, PipelineState *outPS, string
     // name); void CreateShader(Shader *shader, string shaderData); void AddPCTemp(Shader
     // *shader, u32 offset, u32 size); void CreateBufferCopy(GPUBuffer *inBuffer, GPUBufferDesc
     // inDesc, CopyFunction initCallback);
     void AllocateCommandBuffers(ThreadCommandPool &pool, QueueType type);
-    void AllocateTransferCommandBuffers(ThreadCommandPool &pool);
     void CheckInitializedThreadCommandPool(int threadIndex);
-    CommandBuffer BeginCommandBuffer(QueueType queue);
+    CommandBuffer *BeginCommandBuffer(QueueType queue);
     void SubmitCommandBuffer(CommandBuffer *cmd);
     ThreadCommandPool &GetThreadCommandPool(int threadIndex);
-    TransferCommandBuffer BeginTransfers();
     GPUBuffer CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
                            VmaAllocationCreateFlags vmaFlags = 0);
     TransferBuffer GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize);
-    void SubmitTransfer(TransferBuffer *buffer);
     u64 GetDeviceAddress(VkBuffer buffer);
-    void SubmitToQueue(Semaphore *semaphore = 0);
     GPUAccelerationStructure CreateBLAS(CommandBuffer *cmd, const GPUMesh *meshes, int count);
     void BeginEvent(CommandBuffer *cmd, string name);
     void EndEvent(CommandBuffer *cmd);
@@ -537,7 +537,6 @@ struct Vulkan
     //                       u32 baseMip = 0, u32 numMips = ~0u);
     // void UpdateDescriptorSet(CommandBuffer cmd, b8 isCompute = 0);
     // CommandBuffer BeginCommandBuffer(QueueType queue);
-    // TransferCommandBuffer BeginTransfers();
     // void BeginRenderPass(Swapchain *inSwapchain, CommandBuffer commandBuffer);
     // void BeginRenderPass(RenderPassImage *images, u32 count, CommandBuffer cmd);
     // void Draw(CommandBuffer cmd, u32 vertexCount, u32 firstVertex);
