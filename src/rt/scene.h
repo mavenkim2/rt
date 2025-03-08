@@ -823,6 +823,7 @@ struct ScenePrimitives
 
 #ifdef USE_GPU
     GPUAccelerationStructure gpuBVH;
+    Semaphore semaphore;
 #endif
 
     // NOTE: is one of PrimitiveType

@@ -14,6 +14,7 @@ struct PrimitiveIndices;
 struct SceneShapeParse
 {
     TransferCommandBuffer buffer;
+    Semaphore semaphore;
 };
 
 GPUMesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh);
@@ -28,6 +29,6 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
                           ChunkedLinkedList<PrimitiveIndices, MemoryType_Shape> &indices,
                           ChunkedLinkedList<Light *, MemoryType_Light> &lights);
 SceneShapeParse StartSceneShapeParse();
-void EndSceneShapeParse(SceneShapeParse *parse);
+void EndSceneShapeParse(ScenePrimitives *scene, SceneShapeParse *parse);
 } // namespace rt
 #endif

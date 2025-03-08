@@ -20,7 +20,7 @@ struct SceneShapeParse
 };
 Mesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh);
 SceneShapeParse StartSceneShapeParse();
-void EndSceneShapeParse(SceneShapeParse *parse);
+void EndSceneShapeParse(ScenePrimitives *scene, SceneShapeParse *parse);
 void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, GeometryType type,
                           string directory, AffineSpace &worldFromRender,
                           AffineSpace &renderFromWorld, Tokenizer &tokenizer,

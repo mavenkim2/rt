@@ -7,10 +7,20 @@ namespace rt
 
 SceneShapeParse StartSceneShapeParse()
 {
-    return SceneShapeParse{.buffer = device->BeginTransfers()};
+    SceneShapeParse result = SceneShapeParse{
+        .buffer    = device->BeginTransfers(),
+        .semaphore = device->CreateSemaphore(),
+    };
+    result.semaphore.signalValue = 1;
+    return result;
 }
 
-void EndSceneShapeParse(SceneShapeParse *parse) { parse->buffer.SubmitToQueue(); }
+void EndSceneShapeParse(ScenePrimitives *scene, SceneShapeParse *parse)
+{
+    parse->buffer.Signal(parse->semaphore);
+    scene->semaphore = parse->semaphore;
+    parse->buffer.SubmitToQueue();
+}
 
 GPUMesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
 {
@@ -56,14 +66,15 @@ void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, 
                        const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender,
                        int screenHeight)
 {
-    CommandBuffer cmd = device->BeginCommandBuffer(QueueType_Graphics);
-    device->BeginEvent(&cmd, "BLAS Build");
 
     for (int depth = maxDepth; depth >= 0; depth--)
     {
+        CommandBuffer cmd = device->BeginCommandBuffer(QueueType_Graphics);
+        device->BeginEvent(&cmd, "BLAS Build");
         for (int i = 0; i < numScenes; i++)
         {
             ScenePrimitives *scene = scenes[i];
+            cmd.Wait(scene->semaphore);
             if (scene->depth.load(std::memory_order_acquire) == depth)
             {
                 switch (scene->geometryType)
@@ -78,8 +89,9 @@ void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, 
                 }
             }
         }
-    }
 
-    device->EndEvent(&cmd);
+        device->SubmitCommandBuffer(&cmd);
+        device->EndEvent(&cmd);
+    }
 }
 } // namespace rt

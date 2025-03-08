@@ -189,15 +189,6 @@ struct TransferBuffer
     void *mappedPtr;
 };
 
-struct TransferCommandBuffer
-{
-    VkCommandBuffer buffer;
-    VkSemaphore semaphore;
-    u64 submissionID;
-    void SubmitTransfer(TransferBuffer *buffer);
-    void SubmitToQueue();
-};
-
 enum QueueType
 {
     QueueType_Graphics,
@@ -205,6 +196,12 @@ enum QueueType
     QueueType_Copy,
 
     QueueType_Count,
+};
+
+struct Semaphore
+{
+    VkSemaphore semaphore;
+    u64 signalValue;
 };
 
 struct CommandBuffer
@@ -219,6 +216,9 @@ struct CommandBuffer
     std::vector<VkImageMemoryBarrier2> endPassImageMemoryBarriers;
     std::vector<Swapchain> updateSwapchains;
 
+    std::vector<Semaphore> waitSemaphores;
+    std::vector<Semaphore> signalSemaphores;
+
     // Descriptor bindings
 
     // BindedResource srvTable[cMaxBindings] = {};
@@ -230,10 +230,12 @@ struct CommandBuffer
     std::vector<VkDescriptorSet> descriptorSets[cNumBuffers];
     u32 currentSet = 0;
     // b32 mIsDirty[cNumBuffers][QueueType_Count] = {};
+
+    void Wait(Semaphore semaphore) { waitSemaphores.push_back(semaphore); }
+    void Signal(Semaphore semaphore) { signalSemaphores.push_back(semaphore); }
 };
 
 typedef StaticArray<ChunkedLinkedList<VkCommandBuffer>> CommandBufferPool;
-typedef ChunkedLinkedList<TransferCommandBuffer> TransferCommandBufferPool;
 
 struct alignas(CACHE_LINE_SIZE) ThreadCommandPool
 {
@@ -242,8 +244,6 @@ struct alignas(CACHE_LINE_SIZE) ThreadCommandPool
 
     StaticArray<VkCommandPool> pool;
     CommandBufferPool buffers;
-
-    TransferCommandBufferPool freeTransferBuffers;
 };
 
 struct CommandQueue
@@ -251,9 +251,6 @@ struct CommandQueue
     VkQueue queue;
     Mutex lock = {};
     u64 submissionID;
-
-    std::vector<VkSemaphore> waitSemaphores;
-    std::vector<u64> waitSemaphoreValues;
 };
 
 struct GPUAccelerationStructure
@@ -484,6 +481,7 @@ struct Vulkan
            GPUDevicePreference preference = GPUDevicePreference::Discrete);
     // u64 GetMinAlignment(GPUBufferDesc *inDesc);
     Swapchain CreateSwapchain(Window window, u32 width, u32 height);
+    Semaphore CreateSemaphore();
     // void CreatePipeline(PipelineStateDesc *inDesc, PipelineState *outPS, string name);
     // void CreateComputePipeline(PipelineStateDesc *inDesc, PipelineState *outPS, string
     // name); void CreateShader(Shader *shader, string shaderData); void AddPCTemp(Shader
@@ -493,6 +491,7 @@ struct Vulkan
     void AllocateTransferCommandBuffers(ThreadCommandPool &pool);
     void CheckInitializedThreadCommandPool(int threadIndex);
     CommandBuffer BeginCommandBuffer(QueueType queue);
+    void SubmitCommandBuffer(CommandBuffer *cmd);
     ThreadCommandPool &GetThreadCommandPool(int threadIndex);
     TransferCommandBuffer BeginTransfers();
     GPUBuffer CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
@@ -500,7 +499,7 @@ struct Vulkan
     TransferBuffer GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize);
     void SubmitTransfer(TransferBuffer *buffer);
     u64 GetDeviceAddress(VkBuffer buffer);
-    void SubmitToQueue();
+    void SubmitToQueue(Semaphore *semaphore = 0);
     GPUAccelerationStructure CreateBLAS(CommandBuffer *cmd, const GPUMesh *meshes, int count);
     void BeginEvent(CommandBuffer *cmd, string name);
     void EndEvent(CommandBuffer *cmd);

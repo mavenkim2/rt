@@ -303,9 +303,9 @@ struct RenderParams2
     f32 focalLength = 0.f;
 };
 
-NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Sampler sampler,
-                                  SampledSpectrum beta, const SampledSpectrum &p,
-                                  const SampledWavelengths &lambda, Vec3f &wi);
+// NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Sampler sampler,
+//                                   SampledSpectrum beta, const SampledSpectrum &p,
+//                                   const SampledWavelengths &lambda, Vec3f &wi);
 SampledWavelengths SampleVisible(f32 u);
 
 inline f32 VisibleWavelengthsPDF(f32 lambda)

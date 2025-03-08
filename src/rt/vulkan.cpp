@@ -1091,6 +1091,18 @@ b32 Vulkan::CreateSwapchain(Swapchain *swapchain)
     return true;
 }
 
+Semaphore Vulkan::CreateSemaphore()
+{
+    VkSemaphoreTypeCreateInfo timelineInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+    timelineInfo.semaphoreType             = VK_SEMAPHORE_TYPE_TIMELINE;
+    VkSemaphoreCreateInfo semaphoreInfo    = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    semaphoreInfo.pNext                    = &timelineInfo;
+
+    Semaphore semaphore = {};
+    vkCreateSemaphore(device, &semaphoreInfo, 0, &semaphore.semaphore);
+    return semaphore;
+}
+
 void Vulkan::AllocateCommandBuffers(ThreadCommandPool &pool, QueueType type)
 {
     auto *node = pool.buffers[type].AddNode(ThreadCommandPool::commandBufferPoolSize);
@@ -1182,6 +1194,54 @@ CommandBuffer Vulkan::BeginCommandBuffer(QueueType queue)
 
     vkBeginCommandBuffer(buffer, &beginInfo);
     return CommandBuffer{.buffer = buffer};
+}
+
+void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd)
+{
+    ScratchArena scratch;
+    CommandQueue &queue = queues[cmd->type];
+    VkSubmitInfo2 info  = {VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+
+    u32 waitSize = static_cast<u32>(cmd->waitSemaphores.size());
+    VkSemaphoreSubmitInfo *submitInfo =
+        PushArrayNoZero(scratch.temp.arena, VkSemaphoreSubmitInfo, size);
+
+    for (u32 i = 0; i < size; i++)
+    {
+        submitInfo[i].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        submitInfo[i].value     = cmd->waitSemaphores[i].semaphore;
+        submitInfo[i].semaphore = cmd->waitSemaphores[i].signalValue;
+        submitInfo[i].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    }
+
+    u32 signalSize = static_cast<u32>(cmd->signalSemaphores.size());
+    VkSemaphoreSubmitInfo *signalSubmitInfo =
+        PushArrayNoZero(scratch.temp.arena, VkSemaphoreSubmitInfo, size);
+
+    for (u32 i = 0; i < size; i++)
+    {
+        submitInfo[i].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        submitInfo[i].value     = cmd->signalSemaphores[i].semaphore;
+        submitInfo[i].semaphore = cmd->signalSemaphores[i].signalValue;
+        submitInfo[i].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    }
+
+    VkCommandBufferSubmitInfo bufferSubmitInfo = {
+        VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    bufferSubmitInfo.commandBuffer = cmd->buffer;
+
+    info.waitSemaphoreInfoCount   = size;
+    info.pWaitSemaphoreInfos      = submitInfo;
+    info.signalSemaphoreInfoCount = signalSize;
+    info.pSignalSemaphoreInfos    = signalSubmitInfo;
+    info.commandBufferInfoCount   = 1;
+    info.pCommandBufferInfos      = &bufferSubmitInfo;
+
+    vkQueueSubmit2(queue.queue, 1, &info, VK_NULL_HANDLE);
+
+    int threadIndex         = GetThreadIndex();
+    ThreadCommandPool &pool = device->GetThreadCommandPool(threadIndex);
+    pool.buffers.AddBack()  = ? ;
 }
 
 ThreadCommandPool &Vulkan::GetThreadCommandPool(int threadIndex)
@@ -1300,114 +1360,6 @@ u64 Vulkan::GetDeviceAddress(VkBuffer buffer)
     VkBufferDeviceAddressInfo info = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
     info.buffer                    = buffer;
     return vkGetBufferDeviceAddress(device, &info);
-}
-
-void TransferCommandBuffer::SubmitToQueue()
-{
-    VK_CHECK(vkEndCommandBuffer(buffer));
-    VK_CHECK(vkEndCommandBuffer(buffer));
-
-    VkCommandBufferSubmitInfo bufSubmitInfo = {};
-    bufSubmitInfo.sType                     = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
-
-    VkSemaphoreSubmitInfo waitSemInfo = {};
-    waitSemInfo.sType                 = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-
-    VkSemaphoreSubmitInfo submitSemInfo = {};
-    submitSemInfo.sType                 = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-
-    VkTimelineSemaphoreSubmitInfo timelineInfo = {
-        VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
-    timelineInfo.signalSemaphoreValueCount = 1;
-
-    VkSubmitInfo2 submitInfo = {};
-    submitInfo.sType         = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-    submitInfo.pNext         = &timelineInfo;
-
-    u64 value = 0;
-
-    // Submit the copy command to the transfer queue.
-    {
-        bufSubmitInfo.commandBuffer = buffer;
-
-        submitSemInfo.semaphore = semaphore;
-        submitSemInfo.value     = 0;
-        submitSemInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-
-        submitInfo.commandBufferInfoCount = 1;
-        submitInfo.pCommandBufferInfos    = &bufSubmitInfo;
-
-        submitInfo.signalSemaphoreInfoCount = 1;
-        submitInfo.pSignalSemaphoreInfos    = &submitSemInfo;
-
-        CommandQueue &queue = device->queues[QueueType_Copy];
-        MutexScope(&queue.lock)
-        {
-            value                               = ++queue.submissionID;
-            timelineInfo.pSignalSemaphoreValues = &value;
-            VK_CHECK(vkQueueSubmit2(queue.queue, 1, &submitInfo, VK_NULL_HANDLE));
-        }
-        CommandQueue &graphicsQueue = device->queues[QueueType_Graphics];
-        MutexScope(&graphicsQueue.lock)
-        {
-            graphicsQueue.waitSemaphores.push_back(semaphore);
-            graphicsQueue.waitSemaphoreValues.push_back(value);
-        }
-
-        submissionID = value;
-    }
-
-    int threadIndex                    = GetThreadIndex();
-    ThreadCommandPool &pool            = device->GetThreadCommandPool(threadIndex);
-    pool.freeTransferBuffers.AddBack() = *this;
-
-#if 0
-    // Insert the execution dependency (semaphores) and memory dependency (barrier) on the
-    // graphics queue
-    {
-        bufSubmitInfo.commandBuffer = cmd.transitionBuffer;
-
-        waitSemInfo.semaphore = cmd.semaphores[0];
-        waitSemInfo.value     = 0;
-        waitSemInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-
-        submitSemInfo.semaphore = cmd.semaphores[1];
-        submitSemInfo.value     = 0;
-        submitSemInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-
-        submitInfo.commandBufferInfoCount   = 1;
-        submitInfo.pCommandBufferInfos      = &bufSubmitInfo;
-        submitInfo.waitSemaphoreInfoCount   = 1;
-        submitInfo.pWaitSemaphoreInfos      = &waitSemInfo;
-        submitInfo.signalSemaphoreInfoCount = 1;
-        submitInfo.pSignalSemaphoreInfos    = &submitSemInfo;
-
-        MutexScope(&queues[QueueType_Graphics].lock)
-        {
-            VK_CHECK(vkQueueSubmit2(queues[QueueType_Graphics].queue, 1, &submitInfo,
-                                    VK_NULL_HANDLE));
-        }
-    }
-    // Execution dependency on compute queue
-    {
-        waitSemInfo.semaphore = cmd.semaphores[1];
-        waitSemInfo.value     = 0;
-        waitSemInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-
-        submitInfo.commandBufferInfoCount   = 0;
-        submitInfo.pCommandBufferInfos      = 0;
-        submitInfo.waitSemaphoreInfoCount   = 1;
-        submitInfo.pWaitSemaphoreInfos      = &waitSemInfo;
-        submitInfo.signalSemaphoreInfoCount = 0;
-        submitInfo.pSignalSemaphoreInfos    = 0;
-
-        MutexScope(&queues[QueueType_Compute].lock)
-        {
-            VK_CHECK(vkQueueSubmit2(queues[QueueType_Compute].queue, 1, &submitInfo,
-                                    ToInternal(&cmd.fence)->fence));
-        }
-    }
-#endif
 }
 
 // void Vulkan::CreateBufferCopy(GPUBuffer *inBuffer, GPUBufferDesc inDesc,

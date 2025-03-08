@@ -818,7 +818,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 }
             }
 
-            EndSceneShapeParse(&parse);
+            EndSceneShapeParse(scene, &parse);
 
             scene->numPrimitives = shapes.totalCount;
             Assert(shapes.totalCount == indices.totalCount);
