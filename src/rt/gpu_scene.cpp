@@ -1,6 +1,7 @@
 #include "gpu_scene.h"
 #include "scene.h"
 #include "vulkan.h"
+#include "win32.h"
 
 namespace rt
 {
@@ -117,6 +118,21 @@ void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, 
                        const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender,
                        int screenHeight)
 {
+    // Compile shaders
+    string raygenShaderName = "../src/shaders/spirv/render_raytrace_rgen.spv";
+    Arena *arena            = arenas[0];
+    string data             = OS_ReadFile(arena, raygenShaderName);
+
+    Shader *rayShaders[RST_Max];
+    int counts[RST_Max] = {};
+    Shader raygenShaders[1];
+    raygenShaders[counts[RST_Raygen]++] =
+        device->CreateShader(ShaderStage::Raygen, "raygen", data);
+    Shader missShaders[1];
+
+    rayShaders[RST_Raygen] = raygenShaders;
+
+    RayTracingState rts = device->CreateRayTracingPipeline(rayShaders, counts, maxDepth);
 
     for (int depth = maxDepth; depth >= 0; depth--)
     {
@@ -161,6 +177,16 @@ void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, 
         compactCmd->Wait(semaphore);
         device->CompactBLASes(compactCmd, queryPool, as, bvhCount);
         device->SubmitCommandBuffer(compactCmd);
+
+        device->BindAccelerationStructure(rts.set, as[0]->as);
     }
+
+    // vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, state.VkPipeline
+    // pipeline); vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
+    //
+    //                         VkPipelineLayout layout, uint32_t firstSet,
+    //                         uint32_t descriptorSetCount,
+    //                         const VkDescriptorSet *pDescriptorSets,
+    //                         uint32_t dynamicOffsetCount, const uint32_t *pDynamicOffsets);
 }
 } // namespace rt

@@ -15,16 +15,6 @@ inline u64 MixBits(u64 v)
     return v;
 }
 
-// Lane4U32 MixBits(Lane4U32 v)
-// {
-//     v ^= (v >> 31u);
-//     v *= 0x7fb5d329728ea185;
-//     v ^= (v >> 27u);
-//     v *= 0x81dadef4bc2dd44d;
-//     v ^= (v >> 33u);
-//     return v;
-// }
-
 // https://github.com/aappleby/smhasher/blob/master/src/MurmurHash3.cpp
 // https://github.com/AntonJohansson/StaticMurmur/blob/master/StaticMurmur.hpp
 constexpr uint32_t get_block(const char *p, unsigned i)

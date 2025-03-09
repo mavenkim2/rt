@@ -138,6 +138,25 @@ enum QueryType
     QueryType_CompactSize,
 };
 
+enum class ShaderStage
+{
+    Vertex,
+    Geometry,
+    Fragment,
+    Compute,
+    Raygen,
+    Miss,
+    Hit,
+    Intersect,
+    Count,
+};
+
+struct Shader
+{
+    VkShaderModule module;
+    ShaderStage stage;
+};
+
 // struct GPUBufferDesc
 // {
 //     u64 size;
@@ -160,12 +179,37 @@ struct GPUBuffer
     size_t size;
 };
 
-// struct GPUBuffer
-// {
-//     GPUBufferDesc desc;
-//     void *mappedData;
-// };
-//
+enum RayShaderType
+{
+    RST_Raygen,
+    RST_Miss,
+    RST_ClosestHit,
+    RST_Intersection,
+    RST_Max,
+};
+
+enum class RTBindings
+{
+    Accel,
+};
+
+struct RayTracingState
+{
+    VkPipeline pipeline;
+    VkDescriptorSet set;
+    union
+    {
+        struct
+        {
+            VkStridedDeviceAddressRegionKHR raygen;
+            VkStridedDeviceAddressRegionKHR miss;
+            VkStridedDeviceAddressRegionKHR hit;
+            VkStridedDeviceAddressRegionKHR call;
+        };
+        VkStridedDeviceAddressRegionKHR addresses[RST_Max];
+    };
+};
+
 struct QueryPool
 {
     VkQueryPool queryPool;
@@ -190,10 +234,6 @@ struct Swapchain
 
     u32 acquireSemaphoreIndex = 0;
     u32 imageIndex;
-};
-
-struct GPUBVH
-{
 };
 
 struct TransferBuffer
@@ -520,6 +560,11 @@ struct Vulkan
                        int count);
     void BeginEvent(CommandBuffer *cmd, string name);
     void EndEvent(CommandBuffer *cmd);
+    Shader CreateShader(ShaderStage stage, string name, string shaderData);
+    void BindAccelerationStructure(VkDescriptorSet descriptorSet,
+                                   VkAccelerationStructureKHR accel);
+    RayTracingState CreateRayTracingPipeline(Shader **shaders, int counts[RST_Max],
+                                             u32 maxDepth);
 
     // void CreateBuffer(GPUBuffer *inBuffer, GPUBufferDesc inDesc, void *inData = 0)
     // {

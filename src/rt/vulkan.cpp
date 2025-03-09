@@ -1,3 +1,4 @@
+#include "base.h"
 #include "memory.h"
 #include "thread_context.h"
 #include "vulkan.h"
@@ -1600,44 +1601,85 @@ void Vulkan::BeginEvent(CommandBuffer *cmd, string name)
 
 void Vulkan::EndEvent(CommandBuffer *cmd) { vkCmdEndDebugUtilsLabelEXT(cmd->buffer); }
 
-#if 0
-void Vulkan::CreateRayTracingPipeline(u32 maxDepth)
+Shader Vulkan::CreateShader(ShaderStage stage, string name, string shaderData)
 {
+    Shader shader;
+    shader.stage                        = stage;
+    VkShaderModuleCreateInfo createInfo = {};
+    createInfo.sType                    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    createInfo.pCode                    = (u32 *)shaderData.str;
+    createInfo.codeSize                 = shaderData.size;
+    VK_CHECK(vkCreateShaderModule(device, &createInfo, 0, &shader.module));
 
-    enum RayShaderType
+    if (name.size) SetName(shader.module, (const char *)name.str);
+    return shader;
+}
+
+void Vulkan::BindAccelerationStructure(VkDescriptorSet descriptorSet,
+                                       VkAccelerationStructureKHR accel)
+{
+    VkWriteDescriptorSetAccelerationStructureKHR writeSet = {
+        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writeSet.pAccelerationStructures    = &accel;
+    writeSet.accelerationStructureCount = 1;
+
+    VkWriteDescriptorSet set = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    set.pNext                = &writeSet;
+    set.descriptorType       = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    set.descriptorCount      = 1;
+    set.dstSet               = descriptorSet;
+    set.dstBinding           = (u32)RTBindings::Accel;
+    vkUpdateDescriptorSets(device, 1, &set, 0, 0);
+}
+
+RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RST_Max],
+                                                 u32 maxDepth)
+{
+    int total = 0;
+    for (int i = 0; i < RST_Max; i++)
     {
-        RST_Raygen,
-        RST_Miss,
-        RST_ClosestHit,
-        RST_Intersection,
-        RST_Max,
-    };
+        total += counts[i];
+    }
 
-    std::vector<VkPipelineShaderStageCreateInfo> pipelineInfos(RST_Max);
-    std::vector<VkRayTracingShaderGroupCreateInfoKHR> shaderGroups(RST_Max);
+    ScratchArena scratch;
+    VkPipelineShaderStageCreateInfo *pipelineInfos =
+        PushArrayNoZero(scratch.temp.arena, VkPipelineShaderStageCreateInfo, total);
+    VkRayTracingShaderGroupCreateInfoKHR *shaderGroups =
+        PushArrayNoZero(scratch.temp.arena, VkRayTracingShaderGroupCreateInfoKHR, total);
+
+    int count = 0;
     // Create pipeline infos
     {
+        Assert(counts[RST_Raygen] == 1);
         VkPipelineShaderStageCreateInfo info = {
             VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        info.pName                = "main";
-        info.stage                = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-        info.module               = ;
-        pipelineInfos[RST_Raygen] = info;
+        info.pName             = "main";
+        info.stage             = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+        info.module            = shaders[RST_Raygen][0].module;
+        pipelineInfos[count++] = info;
 
-        info.stage              = VK_SHADER_STAGE_MISS_BIT_KHR;
-        info.module             = ;
-        pipelineInfos[RST_Miss] = info;
+        info.stage = VK_SHADER_STAGE_MISS_BIT_KHR;
+        for (int i = 0; i < counts[RST_Miss]; i++)
+        {
+            info.module            = shaders[RST_Miss][i].module;
+            pipelineInfos[count++] = info;
+        }
 
-        info.stage                    = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-        info.module                   = ;
-        pipelineInfos[RST_ClosestHit] = info;
+        info.stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+        for (int i = 0; i < counts[RST_ClosestHit]; i++)
+        {
+            info.module            = shaders[RST_ClosestHit][i].module;
+            pipelineInfos[count++] = info;
+        }
 
-        info.stage                      = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
-        info.module                     = ;
-        pipelineInfos[RST_Intersection] = info;
-
-        SetName(info.module, ?);
+        info.stage = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+        for (int i = 0; i < counts[RST_Intersection]; i++)
+        {
+            info.module            = shaders[RST_Intersection][i].module;
+            pipelineInfos[count++] = info;
+        }
     }
+    count = 0;
     // Create shader groups
     {
         VkRayTracingShaderGroupCreateInfoKHR group = {
@@ -1648,25 +1690,76 @@ void Vulkan::CreateRayTracingPipeline(u32 maxDepth)
         group.anyHitShader       = VK_SHADER_UNUSED_KHR;
         group.intersectionShader = VK_SHADER_UNUSED_KHR;
 
-        group.generalShader = RST_Raygen;
-        shaderGroups.push_back(group);
+        group.generalShader = count;
+        shaderGroups[count] = group;
+        count++;
 
-        group.generalShader = RST_Miss;
-        shaderGroups.push_back(group);
+        for (int i = 0; i < counts[RST_Miss]; i++)
+        {
+            group.generalShader = count;
+            shaderGroups[count] = group;
+            count++;
+        }
+
+        group.type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+        group.generalShader = VK_SHADER_UNUSED_KHR;
+        for (int i = 0; i < counts[RST_ClosestHit]; i++)
+        {
+            group.closestHitShader = count;
+            shaderGroups[count]    = group;
+            count++;
+        }
 
         group.type             = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-        group.generalShader    = VK_SHADER_UNUSED_KH;
-        group.closestHitShader = RST_ClosestHit;
-        shaderGroups.push_back(group);
+        group.closestHitShader = VK_SHADER_UNUSED_KHR;
 
-        // Intersection shader
-        group.type               =
-        VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR; group.closestHitShader =
-        VK_SHADER_UNUSED_KHR; group.intersectionShader = RST_Intersection;
-        shaderGroups.push_back(group);
+        for (int i = 0; i < counts[RST_Intersection]; i++)
+        {
+            group.intersectionShader = count;
+            shaderGroups[count]      = group;
+            count++;
+        }
+    }
+
+    // Create pipeline layout
+    VkPipelineLayout layout;
+    VkDescriptorSet set;
+    {
+        VkDescriptorPool descriptorPool;
+        VkDescriptorPoolCreateInfo poolCreateInfo = {
+            VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        vkCreateDescriptorPool(device, &poolCreateInfo, 0, &descriptorPool);
+
+        VkDescriptorSetLayoutBinding binding = {};
+        binding.binding                      = (u32)RTBindings::Accel;
+        binding.descriptorType               = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        binding.descriptorCount              = 1;
+        binding.stageFlags                   = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+        VkDescriptorSetLayout setLayout;
+        VkDescriptorSetLayoutCreateInfo layoutInfo = {
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        layoutInfo.pBindings    = &binding;
+        layoutInfo.bindingCount = 1;
+
+        vkCreateDescriptorSetLayout(device, &layoutInfo, 0, &setLayout);
+
+        VkDescriptorSetAllocateInfo allocateInfo = {
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        allocateInfo.descriptorPool     = descriptorPool;
+        allocateInfo.pSetLayouts        = &setLayout;
+        allocateInfo.descriptorSetCount = 1;
+
+        vkAllocateDescriptorSets(device, &allocateInfo, &set);
+
+        VkPipelineLayoutCreateInfo createInfo = {
+            VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        createInfo.setLayoutCount = 1;
+        VK_CHECK(vkCreatePipelineLayout(device, &createInfo, 0, &layout));
     }
 
     // Create pipeline
+    VkPipeline pipeline;
     {
         VkPipelineLayoutCreateInfo layoutCreateInfo = {
             VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -1674,36 +1767,76 @@ void Vulkan::CreateRayTracingPipeline(u32 maxDepth)
         VkRayTracingPipelineCreateInfoKHR pipelineInfo = {
             VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR};
 
-        pipelineInfo.pStages                      = stages.data();
-        pipelineInfo.stageCount                   = static_cast<u32>(stages.size());
-        pipelineInfo.pGroups                      = shaderGroups.data();
-        pipelineInfo.groupCount                   = static_cast<u32>(shaderGroups.size());
+        pipelineInfo.pStages                      = pipelineInfos;
+        pipelineInfo.stageCount                   = total;
+        pipelineInfo.pGroups                      = shaderGroups;
+        pipelineInfo.groupCount                   = total;
         pipelineInfo.maxPipelineRayRecursionDepth = maxDepth;
-        pipelineInfo.layout                       = ? ;
+        pipelineInfo.layout                       = layout;
 
-        {
-            VkRayTracingPipelineClusterAccelerationStructureCreateInfoNV clusterInfo{
-                VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CLUSTER_ACCELERATION_STRUCTURE_CREATE_INFO_NV};
-            clusterInfo.allowClusterAccelerationStructure = true;
-            pipelineInfo.pNext                            = &clusterInfo;
-        }
-
-        VkResult result = vkCreateRayTracingPipelinesKHR(device, {}, {}, 1, &pipelineInfo,
-        0,
-                                                         need a pipeline here);
+        VK_CHECK(
+            vkCreateRayTracingPipelinesKHR(device, {}, {}, 1, &pipelineInfo, 0, &pipeline));
     }
-    Assert(result == VK_SUCCESS);
+
+    RayTracingState state = {};
+    state.pipeline        = pipeline;
 
     // Create shader binding table
     {
+        Assert(IsPow2(rtPipeProperties.shaderGroupBaseAlignment));
+        Assert(IsPow2(rtPipeProperties.shaderGroupHandleAlignment));
+        u32 handleSize = rtPipeProperties.shaderGroupHandleSize;
+        u32 alignedHandleSize =
+            AlignPow2(handleSize, rtPipeProperties.shaderGroupHandleAlignment);
+
+        int offsets[RST_Max] = {};
+        int offset           = 0;
+        for (int i = 0; i < RST_Max; i++)
+        {
+            state.addresses[i].size   = AlignPow2(counts[i] * alignedHandleSize,
+                                                  rtPipeProperties.shaderGroupBaseAlignment);
+            state.addresses[i].stride = state.addresses[i].size;
+            offsets[i]                = offset;
+            offset += state.addresses[i].size;
+        }
+
+        u32 dataSize = handleSize * total;
+
+        u8 *data = PushArrayNoZero(arena, u8, dataSize);
+        VK_CHECK(
+            vkGetRayTracingShaderGroupHandlesKHR(device, pipeline, 0, total, dataSize, data));
+
+        GPUBuffer buffer = CreateBuffer(
+            VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR |
+                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            dataSize,
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
+
+        VkBufferDeviceAddressInfo deviceAddressInfo = {
+            VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+        deviceAddressInfo.buffer   = buffer.buffer;
+        VkDeviceAddress sbtAddress = vkGetBufferDeviceAddress(device, &deviceAddressInfo);
+
+        u8 *base = (u8 *)buffer.allocation->GetMappedData();
+        for (int type = 0; type < RST_Max; type++)
+        {
+            if (state.addresses[type].size)
+            {
+                state.addresses[type].deviceAddress = sbtAddress;
+                sbtAddress += state.addresses[type].size;
+                u8 *ptr = base + offsets[type];
+                for (int i = 0; i < counts[type]; i++)
+                {
+                    MemoryCopy(ptr, data, handleSize);
+                    data += handleSize;
+                    ptr += alignedHandleSize;
+                }
+            }
+        }
     }
-
-    // VkAccelerationStructureGeometryInstancesDataKHR instance;
-    // instance.arrayOfPointers
-
-    // Build acceleration structures, trace rays
+    return state;
 }
-#endif
 
 GPUAccelerationStructure Vulkan::CreateBLAS(CommandBuffer *cmd, const GPUMesh *meshes,
                                             int count)

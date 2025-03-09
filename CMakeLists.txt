@@ -194,6 +194,8 @@ if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/gen/rgbspectrum_srgb.cpp")
     )
 endif()
 
+# shader compiler
+
 # Main executable
 add_executable(rt_exe 
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/rt.cpp
