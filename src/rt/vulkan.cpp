@@ -822,35 +822,6 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
 
         createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
         VK_CHECK(vkCreateImageView(device, &createInfo, 0, &nullImageView2DArray));
-
-        // Transitions
-        // TransferCommand cmd = Stage(0);
-        //
-        // VkImageMemoryBarrier2 imageBarrier       = {};
-        // imageBarrier.sType                       = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        // imageBarrier.image                       = nullImage2D;
-        // imageBarrier.oldLayout                   = imageInfo.initialLayout;
-        // imageBarrier.newLayout                   = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        // imageBarrier.srcAccessMask               = VK_ACCESS_2_NONE;
-        // imageBarrier.dstAccessMask               = VK_ACCESS_2_SHADER_READ_BIT;
-        // imageBarrier.srcStageMask                = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-        // imageBarrier.dstStageMask                = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        // imageBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        // imageBarrier.subresourceRange.baseArrayLayer = 0;
-        // imageBarrier.subresourceRange.baseMipLevel   = 0;
-        // imageBarrier.subresourceRange.layerCount     = 1;
-        // imageBarrier.subresourceRange.levelCount     = 1;
-        // imageBarrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-        // imageBarrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-        //
-        // VkDependencyInfo dependencyInfo        = {};
-        // dependencyInfo.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        // dependencyInfo.imageMemoryBarrierCount = 1;
-        // dependencyInfo.pImageMemoryBarriers    = &imageBarrier;
-        //
-        // vkCmdPipelineBarrier2(cmd.transitionBuffer, &dependencyInfo);
-        //
-        // Submit(cmd);
     }
 
     // Null buffer
@@ -871,13 +842,13 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
     }
 }
 
-Swapchain Vulkan::CreateSwapchain(Window window, u32 width, u32 height)
+Swapchain Vulkan::CreateSwapchain(OS_Handle window, u32 width, u32 height)
 {
     Swapchain swapchain = {};
 #if _WIN32
     VkWin32SurfaceCreateInfoKHR win32SurfaceCreateInfo = {};
     win32SurfaceCreateInfo.sType     = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-    win32SurfaceCreateInfo.hwnd      = window;
+    win32SurfaceCreateInfo.hwnd      = (HWND)window.handle;
     win32SurfaceCreateInfo.hinstance = GetModuleHandleW(0);
 
     VK_CHECK(
@@ -917,7 +888,6 @@ Swapchain Vulkan::CreateSwapchain(Window window, u32 width, u32 height)
     return swapchain;
 }
 
-// Recreates the swap chain if it becomes invalid
 b32 Vulkan::CreateSwapchain(Swapchain *swapchain)
 {
     Assert(swapchain);
@@ -940,7 +910,6 @@ b32 Vulkan::CreateSwapchain(Swapchain *swapchain)
     VK_CHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(
         physicalDevice, swapchain->surface, &presentCount, surfacePresentModes.data()));
 
-    // Pick one of the supported formats
     VkSurfaceFormatKHR surfaceFormat = {};
     {
         surfaceFormat.format     = swapchain->format;
@@ -1272,6 +1241,165 @@ void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd)
     pool.freeList[cmd->type].AddBack() = cmd;
 }
 
+VkImageMemoryBarrier2 Vulkan::ImageMemoryBarrier(VkImage image, VkImageLayout oldLayout,
+                                                 VkImageLayout newLayout,
+                                                 VkPipelineStageFlags2 srcStageMask,
+                                                 VkPipelineStageFlags2 dstStageMask,
+                                                 VkPipelineStageFlags2 srcAccessMask,
+                                                 VkPipelineStageFlags2 dstAccessMask,
+                                                 VkImageAspectFlags aspectFlags)
+{
+    VkImageMemoryBarrier2 barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    barrier.image                 = image;
+    barrier.oldLayout             = oldLayout;
+    barrier.newLayout             = newLayout;
+    barrier.srcStageMask          = srcStageMask;
+
+    barrier.dstStageMask  = dstStageMask;
+    barrier.srcAccessMask = srcAccessMask;
+    barrier.dstAccessMask = dstAccessMask;
+
+    barrier.subresourceRange.aspectMask     = aspectFlags;
+    barrier.subresourceRange.baseMipLevel   = 0;
+    barrier.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
+    barrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+    return barrier;
+}
+
+void Vulkan::CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage *image)
+{
+    for (;;)
+    {
+        swapchain->acquireSemaphoreIndex =
+            (swapchain->acquireSemaphoreIndex + 1) % (swapchain->acquireSemaphores.size());
+
+        VkResult res = vkAcquireNextImageKHR(
+            device, swapchain->swapchain, UINT64_MAX,
+            swapchain->acquireSemaphores[swapchain->acquireSemaphoreIndex], VK_NULL_HANDLE,
+            &swapchain->imageIndex);
+
+        if (res != VK_SUCCESS)
+        {
+            if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR)
+            {
+                if (CreateSwapchain(swapchain))
+                {
+                    continue;
+                }
+                else
+                {
+                    ErrorExit(0, "Failed to create swapchain.\n");
+                }
+            }
+        }
+        break;
+    }
+
+    VkImageMemoryBarrier2 barrier = {};
+    // Set swapchain to transfer dst, image to transfer src
+    {
+        VkImageMemoryBarrier2 barriers[] = {
+            ImageMemoryBarrier(swapchain->images[swapchain->imageIndex],
+                               VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT,
+                               VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_NONE,
+                               VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT),
+            ImageMemoryBarrier(image->image, image->lastLayout,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image->lastPipeline,
+                               VK_PIPELINE_STAGE_2_TRANSFER_BIT, image->lastAccess,
+                               VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT),
+        };
+
+        VkDependencyInfo dependencyInfo        = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependencyInfo.imageMemoryBarrierCount = ArrayLength(barriers);
+        dependencyInfo.pImageMemoryBarriers    = barriers;
+        vkCmdPipelineBarrier2(cmd->buffer, &dependencyInfo);
+    }
+
+    // Copy framebuffer
+    {
+        VkImageSubresourceLayers srcLayer = {};
+        srcLayer.aspectMask               = VK_IMAGE_ASPECT_COLOR_BIT;
+        srcLayer.mipLevel                 = 0;
+        srcLayer.baseArrayLayer           = 0;
+        srcLayer.layerCount               = 1;
+
+        VkImageSubresourceLayers dstLayer = {};
+        dstLayer.aspectMask               = VK_IMAGE_ASPECT_COLOR_BIT;
+        dstLayer.mipLevel                 = 0;
+        dstLayer.baseArrayLayer           = 0;
+        dstLayer.layerCount               = 1;
+
+        VkImageCopy2 imageCopyInfo   = {};
+        imageCopyInfo.sType          = VK_STRUCTURE_TYPE_IMAGE_COPY_2;
+        imageCopyInfo.srcSubresource = srcLayer;
+        imageCopyInfo.dstSubresource = dstLayer;
+        imageCopyInfo.srcOffset.x    = 0;
+        imageCopyInfo.srcOffset.y    = 0;
+        imageCopyInfo.srcOffset.z    = 0;
+        imageCopyInfo.dstOffset.x    = 0;
+        imageCopyInfo.dstOffset.y    = 0;
+        imageCopyInfo.dstOffset.z    = 0;
+        imageCopyInfo.extent.width   = swapchain->width;
+        imageCopyInfo.extent.height  = swapchain->height;
+        imageCopyInfo.extent.depth   = 1;
+
+        VkCopyImageInfo2 copyInfo = {};
+        copyInfo.sType            = VK_STRUCTURE_TYPE_COPY_IMAGE_INFO_2;
+        copyInfo.srcImage         = image->image;
+        copyInfo.dstImage         = swapchain->images[swapchain->imageIndex];
+        copyInfo.srcImageLayout   = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        copyInfo.dstImageLayout   = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        copyInfo.regionCount      = 1;
+        copyInfo.pRegions         = &imageCopyInfo;
+
+        vkCmdCopyImage2(cmd->buffer, &copyInfo);
+    }
+
+    // Set swapchain to present
+    {
+        VkImageMemoryBarrier2 barrier = ImageMemoryBarrier(
+            swapchain->images[swapchain->imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            VK_ACCESS_2_NONE, VK_IMAGE_ASPECT_COLOR_BIT);
+
+        VkDependencyInfo dependencyInfo        = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependencyInfo.imageMemoryBarrierCount = 1;
+        dependencyInfo.pImageMemoryBarriers    = &barrier;
+        vkCmdPipelineBarrier2(cmd->buffer, &dependencyInfo);
+    }
+
+    cmd->Wait(Semaphore{swapchain->acquireSemaphores[swapchain->acquireSemaphoreIndex]});
+    cmd->Signal(Semaphore{swapchain->releaseSemaphore});
+    SubmitCommandBuffer(cmd);
+
+    VkPresentInfoKHR presentInfo   = {};
+    presentInfo.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores    = &swapchain->releaseSemaphore;
+    presentInfo.swapchainCount     = 1;
+    presentInfo.pSwapchains        = &swapchain->swapchain;
+    presentInfo.pImageIndices      = &swapchain->imageIndex;
+    VkResult res = vkQueuePresentKHR(queues[QueueType_Graphics].queue, &presentInfo);
+
+    if (res != VK_SUCCESS)
+    {
+        if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR)
+        {
+            b32 result = CreateSwapchain(swapchain);
+            Assert(result);
+        }
+        else
+        {
+            Assert(0)
+        }
+    }
+}
+
 ThreadCommandPool &Vulkan::GetThreadCommandPool(int threadIndex)
 {
     return commandPools[threadIndex];
@@ -1339,6 +1467,23 @@ void CommandBuffer::SubmitTransfer(TransferBuffer *transferBuffer)
                     transferBuffer->buffer.buffer, 1, &bufferCopy);
 }
 
+void CommandBuffer::BindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipeline)
+{
+    vkCmdBindPipeline(buffer, bindPoint, pipeline);
+}
+
+void CommandBuffer::BindDescriptorSets(VkPipelineBindPoint bindPoint, VkPipelineLayout layout,
+                                       VkDescriptorSet set)
+{
+    vkCmdBindDescriptorSets(buffer, bindPoint, layout, 0, 1, &set, 0, 0);
+}
+
+void CommandBuffer::TraceRays(RayTracingState *state, u32 width, u32 height, u32 depth)
+{
+    vkCmdTraceRaysKHR(buffer, &state->raygen, &state->miss, &state->hit, &state->call, width,
+                      height, depth);
+}
+
 u64 Vulkan::GetDeviceAddress(VkBuffer buffer)
 {
     VkBufferDeviceAddressInfo info = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
@@ -1346,205 +1491,6 @@ u64 Vulkan::GetDeviceAddress(VkBuffer buffer)
 
     return vkGetBufferDeviceAddress(device, &info);
 }
-
-// void Vulkan::CreateBufferCopy(GPUBuffer *inBuffer, GPUBufferDesc inDesc,
-//                               CopyFunction initCallback)
-// {
-//     GPUBufferVulkan *buffer = 0;
-//     MutexScope(&arenaMutex)
-//     {
-//         buffer = freeBuffer;
-//         if (buffer)
-//         {
-//             StackPop(freeBuffer);
-//         }
-//         else
-//         {
-//             buffer = PushStruct(arena, GPUBufferVulkan);
-//         }
-//     }
-//
-//     buffer->subresourceSrv  = -1;
-//     buffer->subresourceUav  = -1;
-//     inBuffer->internalState = buffer;
-//     inBuffer->desc          = inDesc;
-//     inBuffer->mappedData    = 0;
-//     inBuffer->resourceType  = GPUResource::ResourceType::Buffer;
-//     inBuffer->ticket.ticket = 0;
-//
-//     VkBufferCreateInfo createInfo = {};
-//     createInfo.sType              = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-//     createInfo.size               = inBuffer->desc.size;
-//
-//     if (HasFlags(inDesc.resourceUsage, ResourceUsage_Vertex))
-//     {
-//         createInfo.usage |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-//     }
-//     if (HasFlags(inDesc.resourceUsage, ResourceUsage_Index))
-//     {
-//         createInfo.usage |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-//     }
-//
-//     if (HasFlags(inDesc.resourceUsage, ResourceUsage_StorageTexel))
-//     {
-//         createInfo.usage |= VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT;
-//     }
-//     if (HasFlags(inDesc.resourceUsage, ResourceUsage_StorageBuffer) ||
-//         HasFlags(inDesc.resourceUsage, ResourceUsage_StorageBufferRead))
-//     {
-//         createInfo.usage |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-//     }
-//     if (HasFlags(inDesc.resourceUsage, ResourceUsage_UniformTexel))
-//     {
-//         createInfo.usage |= VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT;
-//     }
-//     if (HasFlags(inDesc.resourceUsage, ResourceUsage_UniformBuffer))
-//     {
-//         createInfo.usage |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-//     }
-//
-//     if (HasFlags(inDesc.resourceUsage, ResourceUsage_Indirect))
-//     {
-//         createInfo.usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
-//     }
-//     if (HasFlags(inDesc.resourceUsage, ResourceUsage_TransferSrc))
-//     {
-//         createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-//     }
-//     if (HasFlags(inDesc.resourceUsage, ResourceUsage_TransferDst))
-//     {
-//         createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-//     }
-//
-//     // Sharing
-//     if (families.size() > 1)
-//     {
-//         createInfo.sharingMode           = VK_SHARING_MODE_CONCURRENT;
-//         createInfo.queueFamilyIndexCount = (u32)families.size();
-//         createInfo.pQueueFamilyIndices   = families.data();
-//     }
-//     else
-//     {
-//         createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-//     }
-//
-//     VmaAllocationCreateInfo allocCreateInfo = {};
-//     allocCreateInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
-//
-//     if (inDesc.usage == MemoryUsage::CPU_TO_GPU)
-//     {
-//         allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-//                                 VMA_ALLOCATION_CREATE_MAPPED_BIT;
-//         createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-//     }
-//     else if (inDesc.usage == MemoryUsage::GPU_TO_CPU)
-//     {
-//         allocCreateInfo.flags =
-//             VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-//         createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT; // TODO: not necessary?
-//     }
-//
-//     // Buffers only on GPU must be copied to using a staging buffer
-//     else if (inDesc.usage == MemoryUsage::GPU_ONLY)
-//     {
-//         createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-//     }
-//
-//     VK_CHECK(vmaCreateBuffer(allocator, &createInfo, &allocCreateInfo, &buffer->buffer,
-//                              &buffer->allocation, 0));
-//
-//     // Map the buffer if it's a staging buffer
-//     if (inDesc.usage == MemoryUsage::CPU_TO_GPU || inDesc.usage == MemoryUsage::GPU_TO_CPU)
-//     {
-//         inBuffer->mappedData = buffer->allocation->GetMappedData();
-//         inBuffer->desc.size  = buffer->allocation->GetSize();
-//     }
-//
-//     if (initCallback != 0)
-//     {
-//         TransferCommand cmd;
-//         void *mappedData = 0;
-//         if (inBuffer->desc.usage == MemoryUsage::CPU_TO_GPU)
-//         {
-//             mappedData = inBuffer->mappedData;
-//         }
-//         else
-//         {
-//             cmd        = Stage(inBuffer->desc.size);
-//             mappedData = cmd.ringAllocation->mappedData;
-//         }
-//
-//         initCallback(mappedData);
-//
-//         if (cmd.IsValid())
-//         {
-//             if (inBuffer->desc.size != 0)
-//             {
-//                 // Memory copy data to the staging buffer
-//                 VkBufferCopy bufferCopy = {};
-//                 bufferCopy.srcOffset    = cmd.ringAllocation->offset;
-//                 bufferCopy.dstOffset    = 0;
-//                 bufferCopy.size         = inBuffer->desc.size;
-//
-//                 RingAllocator *ringAllocator =
-//                     &stagingRingAllocators[cmd.ringAllocation->ringId];
-//
-//                 // Copy from the staging buffer to the allocated buffer
-//                 vkCmdCopyBuffer(cmd.cmdBuffer,
-//                                 ToInternal(&ringAllocator->transferRingBuffer)->buffer,
-//                                 buffer->buffer, 1, &bufferCopy);
-//             }
-//             FenceVulkan *fenceVulkan = ToInternal(&cmd.fence);
-//             inBuffer->ticket.fence   = cmd.fence;
-//             inBuffer->ticket.ticket  = fenceVulkan->count;
-//             Submit(cmd);
-//         }
-//     }
-//
-//     if (!HasFlags(inDesc.resourceUsage, ResourceUsage_Bindless))
-//     {
-//         GPUBufferVulkan::Subresource subresource;
-//         subresource.info.buffer = buffer->buffer;
-//         subresource.info.offset = 0;
-//         subresource.info.range  = VK_WHOLE_SIZE;
-//         buffer->subresources.push_back(subresource);
-//
-//         // TODO: is this fine that they reference the same subresource?
-//         if (HasFlags(inDesc.resourceUsage, ResourceUsage_StorageTexel) ||
-//             HasFlags(inDesc.resourceUsage, ResourceUsage_StorageBuffer))
-//         {
-//             buffer->subresourceUav = 0;
-//         }
-//         if (HasFlags(inDesc.resourceUsage, ResourceUsage_UniformBuffer) ||
-//             HasFlags(inDesc.resourceUsage, ResourceUsage_UniformTexel) ||
-//             HasFlags(inDesc.resourceUsage, ResourceUsage_StorageBufferRead))
-//         {
-//             buffer->subresourceSrv = 0;
-//         }
-//         if (HasFlags(inDesc.resourceUsage, ResourceUsage_StorageTexel) ||
-//             HasFlags(inDesc.resourceUsage, ResourceUsage_UniformTexel))
-//         {
-//             Assert(0);
-//         }
-//     }
-//     else
-//     {
-//         Assert(!HasFlags(inDesc.resourceUsage, ResourceUsage_UniformBuffer));
-//         i32 subresourceIndex = -1;
-//         if (HasFlags(inDesc.resourceUsage, ResourceUsage_StorageTexel) ||
-//             HasFlags(inDesc.resourceUsage, ResourceUsage_StorageBuffer))
-//         {
-//             subresourceIndex       = CreateSubresource(inBuffer, ResourceViewType::UAV);
-//             buffer->subresourceUav = subresourceIndex;
-//         }
-//         if (HasFlags(inDesc.resourceUsage, ResourceUsage_UniformTexel) ||
-//             HasFlags(inDesc.resourceUsage, ResourceUsage_StorageBufferRead))
-//         {
-//             subresourceIndex       = CreateSubresource(inBuffer, ResourceViewType::SRV);
-//             buffer->subresourceSrv = subresourceIndex;
-//         }
-//     }
-// }
 
 void Vulkan::SetName(u64 handle, VkObjectType type, const char *name)
 {
@@ -1780,6 +1726,7 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
 
     RayTracingState state = {};
     state.pipeline        = pipeline;
+    state.layout          = layout;
 
     // Create shader binding table
     {

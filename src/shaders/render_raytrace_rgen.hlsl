@@ -24,5 +24,5 @@ void main()
     RayPayload payload;
     scene.GenerateRay(filterSample, pLens, desc, payload);
 
-    TraceRay(accel, RAY_FLAG_FORCE_OPAQUE, 0xff, 0, 1, 0, desc, payload);
+    TraceRay(accel, RAY_FLAG_FORCE_OPAQUE, 0xff, 0, 0, 0, desc, payload);
 }

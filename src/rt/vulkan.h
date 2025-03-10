@@ -5,6 +5,7 @@
 
 #include "bvh/bvh_types.h"
 #include "containers.h"
+#include "platform.h"
 
 #define VK_NO_PROTOTYPES
 
@@ -27,10 +28,6 @@
 
 namespace rt
 {
-
-#ifdef _WIN32
-typedef HWND Window;
-#endif
 
 #define VK_CHECK(check)                                                                       \
     do                                                                                        \
@@ -196,6 +193,7 @@ enum class RTBindings
 struct RayTracingState
 {
     VkPipeline pipeline;
+    VkPipelineLayout layout;
     VkDescriptorSet set;
     union
     {
@@ -218,7 +216,7 @@ struct QueryPool
 
 struct Swapchain
 {
-    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    VkSwapchainKHR swapchain;
     VkSurfaceKHR surface;
     VkExtent2D extent;
     VkFormat format;
@@ -230,10 +228,18 @@ struct Swapchain
     std::vector<VkImageView> imageViews;
 
     std::vector<VkSemaphore> acquireSemaphores;
-    VkSemaphore releaseSemaphore = VK_NULL_HANDLE;
+    VkSemaphore releaseSemaphore;
 
-    u32 acquireSemaphoreIndex = 0;
+    u32 acquireSemaphoreIndex;
     u32 imageIndex;
+};
+
+struct GPUImage
+{
+    VkImage image;
+    VkPipelineStageFlags2 lastPipeline;
+    VkImageLayout lastLayout;
+    VkAccessFlags2 lastAccess;
 };
 
 struct TransferBuffer
@@ -291,6 +297,10 @@ struct CommandBuffer
     void Wait(Semaphore semaphore) { waitSemaphores.push_back(semaphore); }
     void Signal(Semaphore semaphore) { signalSemaphores.push_back(semaphore); }
     void SubmitTransfer(TransferBuffer *buffer);
+    void BindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipeline);
+    void BindDescriptorSets(VkPipelineBindPoint bindPoint, VkPipelineLayout layout,
+                            VkDescriptorSet set);
+    void TraceRays(RayTracingState *state, u32 width, u32 height, u32 depth);
 };
 
 typedef ChunkedLinkedList<CommandBuffer> CommandBufferList;
@@ -537,7 +547,7 @@ struct Vulkan
     Vulkan(ValidationMode validationMode,
            GPUDevicePreference preference = GPUDevicePreference::Discrete);
     // u64 GetMinAlignment(GPUBufferDesc *inDesc);
-    Swapchain CreateSwapchain(Window window, u32 width, u32 height);
+    Swapchain CreateSwapchain(OS_Handle window, u32 width, u32 height);
     Semaphore CreateGraphicsSemaphore();
     // void CreatePipeline(PipelineStateDesc *inDesc, PipelineState *outPS, string name);
     // void CreateComputePipeline(PipelineStateDesc *inDesc, PipelineState *outPS, string
@@ -548,16 +558,17 @@ struct Vulkan
     void CheckInitializedThreadCommandPool(int threadIndex);
     CommandBuffer *BeginCommandBuffer(QueueType queue);
     void SubmitCommandBuffer(CommandBuffer *cmd);
+    VkImageMemoryBarrier2
+    ImageMemoryBarrier(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
+                       VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
+                       VkPipelineStageFlags2 srcAccessMask,
+                       VkPipelineStageFlags2 dstAccessMask, VkImageAspectFlags aspectFlags);
+    void CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage *image);
     ThreadCommandPool &GetThreadCommandPool(int threadIndex);
     GPUBuffer CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
                            VmaAllocationCreateFlags vmaFlags = 0);
     TransferBuffer GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize);
     u64 GetDeviceAddress(VkBuffer buffer);
-    GPUAccelerationStructure CreateBLAS(CommandBuffer *cmd, const GPUMesh *meshes, int count);
-    QueryPool CreateQuery(QueryType type, int count);
-    QueryPool GetCompactionSizes(CommandBuffer *cmd, GPUAccelerationStructure **as, int count);
-    void CompactBLASes(CommandBuffer *cmd, QueryPool &pool, GPUAccelerationStructure **as,
-                       int count);
     void BeginEvent(CommandBuffer *cmd, string name);
     void EndEvent(CommandBuffer *cmd);
     Shader CreateShader(ShaderStage stage, string name, string shaderData);
@@ -565,6 +576,11 @@ struct Vulkan
                                    VkAccelerationStructureKHR accel);
     RayTracingState CreateRayTracingPipeline(Shader **shaders, int counts[RST_Max],
                                              u32 maxDepth);
+    GPUAccelerationStructure CreateBLAS(CommandBuffer *cmd, const GPUMesh *meshes, int count);
+    QueryPool CreateQuery(QueryType type, int count);
+    QueryPool GetCompactionSizes(CommandBuffer *cmd, GPUAccelerationStructure **as, int count);
+    void CompactBLASes(CommandBuffer *cmd, QueryPool &pool, GPUAccelerationStructure **as,
+                       int count);
 
     // void CreateBuffer(GPUBuffer *inBuffer, GPUBufferDesc inDesc, void *inData = 0)
     // {
@@ -619,7 +635,6 @@ struct Vulkan
     // void EndRenderPass(CommandBuffer cmd);
     // void EndRenderPass(Swapchain *swapchain, CommandBuffer cmd);
     // void SubmitCommandBuffers();
-    // void BindPipeline(PipelineState *ps, CommandBuffer cmd);
     // void BindCompute(PipelineState *ps, CommandBuffer cmd);
     // void PushConstants(CommandBuffer cmd, u32 size, void *data, u32 offset = 0);
     // void WaitForGPU();

@@ -1063,6 +1063,8 @@ int main(int argc, char *argv[])
     threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, numProcessors);
     scheduler.Init(numProcessors);
 
+    OS_Handle handle = OS_WindowInit();
+
     const u32 count = 3000000;
 
     Options options = {};
@@ -1100,7 +1102,7 @@ int main(int argc, char *argv[])
         printf("Must pass in a .rtscene file.\n");
         return 1;
     }
-    TestRender(arena, &options);
+    TestRender(arena, handle, &options);
     // WhiteFurnaceTest(arena, &options);
 
     // CameraRayTest(arena);

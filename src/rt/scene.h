@@ -923,15 +923,13 @@ void BuildCatClarkBVH(Arena **arenas, ScenePrimitives *scene);
 template <GeometryType type>
 void ComputeTessellationParams(Mesh *meshes, TessellationParams *params, u32 start, u32 count);
 
+struct RenderParams2;
 void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
                     const Mat4 &cameraFromRender, int screenHeight);
-void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, int maxDepth,
-                       const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender,
-                       int screenHeight);
+void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
+                       int maxDepth);
 
-void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string filename,
-               const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender, int screenHeight,
-               AffineSpace *t);
+void LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, string filename);
 DiffuseAreaLight *ParseAreaLight(Arena *arena, Tokenizer *tokenizer, AffineSpace *space,
                                  int sceneID, int geomID);
 Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory,

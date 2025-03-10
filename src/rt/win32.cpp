@@ -3,11 +3,13 @@
 #include "base.h"
 #include "thread_context.h"
 #include "win32.h"
+#include "containers.h"
 namespace rt
 {
 
 static Arena *win32Arena;
 static Win32Thread *win32FreeThread;
+static ChunkedLinkedList<OS_Event> events;
 static u64 osPerformanceFrequency;
 static b32 win32LargePagesEnabled;
 
@@ -405,76 +407,6 @@ void OS_FlushMappedFile(void *ptr, size_t size) { FlushViewOfFile(ptr, size); }
 
 bool OS_DeleteFile(string filename) { return DeleteFile((char *)filename.str); }
 
-// OS_FileIter OS_DirectoryIterStart(string path, OS_FileIterFlags flags)
-// {
-//     OS_FileIter result;
-//     TempArena temp       = ScratchStart(0, 0);
-//     string search        = StrConcat(temp.arena, path, Str8Lit("\\*"));
-//     result.flags         = flags;
-//     Win32_FileIter *iter = (Win32_FileIter *)result.memory;
-//     iter->handle         = FindFirstFileA((char *)search.str, &iter->findData);
-//     return result;
-// }
-//
-// b32 OS_DirectoryIterNext(Arena *arena, OS_FileIter *input, OS_FileProperties *out)
-// {
-//     b32 done               = 0;
-//     Win32_FileIter *iter   = (Win32_FileIter *)input->memory;
-//     OS_FileIterFlags flags = input->flags;
-//     if (!(input->flags & OS_FileIterFlag_Complete) && iter->handle != INVALID_HANDLE_VALUE)
-//     {
-//         do
-//         {
-//             b32 skip         = 0;
-//             char *filename   = iter->findData.cFileName;
-//             DWORD attributes = iter->findData.dwFileAttributes;
-//             if (filename[0] == '.')
-//             {
-//                 if (flags & OS_FileIterFlag_SkipHiddenFiles || filename[1] == 0 ||
-//                     (filename[1] == '.' && filename[2] == 0))
-//                 {
-//                     skip = 1;
-//                 }
-//             }
-//             if (attributes & FILE_ATTRIBUTE_DIRECTORY)
-//             {
-//                 if (flags & OS_FileIterFlag_SkipDirectories)
-//                 {
-//                     skip = 1;
-//                 }
-//             }
-//             else
-//             {
-//                 if (flags & OS_FileIterFlag_SkipFiles)
-//                 {
-//                     skip = 1;
-//                 }
-//             }
-//             if (!skip)
-//             {
-//                 out->size         = ((u64)iter->findData.nFileSizeLow) |
-//                 (((u64)iter->findData.nFileSizeHigh) << 32); out->lastModified =
-//                 Win32DenseTimeFromFileTime(&iter->findData.ftLastWriteTime);
-//                 out->isDirectory  = (attributes & FILE_ATTRIBUTE_DIRECTORY);
-//                 out->name         = PushStr8Copy(arena, Str8C(filename));
-//                 done              = 1;
-//                 if (!FindNextFileA(iter->handle, &iter->findData))
-//                 {
-//                     input->flags |= OS_FileIterFlag_Complete;
-//                 }
-//                 break;
-//             }
-//         } while (FindNextFileA(iter->handle, &iter->findData));
-//     }
-//     return done;
-// }
-//
-// void OS_DirectoryIterEnd(OS_FileIter *input)
-// {
-//     Win32_FileIter *iter = (Win32_FileIter *)input->memory;
-//     FindClose(iter->handle);
-// }
-
 OS_Handle GetMainThreadHandle()
 {
     OS_Handle out = {(u64)GetCurrentThread()};
@@ -544,6 +476,152 @@ void OS_Init()
     LARGE_INTEGER frequency;
     QueryPerformanceFrequency(&frequency);
     osPerformanceFrequency = frequency.QuadPart;
+}
+
+OS_Event Win32_CreateKeyEvent(OS_Key key, b32 isDown)
+{
+    OS_Event event;
+    event.key  = key;
+    event.type = isDown ? OS_EventType_KeyPressed : OS_EventType_KeyReleased;
+
+    return event;
+}
+
+LRESULT Win32_Callback(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    LRESULT result = 0;
+    b32 isRelease  = 0;
+    switch (message)
+    {
+        case WM_LBUTTONUP:
+        case WM_RBUTTONUP:
+        {
+            isRelease = 1;
+        }
+        case WM_RBUTTONDOWN:
+        case WM_LBUTTONDOWN:
+        {
+            OS_Key key;
+            switch (message)
+            {
+                case WM_LBUTTONUP:
+                case WM_LBUTTONDOWN: key = OS_Mouse_L; break;
+                case WM_RBUTTONUP:
+                case WM_RBUTTONDOWN: key = OS_Mouse_R; break;
+            }
+
+            OS_Event event = Win32_CreateKeyEvent(key, !isRelease);
+            event.posX     = (f32)LOWORD(lParam);
+            event.posY     = (f32)HIWORD(lParam);
+
+            events.AddBack() = event;
+
+            if (isRelease == 0) SetCapture(window);
+            else ReleaseCapture();
+            break;
+        }
+        case WM_KEYUP:
+        case WM_SYSKEYUP:
+        case WM_KEYDOWN:
+        case WM_SYSKEYDOWN:
+        {
+            u32 keyCode = (u32)wParam;
+            Assert(keyCode < 256);
+
+            static b32 uninitialized = 1;
+            static OS_Key keyTable[256];
+            if (uninitialized)
+            {
+                uninitialized = 0;
+                for (u32 i = 0; i < 'Z' - 'A'; i++)
+                {
+                    keyTable[i + 'A'] = (OS_Key)(OS_Key_A + i);
+                }
+                keyTable[VK_SPACE] = OS_Key_Space;
+                keyTable[VK_SHIFT] = OS_Key_Shift;
+            }
+
+            b32 wasDown    = !!(lParam & (1 << 30));
+            b32 isDown     = !(lParam & (1 << 31));
+            b32 altWasDown = !!(lParam & (1 << 29));
+
+            OS_Event event   = Win32_CreateKeyEvent(keyTable[keyCode], isDown);
+            event.transition = (isDown != wasDown);
+
+            if (keyCode == VK_F4 && altWasDown)
+            {
+                event.type = OS_EventType_Quit;
+            }
+            events.AddBack() = event;
+            break;
+        }
+        case WM_DESTROY:
+        case WM_CLOSE:
+        case WM_QUIT:
+        {
+            OS_Event event;
+            event.type       = OS_EventType_Quit;
+            events.AddBack() = event;
+            break;
+        }
+        case WM_PAINT:
+        {
+            PAINTSTRUCT paint;
+            HDC dc = BeginPaint(window, &paint);
+            EndPaint(window, &paint);
+            break;
+        }
+        case WM_SIZE:
+        {
+            break;
+        }
+        case WM_KILLFOCUS:
+        {
+            OS_Event event;
+            event.type       = OS_EventType_LoseFocus;
+            events.AddBack() = event;
+            ReleaseCapture();
+            break;
+        }
+        case WM_SETCURSOR:
+        {
+            result = DefWindowProcW(window, message, wParam, lParam);
+            break;
+        }
+        case WM_ACTIVATEAPP:
+        {
+            break;
+        }
+        default:
+        {
+            result = DefWindowProcW(window, message, wParam, lParam);
+        }
+    }
+    return result;
+}
+
+OS_Handle OS_WindowInit()
+{
+    OS_Handle result          = {};
+    WNDCLASSW windowClass     = {};
+    windowClass.style         = CS_HREDRAW | CS_VREDRAW;
+    windowClass.lpfnWndProc   = Win32_Callback;
+    windowClass.hInstance     = GetModuleHandleW(0);
+    windowClass.lpszClassName = L"RT";
+    windowClass.hCursor       = LoadCursorA(0, IDC_ARROW);
+
+    if (RegisterClassW(&windowClass))
+    {
+        HWND windowHandle =
+            CreateWindowExW(0, windowClass.lpszClassName, L"rt",
+                            WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT,
+                            CW_USEDEFAULT, CW_USEDEFAULT, 0, 0, windowClass.hInstance, 0);
+        if (windowHandle)
+        {
+            result.handle = (u64)windowHandle;
+        }
+    }
+    return result;
 }
 
 inline u64 InterlockedAdd(u64 volatile *addend, u64 value)

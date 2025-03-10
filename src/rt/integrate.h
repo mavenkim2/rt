@@ -292,6 +292,15 @@ struct RenderParams2
 {
     Mat4 cameraFromRaster;
     Mat4 renderFromCamera;
+
+    Mat4 NDCFromCamera;
+    Mat4 cameraFromRender;
+
+    AffineSpace renderFromWorld;
+
+    Arena **arenas;
+    OS_Handle window;
+
     u32 width;
     u32 height;
     Vec2u pixelMin = Vec2u(0, 0);
@@ -303,7 +312,8 @@ struct RenderParams2
     f32 focalLength = 0.f;
 };
 
-// NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Sampler sampler,
+// NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Sampler
+// sampler,
 //                                   SampledSpectrum beta, const SampledSpectrum &p,
 //                                   const SampledWavelengths &lambda, Vec3f &wi);
 SampledWavelengths SampleVisible(f32 u);

@@ -1,3 +1,4 @@
+#include "integrate.h"
 #include "gpu_scene.h"
 #include "scene.h"
 #include "vulkan.h"
@@ -114,23 +115,34 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
     primIndices = PrimitiveIndices(lightHandle, materialHandle, alphaTexture);
 }
 
-void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, int maxDepth,
-                       const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender,
-                       int screenHeight)
+void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
+                       int maxDepth)
 {
     // Compile shaders
     string raygenShaderName = "../src/shaders/spirv/render_raytrace_rgen.spv";
-    Arena *arena            = arenas[0];
-    string data             = OS_ReadFile(arena, raygenShaderName);
+    string missShaderName   = "../src/shaders/spirv/render_raytrace_miss.spv";
+    string hitShaderName    = "../src/shaders/spirv/render_raytrace_hit.spv";
+
+    Arena *arena    = params->arenas[0];
+    string rgenData = OS_ReadFile(arena, raygenShaderName);
+    string missData = OS_ReadFile(arena, missShaderName);
+    string hitData  = OS_ReadFile(arena, hitShaderName);
 
     Shader *rayShaders[RST_Max];
     int counts[RST_Max] = {};
     Shader raygenShaders[1];
     raygenShaders[counts[RST_Raygen]++] =
-        device->CreateShader(ShaderStage::Raygen, "raygen", data);
+        device->CreateShader(ShaderStage::Raygen, "raygen", rgenData);
     Shader missShaders[1];
+    missShaders[counts[RST_Miss]++] =
+        device->CreateShader(ShaderStage::Miss, "miss", missData);
+    Shader hitShaders[1];
+    hitShaders[counts[RST_ClosestHit]++] =
+        device->CreateShader(ShaderStage::Hit, "hit", hitData);
 
-    rayShaders[RST_Raygen] = raygenShaders;
+    rayShaders[RST_Raygen]     = raygenShaders;
+    rayShaders[RST_Miss]       = missShaders;
+    rayShaders[RST_ClosestHit] = hitShaders;
 
     RayTracingState rts = device->CreateRayTracingPipeline(rayShaders, counts, maxDepth);
 
@@ -181,12 +193,13 @@ void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, 
         device->BindAccelerationStructure(rts.set, as[0]->as);
     }
 
-    // vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, state.VkPipeline
-    // pipeline); vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
-    //
-    //                         VkPipelineLayout layout, uint32_t firstSet,
-    //                         uint32_t descriptorSetCount,
-    //                         const VkDescriptorSet *pDescriptorSets,
-    //                         uint32_t dynamicOffsetCount, const uint32_t *pDynamicOffsets);
+    Swapchain swapchain =
+        device->CreateSwapchain(params->window, params->width, params->height);
+
+    CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics);
+    cmd->BindPipeline(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rts.pipeline);
+    cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rts.layout, rts.set);
+    cmd->TraceRays(&rts, 1920, 804, 1);
+    device->SubmitCommandBuffer(cmd);
 }
 } // namespace rt

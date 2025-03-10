@@ -1,11 +1,12 @@
 #include "cpu_scene.h"
+#include "integrate.h"
 #include "scene.h"
 
 namespace rt
 {
 
 SceneShapeParse StartSceneShapeParse() { return {}; }
-void EndSceneShapeParse(SceneShapeParse *parse) {}
+void EndSceneShapeParse(ScenePrimitives *scene, SceneShapeParse *parse) {}
 
 Mesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
 {
@@ -108,9 +109,8 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
     primIndices = PrimitiveIndices(lightHandle, materialHandle, alphaTexture);
 }
 
-void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, int maxDepth,
-                       const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender,
-                       int screenHeight)
+void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
+                       int maxDepth)
 {
     for (int depth = maxDepth; depth >= 0; depth--)
     {
@@ -118,8 +118,8 @@ void BuildAllSceneBVHs(Arena **arenas, ScenePrimitives **scenes, int numScenes, 
             for (int i = start; i < start + count; i++)
             {
                 if (scenes[i]->depth.load(std::memory_order_acquire) == depth)
-                    BuildSceneBVHs(arenas, scenes[i], NDCFromCamera, cameraFromRender,
-                                   screenHeight);
+                    BuildSceneBVHs(params->arenas, scenes[i], params->NDCFromCamera,
+                                   params->cameraFromRender, params->height);
             }
         });
     }

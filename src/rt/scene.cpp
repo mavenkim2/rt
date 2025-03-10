@@ -1017,12 +1017,10 @@ void ComputeEdgeRates(ScenePrimitives *scene, const AffineSpace &transform,
     }
 }
 
-void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string filename,
-               const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender, int screenHeight,
-               AffineSpace *t)
+void LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, string filename)
 {
     TempArena temp = ScratchStart(0, 0);
-    Arena *arena   = arenas[GetThreadIndex()];
+    Arena *arena   = params->arenas[GetThreadIndex()];
 
     u32 numProcessors      = OS_NumProcessors();
     RTSceneLoadState state = {};
@@ -1034,8 +1032,8 @@ void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string file
     Scene *scene = GetScene();
 
     Scheduler::Counter counter = {};
-    LoadRTScene(arenas, tempArenas, &state, &scene->scene, directory, filename, &counter, t,
-                true);
+    LoadRTScene(params->arenas, tempArenas, &state, &scene->scene, directory, filename,
+                &counter, &params->renderFromWorld, true);
     scheduler.Wait(&counter);
 
     int numScenes            = (int)state.scenes.size();
@@ -1047,7 +1045,7 @@ void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string file
     AffineSpace space = AffineSpace::Identity();
 
     Vec4f planes[6];
-    ExtractPlanes(planes, NDCFromCamera * cameraFromRender);
+    ExtractPlanes(planes, params->NDCFromCamera * params->cameraFromRender);
 
     ComputeEdgeRates(&scene->scene, space, planes, TessellationStyle::ClosestInstance);
 
@@ -1057,8 +1055,7 @@ void LoadScene(Arena **arenas, Arena **tempArenas, string directory, string file
         maxDepth = Max(maxDepth, scenes[i]->depth.load(std::memory_order_acquire));
     }
 
-    BuildAllSceneBVHs(arenas, scenes, numScenes, maxDepth, NDCFromCamera, cameraFromRender,
-                      screenHeight);
+    BuildAllSceneBVHs(params, scenes, numScenes, maxDepth);
 
     for (u32 i = 0; i < numProcessors; i++)
     {

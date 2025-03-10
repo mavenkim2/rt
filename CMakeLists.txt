@@ -120,6 +120,7 @@ option(USE_GPU "USE_GPU" OFF)
 # Create thread context static lib (shared w/ ptex)
 set (MEM_SOURCE_FILES 
     src/rt/thread_context.cpp
+    src/rt/thread_statistics.cpp
     src/rt/memory.cpp
     src/rt/string.cpp
     src/rt/base.cpp
@@ -132,7 +133,6 @@ set (RT_SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/scene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/simd_integrate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/spectrum.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/thread_statistics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/subdivision.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/parallel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/vulkan.cpp

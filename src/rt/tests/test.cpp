@@ -184,7 +184,7 @@ void WhiteFurnaceTest(Arena *arena, Options *options = 0)
 }
 #endif
 
-void TestRender(Arena *arena, Options *options = 0)
+void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
 {
     // TODO:
     // - add area lights (making sure they cannot be intersected, but are sampled properly)
@@ -245,10 +245,54 @@ void TestRender(Arena *arena, Options *options = 0)
     AffineSpace renderFromWorld = AffineSpace::Translate(-pCamera);
     AffineSpace worldFromRender = AffineSpace::Translate(pCamera);
 
+    // Mat4 cameraFromRaster;
+    // Mat4 renderFromCamera;
+    //
+    // Mat4 NDCFromCamera;
+    // Mat4 cameraFromRender;
+    //
+    // AffineSpace renderFromWorld;
+    //
+    // Arena **arenas;
+    // ScenePrimitives **scenes;
+    // int numScenes;
+    //
+    // u32 width;
+    // u32 height;
+    // Vec2u pixelMin = Vec2u(0, 0);
+    // Vec2u pixelMax = Vec2u(0, 0);
+    // Vec2f filterRadius;
+    // u32 spp;
+    // u32 maxDepth;
+    // f32 lensRadius  = 0.f;
+    // f32 focalLength = 0.f;
+    RenderParams2 params    = {};
+    params.cameraFromRaster = cameraFromRaster;
+    params.renderFromCamera = renderFromCamera;
+    params.NDCFromCamera    = NDCFromCamera;
+    params.cameraFromRender = cameraFromRender;
+    params.renderFromWorld  = renderFromWorld;
+    params.arenas           = arenas;
+    params.window           = window;
+    params.width            = width;
+    params.height           = height;
+    if (options)
+    {
+        if (options->pixelX != -1 && options->pixelY != -1)
+        {
+            params.pixelMin = Vec2u(options->pixelX, options->pixelY);
+            params.pixelMax = params.pixelMin + Vec2u(1, 1);
+        }
+    }
+    params.filterRadius = Vec2f(0.5f);
+    params.spp          = 64;
+    params.maxDepth     = 10;
+    params.lensRadius   = lensRadius;
+    params.focalLength  = focalDistance;
+
     string directory = Str8PathChopPastLastSlash(options->filename);
     string filename  = PathSkipLastSlash(options->filename);
-    LoadScene(arenas, tempArenas, directory, filename, NDCFromCamera, cameraFromRender, height,
-              &renderFromWorld);
+    LoadScene(&params, tempArenas, directory, filename);
 
     // environment map
 #if 1
@@ -305,26 +349,6 @@ void TestRender(Arena *arena, Options *options = 0)
     printf("total instance bytes: %llu\n", totalInstanceMemory);
     printf("total # spatial splits: %llu\n", totalNumSpatialSplits);
     printf("max edge factor:  %llu\n", maxEdgeFactor);
-
-    RenderParams2 params;
-    params.cameraFromRaster = cameraFromRaster;
-    params.renderFromCamera = renderFromCamera;
-    params.width            = width;
-    params.height           = height;
-    params.filterRadius     = Vec2f(0.5f);
-    params.spp              = 64;
-    params.maxDepth         = 10;
-    params.lensRadius       = lensRadius;
-    params.focalLength      = focalDistance;
-
-    if (options)
-    {
-        if (options->pixelX != -1 && options->pixelY != -1)
-        {
-            params.pixelMin = Vec2u(options->pixelX, options->pixelY);
-            params.pixelMax = params.pixelMin + Vec2u(1, 1);
-        }
-    }
 
     counter = OS_StartCounter();
 #ifdef USE_GPU
