@@ -2,6 +2,7 @@
 
 ConstantBuffer<GPUScene> scene;
 RaytracingAccelerationStructure accel : register(t0);
+RWTexture2D<float3> image : register(u1);
 
 [shader("raygeneration")]
 void main() 
@@ -25,4 +26,6 @@ void main()
     scene.GenerateRay(filterSample, pLens, desc, payload);
 
     TraceRay(accel, RAY_FLAG_FORCE_OPAQUE, 0xff, 0, 0, 0, desc, payload);
+
+    image[id.xy] = payload.radiance;
 }

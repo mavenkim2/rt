@@ -7,7 +7,7 @@
 
 namespace rt
 {
-static Vulkan *device;
+Vulkan *device;
 
 VkBool32 DebugUtilsMessengerCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
                                      VkDebugUtilsMessageTypeFlagsEXT messageType,
@@ -562,7 +562,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         createInfo.pPoolSizes                 = poolSizes;
         createInfo.maxSets                    = cPoolSize;
 
-        VK_CHECK(vkCreateDescriptorPool(device, &createInfo, 0, &pool));
+        VK_CHECK(vkCreateDescriptorPool(device, &createInfo, 0, &bindlessPool));
     }
 
     // Bindless descriptor pools
@@ -1241,13 +1241,11 @@ void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd)
     pool.freeList[cmd->type].AddBack() = cmd;
 }
 
-VkImageMemoryBarrier2 Vulkan::ImageMemoryBarrier(VkImage image, VkImageLayout oldLayout,
-                                                 VkImageLayout newLayout,
-                                                 VkPipelineStageFlags2 srcStageMask,
-                                                 VkPipelineStageFlags2 dstStageMask,
-                                                 VkPipelineStageFlags2 srcAccessMask,
-                                                 VkPipelineStageFlags2 dstAccessMask,
-                                                 VkImageAspectFlags aspectFlags)
+VkImageMemoryBarrier2
+Vulkan::ImageMemoryBarrier(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
+                           VkPipelineStageFlags2 srcStageMask,
+                           VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 srcAccessMask,
+                           VkAccessFlags2 dstAccessMask, VkImageAspectFlags aspectFlags)
 {
     VkImageMemoryBarrier2 barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
     barrier.image                 = image;
@@ -1268,6 +1266,24 @@ VkImageMemoryBarrier2 Vulkan::ImageMemoryBarrier(VkImage image, VkImageLayout ol
     barrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
     return barrier;
 }
+
+// void CommandBuffer::Barrier(GPUImage *image, VkImageLayout layout, VkPipelineStageFlags2
+// stage,
+//                             VkAccessFlags2 access)
+// {
+//     VkImageMemoryBarrier2 barrier = device->ImageMemoryBarrier(
+//         image->image, image->lastLayout, layout, image->lastPipeline, stage,
+//         image->lastAccess, access, image->aspect);
+//
+//     VkDependencyInfo dependencyInfo        = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+//     dependencyInfo.imageMemoryBarrierCount = 1;
+//     dependencyInfo.pImageMemoryBarriers    = &barrier;
+//     vkCmdPipelineBarrier2(buffer, &dependencyInfo);
+//
+//     image->lastLayout   = layout;
+//     image->lastPipeline = stage;
+//     image->lastAccess   = access;
+// }
 
 void Vulkan::CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage *image)
 {
@@ -1321,42 +1337,32 @@ void Vulkan::CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage 
 
     // Copy framebuffer
     {
-        VkImageSubresourceLayers srcLayer = {};
-        srcLayer.aspectMask               = VK_IMAGE_ASPECT_COLOR_BIT;
-        srcLayer.mipLevel                 = 0;
-        srcLayer.baseArrayLayer           = 0;
-        srcLayer.layerCount               = 1;
+        VkImageBlit2 blitInfo                  = {VK_STRUCTURE_TYPE_IMAGE_BLIT_2};
+        blitInfo.srcSubresource.baseArrayLayer = 0;
+        blitInfo.srcSubresource.mipLevel       = 0;
+        blitInfo.srcSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        blitInfo.srcSubresource.layerCount     = 1;
+        blitInfo.srcOffsets[1].x               = image->width;
+        blitInfo.srcOffsets[1].y               = image->height;
+        blitInfo.srcOffsets[1].z               = 1;
+        blitInfo.dstSubresource.baseArrayLayer = 0;
+        blitInfo.dstSubresource.mipLevel       = 0;
+        blitInfo.dstSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        blitInfo.dstSubresource.layerCount     = 1;
+        blitInfo.dstOffsets[1].x               = (int)swapchain->width;
+        blitInfo.dstOffsets[1].y               = (int)swapchain->height;
+        blitInfo.dstOffsets[1].z               = 1;
 
-        VkImageSubresourceLayers dstLayer = {};
-        dstLayer.aspectMask               = VK_IMAGE_ASPECT_COLOR_BIT;
-        dstLayer.mipLevel                 = 0;
-        dstLayer.baseArrayLayer           = 0;
-        dstLayer.layerCount               = 1;
+        VkBlitImageInfo2 blit = {VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2};
+        blit.srcImage         = image->image;
+        blit.srcImageLayout   = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        blit.dstImage         = swapchain->images[swapchain->imageIndex];
+        blit.dstImageLayout   = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        blit.regionCount      = 1;
+        blit.pRegions         = &blitInfo;
+        blit.filter           = VK_FILTER_LINEAR;
 
-        VkImageCopy2 imageCopyInfo   = {};
-        imageCopyInfo.sType          = VK_STRUCTURE_TYPE_IMAGE_COPY_2;
-        imageCopyInfo.srcSubresource = srcLayer;
-        imageCopyInfo.dstSubresource = dstLayer;
-        imageCopyInfo.srcOffset.x    = 0;
-        imageCopyInfo.srcOffset.y    = 0;
-        imageCopyInfo.srcOffset.z    = 0;
-        imageCopyInfo.dstOffset.x    = 0;
-        imageCopyInfo.dstOffset.y    = 0;
-        imageCopyInfo.dstOffset.z    = 0;
-        imageCopyInfo.extent.width   = swapchain->width;
-        imageCopyInfo.extent.height  = swapchain->height;
-        imageCopyInfo.extent.depth   = 1;
-
-        VkCopyImageInfo2 copyInfo = {};
-        copyInfo.sType            = VK_STRUCTURE_TYPE_COPY_IMAGE_INFO_2;
-        copyInfo.srcImage         = image->image;
-        copyInfo.dstImage         = swapchain->images[swapchain->imageIndex];
-        copyInfo.srcImageLayout   = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        copyInfo.dstImageLayout   = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        copyInfo.regionCount      = 1;
-        copyInfo.pRegions         = &imageCopyInfo;
-
-        vkCmdCopyImage2(cmd->buffer, &copyInfo);
+        vkCmdBlitImage2(cmd->buffer, &blit);
     }
 
     // Set swapchain to present
@@ -1434,6 +1440,65 @@ GPUBuffer Vulkan::CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
     return buffer;
 }
 
+GPUImage Vulkan::CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageType type,
+                             VkImageLayout initialLayout, int width, int height, int depth,
+                             int numMips, int numLayers)
+{
+    GPUImage image = {};
+
+    VkImageCreateInfo imageInfo = {};
+    imageInfo.sType             = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType         = type;
+    imageInfo.extent.width      = width;
+    imageInfo.extent.height     = height;
+    imageInfo.extent.depth      = depth;
+    imageInfo.mipLevels         = numMips;
+    imageInfo.arrayLayers       = numLayers;
+    imageInfo.format            = format;
+    imageInfo.tiling            = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout     = initialLayout;
+    imageInfo.usage             = flags;
+
+    if (families.Length() > 1)
+    {
+        imageInfo.sharingMode           = VK_SHARING_MODE_CONCURRENT;
+        imageInfo.queueFamilyIndexCount = (u32)families.Length();
+        imageInfo.pQueueFamilyIndices   = families.data;
+    }
+    else
+    {
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    }
+
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.flags   = 0;
+
+    VmaAllocationCreateInfo allocInfo = {};
+    allocInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
+
+    VK_CHECK(
+        vmaCreateImage(allocator, &imageInfo, &allocInfo, &image.image, &image.allocation, 0));
+
+    VkImageViewCreateInfo viewInfo = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    switch (type)
+    {
+        case VK_IMAGE_TYPE_2D: viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        default: Assert(0);
+    }
+    viewInfo.image                           = image.image;
+    viewInfo.format                          = format;
+    viewInfo.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel   = 0;
+    viewInfo.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
+
+    viewInfo.flags = VK_IMAGE_VIEW_CREATE_FLAG_BITS_MAX_ENUM;
+
+    vkCreateImageView(device, &viewInfo, 0, &image.imageView);
+    return image;
+}
+
 TransferBuffer Vulkan::GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize)
 {
     int threadIndex = GetThreadIndex();
@@ -1448,11 +1513,10 @@ TransferBuffer Vulkan::GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSi
 
     void *mappedPtr = stagingBuffer.allocation->GetMappedData();
 
-    TransferBuffer transferBuffer = {
-        .buffer        = buffer,
-        .stagingBuffer = stagingBuffer,
-        .mappedPtr     = mappedPtr,
-    };
+    TransferBuffer transferBuffer;
+    transferBuffer.buffer        = buffer;
+    transferBuffer.stagingBuffer = stagingBuffer;
+    transferBuffer.mappedPtr     = mappedPtr;
     return transferBuffer;
 }
 
@@ -1472,10 +1536,82 @@ void CommandBuffer::BindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipel
     vkCmdBindPipeline(buffer, bindPoint, pipeline);
 }
 
-void CommandBuffer::BindDescriptorSets(VkPipelineBindPoint bindPoint, VkPipelineLayout layout,
-                                       VkDescriptorSet set)
+int DescriptorSetLayout::AddBinding(u32 b, VkDescriptorType type, VkShaderStageFlags stage)
 {
-    vkCmdBindDescriptorSets(buffer, bindPoint, layout, 0, 1, &set, 0, 0);
+    VkDescriptorSetLayoutBinding binding = {};
+    binding.binding                      = b;
+    binding.descriptorType               = type;
+    binding.descriptorCount              = 1;
+    binding.stageFlags                   = stage;
+
+    int index = static_cast<int>(bindings.size());
+    bindings.push_back(binding);
+    return index;
+}
+
+VkDescriptorSetLayout DescriptorSetLayout::CreateLayout()
+{
+    VkDescriptorSetLayoutCreateInfo createInfo = {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    createInfo.bindingCount = bindings.size();
+    createInfo.pBindings    = bindings.data();
+    VkDescriptorSetLayout layout;
+    VK_CHECK(vkCreateDescriptorSetLayout(device->device, &createInfo, 0, &layout));
+    return layout;
+}
+
+void DescriptorSetLayout::Bind(int index, GPUImage *image)
+{
+    Assert(index < bindings.size());
+    VkDescriptorImageInfo info = {};
+    info.imageView             = image->imageView;
+    info.imageLayout           = image->lastLayout;
+
+    DescriptorInfo dInfo;
+    dInfo.image = info;
+    descriptorInfo.push_back(dInfo);
+
+    VkWriteDescriptorSet set = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    set.descriptorType       = bindings[index].descriptorType;
+    set.descriptorCount      = 1;
+    set.dstSet               = VK_NULL_HANDLE;
+    set.dstBinding           = bindings[index].binding;
+    set.pImageInfo           = &info;
+
+    writeDescriptorSets.push_back(set);
+}
+
+void DescriptorSetLayout::Bind(int index, VkAccelerationStructureKHR accel)
+{
+    Assert(index < bindings.size());
+    VkWriteDescriptorSetAccelerationStructureKHR writeSet = {
+        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writeSet.pAccelerationStructures    = &accel;
+    writeSet.accelerationStructureCount = 1;
+
+    descriptorInfo.push_back({writeSet});
+
+    VkWriteDescriptorSet set = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    set.pNext                = &descriptorInfo.back();
+    set.descriptorType       = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    set.descriptorCount      = 1;
+    set.dstSet               = VK_NULL_HANDLE;
+    set.dstBinding           = bindings[index].binding;
+
+    writeDescriptorSets.push_back(set);
+}
+
+void CommandBuffer::BindDescriptorSets(VkPipelineBindPoint bindPoint,
+                                       DescriptorSetLayout *layout,
+                                       VkPipelineLayout pipeLayout, VkDescriptorSet set)
+{
+    for (auto &write : layout->writeDescriptorSets)
+    {
+        write.dstSet = set;
+    }
+    vkUpdateDescriptorSets(device->device, layout->writeDescriptorSets.size(),
+                           layout->writeDescriptorSets.data(), 0, 0);
+    vkCmdBindDescriptorSets(buffer, bindPoint, pipeLayout, 0, 1, &set, 0, 0);
 }
 
 void CommandBuffer::TraceRays(RayTracingState *state, u32 width, u32 height, u32 depth)
@@ -1561,25 +1697,8 @@ Shader Vulkan::CreateShader(ShaderStage stage, string name, string shaderData)
     return shader;
 }
 
-void Vulkan::BindAccelerationStructure(VkDescriptorSet descriptorSet,
-                                       VkAccelerationStructureKHR accel)
-{
-    VkWriteDescriptorSetAccelerationStructureKHR writeSet = {
-        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    writeSet.pAccelerationStructures    = &accel;
-    writeSet.accelerationStructureCount = 1;
-
-    VkWriteDescriptorSet set = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    set.pNext                = &writeSet;
-    set.descriptorType       = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    set.descriptorCount      = 1;
-    set.dstSet               = descriptorSet;
-    set.dstBinding           = (u32)RTBindings::Accel;
-    vkUpdateDescriptorSets(device, 1, &set, 0, 0);
-}
-
 RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RST_Max],
-                                                 u32 maxDepth)
+                                                 DescriptorSetLayout *layout, u32 maxDepth)
 {
     int total = 0;
     for (int i = 0; i < RST_Max; i++)
@@ -1668,31 +1787,25 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
     }
 
     // Create pipeline layout
-    VkPipelineLayout layout;
+    VkPipelineLayout pipelineLayout;
     VkDescriptorSet set;
+    VkDescriptorPool pool;
     {
-        VkDescriptorPool descriptorPool;
         VkDescriptorPoolCreateInfo poolCreateInfo = {
             VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        vkCreateDescriptorPool(device, &poolCreateInfo, 0, &descriptorPool);
+        VkDescriptorPoolSize poolSize = {};
+        poolSize.descriptorCount      = layout->bindings.size();
+        poolCreateInfo.pPoolSizes     = &poolSize;
+        poolCreateInfo.poolSizeCount  = 1;
+        poolCreateInfo.maxSets        = 1;
 
-        VkDescriptorSetLayoutBinding binding = {};
-        binding.binding                      = (u32)RTBindings::Accel;
-        binding.descriptorType               = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-        binding.descriptorCount              = 1;
-        binding.stageFlags                   = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+        vkCreateDescriptorPool(device, &poolCreateInfo, 0, &pool);
 
-        VkDescriptorSetLayout setLayout;
-        VkDescriptorSetLayoutCreateInfo layoutInfo = {
-            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        layoutInfo.pBindings    = &binding;
-        layoutInfo.bindingCount = 1;
-
-        vkCreateDescriptorSetLayout(device, &layoutInfo, 0, &setLayout);
+        VkDescriptorSetLayout setLayout = layout->CreateLayout();
 
         VkDescriptorSetAllocateInfo allocateInfo = {
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        allocateInfo.descriptorPool     = descriptorPool;
+        allocateInfo.descriptorPool     = pool;
         allocateInfo.pSetLayouts        = &setLayout;
         allocateInfo.descriptorSetCount = 1;
 
@@ -1700,8 +1813,9 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
 
         VkPipelineLayoutCreateInfo createInfo = {
             VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        createInfo.pSetLayouts    = &setLayout;
         createInfo.setLayoutCount = 1;
-        VK_CHECK(vkCreatePipelineLayout(device, &createInfo, 0, &layout));
+        VK_CHECK(vkCreatePipelineLayout(device, &createInfo, 0, &pipelineLayout));
     }
 
     // Create pipeline
@@ -1718,7 +1832,7 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
         pipelineInfo.pGroups                      = shaderGroups;
         pipelineInfo.groupCount                   = total;
         pipelineInfo.maxPipelineRayRecursionDepth = maxDepth;
-        pipelineInfo.layout                       = layout;
+        pipelineInfo.layout                       = pipelineLayout;
 
         VK_CHECK(
             vkCreateRayTracingPipelinesKHR(device, {}, {}, 1, &pipelineInfo, 0, &pipeline));
@@ -1726,7 +1840,8 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
 
     RayTracingState state = {};
     state.pipeline        = pipeline;
-    state.layout          = layout;
+    state.layout          = pipelineLayout;
+    state.set             = set;
 
     // Create shader binding table
     {

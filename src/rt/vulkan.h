@@ -188,6 +188,7 @@ enum RayShaderType
 enum class RTBindings
 {
     Accel,
+    Image,
 };
 
 struct RayTracingState
@@ -237,9 +238,14 @@ struct Swapchain
 struct GPUImage
 {
     VkImage image;
+    int width;
+    int height;
+    VkImageView imageView;
+    VmaAllocation allocation;
     VkPipelineStageFlags2 lastPipeline;
     VkImageLayout lastLayout;
     VkAccessFlags2 lastAccess;
+    VkImageAspectFlags aspect;
 };
 
 struct TransferBuffer
@@ -264,6 +270,23 @@ struct Semaphore
     u64 signalValue;
 };
 
+struct DescriptorSetLayout
+{
+    union DescriptorInfo
+    {
+        VkWriteDescriptorSetAccelerationStructureKHR accel;
+        VkDescriptorImageInfo image;
+    };
+    std::vector<VkDescriptorSetLayoutBinding> bindings;
+    std::vector<DescriptorInfo> descriptorInfo;
+    std::vector<VkWriteDescriptorSet> writeDescriptorSets;
+
+    int AddBinding(u32 binding, VkDescriptorType type, VkShaderStageFlags stage);
+    void Bind(int index, GPUImage *image);
+    void Bind(int index, VkAccelerationStructureKHR accel);
+    VkDescriptorSetLayout CreateLayout();
+};
+
 struct CommandBuffer
 {
     QueueType type;
@@ -283,6 +306,7 @@ struct CommandBuffer
     std::vector<Semaphore> signalSemaphores;
 
     // Descriptor bindings
+    VkDescriptorSet descriptorSet;
 
     // BindedResource srvTable[cMaxBindings] = {};
     // BindedResource uavTable[cMaxBindings] = {};
@@ -294,13 +318,15 @@ struct CommandBuffer
     u32 currentSet = 0;
     // b32 mIsDirty[cNumBuffers][QueueType_Count] = {};
 
-    void Wait(Semaphore semaphore) { waitSemaphores.push_back(semaphore); }
-    void Signal(Semaphore semaphore) { signalSemaphores.push_back(semaphore); }
+    void Wait(Semaphore s) { waitSemaphores.push_back(s); }
+    void Signal(Semaphore s) { signalSemaphores.push_back(s); }
     void SubmitTransfer(TransferBuffer *buffer);
     void BindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipeline);
-    void BindDescriptorSets(VkPipelineBindPoint bindPoint, VkPipelineLayout layout,
-                            VkDescriptorSet set);
+    void BindDescriptorSets(VkPipelineBindPoint bindPoint, DescriptorSetLayout *layout,
+                            VkPipelineLayout pipeLayout, VkDescriptorSet set);
     void TraceRays(RayTracingState *state, u32 width, u32 height, u32 depth);
+    // void Barrier(GPUImage *image, VkImageLayout layout, VkPipelineStageFlags2 stage,
+    //              VkAccessFlags2 access);
 };
 
 typedef ChunkedLinkedList<CommandBuffer> CommandBufferList;
@@ -404,7 +430,7 @@ struct Vulkan
     //////////////////////////////
     // Descriptors
     //
-    VkDescriptorPool pool;
+    VkDescriptorPool bindlessPool;
 
     //////////////////////////////
     // Pipelines
@@ -546,14 +572,8 @@ struct Vulkan
 
     Vulkan(ValidationMode validationMode,
            GPUDevicePreference preference = GPUDevicePreference::Discrete);
-    // u64 GetMinAlignment(GPUBufferDesc *inDesc);
     Swapchain CreateSwapchain(OS_Handle window, u32 width, u32 height);
     Semaphore CreateGraphicsSemaphore();
-    // void CreatePipeline(PipelineStateDesc *inDesc, PipelineState *outPS, string name);
-    // void CreateComputePipeline(PipelineStateDesc *inDesc, PipelineState *outPS, string
-    // name); void CreateShader(Shader *shader, string shaderData); void AddPCTemp(Shader
-    // *shader, u32 offset, u32 size); void CreateBufferCopy(GPUBuffer *inBuffer, GPUBufferDesc
-    // inDesc, CopyFunction initCallback);
     void AllocateCommandBuffers(ThreadCommandPool &pool, QueueType type);
     void CheckInitializedThreadCommandPool(int threadIndex);
     CommandBuffer *BeginCommandBuffer(QueueType queue);
@@ -561,12 +581,17 @@ struct Vulkan
     VkImageMemoryBarrier2
     ImageMemoryBarrier(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
                        VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
-                       VkPipelineStageFlags2 srcAccessMask,
-                       VkPipelineStageFlags2 dstAccessMask, VkImageAspectFlags aspectFlags);
+                       VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask,
+                       VkImageAspectFlags aspectFlags);
     void CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage *image);
     ThreadCommandPool &GetThreadCommandPool(int threadIndex);
+    DescriptorSetLayout CreateDescriptorSetLayout(u32 binding, VkDescriptorType type,
+                                                  VkShaderStageFlags stage);
     GPUBuffer CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
                            VmaAllocationCreateFlags vmaFlags = 0);
+    GPUImage CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageType type,
+                         VkImageLayout initialLayout, int width = 1, int height = 1,
+                         int depth = 1, int numMips = 1, int numLayers = 1);
     TransferBuffer GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize);
     u64 GetDeviceAddress(VkBuffer buffer);
     void BeginEvent(CommandBuffer *cmd, string name);
@@ -575,32 +600,18 @@ struct Vulkan
     void BindAccelerationStructure(VkDescriptorSet descriptorSet,
                                    VkAccelerationStructureKHR accel);
     RayTracingState CreateRayTracingPipeline(Shader **shaders, int counts[RST_Max],
-                                             u32 maxDepth);
+                                             DescriptorSetLayout *layout, u32 maxDepth);
     GPUAccelerationStructure CreateBLAS(CommandBuffer *cmd, const GPUMesh *meshes, int count);
     QueryPool CreateQuery(QueryType type, int count);
     QueryPool GetCompactionSizes(CommandBuffer *cmd, GPUAccelerationStructure **as, int count);
     void CompactBLASes(CommandBuffer *cmd, QueryPool &pool, GPUAccelerationStructure **as,
                        int count);
 
-    // void CreateBuffer(GPUBuffer *inBuffer, GPUBufferDesc inDesc, void *inData = 0)
-    // {
-    //     if (inData == 0)
-    //     {
-    //         CreateBufferCopy(inBuffer, inDesc, 0);
-    //     }
-    //     else
-    //     {
-    //         CopyFunction func = [&](void *dest) { MemoryCopy(dest, inData, inDesc.size); };
-    //         CreateBufferCopy(inBuffer, inDesc, func);
-    //     }
-    // }
-
     // void CopyBuffer(CommandBuffer cmd, GPUBuffer *dest, GPUBuffer *src, u32 size);
     // void ClearBuffer(CommandBuffer cmd, GPUBuffer *dst);
     // void CopyTexture(CommandBuffer cmd, Texture *dst, Texture *src, Rect3U32 *rect = 0);
     // void CopyImage(CommandBuffer cmd, Swapchain *dst, Texture *src);
     // void DeleteBuffer(GPUBuffer *buffer);
-    // void CreateTexture(Texture *outTexture, TextureDesc desc, void *inData);
     // void DeleteTexture(Texture *texture);
     // void CreateSampler(Sampler *sampler, SamplerDesc desc);
     // void BindSampler(CommandBuffer cmd, Sampler *sampler, u32 slot);

@@ -144,8 +144,23 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     rayShaders[RST_Miss]       = missShaders;
     rayShaders[RST_ClosestHit] = hitShaders;
 
-    RayTracingState rts = device->CreateRayTracingPipeline(rayShaders, counts, maxDepth);
+    GPUImage image =
+        device->CreateImage(VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                            VK_FORMAT_R32G32B32_SFLOAT, VK_IMAGE_TYPE_2D,
+                            VK_IMAGE_LAYOUT_GENERAL, params->width, params->height);
 
+    DescriptorSetLayout layout;
+    int accelBindingIndex = layout.AddBinding((u32)RTBindings::Accel,
+                                              VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                              VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+    int imageBindingIndex =
+        layout.AddBinding((u32)RTBindings::Image, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                          VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+
+    RayTracingState rts =
+        device->CreateRayTracingPipeline(rayShaders, counts, &layout, maxDepth);
+
+    VkAccelerationStructureKHR accel;
     for (int depth = maxDepth; depth >= 0; depth--)
     {
         ScratchArena scratch;
@@ -190,7 +205,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         device->CompactBLASes(compactCmd, queryPool, as, bvhCount);
         device->SubmitCommandBuffer(compactCmd);
 
-        device->BindAccelerationStructure(rts.set, as[0]->as);
+        accel = as[0]->as;
     }
 
     Swapchain swapchain =
@@ -198,8 +213,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics);
     cmd->BindPipeline(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rts.pipeline);
-    cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rts.layout, rts.set);
-    cmd->TraceRays(&rts, 1920, 804, 1);
-    device->SubmitCommandBuffer(cmd);
+    layout.Bind(accelBindingIndex, accel);
+    layout.Bind(imageBindingIndex, &image);
+    cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, &layout, rts.layout,
+                            rts.set);
+    cmd->TraceRays(&rts, params->width, params->height, 1);
+    device->CopyFrameBuffer(&swapchain, cmd, &image);
+    // device->SubmitCommandBuffer(cmd);
 }
 } // namespace rt

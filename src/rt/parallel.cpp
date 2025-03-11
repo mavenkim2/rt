@@ -2,7 +2,7 @@
 
 namespace rt
 {
-static Scheduler scheduler;
+Scheduler scheduler;
 
 THREAD_ENTRY_POINT(WorkerLoop)
 {

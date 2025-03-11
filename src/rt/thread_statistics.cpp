@@ -1,6 +1,6 @@
 #include "thread_statistics.h"
 namespace rt
 {
-static ThreadStatistics *threadLocalStatistics;
-static ThreadMemoryStatistics *threadMemoryStatistics;
+ThreadStatistics *threadLocalStatistics;
+ThreadMemoryStatistics *threadMemoryStatistics;
 } // namespace rt

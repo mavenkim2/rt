@@ -19,10 +19,11 @@ template <typename BxDF>
 struct BSDFBase;
 
 extern Ptex::PtexCache *cache;
-struct : public PtexErrorHandler
+struct PtexErrHandler : public PtexErrorHandler
 {
     void reportError(const char *error) override { ErrorExit(0, "%s", error); }
-} errorHandler;
+};
+extern PtexErrHandler errorHandler;
 
 struct PtexHandle
 {
@@ -35,7 +36,7 @@ struct PtexHandle
     void *buffer;
 };
 
-struct : public PtexInputHandler
+struct PtexInpHandler : public PtexInputHandler
 {
 
 public:
@@ -129,7 +130,8 @@ public:
     virtual const char *lastError() override { return 0; }
 
     /** Return the last error message encountered. */
-} ptexInputHandler;
+};
+extern PtexInpHandler ptexInputHandler;
 
 // template <typename Texture>
 // struct NormalMap

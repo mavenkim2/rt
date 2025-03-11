@@ -19,8 +19,8 @@ namespace rt
 //////////////////////////////
 // Scene
 //
-static Scene *scene_;
-static ScenePrimitives **scenes_;
+Scene *scene_;
+ScenePrimitives **scenes_;
 
 struct SceneLoadTable
 {

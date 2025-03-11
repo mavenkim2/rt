@@ -5,8 +5,8 @@
 
 namespace rt
 {
-static ShadingThreadState *shadingThreadState_;
-static ShadingGlobals *shadingGlobals_;
+ShadingThreadState *shadingThreadState_;
+ShadingGlobals *shadingGlobals_;
 
 template <typename T>
 void ThreadLocalQueue<T>::Push(TempArena scratch, ShadingThreadState *state, T *entries,

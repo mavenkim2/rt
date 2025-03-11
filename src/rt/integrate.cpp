@@ -61,7 +61,10 @@ namespace rt
 // Textures and materials
 //
 
-static Ptex::PtexCache *cache;
+Ptex::PtexCache *cache;
+PtexErrHandler errorHandler;
+PtexInpHandler ptexInputHandler;
+
 void InitializePtex()
 {
     u32 maxFiles  = 400;

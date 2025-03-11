@@ -1878,7 +1878,7 @@ void WriteTransforms(PBRTFileInfo *info, StringBuilderMapped &dataBuilder)
         Put(&dataBuilder, "TRANSFORM_START ");
         Put(&dataBuilder, "Count %u ", info->transforms.totalCount);
 
-        int runningCount = 0;
+        u32 runningCount = 0;
         for (auto *node = info->transforms.first; node != 0; node = node->next)
         {
             runningCount += node->count;
