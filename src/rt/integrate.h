@@ -303,6 +303,9 @@ struct RenderParams2
     Arena **arenas;
     OS_Handle window;
 
+    Vec3f dxCamera;
+    Vec3f dyCamera;
+
     u32 width;
     u32 height;
     Vec2u pixelMin = Vec2u(0, 0);

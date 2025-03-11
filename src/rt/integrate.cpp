@@ -1424,19 +1424,7 @@ SampledSpectrum ManifoldNextEventEstimation(SurfaceInteraction &si, Ray2 &ray,
             SurfaceInteraction newSi = checkIntersectCausticSi;
 
             // Randomly sample position on shape
-            // Vec3f shapePos = shape.SamplePosition(sampler.Get2D());
-            // TODO IMPORTANT: yikes
-            // Vec3f pCamera(-1139.0159, 23.286734, 1479.7947);
-            // shapePos -= pCamera;
-            // Vec3f d      = Normalize(shapePos - si.p);
-            // Vec3f origin = OffsetRayOrigin(si.p, si.pError, si.n, d);
-            // Ray2 shapeRay(origin, d, pos_inf);
             Vec3f d = -toLightRay.d;
-
-            // Make sure ray actually intersects caustic casting shape
-            // bool intersect = Intersect(scene, shapeRay, newSi);
-            // if (!intersect) continue;
-            // Mesh *mesh = GetMesh(newSi.sceneID, newSi.geomID);
 
             Mesh *mesh = GetMesh(newSi.sceneID, newSi.geomID);
             if (mesh->p != shape.p) break;

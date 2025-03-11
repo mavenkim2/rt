@@ -600,8 +600,10 @@ LRESULT Win32_Callback(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
     return result;
 }
 
-OS_Handle OS_WindowInit()
+OS_Handle OS_WindowInit(int width, int height)
 {
+    width                     = width == 0 ? CW_USEDEFAULT : width;
+    height                    = height == 0 ? CW_USEDEFAULT : height;
     OS_Handle result          = {};
     WNDCLASSW windowClass     = {};
     windowClass.style         = CS_HREDRAW | CS_VREDRAW;
@@ -612,10 +614,10 @@ OS_Handle OS_WindowInit()
 
     if (RegisterClassW(&windowClass))
     {
-        HWND windowHandle =
-            CreateWindowExW(0, windowClass.lpszClassName, L"rt",
-                            WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT,
-                            CW_USEDEFAULT, CW_USEDEFAULT, 0, 0, windowClass.hInstance, 0);
+        HWND windowHandle = CreateWindowExW(
+            0, windowClass.lpszClassName, L"rt",
+            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT,
+            width, height, 0, 0, windowClass.hInstance, 0);
         if (windowHandle)
         {
             result.handle = (u64)windowHandle;

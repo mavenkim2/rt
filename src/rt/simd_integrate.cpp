@@ -222,8 +222,6 @@ void RenderSIMD(Arena **arenas, Arena *arena, RenderParams2 &params)
     u32 tileCountY = (pixelHeight + tileHeight - 1) / tileHeight;
     u32 taskCount  = tileCountX * tileCountY;
 
-    // TODO: instead of adding all tasks at once, add them to the thread queue
-    // once the # queued is under a certain threshold (to save space)
     Image image;
     image.width         = width;
     image.height        = height;

@@ -245,27 +245,10 @@ void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
     AffineSpace renderFromWorld = AffineSpace::Translate(-pCamera);
     AffineSpace worldFromRender = AffineSpace::Translate(pCamera);
 
-    // Mat4 cameraFromRaster;
-    // Mat4 renderFromCamera;
-    //
-    // Mat4 NDCFromCamera;
-    // Mat4 cameraFromRender;
-    //
-    // AffineSpace renderFromWorld;
-    //
-    // Arena **arenas;
-    // ScenePrimitives **scenes;
-    // int numScenes;
-    //
-    // u32 width;
-    // u32 height;
-    // Vec2u pixelMin = Vec2u(0, 0);
-    // Vec2u pixelMax = Vec2u(0, 0);
-    // Vec2f filterRadius;
-    // u32 spp;
-    // u32 maxDepth;
-    // f32 lensRadius  = 0.f;
-    // f32 focalLength = 0.f;
+    Vec3f org      = TransformP(cameraFromRaster, Vec3f(0.f, 0.f, 0.f));
+    Vec3f dxCamera = TransformP(cameraFromRaster, Vec3f(1.f, 0.f, 0.f)) - org;
+    Vec3f dyCamera = TransformP(cameraFromRaster, Vec3f(0.f, 1.f, 0.f)) - org;
+
     RenderParams2 params    = {};
     params.cameraFromRaster = cameraFromRaster;
     params.renderFromCamera = renderFromCamera;
@@ -274,6 +257,8 @@ void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
     params.renderFromWorld  = renderFromWorld;
     params.arenas           = arenas;
     params.window           = window;
+    params.dxCamera         = dxCamera;
+    params.dyCamera         = dyCamera;
     params.width            = width;
     params.height           = height;
     if (options)

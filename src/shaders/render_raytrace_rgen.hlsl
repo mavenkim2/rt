@@ -1,8 +1,8 @@
 #include "common.hlsli"
 
-ConstantBuffer<GPUScene> scene;
+ConstantBuffer<GPUScene> scene : register(b2);
 RaytracingAccelerationStructure accel : register(t0);
-RWTexture2D<float3> image : register(u1);
+RWTexture2D<float4> image : register(u1);
 
 [shader("raygeneration")]
 void main() 
@@ -27,5 +27,5 @@ void main()
 
     TraceRay(accel, RAY_FLAG_FORCE_OPAQUE, 0xff, 0, 0, 0, desc, payload);
 
-    image[id.xy] = payload.radiance;
+    image[id.xy] = float4(payload.radiance, 1);
 }

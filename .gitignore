@@ -48,6 +48,7 @@ data/
 *.asm
 *.ilk
 build/
+build_gpu/
 build_clang/
 build_clang_gpu/
 gen/

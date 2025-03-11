@@ -342,6 +342,11 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
             result = checkAndAddExtension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
             Assert(result);
 
+            rayQueryFeatures = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+            result =
+                checkAndAddExtension(VK_KHR_RAY_QUERY_EXTENSION_NAME, 0, &rayQueryFeatures);
+            Assert(result);
+
             // TODO: update my drivers
             // clasPropertiesNV = {
             //     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_PROPERTIES_NV};
@@ -505,8 +510,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
     allocCreateInfo.device                 = device;
     allocCreateInfo.instance               = instance;
     allocCreateInfo.vulkanApiVersion       = VK_API_VERSION_1_3;
-    // these are promoted to core, so this doesn't do anything
-    allocCreateInfo.flags = VMA_ALLOCATOR_CREATE_KHR_BIND_MEMORY2_BIT |
+    allocCreateInfo.flags                  = VMA_ALLOCATOR_CREATE_KHR_BIND_MEMORY2_BIT |
                             VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
 
     VmaVulkanFunctions vulkanFunctions    = {};
@@ -842,9 +846,12 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
     }
 }
 
-Swapchain Vulkan::CreateSwapchain(OS_Handle window, u32 width, u32 height)
+Swapchain Vulkan::CreateSwapchain(OS_Handle window, VkFormat format, u32 width, u32 height)
 {
-    Swapchain swapchain = {};
+    Swapchain swapchain     = {};
+    swapchain.extent.width  = width;
+    swapchain.extent.height = height;
+    swapchain.format        = format;
 #if _WIN32
     VkWin32SurfaceCreateInfoKHR win32SurfaceCreateInfo = {};
     win32SurfaceCreateInfo.sType     = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
@@ -862,11 +869,6 @@ Swapchain Vulkan::CreateSwapchain(OS_Handle window, u32 width, u32 height)
     for (u32 familyIndex = 0; familyIndex < queueFamilyProperties.Length(); familyIndex++)
     {
         VkBool32 supported = false;
-        // TODO: why is this function pointer null?
-        // if (vkGetPhysicalDeviceSurfaceSupportKHR == 0)
-        // {
-        //     volkLoadInstanceOnly(instance);
-        // }
         Assert(vkGetPhysicalDeviceSurfaceSupportKHR);
         VK_CHECK(vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, familyIndex,
                                                       swapchain.surface, &supported));
@@ -942,12 +944,11 @@ b32 Vulkan::CreateSwapchain(Swapchain *swapchain)
         }
         else
         {
-            swapchain->extent = {swapchain->width, swapchain->height};
             swapchain->extent.width =
-                Clamp(swapchain->width, surfaceCapabilities.minImageExtent.width,
+                Clamp(swapchain->extent.width, surfaceCapabilities.minImageExtent.width,
                       surfaceCapabilities.maxImageExtent.width);
             swapchain->extent.height =
-                Clamp(swapchain->height, surfaceCapabilities.minImageExtent.height,
+                Clamp(swapchain->extent.height, surfaceCapabilities.minImageExtent.height,
                       surfaceCapabilities.maxImageExtent.height);
         }
     }
@@ -1094,6 +1095,7 @@ void Vulkan::AllocateCommandBuffers(ThreadCommandPool &pool, QueueType type)
     VK_CHECK(vkAllocateCommandBuffers(device, &bufferInfo, buffers));
     for (int i = 0; i < ThreadCommandPool::commandBufferPoolSize; i++)
     {
+        node->values[i]        = CommandBuffer();
         node->values[i].buffer = buffers[i];
     }
 }
@@ -1267,23 +1269,64 @@ Vulkan::ImageMemoryBarrier(VkImage image, VkImageLayout oldLayout, VkImageLayout
     return barrier;
 }
 
-// void CommandBuffer::Barrier(GPUImage *image, VkImageLayout layout, VkPipelineStageFlags2
-// stage,
-//                             VkAccessFlags2 access)
-// {
-//     VkImageMemoryBarrier2 barrier = device->ImageMemoryBarrier(
-//         image->image, image->lastLayout, layout, image->lastPipeline, stage,
-//         image->lastAccess, access, image->aspect);
-//
-//     VkDependencyInfo dependencyInfo        = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-//     dependencyInfo.imageMemoryBarrierCount = 1;
-//     dependencyInfo.pImageMemoryBarriers    = &barrier;
-//     vkCmdPipelineBarrier2(buffer, &dependencyInfo);
-//
-//     image->lastLayout   = layout;
-//     image->lastPipeline = stage;
-//     image->lastAccess   = access;
-// }
+void CommandBuffer::Barrier(VkPipelineStageFlags2 srcStage, VkPipelineStageFlags2 dstStage,
+                            VkPipelineStageFlags2 srcAccess, VkPipelineStageFlags2 dstAccess)
+{
+    VkMemoryBarrier2 barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    barrier.srcStageMask     = srcStage;
+    barrier.srcAccessMask    = srcAccess;
+    barrier.dstStageMask     = dstStage;
+    barrier.dstAccessMask    = dstAccess;
+
+    memBarriers.push_back(barrier);
+}
+
+void CommandBuffer::Barrier(GPUImage *image, VkImageLayout layout, VkPipelineStageFlags2 stage,
+                            VkAccessFlags2 access)
+{
+    VkImageMemoryBarrier2 barrier = device->ImageMemoryBarrier(
+        image->image, image->lastLayout, layout, image->lastPipeline, stage, image->lastAccess,
+        access, image->aspect);
+
+    imageBarriers.push_back(barrier);
+
+    image->lastLayout   = layout;
+    image->lastPipeline = stage;
+    image->lastAccess   = access;
+}
+
+void CommandBuffer::Barrier(GPUBuffer *inBuffer, VkPipelineStageFlags2 stage,
+                            VkAccessFlags2 access)
+{
+    VkBufferMemoryBarrier2 barrier = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+    barrier.srcStageMask           = inBuffer->lastStage;
+    barrier.srcAccessMask          = inBuffer->lastAccess;
+    barrier.dstStageMask           = stage;
+    barrier.dstAccessMask          = access;
+    barrier.srcQueueFamilyIndex    = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex    = VK_QUEUE_FAMILY_IGNORED;
+    barrier.buffer                 = inBuffer->buffer;
+    barrier.offset                 = 0;
+    barrier.size                   = VK_WHOLE_SIZE;
+
+    bufferBarriers.push_back(barrier);
+
+    inBuffer->lastStage  = stage;
+    inBuffer->lastAccess = access;
+}
+
+void CommandBuffer::FlushBarriers()
+{
+    VkDependencyInfo dependencyInfo         = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dependencyInfo.bufferMemoryBarrierCount = bufferBarriers.size();
+    dependencyInfo.pBufferMemoryBarriers    = bufferBarriers.data();
+    dependencyInfo.imageMemoryBarrierCount  = imageBarriers.size();
+    dependencyInfo.pImageMemoryBarriers     = imageBarriers.data();
+    vkCmdPipelineBarrier2(buffer, &dependencyInfo);
+
+    bufferBarriers.clear();
+    imageBarriers.clear();
+}
 
 void Vulkan::CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage *image)
 {
@@ -1349,8 +1392,8 @@ void Vulkan::CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage 
         blitInfo.dstSubresource.mipLevel       = 0;
         blitInfo.dstSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
         blitInfo.dstSubresource.layerCount     = 1;
-        blitInfo.dstOffsets[1].x               = (int)swapchain->width;
-        blitInfo.dstOffsets[1].y               = (int)swapchain->height;
+        blitInfo.dstOffsets[1].x               = (int)swapchain->extent.width;
+        blitInfo.dstOffsets[1].y               = (int)swapchain->extent.height;
         blitInfo.dstOffsets[1].z               = 1;
 
         VkBlitImageInfo2 blit = {VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2};
@@ -1441,13 +1484,14 @@ GPUBuffer Vulkan::CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
 }
 
 GPUImage Vulkan::CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageType type,
-                             VkImageLayout initialLayout, int width, int height, int depth,
-                             int numMips, int numLayers)
+                             int width, int height, int depth, int numMips, int numLayers)
 {
     GPUImage image = {};
+    image.width    = width;
+    image.height   = height;
+    image.aspect   = VK_IMAGE_ASPECT_COLOR_BIT;
 
-    VkImageCreateInfo imageInfo = {};
-    imageInfo.sType             = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    VkImageCreateInfo imageInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     imageInfo.imageType         = type;
     imageInfo.extent.width      = width;
     imageInfo.extent.height     = height;
@@ -1456,8 +1500,9 @@ GPUImage Vulkan::CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageTy
     imageInfo.arrayLayers       = numLayers;
     imageInfo.format            = format;
     imageInfo.tiling            = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.initialLayout     = initialLayout;
+    imageInfo.initialLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
     imageInfo.usage             = flags;
+    imageInfo.samples           = VK_SAMPLE_COUNT_1_BIT;
 
     if (families.Length() > 1)
     {
@@ -1473,6 +1518,12 @@ GPUImage Vulkan::CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageTy
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.flags   = 0;
 
+    VkImageFormatProperties imageFormatProperties;
+
+    VK_CHECK(vkGetPhysicalDeviceImageFormatProperties(
+        physicalDevice, imageInfo.format, imageInfo.imageType, imageInfo.tiling,
+        imageInfo.usage, imageInfo.flags, &imageFormatProperties));
+
     VmaAllocationCreateInfo allocInfo = {};
     allocInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
 
@@ -1482,7 +1533,7 @@ GPUImage Vulkan::CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageTy
     VkImageViewCreateInfo viewInfo = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     switch (type)
     {
-        case VK_IMAGE_TYPE_2D: viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        case VK_IMAGE_TYPE_2D: viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D; break;
         default: Assert(0);
     }
     viewInfo.image                           = image.image;
@@ -1493,8 +1544,6 @@ GPUImage Vulkan::CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageTy
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
 
-    viewInfo.flags = VK_IMAGE_VIEW_CREATE_FLAG_BITS_MAX_ENUM;
-
     vkCreateImageView(device, &viewInfo, 0, &image.imageView);
     return image;
 }
@@ -1503,9 +1552,11 @@ TransferBuffer Vulkan::GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSi
 {
     int threadIndex = GetThreadIndex();
 
-    GPUBuffer buffer = CreateBuffer(flags | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                    totalSize);
+    GPUBuffer buffer  = CreateBuffer(flags | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                     totalSize);
+    buffer.lastStage  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    buffer.lastAccess = VK_ACCESS_2_TRANSFER_WRITE_BIT;
     GPUBuffer stagingBuffer =
         CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, totalSize,
                      VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
@@ -1557,6 +1608,8 @@ VkDescriptorSetLayout DescriptorSetLayout::CreateLayout()
     createInfo.pBindings    = bindings.data();
     VkDescriptorSetLayout layout;
     VK_CHECK(vkCreateDescriptorSetLayout(device->device, &createInfo, 0, &layout));
+
+    descriptorInfo.resize(bindings.size());
     return layout;
 }
 
@@ -1567,32 +1620,50 @@ void DescriptorSetLayout::Bind(int index, GPUImage *image)
     info.imageView             = image->imageView;
     info.imageLayout           = image->lastLayout;
 
-    DescriptorInfo dInfo;
-    dInfo.image = info;
-    descriptorInfo.push_back(dInfo);
+    descriptorInfo[index].image = info;
 
     VkWriteDescriptorSet set = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     set.descriptorType       = bindings[index].descriptorType;
     set.descriptorCount      = 1;
     set.dstSet               = VK_NULL_HANDLE;
     set.dstBinding           = bindings[index].binding;
-    set.pImageInfo           = &info;
+    set.pImageInfo           = &descriptorInfo[index].image;
 
     writeDescriptorSets.push_back(set);
 }
 
-void DescriptorSetLayout::Bind(int index, VkAccelerationStructureKHR accel)
+void DescriptorSetLayout::Bind(int index, GPUBuffer *buffer)
+{
+    Assert(index < bindings.size());
+    VkDescriptorBufferInfo info = {};
+    info.buffer                 = buffer->buffer;
+    info.offset                 = 0;
+    info.range                  = VK_WHOLE_SIZE;
+
+    descriptorInfo[index].buffer = info;
+
+    VkWriteDescriptorSet set = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    set.descriptorType       = bindings[index].descriptorType;
+    set.descriptorCount      = 1;
+    set.dstSet               = VK_NULL_HANDLE;
+    set.dstBinding           = bindings[index].binding;
+    set.pBufferInfo          = &descriptorInfo[index].buffer;
+
+    writeDescriptorSets.push_back(set);
+}
+
+void DescriptorSetLayout::Bind(int index, VkAccelerationStructureKHR *accel)
 {
     Assert(index < bindings.size());
     VkWriteDescriptorSetAccelerationStructureKHR writeSet = {
-        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    writeSet.pAccelerationStructures    = &accel;
+        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+    writeSet.pAccelerationStructures    = accel;
     writeSet.accelerationStructureCount = 1;
 
-    descriptorInfo.push_back({writeSet});
+    descriptorInfo[index].accel = writeSet;
 
     VkWriteDescriptorSet set = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    set.pNext                = &descriptorInfo.back();
+    set.pNext                = &descriptorInfo[index].accel;
     set.descriptorType       = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     set.descriptorCount      = 1;
     set.dstSet               = VK_NULL_HANDLE;
@@ -1791,13 +1862,19 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
     VkDescriptorSet set;
     VkDescriptorPool pool;
     {
+        ScratchArena scratch;
         VkDescriptorPoolCreateInfo poolCreateInfo = {
             VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        VkDescriptorPoolSize poolSize = {};
-        poolSize.descriptorCount      = layout->bindings.size();
-        poolCreateInfo.pPoolSizes     = &poolSize;
-        poolCreateInfo.poolSizeCount  = 1;
-        poolCreateInfo.maxSets        = 1;
+        VkDescriptorPoolSize *poolSize =
+            PushArrayNoZero(scratch.temp.arena, VkDescriptorPoolSize, layout->bindings.size());
+        for (int i = 0; i < (int)layout->bindings.size(); i++)
+        {
+            poolSize[i].type            = layout->bindings[i].descriptorType;
+            poolSize[i].descriptorCount = 1;
+        }
+        poolCreateInfo.pPoolSizes    = poolSize;
+        poolCreateInfo.poolSizeCount = layout->bindings.size();
+        poolCreateInfo.maxSets       = 1;
 
         vkCreateDescriptorPool(device, &poolCreateInfo, 0, &pool);
 
@@ -1872,7 +1949,7 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
             VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR |
                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            dataSize,
+            offset,
             VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
 
         VkBufferDeviceAddressInfo deviceAddressInfo = {
@@ -1900,8 +1977,57 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
     return state;
 }
 
-GPUAccelerationStructure Vulkan::CreateBLAS(CommandBuffer *cmd, const GPUMesh *meshes,
-                                            int count)
+GPUAccelerationStructure CommandBuffer::BuildAS(
+    VkAccelerationStructureTypeKHR accelType, VkAccelerationStructureGeometryKHR *geometries,
+    int count, VkAccelerationStructureBuildRangeInfoKHR *buildRanges, u32 *maxPrimitiveCounts)
+{
+    VkAccelerationStructureBuildGeometryInfoKHR buildInfo = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+    buildInfo.type  = accelType;
+    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                      VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
+    buildInfo.pGeometries   = geometries;
+    buildInfo.geometryCount = count;
+
+    VkAccelerationStructureBuildSizesInfoKHR sizeInfo = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+
+    vkGetAccelerationStructureBuildSizesKHR(device->device,
+                                            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                                            &buildInfo, maxPrimitiveCounts, &sizeInfo);
+
+    GPUBuffer scratch = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                             sizeInfo.buildScratchSize);
+
+    VkBufferDeviceAddressInfo info = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+    info.buffer                    = scratch.buffer;
+    VkDeviceAddress scratchAddress = vkGetBufferDeviceAddress(device->device, &info);
+
+    GPUAccelerationStructure bvh;
+
+    {
+        bvh.buffer =
+            device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
+                                 sizeInfo.accelerationStructureSize);
+        VkAccelerationStructureCreateInfoKHR accelCreateInfo = {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+
+        accelCreateInfo.buffer = bvh.buffer.buffer;
+        accelCreateInfo.size   = sizeInfo.accelerationStructureSize;
+        accelCreateInfo.type   = accelType;
+
+        vkCreateAccelerationStructureKHR(device->device, &accelCreateInfo, 0, &bvh.as);
+    }
+
+    buildInfo.scratchData.deviceAddress = scratchAddress;
+    buildInfo.dstAccelerationStructure  = bvh.as;
+
+    vkCmdBuildAccelerationStructuresKHR(buffer, 1, &buildInfo, &buildRanges);
+    return bvh;
+}
+
+GPUAccelerationStructure CommandBuffer::BuildBLAS(const GPUMesh *meshes, int count)
 {
     ScratchArena temp;
 
@@ -1936,50 +2062,24 @@ GPUAccelerationStructure Vulkan::CreateBLAS(CommandBuffer *cmd, const GPUMesh *m
         maxPrimitiveCounts.Push(primitiveCount);
     }
 
-    VkAccelerationStructureBuildGeometryInfoKHR buildInfo = {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
-    buildInfo.type  = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
-                      VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
-    buildInfo.pGeometries   = geometries.data;
-    buildInfo.geometryCount = geometries.Length();
+    return BuildAS(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, geometries.data,
+                   geometries.Length(), buildRanges.data, maxPrimitiveCounts.data);
+}
 
-    VkAccelerationStructureBuildSizesInfoKHR sizeInfo = {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+GPUAccelerationStructure CommandBuffer::BuildTLAS(GPUBuffer *instanceData, u32 numInstances)
+{
+    VkAccelerationStructureBuildRangeInfoKHR buildRange = {};
+    buildRange.primitiveCount                           = numInstances;
 
-    vkGetAccelerationStructureBuildSizesKHR(device,
-                                            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                                            &buildInfo, maxPrimitiveCounts.data, &sizeInfo);
+    VkAccelerationStructureGeometryKHR geometry = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+    geometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+    auto &instances       = geometry.geometry.instances;
+    instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+    instances.data.deviceAddress = device->GetDeviceAddress(instanceData->buffer);
 
-    GPUBuffer scratch = CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                     sizeInfo.buildScratchSize);
-
-    VkBufferDeviceAddressInfo info = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
-    info.buffer                    = scratch.buffer;
-    VkDeviceAddress scratchAddress = vkGetBufferDeviceAddress(device, &info);
-
-    GPUAccelerationStructure bvh;
-
-    {
-        bvh.buffer = CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
-                                  sizeInfo.accelerationStructureSize);
-        VkAccelerationStructureCreateInfoKHR accelCreateInfo = {
-            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
-
-        accelCreateInfo.buffer = bvh.buffer.buffer;
-        accelCreateInfo.size   = sizeInfo.accelerationStructureSize;
-        accelCreateInfo.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-
-        vkCreateAccelerationStructureKHR(device, &accelCreateInfo, 0, &bvh.as);
-    }
-
-    buildInfo.scratchData.deviceAddress = scratchAddress;
-    buildInfo.dstAccelerationStructure  = bvh.as;
-
-    vkCmdBuildAccelerationStructuresKHR(cmd->buffer, 1, &buildInfo, &buildRanges.data);
-
-    return bvh;
+    return BuildAS(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, &geometry, 1, &buildRange,
+                   &numInstances);
 }
 
 QueryPool Vulkan::CreateQuery(QueryType type, int count)

@@ -87,7 +87,6 @@ struct GPUScene
     float3x4 renderFromCamera;
     float3 dxCamera;
     float3 dyCamera;
-    float3 pCamera;
     float lensRadius;
     float focalLength;
 

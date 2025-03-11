@@ -174,6 +174,8 @@ struct GPUBuffer
     VkBuffer buffer;
     VmaAllocation allocation;
     size_t size;
+    VkPipelineStageFlags2 lastStage;
+    VkAccessFlags2 lastAccess;
 };
 
 enum RayShaderType
@@ -189,6 +191,7 @@ enum class RTBindings
 {
     Accel,
     Image,
+    Scene,
 };
 
 struct RayTracingState
@@ -222,9 +225,6 @@ struct Swapchain
     VkExtent2D extent;
     VkFormat format;
 
-    u32 width;
-    u32 height;
-
     std::vector<VkImage> images;
     std::vector<VkImageView> imageViews;
 
@@ -246,6 +246,22 @@ struct GPUImage
     VkImageLayout lastLayout;
     VkAccessFlags2 lastAccess;
     VkImageAspectFlags aspect;
+};
+
+struct GPUMesh
+{
+    u64 vertexAddress;
+    u64 indexAddress;
+
+    u32 numIndices;
+    u32 numVertices;
+    u32 numFaces;
+};
+
+struct GPUAccelerationStructure
+{
+    VkAccelerationStructureKHR as;
+    GPUBuffer buffer;
 };
 
 struct TransferBuffer
@@ -276,6 +292,7 @@ struct DescriptorSetLayout
     {
         VkWriteDescriptorSetAccelerationStructureKHR accel;
         VkDescriptorImageInfo image;
+        VkDescriptorBufferInfo buffer;
     };
     std::vector<VkDescriptorSetLayoutBinding> bindings;
     std::vector<DescriptorInfo> descriptorInfo;
@@ -283,7 +300,8 @@ struct DescriptorSetLayout
 
     int AddBinding(u32 binding, VkDescriptorType type, VkShaderStageFlags stage);
     void Bind(int index, GPUImage *image);
-    void Bind(int index, VkAccelerationStructureKHR accel);
+    void Bind(int index, GPUBuffer *buffer);
+    void Bind(int index, VkAccelerationStructureKHR *accel);
     VkDescriptorSetLayout CreateLayout();
 };
 
@@ -297,11 +315,10 @@ struct CommandBuffer
 
     u32 currentBuffer = 0;
     // PipelineState *currentPipeline              = 0;
-    std::atomic_bool waitedOn{false};
 
-    std::vector<VkImageMemoryBarrier2> endPassImageMemoryBarriers;
-    std::vector<Swapchain> updateSwapchains;
-
+    std::vector<VkMemoryBarrier2> memBarriers;
+    std::vector<VkImageMemoryBarrier2> imageBarriers;
+    std::vector<VkBufferMemoryBarrier2> bufferBarriers;
     std::vector<Semaphore> waitSemaphores;
     std::vector<Semaphore> signalSemaphores;
 
@@ -325,8 +342,19 @@ struct CommandBuffer
     void BindDescriptorSets(VkPipelineBindPoint bindPoint, DescriptorSetLayout *layout,
                             VkPipelineLayout pipeLayout, VkDescriptorSet set);
     void TraceRays(RayTracingState *state, u32 width, u32 height, u32 depth);
-    // void Barrier(GPUImage *image, VkImageLayout layout, VkPipelineStageFlags2 stage,
-    //              VkAccessFlags2 access);
+    void Barrier(GPUImage *image, VkImageLayout layout, VkPipelineStageFlags2 stage,
+                 VkAccessFlags2 access);
+    void Barrier(GPUBuffer *buffer, VkPipelineStageFlags2 stage, VkAccessFlags2 access);
+    void Barrier(VkPipelineStageFlags2 srcStage, VkPipelineStageFlags2 dstStage,
+                 VkPipelineStageFlags2 srcAccess, VkPipelineStageFlags2 dstAccess);
+
+    void FlushBarriers();
+    GPUAccelerationStructure BuildAS(VkAccelerationStructureTypeKHR type,
+                                     VkAccelerationStructureGeometryKHR *geometries, int count,
+                                     VkAccelerationStructureBuildRangeInfoKHR *buildRanges,
+                                     u32 *maxPrimitiveCounts);
+    GPUAccelerationStructure BuildTLAS(GPUBuffer *instanceData, u32 numInstances);
+    GPUAccelerationStructure BuildBLAS(const GPUMesh *meshes, int count);
 };
 
 typedef ChunkedLinkedList<CommandBuffer> CommandBufferList;
@@ -350,22 +378,6 @@ struct CommandQueue
 
     VkSemaphore submitSemaphore;
     u64 submissionID;
-};
-
-struct GPUAccelerationStructure
-{
-    VkAccelerationStructureKHR as;
-    GPUBuffer buffer;
-};
-
-struct GPUMesh
-{
-    u64 vertexAddress;
-    u64 indexAddress;
-
-    u32 numIndices;
-    u32 numVertices;
-    u32 numFaces;
 };
 
 struct Vulkan
@@ -413,6 +425,8 @@ struct Vulkan
 
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtPipeProperties;
     VkPhysicalDeviceRayTracingPipelineFeaturesKHR rtPipeFeatures;
+
+    VkPhysicalDeviceRayQueryFeaturesKHR rayQueryFeatures;
 
     VkPhysicalDeviceClusterAccelerationStructurePropertiesNV clasPropertiesNV;
     VkPhysicalDeviceClusterAccelerationStructureFeaturesNV clasFeaturesNV;
@@ -572,7 +586,7 @@ struct Vulkan
 
     Vulkan(ValidationMode validationMode,
            GPUDevicePreference preference = GPUDevicePreference::Discrete);
-    Swapchain CreateSwapchain(OS_Handle window, u32 width, u32 height);
+    Swapchain CreateSwapchain(OS_Handle window, VkFormat format, u32 width, u32 height);
     Semaphore CreateGraphicsSemaphore();
     void AllocateCommandBuffers(ThreadCommandPool &pool, QueueType type);
     void CheckInitializedThreadCommandPool(int threadIndex);
@@ -590,8 +604,8 @@ struct Vulkan
     GPUBuffer CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
                            VmaAllocationCreateFlags vmaFlags = 0);
     GPUImage CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageType type,
-                         VkImageLayout initialLayout, int width = 1, int height = 1,
-                         int depth = 1, int numMips = 1, int numLayers = 1);
+                         int width = 1, int height = 1, int depth = 1, int numMips = 1,
+                         int numLayers = 1);
     TransferBuffer GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize);
     u64 GetDeviceAddress(VkBuffer buffer);
     void BeginEvent(CommandBuffer *cmd, string name);
@@ -601,7 +615,6 @@ struct Vulkan
                                    VkAccelerationStructureKHR accel);
     RayTracingState CreateRayTracingPipeline(Shader **shaders, int counts[RST_Max],
                                              DescriptorSetLayout *layout, u32 maxDepth);
-    GPUAccelerationStructure CreateBLAS(CommandBuffer *cmd, const GPUMesh *meshes, int count);
     QueryPool CreateQuery(QueryType type, int count);
     QueryPool GetCompactionSizes(CommandBuffer *cmd, GPUAccelerationStructure **as, int count);
     void CompactBLASes(CommandBuffer *cmd, QueryPool &pool, GPUAccelerationStructure **as,
@@ -763,6 +776,19 @@ private:
     //
     i32 GetMemoryTypeIndex(u32 typeBits, VkMemoryPropertyFlags flags);
 };
+
+inline VkTransformMatrixKHR ConvertMatrix(const AffineSpace &space)
+{
+    VkTransformMatrixKHR matrix;
+    for (int r = 0; r < 3; r++)
+    {
+        for (int c = 0; c < 4; c++)
+        {
+            matrix.matrix[r][c] = space[c][r];
+        }
+    }
+    return matrix;
+}
 
 extern Vulkan *device;
 

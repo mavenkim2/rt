@@ -1063,7 +1063,7 @@ int main(int argc, char *argv[])
     threadMemoryStatistics = PushArray(arena, ThreadMemoryStatistics, numProcessors);
     scheduler.Init(numProcessors);
 
-    OS_Handle handle = OS_WindowInit();
+    OS_Handle handle = OS_WindowInit(1920, 804);
 
     const u32 count = 3000000;
 

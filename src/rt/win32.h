@@ -62,7 +62,7 @@ b32 OS_SignalWait(OS_Handle input);
 void OS_Init();
 
 LRESULT Win32_Callback(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
-OS_Handle OS_WindowInit();
+OS_Handle OS_WindowInit(int width = 0, int height = 0);
 } // namespace rt
 
 #endif
