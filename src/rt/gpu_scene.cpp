@@ -163,10 +163,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
         VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TYPE_2D, params->width, params->height);
 
-    DescriptorSetLayout layout;
-    int accelBindingIndex = layout.AddBinding((u32)RTBindings::Accel,
-                                              VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
-                                              VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+    DescriptorSetLayout layout = {};
+    int accelBindingIndex      = layout.AddBinding((u32)RTBindings::Accel,
+                                                   VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                                   VK_SHADER_STAGE_RAYGEN_BIT_KHR);
     int imageBindingIndex =
         layout.AddBinding((u32)RTBindings::Image, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
                           VK_SHADER_STAGE_RAYGEN_BIT_KHR);
@@ -250,6 +250,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     MemoryCopy(transferPtr, &instance, sizeof(VkAccelerationStructureInstanceKHR));
 
     CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics);
+    cmd->SubmitTransfer(&instanceTransfer);
     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                  VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
@@ -262,13 +263,60 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     cmd->FlushBarriers();
     GPUAccelerationStructure tlas = cmd->BuildTLAS(&instanceTransfer.buffer, 1);
     cmd->BindPipeline(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rts.pipeline);
-    layout.Bind(accelBindingIndex, &tlas.as);
-    layout.Bind(imageBindingIndex, &image);
-    layout.Bind(sceneBindingIndex, &transferBuffer.buffer);
-    cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, &layout, rts.layout,
-                            rts.set);
+    DescriptorSet descriptorSet = layout.CreateDescriptorSet()
+                                      .Bind(accelBindingIndex, &tlas.as)
+                                      .Bind(imageBindingIndex, &image)
+                                      .Bind(sceneBindingIndex, &transferBuffer.buffer);
+    cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, &descriptorSet,
+                            rts.layout);
     cmd->TraceRays(&rts, params->width, params->height, 1);
     device->CopyFrameBuffer(&swapchain, cmd, &image);
-    // device->SubmitCommandBuffer(cmd);
+
+    f32 frameDt = 1.f / 60.f;
+    for (;;)
+    {
+        MSG message;
+        while (PeekMessageW(&message, 0, 0, 0, PM_REMOVE))
+        {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+        f32 frameTime = OS_NowSeconds();
+
+        device->BeginFrame();
+        cmd = device->BeginCommandBuffer(QueueType_Graphics);
+        cmd->Barrier(&image, VK_IMAGE_LAYOUT_GENERAL,
+                     VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                     VK_ACCESS_2_SHADER_WRITE_BIT);
+        cmd->FlushBarriers();
+        cmd->BindPipeline(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rts.pipeline);
+        descriptorSet = layout.CreateDescriptorSet()
+                            .Bind(accelBindingIndex, &tlas.as)
+                            .Bind(imageBindingIndex, &image)
+                            .Bind(sceneBindingIndex, &transferBuffer.buffer);
+        cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, &descriptorSet,
+                                rts.layout);
+        cmd->TraceRays(&rts, params->width, params->height, 1);
+        device->CopyFrameBuffer(&swapchain, cmd, &image);
+        device->EndFrame();
+
+        // Wait until new update
+        f32 endWorkFrameTime = OS_NowSeconds();
+        f32 timeElapsed      = endWorkFrameTime - frameTime;
+
+        if (timeElapsed < frameDt)
+        {
+            u32 msTimeToSleep = (u32)(1000.f * (frameDt - timeElapsed));
+            if (msTimeToSleep > 0)
+            {
+                OS_Sleep(msTimeToSleep);
+            }
+        }
+
+        while (timeElapsed < frameDt)
+        {
+            timeElapsed = OS_NowSeconds() - frameTime;
+        }
+    }
 }
 } // namespace rt

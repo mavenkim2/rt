@@ -12,6 +12,7 @@ static Win32Thread *win32FreeThread;
 static ChunkedLinkedList<OS_Event> events;
 static u64 osPerformanceFrequency;
 static b32 win32LargePagesEnabled;
+static u64 startCounter;
 
 PerformanceCounter OS_StartCounter()
 {
@@ -476,6 +477,13 @@ void OS_Init()
     LARGE_INTEGER frequency;
     QueryPerformanceFrequency(&frequency);
     osPerformanceFrequency = frequency.QuadPart;
+
+    LARGE_INTEGER counter;
+    if (QueryPerformanceCounter(&counter))
+    {
+        startCounter = counter.QuadPart;
+    }
+    events = ChunkedLinkedList<OS_Event>(win32Arena);
 }
 
 OS_Event Win32_CreateKeyEvent(OS_Key key, b32 isDown)
@@ -625,6 +633,21 @@ OS_Handle OS_WindowInit(int width, int height)
     }
     return result;
 }
+
+f32 OS_NowSeconds()
+{
+    f32 result;
+
+    LARGE_INTEGER counter;
+    if (QueryPerformanceCounter(&counter))
+    {
+        result = (f32)(counter.QuadPart - startCounter) / osPerformanceFrequency;
+    }
+
+    return result;
+}
+
+void OS_Sleep(u32 ms) { Sleep(ms); }
 
 inline u64 InterlockedAdd(u64 volatile *addend, u64 value)
 {

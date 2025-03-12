@@ -60,6 +60,8 @@ void OS_ReleaseSemaphores(OS_Handle input, u32 count);
 void OS_ThreadJoin(OS_Handle handle);
 b32 OS_SignalWait(OS_Handle input);
 void OS_Init();
+f32 OS_NowSeconds();
+void OS_Sleep(u32 ms);
 
 LRESULT Win32_Callback(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
 OS_Handle OS_WindowInit(int width = 0, int height = 0);

@@ -36,8 +36,8 @@ namespace rt
         Assert(result_ == VK_SUCCESS);                                                        \
     } while (0);
 
-static const int cNumBuffers = 2;
-using CopyFunction           = std::function<void(void *)>;
+static const int numActiveFrames = 2;
+using CopyFunction               = std::function<void(void *)>;
 
 enum class ResourceUsage : u32
 {
@@ -198,7 +198,6 @@ struct RayTracingState
 {
     VkPipeline pipeline;
     VkPipelineLayout layout;
-    VkDescriptorSet set;
     union
     {
         struct
@@ -286,7 +285,8 @@ struct Semaphore
     u64 signalValue;
 };
 
-struct DescriptorSetLayout
+struct DescriptorSetLayout;
+struct DescriptorSet
 {
     union DescriptorInfo
     {
@@ -294,15 +294,25 @@ struct DescriptorSetLayout
         VkDescriptorImageInfo image;
         VkDescriptorBufferInfo buffer;
     };
-    std::vector<VkDescriptorSetLayoutBinding> bindings;
+
+    VkDescriptorSet set;
     std::vector<DescriptorInfo> descriptorInfo;
     std::vector<VkWriteDescriptorSet> writeDescriptorSets;
+    DescriptorSetLayout *layout;
+
+    DescriptorSet &Bind(int index, GPUImage *image);
+    DescriptorSet &Bind(int index, GPUBuffer *buffer);
+    DescriptorSet &Bind(int index, VkAccelerationStructureKHR *accel);
+};
+
+struct DescriptorSetLayout
+{
+    std::vector<VkDescriptorSetLayoutBinding> bindings;
+    VkDescriptorSetLayout layout;
 
     int AddBinding(u32 binding, VkDescriptorType type, VkShaderStageFlags stage);
-    void Bind(int index, GPUImage *image);
-    void Bind(int index, GPUBuffer *buffer);
-    void Bind(int index, VkAccelerationStructureKHR *accel);
-    VkDescriptorSetLayout CreateLayout();
+    VkDescriptorSetLayout *GetVulkanLayout();
+    DescriptorSet CreateDescriptorSet();
 };
 
 struct CommandBuffer
@@ -329,18 +339,12 @@ struct CommandBuffer
     // BindedResource uavTable[cMaxBindings] = {};
     // Sampler *samTable[cMaxBindings]       = {};
 
-    // Descriptor set
-    // VkDescriptorSet mDescriptorSets[cNumBuffers][QueueType_Count];
-    std::vector<VkDescriptorSet> descriptorSets[cNumBuffers];
-    u32 currentSet = 0;
-    // b32 mIsDirty[cNumBuffers][QueueType_Count] = {};
-
     void Wait(Semaphore s) { waitSemaphores.push_back(s); }
     void Signal(Semaphore s) { signalSemaphores.push_back(s); }
     void SubmitTransfer(TransferBuffer *buffer);
     void BindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipeline);
-    void BindDescriptorSets(VkPipelineBindPoint bindPoint, DescriptorSetLayout *layout,
-                            VkPipelineLayout pipeLayout, VkDescriptorSet set);
+    void BindDescriptorSets(VkPipelineBindPoint bindPoint, DescriptorSet *set,
+                            VkPipelineLayout pipeLayout);
     void TraceRays(RayTracingState *state, u32 width, u32 height, u32 depth);
     void Barrier(GPUImage *image, VkImageLayout layout, VkPipelineStageFlags2 stage,
                  VkAccessFlags2 access);
@@ -361,14 +365,18 @@ typedef ChunkedLinkedList<CommandBuffer> CommandBufferList;
 typedef StaticArray<CommandBufferList> CommandBufferPool;
 typedef StaticArray<ChunkedLinkedList<CommandBuffer *>> CommandBufferFreeList;
 
-struct alignas(CACHE_LINE_SIZE) ThreadCommandPool
+struct alignas(CACHE_LINE_SIZE) ThreadPool
 {
-    Arena *arena;
     static const int commandBufferPoolSize = 16;
+    Arena *arena;
+    u64 currentFrame;
 
     StaticArray<VkCommandPool> pool;
     CommandBufferPool buffers;
     CommandBufferFreeList freeList;
+
+    VkDescriptorPool descriptorPool[numActiveFrames];
+    std::vector<VkDescriptorSet> sets;
 };
 
 struct CommandQueue
@@ -437,7 +445,6 @@ struct Vulkan
     // Queues, command pools & buffers, fences
     //
     CommandQueue queues[QueueType_Count];
-    VkFence frameFences[cNumBuffers][QueueType_Count] = {};
 
     b32 debugUtils = false;
 
@@ -479,30 +486,6 @@ struct Vulkan
     //////////////////////////////
     // Buffers
     //
-    // struct GPUBufferVulkan
-    // {
-    //     VkBuffer buffer;
-    //     VmaAllocation allocation;
-    //
-    //     struct Subresource
-    //     {
-    //         DescriptorType type;
-    //         VkDescriptorBufferInfo info;
-    //
-    //         // Texel buffer views infromation
-    //         Format format;
-    //         VkBufferView view = VK_NULL_HANDLE;
-    //
-    //         // Bindless descriptor index
-    //         i32 descriptorIndex = -1;
-    //
-    //         b32 IsBindless() { return descriptorIndex != -1; }
-    //     };
-    //     i32 subresourceSrv;
-    //     i32 subresourceUav;
-    //     std::vector<Subresource> subresources;
-    //     GPUBufferVulkan *next;
-    // };
 
     //////////////////////////////
     // Textures/Samplers
@@ -542,23 +525,23 @@ struct Vulkan
 
     VmaAllocator allocator;
     Mutex cleanupMutex = {};
-    std::vector<VkSemaphore> cleanupSemaphores[cNumBuffers];
-    std::vector<VkSwapchainKHR> cleanupSwapchains[cNumBuffers];
-    std::vector<VkImageView> cleanupImageViews[cNumBuffers];
-    std::vector<VkBufferView> cleanupBufferViews[cNumBuffers];
+    std::vector<VkSemaphore> cleanupSemaphores[numActiveFrames];
+    std::vector<VkSwapchainKHR> cleanupSwapchains[numActiveFrames];
+    std::vector<VkImageView> cleanupImageViews[numActiveFrames];
+    std::vector<VkBufferView> cleanupBufferViews[numActiveFrames];
 
     struct CleanupBuffer
     {
         VkBuffer buffer;
         VmaAllocation allocation;
     };
-    std::vector<CleanupBuffer> cleanupBuffers[cNumBuffers];
+    std::vector<CleanupBuffer> cleanupBuffers[numActiveFrames];
     struct CleanupTexture
     {
         VkImage image;
         VmaAllocation allocation;
     };
-    std::vector<CleanupTexture> cleanupTextures[cNumBuffers];
+    std::vector<CleanupTexture> cleanupTextures[numActiveFrames];
     // std::vector<VmaAllocation> mCleanupAllocations[cNumBuffers];
 
     void Cleanup();
@@ -588,8 +571,8 @@ struct Vulkan
            GPUDevicePreference preference = GPUDevicePreference::Discrete);
     Swapchain CreateSwapchain(OS_Handle window, VkFormat format, u32 width, u32 height);
     Semaphore CreateGraphicsSemaphore();
-    void AllocateCommandBuffers(ThreadCommandPool &pool, QueueType type);
-    void CheckInitializedThreadCommandPool(int threadIndex);
+    void AllocateCommandBuffers(ThreadPool &pool, QueueType type);
+    void CheckInitializedThreadPool(int threadIndex);
     CommandBuffer *BeginCommandBuffer(QueueType queue);
     void SubmitCommandBuffer(CommandBuffer *cmd);
     VkImageMemoryBarrier2
@@ -598,7 +581,7 @@ struct Vulkan
                        VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask,
                        VkImageAspectFlags aspectFlags);
     void CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage *image);
-    ThreadCommandPool &GetThreadCommandPool(int threadIndex);
+    ThreadPool &GetThreadPool(int threadIndex);
     DescriptorSetLayout CreateDescriptorSetLayout(u32 binding, VkDescriptorType type,
                                                   VkShaderStageFlags stage);
     GPUBuffer CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
@@ -619,6 +602,8 @@ struct Vulkan
     QueryPool GetCompactionSizes(CommandBuffer *cmd, GPUAccelerationStructure **as, int count);
     void CompactBLASes(CommandBuffer *cmd, QueryPool &pool, GPUAccelerationStructure **as,
                        int count);
+    void BeginFrame();
+    void EndFrame();
 
     // void CopyBuffer(CommandBuffer cmd, GPUBuffer *dest, GPUBuffer *src, u32 size);
     // void ClearBuffer(CommandBuffer cmd, GPUBuffer *dst);
@@ -680,8 +665,8 @@ struct Vulkan
     // void SetName(GPUResource *resource, const char *name);
     // void SetName(GPUResource *resource, string name);
 
-    u32 GetCurrentBuffer() { return frameCount % cNumBuffers; }
-    u32 GetNextBuffer() { return (frameCount + 1) % cNumBuffers; }
+    u32 GetCurrentBuffer() { return frameCount % numActiveFrames; }
+    u32 GetNextBuffer() { return (frameCount + 1) % numActiveFrames; }
 
 private:
     const i32 cPoolSize = 128;
@@ -699,7 +684,7 @@ private:
         b8 freed;
     };
 
-    StaticArray<ThreadCommandPool> commandPools;
+    StaticArray<ThreadPool> commandPools;
 
     //////////////////////////////
     // Bindless resources

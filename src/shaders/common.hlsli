@@ -90,7 +90,7 @@ struct GPUScene
     float lensRadius;
     float focalLength;
 
-    void GenerateRay(float2 pFilm, float2 pLens, out RayDesc desc, out RayPayload payload)
+    void GenerateRay(float2 pFilm, float2 pLens, inout RayDesc desc, out RayPayload payload)
     {
         float3 pCamera = Transform(cameraFromRaster, float3(pFilm, 0.f));
         desc.Origin = float3(0.f, 0.f, 0.f);

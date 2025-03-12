@@ -874,8 +874,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     OS_UnmapFile(dataTokenizer.input.str);
     ScratchEnd(temp);
 
-    // If there are no transforms and no two level-bvhs, then we need to manually convert
-    // meshes to render space.
+#ifndef USE_GPU
     if (baseFile && isLeaf)
     {
         Mesh *meshes = (Mesh *)scene->primitives;
@@ -888,7 +887,6 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
             }
         }
     }
-
     if (type == GeometryType::CatmullClark)
     {
         scene->tessellationParams =
@@ -897,6 +895,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
         ComputeTessellationParams<GeometryType::QuadMesh>(
             (Mesh *)scene->primitives, scene->tessellationParams, 0, scene->numPrimitives);
     }
+#endif
 
     scene->geometryType = type;
 }

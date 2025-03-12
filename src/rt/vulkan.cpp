@@ -1,6 +1,7 @@
 #include "base.h"
 #include "memory.h"
 #include "thread_context.h"
+#include <atomic>
 #include "vulkan.h"
 #define VMA_IMPLEMENTATION
 #include "../third_party/vulkan/vk_mem_alloc.h"
@@ -498,7 +499,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         queues[i].submitSemaphore = s.semaphore;
     }
     u32 numProcessors = OS_NumProcessors();
-    commandPools      = StaticArray<ThreadCommandPool>(arena, numProcessors, numProcessors);
+    commandPools      = StaticArray<ThreadPool>(arena, numProcessors, numProcessors);
 
     // TODO: unified memory access architectures
     memProperties       = {};
@@ -525,21 +526,6 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         VK_DYNAMIC_STATE_SCISSOR,
         VK_DYNAMIC_STATE_VIEWPORT,
     };
-
-    // Set up frame fences
-    for (u32 buffer = 0; buffer < cNumBuffers; buffer++)
-    {
-        for (u32 queue = 0; queue < QueueType_Count; queue++)
-        {
-            if (queues[queue].queue == VK_NULL_HANDLE)
-            {
-                continue;
-            }
-            VkFenceCreateInfo fenceInfo = {};
-            fenceInfo.sType             = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-            VK_CHECK(vkCreateFence(device, &fenceInfo, 0, &frameFences[buffer][queue]));
-        }
-    }
 
     dynamicStateInfo                   = {};
     dynamicStateInfo.sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
@@ -1082,27 +1068,27 @@ Semaphore Vulkan::CreateGraphicsSemaphore()
     return semaphore;
 }
 
-void Vulkan::AllocateCommandBuffers(ThreadCommandPool &pool, QueueType type)
+void Vulkan::AllocateCommandBuffers(ThreadPool &pool, QueueType type)
 {
-    auto *node = pool.buffers[type].AddNode(ThreadCommandPool::commandBufferPoolSize);
+    auto *node = pool.buffers[type].AddNode(ThreadPool::commandBufferPoolSize);
     VkCommandBufferAllocateInfo bufferInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     bufferInfo.commandPool                 = pool.pool[type];
-    bufferInfo.commandBufferCount          = ThreadCommandPool::commandBufferPoolSize;
+    bufferInfo.commandBufferCount          = ThreadPool::commandBufferPoolSize;
     bufferInfo.level                       = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 
-    VkCommandBuffer buffers[ThreadCommandPool::commandBufferPoolSize];
+    VkCommandBuffer buffers[ThreadPool::commandBufferPoolSize];
 
     VK_CHECK(vkAllocateCommandBuffers(device, &bufferInfo, buffers));
-    for (int i = 0; i < ThreadCommandPool::commandBufferPoolSize; i++)
+    for (int i = 0; i < ThreadPool::commandBufferPoolSize; i++)
     {
         node->values[i]        = CommandBuffer();
         node->values[i].buffer = buffers[i];
     }
 }
 
-void Vulkan::CheckInitializedThreadCommandPool(int threadIndex)
+void Vulkan::CheckInitializedThreadPool(int threadIndex)
 {
-    ThreadCommandPool &pool = GetThreadCommandPool(threadIndex);
+    ThreadPool &pool = GetThreadPool(threadIndex);
     if (pool.arena == 0)
     {
         pool.arena = ArenaAlloc();
@@ -1133,14 +1119,37 @@ void Vulkan::CheckInitializedThreadCommandPool(int threadIndex)
                 pool.freeList[i].AddBack() = &node->values[j];
             }
         }
+
+        VkDescriptorPoolCreateInfo poolCreateInfo = {
+            VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        VkDescriptorPoolSize poolSize[3];
+        poolSize[0].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        poolSize[0].descriptorCount = 1;
+        poolSize[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        poolSize[1].descriptorCount = 1;
+        poolSize[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        poolSize[2].descriptorCount = 1;
+
+        poolCreateInfo.pPoolSizes    = poolSize;
+        poolCreateInfo.poolSizeCount = ArrayLength(poolSize);
+        poolCreateInfo.maxSets       = 1;
+
+        vkCreateDescriptorPool(device, &poolCreateInfo, 0, &pool.descriptorPool[0]);
+        vkCreateDescriptorPool(device, &poolCreateInfo, 0, &pool.descriptorPool[1]);
     }
 }
 
 CommandBuffer *Vulkan::BeginCommandBuffer(QueueType queue)
 {
     int threadIndex = GetThreadIndex();
-    CheckInitializedThreadCommandPool(threadIndex);
-    ThreadCommandPool &pool = GetThreadCommandPool(threadIndex);
+    CheckInitializedThreadPool(threadIndex);
+    ThreadPool &pool = GetThreadPool(threadIndex);
+
+    if (pool.currentFrame < frameCount)
+    {
+        vkResetDescriptorPool(device, pool.descriptorPool[GetCurrentBuffer()], 0);
+        pool.currentFrame = frameCount;
+    }
 
     bool success = false;
 
@@ -1194,7 +1203,7 @@ void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd)
 
     u32 waitSize = static_cast<u32>(cmd->waitSemaphores.size());
     VkSemaphoreSubmitInfo *submitInfo =
-        PushArrayNoZero(scratch.temp.arena, VkSemaphoreSubmitInfo, waitSize);
+        PushArray(scratch.temp.arena, VkSemaphoreSubmitInfo, waitSize);
 
     for (u32 i = 0; i < waitSize; i++)
     {
@@ -1239,7 +1248,7 @@ void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd)
     cmd->submissionID = queue.submissionID;
 
     int threadIndex                    = GetThreadIndex();
-    ThreadCommandPool &pool            = GetThreadCommandPool(threadIndex);
+    ThreadPool &pool                   = GetThreadPool(threadIndex);
     pool.freeList[cmd->type].AddBack() = cmd;
 }
 
@@ -1426,8 +1435,7 @@ void Vulkan::CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage 
     cmd->Signal(Semaphore{swapchain->releaseSemaphore});
     SubmitCommandBuffer(cmd);
 
-    VkPresentInfoKHR presentInfo   = {};
-    presentInfo.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    VkPresentInfoKHR presentInfo   = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     presentInfo.waitSemaphoreCount = 1;
     presentInfo.pWaitSemaphores    = &swapchain->releaseSemaphore;
     presentInfo.swapchainCount     = 1;
@@ -1449,10 +1457,7 @@ void Vulkan::CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage 
     }
 }
 
-ThreadCommandPool &Vulkan::GetThreadCommandPool(int threadIndex)
-{
-    return commandPools[threadIndex];
-}
+ThreadPool &Vulkan::GetThreadPool(int threadIndex) { return commandPools[threadIndex]; }
 
 GPUBuffer Vulkan::CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
                                VmaAllocationCreateFlags vmaFlags)
@@ -1600,41 +1605,42 @@ int DescriptorSetLayout::AddBinding(u32 b, VkDescriptorType type, VkShaderStageF
     return index;
 }
 
-VkDescriptorSetLayout DescriptorSetLayout::CreateLayout()
+VkDescriptorSetLayout *DescriptorSetLayout::GetVulkanLayout()
 {
-    VkDescriptorSetLayoutCreateInfo createInfo = {
-        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    createInfo.bindingCount = bindings.size();
-    createInfo.pBindings    = bindings.data();
-    VkDescriptorSetLayout layout;
-    VK_CHECK(vkCreateDescriptorSetLayout(device->device, &createInfo, 0, &layout));
-
-    descriptorInfo.resize(bindings.size());
-    return layout;
+    if (layout == VK_NULL_HANDLE)
+    {
+        VkDescriptorSetLayoutCreateInfo createInfo = {
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        createInfo.bindingCount = bindings.size();
+        createInfo.pBindings    = bindings.data();
+        VK_CHECK(vkCreateDescriptorSetLayout(device->device, &createInfo, 0, &layout));
+    }
+    return &layout;
 }
 
-void DescriptorSetLayout::Bind(int index, GPUImage *image)
+DescriptorSet &DescriptorSet::Bind(int index, GPUImage *image)
 {
-    Assert(index < bindings.size());
+    Assert(index < layout->bindings.size() && index < descriptorInfo.size());
     VkDescriptorImageInfo info = {};
     info.imageView             = image->imageView;
     info.imageLayout           = image->lastLayout;
 
     descriptorInfo[index].image = info;
 
-    VkWriteDescriptorSet set = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    set.descriptorType       = bindings[index].descriptorType;
-    set.descriptorCount      = 1;
-    set.dstSet               = VK_NULL_HANDLE;
-    set.dstBinding           = bindings[index].binding;
-    set.pImageInfo           = &descriptorInfo[index].image;
+    VkWriteDescriptorSet writeSet = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writeSet.descriptorType       = layout->bindings[index].descriptorType;
+    writeSet.descriptorCount      = 1;
+    writeSet.dstSet               = VK_NULL_HANDLE;
+    writeSet.dstBinding           = layout->bindings[index].binding;
+    writeSet.pImageInfo           = &descriptorInfo[index].image;
 
-    writeDescriptorSets.push_back(set);
+    writeDescriptorSets[index] = writeSet;
+    return *this;
 }
 
-void DescriptorSetLayout::Bind(int index, GPUBuffer *buffer)
+DescriptorSet &DescriptorSet::Bind(int index, GPUBuffer *buffer)
 {
-    Assert(index < bindings.size());
+    Assert(index < layout->bindings.size() && index < descriptorInfo.size());
     VkDescriptorBufferInfo info = {};
     info.buffer                 = buffer->buffer;
     info.offset                 = 0;
@@ -1642,47 +1648,50 @@ void DescriptorSetLayout::Bind(int index, GPUBuffer *buffer)
 
     descriptorInfo[index].buffer = info;
 
-    VkWriteDescriptorSet set = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    set.descriptorType       = bindings[index].descriptorType;
-    set.descriptorCount      = 1;
-    set.dstSet               = VK_NULL_HANDLE;
-    set.dstBinding           = bindings[index].binding;
-    set.pBufferInfo          = &descriptorInfo[index].buffer;
+    VkWriteDescriptorSet writeSet = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writeSet.descriptorType       = layout->bindings[index].descriptorType;
+    writeSet.descriptorCount      = 1;
+    writeSet.dstSet               = VK_NULL_HANDLE;
+    writeSet.dstBinding           = layout->bindings[index].binding;
+    writeSet.pBufferInfo          = &descriptorInfo[index].buffer;
 
-    writeDescriptorSets.push_back(set);
+    writeDescriptorSets[index] = writeSet;
+    return *this;
 }
 
-void DescriptorSetLayout::Bind(int index, VkAccelerationStructureKHR *accel)
+DescriptorSet &DescriptorSet::Bind(int index, VkAccelerationStructureKHR *accel)
 {
-    Assert(index < bindings.size());
-    VkWriteDescriptorSetAccelerationStructureKHR writeSet = {
+    Assert(index < layout->bindings.size() && index < descriptorInfo.size());
+    VkWriteDescriptorSetAccelerationStructureKHR info = {
         VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
-    writeSet.pAccelerationStructures    = accel;
-    writeSet.accelerationStructureCount = 1;
+    info.pAccelerationStructures    = accel;
+    info.accelerationStructureCount = 1;
 
-    descriptorInfo[index].accel = writeSet;
+    descriptorInfo[index].accel = info;
 
-    VkWriteDescriptorSet set = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    set.pNext                = &descriptorInfo[index].accel;
-    set.descriptorType       = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    set.descriptorCount      = 1;
-    set.dstSet               = VK_NULL_HANDLE;
-    set.dstBinding           = bindings[index].binding;
+    VkWriteDescriptorSet writeSet = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writeSet.pNext                = &descriptorInfo[index].accel;
+    writeSet.descriptorType       = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    writeSet.descriptorCount      = 1;
+    writeSet.dstSet               = VK_NULL_HANDLE;
+    writeSet.dstBinding           = layout->bindings[index].binding;
 
-    writeDescriptorSets.push_back(set);
+    writeDescriptorSets[index] = writeSet;
+    return *this;
 }
 
-void CommandBuffer::BindDescriptorSets(VkPipelineBindPoint bindPoint,
-                                       DescriptorSetLayout *layout,
-                                       VkPipelineLayout pipeLayout, VkDescriptorSet set)
+void CommandBuffer::BindDescriptorSets(VkPipelineBindPoint bindPoint, DescriptorSet *set,
+                                       VkPipelineLayout pipeLayout)
 {
-    for (auto &write : layout->writeDescriptorSets)
+    for (auto &write : set->writeDescriptorSets)
     {
-        write.dstSet = set;
+        write.dstSet = set->set;
     }
-    vkUpdateDescriptorSets(device->device, layout->writeDescriptorSets.size(),
-                           layout->writeDescriptorSets.data(), 0, 0);
-    vkCmdBindDescriptorSets(buffer, bindPoint, pipeLayout, 0, 1, &set, 0, 0);
+    vkUpdateDescriptorSets(device->device, set->writeDescriptorSets.size(),
+                           set->writeDescriptorSets.data(), 0, 0);
+    vkCmdBindDescriptorSets(buffer, bindPoint, pipeLayout, 0, 1, &set->set, 0, 0);
+    set->descriptorInfo.clear();
+    set->writeDescriptorSets.clear();
 }
 
 void CommandBuffer::TraceRays(RayTracingState *state, u32 width, u32 height, u32 depth)
@@ -1859,38 +1868,12 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
 
     // Create pipeline layout
     VkPipelineLayout pipelineLayout;
-    VkDescriptorSet set;
-    VkDescriptorPool pool;
     {
         ScratchArena scratch;
-        VkDescriptorPoolCreateInfo poolCreateInfo = {
-            VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        VkDescriptorPoolSize *poolSize =
-            PushArrayNoZero(scratch.temp.arena, VkDescriptorPoolSize, layout->bindings.size());
-        for (int i = 0; i < (int)layout->bindings.size(); i++)
-        {
-            poolSize[i].type            = layout->bindings[i].descriptorType;
-            poolSize[i].descriptorCount = 1;
-        }
-        poolCreateInfo.pPoolSizes    = poolSize;
-        poolCreateInfo.poolSizeCount = layout->bindings.size();
-        poolCreateInfo.maxSets       = 1;
-
-        vkCreateDescriptorPool(device, &poolCreateInfo, 0, &pool);
-
-        VkDescriptorSetLayout setLayout = layout->CreateLayout();
-
-        VkDescriptorSetAllocateInfo allocateInfo = {
-            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        allocateInfo.descriptorPool     = pool;
-        allocateInfo.pSetLayouts        = &setLayout;
-        allocateInfo.descriptorSetCount = 1;
-
-        vkAllocateDescriptorSets(device, &allocateInfo, &set);
 
         VkPipelineLayoutCreateInfo createInfo = {
             VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-        createInfo.pSetLayouts    = &setLayout;
+        createInfo.pSetLayouts    = layout->GetVulkanLayout();
         createInfo.setLayoutCount = 1;
         VK_CHECK(vkCreatePipelineLayout(device, &createInfo, 0, &pipelineLayout));
     }
@@ -1918,7 +1901,6 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
     RayTracingState state = {};
     state.pipeline        = pipeline;
     state.layout          = pipelineLayout;
-    state.set             = set;
 
     // Create shader binding table
     {
@@ -1975,6 +1957,24 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
         }
     }
     return state;
+}
+
+DescriptorSet DescriptorSetLayout::CreateDescriptorSet()
+{
+    ThreadPool &pool                         = device->GetThreadPool(GetThreadIndex());
+    VkDescriptorPool descriptorPool          = pool.descriptorPool[device->GetCurrentBuffer()];
+    VkDescriptorSetAllocateInfo allocateInfo = {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    allocateInfo.descriptorPool     = descriptorPool;
+    allocateInfo.pSetLayouts        = GetVulkanLayout();
+    allocateInfo.descriptorSetCount = 1;
+
+    DescriptorSet set;
+    vkAllocateDescriptorSets(device->device, &allocateInfo, &set.set);
+    set.layout = this;
+    set.writeDescriptorSets.resize(bindings.size());
+    set.descriptorInfo.resize(bindings.size());
+    return set;
 }
 
 GPUAccelerationStructure CommandBuffer::BuildAS(
@@ -2169,6 +2169,25 @@ void Vulkan::CompactBLASes(CommandBuffer *cmd, QueryPool &pool, GPUAccelerationS
         as[i]->as     = newAs;
         as[i]->buffer = newBuffer;
     }
+}
+
+void Vulkan::BeginFrame()
+{
+    CommandQueue &queue = queues[QueueType_Graphics];
+    if (queue.submissionID >= 2)
+    {
+        u64 val                      = queue.submissionID - 2;
+        VkSemaphoreWaitInfo waitInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+        waitInfo.pValues             = &val;
+        waitInfo.semaphoreCount      = 1;
+        waitInfo.pSemaphores         = &queue.submitSemaphore;
+        vkWaitSemaphores(device, &waitInfo, UINT64_MAX);
+    }
+}
+void Vulkan::EndFrame()
+{
+    frameCount++;
+    std::atomic_thread_fence(std::memory_order_seq_cst);
 }
 
 } // namespace rt
