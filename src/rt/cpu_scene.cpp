@@ -110,7 +110,7 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
 }
 
 void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
-                       int maxDepth)
+                       int maxDepth, Image *image)
 {
     for (int depth = maxDepth; depth >= 0; depth--)
     {

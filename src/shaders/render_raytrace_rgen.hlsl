@@ -1,5 +1,5 @@
 #include "common.hlsli"
-#include "../rt/gpu_scene_shaderinterop.h"
+#include "../rt/shader_interop/gpu_scene_shaderinterop.h"
 
 ConstantBuffer<GPUScene> scene : register(b2);
 RaytracingAccelerationStructure accel : register(t0);
@@ -24,6 +24,7 @@ void main()
     desc.TMin = 0;
     desc.TMax = FLT_MAX;
     RayPayload payload;
+    payload.throughput = 1;
     scene.GenerateRay(filterSample, pLens, desc, payload);
 
     TraceRay(accel, RAY_FLAG_FORCE_OPAQUE, 0xff, 0, 0, 0, desc, payload);

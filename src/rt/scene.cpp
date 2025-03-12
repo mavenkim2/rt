@@ -1016,7 +1016,8 @@ void ComputeEdgeRates(ScenePrimitives *scene, const AffineSpace &transform,
     }
 }
 
-void LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, string filename)
+void LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, string filename,
+               Image *envMap)
 {
     TempArena temp = ScratchStart(0, 0);
     Arena *arena   = params->arenas[GetThreadIndex()];
@@ -1054,7 +1055,7 @@ void LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, stri
         maxDepth = Max(maxDepth, scenes[i]->depth.load(std::memory_order_acquire));
     }
 
-    BuildAllSceneBVHs(params, scenes, numScenes, maxDepth);
+    BuildAllSceneBVHs(params, scenes, numScenes, maxDepth, envMap);
 
     for (u32 i = 0; i < numProcessors; i++)
     {

@@ -278,7 +278,6 @@ void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
 
     string directory = Str8PathChopPastLastSlash(options->filename);
     string filename  = PathSkipLastSlash(options->filename);
-    LoadScene(&params, tempArenas, directory, filename);
 
     // environment map
 #if 1
@@ -291,13 +290,15 @@ void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
 
     f32 scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
     // ErrorExit(scale == 0.00935831666f, "scale: %f\n", scale);
+    Image envMap = LoadFile("../../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png");
     ImageInfiniteLight *infLight = PushStructConstruct(arena, ImageInfiniteLight)(
-        arena, LoadFile("../../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png"),
-        &renderFromLight, RGBColorSpace::sRGB, sceneRadius, scale);
+        arena, envMap, &renderFromLight, RGBColorSpace::sRGB, sceneRadius, scale);
 
     scene->infiniteLights.push_back(infLight);
     scene->lights.push_back(infLight);
 #endif
+
+    LoadScene(&params, tempArenas, directory, filename, &envMap);
 
     // f32 scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
     // ConstantSpectrum spec2(1.f);

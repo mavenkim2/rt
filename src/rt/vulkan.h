@@ -16,18 +16,11 @@
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 #include "../third_party/vulkan/vk_mem_alloc.h"
 
-// std::vector of things to do:
-// 1. create shaders in HLSL and compile
-// 2. shader binding table
-// 3. create acceleration structures (TLAS and BLAS, how do I handle overlaps? multi
-// level instancing?)
-// 4. subdivision surfaces using opensubdiv on gpu?
-//
-// START: render JUST the ocean with real time path tracing. No clusters, no
-// subdivision, just triangles.
-
 namespace rt
 {
+struct AffineSpace;
+struct Instance;
+struct ScenePrimitives;
 
 #define VK_CHECK(check)                                                                       \
     do                                                                                        \
@@ -38,6 +31,16 @@ namespace rt
 
 static const int numActiveFrames = 2;
 using CopyFunction               = std::function<void(void *)>;
+
+inline u32 GetFormatSize(VkFormat format)
+{
+    switch (format)
+    {
+        case VK_FORMAT_R8G8B8_SRGB: return 3;
+        case VK_FORMAT_R8G8B8A8_SRGB: return 4;
+        default: Assert(0); return 0;
+    }
+}
 
 enum class ResourceUsage : u32
 {
@@ -148,10 +151,33 @@ enum class ShaderStage
     Count,
 };
 
+inline VkShaderStageFlags GetVulkanShaderStage(ShaderStage stage)
+{
+    switch (stage)
+    {
+        case ShaderStage::Vertex: return VK_SHADER_STAGE_VERTEX_BIT;
+        case ShaderStage::Geometry: return VK_SHADER_STAGE_GEOMETRY_BIT;
+        case ShaderStage::Fragment: return VK_SHADER_STAGE_FRAGMENT_BIT;
+        case ShaderStage::Compute: return VK_SHADER_STAGE_COMPUTE_BIT;
+        case ShaderStage::Raygen: return VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+        case ShaderStage::Miss: return VK_SHADER_STAGE_MISS_BIT_KHR;
+        case ShaderStage::Hit: return VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+        case ShaderStage::Intersect: return VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+        default: Assert(0); return VK_SHADER_STAGE_FLAG_BITS_MAX_ENUM;
+    }
+}
+
 struct Shader
 {
     VkShaderModule module;
     ShaderStage stage;
+};
+
+struct PushConstant
+{
+    ShaderStage stage;
+    u32 offset;
+    u32 size;
 };
 
 // struct GPUBufferDesc
@@ -261,11 +287,16 @@ struct GPUAccelerationStructure
 {
     VkAccelerationStructureKHR as;
     GPUBuffer buffer;
+    VkDeviceAddress address;
 };
 
 struct TransferBuffer
 {
-    GPUBuffer buffer;
+    union
+    {
+        GPUBuffer buffer;
+        GPUImage image;
+    };
     GPUBuffer stagingBuffer;
     void *mappedPtr;
 };
@@ -342,6 +373,9 @@ struct CommandBuffer
     void Wait(Semaphore s) { waitSemaphores.push_back(s); }
     void Signal(Semaphore s) { signalSemaphores.push_back(s); }
     void SubmitTransfer(TransferBuffer *buffer);
+    GPUBuffer SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags, size_t totalSize);
+    GPUImage SubmitImage(void *ptr, VkImageUsageFlags flags, VkFormat format, VkImageType type,
+                         u32 width, u32 height);
     void BindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipeline);
     void BindDescriptorSets(VkPipelineBindPoint bindPoint, DescriptorSet *set,
                             VkPipelineLayout pipeLayout);
@@ -353,11 +387,14 @@ struct CommandBuffer
                  VkPipelineStageFlags2 srcAccess, VkPipelineStageFlags2 dstAccess);
 
     void FlushBarriers();
+    void PushConstants(PushConstant *pc, void *ptr, VkPipelineLayout layout);
     GPUAccelerationStructure BuildAS(VkAccelerationStructureTypeKHR type,
                                      VkAccelerationStructureGeometryKHR *geometries, int count,
                                      VkAccelerationStructureBuildRangeInfoKHR *buildRanges,
                                      u32 *maxPrimitiveCounts);
     GPUAccelerationStructure BuildTLAS(GPUBuffer *instanceData, u32 numInstances);
+    GPUAccelerationStructure BuildTLAS(Instance *instances, int numInstances,
+                                       AffineSpace *transforms, ScenePrimitives **childScenes);
     GPUAccelerationStructure BuildBLAS(const GPUMesh *meshes, int count);
 };
 
@@ -590,6 +627,8 @@ struct Vulkan
                          int width = 1, int height = 1, int depth = 1, int numMips = 1,
                          int numLayers = 1);
     TransferBuffer GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize);
+    TransferBuffer GetStagingImage(VkImageUsageFlags flags, VkFormat format, VkImageType type,
+                                   u32 width, u32 height);
     u64 GetDeviceAddress(VkBuffer buffer);
     void BeginEvent(CommandBuffer *cmd, string name);
     void EndEvent(CommandBuffer *cmd);
@@ -597,8 +636,12 @@ struct Vulkan
     void BindAccelerationStructure(VkDescriptorSet descriptorSet,
                                    VkAccelerationStructureKHR accel);
     RayTracingState CreateRayTracingPipeline(Shader **shaders, int counts[RST_Max],
+                                             PushConstant *pushConstant,
                                              DescriptorSetLayout *layout, u32 maxDepth);
     QueryPool CreateQuery(QueryType type, int count);
+
+    VkAccelerationStructureInstanceKHR GetVkInstance(const AffineSpace &transform,
+                                                     GPUAccelerationStructure &as);
     QueryPool GetCompactionSizes(CommandBuffer *cmd, GPUAccelerationStructure **as, int count);
     void CompactBLASes(CommandBuffer *cmd, QueryPool &pool, GPUAccelerationStructure **as,
                        int count);

@@ -3,6 +3,7 @@
 #include "thread_context.h"
 #include <atomic>
 #include "vulkan.h"
+#include "scene.h"
 #define VMA_IMPLEMENTATION
 #include "../third_party/vulkan/vk_mem_alloc.h"
 
@@ -1337,6 +1338,12 @@ void CommandBuffer::FlushBarriers()
     imageBarriers.clear();
 }
 
+void CommandBuffer::PushConstants(PushConstant *pc, void *ptr, VkPipelineLayout layout)
+{
+    vkCmdPushConstants(buffer, layout, GetVulkanShaderStage(pc->stage), pc->offset, pc->size,
+                       ptr);
+}
+
 void Vulkan::CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage *image)
 {
     for (;;)
@@ -1559,8 +1566,6 @@ GPUImage Vulkan::CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageTy
 
 TransferBuffer Vulkan::GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize)
 {
-    int threadIndex = GetThreadIndex();
-
     GPUBuffer buffer  = CreateBuffer(flags | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                      totalSize);
@@ -1580,6 +1585,22 @@ TransferBuffer Vulkan::GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSi
     return transferBuffer;
 }
 
+TransferBuffer Vulkan::GetStagingImage(VkImageUsageFlags flags, VkFormat format,
+                                       VkImageType type, u32 width, u32 height)
+
+{
+    TransferBuffer buffer;
+    size_t size = width * height * GetFormatSize(format);
+    buffer.image =
+        CreateImage(flags | VK_IMAGE_USAGE_TRANSFER_DST_BIT, format, type, width, height);
+    buffer.stagingBuffer =
+        CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, size,
+                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                         VMA_ALLOCATION_CREATE_MAPPED_BIT);
+    buffer.mappedPtr = buffer.stagingBuffer.allocation->GetMappedData();
+    return buffer;
+}
+
 void CommandBuffer::SubmitTransfer(TransferBuffer *transferBuffer)
 {
     VkBufferCopy bufferCopy = {};
@@ -1589,6 +1610,46 @@ void CommandBuffer::SubmitTransfer(TransferBuffer *transferBuffer)
 
     vkCmdCopyBuffer(buffer, transferBuffer->stagingBuffer.buffer,
                     transferBuffer->buffer.buffer, 1, &bufferCopy);
+}
+
+GPUImage CommandBuffer::SubmitImage(void *ptr, VkImageUsageFlags flags, VkFormat format,
+                                    VkImageType imageType, u32 width, u32 height)
+{
+    TransferBuffer transferBuffer =
+        device->GetStagingImage(flags, format, imageType, width, height);
+    size_t size = width * height * GetFormatSize(format);
+    Assert(transferBuffer.mappedPtr);
+    MemoryCopy(transferBuffer.mappedPtr, ptr, size);
+
+    VkImageMemoryBarrier2 barrier = device->ImageMemoryBarrier(
+        transferBuffer.image.image, VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_NONE,
+        VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_NONE, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+        VK_IMAGE_ASPECT_COLOR_BIT);
+
+    VkDependencyInfo info        = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    info.imageMemoryBarrierCount = 1;
+    info.pImageMemoryBarriers    = &barrier;
+    vkCmdPipelineBarrier2(buffer, &info);
+
+    VkBufferImageCopy copy           = {};
+    copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copy.imageSubresource.layerCount = 1;
+    copy.imageExtent                 = {width, height, 1};
+
+    vkCmdCopyBufferToImage(buffer, transferBuffer.stagingBuffer.buffer,
+                           transferBuffer.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                           &copy);
+    return transferBuffer.image;
+}
+
+GPUBuffer CommandBuffer::SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags, size_t totalSize)
+{
+    TransferBuffer transferBuffer = device->GetStagingBuffer(flags, totalSize);
+    Assert(transferBuffer.mappedPtr);
+    MemoryCopy(transferBuffer.mappedPtr, ptr, totalSize);
+    SubmitTransfer(&transferBuffer);
+    return transferBuffer.buffer;
 }
 
 void CommandBuffer::BindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipeline)
@@ -1782,7 +1843,8 @@ Shader Vulkan::CreateShader(ShaderStage stage, string name, string shaderData)
 }
 
 RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RST_Max],
-                                                 DescriptorSetLayout *layout, u32 maxDepth)
+                                                 PushConstant *pc, DescriptorSetLayout *layout,
+                                                 u32 maxDepth)
 {
     int total = 0;
     for (int i = 0; i < RST_Max; i++)
@@ -1879,6 +1941,15 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
             VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         createInfo.pSetLayouts    = layout->GetVulkanLayout();
         createInfo.setLayoutCount = 1;
+        if (pc)
+        {
+            VkPushConstantRange vkpc;
+            vkpc.offset                       = pc->offset;
+            vkpc.size                         = pc->size;
+            vkpc.stageFlags                   = GetVulkanShaderStage(pc->stage);
+            createInfo.pushConstantRangeCount = 1;
+            createInfo.pPushConstantRanges    = &vkpc;
+        }
         VK_CHECK(vkCreatePipelineLayout(device, &createInfo, 0, &pipelineLayout));
     }
 
@@ -2027,6 +2098,12 @@ GPUAccelerationStructure CommandBuffer::BuildAS(
     buildInfo.scratchData.deviceAddress = scratchAddress;
     buildInfo.dstAccelerationStructure  = bvh.as;
 
+    VkAccelerationStructureDeviceAddressInfoKHR accelDeviceAddressInfo = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
+    accelDeviceAddressInfo.accelerationStructure = bvh.as;
+    bvh.address =
+        vkGetAccelerationStructureDeviceAddressKHR(device->device, &accelDeviceAddressInfo);
+
     vkCmdBuildAccelerationStructuresKHR(buffer, 1, &buildInfo, &buildRanges);
     return bvh;
 }
@@ -2086,6 +2163,37 @@ GPUAccelerationStructure CommandBuffer::BuildTLAS(GPUBuffer *instanceData, u32 n
                    &numInstances);
 }
 
+GPUAccelerationStructure CommandBuffer::BuildTLAS(Instance *instances, int numInstances,
+                                                  AffineSpace *transforms,
+                                                  ScenePrimitives **childScenes)
+{
+    ScratchArena scratch;
+    VkAccelerationStructureInstanceKHR *vkInstances =
+        PushArrayNoZero(scratch.temp.arena, VkAccelerationStructureInstanceKHR, numInstances);
+    for (int instanceIndex = 0; instanceIndex < numInstances; instanceIndex++)
+    {
+        VkAccelerationStructureInstanceKHR &vkInstance = vkInstances[instanceIndex];
+        Instance &instance                             = instances[instanceIndex];
+        vkInstance.transform           = ConvertMatrix(transforms[instance.transformIndex]);
+        vkInstance.instanceCustomIndex = 0;
+        vkInstance.mask                = 0xff;
+        vkInstance.instanceShaderBindingTableRecordOffset = 0;
+        vkInstance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+        vkInstance.accelerationStructureReference = childScenes[instance.id]->gpuBVH.address;
+    }
+
+    GPUBuffer tlasBuffer =
+        SubmitBuffer(vkInstances,
+                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                     sizeof(VkAccelerationStructureInstanceKHR));
+
+    Barrier(&tlasBuffer, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+
+    return BuildTLAS(&tlasBuffer, numInstances);
+}
+
 QueryPool Vulkan::CreateQuery(QueryType type, int count)
 {
     VkQueryPoolCreateInfo info = {VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
@@ -2103,6 +2211,19 @@ QueryPool Vulkan::CreateQuery(QueryType type, int count)
     VK_CHECK(vkCreateQueryPool(device, &info, 0, &result.queryPool));
     result.count = count;
     return result;
+}
+
+VkAccelerationStructureInstanceKHR Vulkan::GetVkInstance(const AffineSpace &transform,
+                                                         GPUAccelerationStructure &as)
+{
+    VkAccelerationStructureInstanceKHR instanceAs;
+    instanceAs.transform                              = ConvertMatrix(transform);
+    instanceAs.instanceCustomIndex                    = 0;
+    instanceAs.mask                                   = 0xff;
+    instanceAs.instanceShaderBindingTableRecordOffset = 0;
+    instanceAs.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+    instanceAs.accelerationStructureReference = as.address;
+    return instanceAs;
 }
 
 QueryPool Vulkan::GetCompactionSizes(CommandBuffer *cmd, GPUAccelerationStructure **as,

@@ -22,6 +22,8 @@
 namespace rt
 {
 
+struct Image;
+
 enum class IndexType
 {
     u8,
@@ -927,9 +929,10 @@ struct RenderParams2;
 void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
                     const Mat4 &cameraFromRender, int screenHeight);
 void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
-                       int maxDepth);
+                       int maxDepth, Image *envMap = 0);
 
-void LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, string filename);
+void LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, string filename,
+               Image *envMap = 0);
 DiffuseAreaLight *ParseAreaLight(Arena *arena, Tokenizer *tokenizer, AffineSpace *space,
                                  int sceneID, int geomID);
 Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory,

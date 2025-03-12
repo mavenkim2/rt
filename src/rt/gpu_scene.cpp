@@ -1,6 +1,7 @@
 #include "integrate.h"
 #include "gpu_scene.h"
-#include "gpu_scene_shaderinterop.h"
+#include "shader_interop/miss_shaderinterop.h"
+#include "shader_interop/gpu_scene_shaderinterop.h"
 #include "scene.h"
 #include "vulkan.h"
 #include "win32.h"
@@ -114,8 +115,18 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
     primIndices = PrimitiveIndices(lightHandle, materialHandle, alphaTexture);
 }
 
+// what's next?
+// 1. restir di
+// 2. dgfs
+// 3. clas
+// 4. actual bsdfs and brdfs
+// 5. environment map miss
+// 6. add other parts of the scene
+// 7. ability to move around
+// 8. recycle memory
+
 void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
-                       int maxDepth)
+                       int maxDepth, Image *envMap)
 {
     // Compile shaders
     string raygenShaderName = "../src/shaders/render_raytrace_rgen.spv";
@@ -146,6 +157,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     rayShaders[RST_Miss]       = missShaders;
     rayShaders[RST_ClosestHit] = hitShaders;
 
+    PushConstant pushConstant;
+    pushConstant.stage  = ShaderStage::Miss;
+    pushConstant.offset = 0;
+    pushConstant.size   = sizeof(MissPushConstant);
+
     GPUScene gpuScene;
     gpuScene.cameraFromRaster = params->cameraFromRaster;
     gpuScene.renderFromCamera = params->renderFromCamera;
@@ -154,11 +170,17 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     gpuScene.lensRadius       = params->lensRadius;
     gpuScene.focalLength      = params->focalLength;
 
-    TransferBuffer transferBuffer =
-        device->GetStagingBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene));
-    u8 *ptr = (u8 *)transferBuffer.mappedPtr;
-    Assert(ptr);
-    MemoryCopy(ptr, &gpuScene, sizeof(GPUScene));
+    CommandBuffer *transferCmd    = device->BeginCommandBuffer(QueueType_Copy);
+    GPUBuffer sceneTransferBuffer = transferCmd->SubmitBuffer(
+        &gpuScene, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene));
+
+    GPUImage gpuEnvMap = transferCmd->SubmitImage(envMap->contents, VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                  VK_FORMAT_R8G8B8_SRGB, VK_IMAGE_TYPE_2D,
+                                                  envMap->width, envMap->height);
+    device->SubmitCommandBuffer(transferCmd);
+    // TODO: need to sync this transfer with the start of ray tracing
+    // and bind envmap and sampler properly
+    // with bindless
 
     GPUImage images[2] = {
         device->CreateImage(VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
@@ -181,16 +203,14 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         layout.AddBinding((u32)RTBindings::Scene, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                           VK_SHADER_STAGE_RAYGEN_BIT_KHR);
 
-    RayTracingState rts =
-        device->CreateRayTracingPipeline(rayShaders, counts, &layout, maxDepth);
+    RayTracingState rts = device->CreateRayTracingPipeline(rayShaders, counts, &pushConstant,
+                                                           &layout, params->maxDepth);
 
-    VkAccelerationStructureKHR accel;
     for (int depth = maxDepth; depth >= 0; depth--)
     {
         ScratchArena scratch;
         CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics);
         device->BeginEvent(cmd, "BLAS Build");
-        cmd->SubmitTransfer(&transferBuffer);
         int bvhCount = 0;
 
         Semaphore semaphore   = device->CreateGraphicsSemaphore();
@@ -198,6 +218,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         cmd->Signal(semaphore);
 
         QueryPool query = device->CreateQuery(QueryType_CompactSize, numScenes);
+
         GPUAccelerationStructure **as =
             PushArrayNoZero(scratch.temp.arena, GPUAccelerationStructure *, numScenes);
 
@@ -216,71 +237,45 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                         as[bvhCount++]  = &scene->gpuBVH;
                     }
                     break;
+                    case GeometryType::Instance:
+                    {
+                        Instance *instances = (Instance *)scene->primitives;
+                        scene->gpuBVH =
+                            cmd->BuildTLAS(instances, scene->numPrimitives,
+                                           scene->affineTransforms, scene->childScenes);
+                        as[bvhCount++] = &scene->gpuBVH;
+                    }
+                    break;
                     default: Assert(0);
                 }
             }
         }
 
-        QueryPool queryPool = device->GetCompactionSizes(cmd, as, bvhCount);
-        device->SubmitCommandBuffer(cmd);
-        device->EndEvent(cmd);
+        if (bvhCount)
+        {
+            QueryPool queryPool = device->GetCompactionSizes(cmd, as, bvhCount);
+            device->SubmitCommandBuffer(cmd);
+            device->EndEvent(cmd);
 
-        CommandBuffer *compactCmd = device->BeginCommandBuffer(QueueType_Graphics);
-        compactCmd->Wait(semaphore);
-        device->CompactBLASes(compactCmd, queryPool, as, bvhCount);
-        device->SubmitCommandBuffer(compactCmd);
+            CommandBuffer *compactCmd = device->BeginCommandBuffer(QueueType_Graphics);
+            compactCmd->Wait(semaphore);
+            device->CompactBLASes(compactCmd, queryPool, as, bvhCount);
+            device->SubmitCommandBuffer(compactCmd);
+        }
 
-        accel = as[0]->as;
+        // TODO: need to sync here
+        if (maxDepth == 0)
+        {
+            Assert(numScenes == 1);
+            CommandBuffer *tlasCmd     = device->BeginCommandBuffer(QueueType_Graphics);
+            Instance instance          = {};
+            ScenePrimitives *baseScene = &GetScene()->scene;
+            tlasCmd->BuildTLAS(&instance, 1, &params->renderFromWorld, &baseScene);
+        }
     }
 
-    VkAccelerationStructureDeviceAddressInfoKHR accelDeviceAddressInfo = {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
-    accelDeviceAddressInfo.accelerationStructure = accel;
-    VkDeviceAddress accelAddress =
-        vkGetAccelerationStructureDeviceAddressKHR(device->device, &accelDeviceAddressInfo);
-
-    VkAccelerationStructureInstanceKHR instance;
-    instance.transform                              = ConvertMatrix(params->renderFromWorld);
-    instance.instanceCustomIndex                    = 0;
-    instance.mask                                   = 0xff;
-    instance.instanceShaderBindingTableRecordOffset = 0;
-    instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-    instance.accelerationStructureReference = accelAddress;
-
-    TransferBuffer instanceTransfer = device->GetStagingBuffer(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(VkAccelerationStructureInstanceKHR));
-    u8 *transferPtr = (u8 *)instanceTransfer.mappedPtr;
-    Assert(transferPtr);
-    MemoryCopy(transferPtr, &instance, sizeof(VkAccelerationStructureInstanceKHR));
-
-    GPUImage *image    = &images[0];
-    CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics);
-    cmd->SubmitTransfer(&instanceTransfer);
-    cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                 VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                 VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                 VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-    cmd->Barrier(&instanceTransfer.buffer,
-                 VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                 VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-    cmd->Barrier(&images[0], VK_IMAGE_LAYOUT_GENERAL,
-                 VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_WRITE_BIT);
-    cmd->FlushBarriers();
-    GPUAccelerationStructure tlas = cmd->BuildTLAS(&instanceTransfer.buffer, 1);
-    cmd->BindPipeline(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rts.pipeline);
-    DescriptorSet descriptorSet = layout.CreateDescriptorSet();
-    descriptorSet.Bind(accelBindingIndex, &tlas.as)
-        .Bind(imageBindingIndex, image)
-        .Bind(sceneBindingIndex, &transferBuffer.buffer);
-    cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, &descriptorSet,
-                            rts.layout);
-    cmd->TraceRays(&rts, params->width, params->height, 1);
-    device->CopyFrameBuffer(&swapchain, cmd, image);
-    device->EndFrame();
-
-    f32 frameDt = 1.f / 60.f;
+    GPUAccelerationStructure &tlas = GetScene()->scene.gpuBVH;
+    f32 frameDt                    = 1.f / 60.f;
     for (;;)
     {
         MSG message;
@@ -291,21 +286,27 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         }
         f32 frameTime = OS_NowSeconds();
 
+        MissPushConstant pc;
+        pc.envMap = 0;
+        pc.width  = envMap->width;
+        pc.height = envMap->height;
+
         device->BeginFrame();
-        u32 frame = device->GetCurrentBuffer();
-        image     = &images[frame];
-        cmd       = device->BeginCommandBuffer(QueueType_Graphics);
+        u32 frame          = device->GetCurrentBuffer();
+        GPUImage *image    = &images[frame];
+        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics);
         cmd->Barrier(image, VK_IMAGE_LAYOUT_GENERAL,
                      VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                      VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->FlushBarriers();
         cmd->BindPipeline(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rts.pipeline);
-        descriptorSet = layout.CreateDescriptorSet();
+        DescriptorSet descriptorSet = layout.CreateDescriptorSet();
         descriptorSet.Bind(accelBindingIndex, &tlas.as)
             .Bind(imageBindingIndex, image)
-            .Bind(sceneBindingIndex, &transferBuffer.buffer);
+            .Bind(sceneBindingIndex, &sceneTransferBuffer);
         cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, &descriptorSet,
                                 rts.layout);
+        cmd->PushConstants(&pushConstant, &pc, rts.layout);
         cmd->TraceRays(&rts, params->width, params->height, 1);
         device->CopyFrameBuffer(&swapchain, cmd, image);
         device->EndFrame();

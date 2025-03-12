@@ -1,6 +1,12 @@
 static const float PI = 3.1415926535f;
 static const float FLT_MAX = asfloat(0x7F800000);
 
+#ifdef __spirv__
+[[vk::binding(0, 1)]] Texture2D bindlessTextures[];
+#else
+#error
+#endif
+
 // Alan wake 2 random numbers 
 uint Hash(uint x)
 {
@@ -36,6 +42,19 @@ struct RayPayload
     float3 radiance;
     float3 throughput;
 };
+
+template <typename T>
+void swap(T a, T b)
+{
+    T temp = a;
+    a = b;
+    b = temp;
+}
+
+float copysign(float a, float b)
+{
+    return asfloat(asuint(a) ^ (asuint(b) & 0x80000000));
+}
 
 float3 Transform(float4x4 m, float3 p)
 {
