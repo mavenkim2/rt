@@ -232,6 +232,7 @@ void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
     Mat4 cameraFromRender = LookAt(pCamera, look, up) * Translate(pCamera);
 
     Mat4 renderFromCamera = Inverse(cameraFromRender);
+    AffineSpace renderFromCameraAffine(renderFromCamera);
     // TODO: going to have to figure out how to handle this automatically
     Mat4 NDCFromCamera = Mat4::Perspective2(Radians(fov), aspectRatio);
 
@@ -251,7 +252,7 @@ void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
 
     RenderParams2 params    = {};
     params.cameraFromRaster = cameraFromRaster;
-    params.renderFromCamera = renderFromCamera;
+    params.renderFromCamera = renderFromCameraAffine;
     params.NDCFromCamera    = NDCFromCamera;
     params.cameraFromRender = cameraFromRender;
     params.renderFromWorld  = renderFromWorld;

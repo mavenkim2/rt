@@ -1043,16 +1043,6 @@ int main(int argc, char *argv[])
     InitThreadContext(arena, "[Main Thread]", 1);
     OS_Init();
 
-#ifdef USE_GPU
-#ifdef DEBUG
-    ValidationMode mode = ValidationMode::Verbose;
-#else
-    ValidationMode mode = ValidationMode::Disabled;
-#endif
-    Vulkan *v = PushStructConstruct(arena, Vulkan)(mode);
-    device    = v;
-#endif
-
     Spectra::Init(arena);
     RGBToSpectrumTable::Init(arena);
     RGBColorSpace::Init(arena);
@@ -1091,6 +1081,10 @@ int main(int argc, char *argv[])
             setOptions     = true;
             i += 3;
         }
+        else if (Contains(arg, "-validation"))
+        {
+            options.useValidation = true;
+        }
         else
         {
             options.filename = arg;
@@ -1102,6 +1096,18 @@ int main(int argc, char *argv[])
         printf("Must pass in a .rtscene file.\n");
         return 1;
     }
+
+#ifdef USE_GPU
+#ifdef DEBUG
+    ValidationMode mode =
+        options.useValidation ? ValidationMode::Verbose : ValidationMode::Disabled;
+#else
+    ValidationMode mode = ValidationMode::Disabled;
+#endif
+    Vulkan *v = PushStructConstruct(arena, Vulkan)(mode);
+    device    = v;
+#endif
+
     TestRender(arena, handle, &options);
     // WhiteFurnaceTest(arena, &options);
 

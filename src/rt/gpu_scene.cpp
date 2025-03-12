@@ -1,5 +1,6 @@
 #include "integrate.h"
 #include "gpu_scene.h"
+#include "gpu_scene_shaderinterop.h"
 #include "scene.h"
 #include "vulkan.h"
 #include "win32.h"
@@ -117,9 +118,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                        int maxDepth)
 {
     // Compile shaders
-    string raygenShaderName = "../../src/shaders/spirv/render_raytrace_rgen.spv";
-    string missShaderName   = "../../src/shaders/spirv/render_raytrace_miss.spv";
-    string hitShaderName    = "../../src/shaders/spirv/render_raytrace_hit.spv";
+    string raygenShaderName = "../src/shaders/render_raytrace_rgen.spv";
+    string missShaderName   = "../src/shaders/render_raytrace_miss.spv";
+    string hitShaderName    = "../src/shaders/render_raytrace_hit.spv";
 
     Arena *arena    = params->arenas[0];
     string rgenData = OS_ReadFile(arena, raygenShaderName);
@@ -159,9 +160,14 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     Assert(ptr);
     MemoryCopy(ptr, &gpuScene, sizeof(GPUScene));
 
-    GPUImage image = device->CreateImage(
-        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-        VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TYPE_2D, params->width, params->height);
+    GPUImage images[2] = {
+        device->CreateImage(VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                            VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TYPE_2D, params->width,
+                            params->height),
+        device->CreateImage(VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                            VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TYPE_2D, params->width,
+                            params->height),
+    };
 
     DescriptorSetLayout layout = {};
     int accelBindingIndex      = layout.AddBinding((u32)RTBindings::Accel,
@@ -249,6 +255,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     Assert(transferPtr);
     MemoryCopy(transferPtr, &instance, sizeof(VkAccelerationStructureInstanceKHR));
 
+    GPUImage *image    = &images[0];
     CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics);
     cmd->SubmitTransfer(&instanceTransfer);
     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
@@ -258,19 +265,20 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     cmd->Barrier(&instanceTransfer.buffer,
                  VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-    cmd->Barrier(&image, VK_IMAGE_LAYOUT_GENERAL,
+    cmd->Barrier(&images[0], VK_IMAGE_LAYOUT_GENERAL,
                  VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_WRITE_BIT);
     cmd->FlushBarriers();
     GPUAccelerationStructure tlas = cmd->BuildTLAS(&instanceTransfer.buffer, 1);
     cmd->BindPipeline(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rts.pipeline);
-    DescriptorSet descriptorSet = layout.CreateDescriptorSet()
-                                      .Bind(accelBindingIndex, &tlas.as)
-                                      .Bind(imageBindingIndex, &image)
-                                      .Bind(sceneBindingIndex, &transferBuffer.buffer);
+    DescriptorSet descriptorSet = layout.CreateDescriptorSet();
+    descriptorSet.Bind(accelBindingIndex, &tlas.as)
+        .Bind(imageBindingIndex, image)
+        .Bind(sceneBindingIndex, &transferBuffer.buffer);
     cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, &descriptorSet,
                             rts.layout);
     cmd->TraceRays(&rts, params->width, params->height, 1);
-    device->CopyFrameBuffer(&swapchain, cmd, &image);
+    device->CopyFrameBuffer(&swapchain, cmd, image);
+    device->EndFrame();
 
     f32 frameDt = 1.f / 60.f;
     for (;;)
@@ -284,20 +292,22 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         f32 frameTime = OS_NowSeconds();
 
         device->BeginFrame();
-        cmd = device->BeginCommandBuffer(QueueType_Graphics);
-        cmd->Barrier(&image, VK_IMAGE_LAYOUT_GENERAL,
+        u32 frame = device->GetCurrentBuffer();
+        image     = &images[frame];
+        cmd       = device->BeginCommandBuffer(QueueType_Graphics);
+        cmd->Barrier(image, VK_IMAGE_LAYOUT_GENERAL,
                      VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                      VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->FlushBarriers();
         cmd->BindPipeline(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rts.pipeline);
-        descriptorSet = layout.CreateDescriptorSet()
-                            .Bind(accelBindingIndex, &tlas.as)
-                            .Bind(imageBindingIndex, &image)
-                            .Bind(sceneBindingIndex, &transferBuffer.buffer);
+        descriptorSet = layout.CreateDescriptorSet();
+        descriptorSet.Bind(accelBindingIndex, &tlas.as)
+            .Bind(imageBindingIndex, image)
+            .Bind(sceneBindingIndex, &transferBuffer.buffer);
         cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, &descriptorSet,
                                 rts.layout);
         cmd->TraceRays(&rts, params->width, params->height, 1);
-        device->CopyFrameBuffer(&swapchain, cmd, &image);
+        device->CopyFrameBuffer(&swapchain, cmd, image);
         device->EndFrame();
 
         // Wait until new update

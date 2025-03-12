@@ -20,6 +20,7 @@ struct Options
     string filename;
     i32 pixelX = -1;
     i32 pixelY = -1;
+    bool useValidation;
 };
 
 const Vec3f INVALID_VEC = Vec3f((f32)U32Max, (f32)U32Max, (f32)U32Max);

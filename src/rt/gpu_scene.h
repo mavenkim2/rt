@@ -17,16 +17,6 @@ struct SceneShapeParse
     Semaphore semaphore;
 };
 
-struct GPUScene
-{
-    Mat4 cameraFromRaster;
-    Mat4 renderFromCamera;
-    Vec3f dxCamera;
-    Vec3f dyCamera;
-    float lensRadius;
-    float focalLength;
-};
-
 GPUMesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh);
 void AddMaterialAndLights(Arena *arena, Tokenizer &tokenizer,
                           HashMap<MaterialNode> *materialHashMap, GPUMesh &mesh,
@@ -40,5 +30,11 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
                           ChunkedLinkedList<Light *, MemoryType_Light> &lights);
 SceneShapeParse StartSceneShapeParse();
 void EndSceneShapeParse(ScenePrimitives *scene, SceneShapeParse *parse);
+
+typedef Mat4 float4x4;
+typedef Vec3f float3;
+typedef AffineSpace float3x4;
+
 } // namespace rt
+
 #endif

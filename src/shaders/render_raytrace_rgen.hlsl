@@ -1,4 +1,5 @@
 #include "common.hlsli"
+#include "../rt/gpu_scene_shaderinterop.h"
 
 ConstantBuffer<GPUScene> scene : register(b2);
 RaytracingAccelerationStructure accel : register(t0);

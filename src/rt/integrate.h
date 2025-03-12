@@ -189,9 +189,15 @@ inline Ray2 Transform(const Mat4 &m, const Ray2 &r)
 
 inline Ray2 Transform(const AffineSpace &m, const Ray2 &r)
 {
-    Ray2 newRay = r;
-    newRay.o    = TransformP(m, r.o);
-    newRay.d    = TransformV(m, r.d);
+    Ray2 newRay     = r;
+    newRay.o        = TransformP(m, r.o);
+    newRay.pxOffset = TransformP(m, r.pxOffset);
+    newRay.pyOffset = TransformP(m, r.pyOffset);
+
+    newRay.d        = TransformV(m, r.d);
+    newRay.dxOffset = TransformV(m, r.dxOffset);
+    newRay.dyOffset = TransformV(m, r.dyOffset);
+
     return newRay;
 }
 
@@ -293,7 +299,7 @@ struct NEESample
 struct RenderParams2
 {
     Mat4 cameraFromRaster;
-    Mat4 renderFromCamera;
+    AffineSpace renderFromCamera;
 
     Mat4 NDCFromCamera;
     Mat4 cameraFromRender;
@@ -392,7 +398,7 @@ struct CameraDifferentials
 struct Camera
 {
     Mat4 cameraFromRaster;
-    Mat4 renderFromCamera;
+    AffineSpace renderFromCamera;
     Vec3f dxCamera;
     Vec3f dyCamera;
     f32 focalLength;
@@ -402,8 +408,9 @@ struct Camera
     f32 sppScale;
 
     Camera() {}
-    Camera(const Mat4 &cameraFromRaster, const Mat4 &renderFromCamera, const Vec3f &dxCamera,
-           const Vec3f &dyCamera, f32 focalLength, f32 lensRadius, u32 spp)
+    Camera(const Mat4 &cameraFromRaster, const AffineSpace &renderFromCamera,
+           const Vec3f &dxCamera, const Vec3f &dyCamera, f32 focalLength, f32 lensRadius,
+           u32 spp)
         : cameraFromRaster(cameraFromRaster), renderFromCamera(renderFromCamera),
           dxCamera(dxCamera), dyCamera(dyCamera), focalLength(focalLength),
           lensRadius(lensRadius)

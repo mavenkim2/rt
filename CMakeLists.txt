@@ -31,11 +31,13 @@ string(TOUPPER "${CMAKE_BUILD_TYPE}" uppercase_CMAKE_BUILD_TYPE)
 if (CMAKE_CONFIGURATION_TYPES)
     foreach(config ${CMAKE_CONFIGURATION_TYPES})
         string(TOUPPER "${config}" config_upper)
+        message(STATUS ${config_upper})
         # allow asserts in relwithdebinfo mode
         if (config_upper STREQUAL "DEBUG" OR config_upper STREQUAL "RELWITHDEBINFO")
             list (APPEND RT_DEFINITIONS "TRACK_MEMORY" "DEBUG")
         endif()
         if(config_upper STREQUAL "RELWITHDEBINFO")
+            set (uppercase_CMAKE_BUILD_TYPE "RELWITHDEBINFO")
             if (NOT MSVC)
                 add_definitions(-D_DEBUG)
             endif()
@@ -47,6 +49,10 @@ if (CMAKE_CONFIGURATION_TYPES)
                 string (REGEX REPLACE "(^| )[/-]D*NDEBUG($| )" " "
                     "${flags_var_to_scrub}" "${${flags_var_to_scrub}}")
             endforeach()
+        elseif(config_upper STREQUAL "DEBUG")
+            set (uppercase_CMAKE_BUILD_TYPE "DEBUG")
+        elseif(config_upper STREQUAL "RELEASE")
+            set (uppercase_CMAKE_BUILD_TYPE "RELEASE")
         endif()
     endforeach()
 else()
@@ -69,11 +75,8 @@ else()
     endif()
 endif()
 
-
+message (STATUS "build type: ${uppercase_CMAKE_BUILD_TYPE}")
 add_subdirectory (${CMAKE_CURRENT_SOURCE_DIR}/src/third_party)
-
-# set (FlagsSSE2 "-D __SSE__ -D __SSE2__")
-# set (FlagsSSE42 "${FlagsSSE2} -D __SSE3__ -D __SSSE3__ -D __SSE4_1__ -D __SSE4_2__")
 
 include (CheckCXXCompilerFlag)
 check_cxx_compiler_flag("-march=native" COMPILER_SUPPORTS_MARCH_NATIVE)
@@ -110,6 +113,11 @@ if (CMAKE_SYSTEM_NAME STREQUAL Windows)
     list (APPEND RT_DEFINITIONS "VK_USE_PLATFORM_WIN32_KHR")
 else()
     message (SEND_ERROR "Windows only supported")
+endif()
+
+if (uppercase_CMAKE_BUILD_TYPE STREQUAL "DEBUG")
+    message (STATUS "TESTTESTETESTSETTSETSTS")
+    list (APPEND SHADER_FLAGS "-Zi")
 endif()
 
 list (APPEND RT_DEFINITIONS "__SSE3__" "__SSE4_1__")
@@ -194,7 +202,31 @@ if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/gen/rgbspectrum_srgb.cpp")
     )
 endif()
 
-# shader compiler
+# shader compiles
+set(SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders)
+set(SHADER_SPV_DIR ${CMAKE_CURRENT_BINARY_DIR}/src/shaders)
+file(GLOB SHADER_FILES "${SHADER_SRC_DIR}/*.hlsl")
+file(GLOB SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsli")
+
+if (NOT DEFINED SHADER_COMPILER)
+    set(SHADER_COPILER "dxc")
+endif()
+
+foreach(SHADER_FILE ${SHADER_FILES})
+    get_filename_component(SHADER_NAME ${SHADER_FILE} NAME_WE)
+    set(SHADER_SPV ${SHADER_SPV_DIR}/${SHADER_NAME}.spv)
+    add_custom_command(
+        OUTPUT ${SHADER_SPV}
+        COMMAND ${SHADER_COMPILER} 
+        "-spirv" "-fspv-target-env=vulkan1.3" "-T lib_6_6" "$<$<CONFIG:Debug>:-Zi>" "-Fo ${SHADER_SPV}" "${SHADER_FILE}"
+        DEPENDS ${SHADER_FILE} ${SHADER_INCLUDES}
+        COMMENT "Compiling HLSL shader: ${SHADER_FILE} -> ${SHADER_SPV}"
+        VERBATIM
+    )
+    list (APPEND SHADER_SPV_FILES ${SHADER_SPV})
+endforeach()
+
+add_custom_target(shaders DEPENDS ${SHADER_SPV_FILES})
 
 # Main executable
 add_executable(rt_exe 
@@ -203,6 +235,8 @@ add_executable(rt_exe
     ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/vulkan/volk.c
     ${RT_SOURCE_FILES}
 )
+
+add_dependencies(rt_exe shaders)
 target_compile_definitions(rt_exe PRIVATE ${RT_DEFINITIONS})
 target_include_directories(rt_exe PRIVATE 
     ${PTEX_INCLUDE}

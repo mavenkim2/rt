@@ -80,33 +80,3 @@ void Transform(inout RayDesc desc, float3x4 m)
     desc.Origin = mul(m, float4(desc.Origin, 1));
     desc.Direction = mul(m, float4(desc.Direction, 0));
 }
-
-struct GPUScene
-{
-    float4x4 cameraFromRaster;
-    float3x4 renderFromCamera;
-    float3 dxCamera;
-    float3 dyCamera;
-    float lensRadius;
-    float focalLength;
-
-    void GenerateRay(float2 pFilm, float2 pLens, inout RayDesc desc, out RayPayload payload)
-    {
-        float3 pCamera = Transform(cameraFromRaster, float3(pFilm, 0.f));
-        desc.Origin = float3(0.f, 0.f, 0.f);
-        desc.Direction = normalize(pCamera);
-        if (lensRadius > 0.f)
-        {
-            pLens = lensRadius * SampleUniformDiskConcentric(pLens);
-
-            DefocusBlur(desc.Direction, pLens, focalLength, desc.Origin, 
-                        desc.Direction);
-            DefocusBlur(normalize(pCamera + dxCamera), pLens, focalLength, payload.pxOffset,
-                        payload.dxOffset);
-            DefocusBlur(normalize(pCamera + dyCamera), pLens, focalLength, payload.pyOffset,
-                        payload.dyOffset);
-        }
-        Transform(desc, renderFromCamera);
-        Transform(payload, renderFromCamera);
-    }
-};

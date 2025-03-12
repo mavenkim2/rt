@@ -2,5 +2,5 @@
 [shader("closesthit")]
 void main(inout RayPayload payload, BuiltInTriangleIntersectionAttributes attr) 
 {
-    payload.radiance = float3(.5, 0, 0);
+    payload.radiance = float3(.6, 0, 0);
 }

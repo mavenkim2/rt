@@ -642,6 +642,13 @@ struct AffineSpace
         c3 = other.c3;
         return *this;
     }
+    __forceinline AffineSpace(const Mat4 &other)
+        : c0(Vec3f(other.elements[0][0], other.elements[0][1], other.elements[0][2])),
+          c1(Vec3f(other.elements[1][0], other.elements[1][1], other.elements[1][2])),
+          c2(Vec3f(other.elements[2][0], other.elements[2][1], other.elements[2][2])),
+          c3(Vec3f(other.elements[3][0], other.elements[3][1], other.elements[3][2]))
+    {
+    }
 
     AffineSpace(ZeroTy) : c0(0), c1(0), c2(0), c3(0) {}
     AffineSpace(const Vec3f &a, const Vec3f &b, const Vec3f &c) : c0(a), c1(b), c2(c), c3(0) {}

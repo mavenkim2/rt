@@ -180,16 +180,16 @@ Vec3f ConvertRadianceToRGB(const SampledSpectrum &Lin, const SampledWavelengths 
 
 void Render(Arena *arena, RenderParams2 &params)
 {
-    u32 width              = params.width;
-    u32 height             = params.height;
-    u32 spp                = params.spp;
-    Vec2f &filterRadius    = params.filterRadius;
-    Mat4 &cameraFromRaster = params.cameraFromRaster;
-    Mat4 &renderFromCamera = params.renderFromCamera;
-    u32 maxDepth           = params.maxDepth;
-    f32 lensRadius         = params.lensRadius;
-    f32 focalLength        = params.focalLength;
-    f32 maxComponentValue  = 10.f;
+    u32 width                     = params.width;
+    u32 height                    = params.height;
+    u32 spp                       = params.spp;
+    Vec2f &filterRadius           = params.filterRadius;
+    Mat4 &cameraFromRaster        = params.cameraFromRaster;
+    AffineSpace &renderFromCamera = params.renderFromCamera;
+    u32 maxDepth                  = params.maxDepth;
+    f32 lensRadius                = params.lensRadius;
+    f32 focalLength               = params.focalLength;
+    f32 maxComponentValue         = 10.f;
 
     // parallel for over tiles
     u32 pixelWidth  = width;

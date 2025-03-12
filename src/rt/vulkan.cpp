@@ -1385,6 +1385,10 @@ void Vulkan::CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage 
         dependencyInfo.imageMemoryBarrierCount = ArrayLength(barriers);
         dependencyInfo.pImageMemoryBarriers    = barriers;
         vkCmdPipelineBarrier2(cmd->buffer, &dependencyInfo);
+
+        image->lastLayout   = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        image->lastAccess   = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        image->lastPipeline = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
     }
 
     // Copy framebuffer
@@ -2176,7 +2180,7 @@ void Vulkan::BeginFrame()
     CommandQueue &queue = queues[QueueType_Graphics];
     if (queue.submissionID >= 2)
     {
-        u64 val                      = queue.submissionID - 2;
+        u64 val                      = queue.submissionID - 1;
         VkSemaphoreWaitInfo waitInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
         waitInfo.pValues             = &val;
         waitInfo.semaphoreCount      = 1;
