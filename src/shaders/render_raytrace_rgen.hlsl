@@ -1,9 +1,9 @@
 #include "common.hlsli"
 #include "../rt/shader_interop/gpu_scene_shaderinterop.h"
 
-ConstantBuffer<GPUScene> scene : register(b2);
 RaytracingAccelerationStructure accel : register(t0);
 RWTexture2D<float4> image : register(u1);
+ConstantBuffer<GPUScene> scene : register(b2);
 
 [shader("raygeneration")]
 void main() 

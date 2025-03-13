@@ -1,8 +1,13 @@
 static const float PI = 3.1415926535f;
 static const float FLT_MAX = asfloat(0x7F800000);
+#
+#define texture2DSpace space1
+#define structuredBufferSpace space2
 
 #ifdef __spirv__
-[[vk::binding(0, 1)]] Texture2D bindlessTextures[];
+Texture2D bindlessTextures[] : register(t0, texture2DSpace);
+StructuredBuffer<float3> bindlessFloat3s[] : register(t0, structuredBufferSpace);
+StructuredBuffer<uint> bindlessUints[] : register(t0, structuredBufferSpace);
 #else
 #error
 #endif
@@ -55,7 +60,26 @@ void swap(T a, T b)
 
 float copysign(float a, float b)
 {
-    return asfloat(asuint(a) ^ (asuint(b) & 0x80000000));
+    return asfloat(abs(asint(a)) | (asuint(b) & 0x80000000));
+}
+
+template <int N>
+vector<float, N> flipsign(vector<float, N> mag, vector<float, N> sign)
+{
+    vector<float, N> result;
+    for (int i = 0; i < N; i++)
+    {
+        result[i] = asfloat(asuint(mag[i]) ^ (asuint(sign[i]) & 0x80000000));
+    }
+    return result;
+}
+
+float3 DecodeOctahedral(uint n) 
+{
+    float2 decoded = float2(float((n >> 16) & 0xff), float(n & 0xff)) * 2 - 1;
+    float3 normal = float3(decoded.xy, 1 - abs(decoded.x) - abs(decoded.y));
+    if (normal.z < 0) normal.xy = flipsign((1 - abs(normal.yx)), normal.xy);
+    return normalize(normal);
 }
 
 float3 Transform(float4x4 m, float3 p)

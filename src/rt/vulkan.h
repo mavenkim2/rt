@@ -3,6 +3,7 @@
 
 #include <functional>
 
+#include "base.h"
 #include "bvh/bvh_types.h"
 #include "containers.h"
 #include "platform.h"
@@ -129,8 +130,8 @@ enum
 enum DescriptorType
 {
     DescriptorType_SampledImage,
+    DescriptorType_StorageBuffer,
     // DescriptorType_UniformTexel,
-    // DescriptorType_StorageBuffer,
     // DescriptorType_StorageTexelBuffer,
     DescriptorType_Count,
 };
@@ -155,21 +156,23 @@ enum class ShaderStage
     Intersect,
     Count,
 };
+ENUM_CLASS_FLAGS(ShaderStage)
 
 inline VkShaderStageFlags GetVulkanShaderStage(ShaderStage stage)
 {
-    switch (stage)
-    {
-        case ShaderStage::Vertex: return VK_SHADER_STAGE_VERTEX_BIT;
-        case ShaderStage::Geometry: return VK_SHADER_STAGE_GEOMETRY_BIT;
-        case ShaderStage::Fragment: return VK_SHADER_STAGE_FRAGMENT_BIT;
-        case ShaderStage::Compute: return VK_SHADER_STAGE_COMPUTE_BIT;
-        case ShaderStage::Raygen: return VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-        case ShaderStage::Miss: return VK_SHADER_STAGE_MISS_BIT_KHR;
-        case ShaderStage::Hit: return VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-        case ShaderStage::Intersect: return VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
-        default: Assert(0); return VK_SHADER_STAGE_FLAG_BITS_MAX_ENUM;
-    }
+    VkShaderStageFlags flags = 0;
+    if (EnumHasAnyFlags(stage, ShaderStage::Vertex)) flags |= VK_SHADER_STAGE_VERTEX_BIT;
+    if (EnumHasAnyFlags(stage, ShaderStage::Geometry)) flags |= VK_SHADER_STAGE_GEOMETRY_BIT;
+    if (EnumHasAnyFlags(stage, ShaderStage::Fragment)) flags |= VK_SHADER_STAGE_FRAGMENT_BIT;
+    if (EnumHasAnyFlags(stage, ShaderStage::Compute)) flags |= VK_SHADER_STAGE_COMPUTE_BIT;
+    if (EnumHasAnyFlags(stage, ShaderStage::Raygen)) flags |= VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+    if (EnumHasAnyFlags(stage, ShaderStage::Miss)) flags |= VK_SHADER_STAGE_MISS_BIT_KHR;
+    if (EnumHasAnyFlags(stage, ShaderStage::Hit)) flags |= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+    if (EnumHasAnyFlags(stage, ShaderStage::Intersect))
+        flags |= VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+
+    Assert(flags);
+    return flags;
 }
 
 struct Shader
@@ -223,6 +226,8 @@ enum class RTBindings
     Accel,
     Image,
     Scene,
+    RTBindingData,
+    GPUMaterial,
 };
 
 struct RayTracingState
@@ -280,8 +285,15 @@ struct GPUImage
 
 struct GPUMesh
 {
-    u64 vertexAddress;
-    u64 indexAddress;
+    GPUBuffer buffer;
+
+    u64 deviceAddress;
+    u64 vertexOffset;
+    u64 vertexStride;
+    u64 indexOffset;
+    u64 indexStride;
+    u64 normalOffset;
+    u64 normalStride;
 
     u32 numIndices;
     u32 numVertices;
@@ -634,7 +646,10 @@ struct Vulkan
                          int width = 1, int height = 1, int depth = 1, int numMips = 1,
                          int numLayers = 1);
     int BindlessIndex(GPUImage *image);
-    TransferBuffer GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize);
+    int BindlessStorageIndex(GPUBuffer *buffer, size_t offset = 0, size_t range = 0);
+    u64 GetMinAlignment(VkBufferUsageFlags flags);
+    TransferBuffer GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize,
+                                    int numRanges = 0);
     TransferBuffer GetStagingImage(VkImageUsageFlags flags, VkFormat format, VkImageType type,
                                    u32 width, u32 height);
     u64 GetDeviceAddress(VkBuffer buffer);
@@ -696,7 +711,6 @@ struct Vulkan
     // void EndRenderPass(Swapchain *swapchain, CommandBuffer cmd);
     // void SubmitCommandBuffers();
     // void BindCompute(PipelineState *ps, CommandBuffer cmd);
-    // void PushConstants(CommandBuffer cmd, u32 size, void *data, u32 offset = 0);
     // void WaitForGPU();
     // void Wait(CommandBuffer waitFor, CommandBuffer cmd);
     // void Wait(CommandBuffer wait);

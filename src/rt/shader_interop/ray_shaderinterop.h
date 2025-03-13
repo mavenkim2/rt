@@ -1,15 +1,16 @@
-#ifndef MISS_SHADERINTEROP_H_
-#define MISS_SHADERINTEROP_H_
+#ifndef RAY_SHADERINTEROP_H_
+#define RAY_SHADERINTEROP_H_
 
 #ifdef __cplusplus
-namespace rt 
+namespace rt
 {
 typedef unsigned int uint;
 #endif
 
-struct MissPushConstant 
+struct RayPushConstant
 {
     uint envMap;
+    uint bindingTable;
     uint width;
     uint height;
 };

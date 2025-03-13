@@ -1,16 +1,14 @@
 #include "common.hlsli"
 #include "../rt/shader_interop/gpu_scene_shaderinterop.h"
-#include "../rt/shader_interop/miss_shaderinterop.h"
+#include "../rt/shader_interop/ray_shaderinterop.h"
 
 ConstantBuffer<GPUScene> scene : register(b2);
-Texture2D<float3> environmentMap : register(t4);
 
-[[vk::push_constant]] MissPushConstant push;
+[[vk::push_constant]] RayPushConstant push;
 
 [shader("miss")]
 void main(inout RayPayload payload) 
 {
-    printf("%f\n", scene.lightFromRender[0][0]);
     float3 d = normalize(mul(scene.lightFromRender, float4(WorldRayDirection(), 0)).xyz);
 
     // Equal area sphere to square

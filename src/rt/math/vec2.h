@@ -35,6 +35,7 @@ struct Vec2
         Assert(i < 2);
         return e[i];
     }
+    Vec2 yx() const { return Vec2(y, x); }
 };
 
 template <typename T>
@@ -61,6 +62,18 @@ template <typename T>
 __forceinline Vec2<T> operator-(const Vec2<T> &u, const Vec2<T> &v)
 {
     return Vec2<T>(u.x - v.x, u.y - v.y);
+}
+
+template <typename T>
+__forceinline Vec2<T> operator-(const T &t, const Vec2<T> &v)
+{
+    return Vec2<T>(t - v.x, t - v.y);
+}
+
+template <typename T>
+__forceinline Vec2<T> operator-(const Vec2<T> &v, const T &t)
+{
+    return Vec2<T>(v.x - t, v.y - t);
 }
 
 template <typename T>
@@ -199,6 +212,12 @@ template <typename T>
 __forceinline Vec2<T> Select(const Vec2<T> &mask, const Vec2<T> &a, const Vec2<T> &b)
 {
     return Vec2<T>(Select(mask.x, a.x, b.x), Select(mask.y, a.y, b.y));
+}
+
+template <typename T>
+__forceinline Vec2<T> Abs(const Vec2<T> &u)
+{
+    return Vec2<T>(Abs(u.x), Abs(u.y));
 }
 
 template <typename T>

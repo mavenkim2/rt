@@ -822,14 +822,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
 
             scene->numPrimitives = shapes.totalCount;
             Assert(shapes.totalCount == indices.totalCount);
-            if (type == GeometryType::TriangleMesh || type == GeometryType::QuadMesh)
-            {
-                scene->primitives = PushArrayNoZero(arena, Mesh, shapes.totalCount);
-            }
-            else
-            {
-                scene->primitives = PushArrayNoZero(tempArena, Mesh, shapes.totalCount);
-            }
+            scene->primitives = PushArrayNoZero(arena, MeshType, scene->numPrimitives);
             shapes.Flatten((MeshType *)scene->primitives);
 
             if (lights.totalCount)

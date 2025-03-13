@@ -359,48 +359,16 @@ Complex<T> Sqrt(const Complex<T> &z)
 // Octahedral encoding
 //
 
-struct OctahedralVector
-{
-    u16 x;
-    u16 y;
-};
-
-inline u16 Encode(f32 f) { return (u16)((f + 1) / 2 * 65535.f + 0.5f); }
+inline u32 Encode(f32 f) { return (u32)((f + 1) / 2 * 65535.f + 0.5f); }
 
 inline f32 Decode(u16 u) { return (f32)(u / 65535.f * 2 - 1); }
 
-// TODO: simd
-inline OctahedralVector EncodeOctahedral(Vec3f v)
+inline u32 EncodeOctahedral(Vec3f v)
 {
-    v /= Abs(v.x) + Abs(v.y) + Abs(v.z);
-    OctahedralVector result;
+    Vec2f p = v.xy * (1.f / Abs(v.x) + Abs(v.y) + Abs(v.z));
+    p       = v.z < 0 ? (1.f - Abs(p.yx()) * Vec2f(copysign(1, p.x), copysign(1, p.y))) : p;
 
-    if (v.z >= 0)
-    {
-        result.x = Encode(v.x);
-        result.y = Encode(v.y);
-    }
-    else
-    {
-        result.x = Encode(1 - Abs(v.y)) * (u16)std::copysign(1, v.x);
-        result.y = Encode(1 - Abs(v.x)) * (u16)std::copysign(1, v.y);
-    }
-    return result;
-}
-
-inline Vec3f DecodeOctahedral(OctahedralVector in)
-{
-    Vec3f result;
-    result.x = Decode(in.x);
-    result.y = Decode(in.y);
-    result.z = 1 - Abs(result.x) - Abs(result.y);
-    if (result.z < 0)
-    {
-        f32 xo   = result.x;
-        result.x = (1 - Abs(result.y)) * std::copysign(1.f, xo);
-        result.y = (1 - Abs(xo)) * std::copysign(1.f, result.y);
-    }
-    return Normalize(result);
+    return (Encode(p[0]) << 16) | Encode(p[1]);
 }
 
 inline f32 PowerHeuristic(u32 numA, f32 pdfA, u32 numB, f32 pdfB)
@@ -409,8 +377,6 @@ inline f32 PowerHeuristic(u32 numA, f32 pdfA, u32 numB, f32 pdfB)
     f32 b = Sqr(numB * pdfB);
     return a / (a + b);
 }
-
-
 
 } // namespace rt
 

@@ -583,9 +583,9 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
                 // case DescriptorType_UniformTexel:
                 //     descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
                 //     break;
-                // case DescriptorType_StorageBuffer:
-                //     descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                //     break;
+                case DescriptorType_StorageBuffer:
+                    descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    break;
                 // case DescriptorType_StorageTexelBuffer:
                 //     descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
                 //     break;
@@ -595,15 +595,14 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
             BindlessDescriptorPool &bindlessDescriptorPool = bindlessDescriptorPools[type];
             VkDescriptorPoolSize poolSize                  = {};
             poolSize.type                                  = descriptorType;
-            // if (type == DescriptorType_StorageBuffer ||
-            //     type == DescriptorType_StorageTexelBuffer)
-            // {
-            //     poolSize.descriptorCount =
-            //         Min(10000u,
-            //             deviceProperties.properties.limits.maxDescriptorSetStorageBuffers /
-            //             4);
-            // }
-            if (type == DescriptorType_SampledImage)
+            if (type ==
+                DescriptorType_StorageBuffer) // || type == DescriptorType_StorageTexelBuffer)
+            {
+                poolSize.descriptorCount =
+                    Min(10000u,
+                        deviceProperties.properties.limits.maxDescriptorSetStorageBuffers / 4);
+            }
+            else if (type == DescriptorType_SampledImage)
             {
                 poolSize.descriptorCount =
                     Min(10000u,
@@ -677,7 +676,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
             switch (type)
             {
                 case DescriptorType_SampledImage: typeName = "Sampled Image"; break;
-                // case DescriptorType_StorageBuffer: typeName = "Storage Buffer"; break;
+                case DescriptorType_StorageBuffer: typeName = "Storage Buffer"; break;
                 // case DescriptorType_UniformTexel: typeName = "Uniform Texel Buffer"; break;
                 // case DescriptorType_StorageTexelBuffer:
                 //     typeName = "Storage Texel Buffer";
@@ -1604,13 +1603,59 @@ int Vulkan::BindlessIndex(GPUImage *image)
     return index;
 }
 
-TransferBuffer Vulkan::GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize)
+int Vulkan::BindlessStorageIndex(GPUBuffer *buffer, size_t offset, size_t range)
+{
+    BindlessDescriptorPool &descriptorPool =
+        bindlessDescriptorPools[DescriptorType_StorageBuffer];
+    int index = descriptorPool.Allocate();
+
+    VkDescriptorBufferInfo info = {};
+    info.buffer                 = buffer->buffer;
+    info.offset                 = offset;
+    info.range                  = range;
+
+    VkWriteDescriptorSet writeSet = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writeSet.dstSet               = descriptorPool.set;
+    writeSet.descriptorCount      = 1;
+    writeSet.dstArrayElement      = index;
+    writeSet.descriptorType       = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writeSet.pBufferInfo          = &info;
+
+    vkUpdateDescriptorSets(device, 1, &writeSet, 0, 0);
+    return index;
+}
+
+u64 Vulkan::GetMinAlignment(VkBufferUsageFlags flags)
+{
+    u64 minAlignment = 0;
+    if ((flags & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) != 0)
+    {
+        minAlignment = Max(deviceProperties.properties.limits.minStorageBufferOffsetAlignment,
+                           minAlignment);
+    }
+    if ((flags & VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT) != 0)
+    {
+        minAlignment = Max(deviceProperties.properties.limits.minUniformBufferOffsetAlignment,
+                           minAlignment);
+    }
+    if ((flags & (VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT ||
+                  VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT)) != 0)
+    {
+        minAlignment = Max(deviceProperties.properties.limits.minTexelBufferOffsetAlignment,
+                           minAlignment);
+    }
+    return minAlignment;
+}
+
+TransferBuffer Vulkan::GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize,
+                                        int numRanges)
 {
     GPUBuffer buffer  = CreateBuffer(flags | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                      totalSize);
     buffer.lastStage  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
     buffer.lastAccess = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+
     GPUBuffer stagingBuffer =
         CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, totalSize,
                      VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
@@ -2194,11 +2239,11 @@ GPUAccelerationStructure CommandBuffer::BuildBLAS(const GPUMesh *meshes, int cou
         VkBufferDeviceAddressInfo pInfo = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
 
         triangles.vertexFormat             = VK_FORMAT_R32G32B32_SFLOAT;
-        triangles.vertexData.deviceAddress = mesh.vertexAddress;
+        triangles.vertexData.deviceAddress = mesh.deviceAddress + mesh.vertexOffset;
         triangles.vertexStride             = sizeof(Vec3f);
         triangles.maxVertex                = mesh.numVertices - 1;
         triangles.indexType                = VK_INDEX_TYPE_UINT32;
-        triangles.indexData.deviceAddress  = mesh.indexAddress;
+        triangles.indexData.deviceAddress  = mesh.deviceAddress + mesh.indexOffset;
 
         geometries.Push(geometry);
 
@@ -2241,7 +2286,7 @@ GPUAccelerationStructure CommandBuffer::BuildTLAS(Instance *instances, int numIn
         VkAccelerationStructureInstanceKHR &vkInstance = vkInstances[instanceIndex];
         Instance &instance                             = instances[instanceIndex];
         vkInstance.transform           = ConvertMatrix(transforms[instance.transformIndex]);
-        vkInstance.instanceCustomIndex = 0;
+        vkInstance.instanceCustomIndex = childScenes[instance.id]->gpuInstanceID;
         vkInstance.mask                = 0xff;
         vkInstance.instanceShaderBindingTableRecordOffset = 0;
         vkInstance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;

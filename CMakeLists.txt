@@ -205,7 +205,11 @@ endif()
 # shader compiles
 set(SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders)
 set(SHADER_SPV_DIR ${CMAKE_CURRENT_BINARY_DIR}/src/shaders)
-file(GLOB SHADER_FILES "${SHADER_SRC_DIR}/*.hlsl")
+set (SHADER_FILES "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
+    "${SHADER_SRC_DIR}/render_raytrace_miss.hlsl"
+    "${SHADER_SRC_DIR}/render_raytrace_hit.hlsl"
+    "${SHADER_SRC_DIR}/render_raytrace_dielectric_hit.hlsl"
+)
 file(GLOB SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsli")
 file(GLOB SHADER_INTEROP "${CMAKE_CURRENT_SOURCE_DIR}/src/rt/shader_interop/*.h")
 

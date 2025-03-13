@@ -1,7 +1,8 @@
 #include "integrate.h"
 #include "gpu_scene.h"
-#include "shader_interop/miss_shaderinterop.h"
 #include "shader_interop/gpu_scene_shaderinterop.h"
+#include "shader_interop/hit_shaderinterop.h"
+#include "shader_interop/ray_shaderinterop.h"
 #include "scene.h"
 #include "vulkan.h"
 #include "win32.h"
@@ -29,24 +30,56 @@ GPUMesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
 {
     size_t vertexSize  = sizeof(mesh.p[0]) * mesh.numVertices;
     size_t indicesSize = sizeof(mesh.indices[0]) * mesh.numIndices;
-    size_t totalSize   = vertexSize + sizeof(mesh.indices[0]) * mesh.numIndices;
+    size_t normalSize  = 0;
+    size_t totalSize   = vertexSize + indicesSize;
+
+    ScratchArena scratch;
+    u32 *octNormals = 0;
+    if (mesh.n)
+    {
+        octNormals = PushArrayNoZero(scratch.temp.arena, u32, mesh.numVertices);
+        for (int i = 0; i < mesh.numVertices; i++)
+        {
+            octNormals[i] = EncodeOctahedral(mesh.n[i]);
+        }
+        normalSize = sizeof(u32) * mesh.numVertices;
+        totalSize += normalSize;
+    }
+
+    u64 alignment = device->GetMinAlignment(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
     TransferBuffer transferBuffer = device->GetStagingBuffer(
-        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, totalSize);
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        totalSize + 2 * (alignment - 1));
 
     u64 deviceAddress = device->GetDeviceAddress(transferBuffer.buffer.buffer);
 
-    u8 *ptr = (u8 *)transferBuffer.mappedPtr;
+    GPUMesh result = {};
+
+    uintptr_t ptr = (uintptr_t)transferBuffer.mappedPtr;
     Assert(ptr);
-    MemoryCopy(ptr, mesh.p, vertexSize);
+    MemoryCopy((void *)ptr, mesh.p, vertexSize);
     ptr += vertexSize;
-    MemoryCopy(ptr, mesh.indices, indicesSize);
+    ptr                = AlignPow2(ptr, alignment);
+    result.indexOffset = ptr - (uintptr_t)transferBuffer.mappedPtr;
+    MemoryCopy((void *)ptr, mesh.indices, indicesSize);
+    ptr += indicesSize;
+    if (normalSize)
+    {
+        ptr                 = AlignPow2(ptr, alignment);
+        result.normalOffset = ptr - (uintptr_t)transferBuffer.mappedPtr;
+        MemoryCopy((void *)ptr, octNormals, normalSize);
+    }
 
     parse->buffer->SubmitTransfer(&transferBuffer);
 
-    GPUMesh result;
-    result.vertexAddress = deviceAddress;
-    result.indexAddress  = deviceAddress + vertexSize;
+    result.buffer        = transferBuffer.buffer;
+    result.deviceAddress = deviceAddress;
+    result.vertexOffset  = 0;
+    result.vertexStride  = sizeof(Vec3f);
+    result.indexStride   = sizeof(u32);
+    result.normalStride  = sizeof(u32);
     result.numIndices    = mesh.numIndices;
     result.numVertices   = mesh.numVertices;
     result.numFaces      = mesh.numFaces;
@@ -120,25 +153,63 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
 // 2. dgfs
 // 3. clas
 // 4. actual bsdfs and brdfs
-// 5. environment map miss
-// 6. add other parts of the scene
+//      - need vertices and normals, probably compressed
+// 6. add other parts of the scene, with actual instancing
 // 7. ability to move around
 // 8. recycle memory
 
 void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
                        int maxDepth, Image *envMap)
 {
+    // Set the instance ids of each scene
+    int runningTotal = 0;
+    for (int i = 0; i < numScenes; i++)
+    {
+        ScenePrimitives *scene = scenes[i];
+        if (scene->geometryType != GeometryType::Instance)
+        {
+            scene->gpuInstanceID = runningTotal;
+
+            GPUMesh *gpuMeshes = (GPUMesh *)scene->primitives;
+            for (int primIndex = 0; primIndex < scene->numPrimitives; primIndex++)
+            {
+                GPUMesh &gpuMesh     = gpuMeshes[primIndex];
+                int bindlessVertices = device->BindlessStorageIndex(
+                    &gpuMesh.buffer, gpuMesh.vertexOffset, gpuMesh.vertexStride);
+                Assert(bindlessVertices == 3 * runningTotal);
+                int bindlessIndices = device->BindlessStorageIndex(
+                    &gpuMesh.buffer, gpuMesh.indexOffset, gpuMesh.indexStride);
+                Assert(bindlessIndices == 3 * runningTotal + 1);
+                int bindlessNormals = device->BindlessStorageIndex(
+                    &gpuMesh.buffer, gpuMesh.normalOffset, gpuMesh.normalStride);
+                Assert(bindlessNormals == 3 * runningTotal + 2);
+                runningTotal++;
+            }
+        }
+        else
+        {
+            scene->gpuInstanceID = scene->sceneIndex;
+        }
+    }
+
+    GPUMaterial gpuMaterial;
+    gpuMaterial.eta = 1.1;
+
+    RTBindingData bindingData;
+    bindingData.materialIndex = 0;
+
     // Compile shaders
     string raygenShaderName = "../src/shaders/render_raytrace_rgen.spv";
     string missShaderName   = "../src/shaders/render_raytrace_miss.spv";
-    string hitShaderName    = "../src/shaders/render_raytrace_hit.spv";
+    // string hitShaderName    = "../src/shaders/render_raytrace_hit.spv";
+    string hitShaderName = "../src/shaders/render_raytrace_dielectric_hit.spv";
 
     Arena *arena    = params->arenas[0];
     string rgenData = OS_ReadFile(arena, raygenShaderName);
     string missData = OS_ReadFile(arena, missShaderName);
     string hitData  = OS_ReadFile(arena, hitShaderName);
 
-    Swapchain swapchain = device->CreateSwapchain(params->window, VK_FORMAT_B8G8R8A8_UNORM,
+    Swapchain swapchain = device->CreateSwapchain(params->window, VK_FORMAT_R8G8B8A8_SRGB,
                                                   params->width, params->height);
 
     Shader *rayShaders[RST_Max];
@@ -158,9 +229,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     rayShaders[RST_ClosestHit] = hitShaders;
 
     PushConstant pushConstant;
-    pushConstant.stage  = ShaderStage::Miss;
+    pushConstant.stage  = ShaderStage::Miss | ShaderStage::Hit;
     pushConstant.offset = 0;
-    pushConstant.size   = sizeof(MissPushConstant);
+    pushConstant.size   = sizeof(RayPushConstant);
 
     GPUScene gpuScene;
     gpuScene.cameraFromRaster = params->cameraFromRaster;
@@ -174,6 +245,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     CommandBuffer *transferCmd    = device->BeginCommandBuffer(QueueType_Copy);
     GPUBuffer sceneTransferBuffer = transferCmd->SubmitBuffer(
         &gpuScene, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene));
+    GPUBuffer bindingDataBuffer = transferCmd->SubmitBuffer(
+        &bindingData, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(RTBindingData));
+    GPUBuffer materialBuffer = transferCmd->SubmitBuffer(
+        &gpuMaterial, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(GPUMaterial));
 
     GPUImage gpuEnvMap = transferCmd->SubmitImage(envMap->contents, VK_IMAGE_USAGE_SAMPLED_BIT,
                                                   VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TYPE_2D,
@@ -207,6 +282,15 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     int sceneBindingIndex =
         layout.AddBinding((u32)RTBindings::Scene, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                           VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR);
+
+    int bindingDataBindingIndex =
+        layout.AddBinding((u32)RTBindings::RTBindingData, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                          VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR);
+
+    int gpuMaterialBindingIndex =
+        layout.AddBinding((u32)RTBindings::GPUMaterial, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                          VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR);
+
     layout.AddImmutableSamplers();
 
     RayTracingState rts = device->CreateRayTracingPipeline(rayShaders, counts, &pushConstant,
@@ -216,7 +300,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     GPUAccelerationStructure tlas = {};
     // TODO: new command buffers have to wait on ones from the previous depth
-    // also this doesn't work if there's actually a TLAS
+    // also this doesn't work if there's actually a nontrivial TLAS
     for (int depth = maxDepth; depth >= 0; depth--)
     {
         ScratchArena scratch;
@@ -290,6 +374,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     f32 frameDt = 1.f / 60.f;
     int envMapBindlessIndex;
+    int bindingTableBindlessIndex;
+    int gpuMaterialSomething;
+
     for (;;)
     {
         MSG message;
@@ -309,13 +396,15 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         {
             cmd->Wait(submitSemaphore);
             cmd->Wait(tlasSemaphore);
-            envMapBindlessIndex = device->BindlessIndex(&gpuEnvMap);
+            envMapBindlessIndex       = device->BindlessIndex(&gpuEnvMap);
+            bindingTableBindlessIndex = device->BindlessStorageIndex(&materialBuffer);
         }
 
-        MissPushConstant pc;
-        pc.envMap = envMapBindlessIndex;
-        pc.width  = envMap->width;
-        pc.height = envMap->height;
+        RayPushConstant pc;
+        pc.envMap       = envMapBindlessIndex;
+        pc.bindingTable = bindingTableBindlessIndex;
+        pc.width        = envMap->width;
+        pc.height       = envMap->height;
 
         cmd->Barrier(image, VK_IMAGE_LAYOUT_GENERAL,
                      VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
@@ -325,7 +414,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         DescriptorSet descriptorSet = layout.CreateDescriptorSet();
         descriptorSet.Bind(accelBindingIndex, &tlas.as)
             .Bind(imageBindingIndex, image)
-            .Bind(sceneBindingIndex, &sceneTransferBuffer);
+            .Bind(sceneBindingIndex, &sceneTransferBuffer)
+            .Bind(bindingDataBindingIndex, &bindingDataBuffer)
+            .Bind(gpuMaterialBindingIndex, &materialBuffer);
         cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, &descriptorSet,
                                 rts.layout);
         cmd->PushConstants(&pushConstant, &pc, rts.layout);

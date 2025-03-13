@@ -847,7 +847,9 @@ struct ScenePrimitives
     IntersectFunc intersectFunc;
     OccludedFunc occludedFunc;
     u32 numPrimitives, numFaces;
+
     int sceneIndex;
+    int gpuInstanceID;
 
     ScenePrimitives() {}
     Bounds GetBounds() const { return Bounds(Lane4F32(boundsMin), Lane4F32(boundsMax)); }
