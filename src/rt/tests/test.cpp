@@ -287,10 +287,12 @@ void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
                                  AffineSpace::Rotate(Vec3f(-1, 0, 0), Radians(90)) *
                                  AffineSpace::Rotate(Vec3f(0, 0, 1), Radians(65));
     AffineSpace renderFromLight = worldFromLight;
+    AffineSpace lightFromRender = Inverse(renderFromLight);
+    params.lightFromRender = lightFromRender;
 
     f32 scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
     // ErrorExit(scale == 0.00935831666f, "scale: %f\n", scale);
-    Image envMap = LoadFile("../../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png");
+    Image envMap = LoadFile("../../data/island/pbrt-v4/textures/islandsunVIS-equiarea.png", 4);
     ImageInfiniteLight *infLight = PushStructConstruct(arena, ImageInfiniteLight)(
         arena, envMap, &renderFromLight, RGBColorSpace::sRGB, sceneRadius, scale);
 

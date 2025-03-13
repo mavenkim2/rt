@@ -305,6 +305,7 @@ struct RenderParams2
     Mat4 cameraFromRender;
 
     AffineSpace renderFromWorld;
+    AffineSpace lightFromRender;
 
     Arena **arenas;
     OS_Handle window;

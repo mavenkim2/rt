@@ -100,7 +100,7 @@ inline u32 GetImageSize(Image *image)
     return size;
 }
 
-Image LoadFile(const char *file);
+Image LoadFile(const char *file, int numComponents = 0);
 Image LoadHDR(const char *file);
 
 inline u8 *GetColor(const Image *image, i32 x, i32 y)

@@ -20,11 +20,12 @@
 namespace rt
 {
 
-Image LoadFile(const char *file)
+Image LoadFile(const char *file, int numComponents)
 {
     Image image;
     i32 nComponents;
-    image.contents      = (u8 *)stbi_load(file, &image.width, &image.height, &nComponents, 0);
+    image.contents =
+        (u8 *)stbi_load(file, &image.width, &image.height, &nComponents, numComponents);
     image.bytesPerPixel = nComponents;
     return image;
 }
@@ -1084,6 +1085,7 @@ int main(int argc, char *argv[])
         else if (Contains(arg, "-validation"))
         {
             options.useValidation = true;
+            i++;
         }
         else
         {

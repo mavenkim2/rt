@@ -7,6 +7,8 @@ static const float FLT_MAX = asfloat(0x7F800000);
 #error
 #endif
 
+SamplerState samplerLinearClamp : register(s50);
+
 // Alan wake 2 random numbers 
 uint Hash(uint x)
 {

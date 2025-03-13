@@ -124,9 +124,9 @@ enum
 enum DescriptorType
 {
     DescriptorType_SampledImage,
-    DescriptorType_UniformTexel,
-    DescriptorType_StorageBuffer,
-    DescriptorType_StorageTexelBuffer,
+    // DescriptorType_UniformTexel,
+    // DescriptorType_StorageBuffer,
+    // DescriptorType_StorageTexelBuffer,
     DescriptorType_Count,
 };
 
@@ -288,6 +288,7 @@ struct GPUAccelerationStructure
     VkAccelerationStructureKHR as;
     GPUBuffer buffer;
     VkDeviceAddress address;
+    VkAccelerationStructureTypeKHR type;
 };
 
 struct TransferBuffer
@@ -344,6 +345,7 @@ struct DescriptorSetLayout
     int AddBinding(u32 binding, VkDescriptorType type, VkShaderStageFlags stage);
     VkDescriptorSetLayout *GetVulkanLayout();
     DescriptorSet CreateDescriptorSet();
+    void AddImmutableSamplers();
 };
 
 struct CommandBuffer
@@ -496,7 +498,6 @@ struct Vulkan
     std::vector<VkDynamicState> dynamicStates;
     VkPipelineDynamicStateCreateInfo dynamicStateInfo;
 
-    // TODO: the descriptor sets shouldn't be here.
     struct PipelineStateVulkan
     {
         VkPipeline pipeline;
@@ -553,8 +554,9 @@ struct Vulkan
     struct SamplerVulkan
     {
         VkSampler sampler;
-        SamplerVulkan *next;
     };
+
+    std::vector<VkSampler> immutableSamplers;
 
     //////////////////////////////
     // Allocation/Deferred cleanup
@@ -626,6 +628,7 @@ struct Vulkan
     GPUImage CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageType type,
                          int width = 1, int height = 1, int depth = 1, int numMips = 1,
                          int numLayers = 1);
+    int BindlessIndex(GPUImage *image);
     TransferBuffer GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize);
     TransferBuffer GetStagingImage(VkImageUsageFlags flags, VkFormat format, VkImageType type,
                                    u32 width, u32 height);
@@ -643,8 +646,8 @@ struct Vulkan
     VkAccelerationStructureInstanceKHR GetVkInstance(const AffineSpace &transform,
                                                      GPUAccelerationStructure &as);
     QueryPool GetCompactionSizes(CommandBuffer *cmd, GPUAccelerationStructure **as, int count);
-    void CompactBLASes(CommandBuffer *cmd, QueryPool &pool, GPUAccelerationStructure **as,
-                       int count);
+    void CompactAS(CommandBuffer *cmd, QueryPool &pool, GPUAccelerationStructure **as,
+                   int count);
     void BeginFrame();
     void EndFrame();
 
@@ -711,7 +714,6 @@ struct Vulkan
     u32 GetCurrentBuffer() { return frameCount % numActiveFrames; }
     u32 GetNextBuffer() { return (frameCount + 1) % numActiveFrames; }
 
-private:
     const i32 cPoolSize = 128;
     b32 CreateSwapchain(Swapchain *inSwapchain);
 
@@ -775,11 +777,6 @@ private:
     // Default samplers
     //
     VkSampler nullSampler;
-
-    // Linear wrap, nearest wrap, cmp > clamp to edge
-    std::vector<VkSampler> immutableSamplers;
-    // VkSampler mLinearSampler;
-    // VkSampler mNearestSampler;
 
     VkImage nullImage2D;
     VmaAllocation nullImage2DAllocation;

@@ -165,6 +165,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     GPUScene gpuScene;
     gpuScene.cameraFromRaster = params->cameraFromRaster;
     gpuScene.renderFromCamera = params->renderFromCamera;
+    gpuScene.lightFromRender  = params->lightFromRender;
     gpuScene.dxCamera         = params->dxCamera;
     gpuScene.dyCamera         = params->dyCamera;
     gpuScene.lensRadius       = params->lensRadius;
@@ -175,12 +176,16 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         &gpuScene, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene));
 
     GPUImage gpuEnvMap = transferCmd->SubmitImage(envMap->contents, VK_IMAGE_USAGE_SAMPLED_BIT,
-                                                  VK_FORMAT_R8G8B8_SRGB, VK_IMAGE_TYPE_2D,
+                                                  VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TYPE_2D,
                                                   envMap->width, envMap->height);
+    transferCmd->Barrier(&gpuEnvMap, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                         VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                         VK_ACCESS_2_SHADER_READ_BIT);
+
+    Semaphore submitSemaphore   = device->CreateGraphicsSemaphore();
+    submitSemaphore.signalValue = 1;
+    transferCmd->Signal(submitSemaphore);
     device->SubmitCommandBuffer(transferCmd);
-    // TODO: need to sync this transfer with the start of ray tracing
-    // and bind envmap and sampler properly
-    // with bindless
 
     GPUImage images[2] = {
         device->CreateImage(VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
@@ -201,11 +206,17 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     int sceneBindingIndex =
         layout.AddBinding((u32)RTBindings::Scene, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                          VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+                          VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR);
+    layout.AddImmutableSamplers();
 
     RayTracingState rts = device->CreateRayTracingPipeline(rayShaders, counts, &pushConstant,
                                                            &layout, params->maxDepth);
 
+    Semaphore tlasSemaphore = device->CreateGraphicsSemaphore();
+
+    GPUAccelerationStructure tlas = {};
+    // TODO: new command buffers have to wait on ones from the previous depth
+    // also this doesn't work if there's actually a TLAS
     for (int depth = maxDepth; depth >= 0; depth--)
     {
         ScratchArena scratch;
@@ -259,23 +270,26 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
             CommandBuffer *compactCmd = device->BeginCommandBuffer(QueueType_Graphics);
             compactCmd->Wait(semaphore);
-            device->CompactBLASes(compactCmd, queryPool, as, bvhCount);
+            semaphore.signalValue = 2;
+            compactCmd->Signal(semaphore);
+            device->CompactAS(compactCmd, queryPool, as, bvhCount);
             device->SubmitCommandBuffer(compactCmd);
         }
 
-        // TODO: need to sync here
         if (maxDepth == 0)
         {
             Assert(numScenes == 1);
-            CommandBuffer *tlasCmd     = device->BeginCommandBuffer(QueueType_Graphics);
+            CommandBuffer *tlasCmd = device->BeginCommandBuffer(QueueType_Graphics);
+            tlasCmd->Wait(semaphore);
             Instance instance          = {};
             ScenePrimitives *baseScene = &GetScene()->scene;
-            tlasCmd->BuildTLAS(&instance, 1, &params->renderFromWorld, &baseScene);
+            tlas = tlasCmd->BuildTLAS(&instance, 1, &params->renderFromWorld, &baseScene);
+            device->SubmitCommandBuffer(tlasCmd);
         }
     }
 
-    GPUAccelerationStructure &tlas = GetScene()->scene.gpuBVH;
-    f32 frameDt                    = 1.f / 60.f;
+    f32 frameDt = 1.f / 60.f;
+    int envMapBindlessIndex;
     for (;;)
     {
         MSG message;
@@ -286,15 +300,23 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         }
         f32 frameTime = OS_NowSeconds();
 
-        MissPushConstant pc;
-        pc.envMap = 0;
-        pc.width  = envMap->width;
-        pc.height = envMap->height;
-
         device->BeginFrame();
         u32 frame          = device->GetCurrentBuffer();
         GPUImage *image    = &images[frame];
         CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics);
+
+        if (device->frameCount == 0)
+        {
+            cmd->Wait(submitSemaphore);
+            cmd->Wait(tlasSemaphore);
+            envMapBindlessIndex = device->BindlessIndex(&gpuEnvMap);
+        }
+
+        MissPushConstant pc;
+        pc.envMap = envMapBindlessIndex;
+        pc.width  = envMap->width;
+        pc.height = envMap->height;
+
         cmd->Barrier(image, VK_IMAGE_LAYOUT_GENERAL,
                      VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                      VK_ACCESS_2_SHADER_WRITE_BIT);

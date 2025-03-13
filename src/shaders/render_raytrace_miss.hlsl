@@ -1,15 +1,16 @@
 #include "common.hlsli"
+#include "../rt/shader_interop/gpu_scene_shaderinterop.h"
 #include "../rt/shader_interop/miss_shaderinterop.h"
 
+ConstantBuffer<GPUScene> scene : register(b2);
 Texture2D<float3> environmentMap : register(t4);
-SamplerState samplerLinearClamp : register(s50);
 
 [[vk::push_constant]] MissPushConstant push;
 
 [shader("miss")]
 void main(inout RayPayload payload) 
 {
-    float3 d = WorldRayDirection();
+    float3 d = normalize(mul(scene.lightFromRender, float4(WorldRayDirection(), 0)).xyz);
 
     // Equal area sphere to square
     float x = abs(d.x), y = abs(d.y), z = abs(d.z);
@@ -24,15 +25,15 @@ void main(inout RayPayload payload)
     // Polynomial approximation of atan(x)*2/pi, x=b
     // Coefficients for 6th degree minimax approximation of atan(x)*2/pi,
     // x=[0,1].
-    //const float t1 = 0.406758566246788489601959989e-5;
-    //const float t2 = 0.636226545274016134946890922156;
-    //const float t3 = 0.61572017898280213493197203466e-2;
-    //const float t4 = -0.247333733281268944196501420480;
-    //const float t5 = 0.881770664775316294736387951347e-1;
-    //const float t6 = 0.419038818029165735901852432784e-1;
-    //const float t7 = -0.251390972343483509333252996350e-1;
-    //float phi      = EvaluatePolynomial(b, t1, t2, t3, t4, t5, t6, t7);
-    float phi = atan(b) * 2 / PI;
+    const float t1 = 0.406758566246788489601959989e-5;
+    const float t2 = 0.636226545274016134946890922156;
+    const float t3 = 0.61572017898280213493197203466e-2;
+    const float t4 = -0.247333733281268944196501420480;
+    const float t5 = 0.881770664775316294736387951347e-1;
+    const float t6 = 0.419038818029165735901852432784e-1;
+    const float t7 = -0.251390972343483509333252996350e-1;
+    float phi      = mad(b, mad(b, mad(b, mad(b, mad(b, mad(b, t7, t6), t5), t4), 
+                            t3), t2), t1);
 
     // Extend phi if the input is in the range 45-90 degrees (u<v)
     if (x < y) phi = 1 - phi;
@@ -54,6 +55,9 @@ void main(inout RayPayload payload)
     v = copysign(v, d.y);
     float2 uv = float2(0.5f * (u + 1), 0.5f * (v + 1));
 
+    float3 imageLe = bindlessTextures[push.envMap].SampleLevel(samplerLinearClamp, uv, 0).rgb;
+    payload.radiance = payload.throughput * imageLe;
+#if 0
     int2 p = int2(int(uv[0] * push.width), int(uv[1] * push.height));
     if (p[0] < 0)
     {
@@ -80,6 +84,7 @@ void main(inout RayPayload payload)
     if (push.width == 1) p[0] = 0;
     if (push.height == 1) p[1] = 0;
 
-    float3 imageLe = bindlessTextures[push.envMap].SampleLevel(samplerLinearClamp, uv, 0).rgb;    
+    float3 imageLe = bindlessTextures[push.envMap].Load(int3(p, 0)).rgb;
     payload.radiance = payload.throughput * imageLe;
+#endif
 }

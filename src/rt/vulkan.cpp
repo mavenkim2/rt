@@ -567,44 +567,46 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
                 case DescriptorType_SampledImage:
                     descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
                     break;
-                case DescriptorType_UniformTexel:
-                    descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
-                    break;
-                case DescriptorType_StorageBuffer:
-                    descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                    break;
-                case DescriptorType_StorageTexelBuffer:
-                    descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
-                    break;
+                // case DescriptorType_UniformTexel:
+                //     descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
+                //     break;
+                // case DescriptorType_StorageBuffer:
+                //     descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                //     break;
+                // case DescriptorType_StorageTexelBuffer:
+                //     descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+                //     break;
                 default: Assert(0);
             }
 
             BindlessDescriptorPool &bindlessDescriptorPool = bindlessDescriptorPools[type];
             VkDescriptorPoolSize poolSize                  = {};
             poolSize.type                                  = descriptorType;
-            if (type == DescriptorType_StorageBuffer ||
-                type == DescriptorType_StorageTexelBuffer)
-            {
-                poolSize.descriptorCount =
-                    Min(10000u,
-                        deviceProperties.properties.limits.maxDescriptorSetStorageBuffers / 4);
-            }
-            else if (type == DescriptorType_SampledImage)
+            // if (type == DescriptorType_StorageBuffer ||
+            //     type == DescriptorType_StorageTexelBuffer)
+            // {
+            //     poolSize.descriptorCount =
+            //         Min(10000u,
+            //             deviceProperties.properties.limits.maxDescriptorSetStorageBuffers /
+            //             4);
+            // }
+            if (type == DescriptorType_SampledImage)
             {
                 poolSize.descriptorCount =
                     Min(10000u,
                         deviceProperties.properties.limits.maxDescriptorSetSampledImages / 4);
             }
-            else if (type == DescriptorType_UniformTexel)
-            {
-                poolSize.descriptorCount =
-                    Min(10000u,
-                        deviceProperties.properties.limits.maxDescriptorSetUniformBuffers / 4);
-            }
+            // else if (type == DescriptorType_UniformTexel)
+            // {
+            //     poolSize.descriptorCount =
+            //         Min(10000u,
+            //             deviceProperties.properties.limits.maxDescriptorSetUniformBuffers /
+            //             4);
+            // }
             bindlessDescriptorPool.descriptorCount = poolSize.descriptorCount;
 
-            VkDescriptorPoolCreateInfo createInfo = {};
-            createInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            VkDescriptorPoolCreateInfo createInfo = {
+                VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
             createInfo.poolSizeCount = 1;
             createInfo.pPoolSizes    = &poolSize;
             createInfo.maxSets       = 1;
@@ -662,11 +664,11 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
             switch (type)
             {
                 case DescriptorType_SampledImage: typeName = "Sampled Image"; break;
-                case DescriptorType_StorageBuffer: typeName = "Storage Buffer"; break;
-                case DescriptorType_UniformTexel: typeName = "Uniform Texel Buffer"; break;
-                case DescriptorType_StorageTexelBuffer:
-                    typeName = "Storage Texel Buffer";
-                    break;
+                // case DescriptorType_StorageBuffer: typeName = "Storage Buffer"; break;
+                // case DescriptorType_UniformTexel: typeName = "Uniform Texel Buffer"; break;
+                // case DescriptorType_StorageTexelBuffer:
+                //     typeName = "Storage Texel Buffer";
+                //     break;
                 default: Assert(0);
             }
             string name =
@@ -723,7 +725,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         VkSamplerCreateInfo samplerCreate = {};
         samplerCreate.sType               = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
 
-        VK_CHECK(vkCreateSampler(device, &samplerCreate, 0, &nullSampler));
+        // VK_CHECK(vkCreateSampler(device, &samplerCreate, 0, &nullSampler));
 
         samplerCreate.anisotropyEnable        = VK_FALSE;
         samplerCreate.maxAnisotropy           = 0;
@@ -733,6 +735,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         samplerCreate.unnormalizedCoordinates = VK_FALSE;
         samplerCreate.compareEnable           = VK_FALSE;
         samplerCreate.compareOp               = VK_COMPARE_OP_NEVER;
+#if 0
 
         samplerCreate.minFilter    = VK_FILTER_LINEAR;
         samplerCreate.magFilter    = VK_FILTER_LINEAR;
@@ -751,17 +754,19 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         samplerCreate.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
         immutableSamplers.emplace_back();
         VK_CHECK(vkCreateSampler(device, &samplerCreate, 0, &immutableSamplers.back()));
+#endif
 
         // sampler linear clamp
         samplerCreate.minFilter    = VK_FILTER_LINEAR;
         samplerCreate.magFilter    = VK_FILTER_LINEAR;
-        samplerCreate.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        samplerCreate.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
         samplerCreate.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         samplerCreate.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         samplerCreate.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         immutableSamplers.emplace_back();
         VK_CHECK(vkCreateSampler(device, &samplerCreate, 0, &immutableSamplers.back()));
 
+#if 0
         // sampler nearest clamp
         samplerCreate.minFilter  = VK_FILTER_NEAREST;
         samplerCreate.magFilter  = VK_FILTER_NEAREST;
@@ -774,6 +779,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         samplerCreate.compareOp     = VK_COMPARE_OP_GREATER_OR_EQUAL;
         immutableSamplers.emplace_back();
         VK_CHECK(vkCreateSampler(device, &samplerCreate, 0, &immutableSamplers.back()));
+#endif
     }
 
     // Default views
@@ -1564,6 +1570,27 @@ GPUImage Vulkan::CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageTy
     return image;
 }
 
+int Vulkan::BindlessIndex(GPUImage *image)
+{
+    BindlessDescriptorPool &descriptorPool =
+        bindlessDescriptorPools[DescriptorType_SampledImage];
+    int index = descriptorPool.Allocate();
+
+    VkDescriptorImageInfo info = {};
+    info.imageView             = image->imageView;
+    info.imageLayout           = image->lastLayout;
+
+    VkWriteDescriptorSet writeSet = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writeSet.dstSet               = descriptorPool.set;
+    writeSet.descriptorCount      = 1;
+    writeSet.dstArrayElement      = index;
+    writeSet.descriptorType       = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    writeSet.pImageInfo           = &info;
+
+    vkUpdateDescriptorSets(device, 1, &writeSet, 0, 0);
+    return index;
+}
+
 TransferBuffer Vulkan::GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize)
 {
     GPUBuffer buffer  = CreateBuffer(flags | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
@@ -1623,7 +1650,7 @@ GPUImage CommandBuffer::SubmitImage(void *ptr, VkImageUsageFlags flags, VkFormat
 
     VkImageMemoryBarrier2 barrier = device->ImageMemoryBarrier(
         transferBuffer.image.image, VK_IMAGE_LAYOUT_UNDEFINED,
-        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_NONE,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_NONE,
         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_NONE, VK_ACCESS_2_TRANSFER_WRITE_BIT,
         VK_IMAGE_ASPECT_COLOR_BIT);
 
@@ -1640,6 +1667,9 @@ GPUImage CommandBuffer::SubmitImage(void *ptr, VkImageUsageFlags flags, VkFormat
     vkCmdCopyBufferToImage(buffer, transferBuffer.stagingBuffer.buffer,
                            transferBuffer.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                            &copy);
+    transferBuffer.image.lastPipeline = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    transferBuffer.image.lastAccess   = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    transferBuffer.image.lastLayout   = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     return transferBuffer.image;
 }
 
@@ -1668,6 +1698,18 @@ int DescriptorSetLayout::AddBinding(u32 b, VkDescriptorType type, VkShaderStageF
     int index = static_cast<int>(bindings.size());
     bindings.push_back(binding);
     return index;
+}
+
+void DescriptorSetLayout::AddImmutableSamplers()
+{
+    VkDescriptorSetLayoutBinding binding = {};
+    binding.binding                      = 50;
+    binding.descriptorType               = VK_DESCRIPTOR_TYPE_SAMPLER;
+    binding.descriptorCount              = device->immutableSamplers.size();
+    binding.stageFlags                   = VK_SHADER_STAGE_ALL;
+    binding.pImmutableSamplers           = device->immutableSamplers.data();
+
+    bindings.push_back(binding);
 }
 
 VkDescriptorSetLayout *DescriptorSetLayout::GetVulkanLayout()
@@ -1699,7 +1741,7 @@ DescriptorSet &DescriptorSet::Bind(int index, GPUImage *image)
     writeSet.dstBinding           = layout->bindings[index].binding;
     writeSet.pImageInfo           = &descriptorInfo[index].image;
 
-    writeDescriptorSets[index] = writeSet;
+    writeDescriptorSets.push_back(writeSet);
     return *this;
 }
 
@@ -1720,7 +1762,7 @@ DescriptorSet &DescriptorSet::Bind(int index, GPUBuffer *buffer)
     writeSet.dstBinding           = layout->bindings[index].binding;
     writeSet.pBufferInfo          = &descriptorInfo[index].buffer;
 
-    writeDescriptorSets[index] = writeSet;
+    writeDescriptorSets.push_back(writeSet);
     return *this;
 }
 
@@ -1741,7 +1783,7 @@ DescriptorSet &DescriptorSet::Bind(int index, VkAccelerationStructureKHR *accel)
     writeSet.dstSet               = VK_NULL_HANDLE;
     writeSet.dstBinding           = layout->bindings[index].binding;
 
-    writeDescriptorSets[index] = writeSet;
+    writeDescriptorSets.push_back(writeSet);
     return *this;
 }
 
@@ -1755,6 +1797,9 @@ void CommandBuffer::BindDescriptorSets(VkPipelineBindPoint bindPoint, Descriptor
     vkUpdateDescriptorSets(device->device, set->writeDescriptorSets.size(),
                            set->writeDescriptorSets.data(), 0, 0);
     vkCmdBindDescriptorSets(buffer, bindPoint, pipeLayout, 0, 1, &set->set, 0, 0);
+    vkCmdBindDescriptorSets(buffer, bindPoint, pipeLayout, 1,
+                            device->bindlessDescriptorSets.size(),
+                            device->bindlessDescriptorSets.data(), 0, 0);
     set->descriptorInfo.clear();
     set->writeDescriptorSets.clear();
 }
@@ -1937,10 +1982,18 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
     {
         ScratchArena scratch;
 
+        std::vector<VkDescriptorSetLayout> layouts;
+        layouts.reserve(1 + bindlessDescriptorSetLayouts.size());
+        layouts.push_back(*layout->GetVulkanLayout());
+        for (auto &bindlessLayout : bindlessDescriptorSetLayouts)
+        {
+            layouts.push_back(bindlessLayout);
+        }
+
         VkPipelineLayoutCreateInfo createInfo = {
             VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-        createInfo.pSetLayouts    = layout->GetVulkanLayout();
-        createInfo.setLayoutCount = 1;
+        createInfo.setLayoutCount = layouts.size();
+        createInfo.pSetLayouts    = layouts.data();
         if (pc)
         {
             VkPushConstantRange vkpc;
@@ -2047,7 +2100,6 @@ DescriptorSet DescriptorSetLayout::CreateDescriptorSet()
     DescriptorSet set;
     vkAllocateDescriptorSets(device->device, &allocateInfo, &set.set);
     set.layout = this;
-    set.writeDescriptorSets.resize(bindings.size());
     set.descriptorInfo.resize(bindings.size());
     return set;
 }
@@ -2080,6 +2132,7 @@ GPUAccelerationStructure CommandBuffer::BuildAS(
     VkDeviceAddress scratchAddress = vkGetBufferDeviceAddress(device->device, &info);
 
     GPUAccelerationStructure bvh;
+    bvh.type = accelType;
 
     {
         bvh.buffer =
@@ -2258,8 +2311,8 @@ QueryPool Vulkan::GetCompactionSizes(CommandBuffer *cmd, GPUAccelerationStructur
     return pool;
 }
 
-void Vulkan::CompactBLASes(CommandBuffer *cmd, QueryPool &pool, GPUAccelerationStructure **as,
-                           int count)
+void Vulkan::CompactAS(CommandBuffer *cmd, QueryPool &pool, GPUAccelerationStructure **as,
+                       int count)
 {
     ScratchArena scratch;
     VkDeviceSize *compactedSizes =
