@@ -3,6 +3,7 @@
 
 // HLSL code
 #ifdef __cplusplus
+#define row_major
 namespace rt
 {
 #endif
@@ -13,8 +14,8 @@ struct GPUScene
     float3x4 renderFromCamera;
     float3x4 lightFromRender;
     float3 dxCamera;
-    float3 dyCamera;
     float lensRadius;
+    float3 dyCamera;
     float focalLength;
 
 #ifndef __cplusplus

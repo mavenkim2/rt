@@ -207,6 +207,7 @@ set(SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders)
 set(SHADER_SPV_DIR ${CMAKE_CURRENT_BINARY_DIR}/src/shaders)
 file(GLOB SHADER_FILES "${SHADER_SRC_DIR}/*.hlsl")
 file(GLOB SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsli")
+file(GLOB SHADER_INTEROP "${CMAKE_CURRENT_SOURCE_DIR}/src/rt/shader_interop/*.h")
 
 if (NOT DEFINED SHADER_COMPILER)
     set(SHADER_COPILER "dxc")
@@ -218,8 +219,9 @@ foreach(SHADER_FILE ${SHADER_FILES})
     add_custom_command(
         OUTPUT ${SHADER_SPV}
         COMMAND ${SHADER_COMPILER} 
-        "-spirv" "-fspv-target-env=vulkan1.3" "-T lib_6_6" "$<$<CONFIG:Debug>:-Zi>" "-Fo ${SHADER_SPV}" "${SHADER_FILE}"
-        DEPENDS ${SHADER_FILE} ${SHADER_INCLUDES}
+        "-spirv" "-fspv-target-env=vulkan1.3" "-fvk-use-scalar-layout"
+        "-T lib_6_6" "$<$<CONFIG:Debug>:-Zi>" "-Fo ${SHADER_SPV}" "${SHADER_FILE}"
+        DEPENDS ${SHADER_FILE} ${SHADER_INCLUDES} ${SHADER_INTEROP}
         COMMENT "Compiling HLSL shader: ${SHADER_FILE} -> ${SHADER_SPV}"
         VERBATIM
     )

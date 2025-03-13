@@ -10,6 +10,7 @@ Texture2D<float3> environmentMap : register(t4);
 [shader("miss")]
 void main(inout RayPayload payload) 
 {
+    printf("%f\n", scene.lightFromRender[0][0]);
     float3 d = normalize(mul(scene.lightFromRender, float4(WorldRayDirection(), 0)).xyz);
 
     // Equal area sphere to square

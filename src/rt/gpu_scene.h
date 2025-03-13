@@ -31,10 +31,6 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
 SceneShapeParse StartSceneShapeParse();
 void EndSceneShapeParse(ScenePrimitives *scene, SceneShapeParse *parse);
 
-typedef Mat4 float4x4;
-typedef Vec3f float3;
-typedef AffineSpace float3x4;
-
 } // namespace rt
 
 #endif

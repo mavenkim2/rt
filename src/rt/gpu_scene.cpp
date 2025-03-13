@@ -167,8 +167,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     gpuScene.renderFromCamera = params->renderFromCamera;
     gpuScene.lightFromRender  = params->lightFromRender;
     gpuScene.dxCamera         = params->dxCamera;
-    gpuScene.dyCamera         = params->dyCamera;
     gpuScene.lensRadius       = params->lensRadius;
+    gpuScene.dyCamera         = params->dyCamera;
     gpuScene.focalLength      = params->focalLength;
 
     CommandBuffer *transferCmd    = device->BeginCommandBuffer(QueueType_Copy);

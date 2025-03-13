@@ -22,6 +22,11 @@ struct AffineSpace;
 struct Instance;
 struct ScenePrimitives;
 
+typedef Mat4 float4x4;
+typedef Vec3f float3;
+typedef AffineSpace float3x4;
+typedef Vec4f float4;
+
 #define VK_CHECK(check)                                                                       \
     do                                                                                        \
     {                                                                                         \

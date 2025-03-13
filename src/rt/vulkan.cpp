@@ -24,6 +24,10 @@ VkBool32 DebugUtilsMessengerCallback(VkDebugUtilsMessageSeverityFlagBitsEXT mess
     {
         Print("[Vulkan Error]: %s\n", callbackData->pMessage);
     }
+    else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT)
+    {
+        Print("[Vulkan Info]: %s\n", callbackData->pMessage);
+    }
 
     return VK_FALSE;
 }
@@ -142,24 +146,33 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         instInfo.ppEnabledExtensionNames = instanceExtensions.data();
 
         VkDebugUtilsMessengerCreateInfoEXT debugUtilsCreateInfo = {};
+        VkValidationFeaturesEXT validationFeatures              = {
+            VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT};
 
         debugUtilsCreateInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-        if (validationMode != ValidationMode::Disabled && debugUtils)
+        if (validationMode != ValidationMode::Disabled)
         {
-            debugUtilsCreateInfo.messageSeverity =
-                VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT |
-                VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT;
-            debugUtilsCreateInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                                               VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-            if (validationMode == ValidationMode::Verbose)
-            {
-                debugUtilsCreateInfo.messageSeverity |=
-                    (VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
-                     VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT);
-            }
+            VkValidationFeatureEnableEXT validationFeaturesEnable =
+                VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT;
+            validationFeatures.enabledValidationFeatureCount = 1;
+            validationFeatures.pEnabledValidationFeatures    = &validationFeaturesEnable;
+            instInfo.pNext                                   = &validationFeatures;
 
-            debugUtilsCreateInfo.pfnUserCallback = DebugUtilsMessengerCallback;
-            instInfo.pNext                       = &debugUtilsCreateInfo;
+            if (debugUtils)
+            {
+                debugUtilsCreateInfo.messageSeverity =
+                    VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT |
+                    VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                    VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
+                    VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT;
+
+                debugUtilsCreateInfo.messageType =
+                    VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                    VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+
+                debugUtilsCreateInfo.pfnUserCallback = DebugUtilsMessengerCallback;
+                validationFeatures.pNext             = &debugUtilsCreateInfo;
+            }
         }
 
         VK_CHECK(vkCreateInstance(&instInfo, 0, &instance));
