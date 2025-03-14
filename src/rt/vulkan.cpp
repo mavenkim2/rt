@@ -508,9 +508,12 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
 
     for (int i = 0; i < QueueType_Count; i++)
     {
-        Semaphore s               = CreateGraphicsSemaphore();
-        queues[i].submissionID    = 0;
-        queues[i].submitSemaphore = s.semaphore;
+        queues[i].submissionID = 0;
+        for (int frame = 0; frame < numActiveFrames; frame++)
+        {
+            Semaphore s                      = CreateGraphicsSemaphore();
+            queues[i].submitSemaphore[frame] = s.semaphore;
+        }
     }
     u32 numProcessors = OS_NumProcessors();
     commandPools      = StaticArray<ThreadPool>(arena, numProcessors, numProcessors);
@@ -1141,13 +1144,15 @@ void Vulkan::CheckInitializedThreadPool(int threadIndex)
 
         VkDescriptorPoolCreateInfo poolCreateInfo = {
             VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        VkDescriptorPoolSize poolSize[3];
+        VkDescriptorPoolSize poolSize[4];
         poolSize[0].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         poolSize[0].descriptorCount = 1;
         poolSize[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         poolSize[1].descriptorCount = 1;
         poolSize[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         poolSize[2].descriptorCount = 1;
+        poolSize[3].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        poolSize[3].descriptorCount = 2;
 
         poolCreateInfo.pPoolSizes    = poolSize;
         poolCreateInfo.poolSizeCount = ArrayLength(poolSize);
@@ -1181,7 +1186,8 @@ CommandBuffer *Vulkan::BeginCommandBuffer(QueueType queue)
             u64 value;
             if (test->semaphore != VK_NULL_HANDLE)
                 vkGetSemaphoreCounterValue(device, test->semaphore, &value);
-            if (test->semaphore == VK_NULL_HANDLE || value >= test->submissionID)
+            if (test->semaphore == VK_NULL_HANDLE ||
+                (value != ULLONG_MAX && value >= test->submissionID))
             {
                 cmd             = test;
                 node->values[i] = pool.freeList[queue].Last();
@@ -1245,7 +1251,7 @@ void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd)
     }
     signalSubmitInfo[signalSize].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
     signalSubmitInfo[signalSize].value     = ++queue.submissionID;
-    signalSubmitInfo[signalSize].semaphore = queue.submitSemaphore;
+    signalSubmitInfo[signalSize].semaphore = queue.submitSemaphore[GetCurrentBuffer()];
     signalSubmitInfo[signalSize].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 
     VkCommandBufferSubmitInfo bufferSubmitInfo = {
@@ -1263,7 +1269,7 @@ void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd)
 
     cmd->waitSemaphores.clear();
     cmd->signalSemaphores.clear();
-    cmd->semaphore    = queue.submitSemaphore;
+    cmd->semaphore    = queue.submitSemaphore[GetCurrentBuffer()];
     cmd->submissionID = queue.submissionID;
 
     int threadIndex                    = GetThreadIndex();
@@ -2156,7 +2162,7 @@ DescriptorSet DescriptorSetLayout::CreateDescriptorSet()
     allocateInfo.descriptorSetCount = 1;
 
     DescriptorSet set;
-    vkAllocateDescriptorSets(device->device, &allocateInfo, &set.set);
+    VK_CHECK(vkAllocateDescriptorSets(device->device, &allocateInfo, &set.set));
     set.layout = this;
     set.descriptorInfo.resize(bindings.size());
     return set;
@@ -2410,13 +2416,13 @@ void Vulkan::CompactAS(CommandBuffer *cmd, QueryPool &pool, GPUAccelerationStruc
 void Vulkan::BeginFrame()
 {
     CommandQueue &queue = queues[QueueType_Graphics];
-    if (queue.submissionID >= 2)
+    if (frameCount >= 2)
     {
         u64 val                      = queue.submissionID - 1;
         VkSemaphoreWaitInfo waitInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
         waitInfo.pValues             = &val;
         waitInfo.semaphoreCount      = 1;
-        waitInfo.pSemaphores         = &queue.submitSemaphore;
+        waitInfo.pSemaphores         = &queue.submitSemaphore[GetCurrentBuffer()];
         vkWaitSemaphores(device, &waitInfo, UINT64_MAX);
     }
 }
@@ -2424,6 +2430,16 @@ void Vulkan::EndFrame()
 {
     frameCount++;
     std::atomic_thread_fence(std::memory_order_seq_cst);
+}
+
+void Vulkan::Wait(Semaphore s)
+{
+    u64 val                      = s.signalValue;
+    VkSemaphoreWaitInfo waitInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+    waitInfo.pValues             = &val;
+    waitInfo.semaphoreCount      = 1;
+    waitInfo.pSemaphores         = &s.semaphore;
+    vkWaitSemaphores(device, &waitInfo, UINT64_MAX);
 }
 
 } // namespace rt

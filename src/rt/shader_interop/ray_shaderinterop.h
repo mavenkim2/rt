@@ -10,7 +10,6 @@ typedef unsigned int uint;
 struct RayPushConstant
 {
     uint envMap;
-    uint bindingTable;
     uint width;
     uint height;
 };

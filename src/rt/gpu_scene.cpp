@@ -51,7 +51,7 @@ GPUMesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
     TransferBuffer transferBuffer = device->GetStagingBuffer(
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        totalSize + 2 * (alignment - 1));
+        totalSize + 2 * alignment);
 
     u64 deviceAddress = device->GetDeviceAddress(transferBuffer.buffer.buffer);
 
@@ -77,8 +77,11 @@ GPUMesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
     result.buffer        = transferBuffer.buffer;
     result.deviceAddress = deviceAddress;
     result.vertexOffset  = 0;
+    result.vertexSize    = vertexSize;
     result.vertexStride  = sizeof(Vec3f);
+    result.indexSize     = indicesSize;
     result.indexStride   = sizeof(u32);
+    result.normalSize    = normalSize;
     result.normalStride  = sizeof(u32);
     result.numIndices    = mesh.numIndices;
     result.numVertices   = mesh.numVertices;
@@ -175,13 +178,13 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             {
                 GPUMesh &gpuMesh     = gpuMeshes[primIndex];
                 int bindlessVertices = device->BindlessStorageIndex(
-                    &gpuMesh.buffer, gpuMesh.vertexOffset, gpuMesh.vertexStride);
+                    &gpuMesh.buffer, gpuMesh.vertexOffset, gpuMesh.vertexSize);
                 Assert(bindlessVertices == 3 * runningTotal);
                 int bindlessIndices = device->BindlessStorageIndex(
-                    &gpuMesh.buffer, gpuMesh.indexOffset, gpuMesh.indexStride);
+                    &gpuMesh.buffer, gpuMesh.indexOffset, gpuMesh.indexSize);
                 Assert(bindlessIndices == 3 * runningTotal + 1);
                 int bindlessNormals = device->BindlessStorageIndex(
-                    &gpuMesh.buffer, gpuMesh.normalOffset, gpuMesh.normalStride);
+                    &gpuMesh.buffer, gpuMesh.normalOffset, gpuMesh.normalSize);
                 Assert(bindlessNormals == 3 * runningTotal + 2);
                 runningTotal++;
             }
@@ -192,47 +195,45 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         }
     }
 
-    GPUMaterial gpuMaterial;
-    gpuMaterial.eta = 1.1;
-
-    RTBindingData bindingData;
-    bindingData.materialIndex = 0;
-
-    // Compile shaders
-    string raygenShaderName = "../src/shaders/render_raytrace_rgen.spv";
-    string missShaderName   = "../src/shaders/render_raytrace_miss.spv";
-    // string hitShaderName    = "../src/shaders/render_raytrace_hit.spv";
-    string hitShaderName = "../src/shaders/render_raytrace_dielectric_hit.spv";
-
-    Arena *arena    = params->arenas[0];
-    string rgenData = OS_ReadFile(arena, raygenShaderName);
-    string missData = OS_ReadFile(arena, missShaderName);
-    string hitData  = OS_ReadFile(arena, hitShaderName);
-
     Swapchain swapchain = device->CreateSwapchain(params->window, VK_FORMAT_R8G8B8A8_SRGB,
                                                   params->width, params->height);
 
     Shader *rayShaders[RST_Max];
     int counts[RST_Max] = {};
-    Shader raygenShaders[1];
-    raygenShaders[counts[RST_Raygen]++] =
-        device->CreateShader(ShaderStage::Raygen, "raygen", rgenData);
-    Shader missShaders[1];
-    missShaders[counts[RST_Miss]++] =
-        device->CreateShader(ShaderStage::Miss, "miss", missData);
-    Shader hitShaders[1];
-    hitShaders[counts[RST_ClosestHit]++] =
-        device->CreateShader(ShaderStage::Hit, "hit", hitData);
 
-    rayShaders[RST_Raygen]     = raygenShaders;
-    rayShaders[RST_Miss]       = missShaders;
-    rayShaders[RST_ClosestHit] = hitShaders;
+    // Compile shaders
+    {
+        string raygenShaderName = "../src/shaders/render_raytrace_rgen.spv";
+        string missShaderName   = "../src/shaders/render_raytrace_miss.spv";
+        // string hitShaderName    = "../src/shaders/render_raytrace_hit.spv";
+        string hitShaderName = "../src/shaders/render_raytrace_dielectric_hit.spv";
+
+        Arena *arena    = params->arenas[0];
+        string rgenData = OS_ReadFile(arena, raygenShaderName);
+        string missData = OS_ReadFile(arena, missShaderName);
+        string hitData  = OS_ReadFile(arena, hitShaderName);
+        Shader raygenShaders[1];
+        raygenShaders[counts[RST_Raygen]++] =
+            device->CreateShader(ShaderStage::Raygen, "raygen", rgenData);
+        Shader missShaders[1];
+        missShaders[counts[RST_Miss]++] =
+            device->CreateShader(ShaderStage::Miss, "miss", missData);
+        Shader hitShaders[1];
+        hitShaders[counts[RST_ClosestHit]++] =
+            device->CreateShader(ShaderStage::Hit, "hit", hitData);
+
+        rayShaders[RST_Raygen]     = raygenShaders;
+        rayShaders[RST_Miss]       = missShaders;
+        rayShaders[RST_ClosestHit] = hitShaders;
+    }
 
     PushConstant pushConstant;
     pushConstant.stage  = ShaderStage::Miss | ShaderStage::Hit;
     pushConstant.offset = 0;
     pushConstant.size   = sizeof(RayPushConstant);
 
+    Semaphore submitSemaphore = device->CreateGraphicsSemaphore();
+    // Transfer data to GPU
     GPUScene gpuScene;
     gpuScene.cameraFromRaster = params->cameraFromRaster;
     gpuScene.renderFromCamera = params->renderFromCamera;
@@ -241,6 +242,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     gpuScene.lensRadius       = params->lensRadius;
     gpuScene.dyCamera         = params->dyCamera;
     gpuScene.focalLength      = params->focalLength;
+
+    GPUMaterial gpuMaterial;
+    gpuMaterial.eta = 1.1;
+
+    RTBindingData bindingData;
+    bindingData.materialIndex = 0;
 
     CommandBuffer *transferCmd    = device->BeginCommandBuffer(QueueType_Copy);
     GPUBuffer sceneTransferBuffer = transferCmd->SubmitBuffer(
@@ -257,7 +264,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                          VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                          VK_ACCESS_2_SHADER_READ_BIT);
 
-    Semaphore submitSemaphore   = device->CreateGraphicsSemaphore();
     submitSemaphore.signalValue = 1;
     transferCmd->Signal(submitSemaphore);
     device->SubmitCommandBuffer(transferCmd);
@@ -271,10 +277,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                             params->height),
     };
 
+    // Create descriptor set layout and pipeline
     DescriptorSetLayout layout = {};
-    int accelBindingIndex      = layout.AddBinding((u32)RTBindings::Accel,
-                                                   VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
-                                                   VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+    int accelBindingIndex      = layout.AddBinding(
+        (u32)RTBindings::Accel, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+        VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR);
     int imageBindingIndex =
         layout.AddBinding((u32)RTBindings::Image, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
                           VK_SHADER_STAGE_RAYGEN_BIT_KHR);
@@ -293,8 +300,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     layout.AddImmutableSamplers();
 
-    RayTracingState rts = device->CreateRayTracingPipeline(rayShaders, counts, &pushConstant,
-                                                           &layout, params->maxDepth);
+    RayTracingState rts =
+        device->CreateRayTracingPipeline(rayShaders, counts, &pushConstant, &layout, 2);
 
     Semaphore tlasSemaphore = device->CreateGraphicsSemaphore();
 
@@ -365,6 +372,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             Assert(numScenes == 1);
             CommandBuffer *tlasCmd = device->BeginCommandBuffer(QueueType_Graphics);
             tlasCmd->Wait(semaphore);
+            tlasSemaphore.signalValue = 1;
+            tlasCmd->Signal(tlasSemaphore);
             Instance instance          = {};
             ScenePrimitives *baseScene = &GetScene()->scene;
             tlas = tlasCmd->BuildTLAS(&instance, 1, &params->renderFromWorld, &baseScene);
@@ -374,8 +383,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     f32 frameDt = 1.f / 60.f;
     int envMapBindlessIndex;
-    int bindingTableBindlessIndex;
-    int gpuMaterialSomething;
 
     for (;;)
     {
@@ -394,17 +401,17 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         if (device->frameCount == 0)
         {
-            cmd->Wait(submitSemaphore);
-            cmd->Wait(tlasSemaphore);
-            envMapBindlessIndex       = device->BindlessIndex(&gpuEnvMap);
-            bindingTableBindlessIndex = device->BindlessStorageIndex(&materialBuffer);
+            device->Wait(submitSemaphore);
+            device->Wait(tlasSemaphore);
+            // cmd->Wait(submitSemaphore);
+            // cmd->Wait(tlasSemaphore);
+            envMapBindlessIndex = device->BindlessIndex(&gpuEnvMap);
         }
 
         RayPushConstant pc;
-        pc.envMap       = envMapBindlessIndex;
-        pc.bindingTable = bindingTableBindlessIndex;
-        pc.width        = envMap->width;
-        pc.height       = envMap->height;
+        pc.envMap = envMapBindlessIndex;
+        pc.width  = envMap->width;
+        pc.height = envMap->height;
 
         cmd->Barrier(image, VK_IMAGE_LAYOUT_GENERAL,
                      VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,

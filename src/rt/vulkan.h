@@ -289,10 +289,13 @@ struct GPUMesh
 
     u64 deviceAddress;
     u64 vertexOffset;
+    u64 vertexSize;
     u64 vertexStride;
     u64 indexOffset;
+    u64 indexSize;
     u64 indexStride;
     u64 normalOffset;
+    u64 normalSize;
     u64 normalStride;
 
     u32 numIndices;
@@ -440,7 +443,7 @@ struct CommandQueue
     VkQueue queue;
     Mutex lock = {};
 
-    VkSemaphore submitSemaphore;
+    VkSemaphore submitSemaphore[numActiveFrames];
     u64 submissionID;
 };
 
@@ -646,7 +649,8 @@ struct Vulkan
                          int width = 1, int height = 1, int depth = 1, int numMips = 1,
                          int numLayers = 1);
     int BindlessIndex(GPUImage *image);
-    int BindlessStorageIndex(GPUBuffer *buffer, size_t offset = 0, size_t range = 0);
+    int BindlessStorageIndex(GPUBuffer *buffer, size_t offset = 0,
+                             size_t range = VK_WHOLE_SIZE);
     u64 GetMinAlignment(VkBufferUsageFlags flags);
     TransferBuffer GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize,
                                     int numRanges = 0);
@@ -670,6 +674,8 @@ struct Vulkan
                    int count);
     void BeginFrame();
     void EndFrame();
+
+    void Wait(Semaphore s);
 
     // void CopyBuffer(CommandBuffer cmd, GPUBuffer *dest, GPUBuffer *src, u32 size);
     // void ClearBuffer(CommandBuffer cmd, GPUBuffer *dst);
