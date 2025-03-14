@@ -205,13 +205,21 @@ endif()
 # shader compiles
 set(SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders)
 set(SHADER_SPV_DIR ${CMAKE_CURRENT_BINARY_DIR}/src/shaders)
-set (SHADER_FILES "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
+set(SHADER_FILES "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
     "${SHADER_SRC_DIR}/render_raytrace_miss.hlsl"
     "${SHADER_SRC_DIR}/render_raytrace_hit.hlsl"
     "${SHADER_SRC_DIR}/render_raytrace_dielectric_hit.hlsl"
+    "${SHADER_SRC_DIR}/render_raytrace.hlsl"
 )
-file(GLOB SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsli")
-file(GLOB SHADER_INTEROP "${CMAKE_CURRENT_SOURCE_DIR}/src/rt/shader_interop/*.h")
+set_property(SOURCE 
+    "${SHADER_SRC_DIR}/render_raytrace_miss.hlsl"
+    "${SHADER_SRC_DIR}/render_raytrace_hit.hlsl"
+    "${SHADER_SRC_DIR}/render_raytrace_dielectric_hit.hlsl"
+    "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
+    PROPERTY name "rt")
+set_property(SOURCE 
+    "${SHADER_SRC_DIR}/render_raytrace.hlsl"
+    PROPERTY name "cs")
 
 if (NOT DEFINED SHADER_COMPILER)
     set(SHADER_COPILER "dxc")
@@ -219,12 +227,19 @@ endif()
 
 foreach(SHADER_FILE ${SHADER_FILES})
     get_filename_component(SHADER_NAME ${SHADER_FILE} NAME_WE)
+    get_property(SHADER_TYPE SOURCE ${SHADER_FILE} PROPERTY name)
     set(SHADER_SPV ${SHADER_SPV_DIR}/${SHADER_NAME}.spv)
+
+    if (${SHADER_TYPE} STREQUAL "rt")
+        set (SHADER_TYPE_FLAG "-T lib_6_6")
+    elseif (${SHADER_TYPE} STREQUAL "cs")
+        set (SHADER_TYPE_FLAG "-T cs_6_6")
+    endif()
     add_custom_command(
         OUTPUT ${SHADER_SPV}
         COMMAND ${SHADER_COMPILER} 
         "-spirv" "-fspv-target-env=vulkan1.3" "-fvk-use-scalar-layout"
-        "-T lib_6_6" "$<$<CONFIG:Debug>:-Zi>" "-Fo ${SHADER_SPV}" "${SHADER_FILE}"
+        ${SHADER_TYPE_FLAG} "$<$<CONFIG:Debug>:-Zi>" "-Fo ${SHADER_SPV}" "${SHADER_FILE}"
         DEPENDS ${SHADER_FILE} ${SHADER_INCLUDES} ${SHADER_INTEROP}
         COMMENT "Compiling HLSL shader: ${SHADER_FILE} -> ${SHADER_SPV}"
         VERBATIM

@@ -1874,6 +1874,11 @@ void CommandBuffer::TraceRays(RayTracingState *state, u32 width, u32 height, u32
                       height, depth);
 }
 
+void CommandBuffer::Dispatch(u32 groupCountX, u32 groupCountY, u32 groupCountZ)
+{
+    vkCmdDispatch(buffer, groupCountX, groupCountY, groupCountZ);
+}
+
 u64 Vulkan::GetDeviceAddress(VkBuffer buffer)
 {
     VkBufferDeviceAddressInfo info = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
@@ -1949,6 +1954,51 @@ Shader Vulkan::CreateShader(ShaderStage stage, string name, string shaderData)
 
     if (name.size) SetName(shader.module, (const char *)name.str);
     return shader;
+}
+
+void DescriptorSetLayout::CreatePipelineLayout(PushConstant *pc)
+{
+    std::vector<VkDescriptorSetLayout> layouts;
+    layouts.reserve(1 + device->bindlessDescriptorSetLayouts.size());
+    layouts.push_back(*GetVulkanLayout());
+    for (auto &bindlessLayout : device->bindlessDescriptorSetLayouts)
+    {
+        layouts.push_back(bindlessLayout);
+    }
+
+    VkPipelineLayoutCreateInfo createInfo = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    createInfo.setLayoutCount             = layouts.size();
+    createInfo.pSetLayouts                = layouts.data();
+    if (pc)
+    {
+        VkPushConstantRange vkpc;
+        vkpc.offset                       = pc->offset;
+        vkpc.size                         = pc->size;
+        vkpc.stageFlags                   = GetVulkanShaderStage(pc->stage);
+        createInfo.pushConstantRangeCount = 1;
+        createInfo.pPushConstantRanges    = &vkpc;
+    }
+    VK_CHECK(vkCreatePipelineLayout(device->device, &createInfo, 0, &pipelineLayout));
+}
+
+VkPipeline Vulkan::CreateComputePipeline(Shader *shader, DescriptorSetLayout *layout,
+                                         PushConstant *pc)
+{
+    VkPipelineShaderStageCreateInfo pipelineInfo = {
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    pipelineInfo.pName  = "main";
+    pipelineInfo.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+    pipelineInfo.module = shader->module;
+
+    if (layout->pipelineLayout == VK_NULL_HANDLE) layout->CreatePipelineLayout(pc);
+
+    VkComputePipelineCreateInfo createInfo = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    createInfo.stage                       = pipelineInfo;
+    createInfo.layout                      = layout->pipelineLayout;
+
+    VkPipeline pipeline;
+    vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &createInfo, 0, &pipeline);
+    return pipeline;
 }
 
 RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RST_Max],
@@ -2042,33 +2092,8 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
     }
 
     // Create pipeline layout
-    VkPipelineLayout pipelineLayout;
-    {
-        ScratchArena scratch;
-
-        std::vector<VkDescriptorSetLayout> layouts;
-        layouts.reserve(1 + bindlessDescriptorSetLayouts.size());
-        layouts.push_back(*layout->GetVulkanLayout());
-        for (auto &bindlessLayout : bindlessDescriptorSetLayouts)
-        {
-            layouts.push_back(bindlessLayout);
-        }
-
-        VkPipelineLayoutCreateInfo createInfo = {
-            VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-        createInfo.setLayoutCount = layouts.size();
-        createInfo.pSetLayouts    = layouts.data();
-        if (pc)
-        {
-            VkPushConstantRange vkpc;
-            vkpc.offset                       = pc->offset;
-            vkpc.size                         = pc->size;
-            vkpc.stageFlags                   = GetVulkanShaderStage(pc->stage);
-            createInfo.pushConstantRangeCount = 1;
-            createInfo.pPushConstantRanges    = &vkpc;
-        }
-        VK_CHECK(vkCreatePipelineLayout(device, &createInfo, 0, &pipelineLayout));
-    }
+    if (layout->pipelineLayout == VK_NULL_HANDLE) layout->CreatePipelineLayout(pc);
+    VkPipelineLayout pipelineLayout = layout->pipelineLayout;
 
     // Create pipeline
     VkPipeline pipeline;

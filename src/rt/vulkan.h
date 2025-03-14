@@ -23,11 +23,6 @@ struct AffineSpace;
 struct Instance;
 struct ScenePrimitives;
 
-typedef Mat4 float4x4;
-typedef Vec3f float3;
-typedef AffineSpace float3x4;
-typedef Vec4f float4;
-
 #define VK_CHECK(check)                                                                       \
     do                                                                                        \
     {                                                                                         \
@@ -228,6 +223,7 @@ enum class RTBindings
     Scene,
     RTBindingData,
     GPUMaterial,
+    FrameConstants,
 };
 
 struct RayTracingState
@@ -362,10 +358,13 @@ struct DescriptorSetLayout
     std::vector<VkDescriptorSetLayoutBinding> bindings;
     VkDescriptorSetLayout layout;
 
+    VkPipelineLayout pipelineLayout;
+
     int AddBinding(u32 binding, VkDescriptorType type, VkShaderStageFlags stage);
     VkDescriptorSetLayout *GetVulkanLayout();
     DescriptorSet CreateDescriptorSet();
     void AddImmutableSamplers();
+    void CreatePipelineLayout(PushConstant *pc);
 };
 
 struct CommandBuffer
@@ -402,6 +401,7 @@ struct CommandBuffer
     void BindDescriptorSets(VkPipelineBindPoint bindPoint, DescriptorSet *set,
                             VkPipelineLayout pipeLayout);
     void TraceRays(RayTracingState *state, u32 width, u32 height, u32 depth);
+    void Dispatch(u32 groupCountX, u32 groupCountY, u32 groupCountZ);
     void Barrier(GPUImage *image, VkImageLayout layout, VkPipelineStageFlags2 stage,
                  VkAccessFlags2 access);
     void Barrier(GPUBuffer *buffer, VkPipelineStageFlags2 stage, VkAccessFlags2 access);
@@ -662,6 +662,8 @@ struct Vulkan
     Shader CreateShader(ShaderStage stage, string name, string shaderData);
     void BindAccelerationStructure(VkDescriptorSet descriptorSet,
                                    VkAccelerationStructureKHR accel);
+    VkPipeline CreateComputePipeline(Shader *shader, DescriptorSetLayout *layout,
+                                     PushConstant *pc);
     RayTracingState CreateRayTracingPipeline(Shader **shaders, int counts[RST_Max],
                                              PushConstant *pushConstant,
                                              DescriptorSetLayout *layout, u32 maxDepth);

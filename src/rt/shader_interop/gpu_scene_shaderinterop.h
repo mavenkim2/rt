@@ -1,9 +1,10 @@
 #ifndef GPU_SCENE_SHADERINTEROP_H_
 #define GPU_SCENE_SHADERINTEROP_H_
 
+#include "hlsl_cpp_compat.h"
+
 // HLSL code
 #ifdef __cplusplus
-#define row_major
 namespace rt
 {
 #endif
@@ -17,28 +18,11 @@ struct GPUScene
     float lensRadius;
     float3 dyCamera;
     float focalLength;
+};
 
-#ifndef __cplusplus
-    void GenerateRay(float2 pFilm, float2 pLens, inout RayDesc desc, out RayPayload payload)
-    {
-        float4 homogeneousPCamera = mul(cameraFromRaster, float4(pFilm, 0.f, 1.f));
-        float3 pCamera            = homogeneousPCamera.xyz / homogeneousPCamera.w;
-        desc.Origin               = float3(0.f, 0.f, 0.f);
-        desc.Direction            = normalize(pCamera);
-        if (lensRadius > 0.f)
-        {
-            pLens = lensRadius * SampleUniformDiskConcentric(pLens);
-
-            DefocusBlur(desc.Direction, pLens, focalLength, desc.Origin, desc.Direction);
-            DefocusBlur(normalize(pCamera + dxCamera), pLens, focalLength, payload.pxOffset,
-                        payload.dxOffset);
-            DefocusBlur(normalize(pCamera + dyCamera), pLens, focalLength, payload.pyOffset,
-                        payload.dyOffset);
-        }
-        Transform(desc, renderFromCamera);
-        Transform(payload, renderFromCamera);
-    }
-#endif
+struct FrameConstants 
+{
+    uint frameNum;
 };
 
 #ifdef __cplusplus

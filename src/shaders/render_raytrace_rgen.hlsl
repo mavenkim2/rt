@@ -1,5 +1,5 @@
 #include "common.hlsli"
-#include "../rt/shader_interop/gpu_scene_shaderinterop.h"
+#include "rt.hlsli"
 
 RaytracingAccelerationStructure accel : register(t0);
 RWTexture2D<float4> image : register(u1);
@@ -25,7 +25,8 @@ void main()
     desc.TMax = FLT_MAX;
     RayPayload payload;
     payload.throughput = 1;
-    scene.GenerateRay(filterSample, pLens, desc, payload);
+    GenerateRay(scene, filterSample, pLens, desc.Origin, desc.Direction,
+                payload.pxOffset, payload.pyOffset, payload.dxOffset, payload.dyOffset);
 
     TraceRay(accel, RAY_FLAG_FORCE_OPAQUE, 0xff, 0, 0, 0, desc, payload);
 

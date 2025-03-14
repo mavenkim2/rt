@@ -198,33 +198,13 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     Swapchain swapchain = device->CreateSwapchain(params->window, VK_FORMAT_R8G8B8A8_SRGB,
                                                   params->width, params->height);
 
-    Shader *rayShaders[RST_Max];
-    int counts[RST_Max] = {};
-
     // Compile shaders
+    Shader shader;
     {
-        string raygenShaderName = "../src/shaders/render_raytrace_rgen.spv";
-        string missShaderName   = "../src/shaders/render_raytrace_miss.spv";
-        // string hitShaderName    = "../src/shaders/render_raytrace_hit.spv";
-        string hitShaderName = "../src/shaders/render_raytrace_dielectric_hit.spv";
-
-        Arena *arena    = params->arenas[0];
-        string rgenData = OS_ReadFile(arena, raygenShaderName);
-        string missData = OS_ReadFile(arena, missShaderName);
-        string hitData  = OS_ReadFile(arena, hitShaderName);
-        Shader raygenShaders[1];
-        raygenShaders[counts[RST_Raygen]++] =
-            device->CreateShader(ShaderStage::Raygen, "raygen", rgenData);
-        Shader missShaders[1];
-        missShaders[counts[RST_Miss]++] =
-            device->CreateShader(ShaderStage::Miss, "miss", missData);
-        Shader hitShaders[1];
-        hitShaders[counts[RST_ClosestHit]++] =
-            device->CreateShader(ShaderStage::Hit, "hit", hitData);
-
-        rayShaders[RST_Raygen]     = raygenShaders;
-        rayShaders[RST_Miss]       = missShaders;
-        rayShaders[RST_ClosestHit] = hitShaders;
+        string shaderName = "../src/shaders/render_raytrace.spv";
+        Arena *arena      = params->arenas[0];
+        string shaderData = OS_ReadFile(arena, shaderName);
+        shader = device->CreateShader(ShaderStage::Compute, "pathtrace", shaderData);
     }
 
     PushConstant pushConstant;
@@ -300,8 +280,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     layout.AddImmutableSamplers();
 
-    RayTracingState rts =
-        device->CreateRayTracingPipeline(rayShaders, counts, &pushConstant, &layout, 2);
+    VkPipeline pipeline = device->CreateComputePipeline(&shader, &layout, &pushConstant);
 
     Semaphore tlasSemaphore = device->CreateGraphicsSemaphore();
 
@@ -397,14 +376,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         device->BeginFrame();
         u32 frame          = device->GetCurrentBuffer();
         GPUImage *image    = &images[frame];
-        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics);
+        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Compute);
 
         if (device->frameCount == 0)
         {
-            device->Wait(submitSemaphore);
-            device->Wait(tlasSemaphore);
-            // cmd->Wait(submitSemaphore);
-            // cmd->Wait(tlasSemaphore);
+            cmd->Wait(submitSemaphore);
+            cmd->Wait(tlasSemaphore);
             envMapBindlessIndex = device->BindlessIndex(&gpuEnvMap);
         }
 
@@ -413,21 +390,22 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         pc.width  = envMap->width;
         pc.height = envMap->height;
 
-        cmd->Barrier(image, VK_IMAGE_LAYOUT_GENERAL,
-                     VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+        cmd->Barrier(image, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->FlushBarriers();
-        cmd->BindPipeline(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rts.pipeline);
+        cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
         DescriptorSet descriptorSet = layout.CreateDescriptorSet();
         descriptorSet.Bind(accelBindingIndex, &tlas.as)
             .Bind(imageBindingIndex, image)
             .Bind(sceneBindingIndex, &sceneTransferBuffer)
             .Bind(bindingDataBindingIndex, &bindingDataBuffer)
             .Bind(gpuMaterialBindingIndex, &materialBuffer);
-        cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, &descriptorSet,
-                                rts.layout);
-        cmd->PushConstants(&pushConstant, &pc, rts.layout);
-        cmd->TraceRays(&rts, params->width, params->height, 1);
+        cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &descriptorSet,
+                                layout.pipelineLayout);
+        cmd->PushConstants(&pushConstant, &pc, layout.pipelineLayout);
+        cmd->Dispatch(
+            (params->width + PATH_TRACE_NUM_THREADS_X - 1) / PATH_TRACE_NUM_THREADS_X,
+            (params->height + PATH_TRACE_NUM_THREADS_Y - 1) / PATH_TRACE_NUM_THREADS_Y, 1);
         device->CopyFrameBuffer(&swapchain, cmd, image);
         device->EndFrame();
 

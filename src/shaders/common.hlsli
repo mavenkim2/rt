@@ -61,7 +61,8 @@ void swap(T a, T b)
 
 float copysign(float a, float b)
 {
-    return asfloat(abs(asint(a)) | (asuint(b) & 0x80000000));
+    uint signBit = 0x80000000;
+    return asfloat((asuint(a) & ~signBit) | (asuint(b) & signBit));
 }
 
 template <int N>
@@ -77,9 +78,10 @@ vector<float, N> flipsign(vector<float, N> mag, vector<float, N> sign)
 
 float3 DecodeOctahedral(uint n) 
 {
-    float2 decoded = float2(float((n >> 16) & 0xff), float(n & 0xff)) * 2 - 1;
+    float2 decoded = float2(float((n >> 16) & 0xff) / 65535, float(n & 0xff) / 65535) * 2 - 1;
     float3 normal = float3(decoded.xy, 1 - abs(decoded.x) - abs(decoded.y));
-    if (normal.z < 0) normal.xy = flipsign((1 - abs(normal.yx)), normal.xy);
+    float t = saturate(-normal.z);
+    normal.xy += select(normal.xy >= 0.f, -t, t);
     return normalize(normal);
 }
 
@@ -88,20 +90,6 @@ float3 Transform(float4x4 m, float3 p)
     float4 result = mul(m, float4(p, 1.f));
     result /= result.w;
     return result.xyz;
-}
-
-float2 SampleUniformDiskConcentric(float2 u)
-{
-    float2 uOffset = 2 * u - 1;
-
-    bool mask    = abs(uOffset.x) > abs(uOffset.y);
-    float r      = select(mask, uOffset.x, uOffset.y);
-    float theta  = select(mask, PI / 4 * (uOffset.y / uOffset.x),
-                          PI / 2 - PI / 4 * (uOffset.x / uOffset.y));
-
-    float2 result = select(uOffset.x == 0 && uOffset.y == 0, float2(0, 0),
-                            r * float2(cos(theta), sin(theta)));
-    return result;
 }
 
 void DefocusBlur(float3 dIn, float2 pLens, float focalLength, out float3 o,
@@ -113,16 +101,12 @@ void DefocusBlur(float3 dIn, float2 pLens, float focalLength, out float3 o,
     d             = normalize(pFocus - o);
 }
 
-void Transform(inout RayPayload payload, float3x4 m)
+float3 TransformP(float3x4 m, float3 p)
 {
-    payload.pxOffset = mul(m, float4(payload.pxOffset, 1));
-    payload.pyOffset = mul(m, float4(payload.pyOffset, 1));
-    payload.dxOffset = mul(m, float4(payload.dxOffset, 0));
-    payload.dyOffset = mul(m, float4(payload.dyOffset, 0));
+    return mul(m, float4(p, 1));
 }
 
-void Transform(inout RayDesc desc, float3x4 m)
+float3 TransformV(float3x4 m, float3 v)
 {
-    desc.Origin = mul(m, float4(desc.Origin, 1));
-    desc.Direction = mul(m, float4(desc.Direction, 0));
+    return mul(m, float4(v, 0));
 }
