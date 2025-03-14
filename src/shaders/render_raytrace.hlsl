@@ -10,14 +10,13 @@ RWTexture2D<float4> image : register(u1);
 ConstantBuffer<GPUScene> scene : register(b2);
 StructuredBuffer<RTBindingData> rtBindingData : register(t3);
 StructuredBuffer<GPUMaterial> materials : register(t4);
-ConstantBuffer<FrameConstants> frameConstants : register(b5);
 
 [[vk::push_constant]] RayPushConstant push;
 
 [numthreads(PATH_TRACE_NUM_THREADS_X, PATH_TRACE_NUM_THREADS_Y, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
 {
-    RNG rng = RNG::Init(RNG::PCG3d(DTid.xyx).zy, frameConstants.frameNum);
+    RNG rng = RNG::Init(RNG::PCG3d(DTid.xyx).zy, push.frameNum);
 
     // Generate Ray
     float2 sample = rng.Uniform2D();
@@ -61,23 +60,23 @@ void main(uint3 DTid : SV_DispatchThreadID)
             uint normalBufferIndex = 3 * bindingDataIndex + 2;
             uint primID = query.CommittedPrimitiveIndex();
 
-            uint index0 = bindlessUints[indexBufferIndex][3 * primID + 0];
-            uint index1 = bindlessUints[indexBufferIndex][3 * primID + 1];
-            uint index2 = bindlessUints[indexBufferIndex][3 * primID + 2];
+            uint index0 = bindlessUints[NonUniformResourceIndex(indexBufferIndex)][NonUniformResourceIndex(3 * primID + 0)];
+            uint index1 = bindlessUints[NonUniformResourceIndex(indexBufferIndex)][NonUniformResourceIndex(3 * primID + 1)];
+            uint index2 = bindlessUints[NonUniformResourceIndex(indexBufferIndex)][NonUniformResourceIndex(3 * primID + 2)];
 
-            uint normal0 = bindlessUints[normalBufferIndex][index0];
-            uint normal1 = bindlessUints[normalBufferIndex][index1];
-            uint normal2 = bindlessUints[normalBufferIndex][index2];
+            uint normal0 = bindlessUints[NonUniformResourceIndex(normalBufferIndex)][NonUniformResourceIndex(index0)];
+            uint normal1 = bindlessUints[NonUniformResourceIndex(normalBufferIndex)][NonUniformResourceIndex(index1)];
+            uint normal2 = bindlessUints[NonUniformResourceIndex(normalBufferIndex)][NonUniformResourceIndex(index2)];
 
-            float3 p0 = bindlessFloat3s[vertexBufferIndex][index0];
-            float3 p1 = bindlessFloat3s[vertexBufferIndex][index1];
-            float3 p2 = bindlessFloat3s[vertexBufferIndex][index2];
+            float3 p0 = bindlessFloat3s[NonUniformResourceIndex(vertexBufferIndex)][NonUniformResourceIndex(index0)];
+            float3 p1 = bindlessFloat3s[NonUniformResourceIndex(vertexBufferIndex)][NonUniformResourceIndex(index1)];
+            float3 p2 = bindlessFloat3s[NonUniformResourceIndex(vertexBufferIndex)][NonUniformResourceIndex(index2)];
 
             float3 n0 = DecodeOctahedral(normal0);
             float3 n1 = DecodeOctahedral(normal1);
             float3 n2 = DecodeOctahedral(normal2);
 
-            float3 gn = normalize(cross(p1 - p0, p2 - p0));
+            float3 gn = normalize(cross(p0 - p2, p1 - p2));
             float2 bary = query.CommittedTriangleBarycentrics();
 
             float3 n = normalize(n0 + (n1 - n0) * bary[0] + (n2 - n0) * bary[1]);
@@ -87,7 +86,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
             GPUMaterial material = materials[bindingData.materialIndex];
             float eta = material.eta;
 
-            float3 wo = -normalize(query.WorldRayDirection());
+            float3 wo = -normalize(query.CandidateObjectRayDirection());
 
             float u = rng.Uniform();
             float R = FrDielectric(dot(wo, n), eta);
@@ -99,7 +98,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
             if (u < pr / (pr + pt))
             {
-                dir = normalize(Reflect(wo, n));
+                dir = Reflect(wo, n);
             }
             else
             {
@@ -108,13 +107,15 @@ void main(uint3 DTid : SV_DispatchThreadID)
                 if (!valid)
                 {
                     radiance = float3(0, 0, 0);
-                    return;
+                    break;
                 }
             
-                throughput /= eta * eta;
+                throughput /= etap * etap;
             }
 
-            pos = OffsetRayOrigin(origin, n);
+            origin = TransformP(query.CandidateObjectToWorld3x4(), origin);
+            dir = TransformV(query.CandidateObjectToWorld3x4(), normalize(dir));
+            pos = OffsetRayOrigin(origin, gn);
         }
         else 
         {
@@ -165,7 +166,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
             float2 uv = float2(0.5f * (u + 1), 0.5f * (v + 1));
 
             float3 imageLe = bindlessTextures[push.envMap].SampleLevel(samplerLinearClamp, uv, 0).rgb;
-            radiance = throughput * imageLe;
+            radiance += throughput * imageLe;
             break;
         }
     }

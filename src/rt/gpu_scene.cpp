@@ -208,7 +208,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     }
 
     PushConstant pushConstant;
-    pushConstant.stage  = ShaderStage::Miss | ShaderStage::Hit;
+    pushConstant.stage  = ShaderStage::Compute;
     pushConstant.offset = 0;
     pushConstant.size   = sizeof(RayPushConstant);
 
@@ -259,24 +259,23 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     // Create descriptor set layout and pipeline
     DescriptorSetLayout layout = {};
-    int accelBindingIndex      = layout.AddBinding(
-        (u32)RTBindings::Accel, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
-        VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR);
-    int imageBindingIndex =
-        layout.AddBinding((u32)RTBindings::Image, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-                          VK_SHADER_STAGE_RAYGEN_BIT_KHR);
+    int accelBindingIndex      = layout.AddBinding((u32)RTBindings::Accel,
+                                                   VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                                   VK_SHADER_STAGE_COMPUTE_BIT);
+    int imageBindingIndex      = layout.AddBinding(
+        (u32)RTBindings::Image, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT);
 
     int sceneBindingIndex =
         layout.AddBinding((u32)RTBindings::Scene, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                          VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR);
+                          VK_SHADER_STAGE_COMPUTE_BIT);
 
     int bindingDataBindingIndex =
         layout.AddBinding((u32)RTBindings::RTBindingData, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                          VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR);
+                          VK_SHADER_STAGE_COMPUTE_BIT);
 
     int gpuMaterialBindingIndex =
         layout.AddBinding((u32)RTBindings::GPUMaterial, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                          VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR);
+                          VK_SHADER_STAGE_COMPUTE_BIT);
 
     layout.AddImmutableSamplers();
 
@@ -342,7 +341,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             compactCmd->Wait(semaphore);
             semaphore.signalValue = 2;
             compactCmd->Signal(semaphore);
-            device->CompactAS(compactCmd, queryPool, as, bvhCount);
+            compactCmd->CompactAS(queryPool, as, bvhCount);
             device->SubmitCommandBuffer(compactCmd);
         }
 
@@ -376,7 +375,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         device->BeginFrame();
         u32 frame          = device->GetCurrentBuffer();
         GPUImage *image    = &images[frame];
-        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Compute);
+        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics);
 
         if (device->frameCount == 0)
         {
@@ -386,9 +385,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         }
 
         RayPushConstant pc;
-        pc.envMap = envMapBindlessIndex;
-        pc.width  = envMap->width;
-        pc.height = envMap->height;
+        pc.envMap   = envMapBindlessIndex;
+        pc.frameNum = (u32)device->frameCount;
+        pc.width    = envMap->width;
+        pc.height   = envMap->height;
 
         cmd->Barrier(image, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_ACCESS_2_SHADER_WRITE_BIT);
@@ -402,6 +402,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             .Bind(gpuMaterialBindingIndex, &materialBuffer);
         cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &descriptorSet,
                                 layout.pipelineLayout);
+
         cmd->PushConstants(&pushConstant, &pc, layout.pipelineLayout);
         cmd->Dispatch(
             (params->width + PATH_TRACE_NUM_THREADS_X - 1) / PATH_TRACE_NUM_THREADS_X,

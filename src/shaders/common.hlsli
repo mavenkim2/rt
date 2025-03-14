@@ -76,9 +76,16 @@ vector<float, N> flipsign(vector<float, N> mag, vector<float, N> sign)
     return result;
 }
 
+template <uint N>
+float Dequantize(uint n)
+{
+    return float(n) / ((1u << N) - 1);
+}
+
 float3 DecodeOctahedral(uint n) 
 {
-    float2 decoded = float2(float((n >> 16) & 0xff) / 65535, float(n & 0xff) / 65535) * 2 - 1;
+    float2 decoded = float2(Dequantize<16>((n >> 16) & 0xffff),
+                            Dequantize<16>((n & 0xffff))) * 2 - 1; 
     float3 normal = float3(decoded.xy, 1 - abs(decoded.x) - abs(decoded.y));
     float t = saturate(-normal.z);
     normal.xy += select(normal.xy >= 0.f, -t, t);

@@ -410,6 +410,7 @@ struct CommandBuffer
 
     void FlushBarriers();
     void PushConstants(PushConstant *pc, void *ptr, VkPipelineLayout layout);
+    void CompactAS(QueryPool &pool, GPUAccelerationStructure **as, int count);
     GPUAccelerationStructure BuildAS(VkAccelerationStructureTypeKHR type,
                                      VkAccelerationStructureGeometryKHR *geometries, int count,
                                      VkAccelerationStructureBuildRangeInfoKHR *buildRanges,
@@ -672,8 +673,6 @@ struct Vulkan
     VkAccelerationStructureInstanceKHR GetVkInstance(const AffineSpace &transform,
                                                      GPUAccelerationStructure &as);
     QueryPool GetCompactionSizes(CommandBuffer *cmd, GPUAccelerationStructure **as, int count);
-    void CompactAS(CommandBuffer *cmd, QueryPool &pool, GPUAccelerationStructure **as,
-                   int count);
     void BeginFrame();
     void EndFrame();
 

@@ -13,6 +13,7 @@ typedef unsigned int uint;
 struct RayPushConstant
 {
     uint envMap;
+    uint frameNum;
     uint width;
     uint height;
 };

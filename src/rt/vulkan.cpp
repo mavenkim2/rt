@@ -2400,19 +2400,18 @@ QueryPool Vulkan::GetCompactionSizes(CommandBuffer *cmd, GPUAccelerationStructur
     return pool;
 }
 
-void Vulkan::CompactAS(CommandBuffer *cmd, QueryPool &pool, GPUAccelerationStructure **as,
-                       int count)
+void CommandBuffer::CompactAS(QueryPool &pool, GPUAccelerationStructure **as, int count)
 {
     ScratchArena scratch;
     VkDeviceSize *compactedSizes =
         PushArrayNoZero(scratch.temp.arena, VkDeviceSize, pool.count);
-    vkGetQueryPoolResults(device, pool.queryPool, 0, count, sizeof(VkDeviceSize) * count,
-                          compactedSizes, 0,
+    vkGetQueryPoolResults(device->device, pool.queryPool, 0, count,
+                          sizeof(VkDeviceSize) * count, compactedSizes, 0,
                           VK_QUERY_RESULT_WAIT_BIT | VK_QUERY_RESULT_64_BIT);
 
     for (int i = 0; i < count; i++)
     {
-        GPUBuffer newBuffer = CreateBuffer(
+        GPUBuffer newBuffer = device->CreateBuffer(
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, compactedSizes[i]);
         VkAccelerationStructureKHR newAs;
 
@@ -2422,7 +2421,7 @@ void Vulkan::CompactAS(CommandBuffer *cmd, QueryPool &pool, GPUAccelerationStruc
         accelCreateInfo.buffer = newBuffer.buffer;
         accelCreateInfo.size   = compactedSizes[i];
         accelCreateInfo.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-        vkCreateAccelerationStructureKHR(device, &accelCreateInfo, 0, &newAs);
+        vkCreateAccelerationStructureKHR(device->device, &accelCreateInfo, 0, &newAs);
 
         VkCopyAccelerationStructureInfoKHR copyInfo = {
             VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR};
@@ -2430,11 +2429,17 @@ void Vulkan::CompactAS(CommandBuffer *cmd, QueryPool &pool, GPUAccelerationStruc
         copyInfo.dst  = newAs;
         copyInfo.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
 
-        vkCmdCopyAccelerationStructureKHR(cmd->buffer, &copyInfo);
+        vkCmdCopyAccelerationStructureKHR(buffer, &copyInfo);
+
+        VkAccelerationStructureDeviceAddressInfoKHR accelDeviceAddressInfo = {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
+        accelDeviceAddressInfo.accelerationStructure = newAs;
 
         // TODO: delete old resources
-        as[i]->as     = newAs;
-        as[i]->buffer = newBuffer;
+        as[i]->as      = newAs;
+        as[i]->buffer  = newBuffer;
+        as[i]->address = vkGetAccelerationStructureDeviceAddressKHR(device->device,
+                                                                    &accelDeviceAddressInfo);
     }
 }
 

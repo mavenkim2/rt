@@ -365,7 +365,7 @@ inline f32 Decode(u16 u) { return (f32)(u / 65535.f * 2 - 1); }
 
 inline u32 EncodeOctahedral(Vec3f v)
 {
-    Vec2f p = v.xy * (1.f / Abs(v.x) + Abs(v.y) + Abs(v.z));
+    Vec2f p = v.xy * (1.f / (Abs(v.x) + Abs(v.y) + Abs(v.z)));
     p       = v.z < 0 ? (1.f - Abs(p.yx()) * Vec2f(copysign(1, p.x), copysign(1, p.y))) : p;
 
     return (Encode(p[0]) << 16) | Encode(p[1]);

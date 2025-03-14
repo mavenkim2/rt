@@ -20,11 +20,6 @@ struct GPUScene
     float focalLength;
 };
 
-struct FrameConstants 
-{
-    uint frameNum;
-};
-
 #ifdef __cplusplus
 }
 #endif
