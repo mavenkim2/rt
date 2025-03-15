@@ -369,7 +369,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     camera.position   = params->pCamera;
     camera.forward    = Normalize(params->look - params->pCamera);
     camera.right      = Normalize(Cross(camera.forward, params->up));
-    camera.yaw        = PI / 2;
+
+    camera.pitch = ArcSin(camera.forward.y);
+    camera.yaw   = -Atan2(camera.forward.z, camera.forward.x);
 
     Vec3f baseForward = camera.forward;
     Vec3f baseRight   = camera.right;
@@ -439,25 +441,43 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         // Input
         {
-            f32 speed = 500.f;
+            f32 speed = 5000.f;
 
-            f32 rotationSpeed = 0.0005f * PI;
+            f32 rotationSpeed = 0.001f * PI;
             camera.RotateCamera(dMouseP, rotationSpeed);
 
             camera.position += (dir[2] - dir[3]) * camera.forward * speed * frameDt;
             camera.position += (dir[0] - dir[1]) * camera.right * speed * frameDt;
 
-            // NOTE: these are w.r.t CAMERA space
             camera.forward.x = Cos(camera.yaw) * Cos(camera.pitch);
             camera.forward.y = Sin(camera.pitch);
             camera.forward.z = -Sin(camera.yaw) * Cos(camera.pitch);
+            camera.forward   = Normalize(camera.forward);
 
-            camera.forward = Normalize(TransformV(params->renderFromCamera, camera.forward));
-            camera.right   = Normalize(Cross(camera.forward, params->up));
+            camera.right = Normalize(Cross(camera.forward, params->up));
 
-            Mat4 cameraFromRender =
-                LookAt(camera.position, camera.position + camera.forward, params->up) *
-                Translate(cameraStart);
+            LinearSpace3f axis;
+            axis.e[2] = -camera.forward;
+            f32 d = camera.forward.x * camera.forward.x + camera.forward.z * camera.forward.z;
+            Assert(d != 0);
+            if (d == 0)
+            {
+                axis.e[0][0] = 1.f;
+                axis.e[0][1] = 0.f;
+                axis.e[0][2] = 0.f;
+            }
+            else
+            {
+                f32 invSqrt  = 1 / Sqrt(d);
+                axis.e[0][0] = -camera.forward.z * invSqrt;
+                axis.e[0][1] = 0.f;
+                axis.e[0][2] = camera.forward.x * invSqrt;
+            }
+            axis.e[1] = Cross(axis.e[2], axis.e[0]);
+            axis      = Transpose(axis);
+
+            AffineSpace cameraFromRender =
+                AffineSpace(axis, Vec3f(0)) * Translate(cameraStart - camera.position);
 
             gpuScene.renderFromCamera = Inverse(cameraFromRender);
         }

@@ -18,7 +18,7 @@ struct ViewCamera
     void RotateCamera(Vec2f dMouse, f32 rotationSpeed)
     {
         pitch -= rotationSpeed * dMouse.y;
-        f32 epsilon = 0.01f;
+        f32 epsilon = 0.1f;
         pitch       = Clamp(pitch, -PI / 2.f + epsilon, PI / 2.f - epsilon);
         yaw -= rotationSpeed * dMouse.x;
 

@@ -69,6 +69,7 @@ __forceinline f32 Log2f(const f32 x) { return ::log2f(x); }
 __forceinline f32 Log(const f32 x) { return ::logf(x); }
 __forceinline f32 Copysign(const f32 a, const f32 b) { return ::copysignf(a, b); }
 __forceinline f32 ArcCos(const f32 x) { return ::acosf(x); }
+__forceinline f32 ArcSin(const f32 x) { return ::asinf(x); }
 __forceinline bool All(bool b) { return b; }
 __forceinline bool None(bool b) { return !b; }
 __forceinline bool Some(bool b) { return b; }
