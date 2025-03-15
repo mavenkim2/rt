@@ -298,6 +298,12 @@ struct NEESample
 
 struct RenderParams2
 {
+    Vec3f pCamera;
+    Vec3f look;
+    Vec3f up;
+    f32 fov;
+    f32 aspectRatio;
+
     Mat4 cameraFromRaster;
     AffineSpace renderFromCamera;
 

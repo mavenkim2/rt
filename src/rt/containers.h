@@ -703,7 +703,16 @@ struct ChunkedLinkedList
         newNode->values    = (T *)PushArrayTagged(arena, u8, sizeof(T) * count, memoryTag);
         newNode->count     = count;
         newNode->cap       = count;
-        QueuePush(first, last, newNode);
+        if (last && last->next)
+        {
+            newNode->next = last->next;
+            last->next    = newNode;
+            last          = newNode;
+        }
+        else
+        {
+            QueuePush(first, last, newNode);
+        }
         totalCount += count;
         return newNode;
     }
@@ -750,6 +759,15 @@ struct ChunkedLinkedList
                 totalCount += list->totalCount;
             }
         }
+    }
+    void Clear()
+    {
+        totalCount = 0;
+        for (auto *node = first; node != 0; node = node->next)
+        {
+            node->count = 0;
+        }
+        last = first;
     }
 };
 

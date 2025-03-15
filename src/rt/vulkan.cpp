@@ -1701,6 +1701,9 @@ void CommandBuffer::SubmitTransfer(TransferBuffer *transferBuffer)
 
     vkCmdCopyBuffer(buffer, transferBuffer->stagingBuffer.buffer,
                     transferBuffer->buffer.buffer, 1, &bufferCopy);
+
+    transferBuffer->buffer.lastStage  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    transferBuffer->buffer.lastAccess = VK_ACCESS_2_TRANSFER_WRITE_BIT;
 }
 
 GPUImage CommandBuffer::SubmitImage(void *ptr, VkImageUsageFlags flags, VkFormat format,

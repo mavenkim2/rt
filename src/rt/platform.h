@@ -71,6 +71,7 @@ enum OS_EventType
     OS_EventType_Quit,
     OS_EventType_KeyPressed,
     OS_EventType_KeyReleased,
+    OS_EventType_MouseMove,
     OS_EventType_LoseFocus,
 };
 
@@ -83,6 +84,8 @@ struct OS_Event
     b32 transition;
 
     // mouse click info
+    int mouseMoveX;
+    int mouseMoveY;
     f32 posX;
     f32 posY;
 };

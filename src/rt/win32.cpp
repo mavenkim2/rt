@@ -1,5 +1,4 @@
 #ifdef _WIN32
-/**/
 #include "base.h"
 #include "thread_context.h"
 #include "win32.h"
@@ -13,6 +12,7 @@ static ChunkedLinkedList<OS_Event> events;
 static u64 osPerformanceFrequency;
 static b32 win32LargePagesEnabled;
 static u64 startCounter;
+static OS_Key keyTable[256];
 
 PerformanceCounter OS_StartCounter()
 {
@@ -484,6 +484,24 @@ void OS_Init()
         startCounter = counter.QuadPart;
     }
     events = ChunkedLinkedList<OS_Event>(win32Arena);
+
+    RAWINPUTDEVICE devices[2] = {};
+    // Keyboard
+    devices[0].usUsagePage = 0x01;
+    devices[0].usUsage     = 0x06;
+    // Mouse
+    devices[1].usUsagePage = 0x01;
+    devices[1].usUsage     = 0x02;
+
+    bool result = RegisterRawInputDevices(devices, 2, sizeof(RAWINPUTDEVICE));
+    Assert(result);
+
+    for (u32 i = 0; i < 'Z' - 'A'; i++)
+    {
+        keyTable[i + 'A'] = (OS_Key)(OS_Key_A + i);
+    }
+    keyTable[VK_SPACE] = OS_Key_Space;
+    keyTable[VK_SHIFT] = OS_Key_Shift;
 }
 
 OS_Event Win32_CreateKeyEvent(OS_Key key, b32 isDown)
@@ -501,68 +519,6 @@ LRESULT Win32_Callback(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
     b32 isRelease  = 0;
     switch (message)
     {
-        case WM_LBUTTONUP:
-        case WM_RBUTTONUP:
-        {
-            isRelease = 1;
-        }
-        case WM_RBUTTONDOWN:
-        case WM_LBUTTONDOWN:
-        {
-            OS_Key key;
-            switch (message)
-            {
-                case WM_LBUTTONUP:
-                case WM_LBUTTONDOWN: key = OS_Mouse_L; break;
-                case WM_RBUTTONUP:
-                case WM_RBUTTONDOWN: key = OS_Mouse_R; break;
-            }
-
-            OS_Event event = Win32_CreateKeyEvent(key, !isRelease);
-            event.posX     = (f32)LOWORD(lParam);
-            event.posY     = (f32)HIWORD(lParam);
-
-            events.AddBack() = event;
-
-            if (isRelease == 0) SetCapture(window);
-            else ReleaseCapture();
-            break;
-        }
-        case WM_KEYUP:
-        case WM_SYSKEYUP:
-        case WM_KEYDOWN:
-        case WM_SYSKEYDOWN:
-        {
-            u32 keyCode = (u32)wParam;
-            Assert(keyCode < 256);
-
-            static b32 uninitialized = 1;
-            static OS_Key keyTable[256];
-            if (uninitialized)
-            {
-                uninitialized = 0;
-                for (u32 i = 0; i < 'Z' - 'A'; i++)
-                {
-                    keyTable[i + 'A'] = (OS_Key)(OS_Key_A + i);
-                }
-                keyTable[VK_SPACE] = OS_Key_Space;
-                keyTable[VK_SHIFT] = OS_Key_Shift;
-            }
-
-            b32 wasDown    = !!(lParam & (1 << 30));
-            b32 isDown     = !(lParam & (1 << 31));
-            b32 altWasDown = !!(lParam & (1 << 29));
-
-            OS_Event event   = Win32_CreateKeyEvent(keyTable[keyCode], isDown);
-            event.transition = (isDown != wasDown);
-
-            if (keyCode == VK_F4 && altWasDown)
-            {
-                event.type = OS_EventType_Quit;
-            }
-            events.AddBack() = event;
-            break;
-        }
         case WM_DESTROY:
         case WM_CLOSE:
         case WM_QUIT:
@@ -600,6 +556,47 @@ LRESULT Win32_Callback(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
         {
             break;
         }
+        // Raw input
+        case WM_INPUT:
+        {
+            UINT dwSize;
+            GetRawInputData((HRAWINPUT)lParam, RID_INPUT, 0, &dwSize, sizeof(RAWINPUTHEADER));
+
+            ScratchArena scratch;
+            LPBYTE lpb = PushArrayNoZero(scratch.temp.arena, BYTE, dwSize);
+            if (dwSize == GetRawInputData((HRAWINPUT)lParam, RID_INPUT, lpb, &dwSize,
+                                          sizeof(RAWINPUTHEADER)))
+            {
+                RAWINPUT *raw = (RAWINPUT *)lpb;
+                if (raw->header.dwType == RIM_TYPEKEYBOARD)
+                {
+                    UINT msg    = raw->data.keyboard.Message;
+                    bool isDown = msg == WM_KEYDOWN;
+                    OS_Event event =
+                        Win32_CreateKeyEvent(keyTable[raw->data.keyboard.VKey], isDown);
+                    events.AddBack() = event;
+                }
+                else if (raw->header.dwType == RIM_TYPEMOUSE)
+                {
+                    OS_Event event   = {};
+                    event.type       = OS_EventType_MouseMove;
+                    event.mouseMoveX = raw->data.mouse.lLastX;
+                    event.mouseMoveY = raw->data.mouse.lLastY;
+
+                    if (raw->data.mouse.usButtonFlags == RI_MOUSE_RIGHT_BUTTON_DOWN ||
+                        raw->data.mouse.usButtonFlags == RI_MOUSE_RIGHT_BUTTON_UP)
+                    {
+                        event.key = OS_Mouse_R;
+                        event.type =
+                            raw->data.mouse.usButtonFlags == RI_MOUSE_RIGHT_BUTTON_DOWN
+                                ? OS_EventType_KeyPressed
+                                : OS_EventType_KeyReleased;
+                    }
+                    events.AddBack() = event;
+                }
+            }
+        }
+        break;
         default:
         {
             result = DefWindowProcW(window, message, wParam, lParam);
@@ -653,6 +650,8 @@ inline u64 InterlockedAdd(u64 volatile *addend, u64 value)
 {
     return InterlockedExchangeAdd64((volatile LONG64 *)addend, value);
 }
+
+ChunkedLinkedList<OS_Event> &OS_GetEvents() { return events; }
 
 } // namespace rt
 #endif

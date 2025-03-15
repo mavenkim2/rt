@@ -1,5 +1,7 @@
+#include "camera.h"
 #include "integrate.h"
 #include "gpu_scene.h"
+#include "platform.h"
 #include "shader_interop/gpu_scene_shaderinterop.h"
 #include "shader_interop/hit_shaderinterop.h"
 #include "shader_interop/ray_shaderinterop.h"
@@ -156,10 +158,11 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
 // 2. dgfs
 // 3. clas
 // 4. actual bsdfs and brdfs
-//      - need vertices and normals, probably compressed
-// 6. add other parts of the scene, with actual instancing
-// 7. ability to move around
-// 8. recycle memory
+//      - compress vertices? interleave normal info?
+// 5. add other parts of the scene, with actual instancing
+// 6. ability to move around
+// 7. recycle memory
+// 8. textures...
 
 void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
                        int maxDepth, Image *envMap)
@@ -362,6 +365,30 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     f32 frameDt = 1.f / 60.f;
     int envMapBindlessIndex;
 
+    ViewCamera camera = {};
+    camera.position   = params->pCamera;
+    camera.forward    = Normalize(params->look - params->pCamera);
+    camera.right      = Normalize(Cross(camera.forward, params->up));
+    camera.yaw        = PI / 2;
+
+    Vec3f baseForward = camera.forward;
+    Vec3f baseRight   = camera.right;
+
+    TransferBuffer sceneTransferBuffers[2] = {
+        device->GetStagingBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene)),
+        device->GetStagingBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene))};
+
+    bool mousePressed = false;
+    OS_Key keys[4]    = {
+        OS_Key_D,
+        OS_Key_A,
+        OS_Key_W,
+        OS_Key_S,
+    };
+    int dir[4] = {};
+
+    Vec3f cameraStart = params->pCamera;
+
     for (;;)
     {
         MSG message;
@@ -371,6 +398,69 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             DispatchMessageW(&message);
         }
         f32 frameTime = OS_NowSeconds();
+
+        ChunkedLinkedList<OS_Event> &events = OS_GetEvents();
+
+        Vec2i dMouseP(0.f);
+
+        for (auto *node = events.first; node != 0; node = node->next)
+        {
+            for (int i = 0; i < node->count; i++)
+            {
+                if (node->values[i].key == OS_Mouse_R)
+                {
+                    mousePressed = node->values[i].type == OS_EventType_KeyPressed;
+                    dMouseP[0]   = node->values[i].mouseMoveX;
+                    dMouseP[1]   = node->values[i].mouseMoveY;
+                }
+                else if (node->values[i].type == OS_EventType_MouseMove)
+                {
+                    dMouseP[0] = node->values[i].mouseMoveX;
+                    dMouseP[1] = node->values[i].mouseMoveY;
+                }
+                for (int keyIndex = 0; keyIndex < ArrayLength(keys); keyIndex++)
+                {
+                    if (node->values[i].key == keys[keyIndex])
+                    {
+                        dir[keyIndex] = node->values[i].type == OS_EventType_KeyPressed;
+                    }
+                }
+            }
+        }
+
+        if (!mousePressed)
+        {
+            dMouseP[0] = 0;
+            dMouseP[1] = 0;
+            MemoryZero(dir, sizeof(dir));
+        }
+
+        events.Clear();
+
+        // Input
+        {
+            f32 speed = 500.f;
+
+            f32 rotationSpeed = 0.0005f * PI;
+            camera.RotateCamera(dMouseP, rotationSpeed);
+
+            camera.position += (dir[2] - dir[3]) * camera.forward * speed * frameDt;
+            camera.position += (dir[0] - dir[1]) * camera.right * speed * frameDt;
+
+            // NOTE: these are w.r.t CAMERA space
+            camera.forward.x = Cos(camera.yaw) * Cos(camera.pitch);
+            camera.forward.y = Sin(camera.pitch);
+            camera.forward.z = -Sin(camera.yaw) * Cos(camera.pitch);
+
+            camera.forward = Normalize(TransformV(params->renderFromCamera, camera.forward));
+            camera.right   = Normalize(Cross(camera.forward, params->up));
+
+            Mat4 cameraFromRender =
+                LookAt(camera.position, camera.position + camera.forward, params->up) *
+                Translate(cameraStart);
+
+            gpuScene.renderFromCamera = Inverse(cameraFromRender);
+        }
 
         device->BeginFrame();
         u32 frame          = device->GetCurrentBuffer();
@@ -390,6 +480,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         pc.width    = envMap->width;
         pc.height   = envMap->height;
 
+        u32 currentBuffer = device->GetCurrentBuffer();
+        MemoryCopy(sceneTransferBuffers[currentBuffer].mappedPtr, &gpuScene, sizeof(GPUScene));
+        cmd->SubmitTransfer(&sceneTransferBuffers[currentBuffer]);
+        cmd->Barrier(&sceneTransferBuffers[currentBuffer].buffer,
+                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->Barrier(image, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->FlushBarriers();
@@ -397,7 +492,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         DescriptorSet descriptorSet = layout.CreateDescriptorSet();
         descriptorSet.Bind(accelBindingIndex, &tlas.as)
             .Bind(imageBindingIndex, image)
-            .Bind(sceneBindingIndex, &sceneTransferBuffer)
+            .Bind(sceneBindingIndex, &sceneTransferBuffers[currentBuffer].buffer)
             .Bind(bindingDataBindingIndex, &bindingDataBuffer)
             .Bind(gpuMaterialBindingIndex, &materialBuffer);
         cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &descriptorSet,

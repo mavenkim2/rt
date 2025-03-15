@@ -251,6 +251,11 @@ void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
     Vec3f dyCamera = TransformP(cameraFromRaster, Vec3f(0.f, 1.f, 0.f)) - org;
 
     RenderParams2 params    = {};
+    params.pCamera          = pCamera;
+    params.look             = look;
+    params.up               = up;
+    params.fov              = fov;
+    params.aspectRatio      = aspectRatio;
     params.cameraFromRaster = cameraFromRaster;
     params.renderFromCamera = renderFromCameraAffine;
     params.NDCFromCamera    = NDCFromCamera;
@@ -288,7 +293,7 @@ void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
                                  AffineSpace::Rotate(Vec3f(0, 0, 1), Radians(65));
     AffineSpace renderFromLight = worldFromLight;
     AffineSpace lightFromRender = Inverse(renderFromLight);
-    params.lightFromRender = lightFromRender;
+    params.lightFromRender      = lightFromRender;
 
     f32 scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
     // ErrorExit(scale == 0.00935831666f, "scale: %f\n", scale);
