@@ -155,12 +155,15 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
 
 // what's next?
 // 1. restir di
-// 2. dgfs
+// 2. dgfs or dmms
 // 3. clas
+//      - are memory savings possible with this? it seems like not really, and that this 
+//      just speeds up rebuilds for dynamic/adaptively tessellated geometry. not really 
+//      what I need.
 // 4. actual bsdfs and brdfs
 //      - compress vertices? interleave normal info?
 // 5. add other parts of the scene, with actual instancing
-// 6. ability to move around
+// 6. disneyy bsdf
 // 7. recycle memory
 // 8. textures...
 

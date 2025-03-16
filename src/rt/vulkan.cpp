@@ -2253,6 +2253,28 @@ GPUAccelerationStructure CommandBuffer::BuildAS(
     return bvh;
 }
 
+// GPUAccelerationStructure CommandBuffer::BuildCLAS()
+// {
+//     VkClusterAccelerationStructureInputInfoNV info = {
+//         VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_INPUT_INFO_NV};
+//     info.opType = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_TRIANGLE_CLUSTER_NV;
+//     info.opMode = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_IMPLICIT_DESTINATIONS_NV;
+//     // info.opInput
+//     VkClusterAccelerationStructureOpInputNV input;
+//     VkClusterAccelerationStructureTriangleClusterInputNV triangleCluster = {
+//         VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_TRIANGLE_CLUSTER_INPUT_NV};
+//     input.pTriangleClusters = &triangleCluster;
+//
+//     triangleCluster.maxTotalVertexCount;
+//
+//         VkAccelerationStructureBuildSizesInfoKHR sizeInfo = {
+//             VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+//
+//     VkClusterAccelerationStructureCommandsInfoNV commands;
+//     vkGetClusterAccelerationStructureBuildSizesNV(device->device, &info, &sizeInfo);
+//     vkCmdBuildClusterAccelerationStructureIndirectNV(buffer, &commands);
+// }
+
 GPUAccelerationStructure CommandBuffer::BuildBLAS(const GPUMesh *meshes, int count)
 {
     ScratchArena temp;
