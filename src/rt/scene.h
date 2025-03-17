@@ -21,8 +21,8 @@
 // #include "lights.h"
 namespace rt
 {
-
 struct Image;
+struct RenderParams2;
 
 enum class IndexType
 {
@@ -927,11 +927,14 @@ void BuildCatClarkBVH(Arena **arenas, ScenePrimitives *scene);
 template <GeometryType type>
 void ComputeTessellationParams(Mesh *meshes, TessellationParams *params, u32 start, u32 count);
 
-struct RenderParams2;
+template <GeometryType type>
+PrimRef *ParallelGenerateMeshRefs(Arena *arena, ScenePrimitives *scene,
+                                  RecordAOSSplits &record, bool spatialSplits);
 void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
                     const Mat4 &cameraFromRender, int screenHeight);
 void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
                        int maxDepth, Image *envMap = 0);
+Bounds GetSceneBounds(ScenePrimitives *scene);
 
 void LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, string filename,
                Image *envMap = 0);

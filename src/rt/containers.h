@@ -839,7 +839,7 @@ struct HashMap
         return 0;
     }
 
-    void Add(Arena *arena, const T &val)
+    void Add(Arena *arena, const T &val, bool errorDuplicate = true)
     {
         u32 hash       = val.Hash();
         HashList &list = map[hash & hashMask];
@@ -850,7 +850,8 @@ struct HashMap
             {
                 if (node->value == val)
                 {
-                    ErrorExit(0, "Error: Using a duplicate name.\n");
+                    ErrorExit(errorDuplicate, "Error: Using a duplicate name.\n");
+                    return;
                 }
             }
             node = node->next;

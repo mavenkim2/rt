@@ -772,7 +772,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                         mesh.numIndices = 0;
                     }
 
-                    shapes.AddBack() = CopyMesh(&parse, arena, mesh);
+                    shapes.AddBack() = ProcessMesh(&parse, arena, mesh);
                     AddMaterialAndLights(arena, scene, sceneID, type, directory,
                                          worldFromRender, *renderFromWorld, tokenizer,
                                          materialHashMap, shapes.Last(), shapes, indices,
@@ -789,7 +789,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     Mesh mesh;
                     AddMesh(mesh, 3);
 
-                    shapes.AddBack() = CopyMesh(&parse, arena, mesh);
+                    shapes.AddBack() = ProcessMesh(&parse, arena, mesh);
                     AddMaterialAndLights(arena, scene, sceneID, type, directory,
                                          worldFromRender, *renderFromWorld, tokenizer,
                                          materialHashMap, shapes.Last(), shapes, indices,
@@ -806,7 +806,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     Mesh mesh;
                     AddMesh(mesh, 4);
 
-                    shapes.AddBack() = CopyMesh(&parse, tempArena, mesh);
+                    shapes.AddBack() = ProcessMesh(&parse, tempArena, mesh);
                     AddMaterialAndLights(arena, scene, sceneID, type, directory,
                                          worldFromRender, *renderFromWorld, tokenizer,
                                          materialHashMap, shapes.Last(), shapes, indices,
@@ -1359,64 +1359,9 @@ void BuildBVH(Arena **arenas, ScenePrimitives *scene)
     Mesh *meshes = (Mesh *)scene->primitives;
     RecordAOSSplits record(neg_inf);
 
-    u32 totalNumFaces = 0;
     if (scene->numPrimitives > 1)
     {
-        PrimRef *refs;
-        u32 extEnd;
-        if (scene->numPrimitives > PARALLEL_THRESHOLD)
-        {
-            ParallelForOutput output =
-                ParallelFor<u32>(temp, 0, scene->numPrimitives, PARALLEL_THRESHOLD,
-                                 [&](u32 &faceCount, u32 jobID, u32 start, u32 count) {
-                                     u32 outCount = 0;
-
-                                     for (u32 i = start; i < start + count; i++)
-                                     {
-                                         Mesh &mesh = meshes[i];
-                                         outCount += mesh.GetNumFaces();
-                                     }
-                                     faceCount = outCount;
-                                 });
-            Reduce(totalNumFaces, output, [&](u32 &l, const u32 &r) { l += r; });
-
-            u32 offset   = 0;
-            u32 *offsets = (u32 *)output.out;
-            for (u32 i = 0; i < output.num; i++)
-            {
-                u32 numFaces = offsets[i];
-                offsets[i]   = offset;
-                offset += numFaces;
-            }
-            Assert(totalNumFaces == offset);
-            extEnd = u32(totalNumFaces * GROW_AMOUNT);
-
-            // Generate PrimRefs
-            refs = PushArrayNoZero(temp.arena, PrimRef, extEnd);
-
-            ParallelReduce<RecordAOSSplits>(
-                &record, 0, scene->numPrimitives, PARALLEL_THRESHOLD,
-                [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
-                    GenerateMeshRefs<type>(meshes, refs, offsets[jobID],
-                                           jobID == output.num - 1 ? totalNumFaces
-                                                                   : offsets[jobID + 1],
-                                           start, count, record);
-                },
-                [&](RecordAOSSplits &l, const RecordAOSSplits &r) { l.Merge(r); });
-        }
-        else
-        {
-            for (u32 i = 0; i < scene->numPrimitives; i++)
-            {
-                Mesh &mesh = meshes[i];
-                totalNumFaces += mesh.GetNumFaces();
-            }
-            extEnd = u32(totalNumFaces * GROW_AMOUNT);
-            refs   = PushArrayNoZero(temp.arena, PrimRef, extEnd);
-            GenerateMeshRefs<type>(meshes, refs, 0, totalNumFaces, 0, scene->numPrimitives,
-                                   record);
-        }
-        record.SetRange(0, totalNumFaces, extEnd);
+        PrimRef *refs  = ParallelGenerateMeshRefs<type>(temp.arena, scene, record, true);
         scene->nodePtr = BuildQuantizedSBVH<type>(settings, arenas, scene, refs, record);
         using IntersectorType = typename IntersectorHelper<type, PrimRef>::IntersectorType;
         scene->intersectFunc  = &IntersectorType::Intersect;
@@ -1425,7 +1370,7 @@ void BuildBVH(Arena **arenas, ScenePrimitives *scene)
     }
     else
     {
-        totalNumFaces           = meshes->GetNumFaces();
+        u32 totalNumFaces       = meshes->GetNumFaces();
         u32 extEnd              = u32(totalNumFaces * GROW_AMOUNT);
         PrimRefCompressed *refs = PushArrayNoZero(temp.arena, PrimRefCompressed, extEnd);
         GenerateMeshRefs<type>(meshes, refs, 0, totalNumFaces, 0, 1, record);
@@ -1440,7 +1385,7 @@ void BuildBVH(Arena **arenas, ScenePrimitives *scene)
     Bounds b(record.geomBounds);
     Assert((Movemask(b.maxP >= b.minP) & 0x7) == 0x7);
     scene->SetBounds(b);
-    scene->numFaces = totalNumFaces;
+    scene->numFaces = record.Count();
     ScratchEnd(temp);
 }
 
@@ -1457,6 +1402,74 @@ void BuildQuadBVH(Arena **arenas, ScenePrimitives *scene)
 void BuildCatClarkBVH(Arena **arenas, ScenePrimitives *scene)
 {
     BuildBVH<GeometryType::CatmullClark>(arenas, scene);
+}
+
+template <GeometryType type>
+PrimRef *ParallelGenerateMeshRefs(Arena *arena, ScenePrimitives *scene,
+                                  RecordAOSSplits &record, bool spatialSplits)
+{
+    u32 totalNumFaces = 0;
+    u32 extEnd        = 0;
+    PrimRef *refs     = 0;
+    Mesh *meshes      = (Mesh *)scene->primitives;
+    if (scene->numPrimitives > PARALLEL_THRESHOLD)
+    {
+        TempArena temp = ScratchStart(&arena, 1);
+
+        ParallelForOutput output =
+            ParallelFor<u32>(temp, 0, scene->numPrimitives, PARALLEL_THRESHOLD,
+                             [&](u32 &faceCount, u32 jobID, u32 start, u32 count) {
+                                 u32 outCount = 0;
+
+                                 for (u32 i = start; i < start + count; i++)
+                                 {
+                                     Mesh &mesh = meshes[i];
+                                     outCount += mesh.GetNumFaces();
+                                 }
+                                 faceCount = outCount;
+                             });
+        Reduce(totalNumFaces, output, [&](u32 &l, const u32 &r) { l += r; });
+
+        u32 offset   = 0;
+        u32 *offsets = (u32 *)output.out;
+        for (u32 i = 0; i < output.num; i++)
+        {
+            u32 numFaces = offsets[i];
+            offsets[i]   = offset;
+            offset += numFaces;
+        }
+        Assert(totalNumFaces == offset);
+        u32 extEnd = u32(totalNumFaces * spatialSplits ? GROW_AMOUNT : 1);
+
+        // Generate PrimRefs
+        refs = PushArrayNoZero(arena, PrimRef, extEnd);
+
+        ParallelReduce<RecordAOSSplits>(
+            &record, 0, scene->numPrimitives, PARALLEL_THRESHOLD,
+            [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
+                GenerateMeshRefs<type>(meshes, refs, offsets[jobID],
+                                       jobID == output.num - 1 ? totalNumFaces
+                                                               : offsets[jobID + 1],
+                                       start, count, record);
+            },
+            [&](RecordAOSSplits &l, const RecordAOSSplits &r) { l.Merge(r); });
+
+        ScratchEnd(temp);
+    }
+    else
+    {
+        for (u32 i = 0; i < scene->numPrimitives; i++)
+        {
+            Mesh &mesh = meshes[i];
+            totalNumFaces += mesh.GetNumFaces();
+        }
+        extEnd = u32(totalNumFaces * spatialSplits ? GROW_AMOUNT : 1);
+        refs   = PushArrayNoZero(arena, PrimRef, extEnd);
+        GenerateMeshRefs<type>(meshes, refs, 0, totalNumFaces, 0, scene->numPrimitives,
+                               record);
+    }
+    record.SetRange(0, totalNumFaces, extEnd);
+    return refs;
 }
 
 template <GeometryType type, typename PrimRef>
@@ -1519,6 +1532,102 @@ void ComputeTessellationParams(Mesh *meshes, TessellationParams *params, u32 sta
         params[i].bounds             = bounds;
         params[i].currentMinDistance = pos_inf;
     }
+}
+
+Bounds GetTLASBounds(ScenePrimitives *scene, u32 start, u32 count)
+{
+    Bounds geom;
+    const Instance *instances = (const Instance *)scene->primitives;
+    for (u32 i = start; i < start + count; i++)
+    {
+        const Instance &instance = instances[i];
+        AffineSpace &transform   = scene->affineTransforms[instance.transformIndex];
+        u32 index                = instance.id;
+        Assert(scene->childScenes);
+        ScenePrimitives *inScene = scene->childScenes[index];
+
+        Bounds bounds = Transform(transform, inScene->GetBounds());
+        Assert((Movemask(bounds.maxP >= bounds.minP) & 0x7) == 0x7);
+
+        geom.Extend(bounds);
+    }
+    return geom;
+}
+
+Bounds GetSceneBounds(ScenePrimitives *scene)
+{
+    Bounds b;
+    switch (scene->geometryType)
+    {
+        case GeometryType::Instance:
+        {
+            u32 numInstances = scene->numPrimitives;
+
+            if (numInstances > PARALLEL_THRESHOLD)
+            {
+                ParallelReduce<Bounds>(
+                    &b, 0, numInstances, PARALLEL_THRESHOLD,
+                    [&](Bounds &b, u32 jobID, u32 start, u32 count) {
+                        b = GetTLASBounds(scene, start, count);
+                    },
+                    [&](Bounds &l, const Bounds &r) { l.Extend(r); });
+            }
+            else
+            {
+                b = GetTLASBounds(scene, 0, numInstances);
+            }
+        }
+        break;
+        case GeometryType::TriangleMesh:
+        case GeometryType::QuadMesh:
+        case GeometryType::CatmullClark:
+        {
+            Mesh *meshes = (Mesh *)scene->primitives;
+            for (u32 i = 0; i < scene->numPrimitives; i++)
+            {
+                Bounds bounds;
+                Mesh *mesh = &meshes[i];
+
+                u32 numFaces = mesh->GetNumFaces();
+                if (numFaces > PARALLEL_THRESHOLD)
+                {
+                    ParallelReduce<Bounds>(
+                        &bounds, 0, numFaces, PARALLEL_THRESHOLD,
+                        [&](Bounds &b, int jobID, int start, int count) {
+                            switch (scene->geometryType)
+                            {
+                                case GeometryType::TriangleMesh:
+                                {
+                                    b = GenerateMeshRefsHelper<GeometryType::TriangleMesh>{
+                                        mesh->p, mesh->indices}(start, count);
+                                }
+                                break;
+                                default: Assert(0);
+                            }
+                        },
+                        [&](Bounds &l, const Bounds &r) { l.Extend(r); });
+                }
+                else
+                {
+                    switch (scene->geometryType)
+                    {
+                        case GeometryType::TriangleMesh:
+                        {
+                            bounds = GenerateMeshRefsHelper<GeometryType::TriangleMesh>{
+                                mesh->p, mesh->indices}(0, numFaces);
+                        }
+                        break;
+                        default: Assert(0);
+                    }
+                }
+                b.Extend(bounds);
+            }
+        }
+        break;
+        default: Assert(0);
+    }
+
+    return b;
 }
 
 // NOTE: this assumes the quad is planar

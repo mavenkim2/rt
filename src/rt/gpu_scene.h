@@ -17,7 +17,7 @@ struct SceneShapeParse
     Semaphore semaphore;
 };
 
-GPUMesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh);
+GPUMesh ProcessMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh);
 void AddMaterialAndLights(Arena *arena, Tokenizer &tokenizer,
                           HashMap<MaterialNode> *materialHashMap, GPUMesh &mesh,
                           ChunkedLinkedList<PrimitiveIndices, MemoryType_Shape> &indices);

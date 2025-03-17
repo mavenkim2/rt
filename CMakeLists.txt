@@ -150,6 +150,7 @@ set (RT_SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/tables/primes.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/tables/sobolmatrices.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/sampler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/dgfs.cpp
 )
 
 if (USE_GPU)

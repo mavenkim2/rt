@@ -251,8 +251,8 @@ struct Triangle8
     }
 };
 
-const u32 Quad8::LUTNext[]     = {1, 2, 3, 0};
-const u32 Triangle8::LUTNext[] = {1, 2, 0};
+inline const u32 Quad8::LUTNext[]     = {1, 2, 3, 0};
+inline const u32 Triangle8::LUTNext[] = {1, 2, 0};
 
 template <typename Polygon8>
 static void ClipPolygon(const u32 dim, const Polygon8 &poly, const Lane8F32 &splitPos,

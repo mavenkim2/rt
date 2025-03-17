@@ -1,6 +1,8 @@
 #include "camera.h"
+#include "dgfs.h"
 #include "integrate.h"
 #include "gpu_scene.h"
+#include "parallel.h"
 #include "platform.h"
 #include "shader_interop/gpu_scene_shaderinterop.h"
 #include "shader_interop/hit_shaderinterop.h"
@@ -28,14 +30,15 @@ void EndSceneShapeParse(ScenePrimitives *scene, SceneShapeParse *parse)
     device->SubmitCommandBuffer(parse->buffer);
 }
 
-GPUMesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
+GPUMesh ProcessMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
 {
+    ScratchArena scratch;
+
     size_t vertexSize  = sizeof(mesh.p[0]) * mesh.numVertices;
     size_t indicesSize = sizeof(mesh.indices[0]) * mesh.numIndices;
     size_t normalSize  = 0;
     size_t totalSize   = vertexSize + indicesSize;
 
-    ScratchArena scratch;
     u32 *octNormals = 0;
     if (mesh.n)
     {
@@ -157,8 +160,8 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
 // 1. restir di
 // 2. dgfs or dmms
 // 3. clas
-//      - are memory savings possible with this? it seems like not really, and that this 
-//      just speeds up rebuilds for dynamic/adaptively tessellated geometry. not really 
+//      - are memory savings possible with this? it seems like not really, and that this
+//      just speeds up rebuilds for dynamic/adaptively tessellated geometry. not really
 //      what I need.
 // 4. actual bsdfs and brdfs
 //      - compress vertices? interleave normal info?
@@ -170,6 +173,54 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
 void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
                        int maxDepth, Image *envMap)
 {
+    // Build clusters
+    // TODO: make sure to NOT make gpumeshes
+    ScratchArena scratch;
+    Arena *arena   = ArenaAlloc();
+    Arena **arenas = GetArenaArray(arena);
+
+    Bounds *bounds = PushArrayNoZero(scratch.temp.arena, Bounds, numScenes);
+
+    for (int depth = maxDepth; depth >= 0; depth--)
+    {
+        ParallelFor(0, numScenes, 1, [&](int jobID, int start, int count) {
+            for (int i = start; i < start + count; i++)
+            {
+                if (scenes[i]->depth == depth)
+                {
+                    bounds[i] = GetSceneBounds(scenes[i]);
+                }
+            }
+        });
+    }
+
+    Bounds sceneBounds;
+    for (int i = 0; i < numScenes; i++)
+    {
+        sceneBounds.Extend(bounds[i]);
+    }
+
+    ParallelFor(0, numScenes, 1, [&](int jobID, int start, int count) {
+        for (int i = start; i < start + count; i++)
+        {
+            ScenePrimitives *scene = scenes[i];
+            if (scene->geometryType == GeometryType::Instance) continue;
+
+            RecordAOSSplits record(neg_inf);
+
+            // Arena *arena  = arenas[GetThreadIndex()];
+            ScratchArena scratch;
+            PrimRef *refs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
+                scratch.temp.arena, scenes[i], record, false);
+
+            ClusterBuilder builder(arena, scene, refs);
+            builder.BuildClusters(record, true);
+            builder.CreateDGFs((Mesh *)scene->primitives, scene->numPrimitives, sceneBounds);
+
+            ReleaseArenaArray(builder.arenas);
+        }
+    });
+
     // Set the instance ids of each scene
     int runningTotal = 0;
     for (int i = 0; i < numScenes; i++)

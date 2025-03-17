@@ -1,4 +1,4 @@
-#ifndef VEC3_H_ 
+#ifndef VEC3_H_
 #define VEC3_H_
 
 #include <cmath>
@@ -150,6 +150,12 @@ template <typename T>
 __forceinline Vec3<T> operator/(const Vec3<T> &v, T d)
 {
     return Vec3<T>(v.x / d, v.y / d, v.z / d);
+}
+
+template <typename T>
+__forceinline Vec3<T> operator/(T d, const Vec3<T> &v)
+{
+    return Vec3<T>(d / v.x, d / v.y, d / v.z);
 }
 
 template <typename T>
