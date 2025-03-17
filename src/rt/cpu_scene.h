@@ -18,7 +18,6 @@ struct string;
 struct SceneShapeParse
 {
 };
-Mesh ProcessMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh);
 SceneShapeParse StartSceneShapeParse();
 void EndSceneShapeParse(ScenePrimitives *scene, SceneShapeParse *parse);
 void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, GeometryType type,

@@ -943,6 +943,7 @@ DiffuseAreaLight *ParseAreaLight(Arena *arena, Tokenizer *tokenizer, AffineSpace
 Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory,
                       FilterType type        = FilterType::CatmullRom,
                       ColorEncoding encoding = ColorEncoding::None);
+Mesh ProcessMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh);
 
 } // namespace rt
 #endif

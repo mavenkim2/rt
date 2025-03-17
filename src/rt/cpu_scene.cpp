@@ -8,32 +8,6 @@ namespace rt
 SceneShapeParse StartSceneShapeParse() { return {}; }
 void EndSceneShapeParse(ScenePrimitives *scene, SceneShapeParse *parse) {}
 
-Mesh CopyMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
-{
-    Mesh newMesh        = {};
-    newMesh.numVertices = mesh.numVertices;
-    newMesh.numIndices  = mesh.numIndices;
-    newMesh.numFaces    = mesh.numFaces;
-    newMesh.p = PushArrayNoZeroTagged(arena, Vec3f, mesh.numVertices, MemoryType_Shape);
-    MemoryCopy(newMesh.p, mesh.p, sizeof(Vec3f) * mesh.numVertices);
-    if (mesh.n)
-    {
-        newMesh.n = PushArrayNoZeroTagged(arena, Vec3f, mesh.numVertices, MemoryType_Shape);
-        MemoryCopy(newMesh.n, mesh.n, sizeof(Vec3f) * mesh.numVertices);
-    }
-    if (mesh.uv)
-    {
-        newMesh.uv = PushArrayNoZeroTagged(arena, Vec2f, mesh.numVertices, MemoryType_Shape);
-        MemoryCopy(newMesh.uv, mesh.uv, sizeof(Vec2f) * mesh.numVertices);
-    }
-    if (mesh.indices)
-    {
-        newMesh.indices = PushArrayNoZero(arena, u32, mesh.numIndices);
-        MemoryCopy(newMesh.indices, mesh.indices, sizeof(u32) * mesh.numIndices);
-    }
-    return newMesh;
-}
-
 void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, GeometryType type,
                           string directory, AffineSpace &worldFromRender,
                           AffineSpace &renderFromWorld, Tokenizer &tokenizer,

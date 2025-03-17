@@ -30,6 +30,7 @@ void EndSceneShapeParse(ScenePrimitives *scene, SceneShapeParse *parse)
     device->SubmitCommandBuffer(parse->buffer);
 }
 
+#if 0
 GPUMesh ProcessMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
 {
     ScratchArena scratch;
@@ -94,12 +95,13 @@ GPUMesh ProcessMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
 
     return result;
 }
+#endif
 
 void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, GeometryType type,
                           string directory, AffineSpace &worldFromRender,
                           AffineSpace &renderFromWorld, Tokenizer &tokenizer,
-                          MaterialHashMap *materialHashMap, GPUMesh &mesh,
-                          ChunkedLinkedList<GPUMesh, MemoryType_Shape> &shapes,
+                          MaterialHashMap *materialHashMap, Mesh &mesh,
+                          ChunkedLinkedList<Mesh, MemoryType_Shape> &shapes,
                           ChunkedLinkedList<PrimitiveIndices, MemoryType_Shape> &indices,
                           ChunkedLinkedList<Light *, MemoryType_Light> &lights)
 {

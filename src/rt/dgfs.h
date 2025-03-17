@@ -12,8 +12,22 @@ struct PrimRef;
 struct RecordAOSSplits;
 struct ScenePrimitives;
 
-static const int maxClusterTriangles = 64;
-static const int clusterSize         = 64;
+static const int maxClusterTriangles = 128;
+static const int clusterSize         = 128;
+
+struct U128
+{
+    u64 vals[2];
+    void operator|=(U128 other)
+    {
+        vals[0] |= other.vals[0];
+        vals[1] |= other.vals[1];
+    }
+    void SetBit(u32 currentFirstUseBit)
+    {
+        vals[currentFirstUseBit >> 6] |= 1ull << (currentFirstUseBit & 63);
+    }
+};
 
 struct DenseGeometry
 {

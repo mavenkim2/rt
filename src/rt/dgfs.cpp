@@ -17,7 +17,8 @@ ClusterBuilder::ClusterBuilder(Arena *arena, ScenePrimitives *scene, PrimRef *pr
 {
     u32 numProcessors = OS_NumProcessors();
     arenas            = GetArenaArray(arena);
-    threadClusters    = StaticArray<ClusterList>(arenas[GetThreadIndex()], numProcessors);
+    threadClusters =
+        StaticArray<ClusterList>(arenas[GetThreadIndex()], numProcessors, numProcessors);
     for (u32 i = 0; i < numProcessors; i++)
     {
         threadClusters[i].l = ChunkedLinkedList<RecordAOSSplits>(arenas[i]);
@@ -32,11 +33,13 @@ void AppendBitStream(std::vector<u8> &bitStream, u32 bitsToAdd, u32 &currentBitO
     Assert(currentBitOffset >= 0 && currentBitOffset < 8);
     Assert(numBits);
 
-    u32 remaining = 8 - currentBitOffset;
-    bitStream.back() |= ((bitsToAdd & ((1 << remaining) - 1)) << currentBitOffset);
+    u32 remaining = 0;
+    if (currentBitOffset)
+    {
+        remaining = Min(8 - currentBitOffset, numBits);
+        bitStream.back() |= ((bitsToAdd & ((1 << remaining) - 1)) << currentBitOffset);
+    }
 
-    u32 newBitOffset = 0;
-    newBitOffset += Min(8u, numBits - remaining);
     u32 offset     = remaining + Min(8u, numBits - remaining);
     u32 prevOffset = remaining;
 
@@ -46,9 +49,8 @@ void AppendBitStream(std::vector<u8> &bitStream, u32 bitsToAdd, u32 &currentBitO
         bitStream.push_back(((bitsToAdd & mask) >> prevOffset) & 0xff);
         prevOffset = offset;
         offset += Min(8u, numBits - offset);
-        newBitOffset += Min(8u, numBits - offset);
     }
-    currentBitOffset = newBitOffset & 7;
+    currentBitOffset = (currentBitOffset + numBits) & 7;
 }
 
 void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel)
@@ -117,13 +119,19 @@ void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel)
 
 void ClusterBuilder::CreateDGFs(Mesh *meshes, int numMeshes, Bounds &sceneBounds)
 {
-    static const int b     = 16;
-    static const f32 scale = 1.f / ((1 << (b - 1)) - 1.f);
+    static const int b     = 24;
+    static const f32 scale = (1 << (b - 1)) - 1.f;
     Vec3f sceneExtent      = ToVec3f(sceneBounds.maxP - sceneBounds.minP);
 
-    f32 eX = sceneExtent[0] * scale;
-    f32 eY = sceneExtent[1] * scale;
-    f32 eZ = sceneExtent[2] * scale;
+    i32 eX = (i32)Ceil(Log2f(sceneExtent[0] / scale));
+    i32 eY = (i32)Ceil(Log2f(sceneExtent[1] / scale));
+    i32 eZ = (i32)Ceil(Log2f(sceneExtent[2] / scale));
+
+    f32 expX = AsFloat((eX + 127) << 23);
+    f32 expY = AsFloat((eY + 127) << 23);
+    f32 expZ = AsFloat((eZ + 127) << 23);
+
+    Vec3f quantize = 1.f / Vec3f(expX, expY, expZ);
 
 #if 0
     f32 offsetMinX = maxClusterEdgeLength[0] - 16.f;
@@ -143,30 +151,30 @@ void ClusterBuilder::CreateDGFs(Mesh *meshes, int numMeshes, Bounds &sceneBounds
     eZ = Max(constraintMinZ, Max(constraintMaxY, Max(offsetMinZ, eZ)));
 #endif
 
-    Vec3f quantize = 1.f / Vec3f(eX, eY, eZ);
-
     ScratchArena meshScratch;
     Vec3i **quantizedVertices = PushArrayNoZero(meshScratch.temp.arena, Vec3i *, numMeshes);
+
+    u32 indexTotal = 0;
 
     for (int i = 0; i < numMeshes; i++)
     {
         Mesh &mesh = meshes[i];
         quantizedVertices[i] =
             PushArrayNoZero(meshScratch.temp.arena, Vec3i, mesh.numVertices);
+        indexTotal += mesh.numIndices;
 
         // Quantize to global grid
         for (int j = 0; j < mesh.numVertices; j++)
         {
-            quantizedVertices[i][j] = mesh.p[j] * quantize;
+            quantizedVertices[i][j] = Vec3i(mesh.p[j] * quantize + 0.5f);
         }
-
-        // for (int j = 0; j < cluster.numVertices; j++)
-        // {
-        //     quantizedVertices[i][j] -= min;
-        // }
     }
 
-    for (int threadIndex = 0; threadIndex < threadClusters.Length(); threadIndex++)
+    // TODO: this needs to be permanent
+    PushArrayNoZero(meshScratch.temp.arena, u32, );
+    meshindex
+
+        for (int threadIndex = 0; threadIndex < threadClusters.Length(); threadIndex++)
     {
         ClusterList &list = threadClusters[threadIndex];
         for (auto *node = list.l.first; node != 0; node = node->next)
@@ -183,6 +191,7 @@ void ClusterBuilder::CreateDGFs(Mesh *meshes, int numMeshes, Bounds &sceneBounds
 void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVertices,
                                 RecordAOSSplits &cluster)
 {
+    static const u32 LUT[] = {1, 2, 0};
     struct HashedIndex
     {
         u32 geomID;
@@ -195,7 +204,9 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
         }
     };
 
-    auto ComputeEdgeId = [](u32 id0, u32 id1) {
+    auto ComputeEdgeId = [](u32 indices[3], u32 edgeIndex) {
+        u32 id0 = indices[edgeIndex];
+        u32 id1 = indices[LUT[edgeIndex]];
         return id0 < id1 ? ((u64)id1 << 32) | id0 : ((u64)id0 << 32) | id1;
     };
 
@@ -205,7 +216,8 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
     TempArena clusterScratch = ScratchStart(&arena, 1);
 
     // Maps mesh indices to cluster indices
-    HashMap<HashedIndex> vertexHashSet(clusterScratch.arena, clusterNumTriangles * 3);
+    HashMap<HashedIndex> vertexHashSet(clusterScratch.arena,
+                                       NextPowerOfTwo(clusterNumTriangles * 3));
 
     // TODO: section 4.3?
     u32 *vertexIndices = PushArray(clusterScratch.arena, u32, clusterNumTriangles * 3);
@@ -224,7 +236,7 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
     // Calculate the number of bits needed to represent the range of values in the
     // cluster
     Vec3i min(pos_inf);
-    Vec3i max(pos_inf);
+    Vec3i max(neg_inf);
 
     for (int i = start; i < start + clusterNumTriangles; i++)
     {
@@ -242,7 +254,7 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
             min = Min(min, quantizedVertices[geomID][indices[indexIndex]]);
             max = Max(max, quantizedVertices[geomID][indices[indexIndex]]);
 
-            auto *hashedIndex = vertexHashSet.Find({indices[indexIndex]});
+            auto *hashedIndex = vertexHashSet.Find({geomID, indices[indexIndex]});
             if (hashedIndex)
             {
                 vertexIndices[indexCount++] = hashedIndex->clusterVertexIndex;
@@ -258,9 +270,9 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
         }
     }
 
-    u32 numBitsX = Log2Int(Max(max[0] - min[0] - 1, 1)) + 1;
-    u32 numBitsY = Log2Int(Max(max[1] - min[1] - 1, 1)) + 1;
-    u32 numBitsZ = Log2Int(Max(max[1] - min[1] - 1, 1)) + 1;
+    u32 numBitsX = min[0] == max[0] ? 0 : Log2Int(Max(max[0] - min[0] - 1, 1)) + 1;
+    u32 numBitsY = min[1] == max[1] ? 0 : Log2Int(Max(max[1] - min[1] - 1, 1)) + 1;
+    u32 numBitsZ = min[2] == max[2] ? 0 : Log2Int(Max(max[2] - min[2] - 1, 1)) + 1;
 
     DenseGeometry geometry;
     geometry.anchor       = min;
@@ -278,7 +290,6 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
     // Build adjacency data for triangles
     u32 *counts  = PushArray(clusterScratch.arena, u32, clusterNumTriangles);
     u32 *offsets = PushArray(clusterScratch.arena, u32, clusterNumTriangles);
-    u32 *data    = PushArray(clusterScratch.arena, u32, clusterNumTriangles);
 
     struct EdgeKeyValue
     {
@@ -305,7 +316,7 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
 
         for (int edgeIndex = 0; edgeIndex < 3; edgeIndex++)
         {
-            u64 edgeID = ComputeEdgeId(indices[edgeIndex], indices[(edgeIndex + 1) & 3]);
+            u64 edgeID        = ComputeEdgeId(indices, edgeIndex);
             auto edgeKeyValue = edgeIDMap.Find({edgeID, geomID});
             if (edgeKeyValue == 0)
             {
@@ -314,7 +325,7 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
             else
             {
                 // TODO: handle non manifolds
-                if (edgeKeyValue->value1 == ~0u) Assert(0);
+                Assert(edgeKeyValue->value1 == ~0u);
                 edgeKeyValue->value1 = triangleIndex;
                 edgeKeyValue->count  = 2;
             }
@@ -331,7 +342,7 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
 
         for (int edgeIndex = 0; edgeIndex < 3; edgeIndex++)
         {
-            u64 edgeID = ComputeEdgeId(indices[edgeIndex], indices[(edgeIndex + 1) & 3]);
+            u64 edgeID        = ComputeEdgeId(indices, edgeIndex);
             auto edgeKeyValue = edgeIDMap.Find({edgeID, geomID});
             Assert(edgeKeyValue);
             count += edgeKeyValue->count - 1;
@@ -346,6 +357,8 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
         offset += counts[i];
     }
 
+    u32 *data = PushArray(clusterScratch.arena, u32, offset);
+
     for (u32 triangleIndex = 0; triangleIndex < clusterNumTriangles; triangleIndex++)
     {
         u32 indices[3];
@@ -355,12 +368,13 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
 
         for (int edgeIndex = 0; edgeIndex < 3; edgeIndex++)
         {
-            u64 edgeID = ComputeEdgeId(indices[edgeIndex], indices[(edgeIndex + 1) & 3]);
+            u64 edgeID        = ComputeEdgeId(indices, edgeIndex);
             auto edgeKeyValue = edgeIDMap.Find({edgeID, geomID});
             Assert(edgeKeyValue);
-            data[offsets[triangleIndex]++] = triangleIndex == edgeKeyValue->value0
-                                                 ? edgeKeyValue->value1
-                                                 : edgeKeyValue->value0;
+            data[offsets[triangleIndex]] = triangleIndex == edgeKeyValue->value0
+                                               ? edgeKeyValue->value1
+                                               : edgeKeyValue->value0;
+            offsets[triangleIndex] += edgeKeyValue->count - 1;
         }
     }
 
@@ -403,7 +417,7 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
     std::vector<u32> reuseBuffer;
     reuseBuffer.reserve(clusterNumTriangles * 3);
 
-    u64 firstUse           = 0;
+    U128 firstUse          = {};
     u32 currentFirstUseBit = 0;
     u64 usedTriangles      = 0;
     u32 numReuse           = 0;
@@ -420,18 +434,29 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
         }
 
         usedTriangles |= (1 << index);
-        firstUse |= (1 << currentFirstUseBit);
+        firstUse.SetBit(currentFirstUseBit);
         currentFirstUseBit++;
         mapOldIndexToDGFIndex[index] = addedVertexCount++;
 
         for (int i = 0; i < 3; i++)
         {
-            AppendBitStream(vertexBitStream, quantizedVertices[geomID][index][i], bitOffset,
-                            geometry.bitWidths[i]);
+            AppendBitStream(
+                vertexBitStream,
+                quantizedVertices[geomID][clusterVertexIndexToMeshVertexIndex[index]][i] -
+                    min[i],
+                bitOffset, geometry.bitWidths[i]);
         }
         return false;
     };
 
+    u32 firstIndices[3];
+    GetIndices(firstIndices, minValenceTriangle);
+    u32 firstGeomId = geomIDs[minValenceTriangle];
+    CheckUsedTriangles(firstGeomId, firstIndices[0]);
+    CheckUsedTriangles(firstGeomId, firstIndices[1]);
+    CheckUsedTriangles(firstGeomId, firstIndices[2]);
+
+    // TODO: half edge structure instead of hash table?
     for (u32 numAddedTriangles = 1; numAddedTriangles < clusterNumTriangles;
          numAddedTriangles++)
     {
@@ -507,7 +532,7 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
         u32 geomID = geomIDs[newMinValenceTriangle];
         for (int edgeIndex = 0; edgeIndex < 3; edgeIndex++)
         {
-            u64 edgeID = ComputeEdgeId(indices[edgeIndex], indices[(edgeIndex + 1) & 3]);
+            u64 edgeID        = ComputeEdgeId(indices, edgeIndex);
             auto edgeKeyValue = edgeIDMap.Find({edgeID, geomID});
             Assert(edgeKeyValue);
 
@@ -543,8 +568,8 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
                 // Find whether we're attached to edge1 or 2 from previous triangle
                 for (int oldEdgeIndex = 0; oldEdgeIndex < 3; oldEdgeIndex++)
                 {
-                    u64 oldEdgeId = ComputeEdgeId(oldIndices[oldEdgeIndex],
-                                                  oldIndices[(oldEdgeIndex + 1) & 3]);
+                    u64 oldEdgeId = ComputeEdgeId(indices, edgeIndex);
+
                     if (oldEdgeId == edgeID)
                     {
                         if (backTrackStripType != TriangleStripType::None)

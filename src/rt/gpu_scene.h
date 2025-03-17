@@ -17,15 +17,11 @@ struct SceneShapeParse
     Semaphore semaphore;
 };
 
-GPUMesh ProcessMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh);
-void AddMaterialAndLights(Arena *arena, Tokenizer &tokenizer,
-                          HashMap<MaterialNode> *materialHashMap, GPUMesh &mesh,
-                          ChunkedLinkedList<PrimitiveIndices, MemoryType_Shape> &indices);
 void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, GeometryType type,
                           string directory, AffineSpace &worldFromRender,
                           AffineSpace &renderFromWorld, Tokenizer &tokenizer,
-                          HashMap<MaterialNode> *materialHashMap, GPUMesh &mesh,
-                          ChunkedLinkedList<GPUMesh, MemoryType_Shape> &shapes,
+                          HashMap<MaterialNode> *materialHashMap, Mesh &mesh,
+                          ChunkedLinkedList<Mesh, MemoryType_Shape> &shapes,
                           ChunkedLinkedList<PrimitiveIndices, MemoryType_Shape> &indices,
                           ChunkedLinkedList<Light *, MemoryType_Light> &lights);
 SceneShapeParse StartSceneShapeParse();

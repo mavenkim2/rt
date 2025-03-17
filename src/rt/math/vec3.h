@@ -96,6 +96,12 @@ __forceinline Vec3<T> operator+(const Vec3<T> &u, const Vec3<T> &v)
 }
 
 template <typename T>
+__forceinline Vec3<T> operator+(const Vec3<T> &u, T d)
+{
+    return Vec3<T>(u.x + d, u.y + d, u.z + d);
+}
+
+template <typename T>
 __forceinline Vec3<T> &operator+=(Vec3<T> &a, const Vec3<T> &b)
 {
     a.x += b.x;
@@ -108,6 +114,12 @@ template <typename T>
 __forceinline Vec3<T> operator-(const Vec3<T> &u, const Vec3<T> &v)
 {
     return Vec3<T>(u.x - v.x, u.y - v.y, u.z - v.z);
+}
+
+template <typename T>
+__forceinline Vec3<T> operator-(const Vec3<T> &u, T d)
+{
+    return Vec3<T>(u.x - d, u.y - d, u.z - d);
 }
 
 template <typename T>

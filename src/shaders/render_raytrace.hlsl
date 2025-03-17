@@ -10,8 +10,27 @@ RWTexture2D<float4> image : register(u1);
 ConstantBuffer<GPUScene> scene : register(b2);
 StructuredBuffer<RTBindingData> rtBindingData : register(t3);
 StructuredBuffer<GPUMaterial> materials : register(t4);
+//ByteAddressBuffer denseGeometry : register(t5);
 
 [[vk::push_constant]] RayPushConstant push;
+
+#if 0
+float3 DecodeTriangle(uint offset, int triangleIndex)
+{
+    // per scene index Dense Geometry
+    DenseGeometry dg = denseGeometry.Load<DenseGeometryHeader>(offset);
+    uint3 indexAddress = uint3(0, 1, 2);
+    uint r = 1;
+    for (uint k = 1; k < triangleIndex; k++)
+    {
+    }
+
+    f32 x = (dg.anchor.x + offsetX) * scene.scale;
+    f32 y = (dg.anchor.y + offsetY) * scene.scale;
+    f32 z = (dg.anchor.z + offsetZ) * scene.scale;
+    return float3(x, y, z);
+}
+#endif
 
 [numthreads(PATH_TRACE_NUM_THREADS_X, PATH_TRACE_NUM_THREADS_Y, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)

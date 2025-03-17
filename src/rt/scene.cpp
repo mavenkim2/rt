@@ -554,6 +554,32 @@ i32 ReadInt(Tokenizer *tokenizer, string p)
     return 0;
 }
 
+Mesh ProcessMesh(Arena *arena, Mesh &mesh)
+{
+    Mesh newMesh        = {};
+    newMesh.numVertices = mesh.numVertices;
+    newMesh.numIndices  = mesh.numIndices;
+    newMesh.numFaces    = mesh.numFaces;
+    newMesh.p = PushArrayNoZeroTagged(arena, Vec3f, mesh.numVertices, MemoryType_Shape);
+    MemoryCopy(newMesh.p, mesh.p, sizeof(Vec3f) * mesh.numVertices);
+    if (mesh.n)
+    {
+        newMesh.n = PushArrayNoZeroTagged(arena, Vec3f, mesh.numVertices, MemoryType_Shape);
+        MemoryCopy(newMesh.n, mesh.n, sizeof(Vec3f) * mesh.numVertices);
+    }
+    if (mesh.uv)
+    {
+        newMesh.uv = PushArrayNoZeroTagged(arena, Vec2f, mesh.numVertices, MemoryType_Shape);
+        MemoryCopy(newMesh.uv, mesh.uv, sizeof(Vec2f) * mesh.numVertices);
+    }
+    if (mesh.indices)
+    {
+        newMesh.indices = PushArrayNoZero(arena, u32, mesh.numIndices);
+        MemoryCopy(newMesh.indices, mesh.indices, sizeof(u32) * mesh.numIndices);
+    }
+    return newMesh;
+}
+
 void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                  ScenePrimitives *scene, string directory, string filename,
                  Scheduler::Counter *counter, AffineSpace *renderFromWorld = 0,
@@ -734,7 +760,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
         else if (Advance(&tokenizer, "SHAPE_START "))
         {
             Assert(isLeaf);
-            ChunkedLinkedList<MeshType, MemoryType_Shape> shapes(temp.arena, 1024);
+            ChunkedLinkedList<Mesh, MemoryType_Shape> shapes(temp.arena, 1024);
             ChunkedLinkedList<PrimitiveIndices, MemoryType_Shape> indices(temp.arena, 1024);
             ChunkedLinkedList<Light *, MemoryType_Light> lights(temp.arena);
 
@@ -750,8 +776,6 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 mesh.numFaces    = mesh.numIndices ? mesh.numIndices / numVerticesPerFace
                                                    : mesh.numVertices / numVerticesPerFace;
             };
-
-            SceneShapeParse parse = StartSceneShapeParse();
 
             while (!Advance(&tokenizer, "SHAPE_END "))
             {
@@ -772,7 +796,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                         mesh.numIndices = 0;
                     }
 
-                    shapes.AddBack() = ProcessMesh(&parse, arena, mesh);
+                    shapes.AddBack() = ProcessMesh(arena, mesh);
                     AddMaterialAndLights(arena, scene, sceneID, type, directory,
                                          worldFromRender, *renderFromWorld, tokenizer,
                                          materialHashMap, shapes.Last(), shapes, indices,
@@ -789,7 +813,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     Mesh mesh;
                     AddMesh(mesh, 3);
 
-                    shapes.AddBack() = ProcessMesh(&parse, arena, mesh);
+                    shapes.AddBack() = ProcessMesh(arena, mesh);
                     AddMaterialAndLights(arena, scene, sceneID, type, directory,
                                          worldFromRender, *renderFromWorld, tokenizer,
                                          materialHashMap, shapes.Last(), shapes, indices,
@@ -806,7 +830,7 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                     Mesh mesh;
                     AddMesh(mesh, 4);
 
-                    shapes.AddBack() = ProcessMesh(&parse, tempArena, mesh);
+                    shapes.AddBack() = ProcessMesh(tempArena, mesh);
                     AddMaterialAndLights(arena, scene, sceneID, type, directory,
                                          worldFromRender, *renderFromWorld, tokenizer,
                                          materialHashMap, shapes.Last(), shapes, indices,
@@ -818,12 +842,10 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
                 }
             }
 
-            EndSceneShapeParse(scene, &parse);
-
             scene->numPrimitives = shapes.totalCount;
             Assert(shapes.totalCount == indices.totalCount);
-            scene->primitives = PushArrayNoZero(arena, MeshType, scene->numPrimitives);
-            shapes.Flatten((MeshType *)scene->primitives);
+            scene->primitives = PushArrayNoZero(arena, Mesh, scene->numPrimitives);
+            shapes.Flatten((Mesh *)scene->primitives);
 
             if (lights.totalCount)
             {
@@ -1439,7 +1461,7 @@ PrimRef *ParallelGenerateMeshRefs(Arena *arena, ScenePrimitives *scene,
             offset += numFaces;
         }
         Assert(totalNumFaces == offset);
-        u32 extEnd = u32(totalNumFaces * spatialSplits ? GROW_AMOUNT : 1);
+        u32 extEnd = u32(totalNumFaces * (spatialSplits ? GROW_AMOUNT : 1));
 
         // Generate PrimRefs
         refs = PushArrayNoZero(arena, PrimRef, extEnd);
@@ -1463,7 +1485,7 @@ PrimRef *ParallelGenerateMeshRefs(Arena *arena, ScenePrimitives *scene,
             Mesh &mesh = meshes[i];
             totalNumFaces += mesh.GetNumFaces();
         }
-        extEnd = u32(totalNumFaces * spatialSplits ? GROW_AMOUNT : 1);
+        extEnd = u32(totalNumFaces * (spatialSplits ? GROW_AMOUNT : 1));
         refs   = PushArrayNoZero(arena, PrimRef, extEnd);
         GenerateMeshRefs<type>(meshes, refs, 0, totalNumFaces, 0, scene->numPrimitives,
                                record);

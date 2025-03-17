@@ -18,6 +18,11 @@ struct RayPushConstant
     uint height;
 };
 
+// struct DenseGeometryHeader 
+// {
+//     uint3 anchor;
+// };
+
 #ifdef __cplusplus
 }
 #endif
