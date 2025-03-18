@@ -393,6 +393,7 @@ struct CommandBuffer
 
     void Wait(Semaphore s) { waitSemaphores.push_back(s); }
     void Signal(Semaphore s) { signalSemaphores.push_back(s); }
+    void Wait(CommandBuffer *other);
     void SubmitTransfer(TransferBuffer *buffer);
     GPUBuffer SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags, size_t totalSize);
     GPUImage SubmitImage(void *ptr, VkImageUsageFlags flags, VkFormat format, VkImageType type,
@@ -419,6 +420,7 @@ struct CommandBuffer
     GPUAccelerationStructure BuildTLAS(Instance *instances, int numInstances,
                                        AffineSpace *transforms, ScenePrimitives **childScenes);
     GPUAccelerationStructure BuildBLAS(const GPUMesh *meshes, int count);
+    GPUAccelerationStructure BuildCustomBLAS(GPUBuffer *aabbsBuffer, u32 numAabbs);
 };
 
 typedef ChunkedLinkedList<CommandBuffer> CommandBufferList;

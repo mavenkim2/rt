@@ -51,6 +51,7 @@ struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
     Arena *arena;
     ChunkedLinkedList<u8> byteBuffer;
     ChunkedLinkedList<u32> offsets;
+    u32 numBlocks;
 
     void Init();
     void Merge(DenseGeometryBuildData &other);

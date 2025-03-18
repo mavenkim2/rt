@@ -1692,6 +1692,14 @@ TransferBuffer Vulkan::GetStagingImage(VkImageUsageFlags flags, VkFormat format,
     return buffer;
 }
 
+void CommandBuffer::Wait(CommandBuffer *other)
+{
+    Semaphore s   = device->CreateGraphicsSemaphore();
+    s.signalValue = 1;
+    other->Signal(s);
+    Wait(s);
+}
+
 void CommandBuffer::SubmitTransfer(TransferBuffer *transferBuffer)
 {
     VkBufferCopy bufferCopy = {};
@@ -2253,27 +2261,22 @@ GPUAccelerationStructure CommandBuffer::BuildAS(
     return bvh;
 }
 
-// GPUAccelerationStructure CommandBuffer::BuildCLAS()
-// {
-//     VkClusterAccelerationStructureInputInfoNV info = {
-//         VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_INPUT_INFO_NV};
-//     info.opType = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_TRIANGLE_CLUSTER_NV;
-//     info.opMode = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_IMPLICIT_DESTINATIONS_NV;
-//     // info.opInput
-//     VkClusterAccelerationStructureOpInputNV input;
-//     VkClusterAccelerationStructureTriangleClusterInputNV triangleCluster = {
-//         VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_TRIANGLE_CLUSTER_INPUT_NV};
-//     input.pTriangleClusters = &triangleCluster;
-//
-//     triangleCluster.maxTotalVertexCount;
-//
-//         VkAccelerationStructureBuildSizesInfoKHR sizeInfo = {
-//             VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
-//
-//     VkClusterAccelerationStructureCommandsInfoNV commands;
-//     vkGetClusterAccelerationStructureBuildSizesNV(device->device, &info, &sizeInfo);
-//     vkCmdBuildClusterAccelerationStructureIndirectNV(buffer, &commands);
-// }
+GPUAccelerationStructure CommandBuffer::BuildCustomBLAS(GPUBuffer *aabbsBuffer, u32 numAabbs)
+{
+    VkAccelerationStructureGeometryKHR geometry = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+    geometry.geometryType = VK_GEOMETRY_TYPE_AABBS_KHR;
+    auto &aabbs           = geometry.geometry.aabbs;
+    aabbs.sType           = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR;
+    aabbs.data.deviceAddress = device->GetDeviceAddress(aabbsBuffer->buffer);
+    aabbs.stride             = sizeof(VkAabbPositionsKHR);
+
+    VkAccelerationStructureBuildRangeInfoKHR rangeInfo = {};
+    rangeInfo.primitiveCount                           = numAabbs;
+
+    return BuildAS(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, &geometry, 1, &rangeInfo,
+                   &numAabbs);
+}
 
 GPUAccelerationStructure CommandBuffer::BuildBLAS(const GPUMesh *meshes, int count)
 {

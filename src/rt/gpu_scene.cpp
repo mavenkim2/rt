@@ -2,6 +2,8 @@
 #include "dgfs.h"
 #include "integrate.h"
 #include "gpu_scene.h"
+#include "math/simd_base.h"
+#include "memory.h"
 #include "parallel.h"
 #include "platform.h"
 #include "shader_interop/gpu_scene_shaderinterop.h"
@@ -202,32 +204,89 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         sceneBounds.Extend(bounds[i]);
     }
 
-    ParallelFor(0, numScenes, 1, [&](int jobID, int start, int count) {
-        for (int i = start; i < start + count; i++)
+    CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Copy);
+
+    for (int i = 0; i < numScenes; i++)
+    {
+        ScenePrimitives *scene       = scenes[i];
+        scene->semaphore             = device->CreateGraphicsSemaphore();
+        scene->semaphore.signalValue = 1;
+        if (scene->geometryType == GeometryType::Instance) continue;
+
+        RecordAOSSplits record(neg_inf);
+
+        DenseGeometryBuildData data;
+        data.Init();
+
+        ScratchArena scratch;
+        PrimRef *refs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
+            scratch.temp.arena, scenes[i], record, false);
+
+        ClusterBuilder builder(arena, scene, refs);
+        builder.BuildClusters(record, true);
+        builder.CreateDGFs(&data, (Mesh *)scene->primitives, scene->numPrimitives,
+                           sceneBounds);
+
+        // Convert primrefs to aabbs, submit to GPU
+        StaticArray<VkAabbPositionsKHR> aabbs(scratch.temp.arena,
+                                              clusterSize * data.numBlocks);
+        u32 pos = 0;
+        for (int i = 0; i < builder.threadClusters.Length(); i++)
         {
-            ScenePrimitives *scene = scenes[i];
-            if (scene->geometryType == GeometryType::Instance) continue;
+            for (auto *node = builder.threadClusters[i].l.first; node != 0; node = node->next)
+            {
+                for (int i = 0; i < node->count; i++)
+                {
+                    u32 numTriangles        = 0;
+                    RecordAOSSplits &record = node->values[i];
 
-            RecordAOSSplits record(neg_inf);
-
-            // Arena *arena  = arenas[GetThreadIndex()];
-            DenseGeometryBuildData data;
-            data.Init();
-
-            // u32 np = OS_NumProcessors();
-
-            ScratchArena scratch;
-            PrimRef *refs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
-                scratch.temp.arena, scenes[i], record, false);
-
-            ClusterBuilder builder(arena, scene, refs);
-            builder.BuildClusters(record, true);
-            builder.CreateDGFs(&data, (Mesh *)scene->primitives, scene->numPrimitives,
-                               sceneBounds);
-
-            ReleaseArenaArray(builder.arenas);
+                    for (int refIndex = record.start; refIndex < record.start + record.count;
+                         refIndex++)
+                    {
+                        VkAabbPositionsKHR aabb;
+                        aabb.minX = refs[refIndex].minX;
+                        aabb.minY = refs[refIndex].minY;
+                        aabb.minZ = refs[refIndex].minZ;
+                        aabb.maxX = refs[refIndex].maxX;
+                        aabb.maxY = refs[refIndex].maxY;
+                        aabb.maxZ = refs[refIndex].maxZ;
+                        aabbs.Push(aabb);
+                    }
+                    VkAabbPositionsKHR nullAabb = {};
+                    nullAabb.minX               = f32(NaN);
+                    for (int remaining = record.start + record.count; remaining < clusterSize;
+                         remaining++)
+                    {
+                        aabbs.Push(nullAabb);
+                    }
+                }
+            }
         }
-    });
+
+        GPUBuffer aabbBuffer = dgfTransferCmd->SubmitBuffer(
+            aabbs.data, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+            aabbs.Length() * sizeof(VkAabbPositionsKHR));
+
+        // Combine all blocks together
+        u8 *dgfByteBuffer = PushArrayNoZero(scratch.temp.arena, u8, data.byteBuffer.Length());
+        data.byteBuffer.Flatten(dgfByteBuffer);
+
+        GPUBuffer dgfBuffer = dgfTransferCmd->SubmitBuffer(
+            dgfByteBuffer, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, data.byteBuffer.Length());
+
+        // Upload offsets
+        u32 offsetSize = data.offsets.Length() * sizeof(u32);
+        u32 *offsets   = PushArrayNoZero(scratch.temp.arena, u32, offsetSize);
+        data.offsets.Flatten(offsets);
+
+        GPUBuffer offsetBuffer = dgfTransferCmd->SubmitBuffer(
+            offsets, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, offsetSize);
+
+        dgfTransferCmd->Signal(scene->semaphore);
+
+        // Send offsets buffer and dense geometry info
+        ReleaseArenaArray(builder.arenas);
+    }
 
     // Set the instance ids of each scene
     int runningTotal = 0;
@@ -361,7 +420,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         Semaphore semaphore   = device->CreateGraphicsSemaphore();
         semaphore.signalValue = 1;
         cmd->Signal(semaphore);
-
         QueryPool query = device->CreateQuery(QueryType_CompactSize, numScenes);
 
         GPUAccelerationStructure **as =

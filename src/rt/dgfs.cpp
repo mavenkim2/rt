@@ -51,8 +51,8 @@ void DenseGeometryBuildData::Merge(DenseGeometryBuildData &other)
 void AppendBitStream(std::vector<u8> &bitStream, u32 bitsToAdd, u32 &currentBitOffset,
                      u32 numBits)
 {
+    if (!numBits) return;
     Assert(currentBitOffset >= 0 && currentBitOffset < 8);
-    Assert(numBits);
 
     u32 remaining = 0;
     if (currentBitOffset)
@@ -407,12 +407,14 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     // 4. handle vertices in multiple blocks (duplicate, or references)
 
     // Find node with minimum valence
-    auto FindMinValence = [&]() {
-        u32 minCount           = pos_inf;
+
+    static const u32 removedBit = 0x80000000;
+    auto FindMinValence         = [&]() {
+        u32 minCount           = ~0u;
         u32 minValenceTriangle = 0;
         for (int i = 0; i < clusterNumTriangles; i++)
         {
-            if (counts[i] < minCount)
+            if (!(counts[i] & removedBit) && counts[i] < minCount)
             {
                 minCount           = counts[i];
                 minValenceTriangle = i;
@@ -425,7 +427,6 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
 
     enum class TriangleStripType
     {
-        None,
         Restart,
         Edge1,
         Edge2,
@@ -433,8 +434,8 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     };
 
     // NOTE: implicitly starts with "Restart"
-    std::vector<TriangleStripType> triangleStripTypes;
-    triangleStripTypes.reserve(clusterNumTriangles);
+    StaticArray<TriangleStripType> triangleStripTypes(clusterScratch.arena,
+                                                      clusterNumTriangles);
 
     std::vector<u8> vertexBitStream;
     vertexBitStream.reserve(numBytes);
@@ -454,6 +455,20 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     u32 numReuse           = 0;
 
     u32 prevTriangle = minValenceTriangle;
+
+    auto RemoveFromNeighbor = [&](u32 tri, u32 neighbor) {
+        u32 neighborCount = counts[neighbor] & ~removedBit;
+        for (int j = 0; j < neighborCount; j++)
+        {
+            if (data[offsets[neighbor] + j] == tri)
+            {
+                Swap(data[offsets[neighbor] + j], data[offsets[neighbor] + neighborCount - 1]);
+                counts[neighbor]--;
+                return true;
+            }
+        }
+        return false;
+    };
 
     auto CheckUsedTriangles = [&](u32 geomID, u32 index) {
         if (usedTriangles & (1 << index))
@@ -480,12 +495,15 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
         return false;
     };
 
+    auto MarkUsed = [&](u32 triangle) { counts[minValenceTriangle] |= removedBit; };
+
     u32 firstIndices[3];
     GetIndices(firstIndices, minValenceTriangle);
     u32 firstGeomId = geomIDs[minValenceTriangle];
     CheckUsedTriangles(firstGeomId, firstIndices[0]);
     CheckUsedTriangles(firstGeomId, firstIndices[1]);
     CheckUsedTriangles(firstGeomId, firstIndices[2]);
+    MarkUsed(minValenceTriangle);
 
     // TODO: half edge structure instead of hash table?
     for (u32 numAddedTriangles = 1; numAddedTriangles < clusterNumTriangles;
@@ -493,17 +511,18 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     {
         u32 newMinValenceTriangle = ~0u;
 
-        TriangleStripType backTrackStripType = TriangleStripType::None;
+        TriangleStripType backTrackStripType = TriangleStripType::Restart;
         // If triangle has no neighbors, attempt to backtrack
         if (!counts[minValenceTriangle])
         {
+            MarkUsed(minValenceTriangle);
             // If can't backtrack, restart
             if (numAddedTriangles == 1 ||
-                triangleStripTypes[numAddedTriangles - 1] == TriangleStripType::Restart ||
-                triangleStripTypes[numAddedTriangles - 1] == TriangleStripType::Backtrack ||
-                !counts[prevTriangle])
+                triangleStripTypes[numAddedTriangles - 2] == TriangleStripType::Restart ||
+                triangleStripTypes[numAddedTriangles - 2] == TriangleStripType::Backtrack ||
+                (counts[prevTriangle] & ~removedBit) == 0)
             {
-                triangleStripTypes.push_back(TriangleStripType::Restart);
+                triangleStripTypes.Push(TriangleStripType::Restart);
 
                 prevTriangle       = minValenceTriangle;
                 minValenceTriangle = FindMinValence();
@@ -517,7 +536,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                 continue;
             }
             // Backtrack
-            TriangleStripType prevType = triangleStripTypes[numAddedTriangles - 1];
+            TriangleStripType prevType = triangleStripTypes[numAddedTriangles - 2];
             minValenceTriangle         = prevTriangle;
             Assert(prevType == TriangleStripType::Edge1 ||
                    prevType == TriangleStripType::Edge2);
@@ -525,35 +544,39 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                                      ? TriangleStripType::Edge2
                                      : TriangleStripType::Edge1;
 
-            triangleStripTypes.push_back(TriangleStripType::Backtrack);
-        }
+            triangleStripTypes.Push(TriangleStripType::Backtrack);
 
-        Assert(counts[minValenceTriangle]);
-        // Remove min valence triangle from neighbor's adjacency list
-        u32 minCount = pos_inf;
-        for (int i = 0; i < counts[minValenceTriangle]; i++)
+            // Get last neighbor from previous triangle
+            Assert(counts[minValenceTriangle] & removedBit &&
+                   (counts[minValenceTriangle] & ~removedBit) == 1);
+            newMinValenceTriangle = data[offsets[minValenceTriangle]];
+            counts[minValenceTriangle]--;
+        }
+        else
         {
-            u32 neighborTriangle = data[offsets[minValenceTriangle] + i];
-            bool success         = false;
-            u32 neighborCount    = counts[neighborTriangle];
-            for (int j = 0; j < neighborCount; j++)
+            // Remove min valence triangle from neighbor's adjacency list
+            u32 minCount = ~0u;
+            u32 count    = counts[minValenceTriangle] & ~removedBit;
+            Assert(count);
+            u32 minI = 0;
+            for (int i = 0; i < count; i++)
             {
-                if (data[offsets[neighborTriangle] + j] == minValenceTriangle)
+                u32 neighborTriangle = data[offsets[minValenceTriangle] + i];
+                bool success = RemoveFromNeighbor(minValenceTriangle, neighborTriangle);
+                Assert(success);
+                // Find neighbor with minimum valence
+                if (counts[neighborTriangle] < minCount)
                 {
-                    Swap(data[offsets[neighborTriangle] + j],
-                         data[offsets[neighborTriangle] + neighborCount - 1]);
-                    counts[neighborTriangle]--;
-                    success = true;
-                    break;
+                    minCount              = counts[neighborTriangle];
+                    newMinValenceTriangle = neighborTriangle;
+                    minI                  = i;
                 }
             }
-            Assert(success);
-            // Find neighbor with minimum valence
-            if (counts[neighborTriangle] < minCount)
-            {
-                minCount              = counts[neighborTriangle];
-                newMinValenceTriangle = neighborTriangle;
-            }
+            Swap(data[offsets[minValenceTriangle] + minI],
+                 data[offsets[minValenceTriangle] + count - 1]);
+            counts[minValenceTriangle]--;
+            MarkUsed(minValenceTriangle);
+            Assert(minCount != ~0u);
         }
         Assert(newMinValenceTriangle != ~0u);
 
@@ -599,16 +622,16 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                 // Find whether we're attached to edge1 or 2 from previous triangle
                 for (int oldEdgeIndex = 0; oldEdgeIndex < 3; oldEdgeIndex++)
                 {
-                    u64 oldEdgeId = ComputeEdgeId(indices, edgeIndex);
+                    u64 oldEdgeId = ComputeEdgeId(oldIndices, oldEdgeIndex);
 
                     if (oldEdgeId == edgeID)
                     {
-                        if (backTrackStripType != TriangleStripType::None)
+                        if (backTrackStripType != TriangleStripType::Restart)
                         {
                             Assert((backTrackStripType == TriangleStripType::Edge1 &&
-                                    oldEdgeId == 1) ||
+                                    oldEdgeIndex == 1) ||
                                    (backTrackStripType == TriangleStripType::Edge2 &&
-                                    oldEdgeId == 2));
+                                    oldEdgeIndex == 2));
                             break;
                         }
 
@@ -617,14 +640,16 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                         // edge1 instead
                         if (oldEdgeIndex == 0)
                         {
+                            Assert(numAddedTriangles == 1 ||
+                                   triangleStripTypes[numAddedTriangles - 2] ==
+                                       TriangleStripType::Restart);
                             vertexIndices[3 * minValenceTriangle]     = oldIndices[2];
                             vertexIndices[3 * minValenceTriangle + 1] = oldIndices[0];
                             vertexIndices[3 * minValenceTriangle + 2] = oldIndices[1];
                             oldEdgeIndex                              = 1;
                         }
-                        triangleStripTypes.push_back(oldEdgeIndex == 1
-                                                         ? TriangleStripType::Edge1
-                                                         : TriangleStripType::Edge2);
+                        triangleStripTypes.Push(oldEdgeIndex == 1 ? TriangleStripType::Edge1
+                                                                  : TriangleStripType::Edge2);
                         break;
                     }
                 }
@@ -640,7 +665,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     u32 reuseBufferSize     = (u32)reuseBuffer.size();
     u32 vertexBitStreamSize = (u32)vertexBitStream.size();
     u32 firstUseSize        = (currentFirstUseBit + 7) >> 3;
-    u32 controlBitsSize     = (triangleStripTypes.size() * 2 + 7) >> 3;
+    u32 controlBitsSize     = (triangleStripTypes.Length() * 2 + 7) >> 3;
     u32 size = sizeof(DenseGeometryHeader) + vertexBitStreamSize + reuseBufferSize +
                controlBitsSize + firstUseSize;
     Assert(size < (1 << 16));
@@ -668,7 +693,6 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
         offset += currentTypeBitOffset >> 3;
         currentTypeBitOffset = currentTypeBitOffset & 7;
     }
-    Assert(offset == size);
 
     ScratchEnd(clusterScratch);
 }
