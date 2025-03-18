@@ -27,6 +27,27 @@ ClusterBuilder::ClusterBuilder(Arena *arena, ScenePrimitives *scene, PrimRef *pr
     h = PushStructConstruct(arena, Heuristic)(primRefs, scene, 0);
 }
 
+void DenseGeometryBuildData::Init()
+{
+    arena      = ArenaAlloc();
+    byteBuffer = ChunkedLinkedList<u8>(arena, 1024);
+    offsets    = ChunkedLinkedList<u32>(arena);
+}
+
+void DenseGeometryBuildData::Merge(DenseGeometryBuildData &other)
+{
+    u32 offset = byteBuffer.Length();
+    for (auto *node = other.offsets.first; node != 0; node = node->next)
+    {
+        for (int i = 0; i < node->count; i++)
+        {
+            node->values[i] += offset;
+        }
+    }
+    byteBuffer.Merge(&other.byteBuffer);
+    offsets.Merge(&other.offsets);
+}
+
 void AppendBitStream(std::vector<u8> &bitStream, u32 bitsToAdd, u32 &currentBitOffset,
                      u32 numBits)
 {
@@ -117,7 +138,8 @@ void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel)
     }
 }
 
-void ClusterBuilder::CreateDGFs(Mesh *meshes, int numMeshes, Bounds &sceneBounds)
+void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes, int numMeshes,
+                                Bounds &sceneBounds)
 {
     static const int b     = 24;
     static const f32 scale = (1 << (b - 1)) - 1.f;
@@ -171,10 +193,8 @@ void ClusterBuilder::CreateDGFs(Mesh *meshes, int numMeshes, Bounds &sceneBounds
     }
 
     // TODO: this needs to be permanent
-    PushArrayNoZero(meshScratch.temp.arena, u32, );
-    meshindex
 
-        for (int threadIndex = 0; threadIndex < threadClusters.Length(); threadIndex++)
+    for (int threadIndex = 0; threadIndex < threadClusters.Length(); threadIndex++)
     {
         ClusterList &list = threadClusters[threadIndex];
         for (auto *node = list.l.first; node != 0; node = node->next)
@@ -182,14 +202,15 @@ void ClusterBuilder::CreateDGFs(Mesh *meshes, int numMeshes, Bounds &sceneBounds
             for (int clusterIndex = 0; clusterIndex < node->count; clusterIndex++)
             {
                 RecordAOSSplits &cluster = node->values[clusterIndex];
-                CreateDGFs(meshScratch.temp.arena, meshes, quantizedVertices, cluster);
+                CreateDGFs(buildData, meshScratch.temp.arena, meshes, quantizedVertices,
+                           cluster);
             }
         }
     }
 }
 
-void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVertices,
-                                RecordAOSSplits &cluster)
+void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena, Mesh *meshes,
+                                Vec3i **quantizedVertices, RecordAOSSplits &cluster)
 {
     static const u32 LUT[] = {1, 2, 0};
     struct HashedIndex
@@ -224,6 +245,7 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
     u32 *geomIDs       = PushArray(clusterScratch.arena, u32, clusterNumTriangles);
     u32 *clusterVertexIndexToMeshVertexIndex =
         PushArray(clusterScratch.arena, u32, clusterNumTriangles * 3);
+
     u32 vertexCount = 0;
     u32 indexCount  = 0;
 
@@ -274,18 +296,13 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
     u32 numBitsY = min[1] == max[1] ? 0 : Log2Int(Max(max[1] - min[1] - 1, 1)) + 1;
     u32 numBitsZ = min[2] == max[2] ? 0 : Log2Int(Max(max[2] - min[2] - 1, 1)) + 1;
 
-    DenseGeometry geometry;
+    DenseGeometryHeader geometry;
     geometry.anchor       = min;
     geometry.bitWidths[0] = SafeTruncateU32ToU8(numBitsX);
     geometry.bitWidths[1] = SafeTruncateU32ToU8(numBitsY);
     geometry.bitWidths[2] = SafeTruncateU32ToU8(numBitsZ);
 
     int numBytes = (vertexCount * (numBitsX + numBitsY + numBitsZ) + 7) >> 3;
-
-    std::vector<u8> vertexBitStream;
-    vertexBitStream.reserve(numBytes);
-    u32 bitOffset        = 0;
-    u32 addedVertexCount = 0;
 
     // Build adjacency data for triangles
     u32 *counts  = PushArray(clusterScratch.arena, u32, clusterNumTriangles);
@@ -383,6 +400,12 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
         offsets[i] -= counts[i];
     }
 
+    // TODO:
+    // 1. actually output the data in a format that the GPU can read and decode
+    // 2. set up the custom primitive using vulkan
+    // 3. handle multiple geom IDs in a single block
+    // 4. handle vertices in multiple blocks (duplicate, or references)
+
     // Find node with minimum valence
     auto FindMinValence = [&]() {
         u32 minCount           = pos_inf;
@@ -413,9 +436,17 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
     std::vector<TriangleStripType> triangleStripTypes;
     triangleStripTypes.reserve(clusterNumTriangles);
 
+    std::vector<u8> vertexBitStream;
+    vertexBitStream.reserve(numBytes);
+    u32 bitOffset        = 0;
+    u32 addedVertexCount = 0;
+
     std::vector<u32> mapOldIndexToDGFIndex(clusterNumTriangles * 3);
-    std::vector<u32> reuseBuffer;
-    reuseBuffer.reserve(clusterNumTriangles * 3);
+
+    std::vector<u8> reuseBuffer;
+    u32 reuseBitOffset = 0;
+    int numIndexBits   = Log2Int(NextPowerOfTwo(clusterNumTriangles));
+    reuseBuffer.reserve(clusterNumTriangles * 3 * sizeof(u32));
 
     U128 firstUse          = {};
     u32 currentFirstUseBit = 0;
@@ -428,8 +459,8 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
         if (usedTriangles & (1 << index))
         {
             currentFirstUseBit++;
-            reuseBuffer.push_back(mapOldIndexToDGFIndex[index]);
-            // Add to reuse buffer
+            Assert(index < (1 << numIndexBits));
+            AppendBitStream(reuseBuffer, index, reuseBitOffset, numIndexBits);
             return true;
         }
 
@@ -603,6 +634,42 @@ void ClusterBuilder::CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVer
         prevTriangle       = minValenceTriangle;
         minValenceTriangle = newMinValenceTriangle;
     }
+
+    // Append all data
+    auto &buildData         = buildDatas[0];
+    u32 reuseBufferSize     = (u32)reuseBuffer.size();
+    u32 vertexBitStreamSize = (u32)vertexBitStream.size();
+    u32 firstUseSize        = (currentFirstUseBit + 7) >> 3;
+    u32 controlBitsSize     = (triangleStripTypes.size() * 2 + 7) >> 3;
+    u32 size = sizeof(DenseGeometryHeader) + vertexBitStreamSize + reuseBufferSize +
+               controlBitsSize + firstUseSize;
+    Assert(size < (1 << 16));
+
+    u32 currentOffset           = buildData.byteBuffer.Length();
+    buildData.offsets.AddBack() = currentOffset;
+    auto *node                  = buildData.byteBuffer.AddNode(size);
+    offset                      = 0;
+    MemoryCopy(node->values, &geometry, sizeof(DenseGeometryHeader));
+    DenseGeometryHeader *header = (DenseGeometryHeader *)node->values;
+    offset += sizeof(DenseGeometryHeader);
+    MemoryCopy(node->values + offset, vertexBitStream.data(), vertexBitStreamSize);
+    offset += vertexBitStreamSize;
+    header->reuseStart = offset;
+    MemoryCopy(node->values + offset, reuseBuffer.data(), reuseBufferSize);
+    offset += reuseBufferSize;
+    MemoryCopy(node->values, &firstUse, firstUseSize);
+    offset += firstUseSize;
+
+    u32 currentTypeBitOffset = 0;
+    for (auto &type : triangleStripTypes)
+    {
+        node->values[offset] |= ((u32)type) << currentTypeBitOffset;
+        currentTypeBitOffset += 2;
+        offset += currentTypeBitOffset >> 3;
+        currentTypeBitOffset = currentTypeBitOffset & 7;
+    }
+    Assert(offset == size);
+
     ScratchEnd(clusterScratch);
 }
 

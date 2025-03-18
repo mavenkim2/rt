@@ -29,13 +29,11 @@ struct U128
     }
 };
 
-struct DenseGeometry
+struct DenseGeometryHeader
 {
     Vec3i anchor;
-    u32 primitiveID;
+    u16 reuseStart;
     u8 bitWidths[3];
-    u8 exponents[3];
-    // u8 *perVertexOffsets;
 };
 
 struct alignas(CACHE_LINE_SIZE) ClusterList
@@ -48,6 +46,16 @@ struct alignas(CACHE_LINE_SIZE) ClusterExtents
     Vec3f extent;
 };
 
+struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
+{
+    Arena *arena;
+    ChunkedLinkedList<u8> byteBuffer;
+    ChunkedLinkedList<u32> offsets;
+
+    void Init();
+    void Merge(DenseGeometryBuildData &other);
+};
+
 struct ClusterBuilder
 {
     Arena **arenas;
@@ -57,9 +65,10 @@ struct ClusterBuilder
 
     ClusterBuilder(Arena *arena, ScenePrimitives *scene, PrimRef *primRefs);
     void BuildClusters(RecordAOSSplits &record, bool parallel);
-    void CreateDGFs(Mesh *meshes, int numMeshes, Bounds &sceneBounds);
-    void CreateDGFs(Arena *arena, Mesh *meshes, Vec3i **quantizedVertices,
-                    RecordAOSSplits &cluster);
+    void CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes, int numMeshes,
+                    Bounds &sceneBounds);
+    void CreateDGFs(DenseGeometryBuildData *data, Arena *arena, Mesh *meshes,
+                    Vec3i **quantizedVertices, RecordAOSSplits &cluster);
 };
 
 #if 0

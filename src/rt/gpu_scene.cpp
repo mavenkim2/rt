@@ -211,13 +211,19 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             RecordAOSSplits record(neg_inf);
 
             // Arena *arena  = arenas[GetThreadIndex()];
+            DenseGeometryBuildData data;
+            data.Init();
+
+            // u32 np = OS_NumProcessors();
+
             ScratchArena scratch;
             PrimRef *refs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
                 scratch.temp.arena, scenes[i], record, false);
 
             ClusterBuilder builder(arena, scene, refs);
             builder.BuildClusters(record, true);
-            builder.CreateDGFs((Mesh *)scene->primitives, scene->numPrimitives, sceneBounds);
+            builder.CreateDGFs(&data, (Mesh *)scene->primitives, scene->numPrimitives,
+                               sceneBounds);
 
             ReleaseArenaArray(builder.arenas);
         }
