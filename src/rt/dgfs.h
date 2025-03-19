@@ -41,7 +41,9 @@ struct BitVector
 struct DenseGeometryHeader
 {
     Vec3i anchor;
+    u32 start;
     u16 reuseStart;
+    u16 ctrlBitStart;
     u8 bitWidths[3];
 };
 

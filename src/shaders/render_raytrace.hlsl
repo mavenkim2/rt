@@ -2,6 +2,7 @@
 #include "bxdf.hlsli"
 #include "rt.hlsli"
 #include "sampling.hlsli"
+#include "dense_geometry.hlsli"
 #include "../rt/shader_interop/ray_shaderinterop.h"
 #include "../rt/shader_interop/hit_shaderinterop.h"
 
@@ -14,38 +15,59 @@ ByteAddressBuffer denseGeometry : register(t5);
 
 [[vk::push_constant]] RayPushConstant push;
 
+template <uint pow2>
+uint AlignDownPow2(uint val)
+{
+    return val & ~(pow2 - 1);
+}
+
+// TODO: specify a compile time upper bound to prevent divergence
 struct BitStreamReader 
 {
+    ByteAddressBuffer inputBuffer;
     uint4 buffer;
+    uint alignedStart;
     uint bitOffset;
-};
 
-uint ReadBits(inout BitStreamReader reader, uint bitSize)
-{
-    uint result = 0;
-
-    uint bitOffset = reader.bitOffset & 31;
-    uint remaining = min(32, bitOffset + bitSize);
-    uint remaining = min(bitSize, 32 - bitOffset);
-    uint mask = uint((1ul << remaining) - 1) & ~((1u << (reader.bitOffset & 31)) - 1); 
-    uint index = reader.bitOffset >> 5;
-
-    result |= buffer[index] & mask;
-    result |= buffer[index + 1]
-
-    reader.bitOffset += remaining;
-
-    uint prevBitOffset = bitOffset;
-    reader.bitOffset += ;
-    result |= ;
-
-    if (bitSize + reader.bitOffset > 128)
+    BitStreamReader(ByteAddressBuffer inputBuffer, uint alignedStart, uint bitOffset) 
+        : inputBuffer(inputBuffer), alignedStart(alignedStart), bitOffset(bitOffset)
     {
     }
+
+    uint Read(uint bitSize)
+    {
+        if (bitSize + bitOffset > 128)
+        {
+            int alignedOffset = ((bitOffset >> 5) << 2);
+            alignedStart = alignedStart + alignedOffset;
+            bitOffset = ((bitOffset >> 3) - alignedOffset) << 3;
+            buffer = inputBuffer.Load4(alignedStart);
+        }
+
+        uint result = 0;
+        uint offset = bitOffset & 31;
+        uint remaining = min(32 - offset, bitSize);
+        uint remaining2 = bitSize - remaining;
+        uint mask = (1u << remaining) - 1;
+        uint mask2 = (1u << remaining2) - 1;
+        uint index = bitOffset >> 5;
+        result |= ((buffer[index] >> offset) & mask);
+        result |= (buffer[min(index + 1, 3)] & mask2) << remaining;
+
+        reader.bitOffset += bitSize;
+        return result;
+    }
+};
+
+// TODO: this can't support anything greater than 512 MB
+void CreateBitStreamReader(ByteAddressBuffer inputBuffer, uint offset, uint bitOffset)
+{
+    uint alignedStart = AlignDownPow2<4>(offset + bitOffset >> 3);
+    bitOffset -= (alignedStart << 3);
 }
 
 #if 0
-float3 DecodeTriangle(uint offset, int primitiveIndex)
+void DecodeTriangle(uint offset, int primitiveIndex, out float3 p[3])
 {
     enum 
     {
@@ -60,21 +82,25 @@ float3 DecodeTriangle(uint offset, int primitiveIndex)
     uint triangleIndex = primitiveIndex & triangleMask;
 
     DenseGeometry dg = denseGeometry.Load<DenseGeometryHeader>(offset);
-    uint3 indexAddress = uint3(0, 1, 2);
+    int3 indexAddress = int3(0, 1, 2);
     uint r = 1;
-    uint bt = 0;
+    int bt = 0;
     uint prevCtrl = Restart;
-    for (uint k = 1; k < triangleIndex; k++)
+
+    uint alignedStart = AlignDownPow2<4>(offset + dg.ctrlBitStart >> 3);
+    uint bitOffset = dg.ctrlBitStart - (alignedStart << 3);
+
+    BitStreamReader reader = BitStreamReader(denseGeometry, alignedStart, bitOffset);
+    for (int k = 1; k < triangleIndex; k++)
     {
-        uint ctrl = somehow;
-        uint3 prev = indexAddress;
+        uint ctrl = reader.Read(2);
+        int3 prev = indexAddress;
         switch (ctrl)
         {
             case Restart:
             {
                 r++;
-                // what is i?
-                indexAddress = uint3(2 * r + i - 2, 2 * r + i - 1, 2 * r + i);
+                indexAddress = uint3(2 * r + k - 2, 2 * r + k - 1, 2 * r + k);
             }
             break;
             case Edge1: 
@@ -99,23 +125,25 @@ float3 DecodeTriangle(uint offset, int primitiveIndex)
         prevCtrl = ctrl;
     }
 
-    [[unroll]]
+    uint firstBitsOffset = AlignDownPow2<4>(dg.blockSize - ((numTriangles * 3 + 7) >> 3));
+    uint4 firstBitMask = denseGeometry.Load4(offset + firstBitsOffset);
 
-    float3 result;
+    [[unroll]]
     for (int k = 0; k < 3; k++)
     {
-        uint vid = countbits(indexAddress[k]);
-        if ()
-        {
-            // use reuse buffer
-        }
-        result[k] = dg.anchor[k] + offset
-    }
+        uint4 firstBitTestMask = firstBitMask;
+        firstBitTestMask[0] &= indexAddress[k] < 32 ? (1 << (indexAddress[k] & 31)) - 1 : ~0u;
+        firstBitTestMask[1] &= indexAddress[k] < 64 ? (1 << (max(indexAddress[k] - 32, 0) & 31)) - 1 : ~0u; 
+        firstBitTestMask[2] &= indexAddress[k] < 96 ? (1 << (max(indexAddress[k] - 64, 0) & 31)) - 1 : ~0u; 
+        firstBitTestMask[3] &= indexAddress[k] < 128 ? (1 << (max(indexAddress[k] - 96, 0) & 31)) - 1 : ~0u;
+        uint vid = count_bits(firstBitTestMask);
 
-    f32 x = (dg.anchor.x + offsetX) * scene.scale;
-    f32 y = (dg.anchor.y + offsetY) * scene.scale;
-    f32 z = (dg.anchor.z + offsetZ) * scene.scale;
-    return float3(x, y, z);
+        if ((firstBitMask[indexAddress[k] >> 5] & (1 << (indexAddress[k] & 31))) == 0)
+        {
+            vid = dg.DecodeReuse(indexAddress[k] - vid);
+        }
+        p[k] = dg.DecodePosition(vid);
+    }
 }
 #endif
 
@@ -166,6 +194,9 @@ void main(uint3 DTid : SV_DispatchThreadID)
             uint normalBufferIndex = 3 * bindingDataIndex + 2;
             uint primID = query.CommittedPrimitiveIndex();
 
+            float3 p[3];
+            DecodeTriangle(dgfOffset, primID, p);
+#if 0
             uint index0 = bindlessUints[NonUniformResourceIndex(indexBufferIndex)][NonUniformResourceIndex(3 * primID + 0)];
             uint index1 = bindlessUints[NonUniformResourceIndex(indexBufferIndex)][NonUniformResourceIndex(3 * primID + 1)];
             uint index2 = bindlessUints[NonUniformResourceIndex(indexBufferIndex)][NonUniformResourceIndex(3 * primID + 2)];
@@ -181,6 +212,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
             float3 n0 = DecodeOctahedral(normal0);
             float3 n1 = DecodeOctahedral(normal1);
             float3 n2 = DecodeOctahedral(normal2);
+#endif
 
             float3 gn = normalize(cross(p0 - p2, p1 - p2));
             float2 bary = query.CommittedTriangleBarycentrics();
