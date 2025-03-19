@@ -27,6 +27,21 @@ ClusterBuilder::ClusterBuilder(Arena *arena, ScenePrimitives *scene, PrimRef *pr
     h = PushStructConstruct(arena, Heuristic)(primRefs, scene, 0);
 }
 
+BitVector::BitVector(Arena *arena, u32 maxNumBits) : maxNumBits(maxNumBits)
+{
+    bits = PushArray(arena, u32, (maxNumBits + 31) >> 5);
+}
+void BitVector::SetBit(u32 bit)
+{
+    Assert(bit < maxNumBits);
+    bits[bit >> 5] |= 1ull << (bit & 31);
+}
+bool BitVector::GetBit(u32 bit)
+{
+    Assert(bit < maxNumBits);
+    return bits[bit >> 5] & (1 << (bit & 31));
+}
+
 void DenseGeometryBuildData::Init()
 {
     arena      = ArenaAlloc();
@@ -192,13 +207,13 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes,
         }
     }
 
-    // TODO: this needs to be permanent
-
+    u32 total = 0;
     for (int threadIndex = 0; threadIndex < threadClusters.Length(); threadIndex++)
     {
         ClusterList &list = threadClusters[threadIndex];
         for (auto *node = list.l.first; node != 0; node = node->next)
         {
+            total += node->count;
             for (int clusterIndex = 0; clusterIndex < node->count; clusterIndex++)
             {
                 RecordAOSSplits &cluster = node->values[clusterIndex];
@@ -207,6 +222,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes,
             }
         }
     }
+    buildData->numBlocks = total;
 }
 
 void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena, Mesh *meshes,
@@ -406,8 +422,6 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     // 3. handle multiple geom IDs in a single block
     // 4. handle vertices in multiple blocks (duplicate, or references)
 
-    // Find node with minimum valence
-
     static const u32 removedBit = 0x80000000;
     auto FindMinValence         = [&]() {
         u32 minCount           = ~0u;
@@ -442,16 +456,16 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     u32 bitOffset        = 0;
     u32 addedVertexCount = 0;
 
-    std::vector<u32> mapOldIndexToDGFIndex(clusterNumTriangles * 3);
+    StaticArray<u32> mapOldIndexToDGFIndex(clusterScratch.arena, vertexCount, vertexCount);
 
     std::vector<u8> reuseBuffer;
     u32 reuseBitOffset = 0;
-    int numIndexBits   = Log2Int(NextPowerOfTwo(clusterNumTriangles));
+    int numIndexBits   = Log2Int(NextPowerOfTwo(vertexCount));
     reuseBuffer.reserve(clusterNumTriangles * 3 * sizeof(u32));
 
-    U128 firstUse          = {};
+    BitVector firstUse(clusterScratch.arena, clusterNumTriangles * 3);
+    BitVector usedVertices(clusterScratch.arena, vertexCount);
     u32 currentFirstUseBit = 0;
-    u64 usedTriangles      = 0;
     u32 numReuse           = 0;
 
     u32 prevTriangle = minValenceTriangle;
@@ -471,7 +485,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     };
 
     auto CheckUsedTriangles = [&](u32 geomID, u32 index) {
-        if (usedTriangles & (1 << index))
+        if (usedVertices.GetBit(index))
         {
             currentFirstUseBit++;
             Assert(index < (1 << numIndexBits));
@@ -479,7 +493,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
             return true;
         }
 
-        usedTriangles |= (1 << index);
+        usedVertices.SetBit(index);
         firstUse.SetBit(currentFirstUseBit);
         currentFirstUseBit++;
         mapOldIndexToDGFIndex[index] = addedVertexCount++;
@@ -512,8 +526,9 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
         u32 newMinValenceTriangle = ~0u;
 
         TriangleStripType backTrackStripType = TriangleStripType::Restart;
+        u32 count                            = counts[minValenceTriangle] & ~removedBit;
         // If triangle has no neighbors, attempt to backtrack
-        if (!counts[minValenceTriangle])
+        if (!count)
         {
             MarkUsed(minValenceTriangle);
             // If can't backtrack, restart
@@ -556,9 +571,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
         {
             // Remove min valence triangle from neighbor's adjacency list
             u32 minCount = ~0u;
-            u32 count    = counts[minValenceTriangle] & ~removedBit;
-            Assert(count);
-            u32 minI = 0;
+            u32 minI     = 0;
             for (int i = 0; i < count; i++)
             {
                 u32 neighborTriangle = data[offsets[minValenceTriangle] + i];
@@ -682,7 +695,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     header->reuseStart = offset;
     MemoryCopy(node->values + offset, reuseBuffer.data(), reuseBufferSize);
     offset += reuseBufferSize;
-    MemoryCopy(node->values, &firstUse, firstUseSize);
+    MemoryCopy(node->values, firstUse.bits, firstUseSize);
     offset += firstUseSize;
 
     u32 currentTypeBitOffset = 0;

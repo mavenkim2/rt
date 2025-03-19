@@ -170,9 +170,9 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
 // 4. actual bsdfs and brdfs
 //      - compress vertices? interleave normal info?
 // 5. add other parts of the scene, with actual instancing
-// 6. disneyy bsdf
+// 6. disney bsdf
 // 7. recycle memory
-// 8. textures...
+// 8. textures
 
 void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
                        int maxDepth, Image *envMap)

@@ -29,6 +29,15 @@ struct U128
     }
 };
 
+struct BitVector
+{
+    u32 *bits;
+    u32 maxNumBits;
+    BitVector(Arena *arena, u32 maxNumBits);
+    void SetBit(u32 bit);
+    bool GetBit(u32 bit);
+};
+
 struct DenseGeometryHeader
 {
     Vec3i anchor;

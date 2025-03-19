@@ -10,19 +10,106 @@ RWTexture2D<float4> image : register(u1);
 ConstantBuffer<GPUScene> scene : register(b2);
 StructuredBuffer<RTBindingData> rtBindingData : register(t3);
 StructuredBuffer<GPUMaterial> materials : register(t4);
-//ByteAddressBuffer denseGeometry : register(t5);
+ByteAddressBuffer denseGeometry : register(t5);
 
 [[vk::push_constant]] RayPushConstant push;
 
-#if 0
-float3 DecodeTriangle(uint offset, int triangleIndex)
+struct BitStreamReader 
 {
+    uint4 buffer;
+    uint bitOffset;
+};
+
+uint ReadBits(inout BitStreamReader reader, uint bitSize)
+{
+    uint result = 0;
+
+    uint bitOffset = reader.bitOffset & 31;
+    uint remaining = min(32, bitOffset + bitSize);
+    uint remaining = min(bitSize, 32 - bitOffset);
+    uint mask = uint((1ul << remaining) - 1) & ~((1u << (reader.bitOffset & 31)) - 1); 
+    uint index = reader.bitOffset >> 5;
+
+    result |= buffer[index] & mask;
+    result |= buffer[index + 1]
+
+    reader.bitOffset += remaining;
+
+    uint prevBitOffset = bitOffset;
+    reader.bitOffset += ;
+    result |= ;
+
+    if (bitSize + reader.bitOffset > 128)
+    {
+    }
+}
+
+#if 0
+float3 DecodeTriangle(uint offset, int primitiveIndex)
+{
+    enum 
+    {
+        Restart = 0,
+        Edge1 = 1, 
+        Edge2 = 2, 
+        Backtrack = 3,
+    };
+
     // per scene index Dense Geometry
+    uint blockIndex = primitiveIndex >> blockShift;
+    uint triangleIndex = primitiveIndex & triangleMask;
+
     DenseGeometry dg = denseGeometry.Load<DenseGeometryHeader>(offset);
     uint3 indexAddress = uint3(0, 1, 2);
     uint r = 1;
+    uint bt = 0;
+    uint prevCtrl = Restart;
     for (uint k = 1; k < triangleIndex; k++)
     {
+        uint ctrl = somehow;
+        uint3 prev = indexAddress;
+        switch (ctrl)
+        {
+            case Restart:
+            {
+                r++;
+                // what is i?
+                indexAddress = uint3(2 * r + i - 2, 2 * r + i - 1, 2 * r + i);
+            }
+            break;
+            case Edge1: 
+            {
+                indexAddress = uint3(prev[2], prev[1], 2 * r + k);
+                bt = prev[0];
+            }
+            break;
+            case Edge2: 
+            {
+                indexAddress = uint3(prev[0], prev[2], 2 * r + k);
+                bt = prev[1];
+            }
+            break;
+            case Backtrack: 
+            {
+                indexAddress = prevCtrl == Edge1 ? uint3(bt, prev[0], 2 * r + k) 
+                                                 : uint3(prev[1], bt, 2 * r + k);
+            }
+            break;
+        }
+        prevCtrl = ctrl;
+    }
+
+    [[unroll]]
+
+    float3 result;
+    for (int k = 0; k < 3; k++)
+    {
+        uint vid = countbits(indexAddress[k]);
+        if ()
+        {
+            // use reuse buffer
+        }
+        result[k] = dg.anchor[k] + offset
     }
 
     f32 x = (dg.anchor.x + offsetX) * scene.scale;
