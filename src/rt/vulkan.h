@@ -223,7 +223,8 @@ enum class RTBindings
     Scene,
     RTBindingData,
     GPUMaterial,
-    FrameConstants,
+    DenseGeometryData, 
+    PackedDenseGeometryHeaders,
 };
 
 struct RayTracingState

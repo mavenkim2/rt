@@ -108,8 +108,8 @@ void DecodeTriangle(int primitiveIndex, out float3 p[3])
     };
 
     // per scene index Dense Geometry
-    uint blockIndex = primitiveIndex >> blockShift;
-    uint triangleIndex = primitiveIndex & triangleMask;
+    uint blockIndex = primitiveIndex >> MAX_CLUSTER_TRIANGLES_BIT;
+    uint triangleIndex = primitiveIndex & MAX_CLUSTER_TRIANGLES;
 
     DenseGeometry dg = GetDenseGeometryHeader(denseGeometryHeaders[blockIndex]);
     int3 indexAddress = int3(0, 1, 2);

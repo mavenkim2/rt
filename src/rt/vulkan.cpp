@@ -2278,6 +2278,7 @@ GPUAccelerationStructure CommandBuffer::BuildCustomBLAS(GPUBuffer *aabbsBuffer, 
                    &numAabbs);
 }
 
+#if 0
 GPUAccelerationStructure CommandBuffer::BuildCLAS()
 {
     VkClusterAccelerationStructureTriangleClusterInputNV triangleClusters = {
@@ -2298,6 +2299,7 @@ GPUAccelerationStructure CommandBuffer::BuildCLAS()
 
 
 }
+#endif
 
 GPUAccelerationStructure CommandBuffer::BuildBLAS(const GPUMesh *meshes, int count)
 {

@@ -6,6 +6,7 @@
 #include "memory.h"
 #include "parallel.h"
 #include "platform.h"
+#include "shader_interop/dense_geometry_shaderinterop.h"
 #include "shader_interop/gpu_scene_shaderinterop.h"
 #include "shader_interop/hit_shaderinterop.h"
 #include "shader_interop/ray_shaderinterop.h"
@@ -206,6 +207,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Copy);
 
+    GPUBuffer aabbBuffer;
+    GPUBuffer dgfBuffer;
+    GPUBuffer headerBuffer;
     for (int i = 0; i < numScenes; i++)
     {
         ScenePrimitives *scene       = scenes[i];
@@ -263,24 +267,23 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             }
         }
 
-        GPUBuffer aabbBuffer = dgfTransferCmd->SubmitBuffer(
+        aabbBuffer = dgfTransferCmd->SubmitBuffer(
             aabbs.data, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
             aabbs.Length() * sizeof(VkAabbPositionsKHR));
 
         // Combine all blocks together
         u8 *dgfByteBuffer = PushArrayNoZero(scratch.temp.arena, u8, data.byteBuffer.Length());
         data.byteBuffer.Flatten(dgfByteBuffer);
-
-        GPUBuffer dgfBuffer = dgfTransferCmd->SubmitBuffer(
+        dgfBuffer = dgfTransferCmd->SubmitBuffer(
             dgfByteBuffer, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, data.byteBuffer.Length());
 
-        // Upload offsets
-        u32 offsetSize = data.offsets.Length() * sizeof(u32);
-        u32 *offsets   = PushArrayNoZero(scratch.temp.arena, u32, offsetSize);
-        data.offsets.Flatten(offsets);
-
-        GPUBuffer offsetBuffer = dgfTransferCmd->SubmitBuffer(
-            offsets, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, offsetSize);
+        // Upload headers
+        PackedDenseGeometryHeader *headers = PushArrayNoZero(
+            scratch.temp.arena, PackedDenseGeometryHeader, data.headers.Length());
+        data.headers.Flatten(headers);
+        headerBuffer = dgfTransferCmd->SubmitBuffer(
+            headers, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            sizeof(PackedDenseGeometryHeader) * data.headers.Length());
 
         dgfTransferCmd->Signal(scene->semaphore);
 
@@ -400,6 +403,14 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     int gpuMaterialBindingIndex =
         layout.AddBinding((u32)RTBindings::GPUMaterial, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                           VK_SHADER_STAGE_COMPUTE_BIT);
+
+    int denseGeometryBufferIndex =
+        layout.AddBinding((u32)RTBindings::DenseGeometryData,
+                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT);
+
+    int packedDenseGeometryHeaderBufferIndex =
+        layout.AddBinding((u32)RTBindings::PackedDenseGeometryHeaders,
+                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT);
 
     layout.AddImmutableSamplers();
 
@@ -634,7 +645,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             .Bind(imageBindingIndex, image)
             .Bind(sceneBindingIndex, &sceneTransferBuffers[currentBuffer].buffer)
             .Bind(bindingDataBindingIndex, &bindingDataBuffer)
-            .Bind(gpuMaterialBindingIndex, &materialBuffer);
+            .Bind(gpuMaterialBindingIndex, &materialBuffer)
+            .Bind(denseGeometryBufferIndex, &dgfBuffer)
+            .Bind(packedDenseGeometryHeaderBufferIndex, &headerBuffer);
         cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &descriptorSet,
                                 layout.pipelineLayout);
 

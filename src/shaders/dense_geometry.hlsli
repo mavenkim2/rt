@@ -1,6 +1,6 @@
 #include "../rt/shader_interop/dense_geometry_shaderinterop.h"
 ByteAddressBuffer denseGeometryData : register(t5);
-StructuredBuffer<uint4> denseGeometryHeaders : register(t6); 
+StructuredBuffer<PackedDenseGeometryHeader> denseGeometryHeaders : register(t6); 
 
 // Taken from Platform.ush in Unreal Engine 5
 uint BitAlignU32(uint high, uint low, uint shift)
@@ -91,29 +91,27 @@ struct DenseGeometry
 };
 
 // Taken from NaniteDataDecode.ush in Unreal Engine 5
-DenseGeometry GetDenseGeometryHeader(uint4 packed)
+DenseGeometry GetDenseGeometryHeader(PackedDenseGeometryHeader packed)
 {
     DenseGeometry result;
 
     uint offset = 0;
-    result.anchor[0] = BitFieldExtractI32((int)packed.x, ANCHOR_WIDTH, 0);
-    offset += ANCHOR_WIDTH;
-    result.anchor[1] = BitFieldExtractI32((int)BitAlignU32(packed.y, packed.x, offset), ANCHOR_WIDTH, 0);
-    offset += ANCHOR_WIDTH;
-    result.anchor[2] = BitFieldExtractI32((int)BitAlignU32(packed.z, packed.y, offset), ANCHOR_WIDTH, 0);
-    offset += ANCHOR_WIDTH;
+    result.baseAddress = packed.a;
+
+    result.anchor[0] = BitFieldExtractI32((int)packed.b, ANCHOR_WIDTH, 0);
+    result.numTriangles = BitFieldExtractU32(packed.b, 8, ANCHOR_WIDTH);
+
+    result.anchor[1] = BitFieldExtractI32((int)packed.c, ANCHOR_WIDTH, 0);
+    result.posBitWidths[0] = BitFieldExtractU32(packed.c, 5, ANCHOR_WIDTH);
+    result.indexBitWidth = BitFieldExtractU32(packed.c, 3, ANCHOR_WIDTH + 5); 
+
+    result.anchor[2] = BitFieldExtractI32((int)packed.d, ANCHOR_WIDTH, 0);
     
-    result.indexOffset = BitFieldExtractAndAlignU32(packed.zw, 8, offset);
-    result.posBitWidths[0] = BitFieldExtractAndAlignU32(packed.zw, 5, 0);
-    result.posBitWidths[1] = BitFieldExtractAndAlignU32(packed.zw, 5, 0);
-    result.posBitWidths[2] = BitFieldExtractAndAlignU32(packed.zw, 5, 0);
-    result.indexBitWidth = BitFieldExtractAndAlignU32(packed.zw, 8, 0);
+    result.indexOffset = BitFieldExtractU32(packed.e, 9, 0);
+    result.ctrlBitOffset = BitFieldExtractU32(packed.e, 13, 9);
+    result.posBitWidths[1] = BitFieldExtractU32(packed.e, 5, 22);
+    result.posBitWidths[2] = BitFieldExtractU32(packed.e, 5, 27);
 
-    //result.numTriangles = ?;
-    //result.numVertices = ?;
-    uint numTriangles;
-    result.ctrlBitOffset = BitFieldExtractAndAlignU32(packed.zw, 10, 0);
-    result.firstBitsOffset = result.ctrlBitOffset + 2 * numTriangles;
-
+    result.firstBitsOffset = result.ctrlBitOffset + 2 * result.numTriangles;
     return result;
 }

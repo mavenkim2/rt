@@ -3,6 +3,7 @@
 
 #include "containers.h"
 #include "math/simd_base.h"
+#include "shader_interop/dense_geometry_shaderinterop.h"
 
 namespace rt
 {
@@ -52,7 +53,7 @@ struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
 {
     Arena *arena;
     ChunkedLinkedList<u8> byteBuffer;
-    ChunkedLinkedList<u32> offsets;
+    ChunkedLinkedList<PackedDenseGeometryHeader> headers;
     u32 numBlocks;
 
     void Init();

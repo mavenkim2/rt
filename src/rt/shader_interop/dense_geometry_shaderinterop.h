@@ -8,9 +8,23 @@ namespace rt
 {
 #endif
 
-#define ANCHOR_WIDTH 24
+#define ANCHOR_WIDTH              24
 #define MAX_CLUSTER_TRIANGLES_BIT 7
-#define MAX_CLUSTER_TRIANGLES (1 << MAX_CLUSTER_TRIANGLES_BIT)
+#define MAX_CLUSTER_TRIANGLES     (1 << MAX_CLUSTER_TRIANGLES_BIT)
+
+#define MAX_CLUSTER_VERTICES_BIT 8
+#define MAX_CLUSTER_VERTICES     (1 << MAX_CLUSTER_VERTICES_BIT)
+
+#define CLUSTER_DATA_PADDING_BYTES 4
+
+struct PackedDenseGeometryHeader
+{
+    uint a;
+    uint b;
+    uint c;
+    uint d;
+    uint e;
+};
 
 #ifdef __cplusplus
 }

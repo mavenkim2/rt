@@ -19,9 +19,6 @@ struct RayPushConstant
     uint height;
 };
 
-static const uint blockShift   = 7;
-static const uint triangleMask = 0x7f;
-
 // struct DenseGeometryHeader
 // {
 //     uint3 anchor;
