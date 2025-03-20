@@ -1,6 +1,7 @@
 #include "common.hlsli"
 #include "bxdf.hlsli"
 #include "rt.hlsli"
+#include "ray_triangle_intersection.hlsli"
 #include "sampling.hlsli"
 #include "dense_geometry.hlsli"
 #include "../rt/shader_interop/ray_shaderinterop.h"
@@ -20,7 +21,6 @@ uint AlignDownPow2(uint val)
     return val & ~(pow2 - 1);
 }
 
-// TODO: specify a compile time upper bound to prevent divergence
 struct BitStreamReader 
 {
     ByteAddressBuffer inputBuffer;
@@ -229,9 +229,33 @@ void main(uint3 DTid : SV_DispatchThreadID)
         query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
         query.Proceed();
 
+#ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
+        RayQuery<RAY_FLAG_SKIP_TRIANGLES | RAY_FLAG_FORCE_OPAQUE> query;
+        float2 bary;
+
+        while (query.Proceed()) 
+        {
+            if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
+            {
+                uint primID = query.CandidatePrimitiveIndex();
+                float3 p[3];
+                DecodeTriangle(primID, p);
+
+                float tHit;
+
+                if (!RayTriangleIntersectionMollerTrumbore(query.CandidateObjectRayOrigin(), 
+                                                      query.CandidateObjectRayDirection(), 
+                                                      p[0], p[1], p[2], 
+                                                      query.CommittedRayT(), tHit, bary)) continue;
+
+                query.CommitProceduralPrimitiveHit(tHit);
+            }
+        }
+#endif
         // TODO: emitter intersection
         if (depth++ >= maxDepth) break;
 
+#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
         if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
         {
             uint bindingDataIndex = query.CommittedInstanceID() + query.CommittedGeometryIndex();
@@ -240,9 +264,6 @@ void main(uint3 DTid : SV_DispatchThreadID)
             uint normalBufferIndex = 3 * bindingDataIndex + 2;
             uint primID = query.CommittedPrimitiveIndex();
 
-            float3 p[3];
-            DecodeTriangle(primID, p);
-#if 0
             uint index0 = bindlessUints[NonUniformResourceIndex(indexBufferIndex)][NonUniformResourceIndex(3 * primID + 0)];
             uint index1 = bindlessUints[NonUniformResourceIndex(indexBufferIndex)][NonUniformResourceIndex(3 * primID + 1)];
             uint index2 = bindlessUints[NonUniformResourceIndex(indexBufferIndex)][NonUniformResourceIndex(3 * primID + 2)];
@@ -251,21 +272,30 @@ void main(uint3 DTid : SV_DispatchThreadID)
             uint normal1 = bindlessUints[NonUniformResourceIndex(normalBufferIndex)][NonUniformResourceIndex(index1)];
             uint normal2 = bindlessUints[NonUniformResourceIndex(normalBufferIndex)][NonUniformResourceIndex(index2)];
 
-            float3 p0 = bindlessFloat3s[NonUniformResourceIndex(vertexBufferIndex)][NonUniformResourceIndex(index0)];
-            float3 p1 = bindlessFloat3s[NonUniformResourceIndex(vertexBufferIndex)][NonUniformResourceIndex(index1)];
-            float3 p2 = bindlessFloat3s[NonUniformResourceIndex(vertexBufferIndex)][NonUniformResourceIndex(index2)];
+            float3 p[3];
+            p[0] = bindlessFloat3s[NonUniformResourceIndex(vertexBufferIndex)][NonUniformResourceIndex(index0)];
+            p[1] = bindlessFloat3s[NonUniformResourceIndex(vertexBufferIndex)][NonUniformResourceIndex(index1)];
+            p[2] = bindlessFloat3s[NonUniformResourceIndex(vertexBufferIndex)][NonUniformResourceIndex(index2)];
 
             float3 n0 = DecodeOctahedral(normal0);
             float3 n1 = DecodeOctahedral(normal1);
             float3 n2 = DecodeOctahedral(normal2);
-#endif
+
+            float2 bary = query.CommittedTriangleBarycentrics();
 
             float3 gn = normalize(cross(p[0] - p[2], p[1] - p[2]));
-            float2 bary = query.CommittedTriangleBarycentrics();
-            float3 n = gn;
-
-#if 0
             float3 n = normalize(n0 + (n1 - n0) * bary[0] + (n2 - n0) * bary[1]);
+#else
+        if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
+        {
+            uint bindingDataIndex = query.CommittedInstanceID() + query.CommittedGeometryIndex();
+            uint primID = query.CommittedPrimitiveIndex();
+
+            float3 p[3];
+            DecodeTriangle(primID, p);
+
+            float3 gn = normalize(cross(p[0] - p[2], p[1] - p[2]));
+            float3 n = gn;
 #endif
 
             // Get material
@@ -273,7 +303,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
             GPUMaterial material = materials[bindingData.materialIndex];
             float eta = material.eta;
 
-            float3 wo = -normalize(query.CandidateObjectRayDirection());
+            float3 wo = -normalize(query.CommittedObjectRayDirection());
 
             float u = rng.Uniform();
             float R = FrDielectric(dot(wo, n), eta);
@@ -300,8 +330,8 @@ void main(uint3 DTid : SV_DispatchThreadID)
                 throughput /= etap * etap;
             }
 
-            origin = TransformP(query.CandidateObjectToWorld3x4(), origin);
-            dir = TransformV(query.CandidateObjectToWorld3x4(), normalize(dir));
+            origin = TransformP(query.CommittedObjectToWorld3x4(), origin);
+            dir = TransformV(query.CommittedObjectToWorld3x4(), normalize(dir));
             pos = OffsetRayOrigin(origin, gn);
         }
         else 

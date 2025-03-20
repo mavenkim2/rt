@@ -77,7 +77,7 @@ struct DenseGeometry
         packed.x = BitAlignU32(packed.y, packed.x, posBitWidths.y);
         pos.z = BitFieldExtractU32(packed.x, posBitWidths.z, 0);
         
-        const float scale = asfloat(asint(1.0) - (posPrecision << 23));
+        const float scale = asfloat((127 - posPrecision) << 23);
         return (pos + anchor) * scale;
     }
 
@@ -106,6 +106,7 @@ DenseGeometry GetDenseGeometryHeader(PackedDenseGeometryHeader packed)
     result.indexBitWidth = BitFieldExtractU32(packed.c, 3, ANCHOR_WIDTH + 5); 
 
     result.anchor[2] = BitFieldExtractI32((int)packed.d, ANCHOR_WIDTH, 0);
+    result.posPrecision = (int)BitFieldExtractU32(packed.d, 8, ANCHOR_WIDTH) + CLUSTER_MIN_PRECISION;
     
     result.indexOffset = BitFieldExtractU32(packed.e, 9, 0);
     result.ctrlBitOffset = BitFieldExtractU32(packed.e, 13, 9);

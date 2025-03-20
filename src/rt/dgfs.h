@@ -37,6 +37,7 @@ struct BitVector
     BitVector(Arena *arena, u32 maxNumBits);
     void SetBit(u32 bit);
     bool GetBit(u32 bit);
+    void WriteBits(u32 &position, u32 value, u32 numBits);
 };
 
 struct alignas(CACHE_LINE_SIZE) ClusterList
@@ -72,7 +73,7 @@ struct ClusterBuilder
     void CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes, int numMeshes,
                     Bounds &sceneBounds);
     void CreateDGFs(DenseGeometryBuildData *data, Arena *arena, Mesh *meshes,
-                    Vec3i **quantizedVertices, RecordAOSSplits &cluster);
+                    Vec3i **quantizedVertices, RecordAOSSplits &cluster, int precision);
 };
 
 #if 0
@@ -112,6 +113,8 @@ void DecodeDenseGeometry()
     // solution: just don't have restarts?
 }
 #endif
+
+void WriteBits(u32 *data, u32 &position, u32 value, u32 numBits);
 
 } // namespace rt
 #endif

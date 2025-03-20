@@ -239,7 +239,7 @@ foreach(SHADER_FILE ${SHADER_FILES})
     add_custom_command(
         OUTPUT ${SHADER_SPV}
         COMMAND ${SHADER_COMPILER} 
-        "-spirv" "-fspv-target-env=vulkan1.3" "-fvk-use-scalar-layout"
+        "-spirv" "-fspv-target-env=vulkan1.3" "-fvk-use-scalar-layout" "-Wno-parameter-usage"
         ${SHADER_TYPE_FLAG} "$<$<CONFIG:Debug>:-Zi>" "-Fo ${SHADER_SPV}" "${SHADER_FILE}"
         DEPENDS ${SHADER_FILE} ${SHADER_INCLUDES} ${SHADER_INTEROP}
         COMMENT "Compiling HLSL shader: ${SHADER_FILE} -> ${SHADER_SPV}"

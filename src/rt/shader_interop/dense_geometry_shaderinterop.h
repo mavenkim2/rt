@@ -17,6 +17,8 @@ namespace rt
 
 #define CLUSTER_DATA_PADDING_BYTES 4
 
+#define CLUSTER_MIN_PRECISION -20
+
 struct PackedDenseGeometryHeader
 {
     uint a;

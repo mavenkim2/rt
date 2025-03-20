@@ -82,6 +82,12 @@ void WriteBits(u32 *data, u32 &position, u32 value, u32 numBits)
     position += numBits;
 }
 
+void BitVector::WriteBits(u32 &position, u32 value, u32 numBits)
+{
+    Assert(position + numBits <= maxNumBits);
+    rt::WriteBits(bits, position, value, numBits);
+}
+
 void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel)
 {
     auto *heuristic = (Heuristic *)h;
@@ -148,6 +154,7 @@ void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel)
 void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes, int numMeshes,
                                 Bounds &sceneBounds)
 {
+#if 0
     static const int b     = 24;
     static const f32 scale = (1 << (b - 1)) - 1.f;
     Vec3f sceneExtent      = ToVec3f(sceneBounds.maxP - sceneBounds.minP);
@@ -161,6 +168,11 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes,
     f32 expZ = AsFloat((eZ + 127) << 23);
 
     Vec3f quantize = 1.f / Vec3f(expX, expY, expZ);
+#endif
+
+    i32 precision = 6;
+    Assert(precision > CLUSTER_MIN_PRECISION);
+    Vec3f quantize(AsFloat((127 + precision) << 23));
 
 #if 0
     f32 offsetMinX = maxClusterEdgeLength[0] - 16.f;
@@ -210,7 +222,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes,
             {
                 RecordAOSSplits &cluster = node->values[clusterIndex];
                 CreateDGFs(buildData, meshScratch.temp.arena, meshes, quantizedVertices,
-                           cluster);
+                           cluster, precision);
             }
         }
     }
@@ -262,7 +274,8 @@ u32 BitAlignU32(u32 high, u32 low, u32 shift)
 }
 
 void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena, Mesh *meshes,
-                                Vec3i **quantizedVertices, RecordAOSSplits &cluster)
+                                Vec3i **quantizedVertices, RecordAOSSplits &cluster,
+                                int precision)
 {
     static const u32 LUT[] = {1, 2, 0};
     struct HashedIndex
@@ -354,7 +367,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     Assert(numBitsX < 24 && numBitsY < 24 && numBitsZ < 24);
     Assert(Abs(min[0]) < (1 << 23) && Abs(min[1]) < (1 << 23) && Abs(min[2]) < (1 << 23));
 
-    int numBytes = (vertexCount * (numBitsX + numBitsY + numBitsZ) + 7) >> 3;
+    int numBits = vertexCount * (numBitsX + numBitsY + numBitsZ);
 
     Vec3u bitWidths(numBitsX, numBitsY, numBitsZ);
 
@@ -489,20 +502,19 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     StaticArray<TriangleStripType> triangleStripTypes(clusterScratch.arena,
                                                       clusterNumTriangles);
 
-    std::vector<u32> vertexBitStream;
-    vertexBitStream.reserve((numBytes + 3) >> 2);
+    BitVector vertexBitStream(clusterScratch.arena, numBits);
     u32 vertexBitOffset  = 0;
     u32 addedVertexCount = 0;
 
     StaticArray<u32> mapOldIndexToDGFIndex(clusterScratch.arena, vertexCount, vertexCount);
 
-    std::vector<u32> reuseBuffer;
+    int numIndexBits = Log2Int(NextPowerOfTwo(vertexCount));
+
+    u32 maxReuseBufferSize = numIndexBits * clusterNumTriangles * 3;
+    BitVector reuseBuffer(clusterScratch.arena, maxReuseBufferSize);
     u32 reuseBitOffset = 0;
-    reuseBuffer.reserve(clusterNumTriangles * 3 * sizeof(u32));
 
     Assert(vertexCount <= MAX_CLUSTER_VERTICES);
-    int numIndexBits     = Log2Int(NextPowerOfTwo(vertexCount));
-    u32 reuseBufferCount = 0;
 
     BitVector firstUse(clusterScratch.arena, clusterNumTriangles * 3);
     BitVector usedVertices(clusterScratch.arena, vertexCount);
@@ -530,8 +542,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
         {
             currentFirstUseBit++;
             Assert(index < (1 << numIndexBits));
-            WriteBits(reuseBuffer.data(), reuseBitOffset, index, numIndexBits);
-            reuseBufferCount++;
+            reuseBuffer.WriteBits(reuseBitOffset, index, numIndexBits);
             return true;
         }
 
@@ -542,8 +553,8 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
 
         for (int i = 0; i < 3; i++)
         {
-            WriteBits(
-                vertexBitStream.data(), vertexBitOffset,
+            vertexBitStream.WriteBits(
+                vertexBitOffset,
                 quantizedVertices[geomID][clusterVertexIndexToMeshVertexIndex[index]][i] -
                     min[i],
                 bitWidths[i]);
@@ -718,10 +729,9 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     // Append all data
     auto &buildData = buildDatas[0];
 
-    u32 vertexBitStreamSize = (u32)vertexBitStream.size();
-    u32 bitStreamSize       = (reuseBufferCount * numIndexBits + currentFirstUseBit +
-                         triangleStripTypes.Length() * 2 + 7) >>
-                        3;
+    u32 vertexBitStreamSize = (vertexBitOffset + 7) >> 3;
+    u32 bitStreamSize =
+        (reuseBitOffset + currentFirstUseBit + triangleStripTypes.Length() * 2 + 7) >> 3;
     u32 size = vertexBitStreamSize + bitStreamSize;
     Assert(size < (1 << 16));
 
@@ -729,21 +739,20 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
 
     // Write compressed vertex buffer
     auto *node = buildData.byteBuffer.AddNode(size);
-    MemoryCopy(node->values, vertexBitStream.data(), (vertexBitOffset + 7) >> 3);
+    MemoryCopy(node->values, vertexBitStream.bits, vertexBitStreamSize);
     offset += vertexBitStreamSize;
 
     // Write reuse buffer (byte aligned)
-    u32 reuseBufferOffset  = offset;
-    u32 bitOffset          = offset << 3;
-    u32 remainingReuseSize = numIndexBits * reuseBufferCount;
-    u32 reuseBitWriteSize  = Min(remainingReuseSize, 32u);
-    u32 reuseBitIter       = 0;
-    while (remainingReuseSize)
+    u32 reuseBufferOffset = offset;
+    u32 bitOffset         = offset << 3;
+    u32 reuseWriteOffset  = 0;
+    u32 reuseBitWriteSize = Min(reuseBitOffset - reuseWriteOffset, 32u);
+    while (reuseWriteOffset != reuseBitOffset)
     {
-        WriteBits((u32 *)node->values, bitOffset, reuseBuffer[reuseBitIter++],
+        WriteBits((u32 *)node->values, bitOffset, reuseBuffer.bits[reuseWriteOffset >> 5],
                   reuseBitWriteSize);
-        remainingReuseSize -= reuseBitWriteSize;
-        reuseBitWriteSize = Min(remainingReuseSize, 32u);
+        reuseWriteOffset += reuseBitWriteSize;
+        reuseBitWriteSize = Min(reuseBitOffset - reuseWriteOffset, 32u);
     }
 
     // Write control bits
@@ -755,15 +764,14 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     }
 
     // Write first use bits
-    u32 remainingFirstUseSize = currentFirstUseBit;
-    u32 firstUseBitWriteSize  = Min(currentFirstUseBit, 32u);
-    u32 firstUseBitIter       = 0;
-    while (remainingFirstUseSize)
+    u32 firstBitWriteOffset  = 0;
+    u32 firstUseBitWriteSize = Min(currentFirstUseBit - firstBitWriteOffset, 32u);
+    while (firstBitWriteOffset != currentFirstUseBit)
     {
-        WriteBits((u32 *)node->values, bitOffset, firstUse.bits[firstUseBitIter++],
+        WriteBits((u32 *)node->values, bitOffset, firstUse.bits[firstBitWriteOffset >> 5],
                   firstUseBitWriteSize);
-        remainingFirstUseSize -= firstUseBitWriteSize;
-        firstUseBitWriteSize = Min(remainingFirstUseSize, 32u);
+        firstBitWriteOffset += firstUseBitWriteSize;
+        firstUseBitWriteSize = Min(currentFirstUseBit - firstBitWriteOffset, 32u);
     }
 
     // Write header
@@ -780,6 +788,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     packed.c = BitFieldPackU32(packed.c, numIndexBits - 1, headerOffset, 3);
 
     packed.d = BitFieldPackI32(packed.d, min[2], headerOffset, ANCHOR_WIDTH);
+    packed.d = BitFieldPackU32(packed.d, precision - CLUSTER_MIN_PRECISION, headerOffset, 8);
 
     Assert(reuseBufferOffset < (1u << 9));
     packed.e = BitFieldPackU32(packed.e, reuseBufferOffset, headerOffset, 9);

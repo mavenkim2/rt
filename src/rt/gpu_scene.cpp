@@ -300,9 +300,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         {
             scene->gpuInstanceID = runningTotal;
 
-            GPUMesh *gpuMeshes = (GPUMesh *)scene->primitives;
+            // GPUMesh *gpuMeshes = (GPUMesh *)scene->primitives;
             for (int primIndex = 0; primIndex < scene->numPrimitives; primIndex++)
             {
+#if 0
                 GPUMesh &gpuMesh     = gpuMeshes[primIndex];
                 int bindlessVertices = device->BindlessStorageIndex(
                     &gpuMesh.buffer, gpuMesh.vertexOffset, gpuMesh.vertexSize);
@@ -313,6 +314,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                 int bindlessNormals = device->BindlessStorageIndex(
                     &gpuMesh.buffer, gpuMesh.normalOffset, gpuMesh.normalSize);
                 Assert(bindlessNormals == 3 * runningTotal + 2);
+#endif
                 runningTotal++;
             }
         }
