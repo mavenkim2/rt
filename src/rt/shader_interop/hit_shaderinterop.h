@@ -1,10 +1,11 @@
 #ifndef HIT_SHADERINTEROP_H_
 #define HIT_SHADERINTEROP_H_
 
+#include "hlsl_cpp_compat.h"
+
 #ifdef __cplusplus
 namespace rt
 {
-typedef unsigned int uint;
 #endif
 
 struct RTBindingData
@@ -12,7 +13,7 @@ struct RTBindingData
     uint materialIndex;
 };
 
-struct GPUMaterial 
+struct GPUMaterial
 {
     float eta;
 };

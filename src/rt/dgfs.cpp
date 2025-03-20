@@ -1,6 +1,7 @@
 #include "scene.h"
 #include "bvh/bvh_aos.h"
 #include "bvh/bvh_types.h"
+#include "shader_interop/ray_shaderinterop.h"
 #include "dgfs.h"
 #include "memory.h"
 #include "scene.h"
@@ -90,7 +91,6 @@ void AppendBitStream(std::vector<u8> &bitStream, u32 bitsToAdd, u32 &currentBitO
 }
 
 void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel)
-
 {
     auto *heuristic = (Heuristic *)h;
     const int N     = 4;
@@ -225,6 +225,44 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes,
     buildData->numBlocks = total;
 }
 
+u32 BitFieldPackU32(Vec4u &bits, i32 data, u32 offset, u32 size)
+{
+    u32 d = data;
+    Assert(offset < 128);
+    u32 o &= 31u;
+    u32 index = o >> 5u;
+    bits[index] |= data << o;
+    if (o + size > 32u)
+    {
+        Assert(index + 1 < 4);
+        bits[index + 1] |= (data >> (32u - o));
+    }
+    return offset + size;
+}
+
+u32 BitFieldPackU32(Vec4u &bits, u32 data, u32 offset, u32 size)
+{
+    Assert(offset < 128);
+    u32 o &= 31u;
+    u32 index = o >> 5u;
+    bits[index] |= data << o;
+    if (o + size > 32u)
+    {
+        Assert(index + 1 < 4);
+        bits[index + 1] |= (data >> (32u - o));
+    }
+    return offset + size;
+}
+
+u32 BitAlignU32(u32 high, u32 low, u32 shift)
+{
+    shift &= 31u;
+
+    u32 result = low >> shift;
+    result |= shift > 0u ? (high << (32u - shift)) : 0u;
+    return result;
+}
+
 void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena, Mesh *meshes,
                                 Vec3i **quantizedVertices, RecordAOSSplits &cluster)
 {
@@ -312,11 +350,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     u32 numBitsY = min[1] == max[1] ? 0 : Log2Int(Max(max[1] - min[1] - 1, 1)) + 1;
     u32 numBitsZ = min[2] == max[2] ? 0 : Log2Int(Max(max[2] - min[2] - 1, 1)) + 1;
 
-    DenseGeometryHeader geometry;
-    geometry.anchor       = min;
-    geometry.bitWidths[0] = SafeTruncateU32ToU8(numBitsX);
-    geometry.bitWidths[1] = SafeTruncateU32ToU8(numBitsY);
-    geometry.bitWidths[2] = SafeTruncateU32ToU8(numBitsZ);
+    Assert(numBitsX < 24 && numBitsY < 24 && numBitsZ < 24);
 
     int numBytes = (vertexCount * (numBitsX + numBitsY + numBitsZ) + 7) >> 3;
 
@@ -692,7 +726,8 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     offset += sizeof(DenseGeometryHeader);
     MemoryCopy(node->values + offset, vertexBitStream.data(), vertexBitStreamSize);
     offset += vertexBitStreamSize;
-    header->reuseStart = offset;
+    u32 reuseBufferOffset = offset;
+    Assert(reuseBufferOffset < 256);
     MemoryCopy(node->values + offset, reuseBuffer.data(), reuseBufferSize);
     offset += reuseBufferSize;
     MemoryCopy(node->values, firstUse.bits, firstUseSize);
@@ -706,6 +741,17 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
         offset += currentTypeBitOffset >> 3;
         currentTypeBitOffset = currentTypeBitOffset & 7;
     }
+
+    Vec4u packedHeader;
+    u32 headerOffset = 0;
+    headerOffset     = BitFieldPackI32(packedHeader, min[0], headerOffset, 24);
+    headerOffset     = BitFieldPackI32(packedHeader, min[1], headerOffset, 24);
+    headerOffset     = BitFieldPackI32(packedHeader, min[2], headerOffset, 24);
+    headerOffset     = BitFieldPackU32(packedHeader, reuseBufferOffset, headerOffset, 8);
+    headerOffset     = BitFieldPackU32(packedHeader, numBitsX, headerOffset, 5);
+    headerOffset     = BitFieldPackU32(packedHeader, numBitsY, headerOffset, 5);
+    headerOffset     = BitFieldPackU32(packedHeader, numBitsZ, headerOffset, 5);
+    headerOffset     = BitFieldPackU32(packedHeader, numIndexBits, headerOffset, 8);
 
     ScratchEnd(clusterScratch);
 }

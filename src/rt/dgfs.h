@@ -38,15 +38,6 @@ struct BitVector
     bool GetBit(u32 bit);
 };
 
-struct DenseGeometryHeader
-{
-    Vec3i anchor;
-    u32 start;
-    u16 reuseStart;
-    u16 ctrlBitStart;
-    u8 bitWidths[3];
-};
-
 struct alignas(CACHE_LINE_SIZE) ClusterList
 {
     ChunkedLinkedList<RecordAOSSplits> l;

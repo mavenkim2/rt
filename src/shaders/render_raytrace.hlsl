@@ -11,7 +11,6 @@ RWTexture2D<float4> image : register(u1);
 ConstantBuffer<GPUScene> scene : register(b2);
 StructuredBuffer<RTBindingData> rtBindingData : register(t3);
 StructuredBuffer<GPUMaterial> materials : register(t4);
-ByteAddressBuffer denseGeometry : register(t5);
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -26,48 +25,79 @@ struct BitStreamReader
 {
     ByteAddressBuffer inputBuffer;
     uint4 buffer;
-    uint alignedStart;
-    uint bitOffset;
 
-    BitStreamReader(ByteAddressBuffer inputBuffer, uint alignedStart, uint bitOffset) 
-        : inputBuffer(inputBuffer), alignedStart(alignedStart), bitOffset(bitOffset)
-    {
-    }
+    uint alignedByteAddress;
+    uint bitOffsetFromAddress;
+    int bufferOffset;
 
-    uint Read(uint bitSize)
+    uint compileTimeMinBufferBits;
+    uint compileTimeMinDwordBits;
+    uint compileTimeMaxRemainingBits;
+
+    template <uint compileTimeMaxBits>
+    uint Read(uint numBits)
     {
-        if (bitSize + bitOffset > 128)
+        if (compileTimeMaxBits > compileTimeMinBufferBits)
         {
-            int alignedOffset = ((bitOffset >> 5) << 2);
-            alignedStart = alignedStart + alignedOffset;
-            bitOffset = ((bitOffset >> 3) - alignedOffset) << 3;
-            buffer = inputBuffer.Load4(alignedStart);
+        	bitOffsetFromAddress += bufferOffset;	
+        	uint address = alignedByteAddress + ((bitOffsetFromAddress >> 5) << 2);
+        
+        	uint4 data = inputBuffer.Load4(address);
+        
+        	// Shift bits down to align
+        	buffer.x = BitAlignU32(data.y, data.x, bitOffsetFromAddress);
+        	if (compileTimeMaxRemainingBits > 32) buffer.y = BitAlignU32(data.z, data.y, bitOffsetFromAddress);
+        	if (compileTimeMaxRemainingBits > 64) buffer.z = BitAlignU32(data.w, data.z, bitOffsetFromAddress);
+        	if (compileTimeMaxRemainingBits > 96) buffer.w = BitAlignU32(0, data.w,	bitOffsetFromAddress); 
+        
+        	bufferOffset = 0;
+        
+        	compileTimeMinDwordBits	= min(32, compileTimeMaxRemainingBits);
+        	compileTimeMinBufferBits = min(97, compileTimeMaxRemainingBits);
         }
-
-        uint result = 0;
-        uint offset = bitOffset & 31;
-        uint remaining = min(32 - offset, bitSize);
-        uint remaining2 = bitSize - remaining;
-        uint mask = (1u << remaining) - 1;
-        uint mask2 = (1u << remaining2) - 1;
-        uint index = bitOffset >> 5;
-        result |= ((buffer[index] >> offset) & mask);
-        result |= (buffer[min(index + 1, 3)] & mask2) << remaining;
-
-        reader.bitOffset += bitSize;
+        else if (compileTimeMaxBits > compileTimeMinDwordBits)
+        {
+        	bitOffsetFromAddress += bufferOffset;
+        
+        	const bool bOffset32 = compileTimeMinDwordBits == 0 && bufferOffset == 32;
+        	buffer.x = bOffset32 ? buffer.y : BitAlignU32(buffer.y, buffer.x, bufferOffset);
+        	if (compileTimeMinBufferBits > 32) buffer.y	= bOffset32 ? buffer.z : BitAlignU32(buffer.z, buffer.y, bufferOffset);
+        	if (compileTimeMinBufferBits > 64) buffer.z	= bOffset32 ? buffer.w : BitAlignU32(buffer.w, buffer.z, bufferOffset);
+        	if (compileTimeMinBufferBits > 96) buffer.w	= bOffset32 ? 0u : BitAlignU32(0, buffer.w, bufferOffset);
+        
+        	bufferOffset = 0;
+        
+        	compileTimeMinDwordBits = min(32, compileTimeMaxRemainingBits);
+        }
+        
+        const uint result = BitFieldExtractU32(buffer.x, numBits, bufferOffset);
+        
+        bufferOffset += numBits;
+        compileTimeMinBufferBits    -= compileTimeMaxBits;
+        compileTimeMinDwordBits     -= compileTimeMaxBits;
+        compileTimeMaxRemainingBits -= compileTimeMaxBits;
+        
         return result;
     }
 };
 
-// TODO: this can't support anything greater than 512 MB
-void CreateBitStreamReader(ByteAddressBuffer inputBuffer, uint offset, uint bitOffset)
+BitStreamReader CreateBitStreamReader(ByteAddressBuffer inputBuffer, uint alignedStart, uint bitOffset, uint compileTimeMaxRemainingBits)
 {
-    uint alignedStart = AlignDownPow2<4>(offset + bitOffset >> 3);
-    bitOffset -= (alignedStart << 3);
+    BitStreamReader result;
+
+    result.inputBuffer = inputBuffer;
+    result.buffer = 0;
+    result.alignedByteAddress = alignedStart;
+    result.bitOffsetFromAddress = bitOffset;
+    result.bufferOffset = 0;
+    result.compileTimeMinBufferBits = 0;
+    result.compileTimeMinDwordBits = 0;
+    result.compileTimeMaxRemainingBits = compileTimeMaxRemainingBits;
+
+    return result;
 }
 
-#if 0
-void DecodeTriangle(uint offset, int primitiveIndex, out float3 p[3])
+void DecodeTriangle(int primitiveIndex, out float3 p[3])
 {
     enum 
     {
@@ -81,19 +111,20 @@ void DecodeTriangle(uint offset, int primitiveIndex, out float3 p[3])
     uint blockIndex = primitiveIndex >> blockShift;
     uint triangleIndex = primitiveIndex & triangleMask;
 
-    DenseGeometry dg = denseGeometry.Load<DenseGeometryHeader>(offset);
+    DenseGeometry dg = GetDenseGeometryHeader(denseGeometryHeaders[blockIndex]);
     int3 indexAddress = int3(0, 1, 2);
     uint r = 1;
     int bt = 0;
     uint prevCtrl = Restart;
 
-    uint alignedStart = AlignDownPow2<4>(offset + dg.ctrlBitStart >> 3);
-    uint bitOffset = dg.ctrlBitStart - (alignedStart << 3);
+    uint alignedStart = AlignDownPow2<4>(dg.baseAddress + (dg.ctrlBitOffset >> 3));
+    BitStreamReader reader = CreateBitStreamReader(denseGeometryData, alignedStart, dg.ctrlBitOffset, 
+                                                   MAX_CLUSTER_TRIANGLES * 2);
 
-    BitStreamReader reader = BitStreamReader(denseGeometry, alignedStart, bitOffset);
+    // TODO: branchless and loopless version?
     for (int k = 1; k < triangleIndex; k++)
     {
-        uint ctrl = reader.Read(2);
+        uint ctrl = reader.Read<2>(2);
         int3 prev = indexAddress;
         switch (ctrl)
         {
@@ -125,27 +156,42 @@ void DecodeTriangle(uint offset, int primitiveIndex, out float3 p[3])
         prevCtrl = ctrl;
     }
 
-    uint firstBitsOffset = AlignDownPow2<4>(dg.blockSize - ((numTriangles * 3 + 7) >> 3));
-    uint4 firstBitMask = denseGeometry.Load4(offset + firstBitsOffset);
+    // Get the first bits mask
+    uint firstBitsOffset = dg.firstBitsOffset;
+    uint alignedFirstBitsOffset = AlignDownPow2<4>(dg.baseAddress + (firstBitsOffset >> 3));
+
+    uint4 firstBitMask = denseGeometryData.Load4(alignedFirstBitsOffset);
+    uint firstBitMask2 = denseGeometryData.Load(alignedFirstBitsOffset + 16);
+
+    firstBitMask[0] = BitAlignU32(firstBitMask[1], firstBitMask[0], firstBitsOffset);
+    firstBitMask[1] = BitAlignU32(firstBitMask[2], firstBitMask[1], firstBitsOffset);
+    firstBitMask[2] = BitAlignU32(firstBitMask[3], firstBitMask[2], firstBitsOffset);
+    firstBitMask[3] = BitAlignU32(firstBitMask2, firstBitMask[3], firstBitsOffset);
+
+    uint4 numFirstBits;
+    numFirstBits[0] = 0; 
+    numFirstBits[1] = countbits(firstBitMask[0]);
+    numFirstBits[2] = numFirstBits[1] + countbits(firstBitMask[1]);
+    numFirstBits[3] = numFirstBits[2] + countbits(firstBitMask[2]);
 
     [[unroll]]
     for (int k = 0; k < 3; k++)
     {
         uint4 firstBitTestMask = firstBitMask;
-        firstBitTestMask[0] &= indexAddress[k] < 32 ? (1 << (indexAddress[k] & 31)) - 1 : ~0u;
-        firstBitTestMask[1] &= indexAddress[k] < 64 ? (1 << (max(indexAddress[k] - 32, 0) & 31)) - 1 : ~0u; 
-        firstBitTestMask[2] &= indexAddress[k] < 96 ? (1 << (max(indexAddress[k] - 64, 0) & 31)) - 1 : ~0u; 
-        firstBitTestMask[3] &= indexAddress[k] < 128 ? (1 << (max(indexAddress[k] - 96, 0) & 31)) - 1 : ~0u;
-        uint vid = count_bits(firstBitTestMask);
 
-        if ((firstBitMask[indexAddress[k] >> 5] & (1 << (indexAddress[k] & 31))) == 0)
+        uint dwordIndex = indexAddress[k] >> 5u;
+        uint bitIndex = indexAddress[k] & 31u;
+        uint bit = 1u << bitIndex;
+        uint mask = bit - 1u;
+        uint vid = numFirstBits[dwordIndex] + countbits(firstBitMask[dwordIndex] & mask);
+
+        if ((firstBitMask[dwordIndex] & bit) == 0)
         {
             vid = dg.DecodeReuse(indexAddress[k] - vid);
         }
         p[k] = dg.DecodePosition(vid);
     }
 }
-#endif
 
 [numthreads(PATH_TRACE_NUM_THREADS_X, PATH_TRACE_NUM_THREADS_Y, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
@@ -195,7 +241,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
             uint primID = query.CommittedPrimitiveIndex();
 
             float3 p[3];
-            DecodeTriangle(dgfOffset, primID, p);
+            DecodeTriangle(primID, p);
 #if 0
             uint index0 = bindlessUints[NonUniformResourceIndex(indexBufferIndex)][NonUniformResourceIndex(3 * primID + 0)];
             uint index1 = bindlessUints[NonUniformResourceIndex(indexBufferIndex)][NonUniformResourceIndex(3 * primID + 1)];
@@ -214,10 +260,13 @@ void main(uint3 DTid : SV_DispatchThreadID)
             float3 n2 = DecodeOctahedral(normal2);
 #endif
 
-            float3 gn = normalize(cross(p0 - p2, p1 - p2));
+            float3 gn = normalize(cross(p[0] - p[2], p[1] - p[2]));
             float2 bary = query.CommittedTriangleBarycentrics();
+            float3 n = gn;
 
+#if 0
             float3 n = normalize(n0 + (n1 - n0) * bary[0] + (n2 - n0) * bary[1]);
+#endif
 
             // Get material
             RTBindingData bindingData = rtBindingData[bindingDataIndex];
@@ -232,7 +281,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
             float T = 1 - R;
             float pr = R, pt = T;
 
-            float3 origin = p0 + (p1 - p0) * bary[0] + (p2 - p0) * bary[1];
+            float3 origin = p[0] + (p[1] - p[0]) * bary[0] + (p[2] - p[0]) * bary[1];
 
             if (u < pr / (pr + pt))
             {
