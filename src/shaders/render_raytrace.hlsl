@@ -109,7 +109,10 @@ void DecodeTriangle(int primitiveIndex, out float3 p[3])
 
     // per scene index Dense Geometry
     uint blockIndex = primitiveIndex >> MAX_CLUSTER_TRIANGLES_BIT;
-    uint triangleIndex = primitiveIndex & MAX_CLUSTER_TRIANGLES;
+    uint triangleIndex = primitiveIndex & (MAX_CLUSTER_TRIANGLES - 1);
+
+    printf("block tri: %u %u\n", blockIndex, triangleIndex);
+    printf("test\n");
 
     DenseGeometry dg = GetDenseGeometryHeader(denseGeometryHeaders[blockIndex]);
     int3 indexAddress = int3(0, 1, 2);
@@ -225,12 +228,13 @@ void main(uint3 DTid : SV_DispatchThreadID)
         desc.TMin = 0;
         desc.TMax = FLT_MAX;
         
+#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
         RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_FORCE_OPAQUE> query;
         query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
         query.Proceed();
-
-#ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
+#else
         RayQuery<RAY_FLAG_SKIP_TRIANGLES | RAY_FLAG_FORCE_OPAQUE> query;
+        query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
         float2 bary;
 
         while (query.Proceed()) 

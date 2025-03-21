@@ -24,6 +24,10 @@ VkBool32 DebugUtilsMessengerCallback(VkDebugUtilsMessageSeverityFlagBitsEXT mess
     {
         Print("[Vulkan Error]: %s\n", callbackData->pMessage);
     }
+    else if (strcmp(callbackData->pMessageIdName, "WARNING_DEBUG_PRINTF"))
+    {
+        Print("Debug: %s\n", callbackData->pMessage);
+    }
     else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT)
     {
         Print("[Vulkan Info]: %s\n", callbackData->pMessage);
@@ -1935,6 +1939,11 @@ void Vulkan::SetName(VkPipeline handle, const char *name)
 void Vulkan::SetName(VkQueue handle, const char *name)
 {
     SetName((u64)handle, VK_OBJECT_TYPE_QUEUE, name);
+}
+
+void Vulkan::SetName(GPUBuffer *buffer, const char *name)
+{
+    SetName((u64)buffer->buffer, VK_OBJECT_TYPE_BUFFER, name);
 }
 
 void Vulkan::BeginEvent(CommandBuffer *cmd, string name)

@@ -25,6 +25,16 @@ struct L2
     }
 };
 
+inline L2 operator+=(const L2 &a, const L2 &b)
+{
+    L2 result = {};
+    for (int i = 0; i < 9; i++)
+    {
+        result[i] = a[i] + b[i];
+    }
+    return result;
+}
+
 static const f32 SqrtPi = Sqrt(PI);
 
 static const f32 CosineA0 = PI;

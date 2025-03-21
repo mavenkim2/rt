@@ -78,17 +78,21 @@ f32 *Image::GetSamplingDistribution(Arena *arena)
 
     f32 *result = PushArrayNoZero(arena, f32, height * width);
     u32 count   = 0;
-    for (i32 h = 0; h < height; h++)
-    {
-        for (i32 w = 0; w < width; w++)
-        {
-            Vec3f values    = SRGBToLinear(GetColor(this, w, h));
-            f32 val         = (values[0] + values[1] + values[2]) / 3.f;
-            result[count++] = val;
-            Assert(result[count - 1] == result[count - 1]);
-            ptr += bytesPerPixel;
-        }
-    }
+
+    ParallelFor2D(Vec2i(0), Vec2i(width, height), Vec2i(32),
+                  [&](int jobID, Vec2i start, Vec2i end) {
+                      for (i32 h = start[1]; h < end[1]; h++)
+                      {
+                          for (i32 w = start[0]; w < end[0]; w++)
+                          {
+                              Vec3f values = SRGBToLinear(GetColor(this, w, h));
+                              f32 val      = (values[0] + values[1] + values[2]) / 3.f;
+                              Assert(val == val);
+                              result[h * width + w] = val;
+                              ptr += bytesPerPixel;
+                          }
+                      }
+                  });
     return result;
 }
 

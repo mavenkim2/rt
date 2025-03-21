@@ -13,9 +13,6 @@ struct PrimRef;
 struct RecordAOSSplits;
 struct ScenePrimitives;
 
-static const int maxClusterTriangles = 128;
-static const int clusterSize         = 128;
-
 struct U128
 {
     u64 vals[2];

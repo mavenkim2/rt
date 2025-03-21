@@ -222,6 +222,9 @@ set_property(SOURCE
     "${SHADER_SRC_DIR}/render_raytrace.hlsl"
     PROPERTY name "cs")
 
+file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")
+file(GLOB_RECURSE SHADER_INTEROP "${CMAKE_CURRENT_SOURCE_DIR}/src/rt/shader_interop/*.h")
+
 if (NOT DEFINED SHADER_COMPILER)
     set(SHADER_COPILER "dxc")
 endif()

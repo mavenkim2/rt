@@ -1,5 +1,6 @@
 #include "lights.h"
 #include "color.h"
+#include "parallel.h"
 #include "scene.h"
 #include "spectrum.h"
 
@@ -256,23 +257,37 @@ void ImageInfiniteLight::CalculateSHFromEnvironmentMap()
     L2 c       = {};
     f32 weight = f32(FourPiTy()) / (image.width * image.height);
 
-    for (i32 h = 0; h < image.height; h++)
+    ScratchArena scratch;
+
+    int num = OS_NumProcessors();
+    L2 *l2  = PushArray(scratch.temp.arena, L2, num);
+    ParallelFor2D(Vec2i(0), Vec2i(image.width, image.height), Vec2i(32),
+                  [&](int jobID, Vec2i start, Vec2i end) {
+                      L2 c = {};
+                      for (i32 h = start[1]; h < end[1]; h++)
+                      {
+                          for (i32 w = start[0]; w < end[0]; w++)
+                          {
+                              Vec2f uv(f32(w) / image.width, f32(h) / image.height);
+                              Vec3f dir = EqualAreaSquareToSphere(uv);
+
+                              Vec3f values = SRGBToLinear(GetColor(&image, w, h));
+
+                              f32 lum  = CalculateLuminance(values) * scale;
+                              L2 basis = EvaluateL2Basis(dir);
+
+                              for (int i = 0; i < 9; i++)
+                              {
+                                  c[i] += lum * basis[i] * weight;
+                              }
+                          }
+                      }
+                      l2[GetThreadIndex()] += c;
+                  });
+
+    for (int i = 0; i < num; i++)
     {
-        for (i32 w = 0; w < image.width; w++)
-        {
-            Vec2f uv(f32(w) / image.width, f32(h) / image.height);
-            Vec3f dir = EqualAreaSquareToSphere(uv);
-
-            Vec3f values = SRGBToLinear(GetColor(&image, w, h));
-
-            f32 lum  = CalculateLuminance(values) * scale;
-            L2 basis = EvaluateL2Basis(dir);
-
-            for (int i = 0; i < 9; i++)
-            {
-                c[i] += lum * basis[i] * weight;
-            }
-        }
+        c += l2[i];
     }
     coefficients = c;
 }

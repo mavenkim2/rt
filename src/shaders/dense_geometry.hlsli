@@ -101,6 +101,8 @@ DenseGeometry GetDenseGeometryHeader(PackedDenseGeometryHeader packed)
     result.anchor[0] = BitFieldExtractI32((int)packed.b, ANCHOR_WIDTH, 0);
     result.numTriangles = BitFieldExtractU32(packed.b, 8, ANCHOR_WIDTH);
 
+    printf("base, num tri: %u %u\n", result.baseAddress, result.numTriangles);
+
     result.anchor[1] = BitFieldExtractI32((int)packed.c, ANCHOR_WIDTH, 0);
     result.posBitWidths[0] = BitFieldExtractU32(packed.c, 5, ANCHOR_WIDTH);
     result.indexBitWidth = BitFieldExtractU32(packed.c, 3, ANCHOR_WIDTH + 5); 
@@ -108,8 +110,9 @@ DenseGeometry GetDenseGeometryHeader(PackedDenseGeometryHeader packed)
     result.anchor[2] = BitFieldExtractI32((int)packed.d, ANCHOR_WIDTH, 0);
     result.posPrecision = (int)BitFieldExtractU32(packed.d, 8, ANCHOR_WIDTH) + CLUSTER_MIN_PRECISION;
     
-    result.indexOffset = BitFieldExtractU32(packed.e, 9, 0);
-    result.ctrlBitOffset = BitFieldExtractU32(packed.e, 13, 9);
+    result.indexOffset = BitFieldExtractU32(packed.e, 11, 0);
+    uint reuseBufferBitSize = BitFieldExtractU32(packed.e, 11, 11);
+    result.ctrlBitOffset = (result.indexOffset << 3) + reuseBufferBitSize;
     result.posBitWidths[1] = BitFieldExtractU32(packed.e, 5, 22);
     result.posBitWidths[2] = BitFieldExtractU32(packed.e, 5, 27);
 

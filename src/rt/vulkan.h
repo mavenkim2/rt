@@ -223,7 +223,7 @@ enum class RTBindings
     Scene,
     RTBindingData,
     GPUMaterial,
-    DenseGeometryData, 
+    DenseGeometryData,
     PackedDenseGeometryHeaders,
 };
 
@@ -824,6 +824,7 @@ struct Vulkan
     void SetName(VkShaderModule handle, const char *name);
     void SetName(VkPipeline handle, const char *name);
     void SetName(VkQueue handle, const char *name);
+    void SetName(GPUBuffer *buffer, const char *name);
 
     //////////////////////////////
     // Memory

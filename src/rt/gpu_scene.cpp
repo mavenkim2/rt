@@ -210,6 +210,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     GPUBuffer aabbBuffer;
     GPUBuffer dgfBuffer;
     GPUBuffer headerBuffer;
+    u32 aabbLength;
+    DenseGeometryBuildData data;
+    data.Init();
+    u8 *dgfByteBuffer;
+    PackedDenseGeometryHeader *headers;
+
     for (int i = 0; i < numScenes; i++)
     {
         ScenePrimitives *scene       = scenes[i];
@@ -219,12 +225,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         RecordAOSSplits record(neg_inf);
 
-        DenseGeometryBuildData data;
-        data.Init();
-
-        ScratchArena scratch;
+        ScratchArena temp;
         PrimRef *refs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
-            scratch.temp.arena, scenes[i], record, false);
+            temp.temp.arena, scenes[i], record, false);
 
         ClusterBuilder builder(arena, scene, refs);
         builder.BuildClusters(record, true);
@@ -232,8 +235,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                            sceneBounds);
 
         // Convert primrefs to aabbs, submit to GPU
-        StaticArray<VkAabbPositionsKHR> aabbs(scratch.temp.arena,
-                                              clusterSize * data.numBlocks);
+        StaticArray<VkAabbPositionsKHR> aabbs(temp.temp.arena,
+                                              MAX_CLUSTER_TRIANGLES * data.numBlocks);
         u32 pos = 0;
         for (int i = 0; i < builder.threadClusters.Length(); i++)
         {
@@ -258,7 +261,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                     }
                     VkAabbPositionsKHR nullAabb = {};
                     nullAabb.minX               = f32(NaN);
-                    for (int remaining = record.start + record.count; remaining < clusterSize;
+                    for (int remaining = record.count; remaining < MAX_CLUSTER_TRIANGLES;
                          remaining++)
                     {
                         aabbs.Push(nullAabb);
@@ -267,19 +270,20 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             }
         }
 
+        aabbLength = aabbs.Length();
         aabbBuffer = dgfTransferCmd->SubmitBuffer(
             aabbs.data, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
             aabbs.Length() * sizeof(VkAabbPositionsKHR));
 
         // Combine all blocks together
-        u8 *dgfByteBuffer = PushArrayNoZero(scratch.temp.arena, u8, data.byteBuffer.Length());
+        dgfByteBuffer = PushArrayNoZero(scratch.temp.arena, u8, data.byteBuffer.Length());
         data.byteBuffer.Flatten(dgfByteBuffer);
         dgfBuffer = dgfTransferCmd->SubmitBuffer(
             dgfByteBuffer, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, data.byteBuffer.Length());
 
         // Upload headers
-        PackedDenseGeometryHeader *headers = PushArrayNoZero(
-            scratch.temp.arena, PackedDenseGeometryHeader, data.headers.Length());
+        headers = PushArrayNoZero(scratch.temp.arena, PackedDenseGeometryHeader,
+                                  data.headers.Length());
         data.headers.Flatten(headers);
         headerBuffer = dgfTransferCmd->SubmitBuffer(
             headers, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -290,6 +294,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         // Send offsets buffer and dense geometry info
         ReleaseArenaArray(builder.arenas);
     }
+
+    device->SetName(&dgfBuffer, "DGF Buffer");
+    device->SubmitCommandBuffer(dgfTransferCmd);
 
     // Set the instance ids of each scene
     int runningTotal = 0;
@@ -449,12 +456,14 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                     case GeometryType::TriangleMesh:
                     {
                         GPUMesh *meshes = (GPUMesh *)scene->primitives;
-                        scene->gpuBVH   = cmd->BuildBLAS(meshes, scene->numPrimitives);
-                        as[bvhCount++]  = &scene->gpuBVH;
+                        // scene->gpuBVH   = cmd->BuildBLAS(meshes, scene->numPrimitives);
+                        scene->gpuBVH  = cmd->BuildCustomBLAS(&aabbBuffer, aabbLength);
+                        as[bvhCount++] = &scene->gpuBVH;
                     }
                     break;
                     case GeometryType::Instance:
                     {
+                        Assert(0);
                         Instance *instances = (Instance *)scene->primitives;
                         scene->gpuBVH =
                             cmd->BuildTLAS(instances, scene->numPrimitives,

@@ -99,7 +99,7 @@ void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel)
 
     Split split = heuristic->Bin(record);
 
-    if (record.count <= clusterSize)
+    if (record.count <= MAX_CLUSTER_TRIANGLES)
     {
         u32 threadIndex                         = GetThreadIndex();
         threadClusters[threadIndex].l.AddBack() = record;
@@ -116,7 +116,7 @@ void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel)
         for (u32 recordIndex = 0; recordIndex < numChildren; recordIndex++)
         {
             RecordAOSSplits &childRecord = childRecords[recordIndex];
-            if (childRecord.count <= clusterSize) continue;
+            if (childRecord.count <= MAX_CLUSTER_TRIANGLES) continue;
 
             f32 childArea = HalfArea(childRecord.geomBounds);
             if (childArea > maxArea)
@@ -232,12 +232,13 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes,
 u32 BitFieldPackU32(u32 val, u32 data, u32 &offset, u32 size)
 {
     u32 o = offset & 31u;
+    data = data & ((1u << size) - 1u);
     val |= data << o;
     offset += size;
     return val;
 }
 
-u32 BitFieldPackI32(u32 bits, i32 data, u32 offset, u32 size)
+u32 BitFieldPackI32(u32 bits, i32 data, u32 &offset, u32 size)
 {
     u32 signBit = (data & 0x80000000) >> 31;
     return BitFieldPackU32(bits, data | (signBit << size), offset, size);
@@ -312,6 +313,8 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     u32 *clusterVertexIndexToMeshVertexIndex =
         PushArray(clusterScratch.arena, u32, clusterNumTriangles * 3);
 
+    Vec3i *vertices = PushArrayNoZero(clusterScratch.arena, Vec3i, clusterNumTriangles * 3);
+
     u32 vertexCount = 0;
     u32 indexCount  = 0;
 
@@ -337,6 +340,8 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
             mesh.indices[3 * primID + 2],
         };
 
+        geomIDs[i - start] = geomID;
+
         for (int indexIndex = 0; indexIndex < 3; indexIndex++)
         {
             min = Min(min, quantizedVertices[geomID][indices[indexIndex]]);
@@ -353,6 +358,8 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                                   {geomID, indices[indexIndex], vertexCount});
                 clusterVertexIndexToMeshVertexIndex[vertexCount] = indices[indexIndex];
                 vertexIndices[indexCount++]                      = vertexCount;
+
+                vertices[vertexCount] = quantizedVertices[geomID][indices[indexIndex]];
                 vertexCount++;
             }
         }
@@ -553,11 +560,9 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
 
         for (int i = 0; i < 3; i++)
         {
-            vertexBitStream.WriteBits(
-                vertexBitOffset,
-                quantizedVertices[geomID][clusterVertexIndexToMeshVertexIndex[index]][i] -
-                    min[i],
-                bitWidths[i]);
+            int p = vertices[index][i] - min[i];
+            Assert(p >= 0);
+            vertexBitStream.WriteBits(vertexBitOffset, p, bitWidths[i]);
         }
         return false;
     };
@@ -740,11 +745,13 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     // Write compressed vertex buffer
     auto *node = buildData.byteBuffer.AddNode(size);
     MemoryCopy(node->values, vertexBitStream.bits, vertexBitStreamSize);
-    offset += vertexBitStreamSize;
+
+    u32 writeOffset = 0;
+    writeOffset += vertexBitStreamSize;
 
     // Write reuse buffer (byte aligned)
-    u32 reuseBufferOffset = offset;
-    u32 bitOffset         = offset << 3;
+    u32 reuseBufferOffset = writeOffset;
+    u32 bitOffset         = writeOffset << 3;
     u32 reuseWriteOffset  = 0;
     u32 reuseBitWriteSize = Min(reuseBitOffset - reuseWriteOffset, 32u);
     while (reuseWriteOffset != reuseBitOffset)
@@ -777,11 +784,11 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     // Write header
     PackedDenseGeometryHeader packed = {};
     u32 headerOffset                 = 0;
-    packed.a = BitFieldPackU32(packed.a, baseAddress, headerOffset, 32);
+    packed.a                         = baseAddress;
     headerOffset += 32;
 
     packed.b = BitFieldPackI32(packed.b, min[0], headerOffset, ANCHOR_WIDTH);
-    packed.b = BitFieldPackI32(packed.b, clusterNumTriangles, headerOffset, 8);
+    packed.b = BitFieldPackU32(packed.b, clusterNumTriangles, headerOffset, 8);
 
     packed.c = BitFieldPackI32(packed.c, min[1], headerOffset, ANCHOR_WIDTH);
     packed.c = BitFieldPackU32(packed.c, numBitsX, headerOffset, 5);
@@ -790,12 +797,14 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     packed.d = BitFieldPackI32(packed.d, min[2], headerOffset, ANCHOR_WIDTH);
     packed.d = BitFieldPackU32(packed.d, precision - CLUSTER_MIN_PRECISION, headerOffset, 8);
 
-    Assert(reuseBufferOffset < (1u << 9));
-    packed.e = BitFieldPackU32(packed.e, reuseBufferOffset, headerOffset, 9);
-    Assert(ctrlBitOffset < (1u << 13));
-    packed.e = BitFieldPackU32(packed.e, ctrlBitOffset, headerOffset, 13);
+    Assert(reuseBufferOffset < (1u << 11));
+    packed.e = BitFieldPackU32(packed.e, reuseBufferOffset, headerOffset, 11);
+    Assert(reuseBitOffset < (1u << 11));
+    packed.e = BitFieldPackU32(packed.e, reuseBitOffset, headerOffset, 11);
     packed.e = BitFieldPackU32(packed.e, numBitsY, headerOffset, 5);
     packed.e = BitFieldPackU32(packed.e, numBitsZ, headerOffset, 5);
+
+    buildData.headers.AddBack() = packed;
 
     ScratchEnd(clusterScratch);
 }
