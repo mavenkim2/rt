@@ -20,12 +20,12 @@ bool RayTriangleIntersectionMollerTrumbore(float3 o, float3 d, float3 v0, float3
     const float u = dot(dxt, e2) * invDet;
     const float v = dot(dxt, e1) * invDet;
 
-    if (u < 0 || u > 1 || v < 0 || v > 1) return false;
+    if (u < 0 || v < 0 || u + v > 1) return false;
 
     const float t = dot(ng, c);
     if (t <= 0 || t > abs(det) * tFar) return false;
 
-    tFar           = t;
+    tFar           = t * abs(invDet);
     barycentrics.x = u;
     barycentrics.y = v;
     return true;

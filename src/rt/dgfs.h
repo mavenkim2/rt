@@ -13,6 +13,14 @@ struct PrimRef;
 struct RecordAOSSplits;
 struct ScenePrimitives;
 
+enum class TriangleStripType
+{
+    Restart,
+    Edge1,
+    Edge2,
+    Backtrack,
+};
+
 struct U128
 {
     u64 vals[2];
@@ -53,6 +61,10 @@ struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
     ChunkedLinkedList<u8> byteBuffer;
     ChunkedLinkedList<PackedDenseGeometryHeader> headers;
     u32 numBlocks;
+
+    // Debug
+    ChunkedLinkedList<TriangleStripType> types;
+    ChunkedLinkedList<u32> firstUse;
 
     void Init();
     void Merge(DenseGeometryBuildData &other);

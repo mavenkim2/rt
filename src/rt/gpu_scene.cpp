@@ -180,11 +180,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 {
     // Build clusters
     // TODO: make sure to NOT make gpumeshes
-    ScratchArena scratch;
+    ScratchArena sceneScratch;
     Arena *arena   = ArenaAlloc();
     Arena **arenas = GetArenaArray(arena);
 
-    Bounds *bounds = PushArrayNoZero(scratch.temp.arena, Bounds, numScenes);
+    Bounds *bounds = PushArrayNoZero(sceneScratch.temp.arena, Bounds, numScenes);
 
     for (int depth = maxDepth; depth >= 0; depth--)
     {
@@ -215,6 +215,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     data.Init();
     u8 *dgfByteBuffer;
     PackedDenseGeometryHeader *headers;
+    TriangleStripType **types;
+    u32 **firstUses;
 
     for (int i = 0; i < numScenes; i++)
     {
@@ -225,9 +227,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         RecordAOSSplits record(neg_inf);
 
-        ScratchArena temp;
         PrimRef *refs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
-            temp.temp.arena, scenes[i], record, false);
+            sceneScratch.temp.arena, scenes[i], record, false);
 
         ClusterBuilder builder(arena, scene, refs);
         builder.BuildClusters(record, true);
@@ -235,8 +236,13 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                            sceneBounds);
 
         // Convert primrefs to aabbs, submit to GPU
-        StaticArray<VkAabbPositionsKHR> aabbs(temp.temp.arena,
+        StaticArray<VkAabbPositionsKHR> aabbs(sceneScratch.temp.arena,
                                               MAX_CLUSTER_TRIANGLES * data.numBlocks);
+
+        // Debug
+        types = PushArrayNoZero(sceneScratch.temp.arena, TriangleStripType *, data.numBlocks);
+        firstUses = PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
+
         u32 pos = 0;
         for (int i = 0; i < builder.threadClusters.Length(); i++)
         {
@@ -251,9 +257,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                          refIndex++)
                     {
                         VkAabbPositionsKHR aabb;
-                        aabb.minX = refs[refIndex].minX;
-                        aabb.minY = refs[refIndex].minY;
-                        aabb.minZ = refs[refIndex].minZ;
+                        aabb.minX = -refs[refIndex].minX;
+                        aabb.minY = -refs[refIndex].minY;
+                        aabb.minZ = -refs[refIndex].minZ;
                         aabb.maxX = refs[refIndex].maxX;
                         aabb.maxY = refs[refIndex].maxY;
                         aabb.maxZ = refs[refIndex].maxZ;
@@ -276,25 +282,36 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             aabbs.Length() * sizeof(VkAabbPositionsKHR));
 
         // Combine all blocks together
-        dgfByteBuffer = PushArrayNoZero(scratch.temp.arena, u8, data.byteBuffer.Length());
+        dgfByteBuffer = PushArrayNoZero(sceneScratch.temp.arena, u8, data.byteBuffer.Length());
         data.byteBuffer.Flatten(dgfByteBuffer);
         dgfBuffer = dgfTransferCmd->SubmitBuffer(
             dgfByteBuffer, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, data.byteBuffer.Length());
 
         // Upload headers
-        headers = PushArrayNoZero(scratch.temp.arena, PackedDenseGeometryHeader,
+        headers = PushArrayNoZero(sceneScratch.temp.arena, PackedDenseGeometryHeader,
                                   data.headers.Length());
         data.headers.Flatten(headers);
         headerBuffer = dgfTransferCmd->SubmitBuffer(
             headers, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             sizeof(PackedDenseGeometryHeader) * data.headers.Length());
 
+        // Debug
+        int c = 0;
+        for (auto *node = data.types.first; node != 0; node = node->next)
+        {
+            types[c++] = node->values;
+        }
+        c = 0;
+        for (auto *node = data.firstUse.first; node != 0; node = node->next)
+        {
+            firstUses[c++] = node->values;
+        }
+
         dgfTransferCmd->Signal(scene->semaphore);
 
         // Send offsets buffer and dense geometry info
         ReleaseArenaArray(builder.arenas);
     }
-
     device->SetName(&dgfBuffer, "DGF Buffer");
     device->SubmitCommandBuffer(dgfTransferCmd);
 

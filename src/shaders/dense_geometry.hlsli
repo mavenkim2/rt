@@ -44,6 +44,21 @@ uint BitFieldExtractAndAlignU32(inout uint2 data, uint size, uint offset)
     return result;
 }
 
+template <uint pow2>
+uint AlignDownPow2(uint val)
+{
+    return val & ~(pow2 - 1);
+}
+
+uint2 GetAlignedAddressAndBitOffset(uint baseAddress, uint bitOffset)
+{
+    uint byteAligned = baseAddress + (bitOffset >> 3);
+    uint aligned = AlignDownPow2<4>(byteAligned);
+    uint newBitOffset = ((byteAligned - aligned) << 3) + (bitOffset & 0x7);
+
+    return uint2(aligned, newBitOffset);
+}
+
 struct DenseGeometry 
 {
     uint baseAddress;
@@ -52,6 +67,7 @@ struct DenseGeometry
     uint3 posBitWidths;
     uint indexBitWidth;
     uint numTriangles;
+    uint numVertices;
 
     uint indexOffset;
     uint ctrlBitOffset;
@@ -62,10 +78,12 @@ struct DenseGeometry
     {
         const uint bitsPerVertex = posBitWidths[0] + posBitWidths[1] + posBitWidths[2];
         const uint bitsOffset = vertexIndex * bitsPerVertex;
-        uint3 data = denseGeometryData.Load3(baseAddress + ((bitsOffset >> 5) << 2));
 
-        uint2 packed = uint2(BitAlignU32(data.y, data.x, bitsOffset),
-                             BitAlignU32(data.z, data.y, bitsOffset));
+        uint2 vals = GetAlignedAddressAndBitOffset(baseAddress, bitsOffset);
+        uint3 data = denseGeometryData.Load3(vals[0]);
+
+        uint2 packed = uint2(BitAlignU32(data.y, data.x, vals[1]), 
+                             BitAlignU32(data.z, data.y, vals[1]));
 
         int3 pos;
         pos.x = BitFieldExtractU32(packed.x, posBitWidths.x, 0);
@@ -84,9 +102,10 @@ struct DenseGeometry
     uint DecodeReuse(uint reuseIndex)
     {
         const uint bitsOffset = reuseIndex * indexBitWidth;
-        uint offset = indexOffset + ((bitsOffset >> 5) << 2);
-        uint2 result = denseGeometryData.Load2(baseAddress + offset);
-        return BitAlignU32(result.y, result.x, offset);
+        uint2 vals = GetAlignedAddressAndBitOffset(baseAddress + indexOffset, bitsOffset);
+        uint2 result = denseGeometryData.Load2(vals[0]);
+        uint r = BitFieldExtractU32(BitAlignU32(result.y, result.x, vals[1]), indexBitWidth, 0);
+        return r;
     }
 };
 
@@ -101,21 +120,21 @@ DenseGeometry GetDenseGeometryHeader(PackedDenseGeometryHeader packed)
     result.anchor[0] = BitFieldExtractI32((int)packed.b, ANCHOR_WIDTH, 0);
     result.numTriangles = BitFieldExtractU32(packed.b, 8, ANCHOR_WIDTH);
 
-    printf("base, num tri: %u %u\n", result.baseAddress, result.numTriangles);
-
     result.anchor[1] = BitFieldExtractI32((int)packed.c, ANCHOR_WIDTH, 0);
     result.posBitWidths[0] = BitFieldExtractU32(packed.c, 5, ANCHOR_WIDTH);
-    result.indexBitWidth = BitFieldExtractU32(packed.c, 3, ANCHOR_WIDTH + 5); 
+    result.indexBitWidth = BitFieldExtractU32(packed.c, 3, ANCHOR_WIDTH + 5) + 1;
 
     result.anchor[2] = BitFieldExtractI32((int)packed.d, ANCHOR_WIDTH, 0);
     result.posPrecision = (int)BitFieldExtractU32(packed.d, 8, ANCHOR_WIDTH) + CLUSTER_MIN_PRECISION;
     
-    result.indexOffset = BitFieldExtractU32(packed.e, 11, 0);
-    uint reuseBufferBitSize = BitFieldExtractU32(packed.e, 11, 11);
-    result.ctrlBitOffset = (result.indexOffset << 3) + reuseBufferBitSize;
-    result.posBitWidths[1] = BitFieldExtractU32(packed.e, 5, 22);
-    result.posBitWidths[2] = BitFieldExtractU32(packed.e, 5, 27);
+    result.numVertices     = BitFieldExtractU32(packed.e, 9, 0);
+    uint reuseBufferLength = BitFieldExtractU32(packed.e, 8, 9);
+    result.posBitWidths[1] = BitFieldExtractU32(packed.e, 5, 17);
+    result.posBitWidths[2] = BitFieldExtractU32(packed.e, 5, 22);
 
-    result.firstBitsOffset = result.ctrlBitOffset + 2 * result.numTriangles;
+    result.indexOffset = result.numVertices * (result.posBitWidths[0] + result.posBitWidths[1] + result.posBitWidths[2]);
+    result.indexOffset = (result.indexOffset + 7) >> 3;
+    result.ctrlBitOffset = (result.indexOffset << 3) + reuseBufferLength * result.indexBitWidth;
+    result.firstBitsOffset = result.ctrlBitOffset + 2 * (result.numTriangles - 1);
     return result;
 }

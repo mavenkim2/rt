@@ -1,3 +1,4 @@
+#include "math/basemath.h"
 #include "scene.h"
 #include "bvh/bvh_aos.h"
 #include "bvh/bvh_types.h"
@@ -49,6 +50,10 @@ void DenseGeometryBuildData::Init()
     arena      = ArenaAlloc();
     byteBuffer = ChunkedLinkedList<u8>(arena, 1024);
     headers    = ChunkedLinkedList<PackedDenseGeometryHeader>(arena);
+
+    // Debug
+    types    = ChunkedLinkedList<TriangleStripType>(arena);
+    firstUse = ChunkedLinkedList<u32>(arena);
 }
 
 void DenseGeometryBuildData::Merge(DenseGeometryBuildData &other)
@@ -72,6 +77,8 @@ void WriteBits(u32 *data, u32 &position, u32 value, u32 numBits)
     Assert(numBits <= 32);
     uint dwordIndex = position >> 5;
     uint bitIndex   = position & 31;
+
+    Assert(numBits == 32 || ((value & ((1u << numBits) - 1)) == value));
 
     data[dwordIndex] |= value << bitIndex;
     if (bitIndex + numBits > 32)
@@ -232,7 +239,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes,
 u32 BitFieldPackU32(u32 val, u32 data, u32 &offset, u32 size)
 {
     u32 o = offset & 31u;
-    data = data & ((1u << size) - 1u);
+    data  = data & ((1u << size) - 1u);
     val |= data << o;
     offset += size;
     return val;
@@ -365,16 +372,17 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
         }
     }
 
-    Assert(vertexCount < MAX_CLUSTER_VERTICES);
+    Assert(vertexCount <= MAX_CLUSTER_VERTICES);
 
-    u32 numBitsX = min[0] == max[0] ? 0 : Log2Int(Max(max[0] - min[0] - 1, 1)) + 1;
-    u32 numBitsY = min[1] == max[1] ? 0 : Log2Int(Max(max[1] - min[1] - 1, 1)) + 1;
-    u32 numBitsZ = min[2] == max[2] ? 0 : Log2Int(Max(max[2] - min[2] - 1, 1)) + 1;
+    u32 numBitsX = min[0] == max[0] ? 0 : Log2Int(Max(max[0] - min[0], 1)) + 1;
+    u32 numBitsY = min[1] == max[1] ? 0 : Log2Int(Max(max[1] - min[1], 1)) + 1;
+    u32 numBitsZ = min[2] == max[2] ? 0 : Log2Int(Max(max[2] - min[2], 1)) + 1;
 
     Assert(numBitsX < 24 && numBitsY < 24 && numBitsZ < 24);
+    Assert(numBitsX + numBitsY + numBitsZ < 64);
     Assert(Abs(min[0]) < (1 << 23) && Abs(min[1]) < (1 << 23) && Abs(min[2]) < (1 << 23));
 
-    int numBits = vertexCount * (numBitsX + numBitsY + numBitsZ);
+    u32 numBits = vertexCount * (numBitsX + numBitsY + numBitsZ);
 
     Vec3u bitWidths(numBitsX, numBitsY, numBitsZ);
 
@@ -497,14 +505,6 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
 
     u32 minValenceTriangle = FindMinValence();
 
-    enum class TriangleStripType
-    {
-        Restart,
-        Edge1,
-        Edge2,
-        Backtrack,
-    };
-
     // NOTE: implicitly starts with "Restart"
     StaticArray<TriangleStripType> triangleStripTypes(clusterScratch.arena,
                                                       clusterNumTriangles);
@@ -515,13 +515,9 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
 
     StaticArray<u32> mapOldIndexToDGFIndex(clusterScratch.arena, vertexCount, vertexCount);
 
-    int numIndexBits = Log2Int(NextPowerOfTwo(vertexCount));
-
-    u32 maxReuseBufferSize = numIndexBits * clusterNumTriangles * 3;
-    BitVector reuseBuffer(clusterScratch.arena, maxReuseBufferSize);
-    u32 reuseBitOffset = 0;
-
-    Assert(vertexCount <= MAX_CLUSTER_VERTICES);
+    u32 maxReuseBufferSize = clusterNumTriangles * 3;
+    StaticArray<u32> reuseBuffer(clusterScratch.arena, maxReuseBufferSize);
+    u32 maxReuseIndex = 0;
 
     BitVector firstUse(clusterScratch.arena, clusterNumTriangles * 3);
     BitVector usedVertices(clusterScratch.arena, vertexCount);
@@ -548,23 +544,23 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
         if (usedVertices.GetBit(index))
         {
             currentFirstUseBit++;
-            Assert(index < (1 << numIndexBits));
-            reuseBuffer.WriteBits(reuseBitOffset, index, numIndexBits);
-            return true;
+            reuseBuffer.Push(mapOldIndexToDGFIndex[index]);
+            maxReuseIndex = Max(mapOldIndexToDGFIndex[index], maxReuseIndex);
         }
-
-        usedVertices.SetBit(index);
-        firstUse.SetBit(currentFirstUseBit);
-        currentFirstUseBit++;
-        mapOldIndexToDGFIndex[index] = addedVertexCount++;
-
-        for (int i = 0; i < 3; i++)
+        else
         {
-            int p = vertices[index][i] - min[i];
-            Assert(p >= 0);
-            vertexBitStream.WriteBits(vertexBitOffset, p, bitWidths[i]);
+            usedVertices.SetBit(index);
+            firstUse.SetBit(currentFirstUseBit);
+            currentFirstUseBit++;
+            mapOldIndexToDGFIndex[index] = addedVertexCount++;
+
+            for (int i = 0; i < 3; i++)
+            {
+                int p = vertices[index][i] - min[i];
+                Assert(p >= 0);
+                vertexBitStream.WriteBits(vertexBitOffset, p, bitWidths[i]);
+            }
         }
-        return false;
     };
 
     auto MarkUsed = [&](u32 triangle) { counts[minValenceTriangle] |= removedBit; };
@@ -734,9 +730,13 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     // Append all data
     auto &buildData = buildDatas[0];
 
+    Assert(vertexBitOffset == numBits);
     u32 vertexBitStreamSize = (vertexBitOffset + 7) >> 3;
-    u32 bitStreamSize =
-        (reuseBitOffset + currentFirstUseBit + triangleStripTypes.Length() * 2 + 7) >> 3;
+    u32 numIndexBits        = Log2Int(maxReuseIndex) + 1;
+    Assert(numIndexBits >= 1 && numIndexBits <= 8);
+    u32 bitStreamSize = (numIndexBits * reuseBuffer.Length() + currentFirstUseBit +
+                         triangleStripTypes.Length() * 2 + 7) >>
+                        3;
     u32 size = vertexBitStreamSize + bitStreamSize;
     Assert(size < (1 << 16));
 
@@ -750,20 +750,16 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     writeOffset += vertexBitStreamSize;
 
     // Write reuse buffer (byte aligned)
-    u32 reuseBufferOffset = writeOffset;
-    u32 bitOffset         = writeOffset << 3;
-    u32 reuseWriteOffset  = 0;
-    u32 reuseBitWriteSize = Min(reuseBitOffset - reuseWriteOffset, 32u);
-    while (reuseWriteOffset != reuseBitOffset)
+    u32 bitOffset = writeOffset << 3;
+
+    for (u32 reuseIndex : reuseBuffer)
     {
-        WriteBits((u32 *)node->values, bitOffset, reuseBuffer.bits[reuseWriteOffset >> 5],
-                  reuseBitWriteSize);
-        reuseWriteOffset += reuseBitWriteSize;
-        reuseBitWriteSize = Min(reuseBitOffset - reuseWriteOffset, 32u);
+        WriteBits((u32 *)node->values, bitOffset, reuseIndex, numIndexBits);
     }
 
     // Write control bits
     u32 ctrlBitOffset = bitOffset;
+    Assert(triangleStripTypes.Length() == clusterNumTriangles - 1u);
     for (auto &type : triangleStripTypes)
     {
         Assert((u32)type < 4);
@@ -797,14 +793,22 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     packed.d = BitFieldPackI32(packed.d, min[2], headerOffset, ANCHOR_WIDTH);
     packed.d = BitFieldPackU32(packed.d, precision - CLUSTER_MIN_PRECISION, headerOffset, 8);
 
-    Assert(reuseBufferOffset < (1u << 11));
-    packed.e = BitFieldPackU32(packed.e, reuseBufferOffset, headerOffset, 11);
-    Assert(reuseBitOffset < (1u << 11));
-    packed.e = BitFieldPackU32(packed.e, reuseBitOffset, headerOffset, 11);
+    packed.e = BitFieldPackU32(packed.e, vertexCount, headerOffset, 9);
+    Assert(reuseBuffer.Length() < (1 << 8));
+    packed.e = BitFieldPackU32(packed.e, reuseBuffer.Length(), headerOffset, 8);
     packed.e = BitFieldPackU32(packed.e, numBitsY, headerOffset, 5);
     packed.e = BitFieldPackU32(packed.e, numBitsZ, headerOffset, 5);
 
     buildData.headers.AddBack() = packed;
+
+    // Debug
+    auto *typesNode = buildData.types.AddNode(triangleStripTypes.Length());
+    MemoryCopy(typesNode->values, triangleStripTypes.data,
+               sizeof(TriangleStripType) * triangleStripTypes.Length());
+
+    u32 numu32s        = (currentFirstUseBit + 31) >> 5;
+    auto *firstUseNode = buildData.firstUse.AddNode(numu32s);
+    MemoryCopy(firstUseNode->values, firstUse.bits, (currentFirstUseBit + 7) >> 3);
 
     ScratchEnd(clusterScratch);
 }

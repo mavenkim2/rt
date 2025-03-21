@@ -15,12 +15,6 @@ StructuredBuffer<GPUMaterial> materials : register(t4);
 
 [[vk::push_constant]] RayPushConstant push;
 
-template <uint pow2>
-uint AlignDownPow2(uint val)
-{
-    return val & ~(pow2 - 1);
-}
-
 struct BitStreamReader 
 {
     ByteAddressBuffer inputBuffer;
@@ -111,21 +105,22 @@ void DecodeTriangle(int primitiveIndex, out float3 p[3])
     uint blockIndex = primitiveIndex >> MAX_CLUSTER_TRIANGLES_BIT;
     uint triangleIndex = primitiveIndex & (MAX_CLUSTER_TRIANGLES - 1);
 
-    printf("block tri: %u %u\n", blockIndex, triangleIndex);
-    printf("test\n");
-
     DenseGeometry dg = GetDenseGeometryHeader(denseGeometryHeaders[blockIndex]);
     int3 indexAddress = int3(0, 1, 2);
     uint r = 1;
     int bt = 0;
     uint prevCtrl = Restart;
 
-    uint alignedStart = AlignDownPow2<4>(dg.baseAddress + (dg.ctrlBitOffset >> 3));
-    BitStreamReader reader = CreateBitStreamReader(denseGeometryData, alignedStart, dg.ctrlBitOffset, 
+    uint2 ctrlBaseAligned_bitOffset = GetAlignedAddressAndBitOffset(dg.baseAddress, dg.ctrlBitOffset);
+    uint alignedStart = ctrlBaseAligned_bitOffset[0];
+    uint bitOffset = ctrlBaseAligned_bitOffset[1];
+
+    BitStreamReader reader = CreateBitStreamReader(denseGeometryData, alignedStart, 
+                                                   bitOffset,
                                                    MAX_CLUSTER_TRIANGLES * 2);
 
     // TODO: branchless and loopless version?
-    for (int k = 1; k < triangleIndex; k++)
+    for (int k = 1; k <= triangleIndex; k++)
     {
         uint ctrl = reader.Read<2>(2);
         int3 prev = indexAddress;
@@ -159,9 +154,14 @@ void DecodeTriangle(int primitiveIndex, out float3 p[3])
         prevCtrl = ctrl;
     }
 
+    //printf("blockindex: %u, triindex: %u, base: %u, aligneds: %u, ctrl: %u, bito: %u, indices: %u %u %u\n", 
+    //blockIndex, triangleIndex, dg.baseAddress, alignedStart, dg.ctrlBitOffset, bitOffset, 
+    //indexAddress[0], indexAddress[1], indexAddress[2]);
+
     // Get the first bits mask
-    uint firstBitsOffset = dg.firstBitsOffset;
-    uint alignedFirstBitsOffset = AlignDownPow2<4>(dg.baseAddress + (firstBitsOffset >> 3));
+    uint2 baseAligned_bitOffset = GetAlignedAddressAndBitOffset(dg.baseAddress, dg.firstBitsOffset);
+    uint alignedFirstBitsOffset = baseAligned_bitOffset[0];
+    uint firstBitsOffset = baseAligned_bitOffset[1];
 
     uint4 firstBitMask = denseGeometryData.Load4(alignedFirstBitsOffset);
     uint firstBitMask2 = denseGeometryData.Load(alignedFirstBitsOffset + 16);
@@ -176,6 +176,8 @@ void DecodeTriangle(int primitiveIndex, out float3 p[3])
     numFirstBits[1] = countbits(firstBitMask[0]);
     numFirstBits[2] = numFirstBits[1] + countbits(firstBitMask[1]);
     numFirstBits[3] = numFirstBits[2] + countbits(firstBitMask[2]);
+
+    uint3 vids;
 
     [[unroll]]
     for (int k = 0; k < 3; k++)
@@ -192,8 +194,16 @@ void DecodeTriangle(int primitiveIndex, out float3 p[3])
         {
             vid = dg.DecodeReuse(indexAddress[k] - vid);
         }
+        vids[k] = vid;
         p[k] = dg.DecodePosition(vid);
     }
+    //printf("p0: %f %f %f, p1: %f %f %f, p2: %f %f %f\n", p[0].x, p[0].y, p[0].z, 
+    //p[1].x, p[1].y, p[1].z, p[2].x, p[2].y, p[2].z);
+    //printf("blockindex: %u, triindex: %u, base: %u, aligneds: %u, ctrl: %u, bito: %u, indices: %u %u %u\n", 
+    //blockIndex, triangleIndex, dg.baseAddress, alignedStart, dg.ctrlBitOffset, bitOffset, 
+    //vids[0], vids[1], vids[2]);
+    //printf("blockindex: %u, triindex: %u, anchor: %i %i %i, widths: %u %u %u\n", 
+    //blockIndex, triangleIndex, dg.anchor[0], dg.anchor[1], dg.anchor[2], dg.posBitWidths[0], dg.posBitWidths[1], dg.posBitWidths[2]);
 }
 
 [numthreads(PATH_TRACE_NUM_THREADS_X, PATH_TRACE_NUM_THREADS_Y, 1)]
@@ -303,8 +313,8 @@ void main(uint3 DTid : SV_DispatchThreadID)
 #endif
 
             // Get material
-            RTBindingData bindingData = rtBindingData[bindingDataIndex];
-            GPUMaterial material = materials[bindingData.materialIndex];
+            RTBindingData bindingData = rtBindingData[NonUniformResourceIndex(bindingDataIndex)];
+            GPUMaterial material = materials[NonUniformResourceIndex(bindingData.materialIndex)];
             float eta = material.eta;
 
             float3 wo = -normalize(query.CommittedObjectRayDirection());
@@ -385,6 +395,12 @@ void main(uint3 DTid : SV_DispatchThreadID)
             u = copysign(u, d.x);
             v = copysign(v, d.y);
             float2 uv = float2(0.5f * (u + 1), 0.5f * (v + 1));
+
+            uv = uv[0] < 0 ? float2(-uv[0], 1 - uv[1]) : uv;
+            uv = uv[0] >= 1 ? float2(2 - uv[0], 1 - uv[1]) : uv;
+
+            uv = uv[1] < 0 ? float2(1 - uv[0], -uv[1]) : uv;
+            uv = uv[1] >= 1 ? float2(1 - uv[0], 2 - uv[1]) : uv;
 
             float3 imageLe = bindlessTextures[push.envMap].SampleLevel(samplerLinearClamp, uv, 0).rgb;
             radiance += throughput * imageLe;
