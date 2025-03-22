@@ -64,6 +64,7 @@ __forceinline f32 Tan(const f32 x) { return ::tanf(x); }
 __forceinline f32 Atan2(const f32 y, const f32 x) { return ::atan2f(y, x); }
 __forceinline f32 Ceil(const f32 x) { return ::ceilf(x); }
 __forceinline f32 Floor(const f32 x) { return ::floorf(x); }
+__forceinline f32 Round(const f32 x) { return ::roundf(x); }
 __forceinline f32 Pow(const f32 x, const f32 y) { return ::powf(x, y); }
 __forceinline f32 Log2f(const f32 x) { return ::log2f(x); }
 __forceinline f32 Log(const f32 x) { return ::logf(x); }

@@ -63,6 +63,7 @@ b32 OS_SignalWait(OS_Handle input);
 void OS_Init();
 f32 OS_NowSeconds();
 void OS_Sleep(u32 ms);
+void OS_GetMousePos(OS_Handle handle, u32 &x, u32 &y);
 
 ChunkedLinkedList<OS_Event> &OS_GetEvents();
 

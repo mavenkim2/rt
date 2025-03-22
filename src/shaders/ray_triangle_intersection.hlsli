@@ -1,10 +1,9 @@
-#pragma warning(disable:G5793C645)
-
 bool RayTriangleIntersectionMollerTrumbore(float3 o, float3 d, float3 v0, float3 v1, float3 v2,
-                                           float tFar, out float intersectionT,
-                                           out float2 barycentrics)
+                                           out float intersectionT, out float2 barycentrics)
 {
-    const float epsilon = 1e-9;
+    intersectionT = 0;
+    barycentrics = 0;
+    const float epsilon = 1e-9f;
 
     const float3 e1 = v0 - v1;
     const float3 e2 = v2 - v0;
@@ -20,13 +19,14 @@ bool RayTriangleIntersectionMollerTrumbore(float3 o, float3 d, float3 v0, float3
     const float u = dot(dxt, e2) * invDet;
     const float v = dot(dxt, e1) * invDet;
 
+    barycentrics = float2(u, v);
+
     if (u < 0 || v < 0 || u + v > 1) return false;
 
-    const float t = dot(ng, c);
-    if (t <= 0 || t > abs(det) * tFar) return false;
-
-    tFar           = t * abs(invDet);
+    const float t = dot(ng, c) * invDet;
+    intersectionT = t;
     barycentrics.x = u;
     barycentrics.y = v;
+
     return true;
 }

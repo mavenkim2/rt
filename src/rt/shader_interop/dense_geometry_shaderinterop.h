@@ -30,6 +30,16 @@ struct PackedDenseGeometryHeader
     uint e;
 };
 
+struct AABB
+{
+    float minX;
+    float minY;
+    float minZ;
+    float maxX;
+    float maxY;
+    float maxZ;
+};
+
 #ifdef __cplusplus
 }
 #endif

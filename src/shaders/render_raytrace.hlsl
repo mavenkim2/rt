@@ -6,12 +6,16 @@
 #include "dense_geometry.hlsli"
 #include "../rt/shader_interop/ray_shaderinterop.h"
 #include "../rt/shader_interop/hit_shaderinterop.h"
+#include "../rt/shader_interop/debug_shaderinterop.h"
 
 RaytracingAccelerationStructure accel : register(t0);
 RWTexture2D<float4> image : register(u1);
 ConstantBuffer<GPUScene> scene : register(b2);
 StructuredBuffer<RTBindingData> rtBindingData : register(t3);
 StructuredBuffer<GPUMaterial> materials : register(t4);
+ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
+
+StructuredBuffer<AABB> aabbs : register(t8);
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -91,7 +95,7 @@ BitStreamReader CreateBitStreamReader(ByteAddressBuffer inputBuffer, uint aligne
     return result;
 }
 
-void DecodeTriangle(int primitiveIndex, out float3 p[3])
+DenseGeometry DecodeTriangle(uint3 DTid, int primitiveIndex, out float3 p[3])
 {
     enum 
     {
@@ -154,56 +158,67 @@ void DecodeTriangle(int primitiveIndex, out float3 p[3])
         prevCtrl = ctrl;
     }
 
-    //printf("blockindex: %u, triindex: %u, base: %u, aligneds: %u, ctrl: %u, bito: %u, indices: %u %u %u\n", 
-    //blockIndex, triangleIndex, dg.baseAddress, alignedStart, dg.ctrlBitOffset, bitOffset, 
-    //indexAddress[0], indexAddress[1], indexAddress[2]);
-
     // Get the first bits mask
     uint2 baseAligned_bitOffset = GetAlignedAddressAndBitOffset(dg.baseAddress, dg.firstBitsOffset);
     uint alignedFirstBitsOffset = baseAligned_bitOffset[0];
     uint firstBitsOffset = baseAligned_bitOffset[1];
 
-    uint4 firstBitMask = denseGeometryData.Load4(alignedFirstBitsOffset);
-    uint firstBitMask2 = denseGeometryData.Load(alignedFirstBitsOffset + 16);
+    uint4 firstBitMask[2];
+    firstBitMask[0] = denseGeometryData.Load4(alignedFirstBitsOffset);
+    firstBitMask[1] = denseGeometryData.Load4(alignedFirstBitsOffset + 16);
 
-    firstBitMask[0] = BitAlignU32(firstBitMask[1], firstBitMask[0], firstBitsOffset);
-    firstBitMask[1] = BitAlignU32(firstBitMask[2], firstBitMask[1], firstBitsOffset);
-    firstBitMask[2] = BitAlignU32(firstBitMask[3], firstBitMask[2], firstBitsOffset);
-    firstBitMask[3] = BitAlignU32(firstBitMask2, firstBitMask[3], firstBitsOffset);
+    firstBitMask[0][0] = BitAlignU32(firstBitMask[0][1], firstBitMask[0][0], firstBitsOffset);
+    firstBitMask[0][1] = BitAlignU32(firstBitMask[0][2], firstBitMask[0][1], firstBitsOffset);
+    firstBitMask[0][2] = BitAlignU32(firstBitMask[0][3], firstBitMask[0][2], firstBitsOffset);
+    firstBitMask[0][3] = BitAlignU32(firstBitMask[1][0], firstBitMask[0][3], firstBitsOffset);
 
-    uint4 numFirstBits;
-    numFirstBits[0] = 0; 
-    numFirstBits[1] = countbits(firstBitMask[0]);
-    numFirstBits[2] = numFirstBits[1] + countbits(firstBitMask[1]);
-    numFirstBits[3] = numFirstBits[2] + countbits(firstBitMask[2]);
+    firstBitMask[1][0] = BitAlignU32(firstBitMask[1][1], firstBitMask[1][0], firstBitsOffset);
+    firstBitMask[1][1] = BitAlignU32(firstBitMask[1][2], firstBitMask[1][1], firstBitsOffset);
+    firstBitMask[1][2] = BitAlignU32(firstBitMask[1][3], firstBitMask[1][2], firstBitsOffset);
+    firstBitMask[1][3] >>= firstBitsOffset;
+
+    uint4 numFirstBits[2];
+    numFirstBits[0][0] = 0; 
+    numFirstBits[0][1] = countbits(firstBitMask[0][0]);
+    numFirstBits[0][2] = numFirstBits[0][1] + countbits(firstBitMask[0][1]);
+    numFirstBits[0][3] = numFirstBits[0][2] + countbits(firstBitMask[0][2]);
+
+    numFirstBits[1][0] = numFirstBits[0][3] + countbits(firstBitMask[0][3]); 
+    numFirstBits[1][1] = numFirstBits[1][0] + countbits(firstBitMask[1][0]);  
+    numFirstBits[1][2] = numFirstBits[1][1] + countbits(firstBitMask[1][1]);   
+    numFirstBits[1][3] = numFirstBits[1][2] + countbits(firstBitMask[1][2]);
 
     uint3 vids;
+    uint3 reuseIds = uint3(0, 0, 0);
 
     [[unroll]]
     for (int k = 0; k < 3; k++)
     {
-        uint4 firstBitTestMask = firstBitMask;
-
-        uint dwordIndex = indexAddress[k] >> 5u;
+        uint arrayIndex = indexAddress[k] >> 7u;
+        uint dwordIndex = (indexAddress[k] >> 5u) & 0x3;
         uint bitIndex = indexAddress[k] & 31u;
         uint bit = 1u << bitIndex;
         uint mask = bit - 1u;
-        uint vid = numFirstBits[dwordIndex] + countbits(firstBitMask[dwordIndex] & mask);
+        uint vid = numFirstBits[arrayIndex][dwordIndex] + 
+                    countbits(firstBitMask[arrayIndex][dwordIndex] & mask);
 
-        if ((firstBitMask[dwordIndex] & bit) == 0)
+        if ((firstBitMask[arrayIndex][dwordIndex] & bit) == 0)
         {
+            reuseIds[k] = indexAddress[k] - vid;
             vid = dg.DecodeReuse(indexAddress[k] - vid);
         }
         vids[k] = vid;
         p[k] = dg.DecodePosition(vid);
     }
-    //printf("p0: %f %f %f, p1: %f %f %f, p2: %f %f %f\n", p[0].x, p[0].y, p[0].z, 
-    //p[1].x, p[1].y, p[1].z, p[2].x, p[2].y, p[2].z);
-    //printf("blockindex: %u, triindex: %u, base: %u, aligneds: %u, ctrl: %u, bito: %u, indices: %u %u %u\n", 
-    //blockIndex, triangleIndex, dg.baseAddress, alignedStart, dg.ctrlBitOffset, bitOffset, 
-    //vids[0], vids[1], vids[2]);
-    //printf("blockindex: %u, triindex: %u, anchor: %i %i %i, widths: %u %u %u\n", 
-    //blockIndex, triangleIndex, dg.anchor[0], dg.anchor[1], dg.anchor[2], dg.posBitWidths[0], dg.posBitWidths[1], dg.posBitWidths[2]);
+#if 0
+    if (all(DTid.xy == debugInfo.mousePos))
+    {
+        AABB aabb = aabbs[primitiveIndex];
+        dg.Print(debugInfo.mousePos, blockIndex, triangleIndex, p, indexAddress, 
+        vids, reuseIds, aabb);
+    }
+#endif
+    return dg;
 }
 
 [numthreads(PATH_TRACE_NUM_THREADS_X, PATH_TRACE_NUM_THREADS_Y, 1)]
@@ -253,15 +268,29 @@ void main(uint3 DTid : SV_DispatchThreadID)
             {
                 uint primID = query.CandidatePrimitiveIndex();
                 float3 p[3];
-                DecodeTriangle(primID, p);
+                DenseGeometry dg = DecodeTriangle(DTid, primID, p);
 
                 float tHit;
 
-                if (!RayTriangleIntersectionMollerTrumbore(query.CandidateObjectRayOrigin(), 
+                float2 tempBary;
+                float3 o = query.CandidateObjectRayOrigin();
+                float3 d = query.CandidateObjectRayDirection();
+
+                bool result = 
+                RayTriangleIntersectionMollerTrumbore(query.CandidateObjectRayOrigin(), 
                                                       query.CandidateObjectRayDirection(), 
                                                       p[0], p[1], p[2], 
-                                                      query.CommittedRayT(), tHit, bary)) continue;
+                                                      tHit, tempBary);
 
+                result &= (query.RayTMin() < tHit && tHit <= query.CommittedRayT());
+                if (all(DTid.xy == debugInfo.mousePos))
+                {
+                    printf("%f, %f, %f, %u\n", p[0].y, tHit, query.CommittedRayT(), result);
+                }
+ 
+                if (!result) continue;
+
+                bary = tempBary;
                 query.CommitProceduralPrimitiveHit(tHit);
             }
         }
@@ -306,7 +335,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
             uint primID = query.CommittedPrimitiveIndex();
 
             float3 p[3];
-            DecodeTriangle(primID, p);
+            DecodeTriangle(DTid, primID, p);
 
             float3 gn = normalize(cross(p[0] - p[2], p[1] - p[2]));
             float3 n = gn;

@@ -1,3 +1,4 @@
+#include "base.h"
 #include "math/basemath.h"
 #include "scene.h"
 #include "bvh/bvh_aos.h"
@@ -47,13 +48,16 @@ bool BitVector::GetBit(u32 bit)
 
 void DenseGeometryBuildData::Init()
 {
-    arena      = ArenaAlloc();
-    byteBuffer = ChunkedLinkedList<u8>(arena, 1024);
-    headers    = ChunkedLinkedList<PackedDenseGeometryHeader>(arena);
+    arena         = ArenaAlloc();
+    byteBuffer    = ChunkedLinkedList<u8>(arena, 1024);
+    headers       = ChunkedLinkedList<PackedDenseGeometryHeader>(arena);
+    triangleOrder = ChunkedLinkedList<u32>(arena);
 
     // Debug
-    types    = ChunkedLinkedList<TriangleStripType>(arena);
-    firstUse = ChunkedLinkedList<u32>(arena);
+    types        = ChunkedLinkedList<TriangleStripType>(arena);
+    firstUse     = ChunkedLinkedList<u32>(arena);
+    reuse        = ChunkedLinkedList<u32>(arena);
+    debugIndices = ChunkedLinkedList<u32>(arena);
 }
 
 void DenseGeometryBuildData::Merge(DenseGeometryBuildData &other)
@@ -214,7 +218,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes,
         // Quantize to global grid
         for (int j = 0; j < mesh.numVertices; j++)
         {
-            quantizedVertices[i][j] = Vec3i(mesh.p[j] * quantize + 0.5f);
+            quantizedVertices[i][j] = Vec3i(Round(mesh.p[j] * quantize));
         }
     }
 
@@ -509,20 +513,9 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     StaticArray<TriangleStripType> triangleStripTypes(clusterScratch.arena,
                                                       clusterNumTriangles);
 
-    BitVector vertexBitStream(clusterScratch.arena, numBits);
-    u32 vertexBitOffset  = 0;
-    u32 addedVertexCount = 0;
-
-    StaticArray<u32> mapOldIndexToDGFIndex(clusterScratch.arena, vertexCount, vertexCount);
-
-    u32 maxReuseBufferSize = clusterNumTriangles * 3;
-    StaticArray<u32> reuseBuffer(clusterScratch.arena, maxReuseBufferSize);
-    u32 maxReuseIndex = 0;
-
-    BitVector firstUse(clusterScratch.arena, clusterNumTriangles * 3);
-    BitVector usedVertices(clusterScratch.arena, vertexCount);
-    u32 currentFirstUseBit = 0;
-    u32 numReuse           = 0;
+    StaticArray<u32> newIndexOrder(clusterScratch.arena, clusterNumTriangles * 3);
+    StaticArray<u32> debugIndexOrder(clusterScratch.arena, clusterNumTriangles * 3);
+    StaticArray<u32> triangleOrder(clusterScratch.arena, clusterNumTriangles * 3);
 
     u32 prevTriangle = minValenceTriangle;
 
@@ -540,40 +533,25 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
         return false;
     };
 
-    auto CheckUsedTriangles = [&](u32 geomID, u32 index) {
-        if (usedVertices.GetBit(index))
-        {
-            currentFirstUseBit++;
-            reuseBuffer.Push(mapOldIndexToDGFIndex[index]);
-            maxReuseIndex = Max(mapOldIndexToDGFIndex[index], maxReuseIndex);
-        }
-        else
-        {
-            usedVertices.SetBit(index);
-            firstUse.SetBit(currentFirstUseBit);
-            currentFirstUseBit++;
-            mapOldIndexToDGFIndex[index] = addedVertexCount++;
-
-            for (int i = 0; i < 3; i++)
-            {
-                int p = vertices[index][i] - min[i];
-                Assert(p >= 0);
-                vertexBitStream.WriteBits(vertexBitOffset, p, bitWidths[i]);
-            }
-        }
-    };
-
     auto MarkUsed = [&](u32 triangle) { counts[minValenceTriangle] |= removedBit; };
 
     u32 firstIndices[3];
     GetIndices(firstIndices, minValenceTriangle);
     u32 firstGeomId = geomIDs[minValenceTriangle];
-    CheckUsedTriangles(firstGeomId, firstIndices[0]);
-    CheckUsedTriangles(firstGeomId, firstIndices[1]);
-    CheckUsedTriangles(firstGeomId, firstIndices[2]);
+    newIndexOrder.Push(firstIndices[0]);
+    newIndexOrder.Push(firstIndices[1]);
+    newIndexOrder.Push(firstIndices[2]);
+
+    debugIndexOrder.Push(firstIndices[0]);
+    debugIndexOrder.Push(firstIndices[1]);
+    debugIndexOrder.Push(firstIndices[2]);
+
+    triangleOrder.Push(minValenceTriangle);
+
     MarkUsed(minValenceTriangle);
 
     // TODO: half edge structure instead of hash table?
+    // Find the new ordering of triangles and construct the triangle strip
     for (u32 numAddedTriangles = 1; numAddedTriangles < clusterNumTriangles;
          numAddedTriangles++)
     {
@@ -599,9 +577,15 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                 GetIndices(indices, minValenceTriangle);
                 u32 geomID = geomIDs[minValenceTriangle];
 
-                CheckUsedTriangles(geomID, indices[0]);
-                CheckUsedTriangles(geomID, indices[1]);
-                CheckUsedTriangles(geomID, indices[2]);
+                newIndexOrder.Push(indices[0]);
+                newIndexOrder.Push(indices[1]);
+                newIndexOrder.Push(indices[2]);
+
+                debugIndexOrder.Push(indices[0]);
+                debugIndexOrder.Push(indices[1]);
+                debugIndexOrder.Push(indices[2]);
+
+                triangleOrder.Push(minValenceTriangle);
                 continue;
             }
             // Backtrack
@@ -646,6 +630,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
             Assert(minCount != ~0u);
         }
         Assert(newMinValenceTriangle != ~0u);
+        triangleOrder.Push(newMinValenceTriangle);
 
         // Find what edge is shared, and rotate
         u32 indices[3];
@@ -667,8 +652,11 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                     vertexIndices[3 * newMinValenceTriangle]     = indices[1];
                     vertexIndices[3 * newMinValenceTriangle + 1] = indices[2];
                     vertexIndices[3 * newMinValenceTriangle + 2] = indices[0];
+                    newIndexOrder.Push(indices[0]);
 
-                    CheckUsedTriangles(geomID, indices[0]);
+                    debugIndexOrder.Push(indices[1]);
+                    debugIndexOrder.Push(indices[2]);
+                    debugIndexOrder.Push(indices[0]);
                 }
                 // [0, 1, 2] -> [2, 0, 1]
                 else if (edgeIndex == 2)
@@ -676,12 +664,19 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                     vertexIndices[3 * newMinValenceTriangle]     = indices[2];
                     vertexIndices[3 * newMinValenceTriangle + 1] = indices[0];
                     vertexIndices[3 * newMinValenceTriangle + 2] = indices[1];
+                    newIndexOrder.Push(indices[1]);
 
-                    CheckUsedTriangles(geomID, indices[1]);
+                    debugIndexOrder.Push(indices[2]);
+                    debugIndexOrder.Push(indices[0]);
+                    debugIndexOrder.Push(indices[1]);
                 }
                 else
                 {
-                    CheckUsedTriangles(geomID, indices[2]);
+                    newIndexOrder.Push(indices[2]);
+
+                    debugIndexOrder.Push(indices[0]);
+                    debugIndexOrder.Push(indices[1]);
+                    debugIndexOrder.Push(indices[2]);
                 }
 
                 u32 oldIndices[3];
@@ -710,10 +705,18 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                             Assert(numAddedTriangles == 1 ||
                                    triangleStripTypes[numAddedTriangles - 2] ==
                                        TriangleStripType::Restart);
+                            newIndexOrder[newIndexOrder.Length() - 4] = oldIndices[2];
+                            newIndexOrder[newIndexOrder.Length() - 3] = oldIndices[0];
+                            newIndexOrder[newIndexOrder.Length() - 2] = oldIndices[1];
                             vertexIndices[3 * minValenceTriangle]     = oldIndices[2];
                             vertexIndices[3 * minValenceTriangle + 1] = oldIndices[0];
                             vertexIndices[3 * minValenceTriangle + 2] = oldIndices[1];
-                            oldEdgeIndex                              = 1;
+
+                            debugIndexOrder[debugIndexOrder.Length() - 6] = oldIndices[2];
+                            debugIndexOrder[debugIndexOrder.Length() - 5] = oldIndices[0];
+                            debugIndexOrder[debugIndexOrder.Length() - 4] = oldIndices[1];
+
+                            oldEdgeIndex = 1;
                         }
                         triangleStripTypes.Push(oldEdgeIndex == 1 ? TriangleStripType::Edge1
                                                                   : TriangleStripType::Edge2);
@@ -730,27 +733,62 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     // Append all data
     auto &buildData = buildDatas[0];
 
-    Assert(vertexBitOffset == numBits);
-    u32 vertexBitStreamSize = (vertexBitOffset + 7) >> 3;
-    u32 numIndexBits        = Log2Int(maxReuseIndex) + 1;
+    u32 vertexBitStreamSize = (numBits + 7) >> 3;
+    u32 baseAddress         = buildData.byteBuffer.Length();
+
+    // Use the new index order to write compressed vertex buffer and reuse buffer
+    u32 maxReuseBufferSize = clusterNumTriangles * 3;
+    StaticArray<u32> mapOldIndexToDGFIndex(clusterScratch.arena, vertexCount, vertexCount);
+    StaticArray<u32> reuseBuffer(clusterScratch.arena, maxReuseBufferSize);
+    u32 maxReuseIndex = 0;
+
+    BitVector firstUse(clusterScratch.arena, clusterNumTriangles * 3);
+    u32 currentFirstUseBit = 0;
+    BitVector usedVertices(clusterScratch.arena, vertexCount);
+    u32 addedVertexCount = 0;
+
+    u32 bitOffset = 0;
+    auto *node    = buildData.byteBuffer.AddNode(vertexBitStreamSize);
+    for (auto index : newIndexOrder)
+    {
+        if (usedVertices.GetBit(index))
+        {
+            currentFirstUseBit++;
+            reuseBuffer.Push(mapOldIndexToDGFIndex[index]);
+            maxReuseIndex = Max(mapOldIndexToDGFIndex[index], maxReuseIndex);
+        }
+        else
+        {
+            usedVertices.SetBit(index);
+            firstUse.SetBit(currentFirstUseBit);
+            currentFirstUseBit++;
+            mapOldIndexToDGFIndex[index] = addedVertexCount;
+            addedVertexCount++;
+
+            for (int i = 0; i < 3; i++)
+            {
+                int p = vertices[index][i] - min[i];
+                Assert(p >= 0);
+                WriteBits((u32 *)node->values, bitOffset, p, bitWidths[i]);
+            }
+        }
+    }
+
+    for (u32 i = 0; i < debugIndexOrder.Length(); i++)
+    {
+        debugIndexOrder[i] = mapOldIndexToDGFIndex[debugIndexOrder[i]];
+    }
+
+    Assert(bitOffset == numBits);
+    bitOffset = 0;
+
+    // Write reuse buffer (byte aligned)
+    u32 numIndexBits = Log2Int(maxReuseIndex) + 1;
     Assert(numIndexBits >= 1 && numIndexBits <= 8);
     u32 bitStreamSize = (numIndexBits * reuseBuffer.Length() + currentFirstUseBit +
                          triangleStripTypes.Length() * 2 + 7) >>
                         3;
-    u32 size = vertexBitStreamSize + bitStreamSize;
-    Assert(size < (1 << 16));
-
-    u32 baseAddress = buildData.byteBuffer.Length();
-
-    // Write compressed vertex buffer
-    auto *node = buildData.byteBuffer.AddNode(size);
-    MemoryCopy(node->values, vertexBitStream.bits, vertexBitStreamSize);
-
-    u32 writeOffset = 0;
-    writeOffset += vertexBitStreamSize;
-
-    // Write reuse buffer (byte aligned)
-    u32 bitOffset = writeOffset << 3;
+    node = buildData.byteBuffer.AddNode(bitStreamSize);
 
     for (u32 reuseIndex : reuseBuffer)
     {
@@ -801,6 +839,15 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
 
     buildData.headers.AddBack() = packed;
 
+    // Reorder refs
+    PrimRef *tempRefs = PushArrayNoZero(clusterScratch.arena, PrimRef, clusterNumTriangles);
+    MemoryCopy(tempRefs, primRefs + start, clusterNumTriangles * sizeof(PrimRef));
+
+    for (int i = 0; i < clusterNumTriangles; i++)
+    {
+        primRefs[start + i] = tempRefs[triangleOrder[i]];
+    }
+
     // Debug
     auto *typesNode = buildData.types.AddNode(triangleStripTypes.Length());
     MemoryCopy(typesNode->values, triangleStripTypes.data,
@@ -810,6 +857,12 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     auto *firstUseNode = buildData.firstUse.AddNode(numu32s);
     MemoryCopy(firstUseNode->values, firstUse.bits, (currentFirstUseBit + 7) >> 3);
 
+    auto *reuseNode = buildData.reuse.AddNode(reuseBuffer.Length());
+    MemoryCopy(reuseNode->values, reuseBuffer.data, reuseBuffer.Length() * sizeof(u32));
+
+    auto *debugIndexNode = buildData.debugIndices.AddNode(debugIndexOrder.Length());
+    MemoryCopy(debugIndexNode->values, debugIndexOrder.data,
+               debugIndexOrder.Length() * sizeof(u32));
     ScratchEnd(clusterScratch);
 }
 

@@ -85,7 +85,7 @@ struct DenseGeometry
         uint2 packed = uint2(BitAlignU32(data.y, data.x, vals[1]), 
                              BitAlignU32(data.z, data.y, vals[1]));
 
-        int3 pos;
+        int3 pos = int3(0, 0, 0);
         pos.x = BitFieldExtractU32(packed.x, posBitWidths.x, 0);
         packed.x = BitAlignU32(packed.y, packed.x, posBitWidths.x);
 
@@ -106,6 +106,24 @@ struct DenseGeometry
         uint2 result = denseGeometryData.Load2(vals[0]);
         uint r = BitFieldExtractU32(BitAlignU32(result.y, result.x, vals[1]), indexBitWidth, 0);
         return r;
+    }
+
+    void Print() 
+    {
+        printf("anchor: %i %i %i\nbit widths: %u %u %u %u\nnum tri: %u\nnum vert: %u, offsets: index %u ctrl %u first %u\nprecision: %u\n", 
+            anchor[0], anchor[1], anchor[2], posBitWidths[0], posBitWidths[1], posBitWidths[2], indexBitWidth,
+            numTriangles, numVertices, indexOffset, ctrlBitOffset, firstBitsOffset, posPrecision);
+    }
+
+    void Print(uint2 cursor, uint blockIndex, uint triIndex, float3 p[3], uint3 indexAddress, uint3 vids, uint3 reuseIds, AABB aabb) 
+    {
+        printf("cursor: %u %u\nanchor: %i %i %i\nbit widths: %u %u %u %u\nnum tri: %u\nnum vert: %u, offsets: index %u ctrl %u first %u\nprecision: %u\nblockindex: %u triIndex: %u\n, p: %f %f %f %f %f %f %f %f %f\nindex address: %u %u %u\nvids: %u %u %u\n, reuse: %u %u %u\naabb: %f %f %f %f %f %f\n", 
+            cursor[0], cursor[1], anchor[0], anchor[1], anchor[2], posBitWidths[0], posBitWidths[1], posBitWidths[2], indexBitWidth,
+            numTriangles, numVertices, indexOffset, ctrlBitOffset, firstBitsOffset, posPrecision, 
+            blockIndex, triIndex, 
+            p[0][0], p[0][1], p[0][2], p[1][0], p[1][1], p[1][2],p[2][0], p[2][1], p[2][2], 
+            indexAddress[0], indexAddress[1], indexAddress[2], vids[0], vids[1], vids[2], 
+            reuseIds[0], reuseIds[1], reuseIds[2], aabb.minX, aabb.minY, aabb.minZ, aabb.maxX, aabb.maxY, aabb.maxZ);
     }
 };
 

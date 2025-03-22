@@ -309,6 +309,12 @@ __forceinline Vec3<T> Ceil(const Vec3<T> &v)
 }
 
 template <typename T>
+__forceinline Vec3<T> Round(const Vec3<T> &v)
+{
+    return Vec3<T>(Round(v.x), Round(v.y), Round(v.z));
+}
+
+template <typename T>
 __forceinline Vec3<T> FMA(const Vec3<T> &a, const Vec3<T> &b, const Vec3<T> &c)
 {
     return Vec3<T>(FMA(a.x, b.x, c.x), FMA(a.y, b.y, c.y), FMA(a.z, b.z, c.z));

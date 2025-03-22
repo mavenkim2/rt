@@ -646,6 +646,18 @@ f32 OS_NowSeconds()
 
 void OS_Sleep(u32 ms) { Sleep(ms); }
 
+void OS_GetMousePos(OS_Handle handle, u32 &x, u32 &y)
+{
+    POINT pos;
+    if (GetCursorPos(&pos))
+    {
+        HWND windowHandle = (HWND)handle.handle;
+        ScreenToClient(windowHandle, &pos);
+        x = (u32)pos.x;
+        y = (u32)pos.y;
+    }
+}
+
 inline u64 InterlockedAdd(u64 volatile *addend, u64 value)
 {
     return InterlockedExchangeAdd64((volatile LONG64 *)addend, value);

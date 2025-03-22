@@ -225,6 +225,7 @@ enum class RTBindings
     GPUMaterial,
     DenseGeometryData,
     PackedDenseGeometryHeaders,
+    ShaderDebugInfo,
 };
 
 struct RayTracingState

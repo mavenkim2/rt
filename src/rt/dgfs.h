@@ -60,11 +60,14 @@ struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
     Arena *arena;
     ChunkedLinkedList<u8> byteBuffer;
     ChunkedLinkedList<PackedDenseGeometryHeader> headers;
+    ChunkedLinkedList<u32> triangleOrder;
     u32 numBlocks;
 
     // Debug
     ChunkedLinkedList<TriangleStripType> types;
     ChunkedLinkedList<u32> firstUse;
+    ChunkedLinkedList<u32> reuse;
+    ChunkedLinkedList<u32> debugIndices;
 
     void Init();
     void Merge(DenseGeometryBuildData &other);

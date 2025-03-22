@@ -10,6 +10,7 @@
 #include "shader_interop/gpu_scene_shaderinterop.h"
 #include "shader_interop/hit_shaderinterop.h"
 #include "shader_interop/ray_shaderinterop.h"
+#include "shader_interop/debug_shaderinterop.h"
 #include "scene.h"
 #include "vulkan.h"
 #include "win32.h"
@@ -217,6 +218,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     PackedDenseGeometryHeader *headers;
     TriangleStripType **types;
     u32 **firstUses;
+    u32 **reuses;
+    u32 **debugIndices;
+    VkAabbPositionsKHR *positions;
 
     for (int i = 0; i < numScenes; i++)
     {
@@ -240,8 +244,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                               MAX_CLUSTER_TRIANGLES * data.numBlocks);
 
         // Debug
+        positions = aabbs.data;
         types = PushArrayNoZero(sceneScratch.temp.arena, TriangleStripType *, data.numBlocks);
-        firstUses = PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
+        firstUses    = PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
+        reuses       = PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
+        debugIndices = PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
 
         u32 pos = 0;
         for (int i = 0; i < builder.threadClusters.Length(); i++)
@@ -278,7 +285,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         aabbLength = aabbs.Length();
         aabbBuffer = dgfTransferCmd->SubmitBuffer(
-            aabbs.data, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+            aabbs.data,
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             aabbs.Length() * sizeof(VkAabbPositionsKHR));
 
         // Combine all blocks together
@@ -305,6 +314,16 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         for (auto *node = data.firstUse.first; node != 0; node = node->next)
         {
             firstUses[c++] = node->values;
+        }
+        c = 0;
+        for (auto *node = data.reuse.first; node != 0; node = node->next)
+        {
+            reuses[c++] = node->values;
+        }
+        c = 0;
+        for (auto *node = data.debugIndices.first; node != 0; node = node->next)
+        {
+            debugIndices[c++] = node->values;
         }
 
         dgfTransferCmd->Signal(scene->semaphore);
@@ -376,15 +395,15 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     gpuScene.dyCamera         = params->dyCamera;
     gpuScene.focalLength      = params->focalLength;
 
+    ShaderDebugInfo shaderDebug;
+
     GPUMaterial gpuMaterial;
     gpuMaterial.eta = 1.1;
 
     RTBindingData bindingData;
     bindingData.materialIndex = 0;
 
-    CommandBuffer *transferCmd    = device->BeginCommandBuffer(QueueType_Copy);
-    GPUBuffer sceneTransferBuffer = transferCmd->SubmitBuffer(
-        &gpuScene, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene));
+    CommandBuffer *transferCmd  = device->BeginCommandBuffer(QueueType_Copy);
     GPUBuffer bindingDataBuffer = transferCmd->SubmitBuffer(
         &bindingData, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(RTBindingData));
     GPUBuffer materialBuffer = transferCmd->SubmitBuffer(
@@ -437,6 +456,13 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     int packedDenseGeometryHeaderBufferIndex =
         layout.AddBinding((u32)RTBindings::PackedDenseGeometryHeaders,
                           VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT);
+
+    int shaderDebugIndex =
+        layout.AddBinding((u32)RTBindings::ShaderDebugInfo, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                          VK_SHADER_STAGE_COMPUTE_BIT);
+
+    int aabbIndex =
+        layout.AddBinding(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT);
 
     layout.AddImmutableSamplers();
 
@@ -536,6 +562,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     Vec3f baseRight   = camera.right;
 
     TransferBuffer sceneTransferBuffers[2] = {
+        device->GetStagingBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene)),
+        device->GetStagingBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene))};
+
+    TransferBuffer shaderDebugBuffers[2] = {
         device->GetStagingBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene)),
         device->GetStagingBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene))};
 
@@ -639,6 +669,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                 AffineSpace(axis, Vec3f(0)) * Translate(cameraStart - camera.position);
 
             gpuScene.renderFromCamera = Inverse(cameraFromRender);
+            OS_GetMousePos(params->window, shaderDebug.mousePos.x, shaderDebug.mousePos.y);
         }
 
         device->BeginFrame();
@@ -662,7 +693,13 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         u32 currentBuffer = device->GetCurrentBuffer();
         MemoryCopy(sceneTransferBuffers[currentBuffer].mappedPtr, &gpuScene, sizeof(GPUScene));
         cmd->SubmitTransfer(&sceneTransferBuffers[currentBuffer]);
+        MemoryCopy(shaderDebugBuffers[currentBuffer].mappedPtr, &shaderDebug,
+                   sizeof(ShaderDebugInfo));
+        cmd->SubmitTransfer(&shaderDebugBuffers[currentBuffer]);
+
         cmd->Barrier(&sceneTransferBuffers[currentBuffer].buffer,
+                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+        cmd->Barrier(&shaderDebugBuffers[currentBuffer].buffer,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->Barrier(image, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_ACCESS_2_SHADER_WRITE_BIT);
@@ -675,7 +712,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             .Bind(bindingDataBindingIndex, &bindingDataBuffer)
             .Bind(gpuMaterialBindingIndex, &materialBuffer)
             .Bind(denseGeometryBufferIndex, &dgfBuffer)
-            .Bind(packedDenseGeometryHeaderBufferIndex, &headerBuffer);
+            .Bind(packedDenseGeometryHeaderBufferIndex, &headerBuffer)
+            .Bind(shaderDebugIndex, &shaderDebugBuffers[currentBuffer].buffer)
+            .Bind(aabbIndex, &aabbBuffer);
         cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &descriptorSet,
                                 layout.pipelineLayout);
 
