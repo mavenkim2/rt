@@ -351,6 +351,9 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     Vec3i min(pos_inf);
     Vec3i max(neg_inf);
 
+    Vec2u minOct(pos_inf);
+    Vec2u maxOct(neg_inf);
+
     for (int i = start; i < start + clusterNumTriangles; i++)
     {
         u32 geomID     = primRefs[i].geomID;
@@ -368,6 +371,11 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
         {
             min = Min(min, quantizedVertices[geomID][indices[indexIndex]]);
             max = Max(max, quantizedVertices[geomID][indices[indexIndex]]);
+
+            u32 normal = octNormals[geomID][indices[indexIndex]];
+            Vec2u n    = Vec2u(normal >> 16, normal & ((1 << 16) - 1));
+            minOct     = Min(minOct, n);
+            maxOct     = Max(maxOct, n);
 
             auto *hashedIndex = vertexHashSet.Find({geomID, indices[indexIndex]});
             if (hashedIndex)
@@ -394,6 +402,10 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     u32 numBitsY = min[1] == max[1] ? 0 : Log2Int(Max(max[1] - min[1], 1)) + 1;
     u32 numBitsZ = min[2] == max[2] ? 0 : Log2Int(Max(max[2] - min[2], 1)) + 1;
 
+    u32 numOctBitsX = minOct[0] == maxOct[0] ? 0 : Log2Int(Max(maxOct[0] - minOct[0], 1u)) + 1;
+    u32 numOctBitsY = minOct[1] == maxOct[1] ? 0 : Log2Int(Max(maxOct[1] - minOct[1], 1u)) + 1;
+
+    Assert(numOctBitsX <= 16 && numOctBitsY <= 16);
     Assert(numBitsX < 24 && numBitsY < 24 && numBitsZ < 24);
     Assert(numBitsX + numBitsY + numBitsZ < 64);
     Assert(Abs(min[0]) < (1 << 23) && Abs(min[1]) < (1 << 23) && Abs(min[2]) < (1 << 23));
@@ -746,6 +758,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     auto &buildData = buildDatas[0];
 
     u32 vertexBitStreamSize = (numBits + 7) >> 3;
+    u32 normalBitStreamSize = (vertexCount * (numOctBitsX + numOctBitsY) + 7) >> 3;
     u32 baseAddress         = buildData.byteBuffer.Length();
 
     // Use the new index order to write compressed vertex buffer and reuse buffer
@@ -761,8 +774,12 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
 
     u32 bitOffset       = 0;
     u32 normalBitOffset = 0;
-    auto *vertexNode    = buildData.byteBuffer.AddNode(vertexBitStreamSize);
-    auto *normalNode    = buildData.byteBuffer.AddNode(sizeof(u32) * vertexCount);
+
+    ChunkedLinkedList<u8>::ChunkNode *vertexNode = 0;
+    if (vertexBitStreamSize) vertexNode = buildData.byteBuffer.AddNode(vertexBitStreamSize);
+    ChunkedLinkedList<u8>::ChunkNode *normalNode = 0;
+    if (normalBitStreamSize) normalNode = buildData.byteBuffer.AddNode(normalBitStreamSize);
+
     for (auto index : newIndexOrder)
     {
         if (usedVertices.GetBit(index))
@@ -779,13 +796,23 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
             mapOldIndexToDGFIndex[index] = addedVertexCount;
             addedVertexCount++;
 
-            for (int i = 0; i < 3; i++)
+            if (vertexNode)
             {
-                int p = vertices[index][i] - min[i];
-                Assert(p >= 0);
-                WriteBits((u32 *)vertexNode->values, bitOffset, p, bitWidths[i]);
+                for (int i = 0; i < 3; i++)
+                {
+                    int p = vertices[index][i] - min[i];
+                    Assert(p >= 0);
+                    WriteBits((u32 *)vertexNode->values, bitOffset, p, bitWidths[i]);
+                }
             }
-            WriteBits((u32 *)normalNode->values, normalBitOffset, normals[index], 32);
+            u32 normal  = normals[index];
+            u32 normalX = (normal >> 16) - minOct[0];
+            u32 normalY = (normal & ((1 << 16) - 1)) - minOct[1];
+            if (normalNode)
+            {
+                WriteBits((u32 *)normalNode->values, normalBitOffset, normalX, numOctBitsX);
+                WriteBits((u32 *)normalNode->values, normalBitOffset, normalY, numOctBitsY);
+            }
         }
     }
 
@@ -795,7 +822,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     // }
 
     Assert(bitOffset == numBits);
-    Assert(normalBitOffset == sizeof(u32) * vertexCount * 8);
+    Assert(normalBitOffset == vertexCount * (numOctBitsX + numOctBitsY));
     bitOffset = 0;
 
     // Write reuse buffer (byte aligned)
@@ -852,6 +879,12 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     packed.e = BitFieldPackU32(packed.e, reuseBuffer.Length(), headerOffset, 8);
     packed.e = BitFieldPackU32(packed.e, numBitsY, headerOffset, 5);
     packed.e = BitFieldPackU32(packed.e, numBitsZ, headerOffset, 5);
+    packed.e = BitFieldPackU32(packed.e, numOctBitsX, headerOffset, 5);
+
+    packed.f     = numOctBitsY;
+    headerOffset = 0;
+    packed.g     = BitFieldPackU32(packed.f, minOct[0], headerOffset, 16);
+    packed.g     = BitFieldPackU32(packed.f, minOct[1], headerOffset, 16);
 
     buildData.headers.AddBack() = packed;
 

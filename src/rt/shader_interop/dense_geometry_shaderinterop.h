@@ -28,6 +28,8 @@ struct PackedDenseGeometryHeader
     uint c;
     uint d;
     uint e;
+    uint f;
+    uint g;
 };
 
 struct AABB

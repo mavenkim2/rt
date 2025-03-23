@@ -82,14 +82,19 @@ float Dequantize(uint n)
     return float(n) / ((1u << N) - 1);
 }
 
-float3 DecodeOctahedral(uint n) 
+float3 UnpackOctahedral(float2 v)
 {
-    float2 decoded = float2(Dequantize<16>((n >> 16) & 0xffff),
-                            Dequantize<16>((n & 0xffff))) * 2 - 1; 
-    float3 normal = float3(decoded.xy, 1 - abs(decoded.x) - abs(decoded.y));
+    float3 normal = float3(v.xy, 1 - abs(v.x) - abs(v.y));
     float t = saturate(-normal.z);
     normal.xy += select(normal.xy >= 0.f, -t, t);
     return normalize(normal);
+}
+
+float3 DecodeOctahedral(uint n) 
+{
+    float2 decoded = float2(Dequantize<16>((n >> 16) & 0xffff),
+            Dequantize<16>((n & 0xffff))) * 2 - 1; 
+    return UnpackOctahedral(decoded);
 }
 
 float3 Transform(float4x4 m, float3 p)

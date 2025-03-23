@@ -143,8 +143,12 @@ struct DenseGeometry
     uint triangleIndex;
 
     int3 anchor;
+    uint2 octBase;
+
     uint3 posBitWidths;
+    uint2 octBitWidths;
     uint indexBitWidth;
+
     uint numTriangles;
     uint numVertices;
 
@@ -295,13 +299,17 @@ struct DenseGeometry
 
     float3 DecodeNormal(uint vertexIndex)
     {
-        const uint bitsPerNormal = 32;
+        const uint bitsPerNormal = octBitWidths[0] + octBitWidths[1];
         const uint bitsOffset = bitsPerNormal * vertexIndex;
 
         uint2 vals = GetAlignedAddressAndBitOffset(baseAddress + normalOffset, bitsOffset);
         uint2 data = denseGeometryData.Load2(vals[0]);
         uint n = BitAlignU32(data.y, data.x, vals[1]);
-        return DecodeOctahedral(n);
+
+        float nx = Dequantize<16>(BitFieldExtractU32(n, octBitWidths[0], 0) + octBase[0]);
+        float ny = Dequantize<16>(BitFieldExtractU32(n, octBitWidths[1], octBitWidths[0]) + octBase[1]);
+
+        return UnpackOctahedral(float2(nx, ny));
     }
 
     uint DecodeReuse(uint reuseIndex)
@@ -362,11 +370,17 @@ DenseGeometry GetDenseGeometryHeader(uint primitiveIndex)
     uint reuseBufferLength = BitFieldExtractU32(packed.e, 8, 9);
     result.posBitWidths[1] = BitFieldExtractU32(packed.e, 5, 17);
     result.posBitWidths[2] = BitFieldExtractU32(packed.e, 5, 22);
+    result.octBitWidths[0] = BitFieldExtractU32(packed.e, 5, 27);
+
+    result.octBitWidths[1] = packed.f;
+    result.octBase[0] = BitFieldExtractU32(packed.g, 16, 0);
+    result.octBase[1] = BitFieldExtractU32(packed.g, 16, 16);
 
     // Size of vertex buffer and normal buffer
     const uint vertexBitWidth = result.posBitWidths[0] + result.posBitWidths[1] + result.posBitWidths[2];
+    const uint octBitWidth = result.octBitWidths[0] + result.octBitWidths[1];
     result.normalOffset = (result.numVertices * vertexBitWidth + 7) >> 3;
-    result.indexOffset = result.normalOffset + 4 * result.numVertices;
+    result.indexOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
     result.ctrlBitOffset = (result.indexOffset << 3) + reuseBufferLength * result.indexBitWidth;
     result.firstBitsOffset = result.ctrlBitOffset + 2 * (result.numTriangles - 1);
     return result;
