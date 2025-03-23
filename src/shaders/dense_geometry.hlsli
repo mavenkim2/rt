@@ -54,9 +54,16 @@ uint2 GetAlignedAddressAndBitOffset(uint baseAddress, uint bitOffset)
 {
     uint byteAligned = baseAddress + (bitOffset >> 3);
     uint aligned = AlignDownPow2<4>(byteAligned);
-    uint newBitOffset = ((byteAligned - aligned) << 3) + (bitOffset & 0x7);
+    uint newBitOffset = ((byteAligned & 3u) << 3) | (bitOffset & 0x7);
 
     return uint2(aligned, newBitOffset);
+}
+
+uint ReadUnalignedDword(ByteAddressBuffer buffer, uint baseAddress, uint bitOffset)
+{
+    const uint indices = GetAlignedAddressAndBitOffset(baseAddress, bitOffset);
+    const uint2 data = buffer.Load2(indices[0]);
+    return BitFieldAlignU32(data.y, data.x, bitOffset);
 }
 
 struct BitStreamReader 
@@ -158,6 +165,11 @@ struct DenseGeometry
     uint firstBitsOffset;
     int posPrecision;
 
+    uint prevNumReuses;
+    // result of calling firstbithigh on each dword
+    uint prevHighReuses;
+    uint prevHighBacktracks; 
+
     uint3 DecodeTriangle(uint3 DTid, out float3 p[3])
     {
         enum 
@@ -182,7 +194,138 @@ struct DenseGeometry
                                                        bitOffset,
                                                        MAX_CLUSTER_TRIANGLES * 2);
 
-        // TODO: branchless and loopless version?
+        uint ctrl;
+        // TODO: store 21 bits for num before dword for restart/edge1or2/backtrack?
+        uint2 restartAligned_bitOffset = GetAlignedAddressAndBitOffset(baseAddress, restartBitsOffset);
+        uint alignedRestartStart = restartAligned_bitOffset[0];
+        uint restartBitsOffset = restartAligned_bitOffset[1];
+
+        uint4 restartBitMask;
+        uint restartBitMask2;
+        restartBitMask = denseGeometryData.Load4(restartBitsOffset);
+        restartBitMask2 = denseGeometryData.Load4(restartBitsOffset + 16);
+
+        restartBitMask[0] = BitAlignU32(restartBitMask[1], restartBitMask[0], restartBitsOffset);
+        restartBitMask[1] = BitAlignU32(restartBitMask[2], restartBitMask[1], restartBitsOffset);
+        restartBitMask[2] = BitAlignU32(restartBitMask[3], restartBitMask[2], restartBitsOffset);
+        restartBitMask[2] = BitAlignU32(restartBitMask2, restartBitMask[3], restartBitsOffset);
+
+        uint4 numRestartBits;
+        numRestartBits[0] = 0; 
+        numRestartBits[1] = countbits(restartBitMask[0]);
+        numRestartBits[2] = restartBitMask[1] + countbits(restartBitMask[1]);
+        numRestartBits[3] = restartBitMask[2] + countbits(restartBitMask[2]);
+
+        // i need to know:
+        // number of restarts at any arbitrary triangle index/when restarts occur
+        // triangleIndex of the last triangle type different to the current one
+        // prev ctrl and current ctrl
+
+        uint dwordIndex = triangleIndex >> 5;
+        uint bitIndex = triangleIndex & 31u;
+
+        uint bit = (1u << bitIndex);
+        uint mask = (1u << bitIndex) - 1u;
+        uint numRestarts = numRestartBits[dwordIndex] + 
+                            countbits(restartBitMask[dwordIndex] & mask);
+        uint r = numRestarts + 1;
+
+        uint restartDwordIndex = (numRestartBits[0]);
+        uint isRestart = restartBitMask[dwordIndex] & bit;
+        uint isBacktrack = backtrackBitMask[dwordIndex] & bit;
+        uint isEdge1 = edgeBitMask[dwordIndex] & bit;
+
+        const uint3 stripBitmasks = denseGeometryData.Load3(baseAddress + stripBitmaskOffset + dwordIndex * 12);
+        (LocalClusterIndex * (NANITE_MAX_CLUSTER_TRIANGLES / 32) + DwordIndex) * 12);
+
+        // Restart
+        if (isRestart)
+        {
+            r++;
+            indexAddress = uint3(2 * r + k - 2, 2 * r + k - 1, 2 * r + k);
+        }
+        // Backtrack, edge1 or edge2
+        else
+        {
+            indexAddress = uint3(0, 2 * r + k - 1 - isBacktrack, 2 * r + triangleIndex);
+
+            // edgeBitMask is set to 1 when ctrl is edge1, otherwise it's 0.
+            // backtrackBitMask is set to 1 when bitIndex + 1 is a backtrack
+
+            // ALL CASES
+            // CURRENT IS RESTART: trivial case
+            // CURRENT IS EDGE1, need to find what prev[1] is 
+            // find the first previous triangle that is not an EDGE1, NOR a backtrack with a prev ctrl of EDGE2
+            //       if it's restart, then 2 * r + prevTriangle - 1
+            //       if it's edge2, then 2 * r + prevTriangle - 1
+            //       if it's backtrack w/ prevctrl of EDGE1, then 2 * r + prevTriangle - 2
+            // CURRENT IS EDGE2, need to find what prev[0] is 
+            // find the first previous triangle that is not an EDGE2, NOR a backtrack with a prev ctrl of EDGE1
+            //       if it's restart, then 2 * r + prevTriangle - 2
+            //       if it's edge1, then 2 * r + prevTriangle - 1
+            //       if it's backtrack w/ prevctrl of EDGE2, then 2 * r + prevTriangle - 2
+            // CURRENT IS BACKTRACK, follow EDGE1 or EDGE2 rules based on opposite of prevCtrl. 
+            // For example, if prevCtrl is EDGE1, then we follow EDGE2 rules
+
+            int restartHighBit = firstbithigh(restartBitMask & mask);
+            // TODO: need to think about this more
+            int otherEdgeHighBit = firstbithigh(((~restartBitMask & ((backtrackBitMask ^ isEdge1Mask) ^ edgeBitMask)) & mask));
+            otherEdgeHighBit == -1 ? (dwordIndex ? : 0u) : ;
+
+            int prevRestartTriangle = restartHighBit == -1 ? (dwordIndex ? BitFieldExtractU32(prevHighReuses, 7, (dwordIndex - 1) * 7u) : 0u) : restartHighBit + dwordIndex * 32;
+            int prevOtherEdgeTriangle = otherEdgeHighBit == -1 ? (dwordIndex ? BitFieldExtractU32(prevHighBacktracks, 7, (dwordIndex - 1) * 7u) : 0u) : backtrackHighBit + dwordIndex * 32;
+
+
+            uint prevTriangle = max(prevRestartTriangle, max(prevBacktrackTriangle, prevOtherEdgeTriangle));
+            uint isEdge1Restart = isEdge1 && (prevRestartTriangle == prevTriangle);
+            isEdge1 = isBackTrack ? prevCtrl != Edge1 : isEdge1;
+
+            uint increment = (prevOtherEdgeTriangle == prevTriangle || isEdge1Restart);
+            indexAddress[0] = 2 * r + prevTriangle - 2 + increment;
+
+#if 0
+            // NOTE: worst case, every triangle is edge1 or edge2
+            for (uint index = dwordIndex; index >= 0; index--)
+            {
+                uint restartLoc = firstbithigh(restartBitMask[index] & mask);
+                uint edgeBitMask = ReadUnalignedDword(denseGeometryData, baseAddress, edgeBitsOffset + (dwordIndex << 3));
+                uint backtrackBitMask = ReadUnalignedDword(denseGeometryData, baseAddress, backtrackBitsOffset + (dwordIndex << 3));
+
+                uint otherEdgeLoc = firstbithigh((edgeBitMask ^ isEdge1) & mask);
+                uint backtrackLoc = firstbithigh(backtrackBitMask & mask);
+                restartLoc = index == 0 && restartLoc == ~0u ? 0 : restartLoc;
+
+                uint valid = (min(restartLoc, otherEdgeLoc, backtrackLoc) != ~0u);
+                if (valid)
+                {
+                    uint prevTriangleIndex = max(restartLoc, otherEdgeLoc, backtrackLoc) + (dwordIndex * 32);
+                    uint increment = ((otherEdgeLoc > restartLoc && otherEdgeLoc > backtrackLoc)
+                            || (isEdge1 && restartLoc > otherEdgeLoc && restartLoc > backtrackLoc));
+                    indexAddress[0] = 2 * r + prevTriangleIndex - 2 + increment;
+                    break;
+                }
+                mask = ~0u;
+            }
+#endif
+            indexAddress = isEdge1 ? indexAddress.yxz : indexAddress;
+
+            // Find the earliest previous triangle that is not also Edge1
+            //if (Restart)
+            //{
+            //    indexAddress[1] = 2 * r + prevTriangleIndex - 2;
+            //    if edge2 : indexAddress[1] = 2 * r + prevTriangleIndex - 1;
+            //}
+            //if (Edge2)
+            //{
+            //    indexAddress[1] = 2 * r + prevTriangleIndex - 1;
+            //}
+            //if (Backtract)
+            //{
+            //    indexAddress[1] = 2 * r + prevTriangleIndex - 2;
+            //}
+        }
+
+#if 0
         for (int k = 1; k <= triangleIndex; k++)
         {
             uint ctrl = reader.Read<2>(2);
@@ -216,6 +359,7 @@ struct DenseGeometry
             }
             prevCtrl = ctrl;
         }
+#endif
 
         // Get the first bits mask
         uint2 baseAligned_bitOffset = GetAlignedAddressAndBitOffset(baseAddress, firstBitsOffset);
