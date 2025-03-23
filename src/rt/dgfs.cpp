@@ -48,16 +48,17 @@ bool BitVector::GetBit(u32 bit)
 
 void DenseGeometryBuildData::Init()
 {
-    arena         = ArenaAlloc();
-    byteBuffer    = ChunkedLinkedList<u8>(arena, 1024);
-    headers       = ChunkedLinkedList<PackedDenseGeometryHeader>(arena);
-    triangleOrder = ChunkedLinkedList<u32>(arena);
+    arena      = ArenaAlloc();
+    byteBuffer = ChunkedLinkedList<u8>(arena, 1024);
+    headers    = ChunkedLinkedList<PackedDenseGeometryHeader>(arena);
 
     // Debug
+#if 0
     types        = ChunkedLinkedList<TriangleStripType>(arena);
     firstUse     = ChunkedLinkedList<u32>(arena);
     reuse        = ChunkedLinkedList<u32>(arena);
     debugIndices = ChunkedLinkedList<u32>(arena);
+#endif
 }
 
 void DenseGeometryBuildData::Merge(DenseGeometryBuildData &other)
@@ -204,21 +205,26 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes,
 #endif
 
     ScratchArena meshScratch;
-    Vec3i **quantizedVertices = PushArrayNoZero(meshScratch.temp.arena, Vec3i *, numMeshes);
+    StaticArray<StaticArray<Vec3i>> quantizedVertices(meshScratch.temp.arena, numMeshes);
+    StaticArray<StaticArray<u32>> octNormals(meshScratch.temp.arena, numMeshes);
 
     u32 indexTotal = 0;
 
     for (int i = 0; i < numMeshes; i++)
     {
         Mesh &mesh = meshes[i];
-        quantizedVertices[i] =
-            PushArrayNoZero(meshScratch.temp.arena, Vec3i, mesh.numVertices);
+        quantizedVertices.Push(StaticArray<Vec3i>(meshScratch.temp.arena, mesh.numVertices));
+        if (mesh.n)
+        {
+            octNormals.Push(StaticArray<u32>(meshScratch.temp.arena, mesh.numVertices));
+        }
         indexTotal += mesh.numIndices;
 
         // Quantize to global grid
         for (int j = 0; j < mesh.numVertices; j++)
         {
-            quantizedVertices[i][j] = Vec3i(Round(mesh.p[j] * quantize));
+            quantizedVertices[i].Push(Vec3i(Round(mesh.p[j] * quantize)));
+            octNormals[i].Push(EncodeOctahedral(mesh.n[j]));
         }
     }
 
@@ -233,7 +239,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes,
             {
                 RecordAOSSplits &cluster = node->values[clusterIndex];
                 CreateDGFs(buildData, meshScratch.temp.arena, meshes, quantizedVertices,
-                           cluster, precision);
+                           octNormals, cluster, precision);
             }
         }
     }
@@ -286,8 +292,9 @@ u32 BitAlignU32(u32 high, u32 low, u32 shift)
 }
 
 void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena, Mesh *meshes,
-                                Vec3i **quantizedVertices, RecordAOSSplits &cluster,
-                                int precision)
+                                const StaticArray<StaticArray<Vec3i>> &quantizedVertices,
+                                const StaticArray<StaticArray<u32>> &octNormals,
+                                RecordAOSSplits &cluster, int precision)
 {
     static const u32 LUT[] = {1, 2, 0};
     struct HashedIndex
@@ -319,12 +326,16 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                                        NextPowerOfTwo(clusterNumTriangles * 3));
 
     // TODO: section 4.3?
-    u32 *vertexIndices = PushArray(clusterScratch.arena, u32, clusterNumTriangles * 3);
-    u32 *geomIDs       = PushArray(clusterScratch.arena, u32, clusterNumTriangles);
-    u32 *clusterVertexIndexToMeshVertexIndex =
-        PushArray(clusterScratch.arena, u32, clusterNumTriangles * 3);
+    StaticArray<u32> vertexIndices(clusterScratch.arena, clusterNumTriangles * 3,
+                                   clusterNumTriangles * 3);
+    StaticArray<u32> geomIDs(clusterScratch.arena, clusterNumTriangles, clusterNumTriangles);
+    StaticArray<u32> clusterVertexIndexToMeshVertexIndex(
+        clusterScratch.arena, clusterNumTriangles * 3, clusterNumTriangles * 3);
 
-    Vec3i *vertices = PushArrayNoZero(clusterScratch.arena, Vec3i, clusterNumTriangles * 3);
+    StaticArray<Vec3i> vertices(clusterScratch.arena, clusterNumTriangles * 3,
+                                clusterNumTriangles * 3);
+    StaticArray<u32> normals(clusterScratch.arena, clusterNumTriangles * 3,
+                             clusterNumTriangles * 3);
 
     u32 vertexCount = 0;
     u32 indexCount  = 0;
@@ -371,6 +382,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                 vertexIndices[indexCount++]                      = vertexCount;
 
                 vertices[vertexCount] = quantizedVertices[geomID][indices[indexIndex]];
+                normals[vertexCount]  = octNormals[geomID][indices[indexIndex]];
                 vertexCount++;
             }
         }
@@ -514,7 +526,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                                                       clusterNumTriangles);
 
     StaticArray<u32> newIndexOrder(clusterScratch.arena, clusterNumTriangles * 3);
-    StaticArray<u32> debugIndexOrder(clusterScratch.arena, clusterNumTriangles * 3);
+    // StaticArray<u32> debugIndexOrder(clusterScratch.arena, clusterNumTriangles * 3);
     StaticArray<u32> triangleOrder(clusterScratch.arena, clusterNumTriangles * 3);
 
     u32 prevTriangle = minValenceTriangle;
@@ -542,9 +554,9 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     newIndexOrder.Push(firstIndices[1]);
     newIndexOrder.Push(firstIndices[2]);
 
-    debugIndexOrder.Push(firstIndices[0]);
-    debugIndexOrder.Push(firstIndices[1]);
-    debugIndexOrder.Push(firstIndices[2]);
+    // debugIndexOrder.Push(firstIndices[0]);
+    // debugIndexOrder.Push(firstIndices[1]);
+    // debugIndexOrder.Push(firstIndices[2]);
 
     triangleOrder.Push(minValenceTriangle);
 
@@ -581,9 +593,9 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                 newIndexOrder.Push(indices[1]);
                 newIndexOrder.Push(indices[2]);
 
-                debugIndexOrder.Push(indices[0]);
-                debugIndexOrder.Push(indices[1]);
-                debugIndexOrder.Push(indices[2]);
+                // debugIndexOrder.Push(indices[0]);
+                // debugIndexOrder.Push(indices[1]);
+                // debugIndexOrder.Push(indices[2]);
 
                 triangleOrder.Push(minValenceTriangle);
                 continue;
@@ -654,9 +666,9 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                     vertexIndices[3 * newMinValenceTriangle + 2] = indices[0];
                     newIndexOrder.Push(indices[0]);
 
-                    debugIndexOrder.Push(indices[1]);
-                    debugIndexOrder.Push(indices[2]);
-                    debugIndexOrder.Push(indices[0]);
+                    // debugIndexOrder.Push(indices[1]);
+                    // debugIndexOrder.Push(indices[2]);
+                    // debugIndexOrder.Push(indices[0]);
                 }
                 // [0, 1, 2] -> [2, 0, 1]
                 else if (edgeIndex == 2)
@@ -666,17 +678,17 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                     vertexIndices[3 * newMinValenceTriangle + 2] = indices[1];
                     newIndexOrder.Push(indices[1]);
 
-                    debugIndexOrder.Push(indices[2]);
-                    debugIndexOrder.Push(indices[0]);
-                    debugIndexOrder.Push(indices[1]);
+                    // debugIndexOrder.Push(indices[2]);
+                    // debugIndexOrder.Push(indices[0]);
+                    // debugIndexOrder.Push(indices[1]);
                 }
                 else
                 {
                     newIndexOrder.Push(indices[2]);
 
-                    debugIndexOrder.Push(indices[0]);
-                    debugIndexOrder.Push(indices[1]);
-                    debugIndexOrder.Push(indices[2]);
+                    // debugIndexOrder.Push(indices[0]);
+                    // debugIndexOrder.Push(indices[1]);
+                    // debugIndexOrder.Push(indices[2]);
                 }
 
                 u32 oldIndices[3];
@@ -712,9 +724,9 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                             vertexIndices[3 * minValenceTriangle + 1] = oldIndices[0];
                             vertexIndices[3 * minValenceTriangle + 2] = oldIndices[1];
 
-                            debugIndexOrder[debugIndexOrder.Length() - 6] = oldIndices[2];
-                            debugIndexOrder[debugIndexOrder.Length() - 5] = oldIndices[0];
-                            debugIndexOrder[debugIndexOrder.Length() - 4] = oldIndices[1];
+                            // debugIndexOrder[debugIndexOrder.Length() - 6] = oldIndices[2];
+                            // debugIndexOrder[debugIndexOrder.Length() - 5] = oldIndices[0];
+                            // debugIndexOrder[debugIndexOrder.Length() - 4] = oldIndices[1];
 
                             oldEdgeIndex = 1;
                         }
@@ -747,8 +759,10 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     BitVector usedVertices(clusterScratch.arena, vertexCount);
     u32 addedVertexCount = 0;
 
-    u32 bitOffset = 0;
-    auto *node    = buildData.byteBuffer.AddNode(vertexBitStreamSize);
+    u32 bitOffset       = 0;
+    u32 normalBitOffset = 0;
+    auto *vertexNode    = buildData.byteBuffer.AddNode(vertexBitStreamSize);
+    auto *normalNode    = buildData.byteBuffer.AddNode(sizeof(u32) * vertexCount);
     for (auto index : newIndexOrder)
     {
         if (usedVertices.GetBit(index))
@@ -769,17 +783,19 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
             {
                 int p = vertices[index][i] - min[i];
                 Assert(p >= 0);
-                WriteBits((u32 *)node->values, bitOffset, p, bitWidths[i]);
+                WriteBits((u32 *)vertexNode->values, bitOffset, p, bitWidths[i]);
             }
+            WriteBits((u32 *)normalNode->values, normalBitOffset, normals[index], 32);
         }
     }
 
-    for (u32 i = 0; i < debugIndexOrder.Length(); i++)
-    {
-        debugIndexOrder[i] = mapOldIndexToDGFIndex[debugIndexOrder[i]];
-    }
+    // for (u32 i = 0; i < debugIndexOrder.Length(); i++)
+    // {
+    //     debugIndexOrder[i] = mapOldIndexToDGFIndex[debugIndexOrder[i]];
+    // }
 
     Assert(bitOffset == numBits);
+    Assert(normalBitOffset == sizeof(u32) * vertexCount * 8);
     bitOffset = 0;
 
     // Write reuse buffer (byte aligned)
@@ -788,7 +804,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     u32 bitStreamSize = (numIndexBits * reuseBuffer.Length() + currentFirstUseBit +
                          triangleStripTypes.Length() * 2 + 7) >>
                         3;
-    node = buildData.byteBuffer.AddNode(bitStreamSize);
+    auto *node = buildData.byteBuffer.AddNode(bitStreamSize);
 
     for (u32 reuseIndex : reuseBuffer)
     {
@@ -849,6 +865,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     }
 
     // Debug
+#if 0
     auto *typesNode = buildData.types.AddNode(triangleStripTypes.Length());
     MemoryCopy(typesNode->values, triangleStripTypes.data,
                sizeof(TriangleStripType) * triangleStripTypes.Length());
@@ -863,6 +880,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     auto *debugIndexNode = buildData.debugIndices.AddNode(debugIndexOrder.Length());
     MemoryCopy(debugIndexNode->values, debugIndexOrder.data,
                debugIndexOrder.Length() * sizeof(u32));
+#endif
     ScratchEnd(clusterScratch);
 }
 

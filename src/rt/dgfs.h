@@ -60,14 +60,15 @@ struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
     Arena *arena;
     ChunkedLinkedList<u8> byteBuffer;
     ChunkedLinkedList<PackedDenseGeometryHeader> headers;
-    ChunkedLinkedList<u32> triangleOrder;
     u32 numBlocks;
 
     // Debug
+#if 0
     ChunkedLinkedList<TriangleStripType> types;
     ChunkedLinkedList<u32> firstUse;
     ChunkedLinkedList<u32> reuse;
     ChunkedLinkedList<u32> debugIndices;
+#endif
 
     void Init();
     void Merge(DenseGeometryBuildData &other);
@@ -84,8 +85,10 @@ struct ClusterBuilder
     void BuildClusters(RecordAOSSplits &record, bool parallel);
     void CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes, int numMeshes,
                     Bounds &sceneBounds);
-    void CreateDGFs(DenseGeometryBuildData *data, Arena *arena, Mesh *meshes,
-                    Vec3i **quantizedVertices, RecordAOSSplits &cluster, int precision);
+    void CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena, Mesh *meshes,
+                    const StaticArray<StaticArray<Vec3i>> &quantizedVertices,
+                    const StaticArray<StaticArray<u32>> &normals, RecordAOSSplits &cluster,
+                    int precision);
 };
 
 #if 0

@@ -164,13 +164,13 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
 
 // what's next?
 // 1. restir di
-// 2. dgfs or dmms
+// 2. dgf attributes
 // 3. clas
 //      - are memory savings possible with this? it seems like not really, and that this
 //      just speeds up rebuilds for dynamic/adaptively tessellated geometry. not really
 //      what I need.
+//      - on blackwell there's memory savings
 // 4. actual bsdfs and brdfs
-//      - compress vertices? interleave normal info?
 // 5. add other parts of the scene, with actual instancing
 // 6. disney bsdf
 // 7. recycle memory
@@ -216,11 +216,13 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     data.Init();
     u8 *dgfByteBuffer;
     PackedDenseGeometryHeader *headers;
+#if 0
     TriangleStripType **types;
     u32 **firstUses;
     u32 **reuses;
     u32 **debugIndices;
     VkAabbPositionsKHR *positions;
+#endif
 
     for (int i = 0; i < numScenes; i++)
     {
@@ -244,11 +246,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                               MAX_CLUSTER_TRIANGLES * data.numBlocks);
 
         // Debug
-        positions = aabbs.data;
-        types = PushArrayNoZero(sceneScratch.temp.arena, TriangleStripType *, data.numBlocks);
-        firstUses    = PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
-        reuses       = PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
-        debugIndices = PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
+        // positions = aabbs.data;
+        // types = PushArrayNoZero(sceneScratch.temp.arena, TriangleStripType *,
+        // data.numBlocks); firstUses    = PushArrayNoZero(sceneScratch.temp.arena, u32 *,
+        // data.numBlocks); reuses       = PushArrayNoZero(sceneScratch.temp.arena, u32 *,
+        // data.numBlocks); debugIndices = PushArrayNoZero(sceneScratch.temp.arena, u32 *,
+        // data.numBlocks);
 
         u32 pos = 0;
         for (int i = 0; i < builder.threadClusters.Length(); i++)
@@ -305,26 +308,26 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             sizeof(PackedDenseGeometryHeader) * data.headers.Length());
 
         // Debug
-        int c = 0;
-        for (auto *node = data.types.first; node != 0; node = node->next)
-        {
-            types[c++] = node->values;
-        }
-        c = 0;
-        for (auto *node = data.firstUse.first; node != 0; node = node->next)
-        {
-            firstUses[c++] = node->values;
-        }
-        c = 0;
-        for (auto *node = data.reuse.first; node != 0; node = node->next)
-        {
-            reuses[c++] = node->values;
-        }
-        c = 0;
-        for (auto *node = data.debugIndices.first; node != 0; node = node->next)
-        {
-            debugIndices[c++] = node->values;
-        }
+        // int c = 0;
+        // for (auto *node = data.types.first; node != 0; node = node->next)
+        // {
+        //     types[c++] = node->values;
+        // }
+        // c = 0;
+        // for (auto *node = data.firstUse.first; node != 0; node = node->next)
+        // {
+        //     firstUses[c++] = node->values;
+        // }
+        // c = 0;
+        // for (auto *node = data.reuse.first; node != 0; node = node->next)
+        // {
+        //     reuses[c++] = node->values;
+        // }
+        // c = 0;
+        // for (auto *node = data.debugIndices.first; node != 0; node = node->next)
+        // {
+        //     debugIndices[c++] = node->values;
+        // }
 
         dgfTransferCmd->Signal(scene->semaphore);
 
