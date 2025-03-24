@@ -217,12 +217,15 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     u8 *dgfByteBuffer;
     PackedDenseGeometryHeader *headers;
 #if 0
-    TriangleStripType **types;
     u32 **firstUses;
     u32 **reuses;
-    u32 **debugIndices;
     VkAabbPositionsKHR *positions;
 #endif
+    TriangleStripType **types;
+    u32 **debugIndices;
+
+    u32 **debugRestartCount;
+    u32 **debugRestartHighBit;
 
     for (int i = 0; i < numScenes; i++)
     {
@@ -247,11 +250,13 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         // Debug
         // positions = aabbs.data;
-        // types = PushArrayNoZero(sceneScratch.temp.arena, TriangleStripType *,
-        // data.numBlocks); firstUses    = PushArrayNoZero(sceneScratch.temp.arena, u32 *,
+        types = PushArrayNoZero(sceneScratch.temp.arena, TriangleStripType *, data.numBlocks);
+        // firstUses    = PushArrayNoZero(sceneScratch.temp.arena, u32 *,
         // data.numBlocks); reuses       = PushArrayNoZero(sceneScratch.temp.arena, u32 *,
-        // data.numBlocks); debugIndices = PushArrayNoZero(sceneScratch.temp.arena, u32 *,
         // data.numBlocks);
+        debugIndices        = PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
+        debugRestartHighBit = PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
+        debugRestartCount   = PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
 
         u32 pos = 0;
         for (int i = 0; i < builder.threadClusters.Length(); i++)
@@ -308,11 +313,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             sizeof(PackedDenseGeometryHeader) * data.headers.Length());
 
         // Debug
-        // int c = 0;
-        // for (auto *node = data.types.first; node != 0; node = node->next)
-        // {
-        //     types[c++] = node->values;
-        // }
+        int c = 0;
+        for (auto *node = data.types.first; node != 0; node = node->next)
+        {
+            types[c++] = node->values;
+        }
         // c = 0;
         // for (auto *node = data.firstUse.first; node != 0; node = node->next)
         // {
@@ -323,11 +328,21 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         // {
         //     reuses[c++] = node->values;
         // }
-        // c = 0;
-        // for (auto *node = data.debugIndices.first; node != 0; node = node->next)
-        // {
-        //     debugIndices[c++] = node->values;
-        // }
+        c = 0;
+        for (auto *node = data.debugIndices.first; node != 0; node = node->next)
+        {
+            debugIndices[c++] = node->values;
+        }
+        c = 0;
+        for (auto *node = data.debugRestartHighBitPerDword.first; node != 0; node = node->next)
+        {
+            debugRestartHighBit[c++] = node->values;
+        }
+        c = 0;
+        for (auto *node = data.debugRestartCountPerDword.first; node != 0; node = node->next)
+        {
+            debugRestartCount[c++] = node->values;
+        }
 
         dgfTransferCmd->Signal(scene->semaphore);
 

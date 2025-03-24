@@ -142,7 +142,8 @@ struct JobDeque
         if (t < b)
         {
             result = true;
-            out    = buffer[t & mask];
+            // TODO IMPORTANT: this sometimes errors out???
+            out = buffer[t & mask];
             if (!top.compare_exchange_strong(t, t + 1, std::memory_order_seq_cst,
                                              std::memory_order_relaxed))
             {

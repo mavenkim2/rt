@@ -41,6 +41,7 @@ struct BitVector
     u32 maxNumBits;
     BitVector(Arena *arena, u32 maxNumBits);
     void SetBit(u32 bit);
+    void UnsetBit(u32 bit);
     bool GetBit(u32 bit);
     void WriteBits(u32 &position, u32 value, u32 numBits);
 };
@@ -64,11 +65,14 @@ struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
 
     // Debug
 #if 0
-    ChunkedLinkedList<TriangleStripType> types;
     ChunkedLinkedList<u32> firstUse;
     ChunkedLinkedList<u32> reuse;
-    ChunkedLinkedList<u32> debugIndices;
 #endif
+    ChunkedLinkedList<TriangleStripType> types;
+    ChunkedLinkedList<u32> debugIndices;
+
+    ChunkedLinkedList<u32> debugRestartCountPerDword;
+    ChunkedLinkedList<u32> debugRestartHighBitPerDword;
 
     void Init();
     void Merge(DenseGeometryBuildData &other);

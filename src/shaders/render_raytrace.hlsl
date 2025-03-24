@@ -69,15 +69,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
                 float3 p[3];
 
                 DenseGeometry dg = GetDenseGeometryHeader(primID);
-                uint3 vids = dg.DecodeTriangle(DTid, p);
-
-#if 0
-                if (all(DTid.xy == debugInfo.mousePos))
-                {
-                    AABB aabb = aabbs[primID];
-                    dg.Print(debugInfo.mousePos, p, uint3(0, 0, 0), vids, uint3(0, 0, 0), aabb);
-                }
-#endif
+                uint3 vids = dg.DecodeTriangle(p, all(DTid.xy == debugInfo.mousePos));
 
                 float tHit;
                 float2 tempBary;
@@ -138,20 +130,13 @@ void main(uint3 DTid : SV_DispatchThreadID)
             float3 p[3];
 
             DenseGeometry dg = GetDenseGeometryHeader(primID);
-            uint3 vids = dg.DecodeTriangle(DTid, p);
+            uint3 vids = dg.DecodeTriangle(p);
             float3 gn = normalize(cross(p[0] - p[2], p[1] - p[2]));
 
             float3 n0 = dg.DecodeNormal(vids[0]);
             float3 n1 = dg.DecodeNormal(vids[1]);
             float3 n2 = dg.DecodeNormal(vids[2]);
 
-#if 1
-            if (all(DTid.xy == debugInfo.mousePos))
-            {
-                printf("n0: %f %f %f, n1: %f %f %f, n2: %f %f %f\n", n0.x, n0.y, n0.z,
-                        n1.x, n1.y, n1.z, n2.x, n2.y, n2.z);
-            }
-#endif
 #endif
             float3 n = normalize(n0 + (n1 - n0) * bary[0] + (n2 - n0) * bary[1]);
 

@@ -154,16 +154,16 @@ struct DenseGeometry
 
     uint normalOffset;
     uint indexOffset;
-    uint ctrlBitOffset;
-    uint firstBitsOffset;
+    uint ctrlOffset;
+    uint firstBitOffset;
     int posPrecision;
 
     uint3 numPrevRestartsBeforeDwords;
     uint3 prevHighRestartBeforeDwords;
-    uint3 prevHighEdge1BeforeDwords;
-    uint3 prevHighEdge2BeforeDwords;
+    int3 prevHighEdge1BeforeDwords;
+    int3 prevHighEdge2BeforeDwords;
 
-    uint3 DecodeTriangle(uint3 DTid, out float3 p[3])
+    uint3 DecodeTriangle(out float3 p[3], bool printDebug = false)
     {
         enum 
         {
@@ -183,26 +183,26 @@ struct DenseGeometry
         uint mask = (1u << bitIndex) - 1u;
 
         // x = restarts, y = edge, z = backtrack
-        uint2 vals = GetAlignedAddressAndBitOffset(baseAddress + ctrlBitOffset, dwordIndex * 12);
+        uint2 vals = GetAlignedAddressAndBitOffset(baseAddress + ctrlOffset + dwordIndex * 12, 0);
         uint4 stripBitmasks = denseGeometryData.Load4(vals[0]);
         stripBitmasks[0] = BitAlignU32(stripBitmasks[1], stripBitmasks[0], vals[1]);
         stripBitmasks[1] = BitAlignU32(stripBitmasks[2], stripBitmasks[1], vals[1]);
         stripBitmasks[2] = BitAlignU32(stripBitmasks[3], stripBitmasks[2], vals[1]);
 
-        uint restartBitmask = stripBitmasks[0];
-        uint edgeBitmask = stripBitmasks[1];
-        uint backtrackBitmask = stripBitmasks[2];
+        const uint restartBitmask = stripBitmasks[0];
+        const uint edgeBitmask = stripBitmasks[1];
+        const uint backtrackBitmask = stripBitmasks[2] & mask;
 
         // Count the number of strip restarts
         uint prevRestartsBeforeDwords = dwordIndex ? numPrevRestartsBeforeDwords[dwordIndex - 1] : 0u;
-        uint numRestarts = countbits(restartBitmask) + prevRestartsBeforeDwords;
-        uint r = numRestarts + 1;
+        uint numRestarts = countbits(restartBitmask & mask) + prevRestartsBeforeDwords;
+        uint r = numRestarts;
 
-        uint isRestart = stripBitmasks[0] & bit;
-        uint isEdge1 = stripBitmasks[1] & bit;
-        uint isBacktrack = stripBitmasks[2] & bit;
+        const uint isRestart = BitFieldExtractU32(stripBitmasks[0], 1, bitIndex);
+        const uint isEdge1 = BitFieldExtractU32(stripBitmasks[1], 1, bitIndex);
+        const uint isBacktrack = BitFieldExtractU32(stripBitmasks[2], 1, bitIndex);
 
-        uint isEdge1Bitmask = (0u - (isEdge1 != 0));
+        const uint isEdge1Bitmask = 0u - isEdge1;
 
         // Restart
         if (isRestart)
@@ -214,14 +214,8 @@ struct DenseGeometry
         else
         {
             indexAddress.z = 2 * r + triangleIndex;
-            triangleIndex -= isBacktrack;
-            dwordIndex = triangleIndex >> 5;
-            bitIndex = triangleIndex & 31u;
-
-            indexAddress.y = 2 * r + triangleIndex - 1;
-
-            // edgeBitMask is set to 1 when ctrl is edge1, otherwise it's 0.
-            // backtrackBitMask is set to 1 when bitIndex + 1 is a backtrack
+            mask >>= isBacktrack;
+            indexAddress.y = 2 * r + triangleIndex - 1 - isBacktrack;
 
             // ALL CASES
             // CURRENT IS RESTART: trivial case
@@ -239,22 +233,27 @@ struct DenseGeometry
             // For example, if prevCtrl is EDGE1, then we follow EDGE2 rules
 
             int restartHighBit = firstbithigh(restartBitmask & mask);
-            int otherEdgeHighBit = firstbithigh(((~restartBitmask & (isEdge1Bitmask ^ edgeBitmask)) & mask));
+            int otherEdgeHighBit = firstbithigh(~restartBitmask & ~backtrackBitmask & ((isEdge1Bitmask ^ ((backtrackBitmask >> 1) ^ edgeBitmask)) & mask));
 
             int prevRestartTriangle = restartHighBit == -1 ? (dwordIndex ? prevHighRestartBeforeDwords[dwordIndex - 1] : 0u) : restartHighBit + dwordIndex * 32;
 
-            uint3 prevHighEdge = isEdge1 ? prevHighEdge2BeforeDwords : prevHighEdge1BeforeDwords;
-            int prevOtherEdgeTriangle = otherEdgeHighBit == -1 ? (dwordIndex ? prevHighEdge[dwordIndex - 1] : 0u) : otherEdgeHighBit + dwordIndex * 32;
+            int3 prevHighEdge = isEdge1 ? prevHighEdge2BeforeDwords : prevHighEdge1BeforeDwords;
+            int prevOtherEdgeTriangle = otherEdgeHighBit == -1 ? (dwordIndex ? prevHighEdge[dwordIndex - 1] : -1) : otherEdgeHighBit + dwordIndex * 32;
 
-            uint prevTriangle = max(prevRestartTriangle, prevOtherEdgeTriangle);
+            int prevTriangle = max(prevRestartTriangle, prevOtherEdgeTriangle);
             uint isEdge1Restart = isEdge1 && (prevRestartTriangle == prevTriangle);
 
             uint increment = (prevOtherEdgeTriangle == prevTriangle || isEdge1Restart);
-            indexAddress[0] = 2 * r + prevTriangle - 2 + increment;
+            indexAddress.x = 2 * r + prevTriangle - 2 + increment;
 
             indexAddress = isEdge1 ? indexAddress.yxz : indexAddress;
-        }
 
+            if (printDebug)
+            {
+                printf("block/tri index: %u %u\nnum restarts: %u\nis: %u %u %u\nprev triangle: %u %u %u\nrestart hb: %u\nother hb: %u\nnum prev restarts: %u %u %u\n", blockIndex, triangleIndex, numRestarts, isRestart, isEdge1, isBacktrack, prevRestartTriangle, prevOtherEdgeTriangle, prevTriangle, restartHighBit, otherEdgeHighBit, numPrevRestartsBeforeDwords[0], numPrevRestartsBeforeDwords[1], numPrevRestartsBeforeDwords[2]);
+                printf("bitmask: %u %u %u, vals: %u %u\n", restartBitmask, edgeBitmask, backtrackBitmask, vals[0], vals[1]);
+            }
+        }
 #if 0
         uint r = 1;
         int bt = 0;
@@ -303,7 +302,7 @@ struct DenseGeometry
 #endif
 
         // Get the first bits mask
-        uint2 baseAligned_bitOffset = GetAlignedAddressAndBitOffset(baseAddress, firstBitsOffset);
+        uint2 baseAligned_bitOffset = GetAlignedAddressAndBitOffset(baseAddress, firstBitOffset);
         uint alignedFirstBitsOffset = baseAligned_bitOffset[0];
         uint firstBitsOffset = baseAligned_bitOffset[1];
 
@@ -354,6 +353,24 @@ struct DenseGeometry
             vids[k] = vid;
             p[k] = DecodePosition(vid);
         }
+#if 1
+        if (printDebug)
+        {
+            float3 n0 = DecodeNormal(vids[0]);
+            float3 n1 = DecodeNormal(vids[1]);
+            float3 n2 = DecodeNormal(vids[2]);
+
+            printf("anchor: %i %i %i\nbit widths: %u %u %u %u\nnum tri: %u\nnum vert: %u\noffsets: index %u ctrl %u first %u\nprecision: %u\nblockindex: %u triIndex: %u\n, p: %f %f %f %f %f %f %f %f %f\nindex address: %u %u %u\nvids: %u %u %u\n, reuse: %u %u %u\n, octbase: %u %u, bitwidths: %u %u\nn: %f %f %f %f %f %f %f %f %f\n",
+                anchor[0], anchor[1], anchor[2], posBitWidths[0], posBitWidths[1], posBitWidths[2], indexBitWidth,
+                numTriangles, numVertices, indexOffset, ctrlOffset, firstBitOffset, posPrecision, 
+                blockIndex, triangleIndex, 
+                p[0][0], p[0][1], p[0][2], p[1][0], p[1][1], p[1][2],p[2][0], p[2][1], p[2][2], 
+                indexAddress[0], indexAddress[1], indexAddress[2], vids[0], vids[1], vids[2], 
+                reuseIds[0], reuseIds[1], reuseIds[2], octBase[0], octBase[1], octBitWidths[0], octBitWidths[1], n0.x, n0.y, n0.z, n1.x, n1.y, n1.z, 
+                n2.x, n2.y, n2.z);
+        }
+#endif
+
         return vids;
     }
 
@@ -410,14 +427,14 @@ struct DenseGeometry
     {
         printf("anchor: %i %i %i\nbit widths: %u %u %u %u\nnum tri: %u\nnum vert: %u, offsets: index %u ctrl %u first %u\nprecision: %u\n", 
             anchor[0], anchor[1], anchor[2], posBitWidths[0], posBitWidths[1], posBitWidths[2], indexBitWidth,
-            numTriangles, numVertices, indexOffset, ctrlBitOffset, firstBitsOffset, posPrecision);
+            numTriangles, numVertices, indexOffset, ctrlOffset, firstBitOffset, posPrecision);
     }
 
     void Print(uint2 cursor, float3 p[3], uint3 indexAddress, uint3 vids, uint3 reuseIds, AABB aabb) 
     {
         printf("cursor: %u %u\nanchor: %i %i %i\nbit widths: %u %u %u %u\nnum tri: %u\nnum vert: %u, offsets: index %u ctrl %u first %u\nprecision: %u\nblockindex: %u triIndex: %u\n, p: %f %f %f %f %f %f %f %f %f\nindex address: %u %u %u\nvids: %u %u %u\n, reuse: %u %u %u\naabb: %f %f %f %f %f %f\n", 
             cursor[0], cursor[1], anchor[0], anchor[1], anchor[2], posBitWidths[0], posBitWidths[1], posBitWidths[2], indexBitWidth,
-            numTriangles, numVertices, indexOffset, ctrlBitOffset, firstBitsOffset, posPrecision, 
+            numTriangles, numVertices, indexOffset, ctrlOffset, firstBitOffset, posPrecision, 
             blockIndex, triangleIndex, 
             p[0][0], p[0][1], p[0][2], p[1][0], p[1][1], p[1][2],p[2][0], p[2][1], p[2][2], 
             indexAddress[0], indexAddress[1], indexAddress[2], vids[0], vids[1], vids[2], 
@@ -459,19 +476,19 @@ DenseGeometry GetDenseGeometryHeader(uint primitiveIndex)
 
     result.prevHighRestartBeforeDwords[1] = BitFieldExtractU32(packed.f, 6, 0);
     result.prevHighRestartBeforeDwords[2] = BitFieldExtractU32(packed.f, 7, 6);
-    result.prevHighEdge1BeforeDwords[1] = BitFieldExtractU32(packed.f, 6, 13);
-    result.prevHighEdge1BeforeDwords[2] = BitFieldExtractU32(packed.f, 7, 19);
-    result.prevHighEdge2BeforeDwords[1] = BitFieldExtractU32(packed.f, 6, 26);
+    result.prevHighEdge1BeforeDwords[0] = BitFieldExtractI32(packed.f, 6, 13);
+    result.prevHighEdge1BeforeDwords[1] = BitFieldExtractI32(packed.f, 7, 19);
+    result.prevHighEdge2BeforeDwords[0] = BitFieldExtractI32(packed.f, 6, 26);
 
     result.prevHighRestartBeforeDwords[0] = BitFieldExtractU32(packed.g, 5, 0);
-    result.prevHighEdge1BeforeDwords[0] = BitFieldExtractU32(packed.g, 5, 5);
-    result.prevHighEdge2BeforeDwords[0] = BitFieldExtractU32(packed.g, 5, 10);
-    result.prevHighEdge2BeforeDwords[2] = BitFieldExtractU32(packed.g, 7, 15);
-    result.octBitWidths[1] = BitFieldExtractU32(packed.g, 5, 22);
+    result.prevHighEdge1BeforeDwords[2] = BitFieldExtractI32(packed.g, 8, 5);
+    result.prevHighEdge2BeforeDwords[1] = BitFieldExtractI32(packed.g, 7, 13);
+    result.prevHighEdge2BeforeDwords[2] = BitFieldExtractI32(packed.g, 8, 20);
 
-    result.numPrevRestartsBeforeDwords[0] = BitFieldExtractU32(packed.h, 6, 0);
-    result.numPrevRestartsBeforeDwords[1] = BitFieldExtractU32(packed.h, 7, 6);
-    result.numPrevRestartsBeforeDwords[2] = BitFieldExtractU32(packed.h, 8, 13);
+    result.octBitWidths[1]                = BitFieldExtractU32(packed.h, 5, 0);
+    result.numPrevRestartsBeforeDwords[0] = BitFieldExtractU32(packed.h, 6, 5);
+    result.numPrevRestartsBeforeDwords[1] = BitFieldExtractU32(packed.h, 7, 11);
+    result.numPrevRestartsBeforeDwords[2] = BitFieldExtractU32(packed.h, 8, 18);
 
     result.octBase[0] = BitFieldExtractU32(packed.i, 16, 0);
     result.octBase[1] = BitFieldExtractU32(packed.i, 16, 16);
@@ -479,10 +496,11 @@ DenseGeometry GetDenseGeometryHeader(uint primitiveIndex)
     // Size of vertex buffer and normal buffer
     const uint vertexBitWidth = result.posBitWidths[0] + result.posBitWidths[1] + result.posBitWidths[2];
     const uint octBitWidth = result.octBitWidths[0] + result.octBitWidths[1];
+
     result.normalOffset = (result.numVertices * vertexBitWidth + 7) >> 3;
-    result.indexOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
-    result.ctrlBitOffset = (result.indexOffset << 3) + reuseBufferLength * result.indexBitWidth;
-    //result.firstBitsOffset = result.ctrlBitOffset + 2 * (result.numTriangles - 1);
-    result.firstBitsOffset = result.ctrlBitOffset + 12 * ((result.numTriangles >> 5) + 1);
+    result.ctrlOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
+    result.indexOffset = result.ctrlOffset + 12 * ((result.numTriangles + 31u) >> 5u);
+    result.firstBitOffset = (result.indexOffset << 3) + reuseBufferLength * result.indexBitWidth;
+
     return result;
 }

@@ -41,6 +41,13 @@ void BitVector::SetBit(u32 bit)
     Assert(bit < maxNumBits);
     bits[bit >> 5] |= 1ull << (bit & 31);
 }
+
+void BitVector::UnsetBit(u32 bit)
+{
+    Assert(bit < maxNumBits);
+    bits[bit >> 5] &= ~(1ull << (bit & 31));
+}
+
 bool BitVector::GetBit(u32 bit)
 {
     Assert(bit < maxNumBits);
@@ -55,11 +62,13 @@ void DenseGeometryBuildData::Init()
 
     // Debug
 #if 0
-    types        = ChunkedLinkedList<TriangleStripType>(arena);
     firstUse     = ChunkedLinkedList<u32>(arena);
     reuse        = ChunkedLinkedList<u32>(arena);
-    debugIndices = ChunkedLinkedList<u32>(arena);
 #endif
+    types                       = ChunkedLinkedList<TriangleStripType>(arena);
+    debugIndices                = ChunkedLinkedList<u32>(arena);
+    debugRestartCountPerDword   = ChunkedLinkedList<u32>(arena);
+    debugRestartHighBitPerDword = ChunkedLinkedList<u32>(arena);
 }
 
 void DenseGeometryBuildData::Merge(DenseGeometryBuildData &other)
@@ -543,7 +552,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                                                       clusterNumTriangles);
 
     StaticArray<u32> newIndexOrder(clusterScratch.arena, clusterNumTriangles * 3);
-    // StaticArray<u32> debugIndexOrder(clusterScratch.arena, clusterNumTriangles * 3);
+    StaticArray<u32> debugIndexOrder(clusterScratch.arena, clusterNumTriangles * 3);
     StaticArray<u32> triangleOrder(clusterScratch.arena, clusterNumTriangles * 3);
 
     u32 prevTriangle = minValenceTriangle;
@@ -571,9 +580,9 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     newIndexOrder.Push(firstIndices[1]);
     newIndexOrder.Push(firstIndices[2]);
 
-    // debugIndexOrder.Push(firstIndices[0]);
-    // debugIndexOrder.Push(firstIndices[1]);
-    // debugIndexOrder.Push(firstIndices[2]);
+    debugIndexOrder.Push(firstIndices[0]);
+    debugIndexOrder.Push(firstIndices[1]);
+    debugIndexOrder.Push(firstIndices[2]);
 
     triangleOrder.Push(minValenceTriangle);
 
@@ -613,9 +622,9 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                 newIndexOrder.Push(indices[1]);
                 newIndexOrder.Push(indices[2]);
 
-                // debugIndexOrder.Push(indices[0]);
-                // debugIndexOrder.Push(indices[1]);
-                // debugIndexOrder.Push(indices[2]);
+                debugIndexOrder.Push(indices[0]);
+                debugIndexOrder.Push(indices[1]);
+                debugIndexOrder.Push(indices[2]);
 
                 triangleOrder.Push(minValenceTriangle);
                 continue;
@@ -686,9 +695,9 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                     vertexIndices[3 * newMinValenceTriangle + 2] = indices[0];
                     newIndexOrder.Push(indices[0]);
 
-                    // debugIndexOrder.Push(indices[1]);
-                    // debugIndexOrder.Push(indices[2]);
-                    // debugIndexOrder.Push(indices[0]);
+                    debugIndexOrder.Push(indices[1]);
+                    debugIndexOrder.Push(indices[2]);
+                    debugIndexOrder.Push(indices[0]);
                 }
                 // [0, 1, 2] -> [2, 0, 1]
                 else if (edgeIndex == 2)
@@ -698,17 +707,17 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                     vertexIndices[3 * newMinValenceTriangle + 2] = indices[1];
                     newIndexOrder.Push(indices[1]);
 
-                    // debugIndexOrder.Push(indices[2]);
-                    // debugIndexOrder.Push(indices[0]);
-                    // debugIndexOrder.Push(indices[1]);
+                    debugIndexOrder.Push(indices[2]);
+                    debugIndexOrder.Push(indices[0]);
+                    debugIndexOrder.Push(indices[1]);
                 }
                 else
                 {
                     newIndexOrder.Push(indices[2]);
 
-                    // debugIndexOrder.Push(indices[0]);
-                    // debugIndexOrder.Push(indices[1]);
-                    // debugIndexOrder.Push(indices[2]);
+                    debugIndexOrder.Push(indices[0]);
+                    debugIndexOrder.Push(indices[1]);
+                    debugIndexOrder.Push(indices[2]);
                 }
 
                 u32 oldIndices[3];
@@ -744,9 +753,9 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
                             vertexIndices[3 * minValenceTriangle + 1] = oldIndices[0];
                             vertexIndices[3 * minValenceTriangle + 2] = oldIndices[1];
 
-                            // debugIndexOrder[debugIndexOrder.Length() - 6] = oldIndices[2];
-                            // debugIndexOrder[debugIndexOrder.Length() - 5] = oldIndices[0];
-                            // debugIndexOrder[debugIndexOrder.Length() - 4] = oldIndices[1];
+                            debugIndexOrder[debugIndexOrder.Length() - 6] = oldIndices[2];
+                            debugIndexOrder[debugIndexOrder.Length() - 5] = oldIndices[0];
+                            debugIndexOrder[debugIndexOrder.Length() - 4] = oldIndices[1];
 
                             oldEdgeIndex = 1;
                         }
@@ -763,14 +772,15 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     }
 
     // 7 * 3 * 4 = 84 = 3 dwords
-    FixedArray<u32, 4> restartHighBitPerDword = {};
-    FixedArray<u32, 4> restartCountPerDword   = {};
-    FixedArray<u32, 4> edge1HighBitPerDword   = {};
-    FixedArray<u32, 4> edge2HighBitPerDword   = {};
+    FixedArray<u32, 4> restartHighBitPerDword = {0, 0, 0, 0};
+    FixedArray<u32, 4> restartCountPerDword   = {1, 0, 0, 0};
+    FixedArray<i32, 4> edge1HighBitPerDword   = {-1, -1, -1, -1};
+    FixedArray<i32, 4> edge2HighBitPerDword   = {-1, -1, -1, -1};
 
     u32 prevEdge1HighBitPerDword = 0;
     u32 prevEdge2HighBitPerDword = 0;
 
+    u32 bitVectorsSize = ((clusterNumTriangles >> 5u) + 1u) << 5u;
     BitVector backtrack(clusterScratch.arena, clusterNumTriangles);
     BitVector restart(clusterScratch.arena, clusterNumTriangles);
     BitVector edge(clusterScratch.arena, clusterNumTriangles);
@@ -786,21 +796,22 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
         TriangleStripType stripType = triangleStripTypes[i - 1];
         if (stripType == TriangleStripType::Backtrack)
         {
+            Assert(i > 1);
             TriangleStripType prevType = triangleStripTypes[i - 2];
-            Assert(i >= 1 && (prevType == TriangleStripType::Edge1 ||
-                              prevType == TriangleStripType::Edge2));
+            Assert(prevType == TriangleStripType::Edge1 ||
+                   prevType == TriangleStripType::Edge2);
             backtrack.SetBit(i);
             u32 prevDwordIndex = (i - 1) >> 5;
             if (prevType == TriangleStripType::Edge2)
             {
-                Assert(edge2HighBitPerDword[prevDwordIndex] == i - 1);
+                Assert(edge2HighBitPerDword[prevDwordIndex] == (int)i - 1);
                 edge1HighBitPerDword[prevDwordIndex] = i - 1;
                 edge2HighBitPerDword[prevDwordIndex] = prevEdge2HighBitPerDword;
                 edge.SetBit(i);
             }
             else if (prevType == TriangleStripType::Edge1)
             {
-                Assert(edge1HighBitPerDword[prevDwordIndex] == i - 1);
+                Assert(edge1HighBitPerDword[prevDwordIndex] == (int)i - 1);
                 edge2HighBitPerDword[prevDwordIndex] = i - 1;
                 edge1HighBitPerDword[prevDwordIndex] = prevEdge1HighBitPerDword;
             }
@@ -826,6 +837,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
 
     for (u32 i = 1; i < 4; i++)
     {
+        restartCountPerDword[i] += restartCountPerDword[i - 1];
         restartHighBitPerDword[i] =
             Max(restartHighBitPerDword[i], restartHighBitPerDword[i - 1]);
         edge1HighBitPerDword[i] = Max(edge1HighBitPerDword[i], edge1HighBitPerDword[i - 1]);
@@ -894,10 +906,10 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
         }
     }
 
-    // for (u32 i = 0; i < debugIndexOrder.Length(); i++)
-    // {
-    //     debugIndexOrder[i] = mapOldIndexToDGFIndex[debugIndexOrder[i]];
-    // }
+    for (u32 i = 0; i < debugIndexOrder.Length(); i++)
+    {
+        debugIndexOrder[i] = mapOldIndexToDGFIndex[debugIndexOrder[i]];
+    }
 
     Assert(bitOffset == numBits);
     Assert(normalBitOffset == vertexCount * (numOctBitsX + numOctBitsY));
@@ -906,17 +918,12 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     // Write reuse buffer (byte aligned)
     u32 numIndexBits = Log2Int(maxReuseIndex) + 1;
     Assert(numIndexBits >= 1 && numIndexBits <= 8);
-    u32 ctrlBitSize = ((clusterNumTriangles >> 5u) + 1u) * 12u;
-    // u32 bitStreamSize = (numIndexBits * reuseBuffer.Length() + currentFirstUseBit +
-    //                      triangleStripTypes.Length() * 2 + 7) >>
+    u32 ctrlBitSize = ((clusterNumTriangles + 31) >> 5u) * 12u;
     u32 bitStreamSize =
         ((numIndexBits * reuseBuffer.Length() + currentFirstUseBit + 7) >> 3) + ctrlBitSize;
+    u32 numBitStreamBits =
+        numIndexBits * reuseBuffer.Length() + (ctrlBitSize << 3) + currentFirstUseBit;
     auto *node = buildData.byteBuffer.AddNode(bitStreamSize);
-
-    for (u32 reuseIndex : reuseBuffer)
-    {
-        WriteBits((u32 *)node->values, bitOffset, reuseIndex, numIndexBits);
-    }
 
     // Write control bits
     int numRemainingTriangles = clusterNumTriangles;
@@ -926,7 +933,13 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
         WriteBits((u32 *)node->values, bitOffset, restart.bits[dwordIndex], 32);
         WriteBits((u32 *)node->values, bitOffset, edge.bits[dwordIndex], 32);
         WriteBits((u32 *)node->values, bitOffset, backtrack.bits[dwordIndex], 32);
+        dwordIndex++;
         numRemainingTriangles -= 32;
+    }
+
+    for (u32 reuseIndex : reuseBuffer)
+    {
+        WriteBits((u32 *)node->values, bitOffset, reuseIndex, numIndexBits);
     }
 
 #if 0
@@ -949,6 +962,8 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
         firstBitWriteOffset += firstUseBitWriteSize;
         firstUseBitWriteSize = Min(currentFirstUseBit - firstBitWriteOffset, 32u);
     }
+
+    Assert(bitOffset == numBitStreamBits);
 
     // Write header
     PackedDenseGeometryHeader packed = {};
@@ -973,20 +988,19 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     packed.e = BitFieldPackU32(packed.e, numBitsZ, headerOffset, 5);
     packed.e = BitFieldPackU32(packed.e, numOctBitsX, headerOffset, 5);
 
-    // TODO: change in gpu code
     packed.f = BitFieldPackU32(packed.f, restartHighBitPerDword[1], headerOffset, 6);
     packed.f = BitFieldPackU32(packed.f, restartHighBitPerDword[2], headerOffset, 7);
-    packed.f = BitFieldPackU32(packed.f, edge1HighBitPerDword[1], headerOffset, 6);
-    packed.f = BitFieldPackU32(packed.f, edge1HighBitPerDword[2], headerOffset, 7);
-    packed.f = BitFieldPackU32(packed.f, edge2HighBitPerDword[1], headerOffset, 6);
+    packed.f = BitFieldPackI32(packed.f, edge1HighBitPerDword[0], headerOffset, 6);
+    packed.f = BitFieldPackI32(packed.f, edge1HighBitPerDword[1], headerOffset, 7);
+    packed.f = BitFieldPackI32(packed.f, edge2HighBitPerDword[0], headerOffset, 6);
 
     packed.g = BitFieldPackU32(packed.g, restartHighBitPerDword[0], headerOffset, 5);
-    packed.g = BitFieldPackU32(packed.g, edge1HighBitPerDword[0], headerOffset, 5);
-    packed.g = BitFieldPackU32(packed.g, edge2HighBitPerDword[0], headerOffset, 5);
-    packed.g = BitFieldPackU32(packed.g, edge2HighBitPerDword[2], headerOffset, 7);
-    packed.g = BitFieldPackU32(packed.g, numOctBitsY, headerOffset, 5);
+    packed.g = BitFieldPackI32(packed.g, edge1HighBitPerDword[2], headerOffset, 8);
+    packed.g = BitFieldPackI32(packed.g, edge2HighBitPerDword[1], headerOffset, 7);
+    packed.g = BitFieldPackI32(packed.g, edge2HighBitPerDword[2], headerOffset, 8);
 
     headerOffset = 0;
+    packed.h     = BitFieldPackU32(packed.h, numOctBitsY, headerOffset, 5);
     packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[0], headerOffset, 6);
     packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[1], headerOffset, 7);
     packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[2], headerOffset, 8);
@@ -1007,10 +1021,10 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     }
 
     // Debug
-#if 0
     auto *typesNode = buildData.types.AddNode(triangleStripTypes.Length());
     MemoryCopy(typesNode->values, triangleStripTypes.data,
                sizeof(TriangleStripType) * triangleStripTypes.Length());
+#if 0
 
     u32 numu32s        = (currentFirstUseBit + 31) >> 5;
     auto *firstUseNode = buildData.firstUse.AddNode(numu32s);
@@ -1018,11 +1032,17 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
 
     auto *reuseNode = buildData.reuse.AddNode(reuseBuffer.Length());
     MemoryCopy(reuseNode->values, reuseBuffer.data, reuseBuffer.Length() * sizeof(u32));
+#endif
+
+    u32 bitSize      = ((clusterNumTriangles + 31) >> 5) * sizeof(u32);
+    auto *debug0Node = buildData.debugRestartCountPerDword.AddNode(4);
+    MemoryCopy(debug0Node->values, restart.bits, bitSize);
+    auto *debug1Node = buildData.debugRestartHighBitPerDword.AddNode(4);
+    MemoryCopy(debug1Node->values, backtrack.bits, bitSize);
 
     auto *debugIndexNode = buildData.debugIndices.AddNode(debugIndexOrder.Length());
     MemoryCopy(debugIndexNode->values, debugIndexOrder.data,
                debugIndexOrder.Length() * sizeof(u32));
-#endif
     ScratchEnd(clusterScratch);
 }
 
