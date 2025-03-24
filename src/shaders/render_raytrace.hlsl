@@ -61,6 +61,8 @@ void main(uint3 DTid : SV_DispatchThreadID)
         query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
         float2 bary;
 
+        // TODO: explore design space (e.g. have primitive be a cluster, instead of triangle 
+        // in cluster)
         while (query.Proceed()) 
         {
             if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)

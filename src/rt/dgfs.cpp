@@ -870,6 +870,8 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     ChunkedLinkedList<u8>::ChunkNode *normalNode = 0;
     if (normalBitStreamSize) normalNode = buildData.byteBuffer.AddNode(normalBitStreamSize);
 
+    StaticArray<u32> newNormals(clusterScratch.arena, vertexCount);
+
     for (auto index : newIndexOrder)
     {
         if (usedVertices.GetBit(index))
@@ -898,6 +900,8 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
             u32 normal  = normals[index];
             u32 normalX = (normal >> 16) - minOct[0];
             u32 normalY = (normal & ((1 << 16) - 1)) - minOct[1];
+
+            newNormals.Push(normal);
             if (normalNode)
             {
                 WriteBits((u32 *)normalNode->values, normalBitOffset, normalX, numOctBitsX);
@@ -1035,8 +1039,8 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
 #endif
 
     u32 bitSize      = ((clusterNumTriangles + 31) >> 5) * sizeof(u32);
-    auto *debug0Node = buildData.debugRestartCountPerDword.AddNode(4);
-    MemoryCopy(debug0Node->values, restart.bits, bitSize);
+    auto *debug0Node = buildData.debugRestartCountPerDword.AddNode(vertexCount);
+    MemoryCopy(debug0Node->values, newNormals.data, vertexCount * sizeof(u32));
     auto *debug1Node = buildData.debugRestartHighBitPerDword.AddNode(4);
     MemoryCopy(debug1Node->values, backtrack.bits, bitSize);
 
