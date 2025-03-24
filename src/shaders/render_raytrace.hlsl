@@ -22,6 +22,7 @@ StructuredBuffer<AABB> aabbs : register(t8);
 [numthreads(PATH_TRACE_NUM_THREADS_X, PATH_TRACE_NUM_THREADS_Y, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
 {
+    // TODO: thread swizzling to get greater coherence, and SOA?
     RNG rng = RNG::Init(RNG::PCG3d(DTid.xyx).zy, push.frameNum);
 
     // Generate Ray

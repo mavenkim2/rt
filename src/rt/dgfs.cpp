@@ -1,4 +1,5 @@
 #include "base.h"
+#include "containers.h"
 #include "math/basemath.h"
 #include "scene.h"
 #include "bvh/bvh_aos.h"
@@ -433,6 +434,10 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
         }
     };
     HashMap<EdgeKeyValue> edgeIDMap(clusterScratch.arena, NextPowerOfTwo(indexCount));
+    // i need:
+    // restart high bit per dword
+    // edge high bit for BOTH edges accounting for backtracks
+    // restart counts per dword
 
     // Find triangles with shared edge
     for (u32 triangleIndex = 0; triangleIndex < clusterNumTriangles; triangleIndex++)
@@ -579,6 +584,9 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     for (u32 numAddedTriangles = 1; numAddedTriangles < clusterNumTriangles;
          numAddedTriangles++)
     {
+        u32 dwordIndex = numAddedTriangles >> 5;
+        u32 bitIndex   = numAddedTriangles & 31u;
+
         u32 newMinValenceTriangle = ~0u;
 
         TriangleStripType backTrackStripType = TriangleStripType::Restart;
@@ -754,6 +762,76 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
         minValenceTriangle = newMinValenceTriangle;
     }
 
+    // 7 * 3 * 4 = 84 = 3 dwords
+    FixedArray<u32, 4> restartHighBitPerDword = {};
+    FixedArray<u32, 4> restartCountPerDword   = {};
+    FixedArray<u32, 4> edge1HighBitPerDword   = {};
+    FixedArray<u32, 4> edge2HighBitPerDword   = {};
+
+    u32 prevEdge1HighBitPerDword = 0;
+    u32 prevEdge2HighBitPerDword = 0;
+
+    BitVector backtrack(clusterScratch.arena, clusterNumTriangles);
+    BitVector restart(clusterScratch.arena, clusterNumTriangles);
+    BitVector edge(clusterScratch.arena, clusterNumTriangles);
+
+    restart.SetBit(0);
+
+    // Set bit masks
+    for (u32 i = 1; i < clusterNumTriangles; i++)
+    {
+        u32 dwordIndex = i >> 5;
+        u32 bitIndex   = i & 31u;
+
+        TriangleStripType stripType = triangleStripTypes[i - 1];
+        if (stripType == TriangleStripType::Backtrack)
+        {
+            TriangleStripType prevType = triangleStripTypes[i - 2];
+            Assert(i >= 1 && (prevType == TriangleStripType::Edge1 ||
+                              prevType == TriangleStripType::Edge2));
+            backtrack.SetBit(i);
+            u32 prevDwordIndex = (i - 1) >> 5;
+            if (prevType == TriangleStripType::Edge2)
+            {
+                Assert(edge2HighBitPerDword[prevDwordIndex] == i - 1);
+                edge1HighBitPerDword[prevDwordIndex] = i - 1;
+                edge2HighBitPerDword[prevDwordIndex] = prevEdge2HighBitPerDword;
+                edge.SetBit(i);
+            }
+            else if (prevType == TriangleStripType::Edge1)
+            {
+                Assert(edge1HighBitPerDword[prevDwordIndex] == i - 1);
+                edge2HighBitPerDword[prevDwordIndex] = i - 1;
+                edge1HighBitPerDword[prevDwordIndex] = prevEdge1HighBitPerDword;
+            }
+        }
+        else if (stripType == TriangleStripType::Edge1)
+        {
+            edge.SetBit(i);
+            prevEdge1HighBitPerDword         = edge1HighBitPerDword[dwordIndex];
+            edge1HighBitPerDword[dwordIndex] = i;
+        }
+        else if (stripType == TriangleStripType::Edge2)
+        {
+            prevEdge2HighBitPerDword         = edge2HighBitPerDword[dwordIndex];
+            edge2HighBitPerDword[dwordIndex] = i;
+        }
+        else if (stripType == TriangleStripType::Restart)
+        {
+            restart.SetBit(i);
+            restartHighBitPerDword[dwordIndex] = i;
+            restartCountPerDword[dwordIndex]++;
+        }
+    }
+
+    for (u32 i = 1; i < 4; i++)
+    {
+        restartHighBitPerDword[i] =
+            Max(restartHighBitPerDword[i], restartHighBitPerDword[i - 1]);
+        edge1HighBitPerDword[i] = Max(edge1HighBitPerDword[i], edge1HighBitPerDword[i - 1]);
+        edge2HighBitPerDword[i] = Max(edge2HighBitPerDword[i], edge2HighBitPerDword[i - 1]);
+    }
+
     // Append all data
     auto &buildData = buildDatas[0];
 
@@ -828,9 +906,11 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     // Write reuse buffer (byte aligned)
     u32 numIndexBits = Log2Int(maxReuseIndex) + 1;
     Assert(numIndexBits >= 1 && numIndexBits <= 8);
-    u32 bitStreamSize = (numIndexBits * reuseBuffer.Length() + currentFirstUseBit +
-                         triangleStripTypes.Length() * 2 + 7) >>
-                        3;
+    u32 ctrlBitSize = ((clusterNumTriangles >> 5u) + 1u) * 12u;
+    // u32 bitStreamSize = (numIndexBits * reuseBuffer.Length() + currentFirstUseBit +
+    //                      triangleStripTypes.Length() * 2 + 7) >>
+    u32 bitStreamSize =
+        ((numIndexBits * reuseBuffer.Length() + currentFirstUseBit + 7) >> 3) + ctrlBitSize;
     auto *node = buildData.byteBuffer.AddNode(bitStreamSize);
 
     for (u32 reuseIndex : reuseBuffer)
@@ -839,6 +919,17 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     }
 
     // Write control bits
+    int numRemainingTriangles = clusterNumTriangles;
+    u32 dwordIndex            = 0;
+    while (numRemainingTriangles > 0)
+    {
+        WriteBits((u32 *)node->values, bitOffset, restart.bits[dwordIndex], 32);
+        WriteBits((u32 *)node->values, bitOffset, edge.bits[dwordIndex], 32);
+        WriteBits((u32 *)node->values, bitOffset, backtrack.bits[dwordIndex], 32);
+        numRemainingTriangles -= 32;
+    }
+
+#if 0
     u32 ctrlBitOffset = bitOffset;
     Assert(triangleStripTypes.Length() == clusterNumTriangles - 1u);
     for (auto &type : triangleStripTypes)
@@ -846,6 +937,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
         Assert((u32)type < 4);
         WriteBits((u32 *)node->values, bitOffset, (u32)type, 2);
     }
+#endif
 
     // Write first use bits
     u32 firstBitWriteOffset  = 0;
@@ -881,10 +973,27 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     packed.e = BitFieldPackU32(packed.e, numBitsZ, headerOffset, 5);
     packed.e = BitFieldPackU32(packed.e, numOctBitsX, headerOffset, 5);
 
-    packed.f     = numOctBitsY;
+    // TODO: change in gpu code
+    packed.f = BitFieldPackU32(packed.f, restartHighBitPerDword[1], headerOffset, 6);
+    packed.f = BitFieldPackU32(packed.f, restartHighBitPerDword[2], headerOffset, 7);
+    packed.f = BitFieldPackU32(packed.f, edge1HighBitPerDword[1], headerOffset, 6);
+    packed.f = BitFieldPackU32(packed.f, edge1HighBitPerDword[2], headerOffset, 7);
+    packed.f = BitFieldPackU32(packed.f, edge2HighBitPerDword[1], headerOffset, 6);
+
+    packed.g = BitFieldPackU32(packed.g, restartHighBitPerDword[0], headerOffset, 5);
+    packed.g = BitFieldPackU32(packed.g, edge1HighBitPerDword[0], headerOffset, 5);
+    packed.g = BitFieldPackU32(packed.g, edge2HighBitPerDword[0], headerOffset, 5);
+    packed.g = BitFieldPackU32(packed.g, edge2HighBitPerDword[2], headerOffset, 7);
+    packed.g = BitFieldPackU32(packed.g, numOctBitsY, headerOffset, 5);
+
     headerOffset = 0;
-    packed.g     = BitFieldPackU32(packed.f, minOct[0], headerOffset, 16);
-    packed.g     = BitFieldPackU32(packed.f, minOct[1], headerOffset, 16);
+    packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[0], headerOffset, 6);
+    packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[1], headerOffset, 7);
+    packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[2], headerOffset, 8);
+
+    headerOffset = 0;
+    packed.i     = BitFieldPackU32(packed.i, minOct[0], headerOffset, 16);
+    packed.i     = BitFieldPackU32(packed.i, minOct[1], headerOffset, 16);
 
     buildData.headers.AddBack() = packed;
 
