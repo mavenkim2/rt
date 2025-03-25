@@ -164,7 +164,7 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
 
 // what's next?
 // 1. restir di
-// 2. dgf attributes
+// 2. dgf attributes, geom IDs for differentiating materials
 // 3. clas
 //      - are memory savings possible with this? it seems like not really, and that this
 //      just speeds up rebuilds for dynamic/adaptively tessellated geometry. not really

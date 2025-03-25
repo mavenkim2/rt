@@ -134,35 +134,6 @@ Complex<T> Sqrt(const Complex<T> &z)
     return out;
 }
 
-// struct Frame
-// {
-//     Vec3f x;
-//     Vec3f y;
-//     Vec3f z;
-//
-//     Frame() : x(1, 0, 0), y(0, 1, 0), z(0, 0, 1) {}
-//
-//     Frame(Vec3f x, Vec3f y, Vec3f z) : x(x), y(y), z(z) {}
-//
-//     static Frame FromXZ(Vec3f x, Vec3f z)
-//     {
-//         return Frame(x, Cross(z, x), z);
-//     }
-//     static Frame FromXY(Vec3f x, Vec3f y)
-//     {
-//         return Frame(x, y, Cross(x, y));
-//     }
-//     Vec3f ToLocal(Vec3f a) const
-//     {
-//         return Vec3f(Dot(x, a), Dot(y, a), Dot(z, a));
-//     }
-//
-//     Vec3f FromLocal(Vec3f a) const
-//     {
-//         return a.x * x + a.y * y + a.z * z;
-//     }
-// };
-
 //////////////////////////////
 // Octahedral encoding
 //
@@ -174,7 +145,9 @@ inline f32 Decode(u16 u) { return (f32)(u / 65535.f * 2 - 1); }
 inline u32 EncodeOctahedral(Vec3f v)
 {
     Vec2f p = v.xy * (1.f / (Abs(v.x) + Abs(v.y) + Abs(v.z)));
-    p       = v.z < 0 ? (1.f - Abs(p.yx()) * Vec2f(copysign(1, p.x), copysign(1, p.y))) : p;
+    p       = v.z <= 0 ? (1.f - Abs(p.yx())) * Vec2f(copysign(1, p.x), copysign(1, p.y)) : p;
+    p.x     = Clamp(p.x, -1.f, 1.f);
+    p.y     = Clamp(p.y, -1.f, 1.f);
 
     return (Encode(p[0]) << 16) | Encode(p[1]);
 }

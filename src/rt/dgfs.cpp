@@ -234,7 +234,9 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes,
         for (int j = 0; j < mesh.numVertices; j++)
         {
             quantizedVertices[i].Push(Vec3i(Round(mesh.p[j] * quantize)));
-            octNormals[i].Push(EncodeOctahedral(mesh.n[j]));
+
+            Vec3f n = Normalize(mesh.n[j]);
+            octNormals[i].Push(EncodeOctahedral(n));
         }
     }
 

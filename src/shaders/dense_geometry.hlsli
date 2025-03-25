@@ -353,22 +353,21 @@ struct DenseGeometry
             vids[k] = vid;
             p[k] = DecodePosition(vid);
         }
-#if 1
+
         if (printDebug)
         {
-            uint2 n0 = DecodeNormalTest(vids[0]);
-            uint2 n1 = DecodeNormalTest(vids[1]);
-            uint2 n2 = DecodeNormalTest(vids[2]);
+            float3 n0 = DecodeNormal(vids[0]);
+            float3 n1 = DecodeNormal(vids[1]);
+            float3 n2 = DecodeNormal(vids[2]);
 
-            printf("anchor: %i %i %i\nbit widths: %u %u %u %u\nnum tri: %u\nnum vert: %u\noffsets: index %u ctrl %u first %u\nprecision: %u\nblockindex: %u triIndex: %u\n, p: %f %f %f %f %f %f %f %f %f\nindex address: %u %u %u\nvids: %u %u %u\n, reuse: %u %u %u\n, octbase: %u %u, bitwidths: %u %u\nn: %u %u, %u %u, %u %u\n",
+            printf("anchor: %i %i %i\nbit widths: %u %u %u %u\nnum tri: %u\nnum vert: %u\noffsets: index %u ctrl %u first %u\nprecision: %u\nblockindex: %u triIndex: %u\n, p: %f %f %f %f %f %f %f %f %f\nindex address: %u %u %u\nvids: %u %u %u\n, reuse: %u %u %u\n, octbase: %u %u, bitwidths: %u %u\nn: %f %f %f, %f %f %f, %f %f %f\n",
                 anchor[0], anchor[1], anchor[2], posBitWidths[0], posBitWidths[1], posBitWidths[2], indexBitWidth,
                 numTriangles, numVertices, indexOffset, ctrlOffset, firstBitOffset, posPrecision, 
                 blockIndex, triangleIndex, 
                 p[0][0], p[0][1], p[0][2], p[1][0], p[1][1], p[1][2],p[2][0], p[2][1], p[2][2], 
                 indexAddress[0], indexAddress[1], indexAddress[2], vids[0], vids[1], vids[2], 
-                reuseIds[0], reuseIds[1], reuseIds[2], octBase[0], octBase[1], octBitWidths[0], octBitWidths[1], n0.x, n0.y, n1.x, n1.y, n2.x, n2.y);
+                reuseIds[0], reuseIds[1], reuseIds[2], octBase[0], octBase[1], octBitWidths[0], octBitWidths[1], n0.x, n0.y, n0.z, n1.x, n1.y, n1.z, n2.x, n2.y, n2.z);
         }
-#endif
 
         return vids;
     }
@@ -396,18 +395,6 @@ struct DenseGeometry
         
         const float scale = asfloat((127 - posPrecision) << 23);
         return (pos + anchor) * scale;
-    }
-
-    uint2 DecodeNormalTest(uint vertexIndex)
-    {
-        const uint bitsPerNormal = octBitWidths[0] + octBitWidths[1];
-        const uint bitsOffset = bitsPerNormal * vertexIndex;
-
-        uint2 vals = GetAlignedAddressAndBitOffset(baseAddress + normalOffset, bitsOffset);
-        uint2 data = denseGeometryData.Load2(vals[0]);
-        uint n = BitAlignU32(data.y, data.x, vals[1]);
-
-        return uint2(BitFieldExtractU32(n, octBitWidths[0], 0) + octBase[0], BitFieldExtractU32(n, octBitWidths[1], octBitWidths[0]) + octBase[1]);
     }
 
     float3 DecodeNormal(uint vertexIndex)

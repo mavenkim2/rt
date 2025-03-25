@@ -1,4 +1,5 @@
 #include "base.h"
+#include "shader_interop/dense_geometry_shaderinterop.h"
 #include "memory.h"
 #include "thread_context.h"
 #include <atomic>
@@ -2287,28 +2288,212 @@ GPUAccelerationStructure CommandBuffer::BuildCustomBLAS(GPUBuffer *aabbsBuffer, 
                    &numAabbs);
 }
 
-#if 0
-GPUAccelerationStructure CommandBuffer::BuildCLAS()
+GPUAccelerationStructure CommandBuffer::BuildCLAS(ScenePrimitives *scene,
+                                                  RecordAOSSplits *records, int numRecords,
+                                                  PrimRef *refs, Mesh *meshes, int numMeshes)
 {
+    ScratchArena scratch;
+    u32 numVertices  = 0;
+    u32 numTriangles = 0;
+    for (u32 i = 0; i < numMeshes; i++)
+    {
+        numTriangles += meshes[i].numIndices / 3;
+        numVertices += meshes[i].numVertices;
+    }
+
     VkClusterAccelerationStructureTriangleClusterInputNV triangleClusters = {
         VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_TRIANGLE_CLUSTER_INPUT_NV};
-    triangleClusters.maxClusterVertexCount   = &clusterSize;
-    triangleClusters.maxClusterTriangleCount = &clusterSize;
-    triangleClusters.maxClusterVertexCount;
+    triangleClusters.vertexFormat                  = VK_FORMAT_R32G32B32_SFLOAT;
+    triangleClusters.maxGeometryIndexValue         = numMeshes - 1;
+    triangleClusters.maxClusterUniqueGeometryCount = numMeshes;
+    triangleClusters.maxClusterTriangleCount       = MAX_CLUSTER_TRIANGLES;
+    triangleClusters.maxClusterVertexCount         = MAX_CLUSTER_VERTICES;
+    triangleClusters.maxTotalTriangleCount         = numTriangles;
+    triangleClusters.maxTotalVertexCount           = numVertices;
+    triangleClusters.minPositionTruncateBitCount   = 0;
 
     VkClusterAccelerationStructureInputInfoNV inputInfo = {
         VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_INPUT_INFO_NV};
     inputInfo.opType = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_TRIANGLE_CLUSTER_NV;
-    inputInfo.opMode = ? ;
-    inputInfo.opInput.pTriangleClusters = &triangleClusters;
-    inputInfo.maxAccelerationStructureCount;
+    inputInfo.opMode = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_IMPLICIT_DESTINATIONS_NV;
+    inputInfo.opInput.pTriangleClusters     = &triangleClusters;
+    inputInfo.maxAccelerationStructureCount = numRecords;
 
-    VkAccelerationStructureBuildSizesInfoKHR buildSizesInfo;
-    vkGetClusterAccelerationStructureBuildSizesNV(device->device, &inputInfo, &buildSizesInfo);
+    u32 allClasAccelerationStructureSize;
+    u32 blasSize;
+    u32 maxScratchSize = 0;
 
+    // Get acceleration structure sizes and size of scratch buffer
+    {
+        VkAccelerationStructureBuildSizesInfoKHR buildSizesInfo;
+        vkGetClusterAccelerationStructureBuildSizesNV(device->device, &inputInfo,
+                                                      &buildSizesInfo);
+        allClasAccelerationStructureSize = buildSizesInfo.accelerationStructureSize;
+        maxScratchSize                   = buildSizesInfo.buildScratchSize;
 
+        VkClusterAccelerationStructureClustersBottomLevelInputNV bottomLevelInput = {
+            VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_CLUSTERS_BOTTOM_LEVEL_INPUT_NV};
+        bottomLevelInput.maxTotalClusterCount                    = numRecords;
+        bottomLevelInput.maxClusterCountPerAccelerationStructure = numRecords;
+
+        inputInfo.opType =
+            VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_CLUSTERS_BOTTOM_LEVEL_NV;
+        inputInfo.opMode = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_IMPLICIT_DESTINATIONS_NV;
+        inputInfo.opInput.pClustersBottomLevel  = &bottomLevelInput;
+        inputinfo.maxAccelerationStructureCount = 1;
+
+        vkGetClusterAccelerationStructureBuildSizesNV(device->device, &inputInfo,
+                                                      &buildSizesInfo);
+        blasSize       = buildSizesInfo.accelerationStructureSize;
+        maxScratchSize = Max(buildSizesInfo.buildScratchSize);
+    }
+
+    GPUBuffer buildScratch =
+        device->CreateBuffer(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, maxScratchSize);
+
+    VkClusterAccelerationStructureBuildTriangleClusterInfoNV *triangleClusterInfos =
+        PushArray(scratch.temp.arena, VkClusterAccelerationStructureBuildTriangleClusterInfoNV,
+                  numRecords);
+
+    for (int i = 0; i < numRecords; i++)
+    {
+        RecordAOSSplits &record = records[i];
+
+        u32 clusterVertexCount = 0;
+        for (int j = record.start; j < record.start + record.count; j++)
+        {
+        }
+
+        auto &triangleClusterInfo     = triangleClusterInfos[i];
+        triangleClusterInfo.clusterID = i;
+        triangleClusterInfo.clusterFlags =
+            VK_CLUSTER_ACCELERATION_STRUCTURE_CLUSTER_ALLOW_DISABLE_OPACITY_MICROMAPS_NV;
+        triangleClusterInfo.triangleCount            = record.count;
+        triangleClusterInfo.vertexCount              = clusterVertexCount;
+        triangleClusterInfo.positionTruncateBitCount = 0;
+        triangleClusterInfo.indexType =
+            VK_CLUSTER_ACCELERATION_STRUCTURE_INDEX_FORMAT_32BIT_NV;
+        triangleClusterInfo.opacityMicromapIndexType =
+            VK_CLUSTER_ACCELERATION_STRUCTURE_INDEX_FORMAT_32BIT_NV;
+        triangleClusterInfo.baseGeometryIndexAndGeometryFlags.geometryIndex = 0;
+        triangleClusterInfo.baseGeometryIndexAndGeometryFlags.geometryFlags =
+            VK_CLUSTER_ACCELERATION_STRUCTURE_GEOMETRY_OPAQUE_BIT_NV |
+            VK_CLUSTER_ACCELERATION_STRUCTURE_GEOMETRY_CULL_DISABLE_BIT_NV;
+        triangleClusterInfo.indexBuffer                 = {};
+        triangleClusterInfo.vertexBuffer                = {};
+        triangleClusterInfo.geometryIndexAndFlagsBuffer = {};
+    }
+
+    u32 buildTriangleClusterSize =
+        sizeof(VkClusterAccelerationStructureBuildTriangleClusterInfoNV) * numRecords;
+    GPUBuffer triangleClusterBuffer =
+        SubmitBuffer(triangleClusterInfos,
+                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                     buildTriangleClusterSize);
+
+    GPUBuffer implicitBuffer =
+        device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
+                             buildSizesInfo.accelerationStructureSize);
+
+    GPUBuffer blasBuffer =
+        device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, blasSize);
+
+    VkClusterAccelerationStructureCommandsInfoNV commandsInfo = {
+        VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_COMMANDS_INFO_NV};
+
+    GPUBuffer srcInfosCount = SubmitBuffer(
+        &numRecords, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        sizeof(numRecord));
+
+    GPUBuffer clusterAccelAddresses =
+        device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
+                             sizeof(VkDeviceAddress) * numRecords);
+    // Build CLAS
+    {
+        commandsInfo.input           = inputInfo;
+        commandsInfo.dstImplicitData = device->GetDeviceAddress(implicitBuffer.buffer);
+        commandsInfo.scratchData     = device->GetDeviceAddress(buildScratch.buffer);
+        commandsInfo.dstAddressesArray.deviceAddress =
+            device->GetDeviceAddress(clusterAccelAddresses.buffer);
+        commandsInfo.dstAddressesArray.size   = clusterAccelAddresses.size;
+        commandsInfo.dstAddressesArray.stride = sizeof(VkDeviceAddress);
+        commandsInfo.dstSizesArray            = {};
+        commandsInfo.srcInfosArray.deviceAddress =
+            device->GetDeviceAddress(triangleClusterBuffer.buffer);
+        commandsInfo.srcInfosArray.stride   = 0;
+        commandsInfo.srcInfosArray.size     = buildTriangleClusterSize;
+        commandsInfo.srcInfosCount          = device->GetDeviceAddress(srcInfosCount);
+        commandsInfo.addressResolutionFlags = {};
+
+        vkCmdBuildClusterAccelerationStructureIndirectNV(buffer, &commandsInfo);
+    }
+
+    // Sync
+    {
+        VkMemoryBarrier2 barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        barrier.srcStageMask     = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+        barrier.dstStageMask     = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+        barrier.srcAccessMask    = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+        barrier.dstAccessMask    = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+
+        VkDependencyInfo dependencyInfo   = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependencyInfo.memoryBarrierCount = 1;
+        dependencyInfo.pMemoryBarriers    = &barrier;
+
+        vkCmdPipelineBarrier2(buffer, &dependencyInfo);
+    }
+
+    // Build BLAS over CLAS
+    {
+        GPUBuffer dstAddress = device->CreateBuffer(
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, sizeof(VkDeviceAddress),
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
+
+        VkClusterAccelerationStructureClustersBottomLevelInputNV bottomLevelInput = {
+            VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_CLUSTERS_BOTTOM_LEVEL_INPUT_NV};
+        bottomLevelInput.maxTotalClusterCount                    = numRecords;
+        bottomLevelInput.maxClusterCountPerAccelerationStructure = numRecords;
+
+        VkClusterAccelerationStructureBuildClustersBottomLevelInfoNV bottomLevelInfo;
+        bottomLevelInfo.clusterReferencesCount  = numRecords;
+        bottomLevelInfo.clusterReferencesStride = sizeof(VkDeviceAddress);
+        bottomLevelInfo.clusterReferences =
+            device->GetDeviceAddress(clusterAccelAddresses.buffer);
+
+        GPUBuffer bottomLevelInfoBuffer =
+            SubmitBuffer(&bottomLevelInfo,
+                         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                         sizeof(bottomLevelInfo));
+
+        inputInfo = {VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_INPUT_INFO_NV};
+        inputInfo.opType =
+            VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_CLUSTERS_BOTTOM_LEVEL_NV;
+        inputInfo.opMode = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_IMPLICIT_DESTINATIONS_NV;
+        inputInfo.opInput.pClustersBottomLevel  = &bottomLevelInput;
+        inputInfo.maxAccelerationStructureCount = 1;
+
+        commandsInfo                 = {};
+        commandsInfo.input           = inputInfo;
+        commandsInfo.dstImplicitData = device->GetDeviceAddress(blasBuffer.buffer);
+        commandsInfo.scratchData     = device->GetDeviceAddress(buildScratch.buffer);
+
+        commandsInfo.dstAddressesArray.deviceAddress =
+            device->GetDeviceAddress(dstAddress.buffer);
+        commandsInfo.dstAddressesArray.size   = tlasInstances.size;
+        commandsInfo.dstAddressesArray.stride = sizeof(VkAccelerationStructureInstanceKHR);
+
+        commandsInfo.dstSizesArray = {};
+        commandsInfo.srcInfosArray.deviceAddress =
+            device->GetDeviceAddress(bottomLevelInfoBuffer.buffer);
+        commandsInfo.srcInfosArray.stride =
+            sizeof(VkClusterAccelerationStructureBuildClustersBottomLevelInfoNV);
+        commandsInfo.srcInfosArray.size     = sizeof(bottomLevelInfo);
+        commandsInfo.srcInfosCount          = device->GetDeviceAddress(srcInfosCount);
+        commandsInfo.addressResolutionFlags = {};
+
+        vkCmdBuildClusterAccelerationStructureIndirectNV(buffer, &commandsInfo);
+    }
 }
-#endif
 
 GPUAccelerationStructure CommandBuffer::BuildBLAS(const GPUMesh *meshes, int count)
 {
@@ -2369,6 +2554,17 @@ GPUAccelerationStructure CommandBuffer::BuildTLAS(Instance *instances, int numIn
                                                   AffineSpace *transforms,
                                                   ScenePrimitives **childScenes)
 {
+    CreateTLASInstances(instances, numInstances, transforms, childScenes);
+    Barrier(&tlasBuffer, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+
+    return BuildTLAS(&tlasBuffer, numInstances);
+}
+
+GPUBuffer CommandBuffer::CreateTLASInstances(Instance *instances, int numInstances,
+                                             AffineSpace *transforms,
+                                             ScenePrimitives **childScenes)
+{
     ScratchArena scratch;
     VkAccelerationStructureInstanceKHR *vkInstances =
         PushArrayNoZero(scratch.temp.arena, VkAccelerationStructureInstanceKHR, numInstances);
@@ -2390,10 +2586,7 @@ GPUAccelerationStructure CommandBuffer::BuildTLAS(Instance *instances, int numIn
                          VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
                      sizeof(VkAccelerationStructureInstanceKHR));
 
-    Barrier(&tlasBuffer, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-
-    return BuildTLAS(&tlasBuffer, numInstances);
+    return tlasBuffer;
 }
 
 QueryPool Vulkan::CreateQuery(QueryType type, int count)

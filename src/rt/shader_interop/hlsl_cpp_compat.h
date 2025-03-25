@@ -2,6 +2,7 @@
 #define HLSL_CPP_COMPAT_H
 
 #ifdef __cplusplus
+#include "../math/math_include.h"
 namespace rt
 {
 

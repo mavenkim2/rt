@@ -21,6 +21,7 @@ namespace rt
 {
 struct AffineSpace;
 struct Instance;
+struct Mesh;
 struct ScenePrimitives;
 
 #define VK_CHECK(check)                                                                       \
@@ -418,6 +419,10 @@ struct CommandBuffer
                                      VkAccelerationStructureGeometryKHR *geometries, int count,
                                      VkAccelerationStructureBuildRangeInfoKHR *buildRanges,
                                      u32 *maxPrimitiveCounts);
+    GPUAccelerationStructure BuildCLAS(RecordAOSSplits *records, int numRecords, PrimRef *refs,
+                                       Mesh *meshes, int numMeshes);
+    GPUBuffer CreateTLASInstances(Instance *instances, int numInstances,
+                                  AffineSpace *transforms, ScenePrimitives **childScenes);
     GPUAccelerationStructure BuildTLAS(GPUBuffer *instanceData, u32 numInstances);
     GPUAccelerationStructure BuildTLAS(Instance *instances, int numInstances,
                                        AffineSpace *transforms, ScenePrimitives **childScenes);
