@@ -1,3 +1,4 @@
+#include "common.hlsli"
 #include "../rt/shader_interop/dense_geometry_shaderinterop.h"
 ByteAddressBuffer denseGeometryData : register(t5);
 StructuredBuffer<PackedDenseGeometryHeader> denseGeometryHeaders : register(t6); 
@@ -140,7 +141,6 @@ struct DenseGeometry
     uint baseAddress;
 
     uint blockIndex;
-    uint triangleIndex;
 
     int3 anchor;
     uint2 octBase;
@@ -163,7 +163,7 @@ struct DenseGeometry
     int3 prevHighEdge1BeforeDwords;
     int3 prevHighEdge2BeforeDwords;
 
-    uint3 DecodeTriangle(out float3 p[3], bool printDebug = false)
+    uint3 DecodeTriangle(uint triangleIndex, bool printDebug = false)
     {
         enum 
         {
@@ -351,7 +351,6 @@ struct DenseGeometry
                 vid = DecodeReuse(indexAddress[k] - vid);
             }
             vids[k] = vid;
-            p[k] = DecodePosition(vid);
         }
 
         if (printDebug)
@@ -360,11 +359,10 @@ struct DenseGeometry
             float3 n1 = DecodeNormal(vids[1]);
             float3 n2 = DecodeNormal(vids[2]);
 
-            printf("anchor: %i %i %i\nbit widths: %u %u %u %u\nnum tri: %u\nnum vert: %u\noffsets: index %u ctrl %u first %u\nprecision: %u\nblockindex: %u triIndex: %u\n, p: %f %f %f %f %f %f %f %f %f\nindex address: %u %u %u\nvids: %u %u %u\n, reuse: %u %u %u\n, octbase: %u %u, bitwidths: %u %u\nn: %f %f %f, %f %f %f, %f %f %f\n",
+            printf("anchor: %i %i %i\nbit widths: %u %u %u %u\nnum tri: %u\nnum vert: %u\noffsets: index %u ctrl %u first %u\nprecision: %u\nblockindex: %u triIndex: %u\nindex address: %u %u %u\nvids: %u %u %u\n, reuse: %u %u %u\n, octbase: %u %u, bitwidths: %u %u\nn: %f %f %f, %f %f %f, %f %f %f\n",
                 anchor[0], anchor[1], anchor[2], posBitWidths[0], posBitWidths[1], posBitWidths[2], indexBitWidth,
                 numTriangles, numVertices, indexOffset, ctrlOffset, firstBitOffset, posPrecision, 
                 blockIndex, triangleIndex, 
-                p[0][0], p[0][1], p[0][2], p[1][0], p[1][1], p[1][2],p[2][0], p[2][1], p[2][2], 
                 indexAddress[0], indexAddress[1], indexAddress[2], vids[0], vids[1], vids[2], 
                 reuseIds[0], reuseIds[1], reuseIds[2], octBase[0], octBase[1], octBitWidths[0], octBitWidths[1], n0.x, n0.y, n0.z, n1.x, n1.y, n1.z, n2.x, n2.y, n2.z);
         }
@@ -420,32 +418,11 @@ struct DenseGeometry
         uint r = BitFieldExtractU32(BitAlignU32(result.y, result.x, vals[1]), indexBitWidth, 0);
         return r;
     }
-
-    void Print() 
-    {
-        printf("anchor: %i %i %i\nbit widths: %u %u %u %u\nnum tri: %u\nnum vert: %u, offsets: index %u ctrl %u first %u\nprecision: %u\n", 
-            anchor[0], anchor[1], anchor[2], posBitWidths[0], posBitWidths[1], posBitWidths[2], indexBitWidth,
-            numTriangles, numVertices, indexOffset, ctrlOffset, firstBitOffset, posPrecision);
-    }
-
-    void Print(uint2 cursor, float3 p[3], uint3 indexAddress, uint3 vids, uint3 reuseIds, AABB aabb) 
-    {
-        printf("cursor: %u %u\nanchor: %i %i %i\nbit widths: %u %u %u %u\nnum tri: %u\nnum vert: %u, offsets: index %u ctrl %u first %u\nprecision: %u\nblockindex: %u triIndex: %u\n, p: %f %f %f %f %f %f %f %f %f\nindex address: %u %u %u\nvids: %u %u %u\n, reuse: %u %u %u\naabb: %f %f %f %f %f %f\n", 
-            cursor[0], cursor[1], anchor[0], anchor[1], anchor[2], posBitWidths[0], posBitWidths[1], posBitWidths[2], indexBitWidth,
-            numTriangles, numVertices, indexOffset, ctrlOffset, firstBitOffset, posPrecision, 
-            blockIndex, triangleIndex, 
-            p[0][0], p[0][1], p[0][2], p[1][0], p[1][1], p[1][2],p[2][0], p[2][1], p[2][2], 
-            indexAddress[0], indexAddress[1], indexAddress[2], vids[0], vids[1], vids[2], 
-            reuseIds[0], reuseIds[1], reuseIds[2], aabb.minX, aabb.minY, aabb.minZ, aabb.maxX, aabb.maxY, aabb.maxZ);
-    }
 };
 
 // Taken from NaniteDataDecode.ush in Unreal Engine 5
-DenseGeometry GetDenseGeometryHeader(uint primitiveIndex)
+DenseGeometry GetDenseGeometryHeader(uint blockIndex)
 {
-    uint blockIndex = primitiveIndex >> MAX_CLUSTER_TRIANGLES_BIT;
-    uint triangleIndex = primitiveIndex & (MAX_CLUSTER_TRIANGLES - 1);
-
     PackedDenseGeometryHeader packed = denseGeometryHeaders[blockIndex];
 
     DenseGeometry result;
@@ -454,7 +431,6 @@ DenseGeometry GetDenseGeometryHeader(uint primitiveIndex)
     result.baseAddress = packed.a;
 
     result.blockIndex = blockIndex;
-    result.triangleIndex = triangleIndex;
 
     result.anchor[0] = BitFieldExtractI32((int)packed.b, ANCHOR_WIDTH, 0);
     result.numTriangles = BitFieldExtractU32(packed.b, 8, ANCHOR_WIDTH);

@@ -67,11 +67,17 @@ void main(uint3 DTid : SV_DispatchThreadID)
         {
             if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
             {
-                uint primID = query.CandidatePrimitiveIndex();
-                float3 p[3];
+                uint primitiveIndex = query.CandidatePrimitiveIndex();
 
-                DenseGeometry dg = GetDenseGeometryHeader(primID);
-                uint3 vids = dg.DecodeTriangle(p, all(DTid.xy == debugInfo.mousePos));
+                uint blockIndex = primitiveIndex >> MAX_CLUSTER_TRIANGLES_BIT;
+                uint triangleIndex = primitiveIndex & (MAX_CLUSTER_TRIANGLES - 1);
+
+                DenseGeometry dg = GetDenseGeometryHeader(blockIndex);
+                uint3 vids = dg.DecodeTriangle(triangleIndex, all(DTid.xy == debugInfo.mousePos));
+
+                float3 p0 = dg.DecodePosition(vids[0]);
+                float3 p1 = dg.DecodePosition(vids[1]);
+                float3 p2 = dg.DecodePosition(vids[2]);
 
                 float tHit;
                 float2 tempBary;
@@ -79,7 +85,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
                 bool result = 
                 RayTriangleIntersectionMollerTrumbore(query.CandidateObjectRayOrigin(), 
                                                       query.CandidateObjectRayDirection(), 
-                                                      p[0], p[1], p[2], 
+                                                      p0, p1, p2,
                                                       tHit, tempBary);
 
                 result &= (query.RayTMin() < tHit && tHit <= query.CommittedRayT());
@@ -111,10 +117,9 @@ void main(uint3 DTid : SV_DispatchThreadID)
             uint normal1 = bindlessUints[NonUniformResourceIndex(normalBufferIndex)][NonUniformResourceIndex(index1)];
             uint normal2 = bindlessUints[NonUniformResourceIndex(normalBufferIndex)][NonUniformResourceIndex(index2)];
 
-            float3 p[3];
-            p[0] = bindlessFloat3s[NonUniformResourceIndex(vertexBufferIndex)][NonUniformResourceIndex(index0)];
-            p[1] = bindlessFloat3s[NonUniformResourceIndex(vertexBufferIndex)][NonUniformResourceIndex(index1)];
-            p[2] = bindlessFloat3s[NonUniformResourceIndex(vertexBufferIndex)][NonUniformResourceIndex(index2)];
+            float3 p0 = bindlessFloat3s[NonUniformResourceIndex(vertexBufferIndex)][NonUniformResourceIndex(index0)];
+            float3 p1 = bindlessFloat3s[NonUniformResourceIndex(vertexBufferIndex)][NonUniformResourceIndex(index1)];
+            float3 p2 = bindlessFloat3s[NonUniformResourceIndex(vertexBufferIndex)][NonUniformResourceIndex(index2)];
 
             float3 n0 = DecodeOctahedral(normal0);
             float3 n1 = DecodeOctahedral(normal1);
@@ -127,13 +132,19 @@ void main(uint3 DTid : SV_DispatchThreadID)
         if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
         {
             uint bindingDataIndex = query.CommittedInstanceID() + query.CommittedGeometryIndex();
-            uint primID = query.CommittedPrimitiveIndex();
+            uint primitiveIndex = query.CommittedPrimitiveIndex();
 
-            float3 p[3];
+            uint blockIndex = primitiveIndex >> MAX_CLUSTER_TRIANGLES_BIT;
+            uint triangleIndex = primitiveIndex & (MAX_CLUSTER_TRIANGLES - 1);
 
-            DenseGeometry dg = GetDenseGeometryHeader(primID);
-            uint3 vids = dg.DecodeTriangle(p);
-            float3 gn = normalize(cross(p[0] - p[2], p[1] - p[2]));
+            DenseGeometry dg = GetDenseGeometryHeader(blockIndex);
+            uint3 vids = dg.DecodeTriangle(triangleIndex);
+
+            float3 p0 = dg.DecodePosition(vids[0]);
+            float3 p1 = dg.DecodePosition(vids[1]);
+            float3 p2 = dg.DecodePosition(vids[2]);
+
+            float3 gn = normalize(cross(p0 - p2, p1 - p2));
 
             float3 n0 = dg.DecodeNormal(vids[0]);
             float3 n1 = dg.DecodeNormal(vids[1]);
@@ -155,7 +166,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
             float T = 1 - R;
             float pr = R, pt = T;
 
-            float3 origin = p[0] + (p[1] - p[0]) * bary[0] + (p[2] - p[0]) * bary[1];
+            float3 origin = p0 + (p1 - p0) * bary.x + (p2 - p0) * bary.y;
 
             if (u < pr / (pr + pt))
             {

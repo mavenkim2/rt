@@ -44,10 +44,10 @@ struct BuildClasDesc
     uint32_t indexFormat : 4;
     uint32_t opacityMicromapIndexFormat : 4;
     uint32_t baseGeometryIndexAndFlags;
-    uint16_t indexBufferStride;
-    uint16_t vertexBufferStride;
-    uint16_t geometryIndexAndFlagsBufferStride;
-    uint16_t opacityMicromapIndexBufferStride;
+    uint32_t indexBufferStride : 16;
+    uint32_t vertexBufferStride : 16;
+    uint32_t geometryIndexAndFlagsBufferStride : 16;
+    uint32_t opacityMicromapIndexBufferStride : 16;
     uint64_t indexBuffer;
     uint64_t vertexBuffer;
     uint64_t geometryIndexAndFlagsBuffer;
@@ -61,6 +61,20 @@ struct GeometryIndexAndFlags
     uint32_t reserved : 5;
     uint32_t geometryFlags : 3;
 };
+
+struct DecodePushConstant
+{
+    uint numHeaders;
+    uint indexBufferBaseAddressLowBits;
+    uint indexBufferBaseAddressHighBits;
+    uint vertexBufferBaseAddressLowBits;
+    uint vertexBufferBaseAddressHighBits;
+};
+
+#define GLOBALS_VERTEX_BUFFER_OFFSET_INDEX 0
+#define GLOBALS_INDEX_BUFFER_OFFSET_INDEX  1
+#define GLOBALS_CLAS_COUNT_INDEX           2
+#define GLOBALS_BLAS_COUNT_INDEX           3
 
 #ifdef __cplusplus
 }

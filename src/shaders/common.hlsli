@@ -1,6 +1,9 @@
+#ifndef COMMON_HLSLI_
+#define COMMON_HLSLI_
+
 static const float PI = 3.1415926535f;
 static const float FLT_MAX = asfloat(0x7F800000);
-#
+
 #define texture2DSpace space1
 #define structuredBufferSpace space2
 
@@ -122,3 +125,5 @@ float3 TransformV(float3x4 m, float3 v)
 {
     return mul(m, float4(v, 0));
 }
+
+#endif

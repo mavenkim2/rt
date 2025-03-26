@@ -6,6 +6,7 @@
 #include "memory.h"
 #include "parallel.h"
 #include "platform.h"
+#include "shader_interop/as_shaderinterop.h"
 #include "shader_interop/dense_geometry_shaderinterop.h"
 #include "shader_interop/gpu_scene_shaderinterop.h"
 #include "shader_interop/hit_shaderinterop.h"
@@ -179,6 +180,27 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
 void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
                        int maxDepth, Image *envMap)
 {
+    // Compile shaders
+    Shader shader;
+    Shader decodeShader;
+    Shader fillInstanceShader;
+    {
+        Arena *arena      = params->arenas[0];
+        string shaderName = "../src/shaders/render_raytrace.spv";
+        string shaderData = OS_ReadFile(arena, shaderName);
+        shader = device->CreateShader(ShaderStage::Compute, "pathtrace", shaderData);
+
+        string decodeShaderName = "../src/shaders/decode_dgf_clusters.spv";
+        string decodeShaderData = OS_ReadFile(arena, decodeShaderName);
+        decodeShader =
+            device->CreateShader(ShaderStage::Compute, "decode clusters", decodeShaderData);
+
+        string fillInstanceShaderName = "../src/shaders/fill_instance_descs.spv";
+        string fillShaderData         = OS_ReadFile(arena, fillInstanceShaderName);
+        fillInstanceShader =
+            device->CreateShader(ShaderStage::Compute, "fill instances", decodeShaderData);
+    }
+
     // Build clusters
     // TODO: make sure to NOT make gpumeshes
     ScratchArena sceneScratch;
@@ -227,11 +249,16 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     u32 **debugRestartCount;
     u32 **debugRestartHighBit;
 
+    u32 totalNumClusters = 0;
+    u32 numVertices      = 0;
+    u32 numTriangles     = 0;
+    u32 numHeaders       = 0;
     for (int i = 0; i < numScenes; i++)
     {
         ScenePrimitives *scene       = scenes[i];
         scene->semaphore             = device->CreateGraphicsSemaphore();
         scene->semaphore.signalValue = 1;
+
         if (scene->geometryType == GeometryType::Instance) continue;
 
         RecordAOSSplits record(neg_inf);
@@ -249,7 +276,16 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         {
             numClusters += builder.threadClusters[i].l.totalCount;
         }
+        totalNumClusters += numClusters;
 
+        Mesh *meshes = (Mesh *)scene->primitives;
+        for (int i = 0; i < scene->numPrimitives; i++)
+        {
+            numVertices += meshes[i].numVertices;
+            numTriangles += meshes[i].numFaces;
+        }
+
+#if 0
         // Convert primrefs to aabbs, submit to GPU
         StaticArray<VkAabbPositionsKHR> aabbs(sceneScratch.temp.arena,
                                               MAX_CLUSTER_TRIANGLES * data.numBlocks);
@@ -303,6 +339,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             aabbs.Length() * sizeof(VkAabbPositionsKHR));
+#endif
 
         // Combine all blocks together
         dgfByteBuffer = PushArrayNoZero(sceneScratch.temp.arena, u8, data.byteBuffer.Length());
@@ -314,10 +351,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         headers = PushArrayNoZero(sceneScratch.temp.arena, PackedDenseGeometryHeader,
                                   data.headers.Length());
         data.headers.Flatten(headers);
+        numHeaders   = data.headers.Length();
         headerBuffer = dgfTransferCmd->SubmitBuffer(
             headers, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             sizeof(PackedDenseGeometryHeader) * data.headers.Length());
 
+#if 0
         // Debug
         int c = 0;
         for (auto *node = data.types.first; node != 0; node = node->next)
@@ -351,12 +390,192 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         }
 
         dgfTransferCmd->Signal(scene->semaphore);
+#endif
 
         // Send offsets buffer and dense geometry info
         ReleaseArenaArray(builder.arenas);
     }
+
+    CommandBuffer *computeCmd = device->BeginCommandBuffer(QueueType_Compute);
+    computeCmd->WaitOn(dgfTransferCmd);
+
     device->SetName(&dgfBuffer, "DGF Buffer");
     device->SubmitCommandBuffer(dgfTransferCmd);
+
+    // Decode layout pipeline description
+    DescriptorSetLayout decodeLayout;
+    PushConstant decodeConstants;
+    decodeConstants.stage  = ShaderStage::Compute;
+    decodeConstants.size   = sizeof(DecodePushConstant);
+    decodeConstants.offset = 0;
+
+    u32 buildClasDescsSize = sizeof(BuildClasDesc) * totalNumClusters;
+
+    GPUBuffer indexBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, megabytes(256));
+    GPUBuffer vertexBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, megabytes(256));
+    GPUBuffer buildClasDescs = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        buildClasDescsSize);
+    GPUBuffer globalsDesc = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, sizeof(u32) * 4);
+
+    int indexBufferBinding    = decodeLayout.AddBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                        VK_SHADER_STAGE_COMPUTE_BIT);
+    int vertexBufferBinding   = decodeLayout.AddBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                        VK_SHADER_STAGE_COMPUTE_BIT);
+    int buildClasDescsBinding = decodeLayout.AddBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                        VK_SHADER_STAGE_COMPUTE_BIT);
+    int decodeGlobalsBinding  = decodeLayout.AddBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                        VK_SHADER_STAGE_COMPUTE_BIT);
+
+    int denseGeometryBufferBinding = decodeLayout.AddBinding(
+        (u32)RTBindings::DenseGeometryData, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        VK_SHADER_STAGE_COMPUTE_BIT);
+
+    int packedDenseGeometryHeaderBufferBinding = decodeLayout.AddBinding(
+        (u32)RTBindings::PackedDenseGeometryHeaders, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        VK_SHADER_STAGE_COMPUTE_BIT);
+
+    DescriptorSet set = decodeLayout.CreateDescriptorSet();
+
+    // Decode clusters and set up clas calls
+    {
+        VkPipeline decodePipeline =
+            device->CreateComputePipeline(&decodeShader, &decodeLayout, &decodeConstants);
+
+        computeCmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, decodePipeline);
+        DescriptorSet descriptorSet = decodeLayout.CreateDescriptorSet();
+        descriptorSet.Bind(indexBufferBinding, &indexBuffer)
+            .Bind(vertexBufferBinding, &vertexBuffer)
+            .Bind(buildClasDescsBinding, &buildClasDescs)
+            .Bind(decodeGlobalsBinding, &globalsDesc)
+            .Bind(denseGeometryBufferBinding, &dgfBuffer)
+            .Bind(packedDenseGeometryHeaderBufferBinding, &headerBuffer);
+
+        u64 indexBufferAddress  = device->GetDeviceAddress(indexBuffer.buffer);
+        u64 vertexBufferAddress = device->GetDeviceAddress(vertexBuffer.buffer);
+
+        DecodePushConstant pc;
+        pc.numHeaders                      = numHeaders;
+        pc.indexBufferBaseAddressLowBits   = indexBufferAddress & 0xffffffff;
+        pc.indexBufferBaseAddressHighBits  = (indexBufferAddress >> 32u) & 0xffffffff;
+        pc.vertexBufferBaseAddressLowBits  = vertexBufferAddress & 0xffffffff;
+        pc.vertexBufferBaseAddressHighBits = (vertexBufferAddress >> 32u) & 0xffffffff;
+
+        computeCmd->PushConstants(&decodeConstants, &pc, decodeLayout.pipelineLayout);
+        computeCmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &descriptorSet,
+                                       decodeLayout.pipelineLayout);
+        computeCmd->Dispatch(totalNumClusters, 1, 1);
+
+        computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                            VK_ACCESS_2_SHADER_WRITE_BIT,
+                            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+        computeCmd->FlushBarriers();
+    }
+
+    // Build the CLAS
+    GPUBuffer clusterAccelAddresses = device->CreateBuffer(
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        sizeof(u64) * totalNumClusters);
+    GPUBuffer clusterAccelSizes = device->CreateBuffer(
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        sizeof(u32) * totalNumClusters);
+    {
+        computeCmd->BuildCLAS(&clusterAccelAddresses, &clusterAccelSizes, &clusterAccelSizes,
+                              &globalsDesc, sizeof(u32) * GLOBALS_CLAS_COUNT_INDEX,
+                              &GetScene()->scene, totalNumClusters, numTriangles, numVertices);
+    }
+
+    // TODO: Compact the CLAS over BLAS
+    {
+    }
+
+    // Set up bottom level input
+    u32 numBlas = 1;
+    GPUBuffer blasAccelAddresses =
+        device->CreateBuffer(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, sizeof(u64) * numBlas);
+
+    ClusterBottomLevelInfo bli = {};
+    bli.clusterReferencesCount = totalNumClusters;
+    bli.clusterReferences      = device->GetDeviceAddress(clusterAccelAddresses.buffer);
+
+    GPUBuffer bottomLevelInfo = computeCmd->SubmitBuffer(
+        &bli,
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        sizeof(ClusterBottomLevelInfo) * numBlas);
+
+    // Build the BLAS over CLAS
+    {
+        computeCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                            VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+        computeCmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                            VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+        computeCmd->FlushBarriers();
+        computeCmd->BuildClusterBLAS(&bottomLevelInfo, &blasAccelAddresses, &globalsDesc,
+                                     sizeof(u32) * GLOBALS_BLAS_COUNT_INDEX, totalNumClusters);
+    }
+
+    // Build the TLAS over BLAS
+    DescriptorSetLayout fillLayout;
+    int addressesBinding          = fillLayout.AddBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                          VK_SHADER_STAGE_COMPUTE_BIT);
+    int instancesBinding          = fillLayout.AddBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                          VK_SHADER_STAGE_COMPUTE_BIT);
+    GPUAccelerationStructure tlas = {};
+    {
+        // First fill out instance info on GPU
+        Instance instance          = {};
+        ScenePrimitives *baseScene = &GetScene()->scene;
+        GPUBuffer instanceData     = computeCmd->CreateTLASInstances(
+            &instance, 1, &params->renderFromWorld, &baseScene);
+
+        computeCmd->Barrier(&instanceData, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+        computeCmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                            VK_ACCESS_2_SHADER_READ_BIT);
+        computeCmd->FlushBarriers();
+
+        {
+            VkPipeline fillInstancePipeline =
+                device->CreateComputePipeline(&fillInstanceShader, &fillLayout);
+            computeCmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, fillInstancePipeline);
+            DescriptorSet descriptorSet = fillLayout.CreateDescriptorSet();
+            descriptorSet.Bind(addressesBinding, &blasAccelAddresses)
+                .Bind(instancesBinding, &instanceData);
+
+            computeCmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &descriptorSet,
+                                           fillLayout.pipelineLayout);
+            computeCmd->Dispatch(1, 1, 1);
+        }
+
+        // Build the TLAS
+        computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                            VK_ACCESS_2_SHADER_WRITE_BIT,
+                            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+        computeCmd->FlushBarriers();
+        tlas = computeCmd->BuildTLAS(&instanceData, 1);
+    }
+
+    Semaphore tlasSemaphore   = device->CreateGraphicsSemaphore();
+    tlasSemaphore.signalValue = 1;
+    computeCmd->Signal(tlasSemaphore);
+    device->SubmitCommandBuffer(computeCmd);
 
     // Set the instance ids of each scene
     int runningTotal = 0;
@@ -394,15 +613,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     Swapchain swapchain = device->CreateSwapchain(params->window, VK_FORMAT_R8G8B8A8_SRGB,
                                                   params->width, params->height);
 
-    // Compile shaders
-    Shader shader;
-    {
-        string shaderName = "../src/shaders/render_raytrace.spv";
-        Arena *arena      = params->arenas[0];
-        string shaderData = OS_ReadFile(arena, shaderName);
-        shader = device->CreateShader(ShaderStage::Compute, "pathtrace", shaderData);
-    }
-
     PushConstant pushConstant;
     pushConstant.stage  = ShaderStage::Compute;
     pushConstant.offset = 0;
@@ -439,6 +649,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     transferCmd->Barrier(&gpuEnvMap, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                          VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                          VK_ACCESS_2_SHADER_READ_BIT);
+    transferCmd->FlushBarriers();
 
     submitSemaphore.signalValue = 1;
     transferCmd->Signal(submitSemaphore);
@@ -492,6 +703,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     VkPipeline pipeline = device->CreateComputePipeline(&shader, &layout, &pushConstant);
 
+#if 0
     Semaphore tlasSemaphore = device->CreateGraphicsSemaphore();
 
     GPUAccelerationStructure tlas = {};
@@ -570,6 +782,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             device->SubmitCommandBuffer(tlasCmd);
         }
     }
+#endif
 
     f32 frameDt = 1.f / 60.f;
     int envMapBindlessIndex;

@@ -1,29 +1,25 @@
+#include "../rt/shader_interop/as_shaderinterop.h"
 #include "dense_geometry.hlsli"
 
-struct DecodePushConstant
-{
-    uint numHeaders;
-};
+[[vk::push_constant]] DecodePushConstant pc;
 
-struct DecodeGlobals 
-{
-};
-
-[[vk::push_constant] DecodePushConstant pc;
-ByteAddressBuffer denseGeometryData : register(t0);
-
-RWByteAddressBuffer indexBuffer : register(u1);
-RWStructuredBuffer<float3> decodeVertexBuffer : register(u2);
-RWStructuredBuffer<BuildClasDesc> buildClasDescs : register(u3);
-RWStructuredBuffer<DecodeGlobals> : register();
+RWByteAddressBuffer indexBuffer : register(u0);
+RWStructuredBuffer<float3> decodeVertexBuffer : register(u1);
+RWStructuredBuffer<BuildClasDesc> buildClasDescs : register(u2);
+RWStructuredBuffer<uint> globals : register(u3);
 
 [numthreads(32, 1, 1)] 
-void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
+void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dtID : SV_DispatchThreadID)
 {
     uint headerIndex = groupID.x;
+
+    if (all(dtID == 0))
+    {
+        globals[GLOBALS_BLAS_COUNT_INDEX] = 1;
+    }
+
     if (headerIndex >= pc.numHeaders) return;
 
-    // TODO: this isn't right yet
     DenseGeometry header = GetDenseGeometryHeader(headerIndex);
     
     // Decode triangle indices
@@ -33,17 +29,18 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
     uint indexBufferOffset = 0;
     if (WaveIsFirstLane())
     {
-        InterlockedAdd(globals.indexBufferOffset, header.numTriangles * 3, indexBufferOffset);
+        InterlockedAdd(globals[GLOBALS_INDEX_BUFFER_OFFSET_INDEX], header.numTriangles * 3, indexBufferOffset);
     }
 
     for (uint triangleIndex = groupIndex; triangleIndex < header.numTriangles; triangleIndex += waveNumActiveLanes)
     {
         // write u8 indices
-        uint3 triangleIndices = ?;
+        uint3 triangleIndices = header.DecodeTriangle(triangleIndex);
 
         uint indexBits = triangleIndices[0] | (triangleIndices[1] << 8u) | (triangleIndices[2] << 16u);
         uint2 offset = GetAlignedAddressAndBitOffset(indexBufferOffset + triangleIndex * 3, 0);
 
+        // Write the uint8 indices atomically
         if (indexBits + offset[1] >= 32)
         {
             uint mask = ~0u << ((indexBits + offset[1]) & 31u);
@@ -59,7 +56,7 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
     uint vertexBufferOffset = 0;
     if (WaveIsFirstLane())
     {
-        InterlockedAdd(globals.vertexBufferOffset, header.numVertices, vertexBufferOffset);
+        InterlockedAdd(globals[GLOBALS_VERTEX_BUFFER_OFFSET_INDEX], header.numVertices, vertexBufferOffset);
     }
 
     for (uint vertexIndex = groupIndex; vertexIndex < header.numVertices; vertexIndex += waveNumActiveLanes)
@@ -68,11 +65,16 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
         decodeVertexBuffer[vertexBufferOffset + vertexIndex] = position;
     }
 
+
     // TODO: maybe this goes to a separate pass if culling/tessellation is done
     // Write CLAS build infos
-
     if (WaveIsFirstLane())
     {
+        InterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], 1);
+
+        uint64_t indexBufferBaseAddress = ((pc.indexBufferBaseAddressHighBits << 32) | (pc.indexBufferBaseAddressLowBits));
+        uint64_t vertexBufferBaseAddress = ((pc.vertexBufferBaseAddressHighBits << 32) | (pc.vertexBufferBaseAddressLowBits));
+
         BuildClasDesc desc = (BuildClasDesc)0;
         desc.clusterId = groupID.x;
         desc.clusterFlags = 0;
@@ -81,14 +83,14 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
         desc.positionTruncateBitCount = 0;
         desc.indexFormat = 1; // VK_CLUSTER_ACCELERATION_STRUCTURE_INDEX_FORMAT_8BIT_NV
         desc.opacityMicromapIndexFormat = 0;
-        desc.baseGeometryIndexAndFlags = ?;
+        desc.baseGeometryIndexAndFlags = 0;
         desc.indexBufferStride = 0; // tightly packed
         desc.vertexBufferStride = 0;
-        desc.geometryIndexAndFlagBufferStride = ?;
-        desc.opacityMicromapBufferStride = 0;
+        desc.geometryIndexAndFlagsBufferStride = 0;
+        desc.opacityMicromapIndexBufferStride = 0;
         desc.indexBuffer = indexBufferBaseAddress + indexBufferOffset * 1;
         desc.vertexBuffer = vertexBufferBaseAddress + vertexBufferOffset * 12;
-        desc.geomemtryIndexAndFlagsBuffer = ?;
+        desc.geometryIndexAndFlagsBuffer = 0;
         desc.opacityMicromapArray = 0;
         desc.opacityMicromapIndexBuffer = 0;
 

@@ -367,7 +367,7 @@ struct DescriptorSetLayout
     VkDescriptorSetLayout *GetVulkanLayout();
     DescriptorSet CreateDescriptorSet();
     void AddImmutableSamplers();
-    void CreatePipelineLayout(PushConstant *pc);
+    void CreatePipelineLayout(PushConstant *pc = 0);
 };
 
 struct CommandBuffer
@@ -396,7 +396,7 @@ struct CommandBuffer
 
     void Wait(Semaphore s) { waitSemaphores.push_back(s); }
     void Signal(Semaphore s) { signalSemaphores.push_back(s); }
-    void Wait(CommandBuffer *other);
+    void WaitOn(CommandBuffer *other);
     void SubmitTransfer(TransferBuffer *buffer);
     GPUBuffer SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags, size_t totalSize);
     GPUImage SubmitImage(void *ptr, VkImageUsageFlags flags, VkFormat format, VkImageType type,
@@ -410,7 +410,7 @@ struct CommandBuffer
                  VkAccessFlags2 access);
     void Barrier(GPUBuffer *buffer, VkPipelineStageFlags2 stage, VkAccessFlags2 access);
     void Barrier(VkPipelineStageFlags2 srcStage, VkPipelineStageFlags2 dstStage,
-                 VkPipelineStageFlags2 srcAccess, VkPipelineStageFlags2 dstAccess);
+                 VkAccessFlags2 srcAccess, VkAccessFlags2 dstAccess);
 
     void FlushBarriers();
     void PushConstants(PushConstant *pc, void *ptr, VkPipelineLayout layout);
@@ -419,8 +419,13 @@ struct CommandBuffer
                                      VkAccelerationStructureGeometryKHR *geometries, int count,
                                      VkAccelerationStructureBuildRangeInfoKHR *buildRanges,
                                      u32 *maxPrimitiveCounts);
-    GPUAccelerationStructure BuildCLAS(RecordAOSSplits *records, int numRecords, PrimRef *refs,
-                                       Mesh *meshes, int numMeshes);
+
+    void BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
+                   GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 offset,
+                   ScenePrimitives *scene, int numClusters, u32 numTriangles, u32 numVertices);
+    void BuildClusterBLAS(GPUBuffer *bottomLevelInfo, GPUBuffer *dstAddresses,
+                          GPUBuffer *srcInfosCount, u32 srcInfosOffset, u32 numClusters);
+
     GPUBuffer CreateTLASInstances(Instance *instances, int numInstances,
                                   AffineSpace *transforms, ScenePrimitives **childScenes);
     GPUAccelerationStructure BuildTLAS(GPUBuffer *instanceData, u32 numInstances);
@@ -673,7 +678,7 @@ struct Vulkan
     void BindAccelerationStructure(VkDescriptorSet descriptorSet,
                                    VkAccelerationStructureKHR accel);
     VkPipeline CreateComputePipeline(Shader *shader, DescriptorSetLayout *layout,
-                                     PushConstant *pc);
+                                     PushConstant *pc = 0);
     RayTracingState CreateRayTracingPipeline(Shader **shaders, int counts[RST_Max],
                                              PushConstant *pushConstant,
                                              DescriptorSetLayout *layout, u32 maxDepth);

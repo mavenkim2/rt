@@ -211,6 +211,8 @@ set(SHADER_FILES "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl"
     "${SHADER_SRC_DIR}/render_raytrace_hit.hlsl"
     "${SHADER_SRC_DIR}/render_raytrace_dielectric_hit.hlsl"
     "${SHADER_SRC_DIR}/render_raytrace.hlsl"
+    "${SHADER_SRC_DIR}/decode_dgf_clusters.hlsl"
+    "${SHADER_SRC_DIR}/fill_instance_descs.hlsl"
 )
 set_property(SOURCE 
     "${SHADER_SRC_DIR}/render_raytrace_miss.hlsl"
@@ -220,6 +222,8 @@ set_property(SOURCE
     PROPERTY name "rt")
 set_property(SOURCE 
     "${SHADER_SRC_DIR}/render_raytrace.hlsl"
+    "${SHADER_SRC_DIR}/decode_dgf_clusters.hlsl"
+    "${SHADER_SRC_DIR}/fill_instance_descs.hlsl"
     PROPERTY name "cs")
 
 file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")

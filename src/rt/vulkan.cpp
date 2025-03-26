@@ -1151,13 +1151,13 @@ void Vulkan::CheckInitializedThreadPool(int threadIndex)
             VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         VkDescriptorPoolSize poolSize[4];
         poolSize[0].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-        poolSize[0].descriptorCount = 1;
+        poolSize[0].descriptorCount = 10;
         poolSize[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        poolSize[1].descriptorCount = 1;
+        poolSize[1].descriptorCount = 10;
         poolSize[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        poolSize[2].descriptorCount = 1;
+        poolSize[2].descriptorCount = 10;
         poolSize[3].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        poolSize[3].descriptorCount = 2;
+        poolSize[3].descriptorCount = 20;
 
         poolCreateInfo.pPoolSizes    = poolSize;
         poolCreateInfo.poolSizeCount = ArrayLength(poolSize);
@@ -1309,7 +1309,7 @@ Vulkan::ImageMemoryBarrier(VkImage image, VkImageLayout oldLayout, VkImageLayout
 }
 
 void CommandBuffer::Barrier(VkPipelineStageFlags2 srcStage, VkPipelineStageFlags2 dstStage,
-                            VkPipelineStageFlags2 srcAccess, VkPipelineStageFlags2 dstAccess)
+                            VkAccessFlags2 srcAccess, VkAccessFlags2 dstAccess)
 {
     VkMemoryBarrier2 barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
     barrier.srcStageMask     = srcStage;
@@ -1697,7 +1697,7 @@ TransferBuffer Vulkan::GetStagingImage(VkImageUsageFlags flags, VkFormat format,
     return buffer;
 }
 
-void CommandBuffer::Wait(CommandBuffer *other)
+void CommandBuffer::WaitOn(CommandBuffer *other)
 {
     Semaphore s   = device->CreateGraphicsSemaphore();
     s.signalValue = 1;
@@ -2288,24 +2288,17 @@ GPUAccelerationStructure CommandBuffer::BuildCustomBLAS(GPUBuffer *aabbsBuffer, 
                    &numAabbs);
 }
 
-GPUAccelerationStructure CommandBuffer::BuildCLAS(ScenePrimitives *scene,
-                                                  RecordAOSSplits *records, int numRecords,
-                                                  PrimRef *refs, Mesh *meshes, int numMeshes)
+void CommandBuffer::BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
+                              GPUBuffer *dstSizes, GPUBuffer *srcInfosCount,
+                              u32 srcInfosOffset, ScenePrimitives *scene, int numClusters,
+                              u32 numTriangles, u32 numVertices)
 {
-    ScratchArena scratch;
-    u32 numVertices  = 0;
-    u32 numTriangles = 0;
-    for (u32 i = 0; i < numMeshes; i++)
-    {
-        numTriangles += meshes[i].numIndices / 3;
-        numVertices += meshes[i].numVertices;
-    }
 
     VkClusterAccelerationStructureTriangleClusterInputNV triangleClusters = {
         VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_TRIANGLE_CLUSTER_INPUT_NV};
     triangleClusters.vertexFormat                  = VK_FORMAT_R32G32B32_SFLOAT;
-    triangleClusters.maxGeometryIndexValue         = numMeshes - 1;
-    triangleClusters.maxClusterUniqueGeometryCount = numMeshes;
+    triangleClusters.maxGeometryIndexValue         = 1; // numMeshes - 1;
+    triangleClusters.maxClusterUniqueGeometryCount = 1; // numMeshes;
     triangleClusters.maxClusterTriangleCount       = MAX_CLUSTER_TRIANGLES;
     triangleClusters.maxClusterVertexCount         = MAX_CLUSTER_VERTICES;
     triangleClusters.maxTotalTriangleCount         = numTriangles;
@@ -2317,182 +2310,105 @@ GPUAccelerationStructure CommandBuffer::BuildCLAS(ScenePrimitives *scene,
     inputInfo.opType = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_TRIANGLE_CLUSTER_NV;
     inputInfo.opMode = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_IMPLICIT_DESTINATIONS_NV;
     inputInfo.opInput.pTriangleClusters     = &triangleClusters;
-    inputInfo.maxAccelerationStructureCount = numRecords;
-
-    u32 allClasAccelerationStructureSize;
-    u32 blasSize;
-    u32 maxScratchSize = 0;
+    inputInfo.maxAccelerationStructureCount = numClusters;
 
     // Get acceleration structure sizes and size of scratch buffer
-    {
-        VkAccelerationStructureBuildSizesInfoKHR buildSizesInfo;
-        vkGetClusterAccelerationStructureBuildSizesNV(device->device, &inputInfo,
-                                                      &buildSizesInfo);
-        allClasAccelerationStructureSize = buildSizesInfo.accelerationStructureSize;
-        maxScratchSize                   = buildSizesInfo.buildScratchSize;
+    VkAccelerationStructureBuildSizesInfoKHR buildSizesInfo;
+    vkGetClusterAccelerationStructureBuildSizesNV(device->device, &inputInfo, &buildSizesInfo);
 
-        VkClusterAccelerationStructureClustersBottomLevelInputNV bottomLevelInput = {
-            VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_CLUSTERS_BOTTOM_LEVEL_INPUT_NV};
-        bottomLevelInput.maxTotalClusterCount                    = numRecords;
-        bottomLevelInput.maxClusterCountPerAccelerationStructure = numRecords;
-
-        inputInfo.opType =
-            VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_CLUSTERS_BOTTOM_LEVEL_NV;
-        inputInfo.opMode = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_IMPLICIT_DESTINATIONS_NV;
-        inputInfo.opInput.pClustersBottomLevel  = &bottomLevelInput;
-        inputinfo.maxAccelerationStructureCount = 1;
-
-        vkGetClusterAccelerationStructureBuildSizesNV(device->device, &inputInfo,
-                                                      &buildSizesInfo);
-        blasSize       = buildSizesInfo.accelerationStructureSize;
-        maxScratchSize = Max(buildSizesInfo.buildScratchSize);
-    }
-
-    GPUBuffer buildScratch =
-        device->CreateBuffer(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, maxScratchSize);
-
-    VkClusterAccelerationStructureBuildTriangleClusterInfoNV *triangleClusterInfos =
-        PushArray(scratch.temp.arena, VkClusterAccelerationStructureBuildTriangleClusterInfoNV,
-                  numRecords);
-
-    for (int i = 0; i < numRecords; i++)
-    {
-        RecordAOSSplits &record = records[i];
-
-        u32 clusterVertexCount = 0;
-        for (int j = record.start; j < record.start + record.count; j++)
-        {
-        }
-
-        auto &triangleClusterInfo     = triangleClusterInfos[i];
-        triangleClusterInfo.clusterID = i;
-        triangleClusterInfo.clusterFlags =
-            VK_CLUSTER_ACCELERATION_STRUCTURE_CLUSTER_ALLOW_DISABLE_OPACITY_MICROMAPS_NV;
-        triangleClusterInfo.triangleCount            = record.count;
-        triangleClusterInfo.vertexCount              = clusterVertexCount;
-        triangleClusterInfo.positionTruncateBitCount = 0;
-        triangleClusterInfo.indexType =
-            VK_CLUSTER_ACCELERATION_STRUCTURE_INDEX_FORMAT_32BIT_NV;
-        triangleClusterInfo.opacityMicromapIndexType =
-            VK_CLUSTER_ACCELERATION_STRUCTURE_INDEX_FORMAT_32BIT_NV;
-        triangleClusterInfo.baseGeometryIndexAndGeometryFlags.geometryIndex = 0;
-        triangleClusterInfo.baseGeometryIndexAndGeometryFlags.geometryFlags =
-            VK_CLUSTER_ACCELERATION_STRUCTURE_GEOMETRY_OPAQUE_BIT_NV |
-            VK_CLUSTER_ACCELERATION_STRUCTURE_GEOMETRY_CULL_DISABLE_BIT_NV;
-        triangleClusterInfo.indexBuffer                 = {};
-        triangleClusterInfo.vertexBuffer                = {};
-        triangleClusterInfo.geometryIndexAndFlagsBuffer = {};
-    }
-
-    u32 buildTriangleClusterSize =
-        sizeof(VkClusterAccelerationStructureBuildTriangleClusterInfoNV) * numRecords;
-    GPUBuffer triangleClusterBuffer =
-        SubmitBuffer(triangleClusterInfos,
-                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-                     buildTriangleClusterSize);
+    GPUBuffer buildScratch = device->CreateBuffer(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                                  buildSizesInfo.buildScratchSize);
 
     GPUBuffer implicitBuffer =
         device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
                              buildSizesInfo.accelerationStructureSize);
 
-    GPUBuffer blasBuffer =
-        device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, blasSize);
-
     VkClusterAccelerationStructureCommandsInfoNV commandsInfo = {
         VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_COMMANDS_INFO_NV};
 
-    GPUBuffer srcInfosCount = SubmitBuffer(
-        &numRecords, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(numRecord));
-
-    GPUBuffer clusterAccelAddresses =
-        device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
-                             sizeof(VkDeviceAddress) * numRecords);
     // Build CLAS
     {
         commandsInfo.input           = inputInfo;
         commandsInfo.dstImplicitData = device->GetDeviceAddress(implicitBuffer.buffer);
         commandsInfo.scratchData     = device->GetDeviceAddress(buildScratch.buffer);
+
         commandsInfo.dstAddressesArray.deviceAddress =
-            device->GetDeviceAddress(clusterAccelAddresses.buffer);
-        commandsInfo.dstAddressesArray.size   = clusterAccelAddresses.size;
+            device->GetDeviceAddress(dstAddresses->buffer);
+        commandsInfo.dstAddressesArray.size   = dstAddresses->size;
         commandsInfo.dstAddressesArray.stride = sizeof(VkDeviceAddress);
-        commandsInfo.dstSizesArray            = {};
+
+        commandsInfo.dstSizesArray.deviceAddress = device->GetDeviceAddress(dstSizes->buffer);
+        commandsInfo.dstSizesArray.size          = dstSizes->size;
+        commandsInfo.dstSizesArray.stride        = sizeof(u32);
+
         commandsInfo.srcInfosArray.deviceAddress =
-            device->GetDeviceAddress(triangleClusterBuffer.buffer);
-        commandsInfo.srcInfosArray.stride   = 0;
-        commandsInfo.srcInfosArray.size     = buildTriangleClusterSize;
-        commandsInfo.srcInfosCount          = device->GetDeviceAddress(srcInfosCount);
-        commandsInfo.addressResolutionFlags = {};
-
-        vkCmdBuildClusterAccelerationStructureIndirectNV(buffer, &commandsInfo);
-    }
-
-    // Sync
-    {
-        VkMemoryBarrier2 barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-        barrier.srcStageMask     = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-        barrier.dstStageMask     = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-        barrier.srcAccessMask    = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-        barrier.dstAccessMask    = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-
-        VkDependencyInfo dependencyInfo   = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        dependencyInfo.memoryBarrierCount = 1;
-        dependencyInfo.pMemoryBarriers    = &barrier;
-
-        vkCmdPipelineBarrier2(buffer, &dependencyInfo);
-    }
-
-    // Build BLAS over CLAS
-    {
-        GPUBuffer dstAddress = device->CreateBuffer(
-            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, sizeof(VkDeviceAddress),
-            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
-
-        VkClusterAccelerationStructureClustersBottomLevelInputNV bottomLevelInput = {
-            VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_CLUSTERS_BOTTOM_LEVEL_INPUT_NV};
-        bottomLevelInput.maxTotalClusterCount                    = numRecords;
-        bottomLevelInput.maxClusterCountPerAccelerationStructure = numRecords;
-
-        VkClusterAccelerationStructureBuildClustersBottomLevelInfoNV bottomLevelInfo;
-        bottomLevelInfo.clusterReferencesCount  = numRecords;
-        bottomLevelInfo.clusterReferencesStride = sizeof(VkDeviceAddress);
-        bottomLevelInfo.clusterReferences =
-            device->GetDeviceAddress(clusterAccelAddresses.buffer);
-
-        GPUBuffer bottomLevelInfoBuffer =
-            SubmitBuffer(&bottomLevelInfo,
-                         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-                         sizeof(bottomLevelInfo));
-
-        inputInfo = {VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_INPUT_INFO_NV};
-        inputInfo.opType =
-            VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_CLUSTERS_BOTTOM_LEVEL_NV;
-        inputInfo.opMode = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_IMPLICIT_DESTINATIONS_NV;
-        inputInfo.opInput.pClustersBottomLevel  = &bottomLevelInput;
-        inputInfo.maxAccelerationStructureCount = 1;
-
-        commandsInfo                 = {};
-        commandsInfo.input           = inputInfo;
-        commandsInfo.dstImplicitData = device->GetDeviceAddress(blasBuffer.buffer);
-        commandsInfo.scratchData     = device->GetDeviceAddress(buildScratch.buffer);
-
-        commandsInfo.dstAddressesArray.deviceAddress =
-            device->GetDeviceAddress(dstAddress.buffer);
-        commandsInfo.dstAddressesArray.size   = tlasInstances.size;
-        commandsInfo.dstAddressesArray.stride = sizeof(VkAccelerationStructureInstanceKHR);
-
-        commandsInfo.dstSizesArray = {};
-        commandsInfo.srcInfosArray.deviceAddress =
-            device->GetDeviceAddress(bottomLevelInfoBuffer.buffer);
+            device->GetDeviceAddress(triangleClusterInfo->buffer);
+        commandsInfo.srcInfosArray.size = triangleClusterInfo->size;
         commandsInfo.srcInfosArray.stride =
-            sizeof(VkClusterAccelerationStructureBuildClustersBottomLevelInfoNV);
-        commandsInfo.srcInfosArray.size     = sizeof(bottomLevelInfo);
-        commandsInfo.srcInfosCount          = device->GetDeviceAddress(srcInfosCount);
+            sizeof(VkClusterAccelerationStructureBuildTriangleClusterInfoNV);
+
+        commandsInfo.srcInfosCount =
+            device->GetDeviceAddress(srcInfosCount->buffer) + srcInfosOffset;
         commandsInfo.addressResolutionFlags = {};
 
         vkCmdBuildClusterAccelerationStructureIndirectNV(buffer, &commandsInfo);
     }
+}
+
+void CommandBuffer::BuildClusterBLAS(GPUBuffer *bottomLevelInfo, GPUBuffer *dstAddresses,
+                                     GPUBuffer *srcInfosCount, u32 srcInfosOffset,
+                                     u32 numClusters)
+{
+    // Get build sizes
+    VkClusterAccelerationStructureClustersBottomLevelInputNV bottomLevelInput = {
+        VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_CLUSTERS_BOTTOM_LEVEL_INPUT_NV};
+    bottomLevelInput.maxTotalClusterCount                    = numClusters;
+    bottomLevelInput.maxClusterCountPerAccelerationStructure = numClusters;
+
+    VkClusterAccelerationStructureInputInfoNV inputInfo = {
+        VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_INPUT_INFO_NV};
+    inputInfo.opType =
+        VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_CLUSTERS_BOTTOM_LEVEL_NV;
+    inputInfo.opMode = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_IMPLICIT_DESTINATIONS_NV;
+    inputInfo.opInput.pClustersBottomLevel  = &bottomLevelInput;
+    inputInfo.maxAccelerationStructureCount = 1;
+
+    VkAccelerationStructureBuildSizesInfoKHR buildSizesInfo;
+    vkGetClusterAccelerationStructureBuildSizesNV(device->device, &inputInfo, &buildSizesInfo);
+
+    // Create scratch and implicit buffers
+    GPUBuffer buildScratch = device->CreateBuffer(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                                  buildSizesInfo.buildScratchSize);
+
+    GPUBuffer implicitBuffer =
+        device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
+                             buildSizesInfo.accelerationStructureSize);
+
+    // Submit BLAS build command
+    VkClusterAccelerationStructureCommandsInfoNV commandsInfo = {
+        VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_COMMANDS_INFO_NV};
+    commandsInfo.input           = inputInfo;
+    commandsInfo.dstImplicitData = device->GetDeviceAddress(implicitBuffer.buffer);
+    commandsInfo.scratchData     = device->GetDeviceAddress(buildScratch.buffer);
+
+    commandsInfo.dstAddressesArray.deviceAddress =
+        device->GetDeviceAddress(dstAddresses->buffer);
+    commandsInfo.dstAddressesArray.size   = dstAddresses->size;
+    commandsInfo.dstAddressesArray.stride = sizeof(VkDeviceAddress);
+
+    commandsInfo.dstSizesArray = {};
+
+    commandsInfo.srcInfosArray.deviceAddress =
+        device->GetDeviceAddress(bottomLevelInfo->buffer);
+    commandsInfo.srcInfosArray.stride =
+        sizeof(VkClusterAccelerationStructureBuildClustersBottomLevelInfoNV);
+    commandsInfo.srcInfosArray.size = bottomLevelInfo->size;
+
+    commandsInfo.srcInfosCount =
+        device->GetDeviceAddress(srcInfosCount->buffer) + srcInfosOffset;
+    commandsInfo.addressResolutionFlags = {};
+
+    vkCmdBuildClusterAccelerationStructureIndirectNV(buffer, &commandsInfo);
 }
 
 GPUAccelerationStructure CommandBuffer::BuildBLAS(const GPUMesh *meshes, int count)
@@ -2554,7 +2470,8 @@ GPUAccelerationStructure CommandBuffer::BuildTLAS(Instance *instances, int numIn
                                                   AffineSpace *transforms,
                                                   ScenePrimitives **childScenes)
 {
-    CreateTLASInstances(instances, numInstances, transforms, childScenes);
+    GPUBuffer tlasBuffer =
+        CreateTLASInstances(instances, numInstances, transforms, childScenes);
     Barrier(&tlasBuffer, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
             VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
 
