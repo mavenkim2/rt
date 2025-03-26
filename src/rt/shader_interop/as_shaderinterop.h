@@ -8,6 +8,12 @@ namespace rt
 
 static const uint32_t kFillInstanceDescsThreads = 32;
 
+struct ClusterData
+{
+    uint32_t indexBufferOffset;
+    uint32_t vertexBufferOffset;
+};
+
 struct AccelerationStructureInstance
 {
 #ifdef __cplusplus

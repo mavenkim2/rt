@@ -42,7 +42,7 @@ uint2 Get2Random(inout uint x)
     return uint2(a, b);
 }
 
-struct RayPayload 
+struct [raypayload] RayPayload 
 {
     float3 pxOffset;
     float3 pyOffset;
@@ -50,8 +50,15 @@ struct RayPayload
     float3 dyOffset;
     uint seed;
 
-    float3 radiance;
-    float3 throughput;
+    float3 radiance : write(caller, miss) : read(caller);
+    float3 throughput : write(caller) : read(caller, miss);
+
+    float3 geometricNormal : write(closesthit) : read(caller);
+    float3 shadingNormal : write(closesthit) : read(caller);
+    float3 intersectPosition : write(closesthit) : read(caller);
+    float eta : write(closesthit) : read(caller);
+
+    bool missed : write(caller, miss) : read(caller);
 };
 
 template <typename T>
@@ -125,5 +132,38 @@ float3 TransformV(float3x4 m, float3 v)
 {
     return mul(m, float4(v, 0));
 }
+
+#if 0
+uint2 SwizzleThreadGroup(uint3 dispatchThreadID, uint3 groupID, uint3 GTid, uint2 groupDim, uint dispatchDimX, uint tileWidth,
+    uint log2TileWidth, uint numGroupsInTile, out uint2 swizzledGid)
+{
+    const uint groupIDFlattened = groupID.y * dispatchThreadID.x + groupID.x;
+    const uint tileID = groupIDFlattened / numGroupsInTile;
+    const uint groupIDinTileFlattened = groupIDFlattened % numGroupsInTile;
+
+    const uint numFullTiles = dispatchDimX / tileWidth;
+    const uint numGroupsInFullTiles = numFullTiles * numGroupsInTile;
+
+    uint2 groupIDinTile;
+    if (groupIDFlattened >= numGroupsInFullTiles)
+    {
+        // DispatchDimX & NumGroupsInTile
+        const uint lastTileDimX = dispatchDimX - tileWidth * numFullTiles;
+        groupIDinTile = uint2(groupIDinTileFlattened % lastTileDimX, groupIDinTileFlattened / lastTileDimX);
+    }
+    else
+    {
+        groupIDinTile = uint2(
+            groupIDinTileFlattened & (tileWidth - 1),
+            groupIDinTileFlattened >> log2TileWidth);
+    }
+
+    const uint swizzledGidFlattened = groupIDinTile.y * dispatchDimX + tileID * tileWidth + groupIDinTile.x;
+    swizzledGid = uint2(swizzledGidFlattened % dispatchDimX, swizzledGidFlattened / dispatchDimX);
+    const uint2 swizzledDTid = swizzledGid * groupDim + GTid.xy;
+
+    return swizzledDTid;
+}
+#endif
 
 #endif

@@ -127,7 +127,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
             float2 bary = query.CommittedTriangleBarycentrics();
 
-            float3 gn = normalize(cross(p[0] - p[2], p[1] - p[2]));
+            float3 gn = normalize(cross(p0 - p2, p1 - p2));
 #else
         if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
         {

@@ -8,7 +8,7 @@ namespace rt
 {
 #endif
 
-#define USE_PROCEDURAL_CLUSTER_INTERSECTION
+// #define USE_PROCEDURAL_CLUSTER_INTERSECTION
 
 #define ANCHOR_WIDTH              24
 #define MAX_CLUSTER_TRIANGLES_BIT 7

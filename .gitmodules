@@ -11,3 +11,6 @@
 [submodule "src/third_party/OpenSubdiv"]
 	path = src/third_party/OpenSubdiv
 	url = https://github.com/PixarAnimationStudios/OpenSubdiv.git
+[submodule "nvapi"]
+	path = src/third_party/nvapi
+	url = https://github.com/NVIDIA/nvapi.git

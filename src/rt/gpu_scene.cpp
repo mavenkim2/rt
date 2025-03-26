@@ -177,18 +177,51 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
 // 7. recycle memory
 // 8. textures
 
+#define USE_DGFS
+
 void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
                        int maxDepth, Image *envMap)
 {
     // Compile shaders
-    Shader shader;
+    // Shader shader;
     Shader decodeShader;
     Shader fillInstanceShader;
+    Shader *rayShaders[RST_Max];
+    int counts[RST_Max] = {};
     {
-        Arena *arena      = params->arenas[0];
+        Arena *arena                  = params->arenas[0];
+        string raygenShaderName       = "../src/shaders/render_raytrace_rgen.spv";
+        string missShaderName         = "../src/shaders/render_raytrace_miss.spv";
+        string hitShaderName          = "../src/shaders/render_raytrace_dielectric_hit.spv";
+        string intersectionShaderName = "../src/shaders/render_raytrace_dgf_intersect.spv";
+
+        string rgenData      = OS_ReadFile(arena, raygenShaderName);
+        string missData      = OS_ReadFile(arena, missShaderName);
+        string hitData       = OS_ReadFile(arena, hitShaderName);
+        string intersectData = OS_ReadFile(arena, intersectionShaderName);
+
+        Shader raygenShaders[1];
+        raygenShaders[counts[RST_Raygen]++] =
+            device->CreateShader(ShaderStage::Raygen, "raygen", rgenData);
+        Shader missShaders[1];
+        missShaders[counts[RST_Miss]++] =
+            device->CreateShader(ShaderStage::Miss, "miss", missData);
+        Shader hitShaders[1];
+        hitShaders[counts[RST_ClosestHit]++] =
+            device->CreateShader(ShaderStage::Hit, "hit", hitData);
+        Shader intersectShaders[1];
+        intersectShaders[counts[RST_Intersection]++] =
+            device->CreateShader(ShaderStage::Intersect, "intersect", intersectData);
+        rayShaders[RST_Raygen]       = raygenShaders;
+        rayShaders[RST_Miss]         = missShaders;
+        rayShaders[RST_ClosestHit]   = hitShaders;
+        rayShaders[RST_Intersection] = intersectShaders;
+
+#if 0
         string shaderName = "../src/shaders/render_raytrace.spv";
         string shaderData = OS_ReadFile(arena, shaderName);
         shader = device->CreateShader(ShaderStage::Compute, "pathtrace", shaderData);
+#endif
 
         string decodeShaderName = "../src/shaders/decode_dgf_clusters.spv";
         string decodeShaderData = OS_ReadFile(arena, decodeShaderName);
@@ -285,7 +318,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             numTriangles += meshes[i].numFaces;
         }
 
-#if 0
+#ifdef USE_DGFS
         // Convert primrefs to aabbs, submit to GPU
         StaticArray<VkAabbPositionsKHR> aabbs(sceneScratch.temp.arena,
                                               MAX_CLUSTER_TRIANGLES * data.numBlocks);
@@ -356,7 +389,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             headers, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             sizeof(PackedDenseGeometryHeader) * data.headers.Length());
 
-#if 0
+#ifdef USE_DGFS
         // Debug
         int c = 0;
         for (auto *node = data.types.first; node != 0; node = node->next)
@@ -396,6 +429,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         ReleaseArenaArray(builder.arenas);
     }
 
+    device->SetName(&dgfBuffer, "DGF Buffer");
+    device->SubmitCommandBuffer(dgfTransferCmd);
+
+#ifndef USE_DGFS
     CommandBuffer *computeCmd = device->BeginCommandBuffer(QueueType_Compute);
     computeCmd->WaitOn(dgfTransferCmd);
 
@@ -571,11 +608,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         computeCmd->FlushBarriers();
         tlas = computeCmd->BuildTLAS(&instanceData, 1);
     }
-
     Semaphore tlasSemaphore   = device->CreateGraphicsSemaphore();
     tlasSemaphore.signalValue = 1;
     computeCmd->Signal(tlasSemaphore);
     device->SubmitCommandBuffer(computeCmd);
+
+#endif
 
     // Set the instance ids of each scene
     int runningTotal = 0;
@@ -665,45 +703,43 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     };
 
     // Create descriptor set layout and pipeline
+    VkShaderStageFlags flags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR |
+                               VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                               VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
     DescriptorSetLayout layout = {};
-    int accelBindingIndex      = layout.AddBinding((u32)RTBindings::Accel,
-                                                   VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
-                                                   VK_SHADER_STAGE_COMPUTE_BIT);
-    int imageBindingIndex      = layout.AddBinding(
-        (u32)RTBindings::Image, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT);
+    int accelBindingIndex      = layout.AddBinding(
+        (u32)RTBindings::Accel, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, flags);
+    int imageBindingIndex =
+        layout.AddBinding((u32)RTBindings::Image, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, flags);
 
     int sceneBindingIndex =
-        layout.AddBinding((u32)RTBindings::Scene, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                          VK_SHADER_STAGE_COMPUTE_BIT);
+        layout.AddBinding((u32)RTBindings::Scene, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, flags);
 
-    int bindingDataBindingIndex =
-        layout.AddBinding((u32)RTBindings::RTBindingData, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                          VK_SHADER_STAGE_COMPUTE_BIT);
+    int bindingDataBindingIndex = layout.AddBinding((u32)RTBindings::RTBindingData,
+                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, flags);
 
-    int gpuMaterialBindingIndex =
-        layout.AddBinding((u32)RTBindings::GPUMaterial, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                          VK_SHADER_STAGE_COMPUTE_BIT);
+    int gpuMaterialBindingIndex = layout.AddBinding((u32)RTBindings::GPUMaterial,
+                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, flags);
 
-    int denseGeometryBufferIndex =
-        layout.AddBinding((u32)RTBindings::DenseGeometryData,
-                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT);
+    int denseGeometryBufferIndex = layout.AddBinding((u32)RTBindings::DenseGeometryData,
+                                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, flags);
 
-    int packedDenseGeometryHeaderBufferIndex =
-        layout.AddBinding((u32)RTBindings::PackedDenseGeometryHeaders,
-                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT);
+    int packedDenseGeometryHeaderBufferIndex = layout.AddBinding(
+        (u32)RTBindings::PackedDenseGeometryHeaders, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, flags);
 
-    int shaderDebugIndex =
-        layout.AddBinding((u32)RTBindings::ShaderDebugInfo, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                          VK_SHADER_STAGE_COMPUTE_BIT);
+    int shaderDebugIndex = layout.AddBinding((u32)RTBindings::ShaderDebugInfo,
+                                             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, flags);
 
-    int aabbIndex =
-        layout.AddBinding(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT);
+    int aabbIndex = layout.AddBinding(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, flags);
 
     layout.AddImmutableSamplers();
 
-    VkPipeline pipeline = device->CreateComputePipeline(&shader, &layout, &pushConstant);
+    // VkPipeline pipeline = device->CreateComputePipeline(&shader, &layout, &pushConstant);
 
-#if 0
+    RayTracingState rts =
+        device->CreateRayTracingPipeline(rayShaders, counts, &pushConstant, &layout, 2);
+
+#ifdef USE_DGFS
     Semaphore tlasSemaphore = device->CreateGraphicsSemaphore();
 
     GPUAccelerationStructure tlas = {};
@@ -938,10 +974,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->Barrier(&shaderDebugBuffers[currentBuffer].buffer,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-        cmd->Barrier(image, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        cmd->Barrier(image, VK_IMAGE_LAYOUT_GENERAL,
+                     VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                      VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->FlushBarriers();
-        cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+        cmd->BindPipeline(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rts.pipeline);
         DescriptorSet descriptorSet = layout.CreateDescriptorSet();
         descriptorSet.Bind(accelBindingIndex, &tlas.as)
             .Bind(imageBindingIndex, image)
@@ -956,9 +993,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                 layout.pipelineLayout);
 
         cmd->PushConstants(&pushConstant, &pc, layout.pipelineLayout);
-        cmd->Dispatch(
-            (params->width + PATH_TRACE_NUM_THREADS_X - 1) / PATH_TRACE_NUM_THREADS_X,
-            (params->height + PATH_TRACE_NUM_THREADS_Y - 1) / PATH_TRACE_NUM_THREADS_Y, 1);
+        cmd->TraceRays(&rts, params->width, params->height, 1);
         device->CopyFrameBuffer(&swapchain, cmd, image);
         device->EndFrame();
 

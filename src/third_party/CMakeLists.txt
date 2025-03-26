@@ -50,3 +50,6 @@ set(OSD_LIBRARY osd_static_cpu PARENT_SCOPE)
 
 set (NANOVDB_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/openvdb/nanovdb 
     ${CMAKE_CURRENT_BINARY_DIR}openvdb/nanovdb PARENT_SCOPE)
+
+# nvapi
+set (NVAPI_LIBRARY ${CMAKE_CURRENT_SOURCE_DIR}/nvapi/x86/nvapi.lib PARENT_SCOPE)

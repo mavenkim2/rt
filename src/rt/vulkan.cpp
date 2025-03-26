@@ -367,6 +367,8 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
                 checkAndAddExtension(VK_KHR_RAY_QUERY_EXTENSION_NAME, 0, &rayQueryFeatures);
             Assert(result);
 
+            // checkAndAddExtension(VK_NV_SHADER_EXECUTION_REORDERING_EXTENSION_NAME, 0, );
+
             // TODO: update my drivers
             // clasPropertiesNV = {
             //     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_PROPERTIES_NV};

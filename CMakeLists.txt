@@ -179,6 +179,7 @@ set(deps
     ${ZLIB_LIBRARY}
     ${PTEX_LIBRARY}
     ${OSD_LIBRARY}
+    ${NVAPI_LIBRARY}
 )
 
 install (TARGETS thread_context EXPORT THREAD_CONTEXT DESTINATION lib)
@@ -208,17 +209,17 @@ set(SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders)
 set(SHADER_SPV_DIR ${CMAKE_CURRENT_BINARY_DIR}/src/shaders)
 set(SHADER_FILES "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
     "${SHADER_SRC_DIR}/render_raytrace_miss.hlsl"
-    "${SHADER_SRC_DIR}/render_raytrace_hit.hlsl"
     "${SHADER_SRC_DIR}/render_raytrace_dielectric_hit.hlsl"
     "${SHADER_SRC_DIR}/render_raytrace.hlsl"
     "${SHADER_SRC_DIR}/decode_dgf_clusters.hlsl"
     "${SHADER_SRC_DIR}/fill_instance_descs.hlsl"
+    "${SHADER_SRC_DIR}/render_raytrace_dgf_intersect.hlsl"
 )
 set_property(SOURCE 
     "${SHADER_SRC_DIR}/render_raytrace_miss.hlsl"
-    "${SHADER_SRC_DIR}/render_raytrace_hit.hlsl"
     "${SHADER_SRC_DIR}/render_raytrace_dielectric_hit.hlsl"
     "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
+    "${SHADER_SRC_DIR}/render_raytrace_dgf_intersect.hlsl"
     PROPERTY name "rt")
 set_property(SOURCE 
     "${SHADER_SRC_DIR}/render_raytrace.hlsl"
@@ -239,15 +240,16 @@ foreach(SHADER_FILE ${SHADER_FILES})
     set(SHADER_SPV ${SHADER_SPV_DIR}/${SHADER_NAME}.spv)
 
     if (${SHADER_TYPE} STREQUAL "rt")
-        set (SHADER_TYPE_FLAG "-T lib_6_6")
+        set (SHADER_TYPE_FLAG "-T lib_6_8")
     elseif (${SHADER_TYPE} STREQUAL "cs")
         set (SHADER_TYPE_FLAG "-T cs_6_6")
     endif()
+
     add_custom_command(
         OUTPUT ${SHADER_SPV}
         COMMAND ${SHADER_COMPILER} 
         "-spirv" "-fspv-target-env=vulkan1.3" "-fvk-use-scalar-layout" "-Wno-parameter-usage"
-        ${SHADER_TYPE_FLAG} "$<$<CONFIG:Debug>:-Zi>" "-Fo ${SHADER_SPV}" "${SHADER_FILE}"
+        ${SHADER_TYPE_FLAG} "$<$<CONFIG:Debug>:-Zi>" "-Fo ${SHADER_SPV}" "${SHADER_FILE}" 
         DEPENDS ${SHADER_FILE} ${SHADER_INCLUDES} ${SHADER_INTEROP}
         COMMENT "Compiling HLSL shader: ${SHADER_FILE} -> ${SHADER_SPV}"
         VERBATIM
