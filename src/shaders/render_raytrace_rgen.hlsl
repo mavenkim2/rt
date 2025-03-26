@@ -1,6 +1,8 @@
 #include "bxdf.hlsli"
 #include "common.hlsli"
 #include "rt.hlsli"
+#include "sampling.hlsli"
+#include "payload.hlsli"
 #include "../rt/shader_interop/ray_shaderinterop.h"
 #include "../rt/shader_interop/hit_shaderinterop.h"
 #include "../rt/shader_interop/debug_shaderinterop.h"
@@ -36,7 +38,13 @@ void main()
     float3 dpdx, dpdy, dddx, dddy;
     GenerateRay(scene, filterSample, pLens, pos, dir, dpdx, dpdy, dddx, dddy);
 
+    if (all(id.xy == debugInfo.mousePos))
+    {
+        printf("p: %f %f %f, d: %f %f %f\n", pos.x, pos.y, pos.z, dir.x, dir.y, dir.z);
+    }
+
     RayPayload payload;
+    payload.rng = rng;
     payload.radiance = 0;
     payload.throughput = 1;
     payload.missed = false;
@@ -49,44 +57,13 @@ void main()
         desc.TMin = 0;
         desc.TMax = FLT_MAX;
 
-        TraceRay(accel, RAY_FLAG_FORCE_OPAQUE, 0xff, 0, 0, 0, desc, payload);
-        if (payload.missed || depth++ >= maxDepth) break;
+        TraceRay(accel, RAY_FLAG_SKIP_TRIANGLES | RAY_FLAG_FORCE_OPAQUE, 0xff, 0, 1, 0, desc, payload);
 
-        float3 p = payload.intersectPosition;
-        float3 gn = payload.geometricNormal;
-        float3 n = payload.shadingNormal;
-        float eta = payload.eta;
+        pos = payload.pos;
+        dir = payload.dir;
 
-        //float3 d = WorldRayDirection();
-        float3 wo = float3(1, 0, 0);//-normalize(d);
-
-        float u = rng.Uniform();
-        float R = FrDielectric(dot(wo, n), eta);
-
-        float T = 1 - R;
-        float pr = R, pt = T;
-
-        if (u < pr / (pr + pt))
-        {
-            dir = Reflect(wo, n);
-        }
-        else
-        {
-            float etap;
-            bool valid = Refract(wo, n, eta, etap, dir);
-            if (!valid)
-            {
-                payload.radiance = float3(0, 0, 0);
-                break;
-            }
-        
-            payload.throughput /= etap * etap;
-        }
-
-        float3 origin = TransformP(ObjectToWorld3x4(), p);
-        dir = TransformV(ObjectToWorld3x4(), normalize(dir));
-        pos = OffsetRayOrigin(origin, gn);
-
+        bool missed = payload.missed;
+        if (missed || depth++ >= maxDepth) break;
     }
 
     image[id.xy] = float4(payload.radiance, 1);

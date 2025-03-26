@@ -4,6 +4,11 @@
 [shader("intersection")]
 void main()
 {
+    BuiltInTriangleIntersectionAttributes attr;
+    attr.barycentrics = float2(0, 0);
+    ReportHit(0.5, 0, attr);
+
+#if 0
     uint primitiveIndex = PrimitiveIndex();
     
     uint blockIndex = primitiveIndex >> MAX_CLUSTER_TRIANGLES_BIT;
@@ -31,4 +36,5 @@ void main()
         attr.barycentrics = bary;
         ReportHit(tHit, 0, attr);
     }
+#endif
 }

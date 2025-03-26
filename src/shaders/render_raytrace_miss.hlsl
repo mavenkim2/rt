@@ -1,5 +1,6 @@
 #include "common.hlsli"
 #include "sampling.hlsli"
+#include "payload.hlsli"
 #include "../rt/shader_interop/gpu_scene_shaderinterop.h"
 #include "../rt/shader_interop/ray_shaderinterop.h"
 

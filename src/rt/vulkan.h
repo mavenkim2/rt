@@ -217,6 +217,12 @@ enum RayShaderType
     RST_Max,
 };
 
+enum class RayTracingShaderGroupType
+{
+    Triangle,
+    Procedural,
+};
+
 enum class RTBindings
 {
     Accel,
@@ -680,8 +686,8 @@ struct Vulkan
     VkPipeline CreateComputePipeline(Shader *shader, DescriptorSetLayout *layout,
                                      PushConstant *pc = 0);
     RayTracingState CreateRayTracingPipeline(Shader **shaders, int counts[RST_Max],
-                                             PushConstant *pushConstant,
-                                             DescriptorSetLayout *layout, u32 maxDepth);
+                                             PushConstant *pc, DescriptorSetLayout *layout,
+                                             u32 maxDepth, RayTracingShaderGroupType type);
     QueryPool CreateQuery(QueryType type, int count);
 
     VkAccelerationStructureInstanceKHR GetVkInstance(const AffineSpace &transform,

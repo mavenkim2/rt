@@ -652,7 +652,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                                   params->width, params->height);
 
     PushConstant pushConstant;
-    pushConstant.stage  = ShaderStage::Compute;
+    pushConstant.stage  = ShaderStage::Raygen;
     pushConstant.offset = 0;
     pushConstant.size   = sizeof(RayPushConstant);
 
@@ -685,8 +685,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                                   VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TYPE_2D,
                                                   envMap->width, envMap->height);
     transferCmd->Barrier(&gpuEnvMap, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                         VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                         VK_ACCESS_2_SHADER_READ_BIT);
+                         VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
     transferCmd->FlushBarriers();
 
     submitSemaphore.signalValue = 1;
@@ -736,8 +735,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     // VkPipeline pipeline = device->CreateComputePipeline(&shader, &layout, &pushConstant);
 
-    RayTracingState rts =
-        device->CreateRayTracingPipeline(rayShaders, counts, &pushConstant, &layout, 2);
+    RayTracingState rts = device->CreateRayTracingPipeline(
+        rayShaders, counts, &pushConstant, &layout, 2, RayTracingShaderGroupType::Procedural);
 
 #ifdef USE_DGFS
     Semaphore tlasSemaphore = device->CreateGraphicsSemaphore();
@@ -971,9 +970,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         cmd->SubmitTransfer(&shaderDebugBuffers[currentBuffer]);
 
         cmd->Barrier(&sceneTransferBuffers[currentBuffer].buffer,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+                     VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                     VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->Barrier(&shaderDebugBuffers[currentBuffer].buffer,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+                     VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                     VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->Barrier(image, VK_IMAGE_LAYOUT_GENERAL,
                      VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                      VK_ACCESS_2_SHADER_WRITE_BIT);
@@ -989,8 +990,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             .Bind(packedDenseGeometryHeaderBufferIndex, &headerBuffer)
             .Bind(shaderDebugIndex, &shaderDebugBuffers[currentBuffer].buffer)
             .Bind(aabbIndex, &aabbBuffer);
-        cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &descriptorSet,
-                                layout.pipelineLayout);
+        cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, &descriptorSet,
+                                rts.layout);
 
         cmd->PushConstants(&pushConstant, &pc, layout.pipelineLayout);
         cmd->TraceRays(&rts, params->width, params->height, 1);

@@ -2,6 +2,8 @@
 #include "common.hlsli"
 #include "bxdf.hlsli"
 #include "dense_geometry.hlsli"
+#include "payload.hlsli"
+#include "rt.hlsli"
 #include "../rt/shader_interop/as_shaderinterop.h"
 #include "../rt/shader_interop/dense_geometry_shaderinterop.h"
 #include "../rt/shader_interop/hit_shaderinterop.h"
@@ -20,6 +22,10 @@ ByteAddressBuffer indices : register(t9);
 [shader("closesthit")]
 void main(inout RayPayload payload : SV_RayPayload, BuiltInTriangleIntersectionAttributes attr : SV_IntersectionAttributes) 
 {
+    payload.radiance = float3(.5, 0, 0);
+    payload.missed = true;
+
+#if 0
     uint bindingDataIndex = InstanceID() + GeometryIndex();
     uint primitiveIndex = PrimitiveIndex();
 
@@ -70,15 +76,49 @@ void main(inout RayPayload payload : SV_RayPayload, BuiltInTriangleIntersectionA
 #endif
     float2 bary = attr.barycentrics;
     float3 n = normalize(n0 + (n1 - n0) * bary.x + (n2 - n0) * bary.y);
-    float3 p = p0 + (p1 - p0) * bary.x + (p2 - p0) * bary.y;
 
     // Get material
     RTBindingData bindingData = rtBindingData[0];
     GPUMaterial material = materials[bindingData.materialIndex];
     float eta = material.eta;
 
-    payload.eta = eta;
-    payload.intersectPosition = p;
-    payload.geometricNormal = gn;
-    payload.shadingNormal = n;
+    float3 wo = -normalize(ObjectRayDirection());
+
+    RNG rng = payload.rng;
+    float u = rng.Uniform();
+    float R = FrDielectric(dot(wo, n), eta);
+
+    float T = 1 - R;
+    float pr = R, pt = T;
+
+    float3 origin = p0 + (p1 - p0) * bary.x + (p2 - p0) * bary.y;
+
+    float3 throughput = payload.throughput;
+
+    float3 dir;
+    if (u < pr / (pr + pt))
+    {
+        dir = Reflect(wo, n);
+    }
+    else
+    {
+        float etap;
+        bool valid = Refract(wo, n, eta, etap, dir);
+        if (!valid)
+        {
+            throughput = 0;
+        }
+        else 
+        {
+            throughput /= etap * etap;
+        }
+    }
+
+    origin = TransformP(ObjectToWorld3x4(), origin);
+
+    payload.rng = rng;
+    payload.dir = TransformV(ObjectToWorld3x4(), normalize(dir));
+    payload.pos = OffsetRayOrigin(origin, gn);
+    payload.throughput = throughput;
+#endif
 }

@@ -3,6 +3,7 @@
 #include "rt.hlsli"
 #include "ray_triangle_intersection.hlsli"
 #include "sampling.hlsli"
+#include "payload.hlsli"
 #include "dense_geometry.hlsli"
 #include "../rt/shader_interop/ray_shaderinterop.h"
 #include "../rt/shader_interop/hit_shaderinterop.h"

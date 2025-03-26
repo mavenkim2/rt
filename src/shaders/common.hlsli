@@ -42,25 +42,6 @@ uint2 Get2Random(inout uint x)
     return uint2(a, b);
 }
 
-struct [raypayload] RayPayload 
-{
-    float3 pxOffset;
-    float3 pyOffset;
-    float3 dxOffset;
-    float3 dyOffset;
-    uint seed;
-
-    float3 radiance : write(caller, miss) : read(caller);
-    float3 throughput : write(caller) : read(caller, miss);
-
-    float3 geometricNormal : write(closesthit) : read(caller);
-    float3 shadingNormal : write(closesthit) : read(caller);
-    float3 intersectPosition : write(closesthit) : read(caller);
-    float eta : write(closesthit) : read(caller);
-
-    bool missed : write(caller, miss) : read(caller);
-};
-
 template <typename T>
 void swap(T a, T b)
 {

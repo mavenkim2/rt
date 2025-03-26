@@ -2026,7 +2026,8 @@ VkPipeline Vulkan::CreateComputePipeline(Shader *shader, DescriptorSetLayout *la
 
 RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RST_Max],
                                                  PushConstant *pc, DescriptorSetLayout *layout,
-                                                 u32 maxDepth)
+                                                 u32 maxDepth,
+                                                 RayTracingShaderGroupType shaderGroupType)
 {
     int total = 0;
     for (int i = 0; i < RST_Max; i++)
@@ -2094,7 +2095,12 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
             count++;
         }
 
-        group.type          = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+        VkRayTracingShaderGroupTypeKHR vkShaderGroupType =
+            shaderGroupType == RayTracingShaderGroupType::Triangle
+                ? VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR
+                : VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR;
+
+        group.type          = vkShaderGroupType;
         group.generalShader = VK_SHADER_UNUSED_KHR;
         for (int i = 0; i < counts[RST_ClosestHit]; i++)
         {
@@ -2103,7 +2109,7 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
             count++;
         }
 
-        group.type             = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+        group.type             = vkShaderGroupType;
         group.closestHitShader = VK_SHADER_UNUSED_KHR;
 
         for (int i = 0; i < counts[RST_Intersection]; i++)
