@@ -34,6 +34,34 @@ struct IndirectArgs
     uint32_t clasCount;
 };
 
+struct BuildClasDesc
+{
+    uint32_t clusterId;
+    uint32_t clusterFlags;
+    uint32_t triangleCount : 9;
+    uint32_t vertexCount : 9;
+    uint32_t positionTruncateBitCount : 6;
+    uint32_t indexFormat : 4;
+    uint32_t opacityMicromapIndexFormat : 4;
+    uint32_t baseGeometryIndexAndFlags;
+    uint16_t indexBufferStride;
+    uint16_t vertexBufferStride;
+    uint16_t geometryIndexAndFlagsBufferStride;
+    uint16_t opacityMicromapIndexBufferStride;
+    uint64_t indexBuffer;
+    uint64_t vertexBuffer;
+    uint64_t geometryIndexAndFlagsBuffer;
+    uint64_t opacityMicromapArray;
+    uint64_t opacityMicromapIndexBuffer;
+};
+
+struct GeometryIndexAndFlags
+{
+    uint32_t geometryIndex : 24;
+    uint32_t reserved : 5;
+    uint32_t geometryFlags : 3;
+};
+
 #ifdef __cplusplus
 }
 #endif

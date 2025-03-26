@@ -244,6 +244,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         builder.CreateDGFs(&data, (Mesh *)scene->primitives, scene->numPrimitives,
                            sceneBounds);
 
+        u32 numClusters = 0;
+        for (int i = 0; i < builder.threadClusters.Length(); i++)
+        {
+            numClusters += builder.threadClusters[i].l.totalCount;
+        }
+
         // Convert primrefs to aabbs, submit to GPU
         StaticArray<VkAabbPositionsKHR> aabbs(sceneScratch.temp.arena,
                                               MAX_CLUSTER_TRIANGLES * data.numBlocks);
