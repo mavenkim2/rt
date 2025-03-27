@@ -6,6 +6,8 @@ namespace rt
 {
 #endif
 
+#define USE_PROCEDURAL_CLUSTER_INTERSECTION
+
 static const uint32_t kFillInstanceDescsThreads = 32;
 
 struct ClusterData

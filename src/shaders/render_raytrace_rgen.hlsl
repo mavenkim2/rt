@@ -3,14 +3,20 @@
 #include "rt.hlsli"
 #include "sampling.hlsli"
 #include "payload.hlsli"
+#include "dense_geometry.hlsli"
 #include "../rt/shader_interop/ray_shaderinterop.h"
 #include "../rt/shader_interop/hit_shaderinterop.h"
 #include "../rt/shader_interop/debug_shaderinterop.h"
+#include "../rt/shader_interop/dense_geometry_shaderinterop.h"
+#include "ray_triangle_intersection.hlsli"
+//#include "../rt/nvapi.h"
 
 [[vk::push_constant]] RayPushConstant push;
 
 RaytracingAccelerationStructure accel : register(t0);
-RWTexture2D<float4> image : register(u1);
+
+RWTexture2D<half4> image : register(u1);
+
 ConstantBuffer<GPUScene> scene : register(b2);
 StructuredBuffer<RTBindingData> rtBindingData : register(t3);
 StructuredBuffer<GPUMaterial> materials : register(t4);
@@ -38,11 +44,6 @@ void main()
     float3 dpdx, dpdy, dddx, dddy;
     GenerateRay(scene, filterSample, pLens, pos, dir, dpdx, dpdy, dddx, dddy);
 
-    if (all(id.xy == debugInfo.mousePos))
-    {
-        printf("p: %f %f %f, d: %f %f %f\n", pos.x, pos.y, pos.z, dir.x, dir.y, dir.z);
-    }
-
     RayPayload payload;
     payload.rng = rng;
     payload.radiance = 0;
@@ -57,13 +58,20 @@ void main()
         desc.TMin = 0;
         desc.TMax = FLT_MAX;
 
-        TraceRay(accel, RAY_FLAG_SKIP_TRIANGLES | RAY_FLAG_FORCE_OPAQUE, 0xff, 0, 1, 0, desc, payload);
+        TraceRay(accel, RAY_FLAG_NONE, 0xff, 0, 1, 0, desc, payload);
+        //NvHitObject hit = NvTraceRayHitObject(accel, RAY_FLAG_NONE, 0xff, 0, 1, 0, desc, payload);
+
+        bool terminate = payload.missed || depth++ >= maxDepth;
+        uint hint = terminate ? 1 : 0;
+
+        //NvReorderThread(hit, hint, 1);
+        //NvInvokeHitObject(accel, hit, payload);
 
         pos = payload.pos;
         dir = payload.dir;
 
-        bool missed = payload.missed;
-        if (missed || depth++ >= maxDepth) break;
+        //NvReorderThread(terminate, 1);
+        if (terminate) break;
     }
 
     image[id.xy] = float4(payload.radiance, 1);

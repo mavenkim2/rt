@@ -8,7 +8,8 @@ namespace rt
 {
 #endif
 
-// #define USE_PROCEDURAL_CLUSTER_INTERSECTION
+#define LOG2_TRIANGLES_PER_LEAF 3
+#define TRIANGLES_PER_LEAF (1 << LOG2_TRIANGLES_PER_LEAF)
 
 #define ANCHOR_WIDTH              24
 #define MAX_CLUSTER_TRIANGLES_BIT 7

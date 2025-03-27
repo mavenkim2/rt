@@ -1,3 +1,5 @@
+#ifndef RAY_TRIANGLE_INTERSECTION_HLSLI_
+#define RAY_TRIANGLE_INTERSECTION_HLSLI_
 bool RayTriangleIntersectionMollerTrumbore(float3 o, float3 d, float3 v0, float3 v1, float3 v2,
                                            out float intersectionT, out float2 barycentrics)
 {
@@ -30,3 +32,4 @@ bool RayTriangleIntersectionMollerTrumbore(float3 o, float3 d, float3 v0, float3
 
     return true;
 }
+#endif

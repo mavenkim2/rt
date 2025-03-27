@@ -1,3 +1,6 @@
+#ifndef DENSE_GEOMETRY_HLSLI_
+#define DENSE_GEOMETRY_HLSLI_
+
 #include "bit_twiddling.hlsli"
 #include "common.hlsli"
 #include "../rt/shader_interop/dense_geometry_shaderinterop.h"
@@ -347,3 +350,4 @@ DenseGeometry GetDenseGeometryHeader(uint blockIndex)
 
     return result;
 }
+#endif

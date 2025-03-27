@@ -1,10 +1,13 @@
 #include "base.h"
+#include "containers.h"
 #include "shader_interop/dense_geometry_shaderinterop.h"
 #include "memory.h"
 #include "thread_context.h"
 #include <atomic>
 #include "vulkan.h"
 #include "scene.h"
+#include "nvapi.h"
+#include "../third_party/nvapi/nvapi.h"
 #define VMA_IMPLEMENTATION
 #include "../third_party/vulkan/vk_mem_alloc.h"
 
@@ -46,6 +49,8 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
 
     VK_CHECK(volkInitialize());
 
+    u32 apiVersion = VK_API_VERSION_1_4;
+
     // Create the application
     VkApplicationInfo appInfo  = {};
     appInfo.sType              = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -53,7 +58,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
     appInfo.applicationVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);
     appInfo.pEngineName        = "RT";
     appInfo.engineVersion      = VK_MAKE_API_VERSION(0, major, minor, patch);
-    appInfo.apiVersion         = VK_API_VERSION_1_3;
+    appInfo.apiVersion         = apiVersion;
 
     // Load available layers
     u32 layerCount = 0;
@@ -91,7 +96,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
     {
         static const std::vector<const char *> validationPriorityList[] = {
             // Preferred
-            {"VK_LAYER_KHRONOS_validation"},
+            {"VK_LAYER_NV_optimus", "VK_LAYER_KHRONOS_validation"},
             // Fallback
             {"VK_LAYER_LUNARG_standard_validation"},
             // Individual
@@ -141,7 +146,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
 
     // Create instance
     {
-        Assert(volkGetInstanceVersion() >= VK_API_VERSION_1_3);
+        Assert(volkGetInstanceVersion() >= apiVersion);
         VkInstanceCreateInfo instInfo    = {};
         instInfo.sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         instInfo.pApplicationInfo        = &appInfo;
@@ -242,7 +247,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
             if (!vkGetPhysicalDeviceWin32PresentationSupportKHR(testDevice, graphicsIndex))
                 continue;
 #endif
-            if (props.properties.apiVersion < VK_API_VERSION_1_3) continue;
+            if (props.properties.apiVersion < apiVersion) continue;
 
             b32 suitable = props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
             if (preference == GPUDevicePreference::Integrated)
@@ -317,10 +322,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
             return false;
         };
 
-        if (checkAndAddExtension(VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME))
-        {
-            deviceExtensions.push_back(VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME);
-        }
+        checkAndAddExtension(VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME);
 
         meshShaderProperties = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT};
         meshShaderFeatures   = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
@@ -367,19 +369,26 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
                 checkAndAddExtension(VK_KHR_RAY_QUERY_EXTENSION_NAME, 0, &rayQueryFeatures);
             Assert(result);
 
-            // checkAndAddExtension(VK_NV_SHADER_EXECUTION_REORDERING_EXTENSION_NAME, 0, );
+            reorderPropertiesNV = {
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_PROPERTIES_NV};
+            reorderFeaturesNV = {
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV};
+
+            result = checkAndAddExtension(VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME,
+                                          &reorderPropertiesNV, &reorderFeaturesNV);
+            Assert(result);
 
             // TODO: update my drivers
-            // clasPropertiesNV = {
-            //     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_PROPERTIES_NV};
-            // clasFeaturesNV = {
-            //     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_FEATURES_NV};
-            // result =
-            // checkAndAddExtension(VK_NV_CLUSTER_ACCELERATION_STRUCTURE_EXTENSION_NAME,
-            //                               &clasPropertiesNV, &clasFeaturesNV);
-            // ErrorExit(
-            //     result,
-            //     "Machine doesn't support VK_NV_cluster_acceleration_structure. Exiting\n");
+            clasPropertiesNV = {
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_PROPERTIES_NV};
+            clasFeaturesNV = {
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_FEATURES_NV};
+            result = checkAndAddExtension(VK_NV_CLUSTER_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+                                          &clasPropertiesNV, &clasFeaturesNV);
+
+            ErrorExit(
+                result,
+                "Machine doesn't support VK_NV_cluster_acceleration_structure. Exiting\n");
         }
 
         *featuresChain   = 0;
@@ -534,7 +543,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
     allocCreateInfo.physicalDevice         = physicalDevice;
     allocCreateInfo.device                 = device;
     allocCreateInfo.instance               = instance;
-    allocCreateInfo.vulkanApiVersion       = VK_API_VERSION_1_3;
+    allocCreateInfo.vulkanApiVersion       = apiVersion;
     allocCreateInfo.flags                  = VMA_ALLOCATOR_CREATE_KHR_BIND_MEMORY2_BIT |
                             VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
 
@@ -1163,7 +1172,7 @@ void Vulkan::CheckInitializedThreadPool(int threadIndex)
 
         poolCreateInfo.pPoolSizes    = poolSize;
         poolCreateInfo.poolSizeCount = ArrayLength(poolSize);
-        poolCreateInfo.maxSets       = 1;
+        poolCreateInfo.maxSets       = 10;
 
         vkCreateDescriptorPool(device, &poolCreateInfo, 0, &pool.descriptorPool[0]);
         vkCreateDescriptorPool(device, &poolCreateInfo, 0, &pool.descriptorPool[1]);
@@ -1363,8 +1372,11 @@ void CommandBuffer::FlushBarriers()
     dependencyInfo.pBufferMemoryBarriers    = bufferBarriers.data();
     dependencyInfo.imageMemoryBarrierCount  = imageBarriers.size();
     dependencyInfo.pImageMemoryBarriers     = imageBarriers.data();
+    dependencyInfo.memoryBarrierCount       = memBarriers.size();
+    dependencyInfo.pMemoryBarriers          = memBarriers.data();
     vkCmdPipelineBarrier2(buffer, &dependencyInfo);
 
+    memBarriers.clear();
     bufferBarriers.clear();
     imageBarriers.clear();
 }
@@ -1769,7 +1781,8 @@ void CommandBuffer::BindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipel
     vkCmdBindPipeline(buffer, bindPoint, pipeline);
 }
 
-int DescriptorSetLayout::AddBinding(u32 b, VkDescriptorType type, VkShaderStageFlags stage)
+int DescriptorSetLayout::AddBinding(u32 b, VkDescriptorType type, VkShaderStageFlags stage,
+                                    bool null)
 {
     VkDescriptorSetLayoutBinding binding = {};
     binding.binding                      = b;
@@ -1779,6 +1792,7 @@ int DescriptorSetLayout::AddBinding(u32 b, VkDescriptorType type, VkShaderStageF
 
     int index = static_cast<int>(bindings.size());
     bindings.push_back(binding);
+    nullBindings.push_back(null);
     return index;
 }
 
@@ -1798,8 +1812,23 @@ VkDescriptorSetLayout *DescriptorSetLayout::GetVulkanLayout()
 {
     if (layout == VK_NULL_HANDLE)
     {
+        ScratchArena scratch;
+
+        VkDescriptorBindingFlags *flags =
+            PushArray(scratch.temp.arena, VkDescriptorBindingFlags, bindings.size());
+        for (int i = 0; i < bindings.size(); i++)
+        {
+            if (nullBindings[i]) flags[i] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+        }
+        VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsCreate = {
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
+        bindingFlagsCreate.bindingCount  = bindings.size();
+        bindingFlagsCreate.pBindingFlags = flags;
+
+        Assert(bindings.size());
         VkDescriptorSetLayoutCreateInfo createInfo = {
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        createInfo.pNext        = &bindingFlagsCreate;
         createInfo.bindingCount = bindings.size();
         createInfo.pBindings    = bindings.data();
         VK_CHECK(vkCreateDescriptorSetLayout(device->device, &createInfo, 0, &layout));
@@ -1992,9 +2021,10 @@ void DescriptorSetLayout::CreatePipelineLayout(PushConstant *pc)
     VkPipelineLayoutCreateInfo createInfo = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     createInfo.setLayoutCount             = layouts.size();
     createInfo.pSetLayouts                = layouts.data();
+
+    VkPushConstantRange vkpc;
     if (pc)
     {
-        VkPushConstantRange vkpc;
         vkpc.offset                       = pc->offset;
         vkpc.size                         = pc->size;
         vkpc.stageFlags                   = GetVulkanShaderStage(pc->stage);
@@ -2024,99 +2054,114 @@ VkPipeline Vulkan::CreateComputePipeline(Shader *shader, DescriptorSetLayout *la
     return pipeline;
 }
 
-RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RST_Max],
-                                                 PushConstant *pc, DescriptorSetLayout *layout,
-                                                 u32 maxDepth,
-                                                 RayTracingShaderGroupType shaderGroupType)
+RayTracingState Vulkan::CreateRayTracingPipeline(RayTracingShaderGroup *shaderGroups,
+                                                 int numShaderGroups, PushConstant *pc,
+                                                 DescriptorSetLayout *layout, u32 maxDepth,
+                                                 bool clusters)
 {
     int total = 0;
-    for (int i = 0; i < RST_Max; i++)
+    for (int i = 0; i < numShaderGroups; i++)
     {
-        total += counts[i];
+        total += shaderGroups[i].numShaders;
     }
 
     ScratchArena scratch;
     VkPipelineShaderStageCreateInfo *pipelineInfos =
         PushArrayNoZero(scratch.temp.arena, VkPipelineShaderStageCreateInfo, total);
-    VkRayTracingShaderGroupCreateInfoKHR *shaderGroups =
-        PushArrayNoZero(scratch.temp.arena, VkRayTracingShaderGroupCreateInfoKHR, total);
+    VkRayTracingShaderGroupCreateInfoKHR *vkShaderGroups = PushArrayNoZero(
+        scratch.temp.arena, VkRayTracingShaderGroupCreateInfoKHR, numShaderGroups);
 
     int count = 0;
     // Create pipeline infos
     {
-        Assert(counts[RST_Raygen] == 1);
         VkPipelineShaderStageCreateInfo info = {
             VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        info.pName             = "main";
-        info.stage             = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-        info.module            = shaders[RST_Raygen][0].module;
-        pipelineInfos[count++] = info;
+        info.pName = "main";
 
-        info.stage = VK_SHADER_STAGE_MISS_BIT_KHR;
-        for (int i = 0; i < counts[RST_Miss]; i++)
+        for (int i = 0; i < numShaderGroups; i++)
         {
-            info.module            = shaders[RST_Miss][i].module;
-            pipelineInfos[count++] = info;
-        }
-
-        info.stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-        for (int i = 0; i < counts[RST_ClosestHit]; i++)
-        {
-            info.module            = shaders[RST_ClosestHit][i].module;
-            pipelineInfos[count++] = info;
-        }
-
-        info.stage = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
-        for (int i = 0; i < counts[RST_Intersection]; i++)
-        {
-            info.module            = shaders[RST_Intersection][i].module;
-            pipelineInfos[count++] = info;
+            RayTracingShaderGroup &shaderGroup = shaderGroups[i];
+            for (int j = 0; j < shaderGroup.numShaders; j++)
+            {
+                switch (shaderGroup.stage[j])
+                {
+                    case ShaderStage::Raygen:
+                        info.stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+                        break;
+                    case ShaderStage::Miss: info.stage = VK_SHADER_STAGE_MISS_BIT_KHR; break;
+                    case ShaderStage::Hit:
+                        info.stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+                        break;
+                    case ShaderStage::Intersect:
+                        info.stage = VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+                        break;
+                    default: Assert(0);
+                }
+                info.module            = shaderGroup.shaders[j].module;
+                pipelineInfos[count++] = info;
+            }
         }
     }
-    count = 0;
+    count           = 0;
+    int shaderCount = 0;
+
+    int counts[RST_Max] = {};
     // Create shader groups
     {
-        VkRayTracingShaderGroupCreateInfoKHR group = {
-            VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR};
-        group.type               = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-        group.generalShader      = VK_SHADER_UNUSED_KHR;
-        group.closestHitShader   = VK_SHADER_UNUSED_KHR;
-        group.anyHitShader       = VK_SHADER_UNUSED_KHR;
-        group.intersectionShader = VK_SHADER_UNUSED_KHR;
-
-        group.generalShader = count;
-        shaderGroups[count] = group;
-        count++;
-
-        for (int i = 0; i < counts[RST_Miss]; i++)
+        for (int i = 0; i < numShaderGroups; i++)
         {
-            group.generalShader = count;
-            shaderGroups[count] = group;
-            count++;
-        }
+            VkRayTracingShaderGroupCreateInfoKHR group = {
+                VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR};
+            group.type                      = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+            group.generalShader             = VK_SHADER_UNUSED_KHR;
+            group.closestHitShader          = VK_SHADER_UNUSED_KHR;
+            group.anyHitShader              = VK_SHADER_UNUSED_KHR;
+            group.intersectionShader        = VK_SHADER_UNUSED_KHR;
+            RayTracingShaderGroup &rtsGroup = shaderGroups[i];
 
-        VkRayTracingShaderGroupTypeKHR vkShaderGroupType =
-            shaderGroupType == RayTracingShaderGroupType::Triangle
-                ? VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR
-                : VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR;
+            VkRayTracingShaderGroupTypeKHR vkShaderGroupType =
+                rtsGroup.type == RayTracingShaderGroupType::Triangle
+                    ? VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR
+                    : VK_RAY_TRACING_SHADER_GROUP_TYPE_PROCEDURAL_HIT_GROUP_KHR;
 
-        group.type          = vkShaderGroupType;
-        group.generalShader = VK_SHADER_UNUSED_KHR;
-        for (int i = 0; i < counts[RST_ClosestHit]; i++)
-        {
-            group.closestHitShader = count;
-            shaderGroups[count]    = group;
-            count++;
-        }
-
-        group.type             = vkShaderGroupType;
-        group.closestHitShader = VK_SHADER_UNUSED_KHR;
-
-        for (int i = 0; i < counts[RST_Intersection]; i++)
-        {
-            group.intersectionShader = count;
-            shaderGroups[count]      = group;
-            count++;
+            for (int j = 0; j < rtsGroup.numShaders; j++)
+            {
+                switch (rtsGroup.stage[j])
+                {
+                    case ShaderStage::Raygen:
+                    {
+                        Assert(rtsGroup.numShaders == 1);
+                        group.generalShader = count;
+                        shaderCount++;
+                        counts[RST_Raygen]++;
+                    }
+                    break;
+                    case ShaderStage::Miss:
+                    {
+                        Assert(rtsGroup.numShaders == 1);
+                        group.generalShader = count;
+                        shaderCount++;
+                        counts[RST_Miss]++;
+                    }
+                    break;
+                    case ShaderStage::Hit:
+                    {
+                        group.type             = vkShaderGroupType;
+                        group.closestHitShader = shaderCount++;
+                        counts[RST_Hit]++;
+                    }
+                    break;
+                    case ShaderStage::Intersect:
+                    {
+                        group.type               = vkShaderGroupType;
+                        group.intersectionShader = shaderCount++;
+                        counts[RST_Intersect]++;
+                    }
+                    break;
+                    default: Assert(0);
+                }
+            }
+            vkShaderGroups[count++] = group;
         }
     }
 
@@ -2127,18 +2172,24 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
     // Create pipeline
     VkPipeline pipeline;
     {
-        VkPipelineLayoutCreateInfo layoutCreateInfo = {
-            VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-
         VkRayTracingPipelineCreateInfoKHR pipelineInfo = {
             VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR};
 
         pipelineInfo.pStages                      = pipelineInfos;
         pipelineInfo.stageCount                   = total;
-        pipelineInfo.pGroups                      = shaderGroups;
-        pipelineInfo.groupCount                   = total;
+        pipelineInfo.pGroups                      = vkShaderGroups;
+        pipelineInfo.groupCount                   = numShaderGroups;
         pipelineInfo.maxPipelineRayRecursionDepth = maxDepth;
         pipelineInfo.layout                       = pipelineLayout;
+
+        VkRayTracingPipelineClusterAccelerationStructureCreateInfoNV pipeClusters = {
+            VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CLUSTER_ACCELERATION_STRUCTURE_CREATE_INFO_NV};
+
+        if (clusters)
+        {
+            pipelineInfo.pNext                             = &pipeClusters;
+            pipeClusters.allowClusterAccelerationStructure = true;
+        }
 
         VK_CHECK(
             vkCreateRayTracingPipelinesKHR(device, {}, {}, 1, &pipelineInfo, 0, &pipeline));
@@ -2156,8 +2207,8 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
         u32 alignedHandleSize =
             AlignPow2(handleSize, rtPipeProperties.shaderGroupHandleAlignment);
 
-        int offsets[RST_Max] = {};
-        int offset           = 0;
+        FixedArray<int, RST_Max> offsets = {0, 0, 0, 0};
+        int offset                       = 0;
         for (int i = 0; i < RST_Max; i++)
         {
             state.addresses[i].size   = AlignPow2(counts[i] * alignedHandleSize,
@@ -2170,15 +2221,14 @@ RayTracingState Vulkan::CreateRayTracingPipeline(Shader **shaders, int counts[RS
         u32 dataSize = handleSize * total;
 
         u8 *data = PushArrayNoZero(arena, u8, dataSize);
-        VK_CHECK(
-            vkGetRayTracingShaderGroupHandlesKHR(device, pipeline, 0, total, dataSize, data));
+        VK_CHECK(vkGetRayTracingShaderGroupHandlesKHR(device, pipeline, 0, numShaderGroups,
+                                                      dataSize, data));
 
-        GPUBuffer buffer = CreateBuffer(
-            VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR |
-                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            offset,
-            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT);
+        GPUBuffer buffer = CreateBuffer(VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR |
+                                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                        offset,
+                                        VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
 
         VkBufferDeviceAddressInfo deviceAddressInfo = {
             VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
@@ -2216,7 +2266,8 @@ DescriptorSet DescriptorSetLayout::CreateDescriptorSet()
     allocateInfo.descriptorSetCount = 1;
 
     DescriptorSet set;
-    VK_CHECK(vkAllocateDescriptorSets(device->device, &allocateInfo, &set.set));
+    VkResult result = vkAllocateDescriptorSets(device->device, &allocateInfo, &set.set);
+    ErrorExit(result == VK_SUCCESS, "Error while allocating descriptor sets: %u\n", result);
     set.layout = this;
     set.descriptorInfo.resize(bindings.size());
     return set;
@@ -2321,7 +2372,8 @@ void CommandBuffer::BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddr
     inputInfo.maxAccelerationStructureCount = numClusters;
 
     // Get acceleration structure sizes and size of scratch buffer
-    VkAccelerationStructureBuildSizesInfoKHR buildSizesInfo;
+    VkAccelerationStructureBuildSizesInfoKHR buildSizesInfo = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
     vkGetClusterAccelerationStructureBuildSizesNV(device->device, &inputInfo, &buildSizesInfo);
 
     GPUBuffer buildScratch = device->CreateBuffer(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
@@ -2381,7 +2433,8 @@ void CommandBuffer::BuildClusterBLAS(GPUBuffer *bottomLevelInfo, GPUBuffer *dstA
     inputInfo.opInput.pClustersBottomLevel  = &bottomLevelInput;
     inputInfo.maxAccelerationStructureCount = 1;
 
-    VkAccelerationStructureBuildSizesInfoKHR buildSizesInfo;
+    VkAccelerationStructureBuildSizesInfoKHR buildSizesInfo = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
     vkGetClusterAccelerationStructureBuildSizesNV(device->device, &inputInfo, &buildSizesInfo);
 
     // Create scratch and implicit buffers
@@ -2509,7 +2562,7 @@ GPUBuffer CommandBuffer::CreateTLASInstances(Instance *instances, int numInstanc
         SubmitBuffer(vkInstances,
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                          VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-                     sizeof(VkAccelerationStructureInstanceKHR));
+                     numInstances * sizeof(VkAccelerationStructureInstanceKHR));
 
     return tlasBuffer;
 }

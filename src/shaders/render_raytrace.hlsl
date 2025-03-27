@@ -5,9 +5,12 @@
 #include "sampling.hlsli"
 #include "payload.hlsli"
 #include "dense_geometry.hlsli"
+#include "dgf_intersect.hlsli"
+#include "../rt/shader_interop/as_shaderinterop.h"
 #include "../rt/shader_interop/ray_shaderinterop.h"
 #include "../rt/shader_interop/hit_shaderinterop.h"
 #include "../rt/shader_interop/debug_shaderinterop.h"
+#include "../rt/nvapi.h"
 
 RaytracingAccelerationStructure accel : register(t0);
 RWTexture2D<float4> image : register(u1);
@@ -16,7 +19,13 @@ StructuredBuffer<RTBindingData> rtBindingData : register(t3);
 StructuredBuffer<GPUMaterial> materials : register(t4);
 ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
 
+#ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
 StructuredBuffer<AABB> aabbs : register(t8);
+#else
+StructuredBuffer<ClusterData> clusterData : register(t8);
+StructuredBuffer<float3> vertices : register(t9);
+ByteAddressBuffer indices : register(t10);
+#endif
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -61,6 +70,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
         RayQuery<RAY_FLAG_SKIP_TRIANGLES | RAY_FLAG_FORCE_OPAQUE> query;
         query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
         float2 bary;
+        uint hitKind;
 
         // TODO: explore design space (e.g. have primitive be a cluster, instead of triangle 
         // in cluster)
@@ -69,31 +79,20 @@ void main(uint3 DTid : SV_DispatchThreadID)
             if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
             {
                 uint primitiveIndex = query.CandidatePrimitiveIndex();
+                float3 o = query.CandidateObjectRayOrigin();
+                float3 d = query.CandidateObjectRayDirection();
 
-                uint blockIndex = primitiveIndex >> MAX_CLUSTER_TRIANGLES_BIT;
-                uint triangleIndex = primitiveIndex & (MAX_CLUSTER_TRIANGLES - 1);
+                float tHit = 0;
+                uint kind = 0;
+                float2 tempBary = 0;
 
-                DenseGeometry dg = GetDenseGeometryHeader(blockIndex);
-                uint3 vids = dg.DecodeTriangle(triangleIndex, all(DTid.xy == debugInfo.mousePos));
+                bool result = IntersectCluster(primitiveIndex, o, d, query.RayTMin(), 
+                                               query.CommittedRayT(), tHit, kind, tempBary);
 
-                float3 p0 = dg.DecodePosition(vids[0]);
-                float3 p1 = dg.DecodePosition(vids[1]);
-                float3 p2 = dg.DecodePosition(vids[2]);
-
-                float tHit;
-                float2 tempBary;
-
-                bool result = 
-                RayTriangleIntersectionMollerTrumbore(query.CandidateObjectRayOrigin(), 
-                                                      query.CandidateObjectRayDirection(), 
-                                                      p0, p1, p2,
-                                                      tHit, tempBary);
-
-                result &= (query.RayTMin() < tHit && tHit <= query.CommittedRayT());
- 
                 if (!result) continue;
 
                 bary = tempBary;
+                hitKind = kind;
                 query.CommitProceduralPrimitiveHit(tHit);
             }
         }
@@ -104,39 +103,49 @@ void main(uint3 DTid : SV_DispatchThreadID)
 #ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
         if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
         {
+            uint clusterID = NvRtGetCommittedClusterID(query);
+            float3x3 positions = NvRtCommittedTriangleObjectPositions(query);
+            float3 p0 = positions[0];
+            float3 p1 = positions[1];
+            float3 p2 = positions[2];
+
             uint bindingDataIndex = query.CommittedInstanceID() + query.CommittedGeometryIndex();
-            uint vertexBufferIndex = 3 * bindingDataIndex;
-            uint indexBufferIndex = 3 * bindingDataIndex + 1;
-            uint normalBufferIndex = 3 * bindingDataIndex + 2;
-            uint primID = query.CommittedPrimitiveIndex();
+#if 0
+            uint primitiveIndex = query.CommittedPrimitiveIndex();
 
-            uint index0 = bindlessUints[NonUniformResourceIndex(indexBufferIndex)][NonUniformResourceIndex(3 * primID + 0)];
-            uint index1 = bindlessUints[NonUniformResourceIndex(indexBufferIndex)][NonUniformResourceIndex(3 * primID + 1)];
-            uint index2 = bindlessUints[NonUniformResourceIndex(indexBufferIndex)][NonUniformResourceIndex(3 * primID + 2)];
+            ClusterData cData = clusterData[clusterID];
+            uint ibOffset = cData.indexBufferOffset;
 
-            uint normal0 = bindlessUints[NonUniformResourceIndex(normalBufferIndex)][NonUniformResourceIndex(index0)];
-            uint normal1 = bindlessUints[NonUniformResourceIndex(normalBufferIndex)][NonUniformResourceIndex(index1)];
-            uint normal2 = bindlessUints[NonUniformResourceIndex(normalBufferIndex)][NonUniformResourceIndex(index2)];
+            uint2 offsets = GetAlignedAddressAndBitOffset(ibOffset + 3 * primitiveIndex, 0);
+            uint2 indexData = indices.Load2(offsets[0]);
+            uint packedIndices = BitAlignU32(indexData.y, indexData.x, offsets[1]);
 
-            float3 p0 = bindlessFloat3s[NonUniformResourceIndex(vertexBufferIndex)][NonUniformResourceIndex(index0)];
-            float3 p1 = bindlessFloat3s[NonUniformResourceIndex(vertexBufferIndex)][NonUniformResourceIndex(index1)];
-            float3 p2 = bindlessFloat3s[NonUniformResourceIndex(vertexBufferIndex)][NonUniformResourceIndex(index2)];
+            uint3 indices;
+            indices[0] = BitFieldExtractU32(packedIndices, 8, 0);
+            indices[1] = BitFieldExtractU32(packedIndices, 8, 8);
+            indices[2] = BitFieldExtractU32(packedIndices, 8, 16);
 
-            float3 n0 = DecodeOctahedral(normal0);
-            float3 n1 = DecodeOctahedral(normal1);
-            float3 n2 = DecodeOctahedral(normal2);
+            indices += cData.vertexBufferOffset;
 
-            float2 bary = query.CommittedTriangleBarycentrics();
+            float3 p0 = vertices[indices[0]];
+            float3 p1 = vertices[indices[1]];
+            float3 p2 = vertices[indices[2]];
+#endif
 
             float3 gn = normalize(cross(p0 - p2, p1 - p2));
+            float3 n0 = gn;
+            float3 n1 = gn;
+            float3 n2 = gn;
+            float2 bary = query.CommittedTriangleBarycentrics();
 #else
         if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
         {
             uint bindingDataIndex = query.CommittedInstanceID() + query.CommittedGeometryIndex();
             uint primitiveIndex = query.CommittedPrimitiveIndex();
 
-            uint blockIndex = primitiveIndex >> MAX_CLUSTER_TRIANGLES_BIT;
-            uint triangleIndex = primitiveIndex & (MAX_CLUSTER_TRIANGLES - 1);
+            uint2 blockTriangleIndices = DecodeBlockAndTriangleIndex(primitiveIndex, hitKind);
+            uint blockIndex = blockTriangleIndices[0];
+            uint triangleIndex = blockTriangleIndices[1];
 
             DenseGeometry dg = GetDenseGeometryHeader(blockIndex);
             uint3 vids = dg.DecodeTriangle(triangleIndex);

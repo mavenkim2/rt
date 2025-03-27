@@ -177,6 +177,21 @@ struct Shader
     ShaderStage stage;
 };
 
+enum class RayTracingShaderGroupType
+{
+    Triangle,
+    Procedural,
+};
+
+static const int MAX_SHADERS_IN_GROUP = 3;
+struct RayTracingShaderGroup
+{
+    Shader shaders[MAX_SHADERS_IN_GROUP];
+    ShaderStage stage[MAX_SHADERS_IN_GROUP];
+    int numShaders;
+    RayTracingShaderGroupType type;
+};
+
 struct PushConstant
 {
     ShaderStage stage;
@@ -208,21 +223,6 @@ struct GPUBuffer
     VkAccessFlags2 lastAccess;
 };
 
-enum RayShaderType
-{
-    RST_Raygen,
-    RST_Miss,
-    RST_ClosestHit,
-    RST_Intersection,
-    RST_Max,
-};
-
-enum class RayTracingShaderGroupType
-{
-    Triangle,
-    Procedural,
-};
-
 enum class RTBindings
 {
     Accel,
@@ -233,6 +233,15 @@ enum class RTBindings
     DenseGeometryData,
     PackedDenseGeometryHeaders,
     ShaderDebugInfo,
+};
+
+enum RayShaderTypes
+{
+    RST_Raygen,
+    RST_Miss,
+    RST_Hit,
+    RST_Intersect,
+    RST_Max,
 };
 
 struct RayTracingState
@@ -365,11 +374,13 @@ struct DescriptorSet
 struct DescriptorSetLayout
 {
     std::vector<VkDescriptorSetLayoutBinding> bindings;
+    std::vector<bool> nullBindings;
     VkDescriptorSetLayout layout;
 
     VkPipelineLayout pipelineLayout;
 
-    int AddBinding(u32 binding, VkDescriptorType type, VkShaderStageFlags stage);
+    int AddBinding(u32 binding, VkDescriptorType type, VkShaderStageFlags stage,
+                   bool null = false);
     VkDescriptorSetLayout *GetVulkanLayout();
     DescriptorSet CreateDescriptorSet();
     void AddImmutableSamplers();
@@ -518,6 +529,9 @@ struct Vulkan
 
     VkPhysicalDeviceClusterAccelerationStructurePropertiesNV clasPropertiesNV;
     VkPhysicalDeviceClusterAccelerationStructureFeaturesNV clasFeaturesNV;
+
+    VkPhysicalDeviceRayTracingInvocationReorderPropertiesNV reorderPropertiesNV;
+    VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV reorderFeaturesNV;
 
     VkPhysicalDeviceMemoryProperties2 memProperties;
 
@@ -685,9 +699,10 @@ struct Vulkan
                                    VkAccelerationStructureKHR accel);
     VkPipeline CreateComputePipeline(Shader *shader, DescriptorSetLayout *layout,
                                      PushConstant *pc = 0);
-    RayTracingState CreateRayTracingPipeline(Shader **shaders, int counts[RST_Max],
-                                             PushConstant *pc, DescriptorSetLayout *layout,
-                                             u32 maxDepth, RayTracingShaderGroupType type);
+    RayTracingState CreateRayTracingPipeline(RayTracingShaderGroup *shaderGroups,
+                                             int numGroups, PushConstant *pc,
+                                             DescriptorSetLayout *layout, u32 maxDepth,
+                                             bool useClusters = false);
     QueryPool CreateQuery(QueryType type, int count);
 
     VkAccelerationStructureInstanceKHR GetVkInstance(const AffineSpace &transform,

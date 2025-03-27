@@ -89,6 +89,7 @@ void DenseGeometryBuildData::Merge(DenseGeometryBuildData &other)
 
 void WriteBits(u32 *data, u32 &position, u32 value, u32 numBits)
 {
+    if (numBits == 0) return;
     Assert(numBits <= 32);
     uint dwordIndex = position >> 5;
     uint bitIndex   = position & 31;
@@ -922,7 +923,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     bitOffset = 0;
 
     // Write reuse buffer (byte aligned)
-    u32 numIndexBits = Log2Int(maxReuseIndex) + 1;
+    u32 numIndexBits = Log2Int(Max(maxReuseIndex, 1u)) + 1;
     Assert(numIndexBits >= 1 && numIndexBits <= 8);
     u32 ctrlBitSize = ((clusterNumTriangles + 31) >> 5u) * 12u;
     u32 bitStreamSize =

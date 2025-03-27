@@ -7,6 +7,7 @@ RWByteAddressBuffer indexBuffer : register(u0);
 RWStructuredBuffer<float3> decodeVertexBuffer : register(u1);
 RWStructuredBuffer<BuildClasDesc> buildClasDescs : register(u2);
 RWStructuredBuffer<uint> globals : register(u3);
+RWStructuredBuffer<ClusterData> clusterData : register(u4);
 
 [numthreads(32, 1, 1)] 
 void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dtID : SV_DispatchThreadID)
@@ -95,5 +96,11 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dtI
         desc.opacityMicromapIndexBuffer = 0;
 
         buildClasDescs[groupID.x] = desc;
+
+        ClusterData clData = (ClusterData)0;
+        clData.indexBufferOffset = indexBufferOffset;
+        clData.vertexBufferOffset = vertexBufferOffset;
+
+        clusterData[groupID.x] = clData;
     }
 }
