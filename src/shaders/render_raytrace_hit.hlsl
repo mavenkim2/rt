@@ -55,12 +55,7 @@ void main(inout RayPayload payload : SV_RayPayload, BuiltInTriangleIntersectionA
     RNG rng = payload.rng;
     float2 u = rng.Uniform2D();
 
-    float3 dir    = SampleCosineHemisphere(u);
-    dir.z         = wo.z < 0 ? -wi.z : wi.z;
-    LaneNF32 pdf = CosineHemispherePDF(abs(wi.z));
-
     payload.rng = rng;
-    payload.throughput = R * InvPi * rcp(pdf);
 
     payload.rng = rng;
     payload.dir = TransformV(ObjectToWorld3x4(), normalize(dir));

@@ -1,5 +1,6 @@
 #include "common.hlsli"
-#include "bxdf.hlsli"
+#include "bsdf/bxdf.hlsli"
+#include "bsdf/bsdf.hlsli"
 #include "rt.hlsli"
 #include "ray_triangle_intersection.hlsli"
 #include "sampling.hlsli"
@@ -87,7 +88,8 @@ void main(uint3 DTid : SV_DispatchThreadID)
                 float2 tempBary = 0;
 
                 bool result = IntersectCluster(primitiveIndex, o, d, query.RayTMin(), 
-                                               query.CommittedRayT(), tHit, kind, tempBary);
+                                               query.CommittedRayT(), tHit, kind, tempBary, 
+                                               all(DTid.xy == debugInfo.mousePos));
 
                 if (!result) continue;
 
@@ -148,6 +150,8 @@ void main(uint3 DTid : SV_DispatchThreadID)
             uint triangleIndex = blockTriangleIndices[1];
 
             DenseGeometry dg = GetDenseGeometryHeader(blockIndex);
+
+            uint materialID = dg.DecodeMaterialID(triangleIndex);
             uint3 vids = dg.DecodeTriangle(triangleIndex);
 
             float3 p0 = dg.DecodePosition(vids[0]);
@@ -164,39 +168,29 @@ void main(uint3 DTid : SV_DispatchThreadID)
             float3 n = normalize(n0 + (n1 - n0) * bary[0] + (n2 - n0) * bary[1]);
 
             // Get material
-            RTBindingData bindingData = rtBindingData[NonUniformResourceIndex(bindingDataIndex)];
-            GPUMaterial material = materials[NonUniformResourceIndex(bindingData.materialIndex)];
+            GPUMaterial material = materials[NonUniformResourceIndex(materialID)];
             float eta = material.eta;
 
-            float3 wo = -normalize(query.CommittedObjectRayDirection());
-
-            float u = rng.Uniform();
-            float R = FrDielectric(dot(wo, n), eta);
-
-            float T = 1 - R;
-            float pr = R, pt = T;
-
             float3 origin = p0 + (p1 - p0) * bary.x + (p2 - p0) * bary.y;
-
-            if (u < pr / (pr + pt))
-            {
-                dir = Reflect(wo, n);
-            }
-            else
-            {
-                float etap;
-                bool valid = Refract(wo, n, eta, etap, dir);
-                if (!valid)
-                {
-                    radiance = float3(0, 0, 0);
-                    break;
-                }
+            float3 wo = -normalize(query.CommittedObjectRayDirection());
+            float2 sample = rng.Uniform2D();
             
-                throughput /= etap * etap;
+            switch (material.type) 
+            {
+                case GPUMaterialType::Dielectric:
+                {
+                    dir = SampleDielectric(wo, n, eta, sample, throughput);
+                }
+                break;
+                case GPUMaterialType::Diffuse: 
+                {
+                    dir = SampleDiffuse(wo, n, sample, throughput);
+                }
+                break;
             }
 
             origin = TransformP(query.CommittedObjectToWorld3x4(), origin);
-            dir = TransformV(query.CommittedObjectToWorld3x4(), normalize(dir));
+            dir = normalize(TransformV(query.CommittedObjectToWorld3x4(), dir));
             pos = OffsetRayOrigin(origin, gn);
         }
         else 

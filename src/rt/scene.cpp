@@ -10,6 +10,7 @@
 #include "scene_load.h"
 #include "simd_integrate.h"
 #include "spectrum.h"
+#include "shader_interop/hit_shaderinterop.h"
 #include <atomic>
 #include <cwchar>
 #include <iterator>
@@ -35,6 +36,23 @@ struct SceneLoadTable
     std::atomic<Node *> *nodes;
     u32 count;
 };
+
+GPUMaterial Material::ConvertToGPU() { return {}; }
+
+GPUMaterial DiffuseMaterial::ConvertToGPU()
+{
+    GPUMaterial result = {};
+    result.type        = GPUMaterialType::Diffuse;
+    return result;
+}
+
+GPUMaterial DielectricMaterial::ConvertToGPU()
+{
+    GPUMaterial result = {};
+    result.type        = GPUMaterialType::Dielectric;
+    result.eta         = eta;
+    return result;
+}
 
 void Texture::Start(ShadingThreadState *) {}
 
@@ -397,12 +415,13 @@ void ReadDielectricMaterial(Arena *arena, Tokenizer *tokenizer, string directory
 MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *tokenizer,
                                  string directory)
 {
-    TempArena temp = ScratchStart(&tempArena, 1);
-    Scene *scene   = GetScene();
+    Scene *scene = GetScene();
 
-    ChunkedLinkedList<Material *, 1024> materialsList(temp.arena);
+    // TODO: I have no idea why this errored out?
+    // ChunkedLinkedList<Material *, 1024> materialsList(tempArena);
+    std::vector<Material *> materialsList;
     NullMaterial *nullMaterial = PushStructConstruct(arena, NullMaterial)();
-    materialsList.AddBack()    = nullMaterial;
+    materialsList.push_back(nullMaterial);
 
     MaterialHashMap *table = PushStructConstruct(tempArena, MaterialHashMap)(tempArena, 8192);
 
@@ -432,9 +451,10 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
         // Add to hash table
         table->Add(tempArena,
                    MaterialNode{PushStr8Copy(tempArena, materialName),
-                                MaterialHandle(materialTypeIndex, materialsList.totalCount)});
+                                MaterialHandle(materialTypeIndex, materialsList.size())});
 
-        Material **material = &materialsList.AddBack();
+        materialsList.emplace_back();
+        Material **material = &materialsList.back();
 
         switch (materialTypeIndex)
         {
@@ -514,11 +534,11 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
     }
 
     // Join
-    scene->materials = StaticArray<Material *>(arena, materialsList.totalCount);
+    scene->materials = StaticArray<Material *>(arena, materialsList.size());
+    MemoryCopy(scene->materials.data, materialsList.data(),
+               sizeof(Material *) * materialsList.size());
+    scene->materials.size = materialsList.size();
 
-    materialsList.Flatten(scene->materials);
-
-    ScratchEnd(temp);
     return table;
 }
 
@@ -1062,7 +1082,9 @@ void LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, stri
     Vec4f planes[6];
     ExtractPlanes(planes, params->NDCFromCamera * params->cameraFromRender);
 
+#ifndef USE_GPU
     ComputeEdgeRates(&scene->scene, space, planes, TessellationStyle::ClosestInstance);
+#endif
 
     int maxDepth = 0;
     for (int i = 0; i < numScenes; i++)
@@ -1624,6 +1646,12 @@ Bounds GetSceneBounds(ScenePrimitives *scene)
                                         mesh->p, mesh->indices}(start, count);
                                 }
                                 break;
+                                case GeometryType::CatmullClark:
+                                {
+                                    b = GenerateMeshRefsHelper<GeometryType::QuadMesh>{
+                                        mesh->p, mesh->indices}(start, count);
+                                }
+                                break;
                                 default: Assert(0);
                             }
                         },
@@ -1636,6 +1664,12 @@ Bounds GetSceneBounds(ScenePrimitives *scene)
                         case GeometryType::TriangleMesh:
                         {
                             bounds = GenerateMeshRefsHelper<GeometryType::TriangleMesh>{
+                                mesh->p, mesh->indices}(0, numFaces);
+                        }
+                        break;
+                        case GeometryType::CatmullClark:
+                        {
+                            b = GenerateMeshRefsHelper<GeometryType::QuadMesh>{
                                 mesh->p, mesh->indices}(0, numFaces);
                         }
                         break;

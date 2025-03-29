@@ -1,4 +1,3 @@
-#include "bxdf.hlsli"
 #include "common.hlsli"
 #include "rt.hlsli"
 #include "sampling.hlsli"

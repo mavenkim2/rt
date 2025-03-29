@@ -291,6 +291,45 @@ struct DenseGeometry
         uint r = BitFieldExtractU32(BitAlignU32(result.y, result.x, vals[1]), indexBitWidth, 0);
         return r;
     }
+
+    uint DecodeMaterialID(uint triangleIndex)
+    {
+        // Constant mode
+        const uint constantBit = 0x80000000;
+        if (materialInfo & constantBit)
+        {
+            return materialInfo & ~constantBit;
+        }
+        // Table mode
+        else 
+        {
+            uint materialOffset = materialInfo;
+            uint numHighOrderBits;
+            uint numEntries;
+            uint numLowOrderBits = 32 - numHighOrderBits;
+
+            uint entryBitWidth = firstbithigh(numEntries - 1) + 1;
+            uint bitOffset = numHighOrderBits + numEntries * numLowOrderBits + triangleIndex * entryBitWidth;
+
+            // First get the entry index
+            uint2 offsets = GetAlignedAddressAndBitOffset(baseAddress + materialOffset, bitOffset);
+            uint2 result = denseGeometryData.Load2(offsets[0]);
+            uint entryIndex = BitFieldExtractU32(BitAlignU32(result.y, result.x, offsets[1]), entryBitWidth, 0);
+
+            // Then get the entry
+            // LSB
+            bitOffset = numHighOrderBits + entryIndex * numLowOrderBits;
+            offsets = GetAlignedAddressAndBitOffset(baseAddress + materialOffset, bitOffset);
+            result = denseGeometryData.Load2(offsets[0]);
+            uint entry = BitFieldExtractU32(BitAlignU32(result.y, result.x, offsets[1]), numLowOrderBits, 0);
+            // MSB
+            offsets = GetAlignedAddressAndBitOffset(baseAddress + materialOffset, 0);
+            result = denseGeometryData.Load2(offsets[0]);
+            uint msb = BitFieldExtractU32(BitAlignU32(result.y, result.x, offsets[1]), numHighOrderBits, 0);
+
+            return (msb << numLowOrderBits) | entry;
+        }
+    }
 };
 
 // Taken from NaniteDataDecode.ush in Unreal Engine 5

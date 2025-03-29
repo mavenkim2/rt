@@ -198,6 +198,7 @@ Mesh ConvertQuadToTriangleMesh(Arena *arena, Mesh mesh)
     Mesh result       = mesh;
     result.indices    = newIndices;
     result.numIndices = newNumIndices;
+    result.numFaces   = mesh.numFaces * 2;
     return result;
 }
 
@@ -1073,21 +1074,22 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
         u32 commonMSBs        = 32;
         u32 currentCommonMSBs = geomIDs[0];
 
-        u32 numUniqueGeomIDs = 1;
-        StaticArray<u32> uniqueGeomIDs(clusterScratch.arena, clusterNumTriangles);
+        u32 numUniqueMaterialIDs = 1;
+        StaticArray<u32> uniqueMaterialIDs(clusterScratch.arena, clusterNumTriangles);
         StaticArray<u32> entryIndex(clusterScratch.arena, clusterNumTriangles,
                                     clusterNumTriangles);
 
-        uniqueGeomIDs.Push(geomIDs[triangleOrder[0]]);
+        PrimitiveIndices *primIndices = scene->primIndices;
+        uniqueMaterialIDs.Push(primIndices[geomIDs[triangleOrder[0]]].materialID.GetIndex());
         entryIndex[0] = 0;
         for (int i = 1; i < clusterNumTriangles; i++)
         {
             u32 triangleIndex = triangleOrder[i];
-            u32 geomID        = geomIDs[triangleIndex];
+            u32 materialID    = primIndices[geomIDs[triangleIndex]].materialID.GetIndex();
             bool unique       = true;
-            for (int j = 0; j < uniqueGeomIDs.Length(); j++)
+            for (int j = 0; j < uniqueMaterialIDs.Length(); j++)
             {
-                if (uniqueGeomIDs[j] == geomID)
+                if (uniqueMaterialIDs[j] == materialID)
                 {
                     entryIndex[i] = j;
                     unique        = false;
@@ -1096,36 +1098,37 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
             }
             if (unique)
             {
-                for (int bitIndex = commonMSBs; bitIndex >= 0; bitIndex++)
+                for (int bitIndex = commonMSBs; bitIndex >= 0; bitIndex--)
                 {
-                    if ((geomID >> (32 - bitIndex)) == currentCommonMSBs)
+                    if ((materialID >> (32 - bitIndex)) == currentCommonMSBs)
                     {
                         break;
                     }
                     currentCommonMSBs >>= 1;
                     commonMSBs--;
                 }
-                uniqueGeomIDs.Push(geomID);
-                entryIndex[i] = entryIndex.Length() - 1;
+                uniqueMaterialIDs.Push(materialID);
+                entryIndex[i] = uniqueMaterialIDs.Length() - 1;
             }
         }
 
-        Assert(uniqueGeomIDs.Length() > 1);
-        u32 entryBitLength      = Log2Int(uniqueGeomIDs.Length() - 1) + 1;
+        Assert(uniqueMaterialIDs.Length() > 1);
+        u32 entryBitLength      = Log2Int(uniqueMaterialIDs.Length() - 1) + 1;
         u32 materialTableOffset = vertexBitStreamSize + normalBitStreamSize + bitStreamSize;
         Assert(materialTableOffset < 0x80000000);
         packed.j = materialTableOffset;
 
         // Common MSBs + LSB entries + per triangle entries
-        u32 materialTableNumBits = commonMSBs + (32 - commonMSBs) * uniqueGeomIDs.Length() +
+        u32 materialTableNumBits = commonMSBs +
+                                   (32 - commonMSBs) * uniqueMaterialIDs.Length() +
                                    entryBitLength * clusterNumTriangles;
         u32 materialTableSize = (materialTableNumBits + 7) >> 3;
         auto *table           = buildData.byteBuffer.AddNode(materialTableSize);
         u32 tableBitOffset    = 0;
         WriteBits((u32 *)table->values, tableBitOffset, currentCommonMSBs, commonMSBs);
-        for (u32 geomID : uniqueGeomIDs)
+        for (u32 materialID : uniqueMaterialIDs)
         {
-            WriteBits((u32 *)table->values, tableBitOffset, geomID, (32 - commonMSBs));
+            WriteBits((u32 *)table->values, tableBitOffset, materialID, (32 - commonMSBs));
         }
         for (u32 index : entryIndex)
         {

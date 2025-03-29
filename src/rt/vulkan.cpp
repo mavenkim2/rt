@@ -1806,6 +1806,7 @@ void DescriptorSetLayout::AddImmutableSamplers()
     binding.pImmutableSamplers           = device->immutableSamplers.data();
 
     bindings.push_back(binding);
+    nullBindings.push_back(false);
 }
 
 VkDescriptorSetLayout *DescriptorSetLayout::GetVulkanLayout()
@@ -1814,6 +1815,7 @@ VkDescriptorSetLayout *DescriptorSetLayout::GetVulkanLayout()
     {
         ScratchArena scratch;
 
+        Assert(bindings.size() == nullBindings.size());
         VkDescriptorBindingFlags *flags =
             PushArray(scratch.temp.arena, VkDescriptorBindingFlags, bindings.size());
         for (int i = 0; i < bindings.size(); i++)

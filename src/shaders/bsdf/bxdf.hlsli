@@ -1,3 +1,6 @@
+#ifndef BXDF_HLSLI_
+#define BXDF_HLSLI_
+
 float3 Reflect(float3 w, float3 n)
 {
     return 2 * dot(n, w) * n - w;
@@ -47,3 +50,5 @@ float FrDielectric(float cosTheta_i, float eta)
     float Fr          = 0.5f * (rPerp * rPerp + rParallel * rParallel);
     return Fr;
 }
+
+#endif

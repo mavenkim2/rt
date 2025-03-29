@@ -1,6 +1,6 @@
 #include "bit_twiddling.hlsli"
 #include "common.hlsli"
-#include "bxdf.hlsli"
+#include "bsdf/bxdf.hlsli"
 #include "payload.hlsli"
 #include "rt.hlsli"
 #include "dgf_intersect.hlsli"

@@ -244,7 +244,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     RayTracingShaderGroup groups[3];
     {
-        Arena *arena                  = params->arenas[0];
+        Arena *arena                  = params->arenas[GetThreadIndex()];
         string raygenShaderName       = "../src/shaders/render_raytrace_rgen.spv";
         string missShaderName         = "../src/shaders/render_raytrace_miss.spv";
         string hitShaderName          = "../src/shaders/render_raytrace_dielectric_hit.spv";
@@ -387,11 +387,13 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     u32 numHeaders       = 0;
 
     Scene *rootScene = GetScene();
-    for (int i = 0; i < rootScene->ptexTextures.Length(); i++)
-    {
-        PtexTexture *texture = &rootScene->ptexTextures[i];
-        string data          = Convert(sceneScratch.temp.arena, texture);
-    }
+    // TODO: add ptex textures
+    // for (int i = 0; i < rootScene->ptexTextures.Length(); i++)
+    // {
+    //     PtexTexture *texture = &rootScene->ptexTextures[i];
+    //     string data          = Convert(sceneScratch.temp.arena, texture);
+    // }
+
     // Set the instance ids of each scene
     int runningTotal = 0;
     for (int i = 0; i < numScenes; i++)
@@ -442,6 +444,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             {
                 meshes[j] = ConvertQuadToTriangleMesh(sceneScratch.temp.arena, meshes[j]);
             }
+            scene->geometryType = GeometryType::TriangleMesh;
         }
 
         PrimRef *refs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
@@ -704,6 +707,14 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
 #endif
 
+    // GPU materials
+    StaticArray<GPUMaterial> gpuMaterials(sceneScratch.temp.arena,
+                                          rootScene->materials.Length());
+    for (int i = 0; i < rootScene->materials.Length(); i++)
+    {
+        gpuMaterials.Push(rootScene->materials[i]->ConvertToGPU());
+    }
+
     Swapchain swapchain = device->CreateSwapchain(params->window, VK_FORMAT_R8G8B8A8_SRGB,
                                                   params->width, params->height);
 
@@ -725,17 +736,15 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     ShaderDebugInfo shaderDebug;
 
-    GPUMaterial gpuMaterial;
-    gpuMaterial.eta = 1.1;
-
     RTBindingData bindingData;
     bindingData.materialIndex = 0;
 
     CommandBuffer *transferCmd  = device->BeginCommandBuffer(QueueType_Copy);
     GPUBuffer bindingDataBuffer = transferCmd->SubmitBuffer(
         &bindingData, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(RTBindingData));
-    GPUBuffer materialBuffer = transferCmd->SubmitBuffer(
-        &gpuMaterial, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(GPUMaterial));
+    GPUBuffer materialBuffer =
+        transferCmd->SubmitBuffer(gpuMaterials.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                  sizeof(GPUMaterial) * gpuMaterials.Length());
 
     GPUImage gpuEnvMap = transferCmd->SubmitImage(envMap->contents, VK_IMAGE_USAGE_SAMPLED_BIT,
                                                   VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TYPE_2D,

@@ -23,6 +23,7 @@ namespace rt
 {
 struct Image;
 struct RenderParams2;
+struct GPUMaterial;
 
 enum class IndexType
 {
@@ -509,6 +510,8 @@ struct Material
     // Used in SIMD mode, loads and caches data that may be used across multiple calls
     virtual void Start(struct ShadingThreadState *state) {}
     virtual void Stop() {}
+
+    virtual GPUMaterial ConvertToGPU();
 };
 
 struct NullMaterial : Material
@@ -545,6 +548,7 @@ struct DiffuseMaterial : Material
     virtual void Start(ShadingThreadState *state) override { reflectance->Start(state); }
     virtual void Stop() override { reflectance->Stop(); }
     virtual MaterialTypes GetType() override { return MaterialTypes::Diffuse; }
+    virtual GPUMaterial ConvertToGPU() override;
 };
 
 struct DiffuseTransmissionMaterial : Material
@@ -646,6 +650,7 @@ struct DielectricMaterial : Material
         if (uRoughnessTexture != vRoughnessTexture) vRoughnessTexture->Stop();
     }
     virtual MaterialTypes GetType() override { return MaterialTypes::Dielectric; }
+    virtual GPUMaterial ConvertToGPU() override;
 };
 
 struct CoatedDiffuseMaterial : Material
