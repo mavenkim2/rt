@@ -9,7 +9,6 @@
 #include "../rt/shader_interop/ray_shaderinterop.h"
 #include "../rt/shader_interop/debug_shaderinterop.h"
 
-
 RaytracingAccelerationStructure accel : register(t0);
 RWTexture2D<float4> image : register(u1);
 ConstantBuffer<GPUScene> scene : register(b2);

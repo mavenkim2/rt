@@ -878,6 +878,7 @@ struct Scene
     std::vector<InfiniteLight *> infiniteLights;
 
     StaticArray<Material *> materials;
+    StaticArray<PtexTexture> ptexTextures;
     StaticArray<Texture *> textures;
 
     std::vector<Mesh> causticCasters;

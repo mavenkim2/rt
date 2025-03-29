@@ -174,8 +174,35 @@ void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel)
     }
 }
 
-void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes, int numMeshes,
-                                Bounds &sceneBounds)
+Mesh ConvertQuadToTriangleMesh(Arena *arena, Mesh mesh)
+{
+    Assert(mesh.numFaces * 4 == mesh.numIndices);
+    u32 newNumIndices = mesh.numIndices / 4 * 6;
+    u32 *newIndices   = PushArrayNoZero(arena, u32, mesh.numIndices / 4 * 6);
+    for (int faceIndex = 0; faceIndex < mesh.numFaces; faceIndex++)
+    {
+        u32 id0 = mesh.indices[4 * faceIndex + 0];
+        u32 id1 = mesh.indices[4 * faceIndex + 1];
+        u32 id2 = mesh.indices[4 * faceIndex + 2];
+        u32 id3 = mesh.indices[4 * faceIndex + 3];
+
+        u32 *writeIndices = newIndices + 6 * faceIndex;
+
+        writeIndices[0] = id0;
+        writeIndices[1] = id1;
+        writeIndices[2] = id2;
+        writeIndices[3] = id0;
+        writeIndices[4] = id2;
+        writeIndices[5] = id3;
+    }
+    Mesh result       = mesh;
+    result.indices    = newIndices;
+    result.numIndices = newNumIndices;
+    return result;
+}
+
+void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *buildData,
+                                Mesh *meshes, int numMeshes, Bounds &sceneBounds)
 {
 #if 0
     static const int b     = 24;
@@ -251,7 +278,7 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes,
             for (int clusterIndex = 0; clusterIndex < node->count; clusterIndex++)
             {
                 RecordAOSSplits &cluster = node->values[clusterIndex];
-                CreateDGFs(buildData, meshScratch.temp.arena, meshes, quantizedVertices,
+                CreateDGFs(scene, buildData, meshScratch.temp.arena, meshes, quantizedVertices,
                            octNormals, cluster, precision);
             }
         }
@@ -304,7 +331,8 @@ u32 BitAlignU32(u32 high, u32 low, u32 shift)
     return result;
 }
 
-void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena, Mesh *meshes,
+void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *buildDatas,
+                                Arena *arena, Mesh *meshes,
                                 const StaticArray<StaticArray<Vec3i>> &quantizedVertices,
                                 const StaticArray<StaticArray<u32>> &octNormals,
                                 RecordAOSSplits &cluster, int precision)
@@ -367,6 +395,9 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     Vec2u minOct(pos_inf);
     Vec2u maxOct(neg_inf);
 
+    u32 geomIDStart     = primRefs[start].geomID;
+    bool constantGeomID = true;
+
     for (int i = start; i < start + clusterNumTriangles; i++)
     {
         u32 geomID     = primRefs[i].geomID;
@@ -379,6 +410,8 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
         };
 
         geomIDs[i - start] = geomID;
+
+        constantGeomID &= geomID == geomIDStart;
 
         for (int indexIndex = 0; indexIndex < 3; indexIndex++)
         {
@@ -1025,6 +1058,80 @@ void ClusterBuilder::CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena
     for (int i = 0; i < clusterNumTriangles; i++)
     {
         primRefs[start + i] = tempRefs[triangleOrder[i]];
+    }
+
+    // Constant mode
+    // TODO: compress this
+    if (constantGeomID)
+    {
+        u32 materialIndex = scene->primIndices[geomIDStart].materialID.GetIndex();
+        materialIndex |= 0x80000000;
+        packed.j = materialIndex;
+    }
+    else
+    {
+        u32 commonMSBs        = 32;
+        u32 currentCommonMSBs = geomIDs[0];
+
+        u32 numUniqueGeomIDs = 1;
+        StaticArray<u32> uniqueGeomIDs(clusterScratch.arena, clusterNumTriangles);
+        StaticArray<u32> entryIndex(clusterScratch.arena, clusterNumTriangles,
+                                    clusterNumTriangles);
+
+        uniqueGeomIDs.Push(geomIDs[triangleOrder[0]]);
+        entryIndex[0] = 0;
+        for (int i = 1; i < clusterNumTriangles; i++)
+        {
+            u32 triangleIndex = triangleOrder[i];
+            u32 geomID        = geomIDs[triangleIndex];
+            bool unique       = true;
+            for (int j = 0; j < uniqueGeomIDs.Length(); j++)
+            {
+                if (uniqueGeomIDs[j] == geomID)
+                {
+                    entryIndex[i] = j;
+                    unique        = false;
+                    break;
+                }
+            }
+            if (unique)
+            {
+                for (int bitIndex = commonMSBs; bitIndex >= 0; bitIndex++)
+                {
+                    if ((geomID >> (32 - bitIndex)) == currentCommonMSBs)
+                    {
+                        break;
+                    }
+                    currentCommonMSBs >>= 1;
+                    commonMSBs--;
+                }
+                uniqueGeomIDs.Push(geomID);
+                entryIndex[i] = entryIndex.Length() - 1;
+            }
+        }
+
+        Assert(uniqueGeomIDs.Length() > 1);
+        u32 entryBitLength      = Log2Int(uniqueGeomIDs.Length() - 1) + 1;
+        u32 materialTableOffset = vertexBitStreamSize + normalBitStreamSize + bitStreamSize;
+        Assert(materialTableOffset < 0x80000000);
+        packed.j = materialTableOffset;
+
+        // Common MSBs + LSB entries + per triangle entries
+        u32 materialTableNumBits = commonMSBs + (32 - commonMSBs) * uniqueGeomIDs.Length() +
+                                   entryBitLength * clusterNumTriangles;
+        u32 materialTableSize = (materialTableNumBits + 7) >> 3;
+        auto *table           = buildData.byteBuffer.AddNode(materialTableSize);
+        u32 tableBitOffset    = 0;
+        WriteBits((u32 *)table->values, tableBitOffset, currentCommonMSBs, commonMSBs);
+        for (u32 geomID : uniqueGeomIDs)
+        {
+            WriteBits((u32 *)table->values, tableBitOffset, geomID, (32 - commonMSBs));
+        }
+        for (u32 index : entryIndex)
+        {
+            WriteBits((u32 *)table->values, tableBitOffset, index, entryBitLength);
+        }
+        Assert(tableBitOffset == materialTableNumBits);
     }
 
     // Debug

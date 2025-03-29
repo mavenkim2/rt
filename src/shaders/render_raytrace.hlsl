@@ -13,7 +13,7 @@
 #include "../rt/nvapi.h"
 
 RaytracingAccelerationStructure accel : register(t0);
-RWTexture2D<float4> image : register(u1);
+RWTexture2D<half4> image : register(u1);
 ConstantBuffer<GPUScene> scene : register(b2);
 StructuredBuffer<RTBindingData> rtBindingData : register(t3);
 StructuredBuffer<GPUMaterial> materials : register(t4);

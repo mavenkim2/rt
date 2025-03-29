@@ -29,6 +29,7 @@ struct DenseGeometry
     uint ctrlOffset;
     uint firstBitOffset;
     int posPrecision;
+    uint materialInfo;
 
     uint3 numPrevRestartsBeforeDwords;
     uint3 prevHighRestartBeforeDwords;
@@ -338,6 +339,8 @@ DenseGeometry GetDenseGeometryHeader(uint blockIndex)
 
     result.octBase[0] = BitFieldExtractU32(packed.i, 16, 0);
     result.octBase[1] = BitFieldExtractU32(packed.i, 16, 16);
+
+    result.materialInfo = packed.j;
 
     // Size of vertex buffer and normal buffer
     const uint vertexBitWidth = result.posBitWidths[0] + result.posBitWidths[1] + result.posBitWidths[2];

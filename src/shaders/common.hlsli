@@ -3,6 +3,7 @@
 
 static const float PI = 3.1415926535f;
 static const float FLT_MAX = asfloat(0x7F800000);
+static const float InvPi = 0.31830988618379067154f;
 
 #define texture2DSpace space1
 #define structuredBufferSpace space2
@@ -146,5 +147,10 @@ uint2 SwizzleThreadGroup(uint3 dispatchThreadID, uint3 groupID, uint3 GTid, uint
     return swizzledDTid;
 }
 #endif
+
+float ReciprocalPow2(int power)
+{
+    return asfloat((127 - power) << 23);
+}
 
 #endif

@@ -87,10 +87,10 @@ struct ClusterBuilder
 
     ClusterBuilder(Arena *arena, ScenePrimitives *scene, PrimRef *primRefs);
     void BuildClusters(RecordAOSSplits &record, bool parallel);
-    void CreateDGFs(DenseGeometryBuildData *buildData, Mesh *meshes, int numMeshes,
-                    Bounds &sceneBounds);
-    void CreateDGFs(DenseGeometryBuildData *buildDatas, Arena *arena, Mesh *meshes,
-                    const StaticArray<StaticArray<Vec3i>> &quantizedVertices,
+    void CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *buildData, Mesh *meshes,
+                    int numMeshes, Bounds &sceneBounds);
+    void CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *buildDatas, Arena *arena,
+                    Mesh *meshes, const StaticArray<StaticArray<Vec3i>> &quantizedVertices,
                     const StaticArray<StaticArray<u32>> &normals, RecordAOSSplits &cluster,
                     int precision);
 };
@@ -134,6 +134,7 @@ void DecodeDenseGeometry()
 #endif
 
 void WriteBits(u32 *data, u32 &position, u32 value, u32 numBits);
+Mesh ConvertQuadToTriangleMesh(Arena *arena, Mesh mesh);
 
 } // namespace rt
 #endif

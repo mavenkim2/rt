@@ -163,4 +163,16 @@ float2 SampleUniformDiskConcentric(float2 u)
                             r * float2(cos(theta), sin(theta)));
     return result;
 }
+
+float3 SampleCosineHemisphere(float2 u)
+{
+    float2 d = SampleUniformDiskConcentric(u);
+    float z = sqrt(1 - d.x * d.x - d.y * d.y);
+    return float3(d.x, d.y, z);
+}
+
+float CosineHemispherePDF(float cosTheta)
+{
+    return cosTheta * InvPi;
+}
 #endif

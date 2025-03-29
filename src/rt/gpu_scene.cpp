@@ -16,6 +16,7 @@
 #include "scene.h"
 #include "vulkan.h"
 #include "win32.h"
+#include "ptex.h"
 
 namespace rt
 {
@@ -178,51 +179,11 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
 // 6. disney bsdf
 // 7. recycle memory
 // 8. textures
-
-StaticArray<VkAabbPositionsKHR>
-CreateAABBForEachTriangle(Arena *arena, ClusterBuilder &builder, int numBlocks)
-{
-    StaticArray<VkAabbPositionsKHR> aabbs(arena, MAX_CLUSTER_TRIANGLES * numBlocks);
-    PrimRef *refs = builder.primRefs;
-    for (int index = 0; index < builder.threadClusters.Length(); index++)
-    {
-        for (auto *node = builder.threadClusters[index].l.first; node != 0; node = node->next)
-        {
-            for (int i = 0; i < node->count; i++)
-            {
-                u32 numTriangles        = 0;
-                RecordAOSSplits &record = node->values[i];
-
-                for (int refIndex = record.start; refIndex < record.start + record.count;
-                     refIndex++)
-                {
-                    VkAabbPositionsKHR aabb;
-                    aabb.minX = -refs[refIndex].minX;
-                    aabb.minY = -refs[refIndex].minY;
-                    aabb.minZ = -refs[refIndex].minZ;
-                    aabb.maxX = refs[refIndex].maxX;
-                    aabb.maxY = refs[refIndex].maxY;
-                    aabb.maxZ = refs[refIndex].maxZ;
-                    aabbs.Push(aabb);
-                }
-                VkAabbPositionsKHR nullAabb = {};
-                nullAabb.minX               = f32(NaN);
-                for (int remaining = record.count; remaining < MAX_CLUSTER_TRIANGLES;
-                     remaining++)
-                {
-                    aabbs.Push(nullAabb);
-                }
-            }
-        }
-    }
-    return aabbs;
-}
-
-template <u32 N>
 StaticArray<VkAabbPositionsKHR> CreateAABBForNTriangles(Arena *arena, ClusterBuilder &builder,
                                                         int numBlocks)
 {
-    u32 shift      = Log2Int(N);
+    u32 N          = TRIANGLES_PER_LEAF;
+    u32 shift      = LOG2_TRIANGLES_PER_LEAF;
     u32 totalAabbs = MAX_CLUSTER_TRIANGLES >> shift;
     StaticArray<VkAabbPositionsKHR> aabbs(arena, totalAabbs * numBlocks);
     PrimRef *refs = builder.primRefs;
@@ -424,6 +385,45 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     u32 numVertices      = 0;
     u32 numTriangles     = 0;
     u32 numHeaders       = 0;
+
+    Scene *rootScene = GetScene();
+    for (int i = 0; i < rootScene->ptexTextures.Length(); i++)
+    {
+        PtexTexture *texture = &rootScene->ptexTextures[i];
+        string data          = Convert(sceneScratch.temp.arena, texture);
+    }
+    // Set the instance ids of each scene
+    int runningTotal = 0;
+    for (int i = 0; i < numScenes; i++)
+    {
+        ScenePrimitives *scene = scenes[i];
+        if (scene->geometryType != GeometryType::Instance)
+        {
+            scene->gpuInstanceID = runningTotal;
+            runningTotal += scene->numPrimitives;
+
+            // GPUMesh *gpuMeshes = (GPUMesh *)scene->primitives;
+#if 0
+            for (int primIndex = 0; primIndex < scene->numPrimitives; primIndex++)
+            {
+                GPUMesh &gpuMesh     = gpuMeshes[primIndex];
+                int bindlessVertices = device->BindlessStorageIndex(
+                    &gpuMesh.buffer, gpuMesh.vertexOffset, gpuMesh.vertexSize);
+                Assert(bindlessVertices == 3 * runningTotal);
+                int bindlessIndices = device->BindlessStorageIndex(
+                    &gpuMesh.buffer, gpuMesh.indexOffset, gpuMesh.indexSize);
+                Assert(bindlessIndices == 3 * runningTotal + 1);
+                int bindlessNormals = device->BindlessStorageIndex(
+                    &gpuMesh.buffer, gpuMesh.normalOffset, gpuMesh.normalSize);
+                Assert(bindlessNormals == 3 * runningTotal + 2);
+            }
+#endif
+        }
+        else
+        {
+            scene->gpuInstanceID = scene->sceneIndex;
+        }
+    }
     for (int i = 0; i < numScenes; i++)
     {
         ScenePrimitives *scene       = scenes[i];
@@ -434,12 +434,23 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         RecordAOSSplits record(neg_inf);
 
+        Mesh *meshes = (Mesh *)scene->primitives;
+        if (scene->geometryType == GeometryType::QuadMesh ||
+            scene->geometryType == GeometryType::CatmullClark)
+        {
+            for (int j = 0; j < scene->numPrimitives; j++)
+            {
+                meshes[j] = ConvertQuadToTriangleMesh(sceneScratch.temp.arena, meshes[j]);
+            }
+        }
+
         PrimRef *refs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
             sceneScratch.temp.arena, scenes[i], record, false);
 
         ClusterBuilder builder(arena, scene, refs);
         builder.BuildClusters(record, true);
-        builder.CreateDGFs(&data, (Mesh *)scene->primitives, scene->numPrimitives,
+
+        builder.CreateDGFs(scene, &data, (Mesh *)scene->primitives, scene->numPrimitives,
                            sceneBounds);
 
         u32 numClusters = 0;
@@ -449,7 +460,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         }
         totalNumClusters += numClusters;
 
-        Mesh *meshes = (Mesh *)scene->primitives;
         for (int i = 0; i < scene->numPrimitives; i++)
         {
             numVertices += meshes[i].numVertices;
@@ -470,9 +480,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         debugRestartCount   = PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
 
         StaticArray<VkAabbPositionsKHR> aabbs =
-            // CreateAABBForEachTriangle(sceneScratch.temp.arena, builder, data.numBlocks);
-            CreateAABBForNTriangles<TRIANGLES_PER_LEAF>(sceneScratch.temp.arena, builder,
-                                                        data.numBlocks);
+            CreateAABBForNTriangles(sceneScratch.temp.arena, builder, data.numBlocks);
 
         aabbLength = aabbs.Length();
         aabbBuffer = dgfTransferCmd->SubmitBuffer(
@@ -696,44 +704,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
 #endif
 
-    // Set the instance ids of each scene
-    int runningTotal = 0;
-    for (int i = 0; i < numScenes; i++)
-    {
-        ScenePrimitives *scene = scenes[i];
-        if (scene->geometryType != GeometryType::Instance)
-        {
-            scene->gpuInstanceID = runningTotal;
-
-            // GPUMesh *gpuMeshes = (GPUMesh *)scene->primitives;
-            for (int primIndex = 0; primIndex < scene->numPrimitives; primIndex++)
-            {
-#if 0
-                GPUMesh &gpuMesh     = gpuMeshes[primIndex];
-                int bindlessVertices = device->BindlessStorageIndex(
-                    &gpuMesh.buffer, gpuMesh.vertexOffset, gpuMesh.vertexSize);
-                Assert(bindlessVertices == 3 * runningTotal);
-                int bindlessIndices = device->BindlessStorageIndex(
-                    &gpuMesh.buffer, gpuMesh.indexOffset, gpuMesh.indexSize);
-                Assert(bindlessIndices == 3 * runningTotal + 1);
-                int bindlessNormals = device->BindlessStorageIndex(
-                    &gpuMesh.buffer, gpuMesh.normalOffset, gpuMesh.normalSize);
-                Assert(bindlessNormals == 3 * runningTotal + 2);
-#endif
-                runningTotal++;
-            }
-        }
-        else
-        {
-            scene->gpuInstanceID = scene->sceneIndex;
-        }
-    }
-
     Swapchain swapchain = device->CreateSwapchain(params->window, VK_FORMAT_R8G8B8A8_SRGB,
                                                   params->width, params->height);
 
     PushConstant pushConstant;
-    pushConstant.stage  = /*ShaderStage::Compute;*/ ShaderStage::Raygen | ShaderStage::Miss;
+    pushConstant.stage  = ShaderStage::Compute; // ShaderStage::Raygen | ShaderStage::Miss;
     pushConstant.offset = 0;
     pushConstant.size   = sizeof(RayPushConstant);
 
@@ -783,10 +758,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     };
 
     // Create descriptor set layout and pipeline
-    VkShaderStageFlags flags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR |
-                               VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-                               VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
-    // VkShaderStageFlags flags   = VK_SHADER_STAGE_COMPUTE_BIT;
+    // VkShaderStageFlags flags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR
+    // |
+    //                            VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+    //                            VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+    VkShaderStageFlags flags   = VK_SHADER_STAGE_COMPUTE_BIT;
     DescriptorSetLayout layout = {};
     layout.pipelineLayout      = nullptr;
     int accelBindingIndex      = layout.AddBinding(
@@ -825,9 +801,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     layout.AddImmutableSamplers();
 
-    RayTracingState rts = device->CreateRayTracingPipeline(groups, ArrayLength(groups),
-                                                           &pushConstant, &layout, 2, true);
-    // VkPipeline pipeline = device->CreateComputePipeline(&shader, &layout, &pushConstant);
+    // RayTracingState rts = device->CreateRayTracingPipeline(groups, ArrayLength(groups),
+    //                                                        &pushConstant, &layout, 2, true);
+    VkPipeline pipeline = device->CreateComputePipeline(&shader, &layout, &pushConstant);
 
 #ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
     Semaphore tlasSemaphore = device->CreateGraphicsSemaphore();
@@ -1069,15 +1045,15 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                    sizeof(ShaderDebugInfo));
         cmd->SubmitTransfer(&shaderDebugBuffers[currentBuffer]);
 
-        VkPipelineStageFlags2 flags   = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
-        VkPipelineBindPoint bindPoint = VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
+        VkPipelineStageFlags2 flags   = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        VkPipelineBindPoint bindPoint = VK_PIPELINE_BIND_POINT_COMPUTE;
         cmd->Barrier(&sceneTransferBuffers[currentBuffer].buffer, flags,
                      VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->Barrier(&shaderDebugBuffers[currentBuffer].buffer, flags,
                      VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->Barrier(image, VK_IMAGE_LAYOUT_GENERAL, flags, VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->FlushBarriers();
-        cmd->BindPipeline(bindPoint, /*pipeline);*/ rts.pipeline);
+        cmd->BindPipeline(bindPoint, pipeline); // rts.pipeline);
         DescriptorSet descriptorSet = layout.CreateDescriptorSet();
         descriptorSet.Bind(accelBindingIndex, &tlas.as)
             .Bind(imageBindingIndex, image)
@@ -1097,15 +1073,14 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         // .Bind(nvApiIndex, &nvapiBuffer);
         // .Bind(aabbIndex, &aabbBuffer);
 
-        cmd->BindDescriptorSets(bindPoint, &descriptorSet, rts.layout);
-        // cmd->BindDescriptorSets(bindPoint, &descriptorSet,
-        //                         layout.pipelineLayout);
+        // cmd->BindDescriptorSets(bindPoint, &descriptorSet, rts.layout);
+        cmd->BindDescriptorSets(bindPoint, &descriptorSet, layout.pipelineLayout);
 
-        cmd->PushConstants(&pushConstant, &pc, rts.layout); // layout.pipelineLayout);
-        cmd->TraceRays(&rts, params->width, params->height, 1);
-        // cmd->Dispatch(
-        //     (params->width + PATH_TRACE_NUM_THREADS_X - 1) / PATH_TRACE_NUM_THREADS_X,
-        //     (params->height + PATH_TRACE_NUM_THREADS_Y - 1) / PATH_TRACE_NUM_THREADS_Y, 1);
+        cmd->PushConstants(&pushConstant, &pc, /*rts.layout);*/ layout.pipelineLayout);
+        // cmd->TraceRays(&rts, params->width, params->height, 1);
+        cmd->Dispatch(
+            (params->width + PATH_TRACE_NUM_THREADS_X - 1) / PATH_TRACE_NUM_THREADS_X,
+            (params->height + PATH_TRACE_NUM_THREADS_Y - 1) / PATH_TRACE_NUM_THREADS_Y, 1);
         device->CopyFrameBuffer(&swapchain, cmd, image);
         device->EndFrame();
 

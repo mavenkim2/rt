@@ -12,6 +12,7 @@
 #include "parallel.h"
 #include "integrate.h"
 #include "vulkan.h"
+#include "ptex.h"
 #include "tests/test.h"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -1059,6 +1060,25 @@ int main(int argc, char *argv[])
     scheduler.Init(numProcessors);
 
     OS_Handle handle = OS_WindowInit(1920, 804);
+
+    Ptex::String error;
+    Ptex::PtexTexture *texture = cache->get(
+        "../../data/island/textures/isMountainB/Color/mountainb0001_geo.ptx", error);
+    // u8 *data = Convert(arena, texture);
+    // Ptex::PtexFilter *filter =
+    //     Ptex::PtexFilter::getFilter(texture, Ptex::PtexFilter::FilterType::f_bspline);
+    //
+    // const Vec2f &uv = Vec2f(0.5f, 0.5f);
+    // u32 faceIndex   = 39;
+    // u32 numFaces    = texture->getInfo().numFaces;
+    //
+    // Vec4f filterWidths(0.25f);
+    // f32 out[3] = {};
+    // filter->eval(out, 0, 3, faceIndex, uv[0], uv[1], filterWidths[0], filterWidths[1],
+    //              filterWidths[2], filterWidths[3]);
+    //
+    // Assert(!IsNaN(out[0]) && !IsNaN(out[1]) && !IsNaN(out[2]));
+    // filter->release();
 
     const u32 count = 3000000;
 

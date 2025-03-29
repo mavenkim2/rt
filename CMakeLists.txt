@@ -7,7 +7,8 @@ set (CMAKE_CXX_STANDARD_REQUIRED ON)
 if (MSVC)
     add_definitions(/D _CRT_SECURE_NO_WARNINGS /Dstrdup=_strdup
         /wd4018 /wd4100 /wd4101 /wd4127 /wd4146 /wd4232 /wd4242 /wd4244 /wd4245 /wd4267 /wd4305 /wd4309 
-        /wd4310 /wd4334 /wd4456 /wd4464 /wd4668 /wd4701 /wd4703 /wd4711 /wd4756 /wd4820 /wd5045 /wd5250)
+        /wd4310 /wd4334 /wd4456 /wd4464 /wd4668 /wd4701 /wd4703 /wd4711 /wd4756 /wd4820 /wd5045 /wd5250
+        /wd4130 /wd4389)
 endif ()
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -151,6 +152,7 @@ set (RT_SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/tables/sobolmatrices.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/sampler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/dgfs.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/ptex.cpp
 )
 
 if (USE_GPU)
@@ -274,6 +276,7 @@ target_include_directories(rt_exe PRIVATE
     ${OPENSUBDIV_INCLUDE_DIR}
     ${NANOVDB_INCLUDE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/vulkan
+    ${ZLIB_INCLUDE_DIR}
 )
 
 target_compile_options(rt_exe PRIVATE ${RT_CXX_FLAGS})
