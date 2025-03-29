@@ -8,6 +8,8 @@ RWStructuredBuffer<float3> decodeVertexBuffer : register(u1);
 RWStructuredBuffer<BuildClasDesc> buildClasDescs : register(u2);
 RWStructuredBuffer<uint> globals : register(u3);
 RWStructuredBuffer<ClusterData> clusterData : register(u4);
+ByteAddressBuffer denseGeometryData : register(t6);
+StructuredBuffer<PackedDenseGeometryHeader> denseGeometryHeaders : register(t6);
 
 [numthreads(32, 1, 1)] 
 void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dtID : SV_DispatchThreadID)
@@ -21,7 +23,7 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dtI
 
     if (headerIndex >= pc.numHeaders) return;
 
-    DenseGeometry header = GetDenseGeometryHeader(headerIndex);
+    DenseGeometry header = GetDenseGeometryHeader(denseGeometryHeaders, denseGeometryData, headerIndex);
     
     // Decode triangle indices
     uint waveNumActiveLanes = min(32, WaveGetLaneCount());

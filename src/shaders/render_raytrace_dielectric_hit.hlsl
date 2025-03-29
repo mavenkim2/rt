@@ -28,14 +28,15 @@ ByteAddressBuffer indices : register(t10);
 void main(inout RayPayload payload : SV_RayPayload, BuiltInTriangleIntersectionAttributes attr : SV_IntersectionAttributes) 
 {
 #ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION 
-    uint bindingDataIndex = InstanceID() + GeometryIndex();
+    uint instanceID = InstanceID();
+    uint bindingDataIndex = instanceID + GeometryIndex();
     uint primitiveIndex = PrimitiveIndex();
 
     uint2 blockTriangleIndices = DecodeBlockAndTriangleIndex(primitiveIndex, HitKind());
     uint blockIndex = blockTriangleIndices[0];
     uint triangleIndex = blockTriangleIndices[1];
 
-    DenseGeometry dg = GetDenseGeometryHeader(blockIndex);
+    DenseGeometry dg = GetDenseGeometryHeader(instanceID, blockIndex);
     uint3 vids = dg.DecodeTriangle(triangleIndex);
 
     float3 p0 = dg.DecodePosition(vids[0]);

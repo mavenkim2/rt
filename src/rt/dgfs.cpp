@@ -396,8 +396,10 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     Vec2u minOct(pos_inf);
     Vec2u maxOct(neg_inf);
 
-    u32 geomIDStart     = primRefs[start].geomID;
-    bool constantGeomID = true;
+    u32 geomIDStart = primRefs[start].geomID;
+
+    u32 materialIDStart     = scene->primIndices[geomIDStart].materialID.GetIndex();
+    bool constantMaterialID = true;
 
     for (int i = start; i < start + clusterNumTriangles; i++)
     {
@@ -412,7 +414,8 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
 
         geomIDs[i - start] = geomID;
 
-        constantGeomID &= geomID == geomIDStart;
+        constantMaterialID &=
+            scene->primIndices[geomID].materialID.GetIndex() == materialIDStart;
 
         for (int indexIndex = 0; indexIndex < 3; indexIndex++)
         {
@@ -1050,20 +1053,9 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     packed.i     = BitFieldPackU32(packed.i, minOct[0], headerOffset, 16);
     packed.i     = BitFieldPackU32(packed.i, minOct[1], headerOffset, 16);
 
-    buildData.headers.AddBack() = packed;
-
-    // Reorder refs
-    PrimRef *tempRefs = PushArrayNoZero(clusterScratch.arena, PrimRef, clusterNumTriangles);
-    MemoryCopy(tempRefs, primRefs + start, clusterNumTriangles * sizeof(PrimRef));
-
-    for (int i = 0; i < clusterNumTriangles; i++)
-    {
-        primRefs[start + i] = tempRefs[triangleOrder[i]];
-    }
-
     // Constant mode
     // TODO: compress this
-    if (constantGeomID)
+    if (constantMaterialID)
     {
         u32 materialIndex = scene->primIndices[geomIDStart].materialID.GetIndex();
         materialIndex |= 0x80000000;
@@ -1072,7 +1064,7 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     else
     {
         u32 commonMSBs        = 32;
-        u32 currentCommonMSBs = geomIDs[0];
+        u32 currentCommonMSBs = materialIDStart;
 
         u32 numUniqueMaterialIDs = 1;
         StaticArray<u32> uniqueMaterialIDs(clusterScratch.arena, clusterNumTriangles);
@@ -1116,7 +1108,6 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
         u32 entryBitLength      = Log2Int(uniqueMaterialIDs.Length() - 1) + 1;
         u32 materialTableOffset = vertexBitStreamSize + normalBitStreamSize + bitStreamSize;
         Assert(materialTableOffset < 0x80000000);
-        packed.j = materialTableOffset;
 
         // Common MSBs + LSB entries + per triangle entries
         u32 materialTableNumBits = commonMSBs +
@@ -1128,13 +1119,32 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
         WriteBits((u32 *)table->values, tableBitOffset, currentCommonMSBs, commonMSBs);
         for (u32 materialID : uniqueMaterialIDs)
         {
-            WriteBits((u32 *)table->values, tableBitOffset, materialID, (32 - commonMSBs));
+            u32 lsbMaterialID = materialID & ((1 << (32 - commonMSBs)) - 1u);
+            WriteBits((u32 *)table->values, tableBitOffset, lsbMaterialID, (32 - commonMSBs));
         }
         for (u32 index : entryIndex)
         {
             WriteBits((u32 *)table->values, tableBitOffset, index, entryBitLength);
         }
         Assert(tableBitOffset == materialTableNumBits);
+
+        Assert(materialTableOffset < (1 << 22));
+        Assert(commonMSBs > 0);
+        headerOffset = 0;
+        packed.j     = BitFieldPackU32(packed.j, commonMSBs - 1, headerOffset, 5);
+        packed.j     = BitFieldPackU32(packed.j, uniqueMaterialIDs.Length(), headerOffset, 5);
+        packed.j     = BitFieldPackU32(packed.j, materialTableOffset, headerOffset, 22);
+    }
+
+    buildData.headers.AddBack() = packed;
+
+    // Reorder refs
+    PrimRef *tempRefs = PushArrayNoZero(clusterScratch.arena, PrimRef, clusterNumTriangles);
+    MemoryCopy(tempRefs, primRefs + start, clusterNumTriangles * sizeof(PrimRef));
+
+    for (int i = 0; i < clusterNumTriangles; i++)
+    {
+        primRefs[start + i] = tempRefs[triangleOrder[i]];
     }
 
     // Debug

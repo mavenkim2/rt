@@ -80,6 +80,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
             if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
             {
                 uint primitiveIndex = query.CandidatePrimitiveIndex();
+                uint instanceID = query.CandidateInstanceID();
                 float3 o = query.CandidateObjectRayOrigin();
                 float3 d = query.CandidateObjectRayDirection();
 
@@ -87,7 +88,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
                 uint kind = 0;
                 float2 tempBary = 0;
 
-                bool result = IntersectCluster(primitiveIndex, o, d, query.RayTMin(), 
+                bool result = IntersectCluster(instanceID, primitiveIndex, o, d, query.RayTMin(), 
                                                query.CommittedRayT(), tHit, kind, tempBary, 
                                                all(DTid.xy == debugInfo.mousePos));
 
@@ -142,14 +143,14 @@ void main(uint3 DTid : SV_DispatchThreadID)
 #else
         if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
         {
-            uint bindingDataIndex = query.CommittedInstanceID() + query.CommittedGeometryIndex();
+            uint instanceID = query.CommittedInstanceID();
             uint primitiveIndex = query.CommittedPrimitiveIndex();
 
             uint2 blockTriangleIndices = DecodeBlockAndTriangleIndex(primitiveIndex, hitKind);
             uint blockIndex = blockTriangleIndices[0];
             uint triangleIndex = blockTriangleIndices[1];
 
-            DenseGeometry dg = GetDenseGeometryHeader(blockIndex);
+            DenseGeometry dg = GetDenseGeometryHeader(instanceID, blockIndex, true);
 
             uint materialID = dg.DecodeMaterialID(triangleIndex);
             uint3 vids = dg.DecodeTriangle(triangleIndex);

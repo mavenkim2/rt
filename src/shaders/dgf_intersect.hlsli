@@ -16,17 +16,19 @@ uint2 DecodeBlockAndTriangleIndex(uint primitiveIndex, uint hitKind)
     return uint2(blockIndex, triangleIndex);
 }
 
-bool IntersectCluster(in uint primitiveIndex, in float3 o, in float3 d, in float tMin, 
+
+
+bool IntersectCluster(in uint instanceID, in uint primitiveIndex, in float3 o, in float3 d, in float tMin, 
                       in float tMax, out float tHit, out uint kind, out float2 bary, bool debug = false)
 {
-    
     uint2 blockTriangleIndices = DecodeBlockAndTriangleIndex(primitiveIndex, 0);
     uint blockIndex = blockTriangleIndices[0];
     uint triangleIndex = blockTriangleIndices[1];
-    DenseGeometry dg = GetDenseGeometryHeader(blockIndex);
+
+    DenseGeometry dg = GetDenseGeometryHeader(instanceID, blockIndex, debug);
 
 #if LOG2_TRIANGLES_PER_LEAF == 0
-    uint3 vids = dg.DecodeTriangle(triangleIndex, debug);
+    uint3 vids = dg.DecodeTriangle(triangleIndex);
     
     float3 p0 = dg.DecodePosition(vids[0]);
     float3 p1 = dg.DecodePosition(vids[1]);
@@ -48,7 +50,7 @@ bool IntersectCluster(in uint primitiveIndex, in float3 o, in float3 d, in float
     tHit = tMax;
     for (uint i = triangleIndex; i < min(triangleIndex + TRIANGLES_PER_LEAF, dg.numTriangles); i++)
     {
-        uint3 vids = dg.DecodeTriangle(i, debug);
+        uint3 vids = dg.DecodeTriangle(i);
         
         float3 p0 = dg.DecodePosition(vids[0]);
         float3 p1 = dg.DecodePosition(vids[1]);

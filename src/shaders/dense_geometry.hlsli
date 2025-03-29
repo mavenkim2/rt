@@ -5,11 +5,11 @@
 #include "common.hlsli"
 #include "../rt/shader_interop/dense_geometry_shaderinterop.h"
 
-ByteAddressBuffer denseGeometryData : register(t5);
-StructuredBuffer<PackedDenseGeometryHeader> denseGeometryHeaders : register(t6); 
+StructuredBuffer<PackedDenseGeometryHeader> denseGeometryHeadersArray[] : register(t0, structuredBufferSpace);
 
 struct DenseGeometry 
 {
+    ByteAddressBuffer denseGeometryData;
     uint baseAddress;
 
     uint blockIndex;
@@ -36,7 +36,9 @@ struct DenseGeometry
     int3 prevHighEdge1BeforeDwords;
     int3 prevHighEdge2BeforeDwords;
 
-    uint3 DecodeTriangle(uint triangleIndex, bool printDebug = false)
+    bool debug;
+
+    uint3 DecodeTriangle(uint triangleIndex)
     {
         enum 
         {
@@ -121,7 +123,7 @@ struct DenseGeometry
 
             indexAddress = isEdge1 ? indexAddress.yxz : indexAddress;
 
-            if (printDebug)
+            if (0)
             {
                 printf("block/tri index: %u %u\nnum restarts: %u\nis: %u %u %u\nprev triangle: %u %u %u\nrestart hb: %u\nother hb: %u\nnum prev restarts: %u %u %u\n", blockIndex, triangleIndex, numRestarts, isRestart, isEdge1, isBacktrack, prevRestartTriangle, prevOtherEdgeTriangle, prevTriangle, restartHighBit, otherEdgeHighBit, numPrevRestartsBeforeDwords[0], numPrevRestartsBeforeDwords[1], numPrevRestartsBeforeDwords[2]);
                 printf("bitmask: %u %u %u, vals: %u %u\n", restartBitmask, edgeBitmask, backtrackBitmask, vals[0], vals[1]);
@@ -226,7 +228,7 @@ struct DenseGeometry
             vids[k] = vid;
         }
 
-        if (printDebug)
+        if (0)
         {
             float3 n0 = DecodeNormal(vids[0]);
             float3 n1 = DecodeNormal(vids[1]);
@@ -303,9 +305,10 @@ struct DenseGeometry
         // Table mode
         else 
         {
-            uint materialOffset = materialInfo;
-            uint numHighOrderBits;
-            uint numEntries;
+            uint numHighOrderBits = BitFieldExtractU32(materialInfo, 5, 0) + 1;
+            uint numEntries = BitFieldExtractU32(materialInfo, 5, 5);
+            uint materialOffset = BitFieldExtractU32(materialInfo, 22, 10);
+
             uint numLowOrderBits = 32 - numHighOrderBits;
 
             uint entryBitWidth = firstbithigh(numEntries - 1) + 1;
@@ -327,19 +330,22 @@ struct DenseGeometry
             result = denseGeometryData.Load2(offsets[0]);
             uint msb = BitFieldExtractU32(BitAlignU32(result.y, result.x, offsets[1]), numHighOrderBits, 0);
 
-            return (msb << numLowOrderBits) | entry;
+            uint materialID = (msb << numLowOrderBits) | entry;
+            printf("materialID: %u\nnum high %u, num entry %u, msb %u", materialID, numHighOrderBits, numEntries, msb);
+
+            return materialID;
         }
     }
 };
 
 // Taken from NaniteDataDecode.ush in Unreal Engine 5
-DenseGeometry GetDenseGeometryHeader(uint blockIndex)
+DenseGeometry GetDenseGeometryHeader(StructuredBuffer<PackedDenseGeometryHeader> headers, ByteAddressBuffer buffer, uint blockIndex, bool debug = false)
 {
-    PackedDenseGeometryHeader packed = denseGeometryHeaders[blockIndex];
+    PackedDenseGeometryHeader packed = headers[blockIndex];
 
     DenseGeometry result;
 
-    uint offset = 0;
+    result.denseGeometryData = buffer;
     result.baseAddress = packed.a;
 
     result.blockIndex = blockIndex;
@@ -391,5 +397,12 @@ DenseGeometry GetDenseGeometryHeader(uint blockIndex)
     result.firstBitOffset = (result.indexOffset << 3) + reuseBufferLength * result.indexBitWidth;
 
     return result;
+}
+
+DenseGeometry GetDenseGeometryHeader(uint instanceID, uint blockIndex, bool debug = false)
+{
+    StructuredBuffer<PackedDenseGeometryHeader> headers = denseGeometryHeadersArray[2 * instanceID];
+    ByteAddressBuffer dgfByteBuffer = bindlessBuffer[2 * instanceID + 1];
+    return GetDenseGeometryHeader(headers, dgfByteBuffer, blockIndex, debug);
 }
 #endif
