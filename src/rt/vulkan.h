@@ -325,6 +325,12 @@ struct GPUAccelerationStructure
     VkAccelerationStructureTypeKHR type;
 };
 
+struct GPUAccelerationStructurePayload
+{
+    GPUAccelerationStructure as;
+    GPUBuffer scratch;
+};
+
 struct TransferBuffer
 {
     union
@@ -431,11 +437,13 @@ struct CommandBuffer
 
     void FlushBarriers();
     void PushConstants(PushConstant *pc, void *ptr, VkPipelineLayout layout);
-    void CompactAS(QueryPool &pool, GPUAccelerationStructure **as, int count);
-    GPUAccelerationStructure BuildAS(VkAccelerationStructureTypeKHR type,
-                                     VkAccelerationStructureGeometryKHR *geometries, int count,
-                                     VkAccelerationStructureBuildRangeInfoKHR *buildRanges,
-                                     u32 *maxPrimitiveCounts);
+    QueryPool GetCompactionSizes(const GPUAccelerationStructurePayload *as);
+    GPUAccelerationStructure CompactAS(QueryPool &pool, const GPUAccelerationStructurePayload *as);
+
+    GPUAccelerationStructurePayload
+    BuildAS(VkAccelerationStructureTypeKHR type,
+            VkAccelerationStructureGeometryKHR *geometries, int count,
+            VkAccelerationStructureBuildRangeInfoKHR *buildRanges, u32 *maxPrimitiveCounts);
 
     void BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
                    GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 offset,
@@ -445,11 +453,12 @@ struct CommandBuffer
 
     GPUBuffer CreateTLASInstances(Instance *instances, int numInstances,
                                   AffineSpace *transforms, ScenePrimitives **childScenes);
-    GPUAccelerationStructure BuildTLAS(GPUBuffer *instanceData, u32 numInstances);
-    GPUAccelerationStructure BuildTLAS(Instance *instances, int numInstances,
-                                       AffineSpace *transforms, ScenePrimitives **childScenes);
-    GPUAccelerationStructure BuildBLAS(const GPUMesh *meshes, int count);
-    GPUAccelerationStructure BuildCustomBLAS(GPUBuffer *aabbsBuffer, u32 numAabbs);
+    GPUAccelerationStructurePayload BuildTLAS(GPUBuffer *instanceData, u32 numInstances);
+    GPUAccelerationStructurePayload BuildTLAS(Instance *instances, int numInstances,
+                                              AffineSpace *transforms,
+                                              ScenePrimitives **childScenes);
+    GPUAccelerationStructurePayload BuildBLAS(const GPUMesh *meshes, int count);
+    GPUAccelerationStructurePayload BuildCustomBLAS(GPUBuffer *aabbsBuffer, u32 numAabbs);
 };
 
 typedef ChunkedLinkedList<CommandBuffer> CommandBufferList;
@@ -683,6 +692,8 @@ struct Vulkan
     GPUImage CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageType type,
                          int width = 1, int height = 1, int depth = 1, int numMips = 1,
                          int numLayers = 1);
+    void DestroyBuffer(GPUBuffer *buffer);
+    void DestroyAccelerationStructure(GPUAccelerationStructure *as);
     int BindlessIndex(GPUImage *image);
     int BindlessStorageIndex(GPUBuffer *buffer, size_t offset = 0,
                              size_t range = VK_WHOLE_SIZE);
@@ -707,7 +718,6 @@ struct Vulkan
 
     VkAccelerationStructureInstanceKHR GetVkInstance(const AffineSpace &transform,
                                                      GPUAccelerationStructure &as);
-    QueryPool GetCompactionSizes(CommandBuffer *cmd, GPUAccelerationStructure **as, int count);
     void BeginFrame();
     void EndFrame();
 

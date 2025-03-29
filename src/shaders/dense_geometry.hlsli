@@ -331,7 +331,6 @@ struct DenseGeometry
             uint msb = BitFieldExtractU32(BitAlignU32(result.y, result.x, offsets[1]), numHighOrderBits, 0);
 
             uint materialID = (msb << numLowOrderBits) | entry;
-            printf("materialID: %u\nnum high %u, num entry %u, msb %u", materialID, numHighOrderBits, numEntries, msb);
 
             return materialID;
         }

@@ -37,73 +37,6 @@ void EndSceneShapeParse(ScenePrimitives *scene, SceneShapeParse *parse)
     device->SubmitCommandBuffer(parse->buffer);
 }
 
-#if 0
-GPUMesh ProcessMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh)
-{
-    ScratchArena scratch;
-
-    size_t vertexSize  = sizeof(mesh.p[0]) * mesh.numVertices;
-    size_t indicesSize = sizeof(mesh.indices[0]) * mesh.numIndices;
-    size_t normalSize  = 0;
-    size_t totalSize   = vertexSize + indicesSize;
-
-    u32 *octNormals = 0;
-    if (mesh.n)
-    {
-        octNormals = PushArrayNoZero(scratch.temp.arena, u32, mesh.numVertices);
-        for (int i = 0; i < mesh.numVertices; i++)
-        {
-            octNormals[i] = EncodeOctahedral(mesh.n[i]);
-        }
-        normalSize = sizeof(u32) * mesh.numVertices;
-        totalSize += normalSize;
-    }
-
-    u64 alignment = device->GetMinAlignment(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-
-    TransferBuffer transferBuffer = device->GetStagingBuffer(
-        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        totalSize + 2 * alignment);
-
-    u64 deviceAddress = device->GetDeviceAddress(transferBuffer.buffer.buffer);
-
-    GPUMesh result = {};
-
-    uintptr_t ptr = (uintptr_t)transferBuffer.mappedPtr;
-    Assert(ptr);
-    MemoryCopy((void *)ptr, mesh.p, vertexSize);
-    ptr += vertexSize;
-    ptr                = AlignPow2(ptr, alignment);
-    result.indexOffset = ptr - (uintptr_t)transferBuffer.mappedPtr;
-    MemoryCopy((void *)ptr, mesh.indices, indicesSize);
-    ptr += indicesSize;
-    if (normalSize)
-    {
-        ptr                 = AlignPow2(ptr, alignment);
-        result.normalOffset = ptr - (uintptr_t)transferBuffer.mappedPtr;
-        MemoryCopy((void *)ptr, octNormals, normalSize);
-    }
-
-    parse->buffer->SubmitTransfer(&transferBuffer);
-
-    result.buffer        = transferBuffer.buffer;
-    result.deviceAddress = deviceAddress;
-    result.vertexOffset  = 0;
-    result.vertexSize    = vertexSize;
-    result.vertexStride  = sizeof(Vec3f);
-    result.indexSize     = indicesSize;
-    result.indexStride   = sizeof(u32);
-    result.normalSize    = normalSize;
-    result.normalStride  = sizeof(u32);
-    result.numIndices    = mesh.numIndices;
-    result.numVertices   = mesh.numVertices;
-    result.numFaces      = mesh.numFaces;
-
-    return result;
-}
-#endif
-
 void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, GeometryType type,
                           string directory, AffineSpace &worldFromRender,
                           AffineSpace &renderFromWorld, Tokenizer &tokenizer,
@@ -810,6 +743,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     // also this doesn't work if there's actually a nontrivial TLAS
 
     CommandBuffer *allCommandBuffer = device->BeginCommandBuffer(QueueType_Graphics);
+
+    StaticArray<GPUAccelerationStructurePayload> uncompactedPayloads(sceneScratch.temp.arena,
+                                                                     blasScenes.Length());
     for (int i = 0; i < blasScenes.Length(); i++)
     {
         ScratchArena scratch;
@@ -824,23 +760,21 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         cmd->Wait(scene->semaphore);
         cmd->Signal(semaphore);
 
-        GPUAccelerationStructure **as =
-            PushArrayNoZero(scratch.temp.arena, GPUAccelerationStructure *, numScenes);
-
-        scene->gpuBVH =
+        GPUAccelerationStructurePayload payload =
             cmd->BuildCustomBLAS(&blasSceneInfo[i].aabbBuffer, blasSceneInfo[i].aabbLength);
-        as[bvhCount++] = &scene->gpuBVH;
+        uncompactedPayloads.Push(payload);
 
         // Compact
-        QueryPool query     = device->CreateQuery(QueryType_CompactSize, numScenes);
-        QueryPool queryPool = device->GetCompactionSizes(cmd, as, bvhCount);
+        QueryPool queryPool = cmd->GetCompactionSizes(&payload);
         device->SubmitCommandBuffer(cmd);
         device->EndEvent(cmd);
 
         allCommandBuffer->Wait(semaphore);
         semaphore.signalValue = 2;
         allCommandBuffer->Signal(semaphore);
-        allCommandBuffer->CompactAS(queryPool, as, bvhCount);
+        scene->gpuBVH = allCommandBuffer->CompactAS(queryPool, &payload);
+
+        device->DestroyBuffer(&payload.scratch);
     }
 
     // Set the instance ids of each scene
@@ -884,10 +818,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         {
             ScenePrimitives *scene = tlasScenes[i];
             device->BeginEvent(allCommandBuffer, "TLAS Build");
-            Instance *instances = (Instance *)scene->primitives;
-            scene->gpuBVH       = allCommandBuffer->BuildTLAS(
+            Instance *instances                     = (Instance *)scene->primitives;
+            GPUAccelerationStructurePayload payload = allCommandBuffer->BuildTLAS(
                 instances, scene->numPrimitives, scene->affineTransforms, scene->childScenes);
-            tlas = scene->gpuBVH;
+
+            scene->gpuBVH = payload.as;
+            tlas          = scene->gpuBVH;
 
             tlasSemaphore.signalValue = 1;
             allCommandBuffer->Signal(tlasSemaphore);
@@ -1053,7 +989,17 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         if (device->frameCount == 0)
         {
             cmd->Wait(submitSemaphore);
-            cmd->Wait(tlasSemaphore);
+            device->Wait(tlasSemaphore);
+
+            for (int i = 0; i < uncompactedPayloads.Length(); i++)
+            {
+                auto &payload = uncompactedPayloads[i];
+                device->DestroyAccelerationStructure(&payload.as);
+            }
+            for (int i = 0; i < blasSceneInfo.Length(); i++)
+            {
+                device->DestroyBuffer(&blasSceneInfo[i].aabbBuffer);
+            }
             envMapBindlessIndex = device->BindlessIndex(&gpuEnvMap);
         }
 
@@ -1085,8 +1031,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             .Bind(sceneBindingIndex, &sceneTransferBuffers[currentBuffer].buffer)
             .Bind(bindingDataBindingIndex, &bindingDataBuffer)
             .Bind(gpuMaterialBindingIndex, &materialBuffer)
-            // .Bind(denseGeometryBufferIndex, &dgfBuffer)
-            // .Bind(packedDenseGeometryHeaderBufferIndex, &headerBuffer)
             .Bind(shaderDebugIndex, &shaderDebugBuffers[currentBuffer].buffer)
 #ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
             .Bind(clusterDataIndex, &clusterData)

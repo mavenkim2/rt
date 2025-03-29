@@ -166,30 +166,83 @@ void main(uint3 DTid : SV_DispatchThreadID)
             float3 n2 = dg.DecodeNormal(vids[2]);
 
 #endif
-            float3 n = normalize(n0 + (n1 - n0) * bary[0] + (n2 - n0) * bary[1]);
+            
+            // Calculate triangle differentials
+            // p0 + dpdu * u + dpdv * v = p1
+
+            float2 uv0 = float2(0, 0);
+            float2 uv1 = float2(1, 0);
+            float2 uv2 = float2(1, 1);
+
+            float2 duv10 = uv1 - uv0;
+            float2 duv20 = uv2 - uv0;
+            float det = mad(duv10.x, duv20.y, -duv10.y * duv20.x);
+
+            float3 dpdu, dpdv, dndu, dndv = 0;
+            float3 dp10 = p1 - p0;
+            float3 dp20 = p2 - p0;
+            float3 dn10 = n1 - n0;
+            float3 dn20 = n2 - n0;
+
+            if (abs(det) < 1e-9f)
+            {
+                float2x3 tb = BuildOrthonormalBasis(gn);
+                dpdu = tb[0];
+                dpdv = tb[1];
+            }
+            else 
+            {
+                float invDet = rcp(det);
+
+                dpdu = mad(duv20.y, dp10, -duv10.y * dp20) * invDet;
+                dpdv = mad(-duv20.x, dp10, duv10.x * dp20) * invDet;
+                
+                dndu = mad(duv20.y, dn10, -duv10.y * dn20) * invDet;
+                dndv = mad(-duv20.x, dn10, duv10.x * dn20) * invDet;
+            }
+
+            float3 n = normalize(n0 + dn10 * bary[0] + dn20 * bary[1]);
+
+            float3 ss = dpdu;
+            float3 ts = cross(n, ss);
+            if (dot(ts, ts) > 0)
+            {
+                ss = cross(ts, n);
+            }
+            else
+            {
+                float2x3 tb = BuildOrthonormalBasis(n);
+                ss = tb[0];
+                ts = tb[1];
+            }
+
+            ss = normalize(ss);
+            ts = cross(n, ss);
 
             // Get material
             GPUMaterial material = materials[NonUniformResourceIndex(materialID)];
-            float eta = material.eta;
 
-            float3 origin = p0 + (p1 - p0) * bary.x + (p2 - p0) * bary.y;
-            float3 wo = -normalize(query.CommittedObjectRayDirection());
+            float3 origin = p0 + dp10 * bary.x + dp20 * bary.y;
+
+            float3 objectRayDir = query.CommittedObjectRayDirection();
+            float3 wo = normalize(float3(dot(ss, -objectRayDir), dot(ts, -objectRayDir), dot(n, -objectRayDir)));
             float2 sample = rng.Uniform2D();
             
             switch (material.type) 
             {
                 case GPUMaterialType::Dielectric:
                 {
-                    dir = SampleDielectric(wo, n, eta, sample, throughput);
+                    dir = SampleDielectric(wo, material.eta, sample, throughput);
                 }
                 break;
                 case GPUMaterialType::Diffuse: 
                 {
-                    dir = SampleDiffuse(wo, n, sample, throughput);
+                    dir = SampleDiffuse(wo, sample, throughput);
                 }
                 break;
             }
 
+            dir = ss * dir.x + ts * dir.y + n * dir.z;
             origin = TransformP(query.CommittedObjectToWorld3x4(), origin);
             dir = normalize(TransformV(query.CommittedObjectToWorld3x4(), dir));
             pos = OffsetRayOrigin(origin, gn);

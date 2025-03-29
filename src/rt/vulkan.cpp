@@ -1607,6 +1607,17 @@ GPUImage Vulkan::CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageTy
     return image;
 }
 
+void Vulkan::DestroyBuffer(GPUBuffer *buffer)
+{
+    vmaDestroyBuffer(allocator, buffer->buffer, buffer->allocation);
+}
+
+void Vulkan::DestroyAccelerationStructure(GPUAccelerationStructure *as)
+{
+    vkDestroyAccelerationStructureKHR(device, as->as, 0);
+    DestroyBuffer(&as->buffer);
+}
+
 int Vulkan::BindlessIndex(GPUImage *image)
 {
     BindlessDescriptorPool &descriptorPool =
@@ -2275,7 +2286,7 @@ DescriptorSet DescriptorSetLayout::CreateDescriptorSet()
     return set;
 }
 
-GPUAccelerationStructure CommandBuffer::BuildAS(
+GPUAccelerationStructurePayload CommandBuffer::BuildAS(
     VkAccelerationStructureTypeKHR accelType, VkAccelerationStructureGeometryKHR *geometries,
     int count, VkAccelerationStructureBuildRangeInfoKHR *buildRanges, u32 *maxPrimitiveCounts)
 {
@@ -2302,37 +2313,39 @@ GPUAccelerationStructure CommandBuffer::BuildAS(
     info.buffer                    = scratch.buffer;
     VkDeviceAddress scratchAddress = vkGetBufferDeviceAddress(device->device, &info);
 
-    GPUAccelerationStructure bvh;
-    bvh.type = accelType;
+    GPUAccelerationStructurePayload payload;
+    payload.as.type = accelType;
+    payload.scratch = scratch;
 
     {
-        bvh.buffer =
+        payload.as.buffer =
             device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
                                  sizeInfo.accelerationStructureSize);
         VkAccelerationStructureCreateInfoKHR accelCreateInfo = {
             VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
 
-        accelCreateInfo.buffer = bvh.buffer.buffer;
+        accelCreateInfo.buffer = payload.as.buffer.buffer;
         accelCreateInfo.size   = sizeInfo.accelerationStructureSize;
         accelCreateInfo.type   = accelType;
 
-        vkCreateAccelerationStructureKHR(device->device, &accelCreateInfo, 0, &bvh.as);
+        vkCreateAccelerationStructureKHR(device->device, &accelCreateInfo, 0, &payload.as.as);
     }
 
     buildInfo.scratchData.deviceAddress = scratchAddress;
-    buildInfo.dstAccelerationStructure  = bvh.as;
+    buildInfo.dstAccelerationStructure  = payload.as.as;
 
     VkAccelerationStructureDeviceAddressInfoKHR accelDeviceAddressInfo = {
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
-    accelDeviceAddressInfo.accelerationStructure = bvh.as;
-    bvh.address =
+    accelDeviceAddressInfo.accelerationStructure = payload.as.as;
+    payload.as.address =
         vkGetAccelerationStructureDeviceAddressKHR(device->device, &accelDeviceAddressInfo);
 
     vkCmdBuildAccelerationStructuresKHR(buffer, 1, &buildInfo, &buildRanges);
-    return bvh;
+    return payload;
 }
 
-GPUAccelerationStructure CommandBuffer::BuildCustomBLAS(GPUBuffer *aabbsBuffer, u32 numAabbs)
+GPUAccelerationStructurePayload CommandBuffer::BuildCustomBLAS(GPUBuffer *aabbsBuffer,
+                                                               u32 numAabbs)
 {
     VkAccelerationStructureGeometryKHR geometry = {
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
@@ -2474,7 +2487,7 @@ void CommandBuffer::BuildClusterBLAS(GPUBuffer *bottomLevelInfo, GPUBuffer *dstA
     vkCmdBuildClusterAccelerationStructureIndirectNV(buffer, &commandsInfo);
 }
 
-GPUAccelerationStructure CommandBuffer::BuildBLAS(const GPUMesh *meshes, int count)
+GPUAccelerationStructurePayload CommandBuffer::BuildBLAS(const GPUMesh *meshes, int count)
 {
     ScratchArena temp;
 
@@ -2513,7 +2526,8 @@ GPUAccelerationStructure CommandBuffer::BuildBLAS(const GPUMesh *meshes, int cou
                    geometries.Length(), buildRanges.data, maxPrimitiveCounts.data);
 }
 
-GPUAccelerationStructure CommandBuffer::BuildTLAS(GPUBuffer *instanceData, u32 numInstances)
+GPUAccelerationStructurePayload CommandBuffer::BuildTLAS(GPUBuffer *instanceData,
+                                                         u32 numInstances)
 {
     VkAccelerationStructureBuildRangeInfoKHR buildRange = {};
     buildRange.primitiveCount                           = numInstances;
@@ -2529,9 +2543,9 @@ GPUAccelerationStructure CommandBuffer::BuildTLAS(GPUBuffer *instanceData, u32 n
                    &numInstances);
 }
 
-GPUAccelerationStructure CommandBuffer::BuildTLAS(Instance *instances, int numInstances,
-                                                  AffineSpace *transforms,
-                                                  ScenePrimitives **childScenes)
+GPUAccelerationStructurePayload CommandBuffer::BuildTLAS(Instance *instances, int numInstances,
+                                                         AffineSpace *transforms,
+                                                         ScenePrimitives **childScenes)
 {
     GPUBuffer tlasBuffer =
         CreateTLASInstances(instances, numInstances, transforms, childScenes);
@@ -2601,19 +2615,13 @@ VkAccelerationStructureInstanceKHR Vulkan::GetVkInstance(const AffineSpace &tran
     return instanceAs;
 }
 
-QueryPool Vulkan::GetCompactionSizes(CommandBuffer *cmd, GPUAccelerationStructure **as,
-                                     int count)
+QueryPool CommandBuffer::GetCompactionSizes(const GPUAccelerationStructurePayload *as)
 {
-    QueryPool pool = CreateQuery(QueryType_CompactSize, count);
-    vkCmdResetQueryPool(cmd->buffer, pool.queryPool, 0, count);
+    QueryPool pool = device->CreateQuery(QueryType_CompactSize, 1);
+    vkCmdResetQueryPool(buffer, pool.queryPool, 0, 1);
     ScratchArena scratch;
 
-    VkAccelerationStructureKHR *vkAs =
-        PushArrayNoZero(scratch.temp.arena, VkAccelerationStructureKHR, count);
-    for (int i = 0; i < count; i++)
-    {
-        vkAs[i] = as[i]->as;
-    }
+    VkAccelerationStructureKHR vkAs = as->as.as;
 
     VkMemoryBarrier2 barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
     barrier.srcStageMask     = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
@@ -2625,55 +2633,52 @@ QueryPool Vulkan::GetCompactionSizes(CommandBuffer *cmd, GPUAccelerationStructur
     dependencyInfo.memoryBarrierCount = 1;
     dependencyInfo.pMemoryBarriers    = &barrier;
 
-    vkCmdPipelineBarrier2(cmd->buffer, &dependencyInfo);
+    vkCmdPipelineBarrier2(buffer, &dependencyInfo);
 
     vkCmdWriteAccelerationStructuresPropertiesKHR(
-        cmd->buffer, count, vkAs, VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
+        buffer, 1, &vkAs, VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
         pool.queryPool, 0);
     return pool;
 }
 
-void CommandBuffer::CompactAS(QueryPool &pool, GPUAccelerationStructure **as, int count)
+GPUAccelerationStructure CommandBuffer::CompactAS(QueryPool &pool,
+                                                  const GPUAccelerationStructurePayload *as)
 {
-    ScratchArena scratch;
-    VkDeviceSize *compactedSizes =
-        PushArrayNoZero(scratch.temp.arena, VkDeviceSize, pool.count);
-    vkGetQueryPoolResults(device->device, pool.queryPool, 0, count,
-                          sizeof(VkDeviceSize) * count, compactedSizes, 0,
+    VkDeviceSize compactedSize;
+    vkGetQueryPoolResults(device->device, pool.queryPool, 0, 1, sizeof(VkDeviceSize),
+                          &compactedSize, 0,
                           VK_QUERY_RESULT_WAIT_BIT | VK_QUERY_RESULT_64_BIT);
 
-    for (int i = 0; i < count; i++)
-    {
-        GPUBuffer newBuffer = device->CreateBuffer(
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, compactedSizes[i]);
-        VkAccelerationStructureKHR newAs;
+    GPUBuffer newBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, compactedSize);
+    VkAccelerationStructureKHR newAs;
 
-        VkAccelerationStructureCreateInfoKHR accelCreateInfo = {
-            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+    VkAccelerationStructureCreateInfoKHR accelCreateInfo = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
 
-        accelCreateInfo.buffer = newBuffer.buffer;
-        accelCreateInfo.size   = compactedSizes[i];
-        accelCreateInfo.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-        vkCreateAccelerationStructureKHR(device->device, &accelCreateInfo, 0, &newAs);
+    accelCreateInfo.buffer = newBuffer.buffer;
+    accelCreateInfo.size   = compactedSize;
+    accelCreateInfo.type   = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    vkCreateAccelerationStructureKHR(device->device, &accelCreateInfo, 0, &newAs);
 
-        VkCopyAccelerationStructureInfoKHR copyInfo = {
-            VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR};
-        copyInfo.src  = as[i]->as;
-        copyInfo.dst  = newAs;
-        copyInfo.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
+    VkCopyAccelerationStructureInfoKHR copyInfo = {
+        VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR};
+    copyInfo.src  = as->as.as;
+    copyInfo.dst  = newAs;
+    copyInfo.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
 
-        vkCmdCopyAccelerationStructureKHR(buffer, &copyInfo);
+    vkCmdCopyAccelerationStructureKHR(buffer, &copyInfo);
 
-        VkAccelerationStructureDeviceAddressInfoKHR accelDeviceAddressInfo = {
-            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
-        accelDeviceAddressInfo.accelerationStructure = newAs;
+    VkAccelerationStructureDeviceAddressInfoKHR accelDeviceAddressInfo = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
+    accelDeviceAddressInfo.accelerationStructure = newAs;
 
-        // TODO: delete old resources
-        as[i]->as      = newAs;
-        as[i]->buffer  = newBuffer;
-        as[i]->address = vkGetAccelerationStructureDeviceAddressKHR(device->device,
-                                                                    &accelDeviceAddressInfo);
-    }
+    GPUAccelerationStructure result;
+    result.as     = newAs;
+    result.buffer = newBuffer;
+    result.address =
+        vkGetAccelerationStructureDeviceAddressKHR(device->device, &accelDeviceAddressInfo);
+    return result;
 }
 
 void Vulkan::BeginFrame()

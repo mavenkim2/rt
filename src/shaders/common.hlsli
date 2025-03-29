@@ -153,4 +153,18 @@ float ReciprocalPow2(int power)
     return asfloat((127 - power) << 23);
 }
 
+float2x3 BuildOrthonormalBasis(float3 n)
+{
+    const float s = n.z >= 0.f ? 1.f : -1.f;
+    const float a = -1.0 / (s + n.z);
+    const float b = n.x * n.y * a;
+
+    float2x3 result;
+    result[0] = float3(mad(n.x * a, n.x * s, 1.0f), s * b, -s * n.x);
+    result[1] = float3(b, mad(n.y * a, n.y, s), -n.y);
+
+    return result;
+}
+
+
 #endif

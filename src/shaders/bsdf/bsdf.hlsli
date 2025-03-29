@@ -5,10 +5,10 @@
 #include "bxdf.hlsli"
 #include "../sampling.hlsli"
 
-float3 SampleDielectric(float3 wo, float3 n, float eta, float2 rand, inout float3 throughput) 
+float3 SampleDielectric(float3 wo, float eta, float2 rand, inout float3 throughput) 
 {
     float u = rand.x;
-    float R = FrDielectric(dot(wo, n), eta);
+    float R = FrDielectric(wo.z, eta);
 
     float T = 1 - R;
     float pr = R, pt = T;
@@ -16,12 +16,12 @@ float3 SampleDielectric(float3 wo, float3 n, float eta, float2 rand, inout float
     float3 dir;
     if (u < pr / (pr + pt))
     {
-        dir = Reflect(wo, n);
+        dir = float3(-wo.x, -wo.y, wo.z);
     }
     else
     {
         float etap;
-        bool valid = Refract(wo, n, eta, etap, dir);
+        bool valid = Refract(wo, float3(0, 0, 1), eta, etap, dir);
         if (!valid)
         {
             return 0;
@@ -33,13 +33,12 @@ float3 SampleDielectric(float3 wo, float3 n, float eta, float2 rand, inout float
     return normalize(dir);
 }
 
-float3 SampleDiffuse(float3 wo, float3 n, float2 u, inout float3 throughput)
+float3 SampleDiffuse(float3 wo, float2 u, inout float3 throughput)
 {
     float3 wi = SampleCosineHemisphere(u);
     wi.z = wo.z < 0 ? -wi.z : wi.z;
     float pdf = CosineHemispherePDF(abs(wi.z));
 
-    // TODO: temp
     float3 R = float3(0.1, 0.5, 0.3);
     throughput *= R * InvPi * abs(wi.z) * rcp(pdf);
 
