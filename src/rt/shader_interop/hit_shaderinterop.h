@@ -22,6 +22,7 @@ enum class GPUMaterialType
 struct GPUMaterial
 {
     GPUMaterialType type;
+    int reflectanceDescriptor;
     float eta;
 };
 

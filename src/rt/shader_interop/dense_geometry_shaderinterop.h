@@ -9,7 +9,7 @@ namespace rt
 #endif
 
 #define LOG2_TRIANGLES_PER_LEAF 1
-#define TRIANGLES_PER_LEAF (1 << LOG2_TRIANGLES_PER_LEAF)
+#define TRIANGLES_PER_LEAF      (1 << LOG2_TRIANGLES_PER_LEAF)
 
 #define ANCHOR_WIDTH              24
 #define MAX_CLUSTER_TRIANGLES_BIT 7

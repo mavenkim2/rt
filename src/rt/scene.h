@@ -39,7 +39,7 @@ struct Mesh
     Vec3f *n;
     Vec2f *uv;
     u32 *indices;
-    int *faceIDs;
+    u32 *faceIDs;
     u32 numIndices;
     u32 numVertices;
     u32 numFaces;
@@ -499,6 +499,7 @@ struct Material
 {
     // TODO: actually displacement map
     struct Texture *displacement;
+    int ptexReflectanceIndex;
 
     virtual BxDF *Evaluate(Arena *arena, SurfaceInteraction &si, SampledWavelengths &lambda,
                            const Vec4f &filterWidths) = 0;
@@ -883,7 +884,7 @@ struct Scene
     std::vector<InfiniteLight *> infiniteLights;
 
     StaticArray<Material *> materials;
-    StaticArray<PtexTexture> ptexTextures;
+    std::vector<PtexTexture> ptexTextures;
     StaticArray<Texture *> textures;
 
     std::vector<Mesh> causticCasters;
@@ -946,7 +947,7 @@ void LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, stri
                Image *envMap = 0);
 DiffuseAreaLight *ParseAreaLight(Arena *arena, Tokenizer *tokenizer, AffineSpace *space,
                                  int sceneID, int geomID);
-Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory,
+Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory, int *index = 0,
                       FilterType type        = FilterType::CatmullRom,
                       ColorEncoding encoding = ColorEncoding::None);
 Mesh ProcessMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh);

@@ -55,6 +55,8 @@ void main(uint3 DTid : SV_DispatchThreadID)
     float3 dpdx, dpdy, dddx, dddy;
     GenerateRay(scene, filterSample, pLens, pos, dir, dpdx, dpdy, dddx, dddy);
 
+    bool printDebug = all(DTid.xy == debugInfo.mousePos);
+
     while (true)
     {
         RayDesc desc;
@@ -89,8 +91,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
                 float2 tempBary = 0;
 
                 bool result = IntersectCluster(instanceID, primitiveIndex, o, d, query.RayTMin(), 
-                                               query.CommittedRayT(), tHit, kind, tempBary, 
-                                               all(DTid.xy == debugInfo.mousePos));
+                                               query.CommittedRayT(), tHit, kind, tempBary, printDebug);
 
                 if (!result) continue;
 
@@ -150,9 +151,10 @@ void main(uint3 DTid : SV_DispatchThreadID)
             uint blockIndex = blockTriangleIndices[0];
             uint triangleIndex = blockTriangleIndices[1];
 
-            DenseGeometry dg = GetDenseGeometryHeader(instanceID, blockIndex, true);
+            DenseGeometry dg = GetDenseGeometryHeader(instanceID, blockIndex, printDebug);
 
             uint materialID = dg.DecodeMaterialID(triangleIndex);
+            uint faceID = dg.DecodeFaceID(triangleIndex);
             uint3 vids = dg.DecodeTriangle(triangleIndex);
 
             float3 p0 = dg.DecodePosition(vids[0]);
@@ -237,7 +239,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
                 break;
                 case GPUMaterialType::Diffuse: 
                 {
-                    dir = SampleDiffuse(wo, sample, throughput);
+                    dir = SampleDiffuse(material.reflectanceDescriptor, faceID, wo, sample, throughput, printDebug);
                 }
                 break;
             }

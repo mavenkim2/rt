@@ -20,11 +20,13 @@ struct DenseGeometry
     uint3 posBitWidths;
     uint2 octBitWidths;
     uint indexBitWidth;
+    uint numFaceIDBits;
 
     uint numTriangles;
     uint numVertices;
 
     uint normalOffset;
+    uint faceIDOffset;
     uint indexOffset;
     uint ctrlOffset;
     uint firstBitOffset;
@@ -234,12 +236,12 @@ struct DenseGeometry
             float3 n1 = DecodeNormal(vids[1]);
             float3 n2 = DecodeNormal(vids[2]);
 
-            printf("anchor: %i %i %i\nbit widths: %u %u %u %u\nnum tri: %u\nnum vert: %u\noffsets: index %u ctrl %u first %u\nprecision: %u\nblockindex: %u triIndex: %u\nindex address: %u %u %u\nvids: %u %u %u\n, reuse: %u %u %u\n, octbase: %u %u, bitwidths: %u %u\nn: %f %f %f, %f %f %f, %f %f %f\n",
+            printf("anchor: %i %i %i\nbit widths: %u %u %u %u\nnum tri: %u\nnum vert: %u\noffsets: index %u ctrl %u first %u\nprecision: %u\nblockindex: %u triIndex: %u\nindex address: %u %u %u\nvids: %u %u %u\n, reuse: %u %u %u\n, octbase: %u %u, bitwidths: %u %u\nnumfaceidbits: %u\nn: %f %f %f, %f %f %f, %f %f %f\n",
                 anchor[0], anchor[1], anchor[2], posBitWidths[0], posBitWidths[1], posBitWidths[2], indexBitWidth,
                 numTriangles, numVertices, indexOffset, ctrlOffset, firstBitOffset, posPrecision, 
                 blockIndex, triangleIndex, 
                 indexAddress[0], indexAddress[1], indexAddress[2], vids[0], vids[1], vids[2], 
-                reuseIds[0], reuseIds[1], reuseIds[2], octBase[0], octBase[1], octBitWidths[0], octBitWidths[1], n0.x, n0.y, n0.z, n1.x, n1.y, n1.z, n2.x, n2.y, n2.z);
+                reuseIds[0], reuseIds[1], reuseIds[2], octBase[0], octBase[1], octBitWidths[0], octBitWidths[1], numFaceIDBits, n0.x, n0.y, n0.z, n1.x, n1.y, n1.z, n2.x, n2.y, n2.z);
         }
 
         return vids;
@@ -335,6 +337,28 @@ struct DenseGeometry
             return materialID;
         }
     }
+
+    uint DecodeFaceID(uint triangleIndex)
+    {
+        uint faceID = 0;
+        if (numFaceIDBits)
+        {
+            uint2 offsets = GetAlignedAddressAndBitOffset(baseAddress + faceIDOffset, 0);
+            uint2 result = denseGeometryData.Load2(offsets[0]);
+            uint minFaceID = BitAlignU32(result.y, result.x, offsets[1]);
+
+            offsets = GetAlignedAddressAndBitOffset(baseAddress + faceIDOffset + 4, triangleIndex * numFaceIDBits);
+            result = denseGeometryData.Load2(offsets[0]);
+            uint faceIDDiff = BitFieldExtractU32(BitAlignU32(result.y, result.x, offsets[1]), numFaceIDBits, 0);
+            faceID = minFaceID + faceIDDiff;
+
+            if (debug)
+            {
+                printf("%u %u %u\n", blockIndex, triangleIndex, faceID);
+            }
+        }
+        return faceID;
+    }
 };
 
 // Taken from NaniteDataDecode.ush in Unreal Engine 5
@@ -380,6 +404,7 @@ DenseGeometry GetDenseGeometryHeader(StructuredBuffer<PackedDenseGeometryHeader>
     result.numPrevRestartsBeforeDwords[0] = BitFieldExtractU32(packed.h, 6, 5);
     result.numPrevRestartsBeforeDwords[1] = BitFieldExtractU32(packed.h, 7, 11);
     result.numPrevRestartsBeforeDwords[2] = BitFieldExtractU32(packed.h, 8, 18);
+    result.numFaceIDBits = BitFieldExtractU32(packed.h, 6, 26); 
 
     result.octBase[0] = BitFieldExtractU32(packed.i, 16, 0);
     result.octBase[1] = BitFieldExtractU32(packed.i, 16, 16);
@@ -391,7 +416,8 @@ DenseGeometry GetDenseGeometryHeader(StructuredBuffer<PackedDenseGeometryHeader>
     const uint octBitWidth = result.octBitWidths[0] + result.octBitWidths[1];
 
     result.normalOffset = (result.numVertices * vertexBitWidth + 7) >> 3;
-    result.ctrlOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
+    result.faceIDOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
+    result.ctrlOffset = result.numFaceIDBits ? (result.faceIDOffset + 4 + ((result.numFaceIDBits * result.numTriangles + 7) >> 3)) : result.faceIDOffset;
     result.indexOffset = result.ctrlOffset + 12 * ((result.numTriangles + 31u) >> 5u);
     result.firstBitOffset = (result.indexOffset << 3) + reuseBufferLength * result.indexBitWidth;
 

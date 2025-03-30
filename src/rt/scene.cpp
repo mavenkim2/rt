@@ -272,7 +272,7 @@ Vec3f ReadVec3Bytes(Tokenizer *tokenizer)
     return value;
 }
 
-Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer, string directory,
+Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer, string directory, int *index = 0,
                      FilterType type        = FilterType::CatmullRom,
                      ColorEncoding encoding = ColorEncoding::None)
 {
@@ -292,8 +292,15 @@ Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer, string directory,
             ErrorExit(0, "Not supported yet.\n");
         }
         encoding = encoding == ColorEncoding::None ? ColorEncoding::Gamma : encoding;
-        return PushStructConstruct(arena, PtexTexture)(
-            PushStr8F(arena, "%S%S\0", directory, filename), type, encoding, scale);
+
+        PtexTexture tex(PushStr8F(arena, "%S%S\0", directory, filename), type, encoding,
+                        scale);
+
+        Scene *scene = GetScene();
+        scene->ptexTextures.push_back(tex);
+
+        if (index) *index = (int)(scene->ptexTextures.size() - 1);
+        return &scene->ptexTextures.back();
     }
     else
     {
@@ -302,8 +309,8 @@ Texture *ReadTexture(Arena *arena, Tokenizer *tokenizer, string directory,
     return 0;
 }
 
-Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory, FilterType type,
-                      ColorEncoding encoding)
+Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory, int *index,
+                      FilterType type, ColorEncoding encoding)
 {
     if (!CharIsDigit(*tokenizer->cursor)) return 0;
     DataType dataType = (DataType)ReadInt(tokenizer);
@@ -325,7 +332,7 @@ Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory, Filt
         break;
         case DataType::Texture:
         {
-            return ReadTexture(arena, tokenizer, directory, type, encoding);
+            return ReadTexture(arena, tokenizer, directory, index, type, encoding);
         }
         break;
         default: Assert(0); return 0;
@@ -335,7 +342,7 @@ Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory, Filt
 Texture *ParseDisplacement(Arena *arena, Tokenizer *tokenizer, string directory)
 {
     if (Advance(tokenizer, "displacement "))
-        return ParseTexture(arena, tokenizer, directory, FilterType::Bspline,
+        return ParseTexture(arena, tokenizer, directory, 0, FilterType::Bspline,
                             ColorEncoding::Linear);
     return 0;
 }
@@ -454,16 +461,19 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
                                 MaterialHandle(materialTypeIndex, materialsList.size())});
 
         materialsList.emplace_back();
-        Material **material = &materialsList.back();
-
+        Material **material      = &materialsList.back();
+        int ptexReflectanceIndex = 0;
         switch (materialTypeIndex)
         {
             case MaterialTypes::Diffuse:
             {
                 bool result = Advance(tokenizer, "reflectance ");
                 Texture *reflectance;
+
                 if (!result) reflectance = PushStructConstruct(arena, ConstantTexture)(0.5f);
-                else reflectance = ParseTexture(arena, tokenizer, directory);
+                else
+                    reflectance =
+                        ParseTexture(arena, tokenizer, directory, &ptexReflectanceIndex);
 
                 *material = PushStructConstruct(arena, DiffuseMaterial)(reflectance);
                 (*material)->displacement = ParseDisplacement(arena, tokenizer, directory);
@@ -531,6 +541,7 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
             break;
             default: Assert(0);
         }
+        (*material)->ptexReflectanceIndex = ptexReflectanceIndex;
     }
 
     // Join

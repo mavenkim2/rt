@@ -8,14 +8,10 @@ static const float InvPi = 0.31830988618379067154f;
 #define texture2DSpace space1
 #define structuredBufferSpace space2
 
-#ifdef __spirv__
 Texture2D bindlessTextures[] : register(t0, texture2DSpace);
 StructuredBuffer<float3> bindlessFloat3s[] : register(t0, structuredBufferSpace);
 StructuredBuffer<uint> bindlessUints[] : register(t0, structuredBufferSpace);
 ByteAddressBuffer bindlessBuffer[] : register(t0, structuredBufferSpace);
-#else
-#error
-#endif
 
 SamplerState samplerLinearClamp : register(s50);
 
