@@ -811,24 +811,23 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     }
     else
     {
-        Assert(0);
         Assert(numScenes == 1);
-        // CommandBuffer *tlasCmd = device->BeginCommandBuffer(QueueType_Graphics);
-        // tlasCmd->Wait(semaphore);
-        // tlasSemaphore.signalValue = 1;
-        // tlasCmd->Signal(tlasSemaphore);
-        // Instance instance          = {};
-        // ScenePrimitives *baseScene = &GetScene()->scene;
-        // GPUBuffer tlasBuffer =
-        //     tlasCmd->CreateTLASInstances(&instance, 1, &params->renderFromWorld,
-        //     &baseScene);
-        // tlasCmd->Barrier(&tlasBuffer,
-        // VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-        //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-        // tlasCmd->FlushBarriers();
-        // tlas = tlasCmd->BuildTLAS(&tlasBuffer, 1);
-        //
-        // device->SubmitCommandBuffer(tlasCmd);
+
+        ScenePrimitives *scene = blasScenes[0];
+        CommandBuffer *tlasCmd = device->BeginCommandBuffer(QueueType_Graphics);
+        tlasCmd->Wait(scene->semaphore);
+        tlasSemaphore.signalValue = 1;
+        tlasCmd->Signal(tlasSemaphore);
+        Instance instance          = {};
+        ScenePrimitives *baseScene = &GetScene()->scene;
+        GPUBuffer tlasBuffer =
+            tlasCmd->CreateTLASInstances(&instance, 1, &params->renderFromWorld, &baseScene);
+        tlasCmd->Barrier(&tlasBuffer, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                         VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+        tlasCmd->FlushBarriers();
+        tlas = tlasCmd->BuildTLAS(&tlasBuffer, 1).as;
+
+        device->SubmitCommandBuffer(tlasCmd);
     }
 
     // GPU materials

@@ -3,6 +3,7 @@
 #include "string.h"
 #include "scene.h"
 #include "integrate.h"
+#include "ptex.h"
 #include <Ptexture.h>
 #include <PtexReader.h>
 #include <cstring>
@@ -57,18 +58,23 @@ u8 *PtexImage::GetContentsRelativeIndex(const Vec2u &p)
 }
 
 // NOTE: start is an absolute index
-void PtexImage::WriteRotatedBorder(const PtexImage &other, Vec2u start, Vec2u offset, int vLen,
-                                   int rowLen, Vec2i scale)
+void PtexImage::WriteRotatedBorder(PtexImage &other, Vec2u dstStart, Vec2u offset, int rotate,
+                                   int srcVLen, int srcRowLen, int dstVLen, int dstRowLen,
+                                   Vec2i scale)
 {
-    int u = start.x;
-    int v = start.y;
+    int uStart = dstStart.x;
+    int vStart = dstStart.y;
+
+    int uEnd = dstStart.x + rowLen - 1;
+    int vEnd = dstStart.y + vLen - 1;
 
     Assert(bytesPerPixel == other.bytesPerPixel);
 
     if (rotate == 0)
     {
-        Utils::Copy(other.contents, other.strideWithBorder, contents,
-                    contents.strideWithBorder, vLen, rowLen);
+        Utils::Copy(other.GetContentsRelativeIndex(dstStart), other.strideWithBorder,
+                    GetContentsAbsoluteIndex(dstStart + offset), strideWithBorder, vLen,
+                    rowLen);
         return;
     }
 
@@ -76,34 +82,34 @@ void PtexImage::WriteRotatedBorder(const PtexImage &other, Vec2u start, Vec2u of
     {
         for (int u = uStart; u < uStart + rowLen; u++)
         {
-            Vec2u dstAddress(u, v);
+            Vec2u srcAddress;
             switch (rotate)
             {
                 case 1:
                 {
-                    dstAddress.x = width - 1 - dstAddress.x;
-                    Swap(dstAddress.x, dstAddress.y);
+                    srcAddress.x = height - 1 - v;
+                    srcAddress.y = u;
                 }
                 break;
                 case 2:
                 {
-                    dstAddress.x = width - 1 - dstAddress.x;
-                    dstAddress.y = height - 1 - dstAddress.y;
+                    srcAddress.x = width - 1 - u;
+                    srcAddress.y = height - 1 - v;
                 }
                 break;
                 case 3:
                 {
-                    dstAddress.y = height - 1 - dstAddress.y;
-                    Swap(dstAddress.x, dstAddress.y);
+                    srcAddress.x = v;
+                    srcAddress.y = width - 1 - u;
                 }
                 break;
             }
-            Assert(newU >= 0 && newV >= 0);
+            Vec2u dstPos(u, v);
             Vec2u srcPos(u >> scale.x, v >> scale.y);
-            u8 *dst    = GetContentsAbsoluteIndex(dstAddress + offset);
-            u8 zero[3] = {};
+            u8 *dst = GetContentsAbsoluteIndex(dstAddress + offset);
+            u8 z[3] = {};
             Assert(bytesPerPixel == 3);
-            Assert(memcmp(dst, zero, 3) == 0);
+            Assert(memcmp(dst, z, 3) == 0);
             MemoryCopy(dst, other.GetContentsRelativeIndex(srcPos), bytesPerPixel);
         }
     }
@@ -126,15 +132,14 @@ PtexImage PtexToImg(Arena *arena, Ptex::PtexTexture *ptx, int faceID, int border
 
     u32 bytesPerPixel = numChannels * Ptex::DataSize(ptx->dataType());
     int stride        = (u + 2 * borderSize) * bytesPerPixel;
-    int size          = rowlen * (v + 2 * borderSize);
+    int size          = stride * (v + 2 * borderSize);
     u8 *data          = PushArrayNoZero(arena, u8, size);
-    int rowlen        = (u * bytesPerPixel) * v;
+    int rowlen        = (u * bytesPerPixel);
     // if (flip)
     // {
     //     data += rowlen * (img.h - 1);
     //     stride = -rowlen;
     // }
-    ptx->getData(faceID, (char *)data, stride);
 
     PtexImage result;
     result.contents         = data;
@@ -146,6 +151,8 @@ PtexImage PtexToImg(Arena *arena, Ptex::PtexTexture *ptx, int faceID, int border
     result.strideNoBorder   = rowlen;
     result.borderSize       = borderSize;
     result.strideWithBorder = stride;
+
+    ptx->getData(faceID, (char *)result.GetContentsRelativeIndex({0, 0}), stride);
 
     return result;
 }
@@ -175,6 +182,7 @@ string Convert(Arena *arena, PtexTexture *texture, int filterWidth)
     int borderSize           = filterWidth - 1;
 
     PtexImage **images = PushArrayNoZero(arena, PtexImage *, numFaces);
+    int *numLevels     = PushArrayNoZero(arena, int, numFaces);
     const int maxDepth = 10;
 
     int log2FilterWidth = Log2Int(filterWidth);
@@ -182,59 +190,69 @@ string Convert(Arena *arena, PtexTexture *texture, int filterWidth)
     for (int i = 0; i < numFaces; i++)
     {
         PtexImage img = PtexToImg(arena, t, i, borderSize, false);
-        images[i]     = PushArrayNoZero(arena, PtexImage, maxDepth);
+        int levels    = Max(Max(img.log2Width, img.log2Height) - log2FilterWidth, 1);
+        images[i]     = PushArrayNoZero(arena, PtexImage, levels);
+        numLevels[i]  = levels;
         images[i][0]  = img;
 
         // Generate mip maps
-        Assert(img.width == img.height);
-        Assert(IsPow2(img.width));
+        Assert(IsPow2(img.width) && IsPow2(img.height));
 
-        int width     = img.width;
-        int srcStride = img.bytesPerPixel * width;
+        int width = img.width;
         width >>= 1;
-        int height    = img.height >> 1;
-        int dstStride = img.bytesPerPixel * width;
+        int height = img.height >> 1;
 
         PtexImage inPtexImage = img;
         int depth             = 1;
-        while (depth < maxDepth)
+
+        Vec2u scale = 2u;
+
+        while (depth < levels)
         {
             PtexImage outPtexImage;
-            outPtexImage.width         = width;
-            outPtexImage.height        = height;
-            outPtexImage.bytesPerPixel = img.bytesPerPixel;
-            outPtexImage.contents      = PushArrayNoZero(arena, u8, dstStride * height);
-            for (int v = 0; v < height; v++)
+            outPtexImage.width            = width;
+            outPtexImage.height           = height;
+            outPtexImage.log2Width        = Log2Int(width);
+            outPtexImage.log2Height       = Log2Int(height);
+            outPtexImage.bytesPerPixel    = img.bytesPerPixel;
+            outPtexImage.strideNoBorder   = width * img.bytesPerPixel;
+            outPtexImage.borderSize       = borderSize;
+            outPtexImage.strideWithBorder = (width + 2 * borderSize) * img.bytesPerPixel;
+            outPtexImage.contents         = PushArrayNoZero(
+                arena, u8, outPtexImage.strideWithBorder * (height + 2 * borderSize));
+            for (u32 v = 0; v < height; v++)
             {
-                for (int u = 0; u < width; u++)
+                for (u32 u = 0; u < width; u++)
                 {
-                    Vec2u xy = 2u * Vec2u(u, v);
-                    Vec2u zw = xy + 1u;
+                    Vec2u xy = scale * Vec2u(u, v);
+                    Vec2u zw = xy + scale - 1u;
 
-                    Vec3f topleft =
-                        GammaToLinear(inPtexImage.contents + xy.y * srcStride + xy.x);
+                    Vec3f topleft = GammaToLinear(inPtexImage.GetContentsRelativeIndex(xy));
                     Vec3f topright =
-                        GammaToLinear(inPtexImage.contents + xy.y * srcStride + zw.x);
+                        GammaToLinear(inPtexImage.GetContentsRelativeIndex({zw.x, xy.y}));
                     Vec3f bottomleft =
-                        GammaToLinear(inPtexImage.contents + zw.y * srcStride + xy.x);
+                        GammaToLinear(inPtexImage.GetContentsRelativeIndex({xy.x, zw.y}));
                     Vec3f bottomright =
-                        GammaToLinear(inPtexImage.contents + zw.y * srcStride + zw.x);
+                        GammaToLinear(inPtexImage.GetContentsRelativeIndex({zw.x, zw.y}));
 
-                    Vec3f avg = (topleft + topright + bottomleft + bottomright) * .25f;
+                    Vec3f avg = (topleft + topright + bottomleft + bottomright) / .25f;
 
-                    LinearToGamma(avg, outPtexImage.contents + v * dstStride + u);
+                    LinearToGamma(avg, outPtexImage.GetContentsRelativeIndex({u, v}));
                 }
             }
-
-            if (height == 1 && width == 1) break;
 
             images[i][depth] = outPtexImage;
             inPtexImage      = outPtexImage;
 
-            srcStride = dstStride;
-            width >>= 1;
-            height >>= 1;
-            dstStride = img.bytesPerPixel * width;
+            u32 prevWidth = width;
+            width         = Max(width >> 1, filterWidth);
+            scale[0]      = prevWidth / width;
+
+            u32 prevHeight = height;
+            height         = Max(height >> 1, filterWidth);
+            scale[1]       = prevHeight / height;
+
+            depth++;
         }
     }
     // Fill border with adjacent texels based on filter width
@@ -252,13 +270,13 @@ string Convert(Arena *arena, PtexTexture *texture, int filterWidth)
     // Copy shared borders
     for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
     {
-        Ptex::FaceInfo &f = reader->getFaceInfo(faceIndex);
+        const Ptex::FaceInfo &f = reader->getFaceInfo(faceIndex);
         Assert(!f.isSubface());
         for (int edgeIndex = e_bottom; edgeIndex < e_max; edgeIndex++)
         {
             int aeid         = f.adjedge(edgeIndex);
             int neighborFace = f.adjface(edgeIndex);
-            int rot          = aeid - edgeIndex + 2;
+            int rot          = edgeIndex - aeid + 2;
 
             if (rot != 0)
             {
@@ -270,19 +288,15 @@ string Convert(Arena *arena, PtexTexture *texture, int filterWidth)
                               images[neighborFace][0].log2Height);
 
             int dstCompareDim = (edgeIndex & 1) ? dstBaseSize.y : dstBaseSize.x;
-            int srcCompareDim;
-            if (rot & 1)
-            {
-                if (edgeIndex & 1) srcCompareDim = srcBaseSize.x;
-                else srcCompareDim = srcBaseSize.y;
-            }
-            else
-            {
-                if (edgeIndex & 1) srcCompareDim = srcBaseSize.y;
-                else srcCompareDim = srcBaseSize.x;
-            }
+            int srcCompareDim = (aeid & 1) ? srcBaseSize.y : srcBaseSize.x;
 
-            for (int depth = 0; depth < maxDepth; depth++)
+            Vec2u offset;
+            if (edgeIndex == e_bottom) offset = Vec2u(borderSize, 0);
+            else if (edgeIndex == e_right) offset = Vec2u(2 * borderSize, borderSize);
+            else if (edgeIndex == e_top) offset = Vec2u(borderSize, 2 * borderSize);
+            else if (edgeIndex == e_left) offset = Vec2u(0, borderSize);
+
+            for (int depth = 0; depth < numLevels[faceIndex]; depth++)
             {
                 int srcBaseDepth  = srcCompareDim - dstCompareDim;
                 int srcDepthIndex = Clamp(srcBaseDepth, 0, maxDepth - 1);
@@ -291,46 +305,41 @@ string Convert(Arena *arena, PtexTexture *texture, int filterWidth)
                 PtexImage neighborFaceImg = images[neighborFace][srcDepthIndex];
 
                 Vec2u start;
-                Vec2u offset;
                 Vec2u scale;
                 int vRes;
                 int rowLen;
-                int scale = Max(-srcBaseDepth, 0);
+                int s = Max(-srcBaseDepth, 0);
                 if (aeid == e_bottom)
                 {
                     start  = Vec2u(0, 0);
-                    offset = Vec2u(borderSize, 0);
-                    scale  = Vec2i(scale, 0);
+                    scale  = Vec2i(s, 0);
                     vRes   = borderSize;
-                    rowLen = neighborFaceImg.width;
+                    rowLen = currentFaceImg.width;
                 }
                 else if (aeid == e_right)
                 {
-                    start  = Vec2u(neighborFaceImg.width - borderSize, 0);
-                    offset = Vec2u(2 * borderSize, borderSize);
-                    scale  = Vec2i(0, scale);
-                    vRes   = neighborFaceImg.height;
+                    start  = Vec2u(currentFaceImg.width - borderSize, 0);
+                    scale  = Vec2i(0, s);
+                    vRes   = currentFaceImg.height;
                     rowLen = borderSize;
                 }
                 else if (aeid == e_top)
                 {
-                    start  = Vec2u(0, neighborFaceImg.height - borderSize);
-                    offset = Vec2u(borderSize, 2 * borderSize);
-                    scale  = Vec2i(scale, 0);
+                    start  = Vec2u(0, currentFaceImg.height - borderSize);
+                    scale  = Vec2i(s, 0);
                     vRes   = borderSize;
-                    rowLen = neighborFaceImg.width;
+                    rowLen = currentFaceImg.width;
                 }
                 else if (aeid == e_left)
                 {
                     start  = Vec2u(0, 0);
-                    offset = Vec2u(0, borderSize);
-                    scale  = Vec2i(0, scale);
-                    vRes   = neighborFaceImg.height;
+                    scale  = Vec2i(0, s);
+                    vRes   = currentFaceImg.height;
                     rowLen = borderSize;
                 }
 
-                currentFaceImg.WriteRotatedBorder(neighborFaceImg, start, offset, vRes, rowLen,
-                                                  scale);
+                currentFaceImg.WriteRotatedBorder(neighborFaceImg, start, offset, rot, vRes,
+                                                  rowLen, scale);
 
                 dstCompareDim++;
             }
@@ -344,14 +353,5 @@ string Convert(Arena *arena, PtexTexture *texture, int filterWidth)
     MemoryCopy(result.str, reader->getConstData(), numFaces * reader->_pixelsize);
     t->release();
     return result;
-
-    // for (int levelIndex = 0; levelIndex < texture->_levels.size(); levelIndex++)
-    // {
-    //     Ptex::PtexReader::Level *level = texture->getLevel(levelIndex);
-    //     for (int faceIndex = 0; faceIndex < texture->numFaces; faceIndex++)
-    //     {
-    //         Ptex::PtexReadere::FaceData * face = getFace(levelIndex, level, faceIndex,
-    //     }
-    // }
 }
 } // namespace rt

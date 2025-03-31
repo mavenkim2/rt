@@ -25,11 +25,11 @@ struct PtexImage
     u8 *GetContentsAbsoluteIndex(const Vec2u &p);
     u8 *GetContentsRelativeIndex(const Vec2u &p);
 
-    void WriteRotatedBorder(const PtexImage &other, Vec2u start, Vec2u offset, int vLen,
+    void WriteRotatedBorder(PtexImage &other, Vec2u start, Vec2u offset, int rotate, int vLen,
                             int rowLen, Vec2i scale);
 };
 
 PtexImage PtexToImg(Arena *arena, Ptex::PtexTexture *ptx, int faceid, bool flip);
-string Convert(Arena *arena, PtexTexture *t);
+string Convert(Arena *arena, PtexTexture *texture, int filterWidth = 4);
 } // namespace rt
 #endif
