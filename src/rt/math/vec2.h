@@ -51,6 +51,18 @@ __forceinline Vec2<T> operator+(const Vec2<T> &u, const Vec2<T> &v)
 }
 
 template <typename T>
+__forceinline Vec2<T> operator+(const Vec2<T> &u, const T &t)
+{
+    return Vec2<T>(u.x + t, u.y + t);
+}
+
+template <typename T>
+__forceinline Vec2<T> operator+(const T &t, const Vec2<T> &u)
+{
+    return u + t;
+}
+
+template <typename T>
 __forceinline Vec2<T> &operator+=(Vec2<T> &a, const Vec2<T> &b)
 {
     a.x += b.x;

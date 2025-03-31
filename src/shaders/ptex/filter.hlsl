@@ -189,7 +189,7 @@ void BuildKernelAxis(int8_t& k_ureslog2, int& k_u, int& k_uw, float* ku,
     // find integer pixel extent: [u,v] +/- [2*uw,2*vw]
     // (kernel width is 4 times filter width)
     float dupix = 2.0f*uwpix;
-    int u1 = int(PtexUtils::ceil(upix - dupix)), u2 = int(PtexUtils::ceil(upix + dupix));
+    int u1 = int(ceil(upix - dupix)), u2 = int(ceil(upix + dupix));
 
     k_u = u1;
     k_uw = u2-u1;
