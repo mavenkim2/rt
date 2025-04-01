@@ -25,8 +25,9 @@ struct PtexImage
     u8 *GetContentsAbsoluteIndex(const Vec2u &p);
     u8 *GetContentsRelativeIndex(const Vec2u &p);
 
-    void WriteRotatedBorder(PtexImage &other, Vec2u start, Vec2u offset, int rotate, int vLen,
-                            int rowLen, Vec2i scale);
+    void WriteRotatedBorder(PtexImage &other, Vec2u srcStart, Vec2u dstStart, int edgeIndex,
+                            int rotate, int srcVLen, int srcRowLen, int dstVLen, int dstRowLen,
+                            Vec2u scale);
 };
 
 PtexImage PtexToImg(Arena *arena, Ptex::PtexTexture *ptx, int faceid, bool flip);

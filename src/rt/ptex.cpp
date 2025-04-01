@@ -45,74 +45,100 @@ Vec2u PtexImage::ConvertRelativeToAbsolute(const Vec2u &p)
 // NOTE: absolute index
 u8 *PtexImage::GetContentsAbsoluteIndex(const Vec2u &p)
 {
-    Assert(p.x < width + borderSize && p.y < height + borderSize);
+    Assert(p.x < width + 2 * borderSize && p.y < height + 2 * borderSize);
     return contents + strideWithBorder * p.y + p.x;
 }
 
 // NOTE: ignores border
 u8 *PtexImage::GetContentsRelativeIndex(const Vec2u &p)
 {
-    // Assert(p.x < width && p.y < height);
-    Assert(p.x < width + borderSize && p.y < height + borderSize);
+    Assert(p.x < width && p.y < height);
     return GetContentsAbsoluteIndex(ConvertRelativeToAbsolute(p));
 }
 
 // NOTE: start is an absolute index
-void PtexImage::WriteRotatedBorder(PtexImage &other, Vec2u dstStart, Vec2u offset, int rotate,
-                                   int srcVLen, int srcRowLen, int dstVLen, int dstRowLen,
-                                   Vec2i scale)
+void PtexImage::WriteRotatedBorder(PtexImage &other, Vec2u srcStart, Vec2u dstStart,
+                                   int edgeIndex, int rotate, int srcVLen, int srcRowLen,
+                                   int dstVLen, int dstRowLen, Vec2u scale)
 {
-    int uStart = dstStart.x;
-    int vStart = dstStart.y;
-
-    int uEnd = dstStart.x + rowLen - 1;
-    int vEnd = dstStart.y + vLen - 1;
+    int uStart = srcStart.x;
+    int vStart = srcStart.y;
 
     Assert(bytesPerPixel == other.bytesPerPixel);
 
-    if (rotate == 0)
+    u8 *src       = other.GetContentsRelativeIndex(srcStart);
+    u32 srcStride = other.strideWithBorder;
+    ScratchArena scratch;
+
+    // How this works.
+    // 1. if rotate > 0, take the src image and rotate the border by rotate into a temporary
+    // buffer
+    // 2. copy from the temp buffer to the destination
+    if (rotate != 0)
     {
-        Utils::Copy(other.GetContentsRelativeIndex(dstStart), other.strideWithBorder,
-                    GetContentsAbsoluteIndex(dstStart + offset), strideWithBorder, vLen,
-                    rowLen);
-        return;
+        int pixelsToWrite = Max(1 << scale.x, 1 << scale.y);
+        int duplicateStep = (edgeIndex & 1) ? dstRowLen * bytesPerPixel : 1;
+        // duplicateStep *= (((rotate + (edgeIndex & 1)) & 3) >= 2) ? 1 : -1;
+
+        u32 size       = dstVLen * dstRowLen * bytesPerPixel;
+        u8 *tempBuffer = PushArrayNoZero(scratch.temp.arena, u8, size);
+        for (int v = 0; v < srcVLen; v++)
+        {
+            for (int u = 0; u < srcRowLen; u++)
+            {
+                // int newU = u - ((edgeIndex & 1) ? 0 : (dstDim - srcDim));
+                // int newV = v - ((edgeIndex & 1) ? (dstDim - srcDim) : 0);
+
+                Vec2i dstAddress;
+                switch (rotate)
+                {
+                    case 1:
+                    {
+                        dstAddress.x = srcVLen - 1 - v;
+                        dstAddress.y = u;
+                    }
+                    break;
+                    case 2:
+                    {
+                        dstAddress.x = srcRowLen - 1 - u;
+                        dstAddress.y = srcVLen - 1 - v;
+                    }
+                    break;
+                    case 3:
+                    {
+                        dstAddress.y = srcRowLen - 1 - u;
+                        dstAddress.x = v;
+                    }
+                    break;
+                    default: Assert(0);
+                }
+
+                Vec2i dstPos(dstAddress);
+                dstPos.x <<= scale.x;
+                dstPos.y <<= scale.y;
+
+                Vec2u srcPos(u, v);
+                srcPos += srcStart;
+
+                u32 offset = dstPos.y * dstRowLen * bytesPerPixel + dstPos.x;
+
+                for (int i = 0; i < pixelsToWrite; i++)
+                {
+                    Assert(offset < size);
+                    MemoryCopy(tempBuffer + offset, other.GetContentsRelativeIndex(srcPos),
+                               bytesPerPixel);
+                    offset += duplicateStep;
+                }
+            }
+        }
+        src       = tempBuffer;
+        srcStride = dstRowLen * bytesPerPixel; // other.strideNoBorder;
     }
 
-    for (int v = vStart; v < vStart + vLen; v++)
-    {
-        for (int u = uStart; u < uStart + rowLen; u++)
-        {
-            Vec2u srcAddress;
-            switch (rotate)
-            {
-                case 1:
-                {
-                    srcAddress.x = height - 1 - v;
-                    srcAddress.y = u;
-                }
-                break;
-                case 2:
-                {
-                    srcAddress.x = width - 1 - u;
-                    srcAddress.y = height - 1 - v;
-                }
-                break;
-                case 3:
-                {
-                    srcAddress.x = v;
-                    srcAddress.y = width - 1 - u;
-                }
-                break;
-            }
-            Vec2u dstPos(u, v);
-            Vec2u srcPos(u >> scale.x, v >> scale.y);
-            u8 *dst = GetContentsAbsoluteIndex(dstAddress + offset);
-            u8 z[3] = {};
-            Assert(bytesPerPixel == 3);
-            Assert(memcmp(dst, z, 3) == 0);
-            MemoryCopy(dst, other.GetContentsRelativeIndex(srcPos), bytesPerPixel);
-        }
-    }
+    // TODO: need to handle case where there is no rotation, but the src dimension
+    // is a fraction of the dst dimension
+    Utils::Copy(src, srcStride, GetContentsAbsoluteIndex(dstStart), strideWithBorder, dstVLen,
+                dstRowLen * bytesPerPixel);
 }
 
 PtexImage PtexToImg(Arena *arena, Ptex::PtexTexture *ptx, int faceID, int borderSize,
@@ -268,6 +294,8 @@ string Convert(Arena *arena, PtexTexture *texture, int filterWidth)
     };
 
     // Copy shared borders
+    // TODO: instead of doing two copies, I could attempt to pack textures into 128x128
+    // tiles, with shared edges always in the same tile? corners could be an issue
     for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
     {
         const Ptex::FaceInfo &f = reader->getFaceInfo(faceIndex);
@@ -276,12 +304,7 @@ string Convert(Arena *arena, PtexTexture *texture, int filterWidth)
         {
             int aeid         = f.adjedge(edgeIndex);
             int neighborFace = f.adjface(edgeIndex);
-            int rot          = edgeIndex - aeid + 2;
-
-            if (rot != 0)
-            {
-                int stop = 5;
-            }
+            int rot          = (edgeIndex - aeid + 2) & 3;
 
             Vec2u dstBaseSize(images[faceIndex][0].log2Width, images[faceIndex][0].log2Height);
             Vec2u srcBaseSize(images[neighborFace][0].log2Width,
@@ -309,39 +332,53 @@ string Convert(Arena *arena, PtexTexture *texture, int filterWidth)
                 int vRes;
                 int rowLen;
                 int s = Max(-srcBaseDepth, 0);
+                if (edgeIndex == e_bottom)
+                {
+                    start = Vec2u(borderSize, 0);
+                }
+                else if (edgeIndex == e_right)
+                {
+                    start = Vec2u(currentFaceImg.width + borderSize, borderSize);
+                }
+                else if (edgeIndex == e_top)
+                {
+                    start = Vec2u(borderSize, currentFaceImg.height + borderSize);
+                }
+                else if (edgeIndex == e_left)
+                {
+                    start = Vec2u(0, borderSize);
+                }
+
+                Vec2u srcStart;
                 if (aeid == e_bottom)
                 {
-                    start  = Vec2u(0, 0);
-                    scale  = Vec2i(s, 0);
-                    vRes   = borderSize;
-                    rowLen = currentFaceImg.width;
+                    srcStart = Vec2u(0, 0);
                 }
                 else if (aeid == e_right)
                 {
-                    start  = Vec2u(currentFaceImg.width - borderSize, 0);
-                    scale  = Vec2i(0, s);
-                    vRes   = currentFaceImg.height;
-                    rowLen = borderSize;
+                    srcStart = Vec2u(neighborFaceImg.width - borderSize, 0);
                 }
                 else if (aeid == e_top)
                 {
-                    start  = Vec2u(0, currentFaceImg.height - borderSize);
-                    scale  = Vec2i(s, 0);
-                    vRes   = borderSize;
-                    rowLen = currentFaceImg.width;
+                    srcStart = Vec2u(0, neighborFaceImg.height - borderSize);
                 }
                 else if (aeid == e_left)
                 {
-                    start  = Vec2u(0, 0);
-                    scale  = Vec2i(0, s);
-                    vRes   = currentFaceImg.height;
-                    rowLen = borderSize;
+                    srcStart = Vec2u(0, 0);
                 }
 
-                currentFaceImg.WriteRotatedBorder(neighborFaceImg, start, offset, rot, vRes,
-                                                  rowLen, scale);
+                scale.y       = (edgeIndex & 1) ? s : 0;
+                scale.x       = (edgeIndex & 1) ? 0 : s;
+                int srcVRes   = (aeid & 1) ? neighborFaceImg.height : borderSize;
+                int srcRowLen = (aeid & 1) ? borderSize : neighborFaceImg.width;
+                int dstVRes   = (edgeIndex & 1) ? currentFaceImg.height : borderSize;
+                int dstRowLen = (edgeIndex & 1) ? borderSize : currentFaceImg.width;
 
-                dstCompareDim++;
+                currentFaceImg.WriteRotatedBorder(neighborFaceImg, srcStart, start, edgeIndex,
+                                                  rot, srcVRes, srcRowLen, dstVRes, dstRowLen,
+                                                  scale);
+
+                dstCompareDim--;
             }
         }
     }
