@@ -1543,7 +1543,8 @@ GPUBuffer Vulkan::CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
 }
 
 GPUImage Vulkan::CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageType type,
-                             int width, int height, int depth, int numMips, int numLayers)
+                             VkImageTiling tiling, int width, int height, int depth,
+                             int numMips, int numLayers)
 {
     GPUImage image = {};
     image.width    = width;
@@ -1558,7 +1559,7 @@ GPUImage Vulkan::CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageTy
     imageInfo.mipLevels         = numMips;
     imageInfo.arrayLayers       = numLayers;
     imageInfo.format            = format;
-    imageInfo.tiling            = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.tiling            = tiling;
     imageInfo.initialLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
     imageInfo.usage             = flags;
     imageInfo.samples           = VK_SAMPLE_COUNT_1_BIT;
@@ -1579,9 +1580,11 @@ GPUImage Vulkan::CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageTy
 
     VkImageFormatProperties imageFormatProperties;
 
-    VK_CHECK(vkGetPhysicalDeviceImageFormatProperties(
+    VkResult result = vkGetPhysicalDeviceImageFormatProperties(
         physicalDevice, imageInfo.format, imageInfo.imageType, imageInfo.tiling,
-        imageInfo.usage, imageInfo.flags, &imageFormatProperties));
+        imageInfo.usage, imageInfo.flags, &imageFormatProperties);
+
+    ErrorExit(result == VK_SUCCESS, "Image format properties error: %u\n", result);
 
     VmaAllocationCreateInfo allocInfo = {};
     allocInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
@@ -1707,15 +1710,20 @@ TransferBuffer Vulkan::GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSi
 }
 
 TransferBuffer Vulkan::GetStagingImage(VkImageUsageFlags flags, VkFormat format,
-                                       VkImageType type, u32 width, u32 height)
+                                       VkImageType type, VkImageTiling tiling, u32 width,
+                                       u32 height)
 
 {
     TransferBuffer buffer;
-    size_t size = width * height * GetFormatSize(format);
-    buffer.image =
-        CreateImage(flags | VK_IMAGE_USAGE_TRANSFER_DST_BIT, format, type, width, height);
+    size_t size  = width * height * GetFormatSize(format);
+    buffer.image = CreateImage(flags | VK_IMAGE_USAGE_TRANSFER_DST_BIT, format, type, tiling,
+                               width, height);
+
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(device, buffer.image.image, &req);
+
     buffer.stagingBuffer =
-        CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, size,
+        CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, req.size,
                      VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                          VMA_ALLOCATION_CREATE_MAPPED_BIT);
     buffer.mappedPtr = buffer.stagingBuffer.allocation->GetMappedData();
@@ -1745,10 +1753,11 @@ void CommandBuffer::SubmitTransfer(TransferBuffer *transferBuffer)
 }
 
 GPUImage CommandBuffer::SubmitImage(void *ptr, VkImageUsageFlags flags, VkFormat format,
-                                    VkImageType imageType, u32 width, u32 height)
+                                    VkImageType imageType, VkImageTiling tiling, u32 width,
+                                    u32 height)
 {
     TransferBuffer transferBuffer =
-        device->GetStagingImage(flags, format, imageType, width, height);
+        device->GetStagingImage(flags, format, imageType, tiling, width, height);
     size_t size = width * height * GetFormatSize(format);
     Assert(transferBuffer.mappedPtr);
     MemoryCopy(transferBuffer.mappedPtr, ptr, size);
@@ -1777,6 +1786,77 @@ GPUImage CommandBuffer::SubmitImage(void *ptr, VkImageUsageFlags flags, VkFormat
     transferBuffer.image.lastLayout   = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     return transferBuffer.image;
 }
+
+// void CommandBuffer::SubmitImageTransfer(TransferBuffer *transferBuffer,
+//                                         BufferToImageCopy *copies, int num)
+// {
+//     VkImageMemoryBarrier2 barrier = device->ImageMemoryBarrier(
+//         transferBuffer->image.image, VK_IMAGE_LAYOUT_UNDEFINED,
+//         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_NONE,
+//         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_NONE, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+//         VK_IMAGE_ASPECT_COLOR_BIT);
+//
+//     VkDependencyInfo info        = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+//     info.imageMemoryBarrierCount = 1;
+//     info.pImageMemoryBarriers    = &barrier;
+//     vkCmdPipelineBarrier2(buffer, &info);
+//
+//     VkBufferImageCopy copy                                     = {};
+//     copy.copy.bufferRowLength copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+//     copy.imageSubresource.layerCount                           = 1;
+//     copy.imageExtent                                           = {width, height, 1};
+//
+//     vkCmdCopyBufferToImage(buffer, transferBuffer->stagingBuffer.buffer,
+//                            transferBuffer->image.image,
+//                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+//     transferBuffer.image.lastPipeline = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+//     transferBuffer.image.lastAccess   = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+//     transferBuffer.image.lastLayout   = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+//     return transferBuffer.image;
+// }
+
+// GPUImage CommandBuffer::SubmitImage(Image *images, VkImageUsageFlags flags, VkFormat format,
+//                                     VkImageType imageType, int numLevels)
+// {
+//     u32 width     = images[0].width;
+//     u32 height    = images[0].height;
+//     u32 totalSize = 0;
+//     for (int i = 0; i < numLevels; i++)
+//     {
+//         totalSize += ;
+//         images[i].
+//     }
+//
+//     TransferBuffer transferBuffer =
+//         device->GetStagingImage(flags, format, imageType, width, height);
+//     size_t size = width * height * GetFormatSize(format);
+//     Assert(transferBuffer.mappedPtr);
+//     MemoryCopy(transferBuffer.mappedPtr, ptr, size);
+//
+//     VkImageMemoryBarrier2 barrier = device->ImageMemoryBarrier(
+//         transferBuffer.image.image, VK_IMAGE_LAYOUT_UNDEFINED,
+//         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_NONE,
+//         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_NONE, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+//         VK_IMAGE_ASPECT_COLOR_BIT);
+//
+//     VkDependencyInfo info        = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+//     info.imageMemoryBarrierCount = 1;
+//     info.pImageMemoryBarriers    = &barrier;
+//     vkCmdPipelineBarrier2(buffer, &info);
+//
+//     VkBufferImageCopy copy           = {};
+//     copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+//     copy.imageSubresource.layerCount = 1;
+//     copy.imageExtent                 = {width, height, 1};
+//
+//     vkCmdCopyBufferToImage(buffer, transferBuffer.stagingBuffer.buffer,
+//                            transferBuffer.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+//                            1, &copy);
+//     transferBuffer.image.lastPipeline = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+//     transferBuffer.image.lastAccess   = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+//     transferBuffer.image.lastLayout   = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+//     return transferBuffer.image;
+// }
 
 GPUBuffer CommandBuffer::SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags, size_t totalSize)
 {

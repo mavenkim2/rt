@@ -1,20 +1,23 @@
 #ifndef PTEX_H_
 #define PTEX_H_
+#include "rt.h"
+
+namespace Utils
+{
+void Copy(const void *src, int sstride, void *dst, int dstride, int vres, int rowlen);
+}
+
 namespace rt
 {
 
 struct PtexTexture;
 class Ptex::PtexTexture;
 
-struct PtexImage
+struct PtexImage : Image
 {
-    u8 *contents;
     // Does not include border
-    int width;
-    int height;
     int log2Width;
     int log2Height;
-    int bytesPerPixel;
     int strideNoBorder;
 
     // Includes border
@@ -30,7 +33,7 @@ struct PtexImage
                             Vec2u scale);
 };
 
-PtexImage PtexToImg(Arena *arena, Ptex::PtexTexture *ptx, int faceid, bool flip);
+PtexImage **Convert(Arena *arena, PtexTexture *texture, int filterWidth, int &numFaces);
 string Convert(Arena *arena, PtexTexture *texture, int filterWidth = 4);
 } // namespace rt
 #endif

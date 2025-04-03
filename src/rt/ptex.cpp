@@ -74,9 +74,9 @@ void PtexImage::WriteRotatedBorder(PtexImage &other, Vec2u srcStart, Vec2u dstSt
     // 1. if rotate > 0, take the src image and rotate the border by rotate into a temporary
     // buffer
     // 2. copy from the temp buffer to the destination
+    int pixelsToWrite = Max(1 << scale.x, 1 << scale.y);
     if (rotate != 0)
     {
-        int pixelsToWrite = Max(1 << scale.x, 1 << scale.y);
         int duplicateStep = (edgeIndex & 1) ? dstRowLen * bytesPerPixel : 1;
         // duplicateStep *= (((rotate + (edgeIndex & 1)) & 3) >= 2) ? 1 : -1;
 
@@ -131,14 +131,53 @@ void PtexImage::WriteRotatedBorder(PtexImage &other, Vec2u srcStart, Vec2u dstSt
                 }
             }
         }
-        src       = tempBuffer;
-        srcStride = dstRowLen * bytesPerPixel; // other.strideNoBorder;
+        src           = tempBuffer;
+        srcStride     = dstRowLen * bytesPerPixel;
+        pixelsToWrite = 1;
     }
 
-    // TODO: need to handle case where there is no rotation, but the src dimension
-    // is a fraction of the dst dimension
-    Utils::Copy(src, srcStride, GetContentsAbsoluteIndex(dstStart), strideWithBorder, dstVLen,
-                dstRowLen * bytesPerPixel);
+    if (pixelsToWrite > 1)
+    {
+        // Have to copy one pixel at a time in the horizontal case
+        int writeSize, dstSkip, dstStride;
+        if (edgeIndex & 1)
+        {
+            Assert(srcRowLen == dstRowLen);
+            writeSize = srcRowLen * bytesPerPixel;
+            dstSkip   = strideWithBorder;
+            dstStride = pixelsToWrite * strideWithBorder;
+        }
+        else
+        {
+            writeSize = bytesPerPixel;
+            dstSkip   = writeSize;
+            dstStride = strideWithBorder;
+        }
+
+        const char *sptr = (const char *)src;
+        char *dptr       = (char *)GetContentsAbsoluteIndex(dstStart);
+        for (const char *end = sptr + srcVLen * other.strideWithBorder; sptr != end;)
+        {
+            char *writeDst      = dptr;
+            const char *readSrc = sptr;
+            for (const char *rowend = readSrc + srcRowLen * bytesPerPixel; readSrc != rowend;)
+            {
+                for (int i = 0; i < pixelsToWrite; i++)
+                {
+                    MemoryCopy(writeDst, readSrc, writeSize);
+                    writeDst += dstSkip;
+                }
+                readSrc += writeSize;
+            }
+            sptr += other.strideWithBorder;
+            dptr += dstStride;
+        }
+    }
+    else
+    {
+        Utils::Copy(src, srcStride, GetContentsAbsoluteIndex(dstStart), strideWithBorder,
+                    dstVLen, dstRowLen * bytesPerPixel);
+    }
 }
 
 PtexImage PtexToImg(Arena *arena, Ptex::PtexTexture *ptx, int faceID, int borderSize,
@@ -196,9 +235,10 @@ void LinearToGamma(const Vec3f &rgb, u8 *out)
     out[2] = u8(Clamp(Pow(rgb.z * 255.f, 1 / 2.2f), 0.f, 255.f));
 }
 
-string Convert(Arena *arena, PtexTexture *texture, int filterWidth)
+PtexImage **Convert(Arena *arena, PtexTexture *texture, int filterWidth, int &outNumFaces)
 {
     // Get every mip level
+    TempArena temp = ScratchStart(&arena, 1);
 
     // Highest mip level
     Ptex::String error;
@@ -208,7 +248,7 @@ string Convert(Arena *arena, PtexTexture *texture, int filterWidth)
     int borderSize           = filterWidth - 1;
 
     PtexImage **images = PushArrayNoZero(arena, PtexImage *, numFaces);
-    int *numLevels     = PushArrayNoZero(arena, int, numFaces);
+    int *numLevels     = PushArrayNoZero(temp.arena, int, numFaces);
     const int maxDepth = 10;
 
     int log2FilterWidth = Log2Int(filterWidth);
@@ -216,7 +256,7 @@ string Convert(Arena *arena, PtexTexture *texture, int filterWidth)
     for (int i = 0; i < numFaces; i++)
     {
         PtexImage img = PtexToImg(arena, t, i, borderSize, false);
-        int levels    = Max(Max(img.log2Width, img.log2Height) - log2FilterWidth, 1);
+        int levels    = Max(Max(img.log2Width, img.log2Height), 1);
         images[i]     = PushArrayNoZero(arena, PtexImage, levels);
         numLevels[i]  = levels;
         images[i][0]  = img;
@@ -313,16 +353,79 @@ string Convert(Arena *arena, PtexTexture *texture, int filterWidth)
             int dstCompareDim = (edgeIndex & 1) ? dstBaseSize.y : dstBaseSize.x;
             int srcCompareDim = (aeid & 1) ? srcBaseSize.y : srcBaseSize.x;
 
-            Vec2u offset;
-            if (edgeIndex == e_bottom) offset = Vec2u(borderSize, 0);
-            else if (edgeIndex == e_right) offset = Vec2u(2 * borderSize, borderSize);
-            else if (edgeIndex == e_top) offset = Vec2u(borderSize, 2 * borderSize);
-            else if (edgeIndex == e_left) offset = Vec2u(0, borderSize);
+            // Find corner face
+            // (taken from PtexSeparableFilters.cpp)
+#if 0
+            int afid           = faceIndex;
+            int aeid           = edgeIndex;
+            const FaceInfo *af = &f;
+
+            const int MaxValence = 10;
+            int cfaceId[MaxValence];
+            int cedgeId[MaxValence];
+            const FaceInfo *cface[MaxValence];
+
+            int numCorners = 0;
+            for (int i = 0; i < MaxValence; i++)
+            {
+                // advance to next face
+                int prevFace = afid;
+                afid         = af->adjface(aeid);
+                aeid         = (af->adjedge(aeid) + 1) % 4;
+
+                // we hit a boundary or reached starting face
+                // note: we need to check edge id too because we might have
+                // a periodic texture (w/ toroidal topology) where all 4 corners
+                // are from the same face
+                if (afid < 0 || (afid == faceid && aeid == eid))
+                {
+                    numCorners = i - 2;
+                    break;
+                }
+
+                // record face info
+                af         = &_tx->getFaceInfo(afid);
+                cfaceId[i] = afid;
+                cedgeId[i] = aeid;
+                cface[i]   = af;
+
+                // check to see if corner is a subface "tee"
+                Assert(!af->isSubface());
+                prevIsSubface = isSubface;
+            }
+
+
+            if (numCorners == 1)
+            {
+                applyToCornerFace(k, f, eid, cfaceId[1], *cface[1], cedgeId[1]);
+            }
+            else if (numCorners > 1)
+            {
+                // valence 5+, make kernel symmetric and apply equally to each face
+                // first, rotate to standard orientation, u=v=0
+                k.rotate(eid + 2);
+                float initialWeight = k.weight();
+                float newWeight     = k.makeSymmetric(initialWeight);
+                for (int i = 1; i <= numCorners; i++)
+                {
+                    PtexSeparableKernel kc = k;
+                    applyToCornerFace(kc, f, 2, cfaceId[i], *cface[i], cedgeId[i]);
+                }
+                // adjust weight for symmetrification and for additional corners
+                _weight += newWeight * (float)numCorners - initialWeight;
+            }
+            else
+            {
+                // valence 2 or 3, ignore corner face (just adjust weight)
+                _weight -= k.weight();
+            }
+#endif
 
             for (int depth = 0; depth < numLevels[faceIndex]; depth++)
             {
-                int srcBaseDepth  = srcCompareDim - dstCompareDim;
-                int srcDepthIndex = Clamp(srcBaseDepth, 0, maxDepth - 1);
+                int srcBaseDepth = srcCompareDim - dstCompareDim;
+                // int srcDepthIndex = Clamp(srcBaseDepth, 0, maxDepth - 1);
+                int srcDepthIndex = Clamp(srcBaseDepth, 0, numLevels[neighborFace] - 1);
 
                 PtexImage &currentFaceImg = images[faceIndex][depth];
                 PtexImage neighborFaceImg = images[neighborFace][srcDepthIndex];
@@ -332,6 +435,7 @@ string Convert(Arena *arena, PtexTexture *texture, int filterWidth)
                 int vRes;
                 int rowLen;
                 int s = Max(-srcBaseDepth, 0);
+
                 if (edgeIndex == e_bottom)
                 {
                     start = Vec2u(borderSize, 0);
@@ -383,12 +487,9 @@ string Convert(Arena *arena, PtexTexture *texture, int filterWidth)
         }
     }
 
-    size_t size = numFaces * reader->_pixelsize;
-    string result;
-    result.str  = PushArrayNoZero(arena, u8, size);
-    result.size = size;
-    MemoryCopy(result.str, reader->getConstData(), numFaces * reader->_pixelsize);
+    outNumFaces = numFaces;
+    ScratchEnd(temp);
     t->release();
-    return result;
+    return images;
 }
 } // namespace rt

@@ -225,6 +225,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
             GPUMaterial material = materials[NonUniformResourceIndex(materialID)];
 
             float3 origin = p0 + dp10 * bary.x + dp20 * bary.y;
+            float2 uv = uv0 + duv10 * bary.x + duv20 * bary.y;
 
             float3 objectRayDir = query.CommittedObjectRayDirection();
             float3 wo = normalize(float3(dot(ss, -objectRayDir), dot(ts, -objectRayDir), dot(n, -objectRayDir)));
@@ -239,7 +240,8 @@ void main(uint3 DTid : SV_DispatchThreadID)
                 break;
                 case GPUMaterialType::Diffuse: 
                 {
-                    dir = SampleDiffuse(material.reflectanceDescriptor, faceID, wo, sample, throughput, printDebug);
+                    Texture2D<float3> reflectance = bindlessFloat3Textures[NonUniformResourceIndex(material.reflectanceDescriptor + faceID)];
+                    dir = SampleDiffuse(reflectance, uv, wo, sample, throughput, printDebug);
                 }
                 break;
             }

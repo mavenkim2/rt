@@ -9,6 +9,7 @@ static const float InvPi = 0.31830988618379067154f;
 #define structuredBufferSpace space2
 
 Texture2D bindlessTextures[] : register(t0, texture2DSpace);
+Texture2D<float3> bindlessFloat3Textures[] : register(t0, texture2DSpace);
 StructuredBuffer<float3> bindlessFloat3s[] : register(t0, structuredBufferSpace);
 StructuredBuffer<uint> bindlessUints[] : register(t0, structuredBufferSpace);
 ByteAddressBuffer bindlessBuffer[] : register(t0, structuredBufferSpace);
@@ -161,6 +162,5 @@ float2x3 BuildOrthonormalBasis(float3 n)
 
     return result;
 }
-
 
 #endif

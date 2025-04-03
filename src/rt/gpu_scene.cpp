@@ -647,9 +647,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     GPUBuffer bindingDataBuffer = transferCmd->SubmitBuffer(
         &bindingData, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(RTBindingData));
 
-    GPUImage gpuEnvMap = transferCmd->SubmitImage(envMap->contents, VK_IMAGE_USAGE_SAMPLED_BIT,
-                                                  VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TYPE_2D,
-                                                  envMap->width, envMap->height);
+    GPUImage gpuEnvMap = transferCmd->SubmitImage(
+        envMap->contents, VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8B8A8_SRGB,
+        VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, envMap->width, envMap->height);
     transferCmd->Barrier(&gpuEnvMap, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                          VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
     transferCmd->FlushBarriers();
@@ -659,11 +659,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     GPUImage images[2] = {
         device->CreateImage(VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-                            VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TYPE_2D, params->width,
-                            params->height),
+                            VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TYPE_2D,
+                            VK_IMAGE_TILING_OPTIMAL, params->width, params->height),
         device->CreateImage(VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-                            VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TYPE_2D, params->width,
-                            params->height),
+                            VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TYPE_2D,
+                            VK_IMAGE_TILING_OPTIMAL, params->width, params->height),
     };
 
     // Create descriptor set layout and pipeline
@@ -838,10 +838,53 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     for (int i = 0; i < rootScene->ptexTextures.size(); i++)
     {
         PtexTexture *texture = &rootScene->ptexTextures[i];
-        string data          = Convert(sceneScratch.temp.arena, texture);
-        GPUBuffer buffer =
-            transferCmd->SubmitBuffer(data.str, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, data.size);
-        descriptors.Push(device->BindlessStorageIndex(&buffer));
+
+        int numFaces;
+        PtexImage **images = Convert(sceneScratch.temp.arena, texture, 4, numFaces);
+
+        int firstIndex = 0;
+        for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
+        {
+            PtexImage *faceImages = images[faceIndex];
+            u32 width  = images[faceIndex]->width + 2 * images[faceIndex]->borderSize;
+            u32 height = images[faceIndex]->height + 2 * images[faceIndex]->borderSize;
+
+            GPUImage img = transferCmd->SubmitImage(
+                faceImages[0].contents, VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_B8G8R8_UNORM,
+                VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_LINEAR, width, height);
+
+#if 0
+            u32 levels = GetNumMipLevels(width, height);
+
+            TransferBuffer buffer =
+                transferCmd->GetStagingImage(VK_IMAGE_USAGE_SAMPLED_BIT, VK_FORMAT_R8G8B8_UINT,
+                                             VK_IMAGE_TYPE_2D, width, height, levels);
+
+            BufferToImageCopy *copies = PushArrayNoZero(
+                sceneScratch.temp.arena, BufferToImageCopy, numLevels[faceIndex]);
+
+            u32 offset = 0;
+            for (int level = 0; level < numLevels[faceIndex]; level++)
+            {
+                copies[level].offset = offset;
+                u32 size             = faceImages[level].strideWithBorder *
+                           (faceImages[level].height + 2 * faceImages[level].borderSize);
+                Assert(offset + size < buffer.stagingBuffer.size);
+                MemoryCopy(buffer.mappedPtr + offset, faceImages[level].contents, size);
+                offset += size;
+
+                u32 width  = Max(1, width >> 1);
+                u32 height = Max(1, height >> 1);
+            }
+            transferCmd->SubmitImageTransfer(&buffer, ?);
+#endif
+            int index = device->BindlessIndex(&img);
+            if (faceIndex == 0) firstIndex = index;
+        }
+        descriptors.Push(firstIndex);
+        // GPUBuffer buffer =
+        //     transferCmd->SubmitBuffer(data.str, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        //     data.size);
     }
     for (int i = 0; i < rootScene->materials.Length(); i++)
     {
