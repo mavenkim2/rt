@@ -61,17 +61,6 @@ namespace rt
 // Textures and materials
 //
 
-Ptex::PtexCache *cache;
-PtexErrHandler errorHandler;
-PtexInpHandler ptexInputHandler;
-
-void InitializePtex()
-{
-    u32 maxFiles  = 400;
-    size_t maxMem = gigabytes(8);
-    cache = Ptex::PtexCache::create(maxFiles, maxMem, true, &ptexInputHandler, &errorHandler);
-}
-
 typedef u32 PathFlags;
 enum
 {

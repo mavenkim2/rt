@@ -20,6 +20,8 @@
 #include <functional>
 #include "../random.h"
 #include "../parallel.h"
+#include "../ptex.h"
+#include "../vulkan.h"
 #include "../base.cpp"
 #include "../parallel.cpp"
 #include "../thread_statistics.cpp"
@@ -1445,6 +1447,18 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 PBRTSkipToNextChar(&tokenizer);
 
                 ReadParameters(threadArena, packet, &tokenizer, MemoryType_Texture);
+
+                if (textureClass == "ptex")
+                {
+                    for (int i = 0; i < packet->parameterCount; i++)
+                    {
+                        if (packet->parameterNames[i] == "filename"_sid)
+                        {
+                            Convert(Str8(packet->bytes[i], packet->sizes[i]));
+                        }
+                    }
+                }
+
                 nPacket.name = PushStr8Copy(threadArena, textureName);
                 nPacket.type = PushStr8Copy(threadArena, textureClass);
                 textureHashMap.Add(threadArena, nPacket);
@@ -2187,6 +2201,11 @@ int main(int argc, char **argv)
         printf("You must pass in a valid PBRT file to convert. Aborting... \n");
         return 1;
     }
+
+    ValidationMode mode = ValidationMode::Verbose;
+    Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
+    device              = v;
+
     LoadPBRT(arena, filename);
 
     u64 count = 0;

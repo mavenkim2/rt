@@ -1448,8 +1448,8 @@ void Vulkan::CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage 
         blitInfo.srcSubresource.mipLevel       = 0;
         blitInfo.srcSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
         blitInfo.srcSubresource.layerCount     = 1;
-        blitInfo.srcOffsets[1].x               = image->width;
-        blitInfo.srcOffsets[1].y               = image->height;
+        blitInfo.srcOffsets[1].x               = image->desc.width;
+        blitInfo.srcOffsets[1].y               = image->desc.height;
         blitInfo.srcOffsets[1].z               = 1;
         blitInfo.dstSubresource.baseArrayLayer = 0;
         blitInfo.dstSubresource.mipLevel       = 0;
@@ -1542,27 +1542,38 @@ GPUBuffer Vulkan::CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
     return buffer;
 }
 
-GPUImage Vulkan::CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageType type,
-                             VkImageTiling tiling, int width, int height, int depth,
-                             int numMips, int numLayers)
+GPUImage Vulkan::CreateImage(ImageDesc desc)
 {
     GPUImage image = {};
-    image.width    = width;
-    image.height   = height;
+    image.desc     = desc;
     image.aspect   = VK_IMAGE_ASPECT_COLOR_BIT;
 
     VkImageCreateInfo imageInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-    imageInfo.imageType         = type;
-    imageInfo.extent.width      = width;
-    imageInfo.extent.height     = height;
-    imageInfo.extent.depth      = depth;
-    imageInfo.mipLevels         = numMips;
-    imageInfo.arrayLayers       = numLayers;
-    imageInfo.format            = format;
-    imageInfo.tiling            = tiling;
-    imageInfo.initialLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageInfo.usage             = flags;
-    imageInfo.samples           = VK_SAMPLE_COUNT_1_BIT;
+    switch (desc.imageType)
+    {
+        case ImageType::Type2D:
+        case ImageType::Array2D:
+        {
+            imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        }
+        break;
+            break;
+        case ImageType::Cubemap:
+        {
+            imageInfo.imageType = VK_IMAGE_TYPE_3D;
+        }
+        break;
+    }
+    imageInfo.extent.width  = desc.width;
+    imageInfo.extent.height = desc.height;
+    imageInfo.extent.depth  = desc.depth;
+    imageInfo.mipLevels     = desc.numMips;
+    imageInfo.arrayLayers   = desc.numLayers;
+    imageInfo.format        = desc.format;
+    imageInfo.tiling        = desc.tiling;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage         = desc.imageUsage;
+    imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
 
     if (families.Length() > 1)
     {
@@ -1589,17 +1600,42 @@ GPUImage Vulkan::CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageTy
     VmaAllocationCreateInfo allocInfo = {};
     allocInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
 
+    if (EnumHasAnyFlags(desc.memUsage, MemoryUsage::CPU_TO_GPU))
+    {
+        allocInfo.flags =
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    }
+    if (EnumHasAnyFlags(desc.memUsage, MemoryUsage::GPU_TO_CPU))
+    {
+        allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                          VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    }
+
     VK_CHECK(
         vmaCreateImage(allocator, &imageInfo, &allocInfo, &image.image, &image.allocation, 0));
 
     VkImageViewCreateInfo viewInfo = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-    switch (type)
+
+    switch (desc.imageType)
     {
-        case VK_IMAGE_TYPE_2D: viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D; break;
-        default: Assert(0);
+        case ImageType::Type2D:
+        {
+            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        }
+        break;
+        case ImageType::Array2D:
+        {
+            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        }
+        break;
+        case ImageType::Cubemap:
+        {
+            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+        }
+        break;
     }
     viewInfo.image                           = image.image;
-    viewInfo.format                          = format;
+    viewInfo.format                          = desc.format;
     viewInfo.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.baseMipLevel   = 0;
     viewInfo.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;
@@ -1709,15 +1745,12 @@ TransferBuffer Vulkan::GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSi
     return transferBuffer;
 }
 
-TransferBuffer Vulkan::GetStagingImage(VkImageUsageFlags flags, VkFormat format,
-                                       VkImageType type, VkImageTiling tiling, u32 width,
-                                       u32 height)
+TransferBuffer Vulkan::GetStagingImage(ImageDesc desc)
 
 {
     TransferBuffer buffer;
-    size_t size  = width * height * GetFormatSize(format);
-    buffer.image = CreateImage(flags | VK_IMAGE_USAGE_TRANSFER_DST_BIT, format, type, tiling,
-                               width, height);
+    size_t size  = desc.width * desc.height * GetFormatSize(desc.format);
+    buffer.image = CreateImage(desc);
 
     VkMemoryRequirements req;
     vkGetImageMemoryRequirements(device, buffer.image.image, &req);
@@ -1752,13 +1785,10 @@ void CommandBuffer::SubmitTransfer(TransferBuffer *transferBuffer)
     transferBuffer->buffer.lastAccess = VK_ACCESS_2_TRANSFER_WRITE_BIT;
 }
 
-GPUImage CommandBuffer::SubmitImage(void *ptr, VkImageUsageFlags flags, VkFormat format,
-                                    VkImageType imageType, VkImageTiling tiling, u32 width,
-                                    u32 height)
+GPUImage CommandBuffer::SubmitImage(void *ptr, ImageDesc desc)
 {
-    TransferBuffer transferBuffer =
-        device->GetStagingImage(flags, format, imageType, tiling, width, height);
-    size_t size = width * height * GetFormatSize(format);
+    TransferBuffer transferBuffer = device->GetStagingImage(desc);
+    size_t size                   = desc.width * desc.height * GetFormatSize(desc.format);
     Assert(transferBuffer.mappedPtr);
     MemoryCopy(transferBuffer.mappedPtr, ptr, size);
 
@@ -1776,7 +1806,7 @@ GPUImage CommandBuffer::SubmitImage(void *ptr, VkImageUsageFlags flags, VkFormat
     VkBufferImageCopy copy           = {};
     copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     copy.imageSubresource.layerCount = 1;
-    copy.imageExtent                 = {width, height, 1};
+    copy.imageExtent                 = {desc.width, desc.height, 1};
 
     vkCmdCopyBufferToImage(buffer, transferBuffer.stagingBuffer.buffer,
                            transferBuffer.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,

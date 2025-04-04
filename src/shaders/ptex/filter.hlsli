@@ -3,11 +3,21 @@
 // Samples a texture with Catmull-Rom filtering, using 9 texture fetches instead of 16.
 // Ref: https://gist.github.com/TheRealMJP/c83b8c0f46b63f3a88a5986f4fa982b1
 
+float3 LinearToGamma(float3 rgb)
+{
+    return pow(max(rgb, 0), 1 / 2.2);
+}
+
+float3 GammaToLinear(float3 rgb)
+{
+    return pow(max(rgb, 0), 2.2);
+}
+
 struct Gamma 
 {
     float3 Apply(float3 rgb)
     {
-        return pow(max(rgb, 0), 2.2);
+        return GammaToLinear(rgb);
     }
 };
 

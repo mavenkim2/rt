@@ -144,7 +144,6 @@ set (RT_SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/spectrum.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/subdivision.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/parallel.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/vulkan.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/tests/test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bvh/bvh_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/low_discrepancy.cpp
@@ -153,6 +152,15 @@ set (RT_SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/sampler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/dgfs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/ptex.cpp
+)
+
+set (RT_VULKAN_SOURCE_FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/vulkan.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/vulkan/volk.c
+)
+
+set (VULKAN_INCLUDE_DIR
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/vulkan
 )
 
 if (USE_GPU)
@@ -191,7 +199,16 @@ install (EXPORT THREAD_CONTEXT DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/thread
 add_executable(convert 
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/cmd/convert.cpp
     ${PLATFORM_SOURCE_FILES}
+    ${RT_VULKAN_SOURCE_FILES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/ptex.cpp
 )
+target_include_directories(convert PRIVATE 
+    ${PTEX_INCLUDE}
+    ${NANOVDB_INCLUDE_DIR}
+    ${ZLIB_INCLUDE_DIR}
+    ${VULKAN_INCLUDE_DIR}
+)
+target_link_libraries(convert PRIVATE ${PTEX_LIBRARY})
 target_compile_definitions(convert PRIVATE ${RT_DEFINITIONS})
 target_compile_options(convert PRIVATE ${RT_CXX_FLAGS})
 
@@ -216,6 +233,7 @@ set(SHADER_FILES "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl"
     "${SHADER_SRC_DIR}/decode_dgf_clusters.hlsl"
     "${SHADER_SRC_DIR}/fill_instance_descs.hlsl"
     "${SHADER_SRC_DIR}/render_raytrace_dgf_intersect.hlsl"
+    "${SHADER_SRC_DIR}/compress/block_compress.hlsl"
 )
 set_property(SOURCE 
     "${SHADER_SRC_DIR}/render_raytrace_miss.hlsl"
@@ -227,6 +245,7 @@ set_property(SOURCE
     "${SHADER_SRC_DIR}/render_raytrace.hlsl"
     "${SHADER_SRC_DIR}/decode_dgf_clusters.hlsl"
     "${SHADER_SRC_DIR}/fill_instance_descs.hlsl"
+    "${SHADER_SRC_DIR}/compress/block_compress.hlsl"
     PROPERTY name "cs")
 
 file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")
@@ -265,8 +284,8 @@ add_custom_target(shaders DEPENDS ${SHADER_SPV_FILES})
 add_executable(rt_exe 
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/rt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/gen/rgbspectrum_srgb.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/vulkan/volk.c
     ${RT_SOURCE_FILES}
+    ${RT_VULKAN_SOURCE_FILES}
 )
 
 add_dependencies(rt_exe shaders)
@@ -275,7 +294,7 @@ target_include_directories(rt_exe PRIVATE
     ${PTEX_INCLUDE}
     ${OPENSUBDIV_INCLUDE_DIR}
     ${NANOVDB_INCLUDE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/vulkan
+    ${VULKAN_INCLUDE_DIR}
     ${ZLIB_INCLUDE_DIR}
 )
 

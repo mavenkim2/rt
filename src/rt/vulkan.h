@@ -6,6 +6,7 @@
 #include "base.h"
 #include "bvh/bvh_types.h"
 #include "containers.h"
+#include "math/basemath.h"
 #include "platform.h"
 
 #define VK_NO_PROTOTYPES
@@ -42,8 +43,27 @@ inline u32 GetFormatSize(VkFormat format)
         case VK_FORMAT_B8G8R8_UNORM:
         case VK_FORMAT_R8G8B8_SRGB: return 3;
         case VK_FORMAT_R8G8B8A8_SRGB: return 4;
+        case VK_FORMAT_BC1_RGB_UNORM_BLOCK: return 8;
         default: Assert(0); return 0;
     }
+}
+
+inline u32 GetBlockSize(VkFormat format)
+{
+    switch (format)
+    {
+        case VK_FORMAT_BC1_RGB_UNORM_BLOCK:
+        {
+            return 4;
+        }
+        break;
+        default: return 1;
+    }
+}
+
+inline u32 GetNumLevels(u32 width, u32 height)
+{
+    return Max(1, Max(Log2Int(NextPowerOfTwo(width)), Log2Int(NextPowerOfTwo(height))));
 }
 
 enum class ResourceUsage : u32
@@ -173,6 +193,15 @@ inline VkShaderStageFlags GetVulkanShaderStage(ShaderStage stage)
     return flags;
 }
 
+enum class MemoryUsage
+{
+    GPU_ONLY,
+    CPU_ONLY,
+    CPU_TO_GPU,
+    GPU_TO_CPU,
+};
+ENUM_CLASS_FLAGS(MemoryUsage)
+
 struct Shader
 {
     VkShaderModule module;
@@ -286,17 +315,50 @@ struct Swapchain
     u32 imageIndex;
 };
 
+enum class ImageType
+{
+    Type2D,
+    Array2D,
+    Cubemap,
+};
+
+struct ImageDesc
+{
+    ImageType imageType = ImageType::Type2D;
+    u32 width           = 1;
+    u32 height          = 1;
+    u32 depth           = 1;
+    u32 numMips         = 1;
+    u32 numLayers       = 1;
+    VkFormat format;
+    MemoryUsage memUsage = MemoryUsage::GPU_ONLY;
+    VkImageUsageFlags imageUsage;
+    VkImageTiling tiling;
+
+    ImageDesc() {}
+    ImageDesc(ImageType imageType, u32 width, u32 height, u32 depth, u32 numMips,
+              u32 numLayers, VkFormat format, MemoryUsage memUsage,
+              VkImageUsageFlags imageUsage, VkImageTiling tiling)
+        : imageType(imageType), width(width), height(height), depth(depth), numMips(numMips),
+          numLayers(numLayers), format(format), memUsage(memUsage), imageUsage(imageUsage),
+          tiling(tiling)
+    {
+    }
+};
+
 struct GPUImage
 {
     VkImage image;
-    int width;
-    int height;
     VkImageView imageView;
     VmaAllocation allocation;
+    ImageDesc desc;
+
     VkPipelineStageFlags2 lastPipeline;
     VkImageLayout lastLayout;
     VkAccessFlags2 lastAccess;
     VkImageAspectFlags aspect;
+
+    GPUImage() {}
 };
 
 struct BufferToImageCopy
@@ -354,6 +416,8 @@ struct TransferBuffer
     };
     GPUBuffer stagingBuffer;
     void *mappedPtr;
+
+    TransferBuffer() {}
 };
 
 enum QueueType
@@ -436,9 +500,7 @@ struct CommandBuffer
     void WaitOn(CommandBuffer *other);
     void SubmitTransfer(TransferBuffer *buffer);
     GPUBuffer SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags, size_t totalSize);
-    GPUImage SubmitImage(void *ptr, VkImageUsageFlags flags, VkFormat format, VkImageType type,
-                         VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL, u32 width = 1,
-                         u32 height = 1);
+    GPUImage SubmitImage(void *ptr, ImageDesc desc);
 
     void BindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipeline);
     void BindDescriptorSets(VkPipelineBindPoint bindPoint, DescriptorSet *set,
@@ -706,9 +768,7 @@ struct Vulkan
                                                   VkShaderStageFlags stage);
     GPUBuffer CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
                            VmaAllocationCreateFlags vmaFlags = 0);
-    GPUImage CreateImage(VkImageUsageFlags flags, VkFormat format, VkImageType type,
-                         VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL, int width = 1,
-                         int height = 1, int depth = 1, int numMips = 1, int numLayers = 1);
+    GPUImage CreateImage(ImageDesc desc);
     void DestroyBuffer(GPUBuffer *buffer);
     void DestroyAccelerationStructure(GPUAccelerationStructure *as);
     int BindlessIndex(GPUImage *image);
@@ -717,9 +777,7 @@ struct Vulkan
     u64 GetMinAlignment(VkBufferUsageFlags flags);
     TransferBuffer GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize,
                                     int numRanges = 0);
-    TransferBuffer GetStagingImage(VkImageUsageFlags flags, VkFormat format, VkImageType type,
-                                   VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL,
-                                   u32 width = 1, u32 height = 1);
+    TransferBuffer GetStagingImage(ImageDesc desc);
     u64 GetDeviceAddress(VkBuffer buffer);
     void BeginEvent(CommandBuffer *cmd, string name);
     void EndEvent(CommandBuffer *cmd);

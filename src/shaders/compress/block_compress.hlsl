@@ -1,15 +1,19 @@
-#include "globals.hlsli"
-
 #pragma dxc diagnostic push
 #pragma dxc diagnostic ignored "-Wambig-lit-shift"
 #pragma dxc diagnostic ignored "-Wunused-value"
+
+#include "../common.hlsli"
+#include "../ptex/filter.hlsli"
+#define USE_CMPMSC
 #define ASPM_HLSL
-#include "compressonator/bcn_common_kernel.h"
+#define ASPM_GPU
+#include "bcn_common_kernel.h"
+
 #pragma dxc diagnostic pop
 
 // BC1
 Texture2D input : register(t0);
-RWTexture2D<uint2> output : register(u0);
+RWTexture2D<uint2> output : register(u1);
 
 // NOTE: number of threads in a thread group
 [numthreads(8, 8, 1)]
@@ -43,10 +47,10 @@ void main (uint3 DTid : SV_DispatchThreadID)
             float4 green = input.GatherGreen(samplerLinearClamp, uv, int2(2 * x, 2 * y));
             float4 blue = input.GatherBlue(samplerLinearClamp, uv, int2(2 * x, 2 * y));
 
-            block[8 * y + 2 * x] = float3(red[3], green[3], blue[3]);
-            block[8 * y + 2 * x + 1] = float3(red[2], green[2], blue[2]);
-            block[8 * y + 2 * x + 4] = float3(red[0], green[0], blue[0]);
-            block[8 * y + 2 * x + 5] = float3(red[1], green[1], blue[1]);
+            block[8 * y + 2 * x] = GammaToLinear(float3(red[3], green[3], blue[3]));
+            block[8 * y + 2 * x + 1] = GammaToLinear(float3(red[2], green[2], blue[2]));
+            block[8 * y + 2 * x + 4] = GammaToLinear(float3(red[0], green[0], blue[0]));
+            block[8 * y + 2 * x + 5] = GammaToLinear(float3(red[1], green[1], blue[1]));
         }
     }
 

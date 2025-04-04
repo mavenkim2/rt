@@ -1,6 +1,9 @@
 #ifndef PTEX_H_
 #define PTEX_H_
+
+#include <Ptexture.h>
 #include "rt.h"
+#include "platform.h"
 
 namespace Utils
 {
@@ -10,10 +13,149 @@ void Copy(const void *src, int sstride, void *dst, int dstride, int vres, int ro
 namespace rt
 {
 
+extern Ptex::PtexCache *cache;
+struct PtexErrHandler : public PtexErrorHandler
+{
+    void reportError(const char *error) override { ErrorExit(0, "%s", error); }
+};
+extern PtexErrHandler errorHandler;
+
+struct PtexHandle
+{
+    i64 offset;
+    OS_Handle osHandle;
+
+    i64 bufferOffset;
+    i64 fileSize;
+    static const i64 bufferSize = 8192;
+    void *buffer;
+};
+
+struct PtexInpHandler : public PtexInputHandler
+{
+
+public:
+    /** Open a file in read mode.
+        Returns null if there was an error.
+        If an error occurs, the error string is available via lastError().
+    */
+    virtual Handle open(const char *path) override
+    {
+        // TODO: free list pool this
+        PtexHandle *handle = (PtexHandle *)malloc(sizeof(PtexHandle) + PtexHandle::bufferSize);
+        handle->offset     = 0;
+        handle->osHandle   = OS_CreateFile(Str8C(path));
+        handle->buffer     = (void *)(handle + 1);
+        handle->bufferOffset = -1;
+        handle->fileSize     = OS_GetFileSize2(Str8C(path));
+        return handle;
+    }
+
+    /** Seek to an absolute byte position in the input stream. */
+    // virtual void seek(Handle handle, int64_t pos) override
+    // {
+    //     u8 **ptr = (u8 **)handle;
+    //     // Assert(pos < (int64_t)str.size);
+    //     *ptr = str.str + pos;
+    // }
+    virtual void seek(Handle handle, int64_t pos) override
+    {
+        PtexHandle *offset = (PtexHandle *)handle;
+        offset->offset     = pos;
+    }
+
+    /** Read a number of bytes from the file.
+        Returns the number of bytes successfully read.
+        If less than the requested number of bytes is read, the error string
+        is available via lastError().
+    */
+    virtual size_t read(void *buffer, size_t size, Handle handle) override
+    {
+        // u8 **ptr = (u8 **)handle;
+        // Assert(size_t(*ptr - str.str) + size < (size_t)str.size);
+        PtexHandle *ptexHandle = (PtexHandle *)handle;
+        u64 offset             = ptexHandle->offset;
+        Assert(ptexHandle->osHandle.handle);
+
+        size_t result = 0;
+        if (ptexHandle->buffer && ptexHandle->bufferOffset != -1 &&
+            ptexHandle->offset >= ptexHandle->bufferOffset &&
+            ptexHandle->offset + size <=
+                Min(ptexHandle->bufferOffset + ptexHandle->bufferSize, ptexHandle->fileSize))
+        {
+            MemoryCopy(buffer,
+                       (u8 *)ptexHandle->buffer +
+                           (ptexHandle->offset - ptexHandle->bufferOffset),
+                       size);
+            result = size;
+            ptexHandle->offset += size;
+        }
+        else
+        {
+            if (size <= ptexHandle->bufferSize)
+            {
+                i64 readSize =
+                    Min(ptexHandle->bufferSize, ptexHandle->fileSize - ptexHandle->offset);
+                result =
+                    OS_ReadFile(ptexHandle->osHandle, ptexHandle->buffer, readSize, offset)
+                        ? size
+                        : 0;
+                MemoryCopy(buffer, ptexHandle->buffer, size);
+            }
+            else
+            {
+                result = OS_ReadFile(ptexHandle->osHandle, buffer, size, offset) ? size : 0;
+            }
+            ptexHandle->bufferOffset = offset;
+            ptexHandle->offset += result;
+        }
+        Assert(result);
+        return result;
+    }
+
+    /** Close a file.  Returns false if an error occurs, and the error
+        string is available via lastError().  */
+    virtual bool close(Handle handle) override
+    {
+        PtexHandle *h = (PtexHandle *)handle;
+        bool result   = OS_CloseFile(h->osHandle);
+        free((PtexHandle *)handle);
+        return result;
+    }
+    virtual const char *lastError() override { return 0; }
+
+    /** Return the last error message encountered. */
+};
+extern PtexInpHandler ptexInputHandler;
+
 struct PtexTexture;
 class Ptex::PtexTexture;
 
-struct PtexImage : Image
+enum class TileType
+{
+    Corner,
+    Edge,
+    Center,
+};
+
+enum EdgeId
+{
+    e_bottom, ///< Bottom edge, from UV (0,0) to (1,0)
+    e_right,  ///< Right edge, from UV (1,0) to (1,1)
+    e_top,    ///< Top edge, from UV (1,1) to (0,1)
+    e_left,   ///< Left edge, from UV (0,1) to (0,0)
+    e_max,
+};
+
+struct Tile
+{
+    u8 *contents;
+    TileType type;
+    EdgeId edgeId;
+    u32 parentFace;
+};
+
+struct PaddedImage : Image
 {
     // Does not include border
     int log2Width;
@@ -28,12 +170,17 @@ struct PtexImage : Image
     u8 *GetContentsAbsoluteIndex(const Vec2u &p);
     u8 *GetContentsRelativeIndex(const Vec2u &p);
 
-    void WriteRotatedBorder(PtexImage &other, Vec2u srcStart, Vec2u dstStart, int edgeIndex,
+    u32 GetPaddedWidth() const;
+    u32 GetPaddedHeight() const;
+    void WriteRotatedBorder(PaddedImage &other, Vec2u srcStart, Vec2u dstStart, int edgeIndex,
                             int rotate, int srcVLen, int srcRowLen, int dstVLen, int dstRowLen,
                             Vec2u scale);
 };
 
-PtexImage **Convert(Arena *arena, PtexTexture *texture, int filterWidth, int &numFaces);
+void InitializePtex();
+PaddedImage **Convert(Arena *arena, PtexTexture *texture, int filterWidth, int &numFaces);
 string Convert(Arena *arena, PtexTexture *texture, int filterWidth = 4);
+void Convert(string filename);
+TileType GetTileType(int tileX, int tileY, int numTilesX, int numTilesY);
 } // namespace rt
 #endif
