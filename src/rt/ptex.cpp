@@ -229,7 +229,7 @@ PaddedImage PtexToImg(Arena *arena, Ptex::PtexTexture *ptx, int faceID, int bord
     u32 bytesPerPixel = numChannels * Ptex::DataSize(ptx->dataType());
     int stride        = (u + 2 * borderSize) * bytesPerPixel;
     int size          = stride * (v + 2 * borderSize);
-    u8 *data          = PushArrayNoZero(arena, u8, size);
+    u8 *data          = PushArray(arena, u8, size);
     int rowlen        = (u * bytesPerPixel);
     // if (flip)
     // {
@@ -461,17 +461,15 @@ PaddedImage **Convert(Arena *arena, PtexTexture *texture, int filterWidth, int &
 
 // steps:
 // 1. write borders, including corners
-//      - how do I handle
+//      - how do I handle extraordinary vertices?
 // 2. block compress on gpu
 // 3. group into tiles, write to disk
 //      - how do I load the right tiles from disk at runtime?
 
-// 4. load the right tiles from disk at runtime, keeping highest mip level
-// always resident
+// 4. load the right tiles from disk at runtime, keeping highest mip level always resident
 // 5. create a page table texture
 // 6. upload the tiles to the gpu, and update the page table texture
-// 7. on gpu, look at page table texture to find right tiles. do the texture lookup
-// + filter
+// 7. on gpu, look at page table texture to find right tiles. do the texture lookup + filter
 // 8. if tile isn't found, populate feedback buffer
 // 9. asynchronously read feedback buffer on cpu. go to step 4
 void Convert(string filename)
@@ -479,7 +477,7 @@ void Convert(string filename)
     ScratchArena scratch;
     const Vec2u uvTable[] = {
         Vec2u(0, 0),
-        Vec2u(0, 1),
+        Vec2u(1, 0),
         Vec2u(1, 1),
         Vec2u(0, 1),
     };
@@ -492,6 +490,8 @@ void Convert(string filename)
 
     PaddedImage *images = PushArrayNoZero(scratch.temp.arena, PaddedImage, numFaces);
     GPUImage *blockCompressedImages = PushArrayNoZero(scratch.temp.arena, GPUImage, numFaces);
+    TransferBuffer *gpuSrcImages =
+        PushArrayNoZero(scratch.temp.arena, TransferBuffer, numFaces);
 
     std::vector<Tile> tiles;
 
@@ -701,7 +701,7 @@ void Convert(string filename)
             currentFaceImg.GetPaddedHeight(), 1, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
             MemoryUsage::GPU_ONLY, VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_TILING_OPTIMAL);
 
-        GPUImage blockCompressedImage =
+        TransferBuffer blockCompressedImage =
             cmd->SubmitImage(currentFaceImg.contents, blockCompressedImageDesc);
 
         ImageDesc readbackDesc(ImageType::Type2D, currentFaceImg.GetPaddedWidth() / blockSize,
@@ -711,15 +711,17 @@ void Convert(string filename)
 
         GPUImage readbackImage = device->CreateImage(readbackDesc);
 
-        cmd->Barrier(&blockCompressedImage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        cmd->Barrier(&blockCompressedImage.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
         cmd->Barrier(&readbackImage, VK_IMAGE_LAYOUT_GENERAL,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->FlushBarriers();
+
+        gpuSrcImages[faceIndex]          = blockCompressedImage;
         blockCompressedImages[faceIndex] = readbackImage;
 
         DescriptorSet set = bcLayout.CreateDescriptorSet();
-        set.Bind(inputBinding, &blockCompressedImage);
+        set.Bind(inputBinding, &blockCompressedImage.image);
         set.Bind(outputBinding, &blockCompressedImages[faceIndex]);
         cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &set, bcLayout.pipelineLayout);
     }
@@ -732,6 +734,7 @@ void Convert(string filename)
     device->Wait(semaphore);
 
     // Discretize into tiles
+    // TODO: make tiles larger than 32 by 32 (8 kb)
     for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
     {
         GPUImage *gpuImage = &blockCompressedImages[faceIndex];
@@ -762,8 +765,146 @@ void Convert(string filename)
         }
     }
 
+    for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
+    {
+        device->DestroyBuffer(&gpuSrcImages[faceIndex].stagingBuffer);
+        device->DestroyImage(&gpuSrcImages[faceIndex].image);
+        device->DestroyImage(&blockCompressedImages[faceIndex]);
+    }
+
     // Output tiles to disk
     t->release();
+}
+
+struct PhysicalPagePool
+{
+    GPUImage image;
+    u32 virtualAddress;
+    u32 physTexelsWide;
+    u32 maxNumPages;
+    u32 numPagesAllocated;
+    StaticArray<u32> freePages;
+
+    u32 nextFree;
+};
+
+enum class BlockStatus
+{
+    Free,
+    Allocated,
+};
+
+struct BlockRange
+{
+    BlockStatus status;
+
+    u32 startPage;
+    u32 onePastEndPage;
+
+    u32 prevRange;
+    u32 nextRange;
+
+    u32 prevFree;
+    u32 nextFree;
+
+    BlockRange() {}
+
+    BlockRange(BlockStatus status, u32 startPage, u32 onePastEndPage, u32 prevRange,
+               u32 nextRange, u32 prevFree, u32 nextFree)
+        : status(status), startPage(startPage), onePastEndPage(onePastEndPage),
+          prevRange(prevRange), nextRange(nextRange), prevFree(prevFree), nextFree(nextFree)
+    {
+    }
+};
+
+struct VirtualTextureManager
+{
+    static const u32 InvalidPage  = ~0u;
+    static const u32 InvalidRange = ~0u;
+
+    ChunkedLinkedList<BlockRange> pageRanges;
+    u32 freeRange;
+
+    StaticArray<PhysicalPagePool> pools;
+    u32 partiallyFreePool;
+    u32 completelyFreePool;
+
+    void AllocatePhysicalPage();
+};
+
+// two lookups: one that converts uvs into a virtual address (multiply uv by scale and add
+// offset), then use this address to look up the page table
+//
+// number of pages x and y per face.
+// base virtual address for entire texture
+// per face data that specifies the offset in virtual address space and the size of the face
+// tex in each dimension?
+// if you think about it uv is 2 4 byte floats, and this is 2 4 byte uints...
+
+// virtual address = base virtual address + offset + floor(v * numPagesY * numPagesX) + floor(u
+// * numPagesX)
+// virtual address -> physical address
+
+void VirtualTextureManager::AllocateVirtualPages(u32 numPages)
+{
+    const u32 maxPhysTexelsWide = 16384u;
+    u32 maxDim                  = device->GetMax2DImageDimension();
+    u32 physTexelsWide          = Min(maxDim, maxPhysTexelsWide);
+
+    const u32 pageWidth  = 136;
+    const u32 pageBorder = 4;
+
+    const u32 physPagesWide = (physTexelsWide / pageWidth);
+
+    u32 freeIndex = freeRange;
+
+    u32 leftover   = ~0u;
+    u32 allocIndex = ~0u;
+
+    // Find best fit
+    while (freeIndex != InvalidRange)
+    {
+        BlockRange &range = pageRanges[freeIndex];
+        u32 numFreePages  = range.onePastEndPage - range.startPage;
+        if (numFreePages >= numPages && numFreePages - numPages < leftover)
+        {
+            allocIndex = freeIndex;
+            leftover   = numFreePages - numPages;
+        }
+        freeIndex = range.nextFree;
+    }
+
+    Assert(leftover != ~0u && allocIndex != ~0u);
+
+    // Allocate pages
+    BlockRange &range = pageRanges[allocIndex];
+    Assert(range.status == BlockStatus::Free);
+
+    u32 rightRangeIndex = pageRanges.Length();
+
+    BlockRange leftRange(BlockStatus::Allocated, range.startPage, range.startPage + numPages,
+                         range.prevRange, rightRangeIndex, InvalidRange, InvalidRange);
+    BlockRange rightRange(BlockStatus::Free, range.startPage + numPages, range.onePastEndPage,
+                          allocIndex, range.nextRange, range.prevFree, range.nextFree);
+
+    if (range.prevFree == InvalidRange) freeRange = rightRangeIndex;
+    else pageRanges[range.prevFree].nextFree = allocIndex;
+
+    if (range.nextFree != InvalidRange) pageRanges[range.nextFree].prevFree = allocIndex;
+
+    pageRanges[allocIndex] = leftRange;
+    pageRanges.Push(rightRange);
+
+    // ok i'm starting to see something
+    // 1. you have to "allocate" a virtual address, somehow taking into account the
+    // actual size of the texture
+    // 2. the high bits of the address give you the page table you look up in,
+    // the lower parts give you the uv
+
+    // it's like either the pages themselves have to not be power of two, with
+    // padding that makes them power of two, making the tiling non trivial,
+    // or the pages themselves are non power of two, leading to fragmentation/more difficult
+    // lookup?
 }
 
 } // namespace rt

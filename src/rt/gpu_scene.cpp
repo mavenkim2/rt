@@ -389,27 +389,35 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             CreateAABBForNTriangles(sceneScratch.temp.arena, builder, data.numBlocks);
 
         info.aabbLength = aabbs.Length();
-        info.aabbBuffer = dgfTransferCmd->SubmitBuffer(
-            aabbs.data,
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            aabbs.Length() * sizeof(VkAabbPositionsKHR));
+        info.aabbBuffer =
+            dgfTransferCmd
+                ->SubmitBuffer(
+                    aabbs.data,
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    aabbs.Length() * sizeof(VkAabbPositionsKHR))
+                .buffer;
 
         // Combine all blocks together
         info.dgfByteBuffer =
             PushArrayNoZero(sceneScratch.temp.arena, u8, data.byteBuffer.Length());
         data.byteBuffer.Flatten(info.dgfByteBuffer);
-        info.dgfBuffer = dgfTransferCmd->SubmitBuffer(
-            info.dgfByteBuffer, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, data.byteBuffer.Length());
+        info.dgfBuffer =
+            dgfTransferCmd
+                ->SubmitBuffer(info.dgfByteBuffer, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                               data.byteBuffer.Length())
+                .buffer;
 
         // Upload headers
         info.headers = PushArrayNoZero(sceneScratch.temp.arena, PackedDenseGeometryHeader,
                                        data.headers.Length());
         data.headers.Flatten(info.headers);
-        info.numHeaders   = data.headers.Length();
-        info.headerBuffer = dgfTransferCmd->SubmitBuffer(
-            info.headers, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            sizeof(PackedDenseGeometryHeader) * data.headers.Length());
+        info.numHeaders = data.headers.Length();
+        info.headerBuffer =
+            dgfTransferCmd
+                ->SubmitBuffer(info.headers, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                               sizeof(PackedDenseGeometryHeader) * data.headers.Length())
+                .buffer;
 
         // Debug
         info.types =
@@ -643,15 +651,18 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     RTBindingData bindingData;
     bindingData.materialIndex = 0;
 
-    CommandBuffer *transferCmd  = device->BeginCommandBuffer(QueueType_Copy);
-    GPUBuffer bindingDataBuffer = transferCmd->SubmitBuffer(
-        &bindingData, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(RTBindingData));
+    CommandBuffer *transferCmd = device->BeginCommandBuffer(QueueType_Copy);
+    GPUBuffer bindingDataBuffer =
+        transferCmd
+            ->SubmitBuffer(&bindingData, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                           sizeof(RTBindingData))
+            .buffer;
 
     ImageDesc gpuEnvMapDesc(ImageType::Type2D, envMap->width, envMap->height, 1, 1, 1,
                             VK_FORMAT_R8G8B8A8_SRGB, MemoryUsage::GPU_ONLY,
                             VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_TILING_OPTIMAL);
 
-    GPUImage gpuEnvMap = transferCmd->SubmitImage(envMap->contents, gpuEnvMapDesc);
+    GPUImage gpuEnvMap = transferCmd->SubmitImage(envMap->contents, gpuEnvMapDesc).image;
     transferCmd->Barrier(&gpuEnvMap, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                          VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
     transferCmd->FlushBarriers();
@@ -822,7 +833,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         Instance instance          = {};
         ScenePrimitives *baseScene = &GetScene()->scene;
         GPUBuffer tlasBuffer =
-            tlasCmd->CreateTLASInstances(&instance, 1, &params->renderFromWorld, &baseScene);
+            tlasCmd->CreateTLASInstances(&instance, 1, &params->renderFromWorld, &baseScene)
+                .buffer;
         tlasCmd->Barrier(&tlasBuffer, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                          VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
         tlasCmd->FlushBarriers();
@@ -841,8 +853,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         gpuMaterials.Push(material);
     }
     GPUBuffer materialBuffer =
-        transferCmd->SubmitBuffer(gpuMaterials.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                  sizeof(GPUMaterial) * gpuMaterials.Length());
+        transferCmd
+            ->SubmitBuffer(gpuMaterials.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                           sizeof(GPUMaterial) * gpuMaterials.Length())
+            .buffer;
     device->SubmitCommandBuffer(transferCmd);
 
 #endif

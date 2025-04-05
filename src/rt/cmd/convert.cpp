@@ -1448,6 +1448,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
 
                 ReadParameters(threadArena, packet, &tokenizer, MemoryType_Texture);
 
+#ifdef USE_GPU
                 if (textureClass == "ptex")
                 {
                     for (int i = 0; i < packet->parameterCount; i++)
@@ -1458,6 +1459,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                         }
                     }
                 }
+#endif
 
                 nPacket.name = PushStr8Copy(threadArena, textureName);
                 nPacket.type = PushStr8Copy(threadArena, textureClass);

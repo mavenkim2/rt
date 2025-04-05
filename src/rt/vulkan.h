@@ -499,8 +499,8 @@ struct CommandBuffer
     void Signal(Semaphore s) { signalSemaphores.push_back(s); }
     void WaitOn(CommandBuffer *other);
     void SubmitTransfer(TransferBuffer *buffer);
-    GPUBuffer SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags, size_t totalSize);
-    GPUImage SubmitImage(void *ptr, ImageDesc desc);
+    TransferBuffer SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags, size_t totalSize);
+    TransferBuffer SubmitImage(void *ptr, ImageDesc desc);
 
     void BindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipeline);
     void BindDescriptorSets(VkPipelineBindPoint bindPoint, DescriptorSet *set,
@@ -530,8 +530,8 @@ struct CommandBuffer
     void BuildClusterBLAS(GPUBuffer *bottomLevelInfo, GPUBuffer *dstAddresses,
                           GPUBuffer *srcInfosCount, u32 srcInfosOffset, u32 numClusters);
 
-    GPUBuffer CreateTLASInstances(Instance *instances, int numInstances,
-                                  AffineSpace *transforms, ScenePrimitives **childScenes);
+    TransferBuffer CreateTLASInstances(Instance *instances, int numInstances,
+                                       AffineSpace *transforms, ScenePrimitives **childScenes);
     GPUAccelerationStructurePayload BuildTLAS(GPUBuffer *instanceData, u32 numInstances);
     GPUAccelerationStructurePayload BuildTLAS(Instance *instances, int numInstances,
                                               AffineSpace *transforms,
@@ -752,6 +752,7 @@ struct Vulkan
     Vulkan(ValidationMode validationMode,
            GPUDevicePreference preference = GPUDevicePreference::Discrete);
     Swapchain CreateSwapchain(OS_Handle window, VkFormat format, u32 width, u32 height);
+    u32 GetMax2DImageDimension();
     Semaphore CreateGraphicsSemaphore();
     void AllocateCommandBuffers(ThreadPool &pool, QueueType type);
     void CheckInitializedThreadPool(int threadIndex);
@@ -770,6 +771,7 @@ struct Vulkan
                            VmaAllocationCreateFlags vmaFlags = 0);
     GPUImage CreateImage(ImageDesc desc);
     void DestroyBuffer(GPUBuffer *buffer);
+    void DestroyImage(GPUImage *image);
     void DestroyAccelerationStructure(GPUAccelerationStructure *as);
     int BindlessIndex(GPUImage *image);
     int BindlessStorageIndex(GPUBuffer *buffer, size_t offset = 0,

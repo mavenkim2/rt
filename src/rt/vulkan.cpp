@@ -1094,6 +1094,11 @@ b32 Vulkan::CreateSwapchain(Swapchain *swapchain)
     return true;
 }
 
+u32 Vulkan::GetMax2DImageDimension()
+{
+    deviceProperties.properties.limits.maxImageDimension2D;
+}
+
 Semaphore Vulkan::CreateGraphicsSemaphore()
 {
     VkSemaphoreTypeCreateInfo timelineInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
@@ -1651,6 +1656,11 @@ void Vulkan::DestroyBuffer(GPUBuffer *buffer)
     vmaDestroyBuffer(allocator, buffer->buffer, buffer->allocation);
 }
 
+void Vulkan::DestroyImage(GPUImage *image)
+{
+    vmaDestroyImage(allocator, image->image, image->allocation);
+}
+
 void Vulkan::DestroyAccelerationStructure(GPUAccelerationStructure *as)
 {
     vkDestroyAccelerationStructureKHR(device, as->as, 0);
@@ -1785,7 +1795,7 @@ void CommandBuffer::SubmitTransfer(TransferBuffer *transferBuffer)
     transferBuffer->buffer.lastAccess = VK_ACCESS_2_TRANSFER_WRITE_BIT;
 }
 
-GPUImage CommandBuffer::SubmitImage(void *ptr, ImageDesc desc)
+TransferBuffer CommandBuffer::SubmitImage(void *ptr, ImageDesc desc)
 {
     TransferBuffer transferBuffer = device->GetStagingImage(desc);
     size_t size                   = desc.width * desc.height * GetFormatSize(desc.format);
@@ -1814,87 +1824,17 @@ GPUImage CommandBuffer::SubmitImage(void *ptr, ImageDesc desc)
     transferBuffer.image.lastPipeline = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
     transferBuffer.image.lastAccess   = VK_ACCESS_2_TRANSFER_WRITE_BIT;
     transferBuffer.image.lastLayout   = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    return transferBuffer.image;
+    return transferBuffer;
 }
 
-// void CommandBuffer::SubmitImageTransfer(TransferBuffer *transferBuffer,
-//                                         BufferToImageCopy *copies, int num)
-// {
-//     VkImageMemoryBarrier2 barrier = device->ImageMemoryBarrier(
-//         transferBuffer->image.image, VK_IMAGE_LAYOUT_UNDEFINED,
-//         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_NONE,
-//         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_NONE, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-//         VK_IMAGE_ASPECT_COLOR_BIT);
-//
-//     VkDependencyInfo info        = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-//     info.imageMemoryBarrierCount = 1;
-//     info.pImageMemoryBarriers    = &barrier;
-//     vkCmdPipelineBarrier2(buffer, &info);
-//
-//     VkBufferImageCopy copy                                     = {};
-//     copy.copy.bufferRowLength copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-//     copy.imageSubresource.layerCount                           = 1;
-//     copy.imageExtent                                           = {width, height, 1};
-//
-//     vkCmdCopyBufferToImage(buffer, transferBuffer->stagingBuffer.buffer,
-//                            transferBuffer->image.image,
-//                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-//     transferBuffer.image.lastPipeline = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-//     transferBuffer.image.lastAccess   = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-//     transferBuffer.image.lastLayout   = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-//     return transferBuffer.image;
-// }
-
-// GPUImage CommandBuffer::SubmitImage(Image *images, VkImageUsageFlags flags, VkFormat format,
-//                                     VkImageType imageType, int numLevels)
-// {
-//     u32 width     = images[0].width;
-//     u32 height    = images[0].height;
-//     u32 totalSize = 0;
-//     for (int i = 0; i < numLevels; i++)
-//     {
-//         totalSize += ;
-//         images[i].
-//     }
-//
-//     TransferBuffer transferBuffer =
-//         device->GetStagingImage(flags, format, imageType, width, height);
-//     size_t size = width * height * GetFormatSize(format);
-//     Assert(transferBuffer.mappedPtr);
-//     MemoryCopy(transferBuffer.mappedPtr, ptr, size);
-//
-//     VkImageMemoryBarrier2 barrier = device->ImageMemoryBarrier(
-//         transferBuffer.image.image, VK_IMAGE_LAYOUT_UNDEFINED,
-//         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_NONE,
-//         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_NONE, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-//         VK_IMAGE_ASPECT_COLOR_BIT);
-//
-//     VkDependencyInfo info        = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-//     info.imageMemoryBarrierCount = 1;
-//     info.pImageMemoryBarriers    = &barrier;
-//     vkCmdPipelineBarrier2(buffer, &info);
-//
-//     VkBufferImageCopy copy           = {};
-//     copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-//     copy.imageSubresource.layerCount = 1;
-//     copy.imageExtent                 = {width, height, 1};
-//
-//     vkCmdCopyBufferToImage(buffer, transferBuffer.stagingBuffer.buffer,
-//                            transferBuffer.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-//                            1, &copy);
-//     transferBuffer.image.lastPipeline = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-//     transferBuffer.image.lastAccess   = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-//     transferBuffer.image.lastLayout   = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-//     return transferBuffer.image;
-// }
-
-GPUBuffer CommandBuffer::SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags, size_t totalSize)
+TransferBuffer CommandBuffer::SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags,
+                                           size_t totalSize)
 {
     TransferBuffer transferBuffer = device->GetStagingBuffer(flags, totalSize);
     Assert(transferBuffer.mappedPtr);
     MemoryCopy(transferBuffer.mappedPtr, ptr, totalSize);
     SubmitTransfer(&transferBuffer);
-    return transferBuffer.buffer;
+    return transferBuffer;
 }
 
 void CommandBuffer::BindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipeline)
@@ -2657,17 +2597,16 @@ GPUAccelerationStructurePayload CommandBuffer::BuildTLAS(Instance *instances, in
                                                          AffineSpace *transforms,
                                                          ScenePrimitives **childScenes)
 {
-    GPUBuffer tlasBuffer =
-        CreateTLASInstances(instances, numInstances, transforms, childScenes);
-    Barrier(&tlasBuffer, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+    auto tlasBuffer = CreateTLASInstances(instances, numInstances, transforms, childScenes);
+    Barrier(&tlasBuffer.buffer, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
             VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
 
-    return BuildTLAS(&tlasBuffer, numInstances);
+    return BuildTLAS(&tlasBuffer.buffer, numInstances);
 }
 
-GPUBuffer CommandBuffer::CreateTLASInstances(Instance *instances, int numInstances,
-                                             AffineSpace *transforms,
-                                             ScenePrimitives **childScenes)
+TransferBuffer CommandBuffer::CreateTLASInstances(Instance *instances, int numInstances,
+                                                  AffineSpace *transforms,
+                                                  ScenePrimitives **childScenes)
 {
     ScratchArena scratch;
     VkAccelerationStructureInstanceKHR *vkInstances =
@@ -2684,7 +2623,7 @@ GPUBuffer CommandBuffer::CreateTLASInstances(Instance *instances, int numInstanc
         vkInstance.accelerationStructureReference = childScenes[instance.id]->gpuBVH.address;
     }
 
-    GPUBuffer tlasBuffer =
+    auto tlasBuffer =
         SubmitBuffer(vkInstances,
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                          VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
