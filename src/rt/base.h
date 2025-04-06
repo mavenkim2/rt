@@ -223,6 +223,38 @@ T Max(const T &a, const T &b)
 #define DLLInsert(f, l, p, n) DLLInsert_NPZ(f, l, p, n, next, prev, CheckNull, SetNull)
 #define DLLRemove(f, l, n)    DLLRemove_NPZ(f, l, n, next, prev, CheckNull, SetNull)
 
+#define LinkFreeList(array_, index_, head_, invalid_)                                         \
+    do                                                                                        \
+    {                                                                                         \
+        array_[index_].nextFree = head_;                                                      \
+        if (array_[index_].nextFree != invalid_)                                              \
+        {                                                                                     \
+            array_[head_].prevFree = index_;                                                  \
+        }                                                                                     \
+        head_ = index_;                                                                       \
+    } while (0);
+
+#define UnlinkFreeList(array_, index_, head_, invalid_)                                       \
+    do                                                                                        \
+    {                                                                                         \
+        u32 prevFree_ = array_[index_].prevFree;                                              \
+        u32 nextFree_ = array_[index_].nextFree;                                              \
+        if (prevFree_ != invalid_)                                                            \
+        {                                                                                     \
+            array_[prevFree_].nextFree = nextFree_;                                           \
+            array_[index_].prevFree    = invalid_;                                            \
+        }                                                                                     \
+        if (nextFree_ != invalid_)                                                            \
+        {                                                                                     \
+            array_[nextFree_].prevFree = prevFree_;                                           \
+            array_[index_].nextFree    = invalid_;                                            \
+        }                                                                                     \
+        if (head_ == index_)                                                                  \
+        {                                                                                     \
+            head_ = nextFree_;                                                                \
+        }                                                                                     \
+    } while (0);
+
 //////////////////////////////
 // Mutexes
 //

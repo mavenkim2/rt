@@ -151,11 +151,11 @@ set (RT_SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/tables/sobolmatrices.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/sampler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/dgfs.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/ptex.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/ptex.cpp
 )
 
 set (RT_VULKAN_SOURCE_FILES
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/vulkan.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/vulkan.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/vulkan/volk.c
 )
 
@@ -200,7 +200,7 @@ add_executable(convert
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/cmd/convert.cpp
     ${PLATFORM_SOURCE_FILES}
     ${RT_VULKAN_SOURCE_FILES}
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/ptex.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/ptex.cpp
 )
 target_include_directories(convert PRIVATE 
     ${PTEX_INCLUDE}

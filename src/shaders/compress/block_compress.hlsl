@@ -3,7 +3,7 @@
 #pragma dxc diagnostic ignored "-Wunused-value"
 
 #include "../common.hlsli"
-#include "../ptex/filter.hlsli"
+#include "../tex/filter.hlsli"
 #define USE_CMPMSC
 #define ASPM_HLSL
 #define ASPM_GPU

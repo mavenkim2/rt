@@ -1,6 +1,38 @@
 #ifndef VIRTUAL_TEXTURES_HLSLI_
 #define VIRTUAL_TEXTURES_HLSLI_
 
+struct VirtualTexture 
+{
+    uint physicalPoolPageWidth;
+
+    void Something(StructuredBuffer<uint> pageTable, Texture2DArray physicalTextures, GPUMaterial material, uint faceOffset, uint2 numPages, float2 uv)
+    {
+        uint pageOffsetX = floor(uv.x * numPages.x);
+        uint pageOffsetY = floor(uv.y * numPages.y);
+        uint pageOffset = floor(uv.y * numPages.y * numPages.x) + pageOffsetX;
+    
+        uint virtualPage = material.baseVirtualAddress + faceOffset + pageOffset;
+        uint physicalPage = pageTable[virtualPage];
+    
+        uint log2PhysicalPoolPageWidth = firstbithigh(physicalPoolPageWidth);
+        uint numPagesPerPool = physicalPoolPageWidth * physicalPoolPageWidth;
+        uint log2PhysicalPoolNumPages = firstbithigh(numPagesPerPool);
+
+        uint physicalPageLayer = physicalPage >> log2PhysicalPoolNumPages;
+        uint physicalPageInPool = physicalPage & (numPagesPerPool - 1u);
+    
+        uint physicalPageInPoolY = physicalPageInPool >> log2PhysicalPoolPageWidth;
+        uint physicalPageInPoolX = physicalPageInPool & (physicalPoolPageWidth - 1);
+    
+        const float scaleST = (float)pageWidth / poolWidth;
+        float fracX = (uv.x - (float)pageOffsetX / numPages.x) * numPages.x;
+        float fracY = (uv.y - (float)pageOffsetY / numPages.y) * numPages.y;
+    
+        float2 physicalUv = scaleST * uint2(physicalPageInPoolX, physicalPageInPoolY);
+        physicalUv += float2(fracX, fracY) * scaleST;
+    }
+};
+
 void Func() 
 {
     // constants
@@ -31,10 +63,4 @@ void Func()
     // program to lookup the scale and bias from a mapping texture with one texel per physical page.
     unsigned char texelPhysX = (unsigned char)( ( physX / ( physPagesWide - 1.0f ) ) * 255.0f + 0.01f );
     unsigned char texelPhysY = (unsigned char)( ( physY / ( physPagesWide - 1.0f ) ) * 255.0f + 0.01f );
-}
-
-void Something(Texture2D pageTable, float2 virtualAddress)
-{
-    float4 something = pageTable.SampleLevel(virtualAddress, ?, ?);
-
 }

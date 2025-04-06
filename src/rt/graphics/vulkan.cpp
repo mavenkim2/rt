@@ -1,15 +1,15 @@
-#include "base.h"
-#include "containers.h"
-#include "shader_interop/dense_geometry_shaderinterop.h"
-#include "memory.h"
-#include "thread_context.h"
+#include "../base.h"
+#include "../containers.h"
+#include "../shader_interop/dense_geometry_shaderinterop.h"
+#include "../memory.h"
+#include "../thread_context.h"
 #include <atomic>
 #include "vulkan.h"
-#include "scene.h"
-#include "nvapi.h"
-#include "../third_party/nvapi/nvapi.h"
+#include "../scene.h"
+#include "../nvapi.h"
+#include "../../third_party/nvapi/nvapi.h"
 #define VMA_IMPLEMENTATION
-#include "../third_party/vulkan/vk_mem_alloc.h"
+#include "../../third_party/vulkan/vk_mem_alloc.h"
 
 namespace rt
 {
@@ -1094,9 +1094,12 @@ b32 Vulkan::CreateSwapchain(Swapchain *swapchain)
     return true;
 }
 
-u32 Vulkan::GetMax2DImageDimension()
+ImageLimits Vulkan::GetImageLimits()
 {
-    deviceProperties.properties.limits.maxImageDimension2D;
+    ImageLimits limits;
+    limits.max2DImageDim = deviceProperties.properties.limits.maxImageDimension2D;
+    limits.maxNumLayers  = deviceProperties.properties.limits.maxImageArrayLayers;
+    return limits;
 }
 
 Semaphore Vulkan::CreateGraphicsSemaphore()
@@ -1825,6 +1828,32 @@ TransferBuffer CommandBuffer::SubmitImage(void *ptr, ImageDesc desc)
     transferBuffer.image.lastAccess   = VK_ACCESS_2_TRANSFER_WRITE_BIT;
     transferBuffer.image.lastLayout   = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     return transferBuffer;
+}
+
+void CommandBuffer::CopyImage(TransferBuffer *transfer, GPUImage *image,
+                              BufferToImageCopy *copies, u32 num)
+{
+    ScratchArena scratch;
+    VkBufferImageCopy *vkCopies = PushArrayNoZero(scratch.temp.arena, VkBufferImageCopy, num);
+    for (int i = 0; i < num; i++)
+    {
+        VkBufferImageCopy &copy              = vkCopies[i];
+        copy.bufferOffset                    = copies[i].bufferOffset;
+        copy.bufferRowLength                 = copies[i].rowLength;
+        copy.bufferImageHeight               = copies[i].imageHeight;
+        copy.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        copy.imageSubresource.mipLevel       = copies[i].mipLevel;
+        copy.imageSubresource.baseArrayLayer = copies[i].baseLayer;
+        copy.imageSubresource.layerCount     = copies[i].layerCount;
+        copy.imageOffset.x                   = copies[i].offset.x;
+        copy.imageOffset.y                   = copies[i].offset.y;
+        copy.imageOffset.z                   = copies[i].offset.z;
+        copy.imageExtent.width               = copies[i].extent.x;
+        copy.imageExtent.height              = copies[i].extent.y;
+        copy.imageExtent.depth               = copies[i].extent.z;
+    }
+    vkCmdCopyBufferToImage(buffer, transfer->buffer.buffer, image->image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, num, vkCopies);
 }
 
 TransferBuffer CommandBuffer::SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags,

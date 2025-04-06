@@ -2,8 +2,9 @@
 #define PTEX_H_
 
 #include <Ptexture.h>
-#include "rt.h"
-#include "platform.h"
+#include "../rt.h"
+#include "../platform.h"
+#include "vulkan.h"
 
 namespace Utils
 {
@@ -175,6 +176,77 @@ struct PaddedImage : Image
     void WriteRotatedBorder(PaddedImage &other, Vec2u srcStart, Vec2u dstStart, int edgeIndex,
                             int rotate, int srcVLen, int srcRowLen, int dstVLen, int dstRowLen,
                             Vec2u scale);
+};
+
+enum class AllocationStatus
+{
+    Free,
+    Allocated,
+};
+
+struct PhysicalPagePool
+{
+    u32 layerIndex;
+    StaticArray<u32> freePages;
+
+    u32 prevFree;
+    u32 nextFree;
+};
+
+struct PhysicalPageAllocation
+{
+    u32 arrayIndex;
+    u32 layerIndex;
+    u32 pageIndex;
+};
+
+struct BlockRange
+{
+    AllocationStatus status;
+
+    u32 startPage;
+    u32 onePastEndPage;
+
+    u32 prevRange;
+    u32 nextRange;
+
+    u32 prevFree;
+    u32 nextFree;
+
+    BlockRange() {}
+
+    BlockRange(AllocationStatus status, u32 startPage, u32 onePastEndPage, u32 prevRange,
+               u32 nextRange, u32 prevFree, u32 nextFree)
+        : status(status), startPage(startPage), onePastEndPage(onePastEndPage),
+          prevRange(prevRange), nextRange(nextRange), prevFree(prevFree), nextFree(nextFree)
+    {
+    }
+};
+
+struct VirtualTextureManager
+{
+    static const u32 InvalidPage  = ~0u;
+    static const u32 InvalidRange = ~0u;
+
+    StaticArray<BlockRange> pageRanges;
+    u32 freeRange;
+
+    StaticArray<GPUImage> gpuPhysicalPools;
+    StaticArray<PhysicalPagePool> pools;
+
+    VkFormat format;
+
+    u32 pageWidthPerPool;
+    u32 texelWidthPerPage;
+
+    u32 partiallyFreePool;
+    u32 completelyFreePool;
+
+    VirtualTextureManager(Arena *arena, u32 totalNumPages, u32 pageWidthPerPool,
+                          u32 texelWidthPerPage, VkFormat format);
+    void AllocateVirtualPages(u32 *physicalPages, u32 numPages);
+    void AllocatePhysicalPages(CommandBuffer *cmd, Tile *tiles,
+                               PhysicalPageAllocation *allocations, u32 numPages);
 };
 
 void InitializePtex();

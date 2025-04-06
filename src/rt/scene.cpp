@@ -11,7 +11,7 @@
 #include "simd_integrate.h"
 #include "spectrum.h"
 #include "shader_interop/hit_shaderinterop.h"
-#include "ptex.h"
+#include "graphics/ptex.h"
 #include <atomic>
 #include <cwchar>
 #include <iterator>

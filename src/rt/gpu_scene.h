@@ -1,7 +1,7 @@
 #ifndef GPU_SCENE_H
 #define GPU_SCENE_H
 
-#include "vulkan.h"
+#include "graphics/vulkan.h"
 
 namespace rt
 {

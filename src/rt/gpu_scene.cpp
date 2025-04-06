@@ -14,9 +14,8 @@
 #include "shader_interop/debug_shaderinterop.h"
 #include "nvapi.h"
 #include "scene.h"
-#include "vulkan.h"
 #include "win32.h"
-#include "ptex.h"
+#include "graphics/ptex.h"
 
 namespace rt
 {

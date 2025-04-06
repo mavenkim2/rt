@@ -3,20 +3,20 @@
 
 #include <functional>
 
-#include "base.h"
-#include "bvh/bvh_types.h"
-#include "containers.h"
-#include "math/basemath.h"
-#include "platform.h"
+#include "../base.h"
+#include "../bvh/bvh_types.h"
+#include "../containers.h"
+#include "../math/basemath.h"
+#include "../platform.h"
 
 #define VK_NO_PROTOTYPES
 
-#include "../third_party/vulkan/vulkan/vulkan.h"
-#include "../third_party/vulkan/volk.h"
+#include "../../third_party/vulkan/vulkan/vulkan.h"
+#include "../../third_party/vulkan/volk.h"
 
 #define VMA_STATIC_VULKAN_FUNCTIONS  0
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
-#include "../third_party/vulkan/vk_mem_alloc.h"
+#include "../../third_party/vulkan/vk_mem_alloc.h"
 
 namespace rt
 {
@@ -322,6 +322,12 @@ enum class ImageType
     Cubemap,
 };
 
+struct ImageLimits
+{
+    u32 max2DImageDim;
+    u32 maxNumLayers;
+};
+
 struct ImageDesc
 {
     ImageType imageType = ImageType::Type2D;
@@ -338,7 +344,7 @@ struct ImageDesc
     ImageDesc() {}
     ImageDesc(ImageType imageType, u32 width, u32 height, u32 depth, u32 numMips,
               u32 numLayers, VkFormat format, MemoryUsage memUsage,
-              VkImageUsageFlags imageUsage, VkImageTiling tiling)
+              VkImageUsageFlags imageUsage, VkImageTiling tiling = VK_IMAGE_TILING_OPTIMAL)
         : imageType(imageType), width(width), height(height), depth(depth), numMips(numMips),
           numLayers(numLayers), format(format), memUsage(memUsage), imageUsage(imageUsage),
           tiling(tiling)
@@ -363,14 +369,16 @@ struct GPUImage
 
 struct BufferToImageCopy
 {
-    u32 offset;
+    u64 bufferOffset;
     u32 rowLength;
+    u32 imageHeight;
 
-    uint32_t bufferRowLength;
-    uint32_t bufferImageHeight;
-    VkImageSubresourceLayers imageSubresource;
-    VkOffset3D imageOffset;
-    VkExtent3D imageExtent;
+    u32 mipLevel;
+    u32 baseLayer;
+    u32 layerCount;
+
+    Vec3i offset;
+    Vec3u extent;
 };
 
 struct GPUMesh
@@ -501,6 +509,8 @@ struct CommandBuffer
     void SubmitTransfer(TransferBuffer *buffer);
     TransferBuffer SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags, size_t totalSize);
     TransferBuffer SubmitImage(void *ptr, ImageDesc desc);
+    void CopyImage(TransferBuffer *transfer, GPUImage *image, BufferToImageCopy *copies,
+                   u32 num);
 
     void BindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipeline);
     void BindDescriptorSets(VkPipelineBindPoint bindPoint, DescriptorSet *set,
@@ -752,7 +762,7 @@ struct Vulkan
     Vulkan(ValidationMode validationMode,
            GPUDevicePreference preference = GPUDevicePreference::Discrete);
     Swapchain CreateSwapchain(OS_Handle window, VkFormat format, u32 width, u32 height);
-    u32 GetMax2DImageDimension();
+    ImageLimits GetImageLimits();
     Semaphore CreateGraphicsSemaphore();
     void AllocateCommandBuffers(ThreadPool &pool, QueueType type);
     void CheckInitializedThreadPool(int threadIndex);

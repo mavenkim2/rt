@@ -1,10 +1,10 @@
-#include "base.h"
-#include "memory.h"
-#include "string.h"
-#include "scene.h"
-#include "integrate.h"
-#include "ptex.h"
+#include "../base.h"
+#include "../memory.h"
+#include "../string.h"
+#include "../scene.h"
+#include "../integrate.h"
 #include "vulkan.h"
+#include "ptex.h"
 #include <Ptexture.h>
 #include <PtexReader.h>
 #include <cstring>
@@ -776,62 +776,6 @@ void Convert(string filename)
     t->release();
 }
 
-struct PhysicalPagePool
-{
-    GPUImage image;
-    u32 virtualAddress;
-    u32 physTexelsWide;
-    u32 maxNumPages;
-    u32 numPagesAllocated;
-    StaticArray<u32> freePages;
-
-    u32 nextFree;
-};
-
-enum class BlockStatus
-{
-    Free,
-    Allocated,
-};
-
-struct BlockRange
-{
-    BlockStatus status;
-
-    u32 startPage;
-    u32 onePastEndPage;
-
-    u32 prevRange;
-    u32 nextRange;
-
-    u32 prevFree;
-    u32 nextFree;
-
-    BlockRange() {}
-
-    BlockRange(BlockStatus status, u32 startPage, u32 onePastEndPage, u32 prevRange,
-               u32 nextRange, u32 prevFree, u32 nextFree)
-        : status(status), startPage(startPage), onePastEndPage(onePastEndPage),
-          prevRange(prevRange), nextRange(nextRange), prevFree(prevFree), nextFree(nextFree)
-    {
-    }
-};
-
-struct VirtualTextureManager
-{
-    static const u32 InvalidPage  = ~0u;
-    static const u32 InvalidRange = ~0u;
-
-    ChunkedLinkedList<BlockRange> pageRanges;
-    u32 freeRange;
-
-    StaticArray<PhysicalPagePool> pools;
-    u32 partiallyFreePool;
-    u32 completelyFreePool;
-
-    void AllocatePhysicalPage();
-};
-
 // two lookups: one that converts uvs into a virtual address (multiply uv by scale and add
 // offset), then use this address to look up the page table
 //
@@ -843,19 +787,56 @@ struct VirtualTextureManager
 
 // virtual address = base virtual address + offset + floor(v * numPagesY * numPagesX) + floor(u
 // * numPagesX)
-// virtual address -> physical address
 
-void VirtualTextureManager::AllocateVirtualPages(u32 numPages)
+// virtual address -> physical address lookup directly?
+
+VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 totalNumPages,
+                                             u32 inPageWidthPerPool, u32 texelWidthPerPage,
+                                             VkFormat format)
+    : pageWidthPerPool(inPageWidthPerPool), texelWidthPerPage(texelWidthPerPage),
+      format(format)
 {
-    const u32 maxPhysTexelsWide = 16384u;
-    u32 maxDim                  = device->GetMax2DImageDimension();
-    u32 physTexelsWide          = Min(maxDim, maxPhysTexelsWide);
+    Assert(IsPow2(pageWidthPerPool) && IsPow2(texelWidthPerPage));
+    ImageLimits limits = device->GetImageLimits();
 
-    const u32 pageWidth  = 136;
-    const u32 pageBorder = 4;
+    u32 numPagesPerPool = Sqr(pageWidthPerPool);
+    u32 numPools        = (totalNumPages + numPagesPerPool - 1) / numPagesPerPool;
 
-    const u32 physPagesWide = (physTexelsWide / pageWidth);
+    u32 texelWidthPerPool = Min(texelWidthPerPage * pageWidthPerPool, limits.max2DImageDim);
+    pageWidthPerPool      = texelWidthPerPool / texelWidthPerPage;
 
+    u32 numTextureArrays = (numPools + limits.maxNumLayers - 1) / limits.maxNumLayers;
+
+    pools            = StaticArray<PhysicalPagePool>(arena, numPools);
+    pageRanges       = StaticArray<BlockRange>(arena, totalNumPages);
+    gpuPhysicalPools = StaticArray<GPUImage>(arena, numTextureArrays);
+
+    // Allocate texture arrays
+    for (int i = 0; i < numTextureArrays; i++)
+    {
+        ImageDesc poolDesc(ImageType::Type2D, texelWidthPerPool, texelWidthPerPool, 1, 1,
+                           numPools, format, MemoryUsage::GPU_ONLY,
+                           VK_IMAGE_USAGE_SAMPLED_BIT);
+        gpuPhysicalPools.Push(device->CreateImage(poolDesc));
+    }
+
+    for (int i = 0; i < numPools; i++)
+    {
+        PhysicalPagePool pool;
+        pool.layerIndex = i;
+        pool.freePages  = StaticArray<u32>(arena, numPagesPerPool);
+        for (int j = 0; j < numPagesPerPool; j++)
+        {
+            pool.freePages.Push(j);
+        }
+        pools.Push(pool);
+    }
+    completelyFreePool = 0;
+    partiallyFreePool  = InvalidPage;
+}
+
+void VirtualTextureManager::AllocateVirtualPages(u32 *physicalPages, u32 numPages)
+{
     u32 freeIndex = freeRange;
 
     u32 leftover   = ~0u;
@@ -878,14 +859,16 @@ void VirtualTextureManager::AllocateVirtualPages(u32 numPages)
 
     // Allocate pages
     BlockRange &range = pageRanges[allocIndex];
-    Assert(range.status == BlockStatus::Free);
+    Assert(range.status == AllocationStatus::Free);
 
     u32 rightRangeIndex = pageRanges.Length();
 
-    BlockRange leftRange(BlockStatus::Allocated, range.startPage, range.startPage + numPages,
-                         range.prevRange, rightRangeIndex, InvalidRange, InvalidRange);
-    BlockRange rightRange(BlockStatus::Free, range.startPage + numPages, range.onePastEndPage,
-                          allocIndex, range.nextRange, range.prevFree, range.nextFree);
+    BlockRange leftRange(AllocationStatus::Allocated, range.startPage,
+                         range.startPage + numPages, range.prevRange, rightRangeIndex,
+                         InvalidRange, InvalidRange);
+    BlockRange rightRange(AllocationStatus::Free, range.startPage + numPages,
+                          range.onePastEndPage, allocIndex, range.nextRange, range.prevFree,
+                          range.nextFree);
 
     if (range.prevFree == InvalidRange) freeRange = rightRangeIndex;
     else pageRanges[range.prevFree].nextFree = allocIndex;
@@ -894,6 +877,37 @@ void VirtualTextureManager::AllocateVirtualPages(u32 numPages)
 
     pageRanges[allocIndex] = leftRange;
     pageRanges.Push(rightRange);
+
+    // Next, allocate physical pages
+    for (u32 i = 0; i < numPages; i++)
+    {
+        u32 freeIndex =
+            partiallyFreePool == InvalidPage ? completelyFreePool : partiallyFreePool;
+        bool isFullyFree = partiallyFreePool == InvalidPage;
+
+        u32 allocIndex = ~0u;
+        while (freeIndex != InvalidPage)
+        {
+            PhysicalPagePool &pool = pools[freeIndex];
+            if (pool.freePages.Length())
+            {
+                allocIndex = pool.freePages.Pop();
+                if (isFullyFree)
+                {
+                    UnlinkFreeList(pools, allocIndex, completelyFreePool, InvalidPage);
+                    LinkFreeList(pools, allocIndex, partiallyFreePool, InvalidPage);
+                }
+                else if (pool.freePages.Length() == 0)
+                {
+                    UnlinkFreeList(pools, allocIndex, partiallyFreePool, InvalidPage);
+                }
+                break;
+            }
+            freeIndex = pool.nextFree;
+        }
+        ErrorExit(allocIndex != ~0u, "Ran out of memory");
+        physicalPages[i] = allocIndex;
+    }
 
     // ok i'm starting to see something
     // 1. you have to "allocate" a virtual address, somehow taking into account the
@@ -905,6 +919,22 @@ void VirtualTextureManager::AllocateVirtualPages(u32 numPages)
     // padding that makes them power of two, making the tiling non trivial,
     // or the pages themselves are non power of two, leading to fragmentation/more difficult
     // lookup?
+}
+
+void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, Tile *tiles,
+                                                  PhysicalPageAllocation *allocations,
+                                                  u32 numPages)
+{
+    // TODO: reconcile block vs texel
+    u32 pageSize  = Sqr(texelWidthPerPage) * GetFormatSize(format);
+    u32 allocSize = pageSize * numPages;
+
+    ScratchArena scratch;
+    BufferToImageCopy *copies = PushArray(scratch.temp.arena, BufferToImageCopy, numPages);
+    for (int i = 0; i < numPages; i++)
+    {
+    }
+    // cmd->CopyImage(TransferBuffer * transfer, GPUImage * image, copies, numPages);
 }
 
 } // namespace rt

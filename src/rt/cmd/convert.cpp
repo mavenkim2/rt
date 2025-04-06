@@ -20,8 +20,8 @@
 #include <functional>
 #include "../random.h"
 #include "../parallel.h"
-#include "../ptex.h"
-#include "../vulkan.h"
+#include "../graphics/ptex.h"
+#include "../graphics/vulkan.h"
 #include "../base.cpp"
 #include "../parallel.cpp"
 #include "../thread_statistics.cpp"

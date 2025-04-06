@@ -11,8 +11,8 @@
 #include "sampling.h"
 #include "parallel.h"
 #include "integrate.h"
-#include "vulkan.h"
-#include "ptex.h"
+#include "graphics/vulkan.h"
+#include "graphics/ptex.h"
 #include "tests/test.h"
 
 #define STB_IMAGE_IMPLEMENTATION

@@ -3,7 +3,7 @@
 
 #include "../common.hlsli"
 #include "../bit_twiddling.hlsli"
-#include "../ptex/filter.hlsli"
+#include "../tex/filter.hlsli"
 #include "bxdf.hlsli"
 #include "../sampling.hlsli"
 
