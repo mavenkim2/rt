@@ -48,6 +48,15 @@ inline u32 GetFormatSize(VkFormat format)
     }
 }
 
+inline u32 GetBlockShift(VkFormat format)
+{
+    switch (format)
+    {
+        case VK_FORMAT_BC1_RGB_UNORM_BLOCK: return 2;
+        default: return 0;
+    }
+}
+
 inline u32 GetBlockSize(VkFormat format)
 {
     switch (format)
@@ -787,6 +796,7 @@ struct Vulkan
     int BindlessStorageIndex(GPUBuffer *buffer, size_t offset = 0,
                              size_t range = VK_WHOLE_SIZE);
     u64 GetMinAlignment(VkBufferUsageFlags flags);
+    TransferBuffer GetStagingBuffer(size_t totalSize);
     TransferBuffer GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize,
                                     int numRanges = 0);
     TransferBuffer GetStagingImage(ImageDesc desc);

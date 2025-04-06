@@ -186,7 +186,6 @@ enum class AllocationStatus
 
 struct PhysicalPagePool
 {
-    u32 layerIndex;
     StaticArray<u32> freePages;
 
     u32 prevFree;
@@ -195,8 +194,7 @@ struct PhysicalPagePool
 
 struct PhysicalPageAllocation
 {
-    u32 arrayIndex;
-    u32 layerIndex;
+    u32 poolIndex;
     u32 pageIndex;
 };
 
@@ -225,7 +223,7 @@ struct BlockRange
 
 struct VirtualTextureManager
 {
-    static const u32 InvalidPage  = ~0u;
+    static const u32 InvalidPool  = ~0u;
     static const u32 InvalidRange = ~0u;
 
     StaticArray<BlockRange> pageRanges;
@@ -236,6 +234,8 @@ struct VirtualTextureManager
 
     VkFormat format;
 
+    u32 maxNumLayers;
+
     u32 pageWidthPerPool;
     u32 texelWidthPerPage;
 
@@ -244,7 +244,7 @@ struct VirtualTextureManager
 
     VirtualTextureManager(Arena *arena, u32 totalNumPages, u32 pageWidthPerPool,
                           u32 texelWidthPerPage, VkFormat format);
-    void AllocateVirtualPages(u32 *physicalPages, u32 numPages);
+    void AllocateVirtualPages(PhysicalPageAllocation *allocations, u32 numPages);
     void AllocatePhysicalPages(CommandBuffer *cmd, Tile *tiles,
                                PhysicalPageAllocation *allocations, u32 numPages);
 };

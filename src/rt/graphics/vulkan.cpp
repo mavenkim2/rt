@@ -1758,6 +1758,21 @@ TransferBuffer Vulkan::GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSi
     return transferBuffer;
 }
 
+TransferBuffer Vulkan::GetStagingBuffer(size_t totalSize)
+{
+    GPUBuffer stagingBuffer =
+        CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, totalSize,
+                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                         VMA_ALLOCATION_CREATE_MAPPED_BIT);
+
+    void *mappedPtr = stagingBuffer.allocation->GetMappedData();
+
+    TransferBuffer transferBuffer = {};
+    transferBuffer.stagingBuffer  = stagingBuffer;
+    transferBuffer.mappedPtr      = mappedPtr;
+    return transferBuffer;
+}
+
 TransferBuffer Vulkan::GetStagingImage(ImageDesc desc)
 
 {

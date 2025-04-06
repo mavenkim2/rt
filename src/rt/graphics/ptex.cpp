@@ -805,7 +805,9 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 totalNumPages,
     u32 texelWidthPerPool = Min(texelWidthPerPage * pageWidthPerPool, limits.max2DImageDim);
     pageWidthPerPool      = texelWidthPerPool / texelWidthPerPage;
 
-    u32 numTextureArrays = (numPools + limits.maxNumLayers - 1) / limits.maxNumLayers;
+    maxNumLayers         = 1u << Log2Int(limits.maxNumLayers);
+    u32 numTextureArrays = (numPools + maxNumLayers - 1) / maxNumLayers;
+    Assert(numTextureArrays == 1);
 
     pools            = StaticArray<PhysicalPagePool>(arena, numPools);
     pageRanges       = StaticArray<BlockRange>(arena, totalNumPages);
@@ -820,22 +822,31 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 totalNumPages,
         gpuPhysicalPools.Push(device->CreateImage(poolDesc));
     }
 
+    // Allocate physical page pool
     for (int i = 0; i < numPools; i++)
     {
         PhysicalPagePool pool;
-        pool.layerIndex = i;
-        pool.freePages  = StaticArray<u32>(arena, numPagesPerPool);
+        pool.freePages = StaticArray<u32>(arena, numPagesPerPool);
+        pool.prevFree  = i == 0 ? InvalidPool : i - 1;
+        pool.nextFree  = i == numPools - 1 ? InvalidPool : i + 1;
         for (int j = 0; j < numPagesPerPool; j++)
         {
-            pool.freePages.Push(j);
+            pool.freePages.Push(numPagesPerPool - 1 - j);
         }
         pools.Push(pool);
     }
     completelyFreePool = 0;
-    partiallyFreePool  = InvalidPage;
+    partiallyFreePool  = InvalidPool;
+
+    // Allocate block ranges
+    pageRanges.Push(BlockRange(AllocationStatus::Free, 0, totalNumPages, InvalidRange,
+                               InvalidRange, InvalidRange, InvalidRange));
+
+    freeRange = 0;
 }
 
-void VirtualTextureManager::AllocateVirtualPages(u32 *physicalPages, u32 numPages)
+void VirtualTextureManager::AllocateVirtualPages(PhysicalPageAllocation *allocations,
+                                                 u32 numPages)
 {
     u32 freeIndex = freeRange;
 
@@ -882,43 +893,35 @@ void VirtualTextureManager::AllocateVirtualPages(u32 *physicalPages, u32 numPage
     for (u32 i = 0; i < numPages; i++)
     {
         u32 freeIndex =
-            partiallyFreePool == InvalidPage ? completelyFreePool : partiallyFreePool;
-        bool isFullyFree = partiallyFreePool == InvalidPage;
+            partiallyFreePool == InvalidPool ? completelyFreePool : partiallyFreePool;
+        bool isFullyFree = partiallyFreePool == InvalidPool;
 
-        u32 allocIndex = ~0u;
-        while (freeIndex != InvalidPage)
+        u32 poolAllocIndex = ~0u;
+        u32 pageAllocIndex = ~0u;
+        while (freeIndex != InvalidPool)
         {
             PhysicalPagePool &pool = pools[freeIndex];
             if (pool.freePages.Length())
             {
-                allocIndex = pool.freePages.Pop();
+                poolAllocIndex = freeIndex;
+                pageAllocIndex = pool.freePages.Pop();
                 if (isFullyFree)
                 {
-                    UnlinkFreeList(pools, allocIndex, completelyFreePool, InvalidPage);
-                    LinkFreeList(pools, allocIndex, partiallyFreePool, InvalidPage);
+                    UnlinkFreeList(pools, allocIndex, completelyFreePool, InvalidPool);
+                    LinkFreeList(pools, allocIndex, partiallyFreePool, InvalidPool);
                 }
                 else if (pool.freePages.Length() == 0)
                 {
-                    UnlinkFreeList(pools, allocIndex, partiallyFreePool, InvalidPage);
+                    UnlinkFreeList(pools, allocIndex, partiallyFreePool, InvalidPool);
                 }
                 break;
             }
             freeIndex = pool.nextFree;
         }
         ErrorExit(allocIndex != ~0u, "Ran out of memory");
-        physicalPages[i] = allocIndex;
+        allocations[i].poolIndex = poolAllocIndex;
+        allocations[i].pageIndex = pageAllocIndex;
     }
-
-    // ok i'm starting to see something
-    // 1. you have to "allocate" a virtual address, somehow taking into account the
-    // actual size of the texture
-    // 2. the high bits of the address give you the page table you look up in,
-    // the lower parts give you the uv
-
-    // it's like either the pages themselves have to not be power of two, with
-    // padding that makes them power of two, making the tiling non trivial,
-    // or the pages themselves are non power of two, leading to fragmentation/more difficult
-    // lookup?
 }
 
 void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, Tile *tiles,
@@ -926,15 +929,33 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, Tile *tile
                                                   u32 numPages)
 {
     // TODO: reconcile block vs texel
-    u32 pageSize  = Sqr(texelWidthPerPage) * GetFormatSize(format);
+    u32 pageSize  = Sqr(texelWidthPerPage >> GetBlockShift(format)) * GetFormatSize(format);
     u32 allocSize = pageSize * numPages;
 
+    TransferBuffer buf = device->GetStagingBuffer(allocSize);
     ScratchArena scratch;
+
+    u64 offset                = 0;
     BufferToImageCopy *copies = PushArray(scratch.temp.arena, BufferToImageCopy, numPages);
+
+    u32 log2PageWidthPerPool = Log2Int(pageWidthPerPool);
     for (int i = 0; i < numPages; i++)
     {
+        Assert(allocations[i].poolIndex < maxNumLayers);
+        MemoryCopy((u8 *)buf.mappedPtr + offset, tiles[i].contents, pageSize);
+
+        copies[i].bufferOffset = offset;
+        copies[i].baseLayer    = allocations[i].poolIndex & (maxNumLayers - 1);
+        copies[i].layerCount   = 1;
+
+        u32 pageX        = allocations[i].pageIndex & (pageWidthPerPool - 1);
+        u32 pageY        = allocations[i].pageIndex >> log2PageWidthPerPool;
+        copies[i].offset = Vec3i(pageX * texelWidthPerPage, pageY * texelWidthPerPage, 0);
+        copies[i].extent = Vec3u(texelWidthPerPage, texelWidthPerPage, 0);
+
+        offset += pageSize;
     }
-    // cmd->CopyImage(TransferBuffer * transfer, GPUImage * image, copies, numPages);
+    cmd->CopyImage(&buf, &gpuPhysicalPools[0], copies, numPages);
 }
 
 } // namespace rt
