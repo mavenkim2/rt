@@ -42,6 +42,7 @@ inline u32 GetFormatSize(VkFormat format)
         case VK_FORMAT_R8G8B8_UNORM:
         case VK_FORMAT_B8G8R8_UNORM:
         case VK_FORMAT_R8G8B8_SRGB: return 3;
+        case VK_FORMAT_R8G8B8A8_UNORM:
         case VK_FORMAT_R8G8B8A8_SRGB: return 4;
         case VK_FORMAT_BC1_RGB_UNORM_BLOCK: return 8;
         default: Assert(0); return 0;
@@ -257,6 +258,7 @@ struct GraphicsObject
 struct GPUBuffer
 {
     VkBuffer buffer;
+    void *mappedPtr;
     VmaAllocation allocation;
     size_t size;
     VkPipelineStageFlags2 lastStage;
@@ -376,7 +378,7 @@ struct GPUImage
     GPUImage() {}
 };
 
-struct BufferToImageCopy
+struct BufferImageCopy
 {
     u64 bufferOffset;
     u32 rowLength;
@@ -384,9 +386,24 @@ struct BufferToImageCopy
 
     u32 mipLevel;
     u32 baseLayer;
-    u32 layerCount;
+    u32 layerCount = 1;
 
     Vec3i offset;
+    Vec3u extent;
+};
+
+struct ImageToImageCopy
+{
+    u32 srcMipLevel;
+    u32 srcBaseLayer;
+    u32 srcLayerCount = 1;
+    Vec3i srcOffset;
+
+    u32 dstMipLevel;
+    u32 dstBaseLayer;
+    u32 dstLayerCount = 1;
+    Vec3i dstOffset;
+
     Vec3u extent;
 };
 
@@ -518,8 +535,10 @@ struct CommandBuffer
     void SubmitTransfer(TransferBuffer *buffer);
     TransferBuffer SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags, size_t totalSize);
     TransferBuffer SubmitImage(void *ptr, ImageDesc desc);
-    void CopyImage(TransferBuffer *transfer, GPUImage *image, BufferToImageCopy *copies,
+    void CopyImage(TransferBuffer *transfer, GPUImage *image, BufferImageCopy *copies,
                    u32 num);
+    void CopyImage(GPUImage *dst, GPUImage *src, const ImageToImageCopy &copy);
+    void CopyImageToBuffer(GPUBuffer *dst, GPUImage *src, const BufferImageCopy &copy);
 
     void BindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipeline);
     void BindDescriptorSets(VkPipelineBindPoint bindPoint, DescriptorSet *set,
@@ -787,7 +806,7 @@ struct Vulkan
     DescriptorSetLayout CreateDescriptorSetLayout(u32 binding, VkDescriptorType type,
                                                   VkShaderStageFlags stage);
     GPUBuffer CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
-                           VmaAllocationCreateFlags vmaFlags = 0);
+                           MemoryUsage usage = MemoryUsage::GPU_ONLY);
     GPUImage CreateImage(ImageDesc desc);
     void DestroyBuffer(GPUBuffer *buffer);
     void DestroyImage(GPUImage *image);

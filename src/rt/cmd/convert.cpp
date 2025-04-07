@@ -1455,7 +1455,10 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                     {
                         if (packet->parameterNames[i] == "filename"_sid)
                         {
-                            Convert(Str8(packet->bytes[i], packet->sizes[i]));
+                            string textureFilename =
+                                StrConcat(temp.arena, directory,
+                                          Str8(packet->bytes[i], packet->sizes[i]));
+                            Convert(textureFilename);
                         }
                     }
                 }
@@ -2190,6 +2193,8 @@ int main(int argc, char **argv)
     TempArena temp        = ScratchStart(0, 0);
     StringBuilder builder = {};
     builder.arena         = arena;
+
+    InitializePtex();
 
     if (argc != 2)
     {

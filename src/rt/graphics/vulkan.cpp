@@ -1521,10 +1521,9 @@ void Vulkan::CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage 
 
 ThreadPool &Vulkan::GetThreadPool(int threadIndex) { return commandPools[threadIndex]; }
 
-GPUBuffer Vulkan::CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
-                               VmaAllocationCreateFlags vmaFlags)
+GPUBuffer Vulkan::CreateBuffer(VkBufferUsageFlags flags, size_t totalSize, MemoryUsage usage)
 {
-    GPUBuffer buffer;
+    GPUBuffer buffer              = {};
     buffer.size                   = totalSize;
     VkBufferCreateInfo createInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     createInfo.size               = totalSize;
@@ -1543,10 +1542,31 @@ GPUBuffer Vulkan::CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
 
     VmaAllocationCreateInfo allocCreateInfo = {};
     allocCreateInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
-    allocCreateInfo.flags                   = vmaFlags;
+    switch (usage)
+    {
+        case MemoryUsage::CPU_TO_GPU:
+        {
+            createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                    VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        }
+        break;
+        case MemoryUsage::GPU_TO_CPU:
+        {
+            allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                                    VMA_ALLOCATION_CREATE_MAPPED_BIT;
+            createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        }
+        break;
+    }
 
     VK_CHECK(vmaCreateBuffer(allocator, &createInfo, &allocCreateInfo, &buffer.buffer,
                              &buffer.allocation, 0));
+
+    if (usage != MemoryUsage::GPU_ONLY && usage != MemoryUsage::CPU_ONLY)
+    {
+        buffer.mappedPtr = buffer.allocation->GetMappedData();
+    }
     return buffer;
 }
 
@@ -1565,7 +1585,6 @@ GPUImage Vulkan::CreateImage(ImageDesc desc)
             imageInfo.imageType = VK_IMAGE_TYPE_2D;
         }
         break;
-            break;
         case ImageType::Cubemap:
         {
             imageInfo.imageType = VK_IMAGE_TYPE_3D;
@@ -1608,15 +1627,17 @@ GPUImage Vulkan::CreateImage(ImageDesc desc)
     VmaAllocationCreateInfo allocInfo = {};
     allocInfo.usage                   = VMA_MEMORY_USAGE_AUTO;
 
-    if (EnumHasAnyFlags(desc.memUsage, MemoryUsage::CPU_TO_GPU))
-    {
-        allocInfo.flags =
-            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-    }
-    if (EnumHasAnyFlags(desc.memUsage, MemoryUsage::GPU_TO_CPU))
+    if (desc.memUsage == MemoryUsage::CPU_TO_GPU)
     {
         allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                           VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        imageInfo.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    }
+    if (desc.memUsage == MemoryUsage::GPU_TO_CPU)
+    {
+        allocInfo.flags =
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        imageInfo.usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     }
 
     VK_CHECK(
@@ -1745,9 +1766,7 @@ TransferBuffer Vulkan::GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSi
     buffer.lastAccess = VK_ACCESS_2_TRANSFER_WRITE_BIT;
 
     GPUBuffer stagingBuffer =
-        CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, totalSize,
-                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                         VMA_ALLOCATION_CREATE_MAPPED_BIT);
+        CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, totalSize, MemoryUsage::CPU_TO_GPU);
 
     void *mappedPtr = stagingBuffer.allocation->GetMappedData();
 
@@ -1761,9 +1780,7 @@ TransferBuffer Vulkan::GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSi
 TransferBuffer Vulkan::GetStagingBuffer(size_t totalSize)
 {
     GPUBuffer stagingBuffer =
-        CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, totalSize,
-                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                         VMA_ALLOCATION_CREATE_MAPPED_BIT);
+        CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, totalSize, MemoryUsage::CPU_TO_GPU);
 
     void *mappedPtr = stagingBuffer.allocation->GetMappedData();
 
@@ -1784,9 +1801,7 @@ TransferBuffer Vulkan::GetStagingImage(ImageDesc desc)
     vkGetImageMemoryRequirements(device, buffer.image.image, &req);
 
     buffer.stagingBuffer =
-        CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, req.size,
-                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                         VMA_ALLOCATION_CREATE_MAPPED_BIT);
+        CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, req.size, MemoryUsage::CPU_TO_GPU);
     buffer.mappedPtr = buffer.stagingBuffer.allocation->GetMappedData();
     return buffer;
 }
@@ -1846,7 +1861,7 @@ TransferBuffer CommandBuffer::SubmitImage(void *ptr, ImageDesc desc)
 }
 
 void CommandBuffer::CopyImage(TransferBuffer *transfer, GPUImage *image,
-                              BufferToImageCopy *copies, u32 num)
+                              BufferImageCopy *copies, u32 num)
 {
     ScratchArena scratch;
     VkBufferImageCopy *vkCopies = PushArrayNoZero(scratch.temp.arena, VkBufferImageCopy, num);
@@ -1869,6 +1884,56 @@ void CommandBuffer::CopyImage(TransferBuffer *transfer, GPUImage *image,
     }
     vkCmdCopyBufferToImage(buffer, transfer->buffer.buffer, image->image,
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, num, vkCopies);
+}
+
+void CommandBuffer::CopyImage(GPUImage *dst, GPUImage *src, const ImageToImageCopy &copy)
+{
+    VkImageCopy imageCopy;
+    imageCopy.srcSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    imageCopy.srcSubresource.mipLevel       = copy.srcMipLevel;
+    imageCopy.srcSubresource.baseArrayLayer = copy.srcBaseLayer;
+    imageCopy.srcSubresource.layerCount     = copy.srcLayerCount;
+    imageCopy.srcOffset.x                   = copy.srcOffset.x;
+    imageCopy.srcOffset.y                   = copy.srcOffset.y;
+    imageCopy.srcOffset.z                   = copy.srcOffset.z;
+
+    imageCopy.dstSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    imageCopy.dstSubresource.mipLevel       = copy.dstMipLevel;
+    imageCopy.dstSubresource.baseArrayLayer = copy.dstBaseLayer;
+    imageCopy.dstSubresource.layerCount     = copy.dstLayerCount;
+    imageCopy.dstOffset.x                   = copy.dstOffset.x;
+    imageCopy.dstOffset.y                   = copy.dstOffset.y;
+    imageCopy.dstOffset.z                   = copy.dstOffset.z;
+
+    imageCopy.extent.width  = copy.extent.x;
+    imageCopy.extent.height = copy.extent.y;
+    imageCopy.extent.depth  = copy.extent.z;
+
+    vkCmdCopyImage(buffer, src->image, src->lastLayout, dst->image, dst->lastLayout, 1,
+                   &imageCopy);
+}
+
+void CommandBuffer::CopyImageToBuffer(GPUBuffer *dst, GPUImage *src,
+                                      const BufferImageCopy &copy)
+{
+    VkBufferImageCopy vkCopy;
+    vkCopy.bufferOffset                    = copy.bufferOffset;
+    vkCopy.bufferRowLength                 = copy.rowLength;
+    vkCopy.bufferImageHeight               = copy.imageHeight;
+    vkCopy.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    vkCopy.imageSubresource.mipLevel       = copy.mipLevel;
+    vkCopy.imageSubresource.baseArrayLayer = copy.baseLayer;
+    vkCopy.imageSubresource.layerCount     = copy.layerCount;
+    vkCopy.imageOffset.x                   = copy.offset.x;
+    vkCopy.imageOffset.y                   = copy.offset.y;
+    vkCopy.imageOffset.z                   = copy.offset.z;
+    vkCopy.imageExtent.width               = copy.extent.x;
+    vkCopy.imageExtent.height              = copy.extent.y;
+    vkCopy.imageExtent.depth               = copy.extent.z;
+
+    Assert(src->lastLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    vkCmdCopyImageToBuffer(buffer, src->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           dst->buffer, 1, &vkCopy);
 }
 
 TransferBuffer CommandBuffer::SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags,
@@ -2333,9 +2398,7 @@ RayTracingState Vulkan::CreateRayTracingPipeline(RayTracingShaderGroup *shaderGr
 
         GPUBuffer buffer = CreateBuffer(VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR |
                                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                        offset,
-                                        VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
-                                            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+                                        offset, MemoryUsage::GPU_TO_CPU);
 
         VkBufferDeviceAddressInfo deviceAddressInfo = {
             VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};

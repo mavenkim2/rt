@@ -7,6 +7,8 @@ struct VirtualTexture
 
     void Something(StructuredBuffer<uint> pageTable, Texture2DArray physicalTextures, GPUMaterial material, uint faceOffset, uint2 numPages, float2 uv)
     {
+        const uint pageBorder = 4;
+
         uint pageOffsetX = floor(uv.x * numPages.x);
         uint pageOffsetY = floor(uv.y * numPages.y);
         uint pageOffset = floor(uv.y * numPages.y * numPages.x) + pageOffsetX;
@@ -24,7 +26,7 @@ struct VirtualTexture
         uint physicalPageInPoolY = physicalPageInPool >> log2PhysicalPoolPageWidth;
         uint physicalPageInPoolX = physicalPageInPool & (physicalPoolPageWidth - 1);
     
-        const float scaleST = (float)pageWidth / poolWidth;
+        const float scaleST = (float)(pageWidth + 2 * pageBorder) / poolWidth;
         float fracX = (uv.x - (float)pageOffsetX / numPages.x) * numPages.x;
         float fracY = (uv.y - (float)pageOffsetY / numPages.y) * numPages.y;
     

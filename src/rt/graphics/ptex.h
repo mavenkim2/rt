@@ -8,8 +8,11 @@
 
 namespace Utils
 {
+using namespace rt;
 void Copy(const void *src, int sstride, void *dst, int dstride, int vres, int rowlen);
-}
+void *GetContentsAbsoluteIndex(void *contents, const Vec2u &p, u32 width, u32 height,
+                               u32 stride, u32 borderSize, u32 bytesPerPixel);
+} // namespace Utils
 
 namespace rt
 {
@@ -243,14 +246,13 @@ struct VirtualTextureManager
     u32 completelyFreePool;
 
     VirtualTextureManager(Arena *arena, u32 totalNumPages, u32 pageWidthPerPool,
-                          u32 texelWidthPerPage, VkFormat format);
+                          u32 texelWidthPerPage, u32 borderSize, VkFormat format);
     void AllocateVirtualPages(PhysicalPageAllocation *allocations, u32 numPages);
     void AllocatePhysicalPages(CommandBuffer *cmd, Tile *tiles,
                                PhysicalPageAllocation *allocations, u32 numPages);
 };
 
 void InitializePtex();
-PaddedImage **Convert(Arena *arena, PtexTexture *texture, int filterWidth, int &numFaces);
 string Convert(Arena *arena, PtexTexture *texture, int filterWidth = 4);
 void Convert(string filename);
 TileType GetTileType(int tileX, int tileY, int numTilesX, int numTilesY);
