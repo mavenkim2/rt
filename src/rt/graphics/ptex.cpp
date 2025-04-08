@@ -104,128 +104,88 @@ void PaddedImage::WriteRotatedBorder(PaddedImage &other, Vec2u srcStart, Vec2u d
     int uStart = srcStart.x;
     int vStart = srcStart.y;
 
+    Assert(width >= other.width);
+    Assert(height >= other.height);
     Assert(bytesPerPixel == other.bytesPerPixel);
 
     u8 *src       = other.GetContentsRelativeIndex(srcStart);
     u32 srcStride = other.strideWithBorder;
+
     ScratchArena scratch;
 
-    // How this works.
-    // 1. if rotate > 0, take the src image and rotate the border by rotate into a temporary
-    // buffer
-    // 2. copy from the temp buffer to the destination
-    int pixelsToWrite = Max(1 << scale.x, 1 << scale.y);
-    if (rotate != 0)
+    int pixelsToWriteX = 1 << scale.x;
+    int pixelsToWriteY = 1 << scale.y;
+
+    u32 size       = dstVLen * dstRowLen * bytesPerPixel;
+    u8 *tempBuffer = PushArray(scratch.temp.arena, u8, size);
+    for (int v = 0; v < srcVLen; v++)
     {
-        int duplicateStep = (edgeIndex & 1) ? dstRowLen * bytesPerPixel : 1;
-
-        u32 size       = dstVLen * dstRowLen * bytesPerPixel;
-        u8 *tempBuffer = PushArrayNoZero(scratch.temp.arena, u8, size);
-        for (int v = 0; v < srcVLen; v++)
+        for (int u = 0; u < srcRowLen; u++)
         {
-            for (int u = 0; u < srcRowLen; u++)
+            Vec2i dstAddress;
+            switch (rotate)
             {
-                // int newU = u - ((edgeIndex & 1) ? 0 : (dstDim - srcDim));
-                // int newV = v - ((edgeIndex & 1) ? (dstDim - srcDim) : 0);
-
-                Vec2i dstAddress;
-                switch (rotate)
+                case 0:
                 {
-                    case 1:
-                    {
-                        dstAddress.x = srcVLen - 1 - v;
-                        dstAddress.y = u;
-                    }
-                    break;
-                    case 2:
-                    {
-                        dstAddress.x = srcRowLen - 1 - u;
-                        dstAddress.y = srcVLen - 1 - v;
-                    }
-                    break;
-                    case 3:
-                    {
-                        dstAddress.y = srcRowLen - 1 - u;
-                        dstAddress.x = v;
-                    }
-                    break;
-                    default: Assert(0);
+                    dstAddress.x = u;
+                    dstAddress.y = v;
                 }
-
-                Vec2i dstPos(dstAddress);
-                dstPos.x <<= scale.x;
-                dstPos.y <<= scale.y;
-
-                Vec2u srcPos(u, v);
-                srcPos += srcStart;
-
-                u32 offset = dstPos.y * dstRowLen * bytesPerPixel + dstPos.x;
-
-                for (int i = 0; i < pixelsToWrite; i++)
+                break;
+                case 1:
                 {
-                    Assert(offset < size);
-                    MemoryCopy(tempBuffer + offset, other.GetContentsRelativeIndex(srcPos),
+                    dstAddress.x = srcVLen - 1 - v;
+                    dstAddress.y = u;
+                }
+                break;
+                case 2:
+                {
+                    dstAddress.x = srcRowLen - 1 - u;
+                    dstAddress.y = srcVLen - 1 - v;
+                }
+                break;
+                case 3:
+                {
+                    dstAddress.y = srcRowLen - 1 - u;
+                    dstAddress.x = v;
+                }
+                break;
+                default: Assert(0); break;
+            }
+
+            Vec2i dstPos(dstAddress);
+            dstPos.x <<= scale.x;
+            dstPos.y <<= scale.y;
+
+            Vec2u srcPos(u, v);
+            srcPos += srcStart;
+
+            u32 offset = (dstPos.y * dstRowLen + dstPos.x) * bytesPerPixel;
+
+            for (int y = 0; y < pixelsToWriteY; y++)
+            {
+                u32 dstOffset = offset + y * dstRowLen * bytesPerPixel;
+                for (int x = 0; x < pixelsToWriteX; x++)
+                {
+                    Assert(dstOffset < size);
+                    MemoryCopy(tempBuffer + dstOffset, other.GetContentsRelativeIndex(srcPos),
                                bytesPerPixel);
-                    offset += duplicateStep;
+                    dstOffset += bytesPerPixel;
                 }
             }
         }
-        src           = tempBuffer;
-        srcStride     = dstRowLen * bytesPerPixel;
-        pixelsToWrite = 1;
     }
 
-    if (pixelsToWrite > 1)
-    {
-        // Have to copy one pixel at a time in the horizontal case
-        int writeSize, dstSkip, dstStride;
-        if (edgeIndex & 1)
-        {
-            Assert(srcRowLen == dstRowLen);
-            writeSize = srcRowLen * bytesPerPixel;
-            dstSkip   = strideWithBorder;
-            dstStride = pixelsToWrite * strideWithBorder;
-        }
-        else
-        {
-            writeSize = bytesPerPixel;
-            dstSkip   = writeSize;
-            dstStride = strideWithBorder;
-        }
-
-        const char *sptr = (const char *)src;
-        char *dptr       = (char *)GetContentsAbsoluteIndex(dstStart);
-        for (const char *end = sptr + srcVLen * other.strideWithBorder; sptr != end;)
-        {
-            char *writeDst      = dptr;
-            const char *readSrc = sptr;
-            for (const char *rowend = readSrc + srcRowLen * bytesPerPixel; readSrc != rowend;)
-            {
-                for (int i = 0; i < pixelsToWrite; i++)
-                {
-                    MemoryCopy(writeDst, readSrc, writeSize);
-                    writeDst += dstSkip;
-                }
-                readSrc += writeSize;
-            }
-            sptr += other.strideWithBorder;
-            dptr += dstStride;
-        }
-    }
-    else
-    {
-        Utils::Copy(src, srcStride, GetContentsAbsoluteIndex(dstStart), strideWithBorder,
-                    dstVLen, dstRowLen * bytesPerPixel);
-    }
+    Utils::Copy(tempBuffer, dstRowLen * bytesPerPixel, GetContentsAbsoluteIndex(dstStart),
+                strideWithBorder, dstVLen, dstRowLen * bytesPerPixel);
 }
 
-PaddedImage PtexToImg(Arena *arena, Ptex::PtexTexture *ptx, int faceID, int borderSize,
-                      bool flip)
+PaddedImage PtexToImg(Arena *arena, Ptex::PtexTexture *ptx, int faceID, int borderSize)
 {
+    TempArena temp = ScratchStart(&arena, 1);
     Assert(faceID >= 0 && faceID < ptx->numFaces());
 
     u32 numChannels = ptx->numChannels();
-    u32 aChan       = ptx->alphaChannel();
+    int aChan       = ptx->alphaChannel();
 
     Ptex::FaceInfo fi = ptx->getFaceInfo(faceID);
 
@@ -234,11 +194,12 @@ PaddedImage PtexToImg(Arena *arena, Ptex::PtexTexture *ptx, int faceID, int bord
 
     Assert(IsPow2(u) && IsPow2(v));
 
-    u32 bytesPerPixel = numChannels * Ptex::DataSize(ptx->dataType());
-    int stride        = (u + 2 * borderSize) * bytesPerPixel;
-    int size          = stride * (v + 2 * borderSize);
-    u8 *data          = PushArray(arena, u8, size);
-    int rowlen        = (u * bytesPerPixel);
+    u32 bytesPerChannel = Ptex::DataSize(ptx->dataType());
+    u32 bytesPerPixel   = numChannels * bytesPerChannel;
+    int stride          = (u + 2 * borderSize) * bytesPerPixel;
+    int size            = stride * (v + 2 * borderSize);
+    u8 *data   = aChan == -1 ? PushArray(temp.arena, u8, size) : PushArray(arena, u8, size);
+    int rowlen = (u * bytesPerPixel);
     // if (flip)
     // {
     //     data += rowlen * (img.h - 1);
@@ -257,6 +218,30 @@ PaddedImage PtexToImg(Arena *arena, Ptex::PtexTexture *ptx, int faceID, int bord
     result.strideWithBorder = stride;
 
     ptx->getData(faceID, (char *)result.GetContentsRelativeIndex({0, 0}), stride);
+
+    // Convert image from 3 to 4 channels
+    if (aChan == -1)
+    {
+        result.bytesPerPixel = (numChannels + 1) * Ptex::DataSize(ptx->dataType());
+        stride               = (u + 2 * borderSize) * result.bytesPerPixel;
+        size                 = stride * (v + 2 * borderSize);
+        rowlen               = (u * result.bytesPerPixel);
+
+        result.contents         = PushArray(arena, u8, size);
+        result.strideNoBorder   = rowlen;
+        result.strideWithBorder = stride;
+
+        u32 dstOffset = 0;
+        u32 srcOffset = 0;
+        u8 alpha      = 255;
+        for (int i = 0; i < result.GetPaddedWidth() * result.GetPaddedHeight(); i++)
+        {
+            MemoryCopy(result.contents + dstOffset, data + srcOffset, bytesPerPixel);
+            MemorySet(result.contents + dstOffset + bytesPerPixel, alpha, bytesPerChannel);
+            dstOffset += result.bytesPerPixel;
+            srcOffset += bytesPerPixel;
+        }
+    }
 
     return result;
 }
@@ -287,6 +272,43 @@ void LinearToGamma(const Vec3f &rgb, u8 *out)
 // 7. on gpu, look at page table texture to find right tiles. do the texture lookup + filter
 // 8. if tile isn't found, populate feedback buffer
 // 9. asynchronously read feedback buffer on cpu. go to step 4
+
+// NOTE: scale = (2, 2) reduces in both dimension. scale = (2, 1) reduces only in u
+PaddedImage GenerateMips(Arena *arena, PaddedImage &input, u32 width, u32 height, Vec2u scale,
+                         u32 borderSize)
+{
+    PaddedImage output;
+    output.width            = width;
+    output.height           = height;
+    output.log2Width        = Log2Int(width);
+    output.log2Height       = Log2Int(height);
+    output.bytesPerPixel    = input.bytesPerPixel;
+    output.strideNoBorder   = width * input.bytesPerPixel;
+    output.borderSize       = borderSize;
+    output.strideWithBorder = (width + 2 * borderSize) * input.bytesPerPixel;
+    output.contents =
+        PushArrayNoZero(arena, u8, output.strideWithBorder * (height + 2 * borderSize));
+
+    for (u32 v = 0; v < height; v++)
+    {
+        for (u32 u = 0; u < width; u++)
+        {
+            Vec2u xy = scale * Vec2u(u, v);
+            Vec2u zw = xy + scale - 1u;
+
+            Vec3f topleft     = GammaToLinear(input.GetContentsRelativeIndex(xy));
+            Vec3f topright    = GammaToLinear(input.GetContentsRelativeIndex({zw.x, xy.y}));
+            Vec3f bottomleft  = GammaToLinear(input.GetContentsRelativeIndex({xy.x, zw.y}));
+            Vec3f bottomright = GammaToLinear(input.GetContentsRelativeIndex({zw.x, zw.y}));
+
+            Vec3f avg = (topleft + topright + bottomleft + bottomright) / .25f;
+
+            LinearToGamma(avg, output.GetContentsRelativeIndex({u, v}));
+        }
+    }
+
+    return output;
+}
 
 void Convert(string filename)
 {
@@ -341,8 +363,7 @@ void Convert(string filename)
     }
 
     // Create all face images and mip maps
-    StaticArray<PaddedImage> images(scratch.temp.arena, numFaces, numFaces);
-    // StaticArray<StaticArray<PaddedImage>> images(scratch.temp.arena, numFaces, numFaces);
+    StaticArray<StaticArray<PaddedImage>> images(scratch.temp.arena, numFaces, numFaces);
     // StaticArray<int> numLevels(scratch.temp.arena, numFaces, numFaces);
     StaticArray<GPUImage> tempUavs(scratch.temp.arena, numFaces, numFaces);
     StaticArray<GPUBuffer> blockCompressedImages(scratch.temp.arena, numFaces, numFaces);
@@ -359,17 +380,11 @@ void Convert(string filename)
 
     for (int i = 0; i < numFaces; i++)
     {
-        PaddedImage img = PtexToImg(scratch.temp.arena, t, i, borderSize, false);
-        images[i]       = img;
-    }
-#if 0
-    for (int i = 0; i < numFaces; i++)
-    {
-        PaddedImage img = PtexToImg(scratch.temp.arena, t, i, borderSize, false);
+        PaddedImage img = PtexToImg(scratch.temp.arena, t, i, borderSize);
         int levels      = Max(Max(img.log2Width, img.log2Height), 1);
         images[i]       = StaticArray<PaddedImage>(scratch.temp.arena, levels, levels);
-        numLevels[i]    = levels;
-        images[i][0]    = img;
+        // numLevels[i]    = levels;
+        images[i][0] = img;
 
         // Generate mip maps
         Assert(IsPow2(img.width) && IsPow2(img.height));
@@ -385,38 +400,8 @@ void Convert(string filename)
 
         while (depth < levels)
         {
-            PaddedImage outPaddedImage;
-            outPaddedImage.width            = width;
-            outPaddedImage.height           = height;
-            outPaddedImage.log2Width        = Log2Int(width);
-            outPaddedImage.log2Height       = Log2Int(height);
-            outPaddedImage.bytesPerPixel    = img.bytesPerPixel;
-            outPaddedImage.strideNoBorder   = width * img.bytesPerPixel;
-            outPaddedImage.borderSize       = borderSize;
-            outPaddedImage.strideWithBorder = (width + 2 * borderSize) * img.bytesPerPixel;
-            outPaddedImage.contents =
-                PushArrayNoZero(scratch.temp.arena, u8,
-                                outPaddedImage.strideWithBorder * (height + 2 * borderSize));
-            for (u32 v = 0; v < height; v++)
-            {
-                for (u32 u = 0; u < width; u++)
-                {
-                    Vec2u xy = scale * Vec2u(u, v);
-                    Vec2u zw = xy + scale - 1u;
-
-                    Vec3f topleft = GammaToLinear(inPaddedImage.GetContentsRelativeIndex(xy));
-                    Vec3f topright =
-                        GammaToLinear(inPaddedImage.GetContentsRelativeIndex({zw.x, xy.y}));
-                    Vec3f bottomleft =
-                        GammaToLinear(inPaddedImage.GetContentsRelativeIndex({xy.x, zw.y}));
-                    Vec3f bottomright =
-                        GammaToLinear(inPaddedImage.GetContentsRelativeIndex({zw.x, zw.y}));
-
-                    Vec3f avg = (topleft + topright + bottomleft + bottomright) / .25f;
-
-                    LinearToGamma(avg, outPaddedImage.GetContentsRelativeIndex({u, v}));
-                }
-            }
+            PaddedImage outPaddedImage = GenerateMips(scratch.temp.arena, inPaddedImage, width,
+                                                      height, scale, borderSize);
 
             images[i][depth] = outPaddedImage;
             inPaddedImage    = outPaddedImage;
@@ -432,16 +417,60 @@ void Convert(string filename)
             depth++;
         }
     }
-#endif
+
+    auto GetNeighborFaceImage = [&](PaddedImage &currentFaceImg, u32 neighborFace, u32 rot,
+                                    Vec2u &scale) {
+        Vec2i dstBaseSize(currentFaceImg.log2Width, currentFaceImg.log2Height);
+        Vec2i srcBaseSize(images[neighborFace][0].log2Width,
+                          images[neighborFace][0].log2Height);
+
+        if (rot & 1) Swap(dstBaseSize[0], dstBaseSize[1]);
+        Vec2i srcBaseDepth = srcBaseSize - dstBaseSize;
+        int depthIndex     = Max(0, Min(srcBaseDepth.x, srcBaseDepth.y));
+
+        PaddedImage neighborFaceImg = images[neighborFace][depthIndex];
+
+        u32 uCompare = (rot & 1) ? dstBaseSize.y : dstBaseSize.x;
+        u32 vCompare = (rot & 1) ? dstBaseSize.x : dstBaseSize.y;
+        Assert(neighborFaceImg.log2Width == uCompare ||
+               neighborFaceImg.log2Height == vCompare);
+
+        // reduce u
+        if (neighborFaceImg.log2Width > uCompare)
+        {
+            for (int i = 0; i < neighborFaceImg.log2Width - uCompare; i++)
+            {
+                u32 width = neighborFaceImg.width;
+                width >>= 1;
+                neighborFaceImg = GenerateMips(scratch.temp.arena, neighborFaceImg, width,
+                                               neighborFaceImg.height, {2, 1}, borderSize);
+            }
+        }
+        // reduce v
+        else if (neighborFaceImg.log2Height > vCompare)
+        {
+            for (int i = 0; i < neighborFaceImg.log2Height - vCompare; i++)
+            {
+                u32 height = neighborFaceImg.height;
+                height >>= 1;
+                neighborFaceImg =
+                    GenerateMips(scratch.temp.arena, neighborFaceImg, neighborFaceImg.width,
+                                 height, {1, 2}, borderSize);
+            }
+        }
+        scale = Vec2u(Max(Vec2i(0), -srcBaseDepth));
+        return neighborFaceImg;
+    };
 
     CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Compute);
+    cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     // Add borders to all images
     for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
     {
         const Ptex::FaceInfo &f = reader->getFaceInfo(faceIndex);
         Assert(!f.isSubface());
 
-        PaddedImage &currentFaceImg = images[faceIndex];
+        PaddedImage &currentFaceImg = images[faceIndex][0];
 
         for (int edgeIndex = e_bottom; edgeIndex < e_max; edgeIndex++)
         {
@@ -450,73 +479,38 @@ void Convert(string filename)
             int neighborFace = f.adjface(edgeIndex);
             int rot          = (edgeIndex - aeid + 2) & 3;
 
-            Vec2u dstBaseSize(images[faceIndex].log2Width, images[faceIndex].log2Height);
-            Vec2u srcBaseSize(images[neighborFace].log2Width, images[neighborFace].log2Height);
-
-            int dstCompareDim = (edgeIndex & 1) ? dstBaseSize.y : dstBaseSize.x;
-            int srcCompareDim = (aeid & 1) ? srcBaseSize.y : srcBaseSize.x;
-
-            int srcBaseDepth = srcCompareDim - dstCompareDim;
-            int srcDepthIndex =
-                Clamp(srcBaseDepth, 0,
-                      Max(images[neighborFace].log2Width, images[neighborFace].log2Height));
-
-            PaddedImage neighborFaceImg = images[neighborFace];
-
-            Vec2u start;
             Vec2u scale;
+            PaddedImage neighborFaceImg =
+                GetNeighborFaceImage(currentFaceImg, neighborFace, rot, scale);
+
+            // NOTE: Scale is only used for the base layer, when the src image has smaller
+            // dimensions than the dst image. For mip levels, the above reductions are used
+            // to make the src and dst image have equal dimensions
+            Vec2u start;
             int vRes;
             int rowLen;
-            int s = Max(-srcBaseDepth, 0);
 
-            if (edgeIndex == e_bottom)
-            {
-                start = Vec2u(borderSize, 0);
-            }
-            else if (edgeIndex == e_right)
-            {
-                start = Vec2u(currentFaceImg.width + borderSize, borderSize);
-            }
-            else if (edgeIndex == e_top)
-            {
-                start = Vec2u(borderSize, currentFaceImg.height + borderSize);
-            }
-            else if (edgeIndex == e_left)
-            {
-                start = Vec2u(0, borderSize);
-            }
+            start.x = (edgeIndex == e_left ? 0 : borderSize) +
+                      (edgeIndex == e_right ? currentFaceImg.width : 0);
+            start.y = (edgeIndex == e_bottom ? 0 : borderSize) +
+                      (edgeIndex == e_top ? currentFaceImg.height : 0);
 
             Vec2u srcStart;
-            if (aeid == e_bottom)
-            {
-                srcStart = Vec2u(0, 0);
-            }
-            else if (aeid == e_right)
-            {
-                srcStart = Vec2u(neighborFaceImg.width - borderSize, 0);
-            }
-            else if (aeid == e_top)
-            {
-                srcStart = Vec2u(0, neighborFaceImg.height - borderSize);
-            }
-            else if (aeid == e_left)
-            {
-                srcStart = Vec2u(0, 0);
-            }
+            srcStart.x = aeid == e_right ? neighborFaceImg.width - borderSize : 0;
+            srcStart.y = aeid == e_top ? neighborFaceImg.height - borderSize : 0;
 
-            scale.y       = (edgeIndex & 1) ? s : 0;
-            scale.x       = (edgeIndex & 1) ? 0 : s;
-            int srcVRes   = (aeid & 1) ? neighborFaceImg.height : borderSize;
-            int srcRowLen = (aeid & 1) ? borderSize : neighborFaceImg.width;
+            int srcVRes   = (aeid & 1) ? neighborFaceImg.height : (borderSize >> scale.y);
+            int srcRowLen = (aeid & 1) ? (borderSize >> scale.x) : neighborFaceImg.width;
             int dstVRes   = (edgeIndex & 1) ? currentFaceImg.height : borderSize;
             int dstRowLen = (edgeIndex & 1) ? borderSize : currentFaceImg.width;
 
             currentFaceImg.WriteRotatedBorder(neighborFaceImg, srcStart, start, edgeIndex, rot,
-                                              srcVRes, srcRowLen, dstVRes, dstRowLen, scale);
+                                              srcVRes, srcRowLen, dstVRes, dstRowLen,
+                                              (rot & 1) ? scale.yx() : scale);
 
             // Add corner borders
             int afid                 = faceIndex;
-            aeid                     = edgeIndex;
+            int cornerAeid           = edgeIndex;
             const Ptex::FaceInfo *af = &f;
 
             const int MaxValence = 10;
@@ -528,10 +522,10 @@ void Convert(string filename)
             for (int i = 0; i < MaxValence; i++)
             {
                 int prevFace = afid;
-                afid         = af->adjface(aeid);
-                aeid         = (af->adjedge(aeid) + 1) & 3;
+                afid         = af->adjface(cornerAeid);
+                cornerAeid   = (af->adjedge(cornerAeid) + 1) & 3;
 
-                if (afid < 0 || (afid == faceIndex && aeid == edgeIndex))
+                if (afid < 0 || (afid == faceIndex && cornerAeid == edgeIndex))
                 {
                     numCorners = i - 2;
                     break;
@@ -539,7 +533,7 @@ void Convert(string filename)
 
                 af         = &reader->getFaceInfo(afid);
                 cfaceId[i] = afid;
-                cedgeId[i] = aeid;
+                cedgeId[i] = cornerAeid;
                 cface[i]   = af;
 
                 Assert(!af->isSubface());
@@ -549,16 +543,20 @@ void Convert(string filename)
             {
                 int rotate = (edgeIndex - cedgeId[1] + 2) & 3;
 
-                PaddedImage &cornerImg = images[cfaceId[1]];
+                Vec2u cornerScale;
+                PaddedImage cornerImg =
+                    GetNeighborFaceImage(currentFaceImg, cfaceId[1], rotate, cornerScale);
+
                 Vec2u srcStart = uvTable[cedgeId[1]] * Vec2u(cornerImg.width - borderSize,
                                                              cornerImg.height - borderSize);
                 Vec2u dstStart =
                     uvTable[edgeIndex] * Vec2u(currentFaceImg.width + borderSize,
                                                currentFaceImg.height + borderSize);
 
-                currentFaceImg.WriteRotatedBorder(cornerImg, srcStart, dstStart, cedgeId[1],
-                                                  rotate, borderSize, borderSize, borderSize,
-                                                  borderSize, scale);
+                currentFaceImg.WriteRotatedBorder(
+                    cornerImg, srcStart, dstStart, cedgeId[1], rotate,
+                    borderSize >> cornerScale.y, borderSize >> cornerScale.x, borderSize,
+                    borderSize, (rot & 1) ? cornerScale.yx() : cornerScale);
             }
             else if (numCorners > 1)
             {
@@ -566,24 +564,7 @@ void Convert(string filename)
             }
             else
             {
-                // valence 2 or 3, ignore corner face (just adjust weight)
             }
-        }
-
-        // Convert image from 3 to 4 channels
-        u32 totalGpuSize = currentFaceImg.strideWithBorder * currentFaceImg.GetPaddedHeight() /
-                           bytesPerPixel * gpuBytesPerPixel;
-        u8 *contents  = PushArray(scratch.temp.arena, u8, totalGpuSize);
-        u32 dstOffset = 0;
-        u32 srcOffset = 0;
-        for (int i = 0; i < currentFaceImg.GetPaddedWidth() * currentFaceImg.GetPaddedHeight();
-             i++)
-        {
-            Assert(dstOffset < totalGpuSize);
-            MemoryCopy(contents + dstOffset, currentFaceImg.contents + srcOffset,
-                       bytesPerPixel);
-            dstOffset += gpuBytesPerPixel;
-            srcOffset += bytesPerPixel;
         }
 
         // Block compress the entire face texture
@@ -595,7 +576,7 @@ void Convert(string filename)
                                            VK_IMAGE_TILING_OPTIMAL);
 
         TransferBuffer blockCompressedImage =
-            cmd->SubmitImage(contents, blockCompressedImageDesc);
+            cmd->SubmitImage(currentFaceImg.contents, blockCompressedImageDesc);
 
         u32 outputBlockWidth  = currentFaceImg.GetPaddedWidth() / blockSize;
         u32 outputBlockHeight = currentFaceImg.GetPaddedHeight() / blockSize;
@@ -625,12 +606,14 @@ void Convert(string filename)
         blockCompressedImages[faceIndex] = readbackBuffer;
 
         DescriptorSet set = bcLayout.CreateDescriptorSet();
-        set.Bind(inputBinding, &blockCompressedImage.image);
-        set.Bind(outputBinding, &blockCompressedImages[faceIndex]);
+        set.Bind(inputBinding, &gpuSrcImages[faceIndex].image);
+        set.Bind(outputBinding, &tempUavs[faceIndex]);
         cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &set, bcLayout.pipelineLayout);
+        cmd->Dispatch((outputBlockWidth + 7) >> 3, (outputBlockHeight + 7) >> 3, 1);
 
         cmd->Barrier(&tempUavs[faceIndex], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                      VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        cmd->FlushBarriers();
 
         BufferImageCopy copy = {};
         copy.layerCount      = 1;
@@ -661,7 +644,7 @@ void Convert(string filename)
         // for (int levelIndex = 0; levelIndex < numLevels[faceIndex]; levelIndex++)
         // {
         // PaddedImage *image = &images[faceIndex][levelIndex];
-        PaddedImage *image = &images[faceIndex];
+        PaddedImage *image = &images[faceIndex][0];
 
         // Write all remaining mip levels to the same tile
         // TODO: write all the mips at a given level to consecutive tiles,
@@ -766,7 +749,6 @@ void Convert(string filename)
         // Both dimensions >= texelsPerTile
         else
         {
-
             u32 numTilesX = image->width / texelWidthPerPage;
             u32 numTilesY = image->height / texelWidthPerPage;
 

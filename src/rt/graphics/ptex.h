@@ -253,6 +253,8 @@ struct VirtualTextureManager
 };
 
 void InitializePtex();
+PaddedImage GenerateMips(Arena *arena, PaddedImage &input, u32 width, u32 height, Vec2u scale,
+                         u32 borderSize);
 string Convert(Arena *arena, PtexTexture *texture, int filterWidth = 4);
 void Convert(string filename);
 TileType GetTileType(int tileX, int tileY, int numTilesX, int numTilesY);

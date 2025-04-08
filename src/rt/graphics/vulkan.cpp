@@ -1672,6 +1672,10 @@ GPUImage Vulkan::CreateImage(ImageDesc desc)
     viewInfo.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
 
     vkCreateImageView(device, &viewInfo, 0, &image.imageView);
+
+    image.lastPipeline = VK_PIPELINE_STAGE_2_NONE;
+    image.lastLayout   = VK_IMAGE_LAYOUT_UNDEFINED;
+    image.lastAccess   = VK_ACCESS_2_NONE;
     return image;
 }
 
@@ -2432,6 +2436,46 @@ DescriptorSet DescriptorSetLayout::CreateDescriptorSet()
     VkDescriptorSetAllocateInfo allocateInfo = {
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     allocateInfo.descriptorPool     = descriptorPool;
+    allocateInfo.pSetLayouts        = GetVulkanLayout();
+    allocateInfo.descriptorSetCount = 1;
+
+    DescriptorSet set;
+    VkResult result = vkAllocateDescriptorSets(device->device, &allocateInfo, &set.set);
+    ErrorExit(result == VK_SUCCESS, "Error while allocating descriptor sets: %u\n", result);
+    set.layout = this;
+    set.descriptorInfo.resize(bindings.size());
+    return set;
+}
+
+DescriptorSet DescriptorSetLayout::something()
+{
+    VkDescriptorPoolCreateInfo poolCreateInfo = {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    VkDescriptorPoolSize poolSize[4];
+    poolSize[0].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    poolSize[0].descriptorCount = 10;
+    poolSize[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    poolSize[1].descriptorCount = 10;
+    poolSize[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSize[2].descriptorCount = 10;
+    poolSize[3].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    poolSize[3].descriptorCount = 20;
+
+    for (auto &binding : bindings)
+    {
+    }
+    std::vector<VkDescriptorSetLayoutBinding> bindings;
+
+    poolCreateInfo.pPoolSizes    = poolSize;
+    poolCreateInfo.poolSizeCount = ArrayLength(poolSize);
+    poolCreateInfo.maxSets       = 1;
+
+    VkDescriptorPool pool;
+    vkCreateDescriptorPool(device, &poolCreateInfo, 0, &pool);
+
+    VkDescriptorSetAllocateInfo allocateInfo = {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    allocateInfo.descriptorPool     = pool;
     allocateInfo.pSetLayouts        = GetVulkanLayout();
     allocateInfo.descriptorSetCount = 1;
 
