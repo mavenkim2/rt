@@ -590,38 +590,26 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
 
     // Bindless descriptor pools
     {
-        for (DescriptorType type = (DescriptorType)0; type < DescriptorType_Count;
-             type                = (DescriptorType)(type + 1))
+        DescriptorType types[] = {
+            DescriptorType::SampledImage,
+            DescriptorType::StorageBuffer,
+        };
+        for (int type = 0; type < ArrayLength(types); type++)
         {
-            VkDescriptorType descriptorType = VK_DESCRIPTOR_TYPE_MAX_ENUM;
-            switch (type)
-            {
-                case DescriptorType_SampledImage:
-                    descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                    break;
-                // case DescriptorType_UniformTexel:
-                //     descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
-                //     break;
-                case DescriptorType_StorageBuffer:
-                    descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                    break;
-                // case DescriptorType_StorageTexelBuffer:
-                //     descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
-                //     break;
-                default: Assert(0);
-            }
+            VkDescriptorType descriptorType = ConvertDescriptorType(types[type]);
 
             BindlessDescriptorPool &bindlessDescriptorPool = bindlessDescriptorPools[type];
             VkDescriptorPoolSize poolSize                  = {};
             poolSize.type                                  = descriptorType;
-            if (type ==
-                DescriptorType_StorageBuffer) // || type == DescriptorType_StorageTexelBuffer)
+            if (types[type] ==
+                DescriptorType::StorageBuffer) // || type ==
+                                               // DescriptorType_StorageTexelBuffer)
             {
                 poolSize.descriptorCount =
                     Min(10000u,
                         deviceProperties.properties.limits.maxDescriptorSetStorageBuffers / 4);
             }
-            else if (type == DescriptorType_SampledImage)
+            else if (types[type] == DescriptorType::SampledImage)
             {
                 poolSize.descriptorCount =
                     Min(10000u,
@@ -692,10 +680,10 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
             // Set debug names
             TempArena temp = ScratchStart(0, 0);
             string typeName;
-            switch (type)
+            switch (types[type])
             {
-                case DescriptorType_SampledImage: typeName = "Sampled Image"; break;
-                case DescriptorType_StorageBuffer: typeName = "Storage Buffer"; break;
+                case DescriptorType::SampledImage: typeName = "Sampled Image"; break;
+                case DescriptorType::StorageBuffer: typeName = "Storage Buffer"; break;
                 // case DescriptorType_UniformTexel: typeName = "Uniform Texel Buffer"; break;
                 // case DescriptorType_StorageTexelBuffer:
                 //     typeName = "Storage Texel Buffer";
@@ -1695,11 +1683,12 @@ void Vulkan::DestroyAccelerationStructure(GPUAccelerationStructure *as)
     DestroyBuffer(&as->buffer);
 }
 
+void Vulkan::DestroyPool(VkDescriptorPool pool) { vkDestroyDescriptorPool(device, pool, 0); }
+
 int Vulkan::BindlessIndex(GPUImage *image)
 {
-    BindlessDescriptorPool &descriptorPool =
-        bindlessDescriptorPools[DescriptorType_SampledImage];
-    int index = descriptorPool.Allocate();
+    BindlessDescriptorPool &descriptorPool = bindlessDescriptorPools[0];
+    int index                              = descriptorPool.Allocate();
 
     VkDescriptorImageInfo info = {};
     info.imageView             = image->imageView;
@@ -1718,9 +1707,8 @@ int Vulkan::BindlessIndex(GPUImage *image)
 
 int Vulkan::BindlessStorageIndex(GPUBuffer *buffer, size_t offset, size_t range)
 {
-    BindlessDescriptorPool &descriptorPool =
-        bindlessDescriptorPools[DescriptorType_StorageBuffer];
-    int index = descriptorPool.Allocate();
+    BindlessDescriptorPool &descriptorPool = bindlessDescriptorPools[1];
+    int index                              = descriptorPool.Allocate();
 
     VkDescriptorBufferInfo info = {};
     info.buffer                 = buffer->buffer;
@@ -1935,8 +1923,8 @@ void CommandBuffer::CopyImageToBuffer(GPUBuffer *dst, GPUImage *src,
     vkCopy.imageExtent.height              = copy.extent.y;
     vkCopy.imageExtent.depth               = copy.extent.z;
 
-    Assert(src->lastLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    vkCmdCopyImageToBuffer(buffer, src->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    Assert(src->lastLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    vkCmdCopyImageToBuffer(buffer, src->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            dst->buffer, 1, &vkCopy);
 }
 
@@ -1955,12 +1943,12 @@ void CommandBuffer::BindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipel
     vkCmdBindPipeline(buffer, bindPoint, pipeline);
 }
 
-int DescriptorSetLayout::AddBinding(u32 b, VkDescriptorType type, VkShaderStageFlags stage,
+int DescriptorSetLayout::AddBinding(u32 b, DescriptorType type, VkShaderStageFlags stage,
                                     bool null)
 {
     VkDescriptorSetLayoutBinding binding = {};
     binding.binding                      = b;
-    binding.descriptorType               = type;
+    binding.descriptorType               = ConvertDescriptorType(type);
     binding.descriptorCount              = 1;
     binding.stageFlags                   = stage;
 
@@ -2447,31 +2435,42 @@ DescriptorSet DescriptorSetLayout::CreateDescriptorSet()
     return set;
 }
 
-DescriptorSet DescriptorSetLayout::something()
+DescriptorSet DescriptorSetLayout::CreateNewDescriptorSet()
 {
+    ScratchArena scratch;
+
     VkDescriptorPoolCreateInfo poolCreateInfo = {
         VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    VkDescriptorPoolSize poolSize[4];
-    poolSize[0].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    poolSize[0].descriptorCount = 10;
-    poolSize[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    poolSize[1].descriptorCount = 10;
-    poolSize[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSize[2].descriptorCount = 10;
-    poolSize[3].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSize[3].descriptorCount = 20;
+
+    StaticArray<VkDescriptorPoolSize> poolSizes(scratch.temp.arena, bindings.size());
 
     for (auto &binding : bindings)
     {
+        bool unique = true;
+        for (auto &poolSize : poolSizes)
+        {
+            if (poolSize.type == binding.descriptorType)
+            {
+                poolSize.descriptorCount++;
+                unique = false;
+                break;
+            }
+        }
+        if (unique)
+        {
+            VkDescriptorPoolSize poolSize;
+            poolSize.type            = binding.descriptorType;
+            poolSize.descriptorCount = 1;
+            poolSizes.Push(poolSize);
+        }
     }
-    std::vector<VkDescriptorSetLayoutBinding> bindings;
 
-    poolCreateInfo.pPoolSizes    = poolSize;
-    poolCreateInfo.poolSizeCount = ArrayLength(poolSize);
+    poolCreateInfo.pPoolSizes    = poolSizes.data;
+    poolCreateInfo.poolSizeCount = poolSizes.Length();
     poolCreateInfo.maxSets       = 1;
 
     VkDescriptorPool pool;
-    vkCreateDescriptorPool(device, &poolCreateInfo, 0, &pool);
+    vkCreateDescriptorPool(device->device, &poolCreateInfo, 0, &pool);
 
     VkDescriptorSetAllocateInfo allocateInfo = {
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
@@ -2482,6 +2481,7 @@ DescriptorSet DescriptorSetLayout::something()
     DescriptorSet set;
     VkResult result = vkAllocateDescriptorSets(device->device, &allocateInfo, &set.set);
     ErrorExit(result == VK_SUCCESS, "Error while allocating descriptor sets: %u\n", result);
+    set.pool   = pool;
     set.layout = this;
     set.descriptorInfo.resize(bindings.size());
     return set;

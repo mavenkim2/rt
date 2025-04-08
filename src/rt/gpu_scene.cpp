@@ -229,10 +229,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     // Compile pipelines
     DescriptorSetLayout fillLayout = {};
-    int addressesBinding = fillLayout.AddBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                 VK_SHADER_STAGE_COMPUTE_BIT);
-    int instancesBinding = fillLayout.AddBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                 VK_SHADER_STAGE_COMPUTE_BIT);
+    int addressesBinding =
+        fillLayout.AddBinding(0, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
+    int instancesBinding =
+        fillLayout.AddBinding(1, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
     VkPipeline fillInstancePipeline =
         device->CreateComputePipeline(&fillInstanceShader, &fillLayout);
 
@@ -242,24 +242,24 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     decodeConstants.size   = sizeof(DecodePushConstant);
     decodeConstants.offset = 0;
 
-    int indexBufferBinding    = decodeLayout.AddBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                        VK_SHADER_STAGE_COMPUTE_BIT);
-    int vertexBufferBinding   = decodeLayout.AddBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                        VK_SHADER_STAGE_COMPUTE_BIT);
-    int buildClasDescsBinding = decodeLayout.AddBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                        VK_SHADER_STAGE_COMPUTE_BIT);
-    int decodeGlobalsBinding  = decodeLayout.AddBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                        VK_SHADER_STAGE_COMPUTE_BIT);
-    int clusterDataBinding    = decodeLayout.AddBinding(4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                        VK_SHADER_STAGE_COMPUTE_BIT);
+    int indexBufferBinding =
+        decodeLayout.AddBinding(0, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
+    int vertexBufferBinding =
+        decodeLayout.AddBinding(1, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
+    int buildClasDescsBinding =
+        decodeLayout.AddBinding(2, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
+    int decodeGlobalsBinding =
+        decodeLayout.AddBinding(3, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
+    int clusterDataBinding =
+        decodeLayout.AddBinding(4, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
 
-    int denseGeometryBufferBinding = decodeLayout.AddBinding(
-        (u32)RTBindings::DenseGeometryData, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-        VK_SHADER_STAGE_COMPUTE_BIT);
+    int denseGeometryBufferBinding =
+        decodeLayout.AddBinding((u32)RTBindings::DenseGeometryData,
+                                DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
 
-    int packedDenseGeometryHeaderBufferBinding = decodeLayout.AddBinding(
-        (u32)RTBindings::PackedDenseGeometryHeaders, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-        VK_SHADER_STAGE_COMPUTE_BIT);
+    int packedDenseGeometryHeaderBufferBinding =
+        decodeLayout.AddBinding((u32)RTBindings::PackedDenseGeometryHeaders,
+                                DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
 
     VkPipeline decodePipeline =
         device->CreateComputePipeline(&decodeShader, &decodeLayout, &decodeConstants);
@@ -685,38 +685,38 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     VkShaderStageFlags flags   = VK_SHADER_STAGE_COMPUTE_BIT;
     DescriptorSetLayout layout = {};
     layout.pipelineLayout      = nullptr;
-    int accelBindingIndex      = layout.AddBinding(
-        (u32)RTBindings::Accel, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, flags);
+    int accelBindingIndex      = layout.AddBinding((u32)RTBindings::Accel,
+                                                   DescriptorType::AccelerationStructure, flags);
     int imageBindingIndex =
-        layout.AddBinding((u32)RTBindings::Image, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, flags);
+        layout.AddBinding((u32)RTBindings::Image, DescriptorType::StorageImage, flags);
 
     int sceneBindingIndex =
-        layout.AddBinding((u32)RTBindings::Scene, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, flags);
+        layout.AddBinding((u32)RTBindings::Scene, DescriptorType::UniformBuffer, flags);
 
     int bindingDataBindingIndex = layout.AddBinding((u32)RTBindings::RTBindingData,
-                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, flags);
+                                                    DescriptorType::StorageBuffer, flags);
 
-    int gpuMaterialBindingIndex = layout.AddBinding((u32)RTBindings::GPUMaterial,
-                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, flags);
+    int gpuMaterialBindingIndex =
+        layout.AddBinding((u32)RTBindings::GPUMaterial, DescriptorType::StorageBuffer, flags);
 
     int denseGeometryBufferIndex = layout.AddBinding((u32)RTBindings::DenseGeometryData,
-                                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, flags);
+                                                     DescriptorType::StorageBuffer, flags);
 
     int packedDenseGeometryHeaderBufferIndex = layout.AddBinding(
-        (u32)RTBindings::PackedDenseGeometryHeaders, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, flags);
+        (u32)RTBindings::PackedDenseGeometryHeaders, DescriptorType::StorageBuffer, flags);
 
     int shaderDebugIndex = layout.AddBinding((u32)RTBindings::ShaderDebugInfo,
-                                             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, flags);
+                                             DescriptorType::UniformBuffer, flags);
 
     // int aabbIndex = layout.AddBinding(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, flags);
-    int clusterDataIndex = layout.AddBinding(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, flags);
-    int vertexDataIndex  = layout.AddBinding(9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, flags);
-    int indexDataIndex   = layout.AddBinding(10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, flags);
+    int clusterDataIndex = layout.AddBinding(8, DescriptorType::StorageBuffer, flags);
+    int vertexDataIndex  = layout.AddBinding(9, DescriptorType::StorageBuffer, flags);
+    int indexDataIndex   = layout.AddBinding(10, DescriptorType::StorageBuffer, flags);
 
     // TODO: I have no idea why I need to do this
     // int counterIndex = layout.AddBinding(11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, flags,
     // true);
-    int nvApiIndex = layout.AddBinding(NVAPI_SLOT, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    int nvApiIndex = layout.AddBinding(NVAPI_SLOT, DescriptorType::StorageBuffer,
                                        VK_SHADER_STAGE_ALL, true);
 
     layout.AddImmutableSamplers();

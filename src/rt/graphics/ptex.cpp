@@ -104,8 +104,6 @@ void PaddedImage::WriteRotatedBorder(PaddedImage &other, Vec2u srcStart, Vec2u d
     int uStart = srcStart.x;
     int vStart = srcStart.y;
 
-    Assert(width >= other.width);
-    Assert(height >= other.height);
     Assert(bytesPerPixel == other.bytesPerPixel);
 
     u8 *src       = other.GetContentsRelativeIndex(srcStart);
@@ -246,17 +244,18 @@ PaddedImage PtexToImg(Arena *arena, Ptex::PtexTexture *ptx, int faceID, int bord
     return result;
 }
 
-Vec3f GammaToLinear(const u8 rgb[3])
+Vec4f GammaToLinear(const u8 rgb[4])
 {
-    return Vec3f(Pow(rgb[0] / 255.f, 2.2f), Pow(rgb[1] / 255.f, 2.2f),
-                 Pow(rgb[2] / 255.f, 2.2f));
+    return Vec4f(Pow(rgb[0] / 255.f, 2.2f), Pow(rgb[1] / 255.f, 2.2f),
+                 Pow(rgb[2] / 255.f, 2.2f), rgb[3] / 255.f);
 }
 
-void LinearToGamma(const Vec3f &rgb, u8 *out)
+void LinearToGamma(const Vec4f &rgb, u8 *out)
 {
-    out[0] = u8(Clamp(Pow(rgb.x * 255.f, 1 / 2.2f), 0.f, 255.f));
-    out[1] = u8(Clamp(Pow(rgb.y * 255.f, 1 / 2.2f), 0.f, 255.f));
-    out[2] = u8(Clamp(Pow(rgb.z * 255.f, 1 / 2.2f), 0.f, 255.f));
+    out[0] = u8(Clamp(Pow(rgb.x, 1 / 2.2f) * 255.f, 0.f, 255.f));
+    out[1] = u8(Clamp(Pow(rgb.y, 1 / 2.2f) * 255.f, 0.f, 255.f));
+    out[2] = u8(Clamp(Pow(rgb.z, 1 / 2.2f) * 255.f, 0.f, 255.f));
+    out[3] = u8(Clamp(rgb.w * 255.f, 0.f, 255.f));
 }
 
 // steps:
@@ -287,7 +286,7 @@ PaddedImage GenerateMips(Arena *arena, PaddedImage &input, u32 width, u32 height
     output.borderSize       = borderSize;
     output.strideWithBorder = (width + 2 * borderSize) * input.bytesPerPixel;
     output.contents =
-        PushArrayNoZero(arena, u8, output.strideWithBorder * (height + 2 * borderSize));
+        PushArray(arena, u8, output.strideWithBorder * (height + 2 * borderSize));
 
     for (u32 v = 0; v < height; v++)
     {
@@ -296,12 +295,12 @@ PaddedImage GenerateMips(Arena *arena, PaddedImage &input, u32 width, u32 height
             Vec2u xy = scale * Vec2u(u, v);
             Vec2u zw = xy + scale - 1u;
 
-            Vec3f topleft     = GammaToLinear(input.GetContentsRelativeIndex(xy));
-            Vec3f topright    = GammaToLinear(input.GetContentsRelativeIndex({zw.x, xy.y}));
-            Vec3f bottomleft  = GammaToLinear(input.GetContentsRelativeIndex({xy.x, zw.y}));
-            Vec3f bottomright = GammaToLinear(input.GetContentsRelativeIndex({zw.x, zw.y}));
+            Vec4f topleft     = GammaToLinear(input.GetContentsRelativeIndex(xy));
+            Vec4f topright    = GammaToLinear(input.GetContentsRelativeIndex({zw.x, xy.y}));
+            Vec4f bottomleft  = GammaToLinear(input.GetContentsRelativeIndex({xy.x, zw.y}));
+            Vec4f bottomright = GammaToLinear(input.GetContentsRelativeIndex({zw.x, zw.y}));
 
-            Vec3f avg = (topleft + topright + bottomleft + bottomright) / .25f;
+            Vec4f avg = (topleft + topright + bottomleft + bottomright) * .25f;
 
             LinearToGamma(avg, output.GetContentsRelativeIndex({u, v}));
         }
@@ -353,10 +352,10 @@ void Convert(string filename)
         string data       = OS_ReadFile(scratch.temp.arena, shaderName);
         shader            = device->CreateShader(ShaderStage::Compute, "block_compress", data);
 
-        inputBinding  = bcLayout.AddBinding(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                                            VK_SHADER_STAGE_COMPUTE_BIT);
-        outputBinding = bcLayout.AddBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-                                            VK_SHADER_STAGE_COMPUTE_BIT);
+        inputBinding =
+            bcLayout.AddBinding(0, DescriptorType::SampledImage, VK_SHADER_STAGE_COMPUTE_BIT);
+        outputBinding =
+            bcLayout.AddBinding(1, DescriptorType::StorageImage, VK_SHADER_STAGE_COMPUTE_BIT);
         bcLayout.AddImmutableSamplers();
         pipeline    = device->CreateComputePipeline(&shader, &bcLayout);
         initialized = true;
@@ -368,6 +367,7 @@ void Convert(string filename)
     StaticArray<GPUImage> tempUavs(scratch.temp.arena, numFaces, numFaces);
     StaticArray<GPUBuffer> blockCompressedImages(scratch.temp.arena, numFaces, numFaces);
     StaticArray<TransferBuffer> gpuSrcImages(scratch.temp.arena, numFaces, numFaces);
+    StaticArray<DescriptorSet> descriptorSets(scratch.temp.arena, numFaces, numFaces);
 
     std::vector<Tile> tiles;
 
@@ -421,24 +421,21 @@ void Convert(string filename)
     auto GetNeighborFaceImage = [&](PaddedImage &currentFaceImg, u32 neighborFace, u32 rot,
                                     Vec2u &scale) {
         Vec2i dstBaseSize(currentFaceImg.log2Width, currentFaceImg.log2Height);
-        Vec2i srcBaseSize(images[neighborFace][0].log2Width,
-                          images[neighborFace][0].log2Height);
+        const Vec2i srcBaseSize(images[neighborFace][0].log2Width,
+                                images[neighborFace][0].log2Height);
 
         if (rot & 1) Swap(dstBaseSize[0], dstBaseSize[1]);
         Vec2i srcBaseDepth = srcBaseSize - dstBaseSize;
         int depthIndex     = Max(0, Min(srcBaseDepth.x, srcBaseDepth.y));
 
         PaddedImage neighborFaceImg = images[neighborFace][depthIndex];
-
-        u32 uCompare = (rot & 1) ? dstBaseSize.y : dstBaseSize.x;
-        u32 vCompare = (rot & 1) ? dstBaseSize.x : dstBaseSize.y;
-        Assert(neighborFaceImg.log2Width == uCompare ||
-               neighborFaceImg.log2Height == vCompare);
+        u32 log2Width               = neighborFaceImg.log2Width;
+        u32 log2Height              = neighborFaceImg.log2Height;
 
         // reduce u
-        if (neighborFaceImg.log2Width > uCompare)
+        if (log2Width > dstBaseSize.x)
         {
-            for (int i = 0; i < neighborFaceImg.log2Width - uCompare; i++)
+            for (int i = 0; i < log2Width - dstBaseSize.x; i++)
             {
                 u32 width = neighborFaceImg.width;
                 width >>= 1;
@@ -447,9 +444,9 @@ void Convert(string filename)
             }
         }
         // reduce v
-        else if (neighborFaceImg.log2Height > vCompare)
+        else if (log2Height > dstBaseSize.y)
         {
-            for (int i = 0; i < neighborFaceImg.log2Height - vCompare; i++)
+            for (int i = 0; i < log2Height - dstBaseSize.y; i++)
             {
                 u32 height = neighborFaceImg.height;
                 height >>= 1;
@@ -541,11 +538,11 @@ void Convert(string filename)
 
             if (numCorners == 1)
             {
-                int rotate = (edgeIndex - cedgeId[1] + 2) & 3;
+                int cornerRotate = (edgeIndex - cedgeId[1] + 2) & 3;
 
                 Vec2u cornerScale;
-                PaddedImage cornerImg =
-                    GetNeighborFaceImage(currentFaceImg, cfaceId[1], rotate, cornerScale);
+                PaddedImage cornerImg = GetNeighborFaceImage(currentFaceImg, cfaceId[1],
+                                                             cornerRotate, cornerScale);
 
                 Vec2u srcStart = uvTable[cedgeId[1]] * Vec2u(cornerImg.width - borderSize,
                                                              cornerImg.height - borderSize);
@@ -554,9 +551,9 @@ void Convert(string filename)
                                                currentFaceImg.height + borderSize);
 
                 currentFaceImg.WriteRotatedBorder(
-                    cornerImg, srcStart, dstStart, cedgeId[1], rotate,
+                    cornerImg, srcStart, dstStart, cedgeId[1], cornerRotate,
                     borderSize >> cornerScale.y, borderSize >> cornerScale.x, borderSize,
-                    borderSize, (rot & 1) ? cornerScale.yx() : cornerScale);
+                    borderSize, (cornerRotate & 1) ? cornerScale.yx() : cornerScale);
             }
             else if (numCorners > 1)
             {
@@ -578,18 +575,14 @@ void Convert(string filename)
         TransferBuffer blockCompressedImage =
             cmd->SubmitImage(currentFaceImg.contents, blockCompressedImageDesc);
 
-        u32 outputBlockWidth  = currentFaceImg.GetPaddedWidth() / blockSize;
-        u32 outputBlockHeight = currentFaceImg.GetPaddedHeight() / blockSize;
+        u32 outputBlockWidth  = currentFaceImg.GetPaddedWidth() >> log2BlockSize;
+        u32 outputBlockHeight = currentFaceImg.GetPaddedHeight() >> log2BlockSize;
         ImageDesc uavDesc(ImageType::Type2D, outputBlockWidth, outputBlockHeight, 1, 1, 1,
                           VK_FORMAT_R32G32_UINT, MemoryUsage::GPU_ONLY,
-                          VK_IMAGE_USAGE_STORAGE_BIT, VK_IMAGE_TILING_OPTIMAL);
+                          VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                          VK_IMAGE_TILING_OPTIMAL);
 
         GPUImage uavImage = device->CreateImage(uavDesc);
-
-        ImageDesc readbackDesc(ImageType::Type2D, currentFaceImg.GetPaddedWidth(),
-                               currentFaceImg.GetPaddedHeight(), 1, 1, 1,
-                               VK_FORMAT_BC1_RGB_UNORM_BLOCK, MemoryUsage::GPU_TO_CPU,
-                               VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_TILING_OPTIMAL);
 
         GPUBuffer readbackBuffer = device->CreateBuffer(
             VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -605,7 +598,7 @@ void Convert(string filename)
         tempUavs[faceIndex]              = uavImage;
         blockCompressedImages[faceIndex] = readbackBuffer;
 
-        DescriptorSet set = bcLayout.CreateDescriptorSet();
+        DescriptorSet set = bcLayout.CreateNewDescriptorSet();
         set.Bind(inputBinding, &gpuSrcImages[faceIndex].image);
         set.Bind(outputBinding, &tempUavs[faceIndex]);
         cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &set, bcLayout.pipelineLayout);
@@ -615,10 +608,11 @@ void Convert(string filename)
                      VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
         cmd->FlushBarriers();
 
+        descriptorSets[faceIndex] = set;
+
         BufferImageCopy copy = {};
         copy.layerCount      = 1;
-        copy.extent =
-            Vec3u(currentFaceImg.GetPaddedWidth(), currentFaceImg.GetPaddedHeight(), 1);
+        copy.extent          = Vec3u(outputBlockWidth, outputBlockHeight, 1);
         cmd->CopyImageToBuffer(&blockCompressedImages[faceIndex], &tempUavs[faceIndex], copy);
     }
 
@@ -796,6 +790,7 @@ void Convert(string filename)
         device->DestroyImage(&gpuSrcImages[faceIndex].image);
         device->DestroyImage(&tempUavs[faceIndex]);
         device->DestroyBuffer(&blockCompressedImages[faceIndex]);
+        device->DestroyPool(descriptorSets[faceIndex].pool);
     }
 
     // Output tiles to disk

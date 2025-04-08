@@ -155,15 +155,6 @@ enum
     DeviceCapabilities_VariableShading,
 };
 
-enum DescriptorType
-{
-    DescriptorType_SampledImage,
-    DescriptorType_StorageBuffer,
-    // DescriptorType_UniformTexel,
-    // DescriptorType_StorageTexelBuffer,
-    DescriptorType_Count,
-};
-
 enum QueryType
 {
     QueryType_Occlusion,
@@ -469,6 +460,24 @@ struct Semaphore
     u64 signalValue;
 };
 
+enum class DescriptorType
+{
+    Sampler,
+    CombinedImageSampler,
+    SampledImage,
+    StorageImage,
+    UniformTexelBuffer,
+    StorageTexelBuffer,
+    UniformBuffer,
+    StorageBuffer,
+    UniformBufferDynamic,
+    StorageBufferDynamic,
+    InputAttachment,
+    AccelerationStructure,
+
+    Count,
+};
+
 struct DescriptorSetLayout;
 struct DescriptorSet
 {
@@ -479,6 +488,7 @@ struct DescriptorSet
         VkDescriptorBufferInfo buffer;
     };
 
+    VkDescriptorPool pool;
     VkDescriptorSet set;
     std::vector<DescriptorInfo> descriptorInfo;
     std::vector<VkWriteDescriptorSet> writeDescriptorSets;
@@ -497,10 +507,11 @@ struct DescriptorSetLayout
 
     VkPipelineLayout pipelineLayout;
 
-    int AddBinding(u32 binding, VkDescriptorType type, VkShaderStageFlags stage,
+    int AddBinding(u32 binding, DescriptorType type, VkShaderStageFlags stage,
                    bool null = false);
     VkDescriptorSetLayout *GetVulkanLayout();
     DescriptorSet CreateDescriptorSet();
+    DescriptorSet CreateNewDescriptorSet();
     void AddImmutableSamplers();
     void CreatePipelineLayout(PushConstant *pc = 0);
 };
@@ -811,6 +822,7 @@ struct Vulkan
     void DestroyBuffer(GPUBuffer *buffer);
     void DestroyImage(GPUImage *image);
     void DestroyAccelerationStructure(GPUAccelerationStructure *as);
+    void DestroyPool(VkDescriptorPool pool);
     int BindlessIndex(GPUImage *image);
     int BindlessStorageIndex(GPUBuffer *buffer, size_t offset = 0,
                              size_t range = VK_WHOLE_SIZE);
@@ -956,7 +968,7 @@ struct Vulkan
         }
     };
 
-    BindlessDescriptorPool bindlessDescriptorPools[DescriptorType_Count];
+    BindlessDescriptorPool bindlessDescriptorPools[2];
 
     std::vector<VkDescriptorSet> bindlessDescriptorSets;
     std::vector<VkDescriptorSetLayout> bindlessDescriptorSetLayouts;
@@ -1002,6 +1014,35 @@ inline VkTransformMatrixKHR ConvertMatrix(const AffineSpace &space)
         }
     }
     return matrix;
+}
+
+inline VkDescriptorType ConvertDescriptorType(DescriptorType type)
+{
+    switch (type)
+    {
+        case DescriptorType::Sampler: return VK_DESCRIPTOR_TYPE_SAMPLER;
+
+        case DescriptorType::CombinedImageSampler:
+            return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+
+        case DescriptorType::SampledImage: return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+
+        case DescriptorType::StorageImage: return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        case DescriptorType::UniformTexelBuffer:
+            return VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
+        case DescriptorType::StorageTexelBuffer:
+            return VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+        case DescriptorType::UniformBuffer: return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        case DescriptorType::StorageBuffer: return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        case DescriptorType::UniformBufferDynamic:
+            return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        case DescriptorType::StorageBufferDynamic:
+            return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+        case DescriptorType::InputAttachment: return VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+        case DescriptorType::AccelerationStructure:
+            return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        default: Assert(0); return VK_DESCRIPTOR_TYPE_MAX_ENUM;
+    }
 }
 
 extern Vulkan *device;
