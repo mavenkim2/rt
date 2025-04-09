@@ -463,7 +463,7 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
 
         materialsList.emplace_back();
         Material **material      = &materialsList.back();
-        int ptexReflectanceIndex = 0;
+        int ptexReflectanceIndex = -1;
         switch (materialTypeIndex)
         {
             case MaterialTypes::Diffuse:

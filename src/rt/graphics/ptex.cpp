@@ -371,11 +371,6 @@ void Convert(string filename)
 
     std::vector<Tile> tiles;
 
-    struct TileMetadata
-    {
-        u32 offset;
-        u32 count;
-    };
     StaticArray<TileMetadata> metaData(scratch.temp.arena, numFaces, numFaces);
 
     for (int i = 0; i < numFaces; i++)
@@ -769,7 +764,7 @@ void Convert(string filename)
         }
         u32 size = (u32)tiles.size() - offset;
 
-        metaData[faceIndex] = {offset, size};
+        metaData[faceIndex] = {offset, image->log2Width, image->log2Height};
     }
 
     // Write metadata and tiles to disk

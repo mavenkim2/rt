@@ -154,7 +154,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
             DenseGeometry dg = GetDenseGeometryHeader(instanceID, blockIndex, printDebug);
 
             uint materialID = dg.DecodeMaterialID(triangleIndex);
-            uint faceID = dg.DecodeFaceID(triangleIndex);
+            uint3 pageInformation = dg.DecodePageOffsetAndFaceSize(triangleIndex);
             uint3 vids = dg.DecodeTriangle(triangleIndex);
 
             float3 p0 = dg.DecodePosition(vids[0]);

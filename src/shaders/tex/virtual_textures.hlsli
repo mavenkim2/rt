@@ -1,6 +1,8 @@
 #ifndef VIRTUAL_TEXTURES_HLSLI_
 #define VIRTUAL_TEXTURES_HLSLI_
 
+StructuredBuffer<uint> pageTable : register(t5);
+
 struct VirtualTexture 
 {
     uint physicalPoolPageWidth;

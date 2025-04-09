@@ -159,6 +159,13 @@ struct Tile
     u32 parentFace;
 };
 
+struct TileMetadata
+{
+    u32 offset;
+    int log2Width;
+    int log2Height;
+};
+
 struct PaddedImage : Image
 {
     // Does not include border

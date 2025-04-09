@@ -3,6 +3,7 @@
 #include "integrate.h"
 #include "gpu_scene.h"
 #include "math/simd_base.h"
+#include "string.h"
 #include "memory.h"
 #include "parallel.h"
 #include "platform.h"
@@ -342,8 +343,41 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         blasScenes.Push(scene);
     }
 
+    struct PtexInfo
+    {
+        string filename;
+        StaticArray<TileMetadata> metadata;
+    };
+
+    Scene *rootScene = GetScene();
+
+    StaticArray<string> tiledPtexFilenames(sceneScratch.temp.arena,
+                                           rootScene->ptexTextures.size());
+    StaticArray<StaticArray<TileMetadata>> ptexInfo(sceneScratch.temp.arena,
+                                                    rootScene->ptexTextures.size());
+    for (auto &ptexTexture : rootScene->ptexTextures)
+    {
+        string filename = PushStr8F(sceneScratch.temp.arena, "%S.tiles",
+                                    RemoveFileExtension(ptexTexture.filename));
+        Tokenizer tokenizer;
+        tokenizer.input  = OS_MapFileRead(filename);
+        tokenizer.cursor = tokenizer.input.str;
+
+        int numFaces = ReadInt(&tokenizer);
+
+        TileMetadata *metaData = (TileMetadata *)tokenizer.cursor;
+
+        auto array = StaticArray<TileMetadata>(sceneScratch.temp.arena, numFaces);
+        MemoryCopy(array.data, metaData, sizeof(TileMetadata) * numFaces);
+        array.size = numFaces;
+
+        tiledPtexFilenames.Push(filename);
+        ptexInfo.Push(array);
+
+        OS_UnmapFile(tokenizer.input.str);
+    }
+
     StaticArray<BLASSceneGPUInfo> blasSceneInfo(arena, blasScenes.Length());
-    // StaticArray<CommandBuffer *> commandBuffers(arena, blasScenes.Length());
 
     for (int i = 0; i < blasScenes.Length(); i++)
     {
@@ -365,21 +399,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         ClusterBuilder builder(arena, scene, refs);
         builder.BuildClusters(record, true);
 
-        builder.CreateDGFs(scene, &data, (Mesh *)scene->primitives, scene->numPrimitives,
-                           sceneBounds);
-
-        // u32 numClusters = 0;
-        // for (int i = 0; i < builder.threadClusters.Length(); i++)
-        // {
-        //     numClusters += builder.threadClusters[i].l.totalCount;
-        // }
-        // totalNumClusters += numClusters;
-        //
-        // for (int i = 0; i < scene->numPrimitives; i++)
-        // {
-        //     numVertices += meshes[i].numVertices;
-        //     numTriangles += meshes[i].numFaces;
-        // }
+        builder.CreateDGFs(scene, &data, ptexInfo, (Mesh *)scene->primitives,
+                           scene->numPrimitives, sceneBounds);
 
 #ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
         // Convert primrefs to aabbs, submit to GPU
@@ -843,7 +864,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     }
 
     // GPU materials
-    Scene *rootScene = GetScene();
     StaticArray<GPUMaterial> gpuMaterials(sceneScratch.temp.arena,
                                           rootScene->materials.Length());
     for (int i = 0; i < rootScene->materials.Length(); i++)
