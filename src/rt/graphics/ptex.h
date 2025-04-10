@@ -255,7 +255,7 @@ struct VirtualTextureManager
     VirtualTextureManager(Arena *arena, u32 totalNumPages, u32 pageWidthPerPool,
                           u32 texelWidthPerPage, u32 borderSize, VkFormat format);
     void AllocateVirtualPages(PhysicalPageAllocation *allocations, u32 numPages);
-    void AllocatePhysicalPages(CommandBuffer *cmd, Tile *tiles,
+    void AllocatePhysicalPages(CommandBuffer *cmd, u8 *contents,
                                PhysicalPageAllocation *allocations, u32 numPages);
 };
 

@@ -638,36 +638,37 @@ void Convert(string filename)
         // Write all remaining mip levels to the same tile
         // TODO: write all the mips at a given level to consecutive tiles,
         // instead of writing all the levels for a face to consecutive tiles
-        // if (image->width <= texelWidthPerTile && image->height <= texelWidthPerTile)
-        // {
-        //     Tile tile;
-        //     tile.contents    = PushArray(scratch.temp.arena, u8, vLen * rowLen);
-        //     u32 xTexelOffset = 0;
-        //     u32 yTexelOffset = 0;
-        //     for (; levelIndex < numLevels[faceIndex]; levelIndex++)
-        //     {
-        //         image         = &images[faceIndex][levelIndex];
-        //         u32 mipVLen   = vLen >> levelIndex;
-        //         u32 mipRowLen = rowLen >> levelIndex;
-        //
-        //         u32 dstOffset = ((yTexelOffset >> log2BlockSize) * totalBlocksPerTileX +
-        //                          (xTexelOffset >> log2BlockSize)) *
-        //                         blockSize;
-        //
-        //         Utils::Copy(image->contents, image->strideWithBorder,
-        //                     tile.contents + dstOffset, totalBlocksPerTileX * blockSize,
-        //                     mipVLen, mipRowLen);
-        //         xOffset += image->width;
-        //
-        //         if (xOffset >= totalTexelsPerTileX)
-        //         {
-        //             Assert(xOffset == totalTexelsPerTileX);
-        //             xOffset = 0;
-        //             yOffset = totalTexelsPerTileY / 2;
-        //         }
-        //     }
-        //     break;
-        // }
+#if 0
+        if (image->width <= texelWidthPerTile && image->height <= texelWidthPerTile)
+        {
+            Tile tile;
+            tile.contents    = PushArray(scratch.temp.arena, u8, vLen * rowLen);
+            u32 xTexelOffset = 0;
+            u32 yTexelOffset = 0;
+            for (; levelIndex < numLevels[faceIndex]; levelIndex++)
+            {
+                image         = &images[faceIndex][levelIndex];
+                u32 mipVLen   = vLen >> levelIndex;
+                u32 mipRowLen = rowLen >> levelIndex;
+
+                u32 dstOffset = ((yTexelOffset >> log2BlockSize) * totalBlocksPerTileX +
+                                 (xTexelOffset >> log2BlockSize)) *
+                                blockSize;
+
+                Utils::Copy(image->contents, image->strideWithBorder,
+                            tile.contents + dstOffset, totalBlocksPerTileX * blockSize,
+                            mipVLen, mipRowLen);
+                xOffset += image->width;
+
+                if (xOffset >= totalTexelsPerTileX)
+                {
+                    Assert(xOffset == totalTexelsPerTileX);
+                    xOffset = 0;
+                    yOffset = totalTexelsPerTileY / 2;
+                }
+            }
+            break;
+        }
 
         // One dimension is < texelsPerTile
         if (Min(image->width, image->height) < texelWidthPerPage &&
@@ -737,9 +738,10 @@ void Convert(string filename)
         }
         // Both dimensions >= texelsPerTile
         else
+#endif
         {
-            u32 numTilesX = image->width / texelWidthPerPage;
-            u32 numTilesY = image->height / texelWidthPerPage;
+            u32 numTilesX = Max(image->width / texelWidthPerPage, 1u);
+            u32 numTilesY = Max(image->height / texelWidthPerPage, 1u);
 
             for (int tileY = 0; tileY < numTilesY; tileY++)
             {
@@ -756,7 +758,9 @@ void Convert(string filename)
                                     image->GetPaddedHeight() >> log2BlockSize, rowLen,
                                     blockBorderSize, bytesPerBlock),
                                 (image->GetPaddedWidth() >> log2BlockSize) * bytesPerBlock,
-                                tile.contents, rowLen, vLen, rowLen);
+                                tile.contents, rowLen,
+                                Min(vLen, (u32)image->height >> log2BlockSize),
+                                Min(rowLen, (image->width >> log2BlockSize) * bytesPerBlock));
 
                     tiles.push_back(tile);
                 }
@@ -772,7 +776,9 @@ void Convert(string filename)
         PushStr8F(scratch.temp.arena, "%S.tiles", RemoveFileExtension(filename));
     StringBuilderMapped builder(outFilename);
 
+    u32 numTiles = (u32)tiles.size();
     PutData(&builder, &numFaces, sizeof(numFaces));
+    PutData(&builder, &numTiles, sizeof(numTiles));
     PutData(&builder, metaData.data, sizeof(TileMetadata) * metaData.Length());
     for (auto &tile : tiles)
     {
@@ -819,11 +825,10 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 totalNumPages,
     u32 numPagesPerPool = Sqr(pageWidthPerPool);
     u32 numPools        = (totalNumPages + numPagesPerPool - 1) / numPagesPerPool;
 
-    u32 texelWidthPerPool =
-        NextPowerOfTwo(Min(texelWidthPerPage * pageWidthPerPool, limits.max2DImageDim));
-    pageWidthPerPool = texelWidthPerPool / texelWidthPerPage;
-    pageWidthPerPool = 1u << Log2Int(pageWidthPerPool);
-    numPagesPerPool  = Sqr(pageWidthPerPool);
+    u32 texelWidthPerPool = Min(texelWidthPerPage * pageWidthPerPool, limits.max2DImageDim);
+    pageWidthPerPool      = texelWidthPerPool / texelWidthPerPage;
+    pageWidthPerPool      = 1u << Log2Int(pageWidthPerPool);
+    numPagesPerPool       = Sqr(pageWidthPerPool);
 
     maxNumLayers         = 1u << Log2Int(limits.maxNumLayers);
     u32 numTextureArrays = (numPools + maxNumLayers - 1) / maxNumLayers;
@@ -944,7 +949,7 @@ void VirtualTextureManager::AllocateVirtualPages(PhysicalPageAllocation *allocat
     }
 }
 
-void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, Tile *tiles,
+void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, u8 *contents,
                                                   PhysicalPageAllocation *allocations,
                                                   u32 numPages)
 {
@@ -961,8 +966,9 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, Tile *tile
     for (int i = 0; i < numPages; i++)
     {
         Assert(allocations[i].poolIndex < maxNumLayers);
-        MemoryCopy((u8 *)buf.mappedPtr + offset, tiles[i].contents, pageSize);
+        MemoryCopy((u8 *)buf.mappedPtr + offset, contents, pageSize);
 
+        contents += pageSize;
         copies[i].bufferOffset = offset;
         copies[i].baseLayer    = allocations[i].poolIndex & (maxNumLayers - 1);
         copies[i].layerCount   = 1;

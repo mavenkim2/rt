@@ -1,5 +1,6 @@
 #include "camera.h"
 #include "dgfs.h"
+#include "graphics/vulkan.h"
 #include "integrate.h"
 #include "gpu_scene.h"
 #include "math/simd_base.h"
@@ -355,6 +356,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                            rootScene->ptexTextures.size());
     StaticArray<StaticArray<TileMetadata>> ptexInfo(sceneScratch.temp.arena,
                                                     rootScene->ptexTextures.size());
+
+    VirtualTextureManager virtualTextureManager(sceneScratch.temp.arena, 256 * 32, 128, 128, 4,
+                                                VK_FORMAT_BC1_RGB_UNORM_BLOCK);
+
+    CommandBuffer *tileCmd = device->BeginCommandBuffer(QueueType_Copy);
     for (auto &ptexTexture : rootScene->ptexTextures)
     {
         string filename = PushStr8F(sceneScratch.temp.arena, "%S.tiles",
@@ -364,8 +370,17 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         tokenizer.cursor = tokenizer.input.str;
 
         int numFaces = ReadInt(&tokenizer);
+        int numPages = ReadInt(&tokenizer);
 
         TileMetadata *metaData = (TileMetadata *)tokenizer.cursor;
+        Advance(&tokenizer, sizeof(TileMetadata) * numFaces);
+
+        PhysicalPageAllocation *allocations =
+            PushArrayNoZero(sceneScratch.temp.arena, PhysicalPageAllocation, numFaces);
+        virtualTextureManager.AllocateVirtualPages(allocations, numPages);
+
+        virtualTextureManager.AllocatePhysicalPages(tileCmd, tokenizer.cursor, allocations,
+                                                    numPages);
 
         auto array = StaticArray<TileMetadata>(sceneScratch.temp.arena, numFaces);
         MemoryCopy(array.data, metaData, sizeof(TileMetadata) * numFaces);

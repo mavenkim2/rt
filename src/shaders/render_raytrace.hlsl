@@ -7,6 +7,7 @@
 #include "payload.hlsli"
 #include "dense_geometry.hlsli"
 #include "dgf_intersect.hlsli"
+#include "tex/virtual_textures.hlsli"
 #include "../rt/shader_interop/as_shaderinterop.h"
 #include "../rt/shader_interop/ray_shaderinterop.h"
 #include "../rt/shader_interop/hit_shaderinterop.h"
@@ -240,8 +241,12 @@ void main(uint3 DTid : SV_DispatchThreadID)
                 break;
                 case GPUMaterialType::Diffuse: 
                 {
-                    Texture2D<float3> reflectance = bindlessFloat3Textures[NonUniformResourceIndex(material.reflectanceDescriptor + faceID)];
-                    dir = SampleDiffuse(reflectance, uv, wo, sample, throughput, printDebug);
+                    VirtualTexture tex;
+                    float3 physicalUv = tex.GetPhysicalUV(pageTable, material, pageInformation, uv);
+                    uint width, height, elements;
+                    physicalPages.GetDimensions(width, height, elements);
+                    float3 reflectance = SampleTextureCatmullRom<Gamma>(physicalPages, samplerLinearClamp, physicalUv, float2(width, height));
+                    dir = SampleDiffuse(reflectance, wo, sample, throughput, printDebug);
                 }
                 break;
             }
