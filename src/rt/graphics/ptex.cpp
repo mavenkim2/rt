@@ -817,6 +817,17 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 totalNumPages,
                                              u32 borderSize, VkFormat format)
     : format(format)
 {
+    string shaderName = "../src/shaders/tex/update_page_tables.hlsl";
+    string data       = OS_ReadFile(arena, shaderName);
+    shader            = device->CreateShader(ShaderStage::Compute, "update page tables", data);
+
+    descriptorSetLayout = {};
+    descriptorSetLayout.AddBinding(0, DescriptorType::StorageBuffer,
+                                   VK_SHADER_STAGE_COMPUTE_BIT);
+    descriptorSetLayout.AddBinding(1, DescriptorType::StorageBuffer,
+                                   VK_SHADER_STAGE_COMPUTE_BIT);
+    pipeline = device->CreateComputePipeline(&shader, &descriptorSetLayout);
+
     Assert(IsPow2(pageWidthPerPool) && IsPow2(texelWidthPerPage));
     ImageLimits limits = device->GetImageLimits();
 
@@ -870,8 +881,7 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 totalNumPages,
     freeRange = 0;
 }
 
-void VirtualTextureManager::AllocateVirtualPages(PhysicalPageAllocation *allocations,
-                                                 u32 numPages)
+u32 VirtualTextureManager::AllocateVirtualPages(u32 numPages)
 {
     u32 freeIndex = freeRange;
 
@@ -914,9 +924,31 @@ void VirtualTextureManager::AllocateVirtualPages(PhysicalPageAllocation *allocat
     pageRanges[allocIndex] = leftRange;
     pageRanges.Push(rightRange);
 
-    // Next, allocate physical pages
-    for (u32 i = 0; i < numPages; i++)
+    return allocIndex;
+}
+
+void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, u8 *contents,
+                                                  u32 allocIndex)
+{
+    const BlockRange &range = pageRanges[allocIndex];
+    const u32 numPages      = range.onePastEndPage - range.startPage;
+    u32 pageSize  = Sqr(texelWidthPerPage >> GetBlockShift(format)) * GetFormatSize(format);
+    u32 allocSize = pageSize * numPages;
+
+    TransferBuffer buf = device->GetStagingBuffer(allocSize);
+    ScratchArena scratch;
+
+    u64 offset              = 0;
+    u64 requestOffset       = 0;
+    BufferImageCopy *copies = PushArray(scratch.temp.arena, BufferImageCopy, numPages);
+
+    PageTableUpdateRequest *requests =
+        PushArray(scratch.temp.arena, PageTableUpdateRequest, numPages);
+
+    u32 log2PageWidthPerPool = Log2Int(pageWidthPerPool);
+    for (int i = 0; i < numPages; i++)
     {
+        // First allocate page
         u32 freeIndex =
             partiallyFreePool == InvalidPool ? completelyFreePool : partiallyFreePool;
         bool isFullyFree = partiallyFreePool == InvalidPool;
@@ -943,44 +975,39 @@ void VirtualTextureManager::AllocateVirtualPages(PhysicalPageAllocation *allocat
             }
             freeIndex = pool.nextFree;
         }
+
         ErrorExit(allocIndex != ~0u, "Ran out of memory");
-        allocations[i].poolIndex = poolAllocIndex;
-        allocations[i].pageIndex = pageAllocIndex;
-    }
-}
+        Assert(poolAllocIndex < maxNumLayers);
 
-void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, u8 *contents,
-                                                  PhysicalPageAllocation *allocations,
-                                                  u32 numPages)
-{
-    u32 pageSize  = Sqr(texelWidthPerPage >> GetBlockShift(format)) * GetFormatSize(format);
-    u32 allocSize = pageSize * numPages;
-
-    TransferBuffer buf = device->GetStagingBuffer(allocSize);
-    ScratchArena scratch;
-
-    u64 offset              = 0;
-    BufferImageCopy *copies = PushArray(scratch.temp.arena, BufferImageCopy, numPages);
-
-    u32 log2PageWidthPerPool = Log2Int(pageWidthPerPool);
-    for (int i = 0; i < numPages; i++)
-    {
-        Assert(allocations[i].poolIndex < maxNumLayers);
+        requests[i] = PageTableUpdateRequest{range.startPage + i,
+                                             (poolAllocIndex << 7u) | pageAllocIndex};
         MemoryCopy((u8 *)buf.mappedPtr + offset, contents, pageSize);
-
         contents += pageSize;
         copies[i].bufferOffset = offset;
-        copies[i].baseLayer    = allocations[i].poolIndex & (maxNumLayers - 1);
+        copies[i].baseLayer    = poolAllocIndex & (maxNumLayers - 1);
         copies[i].layerCount   = 1;
 
-        u32 pageX        = allocations[i].pageIndex & (pageWidthPerPool - 1);
-        u32 pageY        = allocations[i].pageIndex >> log2PageWidthPerPool;
+        u32 pageX        = pageAllocIndex & (pageWidthPerPool - 1);
+        u32 pageY        = pageAllocIndex >> log2PageWidthPerPool;
         copies[i].offset = Vec3i(pageX * texelWidthPerPage, pageY * texelWidthPerPage, 0);
         copies[i].extent = Vec3u(texelWidthPerPage, texelWidthPerPage, 0);
 
         offset += pageSize;
+        requestOffset += sizeof(PageTableUpdateRequest);
     }
+
+    cmd->SubmitTransfer(&buf);
+    TransferBuffer pageTableUpdateRequestBuffer =
+        cmd->SubmitBuffer(requests, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                          sizeof(PageTableUpdateRequest) * numPages);
+
+    DescriptorSet ds = descriptorSetLayout.CreateDescriptorSet();
+    ds.Bind(0, &pageTableUpdateRequestBuffer.buffer).Bind(1, &pageTableBuffer);
+    cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                 VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    cmd->FlushBarriers();
     cmd->CopyImage(&buf, &gpuPhysicalPools[0], copies, numPages);
+    cmd->Dispatch((numPages + 63) >> 6, 1, 1);
 }
 
 } // namespace rt

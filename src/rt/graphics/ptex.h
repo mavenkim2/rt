@@ -5,6 +5,7 @@
 #include "../rt.h"
 #include "../platform.h"
 #include "vulkan.h"
+#include "../shader_interop/virtual_textures_shaderinterop.h"
 
 namespace Utils
 {
@@ -204,6 +205,7 @@ struct PhysicalPagePool
 
 struct PhysicalPageAllocation
 {
+    u32 virtualPage;
     u32 poolIndex;
     u32 pageIndex;
 };
@@ -252,11 +254,15 @@ struct VirtualTextureManager
     u32 partiallyFreePool;
     u32 completelyFreePool;
 
+    Shader shader;
+    DescriptorSetLayout descriptorSetLayout;
+    VkPipeline pipeline;
+    GPUBuffer pageTableBuffer;
+
     VirtualTextureManager(Arena *arena, u32 totalNumPages, u32 pageWidthPerPool,
                           u32 texelWidthPerPage, u32 borderSize, VkFormat format);
-    void AllocateVirtualPages(PhysicalPageAllocation *allocations, u32 numPages);
-    void AllocatePhysicalPages(CommandBuffer *cmd, u8 *contents,
-                               PhysicalPageAllocation *allocations, u32 numPages);
+    u32 AllocateVirtualPages(u32 numPages);
+    void AllocatePhysicalPages(CommandBuffer *cmd, u8 *contents, u32 allocIndex);
 };
 
 void InitializePtex();

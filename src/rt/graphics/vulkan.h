@@ -263,8 +263,8 @@ enum class RTBindings
     Scene,
     RTBindingData,
     GPUMaterial,
-    DenseGeometryData,
-    PackedDenseGeometryHeaders,
+    PageTable,
+    PhysicalPages,
     ShaderDebugInfo,
 };
 

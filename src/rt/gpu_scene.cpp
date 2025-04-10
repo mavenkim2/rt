@@ -255,14 +255,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     int clusterDataBinding =
         decodeLayout.AddBinding(4, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
 
-    int denseGeometryBufferBinding =
-        decodeLayout.AddBinding((u32)RTBindings::DenseGeometryData,
-                                DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
-
-    int packedDenseGeometryHeaderBufferBinding =
-        decodeLayout.AddBinding((u32)RTBindings::PackedDenseGeometryHeaders,
-                                DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
-
     VkPipeline decodePipeline =
         device->CreateComputePipeline(&decodeShader, &decodeLayout, &decodeConstants);
 
@@ -375,12 +367,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         TileMetadata *metaData = (TileMetadata *)tokenizer.cursor;
         Advance(&tokenizer, sizeof(TileMetadata) * numFaces);
 
-        PhysicalPageAllocation *allocations =
-            PushArrayNoZero(sceneScratch.temp.arena, PhysicalPageAllocation, numFaces);
-        virtualTextureManager.AllocateVirtualPages(allocations, numPages);
-
-        virtualTextureManager.AllocatePhysicalPages(tileCmd, tokenizer.cursor, allocations,
-                                                    numPages);
+        u32 allocIndex = virtualTextureManager.AllocateVirtualPages(numPages);
+        virtualTextureManager.AllocatePhysicalPages(tileCmd, tokenizer.cursor, allocIndex);
 
         auto array = StaticArray<TileMetadata>(sceneScratch.temp.arena, numFaces);
         MemoryCopy(array.data, metaData, sizeof(TileMetadata) * numFaces);
@@ -405,7 +393,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         DenseGeometryBuildData &data = info.data;
 
         CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Copy);
-        // commandBuffers.Push(dgfTransferCmd);
 
         RecordAOSSplits record;
         PrimRef *refs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
@@ -735,11 +722,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     int gpuMaterialBindingIndex =
         layout.AddBinding((u32)RTBindings::GPUMaterial, DescriptorType::StorageBuffer, flags);
 
-    int denseGeometryBufferIndex = layout.AddBinding((u32)RTBindings::DenseGeometryData,
-                                                     DescriptorType::StorageBuffer, flags);
+    int pageTableBindingIndex =
+        layout.AddBinding((u32)RTBindings::PageTable, DescriptorType::StorageBuffer, flags);
 
-    int packedDenseGeometryHeaderBufferIndex = layout.AddBinding(
-        (u32)RTBindings::PackedDenseGeometryHeaders, DescriptorType::StorageBuffer, flags);
+    int physicalPagesBindingIndex =
+        layout.AddBinding((u32)RTBindings::PhysicalPages, DescriptorType::SampledImage, flags);
 
     int shaderDebugIndex = layout.AddBinding((u32)RTBindings::ShaderDebugInfo,
                                              DescriptorType::UniformBuffer, flags);
@@ -1073,12 +1060,14 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             .Bind(bindingDataBindingIndex, &bindingDataBuffer)
             .Bind(gpuMaterialBindingIndex, &materialBuffer)
             .Bind(shaderDebugIndex, &shaderDebugBuffers[currentBuffer].buffer)
+            .Bind(pageTableBindingIndex, &virtualTextureManager.pageTableBuffer)
+            .Bind(physicalPagesBindingIndex, &virtualTextureManager.gpuPhysicalPools[0]);
 #ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
-            .Bind(clusterDataIndex, &clusterData)
+        .Bind(clusterDataIndex, &clusterData)
             .Bind(vertexDataIndex, &vertexBuffer)
             .Bind(indexDataIndex, &indexBuffer);
 #else
-            ;
+        ;
 #endif
         // .Bind(nvApiIndex, &nvapiBuffer);
         // .Bind(aabbIndex, &aabbBuffer);
