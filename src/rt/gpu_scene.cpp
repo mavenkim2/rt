@@ -230,6 +230,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     }
 
     // Compile pipelines
+#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
     DescriptorSetLayout fillLayout = {};
     int addressesBinding =
         fillLayout.AddBinding(0, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
@@ -257,6 +258,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     VkPipeline decodePipeline =
         device->CreateComputePipeline(&decodeShader, &decodeLayout, &decodeConstants);
+#endif
 
     // Build clusters
     // TODO: make sure to NOT make gpumeshes
@@ -348,21 +350,33 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                            rootScene->ptexTextures.size());
     StaticArray<StaticArray<TileMetadata>> ptexInfo(sceneScratch.temp.arena,
                                                     rootScene->ptexTextures.size());
+    StaticArray<u32> rangeIndices(sceneScratch.temp.arena, rootScene->ptexTextures.size(),
+                                  rootScene->ptexTextures.size());
 
-    VirtualTextureManager virtualTextureManager(sceneScratch.temp.arena, 256 * 32, 128, 128, 4,
+    VirtualTextureManager virtualTextureManager(sceneScratch.temp.arena, 1 << 16, 128, 128, 4,
                                                 VK_FORMAT_BC1_RGB_UNORM_BLOCK);
 
-    CommandBuffer *tileCmd = device->BeginCommandBuffer(QueueType_Copy);
-    for (auto &ptexTexture : rootScene->ptexTextures)
+    CommandBuffer *tileCmd          = device->BeginCommandBuffer(QueueType_Compute);
+    Semaphore tileSubmitSemaphore   = device->CreateGraphicsSemaphore();
+    tileSubmitSemaphore.signalValue = 1;
+    tileCmd->Barrier(&virtualTextureManager.gpuPhysicalPools[0],
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                     VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    tileCmd->FlushBarriers();
+    for (int i = 0; i < rootScene->ptexTextures.size(); i++)
     {
-        string filename = PushStr8F(sceneScratch.temp.arena, "%S.tiles",
-                                    RemoveFileExtension(ptexTexture.filename));
+        PtexTexture &ptexTexture = rootScene->ptexTextures[i];
+        string filename          = PushStr8F(sceneScratch.temp.arena, "%S.tiles",
+                                             RemoveFileExtension(ptexTexture.filename));
+
+        if (Contains(filename, "displacement", MatchFlag_CaseInsensitive)) continue;
         Tokenizer tokenizer;
         tokenizer.input  = OS_MapFileRead(filename);
         tokenizer.cursor = tokenizer.input.str;
 
-        int numFaces = ReadInt(&tokenizer);
-        int numPages = ReadInt(&tokenizer);
+        int numFaces, numPages;
+        GetPointerValue(&tokenizer, &numFaces);
+        GetPointerValue(&tokenizer, &numPages);
 
         TileMetadata *metaData = (TileMetadata *)tokenizer.cursor;
         Advance(&tokenizer, sizeof(TileMetadata) * numFaces);
@@ -374,11 +388,19 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         MemoryCopy(array.data, metaData, sizeof(TileMetadata) * numFaces);
         array.size = numFaces;
 
+        rangeIndices[i] = allocIndex;
         tiledPtexFilenames.Push(filename);
         ptexInfo.Push(array);
 
         OS_UnmapFile(tokenizer.input.str);
     }
+
+    tileCmd->Signal(tileSubmitSemaphore);
+    tileCmd->Barrier(&virtualTextureManager.gpuPhysicalPools[0],
+                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    tileCmd->FlushBarriers();
+    device->SubmitCommandBuffer(tileCmd);
 
     StaticArray<BLASSceneGPUInfo> blasSceneInfo(arena, blasScenes.Length());
 
@@ -682,7 +704,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     ImageDesc gpuEnvMapDesc(ImageType::Type2D, envMap->width, envMap->height, 1, 1, 1,
                             VK_FORMAT_R8G8B8A8_SRGB, MemoryUsage::GPU_ONLY,
-                            VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_TILING_OPTIMAL);
+                            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                            VK_IMAGE_TILING_OPTIMAL);
 
     GPUImage gpuEnvMap = transferCmd->SubmitImage(envMap->contents, gpuEnvMapDesc).image;
     transferCmd->Barrier(&gpuEnvMap, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -694,7 +717,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     ImageDesc targetUavDesc(ImageType::Type2D, params->width, params->height, 1, 1, 1,
                             VK_FORMAT_R16G16B16A16_SFLOAT, MemoryUsage::GPU_ONLY,
-                            VK_IMAGE_USAGE_STORAGE_BIT, VK_IMAGE_TILING_OPTIMAL);
+                            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                            VK_IMAGE_TILING_OPTIMAL);
     GPUImage images[2] = {
         device->CreateImage(targetUavDesc),
         device->CreateImage(targetUavDesc),
@@ -848,21 +872,22 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         Assert(numScenes == 1);
 
         ScenePrimitives *scene = blasScenes[0];
-        CommandBuffer *tlasCmd = device->BeginCommandBuffer(QueueType_Graphics);
-        tlasCmd->Wait(scene->semaphore);
+        allCommandBuffer->Wait(scene->semaphore);
         tlasSemaphore.signalValue = 1;
-        tlasCmd->Signal(tlasSemaphore);
+        allCommandBuffer->Signal(tlasSemaphore);
         Instance instance          = {};
         ScenePrimitives *baseScene = &GetScene()->scene;
         GPUBuffer tlasBuffer =
-            tlasCmd->CreateTLASInstances(&instance, 1, &params->renderFromWorld, &baseScene)
+            allCommandBuffer
+                ->CreateTLASInstances(&instance, 1, &params->renderFromWorld, &baseScene)
                 .buffer;
-        tlasCmd->Barrier(&tlasBuffer, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                         VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-        tlasCmd->FlushBarriers();
-        tlas = tlasCmd->BuildTLAS(&tlasBuffer, 1).as;
+        allCommandBuffer->Barrier(&tlasBuffer,
+                                  VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+        allCommandBuffer->FlushBarriers();
+        tlas = allCommandBuffer->BuildTLAS(&tlasBuffer, 1).as;
 
-        device->SubmitCommandBuffer(tlasCmd);
+        device->SubmitCommandBuffer(allCommandBuffer);
     }
 
     // GPU materials
@@ -871,6 +896,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     for (int i = 0; i < rootScene->materials.Length(); i++)
     {
         GPUMaterial material = rootScene->materials[i]->ConvertToGPU();
+        int index            = rootScene->materials[i]->ptexReflectanceIndex;
+        if (index != -1)
+        {
+            material.pageOffset =
+                virtualTextureManager.pageRanges[rangeIndices[index]].startPage;
+        }
         gpuMaterials.Push(material);
     }
     GPUBuffer materialBuffer =
@@ -1017,6 +1048,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         if (device->frameCount == 0)
         {
             cmd->Wait(submitSemaphore);
+            cmd->Wait(tileSubmitSemaphore);
             device->Wait(tlasSemaphore);
 
             for (int i = 0; i < uncompactedPayloads.Length(); i++)

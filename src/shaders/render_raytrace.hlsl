@@ -241,11 +241,16 @@ void main(uint3 DTid : SV_DispatchThreadID)
                 break;
                 case GPUMaterialType::Diffuse: 
                 {
+                    // TODO: don't hardcode?
                     VirtualTexture tex;
-                    float3 physicalUv = tex.GetPhysicalUV(pageTable, material, pageInformation, uv);
+                    tex.pageWidthPerPool = 128;
+                    tex.texelWidthPerPage = 136;
+
+                    float3 physicalUv = tex.GetPhysicalUV(pageTable, material, pageInformation, uv, printDebug);
                     uint width, height, elements;
                     physicalPages.GetDimensions(width, height, elements);
                     float3 reflectance = SampleTextureCatmullRom<Gamma>(physicalPages, samplerLinearClamp, physicalUv, float2(width, height));
+
                     dir = SampleDiffuse(reflectance, wo, sample, throughput, printDebug);
                 }
                 break;

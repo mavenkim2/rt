@@ -17,7 +17,7 @@ struct VirtualTexture
     float3 GetPhysicalUV(StructuredBuffer<uint> pageTable, 
                          GPUMaterial material,
                          uint3 pageInformation,
-                         float2 uv)
+                         float2 uv, bool debug = false)
     {
         const uint pageBorder = 4;
         const uint2 faceSize = (1u << pageInformation.yz);
@@ -34,19 +34,24 @@ struct VirtualTexture
         uint numPagesPerPool = pageWidthPerPool * pageWidthPerPool;
         uint log2PhysicalPoolNumPages = firstbithigh(numPagesPerPool);
 
-        uint physicalPageLayer = physicalPage >> log2PhysicalPoolNumPages;
+        uint physicalPageLayer = physicalPage >> (2 * log2PhysicalPoolNumPages);
         uint physicalPageInPool = physicalPage & (numPagesPerPool - 1u);
     
         uint physicalPageInPoolY = physicalPageInPool >> log2PhysicalPoolPageWidth;
         uint physicalPageInPoolX = physicalPageInPool & (pageWidthPerPool - 1);
     
-        const float scaleST = (float)(PAGE_WIDTH + 2 * BORDER_SIZE) / texelWidthPerPage;
+        const uint texelWidthPerPool = texelWidthPerPage * pageWidthPerPool;
 
-        float fracX = (uv.x - (float)pageOffsetX / numPages.x) * numPages.x;
-        float fracY = (uv.y - (float)pageOffsetY / numPages.y) * numPages.y;
-    
-        float2 physicalUv = scaleST * uint2(physicalPageInPoolX, physicalPageInPoolY);
-        physicalUv += float2(fracX, fracY) * scaleST;
+        uint2 pageStart = uint2(physicalPageInPoolX, physicalPageInPoolY) * texelWidthPerPage;
+        uint texelOffsetX = (uv.x * numPages.x - pageOffsetX) * texelWidthPerPage;
+        uint texelOffsetY = (uv.y * numPages.y - pageOffsetY) * texelWidthPerPage;
+        pageStart += uint2(texelOffsetX + BORDER_SIZE, texelOffsetY + BORDER_SIZE);
+        float2 physicalUv = pageStart / (float)texelWidthPerPool;
+
+        if (0)
+        {
+            printf("physical uv: %f %f\n, physical page: %u", physicalUv.x, physicalUv.y, physicalPage);
+        }
         return float3(physicalUv, physicalPageLayer);
     }
 };

@@ -507,7 +507,7 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
 
     Vec3u bitWidths(numBitsX, numBitsY, numBitsZ);
 
-    Assert(maxLog2Dim <= 16 && maxLog2Dim > 0);
+    Assert(!hasFaceIDs || (maxLog2Dim <= 16 && maxLog2Dim > 0));
     u32 numPageOffsetBits = maxPageOffset == minPageOffset
                                 ? 0u
                                 : Log2Int(Max(maxPageOffset - minPageOffset, 1u)) + 1u;
@@ -1141,7 +1141,7 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     packed.h = BitFieldPackU32(packed.h, restartCountPerDword[1], headerOffset, 7);
     packed.h = BitFieldPackU32(packed.h, restartCountPerDword[2], headerOffset, 8);
     // packed.h = BitFieldPackU32(packed.h, numFaceBits, headerOffset, 6);
-    packed.h = BitFieldPackU32(packed.h, numPageOffsetBits, headerOffset, 6);
+    packed.h = BitFieldPackU32(packed.h, hasFaceIDs ? numPageOffsetBits : 0, headerOffset, 6);
 
     headerOffset = 0;
     packed.i     = BitFieldPackU32(packed.i, minOct[0], headerOffset, 16);

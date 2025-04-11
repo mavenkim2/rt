@@ -368,15 +368,16 @@ struct DenseGeometry
     {
         const uint numFaceIDBits = numPageOffsetBits + 2 * numFaceSizeBits;
         uint3 result = 0;
+
         if (numPageOffsetBits)
         {
             uint2 offsets = GetAlignedAddressAndBitOffset(baseAddress + faceIDOffset, 0);
             uint2 data = denseGeometryData.Load2(offsets[0]);
-            uint minPageOffset = BitAlignU32(result.y, result.x, offsets[1]);
+            uint minPageOffset = BitAlignU32(data.y, data.x, offsets[1]);
 
             offsets = GetAlignedAddressAndBitOffset(baseAddress + faceIDOffset + 4, triangleIndex * numFaceIDBits);
             data = denseGeometryData.Load2(offsets[0]);
-            uint packed = BitAlignU32(result.y, result.x, offsets[1]);
+            uint packed = BitAlignU32(data.y, data.x, offsets[1]);
 
             uint pageOffset = BitFieldExtractU32(packed, numPageOffsetBits, 0);
             uint log2Width = BitFieldExtractU32(packed, numFaceSizeBits, numPageOffsetBits);
@@ -385,6 +386,11 @@ struct DenseGeometry
             result.x = minPageOffset + pageOffset;
             result.y = log2Width;
             result.z = log2Height;
+
+        }
+        if (debug)
+        {
+            printf("%u %u %u %u\n", numPageOffsetBits, result.x, result.y, result.z);
         }
         return result;
     }

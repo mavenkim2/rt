@@ -229,6 +229,12 @@ struct PushConstant
     ShaderStage stage;
     u32 offset;
     u32 size;
+
+    PushConstant() {}
+    PushConstant(ShaderStage stage, u32 offset, u32 size)
+        : stage(stage), offset(offset), size(size)
+    {
+    }
 };
 
 // struct GPUBufferDesc
@@ -827,7 +833,6 @@ struct Vulkan
     int BindlessStorageIndex(GPUBuffer *buffer, size_t offset = 0,
                              size_t range = VK_WHOLE_SIZE);
     u64 GetMinAlignment(VkBufferUsageFlags flags);
-    TransferBuffer GetStagingBuffer(size_t totalSize);
     TransferBuffer GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize,
                                     int numRanges = 0);
     TransferBuffer GetStagingImage(ImageDesc desc);

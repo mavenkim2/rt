@@ -8,7 +8,7 @@ RWStructuredBuffer<float3> decodeVertexBuffer : register(u1);
 RWStructuredBuffer<BuildClasDesc> buildClasDescs : register(u2);
 RWStructuredBuffer<uint> globals : register(u3);
 RWStructuredBuffer<ClusterData> clusterData : register(u4);
-ByteAddressBuffer denseGeometryData : register(t6);
+ByteAddressBuffer denseGeometryData : register(t5);
 StructuredBuffer<PackedDenseGeometryHeader> denseGeometryHeaders : register(t6);
 
 [numthreads(32, 1, 1)] 

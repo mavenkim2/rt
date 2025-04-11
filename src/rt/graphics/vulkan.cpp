@@ -379,16 +379,17 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
             Assert(result);
 
             // TODO: update my drivers
-            clasPropertiesNV = {
-                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_PROPERTIES_NV};
-            clasFeaturesNV = {
-                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_FEATURES_NV};
-            result = checkAndAddExtension(VK_NV_CLUSTER_ACCELERATION_STRUCTURE_EXTENSION_NAME,
-                                          &clasPropertiesNV, &clasFeaturesNV);
-
-            ErrorExit(
-                result,
-                "Machine doesn't support VK_NV_cluster_acceleration_structure. Exiting\n");
+            // clasPropertiesNV = {
+            //     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_PROPERTIES_NV};
+            // clasFeaturesNV = {
+            //     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_FEATURES_NV};
+            // result =
+            // checkAndAddExtension(VK_NV_CLUSTER_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+            //                               &clasPropertiesNV, &clasFeaturesNV);
+            //
+            // ErrorExit(
+            //     result,
+            //     "Machine doesn't support VK_NV_cluster_acceleration_structure. Exiting\n");
         }
 
         *featuresChain   = 0;
@@ -1769,22 +1770,10 @@ TransferBuffer Vulkan::GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSi
     return transferBuffer;
 }
 
-TransferBuffer Vulkan::GetStagingBuffer(size_t totalSize)
-{
-    GPUBuffer stagingBuffer =
-        CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, totalSize, MemoryUsage::CPU_TO_GPU);
-
-    void *mappedPtr = stagingBuffer.allocation->GetMappedData();
-
-    TransferBuffer transferBuffer = {};
-    transferBuffer.stagingBuffer  = stagingBuffer;
-    transferBuffer.mappedPtr      = mappedPtr;
-    return transferBuffer;
-}
-
 TransferBuffer Vulkan::GetStagingImage(ImageDesc desc)
 
 {
+    desc.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     TransferBuffer buffer;
     size_t size  = desc.width * desc.height * GetFormatSize(desc.format);
     buffer.image = CreateImage(desc);

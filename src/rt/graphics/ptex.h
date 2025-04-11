@@ -258,6 +258,7 @@ struct VirtualTextureManager
     DescriptorSetLayout descriptorSetLayout;
     VkPipeline pipeline;
     GPUBuffer pageTableBuffer;
+    PushConstant push;
 
     VirtualTextureManager(Arena *arena, u32 totalNumPages, u32 pageWidthPerPool,
                           u32 texelWidthPerPage, u32 borderSize, VkFormat format);

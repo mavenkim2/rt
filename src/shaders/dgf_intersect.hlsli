@@ -42,7 +42,7 @@ bool IntersectCluster(in uint instanceID, in uint primitiveIndex, in float3 o, i
     
     result &= (tMin < tHit && tHit <= tMax);
 
-    tHit = result ? tempTHit : tHit;
+    tHit = result ? tempHit : tHit;
     bary = result ? tempBary : bary;
     kind = 0;
 #else
