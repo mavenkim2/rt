@@ -93,25 +93,22 @@ float3 SampleTextureCatmullRom(in Texture2D tex, in SamplerState linearSampler, 
     return result;
 }
 
-template <typename Func>
 float3 SampleTextureCatmullRom(in Texture2DArray tex, in SamplerState linearSampler, in float3 uv, in float2 texSize)
 {
-    Func func;
-
     CatmullRomPositionsAndWeights weights = GenerateCatmullRomWeights(uv.xy, texSize);
 
     float3 result = 0.0f;
-    result += func.Apply(tex.SampleLevel(linearSampler, float3(weights.texPos0.x, weights.texPos0.y, uv.z), 0.0f).rgb)  * weights.w0.x * weights.w0.y;
-    result += func.Apply(tex.SampleLevel(linearSampler, float3(weights.texPos12.x, weights.texPos0.y, uv.z), 0.0f).rgb) * weights.w12.x * weights.w0.y;
-    result += func.Apply(tex.SampleLevel(linearSampler, float3(weights.texPos3.x, weights.texPos0.y, uv.z), 0.0f).rgb) * weights.w3.x * weights.w0.y;
+    result += tex.SampleLevel(linearSampler, float3(weights.texPos0.x, weights.texPos0.y, uv.z), 0.0f).rgb  * weights.w0.x * weights.w0.y;
+    result += tex.SampleLevel(linearSampler, float3(weights.texPos12.x, weights.texPos0.y, uv.z), 0.0f).rgb * weights.w12.x * weights.w0.y;
+    result += tex.SampleLevel(linearSampler, float3(weights.texPos3.x, weights.texPos0.y, uv.z), 0.0f).rgb * weights.w3.x * weights.w0.y;
 
-    result += func.Apply(tex.SampleLevel(linearSampler, float3(weights.texPos0.x, weights.texPos12.y, uv.z), 0.0f).rgb) * weights.w0.x * weights.w12.y;
-    result += func.Apply(tex.SampleLevel(linearSampler, float3(weights.texPos12.x, weights.texPos12.y, uv.z), 0.0f).rgb) * weights.w12.x * weights.w12.y;
-    result += func.Apply(tex.SampleLevel(linearSampler, float3(weights.texPos3.x, weights.texPos12.y, uv.z), 0.0f).rgb) * weights.w3.x * weights.w12.y;
+    result += tex.SampleLevel(linearSampler, float3(weights.texPos0.x, weights.texPos12.y, uv.z), 0.0f).rgb * weights.w0.x * weights.w12.y;
+    result += tex.SampleLevel(linearSampler, float3(weights.texPos12.x, weights.texPos12.y, uv.z), 0.0f).rgb * weights.w12.x * weights.w12.y;
+    result += tex.SampleLevel(linearSampler, float3(weights.texPos3.x, weights.texPos12.y, uv.z), 0.0f).rgb * weights.w3.x * weights.w12.y;
 
-    result += func.Apply(tex.SampleLevel(linearSampler, float3(weights.texPos0.x, weights.texPos3.y, uv.z), 0.0f).rgb) * weights.w0.x * weights.w3.y;
-    result += func.Apply(tex.SampleLevel(linearSampler, float3(weights.texPos12.x, weights.texPos3.y, uv.z), 0.0f).rgb) * weights.w12.x * weights.w3.y;
-    result += func.Apply(tex.SampleLevel(linearSampler, float3(weights.texPos3.x, weights.texPos3.y, uv.z), 0.0f).rgb) * weights.w3.x * weights.w3.y;
+    result += tex.SampleLevel(linearSampler, float3(weights.texPos0.x, weights.texPos3.y, uv.z), 0.0f).rgb * weights.w0.x * weights.w3.y;
+    result += tex.SampleLevel(linearSampler, float3(weights.texPos12.x, weights.texPos3.y, uv.z), 0.0f).rgb * weights.w12.x * weights.w3.y;
+    result += tex.SampleLevel(linearSampler, float3(weights.texPos3.x, weights.texPos3.y, uv.z), 0.0f).rgb * weights.w3.x * weights.w3.y;
 
     return result;
 }

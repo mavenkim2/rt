@@ -21,7 +21,7 @@ struct VirtualTexture
     {
         const uint pageBorder = 4;
         const uint2 faceSize = (1u << pageInformation.yz);
-        const uint2 numPages = max(faceSize >> 7, 1);
+        const uint2 numPages = max((int2)pageInformation.yz - 7, 1);
 
         uint pageOffsetX = floor(uv.x * numPages.x);
         uint pageOffsetY = floor(uv.y * numPages.y);
@@ -34,7 +34,7 @@ struct VirtualTexture
         uint numPagesPerPool = pageWidthPerPool * pageWidthPerPool;
         uint log2PhysicalPoolNumPages = firstbithigh(numPagesPerPool);
 
-        uint physicalPageLayer = physicalPage >> (2 * log2PhysicalPoolNumPages);
+        uint physicalPageLayer = physicalPage >> log2PhysicalPoolNumPages;
         uint physicalPageInPool = physicalPage & (numPagesPerPool - 1u);
     
         uint physicalPageInPoolY = physicalPageInPool >> log2PhysicalPoolPageWidth;
@@ -43,14 +43,14 @@ struct VirtualTexture
         const uint texelWidthPerPool = texelWidthPerPage * pageWidthPerPool;
 
         uint2 pageStart = uint2(physicalPageInPoolX, physicalPageInPoolY) * texelWidthPerPage;
-        uint texelOffsetX = (uv.x * numPages.x - pageOffsetX) * texelWidthPerPage;
-        uint texelOffsetY = (uv.y * numPages.y - pageOffsetY) * texelWidthPerPage;
+        uint texelOffsetX = (uv.x * numPages.x - pageOffsetX) * min(texelWidthPerPage, faceSize.x);
+        uint texelOffsetY = (uv.y * numPages.y - pageOffsetY) * min(texelWidthPerPage, faceSize.y);
         pageStart += uint2(texelOffsetX + BORDER_SIZE, texelOffsetY + BORDER_SIZE);
         float2 physicalUv = pageStart / (float)texelWidthPerPool;
 
-        if (0)
+        if (debug)
         {
-            printf("physical uv: %f %f\n, physical page: %u", physicalUv.x, physicalUv.y, physicalPage);
+            printf("physical uv: %f %f\nphysical page: %u", physicalUv.x, physicalUv.y, physicalPage);
         }
         return float3(physicalUv, physicalPageLayer);
     }

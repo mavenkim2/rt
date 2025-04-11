@@ -379,6 +379,7 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     // TODO: section 4.3?
     StaticArray<u32> vertexIndices(clusterScratch.arena, clusterNumTriangles * 3,
                                    clusterNumTriangles * 3);
+    StaticArray<u32> primIDs(clusterScratch.arena, clusterNumTriangles, clusterNumTriangles);
     StaticArray<u32> geomIDs(clusterScratch.arena, clusterNumTriangles, clusterNumTriangles);
     StaticArray<u32> clusterVertexIndexToMeshVertexIndex(
         clusterScratch.arena, clusterNumTriangles * 3, clusterNumTriangles * 3);
@@ -435,6 +436,7 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
         };
 
         geomIDs[i - start] = geomID;
+        primIDs[i - start] = primID;
 
         u32 faceID         = mesh.faceIDs ? mesh.faceIDs[primID] : 0u;
         minFaceID          = Min(minFaceID, faceID);
@@ -511,9 +513,9 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     u32 numPageOffsetBits = maxPageOffset == minPageOffset
                                 ? 0u
                                 : Log2Int(Max(maxPageOffset - minPageOffset, 1u)) + 1u;
-    Assert(numPageOffsetBits <= 24);
+    Assert(numPageOffsetBits <= 23);
     u32 numFaceSizeBits = Log2Int(maxLog2Dim) + 1;
-    u32 numFaceDimBits  = numPageOffsetBits + 2 * numFaceSizeBits;
+    u32 numFaceDimBits  = numPageOffsetBits + 2 * numFaceSizeBits + 1;
 
     // Build adjacency data for triangles
     u32 *counts  = PushArray(clusterScratch.arena, u32, clusterNumTriangles);
@@ -1037,6 +1039,7 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
                       numFaceSizeBits);
             WriteBits((u32 *)faceIDNode->values, faceBitOffset, tileMetadata[index].log2Height,
                       numFaceSizeBits);
+            WriteBits((u32 *)faceIDNode->values, faceBitOffset, primIDs[index] & 1, 1);
         }
         Assert(faceBitOffset == 32 + numFaceDimBits * clusterNumTriangles);
     }

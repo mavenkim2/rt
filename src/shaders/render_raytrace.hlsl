@@ -155,7 +155,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
             DenseGeometry dg = GetDenseGeometryHeader(instanceID, blockIndex, printDebug);
 
             uint materialID = dg.DecodeMaterialID(triangleIndex);
-            uint3 pageInformation = dg.DecodePageOffsetAndFaceSize(triangleIndex);
+            uint4 pageInformation = dg.DecodePageOffsetAndFaceSize(triangleIndex);
             uint3 vids = dg.DecodeTriangle(triangleIndex);
 
             float3 p0 = dg.DecodePosition(vids[0]);
@@ -173,9 +173,10 @@ void main(uint3 DTid : SV_DispatchThreadID)
             // Calculate triangle differentials
             // p0 + dpdu * u + dpdv * v = p1
 
+            bool secondFace = pageInformation.w;
             float2 uv0 = float2(0, 0);
-            float2 uv1 = float2(1, 0);
-            float2 uv2 = float2(1, 1);
+            float2 uv1 = secondFace ? float2(1, 1) : float2(1, 0);
+            float2 uv2 = secondFace ? float2(0, 1) : float2(1, 1);
 
             float2 duv10 = uv1 - uv0;
             float2 duv20 = uv2 - uv0;
@@ -246,10 +247,10 @@ void main(uint3 DTid : SV_DispatchThreadID)
                     tex.pageWidthPerPool = 128;
                     tex.texelWidthPerPage = 136;
 
-                    float3 physicalUv = tex.GetPhysicalUV(pageTable, material, pageInformation, uv, printDebug);
+                    float3 physicalUv = tex.GetPhysicalUV(pageTable, material, pageInformation.xyz, uv, printDebug);
                     uint width, height, elements;
                     physicalPages.GetDimensions(width, height, elements);
-                    float3 reflectance = SampleTextureCatmullRom<Gamma>(physicalPages, samplerLinearClamp, physicalUv, float2(width, height));
+                    float3 reflectance = SampleTextureCatmullRom(physicalPages, samplerLinearClamp, physicalUv, float2(width, height));
 
                     dir = SampleDiffuse(reflectance, wo, sample, throughput, printDebug);
                 }

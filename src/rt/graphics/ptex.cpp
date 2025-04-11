@@ -315,7 +315,9 @@ void Convert(string filename)
     string outFilename =
         PushStr8F(scratch.temp.arena, "%S.tiles", RemoveFileExtension(filename));
 
-    if (OS_FileExists(outFilename)) return;
+    // if (OS_FileExists(outFilename)) return;
+
+    // if (!Contains(outFilename, "mountainb0001_geo")) return;
 
     const Vec2u uvTable[] = {
         Vec2u(0, 0),
@@ -764,8 +766,9 @@ void Convert(string filename)
                                     blockBorderSize, bytesPerBlock),
                                 (image->GetPaddedWidth() >> log2BlockSize) * bytesPerBlock,
                                 tile.contents, rowLen,
-                                Min(vLen, (u32)image->height >> log2BlockSize),
-                                Min(rowLen, (image->width >> log2BlockSize) * bytesPerBlock));
+                                Min(vLen, image->GetPaddedHeight() >> log2BlockSize),
+                                Min(rowLen, (image->GetPaddedWidth() >> log2BlockSize) *
+                                                bytesPerBlock));
 
                     tiles.push_back(tile);
                 }
