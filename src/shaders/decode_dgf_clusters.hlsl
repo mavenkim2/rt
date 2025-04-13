@@ -38,7 +38,7 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dtI
     for (uint triangleIndex = groupIndex; triangleIndex < header.numTriangles; triangleIndex += waveNumActiveLanes)
     {
         // write u8 indices
-        uint3 triangleIndices = header.DecodeTriangle(triangleIndex);
+        uint3 triangleIndices = header.DecodeTriangle(triangleIndex).xyz;
 
         uint indexBits = triangleIndices[0] | (triangleIndices[1] << 8u) | (triangleIndices[2] << 16u);
         uint2 offset = GetAlignedAddressAndBitOffset(indexBufferOffset + triangleIndex * 3, 0);

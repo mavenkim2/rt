@@ -35,10 +35,26 @@ void Copy(const void *src, int sstride, void *dst, int dstride, int vres, int ro
 
 // NOTE: absolute index
 void *GetContentsAbsoluteIndex(void *contents, const Vec2u &p, u32 width, u32 height,
-                               u32 stride, u32 borderSize, u32 bytesPerPixel)
+                               u32 stride, u32 bytesPerPixel)
 {
-    Assert(p.x < width + 2 * borderSize && p.y < height + 2 * borderSize);
+    Assert(p.x < width && p.y < height);
     return (u8 *)contents + stride * p.y + p.x * bytesPerPixel;
+}
+
+void Copy(void *src, const Vec2u &srcIndex, u32 srcWidth, u32 srcHeight, void *dst,
+          const Vec2u &dstIndex, u32 dstWidth, u32 dstHeight, u32 vRes, u32 rowLen,
+          u32 bytesPerBlock)
+{
+    u32 srcStride = srcWidth * bytesPerBlock;
+    u32 dstStride = dstWidth * bytesPerBlock;
+    src = Utils::GetContentsAbsoluteIndex(src, srcIndex, srcWidth, srcHeight, srcStride,
+                                          bytesPerBlock);
+    dst = Utils::GetContentsAbsoluteIndex(dst, dstIndex, srcWidth, srcHeight, dstStride,
+                                          bytesPerBlock);
+
+    vRes   = Min(srcHeight, vRes);
+    rowLen = Min(rowLen, srcStride);
+    Copy(src, srcStride, dst, dstStride, vRes, rowLen);
 }
 
 } // namespace Utils
@@ -81,8 +97,8 @@ Vec2u PaddedImage::ConvertRelativeToAbsolute(const Vec2u &p)
 // NOTE: absolute index
 u8 *PaddedImage::GetContentsAbsoluteIndex(const Vec2u &p)
 {
-    return (u8 *)Utils::GetContentsAbsoluteIndex(contents, p, width, height, strideWithBorder,
-                                                 borderSize, bytesPerPixel);
+    return (u8 *)Utils::GetContentsAbsoluteIndex(
+        contents, p, GetPaddedWidth(), GetPaddedHeight(), strideWithBorder, bytesPerPixel);
 }
 
 // NOTE: ignores border
@@ -637,147 +653,108 @@ void Convert(string filename)
         u32 offset          = (u32)tiles.size();
         GPUBuffer *gpuImage = &blockCompressedImages[faceIndex];
 
-        // for (int levelIndex = 0; levelIndex < numLevels[faceIndex]; levelIndex++)
-        // {
-        // PaddedImage *image = &images[faceIndex][levelIndex];
-        PaddedImage *image = &images[faceIndex][0];
+        u32 currentTexelsPerPage = texelWidthPerPage;
+        PaddedImage *image       = &images[faceIndex][0];
 
-        // Write all remaining mip levels to the same tile
-        // TODO: write all the mips at a given level to consecutive tiles,
-        // instead of writing all the levels for a face to consecutive tiles
-#if 0
-        if (image->width <= texelWidthPerTile && image->height <= texelWidthPerTile)
+        u32 numTilesX = Max(image->width / texelWidthPerPage, 1u);
+        u32 numTilesY = Max(image->height / texelWidthPerPage, 1u);
+
+        for (int tileY = 0; tileY < numTilesY; tileY++)
         {
-            Tile tile;
-            tile.contents    = PushArray(scratch.temp.arena, u8, vLen * rowLen);
-            u32 xTexelOffset = 0;
-            u32 yTexelOffset = 0;
-            for (; levelIndex < numLevels[faceIndex]; levelIndex++)
+            for (int tileX = 0; tileX < numTilesX; tileX++)
             {
-                image         = &images[faceIndex][levelIndex];
-                u32 mipVLen   = vLen >> levelIndex;
-                u32 mipRowLen = rowLen >> levelIndex;
+                Vec2u tileStart(blocksPerPage * tileX, blocksPerPage * tileY);
 
-                u32 dstOffset = ((yTexelOffset >> log2BlockSize) * totalBlocksPerTileX +
-                                 (xTexelOffset >> log2BlockSize)) *
-                                blockSize;
+                Tile tile;
+                tile.contents   = PushArray(scratch.temp.arena, u8, vLen * rowLen);
+                tile.parentFace = faceIndex;
+                Utils::Copy(
+                    Utils::GetContentsAbsoluteIndex(gpuImage->mappedPtr, tileStart,
+                                                    image->GetPaddedWidth() >> log2BlockSize,
+                                                    image->GetPaddedHeight() >> log2BlockSize,
+                                                    rowLen, bytesPerBlock),
+                    (image->GetPaddedWidth() >> log2BlockSize) * bytesPerBlock, tile.contents,
+                    rowLen, Min(vLen, image->GetPaddedHeight() >> log2BlockSize),
+                    Min(rowLen, (image->GetPaddedWidth() >> log2BlockSize) * bytesPerBlock));
 
-                Utils::Copy(image->contents, image->strideWithBorder,
-                            tile.contents + dstOffset, totalBlocksPerTileX * blockSize,
-                            mipVLen, mipRowLen);
-                xOffset += image->width;
-
-                if (xOffset >= totalTexelsPerTileX)
-                {
-                    Assert(xOffset == totalTexelsPerTileX);
-                    xOffset = 0;
-                    yOffset = totalTexelsPerTileY / 2;
-                }
-            }
-            break;
-        }
-
-        // One dimension is < texelsPerTile
-        if (Min(image->width, image->height) < texelWidthPerPage &&
-            Max(image->width, image->height) > texelWidthPerPage)
-        {
-            u32 numTiles = (image->width * image->height) >> (log2TexelWidth * 2);
-
-            u32 remainingDim = Max(image->width, image->height);
-            u32 xTexelOffset = 0;
-            u32 yTexelOffset = 0;
-
-            u32 xSrcOffset = 0;
-            u32 ySrcOffset = 0;
-
-            Tile tile;
-            tile.contents = PushArray(scratch.temp.arena, u8, vLen * rowLen);
-            for (u32 i = 0; i < numTiles; i++)
-            {
-                u32 subTileWidth =
-                    Min(totalTexelWidthPerPage, (u32)image->width + 2 * borderSize);
-                u32 subTileHeight =
-                    Min(totalTexelWidthPerPage, (u32)image->height + 2 * borderSize);
-
-                Utils::Copy(Utils::GetContentsAbsoluteIndex(
-                                gpuImage->mappedPtr,
-                                {xSrcOffset >> log2BlockSize, ySrcOffset >> log2BlockSize},
-                                image->GetPaddedWidth() >> log2BlockSize,
-                                image->GetPaddedHeight() >> log2BlockSize, rowLen,
-                                blockBorderSize, bytesPerBlock),
-                            (image->GetPaddedWidth() >> log2BlockSize) * bytesPerBlock,
-                            Utils::GetContentsAbsoluteIndex(
-                                tile.contents,
-                                {xTexelOffset >> log2BlockSize, yTexelOffset >> log2BlockSize},
-                                totalBlocksPerPage, totalBlocksPerPage, rowLen,
-                                blockBorderSize, bytesPerBlock),
-                            rowLen, subTileHeight >> log2BlockSize,
-                            (subTileWidth >> log2BlockSize) * bytesPerBlock);
-
-                if (image->width > texelWidthPerPage)
-                {
-                    // total tile size is 136 by 136
-                    xSrcOffset += texelWidthPerPage + borderSize;
-                    xTexelOffset = 0;
-                    yTexelOffset += image->height + borderSize;
-                    // Allocate new tile
-                    if (yTexelOffset == texelWidthPerPage + borderSize)
-                    {
-                        tiles.push_back(tile);
-                        tile.contents = PushArray(scratch.temp.arena, u8, vLen * rowLen);
-                        yTexelOffset  = 0;
-                    }
-                }
-                else if (image->height > texelWidthPerPage)
-                {
-                    ySrcOffset += texelWidthPerPage + borderSize;
-                    yTexelOffset = 0;
-                    xTexelOffset += image->width + borderSize;
-                    // Allocate new tile
-                    if (xTexelOffset == texelWidthPerPage + borderSize)
-                    {
-                        tiles.push_back(tile);
-                        tile.contents = PushArray(scratch.temp.arena, u8, vLen * rowLen);
-                        xTexelOffset  = 0;
-                    }
-                }
-            }
-        }
-        // Both dimensions >= texelsPerTile
-        else
-#endif
-        {
-            u32 numTilesX = Max(image->width / texelWidthPerPage, 1u);
-            u32 numTilesY = Max(image->height / texelWidthPerPage, 1u);
-
-            for (int tileY = 0; tileY < numTilesY; tileY++)
-            {
-                for (int tileX = 0; tileX < numTilesX; tileX++)
-                {
-                    Vec2u tileStart(totalBlocksPerPage * tileX, totalBlocksPerPage * tileY);
-
-                    Tile tile;
-                    tile.contents   = PushArray(scratch.temp.arena, u8, vLen * rowLen);
-                    tile.parentFace = faceIndex;
-                    Utils::Copy(Utils::GetContentsAbsoluteIndex(
-                                    gpuImage->mappedPtr, tileStart,
-                                    image->GetPaddedWidth() >> log2BlockSize,
-                                    image->GetPaddedHeight() >> log2BlockSize, rowLen,
-                                    blockBorderSize, bytesPerBlock),
-                                (image->GetPaddedWidth() >> log2BlockSize) * bytesPerBlock,
-                                tile.contents, rowLen,
-                                Min(vLen, image->GetPaddedHeight() >> log2BlockSize),
-                                Min(rowLen, (image->GetPaddedWidth() >> log2BlockSize) *
-                                                bytesPerBlock));
-
-                    tiles.push_back(tile);
-                }
+                tiles.push_back(tile);
             }
         }
         u32 size = (u32)tiles.size() - offset;
 
         metaData[faceIndex] = {offset, image->log2Width, image->log2Height};
     }
+
+    // Pack each subsequent mip level into 128x128 tiles. Each subsequent mip level is
+    // split into (128 >> level) x (128 >> level) tiles, and packed in row-major order into a
+    // 128x128 tile until space runs out.
+    //
+    // At runtime: The virtual page offset is shifted down by the number of dimensions * the
+    // current level to get the virtual index used to index the page table. The bottom dim *
+    // level bits determine the location within the 128x128 page.
+    // e.g. for the first mip level,
+    // if the calculated offset is 7, we shift down by 2 to get 1. This is the virtual address
+    // we use to look up in the page table. Once we get the physical page, the lower 2 bits (3)
+    // means our start address in the page is (0.5, 0.5), i.e. the bottom right 64 x 64 tile
+#if 0
+    for (int levelIndex = 1; levelIndex < numLevels[faceIndex]; levelIndex++)
+    {
+        u32 currentLevelBlocksPerPage = (texelWidthPerPage >> levelIndex) >> log2BlockSize;
+
+        u32 currentTileOffset  = 0;
+        u32 maxSubTilesPerTile = 1u << (levelIndex * 2);
+
+        u32 tileWidth     = texelWidthPerPage + ((2 * borderSize) << levelIndex);
+        u32 subTileVLen   = levelVLen >> levelIndex;
+        u32 subTileRowLen = tileVLen * bytesPerBlock;
+
+        Tile tile;
+        tile.contents = PushArray(scratch.temp.arena, u8, levelVLen * levelRowLen);
+
+        // 136, 144, 160, 192, 256, 384
+        // idea: tiles for higher mip levels are going to be bigger to preserve
+        // bit shift logic in shader.
+        // use a separate layer/texture? that seems to make the most sense
+
+        // TODO: how do I handle the lowest mip levels?
+        for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
+        {
+            PaddedImage *image = &images[faceIndex][levelIndex];
+
+            u32 numTilesX = Max(image->width / (texelWidthPerPage >> levelIndex), 1u);
+            u32 numTilesY = Max(image->height / (texelWidthPerPage >> levelIndex), 1u);
+
+            for (int tileY = 0; tileY < numTilesY; tileY++)
+            {
+                for (int tileX = 0; tileX < numTilesX; tileX++)
+                {
+                    Vec2u srcStart(currentLevelBlocksPerPage * tileX,
+                                   currentLevelBlocksPerPage * tileY);
+
+                    u32 dstTileX = currentTileOffset & ((1u << levelIndex) - 1);
+                    u32 dstTileY = currenTileOffset >> levelIndex;
+                    Vec2u dstStart(currentLevelBlocksPerPage * dstTileX,
+                                   currentLevelBlocksPerPage * dstTileY);
+
+                    Utils::Copy(gpuImage->mappedPtr, srcStart,
+                                image->GetPaddedWidth() >> log2BlockSize,
+                                image->GetPaddedHeight() >> log2BlockSize, tile.contents,
+                                dstStart, tileWidth, tileHeight, subTileVLen, subTileRowLen,
+                                bytesPerBlock);
+
+                    currentTileOffset++;
+                    if (currentTileOffset == maxSubTilesPerTile)
+                    {
+                        currenTileOffset = 0;
+                        tiles.push_back(tile);
+                        tile.contents =
+                            PushArray(scratch.temp.arena, u8, levelVLen * levelRowLen);
+                    }
+                }
+            }
+        }
+    }
+#endif
 
     // Write metadata and tiles to disk
     StringBuilderMapped builder(outFilename);
@@ -788,6 +765,8 @@ void Convert(string filename)
     PutData(&builder, metaData.data, sizeof(TileMetadata) * metaData.Length());
     for (auto &tile : tiles)
     {
+        u32 vLen   = totalBlocksPerPage;
+        u32 rowLen = totalBlocksPerPage * bytesPerBlock;
         PutData(&builder, tile.contents, vLen * rowLen);
     }
 
@@ -871,6 +850,12 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 totalNumPages,
     // Allocate page table
     pageTableBuffer =
         device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(u32) * totalNumPages);
+
+    // ways of doing this:
+    // 1. have multiple page sizes; e.g. 128x128 for highest, 64x64 for next level, etc.
+    // this complicates page management, but makes lookup easy
+    // 2. only have one page size and pack multiple faces into the same page. makes page
+    // managemnt trivial but complicates the lookup/ requires more information for the lookup
 
     // Allocate physical page pool
     for (int i = 0; i < numPools; i++)

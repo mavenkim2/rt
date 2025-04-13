@@ -43,12 +43,12 @@ struct VirtualTexture
         const uint texelWidthPerPool = texelWidthPerPage * pageWidthPerPool;
 
         uint2 pageStart = uint2(physicalPageInPoolX, physicalPageInPoolY) * texelWidthPerPage;
-        uint texelOffsetX = (uv.x * numPages.x - pageOffsetX) * min(texelWidthPerPage, faceSize.x);
-        uint texelOffsetY = (uv.y * numPages.y - pageOffsetY) * min(texelWidthPerPage, faceSize.y);
+        uint texelOffsetX = frac(uv.x * numPages.x) * min(texelWidthPerPage, faceSize.x);
+        uint texelOffsetY = frac(uv.y * numPages.y) * min(texelWidthPerPage, faceSize.y);
         pageStart += uint2(texelOffsetX + BORDER_SIZE, texelOffsetY + BORDER_SIZE);
         float2 physicalUv = pageStart / (float)texelWidthPerPool;
 
-        if (debug)
+        if (0)
         {
             printf("physical uv: %f %f\nphysical page: %u", physicalUv.x, physicalUv.y, physicalPage);
         }

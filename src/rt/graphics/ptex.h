@@ -13,6 +13,9 @@ using namespace rt;
 void Copy(const void *src, int sstride, void *dst, int dstride, int vres, int rowlen);
 void *GetContentsAbsoluteIndex(void *contents, const Vec2u &p, u32 width, u32 height,
                                u32 stride, u32 borderSize, u32 bytesPerPixel);
+void Copy(void *src, const Vec2u &srcIndex, u32 srcWidth, u32 srcHeight, void *dst,
+          const Vec2u &dstIndex, u32 dstWidth, u32 dstHeight, u32 vRes, u32 rowLen,
+          u32 bytesPerBlock);
 } // namespace Utils
 
 namespace rt
@@ -166,6 +169,12 @@ struct TileMetadata
     int log2Width;
     int log2Height;
 };
+
+// struct TileFileHeader
+// {
+//     int numFaces, numTiles;
+//     int offsets[maxNumLevels];
+// };
 
 struct PaddedImage : Image
 {

@@ -112,7 +112,6 @@ float3 TransformV(float3x4 m, float3 v)
     return mul(m, float4(v, 0));
 }
 
-#if 0
 uint2 SwizzleThreadGroup(uint3 dispatchThreadID, uint3 groupID, uint3 GTid, uint2 groupDim, uint dispatchDimX, uint tileWidth,
     uint log2TileWidth, uint numGroupsInTile, out uint2 swizzledGid)
 {
@@ -143,7 +142,6 @@ uint2 SwizzleThreadGroup(uint3 dispatchThreadID, uint3 groupID, uint3 GTid, uint
 
     return swizzledDTid;
 }
-#endif
 
 float ReciprocalPow2(int power)
 {

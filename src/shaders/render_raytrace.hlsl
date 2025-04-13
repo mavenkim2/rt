@@ -158,6 +158,22 @@ void main(uint3 DTid : SV_DispatchThreadID)
             uint4 pageInformation = dg.DecodePageOffsetAndFaceSize(triangleIndex);
             uint3 vids = dg.DecodeTriangle(triangleIndex);
 
+            // Rotate to original order
+            uint rotate = BitFieldExtractU32(pageInformation.w, 2, 0);
+            uint isSecondFace = BitFieldExtractU32(pageInformation.w, 1, 2);
+
+            uint3 oldVids = vids;
+            vids = (rotate == 1 ? vids.zxy : (rotate == 2 ? vids.yzx : vids));
+            float2 oldBary = bary;
+            bary.x = (rotate == 1 ? 1 - oldBary.x - oldBary.y : (rotate == 2 ? oldBary.y : oldBary.x));
+            bary.y = (rotate == 1 ? oldBary.x : (rotate == 2 ? 1 - oldBary.x - oldBary.y : oldBary.y));
+
+            if (printDebug)
+            {
+                printf("%u %u %u type: %u\noldvids: %u %u %u\nvids: %u %u %u\n", instanceID, blockIndex, triangleIndex, rotate,
+                        oldVids[0], oldVids[1], oldVids[2], vids[0], vids[1], vids[2]);
+            }
+
             float3 p0 = dg.DecodePosition(vids[0]);
             float3 p1 = dg.DecodePosition(vids[1]);
             float3 p2 = dg.DecodePosition(vids[2]);
@@ -173,10 +189,9 @@ void main(uint3 DTid : SV_DispatchThreadID)
             // Calculate triangle differentials
             // p0 + dpdu * u + dpdv * v = p1
 
-            bool secondFace = pageInformation.w;
             float2 uv0 = float2(0, 0);
-            float2 uv1 = secondFace ? float2(1, 1) : float2(1, 0);
-            float2 uv2 = secondFace ? float2(0, 1) : float2(1, 1);
+            float2 uv1 = isSecondFace ? float2(1, 1) : float2(1, 0);
+            float2 uv2 = isSecondFace ? float2(0, 1) : float2(1, 1);
 
             float2 duv10 = uv1 - uv0;
             float2 duv20 = uv2 - uv0;

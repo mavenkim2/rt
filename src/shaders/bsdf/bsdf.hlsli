@@ -41,7 +41,7 @@ float3 SampleDiffuse(float3 R, float3 wo, float2 u, inout float3 throughput, boo
     wi.z = wo.z < 0 ? -wi.z : wi.z;
     float pdf = CosineHemispherePDF(abs(wi.z));
 
-    if (debug) 
+    if (0) 
     {
         printf("R: %f %f %f\n", R.x, R.y, R.z);
     }

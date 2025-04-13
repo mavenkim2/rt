@@ -37,7 +37,8 @@ void main(inout RayPayload payload : SV_RayPayload, BuiltInTriangleIntersectionA
     uint triangleIndex = blockTriangleIndices[1];
 
     DenseGeometry dg = GetDenseGeometryHeader(instanceID, blockIndex);
-    uint3 vids = dg.DecodeTriangle(triangleIndex);
+    // TODO: this shader doesn't handle uv's properly
+    uint3 vids = dg.DecodeTriangle(triangleIndex).xyz;
 
     float3 p0 = dg.DecodePosition(vids[0]);
     float3 p1 = dg.DecodePosition(vids[1]);

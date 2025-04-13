@@ -513,9 +513,9 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     u32 numPageOffsetBits = maxPageOffset == minPageOffset
                                 ? 0u
                                 : Log2Int(Max(maxPageOffset - minPageOffset, 1u)) + 1u;
-    Assert(numPageOffsetBits <= 23);
+    Assert(numPageOffsetBits <= 21);
     u32 numFaceSizeBits = Log2Int(maxLog2Dim) + 1;
-    u32 numFaceDimBits  = numPageOffsetBits + 2 * numFaceSizeBits + 1;
+    u32 numFaceDimBits  = numPageOffsetBits + 2 * numFaceSizeBits + 3;
 
     // Build adjacency data for triangles
     u32 *counts  = PushArray(clusterScratch.arena, u32, clusterNumTriangles);
@@ -645,7 +645,7 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
                                                       clusterNumTriangles);
 
     StaticArray<u32> newIndexOrder(clusterScratch.arena, clusterNumTriangles * 3);
-    StaticArray<u32> debugIndexOrder(clusterScratch.arena, clusterNumTriangles * 3);
+    StaticArray<u32> oldIndexOrder(clusterScratch.arena, clusterNumTriangles * 3);
     StaticArray<u32> triangleOrder(clusterScratch.arena, clusterNumTriangles * 3);
 
     u32 prevTriangle = minValenceTriangle;
@@ -673,9 +673,9 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     newIndexOrder.Push(firstIndices[1]);
     newIndexOrder.Push(firstIndices[2]);
 
-    debugIndexOrder.Push(firstIndices[0]);
-    debugIndexOrder.Push(firstIndices[1]);
-    debugIndexOrder.Push(firstIndices[2]);
+    oldIndexOrder.Push(firstIndices[0]);
+    oldIndexOrder.Push(firstIndices[1]);
+    oldIndexOrder.Push(firstIndices[2]);
 
     triangleOrder.Push(minValenceTriangle);
 
@@ -715,9 +715,9 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
                 newIndexOrder.Push(indices[1]);
                 newIndexOrder.Push(indices[2]);
 
-                debugIndexOrder.Push(indices[0]);
-                debugIndexOrder.Push(indices[1]);
-                debugIndexOrder.Push(indices[2]);
+                oldIndexOrder.Push(indices[0]);
+                oldIndexOrder.Push(indices[1]);
+                oldIndexOrder.Push(indices[2]);
 
                 triangleOrder.Push(minValenceTriangle);
                 continue;
@@ -788,9 +788,9 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
                     vertexIndices[3 * newMinValenceTriangle + 2] = indices[0];
                     newIndexOrder.Push(indices[0]);
 
-                    debugIndexOrder.Push(indices[1]);
-                    debugIndexOrder.Push(indices[2]);
-                    debugIndexOrder.Push(indices[0]);
+                    oldIndexOrder.Push(indices[0]);
+                    oldIndexOrder.Push(indices[1]);
+                    oldIndexOrder.Push(indices[2]);
                 }
                 // [0, 1, 2] -> [2, 0, 1]
                 else if (edgeIndex == 2)
@@ -800,17 +800,17 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
                     vertexIndices[3 * newMinValenceTriangle + 2] = indices[1];
                     newIndexOrder.Push(indices[1]);
 
-                    debugIndexOrder.Push(indices[2]);
-                    debugIndexOrder.Push(indices[0]);
-                    debugIndexOrder.Push(indices[1]);
+                    oldIndexOrder.Push(indices[0]);
+                    oldIndexOrder.Push(indices[1]);
+                    oldIndexOrder.Push(indices[2]);
                 }
                 else
                 {
                     newIndexOrder.Push(indices[2]);
 
-                    debugIndexOrder.Push(indices[0]);
-                    debugIndexOrder.Push(indices[1]);
-                    debugIndexOrder.Push(indices[2]);
+                    oldIndexOrder.Push(indices[0]);
+                    oldIndexOrder.Push(indices[1]);
+                    oldIndexOrder.Push(indices[2]);
                 }
 
                 u32 oldIndices[3];
@@ -845,10 +845,6 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
                             vertexIndices[3 * minValenceTriangle]     = oldIndices[2];
                             vertexIndices[3 * minValenceTriangle + 1] = oldIndices[0];
                             vertexIndices[3 * minValenceTriangle + 2] = oldIndices[1];
-
-                            debugIndexOrder[debugIndexOrder.Length() - 6] = oldIndices[2];
-                            debugIndexOrder[debugIndexOrder.Length() - 5] = oldIndices[0];
-                            debugIndexOrder[debugIndexOrder.Length() - 4] = oldIndices[1];
 
                             oldEdgeIndex = 1;
                         }
@@ -1022,31 +1018,33 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     }
     if (hasFaceIDs)
     {
-        // WriteBits((u32 *)faceIDNode->values, faceBitOffset, minFaceID, 32);
-        // for (auto index : triangleOrder)
-        // {
-        //     WriteBits((u32 *)faceIDNode->values, faceBitOffset, faceIDs[index] - minFaceID,
-        //               numFaceBits);
-        // }
-        // Assert(faceBitOffset == 32 + numFaceBits * clusterNumTriangles);
-
         WriteBits((u32 *)faceIDNode->values, faceBitOffset, minPageOffset, 32);
-        for (auto index : triangleOrder)
+        for (u32 i = 0; i < triangleOrder.Length(); i++)
         {
+            u32 index = triangleOrder[i];
             WriteBits((u32 *)faceIDNode->values, faceBitOffset,
                       tileMetadata[index].offset - minPageOffset, numPageOffsetBits);
             WriteBits((u32 *)faceIDNode->values, faceBitOffset, tileMetadata[index].log2Width,
                       numFaceSizeBits);
             WriteBits((u32 *)faceIDNode->values, faceBitOffset, tileMetadata[index].log2Height,
                       numFaceSizeBits);
+
+            // Write 2 bits to denote triangle rotation
+            u32 indices[3];
+            GetIndices(indices, index);
+            u32 oldStartIndex = oldIndexOrder[3 * i];
+            u32 rotate =
+                oldStartIndex == indices[0] ? 0 : (oldStartIndex == indices[1] ? 2 : 1);
+
+            WriteBits((u32 *)faceIDNode->values, faceBitOffset, rotate, 2);
             WriteBits((u32 *)faceIDNode->values, faceBitOffset, primIDs[index] & 1, 1);
         }
         Assert(faceBitOffset == 32 + numFaceDimBits * clusterNumTriangles);
     }
 
-    for (u32 i = 0; i < debugIndexOrder.Length(); i++)
+    for (u32 i = 0; i < oldIndexOrder.Length(); i++)
     {
-        debugIndexOrder[i] = mapOldIndexToDGFIndex[debugIndexOrder[i]];
+        oldIndexOrder[i] = mapOldIndexToDGFIndex[oldIndexOrder[i]];
     }
 
     Assert(bitOffset == numBits);
@@ -1264,9 +1262,9 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     auto *debug1Node = buildData.debugRestartHighBitPerDword.AddNode(4);
     MemoryCopy(debug1Node->values, backtrack.bits, bitSize);
 
-    auto *debugIndexNode = buildData.debugIndices.AddNode(debugIndexOrder.Length());
-    MemoryCopy(debugIndexNode->values, debugIndexOrder.data,
-               debugIndexOrder.Length() * sizeof(u32));
+    auto *debugIndexNode = buildData.debugIndices.AddNode(oldIndexOrder.Length());
+    MemoryCopy(debugIndexNode->values, oldIndexOrder.data,
+               oldIndexOrder.Length() * sizeof(u32));
     ScratchEnd(clusterScratch);
 }
 

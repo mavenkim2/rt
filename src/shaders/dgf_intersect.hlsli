@@ -28,7 +28,7 @@ bool IntersectCluster(in uint instanceID, in uint primitiveIndex, in float3 o, i
     DenseGeometry dg = GetDenseGeometryHeader(instanceID, blockIndex, debug);
 
 #if LOG2_TRIANGLES_PER_LEAF == 0
-    uint3 vids = dg.DecodeTriangle(triangleIndex);
+    uint3 vids = dg.DecodeTriangle(triangleIndex).xyz;
     
     float3 p0 = dg.DecodePosition(vids[0]);
     float3 p1 = dg.DecodePosition(vids[1]);
@@ -50,7 +50,7 @@ bool IntersectCluster(in uint instanceID, in uint primitiveIndex, in float3 o, i
     tHit = tMax;
     for (uint i = triangleIndex; i < min(triangleIndex + TRIANGLES_PER_LEAF, dg.numTriangles); i++)
     {
-        uint3 vids = dg.DecodeTriangle(i);
+        uint3 vids = dg.DecodeTriangle(i).xyz;
         
         float3 p0 = dg.DecodePosition(vids[0]);
         float3 p1 = dg.DecodePosition(vids[1]);
