@@ -325,6 +325,7 @@ struct Swapchain
 
 enum class ImageType
 {
+    Type1D,
     Type2D,
     Array2D,
     Cubemap,
@@ -371,6 +372,17 @@ struct GPUImage
     VkImageLayout lastLayout;
     VkAccessFlags2 lastAccess;
     VkImageAspectFlags aspect;
+
+    struct Subresource
+    {
+        VkImageView imageView;
+        u32 baseLayer;
+        u32 numLayers;
+        u32 baseMip;
+        u32 numMips;
+        // i32 descriptorIndex;
+    };
+    StaticArray<Subresource> subresources;
 
     GPUImage() {}
 };
@@ -500,7 +512,7 @@ struct DescriptorSet
     std::vector<VkWriteDescriptorSet> writeDescriptorSets;
     DescriptorSetLayout *layout;
 
-    DescriptorSet &Bind(int index, GPUImage *image);
+    DescriptorSet &Bind(int index, GPUImage *image, int subresource = -1);
     DescriptorSet &Bind(int index, GPUBuffer *buffer);
     DescriptorSet &Bind(int index, VkAccelerationStructureKHR *accel);
 };
@@ -719,41 +731,6 @@ struct Vulkan
         ShaderVulkan *next;
     };
 
-    //////////////////////////////
-    // Buffers
-    //
-
-    //////////////////////////////
-    // Textures/Samplers
-    //
-
-    struct TextureVulkan
-    {
-        VkImage image            = VK_NULL_HANDLE;
-        VkBuffer stagingBuffer   = VK_NULL_HANDLE;
-        VmaAllocation allocation = VK_NULL_HANDLE;
-
-        struct Subresource
-        {
-            VkImageView imageView = VK_NULL_HANDLE;
-            u32 baseLayer;
-            u32 numLayers;
-            u32 baseMip;
-            u32 numMips;
-            i32 descriptorIndex;
-
-            b32 IsValid() { return imageView != VK_NULL_HANDLE; }
-        };
-        Subresource subresource;               // whole view
-        std::vector<Subresource> subresources; // sub views
-        TextureVulkan *next;
-    };
-
-    struct SamplerVulkan
-    {
-        VkSampler sampler;
-    };
-
     std::vector<VkSampler> immutableSamplers;
 
     //////////////////////////////
@@ -824,7 +801,10 @@ struct Vulkan
                                                   VkShaderStageFlags stage);
     GPUBuffer CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
                            MemoryUsage usage = MemoryUsage::GPU_ONLY);
-    GPUImage CreateImage(ImageDesc desc);
+    GPUImage CreateImage(ImageDesc desc, int numSubresources = -1);
+    int CreateSubresource(GPUImage *image, u32 baseMip = 0,
+                          u32 numMips = VK_REMAINING_MIP_LEVELS, u32 baseLayer = 0,
+                          u32 numLayers = VK_REMAINING_ARRAY_LAYERS);
     void DestroyBuffer(GPUBuffer *buffer);
     void DestroyImage(GPUImage *image);
     void DestroyAccelerationStructure(GPUAccelerationStructure *as);

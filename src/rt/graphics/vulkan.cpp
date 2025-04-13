@@ -1559,7 +1559,7 @@ GPUBuffer Vulkan::CreateBuffer(VkBufferUsageFlags flags, size_t totalSize, Memor
     return buffer;
 }
 
-GPUImage Vulkan::CreateImage(ImageDesc desc)
+GPUImage Vulkan::CreateImage(ImageDesc desc, int numSubresources)
 {
     GPUImage image = {};
     image.desc     = desc;
@@ -1632,40 +1632,70 @@ GPUImage Vulkan::CreateImage(ImageDesc desc)
     VK_CHECK(
         vmaCreateImage(allocator, &imageInfo, &allocInfo, &image.image, &image.allocation, 0));
 
-    VkImageViewCreateInfo viewInfo = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-
-    switch (desc.imageType)
-    {
-        case ImageType::Type2D:
-        {
-            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        }
-        break;
-        case ImageType::Array2D:
-        {
-            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-        }
-        break;
-        case ImageType::Cubemap:
-        {
-            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
-        }
-        break;
-    }
-    viewInfo.image                           = image.image;
-    viewInfo.format                          = desc.format;
-    viewInfo.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-    viewInfo.subresourceRange.baseMipLevel   = 0;
-    viewInfo.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
-
-    vkCreateImageView(device, &viewInfo, 0, &image.imageView);
+    numSubresources = numSubresources == -1 ? (desc.numMips - 1) : numSubresources;
+    if (numSubresources)
+        image.subresources = StaticArray<GPUImage::Subresource>(arena, numSubresources);
+    CreateSubresource(&image);
 
     image.lastPipeline = VK_PIPELINE_STAGE_2_NONE;
     image.lastLayout   = VK_IMAGE_LAYOUT_UNDEFINED;
     image.lastAccess   = VK_ACCESS_2_NONE;
     return image;
+}
+
+int Vulkan::CreateSubresource(GPUImage *image, u32 baseMip, u32 numMips, u32 baseLayer,
+                              u32 numLayers)
+{
+    VkImageViewCreateInfo createInfo = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    createInfo.format                = image->desc.format;
+    createInfo.image                 = image->image;
+
+    switch (image->desc.imageType)
+    {
+        case ImageType::Type2D:
+        {
+            createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        }
+        break;
+        case ImageType::Array2D:
+        {
+            createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        }
+        break;
+        case ImageType::Cubemap:
+        {
+            createInfo.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+        }
+        break;
+    }
+
+    createInfo.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    createInfo.subresourceRange.baseMipLevel   = baseMip;
+    createInfo.subresourceRange.levelCount     = numMips;
+    createInfo.subresourceRange.baseArrayLayer = baseLayer;
+    createInfo.subresourceRange.layerCount     = numLayers;
+
+    int result = -1;
+    if (baseLayer == 0 && numLayers == VK_REMAINING_ARRAY_LAYERS && baseMip == 0 &&
+        numMips == VK_REMAINING_MIP_LEVELS)
+    {
+        Assert(image->imageView == VK_NULL_HANDLE);
+        VK_CHECK(vkCreateImageView(device, &createInfo, 0, &image->imageView));
+    }
+    else
+    {
+        GPUImage::Subresource subresource = {};
+        subresource.baseLayer            = baseLayer;
+        subresource.numLayers            = numLayers;
+        subresource.baseMip              = baseMip;
+        subresource.numMips              = numMips;
+
+        VK_CHECK(vkCreateImageView(device, &createInfo, 0, &subresource.imageView));
+        image->subresources.Push(subresource);
+        result = (int)(image->subresources.Length() - 1);
+    }
+
+    return result;
 }
 
 void Vulkan::DestroyBuffer(GPUBuffer *buffer)
@@ -1989,12 +2019,13 @@ VkDescriptorSetLayout *DescriptorSetLayout::GetVulkanLayout()
     return &layout;
 }
 
-DescriptorSet &DescriptorSet::Bind(int index, GPUImage *image)
+DescriptorSet &DescriptorSet::Bind(int index, GPUImage *image, int subresource)
 {
     Assert(index < layout->bindings.size() && index < descriptorInfo.size());
     VkDescriptorImageInfo info = {};
-    info.imageView             = image->imageView;
-    info.imageLayout           = image->lastLayout;
+    info.imageView =
+        subresource == -1 ? image->imageView : image->subresources[subresource].imageView;
+    info.imageLayout = image->lastLayout;
 
     descriptorInfo[index].image = info;
 

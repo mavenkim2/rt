@@ -170,11 +170,12 @@ struct TileMetadata
     int log2Height;
 };
 
-// struct TileFileHeader
-// {
-//     int numFaces, numTiles;
-//     int offsets[maxNumLevels];
-// };
+struct TileFileHeader
+{
+    int numFaces, numTiles;
+    int offsets[16];
+    int sizes[16];
+};
 
 struct PaddedImage : Image
 {
@@ -247,32 +248,37 @@ struct VirtualTextureManager
     static const u32 InvalidPool  = ~0u;
     static const u32 InvalidRange = ~0u;
 
-    StaticArray<BlockRange> pageRanges;
-    u32 freeRange;
-
-    StaticArray<GPUImage> gpuPhysicalPools;
-    StaticArray<PhysicalPagePool> pools;
-
     VkFormat format;
 
     u32 maxNumLayers;
 
-    u32 pageWidthPerPool;
-    u32 texelWidthPerPage;
+    struct LevelInfo
+    {
+        StaticArray<BlockRange> pageRanges;
+        StaticArray<PhysicalPagePool> pools;
+        GPUImage gpuPhysicalPool;
+        u32 freeRange;
+        u32 pageWidthPerPool;
+        u32 texelWidthPerPage;
+        u32 partiallyFreePool;
+        u32 completelyFreePool;
 
-    u32 partiallyFreePool;
-    u32 completelyFreePool;
+        int pageTableSubresourceIndex;
+    };
+    StaticArray<LevelInfo> levelInfo;
 
     Shader shader;
     DescriptorSetLayout descriptorSetLayout;
     VkPipeline pipeline;
-    GPUBuffer pageTableBuffer;
+    GPUImage pageTable;
     PushConstant push;
 
-    VirtualTextureManager(Arena *arena, u32 totalNumPages, u32 pageWidthPerPool,
-                          u32 texelWidthPerPage, u32 borderSize, VkFormat format);
-    u32 AllocateVirtualPages(u32 numPages);
-    void AllocatePhysicalPages(CommandBuffer *cmd, u8 *contents, u32 allocIndex);
+    VirtualTextureManager(Arena *arena, u32 numVirtualPages, u32 numPhysicalPages,
+                          int numLevels, u32 inPageWidthPerPool, u32 inTexelWidthPerPage,
+                          u32 borderSize, VkFormat format);
+    u32 AllocateVirtualPages(u32 numPages, int levelIndex = 0);
+    void AllocatePhysicalPages(CommandBuffer *cmd, u8 *contents, u32 allocIndex,
+                               int levelIndex = 0);
 };
 
 void InitializePtex();
