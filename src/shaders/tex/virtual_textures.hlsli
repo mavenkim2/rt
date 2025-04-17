@@ -23,6 +23,9 @@ struct VirtualTexture
         const uint2 faceSize = (1u << pageInformation.yz);
         const uint2 numPages = max((int2)pageInformation.yz - 7, 1);
 
+        // i just have a texture1darray, and have pages 
+        // decrease in size until they're 1 texel
+
         uint pageOffsetX = floor(uv.x * numPages.x);
         uint pageOffsetY = floor(uv.y * numPages.y);
         uint pageOffset = floor(uv.y * numPages.y * numPages.x) + pageOffsetX;

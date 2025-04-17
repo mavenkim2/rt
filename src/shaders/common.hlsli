@@ -4,6 +4,7 @@
 static const float PI = 3.1415926535f;
 static const float FLT_MAX = asfloat(0x7F800000);
 static const float InvPi = 0.31830988618379067154f;
+static const float OneMinusEpsilon = 0x1.fffffep-1;
 
 #define texture2DSpace space1
 #define structuredBufferSpace space2
@@ -159,6 +160,11 @@ float2x3 BuildOrthonormalBasis(float3 n)
     result[1] = float3(b, mad(n.y * a, n.y, s), -n.y);
 
     return result;
+}
+
+float Luminance(float3 rgb)
+{
+    return dot(float3(0.2126f, 0.7152f, 0.0722f), rgb);
 }
 
 #endif

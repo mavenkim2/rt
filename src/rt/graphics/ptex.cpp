@@ -121,6 +121,7 @@ void PaddedImage::WriteRotatedBorder(PaddedImage &other, Vec2u srcStart, Vec2u d
     int vStart = srcStart.y;
 
     Assert(bytesPerPixel == other.bytesPerPixel);
+    Assert(borderSize == other.borderSize);
 
     u8 *src       = other.GetContentsRelativeIndex(srcStart);
     u32 srcStride = other.strideWithBorder;
@@ -422,8 +423,9 @@ void Convert(string filename)
 
         while (depth < levels)
         {
+            u32 mipBorderSize          = Min(width, height) < borderSize ? 1 : borderSize;
             PaddedImage outPaddedImage = GenerateMips(scratch.temp.arena, inPaddedImage, width,
-                                                      height, scale, borderSize);
+                                                      height, scale, mipBorderSize);
 
             images[i][depth] = outPaddedImage;
             inPaddedImage    = outPaddedImage;
@@ -454,7 +456,6 @@ void Convert(string filename)
         u32 log2Width               = neighborFaceImg.log2Width;
         u32 log2Height              = neighborFaceImg.log2Height;
 
-        // u32 clampedBorderSize = Min(borderSize, );
         // reduce u
         if (log2Width > dstBaseSize.x)
         {
@@ -462,8 +463,9 @@ void Convert(string filename)
             {
                 u32 width = neighborFaceImg.width;
                 width >>= 1;
-                neighborFaceImg = GenerateMips(scratch.temp.arena, neighborFaceImg, width,
-                                               neighborFaceImg.height, {2, 1}, borderSize);
+                u32 mipBorderSize = Min(width, height) < borderSize ? 1 : borderSize;
+                neighborFaceImg   = GenerateMips(scratch.temp.arena, neighborFaceImg, width,
+                                                 neighborFaceImg.height, {2, 1}, mipBorderSize);
             }
         }
         // reduce v
@@ -473,9 +475,10 @@ void Convert(string filename)
             {
                 u32 height = neighborFaceImg.height;
                 height >>= 1;
+                u32 mipBorderSize = Min(width, height) < borderSize ? 1 : borderSize;
                 neighborFaceImg =
                     GenerateMips(scratch.temp.arena, neighborFaceImg, neighborFaceImg.width,
-                                 height, {1, 2}, borderSize);
+                                 height, {1, 2}, mipBorderSize);
             }
         }
         scale = Vec2u(Max(Vec2i(0), -srcBaseDepth));
@@ -518,19 +521,24 @@ void Convert(string filename)
                 int vRes;
                 int rowLen;
 
-                start.x = (edgeIndex == e_left ? 0 : borderSize) +
+                Assert(neighborFaceImg.borderSize == currentFaceImg.borderSize);
+                u32 mipBorderSize = neighborFaceImg.borderSize;
+
+                start.x = (edgeIndex == e_left ? 0 : mipBorderSize) +
                           (edgeIndex == e_right ? currentFaceImg.width : 0);
-                start.y = (edgeIndex == e_bottom ? 0 : borderSize) +
+                start.y = (edgeIndex == e_bottom ? 0 : mipBorderSize) +
                           (edgeIndex == e_top ? currentFaceImg.height : 0);
 
                 Vec2u srcStart;
-                srcStart.x = aeid == e_right ? neighborFaceImg.width - borderSize : 0;
-                srcStart.y = aeid == e_top ? neighborFaceImg.height - borderSize : 0;
+                srcStart.x = aeid == e_right ? neighborFaceImg.width - mipBorderSize : 0;
+                srcStart.y = aeid == e_top ? neighborFaceImg.height - mipBorderSize : 0;
 
-                int srcVRes   = (aeid & 1) ? neighborFaceImg.height : (borderSize >> scale.y);
-                int srcRowLen = (aeid & 1) ? (borderSize >> scale.x) : neighborFaceImg.width;
-                int dstVRes   = (edgeIndex & 1) ? currentFaceImg.height : borderSize;
-                int dstRowLen = (edgeIndex & 1) ? borderSize : currentFaceImg.width;
+                Assert(!(mipBorderSize == 1 && scale.y != 0 && scale.x != 0));
+                int srcVRes = (aeid & 1) ? neighborFaceImg.height : (mipBorderSize >> scale.y);
+                int srcRowLen =
+                    (aeid & 1) ? (mipBorderSize >> scale.x) : neighborFaceImg.width;
+                int dstVRes   = (edgeIndex & 1) ? currentFaceImg.height : mipBorderSize;
+                int dstRowLen = (edgeIndex & 1) ? mipBorderSize : currentFaceImg.width;
 
                 currentFaceImg.WriteRotatedBorder(neighborFaceImg, srcStart, start, edgeIndex,
                                                   rot, srcVRes, srcRowLen, dstVRes, dstRowLen,
@@ -575,17 +583,21 @@ void Convert(string filename)
                     PaddedImage cornerImg = GetNeighborFaceImage(
                         currentFaceImg, cfaceId[1], levelIndex, cornerRotate, cornerScale);
 
+                    u32 cornerMipBorderSize = cornerImg.borderSize;
+                    Assert(cornerMipBorderSize == currentFaceImg.borderSize);
                     Vec2u srcStart =
-                        uvTable[cedgeId[1]] *
-                        Vec2u(cornerImg.width - borderSize, cornerImg.height - borderSize);
-                    Vec2u dstStart =
-                        uvTable[edgeIndex] * Vec2u(currentFaceImg.width + borderSize,
-                                                   currentFaceImg.height + borderSize);
+                        uvTable[cedgeId[1]] * Vec2u(cornerImg.width - cornerMipBorderSize,
+                                                    cornerImg.height - cornerMipBorderSize);
+                    Vec2u dstStart = uvTable[edgeIndex] *
+                                     Vec2u(currentFaceImg.width + cornerMipBorderSize,
+                                           currentFaceImg.height + cornerMipBorderSize);
 
                     currentFaceImg.WriteRotatedBorder(
                         cornerImg, srcStart, dstStart, cedgeId[1], cornerRotate,
-                        borderSize >> cornerScale.y, borderSize >> cornerScale.x, borderSize,
-                        borderSize, (cornerRotate & 1) ? cornerScale.yx() : cornerScale);
+                        cornerMipBorderSize >> cornerScale.y,
+                        cornerMipBorderSize >> cornerScale.x, cornerMipBorderSize,
+                        cornerMipBorderSize,
+                        (cornerRotate & 1) ? cornerScale.yx() : cornerScale);
                 }
                 else if (numCorners > 1)
                 {
