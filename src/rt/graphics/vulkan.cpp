@@ -1561,9 +1561,10 @@ GPUBuffer Vulkan::CreateBuffer(VkBufferUsageFlags flags, size_t totalSize, Memor
 
 GPUImage Vulkan::CreateImage(ImageDesc desc, int numSubresources)
 {
-    GPUImage image = {};
-    image.desc     = desc;
-    image.aspect   = VK_IMAGE_ASPECT_COLOR_BIT;
+    GPUImage image  = {};
+    image.desc      = desc;
+    image.aspect    = VK_IMAGE_ASPECT_COLOR_BIT;
+    image.imageView = VK_NULL_HANDLE;
 
     VkImageCreateInfo imageInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     switch (desc.imageType)
@@ -1685,10 +1686,10 @@ int Vulkan::CreateSubresource(GPUImage *image, u32 baseMip, u32 numMips, u32 bas
     else
     {
         GPUImage::Subresource subresource = {};
-        subresource.baseLayer            = baseLayer;
-        subresource.numLayers            = numLayers;
-        subresource.baseMip              = baseMip;
-        subresource.numMips              = numMips;
+        subresource.baseLayer             = baseLayer;
+        subresource.numLayers             = numLayers;
+        subresource.baseMip               = baseMip;
+        subresource.numMips               = numMips;
 
         VK_CHECK(vkCreateImageView(device, &createInfo, 0, &subresource.imageView));
         image->subresources.Push(subresource);

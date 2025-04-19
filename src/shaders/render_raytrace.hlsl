@@ -260,7 +260,6 @@ void main(uint3 DTid : SV_DispatchThreadID)
                     // TODO: don't hardcode?
                     VirtualTexture tex;
                     tex.pageWidthPerPool = 128;
-                    tex.texelWidthPerPage = 136;
 
                     float3 physicalUv = tex.GetPhysicalUV(pageTable, material.pageOffset, pageInformation.xyz, uv, 0, printDebug);
                     uint width, height, elements;

@@ -49,7 +49,7 @@ void Copy(void *src, const Vec2u &srcIndex, u32 srcWidth, u32 srcHeight, void *d
     u32 dstStride = dstWidth * bytesPerBlock;
     src = Utils::GetContentsAbsoluteIndex(src, srcIndex, srcWidth, srcHeight, srcStride,
                                           bytesPerBlock);
-    dst = Utils::GetContentsAbsoluteIndex(dst, dstIndex, srcWidth, srcHeight, dstStride,
+    dst = Utils::GetContentsAbsoluteIndex(dst, dstIndex, dstWidth, dstHeight, dstStride,
                                           bytesPerBlock);
 
     vRes   = Min(srcHeight, vRes);
@@ -357,8 +357,11 @@ void Convert(string filename)
     const u32 log2TexelWidth         = Log2Int(texelWidthPerPage);
     const u32 totalTexelWidthPerPage = 128 + 2 * borderSize;
 
-    const u32 bytesPerBlock      = 8;
-    const u32 blockSize          = GetBlockSize(VK_FORMAT_BC1_RGB_UNORM_BLOCK);
+    const VkFormat baseFormat    = VK_FORMAT_R8G8B8A8_UNORM;
+    const VkFormat blockFormat   = VK_FORMAT_BC1_RGB_UNORM_BLOCK;
+    const u32 bytesPerTexel      = GetFormatSize(baseFormat);
+    const u32 bytesPerBlock      = GetFormatSize(blockFormat);
+    const u32 blockSize          = GetBlockSize(blockFormat);
     const u32 log2BlockSize      = Log2Int(blockSize);
     const u32 blocksPerPage      = texelWidthPerPage >> log2BlockSize;
     const u32 totalBlocksPerPage = totalTexelWidthPerPage >> log2BlockSize;
@@ -456,6 +459,7 @@ void Convert(string filename)
         u32 log2Width               = neighborFaceImg.log2Width;
         u32 log2Height              = neighborFaceImg.log2Height;
 
+        u32 mipBorderSize = GetBorderSize(levelIndex);
         // reduce u
         if (log2Width > dstBaseSize.x)
         {
@@ -463,9 +467,8 @@ void Convert(string filename)
             {
                 u32 width = neighborFaceImg.width;
                 width >>= 1;
-                u32 mipBorderSize = levelIndex >= 6 ? 1 : borderSize;
-                neighborFaceImg   = GenerateMips(scratch.temp.arena, neighborFaceImg, width,
-                                                 neighborFaceImg.height, {2, 1}, mipBorderSize);
+                neighborFaceImg = GenerateMips(scratch.temp.arena, neighborFaceImg, width,
+                                               neighborFaceImg.height, {2, 1}, mipBorderSize);
             }
         }
         // reduce v
@@ -475,12 +478,13 @@ void Convert(string filename)
             {
                 u32 height = neighborFaceImg.height;
                 height >>= 1;
-                u32 mipBorderSize = levelIndex >= 6 ? 1 : borderSize;
                 neighborFaceImg =
                     GenerateMips(scratch.temp.arena, neighborFaceImg, neighborFaceImg.width,
                                  height, {1, 2}, mipBorderSize);
             }
         }
+        srcBaseDepth =
+            Vec2i(neighborFaceImg.log2Width, neighborFaceImg.log2Height) - dstBaseSize;
         scale = Vec2u(Max(Vec2i(0), -srcBaseDepth));
         return neighborFaceImg;
     };
@@ -497,6 +501,7 @@ void Convert(string filename)
         cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
 
         Semaphore semaphore = device->CreateGraphicsSemaphore();
+
         // Add borders to all images
         for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
         {
@@ -532,6 +537,7 @@ void Convert(string filename)
                           (edgeIndex == e_top ? currentFaceImg.height : 0);
 
                 Vec2u srcStart;
+                // TODO: images are smaller than the border size at high mip levels...
                 srcStart.x = aeid == e_right ? neighborFaceImg.width - mipBorderSize : 0;
                 srcStart.y = aeid == e_top ? neighborFaceImg.height - mipBorderSize : 0;
 
@@ -610,12 +616,12 @@ void Convert(string filename)
                 }
             }
 
-            if (levelIndex < 6)
+            if (levelIndex < MAX_COMPRESSED_LEVEL)
             {
                 // Block compress the entire face texture
                 ImageDesc blockCompressedImageDesc(
                     ImageType::Type2D, currentFaceImg.GetPaddedWidth(),
-                    currentFaceImg.GetPaddedHeight(), 1, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
+                    currentFaceImg.GetPaddedHeight(), 1, 1, 1, baseFormat,
                     MemoryUsage::GPU_ONLY,
                     VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                     VK_IMAGE_TILING_OPTIMAL);
@@ -702,9 +708,9 @@ void Convert(string filename)
         // the border is 72. Thus, 4 sub tiles can fit into a 144x144 texel tile. At level 2,
         // 16 sub tiles can fit. Sub tiles are packed in row major order.
         //
-        // Instead of the pattern continuing, causing the tiles to intractably larger,
-        // the number of sub tiles per tile is capped at 8x8. Thus, for mip level 5 (8x8
-        // texels), the tile size is 128x128 (8 + 8 = 16, 16 * 8 = 128).
+        // At MAX_COMPRESSED_LEVEL, the border size switches to 1, block compression is no
+        // longer used, and bilinear filtering is used instead of catmull-rom. This prevents
+        // intractably large tile sizes at high mip levels.
         //
         // At runtime: The virtual page offset is shifted down by the number of dimensions *
         // the current level to get the virtual index used to index the page table. The
@@ -714,22 +720,24 @@ void Convert(string filename)
         // up in the page table, at mip level 1. Once we get the physical page, the lower 2
         // bits (3) means our start address in the page is (0.5, 0.5), i.e. the bottom right
         // 72 x 72 tile
-        u32 currentLevelBlocksPerPage =
-            Max((texelWidthPerPage >> levelIndex) >> log2BlockSize, 1u);
 
         u32 currentTileOffset  = 0;
         u32 maxSubTilesPerTile = 1u << (levelIndex * 2);
 
-        u32 mipBorderSize = levelIndex > MAX_COMPRESSED_LEVEL ? 1 : borderSize;
+        u32 mipBorderSize = levelIndex < MAX_COMPRESSED_LEVEL ? borderSize : 1;
         u32 tileWidth     = GetTileTexelWidth(levelIndex);
 
-        u32 levelLog2BlockSize = levelIndex > MAX_COMPRESSED_LEVEL ? 0 : log2BlockSize;
-        u32 levelBytesPerBlock = levelIndex > MAX_COMPRESSED_LEVEL ? 4 : 8;
+        u32 levelLog2BlockSize = levelIndex < MAX_COMPRESSED_LEVEL ? log2BlockSize : 0;
+        u32 levelBytesPerBlock =
+            levelIndex < MAX_COMPRESSED_LEVEL ? bytesPerBlock : bytesPerTexel;
 
-        u32 subTileVLen   = (tileWidth >> levelLog2BlockSize) >> levelIndex;
-        u32 subTileRowLen = subTileVLen * levelBytesPerBlock;
+        u32 currentLevelBlocksPerPage =
+            Max((texelWidthPerPage >> levelIndex) >> levelLog2BlockSize, 1u);
+        u32 tileBlockWidth = tileWidth >> levelLog2BlockSize;
+        u32 subTileVLen    = tileBlockWidth >> levelIndex;
+        u32 subTileRowLen  = subTileVLen * levelBytesPerBlock;
 
-        u32 tileSize = tileWidth * tileWidth * levelBytesPerBlock;
+        u32 tileSize = tileBlockWidth * tileBlockWidth * levelBytesPerBlock;
         Tile tile;
         tile.contents = PushArray(scratch.temp.arena, u8, tileSize);
 
@@ -738,8 +746,8 @@ void Convert(string filename)
         for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
         {
             u32 offset = (u32)tiles.size();
-            Assert(levelIndex == 0 ||
-                   (metaData[faceIndex].offset >> levelIndex) == header.offsets[levelIndex]);
+            Assert(levelIndex == 0 || (metaData[faceIndex].offset >> (2 * levelIndex)) ==
+                                          offset - header.offsets[levelIndex]);
 
             GPUBuffer *gpuImage = &blockCompressedImages[faceIndex];
 
@@ -760,14 +768,13 @@ void Convert(string filename)
 
                     u32 dstTileX = currentTileOffset & ((1u << levelIndex) - 1);
                     u32 dstTileY = currentTileOffset >> levelIndex;
-                    Vec2u dstStart(currentLevelBlocksPerPage * dstTileX,
-                                   currentLevelBlocksPerPage * dstTileY);
+                    Vec2u dstStart(subTileVLen * dstTileX, subTileVLen * dstTileY);
 
                     Utils::Copy(gpuImage->mappedPtr, srcStart,
                                 image->GetPaddedWidth() >> levelLog2BlockSize,
                                 image->GetPaddedHeight() >> levelLog2BlockSize, tile.contents,
-                                dstStart, tileWidth, tileWidth, subTileVLen, subTileRowLen,
-                                levelBytesPerBlock);
+                                dstStart, tileBlockWidth, tileBlockWidth, subTileVLen,
+                                subTileRowLen, levelBytesPerBlock);
 
                     currentTileOffset++;
                     if (currentTileOffset == maxSubTilesPerTile)
@@ -784,8 +791,6 @@ void Convert(string filename)
                 metaData[faceIndex] = {offset, image->log2Width, image->log2Height};
         }
         header.sizes[levelIndex] = (u32)tiles.size() - header.offsets[levelIndex];
-        Assert(levelIndex == 0 ||
-               header.sizes[levelIndex] == header.sizes[levelIndex - 1] >> (2 * levelIndex));
         for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
         {
             device->DestroyBuffer(&gpuSrcImages[faceIndex].stagingBuffer);

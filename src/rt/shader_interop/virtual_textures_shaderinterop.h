@@ -8,7 +8,7 @@ namespace rt
 {
 #endif
 
-#define MAX_COMPRESSED_LEVEL      5
+#define MAX_COMPRESSED_LEVEL      6
 #define BASE_TEXEL_WIDTH_PER_PAGE 128
 
 #define BLOCK_WIDTH      4
@@ -27,7 +27,7 @@ struct PageTableUpdateRequest
 
 inline uint GetBorderSize(uint levelIndex)
 {
-    return levelIndex > MAX_COMPRESSED_LEVEL ? 1 : 4;
+    return levelIndex < MAX_COMPRESSED_LEVEL ? 4 : 1;
 }
 
 inline uint GetTileTexelWidth(uint levelIndex)

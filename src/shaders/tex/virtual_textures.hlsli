@@ -9,7 +9,6 @@ Texture2DArray physicalPages: register(t6);
 struct VirtualTexture 
 {
     uint pageWidthPerPool;
-    uint texelWidthPerPage;
 
     float3 GetPhysicalUV(Texture1D<uint> pageTable,
                          uint basePageOffset,
@@ -43,9 +42,11 @@ struct VirtualTexture
         const uint subTileDim = texelWidthPerPage >> mipLevel;
 
         uint2 pageStart = uint2(physicalPageInPoolX, physicalPageInPoolY) * texelWidthPerPage;
-        uint texelOffsetX = frac(uv.x * numPages.x) * min(texelWidthPerPage, faceSize.x);
-        uint texelOffsetY = frac(uv.y * numPages.y) * min(texelWidthPerPage, faceSize.y);
-        pageStart += uint2(texelOffsetX + pageBorder, texelOffsetY + pageBorder);
+
+        const uint baseTexelWidthPerPage = max((uint)BASE_TEXEL_WIDTH_PER_PAGE >> mipLevel, 1);
+        uint texelOffsetX = frac(uv.x * numPages.x) * min(baseTexelWidthPerPage, faceSize.x);
+        uint texelOffsetY = frac(uv.y * numPages.y) * min(baseTexelWidthPerPage, faceSize.y);
+        pageStart += uint2(texelOffsetX, texelOffsetY) + pageBorder;
 
         // Offset into subtile
         uint offsetInPage = virtualPage & ((1u << mipShift) - 1u);
