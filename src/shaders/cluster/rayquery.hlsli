@@ -24,8 +24,8 @@ bool VisibilityRay(RaytracingAccelerationStructure rts, float3 origin, float3 di
             uint kind = 0;
             float2 tempBary = 0;
 
-            bool result = IntersectCluster(instanceID, primitiveIndex, o, d, query.RayTMin(), 
-                                           query.CommittedRayT(), tHit, kind, tempBary);
+            bool result = IntersectCluster(instanceID, primitiveIndex, o, d, 0,
+                                           tMax, tHit, kind, tempBary);
 
             if (result) return true;
         }

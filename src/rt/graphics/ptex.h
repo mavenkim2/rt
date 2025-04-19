@@ -172,7 +172,8 @@ struct TileMetadata
 
 struct TileFileHeader
 {
-    int numFaces, numTiles;
+    int numFaces, numLevels;
+    int tileSizes[16];
     int offsets[16];
     int sizes[16];
 };

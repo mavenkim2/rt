@@ -262,7 +262,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
                     tex.pageWidthPerPool = 128;
                     tex.texelWidthPerPage = 136;
 
-                    float3 physicalUv = tex.GetPhysicalUV(pageTable, material, pageInformation.xyz, uv, printDebug);
+                    float3 physicalUv = tex.GetPhysicalUV(pageTable, material.pageOffset, pageInformation.xyz, uv, 0, printDebug);
                     uint width, height, elements;
                     physicalPages.GetDimensions(width, height, elements);
                     float3 reflectance = SampleTextureCatmullRom(physicalPages, samplerLinearClamp, physicalUv, float2(width, height));

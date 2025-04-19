@@ -359,12 +359,16 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     CommandBuffer *tileCmd          = device->BeginCommandBuffer(QueueType_Compute);
     Semaphore tileSubmitSemaphore   = device->CreateGraphicsSemaphore();
     tileSubmitSemaphore.signalValue = 1;
-    tileCmd->Barrier(&virtualTextureManager.levelInfo[0].gpuPhysicalPool,
-                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                     VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    for (int i = 0; i < virtualTextureManager.levelInfo.Length(); i++)
+    {
+        tileCmd->Barrier(&virtualTextureManager.levelInfo[i].gpuPhysicalPool,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    }
     tileCmd->Barrier(&virtualTextureManager.pageTable, VK_IMAGE_LAYOUT_GENERAL,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
     tileCmd->FlushBarriers();
+
     for (int i = 0; i < rootScene->ptexTextures.size(); i++)
     {
         PtexTexture &ptexTexture = rootScene->ptexTextures[i];
@@ -376,31 +380,41 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         tokenizer.input  = OS_MapFileRead(filename);
         tokenizer.cursor = tokenizer.input.str;
 
-        int numFaces, numPages;
-        GetPointerValue(&tokenizer, &numFaces);
-        GetPointerValue(&tokenizer, &numPages);
+        TileFileHeader fileHeader;
+        GetPointerValue(&tokenizer, &fileHeader);
 
         TileMetadata *metaData = (TileMetadata *)tokenizer.cursor;
-        Advance(&tokenizer, sizeof(TileMetadata) * numFaces);
+        Advance(&tokenizer, sizeof(TileMetadata) * fileHeader.numFaces);
 
-        u32 allocIndex = virtualTextureManager.AllocateVirtualPages(numPages);
-        virtualTextureManager.AllocatePhysicalPages(tileCmd, tokenizer.cursor, allocIndex);
-
-        auto array = StaticArray<TileMetadata>(sceneScratch.temp.arena, numFaces);
-        MemoryCopy(array.data, metaData, sizeof(TileMetadata) * numFaces);
-        array.size = numFaces;
-
-        rangeIndices[i] = allocIndex;
+        auto array = StaticArray<TileMetadata>(sceneScratch.temp.arena, fileHeader.numFaces);
+        MemoryCopy(array.data, metaData, sizeof(TileMetadata) * fileHeader.numFaces);
+        array.size = fileHeader.numFaces;
         tiledPtexFilenames.Push(filename);
         ptexInfo.Push(array);
+
+        for (int levelIndex = 0; levelIndex < fileHeader.numLevels; levelIndex++)
+        {
+            u32 allocIndex = virtualTextureManager.AllocateVirtualPages(
+                fileHeader.sizes[levelIndex], levelIndex);
+
+            if (levelIndex == 0) rangeIndices[i] = allocIndex;
+
+            virtualTextureManager.AllocatePhysicalPages(tileCmd, tokenizer.cursor, allocIndex);
+
+            Advance(&tokenizer,
+                    fileHeader.sizes[levelIndex] * fileHeader.tileSizes[levelIndex]);
+        }
 
         OS_UnmapFile(tokenizer.input.str);
     }
 
     tileCmd->Signal(tileSubmitSemaphore);
-    tileCmd->Barrier(&virtualTextureManager.gpuPhysicalPools[0],
-                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    for (int i = 0; i < virtualTextureManager.levelInfo.Length(); i++)
+    {
+        tileCmd->Barrier(&virtualTextureManager.levelInfo[i].gpuPhysicalPool,
+                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    }
     tileCmd->FlushBarriers();
     device->SubmitCommandBuffer(tileCmd);
 
@@ -902,7 +916,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         if (index != -1)
         {
             material.pageOffset =
-                virtualTextureManager.pageRanges[rangeIndices[index]].startPage;
+                virtualTextureManager.levelInfo[0].pageRanges[rangeIndices[index]].startPage;
         }
         gpuMaterials.Push(material);
     }
@@ -1098,13 +1112,13 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             .Bind(gpuMaterialBindingIndex, &materialBuffer)
             .Bind(shaderDebugIndex, &shaderDebugBuffers[currentBuffer].buffer)
             .Bind(pageTableBindingIndex, &virtualTextureManager.pageTable)
-            .Bind(physicalPagesBindingIndex, &virtualTextureManager.gpuPhysicalPools[0]);
+        // .Bind(physicalPagesBindingIndex, &virtualTextureManager.gpuPhysicalPools[0]);
 #ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
-        .Bind(clusterDataIndex, &clusterData)
+            .Bind(clusterDataIndex, &clusterData)
             .Bind(vertexDataIndex, &vertexBuffer)
             .Bind(indexDataIndex, &indexBuffer);
 #else
-        ;
+            ;
 #endif
         // .Bind(nvApiIndex, &nvapiBuffer);
         // .Bind(aabbIndex, &aabbBuffer);
