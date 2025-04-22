@@ -21,6 +21,7 @@ struct PageTableUpdatePushConstant
 
 struct PageTableUpdateRequest
 {
+    uint faceIndex;
     uint virtualPage;
     uint physicalPage;
 };

@@ -1569,6 +1569,12 @@ GPUImage Vulkan::CreateImage(ImageDesc desc, int numSubresources)
     VkImageCreateInfo imageInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     switch (desc.imageType)
     {
+        case ImageType::Type1D:
+        case ImageType::Array1D:
+        {
+            imageInfo.imageType = VK_IMAGE_TYPE_1D;
+        }
+        break;
         case ImageType::Type2D:
         case ImageType::Array2D:
         {
@@ -1580,6 +1586,7 @@ GPUImage Vulkan::CreateImage(ImageDesc desc, int numSubresources)
             imageInfo.imageType = VK_IMAGE_TYPE_3D;
         }
         break;
+        default: Assert(0);
     }
     imageInfo.extent.width  = desc.width;
     imageInfo.extent.height = desc.height;
@@ -1653,6 +1660,16 @@ int Vulkan::CreateSubresource(GPUImage *image, u32 baseMip, u32 numMips, u32 bas
 
     switch (image->desc.imageType)
     {
+        case ImageType::Type1D:
+        {
+            createInfo.viewType = VK_IMAGE_VIEW_TYPE_1D;
+        }
+        break;
+        case ImageType::Array1D:
+        {
+            createInfo.viewType = VK_IMAGE_VIEW_TYPE_1D_ARRAY;
+        }
+        break;
         case ImageType::Type2D:
         {
             createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;

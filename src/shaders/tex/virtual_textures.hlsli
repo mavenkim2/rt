@@ -3,7 +3,7 @@
 
 #include "./../rt/shader_interop/virtual_textures_shaderinterop.h"
 
-Texture1D<uint> pageTable : register(t5);
+Texture1DArray<uint> pageTable : register(t5);
 Texture2DArray physicalPages: register(t6);
 
 struct VirtualTexture 
@@ -25,7 +25,7 @@ struct VirtualTexture
 
         uint mipShift = 2 * mipLevel;
         uint virtualPage = basePageOffset + pageInformation.x + pageOffset;
-        uint physicalPage = pageTable.Load(int2(virtualPage >> mipShift, mipLevel));
+        uint physicalPage = pageTable.Load(int2(virtualPage, mipLevel));
     
         uint log2PhysicalPoolPageWidth = firstbithigh(pageWidthPerPool);
         uint numPagesPerPool = pageWidthPerPool * pageWidthPerPool;

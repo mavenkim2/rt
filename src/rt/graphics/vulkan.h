@@ -326,6 +326,7 @@ struct Swapchain
 enum class ImageType
 {
     Type1D,
+    Array1D,
     Type2D,
     Array2D,
     Cubemap,

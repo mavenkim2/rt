@@ -521,9 +521,6 @@ void Convert(string filename)
                 PaddedImage neighborFaceImg =
                     GetNeighborFaceImage(currentFaceImg, neighborFace, levelIndex, rot, scale);
 
-                // NOTE: Scale is only used for the base layer, when the src image has smaller
-                // dimensions than the dst image. For mip levels, the above reductions are used
-                // to make the src and dst image have equal dimensions
                 Vec2u start;
                 int vRes;
                 int rowLen;
@@ -538,8 +535,15 @@ void Convert(string filename)
 
                 Vec2u srcStart;
                 // TODO: images are smaller than the border size at high mip levels...
-                srcStart.x = aeid == e_right ? neighborFaceImg.width - mipBorderSize : 0;
-                srcStart.y = aeid == e_top ? neighborFaceImg.height - mipBorderSize : 0;
+                // the real problem is that the number of texels is no longer block divisible
+                srcStart.x = aeid == e_right
+                                 ? neighborFaceImg.width -
+                                       Min(mipBorderSize >> scale.x, neighborFaceImg.width)
+                                 : 0;
+                srcStart.y = aeid == e_top
+                                 ? neighborFaceImg.height -
+                                       Min(mipBorderSize >> scale.y, neighborFaceImg.height)
+                                 : 0;
 
                 Assert(!(mipBorderSize == 1 && scale.y != 0 && scale.x != 0));
                 int srcVRes = (aeid & 1) ? neighborFaceImg.height : (mipBorderSize >> scale.y);
@@ -746,8 +750,6 @@ void Convert(string filename)
         for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
         {
             u32 offset = (u32)tiles.size();
-            Assert(levelIndex == 0 || (metaData[faceIndex].offset >> (2 * levelIndex)) ==
-                                          offset - header.offsets[levelIndex]);
 
             GPUBuffer *gpuImage = &blockCompressedImages[faceIndex];
 
@@ -755,6 +757,10 @@ void Convert(string filename)
             PaddedImage *image =
                 &images[faceIndex]
                        [Min(levelIndex, Max(baseImage->log2Width, baseImage->log2Height))];
+            if (Min(baseImage->log2Height, baseImage->log2Width) + levelIndex < 7) continue;
+
+            Assert(levelIndex == 0 || (metaData[faceIndex].offset >> (2 * levelIndex)) ==
+                                          offset - header.offsets[levelIndex]);
 
             u32 numTilesX = Max(image->width / Max(texelWidthPerPage >> levelIndex, 1u), 1u);
             u32 numTilesY = Max(image->height / Max(texelWidthPerPage >> levelIndex, 1u), 1u);
@@ -787,8 +793,9 @@ void Convert(string filename)
             }
             u32 size = (u32)tiles.size() - offset;
 
-            if (levelIndex == 0)
-                metaData[faceIndex] = {offset, image->log2Width, image->log2Height};
+            if (metaData[faceIndex].log2Width == 0)
+                metaData[faceIndex] = {offset, levelIndex, image->log2Width,
+                                       image->log2Height};
         }
         header.sizes[levelIndex] = (u32)tiles.size() - header.offsets[levelIndex];
         for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
@@ -861,7 +868,7 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 numVirtualPages,
     levelInfo = StaticArray<LevelInfo>(arena, numLevels, numLevels);
     // Allocate page table
 
-    ImageDesc pageTableDesc(ImageType::Type1D, numVirtualPages, 1, 1, numLevels, 1,
+    ImageDesc pageTableDesc(ImageType::Array1D, numVirtualPages, 1, 1, 1, numLevels,
                             VK_FORMAT_R32_UINT, MemoryUsage::GPU_ONLY,
                             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT);
     pageTable = device->CreateImage(pageTableDesc);
@@ -887,8 +894,7 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 numVirtualPages,
         Assert(numTextureArrays == 1);
 
         Assert(IsPow2(level.pageWidthPerPool));
-        level.pools      = StaticArray<PhysicalPagePool>(arena, numPools);
-        level.pageRanges = StaticArray<BlockRange>(arena, numVirtualPages >> (2 * levelIndex));
+        level.pools = StaticArray<PhysicalPagePool>(arena, numPools);
 
         // Allocate texture arrays
         ImageDesc poolDesc(ImageType::Array2D, texelWidthPerPool, texelWidthPerPool, 1, 1,
@@ -917,64 +923,78 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 numVirtualPages,
 
         level.completelyFreePool = 0;
         level.partiallyFreePool  = InvalidPool;
-        level.freeRange          = 0;
     }
+
+    pageRanges = StaticArray<BlockRange>(arena, numVirtualPages);
+    freeRange  = 0;
 }
 
-u32 VirtualTextureManager::AllocateVirtualPages(u32 numPages, int levelIndex)
+u32 BlockRange::FindBestFree(const StaticArray<BlockRange> &ranges, u32 freeIndex, u32 num,
+                             u32 leftover)
+{
+    u32 allocIndex = ~0u;
+    while (freeIndex != InvalidRange)
+    {
+        BlockRange &range = ranges[freeIndex];
+        u32 numFree       = range.onePastEnd - range.start;
+        if (numFree >= num && numFree - num < leftover)
+        {
+            allocIndex = freeIndex;
+            leftover   = numFree - num;
+        }
+        freeIndex = range.nextFree;
+    }
+    return allocIndex;
+}
+
+void BlockRange::Split(StaticArray<BlockRange> &ranges, u32 index, u32 &freeIndex, u32 num)
+{
+    BlockRange &range = ranges[index];
+
+    u32 oldOnePastEnd = range.onePastEnd;
+    u32 oldNextRange  = range.nextRange;
+    u32 oldPrevFree   = range.prevFree;
+    u32 oldNextFree   = range.nextFree;
+    u32 newRangeIndex = ranges.Length();
+
+    Assert(range.status == AllocationStatus::Free);
+    range.status     = AllocationStatus::Allocated;
+    range.onePastEnd = range.start + num;
+    range.nextRange  = newRangeIndex;
+
+    UnlinkFreeList(ranges, index, freeIndex, InvalidRange);
+
+    BlockRange newRange(AllocationStatus::Free, range.start + num, oldOnePastEnd, index,
+                        oldNextRange, oldPrevFree, oldNextFree);
+
+    ranges.Push(newRange);
+}
+
+u32 BlockRange::GetNum() const { return onePastEnd - start; }
+
+u32 VirtualTextureManager::AllocateVirtualPages(u32 numPages)
 {
     Assert(numPages);
     LevelInfo &level = levelInfo[levelIndex];
-    u32 freeIndex    = level.freeRange;
+    u32 freeIndex    = freeRange;
 
     u32 leftover   = ~0u;
     u32 allocIndex = ~0u;
 
-    // Find best fit
-    while (freeIndex != InvalidRange)
-    {
-        BlockRange &range = level.pageRanges[freeIndex];
-        u32 numFreePages  = range.onePastEndPage - range.startPage;
-        if (numFreePages >= numPages && numFreePages - numPages < leftover)
-        {
-            allocIndex = freeIndex;
-            leftover   = numFreePages - numPages;
-        }
-        freeIndex = range.nextFree;
-    }
+    u32 allocIndex = BlockRange::FindBestFree(pageRanges, freeRange, numPages);
+    Assert(allocIndex != ~0u);
 
-    Assert(leftover != ~0u && allocIndex != ~0u);
-
-    // Allocate pages
-    BlockRange &range = level.pageRanges[allocIndex];
-    Assert(range.status == AllocationStatus::Free);
-
-    u32 rightRangeIndex = level.pageRanges.Length();
-
-    BlockRange leftRange(AllocationStatus::Allocated, range.startPage,
-                         range.startPage + numPages, range.prevRange, rightRangeIndex,
-                         InvalidRange, InvalidRange);
-    BlockRange rightRange(AllocationStatus::Free, range.startPage + numPages,
-                          range.onePastEndPage, allocIndex, range.nextRange, range.prevFree,
-                          range.nextFree);
-
-    if (range.prevFree == InvalidRange) level.freeRange = rightRangeIndex;
-    else level.pageRanges[range.prevFree].nextFree = allocIndex;
-
-    if (range.nextFree != InvalidRange) level.pageRanges[range.nextFree].prevFree = allocIndex;
-
-    level.pageRanges[allocIndex] = leftRange;
-    level.pageRanges.Push(rightRange);
+    BlockRange::Split(pageRanges, allocIndex, freeRange, numPages);
 
     return allocIndex;
 }
 
-void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, u8 *contents,
-                                                  u32 allocIndex, int levelIndex)
+void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, TileMetadata *metadata,
+                                                  u8 *contents, u32 allocIndex)
 {
     LevelInfo &level = levelInfo[levelIndex];
 
-    const BlockRange &range = level.pageRanges[allocIndex];
+    const BlockRange &range = pageRanges[allocIndex];
     const u32 numPages      = range.onePastEndPage - range.startPage;
     u32 pageSize =
         Sqr(level.texelWidthPerPage >> GetBlockShift(format)) * GetFormatSize(format);
@@ -991,7 +1011,10 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, u8 *conten
         PushArray(scratch.temp.arena, PageTableUpdateRequest, numPages);
 
     u32 log2PageWidthPerPool = Log2Int(level.pageWidthPerPool);
-    for (int i = 0; i < numPages; i++)
+
+    u32 leftover = ~0u;
+    // Allocate continuous ranges of pages for each face
+    for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
     {
         // First allocate page
         u32 freeIndex    = level.partiallyFreePool == InvalidPool ? level.completelyFreePool
@@ -1000,26 +1023,43 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, u8 *conten
 
         u32 poolAllocIndex = ~0u;
         u32 pageAllocIndex = ~0u;
+
+        u32 numPages;
+
+        // TODO: options:
+        // 1. Allocate at the same "offset" in each physical page pool layer
+        // 2. allocate at two separate offsets in each layer
         while (freeIndex != InvalidPool)
         {
-            PhysicalPagePool &pool = level.pools[freeIndex];
-            if (pool.freePages.Length())
+            PhysicalPagePool &pool = pools[freeIndex];
+            if (pool.freePages >= numPages)
             {
-                poolAllocIndex = freeIndex;
-                pageAllocIndex = pool.freePages.Pop();
-                if (isFullyFree)
+                u32 rangeIndex =
+                    BlockRange::FindBestFree(pool.ranges, pool.freeRange, leftover);
+                if (rangeIndex != BlockRange::InvalidRange)
                 {
-                    UnlinkFreeList(level.pools, poolAllocIndex, level.completelyFreePool,
-                                   InvalidPool);
-                    LinkFreeList(level.pools, poolAllocIndex, level.partiallyFreePool,
-                                 InvalidPool);
+                    u32 num = pool.ranges[rangeIndex].GetNum();
+                    Assert(num < numPages + leftover);
+                    leftover = num - numPages;
+
+                    poolAllocIndex = freeIndex;
+                    pageAllocIndex = pool.freePages.Pop();
+
+                    if (isFullyFree)
+                    {
+                        UnlinkFreeList(pools, poolAllocIndex, completelyFreePool, InvalidPool);
+                        LinkFreeList(pools, poolAllocIndex, partiallyFreePool, InvalidPool);
+                    }
+                    else if (pool.freePages.Length() == 0)
+                    {
+                        UnlinkFreeList(pools, poolAllocIndex, partiallyFreePool, InvalidPool);
+                    }
+                    break;
                 }
-                else if (pool.freePages.Length() == 0)
+                else
                 {
-                    UnlinkFreeList(level.pools, poolAllocIndex, level.partiallyFreePool,
-                                   InvalidPool);
+                    // TODO: defrag pool
                 }
-                break;
             }
             freeIndex = pool.nextFree;
         }
@@ -1027,8 +1067,15 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, u8 *conten
         ErrorExit(allocIndex != ~0u, "Ran out of memory");
         Assert(poolAllocIndex < maxNumLayers);
 
-        requests[i] = PageTableUpdateRequest{range.startPage + i,
-                                             (poolAllocIndex << (2u * 7u)) | pageAllocIndex};
+        // face index, start, count
+        u32 request = (poolAllocIndex << (2u * (7u + levelIndex))) |
+                      (pageAllocIndex << (2u * levelIndex)) |
+                      (metadata.subpageY << levelIndex) | subpageX;
+
+        requests[i] = PageTableUpdateRequest{
+            range.startPage + i,
+        };
+
         MemoryCopy((u8 *)buf.mappedPtr + offset, contents, pageSize);
         contents += pageSize;
         copies[i].bufferOffset = offset;

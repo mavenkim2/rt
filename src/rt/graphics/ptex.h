@@ -166,6 +166,8 @@ struct Tile
 struct TileMetadata
 {
     u32 offset;
+    int subpageX[16];
+    int subpageY[16];
     int log2Width;
     int log2Height;
 };
@@ -206,27 +208,13 @@ enum class AllocationStatus
     Allocated,
 };
 
-struct PhysicalPagePool
-{
-    StaticArray<u32> freePages;
-
-    u32 prevFree;
-    u32 nextFree;
-};
-
-struct PhysicalPageAllocation
-{
-    u32 virtualPage;
-    u32 poolIndex;
-    u32 pageIndex;
-};
-
 struct BlockRange
 {
+    static const u32 InvalidRange = ~0u;
     AllocationStatus status;
 
-    u32 startPage;
-    u32 onePastEndPage;
+    u32 start;
+    u32 onePastEnd;
 
     u32 prevRange;
     u32 nextRange;
@@ -236,33 +224,53 @@ struct BlockRange
 
     BlockRange() {}
 
-    BlockRange(AllocationStatus status, u32 startPage, u32 onePastEndPage, u32 prevRange,
+    BlockRange(AllocationStatus status, u32 start, u32 onePastEnd, u32 prevRange,
                u32 nextRange, u32 prevFree, u32 nextFree)
-        : status(status), startPage(startPage), onePastEndPage(onePastEndPage),
-          prevRange(prevRange), nextRange(nextRange), prevFree(prevFree), nextFree(nextFree)
+        : status(status), startPage(start), onePastEndPage(onePastEnd), prevRange(prevRange),
+          nextRange(nextRange), prevFree(prevFree), nextFree(nextFree)
     {
     }
+
+    u32 GetNum() const;
+    static u32 FindBestFree(const StaticArray<BlockRange> &ranges, u32 freeIndex, u32 num,
+                            u32 leftover = ~0u);
+    static void Split(StaticArray<BlockRange> &ranges, u32 index, u32 &freeIndex, u32 num);
+};
+
+struct PhysicalPagePool
+{
+    StaticArray<BlockRange> ranges;
+
+    u32 freePages;
+    u32 freeRange;
+};
+
+struct PhysicalPageAllocation
+{
+    u32 virtualPage;
+    u32 poolIndex;
+    u32 pageIndex;
 };
 
 struct VirtualTextureManager
 {
-    static const u32 InvalidPool  = ~0u;
-    static const u32 InvalidRange = ~0u;
+    static const u32 InvalidPool = ~0u;
 
     VkFormat format;
 
     u32 maxNumLayers;
+    StaticArray<BlockRange> pageRanges;
+    u32 freeRange;
+
+    StaticArray<PhysicalPagePool> pools;
+    u32 partiallyFreePool;
+    u32 completelyFreePool;
 
     struct LevelInfo
     {
-        StaticArray<BlockRange> pageRanges;
-        StaticArray<PhysicalPagePool> pools;
         GPUImage gpuPhysicalPool;
-        u32 freeRange;
         u32 pageWidthPerPool;
         u32 texelWidthPerPage;
-        u32 partiallyFreePool;
-        u32 completelyFreePool;
 
         int pageTableSubresourceIndex;
     };
@@ -277,7 +285,7 @@ struct VirtualTextureManager
     VirtualTextureManager(Arena *arena, u32 numVirtualPages, u32 numPhysicalPages,
                           int numLevels, u32 inPageWidthPerPool, u32 inTexelWidthPerPage,
                           u32 borderSize, VkFormat format);
-    u32 AllocateVirtualPages(u32 numPages, int levelIndex = 0);
+    u32 AllocateVirtualPages(u32 numPages);
     void AllocatePhysicalPages(CommandBuffer *cmd, u8 *contents, u32 allocIndex,
                                int levelIndex = 0);
 };
