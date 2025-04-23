@@ -213,6 +213,7 @@ enum class AllocationStatus
 {
     Free,
     Allocated,
+    PartiallyAllocated,
 };
 
 struct BlockRange
@@ -244,11 +245,39 @@ struct BlockRange
     static void Split(StaticArray<BlockRange> &ranges, u32 index, u32 &freeIndex, u32 num);
 };
 
+// NOTE: quad tree node
+struct AllocationNode
+{
+    AllocationStatus status;
+    Vec2i start;
+    Vec2i end;
+
+    int firstSibling;
+    int nextSibling;
+    int firstChild;
+    int parent;
+
+    int prevFree;
+    int nextFree;
+
+    AllocationNode(AllocationStatus status, Vec2i start, Vec2i end, int firstSibling,
+                   int nextSibling, int firstChild, int parent, int prevFree, int nextFree)
+        : status(status), start(start), end(end), firstSibling(firstSibling),
+          nextSibling(nextSibling), firstChild(firstChild), parent(parent), prevFree(prevFree),
+          nextFree(nextFree)
+    {
+    }
+};
+
 struct PhysicalPagePool
 {
     StaticArray<BlockRange> ranges;
+    StaticArray<AllocationNode> nodes;
+
     u32 freeRange;
     u32 freePages;
+
+    u32 freeNode;
 
     u32 prevFree;
     u32 nextFree;

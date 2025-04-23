@@ -977,6 +977,9 @@ void BlockRange::Split(StaticArray<BlockRange> &ranges, u32 index, u32 &freeInde
 
 u32 BlockRange::GetNum() const { return onePastEnd - start; }
 
+// TODO: instead of having multiple tiles per face, the minimum streamable unit is going to
+// just be an individual face textures (and its higher mips). additionally, if mips must be
+// PHYSICALLY allocated together
 u32 VirtualTextureManager::AllocateVirtualPages(u32 numPages)
 {
     Assert(numPages);
@@ -991,6 +994,111 @@ u32 VirtualTextureManager::AllocateVirtualPages(u32 numPages)
     BlockRange::Split(pageRanges, allocIndex, freeRange, numPages);
 
     return allocIndex;
+}
+
+u32 VirtualTextureManager::AllocatePhysicalPages2(CommandBuffer *cmd, u32 numPages)
+{
+    Vec2i allocationSize(0);
+    TileMetadata *metadata;
+
+    const int InvalidNode = -1;
+
+    for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
+    {
+        const TileMetadata &faceMetadata = metadata[faceIndex];
+        int startLevel                   = faceMetadata.startLevel;
+
+        int borderSize = GetBorderSize(startLevel);
+        allocationSize = Vec2i((1u << faceMetadata.log2Width) + 2 * borderSize,
+                               (1u << faceMetadata.log2Height) + 2 * borderSize);
+
+        allocationSize.x +=
+            faceMetadata.log2Width > faceMetadata.log2Height
+                ? 0
+                : (1u << (faceMetadata.log2Width - 1u)) + 2 * GetBorderSize(startLevel + 1);
+        allocationSize.y +=
+            faceMetadata.log2Width > faceMetadata.log2Height
+                ? (1u << (faceMetadata.log2Height - 1u)) + 2 * GetBorderSize(startLevel + 1)
+                : 0;
+
+        u32 nodeIndex = ~0u;
+        u32 poolIndex = ~0u;
+        int padding   = 0;
+
+        while (freeIndex != InvalidPool)
+        {
+            PhysicalPagePool &pool = pools[freeIndex];
+            u32 freeNode           = pool.freeNode;
+            while (freeNode != InvalidNode)
+            {
+                AllocationNode &node = nodes[freeNode];
+                Assert(node.status == AllocationStatus::Free);
+                Vec2i span = node.end - node.start;
+                if (span >= allocationSize)
+                {
+                    int newPadding = span.x - allocationSize.x + span.y - allocationSize.y;
+                    if (newPadding < padding)
+                    {
+                        padding   = newPadding;
+                        nodeIndex = freeNode;
+                    }
+                    if (padding == 0) break;
+                }
+                freeNode = node.nextFree;
+            }
+        }
+
+        PhysicalPagePool &pool = pools[freeIndex];
+        if (padding != 0)
+        {
+            AllocationNode &parentNode = pool.nodes[nodeIndex];
+            Assert(parentNode.firstChild == InvalidNode);
+
+            u32 newChildIndex     = pool.nodes.Length();
+            parentNode.status     = AllocationStatus::PartiallyAllocated;
+            parentNode.firstChild = newChildIndex;
+
+            AllocationNode newNode0(AllocationStatus::Allocated, parentNode.start,
+                                    parentNode.start + allocationSize, newChildIndex,
+                                    newChildIndex + 1, InvalidNode, nodeIndex,
+                                    parentNode.prevFree, newChildIndex + 1);
+
+            AllocationNode newNode1(
+                AllocationStatus::Free,
+                Vec2i(parentNode.start.x + allocationSize.x, parentNode.start.y),
+                Vec2i(parentNode.end.x, parentNode.start.y + allocationSize.y), newChildIndex,
+                newChildIndex + 2, InvalidNode, nodeIndex, newChildIndex, newChildIndex + 2);
+
+            AllocationNode newNode2(
+                AllocationStatus::Free,
+                Vec2i(parentNode.start.x, parentNode.start.y + allocationSize.y),
+                Vec2i(parentNode.start.x + allocationSize.x, parentNode.end.y), newChildIndex,
+                newChildIndex + 3, InvalidNode, nodeIndex, newChildIndex + 1,
+                newChildIndex + 3);
+
+            AllocationNode newNode3(AllocationStatus::Free, parentNode.start + allocationSize,
+                                    parentNode.end, newChildIndex, InvalidNode, InvalidNode,
+                                    nodeIndex, newChildIndex + 2, parentNode.nextFree);
+
+            if (parentNode.prevFree != InvalidNode)
+                pool.nodes[parentNode.prevFree].nextFree = newChildIndex;
+            if (parentNode.nextFree != InvalidNode)
+                pool.nodes[parentNode.nextFree].prevFree = newChildIndex + 3;
+            if (pool.freeNode == nodeIndex) pool.freeNode = newChildIndex;
+            parentNode.prevFree = InvalidNode;
+            parentNode.nextFree = InvalidNode;
+
+            pool.nodes.Push(newNode0);
+            pool.nodes.Push(newNode1);
+            pool.nodes.Push(newNode2);
+            pool.nodes.Push(newNode3);
+        }
+        else
+        {
+            pool.nodes[nodeIndex].status = AllocationStatus::Allocated;
+            UnlinkFreeList(pool.nodes, nodeIndex, pool.freeNode, InvalidNode);
+        }
+    }
 }
 
 void VirtualTextureManager::AllocatePhysicalPages(

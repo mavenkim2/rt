@@ -244,6 +244,18 @@ __forceinline bool operator!=(const Vec2<T> &a, const Vec2<T> &b)
     return !(a == b);
 }
 
+template <typename T>
+__forceinline bool operator<(const Vec2<T> &a, const Vec2<T> &b)
+{
+    return a.x < b.x && a.y < b.y;
+}
+
+template <typename T>
+__forceinline bool operator>=(const Vec2<T> &a, const Vec2<T> &b)
+{
+    return a.x >= b.x && a.y >= b.y;
+}
+
 typedef Vec2<u32> Vec2u;
 typedef Vec2<i32> Vec2i;
 typedef Vec2<f32> Vec2f;
