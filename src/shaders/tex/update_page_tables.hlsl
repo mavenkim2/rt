@@ -11,5 +11,5 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     if (dispatchThreadID.x >= pc.numRequests) return;
 
     PageTableUpdateRequest request = requests[dispatchThreadID.x];
-    pageTable[request.virtualPage] = request.physicalPage;
+    pageTable[request.faceIndex] = request.physicalPageStart;
 }

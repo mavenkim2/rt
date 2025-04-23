@@ -3,7 +3,7 @@
 
 #include "./../rt/shader_interop/virtual_textures_shaderinterop.h"
 
-Texture1DArray<uint> pageTable : register(t5);
+Texture1D<uint> pageTable : register(t5);
 Texture2DArray physicalPages: register(t6);
 
 struct VirtualTexture 
