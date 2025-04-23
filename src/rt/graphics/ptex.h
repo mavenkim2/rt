@@ -173,12 +173,18 @@ struct TileMetadata
     int log2Height;
 };
 
+struct TileRequest
+{
+    int faceIndex;
+    int startLevelIndex;
+    int numLevels;
+};
+
 struct TileFileHeader
 {
     int numFaces;
-    int tileSizes[16];
-    int offsets[MAX_LEVEL];
-    int sizes[MAX_LEVEL];
+    int tileSizes[MAX_LEVEL];
+    int tileCounts[MAX_LEVEL];
 };
 
 struct PaddedImage : Image

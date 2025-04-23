@@ -359,12 +359,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     CommandBuffer *tileCmd          = device->BeginCommandBuffer(QueueType_Compute);
     Semaphore tileSubmitSemaphore   = device->CreateGraphicsSemaphore();
     tileSubmitSemaphore.signalValue = 1;
-    for (int i = 0; i < virtualTextureManager.levelInfo.Length(); i++)
-    {
-        tileCmd->Barrier(&virtualTextureManager.levelInfo[i].gpuPhysicalPool,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-    }
+    // for (int i = 0; i < virtualTextureManager.levelInfo.Length(); i++)
+    // {
+    //     tileCmd->Barrier(&virtualTextureManager.levelInfo[i].gpuPhysicalPool,
+    //                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    //                      VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    // }
     tileCmd->Barrier(&virtualTextureManager.pageTable, VK_IMAGE_LAYOUT_GENERAL,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
     tileCmd->FlushBarriers();

@@ -167,6 +167,7 @@ struct FixedArray
     i32 size;
     T data[capacity];
     FixedArray() : size(0) {}
+    FixedArray(int count) : size(count) { Assert(count <= capacity); }
     FixedArray(std::initializer_list<T> list) : size((int)list.size())
     {
         Assert(list.size() <= capacity);
