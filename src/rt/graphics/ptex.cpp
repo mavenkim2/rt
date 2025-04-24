@@ -996,30 +996,108 @@ u32 VirtualTextureManager::AllocateVirtualPages(u32 numPages)
     return allocIndex;
 }
 
+// this is my idea:
+// observation: face textures have have dimensions in the range 64-512 generally. thus, we can
+// "reserve" a row for a particularly height dimension, and face textures with the same height
+// can go into this row. if a row with a height dimension isn't found, then we create a new one
+// if available, OR we can pack it into a row with a larger height dimension if there is no
+// space available necessary.
+
 u32 VirtualTextureManager::AllocatePhysicalPages2(CommandBuffer *cmd, u32 numPages)
 {
-    Vec2i allocationSize(0);
     TileMetadata *metadata;
 
     const int InvalidNode = -1;
+    const int InvalidRow  = -1;
+
+    // TODO: should be radix sorted with key: hhhhwwww (height in MSBs)
+    PhysicalPagePool *currentPool = 0;
+    AllocationRow *currentRow     = 0;
+    u32 currentLog2Height         = ~0u;
 
     for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
     {
         const TileMetadata &faceMetadata = metadata[faceIndex];
         int startLevel                   = faceMetadata.startLevel;
 
-        int borderSize = GetBorderSize(startLevel);
-        allocationSize = Vec2i((1u << faceMetadata.log2Width) + 2 * borderSize,
-                               (1u << faceMetadata.log2Height) + 2 * borderSize);
+        if (currentLog2Height != faceMetadata.log2Height)
+        {
+            currentLog2Height = faceMetadata.log2Height;
+            u32 rowStart      = rowStarts[currentLog2Height];
+            currentRow        = &rows[rowStart];
+            if (rowStart == InvalidRow)
+            {
+            }
+        }
 
+        AllocationRow *row = &currentPool->rows[faceMetadata.log2Height];
+
+        int borderSize       = GetBorderSize(startLevel);
+        Vec2i allocationSize = Vec2i((1u << faceMetadata.log2Width) + 2 * borderSize,
+                                     (1u << faceMetadata.log2Height) + 2 * borderSize);
+
+        // Allocation space for subsequent mip levels to the right
         allocationSize.x +=
-            faceMetadata.log2Width > faceMetadata.log2Height
-                ? 0
-                : (1u << (faceMetadata.log2Width - 1u)) + 2 * GetBorderSize(startLevel + 1);
-        allocationSize.y +=
-            faceMetadata.log2Width > faceMetadata.log2Height
-                ? (1u << (faceMetadata.log2Height - 1u)) + 2 * GetBorderSize(startLevel + 1)
-                : 0;
+            (1u << (faceMetadata.log2Width - 1u)) + 2 * GetBorderSize(startLevel + 1);
+
+        u32 leftover = ~0u;
+        u32 rangeIndex =
+            BlockRange::FindBestFree(row->ranges, row->freeRange, allocationSize.x);
+
+        if (rangeIndex == ~0u)
+        {
+            u32 leftover = ~0u;
+            int dimIndex = -1;
+            int rowIndex = -1;
+
+            // First try to fit into rows with larger height
+            for (int testDimIndex = faceMetadata.log2Height + 1;
+                 testDimIndex < currentPool->rowStarts.Length(); testDimIndex++)
+            {
+                int freeRow = currentPool->rowStarts[testDimIndex];
+                while (freeRow != InvalidRow)
+                {
+                    AllocationRow *testRow = &rows[freeRow];
+                    u32 testRangeIndex     = BlockRange::FindBestFree(
+                        testRow->ranges, testRow->freeRange, allocationSize.x, leftover);
+                    if (testRangeIndex != BlockRange::InvalidRange)
+                    {
+                        rowIndex   = freeRow;
+                        dimIndex   = testDimIndex;
+                        rangeIndex = testRangeIndex;
+                        leftover   = testRow->ranges[rangeIndex];
+                    }
+                    freeRow = testRow->nextFree;
+                }
+            }
+
+            // If a row was found
+            if (dimIndex != -1)
+            {
+                row = currentPool->rows[rowIndex];
+                BlockRange::Split(row->ranges, rangeIndex, row->freeRange, allocationSize.x);
+            }
+            else
+            {
+                // If that fails then try to create a new row
+                if (currentPool->totalHeight)
+                {
+                }
+                row->height = pool.totalHeight;
+                pool.totalHeight += height;
+
+                // If we can't create a new row, move on to the next pool
+                // If there are no more pools, we have to evict...
+            }
+        }
+
+        if (row->freeRange == BlockRange::InvalidRange &&
+            pool.totalHeight + height < pool.maxHeight)
+        {
+        }
+        else
+        {
+        }
 
         u32 nodeIndex = ~0u;
         u32 poolIndex = ~0u;

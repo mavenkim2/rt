@@ -269,10 +269,32 @@ struct AllocationNode
     }
 };
 
+struct AllocationRow
+{
+    StaticArray<BlockRange> ranges;
+    int startY;
+    int height;
+
+    //
+    int currentWidth;
+    int maxWidth;
+
+    u32 freeRange;
+
+    int prevFree;
+    int nextFree;
+};
+
 struct PhysicalPagePool
 {
     StaticArray<BlockRange> ranges;
     StaticArray<AllocationNode> nodes;
+
+    std::vector<AllocationRow> rows;
+    FixedArray<int, MAX_LEVEL> rowStarts;
+
+    int totalHeight;
+    int maxHeight;
 
     u32 freeRange;
     u32 freePages;
