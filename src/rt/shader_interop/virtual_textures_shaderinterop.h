@@ -23,7 +23,7 @@ struct PageTableUpdatePushConstant
 struct PageTableUpdateRequest
 {
     uint faceIndex;
-    uint physicalPageStart;
+    uint packed_x_y_layer;
 };
 
 inline uint GetBorderSize(uint levelIndex)

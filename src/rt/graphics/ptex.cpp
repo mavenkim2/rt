@@ -1,5 +1,6 @@
 #include "../base.h"
 #include "../memory.h"
+#include "../bit_packing.h"
 #include "../string.h"
 #include "../scene.h"
 #include "../integrate.h"
@@ -1003,180 +1004,195 @@ u32 VirtualTextureManager::AllocateVirtualPages(u32 numPages)
 // if available, OR we can pack it into a row with a larger height dimension if there is no
 // space available necessary.
 
-u32 VirtualTextureManager::AllocatePhysicalPages2(CommandBuffer *cmd, u32 numPages)
+Vec2i CalculateFaceSize(int log2Width, int log2Height, int levelIndex)
 {
-    TileMetadata *metadata;
+    int borderSize = GetBorderSize(levelIndex);
+    Vec2i allocationSize =
+        Vec2i((1u << log2Width) + 2 * borderSize, (1u << log2Height) + 2 * borderSize);
+    return allocationSize;
+}
+
+u32 VirtualTextureManager::AllocatePhysicalPages2(CommandBuffer *cmd, TileRequest *requests,
+                                                  u32 numRequests, TileMetadata *metadata,
+                                                  u32 numFaces)
+{
+    ScratchArena scratch;
 
     const int InvalidNode = -1;
     const int InvalidRow  = -1;
 
-    // TODO: should be radix sorted with key: hhhhwwww (height in MSBs)
-    PhysicalPagePool *currentPool = 0;
-    AllocationRow *currentRow     = 0;
-    u32 currentLog2Height         = ~0u;
+    Shelf *currentRow     = 0;
+    u32 currentLog2Height = ~0u;
 
-    for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
+    TransferBuffer transferBuffer;
+    u32 bufferOffset = 0;
+
+    StaticArray<PageTableUpdateRequest> updateRequests(scratch.temp.arena, numRequests,
+                                                       numRequests);
+
+    // TODO: the reqeusts should be radix sorted with key: hhhhwwww (height in MSBs)
+    for (int requestIndex = 0; requestIndex < numRequests; requestIndex++)
     {
+        const TileRequest &request = requests[requestIndex];
+        int faceIndex              = request.faceIndex;
+
         const TileMetadata &faceMetadata = metadata[faceIndex];
         int startLevel                   = faceMetadata.startLevel;
 
-        if (currentLog2Height != faceMetadata.log2Height)
-        {
-            currentLog2Height = faceMetadata.log2Height;
-            u32 rowStart      = rowStarts[currentLog2Height];
-            currentRow        = &rows[rowStart];
-            if (rowStart == InvalidRow)
-            {
-            }
-        }
-
-        AllocationRow *row = &currentPool->rows[faceMetadata.log2Height];
-
-        int borderSize       = GetBorderSize(startLevel);
-        Vec2i allocationSize = Vec2i((1u << faceMetadata.log2Width) + 2 * borderSize,
-                                     (1u << faceMetadata.log2Height) + 2 * borderSize);
+        Vec2i allocationSize =
+            CalculateFaceSize(faceMetadata.log2Width, faceMetadata.log2Height, startLevel);
 
         // Allocation space for subsequent mip levels to the right
         allocationSize.x +=
             (1u << (faceMetadata.log2Width - 1u)) + 2 * GetBorderSize(startLevel + 1);
 
-        u32 leftover = ~0u;
-        u32 rangeIndex =
-            BlockRange::FindBestFree(row->ranges, row->freeRange, allocationSize.x);
+        // First find the pool to use
+        u32 freePoolIndex =
+            partiallyFreePool == InvalidPool ? completelyFreePool : partiallyFreePool;
 
-        if (rangeIndex == ~0u)
+        PhysicalPagePool *pool = &pools[freePoolIndex];
+
+        currentLog2Height = faceMetadata.log2Height;
+
+        u32 shelfStart = pool->shelfStarts[currentLog2Height];
+
+        u32 blockRangeIndex = BlockRange::InvalidRange;
+        int rowIndex        = -1;
+
+        // Find a suitable shelf
+        for (;;)
         {
-            u32 leftover = ~0u;
-            int dimIndex = -1;
-            int rowIndex = -1;
-
-            // First try to fit into rows with larger height
-            for (int testDimIndex = faceMetadata.log2Height + 1;
-                 testDimIndex < currentPool->rowStarts.Length(); testDimIndex++)
+            while (shelfStart == InvalidRow)
             {
-                int freeRow = currentPool->rowStarts[testDimIndex];
-                while (freeRow != InvalidRow)
+                if (pool->totalHeight + allocationSize.y > pool->maxHeight)
                 {
-                    AllocationRow *testRow = &rows[freeRow];
-                    u32 testRangeIndex     = BlockRange::FindBestFree(
-                        testRow->ranges, testRow->freeRange, allocationSize.x, leftover);
-                    if (testRangeIndex != BlockRange::InvalidRange)
-                    {
-                        rowIndex   = freeRow;
-                        dimIndex   = testDimIndex;
-                        rangeIndex = testRangeIndex;
-                        leftover   = testRow->ranges[rangeIndex];
-                    }
-                    freeRow = testRow->nextFree;
+                    // Go to next free pool if there is no more space in current pool
+                    freePoolIndex = pool->nextFree;
+                    Assert(freePoolIndex != InvalidPool);
+                    pool = &pools[freePoolIndex];
+                }
+                else
+                {
+                    // Allocate a new row in the current pool
+                    pool->shelves.emplace_back();
+                    Shelf &newRow = pool->shelves.back();
+                    newRow.startY = pool->totalHeight;
+                    newRow.height = allocationSize.y;
+                    newRow.ranges.reserve(pool->maxWidth / allocationSize.x);
+                    newRow.ranges.push_back(
+                        BlockRange(AllocationStatus::Free, 0, pool->maxWidth));
+                    LinkFreeList(pool->shelves, pool->shelves.size() - 1,
+                                 pool->shelfStarts[currentLog2Height], InvalidRow);
+
+                    pool->totalHeight += allocationSize.y;
+                    shelfStart = pool->shelfStarts[currentLog2Height];
                 }
             }
 
-            // If a row was found
-            if (dimIndex != -1)
+            // Find suitable span in row
+            Shelf *row = &pool->shelves[shelfStart];
+            u32 rangeIndex =
+                BlockRange::FindBestFree(row->ranges, row->freeRange, allocationSize.x);
+
+            if (rangeIndex == ~0u)
             {
-                row = currentPool->rows[rowIndex];
-                BlockRange::Split(row->ranges, rangeIndex, row->freeRange, allocationSize.x);
+                u32 leftover = ~0u;
+
+                // First try to fit into rows with larger height
+                for (int testDimIndex = faceMetadata.log2Height;
+                     testDimIndex < pool->shelfStarts.Length(); testDimIndex++)
+                {
+                    int freeRow = pool->shelfStarts[testDimIndex];
+                    while (freeRow != InvalidRow)
+                    {
+                        Shelf *testRow     = &pool->shelves[freeRow];
+                        u32 testRangeIndex = BlockRange::FindBestFree(
+                            testRow->ranges, testRow->freeRange, allocationSize.x, leftover);
+                        if (testRangeIndex != BlockRange::InvalidRange)
+                        {
+                            rowIndex        = freeRow;
+                            blockRangeIndex = testRangeIndex;
+                            leftover =
+                                testRow->ranges[testRangeIndex].GetNum() - allocationSize.x;
+                        }
+                        freeRow = testRow->nextFree;
+                    }
+                }
+
+                // If a row was found that can fit the current entry
+                if (rowIndex != -1)
+                {
+                    row = pool->shelves[rowIndex];
+                    BlockRange::Split(row->ranges, rangeIndex, row->freeRange,
+                                      allocationSize.x);
+                }
+                // Repeat the loop
+                else
+                {
+                    shelfStart = InvalidRow;
+                    continue;
+                }
             }
             else
             {
-                // If that fails then try to create a new row
-                if (currentPool->totalHeight)
-                {
-                }
-                row->height = pool.totalHeight;
-                pool.totalHeight += height;
-
-                // If we can't create a new row, move on to the next pool
-                // If there are no more pools, we have to evict...
+                BlockRange::Split(row->ranges, rangeIndex, row->freeRange, allocationSize.x);
+                rowIndex        = shelfStart;
+                blockRangeIndex = rangeIndex;
             }
+            break;
         }
 
-        if (row->freeRange == BlockRange::InvalidRange &&
-            pool.totalHeight + height < pool.maxHeight)
+        // Create the buffer image copy commands and page table update requests
+        const Shelf &row             = pool->shelves[rowIndex];
+        const BlockRange &blockRange = row.ranges[rangeIndex];
+
+        u32 packed       = 0;
+        u32 packedOffset = 0;
+        packed           = BitFieldPackU32(packed, blockRange.start, packedOffset, 15);
+        packed           = BitFieldPackU32(packed, row.startY, packedOffset, 15);
+        Assert(pool->layerIndex < 4);
+        packed = BitFieldPackU32(packed, pool->layerIndex, packedOffset, 2);
+
+        // TODO: how do I store the current max packed mip without needing another u32?
+        updateRequests[requestIndex].faceIndex        = faceIndex;
+        updateRequests[requestIndex].packed_x_y_layer = packed;
+
+        Vec3i start = Vec3i(blockRange.start, row.startY, 0);
+        Vec2i begin = start.xy;
+        for (int levelIndex = 0; levelIndex < request.numLevels; levelIndex++)
         {
-        }
-        else
-        {
-        }
+            Assert(start.xy - begin.xy < allocationSize);
+            BufferImageCopy copy;
+            copy.bufferOffset = bufferOffset;
+            copy.baseLayer    = pool->layerIndex;
+            copy.layerCount   = 1;
+            copy.offset       = start;
 
-        u32 nodeIndex = ~0u;
-        u32 poolIndex = ~0u;
-        int padding   = 0;
+            Vec2i extent = CalculateFaceSize(faceMetadata.log2Width, faceMetadata.log2Height,
+                                             request.startLevelIndex + levelIndex);
+            copy.extent  = Vec3u(extent.x, extent.y, 1);
 
-        while (freeIndex != InvalidPool)
-        {
-            PhysicalPagePool &pool = pools[freeIndex];
-            u32 freeNode           = pool.freeNode;
-            while (freeNode != InvalidNode)
-            {
-                AllocationNode &node = nodes[freeNode];
-                Assert(node.status == AllocationStatus::Free);
-                Vec2i span = node.end - node.start;
-                if (span >= allocationSize)
-                {
-                    int newPadding = span.x - allocationSize.x + span.y - allocationSize.y;
-                    if (newPadding < padding)
-                    {
-                        padding   = newPadding;
-                        nodeIndex = freeNode;
-                    }
-                    if (padding == 0) break;
-                }
-                freeNode = node.nextFree;
-            }
-        }
-
-        PhysicalPagePool &pool = pools[freeIndex];
-        if (padding != 0)
-        {
-            AllocationNode &parentNode = pool.nodes[nodeIndex];
-            Assert(parentNode.firstChild == InvalidNode);
-
-            u32 newChildIndex     = pool.nodes.Length();
-            parentNode.status     = AllocationStatus::PartiallyAllocated;
-            parentNode.firstChild = newChildIndex;
-
-            AllocationNode newNode0(AllocationStatus::Allocated, parentNode.start,
-                                    parentNode.start + allocationSize, newChildIndex,
-                                    newChildIndex + 1, InvalidNode, nodeIndex,
-                                    parentNode.prevFree, newChildIndex + 1);
-
-            AllocationNode newNode1(
-                AllocationStatus::Free,
-                Vec2i(parentNode.start.x + allocationSize.x, parentNode.start.y),
-                Vec2i(parentNode.end.x, parentNode.start.y + allocationSize.y), newChildIndex,
-                newChildIndex + 2, InvalidNode, nodeIndex, newChildIndex, newChildIndex + 2);
-
-            AllocationNode newNode2(
-                AllocationStatus::Free,
-                Vec2i(parentNode.start.x, parentNode.start.y + allocationSize.y),
-                Vec2i(parentNode.start.x + allocationSize.x, parentNode.end.y), newChildIndex,
-                newChildIndex + 3, InvalidNode, nodeIndex, newChildIndex + 1,
-                newChildIndex + 3);
-
-            AllocationNode newNode3(AllocationStatus::Free, parentNode.start + allocationSize,
-                                    parentNode.end, newChildIndex, InvalidNode, InvalidNode,
-                                    nodeIndex, newChildIndex + 2, parentNode.nextFree);
-
-            if (parentNode.prevFree != InvalidNode)
-                pool.nodes[parentNode.prevFree].nextFree = newChildIndex;
-            if (parentNode.nextFree != InvalidNode)
-                pool.nodes[parentNode.nextFree].prevFree = newChildIndex + 3;
-            if (pool.freeNode == nodeIndex) pool.freeNode = newChildIndex;
-            parentNode.prevFree = InvalidNode;
-            parentNode.nextFree = InvalidNode;
-
-            pool.nodes.Push(newNode0);
-            pool.nodes.Push(newNode1);
-            pool.nodes.Push(newNode2);
-            pool.nodes.Push(newNode3);
-        }
-        else
-        {
-            pool.nodes[nodeIndex].status = AllocationStatus::Allocated;
-            UnlinkFreeList(pool.nodes, nodeIndex, pool.freeNode, InvalidNode);
+            start[levelIndex & 1] += extent[levelIndex & 1];
         }
     }
+
+    PageTableUpdatePushConstant pc;
+    pc.numRequests = numRequests;
+
+    cmd->SubmitTransfer(&transferBuffer);
+    TransferBuffer pageTableUpdateRequestBuffer =
+        cmd->SubmitBuffer(updateRequests.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                          sizeof(PageTableUpdateRequest) * pc.numRequests);
+
+    DescriptorSet ds = descriptorSetLayout.CreateDescriptorSet();
+    ds.Bind(0, &pageTableUpdateRequestBuffer.buffer).Bind(1, &pageTable);
+    cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                 VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+    cmd->PushConstants(&push, &pc, descriptorSetLayout.pipelineLayout);
+    cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
+                            descriptorSetLayout.pipelineLayout);
+    cmd->Dispatch((numPages + 63) >> 6, 1, 1);
 }
 
 void VirtualTextureManager::AllocatePhysicalPages(

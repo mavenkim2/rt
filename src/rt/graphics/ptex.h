@@ -232,6 +232,12 @@ struct BlockRange
 
     BlockRange() {}
 
+    BlockRange(AllocationStatus status, u32 start, u32 onePastEnd)
+        : status(status), start(start), onePastEnd(onePastEnd), prevRange(InvalidRange),
+          nextRange(InvalidRange), prevFree(InvalidRange), nextFree(InvalidRange)
+    {
+    }
+
     BlockRange(AllocationStatus status, u32 start, u32 onePastEnd, u32 prevRange,
                u32 nextRange, u32 prevFree, u32 nextFree)
         : status(status), start(start), onePastEnd(onePastEnd), prevRange(prevRange),
@@ -269,15 +275,11 @@ struct AllocationNode
     }
 };
 
-struct AllocationRow
+struct Shelf
 {
-    StaticArray<BlockRange> ranges;
+    std::vector<BlockRange> ranges;
     int startY;
     int height;
-
-    //
-    int currentWidth;
-    int maxWidth;
 
     u32 freeRange;
 
@@ -290,11 +292,15 @@ struct PhysicalPagePool
     StaticArray<BlockRange> ranges;
     StaticArray<AllocationNode> nodes;
 
-    std::vector<AllocationRow> rows;
-    FixedArray<int, MAX_LEVEL> rowStarts;
+    std::vector<Shelf> shelves;
+    FixedArray<int, MAX_LEVEL> shelfStarts;
+
+    int maxWidth;
 
     int totalHeight;
     int maxHeight;
+
+    int layerIndex;
 
     u32 freeRange;
     u32 freePages;

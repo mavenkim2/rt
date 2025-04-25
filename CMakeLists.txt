@@ -152,6 +152,7 @@ set (RT_SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/sampler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/dgfs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/ptex.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bit_packing.cpp
 )
 
 set (RT_VULKAN_SOURCE_FILES

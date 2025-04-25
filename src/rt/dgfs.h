@@ -22,31 +22,6 @@ enum class TriangleStripType
     Backtrack,
 };
 
-struct U128
-{
-    u64 vals[2];
-    void operator|=(U128 other)
-    {
-        vals[0] |= other.vals[0];
-        vals[1] |= other.vals[1];
-    }
-    void SetBit(u32 currentFirstUseBit)
-    {
-        vals[currentFirstUseBit >> 6] |= 1ull << (currentFirstUseBit & 63);
-    }
-};
-
-struct BitVector
-{
-    u32 *bits;
-    u32 maxNumBits;
-    BitVector(Arena *arena, u32 maxNumBits);
-    void SetBit(u32 bit);
-    void UnsetBit(u32 bit);
-    bool GetBit(u32 bit);
-    void WriteBits(u32 &position, u32 value, u32 numBits);
-};
-
 struct alignas(CACHE_LINE_SIZE) ClusterList
 {
     ChunkedLinkedList<RecordAOSSplits> l;
