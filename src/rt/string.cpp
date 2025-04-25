@@ -984,6 +984,15 @@ u64 PutData(StringBuilderMapped *builder, void *data, u64 size)
     return offset;
 }
 
+void *AllocateSpace(StringBuilderMapped *builder, u64 size)
+{
+    Expand(builder, size);
+    void *out = builder->writePtr;
+    builder->writePtr += size;
+    builder->totalSize += size;
+    return out;
+}
+
 void Put(StringBuilderMapped *builder, void *data, u64 size, u64 offset)
 {
     MemoryCopy(builder->ptr + offset, data, size);
