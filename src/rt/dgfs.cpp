@@ -67,30 +67,6 @@ void DenseGeometryBuildData::Merge(DenseGeometryBuildData &other)
     byteBuffer.Merge(&other.byteBuffer);
 }
 
-void WriteBits(u32 *data, u32 &position, u32 value, u32 numBits)
-{
-    if (numBits == 0) return;
-    Assert(numBits <= 32);
-    uint dwordIndex = position >> 5;
-    uint bitIndex   = position & 31;
-
-    Assert(numBits == 32 || ((value & ((1u << numBits) - 1)) == value));
-
-    data[dwordIndex] |= value << bitIndex;
-    if (bitIndex + numBits > 32)
-    {
-        data[dwordIndex + 1] |= value >> (32 - bitIndex);
-    }
-
-    position += numBits;
-}
-
-void BitVector::WriteBits(u32 &position, u32 value, u32 numBits)
-{
-    Assert(position + numBits <= maxNumBits);
-    rt::WriteBits(bits, position, value, numBits);
-}
-
 void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel)
 {
     auto *heuristic = (Heuristic *)h;

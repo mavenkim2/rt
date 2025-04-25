@@ -176,7 +176,7 @@ struct TileMetadata
 struct TileRequest
 {
     int faceIndex;
-    int startLevelIndex;
+    int startLevel;
     int numLevels;
 };
 
@@ -356,6 +356,14 @@ struct VirtualTextureManager
     void AllocatePhysicalPages(CommandBuffer *cmd, TileMetadata *metadata, u32 numFaces,
                                u8 *contents, u32 allocIndex);
 };
+
+inline Vec2i CalculateFaceSize(int log2Width, int log2Height, int levelIndex)
+{
+    int borderSize = GetBorderSize(levelIndex);
+    Vec2i allocationSize =
+        Vec2i((1u << log2Width) + 2 * borderSize, (1u << log2Height) + 2 * borderSize);
+    return allocationSize;
+}
 
 void InitializePtex();
 PaddedImage GenerateMips(Arena *arena, PaddedImage &input, u32 width, u32 height, Vec2u scale,

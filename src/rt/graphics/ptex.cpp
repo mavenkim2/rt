@@ -2,6 +2,7 @@
 #include "../memory.h"
 #include "../bit_packing.h"
 #include "../string.h"
+#include "../radix_sort.h"
 #include "../scene.h"
 #include "../integrate.h"
 #include "vulkan.h"
@@ -391,8 +392,8 @@ void Convert(string filename)
     }
 
     // Create all face images and mip maps
-    FixedArray<StaticArray<PaddedImage>, MAX_LEVEL> images;
-    StaticArray<u32> faceStartLevel(scratch.temp.arena, numFaces, numFaces);
+    FixedArray<StaticArray<PaddedImage>, 16> images;
+    StaticArray<int> faceNumLevels(scratch.temp.arena, numFaces, numFaces);
 
     StaticArray<GPUImage> tempUavs(scratch.temp.arena, numFaces, numFaces);
     StaticArray<GPUBuffer> blockCompressedImages(scratch.temp.arena, numFaces, numFaces);
@@ -404,7 +405,7 @@ void Convert(string filename)
     StaticArray<TileMetadata> metaData(scratch.temp.arena, numFaces, numFaces);
 
     // Initialize image array
-    for (int i = 0; i < MAX_LEVEL; i++)
+    for (int i = 0; i < images.Length(); i++)
     {
         images[i] = StaticArray<PaddedImage>(scratch.temp.arena, numFaces, numFaces);
     }
@@ -415,17 +416,14 @@ void Convert(string filename)
         PaddedImage img = PtexToImg(scratch.temp.arena, t, i, borderSize);
         int levels      = Max(Max(img.log2Width, img.log2Height), 1);
 
-        u32 minDim            = Min(img.log2Width, img.log2Height);
-        int startLevel        = Max(MAX_LEVEL - (int)minDim, 0);
-        images[startLevel][i] = img;
-        faceStartLevel[i]     = startLevel;
+        images[0][i]     = img;
+        faceNumLevels[i] = levels;
 
         // Generate mip maps
         Assert(IsPow2(img.width) && IsPow2(img.height));
 
-        int width = img.width;
-        width >>= 1;
-        int height = img.height >> 1;
+        int width  = Max(img.width >> 1, 1);
+        int height = Max(img.height >> 1, 1);
 
         PaddedImage inPaddedImage = img;
         int depth                 = startLevel + 1;
@@ -457,8 +455,8 @@ void Convert(string filename)
                                     u32 levelIndex, u32 rot, Vec2u &scale) {
         Vec2i dstBaseSize(currentFaceImg.log2Width, currentFaceImg.log2Height);
 
-        u32 startLevel                         = faceStartLevel[neighborFace];
-        u32 neighborLevelIndex                 = Max(startLevel, levelIndex);
+        u32 neighborMaxLevel                   = faceNumLevels[neighborFace];
+        u32 neighborLevelIndex                 = Clamp(levelIndex, 0, neighborMaxLevel - 1);
         const PaddedImage &baseNeighborFaceImg = images[neighborLevelIndex][neighborFace];
         const Vec2i srcBaseSize(baseNeighborFaceImg.log2Width, baseNeighborFaceImg.log2Height);
 
@@ -470,7 +468,7 @@ void Convert(string filename)
         u32 log2Width               = neighborFaceImg.log2Width;
         u32 log2Height              = neighborFaceImg.log2Height;
 
-        u32 mipBorderSize = GetBorderSize(levelIndex);
+        u32 mipBorderSize = Min(log2Width, log2Height) < 2 ? 1 : 4;
         // reduce u
         if (log2Width > dstBaseSize.x)
         {
@@ -714,25 +712,6 @@ void Convert(string filename)
         device->SubmitCommandBuffer(cmd);
 
         device->Wait(semaphore);
-
-        // Pack each subsequent mip level into variable sized tiles. At each subsequent mip
-        // level, the tile size increases (136, 144, 160, 192, etc.). This allows the offset
-        // variable to be used for all mip levels. At level 1, the texelWidth is 64, including
-        // the border is 72. Thus, 4 sub tiles can fit into a 144x144 texel tile. At level 2,
-        // 16 sub tiles can fit. Sub tiles are packed in row major order.
-        //
-        // At MAX_COMPRESSED_LEVEL, the border size switches to 1, block compression is no
-        // longer used, and bilinear filtering is used instead of catmull-rom. This prevents
-        // intractably large tile sizes at high mip levels.
-        //
-        // At runtime: The virtual page offset is shifted down by the number of dimensions *
-        // the current level to get the virtual index used to index the page table. The
-        // page table is a Texture1D with mips. The bottom dim * level bits determine the
-        // location within the 128x128 page. e.g. for the first mip level, if the calculated
-        // offset is 7, we shift down by 2 to get 1. This is the virtual address we use to look
-        // up in the page table, at mip level 1. Once we get the physical page, the lower 2
-        // bits (3) means our start address in the page is (0.5, 0.5), i.e. the bottom right
-        // 72 x 72 tile
 
         u32 currentTileOffset  = 0;
         u32 maxSubTilesPerTile = 1u << (levelIndex * 2);
@@ -978,9 +957,6 @@ void BlockRange::Split(StaticArray<BlockRange> &ranges, u32 index, u32 &freeInde
 
 u32 BlockRange::GetNum() const { return onePastEnd - start; }
 
-// TODO: instead of having multiple tiles per face, the minimum streamable unit is going to
-// just be an individual face textures (and its higher mips). additionally, if mips must be
-// PHYSICALLY allocated together
 u32 VirtualTextureManager::AllocateVirtualPages(u32 numPages)
 {
     Assert(numPages);
@@ -997,21 +973,7 @@ u32 VirtualTextureManager::AllocateVirtualPages(u32 numPages)
     return allocIndex;
 }
 
-// this is my idea:
-// observation: face textures have have dimensions in the range 64-512 generally. thus, we can
-// "reserve" a row for a particularly height dimension, and face textures with the same height
-// can go into this row. if a row with a height dimension isn't found, then we create a new one
-// if available, OR we can pack it into a row with a larger height dimension if there is no
-// space available necessary.
-
-Vec2i CalculateFaceSize(int log2Width, int log2Height, int levelIndex)
-{
-    int borderSize = GetBorderSize(levelIndex);
-    Vec2i allocationSize =
-        Vec2i((1u << log2Width) + 2 * borderSize, (1u << log2Height) + 2 * borderSize);
-    return allocationSize;
-}
-
+// Pack textures into shelves
 u32 VirtualTextureManager::AllocatePhysicalPages2(CommandBuffer *cmd, TileRequest *requests,
                                                   u32 numRequests, TileMetadata *metadata,
                                                   u32 numFaces)
@@ -1030,9 +992,37 @@ u32 VirtualTextureManager::AllocatePhysicalPages2(CommandBuffer *cmd, TileReques
     StaticArray<PageTableUpdateRequest> updateRequests(scratch.temp.arena, numRequests,
                                                        numRequests);
 
-    // TODO: the reqeusts should be radix sorted with key: hhhhwwww (height in MSBs)
-    for (int requestIndex = 0; requestIndex < numRequests; requestIndex++)
+    struct RequestHandle
     {
+        u8 sortKey;
+        int requestIndex;
+    };
+
+    // Generate radix sort keys
+    RequestHandle *handles = PushArrayNoZero(scratch.temp.arena, RequestHandle, numRequests);
+    for (int requestIndex = 0; requestIndex < numRequest; requestIndex++)
+    {
+        const TileRequest &request       = requests[requestIndex];
+        const TileMetadata &faceMetadata = metadata[request.faceIndex];
+
+        // TODO: change start level to be relative
+        Assert(faceMetadata.log2Width > request.startLevel);
+        Assert(faceMetadata.log2Height > request.startLevel);
+        u32 key    = 0;
+        u32 offset = 0;
+        key =
+            BitFieldPackU32(key, Max(faceMetadata.log2Width - request.startLevel), offset, 4);
+        key =
+            BitFieldPackU32(key, Max(faceMetadata.log2Height - request.startLevel), offset, 4);
+        handles[requestIndex].sortKey      = (u8)key;
+        handles[requestIndex].requestIndex = requestIndex;
+    }
+    SortHandles(handles, numRequests);
+
+    for (int handleIndex = 0; handleIndex < numRequests; handleIndex++)
+    {
+        int requestIndex = handles[handleIndex].requestIndex;
+
         const TileRequest &request = requests[requestIndex];
         int faceIndex              = request.faceIndex;
 
@@ -1154,8 +1144,8 @@ u32 VirtualTextureManager::AllocatePhysicalPages2(CommandBuffer *cmd, TileReques
         packed = BitFieldPackU32(packed, pool->layerIndex, packedOffset, 2);
 
         // TODO: how do I store the current max packed mip without needing another u32?
-        updateRequests[requestIndex].faceIndex        = faceIndex;
-        updateRequests[requestIndex].packed_x_y_layer = packed;
+        updateRequests[handleIndex].faceIndex        = faceIndex;
+        updateRequests[handleIndex].packed_x_y_layer = packed;
 
         Vec3i start = Vec3i(blockRange.start, row.startY, 0);
         Vec2i begin = start.xy;
@@ -1169,7 +1159,7 @@ u32 VirtualTextureManager::AllocatePhysicalPages2(CommandBuffer *cmd, TileReques
             copy.offset       = start;
 
             Vec2i extent = CalculateFaceSize(faceMetadata.log2Width, faceMetadata.log2Height,
-                                             request.startLevelIndex + levelIndex);
+                                             request.startLevel + levelIndex);
             copy.extent  = Vec3u(extent.x, extent.y, 1);
 
             start[levelIndex & 1] += extent[levelIndex & 1];
@@ -1367,8 +1357,8 @@ void VirtualTextureManager::AllocatePhysicalPages(
         u32 rangeIndex             = allocationRequest & ((1u << (2u * 7u)) - 1u);
         const BlockRange &range    = pageRanges[rangeIndex];
 
-        for (int levelIndex = request.startLevelIndex;
-             levelIndex < request.startLevelIndex + request.numLevels; levelIndex++)
+        for (int levelIndex = request.startLevel;
+             levelIndex < request.startLevel + request.numLevels; levelIndex++)
         {
             Assert(levelIndex < MAX_LEVEL);
 

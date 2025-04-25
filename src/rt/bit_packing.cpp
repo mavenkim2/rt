@@ -24,4 +24,11 @@ bool BitVector::GetBit(u32 bit)
     Assert(bit < maxNumBits);
     return bits[bit >> 5] & (1 << (bit & 31));
 }
+
+void BitVector::WriteBits(u32 &position, u32 value, u32 numBits)
+{
+    Assert(position + numBits <= maxNumBits);
+    rt::WriteBits(bits, position, value, numBits);
+}
+
 } // namespace rt

@@ -64,6 +64,24 @@ inline u32 BitAlignU32(u32 high, u32 low, u32 shift)
     return result;
 }
 
+inline void WriteBits(u32 *data, u32 &position, u32 value, u32 numBits)
+{
+    if (numBits == 0) return;
+    Assert(numBits <= 32);
+    uint dwordIndex = position >> 5;
+    uint bitIndex   = position & 31;
+
+    Assert(numBits == 32 || ((value & ((1u << numBits) - 1)) == value));
+
+    data[dwordIndex] |= value << bitIndex;
+    if (bitIndex + numBits > 32)
+    {
+        data[dwordIndex + 1] |= value >> (32 - bitIndex);
+    }
+
+    position += numBits;
+}
+
 } // namespace rt
 
 #endif
