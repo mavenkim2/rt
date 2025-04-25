@@ -68,8 +68,8 @@ inline void WriteBits(u32 *data, u32 &position, u32 value, u32 numBits)
 {
     if (numBits == 0) return;
     Assert(numBits <= 32);
-    uint dwordIndex = position >> 5;
-    uint bitIndex   = position & 31;
+    u32 dwordIndex = position >> 5;
+    u32 bitIndex   = position & 31;
 
     Assert(numBits == 32 || ((value & ((1u << numBits) - 1)) == value));
 

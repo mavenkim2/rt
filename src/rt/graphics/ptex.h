@@ -163,6 +163,13 @@ struct Tile
     u32 parentFace;
 };
 
+struct FaceMetadata
+{
+    u32 bufferOffset;
+    int log2Width;
+    int log2Height;
+};
+
 struct TileMetadata
 {
     u32 offset;
@@ -183,8 +190,6 @@ struct TileRequest
 struct TileFileHeader
 {
     int numFaces;
-    int tileSizes[MAX_LEVEL];
-    int tileCounts[MAX_LEVEL];
 };
 
 struct PaddedImage : Image
@@ -246,9 +251,10 @@ struct BlockRange
     }
 
     u32 GetNum() const;
-    static u32 FindBestFree(const StaticArray<BlockRange> &ranges, u32 freeIndex, u32 num,
-                            u32 leftover = ~0u);
-    static void Split(StaticArray<BlockRange> &ranges, u32 index, u32 &freeIndex, u32 num);
+    template <typename Array>
+    static u32 FindBestFree(const Array &ranges, u32 freeIndex, u32 num, u32 leftover = ~0u);
+    template <typename Array>
+    static void Split(Array &ranges, u32 index, u32 &freeIndex, u32 num);
 };
 
 // NOTE: quad tree node
@@ -333,15 +339,7 @@ struct VirtualTextureManager
     u32 completelyFreePool;
 
     u32 pageWidthPerPool;
-
-    struct LevelInfo
-    {
-        GPUImage gpuPhysicalPool;
-        u32 texelWidthPerPage;
-
-        // int pageTableSubresourceIndex;
-    };
-    StaticArray<LevelInfo> levelInfo;
+    GPUImage gpuPhysicalPool;
 
     Shader shader;
     DescriptorSetLayout descriptorSetLayout;
@@ -353,8 +351,8 @@ struct VirtualTextureManager
                           int numLevels, u32 inPageWidthPerPool, u32 inTexelWidthPerPage,
                           u32 borderSize, VkFormat format);
     u32 AllocateVirtualPages(u32 numPages);
-    void AllocatePhysicalPages(CommandBuffer *cmd, TileMetadata *metadata, u32 numFaces,
-                               u8 *contents, u32 allocIndex);
+    void AllocatePhysicalPages(CommandBuffer *cmd, TileRequest *requests, u32 numRequests,
+                               TileMetadata *metadata, u32 numFaces);
 };
 
 inline Vec2i CalculateFaceSize(int log2Width, int log2Height, int levelIndex)

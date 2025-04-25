@@ -63,84 +63,85 @@ struct ReversedCheckedIterator
 template <typename T>
 struct StaticArray
 {
-    StaticArray() : size(0), capacity(0), data(0) {}
+    StaticArray() : size_(0), capacity(0), data(0) {}
 
-    StaticArray(Arena *arena, i32 inCap) : size(0), capacity(inCap)
+    StaticArray(Arena *arena, i32 inCap) : size_(0), capacity(inCap)
     {
         data = (T *)PushArray(arena, u8, sizeof(T) * capacity);
     }
-    StaticArray(Arena *arena, i32 inCap, i32 size) : size(size), capacity(inCap)
+    StaticArray(Arena *arena, i32 inCap, i32 size) : size_(size), capacity(inCap)
     {
         data = (T *)PushArray(arena, u8, sizeof(T) * capacity);
     }
     StaticArray(Arena *arena, std::vector<T> &vector)
-        : size((int)vector.size()), capacity((int)vector.size())
+        : size_((int)vector.size()), capacity((int)vector.size())
     {
-        data = (T *)PushArrayNoZero(arena, u8, sizeof(T) * size);
-        MemoryCopy(data, vector.data(), sizeof(T) * size);
+        data = (T *)PushArrayNoZero(arena, u8, sizeof(T) * size_);
+        MemoryCopy(data, vector.data(), sizeof(T) * size_);
     }
 
     __forceinline void Init(Arena *arena, i32 inCap)
     {
-        size     = 0;
+        size_    = 0;
         capacity = inCap;
         data     = (T *)PushArray(arena, u8, sizeof(T) * capacity);
     }
 
     __forceinline void Push(T element)
     {
-        Assert(size < capacity);
-        data[size] = element;
-        size++;
+        Assert(size_ < capacity);
+        data[size_] = element;
+        size_++;
     }
 
     __forceinline T Pop()
     {
-        Assert(size > 0);
-        T result = std::move(data[size - 1]);
-        size--;
+        Assert(size_ > 0);
+        T result = std::move(data[size_ - 1]);
+        size_--;
         return result;
     }
 
-    __forceinline u32 Length() const { return size; }
+    __forceinline u32 Length() const { return size_; }
+    __forceinline u32 size() const { return Length(); }
 
-    __forceinline b8 Empty() { return size != 0; }
+    __forceinline b8 Empty() { return size_ != 0; }
 
-    __forceinline u32 Clear() { size = 0; }
+    __forceinline u32 Clear() { size_ = 0; }
 
-    __forceinline void Resize(int s) { size = s; }
+    __forceinline void Resize(int s) { size_ = s; }
 
     __forceinline T &operator[](i32 index)
     {
-        ErrorExit(index >= 0 && index < size, "index: %u, size %u\n", index, size);
+        ErrorExit(index >= 0 && index < size_, "index: %u, size %u\n", index, size_);
         return data[index];
     }
 
     __forceinline const T &operator[](i32 index) const
     {
-        Assert(index >= 0 && index < size);
+        Assert(index >= 0 && index < size_);
         return data[index];
     }
 
-    CheckedIterator<T> begin() { return CheckedIterator<T>(data, size); }
-    CheckedIterator<T> begin() const { return CheckedIterator<const T>(data, size); }
-    CheckedIterator<T> end() { return CheckedIterator<T>(data + size, size); }
-    CheckedIterator<T> end() const { return CheckedIterator<const T>(data + size, size); }
+    CheckedIterator<T> begin() { return CheckedIterator<T>(data, size_); }
+    CheckedIterator<T> begin() const { return CheckedIterator<const T>(data, size_); }
+    CheckedIterator<T> end() { return CheckedIterator<T>(data + size_, size_); }
+    CheckedIterator<T> end() const { return CheckedIterator<const T>(data + size_, size_); }
     ReversedCheckedIterator<T> rbegin()
     {
-        return ReversedCheckedIterator<T>(data + size, size);
+        return ReversedCheckedIterator<T>(data + size_, size_);
     }
     ReversedCheckedIterator<T> rbegin() const
     {
-        return ReversedCheckedIterator<const T>(data + size, size);
+        return ReversedCheckedIterator<const T>(data + size_, size_);
     }
-    ReversedCheckedIterator<T> rend() { return ReversedCheckedIterator<T>(data, size); }
+    ReversedCheckedIterator<T> rend() { return ReversedCheckedIterator<T>(data, size_); }
     ReversedCheckedIterator<T> rend() const
     {
-        return ReversedCheckedIterator<const T>(data, size);
+        return ReversedCheckedIterator<const T>(data, size_);
     }
 
-    i32 size;
+    i32 size_;
     i32 capacity;
     T *data;
 };
