@@ -3,31 +3,30 @@
 
 #include "./../rt/shader_interop/virtual_textures_shaderinterop.h"
 
-Texture1D<uint> pageTable : register(t5);
+Texture1D<uint2> pageTable : register(t5);
 Texture2DArray physicalPages: register(t6);
 
 struct VirtualTexture 
 {
     uint pageWidthPerPool;
 
-    float3 GetPhysicalUV(Texture1D<uint> pageTable,
+    float3 GetPhysicalUV(Texture1D<uint2> pageTable,
                          uint basePageOffset,
-                         uint3 pageInformation,
+                         uint faceID,
                          float2 uv, uint mipLevel = 0, bool debug = false)
     {
         // page information.x contains the faceID
-        uint faceIndex = basePageOffset + pageInformation.x;
-        uint physicalPageInfo = pageTable.Load(faceIndex);
+        uint faceIndex = basePageOffset + faceID;
+        uint2 physicalPageInfo = pageTable.Load(faceIndex);
 
-        uint x = physicalPageInfo & ((1u << 15u) - 1u);
-        uint y = physicalPageInfo >> 15u;
-        uint layerIndex = physicalPageInfo >> 30u;
+        uint x = physicalPageInfo.x & ((1u << 15u) - 1u);
+        uint y = physicalPageInfo.x >> 15u;
+        uint layerIndex = physicalPageInfo.x >> 30u;
 
-        // TODO: somehow store this per face
-        uint basePhysicalLevel;
+        uint basePhysicalLevel = BitFieldExtractU32(physicalPageInfo.y, 4, 8);
 
-        int log2Width = pageInformation.y;
-        int log2Height = pageInformation.z;
+        int log2Width = BitFieldExtractU32(physicalPageInfo.y, 4, 0);
+        int log2Height = BitFieldExtractU32(physicalPageInfo.y, 4, 4);
         log2Width = max(1, log2Width - basePhysicalLevel);
         log2Height = max(1, log2Height - basePhysicalLevel);
 

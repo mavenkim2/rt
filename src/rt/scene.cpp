@@ -550,7 +550,7 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
     scene->materials = StaticArray<Material *>(arena, materialsList.size());
     MemoryCopy(scene->materials.data, materialsList.data(),
                sizeof(Material *) * materialsList.size());
-    scene->materials.size = materialsList.size();
+    scene->materials.size_ = materialsList.size();
 
     return table;
 }

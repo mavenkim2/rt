@@ -155,12 +155,12 @@ void main(uint3 DTid : SV_DispatchThreadID)
             DenseGeometry dg = GetDenseGeometryHeader(instanceID, blockIndex, printDebug);
 
             uint materialID = dg.DecodeMaterialID(triangleIndex);
-            uint4 pageInformation = dg.DecodePageOffsetAndFaceSize(triangleIndex);
+            uint2 pageInformation = dg.DecodeFaceIDAndRotateInfo(triangleIndex);
             uint3 vids = dg.DecodeTriangle(triangleIndex);
 
             // Rotate to original order
-            uint rotate = BitFieldExtractU32(pageInformation.w, 2, 0);
-            uint isSecondFace = BitFieldExtractU32(pageInformation.w, 1, 2);
+            uint rotate = BitFieldExtractU32(pageInformation.y, 2, 0);
+            uint isSecondFace = BitFieldExtractU32(pageInformation.y, 1, 2);
 
             uint3 oldVids = vids;
             vids = (rotate == 1 ? vids.zxy : (rotate == 2 ? vids.yzx : vids));
@@ -261,7 +261,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
                     VirtualTexture tex;
                     tex.pageWidthPerPool = 128;
 
-                    float3 physicalUv = tex.GetPhysicalUV(pageTable, material.pageOffset, pageInformation.xyz, uv, 0, printDebug);
+                    float3 physicalUv = tex.GetPhysicalUV(pageTable, material.pageOffset, pageInformation.x, uv, 0, printDebug);
                     uint width, height, elements;
                     physicalPages.GetDimensions(width, height, elements);
                     float3 reflectance = SampleTextureCatmullRom(physicalPages, samplerLinearClamp, physicalUv, float2(width, height));

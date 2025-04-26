@@ -63,14 +63,12 @@ struct ClusterBuilder
 
     ClusterBuilder(Arena *arena, ScenePrimitives *scene, PrimRef *primRefs);
     void BuildClusters(RecordAOSSplits &record, bool parallel);
-    void CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *buildData,
-                    const StaticArray<StaticArray<TileMetadata>> &metadata, Mesh *meshes,
+    void CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *buildData, Mesh *meshes,
                     int numMeshes, Bounds &sceneBounds);
     void CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *buildDatas, Arena *arena,
                     Mesh *meshes, const StaticArray<StaticArray<Vec3i>> &quantizedVertices,
-                    const StaticArray<StaticArray<u32>> &normals,
-                    const StaticArray<StaticArray<TileMetadata>> &metadata,
-                    RecordAOSSplits &cluster, int precision);
+                    const StaticArray<StaticArray<u32>> &normals, RecordAOSSplits &cluster,
+                    int precision);
 };
 
 void WriteBits(u32 *data, u32 &position, u32 value, u32 numBits);

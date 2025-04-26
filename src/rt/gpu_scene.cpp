@@ -338,17 +338,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         blasScenes.Push(scene);
     }
 
-    struct PtexInfo
-    {
-        string filename;
-        StaticArray<TileMetadata> metadata;
-    };
-
     Scene *rootScene = GetScene();
 
     StaticArray<string> tiledPtexFilenames(sceneScratch.temp.arena,
                                            rootScene->ptexTextures.size());
-    StaticArray<StaticArray<TileMetadata>> ptexInfo(sceneScratch.temp.arena,
+    StaticArray<StaticArray<FaceMetadata>> ptexInfo(sceneScratch.temp.arena,
                                                     rootScene->ptexTextures.size());
     StaticArray<u32> rangeIndices(sceneScratch.temp.arena, rootScene->ptexTextures.size(),
                                   rootScene->ptexTextures.size());
@@ -377,38 +371,27 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         TileFileHeader fileHeader;
         GetPointerValue(&tokenizer, &fileHeader);
 
-        TileMetadata *metaData = (TileMetadata *)tokenizer.cursor;
-        Advance(&tokenizer, sizeof(TileMetadata) * fileHeader.numFaces);
+        FaceMetadata *metaData = (FaceMetadata *)tokenizer.cursor;
+        Advance(&tokenizer, sizeof(FaceMetadata) * fileHeader.numFaces);
 
-        auto array = StaticArray<TileMetadata>(sceneScratch.temp.arena, fileHeader.numFaces);
-        MemoryCopy(array.data, metaData, sizeof(TileMetadata) * fileHeader.numFaces);
-        array.size = fileHeader.numFaces;
+        auto array = StaticArray<FaceMetadata>(sceneScratch.temp.arena, fileHeader.numFaces,
+                                               fileHeader.numFaces);
+        MemoryCopy(array.data, metaData, sizeof(FaceMetadata) * fileHeader.numFaces);
         tiledPtexFilenames.Push(filename);
         ptexInfo.Push(array);
 
-        for (int levelIndex = 0; levelIndex < fileHeader.numLevels; levelIndex++)
-        {
-            u32 allocIndex = virtualTextureManager.AllocateVirtualPages(
-                fileHeader.sizes[levelIndex], levelIndex);
-
-            if (levelIndex == 0) rangeIndices[i] = allocIndex;
-
-            virtualTextureManager.AllocatePhysicalPages(tileCmd, tokenizer.cursor, allocIndex);
-
-            Advance(&tokenizer,
-                    fileHeader.sizes[levelIndex] * fileHeader.tileSizes[levelIndex]);
-        }
+        u32 allocIndex  = virtualTextureManager.AllocateVirtualPages(fileHeader.numFaces);
+        rangeIndices[i] = allocIndex;
+        virtualTextureManager.AllocatePhysicalPages(tileCmd, metaData, fileHeader.numFaces,
+                                                    tokenizer.cursor);
 
         OS_UnmapFile(tokenizer.input.str);
     }
 
     tileCmd->Signal(tileSubmitSemaphore);
-    for (int i = 0; i < virtualTextureManager.levelInfo.Length(); i++)
-    {
-        tileCmd->Barrier(&virtualTextureManager.levelInfo[i].gpuPhysicalPool,
-                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-    }
+    tileCmd->Barrier(&virtualTextureManager.gpuPhysicalPool,
+                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
     tileCmd->FlushBarriers();
     device->SubmitCommandBuffer(tileCmd);
 
@@ -433,8 +416,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         ClusterBuilder builder(arena, scene, refs);
         builder.BuildClusters(record, true);
 
-        builder.CreateDGFs(scene, &data, ptexInfo, (Mesh *)scene->primitives,
-                           scene->numPrimitives, sceneBounds);
+        builder.CreateDGFs(scene, &data, (Mesh *)scene->primitives, scene->numPrimitives,
+                           sceneBounds);
 
 #ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
         // Convert primrefs to aabbs, submit to GPU
@@ -909,8 +892,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         int index            = rootScene->materials[i]->ptexReflectanceIndex;
         if (index != -1)
         {
-            material.pageOffset =
-                virtualTextureManager.levelInfo[0].pageRanges[rangeIndices[index]].startPage;
+            material.pageOffset = virtualTextureManager.pageRanges[rangeIndices[index]].start;
         }
         gpuMaterials.Push(material);
     }

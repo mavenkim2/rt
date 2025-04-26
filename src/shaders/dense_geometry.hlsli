@@ -20,9 +20,7 @@ struct DenseGeometry
     uint3 posBitWidths;
     uint2 octBitWidths;
     uint indexBitWidth;
-    //uint numFaceIDBits;
-    uint numFaceSizeBits;
-    uint numPageOffsetBits;
+    uint numFaceIDBits;
 
     uint numTriangles;
     uint numVertices;
@@ -243,7 +241,7 @@ struct DenseGeometry
                 numTriangles, numVertices, indexOffset, ctrlOffset, firstBitOffset, posPrecision, 
                 blockIndex, triangleIndex, 
                 indexAddress[0], indexAddress[1], indexAddress[2], vids[0], vids[1], vids[2], 
-                reuseIds[0], reuseIds[1], reuseIds[2], octBase[0], octBase[1], octBitWidths[0], octBitWidths[1], numPageOffsetBits + 2 * numFaceSizeBits, n0.x, n0.y, n0.z, n1.x, n1.y, n1.z, n2.x, n2.y, n2.z);
+                reuseIds[0], reuseIds[1], reuseIds[2], octBase[0], octBase[1], octBitWidths[0], octBitWidths[1], numFaceIDBits, n0.x, n0.y, n0.z, n1.x, n1.y, n1.z, n2.x, n2.y, n2.z);
         }
 
         return vids;
@@ -340,35 +338,28 @@ struct DenseGeometry
         }
     }
 
-    uint4 DecodePageOffsetAndFaceSize(uint triangleIndex)
+    uint2 DecodeFaceIDAndRotateInfo(uint triangleIndex)
     {
-        const uint numFaceIDBits = numPageOffsetBits + 2 * numFaceSizeBits + 3;
-        uint4 result = 0;
-
-        if (numPageOffsetBits)
+        uint2 result = 0;
+        if (numFaceIDBits)
         {
             uint2 offsets = GetAlignedAddressAndBitOffset(baseAddress + faceIDOffset, 0);
             uint2 data = denseGeometryData.Load2(offsets[0]);
-            uint minPageOffset = BitAlignU32(data.y, data.x, offsets[1]);
-
+            uint minFaceID = BitAlignU32(data.y, data.x, offsets[1]);
+ 
             offsets = GetAlignedAddressAndBitOffset(baseAddress + faceIDOffset + 4, triangleIndex * numFaceIDBits);
             data = denseGeometryData.Load2(offsets[0]);
             uint packed = BitAlignU32(data.y, data.x, offsets[1]);
+            uint faceIDDiff = BitFieldExtractU32(packed, numFaceIDBits, 0);
+            uint rotateInfo = BitFieldExtractU32(packed, 3, numFaceIDBits);
 
-            uint pageOffset = BitFieldExtractU32(packed, numPageOffsetBits, 0);
-            uint log2Width = BitFieldExtractU32(packed, numFaceSizeBits, numPageOffsetBits);
-            uint log2Height = BitFieldExtractU32(packed, numFaceSizeBits, numPageOffsetBits + numFaceSizeBits);
-            uint rotateInfo = BitFieldExtractU32(packed, 3, numPageOffsetBits + 2 * numFaceSizeBits);
-
-            result.x = minPageOffset + pageOffset;
-            result.y = log2Width;
-            result.z = log2Height;
-            result.w = rotateInfo;
-
-        }
-        if (0)
-        {
-            printf("%u %u %u %u\n", numPageOffsetBits, result.x, result.y, result.z);
+            result.x = minFaceID + faceIDDiff;
+            result.y = rotateInfo;
+ 
+            if (0)
+            {
+                printf("%u %u %u\n", blockIndex, triangleIndex, result.x);
+            }
         }
         return result;
     }
@@ -412,14 +403,12 @@ DenseGeometry GetDenseGeometryHeader(StructuredBuffer<PackedDenseGeometryHeader>
     result.prevHighEdge1BeforeDwords[2] = BitFieldExtractI32(packed.g, 8, 5);
     result.prevHighEdge2BeforeDwords[1] = BitFieldExtractI32(packed.g, 7, 13);
     result.prevHighEdge2BeforeDwords[2] = BitFieldExtractI32(packed.g, 8, 20);
-    result.numFaceSizeBits = BitFieldExtractI32(packed.g, 4, 28) + 1;
 
     result.octBitWidths[1]                = BitFieldExtractU32(packed.h, 5, 0);
     result.numPrevRestartsBeforeDwords[0] = BitFieldExtractU32(packed.h, 6, 5);
     result.numPrevRestartsBeforeDwords[1] = BitFieldExtractU32(packed.h, 7, 11);
     result.numPrevRestartsBeforeDwords[2] = BitFieldExtractU32(packed.h, 8, 18);
-    //result.numFaceIDBits = BitFieldExtractU32(packed.h, 6, 26); 
-    result.numPageOffsetBits = BitFieldExtractU32(packed.h, 6, 26); 
+    result.numFaceIDBits = BitFieldExtractU32(packed.h, 6, 26); 
 
     result.octBase[0] = BitFieldExtractU32(packed.i, 16, 0);
     result.octBase[1] = BitFieldExtractU32(packed.i, 16, 16);
@@ -432,8 +421,7 @@ DenseGeometry GetDenseGeometryHeader(StructuredBuffer<PackedDenseGeometryHeader>
 
     result.normalOffset = (result.numVertices * vertexBitWidth + 7) >> 3;
     result.faceIDOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
-    //result.ctrlOffset = result.numFaceIDBits ? (result.faceIDOffset + 4 + ((result.numFaceIDBits * result.numTriangles + 7) >> 3)) : result.faceIDOffset;
-    result.ctrlOffset = result.numPageOffsetBits ? (result.faceIDOffset + 4 + ((result.numTriangles * (result.numPageOffsetBits + 2 * result.numFaceSizeBits + 3) + 7) >> 3)) : result.faceIDOffset;
+    result.ctrlOffset = result.numFaceIDBits ? (result.faceIDOffset + 4 + (((result.numFaceIDBits + 3) * result.numTriangles + 7) >> 3)) : result.faceIDOffset;
     result.indexOffset = result.ctrlOffset + 12 * ((result.numTriangles + 31u) >> 5u);
     result.firstBitOffset = (result.indexOffset << 3) + reuseBufferLength * result.indexBitWidth;
 

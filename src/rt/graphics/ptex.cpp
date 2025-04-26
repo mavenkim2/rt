@@ -887,8 +887,8 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 numVirtualFaces,
 
     // Allocate page table
 
-    ImageDesc pageTableDesc(ImageType::Type1D, numVirtualFaces, 1, 1, 1, 1, VK_FORMAT_R32_UINT,
-                            MemoryUsage::GPU_ONLY,
+    ImageDesc pageTableDesc(ImageType::Type1D, numVirtualFaces, 1, 1, 1, 1,
+                            VK_FORMAT_R32G32_UINT, MemoryUsage::GPU_ONLY,
                             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT);
     pageTable = device->CreateImage(pageTableDesc);
 
@@ -906,8 +906,6 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 numVirtualFaces,
             pool.maxHeight   = physicalTextureHeight;
             pool.totalHeight = 0;
             pool.layerIndex  = i;
-            pool.prevFree    = i == 0 ? InvalidPool : i - 1;
-            pool.nextFree    = i == numPools - 1 ? InvalidPool : i + 1;
             pools.Push(pool);
         }
 
@@ -915,9 +913,6 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 numVirtualFaces,
         const u32 invalidRange = BlockRange::InvalidRange;
         pageRanges.Push(BlockRange(AllocationStatus::Free, 0, numVirtualFaces, invalidRange,
                                    invalidRange, invalidRange, invalidRange));
-
-        completelyFreePool = 0;
-        partiallyFreePool  = InvalidPool;
 
         // Allocate texture arrays
         ImageDesc poolDesc(ImageType::Array2D, physicalTextureWidth, physicalTextureHeight, 1,
@@ -994,10 +989,39 @@ u32 VirtualTextureManager::AllocateVirtualPages(u32 numPages)
     return allocIndex;
 }
 
+void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetadata *metadata,
+                                                  u32 numFaces, u8 *contents)
+{
+    ScratchArena scratch;
+
+    TileRequest *requests = PushArrayNoZero(scratch.temp.arena, TileRequest, numFaces);
+    RequestHandle *requestHandles =
+        PushArrayNoZero(scratch.temp.arena, RequestHandle, numFaces);
+
+    for (int i = 0; i < numFaces; i++)
+    {
+        requests[i].faceIndex  = i;
+        requests[i].startLevel = 0;
+        requests[i].numLevels  = Min(metadata[i].log2Width, metadata[i].log2Height) + 1;
+
+        u32 key    = 0;
+        u32 offset = 0;
+        key        = BitFieldPackU32(key, metadata[i].log2Width, offset, 4);
+        key        = BitFieldPackU32(key, metadata[i].log2Height, offset, 4);
+
+        requestHandles[i].sortKey      = (u8)key;
+        requestHandles[i].requestIndex = i;
+    }
+    SortHandles(requestHandles, numFaces);
+    AllocatePhysicalPages(cmd, metadata, numFaces, contents, requests, numFaces,
+                          requestHandles);
+}
+
 // Pack textures into shelves
-void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, TileRequest *requests,
-                                                  u32 numRequests, TileMetadata *metadata,
-                                                  u32 numFaces)
+void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetadata *metadata,
+                                                  u32 numFaces, u8 *contents,
+                                                  TileRequest *requests, u32 numRequests,
+                                                  RequestHandle *handles)
 {
     ScratchArena scratch;
 
@@ -1013,31 +1037,6 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, TileReques
     StaticArray<PageTableUpdateRequest> updateRequests(scratch.temp.arena, numRequests,
                                                        numRequests);
 
-    struct RequestHandle
-    {
-        u8 sortKey;
-        int requestIndex;
-    };
-
-    // Generate radix sort keys
-    RequestHandle *handles = PushArrayNoZero(scratch.temp.arena, RequestHandle, numRequests);
-    for (int requestIndex = 0; requestIndex < numRequests; requestIndex++)
-    {
-        const TileRequest &request       = requests[requestIndex];
-        const TileMetadata &faceMetadata = metadata[request.faceIndex];
-
-        // TODO: change start level to be relative
-        Assert(faceMetadata.log2Width > request.startLevel);
-        Assert(faceMetadata.log2Height > request.startLevel);
-        u32 key    = 0;
-        u32 offset = 0;
-        key = BitFieldPackU32(key, faceMetadata.log2Width - request.startLevel, offset, 4);
-        key = BitFieldPackU32(key, faceMetadata.log2Height - request.startLevel, offset, 4);
-        handles[requestIndex].sortKey      = (u8)key;
-        handles[requestIndex].requestIndex = requestIndex;
-    }
-    SortHandles(handles, numRequests);
-
     for (int handleIndex = 0; handleIndex < numRequests; handleIndex++)
     {
         int requestIndex = handles[handleIndex].requestIndex;
@@ -1045,8 +1044,7 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, TileReques
         const TileRequest &request = requests[requestIndex];
         int faceIndex              = request.faceIndex;
 
-        const TileMetadata &faceMetadata = metadata[faceIndex];
-        int startLevel                   = faceMetadata.startLevel;
+        const FaceMetadata &faceMetadata = metadata[faceIndex];
 
         Vec2i allocationSize =
             CalculateFaceSize(faceMetadata.log2Width, faceMetadata.log2Height);
@@ -1057,8 +1055,7 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, TileReques
             2 * GetBorderSize(faceMetadata.log2Width - 1, faceMetadata.log2Height - 1);
 
         // First find the pool to use
-        u32 freePoolIndex =
-            partiallyFreePool == InvalidPool ? completelyFreePool : partiallyFreePool;
+        u32 freePoolIndex = 0;
 
         PhysicalPagePool *pool = &pools[freePoolIndex];
 
@@ -1077,8 +1074,8 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, TileReques
                 if (pool->totalHeight + allocationSize.y > pool->maxHeight)
                 {
                     // Go to next free pool if there is no more space in current pool
-                    freePoolIndex = pool->nextFree;
-                    Assert(freePoolIndex != InvalidPool);
+                    freePoolIndex++;
+                    Assert(freePoolIndex < pools.Length());
                     pool = &pools[freePoolIndex];
                 }
                 else
@@ -1164,12 +1161,20 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, TileReques
         Assert(pool->layerIndex < 4);
         packed = BitFieldPackU32(packed, pool->layerIndex, packedOffset, 2);
 
-        // TODO: how do I store the current max packed mip without needing another u32?
-        updateRequests[handleIndex].faceIndex        = faceIndex;
-        updateRequests[handleIndex].packed_x_y_layer = packed;
+        u32 packed2  = 0;
+        packedOffset = 0;
+        packed2      = BitFieldPackU32(packed2, faceMetadata.log2Width, packedOffset, 4);
+        packed2      = BitFieldPackU32(packed2, faceMetadata.log2Height, packedOffset, 4);
+        packed2      = BitFieldPackU32(packed2, request.startLevel, packedOffset, 4);
 
-        Vec3i start = Vec3i(blockRange.start, shelf.startY, 0);
-        Vec2i begin = start.xy;
+        updateRequests[handleIndex].faceIndex                     = faceIndex;
+        updateRequests[handleIndex].packed_x_y_layer              = packed;
+        updateRequests[handleIndex].packed_width_height_baseLayer = packed2;
+
+        Vec3i start    = Vec3i(blockRange.start, shelf.startY, 0);
+        Vec2i begin    = start.xy;
+        int log2Width  = faceMetadata.log2Width;
+        int log2Height = faceMetadata.log2Height;
         for (int levelIndex = 0; levelIndex < request.numLevels; levelIndex++)
         {
             Assert(start.xy - begin < allocationSize);
@@ -1179,11 +1184,47 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, TileReques
             copy.layerCount   = 1;
             copy.offset       = start;
 
-            Vec2i extent = CalculateFaceSize(faceMetadata.log2Width, faceMetadata.log2Height);
+            Vec2i extent = CalculateFaceSize(log2Width, log2Height);
             copy.extent  = Vec3u(extent.x, extent.y, 1);
+
+            u32 texSize = extent.y * extent.x * GetFormatSize(format);
+            bufferOffset += texSize;
+            log2Width  = Max(log2Width - 1, 1);
+            log2Height = Max(log2Height - 1, 1);
 
             start[levelIndex & 1] += extent[levelIndex & 1];
         }
+    }
+
+    transferBuffer = device->GetStagingBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, bufferOffset);
+
+    // Allocate staging buffer
+    for (int handleIndex = 0; handleIndex < numRequests; handleIndex++)
+    {
+        int requestIndex = handles[handleIndex].requestIndex;
+
+        const TileRequest &request = requests[requestIndex];
+        int faceIndex              = request.faceIndex;
+
+        const FaceMetadata &faceMetadata = metadata[faceIndex];
+
+        u32 offset     = faceMetadata.bufferOffset;
+        u32 size       = faceMetadata.totalSize;
+        int log2Width  = faceMetadata.log2Width;
+        int log2Height = faceMetadata.log2Height;
+
+        for (int levelIndex = 0; levelIndex < request.startLevel; levelIndex++)
+        {
+            Vec2i extent = CalculateFaceSize(log2Width, log2Height);
+            u32 texSize  = extent.y * extent.x * GetFormatSize(format);
+            Assert(size > texSize);
+            offset += texSize;
+            size -= texSize;
+            log2Width  = Max(log2Width - 1, 1);
+            log2Height = Max(log2Height - 1, 1);
+        }
+
+        MemoryCopy(transferBuffer.mappedPtr, contents + offset, size);
     }
 
     PageTableUpdatePushConstant pc;

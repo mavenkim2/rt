@@ -24,6 +24,7 @@ struct PageTableUpdateRequest
 {
     uint faceIndex;
     uint packed_x_y_layer;
+    uint packed_width_height_baseLayer;
 };
 
 inline uint GetBorderSize(int log2Width, int log2Height)

@@ -686,11 +686,11 @@ OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                 patches.push_back(patch);
             }
 
-            Arena *arena              = arenas[GetThreadIndex()];
-            outputMesh->vertices      = StaticArray<Vec3f>(arena, vSize + totalSize);
-            outputMesh->normals       = StaticArray<Vec3f>(arena, vSize + totalSize);
-            outputMesh->vertices.size = vSize + totalSize;
-            outputMesh->normals.size  = vSize + totalSize;
+            Arena *arena               = arenas[GetThreadIndex()];
+            outputMesh->vertices       = StaticArray<Vec3f>(arena, vSize + totalSize);
+            outputMesh->normals        = StaticArray<Vec3f>(arena, vSize + totalSize);
+            outputMesh->vertices.size_ = vSize + totalSize;
+            outputMesh->normals.size_  = vSize + totalSize;
 
             // Resolve displacements now that full buffer size is known
             if (texture)

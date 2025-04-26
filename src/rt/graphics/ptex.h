@@ -166,6 +166,7 @@ struct Tile
 struct FaceMetadata
 {
     u32 bufferOffset;
+    u32 totalSize;
     int log2Width;
     int log2Height;
 };
@@ -280,8 +281,8 @@ struct PhysicalPagePool
 
     int layerIndex;
 
-    u32 prevFree;
-    u32 nextFree;
+    // u32 prevFree;
+    // u32 nextFree;
 };
 
 struct PhysicalPageAllocation
@@ -295,14 +296,18 @@ struct VirtualTextureManager
 {
     static const u32 InvalidPool = ~0u;
 
+    struct RequestHandle
+    {
+        u8 sortKey;
+        int requestIndex;
+    };
+
     VkFormat format;
 
     StaticArray<BlockRange> pageRanges;
     u32 freeRange;
 
     StaticArray<PhysicalPagePool> pools;
-    u32 partiallyFreePool;
-    u32 completelyFreePool;
 
     u32 pageWidthPerPool;
     GPUImage gpuPhysicalPool;
@@ -316,8 +321,11 @@ struct VirtualTextureManager
     VirtualTextureManager(Arena *arena, u32 numVirtualFaces, u32 physicalTextureWidth,
                           u32 physicalTextureHeight, u32 numPools, VkFormat format);
     u32 AllocateVirtualPages(u32 numPages);
-    void AllocatePhysicalPages(CommandBuffer *cmd, TileRequest *requests, u32 numRequests,
-                               TileMetadata *metadata, u32 numFaces);
+    void AllocatePhysicalPages(CommandBuffer *cmd, FaceMetadata *metadata, u32 numFaces,
+                               u8 *contents);
+    void AllocatePhysicalPages(CommandBuffer *cmd, FaceMetadata *metadata, u32 numFaces,
+                               u8 *contents, TileRequest *requests, u32 numRequests,
+                               RequestHandle *handles);
 };
 
 void InitializePtex();
