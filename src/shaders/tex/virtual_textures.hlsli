@@ -15,6 +15,40 @@ struct VirtualTexture
                          uint3 pageInformation,
                          float2 uv, uint mipLevel = 0, bool debug = false)
     {
+        // page information.x contains the faceID
+        uint faceIndex = basePageOffset + pageInformation.x;
+        uint physicalPageInfo = pageTable.Load(faceIndex);
+
+        uint x = physicalPageInfo & ((1u << 15u) - 1u);
+        uint y = physicalPageInfo >> 15u;
+        uint layerIndex = physicalPageInfo >> 30u;
+
+        // TODO: somehow store this per face
+        uint basePhysicalLevel;
+
+        int log2Width = pageInformation.y;
+        int log2Height = pageInformation.z;
+        log2Width = max(1, log2Width - basePhysicalLevel);
+        log2Height = max(1, log2Height - basePhysicalLevel);
+
+        uint2 offset = uint2(x, y);
+        for (int levelIndex = basePhysicalLevel; levelIndex < mipLevel; levelIndex++)
+        {
+            offset += CalculateFaceSize(log2Width, log2Height);
+        }
+
+        uint width, height, layers;
+        physicalPages.GetDimensions(width, height, layers);
+        float3 physicalUv = float3((float)offset.x / width, (float)offset.y / height, layerIndex);
+        return physicalUv;
+    }
+
+#if 0
+    float3 GetPhysicalUV(Texture1D<uint> pageTable,
+                         uint basePageOffset,
+                         uint3 pageInformation,
+                         float2 uv, uint mipLevel = 0, bool debug = false)
+    {
         const uint pageBorder = GetBorderSize(mipLevel);
         const uint2 faceSize = (1u << pageInformation.yz);
         const uint2 numPages = max((int2)pageInformation.yz - 7, 1);
@@ -63,5 +97,6 @@ struct VirtualTexture
         }
         return float3(physicalUv, physicalPageLayer);
     }
+#endif
 };
 #endif

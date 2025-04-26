@@ -472,7 +472,7 @@ void Convert(string filename)
         u32 log2Width               = neighborFaceImg.log2Width;
         u32 log2Height              = neighborFaceImg.log2Height;
 
-        u32 mipBorderSize = Min(log2Width, log2Height) < 2 ? 1 : 4;
+        u32 mipBorderSize = GetBorderSize(log2Width, log2Height);
         // reduce u
         if (log2Width > dstBaseSize.x)
         {
@@ -865,7 +865,7 @@ void Convert(string filename)
     t->release();
 }
 
-VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 numVirtualFaces, u32 borderSize,
+VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 numVirtualFaces,
                                              u32 physicalTextureWidth,
                                              u32 physicalTextureHeight, u32 numPools,
                                              VkFormat format)
@@ -885,7 +885,6 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 numVirtualFaces, 
 
     ImageLimits limits = device->GetImageLimits();
 
-    levelInfo = StaticArray<LevelInfo>(arena, numLevels, numLevels);
     // Allocate page table
 
     ImageDesc pageTableDesc(ImageType::Type1D, numVirtualFaces, 1, 1, 1, 1, VK_FORMAT_R32_UINT,
@@ -894,43 +893,40 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 numVirtualFaces, 
     pageTable = device->CreateImage(pageTableDesc);
 
     {
-        Assert(IsPow2(inPageWidthPerPool));
-        pageWidthPerPool = inPageWidthPerPool;
-
-        u32 numPagesPerPool = Sqr(pageWidthPerPool);
-        numPools            = Min(numPools, maxNumLayers);
-
-        maxNumLayers = 1u << Log2Int(limits.maxNumLayers);
+        numPools              = Min(numPools, limits.maxNumLayers);
+        physicalTextureWidth  = Min(physicalTextureWidth, limits.max2DImageDim);
+        physicalTextureHeight = Min(physicalTextureHeight, limits.max2DImageDim);
 
         // Allocate physical page pool
         pools = StaticArray<PhysicalPagePool>(arena, numPools);
         for (int i = 0; i < numPools; i++)
         {
             PhysicalPagePool pool;
-            pool.ranges    = StaticArray<BlockRange>(arena, numPagesPerPool);
-            pool.freeRange = 0;
-            pool.freePages = numPagesPerPool;
-            pool.prevFree  = i == 0 ? InvalidPool : i - 1;
-            pool.nextFree  = i == numPools - 1 ? InvalidPool : i + 1;
+            pool.maxWidth    = physicalTextureWidth;
+            pool.maxHeight   = physicalTextureHeight;
+            pool.totalHeight = 0;
+            pool.layerIndex  = i;
+            pool.prevFree    = i == 0 ? InvalidPool : i - 1;
+            pool.nextFree    = i == numPools - 1 ? InvalidPool : i + 1;
             pools.Push(pool);
         }
 
         // Allocate block ranges
         const u32 invalidRange = BlockRange::InvalidRange;
-        pageRanges.Push(BlockRange(AllocationStatus::Free, 0, numVirtualPages, invalidRange,
+        pageRanges.Push(BlockRange(AllocationStatus::Free, 0, numVirtualFaces, invalidRange,
                                    invalidRange, invalidRange, invalidRange));
 
         completelyFreePool = 0;
         partiallyFreePool  = InvalidPool;
 
         // Allocate texture arrays
-        ImageDesc poolDesc(ImageType::Array2D, texelWidthPerPool, texelWidthPerPool, 1, 1,
-                           numPools, format, MemoryUsage::GPU_ONLY,
+        ImageDesc poolDesc(ImageType::Array2D, physicalTextureWidth, physicalTextureHeight, 1,
+                           1, numPools, format, MemoryUsage::GPU_ONLY,
                            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-        level.gpuPhysicalPool = device->CreateImage(poolDesc);
+        gpuPhysicalPool = device->CreateImage(poolDesc);
     }
 
-    pageRanges = StaticArray<BlockRange>(arena, numVirtualPages);
+    pageRanges = StaticArray<BlockRange>(arena, numVirtualFaces);
     freeRange  = 0;
 }
 
@@ -976,7 +972,7 @@ void BlockRange::Split(Array &ranges, u32 index, u32 &freeIndex, u32 num)
         BlockRange newRange(AllocationStatus::Free, range.start + num, oldOnePastEnd, index,
                             oldNextRange, oldPrevFree, oldNextFree);
 
-        ranges.Push(newRange);
+        ranges.push_back(newRange);
     }
 }
 
@@ -1053,11 +1049,12 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, TileReques
         int startLevel                   = faceMetadata.startLevel;
 
         Vec2i allocationSize =
-            CalculateFaceSize(faceMetadata.log2Width, faceMetadata.log2Height, startLevel);
+            CalculateFaceSize(faceMetadata.log2Width, faceMetadata.log2Height);
 
         // Allocation space for subsequent mip levels to the right
         allocationSize.x +=
-            (1u << (faceMetadata.log2Width - 1u)) + 2 * GetBorderSize(startLevel + 1);
+            (1u << (faceMetadata.log2Width - 1u)) +
+            2 * GetBorderSize(faceMetadata.log2Width - 1, faceMetadata.log2Height - 1);
 
         // First find the pool to use
         u32 freePoolIndex =
@@ -1182,8 +1179,7 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, TileReques
             copy.layerCount   = 1;
             copy.offset       = start;
 
-            Vec2i extent = CalculateFaceSize(faceMetadata.log2Width, faceMetadata.log2Height,
-                                             request.startLevel + levelIndex);
+            Vec2i extent = CalculateFaceSize(faceMetadata.log2Width, faceMetadata.log2Height);
             copy.extent  = Vec3u(extent.x, extent.y, 1);
 
             start[levelIndex & 1] += extent[levelIndex & 1];

@@ -14,6 +14,7 @@ typedef AffineSpace float3x4;
 typedef unsigned int uint;
 typedef Vec2u uint2;
 
+typedef Vec2i int2;
 typedef Vec3i int3;
 
 } // namespace rt

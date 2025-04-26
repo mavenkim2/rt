@@ -94,6 +94,8 @@ struct StaticArray
         size_++;
     }
 
+    __forceinline void push_back(T element) { Push(element); }
+
     __forceinline T Pop()
     {
         Assert(size_ > 0);

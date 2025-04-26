@@ -989,16 +989,6 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
         WriteBits((u32 *)node->values, bitOffset, reuseIndex, numIndexBits);
     }
 
-#if 0
-    u32 ctrlBitOffset = bitOffset;
-    Assert(triangleStripTypes.Length() == clusterNumTriangles - 1u);
-    for (auto &type : triangleStripTypes)
-    {
-        Assert((u32)type < 4);
-        WriteBits((u32 *)node->values, bitOffset, (u32)type, 2);
-    }
-#endif
-
     // Write first use bits
     u32 firstBitWriteOffset  = 0;
     u32 firstUseBitWriteSize = Min(currentFirstUseBit - firstBitWriteOffset, 32u);

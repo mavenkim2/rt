@@ -9,7 +9,7 @@ namespace rt
 #endif
 
 #define MAX_COMPRESSED_LEVEL      6
-#define MAX_LEVEL 8
+#define MAX_LEVEL                 8
 #define BASE_TEXEL_WIDTH_PER_PAGE 128
 
 #define BLOCK_WIDTH      4
@@ -25,6 +25,23 @@ struct PageTableUpdateRequest
     uint faceIndex;
     uint packed_x_y_layer;
 };
+
+inline uint GetBorderSize(int log2Width, int log2Height)
+{
+#ifdef __cplusplus
+    return Min(log2Width, log2Height) < 2 ? 1 : 4;
+#else
+    return min(log2Width, log2Height) < 2 ? 1 : 4;
+#endif
+}
+
+inline int2 CalculateFaceSize(int log2Width, int log2Height)
+{
+    int borderSize = GetBorderSize(log2Width, log2Height);
+    int2 allocationSize =
+        int2((1u << log2Width) + 2 * borderSize, (1u << log2Height) + 2 * borderSize);
+    return allocationSize;
+}
 
 inline uint GetBorderSize(uint levelIndex)
 {

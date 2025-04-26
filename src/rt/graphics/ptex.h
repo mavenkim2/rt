@@ -257,30 +257,6 @@ struct BlockRange
     static void Split(Array &ranges, u32 index, u32 &freeIndex, u32 num);
 };
 
-// NOTE: quad tree node
-struct AllocationNode
-{
-    AllocationStatus status;
-    Vec2i start;
-    Vec2i end;
-
-    int firstSibling;
-    int nextSibling;
-    int firstChild;
-    int parent;
-
-    int prevFree;
-    int nextFree;
-
-    AllocationNode(AllocationStatus status, Vec2i start, Vec2i end, int firstSibling,
-                   int nextSibling, int firstChild, int parent, int prevFree, int nextFree)
-        : status(status), start(start), end(end), firstSibling(firstSibling),
-          nextSibling(nextSibling), firstChild(firstChild), parent(parent), prevFree(prevFree),
-          nextFree(nextFree)
-    {
-    }
-};
-
 struct Shelf
 {
     std::vector<BlockRange> ranges;
@@ -295,23 +271,14 @@ struct Shelf
 
 struct PhysicalPagePool
 {
-    StaticArray<BlockRange> ranges;
-    StaticArray<AllocationNode> nodes;
-
     std::vector<Shelf> shelves;
     FixedArray<int, MAX_LEVEL> shelfStarts;
 
     int maxWidth;
-
-    int totalHeight;
     int maxHeight;
+    int totalHeight;
 
     int layerIndex;
-
-    u32 freeRange;
-    u32 freePages;
-
-    u32 freeNode;
 
     u32 prevFree;
     u32 nextFree;
@@ -330,7 +297,6 @@ struct VirtualTextureManager
 
     VkFormat format;
 
-    u32 maxNumLayers;
     StaticArray<BlockRange> pageRanges;
     u32 freeRange;
 
@@ -347,21 +313,12 @@ struct VirtualTextureManager
     GPUImage pageTable;
     PushConstant push;
 
-    VirtualTextureManager(Arena *arena, u32 numVirtualPages, u32 numPhysicalPages,
-                          int numLevels, u32 inPageWidthPerPool, u32 inTexelWidthPerPage,
-                          u32 borderSize, VkFormat format);
+    VirtualTextureManager(Arena *arena, u32 numVirtualFaces, u32 physicalTextureWidth,
+                          u32 physicalTextureHeight, u32 numPools, VkFormat format);
     u32 AllocateVirtualPages(u32 numPages);
     void AllocatePhysicalPages(CommandBuffer *cmd, TileRequest *requests, u32 numRequests,
                                TileMetadata *metadata, u32 numFaces);
 };
-
-inline Vec2i CalculateFaceSize(int log2Width, int log2Height, int levelIndex)
-{
-    int borderSize = GetBorderSize(levelIndex);
-    Vec2i allocationSize =
-        Vec2i((1u << log2Width) + 2 * borderSize, (1u << log2Height) + 2 * borderSize);
-    return allocationSize;
-}
 
 void InitializePtex();
 PaddedImage GenerateMips(Arena *arena, PaddedImage &input, u32 width, u32 height, Vec2u scale,
