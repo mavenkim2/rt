@@ -392,8 +392,7 @@ void Convert(string filename)
     }
 
     // Create all face images and mip maps
-    static const int maxLevels = 16;
-    StaticArray<FixedArray<PaddedImage, maxLevels>> images(scratch.temp.arena, numFaces,
+    StaticArray<FixedArray<PaddedImage, MAX_LEVEL>> images(scratch.temp.arena, numFaces,
                                                            numFaces);
 
     struct FaceUploadInfo
@@ -408,53 +407,63 @@ void Convert(string filename)
     };
 
     FixedArray<StaticArray<FaceUploadInfo>, 2> faceUploads(2);
-    faceUploads[0] = StaticArray<FaceUploadInfo>(scratch.temp.arena, numFaces * maxLevels,
-                                                 numFaces * maxLevels);
-    faceUploads[1] = StaticArray<FaceUploadInfo>(scratch.temp.arena, numFaces * maxLevels,
-                                                 numFaces * maxLevels);
+    faceUploads[0] = StaticArray<FaceUploadInfo>(scratch.temp.arena, numFaces * MAX_LEVEL);
+    faceUploads[1] = StaticArray<FaceUploadInfo>(scratch.temp.arena, numFaces * MAX_LEVEL);
 
     StaticArray<TileMetadata> metaData(scratch.temp.arena, numFaces, numFaces);
 
+    Arena **arenas = GetArenaArray(scratch.temp.arena);
     // Generate mips for faces
-    for (int i = 0; i < numFaces; i++)
-    {
-        PaddedImage img = PtexToImg(scratch.temp.arena, t, i, borderSize);
-        int levels      = Max(Max(img.log2Width, img.log2Height), 1);
-
-        images[i]    = FixedArray<PaddedImage, maxLevels>(levels);
-        images[i][0] = img;
-
-        // Generate mip maps
-        Assert(IsPow2(img.width) && IsPow2(img.height));
-
-        int width  = Max(img.width >> 1, 1);
-        int height = Max(img.height >> 1, 1);
-
-        PaddedImage inPaddedImage = img;
-        int depth                 = 1;
-
-        Vec2u scale = 2u;
-
-        while (depth < MAX_LEVEL)
+    ParallelFor(0, numFaces, 1024, [&](int jobID, int start, int count) {
+        u32 threadIndex = GetThreadIndex();
+        Arena *arena    = arenas[threadIndex];
+        for (int i = start; i < start + count; i++)
         {
-            u32 mipBorderSize          = depth < MAX_COMPRESSED_LEVEL ? borderSize : 1;
-            PaddedImage outPaddedImage = GenerateMips(scratch.temp.arena, inPaddedImage, width,
-                                                      height, scale, mipBorderSize);
+            PaddedImage img = PtexToImg(arena, t, i, borderSize);
+            int levels      = Max(img.log2Width, img.log2Height) + 1;
+            Assert(levels < MAX_LEVEL);
 
-            images[i][depth] = outPaddedImage;
-            inPaddedImage    = outPaddedImage;
+            images[i]    = FixedArray<PaddedImage, MAX_LEVEL>(levels);
+            images[i][0] = img;
 
-            u32 prevWidth = width;
-            width         = Max(width >> 1, 1);
-            scale[0]      = prevWidth / width;
+            // Generate mip maps
+            Assert(IsPow2(img.width) && IsPow2(img.height));
 
-            u32 prevHeight = height;
-            height         = Max(height >> 1, 1);
-            scale[1]       = prevHeight / height;
+            int width  = Max(img.width >> 1, 1);
+            int height = Max(img.height >> 1, 1);
 
-            depth++;
+            int log2Width  = Max(img.log2Width - 1, 1);
+            int log2Height = Max(img.log2Height - 1, 1);
+
+            PaddedImage inPaddedImage = img;
+            int depth                 = 1;
+
+            Vec2u scale = 2u;
+
+            while (depth < levels)
+            {
+                u32 mipBorderSize = GetBorderSize(log2Width, log2Height);
+                PaddedImage outPaddedImage =
+                    GenerateMips(arena, inPaddedImage, width, height, scale, mipBorderSize);
+
+                images[i][depth] = outPaddedImage;
+                inPaddedImage    = outPaddedImage;
+
+                u32 prevWidth = width;
+                width         = Max(width >> 1, 1);
+                scale[0]      = prevWidth / width;
+
+                u32 prevHeight = height;
+                height         = Max(height >> 1, 1);
+                scale[1]       = prevHeight / height;
+
+                log2Width  = Max(log2Width - 1, 1);
+                log2Height = Max(log2Height - 1, 1);
+
+                depth++;
+            }
         }
-    }
+    });
 
     auto GetNeighborFaceImage = [&](PaddedImage &currentFaceImg, u32 neighborFace, u32 rot,
                                     Vec2u &scale) {
@@ -472,7 +481,7 @@ void Convert(string filename)
         u32 log2Width               = neighborFaceImg.log2Width;
         u32 log2Height              = neighborFaceImg.log2Height;
 
-        u32 mipBorderSize = GetBorderSize(log2Width, log2Height);
+        u32 mipBorderSize = GetBorderSize(dstBaseSize.x, dstBaseSize.y);
         // reduce u
         if (log2Width > dstBaseSize.x)
         {
@@ -507,14 +516,15 @@ void Convert(string filename)
 
     // NOTE: pack multiple face textures/mips into one texture atlas that gets submitted to the
     // GPU
-    const u32 gpuSubmissionWidth  = 8192;
-    const u32 gpuSubmissionHeight = 8192;
+    const u32 gpuSubmissionWidth  = 4096;
+    const u32 gpuSubmissionHeight = 4096;
     const u32 gpuOutputWidth      = gpuSubmissionWidth >> log2BlockSize;
     const u32 gpuOutputHeight     = gpuSubmissionHeight >> log2BlockSize;
 
     GPUImage gpuSrcImages[2];
     GPUImage uavImages[2];
-    TransferBuffer submissionBuffers[2];
+    GPUBuffer submissionBuffers[2];
+    void *mappedPtrs[2];
     GPUBuffer readbackBuffers[2];
     DescriptorSet descriptorSets[2];
     Semaphore semaphores[2];
@@ -539,6 +549,19 @@ void Convert(string filename)
 
         uavImages[0] = device->CreateImage(uavDesc);
         uavImages[1] = device->CreateImage(uavDesc);
+
+        submissionBuffers[0] = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                    gpuSubmissionWidth * gpuSubmissionHeight *
+                                                        GetFormatSize(baseFormat),
+                                                    MemoryUsage::CPU_TO_GPU);
+        submissionBuffers[1] = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                    gpuSubmissionWidth * gpuSubmissionHeight *
+                                                        GetFormatSize(baseFormat),
+                                                    MemoryUsage::CPU_TO_GPU);
+
+        Assert(submissionBuffers[0].mappedPtr && submissionBuffers[1].mappedPtr);
+        mappedPtrs[0] = submissionBuffers[0].mappedPtr;
+        mappedPtrs[1] = submissionBuffers[1].mappedPtr;
 
         readbackBuffers[0] = device->CreateBuffer(
             VK_BUFFER_USAGE_TRANSFER_DST_BIT, gpuOutputWidth * gpuOutputHeight * bytesPerBlock,
@@ -569,7 +592,7 @@ void Convert(string filename)
     FaceHandle *handles = PushArrayNoZero(scratch.temp.arena, FaceHandle, numFaces);
     for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
     {
-        PaddedImage &img = images[0][faceIndex];
+        PaddedImage &img = images[faceIndex][0];
 
         u32 key                      = 0;
         u32 offset                   = 0;
@@ -580,26 +603,30 @@ void Convert(string filename)
     }
 
     // Not worth sorting if there aren't enough faces
-    if (numFaces > 1000) SortHandles(handles, numFaces);
+    if (numFaces > 1000) SortHandles<FaceHandle, false>(handles, numFaces);
 
     int currentHorizontalOffset = 0;
-    int currentShelfHeight      = 0;
-    int totalHeight             = 0;
+    u32 currentShelfHeight      = 0;
+    u32 totalHeight             = 0;
 
     StringBuilderMapped builder(outFilename);
     TileFileHeader header = {};
     header.numFaces       = numFaces;
     PutData(&builder, &header, sizeof(header));
-    FaceMetadata *faceMetadata =
+    FaceMetadata *outFaceMetadata =
         (FaceMetadata *)AllocateSpace(&builder, sizeof(FaceMetadata) * numFaces);
+
+    StaticArray<FaceMetadata> faceMetadata(scratch.temp.arena, numFaces, numFaces);
 
     auto CopyBlockCompressedResultsToDisk = [&]() {
         // Write to face images to disk
-        if (submissionIndex > 0)
+        if (numSubmissions > 0)
         {
             int lastSubmissionIndex   = (submissionIndex - 1) & 1;
             GPUBuffer *readbackBuffer = &readbackBuffers[lastSubmissionIndex];
             device->Wait(semaphores[lastSubmissionIndex]);
+
+            descriptorSets[lastSubmissionIndex].Reset();
 
             // Loop through requests and copy out to disk
             for (auto &upload : faceUploads[lastSubmissionIndex])
@@ -611,6 +638,9 @@ void Convert(string filename)
                     faceMetadata[upload.faceIndex].log2Height   = upload.log2Height;
                 }
 
+                u32 numBytes = upload.srcDim.x * upload.srcDim.y * bytesPerBlock;
+                faceMetadata[upload.faceIndex].totalSize += numBytes;
+
                 u32 faceStride = upload.srcDim.x * bytesPerBlock;
                 u32 srcStride  = gpuOutputWidth * bytesPerBlock;
 
@@ -621,17 +651,18 @@ void Convert(string filename)
                 void *dst = AllocateSpace(&builder, faceStride * upload.srcDim.y);
                 Utils::Copy(src, srcStride, dst, faceStride, upload.srcDim.y, faceStride);
             }
+            faceUploads[lastSubmissionIndex].size_ = 0;
         }
     };
 
     auto SubmitBlockCompressionCommandsToGPU = [&]() {
         // Submission currently packed image to GPU
-        GPUImage *srcImage             = &gpuSrcImages[submissionIndex];
-        GPUImage *uavImage             = &uavImages[submissionIndex];
-        TransferBuffer *transferBuffer = &submissionBuffers[submissionIndex];
-        GPUBuffer *readbackBuffer      = &readbackBuffers[submissionIndex];
-        DescriptorSet *set             = &descriptorSets[submissionIndex];
-        CommandBuffer *cmd             = cmds[submissionIndex];
+        GPUImage *srcImage        = &gpuSrcImages[submissionIndex];
+        GPUImage *uavImage        = &uavImages[submissionIndex];
+        GPUBuffer *transferBuffer = &submissionBuffers[submissionIndex];
+        GPUBuffer *readbackBuffer = &readbackBuffers[submissionIndex];
+        DescriptorSet *set        = &descriptorSets[submissionIndex];
+        CommandBuffer *cmd        = cmds[submissionIndex];
 
         BufferImageCopy copy = {};
         copy.layerCount      = 1;
@@ -662,6 +693,7 @@ void Convert(string filename)
 
         // Copy from uav to buffer
         {
+            copy.extent = Vec3u(gpuOutputWidth, gpuOutputHeight, 1);
             cmd->Barrier(uavImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                          VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
             cmd->FlushBarriers();
@@ -670,10 +702,11 @@ void Convert(string filename)
         }
 
         // Submit command buffer
-        semaphores[submissionIndex].signalValue = numSubmissions;
+        semaphores[submissionIndex].signalValue++;
         cmd->Signal(semaphores[submissionIndex]);
         device->SubmitCommandBuffer(cmds[submissionIndex]);
         cmds[submissionIndex] = device->BeginCommandBuffer(QueueType_Compute);
+        cmds[submissionIndex]->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     };
 
     // Add borders to all images
@@ -689,9 +722,7 @@ void Convert(string filename)
         {
             PaddedImage &currentFaceImg = images[faceIndex][levelIndex];
 
-            if (currentHorizontalOffset + currentFaceImg.width +
-                    2 * currentFaceImg.borderSize >
-                gpuSubmissionWidth)
+            if (currentHorizontalOffset + currentFaceImg.GetPaddedWidth() > gpuSubmissionWidth)
             {
                 currentHorizontalOffset = 0;
                 totalHeight += currentShelfHeight;
@@ -699,7 +730,7 @@ void Convert(string filename)
             }
 
             currentShelfHeight =
-                Max(currentShelfHeight, currentFaceImg.height + 2 * currentFaceImg.borderSize);
+                Max(currentShelfHeight, AlignPow2(currentFaceImg.GetPaddedHeight(), 4u));
 
             if (currentShelfHeight + totalHeight > gpuSubmissionHeight)
             {
@@ -710,7 +741,7 @@ void Convert(string filename)
                 submissionIndex         = numSubmissions & 1;
                 currentHorizontalOffset = 0;
                 totalHeight             = 0;
-                currentShelfHeight = currentFaceImg.height + 2 * currentFaceImg.borderSize;
+                currentShelfHeight      = currentFaceImg.GetPaddedHeight();
             }
 
             for (int edgeIndex = e_bottom; edgeIndex < e_max; edgeIndex++)
@@ -737,8 +768,6 @@ void Convert(string filename)
                           (edgeIndex == e_top ? currentFaceImg.height : 0);
 
                 Vec2u srcStart;
-                Assert(aeid != e_right || mipBorderSize > neighborFaceImg.width);
-                Assert(aeid != e_top || mipBorderSize > neighborFaceImg.height);
                 srcStart.x =
                     aeid == e_right ? neighborFaceImg.width - (mipBorderSize >> scale.x) : 0;
                 srcStart.y =
@@ -819,24 +848,29 @@ void Convert(string filename)
                 }
             }
 
-            TransferBuffer *submissionBuffer = &submissionBuffers[submissionIndex];
-            u32 dstStride                    = gpuSubmissionWidth * GetFormatSize(baseFormat);
+            u32 dstStride = gpuSubmissionWidth * GetFormatSize(baseFormat);
+            u32 offset =
+                dstStride * totalHeight + currentHorizontalOffset * GetFormatSize(baseFormat);
+            Assert(offset <
+                   gpuSubmissionWidth * gpuSubmissionHeight * GetFormatSize(baseFormat));
             Utils::Copy(currentFaceImg.contents, currentFaceImg.strideWithBorder,
-                        (u8 *)submissionBuffer->mappedPtr + dstStride * totalHeight +
-                            currentHorizontalOffset * GetFormatSize(baseFormat),
-                        dstStride, currentFaceImg.height, currentFaceImg.strideWithBorder);
+                        (u8 *)mappedPtrs[submissionIndex] + offset, dstStride,
+                        currentFaceImg.GetPaddedHeight(), currentFaceImg.strideWithBorder);
 
+            Assert((currentHorizontalOffset & 3) == 0);
+            Assert((totalHeight & 3) == 0);
             FaceUploadInfo upload;
-            upload.faceIndex  = faceIndex;
-            upload.srcDim.x   = currentFaceImg.GetPaddedWidth();
-            upload.srcDim.y   = currentFaceImg.GetPaddedHeight();
-            upload.offset     = Vec2i(currentHorizontalOffset, totalHeight);
+            upload.faceIndex = faceIndex;
+            upload.srcDim.x  = Max(currentFaceImg.GetPaddedWidth() >> log2BlockSize, 1u);
+            upload.srcDim.y  = Max(currentFaceImg.GetPaddedHeight() >> log2BlockSize, 1u);
+            upload.offset =
+                Vec2i(currentHorizontalOffset >> log2BlockSize, totalHeight >> log2BlockSize);
             upload.base       = levelIndex == 0;
             upload.log2Width  = currentFaceImg.log2Width;
             upload.log2Height = currentFaceImg.log2Height;
             faceUploads[submissionIndex].Push(upload);
 
-            currentHorizontalOffset += currentFaceImg.width + 2 * currentFaceImg.borderSize;
+            currentHorizontalOffset += AlignPow2(currentFaceImg.GetPaddedWidth(), 4);
         }
     }
 
@@ -848,12 +882,14 @@ void Convert(string filename)
 
     CopyBlockCompressedResultsToDisk();
 
+    MemoryCopy(outFaceMetadata, faceMetadata.data, numFaces * sizeof(FaceMetadata));
+
     // Cleanup
     for (int i = 0; i < 2; i++)
     {
         device->DestroyImage(&gpuSrcImages[i]);
         device->DestroyImage(&uavImages[i]);
-        device->DestroyBuffer(&submissionBuffers[i].stagingBuffer);
+        device->DestroyBuffer(&submissionBuffers[i]);
         device->DestroyBuffer(&readbackBuffers[i]);
         device->DestroyPool(descriptorSets[i].pool);
     }
@@ -906,11 +942,17 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 numVirtualFaces,
             pool.maxHeight   = physicalTextureHeight;
             pool.totalHeight = 0;
             pool.layerIndex  = i;
+            pool.shelfStarts = FixedArray<int, MAX_LEVEL>(MAX_LEVEL);
+            for (int j = 0; j < MAX_LEVEL; j++)
+            {
+                pool.shelfStarts[j] = InvalidShelf;
+            }
             pools.Push(pool);
         }
 
         // Allocate block ranges
         const u32 invalidRange = BlockRange::InvalidRange;
+        pageRanges             = StaticArray<BlockRange>(arena, numVirtualFaces);
         pageRanges.Push(BlockRange(AllocationStatus::Free, 0, numVirtualFaces, invalidRange,
                                    invalidRange, invalidRange, invalidRange));
 
@@ -921,8 +963,7 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 numVirtualFaces,
         gpuPhysicalPool = device->CreateImage(poolDesc);
     }
 
-    pageRanges = StaticArray<BlockRange>(arena, numVirtualFaces);
-    freeRange  = 0;
+    freeRange = 0;
 }
 
 template <typename Array>
@@ -966,6 +1007,8 @@ void BlockRange::Split(Array &ranges, u32 index, u32 &freeIndex, u32 num)
 
         BlockRange newRange(AllocationStatus::Free, range.start + num, oldOnePastEnd, index,
                             oldNextRange, oldPrevFree, oldNextFree);
+
+        LinkFreeList(ranges, newRangeIndex, freeIndex, InvalidRange);
 
         ranges.push_back(newRange);
     }
@@ -1012,7 +1055,7 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
         requestHandles[i].sortKey      = (u8)key;
         requestHandles[i].requestIndex = i;
     }
-    SortHandles(requestHandles, numFaces);
+    SortHandles<RequestHandle, false>(requestHandles, numFaces);
     AllocatePhysicalPages(cmd, metadata, numFaces, contents, requests, numFaces,
                           requestHandles);
 }
@@ -1025,17 +1068,14 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
 {
     ScratchArena scratch;
 
-    const int InvalidNode = -1;
-    const int InvalidRow  = -1;
-
     Shelf *currentRow     = 0;
     u32 currentLog2Height = ~0u;
 
-    TransferBuffer transferBuffer;
     u32 bufferOffset = 0;
 
     StaticArray<PageTableUpdateRequest> updateRequests(scratch.temp.arena, numRequests,
                                                        numRequests);
+    StaticArray<BufferImageCopy> copies(scratch.temp.arena, numRequests * MAX_LEVEL);
 
     for (int handleIndex = 0; handleIndex < numRequests; handleIndex++)
     {
@@ -1051,7 +1091,7 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
 
         // Allocation space for subsequent mip levels to the right
         allocationSize.x +=
-            (1u << (faceMetadata.log2Width - 1u)) +
+            (1u << Max(faceMetadata.log2Width - 1, 1)) +
             2 * GetBorderSize(faceMetadata.log2Width - 1, faceMetadata.log2Height - 1);
 
         // First find the pool to use
@@ -1069,7 +1109,7 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
         // Find a suitable shelf
         for (;;)
         {
-            while (shelfStart == InvalidRow)
+            while (shelfStart == InvalidShelf)
             {
                 if (pool->totalHeight + allocationSize.y > pool->maxHeight)
                 {
@@ -1082,18 +1122,21 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
                 {
                     // Allocate a new row in the current pool
                     pool->shelves.emplace_back();
-                    Shelf &newRow = pool->shelves.back();
-                    newRow.startY = pool->totalHeight;
-                    newRow.height = allocationSize.y;
+                    Shelf &newRow    = pool->shelves.back();
+                    newRow.startY    = pool->totalHeight;
+                    newRow.height    = allocationSize.y;
+                    newRow.freeRange = 0;
+                    newRow.prevFree  = InvalidShelf;
+                    newRow.nextFree  = InvalidShelf;
                     newRow.ranges.reserve(pool->maxWidth / allocationSize.x);
                     newRow.ranges.push_back(
                         BlockRange(AllocationStatus::Free, 0, pool->maxWidth));
                     LinkFreeList(pool->shelves, pool->shelves.size() - 1,
-                                 pool->shelfStarts[currentLog2Height], InvalidRow);
+                                 pool->shelfStarts[currentLog2Height], InvalidShelf);
 
                     pool->totalHeight += allocationSize.y;
-                    shelfStart = pool->shelfStarts[currentLog2Height];
                 }
+                shelfStart = pool->shelfStarts[currentLog2Height];
             }
 
             // Find suitable span in row
@@ -1110,7 +1153,7 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
                      testDimIndex < pool->shelfStarts.Length(); testDimIndex++)
                 {
                     int freeRow = pool->shelfStarts[testDimIndex];
-                    while (freeRow != InvalidRow)
+                    while (freeRow != InvalidShelf)
                     {
                         Shelf *testRow     = &pool->shelves[freeRow];
                         u32 testRangeIndex = BlockRange::FindBestFree(
@@ -1136,7 +1179,7 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
                 // Repeat the loop
                 else
                 {
-                    shelfStart = InvalidRow;
+                    shelfStart = InvalidShelf;
                     continue;
                 }
             }
@@ -1193,10 +1236,15 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
             log2Height = Max(log2Height - 1, 1);
 
             start[levelIndex & 1] += extent[levelIndex & 1];
+
+            copies.Push(copy);
         }
     }
 
-    transferBuffer = device->GetStagingBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, bufferOffset);
+    GPUBuffer transferBuffer = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                    bufferOffset, MemoryUsage::CPU_TO_GPU);
+    Assert(transferBuffer.mappedPtr);
+    void *mappedPtr = transferBuffer.mappedPtr;
 
     // Allocate staging buffer
     for (int handleIndex = 0; handleIndex < numRequests; handleIndex++)
@@ -1224,13 +1272,13 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
             log2Height = Max(log2Height - 1, 1);
         }
 
-        MemoryCopy(transferBuffer.mappedPtr, contents + offset, size);
+        MemoryCopy(mappedPtr, contents + offset, size);
     }
 
     PageTableUpdatePushConstant pc;
     pc.numRequests = numRequests;
 
-    cmd->SubmitTransfer(&transferBuffer);
+    cmd->CopyImage(&transferBuffer, &gpuPhysicalPool, copies.data, copies.Length());
     TransferBuffer pageTableUpdateRequestBuffer =
         cmd->SubmitBuffer(updateRequests.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                           sizeof(PageTableUpdateRequest) * pc.numRequests);

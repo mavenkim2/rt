@@ -295,6 +295,7 @@ struct PhysicalPageAllocation
 struct VirtualTextureManager
 {
     static const u32 InvalidPool = ~0u;
+    static const int InvalidShelf  = -1;
 
     struct RequestHandle
     {

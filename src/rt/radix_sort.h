@@ -8,12 +8,11 @@
 namespace rt
 {
 
-template <typename Handle>
+template <typename Handle, bool ascending = true>
 void SortHandles(Handle *shadingHandles, u32 count)
 {
     TempArena temp    = ScratchStart(0, 0);
     size_t handleSize = sizeof(shadingHandles[0].sortKey);
-    Assert(handleSize == 4 || handleSize == 8);
 
     Handle *keys0 = (Handle *)shadingHandles;
     Handle *keys1 = PushArrayNoZero(temp.arena, Handle, count);
@@ -33,12 +32,26 @@ void SortHandles(Handle *shadingHandles, u32 count)
             buckets[bucket]++;
         }
         // Prefix sum
-        u32 total = 0;
-        for (u32 i = 0; i < 256; i++)
+
+        if constexpr (ascending)
         {
-            u32 bucketCount = buckets[i];
-            buckets[i]      = total;
-            total += bucketCount;
+            u32 total = 0;
+            for (u32 i = 0; i < 256; i++)
+            {
+                u32 bucketCount = buckets[i];
+                buckets[i]      = total;
+                total += bucketCount;
+            }
+        }
+        else
+        {
+            u32 total = 0;
+            for (int i = 255; i >= 0; i--)
+            {
+                u32 bucketCount = buckets[i];
+                buckets[i]      = total;
+                total += bucketCount;
+            }
         }
 
         // Place in correct position
@@ -52,6 +65,12 @@ void SortHandles(Handle *shadingHandles, u32 count)
         }
         Swap(keys0, keys1);
     }
+
+    if (sizeof(shadingHandles[0].sortKey) & 1)
+    {
+        MemoryCopy(keys1, keys0, sizeof(Handle) * count);
+    }
+
     ScratchEnd(temp);
 }
 

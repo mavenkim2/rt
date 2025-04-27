@@ -1889,8 +1889,8 @@ TransferBuffer CommandBuffer::SubmitImage(void *ptr, ImageDesc desc)
     return transferBuffer;
 }
 
-void CommandBuffer::CopyImage(TransferBuffer *transfer, GPUImage *image,
-                              BufferImageCopy *copies, u32 num)
+void CommandBuffer::CopyImage(GPUBuffer *transfer, GPUImage *image, BufferImageCopy *copies,
+                              u32 num)
 {
     ScratchArena scratch;
     VkBufferImageCopy *vkCopies = PushArrayNoZero(scratch.temp.arena, VkBufferImageCopy, num);
@@ -1911,7 +1911,7 @@ void CommandBuffer::CopyImage(TransferBuffer *transfer, GPUImage *image,
         copy.imageExtent.height              = copies[i].extent.y;
         copy.imageExtent.depth               = copies[i].extent.z;
     }
-    vkCmdCopyBufferToImage(buffer, transfer->buffer.buffer, image->image,
+    vkCmdCopyBufferToImage(buffer, transfer->buffer, image->image,
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, num, vkCopies);
 }
 
@@ -2113,7 +2113,6 @@ void CommandBuffer::BindDescriptorSets(VkPipelineBindPoint bindPoint, Descriptor
     vkCmdBindDescriptorSets(buffer, bindPoint, pipeLayout, 1,
                             device->bindlessDescriptorSets.size(),
                             device->bindlessDescriptorSets.data(), 0, 0);
-    set->descriptorInfo.clear();
     set->writeDescriptorSets.clear();
 }
 
@@ -2523,6 +2522,19 @@ DescriptorSet DescriptorSetLayout::CreateNewDescriptorSet()
     set.layout = this;
     set.descriptorInfo.resize(bindings.size());
     return set;
+}
+
+void DescriptorSet::Reset()
+{
+    VK_CHECK(vkResetDescriptorPool(device->device, pool, 0));
+    VkDescriptorSetAllocateInfo allocateInfo = {
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    allocateInfo.descriptorPool     = pool;
+    allocateInfo.pSetLayouts        = layout->GetVulkanLayout();
+    allocateInfo.descriptorSetCount = 1;
+
+    VkResult result = vkAllocateDescriptorSets(device->device, &allocateInfo, &set);
+    ErrorExit(result == VK_SUCCESS, "Error while allocating descriptor sets: %u\n", result);
 }
 
 GPUAccelerationStructurePayload CommandBuffer::BuildAS(

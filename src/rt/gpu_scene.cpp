@@ -363,7 +363,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         string filename          = PushStr8F(sceneScratch.temp.arena, "%S.tiles",
                                              RemoveFileExtension(ptexTexture.filename));
 
-        if (Contains(filename, "displacement", MatchFlag_CaseInsensitive)) continue;
+        if (!Contains(filename, "mountainb0001_geo") || Contains(filename, "displacement"))
+            continue;
+
         Tokenizer tokenizer;
         tokenizer.input  = OS_MapFileRead(filename);
         tokenizer.cursor = tokenizer.input.str;

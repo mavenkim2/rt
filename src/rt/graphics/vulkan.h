@@ -516,6 +516,7 @@ struct DescriptorSet
     DescriptorSet &Bind(int index, GPUImage *image, int subresource = -1);
     DescriptorSet &Bind(int index, GPUBuffer *buffer);
     DescriptorSet &Bind(int index, VkAccelerationStructureKHR *accel);
+    void Reset();
 };
 
 struct DescriptorSetLayout
@@ -565,8 +566,7 @@ struct CommandBuffer
     void SubmitTransfer(TransferBuffer *buffer);
     TransferBuffer SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags, size_t totalSize);
     TransferBuffer SubmitImage(void *ptr, ImageDesc desc);
-    void CopyImage(TransferBuffer *transfer, GPUImage *image, BufferImageCopy *copies,
-                   u32 num);
+    void CopyImage(GPUBuffer *transfer, GPUImage *image, BufferImageCopy *copies, u32 num);
     void CopyImage(GPUImage *dst, GPUImage *src, const ImageToImageCopy &copy);
     void CopyImageToBuffer(GPUBuffer *dst, GPUImage *src, const BufferImageCopy &copy);
 
