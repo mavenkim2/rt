@@ -27,14 +27,23 @@ struct VirtualTexture
 
         int log2Width = BitFieldExtractU32(physicalPageInfo.y, 4, 0);
         int log2Height = BitFieldExtractU32(physicalPageInfo.y, 4, 4);
-        log2Width = max(1, log2Width - basePhysicalLevel);
-        log2Height = max(1, log2Height - basePhysicalLevel);
+        int rotate = BitFieldExtractU32(physicalPageInfo.y, 1, 12);
+        log2Width = max(0, log2Width - basePhysicalLevel);
+        log2Height = max(0, log2Height - basePhysicalLevel);
+        uint numLevels = max(log2Width, log2Height) + 1u;
 
         uint2 offset = uint2(x, y);
-        for (int levelIndex = basePhysicalLevel; levelIndex < mipLevel; levelIndex++)
+        offset.x += mipLevel > basePhysicalLevel ? CalculateFaceSize(log2Width, log2Height).x: 0;
+        //((1u << numLevels) - 1u) & ~((1u << (numLevels - mipLevel - basePhysicalLevel + 1)) - 1u);
+        for (int levelIndex = basePhysicalLevel + 1; levelIndex < mipLevel; levelIndex++)
         {
-            offset += CalculateFaceSize(log2Width, log2Height);
+            offset += CalculateFaceSize(log2Width, log2Height).y;
+            log2Width = max(log2Width - 1, 0);
+            log2Height = max(log2Height - 1, 0);
         }
+        
+        uv = rotate ? float2(1 - uv.y, uv.x) : uv;
+        offset += uv * float2(1u << log2Width, 1u << log2Height);
 
         uint width, height, layers;
         physicalPages.GetDimensions(width, height, layers);

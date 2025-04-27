@@ -367,7 +367,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             continue;
 
         Tokenizer tokenizer;
-        tokenizer.input  = OS_MapFileRead(filename);
+        // tokenizer.input  = OS_MapFileRead(filename);
+        tokenizer.input  = OS_ReadFile(sceneScratch.temp.arena, filename);
         tokenizer.cursor = tokenizer.input.str;
 
         TileFileHeader fileHeader;

@@ -16,6 +16,8 @@ void *GetContentsAbsoluteIndex(void *contents, const Vec2u &p, u32 width, u32 he
 void Copy(void *src, const Vec2u &srcIndex, u32 srcWidth, u32 srcHeight, void *dst,
           const Vec2u &dstIndex, u32 dstWidth, u32 dstHeight, u32 vRes, u32 rowLen,
           u32 bytesPerBlock);
+void CopyAndPad(const void *src, int sstride, void *dst, int dstride, int vres, int rowlen,
+                int minVres, int minRowlen);
 } // namespace Utils
 
 namespace rt
@@ -166,7 +168,7 @@ struct Tile
 struct FaceMetadata
 {
     u32 bufferOffset;
-    u32 totalSize;
+    u32 totalSize_rotate;
     int log2Width;
     int log2Height;
 };
@@ -210,9 +212,8 @@ struct PaddedImage : Image
 
     u32 GetPaddedWidth() const;
     u32 GetPaddedHeight() const;
-    void WriteRotatedBorder(PaddedImage &other, Vec2u srcStart, Vec2u dstStart, int edgeIndex,
-                            int rotate, int srcVLen, int srcRowLen, int dstVLen, int dstRowLen,
-                            Vec2u scale);
+    void WriteRotated(PaddedImage &other, Vec2u srcStart, Vec2u dstStart, int rotate,
+                      int srcVLen, int srcRowLen, int dstVLen, int dstRowLen, Vec2u scale);
 };
 
 enum class AllocationStatus
@@ -260,7 +261,6 @@ struct BlockRange
 
 struct Shelf
 {
-    std::vector<BlockRange> ranges;
     int startY;
     int height;
 
@@ -272,7 +272,6 @@ struct Shelf
 
 struct PhysicalPagePool
 {
-    std::vector<Shelf> shelves;
     FixedArray<int, MAX_LEVEL> shelfStarts;
 
     int maxWidth;
@@ -294,8 +293,8 @@ struct PhysicalPageAllocation
 
 struct VirtualTextureManager
 {
-    static const u32 InvalidPool = ~0u;
-    static const int InvalidShelf  = -1;
+    static const u32 InvalidPool  = ~0u;
+    static const int InvalidShelf = -1;
 
     struct RequestHandle
     {
@@ -309,6 +308,9 @@ struct VirtualTextureManager
     u32 freeRange;
 
     StaticArray<PhysicalPagePool> pools;
+
+    std::vector<BlockRange> ranges;
+    std::vector<Shelf> shelves;
 
     u32 pageWidthPerPool;
     GPUImage gpuPhysicalPool;

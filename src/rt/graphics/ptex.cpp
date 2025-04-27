@@ -59,6 +59,42 @@ void Copy(void *src, const Vec2u &srcIndex, u32 srcWidth, u32 srcHeight, void *d
     Copy(src, srcStride, dst, dstStride, vRes, rowLen);
 }
 
+// Zeroes out unfilled texels in a NxN region; used for block compression
+void CopyAndPad(const void *src, int sstride, void *dst, int dstride, int vres, int rowlen,
+                int minVres, int minRowlen)
+{
+    // regular non-tiled case
+    if (sstride == rowlen && dstride == rowlen)
+    {
+        Assert(0);
+        // packed case - copy in single block
+        MemoryCopy(dst, src, vres * rowlen);
+    }
+    else
+    {
+        // copy a row at a time
+        const char *sptr = (const char *)src;
+        char *dptr       = (char *)dst;
+        for (const char *end = sptr + vres * sstride; sptr != end;)
+        {
+            MemoryCopy(dptr, sptr, rowlen);
+            if (minRowlen > rowlen)
+            {
+                MemoryZero(dptr + rowlen, minRowlen - rowlen);
+            }
+            dptr += dstride;
+            sptr += sstride;
+        }
+
+        rowlen = Max(rowlen, minRowlen);
+        for (int i = 0; i < minVres - vres; i++)
+        {
+            MemoryZero(dptr, rowlen);
+            dptr += dstride;
+        }
+    }
+}
+
 } // namespace Utils
 
 namespace rt
@@ -115,9 +151,9 @@ u32 PaddedImage::GetPaddedWidth() const { return width + 2 * borderSize; }
 u32 PaddedImage::GetPaddedHeight() const { return height + 2 * borderSize; }
 
 // NOTE: start is an absolute index
-void PaddedImage::WriteRotatedBorder(PaddedImage &other, Vec2u srcStart, Vec2u dstStart,
-                                     int edgeIndex, int rotate, int srcVLen, int srcRowLen,
-                                     int dstVLen, int dstRowLen, Vec2u scale)
+void PaddedImage::WriteRotated(PaddedImage &other, Vec2u srcStart, Vec2u dstStart, int rotate,
+                               int srcVLen, int srcRowLen, int dstVLen, int dstRowLen,
+                               Vec2u scale)
 {
     int uStart = srcStart.x;
     int vStart = srcStart.y;
@@ -125,7 +161,7 @@ void PaddedImage::WriteRotatedBorder(PaddedImage &other, Vec2u srcStart, Vec2u d
     Assert(bytesPerPixel == other.bytesPerPixel);
     Assert(borderSize == other.borderSize);
 
-    u8 *src       = other.GetContentsRelativeIndex(srcStart);
+    u8 *src       = other.GetContentsAbsoluteIndex(srcStart);
     u32 srcStride = other.strideWithBorder;
 
     ScratchArena scratch;
@@ -184,7 +220,7 @@ void PaddedImage::WriteRotatedBorder(PaddedImage &other, Vec2u srcStart, Vec2u d
                 for (int x = 0; x < pixelsToWriteX; x++)
                 {
                     Assert(dstOffset < size);
-                    MemoryCopy(tempBuffer + dstOffset, other.GetContentsRelativeIndex(srcPos),
+                    MemoryCopy(tempBuffer + dstOffset, other.GetContentsAbsoluteIndex(srcPos),
                                bytesPerPixel);
                     dstOffset += bytesPerPixel;
                 }
@@ -328,6 +364,7 @@ PaddedImage GenerateMips(Arena *arena, PaddedImage &input, u32 width, u32 height
     return output;
 }
 
+// TODO: explore a borderless solution if the borders cost too much
 void Convert(string filename)
 {
     ScratchArena scratch;
@@ -402,8 +439,6 @@ void Convert(string filename)
         Vec2i offset;
 
         bool base;
-        int log2Width;
-        int log2Height;
     };
 
     FixedArray<StaticArray<FaceUploadInfo>, 2> faceUploads(2);
@@ -594,10 +629,16 @@ void Convert(string filename)
     {
         PaddedImage &img = images[faceIndex][0];
 
-        u32 key                      = 0;
-        u32 offset                   = 0;
-        key                          = BitFieldPackU32(key, img.log2Width, offset, 4);
-        key                          = BitFieldPackU32(key, img.log2Height, offset, 4);
+        u32 key        = 0;
+        u32 offset     = 0;
+        u32 log2Width  = img.log2Width;
+        u32 log2Height = img.log2Height;
+        if (log2Width > log2Height)
+        {
+            Swap(log2Width, log2Height);
+        }
+        key                          = BitFieldPackU32(key, log2Width, offset, 4);
+        key                          = BitFieldPackU32(key, log2Height, offset, 4);
         handles[faceIndex].sortKey   = (u8)key;
         handles[faceIndex].faceIndex = faceIndex;
     }
@@ -631,15 +672,8 @@ void Convert(string filename)
             // Loop through requests and copy out to disk
             for (auto &upload : faceUploads[lastSubmissionIndex])
             {
-                if (upload.base)
-                {
-                    faceMetadata[upload.faceIndex].bufferOffset = builder.totalSize;
-                    faceMetadata[upload.faceIndex].log2Width    = upload.log2Width;
-                    faceMetadata[upload.faceIndex].log2Height   = upload.log2Height;
-                }
-
-                u32 numBytes = upload.srcDim.x * upload.srcDim.y * bytesPerBlock;
-                faceMetadata[upload.faceIndex].totalSize += numBytes;
+                Assert(!upload.base ||
+                       builder.totalSize == faceMetadata[upload.faceIndex].bufferOffset);
 
                 u32 faceStride = upload.srcDim.x * bytesPerBlock;
                 u32 srcStride  = gpuOutputWidth * bytesPerBlock;
@@ -709,6 +743,8 @@ void Convert(string filename)
         cmds[submissionIndex]->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     };
 
+    u32 totalSize = 0;
+
     // Add borders to all images
     for (int handleIndex = 0; handleIndex < numFaces; handleIndex++)
     {
@@ -769,9 +805,12 @@ void Convert(string filename)
 
                 Vec2u srcStart;
                 srcStart.x =
-                    aeid == e_right ? neighborFaceImg.width - (mipBorderSize >> scale.x) : 0;
+                    (aeid == e_right ? neighborFaceImg.width - (mipBorderSize >> scale.x)
+                                     : 0) +
+                    mipBorderSize;
                 srcStart.y =
-                    aeid == e_top ? neighborFaceImg.height - (mipBorderSize >> scale.y) : 0;
+                    (aeid == e_top ? neighborFaceImg.height - (mipBorderSize >> scale.y) : 0) +
+                    mipBorderSize;
 
                 Assert(!(mipBorderSize == 1 && scale.y != 0 && scale.x != 0));
                 int srcVRes = (aeid & 1) ? neighborFaceImg.height : (mipBorderSize >> scale.y);
@@ -780,9 +819,9 @@ void Convert(string filename)
                 int dstVRes   = (edgeIndex & 1) ? currentFaceImg.height : mipBorderSize;
                 int dstRowLen = (edgeIndex & 1) ? mipBorderSize : currentFaceImg.width;
 
-                currentFaceImg.WriteRotatedBorder(neighborFaceImg, srcStart, start, edgeIndex,
-                                                  rot, srcVRes, srcRowLen, dstVRes, dstRowLen,
-                                                  (rot & 1) ? scale.yx() : scale);
+                currentFaceImg.WriteRotated(neighborFaceImg, srcStart, start, rot, srcVRes,
+                                            srcRowLen, dstVRes, dstRowLen,
+                                            (rot & 1) ? scale.yx() : scale);
 
                 // Add corner borders
                 int afid                 = faceIndex;
@@ -826,18 +865,17 @@ void Convert(string filename)
                     u32 cornerMipBorderSize = cornerImg.borderSize;
                     Assert(cornerMipBorderSize == currentFaceImg.borderSize);
                     Vec2u srcStart =
-                        uvTable[cedgeId[1]] * Vec2u(cornerImg.width - cornerMipBorderSize,
-                                                    cornerImg.height - cornerMipBorderSize);
+                        uvTable[cedgeId[1]] * Vec2u(cornerImg.width, cornerImg.height);
                     Vec2u dstStart = uvTable[edgeIndex] *
                                      Vec2u(currentFaceImg.width + cornerMipBorderSize,
                                            currentFaceImg.height + cornerMipBorderSize);
 
-                    currentFaceImg.WriteRotatedBorder(
-                        cornerImg, srcStart, dstStart, cedgeId[1], cornerRotate,
-                        cornerMipBorderSize >> cornerScale.y,
-                        cornerMipBorderSize >> cornerScale.x, cornerMipBorderSize,
-                        cornerMipBorderSize,
-                        (cornerRotate & 1) ? cornerScale.yx() : cornerScale);
+                    currentFaceImg.WriteRotated(cornerImg, srcStart, dstStart, cornerRotate,
+                                                cornerMipBorderSize >> cornerScale.y,
+                                                cornerMipBorderSize >> cornerScale.x,
+                                                cornerMipBorderSize, cornerMipBorderSize,
+                                                (cornerRotate & 1) ? cornerScale.yx()
+                                                                   : cornerScale);
                 }
                 else if (numCorners > 1)
                 {
@@ -853,24 +891,56 @@ void Convert(string filename)
                 dstStride * totalHeight + currentHorizontalOffset * GetFormatSize(baseFormat);
             Assert(offset <
                    gpuSubmissionWidth * gpuSubmissionHeight * GetFormatSize(baseFormat));
-            Utils::Copy(currentFaceImg.contents, currentFaceImg.strideWithBorder,
-                        (u8 *)mappedPtrs[submissionIndex] + offset, dstStride,
-                        currentFaceImg.GetPaddedHeight(), currentFaceImg.strideWithBorder);
+
+            // Rotate so that all textures are taller than wide
+            PaddedImage img = currentFaceImg;
+            bool rotate     = false;
+            if (currentFaceImg.width > currentFaceImg.height)
+            {
+                u32 size = img.GetPaddedWidth() * img.GetPaddedHeight() * img.bytesPerPixel;
+                img.contents = PushArray(scratch.temp.arena, u8, size);
+                Swap(img.width, img.height);
+                Swap(img.log2Width, img.log2Height);
+                img.strideNoBorder   = img.width * img.bytesPerPixel;
+                img.strideWithBorder = img.GetPaddedWidth() * img.bytesPerPixel;
+
+                img.WriteRotated(currentFaceImg, Vec2u(0, 0), Vec2u(0, 0), 1,
+                                 currentFaceImg.GetPaddedHeight(),
+                                 currentFaceImg.GetPaddedWidth(),
+                                 currentFaceImg.GetPaddedWidth(),
+                                 currentFaceImg.GetPaddedHeight(), Vec2u(0, 0));
+                rotate = true;
+            }
+
+            Utils::CopyAndPad(img.contents, img.strideWithBorder,
+                              (u8 *)mappedPtrs[submissionIndex] + offset, dstStride,
+                              img.GetPaddedHeight(), img.strideWithBorder, 4,
+                              4 * GetFormatSize(baseFormat));
 
             Assert((currentHorizontalOffset & 3) == 0);
             Assert((totalHeight & 3) == 0);
             FaceUploadInfo upload;
             upload.faceIndex = faceIndex;
-            upload.srcDim.x  = Max(currentFaceImg.GetPaddedWidth() >> log2BlockSize, 1u);
-            upload.srcDim.y  = Max(currentFaceImg.GetPaddedHeight() >> log2BlockSize, 1u);
+            upload.srcDim.x  = Max(img.GetPaddedWidth() >> log2BlockSize, 1u);
+            upload.srcDim.y  = Max(img.GetPaddedHeight() >> log2BlockSize, 1u);
             upload.offset =
                 Vec2i(currentHorizontalOffset >> log2BlockSize, totalHeight >> log2BlockSize);
-            upload.base       = levelIndex == 0;
-            upload.log2Width  = currentFaceImg.log2Width;
-            upload.log2Height = currentFaceImg.log2Height;
+            upload.base = levelIndex == 0;
             faceUploads[submissionIndex].Push(upload);
 
-            currentHorizontalOffset += AlignPow2(currentFaceImg.GetPaddedWidth(), 4);
+            u32 numBytes = upload.srcDim.x * upload.srcDim.y * bytesPerBlock;
+            Assert((faceMetadata[faceIndex].totalSize_rotate & 0x7fffffff) + numBytes <
+                   0x80000000);
+            if (levelIndex == 0)
+            {
+                faceMetadata[faceIndex].bufferOffset = totalSize;
+                faceMetadata[faceIndex].log2Width    = img.log2Width;
+                faceMetadata[faceIndex].log2Height   = img.log2Height;
+            }
+            faceMetadata[faceIndex].totalSize_rotate |= (rotate << 31u);
+            faceMetadata[faceIndex].totalSize_rotate += numBytes;
+
+            currentHorizontalOffset += AlignPow2(img.GetPaddedWidth(), 4);
         }
     }
 
@@ -1008,9 +1078,12 @@ void BlockRange::Split(Array &ranges, u32 index, u32 &freeIndex, u32 num)
         BlockRange newRange(AllocationStatus::Free, range.start + num, oldOnePastEnd, index,
                             oldNextRange, oldPrevFree, oldNextFree);
 
-        LinkFreeList(ranges, newRangeIndex, freeIndex, InvalidRange);
-
         ranges.push_back(newRange);
+        LinkFreeList(ranges, newRangeIndex, freeIndex, InvalidRange);
+    }
+    else
+    {
+        UnlinkFreeList(ranges, index, freeIndex, InvalidRange);
     }
 }
 
@@ -1045,7 +1118,7 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
     {
         requests[i].faceIndex  = i;
         requests[i].startLevel = 0;
-        requests[i].numLevels  = Min(metadata[i].log2Width, metadata[i].log2Height) + 1;
+        requests[i].numLevels  = Max(metadata[i].log2Width, metadata[i].log2Height) + 1;
 
         u32 key    = 0;
         u32 offset = 0;
@@ -1068,6 +1141,7 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
 {
     ScratchArena scratch;
 
+    const u32 blockShift  = GetBlockShift(format);
     Shelf *currentRow     = 0;
     u32 currentLog2Height = ~0u;
 
@@ -1104,7 +1178,7 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
         u32 shelfStart = pool->shelfStarts[currentLog2Height];
 
         u32 blockRangeIndex = BlockRange::InvalidRange;
-        int rowIndex        = -1;
+        int shelfIndex      = -1;
 
         // Find a suitable shelf
         for (;;)
@@ -1121,17 +1195,16 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
                 else
                 {
                     // Allocate a new row in the current pool
-                    pool->shelves.emplace_back();
-                    Shelf &newRow    = pool->shelves.back();
+                    shelves.emplace_back();
+                    Shelf &newRow    = shelves.back();
                     newRow.startY    = pool->totalHeight;
                     newRow.height    = allocationSize.y;
-                    newRow.freeRange = 0;
+                    newRow.freeRange = ranges.size();
                     newRow.prevFree  = InvalidShelf;
                     newRow.nextFree  = InvalidShelf;
-                    newRow.ranges.reserve(pool->maxWidth / allocationSize.x);
-                    newRow.ranges.push_back(
-                        BlockRange(AllocationStatus::Free, 0, pool->maxWidth));
-                    LinkFreeList(pool->shelves, pool->shelves.size() - 1,
+
+                    ranges.push_back(BlockRange(AllocationStatus::Free, 0, pool->maxWidth));
+                    LinkFreeList(shelves, shelves.size() - 1,
                                  pool->shelfStarts[currentLog2Height], InvalidShelf);
 
                     pool->totalHeight += allocationSize.y;
@@ -1140,9 +1213,9 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
             }
 
             // Find suitable span in row
-            Shelf *shelf = &pool->shelves[shelfStart];
+            Shelf *shelf = &shelves[shelfStart];
             u32 rangeIndex =
-                BlockRange::FindBestFree(shelf->ranges, shelf->freeRange, allocationSize.x);
+                BlockRange::FindBestFree(ranges, shelf->freeRange, allocationSize.x);
 
             if (rangeIndex == ~0u)
             {
@@ -1152,28 +1225,27 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
                 for (int testDimIndex = faceMetadata.log2Height;
                      testDimIndex < pool->shelfStarts.Length(); testDimIndex++)
                 {
-                    int freeRow = pool->shelfStarts[testDimIndex];
-                    while (freeRow != InvalidShelf)
+                    int freeShelf = pool->shelfStarts[testDimIndex];
+                    while (freeShelf != InvalidShelf)
                     {
-                        Shelf *testRow     = &pool->shelves[freeRow];
+                        Shelf *testShelf   = &shelves[freeShelf];
                         u32 testRangeIndex = BlockRange::FindBestFree(
-                            testRow->ranges, testRow->freeRange, allocationSize.x, leftover);
+                            ranges, testShelf->freeRange, allocationSize.x, leftover);
                         if (testRangeIndex != BlockRange::InvalidRange)
                         {
-                            rowIndex        = freeRow;
+                            shelfIndex      = freeShelf;
                             blockRangeIndex = testRangeIndex;
-                            leftover =
-                                testRow->ranges[testRangeIndex].GetNum() - allocationSize.x;
+                            leftover = ranges[testRangeIndex].GetNum() - allocationSize.x;
                         }
-                        freeRow = testRow->nextFree;
+                        freeShelf = testShelf->nextFree;
                     }
                 }
 
                 // If a row was found that can fit the current entry
-                if (rowIndex != -1)
+                if (shelfIndex != -1)
                 {
-                    shelf = &pool->shelves[rowIndex];
-                    BlockRange::Split(shelf->ranges, rangeIndex, shelf->freeRange,
+                    shelf = &shelves[shelfIndex];
+                    BlockRange::Split(ranges, blockRangeIndex, shelf->freeRange,
                                       allocationSize.x);
                 }
                 // Repeat the loop
@@ -1185,17 +1257,16 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
             }
             else
             {
-                BlockRange::Split(shelf->ranges, rangeIndex, shelf->freeRange,
-                                  allocationSize.x);
-                rowIndex        = shelfStart;
+                BlockRange::Split(ranges, rangeIndex, shelf->freeRange, allocationSize.x);
+                shelfIndex      = shelfStart;
                 blockRangeIndex = rangeIndex;
             }
             break;
         }
 
         // Create the buffer image copy commands and page table update requests
-        const Shelf &shelf           = pool->shelves[rowIndex];
-        const BlockRange &blockRange = shelf.ranges[blockRangeIndex];
+        const Shelf &shelf           = shelves[shelfIndex];
+        const BlockRange &blockRange = ranges[blockRangeIndex];
 
         u32 packed       = 0;
         u32 packedOffset = 0;
@@ -1209,6 +1280,8 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
         packed2      = BitFieldPackU32(packed2, faceMetadata.log2Width, packedOffset, 4);
         packed2      = BitFieldPackU32(packed2, faceMetadata.log2Height, packedOffset, 4);
         packed2      = BitFieldPackU32(packed2, request.startLevel, packedOffset, 4);
+        packed2 =
+            BitFieldPackU32(packed2, faceMetadata.totalSize_rotate >> 31, packedOffset, 1);
 
         updateRequests[handleIndex].faceIndex                     = faceIndex;
         updateRequests[handleIndex].packed_x_y_layer              = packed;
@@ -1216,8 +1289,8 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
 
         Vec3i start    = Vec3i(blockRange.start, shelf.startY, 0);
         Vec2i begin    = start.xy;
-        int log2Width  = faceMetadata.log2Width;
-        int log2Height = faceMetadata.log2Height;
+        int log2Width  = Max(faceMetadata.log2Width - request.startLevel, 0);
+        int log2Height = Max(faceMetadata.log2Height - request.startLevel, 0);
         for (int levelIndex = 0; levelIndex < request.numLevels; levelIndex++)
         {
             Assert(start.xy - begin < allocationSize);
@@ -1230,12 +1303,14 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
             Vec2i extent = CalculateFaceSize(log2Width, log2Height);
             copy.extent  = Vec3u(extent.x, extent.y, 1);
 
-            u32 texSize = extent.y * extent.x * GetFormatSize(format);
+            u32 texSize = Max(extent.y >> blockShift, 1) * Max(extent.x >> blockShift, 1) *
+                          GetFormatSize(format);
             bufferOffset += texSize;
-            log2Width  = Max(log2Width - 1, 1);
-            log2Height = Max(log2Height - 1, 1);
+            log2Width  = Max(log2Width - 1, 0);
+            log2Height = Max(log2Height - 1, 0);
 
-            start[levelIndex & 1] += extent[levelIndex & 1];
+            u32 indx = levelIndex == 0 ? 0 : 1;
+            start[indx] += extent[indx];
 
             copies.Push(copy);
         }
@@ -1244,7 +1319,8 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
     GPUBuffer transferBuffer = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                                     bufferOffset, MemoryUsage::CPU_TO_GPU);
     Assert(transferBuffer.mappedPtr);
-    void *mappedPtr = transferBuffer.mappedPtr;
+    u8 *mappedPtr = (u8 *)transferBuffer.mappedPtr;
+    u32 dstOffset = 0;
 
     // Allocate staging buffer
     for (int handleIndex = 0; handleIndex < numRequests; handleIndex++)
@@ -1257,22 +1333,25 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
         const FaceMetadata &faceMetadata = metadata[faceIndex];
 
         u32 offset     = faceMetadata.bufferOffset;
-        u32 size       = faceMetadata.totalSize;
+        u32 size       = faceMetadata.totalSize_rotate & 0x7fffffff;
         int log2Width  = faceMetadata.log2Width;
         int log2Height = faceMetadata.log2Height;
 
         for (int levelIndex = 0; levelIndex < request.startLevel; levelIndex++)
         {
             Vec2i extent = CalculateFaceSize(log2Width, log2Height);
-            u32 texSize  = extent.y * extent.x * GetFormatSize(format);
+            u32 texSize  = Max(extent.y >> blockShift, 1) * Max(extent.x >> blockShift, 1) *
+                          GetFormatSize(format);
             Assert(size > texSize);
             offset += texSize;
             size -= texSize;
-            log2Width  = Max(log2Width - 1, 1);
-            log2Height = Max(log2Height - 1, 1);
+            log2Width  = Max(log2Width - 1, 0);
+            log2Height = Max(log2Height - 1, 0);
         }
 
-        MemoryCopy(mappedPtr, contents + offset, size);
+        Assert(dstOffset < bufferOffset);
+        MemoryCopy(mappedPtr + dstOffset, contents + offset, size);
+        dstOffset += size;
     }
 
     PageTableUpdatePushConstant pc;
