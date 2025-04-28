@@ -467,8 +467,8 @@ void Convert(string filename)
             int width  = Max(img.width >> 1, 1);
             int height = Max(img.height >> 1, 1);
 
-            int log2Width  = Max(img.log2Width - 1, 1);
-            int log2Height = Max(img.log2Height - 1, 1);
+            int log2Width  = Max(img.log2Width - 1, 0);
+            int log2Height = Max(img.log2Height - 1, 0);
 
             PaddedImage inPaddedImage = img;
             int depth                 = 1;
@@ -492,8 +492,8 @@ void Convert(string filename)
                 height         = Max(height >> 1, 1);
                 scale[1]       = prevHeight / height;
 
-                log2Width  = Max(log2Width - 1, 1);
-                log2Height = Max(log2Height - 1, 1);
+                log2Width  = Max(log2Width - 1, 0);
+                log2Height = Max(log2Height - 1, 0);
 
                 depth++;
             }
@@ -633,7 +633,7 @@ void Convert(string filename)
         u32 offset     = 0;
         u32 log2Width  = img.log2Width;
         u32 log2Height = img.log2Height;
-        if (log2Width > log2Height)
+        if (log2Height > log2Width)
         {
             Swap(log2Width, log2Height);
         }
@@ -743,7 +743,7 @@ void Convert(string filename)
         cmds[submissionIndex]->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     };
 
-    u32 totalSize = 0;
+    u32 totalSize = builder.totalSize;
 
     // Add borders to all images
     for (int handleIndex = 0; handleIndex < numFaces; handleIndex++)
@@ -895,7 +895,7 @@ void Convert(string filename)
             // Rotate so that all textures are taller than wide
             PaddedImage img = currentFaceImg;
             bool rotate     = false;
-            if (currentFaceImg.width > currentFaceImg.height)
+            if (currentFaceImg.height > currentFaceImg.width)
             {
                 u32 size = img.GetPaddedWidth() * img.GetPaddedHeight() * img.bytesPerPixel;
                 img.contents = PushArray(scratch.temp.arena, u8, size);
@@ -912,10 +912,11 @@ void Convert(string filename)
                 rotate = true;
             }
 
+            u32 alignedVres   = AlignPow2(img.GetPaddedHeight(), 4);
+            u32 alignedRowLen = AlignPow2(img.GetPaddedWidth(), 4) * GetFormatSize(baseFormat);
             Utils::CopyAndPad(img.contents, img.strideWithBorder,
                               (u8 *)mappedPtrs[submissionIndex] + offset, dstStride,
-                              img.GetPaddedHeight(), img.strideWithBorder, 4,
-                              4 * GetFormatSize(baseFormat));
+                              img.GetPaddedHeight(), img.strideWithBorder, 4, alignedRowLen);
 
             Assert((currentHorizontalOffset & 3) == 0);
             Assert((totalHeight & 3) == 0);
@@ -940,6 +941,7 @@ void Convert(string filename)
             faceMetadata[faceIndex].totalSize_rotate |= (rotate << 31u);
             faceMetadata[faceIndex].totalSize_rotate += numBytes;
 
+            totalSize += numBytes;
             currentHorizontalOffset += AlignPow2(img.GetPaddedWidth(), 4);
         }
     }
@@ -984,7 +986,7 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 numVirtualFaces,
     descriptorSetLayout = {};
     descriptorSetLayout.AddBinding(0, DescriptorType::StorageBuffer,
                                    VK_SHADER_STAGE_COMPUTE_BIT);
-    descriptorSetLayout.AddBinding(1, DescriptorType::StorageImage,
+    descriptorSetLayout.AddBinding(1, DescriptorType::StorageBuffer,
                                    VK_SHADER_STAGE_COMPUTE_BIT);
     push     = PushConstant(ShaderStage::Compute, 0, sizeof(PageTableUpdatePushConstant));
     pipeline = device->CreateComputePipeline(&shader, &descriptorSetLayout, &push);
@@ -992,11 +994,8 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 numVirtualFaces,
     ImageLimits limits = device->GetImageLimits();
 
     // Allocate page table
-
-    ImageDesc pageTableDesc(ImageType::Type1D, numVirtualFaces, 1, 1, 1, 1,
-                            VK_FORMAT_R32G32_UINT, MemoryUsage::GPU_ONLY,
-                            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT);
-    pageTable = device->CreateImage(pageTableDesc);
+    pageTable = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                     sizeof(Vec2u) * numVirtualFaces);
 
     {
         numPools              = Min(numPools, limits.maxNumLayers);
@@ -1165,7 +1164,7 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
 
         // Allocation space for subsequent mip levels to the right
         allocationSize.x +=
-            (1u << Max(faceMetadata.log2Width - 1, 1)) +
+            (1u << Max(faceMetadata.log2Width - 1, 0)) +
             2 * GetBorderSize(faceMetadata.log2Width - 1, faceMetadata.log2Height - 1);
 
         // First find the pool to use
@@ -1294,23 +1293,25 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
         for (int levelIndex = 0; levelIndex < request.numLevels; levelIndex++)
         {
             Assert(start.xy - begin < allocationSize);
-            BufferImageCopy copy;
-            copy.bufferOffset = bufferOffset;
-            copy.baseLayer    = pool->layerIndex;
-            copy.layerCount   = 1;
-            copy.offset       = start;
+            BufferImageCopy copy = {};
+            copy.bufferOffset    = bufferOffset;
+            copy.baseLayer       = pool->layerIndex;
+            copy.layerCount      = 1;
+            copy.offset          = start;
 
             Vec2i extent = CalculateFaceSize(log2Width, log2Height);
+            extent.x     = AlignPow2(extent.x, 4);
+            extent.y     = AlignPow2(extent.y, 4);
             copy.extent  = Vec3u(extent.x, extent.y, 1);
+
+            u32 index = Min(log2Width, log2Height) == 0 ? 0 : (levelIndex & 1);
+            start[index] += extent[index];
 
             u32 texSize = Max(extent.y >> blockShift, 1) * Max(extent.x >> blockShift, 1) *
                           GetFormatSize(format);
             bufferOffset += texSize;
             log2Width  = Max(log2Width - 1, 0);
             log2Height = Max(log2Height - 1, 0);
-
-            u32 indx = levelIndex == 0 ? 0 : 1;
-            start[indx] += extent[indx];
 
             copies.Push(copy);
         }
@@ -1349,7 +1350,7 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
             log2Height = Max(log2Height - 1, 0);
         }
 
-        Assert(dstOffset < bufferOffset);
+        Assert(dstOffset + size <= bufferOffset);
         MemoryCopy(mappedPtr + dstOffset, contents + offset, size);
         dstOffset += size;
     }
@@ -1372,267 +1373,5 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
                             descriptorSetLayout.pipelineLayout);
     cmd->Dispatch((numRequests + 63) >> 6, 1, 1);
 }
-
-#if 0
-void VirtualTextureManager::AllocatePhysicalPages(
-    CommandBuffer *cmd, const TileFileHeader &header, TileMetadata *metadata,
-    TileRequest *tileRequests, int numTileRequests, u32 numFaces, u8 *contents, u32 allocIndex)
-{
-    const BlockRange &range = pageRanges[allocIndex];
-    const u32 numPages      = range.GetNum();
-
-    ScratchArena scratch;
-
-    u64 offset = 0;
-
-    PageTableUpdateRequest *requests =
-        PushArray(scratch.temp.arena, PageTableUpdateRequest, numPages);
-
-    u32 log2PageWidthPerPool = Log2Int(pageWidthPerPool);
-
-    u32 leftover = ~0u;
-
-    u32 *allocationRequests = PushArray(scratch.temp.arena, u32, numFaces);
-
-    // Allocate continuous ranges of pages for each face
-    for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
-    {
-        // First allocate page
-        u32 freeIndex =
-            partiallyFreePool == InvalidPool ? completelyFreePool : partiallyFreePool;
-        bool isFullyFree = partiallyFreePool == InvalidPool;
-
-        u32 poolAllocIndex = ~0u;
-        u32 pageAllocIndex = ~0u;
-
-        u32 log2Width  = metadata[faceIndex].log2Width;
-        u32 log2Height = metadata[faceIndex].log2Height;
-        u32 minDim     = Min(log2Width, log2Height);
-
-        // TODO: At the highest mip levels (7+), this value changes. Either I need to clamp,
-        // or handle them specially in some way (e.g. have them always be resident?)
-        u32 faceNumPages =
-            1u << ((log2Width - Min(minDim, 7u)) + (log2Height - Min(minDim, 7u)));
-
-        while (freeIndex != InvalidPool)
-        {
-            PhysicalPagePool &pool = pools[freeIndex];
-            if (pool.freePages >= numPages)
-            {
-                u32 rangeIndex =
-                    BlockRange::FindBestFree(pool.ranges, pool.freeRange, leftover);
-                if (rangeIndex != BlockRange::InvalidRange)
-                {
-                    u32 num = pool.ranges[rangeIndex].GetNum();
-                    Assert(num < faceNumPages + leftover);
-                    leftover = num - faceNumPages;
-
-                    poolAllocIndex = freeIndex;
-                    pageAllocIndex = rangeIndex;
-
-                    BlockRange::Split(pool.ranges, rangeIndex, pool.freeRange, numPages);
-
-                    pool.freePages -= numPages;
-                    if (isFullyFree)
-                    {
-                        UnlinkFreeList(pools, poolAllocIndex, completelyFreePool, InvalidPool);
-                        LinkFreeList(pools, poolAllocIndex, partiallyFreePool, InvalidPool);
-                    }
-                    else if (pool.freeRange == BlockRange::InvalidRange)
-                    {
-                        UnlinkFreeList(pools, poolAllocIndex, partiallyFreePool, InvalidPool);
-                    }
-                    break;
-                }
-                else
-                {
-                    Print("need to defrag physical pages\n");
-                    // TODO: defrag pool
-                }
-            }
-            freeIndex = pool.nextFree;
-        }
-
-        ErrorExit(allocIndex != ~0u, "Ran out of memory");
-        Assert(poolAllocIndex < maxNumLayers);
-
-        Assert(pageAllocIndex < (1u << (2u * 7u)));
-        u32 request                   = (poolAllocIndex << (2u * 7u)) | pageAllocIndex;
-        allocationRequests[faceIndex] = request;
-
-        // TODO: this faceIndex needs to be offset by something
-        requests[faceIndex] = PageTableUpdateRequest{
-            faceIndex,
-            pools[poolAllocIndex].ranges[pageAllocIndex].start,
-        };
-    }
-
-    // Allocate buffer to image copy commands
-
-    // for (int levelIndex = 0; levelIndex < MAX_LEVEL; levelIndex++)
-    // {
-    //     const LevelInfo &level = levelInfo[levelIndex];
-    //     u32 levelPageSize =
-    //         Sqr(level.texelWidthPerPage >> GetBlockShift(format)) * GetFormatSize(format);
-    //     for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
-    //     {
-    //         if (metadata[faceIndex].startLevel > levelIndex ||
-    //             metadata[faceIndex].endLevel < levelIndex)
-    //             continue;
-    //
-    //         BufferImageCopy copy;
-    //
-    //         MemoryCopy((u8 *)buf.mappedPtr + offset, contents, levelPageSize);
-    //         contents += levelPageSize;
-    //
-    //         u32 request = allocationRequests[faceIndex];
-    //
-    //         u32 bitShift = (2u * (7u + levelIndex));
-    //         u32 bitMask  = (1u << (7u + levelIndex)) - 1u;
-    //
-    //         copy.bufferOffset = offset;
-    //         copy.baseLayer    = request >> bitShift;
-    //         copy.layerCount   = 1;
-    //
-    //         u32 pageX = request & bitMask;
-    //         u32 pageY = (request >> (7u + levelIndex)) & bitMask;
-    //
-    //         copy.offset =
-    //             Vec3i(pageX * level.texelWidthPerPage, pageY * level.texelWidthPerPage, 0);
-    //         copy.extent = Vec3u(level.texelWidthPerPage, level.texelWidthPerPage, 1);
-    //
-    //         copies.push_back(copy);
-    //         offset += levelPageSize;
-    //     }
-    // }
-
-    // i think i need a two level mapping: one from face index to something, then from
-    // something to a physical page
-    u32 log2BlockSize = GetBlockShift(format);
-    u32 allocSize     = 0;
-    for (int tileRequestIndex = 0; tileRequestIndex < numTileRequests; tileRequestIndex++)
-    {
-        const TileRequest &request = tileRequests[tileRequestIndex];
-        int levelIndex             = request.levelIndex;
-
-        u32 levelLog2BlockSize = levelIndex < MAX_COMPRESSED_LEVEL ? log2BlockSize : 0;
-        const LevelInfo &level = levelInfo[levelIndex];
-        u32 pageSize =
-            Sqr(level.texelWidthPerPage >> levelLog2BlockSize) * GetFormatSize(format);
-        allocSize += pageSize;
-    }
-
-    TransferBuffer buf = device->GetStagingBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, allocSize);
-
-    u32 levelOffsets[MAX_LEVEL];
-    u32 levelOffset = 0;
-    u32 dstOffset   = 0;
-    FixedArray<StaticArray<BufferImageCopy, MAX_LEVEL>> copies(MAX_LEVEL);
-
-    for (int i = 0; i < MAX_LEVEL; i++)
-    {
-        levelOffsets[i] = levelOffset;
-        levelOffset += header.tileSizes[i] * header.tileCounts[i];
-        copies[i] = StaticArray<BufferImageCopy>(scratch.temp.arena, numTileRequests);
-    }
-
-    // from the faces and levels, get the tiles I need
-    // ensure that the single offset maps to the right tile at every level
-    for (int tileRequestIndex = 0; tileRequestIndex < numTileRequests; tileRequestIndex++)
-    {
-        // TODO: make sure I'm not repeating copies?
-        const TileRequest &request = tileRequests[tileRequestIndex];
-        u32 allocationRequest      = allocationRequests[request.faceIndex];
-        u32 rangeIndex             = allocationRequest & ((1u << (2u * 7u)) - 1u);
-        const BlockRange &range    = pageRanges[rangeIndex];
-
-        for (int levelIndex = request.startLevel;
-             levelIndex < request.startLevel + request.numLevels; levelIndex++)
-        {
-            Assert(levelIndex < MAX_LEVEL);
-
-            u32 levelLog2BlockSize = levelIndex < MAX_COMPRESSED_LEVEL ? log2BlockSize : 0;
-            const LevelInfo &level = levelInfo[levelIndex];
-            u32 pageSize =
-                Sqr(level.texelWidthPerPage >> levelLog2BlockSize) * GetFormatSize(format);
-
-            u32 startTile = range.start >> (2u * levelIndex);
-            Assert(range.onePastEnd != 0);
-            u32 endTile = ((range.onePastEnd - 1) >> (2u * levelIndex)) + 1;
-
-            u32 faceTileLevelOffset = ? ;
-            for (u32 tileIndex = startTile; tileIndex < endTile;
-                 tileIndex++, faceTileLevelOffset++)
-            {
-                BufferImageCopy copy;
-                const u8 *src = contents + levelOffset[levelIndex] +
-                                header.tileSizes[levelIndex] * faceTileLevelOffset;
-                MemoryCopy((u8 *)buf.mappedPtr + dstOffset, src, pageSize);
-                dstOffset += pageSize;
-
-                u32 request = allocationRequests[faceIndex];
-
-                u32 bitShift = (2u * (7u + levelIndex));
-                u32 bitMask  = (1u << (7u + levelIndex)) - 1u;
-
-                copy.bufferOffset = dstOffset;
-                copy.baseLayer    = request >> bitShift;
-                copy.layerCount   = 1;
-
-                // TODO: one offset doesn't seem to work because at level 7, I can only have
-                // one physical page??? the only other way to make this work is if
-                // only one mip or a couple of mips are resident at once?
-                u32 pageAllocIndex = request & ((1u << (2u * 7u)) - 1u);
-                u32 pageX          = request & bitMask;
-                u32 pageY          = (request >> (7u + levelIndex)) & bitMask;
-
-                copy.offset =
-                    Vec3i(pageX * level.texelWidthPerPage, pageY * level.texelWidthPerPage, 0);
-                copy.extent = Vec3u(level.texelWidthPerPage, level.texelWidthPerPage, 1);
-
-                copies[levelIndex].Push(copy);
-            }
-        }
-    }
-
-    PageTableUpdatePushConstant pc;
-    pc.numRequests = numFaces;
-
-    cmd->SubmitTransfer(&buf);
-    TransferBuffer pageTableUpdateRequestBuffer =
-        cmd->SubmitBuffer(requests, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                          sizeof(PageTableUpdateRequest) * numFaces);
-
-    DescriptorSet ds = descriptorSetLayout.CreateDescriptorSet();
-    ds.Bind(0, &pageTableUpdateRequestBuffer.buffer).Bind(1, &pageTable);
-    cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                 VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-
-    // Submit copy commands
-    {
-        for (int levelIndex = 0; levelIndex < copies.Length(); levelIndex++)
-        {
-            const LevelInfo &level = levelInfo[levelIndex];
-            if (copies[levelIndex].Length())
-                cmd->Barrier(&level.gpuPhysicalPool, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-        }
-        cmd->FlushBarriers();
-        for (int levelIndex = 0; levelIndex < copies.Length(); levelIndex++)
-        {
-            const LevelInfo &level = levelInfo[levelIndex];
-            if (copies[levelIndex].Length())
-                cmd->CopyImage(&buf, &level.gpuPhysicalPool, copies[levelIndex].data,
-                               copies[levelIndex].Length());
-        }
-    }
-
-    cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-    cmd->PushConstants(&push, &pc, descriptorSetLayout.pipelineLayout);
-    cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
-                            descriptorSetLayout.pipelineLayout);
-    cmd->Dispatch((numPages + 63) >> 6, 1, 1);
-}
-#endif
 
 } // namespace rt

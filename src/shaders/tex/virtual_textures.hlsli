@@ -3,14 +3,14 @@
 
 #include "./../rt/shader_interop/virtual_textures_shaderinterop.h"
 
-Texture1D<uint2> pageTable : register(t5);
+StructuredBuffer<uint2> pageTable : register(t5);
 Texture2DArray physicalPages: register(t6);
 
 struct VirtualTexture 
 {
     uint pageWidthPerPool;
 
-    float3 GetPhysicalUV(Texture1D<uint2> pageTable,
+    float3 GetPhysicalUV(StructuredBuffer<uint2> pageTable,
                          uint basePageOffset,
                          uint faceID,
                          float2 uv, uint mipLevel = 0, bool debug = false)
@@ -34,10 +34,15 @@ struct VirtualTexture
 
         uint2 offset = uint2(x, y);
         offset.x += mipLevel > basePhysicalLevel ? CalculateFaceSize(log2Width, log2Height).x: 0;
+
         //((1u << numLevels) - 1u) & ~((1u << (numLevels - mipLevel - basePhysicalLevel + 1)) - 1u);
-        for (int levelIndex = basePhysicalLevel + 1; levelIndex < mipLevel; levelIndex++)
+
+        for (int levelIndex = 0; levelIndex < (int)mipLevel - (int)basePhysicalLevel; levelIndex++)
         {
-            offset += CalculateFaceSize(log2Width, log2Height).y;
+            uint index = min(log2Width, log2Height) == 0 ? 0 : (levelIndex & 1);
+            uint faceOffset = CalculateFaceSize(log2Width, log2Height)[index];
+            faceOffset = (faceOffset + 3) & ~3u;
+            offset[index] += faceOffset;
             log2Width = max(log2Width - 1, 0);
             log2Height = max(log2Height - 1, 0);
         }

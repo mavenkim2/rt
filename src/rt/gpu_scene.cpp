@@ -353,8 +353,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     CommandBuffer *tileCmd          = device->BeginCommandBuffer(QueueType_Compute);
     Semaphore tileSubmitSemaphore   = device->CreateGraphicsSemaphore();
     tileSubmitSemaphore.signalValue = 1;
-    tileCmd->Barrier(&virtualTextureManager.pageTable, VK_IMAGE_LAYOUT_GENERAL,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+    // tileCmd->UAVBarrier(&virtualTextureManager.pageTable);
+    tileCmd->TransferWriteBarrier(&virtualTextureManager.gpuPhysicalPool);
     tileCmd->FlushBarriers();
 
     for (int i = 0; i < rootScene->ptexTextures.size(); i++)
@@ -386,7 +386,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         u32 allocIndex  = virtualTextureManager.AllocateVirtualPages(fileHeader.numFaces);
         rangeIndices[i] = allocIndex;
         virtualTextureManager.AllocatePhysicalPages(tileCmd, metaData, fileHeader.numFaces,
-                                                    tokenizer.cursor);
+                                                    tokenizer.input.str);
 
         OS_UnmapFile(tokenizer.input.str);
     }
@@ -904,9 +904,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             ->SubmitBuffer(gpuMaterials.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                            sizeof(GPUMaterial) * gpuMaterials.Length())
             .buffer;
-    transferCmd->Barrier(&virtualTextureManager.pageTable,
-                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    // transferCmd->Barrier(&virtualTextureManager.pageTable,
+    //                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    //                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+    //                      VK_ACCESS_2_SHADER_READ_BIT);
     device->SubmitCommandBuffer(transferCmd);
 
 #endif
@@ -1091,13 +1092,13 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             .Bind(gpuMaterialBindingIndex, &materialBuffer)
             .Bind(shaderDebugIndex, &shaderDebugBuffers[currentBuffer].buffer)
             .Bind(pageTableBindingIndex, &virtualTextureManager.pageTable)
-        // .Bind(physicalPagesBindingIndex, &virtualTextureManager.gpuPhysicalPools[0]);
+            .Bind(physicalPagesBindingIndex, &virtualTextureManager.gpuPhysicalPool);
 #ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
-            .Bind(clusterDataIndex, &clusterData)
+        .Bind(clusterDataIndex, &clusterData)
             .Bind(vertexDataIndex, &vertexBuffer)
             .Bind(indexDataIndex, &indexBuffer);
 #else
-            ;
+        ;
 #endif
         // .Bind(nvApiIndex, &nvapiBuffer);
         // .Bind(aabbIndex, &aabbBuffer);

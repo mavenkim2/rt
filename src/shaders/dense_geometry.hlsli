@@ -347,7 +347,7 @@ struct DenseGeometry
             uint2 data = denseGeometryData.Load2(offsets[0]);
             uint minFaceID = BitAlignU32(data.y, data.x, offsets[1]);
  
-            offsets = GetAlignedAddressAndBitOffset(baseAddress + faceIDOffset + 4, triangleIndex * numFaceIDBits);
+            offsets = GetAlignedAddressAndBitOffset(baseAddress + faceIDOffset + 4, triangleIndex * (numFaceIDBits + 3u));
             data = denseGeometryData.Load2(offsets[0]);
             uint packed = BitAlignU32(data.y, data.x, offsets[1]);
             uint faceIDDiff = BitFieldExtractU32(packed, numFaceIDBits, 0);

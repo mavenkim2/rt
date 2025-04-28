@@ -334,6 +334,7 @@ enum class ImageType
 
 struct ImageLimits
 {
+    u32 max1DImageDim;
     u32 max2DImageDim;
     u32 maxNumLayers;
 };
@@ -580,7 +581,8 @@ struct CommandBuffer
     void Barrier(GPUBuffer *buffer, VkPipelineStageFlags2 stage, VkAccessFlags2 access);
     void Barrier(VkPipelineStageFlags2 srcStage, VkPipelineStageFlags2 dstStage,
                  VkAccessFlags2 srcAccess, VkAccessFlags2 dstAccess);
-
+    void TransferWriteBarrier(GPUImage *image);
+    void UAVBarrier(GPUImage *image);
     void FlushBarriers();
     void PushConstants(PushConstant *pc, void *ptr, VkPipelineLayout layout);
     QueryPool GetCompactionSizes(const GPUAccelerationStructurePayload *as);

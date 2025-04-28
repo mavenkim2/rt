@@ -318,7 +318,7 @@ struct VirtualTextureManager
     Shader shader;
     DescriptorSetLayout descriptorSetLayout;
     VkPipeline pipeline;
-    GPUImage pageTable;
+    GPUBuffer pageTable;
     PushConstant push;
 
     VirtualTextureManager(Arena *arena, u32 numVirtualFaces, u32 physicalTextureWidth,

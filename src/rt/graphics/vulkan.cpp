@@ -1086,6 +1086,7 @@ b32 Vulkan::CreateSwapchain(Swapchain *swapchain)
 ImageLimits Vulkan::GetImageLimits()
 {
     ImageLimits limits;
+    limits.max1DImageDim = deviceProperties.properties.limits.maxImageDimension1D;
     limits.max2DImageDim = deviceProperties.properties.limits.maxImageDimension2D;
     limits.maxNumLayers  = deviceProperties.properties.limits.maxImageArrayLayers;
     return limits;
@@ -1360,6 +1361,18 @@ void CommandBuffer::Barrier(GPUBuffer *inBuffer, VkPipelineStageFlags2 stage,
 
     inBuffer->lastStage  = stage;
     inBuffer->lastAccess = access;
+}
+
+void CommandBuffer::TransferWriteBarrier(GPUImage *image)
+{
+    Assert(image->lastLayout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    Barrier(image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            VK_ACCESS_2_TRANSFER_WRITE_BIT);
+}
+void CommandBuffer::UAVBarrier(GPUImage *image)
+{
+    Barrier(image, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            VK_ACCESS_2_SHADER_WRITE_BIT);
 }
 
 void CommandBuffer::FlushBarriers()
