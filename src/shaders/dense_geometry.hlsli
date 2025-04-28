@@ -230,7 +230,7 @@ struct DenseGeometry
             vids[k] = vid;
         }
 
-        if (0)
+        if (debug)
         {
             float3 n0 = DecodeNormal(vids[0]);
             float3 n1 = DecodeNormal(vids[1]);
@@ -424,6 +424,7 @@ DenseGeometry GetDenseGeometryHeader(StructuredBuffer<PackedDenseGeometryHeader>
     result.ctrlOffset = result.numFaceIDBits ? (result.faceIDOffset + 4 + (((result.numFaceIDBits + 3) * result.numTriangles + 7) >> 3)) : result.faceIDOffset;
     result.indexOffset = result.ctrlOffset + 12 * ((result.numTriangles + 31u) >> 5u);
     result.firstBitOffset = (result.indexOffset << 3) + reuseBufferLength * result.indexBitWidth;
+    result.debug = debug;
 
     return result;
 }

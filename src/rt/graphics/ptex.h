@@ -324,11 +324,11 @@ struct VirtualTextureManager
     VirtualTextureManager(Arena *arena, u32 numVirtualFaces, u32 physicalTextureWidth,
                           u32 physicalTextureHeight, u32 numPools, VkFormat format);
     u32 AllocateVirtualPages(u32 numPages);
-    void AllocatePhysicalPages(CommandBuffer *cmd, FaceMetadata *metadata, u32 numFaces,
-                               u8 *contents);
-    void AllocatePhysicalPages(CommandBuffer *cmd, FaceMetadata *metadata, u32 numFaces,
-                               u8 *contents, TileRequest *requests, u32 numRequests,
-                               RequestHandle *handles);
+    void AllocatePhysicalPages(CommandBuffer *cmd, u32 allocIndex, FaceMetadata *metadata,
+                               u32 numFaces, u8 *contents);
+    void AllocatePhysicalPages(CommandBuffer *cmd, u32 allocIndex, FaceMetadata *metadata,
+                               u32 numFaces, u8 *contents, TileRequest *requests,
+                               u32 numRequests, RequestHandle *handles);
 };
 
 void InitializePtex();

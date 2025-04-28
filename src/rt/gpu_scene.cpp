@@ -299,6 +299,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         u32 **reuses;
         VkAabbPositionsKHR *positions;
         TriangleStripType **types;
+        u32 **debugFaceIDs;
         u32 **debugIndices;
         u32 **debugRestartCount;
         u32 **debugRestartHighBit;
@@ -385,8 +386,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         u32 allocIndex  = virtualTextureManager.AllocateVirtualPages(fileHeader.numFaces);
         rangeIndices[i] = allocIndex;
-        virtualTextureManager.AllocatePhysicalPages(tileCmd, metaData, fileHeader.numFaces,
-                                                    tokenizer.input.str);
+        virtualTextureManager.AllocatePhysicalPages(tileCmd, allocIndex, metaData,
+                                                    fileHeader.numFaces, tokenizer.input.str);
 
         OS_UnmapFile(tokenizer.input.str);
     }
@@ -465,6 +466,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         // firstUses    = PushArrayNoZero(sceneScratch.temp.arena, u32 *,
         // data.numBlocks); reuses       = PushArrayNoZero(sceneScratch.temp.arena, u32 *,
         // data.numBlocks);
+        info.debugFaceIDs = PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
         info.debugIndices = PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
         info.debugRestartHighBit =
             PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
@@ -475,6 +477,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         for (auto *node = data.types.first; node != 0; node = node->next)
         {
             info.types[c++] = node->values;
+        }
+        c = 0;
+        for (auto *node = data.debugFaceIDs.first; node != 0; node = node->next)
+        {
+            info.debugFaceIDs[c++] = node->values;
         }
         // c = 0;
         // for (auto *node = data.firstUse.first; node != 0; node = node->next)

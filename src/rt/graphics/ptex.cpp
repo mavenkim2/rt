@@ -777,7 +777,7 @@ void Convert(string filename)
                 submissionIndex         = numSubmissions & 1;
                 currentHorizontalOffset = 0;
                 totalHeight             = 0;
-                currentShelfHeight      = currentFaceImg.GetPaddedHeight();
+                currentShelfHeight      = AlignPow2(currentFaceImg.GetPaddedHeight(), 4u);
             }
 
             for (int edgeIndex = e_bottom; edgeIndex < e_max; edgeIndex++)
@@ -912,18 +912,20 @@ void Convert(string filename)
                 rotate = true;
             }
 
-            u32 alignedVres   = AlignPow2(img.GetPaddedHeight(), 4);
-            u32 alignedRowLen = AlignPow2(img.GetPaddedWidth(), 4) * GetFormatSize(baseFormat);
+            u32 alignedHeight = AlignPow2(img.GetPaddedHeight(), 4);
+            u32 alignedWidth  = AlignPow2(img.GetPaddedWidth(), 4);
+            u32 alignedRowLen = alignedWidth * GetFormatSize(baseFormat);
             Utils::CopyAndPad(img.contents, img.strideWithBorder,
                               (u8 *)mappedPtrs[submissionIndex] + offset, dstStride,
-                              img.GetPaddedHeight(), img.strideWithBorder, 4, alignedRowLen);
+                              img.GetPaddedHeight(), img.strideWithBorder, alignedHeight,
+                              alignedRowLen);
 
             Assert((currentHorizontalOffset & 3) == 0);
             Assert((totalHeight & 3) == 0);
             FaceUploadInfo upload;
             upload.faceIndex = faceIndex;
-            upload.srcDim.x  = Max(img.GetPaddedWidth() >> log2BlockSize, 1u);
-            upload.srcDim.y  = Max(img.GetPaddedHeight() >> log2BlockSize, 1u);
+            upload.srcDim.x  = Max(alignedWidth >> log2BlockSize, 1u);
+            upload.srcDim.y  = Max(alignedHeight >> log2BlockSize, 1u);
             upload.offset =
                 Vec2i(currentHorizontalOffset >> log2BlockSize, totalHeight >> log2BlockSize);
             upload.base = levelIndex == 0;
@@ -942,7 +944,7 @@ void Convert(string filename)
             faceMetadata[faceIndex].totalSize_rotate += numBytes;
 
             totalSize += numBytes;
-            currentHorizontalOffset += AlignPow2(img.GetPaddedWidth(), 4);
+            currentHorizontalOffset += alignedWidth;
         }
     }
 
@@ -1104,8 +1106,9 @@ u32 VirtualTextureManager::AllocateVirtualPages(u32 numPages)
     return allocIndex;
 }
 
-void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetadata *metadata,
-                                                  u32 numFaces, u8 *contents)
+void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, u32 allocIndex,
+                                                  FaceMetadata *metadata, u32 numFaces,
+                                                  u8 *contents)
 {
     ScratchArena scratch;
 
@@ -1128,17 +1131,19 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
         requestHandles[i].requestIndex = i;
     }
     SortHandles<RequestHandle, false>(requestHandles, numFaces);
-    AllocatePhysicalPages(cmd, metadata, numFaces, contents, requests, numFaces,
+    AllocatePhysicalPages(cmd, allocIndex, metadata, numFaces, contents, requests, numFaces,
                           requestHandles);
 }
 
 // Pack textures into shelves
-void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetadata *metadata,
-                                                  u32 numFaces, u8 *contents,
-                                                  TileRequest *requests, u32 numRequests,
-                                                  RequestHandle *handles)
+void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, u32 allocIndex,
+                                                  FaceMetadata *metadata, u32 numFaces,
+                                                  u8 *contents, TileRequest *requests,
+                                                  u32 numRequests, RequestHandle *handles)
 {
     ScratchArena scratch;
+
+    u32 baseFaceIndex = pageRanges[allocIndex].start;
 
     const u32 blockShift  = GetBlockShift(format);
     Shelf *currentRow     = 0;
@@ -1282,7 +1287,7 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
         packed2 =
             BitFieldPackU32(packed2, faceMetadata.totalSize_rotate >> 31, packedOffset, 1);
 
-        updateRequests[handleIndex].faceIndex                     = faceIndex;
+        updateRequests[handleIndex].faceIndex                     = baseFaceIndex + faceIndex;
         updateRequests[handleIndex].packed_x_y_layer              = packed;
         updateRequests[handleIndex].packed_width_height_baseLayer = packed2;
 
@@ -1341,6 +1346,8 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, FaceMetada
         for (int levelIndex = 0; levelIndex < request.startLevel; levelIndex++)
         {
             Vec2i extent = CalculateFaceSize(log2Width, log2Height);
+            extent.x     = AlignPow2(extent.x, 4);
+            extent.y     = AlignPow2(extent.y, 4);
             u32 texSize  = Max(extent.y >> blockShift, 1) * Max(extent.x >> blockShift, 1) *
                           GetFormatSize(format);
             Assert(size > texSize);

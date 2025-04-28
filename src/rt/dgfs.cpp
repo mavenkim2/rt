@@ -46,6 +46,7 @@ void DenseGeometryBuildData::Init()
     reuse        = ChunkedLinkedList<u32>(arena);
 #endif
     types                       = ChunkedLinkedList<TriangleStripType>(arena);
+    debugFaceIDs                = ChunkedLinkedList<u32>(arena);
     debugIndices                = ChunkedLinkedList<u32>(arena);
     debugRestartCountPerDword   = ChunkedLinkedList<u32>(arena);
     debugRestartHighBitPerDword = ChunkedLinkedList<u32>(arena);
@@ -904,7 +905,7 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
         for (u32 i = 0; i < triangleOrder.Length(); i++)
         {
             u32 index = triangleOrder[i];
-            WriteBits((u32 *)faceIDNode->values, faceBitOffset, faceIDs[i] - minFaceID,
+            WriteBits((u32 *)faceIDNode->values, faceBitOffset, faceIDs[index] - minFaceID,
                       numFaceBits);
 
             // Write 2 bits to denote triangle rotation
@@ -1003,15 +1004,13 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     packed.g = BitFieldPackI32(packed.g, edge1HighBitPerDword[2], headerOffset, 8);
     packed.g = BitFieldPackI32(packed.g, edge2HighBitPerDword[1], headerOffset, 7);
     packed.g = BitFieldPackI32(packed.g, edge2HighBitPerDword[2], headerOffset, 8);
-    // packed.g = BitFieldPackU32(packed.g, numFaceSizeBits - 1, headerOffset, 4);
 
-    packed.h = BitFieldPackU32(packed.h, numOctBitsY, headerOffset, 5);
-    packed.h = BitFieldPackU32(packed.h, restartCountPerDword[0], headerOffset, 6);
-    packed.h = BitFieldPackU32(packed.h, restartCountPerDword[1], headerOffset, 7);
-    packed.h = BitFieldPackU32(packed.h, restartCountPerDword[2], headerOffset, 8);
-    packed.h = BitFieldPackU32(packed.h, numFaceBits, headerOffset, 6);
-    // packed.h = BitFieldPackU32(packed.h, hasFaceIDs ? numPageOffsetBits : 0, headerOffset,
-    // 6);
+    headerOffset = 0;
+    packed.h     = BitFieldPackU32(packed.h, numOctBitsY, headerOffset, 5);
+    packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[0], headerOffset, 6);
+    packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[1], headerOffset, 7);
+    packed.h     = BitFieldPackU32(packed.h, restartCountPerDword[2], headerOffset, 8);
+    packed.h     = BitFieldPackU32(packed.h, numFaceBits, headerOffset, 6);
 
     headerOffset = 0;
     packed.i     = BitFieldPackU32(packed.i, minOct[0], headerOffset, 16);
@@ -1115,8 +1114,10 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     auto *typesNode = buildData.types.AddNode(triangleStripTypes.Length());
     MemoryCopy(typesNode->values, triangleStripTypes.data,
                sizeof(TriangleStripType) * triangleStripTypes.Length());
-#if 0
 
+    auto *debugFaceIDNode = buildData.debugFaceIDs.AddNode(faceIDs.Length());
+    MemoryCopy(debugFaceIDNode->values, faceIDs.data, sizeof(u32) * faceIDs.Length());
+#if 0
     u32 numu32s        = (currentFirstUseBit + 31) >> 5;
     auto *firstUseNode = buildData.firstUse.AddNode(numu32s);
     MemoryCopy(firstUseNode->values, firstUse.bits, (currentFirstUseBit + 7) >> 3);
@@ -1136,12 +1137,5 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
                oldIndexOrder.Length() * sizeof(u32));
     ScratchEnd(clusterScratch);
 }
-
-struct PtexInfo
-{
-    string filename;
-    TileMetadata *metaData;
-    int numFaces;
-};
 
 } // namespace rt

@@ -44,6 +44,7 @@ struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
     ChunkedLinkedList<u32> firstUse;
     ChunkedLinkedList<u32> reuse;
 #endif
+    ChunkedLinkedList<u32> debugFaceIDs;
     ChunkedLinkedList<TriangleStripType> types;
     ChunkedLinkedList<u32> debugIndices;
 

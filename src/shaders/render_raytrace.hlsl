@@ -92,7 +92,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
                 float2 tempBary = 0;
 
                 bool result = IntersectCluster(instanceID, primitiveIndex, o, d, query.RayTMin(), 
-                                               query.CommittedRayT(), tHit, kind, tempBary, printDebug);
+                                               query.CommittedRayT(), tHit, kind, tempBary);
 
                 if (!result) continue;
 
@@ -168,7 +168,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
             bary.x = (rotate == 1 ? 1 - oldBary.x - oldBary.y : (rotate == 2 ? oldBary.y : oldBary.x));
             bary.y = (rotate == 1 ? oldBary.x : (rotate == 2 ? 1 - oldBary.x - oldBary.y : oldBary.y));
 
-            if (printDebug)
+            if (0)
             {
                 printf("%u %u %u type: %u\noldvids: %u %u %u\nvids: %u %u %u\n", instanceID, blockIndex, triangleIndex, rotate,
                         oldVids[0], oldVids[1], oldVids[2], vids[0], vids[1], vids[2]);
@@ -257,11 +257,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
                 break;
                 case GPUMaterialType::Diffuse: 
                 {
-                    // TODO: don't hardcode?
-                    VirtualTexture tex;
-                    tex.pageWidthPerPool = 128;
-
-                    float3 physicalUv = tex.GetPhysicalUV(pageTable, material.pageOffset, pageInformation.x, uv, 0, printDebug);
+                    float3 physicalUv = VirtualTexture::GetPhysicalUV(pageTable, material.pageOffset, pageInformation.x, uv, 0, printDebug);
                     uint width, height, elements;
                     physicalPages.GetDimensions(width, height, elements);
                     float3 reflectance = SampleTextureCatmullRom(physicalPages, samplerLinearClamp, physicalUv, float2(width, height));

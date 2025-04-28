@@ -6,35 +6,31 @@
 StructuredBuffer<uint2> pageTable : register(t5);
 Texture2DArray physicalPages: register(t6);
 
-struct VirtualTexture 
+namespace VirtualTexture
 {
-    uint pageWidthPerPool;
-
-    float3 GetPhysicalUV(StructuredBuffer<uint2> pageTable,
-                         uint basePageOffset,
-                         uint faceID,
-                         float2 uv, uint mipLevel = 0, bool debug = false)
+    static float3 GetPhysicalUV(StructuredBuffer<uint2> pageTable,
+                                uint basePageOffset,
+                                uint faceID,
+                                float2 uv, uint mipLevel = 0, bool debug = false)
     {
         // page information.x contains the faceID
         uint faceIndex = basePageOffset + faceID;
         uint2 physicalPageInfo = pageTable.Load(faceIndex);
 
-        uint x = physicalPageInfo.x & ((1u << 15u) - 1u);
-        uint y = physicalPageInfo.x >> 15u;
-        uint layerIndex = physicalPageInfo.x >> 30u;
-
-        uint basePhysicalLevel = BitFieldExtractU32(physicalPageInfo.y, 4, 8);
+        uint x = BitFieldExtractU32(physicalPageInfo.x, 15, 0);
+        uint y = BitFieldExtractU32(physicalPageInfo.x, 15, 15);
+        uint layerIndex = BitFieldExtractU32(physicalPageInfo.x, 2, 30);
 
         int log2Width = BitFieldExtractU32(physicalPageInfo.y, 4, 0);
         int log2Height = BitFieldExtractU32(physicalPageInfo.y, 4, 4);
+        uint basePhysicalLevel = BitFieldExtractU32(physicalPageInfo.y, 4, 8);
         int rotate = BitFieldExtractU32(physicalPageInfo.y, 1, 12);
+
         log2Width = max(0, log2Width - basePhysicalLevel);
         log2Height = max(0, log2Height - basePhysicalLevel);
         uint numLevels = max(log2Width, log2Height) + 1u;
 
         uint2 offset = uint2(x, y);
-        offset.x += mipLevel > basePhysicalLevel ? CalculateFaceSize(log2Width, log2Height).x: 0;
-
         //((1u << numLevels) - 1u) & ~((1u << (numLevels - mipLevel - basePhysicalLevel + 1)) - 1u);
 
         for (int levelIndex = 0; levelIndex < (int)mipLevel - (int)basePhysicalLevel; levelIndex++)
@@ -48,7 +44,14 @@ struct VirtualTexture
         }
         
         uv = rotate ? float2(1 - uv.y, uv.x) : uv;
-        offset += uv * float2(1u << log2Width, 1u << log2Height);
+        uint borderSize = GetBorderSize(log2Width, log2Height);
+        offset += uv * float2(1u << log2Width, 1u << log2Height) + borderSize;
+
+        if (debug)
+        {
+            printf("faceID: %u, offset: %u %u, base x y: %u %u, log: %u %u, uv: %f %f\n", 
+                    faceID, offset.x, offset.y, x, y, log2Width, log2Height, uv.x, uv.y);
+        }
 
         uint width, height, layers;
         physicalPages.GetDimensions(width, height, layers);
@@ -111,5 +114,5 @@ struct VirtualTexture
         return float3(physicalUv, physicalPageLayer);
     }
 #endif
-};
+}
 #endif
