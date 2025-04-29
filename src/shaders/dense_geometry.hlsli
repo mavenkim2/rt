@@ -230,7 +230,7 @@ struct DenseGeometry
             vids[k] = vid;
         }
 
-        if (debug)
+        if (0)
         {
             float3 n0 = DecodeNormal(vids[0]);
             float3 n1 = DecodeNormal(vids[1]);

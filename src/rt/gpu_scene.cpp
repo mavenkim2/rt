@@ -180,7 +180,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     {
         string raygenShaderName       = "../src/shaders/render_raytrace_rgen.spv";
         string missShaderName         = "../src/shaders/render_raytrace_miss.spv";
-        string hitShaderName          = "../src/shaders/render_raytrace_dielectric_hit.spv";
+        string hitShaderName          = "../src/shaders/render_raytrace_hit.spv";
         string intersectionShaderName = "../src/shaders/render_raytrace_dgf_intersect.spv";
 
         string rgenData      = OS_ReadFile(arena, raygenShaderName);
@@ -692,6 +692,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     gpuScene.lensRadius       = params->lensRadius;
     gpuScene.dyCamera         = params->dyCamera;
     gpuScene.focalLength      = params->focalLength;
+    gpuScene.height           = params->height;
+    gpuScene.fov              = Radians(params->fov / params->aspectRatio);
 
     ShaderDebugInfo shaderDebug;
 

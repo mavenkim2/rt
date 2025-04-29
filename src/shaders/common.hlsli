@@ -51,7 +51,7 @@ void swap(T a, T b)
 
 float copysign(float a, float b)
 {
-    uint signBit = 0x80000000;
+    const uint signBit = 0x80000000;
     return asfloat((asuint(a) & ~signBit) | (asuint(b) & signBit));
 }
 

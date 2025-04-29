@@ -7,13 +7,18 @@
 #include "bxdf.hlsli"
 #include "../sampling.hlsli"
 
-float3 SampleDielectric(float3 wo, float eta, float2 rand, inout float3 throughput) 
+float3 SampleDielectric(float3 wo, float eta, float2 rand, inout float3 throughput, bool debug = false) 
 {
     float u = rand.x;
     float R = FrDielectric(wo.z, eta);
 
     float T = 1 - R;
     float pr = R, pt = T;
+
+    if (debug)
+    {
+        printf("R, T: %f %f\n", R, T);
+    }
 
     float3 dir;
     if (u < pr / (pr + pt))

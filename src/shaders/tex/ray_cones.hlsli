@@ -1,6 +1,9 @@
 #ifndef RAY_CONES_HLSLI
 #define RAY_CONES_HLSLI
 
+// See: 
+// (1) Improved Shader and Texture Level of Detail Using Ray Cones
+// (2) RTG: CHAPTER 20 Texture Level of Detail Strategies for Real-Time Ray Tracing
 struct RayCone 
 {
     float width;
@@ -14,7 +17,7 @@ struct RayCone
 
     float ComputeTextureLOD(float3 p0, float3 p1, float3 p2, 
                             float2 uv0, float2 uv1, float2 uv2, 
-                            float3 dir, float3 normal, int2 dimensions)
+                            float3 dir, float3 normal, int2 dimensions, bool debug = false)
     {
         const float textureArea = (uv1.x - uv0.x) * (uv2.y - uv0.y) + (uv2.x - uv0.x) * (uv1.y - uv0.y);
         const float triangleArea = length(cross(p1 - p0, p2 - p0));
@@ -24,6 +27,7 @@ struct RayCone
         lambda += log2(abs(width));
         lambda += 0.5f * log2(dimensions.x * dimensions.y);
         lambda -= log2(abs(dot(dir, normal)));
+
         return lambda;
     }
 

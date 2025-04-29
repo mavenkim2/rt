@@ -81,8 +81,6 @@ void main(uint3 DTid : SV_DispatchThreadID)
         float2 bary;
         uint hitKind;
 
-        // TODO: explore design space (e.g. have primitive be a cluster, instead of triangle 
-        // in cluster)
         while (query.Proceed()) 
         {
             if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
@@ -251,20 +249,21 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
             float3 objectRayDir = query.CommittedObjectRayDirection();
             float3 wo = normalize(float3(dot(ss, -objectRayDir), dot(ts, -objectRayDir), dot(n, -objectRayDir)));
+
             float2 sample = rng.Uniform2D();
 
             float surfaceSpreadAngle = depth == 1 ? rayCone.CalculatePrimaryHitUnifiedSurfaceSpreadAngle(dir, n, p0, p1, p2, n0, n1, n2) 
                                                   : rayCone.CalculateSecondaryHitSurfaceSpreadAngle(dir, n, p0, p1, p2, n0, n1, n2);
 
             int2 dim = VirtualTexture::GetDimensions(pageTable, material.pageOffset, pageInformation.x);
-            float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, n, dim);
             rayCone.Propagate(surfaceSpreadAngle, query.CommittedRayT());
+            float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, n, dim, printDebug);
 
             switch (material.type) 
             {
                 case GPUMaterialType::Dielectric:
                 {
-                    dir = SampleDielectric(wo, material.eta, sample, throughput);
+                    dir = SampleDielectric(wo, material.eta, sample, throughput, printDebug);
                 }
                 break;
                 case GPUMaterialType::Diffuse: 
@@ -272,6 +271,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
                     float3 physicalUv = VirtualTexture::GetPhysicalUV(pageTable, material.pageOffset, pageInformation.x, uv, uint(lambda), printDebug);
                     uint width, height, elements;
                     physicalPages.GetDimensions(width, height, elements);
+                    // TODO: at high mip levels this doesn't work anymore
                     float3 reflectance = SampleTextureCatmullRom(physicalPages, samplerLinearClamp, physicalUv, float2(width, height));
 
                     dir = SampleDiffuse(reflectance, wo, sample, throughput, printDebug);
@@ -279,10 +279,17 @@ void main(uint3 DTid : SV_DispatchThreadID)
                 break;
             }
 
-            dir = ss * dir.x + ts * dir.y + n * dir.z;
+            if (dir.z == 0) break;
             origin = TransformP(query.CommittedObjectToWorld3x4(), origin);
+            dir = ss * dir.x + ts * dir.y + n * dir.z;
             dir = normalize(TransformV(query.CommittedObjectToWorld3x4(), dir));
-            pos = OffsetRayOrigin(origin, gn);
+            pos = OffsetRayOrigin(origin, gn, printDebug);
+            if (0)
+            {
+                float3 d = -query.WorldRayDirection();
+                printf("before: %f %f %f, after: %f %f %f\norigin before: %f %f %f, origin after: %f %f %f\n",
+                        d.x, d.y, d.z, dir.x, dir.y, dir.z, origin.x, origin.y, origin.z, pos.x, pos.y, pos.z);
+            }
         }
         else 
         {

@@ -26,7 +26,7 @@ void GenerateRay(GPUScene scene, float2 pFilm, float2 pLens, out float3 origin, 
 }
 
 // See Ray Tracing Gems chapter 6
-float3 OffsetRayOrigin(float3 p, float3 gn)
+float3 OffsetRayOrigin(float3 p, float3 gn, bool printDebug = false)
 {
     static const float intScale = 256.f;
     static const float floatScale = 1.f / 65536;
@@ -34,9 +34,9 @@ float3 OffsetRayOrigin(float3 p, float3 gn)
 
     int3 of_i = intScale * gn;
 
-    float3 p_i = float3(asfloat(asint(p.x) + copysign(of_i.x, p.x)),
-        asfloat(asint(p.y) + copysign(of_i.y, p.y)),
-        asfloat(asint(p.z) + copysign(of_i.z, p.z)));
+    float3 p_i = float3(asfloat(asint(p.x) + ((p.x < 0) ? -of_i.x : of_i.x)),
+        asfloat(asint(p.y) + ((p.y < 0) ? -of_i.y : of_i.y)),
+        asfloat(asint(p.z) + ((p.z < 0) ? -of_i.z : of_i.z)));
 
     return float3(abs(p.x) < origin ? p.x + floatScale * gn.x : p_i.x,
                   abs(p.y) < origin ? p.y + floatScale * gn.y : p_i.y,
