@@ -113,6 +113,10 @@ float3 SampleTextureCatmullRom(in Texture2DArray tex, in SamplerState linearSamp
     return result;
 }
 
-
-
-
+float3 IntersectRayPlane(float3 planeN, float3 planeP, float3 rayP, float3 rayD)
+{
+    float d   = dot(planeN, planeP);
+    float t   = (d - dot(planeN, rayP)) / dot(planeN, rayD);
+    float3 p = rayP + t * rayD;
+    return p;
+}

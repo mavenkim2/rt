@@ -8,6 +8,17 @@ Texture2DArray physicalPages: register(t6);
 
 namespace VirtualTexture
 {
+    static int2 GetDimensions(StructuredBuffer<uint2> pageTable,
+                              uint basePageOffset,
+                              uint faceID)
+    {
+        uint faceIndex = basePageOffset + faceID;
+        uint2 physicalPageInfo = pageTable.Load(faceIndex);
+        int log2Width = BitFieldExtractU32(physicalPageInfo.y, 4, 0);
+        int log2Height = BitFieldExtractU32(physicalPageInfo.y, 4, 4);
+        return int2(1l << log2Width, 1l << log2Height);
+    }
+
     static float3 GetPhysicalUV(StructuredBuffer<uint2> pageTable,
                                 uint basePageOffset,
                                 uint faceID,

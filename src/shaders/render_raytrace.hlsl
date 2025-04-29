@@ -8,6 +8,7 @@
 #include "dense_geometry.hlsli"
 #include "dgf_intersect.hlsli"
 #include "tex/virtual_textures.hlsli"
+#include "tex/ray_cones.hlsli"
 #include "../rt/shader_interop/as_shaderinterop.h"
 #include "../rt/shader_interop/ray_shaderinterop.h"
 #include "../rt/shader_interop/hit_shaderinterop.h"
@@ -55,6 +56,10 @@ void main(uint3 DTid : SV_DispatchThreadID)
     float3 dir;
     float3 dpdx, dpdy, dddx, dddy;
     GenerateRay(scene, filterSample, pLens, pos, dir, dpdx, dpdy, dddx, dddy);
+
+    RayCone rayCone;
+    rayCone.width = 0.f;
+    rayCone.spreadAngle = atan(2.f * tan(scene.fov / 2.f) / scene.height);
 
     bool printDebug = all(DTid.xy == debugInfo.mousePos);
 
@@ -247,7 +252,14 @@ void main(uint3 DTid : SV_DispatchThreadID)
             float3 objectRayDir = query.CommittedObjectRayDirection();
             float3 wo = normalize(float3(dot(ss, -objectRayDir), dot(ts, -objectRayDir), dot(n, -objectRayDir)));
             float2 sample = rng.Uniform2D();
-            
+
+            float surfaceSpreadAngle = depth == 1 ? rayCone.CalculatePrimaryHitUnifiedSurfaceSpreadAngle(dir, n, p0, p1, p2, n0, n1, n2) 
+                                                  : rayCone.CalculateSecondaryHitSurfaceSpreadAngle(dir, n, p0, p1, p2, n0, n1, n2);
+
+            int2 dim = VirtualTexture::GetDimensions(pageTable, material.pageOffset, pageInformation.x);
+            float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, n, dim);
+            rayCone.Propagate(surfaceSpreadAngle, query.CommittedRayT());
+
             switch (material.type) 
             {
                 case GPUMaterialType::Dielectric:
@@ -257,7 +269,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
                 break;
                 case GPUMaterialType::Diffuse: 
                 {
-                    float3 physicalUv = VirtualTexture::GetPhysicalUV(pageTable, material.pageOffset, pageInformation.x, uv, 0, printDebug);
+                    float3 physicalUv = VirtualTexture::GetPhysicalUV(pageTable, material.pageOffset, pageInformation.x, uv, uint(lambda), printDebug);
                     uint width, height, elements;
                     physicalPages.GetDimensions(width, height, elements);
                     float3 reflectance = SampleTextureCatmullRom(physicalPages, samplerLinearClamp, physicalUv, float2(width, height));

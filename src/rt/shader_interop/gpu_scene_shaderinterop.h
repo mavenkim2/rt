@@ -18,6 +18,9 @@ struct GPUScene
     float lensRadius;
     float3 dyCamera;
     float focalLength;
+
+    float fov;
+    float height;
 };
 
 #ifdef __cplusplus

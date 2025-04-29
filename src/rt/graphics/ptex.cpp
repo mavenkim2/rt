@@ -1000,7 +1000,9 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 numVirtualFaces,
                                      sizeof(Vec2u) * numVirtualFaces);
 
     {
-        numPools              = Min(numPools, limits.maxNumLayers);
+        numPools = Min(numPools, limits.maxNumLayers);
+        Assert(physicalTextureWidth <= limits.max2DImageDim);
+        Assert(physicalTextureHeight <= limits.max2DImageDim);
         physicalTextureWidth  = Min(physicalTextureWidth, limits.max2DImageDim);
         physicalTextureHeight = Min(physicalTextureHeight, limits.max2DImageDim);
 
