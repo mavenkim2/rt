@@ -225,7 +225,8 @@ enum class AllocationStatus
 
 struct BlockRange
 {
-    static const u32 InvalidRange = ~0u;
+    static const u32 InvalidRange            = ~0u;
+    static const u32 TopLevelMipRequestedBit = 0x80000000;
     AllocationStatus status;
 
     u32 start;
@@ -238,7 +239,13 @@ struct BlockRange
     u32 nextFree;
 
     int virtualFaceIndex;
-    int startLevel;
+
+    // Top two bits denote whether the top most stored mip was requested since the last
+    // eviction check, and whether any subsequent mips were requested
+    int startLevel_requested;
+    int log2Width;
+    int log2Height;
+    int totalSize_rotate;
 
     BlockRange() {}
 
@@ -256,6 +263,9 @@ struct BlockRange
     }
 
     u32 GetNum() const;
+    u32 GetStartLevel() const;
+    u32 GetTopLevelWidth() const;
+    bool CheckTopLevelMipRequested() const;
     template <typename Array>
     static u32 FindBestFree(const Array &ranges, u32 freeIndex, u32 num, u32 leftover = ~0u);
     template <typename Array>
@@ -284,9 +294,6 @@ struct PhysicalPagePool
     int totalHeight;
 
     int layerIndex;
-
-    // u32 prevFree;
-    // u32 nextFree;
 };
 
 struct PhysicalPageAllocation
