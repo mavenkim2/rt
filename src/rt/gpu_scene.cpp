@@ -693,7 +693,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     gpuScene.dyCamera         = params->dyCamera;
     gpuScene.focalLength      = params->focalLength;
     gpuScene.height           = params->height;
-    gpuScene.fov              = Radians(params->fov / params->aspectRatio);
+    gpuScene.fov              = params->fov;
 
     ShaderDebugInfo shaderDebug;
 

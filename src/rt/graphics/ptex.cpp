@@ -1092,6 +1092,32 @@ void BlockRange::Split(Array &ranges, u32 index, u32 &freeIndex, u32 num)
 
 u32 BlockRange::GetNum() const { return onePastEnd - start; }
 
+static PageTableUpdateRequest
+VirtualTextureManager::CreatePageTableUpdateRequest(int faceIndex, u32 x, u32 y, u32 layer,
+                                                    int log2Width, int log2Height,
+                                                    int startLevel, bool rotate)
+{
+    u32 packed       = 0;
+    u32 packedOffset = 0;
+    packed           = BitFieldPackU32(packed, x, packedOffset, 15);
+    packed           = BitFieldPackU32(packed, y, packedOffset, 15);
+    Assert(pool->layerIndex < 4);
+    packed = BitFieldPackU32(packed, layer, packedOffset, 2);
+
+    u32 packed2  = 0;
+    packedOffset = 0;
+    packed2      = BitFieldPackU32(packed2, log2Width, packedOffset, 4);
+    packed2      = BitFieldPackU32(packed2, log2Height, packedOffset, 4);
+    packed2      = BitFieldPackU32(packed2, startLevel, packedOffset, 4);
+    packed2      = BitFieldPackU32(packed2, rotate, packedOffset, 1);
+
+    PageTableUpdateRequest request;
+    request.faceIndex                     = faceIndex;
+    request.packed_x_y_layer              = packed;
+    request.packed_width_height_baseLayer = packed2;
+    return request;
+}
+
 u32 VirtualTextureManager::AllocateVirtualPages(u32 numPages)
 {
     Assert(numPages);
@@ -1195,7 +1221,11 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, u32 allocI
                 {
                     // Go to next free pool if there is no more space in current pool
                     freePoolIndex++;
-                    Assert(freePoolIndex < pools.Length());
+                    // Evict
+                    if (freePoolIndex >= pools.Length())
+                    {
+                        freePoolIndex = Evict();
+                    }
                     pool = &pools[freePoolIndex];
                 }
                 else
@@ -1274,24 +1304,10 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, u32 allocI
         const Shelf &shelf           = shelves[shelfIndex];
         const BlockRange &blockRange = ranges[blockRangeIndex];
 
-        u32 packed       = 0;
-        u32 packedOffset = 0;
-        packed           = BitFieldPackU32(packed, blockRange.start, packedOffset, 15);
-        packed           = BitFieldPackU32(packed, shelf.startY, packedOffset, 15);
-        Assert(pool->layerIndex < 4);
-        packed = BitFieldPackU32(packed, pool->layerIndex, packedOffset, 2);
-
-        u32 packed2  = 0;
-        packedOffset = 0;
-        packed2      = BitFieldPackU32(packed2, faceMetadata.log2Width, packedOffset, 4);
-        packed2      = BitFieldPackU32(packed2, faceMetadata.log2Height, packedOffset, 4);
-        packed2      = BitFieldPackU32(packed2, request.startLevel, packedOffset, 4);
-        packed2 =
-            BitFieldPackU32(packed2, faceMetadata.totalSize_rotate >> 31, packedOffset, 1);
-
-        updateRequests[handleIndex].faceIndex                     = baseFaceIndex + faceIndex;
-        updateRequests[handleIndex].packed_x_y_layer              = packed;
-        updateRequests[handleIndex].packed_width_height_baseLayer = packed2;
+        updateRequests[handleIndex] = CreatePageTableUpdateRequest(
+            baseFaceIndex + faceIndex, blockRange.start, shelf.startY, pool->layerIndex,
+            faceMetadata.log2Width, faceMetadata.log2Height, request.startLevel,
+            faceMetadata.totalSize_rotate >> 31);
 
         Vec3i start    = Vec3i(blockRange.start, shelf.startY, 0);
         Vec2i begin    = start.xy;
@@ -1381,6 +1397,108 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, u32 allocI
     cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                             descriptorSetLayout.pipelineLayout);
     cmd->Dispatch((numRequests + 63) >> 6, 1, 1);
+}
+
+// 1. just remove the top most mip level
+// 2. remove the top most mip level and move it to a different shelf, updating the page table
+//
+// the thing is like if we don't use pages this just becomes 10x more complicated.
+// the problem is if we use pages there will just be so much waste, especially since
+// we need lower mip levels
+// lru? clock? clock per face vs per shelf?
+// do I remove from shelf that perfectly fit the requested height of the face texture?
+// defragment shelves? per face streaming, per texture streaming, something in between?
+void VirtualTextureManager::Evict(CommandBuffer *cmd, TileRequest *requests, u32 numRequests,
+                                  FaceMetadata *metadata)
+{
+    // probably cannot evict individual entries. leads to too much complexity and fragmentation
+
+    // idea: sort the requests as above, look at shelves that match the height,
+    // free all of or a fixed portion of the shelf, add back any needed items?
+    // - potentially leads to unnecessary thrashing?
+    // the thing is though i'm pretty sure this is best because
+    // 1. only need 1 offset
+    // 2. if one page in a face is loaded you probably need all of the face texture anyways,
+    //
+    // so enforcing a page size would lead to allocation simplicity at the expense
+    // of fast lookup and less wasted space
+
+    // what am I trying to solve? I want it so that not visible texture data isn't
+    // resident on the gpu. eviction speed doesn't really matter unless it leads to
+    // unnecessary visible quality loss
+
+    // probably need to evict the worst case
+    int shelfIndex;
+    Shelf &shelf   = shelves[shelfIndex];
+    u32 rangeIndex = shelf.rangeStart;
+
+    // i could try evicting multiple things from the same shelf?? but why would
+    // things on the same shelf be correlated? i could make them correlated but
+    // that would lead to worse packing.
+
+    ScratchArena scratch;
+
+    StaticArray<PageTableUpdateRequest> evictRequests(scratch.temp.arena, numRequests);
+    StaticArray<PageTableUpdateRequest> mapRequests(scratch.temp.arena, numRequests);
+
+    for (int i = 0; i < numRequests; i++)
+    {
+        while (rangeIndex != BlockRange::InvalidRange)
+        {
+            BlockRange &range = ranges[rangeIndex];
+            u32 topLevelWidth = = range.GetTopLevelWidth();
+            bool fits           = topLevelWidth >= requestedWidth;
+            if (fits)
+            {
+                // Split the range we're evicting
+                BlockRange newRange(AllocationStatus::Allocated, range.start,
+                                    range.start + topLevelWidth, range.prevRange, rangeIndex,
+                                    BlockRange::InvalidRange, BlockRange::InvalidRange);
+
+                ranges.push_back(newRange);
+                range.start += topLevelWidth;
+                range.prevRange = ranges.size() - 1;
+
+                int faceIndex = requests[i].faceIndex;
+
+                // Update page table information for entries we're evicting
+                int startLevel                 = ++range.startLevel;
+                PageTableUpdateRequest request = CreatePageTableUpdateRequest(
+                    faceIndex, range.start, shelf.startY, pool->layerIndex,
+                    metadata[faceIndex].log2Width, metadata[faceIndex].log2Height, startLevel,
+                    metadata[faceIndex].totalSize_rotate >> 31);
+                evictRequests.push_back(request);
+
+                // Issue copy commands to new location
+
+                // Update page table information for entries we're mapping
+                // First, unmap
+                if (virtualFaceIndexToRangeIndex[] != -1)
+                {
+                }
+                virtualFaceInfo[range.virtualFaceInfoIndex].startLevel =
+                    requests[i].startLevel;
+                break;
+            }
+            rangeIndex = range.nextRange;
+        }
+    }
+
+    // First update page table information to prepare for eviction
+    PageTableUpdatePushConstant pc;
+    pc.numRequests = evictRequests.Length();
+    TransferBuffer pageTableUpdateRequestBuffer =
+        cmd->SubmitBuffer(evictRequests.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                          sizeof(PageTableUpdateRequest) * evictRequests.Length());
+    DescriptorSet ds = descriptorSetLayout.CreateDescriptorSet();
+    cmd->Bind(0, &pageTableUpdateRequestBuffer).Bind(1, &pageTable);
+    cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+    cmd->PushConstants(&push, &pc, descriptorSetLayout.pipelineLayout);
+    cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
+                            descriptorSetLayout.pipelineLayout);
+    cmd->Dispatch((evictRequests.Length() + 63) >> 6, 1, 1);
+
+    // Then, copy data to new location
 }
 
 } // namespace rt

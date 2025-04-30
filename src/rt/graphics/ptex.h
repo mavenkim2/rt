@@ -237,6 +237,9 @@ struct BlockRange
     u32 prevFree;
     u32 nextFree;
 
+    int virtualFaceIndex;
+    int startLevel;
+
     BlockRange() {}
 
     BlockRange(AllocationStatus status, u32 start, u32 onePastEnd)
@@ -265,6 +268,8 @@ struct Shelf
     int height;
 
     u32 freeRange;
+
+    u32 rangeStart;
 
     int prevFree;
     int nextFree;
@@ -312,6 +317,8 @@ struct VirtualTextureManager
     std::vector<BlockRange> ranges;
     std::vector<Shelf> shelves;
 
+    std::vector<int> virtualFaceIndexToRangeIndex;
+
     u32 pageWidthPerPool;
     GPUImage gpuPhysicalPool;
 
@@ -329,6 +336,11 @@ struct VirtualTextureManager
     void AllocatePhysicalPages(CommandBuffer *cmd, u32 allocIndex, FaceMetadata *metadata,
                                u32 numFaces, u8 *contents, TileRequest *requests,
                                u32 numRequests, RequestHandle *handles);
+
+    static PageTableUpdateRequest CreatePageTableUpdateRequest(int faceIndex, u32 x, u32 y,
+                                                               u32 layer, int log2Width,
+                                                               int log2Height, int startLevel,
+                                                               bool rotate);
 };
 
 void InitializePtex();

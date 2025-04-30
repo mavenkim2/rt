@@ -250,11 +250,12 @@ void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
     Vec3f dxCamera = TransformP(cameraFromRaster, Vec3f(1.f, 0.f, 0.f)) - org;
     Vec3f dyCamera = TransformP(cameraFromRaster, Vec3f(0.f, 1.f, 0.f)) - org;
 
+    f32 verticalFov         = 2.f * atanf(tanf(Radians(fov) / 2.f) / aspectRatio);
     RenderParams2 params    = {};
     params.pCamera          = pCamera;
     params.look             = look;
     params.up               = up;
-    params.fov              = fov;
+    params.fov              = verticalFov;
     params.aspectRatio      = aspectRatio;
     params.cameraFromRaster = cameraFromRaster;
     params.renderFromCamera = renderFromCameraAffine;
