@@ -1047,6 +1047,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             gpuScene.renderFromCamera = Inverse(cameraFromRender);
             OS_GetMousePos(params->window, shaderDebug.mousePos.x, shaderDebug.mousePos.y);
         }
+        u32 dispatchDimX =
+            (params->width + PATH_TRACE_NUM_THREADS_X - 1) / PATH_TRACE_NUM_THREADS_X;
+        u32 dispatchDimY =
+            (params->height + PATH_TRACE_NUM_THREADS_Y - 1) / PATH_TRACE_NUM_THREADS_Y;
+        gpuScene.dispatchDimX = dispatchDimX;
+        gpuScene.dispatchDimY = dispatchDimY;
 
         device->BeginFrame();
         u32 frame          = device->GetCurrentBuffer();
@@ -1117,9 +1123,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         cmd->PushConstants(&pushConstant, &pc, /*rts.layout);*/ layout.pipelineLayout);
         // cmd->TraceRays(&rts, params->width, params->height, 1);
-        cmd->Dispatch(
-            (params->width + PATH_TRACE_NUM_THREADS_X - 1) / PATH_TRACE_NUM_THREADS_X,
-            (params->height + PATH_TRACE_NUM_THREADS_Y - 1) / PATH_TRACE_NUM_THREADS_Y, 1);
+        cmd->Dispatch(dispatchDimX, dispatchDimY, 1);
         device->CopyFrameBuffer(&swapchain, cmd, image);
         device->EndFrame();
 

@@ -1098,14 +1098,14 @@ u32 BlockRange::GetStartLevel() const
 
 u32 BlockRange::GetTopLevelWidth() const { return 0; }
 // NOTE: Follows a clock replacement policy
-bool BlockRange::CheckTopLevelMipRequested()
+bool BlockRange::CheckTopLevelMipRequested() const
 {
     bool result = (startLevel_requested & TopLevelMipRequestedBit) != 0;
-    startLevel_requested &= ~TopLevelMipRequestedBit;
+    // startLevel_requested &= ~TopLevelMipRequestedBit;
     return result;
 }
 
-static PageTableUpdateRequest
+PageTableUpdateRequest
 VirtualTextureManager::CreatePageTableUpdateRequest(int faceIndex, u32 x, u32 y, u32 layer,
                                                     int log2Width, int log2Height,
                                                     int startLevel, bool rotate)
@@ -1114,8 +1114,7 @@ VirtualTextureManager::CreatePageTableUpdateRequest(int faceIndex, u32 x, u32 y,
     u32 packedOffset = 0;
     packed           = BitFieldPackU32(packed, x, packedOffset, 15);
     packed           = BitFieldPackU32(packed, y, packedOffset, 15);
-    Assert(pool->layerIndex < 4);
-    packed = BitFieldPackU32(packed, layer, packedOffset, 2);
+    packed           = BitFieldPackU32(packed, layer, packedOffset, 2);
 
     u32 packed2  = 0;
     packedOffset = 0;
@@ -1235,10 +1234,11 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, u32 allocI
                     // Go to next free pool if there is no more space in current pool
                     freePoolIndex++;
                     // Evict
-                    if (freePoolIndex >= pools.Length())
-                    {
-                        freePoolIndex = Evict();
-                    }
+                    // if (freePoolIndex >= pools.Length())
+                    // {
+                    //     freePoolIndex = Evict();
+                    // }
+                    Assert(freePoolIndex < pools.Length());
                     pool = &pools[freePoolIndex];
                 }
                 else
@@ -1412,6 +1412,7 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, u32 allocI
     cmd->Dispatch((numRequests + 63) >> 6, 1, 1);
 }
 
+#if 0
 void VirtualTextureManager::Evict(CommandBuffer *cmd, TileRequest *requests, u32 numRequests,
                                   FaceMetadata *metadata)
 {
@@ -1457,7 +1458,6 @@ void VirtualTextureManager::Evict(CommandBuffer *cmd, TileRequest *requests, u32
                     evictRequests.push_back(evictRequest);
 
                     // Issue copy commands to new location
-
                     int virtualFaceIndex;
                     int oldRangeIndex = virtualFaceIndexToRangeIndex[virtualFaceIndex];
                     // Remap the range previously associated with this data if present
@@ -1511,5 +1511,6 @@ void VirtualTextureManager::Evict(CommandBuffer *cmd, TileRequest *requests, u32
                             descriptorSetLayout.pipelineLayout);
     cmd->Dispatch((mapRequests.Length() + 63) >> 6, 1, 1);
 }
+#endif
 
 } // namespace rt

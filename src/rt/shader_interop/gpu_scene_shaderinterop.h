@@ -21,6 +21,8 @@ struct GPUScene
 
     float fov;
     float height;
+    uint dispatchDimX;
+    uint dispatchDimY;
 };
 
 #ifdef __cplusplus

@@ -33,17 +33,22 @@ ByteAddressBuffer indices : register(t10);
 [[vk::push_constant]] RayPushConstant push;
 
 [numthreads(PATH_TRACE_NUM_THREADS_X, PATH_TRACE_NUM_THREADS_Y, 1)]
-void main(uint3 DTid : SV_DispatchThreadID)
+void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 groupThreadID : SV_GroupThreadID)
 {
+    uint2 swizzledThreadID = 
+        SwizzleThreadGroup(uint2(scene.dispatchDimX, scene.dispatchDimY), 
+                           uint2(PATH_TRACE_NUM_THREADS_X, PATH_TRACE_NUM_THREADS_Y), 
+                           PATH_TRACE_TILE_WIDTH, groupThreadID.xy, groupID.xy);
+
     // TODO: thread swizzling to get greater coherence, and SOA?
-    RNG rng = RNG::Init(RNG::PCG3d(DTid.xyx).zy, push.frameNum);
+    RNG rng = RNG::Init(RNG::PCG3d(swizzledThreadID.xyx).zy, push.frameNum);
 
     // Generate Ray
     float2 sample = rng.Uniform2D();
     const float2 filterRadius = float2(0.5, 0.5);
     float2 filterSample = float2(lerp(-filterRadius.x, filterRadius.x, sample[0]), 
                                  lerp(-filterRadius.y, filterRadius.y, sample[1]));
-    filterSample += float2(0.5, 0.5) + float2(DTid.xy);
+    filterSample += float2(0.5, 0.5) + float2(swizzledThreadID);
     float2 pLens = rng.Uniform2D();
 
     float3 throughput = float3(1, 1, 1);
@@ -61,7 +66,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     rayCone.width = 0.f;
     rayCone.spreadAngle = atan(2.f * tan(scene.fov / 2.f) / scene.height);
 
-    bool printDebug = all(DTid.xy == debugInfo.mousePos);
+    bool printDebug = all(swizzledThreadID == debugInfo.mousePos);
 
     while (true)
     {
@@ -350,5 +355,5 @@ void main(uint3 DTid : SV_DispatchThreadID)
             break;
         }
     }
-    image[DTid.xy] = float4(radiance, 1);
+    image[swizzledThreadID] = float4(radiance, 1);
 }
