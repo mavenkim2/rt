@@ -14,6 +14,7 @@
 #include "shader_interop/hit_shaderinterop.h"
 #include "shader_interop/ray_shaderinterop.h"
 #include "shader_interop/debug_shaderinterop.h"
+#include "../third_party/nvapi/nvapi.h"
 #include "nvapi.h"
 #include "scene.h"
 #include "win32.h"
@@ -170,6 +171,7 @@ StaticArray<VkAabbPositionsKHR> CreateAABBForNTriangles(Arena *arena, ClusterBui
 void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
                        int maxDepth, Image *envMap)
 {
+    NvAPI_Initialize();
     // Compile shaders
     Shader shader;
     Shader decodeShader;
@@ -760,19 +762,17 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     int shaderDebugIndex = layout.AddBinding((u32)RTBindings::ShaderDebugInfo,
                                              DescriptorType::UniformBuffer, flags);
 
-    // int aabbIndex = layout.AddBinding(8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, flags);
-    int clusterDataIndex = layout.AddBinding(8, DescriptorType::StorageBuffer, flags);
-    int vertexDataIndex  = layout.AddBinding(9, DescriptorType::StorageBuffer, flags);
-    int indexDataIndex   = layout.AddBinding(10, DescriptorType::StorageBuffer, flags);
+    // int clusterDataIndex = layout.AddBinding(8, DescriptorType::StorageBuffer, flags);
+    // int vertexDataIndex  = layout.AddBinding(9, DescriptorType::StorageBuffer, flags);
+    // int indexDataIndex   = layout.AddBinding(10, DescriptorType::StorageBuffer, flags);
 
     int feedbackBufferIndex = layout.AddBinding(11, DescriptorType::StorageBuffer, flags);
     int countBufferIndex    = layout.AddBinding(12, DescriptorType::StorageBuffer, flags);
 
-    // TODO: I have no idea why I need to do this
-    // int counterIndex = layout.AddBinding(11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, flags,
-    // true);
-    int nvApiIndex = layout.AddBinding(NVAPI_SLOT, DescriptorType::StorageBuffer,
-                                       VK_SHADER_STAGE_ALL, true);
+    // TODO: what is this?
+    int counterIndex = layout.AddBinding(8, DescriptorType::StorageBuffer, flags);
+    int nvApiIndex   = layout.AddBinding(NVAPI_SLOT, DescriptorType::StorageBuffer,
+                                         VK_SHADER_STAGE_ALL, true);
 
     layout.AddImmutableSamplers();
 
@@ -966,7 +966,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     Vec3f cameraStart = params->pCamera;
 
-    GPUBuffer nvapiBuffer = {};
+    GPUBuffer counterBuffer =
+        device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(u32));
+    GPUBuffer nvapiBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 256);
 
     for (;;)
     {
@@ -1126,13 +1128,14 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             .Bind(pageTableBindingIndex, &virtualTextureManager.pageTable)
             .Bind(physicalPagesBindingIndex, &virtualTextureManager.gpuPhysicalPool)
             .Bind(feedbackBufferIndex, &feedbackBuffer[currentBuffer])
-            .Bind(countBufferIndex, &countBuffer[currentBuffer]);
+            .Bind(countBufferIndex, &countBuffer[currentBuffer])
+            .Bind(counterIndex, &counterBuffer)
+            .Bind(nvApiIndex, &nvapiBuffer);
 #ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
         .Bind(clusterDataIndex, &clusterData)
             .Bind(vertexDataIndex, &vertexBuffer)
             .Bind(indexDataIndex, &indexBuffer);
 #endif
-        // .Bind(nvApiIndex, &nvapiBuffer);
         // .Bind(aabbIndex, &aabbBuffer);
 
         // cmd->BindDescriptorSets(bindPoint, &descriptorSet, rts.layout);

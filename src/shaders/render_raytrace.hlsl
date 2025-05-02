@@ -23,19 +23,16 @@ StructuredBuffer<RTBindingData> rtBindingData : register(t3);
 StructuredBuffer<GPUMaterial> materials : register(t4);
 ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
 
-#ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
-StructuredBuffer<AABB> aabbs : register(t8);
-#else
+#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
 StructuredBuffer<ClusterData> clusterData : register(t8);
 StructuredBuffer<float3> vertices : register(t9);
 ByteAddressBuffer indices : register(t10);
 #endif
+
 RWStructuredBuffer<uint> feedbackBuffer : register(u11);
 RWStructuredBuffer<uint> numFeedback : register(u12);
 
 [[vk::push_constant]] RayPushConstant push;
-
-groupshared uint2 requests[PATH_TRACE_NUM_THREADS_X * PATH_TRACE_NUM_THREADS_Y];
 
 [numthreads(PATH_TRACE_NUM_THREADS_X, PATH_TRACE_NUM_THREADS_Y, 1)]
 void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 groupThreadID : SV_GroupThreadID)
@@ -72,6 +69,8 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
     rayCone.spreadAngle = atan(2.f * tan(scene.fov / 2.f) / scene.height);
 
     bool printDebug = all(swizzledThreadID == debugInfo.mousePos);
+
+    int2 feedbackRequest = -1;
 
     while (true)
     {
@@ -156,6 +155,9 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
             float3 n2 = gn;
             float2 bary = query.CommittedTriangleBarycentrics();
 #else
+        uint hint = query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT; 
+        NvReorderThread(hint, 1);
+
         if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
         {
             uint instanceID = query.CommittedInstanceID();
@@ -291,7 +293,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
 
             if (depth == 1)
             {
-                requests[flattenedGroupThreadID] = uint2(material.pageOffset + pageInformation.x, uint(lambda));
+                feedbackRequest = int2(material.pageOffset + pageInformation.x, int(lambda));
             }
 
             if (dir.z == 0) break;
@@ -299,6 +301,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
             dir = ss * dir.x + ts * dir.y + n * dir.z;
             dir = normalize(TransformV(query.CommittedObjectToWorld3x4(), dir));
             pos = OffsetRayOrigin(origin, gn, printDebug);
+
             if (0)
             {
                 float3 d = -query.WorldRayDirection();
@@ -364,27 +367,38 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
             radiance += throughput * imageLe;
             break;
         }
+
+#if 0
+        // Warp based russian roulette
+        // https://www.nvidia.com/en-us/on-demand/session/gdc25-gdc1002/
+        const float continuationProb = min(1.f, Luminance(throughput));
+        const uint activeLaneCount = WaveActiveCountBits(true);
+        const uint totalLaneCount = WaveGetLaneCount();
+        const float activeLaneRatio = (float)activeLaneCount / (float)totalLaneCount;
+        const float activeLaneRatioThreshold = .3f;
+        const float groupContinuationProb = continuationProb * saturate(activeLaneRatio / activeLaneRatioThreshold);
+
+        if (rng.Uniform() >= groupContinuationProb)
+            break;
+        throughput /= groupContinuationProb;
+#endif
     }
     image[swizzledThreadID] = float4(radiance, 1);
 
-#if 1
-    GroupMemoryBarrierWithGroupSync();
-    bool uniqueFeedback = true;
-    uint2 request = requests[flattenedGroupThreadID];
-    for (int i = 0; i < PATH_TRACE_NUM_THREADS_X * PATH_TRACE_NUM_THREADS_Y; i++)
-    {
-        if (all(requests[i] == request) && i < flattenedGroupThreadID)
-        {
-            uniqueFeedback = false;
-            break;
-        }
-    }
+    uint4 mask = WaveMatch(feedbackRequest);
+    uint mx = flattenedGroupThreadID > 31 ? ~0u : (1u << flattenedGroupThreadID) - 1u;
+    uint my = flattenedGroupThreadID > 63 ? ~0u : (flattenedGroupThreadID > 31 ? (1u << (flattenedGroupThreadID & 31u)) - 1u : 0u);
+    uint mz = flattenedGroupThreadID > 95 ? ~0u : (flattenedGroupThreadID > 63 ? (1u << (flattenedGroupThreadID & 31u)) - 1u : 0u);
+    uint mw = flattenedGroupThreadID > 95 ? (1u << (flattenedGroupThreadID & 31u)) - 1u : 0u;
+
+    uint numSame = (countbits(mask.x & mx) + countbits(mask.y & my) 
+                   + countbits(mask.z & mz) + countbits(mask.w & mw));
+    bool uniqueFeedback = all(feedbackRequest != -1) && numSame == 0;
 
     uint index;
     WaveInterlockedAddScalarTest(numFeedback[0], uniqueFeedback, 1, index);
     if (uniqueFeedback)
     {
-        feedbackBuffer[index] = (request.y << 28) | request.x;
+        feedbackBuffer[index] = (feedbackRequest.y << 28) | feedbackRequest.x;
     }
-#endif
 }

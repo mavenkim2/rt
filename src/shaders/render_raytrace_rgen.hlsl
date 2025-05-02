@@ -58,7 +58,6 @@ void main()
         desc.TMax = FLT_MAX;
 
         TraceRay(accel, RAY_FLAG_NONE, 0xff, 0, 1, 0, desc, payload);
-        //NvHitObject hit = NvTraceRayHitObject(accel, RAY_FLAG_NONE, 0xff, 0, 1, 0, desc, payload);
 
         bool terminate = payload.missed || depth++ >= maxDepth;
         uint hint = terminate ? 1 : 0;

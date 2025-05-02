@@ -2262,6 +2262,7 @@ VkPipeline Vulkan::CreateComputePipeline(Shader *shader, DescriptorSetLayout *la
     VkComputePipelineCreateInfo createInfo = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
     createInfo.stage                       = pipelineInfo;
     createInfo.layout                      = layout->pipelineLayout;
+    // createInfo.pNext                       = ? ;
 
     VkPipeline pipeline;
     vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &createInfo, 0, &pipeline);
