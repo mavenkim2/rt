@@ -608,6 +608,7 @@ struct CommandBuffer
                                               ScenePrimitives **childScenes);
     GPUAccelerationStructurePayload BuildBLAS(const GPUMesh *meshes, int count);
     GPUAccelerationStructurePayload BuildCustomBLAS(GPUBuffer *aabbsBuffer, u32 numAabbs);
+    void ClearBuffer(GPUBuffer *b);
 };
 
 typedef ChunkedLinkedList<CommandBuffer> CommandBufferList;

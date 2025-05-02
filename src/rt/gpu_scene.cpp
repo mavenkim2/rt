@@ -765,6 +765,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     int vertexDataIndex  = layout.AddBinding(9, DescriptorType::StorageBuffer, flags);
     int indexDataIndex   = layout.AddBinding(10, DescriptorType::StorageBuffer, flags);
 
+    int feedbackBufferIndex = layout.AddBinding(11, DescriptorType::StorageBuffer, flags);
+    int countBufferIndex    = layout.AddBinding(12, DescriptorType::StorageBuffer, flags);
+
     // TODO: I have no idea why I need to do this
     // int counterIndex = layout.AddBinding(11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, flags,
     // true);
@@ -943,6 +946,15 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         device->GetStagingBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene)),
         device->GetStagingBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene))};
 
+    GPUBuffer feedbackBuffer[2] = {
+        device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 131072 * sizeof(Vec2u)),
+        device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 131072 * sizeof(Vec2u)),
+    };
+    GPUBuffer countBuffer[2] = {
+        device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(u32)),
+        device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(u32)),
+    };
+
     bool mousePressed = false;
     OS_Key keys[4]    = {
         OS_Key_D,
@@ -1077,13 +1089,18 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             envMapBindlessIndex = device->BindlessIndex(&gpuEnvMap);
         }
 
+        u32 currentBuffer = device->GetCurrentBuffer();
+        // Clear count
+        {
+            cmd->ClearBuffer(&countBuffer[currentBuffer]);
+        }
+
         RayPushConstant pc;
         pc.envMap   = envMapBindlessIndex;
         pc.frameNum = (u32)device->frameCount;
         pc.width    = envMap->width;
         pc.height   = envMap->height;
 
-        u32 currentBuffer = device->GetCurrentBuffer();
         MemoryCopy(sceneTransferBuffers[currentBuffer].mappedPtr, &gpuScene, sizeof(GPUScene));
         cmd->SubmitTransfer(&sceneTransferBuffers[currentBuffer]);
         MemoryCopy(shaderDebugBuffers[currentBuffer].mappedPtr, &shaderDebug,
@@ -1107,13 +1124,13 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             .Bind(gpuMaterialBindingIndex, &materialBuffer)
             .Bind(shaderDebugIndex, &shaderDebugBuffers[currentBuffer].buffer)
             .Bind(pageTableBindingIndex, &virtualTextureManager.pageTable)
-            .Bind(physicalPagesBindingIndex, &virtualTextureManager.gpuPhysicalPool);
+            .Bind(physicalPagesBindingIndex, &virtualTextureManager.gpuPhysicalPool)
+            .Bind(feedbackBufferIndex, &feedbackBuffer[currentBuffer])
+            .Bind(countBufferIndex, &countBuffer[currentBuffer]);
 #ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
         .Bind(clusterDataIndex, &clusterData)
             .Bind(vertexDataIndex, &vertexBuffer)
             .Bind(indexDataIndex, &indexBuffer);
-#else
-        ;
 #endif
         // .Bind(nvApiIndex, &nvapiBuffer);
         // .Bind(aabbIndex, &aabbBuffer);

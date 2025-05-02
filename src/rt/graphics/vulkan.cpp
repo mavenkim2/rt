@@ -2944,6 +2944,11 @@ GPUAccelerationStructure CommandBuffer::CompactAS(QueryPool &pool,
     return result;
 }
 
+void CommandBuffer::ClearBuffer(GPUBuffer *b)
+{
+    vkCmdFillBuffer(buffer, b->buffer, 0, VK_WHOLE_SIZE, 0);
+}
+
 void Vulkan::BeginFrame()
 {
     CommandQueue &queue = queues[QueueType_Graphics];

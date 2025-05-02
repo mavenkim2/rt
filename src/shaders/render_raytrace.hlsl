@@ -14,6 +14,7 @@
 #include "../rt/shader_interop/hit_shaderinterop.h"
 #include "../rt/shader_interop/debug_shaderinterop.h"
 #include "../rt/nvapi.h"
+#include "wave_intrinsics.hlsli"
 
 RaytracingAccelerationStructure accel : register(t0);
 RWTexture2D<half4> image : register(u1);
@@ -29,8 +30,12 @@ StructuredBuffer<ClusterData> clusterData : register(t8);
 StructuredBuffer<float3> vertices : register(t9);
 ByteAddressBuffer indices : register(t10);
 #endif
+RWStructuredBuffer<uint> feedbackBuffer : register(u11);
+RWStructuredBuffer<uint> numFeedback : register(u12);
 
 [[vk::push_constant]] RayPushConstant push;
+
+groupshared uint2 requests[PATH_TRACE_NUM_THREADS_X * PATH_TRACE_NUM_THREADS_Y];
 
 [numthreads(PATH_TRACE_NUM_THREADS_X, PATH_TRACE_NUM_THREADS_Y, 1)]
 void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 groupThreadID : SV_GroupThreadID)
@@ -39,8 +44,8 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
         SwizzleThreadGroup(uint2(scene.dispatchDimX, scene.dispatchDimY), 
                            uint2(PATH_TRACE_NUM_THREADS_X, PATH_TRACE_NUM_THREADS_Y), 
                            PATH_TRACE_TILE_WIDTH, groupThreadID.xy, groupID.xy);
+    uint flattenedGroupThreadID = groupThreadID.y * PATH_TRACE_NUM_THREADS_Y + groupThreadID.x;
 
-    // TODO: thread swizzling to get greater coherence, and SOA?
     RNG rng = RNG::Init(RNG::PCG3d(swizzledThreadID.xyx).zy, push.frameNum);
 
     // Generate Ray
@@ -284,6 +289,11 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
                 break;
             }
 
+            if (depth == 1)
+            {
+                requests[flattenedGroupThreadID] = uint2(material.pageOffset + pageInformation.x, uint(lambda));
+            }
+
             if (dir.z == 0) break;
             origin = TransformP(query.CommittedObjectToWorld3x4(), origin);
             dir = ss * dir.x + ts * dir.y + n * dir.z;
@@ -356,4 +366,25 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
         }
     }
     image[swizzledThreadID] = float4(radiance, 1);
+
+#if 1
+    GroupMemoryBarrierWithGroupSync();
+    bool uniqueFeedback = true;
+    uint2 request = requests[flattenedGroupThreadID];
+    for (int i = 0; i < PATH_TRACE_NUM_THREADS_X * PATH_TRACE_NUM_THREADS_Y; i++)
+    {
+        if (all(requests[i] == request) && i < flattenedGroupThreadID)
+        {
+            uniqueFeedback = false;
+            break;
+        }
+    }
+
+    uint index;
+    WaveInterlockedAddScalarTest(numFeedback[0], uniqueFeedback, 1, index);
+    if (uniqueFeedback)
+    {
+        feedbackBuffer[index] = (request.y << 28) | request.x;
+    }
+#endif
 }
