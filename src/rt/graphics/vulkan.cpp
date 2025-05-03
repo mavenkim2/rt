@@ -378,6 +378,9 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
                                           &reorderPropertiesNV, &reorderFeaturesNV);
             Assert(result);
 
+            result = checkAndAddExtension(VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME);
+            Assert(result);
+
             // TODO: update my drivers
             // clasPropertiesNV = {
             //     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_PROPERTIES_NV};

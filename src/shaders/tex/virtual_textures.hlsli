@@ -69,7 +69,7 @@ namespace VirtualTexture
         uint borderSize = GetBorderSize(log2Width, log2Height);
         offset += uv * float2(1u << log2Width, 1u << log2Height) + borderSize;
 
-        if (debug)
+        if (0)
         {
             printf("miplevel: %u, faceID: %u, offset: %u %u, base x y: %u %u, log: %u %u, uv: %f %f\n", 
                     mipLevel, faceID, offset.x, offset.y, x, y, log2Width, log2Height, uv.x, uv.y);

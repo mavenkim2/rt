@@ -171,6 +171,8 @@ struct FaceMetadata
     u32 totalSize_rotate;
     int log2Width;
     int log2Height;
+
+    Vec2u CalculateOffsetAndSize(u32 mipLevel, u32 blockShift, u32 bytesPerBlock);
 };
 
 struct TileMetadata
@@ -266,6 +268,7 @@ struct BlockRange
     u32 GetStartLevel() const;
     u32 GetTopLevelWidth() const;
     bool CheckTopLevelMipRequested() const;
+    void SetRangeAsRequested();
     template <typename Array>
     static u32 FindBestFree(const Array &ranges, u32 freeIndex, u32 num, u32 leftover = ~0u);
     template <typename Array>
@@ -335,6 +338,12 @@ struct VirtualTextureManager
     GPUBuffer pageTable;
     PushConstant push;
 
+    Mutex mutex;
+    GPUBuffer feedbackBuffer;
+    u32 count;
+    GPUBuffer uploadBuffer;
+    u32 uploadOffset;
+
     VirtualTextureManager(Arena *arena, u32 numVirtualFaces, u32 physicalTextureWidth,
                           u32 physicalTextureHeight, u32 numPools, VkFormat format);
     u32 AllocateVirtualPages(u32 numPages);
@@ -348,6 +357,7 @@ struct VirtualTextureManager
                                                                u32 layer, int log2Width,
                                                                int log2Height, int startLevel,
                                                                bool rotate);
+    void Callback();
 };
 
 void InitializePtex();

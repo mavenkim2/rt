@@ -15,7 +15,7 @@ float3 SampleDielectric(float3 wo, float eta, float2 rand, inout float3 throughp
     float T = 1 - R;
     float pr = R, pt = T;
 
-    if (debug)
+    if (0)
     {
         printf("R, T: %f %f\n", R, T);
     }

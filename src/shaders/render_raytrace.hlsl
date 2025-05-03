@@ -155,9 +155,6 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
             float3 n2 = gn;
             float2 bary = query.CommittedTriangleBarycentrics();
 #else
-        uint hint = query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT; 
-        NvReorderThread(hint, 1);
-
         if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
         {
             uint instanceID = query.CommittedInstanceID();
@@ -385,20 +382,21 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
     }
     image[swizzledThreadID] = float4(radiance, 1);
 
-    uint4 mask = WaveMatch(feedbackRequest);
-    uint mx = flattenedGroupThreadID > 31 ? ~0u : (1u << flattenedGroupThreadID) - 1u;
-    uint my = flattenedGroupThreadID > 63 ? ~0u : (flattenedGroupThreadID > 31 ? (1u << (flattenedGroupThreadID & 31u)) - 1u : 0u);
-    uint mz = flattenedGroupThreadID > 95 ? ~0u : (flattenedGroupThreadID > 63 ? (1u << (flattenedGroupThreadID & 31u)) - 1u : 0u);
-    uint mw = flattenedGroupThreadID > 95 ? (1u << (flattenedGroupThreadID & 31u)) - 1u : 0u;
-
-    uint numSame = (countbits(mask.x & mx) + countbits(mask.y & my) 
-                   + countbits(mask.z & mz) + countbits(mask.w & mw));
-    bool uniqueFeedback = all(feedbackRequest != -1) && numSame == 0;
+    uint4 mask = WaveMatch(feedbackRequest.x);
+    int4 highLanes = (int4)(firstbithigh(mask) | uint4(0, 0x20, 0x40, 0x60));
+    uint highLane = (uint)max(max(highLanes.x, highLanes.y), max(highLanes.z, highLanes.w));
+    bool isHighLane = all(feedbackRequest != -1) && WaveGetLaneIndex() == highLane;
 
     uint index;
-    WaveInterlockedAddScalarTest(numFeedback[0], uniqueFeedback, 1, index);
-    if (uniqueFeedback)
+    WaveInterlockedAddScalarTest(numFeedback[0], isHighLane, 1, index);
+    if (isHighLane)
     {
-        feedbackBuffer[index] = (feedbackRequest.y << 28) | feedbackRequest.x;
+        uint mipBit = 1u << feedbackRequest.y;
+        uint mipLevel = firstbitlow(mipBit | WaveMultiPrefixBitOr(mipBit, mask));
+        feedbackBuffer[index] = (mipLevel << 28) | feedbackRequest.x;
+    }
+    if (0) // WaveActiveAnyTrue(printDebug))
+    {
+        printf("%u %u %u %u unique %u\n", feedbackRequest.x, feedbackRequest.y, flattenedGroupThreadID, highLane, WaveActiveCountBits(isHighLane));
     }
 }

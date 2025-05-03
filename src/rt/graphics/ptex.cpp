@@ -1036,6 +1036,10 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 numVirtualFaces,
         gpuPhysicalPool = device->CreateImage(poolDesc);
     }
 
+    // callback
+    Scheduler::Counter counter = {};
+    scheduler.Schedule(&counter, [&](int jobID) { Callback(); });
+
     freeRange = 0;
 }
 
@@ -1101,9 +1105,10 @@ u32 BlockRange::GetTopLevelWidth() const { return 0; }
 bool BlockRange::CheckTopLevelMipRequested() const
 {
     bool result = (startLevel_requested & TopLevelMipRequestedBit) != 0;
-    // startLevel_requested &= ~TopLevelMipRequestedBit;
     return result;
 }
+
+void BlockRange::SetRangeAsRequested() { startLevel_requested |= TopLevelMipRequestedBit; }
 
 PageTableUpdateRequest
 VirtualTextureManager::CreatePageTableUpdateRequest(int faceIndex, u32 x, u32 y, u32 layer,
@@ -1369,24 +1374,10 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, u32 allocI
 
         const FaceMetadata &faceMetadata = metadata[faceIndex];
 
-        u32 offset     = faceMetadata.bufferOffset;
-        u32 size       = faceMetadata.totalSize_rotate & 0x7fffffff;
-        int log2Width  = faceMetadata.log2Width;
-        int log2Height = faceMetadata.log2Height;
-
-        for (int levelIndex = 0; levelIndex < request.startLevel; levelIndex++)
-        {
-            Vec2i extent = CalculateFaceSize(log2Width, log2Height);
-            extent.x     = AlignPow2(extent.x, 4);
-            extent.y     = AlignPow2(extent.y, 4);
-            u32 texSize  = Max(extent.y >> blockShift, 1) * Max(extent.x >> blockShift, 1) *
-                          GetFormatSize(format);
-            Assert(size > texSize);
-            offset += texSize;
-            size -= texSize;
-            log2Width  = Max(log2Width - 1, 0);
-            log2Height = Max(log2Height - 1, 0);
-        }
+        Vec2u offsetAndSize = faceMetadata.CalculateOffsetAndSize(
+            request.startLevel, blockShift, GetFormatSize(format));
+        u32 offset = offsetAndSize.x;
+        u32 size   = offsetAndSize.y;
 
         Assert(dstOffset + size <= bufferOffset);
         MemoryCopy(mappedPtr + dstOffset, contents + offset, size);
@@ -1512,5 +1503,105 @@ void VirtualTextureManager::Evict(CommandBuffer *cmd, TileRequest *requests, u32
     cmd->Dispatch((mapRequests.Length() + 63) >> 6, 1, 1);
 }
 #endif
+
+void VirtualTextureManager::Callback()
+{
+    const u32 blockShift    = GetBlockShift(format);
+    const u32 bytesPerBlock = GetFormatSize(format);
+    for (;;)
+    {
+        ScratchArena scratch;
+        BeginMutex(&mutex);
+        // Get feedback requests
+        u32 numFeedbackRequests = count;
+        u32 *feedbackRequests = PushArrayNoZero(scratch.temp.arena, u32, numFeedbackRequests);
+        MemoryCopy(feedbackRequests, feedbackBuffer.mappedPtr,
+                   sizeof(u32) * numFeedbackRequests);
+        count = 0;
+        EndMutex(&mutex);
+
+        RequestHandle *keys =
+            PushArrayNoZero(scratch.temp.arena, RequestHandle, numFeedbackRequests);
+        u32 numKeys = 0;
+
+        // TODO: should data already be compacted or not?
+
+        // Sort requests based on diff between requested mip level and resident mip level
+        for (int requestIndex = 0; requestIndex < numFeedbackRequests; requestIndex++)
+        {
+            u32 virtualFaceIndex = feedbackRequests[requestIndex] & 0x0fffffff;
+            u32 mipLevel         = feedbackRequests[requestIndex] >> 28;
+
+            // The larger the difference between
+            int rangeIndex    = virtualFaceIndexToRangeIndex[virtualFaceIndex];
+            BlockRange &range = ranges[rangeIndex];
+            int startLevel    = range.GetStartLevel();
+            range.SetRangeAsRequested();
+
+            int diff = startLevel - mipLevel;
+
+            if (diff > 0)
+            {
+                // ?
+                keys[numKeys].sortKey      = (u8)diff | virtualFaceIndex ? ;
+                keys[numKeys].requestIndex = requestIndex;
+                numKeys++;
+            }
+        }
+
+        SortHandles<RequestHandle, false>(keys, numKeys);
+
+        // Load face data from disk/cache
+        for (int keyIndex = 0; keyIndex < numKeys; keyIndex++)
+        {
+            int feedbackRequestIndex = keys[keyIndex].feedbackRequestIndex;
+            u32 virtualFaceIndex     = feedbackRequests[feedbackRequestIndex] & 0x0fffffff;
+            u32 mipLevel             = feedbackRequests[feedbackRequestIndex] >> 28;
+
+            int materialIndex = ? ;
+            string filename   = ? ;
+
+            FaceMetadata metadata;
+
+            Vec2u offsetAndSize =
+                metadata.CalculateOffsetAndSize(mipLevel, blockShift, bytesPerBlock);
+
+            if (offsetAndSize.y + uploadOffset > uploadBuffer.size)
+            {
+                // TODO: add back unused keys or keep going
+                break;
+            }
+
+            // TODO: cache
+            OS_Handle handle = OS_CreateFile(filename);
+            bool result      = OS_ReadFile(handle, (u8 *)uploadBuffer.mappedPtr + uploadOffset,
+                                           offsetAndSize.y, offsetAndSize.x);
+            Assert(result);
+
+            OS_CloseFile(handle);
+            uploadOffset += offsetAndSize.y;
+        }
+    }
+}
+
+Vec2u FaceMetadata::CalculateOffsetAndSize(u32 mipLevel, u32 blockShift, u32 bytesPerBlock)
+{
+    int currentLog2Width  = Max(log2Width - (int)mipLevel, 0);
+    int currentLog2Height = Max(log2Height - (int)mipLevel, 0);
+
+    Vec2u offsetAndSize(bufferOffset, totalSize_rotate & 0x7fffffff);
+    for (int levelIndex = 0; levelIndex < mipLevel; levelIndex++)
+    {
+        Vec2i extent = CalculateFaceSize(currentLog2Width, currentLog2Height);
+        extent.x     = AlignPow2(extent.x, 4);
+        extent.y     = AlignPow2(extent.y, 4);
+        u32 texSize =
+            Max(extent.y >> blockShift, 1) * Max(extent.x >> blockShift, 1) * bytesPerBlock;
+        offsetAndSize.x += texSize;
+        offsetAndSize.y -= texSize;
+        currentLog2Width  = Max(currentLog2Width - 1, 0);
+        currentLog2Height = Max(currentLog2Height - 1, 0);
+    }
+}
 
 } // namespace rt
