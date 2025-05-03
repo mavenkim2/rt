@@ -306,6 +306,27 @@ struct PhysicalPageAllocation
     u32 pageIndex;
 };
 
+template <typename T>
+struct RingBuffer
+{
+    Mutex mutex;
+    StaticArray<T> entries;
+    u64 readOffset;
+    u64 writeOffset;
+
+    RingBuffer(Arena *arena, u32 max);
+    bool Write(T *vals, u32 num);
+    T *Read(Arena *arena, u32 &num);
+    T *Read(Arena *arena, u32 num, u32 &numReturned);
+};
+
+struct UploadCommand
+{
+    GPUBuffer buffer;
+    u64 readOffset;
+    u32 numCopies;
+};
+
 struct VirtualTextureManager
 {
     static const u32 InvalidPool  = ~0u;
@@ -338,11 +359,21 @@ struct VirtualTextureManager
     GPUBuffer pageTable;
     PushConstant push;
 
-    Mutex mutex;
+    // Streaming
+    Mutex uploadMutex;
+    StaticArray<UploadCommand> uploadCommands;
+    RingBuffer<BufferImageCopy> uploadCopyCommandsRingBuffer;
+
+    Mutex evictMutex;
+    RingBuffer<PageTableUpdateRequest> evictRequestRingBuffer;
+
+    Mutex mapMutex;
+    RingBuffer<PageTableUpdateRequest> mapRequestRingBuffer;
+
     GPUBuffer feedbackBuffer;
     u32 count;
-    GPUBuffer uploadBuffer;
-    u32 uploadOffset;
+
+    StaticArray<StaticArray<FaceMetadata>> faceMetadata;
 
     VirtualTextureManager(Arena *arena, u32 numVirtualFaces, u32 physicalTextureWidth,
                           u32 physicalTextureHeight, u32 numPools, VkFormat format);

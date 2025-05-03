@@ -972,6 +972,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     for (;;)
     {
+        ScratchArena frameScratch;
+
         MSG message;
         while (PeekMessageW(&message, 0, 0, 0, PM_REMOVE))
         {
@@ -1095,6 +1097,58 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         // Clear count
         {
             cmd->ClearBuffer(&countBuffer[currentBuffer]);
+        }
+
+        // Virtual texture system
+        CommandBuffer *evictPageTableCmd = device->BeginCommandBuffer(QueueType_Compute);
+        CommandBuffer *virtualTextureCmd = device->BeginCommandBuffer(QueueType_Copy);
+        {
+            // Evict page table entries
+            u32 numToEvict = 0;
+            PageTableUpdateRequest *evictRequests =
+                virtualTextureManager.evictRequestRingBuffer.Read(frameScratch.temp.arena,
+                                                                  numToEvict);
+            if (numToEvict)
+            {
+            }
+
+            // Update physical texture with new entries
+            BeginMutex(&virtualTextureManager.uploadMutex);
+            UploadCommand *uploadCommand =
+                virtualTextureManager.uploadBufferRingBuffer.Read(frameScratch.temp.arena, 1);
+            if (uploadCommand)
+            {
+                Assert(virtualTextureManager.uploadCopyCommandsRingBuffer.readOffset ==
+                       uploadCommand->readOffset);
+                BufferImageCopy *copies =
+                    virtualTextureManager.uploadCopyCommandsRingBuffer.Read(
+                        frameScratch.temp.arena, uploadCommand->numCopies);
+                EndMutex(&virtualTextureManager.uploadMutex);
+
+                // Transition physical texture to allow copies
+                virtualTextureCmd->Barrier(&virtualTextureManager.gpuPhysicalPool,
+                                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                           VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                           VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                virtualTextureCmd->FlushBarriers();
+
+                virtualTextureCmd->CopyImage(uploadCommand->buffer,
+                                             &virtualTextureManager.gpuPhysicalPool, copies,
+                                             uploadCommand->numCopies);
+
+                // Transition physical texture to allow reads
+                virtualTextureCmd->Barrier(&virtualTextureManager.gpuPhysicalPool,
+                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                           VK_ACCESS_2_SHADER_READ_BIT);
+                virtualTextureCmd->FlushBarriers();
+            }
+            else
+            {
+                EndMutex(&virtualTextureManager.uploadMutex);
+            }
+
+            // Update page table with newly mapped entries
         }
 
         RayPushConstant pc;
