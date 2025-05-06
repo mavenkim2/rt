@@ -789,7 +789,7 @@ struct Vulkan
            GPUDevicePreference preference = GPUDevicePreference::Discrete);
     Swapchain CreateSwapchain(OS_Handle window, VkFormat format, u32 width, u32 height);
     ImageLimits GetImageLimits();
-    Semaphore CreateGraphicsSemaphore();
+    Semaphore CreateSemaphore();
     void AllocateCommandBuffers(ThreadPool &pool, QueueType type);
     void CheckInitializedThreadPool(int threadIndex);
     CommandBuffer *BeginCommandBuffer(QueueType queue);

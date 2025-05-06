@@ -27,7 +27,7 @@ SceneShapeParse StartSceneShapeParse()
 {
     SceneShapeParse result;
     result.buffer                = device->BeginCommandBuffer(QueueType_Copy);
-    result.semaphore             = device->CreateGraphicsSemaphore();
+    result.semaphore             = device->CreateSemaphore();
     result.semaphore.signalValue = 1;
     return result;
 }
@@ -354,7 +354,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                                 2, VK_FORMAT_BC1_RGB_UNORM_BLOCK);
 
     CommandBuffer *tileCmd          = device->BeginCommandBuffer(QueueType_Compute);
-    Semaphore tileSubmitSemaphore   = device->CreateGraphicsSemaphore();
+    Semaphore tileSubmitSemaphore   = device->CreateSemaphore();
     tileSubmitSemaphore.signalValue = 1;
     // tileCmd->UAVBarrier(&virtualTextureManager.pageTable);
     tileCmd->TransferWriteBarrier(&virtualTextureManager.gpuPhysicalPool);
@@ -406,7 +406,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     for (int i = 0; i < blasScenes.Length(); i++)
     {
         ScenePrimitives *scene       = blasScenes[i];
-        scene->semaphore             = device->CreateGraphicsSemaphore();
+        scene->semaphore             = device->CreateSemaphore();
         scene->semaphore.signalValue = 1;
 
         BLASSceneGPUInfo info;
@@ -669,7 +669,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         computeCmd->FlushBarriers();
         tlas = computeCmd->BuildTLAS(&instanceData, 1);
     }
-    Semaphore tlasSemaphore   = device->CreateGraphicsSemaphore();
+    Semaphore tlasSemaphore   = device->CreateSemaphore();
     tlasSemaphore.signalValue = 1;
     computeCmd->Signal(tlasSemaphore);
     device->SubmitCommandBuffer(computeCmd);
@@ -684,7 +684,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     pushConstant.offset = 0;
     pushConstant.size   = sizeof(RayPushConstant);
 
-    Semaphore submitSemaphore = device->CreateGraphicsSemaphore();
+    Semaphore submitSemaphore = device->CreateSemaphore();
     // Transfer data to GPU
     GPUScene gpuScene;
     gpuScene.cameraFromRaster = params->cameraFromRaster;
@@ -781,7 +781,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     VkPipeline pipeline = device->CreateComputePipeline(&shader, &layout, &pushConstant);
 
 #ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
-    Semaphore tlasSemaphore = device->CreateGraphicsSemaphore();
+    Semaphore tlasSemaphore = device->CreateSemaphore();
 
     GPUAccelerationStructure tlas = {};
     // TODO: new command buffers have to wait on ones from the previous depth
@@ -800,7 +800,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         device->BeginEvent(cmd, "BLAS Build");
         int bvhCount = 0;
 
-        Semaphore semaphore   = device->CreateGraphicsSemaphore();
+        Semaphore semaphore   = device->CreateSemaphore();
         semaphore.signalValue = 1;
         cmd->Wait(scene->semaphore);
         cmd->Signal(semaphore);
@@ -1100,77 +1100,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         }
 
         // Virtual texture system
-        CommandBuffer *evictPageTableCmd = device->BeginCommandBuffer(QueueType_Compute);
-        CommandBuffer *virtualTextureCmd = device->BeginCommandBuffer(QueueType_Copy);
-        {
-            // Evict page table entries
-            u32 numRequests = 0;
-            PageTableUpdateRequest *updateRequests =
-                virtualTextureManager.updateRequestRingBuffer.SynchronizedRead(
-                    virtualTextureManager.updateRequestMutex, frameScratch.temp.arena,
-                    numRequests);
-
-            if (numRequests)
-            {
-            }
-
-            u64 readIndex =
-                virtualTextureManager.readSubmission.load(std::memory_order_relaxed);
-
-            for (;;)
-            {
-                u64 writeIndex =
-                    virtualTextureManager.writeSubmission.load(std::memory_order_acquire);
-                if (readIndex < writeIndex)
-                {
-                    break;
-                }
-            }
-
-            // Update physical texture with new entries
-            u32 readDoubleBufferIndex = readIndex & 1;
-
-            StaticArray<BufferImageCopy> &writtenCopyCommands =
-                virtualTextureManager.uploadCopyCommands[readDoubleBufferIndex];
-            GPUBuffer *copiesBuffer =
-                virtualTextureManager.uploadBuffers[readDoubleBufferIndex];
-            u32 numCopies = writtenCopyCommands.size();
-
-            if (numCopies)
-            {
-                virtualTextureManager.uploadSemaphores[readDoubleBufferIndex].signalValue++;
-                virtualTextureCmd->Signal(
-                    virtualTextureManager.uploadSemaphores[readDoubleBufferIndex]);
-                BufferImageCopy *copies =
-                    PushArrayNoZero(frameScratch.temp.arena, BufferImageCopy, numCopies);
-                MemoryCopy(copies, writtenCopyCommands.data,
-                           sizeof(BufferImageCopy) * numCopies);
-
-                // Transition physical texture to allow copies
-                virtualTextureCmd->Barrier(&virtualTextureManager.gpuPhysicalPool,
-                                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                           VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                                           VK_ACCESS_2_TRANSFER_WRITE_BIT);
-                virtualTextureCmd->FlushBarriers();
-
-                virtualTextureCmd->CopyImage(
-                    copiesBuffer, &virtualTextureManager.gpuPhysicalPool, copies, numCopies);
-
-                // Transition physical texture to allow reads
-                virtualTextureCmd->Barrier(&virtualTextureManager.gpuPhysicalPool,
-                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                           VK_ACCESS_2_SHADER_READ_BIT);
-                virtualTextureCmd->FlushBarriers();
-            }
-
-            device->SubmitCommandBuffer(virtualTextureCmd);
-            // Make sure all memory writes are visible
-            virtualTextureManage.readSubmission.store(readIndex + 1,
-                                                      std::memory_order_release);
-
-            // Update page table with newly mapped entries
-        }
+        CommandBuffer *virtualTextureCopyCmd = device->BeginCommandBuffer(QueueType_Copy);
+        virtualTextureManager.Update(cmd, virtualTextureCopyCmd);
+        device->SubmitCommandBuffer(virtualTextureCopyCmd);
 
         RayPushConstant pc;
         pc.envMap   = envMapBindlessIndex;

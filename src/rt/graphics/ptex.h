@@ -314,11 +314,20 @@ struct RingBuffer
     u64 readOffset;
     u64 writeOffset;
 
+    u32 max;
+
     RingBuffer(Arena *arena, u32 max);
     bool Write(T *vals, u32 num);
     void SynchronizedWrite(Mutex *mutex, T *vals, u32 num);
     T *Read(Arena *arena, u32 &num);
     T *SynchronizedRead(Mutex *mutex, Arena *arena, u32 &num);
+};
+
+struct ShelfRequest
+{
+    int shelfIndex;
+    int blockRangeIndex;
+    int layerIndex;
 };
 
 struct VirtualTextureManager
@@ -354,13 +363,20 @@ struct VirtualTextureManager
     PushConstant push;
 
     // Streaming
-    const u32 numPendingSubmissions = 2;
-    FixedArray<StaticArray<GPUBuffer, numPendingSubmissions>> uploadBuffers;
-    FixedArray<StaticArray<BufferImageCopy, numPendingSubmissions>> uploadCopyCommands;
-    FixedArray<Semaphore, numPendingSubmissions> uploadSemaphores;
+    static const u32 numPendingSubmissions = 2;
+    static const u32 maxUploadSize         = megabytes(512);
+    static const u32 maxCopies             = 1u << 20u;
 
-    std::atomic<u64> readSubmission;
+    // Double buffered, update once per virtual texture thread tick
+    FixedArray<StaticArray<u8>, numPendingSubmissions> uploadBuffers;
+    FixedArray<StaticArray<BufferImageCopy>, numPendingSubmissions> uploadCopyCommands;
+    FixedArray<Semaphore, numPendingSubmissions> uploadSemaphores;
     std::atomic<u64> writeSubmission;
+
+    // Double buffered, updated once per frame
+    FixedArray<GPUBuffer, numPendingSubmissions> uploadDeviceBuffers;
+    FixedArray<TransferBuffer, numPendingSubmissions> pageTableRequestBuffers;
+    std::atomic<u64> readSubmission;
 
     Mutex updateRequestMutex;
     RingBuffer<PageTableUpdateRequest> updateRequestRingBuffer;
@@ -375,6 +391,11 @@ struct VirtualTextureManager
     void AllocatePhysicalPages(CommandBuffer *cmd, u32 allocIndex, FaceMetadata *metadata,
                                u32 numFaces, u8 *contents, TileRequest *requests,
                                u32 numRequests, RequestHandle *handles);
+    ShelfRequest AllocateShelf(Vec2i allocationSize, int currentLog2Height);
+    u32 Evict(StaticArray<PageTableUpdateRequest> &evictRequests,
+              StaticArray<PageTableUpdateRequest> &mapRequests, u32 *feedbackRequests,
+              u32 numRequests, u8 *uploadBuffer, u32 uploadOffset);
+    void Update(CommandBuffer *computeCmd, CommandBuffer *transferCmd);
 
     static PageTableUpdateRequest CreatePageTableUpdateRequest(int faceIndex, u32 x, u32 y,
                                                                u32 layer, int log2Width,

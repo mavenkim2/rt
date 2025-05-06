@@ -531,7 +531,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         queues[i].submissionID = 0;
         for (int frame = 0; frame < numActiveFrames; frame++)
         {
-            Semaphore s                      = CreateGraphicsSemaphore();
+            Semaphore s                      = CreateSemaphore();
             queues[i].submitSemaphore[frame] = s.semaphore;
         }
     }
@@ -1095,7 +1095,7 @@ ImageLimits Vulkan::GetImageLimits()
     return limits;
 }
 
-Semaphore Vulkan::CreateGraphicsSemaphore()
+Semaphore Vulkan::CreateSemaphore()
 {
     VkSemaphoreTypeCreateInfo timelineInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
     timelineInfo.semaphoreType             = VK_SEMAPHORE_TYPE_TIMELINE;
@@ -1853,7 +1853,7 @@ TransferBuffer Vulkan::GetStagingImage(ImageDesc desc)
 
 void CommandBuffer::WaitOn(CommandBuffer *other)
 {
-    Semaphore s   = device->CreateGraphicsSemaphore();
+    Semaphore s   = device->CreateSemaphore();
     s.signalValue = 1;
     other->Signal(s);
     Wait(s);
