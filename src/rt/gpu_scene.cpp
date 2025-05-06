@@ -1104,26 +1104,47 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         CommandBuffer *virtualTextureCmd = device->BeginCommandBuffer(QueueType_Copy);
         {
             // Evict page table entries
-            u32 numToEvict = 0;
-            PageTableUpdateRequest *evictRequests =
-                virtualTextureManager.evictRequestRingBuffer.Read(frameScratch.temp.arena,
-                                                                  numToEvict);
-            if (numToEvict)
+            u32 numRequests = 0;
+            PageTableUpdateRequest *updateRequests =
+                virtualTextureManager.updateRequestRingBuffer.SynchronizedRead(
+                    virtualTextureManager.updateRequestMutex, frameScratch.temp.arena,
+                    numRequests);
+
+            if (numRequests)
             {
             }
 
-            // Update physical texture with new entries
-            BeginMutex(&virtualTextureManager.uploadMutex);
-            UploadCommand *uploadCommand =
-                virtualTextureManager.uploadBufferRingBuffer.Read(frameScratch.temp.arena, 1);
-            if (uploadCommand)
+            u64 readIndex =
+                virtualTextureManager.readSubmission.load(std::memory_order_relaxed);
+
+            for (;;)
             {
-                Assert(virtualTextureManager.uploadCopyCommandsRingBuffer.readOffset ==
-                       uploadCommand->readOffset);
+                u64 writeIndex =
+                    virtualTextureManager.writeSubmission.load(std::memory_order_acquire);
+                if (readIndex < writeIndex)
+                {
+                    break;
+                }
+            }
+
+            // Update physical texture with new entries
+            u32 readDoubleBufferIndex = readIndex & 1;
+
+            StaticArray<BufferImageCopy> &writtenCopyCommands =
+                virtualTextureManager.uploadCopyCommands[readDoubleBufferIndex];
+            GPUBuffer *copiesBuffer =
+                virtualTextureManager.uploadBuffers[readDoubleBufferIndex];
+            u32 numCopies = writtenCopyCommands.size();
+
+            if (numCopies)
+            {
+                virtualTextureManager.uploadSemaphores[readDoubleBufferIndex].signalValue++;
+                virtualTextureCmd->Signal(
+                    virtualTextureManager.uploadSemaphores[readDoubleBufferIndex]);
                 BufferImageCopy *copies =
-                    virtualTextureManager.uploadCopyCommandsRingBuffer.Read(
-                        frameScratch.temp.arena, uploadCommand->numCopies);
-                EndMutex(&virtualTextureManager.uploadMutex);
+                    PushArrayNoZero(frameScratch.temp.arena, BufferImageCopy, numCopies);
+                MemoryCopy(copies, writtenCopyCommands.data,
+                           sizeof(BufferImageCopy) * numCopies);
 
                 // Transition physical texture to allow copies
                 virtualTextureCmd->Barrier(&virtualTextureManager.gpuPhysicalPool,
@@ -1132,9 +1153,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                            VK_ACCESS_2_TRANSFER_WRITE_BIT);
                 virtualTextureCmd->FlushBarriers();
 
-                virtualTextureCmd->CopyImage(uploadCommand->buffer,
-                                             &virtualTextureManager.gpuPhysicalPool, copies,
-                                             uploadCommand->numCopies);
+                virtualTextureCmd->CopyImage(
+                    copiesBuffer, &virtualTextureManager.gpuPhysicalPool, copies, numCopies);
 
                 // Transition physical texture to allow reads
                 virtualTextureCmd->Barrier(&virtualTextureManager.gpuPhysicalPool,
@@ -1143,10 +1163,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                            VK_ACCESS_2_SHADER_READ_BIT);
                 virtualTextureCmd->FlushBarriers();
             }
-            else
-            {
-                EndMutex(&virtualTextureManager.uploadMutex);
-            }
+
+            device->SubmitCommandBuffer(virtualTextureCmd);
+            // Make sure all memory writes are visible
+            virtualTextureManage.readSubmission.store(readIndex + 1,
+                                                      std::memory_order_release);
 
             // Update page table with newly mapped entries
         }

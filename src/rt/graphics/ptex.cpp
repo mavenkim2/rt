@@ -10,6 +10,7 @@
 #include <Ptexture.h>
 #include <PtexReader.h>
 #include <cstring>
+#include <thread>
 
 namespace Utils
 {
@@ -1544,6 +1545,26 @@ bool RingBuffer<T>::Write(T *vals, u32 num)
 }
 
 template <typename T>
+void RingBuffer<T>::SynchronizedWrite(Mutex *mutex, T *vals, u32 num)
+{
+    for (;;)
+    {
+        BeginMutex(mutex);
+        bool result = Write(vals, num);
+
+        if (result)
+        {
+            EndMutex(mutex);
+            break;
+        }
+
+        EndMutex(mutex);
+
+        std::this_thread::yield();
+    }
+}
+
+template <typename T>
 T *RingBuffer<T>::Read(Arena *arena, u32 &num)
 {
     // BeginMutex(&mutex);
@@ -1569,27 +1590,12 @@ T *RingBuffer<T>::Read(Arena *arena, u32 &num)
 }
 
 template <typename T>
-T *RingBuffer<T>::Read(Arena *arena, u32 num, u32 &count)
+T *RingBuffer<T>::SynchronizedRead(Mutex *mutex, Arena *arena, u32 &num)
 {
-    // BeginMutex(&mutex);
-    Assert(readOffset <= writeOffset);
-    u32 numToRead = writeOffset - readOffset;
-    Assert(numToRead >= num);
-    u32 capacity = entries.capacity;
-    if (numToRead)
-    {
-        T *vals       = (T *)PushArrayNoZero(arena, u8, sizeof(T) * numToRead);
-        u32 readIndex = readOffset & (capacity - 1);
-        u32 numToEnd  = capacity - readIndex;
-        MemoryCopy(vals, entries.data + readIndex, sizeof(T) * Min(numToRead, numToEnd));
-        if (numToRead > numToEnd)
-        {
-            MemoryCopy(vals + numToEnd, entries.data, sizeof(T) * numToRead - numToEnd);
-        }
-        readOffset = writeOffset;
-    }
-    num = numToRead;
-    // EndMutex(&mutex);
+    BeginMutex(mutex);
+    T *result = Read(arena, num);
+    EndMutex(mutex);
+    return result;
 }
 
 void VirtualTextureManager::Callback()
@@ -1604,9 +1610,24 @@ void VirtualTextureManager::Callback()
     const u32 bytesPerBlock = GetFormatSize(format);
 
     const u32 maxUploadSize = megabytes(512);
-    GPUBuffer uploadBuffer  = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                                   maxUploadSize, MemoryUsage::CPU_TO_GPU);
-    Semaphore semaphore     = device->CreateGraphicsSemaphore();
+    const u32 maxCopies     = 1u << 20u;
+
+    ScratchArena threadScratch;
+
+    uploadBuffers    = FixedArray<GPUBuffer, numPendingSubmissions>(numPendingSubmissions);
+    uploadBuffers[0] = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, maxUploadSize,
+                                            MemoryUsage::CPU_TO_GPU);
+    uploadBuffers[1] = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, maxUploadSize,
+                                            MemoryUsage::CPU_TO_GPU);
+
+    uploadCopyCommands =
+        FixedArray<StaticArray<BufferImageCopy>, numPendingSubmissions>(numPendingSubmissions);
+    uploadCopyCommands[0] =
+        StaticArray<BufferImageCopy>(threadScratch.temp.arena, maxCopies, maxCopies);
+
+    uploadSemaphores    = FixedArray<Semaphore, numPendingSubmissions>(numPendingSubmissions);
+    uploadSemaphores[0] = device->CreateGraphicsSemaphore();
+    uploadSemaphores[1] = device->CreateGraphicsSemaphore();
 
     for (;;)
     {
@@ -1631,7 +1652,8 @@ void VirtualTextureManager::Callback()
             u32 virtualFaceIndex = feedbackRequests[requestIndex] & 0x0fffffff;
             u32 mipLevel         = feedbackRequests[requestIndex] >> 28;
 
-            // The larger the difference between
+            // The larger the difference between top resident mip and requested mip, the higher
+            // the priority
             int rangeIndex    = virtualFaceIndexToRangeIndex[virtualFaceIndex];
             BlockRange &range = ranges[rangeIndex];
             int startLevel    = range.GetStartLevel();
@@ -1666,8 +1688,27 @@ void VirtualTextureManager::Callback()
         StaticArray<PageTableUpdateRequest> evictRequests(scratch.temp.arena,
                                                           numFeedbackRequests);
 
+        StaticArray<PageTableUpdateRequest> mapRequests(scratch.temp.arena,
+                                                        numFeedbackRequests);
+
+        // Wait until the transfer buffer is read on the GPU before writing new data
+        u64 writeIndex = writeSubmission.load(std::memory_order_relaxed);
+        for (;;)
+        {
+            u64 readIndex = readSubmission.load(std::memory_order_acquire);
+            if (readIndex > writeIndex - numPendingSubmissions)
+            {
+                break;
+            }
+            std::this_thread::yield();
+        }
+
+        u32 writeDoubleBufferIndex = writeIndex & 1;
+        device->Wait(uploadSemaphores[writeDoubleBufferIndex]);
+
         // Load face data from disk/cache
-        u32 uploadOffset = 0;
+        GPUBuffer *uploadBuffer = &uploadBuffers[writeDoubleBufferIndex];
+        u32 uploadOffset        = 0;
         for (int keyIndex = 0; keyIndex < numKeys; keyIndex++)
         {
             int feedbackRequestIndex = keys[keyIndex].feedbackRequestIndex;
@@ -1682,7 +1723,12 @@ void VirtualTextureManager::Callback()
             Vec2u offsetAndSize =
                 metadata.CalculateOffsetAndSize(mipLevel, blockShift, bytesPerBlock);
 
-            if (offsetAndSize.y + uploadOffset > maxUploadSize)
+            int log2Width  = Max(faceMetadata.log2Width - request.startLevel, 0);
+            int log2Height = Max(faceMetadata.log2Height - request.startLevel, 0);
+            int numLevels  = Max(log2Width, log2Height) + 1;
+
+            if (offsetAndSize.y + uploadOffset > maxUploadSize ||
+                copies.size() + numLevels > maxCopies)
             {
                 break;
             }
@@ -1693,11 +1739,9 @@ void VirtualTextureManager::Callback()
             const Shelf &shelf           = shelves[shelf];
             const BlockRange &blockRange = ranges[blockRangeIndex];
 
-            Vec3i start    = Vec3i(blockRange.start, shelf.startY, 0);
-            Vec2i begin    = start.xy;
-            int log2Width  = Max(faceMetadata.log2Width - request.startLevel, 0);
-            int log2Height = Max(faceMetadata.log2Height - request.startLevel, 0);
-            for (int levelIndex = 0; levelIndex < request.numLevels; levelIndex++)
+            Vec3i start = Vec3i(blockRange.start, shelf.startY, 0);
+            Vec2i begin = start.xy;
+            for (int levelIndex = 0; levelIndex < numLevels; levelIndex++)
             {
                 Assert(start.xy - begin < allocationSize);
                 BufferImageCopy copy = {};
@@ -1731,8 +1775,8 @@ void VirtualTextureManager::Callback()
 
             // TODO: cache
             OS_Handle handle = OS_CreateFile(filename);
-            bool result      = OS_ReadFile(handle, (u8 *)uploadBuffer.mappedPtr + uploadOffset,
-                                           offsetAndSize.y, offsetAndSize.x);
+            bool result = OS_ReadFile(handle, (u8 *)uploadBuffer->mappedPtr + uploadOffset,
+                                      offsetAndSize.y, offsetAndSize.x);
             Assert(result);
 
             OS_CloseFile(handle);
@@ -1742,18 +1786,23 @@ void VirtualTextureManager::Callback()
         // Write evict requests if present
         if (evictRequests.size())
         {
-            pageTableUpdateRingBuffer.Write(evictRequests.data, evictRequests.size());
+            updateRequestRingBuffer.SynchronizedWrite(&updateRequestMutex, evictRequests.data,
+                                                      evictRequests.size());
         }
 
-        // TODO: have to handle the fact that this is happening on another thread
-        // Perform copies
-        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Copy);
+        // Write copy commands
+        MemoryCopy(uploadCopyCommands[writeDoubleBufferIndex], copies.data,
+                   sizeof(BufferImageCopy) * copies.size());
+        uploadCopyCommands[writeDoubleBufferIndex].size_ = copies.size();
 
-        semaphore.signalValue++;
-        cmd->CopyImage(&uploadBuffer, );
-        device->SubmitCommandBuffer(cmd);
+        writeSubmission.store(writeIndex + 1, std::memory_order_release);
 
-        device->Wait(semaphore);
+        // Write map requests
+        if (mapRequests.size())
+        {
+            updateRequestRingBuffer.SynchronizedWrite(&updateRequestMutex, mapRequests.data,
+                                                      mapRequests.size());
+        }
     }
 }
 

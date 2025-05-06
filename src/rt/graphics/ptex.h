@@ -316,15 +316,9 @@ struct RingBuffer
 
     RingBuffer(Arena *arena, u32 max);
     bool Write(T *vals, u32 num);
+    void SynchronizedWrite(Mutex *mutex, T *vals, u32 num);
     T *Read(Arena *arena, u32 &num);
-    T *Read(Arena *arena, u32 num, u32 &numReturned);
-};
-
-struct UploadCommand
-{
-    GPUBuffer buffer;
-    u64 readOffset;
-    u32 numCopies;
+    T *SynchronizedRead(Mutex *mutex, Arena *arena, u32 &num);
 };
 
 struct VirtualTextureManager
@@ -360,18 +354,16 @@ struct VirtualTextureManager
     PushConstant push;
 
     // Streaming
-    Mutex uploadMutex;
-    StaticArray<UploadCommand> uploadCommands;
-    RingBuffer<BufferImageCopy> uploadCopyCommandsRingBuffer;
+    const u32 numPendingSubmissions = 2;
+    FixedArray<StaticArray<GPUBuffer, numPendingSubmissions>> uploadBuffers;
+    FixedArray<StaticArray<BufferImageCopy, numPendingSubmissions>> uploadCopyCommands;
+    FixedArray<Semaphore, numPendingSubmissions> uploadSemaphores;
 
-    Mutex evictMutex;
-    RingBuffer<PageTableUpdateRequest> evictRequestRingBuffer;
+    std::atomic<u64> readSubmission;
+    std::atomic<u64> writeSubmission;
 
-    Mutex mapMutex;
-    RingBuffer<PageTableUpdateRequest> mapRequestRingBuffer;
-
-    GPUBuffer feedbackBuffer;
-    u32 count;
+    Mutex updateRequestMutex;
+    RingBuffer<PageTableUpdateRequest> updateRequestRingBuffer;
 
     StaticArray<StaticArray<FaceMetadata>> faceMetadata;
 
