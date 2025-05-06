@@ -946,10 +946,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         device->GetStagingBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene)),
         device->GetStagingBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene))};
 
-    GPUBuffer feedbackBuffer[2] = {
-        device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 131072 * sizeof(Vec2u)),
-        device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 131072 * sizeof(Vec2u)),
-    };
     GPUBuffer countBuffer[2] = {
         device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(u32)),
         device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(u32)),
@@ -1134,7 +1130,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             .Bind(shaderDebugIndex, &shaderDebugBuffers[currentBuffer].buffer)
             .Bind(pageTableBindingIndex, &virtualTextureManager.pageTable)
             .Bind(physicalPagesBindingIndex, &virtualTextureManager.gpuPhysicalPool)
-            .Bind(feedbackBufferIndex, &feedbackBuffer[currentBuffer])
+            .Bind(feedbackBufferIndex,
+                  &virtualTextureManager.feedbackBuffers[currentBuffer].buffer)
             .Bind(countBufferIndex, &countBuffer[currentBuffer])
             .Bind(counterIndex, &counterBuffer)
             .Bind(nvApiIndex, &nvapiBuffer);
@@ -1151,6 +1148,15 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         cmd->PushConstants(&pushConstant, &pc, /*rts.layout);*/ layout.pipelineLayout);
         // cmd->TraceRays(&rts, params->width, params->height, 1);
         cmd->Dispatch(dispatchDimX, dispatchDimY, 1);
+
+        // Copy feedback from device to host
+        CommandBuffer *transferCmd = device->BeginCommandBuffer(QueueType_Copy);
+        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+        cmd->CopyBuffer(&virtualTextureManager.feedbackBuffers[currentBuffer].stagingBuffer,
+                        &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
+        device->SubmitCommandBuffer(transferCmd);
+
         device->CopyFrameBuffer(&swapchain, cmd, image);
         device->EndFrame();
 

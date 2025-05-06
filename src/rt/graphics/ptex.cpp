@@ -1458,9 +1458,14 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, u32 allocI
 
 u32 VirtualTextureManager::Evict(StaticArray<PageTableUpdateRequest> &evictRequests,
                                  StaticArray<PageTableUpdateRequest> &mapRequests,
-                                 u32 *feedbackRequests, u32 numRequests, u8 *uploadBuffer,
-                                 u32 uploadOffset)
+                                 StaticArray<BufferImageCopy> &copies, u32 *feedbackRequests,
+                                 u32 numRequests, u8 *uploadBuffer, u32 uploadOffset)
 {
+    ScratchArena scratch;
+    // Clock replacement policy; ranges that will have their request bit reset, losing their
+    // "first chance"
+    // StaticArray<u32> requestedRangeIndices(scratch.temp.arena, numRequests)
+
     for (int i = 0; i < numRequests; i++)
     {
         u32 feedback         = feedbackRequests[i];
@@ -1501,10 +1506,15 @@ u32 VirtualTextureManager::Evict(StaticArray<PageTableUpdateRequest> &evictReque
                     evictRequests.push_back(evictRequest);
 
                     // Issue copy commands to new location
+                    Vec3i start(newRange.start, shelf.startY, 0);
+                    CreateBufferImageCopies(copies, start, int numLevels, int layerIndex,
+                                            int log2Width, int log2Height, u32 texelSize,
+                                            u32 &bufferOffset);
                     int oldRangeIndex = virtualFaceIndexToRangeIndex[virtualFaceIndex];
                     // Remap the range previously associated with this data if present
                     if (oldRangeIndex != -1)
                     {
+                        ranges[oldRangeIndex].allocationStatus = AllocationStatus::Free;
                         LinkFreeList(ranges, oldRangeIndex, shelf.freeRange,
                                      BlockRange::InvalidRange);
                         virtualFaceIndexToRangeIndex[virtualFaceIndex] = ranges.size() - 1;
@@ -1533,13 +1543,139 @@ u32 VirtualTextureManager::Evict(StaticArray<PageTableUpdateRequest> &evictReque
     return uploadOffset;
 }
 
+///////////////////////////////////////
+// Streaming/Feedback
+//
+
+template <typename T>
+RingBuffer<T>::RingBuffer(Arena *arena, u32 max) : max(max)
+{
+    entries = StaticArray<T>(arena, max);
+    // mutex       = {};
+    readOffset  = 0;
+    writeOffset = 0;
+}
+
+template <typename T>
+bool RingBuffer<T>::Write(T *vals, u32 num)
+{
+    bool result  = true;
+    u32 capacity = entries.capacity;
+    if (writeOffset + num >= readOffset + capacity)
+    {
+        result = false;
+    }
+    else
+    {
+        u32 writeIndex = entries.size() & (capacity - 1);
+        u32 numToEnd   = capacity - writeIndex;
+        MemoryCopy(entries.data + writeIndex, vals, sizeof(T) * Min(num, numToEnd));
+        if (num > numToEnd)
+        {
+            MemoryCopy(entries.data, vals + numToEnd, sizeof(T) * (num - numToEnd));
+        }
+        writeOffset += num;
+    }
+
+    return result;
+}
+
+template <typename T>
+void RingBuffer<T>::WriteWithOverwrite(T *vals, u32 num)
+{
+    u32 capacity = entries.capacity;
+    if (writeOffset + num >= readOffset + capacity)
+    {
+        readOffset = writeOffset + num - capacity;
+    }
+    u32 writeIndex = entries.size() & (capacity - 1);
+    u32 numToEnd   = capacity - writeIndex;
+    MemoryCopy(entries.data + writeIndex, vals, sizeof(T) * Min(num, numToEnd));
+    if (num > numToEnd)
+    {
+        MemoryCopy(entries.data, vals + numToEnd, sizeof(T) * (num - numToEnd));
+    }
+    writeOffset += num;
+
+    return result;
+}
+
+template <typename T>
+void RingBuffer<T>::SynchronizedWrite(Mutex *mutex, T *vals, u32 num)
+{
+    for (;;)
+    {
+        BeginMutex(mutex);
+        bool result = Write(vals, num);
+
+        if (result)
+        {
+            EndMutex(mutex);
+            break;
+        }
+
+        EndMutex(mutex);
+
+        std::this_thread::yield();
+    }
+}
+
+template <typename T>
+T *RingBuffer<T>::Read(Arena *arena, u32 &num)
+{
+    // BeginMutex(&mutex);
+    Assert(readOffset <= writeOffset);
+    u32 numToRead = writeOffset - readOffset;
+    u32 capacity  = entries.capacity;
+    T *vals       = 0;
+    if (numToRead)
+    {
+        vals          = (T *)PushArrayNoZero(arena, u8, sizeof(T) * numToRead);
+        u32 readIndex = readOffset & (capacity - 1);
+        u32 numToEnd  = capacity - readIndex;
+        MemoryCopy(vals, entries.data + readIndex, sizeof(T) * Min(numToRead, numToEnd));
+        if (numToRead > numToEnd)
+        {
+            MemoryCopy(vals + numToEnd, entries.data, sizeof(T) * numToRead - numToEnd);
+        }
+        readOffset = writeOffset;
+    }
+    num = numToRead;
+    // EndMutex(&mutex);
+    return vals;
+}
+
+template <typename T>
+T *RingBuffer<T>::SynchronizedRead(Mutex *mutex, Arena *arena, u32 &num)
+{
+    BeginMutex(mutex);
+    T *result = Read(arena, num);
+    EndMutex(mutex);
+    return result;
+}
+
+// Executes on main thread
 void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *transferCmd)
 {
     // Update page table
     ScratchArena scratch;
 
     u32 currentBuffer = device->GetCurrentBuffer();
-    u32 numRequests   = 0;
+
+    // Write last frame's feedback buffer
+    if (device->frameCount >= 2)
+    {
+        u32 numFeedbackRequests = 
+            ((u32 *)feedbackBuffers[currentBuffer].mappedPtr)[0]);
+        u32 *feedbackRequests = PushArrayNoZero(scratch.temp.arena, u32, numFeedbackRequests);
+
+        BeginMutex(&feedbackMutex);
+        feedbackRingBuffer.WriteWithOverwrite(
+            (u32 *)feedbackBuffers[currentBuffer].mappedPtr + 1, numFeedbackRequests);
+        EndMutex(&feedbackMutex);
+    }
+
+    u32 numRequests = 0;
     PageTableUpdateRequest *updateRequests =
         virtualTextureManager.updateRequestRingBuffer.SynchronizedRead(
             virtualTextureManager.updateRequestMutex, scratch.temp.arena, numRequests);
@@ -1628,99 +1764,7 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
     readSubmission.store(readIndex + 1, std::memory_order_release);
 }
 
-///////////////////////////////////////
-// Streaming/Feedback
-//
-
-template <typename T>
-RingBuffer<T>::RingBuffer(Arena *arena, u32 max) : max(max)
-{
-    entries = StaticArray<T>(arena, max);
-    // mutex       = {};
-    readOffset  = 0;
-    writeOffset = 0;
-}
-
-template <typename T>
-bool RingBuffer<T>::Write(T *vals, u32 num)
-{
-    bool result = true;
-    // BeginMutex(&mutex);
-    u32 capacity = entries.capacity;
-    if (writeOffset + num >= readOffset + capacity)
-    {
-        result = false;
-    }
-    else
-    {
-        u32 writeIndex = entries.size() & (capacity - 1);
-        u32 numToEnd   = capacity - writeIndex;
-        MemoryCopy(entries.data + writeIndex, vals, sizeof(T) * Min(num, numToEnd));
-        if (num > numToEnd)
-        {
-            MemoryCopy(entries.data, vals + numToEnd, sizeof(T) * (num - numToEnd));
-        }
-        writeOffset += num;
-    }
-    // EndMutex(&mutex);
-
-    return result;
-}
-
-template <typename T>
-void RingBuffer<T>::SynchronizedWrite(Mutex *mutex, T *vals, u32 num)
-{
-    for (;;)
-    {
-        BeginMutex(mutex);
-        bool result = Write(vals, num);
-
-        if (result)
-        {
-            EndMutex(mutex);
-            break;
-        }
-
-        EndMutex(mutex);
-
-        std::this_thread::yield();
-    }
-}
-
-template <typename T>
-T *RingBuffer<T>::Read(Arena *arena, u32 &num)
-{
-    // BeginMutex(&mutex);
-    Assert(readOffset <= writeOffset);
-    u32 numToRead = writeOffset - readOffset;
-    u32 capacity  = entries.capacity;
-    T *vals       = 0;
-    if (numToRead)
-    {
-        vals          = (T *)PushArrayNoZero(arena, u8, sizeof(T) * numToRead);
-        u32 readIndex = readOffset & (capacity - 1);
-        u32 numToEnd  = capacity - readIndex;
-        MemoryCopy(vals, entries.data + readIndex, sizeof(T) * Min(numToRead, numToEnd));
-        if (numToRead > numToEnd)
-        {
-            MemoryCopy(vals + numToEnd, entries.data, sizeof(T) * numToRead - numToEnd);
-        }
-        readOffset = writeOffset;
-    }
-    num = numToRead;
-    // EndMutex(&mutex);
-    return vals;
-}
-
-template <typename T>
-T *RingBuffer<T>::SynchronizedRead(Mutex *mutex, Arena *arena, u32 &num)
-{
-    BeginMutex(mutex);
-    T *result = Read(arena, num);
-    EndMutex(mutex);
-    return result;
-}
-
+// Executes on virtual texture thread
 void VirtualTextureManager::Callback()
 {
     struct SortKey
@@ -1738,11 +1782,10 @@ void VirtualTextureManager::Callback()
     {
         ScratchArena scratch;
         // Get feedback requests
-        u32 numFeedbackRequests = count;
-        u32 *feedbackRequests = PushArrayNoZero(scratch.temp.arena, u32, numFeedbackRequests);
-        MemoryCopy(feedbackRequests, feedbackBuffer.mappedPtr,
-                   sizeof(u32) * numFeedbackRequests);
-        count = 0;
+
+        u32 numFeedbackRequests = 0;
+        u32 *feedbackRequests   = feedbackRingBuffer.SynchronizedRead(
+            &feedbackMutex, scratch.temp.arena, numFeedbackRequests);
 
         SortKey *keys = PushArrayNoZero(scratch.temp.arena, SortKey, numFeedbackRequests);
         u32 numKeys   = 0;
@@ -1860,32 +1903,8 @@ void VirtualTextureManager::Callback()
             const BlockRange &blockRange = ranges[shelfRequest.blockRangeIndex];
 
             Vec3i start = Vec3i(blockRange.start, shelf.startY, 0);
-            Vec2i begin = start.xy;
-            for (int levelIndex = 0; levelIndex < numLevels; levelIndex++)
-            {
-                Assert(start.xy - begin < allocationSize);
-                BufferImageCopy copy = {};
-                copy.bufferOffset    = bufferOffset;
-                copy.baseLayer       = pool->layerIndex;
-                copy.layerCount      = 1;
-                copy.offset          = start;
-
-                Vec2i extent = CalculateFaceSize(log2Width, log2Height);
-                extent.x     = AlignPow2(extent.x, 4);
-                extent.y     = AlignPow2(extent.y, 4);
-                copy.extent  = Vec3u(extent.x, extent.y, 1);
-
-                u32 index = Min(log2Width, log2Height) == 0 ? 0 : (levelIndex & 1);
-                start[index] += extent[index];
-
-                u32 texSize = Max(extent.y >> blockShift, 1) * Max(extent.x >> blockShift, 1) *
-                              GetFormatSize(format);
-                bufferOffset += texSize;
-                log2Width  = Max(log2Width - 1, 0);
-                log2Height = Max(log2Height - 1, 0);
-
-                copies.Push(copy);
-            }
+            CreateBufferImageCopies(copies, start, numLevels, pool->layerIndex, log2Width,
+                                    log2Height, GetFormatSize(format), bufferOffset);
 
             // TODO: cache
             // Load from disk and write to buffer
@@ -1903,8 +1922,9 @@ void VirtualTextureManager::Callback()
         // Evict
         if (evictRequests.size() && !bufferIsFull)
         {
-            uploadOffset = Evict(evictRequests, mapRequests, feedbackRequiringEvict.data,
-                                 feedbackRequiringEvict.size(), uploadBuffer, uploadOffset);
+            uploadOffset =
+                Evict(evictRequests, mapRequests, copies, feedbackRequiringEvict.data,
+                      feedbackRequiringEvict.size(), uploadBuffer, uploadOffset);
         }
 
         // Write evict requests if present
@@ -1948,6 +1968,39 @@ Vec2u FaceMetadata::CalculateOffsetAndSize(u32 mipLevel, u32 blockShift, u32 byt
         offsetAndSize.y -= texSize;
         currentLog2Width  = Max(currentLog2Width - 1, 0);
         currentLog2Height = Max(currentLog2Height - 1, 0);
+    }
+}
+
+void VirtualTextureManager::CreateBufferImageCopies(StaticArray<BufferImageCopy> &copies,
+                                                    Vec3i start, int numLevels, int layerIndex,
+                                                    int log2Width, int log2Height,
+                                                    u32 texelSize, u32 &bufferOffset)
+{
+    Vec2i begin = start.xy;
+    for (int levelIndex = 0; levelIndex < numLevels; levelIndex++)
+    {
+        Assert(start.xy - begin < allocationSize);
+        BufferImageCopy copy = {};
+        copy.bufferOffset    = bufferOffset;
+        copy.baseLayer       = layerIndex;
+        copy.layerCount      = 1;
+        copy.offset          = start;
+
+        Vec2i extent = CalculateFaceSize(log2Width, log2Height);
+        extent.x     = AlignPow2(extent.x, 4);
+        extent.y     = AlignPow2(extent.y, 4);
+        copy.extent  = Vec3u(extent.x, extent.y, 1);
+
+        u32 index = Min(log2Width, log2Height) == 0 ? 0 : (levelIndex & 1);
+        start[index] += extent[index];
+
+        u32 texSize =
+            Max(extent.y >> blockShift, 1) * Max(extent.x >> blockShift, 1) * texelSize;
+        bufferOffset += texSize;
+        log2Width  = Max(log2Width - 1, 0);
+        log2Height = Max(log2Height - 1, 0);
+
+        copies.Push(copy);
     }
 }
 

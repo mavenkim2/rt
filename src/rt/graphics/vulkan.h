@@ -564,6 +564,7 @@ struct CommandBuffer
     void Wait(Semaphore s) { waitSemaphores.push_back(s); }
     void Signal(Semaphore s) { signalSemaphores.push_back(s); }
     void WaitOn(CommandBuffer *other);
+    void CopyBuffer(GPUBuffer *dst, GPUBuffer *src);
     void SubmitTransfer(TransferBuffer *buffer);
     TransferBuffer SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags, size_t totalSize);
     TransferBuffer SubmitImage(void *ptr, ImageDesc desc);

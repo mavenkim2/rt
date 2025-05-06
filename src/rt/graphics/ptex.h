@@ -318,6 +318,7 @@ struct RingBuffer
 
     RingBuffer(Arena *arena, u32 max);
     bool Write(T *vals, u32 num);
+    void WriteWithOverwrite(T *vals, u32 num);
     void SynchronizedWrite(Mutex *mutex, T *vals, u32 num);
     T *Read(Arena *arena, u32 &num);
     T *SynchronizedRead(Mutex *mutex, Arena *arena, u32 &num);
@@ -381,6 +382,10 @@ struct VirtualTextureManager
     Mutex updateRequestMutex;
     RingBuffer<PageTableUpdateRequest> updateRequestRingBuffer;
 
+    Mutex feedbackMutex;
+    FixedArray<TransferBuffer, 2> feedbackBuffers;
+    RingBuffer<u32> feedbackRingBuffer;
+
     StaticArray<StaticArray<FaceMetadata>> faceMetadata;
 
     VirtualTextureManager(Arena *arena, u32 numVirtualFaces, u32 physicalTextureWidth,
@@ -395,13 +400,19 @@ struct VirtualTextureManager
     u32 Evict(StaticArray<PageTableUpdateRequest> &evictRequests,
               StaticArray<PageTableUpdateRequest> &mapRequests, u32 *feedbackRequests,
               u32 numRequests, u8 *uploadBuffer, u32 uploadOffset);
+
+    // Streaming
+    void WriteFeedback(TransferBuffer *transfer);
     void Update(CommandBuffer *computeCmd, CommandBuffer *transferCmd);
+    void Callback();
 
     static PageTableUpdateRequest CreatePageTableUpdateRequest(int faceIndex, u32 x, u32 y,
                                                                u32 layer, int log2Width,
                                                                int log2Height, int startLevel,
                                                                bool rotate);
-    void Callback();
+    static void CreateBufferImageCopies(StaticArray<BufferImageCopy> &copies, Vec3i start,
+                                        int numLevels, int layerIndex, int log2Width,
+                                        int log2Height, u32 texelSize, u32 &bufferOffset);
 };
 
 void InitializePtex();

@@ -1859,6 +1859,16 @@ void CommandBuffer::WaitOn(CommandBuffer *other)
     Wait(s);
 }
 
+void CommandBuffer::CopyBuffer(GPUBuffer *dst, GPUBuffer *src)
+{
+    VkBufferCopy bufferCopy = {};
+    bufferCopy.srcOffset    = 0;
+    bufferCopy.dstOffset    = 0;
+    bufferCopy.size         = dst->size;
+
+    vkCmdCopyBuffer(buffer, src->buffer, dst->buffer, 1, &bufferCopy);
+}
+
 void CommandBuffer::SubmitTransfer(TransferBuffer *transferBuffer)
 {
     VkBufferCopy bufferCopy = {};
