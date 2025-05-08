@@ -386,7 +386,7 @@ struct VirtualTextureManager
     FixedArray<TransferBuffer, 2> feedbackBuffers;
     RingBuffer<u32> feedbackRingBuffer;
 
-    StaticArray<StaticArray<FaceMetadata>> faceMetadata;
+    StaticArray<FaceMetadata> faceMetadata;
 
     VirtualTextureManager(Arena *arena, u32 numVirtualFaces, u32 physicalTextureWidth,
                           u32 physicalTextureHeight, u32 numPools, VkFormat format);
