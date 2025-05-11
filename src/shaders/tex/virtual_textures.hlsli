@@ -19,8 +19,8 @@ namespace VirtualTexture
         return int2(1l << log2Width, 1l << log2Height);
     }
 
-    static float3 GetPhysicalUV(Texture2D<uint> pageTable, uint2 basePage, uint faceID, float2 uv, 
-                                uint mipLevel, uint filterKernelSize)
+    static float3 GetPhysicalUV(Texture2D<uint> pageTable, uint2 basePage, float2 uv, 
+                                uint mipLevel)
     {
         const uint texelWidth = 128;
         const uint pageShift = 7;
