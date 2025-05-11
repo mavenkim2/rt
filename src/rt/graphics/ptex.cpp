@@ -649,10 +649,11 @@ void Convert(string filename)
     const int tileTexelWidth       = 128;
     const int pageBorderTexelWidth = 4;
     const int tileBlockWidth       = tileTexelWidth >> log2BlockSize;
-    const int tileFullBlockWidth   = tileBlockWidth + (pageBorderTexelWidth >> log2BlockSize);
-    const int tileByteSize         = Sqr(tileBlockWidth) * bytesPerBlock;
-    const int numTilesX            = gpuOutputWidth / tileBlockWidth;
-    const int numTilesY            = gpuOutputHeight / tileBlockWidth;
+    const int tileFullBlockWidth =
+        tileBlockWidth + 2 * (pageBorderTexelWidth >> log2BlockSize);
+    const int tileByteSize = Sqr(tileBlockWidth) * bytesPerBlock;
+    const int numTilesX    = gpuOutputWidth / tileBlockWidth;
+    const int numTilesY    = gpuOutputHeight / tileBlockWidth;
 
     const int gpuSrcStride = gpuOutputWidth * bytesPerBlock;
     const int tileStride   = tileBlockWidth * bytesPerBlock;
@@ -676,7 +677,7 @@ void Convert(string filename)
                     u8 *tile = PushArray(scratch.temp.arena, u8, tileByteSize);
 
                     u32 offset =
-                        (gpuSrcStride * tileBlockWidth * tileY + tileX * tileBlockWidth) *
+                        (gpuOutputWidth * tileBlockWidth * tileY + tileX * tileBlockWidth) *
                         bytesPerBlock;
                     u8 *src = (u8 *)readbackBuffer->mappedPtr + offset;
                     Utils::Copy(src, gpuSrcStride, tile, tileStride, tileFullBlockWidth,
@@ -947,8 +948,8 @@ void Convert(string filename)
             if (levelIndex == 0)
             {
                 FaceMetadata2 metadata;
-                metadata.offsetX = currentHorizontalOffset >> log2BlockSize;
-                metadata.offsetY = totalHeight >> log2BlockSize;
+                metadata.offsetX = currentHorizontalOffset;
+                metadata.offsetY = totalHeight;
 
                 faceMetadata[faceIndex] = metadata;
             }
@@ -959,15 +960,15 @@ void Convert(string filename)
 
             currentHorizontalOffset += img.width;
         }
+
+        CopyBlockCompressedResultsToDisk();
+        SubmitBlockCompressionCommandsToGPU();
+
+        numSubmissions++;
+        submissionIndex = numSubmissions & 1;
+
+        CopyBlockCompressedResultsToDisk();
     }
-
-    CopyBlockCompressedResultsToDisk();
-    SubmitBlockCompressionCommandsToGPU();
-
-    numSubmissions++;
-    submissionIndex = numSubmissions & 1;
-
-    CopyBlockCompressedResultsToDisk();
 
     MemoryCopy(outFaceMetadata, faceMetadata.data, numFaces * sizeof(FaceMetadata2));
 

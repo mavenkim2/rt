@@ -55,6 +55,11 @@ inline uint GetTileTexelWidth(uint levelIndex)
     return BASE_TEXEL_WIDTH_PER_PAGE + ((2 * mipBorderSize) << levelIndex);
 }
 
+struct FaceData
+{
+    uint4 neighborFaces;
+};
+
 #ifdef __cplusplus
 }
 #endif
