@@ -172,7 +172,13 @@ struct FaceMetadata
     int log2Width;
     int log2Height;
 
-    Vec2u CalculateOffsetAndSize(u32 mipLevel, u32 blockShift, u32 bytesPerBlock);
+    Vec2u CalculateOffsetAndSize(u32 mipLevel, u32 blockShift, u32 bytesPerBlock) const;
+};
+
+struct FaceMetadata2
+{
+    u32 offsetX;
+    u32 offsetY;
 };
 
 struct TileMetadata
@@ -367,6 +373,7 @@ struct VirtualTextureManager
     static const u32 numPendingSubmissions = 2;
     static const u32 maxUploadSize         = megabytes(512);
     static const u32 maxCopies             = 1u << 20u;
+    static const u32 maxFeedback           = 32 * 1024 * 1024;
 
     // Double buffered, update once per virtual texture thread tick
     FixedArray<StaticArray<u8>, numPendingSubmissions> uploadBuffers;
@@ -386,7 +393,7 @@ struct VirtualTextureManager
     FixedArray<TransferBuffer, 2> feedbackBuffers;
     RingBuffer<u32> feedbackRingBuffer;
 
-    StaticArray<StaticArray<FaceMetadata>> faceMetadata;
+    // StaticArray<StaticArray<FaceMetadata>> faceMetadata;
 
     VirtualTextureManager(Arena *arena, u32 numVirtualFaces, u32 physicalTextureWidth,
                           u32 physicalTextureHeight, u32 numPools, VkFormat format);
@@ -396,23 +403,23 @@ struct VirtualTextureManager
     void AllocatePhysicalPages(CommandBuffer *cmd, u32 allocIndex, FaceMetadata *metadata,
                                u32 numFaces, u8 *contents, TileRequest *requests,
                                u32 numRequests, RequestHandle *handles);
-    ShelfRequest AllocateShelf(Vec2i allocationSize, int currentLog2Height);
-    u32 Evict(StaticArray<PageTableUpdateRequest> &evictRequests,
-              StaticArray<PageTableUpdateRequest> &mapRequests, u32 *feedbackRequests,
-              u32 numRequests, u8 *uploadBuffer, u32 uploadOffset);
+    // ShelfRequest AllocateShelf(Vec2i allocationSize, int currentLog2Height);
 
     // Streaming
-    void WriteFeedback(TransferBuffer *transfer);
-    void Update(CommandBuffer *computeCmd, CommandBuffer *transferCmd);
-    void Callback();
+    // u32 Evict(StaticArray<PageTableUpdateRequest> &evictRequests,
+    //         StaticArray<PageTableUpdateRequest> &mapRequests, u32 *feedbackRequests,
+    //         u32 numRequests, u8 *uploadBuffer, u32 uploadOffset);
+    // void WriteFeedback(TransferBuffer *transfer);
+    // void Update(CommandBuffer *computeCmd, CommandBuffer *transferCmd);
+    // void Callback();
 
     static PageTableUpdateRequest CreatePageTableUpdateRequest(int faceIndex, u32 x, u32 y,
                                                                u32 layer, int log2Width,
                                                                int log2Height, int startLevel,
                                                                bool rotate);
-    static void CreateBufferImageCopies(StaticArray<BufferImageCopy> &copies, Vec3i start,
-                                        int numLevels, int layerIndex, int log2Width,
-                                        int log2Height, u32 texelSize, u32 &bufferOffset);
+    // static void CreateBufferImageCopies(StaticArray<BufferImageCopy> &copies, Vec3i start,
+    //                                     int numLevels, int layerIndex, int log2Width,
+    //                                     int log2Height, u32 texelSize, u32 &bufferOffset);
 };
 
 void InitializePtex();

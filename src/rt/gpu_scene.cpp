@@ -1096,9 +1096,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         }
 
         // Virtual texture system
-        CommandBuffer *virtualTextureCopyCmd = device->BeginCommandBuffer(QueueType_Copy);
-        virtualTextureManager.Update(cmd, virtualTextureCopyCmd);
-        device->SubmitCommandBuffer(virtualTextureCopyCmd);
+        // CommandBuffer *virtualTextureCopyCmd = device->BeginCommandBuffer(QueueType_Copy);
+        // virtualTextureManager.Update(cmd, virtualTextureCopyCmd);
+        // device->SubmitCommandBuffer(virtualTextureCopyCmd);
 
         RayPushConstant pc;
         pc.envMap   = envMapBindlessIndex;
