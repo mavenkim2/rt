@@ -8,9 +8,6 @@ Texture2DArray physicalPages: register(t6);
 
 namespace VirtualTexture
 {
-    static const uint pageWidth = 128;
-    static const uint pageShift = 7;
-
     static float3 GetPhysicalUV(uint2 baseOffset, float2 uv, uint2 texSize, uint mipLevel)
     {
         uint poolWidth, poolHeight, poolNumLayers;
@@ -22,16 +19,16 @@ namespace VirtualTexture
 
         const float2 faceTexelOffset = uv * float2(texSize);
         const uint2 virtualAddress = ((baseOffset + (uint2)faceTexelOffset) >> mipLevel);
-        const uint2 virtualPage = virtualAddress >> pageShift;
+        const uint2 virtualPage = virtualAddress >> PAGE_SHIFT;
         const uint packed = pageTable.Load(float3(virtualPage.x, virtualPage.y, mipLevel));
 
-        uint pageX = BitFieldExtractU32(packed, 15, 0);
-        uint pageY = BitFieldExtractU32(packed, 15, 15);
-        uint layer = BitFieldExtractU32(packed, 2, 30);
-        const float2 physicalPageCoord = float2(pageX, pageY) * pageWidth;
-        const float2 offsetInPage = float2(virtualAddress & (pageWidth - 1));
+        uint pageX = BitFieldExtractU32(packed, 8, 0);
+        uint pageY = BitFieldExtractU32(packed, 8, 8);
+        uint layer = BitFieldExtractU32(packed, 2, 16);
+        const float2 physicalPageCoord = float2(pageX, pageY) * PAGE_WIDTH;
+        const float2 offsetInPage = float2(virtualAddress & (PAGE_WIDTH - 1));
 
-        const float2 texCoord = (physicalPageCoord + offsetInPage + (faceTexelOffset % pageWidth)) / float2(poolWidth, poolHeight);
+        const float2 texCoord = (physicalPageCoord + offsetInPage + (faceTexelOffset % PAGE_WIDTH)) / float2(poolWidth, poolHeight);
         const float3 result = float3(texCoord.x, texCoord.y, layer);
 
         return result;

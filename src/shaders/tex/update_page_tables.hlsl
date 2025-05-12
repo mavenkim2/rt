@@ -1,7 +1,7 @@
 #include "../../rt/shader_interop/virtual_textures_shaderinterop.h"
 
 StructuredBuffer<PageTableUpdateRequest> requests : register(t0);
-RWStructuredBuffer<uint2> pageTable : register(u1);
+RWTexture2D<uint> pageTable : register(u1);
 
 [[vk::push_constant]] PageTableUpdatePushConstant pc;
 
@@ -11,7 +11,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     if (dispatchThreadID.x >= pc.numRequests) return;
 
     PageTableUpdateRequest request = requests[dispatchThreadID.x];
-    uint index = request.faceIndex;
-    pageTable[index].x = request.packed_x_y_layer;
-    pageTable[index].y = request.packed_width_height_baseLayer;
+    uint2 virtualPage = request.virtualPage;
+    pageTable[index] = request.packed;
 }

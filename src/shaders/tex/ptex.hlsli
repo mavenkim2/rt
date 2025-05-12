@@ -2,6 +2,7 @@
 #define PTEX_HLSLI_
 
 #include "../common.hlsli"
+#include "virtual_textures.hlsli"
 
 const float2x3 uvRotations[16];
 
@@ -148,7 +149,7 @@ float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, uint2 basePage, 
         const uint2 faceSize = neighborIndex == -1 ? faceData.GetFaceSize() : faceData.GetNeighborFaceSize((uint)neighborIndex);
 
         // Virtual texture lookup
-        const uint2 baseOffset = basePage * VirtualTexture::pageWidth + faceOffset;
+        const uint2 baseOffset = basePage * PAGE_WIDTH + faceOffset;
         const float3 fullUv = VirtualTexture::GetPhysicalUV(baseOffset, newUv, faceSize, mipLevel);
         result += weightsSum[0] * tex.SampleLevel(samplerLinearClamp, fullUv, 0.f);
     }
@@ -165,7 +166,7 @@ float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, uint2 basePage, 
         const uint2 faceSize = neighborIndex == -1 ? faceData.GetFaceSize() : faceData.GetNeighborFaceSize((uint)neighborIndex);
 
         // Virtual texture lookup
-        const uint2 baseOffset = basePage * VirtualTexture::pageWidth + faceOffset;
+        const uint2 baseOffset = basePage * PAGE_WIDTH + faceOffset;
         const float3 fullUv = VirtualTexture::GetPhysicalUV(baseOffset, newUv, faceSize, mipLevel);
         result += weightsSum[1] * tex.SampleLevel(samplerLinearClamp, fullUv, 0.f);
     }

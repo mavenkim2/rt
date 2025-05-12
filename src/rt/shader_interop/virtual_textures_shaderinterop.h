@@ -8,6 +8,9 @@ namespace rt
 {
 #endif
 
+#define PAGE_WIDTH 128
+#define PAGE_SHIFT 7
+
 #define MAX_COMPRESSED_LEVEL      6
 #define MAX_LEVEL                 16
 #define BASE_TEXEL_WIDTH_PER_PAGE 128
@@ -22,9 +25,8 @@ struct PageTableUpdatePushConstant
 
 struct PageTableUpdateRequest
 {
-    uint faceIndex;
-    uint packed_x_y_layer;
-    uint packed_width_height_baseLayer;
+    uint2 virtualPage;
+    uint packed;
 };
 
 inline uint GetBorderSize(int log2Width, int log2Height)

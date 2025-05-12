@@ -171,24 +171,12 @@ struct FaceMetadata
     u32 totalSize_rotate;
     int log2Width;
     int log2Height;
-
-    Vec2u CalculateOffsetAndSize(u32 mipLevel, u32 blockShift, u32 bytesPerBlock) const;
 };
 
 struct FaceMetadata2
 {
     u32 offsetX;
     u32 offsetY;
-};
-
-struct TileMetadata
-{
-    u32 offset;
-    int startLevel;
-    int endLevel;
-
-    int log2Width;
-    int log2Height;
 };
 
 struct TileRequest
@@ -198,9 +186,18 @@ struct TileRequest
     int numLevels;
 };
 
+struct TileRequest2
+{
+    Vec2u virtualPage;
+    u32 virtualAddressIndex;
+    u32 mipLevel;
+};
+
 struct TileFileHeader
 {
     int numFaces;
+    u32 numTilesX;
+    u32 numTilesY;
 };
 
 struct PaddedImage : Image
@@ -231,78 +228,10 @@ enum class AllocationStatus
     PartiallyAllocated,
 };
 
-struct BlockRange
-{
-    static const u32 InvalidRange            = ~0u;
-    static const u32 TopLevelMipRequestedBit = 0x80000000;
-    AllocationStatus status;
-
-    u32 start;
-    u32 onePastEnd;
-
-    u32 prevRange;
-    u32 nextRange;
-
-    u32 prevFree;
-    u32 nextFree;
-
-    int virtualFaceIndex;
-
-    // Top two bits denote whether the top most stored mip was requested since the last
-    // eviction check, and whether any subsequent mips were requested
-    int startLevel_requested;
-    int log2Width;
-    int log2Height;
-    int totalSize_rotate;
-
-    BlockRange() {}
-
-    BlockRange(AllocationStatus status, u32 start, u32 onePastEnd)
-        : status(status), start(start), onePastEnd(onePastEnd), prevRange(InvalidRange),
-          nextRange(InvalidRange), prevFree(InvalidRange), nextFree(InvalidRange)
-    {
-    }
-
-    BlockRange(AllocationStatus status, u32 start, u32 onePastEnd, u32 prevRange,
-               u32 nextRange, u32 prevFree, u32 nextFree)
-        : status(status), start(start), onePastEnd(onePastEnd), prevRange(prevRange),
-          nextRange(nextRange), prevFree(prevFree), nextFree(nextFree)
-    {
-    }
-
-    u32 GetNum() const;
-    u32 GetStartLevel() const;
-    u32 GetTopLevelWidth() const;
-    bool CheckTopLevelMipRequested() const;
-    void SetRangeAsRequested();
-    template <typename Array>
-    static u32 FindBestFree(const Array &ranges, u32 freeIndex, u32 num, u32 leftover = ~0u);
-    template <typename Array>
-    static void Split(Array &ranges, u32 index, u32 &freeIndex, u32 num);
-};
-
-struct Shelf
-{
-    int startY;
-    int height;
-
-    u32 freeRange;
-
-    u32 rangeStart;
-
-    int prevFree;
-    int nextFree;
-};
-
 struct PhysicalPagePool
 {
-    FixedArray<int, MAX_LEVEL> shelfStarts;
-
-    int maxWidth;
-    int maxHeight;
-    int totalHeight;
-
-    int layerIndex;
+    StaticArray<Vec2u> pagePool;
+    u32 freePage;
 };
 
 struct PhysicalPageAllocation
@@ -330,17 +259,17 @@ struct RingBuffer
     T *SynchronizedRead(Mutex *mutex, Arena *arena, u32 &num);
 };
 
-struct ShelfRequest
+struct AllocationColumn
 {
-    int shelfIndex;
-    int blockRangeIndex;
-    int layerIndex;
+    u32 numPagesWide;
+    u32 numPagesX;
+    u32 currentPageHeight;
+    u32 maxPageHeight;
 };
 
 struct VirtualTextureManager
 {
-    static const u32 InvalidPool  = ~0u;
-    static const int InvalidShelf = -1;
+    static const u32 InvalidPool = ~0u;
 
     struct RequestHandle
     {
@@ -350,23 +279,19 @@ struct VirtualTextureManager
 
     VkFormat format;
 
-    StaticArray<BlockRange> pageRanges;
-    u32 freeRange;
+    StaticArray<AllocationColumn> allocationColumns;
+    std::vector<Vec2u> baseVirtualPage;
 
     StaticArray<PhysicalPagePool> pools;
-
-    std::vector<BlockRange> ranges;
-    std::vector<Shelf> shelves;
-
-    std::vector<int> virtualFaceIndexToRangeIndex;
+    u32 freePool;
 
     u32 pageWidthPerPool;
     GPUImage gpuPhysicalPool;
+    GPUImage pageTable;
 
     Shader shader;
     DescriptorSetLayout descriptorSetLayout;
     VkPipeline pipeline;
-    GPUBuffer pageTable;
     PushConstant push;
 
     // Streaming
@@ -374,6 +299,10 @@ struct VirtualTextureManager
     static const u32 maxUploadSize         = megabytes(512);
     static const u32 maxCopies             = 1u << 20u;
     static const u32 maxFeedback           = 32 * 1024 * 1024;
+
+    // Clock replacement
+    u32 clockPoolIndex;
+    u32 clockPageIndex;
 
     // Double buffered, update once per virtual texture thread tick
     FixedArray<StaticArray<u8>, numPendingSubmissions> uploadBuffers;
@@ -393,17 +322,15 @@ struct VirtualTextureManager
     FixedArray<TransferBuffer, 2> feedbackBuffers;
     RingBuffer<u32> feedbackRingBuffer;
 
-    // StaticArray<StaticArray<FaceMetadata>> faceMetadata;
-
-    VirtualTextureManager(Arena *arena, u32 numVirtualFaces, u32 physicalTextureWidth,
-                          u32 physicalTextureHeight, u32 numPools, VkFormat format);
-    u32 AllocateVirtualPages(u32 numPages);
+    VirtualTextureManager(Arena *arena, u32 virtualTextureWidth, u32 virtualTextureHeight,
+                          u32 physicalTextureWidth, u32 physicalTextureHeight, u32 numPools,
+                          VkFormat format);
+    Vec2u AllocateVirtualPages(const Vec2u &virtualSize, u32 &index);
     void AllocatePhysicalPages(CommandBuffer *cmd, u32 allocIndex, FaceMetadata *metadata,
                                u32 numFaces, u8 *contents);
     void AllocatePhysicalPages(CommandBuffer *cmd, u32 allocIndex, FaceMetadata *metadata,
                                u32 numFaces, u8 *contents, TileRequest *requests,
                                u32 numRequests, RequestHandle *handles);
-    // ShelfRequest AllocateShelf(Vec2i allocationSize, int currentLog2Height);
 
     // Streaming
     // u32 Evict(StaticArray<PageTableUpdateRequest> &evictRequests,
@@ -417,9 +344,6 @@ struct VirtualTextureManager
                                                                u32 layer, int log2Width,
                                                                int log2Height, int startLevel,
                                                                bool rotate);
-    // static void CreateBufferImageCopies(StaticArray<BufferImageCopy> &copies, Vec3i start,
-    //                                     int numLevels, int layerIndex, int log2Width,
-    //                                     int log2Height, u32 texelSize, u32 &bufferOffset);
 };
 
 void InitializePtex();
