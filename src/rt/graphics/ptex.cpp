@@ -44,12 +44,14 @@ void *GetContentsAbsoluteIndex(void *contents, const Vec2u &p, u32 width, u32 he
     return (u8 *)contents + stride * p.y + p.x * bytesPerPixel;
 }
 
+// NOTE: all values in terms of blocks/texels, not bytes
 void Copy(void *src, const Vec2u &srcIndex, u32 srcWidth, u32 srcHeight, void *dst,
           const Vec2u &dstIndex, u32 dstWidth, u32 dstHeight, u32 vRes, u32 rowLen,
           u32 bytesPerBlock)
 {
     u32 srcStride = srcWidth * bytesPerBlock;
     u32 dstStride = dstWidth * bytesPerBlock;
+    rowLen *= bytesPerBlock;
     src = Utils::GetContentsAbsoluteIndex(src, srcIndex, srcWidth, srcHeight, srcStride,
                                           bytesPerBlock);
     dst = Utils::GetContentsAbsoluteIndex(dst, dstIndex, dstWidth, dstHeight, dstStride,
@@ -58,42 +60,6 @@ void Copy(void *src, const Vec2u &srcIndex, u32 srcWidth, u32 srcHeight, void *d
     vRes   = Min(srcHeight, vRes);
     rowLen = Min(rowLen, srcStride);
     Copy(src, srcStride, dst, dstStride, vRes, rowLen);
-}
-
-// Zeroes out unfilled texels in a NxN region; used for block compression
-void CopyAndPad(const void *src, int sstride, void *dst, int dstride, int vres, int rowlen,
-                int minVres, int minRowlen)
-{
-    // regular non-tiled case
-    if (sstride == rowlen && dstride == rowlen)
-    {
-        Assert(0);
-        // packed case - copy in single block
-        MemoryCopy(dst, src, vres * rowlen);
-    }
-    else
-    {
-        // copy a row at a time
-        const char *sptr = (const char *)src;
-        char *dptr       = (char *)dst;
-        for (const char *end = sptr + vres * sstride; sptr != end;)
-        {
-            MemoryCopy(dptr, sptr, rowlen);
-            if (minRowlen > rowlen)
-            {
-                MemoryZero(dptr + rowlen, minRowlen - rowlen);
-            }
-            dptr += dstride;
-            sptr += sstride;
-        }
-
-        rowlen = Max(rowlen, minRowlen);
-        for (int i = 0; i < minVres - vres; i++)
-        {
-            MemoryZero(dptr, rowlen);
-            dptr += dstride;
-        }
-    }
 }
 
 } // namespace Utils
@@ -641,14 +607,11 @@ void Convert(string filename)
 
     std::vector<u8 *> tiles;
 
-    const int tileTexelWidth       = PAGE_WIDTH;
-    const int pageBorderTexelWidth = 4;
-    const int tileBlockWidth       = tileTexelWidth >> log2BlockSize;
-    const int tileFullBlockWidth =
-        tileBlockWidth + 2 * (pageBorderTexelWidth >> log2BlockSize);
-    const int tileByteSize = Sqr(tileBlockWidth) * bytesPerBlock;
-    const int numTilesX    = gpuOutputWidth / tileBlockWidth;
-    const int numTilesY    = gpuOutputHeight / tileBlockWidth;
+    const int tileTexelWidth = PAGE_WIDTH;
+    const int tileBlockWidth = tileTexelWidth >> log2BlockSize;
+    const int tileByteSize   = Sqr(tileBlockWidth) * bytesPerBlock;
+    const int numTilesX      = gpuOutputWidth / tileBlockWidth;
+    const int numTilesY      = gpuOutputHeight / tileBlockWidth;
 
     const int gpuSrcStride = gpuOutputWidth * bytesPerBlock;
     const int tileStride   = tileBlockWidth * bytesPerBlock;
@@ -754,15 +717,21 @@ void Convert(string filename)
         maxLevel           = Max(maxLevel, images[faceIndex].Length());
     }
 
+    TextureMetadata textureMetadata = {};
+    u32 currentPageOffset           = 0;
+
     // Add borders to all images
     for (int levelIndex = 0; levelIndex < maxLevel; levelIndex++)
     {
-        u32 totalHeight             = 0;
         u32 gpuHeight               = 0;
+        u32 totalHeight             = 0;
         int currentHorizontalOffset = 0;
 
         Assert(levelIndex < images[handles[0].faceIndex].Length());
+
         u32 currentShelfHeight = images[handles[0].faceIndex][levelIndex].height;
+
+        std::vector<u8 *> blockCompressedResults;
 
         for (int handleIndex = 0; handleIndex < numFaces; handleIndex++)
         {
@@ -777,6 +746,7 @@ void Convert(string filename)
 
             int cmpHeight = Max(currentFaceImg.height, currentFaceImg.width);
             int cmpWidth  = Min(currentFaceImg.height, currentFaceImg.width);
+
             if (cmpHeight < currentShelfHeight ||
                 currentHorizontalOffset + cmpWidth > gpuSubmissionWidth)
             {
@@ -934,9 +904,6 @@ void Convert(string filename)
                 rotate = true;
             }
 
-            // Utils::Copy(img.contents, img.strideNoBorder,
-            //             (u8 *)mappedPtrs[submissionIndex] + offset, dstStride,
-            //             img.GetPaddedHeight(), img.strideNoBorder);
             Utils::Copy(img.contents, img.strideNoBorder, debugSrc[submissionIndex] + offset,
                         dstStride, img.GetPaddedHeight(), img.strideNoBorder);
 
@@ -948,10 +915,15 @@ void Convert(string filename)
 
                 faceMetadata[faceIndex] = metadata;
             }
+
+            Assert(faceMetadata[faceIndex].offsetX < 4096);
+            u64 testFaceOffset =
+                (faceMetadata[faceIndex].offsetY << 12) | faceMetadata[faceIndex].offsetX;
+            u32 testX = u32((testFaceOffset >> levelIndex) & ((1u << 12u) - 1u));
+            u32 testY = u32(testFaceOffset >> (levelIndex + 12u));
+
             Assert(levelIndex == 0 ||
-                   (((faceMetadata[faceIndex].offsetX >> levelIndex) ==
-                     currentHorizontalOffset) &&
-                    ((faceMetadata[faceIndex].offsetY >> levelIndex) == totalHeight)));
+                   (testX == currentHorizontalOffset && testY == totalHeight));
 
             currentHorizontalOffset += img.width;
         }
@@ -963,6 +935,73 @@ void Convert(string filename)
         submissionIndex = numSubmissions & 1;
 
         CopyBlockCompressedResultsToDisk();
+
+        const u32 numTilesX               = gpuSubmissionWidth >> PAGE_SHIFT;
+        const u32 numTilesY               = gpuSubmissionHeight >> PAGE_SHIFT;
+        const u32 numLastSubmissionTilesY = (totalHeight & ~(PAGE_WIDTH - 1)) / PAGE_WIDTH;
+        const u32 numLastSubmissionTilesX =
+            (currentHorizontalOffset + PAGE_WIDTH - 1) / PAGE_WIDTH;
+
+        u32 numTiles = (numSubmissions - 1) * numTilesX * numTilesY;
+        numTiles += numLastSubmissionTilesY * numTilesX;
+        numTiles += numLastSubmissionTilesX;
+
+        const u32 sqrtNumTiles    = std::sqrt(numTiles) + 1;
+        const u32 totalNumTiles   = Sqr(sqrtNumTiles);
+        const u32 levelBlockWidth = sqrtNumTiles * tileBlockWidth;
+        const u32 totalSize       = Sqr(levelBlockWidth) * bytesPerBlock;
+
+        textureMetadata.mipPageOffsets[levelIndex] = currentPageOffset;
+        currentPageOffset += totalNumTiles;
+
+        if (levelIndex > 0)
+        {
+            u32 prevLevelNumTiles = textureMetadata.mipPageOffsets[levelIndex] -
+                                    textureMetadata.mipPageOffsets[levelIndex - 1];
+            Assert((totalNumTiles >> 1) == prevLevelNumTiles);
+        }
+
+        // From submissions, shell fill the tiles
+        u8 *dst         = (u8 *)AllocateSpace(&builder, totalSize);
+        u32 currentTile = 0;
+        u32 currentSqrt = 0;
+        for (int i = 0; i < blockCompressedResults.size(); i++)
+        {
+            u8 *blockCompressedResult = blockCompressedResults[i];
+
+            const u32 itrNumTilesY = i == blockCompressedResults.size() - 1
+                                         ? numLastSubmissionTilesY + 1
+                                         : numTilesY;
+            for (u32 tileY = 0; tileY < itrNumTilesY; tileY++)
+            {
+                const u32 itrNumTilesX =
+                    (i == blockCompressedResult.size() - 1 && tileY == itrNumTilesY - 1)
+                        ? numLastSubmissionTilesX
+                        : numTilesX;
+                for (u32 tileX = 0; tileX < itrNumTilesX; tileX++)
+                {
+                    u32 shellIndex = currentTile - currentSqrt * currentSqrt;
+                    Vec2u tileLoc(currentSqrt, shellIndex >> 1);
+                    if (shellIndex & 1) Swap(tileLoc.x, tileLoc.y);
+
+                    // Copy tile to final location in destination buffer
+                    Vec2u srcIndex(tileX * tileBlockWidth, tileY * tileBlockWidth);
+                    Vec2u dstIndex = tileLoc * tileBlockWidth;
+                    Utils::Copy(blockCompressedResult, srcIndex, gpuOutputWidth,
+                                gpuOutputHeight, dst, dstIndex, levelBlockWidth,
+                                levelBlockWidth, tileBlockWidth, tileBlockWidth,
+                                bytesPerBlock);
+
+                    // Iterate to next tile
+                    currentTile++;
+                    u32 sqrtCurrentTile = std::sqrt(currentTile);
+                    if (Sqr(sqrtCurrentTile) == currentTile)
+                    {
+                        currentSqrt++;
+                    }
+                }
+            }
+        }
     }
 
     MemoryCopy(outFaceMetadata, faceMetadata.data, numFaces * sizeof(FaceMetadata2));
@@ -1179,6 +1218,13 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, Vec2u base
     u32 bufferOffset           = 0;
 
     // TODO:
+    // 0. this doesn't work if the virtual addresses aren't square. if the virtual addresses
+    // aren't square, then i need to shell fill. if i shell fill, how do I find the page from
+    // the uv? currently i'm thinking 4096x? -> shell -> virtual -> physical
+    // 0a. sorting by height then width also doesn't work... every single entry on the shelf
+    // must have the same width. height can be whatever as long as the "shelf" height is >= to
+    // the height of the shelf below
+    //
     // 1. store the FaceData in the dgf
     // 2. per mip level offsets stored per texture file
     //

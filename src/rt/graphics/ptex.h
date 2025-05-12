@@ -16,8 +16,6 @@ void *GetContentsAbsoluteIndex(void *contents, const Vec2u &p, u32 width, u32 he
 void Copy(void *src, const Vec2u &srcIndex, u32 srcWidth, u32 srcHeight, void *dst,
           const Vec2u &dstIndex, u32 dstWidth, u32 dstHeight, u32 vRes, u32 rowLen,
           u32 bytesPerBlock);
-void CopyAndPad(const void *src, int sstride, void *dst, int dstride, int vres, int rowlen,
-                int minVres, int minRowlen);
 } // namespace Utils
 
 namespace rt
@@ -191,6 +189,12 @@ struct TileRequest2
     Vec2u virtualPage;
     u32 virtualAddressIndex;
     u32 mipLevel;
+};
+
+struct TextureMetadata
+{
+    u32 sqrtNumPages;
+    u32 mipPageOffsets[MAX_LEVEL];
 };
 
 struct TileFileHeader
