@@ -3,52 +3,41 @@
 
 #include "./../rt/shader_interop/virtual_textures_shaderinterop.h"
 
-StructuredBuffer<uint2> pageTable : register(t5);
+Texture2D<uint> pageTable : register(t5);
 Texture2DArray physicalPages: register(t6);
 
 namespace VirtualTexture
 {
-    static int2 GetDimensions(StructuredBuffer<uint2> pageTable,
-                              uint basePageOffset,
-                              uint faceID)
+    static const uint pageWidth = 128;
+    static const uint pageShift = 7;
+
+    static float3 GetPhysicalUV(uint2 baseOffset, float2 uv, uint2 texSize, uint mipLevel)
     {
-        uint faceIndex = basePageOffset + faceID;
-        uint2 physicalPageInfo = pageTable.Load(faceIndex);
-        int log2Width = BitFieldExtractU32(physicalPageInfo.y, 4, 0);
-        int log2Height = BitFieldExtractU32(physicalPageInfo.y, 4, 4);
-        return int2(1l << log2Width, 1l << log2Height);
-    }
+        uint poolWidth, poolHeight, poolNumLayers;
+        physicalPages.GetDimensions(poolWidth, poolHeight, poolNumLayers);
 
-    static float3 GetPhysicalUV(Texture2D<uint> pageTable, uint2 basePage, float2 uv, 
-                                uint mipLevel)
-    {
-        const uint texelWidth = 128;
-        const uint pageShift = 7;
-
-        FaceData faceData;
-        uint log2Width, log2Height;
-
-        uint2 faceOffset;
-
-        uint width = 1u << log2Width;
-        uint height = 1u << log2Height;
-
+        uint log2Width = firstbithigh(texSize.x);
+        uint log2Height = firstbithigh(texSize.y);
         mipLevel = clamp(mipLevel, 0, min(log2Width, log2Height) - 2);
 
-        uint2 faceTexelOffset = faceOffset + uv * uint2(width - 1, height - 1);
-        const uint2 virtualAddress = ((basePage * texelWidth + faceTexelOffset) >> mipLevel) >> pageShift;
-        const uint packed = pageTable.Load(float3(virtualAddress.x, virtualAddress.y, mipLevel));
+        const float2 faceTexelOffset = uv * float2(texSize);
+        const uint2 virtualAddress = ((baseOffset + (uint2)faceTexelOffset) >> mipLevel);
+        const uint2 virtualPage = virtualAddress >> pageShift;
+        const uint packed = pageTable.Load(float3(virtualPage.x, virtualPage.y, mipLevel));
 
-        uint pageX = BitFieldExtractU32(packed, 8, 0);
-        uint pageY = BitFieldExtractU32(packed, 8, 8);
-        uint2 physicalPageLoc = uint2(pageX, pageY) * texelWidth;
+        uint pageX = BitFieldExtractU32(packed, 15, 0);
+        uint pageY = BitFieldExtractU32(packed, 15, 15);
+        uint layer = BitFieldExtractU32(packed, 2, 30);
+        const float2 physicalPageCoord = float2(pageX, pageY) * pageWidth;
+        const float2 offsetInPage = float2(virtualAddress & (pageWidth - 1));
 
-        faceTexelOffset >>= mipLevel;
-        const uint2 offsetInPage = faceTexelOffset & (texelWidth - 1);
+        const float2 texCoord = (physicalPageCoord + offsetInPage + (faceTexelOffset % pageWidth)) / float2(poolWidth, poolHeight);
+        const float3 result = float3(texCoord.x, texCoord.y, layer);
 
-        uint layer;
+        return result;
     }
 
+#if 0
     static float3 GetPhysicalUV(StructuredBuffer<uint2> pageTable,
                                 uint basePageOffset,
                                 uint faceID,
@@ -110,6 +99,7 @@ namespace VirtualTexture
         float3 physicalUv = float3((float)offset.x / width, (float)offset.y / height, layerIndex);
         return physicalUv;
     }
+#endif
 }
 
 #endif

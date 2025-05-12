@@ -9,6 +9,7 @@
 #include "dgf_intersect.hlsli"
 #include "tex/virtual_textures.hlsli"
 #include "tex/ray_cones.hlsli"
+#include "tex/ptex.hlsli"
 #include "../rt/shader_interop/as_shaderinterop.h"
 #include "../rt/shader_interop/ray_shaderinterop.h"
 #include "../rt/shader_interop/hit_shaderinterop.h"
@@ -264,9 +265,12 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
             float surfaceSpreadAngle = depth == 1 ? rayCone.CalculatePrimaryHitUnifiedSurfaceSpreadAngle(dir, n, p0, p1, p2, n0, n1, n2) 
                                                   : rayCone.CalculateSecondaryHitSurfaceSpreadAngle(dir, n, p0, p1, p2, n0, n1, n2);
 
-            int2 dim = VirtualTexture::GetDimensions(pageTable, material.pageOffset, pageInformation.x);
+            int2 dim;
+            FaceData faceData;
+
             rayCone.Propagate(surfaceSpreadAngle, query.CommittedRayT());
             float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, n, dim, printDebug);
+            float filterU = rng.Uniform();
 
             switch (material.type) 
             {
@@ -277,13 +281,8 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
                 break;
                 case GPUMaterialType::Diffuse: 
                 {
-                    float3 physicalUv = VirtualTexture::GetPhysicalUV(pageTable, material.pageOffset, pageInformation.x, uv, uint(lambda), printDebug);
-                    uint width, height, elements;
-                    physicalPages.GetDimensions(width, height, elements);
-                    // TODO: at high mip levels this doesn't work anymore
-                    float3 reflectance = SampleTextureCatmullRom(physicalPages, samplerLinearClamp, physicalUv, float2(width, height));
-
-                    dir = SampleDiffuse(reflectance, wo, sample, throughput, printDebug);
+                    float4 reflectance = SampleStochasticCatmullRomBorderless(physicalPages, material.pageOffset, faceData, uv, (uint)lambda, filterU);
+                    dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
                 }
                 break;
             }
