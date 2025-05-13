@@ -194,8 +194,9 @@ struct TileRequest2
 struct TextureMetadata
 {
     u32 numFaces;
+    u32 virtualSqrtNumPages;
     u32 sqrtNumPages;
-    u32 mipPageOffsets[MAX_LEVEL];
+    u32 mipPageOffsets[MAX_LEVEL - 1];
 };
 
 struct TileFileHeader
@@ -285,7 +286,7 @@ struct VirtualTextureManager
     VkFormat format;
 
     StaticArray<AllocationColumn> allocationColumns;
-    std::vector<Vec2u> baseVirtualPage;
+    std::vector<Vec2u> baseVirtualPages;
 
     StaticArray<PhysicalPagePool> pools;
     u32 freePool;
@@ -333,9 +334,8 @@ struct VirtualTextureManager
     Vec2u AllocateVirtualPages(const Vec2u &virtualSize, u32 &index);
     void AllocatePhysicalPages(CommandBuffer *cmd, u32 allocIndex, FaceMetadata *metadata,
                                u32 numFaces, u8 *contents);
-    void AllocatePhysicalPages(CommandBuffer *cmd, u32 allocIndex, FaceMetadata *metadata,
-                               u32 numFaces, u8 *contents, TileRequest *requests,
-                               u32 numRequests, RequestHandle *handles);
+    void AllocatePhysicalPages(CommandBuffer *cmd, Vec2u baseVirtualPage,
+                               TileRequest2 *requests, u32 numRequests, u8 *contents);
 
     // Streaming
     // u32 Evict(StaticArray<PageTableUpdateRequest> &evictRequests,
@@ -356,6 +356,5 @@ PaddedImage GenerateMips(Arena *arena, PaddedImage &input, u32 width, u32 height
                          u32 borderSize);
 string Convert(Arena *arena, PtexTexture *texture, int filterWidth = 4);
 void Convert(string filename);
-TileType GetTileType(int tileX, int tileY, int numTilesX, int numTilesY);
 } // namespace rt
 #endif

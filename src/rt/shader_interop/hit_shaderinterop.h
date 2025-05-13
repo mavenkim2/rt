@@ -13,16 +13,17 @@ struct RTBindingData
     uint materialIndex;
 };
 
-enum class GPUMaterialType 
+enum class GPUMaterialType
 {
-    Diffuse, 
+    Diffuse,
     Dielectric,
 };
 
 struct GPUMaterial
 {
     GPUMaterialType type;
-    uint pageOffset;
+    uint2 baseVirtualPage;
+    uint materialIndex;
     float eta;
 };
 

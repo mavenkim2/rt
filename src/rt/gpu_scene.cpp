@@ -347,11 +347,15 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                            rootScene->ptexTextures.size());
     StaticArray<StaticArray<FaceMetadata>> ptexInfo(sceneScratch.temp.arena,
                                                     rootScene->ptexTextures.size());
-    StaticArray<u32> rangeIndices(sceneScratch.temp.arena, rootScene->ptexTextures.size(),
-                                  rootScene->ptexTextures.size());
+    StaticArray<u32> textureIndexToVirtualAddressIndex(sceneScratch.temp.arena,
+                                                       rootScene->ptexTextures.size(),
+                                                       rootScene->ptexTextures.size());
+    StaticArray<Vec2u> baseVirtualPages(sceneScratch.temp.arena,
+                                        rootScene->ptexTextures.size(),
+                                        rootScene->ptexTextures.size());
 
-    VirtualTextureManager virtualTextureManager(sceneScratch.temp.arena, 131072, 32768, 32768,
-                                                2, VK_FORMAT_BC1_RGB_UNORM_BLOCK);
+    VirtualTextureManager virtualTextureManager(sceneScratch.temp.arena, 131072, 131072, 32768,
+                                                32768, 2, VK_FORMAT_BC1_RGB_UNORM_BLOCK);
 
     CommandBuffer *tileCmd          = device->BeginCommandBuffer(QueueType_Compute);
     Semaphore tileSubmitSemaphore   = device->CreateSemaphore();
@@ -374,7 +378,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         tokenizer.input  = OS_ReadFile(sceneScratch.temp.arena, filename);
         tokenizer.cursor = tokenizer.input.str;
 
-        TileFileHeader fileHeader;
+        TextureMetadata fileHeader;
         GetPointerValue(&tokenizer, &fileHeader);
 
         FaceMetadata *metaData = (FaceMetadata *)tokenizer.cursor;
@@ -386,10 +390,14 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         tiledPtexFilenames.Push(filename);
         ptexInfo.Push(array);
 
-        u32 allocIndex  = virtualTextureManager.AllocateVirtualPages(fileHeader.numFaces);
-        rangeIndices[i] = allocIndex;
-        virtualTextureManager.AllocatePhysicalPages(tileCmd, allocIndex, metaData,
-                                                    fileHeader.numFaces, tokenizer.input.str);
+        u32 allocIndex        = 0;
+        Vec2u baseVirtualPage = virtualTextureManager.AllocateVirtualPages(
+            Vec2u(fileHeader.sqrtNumPages, fileHeader.sqrtNumPages), allocIndex);
+
+        textureIndexToVirtualAddressIndex[i] = allocIndex;
+        // virtualTextureManager.AllocatePhysicalPages(tileCmd, allocIndex, metaData,
+        //                                             fileHeader.numFaces,
+        //                                             tokenizer.input.str);
 
         OS_UnmapFile(tokenizer.input.str);
     }
@@ -907,7 +915,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         int index            = rootScene->materials[i]->ptexReflectanceIndex;
         if (index != -1)
         {
-            material.pageOffset = virtualTextureManager.pageRanges[rangeIndices[index]].start;
+            material.baseVirtualPage =
+                virtualTextureManager
+                    .baseVirtualPages[textureIndexToVirtualAddressIndex[index]];
         }
         gpuMaterials.Push(material);
     }

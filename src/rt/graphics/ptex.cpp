@@ -78,22 +78,6 @@ void InitializePtex()
     cache = Ptex::PtexCache::create(maxFiles, maxMem, true, &ptexInputHandler, &errorHandler);
 }
 
-TileType GetTileType(int tileX, int tileY, int numTilesX, int numTilesY)
-{
-
-    if ((tileX == 0 && tileY == 0) || (tileX == numTilesX - 1 && tileY == 0) ||
-        (tileX == 0 && tileY == numTilesY - 1) ||
-        (tileX == numTilesX - 1 && tileY == numTilesY - 1))
-    {
-        return TileType::Corner;
-    }
-    else if (tileX == 0 || tileX == numTilesX - 1 || tileY == 0 || tileY == numTilesY - 1)
-    {
-        return TileType::Edge;
-    }
-    return TileType::Center;
-}
-
 Vec2u PaddedImage::ConvertRelativeToAbsolute(const Vec2u &p)
 {
     return Vec2u(p.x + borderSize, p.y + borderSize);
@@ -408,7 +392,7 @@ void Convert(string filename)
         {
             PaddedImage img = PtexToImg(arena, t, i, 0);
             Assert(img.log2Width >= 2 && img.log2Height >= 2);
-            int levels = Max(img.log2Width, img.log2Height) - 1;
+            int levels = Min(img.log2Width, img.log2Height) + 1;
             Assert(levels < MAX_LEVEL);
 
             images[i]    = FixedArray<PaddedImage, MAX_LEVEL>(levels);
@@ -519,6 +503,7 @@ void Convert(string filename)
 
     const u32 submissionSize =
         gpuSubmissionWidth * gpuSubmissionHeight * GetFormatSize(baseFormat);
+    const u32 outputSize = gpuOutputWidth * gpuOutputHeight * GetFormatSize(blockFormat);
     // Allocate GPU resources
     {
         ImageDesc blockCompressedImageDesc(
@@ -605,8 +590,6 @@ void Convert(string filename)
         (FaceMetadata2 *)AllocateSpace(&builder, sizeof(FaceMetadata2) * numFaces);
     StaticArray<FaceMetadata2> faceMetadata(scratch.temp.arena, numFaces, numFaces);
 
-    std::vector<u8 *> tiles;
-
     const int tileTexelWidth = PAGE_WIDTH;
     const int tileBlockWidth = tileTexelWidth >> log2BlockSize;
     const int tileByteSize   = Sqr(tileBlockWidth) * bytesPerBlock;
@@ -616,7 +599,7 @@ void Convert(string filename)
     const int gpuSrcStride = gpuOutputWidth * bytesPerBlock;
     const int tileStride   = tileBlockWidth * bytesPerBlock;
 
-    auto CopyBlockCompressedResultsToDisk = [&]() {
+    auto CopyBlockCompressedResultsToDisk = [&](std::vector<u8 *> &blockCompressedResults) {
         // Write to face images to disk
         if (numSubmissions > 0)
         {
@@ -628,21 +611,9 @@ void Convert(string filename)
 
             MemoryZero(debugSrc[lastSubmissionIndex], submissionSize);
 
-            for (int tileY = 0; tileY < numTilesY; tileY++)
-            {
-                for (int tileX = 0; tileX < numTilesX; tileX++)
-                {
-                    u8 *tile = PushArray(scratch.temp.arena, u8, tileByteSize);
-
-                    u32 offset =
-                        (gpuOutputWidth * tileBlockWidth * tileY + tileX * tileBlockWidth) *
-                        bytesPerBlock;
-                    u8 *src = (u8 *)readbackBuffer->mappedPtr + offset;
-                    Utils::Copy(src, gpuSrcStride, tile, tileStride, tileFullBlockWidth,
-                                tileFullBlockWidth);
-                    tiles.push_back(tile);
-                }
-            }
+            u8 *blockCompressedResult = PushArrayNoZero(scratch.temp.arena, u8, outputSize);
+            MemoryCopy(blockCompressedResult, readbackBuffer->mappedPtr, outputSize);
+            blockCompressedResults.push_back(blockCompressedResult);
         }
     };
 
@@ -719,11 +690,22 @@ void Convert(string filename)
 
     u32 currentPageOffset = 0;
 
+    struct FaceInfo
+    {
+        Vec2u srcOffset;
+        Vec2u size;
+        u32 submissionIndex;
+        Vec2u dstOffset;
+
+        int faceIndex;
+    };
+
+    StaticArray<FaceInfo> faceInfos(scratch.temp.arena, numFaces);
+
     // Add borders to all images
     for (int levelIndex = 0; levelIndex < maxLevel; levelIndex++)
     {
         u32 gpuHeight               = 0;
-        u32 totalHeight             = 0;
         int currentHorizontalOffset = 0;
 
         Assert(levelIndex < images[handles[0].faceIndex].Length());
@@ -746,26 +728,21 @@ void Convert(string filename)
             int cmpHeight = Max(currentFaceImg.height, currentFaceImg.width);
             int cmpWidth  = Min(currentFaceImg.height, currentFaceImg.width);
 
-            if (cmpHeight < currentShelfHeight ||
-                currentHorizontalOffset + cmpWidth > gpuSubmissionWidth)
+            if (currentHorizontalOffset + cmpWidth > gpuSubmissionWidth)
             {
                 currentHorizontalOffset = 0;
-                totalHeight += currentShelfHeight;
                 gpuHeight += currentShelfHeight;
                 currentShelfHeight = cmpHeight;
             }
 
-            Assert(currentShelfHeight == cmpHeight);
-
             if (currentShelfHeight + gpuHeight > gpuSubmissionHeight)
             {
-                CopyBlockCompressedResultsToDisk();
+                CopyBlockCompressedResultsToDisk(blockCompressedResults);
                 SubmitBlockCompressionCommandsToGPU();
 
                 numSubmissions++;
                 submissionIndex         = numSubmissions & 1;
                 gpuHeight               = 0;
-                totalHeight             = AlignPow2(totalHeight, gpuSubmissionHeight);
                 currentHorizontalOffset = 0;
             }
 
@@ -908,36 +885,40 @@ void Convert(string filename)
 
             if (levelIndex == 0)
             {
-                FaceMetadata2 metadata;
-                metadata.offsetX = currentHorizontalOffset;
-                metadata.offsetY = totalHeight;
+                FaceInfo faceInfo        = {};
+                faceInfo.srcOffset       = Vec2u(currentHorizontalOffset, gpuHeight);
+                faceInfo.size            = Vec2u(img.width, img.height);
+                faceInfo.submissionIndex = numSubmissions;
+                faceInfo.faceIndex       = faceIndex;
 
-                faceMetadata[faceIndex] = metadata;
+                faceInfos.Push(faceInfo);
+            }
+            else
+            {
+                faceInfos[handleIndex].srcOffset = Vec2u(currentHorizontalOffset, gpuHeight);
+                faceInfos[handleIndex].size      = Vec2u(img.width, img.height);
+                faceInfos[handleIndex].submissionIndex = submissionIndex;
             }
 
-            Assert(faceMetadata[faceIndex].offsetX < 4096);
-            u64 testFaceOffset =
-                (faceMetadata[faceIndex].offsetY << 12) | faceMetadata[faceIndex].offsetX;
-            u32 testX = u32((testFaceOffset >> levelIndex) & ((1u << 12u) - 1u));
-            u32 testY = u32(testFaceOffset >> (levelIndex + 12u));
-
-            Assert(levelIndex == 0 ||
-                   (testX == currentHorizontalOffset && testY == totalHeight));
+            if (levelIndex == 1)
+            {
+                int stp = 5;
+            }
 
             currentHorizontalOffset += img.width;
         }
 
-        CopyBlockCompressedResultsToDisk();
+        CopyBlockCompressedResultsToDisk(blockCompressedResults);
         SubmitBlockCompressionCommandsToGPU();
 
         numSubmissions++;
         submissionIndex = numSubmissions & 1;
 
-        CopyBlockCompressedResultsToDisk();
+        CopyBlockCompressedResultsToDisk(blockCompressedResults);
 
         const u32 numTilesX               = gpuSubmissionWidth >> PAGE_SHIFT;
         const u32 numTilesY               = gpuSubmissionHeight >> PAGE_SHIFT;
-        const u32 numLastSubmissionTilesY = (totalHeight & ~(PAGE_WIDTH - 1)) / PAGE_WIDTH;
+        const u32 numLastSubmissionTilesY = (gpuHeight & ~(PAGE_WIDTH - 1)) / PAGE_WIDTH;
         const u32 numLastSubmissionTilesX =
             (currentHorizontalOffset + PAGE_WIDTH - 1) / PAGE_WIDTH;
 
@@ -945,62 +926,105 @@ void Convert(string filename)
         numTiles += numLastSubmissionTilesY * numTilesX;
         numTiles += numLastSubmissionTilesX;
 
-        const u32 sqrtNumTiles    = std::sqrt(numTiles) + 1;
-        const u32 totalNumTiles   = Sqr(sqrtNumTiles);
-        const u32 levelBlockWidth = sqrtNumTiles * tileBlockWidth;
-        const u32 totalSize       = Sqr(levelBlockWidth) * bytesPerBlock;
+        u32 sqrtNumTiles = std::sqrt(numTiles) + 1;
 
-        textureMetadata->mipPageOffsets[levelIndex] = currentPageOffset;
-        currentPageOffset += totalNumTiles;
-
-        if (levelIndex > 0)
+        if (levelIndex == 0)
         {
-            u32 prevLevelNumTiles = textureMetadata->mipPageOffsets[levelIndex] -
-                                    textureMetadata->mipPageOffsets[levelIndex - 1];
-            Assert((totalNumTiles >> 1) == prevLevelNumTiles);
+            textureMetadata->virtualSqrtNumPages = NextPowerOfTwo(sqrtNumTiles);
+            textureMetadata->sqrtNumPages        = sqrtNumTiles;
         }
+
+        u32 totalNumTiles   = Sqr(sqrtNumTiles);
+        u32 levelBlockWidth = sqrtNumTiles * tileBlockWidth;
+        u32 totalSize       = Sqr(levelBlockWidth) * bytesPerBlock;
+
+        currentPageOffset += totalNumTiles;
+        textureMetadata->mipPageOffsets[levelIndex] = currentPageOffset;
+
+        Assert(levelIndex == 0 ||
+               textureMetadata->virtualSqrtNumPages >> levelIndex >= sqrtNumTiles);
 
         // From submissions, shell fill the tiles
         u8 *dst         = (u8 *)AllocateSpace(&builder, totalSize);
         u32 currentTile = 0;
         u32 currentSqrt = 0;
-        for (int i = 0; i < blockCompressedResults.size(); i++)
+
+        u8 *temp = PushArrayNoZero(scratch.temp.arena, u8, totalSize);
+
+        const u32 blockShift = GetBlockShift(blockFormat);
+
+        u32 currentDstHorizontalOffset = 0;
+        u32 currentDstTotalHeight      = 0;
+        currentShelfHeight             = 0;
+
+        // Copy to square texture
+        for (int i = 0; i < numFaces; i++)
         {
-            u8 *blockCompressedResult = blockCompressedResults[i];
+            FaceInfo &faceInfo = faceInfos[i];
+            if (faceInfo.size.x == 1 && faceInfo.size.y == 1) continue;
+            u8 *blockCompressedResult = blockCompressedResults[faceInfo.submissionIndex];
 
-            const u32 itrNumTilesY = i == blockCompressedResults.size() - 1
-                                         ? numLastSubmissionTilesY + 1
-                                         : numTilesY;
-            for (u32 tileY = 0; tileY < itrNumTilesY; tileY++)
+            u32 blockWidth  = faceInfo.size.x >> blockShift;
+            u32 blockHeight = faceInfo.size.y >> blockShift;
+            if (currentDstHorizontalOffset + blockWidth > levelBlockWidth)
             {
-                const u32 itrNumTilesX =
-                    (i == blockCompressedResult.size() - 1 && tileY == itrNumTilesY - 1)
-                        ? numLastSubmissionTilesX
-                        : numTilesX;
-                for (u32 tileX = 0; tileX < itrNumTilesX; tileX++)
-                {
-                    u32 shellIndex = currentTile - currentSqrt * currentSqrt;
-                    Vec2u tileLoc(currentSqrt, shellIndex >> 1);
-                    if (shellIndex & 1) Swap(tileLoc.x, tileLoc.y);
+                currentDstHorizontalOffset = 0;
+                currentShelfHeight         = 0;
+                currentDstTotalHeight += currentShelfHeight;
 
-                    // Copy tile to final location in destination buffer
-                    Vec2u srcIndex(tileX * tileBlockWidth, tileY * tileBlockWidth);
-                    Vec2u dstIndex = tileLoc * tileBlockWidth;
-                    Utils::Copy(blockCompressedResult, srcIndex, gpuOutputWidth,
-                                gpuOutputHeight, dst, dstIndex, levelBlockWidth,
-                                levelBlockWidth, tileBlockWidth, tileBlockWidth,
-                                bytesPerBlock);
+                Assert(currentDstTotalHeight < levelBlockWidth);
+            }
 
-                    // Iterate to next tile
-                    currentTile++;
-                    u32 sqrtCurrentTile = std::sqrt(currentTile);
-                    if (Sqr(sqrtCurrentTile) == currentTile)
-                    {
-                        currentSqrt++;
-                    }
-                }
+            currentShelfHeight = Max(currentShelfHeight, blockHeight);
+
+            u32 dstStride = levelBlockWidth * bytesPerBlock;
+            Vec2u dstOffset(0);
+            if (levelIndex == 0)
+            {
+                dstOffset          = Vec2u(currentDstHorizontalOffset, currentDstTotalHeight);
+                faceInfo.dstOffset = dstOffset;
+            }
+            else
+            {
+                dstOffset = faceInfo.dstOffset >> (u32)levelIndex;
+            }
+
+            // Copy face data to square texture
+            Utils::Copy(blockCompressedResult, faceInfo.srcOffset >> blockShift,
+                        gpuOutputWidth, gpuOutputHeight, temp, dstOffset, levelBlockWidth,
+                        levelBlockWidth, blockHeight, blockWidth, bytesPerBlock);
+
+            currentDstHorizontalOffset += blockWidth;
+        }
+
+        // Copy tiles to disk
+        for (int tileY = 0; tileY < sqrtNumTiles; tileY++)
+        {
+            for (int tileX = 0; tileX < sqrtNumTiles; tileX++)
+            {
+                Vec2u srcIndex(tileX * tileBlockWidth, tileY * tileBlockWidth);
+                Vec2u dstIndex(tileX * tileBlockWidth, tileY * tileBlockWidth);
+                Utils::Copy(temp, srcIndex, levelBlockWidth, levelBlockWidth, dst, dstIndex,
+                            levelBlockWidth, levelBlockWidth, tileBlockWidth, tileBlockWidth,
+                            bytesPerBlock);
             }
         }
+
+        if (levelIndex == 0)
+        {
+            for (int i = 0; i < numFaces; i++)
+            {
+                FaceInfo &faceInfo = faceInfos[i];
+                FaceMetadata2 faceMeta;
+                faceMeta.offsetX = faceInfo.srcOffset.x;
+                faceMeta.offsetY = faceInfo.srcOffset.y;
+
+                faceMetadata[faceInfo.faceIndex] = faceMeta;
+            }
+        }
+
+        numSubmissions  = 0;
+        submissionIndex = 0;
     }
 
     MemoryCopy(outFaceMetadata, faceMetadata.data, numFaces * sizeof(FaceMetadata2));
@@ -1068,7 +1092,7 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
         for (int i = 0; i < numPools; i++)
         {
             PhysicalPagePool pool;
-            pool.pagePool = StaticArray<u32>(arena, numPhysPagesWidth * numPhysPagesHeight);
+            pool.pagePool = StaticArray<Vec2u>(arena, numPhysPagesWidth * numPhysPagesHeight);
             pool.freePage = 0;
             for (int y = 0; y < numPhysPagesHeight; y++)
             {
@@ -1133,25 +1157,18 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
 
 Vec2u VirtualTextureManager::AllocateVirtualPages(const Vec2u &virtualSize, u32 &index)
 {
-    u32 freeIndex = freeRange;
-
-    u32 leftover   = ~0u;
-    u32 allocIndex = ~0u;
-
-    u32 freeIndex = freeNode;
-
     Vec2u virtualPage(0);
 
     // TODO: sort the virtual address ranges from larger to smallest?
     for (int columnIndex = 0; columnIndex < allocationColumns.size(); columnIndex++)
     {
         AllocationColumn &column = allocationColumns[columnIndex];
-        Assert(size.x <= column.width);
+        Assert(virtualSize.x <= column.numPagesWide);
         if (column.currentPageHeight + virtualSize.y < column.maxPageHeight)
         {
             virtualPage = Vec2u(column.numPagesX, column.currentPageHeight);
-            baseVirtualPage.push_back(virtualPage);
-            index = baseVirtualPage.size() - 1;
+            baseVirtualPages.push_back(virtualPage);
+            index = baseVirtualPages.size() - 1;
 
             return virtualPage;
         }
@@ -1186,14 +1203,15 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, u32 allocI
         requestHandles[i].requestIndex = i;
     }
     SortHandles<RequestHandle, false>(requestHandles, numFaces);
-    AllocatePhysicalPages(cmd, allocIndex, metadata, numFaces, contents, requests, numFaces,
-                          requestHandles);
+    // AllocatePhysicalPages(cmd, allocIndex, metadata, numFaces, contents, requests, numFaces,
+    //                       requestHandles);
 }
 
 void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, Vec2u baseVirtualPage,
                                                   TileRequest2 *requests, u32 numRequests,
                                                   u8 *contents)
 {
+#if 0
     ScratchArena scratch;
 
     u32 baseFaceIndex = pageRanges[allocIndex].start;
@@ -1300,6 +1318,7 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, Vec2u base
     cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                             descriptorSetLayout.pipelineLayout);
     cmd->Dispatch((numRequests + 63) >> 6, 1, 1);
+#endif
 }
 
 ///////////////////////////////////////

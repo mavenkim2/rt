@@ -12,5 +12,5 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     PageTableUpdateRequest request = requests[dispatchThreadID.x];
     uint2 virtualPage = request.virtualPage;
-    pageTable[index] = request.packed;
+    pageTable[virtualPage] = request.packed;
 }

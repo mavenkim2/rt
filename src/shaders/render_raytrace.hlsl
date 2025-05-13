@@ -281,7 +281,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
                 break;
                 case GPUMaterialType::Diffuse: 
                 {
-                    float4 reflectance = SampleStochasticCatmullRomBorderless(physicalPages, material.pageOffset, faceData, uv, (uint)lambda, filterU);
+                    float4 reflectance = SampleStochasticCatmullRomBorderless(physicalPages, material.baseVirtualPage, faceData, uv, (uint)lambda, filterU);
                     dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
                 }
                 break;
@@ -289,7 +289,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
 
             if (depth == 1)
             {
-                feedbackRequest = int2(material.pageOffset + pageInformation.x, int(lambda));
+                feedbackRequest = int2(0, 0);//int2(material.pageOffset + pageInformation.x, int(lambda));
             }
 
             if (dir.z == 0) break;
