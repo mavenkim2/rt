@@ -597,10 +597,10 @@ void Convert(string filename)
     SortHandles<FaceHandle, false>(handles, numFaces);
 
     StringBuilderMapped builder(outFilename);
-    TileFileHeader header = {};
-    header.numFaces       = numFaces;
-    PutData(&builder, &header, sizeof(header));
 
+    TextureMetadata *textureMetadata =
+        (TextureMetadata *)AllocateSpace(&builder, sizeof(TextureMetadata));
+    textureMetadata->numFaces = numFaces;
     FaceMetadata2 *outFaceMetadata =
         (FaceMetadata2 *)AllocateSpace(&builder, sizeof(FaceMetadata2) * numFaces);
     StaticArray<FaceMetadata2> faceMetadata(scratch.temp.arena, numFaces, numFaces);
@@ -717,8 +717,7 @@ void Convert(string filename)
         maxLevel           = Max(maxLevel, images[faceIndex].Length());
     }
 
-    TextureMetadata textureMetadata = {};
-    u32 currentPageOffset           = 0;
+    u32 currentPageOffset = 0;
 
     // Add borders to all images
     for (int levelIndex = 0; levelIndex < maxLevel; levelIndex++)
@@ -951,13 +950,13 @@ void Convert(string filename)
         const u32 levelBlockWidth = sqrtNumTiles * tileBlockWidth;
         const u32 totalSize       = Sqr(levelBlockWidth) * bytesPerBlock;
 
-        textureMetadata.mipPageOffsets[levelIndex] = currentPageOffset;
+        textureMetadata->mipPageOffsets[levelIndex] = currentPageOffset;
         currentPageOffset += totalNumTiles;
 
         if (levelIndex > 0)
         {
-            u32 prevLevelNumTiles = textureMetadata.mipPageOffsets[levelIndex] -
-                                    textureMetadata.mipPageOffsets[levelIndex - 1];
+            u32 prevLevelNumTiles = textureMetadata->mipPageOffsets[levelIndex] -
+                                    textureMetadata->mipPageOffsets[levelIndex - 1];
             Assert((totalNumTiles >> 1) == prevLevelNumTiles);
         }
 

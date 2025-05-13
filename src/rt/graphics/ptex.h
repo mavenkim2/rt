@@ -193,6 +193,7 @@ struct TileRequest2
 
 struct TextureMetadata
 {
+    u32 numFaces;
     u32 sqrtNumPages;
     u32 mipPageOffsets[MAX_LEVEL];
 };
