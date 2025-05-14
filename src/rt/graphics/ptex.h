@@ -202,7 +202,6 @@ struct TextureMetadata
 {
     u32 numFaces;
     u32 virtualSqrtNumPages;
-    u32 sqrtNumPages;
     u32 numLevels;
     u32 mipPageOffsets[MAX_LEVEL - 1];
 };
@@ -299,7 +298,6 @@ struct VirtualTextureManager
     StaticArray<PhysicalPagePool> pools;
     u32 freePool;
 
-    u32 pageWidthPerPool;
     GPUImage gpuPhysicalPool;
     GPUImage pageTable;
 

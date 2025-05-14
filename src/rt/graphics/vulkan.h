@@ -821,6 +821,7 @@ struct Vulkan
     TransferBuffer GetStagingBuffer(VkBufferUsageFlags flags, size_t totalSize,
                                     int numRanges = 0);
     TransferBuffer GetStagingImage(ImageDesc desc);
+    TransferBuffer GetReadbackBuffer(VkBufferUsageFlags flags, size_t totalSize);
     u64 GetDeviceAddress(VkBuffer buffer);
     void BeginEvent(CommandBuffer *cmd, string name);
     void EndEvent(CommandBuffer *cmd);

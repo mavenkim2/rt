@@ -399,7 +399,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         u32 allocIndex        = 0;
         Vec2u baseVirtualPage = virtualTextureManager.AllocateVirtualPages(
-            Vec2u(fileHeader.sqrtNumPages, fileHeader.sqrtNumPages), allocIndex);
+            Vec2u(fileHeader.virtualSqrtNumPages, fileHeader.virtualSqrtNumPages), allocIndex);
 
         virtualTextureManager.AllocatePhysicalPages(tileCmd, baseVirtualPage, fileHeader,
                                                     tokenizer.cursor);
@@ -417,7 +417,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             maxVirtualOffset = Max(maxVirtualOffset, metaData[faceIndex].offsetX);
             maxVirtualOffset = Max(maxVirtualOffset, metaData[faceIndex].offsetY);
 
-            Assert(metaData[faceIndex].log2Width < 16 && metaData[faceIndex].log2Height < 16);
+            Assert(metaData[faceIndex].log2Width < 9 && metaData[faceIndex].log2Height < 9);
             minLog2Dim = Min(minLog2Dim, metaData[faceIndex].log2Width);
             maxLog2Dim = Max(maxLog2Dim, metaData[faceIndex].log2Width);
             minLog2Dim = Min(minLog2Dim, metaData[faceIndex].log2Height);
@@ -428,11 +428,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         u32 numFaceDimBits =
             (minLog2Dim == maxLog2Dim ? 0 : Log2Int(Max(maxLog2Dim - minLog2Dim, 1)) + 1);
 
-        u32 faceDataBitStreamSize =
-            ((5 * 2 * (numVirtualOffsetBits + numFaceDimBits) + 4 * 3 + 1) *
-                 fileHeader.numFaces +
-             7) >>
-            3;
+        u32 faceDataBitStreamBitSize =
+            (5 * 2 * (numVirtualOffsetBits + numFaceDimBits) + 4 * 3 + 1) *
+            fileHeader.numFaces;
+        u32 faceDataBitStreamSize = (faceDataBitStreamBitSize + 7) >> 3;
 
         ScratchArena textureScratch;
 
@@ -464,11 +463,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                 WriteBits((u32 *)faceDataStream, faceDataBitOffset,
                           neighborMetadata.log2Height - minLog2Dim, numFaceDimBits);
                 WriteBits((u32 *)faceDataStream, faceDataBitOffset,
-                          faceMetadata.rotate >> (2 * edgeIndex), 2);
-                WriteBits((u32 *)faceDataStream, faceDataBitOffset,
                           neighborMetadata.rotate >> 31, 1);
+                WriteBits((u32 *)faceDataStream, faceDataBitOffset,
+                          (faceMetadata.rotate >> (2 * edgeIndex)) & 0x3, 2);
             }
         }
+        Assert(faceDataBitOffset == faceDataBitStreamBitSize);
 
         gpuTextureInfo[i].packedFaceData       = faceDataStream;
         gpuTextureInfo[i].packedDataSize       = faceDataBitStreamSize;
@@ -838,7 +838,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         layout.AddBinding((u32)RTBindings::GPUMaterial, DescriptorType::StorageBuffer, flags);
 
     int pageTableBindingIndex =
-        layout.AddBinding((u32)RTBindings::PageTable, DescriptorType::StorageBuffer, flags);
+        layout.AddBinding((u32)RTBindings::PageTable, DescriptorType::SampledImage, flags);
 
     int physicalPagesBindingIndex =
         layout.AddBinding((u32)RTBindings::PhysicalPages, DescriptorType::SampledImage, flags);
@@ -929,19 +929,23 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         if (index != -1)
         {
             GPUTextureInfo &textureInfo = gpuTextureInfo[index];
-            material.baseVirtualPage =
-                virtualTextureManager.baseVirtualPages[textureInfo.virtualAddressIndex];
-            material.materialIndex        = index;
-            material.minLog2Dim           = textureInfo.minLog2Dim;
-            material.numVirtualOffsetBits = textureInfo.numVirtualOffsetBits;
-            material.numFaceDimBits       = textureInfo.numFaceDimBits;
+            if (textureInfo.numVirtualOffsetBits != 0)
+            {
+                material.baseVirtualPage =
+                    virtualTextureManager.baseVirtualPages[textureInfo.virtualAddressIndex];
+                material.materialIndex        = index;
+                material.minLog2Dim           = textureInfo.minLog2Dim;
+                material.numVirtualOffsetBits = textureInfo.numVirtualOffsetBits;
+                material.numFaceDimBits       = textureInfo.numFaceDimBits;
 
-            TransferBuffer faceDataBuffer = transferCmd->SubmitBuffer(
-                textureInfo.packedFaceData, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                textureInfo.packedDataSize);
-            int bindlessFaceDataIndex = device->BindlessStorageIndex(&faceDataBuffer.buffer);
+                TransferBuffer faceDataBuffer = transferCmd->SubmitBuffer(
+                    textureInfo.packedFaceData, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    textureInfo.packedDataSize);
+                int bindlessFaceDataIndex =
+                    device->BindlessStorageIndex(&faceDataBuffer.buffer);
 
-            material.bindlessFaceDataIndex = bindlessFaceDataIndex;
+                material.bindlessFaceDataIndex = bindlessFaceDataIndex;
+            }
         }
         gpuMaterials.Push(material);
     }
@@ -1174,6 +1178,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         // Clear count
         {
             cmd->ClearBuffer(&countBuffer[currentBuffer]);
+            cmd->ClearBuffer(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
         }
 
         // Virtual texture system
@@ -1231,12 +1236,13 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         cmd->Dispatch(dispatchDimX, dispatchDimY, 1);
 
         // Copy feedback from device to host
-        CommandBuffer *transferCmd = device->BeginCommandBuffer(QueueType_Copy);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->CopyBuffer(&virtualTextureManager.feedbackBuffers[currentBuffer].stagingBuffer,
-                        &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
-        device->SubmitCommandBuffer(transferCmd);
+        // CommandBuffer *transferCmd = device->BeginCommandBuffer(QueueType_Copy);
+        // cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        // VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //              VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+        // cmd->CopyBuffer(&virtualTextureManager.feedbackBuffers[currentBuffer].stagingBuffer,
+        //                 &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
+        // device->SubmitCommandBuffer(transferCmd);
 
         device->CopyFrameBuffer(&swapchain, cmd, image);
         device->EndFrame();

@@ -6,7 +6,24 @@
 #include "virtual_textures.hlsli"
 #include "../../rt/shader_interop/hit_shaderinterop.h"
 
-const float2x3 uvRotations[16];
+static const float2x3 uvRotations[16] = {
+    float2x3(1, 0, 0, 0, 1, 1), 
+    float2x3(0, 1, 1, -1, 0, 1),
+    float2x3(-1, 0, 1, 0, -1, 0),
+    float2x3(0, -1, 0, 1, 0, 0),
+    float2x3(1, 0, -1, 0, 1, 0),
+    float2x3(0, 1, 0, -1, 0, 2), 
+    float2x3(-1, 0, 2, 0, -1, -1), 
+    float2x3(0, -1, 1, 1, 0, -1), 
+    float2x3(1, 0, 0, 0, 1, -1), 
+    float2x3(0, 1, -1, -1, 0, 1),
+    float2x3(-1, 0, 1, 0, -1, 2),
+    float2x3(0, -1, 2, 1, 0, 0), 
+    float2x3(1, 0, 1, 0, 1, 0), 
+    float2x3(0, 1, 0, -1, 0, 0), 
+    float2x3(-1, 0, 0, 0, -1, 1), 
+    float2x3(0, -1, 1, 1, 0, 1),
+};
 
 namespace Ptex
 {
@@ -18,52 +35,31 @@ namespace Ptex
         bool rotate;
     };
 
-    int GetNeighborIndexFromUV(float2 texCoord, float2 faceDim, inout float2 uv)
+    int GetNeighborIndexFromUV(inout float2 texCoord, float2 faceDim)
     {
         int neighborIndex = -1;
 
         // TODO: how do I handle corners and different resolution faces?
-        if (texCoord.x >= faceDim.x)
+        if (texCoord.x >= faceDim.x && texCoord.y >= 0 && texCoord.y < faceDim.y)
         {
-            // Bottom right corner
-            if (texCoord.y >= faceDim.y)
-            {
-                uv = (faceDim - 0.5) / faceDim;
-            }
-            // Top right corner
-            else if (texCoord.y < 0)
-            {
-                uv = float2(faceDim.x - 0.5, 0.5) / faceDim;
-            }
-            else 
-            {
-                neighborIndex = 1;
-            }
+            neighborIndex = 1;
         }
-        else if (texCoord.x < 0)
+        else if (texCoord.x < 0 && texCoord.y >= 0 && texCoord.y < faceDim.y)
         {
-            // Bottom left corner
-            if (texCoord.y >= faceDim.y)
-            {
-                uv = float2(0.5, faceDim.y - 0.5) / faceDim;
-            }
-            // Top left corner
-            else if (texCoord.y < 0)
-            {
-                uv = float2(0.5, 0.5) / faceDim;
-            }
-            else 
-            {
-                neighborIndex = 3;
-            }
+            neighborIndex = 3;
         }
-        else if (texCoord.y >= faceDim.y)
+        else if (texCoord.y >= faceDim.y && texCoord.x >= 0 && texCoord.x < faceDim.x)
         {
             neighborIndex = 2;
         }
-        else if (texCoord.y < 0)
+        else if (texCoord.y < 0 && texCoord.x >= 0 && texCoord.x < faceDim.x)
         {
             neighborIndex = 0;
+        }
+        else 
+        {
+            // Clamp to corner
+            texCoord = clamp(texCoord, 0.5, faceDim - 0.5);
         }
         return neighborIndex;
     }
@@ -76,17 +72,43 @@ namespace Ptex
         uint neighborDataStride = 2 * (material.numVirtualOffsetBits + material.numFaceDimBits) + 3;
         uint bufferOffset = faceDataStride * faceID;
 
-        bufferOffset += neighborIndex == -1 ? 0 : neighborDataStride * neighborIndex;
+        bufferOffset += neighborIndex == -1 ? 0 : neighborDataStride - 2 + neighborDataStride * neighborIndex;
 
-        BitStreamReader bitStreamReader = CreateBitStreamReader(faceDataBuffer, 0, bufferOffset, neighborDataStride);
+        //BitStreamReader bitStreamReader = CreateBitStreamReader(faceDataBuffer, 0, bufferOffset, neighborDataStride);
 
+        // TODO: may need a uint4
+        uint2 offset = GetAlignedAddressAndBitOffset(0, bufferOffset);
+        uint3 packed = faceDataBuffer.Load3(offset.x);
+
+        uint2 data = uint2(BitAlignU32(packed.y, packed.x, offset.y), 
+                           BitAlignU32(packed.z, packed.y, offset.y));
+        
         FaceData result;
-        result.faceOffset.x = bitStreamReader.Read<32>(material.numVirtualOffsetBits);
-        result.faceOffset.y = bitStreamReader.Read<32>(material.numVirtualOffsetBits);
+        result.faceOffset.x = BitFieldExtractU32(data.x, material.numVirtualOffsetBits, 0);
+        data.x = BitAlignU32(packed.y, packed.x, material.numVirtualOffsetBits);
+        data.y = BitAlignU32(packed.z, packed.y, material.numVirtualOffsetBits);
+        packed.z >>= material.numVirtualOffsetBits;
+
+        result.faceOffset.y = BitFieldExtractU32(data.x, material.numVirtualOffsetBits, 0);
+        data.x = BitAlignU32(packed.y, packed.x, material.numVirtualOffsetBits);
+        data.y = BitAlignU32(packed.z, packed.y, material.numVirtualOffsetBits);
+        packed.z >>= material.numVirtualOffsetBits;
+
+        result.log2Dim.x = material.minLog2Dim + BitFieldExtractU32(data.x, material.numFaceDimBits, 0);
+        result.log2Dim.y = material.minLog2Dim + BitFieldExtractU32(data.x, material.numFaceDimBits, material.numFaceDimBits);
+
+        result.rotate = BitFieldExtractU32(data.x, 1, 2 * material.numFaceDimBits);
+        result.rotateIndex = neighborIndex = -1 ? -1 : BitFieldExtractU32(data.x, 2, 2 * material.numFaceDimBits + 1);
+
+#if 0
+        FaceData result;
+        result.faceOffset.x = bitStreamReader.Read<31>(material.numVirtualOffsetBits);
+        result.faceOffset.y = bitStreamReader.Read<31>(material.numVirtualOffsetBits);
         result.log2Dim.x = material.minLog2Dim + bitStreamReader.Read<4>(material.numFaceDimBits);
-        result.faceOffset.y = material.minLog2Dim + bitStreamReader.Read<4>(material.numFaceDimBits);
+        result.log2Dim.y = material.minLog2Dim + bitStreamReader.Read<4>(material.numFaceDimBits);
         result.rotateIndex = neighborIndex = -1 ? -1 : bitStreamReader.Read<2>(2);
         result.rotate = (bool)bitStreamReader.Read<1>(1);
+#endif
 
         return result;
     }
@@ -118,9 +140,9 @@ namespace Ptex
 //};
 
 // https://research.nvidia.com/labs/rtr/publication/pharr2024stochtex/stochtex.pdf
-float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, Ptex::FaceData faceData, GPUMaterial material, uint faceID, float2 uv, uint mipLevel, inout float u) 
+float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, Ptex::FaceData faceData, GPUMaterial material, uint faceID, float2 uv, uint mipLevel, inout float u, bool debug = false) 
 {
-    float2 texSize = float2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
+    float2 texSize = float2(1u << (faceData.log2Dim.x - mipLevel), 1u << (faceData.log2Dim.y - mipLevel));
     float2 w[4];
     float2 texPos[4];
 
@@ -138,11 +160,6 @@ float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, Ptex::FaceData f
     texPos[2] = texPos[1] + 1;
     texPos[3] = texPos[1] + 2;
 
-    for (int i = 0; i < 4; i++)
-    {
-        texPos[i] /= texSize;
-    }
-
     // Weighted reservoir sampling
     int2 reservoir[2] = {int2(0, 0), int2(0, 0)};
     float weightsSum[2] = {0, 0};
@@ -152,7 +169,7 @@ float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, Ptex::FaceData f
         for (int x = 0; x < 4; x++)
         {
             float weight = w[x].x * w[y].y;
-            int index = weight >= 0.f; 
+            int index = weight < 0.f; 
             weightsSum[index] += abs(weight);
             float p = abs(weight) / weightsSum[index];
 
@@ -174,20 +191,28 @@ float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, Ptex::FaceData f
         float2 posCoord = float2(texPos[reservoir[0].x].x, texPos[reservoir[0].y].y);
 
         // Lookup adjacency information if necessary
-        int neighborIndex = Ptex::GetNeighborIndexFromUV(posCoord, texSize, uv);
+        int neighborIndex = Ptex::GetNeighborIndexFromUV(posCoord, texSize);
         Ptex::FaceData neighborData = faceData;
         if (neighborIndex != -1)
         {
             neighborData = Ptex::GetFaceData(material, faceID, neighborIndex);
         }
 
-        const int rotateIndex = neighborIndex * 4 + neighborData.rotateIndex;
-        const float2 newUv = neighborIndex == -1 ? uv : mul(uvRotations[rotateIndex], float3(uv.x, uv.y, 1));
         const uint2 faceSize = uint2(1u << neighborData.log2Dim.x, 1u << neighborData.log2Dim.y);
+        const int rotateIndex = neighborIndex * 4 + neighborData.rotateIndex;
+        float2 newUv = posCoord / texSize;
+        newUv = neighborIndex == -1 ? newUv : mul(uvRotations[rotateIndex], float3(uv.x, uv.y, 1));
+        newUv = neighborData.rotate ? float2(1 - newUv.y, newUv.x) : newUv;
+
+        if (debug)
+        {
+            printf("faceOffset: %u %u, log2Dim: %u %u\nmip: %u, face: %u, uv: %f %f\n", 
+            faceData.faceOffset.x, faceData.faceOffset.y, faceData.log2Dim.x, faceData.log2Dim.y, mipLevel, faceID, newUv.x, newUv.y);
+        }
 
         // Virtual texture lookup
         const uint2 baseOffset = material.baseVirtualPage * PAGE_WIDTH + neighborData.faceOffset;
-        const float3 fullUv = VirtualTexture::GetPhysicalUV(baseOffset, newUv, faceSize, mipLevel);
+        const float3 fullUv = VirtualTexture::GetPhysicalUV(baseOffset, newUv, faceSize, mipLevel, debug);
         result += weightsSum[0] * tex.SampleLevel(samplerLinearClamp, fullUv, 0.f);
     }
 
@@ -196,16 +221,18 @@ float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, Ptex::FaceData f
         float2 negCoord = float2(texPos[reservoir[1].x].x, texPos[reservoir[1].y].y);
 
         // Lookup adjacency information if necessary
-        int neighborIndex = Ptex::GetNeighborIndexFromUV(negCoord, texSize, uv);
+        int neighborIndex = Ptex::GetNeighborIndexFromUV(negCoord, texSize);
         Ptex::FaceData neighborData = faceData; 
         if (neighborIndex != -1)
         {
             neighborData = Ptex::GetFaceData(material, faceID, neighborIndex);
         }
 
-        const int rotateIndex = neighborIndex * 4 + neighborData.rotateIndex;
-        const float2 newUv = neighborIndex == -1 ? uv : mul(uvRotations[rotateIndex], float3(uv.x, uv.y, 1));
         const uint2 faceSize = uint2(1u << neighborData.log2Dim.x, 1u << neighborData.log2Dim.y);
+        const int rotateIndex = neighborIndex * 4 + neighborData.rotateIndex;
+        float2 newUv = negCoord / texSize;
+        newUv = neighborIndex == -1 ? newUv : mul(uvRotations[rotateIndex], float3(uv.x, uv.y, 1));
+        newUv = neighborData.rotate ? float2(1 - newUv.y, newUv.x) : newUv;
 
         // Virtual texture lookup
         const uint2 baseOffset = material.baseVirtualPage * PAGE_WIDTH + neighborData.faceOffset;

@@ -1656,7 +1656,7 @@ GPUImage Vulkan::CreateImage(ImageDesc desc, int numSubresources)
     VK_CHECK(
         vmaCreateImage(allocator, &imageInfo, &allocInfo, &image.image, &image.allocation, 0));
 
-    numSubresources = numSubresources == -1 ? (desc.numMips - 1) : numSubresources;
+    numSubresources = numSubresources == -1 ? desc.numMips : numSubresources;
     if (numSubresources)
         image.subresources = StaticArray<GPUImage::Subresource>(arena, numSubresources);
     CreateSubresource(&image);
@@ -1849,6 +1849,22 @@ TransferBuffer Vulkan::GetStagingImage(ImageDesc desc)
         CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, req.size, MemoryUsage::CPU_TO_GPU);
     buffer.mappedPtr = buffer.stagingBuffer.allocation->GetMappedData();
     return buffer;
+}
+
+TransferBuffer Vulkan::GetReadbackBuffer(VkBufferUsageFlags flags, size_t totalSize)
+{
+    GPUBuffer buffer = CreateBuffer(flags | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, totalSize);
+
+    GPUBuffer stagingBuffer =
+        CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, totalSize, MemoryUsage::GPU_TO_CPU);
+
+    void *mappedPtr = stagingBuffer.allocation->GetMappedData();
+
+    TransferBuffer transferBuffer;
+    transferBuffer.buffer        = buffer;
+    transferBuffer.stagingBuffer = stagingBuffer;
+    transferBuffer.mappedPtr     = mappedPtr;
+    return transferBuffer;
 }
 
 void CommandBuffer::WaitOn(CommandBuffer *other)
