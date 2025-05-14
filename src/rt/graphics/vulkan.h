@@ -523,13 +523,11 @@ struct DescriptorSet
 struct DescriptorSetLayout
 {
     std::vector<VkDescriptorSetLayoutBinding> bindings;
-    std::vector<bool> nullBindings;
     VkDescriptorSetLayout layout;
 
     VkPipelineLayout pipelineLayout;
 
-    int AddBinding(u32 binding, DescriptorType type, VkShaderStageFlags stage,
-                   bool null = false);
+    int AddBinding(u32 binding, DescriptorType type, VkShaderStageFlags stage);
     VkDescriptorSetLayout *GetVulkanLayout();
     DescriptorSet CreateDescriptorSet();
     DescriptorSet CreateNewDescriptorSet();

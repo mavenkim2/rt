@@ -74,8 +74,6 @@ namespace Ptex
 
         bufferOffset += neighborIndex == -1 ? 0 : neighborDataStride - 2 + neighborDataStride * neighborIndex;
 
-        //BitStreamReader bitStreamReader = CreateBitStreamReader(faceDataBuffer, 0, bufferOffset, neighborDataStride);
-
         // TODO: may need a uint4
         uint2 offset = GetAlignedAddressAndBitOffset(0, bufferOffset);
         uint3 packed = faceDataBuffer.Load3(offset.x);
@@ -85,14 +83,10 @@ namespace Ptex
         
         FaceData result;
         result.faceOffset.x = BitFieldExtractU32(data.x, material.numVirtualOffsetBits, 0);
-        data.x = BitAlignU32(packed.y, packed.x, material.numVirtualOffsetBits);
-        data.y = BitAlignU32(packed.z, packed.y, material.numVirtualOffsetBits);
-        packed.z >>= material.numVirtualOffsetBits;
+        data.x = BitAlignU32(data.y, data.x, material.numVirtualOffsetBits);
 
         result.faceOffset.y = BitFieldExtractU32(data.x, material.numVirtualOffsetBits, 0);
-        data.x = BitAlignU32(packed.y, packed.x, material.numVirtualOffsetBits);
-        data.y = BitAlignU32(packed.z, packed.y, material.numVirtualOffsetBits);
-        packed.z >>= material.numVirtualOffsetBits;
+        data.x = BitAlignU32(data.y, data.x, material.numVirtualOffsetBits);
 
         result.log2Dim.x = material.minLog2Dim + BitFieldExtractU32(data.x, material.numFaceDimBits, 0);
         result.log2Dim.y = material.minLog2Dim + BitFieldExtractU32(data.x, material.numFaceDimBits, material.numFaceDimBits);
@@ -100,49 +94,15 @@ namespace Ptex
         result.rotate = BitFieldExtractU32(data.x, 1, 2 * material.numFaceDimBits);
         result.rotateIndex = neighborIndex = -1 ? -1 : BitFieldExtractU32(data.x, 2, 2 * material.numFaceDimBits + 1);
 
-#if 0
-        FaceData result;
-        result.faceOffset.x = bitStreamReader.Read<31>(material.numVirtualOffsetBits);
-        result.faceOffset.y = bitStreamReader.Read<31>(material.numVirtualOffsetBits);
-        result.log2Dim.x = material.minLog2Dim + bitStreamReader.Read<4>(material.numFaceDimBits);
-        result.log2Dim.y = material.minLog2Dim + bitStreamReader.Read<4>(material.numFaceDimBits);
-        result.rotateIndex = neighborIndex = -1 ? -1 : bitStreamReader.Read<2>(2);
-        result.rotate = (bool)bitStreamReader.Read<1>(1);
-#endif
-
         return result;
     }
 }
-
-//struct FaceData 
-//{
-//    uint2 faceOffsets[5];
-//    uint neighborFaceSize;
-//    // Bottom 8 bits is 4 bits each for log2 dimensions, then 2 bits for each neighbor for 
-//    // uv rotation
-//    uint faceSize_rotate;
-//
-//    uint2 GetFaceSize()
-//    {
-//        uint width = 1u << BitFieldExtractU32(faceSize_rotate, 4, 0);
-//        uint height = 1u << BitFieldExtractU32(faceSize_rotate, 4, 4);
-//        uint2 faceDim = uint2(width, height);
-//        return faceDim;
-//    }
-//
-//    uint2 GetNeighborFaceSize(uint neighbor)
-//    {
-//        uint width = 1u << BitFieldExtractU32(neighborFaceSize, 4, 8 * neighbor);
-//        uint height = 1u << BitFieldExtractU32(neighborFaceSize, 4, 8 * neighbor + 4);
-//        uint2 faceDim = uint2(width, height);
-//        return faceDim;
-//    }
-//};
 
 // https://research.nvidia.com/labs/rtr/publication/pharr2024stochtex/stochtex.pdf
 float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, Ptex::FaceData faceData, GPUMaterial material, uint faceID, float2 uv, uint mipLevel, inout float u, bool debug = false) 
 {
     float2 texSize = float2(1u << (faceData.log2Dim.x - mipLevel), 1u << (faceData.log2Dim.y - mipLevel));
+    texSize = faceData.rotate ? texSize.yx : texSize;
     float2 w[4];
     float2 texPos[4];
 
@@ -201,7 +161,7 @@ float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, Ptex::FaceData f
         const uint2 faceSize = uint2(1u << neighborData.log2Dim.x, 1u << neighborData.log2Dim.y);
         const int rotateIndex = neighborIndex * 4 + neighborData.rotateIndex;
         float2 newUv = posCoord / texSize;
-        newUv = neighborIndex == -1 ? newUv : mul(uvRotations[rotateIndex], float3(uv.x, uv.y, 1));
+        newUv = neighborIndex == -1 ? newUv : mul(uvRotations[rotateIndex], float3(newUv.x, newUv.y, 1));
         newUv = neighborData.rotate ? float2(1 - newUv.y, newUv.x) : newUv;
 
         if (debug)
@@ -213,7 +173,7 @@ float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, Ptex::FaceData f
         // Virtual texture lookup
         const uint2 baseOffset = material.baseVirtualPage * PAGE_WIDTH + neighborData.faceOffset;
         const float3 fullUv = VirtualTexture::GetPhysicalUV(baseOffset, newUv, faceSize, mipLevel, debug);
-        result += weightsSum[0] * tex.SampleLevel(samplerLinearClamp, fullUv, 0.f);
+        result += weightsSum[0] * tex.SampleLevel(samplerNearestClamp, fullUv, 0.f);
     }
 
     if (weightsSum[1] != 0.f)
@@ -231,13 +191,13 @@ float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, Ptex::FaceData f
         const uint2 faceSize = uint2(1u << neighborData.log2Dim.x, 1u << neighborData.log2Dim.y);
         const int rotateIndex = neighborIndex * 4 + neighborData.rotateIndex;
         float2 newUv = negCoord / texSize;
-        newUv = neighborIndex == -1 ? newUv : mul(uvRotations[rotateIndex], float3(uv.x, uv.y, 1));
+        newUv = neighborIndex == -1 ? newUv : mul(uvRotations[rotateIndex], float3(newUv.x, newUv.y, 1));
         newUv = neighborData.rotate ? float2(1 - newUv.y, newUv.x) : newUv;
 
         // Virtual texture lookup
         const uint2 baseOffset = material.baseVirtualPage * PAGE_WIDTH + neighborData.faceOffset;
         const float3 fullUv = VirtualTexture::GetPhysicalUV(baseOffset, newUv, faceSize, mipLevel);
-        result += weightsSum[1] * tex.SampleLevel(samplerLinearClamp, fullUv, 0.f);
+        result += weightsSum[1] * tex.SampleLevel(samplerNearestClamp, fullUv, 0.f);
     }
 
     return result;

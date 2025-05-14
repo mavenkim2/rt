@@ -789,7 +789,6 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         immutableSamplers.emplace_back();
         VK_CHECK(vkCreateSampler(device, &samplerCreate, 0, &immutableSamplers.back()));
 
-#if 0
         // sampler nearest clamp
         samplerCreate.minFilter  = VK_FILTER_NEAREST;
         samplerCreate.magFilter  = VK_FILTER_NEAREST;
@@ -797,6 +796,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         immutableSamplers.emplace_back();
         VK_CHECK(vkCreateSampler(device, &samplerCreate, 0, &immutableSamplers.back()));
 
+#if 0
         // sampler nearest compare
         samplerCreate.compareEnable = VK_TRUE;
         samplerCreate.compareOp     = VK_COMPARE_OP_GREATER_OR_EQUAL;
@@ -2022,8 +2022,7 @@ void CommandBuffer::BindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipel
     vkCmdBindPipeline(buffer, bindPoint, pipeline);
 }
 
-int DescriptorSetLayout::AddBinding(u32 b, DescriptorType type, VkShaderStageFlags stage,
-                                    bool null)
+int DescriptorSetLayout::AddBinding(u32 b, DescriptorType type, VkShaderStageFlags stage)
 {
     VkDescriptorSetLayoutBinding binding = {};
     binding.binding                      = b;
@@ -2033,7 +2032,6 @@ int DescriptorSetLayout::AddBinding(u32 b, DescriptorType type, VkShaderStageFla
 
     int index = static_cast<int>(bindings.size());
     bindings.push_back(binding);
-    nullBindings.push_back(null);
     return index;
 }
 
@@ -2042,12 +2040,19 @@ void DescriptorSetLayout::AddImmutableSamplers()
     VkDescriptorSetLayoutBinding binding = {};
     binding.binding                      = 50;
     binding.descriptorType               = VK_DESCRIPTOR_TYPE_SAMPLER;
-    binding.descriptorCount              = device->immutableSamplers.size();
+    binding.descriptorCount              = 1;
     binding.stageFlags                   = VK_SHADER_STAGE_ALL;
-    binding.pImmutableSamplers           = device->immutableSamplers.data();
+    binding.pImmutableSamplers           = &device->immutableSamplers[0];
+
+    VkDescriptorSetLayoutBinding binding2 = {};
+    binding2.binding                      = 51;
+    binding2.descriptorType               = VK_DESCRIPTOR_TYPE_SAMPLER;
+    binding2.descriptorCount              = 1;
+    binding2.stageFlags                   = VK_SHADER_STAGE_ALL;
+    binding2.pImmutableSamplers           = &device->immutableSamplers[1];
 
     bindings.push_back(binding);
-    nullBindings.push_back(false);
+    bindings.push_back(binding2);
 }
 
 VkDescriptorSetLayout *DescriptorSetLayout::GetVulkanLayout()
@@ -2056,22 +2061,9 @@ VkDescriptorSetLayout *DescriptorSetLayout::GetVulkanLayout()
     {
         ScratchArena scratch;
 
-        Assert(bindings.size() == nullBindings.size());
-        VkDescriptorBindingFlags *flags =
-            PushArray(scratch.temp.arena, VkDescriptorBindingFlags, bindings.size());
-        for (int i = 0; i < bindings.size(); i++)
-        {
-            if (nullBindings[i]) flags[i] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-        }
-        VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsCreate = {
-            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-        bindingFlagsCreate.bindingCount  = bindings.size();
-        bindingFlagsCreate.pBindingFlags = flags;
-
         Assert(bindings.size());
         VkDescriptorSetLayoutCreateInfo createInfo = {
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        createInfo.pNext        = &bindingFlagsCreate;
         createInfo.bindingCount = bindings.size();
         createInfo.pBindings    = bindings.data();
         VK_CHECK(vkCreateDescriptorSetLayout(device->device, &createInfo, 0, &layout));
@@ -2291,7 +2283,6 @@ VkPipeline Vulkan::CreateComputePipeline(Shader *shader, DescriptorSetLayout *la
     VkComputePipelineCreateInfo createInfo = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
     createInfo.stage                       = pipelineInfo;
     createInfo.layout                      = layout->pipelineLayout;
-    // createInfo.pNext                       = ? ;
 
     VkPipeline pipeline;
     vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &createInfo, 0, &pipeline);

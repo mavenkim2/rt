@@ -16,6 +16,7 @@ StructuredBuffer<uint> bindlessUints[] : register(t0, structuredBufferSpace);
 ByteAddressBuffer bindlessBuffer[] : register(t0, structuredBufferSpace);
 
 SamplerState samplerLinearClamp : register(s50);
+SamplerState samplerNearestClamp : register(s51);
 
 // Alan wake 2 random numbers 
 uint Hash(uint x)

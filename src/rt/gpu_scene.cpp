@@ -418,6 +418,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             maxVirtualOffset = Max(maxVirtualOffset, metaData[faceIndex].offsetY);
 
             Assert(metaData[faceIndex].log2Width < 9 && metaData[faceIndex].log2Height < 9);
+            Assert(Max(metaData[faceIndex].log2Width, metaData[faceIndex].log2Height) > 4);
             minLog2Dim = Min(minLog2Dim, metaData[faceIndex].log2Width);
             maxLog2Dim = Max(maxLog2Dim, metaData[faceIndex].log2Width);
             minLog2Dim = Min(minLog2Dim, metaData[faceIndex].log2Height);
@@ -435,11 +436,14 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         ScratchArena textureScratch;
 
-        u8 *faceDataStream =
-            PushArrayNoZero(sceneScratch.temp.arena, u8, faceDataBitStreamSize);
+        u8 *faceDataStream    = PushArray(sceneScratch.temp.arena, u8, faceDataBitStreamSize);
         u32 faceDataBitOffset = 0;
         for (int faceIndex = 0; faceIndex < fileHeader.numFaces; faceIndex++)
         {
+            if (faceIndex == 18273)
+            {
+                int stop = 5;
+            }
             FaceMetadata2 &faceMetadata = metaData[faceIndex];
             WriteBits((u32 *)faceDataStream, faceDataBitOffset, faceMetadata.offsetX,
                       numVirtualOffsetBits);
@@ -469,7 +473,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             }
         }
         Assert(faceDataBitOffset == faceDataBitStreamBitSize);
-
         gpuTextureInfo[i].packedFaceData       = faceDataStream;
         gpuTextureInfo[i].packedDataSize       = faceDataBitStreamSize;
         gpuTextureInfo[i].minLog2Dim           = minLog2Dim;
@@ -855,8 +858,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     // TODO: what is this?
     int counterIndex = layout.AddBinding(8, DescriptorType::StorageBuffer, flags);
-    int nvApiIndex   = layout.AddBinding(NVAPI_SLOT, DescriptorType::StorageBuffer,
-                                         VK_SHADER_STAGE_ALL, true);
+    int nvApiIndex =
+        layout.AddBinding(NVAPI_SLOT, DescriptorType::StorageBuffer, VK_SHADER_STAGE_ALL);
 
     layout.AddImmutableSamplers();
 

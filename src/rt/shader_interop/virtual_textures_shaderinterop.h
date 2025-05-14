@@ -29,6 +29,14 @@ struct PageTableUpdateRequest
     uint packed;
 };
 
+struct GPUFaceData
+{
+    uint4 neighborFaces;
+    uint2 faceOffset;
+    uint2 log2Dim;
+    uint rotate;
+};
+
 #ifdef __cplusplus
 }
 #endif

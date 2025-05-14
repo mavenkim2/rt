@@ -26,16 +26,16 @@ namespace VirtualTexture
         uint pageY = BitFieldExtractU32(packed, 8, 8);
         uint layer = BitFieldExtractU32(packed, 2, 16);
         const float2 physicalPageCoord = float2(pageX, pageY) * PAGE_WIDTH;
-        const float2 offsetInPage = float2(virtualAddress & (PAGE_WIDTH - 1));
 
-        const float2 mipFaceTexelOffset = float2(asfloat(asuint(faceTexelOffset.x) - (mipLevel << 23)), asfloat(asuint(faceTexelOffset.y) - (mipLevel << 23)));
+        const float2 mipFaceTexelOffset = faceTexelOffset / float(1u << mipLevel);
 
         if (debug)
         {
-            printf("virtual address: %u %u\n", virtualAddress.x, virtualAddress.y);
+            printf("virtual address: %u %u, phys page: %f %f, face texel offset: %f %f\n", 
+            virtualAddress.x, virtualAddress.y, physicalPageCoord.x, physicalPageCoord.y, mipFaceTexelOffset.x, mipFaceTexelOffset.y);
         }
 
-        const float2 texCoord = (physicalPageCoord + offsetInPage + (mipFaceTexelOffset % PAGE_WIDTH)) / float2(poolWidth, poolHeight);
+        const float2 texCoord = (physicalPageCoord + ((baseOffset >> mipLevel) & (PAGE_WIDTH - 1)) + (mipFaceTexelOffset % PAGE_WIDTH)) / float2(poolWidth, poolHeight);
         const float3 result = float3(texCoord.x, texCoord.y, layer);
 
         return result;
