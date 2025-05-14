@@ -171,6 +171,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
             uint2 pageInformation = dg.DecodeFaceIDAndRotateInfo(triangleIndex);
             uint3 vids = dg.DecodeTriangle(triangleIndex);
 
+            uint faceID = pageInformation.x;
             // Rotate to original order
             uint rotate = BitFieldExtractU32(pageInformation.y, 2, 0);
             uint isSecondFace = BitFieldExtractU32(pageInformation.y, 1, 2);
@@ -265,8 +266,9 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
             float surfaceSpreadAngle = depth == 1 ? rayCone.CalculatePrimaryHitUnifiedSurfaceSpreadAngle(dir, n, p0, p1, p2, n0, n1, n2) 
                                                   : rayCone.CalculateSecondaryHitSurfaceSpreadAngle(dir, n, p0, p1, p2, n0, n1, n2);
 
-            int2 dim;
-            FaceData faceData;
+            // Get base face data
+            Ptex::FaceData faceData = Ptex::GetFaceData(material, faceID);
+            int2 dim = int2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
 
             rayCone.Propagate(surfaceSpreadAngle, query.CommittedRayT());
             float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, n, dim, printDebug);
@@ -281,7 +283,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
                 break;
                 case GPUMaterialType::Diffuse: 
                 {
-                    float4 reflectance = SampleStochasticCatmullRomBorderless(physicalPages, material.baseVirtualPage, faceData, uv, (uint)lambda, filterU);
+                    float4 reflectance = SampleStochasticCatmullRomBorderless(physicalPages, faceData, material, faceID, uv, (uint)lambda, filterU);
                     dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
                 }
                 break;

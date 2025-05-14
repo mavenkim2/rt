@@ -429,7 +429,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             (minLog2Dim == maxLog2Dim ? 0 : Log2Int(Max(maxLog2Dim - minLog2Dim, 1)) + 1);
 
         u32 faceDataBitStreamSize =
-            ((5 * 2 * (numVirtualOffsetBits + numFaceDimBits) + 9) * fileHeader.numFaces +
+            ((5 * 2 * (numVirtualOffsetBits + numFaceDimBits) + 4 * 3 + 1) *
+                 fileHeader.numFaces +
              7) >>
             3;
 
@@ -464,6 +465,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                           neighborMetadata.log2Height - minLog2Dim, numFaceDimBits);
                 WriteBits((u32 *)faceDataStream, faceDataBitOffset,
                           faceMetadata.rotate >> (2 * edgeIndex), 2);
+                WriteBits((u32 *)faceDataStream, faceDataBitOffset,
+                          neighborMetadata.rotate >> 31, 1);
             }
         }
 

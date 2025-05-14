@@ -174,6 +174,8 @@ struct FaceMetadata
 struct FaceMetadata2
 {
     u32 neighborFaces[4];
+    // 2 bits per face denoting rotation of each neighbor wrt this face, top bit set if this
+    // face is rotated (done in packing process to make long textures tall)
     u32 rotate;
     int log2Width;
     int log2Height;
