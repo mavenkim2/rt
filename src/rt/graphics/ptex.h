@@ -173,6 +173,11 @@ struct FaceMetadata
 
 struct FaceMetadata2
 {
+    u32 neighborFaces[4];
+    u32 rotate;
+    int log2Width;
+    int log2Height;
+
     u32 offsetX;
     u32 offsetY;
 };
@@ -196,6 +201,7 @@ struct TextureMetadata
     u32 numFaces;
     u32 virtualSqrtNumPages;
     u32 sqrtNumPages;
+    u32 numLevels;
     u32 mipPageOffsets[MAX_LEVEL - 1];
 };
 
@@ -332,10 +338,8 @@ struct VirtualTextureManager
                           u32 physicalTextureWidth, u32 physicalTextureHeight, u32 numPools,
                           VkFormat format);
     Vec2u AllocateVirtualPages(const Vec2u &virtualSize, u32 &index);
-    void AllocatePhysicalPages(CommandBuffer *cmd, u32 allocIndex, FaceMetadata *metadata,
-                               u32 numFaces, u8 *contents);
     void AllocatePhysicalPages(CommandBuffer *cmd, Vec2u baseVirtualPage,
-                               TileRequest2 *requests, u32 numRequests, u8 *contents);
+                               TextureMetadata &metadata, u8 *contents);
 
     // Streaming
     // u32 Evict(StaticArray<PageTableUpdateRequest> &evictRequests,

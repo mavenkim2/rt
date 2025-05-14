@@ -1,3 +1,4 @@
+#include "bit_packing.h"
 #include "camera.h"
 #include "dgfs.h"
 #include "graphics/vulkan.h"
@@ -345,14 +346,21 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     StaticArray<string> tiledPtexFilenames(sceneScratch.temp.arena,
                                            rootScene->ptexTextures.size());
-    StaticArray<StaticArray<FaceMetadata>> ptexInfo(sceneScratch.temp.arena,
-                                                    rootScene->ptexTextures.size());
-    StaticArray<u32> textureIndexToVirtualAddressIndex(sceneScratch.temp.arena,
-                                                       rootScene->ptexTextures.size(),
-                                                       rootScene->ptexTextures.size());
-    StaticArray<Vec2u> baseVirtualPages(sceneScratch.temp.arena,
-                                        rootScene->ptexTextures.size(),
-                                        rootScene->ptexTextures.size());
+    StaticArray<StaticArray<FaceMetadata2>> ptexInfo(sceneScratch.temp.arena,
+                                                     rootScene->ptexTextures.size());
+
+    struct GPUTextureInfo
+    {
+        u8 *packedFaceData;
+        int packedDataSize;
+        int minLog2Dim;
+        int numVirtualOffsetBits;
+        int numFaceDimBits;
+        u32 virtualAddressIndex;
+    };
+    StaticArray<GPUTextureInfo> gpuTextureInfo(sceneScratch.temp.arena,
+                                               rootScene->ptexTextures.size(),
+                                               rootScene->ptexTextures.size());
 
     VirtualTextureManager virtualTextureManager(sceneScratch.temp.arena, 131072, 131072, 32768,
                                                 32768, 2, VK_FORMAT_BC1_RGB_UNORM_BLOCK);
@@ -360,7 +368,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     CommandBuffer *tileCmd          = device->BeginCommandBuffer(QueueType_Compute);
     Semaphore tileSubmitSemaphore   = device->CreateSemaphore();
     tileSubmitSemaphore.signalValue = 1;
-    // tileCmd->UAVBarrier(&virtualTextureManager.pageTable);
+    tileCmd->UAVBarrier(&virtualTextureManager.pageTable);
     tileCmd->TransferWriteBarrier(&virtualTextureManager.gpuPhysicalPool);
     tileCmd->FlushBarriers();
 
@@ -374,19 +382,18 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             continue;
 
         Tokenizer tokenizer;
-        // tokenizer.input  = OS_MapFileRead(filename);
         tokenizer.input  = OS_ReadFile(sceneScratch.temp.arena, filename);
         tokenizer.cursor = tokenizer.input.str;
 
         TextureMetadata fileHeader;
         GetPointerValue(&tokenizer, &fileHeader);
 
-        FaceMetadata *metaData = (FaceMetadata *)tokenizer.cursor;
-        Advance(&tokenizer, sizeof(FaceMetadata) * fileHeader.numFaces);
+        FaceMetadata2 *metaData = (FaceMetadata2 *)tokenizer.cursor;
+        Advance(&tokenizer, sizeof(FaceMetadata2) * fileHeader.numFaces);
 
-        auto array = StaticArray<FaceMetadata>(sceneScratch.temp.arena, fileHeader.numFaces,
-                                               fileHeader.numFaces);
-        MemoryCopy(array.data, metaData, sizeof(FaceMetadata) * fileHeader.numFaces);
+        auto array = StaticArray<FaceMetadata2>(sceneScratch.temp.arena, fileHeader.numFaces,
+                                                fileHeader.numFaces);
+        MemoryCopy(array.data, metaData, sizeof(FaceMetadata2) * fileHeader.numFaces);
         tiledPtexFilenames.Push(filename);
         ptexInfo.Push(array);
 
@@ -394,12 +401,78 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         Vec2u baseVirtualPage = virtualTextureManager.AllocateVirtualPages(
             Vec2u(fileHeader.sqrtNumPages, fileHeader.sqrtNumPages), allocIndex);
 
-        textureIndexToVirtualAddressIndex[i] = allocIndex;
-        // virtualTextureManager.AllocatePhysicalPages(tileCmd, allocIndex, metaData,
-        //                                             fileHeader.numFaces,
-        //                                             tokenizer.input.str);
+        virtualTextureManager.AllocatePhysicalPages(tileCmd, baseVirtualPage, fileHeader,
+                                                    tokenizer.cursor);
 
         OS_UnmapFile(tokenizer.input.str);
+
+        // Pack ptex face metadata into FaceData bitstream
+        u32 maxVirtualOffset = neg_inf;
+
+        int minLog2Dim = 16;
+        int maxLog2Dim = 0;
+
+        for (int faceIndex = 0; faceIndex < fileHeader.numFaces; faceIndex++)
+        {
+            maxVirtualOffset = Max(maxVirtualOffset, metaData[faceIndex].offsetX);
+            maxVirtualOffset = Max(maxVirtualOffset, metaData[faceIndex].offsetY);
+
+            Assert(metaData[faceIndex].log2Width < 16 && metaData[faceIndex].log2Height < 16);
+            minLog2Dim = Min(minLog2Dim, metaData[faceIndex].log2Width);
+            maxLog2Dim = Max(maxLog2Dim, metaData[faceIndex].log2Width);
+            minLog2Dim = Min(minLog2Dim, metaData[faceIndex].log2Height);
+            maxLog2Dim = Max(maxLog2Dim, metaData[faceIndex].log2Height);
+        }
+
+        u32 numVirtualOffsetBits = Log2Int(maxVirtualOffset) + 1;
+        u32 numFaceDimBits =
+            (minLog2Dim == maxLog2Dim ? 0 : Log2Int(Max(maxLog2Dim - minLog2Dim, 1)) + 1);
+
+        u32 faceDataBitStreamSize =
+            ((5 * 2 * (numVirtualOffsetBits + numFaceDimBits) + 9) * fileHeader.numFaces +
+             7) >>
+            3;
+
+        ScratchArena textureScratch;
+
+        u8 *faceDataStream =
+            PushArrayNoZero(sceneScratch.temp.arena, u8, faceDataBitStreamSize);
+        u32 faceDataBitOffset = 0;
+        for (int faceIndex = 0; faceIndex < fileHeader.numFaces; faceIndex++)
+        {
+            FaceMetadata2 &faceMetadata = metaData[faceIndex];
+            WriteBits((u32 *)faceDataStream, faceDataBitOffset, faceMetadata.offsetX,
+                      numVirtualOffsetBits);
+            WriteBits((u32 *)faceDataStream, faceDataBitOffset, faceMetadata.offsetY,
+                      numVirtualOffsetBits);
+            WriteBits((u32 *)faceDataStream, faceDataBitOffset,
+                      faceMetadata.log2Width - minLog2Dim, numFaceDimBits);
+            WriteBits((u32 *)faceDataStream, faceDataBitOffset,
+                      faceMetadata.log2Height - minLog2Dim, numFaceDimBits);
+            WriteBits((u32 *)faceDataStream, faceDataBitOffset, faceMetadata.rotate >> 31, 1);
+            for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
+            {
+                FaceMetadata2 &neighborMetadata =
+                    metaData[faceMetadata.neighborFaces[edgeIndex]];
+                WriteBits((u32 *)faceDataStream, faceDataBitOffset, neighborMetadata.offsetX,
+                          numVirtualOffsetBits);
+                WriteBits((u32 *)faceDataStream, faceDataBitOffset, neighborMetadata.offsetY,
+                          numVirtualOffsetBits);
+                WriteBits((u32 *)faceDataStream, faceDataBitOffset,
+                          neighborMetadata.log2Width - minLog2Dim, numFaceDimBits);
+                WriteBits((u32 *)faceDataStream, faceDataBitOffset,
+                          neighborMetadata.log2Height - minLog2Dim, numFaceDimBits);
+                WriteBits((u32 *)faceDataStream, faceDataBitOffset,
+                          faceMetadata.rotate >> (2 * edgeIndex), 2);
+            }
+        }
+
+        gpuTextureInfo[i].packedFaceData       = faceDataStream;
+        gpuTextureInfo[i].packedDataSize       = faceDataBitStreamSize;
+        gpuTextureInfo[i].minLog2Dim           = minLog2Dim;
+        gpuTextureInfo[i].numVirtualOffsetBits = numVirtualOffsetBits;
+        gpuTextureInfo[i].numFaceDimBits       = numFaceDimBits;
+        gpuTextureInfo[i].virtualAddressIndex  = allocIndex;
     }
 
     tileCmd->Signal(tileSubmitSemaphore);
@@ -841,24 +914,39 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         int bindlessData = device->BindlessStorageIndex(&blasSceneInfo[i].dgfBuffer);
         Assert(bindlessData == 2 * runningTotal + 1);
         scene->gpuInstanceID = runningTotal++;
-#if 0
-            runningTotal += scene->numPrimitives;
-            GPUMesh *gpuMeshes = (GPUMesh *)scene->primitives;
-            for (int primIndex = 0; primIndex < scene->numPrimitives; primIndex++)
-            {
-                GPUMesh &gpuMesh     = gpuMeshes[primIndex];
-                int bindlessVertices = device->BindlessStorageIndex(
-                    &gpuMesh.buffer, gpuMesh.vertexOffset, gpuMesh.vertexSize);
-                Assert(bindlessVertices == 3 * runningTotal);
-                int bindlessIndices = device->BindlessStorageIndex(
-                    &gpuMesh.buffer, gpuMesh.indexOffset, gpuMesh.indexSize);
-                Assert(bindlessIndices == 3 * runningTotal + 1);
-                int bindlessNormals = device->BindlessStorageIndex(
-                    &gpuMesh.buffer, gpuMesh.normalOffset, gpuMesh.normalSize);
-                Assert(bindlessNormals == 3 * runningTotal + 2);
-            }
-#endif
     }
+
+    // Populate GPU materials
+    StaticArray<GPUMaterial> gpuMaterials(sceneScratch.temp.arena,
+                                          rootScene->materials.Length());
+    for (int i = 0; i < rootScene->materials.Length(); i++)
+    {
+        GPUMaterial material = rootScene->materials[i]->ConvertToGPU();
+        int index            = rootScene->materials[i]->ptexReflectanceIndex;
+        if (index != -1)
+        {
+            GPUTextureInfo &textureInfo = gpuTextureInfo[index];
+            material.baseVirtualPage =
+                virtualTextureManager.baseVirtualPages[textureInfo.virtualAddressIndex];
+            material.materialIndex        = index;
+            material.minLog2Dim           = textureInfo.minLog2Dim;
+            material.numVirtualOffsetBits = textureInfo.numVirtualOffsetBits;
+            material.numFaceDimBits       = textureInfo.numFaceDimBits;
+
+            TransferBuffer faceDataBuffer = transferCmd->SubmitBuffer(
+                textureInfo.packedFaceData, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                textureInfo.packedDataSize);
+            int bindlessFaceDataIndex = device->BindlessStorageIndex(&faceDataBuffer.buffer);
+
+            material.bindlessFaceDataIndex = bindlessFaceDataIndex;
+        }
+        gpuMaterials.Push(material);
+    }
+    GPUBuffer materialBuffer =
+        transferCmd
+            ->SubmitBuffer(gpuMaterials.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                           sizeof(GPUMaterial) * gpuMaterials.Length())
+            .buffer;
 
     if (tlasScenes.Length() != 0)
     {
@@ -906,26 +994,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         device->SubmitCommandBuffer(allCommandBuffer);
     }
 
-    // GPU materials
-    StaticArray<GPUMaterial> gpuMaterials(sceneScratch.temp.arena,
-                                          rootScene->materials.Length());
-    for (int i = 0; i < rootScene->materials.Length(); i++)
-    {
-        GPUMaterial material = rootScene->materials[i]->ConvertToGPU();
-        int index            = rootScene->materials[i]->ptexReflectanceIndex;
-        if (index != -1)
-        {
-            material.baseVirtualPage =
-                virtualTextureManager
-                    .baseVirtualPages[textureIndexToVirtualAddressIndex[index]];
-        }
-        gpuMaterials.Push(material);
-    }
-    GPUBuffer materialBuffer =
-        transferCmd
-            ->SubmitBuffer(gpuMaterials.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                           sizeof(GPUMaterial) * gpuMaterials.Length())
-            .buffer;
     // transferCmd->Barrier(&virtualTextureManager.pageTable,
     //                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
     //                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,

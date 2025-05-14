@@ -22,8 +22,16 @@ enum class GPUMaterialType
 struct GPUMaterial
 {
     GPUMaterialType type;
+
+    // Virtual texture info
     uint2 baseVirtualPage;
     uint materialIndex;
+    uint minLog2Dim;
+    uint numVirtualOffsetBits;
+    uint numFaceDimBits;
+    int bindlessFaceDataIndex;
+
+    // Shading info
     float eta;
 };
 

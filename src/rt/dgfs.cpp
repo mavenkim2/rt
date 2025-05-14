@@ -501,12 +501,6 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
         offsets[i] -= counts[i];
     }
 
-    // TODO:
-    // 1. actually output the data in a format that the GPU can read and decode
-    // 2. set up the custom primitive using vulkan
-    // 3. handle multiple geom IDs in a single block
-    // 4. handle vertices in multiple blocks (duplicate, or references)
-
     static const u32 removedBit = 0x80000000;
     auto FindMinValence         = [&]() {
         u32 minCount           = ~0u;
@@ -1017,7 +1011,6 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     packed.i     = BitFieldPackU32(packed.i, minOct[1], headerOffset, 16);
 
     // Constant mode
-    // TODO: compress this
     if (constantMaterialID)
     {
         u32 materialIndex = scene->primIndices[geomIDStart].materialID.GetIndex();
