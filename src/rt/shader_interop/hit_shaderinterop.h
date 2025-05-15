@@ -29,6 +29,7 @@ struct GPUMaterial
     uint minLog2Dim;
     uint numVirtualOffsetBits;
     uint numFaceDimBits;
+    uint numFaceIDBits;
     int bindlessFaceDataIndex;
 
     // Shading info

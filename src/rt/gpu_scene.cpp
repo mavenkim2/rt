@@ -356,14 +356,15 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         int minLog2Dim;
         int numVirtualOffsetBits;
         int numFaceDimBits;
+        int numFaceIDBits;
         u32 virtualAddressIndex;
     };
     StaticArray<GPUTextureInfo> gpuTextureInfo(sceneScratch.temp.arena,
                                                rootScene->ptexTextures.size(),
                                                rootScene->ptexTextures.size());
 
-    VirtualTextureManager virtualTextureManager(sceneScratch.temp.arena, 131072, 131072, 32768,
-                                                32768, 2, VK_FORMAT_BC1_RGB_UNORM_BLOCK);
+    VirtualTextureManager virtualTextureManager(sceneScratch.temp.arena, 131072, 131072, 16384,
+                                                16384, 4, VK_FORMAT_BC1_RGB_UNORM_BLOCK);
 
     CommandBuffer *tileCmd          = device->BeginCommandBuffer(QueueType_Compute);
     Semaphore tileSubmitSemaphore   = device->CreateSemaphore();
@@ -428,9 +429,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         u32 numVirtualOffsetBits = Log2Int(maxVirtualOffset) + 1;
         u32 numFaceDimBits =
             (minLog2Dim == maxLog2Dim ? 0 : Log2Int(Max(maxLog2Dim - minLog2Dim, 1)) + 1);
+        u32 numFaceIDBits = Log2Int(fileHeader.numFaces) + 1;
 
         u32 faceDataBitStreamBitSize =
-            (5 * 2 * (numVirtualOffsetBits + numFaceDimBits) + 4 * 3 + 1) *
+            (2 * (numVirtualOffsetBits + numFaceDimBits) + 4 * numFaceIDBits + 9) *
             fileHeader.numFaces;
         u32 faceDataBitStreamSize = (faceDataBitStreamBitSize + 7) >> 3;
 
@@ -440,10 +442,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         u32 faceDataBitOffset = 0;
         for (int faceIndex = 0; faceIndex < fileHeader.numFaces; faceIndex++)
         {
-            if (faceIndex == 18273)
-            {
-                int stop = 5;
-            }
             FaceMetadata2 &faceMetadata = metaData[faceIndex];
             WriteBits((u32 *)faceDataStream, faceDataBitOffset, faceMetadata.offsetX,
                       numVirtualOffsetBits);
@@ -453,23 +451,16 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                       faceMetadata.log2Width - minLog2Dim, numFaceDimBits);
             WriteBits((u32 *)faceDataStream, faceDataBitOffset,
                       faceMetadata.log2Height - minLog2Dim, numFaceDimBits);
+            WriteBits((u32 *)faceDataStream, faceDataBitOffset,
+                      faceMetadata.rotate & ((1u << 8u) - 1u), 8);
             WriteBits((u32 *)faceDataStream, faceDataBitOffset, faceMetadata.rotate >> 31, 1);
             for (int edgeIndex = 0; edgeIndex < 4; edgeIndex++)
             {
-                FaceMetadata2 &neighborMetadata =
-                    metaData[faceMetadata.neighborFaces[edgeIndex]];
-                WriteBits((u32 *)faceDataStream, faceDataBitOffset, neighborMetadata.offsetX,
-                          numVirtualOffsetBits);
-                WriteBits((u32 *)faceDataStream, faceDataBitOffset, neighborMetadata.offsetY,
-                          numVirtualOffsetBits);
-                WriteBits((u32 *)faceDataStream, faceDataBitOffset,
-                          neighborMetadata.log2Width - minLog2Dim, numFaceDimBits);
-                WriteBits((u32 *)faceDataStream, faceDataBitOffset,
-                          neighborMetadata.log2Height - minLog2Dim, numFaceDimBits);
-                WriteBits((u32 *)faceDataStream, faceDataBitOffset,
-                          neighborMetadata.rotate >> 31, 1);
-                WriteBits((u32 *)faceDataStream, faceDataBitOffset,
-                          (faceMetadata.rotate >> (2 * edgeIndex)) & 0x3, 2);
+                int neighborFace = faceMetadata.neighborFaces[edgeIndex];
+                u32 writeNeighborFace =
+                    neighborFace == -1 ? (~0u >> (32 - numFaceIDBits)) : (u32)neighborFace;
+                WriteBits((u32 *)faceDataStream, faceDataBitOffset, writeNeighborFace,
+                          numFaceIDBits);
             }
         }
         Assert(faceDataBitOffset == faceDataBitStreamBitSize);
@@ -478,11 +469,15 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         gpuTextureInfo[i].minLog2Dim           = minLog2Dim;
         gpuTextureInfo[i].numVirtualOffsetBits = numVirtualOffsetBits;
         gpuTextureInfo[i].numFaceDimBits       = numFaceDimBits;
+        gpuTextureInfo[i].numFaceIDBits        = numFaceIDBits;
         gpuTextureInfo[i].virtualAddressIndex  = allocIndex;
     }
 
     tileCmd->Signal(tileSubmitSemaphore);
     tileCmd->Barrier(&virtualTextureManager.gpuPhysicalPool,
+                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    tileCmd->Barrier(&virtualTextureManager.pageTable,
                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
     tileCmd->FlushBarriers();
@@ -940,6 +935,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                 material.minLog2Dim           = textureInfo.minLog2Dim;
                 material.numVirtualOffsetBits = textureInfo.numVirtualOffsetBits;
                 material.numFaceDimBits       = textureInfo.numFaceDimBits;
+                material.numFaceIDBits        = textureInfo.numFaceIDBits;
 
                 TransferBuffer faceDataBuffer = transferCmd->SubmitBuffer(
                     textureInfo.packedFaceData, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,

@@ -766,6 +766,10 @@ void Convert(string filename)
                     int neighborFace = f.adjface(edgeIndex);
                     int rot          = (edgeIndex - aeid + 2) & 3;
 
+                    if (neighborFace == -1)
+                    {
+                        int stop = 5;
+                    }
                     faceMetadata[faceIndex].neighborFaces[edgeIndex] = neighborFace;
                     faceMetadata[faceIndex].rotate |= rot << (2 * edgeIndex);
                 }
@@ -927,7 +931,7 @@ void Convert(string filename)
                 Assert(faceInfos[handleIndex].faceIndex == faceIndex);
                 faceInfos[handleIndex].srcOffset = Vec2u(currentHorizontalOffset, gpuHeight);
                 faceInfos[handleIndex].size      = Vec2u(img.width, img.height);
-                faceInfos[handleIndex].submissionIndex = submissionIndex;
+                faceInfos[handleIndex].submissionIndex = numSubmissions;
             }
 
             currentHorizontalOffset += img.width;
@@ -976,11 +980,18 @@ void Convert(string filename)
         u32 currentDstTotalHeight      = 0;
         currentShelfHeight             = 0;
 
+        StaticArray<bool> blockCopied(scratch.temp.arena,
+                                      gpuOutputWidth * gpuOutputHeight * numSubmissions,
+                                      gpuOutputWidth * gpuOutputHeight * numSubmissions);
         // Copy to square texture
         for (int i = 0; i < numFaces; i++)
         {
             FaceInfo &faceInfo = faceInfos[i];
-            if (faceInfo.size.x == 0 && faceInfo.size.y == 0) continue;
+            if (faceInfo.size.x == 0 && faceInfo.size.y == 0)
+            {
+                int stop = 5;
+                continue;
+            }
             u8 *blockCompressedResult = blockCompressedResults[faceInfo.submissionIndex];
 
             u32 texelWidth  = faceInfo.size.x;
@@ -1011,20 +1022,24 @@ void Convert(string filename)
                 dstOffset = faceInfo.dstOffset >> (blockShift + (u32)levelIndex);
             }
 
-            if (blockWidth == 0 || blockHeight == 0)
+            Vec2u block     = faceInfo.srcOffset >> blockShift;
+            u32 lookupIndex = faceInfo.submissionIndex * gpuOutputWidth * gpuOutputHeight +
+                              block.y * gpuOutputWidth + block.x;
+            if (blockCopied[lookupIndex])
             {
-                if (((faceInfo.srcOffset.x & ((1u << blockShift) - 1u)) != 0) ||
-                    ((faceInfo.srcOffset.y & ((1u << blockShift) - 1u)) != 0))
-                    continue;
+                int stop = 5;
+                continue;
             }
+
+            blockCopied[lookupIndex] = true;
 
             blockWidth  = Max(blockWidth, 1u);
             blockHeight = Max(blockHeight, 1u);
 
             // Copy face data to square texture
-            Utils::Copy(blockCompressedResult, faceInfo.srcOffset >> blockShift,
-                        gpuOutputWidth, gpuOutputHeight, temp, dstOffset, levelBlockWidth,
-                        levelBlockWidth, blockHeight, blockWidth, bytesPerBlock);
+            Utils::Copy(blockCompressedResult, block, gpuOutputWidth, gpuOutputHeight, temp,
+                        dstOffset, levelBlockWidth, levelBlockWidth, blockHeight, blockWidth,
+                        bytesPerBlock);
 
             currentDstHorizontalOffset += texelWidth;
         }
@@ -1278,9 +1293,10 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, Vec2u base
 
             Assert(pageLocation.x < 256 && pageLocation.y < 256);
 
-            packed = BitFieldPackU32(packed, pageLocation.x, packedOffset, 8);
-            packed = BitFieldPackU32(packed, pageLocation.y, packedOffset, 8);
-            packed = BitFieldPackU32(packed, poolIndex, packedOffset, 2);
+            // TODO: don't hardcode these
+            packed = BitFieldPackU32(packed, pageLocation.x, packedOffset, 7);
+            packed = BitFieldPackU32(packed, pageLocation.y, packedOffset, 7);
+            packed = BitFieldPackU32(packed, poolIndex, packedOffset, 4);
             PageTableUpdateRequest pageTableUpdateRequest;
             pageTableUpdateRequest.virtualPage = virtualPage;
             pageTableUpdateRequest.packed      = packed;
@@ -1322,58 +1338,6 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, Vec2u base
                                 descriptorSetLayout.pipelineLayout);
         cmd->Dispatch((levelNumPages + 63) >> 6, 1, 1);
     }
-
-#if 0
-    for (int requestIndex = 0; requestIndex < numRequests; requestIndex++)
-    {
-        if (freePool >= pools.Length())
-        {
-            evictStartRequestIndex = requestIndex;
-            break;
-        }
-
-        TileRequest2 &request = requests[requestIndex];
-
-        // Calculate address of virtual page
-        const Vec2u basePage   = baseVirtualPages[request.virtualAddressIndex];
-        const Vec2u pageOffset = (basePage >> (u32)request.mipLevel) + request.virtualPage;
-
-        // Allocate page from pool
-        Assert(freePool != InvalidPool && freePool < pools.Length());
-        u32 poolIndex          = freePool;
-        PhysicalPagePool &pool = pools[poolIndex];
-        Vec2u pageLocation     = pool.pagePool[pool.freePage];
-        pool.freePage++;
-        if (pool.freePage >= pool.pagePool.Length()) freePool++;
-
-        // Create page table update request
-        u32 packed       = 0;
-        u32 packedOffset = 0;
-
-        packed = BitFieldPackU32(packed, pageLocation.x, packedOffset, 8);
-        packed = BitFieldPackU32(packed, pageLocation.y, packedOffset, 8);
-        packed = BitFieldPackU32(packed, poolIndex, packedOffset, 2);
-        PageTableUpdateRequest pageTableUpdateRequest;
-        pageTableUpdateRequest.virtualPage = Vec2u(pageOffset);
-        pageTableUpdateRequest.packed      = packed;
-        updateRequests.push_back(pageTableUpdateRequest);
-
-        // Create buffer image copy command
-        BufferImageCopy copy = {};
-        copy.bufferOffset    = bufferOffset;
-        copy.baseLayer       = poolIndex;
-        copy.layerCount      = 1;
-        copy.offset = Vec3i(pageLocation.x << PAGE_SHIFT, pageLocation.y << PAGE_SHIFT, 0);
-        copy.extent = Vec3u(PAGE_WIDTH, PAGE_WIDTH, 1);
-
-        copies.push_back(copy);
-
-        // Copy to transfer buffer
-        u32 offset = pagesPerRow * pageSize * pageLocation.y + pageSize * pageLocation.x;
-        u8 *src    = contents + offset;
-        MemoryCopy(mappedPtr + bufferOffset, src, pageSize);
-    }
-#endif
 
     cmd->CopyImage(&transferBuffer, &gpuPhysicalPool, copies.data, copies.Length());
 }

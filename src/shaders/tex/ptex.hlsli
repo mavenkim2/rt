@@ -29,9 +29,10 @@ namespace Ptex
 {
     struct FaceData 
     {
+        int4 neighborFaces;
         uint2 faceOffset;
         uint2 log2Dim;
-        int rotateIndex;
+        uint rotateIndices;
         bool rotate;
     };
 
@@ -64,44 +65,43 @@ namespace Ptex
         return neighborIndex;
     }
 
-    FaceData GetFaceData(GPUMaterial material, uint faceID, int neighborIndex = -1)
+    FaceData GetFaceData(GPUMaterial material, uint faceID)
     {
         // Load face data
         ByteAddressBuffer faceDataBuffer = bindlessBuffer[material.bindlessFaceDataIndex];
-        uint faceDataStride = 5 * 2 * (material.numVirtualOffsetBits + material.numFaceDimBits) + 13;
-        uint neighborDataStride = 2 * (material.numVirtualOffsetBits + material.numFaceDimBits) + 3;
+        uint faceDataStride = 2 * (material.numVirtualOffsetBits + material.numFaceDimBits) + 4 * material.numFaceIDBits + 9;
         uint bufferOffset = faceDataStride * faceID;
 
-        bufferOffset += neighborIndex == -1 ? 0 : neighborDataStride - 2 + neighborDataStride * neighborIndex;
+        BitStreamReader reader = CreateBitStreamReader(faceDataBuffer, 0, bufferOffset, 32 * 4 + 24 * 2 + 4 * 2 + 9);
 
-        // TODO: may need a uint4
-        uint2 offset = GetAlignedAddressAndBitOffset(0, bufferOffset);
-        uint3 packed = faceDataBuffer.Load3(offset.x);
-
-        uint2 data = uint2(BitAlignU32(packed.y, packed.x, offset.y), 
-                           BitAlignU32(packed.z, packed.y, offset.y));
-        
         FaceData result;
-        result.faceOffset.x = BitFieldExtractU32(data.x, material.numVirtualOffsetBits, 0);
-        data.x = BitAlignU32(data.y, data.x, material.numVirtualOffsetBits);
+        result.faceOffset.x = reader.Read<24>(material.numVirtualOffsetBits);
+        result.faceOffset.y = reader.Read<24>(material.numVirtualOffsetBits);
+        result.log2Dim.x = material.minLog2Dim + reader.Read<4>(material.numFaceDimBits);
+        result.log2Dim.y = material.minLog2Dim + reader.Read<4>(material.numFaceDimBits);
+        result.rotateIndices = reader.Read<8>(8);
+        result.rotate = reader.Read<1>(1);
 
-        result.faceOffset.y = BitFieldExtractU32(data.x, material.numVirtualOffsetBits, 0);
-        data.x = BitAlignU32(data.y, data.x, material.numVirtualOffsetBits);
+        result.neighborFaces.x = reader.Read<32>(material.numFaceIDBits);
+        result.neighborFaces.y = reader.Read<32>(material.numFaceIDBits);
+        result.neighborFaces.z = reader.Read<32>(material.numFaceIDBits);
+        result.neighborFaces.w = reader.Read<32>(material.numFaceIDBits);
 
-        result.log2Dim.x = material.minLog2Dim + BitFieldExtractU32(data.x, material.numFaceDimBits, 0);
-        result.log2Dim.y = material.minLog2Dim + BitFieldExtractU32(data.x, material.numFaceDimBits, material.numFaceDimBits);
-
-        result.rotate = BitFieldExtractU32(data.x, 1, 2 * material.numFaceDimBits);
-        result.rotateIndex = neighborIndex = -1 ? -1 : BitFieldExtractU32(data.x, 2, 2 * material.numFaceDimBits + 1);
+        const uint shift = 32u - material.numFaceIDBits;
+        result.neighborFaces = (result.neighborFaces << shift) >> shift;
 
         return result;
     }
+
+
 }
 
 // https://research.nvidia.com/labs/rtr/publication/pharr2024stochtex/stochtex.pdf
 float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, Ptex::FaceData faceData, GPUMaterial material, uint faceID, float2 uv, uint mipLevel, inout float u, bool debug = false) 
 {
+    float2 baseTexSize = float2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
     float2 texSize = float2(1u << (faceData.log2Dim.x - mipLevel), 1u << (faceData.log2Dim.y - mipLevel));
+    baseTexSize = faceData.rotate ? baseTexSize.yx : baseTexSize;
     texSize = faceData.rotate ? texSize.yx : texSize;
     float2 w[4];
     float2 texPos[4];
@@ -155,19 +155,29 @@ float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, Ptex::FaceData f
         Ptex::FaceData neighborData = faceData;
         if (neighborIndex != -1)
         {
-            neighborData = Ptex::GetFaceData(material, faceID, neighborIndex);
+            int neighborFaceID = faceData.neighborFaces[neighborIndex];
+            if (neighborFaceID == -1)
+            {
+                posCoord = clamp(posCoord, 0.5, baseTexSize - 0.5);
+            }
+            else 
+            {
+                neighborData = Ptex::GetFaceData(material, neighborFaceID);
+            }
         }
 
         const uint2 faceSize = uint2(1u << neighborData.log2Dim.x, 1u << neighborData.log2Dim.y);
-        const int rotateIndex = neighborIndex * 4 + neighborData.rotateIndex;
+        const int rotateIndex = neighborIndex * 4 + BitFieldExtractU32(faceData.rotateIndices, 2, 2 * max(neighborIndex, 0));
         float2 newUv = posCoord / texSize;
         newUv = neighborIndex == -1 ? newUv : mul(uvRotations[rotateIndex], float3(newUv.x, newUv.y, 1));
         newUv = neighborData.rotate ? float2(1 - newUv.y, newUv.x) : newUv;
 
         if (debug)
         {
-            printf("faceOffset: %u %u, log2Dim: %u %u\nmip: %u, face: %u, uv: %f %f\n", 
-            faceData.faceOffset.x, faceData.faceOffset.y, faceData.log2Dim.x, faceData.log2Dim.y, mipLevel, faceID, newUv.x, newUv.y);
+            printf("faceOffset: %u %u, log2Dim: %u %u\nmip: %u, face: %u, uv: %f %f\n "
+            "rotate: %u", 
+            faceData.faceOffset.x, faceData.faceOffset.y, faceData.log2Dim.x, faceData.log2Dim.y, 
+            mipLevel, faceID, newUv.x, newUv.y, neighborData.rotate);
         }
 
         // Virtual texture lookup
@@ -185,11 +195,19 @@ float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, Ptex::FaceData f
         Ptex::FaceData neighborData = faceData; 
         if (neighborIndex != -1)
         {
-            neighborData = Ptex::GetFaceData(material, faceID, neighborIndex);
+            int neighborFaceID = faceData.neighborFaces[neighborIndex];
+            if (neighborFaceID == -1)
+            {
+                negCoord = clamp(negCoord, 0.5, baseTexSize - 0.5);
+            }
+            else 
+            {
+                neighborData = Ptex::GetFaceData(material, neighborFaceID);
+            }
         }
 
         const uint2 faceSize = uint2(1u << neighborData.log2Dim.x, 1u << neighborData.log2Dim.y);
-        const int rotateIndex = neighborIndex * 4 + neighborData.rotateIndex;
+        const int rotateIndex = neighborIndex * 4 + BitFieldExtractU32(faceData.rotateIndices, 2, 2 * max(neighborIndex, 0));
         float2 newUv = negCoord / texSize;
         newUv = neighborIndex == -1 ? newUv : mul(uvRotations[rotateIndex], float3(newUv.x, newUv.y, 1));
         newUv = neighborData.rotate ? float2(1 - newUv.y, newUv.x) : newUv;
