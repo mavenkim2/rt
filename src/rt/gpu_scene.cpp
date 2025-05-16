@@ -363,8 +363,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                                rootScene->ptexTextures.size(),
                                                rootScene->ptexTextures.size());
 
-    VirtualTextureManager virtualTextureManager(sceneScratch.temp.arena, 131072, 131072, 16384,
-                                                16384, 4, VK_FORMAT_BC1_RGB_UNORM_BLOCK);
+    VirtualTextureManager virtualTextureManager(
+        sceneScratch.temp.arena, 131072, 131072, PHYSICAL_POOL_NUM_PAGES_WIDE * PAGE_WIDTH,
+        PHYSICAL_POOL_NUM_PAGES_WIDE * PAGE_WIDTH, 4, VK_FORMAT_BC1_RGB_UNORM_BLOCK);
 
     CommandBuffer *tileCmd          = device->BeginCommandBuffer(QueueType_Compute);
     Semaphore tileSubmitSemaphore   = device->CreateSemaphore();

@@ -13,6 +13,7 @@ typedef AffineSpace float3x4;
 
 typedef unsigned int uint;
 typedef Vec2u uint2;
+typedef Vec3u uint3;
 typedef Vec4u uint4;
 
 typedef Vec2i int2;

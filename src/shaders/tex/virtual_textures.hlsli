@@ -22,9 +22,10 @@ namespace VirtualTexture
         const uint2 virtualPage = virtualAddress >> PAGE_SHIFT;
         const uint packed = pageTable.Load(float3(virtualPage.x, virtualPage.y, mipLevel));
 
-        uint pageX = BitFieldExtractU32(packed, 7, 0);
-        uint pageY = BitFieldExtractU32(packed, 7, 7);
-        uint layer = BitFieldExtractU32(packed, 4, 14);
+        uint4 pageTableEntry = UnpackPageTableEntry(packed);
+        uint pageX = pageTableEntry.x;
+        uint pageY = pageTableEntry.y;
+        uint layer = pageTableEntry.z;
         const float2 physicalPageCoord = float2(pageX, pageY) * PAGE_WIDTH;
 
         const float2 mipFaceTexelOffset = faceTexelOffset / float(1u << mipLevel);
@@ -33,7 +34,7 @@ namespace VirtualTexture
 
         const float2 texCoord = (physicalPageCoord + offsetInPage + (mipFaceTexelOffset % PAGE_WIDTH)) / float2(poolWidth, poolHeight);
 
-        if (debug)
+        if (0)
         {
             printf("virtual address: %u %u, phys page: %f %f, offset: %u %u, face texel offset: %f %f, mip: %u, in uv: %f %fout uv: %f %f, %u \n", 
                     virtualAddress.x, virtualAddress.y, physicalPageCoord.x, physicalPageCoord.y, 

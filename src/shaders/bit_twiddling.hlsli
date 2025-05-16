@@ -1,6 +1,8 @@
 #ifndef BIT_TWIDDLING_HLSLI_
 #define BIT_TWIDDLING_HLSLI_
 
+#include "../rt/shader_interop/bit_twiddling_shaderinterop.h"
+
 // Taken from Platform.ush in Unreal Engine 5
 uint BitAlignU32(uint high, uint low, uint shift)
 {
@@ -9,13 +11,6 @@ uint BitAlignU32(uint high, uint low, uint shift)
 	uint result = low >> shift;
 	result |= shift > 0u ? (high << (32u - shift)) : 0u;
 	return result;
-}
-
-uint BitFieldExtractU32(uint data, uint size, uint offset)
-{
-	size &= 31;
-	offset &= 31;
-	return (data >> offset) & ((1u << size) - 1u);
 }
 
 int BitFieldExtractI32(int data, uint size, uint offset)

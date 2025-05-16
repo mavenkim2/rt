@@ -1,4 +1,5 @@
 #include "../base.h"
+#include "../containers.h"
 #include "../memory.h"
 #include "../bit_packing.h"
 #include "../string.h"
@@ -593,14 +594,14 @@ void Convert(string filename)
         (FaceMetadata2 *)AllocateSpace(&builder, sizeof(FaceMetadata2) * numFaces);
     StaticArray<FaceMetadata2> faceMetadata(scratch.temp.arena, numFaces, numFaces);
 
-    const int tileTexelWidth = PAGE_WIDTH;
-    const int tileBlockWidth = tileTexelWidth >> log2BlockSize;
-    const int tileByteSize   = Sqr(tileBlockWidth) * bytesPerBlock;
-    const int numTilesX      = gpuOutputWidth / tileBlockWidth;
-    const int numTilesY      = gpuOutputHeight / tileBlockWidth;
+    const int pageTexelWidth = PAGE_WIDTH;
+    const int pageBlockWidth = pageTexelWidth >> log2BlockSize;
+    const int pageByteSize   = Sqr(pageBlockWidth) * bytesPerBlock;
+    const int numpagesX      = gpuOutputWidth / pageBlockWidth;
+    const int numpagesY      = gpuOutputHeight / pageBlockWidth;
 
     const int gpuSrcStride = gpuOutputWidth * bytesPerBlock;
-    const int tileStride   = tileBlockWidth * bytesPerBlock;
+    const int pageStride   = pageBlockWidth * bytesPerBlock;
 
     auto CopyBlockCompressedResultsToDisk = [&](std::vector<u8 *> &blockCompressedResults) {
         // Write to face images to disk
@@ -945,31 +946,31 @@ void Convert(string filename)
 
         CopyBlockCompressedResultsToDisk(blockCompressedResults);
 
-        const u32 numTilesX = gpuSubmissionWidth >> PAGE_SHIFT;
-        const u32 numTilesY = gpuSubmissionHeight >> PAGE_SHIFT;
+        const u32 numpagesX = gpuSubmissionWidth >> PAGE_SHIFT;
+        const u32 numpagesY = gpuSubmissionHeight >> PAGE_SHIFT;
 
-        u32 numTiles = numSubmissions * numTilesX * numTilesY;
+        u32 numpages = numSubmissions * numpagesX * numpagesY;
 
-        u32 sqrtNumTiles = std::sqrt(numTiles) + 1;
+        u32 sqrtNumpages = std::sqrt(numpages) + 1;
 
         if (levelIndex == 0)
         {
-            textureMetadata->virtualSqrtNumPages = NextPowerOfTwo(sqrtNumTiles);
+            textureMetadata->virtualSqrtNumPages = NextPowerOfTwo(sqrtNumpages);
         }
 
         const u32 maxSqrtNumPages = textureMetadata->virtualSqrtNumPages >> levelIndex;
-        sqrtNumTiles              = Min(sqrtNumTiles, maxSqrtNumPages);
-        u32 totalNumTiles         = Sqr(sqrtNumTiles);
-        u32 levelBlockWidth       = sqrtNumTiles * tileBlockWidth;
-        u32 levelTexelWidth       = sqrtNumTiles * tileTexelWidth;
+        sqrtNumpages              = Min(sqrtNumpages, maxSqrtNumPages);
+        u32 totalNumpages         = Sqr(sqrtNumpages);
+        u32 levelBlockWidth       = sqrtNumpages * pageBlockWidth;
+        u32 levelTexelWidth       = sqrtNumpages * pageTexelWidth;
         u32 totalSize             = Sqr(levelBlockWidth) * bytesPerBlock;
 
-        currentPageOffset += totalNumTiles;
+        currentPageOffset += totalNumpages;
         textureMetadata->mipPageOffsets[levelIndex] = currentPageOffset;
 
-        // From submissions, shell fill the tiles
+        // From submissions, shell fill the pages
         u8 *dst         = (u8 *)AllocateSpace(&builder, totalSize);
-        u32 currentTile = 0;
+        u32 currentpage = 0;
         u32 currentSqrt = 0;
 
         u8 *temp = PushArray(scratch.temp.arena, u8, totalSize);
@@ -989,7 +990,6 @@ void Convert(string filename)
             FaceInfo &faceInfo = faceInfos[i];
             if (faceInfo.size.x == 0 && faceInfo.size.y == 0)
             {
-                int stop = 5;
                 continue;
             }
             u8 *blockCompressedResult = blockCompressedResults[faceInfo.submissionIndex];
@@ -1027,7 +1027,6 @@ void Convert(string filename)
                               block.y * gpuOutputWidth + block.x;
             if (blockCopied[lookupIndex])
             {
-                int stop = 5;
                 continue;
             }
 
@@ -1044,17 +1043,17 @@ void Convert(string filename)
             currentDstHorizontalOffset += texelWidth;
         }
 
-        // Copy tiles to disk
+        // Copy pages to disk
         u32 dstOffset = 0;
-        for (int tileY = 0; tileY < sqrtNumTiles; tileY++)
+        for (int pageY = 0; pageY < sqrtNumpages; pageY++)
         {
-            for (int tileX = 0; tileX < sqrtNumTiles; tileX++)
+            for (int pageX = 0; pageX < sqrtNumpages; pageX++)
             {
-                Vec2u srcIndex(tileX * tileBlockWidth, tileY * tileBlockWidth);
+                Vec2u srcIndex(pageX * pageBlockWidth, pageY * pageBlockWidth);
                 Utils::Copy(temp, srcIndex, levelBlockWidth, levelBlockWidth, dst + dstOffset,
-                            Vec2u(0, 0), tileBlockWidth, tileBlockWidth, tileBlockWidth,
-                            tileBlockWidth, bytesPerBlock);
-                dstOffset += tileByteSize;
+                            Vec2u(0, 0), pageBlockWidth, pageBlockWidth, pageBlockWidth,
+                            pageBlockWidth, bytesPerBlock);
+                dstOffset += pageByteSize;
             }
         }
 
@@ -1288,15 +1287,10 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, Vec2u base
             if (pool.freePage >= pool.pagePool.Length()) freePool++;
 
             // Create page table update request
-            u32 packed       = 0;
-            u32 packedOffset = 0;
-
             Assert(pageLocation.x < 256 && pageLocation.y < 256);
 
-            // TODO: don't hardcode these
-            packed = BitFieldPackU32(packed, pageLocation.x, packedOffset, 7);
-            packed = BitFieldPackU32(packed, pageLocation.y, packedOffset, 7);
-            packed = BitFieldPackU32(packed, poolIndex, packedOffset, 4);
+            u32 packed =
+                PackPageTableEntry(pageLocation.x, pageLocation.y, levelIndex, poolIndex);
             PageTableUpdateRequest pageTableUpdateRequest;
             pageTableUpdateRequest.virtualPage = virtualPage;
             pageTableUpdateRequest.packed      = packed;
@@ -1453,93 +1447,6 @@ T *RingBuffer<T>::SynchronizedRead(Mutex *mutex, Arena *arena, u32 &num)
     return result;
 }
 
-#if 0
-u32 VirtualTextureManager::Evict(StaticArray<PageTableUpdateRequest> &evictRequests,
-                                 StaticArray<PageTableUpdateRequest> &mapRequests,
-                                 StaticArray<BufferImageCopy> &copies, u32 *feedbackRequests,
-                                 u32 numRequests, u8 *uploadBuffer, u32 uploadOffset)
-{
-    ScratchArena scratch;
-    // Clock replacement policy; ranges that will have their request bit reset, losing their
-    // "first chance"
-    // StaticArray<u32> requestedRangeIndices(scratch.temp.arena, numRequests)
-
-    for (int i = 0; i < numRequests; i++)
-    {
-        u32 feedback         = feedbackRequests[i];
-        u32 virtualFaceIndex = feedbackRequest & 0x0fffffff;
-        u32 mipLevel         = feedbackRequest >> 28;
-
-        int shelfIndex = -1;
-        while (shelfIndex != InvalidShelf)
-        {
-            Shelf &shelf   = shelves[shelfIndex];
-            u32 rangeIndex = shelf.rangeStart;
-            while (rangeIndex != BlockRange::InvalidRange)
-            {
-                BlockRange &range = ranges[rangeIndex];
-                u32 topLevelWidth = = range.GetTopLevelWidth();
-                bool fits           = topLevelWidth >= requestedWidth;
-                if (fits && !range.CheckTopLevelMipRequested())
-                {
-                    // Split the range we're evicting
-                    BlockRange newRange(AllocationStatus::Allocated, range.start,
-                                        range.start + topLevelWidth, range.prevRange,
-                                        rangeIndex, BlockRange::InvalidRange,
-                                        BlockRange::InvalidRange);
-
-                    ranges.push_back(newRange);
-                    range.start += topLevelWidth;
-                    range.prevRange = ranges.size() - 1;
-
-                    int faceIndex = requests[i].faceIndex;
-
-                    // Update page table information for entries we're evicting
-                    range.startLevel_requested++;
-                    int startLevel                      = range.GetStartLevel();
-                    PageTableUpdateRequest evictRequest = CreatePageTableUpdateRequest(
-                        virtualFaceIndex, range.start, shelf.startY, pool->layerIndex,
-                        range.log2Width, range.log2Height, startLevel,
-                        range.totalSize_rotate >> 31);
-                    evictRequests.push_back(evictRequest);
-
-                    // Issue copy commands to new location
-                    Vec3i start(newRange.start, shelf.startY, 0);
-                    CreateBufferImageCopies(copies, start, int numLevels, int layerIndex,
-                                            int log2Width, int log2Height, u32 texelSize,
-                                            u32 &bufferOffset);
-                    int oldRangeIndex = virtualFaceIndexToRangeIndex[virtualFaceIndex];
-                    // Remap the range previously associated with this data if present
-                    if (oldRangeIndex != -1)
-                    {
-                        ranges[oldRangeIndex].allocationStatus = AllocationStatus::Free;
-                        LinkFreeList(ranges, oldRangeIndex, shelf.freeRange,
-                                     BlockRange::InvalidRange);
-                        virtualFaceIndexToRangeIndex[virtualFaceIndex] = ranges.size() - 1;
-                    }
-                    virtualFaceInfo[virtualFaceIndex].startLevel_requested =
-                        mipLevel | BlockRange::TopLevelMipRequestedBit;
-                    // Update page table information for entries we're mapping
-                    PageTableUpdateRequest mapRequest = CreatePageTableUpdateRequest(
-                        virtualFaceIndex, newRange.start, shelf.startY, pool->layerIndex,
-                        int log2Width, int log2Height, requests[i].startLevel, bool rotate);
-                    mapRequests.push_back(mapRequest);
-                    break;
-                }
-                rangeIndex = range.nextRange;
-            }
-        }
-    }
-
-    // Update page table information to prepare for eviction
-
-    // Issue copy commands to new location
-    cmd->CopyImage(&transferBuffer, &gpuPhysicalPool, copies.data, copies.Length());
-
-    // Update page table information for entries we're mapping
-    pc.numRequests = mapRequests.Length();
-    return uploadOffset;
-}
 // Executes on main thread
 void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *transferCmd)
 {
@@ -1650,6 +1557,28 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
     readSubmission.store(readIndex + 1, std::memory_order_release);
 }
 
+void VirtualTextureManager::UnlinkLRU(int pageIndex)
+{
+    PhysicalPage &page = physicalPages[pageIndex];
+    Assert(page.prevPage != -1 && page.nextPage != -1);
+
+    int prevPage                     = page.prevPage;
+    int nextPage                     = page.nextPage;
+    physicalPages[prevPage].nextPage = nextPage;
+    physicalPages[nextPage].prevPage = prevPage;
+}
+
+void VirtualTextureManager::LinkLRU(int index, int mip)
+{
+    int headPage                  = mipSentinels[mip].head;
+    int nextPage                  = physicalPages[headPage].nextPage;
+    physicalPages[index].nextPage = nextPage;
+    physicalPages[index].prevPage = headPage;
+
+    physicalPages[nextPage].prevPage = index;
+    physicalPages[headPage].nextPage = index;
+}
+
 // Executes on virtual texture thread
 void VirtualTextureManager::Callback()
 {
@@ -1659,8 +1588,19 @@ void VirtualTextureManager::Callback()
         u32 requestIndex;
     };
 
+    struct FeedbackRequest
+    {
+        Vec2u packedFeedbackInfo;
+        u32 count;
+        u32 diff;
+    };
+
     const u32 blockShift    = GetBlockShift(format);
     const u32 bytesPerBlock = GetFormatSize(format);
+
+    const int pageTexelWidth = PAGE_WIDTH;
+    const int pageBlockWidth = pageTexelWidth >> blockShift;
+    const int pageByteSize   = Sqr(pageBlockWidth) * bytesPerBlock;
 
     ScratchArena threadScratch;
 
@@ -1670,59 +1610,113 @@ void VirtualTextureManager::Callback()
         // Get feedback requests
 
         u32 numFeedbackRequests = 0;
-        u32 *feedbackRequests   = feedbackRingBuffer.SynchronizedRead(
+        Vec2u *feedbackRequests = feedbackRingBuffer.SynchronizedRead(
             &feedbackMutex, scratch.temp.arena, numFeedbackRequests);
+        u32 numNonResidentFeedback = 0;
 
-        SortKey *keys = PushArrayNoZero(scratch.temp.arena, SortKey, numFeedbackRequests);
-        u32 numKeys   = 0;
+        StaticArray<FeedbackRequest> compactedFeedbackRequests(scratch.temp.arena,
+                                                               numFeedbackRequests);
 
-        // TODO: should data already be compacted or not?
+        u32 hashMapSize = NextPowerOfTwo(numFeedbackRequests);
+        HashIndex pageHashMap(scratch.temp.arena, hashMapSize, hashMapSize);
 
-        // Sort requests based on diff between requested mip level and resident mip level
+        // Compact feedback
         for (int requestIndex = 0; requestIndex < numFeedbackRequests; requestIndex++)
         {
-            u32 virtualFaceIndex = feedbackRequests[requestIndex] & 0x0fffffff;
-            u32 mipLevel         = feedbackRequests[requestIndex] >> 28;
+            Vec2u &feedbackRequest = feedbackRequests[requestIndex];
+            u32 virtualOffsetX     = feedbackRequest.x & 0xffff;
+            u32 virtualOffsetY     = feedbackRequest.x >> 16;
+            u32 textureIndex       = feedbackRequest.y & 0x00ffffff;
+            u32 mipLevel           = feedbackRequest.y >> 24;
 
-            // The larger the difference between top resident mip and requested mip, the higher
-            // the priority
-            int rangeIndex    = virtualFaceIndexToRangeIndex[virtualFaceIndex];
-            BlockRange &range = ranges[rangeIndex];
-            int startLevel    = range.GetStartLevel();
-            range.SetRangeAsRequested();
+            const u32 virtualPageX = virtualOffsetX >> PAGE_SHIFT;
+            const u32 virtualPageY = virtualOffsetY >> PAGE_SHIFT;
+            Assert(virtualPageX < 65536 && virtualPageY < 65536);
 
-            int diff = startLevel - mipLevel;
+            u64 packed = (mipLevel << 56u) | (textureIndex << 32u) | (virtualPageY << 16u) |
+                         virtualPageX;
 
-            int materialIndex = ? ;
-            int faceIndex     = ? ;
+            u32 hash = (u32)MixBits(packed);
 
-            if (diff > 0)
+            bool found = false;
+            for (int index = pageHashMap.FirstInHash(hash); index != -1;
+                 pageHashMap.NextInHash(index))
             {
-                FaceMetadata &f = faceMetadata[materialIndex][faceIndex];
-                u32 key         = 0;
-                u32 offset      = 0;
-                key             = BitFieldPackU32(key, f.log2Width, offset, 4);
-                key             = BitFieldPackU32(key, f.log2Height, offset, 4);
-                key             = BitFieldPackU32(key, materialIndex, offset, 16);
-                key             = BitFieldPackU32(key, diff, offset, 4);
+                Vec2u &testFeedbackRequest = compactedFeedbackRequests[index];
+                u32 testVirtualOffsetX     = feedbackRequest.x & 0xffff;
+                u32 testvirtualOffsetY     = feedbackRequest.x >> 16;
+                u32 testTextureIndex       = feedbackRequest.y & 0x00ffffff;
+                u32 testMipLevel           = feedbackRequest.y >> 24;
 
-                keys[numKeys].sortKey      = key;
-                keys[numKeys].requestIndex = requestIndex;
-                numKeys++;
+                u32 testVirtualPageX = testVirtualOffsetX >> PAGE_SHIFT;
+                u32 testVirtualPageY = testVirtualOffsetY >> PAGE_SHIFT;
+
+                if (testVirtualPageX == virtualPageX && testVirtualPageY == virtualPageY &&
+                    &&testTextureIndex == textureIndex && testMipLevel == mipLevel)
+                {
+                    compactedFeedbackRequests[index].count++;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+            {
+                u32 index = compactedFeedbackRequests.size();
+                FeedbackRequest request;
+                request.packedFeedbackInfo = feedbackRequest;
+                request.count              = 1;
+                compactedFeedbackRequests.push_back(request);
+                pageHashMap.AddInHash(hash, index);
             }
         }
 
-        SortHandles<SortKey, false>(keys, numKeys);
+        SortKey *keys = PushArrayNoZero(scratch.temp.arena, SortKey, numCompactedFeedback);
+        u32 numKeys   = 0;
 
-        StaticArray<BufferImageCopy> copies(scratch.temp.arena,
-                                            numFeedbackRequests * MAX_LEVEL);
+        // If requested page is resident Update LRU. Otherwise
+        for (int requestIndex = 0; requestIndex < compactedFeedbackRequests.size();
+             requestIndex++)
+        {
+            FeedbackRequest fr    = compactedFeedbackRequests[requestIndex];
+            Vec2u feedbackRequest = fr.packedFeedbackInfo;
+            u32 virtualOffsetX    = feedbackRequest.x & 0xffff;
+            u32 virtualOffsetY    = feedbackRequest.x >> 16;
+            u32 textureIndex      = feedbackRequest.y & 0x00ffffff;
+            u32 mipLevel          = feedbackRequest.y >> 24;
 
-        StaticArray<u32> feedbackRequiringEvict(scratch.temp.arena, numFeedbackRequests);
-        StaticArray<PageTableUpdateRequest> evictRequests(scratch.temp.arena,
-                                                          numFeedbackRequests);
+            // TODO: I think I only need the virtual page, not the offset
+            TextureInfo &textureInfo = textureInfo[textureIndex];
+            u32 numVirtPagesWide     = textureInfo.metadata.virtualSqrtNumPages >> mipLevel;
 
-        StaticArray<PageTableUpdateRequest> mapRequests(scratch.temp.arena,
-                                                        numFeedbackRequests);
+            u32 virtualPageX = virtualOffsetX >> PAGE_SHIFT;
+            u32 virtualPageY = virtualOffsetY >> PAGE_SHIFT;
+            u32 packedPageTableEntry =
+                pageTable[virtualPageY * numVirtPagesWide + virtualPageX];
+
+            Vec4u pageTableEntry = UnpackPageTableEntry(packedPageTableEntry);
+            u32 physicalPageX    = pageTableEntry.x;
+            u32 physicalPageY    = pageTableEntry.y;
+            u32 mip              = pageTableEntry.z;
+            u32 layer            = pageTableEntry.w;
+
+            // Move to head of LRU if requested page is already resident
+            if (packedPageTableEntry != ~0u && mip == mipLevel)
+            {
+                int pageIndex =
+                    layer * Sqr(poolPageWidth) + physicalPageY * poolPageWidth + physicalPageX;
+
+                UnlinkLRU(pageIndex);
+                LinkLRU(pageIndex, mip);
+            }
+            // Otherwise, page needs to be mapped
+            else
+            {
+                Assert(mip - mipLevel);
+                fr.diff                                             = mip - mipLevel;
+                compactedFeedbackRequests[numNonResidentFeedback++] = fr;
+            }
+        }
+        compactedFeedbackRequests.size() = numNonResidentFeedback;
 
         // Wait until the transfer buffer is read on the GPU before writing new data
         u64 writeIndex = writeSubmission.load(std::memory_order_relaxed);
@@ -1738,79 +1732,74 @@ void VirtualTextureManager::Callback()
 
         u32 writeDoubleBufferIndex = writeIndex & 1;
 
-        // Load face data from disk/cache
-        u8 *uploadBuffer  = uploadBuffers[writeDoubleBufferIndex].data;
-        u32 uploadOffset  = 0;
-        bool bufferIsFull = false;
-        for (int keyIndex = 0; keyIndex < numKeys; keyIndex++)
+        StaticArray<BufferImageCopy> copies(scratch.temp.arena, numCompactedFeedback);
+
+        StaticArray<PageTableUpdateRequest> evictRequests(scratch.temp.arena,
+                                                          numCompactedFeedback);
+
+        StaticArray<PageTableUpdateRequest> mapRequests(scratch.temp.arena,
+                                                        numCompactedFeedback);
+
+        auto &uploadBuffer  = uploadBuffers[writeDoubleBufferIndex];
+        uploadBuffer.size() = 0;
+
+        // Evict to make space for new entries while populating feedback buffer
+        for (FeedbackRequest fr : compactedFeedbackRequests)
         {
-            int feedbackRequestIndex = keys[keyIndex].feedbackRequestIndex;
-            u32 feedbackRequest      = feedbackRequests[feedbackRequestIndex];
-            u32 virtualFaceIndex     = feedbackRequest & 0x0fffffff;
-            u32 mipLevel             = feedbackRequest >> 28;
+            FeedbackRequest fr    = compactedFeedbackRequests[requestIndex];
+            Vec2u feedbackRequest = fr.packedFeedbackInfo;
+            u32 virtualPageX      = feedbackRequest.x & 0xffff;
+            u32 virtualPageY      = feedbackRequest.x >> 16;
+            u32 textureIndex      = feedbackRequest.y & 0x00ffffff;
+            u32 mipLevel          = feedbackRequest.y >> 24;
 
-            int materialIndex = ? ;
-            string filename   = ? ;
+            TextureInfo &textureInfo         = textureInfo[textureIndex];
+            TextureMetadata &textureMetadata = textureInfo.metadata;
+            u32 levelOffset = mipLevel == 0 ? 0 : textureMetadata.mipPageOffsets[mipLevel - 1];
+            u32 levelNumPages     = mipLevel == 0
+                                        ? textureMetadata.mipPageOffsets[0]
+                                        : textureMetadata.mipPageOffsets[mipLevel] -
+                                          textureMetadata.mipPageOffsets[mipLevel - 1];
+            u32 sqrtLevelNumPages = std::sqrt(levelNumPages);
 
-            FaceMetadata metadata;
-
-            Vec2u offsetAndSize =
-                metadata.CalculateOffsetAndSize(mipLevel, blockShift, bytesPerBlock);
-
-            Vec2i allocationSize = CalculateFaceSize(metadata.log2Width, metadata.log2Height);
-
-            // Allocation space for subsequent mip levels to the right
-            allocationSize.x +=
-                (1u << Max(metadata.log2Width - 1, 0)) +
-                2 * GetBorderSize(metadata.log2Width - 1, metadata.log2Height - 1);
-
-            int log2Width  = Max(metadata.log2Width - mipLevel, 0);
-            int log2Height = Max(metadata.log2Height - mipLevel, 0);
-            int numLevels  = Max(log2Width, log2Height) + 1;
-
-            if (offsetAndSize.y + uploadOffset > maxUploadSize ||
-                copies.size() + numLevels > maxCopies)
+            for (Sentinel &sentinel : mipSentinels)
             {
-                bufferIsFull = true;
+                if (physicalPages[sentinel.tail].prevPage == sentinel.head) continue;
+                u32 pageIndex              = physicalPages[sentinel.tail].prevPage;
+                PhysicalPage &physicalPage = physicalPages[pageIndex];
+                Vec2u virtualPage          = physicalPage.virtualPage;
+                physicalPage.virtualPage   = Vec2u(virtualPageX, virtualPageY);
+
+                UnlinkLRU(pageIndex);
+                LinkLRU(pageIndex, mipLevel);
+
+                PageTableUpdateRequest evictRequest;
+                evictRequest.virtualPage = virtualPage;
+                evictRequest.packed      = evictPackedEntry;
+                evictRequests.push_back(evictRequest);
+
+                BufferImageCopy copy = {};
+                copy.bufferOffset    = uploadBuffer.size();
+                copy.baseLayer       = physicalPage.layer;
+                copy.layerCount      = 1;
+                copy.offset          = Vec3i(physicalPage.page.x << PAGE_SHIFT,
+                                             physicalPage.page.x << PAGE_SHIFT, 0);
+                copies.push_back(copy);
+
+                u32 virtualPage = virtualPageY * sqrtLevelNumPages + virtualPageX;
+                u32 pageOffset  = (levelOffset + virtualPage) * pageByteSize;
+                MemoryCopy(uploadBuffer.data + uploadBuffer.size(),
+                           textureInfo.contents + pageOffset, pageByteSize);
+                uploadBuffer.size() += pageByteSize;
+
+                u32 mapPackedEntry = PackPageTableEntry(physicalPage.x, physicalPage.y,
+                                                        mipLevel, physicalPage.layer);
+                PageTableUpdateRequest evictRequest;
+                evictRequest.virtualPage = Vec2u(virtualPageX, virtualPageY);
+                evictRequest.packed      = mapPackedEntry;
+                mapRequests.push_back(mapRequest);
                 break;
             }
-
-            ShelfRequest shelfRequest = AllocateShelf(allocationSize, log2Height);
-
-            // Save for eviction later
-            if (shelfRequest.shelfIndex == -1)
-            {
-                feedbackRequiringEvict.Push(feedbackRequest);
-                continue;
-            }
-
-            // Create buffer to image copy commands
-            const Shelf &shelf           = shelves[shelfRequest.shelfIndex];
-            const BlockRange &blockRange = ranges[shelfRequest.blockRangeIndex];
-
-            Vec3i start = Vec3i(blockRange.start, shelf.startY, 0);
-            CreateBufferImageCopies(copies, start, numLevels, pool->layerIndex, log2Width,
-                                    log2Height, GetFormatSize(format), bufferOffset);
-
-            // TODO: cache
-            // Load from disk and write to buffer
-            OS_Handle handle = OS_CreateFile(filename);
-            bool result      = OS_ReadFile(handle, uploadBuffer + uploadOffset + uploadOffset,
-                                           offsetAndSize.y, offsetAndSize.x);
-            Assert(result);
-
-            OS_CloseFile(handle);
-            uploadOffset += offsetAndSize.y;
-
-            // Write map request
-        }
-
-        // Evict
-        if (evictRequests.size() && !bufferIsFull)
-        {
-            uploadOffset =
-                Evict(evictRequests, mapRequests, copies, feedbackRequiringEvict.data,
-                      feedbackRequiringEvict.size(), uploadBuffer, uploadOffset);
         }
 
         // Write evict requests if present
@@ -1836,6 +1825,5 @@ void VirtualTextureManager::Callback()
         }
     }
 }
-#endif
 
 } // namespace rt

@@ -241,9 +241,20 @@ enum class AllocationStatus
     PartiallyAllocated,
 };
 
+struct PhysicalPage
+{
+    Vec2u page;
+    u32 layer;
+
+    Vec2u virtualPage;
+
+    int prevPage;
+    int nextPage;
+};
+
 struct PhysicalPagePool
 {
-    StaticArray<Vec2u> pagePool;
+    StaticArray<PhysicalPage> pagePool;
     u32 freePage;
 };
 
@@ -290,10 +301,31 @@ struct VirtualTextureManager
         int requestIndex;
     };
 
+    struct TextureInfo
+    {
+        string filename;
+        Vec2u baseVirtualPage;
+        TextureMetadata metadata;
+        u8 *contents;
+
+        StaticArray<StaticArray<u32>> pageTable;
+    };
+
+    struct Sentinel
+    {
+        int head;
+        int tail;
+    };
+
     VkFormat format;
 
     StaticArray<AllocationColumn> allocationColumns;
-    std::vector<Vec2u> baseVirtualPages;
+    // std::vector<Vec2u> baseVirtualPages;
+    std::vector<TextureInfo> textureInfo;
+    StaticArray<PhysicalPage> physicalPages;
+
+    // Add to head; tail is LRU
+    StaticArray<Sentinel> mipSentinels;
 
     StaticArray<PhysicalPagePool> pools;
     u32 freePool;
@@ -332,7 +364,7 @@ struct VirtualTextureManager
 
     Mutex feedbackMutex;
     FixedArray<TransferBuffer, 2> feedbackBuffers;
-    RingBuffer<u32> feedbackRingBuffer;
+    RingBuffer<Vec2u> feedbackRingBuffer;
 
     VirtualTextureManager(Arena *arena, u32 virtualTextureWidth, u32 virtualTextureHeight,
                           u32 physicalTextureWidth, u32 physicalTextureHeight, u32 numPools,
@@ -342,12 +374,11 @@ struct VirtualTextureManager
                                TextureMetadata &metadata, u8 *contents);
 
     // Streaming
-    // u32 Evict(StaticArray<PageTableUpdateRequest> &evictRequests,
-    //         StaticArray<PageTableUpdateRequest> &mapRequests, u32 *feedbackRequests,
-    //         u32 numRequests, u8 *uploadBuffer, u32 uploadOffset);
     // void WriteFeedback(TransferBuffer *transfer);
     // void Update(CommandBuffer *computeCmd, CommandBuffer *transferCmd);
-    // void Callback();
+    void UnlinkLRU(int index);
+    void LinkLRU(int index, int mip);
+    void Callback();
 
     static PageTableUpdateRequest CreatePageTableUpdateRequest(int faceIndex, u32 x, u32 y,
                                                                u32 layer, int log2Width,

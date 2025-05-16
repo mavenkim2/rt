@@ -93,15 +93,52 @@ namespace Ptex
         return result;
     }
 
+}
 
+float4 StochasticCatmullRomBorderlessHelper(Texture2DArray tex, GPUMaterial material, Ptex::FaceData faceData, float2 texCoord, float2 texSize, uint mipLevel, float reservoirWeightSum, bool debug = false) 
+{
+    // Lookup adjacency information if necessary
+    int neighborIndex = Ptex::GetNeighborIndexFromUV(texCoord, texSize);
+    Ptex::FaceData neighborData = faceData;
+    if (neighborIndex != -1)
+    {
+        int neighborFaceID = faceData.neighborFaces[neighborIndex];
+        if (neighborFaceID == -1)
+        {
+            texCoord = clamp(texCoord, 0.5, texSize - 0.5);
+        }
+        else 
+        {
+            neighborData = Ptex::GetFaceData(material, neighborFaceID);
+        }
+    }
+
+    const uint2 faceSize = uint2(1u << neighborData.log2Dim.x, 1u << neighborData.log2Dim.y);
+    const int rotateIndex = neighborIndex * 4 + BitFieldExtractU32(faceData.rotateIndices, 2, 2 * max(neighborIndex, 0));
+    float2 newUv = texCoord / texSize;
+    newUv = neighborIndex == -1 ? newUv : mul(uvRotations[rotateIndex], float3(newUv.x, newUv.y, 1));
+    newUv = neighborData.rotate ? float2(1 - newUv.y, newUv.x) : newUv;
+
+    // Virtual texture lookup
+    const uint2 baseOffset = material.baseVirtualPage * PAGE_WIDTH + neighborData.faceOffset;
+    const float3 fullUv = VirtualTexture::GetPhysicalUV(baseOffset, newUv, faceSize, mipLevel, debug);
+    float4 result = reservoirWeightSum * tex.SampleLevel(samplerNearestClamp, fullUv, 0.f);
+
+    if (0)
+    {
+        printf("faceOffset: %u %u, log2Dim: %u %u\nmip: %u, face: %u, uv: %f %f\n "
+                "neighborIndex: %i, weight sum: %f rgb: %f %f %f", 
+                faceData.faceOffset.x, faceData.faceOffset.y, faceData.log2Dim.x, faceData.log2Dim.y, 
+                mipLevel, 0, newUv.x, newUv.y, neighborIndex, reservoirWeightSum, result.x, result.y, result.z);
+    }
+
+    return result;
 }
 
 // https://research.nvidia.com/labs/rtr/publication/pharr2024stochtex/stochtex.pdf
 float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, Ptex::FaceData faceData, GPUMaterial material, uint faceID, float2 uv, uint mipLevel, inout float u, bool debug = false) 
 {
-    float2 baseTexSize = float2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
     float2 texSize = float2(1u << (faceData.log2Dim.x - mipLevel), 1u << (faceData.log2Dim.y - mipLevel));
-    baseTexSize = faceData.rotate ? baseTexSize.yx : baseTexSize;
     texSize = faceData.rotate ? texSize.yx : texSize;
     float2 w[4];
     float2 texPos[4];
@@ -147,75 +184,15 @@ float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, Ptex::FaceData f
 
     // Get texels
     float4 result = 0.f;
-    {
-        float2 posCoord = float2(texPos[reservoir[0].x].x, texPos[reservoir[0].y].y);
-
-        // Lookup adjacency information if necessary
-        int neighborIndex = Ptex::GetNeighborIndexFromUV(posCoord, texSize);
-        Ptex::FaceData neighborData = faceData;
-        if (neighborIndex != -1)
-        {
-            int neighborFaceID = faceData.neighborFaces[neighborIndex];
-            if (neighborFaceID == -1)
-            {
-                posCoord = clamp(posCoord, 0.5, baseTexSize - 0.5);
-            }
-            else 
-            {
-                neighborData = Ptex::GetFaceData(material, neighborFaceID);
-            }
-        }
-
-        const uint2 faceSize = uint2(1u << neighborData.log2Dim.x, 1u << neighborData.log2Dim.y);
-        const int rotateIndex = neighborIndex * 4 + BitFieldExtractU32(faceData.rotateIndices, 2, 2 * max(neighborIndex, 0));
-        float2 newUv = posCoord / texSize;
-        newUv = neighborIndex == -1 ? newUv : mul(uvRotations[rotateIndex], float3(newUv.x, newUv.y, 1));
-        newUv = neighborData.rotate ? float2(1 - newUv.y, newUv.x) : newUv;
-
-        if (debug)
-        {
-            printf("faceOffset: %u %u, log2Dim: %u %u\nmip: %u, face: %u, uv: %f %f\n "
-            "rotate: %u", 
-            faceData.faceOffset.x, faceData.faceOffset.y, faceData.log2Dim.x, faceData.log2Dim.y, 
-            mipLevel, faceID, newUv.x, newUv.y, neighborData.rotate);
-        }
-
-        // Virtual texture lookup
-        const uint2 baseOffset = material.baseVirtualPage * PAGE_WIDTH + neighborData.faceOffset;
-        const float3 fullUv = VirtualTexture::GetPhysicalUV(baseOffset, newUv, faceSize, mipLevel, debug);
-        result += weightsSum[0] * tex.SampleLevel(samplerNearestClamp, fullUv, 0.f);
-    }
+    float2 posCoord = float2(texPos[reservoir[0].x].x, texPos[reservoir[0].y].y);
+    result += StochasticCatmullRomBorderlessHelper(tex, material, faceData, posCoord, 
+                                                   texSize, mipLevel, weightsSum[0], debug);
 
     if (weightsSum[1] != 0.f)
     {
         float2 negCoord = float2(texPos[reservoir[1].x].x, texPos[reservoir[1].y].y);
-
-        // Lookup adjacency information if necessary
-        int neighborIndex = Ptex::GetNeighborIndexFromUV(negCoord, texSize);
-        Ptex::FaceData neighborData = faceData; 
-        if (neighborIndex != -1)
-        {
-            int neighborFaceID = faceData.neighborFaces[neighborIndex];
-            if (neighborFaceID == -1)
-            {
-                negCoord = clamp(negCoord, 0.5, baseTexSize - 0.5);
-            }
-            else 
-            {
-                neighborData = Ptex::GetFaceData(material, neighborFaceID);
-            }
-        }
-
-        const uint2 faceSize = uint2(1u << neighborData.log2Dim.x, 1u << neighborData.log2Dim.y);
-        const int rotateIndex = neighborIndex * 4 + BitFieldExtractU32(faceData.rotateIndices, 2, 2 * max(neighborIndex, 0));
-        float2 newUv = negCoord / texSize;
-        newUv = neighborIndex == -1 ? newUv : mul(uvRotations[rotateIndex], float3(newUv.x, newUv.y, 1));
-        newUv = neighborData.rotate ? float2(1 - newUv.y, newUv.x) : newUv;
-
-        // Virtual texture lookup
-        const uint2 baseOffset = material.baseVirtualPage * PAGE_WIDTH + neighborData.faceOffset;
-        const float3 fullUv = VirtualTexture::GetPhysicalUV(baseOffset, newUv, faceSize, mipLevel);
-        result += weightsSum[1] * tex.SampleLevel(samplerNearestClamp, fullUv, 0.f);
+        result -= StochasticCatmullRomBorderlessHelper(tex, material, faceData, negCoord, 
+                                                       texSize, mipLevel, weightsSum[1], debug);
     }
 
     return result;

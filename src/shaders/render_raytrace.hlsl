@@ -116,7 +116,10 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
         }
 #endif
         // TODO: emitter intersection
-        if (depth++ >= maxDepth) break;
+        if (depth++ >= maxDepth)
+        {
+            break;
+        }
 
 #ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
         if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
