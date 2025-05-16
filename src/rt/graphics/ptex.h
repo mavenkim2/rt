@@ -252,12 +252,6 @@ struct PhysicalPage
     int nextPage;
 };
 
-struct PhysicalPagePool
-{
-    StaticArray<PhysicalPage> pagePool;
-    u32 freePage;
-};
-
 struct PhysicalPageAllocation
 {
     u32 virtualPage;
@@ -268,7 +262,6 @@ struct PhysicalPageAllocation
 template <typename T>
 struct RingBuffer
 {
-    Mutex mutex;
     StaticArray<T> entries;
     u64 readOffset;
     u64 writeOffset;
@@ -307,8 +300,6 @@ struct VirtualTextureManager
         Vec2u baseVirtualPage;
         TextureMetadata metadata;
         u8 *contents;
-
-        StaticArray<StaticArray<u32>> pageTable;
     };
 
     struct Sentinel
@@ -320,15 +311,16 @@ struct VirtualTextureManager
     VkFormat format;
 
     StaticArray<AllocationColumn> allocationColumns;
-    // std::vector<Vec2u> baseVirtualPages;
     std::vector<TextureInfo> textureInfo;
     StaticArray<PhysicalPage> physicalPages;
+    StaticArray<StaticArray<u32>> cpuPageTable;
+    u32 numPhysPagesWidth;
+    u32 numPhysPagesHeight;
+    u32 numVirtPagesWide;
+    u32 freePage;
 
     // Add to head; tail is LRU
     StaticArray<Sentinel> mipSentinels;
-
-    StaticArray<PhysicalPagePool> pools;
-    u32 freePool;
 
     GPUImage gpuPhysicalPool;
     GPUImage pageTable;

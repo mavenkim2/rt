@@ -15,6 +15,7 @@
 #include "shader_interop/hit_shaderinterop.h"
 #include "shader_interop/ray_shaderinterop.h"
 #include "shader_interop/debug_shaderinterop.h"
+#include "shader_interop/virtual_textures_shaderinterop.h"
 #include "../third_party/nvapi/nvapi.h"
 #include "nvapi.h"
 #include "scene.h"

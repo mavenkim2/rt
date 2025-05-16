@@ -106,7 +106,7 @@ struct StaticArray
 
     __forceinline u32 Length() const { return size_; }
     __forceinline u32 size() const { return Length(); }
-    __forceinline u32 &size() { return size_; }
+    __forceinline i32 &size() { return size_; }
 
     __forceinline b8 Empty() { return size_ != 0; }
 

@@ -3,6 +3,7 @@
 
 #include "base.h"
 #include "math/math_include.h"
+#include "shader_interop/bit_twiddling_shaderinterop.h"
 
 namespace rt
 {
@@ -18,15 +19,6 @@ struct BitVector
     bool GetBit(u32 bit);
     void WriteBits(u32 &position, u32 value, u32 numBits);
 };
-
-inline u32 BitFieldPackU32(u32 val, u32 data, u32 &offset, u32 size)
-{
-    u32 o = offset & 31u;
-    data  = data & ((1u << size) - 1u);
-    val |= data << o;
-    offset += size;
-    return val;
-}
 
 inline u32 BitFieldPackI32(u32 bits, i32 data, u32 &offset, u32 size)
 {
