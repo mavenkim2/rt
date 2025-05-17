@@ -361,21 +361,16 @@ struct VirtualTextureManager
     VirtualTextureManager(Arena *arena, u32 virtualTextureWidth, u32 virtualTextureHeight,
                           u32 physicalTextureWidth, u32 physicalTextureHeight, u32 numPools,
                           VkFormat format);
-    Vec2u AllocateVirtualPages(const Vec2u &virtualSize, u32 &index);
+    Vec2u AllocateVirtualPages(Arena *arena, string filename, const TextureMetadata &metadata,
+                               const Vec2u &virtualSize, u8 *contents, u32 &index);
     void AllocatePhysicalPages(CommandBuffer *cmd, Vec2u baseVirtualPage,
                                TextureMetadata &metadata, u8 *contents);
 
     // Streaming
-    // void WriteFeedback(TransferBuffer *transfer);
-    // void Update(CommandBuffer *computeCmd, CommandBuffer *transferCmd);
+    void Update(CommandBuffer *computeCmd, CommandBuffer *transferCmd);
     void UnlinkLRU(int index);
     void LinkLRU(int index, int mip);
     void Callback();
-
-    static PageTableUpdateRequest CreatePageTableUpdateRequest(int faceIndex, u32 x, u32 y,
-                                                               u32 layer, int log2Width,
-                                                               int log2Height, int startLevel,
-                                                               bool rotate);
 };
 
 void InitializePtex();

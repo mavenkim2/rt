@@ -402,10 +402,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         u32 allocIndex        = 0;
         Vec2u baseVirtualPage = virtualTextureManager.AllocateVirtualPages(
-            Vec2u(fileHeader.virtualSqrtNumPages, fileHeader.virtualSqrtNumPages), allocIndex);
+            sceneScratch.temp.arena, filename, fileHeader,
+            Vec2u(fileHeader.virtualSqrtNumPages, fileHeader.virtualSqrtNumPages),
+            tokenizer.cursor, allocIndex);
 
-        virtualTextureManager.AllocatePhysicalPages(tileCmd, baseVirtualPage, fileHeader,
-                                                    tokenizer.cursor);
+        // virtualTextureManager.AllocatePhysicalPages(tileCmd, baseVirtualPage, fileHeader,
+        //                                             tokenizer.cursor);
 
         OS_UnmapFile(tokenizer.input.str);
 
@@ -931,9 +933,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             GPUTextureInfo &textureInfo = gpuTextureInfo[index];
             if (textureInfo.numVirtualOffsetBits != 0)
             {
-                material.baseVirtualPage =
-                    virtualTextureManager.baseVirtualPages[textureInfo.virtualAddressIndex];
-                material.materialIndex        = index;
+                VirtualTextureManager::TextureInfo &texInfo =
+                    virtualTextureManager.textureInfo[textureInfo.virtualAddressIndex];
+                material.baseVirtualPage      = texInfo.baseVirtualPage;
+                material.materialIndex        = textureInfo.virtualAddressIndex;
                 material.minLog2Dim           = textureInfo.minLog2Dim;
                 material.numVirtualOffsetBits = textureInfo.numVirtualOffsetBits;
                 material.numFaceDimBits       = textureInfo.numFaceDimBits;
@@ -1002,10 +1005,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         device->SubmitCommandBuffer(allCommandBuffer);
     }
 
-    // transferCmd->Barrier(&virtualTextureManager.pageTable,
-    //                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    //                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    //                      VK_ACCESS_2_SHADER_READ_BIT);
     device->SubmitCommandBuffer(transferCmd);
 
 #endif
@@ -1183,9 +1182,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         }
 
         // Virtual texture system
-        // CommandBuffer *virtualTextureCopyCmd = device->BeginCommandBuffer(QueueType_Copy);
-        // virtualTextureManager.Update(cmd, virtualTextureCopyCmd);
-        // device->SubmitCommandBuffer(virtualTextureCopyCmd);
+        CommandBuffer *virtualTextureCopyCmd = device->BeginCommandBuffer(QueueType_Copy);
+        virtualTextureManager.Update(cmd, virtualTextureCopyCmd);
+        device->SubmitCommandBuffer(virtualTextureCopyCmd);
 
         RayPushConstant pc;
         pc.envMap   = envMapBindlessIndex;

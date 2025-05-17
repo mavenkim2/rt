@@ -1116,15 +1116,33 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
     // Allocate page table
     const u32 numMips =
         Log2Int(Max(virtualTextureWidth, virtualTextureHeight) >> PAGE_SHIFT) + 1;
-    ImageDesc pageTableDesc(ImageType::Type2D, virtualTextureWidth >> PAGE_SHIFT,
-                            virtualTextureHeight >> PAGE_SHIFT, 1, numMips, 1,
-                            VK_FORMAT_R32_UINT, MemoryUsage::GPU_ONLY,
+    numVirtPagesWide     = virtualTextureWidth >> PAGE_SHIFT;
+    u32 numVirtPagesHigh = virtualTextureHeight >> PAGE_SHIFT;
+    ImageDesc pageTableDesc(ImageType::Type2D, numVirtPagesWide, numVirtPagesHigh, 1, numMips,
+                            1, VK_FORMAT_R32_UINT, MemoryUsage::GPU_ONLY,
                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
 
     pageTable = device->CreateImage(pageTableDesc);
     for (int i = 0; i < numMips; i++)
     {
         device->CreateSubresource(&pageTable, i, 1);
+    }
+
+    // Allocate cpu page table
+    cpuPageTable = StaticArray<StaticArray<u32>>(arena, numMips, numMips);
+    for (int i = 0; i < numMips; i++)
+    {
+        const u32 mipNumVirtPagesWide = numVirtPagesWide >> i;
+        const u32 mipNumVirtPagesHigh = numVirtPagesHigh >> i;
+        cpuPageTable[i] = StaticArray<u32>(arena, mipNumVirtPagesWide * mipNumVirtPagesHigh,
+                                           mipNumVirtPagesWide * mipNumVirtPagesHigh);
+        for (int pageY = 0; pageY < mipNumVirtPagesHigh; pageY++)
+        {
+            for (int pageX = 0; pageX < mipNumVirtPagesWide; pageX++)
+            {
+                cpuPageTable[i][pageY * mipNumVirtPagesWide + pageX] = ~0u;
+            }
+        }
     }
 
     Assert(IsPow2(physicalTextureWidth) && IsPow2(physicalTextureHeight));
@@ -1138,9 +1156,13 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
         physicalTextureWidth  = Min(physicalTextureWidth, limits.max2DImageDim);
         physicalTextureHeight = Min(physicalTextureHeight, limits.max2DImageDim);
 
-        // Allocate physical page pool
-        physicalPages = StaticArray<PhysicalPage>(arena, numPools * numPhysPagesWidth *
-                                                             numPhysPagesHeight);
+        // Allocate physical page pool + sentinels
+        mipSentinels = StaticArray<Sentinel>(arena, numMips);
+
+        const u32 numPhysicalPages =
+            2 * numMips + numPools * numPhysPagesWidth * numPhysPagesHeight;
+        physicalPages = StaticArray<PhysicalPage>(arena, numPhysicalPages);
+
         for (int i = 0; i < numPools; i++)
         {
             for (int y = 0; y < numPhysPagesHeight; y++)
@@ -1157,6 +1179,29 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
             }
         }
 
+        u32 pageSentinelIndex = physicalPages.size();
+        for (int i = 0; i < numMips; i++)
+        {
+            int headIndex = pageSentinelIndex++;
+            int tailIndex = pageSentinelIndex++;
+
+            PhysicalPage head;
+            head.nextPage = tailIndex;
+            head.prevPage = -1;
+            PhysicalPage tail;
+            tail.nextPage = -1;
+            tail.prevPage = headIndex;
+
+            physicalPages.push_back(head);
+            physicalPages.push_back(tail);
+
+            Sentinel sentinel;
+            sentinel.head = headIndex;
+            sentinel.tail = tailIndex;
+
+            mipSentinels.push_back(sentinel);
+        }
+
         // Allocate texture arrays
         ImageDesc poolDesc(ImageType::Array2D, physicalTextureWidth, physicalTextureHeight, 1,
                            1, numPools, format, MemoryUsage::GPU_ONLY,
@@ -1166,8 +1211,6 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
 
     // Instantiate streaming system
     {
-        writeSubmission.store(0);
-        readSubmission.store(0);
         uploadBuffers =
             FixedArray<StaticArray<u8>, numPendingSubmissions>(numPendingSubmissions);
         uploadBuffers[0] = StaticArray<u8>(arena, maxUploadSize);
@@ -1177,6 +1220,12 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
             numPendingSubmissions);
         uploadCopyCommands[0] = StaticArray<BufferImageCopy>(arena, maxCopies);
         uploadCopyCommands[1] = StaticArray<BufferImageCopy>(arena, maxCopies);
+
+        uploadSemaphores = FixedArray<Semaphore, numPendingSubmissions>(numPendingSubmissions);
+        uploadSemaphores[0] = device->CreateSemaphore();
+        uploadSemaphores[1] = device->CreateSemaphore();
+
+        writeSubmission.store(0);
 
         uploadDeviceBuffers =
             FixedArray<GPUBuffer, numPendingSubmissions>(numPendingSubmissions);
@@ -1194,9 +1243,9 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             sizeof(PageTableUpdateRequest) * updateRequestRingBuffer.max);
 
-        uploadSemaphores = FixedArray<Semaphore, numPendingSubmissions>(numPendingSubmissions);
-        uploadSemaphores[0] = device->CreateSemaphore();
-        uploadSemaphores[1] = device->CreateSemaphore();
+        readSubmission.store(0);
+
+        updateRequestMutex.count.store(0);
 
         feedbackBuffers =
             FixedArray<TransferBuffer, numPendingSubmissions>(numPendingSubmissions);
@@ -1205,15 +1254,18 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
         feedbackBuffers[1] =
             device->GetReadbackBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, megabytes(8));
 
-        // updateRequestMutex = {};
+        feedbackMutex.count.store(0);
     }
 
     // callback
-    // Scheduler::Counter counter = {};
-    // scheduler.Schedule(&counter, [&](int jobID) { Callback(); });
+    Scheduler::Counter counter = {};
+    scheduler.Schedule(&counter, [&](int jobID) { Callback(); });
 }
 
-Vec2u VirtualTextureManager::AllocateVirtualPages(const Vec2u &virtualSize, u32 &index)
+Vec2u VirtualTextureManager::AllocateVirtualPages(Arena *arena, string filename,
+                                                  const TextureMetadata &metadata,
+                                                  const Vec2u &virtualSize, u8 *contents,
+                                                  u32 &index)
 {
     Vec2u virtualPage(0);
 
@@ -1233,10 +1285,14 @@ Vec2u VirtualTextureManager::AllocateVirtualPages(const Vec2u &virtualSize, u32 
     //     }
     // }
 
-    // baseVirtualPages.push_back(virtualPage);
-    // index = baseVirtualPages.size() - 1;
+    TextureInfo texInfo;
+    texInfo.filename        = PushStr8Copy(arena, filename);
+    texInfo.baseVirtualPage = virtualPage;
+    texInfo.metadata        = metadata;
+    texInfo.contents        = contents;
+    textureInfo.push_back(texInfo);
+    index = textureInfo.size() - 1;
 
-    // Assert(0);
     return virtualPage;
 }
 
@@ -1392,8 +1448,6 @@ void RingBuffer<T>::WriteWithOverwrite(T *vals, u32 num)
         MemoryCopy(entries.data, vals + numToEnd, sizeof(T) * (num - numToEnd));
     }
     writeOffset += num;
-
-    return result;
 }
 
 template <typename T>
@@ -1450,7 +1504,6 @@ T *RingBuffer<T>::SynchronizedRead(Mutex *mutex, Arena *arena, u32 &num)
     return result;
 }
 
-#if 0
 // Executes on main thread
 void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *transferCmd)
 {
@@ -1462,20 +1515,20 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
     // Write last frame's feedback buffer
     if (device->frameCount >= 2)
     {
-        u32 numFeedbackRequests = 
-            ((u32 *)feedbackBuffers[currentBuffer].mappedPtr)[0]);
-        u32 *feedbackRequests = PushArrayNoZero(scratch.temp.arena, u32, numFeedbackRequests);
+        u32 numFeedbackRequests = ((u32 *)feedbackBuffers[currentBuffer].mappedPtr)[0];
+        Vec2u *feedbackRequests =
+            PushArrayNoZero(scratch.temp.arena, Vec2u, numFeedbackRequests);
 
         BeginMutex(&feedbackMutex);
         feedbackRingBuffer.WriteWithOverwrite(
-            (u32 *)feedbackBuffers[currentBuffer].mappedPtr + 1, numFeedbackRequests);
+            (Vec2u *)((u32 *)feedbackBuffers[currentBuffer].mappedPtr + 1),
+            numFeedbackRequests);
         EndMutex(&feedbackMutex);
     }
 
-    u32 numRequests = 0;
-    PageTableUpdateRequest *updateRequests =
-        virtualTextureManager.updateRequestRingBuffer.SynchronizedRead(
-            virtualTextureManager.updateRequestMutex, scratch.temp.arena, numRequests);
+    u32 numRequests                        = 0;
+    PageTableUpdateRequest *updateRequests = updateRequestRingBuffer.SynchronizedRead(
+        &updateRequestMutex, scratch.temp.arena, numRequests);
 
     if (numRequests)
     {
@@ -1501,10 +1554,11 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
         updatePageTableDescriptorSet.Bind(0, &pageTableRequestBuffer->buffer)
             .Bind(1, &pageTable);
         computeCmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-        cmd->PushConstants(&push, &pc, descriptorSetLayout.pipelineLayout);
-        cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &updatePageTableDescriptorSet,
-                                descriptorSetLayout.pipelineLayout);
-        computeCmd->Dispatch(numRequests >> 6, 1, 1);
+        computeCmd->PushConstants(&push, &pc, descriptorSetLayout.pipelineLayout);
+        computeCmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
+                                       &updatePageTableDescriptorSet,
+                                       descriptorSetLayout.pipelineLayout);
+        computeCmd->Dispatch((numRequests + 63) >> 6, 1, 1);
 
         // RAW for page table
         computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1515,14 +1569,9 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
 
     u64 readIndex = readSubmission.load(std::memory_order_relaxed);
 
-    for (;;)
-    {
-        u64 writeIndex = writeSubmission.load(std::memory_order_acquire);
-        if (readIndex < writeIndex)
-        {
-            break;
-        }
-    }
+    u64 writeIndex = writeSubmission.load(std::memory_order_acquire);
+    Assert(readIndex <= writeIndex);
+    if (readIndex == writeIndex) return;
 
     // Update physical texture with new entries
     u32 readDoubleBufferIndex = readIndex & 1;
@@ -1560,7 +1609,6 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
     // Make sure all memory writes are visible
     readSubmission.store(readIndex + 1, std::memory_order_release);
 }
-#endif
 
 void VirtualTextureManager::UnlinkLRU(int pageIndex)
 {
