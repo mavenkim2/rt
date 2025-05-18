@@ -597,6 +597,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         DescriptorType types[] = {
             DescriptorType::SampledImage,
             DescriptorType::StorageBuffer,
+            DescriptorType::StorageImage,
         };
         for (int type = 0; type < ArrayLength(types); type++)
         {
@@ -618,6 +619,12 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
                 poolSize.descriptorCount =
                     Min(10000u,
                         deviceProperties.properties.limits.maxDescriptorSetSampledImages / 4);
+            }
+            else if (types[type] == DescriptorType::StorageImage)
+            {
+                poolSize.descriptorCount =
+                    Min(10000u,
+                        deviceProperties.properties.limits.maxDescriptorSetStorageImages / 4);
             }
             // else if (type == DescriptorType_UniformTexel)
             // {
@@ -688,6 +695,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
             {
                 case DescriptorType::SampledImage: typeName = "Sampled Image"; break;
                 case DescriptorType::StorageBuffer: typeName = "Storage Buffer"; break;
+                case DescriptorType::StorageImage: typeName = "Storage Image"; break;
                 // case DescriptorType_UniformTexel: typeName = "Uniform Texel Buffer"; break;
                 // case DescriptorType_StorageTexelBuffer:
                 //     typeName = "Storage Texel Buffer";
@@ -1298,7 +1306,8 @@ VkImageMemoryBarrier2
 Vulkan::ImageMemoryBarrier(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
                            VkPipelineStageFlags2 srcStageMask,
                            VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 srcAccessMask,
-                           VkAccessFlags2 dstAccessMask, VkImageAspectFlags aspectFlags)
+                           VkAccessFlags2 dstAccessMask, VkImageAspectFlags aspectFlags,
+                           u32 fromQueue, u32 toQueue)
 {
     VkImageMemoryBarrier2 barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
     barrier.image                 = image;
@@ -1315,8 +1324,8 @@ Vulkan::ImageMemoryBarrier(VkImage image, VkImageLayout oldLayout, VkImageLayout
     barrier.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;
     barrier.subresourceRange.baseArrayLayer = 0;
     barrier.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
-    barrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+    barrier.srcQueueFamilyIndex             = fromQueue;
+    barrier.dstQueueFamilyIndex             = toQueue;
     return barrier;
 }
 
@@ -1330,6 +1339,22 @@ void CommandBuffer::Barrier(VkPipelineStageFlags2 srcStage, VkPipelineStageFlags
     barrier.dstAccessMask    = dstAccess;
 
     memBarriers.push_back(barrier);
+}
+
+void CommandBuffer::Barrier(GPUImage *image, VkImageLayout oldLayout, VkImageLayout newLayout,
+                            VkPipelineStageFlags2 srcStageMask,
+                            VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 srcAccessMask,
+                            VkAccessFlags2 dstAccessMask, u32 fromQueue, u32 toQueue)
+{
+    VkImageMemoryBarrier2 barrier = device->ImageMemoryBarrier(
+        image->image, oldLayout, newLayout, srcStageMask, dstStageMask, srcAccessMask,
+        dstAccessMask, image->aspect, fromQueue, toQueue);
+
+    imageBarriers.push_back(barrier);
+
+    image->lastLayout   = newLayout;
+    image->lastPipeline = dstStageMask;
+    image->lastAccess   = dstAccessMask;
 }
 
 void CommandBuffer::Barrier(GPUImage *image, VkImageLayout layout, VkPipelineStageFlags2 stage,
@@ -1575,7 +1600,7 @@ GPUBuffer Vulkan::CreateBuffer(VkBufferUsageFlags flags, size_t totalSize, Memor
     return buffer;
 }
 
-GPUImage Vulkan::CreateImage(ImageDesc desc, int numSubresources)
+GPUImage Vulkan::CreateImage(ImageDesc desc, int numSubresources, int ownedQueues)
 {
     GPUImage image  = {};
     image.desc      = desc;
@@ -1615,7 +1640,11 @@ GPUImage Vulkan::CreateImage(ImageDesc desc, int numSubresources)
     imageInfo.usage         = desc.imageUsage;
     imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
 
-    if (families.Length() > 1)
+    ScratchArena scratch;
+    u32 *imageQueueFamilies   = PushArrayNoZero(scratch.temp.arena, u32, families.Length());
+    u32 imageQueueFamilyCount = 0;
+
+    if (ownedQueues == -1 && families.Length() > 1)
     {
         imageInfo.sharingMode           = VK_SHARING_MODE_CONCURRENT;
         imageInfo.queueFamilyIndexCount = (u32)families.Length();
@@ -1624,6 +1653,22 @@ GPUImage Vulkan::CreateImage(ImageDesc desc, int numSubresources)
     else
     {
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        for (u32 queueType = (u32)QueueType_Graphics; queueType < (u32)QueueType_Count;
+             queueType++)
+        {
+            if ((ownedQueues & (1u << (u32)queueType)) != 0)
+            {
+                u32 family                                  = queueType == QueueType_Graphics
+                                                                  ? graphicsFamily
+                                                                  : (queueType == QueueType_Copy
+                                                                         ? copyFamily
+                                                                         : (queueType == QueueType_Compute ? computeFamily
+                                                                                                           : families[0]));
+                imageQueueFamilies[imageQueueFamilyCount++] = family;
+            }
+        }
+        imageInfo.queueFamilyIndexCount = imageQueueFamilyCount;
+        imageInfo.pQueueFamilyIndices   = imageQueueFamilies;
     }
 
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -1764,6 +1809,27 @@ int Vulkan::BindlessIndex(GPUImage *image)
     writeSet.descriptorCount      = 1;
     writeSet.dstArrayElement      = index;
     writeSet.descriptorType       = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    writeSet.pImageInfo           = &info;
+
+    vkUpdateDescriptorSets(device, 1, &writeSet, 0, 0);
+    return index;
+}
+
+int Vulkan::BindlessStorageIndex(GPUImage *image, int subresourceIndex)
+{
+    BindlessDescriptorPool &descriptorPool = bindlessDescriptorPools[2];
+    int index                              = descriptorPool.Allocate();
+
+    VkDescriptorImageInfo info = {};
+    info.imageView             = subresourceIndex == -1 ? image->imageView
+                                                        : image->subresources[subresourceIndex].imageView;
+    info.imageLayout           = image->lastLayout;
+
+    VkWriteDescriptorSet writeSet = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writeSet.dstSet               = descriptorPool.set;
+    writeSet.descriptorCount      = 1;
+    writeSet.dstArrayElement      = index;
+    writeSet.descriptorType       = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writeSet.pImageInfo           = &info;
 
     vkUpdateDescriptorSets(device, 1, &writeSet, 0, 0);
@@ -2968,6 +3034,8 @@ GPUAccelerationStructure CommandBuffer::CompactAS(QueryPool &pool,
 void CommandBuffer::ClearBuffer(GPUBuffer *b)
 {
     vkCmdFillBuffer(buffer, b->buffer, 0, VK_WHOLE_SIZE, 0);
+    b->lastStage  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    b->lastAccess = VK_ACCESS_2_TRANSFER_WRITE_BIT;
 }
 
 void Vulkan::BeginFrame()

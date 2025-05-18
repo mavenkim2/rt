@@ -8,12 +8,14 @@ static const float OneMinusEpsilon = 0x1.fffffep-1;
 
 #define texture2DSpace space1
 #define structuredBufferSpace space2
+#define rwTexture2DSpace space3
 
 Texture2D bindlessTextures[] : register(t0, texture2DSpace);
 Texture2D<float3> bindlessFloat3Textures[] : register(t0, texture2DSpace);
 StructuredBuffer<float3> bindlessFloat3s[] : register(t0, structuredBufferSpace);
 StructuredBuffer<uint> bindlessUints[] : register(t0, structuredBufferSpace);
 ByteAddressBuffer bindlessBuffer[] : register(t0, structuredBufferSpace);
+RWTexture2D<uint> bindlessRWTextureUint[] : register(u0, rwTexture2DSpace);
 
 SamplerState samplerLinearClamp : register(s50);
 SamplerState samplerNearestClamp : register(s51);

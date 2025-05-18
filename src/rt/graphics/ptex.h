@@ -329,6 +329,7 @@ struct VirtualTextureManager
     DescriptorSetLayout descriptorSetLayout;
     VkPipeline pipeline;
     PushConstant push;
+    int bindlessPageTableStartIndex;
 
     // Streaming
     static const u32 numPendingSubmissions = 2;
@@ -367,7 +368,8 @@ struct VirtualTextureManager
                                TextureMetadata &metadata, u8 *contents);
 
     // Streaming
-    void Update(CommandBuffer *computeCmd, CommandBuffer *transferCmd);
+    void Update(CommandBuffer *computeCmd, CommandBuffer *transferCmd,
+                CommandBuffer *transitionCmd, QueueType computeCmdQueue);
     void UnlinkLRU(int index);
     void LinkLRU(int index, int mip);
     void Callback();

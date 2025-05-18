@@ -438,13 +438,6 @@ struct HashIndex
         return result;
     }
 
-    template <typename T>
-    inline void AddInHash(T obj, i32 index)
-    {
-        i32 inHash = (i32)Hash<T>(obj);
-        AddInHash(inHash, index);
-    }
-
     void AddInHash(i32 key, i32 index)
     {
         i32 slot = key & hashMask;

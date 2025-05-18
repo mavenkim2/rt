@@ -31,7 +31,6 @@ ByteAddressBuffer indices : register(t10);
 #endif
 
 RWStructuredBuffer<uint> feedbackBuffer : register(u11);
-RWStructuredBuffer<uint> numFeedback : register(u12);
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -71,7 +70,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
 
     bool printDebug = all(swizzledThreadID == debugInfo.mousePos);
 
-    int2 feedbackRequest = -1;
+    uint2 feedbackRequest = ~0u;
 
     while (true)
     {
@@ -275,8 +274,10 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
 
             rayCone.Propagate(surfaceSpreadAngle, query.CommittedRayT());
             float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, n, dim, printDebug);
+            uint mipLevel = (uint)lambda;
             float filterU = rng.Uniform();
 
+            uint2 virtualPage = ~0u;
             switch (material.type) 
             {
                 case GPUMaterialType::Dielectric:
@@ -286,7 +287,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
                 break;
                 case GPUMaterialType::Diffuse: 
                 {
-                    float4 reflectance = SampleStochasticCatmullRomBorderless(physicalPages, faceData, material, faceID, uv, (uint)lambda, filterU, printDebug);
+                    float4 reflectance = SampleStochasticCatmullRomBorderless(physicalPages, faceData, material, faceID, uv, mipLevel, filterU, printDebug);
                     dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
                 }
                 break;
@@ -294,7 +295,10 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
 
             if (depth == 1)
             {
-                feedbackRequest = int2(0, 0);//int2(material.pageOffset + pageInformation.x, int(lambda));
+                float2 newUv = faceData.rotate ? float2(1 - uv.y, uv.x) : uv;
+                uint2 virtualPage = VirtualTexture::CalculateVirtualPage(faceData.faceOffset, newUv, dim, mipLevel);
+                const uint feedbackMipLevel = VirtualTexture::ClampMipLevel(dim, mipLevel);
+                feedbackRequest = PackFeedbackEntry(virtualPage.x, virtualPage.y, material.textureIndex, feedbackMipLevel);
             }
 
             if (dir.z == 0) break;
@@ -386,20 +390,20 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
     }
     image[swizzledThreadID] = float4(radiance, 1);
 
+    // Write virtual texture feedback back to main memory
     uint4 mask = WaveMatch(feedbackRequest.x);
     int4 highLanes = (int4)(firstbithigh(mask) | uint4(0, 0x20, 0x40, 0x60));
     uint highLane = (uint)max(max(highLanes.x, highLanes.y), max(highLanes.z, highLanes.w));
-    bool isHighLane = all(feedbackRequest != -1) && WaveGetLaneIndex() == highLane;
+    bool isHighLane = all(feedbackRequest != ~0u) && WaveGetLaneIndex() == highLane;
 
     uint index;
-    WaveInterlockedAddScalarTest(numFeedback[0], isHighLane, 1, index);
+    WaveInterlockedAddScalarTest(feedbackBuffer[0], isHighLane, 2, index);
     if (isHighLane)
     {
-        uint mipBit = 1u << feedbackRequest.y;
-        uint mipLevel = firstbitlow(mipBit | WaveMultiPrefixBitOr(mipBit, mask));
-        feedbackBuffer[index] = (mipLevel << 28) | feedbackRequest.x;
+        feedbackBuffer[index + 1] = feedbackRequest.x;
+        feedbackBuffer[index + 2] = feedbackRequest.y;
     }
-    if (0) // WaveActiveAnyTrue(printDebug))
+    if (0)//WaveActiveAnyTrue(printDebug))
     {
         printf("%u %u %u %u unique %u\n", feedbackRequest.x, feedbackRequest.y, flattenedGroupThreadID, highLane, WaveActiveCountBits(isHighLane));
     }

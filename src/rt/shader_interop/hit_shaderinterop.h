@@ -25,7 +25,7 @@ struct GPUMaterial
 
     // Virtual texture info
     uint2 baseVirtualPage;
-    uint materialIndex;
+    uint textureIndex;
     uint minLog2Dim;
     uint numVirtualOffsetBits;
     uint numFaceDimBits;

@@ -25,11 +25,13 @@ namespace rt
 struct PageTableUpdatePushConstant
 {
     uint numRequests;
+    uint bindlessPageTableStartIndex;
 };
 
 struct PageTableUpdateRequest
 {
     uint2 virtualPage;
+    uint mipLevel;
     uint packed;
 };
 
@@ -65,6 +67,15 @@ inline uint PackPageTableEntry(uint pageLocationX, uint pageLocationY, uint mip,
     packed            = BitFieldPackU32(packed, mip, packedOffset, 4);
     packed            = BitFieldPackU32(packed, layer, packedOffset, 4);
     return packed;
+}
+
+inline uint2 PackFeedbackEntry(uint virtualPageX, uint virtualPageY, uint textureIndex,
+                               uint mipLevel)
+{
+    uint2 result;
+    result.x = (virtualPageY << 16) | virtualPageX;
+    result.y = (mipLevel << 24) | textureIndex;
+    return result;
 }
 
 #ifdef __cplusplus

@@ -366,12 +366,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     VirtualTextureManager virtualTextureManager(
         sceneScratch.temp.arena, 131072, 131072, PHYSICAL_POOL_NUM_PAGES_WIDE * PAGE_WIDTH,
-        PHYSICAL_POOL_NUM_PAGES_WIDE * PAGE_WIDTH, 4, VK_FORMAT_BC1_RGB_UNORM_BLOCK);
+        PHYSICAL_POOL_NUM_PAGES_WIDE * PAGE_WIDTH, 1, VK_FORMAT_BC1_RGB_UNORM_BLOCK);
 
     CommandBuffer *tileCmd          = device->BeginCommandBuffer(QueueType_Compute);
     Semaphore tileSubmitSemaphore   = device->CreateSemaphore();
     tileSubmitSemaphore.signalValue = 1;
-    tileCmd->UAVBarrier(&virtualTextureManager.pageTable);
+    // tileCmd->UAVBarrier(&virtualTextureManager.pageTable);
     tileCmd->TransferWriteBarrier(&virtualTextureManager.gpuPhysicalPool);
     tileCmd->FlushBarriers();
 
@@ -853,7 +853,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     // int indexDataIndex   = layout.AddBinding(10, DescriptorType::StorageBuffer, flags);
 
     int feedbackBufferIndex = layout.AddBinding(11, DescriptorType::StorageBuffer, flags);
-    int countBufferIndex    = layout.AddBinding(12, DescriptorType::StorageBuffer, flags);
 
     // TODO: what is this?
     int counterIndex = layout.AddBinding(8, DescriptorType::StorageBuffer, flags);
@@ -936,7 +935,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                 VirtualTextureManager::TextureInfo &texInfo =
                     virtualTextureManager.textureInfo[textureInfo.virtualAddressIndex];
                 material.baseVirtualPage      = texInfo.baseVirtualPage;
-                material.materialIndex        = textureInfo.virtualAddressIndex;
+                material.textureIndex         = textureInfo.virtualAddressIndex;
                 material.minLog2Dim           = textureInfo.minLog2Dim;
                 material.numVirtualOffsetBits = textureInfo.numVirtualOffsetBits;
                 material.numFaceDimBits       = textureInfo.numFaceDimBits;
@@ -1030,11 +1029,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     TransferBuffer shaderDebugBuffers[2] = {
         device->GetStagingBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene)),
         device->GetStagingBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, sizeof(GPUScene))};
-
-    GPUBuffer countBuffer[2] = {
-        device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(u32)),
-        device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(u32)),
-    };
 
     bool mousePressed = false;
     OS_Key keys[4]    = {
@@ -1175,16 +1169,16 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         }
 
         u32 currentBuffer = device->GetCurrentBuffer();
-        // Clear count
-        {
-            cmd->ClearBuffer(&countBuffer[currentBuffer]);
-            cmd->ClearBuffer(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
-        }
 
         // Virtual texture system
         CommandBuffer *virtualTextureCopyCmd = device->BeginCommandBuffer(QueueType_Copy);
-        virtualTextureManager.Update(cmd, virtualTextureCopyCmd);
+        CommandBuffer *transitionCmd         = device->BeginCommandBuffer(QueueType_Graphics);
+        virtualTextureManager.Update(cmd, virtualTextureCopyCmd, transitionCmd,
+                                     QueueType_Graphics);
+        device->SubmitCommandBuffer(transitionCmd);
         device->SubmitCommandBuffer(virtualTextureCopyCmd);
+
+        cmd->ClearBuffer(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
 
         RayPushConstant pc;
         pc.envMap   = envMapBindlessIndex;
@@ -1200,6 +1194,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         VkPipelineStageFlags2 flags   = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
         VkPipelineBindPoint bindPoint = VK_PIPELINE_BIND_POINT_COMPUTE;
+        cmd->Barrier(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer, flags,
+                     VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->Barrier(&sceneTransferBuffers[currentBuffer].buffer, flags,
                      VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->Barrier(&shaderDebugBuffers[currentBuffer].buffer, flags,
@@ -1218,7 +1214,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             .Bind(physicalPagesBindingIndex, &virtualTextureManager.gpuPhysicalPool)
             .Bind(feedbackBufferIndex,
                   &virtualTextureManager.feedbackBuffers[currentBuffer].buffer)
-            .Bind(countBufferIndex, &countBuffer[currentBuffer])
             .Bind(counterIndex, &counterBuffer)
             .Bind(nvApiIndex, &nvapiBuffer);
 #ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
@@ -1236,13 +1231,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         cmd->Dispatch(dispatchDimX, dispatchDimY, 1);
 
         // Copy feedback from device to host
-        // CommandBuffer *transferCmd = device->BeginCommandBuffer(QueueType_Copy);
-        // cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        // VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //              VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-        // cmd->CopyBuffer(&virtualTextureManager.feedbackBuffers[currentBuffer].stagingBuffer,
-        //                 &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
-        // device->SubmitCommandBuffer(transferCmd);
+        CommandBuffer *transferCmd = device->BeginCommandBuffer(QueueType_Copy);
+        transferCmd->WaitOn(cmd);
+        transferCmd->CopyBuffer(
+            &virtualTextureManager.feedbackBuffers[currentBuffer].stagingBuffer,
+            &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
+        device->SubmitCommandBuffer(transferCmd);
 
         device->CopyFrameBuffer(&swapchain, cmd, image);
         device->EndFrame();

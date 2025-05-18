@@ -575,6 +575,10 @@ struct CommandBuffer
                             VkPipelineLayout pipeLayout);
     void TraceRays(RayTracingState *state, u32 width, u32 height, u32 depth);
     void Dispatch(u32 groupCountX, u32 groupCountY, u32 groupCountZ);
+    void Barrier(GPUImage *image, VkImageLayout oldLayout, VkImageLayout newLayout,
+                 VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
+                 VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask, u32 fromQueue,
+                 u32 toQueue);
     void Barrier(GPUImage *image, VkImageLayout layout, VkPipelineStageFlags2 stage,
                  VkAccessFlags2 access);
     void Barrier(GPUBuffer *buffer, VkPipelineStageFlags2 stage, VkAccessFlags2 access);
@@ -797,14 +801,15 @@ struct Vulkan
     ImageMemoryBarrier(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
                        VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
                        VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask,
-                       VkImageAspectFlags aspectFlags);
+                       VkImageAspectFlags aspectFlags, u32 fromQueue = VK_QUEUE_FAMILY_IGNORED,
+                       u32 toQueue = VK_QUEUE_FAMILY_IGNORED);
     void CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage *image);
     ThreadPool &GetThreadPool(int threadIndex);
     DescriptorSetLayout CreateDescriptorSetLayout(u32 binding, VkDescriptorType type,
                                                   VkShaderStageFlags stage);
     GPUBuffer CreateBuffer(VkBufferUsageFlags flags, size_t totalSize,
                            MemoryUsage usage = MemoryUsage::GPU_ONLY);
-    GPUImage CreateImage(ImageDesc desc, int numSubresources = -1);
+    GPUImage CreateImage(ImageDesc desc, int numSubresources = -1, int ownedQueue = -1);
     int CreateSubresource(GPUImage *image, u32 baseMip = 0,
                           u32 numMips = VK_REMAINING_MIP_LEVELS, u32 baseLayer = 0,
                           u32 numLayers = VK_REMAINING_ARRAY_LAYERS);
@@ -813,6 +818,7 @@ struct Vulkan
     void DestroyAccelerationStructure(GPUAccelerationStructure *as);
     void DestroyPool(VkDescriptorPool pool);
     int BindlessIndex(GPUImage *image);
+    int BindlessStorageIndex(GPUImage *image, int subresourceIndex = -1);
     int BindlessStorageIndex(GPUBuffer *buffer, size_t offset = 0,
                              size_t range = VK_WHOLE_SIZE);
     u64 GetMinAlignment(VkBufferUsageFlags flags);
@@ -957,7 +963,7 @@ struct Vulkan
         }
     };
 
-    BindlessDescriptorPool bindlessDescriptorPools[2];
+    BindlessDescriptorPool bindlessDescriptorPools[3];
 
     std::vector<VkDescriptorSet> bindlessDescriptorSets;
     std::vector<VkDescriptorSetLayout> bindlessDescriptorSetLayouts;
