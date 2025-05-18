@@ -1188,7 +1188,7 @@ void Vulkan::CheckInitializedThreadPool(int threadIndex)
     }
 }
 
-CommandBuffer *Vulkan::BeginCommandBuffer(QueueType queue)
+CommandBuffer *Vulkan::BeginCommandBuffer(QueueType queue, string name)
 {
     int threadIndex = GetThreadIndex();
     CheckInitializedThreadPool(threadIndex);
@@ -1239,12 +1239,13 @@ CommandBuffer *Vulkan::BeginCommandBuffer(QueueType queue)
     VkCommandBufferBeginInfo beginInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     beginInfo.flags                    = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
+    SetName(cmd->buffer, (const char *)name.str);
     VK_CHECK(vkBeginCommandBuffer(cmd->buffer, &beginInfo));
 
     return cmd;
 }
 
-void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd)
+void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd, bool frame)
 {
     VK_CHECK(vkEndCommandBuffer(cmd->buffer));
     ScratchArena scratch;
@@ -1265,7 +1266,7 @@ void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd)
 
     u32 signalSize = static_cast<u32>(cmd->signalSemaphores.size());
     VkSemaphoreSubmitInfo *signalSubmitInfo =
-        PushArray(scratch.temp.arena, VkSemaphoreSubmitInfo, signalSize + 1);
+        PushArray(scratch.temp.arena, VkSemaphoreSubmitInfo, signalSize + frame);
 
     for (u32 i = 0; i < signalSize; i++)
     {
@@ -1274,10 +1275,14 @@ void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd)
         signalSubmitInfo[i].semaphore = cmd->signalSemaphores[i].semaphore;
         signalSubmitInfo[i].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     }
-    signalSubmitInfo[signalSize].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-    signalSubmitInfo[signalSize].value     = ++queue.submissionID;
-    signalSubmitInfo[signalSize].semaphore = queue.submitSemaphore[GetCurrentBuffer()];
-    signalSubmitInfo[signalSize].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    if (frame)
+    {
+        signalSubmitInfo[signalSize].sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        u32 submissionID                       = queue.submissionID + 1;
+        signalSubmitInfo[signalSize].value     = submissionID;
+        signalSubmitInfo[signalSize].semaphore = queue.submitSemaphore[GetCurrentBuffer()];
+        signalSubmitInfo[signalSize].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    }
 
     VkCommandBufferSubmitInfo bufferSubmitInfo = {
         VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
@@ -1285,7 +1290,7 @@ void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd)
 
     info.waitSemaphoreInfoCount   = waitSize;
     info.pWaitSemaphoreInfos      = submitInfo;
-    info.signalSemaphoreInfoCount = signalSize + 1;
+    info.signalSemaphoreInfoCount = signalSize + frame;
     info.pSignalSemaphoreInfos    = signalSubmitInfo;
     info.commandBufferInfoCount   = 1;
     info.pCommandBufferInfos      = &bufferSubmitInfo;
@@ -1294,8 +1299,11 @@ void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd)
 
     cmd->waitSemaphores.clear();
     cmd->signalSemaphores.clear();
-    cmd->semaphore    = queue.submitSemaphore[GetCurrentBuffer()];
-    cmd->submissionID = queue.submissionID;
+    if (frame)
+    {
+        cmd->semaphore    = queue.submitSemaphore[GetCurrentBuffer()];
+        cmd->submissionID = queue.submissionID;
+    }
 
     int threadIndex                    = GetThreadIndex();
     ThreadPool &pool                   = GetThreadPool(threadIndex);
@@ -1307,7 +1315,7 @@ Vulkan::ImageMemoryBarrier(VkImage image, VkImageLayout oldLayout, VkImageLayout
                            VkPipelineStageFlags2 srcStageMask,
                            VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 srcAccessMask,
                            VkAccessFlags2 dstAccessMask, VkImageAspectFlags aspectFlags,
-                           u32 fromQueue, u32 toQueue)
+                           QueueType fromQueue, QueueType toQueue)
 {
     VkImageMemoryBarrier2 barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
     barrier.image                 = image;
@@ -1324,8 +1332,8 @@ Vulkan::ImageMemoryBarrier(VkImage image, VkImageLayout oldLayout, VkImageLayout
     barrier.subresourceRange.levelCount     = VK_REMAINING_MIP_LEVELS;
     barrier.subresourceRange.baseArrayLayer = 0;
     barrier.subresourceRange.layerCount     = VK_REMAINING_ARRAY_LAYERS;
-    barrier.srcQueueFamilyIndex             = fromQueue;
-    barrier.dstQueueFamilyIndex             = toQueue;
+    barrier.srcQueueFamilyIndex             = GetQueueFamily(fromQueue);
+    barrier.dstQueueFamilyIndex             = GetQueueFamily(toQueue);
     return barrier;
 }
 
@@ -1344,7 +1352,8 @@ void CommandBuffer::Barrier(VkPipelineStageFlags2 srcStage, VkPipelineStageFlags
 void CommandBuffer::Barrier(GPUImage *image, VkImageLayout oldLayout, VkImageLayout newLayout,
                             VkPipelineStageFlags2 srcStageMask,
                             VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 srcAccessMask,
-                            VkAccessFlags2 dstAccessMask, u32 fromQueue, u32 toQueue)
+                            VkAccessFlags2 dstAccessMask, QueueType fromQueue,
+                            QueueType toQueue)
 {
     VkImageMemoryBarrier2 barrier = device->ImageMemoryBarrier(
         image->image, oldLayout, newLayout, srcStageMask, dstStageMask, srcAccessMask,
@@ -1525,7 +1534,7 @@ void Vulkan::CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage 
 
     cmd->Wait(Semaphore{swapchain->acquireSemaphores[swapchain->acquireSemaphoreIndex]});
     cmd->Signal(Semaphore{swapchain->releaseSemaphore});
-    SubmitCommandBuffer(cmd);
+    SubmitCommandBuffer(cmd, true);
 
     VkPresentInfoKHR presentInfo   = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     presentInfo.waitSemaphoreCount = 1;
@@ -1650,6 +1659,12 @@ GPUImage Vulkan::CreateImage(ImageDesc desc, int numSubresources, int ownedQueue
         imageInfo.queueFamilyIndexCount = (u32)families.Length();
         imageInfo.pQueueFamilyIndices   = families.data;
     }
+    else if (ownedQueues == -1 && families.Length() == 1)
+    {
+        imageInfo.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
+        imageInfo.queueFamilyIndexCount = (u32)families.Length();
+        imageInfo.pQueueFamilyIndices   = families.data;
+    }
     else
     {
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -1658,12 +1673,7 @@ GPUImage Vulkan::CreateImage(ImageDesc desc, int numSubresources, int ownedQueue
         {
             if ((ownedQueues & (1u << (u32)queueType)) != 0)
             {
-                u32 family                                  = queueType == QueueType_Graphics
-                                                                  ? graphicsFamily
-                                                                  : (queueType == QueueType_Copy
-                                                                         ? copyFamily
-                                                                         : (queueType == QueueType_Compute ? computeFamily
-                                                                                                           : families[0]));
+                u32 family = GetQueueFamily((QueueType)queueType);
                 imageQueueFamilies[imageQueueFamilyCount++] = family;
             }
         }
@@ -1823,7 +1833,7 @@ int Vulkan::BindlessStorageIndex(GPUImage *image, int subresourceIndex)
     VkDescriptorImageInfo info = {};
     info.imageView             = subresourceIndex == -1 ? image->imageView
                                                         : image->subresources[subresourceIndex].imageView;
-    info.imageLayout           = image->lastLayout;
+    info.imageLayout           = VK_IMAGE_LAYOUT_GENERAL;
 
     VkWriteDescriptorSet writeSet = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     writeSet.dstSet               = descriptorPool.set;
@@ -2277,6 +2287,11 @@ void Vulkan::SetName(VkQueue handle, const char *name)
 void Vulkan::SetName(GPUBuffer *buffer, const char *name)
 {
     SetName((u64)buffer->buffer, VK_OBJECT_TYPE_BUFFER, name);
+}
+
+void Vulkan::SetName(VkCommandBuffer handle, const char *name)
+{
+    SetName((u64)handle, VK_OBJECT_TYPE_COMMAND_BUFFER, name);
 }
 
 void Vulkan::BeginEvent(CommandBuffer *cmd, string name)
@@ -3038,21 +3053,47 @@ void CommandBuffer::ClearBuffer(GPUBuffer *b)
     b->lastAccess = VK_ACCESS_2_TRANSFER_WRITE_BIT;
 }
 
+u32 Vulkan::GetQueueFamily(QueueType queueType)
+{
+    Assert(families.size() > 0);
+    u32 family = queueType == QueueType_Graphics
+                     ? graphicsFamily
+                     : (queueType == QueueType_Copy
+                            ? copyFamily
+                            : (queueType == QueueType_Compute ? computeFamily
+                                                              : VK_QUEUE_FAMILY_IGNORED));
+    return family;
+}
+
 void Vulkan::BeginFrame()
 {
-    CommandQueue &queue = queues[QueueType_Graphics];
     if (frameCount >= 2)
     {
-        u64 val                      = queue.submissionID - 1;
-        VkSemaphoreWaitInfo waitInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-        waitInfo.pValues             = &val;
-        waitInfo.semaphoreCount      = 1;
-        waitInfo.pSemaphores         = &queue.submitSemaphore[GetCurrentBuffer()];
-        vkWaitSemaphores(device, &waitInfo, UINT64_MAX);
+        for (int i = 0; i < QueueType_Count; i++)
+        {
+            CommandQueue &queue = queues[i];
+            if (queue.submissionID >= 2)
+            {
+                u64 val                      = queue.submissionID - 1;
+                VkSemaphoreWaitInfo waitInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+                waitInfo.pValues             = &val;
+                waitInfo.semaphoreCount      = 1;
+                waitInfo.pSemaphores         = &queue.submitSemaphore[GetCurrentBuffer()];
+                vkWaitSemaphores(device, &waitInfo, UINT64_MAX);
+            }
+        }
     }
 }
-void Vulkan::EndFrame()
+void Vulkan::EndFrame(int queueTypes)
 {
+    for (int i = 0; i < QueueType_Count; i++)
+    {
+        if ((queueTypes & (1 << i)) != 0)
+        {
+            CommandQueue &queue = queues[i];
+            queue.submissionID++;
+        }
+    }
     frameCount++;
     std::atomic_thread_fence(std::memory_order_seq_cst);
 }

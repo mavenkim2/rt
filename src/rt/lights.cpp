@@ -264,6 +264,7 @@ void ImageInfiniteLight::CalculateSHFromEnvironmentMap()
     ParallelFor2D(Vec2i(0), Vec2i(image.width, image.height), Vec2i(32),
                   [&](int jobID, Vec2i start, Vec2i end) {
                       L2 c = {};
+                      Assert(start.x >= 0 && start.y >= 0 && end.x >= 0 && end.y >= 0);
                       for (i32 h = start[1]; h < end[1]; h++)
                       {
                           for (i32 w = start[0]; w < end[0]; w++)
@@ -282,7 +283,8 @@ void ImageInfiniteLight::CalculateSHFromEnvironmentMap()
                               }
                           }
                       }
-                      l2[GetThreadIndex()] += c;
+                      u32 index = GetThreadIndex();
+                      l2[index] += c;
                   });
 
     for (int i = 0; i < num; i++)

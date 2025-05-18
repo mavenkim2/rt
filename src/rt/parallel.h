@@ -137,20 +137,17 @@ struct JobDeque
     {
         i64 t = top.load(std::memory_order_acquire);
         std::atomic_thread_fence(std::memory_order_seq_cst);
-        i64 b       = bottom.load(std::memory_order_acquire);
-        bool result = false;
+        i64 b = bottom.load(std::memory_order_acquire);
         if (t < b)
         {
-            result = true;
-            // TODO IMPORTANT: this sometimes errors out???
-            out = buffer[t & mask];
-            if (!top.compare_exchange_strong(t, t + 1, std::memory_order_seq_cst,
-                                             std::memory_order_relaxed))
+            if (top.compare_exchange_strong(t, t + 1, std::memory_order_seq_cst,
+                                            std::memory_order_relaxed))
             {
-                result = false;
+                out = buffer[t & mask];
+                return true;
             }
         }
-        return result;
+        return false;
     }
     bool Empty() const
     {
@@ -561,8 +558,6 @@ void ParallelFor(u32 start, u32 count, u32 threshold, u32 groupSize, const Func 
 template <typename Func>
 void ParallelFor2D(Vec2i start, Vec2i end, Vec2i tileSize, const Func &func)
 {
-    Scheduler::Counter counter = {};
-
     Assert(end[0] > start[0] && end[1] > start[1]);
     Vec2i width = end - start;
 
@@ -576,7 +571,7 @@ void ParallelFor2D(Vec2i start, Vec2i end, Vec2i tileSize, const Func &func)
         int jobsToRun = Min(taskCount, JobDeque<Scheduler::Task>::size - 1);
         taskCount -= jobsToRun;
 
-        scheduler.Schedule(&counter, jobsToRun, 1, [=](int jobID) {
+        scheduler.ScheduleAndWait(jobsToRun, 1, [&](int jobID) {
             jobID += offset;
             int tileX = jobID % tileCountX;
             int tileY = jobID / tileCountX;
@@ -587,8 +582,6 @@ void ParallelFor2D(Vec2i start, Vec2i end, Vec2i tileSize, const Func &func)
         });
         offset += jobsToRun;
     }
-
-    scheduler.Wait(&counter);
 }
 
 struct ParallelForOutput

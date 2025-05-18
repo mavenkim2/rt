@@ -474,6 +474,13 @@ enum QueueType
     QueueType_Count,
 };
 
+enum QueueFlag
+{
+    QueueFlag_Graphics = 1 << 0,
+    QueueFlag_Compute  = 1 << 1,
+    QueueFlag_Copy     = 1 << 2,
+};
+
 struct Semaphore
 {
     VkSemaphore semaphore;
@@ -561,6 +568,12 @@ struct CommandBuffer
 
     void Wait(Semaphore s) { waitSemaphores.push_back(s); }
     void Signal(Semaphore s) { signalSemaphores.push_back(s); }
+    void SignalOutsideFrame(Semaphore s)
+    {
+        signalSemaphores.push_back(s);
+        submissionID = s.signalValue;
+        semaphore    = s.semaphore;
+    }
     void WaitOn(CommandBuffer *other);
     void CopyBuffer(GPUBuffer *dst, GPUBuffer *src);
     void SubmitTransfer(TransferBuffer *buffer);
@@ -577,8 +590,8 @@ struct CommandBuffer
     void Dispatch(u32 groupCountX, u32 groupCountY, u32 groupCountZ);
     void Barrier(GPUImage *image, VkImageLayout oldLayout, VkImageLayout newLayout,
                  VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
-                 VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask, u32 fromQueue,
-                 u32 toQueue);
+                 VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask,
+                 QueueType fromQueue, QueueType toQueue);
     void Barrier(GPUImage *image, VkImageLayout layout, VkPipelineStageFlags2 stage,
                  VkAccessFlags2 access);
     void Barrier(GPUBuffer *buffer, VkPipelineStageFlags2 stage, VkAccessFlags2 access);
@@ -795,14 +808,14 @@ struct Vulkan
     Semaphore CreateSemaphore();
     void AllocateCommandBuffers(ThreadPool &pool, QueueType type);
     void CheckInitializedThreadPool(int threadIndex);
-    CommandBuffer *BeginCommandBuffer(QueueType queue);
-    void SubmitCommandBuffer(CommandBuffer *cmd);
+    CommandBuffer *BeginCommandBuffer(QueueType queue, string name = "Command Buffer");
+    void SubmitCommandBuffer(CommandBuffer *cmd, bool frame = false);
     VkImageMemoryBarrier2
     ImageMemoryBarrier(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
                        VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
                        VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask,
-                       VkImageAspectFlags aspectFlags, u32 fromQueue = VK_QUEUE_FAMILY_IGNORED,
-                       u32 toQueue = VK_QUEUE_FAMILY_IGNORED);
+                       VkImageAspectFlags aspectFlags, QueueType fromQueue = QueueType_Count,
+                       QueueType toQueue = QueueType_Count);
     void CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage *image);
     ThreadPool &GetThreadPool(int threadIndex);
     DescriptorSetLayout CreateDescriptorSetLayout(u32 binding, VkDescriptorType type,
@@ -842,8 +855,9 @@ struct Vulkan
 
     VkAccelerationStructureInstanceKHR GetVkInstance(const AffineSpace &transform,
                                                      GPUAccelerationStructure &as);
+    u32 GetQueueFamily(QueueType type);
     void BeginFrame();
-    void EndFrame();
+    void EndFrame(int queueType);
 
     void Wait(Semaphore s);
 
@@ -990,6 +1004,7 @@ struct Vulkan
     void SetName(VkShaderModule handle, const char *name);
     void SetName(VkPipeline handle, const char *name);
     void SetName(VkQueue handle, const char *name);
+    void SetName(VkCommandBuffer handle, const char *name);
     void SetName(GPUBuffer *buffer, const char *name);
 
     //////////////////////////////

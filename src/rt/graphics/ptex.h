@@ -335,7 +335,7 @@ struct VirtualTextureManager
     static const u32 numPendingSubmissions = 2;
     static const u32 maxUploadSize         = megabytes(512);
     static const u32 maxCopies             = 1u << 20u;
-    static const u32 maxFeedback           = 32 * 1024 * 1024;
+    static const u32 maxFeedback           = 4 * 1024 * 1024;
 
     // Clock replacement
     u32 clockPoolIndex;

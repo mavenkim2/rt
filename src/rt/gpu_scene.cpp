@@ -25,22 +25,6 @@
 namespace rt
 {
 
-SceneShapeParse StartSceneShapeParse()
-{
-    SceneShapeParse result;
-    result.buffer                = device->BeginCommandBuffer(QueueType_Copy);
-    result.semaphore             = device->CreateSemaphore();
-    result.semaphore.signalValue = 1;
-    return result;
-}
-
-void EndSceneShapeParse(ScenePrimitives *scene, SceneShapeParse *parse)
-{
-    parse->buffer->Signal(parse->semaphore);
-    scene->semaphore = parse->semaphore;
-    device->SubmitCommandBuffer(parse->buffer);
-}
-
 void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, GeometryType type,
                           string directory, AffineSpace &worldFromRender,
                           AffineSpace &renderFromWorld, Tokenizer &tokenizer,
@@ -406,9 +390,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             Vec2u(fileHeader.virtualSqrtNumPages, fileHeader.virtualSqrtNumPages),
             tokenizer.cursor, allocIndex);
 
-        // virtualTextureManager.AllocatePhysicalPages(tileCmd, baseVirtualPage, fileHeader,
-        //                                             tokenizer.cursor);
-
         OS_UnmapFile(tokenizer.input.str);
 
         // Pack ptex face metadata into FaceData bitstream
@@ -477,7 +458,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         gpuTextureInfo[i].virtualAddressIndex  = allocIndex;
     }
 
-    tileCmd->Signal(tileSubmitSemaphore);
+    tileCmd->SignalOutsideFrame(tileSubmitSemaphore);
     tileCmd->Barrier(&virtualTextureManager.gpuPhysicalPool,
                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
@@ -598,7 +579,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         }
 #endif
 
-        dgfTransferCmd->Signal(scene->semaphore);
+        dgfTransferCmd->SignalOutsideFrame(scene->semaphore);
         device->SetName(&info.dgfBuffer, "DGF Buffer");
         device->SubmitCommandBuffer(dgfTransferCmd);
 
@@ -806,7 +787,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     transferCmd->FlushBarriers();
 
     submitSemaphore.signalValue = 1;
-    transferCmd->Signal(submitSemaphore);
+    transferCmd->SignalOutsideFrame(submitSemaphore);
 
     ImageDesc targetUavDesc(ImageType::Type2D, params->width, params->height, 1, 1, 1,
                             VK_FORMAT_R16G16B16A16_SFLOAT, MemoryUsage::GPU_ONLY,
@@ -888,7 +869,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         Semaphore semaphore   = device->CreateSemaphore();
         semaphore.signalValue = 1;
         cmd->Wait(scene->semaphore);
-        cmd->Signal(semaphore);
+        cmd->SignalOutsideFrame(semaphore);
 
         GPUAccelerationStructurePayload payload =
             cmd->BuildCustomBLAS(&blasSceneInfo[i].aabbBuffer, blasSceneInfo[i].aabbLength);
@@ -977,7 +958,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             tlas          = scene->gpuBVH;
 
             tlasSemaphore.signalValue = 1;
-            allCommandBuffer->Signal(tlasSemaphore);
+            allCommandBuffer->SignalOutsideFrame(tlasSemaphore);
         }
         device->SubmitCommandBuffer(allCommandBuffer);
     }
@@ -988,7 +969,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         ScenePrimitives *scene = blasScenes[0];
         allCommandBuffer->Wait(scene->semaphore);
         tlasSemaphore.signalValue = 1;
-        allCommandBuffer->Signal(tlasSemaphore);
+        allCommandBuffer->SignalOutsideFrame(tlasSemaphore);
         Instance instance          = {};
         ScenePrimitives *baseScene = &GetScene()->scene;
         GPUBuffer tlasBuffer =
@@ -1148,7 +1129,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         device->BeginFrame();
         u32 frame          = device->GetCurrentBuffer();
         GPUImage *image    = &images[frame];
-        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics);
+        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics, "graphics cmd");
 
         if (device->frameCount == 0)
         {
@@ -1171,8 +1152,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         u32 currentBuffer = device->GetCurrentBuffer();
 
         // Virtual texture system
-        CommandBuffer *virtualTextureCopyCmd = device->BeginCommandBuffer(QueueType_Copy);
-        CommandBuffer *transitionCmd         = device->BeginCommandBuffer(QueueType_Graphics);
+        CommandBuffer *virtualTextureCopyCmd =
+            device->BeginCommandBuffer(QueueType_Copy, "async copy cmd");
+        CommandBuffer *transitionCmd =
+            device->BeginCommandBuffer(QueueType_Graphics, "transition cmd");
         virtualTextureManager.Update(cmd, virtualTextureCopyCmd, transitionCmd,
                                      QueueType_Graphics);
         device->SubmitCommandBuffer(transitionCmd);
@@ -1231,15 +1214,16 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         cmd->Dispatch(dispatchDimX, dispatchDimY, 1);
 
         // Copy feedback from device to host
-        CommandBuffer *transferCmd = device->BeginCommandBuffer(QueueType_Copy);
+        CommandBuffer *transferCmd =
+            device->BeginCommandBuffer(QueueType_Copy, "feedback copy cmd");
         transferCmd->WaitOn(cmd);
         transferCmd->CopyBuffer(
             &virtualTextureManager.feedbackBuffers[currentBuffer].stagingBuffer,
             &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
-        device->SubmitCommandBuffer(transferCmd);
+        device->SubmitCommandBuffer(transferCmd, true);
 
         device->CopyFrameBuffer(&swapchain, cmd, image);
-        device->EndFrame();
+        device->EndFrame(QueueFlag_Copy | QueueFlag_Graphics);
 
         // Wait until new update
         f32 endWorkFrameTime = OS_NowSeconds();

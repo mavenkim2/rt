@@ -24,8 +24,6 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
                           ChunkedLinkedList<Mesh, MemoryType_Shape> &shapes,
                           ChunkedLinkedList<PrimitiveIndices, MemoryType_Shape> &indices,
                           ChunkedLinkedList<Light *, MemoryType_Light> &lights);
-SceneShapeParse StartSceneShapeParse();
-void EndSceneShapeParse(ScenePrimitives *scene, SceneShapeParse *parse);
 
 } // namespace rt
 

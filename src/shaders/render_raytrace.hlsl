@@ -289,17 +289,18 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
                 {
                     float4 reflectance = SampleStochasticCatmullRomBorderless(physicalPages, faceData, material, faceID, uv, mipLevel, filterU, printDebug);
                     dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
+
+                    if (depth == 1)
+                    {
+                        float2 newUv = faceData.rotate ? float2(1 - uv.y, uv.x) : uv;
+                        uint2 virtualPage = VirtualTexture::CalculateVirtualPage(faceData.faceOffset, newUv, dim, mipLevel);
+                        const uint feedbackMipLevel = VirtualTexture::ClampMipLevel(dim, mipLevel);
+                        feedbackRequest = PackFeedbackEntry(virtualPage.x, virtualPage.y, material.textureIndex, feedbackMipLevel);
+                    }
                 }
                 break;
             }
 
-            if (depth == 1)
-            {
-                float2 newUv = faceData.rotate ? float2(1 - uv.y, uv.x) : uv;
-                uint2 virtualPage = VirtualTexture::CalculateVirtualPage(faceData.faceOffset, newUv, dim, mipLevel);
-                const uint feedbackMipLevel = VirtualTexture::ClampMipLevel(dim, mipLevel);
-                feedbackRequest = PackFeedbackEntry(virtualPage.x, virtualPage.y, material.textureIndex, feedbackMipLevel);
-            }
 
             if (dir.z == 0) break;
             origin = TransformP(query.CommittedObjectToWorld3x4(), origin);

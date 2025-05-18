@@ -18,8 +18,6 @@ struct string;
 struct SceneShapeParse
 {
 };
-SceneShapeParse StartSceneShapeParse();
-void EndSceneShapeParse(ScenePrimitives *scene, SceneShapeParse *parse);
 void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, GeometryType type,
                           string directory, AffineSpace &worldFromRender,
                           AffineSpace &renderFromWorld, Tokenizer &tokenizer,

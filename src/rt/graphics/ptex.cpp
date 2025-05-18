@@ -1124,7 +1124,7 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
     for (int i = 0; i < numMips; i++)
     {
         device->CreateSubresource(&pageTable, i, 1);
-        int bindlessIndex = device->BindlessStorageIndex(&pageTable, 0);
+        int bindlessIndex = device->BindlessStorageIndex(&pageTable, i);
         if (i == 0) bindlessPageTableStartIndex = bindlessIndex;
         Assert(bindlessIndex == bindlessPageTableStartIndex + i);
     }
@@ -1209,7 +1209,7 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
                            1, numPools, format, MemoryUsage::GPU_ONLY,
                            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
         gpuPhysicalPool = device->CreateImage(
-            poolDesc, -1, QueueType_Copy | QueueType_Graphics | QueueType_Compute);
+            poolDesc, -1, QueueFlag_Copy | QueueFlag_Compute | QueueFlag_Graphics);
     }
 
     // Instantiate streaming system
@@ -1516,6 +1516,15 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
 
     u32 currentBuffer = device->GetCurrentBuffer();
 
+    // Synchronize
+    uploadSemaphores[currentBuffer].signalValue++;
+    transitionCmd->SignalOutsideFrame(uploadSemaphores[currentBuffer]);
+    transferCmd->Wait(uploadSemaphores[currentBuffer]);
+
+    uploadSemaphores[currentBuffer].signalValue++;
+    transferCmd->SignalOutsideFrame(uploadSemaphores[currentBuffer]);
+    computeCmd->Wait(uploadSemaphores[currentBuffer]);
+
     // Write last frame's feedback buffer
     if (device->frameCount >= 2)
     {
@@ -1623,15 +1632,6 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
                             VK_ACCESS_2_SHADER_READ_BIT, QueueType_Copy, computeCmdQueue);
         transferCmd->FlushBarriers();
         computeCmd->FlushBarriers();
-
-        // Synchronize
-        uploadSemaphores[currentBuffer].signalValue++;
-        transitionCmd->Signal(uploadSemaphores[currentBuffer]);
-        transferCmd->Wait(uploadSemaphores[currentBuffer]);
-
-        uploadSemaphores[currentBuffer].signalValue++;
-        transferCmd->Signal(uploadSemaphores[currentBuffer]);
-        computeCmd->Wait(uploadSemaphores[currentBuffer]);
     }
 
     // Make sure all memory writes are visible
@@ -1869,6 +1869,8 @@ void VirtualTextureManager::Callback()
                 }
             }
 
+            Assert(pageIndex != ~0u);
+
             const Vec2u globalVirtualPage =
                 (texInfo.baseVirtualPage >> mipLevel) + Vec2u(virtualPageX, virtualPageY);
 
@@ -1887,7 +1889,7 @@ void VirtualTextureManager::Callback()
             copy.bufferOffset    = uploadBuffer.size();
             copy.baseLayer       = page.layer;
             copy.layerCount      = 1;
-            copy.offset = Vec3i(page.page.x << PAGE_SHIFT, page.page.x << PAGE_SHIFT, 0);
+            copy.offset = Vec3i(page.page.x << PAGE_SHIFT, page.page.y << PAGE_SHIFT, 0);
             copy.extent = Vec3u(PAGE_WIDTH, PAGE_WIDTH, 1);
 
             copies.push_back(copy);
