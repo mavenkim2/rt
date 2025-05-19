@@ -355,9 +355,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     CommandBuffer *tileCmd          = device->BeginCommandBuffer(QueueType_Compute);
     Semaphore tileSubmitSemaphore   = device->CreateSemaphore();
     tileSubmitSemaphore.signalValue = 1;
-    // tileCmd->UAVBarrier(&virtualTextureManager.pageTable);
-    tileCmd->TransferWriteBarrier(&virtualTextureManager.gpuPhysicalPool);
+    tileCmd->TransferWriteBarrier(&virtualTextureManager.pageTable);
     tileCmd->FlushBarriers();
+    virtualTextureManager.ClearPageTable(tileCmd);
 
     for (int i = 0; i < rootScene->ptexTextures.size(); i++)
     {
@@ -420,8 +420,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             (2 * (numVirtualOffsetBits + numFaceDimBits) + 4 * numFaceIDBits + 9) *
             fileHeader.numFaces;
         u32 faceDataBitStreamSize = (faceDataBitStreamBitSize + 7) >> 3;
-
-        ScratchArena textureScratch;
 
         u8 *faceDataStream    = PushArray(sceneScratch.temp.arena, u8, faceDataBitStreamSize);
         u32 faceDataBitOffset = 0;
@@ -1127,9 +1125,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         gpuScene.dispatchDimY = dispatchDimY;
 
         device->BeginFrame();
-        u32 frame          = device->GetCurrentBuffer();
-        GPUImage *image    = &images[frame];
-        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics, "graphics cmd");
+        u32 frame       = device->GetCurrentBuffer();
+        GPUImage *image = &images[frame];
+        string cmdBufferName =
+            PushStr8F(frameScratch.temp.arena, "Graphics Cmd %u", device->frameCount);
+        CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics, cmdBufferName);
 
         if (device->frameCount == 0)
         {
@@ -1152,10 +1152,14 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         u32 currentBuffer = device->GetCurrentBuffer();
 
         // Virtual texture system
+        cmdBufferName = PushStr8F(frameScratch.temp.arena, "Virtual Texture Async Copy Cmd %u",
+                                  device->frameCount);
         CommandBuffer *virtualTextureCopyCmd =
-            device->BeginCommandBuffer(QueueType_Copy, "async copy cmd");
+            device->BeginCommandBuffer(QueueType_Copy, cmdBufferName);
+        cmdBufferName = PushStr8F(frameScratch.temp.arena, "Virtual Texture Transition Cmd %u",
+                                  device->frameCount);
         CommandBuffer *transitionCmd =
-            device->BeginCommandBuffer(QueueType_Graphics, "transition cmd");
+            device->BeginCommandBuffer(QueueType_Graphics, cmdBufferName);
         virtualTextureManager.Update(cmd, virtualTextureCopyCmd, transitionCmd,
                                      QueueType_Graphics);
         device->SubmitCommandBuffer(transitionCmd);

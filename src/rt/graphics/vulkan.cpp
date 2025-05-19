@@ -1128,8 +1128,9 @@ void Vulkan::AllocateCommandBuffers(ThreadPool &pool, QueueType type)
     VK_CHECK(vkAllocateCommandBuffers(device, &bufferInfo, buffers));
     for (int i = 0; i < ThreadPool::commandBufferPoolSize; i++)
     {
-        node->values[i]        = CommandBuffer();
-        node->values[i].buffer = buffers[i];
+        node->values[i]               = CommandBuffer();
+        node->values[i].buffer        = buffers[i];
+        pool.freeList[type].AddBack() = &node->values[i];
     }
 }
 
@@ -1160,11 +1161,6 @@ void Vulkan::CheckInitializedThreadPool(int threadIndex)
             pool.buffers[i]  = CommandBufferList(pool.arena);
             pool.freeList[i] = ChunkedLinkedList<CommandBuffer *>(pool.arena);
             AllocateCommandBuffers(pool, QueueType(i));
-            auto *node = pool.buffers[i].last;
-            for (int j = 0; j < node->count; j++)
-            {
-                pool.freeList[i].AddBack() = &node->values[j];
-            }
         }
 
         VkDescriptorPoolCreateInfo poolCreateInfo = {
@@ -1214,10 +1210,8 @@ CommandBuffer *Vulkan::BeginCommandBuffer(QueueType queue, string name)
             if (test->semaphore == VK_NULL_HANDLE ||
                 (value != ULLONG_MAX && value >= test->submissionID))
             {
-                cmd             = test;
-                node->values[i] = pool.freeList[queue].Last();
-                pool.freeList[queue].totalCount--;
-                pool.freeList[queue].last->count--;
+                cmd = test;
+                pool.freeList[queue].Pop(&node->values[i]);
 
                 success = true;
                 break;
@@ -1302,7 +1296,7 @@ void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd, bool frame)
     if (frame)
     {
         cmd->semaphore    = queue.submitSemaphore[GetCurrentBuffer()];
-        cmd->submissionID = queue.submissionID;
+        cmd->submissionID = queue.submissionID + 1;
     }
 
     int threadIndex                    = GetThreadIndex();
@@ -3051,6 +3045,20 @@ void CommandBuffer::ClearBuffer(GPUBuffer *b)
     vkCmdFillBuffer(buffer, b->buffer, 0, VK_WHOLE_SIZE, 0);
     b->lastStage  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
     b->lastAccess = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+}
+
+void CommandBuffer::ClearImage(GPUImage *image, u32 value, u32 baseMip, u32 numMips,
+                               u32 baseLayer, u32 numLayers)
+{
+    VkClearColorValue colorValue = {};
+    colorValue.uint32[0]         = value;
+    VkImageSubresourceRange range;
+    range.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.baseMipLevel   = baseMip;
+    range.levelCount     = numMips;
+    range.baseArrayLayer = baseLayer;
+    range.layerCount     = numLayers;
+    vkCmdClearColorImage(buffer, image->image, image->lastLayout, &colorValue, 1, &range);
 }
 
 u32 Vulkan::GetQueueFamily(QueueType queueType)

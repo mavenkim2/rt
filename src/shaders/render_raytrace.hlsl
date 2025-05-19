@@ -268,13 +268,6 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
             float surfaceSpreadAngle = depth == 1 ? rayCone.CalculatePrimaryHitUnifiedSurfaceSpreadAngle(dir, n, p0, p1, p2, n0, n1, n2) 
                                                   : rayCone.CalculateSecondaryHitSurfaceSpreadAngle(dir, n, p0, p1, p2, n0, n1, n2);
 
-            // Get base face data
-            Ptex::FaceData faceData = Ptex::GetFaceData(material, faceID);
-            int2 dim = int2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
-
-            rayCone.Propagate(surfaceSpreadAngle, query.CommittedRayT());
-            float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, n, dim, printDebug);
-            uint mipLevel = (uint)lambda;
             float filterU = rng.Uniform();
 
             uint2 virtualPage = ~0u;
@@ -287,6 +280,21 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
                 break;
                 case GPUMaterialType::Diffuse: 
                 {
+                    // Get base face data
+                    Ptex::FaceData faceData = Ptex::GetFaceData(material, faceID);
+                    int2 dim = int2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
+
+                    if (dim.x > 1024 || dim.y > 1024)
+                    {
+                        printf("boo: %u %u %u %u %i %i %i %i %u %u\n", faceID, materialID, dim.x, dim.y, 
+                        faceData.neighborFaces.x, faceData.neighborFaces.y, faceData.neighborFaces.z, faceData.neighborFaces.w,
+                        faceData.faceOffset.x, faceData.faceOffset.y);
+                    }
+
+                    rayCone.Propagate(surfaceSpreadAngle, query.CommittedRayT());
+                    float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, n, dim, printDebug);
+                    uint mipLevel = (uint)lambda;
+
                     float4 reflectance = SampleStochasticCatmullRomBorderless(physicalPages, faceData, material, faceID, uv, mipLevel, filterU, printDebug);
                     dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
 

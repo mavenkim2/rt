@@ -625,6 +625,9 @@ struct CommandBuffer
     GPUAccelerationStructurePayload BuildBLAS(const GPUMesh *meshes, int count);
     GPUAccelerationStructurePayload BuildCustomBLAS(GPUBuffer *aabbsBuffer, u32 numAabbs);
     void ClearBuffer(GPUBuffer *b);
+    void ClearImage(GPUImage *image, u32 value, u32 baseMip = 0,
+                    u32 numMips = VK_REMAINING_MIP_LEVELS, u32 baseLayer = 0,
+                    u32 numLayers = VK_REMAINING_ARRAY_LAYERS);
 };
 
 typedef ChunkedLinkedList<CommandBuffer> CommandBufferList;

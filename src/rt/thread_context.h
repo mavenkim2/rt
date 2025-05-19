@@ -40,6 +40,7 @@ struct ScratchArena
 {
     TempArena temp;
     ScratchArena() { temp = ScratchStart(0, 0); }
+    ScratchArena(Arena **conflicts, int count) { temp = ScratchStart(conflicts, count); }
     ~ScratchArena() { ScratchEnd(temp); }
 };
 

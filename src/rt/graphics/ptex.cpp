@@ -316,7 +316,6 @@ PaddedImage GenerateMips(Arena *arena, PaddedImage &input, u32 width, u32 height
     return output;
 }
 
-// TODO: explore a borderless solution if the borders cost too much
 void Convert(string filename)
 {
     ScratchArena scratch;
@@ -1091,6 +1090,111 @@ void Convert(string filename)
     t->release();
 }
 
+template <typename T>
+RingBuffer<T>::RingBuffer(Arena *arena, u32 max) : max(max)
+{
+    entries = StaticArray<T>(arena, max);
+    // mutex       = {};
+    readOffset  = 0;
+    writeOffset = 0;
+}
+
+template <typename T>
+bool RingBuffer<T>::Write(T *vals, u32 num)
+{
+    bool result  = true;
+    u32 capacity = entries.capacity;
+    if (writeOffset + num >= readOffset + capacity)
+    {
+        result = false;
+    }
+    else
+    {
+        u32 writeIndex = writeOffset & (capacity - 1);
+        u32 numToEnd   = capacity - writeIndex;
+        MemoryCopy(entries.data + writeIndex, vals, sizeof(T) * Min(num, numToEnd));
+        if (num > numToEnd)
+        {
+            MemoryCopy(entries.data, vals + numToEnd, sizeof(T) * (num - numToEnd));
+        }
+        writeOffset += num;
+    }
+
+    return result;
+}
+
+template <typename T>
+void RingBuffer<T>::WriteWithOverwrite(T *vals, u32 num)
+{
+    u32 capacity = entries.capacity;
+    if (writeOffset + num >= readOffset + capacity)
+    {
+        readOffset = writeOffset + num - capacity;
+    }
+    u32 writeIndex = writeOffset & (capacity - 1);
+    u32 numToEnd   = capacity - writeIndex;
+    MemoryCopy(entries.data + writeIndex, vals, sizeof(T) * Min(num, numToEnd));
+    if (num > numToEnd)
+    {
+        MemoryCopy(entries.data, vals + numToEnd, sizeof(T) * (num - numToEnd));
+    }
+    writeOffset += num;
+}
+
+template <typename T>
+void RingBuffer<T>::SynchronizedWrite(Mutex *mutex, T *vals, u32 num)
+{
+    for (;;)
+    {
+        BeginMutex(mutex);
+        bool result = Write(vals, num);
+
+        if (result)
+        {
+            EndMutex(mutex);
+            break;
+        }
+
+        EndMutex(mutex);
+
+        std::this_thread::yield();
+    }
+}
+
+template <typename T>
+T *RingBuffer<T>::Read(Arena *arena, u32 &num)
+{
+    // BeginMutex(&mutex);
+    Assert(readOffset <= writeOffset);
+    u32 numToRead = writeOffset - readOffset;
+    u32 capacity  = entries.capacity;
+    T *vals       = 0;
+    if (numToRead)
+    {
+        vals          = (T *)PushArrayNoZero(arena, u8, sizeof(T) * numToRead);
+        u32 readIndex = readOffset & (capacity - 1);
+        u32 numToEnd  = capacity - readIndex;
+        MemoryCopy(vals, entries.data + readIndex, sizeof(T) * Min(numToRead, numToEnd));
+        if (numToRead > numToEnd)
+        {
+            MemoryCopy(vals + numToEnd, entries.data, sizeof(T) * numToRead - numToEnd);
+        }
+        readOffset = writeOffset;
+    }
+    num = numToRead;
+    // EndMutex(&mutex);
+    return vals;
+}
+
+template <typename T>
+T *RingBuffer<T>::SynchronizedRead(Mutex *mutex, Arena *arena, u32 &num)
+{
+    BeginMutex(mutex);
+    T *result = Read(arena, num);
+    EndMutex(mutex);
+    return result;
+}
+
 VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWidth,
                                              u32 virtualTextureHeight,
                                              u32 physicalTextureWidth,
@@ -1118,7 +1222,8 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
     u32 numVirtPagesHigh = virtualTextureHeight >> PAGE_SHIFT;
     ImageDesc pageTableDesc(ImageType::Type2D, numVirtPagesWide, numVirtPagesHigh, 1, numMips,
                             1, VK_FORMAT_R32_UINT, MemoryUsage::GPU_ONLY,
-                            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+                            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                VK_IMAGE_USAGE_TRANSFER_DST_BIT);
 
     pageTable = device->CreateImage(pageTableDesc);
     for (int i = 0; i < numMips; i++)
@@ -1299,6 +1404,19 @@ Vec2u VirtualTextureManager::AllocateVirtualPages(Arena *arena, string filename,
     return virtualPage;
 }
 
+// void VirtualTextureManager::PinPages(CommandBuffer *cmd, Vec2u baseVirtualPage,
+//                                      FaceMetadata2 *faceMetadatas, int numFaces,
+//                                      TextureMetadata &metadata, u8 *contents)
+// {
+//     int numPages = 0;
+//     for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
+//     {
+//         FaceMetadata2 &faceMetadata = faceMetadatas[faceIndex];
+//         int maxLevel                = Min(faceMetadata.log2Width, faceMetadata.log2Height);
+//
+//     }
+// }
+
 void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, Vec2u baseVirtualPage,
                                                   TextureMetadata &metadata, u8 *contents)
 {
@@ -1398,114 +1516,14 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, Vec2u base
 #endif
 }
 
+void VirtualTextureManager::ClearPageTable(CommandBuffer *cmd)
+{
+    cmd->ClearImage(&pageTable, ~0u);
+}
+
 ///////////////////////////////////////
 // Streaming/Feedback
 //
-
-template <typename T>
-RingBuffer<T>::RingBuffer(Arena *arena, u32 max) : max(max)
-{
-    entries = StaticArray<T>(arena, max);
-    // mutex       = {};
-    readOffset  = 0;
-    writeOffset = 0;
-}
-
-template <typename T>
-bool RingBuffer<T>::Write(T *vals, u32 num)
-{
-    bool result  = true;
-    u32 capacity = entries.capacity;
-    if (writeOffset + num >= readOffset + capacity)
-    {
-        result = false;
-    }
-    else
-    {
-        u32 writeIndex = writeOffset & (capacity - 1);
-        u32 numToEnd   = capacity - writeIndex;
-        MemoryCopy(entries.data + writeIndex, vals, sizeof(T) * Min(num, numToEnd));
-        if (num > numToEnd)
-        {
-            MemoryCopy(entries.data, vals + numToEnd, sizeof(T) * (num - numToEnd));
-        }
-        writeOffset += num;
-    }
-
-    return result;
-}
-
-template <typename T>
-void RingBuffer<T>::WriteWithOverwrite(T *vals, u32 num)
-{
-    u32 capacity = entries.capacity;
-    if (writeOffset + num >= readOffset + capacity)
-    {
-        readOffset = writeOffset + num - capacity;
-    }
-    u32 writeIndex = writeOffset & (capacity - 1);
-    u32 numToEnd   = capacity - writeIndex;
-    MemoryCopy(entries.data + writeIndex, vals, sizeof(T) * Min(num, numToEnd));
-    if (num > numToEnd)
-    {
-        MemoryCopy(entries.data, vals + numToEnd, sizeof(T) * (num - numToEnd));
-    }
-    writeOffset += num;
-}
-
-template <typename T>
-void RingBuffer<T>::SynchronizedWrite(Mutex *mutex, T *vals, u32 num)
-{
-    for (;;)
-    {
-        BeginMutex(mutex);
-        bool result = Write(vals, num);
-
-        if (result)
-        {
-            EndMutex(mutex);
-            break;
-        }
-
-        EndMutex(mutex);
-
-        std::this_thread::yield();
-    }
-}
-
-template <typename T>
-T *RingBuffer<T>::Read(Arena *arena, u32 &num)
-{
-    // BeginMutex(&mutex);
-    Assert(readOffset <= writeOffset);
-    u32 numToRead = writeOffset - readOffset;
-    u32 capacity  = entries.capacity;
-    T *vals       = 0;
-    if (numToRead)
-    {
-        vals          = (T *)PushArrayNoZero(arena, u8, sizeof(T) * numToRead);
-        u32 readIndex = readOffset & (capacity - 1);
-        u32 numToEnd  = capacity - readIndex;
-        MemoryCopy(vals, entries.data + readIndex, sizeof(T) * Min(numToRead, numToEnd));
-        if (numToRead > numToEnd)
-        {
-            MemoryCopy(vals + numToEnd, entries.data, sizeof(T) * numToRead - numToEnd);
-        }
-        readOffset = writeOffset;
-    }
-    num = numToRead;
-    // EndMutex(&mutex);
-    return vals;
-}
-
-template <typename T>
-T *RingBuffer<T>::SynchronizedRead(Mutex *mutex, Arena *arena, u32 &num)
-{
-    BeginMutex(mutex);
-    T *result = Read(arena, num);
-    EndMutex(mutex);
-    return result;
-}
 
 // Executes on main thread
 void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *transferCmd,
@@ -1816,7 +1834,8 @@ void VirtualTextureManager::Callback()
             u32 textureIndex      = feedbackRequest.y & 0x00ffffff;
             u32 mipLevel          = feedbackRequest.y >> 24;
 
-            TextureInfo &texInfo             = textureInfo[textureIndex];
+            TextureInfo &texInfo = textureInfo[textureIndex];
+            Assert(mipLevel < texInfo.metadata.numLevels);
             TextureMetadata &textureMetadata = texInfo.metadata;
             u32 levelOffset = mipLevel == 0 ? 0 : textureMetadata.mipPageOffsets[mipLevel - 1];
             u32 levelNumPages     = mipLevel == 0

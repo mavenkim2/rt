@@ -366,6 +366,7 @@ struct VirtualTextureManager
                                const Vec2u &virtualSize, u8 *contents, u32 &index);
     void AllocatePhysicalPages(CommandBuffer *cmd, Vec2u baseVirtualPage,
                                TextureMetadata &metadata, u8 *contents);
+    void ClearPageTable(CommandBuffer *cmd);
 
     // Streaming
     void Update(CommandBuffer *computeCmd, CommandBuffer *transferCmd,
