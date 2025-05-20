@@ -1,6 +1,7 @@
 #include "bit_packing.h"
 #include "camera.h"
 #include "dgfs.h"
+#include "debug.h"
 #include "graphics/vulkan.h"
 #include "integrate.h"
 #include "gpu_scene.h"
@@ -958,6 +959,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             tlasSemaphore.signalValue = 1;
             allCommandBuffer->SignalOutsideFrame(tlasSemaphore);
         }
+        allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                                  VK_ACCESS_2_SHADER_READ_BIT);
         device->SubmitCommandBuffer(allCommandBuffer);
     }
     else
@@ -1125,14 +1130,19 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         gpuScene.dispatchDimY = dispatchDimY;
 
         device->BeginFrame();
+
         u32 frame       = device->GetCurrentBuffer();
         GPUImage *image = &images[frame];
         string cmdBufferName =
             PushStr8F(frameScratch.temp.arena, "Graphics Cmd %u", device->frameCount);
         CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics, cmdBufferName);
+        debugState.BeginFrame(cmd);
 
         if (device->frameCount == 0)
         {
+            cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                         VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
             cmd->Wait(submitSemaphore);
             cmd->Wait(tileSubmitSemaphore);
             device->Wait(tlasSemaphore);
@@ -1215,7 +1225,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         cmd->PushConstants(&pushConstant, &pc, /*rts.layout);*/ layout.pipelineLayout);
         // cmd->TraceRays(&rts, params->width, params->height, 1);
+
+        int beginIndex = TIMED_GPU_RANGE_BEGIN(cmd, "ray trace");
         cmd->Dispatch(dispatchDimX, dispatchDimY, 1);
+        TIMED_RANGE_END(beginIndex);
 
         // Copy feedback from device to host
         CommandBuffer *transferCmd =
@@ -1226,8 +1239,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
         device->SubmitCommandBuffer(transferCmd, true);
 
+        debugState.EndFrame(cmd);
         device->CopyFrameBuffer(&swapchain, cmd, image);
         device->EndFrame(QueueFlag_Copy | QueueFlag_Graphics);
+
+        debugState.PrintDebugRecords();
 
         // Wait until new update
         f32 endWorkFrameTime = OS_NowSeconds();

@@ -1,5 +1,6 @@
 #include "base.h"
 #include "string.h"
+#include "hash.h"
 #include "thread_context.h"
 #include "platform.h"
 

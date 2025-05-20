@@ -41,6 +41,11 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
         SwizzleThreadGroup(uint2(scene.dispatchDimX, scene.dispatchDimY), 
                            uint2(PATH_TRACE_NUM_THREADS_X, PATH_TRACE_NUM_THREADS_Y), 
                            PATH_TRACE_TILE_WIDTH, groupThreadID.xy, groupID.xy);
+
+    uint imageWidth, imageHeight;
+    image.GetDimensions(imageWidth, imageHeight);
+    if (any(swizzledThreadID.xy >= uint2(imageWidth, imageHeight))) return;
+    
     uint flattenedGroupThreadID = groupThreadID.y * PATH_TRACE_NUM_THREADS_Y + groupThreadID.x;
 
     RNG rng = RNG::Init(RNG::PCG3d(swizzledThreadID.xyx).zy, push.frameNum);
@@ -284,11 +289,9 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
                     Ptex::FaceData faceData = Ptex::GetFaceData(material, faceID);
                     int2 dim = int2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
 
-                    if (dim.x > 1024 || dim.y > 1024)
+                    if (printDebug)
                     {
-                        printf("boo: %u %u %u %u %i %i %i %i %u %u\n", faceID, materialID, dim.x, dim.y, 
-                        faceData.neighborFaces.x, faceData.neighborFaces.y, faceData.neighborFaces.z, faceData.neighborFaces.w,
-                        faceData.faceOffset.x, faceData.faceOffset.y);
+                        printf("%u %u %u %u %u\n", faceID, dim.x, dim.y, faceData.faceOffset.x, faceData.faceOffset.y);
                     }
 
                     rayCone.Propagate(surfaceSpreadAngle, query.CommittedRayT());
@@ -315,13 +318,6 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
             dir = ss * dir.x + ts * dir.y + n * dir.z;
             dir = normalize(TransformV(query.CommittedObjectToWorld3x4(), dir));
             pos = OffsetRayOrigin(origin, gn, printDebug);
-
-            if (0)
-            {
-                float3 d = -query.WorldRayDirection();
-                printf("before: %f %f %f, after: %f %f %f\norigin before: %f %f %f, origin after: %f %f %f\n",
-                        d.x, d.y, d.z, dir.x, dir.y, dir.z, origin.x, origin.y, origin.z, pos.x, pos.y, pos.z);
-            }
         }
         else 
         {

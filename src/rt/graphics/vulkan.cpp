@@ -3061,6 +3061,77 @@ void CommandBuffer::ClearImage(GPUImage *image, u32 value, u32 baseMip, u32 numM
     vkCmdClearColorImage(buffer, image->image, image->lastLayout, &colorValue, 1, &range);
 }
 
+void Vulkan::CreateQueryPool(QueryPool *queryPool, QueryType type, u32 queryCount)
+{
+    queryPool->type                  = type;
+    queryPool->count                 = queryCount;
+    VkQueryPoolCreateInfo createInfo = {VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+    createInfo.queryCount            = queryCount;
+    switch (type)
+    {
+        case QueryType_PipelineStatistics:
+        {
+            createInfo.queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS;
+            createInfo.pipelineStatistics =
+                VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT |
+                VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT;
+        }
+        break;
+        case QueryType_Timestamp: createInfo.queryType = VK_QUERY_TYPE_TIMESTAMP; break;
+        case QueryType_Occlusion: createInfo.queryType = VK_QUERY_TYPE_OCCLUSION; break;
+        default: Assert(0);
+    }
+
+    VkQueryPool vkQueryPool = VK_NULL_HANDLE;
+    VK_CHECK(vkCreateQueryPool(device, &createInfo, 0, &vkQueryPool));
+
+    queryPool->queryPool = vkQueryPool;
+}
+
+void CommandBuffer::BeginQuery(QueryPool *queryPool, u32 queryIndex)
+{
+    VkQueryPool queryPoolVulkan = queryPool->queryPool;
+    switch (queryPool->type)
+    {
+        case QueryType_PipelineStatistics:
+            vkCmdBeginQuery(buffer, queryPoolVulkan, queryIndex, 0);
+            break;
+        case QueryType_Timestamp: break;
+        case QueryType_Occlusion:
+            vkCmdBeginQuery(buffer, queryPoolVulkan, queryIndex, VK_QUERY_CONTROL_PRECISE_BIT);
+            break;
+    }
+}
+
+void CommandBuffer::EndQuery(QueryPool *queryPool, u32 queryIndex)
+{
+    VkQueryPool queryPoolVulkan = queryPool->queryPool;
+    switch (queryPool->type)
+    {
+        case QueryType_Occlusion:
+        case QueryType_PipelineStatistics:
+            vkCmdEndQuery(buffer, queryPoolVulkan, queryIndex);
+            break;
+        case QueryType_Timestamp:
+            vkCmdWriteTimestamp2(buffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queryPoolVulkan,
+                                 queryIndex);
+            break;
+    }
+}
+
+void CommandBuffer::ResolveQuery(QueryPool *queryPool, GPUBuffer *gpuBuffer, u32 queryIndex,
+                                 u32 count, u32 destOffset)
+{
+    VkQueryResultFlags flags = VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT;
+    vkCmdCopyQueryPoolResults(buffer, queryPool->queryPool, queryIndex, count,
+                              gpuBuffer->buffer, destOffset, sizeof(u64), flags);
+}
+
+void CommandBuffer::ResetQuery(QueryPool *queryPool, u32 index, u32 count)
+{
+    vkCmdResetQueryPool(buffer, queryPool->queryPool, index, count);
+}
+
 u32 Vulkan::GetQueueFamily(QueueType queueType)
 {
     Assert(families.size() > 0);

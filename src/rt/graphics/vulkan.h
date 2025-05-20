@@ -303,6 +303,7 @@ struct RayTracingState
 struct QueryPool
 {
     VkQueryPool queryPool;
+    QueryType type;
     int count;
 };
 
@@ -628,6 +629,12 @@ struct CommandBuffer
     void ClearImage(GPUImage *image, u32 value, u32 baseMip = 0,
                     u32 numMips = VK_REMAINING_MIP_LEVELS, u32 baseLayer = 0,
                     u32 numLayers = VK_REMAINING_ARRAY_LAYERS);
+
+    void BeginQuery(QueryPool *queryPool, u32 queryIndex);
+    void EndQuery(QueryPool *queryPool, u32 queryIndex);
+    void ResolveQuery(QueryPool *queryPool, GPUBuffer *gpuBuffer, u32 queryIndex, u32 count,
+                      u32 destOffset);
+    void ResetQuery(QueryPool *queryPool, u32 index, u32 count);
 };
 
 typedef ChunkedLinkedList<CommandBuffer> CommandBufferList;
@@ -659,6 +666,7 @@ struct CommandQueue
 
 struct Vulkan
 {
+    static const u32 numBuffers = 2;
     Arena *arena;
     Mutex arenaMutex = {};
     f64 cTimestampPeriod;
@@ -806,6 +814,7 @@ struct Vulkan
 
     Vulkan(ValidationMode validationMode,
            GPUDevicePreference preference = GPUDevicePreference::Discrete);
+    inline f64 GetTimestampPeriod() { return cTimestampPeriod; }
     Swapchain CreateSwapchain(OS_Handle window, VkFormat format, u32 width, u32 height);
     ImageLimits GetImageLimits();
     Semaphore CreateSemaphore();
@@ -912,12 +921,7 @@ struct Vulkan
     // b32 IsLoaded(GPUResource *resource);
 
     // Query pool
-    // void CreateQueryPool(QueryPool *queryPool, QueryType type, u32 queryCount);
-    // void BeginQuery(QueryPool *queryPool, CommandBuffer cmd, u32 queryIndex);
-    // void EndQuery(QueryPool *queryPool, CommandBuffer cmd, u32 queryIndex);
-    // void ResolveQuery(QueryPool *queryPool, CommandBuffer cmd, GPUBuffer *buffer,
-    //                   u32 queryIndex, u32 count, u32 destOffset);
-    // void ResetQuery(QueryPool *queryPool, CommandBuffer cmd, u32 index, u32 count);
+    void CreateQueryPool(QueryPool *queryPool, QueryType type, u32 queryCount);
     // u32 GetCount(Fence f);
 
     // void SetName(GPUResource *resource, const char *name);

@@ -14,7 +14,7 @@ groupshared float4 rgba[16][16];
 
 Texture2D input : register(t0);
 
-[numthreads(8, 8, 1)]
+[numthreads(16, 16, 1)]
 void main (uint3 groupID : SV_GroupID, uint groupThreadIndex : SV_GroupIndex)
 {
     // 0 1 8   9 16 17
@@ -35,7 +35,10 @@ void main (uint3 groupID : SV_GroupID, uint groupThreadIndex : SV_GroupIndex)
     swizzledThreadID.y += 2 * ((localGroupThreadIndex >> 2) & 1)
     swizzledThreadID.y += (localGroupThreadIndex >> 2) & 1;
 
-    swizzledThreadID.y = (groupThreadID.y >> 2) << 1
+    swizzledThreadID.y = (groupThreadID.y >> 2) << 1;
+
+    uint x = swizzledThreadID.x;
+    uint y = swizzledThreadID.y;
 
     float4 vals[4];
     uint2 texCoords[4];
@@ -113,11 +116,21 @@ void main (uint3 groupID : SV_GroupID, uint groupThreadIndex : SV_GroupIndex)
             float4 v3 = WaveReadLaneAt(v[i], laneIndex | 3);
             float4 vResult = (v0 + v1 + v2 + v3) * 0.25f;
 
-            rgba[(texCoords[i] >> 2) & 0xf] = vResult;
+            uint2 index = (texCoords[i] >> 1) & 0xf;
+            rgba[index.x][index.y] = vResult;
         }
     }
 
     // Block compress second mip
+    float4 v = rgba[x][y];
+    if ((localGroupThreadIndex & 0xf) == 0)
     {
+        float3 block[16];
+        uint laneIndex = WaveGetLaneIndex() & ~0xf;
+        for (int i = 0; i < 16; i++)
+        {
+            float4 v0 = WaveReadLaneAt(v, laneIndex + i);
+            block[?] = v0;
+        }
     }
 }
