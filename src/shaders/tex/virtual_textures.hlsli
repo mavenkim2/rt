@@ -33,6 +33,7 @@ namespace VirtualTexture
         uint2 virtualPage = CalculateVirtualPage(baseOffset, uv, texSize, mipLevel);
         uint packed = pageTable.Load(float3(virtualPage.x, virtualPage.y, mipLevel));
 
+#if 0
         while (packed == ~0u)
         {
             mipLevel += 1;
@@ -40,6 +41,7 @@ namespace VirtualTexture
             packed = pageTable.Load(float3(virtualPage.x, virtualPage.y, mipLevel));
 
         }
+#endif
 
         uint4 pageTableEntry = UnpackPageTableEntry(packed);
         uint pageX = pageTableEntry.x;
