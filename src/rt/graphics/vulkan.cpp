@@ -1781,6 +1781,8 @@ int Vulkan::CreateSubresource(GPUImage *image, u32 baseMip, u32 numMips, u32 bas
     return result;
 }
 
+u32 Vulkan::GetImageSize(GPUImage *image) { return (u32)image->allocation->GetSize(); }
+
 void Vulkan::DestroyBuffer(GPUBuffer *buffer)
 {
     vmaDestroyBuffer(allocator, buffer->buffer, buffer->allocation);
@@ -3052,6 +3054,24 @@ void CommandBuffer::ClearImage(GPUImage *image, u32 value, u32 baseMip, u32 numM
 {
     VkClearColorValue colorValue = {};
     colorValue.uint32[0]         = value;
+    VkImageSubresourceRange range;
+    range.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    range.baseMipLevel   = baseMip;
+    range.levelCount     = numMips;
+    range.baseArrayLayer = baseLayer;
+    range.layerCount     = numLayers;
+    vkCmdClearColorImage(buffer, image->image, image->lastLayout, &colorValue, 1, &range);
+}
+
+void CommandBuffer::ClearImage(GPUImage *image, const Vec4f &value, u32 baseMip, u32 numMips,
+                               u32 baseLayer, u32 numLayers)
+{
+    VkClearColorValue colorValue = {};
+    colorValue.float32[0]        = value.x;
+    colorValue.float32[1]        = value.y;
+    colorValue.float32[2]        = value.z;
+    colorValue.float32[3]        = value.w;
+
     VkImageSubresourceRange range;
     range.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
     range.baseMipLevel   = baseMip;

@@ -436,61 +436,10 @@ void Convert(string filename)
         }
     });
 
-    // auto GetNeighborFaceImage = [&](PaddedImage &currentFaceImg, u32 neighborFace, u32 rot,
-    //                                 Vec2u &scale) {
-    //     Vec2i dstBaseSize(currentFaceImg.log2Width, currentFaceImg.log2Height);
-    //
-    //     int neighborMaxLevel                   = images[neighborFace].Length();
-    //     const PaddedImage &baseNeighborFaceImg = images[neighborFace][0];
-    //     const Vec2i srcBaseSize(baseNeighborFaceImg.log2Width,
-    //     baseNeighborFaceImg.log2Height);
-    //
-    //     if (rot & 1) Swap(dstBaseSize[0], dstBaseSize[1]);
-    //     Vec2i srcBaseDepth = srcBaseSize - dstBaseSize;
-    //     int depthIndex = Clamp(Min(srcBaseDepth.x, srcBaseDepth.y), 0, neighborMaxLevel -
-    //     1);
-    //
-    //     PaddedImage neighborFaceImg = images[neighborFace][depthIndex];
-    //     u32 log2Width               = neighborFaceImg.log2Width;
-    //     u32 log2Height              = neighborFaceImg.log2Height;
-    //
-    //     u32 mipBorderSize = GetBorderSize(dstBaseSize.x, dstBaseSize.y);
-    //     // reduce u
-    //     if (log2Width > dstBaseSize.x)
-    //     {
-    //         for (int i = 0; i < log2Width - dstBaseSize.x; i++)
-    //         {
-    //             u32 width = neighborFaceImg.width;
-    //             width >>= 1;
-    //             neighborFaceImg = GenerateMips(scratch.temp.arena, neighborFaceImg, width,
-    //                                            neighborFaceImg.height, {2, 1},
-    //                                            mipBorderSize);
-    //         }
-    //     }
-    //     // reduce v
-    //     else if (log2Height > dstBaseSize.y)
-    //     {
-    //         for (int i = 0; i < log2Height - dstBaseSize.y; i++)
-    //         {
-    //             u32 height = neighborFaceImg.height;
-    //             height >>= 1;
-    //             neighborFaceImg =
-    //                 GenerateMips(scratch.temp.arena, neighborFaceImg, neighborFaceImg.width,
-    //                              height, {1, 2}, mipBorderSize);
-    //         }
-    //     }
-    //     srcBaseDepth =
-    //         Vec2i(neighborFaceImg.log2Width, neighborFaceImg.log2Height) - dstBaseSize;
-    //     scale = Vec2u(Max(Vec2i(0), -srcBaseDepth));
-    //     return neighborFaceImg;
-    // };
-
     // NOTE: pack multiple face textures/mips into one texture atlas that gets submitted to the
     // GPU
-    const u32 gpuSubmissionWidth  = 4096;
-    const u32 gpuSubmissionHeight = 4096;
-    const u32 gpuOutputWidth      = gpuSubmissionWidth >> log2BlockSize;
-    const u32 gpuOutputHeight     = gpuSubmissionHeight >> log2BlockSize;
+    const u32 gpuSubmissionWidth = 4096;
+    const u32 gpuOutputWidth     = gpuSubmissionWidth >> log2BlockSize;
 
     GPUImage gpuSrcImages[2];
     GPUImage uavImages[2];
@@ -505,19 +454,19 @@ void Convert(string filename)
     u32 submissionIndex = 0;
 
     const u32 submissionSize =
-        gpuSubmissionWidth * gpuSubmissionHeight * GetFormatSize(baseFormat);
-    const u32 outputSize = gpuOutputWidth * gpuOutputHeight * GetFormatSize(blockFormat);
+        gpuSubmissionWidth * gpuSubmissionWidth * GetFormatSize(baseFormat);
+    const u32 outputSize = gpuOutputWidth * gpuOutputWidth * GetFormatSize(blockFormat);
     // Allocate GPU resources
     {
         ImageDesc blockCompressedImageDesc(
-            ImageType::Type2D, gpuSubmissionWidth, gpuSubmissionHeight, 1, 1, 1, baseFormat,
+            ImageType::Type2D, gpuSubmissionWidth, gpuSubmissionWidth, 1, 1, 1, baseFormat,
             MemoryUsage::GPU_ONLY,
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
             VK_IMAGE_TILING_OPTIMAL);
         gpuSrcImages[0] = device->CreateImage(blockCompressedImageDesc);
         gpuSrcImages[1] = device->CreateImage(blockCompressedImageDesc);
 
-        ImageDesc uavDesc(ImageType::Type2D, gpuOutputWidth, gpuOutputHeight, 1, 1, 1,
+        ImageDesc uavDesc(ImageType::Type2D, gpuOutputWidth, gpuOutputWidth, 1, 1, 1,
                           VK_FORMAT_R32G32_UINT, MemoryUsage::GPU_ONLY,
                           VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                           VK_IMAGE_TILING_OPTIMAL);
@@ -537,12 +486,10 @@ void Convert(string filename)
         debugSrc[0] = PushArray(scratch.temp.arena, u8, submissionSize);
         debugSrc[1] = PushArray(scratch.temp.arena, u8, submissionSize);
 
-        readbackBuffers[0] = device->CreateBuffer(
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT, gpuOutputWidth * gpuOutputHeight * bytesPerBlock,
-            MemoryUsage::GPU_TO_CPU);
-        readbackBuffers[1] = device->CreateBuffer(
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT, gpuOutputWidth * gpuOutputHeight * bytesPerBlock,
-            MemoryUsage::GPU_TO_CPU);
+        readbackBuffers[0] = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, outputSize,
+                                                  MemoryUsage::GPU_TO_CPU);
+        readbackBuffers[1] = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, outputSize,
+                                                  MemoryUsage::GPU_TO_CPU);
 
         descriptorSets[0] = bcLayout.CreateNewDescriptorSet();
         descriptorSets[1] = bcLayout.CreateNewDescriptorSet();
@@ -572,7 +519,7 @@ void Convert(string filename)
         u32 offset     = 0;
         u32 log2Width  = img.log2Width;
         u32 log2Height = img.log2Height;
-        if (log2Width > log2Height)
+        if (log2Height > log2Width)
         {
             Swap(log2Width, log2Height);
         }
@@ -591,21 +538,37 @@ void Convert(string filename)
     textureMetadata->numFaces = numFaces;
     FaceMetadata2 *outFaceMetadata =
         (FaceMetadata2 *)AllocateSpace(&builder, sizeof(FaceMetadata2) * numFaces);
-    StaticArray<FaceMetadata2> faceMetadata(scratch.temp.arena, numFaces, numFaces);
+    StaticArray<FaceMetadata2> faceMetadatas(scratch.temp.arena, numFaces, numFaces);
 
     const int pageTexelWidth = PAGE_WIDTH;
     const int pageBlockWidth = pageTexelWidth >> log2BlockSize;
     const int pageByteSize   = Sqr(pageBlockWidth) * bytesPerBlock;
-    const int numpagesX      = gpuOutputWidth / pageBlockWidth;
-    const int numpagesY      = gpuOutputHeight / pageBlockWidth;
+    const int numPagesX      = gpuOutputWidth / pageBlockWidth;
 
     const int gpuSrcStride = gpuOutputWidth * bytesPerBlock;
     const int pageStride   = pageBlockWidth * bytesPerBlock;
 
-    auto CopyBlockCompressedResultsToDisk = [&](std::vector<u8 *> &blockCompressedResults) {
+    struct SubmissionInfo
+    {
+        u32 numX;
+        u32 numY;
+
+        u32 outputPageWidth;
+        u32 outputPageHeight;
+    };
+
+    std::vector<SubmissionInfo> submissionInfos;
+
+    auto CopyBlockCompressedResultsToDisk = [&](u8 *dst, u32 mipSqrtNumPages) {
         // Write to face images to disk
         if (numSubmissions > 0)
         {
+            const SubmissionInfo &s = submissionInfos[numSubmissions - 1];
+            u32 numX                = s.numX;
+            u32 numY                = s.numY;
+            u32 outputPageWidth     = s.outputPageWidth;
+            u32 outputPageHeight    = s.outputPageHeight;
+
             int lastSubmissionIndex   = (submissionIndex - 1) & 1;
             GPUBuffer *readbackBuffer = &readbackBuffers[lastSubmissionIndex];
             device->Wait(semaphores[lastSubmissionIndex]);
@@ -614,9 +577,26 @@ void Convert(string filename)
 
             MemoryZero(debugSrc[lastSubmissionIndex], submissionSize);
 
-            u8 *blockCompressedResult = PushArrayNoZero(scratch.temp.arena, u8, outputSize);
-            MemoryCopy(blockCompressedResult, readbackBuffer->mappedPtr, outputSize);
-            blockCompressedResults.push_back(blockCompressedResult);
+            // Copy tiles out to disk
+            u32 srcOffset = 0;
+
+            u32 pageStride = pageByteSize * mipSqrtNumPages;
+            Assert(outputPageWidth <= numPagesX && outputPageHeight <= numPagesX);
+
+            for (int pageY = 0; pageY < outputPageHeight; pageY++)
+            {
+                u32 dstOffset = (numY * numPagesX + pageY) * pageStride + numX * pageByteSize;
+                for (int pageX = 0; pageX < outputPageWidth; pageX++)
+                {
+                    Vec2u srcIndex = Vec2u(pageX, pageY) * (u32)pageBlockWidth;
+                    Utils::Copy(readbackBuffers[lastSubmissionIndex].mappedPtr, srcIndex,
+                                gpuOutputWidth, gpuOutputWidth, dst + dstOffset, Vec2u(0, 0),
+                                pageBlockWidth, pageBlockWidth, pageBlockWidth, pageBlockWidth,
+                                bytesPerBlock);
+
+                    dstOffset += pageByteSize;
+                }
+            }
         }
     };
 
@@ -631,7 +611,7 @@ void Convert(string filename)
 
         BufferImageCopy copy = {};
         copy.layerCount      = 1;
-        copy.extent          = Vec3u(gpuSubmissionWidth, gpuSubmissionHeight, 1);
+        copy.extent          = Vec3u(gpuSubmissionWidth, gpuSubmissionWidth, 1);
 
         // Debug copy
         {
@@ -659,12 +639,12 @@ void Convert(string filename)
             set->Bind(outputBinding, uavImage);
             cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, set,
                                     bcLayout.pipelineLayout);
-            cmd->Dispatch((gpuSubmissionWidth + 7) >> 3, (gpuSubmissionHeight + 7) >> 3, 1);
+            cmd->Dispatch((gpuSubmissionWidth + 7) >> 3, (gpuSubmissionWidth + 7) >> 3, 1);
         }
 
         // Copy from uav to buffer
         {
-            copy.extent = Vec3u(gpuOutputWidth, gpuOutputHeight, 1);
+            copy.extent = Vec3u(gpuOutputWidth, gpuOutputWidth, 1);
             cmd->Barrier(uavImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                          VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
             cmd->FlushBarriers();
@@ -707,7 +687,216 @@ void Convert(string filename)
 
     StaticArray<FaceInfo> faceInfos(scratch.temp.arena, numFaces);
 
-    // Add borders to all images
+    // How this is packed:
+    // 1. calculate the total texture area to get a naive lower bound estimate on the
+    // number of pages
+    // 2. pack face data onto shelves in the estimated square virtual texture space to
+    // calculate the minimum necessary # of pages. shelves are packed such that all shelves
+    // have height >= shelves below . When the width changes, a new shelf is also created. This
+    // way, high mip levels of 2x1 and 4x1 aspect ratio faces are handled by clamping the u
+    // coordinate to the entry index on the shelf.
+    // 3. repeat #2 in the actual virtual texture space.
+    //
+    // e.g.
+    //
+    // Mip 0:
+    // 256x256 256x256 ...
+    // 128x256 128x256 ...
+    // 16x256 16x256 16x256
+    // 128x128 128x128
+    //
+    // Mip 5:
+    // 8x8 8x8 ...
+    // 4x8 4x8 ...
+    // 1x8 1x8 <-- note: 16 >> 5 = 0, so max with the entry index on this shelf to get u.
+    // 4x4 4x4
+    //
+    // Mip 8:
+    // 1x1 1x1 ...
+    // 1x1 1x1 ...
+    // 1x1 1x1 1x1 ...
+    // <-- 128x128 faces and below vanish. this doesn't impact the addressing of faces actually
+    // present at this mip level.
+    //
+    // Data on disk is stored using these shelves minimize wasted space.
+
+    int totalTextureArea = 0;
+    for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
+    {
+        PaddedImage &currentFaceImg = images[faceIndex][0];
+        totalTextureArea += currentFaceImg.width * currentFaceImg.height;
+    }
+
+    const int estimateSqrtNumPages      = std::sqrt(totalTextureArea >> (2 * PAGE_SHIFT)) + 1;
+    const int estimateVirtualTexelWidth = estimateSqrtNumPages * pageTexelWidth;
+    Assert(Sqr(estimateVirtualTexelWidth) >= totalTextureArea);
+
+    int currentTotalHeight = 0;
+    {
+        PaddedImage &firstFaceImg   = images[handles[0].faceIndex][0];
+        int currentHorizontalOffset = 0;
+        int currentShelfHeight      = Min(firstFaceImg.width, firstFaceImg.height);
+        for (int handleIndex = 0; handleIndex < numFaces; handleIndex++)
+        {
+            FaceHandle &handle          = handles[handleIndex];
+            int faceIndex               = handle.faceIndex;
+            PaddedImage &currentFaceImg = images[faceIndex][0];
+            int cmpWidth                = Max(currentFaceImg.width, currentFaceImg.height);
+            int cmpHeight               = Min(currentFaceImg.width, currentFaceImg.height);
+
+            if (cmpHeight != currentShelfHeight ||
+                currentHorizontalOffset + cmpWidth > estimateVirtualTexelWidth)
+            {
+                currentHorizontalOffset = 0;
+                currentTotalHeight += currentShelfHeight;
+                currentShelfHeight = cmpHeight;
+            }
+            currentHorizontalOffset += cmpWidth;
+        }
+        currentTotalHeight += currentShelfHeight;
+    }
+
+    const int virtualTextureWidth = Max(currentTotalHeight, estimateVirtualTexelWidth);
+    const u32 sqrtNumPages        = (virtualTextureWidth + PAGE_WIDTH - 1) >> PAGE_SHIFT;
+    textureMetadata->virtualSqrtNumPages = NextPowerOfTwo(sqrtNumPages);
+
+    for (int levelIndex = 0; levelIndex < maxLevel; levelIndex++)
+    {
+        const u32 mipSqrtNumPages =
+            ((virtualTextureWidth >> levelIndex) + PAGE_WIDTH - 1) >> PAGE_SHIFT;
+        u32 levelTexelWidth = mipSqrtNumPages * pageTexelWidth;
+        u32 levelBlockWidth = mipSqrtNumPages * pageBlockWidth;
+        u32 totalOutputSize = Sqr(levelBlockWidth) * bytesPerBlock;
+
+        u8 *temp = PushArray(scratch.temp.arena, u8, Sqr(levelTexelWidth) * gpuBytesPerPixel);
+
+        currentPageOffset += Sqr(mipSqrtNumPages);
+        PaddedImage &firstFaceImg                   = images[handles[0].faceIndex][levelIndex];
+        textureMetadata->mipPageOffsets[levelIndex] = currentPageOffset;
+        int currentHorizontalOffset                 = 0;
+        int currentShelfHeight = Min(firstFaceImg.width, firstFaceImg.height);
+        int currentTotalHeight = 0;
+        for (int handleIndex = 0; handleIndex < numFaces; handleIndex++)
+        {
+            FaceHandle &handle = handles[handleIndex];
+            int faceIndex      = handle.faceIndex;
+            if (levelIndex >= images[faceIndex].Length()) continue;
+            PaddedImage &currentFaceImg = images[faceIndex][levelIndex];
+
+            int cmpWidth  = Max(currentFaceImg.width, currentFaceImg.height);
+            int cmpHeight = Min(currentFaceImg.width, currentFaceImg.height);
+
+            int faceMaxLevel = cmpHeight + 1;
+
+            if (cmpHeight != currentShelfHeight ||
+                currentHorizontalOffset + cmpWidth > levelTexelWidth)
+            {
+                currentHorizontalOffset = 0;
+                currentTotalHeight += currentShelfHeight;
+                currentShelfHeight = cmpHeight;
+            }
+            Assert(currentTotalHeight + currentShelfHeight <= levelTexelWidth);
+
+            // Rotate face
+            PaddedImage img = currentFaceImg;
+            bool rotate     = false;
+            if (currentFaceImg.height > currentFaceImg.width)
+            {
+                u32 size = img.GetPaddedWidth() * img.GetPaddedHeight() * img.bytesPerPixel;
+                img.contents = PushArray(scratch.temp.arena, u8, size);
+                Swap(img.width, img.height);
+                Swap(img.log2Width, img.log2Height);
+                img.strideNoBorder   = img.width * img.bytesPerPixel;
+                img.strideWithBorder = img.GetPaddedWidth() * img.bytesPerPixel;
+
+                img.WriteRotated(currentFaceImg, Vec2u(0, 0), Vec2u(0, 0), 1,
+                                 currentFaceImg.GetPaddedHeight(),
+                                 currentFaceImg.GetPaddedWidth(),
+                                 currentFaceImg.GetPaddedWidth(),
+                                 currentFaceImg.GetPaddedHeight(), Vec2u(0, 0));
+                rotate = true;
+                faceMetadatas[faceIndex].rotate |= 0x80000000;
+            }
+
+            Vec2u dstLoc(pos_inf);
+            if (levelIndex == 0)
+            {
+                faceMetadatas[faceIndex].log2Width  = img.log2Width;
+                faceMetadatas[faceIndex].log2Height = img.log2Height;
+                faceMetadatas[faceIndex].offsetX    = currentHorizontalOffset;
+                faceMetadatas[faceIndex].offsetY    = currentTotalHeight;
+
+                const Ptex::FaceInfo &f = reader->getFaceInfo(faceIndex);
+                Assert(!f.isSubface());
+                for (int edgeIndex = e_bottom; edgeIndex < e_max; edgeIndex++)
+                {
+                    // Add edge borders
+                    int aeid         = f.adjedge(edgeIndex);
+                    int neighborFace = f.adjface(edgeIndex);
+                    int rot          = (edgeIndex - aeid + 2) & 3;
+
+                    faceMetadatas[faceIndex].neighborFaces[edgeIndex] = neighborFace;
+                    faceMetadatas[faceIndex].rotate |= rot << (2 * edgeIndex);
+                }
+                dstLoc = Vec2u(currentHorizontalOffset, currentTotalHeight);
+            }
+            else
+            {
+                dstLoc = Vec2u(faceMetadatas[faceIndex].offsetX,
+                               faceMetadatas[faceIndex].offsetY) >>
+                         (u32)levelIndex;
+            }
+            Utils::Copy(img.contents, Vec2u(0, 0), img.width, img.height, temp, dstLoc,
+                        levelTexelWidth, levelTexelWidth, img.height, img.width,
+                        img.bytesPerPixel);
+
+            currentHorizontalOffset += cmpWidth;
+        }
+
+        // Submit to GPU to calculate mip and block compress, then write to disk
+        u8 *dst = (u8 *)AllocateSpace(&builder, totalOutputSize);
+
+        int numSqrtSubmissions =
+            (mipSqrtNumPages * PAGE_WIDTH + gpuSubmissionWidth - 1) / gpuSubmissionWidth;
+
+        numSubmissions  = 0;
+        submissionIndex = 0;
+
+        for (int numY = 0; numY < numSqrtSubmissions; numY++)
+        {
+            for (int numX = 0; numX < numSqrtSubmissions; numX++)
+            {
+                Vec2u srcIndex(numX * gpuSubmissionWidth, numY * gpuSubmissionWidth);
+
+                u32 width =
+                    Min(gpuSubmissionWidth, levelTexelWidth - numX * gpuSubmissionWidth);
+                u32 height =
+                    Min(gpuSubmissionWidth, levelTexelWidth - numY * gpuSubmissionWidth);
+                Utils::Copy(temp, srcIndex, levelTexelWidth, levelTexelWidth,
+                            debugSrc[submissionIndex], Vec2u(0, 0), gpuSubmissionWidth,
+                            gpuSubmissionWidth, height, width, gpuBytesPerPixel);
+
+                CopyBlockCompressedResultsToDisk(dst, mipSqrtNumPages);
+                SubmitBlockCompressionCommandsToGPU();
+
+                u32 outputPageWidth  = (width + PAGE_WIDTH - 1) >> PAGE_SHIFT;
+                u32 outputPageHeight = (height + PAGE_WIDTH - 1) >> PAGE_SHIFT;
+
+                SubmissionInfo submissionInfo;
+                submissionInfo.numX             = numX;
+                submissionInfo.numY             = numY;
+                submissionInfo.outputPageWidth  = outputPageWidth;
+                submissionInfo.outputPageHeight = outputPageHeight;
+                submissionInfos.push_back(submissionInfo);
+
+                numSubmissions++;
+                submissionIndex = numSubmissions & 1;
+            }
+        }
+        CopyBlockCompressedResultsToDisk(dst, mipSqrtNumPages);
+    }
+
+#if 0
     for (int levelIndex = 0; levelIndex < maxLevel; levelIndex++)
     {
         u32 gpuHeight               = 0;
@@ -746,7 +935,7 @@ void Convert(string filename)
 
             currentShelfHeight = Max(currentShelfHeight, (u32)cmpHeight);
 
-            if (currentShelfHeight + gpuHeight > gpuSubmissionHeight)
+            if (currentShelfHeight + gpuHeight > gpuSubmissionWidth)
             {
                 CopyBlockCompressedResultsToDisk(blockCompressedResults);
                 SubmitBlockCompressionCommandsToGPU();
@@ -887,7 +1076,7 @@ void Convert(string filename)
             u32 offset =
                 dstStride * gpuHeight + currentHorizontalOffset * GetFormatSize(baseFormat);
             Assert(offset <
-                   gpuSubmissionWidth * gpuSubmissionHeight * GetFormatSize(baseFormat));
+                   gpuSubmissionWidth * gpuSubmissionWidth * GetFormatSize(baseFormat));
 
             // Rotate so that all textures are taller than wide
             PaddedImage img = currentFaceImg;
@@ -946,7 +1135,7 @@ void Convert(string filename)
         CopyBlockCompressedResultsToDisk(blockCompressedResults);
 
         const u32 numpagesX = gpuSubmissionWidth >> PAGE_SHIFT;
-        const u32 numpagesY = gpuSubmissionHeight >> PAGE_SHIFT;
+        const u32 numpagesY = gpuSubmissionWidth >> PAGE_SHIFT;
 
         u32 numpages = numSubmissions * numpagesX * numpagesY;
 
@@ -981,8 +1170,8 @@ void Convert(string filename)
         currentShelfHeight             = 0;
 
         StaticArray<bool> blockCopied(scratch.temp.arena,
-                                      gpuOutputWidth * gpuOutputHeight * numSubmissions,
-                                      gpuOutputWidth * gpuOutputHeight * numSubmissions);
+                                      gpuOutputWidth * gpuOutputWidth * numSubmissions,
+                                      gpuOutputWidth * gpuOutputWidth * numSubmissions);
         // Copy to square texture
         for (int i = 0; i < numFaces; i++)
         {
@@ -1022,7 +1211,7 @@ void Convert(string filename)
             }
 
             Vec2u block     = faceInfo.srcOffset >> blockShift;
-            u32 lookupIndex = faceInfo.submissionIndex * gpuOutputWidth * gpuOutputHeight +
+            u32 lookupIndex = faceInfo.submissionIndex * gpuOutputWidth * gpuOutputWidth +
                               block.y * gpuOutputWidth + block.x;
             if (blockCopied[lookupIndex])
             {
@@ -1035,7 +1224,7 @@ void Convert(string filename)
             blockHeight = Max(blockHeight, 1u);
 
             // Copy face data to square texture
-            Utils::Copy(blockCompressedResult, block, gpuOutputWidth, gpuOutputHeight, temp,
+            Utils::Copy(blockCompressedResult, block, gpuOutputWidth, gpuOutputWidth, temp,
                         dstOffset, levelBlockWidth, levelBlockWidth, blockHeight, blockWidth,
                         bytesPerBlock);
 
@@ -1070,8 +1259,9 @@ void Convert(string filename)
         numSubmissions  = 0;
         submissionIndex = 0;
     }
+#endif
 
-    MemoryCopy(outFaceMetadata, faceMetadata.data, numFaces * sizeof(FaceMetadata2));
+    MemoryCopy(outFaceMetadata, faceMetadatas.data, numFaces * sizeof(FaceMetadata2));
 
     // Cleanup
     for (int i = 0; i < 2; i++)
@@ -1413,7 +1603,6 @@ Vec2u VirtualTextureManager::AllocateVirtualPages(Arena *arena, string filename,
 //     {
 //         FaceMetadata2 &faceMetadata = faceMetadatas[faceIndex];
 //         int maxLevel                = Min(faceMetadata.log2Width, faceMetadata.log2Height);
-//
 //     }
 // }
 
@@ -1516,9 +1705,10 @@ void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, Vec2u base
 #endif
 }
 
-void VirtualTextureManager::ClearPageTable(CommandBuffer *cmd)
+void VirtualTextureManager::ClearTextures(CommandBuffer *cmd)
 {
     cmd->ClearImage(&pageTable, ~0u);
+    cmd->ClearImage(&gpuPhysicalPool, Vec4f(1.f, 1.f, 1.f, 1.f));
 }
 
 ///////////////////////////////////////
@@ -1855,6 +2045,7 @@ void VirtualTextureManager::Callback()
             }
             else
             {
+                Assert(0);
                 // Otherwise, evict old entires
                 for (int levelIndex = 0; levelIndex < mipSentinels.size(); levelIndex++)
                 {

@@ -95,8 +95,11 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
         float2 bary;
         uint hitKind;
 
+        uint numIters = 0;
+
         while (query.Proceed()) 
         {
+            numIters++;
             if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
             {
                 uint primitiveIndex = query.CandidatePrimitiveIndex();
@@ -118,6 +121,8 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
                 query.CommitProceduralPrimitiveHit(tHit);
             }
         }
+
+        if (printDebug) printf("num iters: %u\n", numIters);
 #endif
         // TODO: emitter intersection
         if (depth++ >= maxDepth)
@@ -289,7 +294,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
                     Ptex::FaceData faceData = Ptex::GetFaceData(material, faceID);
                     int2 dim = int2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
 
-                    if (printDebug)
+                    if (0)
                     {
                         printf("%u %u %u %u %u\n", faceID, dim.x, dim.y, faceData.faceOffset.x, faceData.faceOffset.y);
                     }

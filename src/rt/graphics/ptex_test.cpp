@@ -438,10 +438,8 @@ void Convert(string filename)
 
     // NOTE: pack multiple face textures/mips into one texture atlas that gets submitted to the
     // GPU
-    const u32 gpuSubmissionWidth  = 4096;
-    const u32 gpuSubmissionHeight = 4096;
-    const u32 gpuOutputWidth      = gpuSubmissionWidth >> log2BlockSize;
-    const u32 gpuOutputHeight     = gpuSubmissionHeight >> log2BlockSize;
+    const u32 gpuSubmissionWidth = 4096;
+    const u32 gpuOutputWidth     = gpuSubmissionWidth >> log2BlockSize;
 
     GPUImage gpuSrcImages[2];
     GPUImage uavImages[2];
@@ -452,23 +450,24 @@ void Convert(string filename)
     DescriptorSet descriptorSets[2];
     Semaphore semaphores[2];
     CommandBuffer *cmds[2];
-    u32 numSubmissions  = 0;
-    u32 submissionIndex = 0;
+    u32 numSubmissions   = 0;
+    u32 submissionIndex  = 0;
+    const u32 gpuNumMips = Log2Int(gpuSubmissionWidth) + 1 - 2;
 
     const u32 submissionSize =
-        gpuSubmissionWidth * gpuSubmissionHeight * GetFormatSize(baseFormat);
+        gpuSubmissionWidth * gpuSubmissionWidth * GetFormatSize(baseFormat);
     const u32 outputSize = gpuOutputWidth * gpuOutputHeight * GetFormatSize(blockFormat);
     // Allocate GPU resources
     {
         ImageDesc blockCompressedImageDesc(
-            ImageType::Type2D, gpuSubmissionWidth, gpuSubmissionHeight, 1, 1, 1, baseFormat,
+            ImageType::Type2D, gpuSubmissionWidth, gpuSubmissionWidth, 1, 1, 1, baseFormat,
             MemoryUsage::GPU_ONLY,
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
             VK_IMAGE_TILING_OPTIMAL);
         gpuSrcImages[0] = device->CreateImage(blockCompressedImageDesc);
         gpuSrcImages[1] = device->CreateImage(blockCompressedImageDesc);
 
-        ImageDesc uavDesc(ImageType::Type2D, gpuOutputWidth, gpuOutputHeight, 1, 1, 1,
+        ImageDesc uavDesc(ImageType::Type2D, gpuOutputWidth, gpuOutputHeight, 1, gpuNumMips, 1,
                           VK_FORMAT_R32G32_UINT, MemoryUsage::GPU_ONLY,
                           VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                           VK_IMAGE_TILING_OPTIMAL);
@@ -582,7 +581,7 @@ void Convert(string filename)
 
         BufferImageCopy copy = {};
         copy.layerCount      = 1;
-        copy.extent          = Vec3u(gpuSubmissionWidth, gpuSubmissionHeight, 1);
+        copy.extent          = Vec3u(gpuSubmissionWidth, gpuSubmissionWidth, 1);
 
         // Debug copy
         {
@@ -610,7 +609,7 @@ void Convert(string filename)
             set->Bind(outputBinding, uavImage);
             cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, set,
                                     bcLayout.pipelineLayout);
-            cmd->Dispatch((gpuSubmissionWidth + 7) >> 3, (gpuSubmissionHeight + 7) >> 3, 1);
+            cmd->Dispatch((gpuSubmissionWidth + 7) >> 3, (gpuSubmissionWidth + 7) >> 3, 1);
         }
 
         // Copy from uav to buffer
@@ -838,22 +837,22 @@ void Convert(string filename)
         {
             Shelf &shelf         = shelves[shelfIndex];
             submissionTotalWidth = Max(submissionTotalWidth, shelf.submissionTotalWidth);
-            if (submissionTotalHeight + shelf.height > gpuSubmissionHeight) break;
+            if (submissionTotalHeight + shelf.height > gpuSubmissionWidth) break;
             submissionTotalHeight += shelf.height;
         }
         int numSubmissionsX =
             (submissionTotalWidth + gpuSubmissionWidth - 1) / gpuSubmissionWidth;
         int numSubmissionsY =
-            (submissionTotalHeight + gpuSubmissionHeight - 1) / gpuSubmissionHeight;
+            (submissionTotalHeight + gpuSubmissionWidth - 1) / gpuSubmissionWidth;
 
         for (int numY = 0; numY < numSubmissionsY; numY++)
         {
             for (int numX = 0; numX < numSubmissionsX; numX++)
             {
-                Vec2u srcIndex(numX * gpuSubmissionWidth, numY * gpuSubmissionHeight);
+                Vec2u srcIndex(numX * gpuSubmissionWidth, numY * gpuSubmissionWidth);
                 Utils::Copy(temp, srcIndex, virtualTextureWidth, virtualTextureWidth,
                             debugSrc[submissionIndex], Vec2u(0, 0), gpuSubmissionWidth,
-                            gpuSubmissionHeight, gpuSubmissionHeight, gpuSubmissionWidth,
+                            gpuSubmissionWidth, gpuSubmissionWidth, gpuSubmissionWidth,
                             gpuBytesPerPixel);
 
                 CopyBlockCompressedResultsToDisk(blockCompressedResults);
@@ -903,7 +902,7 @@ void Convert(string filename)
 
             currentShelfHeight = Max(currentShelfHeight, (u32)cmpHeight);
 
-            if (currentShelfHeight + gpuHeight > gpuSubmissionHeight)
+            if (currentShelfHeight + gpuHeight > gpuSubmissionWidth)
             {
                 CopyBlockCompressedResultsToDisk(blockCompressedResults);
                 SubmitBlockCompressionCommandsToGPU();
@@ -1044,7 +1043,7 @@ void Convert(string filename)
             u32 offset =
                 dstStride * gpuHeight + currentHorizontalOffset * GetFormatSize(baseFormat);
             Assert(offset <
-                   gpuSubmissionWidth * gpuSubmissionHeight * GetFormatSize(baseFormat));
+                   gpuSubmissionWidth * gpuSubmissionWidth * GetFormatSize(baseFormat));
 
             // Rotate so that all textures are taller than wide
             PaddedImage img = currentFaceImg;
@@ -1103,7 +1102,7 @@ void Convert(string filename)
         CopyBlockCompressedResultsToDisk(blockCompressedResults);
 
         const u32 numPagesX = gpuSubmissionWidth >> PAGE_SHIFT;
-        const u32 numPagesY = gpuSubmissionHeight >> PAGE_SHIFT;
+        const u32 numPagesY = gpuSubmissionWidth >> PAGE_SHIFT;
 
         u32 numPages = numSubmissions * numPagesX * numPagesY;
 

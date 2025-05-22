@@ -358,7 +358,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     tileSubmitSemaphore.signalValue = 1;
     tileCmd->TransferWriteBarrier(&virtualTextureManager.pageTable);
     tileCmd->FlushBarriers();
-    virtualTextureManager.ClearPageTable(tileCmd);
+    virtualTextureManager.ClearTextures(tileCmd);
 
     for (int i = 0; i < rootScene->ptexTextures.size(); i++)
     {

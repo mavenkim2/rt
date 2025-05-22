@@ -629,6 +629,9 @@ struct CommandBuffer
     void ClearImage(GPUImage *image, u32 value, u32 baseMip = 0,
                     u32 numMips = VK_REMAINING_MIP_LEVELS, u32 baseLayer = 0,
                     u32 numLayers = VK_REMAINING_ARRAY_LAYERS);
+    void ClearImage(GPUImage *image, const Vec4f &value, u32 baseMip = 0,
+                    u32 numMips = VK_REMAINING_MIP_LEVELS, u32 baseLayer = 0,
+                    u32 numLayers = VK_REMAINING_ARRAY_LAYERS);
 
     void BeginQuery(QueryPool *queryPool, u32 queryIndex);
     void EndQuery(QueryPool *queryPool, u32 queryIndex);
@@ -838,6 +841,7 @@ struct Vulkan
     int CreateSubresource(GPUImage *image, u32 baseMip = 0,
                           u32 numMips = VK_REMAINING_MIP_LEVELS, u32 baseLayer = 0,
                           u32 numLayers = VK_REMAINING_ARRAY_LAYERS);
+    u32 GetImageSize(GPUImage *image);
     void DestroyBuffer(GPUBuffer *buffer);
     void DestroyImage(GPUImage *image);
     void DestroyAccelerationStructure(GPUAccelerationStructure *as);
