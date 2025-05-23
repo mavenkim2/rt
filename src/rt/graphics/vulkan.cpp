@@ -1228,6 +1228,9 @@ CommandBuffer *Vulkan::BeginCommandBuffer(QueueType queue, string name)
 
     Assert(cmd);
 
+    cmd->semaphore    = VK_NULL_HANDLE;
+    cmd->submissionID = 0;
+
     cmd->type = queue;
     VK_CHECK(vkResetCommandBuffer(cmd->buffer, 0));
     VkCommandBufferBeginInfo beginInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -1241,6 +1244,7 @@ CommandBuffer *Vulkan::BeginCommandBuffer(QueueType queue, string name)
 
 void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd, bool frame)
 {
+    Assert(cmd->semaphore != VK_NULL_HANDLE || frame);
     VK_CHECK(vkEndCommandBuffer(cmd->buffer));
     ScratchArena scratch;
     CommandQueue &queue = queues[cmd->type];
@@ -2984,18 +2988,6 @@ QueryPool CommandBuffer::GetCompactionSizes(const GPUAccelerationStructurePayloa
 
     VkAccelerationStructureKHR vkAs = as->as.as;
 
-    VkMemoryBarrier2 barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-    barrier.srcStageMask     = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-    barrier.dstStageMask     = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-    barrier.srcAccessMask    = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-    barrier.dstAccessMask    = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-
-    VkDependencyInfo dependencyInfo   = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    dependencyInfo.memoryBarrierCount = 1;
-    dependencyInfo.pMemoryBarriers    = &barrier;
-
-    vkCmdPipelineBarrier2(buffer, &dependencyInfo);
-
     vkCmdWriteAccelerationStructuresPropertiesKHR(
         buffer, 1, &vkAs, VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
         pool.queryPool, 0);
@@ -3005,11 +2997,12 @@ QueryPool CommandBuffer::GetCompactionSizes(const GPUAccelerationStructurePayloa
 GPUAccelerationStructure CommandBuffer::CompactAS(QueryPool &pool,
                                                   const GPUAccelerationStructurePayload *as)
 {
-    VkDeviceSize compactedSize;
+    VkDeviceSize compactedSize = 0;
     vkGetQueryPoolResults(device->device, pool.queryPool, 0, 1, sizeof(VkDeviceSize),
                           &compactedSize, 0,
                           VK_QUERY_RESULT_WAIT_BIT | VK_QUERY_RESULT_64_BIT);
 
+    Assert(compactedSize != 0);
     GPUBuffer newBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, compactedSize);
     VkAccelerationStructureKHR newAs;

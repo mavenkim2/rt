@@ -139,13 +139,6 @@ extern PtexInpHandler ptexInputHandler;
 struct PtexTexture;
 class Ptex::PtexTexture;
 
-enum class TileType
-{
-    Corner,
-    Edge,
-    Center,
-};
-
 enum EdgeId
 {
     e_bottom, ///< Bottom edge, from UV (0,0) to (1,0)
@@ -153,14 +146,6 @@ enum EdgeId
     e_top,    ///< Top edge, from UV (1,1) to (0,1)
     e_left,   ///< Left edge, from UV (0,1) to (0,0)
     e_max,
-};
-
-struct Tile
-{
-    u8 *contents;
-    TileType type;
-    EdgeId edgeId;
-    u32 parentFace;
 };
 
 struct FaceMetadata
@@ -203,6 +188,7 @@ struct TextureMetadata
     u32 numFaces;
     u32 virtualSqrtNumPages;
     u32 numLevels;
+    u32 numPinnedPages;
     u32 mipPageOffsets[MAX_LEVEL - 1];
 };
 
@@ -224,6 +210,8 @@ struct PaddedImage : Image
     int borderSize;
     int strideWithBorder;
 
+    bool rotated;
+
     Vec2u ConvertRelativeToAbsolute(const Vec2u &p);
     u8 *GetContentsAbsoluteIndex(const Vec2u &p);
     u8 *GetContentsRelativeIndex(const Vec2u &p);
@@ -232,13 +220,6 @@ struct PaddedImage : Image
     u32 GetPaddedHeight() const;
     void WriteRotated(PaddedImage &other, Vec2u srcStart, Vec2u dstStart, int rotate,
                       int srcVLen, int srcRowLen, int dstVLen, int dstRowLen, Vec2u scale);
-};
-
-enum class AllocationStatus
-{
-    Free,
-    Allocated,
-    PartiallyAllocated,
 };
 
 struct PhysicalPage
@@ -250,13 +231,6 @@ struct PhysicalPage
 
     int prevPage;
     int nextPage;
-};
-
-struct PhysicalPageAllocation
-{
-    u32 virtualPage;
-    u32 poolIndex;
-    u32 pageIndex;
 };
 
 template <typename T>
@@ -364,8 +338,7 @@ struct VirtualTextureManager
                           VkFormat format);
     Vec2u AllocateVirtualPages(Arena *arena, string filename, const TextureMetadata &metadata,
                                const Vec2u &virtualSize, u8 *contents, u32 &index);
-    void AllocatePhysicalPages(CommandBuffer *cmd, Vec2u baseVirtualPage,
-                               TextureMetadata &metadata, u8 *contents);
+    void PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u *pinnedPages, u32 numPages);
     void ClearTextures(CommandBuffer *cmd);
 
     // Streaming

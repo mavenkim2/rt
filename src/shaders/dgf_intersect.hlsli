@@ -4,6 +4,8 @@
 #include "ray_triangle_intersection.hlsli"
 #include "dense_geometry.hlsli"
 
+StructuredBuffer<AABB> bindlessAABBs[] : register(t0, structuredBufferSpace);
+
 uint2 DecodeBlockAndTriangleIndex(uint primitiveIndex, uint hitKind)
 {
 #if LOG2_TRIANGLES_PER_LEAF == 0
@@ -27,35 +29,27 @@ bool IntersectCluster(in uint instanceID, in uint primitiveIndex, in float3 o, i
 
     DenseGeometry dg = GetDenseGeometryHeader(instanceID, blockIndex, debug);
 
-#if LOG2_TRIANGLES_PER_LEAF == 0
-    uint3 vids = dg.DecodeTriangle(triangleIndex).xyz;
-    
-    float3 p0 = dg.DecodePosition(vids[0]);
-    float3 p1 = dg.DecodePosition(vids[1]);
-    float3 p2 = dg.DecodePosition(vids[2]);
-    
-    float tempHit;
-    float2 tempBary;
-    
-    bool result = 
-    RayTriangleIntersectionMollerTrumbore(o, d, p0, p1, p2, tempHit, tempBary);
-    
-    result &= (tMin < tHit && tHit <= tMax);
-
-    tHit = result ? tempHit : tHit;
-    bary = result ? tempBary : bary;
-    kind = 0;
-#else
-    bool result = false;
+    if (0)
+    {
+        StructuredBuffer<AABB> aabbs = bindlessAABBs[3 * instanceID + 2];
+        AABB aabb = aabbs[primitiveIndex];
+        printf("prim: %u, t: %f %f\n", primitiveIndex, tHit, tMax);
+        printf("aabb: %f %f %f %f %f %f\n", aabb.minX, aabb.minY, aabb.minZ, aabb.maxX, aabb.maxY, aabb.maxZ);
+    }
     tHit = tMax;
-    for (uint i = triangleIndex; i < min(triangleIndex + TRIANGLES_PER_LEAF, dg.numTriangles); i++)
+    bool result = false;
+
+    uint i = triangleIndex;
+#if LOG2_TRIANGLES_PER_LEAF != 0
+    for (; i < min(triangleIndex + TRIANGLES_PER_LEAF, dg.numTriangles); i++)
+#endif
     {
         uint3 vids = dg.DecodeTriangle(i).xyz;
         
         float3 p0 = dg.DecodePosition(vids[0]);
         float3 p1 = dg.DecodePosition(vids[1]);
         float3 p2 = dg.DecodePosition(vids[2]);
-        
+
         float tempTHit;
         float2 tempBary;
         
@@ -70,7 +64,6 @@ bool IntersectCluster(in uint instanceID, in uint primitiveIndex, in float3 o, i
         kind = tempResult ? i & (TRIANGLES_PER_LEAF - 1) : kind;
     }
 
-#endif
     return result;
 }
 

@@ -540,18 +540,18 @@ void Convert(string filename)
         (FaceMetadata2 *)AllocateSpace(&builder, sizeof(FaceMetadata2) * numFaces);
     StaticArray<FaceMetadata2> faceMetadatas(scratch.temp.arena, numFaces, numFaces);
 
-    const int pageTexelWidth = PAGE_WIDTH;
-    const int pageBlockWidth = pageTexelWidth >> log2BlockSize;
-    const int pageByteSize   = Sqr(pageBlockWidth) * bytesPerBlock;
-    const int numPagesX      = gpuOutputWidth / pageBlockWidth;
+    const int pageTexelWidth         = PAGE_WIDTH;
+    const int pageBlockWidth         = pageTexelWidth >> log2BlockSize;
+    const int pageByteSize           = Sqr(pageBlockWidth) * bytesPerBlock;
+    const int submissionNumSqrtPages = gpuOutputWidth / pageBlockWidth;
 
     const int gpuSrcStride = gpuOutputWidth * bytesPerBlock;
     const int pageStride   = pageBlockWidth * bytesPerBlock;
 
     struct SubmissionInfo
     {
-        u32 numX;
-        u32 numY;
+        u32 numSubmissionX;
+        u32 numSubmissionY;
 
         u32 outputPageWidth;
         u32 outputPageHeight;
@@ -564,8 +564,8 @@ void Convert(string filename)
         if (numSubmissions > 0)
         {
             const SubmissionInfo &s = submissionInfos[numSubmissions - 1];
-            u32 numX                = s.numX;
-            u32 numY                = s.numY;
+            u32 numSubmissionX      = s.numSubmissionX;
+            u32 numSubmissionY      = s.numSubmissionY;
             u32 outputPageWidth     = s.outputPageWidth;
             u32 outputPageHeight    = s.outputPageHeight;
 
@@ -581,11 +581,14 @@ void Convert(string filename)
             u32 srcOffset = 0;
 
             u32 pageStride = pageByteSize * mipSqrtNumPages;
-            Assert(outputPageWidth <= numPagesX && outputPageHeight <= numPagesX);
+            Assert(outputPageWidth <= submissionNumSqrtPages &&
+                   outputPageHeight <= submissionNumSqrtPages);
 
             for (int pageY = 0; pageY < outputPageHeight; pageY++)
             {
-                u32 dstOffset = (numY * numPagesX + pageY) * pageStride + numX * pageByteSize;
+                u32 dstOffset =
+                    (numSubmissionY * submissionNumSqrtPages + pageY) * pageStride +
+                    numSubmissionX * submissionNumSqrtPages * pageByteSize;
                 for (int pageX = 0; pageX < outputPageWidth; pageX++)
                 {
                     Vec2u srcIndex = Vec2u(pageX, pageY) * (u32)pageBlockWidth;
@@ -654,24 +657,11 @@ void Convert(string filename)
 
         // Submit command buffer
         semaphores[submissionIndex].signalValue++;
-        cmd->Signal(semaphores[submissionIndex]);
+        cmd->SignalOutsideFrame(semaphores[submissionIndex]);
         device->SubmitCommandBuffer(cmds[submissionIndex]);
         cmds[submissionIndex] = device->BeginCommandBuffer(QueueType_Compute);
         cmds[submissionIndex]->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     };
-
-    u32 totalSize = builder.totalSize;
-
-    // Find max level
-    u32 maxLevel = 0;
-    for (int handleIndex = 0; handleIndex < numFaces; handleIndex++)
-    {
-        FaceHandle &handle = handles[handleIndex];
-        int faceIndex      = handle.faceIndex;
-        maxLevel           = Max(maxLevel, images[faceIndex].Length());
-    }
-
-    textureMetadata->numLevels = maxLevel;
 
     u32 currentPageOffset = 0;
 
@@ -721,11 +711,17 @@ void Convert(string filename)
     // Data on disk is stored using these shelves minimize wasted space.
 
     int totalTextureArea = 0;
+    u32 maxLevel         = 0;
     for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
     {
         PaddedImage &currentFaceImg = images[faceIndex][0];
         totalTextureArea += currentFaceImg.width * currentFaceImg.height;
+        maxLevel = Max(maxLevel, images[faceIndex].Length());
+
+        Assert(currentFaceImg.width != 1 && currentFaceImg.height != 1);
     }
+
+    textureMetadata->numLevels = maxLevel;
 
     const int estimateSqrtNumPages      = std::sqrt(totalTextureArea >> (2 * PAGE_SHIFT)) + 1;
     const int estimateVirtualTexelWidth = estimateSqrtNumPages * pageTexelWidth;
@@ -781,12 +777,11 @@ void Convert(string filename)
             FaceHandle &handle = handles[handleIndex];
             int faceIndex      = handle.faceIndex;
             if (levelIndex >= images[faceIndex].Length()) continue;
+
             PaddedImage &currentFaceImg = images[faceIndex][levelIndex];
 
             int cmpWidth  = Max(currentFaceImg.width, currentFaceImg.height);
             int cmpHeight = Min(currentFaceImg.width, currentFaceImg.height);
-
-            int faceMaxLevel = cmpHeight + 1;
 
             if (cmpHeight != currentShelfHeight ||
                 currentHorizontalOffset + cmpWidth > levelTexelWidth)
@@ -853,6 +848,53 @@ void Convert(string filename)
             currentHorizontalOffset += cmpWidth;
         }
 
+        if (levelIndex == 0)
+        {
+            // Pinning
+            std::vector<Vec3u> pinnedPages;
+            pinnedPages.reserve(sqrtNumPages);
+
+            HashIndex hashMap(scratch.temp.arena);
+            for (int handleIndex = 0; handleIndex < numFaces; handleIndex++)
+            {
+                FaceHandle &handle = handles[handleIndex];
+                int faceIndex      = handle.faceIndex;
+                u32 levelIndex     = images[faceIndex].Length() - 1;
+                Vec2u page         = Vec2u(faceMetadatas[faceIndex].offsetX,
+                                           faceMetadatas[faceIndex].offsetY) >>
+                             ((u32)levelIndex + PAGE_SHIFT);
+
+                Vec3u pinnedPage(page, (u32)levelIndex);
+
+                Assert(pinnedPage.x < 65536 && pinnedPage.y < 65536);
+
+                int hash = (int)MixBits(((u64)pinnedPage.z << 32) | ((u64)pinnedPage.y << 16) |
+                                        (u64)pinnedPage.x);
+
+                bool found = false;
+                for (int pinnedPageIndex = hashMap.FirstInHash(hash); pinnedPageIndex != -1;
+                     pinnedPageIndex++)
+                {
+                    if (pinnedPages[pinnedPageIndex] == pinnedPage)
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                {
+                    pinnedPages.push_back(pinnedPage);
+                }
+            }
+
+            textureMetadata->numPinnedPages = (u32)pinnedPages.size();
+            Vec3u *outPinnedPages           = (Vec3u *)AllocateSpace(
+                &builder, sizeof(Vec3u) * textureMetadata->numPinnedPages);
+
+            MemoryCopy(outPinnedPages, pinnedPages.data(),
+                       sizeof(Vec3u) * textureMetadata->numPinnedPages);
+        }
+
         // Submit to GPU to calculate mip and block compress, then write to disk
         u8 *dst = (u8 *)AllocateSpace(&builder, totalOutputSize);
 
@@ -861,6 +903,7 @@ void Convert(string filename)
 
         numSubmissions  = 0;
         submissionIndex = 0;
+        submissionInfos.clear();
 
         for (int numY = 0; numY < numSqrtSubmissions; numY++)
         {
@@ -883,8 +926,8 @@ void Convert(string filename)
                 u32 outputPageHeight = (height + PAGE_WIDTH - 1) >> PAGE_SHIFT;
 
                 SubmissionInfo submissionInfo;
-                submissionInfo.numX             = numX;
-                submissionInfo.numY             = numY;
+                submissionInfo.numSubmissionX   = numX;
+                submissionInfo.numSubmissionY   = numY;
                 submissionInfo.outputPageWidth  = outputPageWidth;
                 submissionInfo.outputPageHeight = outputPageHeight;
                 submissionInfos.push_back(submissionInfo);
@@ -895,371 +938,6 @@ void Convert(string filename)
         }
         CopyBlockCompressedResultsToDisk(dst, mipSqrtNumPages);
     }
-
-#if 0
-    for (int levelIndex = 0; levelIndex < maxLevel; levelIndex++)
-    {
-        u32 gpuHeight               = 0;
-        int currentHorizontalOffset = 0;
-
-        Assert(levelIndex < images[handles[0].faceIndex].Length());
-
-        u32 currentShelfHeight = 0;
-
-        std::vector<u8 *> blockCompressedResults;
-
-        for (int handleIndex = 0; handleIndex < numFaces; handleIndex++)
-        {
-            FaceHandle &handle = handles[handleIndex];
-            int faceIndex      = handle.faceIndex;
-            if (levelIndex >= images[faceIndex].Length())
-            {
-                faceInfos[handleIndex].size = Vec2u(0);
-                continue;
-            }
-
-            const Ptex::FaceInfo &f = reader->getFaceInfo(faceIndex);
-            Assert(!f.isSubface());
-
-            PaddedImage &currentFaceImg = images[faceIndex][levelIndex];
-
-            int cmpHeight = Max(currentFaceImg.height, currentFaceImg.width);
-            int cmpWidth  = Min(currentFaceImg.height, currentFaceImg.width);
-
-            if (currentHorizontalOffset + cmpWidth > gpuSubmissionWidth)
-            {
-                currentHorizontalOffset = 0;
-                gpuHeight += currentShelfHeight;
-                currentShelfHeight = 0;
-            }
-
-            currentShelfHeight = Max(currentShelfHeight, (u32)cmpHeight);
-
-            if (currentShelfHeight + gpuHeight > gpuSubmissionWidth)
-            {
-                CopyBlockCompressedResultsToDisk(blockCompressedResults);
-                SubmitBlockCompressionCommandsToGPU();
-
-                numSubmissions++;
-                submissionIndex         = numSubmissions & 1;
-                gpuHeight               = 0;
-                currentHorizontalOffset = 0;
-            }
-
-            if (levelIndex == 0)
-            {
-                for (int edgeIndex = e_bottom; edgeIndex < e_max; edgeIndex++)
-                {
-                    // Add edge borders
-                    int aeid         = f.adjedge(edgeIndex);
-                    int neighborFace = f.adjface(edgeIndex);
-                    int rot          = (edgeIndex - aeid + 2) & 3;
-
-                    if (neighborFace == -1)
-                    {
-                        int stop = 5;
-                    }
-                    faceMetadata[faceIndex].neighborFaces[edgeIndex] = neighborFace;
-                    faceMetadata[faceIndex].rotate |= rot << (2 * edgeIndex);
-                }
-            }
-
-#if 0
-            for (int edgeIndex = e_bottom; edgeIndex < e_max; edgeIndex++)
-            {
-                // Add edge borders
-                int aeid         = f.adjedge(edgeIndex);
-                int neighborFace = f.adjface(edgeIndex);
-                int rot          = (edgeIndex - aeid + 2) & 3;
-
-                Vec2u scale;
-                PaddedImage neighborFaceImg =
-                    GetNeighborFaceImage(currentFaceImg, neighborFace, rot, scale);
-
-                Vec2u start;
-                int vRes;
-                int rowLen;
-
-                Assert(neighborFaceImg.borderSize == currentFaceImg.borderSize);
-                u32 mipBorderSize = neighborFaceImg.borderSize;
-
-                start.x = (edgeIndex == e_left ? 0 : mipBorderSize) +
-                          (edgeIndex == e_right ? currentFaceImg.width : 0);
-                start.y = (edgeIndex == e_bottom ? 0 : mipBorderSize) +
-                          (edgeIndex == e_top ? currentFaceImg.height : 0);
-
-                Vec2u srcStart;
-                srcStart.x =
-                    (aeid == e_right ? neighborFaceImg.width - (mipBorderSize >> scale.x)
-                                     : 0) +
-                    mipBorderSize;
-                srcStart.y =
-                    (aeid == e_top ? neighborFaceImg.height - (mipBorderSize >> scale.y) : 0) +
-                    mipBorderSize;
-
-                Assert(!(mipBorderSize == 1 && scale.y != 0 && scale.x != 0));
-                int srcVRes = (aeid & 1) ? neighborFaceImg.height : (mipBorderSize >> scale.y);
-                int srcRowLen =
-                    (aeid & 1) ? (mipBorderSize >> scale.x) : neighborFaceImg.width;
-                int dstVRes   = (edgeIndex & 1) ? currentFaceImg.height : mipBorderSize;
-                int dstRowLen = (edgeIndex & 1) ? mipBorderSize : currentFaceImg.width;
-
-                currentFaceImg.WriteRotated(neighborFaceImg, srcStart, start, rot, srcVRes,
-                                            srcRowLen, dstVRes, dstRowLen,
-                                            (rot & 1) ? scale.yx() : scale);
-
-                // Add corner borders
-                int afid                 = faceIndex;
-                int cornerAeid           = edgeIndex;
-                const Ptex::FaceInfo *af = &f;
-
-                const int MaxValence = 10;
-                int cfaceId[MaxValence];
-                int cedgeId[MaxValence];
-                const Ptex::FaceInfo *cface[MaxValence];
-
-                int numCorners = 0;
-                for (int i = 0; i < MaxValence; i++)
-                {
-                    int prevFace = afid;
-                    afid         = af->adjface(cornerAeid);
-                    cornerAeid   = (af->adjedge(cornerAeid) + 1) & 3;
-
-                    if (afid < 0 || (afid == faceIndex && cornerAeid == edgeIndex))
-                    {
-                        numCorners = i - 2;
-                        break;
-                    }
-
-                    af         = &reader->getFaceInfo(afid);
-                    cfaceId[i] = afid;
-                    cedgeId[i] = cornerAeid;
-                    cface[i]   = af;
-
-                    Assert(!af->isSubface());
-                }
-
-                if (numCorners == 1)
-                {
-                    int cornerRotate = (edgeIndex - cedgeId[1] + 2) & 3;
-
-                    Vec2u cornerScale;
-                    PaddedImage cornerImg = GetNeighborFaceImage(currentFaceImg, cfaceId[1],
-                                                                 cornerRotate, cornerScale);
-
-                    u32 cornerMipBorderSize = cornerImg.borderSize;
-                    Assert(cornerMipBorderSize == currentFaceImg.borderSize);
-                    Vec2u srcStart =
-                        uvTable[cedgeId[1]] * Vec2u(cornerImg.width, cornerImg.height);
-                    Vec2u dstStart = uvTable[edgeIndex] *
-                                     Vec2u(currentFaceImg.width + cornerMipBorderSize,
-                                           currentFaceImg.height + cornerMipBorderSize);
-
-                    currentFaceImg.WriteRotated(cornerImg, srcStart, dstStart, cornerRotate,
-                                                cornerMipBorderSize >> cornerScale.y,
-                                                cornerMipBorderSize >> cornerScale.x,
-                                                cornerMipBorderSize, cornerMipBorderSize,
-                                                (cornerRotate & 1) ? cornerScale.yx()
-                                                                   : cornerScale);
-                }
-                else if (numCorners > 1)
-                {
-                    // TODO: what do I do here?
-                }
-                else
-                {
-                }
-            }
-#endif
-
-            u32 dstStride = gpuSubmissionWidth * GetFormatSize(baseFormat);
-            u32 offset =
-                dstStride * gpuHeight + currentHorizontalOffset * GetFormatSize(baseFormat);
-            Assert(offset <
-                   gpuSubmissionWidth * gpuSubmissionWidth * GetFormatSize(baseFormat));
-
-            // Rotate so that all textures are taller than wide
-            PaddedImage img = currentFaceImg;
-            bool rotate     = false;
-            if (currentFaceImg.width > currentFaceImg.height)
-            {
-                u32 size = img.GetPaddedWidth() * img.GetPaddedHeight() * img.bytesPerPixel;
-                img.contents = PushArray(scratch.temp.arena, u8, size);
-                Swap(img.width, img.height);
-                Swap(img.log2Width, img.log2Height);
-                img.strideNoBorder   = img.width * img.bytesPerPixel;
-                img.strideWithBorder = img.GetPaddedWidth() * img.bytesPerPixel;
-
-                img.WriteRotated(currentFaceImg, Vec2u(0, 0), Vec2u(0, 0), 1,
-                                 currentFaceImg.GetPaddedHeight(),
-                                 currentFaceImg.GetPaddedWidth(),
-                                 currentFaceImg.GetPaddedWidth(),
-                                 currentFaceImg.GetPaddedHeight(), Vec2u(0, 0));
-                rotate = true;
-                faceMetadata[faceIndex].rotate |= 0x80000000;
-            }
-
-            Utils::Copy(img.contents, img.strideNoBorder, debugSrc[submissionIndex] + offset,
-                        dstStride, img.GetPaddedHeight(), img.strideNoBorder);
-
-            if (levelIndex == 0)
-            {
-                faceMetadata[faceIndex].log2Width  = img.log2Width;
-                faceMetadata[faceIndex].log2Height = img.log2Height;
-
-                FaceInfo faceInfo        = {};
-                faceInfo.srcOffset       = Vec2u(currentHorizontalOffset, gpuHeight);
-                faceInfo.size            = Vec2u(img.width, img.height);
-                faceInfo.submissionIndex = numSubmissions;
-                faceInfo.faceIndex       = faceIndex;
-
-                faceInfos.Push(faceInfo);
-            }
-            else
-            {
-                Assert(faceInfos[handleIndex].faceIndex == faceIndex);
-                faceInfos[handleIndex].srcOffset = Vec2u(currentHorizontalOffset, gpuHeight);
-                faceInfos[handleIndex].size      = Vec2u(img.width, img.height);
-                faceInfos[handleIndex].submissionIndex = numSubmissions;
-            }
-
-            currentHorizontalOffset += img.width;
-        }
-
-        CopyBlockCompressedResultsToDisk(blockCompressedResults);
-        SubmitBlockCompressionCommandsToGPU();
-
-        numSubmissions++;
-        submissionIndex = numSubmissions & 1;
-
-        CopyBlockCompressedResultsToDisk(blockCompressedResults);
-
-        const u32 numpagesX = gpuSubmissionWidth >> PAGE_SHIFT;
-        const u32 numpagesY = gpuSubmissionWidth >> PAGE_SHIFT;
-
-        u32 numpages = numSubmissions * numpagesX * numpagesY;
-
-        u32 sqrtNumpages = std::sqrt(numpages) + 1;
-
-        if (levelIndex == 0)
-        {
-            textureMetadata->virtualSqrtNumPages = NextPowerOfTwo(sqrtNumpages);
-        }
-
-        const u32 maxSqrtNumPages = textureMetadata->virtualSqrtNumPages >> levelIndex;
-        sqrtNumpages              = Min(sqrtNumpages, maxSqrtNumPages);
-        u32 totalNumpages         = Sqr(sqrtNumpages);
-        u32 levelBlockWidth       = sqrtNumpages * pageBlockWidth;
-        u32 levelTexelWidth       = sqrtNumpages * pageTexelWidth;
-        u32 totalSize             = Sqr(levelBlockWidth) * bytesPerBlock;
-
-        currentPageOffset += totalNumpages;
-        textureMetadata->mipPageOffsets[levelIndex] = currentPageOffset;
-
-        // From submissions, shell fill the pages
-        u8 *dst         = (u8 *)AllocateSpace(&builder, totalSize);
-        u32 currentpage = 0;
-        u32 currentSqrt = 0;
-
-        u8 *temp = PushArray(scratch.temp.arena, u8, totalSize);
-
-        const u32 blockShift = GetBlockShift(blockFormat);
-
-        u32 currentDstHorizontalOffset = 0;
-        u32 currentDstTotalHeight      = 0;
-        currentShelfHeight             = 0;
-
-        StaticArray<bool> blockCopied(scratch.temp.arena,
-                                      gpuOutputWidth * gpuOutputWidth * numSubmissions,
-                                      gpuOutputWidth * gpuOutputWidth * numSubmissions);
-        // Copy to square texture
-        for (int i = 0; i < numFaces; i++)
-        {
-            FaceInfo &faceInfo = faceInfos[i];
-            if (faceInfo.size.x == 0 && faceInfo.size.y == 0)
-            {
-                continue;
-            }
-            u8 *blockCompressedResult = blockCompressedResults[faceInfo.submissionIndex];
-
-            u32 texelWidth  = faceInfo.size.x;
-            u32 texelHeight = faceInfo.size.y;
-            u32 blockWidth  = texelWidth >> blockShift;
-            u32 blockHeight = texelHeight >> blockShift;
-            if (currentDstHorizontalOffset + texelWidth > levelTexelWidth)
-            {
-                currentDstHorizontalOffset = 0;
-                currentDstTotalHeight += currentShelfHeight;
-                currentShelfHeight = 0;
-
-                Assert(currentDstTotalHeight < levelTexelWidth);
-            }
-
-            currentShelfHeight = Max(currentShelfHeight, texelHeight);
-
-            u32 dstStride = levelBlockWidth * bytesPerBlock;
-            Vec2u dstOffset(0);
-            if (levelIndex == 0)
-            {
-                dstOffset          = Vec2u(currentDstHorizontalOffset, currentDstTotalHeight);
-                faceInfo.dstOffset = dstOffset;
-                dstOffset          = dstOffset >> blockShift;
-            }
-            else
-            {
-                dstOffset = faceInfo.dstOffset >> (blockShift + (u32)levelIndex);
-            }
-
-            Vec2u block     = faceInfo.srcOffset >> blockShift;
-            u32 lookupIndex = faceInfo.submissionIndex * gpuOutputWidth * gpuOutputWidth +
-                              block.y * gpuOutputWidth + block.x;
-            if (blockCopied[lookupIndex])
-            {
-                continue;
-            }
-
-            blockCopied[lookupIndex] = true;
-
-            blockWidth  = Max(blockWidth, 1u);
-            blockHeight = Max(blockHeight, 1u);
-
-            // Copy face data to square texture
-            Utils::Copy(blockCompressedResult, block, gpuOutputWidth, gpuOutputWidth, temp,
-                        dstOffset, levelBlockWidth, levelBlockWidth, blockHeight, blockWidth,
-                        bytesPerBlock);
-
-            currentDstHorizontalOffset += texelWidth;
-        }
-
-        // Copy pages to disk
-        u32 dstOffset = 0;
-        for (int pageY = 0; pageY < sqrtNumpages; pageY++)
-        {
-            for (int pageX = 0; pageX < sqrtNumpages; pageX++)
-            {
-                Vec2u srcIndex(pageX * pageBlockWidth, pageY * pageBlockWidth);
-                Utils::Copy(temp, srcIndex, levelBlockWidth, levelBlockWidth, dst + dstOffset,
-                            Vec2u(0, 0), pageBlockWidth, pageBlockWidth, pageBlockWidth,
-                            pageBlockWidth, bytesPerBlock);
-                dstOffset += pageByteSize;
-            }
-        }
-
-        if (levelIndex == 0)
-        {
-            for (int i = 0; i < numFaces; i++)
-            {
-                FaceInfo &faceInfo = faceInfos[i];
-
-                faceMetadata[faceInfo.faceIndex].offsetX = faceInfo.dstOffset.x;
-                faceMetadata[faceInfo.faceIndex].offsetY = faceInfo.dstOffset.y;
-            }
-        }
-
-        numSubmissions  = 0;
-        submissionIndex = 0;
-    }
-#endif
 
     MemoryCopy(outFaceMetadata, faceMetadatas.data, numFaces * sizeof(FaceMetadata2));
 
@@ -1556,8 +1234,7 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
     }
 
     // callback
-    Scheduler::Counter counter = {};
-    scheduler.Schedule(&counter, [&](int jobID) { Callback(); });
+    scheduler.Schedule([&](int jobID) { Callback(); });
 }
 
 Vec2u VirtualTextureManager::AllocateVirtualPages(Arena *arena, string filename,
@@ -1605,104 +1282,99 @@ Vec2u VirtualTextureManager::AllocateVirtualPages(Arena *arena, string filename,
 //         int maxLevel                = Min(faceMetadata.log2Width, faceMetadata.log2Height);
 //     }
 // }
-
-void VirtualTextureManager::AllocatePhysicalPages(CommandBuffer *cmd, Vec2u baseVirtualPage,
-                                                  TextureMetadata &metadata, u8 *contents)
+void VirtualTextureManager::PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u *pinnedPages,
+                                     u32 numPages)
 {
-#if 0
     ScratchArena scratch;
 
     const u32 blockShift     = GetBlockShift(format);
     const u32 bytesPerBlock  = GetFormatSize(format);
     const u32 pageBlockWidth = PAGE_WIDTH >> blockShift;
     const u32 pageSize       = pageBlockWidth * pageBlockWidth * bytesPerBlock;
-    const u32 pagesPerRow    = 4096 / PAGE_WIDTH;
 
-    Assert(metadata.numLevels);
-    const u32 totalNumPages = metadata.mipPageOffsets[metadata.numLevels - 1];
-    StaticArray<PageTableUpdateRequest> updateRequests(scratch.temp.arena, totalNumPages);
-    StaticArray<BufferImageCopy> copies(scratch.temp.arena, totalNumPages);
+    TextureInfo &texInfo      = textureInfo[textureIndex];
+    u8 *contents              = texInfo.contents;
+    TextureMetadata &metadata = texInfo.metadata;
+    Vec2u baseVirtualPage     = texInfo.baseVirtualPage;
+
+    StaticArray<PageTableUpdateRequest> updateRequests(scratch.temp.arena, numPages);
+    StaticArray<BufferImageCopy> copies(scratch.temp.arena, numPages);
     GPUBuffer transferBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT, totalNumPages * pageSize, MemoryUsage::CPU_TO_GPU);
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT, numPages * pageSize, MemoryUsage::CPU_TO_GPU);
     u8 *mappedPtr    = (u8 *)transferBuffer.mappedPtr;
     u32 bufferOffset = 0;
 
-    for (u32 levelIndex = 0; levelIndex < metadata.numLevels; levelIndex++)
+    for (u32 pageIndex = 0; pageIndex < numPages; pageIndex++)
     {
+        Vec3u &pinnedPage = pinnedPages[pageIndex];
+        u32 levelIndex    = pinnedPage.z;
+
         u32 levelNumPages = levelIndex == 0 ? metadata.mipPageOffsets[0]
                                             : metadata.mipPageOffsets[levelIndex] -
                                                   metadata.mipPageOffsets[levelIndex - 1];
         u32 levelOffset   = levelIndex == 0 ? 0 : metadata.mipPageOffsets[levelIndex - 1];
 
         u32 sqrtLevelNumPages = std::sqrt(levelNumPages);
-        updateRequests.size_  = 0;
 
-        for (u32 pageIndex = 0; pageIndex < levelNumPages; pageIndex++)
-        {
-            Assert(freePool < pools.Length());
+        const Vec2u virtualPage = (baseVirtualPage >> levelIndex) + pinnedPage.xy;
 
-            // Calculate address of virtual page
-            const Vec2u virtualPage =
-                (baseVirtualPage >> levelIndex) +
-                Vec2u(pageIndex % sqrtLevelNumPages, pageIndex / sqrtLevelNumPages);
+        // Allocate page from pool
+        u32 freePageIndex = freePage;
+        Assert(freePageIndex < physicalPages.size());
+        PhysicalPage &page = physicalPages[freePageIndex];
+        freePage++;
 
-            // Allocate page from pool
-            Assert(freePool != InvalidPool && freePool < pools.Length());
-            u32 poolIndex          = freePool;
-            PhysicalPagePool &pool = pools[poolIndex];
-            Vec2u pageLocation     = pool.pagePool[pool.freePage];
-            pool.freePage++;
-            if (pool.freePage >= pool.pagePool.Length()) freePool++;
+        // Create packed page table entry
+        u32 packed = PackPageTableEntry(page.page.x, page.page.y, levelIndex, page.layer);
+        PageTableUpdateRequest request;
+        request.virtualPage = virtualPage;
+        request.mipLevel    = levelIndex;
+        request.packed      = packed;
 
-            // Create page table update request
-            Assert(pageLocation.x < 256 && pageLocation.y < 256);
+        updateRequests.push_back(request);
 
-            u32 packed =
-                PackPageTableEntry(pageLocation.x, pageLocation.y, levelIndex, poolIndex);
-            PageTableUpdateRequest pageTableUpdateRequest;
-            pageTableUpdateRequest.virtualPage = virtualPage;
-            pageTableUpdateRequest.packed      = packed;
-            updateRequests.push_back(pageTableUpdateRequest);
+        u32 mipNumVertPagesWide = numVirtPagesWide >> levelIndex;
+        cpuPageTable[levelIndex][virtualPage.y * mipNumVertPagesWide + virtualPage.x] = packed;
 
-            // Create buffer image copy command
-            BufferImageCopy copy = {};
-            copy.bufferOffset    = bufferOffset;
-            copy.baseLayer       = poolIndex;
-            copy.layerCount      = 1;
-            copy.offset = Vec3i(pageLocation.x << PAGE_SHIFT, pageLocation.y << PAGE_SHIFT, 0);
-            copy.extent = Vec3u(PAGE_WIDTH, PAGE_WIDTH, 1);
+        // Create buffer image copy command
+        BufferImageCopy copy = {};
+        copy.bufferOffset    = bufferOffset;
+        copy.baseLayer       = page.layer;
+        copy.layerCount      = 1;
+        copy.offset          = Vec3i(page.page.x << PAGE_SHIFT, page.page.y << PAGE_SHIFT, 0);
+        copy.extent          = Vec3u(PAGE_WIDTH, PAGE_WIDTH, 1);
 
-            copies.push_back(copy);
+        copies.push_back(copy);
 
-            // Copy to transfer buffer
-            u32 pageOffset = (levelOffset + pageIndex) * pageSize;
-            u8 *pageStart  = contents + pageOffset;
-            MemoryCopy(mappedPtr + bufferOffset, pageStart, pageSize);
+        // Copy to transfer buffer
+        u32 flattenedVirtualPage = virtualPage.y * sqrtLevelNumPages + virtualPage.x;
+        u32 pageOffset           = (levelOffset + flattenedVirtualPage) * pageSize;
 
-            bufferOffset += pageSize;
-        }
+        MemoryCopy(mappedPtr + bufferOffset, contents + pageOffset, pageSize);
 
-        PageTableUpdatePushConstant pc;
-        pc.numRequests = levelNumPages;
-
-        TransferBuffer pageTableUpdateRequestBuffer =
-            cmd->SubmitBuffer(updateRequests.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                              sizeof(PageTableUpdateRequest) * pc.numRequests);
-
-        DescriptorSet ds = descriptorSetLayout.CreateDescriptorSet();
-        ds.Bind(0, &pageTableUpdateRequestBuffer.buffer).Bind(1, &pageTable, levelIndex);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->FlushBarriers();
-        cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-        cmd->PushConstants(&push, &pc, descriptorSetLayout.pipelineLayout);
-        cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
-                                descriptorSetLayout.pipelineLayout);
-        cmd->Dispatch((levelNumPages + 63) >> 6, 1, 1);
+        bufferOffset += pageSize;
     }
 
+    PageTableUpdatePushConstant pc;
+    pc.numRequests                 = numPages;
+    pc.bindlessPageTableStartIndex = bindlessPageTableStartIndex;
+
+    TransferBuffer pageTableUpdateRequestBuffer =
+        cmd->SubmitBuffer(updateRequests.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                          sizeof(PageTableUpdateRequest) * pc.numRequests);
+
+    DescriptorSet ds = descriptorSetLayout.CreateDescriptorSet();
+    ds.Bind(0, &pageTableUpdateRequestBuffer.buffer);
+    cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                 VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    cmd->FlushBarriers();
+    cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+    cmd->PushConstants(&push, &pc, descriptorSetLayout.pipelineLayout);
+    cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
+                            descriptorSetLayout.pipelineLayout);
+    cmd->Dispatch((pc.numRequests + 63) >> 6, 1, 1);
+
     cmd->CopyImage(&transferBuffer, &gpuPhysicalPool, copies.data, copies.Length());
-#endif
 }
 
 void VirtualTextureManager::ClearTextures(CommandBuffer *cmd)

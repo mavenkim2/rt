@@ -455,6 +455,16 @@ struct Scheduler
         }
         goto begin;
     }
+    void Schedule(const TaskFunction &func)
+    {
+        Worker *worker = &workers[GetThreadIndex()];
+        Task task;
+        task.counter = 0;
+        task.func    = func;
+        task.id      = 0;
+        worker->queue.Push(task);
+        notifier.NotifyOne();
+    }
     void Schedule(Counter *counter, const TaskFunction &func)
     {
         Worker *worker = &workers[GetThreadIndex()];

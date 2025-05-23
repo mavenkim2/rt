@@ -112,7 +112,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
                 float2 tempBary = 0;
 
                 bool result = IntersectCluster(instanceID, primitiveIndex, o, d, query.RayTMin(), 
-                                               query.CommittedRayT(), tHit, kind, tempBary);
+                                               query.CommittedRayT(), tHit, kind, tempBary, numIters > 1000);
 
                 if (!result) continue;
 
@@ -122,7 +122,11 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
             }
         }
 
-        if (printDebug) printf("num iters: %u\n", numIters);
+        if (0)
+        {
+            printf("numiters: %u\n", numIters);
+        }
+
 #endif
         // TODO: emitter intersection
         if (depth++ >= maxDepth)

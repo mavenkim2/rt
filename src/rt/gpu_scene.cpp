@@ -155,6 +155,8 @@ StaticArray<VkAabbPositionsKHR> CreateAABBForNTriangles(Arena *arena, ClusterBui
     return aabbs;
 }
 
+// TODO: see if it's possible to group consecutive triangles in a strip into 1 procedural
+// primitive (when the sah is small)
 void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
                        int maxDepth, Image *envMap)
 {
@@ -385,13 +387,17 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         tiledPtexFilenames.Push(filename);
         ptexInfo.Push(array);
 
+        Vec3u *pinnedPages = (Vec3u *)tokenizer.cursor;
+        Advance(&tokenizer, sizeof(Vec3u) * fileHeader.numPinnedPages);
+
         u32 allocIndex        = 0;
         Vec2u baseVirtualPage = virtualTextureManager.AllocateVirtualPages(
             sceneScratch.temp.arena, filename, fileHeader,
             Vec2u(fileHeader.virtualSqrtNumPages, fileHeader.virtualSqrtNumPages),
             tokenizer.cursor, allocIndex);
 
-        OS_UnmapFile(tokenizer.input.str);
+        virtualTextureManager.PinPages(tileCmd, allocIndex, pinnedPages,
+                                       fileHeader.numPinnedPages);
 
         // Pack ptex face metadata into FaceData bitstream
         u32 maxVirtualOffset = neg_inf;
@@ -580,6 +586,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         dgfTransferCmd->SignalOutsideFrame(scene->semaphore);
         device->SetName(&info.dgfBuffer, "DGF Buffer");
+
+        dgfTransferCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
+        dgfTransferCmd->FlushBarriers();
         device->SubmitCommandBuffer(dgfTransferCmd);
 
         blasSceneInfo.Push(info);
@@ -865,25 +876,34 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         device->BeginEvent(cmd, "BLAS Build");
         int bvhCount = 0;
 
-        Semaphore semaphore   = device->CreateSemaphore();
-        semaphore.signalValue = 1;
         cmd->Wait(scene->semaphore);
-        cmd->SignalOutsideFrame(semaphore);
+        scene->semaphore.signalValue++;
+        cmd->SignalOutsideFrame(scene->semaphore);
+
+        cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                     VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
+        cmd->FlushBarriers();
 
         GPUAccelerationStructurePayload payload =
             cmd->BuildCustomBLAS(&blasSceneInfo[i].aabbBuffer, blasSceneInfo[i].aabbLength);
         uncompactedPayloads.Push(payload);
+
+        cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                     VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                     VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                     VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+        cmd->FlushBarriers();
 
         // Compact
         QueryPool queryPool = cmd->GetCompactionSizes(&payload);
         device->SubmitCommandBuffer(cmd);
         device->EndEvent(cmd);
 
-        allCommandBuffer->Wait(semaphore);
-        semaphore.signalValue = 2;
-        allCommandBuffer->Signal(semaphore);
-        scene->gpuBVH = allCommandBuffer->CompactAS(queryPool, &payload);
+        allCommandBuffer->Wait(scene->semaphore);
+        scene->semaphore.signalValue++;
+        allCommandBuffer->Signal(scene->semaphore);
 
+        scene->gpuBVH = allCommandBuffer->CompactAS(queryPool, &payload);
         device->DestroyBuffer(&payload.scratch);
     }
 
@@ -893,10 +913,14 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     {
         ScenePrimitives *scene = blasScenes[i];
         int bindlessHeaders    = device->BindlessStorageIndex(&blasSceneInfo[i].headerBuffer);
-        Assert(bindlessHeaders == 2 * runningTotal);
+        Assert(bindlessHeaders == 3 * runningTotal);
 
         int bindlessData = device->BindlessStorageIndex(&blasSceneInfo[i].dgfBuffer);
-        Assert(bindlessData == 2 * runningTotal + 1);
+        Assert(bindlessData == 3 * runningTotal + 1);
+
+        int bindlessAabbs = device->BindlessStorageIndex(&blasSceneInfo[i].aabbBuffer);
+        Assert(bindlessAabbs == 3 * runningTotal + 2);
+
         scene->gpuInstanceID = runningTotal++;
     }
 
@@ -938,13 +962,13 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                            sizeof(GPUMaterial) * gpuMaterials.Length())
             .buffer;
 
+    allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                              VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                              VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
     if (tlasScenes.Length() != 0)
     {
         Assert(tlasScenes.Length() == 1);
-        allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                                  VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
         for (int i = 0; i < tlasScenes.Length(); i++)
         {
             ScenePrimitives *scene = tlasScenes[i];
@@ -1152,10 +1176,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                 auto &payload = uncompactedPayloads[i];
                 device->DestroyAccelerationStructure(&payload.as);
             }
-            for (int i = 0; i < blasSceneInfo.Length(); i++)
-            {
-                device->DestroyBuffer(&blasSceneInfo[i].aabbBuffer);
-            }
+            // for (int i = 0; i < blasSceneInfo.Length(); i++)
+            // {
+            //     device->DestroyBuffer(&blasSceneInfo[i].aabbBuffer);
+            // }
             envMapBindlessIndex = device->BindlessIndex(&gpuEnvMap);
         }
 

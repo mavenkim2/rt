@@ -8,7 +8,7 @@ namespace rt
 {
 #endif
 
-#define LOG2_TRIANGLES_PER_LEAF 1
+#define LOG2_TRIANGLES_PER_LEAF 0
 #define TRIANGLES_PER_LEAF      (1 << LOG2_TRIANGLES_PER_LEAF)
 
 #define ANCHOR_WIDTH              24
