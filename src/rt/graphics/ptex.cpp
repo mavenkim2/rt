@@ -884,6 +884,7 @@ void Convert(string filename)
                 if (!found)
                 {
                     pinnedPages.push_back(pinnedPage);
+                    hashMap.AddInHash(hash, pinnedPages.size() - 1);
                 }
             }
 
@@ -1419,6 +1420,11 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
         EndMutex(&feedbackMutex);
     }
 
+    u64 readIndex  = readSubmission.load(std::memory_order_relaxed);
+    u64 writeIndex = writeSubmission.load(std::memory_order_acquire);
+    Assert(readIndex <= writeIndex);
+    if (readIndex == writeIndex) return;
+
     u32 numRequests                        = 0;
     PageTableUpdateRequest *updateRequests = updateRequestRingBuffer.SynchronizedRead(
         &updateRequestMutex, scratch.temp.arena, numRequests);
@@ -1464,12 +1470,6 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
                             VK_ACCESS_2_SHADER_READ_BIT);
         computeCmd->FlushBarriers();
     }
-
-    u64 readIndex = readSubmission.load(std::memory_order_relaxed);
-
-    u64 writeIndex = writeSubmission.load(std::memory_order_acquire);
-    Assert(readIndex <= writeIndex);
-    if (readIndex == writeIndex) return;
 
     // Update physical texture with new entries
     u32 readDoubleBufferIndex = readIndex & 1;
@@ -1573,6 +1573,15 @@ void VirtualTextureManager::Callback()
             &feedbackMutex, scratch.temp.arena, numFeedbackRequests);
         u32 numNonResidentFeedback = 0;
 
+        // Wait until the transfer buffer is read on the GPU before writing new data
+        u64 writeIndex = writeSubmission.load(std::memory_order_relaxed);
+        u64 readIndex  = readSubmission.load(std::memory_order_acquire);
+        if (readIndex + numPendingSubmissions <= writeIndex || numFeedbackRequests == 0)
+        {
+            std::this_thread::yield();
+            continue;
+        }
+
         StaticArray<FeedbackRequest> compactedFeedbackRequests(scratch.temp.arena,
                                                                numFeedbackRequests);
 
@@ -1620,8 +1629,7 @@ void VirtualTextureManager::Callback()
             }
         }
 
-        // Print("Num feedback: %u, num compacted: %u\n", numFeedbackRequests,
-        //       compactedFeedbackRequests.size());
+        u32 numCompacted = compactedFeedbackRequests.size();
 
         // If requested page is resident Update LRU. Otherwise
         for (int requestIndex = 0; requestIndex < compactedFeedbackRequests.size();
@@ -1652,8 +1660,13 @@ void VirtualTextureManager::Callback()
                 int pageIndex = layer * Sqr(numPhysPagesWidth) +
                                 physicalPageY * numPhysPagesWidth + physicalPageX;
 
-                UnlinkLRU(pageIndex);
-                LinkLRU(pageIndex, mip);
+                // If page is not pinned, move to head of LRU
+                PhysicalPage &page = physicalPages[pageIndex];
+                if (page.nextPage != -1 && page.prevPage != -1)
+                {
+                    UnlinkLRU(pageIndex);
+                    LinkLRU(pageIndex, mip);
+                }
             }
             // Otherwise, page needs to be mapped
             else
@@ -1665,14 +1678,9 @@ void VirtualTextureManager::Callback()
         }
         compactedFeedbackRequests.size() = numNonResidentFeedback;
 
-        // Wait until the transfer buffer is read on the GPU before writing new data
-        u64 writeIndex = writeSubmission.load(std::memory_order_relaxed);
-        for (;;)
-        {
-            u64 readIndex = readSubmission.load(std::memory_order_acquire);
-            if (readIndex + numPendingSubmissions > writeIndex) break;
-            std::this_thread::yield();
-        }
+        // Print("Num feedback: %u, num compacted: %u, num non resident: %u\n",
+        //       numFeedbackRequests, compactedFeedbackRequests.size(),
+        //       numNonResidentFeedback);
 
         u32 writeDoubleBufferIndex = writeIndex & 1;
 

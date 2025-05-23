@@ -30,15 +30,27 @@ namespace VirtualTexture
         uint poolWidth, poolHeight, poolNumLayers;
         physicalPages.GetDimensions(poolWidth, poolHeight, poolNumLayers);
 
+        uint log2Width = firstbithigh(texSize.x);
+        uint log2Height = firstbithigh(texSize.y);
+        uint maxMipLevel = min(log2Width, log2Height);
+        mipLevel = clamp(mipLevel, 0, maxMipLevel);
+
         uint2 virtualPage = CalculateVirtualPage(baseOffset, uv, texSize, mipLevel);
         uint packed = pageTable.Load(float3(virtualPage.x, virtualPage.y, mipLevel));
 
 #if 1
-        while (packed == ~0u)
+        uint iters = 0;
+        while (packed == ~0u && mipLevel <= maxMipLevel)
         {
+            iters++;
             mipLevel += 1;
             virtualPage = CalculateVirtualPage(baseOffset, uv, texSize, mipLevel);
             packed = pageTable.Load(float3(virtualPage.x, virtualPage.y, mipLevel));
+        }
+
+        if (iters)
+        {
+            printf("iters: %u\n", iters);
         }
 #endif
 

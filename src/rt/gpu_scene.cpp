@@ -358,7 +358,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     CommandBuffer *tileCmd          = device->BeginCommandBuffer(QueueType_Compute);
     Semaphore tileSubmitSemaphore   = device->CreateSemaphore();
     tileSubmitSemaphore.signalValue = 1;
-    tileCmd->TransferWriteBarrier(&virtualTextureManager.pageTable);
+    tileCmd->TransferWriteBarrier(&virtualTextureManager.gpuPhysicalPool);
+    tileCmd->UAVBarrier(&virtualTextureManager.pageTable);
     tileCmd->FlushBarriers();
     virtualTextureManager.ClearTextures(tileCmd);
 
@@ -1252,12 +1253,19 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         int beginIndex = TIMED_GPU_RANGE_BEGIN(cmd, "ray trace");
         cmd->Dispatch(dispatchDimX, dispatchDimY, 1);
+        // cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        // VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //              VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        // cmd->FlushBarriers();
         TIMED_RANGE_END(beginIndex);
 
         // Copy feedback from device to host
         CommandBuffer *transferCmd =
             device->BeginCommandBuffer(QueueType_Copy, "feedback copy cmd");
         transferCmd->WaitOn(cmd);
+        // transferCmd->Barrier(VK_PIPELINE_STAGE_2_NONE, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        //                      VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        // transferCmd->FlushBarriers();
         transferCmd->CopyBuffer(
             &virtualTextureManager.feedbackBuffers[currentBuffer].stagingBuffer,
             &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);

@@ -318,10 +318,10 @@ struct VirtualTextureManager
     // Double buffered, update once per virtual texture thread tick
     FixedArray<StaticArray<u8>, numPendingSubmissions> uploadBuffers;
     FixedArray<StaticArray<BufferImageCopy>, numPendingSubmissions> uploadCopyCommands;
-    FixedArray<Semaphore, numPendingSubmissions> uploadSemaphores;
     std::atomic<u64> writeSubmission;
 
     // Double buffered, updated once per frame
+    FixedArray<Semaphore, numPendingSubmissions> uploadSemaphores;
     FixedArray<GPUBuffer, numPendingSubmissions> uploadDeviceBuffers;
     FixedArray<TransferBuffer, numPendingSubmissions> pageTableRequestBuffers;
     std::atomic<u64> readSubmission;

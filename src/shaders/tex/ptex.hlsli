@@ -100,6 +100,8 @@ float4 StochasticCatmullRomBorderlessHelper(Texture2DArray tex, GPUMaterial mate
     // Lookup adjacency information if necessary
     int neighborIndex = Ptex::GetNeighborIndexFromUV(texCoord, texSize);
     Ptex::FaceData neighborData = faceData;
+
+    neighborIndex = -1;
     if (neighborIndex != -1)
     {
         int neighborFaceID = faceData.neighborFaces[neighborIndex];
