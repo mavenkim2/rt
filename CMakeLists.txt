@@ -262,7 +262,7 @@ foreach(SHADER_FILE ${SHADER_FILES})
     set(SHADER_SPV ${SHADER_SPV_DIR}/${SHADER_NAME}.spv)
 
     if (${SHADER_TYPE} STREQUAL "rt")
-        set (SHADER_TYPE_FLAG "-T lib_6_6")
+        set (SHADER_TYPE_FLAG "-T lib_6_7")
     elseif (${SHADER_TYPE} STREQUAL "cs")
         set (SHADER_TYPE_FLAG "-T cs_6_6")
     endif()

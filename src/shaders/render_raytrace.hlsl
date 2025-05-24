@@ -307,13 +307,14 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
                     float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, n, dim, printDebug);
                     uint mipLevel = (uint)lambda;
 
-                    float4 reflectance = SampleStochasticCatmullRomBorderless(physicalPages, faceData, material, faceID, uv, mipLevel, filterU, printDebug);
+                    float4 reflectance = SampleStochasticCatmullRomBorderless(physicalPages, faceData, material, faceID, uv, mipLevel, filterU, printDebug && depth == 1);
                     dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
 
                     if (depth == 1)
                     {
                         float2 newUv = faceData.rotate ? float2(1 - uv.y, uv.x) : uv;
-                        uint2 virtualPage = VirtualTexture::CalculateVirtualPage(faceData.faceOffset, newUv, dim, mipLevel);
+                        uint2 baseOffset = material.baseVirtualPage * PAGE_WIDTH + faceData.faceOffset;
+                        uint2 virtualPage = VirtualTexture::CalculateVirtualPage(baseOffset, newUv, dim, mipLevel);
                         const uint feedbackMipLevel = VirtualTexture::ClampMipLevel(dim, mipLevel);
                         feedbackRequest = PackFeedbackEntry(virtualPage.x, virtualPage.y, material.textureIndex, feedbackMipLevel);
                     }

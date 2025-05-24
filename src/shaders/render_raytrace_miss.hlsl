@@ -57,8 +57,8 @@ void main(inout RayPayload payload)
     float2 uv = float2(0.5f * (u + 1), 0.5f * (v + 1));
 
     float3 imageLe = bindlessTextures[push.envMap].SampleLevel(samplerLinearClamp, uv, 0).rgb;
-    payload.radiance = payload.throughput * imageLe;
-    payload.missed = true;
+    //payload.radiance = payload.throughput * imageLe;
+    //payload.missed = true;
 #if 0
     int2 p = int2(int(uv[0] * push.width), int(uv[1] * push.height));
     if (p[0] < 0)

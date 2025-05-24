@@ -101,7 +101,6 @@ float4 StochasticCatmullRomBorderlessHelper(Texture2DArray tex, GPUMaterial mate
     int neighborIndex = Ptex::GetNeighborIndexFromUV(texCoord, texSize);
     Ptex::FaceData neighborData = faceData;
 
-    neighborIndex = -1;
     if (neighborIndex != -1)
     {
         int neighborFaceID = faceData.neighborFaces[neighborIndex];
@@ -189,7 +188,6 @@ float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, Ptex::FaceData f
     float2 posCoord = float2(texPos[reservoir[0].x].x, texPos[reservoir[0].y].y);
     result += StochasticCatmullRomBorderlessHelper(tex, material, faceData, posCoord, 
                                                    texSize, mipLevel, weightsSum[0], debug);
-
     if (weightsSum[1] != 0.f)
     {
         float2 negCoord = float2(texPos[reservoir[1].x].x, texPos[reservoir[1].y].y);
