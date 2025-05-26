@@ -6,6 +6,7 @@
 #include "integrate.h"
 #include "gpu_scene.h"
 #include "math/simd_base.h"
+#include "radix_sort.h"
 #include "string.h"
 #include "memory.h"
 #include "parallel.h"
@@ -332,11 +333,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     Scene *rootScene = GetScene();
 
-    StaticArray<string> tiledPtexFilenames(sceneScratch.temp.arena,
-                                           rootScene->ptexTextures.size());
-    StaticArray<StaticArray<FaceMetadata2>> ptexInfo(sceneScratch.temp.arena,
-                                                     rootScene->ptexTextures.size());
-
     struct GPUTextureInfo
     {
         u8 *packedFaceData;
@@ -363,14 +359,35 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     tileCmd->FlushBarriers();
     virtualTextureManager.ClearTextures(tileCmd);
 
+    struct TextureTempData
+    {
+        Tokenizer tokenizer;
+        TextureMetadata metadata;
+        string filename;
+    };
+
+    struct RequestHandle
+    {
+        u16 sortKey;
+        int requestIndex;
+        int ptexIndex;
+    };
+
+    StaticArray<TextureTempData> textureTempData(sceneScratch.temp.arena,
+                                                 rootScene->ptexTextures.size(),
+                                                 rootScene->ptexTextures.size());
+
+    RequestHandle *handles = PushArrayNoZero(sceneScratch.temp.arena, RequestHandle,
+                                             rootScene->ptexTextures.size());
+    int numHandles         = 0;
+
     for (int i = 0; i < rootScene->ptexTextures.size(); i++)
     {
         PtexTexture &ptexTexture = rootScene->ptexTextures[i];
         string filename          = PushStr8F(sceneScratch.temp.arena, "%S.tiles",
                                              RemoveFileExtension(ptexTexture.filename));
 
-        if (!Contains(filename, "mountainb0001_geo") || Contains(filename, "displacement"))
-            continue;
+        if (Contains(filename, "displacement")) continue;
 
         Tokenizer tokenizer;
         tokenizer.input  = OS_ReadFile(sceneScratch.temp.arena, filename);
@@ -379,21 +396,38 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         TextureMetadata fileHeader;
         GetPointerValue(&tokenizer, &fileHeader);
 
+        textureTempData[numHandles].tokenizer = tokenizer;
+        textureTempData[numHandles].metadata  = fileHeader;
+        textureTempData[numHandles].filename  = filename;
+        handles[numHandles].sortKey = SafeTruncateU32ToU16(fileHeader.virtualSqrtNumPages);
+        handles[numHandles].requestIndex = numHandles;
+        handles[numHandles].ptexIndex    = i;
+        numHandles++;
+    }
+
+    SortHandles<RequestHandle, false>(handles, numHandles);
+
+    for (int i = 0; i < numHandles; i++)
+    {
+        RequestHandle &handle        = handles[i];
+        TextureTempData &textureTemp = textureTempData[handle.requestIndex];
+
+        Tokenizer tokenizer        = textureTemp.tokenizer;
+        TextureMetadata fileHeader = textureTemp.metadata;
+
         FaceMetadata2 *metaData = (FaceMetadata2 *)tokenizer.cursor;
         Advance(&tokenizer, sizeof(FaceMetadata2) * fileHeader.numFaces);
 
         auto array = StaticArray<FaceMetadata2>(sceneScratch.temp.arena, fileHeader.numFaces,
                                                 fileHeader.numFaces);
         MemoryCopy(array.data, metaData, sizeof(FaceMetadata2) * fileHeader.numFaces);
-        tiledPtexFilenames.Push(filename);
-        ptexInfo.Push(array);
 
         Vec3u *pinnedPages = (Vec3u *)tokenizer.cursor;
         Advance(&tokenizer, sizeof(Vec3u) * fileHeader.numPinnedPages);
 
         u32 allocIndex        = 0;
         Vec2u baseVirtualPage = virtualTextureManager.AllocateVirtualPages(
-            sceneScratch.temp.arena, filename, fileHeader,
+            sceneScratch.temp.arena, textureTemp.filename, fileHeader,
             Vec2u(fileHeader.virtualSqrtNumPages, fileHeader.virtualSqrtNumPages),
             tokenizer.cursor, allocIndex);
 
@@ -455,13 +489,13 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             }
         }
         Assert(faceDataBitOffset == faceDataBitStreamBitSize);
-        gpuTextureInfo[i].packedFaceData       = faceDataStream;
-        gpuTextureInfo[i].packedDataSize       = faceDataBitStreamSize;
-        gpuTextureInfo[i].minLog2Dim           = minLog2Dim;
-        gpuTextureInfo[i].numVirtualOffsetBits = numVirtualOffsetBits;
-        gpuTextureInfo[i].numFaceDimBits       = numFaceDimBits;
-        gpuTextureInfo[i].numFaceIDBits        = numFaceIDBits;
-        gpuTextureInfo[i].virtualAddressIndex  = allocIndex;
+        gpuTextureInfo[handle.ptexIndex].packedFaceData       = faceDataStream;
+        gpuTextureInfo[handle.ptexIndex].packedDataSize       = faceDataBitStreamSize;
+        gpuTextureInfo[handle.ptexIndex].minLog2Dim           = minLog2Dim;
+        gpuTextureInfo[handle.ptexIndex].numVirtualOffsetBits = numVirtualOffsetBits;
+        gpuTextureInfo[handle.ptexIndex].numFaceDimBits       = numFaceDimBits;
+        gpuTextureInfo[handle.ptexIndex].numFaceIDBits        = numFaceIDBits;
+        gpuTextureInfo[handle.ptexIndex].virtualAddressIndex  = allocIndex;
     }
 
     tileCmd->SignalOutsideFrame(tileSubmitSemaphore);

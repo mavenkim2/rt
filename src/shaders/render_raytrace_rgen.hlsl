@@ -90,12 +90,6 @@ void main()
         desc.TMin = 0;
         desc.TMax = FLT_MAX;
 
-        NvCreateHitObject();
-        NvHitObject hitObject;
-
-        RayPayload payload;
-        NvTraceRayHitObject(hitObject, accel, RAY_FLAG_NONE, 0, 0, 0, 0, pos, 0, dir, FLT_MAX, payload);
-        
         RayQuery<RAY_FLAG_SKIP_TRIANGLES | RAY_FLAG_FORCE_OPAQUE> query;
         query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
         float2 bary;

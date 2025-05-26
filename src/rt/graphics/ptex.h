@@ -284,7 +284,11 @@ struct VirtualTextureManager
 
     VkFormat format;
 
-    StaticArray<AllocationColumn> allocationColumns;
+    // Virtual texture space allocation
+    int currentHorizontalOffset;
+    int currentTotalHeight;
+    int currentShelfHeight;
+
     std::vector<TextureInfo> textureInfo;
     StaticArray<PhysicalPage> physicalPages;
     StaticArray<StaticArray<u32>> cpuPageTable;

@@ -175,7 +175,7 @@ inline u32 AsUInt(f32 src) { return _mm_cvtsi128_si32(_mm_castps_si128(_mm_set_s
 
 inline i32 Exponent(f32 v) { return (FloatToBits(v) >> 23) - 127; }
 
- inline f32 FastExp(f32 x)
+inline f32 FastExp(f32 x)
 {
     f32 xp  = x * 1.442695041f;
     f32 fxp = std::floor(xp), f = xp - fxp;
@@ -220,6 +220,13 @@ inline u8 SafeTruncateU32ToU8(u32 val)
 {
     Assert(val <= 255);
     u8 result = (u8)val;
+    return result;
+}
+
+inline u16 SafeTruncateU32ToU16(u32 val)
+{
+    Assert(val <= 65535);
+    u16 result = (u16)val;
     return result;
 }
 

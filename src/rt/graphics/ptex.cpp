@@ -324,8 +324,7 @@ void Convert(string filename)
 
     // if (OS_FileExists(outFilename)) return;
 
-    if (!Contains(outFilename, "mountainb0001_geo") || Contains(outFilename, "displacement"))
-        return;
+    if (Contains(outFilename, "displacement")) return;
 
     const Vec2u uvTable[] = {
         Vec2u(0, 0),
@@ -682,33 +681,26 @@ void Convert(string filename)
     // number of pages
     // 2. pack face data onto shelves in the estimated square virtual texture space to
     // calculate the minimum necessary # of pages. shelves are packed such that all shelves
-    // have height >= shelves below . When the width changes, a new shelf is also created. This
-    // way, high mip levels of 2x1 and 4x1 aspect ratio faces are handled by clamping the u
-    // coordinate to the entry index on the shelf.
+    // have height >= shelves below. face data is rotated so that the largest dimension is the
+    // width, and then sorted first by height then width, descending
     // 3. repeat #2 in the actual virtual texture space.
     //
     // e.g.
     //
     // Mip 0:
     // 256x256 256x256 ...
-    // 128x256 128x256 ...
-    // 16x256 16x256 16x256
-    // 128x128 128x128
+    // 256x128 256x128 128x128 128x128 <-- sorted descending width
+    // 256x16 256x16
+    //
+    // Mip 4:
+    // 16x16 16x16 ...
+    // 16x8 16x8 8x8 8x8
+    // 16x1 16x1 <-- at subsequent mip levels, this shelf and all shelves below are gone. TODO
+    // handling coarser mips of 4:1 and 2:1 aspect ratio face data
     //
     // Mip 5:
     // 8x8 8x8 ...
-    // 4x8 4x8 ...
-    // 1x8 1x8 <-- note: 16 >> 5 = 0, so max with the entry index on this shelf to get u.
-    // 4x4 4x4
-    //
-    // Mip 8:
-    // 1x1 1x1 ...
-    // 1x1 1x1 ...
-    // 1x1 1x1 1x1 ...
-    // <-- 128x128 faces and below vanish. this doesn't impact the addressing of faces actually
-    // present at this mip level.
-    //
-    // Data on disk is stored using these shelves minimize wasted space.
+    // 8x4 8x4 4x4 4x4
 
     int totalTextureArea = 0;
     u32 maxLevel         = 0;
@@ -873,7 +865,7 @@ void Convert(string filename)
 
                 bool found = false;
                 for (int pinnedPageIndex = hashMap.FirstInHash(hash); pinnedPageIndex != -1;
-                     pinnedPageIndex++)
+                     hashMap.NextInHash(pinnedPageIndex))
                 {
                     if (pinnedPages[pinnedPageIndex] == pinnedPage)
                     {
@@ -1243,23 +1235,20 @@ Vec2u VirtualTextureManager::AllocateVirtualPages(Arena *arena, string filename,
                                                   const Vec2u &virtualSize, u8 *contents,
                                                   u32 &index)
 {
-    Vec2u virtualPage(0);
+    int virtualSqrtNumPages = (int)metadata.virtualSqrtNumPages;
 
-    // TODO: actually implement this, using some form of sorting
+    if (currentHorizontalOffset + virtualSqrtNumPages > numVirtPagesWide)
+    {
+        currentHorizontalOffset = 0;
+        currentTotalHeight += currentShelfHeight;
+        currentShelfHeight = virtualSqrtNumPages;
+    }
 
-    // for (int columnIndex = 0; columnIndex < allocationColumns.size(); columnIndex++)
-    // {
-    //     AllocationColumn &column = allocationColumns[columnIndex];
-    //     Assert(virtualSize.x <= column.numPagesWide);
-    //     if (column.currentPageHeight + virtualSize.y < column.maxPageHeight)
-    //     {
-    //         virtualPage = Vec2u(column.numPagesX, column.currentPageHeight);
-    //         baseVirtualPages.push_back(virtualPage);
-    //         index = baseVirtualPages.size() - 1;
-    //
-    //         return virtualPage;
-    //     }
-    // }
+    Assert(currentTotalHeight + currentShelfHeight <= numVirtPagesWide);
+    currentShelfHeight = Max(currentShelfHeight, virtualSqrtNumPages);
+
+    Vec2u virtualPage(currentHorizontalOffset, currentTotalHeight);
+    currentHorizontalOffset += virtualSqrtNumPages;
 
     TextureInfo texInfo;
     texInfo.filename        = PushStr8Copy(arena, filename);
@@ -1272,17 +1261,6 @@ Vec2u VirtualTextureManager::AllocateVirtualPages(Arena *arena, string filename,
     return virtualPage;
 }
 
-// void VirtualTextureManager::PinPages(CommandBuffer *cmd, Vec2u baseVirtualPage,
-//                                      FaceMetadata2 *faceMetadatas, int numFaces,
-//                                      TextureMetadata &metadata, u8 *contents)
-// {
-//     int numPages = 0;
-//     for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
-//     {
-//         FaceMetadata2 &faceMetadata = faceMetadatas[faceIndex];
-//         int maxLevel                = Min(faceMetadata.log2Width, faceMetadata.log2Height);
-//     }
-// }
 void VirtualTextureManager::PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u *pinnedPages,
                                      u32 numPages)
 {
