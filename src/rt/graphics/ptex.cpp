@@ -324,6 +324,7 @@ void Convert(string filename)
 
     // if (OS_FileExists(outFilename)) return;
 
+    // if (!Contains(outFilename, "mountbring")) return;
     if (Contains(outFilename, "displacement")) return;
 
     const Vec2u uvTable[] = {
@@ -657,7 +658,7 @@ void Convert(string filename)
         // Submit command buffer
         semaphores[submissionIndex].signalValue++;
         cmd->SignalOutsideFrame(semaphores[submissionIndex]);
-        device->SubmitCommandBuffer(cmds[submissionIndex]);
+        device->SubmitCommandBuffer(cmds[submissionIndex], false, true);
         cmds[submissionIndex] = device->BeginCommandBuffer(QueueType_Compute);
         cmds[submissionIndex]->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     };
@@ -1062,7 +1063,8 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
                                              u32 physicalTextureHeight, u32 numPools,
                                              VkFormat format)
     : format(format), updateRequestRingBuffer(arena, maxCopies),
-      feedbackRingBuffer(arena, maxFeedback)
+      feedbackRingBuffer(arena, maxFeedback), currentHorizontalOffset(0),
+      currentTotalHeight(0), currentShelfHeight(0)
 {
     string shaderName = "../src/shaders/update_page_tables.spv";
     string data       = OS_ReadFile(arena, shaderName);
@@ -1123,12 +1125,8 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
         physicalTextureWidth  = Min(physicalTextureWidth, limits.max2DImageDim);
         physicalTextureHeight = Min(physicalTextureHeight, limits.max2DImageDim);
 
-        // Allocate physical page pool + sentinels
-        mipSentinels = StaticArray<Sentinel>(arena, numMips);
-
-        const u32 numPhysicalPages =
-            2 * numMips + numPools * numPhysPagesWidth * numPhysPagesHeight;
-        physicalPages = StaticArray<PhysicalPage>(arena, numPhysicalPages);
+        const u32 numPhysicalPages = 2 + numPools * numPhysPagesWidth * numPhysPagesHeight;
+        physicalPages              = StaticArray<PhysicalPage>(arena, numPhysicalPages);
 
         for (int i = 0; i < numPools; i++)
         {
@@ -1147,27 +1145,21 @@ VirtualTextureManager::VirtualTextureManager(Arena *arena, u32 virtualTextureWid
         }
 
         u32 pageSentinelIndex = physicalPages.size();
-        for (int i = 0; i < numMips; i++)
-        {
-            int headIndex = pageSentinelIndex++;
-            int tailIndex = pageSentinelIndex++;
+        int headIndex         = pageSentinelIndex++;
+        int tailIndex         = pageSentinelIndex++;
 
-            PhysicalPage head;
-            head.nextPage = tailIndex;
-            head.prevPage = -1;
-            PhysicalPage tail;
-            tail.nextPage = -1;
-            tail.prevPage = headIndex;
+        PhysicalPage head;
+        head.nextPage = tailIndex;
+        head.prevPage = -1;
+        PhysicalPage tail;
+        tail.nextPage = -1;
+        tail.prevPage = headIndex;
 
-            physicalPages.push_back(head);
-            physicalPages.push_back(tail);
+        physicalPages.push_back(head);
+        physicalPages.push_back(tail);
 
-            Sentinel sentinel;
-            sentinel.head = headIndex;
-            sentinel.tail = tailIndex;
-
-            mipSentinels.push_back(sentinel);
-        }
+        lruHead = headIndex;
+        lruTail = tailIndex;
 
         freePage = 0;
         // Allocate texture arrays
@@ -1244,8 +1236,8 @@ Vec2u VirtualTextureManager::AllocateVirtualPages(Arena *arena, string filename,
         currentShelfHeight = virtualSqrtNumPages;
     }
 
-    Assert(currentTotalHeight + currentShelfHeight <= numVirtPagesWide);
     currentShelfHeight = Max(currentShelfHeight, virtualSqrtNumPages);
+    Assert(currentTotalHeight + currentShelfHeight <= numVirtPagesWide);
 
     Vec2u virtualPage(currentHorizontalOffset, currentTotalHeight);
     currentHorizontalOffset += virtualSqrtNumPages;
@@ -1326,7 +1318,7 @@ void VirtualTextureManager::PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u
         copies.push_back(copy);
 
         // Copy to transfer buffer
-        u32 flattenedVirtualPage = virtualPage.y * sqrtLevelNumPages + virtualPage.x;
+        u32 flattenedVirtualPage = pinnedPage.y * sqrtLevelNumPages + pinnedPage.x;
         u32 pageOffset           = (levelOffset + flattenedVirtualPage) * pageSize;
 
         MemoryCopy(mappedPtr + bufferOffset, contents + pageOffset, pageSize);
@@ -1507,15 +1499,14 @@ void VirtualTextureManager::UnlinkLRU(int pageIndex)
     physicalPages[nextPage].prevPage = prevPage;
 }
 
-void VirtualTextureManager::LinkLRU(int index, int mip)
+void VirtualTextureManager::LinkLRU(int index)
 {
-    int headPage                  = mipSentinels[mip].head;
-    int nextPage                  = physicalPages[headPage].nextPage;
+    int nextPage                  = physicalPages[lruHead].nextPage;
     physicalPages[index].nextPage = nextPage;
-    physicalPages[index].prevPage = headPage;
+    physicalPages[index].prevPage = lruHead;
 
     physicalPages[nextPage].prevPage = index;
-    physicalPages[headPage].nextPage = index;
+    physicalPages[lruHead].nextPage  = index;
 }
 
 // Executes on virtual texture thread
@@ -1609,6 +1600,9 @@ void VirtualTextureManager::Callback()
 
         u32 numCompacted = compactedFeedbackRequests.size();
 
+        StaticArray<u32> pagesUsedThisFrame(scratch.temp.arena,
+                                            compactedFeedbackRequests.size());
+
         // If requested page is resident Update LRU. Otherwise
         for (int requestIndex = 0; requestIndex < compactedFeedbackRequests.size();
              requestIndex++)
@@ -1622,9 +1616,13 @@ void VirtualTextureManager::Callback()
 
             TextureInfo &texInfo = textureInfo[textureIndex];
 
+            const Vec2u globalVirtualPage =
+                (texInfo.baseVirtualPage >> mipLevel) + Vec2u(virtualPageX, virtualPageY);
             const u32 numMipVirtPagesWide = numVirtPagesWide >> mipLevel;
+
             u32 packedPageTableEntry =
-                cpuPageTable[mipLevel][virtualPageY * numMipVirtPagesWide + virtualPageX];
+                cpuPageTable[mipLevel]
+                            [globalVirtualPage.y * numMipVirtPagesWide + globalVirtualPage.x];
 
             Vec4u pageTableEntry = UnpackPageTableEntry(packedPageTableEntry);
             u32 physicalPageX    = pageTableEntry.x;
@@ -1640,10 +1638,15 @@ void VirtualTextureManager::Callback()
 
                 // If page is not pinned, move to head of LRU
                 PhysicalPage &page = physicalPages[pageIndex];
+                if (!page.usedThisFrame)
+                {
+                    pagesUsedThisFrame.push_back(pageIndex);
+                    page.usedThisFrame = true;
+                }
                 if (page.nextPage != -1 && page.prevPage != -1)
                 {
                     UnlinkLRU(pageIndex);
-                    LinkLRU(pageIndex, mip);
+                    LinkLRU(pageIndex);
                 }
             }
             // Otherwise, page needs to be mapped
@@ -1656,9 +1659,8 @@ void VirtualTextureManager::Callback()
         }
         compactedFeedbackRequests.size() = numNonResidentFeedback;
 
-        // Print("Num feedback: %u, num compacted: %u, num non resident: %u\n",
-        //       numFeedbackRequests, compactedFeedbackRequests.size(),
-        //       numNonResidentFeedback);
+        Print("Num feedback: %u, num compacted: %u, num non resident: %u\n",
+              numFeedbackRequests, numCompacted, numNonResidentFeedback);
 
         u32 writeDoubleBufferIndex = writeIndex & 1;
 
@@ -1672,6 +1674,11 @@ void VirtualTextureManager::Callback()
 
         auto &uploadBuffer  = uploadBuffers[writeDoubleBufferIndex];
         uploadBuffer.size() = 0;
+
+        if (freePage >= physicalPages.size())
+        {
+            Print("Evicting %u pages\n", numNonResidentFeedback);
+        }
 
         // Evict to make space for new entries while populating feedback buffer
         for (FeedbackRequest fr : compactedFeedbackRequests)
@@ -1703,38 +1710,30 @@ void VirtualTextureManager::Callback()
             }
             else
             {
-                Assert(0);
                 // Otherwise, evict old entires
-                for (int levelIndex = 0; levelIndex < mipSentinels.size(); levelIndex++)
-                {
-                    Sentinel &sentinel = mipSentinels[levelIndex];
-                    if (physicalPages[sentinel.tail].prevPage == sentinel.head) continue;
-                    pageIndex                  = physicalPages[sentinel.tail].prevPage;
-                    PhysicalPage &physicalPage = physicalPages[pageIndex];
-                    Vec2u virtualPage          = physicalPage.virtualPage;
+                pageIndex                  = physicalPages[lruTail].prevPage;
+                PhysicalPage &physicalPage = physicalPages[pageIndex];
+                Vec2u virtualPage          = physicalPage.virtualPage;
+                u32 level                  = physicalPage.level;
 
-                    // TODO: need to handle mapping to coarser mips
-                    // Replace previously mapped entry with a coarser mip
-                    Vec2u coarserVirtualPage = virtualPage >> 1u;
-                    u32 mipNumVertPagesWide  = numVirtPagesWide >> levelIndex;
-                    u32 evictPackedEntry =
-                        cpuPageTable[levelIndex + 1]
-                                    [coarserVirtualPage.y * (mipNumVertPagesWide >> 1) +
-                                     coarserVirtualPage.x];
+                // TODO: need to handle mapping to coarser mips
+                // Replace previously mapped entry with a coarser mip
+                Vec2u coarserVirtualPage = virtualPage >> 1u;
+                u32 mipNumVertPagesWide  = numVirtPagesWide >> level;
+                u32 evictPackedEntry =
+                    cpuPageTable[level + 1][coarserVirtualPage.y * (mipNumVertPagesWide >> 1) +
+                                            coarserVirtualPage.x];
 
-                    cpuPageTable[levelIndex][virtualPage.y * mipNumVertPagesWide +
-                                             virtualPage.x] = evictPackedEntry;
+                cpuPageTable[level][virtualPage.y * mipNumVertPagesWide + virtualPage.x] =
+                    evictPackedEntry;
 
-                    UnlinkLRU(pageIndex);
+                UnlinkLRU(pageIndex);
 
-                    PageTableUpdateRequest evictRequest;
-                    evictRequest.virtualPage = virtualPage;
-                    evictRequest.mipLevel    = levelIndex;
-                    evictRequest.packed      = evictPackedEntry;
-                    evictRequests.push_back(evictRequest);
-
-                    break;
-                }
+                PageTableUpdateRequest evictRequest;
+                evictRequest.virtualPage = virtualPage;
+                evictRequest.mipLevel    = mipLevel;
+                evictRequest.packed      = evictPackedEntry;
+                evictRequests.push_back(evictRequest);
             }
 
             Assert(pageIndex != ~0u);
@@ -1744,6 +1743,7 @@ void VirtualTextureManager::Callback()
 
             PhysicalPage &page = physicalPages[pageIndex];
             page.virtualPage   = globalVirtualPage;
+            page.level         = mipLevel;
 
             u32 mapPackedEntry =
                 PackPageTableEntry(page.page.x, page.page.y, mipLevel, page.layer);
@@ -1751,7 +1751,7 @@ void VirtualTextureManager::Callback()
             cpuPageTable[mipLevel][globalVirtualPage.y * (numVirtPagesWide >> mipLevel) +
                                    globalVirtualPage.x] = mapPackedEntry;
 
-            LinkLRU(pageIndex, mipLevel);
+            LinkLRU(pageIndex);
 
             BufferImageCopy copy = {};
             copy.bufferOffset    = uploadBuffer.size();

@@ -18,7 +18,7 @@ void SortHandles(Handle *shadingHandles, u32 count)
     Handle *keys1 = PushArrayNoZero(temp.arena, Handle, count);
 
     // Radix sort
-    for (int iter = (int)handleSize - 1; iter >= 0; iter--)
+    for (int iter = 0; iter < (int)handleSize; iter++)
     {
         u32 shift = iter * 8;
         Assert(shift < 64);

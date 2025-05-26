@@ -298,11 +298,6 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
                     Ptex::FaceData faceData = Ptex::GetFaceData(material, faceID);
                     int2 dim = int2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
 
-                    if (0)
-                    {
-                        printf("%u %u %u %u %u\n", faceID, dim.x, dim.y, faceData.faceOffset.x, faceData.faceOffset.y);
-                    }
-
                     rayCone.Propagate(surfaceSpreadAngle, query.CommittedRayT());
                     float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, n, dim, printDebug);
                     uint mipLevel = (uint)lambda;
@@ -313,8 +308,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
                     if (depth == 1)
                     {
                         float2 newUv = faceData.rotate ? float2(1 - uv.y, uv.x) : uv;
-                        uint2 baseOffset = material.baseVirtualPage * PAGE_WIDTH + faceData.faceOffset;
-                        uint2 virtualPage = VirtualTexture::CalculateVirtualPage(baseOffset, newUv, dim, mipLevel);
+                        uint2 virtualPage = VirtualTexture::CalculateVirtualPage(faceData.faceOffset, newUv, dim, mipLevel);
                         const uint feedbackMipLevel = VirtualTexture::ClampMipLevel(dim, mipLevel);
                         feedbackRequest = PackFeedbackEntry(virtualPage.x, virtualPage.y, material.textureIndex, feedbackMipLevel);
                     }

@@ -1459,6 +1459,9 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                                 StrConcat(temp.arena, directory,
                                           Str8(packet->bytes[i], packet->sizes[i]));
                             Convert(textureFilename);
+                            // scheduler.Schedule(&state->counter, [=](u32 jobID) {
+                            //     ScratchArena scratch;
+                            // });
                         }
                     }
                 }

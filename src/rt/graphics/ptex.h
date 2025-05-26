@@ -228,6 +228,9 @@ struct PhysicalPage
     u32 layer;
 
     Vec2u virtualPage;
+    u32 level;
+
+    bool usedThisFrame;
 
     int prevPage;
     int nextPage;
@@ -276,11 +279,11 @@ struct VirtualTextureManager
         u8 *contents;
     };
 
-    struct Sentinel
-    {
-        int head;
-        int tail;
-    };
+    // struct Sentinel
+    // {
+    //     int head;
+    //     int tail;
+    // };
 
     VkFormat format;
 
@@ -298,7 +301,9 @@ struct VirtualTextureManager
     u32 freePage;
 
     // Add to head; tail is LRU
-    StaticArray<Sentinel> mipSentinels;
+    // StaticArray<Sentinel> mipSentinels;
+    int lruHead;
+    int lruTail;
 
     GPUImage gpuPhysicalPool;
     GPUImage pageTable;
@@ -349,7 +354,7 @@ struct VirtualTextureManager
     void Update(CommandBuffer *computeCmd, CommandBuffer *transferCmd,
                 CommandBuffer *transitionCmd, QueueType computeCmdQueue);
     void UnlinkLRU(int index);
-    void LinkLRU(int index, int mip);
+    void LinkLRU(int index);
     void Callback();
 };
 

@@ -1242,7 +1242,7 @@ CommandBuffer *Vulkan::BeginCommandBuffer(QueueType queue, string name)
     return cmd;
 }
 
-void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd, bool frame)
+void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd, bool frame, bool parallel)
 {
     Assert(cmd->semaphore != VK_NULL_HANDLE || frame);
     VK_CHECK(vkEndCommandBuffer(cmd->buffer));
@@ -1293,7 +1293,9 @@ void Vulkan::SubmitCommandBuffer(CommandBuffer *cmd, bool frame)
     info.commandBufferInfoCount   = 1;
     info.pCommandBufferInfos      = &bufferSubmitInfo;
 
+    if (parallel) BeginMutex(&queue.lock);
     vkQueueSubmit2(queue.queue, 1, &info, VK_NULL_HANDLE);
+    if (parallel) EndMutex(&queue.lock);
 
     cmd->waitSemaphores.clear();
     cmd->signalSemaphores.clear();

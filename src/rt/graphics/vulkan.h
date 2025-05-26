@@ -824,7 +824,7 @@ struct Vulkan
     void AllocateCommandBuffers(ThreadPool &pool, QueueType type);
     void CheckInitializedThreadPool(int threadIndex);
     CommandBuffer *BeginCommandBuffer(QueueType queue, string name = "Command Buffer");
-    void SubmitCommandBuffer(CommandBuffer *cmd, bool frame = false);
+    void SubmitCommandBuffer(CommandBuffer *cmd, bool frame = false, bool parallel = false);
     VkImageMemoryBarrier2
     ImageMemoryBarrier(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
                        VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,

@@ -349,7 +349,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     VirtualTextureManager virtualTextureManager(
         sceneScratch.temp.arena, 131072, 131072, PHYSICAL_POOL_NUM_PAGES_WIDE * PAGE_WIDTH,
-        PHYSICAL_POOL_NUM_PAGES_WIDE * PAGE_WIDTH, 1, VK_FORMAT_BC1_RGB_UNORM_BLOCK);
+        PHYSICAL_POOL_NUM_PAGES_WIDE * PAGE_WIDTH, 4, VK_FORMAT_BC1_RGB_UNORM_BLOCK);
 
     CommandBuffer *tileCmd          = device->BeginCommandBuffer(QueueType_Compute);
     Semaphore tileSubmitSemaphore   = device->CreateSemaphore();
@@ -445,8 +445,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             maxVirtualOffset = Max(maxVirtualOffset, metaData[faceIndex].offsetX);
             maxVirtualOffset = Max(maxVirtualOffset, metaData[faceIndex].offsetY);
 
-            Assert(metaData[faceIndex].log2Width < 9 && metaData[faceIndex].log2Height < 9);
-            Assert(Max(metaData[faceIndex].log2Width, metaData[faceIndex].log2Height) > 4);
             minLog2Dim = Min(minLog2Dim, metaData[faceIndex].log2Width);
             maxLog2Dim = Max(maxLog2Dim, metaData[faceIndex].log2Width);
             minLog2Dim = Min(minLog2Dim, metaData[faceIndex].log2Height);
