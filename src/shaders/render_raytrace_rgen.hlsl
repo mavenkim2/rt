@@ -1,5 +1,4 @@
 #include "common.hlsli"
-#include "ser.hlsli"
 #include "bsdf/bxdf.hlsli"
 #include "bsdf/bsdf.hlsli"
 #include "rt.hlsli"
@@ -15,25 +14,9 @@
 #include "../rt/shader_interop/ray_shaderinterop.h"
 #include "../rt/shader_interop/hit_shaderinterop.h"
 #include "../rt/shader_interop/debug_shaderinterop.h"
+//# include "../rt/nvapi.h"
 #include "wave_intrinsics.hlsli"
-
-[[vk::ext_instruction(OpHitObjectTraceRayNV)]]
-void NvTraceRayHitObject(
-    [[vk::ext_reference]] NvHitObject hitObject,
-    RaytracingAccelerationStructure as,
-    uint RayFlags,
-    uint CullMask,
-    uint SBTOffset,
-    uint SBTStride,
-    uint MissIndex,
-    float3 RayOrigin,
-    float RayTmin,
-    float3 RayDirection,
-    float RayTMax,
-    [[vk::ext_reference]] [[vk::ext_storage_class(RayPayloadKHR)]] RayPayload payload
-  );
-
-[[vk::push_constant]] RayPushConstant push;
+#include "ser.hlsli"
 
 RaytracingAccelerationStructure accel : register(t0);
 RWTexture2D<half4> image : register(u1);
@@ -41,10 +24,19 @@ ConstantBuffer<GPUScene> scene : register(b2);
 StructuredBuffer<RTBindingData> rtBindingData : register(t3);
 StructuredBuffer<GPUMaterial> materials : register(t4);
 ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
+
+#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
+StructuredBuffer<ClusterData> clusterData : register(t8);
+StructuredBuffer<float3> vertices : register(t9);
+ByteAddressBuffer indices : register(t10);
+#endif
+
 RWStructuredBuffer<uint> feedbackBuffer : register(u11);
 
+[[vk::push_constant]] RayPushConstant push;
+
 [shader("raygeneration")]
-void main() 
+void main()
 {
     uint3 id = DispatchRaysIndex();
     uint2 swizzledThreadID = id.xy;
@@ -66,7 +58,7 @@ void main()
     float3 throughput = float3(1, 1, 1);
     float3 radiance = float3(0, 0, 0);
 
-    const int maxDepth = 2;
+    const int maxDepth = 1;
     int depth = 0;
 
     float3 pos;
@@ -89,7 +81,12 @@ void main()
         desc.Direction = dir;
         desc.TMin = 0;
         desc.TMax = FLT_MAX;
-
+        
+#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
+        RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_FORCE_OPAQUE> query;
+        query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
+        query.Proceed();
+#else
         RayQuery<RAY_FLAG_SKIP_TRIANGLES | RAY_FLAG_FORCE_OPAQUE> query;
         query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
         float2 bary;
@@ -122,12 +119,115 @@ void main()
             }
         }
 
+        if (0)
+        {
+            printf("numiters: %u\n", numIters);
+        }
+
+#endif
+        if (query.CommittedStatus() != COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
+        {
+            float3 d = normalize(mul(scene.lightFromRender, 
+                                 float4(query.WorldRayDirection(), 0)).xyz);
+
+            // Equal area sphere to square
+            float x = abs(d.x), y = abs(d.y), z = abs(d.z);
+
+            // Compute the radius r
+            float r = sqrt(1 - z); // r = sqrt(1-|z|)
+
+            // Compute the argument to atan (detect a=0 to avoid div-by-zero)
+            float a = max(x, y), b = min(x, y);
+            b = a == 0 ? 0 : b / a;
+
+            // Polynomial approximation of atan(x)*2/pi, x=b
+            // Coefficients for 6th degree minimax approximation of atan(x)*2/pi,
+            // x=[0,1].
+            const float t1 = 0.406758566246788489601959989e-5;
+            const float t2 = 0.636226545274016134946890922156;
+            const float t3 = 0.61572017898280213493197203466e-2;
+            const float t4 = -0.247333733281268944196501420480;
+            const float t5 = 0.881770664775316294736387951347e-1;
+            const float t6 = 0.419038818029165735901852432784e-1;
+            const float t7 = -0.251390972343483509333252996350e-1;
+            float phi      = mad(b, mad(b, mad(b, mad(b, mad(b, mad(b, t7, t6), t5), t4), 
+                                    t3), t2), t1);
+
+            // Extend phi if the input is in the range 45-90 degrees (u<v)
+            if (x < y) phi = 1 - phi;
+
+            // Find (u,v) based on (r,phi)
+            float v = phi * r;
+            float u = r - v;
+
+            if (d.z < 0)
+            {
+                // southern hemisphere -> mirror u,v
+                swap(u, v);
+                u = 1 - u;
+                v = 1 - v;
+            }
+
+            // Move (u,v) to the correct quadrant based on the signs of (x,y)
+            u = copysign(u, d.x);
+            v = copysign(v, d.y);
+            float2 uv = float2(0.5f * (u + 1), 0.5f * (v + 1));
+
+            uv = uv[0] < 0 ? float2(-uv[0], 1 - uv[1]) : uv;
+            uv = uv[0] >= 1 ? float2(2 - uv[0], 1 - uv[1]) : uv;
+
+            uv = uv[1] < 0 ? float2(1 - uv[0], -uv[1]) : uv;
+            uv = uv[1] >= 1 ? float2(1 - uv[0], 2 - uv[1]) : uv;
+
+            float3 imageLe = bindlessTextures[push.envMap].SampleLevel(samplerLinearClamp, uv, 0).rgb;
+            radiance += throughput * imageLe;
+            break;
+        }
+
         // TODO: emitter intersection
         if (depth++ >= maxDepth)
         {
             break;
         }
 
+#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
+        if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+        {
+            uint clusterID = NvRtGetCommittedClusterID(query);
+            float3x3 positions = NvRtCommittedTriangleObjectPositions(query);
+            float3 p0 = positions[0];
+            float3 p1 = positions[1];
+            float3 p2 = positions[2];
+
+            uint bindingDataIndex = query.CommittedInstanceID() + query.CommittedGeometryIndex();
+#if 0
+            uint primitiveIndex = query.CommittedPrimitiveIndex();
+
+            ClusterData cData = clusterData[clusterID];
+            uint ibOffset = cData.indexBufferOffset;
+
+            uint2 offsets = GetAlignedAddressAndBitOffset(ibOffset + 3 * primitiveIndex, 0);
+            uint2 indexData = indices.Load2(offsets[0]);
+            uint packedIndices = BitAlignU32(indexData.y, indexData.x, offsets[1]);
+
+            uint3 indices;
+            indices[0] = BitFieldExtractU32(packedIndices, 8, 0);
+            indices[1] = BitFieldExtractU32(packedIndices, 8, 8);
+            indices[2] = BitFieldExtractU32(packedIndices, 8, 16);
+
+            indices += cData.vertexBufferOffset;
+
+            float3 p0 = vertices[indices[0]];
+            float3 p1 = vertices[indices[1]];
+            float3 p2 = vertices[indices[2]];
+#endif
+
+            float3 gn = normalize(cross(p0 - p2, p1 - p2));
+            float3 n0 = gn;
+            float3 n1 = gn;
+            float3 n2 = gn;
+            float2 bary = query.CommittedTriangleBarycentrics();
+#else
         if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
         {
             uint instanceID = query.CommittedInstanceID();
@@ -170,6 +270,8 @@ void main()
             float3 n1 = dg.DecodeNormal(vids[1]);
             float3 n2 = dg.DecodeNormal(vids[2]);
 
+#endif
+            
             // Calculate triangle differentials
             // p0 + dpdu * u + dpdv * v = p1
 
@@ -252,23 +354,17 @@ void main()
                     Ptex::FaceData faceData = Ptex::GetFaceData(material, faceID);
                     int2 dim = int2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
 
-                    if (0)
-                    {
-                        printf("%u %u %u %u %u\n", faceID, dim.x, dim.y, faceData.faceOffset.x, faceData.faceOffset.y);
-                    }
-
                     rayCone.Propagate(surfaceSpreadAngle, query.CommittedRayT());
                     float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, n, dim, printDebug);
                     uint mipLevel = (uint)lambda;
 
-                    float4 reflectance = SampleStochasticCatmullRomBorderless(physicalPages, faceData, material, faceID, uv, mipLevel, filterU, printDebug && depth == 1);
+                    float4 reflectance = SampleStochasticCatmullRomBorderless(physicalPages, faceData, material, faceID, uv, mipLevel, filterU, printDebug);
                     dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
 
                     if (depth == 1)
                     {
                         float2 newUv = faceData.rotate ? float2(1 - uv.y, uv.x) : uv;
-                        uint2 baseOffset = material.baseVirtualPage * PAGE_WIDTH + faceData.faceOffset;
-                        uint2 virtualPage = VirtualTexture::CalculateVirtualPage(baseOffset, newUv, dim, mipLevel);
+                        uint2 virtualPage = VirtualTexture::CalculateVirtualPage(faceData.faceOffset, newUv, dim, mipLevel);
                         const uint feedbackMipLevel = VirtualTexture::ClampMipLevel(dim, mipLevel);
                         feedbackRequest = PackFeedbackEntry(virtualPage.x, virtualPage.y, material.textureIndex, feedbackMipLevel);
                     }
@@ -283,6 +379,25 @@ void main()
             dir = normalize(TransformV(query.CommittedObjectToWorld3x4(), dir));
             pos = OffsetRayOrigin(origin, gn, printDebug);
         }
+
+#if 0
+        // Warp based russian roulette
+        // https://www.nvidia.com/en-us/on-demand/session/gdc25-gdc1002/
+        const float continuationProb = min(1.f, Luminance(throughput));
+        const uint activeLaneCount = WaveActiveCountBits(true);
+        const uint totalLaneCount = WaveGetLaneCount();
+        const float activeLaneRatio = (float)activeLaneCount / (float)totalLaneCount;
+        const float activeLaneRatioThreshold = .3f;
+        const float groupContinuationProb = continuationProb * saturate(activeLaneRatio / activeLaneRatioThreshold);
+
+        if (rng.Uniform() >= groupContinuationProb)
+            break;
+        throughput /= groupContinuationProb;
+#endif
+        
+        // Shader execution reordering
+        uint octant = (dir.x >= 0) | ((dir.y >= 0) << 1) | ((dir.z >= 0) << 2);
+        //NvReorderThread(octant, 3);
     }
     image[swizzledThreadID] = float4(radiance, 1);
 

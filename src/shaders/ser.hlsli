@@ -52,7 +52,7 @@ void NvCreateHitObject();
 #define NvHitObject vk::ext_type<HitObjectAttributeNV>
 
 [[vk::ext_instruction(OpReorderThreadWithHitObjectNV)]]
-void NvReorderThread([[vk::ext_reference]] NvHitObject hitObject);
+void NvReorderThreadWithHit([[vk::ext_reference]] NvHitObject hitObject, uint hint, uint bits);
 
 #if 0
 [[vk::ext_instruction(OpHitObjectTraceRayNV)]]

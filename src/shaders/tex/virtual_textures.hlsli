@@ -55,10 +55,10 @@ namespace VirtualTexture
         uint newMipLevel = pageTableEntry.z;
         uint layer = pageTableEntry.w;
 
-        if (0)
+        if (debug)
         {
-            printf("mip: %u %u virtualPage: %u %u\n phys page: %u %u", mipLevel, newMipLevel, virtualPage.x, virtualPage.y, 
-                    pageX, pageY);
+            printf("mip: %u %u virtualPage: %u %u\n phys page: %u %u, layer: %u iters: %u", mipLevel, newMipLevel, virtualPage.x, virtualPage.y, 
+                    pageX, pageY, layer, iters);
         }
 
         const float2 faceTexelOffset = uv * float2(texSize);

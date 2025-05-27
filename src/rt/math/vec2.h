@@ -161,6 +161,13 @@ __forceinline Vec2<T> operator<<(const Vec2<T> &a, const T b)
 }
 
 template <typename T>
+__forceinline Vec2<T> operator&(const Vec2<T> &a, const T b)
+{
+    return Vec2<T>(a.x & b, a.y & b);
+}
+
+
+template <typename T>
 __forceinline Vec2<T> Sqrt(const Vec2<T> &a)
 {
     return Vec2<T>(sqrt(a.x), sqrt(a.y));

@@ -115,7 +115,6 @@ StaticArray<VkAabbPositionsKHR> CreateAABBForNTriangles(Arena *arena, ClusterBui
         {
             for (int i = 0; i < node->count; i++)
             {
-                u32 numTriangles        = 0;
                 RecordAOSSplits &record = node->values[i];
 
                 int numAabbs = (record.count + N - 1) >> shift;
@@ -161,7 +160,8 @@ StaticArray<VkAabbPositionsKHR> CreateAABBForNTriangles(Arena *arena, ClusterBui
 void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
                        int maxDepth, Image *envMap)
 {
-    NvAPI_Initialize();
+    NvAPI_Status status = NvAPI_Initialize();
+    Assert(status == NVAPI_OK);
     // Compile shaders
     Shader shader;
     Shader decodeShader;
@@ -497,17 +497,18 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     }
 
     tileCmd->SignalOutsideFrame(tileSubmitSemaphore);
-    tileCmd->Barrier(&virtualTextureManager.gpuPhysicalPool,
-                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-    tileCmd->Barrier(&virtualTextureManager.pageTable,
-                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    tileCmd->Barrier(
+        &virtualTextureManager.gpuPhysicalPool, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_READ_BIT);
+    tileCmd->Barrier(
+        &virtualTextureManager.pageTable, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_READ_BIT);
     tileCmd->FlushBarriers();
     device->SubmitCommandBuffer(tileCmd);
 
     StaticArray<BLASSceneGPUInfo> blasSceneInfo(arena, blasScenes.Length());
 
+    u32 numTriangles = 0;
     for (int i = 0; i < blasScenes.Length(); i++)
     {
         ScenePrimitives *scene       = blasScenes[i];
@@ -526,6 +527,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         ClusterBuilder builder(arena, scene, refs);
         builder.BuildClusters(record, true);
+
+        for (int j = 0; j < builder.threadClusters.size(); j++)
+        {
+            numTriangles += builder.threadClusters[j].l.totalCount;
+        }
 
         builder.CreateDGFs(scene, &data, (Mesh *)scene->primitives, scene->numPrimitives,
                            sceneBounds);
@@ -630,6 +636,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         // Send offsets buffer and dense geometry info
         ReleaseArenaArray(builder.arenas);
     }
+
+    Print("num triangles: %u\n", numTriangles);
 
 #ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
     CommandBuffer *computeCmd = device->BeginCommandBuffer(QueueType_Compute);
@@ -790,7 +798,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                                   params->width, params->height);
 
     PushConstant pushConstant;
-    pushConstant.stage  = ShaderStage::Compute; // ShaderStage::Raygen | ShaderStage::Miss;
+    pushConstant.stage  = ShaderStage::Raygen | ShaderStage::Miss;
     pushConstant.offset = 0;
     pushConstant.size   = sizeof(RayPushConstant);
 
@@ -842,11 +850,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     };
 
     // Create descriptor set layout and pipeline
-    // VkShaderStageFlags flags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR
-    // |
-    //                            VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-    //                            VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
-    VkShaderStageFlags flags   = VK_SHADER_STAGE_COMPUTE_BIT;
+    VkShaderStageFlags flags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR |
+                               VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+                               VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+    // VkShaderStageFlags flags   = VK_SHADER_STAGE_COMPUTE_BIT;
     DescriptorSetLayout layout = {};
     layout.pipelineLayout      = nullptr;
     int accelBindingIndex      = layout.AddBinding((u32)RTBindings::Accel,
@@ -885,9 +892,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     layout.AddImmutableSamplers();
 
-    // RayTracingState rts = device->CreateRayTracingPipeline(groups, ArrayLength(groups),
-    //                                                        &pushConstant, &layout, 2, true);
-    VkPipeline pipeline = device->CreateComputePipeline(&shader, &layout, &pushConstant);
+    RayTracingState rts = device->CreateRayTracingPipeline(groups, ArrayLength(groups),
+                                                           &pushConstant, &layout, 2, true);
+    // VkPipeline pipeline = device->CreateComputePipeline(&shader, &layout, &pushConstant);
 
 #ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
     Semaphore tlasSemaphore = device->CreateSemaphore();
@@ -1017,7 +1024,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             allCommandBuffer->SignalOutsideFrame(tlasSemaphore);
         }
         allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                  VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                                   VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
                                   VK_ACCESS_2_SHADER_READ_BIT);
         device->SubmitCommandBuffer(allCommandBuffer);
@@ -1198,7 +1205,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         if (device->frameCount == 0)
         {
             cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                          VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
             cmd->Wait(submitSemaphore);
             cmd->Wait(tileSubmitSemaphore);
@@ -1246,8 +1253,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                    sizeof(ShaderDebugInfo));
         cmd->SubmitTransfer(&shaderDebugBuffers[currentBuffer]);
 
-        VkPipelineStageFlags2 flags   = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        VkPipelineBindPoint bindPoint = VK_PIPELINE_BIND_POINT_COMPUTE;
+        VkPipelineStageFlags2 flags   = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+        VkPipelineBindPoint bindPoint = VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
         cmd->Barrier(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer, flags,
                      VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->Barrier(&sceneTransferBuffers[currentBuffer].buffer, flags,
@@ -1256,7 +1263,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                      VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->Barrier(image, VK_IMAGE_LAYOUT_GENERAL, flags, VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->FlushBarriers();
-        cmd->BindPipeline(bindPoint, pipeline); // rts.pipeline);
+        cmd->BindPipeline(bindPoint, rts.pipeline);
         DescriptorSet descriptorSet = layout.CreateDescriptorSet();
         descriptorSet.Bind(accelBindingIndex, &tlas.as)
             .Bind(imageBindingIndex, image)
@@ -1277,18 +1284,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 #endif
         // .Bind(aabbIndex, &aabbBuffer);
 
-        // cmd->BindDescriptorSets(bindPoint, &descriptorSet, rts.layout);
-        cmd->BindDescriptorSets(bindPoint, &descriptorSet, layout.pipelineLayout);
-
-        cmd->PushConstants(&pushConstant, &pc, /*rts.layout);*/ layout.pipelineLayout);
-        // cmd->TraceRays(&rts, params->width, params->height, 1);
+        cmd->BindDescriptorSets(bindPoint, &descriptorSet, rts.layout);
+        cmd->PushConstants(&pushConstant, &pc, rts.layout);
 
         int beginIndex = TIMED_GPU_RANGE_BEGIN(cmd, "ray trace");
-        cmd->Dispatch(dispatchDimX, dispatchDimY, 1);
-        // cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        // VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //              VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-        // cmd->FlushBarriers();
+        // cmd->Dispatch(dispatchDimX, dispatchDimY, 1);
+        cmd->TraceRays(&rts, params->width, params->height, 1);
         TIMED_RANGE_END(beginIndex);
 
         // Copy feedback from device to host

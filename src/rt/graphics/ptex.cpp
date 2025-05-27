@@ -757,7 +757,23 @@ void Convert(string filename)
         u32 levelBlockWidth = mipSqrtNumPages * pageBlockWidth;
         u32 totalOutputSize = Sqr(levelBlockWidth) * bytesPerBlock;
 
-        u8 *temp = PushArray(scratch.temp.arena, u8, Sqr(levelTexelWidth) * gpuBytesPerPixel);
+        int numSqrtSubmissions =
+            (mipSqrtNumPages * PAGE_WIDTH + gpuSubmissionWidth - 1) / gpuSubmissionWidth;
+        int totalNumGPUSubmissions = Sqr(numSqrtSubmissions);
+
+        struct FaceSubmissionInfo
+        {
+            Vec2u start;
+            Vec2u end;
+            int faceIndex;
+        };
+        StaticArray<StaticArray<FaceSubmissionInfo>> faceSubmissionInfos(
+            scratch.temp.arena, totalNumGPUSubmissions, totalNumGPUSubmissions);
+        for (int i = 0; i < totalNumGPUSubmissions; i++)
+        {
+            faceSubmissionInfos[i] =
+                StaticArray<FaceSubmissionInfo>(scratch.temp.arena, numFaces);
+        }
 
         currentPageOffset += Sqr(mipSqrtNumPages);
         PaddedImage &firstFaceImg                   = images[handles[0].faceIndex][levelIndex];
@@ -834,9 +850,45 @@ void Convert(string filename)
                                faceMetadatas[faceIndex].offsetY) >>
                          (u32)levelIndex;
             }
-            Utils::Copy(img.contents, Vec2u(0, 0), img.width, img.height, temp, dstLoc,
-                        levelTexelWidth, levelTexelWidth, img.height, img.width,
-                        img.bytesPerPixel);
+
+            Assert(img.width <= gpuSubmissionWidth && img.height <= gpuSubmissionWidth);
+            Vec2u locationInSubmission = dstLoc & (gpuSubmissionWidth - 1);
+            Vec2u firstChunkMaxSize    = Vec2u(gpuSubmissionWidth) - locationInSubmission;
+
+            FaceSubmissionInfo faceSubmissionInfo;
+            faceSubmissionInfo.faceIndex = faceIndex;
+            faceSubmissionInfo.start     = Vec2u(0);
+            faceSubmissionInfo.end = Min(Vec2u(img.width, img.height), firstChunkMaxSize);
+
+            Vec2u submissionXY          = dstLoc / gpuSubmissionWidth;
+            int faceSubmissionInfoIndex = submissionXY.y * numSqrtSubmissions + submissionXY.x;
+
+            faceSubmissionInfos[faceSubmissionInfoIndex].push_back(faceSubmissionInfo);
+
+            // If a face overlaps multiple 4096x4096 regions, add to those submissions
+            for (int i = 1; i < 4; i++)
+            {
+                Vec2u offset = Vec2u(img.width, img.height);
+                Vec2u end    = locationInSubmission + offset;
+                if (end.x > gpuSubmissionWidth || end.y > gpuSubmissionWidth)
+                {
+                    Vec2u overlapStart((i & 1) ? faceSubmissionInfo.end.x : 0,
+                                       (i >> 1) ? faceSubmissionInfo.end.y : 0);
+                    Vec2u overlapEnd((i & 1) ? img.width : faceSubmissionInfo.end.x,
+                                     (i >> 1) ? img.height : faceSubmissionInfo.end.y);
+
+                    FaceSubmissionInfo overlapFaceSubmissionInfo;
+                    overlapFaceSubmissionInfo.faceIndex = faceIndex;
+                    overlapFaceSubmissionInfo.start     = overlapStart;
+                    overlapFaceSubmissionInfo.end       = overlapEnd;
+
+                    int overlapFaceSubmissionInfoIndex =
+                        (submissionXY.y + (i >> 1)) * numSqrtSubmissions + submissionXY.x +
+                        (i & 1);
+                    faceSubmissionInfos[overlapFaceSubmissionInfoIndex].push_back(
+                        overlapFaceSubmissionInfo);
+                }
+            }
 
             currentHorizontalOffset += cmpWidth;
         }
@@ -892,9 +944,6 @@ void Convert(string filename)
         // Submit to GPU to calculate mip and block compress, then write to disk
         u8 *dst = (u8 *)AllocateSpace(&builder, totalOutputSize);
 
-        int numSqrtSubmissions =
-            (mipSqrtNumPages * PAGE_WIDTH + gpuSubmissionWidth - 1) / gpuSubmissionWidth;
-
         numSubmissions  = 0;
         submissionIndex = 0;
         submissionInfos.clear();
@@ -903,15 +952,31 @@ void Convert(string filename)
         {
             for (int numX = 0; numX < numSqrtSubmissions; numX++)
             {
+                StaticArray<FaceSubmissionInfo> &faceSubmissionInfo =
+                    faceSubmissionInfos[numY * numSqrtSubmissions + numX];
+
+                for (int i = 0; i < faceSubmissionInfo.size(); i++)
+                {
+                    FaceSubmissionInfo faceInfo = faceSubmissionInfo[i];
+                    int faceIndex               = faceInfo.faceIndex;
+                    FaceMetadata2 faceMetadata  = faceMetadatas[faceIndex];
+                    PaddedImage &img            = images[faceIndex][levelIndex];
+
+                    Vec2u faceSize = faceInfo.end - faceInfo.start;
+
+                    Vec2u submissionLoc =
+                        Vec2u(faceMetadata.offsetX, faceMetadata.offsetY) >> (u32)levelIndex;
+                    Utils::Copy(img.contents, faceInfo.start, img.width, img.height,
+                                debugSrc[submissionIndex], submissionLoc, gpuSubmissionWidth,
+                                gpuSubmissionWidth, faceSize.y, faceSize.x, bytesPerBlock);
+                }
+
                 Vec2u srcIndex(numX * gpuSubmissionWidth, numY * gpuSubmissionWidth);
 
                 u32 width =
                     Min(gpuSubmissionWidth, levelTexelWidth - numX * gpuSubmissionWidth);
                 u32 height =
                     Min(gpuSubmissionWidth, levelTexelWidth - numY * gpuSubmissionWidth);
-                Utils::Copy(temp, srcIndex, levelTexelWidth, levelTexelWidth,
-                            debugSrc[submissionIndex], Vec2u(0, 0), gpuSubmissionWidth,
-                            gpuSubmissionWidth, height, width, gpuBytesPerPixel);
 
                 CopyBlockCompressedResultsToDisk(dst, mipSqrtNumPages);
                 SubmitBlockCompressionCommandsToGPU();
@@ -1287,7 +1352,7 @@ void VirtualTextureManager::PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u
 
         u32 sqrtLevelNumPages = std::sqrt(levelNumPages);
 
-        const Vec2u virtualPage = (baseVirtualPage >> levelIndex) + pinnedPage.xy;
+        const Vec2u globalVirtualPage = (baseVirtualPage >> levelIndex) + pinnedPage.xy;
 
         // Allocate page from pool
         u32 freePageIndex = freePage;
@@ -1298,14 +1363,15 @@ void VirtualTextureManager::PinPages(CommandBuffer *cmd, u32 textureIndex, Vec3u
         // Create packed page table entry
         u32 packed = PackPageTableEntry(page.page.x, page.page.y, levelIndex, page.layer);
         PageTableUpdateRequest request;
-        request.virtualPage = virtualPage;
+        request.virtualPage = globalVirtualPage;
         request.mipLevel    = levelIndex;
         request.packed      = packed;
 
         updateRequests.push_back(request);
 
         u32 mipNumVertPagesWide = numVirtPagesWide >> levelIndex;
-        cpuPageTable[levelIndex][virtualPage.y * mipNumVertPagesWide + virtualPage.x] = packed;
+        cpuPageTable[levelIndex]
+                    [globalVirtualPage.y * mipNumVertPagesWide + globalVirtualPage.x] = packed;
 
         // Create buffer image copy command
         BufferImageCopy copy = {};
@@ -1454,7 +1520,7 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
         // Queue family transfer to async copy queue
         transitionCmd->Barrier(&gpuPhysicalPool, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                                VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_SHADER_READ_BIT,
                                VK_ACCESS_2_NONE, computeCmdQueue, QueueType_Copy);
         transferCmd->Barrier(&gpuPhysicalPool, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -1478,7 +1544,7 @@ void VirtualTextureManager::Update(CommandBuffer *computeCmd, CommandBuffer *tra
                              computeCmdQueue);
         computeCmd->Barrier(&gpuPhysicalPool, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_NONE,
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_NONE,
+                            VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_NONE,
                             VK_ACCESS_2_SHADER_READ_BIT, QueueType_Copy, computeCmdQueue);
         transferCmd->FlushBarriers();
         computeCmd->FlushBarriers();
@@ -1659,8 +1725,8 @@ void VirtualTextureManager::Callback()
         }
         compactedFeedbackRequests.size() = numNonResidentFeedback;
 
-        Print("Num feedback: %u, num compacted: %u, num non resident: %u\n",
-              numFeedbackRequests, numCompacted, numNonResidentFeedback);
+        // Print("Num feedback: %u, num compacted: %u, num non resident: %u\n",
+        // numFeedbackRequests, numCompacted, numNonResidentFeedback);
 
         u32 writeDoubleBufferIndex = writeIndex & 1;
 
@@ -1769,7 +1835,7 @@ void VirtualTextureManager::Callback()
             uploadBuffer.size() += pageByteSize;
 
             PageTableUpdateRequest mapRequest;
-            mapRequest.virtualPage = Vec2u(virtualPageX, virtualPageY);
+            mapRequest.virtualPage = globalVirtualPage;
             mapRequest.mipLevel    = mipLevel;
             mapRequest.packed      = mapPackedEntry;
             mapRequests.push_back(mapRequest);

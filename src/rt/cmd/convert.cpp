@@ -1455,13 +1455,13 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                     {
                         if (packet->parameterNames[i] == "filename"_sid)
                         {
-                            string textureFilename =
-                                StrConcat(temp.arena, directory,
-                                          Str8(packet->bytes[i], packet->sizes[i]));
-                            Convert(textureFilename);
-                            // scheduler.Schedule(&state->counter, [=](u32 jobID) {
-                            //     ScratchArena scratch;
-                            // });
+                            scheduler.Schedule(&state->counter, [=](u32 jobID) {
+                                ScratchArena scratch;
+                                string textureFilename =
+                                    StrConcat(scratch.temp.arena, directory,
+                                              Str8(packet->bytes[i], packet->sizes[i]));
+                                Convert(textureFilename);
+                            });
                         }
                     }
                 }
