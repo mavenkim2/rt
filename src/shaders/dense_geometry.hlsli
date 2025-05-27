@@ -431,7 +431,7 @@ DenseGeometry GetDenseGeometryHeader(StructuredBuffer<PackedDenseGeometryHeader>
 
 DenseGeometry GetDenseGeometryHeader(uint instanceID, uint blockIndex, bool debug = false)
 {
-    const int mult = 3;
+    const int mult = 2;
     StructuredBuffer<PackedDenseGeometryHeader> headers = denseGeometryHeadersArray[mult * instanceID];
     ByteAddressBuffer dgfByteBuffer = bindlessBuffer[mult * instanceID + 1];
     return GetDenseGeometryHeader(headers, dgfByteBuffer, blockIndex, debug);

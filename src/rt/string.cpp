@@ -985,13 +985,18 @@ u64 PutData(StringBuilderMapped *builder, void *data, u64 size)
     return offset;
 }
 
-void *AllocateSpace(StringBuilderMapped *builder, u64 size)
+u64 AllocateSpace(StringBuilderMapped *builder, u64 size)
 {
     Expand(builder, size);
-    void *out = builder->writePtr;
+    u64 out = builder->totalSize;
     builder->writePtr += size;
     builder->totalSize += size;
     return out;
+}
+
+void *GetMappedPtr(StringBuilderMapped *builder, u64 offset)
+{
+    return (u8 *)builder->ptr + offset;
 }
 
 void Put(StringBuilderMapped *builder, void *data, u64 size, u64 offset)

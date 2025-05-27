@@ -1,5 +1,6 @@
 #include "../base.h"
 #include "../containers.h"
+#include "../debug.h"
 #include "../memory.h"
 #include "../bit_packing.h"
 #include "../string.h"
@@ -72,10 +73,8 @@ Ptex::PtexCache *cache;
 PtexErrHandler errorHandler;
 PtexInpHandler ptexInputHandler;
 
-void InitializePtex()
+void InitializePtex(u32 maxFiles, u32 maxMem)
 {
-    u32 maxFiles  = 400;
-    size_t maxMem = gigabytes(8);
     cache = Ptex::PtexCache::create(maxFiles, maxMem, true, &ptexInputHandler, &errorHandler);
 }
 
@@ -324,8 +323,24 @@ void Convert(string filename)
 
     // if (OS_FileExists(outFilename)) return;
 
-    // if (!Contains(outFilename, "mountbring")) return;
+    size_t maxMem = gigabytes(4);
+
     if (Contains(outFilename, "displacement")) return;
+
+    Ptex::String error;
+    Ptex::PtexTexture *t = cache->get((char *)filename.str, error);
+    Assert(t);
+
+    int numFaces = t->numFaces();
+    StaticArray<Ptex::FaceInfo> ptexFaceInfos(scratch.temp.arena, numFaces);
+    for (int i = 0; i < numFaces; i++)
+    {
+        const Ptex::FaceInfo &f = t->getFaceInfo(i);
+        Assert(!f.isSubface());
+        ptexFaceInfos.push_back(f);
+    }
+
+    t->release();
 
     const Vec2u uvTable[] = {
         Vec2u(0, 0),
@@ -333,11 +348,6 @@ void Convert(string filename)
         Vec2u(1, 1),
         Vec2u(0, 1),
     };
-
-    Ptex::String error;
-    Ptex::PtexTexture *t     = cache->get((char *)filename.str, error);
-    Ptex::PtexReader *reader = static_cast<Ptex::PtexReader *>(t);
-    int numFaces             = reader->numFaces();
 
     const u32 bytesPerPixel    = 3;
     const u32 gpuBytesPerPixel = 4;
@@ -388,9 +398,16 @@ void Convert(string filename)
     ParallelFor(0, numFaces, 1024, [&](int jobID, int start, int count) {
         u32 threadIndex = GetThreadIndex();
         Arena *arena    = arenas[threadIndex];
+
         for (int i = start; i < start + count; i++)
         {
+            Ptex::String error;
+
+            Ptex::PtexTexture *t = cache->get((char *)filename.str, error);
+            Assert(t);
             PaddedImage img = PtexToImg(arena, t, i, 0);
+            t->release();
+
             Assert(img.log2Width >= 2 && img.log2Height >= 2);
             int levels = Min(img.log2Width, img.log2Height) + 1;
             Assert(levels < MAX_LEVEL);
@@ -435,6 +452,8 @@ void Convert(string filename)
             }
         }
     });
+
+    TIMED_FUNCTION(miscF);
 
     // NOTE: pack multiple face textures/mips into one texture atlas that gets submitted to the
     // GPU
@@ -533,11 +552,12 @@ void Convert(string filename)
 
     StringBuilderMapped builder(outFilename);
 
-    TextureMetadata *textureMetadata =
-        (TextureMetadata *)AllocateSpace(&builder, sizeof(TextureMetadata));
-    textureMetadata->numFaces = numFaces;
-    FaceMetadata2 *outFaceMetadata =
-        (FaceMetadata2 *)AllocateSpace(&builder, sizeof(FaceMetadata2) * numFaces);
+    u64 textureMetadataOffset = AllocateSpace(&builder, sizeof(TextureMetadata));
+    u64 faceMetadataOffset    = AllocateSpace(&builder, sizeof(FaceMetadata2) * numFaces);
+
+    TextureMetadata textureMetadata;
+    textureMetadata.numFaces = numFaces;
+
     StaticArray<FaceMetadata2> faceMetadatas(scratch.temp.arena, numFaces, numFaces);
 
     const int pageTexelWidth         = PAGE_WIDTH;
@@ -714,7 +734,7 @@ void Convert(string filename)
         Assert(currentFaceImg.width != 1 && currentFaceImg.height != 1);
     }
 
-    textureMetadata->numLevels = maxLevel;
+    textureMetadata.numLevels = maxLevel;
 
     const int estimateSqrtNumPages      = std::sqrt(totalTextureArea >> (2 * PAGE_SHIFT)) + 1;
     const int estimateVirtualTexelWidth = estimateSqrtNumPages * pageTexelWidth;
@@ -745,9 +765,9 @@ void Convert(string filename)
         currentTotalHeight += currentShelfHeight;
     }
 
-    const int virtualTextureWidth = Max(currentTotalHeight, estimateVirtualTexelWidth);
-    const u32 sqrtNumPages        = (virtualTextureWidth + PAGE_WIDTH - 1) >> PAGE_SHIFT;
-    textureMetadata->virtualSqrtNumPages = NextPowerOfTwo(sqrtNumPages);
+    const int virtualTextureWidth       = Max(currentTotalHeight, estimateVirtualTexelWidth);
+    const u32 sqrtNumPages              = (virtualTextureWidth + PAGE_WIDTH - 1) >> PAGE_SHIFT;
+    textureMetadata.virtualSqrtNumPages = NextPowerOfTwo(sqrtNumPages);
 
     for (int levelIndex = 0; levelIndex < maxLevel; levelIndex++)
     {
@@ -765,6 +785,7 @@ void Convert(string filename)
         {
             Vec2u start;
             Vec2u end;
+            Vec2u dstStart;
             int faceIndex;
         };
         StaticArray<StaticArray<FaceSubmissionInfo>> faceSubmissionInfos(
@@ -776,9 +797,9 @@ void Convert(string filename)
         }
 
         currentPageOffset += Sqr(mipSqrtNumPages);
-        PaddedImage &firstFaceImg                   = images[handles[0].faceIndex][levelIndex];
-        textureMetadata->mipPageOffsets[levelIndex] = currentPageOffset;
-        int currentHorizontalOffset                 = 0;
+        PaddedImage &firstFaceImg                  = images[handles[0].faceIndex][levelIndex];
+        textureMetadata.mipPageOffsets[levelIndex] = currentPageOffset;
+        int currentHorizontalOffset                = 0;
         int currentShelfHeight = Min(firstFaceImg.width, firstFaceImg.height);
         int currentTotalHeight = 0;
         for (int handleIndex = 0; handleIndex < numFaces; handleIndex++)
@@ -820,6 +841,8 @@ void Convert(string filename)
                                  currentFaceImg.GetPaddedHeight(), Vec2u(0, 0));
                 rotate = true;
                 faceMetadatas[faceIndex].rotate |= 0x80000000;
+
+                currentFaceImg = img;
             }
 
             Vec2u dstLoc(pos_inf);
@@ -830,8 +853,7 @@ void Convert(string filename)
                 faceMetadatas[faceIndex].offsetX    = currentHorizontalOffset;
                 faceMetadatas[faceIndex].offsetY    = currentTotalHeight;
 
-                const Ptex::FaceInfo &f = reader->getFaceInfo(faceIndex);
-                Assert(!f.isSubface());
+                const Ptex::FaceInfo &f = ptexFaceInfos[faceIndex];
                 for (int edgeIndex = e_bottom; edgeIndex < e_max; edgeIndex++)
                 {
                     // Add edge borders
@@ -858,7 +880,8 @@ void Convert(string filename)
             FaceSubmissionInfo faceSubmissionInfo;
             faceSubmissionInfo.faceIndex = faceIndex;
             faceSubmissionInfo.start     = Vec2u(0);
-            faceSubmissionInfo.end = Min(Vec2u(img.width, img.height), firstChunkMaxSize);
+            faceSubmissionInfo.end      = Min(Vec2u(img.width, img.height), firstChunkMaxSize);
+            faceSubmissionInfo.dstStart = locationInSubmission;
 
             Vec2u submissionXY          = dstLoc / gpuSubmissionWidth;
             int faceSubmissionInfoIndex = submissionXY.y * numSqrtSubmissions + submissionXY.x;
@@ -876,11 +899,14 @@ void Convert(string filename)
                                        (i >> 1) ? faceSubmissionInfo.end.y : 0);
                     Vec2u overlapEnd((i & 1) ? img.width : faceSubmissionInfo.end.x,
                                      (i >> 1) ? img.height : faceSubmissionInfo.end.y);
+                    Vec2u dstStart((i & 1) ? 0 : locationInSubmission.x,
+                                   (i >> 1) ? 0 : locationInSubmission.y);
 
                     FaceSubmissionInfo overlapFaceSubmissionInfo;
                     overlapFaceSubmissionInfo.faceIndex = faceIndex;
                     overlapFaceSubmissionInfo.start     = overlapStart;
                     overlapFaceSubmissionInfo.end       = overlapEnd;
+                    overlapFaceSubmissionInfo.dstStart  = dstStart;
 
                     int overlapFaceSubmissionInfoIndex =
                         (submissionXY.y + (i >> 1)) * numSqrtSubmissions + submissionXY.x +
@@ -933,16 +959,19 @@ void Convert(string filename)
                 }
             }
 
-            textureMetadata->numPinnedPages = (u32)pinnedPages.size();
-            Vec3u *outPinnedPages           = (Vec3u *)AllocateSpace(
-                &builder, sizeof(Vec3u) * textureMetadata->numPinnedPages);
+            textureMetadata.numPinnedPages = (u32)pinnedPages.size();
+
+            u64 pinnedPagesOffset =
+                AllocateSpace(&builder, sizeof(Vec3u) * textureMetadata.numPinnedPages);
+            Vec3u *outPinnedPages = (Vec3u *)GetMappedPtr(&builder, pinnedPagesOffset);
 
             MemoryCopy(outPinnedPages, pinnedPages.data(),
-                       sizeof(Vec3u) * textureMetadata->numPinnedPages);
+                       sizeof(Vec3u) * textureMetadata.numPinnedPages);
         }
 
         // Submit to GPU to calculate mip and block compress, then write to disk
-        u8 *dst = (u8 *)AllocateSpace(&builder, totalOutputSize);
+        u64 dstTileDataOffset = AllocateSpace(&builder, totalOutputSize);
+        u8 *dst               = (u8 *)GetMappedPtr(&builder, dstTileDataOffset);
 
         numSubmissions  = 0;
         submissionIndex = 0;
@@ -964,11 +993,10 @@ void Convert(string filename)
 
                     Vec2u faceSize = faceInfo.end - faceInfo.start;
 
-                    Vec2u submissionLoc =
-                        Vec2u(faceMetadata.offsetX, faceMetadata.offsetY) >> (u32)levelIndex;
                     Utils::Copy(img.contents, faceInfo.start, img.width, img.height,
-                                debugSrc[submissionIndex], submissionLoc, gpuSubmissionWidth,
-                                gpuSubmissionWidth, faceSize.y, faceSize.x, bytesPerBlock);
+                                debugSrc[submissionIndex], faceInfo.dstStart,
+                                gpuSubmissionWidth, gpuSubmissionWidth, faceSize.y, faceSize.x,
+                                img.bytesPerPixel);
                 }
 
                 Vec2u srcIndex(numX * gpuSubmissionWidth, numY * gpuSubmissionWidth);
@@ -998,6 +1026,11 @@ void Convert(string filename)
         CopyBlockCompressedResultsToDisk(dst, mipSqrtNumPages);
     }
 
+    TextureMetadata *outTextureMetadata =
+        (TextureMetadata *)GetMappedPtr(&builder, textureMetadataOffset);
+    FaceMetadata2 *outFaceMetadata =
+        (FaceMetadata2 *)GetMappedPtr(&builder, faceMetadataOffset);
+    MemoryCopy(outTextureMetadata, &textureMetadata, sizeof(TextureMetadata));
     MemoryCopy(outFaceMetadata, faceMetadatas.data, numFaces * sizeof(FaceMetadata2));
 
     // Cleanup
@@ -1013,8 +1046,6 @@ void Convert(string filename)
     // Output to disk
     OS_UnmapFile(builder.ptr);
     OS_ResizeFile(builder.filename, builder.totalSize);
-
-    t->release();
 }
 
 template <typename T>
@@ -1725,8 +1756,8 @@ void VirtualTextureManager::Callback()
         }
         compactedFeedbackRequests.size() = numNonResidentFeedback;
 
-        // Print("Num feedback: %u, num compacted: %u, num non resident: %u\n",
-        // numFeedbackRequests, numCompacted, numNonResidentFeedback);
+        Print("Num feedback: %u, num compacted: %u, num non resident: %u\n",
+              numFeedbackRequests, numCompacted, numNonResidentFeedback);
 
         u32 writeDoubleBufferIndex = writeIndex & 1;
 

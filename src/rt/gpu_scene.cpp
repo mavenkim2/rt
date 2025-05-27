@@ -909,7 +909,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                                                      blasScenes.Length());
     for (int i = 0; i < blasScenes.Length(); i++)
     {
-        ScratchArena scratch;
         ScenePrimitives *scene = blasScenes[i];
 
         CommandBuffer *cmd = device->BeginCommandBuffer(QueueType_Graphics);
@@ -953,13 +952,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     {
         ScenePrimitives *scene = blasScenes[i];
         int bindlessHeaders    = device->BindlessStorageIndex(&blasSceneInfo[i].headerBuffer);
-        Assert(bindlessHeaders == 3 * runningTotal);
+        Assert(bindlessHeaders == 2 * runningTotal);
 
         int bindlessData = device->BindlessStorageIndex(&blasSceneInfo[i].dgfBuffer);
-        Assert(bindlessData == 3 * runningTotal + 1);
-
-        int bindlessAabbs = device->BindlessStorageIndex(&blasSceneInfo[i].aabbBuffer);
-        Assert(bindlessAabbs == 3 * runningTotal + 2);
+        Assert(bindlessData == 2 * runningTotal + 1);
 
         scene->gpuInstanceID = runningTotal++;
     }
@@ -1216,10 +1212,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                 auto &payload = uncompactedPayloads[i];
                 device->DestroyAccelerationStructure(&payload.as);
             }
-            // for (int i = 0; i < blasSceneInfo.Length(); i++)
-            // {
-            //     device->DestroyBuffer(&blasSceneInfo[i].aabbBuffer);
-            // }
+            for (int i = 0; i < blasSceneInfo.Length(); i++)
+            {
+                device->DestroyBuffer(&blasSceneInfo[i].aabbBuffer);
+            }
             envMapBindlessIndex = device->BindlessIndex(&gpuEnvMap);
         }
 

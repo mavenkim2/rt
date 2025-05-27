@@ -139,7 +139,8 @@ struct StringBuilderMapped
 
 void Expand(StringBuilderMapped *builder, u64 size);
 u64 PutData(StringBuilderMapped *builder, void *data, u64 size);
-void *AllocateSpace(StringBuilderMapped *builder, u64 size);
+u64 AllocateSpace(StringBuilderMapped *builder, u64 size);
+void *GetMappedPtr(StringBuilderMapped *builder, u64 offset);
 void Put(StringBuilderMapped *builder, void *data, u64 size, u64 offset);
 u64 Put(StringBuilderMapped *builder, string str);
 

@@ -55,7 +55,7 @@ namespace VirtualTexture
         uint newMipLevel = pageTableEntry.z;
         uint layer = pageTableEntry.w;
 
-        if (debug)
+        if (0)
         {
             printf("mip: %u %u virtualPage: %u %u\n phys page: %u %u, layer: %u iters: %u", mipLevel, newMipLevel, virtualPage.x, virtualPage.y, 
                     pageX, pageY, layer, iters);

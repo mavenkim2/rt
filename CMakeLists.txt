@@ -202,6 +202,7 @@ add_executable(convert
     ${PLATFORM_SOURCE_FILES}
     ${RT_VULKAN_SOURCE_FILES}
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/ptex.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/debug.cpp
 )
 target_include_directories(convert PRIVATE 
     ${PTEX_INCLUDE}

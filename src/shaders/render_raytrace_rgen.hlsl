@@ -354,6 +354,11 @@ void main()
                     Ptex::FaceData faceData = Ptex::GetFaceData(material, faceID);
                     int2 dim = int2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
 
+                    if (printDebug)
+                    {
+                        printf("%f %f %u %u\n", uv.x, uv.y, faceData.log2Dim.x, faceData.log2Dim.y);
+                    }
+
                     rayCone.Propagate(surfaceSpreadAngle, query.CommittedRayT());
                     float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, n, dim, printDebug);
                     uint mipLevel = (uint)lambda;

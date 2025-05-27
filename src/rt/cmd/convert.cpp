@@ -1455,13 +1455,11 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                     {
                         if (packet->parameterNames[i] == "filename"_sid)
                         {
-                            scheduler.Schedule(&state->counter, [=](u32 jobID) {
-                                ScratchArena scratch;
-                                string textureFilename =
-                                    StrConcat(scratch.temp.arena, directory,
-                                              Str8(packet->bytes[i], packet->sizes[i]));
-                                Convert(textureFilename);
-                            });
+                            string textureFilename =
+                                StrConcat(threadArena, directory,
+                                          Str8(packet->bytes[i], packet->sizes[i]));
+                            scheduler.Schedule(&state->counter,
+                                               [=](u32 jobID) { Convert(textureFilename); });
                         }
                     }
                 }
@@ -2197,7 +2195,7 @@ int main(int argc, char **argv)
     StringBuilder builder = {};
     builder.arena         = arena;
 
-    InitializePtex();
+    InitializePtex(1, gigabytes(1));
 
     if (argc != 2)
     {
@@ -2219,11 +2217,14 @@ int main(int argc, char **argv)
     LoadPBRT(arena, filename);
 
     u64 count = 0;
+    f64 time  = 0;
     for (int i = 0; i < numProcessors; i++)
     {
         count += threadLocalStatistics[i].misc;
+        time += threadLocalStatistics[i].miscF;
     }
     printf("num materials pruned: %llu\n", count);
+    printf("total gpu time: %f\n", time);
 
     // read pbrt as i've done before, getting scene packets
     // list of things to do

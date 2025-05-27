@@ -4,8 +4,6 @@
 #include "ray_triangle_intersection.hlsli"
 #include "dense_geometry.hlsli"
 
-StructuredBuffer<AABB> bindlessAABBs[] : register(t0, structuredBufferSpace);
-
 uint2 DecodeBlockAndTriangleIndex(uint primitiveIndex, uint hitKind)
 {
 #if LOG2_TRIANGLES_PER_LEAF == 0
@@ -29,13 +27,6 @@ bool IntersectCluster(in uint instanceID, in uint primitiveIndex, in float3 o, i
 
     DenseGeometry dg = GetDenseGeometryHeader(instanceID, blockIndex, debug);
 
-    if (0)
-    {
-        StructuredBuffer<AABB> aabbs = bindlessAABBs[3 * instanceID + 2];
-        AABB aabb = aabbs[primitiveIndex];
-        printf("prim: %u, t: %f %f\n", primitiveIndex, tHit, tMax);
-        printf("aabb: %f %f %f %f %f %f\n", aabb.minX, aabb.minY, aabb.minZ, aabb.maxX, aabb.maxY, aabb.maxZ);
-    }
     tHit = tMax;
     bool result = false;
 

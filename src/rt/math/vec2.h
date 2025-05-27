@@ -131,7 +131,7 @@ __forceinline Vec2<T> operator/(const Vec2<T> &u, const Vec2<T> &v)
 template <typename T>
 __forceinline Vec2<T> operator/(const Vec2<T> &v, T d)
 {
-    return v * (1 / d);
+    return Vec2<T>(v.x / d, v.y / d);
 }
 
 template <typename T>
@@ -165,7 +165,6 @@ __forceinline Vec2<T> operator&(const Vec2<T> &a, const T b)
 {
     return Vec2<T>(a.x & b, a.y & b);
 }
-
 
 template <typename T>
 __forceinline Vec2<T> Sqrt(const Vec2<T> &a)

@@ -389,7 +389,6 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     u32 numOctBitsX = minOct[0] == maxOct[0] ? 0 : Log2Int(Max(maxOct[0] - minOct[0], 1u)) + 1;
     u32 numOctBitsY = minOct[1] == maxOct[1] ? 0 : Log2Int(Max(maxOct[1] - minOct[1], 1u)) + 1;
 
-    Assert(!hasFaceIDs || minFaceID != maxFaceID);
     u32 numFaceBits = hasFaceIDs ? Log2Int(Max(maxFaceID - minFaceID, 1u)) + 1 : 0;
 
     Assert(numOctBitsX <= 16 && numOctBitsY <= 16);
