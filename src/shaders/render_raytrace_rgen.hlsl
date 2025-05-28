@@ -14,9 +14,10 @@
 #include "../rt/shader_interop/ray_shaderinterop.h"
 #include "../rt/shader_interop/hit_shaderinterop.h"
 #include "../rt/shader_interop/debug_shaderinterop.h"
-//# include "../rt/nvapi.h"
+# include "../rt/nvapi.h"
 #include "wave_intrinsics.hlsli"
-#include "ser.hlsli"
+
+#define SER
 
 RaytracingAccelerationStructure accel : register(t0);
 RWTexture2D<half4> image : register(u1);
@@ -87,6 +88,15 @@ void main()
         query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
         query.Proceed();
 #else
+#ifdef SER
+        RayPayload payload;
+        NvHitObject hitObject = NvTraceRayHitObject(accel, RAY_FLAG_SKIP_TRIANGLES | RAY_FLAG_FORCE_OPAQUE, 
+                                                    0xff, 0, 1, 0, desc, payload);
+
+        //uint octant = (dir.x >= 0) | ((dir.y >= 0) << 1) | ((dir.z >= 0) << 2);
+        //NvReorderThread(octant, 3);
+        NvReorderThread(hitObject);
+#else
         RayQuery<RAY_FLAG_SKIP_TRIANGLES | RAY_FLAG_FORCE_OPAQUE> query;
         query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
         float2 bary;
@@ -118,17 +128,16 @@ void main()
                 query.CommitProceduralPrimitiveHit(tHit);
             }
         }
-
-        if (0)
-        {
-            printf("numiters: %u\n", numIters);
-        }
-
 #endif
+#endif
+
+#ifdef SER
+        if (hitObject.IsMiss())
+#else
         if (query.CommittedStatus() != COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
+#endif
         {
-            float3 d = normalize(mul(scene.lightFromRender, 
-                                 float4(query.WorldRayDirection(), 0)).xyz);
+            float3 d = normalize(mul(scene.lightFromRender, float4(dir, 0)).xyz);
 
             // Equal area sphere to square
             float x = abs(d.x), y = abs(d.y), z = abs(d.z);
@@ -193,50 +202,41 @@ void main()
 #ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
         if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
         {
-            uint clusterID = NvRtGetCommittedClusterID(query);
             float3x3 positions = NvRtCommittedTriangleObjectPositions(query);
             float3 p0 = positions[0];
             float3 p1 = positions[1];
             float3 p2 = positions[2];
 
-            uint bindingDataIndex = query.CommittedInstanceID() + query.CommittedGeometryIndex();
-#if 0
-            uint primitiveIndex = query.CommittedPrimitiveIndex();
-
-            ClusterData cData = clusterData[clusterID];
-            uint ibOffset = cData.indexBufferOffset;
-
-            uint2 offsets = GetAlignedAddressAndBitOffset(ibOffset + 3 * primitiveIndex, 0);
-            uint2 indexData = indices.Load2(offsets[0]);
-            uint packedIndices = BitAlignU32(indexData.y, indexData.x, offsets[1]);
-
-            uint3 indices;
-            indices[0] = BitFieldExtractU32(packedIndices, 8, 0);
-            indices[1] = BitFieldExtractU32(packedIndices, 8, 8);
-            indices[2] = BitFieldExtractU32(packedIndices, 8, 16);
-
-            indices += cData.vertexBufferOffset;
-
-            float3 p0 = vertices[indices[0]];
-            float3 p1 = vertices[indices[1]];
-            float3 p2 = vertices[indices[2]];
-#endif
-
-            float3 gn = normalize(cross(p0 - p2, p1 - p2));
-            float3 n0 = gn;
-            float3 n1 = gn;
-            float3 n2 = gn;
+            uint blockIndex = NvRtGetCommittedClusterID(query);
+            uint triangleIndex = query.CommittedPrimitiveIndex();
             float2 bary = query.CommittedTriangleBarycentrics();
+#else
+#ifdef SER
+        if (hitObject.IsHit())
+        {
+            NvInvokeHitObject(accel, hitObject, payload);
+
+            uint primitiveIndex = hitObject.GetPrimitiveIndex();
+            uint instanceID = hitObject.GetInstanceID();
+            float3x4 objectToWorld = payload.objectToWorld;
+            float3 objectRayDir = payload.objectRayDir;
+            float2 bary = payload.bary;
+            float rayT = payload.rayT;
+            uint hitKind = payload.hitKind;
 #else
         if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
         {
-            uint instanceID = query.CommittedInstanceID();
             uint primitiveIndex = query.CommittedPrimitiveIndex();
+            uint instanceID = query.CommittedInstanceID();
+            float3x4 objectToWorld = query.CommittedObjectToWorld3x4();
+            float rayT = query.CommittedRayT();
+            float3 objectRayDir = query.CommittedObjectRayDirection();
+#endif
 
             uint2 blockTriangleIndices = DecodeBlockAndTriangleIndex(primitiveIndex, hitKind);
             uint blockIndex = blockTriangleIndices[0];
             uint triangleIndex = blockTriangleIndices[1];
-
+#endif
             DenseGeometry dg = GetDenseGeometryHeader(instanceID, blockIndex, printDebug);
 
             uint materialID = dg.DecodeMaterialID(triangleIndex);
@@ -254,15 +254,18 @@ void main()
             bary.x = (rotate == 1 ? 1 - oldBary.x - oldBary.y : (rotate == 2 ? oldBary.y : oldBary.x));
             bary.y = (rotate == 1 ? oldBary.x : (rotate == 2 ? 1 - oldBary.x - oldBary.y : oldBary.y));
 
+#ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
+            float3 p0 = dg.DecodePosition(vids[0]);
+            float3 p1 = dg.DecodePosition(vids[1]);
+            float3 p2 = dg.DecodePosition(vids[2]);
+#endif
+
             if (0)
             {
                 printf("%u %u %u type: %u\noldvids: %u %u %u\nvids: %u %u %u\n", instanceID, blockIndex, triangleIndex, rotate,
                         oldVids[0], oldVids[1], oldVids[2], vids[0], vids[1], vids[2]);
             }
 
-            float3 p0 = dg.DecodePosition(vids[0]);
-            float3 p1 = dg.DecodePosition(vids[1]);
-            float3 p2 = dg.DecodePosition(vids[2]);
 
             float3 gn = normalize(cross(p0 - p2, p1 - p2));
 
@@ -270,7 +273,6 @@ void main()
             float3 n1 = dg.DecodeNormal(vids[1]);
             float3 n2 = dg.DecodeNormal(vids[2]);
 
-#endif
             
             // Calculate triangle differentials
             // p0 + dpdu * u + dpdv * v = p1
@@ -330,7 +332,6 @@ void main()
             float3 origin = p0 + dp10 * bary.x + dp20 * bary.y;
             float2 uv = uv0 + duv10 * bary.x + duv20 * bary.y;
 
-            float3 objectRayDir = query.CommittedObjectRayDirection();
             float3 wo = normalize(float3(dot(ss, -objectRayDir), dot(ts, -objectRayDir), dot(n, -objectRayDir)));
 
             float2 sample = rng.Uniform2D();
@@ -354,12 +355,7 @@ void main()
                     Ptex::FaceData faceData = Ptex::GetFaceData(material, faceID);
                     int2 dim = int2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
 
-                    if (printDebug)
-                    {
-                        printf("%f %f %u %u\n", uv.x, uv.y, faceData.log2Dim.x, faceData.log2Dim.y);
-                    }
-
-                    rayCone.Propagate(surfaceSpreadAngle, query.CommittedRayT());
+                    rayCone.Propagate(surfaceSpreadAngle, rayT);
                     float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, n, dim, printDebug);
                     uint mipLevel = (uint)lambda;
 
@@ -379,13 +375,13 @@ void main()
 
 
             if (dir.z == 0) break;
-            origin = TransformP(query.CommittedObjectToWorld3x4(), origin);
+            origin = TransformP(objectToWorld, origin);
             dir = ss * dir.x + ts * dir.y + n * dir.z;
-            dir = normalize(TransformV(query.CommittedObjectToWorld3x4(), dir));
+            dir = normalize(TransformV(objectToWorld, dir));
             pos = OffsetRayOrigin(origin, gn, printDebug);
         }
 
-#if 0
+#if 1
         // Warp based russian roulette
         // https://www.nvidia.com/en-us/on-demand/session/gdc25-gdc1002/
         const float continuationProb = min(1.f, Luminance(throughput));
@@ -395,14 +391,11 @@ void main()
         const float activeLaneRatioThreshold = .3f;
         const float groupContinuationProb = continuationProb * saturate(activeLaneRatio / activeLaneRatioThreshold);
 
+
         if (rng.Uniform() >= groupContinuationProb)
             break;
         throughput /= groupContinuationProb;
 #endif
-        
-        // Shader execution reordering
-        uint octant = (dir.x >= 0) | ((dir.y >= 0) << 1) | ((dir.z >= 0) << 2);
-        //NvReorderThread(octant, 3);
     }
     image[swizzledThreadID] = float4(radiance, 1);
 

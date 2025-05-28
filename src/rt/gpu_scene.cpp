@@ -155,6 +155,23 @@ StaticArray<VkAabbPositionsKHR> CreateAABBForNTriangles(Arena *arena, ClusterBui
     return aabbs;
 }
 
+u32 GetNumTriangles(ClusterBuilder &builder)
+{
+    u32 count = 0;
+    for (int index = 0; index < builder.threadClusters.Length(); index++)
+    {
+        for (auto *node = builder.threadClusters[index].l.first; node != 0; node = node->next)
+        {
+            for (int i = 0; i < node->count; i++)
+            {
+                RecordAOSSplits &record = node->values[i];
+                count += record.count;
+            }
+        }
+    }
+    return count;
+}
+
 // TODO: see if it's possible to group consecutive triangles in a strip into 1 procedural
 // primitive (when the sah is small)
 void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
@@ -407,6 +424,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     SortHandles<RequestHandle, false>(handles, numHandles);
 
+    u32 ptexFaceDataBytes = 0;
     for (int i = 0; i < numHandles; i++)
     {
         RequestHandle &handle        = handles[i];
@@ -461,6 +479,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             fileHeader.numFaces;
         u32 faceDataBitStreamSize = (faceDataBitStreamBitSize + 7) >> 3;
 
+        ptexFaceDataBytes += faceDataBitStreamSize;
         u8 *faceDataStream    = PushArray(sceneScratch.temp.arena, u8, faceDataBitStreamSize);
         u32 faceDataBitOffset = 0;
         for (int faceIndex = 0; faceIndex < fileHeader.numFaces; faceIndex++)
@@ -508,7 +527,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     StaticArray<BLASSceneGPUInfo> blasSceneInfo(arena, blasScenes.Length());
 
-    u32 numTriangles = 0;
+    u32 numAabbs       = 0;
+    u32 numTriangles   = 0;
+    u32 dgfHeaderBytes = 0;
+    u32 dgfBufferBytes = 0;
+
+    CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Copy);
     for (int i = 0; i < blasScenes.Length(); i++)
     {
         ScenePrimitives *scene       = blasScenes[i];
@@ -519,19 +543,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         info.data.Init();
         DenseGeometryBuildData &data = info.data;
 
-        CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Copy);
-
         RecordAOSSplits record;
         PrimRef *refs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
             sceneScratch.temp.arena, scene, record, false);
 
         ClusterBuilder builder(arena, scene, refs);
         builder.BuildClusters(record, true);
-
-        for (int j = 0; j < builder.threadClusters.size(); j++)
-        {
-            numTriangles += builder.threadClusters[j].l.totalCount;
-        }
 
         builder.CreateDGFs(scene, &data, (Mesh *)scene->primitives, scene->numPrimitives,
                            sceneBounds);
@@ -541,8 +558,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         StaticArray<VkAabbPositionsKHR> aabbs =
             CreateAABBForNTriangles(sceneScratch.temp.arena, builder, data.numBlocks);
+        numTriangles += GetNumTriangles(builder);
 
         info.aabbLength = aabbs.Length();
+        numAabbs += info.aabbLength;
+
         info.aabbBuffer =
             dgfTransferCmd
                 ->SubmitBuffer(
@@ -553,6 +573,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                 .buffer;
 
         // Combine all blocks together
+        dgfBufferBytes += data.byteBuffer.Length();
         info.dgfByteBuffer =
             PushArrayNoZero(sceneScratch.temp.arena, u8, data.byteBuffer.Length());
         data.byteBuffer.Flatten(info.dgfByteBuffer);
@@ -622,22 +643,26 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             info.debugRestartCount[c++] = node->values;
         }
 #endif
-
-        dgfTransferCmd->SignalOutsideFrame(scene->semaphore);
         device->SetName(&info.dgfBuffer, "DGF Buffer");
 
-        dgfTransferCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                                VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
-        dgfTransferCmd->FlushBarriers();
-        device->SubmitCommandBuffer(dgfTransferCmd);
-
+        dgfTransferCmd->Signal(scene->semaphore);
         blasSceneInfo.Push(info);
-        // Send offsets buffer and dense geometry info
         ReleaseArenaArray(builder.arenas);
     }
 
-    Print("num triangles: %u\n", numTriangles);
+    Semaphore sem   = device->CreateSemaphore();
+    sem.signalValue = 1;
+
+    dgfTransferCmd->SignalOutsideFrame(sem);
+
+    dgfTransferCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                            VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
+    dgfTransferCmd->FlushBarriers();
+    device->SubmitCommandBuffer(dgfTransferCmd);
+
+    Print("num triangles: %u\nnum aabbs: %u\ndgf buffer bytes: %u\nptex face data bytes: %u\n",
+          numTriangles, numAabbs, dgfBufferBytes, ptexFaceDataBytes);
 
 #ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
     CommandBuffer *computeCmd = device->BeginCommandBuffer(QueueType_Compute);
@@ -907,6 +932,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     StaticArray<GPUAccelerationStructurePayload> uncompactedPayloads(sceneScratch.temp.arena,
                                                                      blasScenes.Length());
+    u32 compactedBLASSize   = 0;
+    u32 uncompactedBLASSize = 0;
     for (int i = 0; i < blasScenes.Length(); i++)
     {
         ScenePrimitives *scene = blasScenes[i];
@@ -927,6 +954,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             cmd->BuildCustomBLAS(&blasSceneInfo[i].aabbBuffer, blasSceneInfo[i].aabbLength);
         uncompactedPayloads.Push(payload);
 
+        uncompactedBLASSize += payload.as.buffer.size;
         cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
@@ -943,8 +971,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         allCommandBuffer->Signal(scene->semaphore);
 
         scene->gpuBVH = allCommandBuffer->CompactAS(queryPool, &payload);
+        compactedBLASSize += scene->gpuBVH.buffer.size;
         device->DestroyBuffer(&payload.scratch);
     }
+
+    Print("compacted blas size: %u, uncompacted sze: %u\n", compactedBLASSize,
+          uncompactedBLASSize);
 
     // Set the instance ids of each scene
     int runningTotal = 0;

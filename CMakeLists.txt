@@ -261,6 +261,7 @@ foreach(SHADER_FILE ${SHADER_FILES})
     get_filename_component(SHADER_NAME ${SHADER_FILE} NAME_WE)
     get_property(SHADER_TYPE SOURCE ${SHADER_FILE} PROPERTY name)
     set(SHADER_SPV ${SHADER_SPV_DIR}/${SHADER_NAME}.spv)
+    # set(SHADER_SPV ${SHADER_SPV_DIR}/${SHADER_NAME}.cso)
 
     if (${SHADER_TYPE} STREQUAL "rt")
         set (SHADER_TYPE_FLAG "-T lib_6_7")
@@ -271,7 +272,8 @@ foreach(SHADER_FILE ${SHADER_FILES})
     add_custom_command(
         OUTPUT ${SHADER_SPV}
         COMMAND ${SHADER_COMPILER} 
-        "-spirv" "-fspv-target-env=vulkan1.3" "-fvk-use-scalar-layout" "-Wno-parameter-usage"
+        "-spirv" "-fspv-target-env=vulkan1.3" "-fvk-use-scalar-layout" 
+        "-Wno-parameter-usage"
         ${SHADER_TYPE_FLAG} "$<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:-Zi>" "-Fo ${SHADER_SPV}" "${SHADER_FILE}" 
         DEPENDS ${SHADER_FILE} ${SHADER_INCLUDES} ${SHADER_INTEROP}
         COMMENT "Compiling HLSL shader: ${SHADER_FILE} -> ${SHADER_SPV}"

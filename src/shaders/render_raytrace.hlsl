@@ -196,50 +196,24 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
 #ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
         if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
         {
-            uint clusterID = NvRtGetCommittedClusterID(query);
             float3x3 positions = NvRtCommittedTriangleObjectPositions(query);
             float3 p0 = positions[0];
             float3 p1 = positions[1];
             float3 p2 = positions[2];
 
-            uint bindingDataIndex = query.CommittedInstanceID() + query.CommittedGeometryIndex();
-#if 0
-            uint primitiveIndex = query.CommittedPrimitiveIndex();
-
-            ClusterData cData = clusterData[clusterID];
-            uint ibOffset = cData.indexBufferOffset;
-
-            uint2 offsets = GetAlignedAddressAndBitOffset(ibOffset + 3 * primitiveIndex, 0);
-            uint2 indexData = indices.Load2(offsets[0]);
-            uint packedIndices = BitAlignU32(indexData.y, indexData.x, offsets[1]);
-
-            uint3 indices;
-            indices[0] = BitFieldExtractU32(packedIndices, 8, 0);
-            indices[1] = BitFieldExtractU32(packedIndices, 8, 8);
-            indices[2] = BitFieldExtractU32(packedIndices, 8, 16);
-
-            indices += cData.vertexBufferOffset;
-
-            float3 p0 = vertices[indices[0]];
-            float3 p1 = vertices[indices[1]];
-            float3 p2 = vertices[indices[2]];
-#endif
-
-            float3 gn = normalize(cross(p0 - p2, p1 - p2));
-            float3 n0 = gn;
-            float3 n1 = gn;
-            float3 n2 = gn;
+            uint blockIndex = NvRtGetCommittedClusterID(query);
+            uint triangleIndex = query.CommittedPrimitiveIndex();
             float2 bary = query.CommittedTriangleBarycentrics();
 #else
         if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
         {
-            uint instanceID = query.CommittedInstanceID();
             uint primitiveIndex = query.CommittedPrimitiveIndex();
 
             uint2 blockTriangleIndices = DecodeBlockAndTriangleIndex(primitiveIndex, hitKind);
             uint blockIndex = blockTriangleIndices[0];
             uint triangleIndex = blockTriangleIndices[1];
-
+#endif
+            uint instanceID = query.CommittedInstanceID();
             DenseGeometry dg = GetDenseGeometryHeader(instanceID, blockIndex, printDebug);
 
             uint materialID = dg.DecodeMaterialID(triangleIndex);
@@ -257,15 +231,18 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
             bary.x = (rotate == 1 ? 1 - oldBary.x - oldBary.y : (rotate == 2 ? oldBary.y : oldBary.x));
             bary.y = (rotate == 1 ? oldBary.x : (rotate == 2 ? 1 - oldBary.x - oldBary.y : oldBary.y));
 
+#ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
+            float3 p0 = dg.DecodePosition(vids[0]);
+            float3 p1 = dg.DecodePosition(vids[1]);
+            float3 p2 = dg.DecodePosition(vids[2]);
+#endif
+
             if (0)
             {
                 printf("%u %u %u type: %u\noldvids: %u %u %u\nvids: %u %u %u\n", instanceID, blockIndex, triangleIndex, rotate,
                         oldVids[0], oldVids[1], oldVids[2], vids[0], vids[1], vids[2]);
             }
 
-            float3 p0 = dg.DecodePosition(vids[0]);
-            float3 p1 = dg.DecodePosition(vids[1]);
-            float3 p2 = dg.DecodePosition(vids[2]);
 
             float3 gn = normalize(cross(p0 - p2, p1 - p2));
 
@@ -273,7 +250,6 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
             float3 n1 = dg.DecodeNormal(vids[1]);
             float3 n2 = dg.DecodeNormal(vids[2]);
 
-#endif
             
             // Calculate triangle differentials
             // p0 + dpdu * u + dpdv * v = p1

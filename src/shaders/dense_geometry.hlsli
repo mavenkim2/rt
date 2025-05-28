@@ -5,7 +5,11 @@
 #include "common.hlsli"
 #include "../rt/shader_interop/dense_geometry_shaderinterop.h"
 
+#if defined(__spirv__)
 StructuredBuffer<PackedDenseGeometryHeader> denseGeometryHeadersArray[] : register(t0, structuredBufferSpace);
+#else
+StructuredBuffer<PackedDenseGeometryHeader> denseGeometryHeadersArray[] : register(space200);
+#endif
 
 struct DenseGeometry 
 {
