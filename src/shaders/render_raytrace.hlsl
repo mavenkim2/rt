@@ -30,7 +30,7 @@ StructuredBuffer<float3> vertices : register(t9);
 ByteAddressBuffer indices : register(t10);
 #endif
 
-RWStructuredBuffer<uint> feedbackBuffer : register(u11);
+RWStructuredBuffer<uint> feedbackBuffer : register(u12);
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -337,7 +337,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 gr
                     float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, n, dim, printDebug);
                     uint mipLevel = (uint)lambda;
 
-                    float4 reflectance = SampleStochasticCatmullRomBorderless(physicalPages, faceData, material, faceID, uv, mipLevel, filterU, printDebug);
+                    float4 reflectance = SampleStochasticCatmullRomBorderless(faceData, material, faceID, uv, mipLevel, filterU, printDebug);
                     dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
 
                     if (depth == 1)

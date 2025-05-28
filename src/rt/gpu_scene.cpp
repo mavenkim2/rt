@@ -298,12 +298,15 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     {
         DenseGeometryBuildData data;
         GPUBuffer aabbBuffer;
-        GPUBuffer dgfBuffer;
-        GPUBuffer headerBuffer;
+        // GPUBuffer dgfBuffer;
+        // GPUBuffer headerBuffer;
         u32 aabbLength;
         u8 *dgfByteBuffer;
+        u32 byteBufferLength;
 
         PackedDenseGeometryHeader *headers;
+        u32 numHeaders;
+
         u32 **firstUses;
         u32 **reuses;
         VkAabbPositionsKHR *positions;
@@ -312,8 +315,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         u32 **debugIndices;
         u32 **debugRestartCount;
         u32 **debugRestartHighBit;
-
-        u32 numHeaders = 0;
     };
 
     // u32 totalNumClusters = 0;
@@ -359,6 +360,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         int numFaceDimBits;
         int numFaceIDBits;
         u32 virtualAddressIndex;
+        u32 faceDataOffset;
     };
     StaticArray<GPUTextureInfo> gpuTextureInfo(sceneScratch.temp.arena,
                                                rootScene->ptexTextures.size(),
@@ -479,7 +481,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             fileHeader.numFaces;
         u32 faceDataBitStreamSize = (faceDataBitStreamBitSize + 7) >> 3;
 
-        ptexFaceDataBytes += faceDataBitStreamSize;
         u8 *faceDataStream    = PushArray(sceneScratch.temp.arena, u8, faceDataBitStreamSize);
         u32 faceDataBitOffset = 0;
         for (int faceIndex = 0; faceIndex < fileHeader.numFaces; faceIndex++)
@@ -513,9 +514,32 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         gpuTextureInfo[handle.ptexIndex].numFaceDimBits       = numFaceDimBits;
         gpuTextureInfo[handle.ptexIndex].numFaceIDBits        = numFaceIDBits;
         gpuTextureInfo[handle.ptexIndex].virtualAddressIndex  = allocIndex;
+        gpuTextureInfo[handle.ptexIndex].faceDataOffset       = ptexFaceDataBytes;
+
+        ptexFaceDataBytes += faceDataBitStreamSize;
     }
 
+    u8 *faceDataByteBuffer = PushArrayNoZero(sceneScratch.temp.arena, u8, ptexFaceDataBytes);
+    u32 ptexOffset         = 0;
+    for (int i = 0; i < numHandles; i++)
+    {
+        RequestHandle &handle = handles[i];
+        GPUTextureInfo &info  = gpuTextureInfo[handle.ptexIndex];
+        MemoryCopy(faceDataByteBuffer + ptexOffset, info.packedFaceData, info.packedDataSize);
+        ptexOffset += info.packedDataSize;
+    }
+
+    Assert(ptexOffset == ptexFaceDataBytes);
+    GPUBuffer faceDataBuffer =
+        tileCmd
+            ->SubmitBuffer(faceDataByteBuffer, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                           ptexFaceDataBytes)
+            .buffer;
+
     tileCmd->SignalOutsideFrame(tileSubmitSemaphore);
+    tileCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                     VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                     VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
     tileCmd->Barrier(
         &virtualTextureManager.gpuPhysicalPool, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_READ_BIT);
@@ -527,10 +551,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     StaticArray<BLASSceneGPUInfo> blasSceneInfo(arena, blasScenes.Length());
 
-    u32 numAabbs       = 0;
-    u32 numTriangles   = 0;
-    u32 dgfHeaderBytes = 0;
-    u32 dgfBufferBytes = 0;
+    u32 numAabbs        = 0;
+    u32 numTriangles    = 0;
+    u32 dgfHeaderBytes  = 0;
+    u32 dgfBufferBytes  = 0;
+    u32 totalNumHeaders = 0;
 
     CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Copy);
     for (int i = 0; i < blasScenes.Length(); i++)
@@ -573,26 +598,18 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                 .buffer;
 
         // Combine all blocks together
+        info.byteBufferLength = data.byteBuffer.Length();
         dgfBufferBytes += data.byteBuffer.Length();
         info.dgfByteBuffer =
             PushArrayNoZero(sceneScratch.temp.arena, u8, data.byteBuffer.Length());
         data.byteBuffer.Flatten(info.dgfByteBuffer);
-        info.dgfBuffer =
-            dgfTransferCmd
-                ->SubmitBuffer(info.dgfByteBuffer, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                               data.byteBuffer.Length())
-                .buffer;
 
         // Upload headers
+        totalNumHeaders += data.headers.Length();
         info.headers = PushArrayNoZero(sceneScratch.temp.arena, PackedDenseGeometryHeader,
                                        data.headers.Length());
         data.headers.Flatten(info.headers);
         info.numHeaders = data.headers.Length();
-        info.headerBuffer =
-            dgfTransferCmd
-                ->SubmitBuffer(info.headers, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                               sizeof(PackedDenseGeometryHeader) * data.headers.Length())
-                .buffer;
 
         // Debug
         info.types =
@@ -643,12 +660,56 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             info.debugRestartCount[c++] = node->values;
         }
 #endif
-        device->SetName(&info.dgfBuffer, "DGF Buffer");
 
         dgfTransferCmd->Signal(scene->semaphore);
         blasSceneInfo.Push(info);
         ReleaseArenaArray(builder.arenas);
     }
+
+    u32 dgfByteOffset   = 0;
+    u32 dgfHeaderOffset = 0;
+    u8 *dgfBytes        = PushArrayNoZero(sceneScratch.temp.arena, u8, dgfBufferBytes);
+    PackedDenseGeometryHeader *headers =
+        PushArrayNoZero(sceneScratch.temp.arena, PackedDenseGeometryHeader, totalNumHeaders);
+
+    DGFGeometryInfo *geometryInfo =
+        PushArrayNoZero(sceneScratch.temp.arena, DGFGeometryInfo, blasScenes.Length());
+
+    for (int i = 0; i < blasScenes.Length(); i++)
+    {
+        BLASSceneGPUInfo &info = blasSceneInfo[i];
+        MemoryCopy(dgfBytes + dgfByteOffset, info.dgfByteBuffer, info.byteBufferLength);
+        u32 byteOffset = dgfByteOffset;
+        dgfByteOffset += info.byteBufferLength;
+
+        MemoryCopy(headers + dgfHeaderOffset, info.headers, info.numHeaders);
+        u32 headerOffset = dgfHeaderOffset;
+        dgfHeaderOffset += info.numHeaders;
+
+        geometryInfo[i].headerOffset = headerOffset;
+        geometryInfo[i].byteOffset   = byteOffset;
+    }
+
+    Assert(dgfByteOffset == dgfBufferBytes);
+    Assert(totalNumHeaders == dgfHeaderOffset);
+    GPUBuffer dgfHeaderBuffer =
+        dgfTransferCmd
+            ->SubmitBuffer(headers, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                           sizeof(PackedDenseGeometryHeader) * totalNumHeaders)
+            .buffer;
+    device->SetName(&dgfHeaderBuffer, "DGF Header Buffer");
+    GPUBuffer dgfByteBuffer =
+        dgfTransferCmd
+            ->SubmitBuffer(dgfBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, dgfBufferBytes)
+            .buffer;
+    device->SetName(&dgfByteBuffer, "DGF Byte Buffer");
+
+    GPUBuffer dgfGeometryInfoBuffer =
+        dgfTransferCmd
+            ->SubmitBuffer(geometryInfo, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                           sizeof(DGFGeometryInfo) * blasScenes.Length())
+            .buffer;
+    device->SetName(&dgfGeometryInfoBuffer, "DGF Geometry Info Buffer");
 
     Semaphore sem   = device->CreateSemaphore();
     sem.signalValue = 1;
@@ -904,11 +965,22 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     int shaderDebugIndex = layout.AddBinding((u32)RTBindings::ShaderDebugInfo,
                                              DescriptorType::UniformBuffer, flags);
 
+    int dgfHeaderIndex =
+        layout.AddBinding((u32)RTBindings::DGFHeaders, DescriptorType::StorageBuffer, flags);
+    int dgfBytesIndex =
+        layout.AddBinding((u32)RTBindings::DGFBytes, DescriptorType::StorageBuffer, flags);
+
+    int dgfInfoIndex =
+        layout.AddBinding((u32)RTBindings::DGFInfo, DescriptorType::StorageBuffer, flags);
+    int ptexFaceDataIndex =
+        layout.AddBinding((u32)RTBindings::PtexFaceData, DescriptorType::StorageBuffer, flags);
+
     // int clusterDataIndex = layout.AddBinding(8, DescriptorType::StorageBuffer, flags);
     // int vertexDataIndex  = layout.AddBinding(9, DescriptorType::StorageBuffer, flags);
     // int indexDataIndex   = layout.AddBinding(10, DescriptorType::StorageBuffer, flags);
 
-    int feedbackBufferIndex = layout.AddBinding(11, DescriptorType::StorageBuffer, flags);
+    int feedbackBufferIndex =
+        layout.AddBinding((u32)RTBindings::Feedback, DescriptorType::StorageBuffer, flags);
 
     // TODO: what is this?
     int counterIndex = layout.AddBinding(8, DescriptorType::StorageBuffer, flags);
@@ -983,13 +1055,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     for (int i = 0; i < blasScenes.Length(); i++)
     {
         ScenePrimitives *scene = blasScenes[i];
-        int bindlessHeaders    = device->BindlessStorageIndex(&blasSceneInfo[i].headerBuffer);
-        Assert(bindlessHeaders == 2 * runningTotal);
-
-        int bindlessData = device->BindlessStorageIndex(&blasSceneInfo[i].dgfBuffer);
-        Assert(bindlessData == 2 * runningTotal + 1);
-
-        scene->gpuInstanceID = runningTotal++;
+        scene->gpuInstanceID   = runningTotal++;
     }
 
     // Populate GPU materials
@@ -1012,14 +1078,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                 material.numVirtualOffsetBits = textureInfo.numVirtualOffsetBits;
                 material.numFaceDimBits       = textureInfo.numFaceDimBits;
                 material.numFaceIDBits        = textureInfo.numFaceIDBits;
-
-                TransferBuffer faceDataBuffer = transferCmd->SubmitBuffer(
-                    textureInfo.packedFaceData, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    textureInfo.packedDataSize);
-                int bindlessFaceDataIndex =
-                    device->BindlessStorageIndex(&faceDataBuffer.buffer);
-
-                material.bindlessFaceDataIndex = bindlessFaceDataIndex;
+                material.faceDataOffset       = textureInfo.faceDataOffset;
             }
         }
         gpuMaterials.Push(material);
@@ -1298,9 +1357,13 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             .Bind(sceneBindingIndex, &sceneTransferBuffers[currentBuffer].buffer)
             .Bind(bindingDataBindingIndex, &bindingDataBuffer)
             .Bind(gpuMaterialBindingIndex, &materialBuffer)
-            .Bind(shaderDebugIndex, &shaderDebugBuffers[currentBuffer].buffer)
             .Bind(pageTableBindingIndex, &virtualTextureManager.pageTable)
             .Bind(physicalPagesBindingIndex, &virtualTextureManager.gpuPhysicalPool)
+            .Bind(dgfHeaderIndex, &dgfHeaderBuffer)
+            .Bind(dgfBytesIndex, &dgfByteBuffer)
+            .Bind(dgfInfoIndex, &dgfGeometryInfoBuffer)
+            .Bind(ptexFaceDataIndex, &faceDataBuffer)
+            .Bind(shaderDebugIndex, &shaderDebugBuffers[currentBuffer].buffer)
             .Bind(feedbackBufferIndex,
                   &virtualTextureManager.feedbackBuffers[currentBuffer].buffer)
             .Bind(counterIndex, &counterBuffer)

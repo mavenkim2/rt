@@ -15,11 +15,6 @@ float3 SampleDielectric(float3 wo, float eta, float2 rand, inout float3 throughp
     float T = 1 - R;
     float pr = R, pt = T;
 
-    if (0)
-    {
-        printf("R, T: %f %f\n", R, T);
-    }
-
     float3 dir;
     if (u < pr / (pr + pt))
     {
@@ -46,10 +41,6 @@ float3 SampleDiffuse(float3 R, float3 wo, float2 u, inout float3 throughput, boo
     wi.z = wo.z < 0 ? -wi.z : wi.z;
     float pdf = CosineHemispherePDF(abs(wi.z));
 
-    if (0) 
-    {
-        printf("R: %f %f %f\n", R.x, R.y, R.z);
-    }
     throughput *= R * InvPi * abs(wi.z) * rcp(pdf);
 
     return wi;

@@ -11,18 +11,21 @@ ConstantBuffer<GPUScene> scene : register(b2);
 [shader("miss")]
 void main(inout RayPayload payload) 
 {
-    float3 d = normalize(mul(scene.lightFromRender, float4(WorldRayDirection(), 0)).xyz);
-
+    payload.miss = true;
+#if 0
+    float3 dir = WorldRayDirection();
+    float3 d = normalize(mul(scene.lightFromRender, float4(dir, 0)).xyz);
+    
     // Equal area sphere to square
     float x = abs(d.x), y = abs(d.y), z = abs(d.z);
-
+    
     // Compute the radius r
     float r = sqrt(1 - z); // r = sqrt(1-|z|)
-
+    
     // Compute the argument to atan (detect a=0 to avoid div-by-zero)
     float a = max(x, y), b = min(x, y);
     b = a == 0 ? 0 : b / a;
-
+    
     // Polynomial approximation of atan(x)*2/pi, x=b
     // Coefficients for 6th degree minimax approximation of atan(x)*2/pi,
     // x=[0,1].
@@ -35,14 +38,14 @@ void main(inout RayPayload payload)
     const float t7 = -0.251390972343483509333252996350e-1;
     float phi      = mad(b, mad(b, mad(b, mad(b, mad(b, mad(b, t7, t6), t5), t4), 
                             t3), t2), t1);
-
+    
     // Extend phi if the input is in the range 45-90 degrees (u<v)
     if (x < y) phi = 1 - phi;
-
+    
     // Find (u,v) based on (r,phi)
     float v = phi * r;
     float u = r - v;
-
+    
     if (d.z < 0)
     {
         // southern hemisphere -> mirror u,v
@@ -50,43 +53,19 @@ void main(inout RayPayload payload)
         u = 1 - u;
         v = 1 - v;
     }
-
+    
     // Move (u,v) to the correct quadrant based on the signs of (x,y)
     u = copysign(u, d.x);
     v = copysign(v, d.y);
     float2 uv = float2(0.5f * (u + 1), 0.5f * (v + 1));
-
+    
+    uv = uv[0] < 0 ? float2(-uv[0], 1 - uv[1]) : uv;
+    uv = uv[0] >= 1 ? float2(2 - uv[0], 1 - uv[1]) : uv;
+    
+    uv = uv[1] < 0 ? float2(1 - uv[0], -uv[1]) : uv;
+    uv = uv[1] >= 1 ? float2(1 - uv[0], 2 - uv[1]) : uv;
+    
     float3 imageLe = bindlessTextures[push.envMap].SampleLevel(samplerLinearClamp, uv, 0).rgb;
-    //payload.radiance = payload.throughput * imageLe;
-    //payload.missed = true;
-#if 0
-    int2 p = int2(int(uv[0] * push.width), int(uv[1] * push.height));
-    if (p[0] < 0)
-    {
-        p[0] = -p[0];                    // mirror across u = 0
-        p[1] = push.height - 1 - p[1]; // mirror across v = 0.5
-    }
-    else if (p[0] >= push.width)
-    {
-        p[0] = 2 * push.width - 1 - p[0]; // mirror across u = 1
-        p[1] = push.height - 1 - p[1];    // mirror across v = 0.5
-    }
-
-    if (p[1] < 0)
-    {
-        p[0] = push.width - 1 - p[0]; // mirror across u = 0.5
-        p[1] = -p[1];                   // mirror across v = 0;
-    }
-    else if (p[1] >= push.height)
-    {
-        p[0] = push.width - 1 - p[0];      // mirror across u = 0.5
-        p[1] = 2 * push.height - 1 - p[1]; // mirror across v = 1
-    }
-
-    if (push.width == 1) p[0] = 0;
-    if (push.height == 1) p[1] = 0;
-
-    float3 imageLe = bindlessTextures[push.envMap].Load(int3(p, 0)).rgb;
-    payload.radiance = payload.throughput * imageLe;
+    radiance += throughput * imageLe;
 #endif
 }

@@ -1,3 +1,7 @@
+#define ShaderInvocationReorderNV 5383
+[[vk::ext_capability(ShaderInvocationReorderNV)]]
+[[vk::ext_extension("SPV_NV_shader_invocation_reorder")]]
+
 #include "common.hlsli"
 #include "bsdf/bxdf.hlsli"
 #include "bsdf/bsdf.hlsli"
@@ -14,7 +18,8 @@
 #include "../rt/shader_interop/ray_shaderinterop.h"
 #include "../rt/shader_interop/hit_shaderinterop.h"
 #include "../rt/shader_interop/debug_shaderinterop.h"
-# include "../rt/nvapi.h"
+#include "ser.hlsli"
+//#include "../rt/nvapi.h"
 #include "wave_intrinsics.hlsli"
 
 #define SER
@@ -32,7 +37,7 @@ StructuredBuffer<float3> vertices : register(t9);
 ByteAddressBuffer indices : register(t10);
 #endif
 
-RWStructuredBuffer<uint> feedbackBuffer : register(u11);
+RWStructuredBuffer<uint> feedbackBuffer : register(u12);
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -83,59 +88,13 @@ void main()
         desc.TMin = 0;
         desc.TMax = FLT_MAX;
         
-#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
-        RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_FORCE_OPAQUE> query;
-        query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
-        query.Proceed();
-#else
-#ifdef SER
-        RayPayload payload;
-        NvHitObject hitObject = NvTraceRayHitObject(accel, RAY_FLAG_SKIP_TRIANGLES | RAY_FLAG_FORCE_OPAQUE, 
-                                                    0xff, 0, 1, 0, desc, payload);
+        HitObjectNV hitObject;
+        CreateHitObjectNV();
+        TraceRayHitObjectNV(hitObject, accel, RAY_FLAG_SKIP_TRIANGLES | RAY_FLAG_FORCE_OPAQUE, 
+                            0xff, 0, 1, 0, pos, 0, dir, FLT_MAX, payload);
+        ReorderThreadWithHitNV(hitObject, 0, 0);
 
-        //uint octant = (dir.x >= 0) | ((dir.y >= 0) << 1) | ((dir.z >= 0) << 2);
-        //NvReorderThread(octant, 3);
-        NvReorderThread(hitObject);
-#else
-        RayQuery<RAY_FLAG_SKIP_TRIANGLES | RAY_FLAG_FORCE_OPAQUE> query;
-        query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
-        float2 bary;
-        uint hitKind;
-
-        uint numIters = 0;
-
-        while (query.Proceed()) 
-        {
-            numIters++;
-            if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
-            {
-                uint primitiveIndex = query.CandidatePrimitiveIndex();
-                uint instanceID = query.CandidateInstanceID();
-                float3 o = query.CandidateObjectRayOrigin();
-                float3 d = query.CandidateObjectRayDirection();
-
-                float tHit = 0;
-                uint kind = 0;
-                float2 tempBary = 0;
-
-                bool result = IntersectCluster(instanceID, primitiveIndex, o, d, query.RayTMin(), 
-                                               query.CommittedRayT(), tHit, kind, tempBary, numIters > 1000);
-
-                if (!result) continue;
-
-                bary = tempBary;
-                hitKind = kind;
-                query.CommitProceduralPrimitiveHit(tHit);
-            }
-        }
-#endif
-#endif
-
-#ifdef SER
-        if (hitObject.IsMiss())
-#else
-        if (query.CommittedStatus() != COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
-#endif
+        if (IsMissNV(hitObject))
         {
             float3 d = normalize(mul(scene.lightFromRender, float4(dir, 0)).xyz);
 
@@ -199,44 +158,21 @@ void main()
             break;
         }
 
-#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
-        if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+        if (IsHitNV(hitObject))
         {
-            float3x3 positions = NvRtCommittedTriangleObjectPositions(query);
-            float3 p0 = positions[0];
-            float3 p1 = positions[1];
-            float3 p2 = positions[2];
+            //NvInvokeHitObject(hitObject, payload);
 
-            uint blockIndex = NvRtGetCommittedClusterID(query);
-            uint triangleIndex = query.CommittedPrimitiveIndex();
-            float2 bary = query.CommittedTriangleBarycentrics();
-#else
-#ifdef SER
-        if (hitObject.IsHit())
-        {
-            NvInvokeHitObject(accel, hitObject, payload);
-
-            uint primitiveIndex = hitObject.GetPrimitiveIndex();
-            uint instanceID = hitObject.GetInstanceID();
+            uint primitiveIndex = GetPrimitiveIndexNV(hitObject);
+            uint instanceID = GetInstanceIDNV(hitObject);
             float3x4 objectToWorld = payload.objectToWorld;
             float3 objectRayDir = payload.objectRayDir;
             float2 bary = payload.bary;
             float rayT = payload.rayT;
             uint hitKind = payload.hitKind;
-#else
-        if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
-        {
-            uint primitiveIndex = query.CommittedPrimitiveIndex();
-            uint instanceID = query.CommittedInstanceID();
-            float3x4 objectToWorld = query.CommittedObjectToWorld3x4();
-            float rayT = query.CommittedRayT();
-            float3 objectRayDir = query.CommittedObjectRayDirection();
-#endif
 
             uint2 blockTriangleIndices = DecodeBlockAndTriangleIndex(primitiveIndex, hitKind);
             uint blockIndex = blockTriangleIndices[0];
             uint triangleIndex = blockTriangleIndices[1];
-#endif
             DenseGeometry dg = GetDenseGeometryHeader(instanceID, blockIndex, printDebug);
 
             uint materialID = dg.DecodeMaterialID(triangleIndex);
@@ -254,11 +190,9 @@ void main()
             bary.x = (rotate == 1 ? 1 - oldBary.x - oldBary.y : (rotate == 2 ? oldBary.y : oldBary.x));
             bary.y = (rotate == 1 ? oldBary.x : (rotate == 2 ? 1 - oldBary.x - oldBary.y : oldBary.y));
 
-#ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
             float3 p0 = dg.DecodePosition(vids[0]);
             float3 p1 = dg.DecodePosition(vids[1]);
             float3 p2 = dg.DecodePosition(vids[2]);
-#endif
 
             if (0)
             {
@@ -359,7 +293,7 @@ void main()
                     float lambda = rayCone.ComputeTextureLOD(p0, p1, p2, uv0, uv1, uv2, dir, n, dim, printDebug);
                     uint mipLevel = (uint)lambda;
 
-                    float4 reflectance = SampleStochasticCatmullRomBorderless(physicalPages, faceData, material, faceID, uv, mipLevel, filterU, printDebug);
+                    float4 reflectance = SampleStochasticCatmullRomBorderless(faceData, material, faceID, uv, mipLevel, filterU, printDebug);
                     dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
 
                     if (depth == 1)
@@ -372,44 +306,6 @@ void main()
                 }
                 break;
             }
-
-
-            if (dir.z == 0) break;
-            origin = TransformP(objectToWorld, origin);
-            dir = ss * dir.x + ts * dir.y + n * dir.z;
-            dir = normalize(TransformV(objectToWorld, dir));
-            pos = OffsetRayOrigin(origin, gn, printDebug);
         }
-
-#if 1
-        // Warp based russian roulette
-        // https://www.nvidia.com/en-us/on-demand/session/gdc25-gdc1002/
-        const float continuationProb = min(1.f, Luminance(throughput));
-        const uint activeLaneCount = WaveActiveCountBits(true);
-        const uint totalLaneCount = WaveGetLaneCount();
-        const float activeLaneRatio = (float)activeLaneCount / (float)totalLaneCount;
-        const float activeLaneRatioThreshold = .3f;
-        const float groupContinuationProb = continuationProb * saturate(activeLaneRatio / activeLaneRatioThreshold);
-
-
-        if (rng.Uniform() >= groupContinuationProb)
-            break;
-        throughput /= groupContinuationProb;
-#endif
-    }
-    image[swizzledThreadID] = float4(radiance, 1);
-
-    // Write virtual texture feedback back to main memory
-    uint4 mask = WaveMatch(feedbackRequest.x);
-    int4 highLanes = (int4)(firstbithigh(mask) | uint4(0, 0x20, 0x40, 0x60));
-    uint highLane = (uint)max(max(highLanes.x, highLanes.y), max(highLanes.z, highLanes.w));
-    bool isHighLane = all(feedbackRequest != ~0u) && WaveGetLaneIndex() == highLane;
-
-    uint index;
-    WaveInterlockedAddScalarTest(feedbackBuffer[0], isHighLane, 2, index);
-    if (isHighLane)
-    {
-        feedbackBuffer[index + 1] = feedbackRequest.x;
-        feedbackBuffer[index + 2] = feedbackRequest.y;
     }
 }

@@ -5,15 +5,12 @@
 #include "common.hlsli"
 #include "../rt/shader_interop/dense_geometry_shaderinterop.h"
 
-#if defined(__spirv__)
-StructuredBuffer<PackedDenseGeometryHeader> denseGeometryHeadersArray[] : register(t0, structuredBufferSpace);
-#else
-StructuredBuffer<PackedDenseGeometryHeader> denseGeometryHeadersArray[] : register(space200);
-#endif
+StructuredBuffer<PackedDenseGeometryHeader> denseGeometryHeaders : register(t8);
+ByteAddressBuffer denseGeometryData : register(t9);
+StructuredBuffer<DGFGeometryInfo> dgfGeometryInfos : register(t10);
 
 struct DenseGeometry 
 {
-    ByteAddressBuffer denseGeometryData;
     uint baseAddress;
 
     uint blockIndex;
@@ -135,52 +132,6 @@ struct DenseGeometry
                 printf("bitmask: %u %u %u, vals: %u %u\n", restartBitmask, edgeBitmask, backtrackBitmask, vals[0], vals[1]);
             }
         }
-#if 0
-        uint r = 1;
-        int bt = 0;
-        uint prevCtrl = Restart;
-
-        uint2 ctrlBaseAligned_bitOffset = GetAlignedAddressAndBitOffset(baseAddress, ctrlBitOffset);
-        uint alignedStart = ctrlBaseAligned_bitOffset[0];
-        uint bitOffset = ctrlBaseAligned_bitOffset[1];
-
-        BitStreamReader reader = CreateBitStreamReader(denseGeometryData, alignedStart, 
-                                                       bitOffset,
-                                                       MAX_CLUSTER_TRIANGLES * 2);
-        for (int k = 1; k <= triangleIndex; k++)
-        {
-            uint ctrl = reader.Read<2>(2);
-            int3 prev = indexAddress;
-            switch (ctrl)
-            {
-                case Restart:
-                {
-                    r++;
-                    indexAddress = uint3(2 * r + k - 2, 2 * r + k - 1, 2 * r + k);
-                }
-                break;
-                case Edge1: 
-                {
-                    indexAddress = uint3(prev[2], prev[1], 2 * r + k);
-                    bt = prev[0];
-                }
-                break;
-                case Edge2: 
-                {
-                    indexAddress = uint3(prev[0], prev[2], 2 * r + k);
-                    bt = prev[1];
-                }
-                break;
-                case Backtrack: 
-                {
-                    indexAddress = prevCtrl == Edge1 ? uint3(bt, prev[0], 2 * r + k) 
-                                                     : uint3(prev[1], bt, 2 * r + k);
-                }
-                break;
-            }
-            prevCtrl = ctrl;
-        }
-#endif
 
         // Get the first bits mask
         uint2 baseAligned_bitOffset = GetAlignedAddressAndBitOffset(baseAddress, firstBitOffset);
@@ -370,14 +321,15 @@ struct DenseGeometry
 };
 
 // Taken from NaniteDataDecode.ush in Unreal Engine 5
-DenseGeometry GetDenseGeometryHeader(StructuredBuffer<PackedDenseGeometryHeader> headers, ByteAddressBuffer buffer, uint blockIndex, bool debug = false)
+DenseGeometry GetDenseGeometryHeader(uint instanceID, uint blockIndex, bool debug = false)
 {
-    PackedDenseGeometryHeader packed = headers[blockIndex];
+    const int mult = 2;
+    DGFGeometryInfo geometryInfo = dgfGeometryInfos[instanceID];
+    PackedDenseGeometryHeader packed = denseGeometryHeaders[geometryInfo.headerOffset + blockIndex];
 
     DenseGeometry result;
 
-    result.denseGeometryData = buffer;
-    result.baseAddress = packed.a;
+    result.baseAddress = geometryInfo.byteOffset + packed.a;
 
     result.blockIndex = blockIndex;
 
@@ -433,11 +385,4 @@ DenseGeometry GetDenseGeometryHeader(StructuredBuffer<PackedDenseGeometryHeader>
     return result;
 }
 
-DenseGeometry GetDenseGeometryHeader(uint instanceID, uint blockIndex, bool debug = false)
-{
-    const int mult = 2;
-    StructuredBuffer<PackedDenseGeometryHeader> headers = denseGeometryHeadersArray[mult * instanceID];
-    ByteAddressBuffer dgfByteBuffer = bindlessBuffer[mult * instanceID + 1];
-    return GetDenseGeometryHeader(headers, dgfByteBuffer, blockIndex, debug);
-}
 #endif

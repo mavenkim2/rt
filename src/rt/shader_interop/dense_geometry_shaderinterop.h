@@ -36,6 +36,12 @@ struct PackedDenseGeometryHeader
     uint j;
 };
 
+struct DGFGeometryInfo
+{
+    uint headerOffset;
+    uint byteOffset;
+};
+
 struct AABB
 {
     float minX;

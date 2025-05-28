@@ -30,7 +30,7 @@ struct GPUMaterial
     uint numVirtualOffsetBits;
     uint numFaceDimBits;
     uint numFaceIDBits;
-    int bindlessFaceDataIndex;
+    uint faceDataOffset;
 
     // Shading info
     float eta;

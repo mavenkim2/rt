@@ -1,9 +1,7 @@
 #ifndef SER_HLSLI_
 #define SER_HLSLI_
 
-#define ShaderInvocationReorderNV 5383
 #define HitObjectAttributeNV 5385
-
 #define OpHitObjectRecordHitMotionNV 5249
 #define OpHitObjectRecordHitWithIndexMotionNV 5250
 #define OpHitObjectRecordMissMotionNV 5251
@@ -38,26 +36,29 @@
 #define OpReorderThreadWithHintNV 5280
 #define OpTypeHitObjectNV 5281
 
-[[vk::ext_capability(ShaderInvocationReorderNV)]]
-[[vk::ext_extension("SPV_NV_shader_invocation_reorder")]]
-
 #define RayPayloadKHR 5338
-//[[vk::ext_storage_class(RayPayloadKHR)]] static RayPayload payload;
+[[vk::ext_storage_class(RayPayloadKHR)]] static RayPayload payload;
 
 [[vk::ext_instruction(OpReorderThreadWithHintNV)]]
 void NvReorderThread(int hint, int bits);
 
 [[vk::ext_type_def(HitObjectAttributeNV, OpTypeHitObjectNV)]]
-void NvCreateHitObject();
-#define NvHitObject vk::ext_type<HitObjectAttributeNV>
+void CreateHitObjectNV();
+#define HitObjectNV vk::ext_type<HitObjectAttributeNV>
 
 [[vk::ext_instruction(OpReorderThreadWithHitObjectNV)]]
-void NvReorderThreadWithHit([[vk::ext_reference]] NvHitObject hitObject, uint hint, uint bits);
+void ReorderThreadWithHitNV([[vk::ext_reference]] HitObjectNV hitObject, uint hint, uint bits);
 
-#if 0
+[[vk::ext_instruction(OpHitObjectIsMissNV)]]
+bool IsMissNV([[vk::ext_reference]] HitObjectNV hitObject);
+
+[[vk::ext_instruction(OpHitObjectIsHitNV)]]
+bool IsHitNV([[vk::ext_reference]] HitObjectNV hitObject);
+
+#if 1
 [[vk::ext_instruction(OpHitObjectTraceRayNV)]]
-void NvTraceRayHitObject(
-    [[vk::ext_reference]] NvHitObject hitObject,
+void TraceRayHitObjectNV(
+    [[vk::ext_reference]] HitObjectNV hitObject,
     RaytracingAccelerationStructure as,
     uint RayFlags,
     uint CullMask,
@@ -71,5 +72,17 @@ void NvTraceRayHitObject(
     [[vk::ext_reference]] [[vk::ext_storage_class(RayPayloadKHR)]] RayPayload payload
   );
 #endif
+
+[[vk::ext_instruction(OpHitObjectExecuteShaderNV)]]
+void InvokeHitObjectNV(
+    [[vk::ext_reference]] HitObjectNV hitObject, 
+    [[vk::ext_reference]] [[vk::ext_storage_class(RayPayloadKHR)]] RayPayload payload
+);
+
+[[vk::ext_instruction(OpHitObjectGetPrimitiveIndexNV)]]
+uint GetPrimitiveIndexNV([[vk::ext_reference]] HitObjectNV hitObject);
+
+[[vk::ext_instruction(OpHitObjectGetInstanceIdNV)]]
+uint GetInstanceIDNV([[vk::ext_reference]] HitObjectNV hitObject);
 
 #endif

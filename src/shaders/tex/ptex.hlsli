@@ -6,6 +6,8 @@
 #include "virtual_textures.hlsli"
 #include "../../rt/shader_interop/hit_shaderinterop.h"
 
+ByteAddressBuffer faceDataBuffer : register(t11);
+
 static const float2x3 uvRotations[16] = {
     float2x3(1, 0, 0, 0, 1, 1), 
     float2x3(0, 1, 1, -1, 0, 1),
@@ -24,6 +26,8 @@ static const float2x3 uvRotations[16] = {
     float2x3(-1, 0, 0, 0, -1, 1), 
     float2x3(0, -1, 1, 1, 0, 1),
 };
+
+DefineBitStreamReader(Ptex, faceDataBuffer)
 
 namespace Ptex
 {
@@ -68,13 +72,12 @@ namespace Ptex
     FaceData GetFaceData(GPUMaterial material, uint faceID)
     {
         // Load face data
-        ByteAddressBuffer faceDataBuffer = bindlessBuffer[material.bindlessFaceDataIndex];
         uint faceDataStride = 2 * (material.numVirtualOffsetBits + material.numFaceDimBits) + 4 * material.numFaceIDBits + 9;
         uint bufferOffset = faceDataStride * faceID;
 
-        BitStreamReader reader = CreateBitStreamReader(faceDataBuffer, 0, bufferOffset, 32 * 4 + 24 * 2 + 4 * 2 + 9);
-
         FaceData result;
+        BitStreamReader_Ptex reader = CreateBitStreamReader_Ptex(material.faceDataOffset, bufferOffset, 32 * 4 + 24 * 2 + 4 * 2 + 9);
+
         result.faceOffset.x = reader.Read<24>(material.numVirtualOffsetBits);
         result.faceOffset.y = reader.Read<24>(material.numVirtualOffsetBits);
         result.log2Dim.x = material.minLog2Dim + reader.Read<4>(material.numFaceDimBits);
@@ -95,7 +98,7 @@ namespace Ptex
 
 }
 
-float4 StochasticCatmullRomBorderlessHelper(Texture2DArray tex, GPUMaterial material, Ptex::FaceData faceData, float2 texCoord, float2 texSize, uint mipLevel, float reservoirWeightSum, bool debug = false) 
+float4 StochasticCatmullRomBorderlessHelper(GPUMaterial material, Ptex::FaceData faceData, float2 texCoord, float2 texSize, uint mipLevel, float reservoirWeightSum, bool debug = false) 
 {
     // Lookup adjacency information if necessary
     int neighborIndex = Ptex::GetNeighborIndexFromUV(texCoord, texSize);
@@ -123,7 +126,7 @@ float4 StochasticCatmullRomBorderlessHelper(Texture2DArray tex, GPUMaterial mate
     // Virtual texture lookup
     const uint2 baseOffset = material.baseVirtualPage * PAGE_WIDTH + neighborData.faceOffset;
     const float3 fullUv = VirtualTexture::GetPhysicalUV(baseOffset, newUv, faceSize, mipLevel, debug);
-    float4 result = reservoirWeightSum * tex.SampleLevel(samplerNearestClamp, fullUv, 0.f);
+    float4 result = reservoirWeightSum * physicalPages.SampleLevel(samplerNearestClamp, fullUv, 0.f);
 
     if (0)
     {
@@ -137,7 +140,7 @@ float4 StochasticCatmullRomBorderlessHelper(Texture2DArray tex, GPUMaterial mate
 }
 
 // https://research.nvidia.com/labs/rtr/publication/pharr2024stochtex/stochtex.pdf
-float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, Ptex::FaceData faceData, GPUMaterial material, uint faceID, float2 uv, uint mipLevel, inout float u, bool debug = false) 
+float4 SampleStochasticCatmullRomBorderless(Ptex::FaceData faceData, GPUMaterial material, uint faceID, float2 uv, uint mipLevel, inout float u, bool debug = false) 
 {
     float2 texSize = float2(1u << (faceData.log2Dim.x - mipLevel), 1u << (faceData.log2Dim.y - mipLevel));
     texSize = faceData.rotate ? texSize.yx : texSize;
@@ -186,12 +189,12 @@ float4 SampleStochasticCatmullRomBorderless(Texture2DArray tex, Ptex::FaceData f
     // Get texels
     float4 result = 0.f;
     float2 posCoord = float2(texPos[reservoir[0].x].x, texPos[reservoir[0].y].y);
-    result += StochasticCatmullRomBorderlessHelper(tex, material, faceData, posCoord, 
+    result += StochasticCatmullRomBorderlessHelper(material, faceData, posCoord, 
                                                    texSize, mipLevel, weightsSum[0], debug);
     if (weightsSum[1] != 0.f)
     {
         float2 negCoord = float2(texPos[reservoir[1].x].x, texPos[reservoir[1].y].y);
-        result -= StochasticCatmullRomBorderlessHelper(tex, material, faceData, negCoord, 
+        result -= StochasticCatmullRomBorderlessHelper(material, faceData, negCoord, 
                                                        texSize, mipLevel, weightsSum[1], debug);
     }
 

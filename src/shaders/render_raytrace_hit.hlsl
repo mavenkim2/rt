@@ -25,4 +25,7 @@ void main(inout RayPayload payload : SV_RayPayload, BuiltInTriangleIntersectionA
     payload.bary = attr.barycentrics;
     payload.rayT = RayTCurrent();
     payload.hitKind = HitKind();
+    payload.primitiveIndex = PrimitiveIndex();
+    payload.instanceID = InstanceID();
+    payload.miss = false;
 }

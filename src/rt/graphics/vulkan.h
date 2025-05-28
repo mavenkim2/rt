@@ -272,6 +272,14 @@ enum class RTBindings
     PageTable,
     PhysicalPages,
     ShaderDebugInfo,
+
+    DGFHeaders,
+    DGFBytes,
+    DGFInfo, 
+
+    PtexFaceData,
+
+    Feedback,
 };
 
 enum RayShaderTypes
