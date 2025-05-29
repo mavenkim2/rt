@@ -36,9 +36,10 @@ ClusterBuilder::ClusterBuilder(Arena *arena, ScenePrimitives *scene, PrimRef *pr
 
 void DenseGeometryBuildData::Init()
 {
-    arena      = ArenaAlloc();
-    byteBuffer = ChunkedLinkedList<u8>(arena, 1024);
-    headers    = ChunkedLinkedList<PackedDenseGeometryHeader>(arena);
+    arena             = ArenaAlloc();
+    geoByteBuffer     = ChunkedLinkedList<u8>(arena, 1024);
+    shadingByteBuffer = ChunkedLinkedList<u8>(arena, 1024);
+    headers           = ChunkedLinkedList<PackedDenseGeometryHeader>(arena);
 
     // Debug
 #if 0
@@ -50,22 +51,6 @@ void DenseGeometryBuildData::Init()
     debugIndices                = ChunkedLinkedList<u32>(arena);
     debugRestartCountPerDword   = ChunkedLinkedList<u32>(arena);
     debugRestartHighBitPerDword = ChunkedLinkedList<u32>(arena);
-}
-
-void DenseGeometryBuildData::Merge(DenseGeometryBuildData &other)
-{
-    u32 offset = byteBuffer.Length();
-
-    for (auto *node = other.headers.first; node != 0; node = node->next)
-    {
-        for (int i = 0; i < node->count; i++)
-        {
-            node->values[i].a += offset;
-        }
-    }
-
-    headers.Merge(&other.headers);
-    byteBuffer.Merge(&other.byteBuffer);
 }
 
 void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel)
@@ -816,7 +801,8 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     u32 vertexBitStreamSize = (numBits + 7) >> 3;
     u32 normalBitStreamSize = (vertexCount * (numOctBitsX + numOctBitsY) + 7) >> 3;
     u32 faceBitStreamSize   = 4 + (((numFaceBits + 3) * clusterNumTriangles + 7) >> 3);
-    u32 baseAddress         = buildData.byteBuffer.Length();
+    u32 geoBaseAddress      = buildData.geoByteBuffer.Length();
+    u32 shadingBaseAddress  = buildData.shadingByteBuffer.Length();
 
     // Use the new index order to write compressed vertex buffer and reuse buffer
     u32 maxReuseBufferSize = clusterNumTriangles * 3;
@@ -837,20 +823,20 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     ChunkedLinkedList<u8>::ChunkNode *vertexNode = 0;
     if (vertexBitStreamSize)
     {
-        totalSize += vertexBitStreamSize;
-        vertexNode = buildData.byteBuffer.AddNode(vertexBitStreamSize);
+        // totalSize += vertexBitStreamSize;
+        vertexNode = buildData.geoByteBuffer.AddNode(vertexBitStreamSize);
     }
     ChunkedLinkedList<u8>::ChunkNode *normalNode = 0;
     if (normalBitStreamSize)
     {
         totalSize += normalBitStreamSize;
-        normalNode = buildData.byteBuffer.AddNode(normalBitStreamSize);
+        normalNode = buildData.shadingByteBuffer.AddNode(normalBitStreamSize);
     }
     ChunkedLinkedList<u8>::ChunkNode *faceIDNode = 0;
     if (hasFaceIDs)
     {
         totalSize += faceBitStreamSize;
-        faceIDNode = buildData.byteBuffer.AddNode(faceBitStreamSize);
+        faceIDNode = buildData.shadingByteBuffer.AddNode(faceBitStreamSize);
     }
 
     StaticArray<u32> newNormals(clusterScratch.arena, vertexCount);
@@ -931,8 +917,8 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
         ((numIndexBits * reuseBuffer.Length() + currentFirstUseBit + 7) >> 3) + ctrlBitSize;
     u32 numBitStreamBits =
         numIndexBits * reuseBuffer.Length() + (ctrlBitSize << 3) + currentFirstUseBit;
-    auto *node = buildData.byteBuffer.AddNode(bitStreamSize);
-    totalSize += bitStreamSize;
+    auto *node = buildData.geoByteBuffer.AddNode(bitStreamSize);
+    // totalSize += bitStreamSize;
 
     // Write control bits
     int numRemainingTriangles = clusterNumTriangles;
@@ -967,7 +953,8 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     // Write header
     PackedDenseGeometryHeader packed = {};
     u32 headerOffset                 = 0;
-    packed.a                         = baseAddress;
+    packed.z                         = shadingBaseAddress;
+    packed.a                         = geoBaseAddress;
     headerOffset += 32;
 
     packed.b = BitFieldPackI32(packed.b, min[0], headerOffset, ANCHOR_WIDTH);
@@ -1069,7 +1056,7 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
                                    (32 - commonMSBs) * uniqueMaterialIDs.Length() +
                                    entryBitLength * clusterNumTriangles;
         u32 materialTableSize = (materialTableNumBits + 7) >> 3;
-        auto *table           = buildData.byteBuffer.AddNode(materialTableSize);
+        auto *table           = buildData.shadingByteBuffer.AddNode(materialTableSize);
         u32 tableBitOffset    = 0;
         WriteBits((u32 *)table->values, tableBitOffset, currentCommonMSBs, commonMSBs);
         for (u32 materialID : uniqueMaterialIDs)

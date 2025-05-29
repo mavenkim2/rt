@@ -35,7 +35,8 @@ struct alignas(CACHE_LINE_SIZE) ClusterExtents
 struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
 {
     Arena *arena;
-    ChunkedLinkedList<u8> byteBuffer;
+    ChunkedLinkedList<u8> geoByteBuffer;
+    ChunkedLinkedList<u8> shadingByteBuffer;
     ChunkedLinkedList<PackedDenseGeometryHeader> headers;
     u32 numBlocks;
 
@@ -52,7 +53,6 @@ struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
     ChunkedLinkedList<u32> debugRestartHighBitPerDword;
 
     void Init();
-    void Merge(DenseGeometryBuildData &other);
 };
 
 struct ClusterBuilder

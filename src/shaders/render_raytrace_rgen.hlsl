@@ -63,7 +63,7 @@ void main()
     float3 throughput = float3(1, 1, 1);
     float3 radiance = float3(0, 0, 0);
 
-    const int maxDepth = 1;
+    const int maxDepth = 2;
     int depth = 0;
 
     float3 pos;
@@ -226,11 +226,6 @@ void main()
             float2 bary = payload.bary;
             float rayT = payload.rayT;
             uint hitKind = 0;//GetHitKindNV(hitObject);
-
-            if (printDebug)
-            {
-                printf("help: %f %f %f\n", bary.x, bary.y, rayT);
-            }
 #else
         if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
         {

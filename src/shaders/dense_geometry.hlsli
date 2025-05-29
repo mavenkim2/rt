@@ -11,7 +11,8 @@ StructuredBuffer<DGFGeometryInfo> dgfGeometryInfos : register(t10);
 
 struct DenseGeometry 
 {
-    uint baseAddress;
+    uint geoBaseAddress;
+    uint shadBaseAddress;
 
     uint blockIndex;
 
@@ -61,7 +62,7 @@ struct DenseGeometry
         uint mask = (1u << bitIndex) - 1u;
 
         // x = restarts, y = edge, z = backtrack
-        uint2 vals = GetAlignedAddressAndBitOffset(baseAddress + ctrlOffset + dwordIndex * 12, 0);
+        uint2 vals = GetAlignedAddressAndBitOffset(geoBaseAddress + ctrlOffset + dwordIndex * 12, 0);
         uint4 stripBitmasks = denseGeometryData.Load4(vals[0]);
         stripBitmasks[0] = BitAlignU32(stripBitmasks[1], stripBitmasks[0], vals[1]);
         stripBitmasks[1] = BitAlignU32(stripBitmasks[2], stripBitmasks[1], vals[1]);
@@ -134,7 +135,7 @@ struct DenseGeometry
         }
 
         // Get the first bits mask
-        uint2 baseAligned_bitOffset = GetAlignedAddressAndBitOffset(baseAddress, firstBitOffset);
+        uint2 baseAligned_bitOffset = GetAlignedAddressAndBitOffset(geoBaseAddress, firstBitOffset);
         uint alignedFirstBitsOffset = baseAligned_bitOffset[0];
         uint firstBitsOffset = baseAligned_bitOffset[1];
 
@@ -207,7 +208,7 @@ struct DenseGeometry
         const uint bitsPerVertex = posBitWidths[0] + posBitWidths[1] + posBitWidths[2];
         const uint bitsOffset = vertexIndex * bitsPerVertex;
 
-        uint2 vals = GetAlignedAddressAndBitOffset(baseAddress, bitsOffset);
+        uint2 vals = GetAlignedAddressAndBitOffset(geoBaseAddress, bitsOffset);
         uint3 data = denseGeometryData.Load3(vals[0]);
 
         uint2 packed = uint2(BitAlignU32(data.y, data.x, vals[1]), 
@@ -232,7 +233,7 @@ struct DenseGeometry
         const uint bitsPerNormal = octBitWidths[0] + octBitWidths[1];
         const uint bitsOffset = bitsPerNormal * vertexIndex;
 
-        uint2 vals = GetAlignedAddressAndBitOffset(baseAddress + normalOffset, bitsOffset);
+        uint2 vals = GetAlignedAddressAndBitOffset(shadBaseAddress + normalOffset, bitsOffset);
         uint2 data = denseGeometryData.Load2(vals[0]);
         uint n = BitAlignU32(data.y, data.x, vals[1]);
 
@@ -245,7 +246,7 @@ struct DenseGeometry
     uint DecodeReuse(uint reuseIndex)
     {
         const uint bitsOffset = reuseIndex * indexBitWidth;
-        uint2 vals = GetAlignedAddressAndBitOffset(baseAddress + indexOffset, bitsOffset);
+        uint2 vals = GetAlignedAddressAndBitOffset(geoBaseAddress + indexOffset, bitsOffset);
         uint2 result = denseGeometryData.Load2(vals[0]);
         uint r = BitFieldExtractU32(BitAlignU32(result.y, result.x, vals[1]), indexBitWidth, 0);
         return r;
@@ -272,18 +273,18 @@ struct DenseGeometry
             uint bitOffset = numHighOrderBits + numEntries * numLowOrderBits + triangleIndex * entryBitWidth;
 
             // First get the entry index
-            uint2 offsets = GetAlignedAddressAndBitOffset(baseAddress + materialOffset, bitOffset);
+            uint2 offsets = GetAlignedAddressAndBitOffset(shadBaseAddress + materialOffset, bitOffset);
             uint2 result = denseGeometryData.Load2(offsets[0]);
             uint entryIndex = BitFieldExtractU32(BitAlignU32(result.y, result.x, offsets[1]), entryBitWidth, 0);
 
             // Then get the entry
             // LSB
             bitOffset = numHighOrderBits + entryIndex * numLowOrderBits;
-            offsets = GetAlignedAddressAndBitOffset(baseAddress + materialOffset, bitOffset);
+            offsets = GetAlignedAddressAndBitOffset(shadBaseAddress + materialOffset, bitOffset);
             result = denseGeometryData.Load2(offsets[0]);
             uint entry = BitFieldExtractU32(BitAlignU32(result.y, result.x, offsets[1]), numLowOrderBits, 0);
             // MSB
-            offsets = GetAlignedAddressAndBitOffset(baseAddress + materialOffset, 0);
+            offsets = GetAlignedAddressAndBitOffset(shadBaseAddress + materialOffset, 0);
             result = denseGeometryData.Load2(offsets[0]);
             uint msb = BitFieldExtractU32(BitAlignU32(result.y, result.x, offsets[1]), numHighOrderBits, 0);
 
@@ -298,11 +299,11 @@ struct DenseGeometry
         uint2 result = 0;
         if (numFaceIDBits)
         {
-            uint2 offsets = GetAlignedAddressAndBitOffset(baseAddress + faceIDOffset, 0);
+            uint2 offsets = GetAlignedAddressAndBitOffset(shadBaseAddress + faceIDOffset, 0);
             uint2 data = denseGeometryData.Load2(offsets[0]);
             uint minFaceID = BitAlignU32(data.y, data.x, offsets[1]);
  
-            offsets = GetAlignedAddressAndBitOffset(baseAddress + faceIDOffset + 4, triangleIndex * (numFaceIDBits + 3u));
+            offsets = GetAlignedAddressAndBitOffset(shadBaseAddress + faceIDOffset + 4, triangleIndex * (numFaceIDBits + 3u));
             data = denseGeometryData.Load2(offsets[0]);
             uint packed = BitAlignU32(data.y, data.x, offsets[1]);
             uint faceIDDiff = BitFieldExtractU32(packed, numFaceIDBits, 0);
@@ -329,7 +330,8 @@ DenseGeometry GetDenseGeometryHeader(uint instanceID, uint blockIndex, bool debu
 
     DenseGeometry result;
 
-    result.baseAddress = geometryInfo.byteOffset + packed.a;
+    result.geoBaseAddress = geometryInfo.geoByteOffset + packed.a;
+    result.shadBaseAddress = geometryInfo.shadByteOffset + packed.z;
 
     result.blockIndex = blockIndex;
 
@@ -375,11 +377,19 @@ DenseGeometry GetDenseGeometryHeader(uint instanceID, uint blockIndex, bool debu
     const uint vertexBitWidth = result.posBitWidths[0] + result.posBitWidths[1] + result.posBitWidths[2];
     const uint octBitWidth = result.octBitWidths[0] + result.octBitWidths[1];
 
+    result.normalOffset = 0;
+    result.faceIDOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
+
+    result.ctrlOffset = (result.numVertices * vertexBitWidth + 7) >> 3;
+    result.indexOffset = result.ctrlOffset + 12 * ((result.numTriangles + 31u) >> 5u);
+    result.firstBitOffset = (result.indexOffset << 3) + reuseBufferLength * result.indexBitWidth;
+#if 0
     result.normalOffset = (result.numVertices * vertexBitWidth + 7) >> 3;
     result.faceIDOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
     result.ctrlOffset = result.numFaceIDBits ? (result.faceIDOffset + 4 + (((result.numFaceIDBits + 3) * result.numTriangles + 7) >> 3)) : result.faceIDOffset;
     result.indexOffset = result.ctrlOffset + 12 * ((result.numTriangles + 31u) >> 5u);
     result.firstBitOffset = (result.indexOffset << 3) + reuseBufferLength * result.indexBitWidth;
+#endif
     result.debug = debug;
 
     return result;

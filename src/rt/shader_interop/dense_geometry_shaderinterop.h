@@ -18,12 +18,11 @@ namespace rt
 #define MAX_CLUSTER_VERTICES_BIT 8
 #define MAX_CLUSTER_VERTICES     (1 << MAX_CLUSTER_VERTICES_BIT)
 
-#define CLUSTER_DATA_PADDING_BYTES 4
-
 #define CLUSTER_MIN_PRECISION -20
 
 struct PackedDenseGeometryHeader
 {
+    uint z;
     uint a;
     uint b;
     uint c;
@@ -39,7 +38,8 @@ struct PackedDenseGeometryHeader
 struct DGFGeometryInfo
 {
     uint headerOffset;
-    uint byteOffset;
+    uint geoByteOffset;
+    uint shadByteOffset;
 };
 
 struct AABB

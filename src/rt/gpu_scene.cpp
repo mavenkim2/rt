@@ -301,8 +301,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         // GPUBuffer dgfBuffer;
         // GPUBuffer headerBuffer;
         u32 aabbLength;
-        u8 *dgfByteBuffer;
-        u32 byteBufferLength;
+        u8 *dgfGeoByteBuffer;
+        u8 *dgfShadByteBuffer;
+
+        u32 geoByteBufferLength;
+        u32 shadingByteBufferLength;
 
         PackedDenseGeometryHeader *headers;
         u32 numHeaders;
@@ -552,11 +555,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     StaticArray<BLASSceneGPUInfo> blasSceneInfo(arena, blasScenes.Length());
 
-    u32 numAabbs        = 0;
-    u32 numTriangles    = 0;
-    u32 dgfHeaderBytes  = 0;
-    u32 dgfBufferBytes  = 0;
-    u32 totalNumHeaders = 0;
+    u32 numAabbs           = 0;
+    u32 numTriangles       = 0;
+    u32 dgfHeaderBytes     = 0;
+    u32 dgfGeoBufferBytes  = 0;
+    u32 dgfShadBufferBytes = 0;
+    u32 totalNumHeaders    = 0;
 
     CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Copy);
     for (int i = 0; i < blasScenes.Length(); i++)
@@ -599,11 +603,17 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                 .buffer;
 
         // Combine all blocks together
-        info.byteBufferLength = data.byteBuffer.Length();
-        dgfBufferBytes += data.byteBuffer.Length();
-        info.dgfByteBuffer =
-            PushArrayNoZero(sceneScratch.temp.arena, u8, data.byteBuffer.Length());
-        data.byteBuffer.Flatten(info.dgfByteBuffer);
+        info.geoByteBufferLength = data.geoByteBuffer.Length();
+        dgfGeoBufferBytes += data.geoByteBuffer.Length();
+        info.dgfGeoByteBuffer =
+            PushArrayNoZero(sceneScratch.temp.arena, u8, data.geoByteBuffer.Length());
+        data.geoByteBuffer.Flatten(info.dgfGeoByteBuffer);
+
+        info.shadingByteBufferLength = data.shadingByteBuffer.Length();
+        dgfShadBufferBytes += data.shadingByteBuffer.Length();
+        info.dgfShadByteBuffer =
+            PushArrayNoZero(sceneScratch.temp.arena, u8, data.shadingByteBuffer.Length());
+        data.shadingByteBuffer.Flatten(info.dgfShadByteBuffer);
 
         // Upload headers
         totalNumHeaders += data.headers.Length();
@@ -667,9 +677,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         ReleaseArenaArray(builder.arenas);
     }
 
-    u32 dgfByteOffset   = 0;
-    u32 dgfHeaderOffset = 0;
-    u8 *dgfBytes        = PushArrayNoZero(sceneScratch.temp.arena, u8, dgfBufferBytes);
+    u32 dgfGeoByteOffset  = 0;
+    u32 dgfShadByteOffset = 0;
+    u32 dgfHeaderOffset   = 0;
+    u8 *dgfBytes =
+        PushArrayNoZero(sceneScratch.temp.arena, u8, dgfGeoBufferBytes + dgfShadBufferBytes);
     PackedDenseGeometryHeader *headers =
         PushArrayNoZero(sceneScratch.temp.arena, PackedDenseGeometryHeader, totalNumHeaders);
 
@@ -679,20 +691,28 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     for (int i = 0; i < blasScenes.Length(); i++)
     {
         BLASSceneGPUInfo &info = blasSceneInfo[i];
-        MemoryCopy(dgfBytes + dgfByteOffset, info.dgfByteBuffer, info.byteBufferLength);
-        u32 byteOffset = dgfByteOffset;
-        dgfByteOffset += info.byteBufferLength;
+        MemoryCopy(dgfBytes + dgfGeoByteOffset, info.dgfGeoByteBuffer,
+                   info.geoByteBufferLength);
+        u32 byteOffset = dgfGeoByteOffset;
+        dgfGeoByteOffset += info.geoByteBufferLength;
+
+        MemoryCopy(dgfBytes + dgfGeoBufferBytes + dgfShadByteOffset, info.dgfShadByteBuffer,
+                   info.shadingByteBufferLength);
+        u32 shadByteOffset = dgfGeoBufferBytes + dgfShadByteOffset;
+        dgfShadByteOffset += info.shadingByteBufferLength;
 
         MemoryCopy(headers + dgfHeaderOffset, info.headers,
                    sizeof(PackedDenseGeometryHeader) * info.numHeaders);
         u32 headerOffset = dgfHeaderOffset;
         dgfHeaderOffset += info.numHeaders;
 
-        geometryInfo[i].headerOffset = headerOffset;
-        geometryInfo[i].byteOffset   = byteOffset;
+        geometryInfo[i].headerOffset   = headerOffset;
+        geometryInfo[i].geoByteOffset  = byteOffset;
+        geometryInfo[i].shadByteOffset = shadByteOffset;
     }
 
-    Assert(dgfByteOffset == dgfBufferBytes);
+    Assert(dgfGeoByteOffset == dgfGeoBufferBytes);
+    Assert(dgfShadByteOffset == dgfShadBufferBytes);
     Assert(totalNumHeaders == dgfHeaderOffset);
     GPUBuffer dgfHeaderBuffer =
         dgfTransferCmd
@@ -700,10 +720,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                            sizeof(PackedDenseGeometryHeader) * totalNumHeaders)
             .buffer;
     device->SetName(&dgfHeaderBuffer, "DGF Header Buffer");
-    GPUBuffer dgfByteBuffer =
-        dgfTransferCmd
-            ->SubmitBuffer(dgfBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, dgfBufferBytes)
-            .buffer;
+    GPUBuffer dgfByteBuffer = dgfTransferCmd
+                                  ->SubmitBuffer(dgfBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                 dgfGeoBufferBytes + dgfShadBufferBytes)
+                                  .buffer;
     device->SetName(&dgfByteBuffer, "DGF Byte Buffer");
 
     GPUBuffer dgfGeometryInfoBuffer =
@@ -724,8 +744,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     dgfTransferCmd->FlushBarriers();
     device->SubmitCommandBuffer(dgfTransferCmd);
 
-    Print("num triangles: %u\nnum aabbs: %u\ndgf buffer bytes: %u\nptex face data bytes: %u\n",
-          numTriangles, numAabbs, dgfBufferBytes, ptexFaceDataBytes);
+    Print("num triangles: %u\nnum aabbs: %u\ndgf geo buffer bytes: %u\ndgf shad buffer bytes: "
+          "%u\nptex face data bytes: %u\n",
+          numTriangles, numAabbs, dgfGeoBufferBytes, dgfShadBufferBytes, ptexFaceDataBytes);
 
 #ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
     CommandBuffer *computeCmd = device->BeginCommandBuffer(QueueType_Compute);
