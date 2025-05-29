@@ -74,9 +74,10 @@ namespace Ptex
         // Load face data
         uint faceDataStride = 2 * (material.numVirtualOffsetBits + material.numFaceDimBits) + 4 * material.numFaceIDBits + 9;
         uint bufferOffset = faceDataStride * faceID;
+        uint2 offsets = GetAlignedAddressAndBitOffset(material.faceDataOffset, bufferOffset);
 
         FaceData result;
-        BitStreamReader_Ptex reader = CreateBitStreamReader_Ptex(material.faceDataOffset, bufferOffset, 32 * 4 + 24 * 2 + 4 * 2 + 9);
+        BitStreamReader_Ptex reader = CreateBitStreamReader_Ptex(offsets.x, offsets.y, 32 * 4 + 24 * 2 + 4 * 2 + 9);
 
         result.faceOffset.x = reader.Read<24>(material.numVirtualOffsetBits);
         result.faceOffset.y = reader.Read<24>(material.numVirtualOffsetBits);

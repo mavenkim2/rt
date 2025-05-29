@@ -19,7 +19,6 @@
 #include "../rt/shader_interop/hit_shaderinterop.h"
 #include "../rt/shader_interop/debug_shaderinterop.h"
 #include "ser.hlsli"
-//#include "../rt/nvapi.h"
 #include "wave_intrinsics.hlsli"
 
 #define SER
@@ -88,13 +87,58 @@ void main()
         desc.TMin = 0;
         desc.TMax = FLT_MAX;
         
+#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
+        RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_FORCE_OPAQUE> query;
+        query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
+        query.Proceed();
+#else
+#ifdef SER
         HitObjectNV hitObject;
         CreateHitObjectNV();
         TraceRayHitObjectNV(hitObject, accel, RAY_FLAG_SKIP_TRIANGLES | RAY_FLAG_FORCE_OPAQUE, 
                             0xff, 0, 1, 0, pos, 0, dir, FLT_MAX, payload);
         ReorderThreadWithHitNV(hitObject, 0, 0);
+#else
+        RayQuery<RAY_FLAG_SKIP_TRIANGLES | RAY_FLAG_FORCE_OPAQUE> query;
+        query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
+        float2 bary;
+        uint hitKind;
 
+        uint numIters = 0;
+
+        while (query.Proceed()) 
+        {
+            numIters++;
+            if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
+            {
+                uint primitiveIndex = query.CandidatePrimitiveIndex();
+                uint instanceID = query.CandidateInstanceID();
+                float3 o = query.CandidateObjectRayOrigin();
+                float3 d = query.CandidateObjectRayDirection();
+
+                float tHit = 0;
+                uint kind = 0;
+                float2 tempBary = 0;
+
+                bool result = IntersectCluster(instanceID, primitiveIndex, o, d, query.RayTMin(), 
+                                               query.CommittedRayT(), tHit, kind, tempBary, numIters > 1000);
+
+                if (!result) continue;
+
+                bary = tempBary;
+                hitKind = kind;
+                query.CommitProceduralPrimitiveHit(tHit);
+            }
+        }
+#endif
+#endif
+
+#ifdef SER
         if (IsMissNV(hitObject))
+#else
+        bool isMiss = query.CommittedStatus() != COMMITTED_PROCEDURAL_PRIMITIVE_HIT;
+        if (isMiss)
+#endif
         {
             float3 d = normalize(mul(scene.lightFromRender, float4(dir, 0)).xyz);
 
@@ -158,21 +202,48 @@ void main()
             break;
         }
 
+#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
+        if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+        {
+            float3x3 positions = NvRtCommittedTriangleObjectPositions(query);
+            float3 p0 = positions[0];
+            float3 p1 = positions[1];
+            float3 p2 = positions[2];
+
+            uint blockIndex = NvRtGetCommittedClusterID(query);
+            uint triangleIndex = query.CommittedPrimitiveIndex();
+            float2 bary = query.CommittedTriangleBarycentrics();
+#else
+#ifdef SER
         if (IsHitNV(hitObject))
         {
-            //NvInvokeHitObject(hitObject, payload);
+            InvokeHitObjectNV(hitObject, payload);
 
             uint primitiveIndex = GetPrimitiveIndexNV(hitObject);
             uint instanceID = GetInstanceIDNV(hitObject);
-            float3x4 objectToWorld = payload.objectToWorld;
-            float3 objectRayDir = payload.objectRayDir;
+            float3x4 objectToWorld = transpose(GetObjectToWorldNV(hitObject));
+            float3 objectRayDir = GetObjectRayDirectionNV(hitObject);
             float2 bary = payload.bary;
             float rayT = payload.rayT;
-            uint hitKind = payload.hitKind;
+            uint hitKind = 0;//GetHitKindNV(hitObject);
 
+            if (printDebug)
+            {
+                printf("help: %f %f %f\n", bary.x, bary.y, rayT);
+            }
+#else
+        if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
+        {
+            uint primitiveIndex = query.CommittedPrimitiveIndex();
+            uint instanceID = query.CommittedInstanceID();
+            float3x4 objectToWorld = query.CommittedObjectToWorld3x4();
+            float rayT = query.CommittedRayT();
+            float3 objectRayDir = query.CommittedObjectRayDirection();
+#endif
             uint2 blockTriangleIndices = DecodeBlockAndTriangleIndex(primitiveIndex, hitKind);
             uint blockIndex = blockTriangleIndices[0];
             uint triangleIndex = blockTriangleIndices[1];
+#endif
             DenseGeometry dg = GetDenseGeometryHeader(instanceID, blockIndex, printDebug);
 
             uint materialID = dg.DecodeMaterialID(triangleIndex);
@@ -190,9 +261,11 @@ void main()
             bary.x = (rotate == 1 ? 1 - oldBary.x - oldBary.y : (rotate == 2 ? oldBary.y : oldBary.x));
             bary.y = (rotate == 1 ? oldBary.x : (rotate == 2 ? 1 - oldBary.x - oldBary.y : oldBary.y));
 
+#ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
             float3 p0 = dg.DecodePosition(vids[0]);
             float3 p1 = dg.DecodePosition(vids[1]);
             float3 p2 = dg.DecodePosition(vids[2]);
+#endif
 
             if (0)
             {
@@ -306,6 +379,46 @@ void main()
                 }
                 break;
             }
+
+
+            if (dir.z == 0) break;
+            origin = TransformP(objectToWorld, origin);
+            dir = ss * dir.x + ts * dir.y + n * dir.z;
+            dir = normalize(TransformV(objectToWorld, dir));
+            pos = OffsetRayOrigin(origin, gn, printDebug);
         }
+
+#if 1
+        // Warp based russian roulette
+        // https://www.nvidia.com/en-us/on-demand/session/gdc25-gdc1002/
+        const float continuationProb = min(1.f, Luminance(throughput));
+        const uint activeLaneCount = WaveActiveCountBits(true);
+        const uint totalLaneCount = WaveGetLaneCount();
+        const float activeLaneRatio = (float)activeLaneCount / (float)totalLaneCount;
+        const float activeLaneRatioThreshold = .3f;
+        const float groupContinuationProb = continuationProb * saturate(activeLaneRatio / activeLaneRatioThreshold);
+
+        bool russianRoulette = rng.Uniform() >= groupContinuationProb;
+#endif
+        uint hint = (dir.x >= 0) | ((dir.y >= 0) << 1) | ((dir.z >= 0) << 2);
+        //NvReorderThread(russianRoulette, 1);
+
+        if (russianRoulette) break;
+        throughput /= groupContinuationProb;
+    }
+    image[swizzledThreadID] = float4(radiance, 1);
+
+    // Write virtual texture feedback back to main memory
+    uint4 mask = WaveMatch(feedbackRequest.x);
+    int4 highLanes = (int4)(firstbithigh(mask) | uint4(0, 0x20, 0x40, 0x60));
+    uint highLane = (uint)max(max(highLanes.x, highLanes.y), max(highLanes.z, highLanes.w));
+    bool isHighLane = all(feedbackRequest != ~0u) && WaveGetLaneIndex() == highLane;
+
+    uint index;
+    WaveInterlockedAddScalarTest(feedbackBuffer[0], isHighLane, 2, index);
+    if (isHighLane)
+    {
+        feedbackBuffer[index + 1] = feedbackRequest.x;
+        feedbackBuffer[index + 2] = feedbackRequest.y;
     }
 }

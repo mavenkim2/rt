@@ -376,6 +376,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
 
             result = checkAndAddExtension(VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME,
                                           &reorderPropertiesNV, &reorderFeaturesNV);
+
             Assert(result);
 
             result = checkAndAddExtension(VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME);
@@ -400,6 +401,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         vkGetPhysicalDeviceFeatures2(physicalDevice, &deviceFeatures);
 
         // Ensure core functionlity is supported
+        Assert(reorderFeaturesNV.rayTracingInvocationReorder == VK_TRUE);
         Assert(deviceFeatures.features.multiDrawIndirect == VK_TRUE);
         Assert(deviceFeatures.features.pipelineStatisticsQuery == VK_TRUE);
         Assert(features13.dynamicRendering == VK_TRUE);

@@ -525,6 +525,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     {
         RequestHandle &handle = handles[i];
         GPUTextureInfo &info  = gpuTextureInfo[handle.ptexIndex];
+        Assert(info.faceDataOffset == ptexOffset);
         MemoryCopy(faceDataByteBuffer + ptexOffset, info.packedFaceData, info.packedDataSize);
         ptexOffset += info.packedDataSize;
     }
@@ -682,7 +683,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         u32 byteOffset = dgfByteOffset;
         dgfByteOffset += info.byteBufferLength;
 
-        MemoryCopy(headers + dgfHeaderOffset, info.headers, info.numHeaders);
+        MemoryCopy(headers + dgfHeaderOffset, info.headers,
+                   sizeof(PackedDenseGeometryHeader) * info.numHeaders);
         u32 headerOffset = dgfHeaderOffset;
         dgfHeaderOffset += info.numHeaders;
 
@@ -983,9 +985,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         layout.AddBinding((u32)RTBindings::Feedback, DescriptorType::StorageBuffer, flags);
 
     // TODO: what is this?
-    int counterIndex = layout.AddBinding(8, DescriptorType::StorageBuffer, flags);
-    int nvApiIndex =
-        layout.AddBinding(NVAPI_SLOT, DescriptorType::StorageBuffer, VK_SHADER_STAGE_ALL);
+    // int counterIndex = layout.AddBinding(8, DescriptorType::StorageBuffer, flags);
+    // int nvApiIndex =
+    //     layout.AddBinding(NVAPI_SLOT, DescriptorType::StorageBuffer, VK_SHADER_STAGE_ALL);
 
     layout.AddImmutableSamplers();
 
@@ -1365,9 +1367,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             .Bind(ptexFaceDataIndex, &faceDataBuffer)
             .Bind(shaderDebugIndex, &shaderDebugBuffers[currentBuffer].buffer)
             .Bind(feedbackBufferIndex,
-                  &virtualTextureManager.feedbackBuffers[currentBuffer].buffer)
-            .Bind(counterIndex, &counterBuffer)
-            .Bind(nvApiIndex, &nvapiBuffer);
+                  &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
+        // .Bind(counterIndex, &counterBuffer)
+        // .Bind(nvApiIndex, &nvapiBuffer);
 #ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
         .Bind(clusterDataIndex, &clusterData)
             .Bind(vertexDataIndex, &vertexBuffer)

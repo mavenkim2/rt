@@ -1,6 +1,8 @@
 #ifndef SER_HLSLI_
 #define SER_HLSLI_
 
+#include "payload.hlsli"
+
 #define HitObjectAttributeNV 5385
 #define OpHitObjectRecordHitMotionNV 5249
 #define OpHitObjectRecordHitWithIndexMotionNV 5250
@@ -37,6 +39,8 @@
 #define OpTypeHitObjectNV 5281
 
 #define RayPayloadKHR 5338
+#define HitObjectAttributeNV 5385
+
 [[vk::ext_storage_class(RayPayloadKHR)]] static RayPayload payload;
 
 [[vk::ext_instruction(OpReorderThreadWithHintNV)]]
@@ -55,7 +59,6 @@ bool IsMissNV([[vk::ext_reference]] HitObjectNV hitObject);
 [[vk::ext_instruction(OpHitObjectIsHitNV)]]
 bool IsHitNV([[vk::ext_reference]] HitObjectNV hitObject);
 
-#if 1
 [[vk::ext_instruction(OpHitObjectTraceRayNV)]]
 void TraceRayHitObjectNV(
     [[vk::ext_reference]] HitObjectNV hitObject,
@@ -71,7 +74,6 @@ void TraceRayHitObjectNV(
     float RayTMax,
     [[vk::ext_reference]] [[vk::ext_storage_class(RayPayloadKHR)]] RayPayload payload
   );
-#endif
 
 [[vk::ext_instruction(OpHitObjectExecuteShaderNV)]]
 void InvokeHitObjectNV(
@@ -83,6 +85,18 @@ void InvokeHitObjectNV(
 uint GetPrimitiveIndexNV([[vk::ext_reference]] HitObjectNV hitObject);
 
 [[vk::ext_instruction(OpHitObjectGetInstanceIdNV)]]
+uint GetInstanceIndexNV([[vk::ext_reference]] HitObjectNV hitObject);
+
+[[vk::ext_instruction(OpHitObjectGetInstanceCustomIndexNV)]]
 uint GetInstanceIDNV([[vk::ext_reference]] HitObjectNV hitObject);
+
+[[vk::ext_instruction(OpHitObjectGetObjectRayDirectionNV)]]
+float3 GetObjectRayDirectionNV([[vk::ext_reference]] HitObjectNV hitObject);
+
+[[vk::ext_instruction(OpHitObjectGetObjectToWorldNV)]]
+float4x3 GetObjectToWorldNV([[vk::ext_reference]] HitObjectNV hitObject);
+
+[[vk::ext_instruction(OpHitObjectGetHitKindNV)]]
+uint GetHitKindNV([[vk::ext_reference]] HitObjectNV hitObject);
 
 #endif

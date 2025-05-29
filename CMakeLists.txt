@@ -230,16 +230,18 @@ set(SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders)
 set(SHADER_SPV_DIR ${CMAKE_CURRENT_BINARY_DIR}/src/shaders)
 set(SHADER_FILES "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
     "${SHADER_SRC_DIR}/render_raytrace_miss.hlsl"
+    "${SHADER_SRC_DIR}/render_raytrace_hit.hlsl"
     "${SHADER_SRC_DIR}/render_raytrace.hlsl"
+    "${SHADER_SRC_DIR}/render_raytrace_dgf_intersect.hlsl"
     "${SHADER_SRC_DIR}/decode_dgf_clusters.hlsl"
     "${SHADER_SRC_DIR}/fill_instance_descs.hlsl"
-    "${SHADER_SRC_DIR}/render_raytrace_dgf_intersect.hlsl"
     "${SHADER_SRC_DIR}/compress/block_compress.hlsl"
     "${SHADER_SRC_DIR}/tex/update_page_tables.hlsl"
 )
 set_property(SOURCE 
-    "${SHADER_SRC_DIR}/render_raytrace_miss.hlsl"
     "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
+    "${SHADER_SRC_DIR}/render_raytrace_miss.hlsl"
+    "${SHADER_SRC_DIR}/render_raytrace_hit.hlsl"
     "${SHADER_SRC_DIR}/render_raytrace_dgf_intersect.hlsl"
     PROPERTY name "rt")
 set_property(SOURCE 

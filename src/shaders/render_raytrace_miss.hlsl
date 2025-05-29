@@ -11,7 +11,6 @@ ConstantBuffer<GPUScene> scene : register(b2);
 [shader("miss")]
 void main(inout RayPayload payload) 
 {
-    payload.miss = true;
 #if 0
     float3 dir = WorldRayDirection();
     float3 d = normalize(mul(scene.lightFromRender, float4(dir, 0)).xyz);
