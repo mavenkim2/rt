@@ -322,16 +322,12 @@ struct DenseGeometry
 };
 
 // Taken from NaniteDataDecode.ush in Unreal Engine 5
-DenseGeometry GetDenseGeometryHeader(uint instanceID, uint blockIndex, bool debug = false)
+DenseGeometry GetDenseGeometryHeader(PackedDenseGeometryHeader packed, uint blockIndex, bool debug = false)
 {
-    const int mult = 2;
-    DGFGeometryInfo geometryInfo = dgfGeometryInfos[instanceID];
-    PackedDenseGeometryHeader packed = denseGeometryHeaders[geometryInfo.headerOffset + blockIndex];
-
     DenseGeometry result;
 
-    result.geoBaseAddress = geometryInfo.geoByteOffset + packed.a;
-    result.shadBaseAddress = geometryInfo.shadByteOffset + packed.z;
+    result.geoBaseAddress = packed.a;
+    result.shadBaseAddress = packed.z;
 
     result.blockIndex = blockIndex;
 
@@ -393,6 +389,15 @@ DenseGeometry GetDenseGeometryHeader(uint instanceID, uint blockIndex, bool debu
     result.debug = debug;
 
     return result;
+}
+
+DenseGeometry GetDenseGeometryHeader(uint instanceID, uint blockIndex, bool debug = false)
+{
+    const int mult = 2;
+    DGFGeometryInfo geometryInfo = dgfGeometryInfos[instanceID];
+    PackedDenseGeometryHeader packed = denseGeometryHeaders[geometryInfo.headerOffset + blockIndex];
+
+    return GetDenseGeometryHeader(packed, blockIndex, debug);
 }
 
 #endif

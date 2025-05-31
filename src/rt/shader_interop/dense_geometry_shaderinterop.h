@@ -38,8 +38,6 @@ struct PackedDenseGeometryHeader
 struct DGFGeometryInfo
 {
     uint headerOffset;
-    uint geoByteOffset;
-    uint shadByteOffset;
 };
 
 struct AABB

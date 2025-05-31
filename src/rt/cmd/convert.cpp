@@ -1449,20 +1449,21 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 ReadParameters(threadArena, packet, &tokenizer, MemoryType_Texture);
 
 #ifdef USE_GPU
-                if (textureClass == "ptex")
-                {
-                    for (int i = 0; i < packet->parameterCount; i++)
-                    {
-                        if (packet->parameterNames[i] == "filename"_sid)
-                        {
-                            string textureFilename =
-                                StrConcat(threadArena, directory,
-                                          Str8(packet->bytes[i], packet->sizes[i]));
-                            scheduler.Schedule(&state->counter,
-                                               [=](u32 jobID) { Convert(textureFilename); });
-                        }
-                    }
-                }
+                // if (textureClass == "ptex")
+                // {
+                //     for (int i = 0; i < packet->parameterCount; i++)
+                //     {
+                //         if (packet->parameterNames[i] == "filename"_sid)
+                //         {
+                //             string textureFilename =
+                //                 StrConcat(threadArena, directory,
+                //                           Str8(packet->bytes[i], packet->sizes[i]));
+                //             scheduler.Schedule(&state->counter,
+                //                                [=](u32 jobID) { Convert(textureFilename);
+                //                                });
+                //         }
+                //     }
+                // }
 #endif
 
                 nPacket.name = PushStr8Copy(threadArena, textureName);
@@ -2102,6 +2103,7 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
         Put(&builder, "INCLUDE_START ");
         Assert(info->numInstances);
         Put(&builder, "Count: %u ", info->numInstances);
+        threadLocalStatistics[GetThreadIndex()].misc4 += info->numInstances;
         u32 count = 0;
         for (auto *instNode = info->fileInstances.first; instNode != 0;
              instNode       = instNode->next)
@@ -2216,15 +2218,24 @@ int main(int argc, char **argv)
 
     LoadPBRT(arena, filename);
 
-    u64 count = 0;
-    f64 time  = 0;
+    u64 count        = 0;
+    f64 time         = 0;
+    u32 verts        = 0;
+    u32 inds         = 0;
+    u32 numInstances = 0;
     for (int i = 0; i < numProcessors; i++)
     {
         count += threadLocalStatistics[i].misc;
+        verts += threadLocalStatistics[i].misc2;
+        numInstances += threadLocalStatistics[i].misc4;
+
+        inds += threadLocalStatistics[i].misc3;
         time += threadLocalStatistics[i].miscF;
     }
     printf("num materials pruned: %llu\n", count);
     printf("total gpu time: %f\n", time);
+    printf("verts: %u indices: %u\n", verts, inds);
+    printf("num instances: %u\n", numInstances);
 
     // read pbrt as i've done before, getting scene packets
     // list of things to do

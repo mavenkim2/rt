@@ -6,7 +6,10 @@ namespace rt
 {
 #endif
 
-#define USE_PROCEDURAL_CLUSTER_INTERSECTION
+// #define USE_PROCEDURAL_CLUSTER_INTERSECTION
+
+#define RAY_TRACING_ADDRESS_STRIDE               8
+#define FILL_CLUSTER_BOTTOM_LEVEL_INFO_GROUPSIZE 32
 
 static const uint32_t kFillInstanceDescsThreads = 32;
 
@@ -30,7 +33,7 @@ struct AccelerationStructureInstance
     uint64_t blasDeviceAddress;
 };
 
-struct ClusterBottomLevelInfo
+struct BUILD_CLUSTERS_BOTTOM_LEVEL_INFO
 {
     uint32_t clusterReferencesCount;
     uint32_t clusterReferencesStride;
@@ -42,7 +45,7 @@ struct IndirectArgs
     uint32_t clasCount;
 };
 
-struct BuildClasDesc
+struct BUILD_CLUSTER_TRIANGLE_INFO
 {
     uint32_t clusterId;
     uint32_t clusterFlags;
@@ -63,6 +66,12 @@ struct BuildClasDesc
     uint64_t opacityMicromapIndexBuffer;
 };
 
+struct BLASData
+{
+    uint clasAddressStartIndex;
+    uint clasCount;
+};
+
 struct GeometryIndexAndFlags
 {
     uint32_t geometryIndex : 24;
@@ -77,6 +86,13 @@ struct DecodePushConstant
     uint indexBufferBaseAddressHighBits;
     uint vertexBufferBaseAddressLowBits;
     uint vertexBufferBaseAddressHighBits;
+};
+
+struct FillClusterBottomLevelInfoPushConstant
+{
+    uint blasCount;
+    uint clustersBaseAddressLowBits;
+    uint clustersBaseAddressHighBits;
 };
 
 #define GLOBALS_VERTEX_BUFFER_OFFSET_INDEX 0

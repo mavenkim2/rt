@@ -3,7 +3,6 @@
 
 #include "../rt/shader_interop/bit_twiddling_shaderinterop.h"
 
-// Taken from Platform.ush in Unreal Engine 5
 uint BitAlignU32(uint high, uint low, uint shift)
 {
 	shift &= 31u;

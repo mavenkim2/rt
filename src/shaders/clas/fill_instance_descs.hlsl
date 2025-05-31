@@ -1,4 +1,4 @@
-#include "../rt/shader_interop/as_shaderinterop.h"
+#include "../../rt/shader_interop/as_shaderinterop.h"
 
 StructuredBuffer<uint64_t> blasAddresses : register(t0);
 RWStructuredBuffer<AccelerationStructureInstance> instances : register(u1);

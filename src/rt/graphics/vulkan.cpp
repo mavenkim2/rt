@@ -2734,8 +2734,8 @@ GPUAccelerationStructurePayload CommandBuffer::BuildCustomBLAS(GPUBuffer *aabbsB
 
 void CommandBuffer::BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
                               GPUBuffer *dstSizes, GPUBuffer *srcInfosCount,
-                              u32 srcInfosOffset, ScenePrimitives *scene, int numClusters,
-                              u32 numTriangles, u32 numVertices)
+                              u32 srcInfosOffset, int numClusters, u32 numTriangles,
+                              u32 numVertices)
 {
 
     VkClusterAccelerationStructureTriangleClusterInputNV triangleClusters = {
@@ -2779,11 +2779,11 @@ void CommandBuffer::BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddr
 
         commandsInfo.dstAddressesArray.deviceAddress =
             device->GetDeviceAddress(dstAddresses->buffer);
-        commandsInfo.dstAddressesArray.size   = dstAddresses->size;
+        commandsInfo.dstAddressesArray.size   = sizeof(VkDeviceAddress) * numClusters;
         commandsInfo.dstAddressesArray.stride = sizeof(VkDeviceAddress);
 
         commandsInfo.dstSizesArray.deviceAddress = device->GetDeviceAddress(dstSizes->buffer);
-        commandsInfo.dstSizesArray.size          = dstSizes->size;
+        commandsInfo.dstSizesArray.size          = sizeof(u32) * numClusters;
         commandsInfo.dstSizesArray.stride        = sizeof(u32);
 
         commandsInfo.srcInfosArray.deviceAddress =

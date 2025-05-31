@@ -233,8 +233,9 @@ set(SHADER_FILES "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl"
     "${SHADER_SRC_DIR}/render_raytrace_hit.hlsl"
     "${SHADER_SRC_DIR}/render_raytrace.hlsl"
     "${SHADER_SRC_DIR}/render_raytrace_dgf_intersect.hlsl"
-    "${SHADER_SRC_DIR}/decode_dgf_clusters.hlsl"
-    "${SHADER_SRC_DIR}/fill_instance_descs.hlsl"
+    "${SHADER_SRC_DIR}/clas/decode_dgf_clusters.hlsl"
+    "${SHADER_SRC_DIR}/clas/fill_instance_descs.hlsl"
+    "${SHADER_SRC_DIR}/clas/fill_cluster_bottom_level_info.hlsl"
     "${SHADER_SRC_DIR}/compress/block_compress.hlsl"
     "${SHADER_SRC_DIR}/tex/update_page_tables.hlsl"
 )
@@ -246,10 +247,11 @@ set_property(SOURCE
     PROPERTY name "rt")
 set_property(SOURCE 
     "${SHADER_SRC_DIR}/render_raytrace.hlsl"
-    "${SHADER_SRC_DIR}/decode_dgf_clusters.hlsl"
-    "${SHADER_SRC_DIR}/fill_instance_descs.hlsl"
     "${SHADER_SRC_DIR}/compress/block_compress.hlsl"
     "${SHADER_SRC_DIR}/tex/update_page_tables.hlsl"
+    "${SHADER_SRC_DIR}/clas/decode_dgf_clusters.hlsl"
+    "${SHADER_SRC_DIR}/clas/fill_instance_descs.hlsl"
+    "${SHADER_SRC_DIR}/clas/fill_cluster_bottom_level_info.hlsl"
     PROPERTY name "cs")
 
 file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")

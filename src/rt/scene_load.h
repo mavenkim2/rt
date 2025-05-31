@@ -1,6 +1,7 @@
 #ifndef SCENE_LOAD_H
 #define SCENE_LOAD_H
 
+#include "thread_statistics.h"
 #include <unordered_set>
 
 namespace rt
@@ -498,6 +499,9 @@ Mesh *LoadObj(Arena *arena, string filename, int &numMeshes, int &actualNumMeshe
 
                         mesh.p = PushArrayNoZero(arena, Vec3f, vertices.size());
                         MemoryCopy(mesh.p, vertices.data(), sizeof(Vec3f) * vertices.size());
+
+                        threadLocalStatistics[GetThreadIndex()].misc2 += mesh.numVertices;
+                        threadLocalStatistics[GetThreadIndex()].misc3 += mesh.numIndices;
 
                         int *normalIndices = PushArray(temp.arena, int, mesh.numVertices);
                         MemorySet(normalIndices, 0xff, sizeof(int) * mesh.numVertices);

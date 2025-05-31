@@ -1,5 +1,5 @@
-#include "../rt/shader_interop/as_shaderinterop.h"
-#include "dense_geometry.hlsli"
+#include "../../rt/shader_interop/as_shaderinterop.h"
+#include "../dense_geometry.hlsli"
 
 [[vk::push_constant]] DecodePushConstant pc;
 
@@ -7,23 +7,24 @@ RWByteAddressBuffer indexBuffer : register(u0);
 RWStructuredBuffer<float3> decodeVertexBuffer : register(u1);
 RWStructuredBuffer<BuildClasDesc> buildClasDescs : register(u2);
 RWStructuredBuffer<uint> globals : register(u3);
-RWStructuredBuffer<ClusterData> clusterData : register(u4);
+
 
 [numthreads(32, 1, 1)] 
 void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dtID : SV_DispatchThreadID)
 {
     uint headerIndex = groupID.x;
 
-    if (all(dtID == 0))
-    {
-        globals[GLOBALS_BLAS_COUNT_INDEX] = 1;
-    }
+    //if (all(dtID == 0))
+    //{
+        //globals[GLOBALS_BLAS_COUNT_INDEX] = 1;
+    //}
 
     if (headerIndex >= pc.numHeaders) return;
 
-// TODO
-    DenseGeometry header = GetDenseGeometryHeader(0, 0, 0);//denseGeometryHeaders, denseGeometryData, headerIndex);
-    
+    PackedDenseGeometryHeader denseHeader = denseGeometryHeaders[groupID.x];
+
+    DenseGeometry header = GetDenseGeometryHeader(denseHeader, groupID.x);
+
     // Decode triangle indices
     uint waveNumActiveLanes = min(32, WaveGetLaneCount());
 
@@ -37,7 +38,7 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dtI
     for (uint triangleIndex = groupIndex; triangleIndex < header.numTriangles; triangleIndex += waveNumActiveLanes)
     {
         // write u8 indices
-        uint3 triangleIndices = header.DecodeTriangle(triangleIndex).xyz;
+        uint3 triangleIndices = header.DecodeTriangle(triangleIndex);
 
         uint indexBits = triangleIndices[0] | (triangleIndices[1] << 8u) | (triangleIndices[2] << 16u);
         uint2 offset = GetAlignedAddressAndBitOffset(indexBufferOffset + triangleIndex * 3, 0);
@@ -97,11 +98,5 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dtI
         desc.opacityMicromapIndexBuffer = 0;
 
         buildClasDescs[groupID.x] = desc;
-
-        ClusterData clData = (ClusterData)0;
-        clData.indexBufferOffset = indexBufferOffset;
-        clData.vertexBufferOffset = vertexBufferOffset;
-
-        clusterData[groupID.x] = clData;
     }
 }

@@ -19,6 +19,7 @@
 #include "../rt/shader_interop/hit_shaderinterop.h"
 #include "../rt/shader_interop/debug_shaderinterop.h"
 #include "ser.hlsli"
+#include "../rt/nvapi.h"
 #include "wave_intrinsics.hlsli"
 
 #define SER
@@ -29,12 +30,6 @@ ConstantBuffer<GPUScene> scene : register(b2);
 StructuredBuffer<RTBindingData> rtBindingData : register(t3);
 StructuredBuffer<GPUMaterial> materials : register(t4);
 ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
-
-#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
-StructuredBuffer<ClusterData> clusterData : register(t8);
-StructuredBuffer<float3> vertices : register(t9);
-ByteAddressBuffer indices : register(t10);
-#endif
 
 RWStructuredBuffer<uint> feedbackBuffer : register(u12);
 
@@ -133,11 +128,14 @@ void main()
 #endif
 #endif
 
+#ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
 #ifdef SER
         if (IsMissNV(hitObject))
 #else
-        bool isMiss = query.CommittedStatus() != COMMITTED_PROCEDURAL_PRIMITIVE_HIT;
-        if (isMiss)
+        if (query.CommittedStatus() != COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
+#endif
+#else
+        if (query.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
 #endif
         {
             float3 d = normalize(mul(scene.lightFromRender, float4(dir, 0)).xyz);
@@ -213,6 +211,11 @@ void main()
             uint blockIndex = NvRtGetCommittedClusterID(query);
             uint triangleIndex = query.CommittedPrimitiveIndex();
             float2 bary = query.CommittedTriangleBarycentrics();
+
+            uint instanceID = query.CommittedInstanceID();
+            float3x4 objectToWorld = query.CommittedObjectToWorld3x4();
+            float rayT = query.CommittedRayT();
+            float3 objectRayDir = query.CommittedObjectRayDirection();
 #else
 #ifdef SER
         if (IsHitNV(hitObject))
