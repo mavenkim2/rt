@@ -54,7 +54,6 @@ int LUPDecompose(T **__restrict A, int N, double Tol, int *__restrict P)
  */
 void LUPSolve(double **A, int *P, double *b, int N, double *x)
 {
-
     for (int i = 0; i < N; i++)
     {
         x[i] = b[P[i]];
@@ -68,6 +67,43 @@ void LUPSolve(double **A, int *P, double *b, int N, double *x)
 
         x[i] /= A[i][i];
     }
+}
+
+// Due to floating point inaccuracy, use residuals to minimize error
+template <typename T>
+bool LUPSolveIterate(T **__restrict A, int *__restrict P, T *__restrict b, int N,
+                     T *__restrict x, u32 numIters)
+{
+    LUPSolve(A, P, b, N, x);
+
+    ScratchArena scratch;
+
+    T *residual = (T *)PushArrayNoZero(scratch.temp.arena, u8, sizeof(T) * N);
+    T *error    = (T *)PushArrayNoZero(scratch.temp.arena, u8, sizeof(T) * N);
+    for (int iters = 0; iters < numIters; iters++)
+    {
+        // Calculate residual
+        for (int i = 0; i < N; i++)
+        {
+            residual[i] = b[i];
+            for (int j = 0; j < N; j++)
+            {
+                residual[i] -= A[i][j] * x[j];
+            }
+        }
+
+        LUPSolve(A, P, residual, N, error);
+
+        f32 mse = 0.f;
+        for (int i = 0; i < N; i++)
+        {
+            mse += Sqr(error[i]);
+            x[i] += error[i];
+        }
+        if (mse < 1e-4f) return true;
+    }
+
+    return false;
 }
 
 // https://www.cs.cmu.edu/~garland/Papers/quadrics.pdf Quadric error
@@ -88,7 +124,7 @@ f32 Quadric::Evaluate(const Vec3f &p)
     f32 y = Dot(Vec3f(nxx, nxy, nxz), p);
     f32 z = Dot(Vec3f(nxx, nxy, nxz), p);
 
-    f32 error = Dot(Vec3f(x, y, z) + 2 * nd, p) + d2;
+    f32 error = Dot(Vec3f(x, y, z) + 2 * dn, p) + d2;
     return error;
 }
 
@@ -100,7 +136,11 @@ QuadricAttr::QuadricAttr(const Vec3f &p0, const Vec3f &p1, const Vec3f &p2,
     Vec3f p01 = p1 - p0;
     Vec3f p02 = p2 - p0;
 
-    Vec3f n    = Cross(p01, p02);
+    Vec3f n = Cross(p01, p02);
+
+    gVol = n;
+    dVol = -Dot(gVol, p0);
+
     f32 length = Length(n);
     f32 area   = 0.5f * length;
 
@@ -108,6 +148,8 @@ QuadricAttr::QuadricAttr(const Vec3f &p0, const Vec3f &p1, const Vec3f &p2,
     {
         return;
     }
+
+    n /= length;
 
     a2 = Sqr(n.x);
     ab = n.x * n.y;
@@ -118,6 +160,11 @@ QuadricAttr::QuadricAttr(const Vec3f &p0, const Vec3f &p1, const Vec3f &p2,
 
     c2 = Sqr(n.z);
 
+    f32 distToPlane = -Dot(n, p0);
+    dn              = distToPlane * n;
+    d2              = Sqr(distToPlane);
+
+    // Solve system of equations to find gradient for each attribute
     // (p1 - p0) * g = a1 - a0
     // (p2 - p0) * g = a2 - a0
     // n * g = 0
@@ -171,13 +218,102 @@ QuadricAttr::QuadricAttr(const Vec3f &p0, const Vec3f &p1, const Vec3f &p2,
 
         c2 += Sqr(g[i].z);
 
-        nd += d[i] * grad;
+        dn += d[i] * grad;
         d2 += Sqr(d[i]);
     }
 }
 
 template <u32 numAttributes>
-f32 QuadricAttr<numAttributes>::Evaluate(const Vec3f &p)
+bool QuadricAttr<numAttributes>::OptimizeVolume(Vec3f &p)
+{
+    if (a < 1e-12) return false;
+
+    // https://hhoppe.com/minqem.pd
+    // Solve linear subsystem for v according to above paper
+
+    // (C - 1/a * BBt) * v = b1 - 1/a * B * b2
+
+    // C is the 3x3 outer product sum of all the plane normals and gradients for all the
+    // quadrics
+    // 1/a is the inv area
+    // B is the 3xnumAttributes matrix of attribute gradients
+    // v is the vector of length 3 + numAttributes containin the position and attributes
+    //
+    // b1 is -dn + sum djgj
+    // b2 is dj
+
+    f32 invA = 1.f / a;
+
+    f32 BBt00 = 0.f;
+    f32 BBt01 = 0.f;
+    f32 BBt02 = 0.f;
+    f32 BBt11 = 0.f;
+    f32 BBt12 = 0.f;
+    f32 BBt22 = 0.f;
+
+    Vec3f b1 = dn;
+    Vec3f Bb2(0.f);
+
+    for (int i = 0; i < numAttributes; i++)
+    {
+        BBt00 += Sqr(gradients[i].x);
+        BBt01 += gradients[i].x * gradients[i].y;
+        BBt02 += gradients[i].x * gradients[i].z;
+
+        BBt11 += Sqr(gradients[i].y);
+        BBt12 += gradients[i].y * gradients[i].z;
+
+        BBt22 += Sqr(gradients[i].z);
+
+        b1 += gradients[i] * d[i];
+        Bb2 += gradients[i] * d[i];
+    }
+
+    // A = (C - 1/a * BBt)
+    f32 A00 = c00 - BBt00 * invA;
+    f32 A01 = c01 - BBt01 * invA;
+    f32 A02 = c02 - BBt02 * invA;
+
+    f32 A11 = c11 - BBt11 * invA;
+    f32 A12 = c12 - BBt12 * invA;
+
+    f32 A22 = c12 - BBt12 * invA;
+
+    // b = b1 - 1/a * B * b2
+    Vec3f b = b1 - invA * Bb2;
+
+    // Now add the lagrange multiplier volume constraint:
+    // v is now 4-dim position and lagrange multiplier
+    // Dot(gVol, p) + dVol = 0
+
+    f32 A[4][4] = {
+        {A00, A01, A02, gVol.x},
+        {A01, A11, A12, gVol.y},
+        {A02, A12, A22, gVol.z},
+        {gVol.x, gVol.y, gVol.z, 0},
+    };
+
+    f32 b[4] = {-b.x, -b.y, -b.z, -dVol};
+
+    // Solve the 4x4 linear system
+    int pivots[4];
+    if (LUPDecompose(A, 4, 1e-8f, pivots))
+    {
+        f32 result[4];
+        if (LUPSolveIterate(A, pivots, b, 4, result))
+        {
+            p.x = result[0];
+            p.y = result[1];
+            p.z = result[2];
+            return true;
+        }
+    }
+    return false;
+}
+
+template <u32 numAttributes>
+f32 QuadricAttr<numAttributes>::Evaluate(const Vec3f &p, f32 *__restrict attributes,
+                                         f32 *__restrict attributeWeights)
 {
     // New matrix Q =
     // [K  B]
@@ -194,12 +330,16 @@ f32 QuadricAttr<numAttributes>::Evaluate(const Vec3f &p)
     f32 y = Dot(Vec3f(nxx, nxy, nxz), p);
     f32 z = Dot(Vec3f(nxx, nxy, nxz), p);
 
-    f32 error = Dot(Vec3f(x, y, z) + 2 * nd, p) + d2;
+    f32 error = Dot(Vec3f(x, y, z) + 2 * dn, p) + d2;
 
     for (int i = 0; i < numAttributes; i++)
     {
         f32 attributeVal = Dot(Vec3f(gradients[i]), p) + d[i];
+        f32 s            = attributeVal / area;
+
         error += s * (a * s - 2 * attributeVal);
+
+        attributes[i] = attributeVal / attributeWeight;
     }
 
     return error;
@@ -262,15 +402,48 @@ struct Heap
     }
 };
 
-void Simplify(Mesh &mesh)
+Vec3f MeshSimplifier::GetPosition(u32 vertexIndex)
+{
+    return *(Vec3f *)(attributeData + (3 + numAttributes) * vertexIndex);
+}
+
+bool MeshSimplifier::CheckInversion(const Vec3f &newPosition, u32 vertexIndex)
+{
+    // p0 is the vertex being replaced
+    VertexGraphNode *node = &vertexNodes[vertexIndex];
+
+    while (node->next != -1)
+    {
+        for (int i = node->offset; i < node->offset + node->count; i++)
+        {
+            u32 indexIndex0 = indexData[i];
+            u32 indexIndex1 = (indexIndex0 & ~0x3) + (indexIndex0 + 1) & 3;
+            u32 indexIndex2 = (indexIndex0 & ~0x3) + (indexIndex0 + 2) & 3;
+
+            u32 vertexIndex0 = indices[indexIndex0];
+            u32 vertexIndex1 = indices[indexIndex1];
+            u32 vertexIndex2 = indices[indexIndex2];
+
+            Vec3f p0 = GetPosition(vertexIndex0);
+            Vec3f p1 = GetPosition(vertexIndex1);
+            Vec3f p2 = GetPosition(vertexIndex2);
+
+            Vec3f p21      = p2 - p1;
+            Vec3f p01      = p0 - p1;
+            Vec3f pNewEdge = newPosition - p1;
+
+            bool result = Dot(Cross(pNewEdge, p21), Cross(p01, p21)) >= 0.f;
+            if (!result) return true;
+        }
+    }
+
+    return false;
+}
+
+void MeshSimplifier::Simplify(Mesh &mesh)
 {
     ScratchArena scratch;
     // Follows section 4.1 of the quadric error paper
-
-    // Compute the Q matrices for all the initial vertices
-    for (int i = 0; i < mesh.numIndices; i++)
-    {
-    }
 
     struct Pair
     {
@@ -279,6 +452,11 @@ void Simplify(Mesh &mesh)
 
         float error;
         bool operator<(const Pair &other) { return error < other.error; }
+        u32 GetIndex(u32 index)
+        {
+            Assert(index < 2);
+            return index == 0 ? index0 : index1;
+        }
     };
 
     // For every edge, compute the optimal contraction target and its cost
@@ -296,30 +474,24 @@ void Simplify(Mesh &mesh)
 
     for (int triIndex = 0; triIndex < numTriangles; triIndex++)
     {
-        Vec3f p0 = mesh.p[mesh.indices[3 * triIndex + 0];
-        Vec3f p1 = mesh.p[mesh.indices[3 * triIndex + 1];
-        Vec3f p2 = mesh.p[mesh.indices[3 * triIndex + 2];
+        int index0 = 3 * triIndex + 0;
+        int index1 = 3 * triIndex + 1;
+        int index2 = 3 * triIndex + 2;
+        Vec3f p0   = mesh.p[mesh.indices[index0]];
+        Vec3f p1   = mesh.p[mesh.indices[index1]];
+        Vec3f p2   = mesh.p[mesh.indices[index2]];
 
-        triangleQuadrics.push_back(QuadricAttr(p0, p1, p2, 
-                    vertexData[(3 * numAttributes) * index0]));
-
-        for (int vertIndex = 0; vertIndex < 3; vertIndex++)
-        {
-            int index0 = mesh.indices[3 * triIndex + vertIndex];
-            int index1 = mesh.indices[3 * triIndex + ((vertIndex + 1) & 3)];
-        }
+        f32 *attributeWeights;
+        triangleQuadrics.push_back(
+            QuadricAttr(p0, p1, p2, &vertexData[(3 + numAttributes) * index0],
+                        &vertexData[(3 + numAttributes) * index1],
+                        &vertexData[(3 + numAttributes) * index2], attributeWeights));
     }
 
     // Generate graph of vertices to triangles. These point into the triangleData array.
-    struct VertexGraphNode
-    {
-        u32 offset;
-        u32 count;
-        int next;
-    };
 
-    int numVertices              = mesh.numVertices;
-    VertexGraphNode *vertexNodes = PushArray(scratch.temp.arena, VertexGraphNode, numVertices);
+    int numVertices = mesh.numVertices;
+    vertexNodes     = PushArray(scratch.temp.arena, VertexGraphNode, numVertices);
 
     for (int triIndex = 0; triIndex < numTriangles; triIndex++)
     {
@@ -338,14 +510,15 @@ void Simplify(Mesh &mesh)
         total += vertexNodes[vertIndex].count;
     }
 
-    u32 *triangleData = PushArray(scratch.temp.arena, u32, total);
+    indexData = PushArray(scratch.temp.arena, u32, total);
 
     for (int triIndex = 0; triIndex < numTriangles; triIndex++)
     {
         for (int vertIndex = 0; vertIndex < 3; vertIndex++)
         {
-            int index                                 = mesh.indices[3 * triIndex + vertIndex];
-            triangleData[vertexNodes[index].offset++] = triIndex;
+            int indexIndex                               = 3 * triIndex + vertIndex;
+            int vertexIndex                              = mesh.indices[indexIndex];
+            indexData[vertexNodes[vertexIndex].offset++] = indexIndex;
         }
     }
 
@@ -358,12 +531,88 @@ void Simplify(Mesh &mesh)
 
     for (;;)
     {
-        bool remaining = heap.Pop();
+        Pair pair;
+        bool remaining = heap.Pop(pair);
         if (!remaining) break;
-    }
 
-    while (heap.Pop())
-    {
+        VertexGraphNode *node = &vertexNodes[pair.index0];
+
+        // Find the set of triangles adjacent to the pair
+        u32 maxAdjTris = 0;
+
+        int nodeIndex = pair.index0;
+        while (nodeIndex != -1)
+        {
+            VertexGraphNode *travNode = &vertexNodes[nodeIndex];
+            maxAdjTris += travNode->count;
+            nodeIndex = travNode->next;
+        }
+        nodeIndex = pair.index1;
+        while (nodeIndex != -1)
+        {
+            VertexGraphNode *travNode = &vertexNodes[nodeIndex];
+            maxAdjTris += travNode->count;
+            nodeIndex = travNode->next;
+        }
+
+        StaticArray<u32> adjTris(scratch.temp.arena, maxAdjTris);
+
+        for (int pairIndex = 0; pairIndex < 2; pairIndex++)
+        {
+            nodeIndex = pair.GetIndex(pairIndex);
+            while (nodeIndex != -1)
+            {
+                VertexGraphNode *travNode = &vertexNodes[nodeIndex];
+                for (int i = travNode->offset; i < travNode->offset + travNode->count; i++)
+                {
+                    u32 adjTri     = indexData[i] / 3;
+                    bool duplicate = false;
+                    for (int j = 0; j < adjTris.Length(); j++)
+                    {
+                        if (adjTris[j] == adjTri)
+                        {
+                            duplicate = true;
+                            break;
+                        }
+                    }
+                    if (!duplicate)
+                    {
+                        adjTris.push_back(adjTri);
+                    }
+                }
+                nodeIndex = travNode->next;
+            }
+        }
+
+        // Add quadrics together
+        QuadricAttr<6> quadric;
+        for (int i = 0; i < adjTris.Length(); i++)
+        {
+            quadric.Add(triangleQuadrics[adjTris[i]]);
+        }
+
+        // TODO: handle locked edges, preserving boundary edges, inversion prevention,
+        // rebase to new coordinate system to for floating point accuracy
+        Vec3f newPosition;
+
+        // Try optimize volume
+        bool valid = quadric.OptimizeVolume(newPosition) && !CheckInversion(newPosition);
+
+        if (!valid)
+        {
+            // Try optimize linear
+            valid = quadric.OptimizeLinear(newPosition) && !CheckInversion(newPosition);
+        }
+
+        if (!valid)
+        {
+            newPosition = (position0 + position1) / 2.f;
+            valid       = CheckInversion(newPosition);
+        }
+
+        if (!valid)
+        {
+        }
     }
 }
 
