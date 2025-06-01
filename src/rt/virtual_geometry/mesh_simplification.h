@@ -59,7 +59,7 @@ struct MeshSimplifier
         int next;
     };
 
-    Vec3f GetPosition(u32 vertexIndex);
+    Vec3f &GetPosition(u32 vertexIndex);
     bool CheckInversion(const Vec3f &newPosition, u32 vertexIndex);
     void Simplify(Mesh &mesh);
 
@@ -70,7 +70,10 @@ struct MeshSimplifier
 
     // Graph mapping vertices to triangle faces
     VertexGraphNode *vertexNodes;
+    VertexGraphNode *vertexToPairNodes;
+
     u32 *indexData;
+    u32 *pairIndices;
 };
 
 } // namespace rt

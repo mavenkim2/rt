@@ -224,6 +224,17 @@ QuadricAttr::QuadricAttr(const Vec3f &p0, const Vec3f &p1, const Vec3f &p2,
 }
 
 template <u32 numAttributes>
+void QuadricAttr<numAttributes>::Add(QuadricAttr<numAttributes> &other)
+{
+    c00 = c00 + area * other.c00;
+    c01 = c01 + area * other.c01;
+    c02 = c02 + area * other.c02;
+
+    c11 = c11 + area * other.c11;
+    c12 = c12 + area * other.c02;
+}
+
+template <u32 numAttributes>
 bool QuadricAttr<numAttributes>::OptimizeVolume(Vec3f &p)
 {
     if (a < 1e-12) return false;
@@ -348,61 +359,98 @@ f32 QuadricAttr<numAttributes>::Evaluate(const Vec3f &p, f32 *__restrict attribu
 template <typename T>
 struct Heap
 {
-    StaticArray<T> array;
+    StaticArray<u32> indices;
+    StaticArray<u32> indicesIndex;
+    StaticArray<T> values;
 
-    Heap(Arena *arena, u32 arraySize) { array = StaticArray<T>(arena, arraySize); }
+    Heap(Arena *arena, u32 arraySize)
+    {
+        indices      = StaticArray<u32>(arena, arraySize);
+        indicesIndex = StaticArray<u32>(arena, arraySize);
+        values       = StaticArray<T>(arena, arraySize);
+    }
 
     int GetParent(int index) const { return (index - 1) >> 1; }
 
-    void Add(const T &element)
+    int Add(const T &element)
     {
-        array.push_back(element);
-        int index  = array.size() - 1;
+        values.push_back(element);
+        int index  = values.size() - 1;
+        int result = index;
+        indices.push_back(index);
+
         int parent = GetParent(index);
-        while (parent != 0 && element < array[parent])
+        while (parent != 0 && element < values[indices[parent]])
         {
-            Swap(array[parent], array[index]);
+            Swap(indices[parent], indices[index]);
             index  = parent;
             parent = GetParent(index);
         }
+        indicesIndex.push_back(index);
+
+        return result;
     }
 
-    bool Pop(T &element)
+    int Pop()
     {
-        if (array.empty()) return false;
+        if (values.empty()) return -1;
 
-        if (array.size() == 1)
+        if (indices.size() == 1)
         {
-            element = array.back();
-            array.pop_back();
-            return true;
+            values.size_ = 0;
+            return indices[0];
         }
 
         // Down heap
-        element  = array[0];
-        array[0] = array.back();
-        array.pop_back();
+        int index = indices[0];
+        Assert(indicesIndex[index] == 0);
 
-        int parent = 0;
-        while (parent < array.Length() - 1)
+        indices[0]               = indices.Pop();
+        indicesIndex[indices[0]] = 0;
+        indicesIndex[index]      = -1;
+
+        Heapify(0);
+
+        return index;
+    }
+
+    void Remove(int index)
+    {
+        int indexIndex      = indicesIndex[index];
+        indices[indexIndex] = indices.Pop();
+
+        indicesIndex[indices[indexIndex]] = indexIndex;
+        indicesIndex[index]               = -1;
+
+        Heapify(indexIndex);
+    }
+
+    void Heapify(int startIndex)
+    {
+        T &addedVal = values[indices[startIndex]];
+
+        int parent = startIndex;
+        while (parent < indices.Length() - 1)
         {
             int left  = (parent << 1) + 1;
             int right = left + 1;
             int minIndex =
-                left < array.Length() && array[left] < array[parent] ? left : parent;
-            minIndex =
-                right < array.Length() && array[right] < array[minIndex] ? right : minIndex;
+                left < indices.Length() && values[indices[left]] < addedVal ? left : parent;
+            minIndex = right < indices.Length() && values[indices[right]] < addedVal
+                           ? right
+                           : minIndex;
             if (minIndex == parent) break;
 
-            Swap(array[parent], array[minIndex]);
+            Swap(indices[parent], indices[minIndex]);
+            indicesIndex[indices[parent]]   = parent;
+            indicesIndex[indices[minIndex]] = minIndex;
+
             parent = minIndex;
         }
-
-        return true;
     }
 };
 
-Vec3f MeshSimplifier::GetPosition(u32 vertexIndex)
+Vec3f &MeshSimplifier::GetPosition(u32 vertexIndex)
 {
     return *(Vec3f *)(attributeData + (3 + numAttributes) * vertexIndex);
 }
@@ -440,24 +488,26 @@ bool MeshSimplifier::CheckInversion(const Vec3f &newPosition, u32 vertexIndex)
     return false;
 }
 
+struct Pair
+{
+    int indexIndex0;
+    int indexIndex1;
+
+    float error;
+
+    bool operator<(const Pair &other) { return error < other.error; }
+
+    u32 GetIndex(u32 index)
+    {
+        Assert(index < 2);
+        return index == 0 ? indexIndex0 : indexIndex1;
+    }
+};
+
 void MeshSimplifier::Simplify(Mesh &mesh)
 {
     ScratchArena scratch;
     // Follows section 4.1 of the quadric error paper
-
-    struct Pair
-    {
-        int index0;
-        int index1;
-
-        float error;
-        bool operator<(const Pair &other) { return error < other.error; }
-        u32 GetIndex(u32 index)
-        {
-            Assert(index < 2);
-            return index == 0 ? index0 : index1;
-        }
-    };
 
     // For every edge, compute the optimal contraction target and its cost
 
@@ -490,8 +540,9 @@ void MeshSimplifier::Simplify(Mesh &mesh)
 
     // Generate graph of vertices to triangles. These point into the triangleData array.
 
-    int numVertices = mesh.numVertices;
-    vertexNodes     = PushArray(scratch.temp.arena, VertexGraphNode, numVertices);
+    int numVertices   = mesh.numVertices;
+    vertexNodes       = PushArray(scratch.temp.arena, VertexGraphNode, numVertices);
+    vertexToPairNodes = PushArray(scratch.temp.arena, VertexGraphNode, numVertices);
 
     for (int triIndex = 0; triIndex < numTriangles; triIndex++)
     {
@@ -499,41 +550,64 @@ void MeshSimplifier::Simplify(Mesh &mesh)
         {
             int index = mesh.indices[3 * triIndex + vertIndex];
             vertexNodes[index].count++;
+
+            vertexToPairNodes[index].count += 2;
         }
     }
 
-    u32 total = 0;
+    u32 total      = 0;
+    u32 totalPairs = 0;
     for (int vertIndex = 0; vertIndex < numVertices; vertIndex++)
     {
         vertexNodes[vertIndex].offset = total;
         vertexNodes[vertIndex].next   = -1;
         total += vertexNodes[vertIndex].count;
+
+        vertexToPairNodes[vertIndex].offset = totalPairs;
+        vertexToPairNodes[vertIndex].next   = -1;
+        totalPairs                          = vertexToPairNodes[vertIndex].count;
     }
 
-    indexData = PushArray(scratch.temp.arena, u32, total);
+    indexData   = PushArray(scratch.temp.arena, u32, total);
+    pairIndices = PushArray(scratch.temp.arena, u32, totalPairs);
+
+    Heap<Pair> heap(scratch.temp.arena, totalPairs / 2);
 
     for (int triIndex = 0; triIndex < numTriangles; triIndex++)
     {
         for (int vertIndex = 0; vertIndex < 3; vertIndex++)
         {
-            int indexIndex                               = 3 * triIndex + vertIndex;
-            int vertexIndex                              = mesh.indices[indexIndex];
-            indexData[vertexNodes[vertexIndex].offset++] = indexIndex;
+            int indexIndex0 = 3 * triIndex + vertIndex;
+            int indexIndex1 = (indexIndex0 & ~0x3) + ((indexIndex0 + 1) & 0x3);
+
+            Pair pair;
+            pair.index0 = indexIndex0;
+            pair.index1 = indexIndex1;
+
+            int vertexIndex0 = mesh.indices[indexIndex0];
+            int vertexIndex1 = mesh.indices[indexIndex1];
+
+            int pairIndex                                         = heap.Add(pair);
+            pairIndices[vertexToPairNodes[vertexIndex0].offset++] = pairIndex;
+            pairIndices[vertexToPairNodes[vertexIndex1].offset++] = pairIndex;
+
+            indexData[vertexNodes[vertexIndex0].offset++] = indexIndex0;
         }
     }
 
     for (int vertIndex = 0; vertIndex < numVertices; vertIndex++)
     {
-        vertexNodes[index].offset -= vertexNodes[index].count;
-    }
+        vertexNodes[vertIndex].offset -= vertexNodes[vertIndex].count;
 
-    Heap<Pair> heap;
+        vertexToPairNodes[vertIndex].offset -= vertexToPairNodes[vertIndex].count;
+    }
 
     for (;;)
     {
-        Pair pair;
-        bool remaining = heap.Pop(pair);
-        if (!remaining) break;
+        int pairIndex = heap.Pop();
+        if (pairIndex == -1) break;
+
+        Pair &pair = heap.values[pairIndex];
 
         VertexGraphNode *node = &vertexNodes[pair.index0];
 
@@ -557,9 +631,9 @@ void MeshSimplifier::Simplify(Mesh &mesh)
 
         StaticArray<u32> adjTris(scratch.temp.arena, maxAdjTris);
 
-        for (int pairIndex = 0; pairIndex < 2; pairIndex++)
+        for (int i = 0; i < 2; i++)
         {
-            nodeIndex = pair.GetIndex(pairIndex);
+            nodeIndex = pair.GetIndex(i);
             while (nodeIndex != -1)
             {
                 VertexGraphNode *travNode = &vertexNodes[nodeIndex];
@@ -612,6 +686,77 @@ void MeshSimplifier::Simplify(Mesh &mesh)
 
         if (!valid)
         {
+        }
+
+        // Move the position and change the attribute data
+        GetPosition(pair.index0) = newPosition;
+
+        // Reevaluate all pairs and remove v2 from the graph
+        vertexToPairNodes[pair.index0].next = pair.index1;
+        nodeIndex                           = pair.index1;
+        while (nodeIndex != -1)
+        {
+            VertexGraphNode *vertexToPairNode = vertexToPairNodes[nodeIndex];
+            for (int i = 0; i < vertexToPairNode->count; i++)
+            {
+                u32 pairIndexIndex = vertexToPairNode->offset + i;
+                if (pairIndices[pairIndexIndex] == pairIndex)
+                {
+                    pairIndices[pairIndexIndex] =
+                        pairIndices[vertexToPairNode->offset + vertexToPairNode->count - 1];
+                }
+                else
+                {
+                    Pair &changedPair    = heap.values[pairIndices[pairIndexIndex]];
+                    u32 firstVertexIndex = indices[pair.indexIndex0];
+
+                    if (indices[changedPair.indexIndex0] == indices[pair.indexIndex1])
+                        indices[changedPair.indexIndex0] = firstVertexIndex;
+                    else if (changedPair.index1 == pair.index1)
+                        indices[changedPair.indexIndex1] = firstVertexIndex;
+                    else
+                    {
+                        ErrorExit(0, "Bug in graph state");
+                    }
+
+                    changedPair.error = EvaluatePair(changedPair);
+                    heap.Heapify(pairIndices[pairIndexIndex]);
+                }
+            }
+        }
+
+        // Remove degenerate triangles
+        for (int i = 0; i < 2; i++)
+        {
+            int indexIndex  = pair.GetIndex(i);
+            int vertexIndex = indices[indexIndex];
+
+            while (vertexIndex != -1)
+            {
+                VertexGraphNode *node = &vertexNodes[vertexIndex];
+                for (int j = 0; j < node->count;)
+                {
+                    u32 tri           = indexData[node->offset + j] / 3;
+                    u32 triIndices[3] = {
+                        indices[3 * tri + 0],
+                        indices[3 * tri + 1],
+                        indices[3 * tri + 2],
+                    };
+
+                    if (triIndices[0] == triIndices[1] || triIndices[1] == triIndices[2] ||
+                        triIndices[0] == triIndices[2])
+                    {
+                        indexData[node->offset + j] =
+                            indexData[node->offset + node->count - 1];
+                        node->count--;
+                    }
+                    else
+                    {
+                        j++;
+                    }
+                }
+                vertexIndex = node->next;
+            }
         }
     }
 }
