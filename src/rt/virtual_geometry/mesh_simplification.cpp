@@ -1,3 +1,4 @@
+#include "../dgfs.h"
 #include "../scene.h"
 #include "mesh_simplification.h"
 
@@ -106,9 +107,44 @@ bool LUPSolveIterate(T **__restrict A, int *__restrict P, T *__restrict b, int N
     return false;
 }
 
+__forceinline void OuterProduct(const Vec3f &v, f32 &a00, f32 &a01, f32 &a02, f32 &a11,
+                                f32 &a12, f32 &a22)
+{
+    a00 += Sqr(v.x);
+    a01 += v.x * v.y;
+    a02 += v.x * v.z;
+
+    a11 += Sqr(v.y);
+    a12 += v.y * v.z;
+
+    a22 += Sqr(v.z);
+}
+
+Quadric::Quadric(u32 numAttributes) : numAttributes(numAttributes)
+{
+    c00 = 0.f;
+    c01 = 0.f;
+    c02 = 0.f;
+
+    c11 = 0.f;
+    c12 = 0.f;
+
+    c22 = 0.f;
+
+    dn = Vec3f(0);
+
+    d2 = 0.f;
+
+    gVol = Vec3f(0);
+    dVol = 0.f;
+
+    area = 0.f;
+}
+
 Quadric::Quadric(const Vec3f &p0, const Vec3f &p1, const Vec3f &p2, f32 *__restrict attr0,
                  f32 *__restrict attr1, f32 *__restrict attr2,
-                 f32 *__restrict attributeWeights)
+                 f32 *__restrict attributeWeights, u32 numAttributes)
+    : numAttributes(numAttributes)
 {
     Vec3f p01 = p1 - p0;
     Vec3f p02 = p2 - p0;
@@ -119,7 +155,7 @@ Quadric::Quadric(const Vec3f &p0, const Vec3f &p1, const Vec3f &p2, f32 *__restr
     dVol = -Dot(gVol, p0);
 
     f32 length = Length(n);
-    f32 area   = 0.5f * length;
+    area       = 0.5f * length;
 
     if (length < 1e-8f)
     {
@@ -128,14 +164,7 @@ Quadric::Quadric(const Vec3f &p0, const Vec3f &p1, const Vec3f &p2, f32 *__restr
 
     n /= length;
 
-    a2 = Sqr(n.x);
-    ab = n.x * n.y;
-    ac = n.x * n.z;
-
-    b2 = Sqr(n.y);
-    bc = n.y * n.z;
-
-    c2 = Sqr(n.z);
+    OuterProduct(n, c00, c01, c02, c11, c12, c22);
 
     f32 distToPlane = -Dot(n, p0);
     dn              = distToPlane * n;
@@ -169,34 +198,33 @@ Quadric::Quadric(const Vec3f &p0, const Vec3f &p1, const Vec3f &p2, f32 *__restr
             0.f,
         };
 
-        if (isInvertible)
-        {
-            LUPSolve(M, pivots, b, 3, grad.e);
-            f32 residual[] = {
-                b[0] - Dot(grad, p01),
-                b[1] - Dot(grad, p02),
-                b[2] - Dot(grad, n),
-            };
-
-            Vec3f error;
-            LUPSolve(M, pivots, residual, 3, error.e);
-            grad += error;
-        }
+        if (isInvertible) LUPSolveIterate(M, pivots, b, 3, grad.e, 1);
 
         gradients[i] = grad;
         d[i]         = a0 - Dot(grad, p);
 
-        a2 += Sqr(g[i].x);
-        ab += g[i].x * g[i].y;
-        ac += g[i].x * g[i].z;
+        OuterProduct(gradients[i], c00, c01, c02, c11, c12, c22);
 
-        b2 += Sqr(g[i].y);
-        bc += g[i].y * g[i].z;
-
-        c2 += Sqr(g[i].z);
-
-        dn += d[i] * grad;
+        dn += d[i] * gradients[i];
         d2 += Sqr(d[i]);
+    }
+
+    // Multiply quadric by area (in preparation to be summed by other faces)
+    c00 *= area;
+    c01 *= area;
+    c02 *= area;
+
+    c11 *= area;
+    c12 *= area;
+    c22 *= area;
+
+    dn *= area;
+    d2 *= area;
+
+    for (u32 i = 0; i < numAttributes; i++)
+    {
+        gradients[i] *= area;
+        d[i] *= area;
     }
 }
 
@@ -249,17 +277,73 @@ f32 Quadric::Evaluate(const Vec3f &p, f32 *__restrict attributes,
     return error;
 }
 
-void Quadric::Add(Quadric &other)
+void Quadric::InitializeEdge(const Vec3f &p0, const Vec3f &p1)
 {
-    c00 = c00 + area * other.c00;
-    c01 = c01 + area * other.c01;
-    c02 = c02 + area * other.c02;
+    Vec3f n = Cross(p0, p1);
 
-    c11 = c11 + area * other.c11;
-    c12 = c12 + area * other.c02;
+    Vec3f p01 = p1 - p0;
+    Vec3f p02 = p2 - p0;
+
+    Vec3f n = Cross(p01, p02);
+
+    gVol = 0.f;
+    dVol = 0.f;
+
+    f32 length = Length(n);
+    area       = 0.5f * length;
+
+    if (length < 1e-8f) return;
+
+    n /= length;
+
+    OuterProduct(n, c00, c01, c02, c11, c12, c22);
+
+    f32 distToPlane = -Dot(n, p0);
+    dn              = distToPlane * n;
+    d2              = Sqr(distToPlane);
+
+    // Multiply quadric by area (in preparation to be summed by other faces)
+    c00 *= area;
+    c01 *= area;
+    c02 *= area;
+
+    c11 *= area;
+    c12 *= area;
+    c22 *= area;
+
+    dn *= area;
+    d2 *= area;
 }
 
-bool Quadric::OptimizeVolume(Vec3f &p)
+void Quadric::Add(Quadric &other)
+{
+    Assert(numAttributes == other.numAttributes);
+    c00 += other.c00;
+    c01 += other.c01;
+    c02 += other.c02;
+
+    c11 += other.c11;
+    c12 += other.c02;
+    c22 += other.c22;
+
+    dn += other.dn;
+
+    d2 += other.d2;
+
+    gVol += other.gVol;
+    dVol += other.dVol;
+
+    // Volume optimization
+    area = other.area;
+
+    for (int i = 0; i < numAttributes; i++)
+    {
+        gradients[i] += other.gradients[i];
+        d[i] += other.d[i];
+    }
+}
+
+bool Quadric::Optimize(Vec3f &p, bool volume)
 {
     if (a < 1e-12) return false;
 
@@ -291,16 +375,8 @@ bool Quadric::OptimizeVolume(Vec3f &p)
 
     for (int i = 0; i < numAttributes; i++)
     {
-        BBt00 += Sqr(gradients[i].x);
-        BBt01 += gradients[i].x * gradients[i].y;
-        BBt02 += gradients[i].x * gradients[i].z;
+        OuterProduct(gradients[i], BBt00, BBt01, BBt02, BBt11, BBt12, BBt22);
 
-        BBt11 += Sqr(gradients[i].y);
-        BBt12 += gradients[i].y * gradients[i].z;
-
-        BBt22 += Sqr(gradients[i].z);
-
-        b1 += gradients[i] * d[i];
         Bb2 += gradients[i] * d[i];
     }
 
@@ -321,28 +397,56 @@ bool Quadric::OptimizeVolume(Vec3f &p)
     // v is now 4-dim position and lagrange multiplier
     // Dot(gVol, p) + dVol = 0
 
-    f32 A[4][4] = {
-        {A00, A01, A02, gVol.x},
-        {A01, A11, A12, gVol.y},
-        {A02, A12, A22, gVol.z},
-        {gVol.x, gVol.y, gVol.z, 0},
-    };
-
-    f32 b[4] = {-b.x, -b.y, -b.z, -dVol};
-
-    // Solve the 4x4 linear system
-    int pivots[4];
-    if (LUPDecompose(A, 4, 1e-8f, pivots))
+    if (volume)
     {
-        f32 result[4];
-        if (LUPSolveIterate(A, pivots, b, 4, result))
+        f32 A[4][4] = {
+            {A00, A01, A02, gVol.x},
+            {A01, A11, A12, gVol.y},
+            {A02, A12, A22, gVol.z},
+            {gVol.x, gVol.y, gVol.z, 0},
+        };
+
+        f32 b[4] = {-b.x, -b.y, -b.z, -dVol};
+
+        // Solve the 4x4 linear system
+        int pivots[4];
+        if (LUPDecompose(A, 4, 1e-8f, pivots))
         {
-            p.x = result[0];
-            p.y = result[1];
-            p.z = result[2];
-            return true;
+            f32 result[4];
+            if (LUPSolveIterate(A, pivots, b, 4, result))
+            {
+                p.x = result[0];
+                p.y = result[1];
+                p.z = result[2];
+                return true;
+            }
         }
     }
+    else
+    {
+        f32 A[3][3] = {
+            {A00, A01, A02},
+            {A01, A11, A12},
+            {A02, A12, A22},
+        };
+
+        f32 b[3] = {-b.x, -b.y, -b.z};
+
+        // Solve the 4x4 linear system
+        int pivots[3];
+        if (LUPDecompose(A, 3, 1e-8f, pivots))
+        {
+            f32 result[3];
+            if (LUPSolveIterate(A, pivots, b, 3, result))
+            {
+                p.x = result[0];
+                p.y = result[1];
+                p.z = result[2];
+                return true;
+            }
+        }
+    }
+
     return false;
 }
 
@@ -580,25 +684,34 @@ f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
         }
     }
 
-    // Add quadrics together
-    Quadric quadric;
+    // Add triangle quadrics
+    Quadric quadric(numAttributes);
     for (int i = 0; i < adjTris.Length(); i++)
     {
         quadric.Add(triangleQuadrics[adjTris[i]]);
     }
 
-    // TODO: handle locked edges, preserving boundary edges, inversion prevention,
-    // rebase to new coordinate system to for floating point accuracy
+    // Add edge quadric
+    Quadric edgeQuadric(0);
+    for (int i = 0; i < 2; i++)
+    {
+        int nodeIndex = indices[pair.indexIndex0];
+    }
+
+    // TODO: handle locked edges, preserving boundary edges, rebase to new coordinate system to
+    // for floating point accuracy
+
     Vec3f newPosition;
 
     f32 error = 0.f;
+
     // Try optimize volume
-    bool valid = quadric.OptimizeVolume(newPosition) && !CheckInversion(newPosition);
+    bool valid = quadric.Optimize(newPosition, true) && !CheckInversion(newPosition);
 
     if (!valid)
     {
-        // Try optimize linear
-        valid = quadric.OptimizeLinear(newPosition) && !CheckInversion(newPosition);
+        // Try optimize wout volume
+        valid = quadric.Optimize(newPosition, false) && !CheckInversion(newPosition);
     }
 
     if (!valid)
@@ -609,15 +722,19 @@ f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
 
     if (!valid)
     {
+        error += inversionPenalty;
     }
 
     // Evaluate the error for the optimal position
     f32 error = quadric.Evaluate(newPosition);
 
     if (p) *outP = newPosition;
+
+    return error;
 }
 
-void MeshSimplifier::Simplify(Mesh &mesh)
+void MeshSimplifier::Simplify(Mesh &mesh, u32 limitNumVerts, u32 limitNumTris, u32 targetError,
+                              u32 limitError);
 {
     ScratchArena scratch;
     // Follows section 4.1 of the quadric error paper
@@ -733,7 +850,7 @@ void MeshSimplifier::Simplify(Mesh &mesh)
         vertexNodes[index0].next       = index1;
         vertexToPairNodes[index0].next = index1;
 
-        // Reevaluate all pairs, remove v2 from the graph, update the heap
+        // Remove duplicate pairs and reevaluate remaining pairs.
         nodeIndex = pair.index1;
         while (nodeIndex != -1)
         {
@@ -799,6 +916,27 @@ void MeshSimplifier::Simplify(Mesh &mesh)
                 vertexIndex = node->next;
             }
         }
+    }
+}
+
+struct Cluster
+{
+};
+
+void CreateClusters(Mesh &mesh)
+{
+    // 1. Split triangles into clusters
+    // 2. Group clusters based on how many shared edges they have (METIS)
+    // 3. Simplify the cluster group
+    // 4. Split into clusters
+
+    ClusterBuilder builder;
+
+    // mesh.
+    for (;;)
+    {
+        RecordAOSSplits record;
+        builder.BuildClusters(RecordAOSSplits & record, true);
     }
 }
 

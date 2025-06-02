@@ -8,6 +8,8 @@ namespace rt
 
 struct Quadric
 {
+    static const u32 maxAttributes = 6;
+
     f32 c00;
     f32 c01;
     f32 c02;
@@ -28,18 +30,21 @@ struct Quadric
 
     f32 area;
 
-    Vec3f *gradients;
-    f32 *d;
+    Vec3f gradients[maxAttributes];
+    f32 d[maxAttributes];
+
     u32 numAttributes;
 
+    Quadric(u32 numAttributes);
     Quadric(const Vec3f &p0, const Vec3f &p1, const Vec3f &p2, f32 *__restrict attr0,
-            f32 *__restrict attr1, f32 *__restrict attr2, f32 *__restrict attributeWeights);
+            f32 *__restrict attr1, f32 *__restrict attr2, f32 *__restrict attributeWeights,
+            u32 numAttributes);
 
+    void InitializeEdge(const Vec3f &p0, const Vec3f &p1);
     f32 Evaluate(const Vec3f &p, f32 *__restrict attributes, f32 *__restrict attributeWeights);
     void Add(QuadricAttr<numAttributes> &other);
 
-    bool Optimize(Vec3f &p);
-    bool OptimizeVolume(Vec3f &p);
+    bool Optimize(Vec3f &p, bool volume);
 };
 
 struct Pair
@@ -67,10 +72,9 @@ struct MeshSimplifier
         int next;
     };
 
-    Vec3f &GetPosition(u32 vertexIndex);
-    bool CheckInversion(const Vec3f &newPosition, u32 vertexIndex);
-    f32 EvaluatePair(Pair &pair, Vec3f *newPosition);
-    void Simplify(Mesh &mesh);
+    // Constants
+    f32 lockedPenaty     = 1e8f;
+    f32 inversionPenalty = 100.f;
 
     // Contains position, and all attributes (normals, uvs, etc.)
     f32 *vertexData;
@@ -86,6 +90,12 @@ struct MeshSimplifier
 
     u32 *indexData;
     u32 *pairIndices;
+
+    Vec3f &GetPosition(u32 vertexIndex);
+    bool CheckInversion(const Vec3f &newPosition, u32 vertexIndex);
+    f32 EvaluatePair(Pair &pair, Vec3f *newPosition);
+    void Simplify(Mesh &mesh, u32 limitNumVerts, u32 limitNumTris, u32 targetError,
+                  u32 limitError);
 };
 
 } // namespace rt
