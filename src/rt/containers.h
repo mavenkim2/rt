@@ -104,6 +104,8 @@ struct StaticArray
         return result;
     }
 
+    __forceinline T &Last() { return data[size_ - 1]; }
+
     __forceinline u32 Length() const { return size_; }
     __forceinline u32 size() const { return Length(); }
     __forceinline i32 &size() { return size_; }

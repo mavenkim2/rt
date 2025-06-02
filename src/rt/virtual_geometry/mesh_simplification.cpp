@@ -106,32 +106,9 @@ bool LUPSolveIterate(T **__restrict A, int *__restrict P, T *__restrict b, int N
     return false;
 }
 
-// https://www.cs.cmu.edu/~garland/Papers/quadrics.pdf Quadric error
-// https://www.cs.cmu.edu/~garland/Papers/quadric2.pdf Quadric error w/ attributes
-f32 Quadric::Evaluate(const Vec3f &p)
-{
-    // The error is: vt * K * v where
-    // v is the column vector position of the vertex
-    // K is the outer product matrix of the plane vector p = [a b c d] for
-    // plane ax + by + cz + d = 0. The Kp for all the triangles planes at a vertex is simply
-    // the sum of the matrices.
-
-    // Simplified calculation:
-    // vt * K * v =
-    // vt * A * v + 2 * nd * v + d2
-
-    f32 x = Dot(Vec3f(nxx, nxy, nxz), p);
-    f32 y = Dot(Vec3f(nxx, nxy, nxz), p);
-    f32 z = Dot(Vec3f(nxx, nxy, nxz), p);
-
-    f32 error = Dot(Vec3f(x, y, z) + 2 * dn, p) + d2;
-    return error;
-}
-
-template <u32 numAttributes>
-QuadricAttr::QuadricAttr(const Vec3f &p0, const Vec3f &p1, const Vec3f &p2,
-                         f32 *__restrict attr0, f32 *__restrict attr1, f32 *__restrict attr2,
-                         f32 *__restrict attributeWeights)
+Quadric::Quadric(const Vec3f &p0, const Vec3f &p1, const Vec3f &p2, f32 *__restrict attr0,
+                 f32 *__restrict attr1, f32 *__restrict attr2,
+                 f32 *__restrict attributeWeights)
 {
     Vec3f p01 = p1 - p0;
     Vec3f p02 = p2 - p0;
@@ -223,8 +200,56 @@ QuadricAttr::QuadricAttr(const Vec3f &p0, const Vec3f &p1, const Vec3f &p2,
     }
 }
 
-template <u32 numAttributes>
-void QuadricAttr<numAttributes>::Add(QuadricAttr<numAttributes> &other)
+f32 Quadric::Evaluate(const Vec3f &p, f32 *__restrict attributes,
+                      f32 *__restrict attributeWeights)
+{
+    // New matrix Q =
+    // [K  B]
+    // [Bt a]
+    //
+    // Where B = g[0 ... numAttributes] (matrix 3xnumAttributes of gradients)
+    //
+    // Error = pT * Q * p
+    //
+    // where p = [v]
+    //           [s]
+
+    f32 x = Dot(Vec3f(c00, c01, c02), p);
+    f32 y = Dot(Vec3f(c01, c11, c12), p);
+    f32 z = Dot(Vec3f(c02, c12, c22), p);
+
+    f32 error = Dot(Vec3f(x, y, z) + 2 * dn, p) + d2;
+
+    f32 invArea = 1.f / area;
+
+    for (int i = 0; i < numAttributes; i++)
+    {
+        f32 pgd       = d[i] + Dot(gradients[i], p);
+        f32 s         = pgd * invArea;
+        attributes[i] = s / attributeWeights[i];
+
+        f32 gp = Dot(gradients[i], p);
+
+        // 2s * Dot(-g, p) + -2s * d + dj2 + s^2 * area
+        //
+        // 1/area(d^2 + 2gp + gp^2 + 2d * -gp - 2gp^2 - 2d^2 - 2gp)
+        // 1/area(-d^2 -gp^2 -2dgp)
+        // -1/area(pgd^2)
+        // -pgd * s
+
+        error -= pgd * s;
+
+        // f32 attributeVal = Dot(Vec3f(gradients[i]), p) + d[i];
+        // f32 s            = attributeVal / area;
+        //
+        // error += s * (a * s - 2 * attributeVal);
+        // attributes[i] = attributeVal / attributeWeight;
+    }
+
+    return error;
+}
+
+void Quadric::Add(Quadric &other)
 {
     c00 = c00 + area * other.c00;
     c01 = c01 + area * other.c01;
@@ -234,8 +259,7 @@ void QuadricAttr<numAttributes>::Add(QuadricAttr<numAttributes> &other)
     c12 = c12 + area * other.c02;
 }
 
-template <u32 numAttributes>
-bool QuadricAttr<numAttributes>::OptimizeVolume(Vec3f &p)
+bool Quadric::OptimizeVolume(Vec3f &p)
 {
     if (a < 1e-12) return false;
 
@@ -322,72 +346,41 @@ bool QuadricAttr<numAttributes>::OptimizeVolume(Vec3f &p)
     return false;
 }
 
-template <u32 numAttributes>
-f32 QuadricAttr<numAttributes>::Evaluate(const Vec3f &p, f32 *__restrict attributes,
-                                         f32 *__restrict attributeWeights)
-{
-    // New matrix Q =
-    // [K  B]
-    // [Bt a]
-    //
-    // Where B = g[0 ... numAttributes] (matrix 3xnumAttributes of gradients)
-    //
-    // Error = pT * Q * p
-    //
-    // where p = [v]
-    //           [s]
-
-    f32 x = Dot(Vec3f(nxx, nxy, nxz), p);
-    f32 y = Dot(Vec3f(nxx, nxy, nxz), p);
-    f32 z = Dot(Vec3f(nxx, nxy, nxz), p);
-
-    f32 error = Dot(Vec3f(x, y, z) + 2 * dn, p) + d2;
-
-    for (int i = 0; i < numAttributes; i++)
-    {
-        f32 attributeVal = Dot(Vec3f(gradients[i]), p) + d[i];
-        f32 s            = attributeVal / area;
-
-        error += s * (a * s - 2 * attributeVal);
-
-        attributes[i] = attributeVal / attributeWeight;
-    }
-
-    return error;
-}
-
 template <typename T>
 struct Heap
 {
-    StaticArray<u32> indices;
-    StaticArray<u32> indicesIndex;
-    StaticArray<T> values;
+    u32 *indices;
+    u32 *indicesIndex;
+    T *values;
+
+    u32 heapNum;
+    u32 numValues;
+
+    u32 maxSize;
 
     Heap(Arena *arena, u32 arraySize)
     {
-        indices      = StaticArray<u32>(arena, arraySize);
-        indicesIndex = StaticArray<u32>(arena, arraySize);
-        values       = StaticArray<T>(arena, arraySize);
+        indices      = PushArrayNoZero(arena, u32, arraySize);
+        indicesIndex = PushArrayNoZero(arena, u32, arraySize);
+        values       = (T *)PushArrayNoZero(arena, u8, sizeof(T) * arraySize);
+        heapNum      = 0;
+        maxSize      = arraySize;
     }
 
-    int GetParent(int index) const { return (index - 1) >> 1; }
+    int GetParent(int index) const { return index == 0 ? 0 : (index - 1) >> 1; }
 
     int Add(const T &element)
     {
-        values.push_back(element);
-        int index  = values.size() - 1;
-        int result = index;
-        indices.push_back(index);
+        values[numValues] = element;
 
-        int parent = GetParent(index);
-        while (parent != 0 && element < values[indices[parent]])
-        {
-            Swap(indices[parent], indices[index]);
-            index  = parent;
-            parent = GetParent(index);
-        }
-        indicesIndex.push_back(index);
+        int index                      = numValues++;
+        int result                     = index;
+        indices[heapNum]               = index;
+        indicesIndex[indices[heapNum]] = heapNum;
 
+        UpHeap(heapNum);
+
+        heapNum++;
         return result;
     }
 
@@ -409,23 +402,46 @@ struct Heap
         indicesIndex[indices[0]] = 0;
         indicesIndex[index]      = -1;
 
-        Heapify(0);
+        DownHeap(0);
 
         return index;
     }
 
     void Remove(int index)
     {
-        int indexIndex      = indicesIndex[index];
-        indices[indexIndex] = indices.Pop();
+        int indexIndex = indicesIndex[index];
 
+        Assert(values[indices[indexIndex]] < values[indices.Last()]);
+        indices[indexIndex]               = indices.Pop();
         indicesIndex[indices[indexIndex]] = indexIndex;
         indicesIndex[index]               = -1;
 
-        Heapify(indexIndex);
+        DownHeap(indexIndex);
     }
 
-    void Heapify(int startIndex)
+    void UpHeap(int startIndex)
+    {
+        int index  = startIndex;
+        int parent = GetParent(startIndex);
+        T &element = values[indices[startIndex]];
+
+        Assert(indicesIndex.Length() == values.Length());
+
+        while (parent != 0 && element < values[indices[parent]])
+        {
+            Assert(indicesIndex[indices[parent]] == parent);
+            Assert(indicesIndex[indices[index]] == index);
+
+            Swap(indices[parent], indices[index]);
+            indicesIndex[indices[parent]] = parent;
+            indicesIndex[indices[index]]  = index;
+
+            index  = parent;
+            parent = GetParent(index);
+        }
+    }
+
+    void DownHeap(int startIndex)
     {
         T &addedVal = values[indices[startIndex]];
 
@@ -441,11 +457,36 @@ struct Heap
                            : minIndex;
             if (minIndex == parent) break;
 
+            Assert(indicesIndex[indices[parent]] == parent);
+            Assert(indicesIndex[indices[minIndex]] == minIndex);
+
             Swap(indices[parent], indices[minIndex]);
             indicesIndex[indices[parent]]   = parent;
             indicesIndex[indices[minIndex]] = minIndex;
 
             parent = minIndex;
+        }
+    }
+
+    void FixHeap(int index)
+    {
+        int startIndex = indicesIndex[index];
+
+        Assert(indicesIndex[indices[startIndex]] == startIndex);
+
+        int left  = (startIndex << 1) + 1;
+        int right = left + 1;
+
+        T &value  = values[indices[startIndex]];
+        T &parent = values[indices[GetParent(startIndex)]];
+
+        if (value < parent)
+        {
+            UpHeap(startIndex);
+        }
+        else
+        {
+            DownHeap(startIndex);
         }
     }
 };
@@ -488,21 +529,93 @@ bool MeshSimplifier::CheckInversion(const Vec3f &newPosition, u32 vertexIndex)
     return false;
 }
 
-struct Pair
+f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
 {
-    int indexIndex0;
-    int indexIndex1;
+    VertexGraphNode *node = &vertexNodes[pair.index0];
 
-    float error;
+    // Find the set of triangles adjacent to the pair
+    u32 maxAdjTris = 0;
 
-    bool operator<(const Pair &other) { return error < other.error; }
-
-    u32 GetIndex(u32 index)
+    int nodeIndex = pair.index0;
+    while (nodeIndex != -1)
     {
-        Assert(index < 2);
-        return index == 0 ? indexIndex0 : indexIndex1;
+        VertexGraphNode *travNode = &vertexNodes[nodeIndex];
+        maxAdjTris += travNode->count;
+        nodeIndex = travNode->next;
     }
-};
+    nodeIndex = pair.index1;
+    while (nodeIndex != -1)
+    {
+        VertexGraphNode *travNode = &vertexNodes[nodeIndex];
+        maxAdjTris += travNode->count;
+        nodeIndex = travNode->next;
+    }
+
+    StaticArray<u32> adjTris(scratch.temp.arena, maxAdjTris);
+
+    for (int i = 0; i < 2; i++)
+    {
+        nodeIndex = pair.GetIndex(i);
+        while (nodeIndex != -1)
+        {
+            VertexGraphNode *travNode = &vertexNodes[nodeIndex];
+            for (int i = travNode->offset; i < travNode->offset + travNode->count; i++)
+            {
+                u32 adjTri     = indexData[i] / 3;
+                bool duplicate = false;
+                for (int j = 0; j < adjTris.Length(); j++)
+                {
+                    if (adjTris[j] == adjTri)
+                    {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (!duplicate)
+                {
+                    adjTris.push_back(adjTri);
+                }
+            }
+            nodeIndex = travNode->next;
+        }
+    }
+
+    // Add quadrics together
+    Quadric quadric;
+    for (int i = 0; i < adjTris.Length(); i++)
+    {
+        quadric.Add(triangleQuadrics[adjTris[i]]);
+    }
+
+    // TODO: handle locked edges, preserving boundary edges, inversion prevention,
+    // rebase to new coordinate system to for floating point accuracy
+    Vec3f newPosition;
+
+    f32 error = 0.f;
+    // Try optimize volume
+    bool valid = quadric.OptimizeVolume(newPosition) && !CheckInversion(newPosition);
+
+    if (!valid)
+    {
+        // Try optimize linear
+        valid = quadric.OptimizeLinear(newPosition) && !CheckInversion(newPosition);
+    }
+
+    if (!valid)
+    {
+        newPosition = (position0 + position1) / 2.f;
+        valid       = CheckInversion(newPosition);
+    }
+
+    if (!valid)
+    {
+    }
+
+    // Evaluate the error for the optimal position
+    f32 error = quadric.Evaluate(newPosition);
+
+    if (p) *outP = newPosition;
+}
 
 void MeshSimplifier::Simplify(Mesh &mesh)
 {
@@ -516,11 +629,11 @@ void MeshSimplifier::Simplify(Mesh &mesh)
 
     const u32 numAttributes = 6;
 
-    f32 *vertexData =
+    vertexData =
         PushArrayNoZero(scratch.temp.arena, f32, (3 * numAttributes) * mesh.numVertices);
     int numTriangles = mesh.numIndices / 3;
 
-    StaticArray<QuadricAttrb<6>> triangleQuadrics(scratch.temp.arena, numTriangles);
+    triangleQuadrics = StaticArray<Quadric>(scratch.temp.arena, numTriangles);
 
     for (int triIndex = 0; triIndex < numTriangles; triIndex++)
     {
@@ -533,9 +646,9 @@ void MeshSimplifier::Simplify(Mesh &mesh)
 
         f32 *attributeWeights;
         triangleQuadrics.push_back(
-            QuadricAttr(p0, p1, p2, &vertexData[(3 + numAttributes) * index0],
-                        &vertexData[(3 + numAttributes) * index1],
-                        &vertexData[(3 + numAttributes) * index2], attributeWeights));
+            Quadric(p0, p1, p2, &vertexData[(3 + numAttributes) * index0],
+                    &vertexData[(3 + numAttributes) * index1],
+                    &vertexData[(3 + numAttributes) * index2], attributeWeights));
     }
 
     // Generate graph of vertices to triangles. These point into the triangleData array.
@@ -609,91 +722,19 @@ void MeshSimplifier::Simplify(Mesh &mesh)
 
         Pair &pair = heap.values[pairIndex];
 
-        VertexGraphNode *node = &vertexNodes[pair.index0];
-
-        // Find the set of triangles adjacent to the pair
-        u32 maxAdjTris = 0;
-
-        int nodeIndex = pair.index0;
-        while (nodeIndex != -1)
-        {
-            VertexGraphNode *travNode = &vertexNodes[nodeIndex];
-            maxAdjTris += travNode->count;
-            nodeIndex = travNode->next;
-        }
-        nodeIndex = pair.index1;
-        while (nodeIndex != -1)
-        {
-            VertexGraphNode *travNode = &vertexNodes[nodeIndex];
-            maxAdjTris += travNode->count;
-            nodeIndex = travNode->next;
-        }
-
-        StaticArray<u32> adjTris(scratch.temp.arena, maxAdjTris);
-
-        for (int i = 0; i < 2; i++)
-        {
-            nodeIndex = pair.GetIndex(i);
-            while (nodeIndex != -1)
-            {
-                VertexGraphNode *travNode = &vertexNodes[nodeIndex];
-                for (int i = travNode->offset; i < travNode->offset + travNode->count; i++)
-                {
-                    u32 adjTri     = indexData[i] / 3;
-                    bool duplicate = false;
-                    for (int j = 0; j < adjTris.Length(); j++)
-                    {
-                        if (adjTris[j] == adjTri)
-                        {
-                            duplicate = true;
-                            break;
-                        }
-                    }
-                    if (!duplicate)
-                    {
-                        adjTris.push_back(adjTri);
-                    }
-                }
-                nodeIndex = travNode->next;
-            }
-        }
-
-        // Add quadrics together
-        QuadricAttr<6> quadric;
-        for (int i = 0; i < adjTris.Length(); i++)
-        {
-            quadric.Add(triangleQuadrics[adjTris[i]]);
-        }
-
-        // TODO: handle locked edges, preserving boundary edges, inversion prevention,
-        // rebase to new coordinate system to for floating point accuracy
         Vec3f newPosition;
-
-        // Try optimize volume
-        bool valid = quadric.OptimizeVolume(newPosition) && !CheckInversion(newPosition);
-
-        if (!valid)
-        {
-            // Try optimize linear
-            valid = quadric.OptimizeLinear(newPosition) && !CheckInversion(newPosition);
-        }
-
-        if (!valid)
-        {
-            newPosition = (position0 + position1) / 2.f;
-            valid       = CheckInversion(newPosition);
-        }
-
-        if (!valid)
-        {
-        }
+        f32 error = EvaluatePair(pair, &newPosition);
 
         // Move the position and change the attribute data
-        GetPosition(pair.index0) = newPosition;
+        int index0 = indices[pair.indexIndex0];
+        int index1 = indices[pair.indexIndex0];
 
-        // Reevaluate all pairs and remove v2 from the graph
-        vertexToPairNodes[pair.index0].next = pair.index1;
-        nodeIndex                           = pair.index1;
+        GetPosition(index0)            = newPosition;
+        vertexNodes[index0].next       = index1;
+        vertexToPairNodes[index0].next = index1;
+
+        // Reevaluate all pairs, remove v2 from the graph, update the heap
+        nodeIndex = pair.index1;
         while (nodeIndex != -1)
         {
             VertexGraphNode *vertexToPairNode = vertexToPairNodes[nodeIndex];
@@ -720,7 +761,7 @@ void MeshSimplifier::Simplify(Mesh &mesh)
                     }
 
                     changedPair.error = EvaluatePair(changedPair);
-                    heap.Heapify(pairIndices[pairIndexIndex]);
+                    heap.FixHeap(pairIndices[pairIndexIndex]);
                 }
             }
         }

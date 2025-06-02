@@ -28,26 +28,34 @@ struct Quadric
 
     f32 area;
 
-    f32 Evaluate(const Vec3f &p);
-};
+    Vec3f *gradients;
+    f32 *d;
+    u32 numAttributes;
 
-template <u32 numAttributes>
-struct QuadricAttr : Quadric
-{
-    QuadricAttr();
-    QuadricAttr(const Vec3f &p0, const Vec3f &p1, const Vec3f &p2, f32 *__restrict attr0,
-                f32 *__restrict attr1, f32 *__restrict attr2,
-                f32 *__restrict attributeWeights);
+    Quadric(const Vec3f &p0, const Vec3f &p1, const Vec3f &p2, f32 *__restrict attr0,
+            f32 *__restrict attr1, f32 *__restrict attr2, f32 *__restrict attributeWeights);
 
-    void Zero();
-    Vec3f gradients[numAttributes];
-    f32 d[numAttributes];
-
-    f32 Evaluate(const Vec3f &p);
+    f32 Evaluate(const Vec3f &p, f32 *__restrict attributes, f32 *__restrict attributeWeights);
     void Add(QuadricAttr<numAttributes> &other);
 
     bool Optimize(Vec3f &p);
     bool OptimizeVolume(Vec3f &p);
+};
+
+struct Pair
+{
+    int indexIndex0;
+    int indexIndex1;
+
+    float error;
+
+    bool operator<(const Pair &other) { return error < other.error; }
+
+    u32 GetIndex(u32 index)
+    {
+        Assert(index < 2);
+        return index == 0 ? indexIndex0 : indexIndex1;
+    }
 };
 
 struct MeshSimplifier
@@ -61,12 +69,16 @@ struct MeshSimplifier
 
     Vec3f &GetPosition(u32 vertexIndex);
     bool CheckInversion(const Vec3f &newPosition, u32 vertexIndex);
+    f32 EvaluatePair(Pair &pair, Vec3f *newPosition);
     void Simplify(Mesh &mesh);
 
     // Contains position, and all attributes (normals, uvs, etc.)
     f32 *vertexData;
     u32 *indices;
     u32 numAttributes;
+
+    // Quadrics
+    StaticArray<Quadric> triangleQuadrics;
 
     // Graph mapping vertices to triangle faces
     VertexGraphNode *vertexNodes;
