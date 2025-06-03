@@ -455,10 +455,10 @@ struct Heap
 {
     u32 *indices;
     u32 *indicesIndex;
-    T *values;
+    T *keys;
 
     u32 heapNum;
-    u32 numValues;
+    u32 numKeys;
 
     u32 maxSize;
 
@@ -466,18 +466,18 @@ struct Heap
     {
         indices      = PushArrayNoZero(arena, u32, arraySize);
         indicesIndex = PushArrayNoZero(arena, u32, arraySize);
-        values       = (T *)PushArrayNoZero(arena, u8, sizeof(T) * arraySize);
+        keys         = (T *)PushArrayNoZero(arena, u8, sizeof(T) * arraySize);
         heapNum      = 0;
         maxSize      = arraySize;
     }
 
     int GetParent(int index) const { return index == 0 ? 0 : (index - 1) >> 1; }
 
-    int Add(const T &element)
+    int Add(const &T key, int index)
     {
-        values[numValues] = element;
+        keys[numValues] = key;
 
-        int index                      = numValues++;
+        numKeys++;
         int result                     = index;
         indices[heapNum]               = index;
         indicesIndex[indices[heapNum]] = heapNum;
@@ -490,11 +490,11 @@ struct Heap
 
     int Pop()
     {
-        if (values.empty()) return -1;
+        if (keys.empty()) return -1;
 
         if (indices.size() == 1)
         {
-            values.size_ = 0;
+            keys.size_ = 0;
             return indices[0];
         }
 
@@ -527,11 +527,11 @@ struct Heap
     {
         int index  = startIndex;
         int parent = GetParent(startIndex);
-        T &element = values[indices[startIndex]];
+        T &key     = keys[indices[startIndex]];
 
         Assert(indicesIndex.Length() == values.Length());
 
-        while (parent != 0 && element < values[indices[parent]])
+        while (parent != 0 && key < keys[indices[parent]])
         {
             Assert(indicesIndex[indices[parent]] == parent);
             Assert(indicesIndex[indices[index]] == index);
@@ -547,7 +547,7 @@ struct Heap
 
     void DownHeap(int startIndex)
     {
-        T &addedVal = values[indices[startIndex]];
+        T &addedVal = keys[indices[startIndex]];
 
         int parent = startIndex;
         while (parent < indices.Length() - 1)
@@ -555,10 +555,9 @@ struct Heap
             int left  = (parent << 1) + 1;
             int right = left + 1;
             int minIndex =
-                left < indices.Length() && values[indices[left]] < addedVal ? left : parent;
-            minIndex = right < indices.Length() && values[indices[right]] < addedVal
-                           ? right
-                           : minIndex;
+                left < indices.Length() && keys[indices[left]] < addedVal ? left : parent;
+            minIndex =
+                right < indices.Length() && keys[indices[right]] < addedVal ? right : minIndex;
             if (minIndex == parent) break;
 
             Assert(indicesIndex[indices[parent]] == parent);
@@ -581,8 +580,8 @@ struct Heap
         int left  = (startIndex << 1) + 1;
         int right = left + 1;
 
-        T &value  = values[indices[startIndex]];
-        T &parent = values[indices[GetParent(startIndex)]];
+        T &value  = keys[indices[startIndex]];
+        T &parent = keys[indices[GetParent(startIndex)]];
 
         if (value < parent)
         {
@@ -632,6 +631,8 @@ bool MeshSimplifier::CheckInversion(const Vec3f &newPosition, u32 vertexIndex)
 
     return false;
 }
+
+static const int next[3] = {1, 2, 0};
 
 f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
 {
@@ -769,19 +770,22 @@ void MeshSimplifier::Simplify(Mesh &mesh, u32 limitNumVerts, u32 limitNumTris, u
     }
 
     // Generate graph of vertices to triangles. These point into the triangleData array.
-
     int numVertices   = mesh.numVertices;
     vertexNodes       = PushArray(scratch.temp.arena, VertexGraphNode, numVertices);
     vertexToPairNodes = PushArray(scratch.temp.arena, VertexGraphNode, numVertices);
 
     for (int triIndex = 0; triIndex < numTriangles; triIndex++)
     {
+        int baseIndexIndex = 3 * triIndex;
         for (int vertIndex = 0; vertIndex < 3; vertIndex++)
         {
-            int index = mesh.indices[3 * triIndex + vertIndex];
+            int index = mesh.indices[baseIndexIndex + vertIndex];
             vertexNodes[index].count++;
 
-            vertexToPairNodes[index].count += 2;
+            int index2 = mesh.indices[baseIndexIndex + next[vertIndex]];
+
+            u32 validEdge = index < index2;
+            vertexToPairNodes[index].count += validEdge;
         }
     }
 
@@ -801,35 +805,49 @@ void MeshSimplifier::Simplify(Mesh &mesh, u32 limitNumVerts, u32 limitNumTris, u
     indexData   = PushArray(scratch.temp.arena, u32, total);
     pairIndices = PushArray(scratch.temp.arena, u32, totalPairs);
 
-    Heap<Pair> heap(scratch.temp.arena, totalPairs / 2);
+    // after the edge is removed, need to remove degenerate triangles and edges
+    StaticArray<Pair> pairs(scratch.temp.arena, totalPairs);
+    Heap<f32> heap(scratch.temp.arena, totalPairs);
 
     for (int triIndex = 0; triIndex < numTriangles; triIndex++)
     {
+        int baseIndexIndex = 3 * triIndex;
         for (int vertIndex = 0; vertIndex < 3; vertIndex++)
         {
-            int indexIndex0 = 3 * triIndex + vertIndex;
-            int indexIndex1 = (indexIndex0 & ~0x3) + ((indexIndex0 + 1) & 0x3);
-
-            Pair pair;
-            pair.index0 = indexIndex0;
-            pair.index1 = indexIndex1;
+            int indexIndex0 = baseIndexIndex + vertIndex;
+            int indexIndex1 = baseIndexIndex + next[vertIndex];
 
             int vertexIndex0 = mesh.indices[indexIndex0];
             int vertexIndex1 = mesh.indices[indexIndex1];
-
-            int pairIndex                                         = heap.Add(pair);
-            pairIndices[vertexToPairNodes[vertexIndex0].offset++] = pairIndex;
-            pairIndices[vertexToPairNodes[vertexIndex1].offset++] = pairIndex;
+            Assert(vertexIndex0 != vertexIndex1);
 
             indexData[vertexNodes[vertexIndex0].offset++] = indexIndex0;
+
+            // Avoid duplicate pairs
+            if (vertexIndex0 > vertexIndex1) continue;
+
+            Pair pair;
+            pair.indexIndex0 = indexIndex0;
+            pair.indexIndex1 = indexIndex1;
+
+            pairs.push_back(pair);
+            int pairIndex = pairs.size() - 1;
+
+            pairIndices[vertexToPairNodes[vertexIndex0].offset++] = pairIndex;
+            pairIndices[vertexToPairNodes[vertexIndex1].offset++] = pairIndex;
         }
     }
 
     for (int vertIndex = 0; vertIndex < numVertices; vertIndex++)
     {
         vertexNodes[vertIndex].offset -= vertexNodes[vertIndex].count;
-
         vertexToPairNodes[vertIndex].offset -= vertexToPairNodes[vertIndex].count;
+    }
+
+    for (int pairIndex = 0; pairIndex < pairs.size() - 1; pairIndex++)
+    {
+        f32 error = EvaluatePair(pairs[pairIndex]);
+        heap.Add(error, pairIndex);
     }
 
     for (;;)
@@ -837,7 +855,7 @@ void MeshSimplifier::Simplify(Mesh &mesh, u32 limitNumVerts, u32 limitNumTris, u
         int pairIndex = heap.Pop();
         if (pairIndex == -1) break;
 
-        Pair &pair = heap.values[pairIndex];
+        Pair &pair = pairs[pairIndex];
 
         Vec3f newPosition;
         f32 error = EvaluatePair(pair, &newPosition);
@@ -919,6 +937,11 @@ void MeshSimplifier::Simplify(Mesh &mesh, u32 limitNumVerts, u32 limitNumTris, u
     }
 }
 
+#if 0
+struct ClusterGroup
+{
+};
+
 struct Cluster
 {
 };
@@ -932,12 +955,21 @@ void CreateClusters(Mesh &mesh)
 
     ClusterBuilder builder;
 
-    // mesh.
     for (;;)
     {
+        ScratchArena scratch;
+
         RecordAOSSplits record;
-        builder.BuildClusters(RecordAOSSplits & record, true);
+        builder.BuildClusters(record, true);
+
+        PrimRef *refs = PushArrayNoZero(scratch.temp.arena, PrimRef, mesh.numFaces);
+        u32 offset    = 0;
+        u32 start     = 0;
+        u32 count     = mesh.numFaces;
+        GenerateMeshRefsHelper<GeometryType::TriangleMesh>{mesh->p, mesh->indices}(
+            refs, offset, 0, start, count, record);
     }
 }
+#endif
 
 } // namespace rt

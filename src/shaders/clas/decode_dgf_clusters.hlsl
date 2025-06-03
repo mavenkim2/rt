@@ -5,7 +5,7 @@
 
 RWByteAddressBuffer indexBuffer : register(u0);
 RWStructuredBuffer<float3> decodeVertexBuffer : register(u1);
-RWStructuredBuffer<BuildClasDesc> buildClasDescs : register(u2);
+RWStructuredBuffer<BUILD_CLUSTER_TRIANGLE_INFO> buildClasDescs : register(u2);
 RWStructuredBuffer<uint> globals : register(u3);
 
 
@@ -78,7 +78,7 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dtI
         uint64_t indexBufferBaseAddress = ((pc.indexBufferBaseAddressHighBits << 32) | (pc.indexBufferBaseAddressLowBits));
         uint64_t vertexBufferBaseAddress = ((pc.vertexBufferBaseAddressHighBits << 32) | (pc.vertexBufferBaseAddressLowBits));
 
-        BuildClasDesc desc = (BuildClasDesc)0;
+        BUILD_CLUSTER_TRIANGLE_INFO desc = (BUILD_CLUSTER_TRIANGLE_INFO)0;
         desc.clusterId = groupID.x;
         desc.clusterFlags = 0;
         desc.triangleCount = header.numTriangles;

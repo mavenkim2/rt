@@ -929,7 +929,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     computeCmd->Wait(sem);
 
     // Decode layout pipeline description
-    u32 buildClasDescsSize = sizeof(BuildClasDesc) * totalNumClusters;
+    u32 buildClasDescsSize = sizeof(BUILD_CLUSTER_TRIANGLE_INFO) * totalNumClusters;
 
     GPUBuffer indexBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -1055,38 +1055,40 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     // Build the TLAS over BLAS
     GPUAccelerationStructure tlas = {};
-    {
-        // First fill out instance info on GPU
-        Instance instance          = {};
-        ScenePrimitives *baseScene = &GetScene()->scene;
-        GPUBuffer instanceData     = computeCmd->CreateTLASInstances(
-            &instance, 1, &params->renderFromWorld, &baseScene);
-
-        computeCmd->Barrier(&instanceData, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
-        computeCmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                            VK_ACCESS_2_SHADER_READ_BIT);
-        computeCmd->FlushBarriers();
-
-        computeCmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, fillInstancePipeline);
-        DescriptorSet descriptorSet = fillLayout.CreateDescriptorSet();
-        descriptorSet.Bind(addressesBinding, &blasAccelAddresses)
-            .Bind(instancesBinding, &instanceData);
-
-        computeCmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &descriptorSet,
-                                       fillLayout.pipelineLayout);
-        computeCmd->Dispatch(1, 1, 1);
-
-        // Build the TLAS
-        computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                            VK_ACCESS_2_SHADER_WRITE_BIT,
-                            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-        computeCmd->FlushBarriers();
-        tlas = computeCmd->BuildTLAS(&instanceData, 1);
-    }
+    // {
+    //     // First fill out instance info on GPU
+    //     Instance instance          = {};
+    //     ScenePrimitives *baseScene = &GetScene()->scene;
+    //     GPUBuffer instanceData =
+    //         computeCmd->CreateTLASInstances(&instance, 1, &params->renderFromWorld,
+    //         &baseScene)
+    //             .buffer;
+    //
+    //     computeCmd->Barrier(&instanceData, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+    //                         VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+    //     computeCmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+    //                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+    //                         VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+    //                         VK_ACCESS_2_SHADER_READ_BIT);
+    //     computeCmd->FlushBarriers();
+    //
+    //     computeCmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, fillInstancePipeline);
+    //     DescriptorSet descriptorSet = fillLayout.CreateDescriptorSet();
+    //     descriptorSet.Bind(addressesBinding, &blasAccelAddresses)
+    //         .Bind(instancesBinding, &instanceData);
+    //
+    //     computeCmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &descriptorSet,
+    //                                    fillLayout.pipelineLayout);
+    //     computeCmd->Dispatch(1, 1, 1);
+    //
+    //     // Build the TLAS
+    //     computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+    //                         VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+    //                         VK_ACCESS_2_SHADER_WRITE_BIT,
+    //                         VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+    //     computeCmd->FlushBarriers();
+    //     tlas = computeCmd->BuildTLAS(&instanceData, 1);
+    // }
     Semaphore tlasSemaphore   = device->CreateSemaphore();
     tlasSemaphore.signalValue = 1;
     computeCmd->Signal(tlasSemaphore);
@@ -1438,11 +1440,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                   &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
         // .Bind(counterIndex, &counterBuffer)
         // .Bind(nvApiIndex, &nvapiBuffer);
-#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
-        .Bind(clusterDataIndex, &clusterData)
-            .Bind(vertexDataIndex, &vertexBuffer)
-            .Bind(indexDataIndex, &indexBuffer);
-#endif
         // .Bind(aabbIndex, &aabbBuffer);
 
         cmd->BindDescriptorSets(bindPoint, &descriptorSet, rts.layout);

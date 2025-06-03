@@ -2216,7 +2216,12 @@ int main(int argc, char **argv)
     Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
     device              = v;
 
-    LoadPBRT(arena, filename);
+    string testFilename = "../../data/island/pbrt-v4/obj/isHibiscus/test.obj";
+    int numMeshes, actualNumMeshes;
+
+    LoadObjWithWedges(arena, testFilename, numMeshes, actualNumMeshes);
+
+    // LoadPBRT(arena, filename);
 
     u64 count        = 0;
     f64 time         = 0;
