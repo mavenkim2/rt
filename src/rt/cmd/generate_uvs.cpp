@@ -90,6 +90,46 @@ void WriteQuadOBJ(Mesh &mesh, string filename)
 
 f32 Cross2D(Vec2f a, Vec2f b) { return a.x * b.y - a.y * b.x; }
 
+// https://iquilezles.org/articles/ibilinear/
+bool InverseBilinearUV(const Vec2f &uv00, const Vec2f &uv10, const Vec2f &uv11,
+                       const Vec2f &uv01, const Vec2f &uv, Vec2f &outUv)
+{
+    Vec2f base = uv - uv00;
+    Vec2f x    = uv00 - uv10 + uv11 - uv01;
+    Vec2f y    = uv10 - uv00;
+    Vec2f z    = uv01 - uv00;
+
+    f32 a = Cross2D(x, z);
+    f32 b = Cross2D(base, x) + Cross2D(y, z);
+    f32 c = Cross2D(base, y);
+
+    // Quadratic equation
+    // If edges are parallel,  equation is linear
+    if (Abs(a) < 0.001)
+    {
+        f32 t = -c / b;
+        f32 s = (base.x - t * z.x) / (t * x.x + y.x);
+        outUv = Vec2f(s, t);
+    }
+    else
+    {
+        f32 discriminant = b * b - 4 * a * c;
+        if (discriminant < 0.f) return false;
+
+        f32 t = 0.5 * (-b + Sqrt(discriminant)) / a;
+        f32 s = (base.x - t * z.x) / (t * x.x + y.x);
+
+        if (s < 0.f || s > 1.f || t < 0.f || t < 1.f)
+        {
+            f32 t = 0.5 * (-b - Sqrt(discriminant)) / a;
+            f32 s = (base.x - t * z.x) / (t * x.x + y.x);
+        }
+
+        outUv = Vec2f(s, t);
+    }
+    return true;
+}
+
 void ConvertPtexToUVTexture(string textureFilename, string meshFilename)
 {
     ScratchArena scratch;
@@ -110,25 +150,105 @@ void ConvertPtexToUVTexture(string textureFilename, string meshFilename)
         ptexFaceInfos.push_back(f);
     }
 
-    // Create uv grid
-    [128][128];
+    const int avgFacesPerCell = 10;
+    int numCells              = numFaces / avgFacesPerCell;
+
+    const int sqrtNumCells = Sqrt(numCells);
+    numCells               = Sqr(sqrtNumCells);
+
+    int *offsets  = PushArrayNoZero(scratch.temp.arena, int, numCells + 1);
+    int *offsets1 = &offsets[1];
 
     // Populate grid
+    for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
+    {
+        int idx0 = mesh->indices[faceIndex * 4 + 0];
+        int idx1 = mesh->indices[faceIndex * 4 + 1];
+        int idx2 = mesh->indices[faceIndex * 4 + 2];
+        int idx3 = mesh->indices[faceIndex * 4 + 3];
 
-    // uv = uv0 + duv10 * bary.x + duv20 * bary.y
-    // uv = (1, 0) * bary.x + (1, 1) * bary.y
+        Vec2f uv00 = mesh->uv[idx0];
+        Vec2f uv10 = mesh->uv[idx1];
+        Vec2f uv11 = mesh->uv[idx2];
+        Vec2f uv01 = mesh->uv[idx3];
+
+        Vec2f bbMin = Min(Min(uv00, uv10), Min(uv11, uv01));
+        Vec2f bbMax = Max(Max(uv00, uv10), Max(uv11, uv01));
+
+        Vec2i bbiMin = Clamp(Vec2i(bbMin.x * sqrtNumCells, bbMin.y * sqrtNumCells), Vec2i(0),
+                             Vec2i(sqrtNumCells - 1));
+        Vec2i bbiMax = Clamp(Vec2i(bbMax.x * sqrtNumCells, bbMax.y * sqrtNumCells), Vec2i(0),
+                             Vec2i(sqrtNumCells - 1));
+
+        for (int v = bbiMin.y; v < bbiMax.y; v++)
+        {
+            for (int u = bbiMin.x; u < bbiMax.y; u++)
+            {
+                int index = v * sqrtNumCells + u;
+                Assert(index < numCells);
+                offsets1[index]++;
+            }
+        }
+    }
+
+    int sum = 0;
+    for (int i = 0; i < numCells; i++)
+    {
+        int num     = offsets1[i];
+        offsets1[i] = sum;
+        sum += num;
+    }
+
+    int *faceData = PushArrayNoZero(scratch.temp.arena, int, sum);
+
+    for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
+    {
+        int idx0 = mesh->indices[faceIndex * 4 + 0];
+        int idx1 = mesh->indices[faceIndex * 4 + 1];
+        int idx2 = mesh->indices[faceIndex * 4 + 2];
+        int idx3 = mesh->indices[faceIndex * 4 + 3];
+
+        Vec2f uv00 = mesh->uv[idx0];
+        Vec2f uv10 = mesh->uv[idx1];
+        Vec2f uv11 = mesh->uv[idx2];
+        Vec2f uv01 = mesh->uv[idx3];
+
+        Vec2f bbMin = Min(Min(uv00, uv10), Min(uv11, uv01));
+        Vec2f bbMax = Max(Max(uv00, uv10), Max(uv11, uv01));
+
+        Vec2i bbiMin = Clamp(Vec2i(bbMin.x * sqrtNumCells, bbMin.y * sqrtNumCells), Vec2i(0),
+                             Vec2i(sqrtNumCells - 1));
+        Vec2i bbiMax = Clamp(Vec2i(bbMax.x * sqrtNumCells, bbMax.y * sqrtNumCells), Vec2i(0),
+                             Vec2i(sqrtNumCells - 1));
+
+        for (int v = bbiMin.y; v < bbiMax.y; v++)
+        {
+            for (int u = bbiMin.x; u < bbiMax.y; u++)
+            {
+                int index = v * sqrtNumCells + u;
+                Assert(index < numCells);
+                faceData[offsets1[index]++] = faceIndex;
+            }
+        }
+    }
 
     // Square texture dimension
     int textureWidth;
 
-    for (int v = 0; v < textureWidth; v++)
-    {
-        for (int u = 0; u < textureWidth; u++)
-        {
-            Vec2f uv = Vec2f(u, v) / textureWidth;
+    Ptex::PtexFilter::FilterType fType = Ptex::PtexFilter::FilterType::f_catmullrom;
+    Ptex::PtexFilter::Options opts(fType);
+    Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(t, opts);
+    int nc                   = t->numChannels();
 
-            // Find the face that contains this uv
-            int faceIndex;
+    auto CalculateFaceUV = [&](Vec2f uv, Vec2f &st) {
+        // Find the face that contains this uv
+        Vec2i gridPos = Vec2i(uv) * sqrtNumCells;
+        int gridIndex = gridPos.y * sqrtNumCells + gridPos.x;
+        int gridCount = offsets[gridIndex + 1] - offsets[gridIndex];
+
+        for (int faceIndexIndex = 0; faceIndexIndex < gridCount; faceIndexIndex++)
+        {
+            int faceIndex = faceData[faceIndexIndex + offsets[gridIndex]];
 
             int idx0 = mesh->indices[faceIndex * 4 + 0];
             int idx1 = mesh->indices[faceIndex * 4 + 1];
@@ -140,55 +260,50 @@ void ConvertPtexToUVTexture(string textureFilename, string meshFilename)
             Vec2f uv11 = mesh->uv[idx2];
             Vec2f uv01 = mesh->uv[idx3];
 
-            // Inverse bilinear
-            // https://iquilezles.org/articles/ibilinear/
-            Vec2f base = uv - uv00;
-            Vec2f x    = uv00 - uv10 + uv11 - uv01;
-            Vec2f y    = uv10 - uv00;
-            Vec2f z    = uv01 - uv00;
+            if (InverseBilinearUV(uv00, uv10, uv11, uv01, uv, st)) return faceIndex;
+        }
+        return -1;
+    };
 
-            f32 a = Cross2D(x, z);
-            f32 b = Cross2D(base, x) + Cross2D(y, z);
-            f32 c = Cross2D(base, y);
+    for (int v = 0; v < textureWidth; v++)
+    {
+        for (int u = 0; u < textureWidth; u++)
+        {
+            Vec2f uv = Vec2f(u, v) / (f32)textureWidth;
 
-            // Quadratic equation
-            // If edges are parallel,  equation is linear
-            Vec2f faceUv;
-            if (Abs(a) < 0.001)
+            Vec2f st;
+            int faceIndex = CalculateFaceUV(uv, st);
+            Assert(faceIndex != -1);
+
+            Vec2f uv_du = Vec2f(u + 1, v) / (f32)textureWidth;
+            Vec2f st_du;
+            int faceIndex_du = CalculateFaceUV(uv_du, st_du);
+            if (faceIndex != faceIndex_du)
             {
-                f32 t  = -c / b;
-                f32 s  = (base.x - t * z.x) / (t * x.x + y.x);
-                faceUv = Vec2f(s, t);
+                uv_du        = Vec2f(u - 1, v) / (f32)textureWidth;
+                faceIndex_du = CalculateFaceUV(uv_du, st_du);
+                if (faceIndex != faceIndex_du) st_du = st;
             }
-            else
+
+            Vec2f uv_dv = Vec2f(u, v + 1) / (f32)textureWidth;
+            Vec2f st_dv;
+            int faceIndex_dv = CalculateFaceUV(uv_dv, st_dv);
+            if (faceIndex != faceIndex_dv)
             {
-                f32 discriminant = b * b - 4 * a * c;
-                Assert(discriminant >= 0.f);
-                f32 t = 0.5 * (-b + Sqrt(discriminant)) / a;
-                f32 s = (base.x - t * z.x) / (t * x.x + y.x);
-
-                if (s < 0.f || s > 1.f || t < 0.f || t < 1.f)
-                {
-                    f32 t = 0.5 * (-b - Sqrt(discriminant)) / a;
-                    f32 s = (base.x - t * z.x) / (t * x.x + y.x);
-                }
-
-                faceUv = Vec2f(s, t);
+                uv_dv        = Vec2f(u, v - 1) / (f32)textureWidth;
+                faceIndex_dv = CalculateFaceUV(uv_dv, st_dv);
+                if (faceIndex != faceIndex_dv) st_dv = st;
             }
+
+            Vec2f ds = st_du - st;
+            Vec2f dt = st_dv - st;
+
+            f32 out[3] = {};
+            filter->eval(out, 0, nc, faceIndex, st.x, st.y, ds.x, ds.y, dt.x, dt.y);
         }
     }
-
-    for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
-    {
-
-        Vec2i texel00 = Vec2i(uv00 * (f32)textureWidth);
-        Vec2i texel10 = Vec2i(uv10 * (f32)textureWidth);
-        Vec2i texel11 = Vec2i(uv11 * (f32)textureWidth);
-        Vec2i texel01 = Vec2i(uv01 * (f32)textureWidth);
-
-        // Get the rectangle in the texture represented by this face
-        const auto &faceInfo = ptexFaceInfos[faceIndex];
-    }
+    filter->release();
+    t->release();
 }
 
 } // namespace rt
