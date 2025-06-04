@@ -665,5 +665,73 @@ inline u64 InterlockedAdd(u64 volatile *addend, u64 value)
 
 ChunkedLinkedList<OS_Event> &OS_GetEvents() { return events; }
 
+OS_FileIter OS_DirectoryIterStart(string path, OS_FileIterFlags flags)
+{
+    TempArena temp = ScratchStart(0, 0);
+    string search  = StrConcat(temp.arena, path, Str8Lit("\\*"));
+
+    OS_FileIter result;
+    result.handle = FindFirstFileA((char *)search.str, &result.findData);
+    result.flags  = flags;
+
+    return result;
+}
+
+bool OS_DirectoryIterNext(Arena *arena, OS_FileIter *iter, OS_FileProperties *out)
+{
+    b32 done               = 0;
+    OS_FileIterFlags flags = iter->flags;
+    if (!(iter->flags & OS_FileIterFlag_Complete) && iter->handle != INVALID_HANDLE_VALUE)
+    {
+        do
+        {
+            b32 skip         = 0;
+            char *filename   = iter->findData.cFileName;
+            DWORD attributes = iter->findData.dwFileAttributes;
+            if (filename[0] == '.')
+            {
+                if (flags & OS_FileIterFlag_SkipHiddenFiles || filename[1] == 0 ||
+                    (filename[1] == '.' && filename[2] == 0))
+                {
+                    skip = 1;
+                }
+            }
+            if (attributes & FILE_ATTRIBUTE_DIRECTORY)
+            {
+                if (flags & OS_FileIterFlag_SkipDirectories)
+                {
+                    skip = 1;
+                }
+            }
+            else
+            {
+                if (flags & OS_FileIterFlag_SkipFiles)
+                {
+                    skip = 1;
+                }
+            }
+            if (!skip)
+            {
+                out->size = ((u64)iter->findData.nFileSizeLow) |
+                            (((u64)iter->findData.nFileSizeHigh) << 32);
+                out->isDirectory = (attributes & FILE_ATTRIBUTE_DIRECTORY);
+                out->name        = PushStr8Copy(arena, Str8C(filename));
+                done             = 1;
+                if (!FindNextFileA(iter->handle, &iter->findData))
+                {
+                    iter->flags |= OS_FileIterFlag_Complete;
+                }
+                break;
+            }
+        } while (FindNextFileA(iter->handle, &iter->findData));
+    }
+    return done;
+}
+
+void OS_DirectoryIterEnd(OS_FileIter *input)
+{
+    FindClose(input->handle);
+}
+
 } // namespace rt
 #endif

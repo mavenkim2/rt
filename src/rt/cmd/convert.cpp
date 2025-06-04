@@ -2178,6 +2178,15 @@ void LoadPBRT(Arena *arena, string filename)
 
     ScratchEnd(temp);
 }
+
+void RunMinistryOfFlat() {}
+
+void GenerateUVs(string filename)
+{
+    // First, write each group to its own file
+    StringBuilder builder;
+}
+
 } // namespace rt
 
 using namespace rt;
@@ -2219,9 +2228,7 @@ int main(int argc, char **argv)
     string testFilename = "../../data/island/pbrt-v4/obj/isHibiscus/test.obj";
     int numMeshes, actualNumMeshes;
 
-    LoadObjWithWedges(arena, testFilename, numMeshes, actualNumMeshes);
-
-    // LoadPBRT(arena, filename);
+    LoadPBRT(arena, filename);
 
     u64 count        = 0;
     f64 time         = 0;

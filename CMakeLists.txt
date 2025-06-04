@@ -214,6 +214,25 @@ target_link_libraries(convert PRIVATE ${PTEX_LIBRARY})
 target_compile_definitions(convert PRIVATE ${RT_DEFINITIONS})
 target_compile_options(convert PRIVATE ${RT_CXX_FLAGS})
 
+# generate_uvs
+add_executable(generate_uvs 
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/cmd/generate_uvs.cpp
+    ${PLATFORM_SOURCE_FILES}
+    ${RT_VULKAN_SOURCE_FILES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/ptex.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/debug.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/parallel.cpp
+)
+target_include_directories(generate_uvs PRIVATE 
+    ${PTEX_INCLUDE}
+    ${NANOVDB_INCLUDE_DIR}
+    ${ZLIB_INCLUDE_DIR}
+    ${VULKAN_INCLUDE_DIR}
+)
+target_link_libraries(generate_uvs PRIVATE ${PTEX_LIBRARY})
+target_compile_definitions(generate_uvs PRIVATE ${RT_DEFINITIONS})
+target_compile_options(generate_uvs PRIVATE ${RT_CXX_FLAGS})
+
 # rgb2spec
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/gen)
 add_executable(rgb2spec_exe ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/rgb2spec.cpp)

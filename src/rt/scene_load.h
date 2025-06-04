@@ -617,7 +617,7 @@ Mesh *LoadObj(Arena *arena, string filename, int &numMeshes, int &actualNumMeshe
     return outputMeshes;
 }
 
-Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes, int &actualNumMeshes)
+Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes)
 {
     TempArena temp = ScratchStart(0, 0);
     string buffer  = OS_MapFileRead(filename);
@@ -639,12 +639,17 @@ Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes, int &actu
     int normalOffset = 1;
     int texOffset    = 1;
 
-    std::unordered_set<string> meshHashSet;
-    bool repeatedMesh   = false;
-    bool processingMesh = false;
-    int totalNumMeshes  = 0;
+    int totalNumMeshes = 0;
 
     auto Skip = [&]() { SkipToNextChar(&tokenizer, '#'); };
+
+    bool hasUvs     = false;
+    bool hasNormals = false;
+
+    auto GetUV = [&](int uvIndex) {
+        Vec2f uv = uvIndex == -1 ? Vec2f(-1e8, -1e8) : uvs[uvIndex];
+        return uv;
+    };
 
     for (;;)
     {
@@ -659,109 +664,93 @@ Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes, int &actu
             string groupName = ReadWord(&tokenizer);
             if (groupName == "default" || isEndOfBuffer)
             {
-                if (processingMesh)
+                std::vector<Vec3f> newPositions;
+                newPositions.reserve(vertices.size());
+                std::vector<Vec2f> newUvs;
+                newUvs.reserve(uvs.size());
+                std::vector<Vec3f> newNormals;
+                newNormals.reserve(normals.size());
+
+                int numIndices  = indices.size();
+                int numVertices = vertices.size();
+
+                int *remap   = PushArray(temp.arena, int, numIndices);
+                int hashSize = NextPowerOfTwo(numIndices);
+                HashIndex hashTable(temp.arena, hashSize, hashSize);
+
+                Mesh mesh;
+                mesh.numIndices = (u32)indices.size();
+                mesh.indices    = PushArrayNoZero(arena, u32, indices.size());
+
+                for (u32 i = 0; i < numIndices; i++)
                 {
-                    if (!repeatedMesh)
+                    i32 vertexIndex = indices[i][0];
+                    int uvIndex     = indices[i][1];
+                    i32 normalIndex = indices[i][2];
+                    Vec3f p         = vertices[vertexIndex];
+                    Vec3f n         = normalIndex == -1 ? Vec3f(1e8) : normals[normalIndex];
+                    Vec2f uv        = GetUV(uvIndex);
+
+                    int hash   = Hash(p, uv, n);
+                    bool found = false;
+                    for (int j = hashTable.FirstInHash(hash); j != -1;
+                         j     = hashTable.NextInHash(j))
                     {
-                        std::vector<Vec3f> newPositions;
-                        newPositions.reserve(vertices.size());
-                        std::vector<Vec2f> newUvs;
-                        newUvs.reserve(uvs.size());
-                        std::vector<Vec3f> newNormals;
-                        newNormals.reserve(normals.size());
-
-                        int numIndices  = indices.size();
-                        int numVertices = vertices.size();
-
-                        int *remap   = PushArray(temp.arena, int, numIndices);
-                        int hashSize = NextPowerOfTwo(numIndices);
-                        HashIndex hashTable(temp.arena, hashSize, hashSize);
-
-                        Mesh mesh;
-                        mesh.numIndices = (u32)indices.size();
-                        mesh.indices    = PushArrayNoZero(arena, u32, indices.size());
-
-                        for (u32 i = 0; i < numIndices; i++)
+                        Vec3i testIndices = indices[j];
+                        Vec2f testUv      = GetUV(testIndices[1]);
+                        if (p == vertices[testIndices[0]] && uv == testUv &&
+                            n == normals[testIndices[2]])
                         {
-                            i32 vertexIndex = indices[i][0];
-                            int uvIndex     = indices[i][1];
-                            i32 normalIndex = indices[i][2];
-                            Vec3f p         = vertices[vertexIndex];
-                            Vec2f uv        = uvs[uvIndex];
-                            Vec3f n         = normals[normalIndex];
+                            mesh.indices[i] = remap[j];
+                            found           = true;
+                            break;
+                        }
+                    }
 
-                            int hash   = Hash(p, uv, n);
-                            bool found = false;
-                            for (int j = hashTable.FirstInHash(hash); j != -1;
-                                 j     = hashTable.NextInHash(j))
-                            {
-                                Vec3i testIndices = indices[j];
-                                if (p == vertices[testIndices[0]] &&
-                                    uv == uvs[testIndices[1]] && n == normals[testIndices[2]])
-                                {
-                                    mesh.indices[i] = remap[j];
-                                    found           = true;
-                                    break;
-                                }
-                            }
+                    if (!found)
+                    {
+                        int currentIndex = newPositions.size();
 
-                            if (!found)
-                            {
-                                Assert(normalIndex < (int)normals.size());
-                                Assert(vertexIndex < (int)vertices.size());
-                                Assert(uvIndex < (int)uvs.size());
+                        remap[i] = currentIndex;
 
-                                int currentIndex = newPositions.size();
-
-                                remap[i] = currentIndex;
-
-                                Assert(newPositions.size() == newNormals.size() &&
-                                       newNormals.size() == newUvs.size());
-
-                                newPositions.push_back(p);
-                                newNormals.push_back(n);
-                                newUvs.push_back(uv);
-
-                                mesh.indices[i] = currentIndex;
-
-                                int hash = Hash(p, uv, n);
-                                hashTable.AddInHash(hash, i);
-                            }
+                        newPositions.push_back(p);
+                        if (hasNormals)
+                        {
+                            newNormals.push_back(n);
                         }
 
-                        mesh.numVertices = (u32)newPositions.size();
+                        if (hasUvs)
+                        {
+                            newUvs.push_back(uv);
+                        }
 
-                        mesh.p  = PushArrayNoZero(arena, Vec3f, mesh.numVertices);
-                        mesh.uv = PushArrayNoZero(arena, Vec2f, mesh.numVertices);
-                        mesh.n  = PushArrayNoZero(arena, Vec3f, mesh.numVertices);
+                        mesh.indices[i] = currentIndex;
 
-                        MemoryCopy(mesh.p, newPositions.data(),
-                                   sizeof(Vec3f) * newPositions.size());
-                        MemoryCopy(mesh.uv, newUvs.data(), sizeof(Vec2f) * newUvs.size());
-                        MemoryCopy(mesh.n, newNormals.data(),
-                                   sizeof(Vec3f) * newNormals.size());
-
-                        threadLocalStatistics[GetThreadIndex()].misc2 += mesh.numVertices;
-                        threadLocalStatistics[GetThreadIndex()].misc3 += mesh.numIndices;
-                        meshes.push_back(mesh);
-
-                        vertexOffset += (int)vertices.size();
-                        normalOffset += (int)normals.size();
-                        vertices.clear();
-                        normals.clear();
-                        indices.clear();
+                        int hash = Hash(p, uv, n);
+                        hashTable.AddInHash(hash, i);
                     }
-                    repeatedMesh = false;
-                    totalNumMeshes++;
                 }
-                processingMesh = false;
-            }
-            else
-            {
-                processingMesh     = true;
-                const auto &result = meshHashSet.find(groupName);
-                if (result != meshHashSet.end()) repeatedMesh = true;
-                else meshHashSet.insert(groupName);
+
+                mesh.numVertices = (u32)newPositions.size();
+
+                mesh.p = PushArrayNoZero(arena, Vec3f, mesh.numVertices);
+                if (hasUvs) mesh.uv = PushArrayNoZero(arena, Vec2f, newUvs.size());
+                mesh.n = PushArrayNoZero(arena, Vec3f, newNormals.size());
+
+                MemoryCopy(mesh.p, newPositions.data(), sizeof(Vec3f) * newPositions.size());
+                if (hasUvs) MemoryCopy(mesh.uv, newUvs.data(), sizeof(Vec2f) * newUvs.size());
+                MemoryCopy(mesh.n, newNormals.data(), sizeof(Vec3f) * newNormals.size());
+
+                threadLocalStatistics[GetThreadIndex()].misc2 += mesh.numVertices;
+                threadLocalStatistics[GetThreadIndex()].misc3 += mesh.numIndices;
+                meshes.push_back(mesh);
+
+                vertexOffset += (int)vertices.size();
+                normalOffset += (int)normals.size();
+                vertices.clear();
+                normals.clear();
+                indices.clear();
+                totalNumMeshes++;
             }
             if (isEndOfBuffer) break;
         }
@@ -787,6 +776,7 @@ Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes, int &actu
         }
         else if (word == "vn")
         {
+            hasNormals = true;
             Skip();
             f32 x = ReadFloat(&tokenizer);
             f32 y = ReadFloat(&tokenizer);
@@ -795,6 +785,7 @@ Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes, int &actu
         }
         else if (word == "vt")
         {
+            hasUvs = true;
             Skip();
             f32 u = ReadFloat(&tokenizer);
             f32 v = ReadFloat(&tokenizer);
@@ -808,15 +799,13 @@ Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes, int &actu
             {
                 faceVertexCount++;
 
-                u32 vertexIndex = ReadUint(&tokenizer);
+                int vertexIndex = (int)ReadUint(&tokenizer);
                 bool result     = Advance(&tokenizer, "/");
                 Assert(result);
-                u32 texIndex = ReadUint(&tokenizer);
+                int texIndex = (int)ReadUint(&tokenizer);
                 result       = Advance(&tokenizer, "/");
                 Assert(result);
-                u32 normalIndex = ReadUint(&tokenizer);
-                Assert(vertexIndex >= vertexOffset && normalIndex >= normalOffset &&
-                       texIndex >= texOffset);
+                int normalIndex = ReadUint(&tokenizer);
                 indices.push_back(Vec3i(vertexIndex - vertexOffset, texIndex - texOffset,
                                         normalIndex - normalOffset));
                 Skip();
@@ -832,9 +821,8 @@ Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes, int &actu
     ScratchEnd(temp);
 
     numMeshes          = totalNumMeshes;
-    actualNumMeshes    = (int)meshes.size();
-    Mesh *outputMeshes = PushArrayNoZero(arena, Mesh, actualNumMeshes);
-    MemoryCopy(outputMeshes, meshes.data(), sizeof(Mesh) * actualNumMeshes);
+    Mesh *outputMeshes = PushArrayNoZero(arena, Mesh, numMeshes);
+    MemoryCopy(outputMeshes, meshes.data(), sizeof(Mesh) * numMeshes);
     return outputMeshes;
 }
 

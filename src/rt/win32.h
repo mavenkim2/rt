@@ -69,6 +69,34 @@ ChunkedLinkedList<OS_Event> &OS_GetEvents();
 
 LRESULT Win32_Callback(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
 OS_Handle OS_WindowInit(int width = 0, int height = 0);
+
+typedef u32 OS_FileIterFlags;
+enum
+{
+    OS_FileIterFlag_SkipDirectories = (1 << 0),
+    OS_FileIterFlag_SkipFiles       = (1 << 1),
+    OS_FileIterFlag_SkipHiddenFiles = (1 << 2),
+    OS_FileIterFlag_Complete        = (1 << 31),
+};
+
+struct OS_FileIter
+{
+    HANDLE handle;
+    WIN32_FIND_DATAA findData;
+    OS_FileIterFlags flags;
+};
+
+struct OS_FileProperties
+{
+    string name;
+    u64 size;
+    b32 isDirectory;
+};
+
+OS_FileIter OS_DirectoryIterStart(string path, OS_FileIterFlags flags);
+bool OS_DirectoryIterNext(Arena *arena, OS_FileIter *input, OS_FileProperties *out);
+void OS_DirectoryIterEnd(OS_FileIter *input);
+
 } // namespace rt
 
 #endif
