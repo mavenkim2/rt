@@ -88,6 +88,109 @@ void WriteQuadOBJ(Mesh &mesh, string filename)
     WriteFileMapped(&builder, filename);
 }
 
+f32 Cross2D(Vec2f a, Vec2f b) { return a.x * b.y - a.y * b.x; }
+
+void ConvertPtexToUVTexture(string textureFilename, string meshFilename)
+{
+    ScratchArena scratch;
+    int numMeshes;
+    Mesh *mesh = LoadObjWithWedges(scratch.temp.arena, meshFilename, numMeshes);
+    Assert(numMeshes == 1);
+
+    Ptex::String error;
+    Ptex::PtexTexture *t = cache->get((char *)textureFilename.str, error);
+    Assert(t);
+
+    int numFaces = t->numFaces();
+    StaticArray<Ptex::FaceInfo> ptexFaceInfos(scratch.temp.arena, numFaces);
+    for (int i = 0; i < numFaces; i++)
+    {
+        const Ptex::FaceInfo &f = t->getFaceInfo(i);
+        Assert(!f.isSubface());
+        ptexFaceInfos.push_back(f);
+    }
+
+    // Create uv grid
+    [128][128];
+
+    // Populate grid
+
+    // uv = uv0 + duv10 * bary.x + duv20 * bary.y
+    // uv = (1, 0) * bary.x + (1, 1) * bary.y
+
+    // Square texture dimension
+    int textureWidth;
+
+    for (int v = 0; v < textureWidth; v++)
+    {
+        for (int u = 0; u < textureWidth; u++)
+        {
+            Vec2f uv = Vec2f(u, v) / textureWidth;
+
+            // Find the face that contains this uv
+            int faceIndex;
+
+            int idx0 = mesh->indices[faceIndex * 4 + 0];
+            int idx1 = mesh->indices[faceIndex * 4 + 1];
+            int idx2 = mesh->indices[faceIndex * 4 + 2];
+            int idx3 = mesh->indices[faceIndex * 4 + 3];
+
+            Vec2f uv00 = mesh->uv[idx0];
+            Vec2f uv10 = mesh->uv[idx1];
+            Vec2f uv11 = mesh->uv[idx2];
+            Vec2f uv01 = mesh->uv[idx3];
+
+            // Inverse bilinear
+            // https://iquilezles.org/articles/ibilinear/
+            Vec2f base = uv - uv00;
+            Vec2f x    = uv00 - uv10 + uv11 - uv01;
+            Vec2f y    = uv10 - uv00;
+            Vec2f z    = uv01 - uv00;
+
+            f32 a = Cross2D(x, z);
+            f32 b = Cross2D(base, x) + Cross2D(y, z);
+            f32 c = Cross2D(base, y);
+
+            // Quadratic equation
+            // If edges are parallel,  equation is linear
+            Vec2f faceUv;
+            if (Abs(a) < 0.001)
+            {
+                f32 t  = -c / b;
+                f32 s  = (base.x - t * z.x) / (t * x.x + y.x);
+                faceUv = Vec2f(s, t);
+            }
+            else
+            {
+                f32 discriminant = b * b - 4 * a * c;
+                Assert(discriminant >= 0.f);
+                f32 t = 0.5 * (-b + Sqrt(discriminant)) / a;
+                f32 s = (base.x - t * z.x) / (t * x.x + y.x);
+
+                if (s < 0.f || s > 1.f || t < 0.f || t < 1.f)
+                {
+                    f32 t = 0.5 * (-b - Sqrt(discriminant)) / a;
+                    f32 s = (base.x - t * z.x) / (t * x.x + y.x);
+                }
+
+                faceUv = Vec2f(s, t);
+            }
+        }
+    }
+
+    for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
+    {
+
+        Vec2i texel00 = Vec2i(uv00 * (f32)textureWidth);
+        Vec2i texel10 = Vec2i(uv10 * (f32)textureWidth);
+        Vec2i texel11 = Vec2i(uv11 * (f32)textureWidth);
+        Vec2i texel01 = Vec2i(uv01 * (f32)textureWidth);
+
+        // Get the rectangle in the texture represented by this face
+        const auto &faceInfo = ptexFaceInfos[faceIndex];
+    }
+}
+
 } // namespace rt
 
 using namespace rt;
@@ -150,6 +253,8 @@ int main(int argc, char **argv)
             }
         }
     }
+
+    InitializePtex(1, gigabytes(1));
 
     Scheduler::Counter counter = {};
     for (string file : files)

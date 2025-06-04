@@ -651,6 +651,8 @@ Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes)
         return uv;
     };
 
+    bool processingMesh = false;
+
     for (;;)
     {
         Skip();
@@ -662,7 +664,7 @@ Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes)
         {
             Skip();
             string groupName = ReadWord(&tokenizer);
-            if (groupName == "default" || isEndOfBuffer)
+            if ((groupName == "default" && processingMesh) || isEndOfBuffer)
             {
                 std::vector<Vec3f> newPositions;
                 newPositions.reserve(vertices.size());
@@ -751,6 +753,12 @@ Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes)
                 normals.clear();
                 indices.clear();
                 totalNumMeshes++;
+
+                processingMesh = false;
+            }
+            else
+            {
+                processingMesh = true;
             }
             if (isEndOfBuffer) break;
         }
