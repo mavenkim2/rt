@@ -2065,26 +2065,30 @@ void CommandBuffer::CopyImage(GPUImage *dst, GPUImage *src, const ImageToImageCo
 }
 
 void CommandBuffer::CopyImageToBuffer(GPUBuffer *dst, GPUImage *src,
-                                      const BufferImageCopy &copy)
+                                      const BufferImageCopy *copies, u32 num)
 {
-    VkBufferImageCopy vkCopy;
-    vkCopy.bufferOffset                    = copy.bufferOffset;
-    vkCopy.bufferRowLength                 = copy.rowLength;
-    vkCopy.bufferImageHeight               = copy.imageHeight;
-    vkCopy.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-    vkCopy.imageSubresource.mipLevel       = copy.mipLevel;
-    vkCopy.imageSubresource.baseArrayLayer = copy.baseLayer;
-    vkCopy.imageSubresource.layerCount     = copy.layerCount;
-    vkCopy.imageOffset.x                   = copy.offset.x;
-    vkCopy.imageOffset.y                   = copy.offset.y;
-    vkCopy.imageOffset.z                   = copy.offset.z;
-    vkCopy.imageExtent.width               = copy.extent.x;
-    vkCopy.imageExtent.height              = copy.extent.y;
-    vkCopy.imageExtent.depth               = copy.extent.z;
-
+    ScratchArena scratch;
+    VkBufferImageCopy *vkCopies = PushArrayNoZero(scratch.temp.arena, VkBufferImageCopy, num);
+    for (int i = 0; i < num; i++)
+    {
+        VkBufferImageCopy &copy              = vkCopies[i];
+        copy.bufferOffset                    = copies[i].bufferOffset;
+        copy.bufferRowLength                 = copies[i].rowLength;
+        copy.bufferImageHeight               = copies[i].imageHeight;
+        copy.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        copy.imageSubresource.mipLevel       = copies[i].mipLevel;
+        copy.imageSubresource.baseArrayLayer = copies[i].baseLayer;
+        copy.imageSubresource.layerCount     = copies[i].layerCount;
+        copy.imageOffset.x                   = copies[i].offset.x;
+        copy.imageOffset.y                   = copies[i].offset.y;
+        copy.imageOffset.z                   = copies[i].offset.z;
+        copy.imageExtent.width               = copies[i].extent.x;
+        copy.imageExtent.height              = copies[i].extent.y;
+        copy.imageExtent.depth               = copies[i].extent.z;
+    }
     Assert(src->lastLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     vkCmdCopyImageToBuffer(buffer, src->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                           dst->buffer, 1, &vkCopy);
+                           dst->buffer, num, vkCopies);
 }
 
 TransferBuffer CommandBuffer::SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags,

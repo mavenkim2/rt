@@ -169,20 +169,6 @@ struct FaceMetadata2
     u32 offsetY;
 };
 
-struct TileRequest
-{
-    int faceIndex;
-    int startLevel;
-    int numLevels;
-};
-
-struct TileRequest2
-{
-    Vec2u virtualPage;
-    u32 virtualAddressIndex;
-    u32 mipLevel;
-};
-
 struct TextureMetadata
 {
     u32 numFaces;
@@ -190,13 +176,6 @@ struct TextureMetadata
     u32 numLevels;
     u32 numPinnedPages;
     u32 mipPageOffsets[MAX_LEVEL - 1];
-};
-
-struct TileFileHeader
-{
-    int numFaces;
-    u32 numTilesX;
-    u32 numTilesY;
 };
 
 struct PaddedImage : Image

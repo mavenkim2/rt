@@ -21,6 +21,7 @@
 #include "../parallel.h"
 #include "../graphics/ptex.h"
 #include "../graphics/vulkan.h"
+#include "../graphics/block_compressor.h"
 #include <cstdlib>
 
 namespace rt
@@ -132,7 +133,27 @@ bool InverseBilinearUV(const Vec2f &uv00, const Vec2f &uv10, const Vec2f &uv11,
 
 void ConvertPtexToUVTexture(string textureFilename, string meshFilename)
 {
+    const VkFormat baseFormat    = VK_FORMAT_R8G8B8A8_UNORM;
+    const VkFormat blockFormat   = VK_FORMAT_BC1_RGB_UNORM_BLOCK;
+    const u32 bytesPerTexel      = GetFormatSize(baseFormat);
+    const u32 bytesPerBlock      = GetFormatSize(blockFormat);
+    const u32 blockSize          = GetBlockSize(blockFormat);
+    const u32 log2BlockSize      = Log2Int(blockSize);
+    const u32 blocksPerPage      = texelWidthPerPage >> log2BlockSize;
+    const u32 totalBlocksPerPage = totalTexelWidthPerPage >> log2BlockSize;
+
+    const int pageTexelWidth         = PAGE_WIDTH;
+    const int pageBlockWidth         = pageTexelWidth >> log2BlockSize;
+    const int pageByteSize           = Sqr(pageBlockWidth) * bytesPerBlock;
+    const int submissionNumSqrtPages = gpuOutputWidth / pageBlockWidth;
+
+    const int gpuSrcStride = gpuOutputWidth * bytesPerBlock;
+    const int pageStride   = pageBlockWidth * bytesPerBlock;
+
+    BlockCompressor blockCompressor(gpuSubmissionWidth, baseFormat, blockFormat, numMips);
+
     ScratchArena scratch;
+
     int numMeshes;
     Mesh *mesh = LoadObjWithWedges(scratch.temp.arena, meshFilename, numMeshes);
     Assert(numMeshes == 1);
@@ -142,13 +163,88 @@ void ConvertPtexToUVTexture(string textureFilename, string meshFilename)
     Assert(t);
 
     int numFaces = t->numFaces();
-    StaticArray<Ptex::FaceInfo> ptexFaceInfos(scratch.temp.arena, numFaces);
+
+    u32 totalTextureArea = 0;
     for (int i = 0; i < numFaces; i++)
     {
         const Ptex::FaceInfo &f = t->getFaceInfo(i);
+        totalTextureArea += f.res.u() * f.res.v();
         Assert(!f.isSubface());
-        ptexFaceInfos.push_back(f);
     }
+
+    Assert(totalTextureArea);
+
+    const u32 sqrtNumPages = std::sqrt((totalTextureArea - 1) >> (2 * PAGE_SHIFT)) + 1;
+    const int textureWidth = sqrtNumPages * pageTexelWidth;
+
+    int numMips = Log2Int(NextPowerOfTwo(textureWidth)) - PAGE_SHIFT;
+    Assert(numMips > 0);
+
+    StaticArray<u32> mipPageOffsets(scratch.temp.arena, numMips);
+    u32 mipOffset = 0;
+
+    for (int i = 0; i < numMips; i++)
+    {
+        mipOffsets.Push(mipOffset);
+        u32 mipSqrtNumPages = ((textureWidth >> i) + PAGE_WIDTH - 1) >> PAGE_SHIFT;
+        mipOffset += Sqr(mipSqrtNumPages) * pageByteSize;
+    }
+
+    u32 totalTextureSize = (textureWidth >> log2BlockSize) * GetFormatSize(blockFormat);
+    u64 dataOffset       = AllocateSpace(&builder, mipOffset);
+    u8 *dst              = (u8 *)GetMappedPtr(&builder, dataOffset);
+
+    SubmissionInfo submissionInfos[2];
+
+    auto CopyBlockCompressedResultsToDisk = [&](u8 *dst) {
+        blockCompressor.CopyBlockCompressedResultsToDisk(
+            [&](u8 *src, int lastSubmissionIndex) {
+                u32 gpuOutputWidth = blockCompressor.gpuOutputWidth;
+
+                const SubmissionInfo &s = submissionInfos[lastSubmissionIndex];
+                u32 numSubmissionX      = s.numSubmissionX;
+                u32 numSubmissionY      = s.numSubmissionY;
+                u32 width               = s.outputPageWidth;
+                u32 height              = s.outputPageHeight;
+
+                // Copy tiles out to disk
+                u32 srcOffset = 0;
+
+                u32 pageStride = pageByteSize * mipSqrtNumPages;
+                Assert(outputPageWidth <= submissionNumSqrtPages &&
+                       outputPageHeight <= submissionNumSqrtPages);
+
+                int submissionNumMips = Min(Log2Int(width), Log2Int(height)) - 2;
+                for (int i = 0; i < submissionNumMips; i++)
+                {
+                    u32 baseMipOffset = mipPageOffsets[i];
+                    u32 mipPageHeight = (height + PAGE_WIDTH - 1) >> PAGE_SHIFT;
+                    u32 mipPageWidth  = (width + PAGE_WIDTH - 1) >> PAGE_SHIFT;
+
+                    u32 srcOffset = 0;
+                    for (int pageY = 0; pageY < mipPageHeight; pageY++)
+                    {
+                        u32 dstOffset =
+                            baseMipOffset +
+                            (numSubmissionY * submissionNumSqrtPages + pageY) * pageStride +
+                            numSubmissionX * submissionNumSqrtPages * pageByteSize;
+                        for (int pageX = 0; pageX < mipPageWidth; pageX++)
+                        {
+                            Vec2u srcIndex = Vec2u(pageX, pageY) * (u32)pageBlockWidth;
+                            Utils::Copy(src + srcOffset, srcIndex, gpuOutputWidth,
+                                        gpuOutputWidth, dst + dstOffset, Vec2u(0, 0),
+                                        pageBlockWidth, pageBlockWidth, pageBlockWidth,
+                                        pageBlockWidth, bytesPerBlock);
+
+                            dstOffset += pageByteSize;
+                        }
+                    }
+
+                    height >>= 1;
+                    width >>= 1;
+                }
+            });
+    };
 
     const int avgFacesPerCell = 10;
     int numCells              = numFaces / avgFacesPerCell;
@@ -232,9 +328,6 @@ void ConvertPtexToUVTexture(string textureFilename, string meshFilename)
         }
     }
 
-    // Square texture dimension
-    int textureWidth;
-
     Ptex::PtexFilter::FilterType fType = Ptex::PtexFilter::FilterType::f_catmullrom;
     Ptex::PtexFilter::Options opts(fType);
     Ptex::PtexFilter *filter = Ptex::PtexFilter::getFilter(t, opts);
@@ -265,43 +358,81 @@ void ConvertPtexToUVTexture(string textureFilename, string meshFilename)
         return -1;
     };
 
-    for (int v = 0; v < textureWidth; v++)
+    u32 sqrtNumSubmissions = (textureWidth + gpuSubmissionWidth - 1) / gpuSubmissionWidth;
+
+    string outFilename =
+        PushStr8F(scratch.temp.arena, "%S.tiles", RemoveFileExtension(textureFilename));
+    StringBuilderMapped builder(outFilename);
+
+    for (u32 submissionY = 0; submissionY < sqrtNumSubmissions; submissionY++)
     {
-        for (int u = 0; u < textureWidth; u++)
+        for (u32 submissionX = 0; submissionX < sqrtNumSubmissions; submissionX++)
         {
-            Vec2f uv = Vec2f(u, v) / (f32)textureWidth;
+            Vec2u start = Vec2u(submissionX, submissionY) * gpuSubmissionWidth;
+            u32 vExtent =
+                Min(gpuSubmissionWidth, textureWidth - submissionY * gpuSubmissionWidth);
+            u32 uExtent =
+                Min(gpuSubmissionWidth, textureWidth - submissionX * gpuSubmissionWidth);
 
-            Vec2f st;
-            int faceIndex = CalculateFaceUV(uv, st);
-            Assert(faceIndex != -1);
+            ScratchArena submissionScratch;
 
-            Vec2f uv_du = Vec2f(u + 1, v) / (f32)textureWidth;
-            Vec2f st_du;
-            int faceIndex_du = CalculateFaceUV(uv_du, st_du);
-            if (faceIndex != faceIndex_du)
+            u8 *temp = PushArrayNoZero(submissionScratch.temp.arena, u8,
+                                       blockCompressor.submissionSize);
+
+            for (u32 v = 0; v < vExtent; v++)
             {
-                uv_du        = Vec2f(u - 1, v) / (f32)textureWidth;
-                faceIndex_du = CalculateFaceUV(uv_du, st_du);
-                if (faceIndex != faceIndex_du) st_du = st;
+                for (u32 u = 0; u < uExtent; u++)
+                {
+                    Vec2f uv = Vec2f(start + Vec2u(u, v)) / (f32)textureWidth;
+
+                    Vec2f st;
+                    int faceIndex = CalculateFaceUV(uv, st);
+                    Assert(faceIndex != -1);
+
+                    Vec2f uv_du = Vec2f(u + 1, v) / (f32)textureWidth;
+                    Vec2f st_du;
+                    int faceIndex_du = CalculateFaceUV(uv_du, st_du);
+                    if (faceIndex != faceIndex_du)
+                    {
+                        uv_du        = Vec2f(u - 1, v) / (f32)textureWidth;
+                        faceIndex_du = CalculateFaceUV(uv_du, st_du);
+                        if (faceIndex != faceIndex_du) st_du = st;
+                    }
+
+                    Vec2f uv_dv = Vec2f(u, v + 1) / (f32)textureWidth;
+                    Vec2f st_dv;
+                    int faceIndex_dv = CalculateFaceUV(uv_dv, st_dv);
+                    if (faceIndex != faceIndex_dv)
+                    {
+                        uv_dv        = Vec2f(u, v - 1) / (f32)textureWidth;
+                        faceIndex_dv = CalculateFaceUV(uv_dv, st_dv);
+                        if (faceIndex != faceIndex_dv) st_dv = st;
+                    }
+
+                    Vec2f ds = st_du - st;
+                    Vec2f dt = st_dv - st;
+
+                    f32 out[3] = {};
+                    filter->eval(out, 0, nc, faceIndex, st.x, st.y, ds.x, ds.y, dt.x, dt.y);
+                }
             }
 
-            Vec2f uv_dv = Vec2f(u, v + 1) / (f32)textureWidth;
-            Vec2f st_dv;
-            int faceIndex_dv = CalculateFaceUV(uv_dv, st_dv);
-            if (faceIndex != faceIndex_dv)
-            {
-                uv_dv        = Vec2f(u, v - 1) / (f32)textureWidth;
-                faceIndex_dv = CalculateFaceUV(uv_dv, st_dv);
-                if (faceIndex != faceIndex_dv) st_dv = st;
-            }
+            u32 width  = Min(gpuSubmissionWidth, levelTexelWidth - numX * gpuSubmissionWidth);
+            u32 height = Min(gpuSubmissionWidth, levelTexelWidth - numY * gpuSubmissionWidth);
 
-            Vec2f ds = st_du - st;
-            Vec2f dt = st_dv - st;
+            SubmissionInfo submissionInfo;
+            submissionInfo.numSubmissionX   = submissionX;
+            submissionInfo.numSubmissionY   = submissionY;
+            submissionInfo.outputPageWidth  = width;
+            submissionInfo.outputPageHeight = height;
 
-            f32 out[3] = {};
-            filter->eval(out, 0, nc, faceIndex, st.x, st.y, ds.x, ds.y, dt.x, dt.y);
+            submissionInfos[blockCompressor.submissionIndex] = submissionInfo;
+
+            blockCompressor.SubmitBlockCompressedCommands(temp);
+            CopyBlockCompressedResultsToDisk(dst);
         }
     }
+
     filter->release();
     t->release();
 }

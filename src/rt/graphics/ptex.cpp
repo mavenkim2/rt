@@ -672,7 +672,7 @@ void Convert(string filename)
                          VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
             cmd->FlushBarriers();
 
-            cmd->CopyImageToBuffer(readbackBuffer, uavImage, copy);
+            cmd->CopyImageToBuffer(readbackBuffer, uavImage, &copy, 1);
         }
 
         // Submit command buffer

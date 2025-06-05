@@ -590,7 +590,8 @@ struct CommandBuffer
     TransferBuffer SubmitImage(void *ptr, ImageDesc desc);
     void CopyImage(GPUBuffer *transfer, GPUImage *image, BufferImageCopy *copies, u32 num);
     void CopyImage(GPUImage *dst, GPUImage *src, const ImageToImageCopy &copy);
-    void CopyImageToBuffer(GPUBuffer *dst, GPUImage *src, const BufferImageCopy &copy);
+    void CopyImageToBuffer(GPUBuffer *dst, GPUImage *src, const BufferImageCopy *copies,
+                           u32 num);
 
     void BindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipeline);
     void BindDescriptorSets(VkPipelineBindPoint bindPoint, DescriptorSet *set,
