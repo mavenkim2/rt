@@ -133,24 +133,20 @@ bool InverseBilinearUV(const Vec2f &uv00, const Vec2f &uv10, const Vec2f &uv11,
 
 void ConvertPtexToUVTexture(string textureFilename, string meshFilename)
 {
-    const VkFormat baseFormat    = VK_FORMAT_R8G8B8A8_UNORM;
-    const VkFormat blockFormat   = VK_FORMAT_BC1_RGB_UNORM_BLOCK;
-    const u32 bytesPerTexel      = GetFormatSize(baseFormat);
-    const u32 bytesPerBlock      = GetFormatSize(blockFormat);
-    const u32 blockSize          = GetBlockSize(blockFormat);
-    const u32 log2BlockSize      = Log2Int(blockSize);
-    const u32 blocksPerPage      = texelWidthPerPage >> log2BlockSize;
-    const u32 totalBlocksPerPage = totalTexelWidthPerPage >> log2BlockSize;
+    const VkFormat baseFormat  = VK_FORMAT_R8G8B8A8_UNORM;
+    const VkFormat blockFormat = VK_FORMAT_BC1_RGB_UNORM_BLOCK;
+    const u32 bytesPerTexel    = GetFormatSize(baseFormat);
+    const u32 bytesPerBlock    = GetFormatSize(blockFormat);
+    const u32 blockSize        = GetBlockSize(blockFormat);
+    const u32 log2BlockSize    = Log2Int(blockSize);
 
+    const u32 gpuSubmissionWidth     = 4096;
     const int pageTexelWidth         = PAGE_WIDTH;
     const int pageBlockWidth         = pageTexelWidth >> log2BlockSize;
     const int pageByteSize           = Sqr(pageBlockWidth) * bytesPerBlock;
-    const int submissionNumSqrtPages = gpuOutputWidth / pageBlockWidth;
+    const int submissionNumSqrtPages = gpuSubmissionWidth / pageTexelWidth;
 
-    const int gpuSrcStride = gpuOutputWidth * bytesPerBlock;
-    const int pageStride   = pageBlockWidth * bytesPerBlock;
-
-    BlockCompressor blockCompressor(gpuSubmissionWidth, baseFormat, blockFormat, numMips);
+    const int pageStride = pageBlockWidth * bytesPerBlock;
 
     ScratchArena scratch;
 
@@ -180,71 +176,44 @@ void ConvertPtexToUVTexture(string textureFilename, string meshFilename)
     int numMips = Log2Int(NextPowerOfTwo(textureWidth)) - PAGE_SHIFT;
     Assert(numMips > 0);
 
-    StaticArray<u32> mipPageOffsets(scratch.temp.arena, numMips);
+    BlockCompressor blockCompressor(gpuSubmissionWidth, baseFormat, blockFormat, numMips);
+
+    StaticArray<u32> mipOffsets(scratch.temp.arena, numMips);
+    StaticArray<u32> levelsSqrtNumPages(scratch.temp.arena, numMips);
     u32 mipOffset = 0;
 
     for (int i = 0; i < numMips; i++)
     {
         mipOffsets.Push(mipOffset);
         u32 mipSqrtNumPages = ((textureWidth >> i) + PAGE_WIDTH - 1) >> PAGE_SHIFT;
+        levelsSqrtNumPages.Push(mipSqrtNumPages);
         mipOffset += Sqr(mipSqrtNumPages) * pageByteSize;
     }
 
-    u32 totalTextureSize = (textureWidth >> log2BlockSize) * GetFormatSize(blockFormat);
-    u64 dataOffset       = AllocateSpace(&builder, mipOffset);
-    u8 *dst              = (u8 *)GetMappedPtr(&builder, dataOffset);
+    string outFilename =
+        PushStr8F(scratch.temp.arena, "%S.tiles", RemoveFileExtension(textureFilename));
+    StringBuilderMapped builder(outFilename);
+    u64 dataOffset = AllocateSpace(&builder, mipOffset);
+    u8 *dst        = (u8 *)GetMappedPtr(&builder, dataOffset);
 
     SubmissionInfo submissionInfos[2];
 
-    auto CopyBlockCompressedResultsToDisk = [&](u8 *dst) {
-        blockCompressor.CopyBlockCompressedResultsToDisk(
-            [&](u8 *src, int lastSubmissionIndex) {
-                u32 gpuOutputWidth = blockCompressor.gpuOutputWidth;
+    // TODO
+    // 1. when the submission's mip width is less than a page (i.e. 128x128 texels or 32x32
+    // blocks), have to copy to a temp buffer and collate between submissions instead of
+    // copying to disk
+    // 2. how am I going to handle the case where the mip resolution is less than a page for
+    // the entire texture?
 
-                const SubmissionInfo &s = submissionInfos[lastSubmissionIndex];
-                u32 numSubmissionX      = s.numSubmissionX;
-                u32 numSubmissionY      = s.numSubmissionY;
-                u32 width               = s.outputPageWidth;
-                u32 height              = s.outputPageHeight;
-
-                // Copy tiles out to disk
-                u32 srcOffset = 0;
-
-                u32 pageStride = pageByteSize * mipSqrtNumPages;
-                Assert(outputPageWidth <= submissionNumSqrtPages &&
-                       outputPageHeight <= submissionNumSqrtPages);
-
-                int submissionNumMips = Min(Log2Int(width), Log2Int(height)) - 2;
-                for (int i = 0; i < submissionNumMips; i++)
-                {
-                    u32 baseMipOffset = mipPageOffsets[i];
-                    u32 mipPageHeight = (height + PAGE_WIDTH - 1) >> PAGE_SHIFT;
-                    u32 mipPageWidth  = (width + PAGE_WIDTH - 1) >> PAGE_SHIFT;
-
-                    u32 srcOffset = 0;
-                    for (int pageY = 0; pageY < mipPageHeight; pageY++)
-                    {
-                        u32 dstOffset =
-                            baseMipOffset +
-                            (numSubmissionY * submissionNumSqrtPages + pageY) * pageStride +
-                            numSubmissionX * submissionNumSqrtPages * pageByteSize;
-                        for (int pageX = 0; pageX < mipPageWidth; pageX++)
-                        {
-                            Vec2u srcIndex = Vec2u(pageX, pageY) * (u32)pageBlockWidth;
-                            Utils::Copy(src + srcOffset, srcIndex, gpuOutputWidth,
-                                        gpuOutputWidth, dst + dstOffset, Vec2u(0, 0),
-                                        pageBlockWidth, pageBlockWidth, pageBlockWidth,
-                                        pageBlockWidth, bytesPerBlock);
-
-                            dstOffset += pageByteSize;
-                        }
-                    }
-
-                    height >>= 1;
-                    width >>= 1;
-                }
-            });
-    };
+    // Submission: 4096x4906
+    // 1. When the mip resolution is less than 128x128 texels, stop writing pages to disk and
+    // instead write blocks to a temp buffer
+    // 2. When the resolution is less than 4x4 texels, write the texels to a separate gpu
+    // buffer/image
+    //
+    // Entire texture: N x N
+    // 1. collate the blocks in the temp buffer into pages
+    // 2. figure out what to do with the texels
 
     const int avgFacesPerCell = 10;
     int numCells              = numFaces / avgFacesPerCell;
@@ -360,10 +329,6 @@ void ConvertPtexToUVTexture(string textureFilename, string meshFilename)
 
     u32 sqrtNumSubmissions = (textureWidth + gpuSubmissionWidth - 1) / gpuSubmissionWidth;
 
-    string outFilename =
-        PushStr8F(scratch.temp.arena, "%S.tiles", RemoveFileExtension(textureFilename));
-    StringBuilderMapped builder(outFilename);
-
     for (u32 submissionY = 0; submissionY < sqrtNumSubmissions; submissionY++)
     {
         for (u32 submissionX = 0; submissionX < sqrtNumSubmissions; submissionX++)
@@ -417,19 +382,64 @@ void ConvertPtexToUVTexture(string textureFilename, string meshFilename)
                 }
             }
 
-            u32 width  = Min(gpuSubmissionWidth, levelTexelWidth - numX * gpuSubmissionWidth);
-            u32 height = Min(gpuSubmissionWidth, levelTexelWidth - numY * gpuSubmissionWidth);
+            u32 width =
+                Min(gpuSubmissionWidth, textureWidth - submissionX * gpuSubmissionWidth);
+            u32 height =
+                Min(gpuSubmissionWidth, textureWidth - submissionY * gpuSubmissionWidth);
 
             SubmissionInfo submissionInfo;
-            submissionInfo.numSubmissionX   = submissionX;
-            submissionInfo.numSubmissionY   = submissionY;
-            submissionInfo.outputPageWidth  = width;
-            submissionInfo.outputPageHeight = height;
+            submissionInfo.numSubmissionX = submissionX;
+            submissionInfo.numSubmissionY = submissionY;
+            submissionInfo.width          = width;
+            submissionInfo.height         = height;
 
             submissionInfos[blockCompressor.submissionIndex] = submissionInfo;
 
             blockCompressor.SubmitBlockCompressedCommands(temp);
-            CopyBlockCompressedResultsToDisk(dst);
+            blockCompressor.CopyBlockCompressedResultsToDisk([&](u8 *src,
+                                                                 int lastSubmissionIndex) {
+                u32 gpuOutputWidth = blockCompressor.gpuOutputWidth;
+
+                const SubmissionInfo &s = submissionInfos[lastSubmissionIndex];
+                u32 numSubmissionX      = s.numSubmissionX;
+                u32 numSubmissionY      = s.numSubmissionY;
+                u32 width               = s.width;
+                u32 height              = s.height;
+
+                // Copy tiles out to disk
+
+                int submissionNumMips = Min(Log2Int(width), Log2Int(height)) - 2;
+                for (int i = 0; i < submissionNumMips; i++)
+                {
+                    u32 mipPageHeight = (height + PAGE_WIDTH - 1) >> PAGE_SHIFT;
+                    u32 mipPageWidth  = (width + PAGE_WIDTH - 1) >> PAGE_SHIFT;
+                    u32 pageStride    = pageByteSize * levelsSqrtNumPages[i];
+
+                    u32 srcOffset     = 0;
+                    u32 dstBaseOffset = mipOffsets[i];
+                    for (int pageY = 0; pageY < mipPageHeight; pageY++)
+                    {
+                        u32 dstOffset =
+                            dstBaseOffset +
+                            (numSubmissionY * submissionNumSqrtPages + pageY) * pageStride +
+                            numSubmissionX * submissionNumSqrtPages * pageByteSize;
+                        for (int pageX = 0; pageX < mipPageWidth; pageX++)
+                        {
+                            Vec2u srcIndex = Vec2u(pageX, pageY) * (u32)pageBlockWidth;
+                            Utils::Copy(src + srcOffset, srcIndex, gpuOutputWidth,
+                                        gpuOutputWidth, dst + dstOffset, Vec2u(0, 0),
+                                        pageBlockWidth, pageBlockWidth, pageBlockWidth,
+                                        pageBlockWidth, bytesPerBlock);
+
+                            dstOffset += pageByteSize;
+                        }
+                    }
+
+                    srcOffset += Sqr(gpuSubmissionWidth >> i) * bytesPerBlock;
+                    height >>= 1;
+                    width >>= 1;
+                }
+            });
         }
     }
 

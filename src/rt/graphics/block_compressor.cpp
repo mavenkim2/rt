@@ -1,3 +1,5 @@
+#include "../memory.h"
+#include "../thread_context.h"
 #include "block_compressor.h"
 #include <functional>
 
@@ -24,7 +26,7 @@ BlockCompressor::BlockCompressor(u32 gpuSubmissionWidth, VkFormat inFormat, VkFo
 
     // Allocate GPU resources
     ImageDesc blockCompressedImageDesc(
-        ImageType::Type2D, gpuSubmissionWidth, gpuSubmissionWidth, 1, numMips, 1, baseFormat,
+        ImageType::Type2D, gpuSubmissionWidth, gpuSubmissionWidth, 1, numMips, 1, inFormat,
         MemoryUsage::GPU_ONLY, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
         VK_IMAGE_TILING_OPTIMAL);
     gpuSrcImages[0] = device->CreateImage(blockCompressedImageDesc);
@@ -133,7 +135,7 @@ void BlockCompressor::SubmitBlockCompressedCommands(u8 *in)
             copy.layerCount       = 1;
             copy.extent           = Vec3u(outputMipWidth, outputMipWidth, 1);
 
-            outputMipWidth >>= 1
+            outputMipWidth >>= 1;
         }
         cmd->Barrier(uavImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                      VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
@@ -152,7 +154,7 @@ void BlockCompressor::SubmitBlockCompressedCommands(u8 *in)
     submissionIndex = numSubmissions & 1;
 }
 
-void BlockCompressor::CopyBlockCompressedResultsToDisk(BlockCopyFunction &func)
+void BlockCompressor::CopyBlockCompressedResultsToDisk(const BlockCopyFunction &func)
 {
     if (numSubmissions > 0)
     {
@@ -162,7 +164,7 @@ void BlockCompressor::CopyBlockCompressedResultsToDisk(BlockCopyFunction &func)
 
         descriptorSets[lastSubmissionIndex].Reset();
 
-        func(readbackBuffers[lastSubmissionIndex.mappedPtr], lastSubmissionIndex);
+        func((u8 *)readbackBuffers[lastSubmissionIndex].mappedPtr, lastSubmissionIndex);
     }
 }
 

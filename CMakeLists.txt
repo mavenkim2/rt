@@ -222,6 +222,7 @@ add_executable(generate_uvs
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/ptex.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/debug.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/parallel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/block_compressor.cpp
 )
 target_include_directories(generate_uvs PRIVATE 
     ${PTEX_INCLUDE}
@@ -257,6 +258,7 @@ set(SHADER_FILES "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl"
     "${SHADER_SRC_DIR}/clas/fill_cluster_bottom_level_info.hlsl"
     "${SHADER_SRC_DIR}/compress/block_compress.hlsl"
     "${SHADER_SRC_DIR}/tex/update_page_tables.hlsl"
+    "${SHADER_SRC_DIR}/tex/generate_mips.hlsl"
 )
 set_property(SOURCE 
     "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
@@ -271,6 +273,7 @@ set_property(SOURCE
     "${SHADER_SRC_DIR}/clas/decode_dgf_clusters.hlsl"
     "${SHADER_SRC_DIR}/clas/fill_instance_descs.hlsl"
     "${SHADER_SRC_DIR}/clas/fill_cluster_bottom_level_info.hlsl"
+    "${SHADER_SRC_DIR}/tex/generate_mips.hlsl"
     PROPERTY name "cs")
 
 file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")

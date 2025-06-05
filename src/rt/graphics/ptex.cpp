@@ -363,8 +363,6 @@ void Convert(string filename)
     const u32 bytesPerBlock      = GetFormatSize(blockFormat);
     const u32 blockSize          = GetBlockSize(blockFormat);
     const u32 log2BlockSize      = Log2Int(blockSize);
-    const u32 blocksPerPage      = texelWidthPerPage >> log2BlockSize;
-    const u32 totalBlocksPerPage = totalTexelWidthPerPage >> log2BlockSize;
 
     const u32 blockBorderSize = borderSize >> log2BlockSize;
 
@@ -565,7 +563,6 @@ void Convert(string filename)
     const int pageByteSize           = Sqr(pageBlockWidth) * bytesPerBlock;
     const int submissionNumSqrtPages = gpuOutputWidth / pageBlockWidth;
 
-    const int gpuSrcStride = gpuOutputWidth * bytesPerBlock;
     const int pageStride   = pageBlockWidth * bytesPerBlock;
 
     struct SubmissionInfo

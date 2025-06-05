@@ -6,12 +6,12 @@
 #define USE_CMPMSC
 #define ASPM_HLSL
 #define ASPM_GPU
-#include "../bcn_common_kernel.h"
+#include "../compress/bcn_common_kernel.h"
 
 #pragma dxc diagnostic pop
 
-static const uint blockLUT = {0, 1, 4, 5};
-groupshared float4 rgba[16][16]; 
+static const uint blockLUT[] = {0, 1, 4, 5};
+groupshared float4 rgba[8][8];
 
 Texture2D input : register(t0);
 
@@ -28,6 +28,12 @@ float3 Load(RWTexture2D<float4> tex, uint2 loc)
 #else 
 #error
 #endif
+
+float3 Downsample(float3 v0, float3 v1, float3 v2, float3 v3)
+{
+    float3 val = (v0 + v1 + v2 + v3) * 0.25f;
+    return val;
+}
 
 [numthreads(16, 16, 1)]
 void main (uint3 groupID : SV_GroupID, uint groupThreadIndex : SV_GroupIndex)
@@ -58,12 +64,12 @@ void main (uint3 groupID : SV_GroupID, uint groupThreadIndex : SV_GroupIndex)
     uint x = swizzledThreadID.x;
     uint y = swizzledThreadID.y;
 
-    float4 vals[4];
+    float3 vals[4];
 
-    RWTexture2D<float4> baseTex = bindlessRWTexture[bindlessBaseIndex];
-    RWTexture2D<uint2> baseOutput = bindlessRWTextureUint[bindlessBaseRWTexture];
+    RWTexture2D<float4> baseTex = bindlessRWTexture2D[bindlessBaseIndex];
+    RWTexture2D<uint2> baseOutput = bindlessRWTextureUint2[bindlessBaseRWTexture];
 
-    uint width, uint height;
+    uint width, height;
     baseTex.GetDimensions(width, height);
 
     // There are 16x16 threads. Each thread covers 2x2 texels in a subregion (at the base level).
@@ -87,79 +93,72 @@ void main (uint3 groupID : SV_GroupID, uint groupThreadIndex : SV_GroupIndex)
         block[blockStartIndex + 4] = v2;
         block[blockStartIndex + 5] = v3;
 
-
         // Downsample
-        vals[i] = (v0 + v1 + v2 + v3) * 0.25f;
+        vals[i] = Downsample(v0, v1, v2, v3);
     }
 
     uint2 loadCoords = groupID.xy * 16 + swizzledThreadID;
     baseOutput[loadCoords] = CompressBlockBC1_UNORM(block, CMP_QUALITY2, false);
 
-    // Block compress
-    if ((localGroupThreadIndex & 3) == 0)
-    {
-        uint baseLaneIndex = WaveGetLaneIndex() & ~0x3;
-        for (int threadIndex = 0; threadIndex < 4; threadIndex++)
-        {
-            uint indexStart = 2 * blockLUT[threadIndex];
-            uint waveIndex = baseLaneIndex + blockLUT[threadIndex];
-            for (int texelIndex = 0; texelIndex < 4; texelIndex++)
-            {
-                uint neighbor = blockLUT[texelIndex];
-                block[indexStart + neighbor] = WaveReadLaneAt(v[texelIndex], waveIndex).rgb;
-            }
-        }
-    }
-
     // Mip 1: 32x32 region
-    // Block compress and write to mip 1 output texture
-    if ((localGroupThreadIndex & 0xf) == 0)
+    // Downsample
+    float3 val = Downsample(vals[0], vals[1], vals[2], vals[3]);
+    // Block compress
+    if ((localGroupThreadIndex & 1) == 0)
     {
-        float3 block[16];
-        uint laneIndex = WaveGetLaneIndex() & ~0xf;
+        uint laneIndex = WaveGetLaneIndex();
         for (int i = 0; i < 4; i++)
         {
-            for (int j = 0; j < 16; j++)
+            uint neighborLaneIndex = laneIndex + blockLUT[i];
+            uint blockStartIndex = 2 * blockLUT[i];
+            for (int j = 0; j < 4; j++)
             {
-                uint blockIndex = 8 * ((j >> 2) & 1);
-                blockIndex += 4 * ((j >> 1) & 1);
-                blockIndex += 2 * ((j >> 3) & 1);
-                blockIndex += j & 1;
-
-                block[blockIndex] = float4 v = WaveReadLaneAt(v[i], laneIndex + j);
+                block[blockStartIndex + blockLUT[j]] = WaveReadLaneAt(vals[j], neighborLaneIndex);
             }
-            uint2 blockCoords = texCoords[i] >> 2;
-            baseOutput[blockCoords] = CompressBlockBC1_UNORM(block, CMP_QUALITY2, false);
+
+            uint2 loadCoords = groupID.xy * 8 + swizzledThreadID / 2;
+            baseOutput[loadCoords] = CompressBlockBC1_UNORM(block, CMP_QUALITY2, false);
         }
     }
 
-    // Store second mip to groupshared
-    if ((localGroupThreadIndex & 3) == 0)
+    // Mip 2: 16x16 region 
+    // Downsample
+    if (((localGroupThreadIndex & 1) == 0) && (((localGroupThreadIndex >> 2) & 1) == 0))
     {
+        // 0 2  16 18
+        // 8 10 20 22 etc...
+
+        uint baseLaneIndex = WaveGetLaneIndex();
+
+        float3 vals[4];
         for (int i = 0; i < 4; i++)
         {
-            uint laneIndex = WaveGetLaneIndex() & ~0x3;
-            float4 v0 = v[i];
-            float4 v1 = WaveReadLaneAt(v[i], laneIndex | 1);
-            float4 v2 = WaveReadLaneAt(v[i], laneIndex | 2);
-            float4 v3 = WaveReadLaneAt(v[i], laneIndex | 3);
-            float4 vResult = (v0 + v1 + v2 + v3) * 0.25f;
-
-            uint2 index = (texCoords[i] >> 1) & 0xf;
-            rgba[index.x][index.y] = vResult;
+            vals[i] = WaveReadLaneAt(val, baseLaneIndex + blockLUT[i]);
         }
-    }
+        float3 val = Downsample(vals[0], vals[1], vals[2], vals[3]);
 
-    // Block compress second mip
-    float4 v = rgba[x][y];
-    if ((localGroupThreadIndex & 0xf) == 0)
-    {
-        float3 block[16];
-        uint laneIndex = WaveGetLaneIndex() & ~0xf;
-        for (int i = 0; i < 16; i++)
+        //uint groupSharedIndexX = (x >> 1) & 0x7;
+        //uint groupSharedIndexY = (y >> 1) & 0x7;
+        //rgba[groupSharedIndexX][groupSharedIndexY] = val;
+
+        // Block compress
+        if ((localGroupThreadIndex & 0xf) == 0)
         {
-            float4 v0 = WaveReadLaneAt(v, laneIndex + i);
-            block[?] = v0;
+            uint baseLaneIndex = WaveGetLaneIndex() & ~0xf;
+            for (int i = 0; i < 4; i++)
+            {
+                int blockStartIndex = 2 * blockLUT[i];
+                int laneIndex = baseLaneIndex + blockStartIndex;
+                for (int j = 0; j < 4; j++)
+                {
+                    block[blockStartIndex + blockLUT[j]] = WaveReadLaneAt(vals[j], laneIndex);
+                }
+            }
+
+            uint2 loadCoords = groupID.xy * 4 + swizzledThreadID / 4;
+            baseOutput[loadCoords] = CompressBlockBC1_UNORM(block, CMP_QUALITY2, false);
         }
     }
+
+    //GroupMemoryBarrierWithGroupSync();
 }

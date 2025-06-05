@@ -6,7 +6,7 @@
 namespace rt
 {
 
-using BlockCopyFunction = std::function<void(void *, int)>;
+using BlockCopyFunction = std::function<void(u8 *, int)>;
 
 struct SubmissionInfo
 {
@@ -45,7 +45,7 @@ struct BlockCompressor
 
     BlockCompressor(u32 gpuSubmissionWidth, VkFormat inFormat, VkFormat outFormat,
                     u32 numMips = 0);
-    void CopyBlockCompressedResultsToDisk(BlockCopyFunction &func);
+    void CopyBlockCompressedResultsToDisk(const BlockCopyFunction &func);
     void SubmitBlockCompressedCommands(u8 *in);
 };
 
