@@ -54,16 +54,8 @@ BlockCompressor::BlockCompressor(u32 gpuSubmissionWidth, VkFormat inFormat, VkFo
     readbackBuffers[1] = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, outputSize,
                                               MemoryUsage::GPU_TO_CPU);
 
-    descriptorSets[0] = bcLayout.CreateNewDescriptorSet();
-    descriptorSets[1] = bcLayout.CreateNewDescriptorSet();
-
     semaphores[0] = device->CreateSemaphore();
     semaphores[1] = device->CreateSemaphore();
-
-    cmds[0] = device->BeginCommandBuffer(QueueType_Compute);
-    cmds[0]->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-    cmds[1] = device->BeginCommandBuffer(QueueType_Compute);
-    cmds[1]->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
 
     ScratchArena scratch;
     string shaderName = "../src/shaders/block_compress.spv";
@@ -77,6 +69,14 @@ BlockCompressor::BlockCompressor(u32 gpuSubmissionWidth, VkFormat inFormat, VkFo
         bcLayout.AddBinding(1, DescriptorType::StorageImage, VK_SHADER_STAGE_COMPUTE_BIT);
     bcLayout.AddImmutableSamplers();
     pipeline = device->CreateComputePipeline(&shader, &bcLayout);
+
+    descriptorSets[0] = bcLayout.CreateNewDescriptorSet();
+    descriptorSets[1] = bcLayout.CreateNewDescriptorSet();
+
+    cmds[0] = device->BeginCommandBuffer(QueueType_Compute);
+    cmds[0]->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+    cmds[1] = device->BeginCommandBuffer(QueueType_Compute);
+    cmds[1]->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
 }
 
 void BlockCompressor::SubmitBlockCompressedCommands(u8 *in)

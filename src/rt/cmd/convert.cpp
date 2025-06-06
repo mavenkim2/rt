@@ -22,6 +22,7 @@
 #include "../parallel.h"
 #include "../graphics/ptex.h"
 #include "../graphics/vulkan.h"
+#include "../virtual_geometry/mesh_simplification.h"
 #include "../base.cpp"
 #include "../parallel.cpp"
 #include "../thread_statistics.cpp"

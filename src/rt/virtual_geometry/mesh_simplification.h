@@ -42,24 +42,25 @@ struct Quadric
 
     void InitializeEdge(const Vec3f &p0, const Vec3f &p1);
     f32 Evaluate(const Vec3f &p, f32 *__restrict attributes, f32 *__restrict attributeWeights);
-    void Add(QuadricAttr<numAttributes> &other);
+    void Add(Quadric &other);
 
     bool Optimize(Vec3f &p, bool volume);
 };
 
 struct Pair
 {
-    int indexIndex0;
-    int indexIndex1;
+    int index0;
+    int index1;
 
-    float error;
-
-    bool operator<(const Pair &other) { return error < other.error; }
+    bool operator==(const Pair &other)
+    {
+        return index0 == other.index0 && index1 == other.index1;
+    }
 
     u32 GetIndex(u32 index)
     {
         Assert(index < 2);
-        return index == 0 ? indexIndex0 : indexIndex1;
+        return index == 0 ? index0 : index1;
     }
 };
 
@@ -86,16 +87,16 @@ struct MeshSimplifier
 
     // Graph mapping vertices to triangle faces
     VertexGraphNode *vertexNodes;
-    VertexGraphNode *vertexToPairNodes;
 
     u32 *indexData;
-    u32 *pairIndices;
+    u32 *triangleToPairIndices;
 
     Vec3f &GetPosition(u32 vertexIndex);
-    bool CheckInversion(const Vec3f &newPosition, u32 vertexIndex);
-    f32 EvaluatePair(Pair &pair, Vec3f *newPosition);
-    void Simplify(Mesh &mesh, u32 limitNumVerts, u32 limitNumTris, u32 targetError,
-                  u32 limitError);
+    f32 *GetAttributes(u32 vertexIndex);
+    bool CheckInversion(const Vec3f &newPosition, u32 vertexIndex0, u32 vertexIndex1);
+    f32 EvaluatePair(Pair &pair, Vec3f *newPosition = 0);
+    Mesh Simplify(Arena *arena, Mesh &mesh, u32 limitNumVerts, u32 limitNumTris,
+                  u32 targetError, u32 limitError);
 };
 
 } // namespace rt

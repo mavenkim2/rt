@@ -94,6 +94,15 @@ struct StaticArray
         size_++;
     }
 
+    __forceinline void PushUnique(T element)
+    {
+        for (int i = 0; i < size_; i++)
+        {
+            if (data[i] == element) return;
+        }
+        Push(element);
+    }
+
     __forceinline void push_back(T element) { Push(element); }
 
     __forceinline T Pop()

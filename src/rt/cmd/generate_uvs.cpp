@@ -221,78 +221,85 @@ void ConvertPtexToUVTexture(string textureFilename, string meshFilename)
     const int sqrtNumCells = Sqrt(numCells);
     numCells               = Sqr(sqrtNumCells);
 
-    int *offsets  = PushArrayNoZero(scratch.temp.arena, int, numCells + 1);
-    int *offsets1 = &offsets[1];
+    int maxU = 0;
+    int maxV = 0;
+    // Find out how many tiles there are
+    for (int i = 0; i < mesh->numVertices; i++)
+    {
+        Vec2f uv = mesh->uv[i];
+        Vec2i t  = Vec2i(uv);
+
+        maxU = Max(maxU, (int)uv.x);
+        maxV = Max(maxV, (int)uv.y);
+    }
+
+    int numTilesU         = maxU + 1;
+    int numTilesV         = maxV + 1;
+    int numTiles          = numTilesU * numTilesV;
+    bool *tileIsPopulated = PushArray(scratch.temp.arena, bool, numTiles);
+    int *tileOffsets      = PushArray(scratch.temp.arena, int, numTiles *numCells + 1);
+    int *tileOffsets1     = &tileOffsets[1];
 
     // Populate grid
-    for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
+    int *faceData;
+    for (int i = 0; i < 2; i++)
     {
-        int idx0 = mesh->indices[faceIndex * 4 + 0];
-        int idx1 = mesh->indices[faceIndex * 4 + 1];
-        int idx2 = mesh->indices[faceIndex * 4 + 2];
-        int idx3 = mesh->indices[faceIndex * 4 + 3];
-
-        Vec2f uv00 = mesh->uv[idx0];
-        Vec2f uv10 = mesh->uv[idx1];
-        Vec2f uv11 = mesh->uv[idx2];
-        Vec2f uv01 = mesh->uv[idx3];
-
-        Vec2f bbMin = Min(Min(uv00, uv10), Min(uv11, uv01));
-        Vec2f bbMax = Max(Max(uv00, uv10), Max(uv11, uv01));
-
-        Vec2i bbiMin = Clamp(Vec2i(bbMin.x * sqrtNumCells, bbMin.y * sqrtNumCells), Vec2i(0),
-                             Vec2i(sqrtNumCells - 1));
-        Vec2i bbiMax = Clamp(Vec2i(bbMax.x * sqrtNumCells, bbMax.y * sqrtNumCells), Vec2i(0),
-                             Vec2i(sqrtNumCells - 1));
-
-        for (int v = bbiMin.y; v < bbiMax.y; v++)
+        if (i == 2)
         {
-            for (int u = bbiMin.x; u < bbiMax.y; u++)
+            int sum = 0;
+            for (int i = 0; i < numCells; i++)
             {
-                int index = v * sqrtNumCells + u;
-                Assert(index < numCells);
-                offsets1[index]++;
+                int num         = tileOffsets1[i];
+                tileOffsets1[i] = sum;
+                sum += num;
             }
+            faceData = PushArrayNoZero(scratch.temp.arena, int, sum);
         }
-    }
 
-    int sum = 0;
-    for (int i = 0; i < numCells; i++)
-    {
-        int num     = offsets1[i];
-        offsets1[i] = sum;
-        sum += num;
-    }
-
-    int *faceData = PushArrayNoZero(scratch.temp.arena, int, sum);
-
-    for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
-    {
-        int idx0 = mesh->indices[faceIndex * 4 + 0];
-        int idx1 = mesh->indices[faceIndex * 4 + 1];
-        int idx2 = mesh->indices[faceIndex * 4 + 2];
-        int idx3 = mesh->indices[faceIndex * 4 + 3];
-
-        Vec2f uv00 = mesh->uv[idx0];
-        Vec2f uv10 = mesh->uv[idx1];
-        Vec2f uv11 = mesh->uv[idx2];
-        Vec2f uv01 = mesh->uv[idx3];
-
-        Vec2f bbMin = Min(Min(uv00, uv10), Min(uv11, uv01));
-        Vec2f bbMax = Max(Max(uv00, uv10), Max(uv11, uv01));
-
-        Vec2i bbiMin = Clamp(Vec2i(bbMin.x * sqrtNumCells, bbMin.y * sqrtNumCells), Vec2i(0),
-                             Vec2i(sqrtNumCells - 1));
-        Vec2i bbiMax = Clamp(Vec2i(bbMax.x * sqrtNumCells, bbMax.y * sqrtNumCells), Vec2i(0),
-                             Vec2i(sqrtNumCells - 1));
-
-        for (int v = bbiMin.y; v < bbiMax.y; v++)
+        for (int faceIndex = 0; faceIndex < numFaces; faceIndex++)
         {
-            for (int u = bbiMin.x; u < bbiMax.y; u++)
+            int idx0 = mesh->indices[faceIndex * 4 + 0];
+            int idx1 = mesh->indices[faceIndex * 4 + 1];
+            int idx2 = mesh->indices[faceIndex * 4 + 2];
+            int idx3 = mesh->indices[faceIndex * 4 + 3];
+
+            Vec2f uv00 = mesh->uv[idx0];
+            Vec2f uv10 = mesh->uv[idx1];
+            Vec2f uv11 = mesh->uv[idx2];
+            Vec2f uv01 = mesh->uv[idx3];
+
+            // Find tile, assumes uvs for a face are within the same tile
+            int tileU = (int)uv00.x;
+            int tileV = (int)uv00.y;
+
+            tileIsPopulated[tileV * numTilesU + tileU] = true;
+
+            Assert((int)uv10.x == tileU && (int)uv11.x == tileU && (int)uv01.x == tileU);
+            Assert((int)uv10.y == tileV && (int)uv11.y == tileV && (int)uv01.y == tileV);
+            Vec2f tile(tileU, tileV);
+            uv00 -= tile;
+            uv01 -= tile;
+            uv11 -= tile;
+            uv10 -= tile;
+
+            Vec2f bbMin = Min(Min(uv00, uv10), Min(uv11, uv01));
+            Vec2f bbMax = Max(Max(uv00, uv10), Max(uv11, uv01));
+
+            Vec2i bbiMin = Clamp(Vec2i(bbMin.x * sqrtNumCells, bbMin.y * sqrtNumCells),
+                                 Vec2i(0), Vec2i(sqrtNumCells - 1));
+            Vec2i bbiMax = Clamp(Vec2i(bbMax.x * sqrtNumCells, bbMax.y * sqrtNumCells),
+                                 Vec2i(0), Vec2i(sqrtNumCells - 1));
+            bbiMax       = Max(bbiMax, bbiMin + 1);
+
+            for (int v = bbiMin.y; v < bbiMax.y; v++)
             {
-                int index = v * sqrtNumCells + u;
-                Assert(index < numCells);
-                faceData[offsets1[index]++] = faceIndex;
+                for (int u = bbiMin.x; u < bbiMax.x; u++)
+                {
+                    int index = (numTilesU * tileV + tileU) * numCells + v * sqrtNumCells + u;
+                    Assert(index < numTiles * numCells + 1);
+                    if (i == 0) tileOffsets1[index]++;
+                    else faceData[tileOffsets1[index]++] = faceIndex;
+                }
             }
         }
     }
@@ -306,11 +313,11 @@ void ConvertPtexToUVTexture(string textureFilename, string meshFilename)
         // Find the face that contains this uv
         Vec2i gridPos = Vec2i(uv) * sqrtNumCells;
         int gridIndex = gridPos.y * sqrtNumCells + gridPos.x;
-        int gridCount = offsets[gridIndex + 1] - offsets[gridIndex];
+        int gridCount = tileOffsets[gridIndex + 1] - tileOffsets[gridIndex];
 
         for (int faceIndexIndex = 0; faceIndexIndex < gridCount; faceIndexIndex++)
         {
-            int faceIndex = faceData[faceIndexIndex + offsets[gridIndex]];
+            int faceIndex = faceData[faceIndexIndex + tileOffsets[gridIndex]];
 
             int idx0 = mesh->indices[faceIndex * 4 + 0];
             int idx1 = mesh->indices[faceIndex * 4 + 1];
@@ -382,6 +389,7 @@ void ConvertPtexToUVTexture(string textureFilename, string meshFilename)
                 }
             }
 
+#if 0
             u32 width =
                 Min(gpuSubmissionWidth, textureWidth - submissionX * gpuSubmissionWidth);
             u32 height =
@@ -440,6 +448,7 @@ void ConvertPtexToUVTexture(string textureFilename, string meshFilename)
                     width >>= 1;
                 }
             });
+#endif
         }
     }
 
@@ -487,7 +496,6 @@ int main(int argc, char **argv)
     }
     else
     {
-
         std::vector<string> directoryStack;
         directoryStack.push_back(filename);
         while (!directoryStack.empty())
@@ -512,6 +520,11 @@ int main(int argc, char **argv)
 
     InitializePtex(1, gigabytes(1));
 
+    ValidationMode mode = ValidationMode::Verbose;
+    Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
+    device              = v;
+
+#if 0
     Scheduler::Counter counter = {};
     for (string file : files)
     {
@@ -534,4 +547,9 @@ int main(int argc, char **argv)
             }
         });
     }
+#endif
+
+    ConvertPtexToUVTexture(
+        "../../data/island/textures/isMountainB/Color/mountainb0001_geo.ptx",
+        "../../data/island/pbrt-v4/obj/isMountainB/isMountainB_0.obj");
 }
