@@ -137,7 +137,6 @@ public:
 extern PtexInpHandler ptexInputHandler;
 
 struct PtexTexture;
-class Ptex::PtexTexture;
 
 enum EdgeId
 {
@@ -337,7 +336,7 @@ struct VirtualTextureManager
     void Callback();
 };
 
-void InitializePtex(u32 maxFiles = 400, u32 maxMem = gigabytes(8));
+void InitializePtex(u32 maxFiles = 400, u64 maxMem = gigabytes(8));
 PaddedImage GenerateMips(Arena *arena, PaddedImage &input, u32 width, u32 height, Vec2u scale,
                          u32 borderSize);
 string Convert(Arena *arena, PtexTexture *texture, int filterWidth = 4);

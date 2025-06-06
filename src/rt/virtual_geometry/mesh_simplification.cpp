@@ -1,6 +1,8 @@
+#include "../hash.h"
+#include "../memory.h"
+#include "../thread_context.h"
 #include "../bit_packing.h"
 #include "../dgfs.h"
-#include "../scene.h"
 #include "mesh_simplification.h"
 
 namespace rt
@@ -588,6 +590,12 @@ struct Heap
     }
 };
 
+MeshSimplifier::MeshSimplifier(f32 *vertexData, u32 numVertices, u32 *indices, u32 numIndices)
+    : vertexData(vertexData), indices(indices), numVertices(numVertices),
+      numIndices(numIndices)
+{
+}
+
 Vec3f &MeshSimplifier::GetPosition(u32 vertexIndex)
 {
     return *(Vec3f *)(vertexData + (3 + numAttributes) * vertexIndex);
@@ -727,8 +735,9 @@ f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
     return error;
 }
 
-Mesh MeshSimplifier::Simplify(Arena *arena, Mesh &mesh, u32 limitNumVerts, u32 limitNumTris,
-                              u32 targetError, u32 limitError)
+f32 MeshSimplifier::Simplify(Arena *arena, u32 targetNumVerts, u32 targetNumTris,
+                             f32 targetError, u32 limitNumVerts, u32 limitNumTris,
+                             f32 limitError)
 {
     ScratchArena scratch;
     // Follows section 4.1 of the quadric error paper
@@ -740,11 +749,7 @@ Mesh MeshSimplifier::Simplify(Arena *arena, Mesh &mesh, u32 limitNumVerts, u32 l
 
     numAttributes = 0;
 
-    vertexData =
-        PushArrayNoZero(scratch.temp.arena, f32, (3 * numAttributes) * mesh.numVertices);
-    MemoryCopy(vertexData, mesh.p, sizeof(Vec3f) * mesh.numVertices);
-
-    int numTriangles = mesh.numIndices / 3;
+    u32 numTriangles = numIndices / 3;
 
     f32 *attributeWeights = 0;
 
@@ -756,9 +761,9 @@ Mesh MeshSimplifier::Simplify(Arena *arena, Mesh &mesh, u32 limitNumVerts, u32 l
         int index1 = 3 * triIndex + 1;
         int index2 = 3 * triIndex + 2;
 
-        Vec3f p0 = mesh.p[mesh.indices[index0]];
-        Vec3f p1 = mesh.p[mesh.indices[index1]];
-        Vec3f p2 = mesh.p[mesh.indices[index2]];
+        Vec3f p0 = GetPosition(indices[index0]);
+        Vec3f p1 = GetPosition(indices[index1]);
+        Vec3f p2 = GetPosition(indices[index2]);
 
         triangleQuadrics.push_back(Quadric(p0, p1, p2, GetAttributes(index0),
                                            GetAttributes(index1), GetAttributes(index2),
@@ -766,15 +771,14 @@ Mesh MeshSimplifier::Simplify(Arena *arena, Mesh &mesh, u32 limitNumVerts, u32 l
     }
 
     // Generate graph of vertices to triangles. These point into the triangleData array.
-    int numVertices = mesh.numVertices;
-    vertexNodes     = PushArray(scratch.temp.arena, VertexGraphNode, numVertices);
+    vertexNodes = PushArray(scratch.temp.arena, VertexGraphNode, numVertices);
 
     for (int triIndex = 0; triIndex < numTriangles; triIndex++)
     {
         int baseIndexIndex = 3 * triIndex;
         for (int vertIndex = 0; vertIndex < 3; vertIndex++)
         {
-            int index = mesh.indices[baseIndexIndex + vertIndex];
+            int index = indices[baseIndexIndex + vertIndex];
             vertexNodes[index].count++;
         }
     }
@@ -804,8 +808,8 @@ Mesh MeshSimplifier::Simplify(Arena *arena, Mesh &mesh, u32 limitNumVerts, u32 l
             int indexIndex0 = baseIndexIndex + vertIndex;
             int indexIndex1 = baseIndexIndex + next[vertIndex];
 
-            int vertexIndex0 = mesh.indices[indexIndex0];
-            int vertexIndex1 = mesh.indices[indexIndex1];
+            int vertexIndex0 = indices[indexIndex0];
+            int vertexIndex1 = indices[indexIndex1];
             Assert(vertexIndex0 != vertexIndex1);
 
             indexData[vertexNodes[vertexIndex0].offset++] = indexIndex0;
@@ -850,6 +854,9 @@ Mesh MeshSimplifier::Simplify(Arena *arena, Mesh &mesh, u32 limitNumVerts, u32 l
     BitVector triangleIsRemoved(scratch.temp.arena, numTriangles);
     BitVector vertexIsRemoved(scratch.temp.arena, numVertices);
 
+    f32 maxError              = 0.f;
+    u32 remainingNumVertices  = numVertices;
+    u32 remainingNumTriangles = numTriangles;
     for (;;)
     {
         int pairIndex = heap.Pop();
@@ -860,9 +867,23 @@ Mesh MeshSimplifier::Simplify(Arena *arena, Mesh &mesh, u32 limitNumVerts, u32 l
         Vec3f newPosition;
         f32 error = EvaluatePair(pair, &newPosition);
 
+        maxError = Max(maxError, error);
+
+        if (maxError >= targetError && remainingNumVertices <= targetNumVerts &&
+            remainingNumTriangles <= targetNumTris)
+        {
+            break;
+        }
+        if (maxError >= limitError || remainingNumVertices <= limitNumTris ||
+            remainingNumTriangles <= limitNumTris)
+        {
+            break;
+        }
+
         // Move the position and change the attribute data
         GetPosition(pair.index0)      = newPosition;
         vertexNodes[pair.index0].next = pair.index1;
+        remainingNumVertices--;
 
         // Find the triangles that would be collapsed
         StaticArray<u32> movedTriangles(scratch.temp.arena, 24);
@@ -883,6 +904,10 @@ Mesh MeshSimplifier::Simplify(Arena *arena, Mesh &mesh, u32 limitNumVerts, u32 l
                     int testPairIndex = triangleToPairIndices[3 * triangle + pairIndexIndex];
                     if (testPairIndex == pairIndex)
                     {
+                        if (!triangleIsRemoved.GetBit(triangle))
+                        {
+                            remainingNumTriangles--;
+                        }
                         triangleIsRemoved.SetBit(triangle);
                         indexData[node->offset + j] =
                             indexData[node->offset + node->count - 1];
@@ -957,13 +982,7 @@ Mesh MeshSimplifier::Simplify(Arena *arena, Mesh &mesh, u32 limitNumVerts, u32 l
     f32 *finalVertexData = PushArrayNoZero(arena, f32, vertexCount * (3 + numAttributes));
     MemoryCopy(finalVertexData, vertexData, vertexDataStride * vertexCount);
 
-    Mesh result        = {};
-    result.p           = (Vec3f *)finalVertexData;
-    result.indices     = finalIndices;
-    result.numVertices = vertexCount;
-    result.numIndices  = indexCount;
-
-    return result;
+    return maxError;
 }
 
 #if 0

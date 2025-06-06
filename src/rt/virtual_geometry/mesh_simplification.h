@@ -80,6 +80,8 @@ struct MeshSimplifier
     // Contains position, and all attributes (normals, uvs, etc.)
     f32 *vertexData;
     u32 *indices;
+    u32 numVertices;
+    u32 numIndices;
     u32 numAttributes;
 
     // Quadrics
@@ -91,12 +93,14 @@ struct MeshSimplifier
     u32 *indexData;
     u32 *triangleToPairIndices;
 
+    MeshSimplifier(f32 *vertexData, u32 numVertices, u32 *indices, u32 numIndices);
+
     Vec3f &GetPosition(u32 vertexIndex);
     f32 *GetAttributes(u32 vertexIndex);
     bool CheckInversion(const Vec3f &newPosition, u32 vertexIndex0, u32 vertexIndex1);
     f32 EvaluatePair(Pair &pair, Vec3f *newPosition = 0);
-    Mesh Simplify(Arena *arena, Mesh &mesh, u32 limitNumVerts, u32 limitNumTris,
-                  u32 targetError, u32 limitError);
+    f32 Simplify(Arena *arena, u32 targetNumVerts, u32 targetNumTris, f32 targetError,
+                 u32 limitNumVerts, u32 limitNumTris, f32 limitError);
 };
 
 } // namespace rt

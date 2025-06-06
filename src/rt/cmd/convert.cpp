@@ -23,28 +23,6 @@
 #include "../graphics/ptex.h"
 #include "../graphics/vulkan.h"
 #include "../virtual_geometry/mesh_simplification.h"
-#include "../base.cpp"
-#include "../parallel.cpp"
-#include "../thread_statistics.cpp"
-#include "../memory.cpp"
-#include "../string.cpp"
-#include "../thread_context.cpp"
-
-namespace rt
-{
-
-struct Mesh
-{
-    Vec3f *p     = 0;
-    Vec3f *n     = 0;
-    Vec2f *uv    = 0;
-    u32 *indices = 0;
-    u32 numIndices;
-    u32 numVertices;
-    u32 numFaces;
-};
-} // namespace rt
-
 #include "../handles.h"
 #include "../scene_load.h"
 
@@ -65,7 +43,7 @@ struct ShapeType
     int transformIndex;
 
     // Moana only
-    Mesh *mesh;
+    OfflineMesh *mesh;
     bool cancelled;
 };
 
@@ -95,9 +73,9 @@ typedef HashMap<NamedPacket> SceneHashMap;
 // leaflet0123 is improperly mapped to stem0004. switched material to isDunes:archivePalm
 
 // MOANA ONLY
-struct MoanaOBJMeshes
+struct MoanaOBJOfflineMeshes
 {
-    Mesh *meshes;
+    OfflineMesh *meshes;
     int total;
     int num;
     int offset;
@@ -119,7 +97,7 @@ struct PBRTFileInfo
     ScenePacket packets[MAX] = {};
     ChunkedLinkedList<ShapeType, MemoryType_Shape> shapes;
     // MOANA ONLY
-    std::vector<MoanaOBJMeshes> objMeshes;
+    std::vector<MoanaOBJOfflineMeshes> objOfflineMeshes;
     ChunkedLinkedList<InstanceType, MemoryType_Instance> fileInstances;
     u32 numInstances;
 
@@ -146,10 +124,10 @@ struct PBRTFileInfo
 
         // MOANA ONLY
         u32 shapeOffset = shapes.totalCount;
-        for (auto objMesh : import->objMeshes)
+        for (auto objOfflineMesh : import->objOfflineMeshes)
         {
-            objMesh.offset += shapeOffset;
-            objMeshes.push_back(objMesh);
+            objOfflineMesh.offset += shapeOffset;
+            objOfflineMeshes.push_back(objOfflineMesh);
         }
 
         shapes.Merge(&import->shapes);
@@ -681,11 +659,11 @@ bool LoadMoanaOBJ(Arena *arena, PBRTFileInfo *state, string objFile)
     if (OS_FileExists(objFile))
     {
         int total, num;
-        Mesh *meshes = LoadObj(arena, objFile, total, num);
-        Assert(state->objMeshes.size() == 0);
+        OfflineMesh *meshes = LoadObj(arena, objFile, total, num);
+        Assert(state->objOfflineMeshes.size() == 0);
         Assert(state->shapes.totalCount == 0);
-        state->objMeshes.emplace_back(
-            MoanaOBJMeshes{meshes, total, num, (int)state->shapes.totalCount});
+        state->objOfflineMeshes.emplace_back(
+            MoanaOBJOfflineMeshes{meshes, total, num, (int)state->shapes.totalCount});
         return true;
     }
     return false;
@@ -777,8 +755,8 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
     auto &textureHashMap = sls->textureHashMaps[threadIndex];
     auto *lights         = &sls->lights[threadIndex];
 
-    bool isMoana       = false;
-    int moanaMeshIndex = 0;
+    bool isMoana              = false;
+    int moanaOfflineMeshIndex = 0;
 
     if (moanaObjFile.size)
     {
@@ -820,10 +798,10 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             OS_UnmapFile(tokenizer.input.str);
             scheduler.Wait(&state->counter);
 
-            if (isMoana && !state->objMeshes.empty())
+            if (isMoana && !state->objOfflineMeshes.empty())
             {
-                MoanaOBJMeshes &meshes = state->objMeshes.back();
-                if (moanaMeshIndex != meshes.num)
+                MoanaOBJOfflineMeshes &meshes = state->objOfflineMeshes.back();
+                if (moanaOfflineMeshIndex != meshes.num)
                 {
                     Print("%S, num: %i, imports: %i\n", currentFilename, meshes.num,
                           state->numImports);
@@ -835,14 +813,15 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                             for (int j = 0; j < node->count; j++)
                             {
                                 node->values[j].packet.type = "catclark"_sid;
-                                if (moanaMeshIndex >= meshes.num)
+                                if (moanaOfflineMeshIndex >= meshes.num)
                                 {
                                     node->values[j].cancelled = true;
                                     node->values[j].mesh      = 0;
                                 }
                                 else
                                 {
-                                    node->values[j].mesh = &meshes.meshes[moanaMeshIndex++];
+                                    node->values[j].mesh =
+                                        &meshes.meshes[moanaOfflineMeshIndex++];
                                 }
                             }
                         }
@@ -1198,8 +1177,8 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
 
                 if (isMoana)
                 {
-                    newState->objMeshes = std::move(state->objMeshes);
-                    state->objMeshes.clear();
+                    newState->objOfflineMeshes = std::move(state->objOfflineMeshes);
+                    state->objOfflineMeshes.clear();
                 }
 
                 string objectFileName = PushStr8F(threadArena, "objects/%S_obj.rtscene",
@@ -1335,13 +1314,13 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                     }
                     else if (packet->parameterNames[i] == "filename"_sid)
                     {
-                        string plyMeshFile;
-                        plyMeshFile.str  = packet->bytes[i];
-                        plyMeshFile.size = packet->sizes[i];
+                        string plyOfflineMeshFile;
+                        plyOfflineMeshFile.str  = packet->bytes[i];
+                        plyOfflineMeshFile.size = packet->sizes[i];
 
                         // TODO: this is hardcoded for the moana island scene
-                        if (GetFileExtension(plyMeshFile) == "obj" ||
-                            CheckQuadPLY(StrConcat(temp.arena, directory, plyMeshFile)))
+                        if (GetFileExtension(plyOfflineMeshFile) == "obj" ||
+                            CheckQuadPLY(StrConcat(temp.arena, directory, plyOfflineMeshFile)))
                             packet->type = "quadmesh"_sid;
                         else packet->type = "trianglemesh"_sid;
                     }
@@ -1361,17 +1340,17 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 shape->cancelled = false;
                 if (isMoana)
                 {
-                    MoanaOBJMeshes &meshes = state->objMeshes.back();
-                    Assert(moanaMeshIndex < meshes.total);
+                    MoanaOBJOfflineMeshes &meshes = state->objOfflineMeshes.back();
+                    Assert(moanaOfflineMeshIndex < meshes.total);
                     packet->type = "catclark"_sid;
-                    if (moanaMeshIndex >= meshes.num)
+                    if (moanaOfflineMeshIndex >= meshes.num)
                     {
                         shape->cancelled = true;
                         shape->mesh      = 0;
                     }
                     else
                     {
-                        shape->mesh = &meshes.meshes[moanaMeshIndex++];
+                        shape->mesh = &meshes.meshes[moanaOfflineMeshIndex++];
                     }
                 }
                 else
@@ -1650,8 +1629,8 @@ void WriteData(StringBuilder *builder, StringBuilderMapped *dataBuilder, void *p
     }
 }
 
-void WriteMesh(Mesh &mesh, StringBuilder &builder, StringBuilderMapped &dataBuilder,
-               u64 *builderOffset = 0, u64 cap = 0)
+void WriteOfflineMesh(OfflineMesh &mesh, StringBuilder &builder,
+                      StringBuilderMapped &dataBuilder, u64 *builderOffset = 0, u64 cap = 0)
 {
     WriteData(&builder, &dataBuilder, mesh.p, mesh.numVertices * sizeof(Vec3f), "p",
               builderOffset, cap);
@@ -1673,8 +1652,8 @@ int ComputeShapeSize(Arena *arena, ShapeType *shape, string directory)
     if (shape->cancelled) return 0;
     if (shape->mesh)
     {
-        Mesh &mesh = *shape->mesh;
-        int total  = mesh.numVertices * sizeof(Vec3f);
+        OfflineMesh &mesh = *shape->mesh;
+        int total         = mesh.numVertices * sizeof(Vec3f);
         total += mesh.n ? mesh.numVertices * sizeof(Vec3f) : 0;
         total += mesh.uv ? mesh.numVertices * sizeof(Vec2f) : 0;
         total += mesh.indices ? mesh.numIndices * sizeof(int) : 0;
@@ -1693,9 +1672,9 @@ int ComputeShapeSize(Arena *arena, ShapeType *shape, string directory)
                 GeometryType type = ConvertStringIDToGeometryType(shape->packet.type);
                 Assert(type == GeometryType::TriangleMesh);
 
-                Mesh mesh    = LoadPLY(arena, filename, type);
-                shape->mesh  = PushStruct(arena, Mesh);
-                *shape->mesh = mesh;
+                OfflineMesh mesh = LoadPLY(arena, filename, type);
+                shape->mesh      = PushStruct(arena, OfflineMesh);
+                *shape->mesh     = mesh;
 
                 return ComputeShapeSize(arena, shape, directory);
             }
@@ -1733,33 +1712,34 @@ i32 WriteData(ScenePacket *packet, StringBuilder *builder, StringBuilderMapped *
     return -1;
 }
 
-void WriteMesh(StringBuilder &builder, StringBuilderMapped &dataBuilder, ShapeType *shape,
-               string directory, GeometryType type, u64 *builderOffset = 0, u64 cap = 0)
+void WriteOfflineMesh(StringBuilder &builder, StringBuilderMapped &dataBuilder,
+                      ShapeType *shape, string directory, GeometryType type,
+                      u64 *builderOffset = 0, u64 cap = 0)
 {
     if (shape->mesh)
     {
-        WriteMesh(*shape->mesh, builder, dataBuilder, builderOffset, cap);
+        WriteOfflineMesh(*shape->mesh, builder, dataBuilder, builderOffset, cap);
         return;
     }
 
-    TempArena temp      = ScratchStart(&builder.arena, 1);
-    ScenePacket *packet = &shape->packet;
-    bool fileMesh       = false;
+    TempArena temp       = ScratchStart(&builder.arena, 1);
+    ScenePacket *packet  = &shape->packet;
+    bool fileOfflineMesh = false;
     for (u32 c = 0; c < packet->parameterCount; c++)
     {
         if (packet->parameterNames[c] == "filename"_sid)
         {
             string filename =
                 StrConcat(temp.arena, directory, Str8(packet->bytes[c], packet->sizes[c]));
-            Mesh mesh = LoadPLY(temp.arena, filename, type);
+            OfflineMesh mesh = LoadPLY(temp.arena, filename, type);
             Assert(GetFileExtension(filename) == "ply");
 
-            WriteMesh(mesh, builder, dataBuilder, builderOffset, cap);
-            fileMesh = true;
+            WriteOfflineMesh(mesh, builder, dataBuilder, builderOffset, cap);
+            fileOfflineMesh = true;
             break;
         }
     }
-    if (!fileMesh)
+    if (!fileOfflineMesh)
     {
         u32 numVertices = 0;
         u32 numIndices  = 0;
@@ -1820,22 +1800,22 @@ void WriteShape(PBRTFileInfo *info, ShapeType *shapeType, StringBuilder &builder
         case "catclark"_sid:
         {
             Put(&builder, "Catclark ");
-            WriteMesh(builder, dataBuilder, shapeType, directory, GeometryType::CatmullClark,
-                      builderOffset, cap);
+            WriteOfflineMesh(builder, dataBuilder, shapeType, directory,
+                             GeometryType::CatmullClark, builderOffset, cap);
         }
         break;
         case "quadmesh"_sid:
         {
             Put(&builder, "Quad ");
-            WriteMesh(builder, dataBuilder, shapeType, directory, GeometryType::QuadMesh,
-                      builderOffset, cap);
+            WriteOfflineMesh(builder, dataBuilder, shapeType, directory,
+                             GeometryType::QuadMesh, builderOffset, cap);
         }
         break;
         case "trianglemesh"_sid:
         {
             Put(&builder, "Tri ");
-            WriteMesh(builder, dataBuilder, shapeType, directory, GeometryType::TriangleMesh,
-                      builderOffset, cap);
+            WriteOfflineMesh(builder, dataBuilder, shapeType, directory,
+                             GeometryType::TriangleMesh, builderOffset, cap);
         }
         break;
         // case "curve"_sid:
@@ -2226,10 +2206,19 @@ int main(int argc, char **argv)
     Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
     device              = v;
 
-    string testFilename = "../../data/island/pbrt-v4/obj/isMountainB/isMountainB_1.obj";
-    int numMeshes, actualNumMeshes;
+    string testFilename = "../../data/island/pbrt-v4/obj/osOcean/osOcean.obj";
+    int numOfflineMeshes, actualNumOfflineMeshes;
 
-    LoadObjWithWedges(arena, testFilename, numMeshes);
+    OfflineMesh *meshes = LoadObjWithWedges(arena, testFilename, numOfflineMeshes);
+
+    OfflineMesh *mesh = &meshes[1];
+    u32 targetNumTris = mesh->numIndices / 6;
+    u32 limitNumTris  = 256;
+    MeshSimplifier simplifier((f32 *)mesh->p, mesh->numVertices, mesh->indices,
+                                     mesh->numIndices);
+    f32 maxError = simplifier.Simplify(arena, mesh->numVertices, targetNumTris, 0.f, 0,
+                                       limitNumTris, FLT_MAX);
+    printf("test error: %f\n", maxError);
 
     // LoadPBRT(arena, filename);
 

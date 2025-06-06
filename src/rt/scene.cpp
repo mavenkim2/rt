@@ -7,7 +7,6 @@
 #include "integrate.h"
 #include "math/matx.h"
 #include "memory.h"
-#include "scene_load.h"
 #include "simd_integrate.h"
 #include "spectrum.h"
 #include "shader_interop/hit_shaderinterop.h"

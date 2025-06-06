@@ -73,7 +73,7 @@ Ptex::PtexCache *cache;
 PtexErrHandler errorHandler;
 PtexInpHandler ptexInputHandler;
 
-void InitializePtex(u32 maxFiles, u32 maxMem)
+void InitializePtex(u32 maxFiles, u64 maxMem)
 {
     cache = Ptex::PtexCache::create(maxFiles, maxMem, true, &ptexInputHandler, &errorHandler);
 }

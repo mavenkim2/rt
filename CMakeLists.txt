@@ -186,7 +186,6 @@ target_link_libraries(thread_context PRIVATE ${deps})
 
 set(deps  
     ${deps}
-    # thread_context
     ${ZLIB_LIBRARY}
     ${PTEX_LIBRARY}
     ${OSD_LIBRARY}
@@ -199,12 +198,12 @@ install (EXPORT THREAD_CONTEXT DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/thread
 # convert
 add_executable(convert 
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/cmd/convert.cpp
-    ${PLATFORM_SOURCE_FILES}
     ${RT_VULKAN_SOURCE_FILES}
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/ptex.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/debug.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/virtual_geometry/mesh_simplification.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bit_packing.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/parallel.cpp
 )
 target_include_directories(convert PRIVATE 
     ${PTEX_INCLUDE}
@@ -219,7 +218,6 @@ target_compile_options(convert PRIVATE ${RT_CXX_FLAGS})
 # generate_uvs
 add_executable(generate_uvs 
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/cmd/generate_uvs.cpp
-    ${PLATFORM_SOURCE_FILES}
     ${RT_VULKAN_SOURCE_FILES}
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/ptex.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/debug.cpp

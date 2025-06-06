@@ -22,23 +22,8 @@
 #include "../graphics/ptex.h"
 #include "../graphics/vulkan.h"
 #include "../graphics/block_compressor.h"
+
 #include <cstdlib>
-
-namespace rt
-{
-
-struct Mesh
-{
-    Vec3f *p     = 0;
-    Vec3f *n     = 0;
-    Vec2f *uv    = 0;
-    u32 *indices = 0;
-    u32 numIndices;
-    u32 numVertices;
-    u32 numFaces;
-};
-
-} // namespace rt
 
 #include "../handles.h"
 #include "../scene_load.h"
@@ -46,7 +31,7 @@ struct Mesh
 namespace rt
 {
 
-void WriteQuadOBJ(Mesh &mesh, string filename)
+void WriteQuadOBJ(OfflineMesh &mesh, string filename)
 {
     StringBuilder builder = {};
     ScratchArena scratch;
@@ -151,7 +136,7 @@ void ConvertPtexToUVTexture(string textureFilename, string meshFilename)
     ScratchArena scratch;
 
     int numMeshes;
-    Mesh *mesh = LoadObjWithWedges(scratch.temp.arena, meshFilename, numMeshes);
+    OfflineMesh *mesh = LoadObjWithWedges(scratch.temp.arena, meshFilename, numMeshes);
     Assert(numMeshes == 1);
 
     Ptex::String error;
@@ -529,7 +514,7 @@ int main(int argc, char **argv)
     for (string file : files)
     {
         int numMeshes;
-        Mesh *meshes = LoadObjWithWedges(arena, file, numMeshes);
+        OfflineMesh *meshes = LoadObjWithWedges(arena, file, numMeshes);
 
         string f = RemoveFileExtension(file);
 

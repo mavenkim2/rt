@@ -25,6 +25,7 @@ struct string
 // Char
 //
 b32 CharIsWhitespace(u8 c);
+b32 CharIsBlank(u8 c);
 b32 CharIsAlpha(u8 c);
 b32 CharIsAlphaUpper(u8 c);
 b32 CharIsAlphaLower(u8 c);
@@ -67,6 +68,7 @@ b8 Contains(string haystack, string needle, MatchFlags flags = MatchFlag_CaseIns
 u32 ConvertToUint(string word);
 string SkipToNextWord(string line);
 string GetFirstWord(string line);
+string GetNthWord(string line, u32 n);
 
 //////////////////////////////
 // File Path Helpers
@@ -143,6 +145,7 @@ u64 AllocateSpace(StringBuilderMapped *builder, u64 size);
 void *GetMappedPtr(StringBuilderMapped *builder, u64 offset);
 void Put(StringBuilderMapped *builder, void *data, u64 size, u64 offset);
 u64 Put(StringBuilderMapped *builder, string str);
+void Put(StringBuilderMapped *builder, const char *fmt, ...);
 
 struct Tokenizer
 {
@@ -172,11 +175,18 @@ string ReadLine(Tokenizer *tokenizer);
 void Get(Tokenizer *tokenizer, void *ptr, u32 size);
 u8 *GetPointer_(Tokenizer *tokenizer);
 b32 Compare(u8 *ptr, string str);
+bool GetBetweenPair(string &out, Tokenizer *tokenizer, const u8 ch);
+u32 CountBetweenPair(Tokenizer *tokenizer, const u8 ch);
+b32 IsAlpha(Tokenizer *tokenizer);
+b32 IsDigit(Tokenizer *tokenizer);
+b32 IsAlphaNumeric(Tokenizer *tokenizer);
+b32 IsBlank(Tokenizer *tokenizer);
 
 u64 Put_(StringBuilder *builder, void *data, u64 size);
 u64 PutData(StringBuilder *builder, void *data, u64 size);
 u64 Put(StringBuilder *builder, string str);
 u64 Put(StringBuilder *builder, u32 value);
+StringBuilder ConcatBuilders(StringBuilder *a, StringBuilder *b);
 string CombineBuilderNodes(StringBuilder *builder);
 b32 WriteFileMapped(StringBuilder *builder, string filename);
 b32 WriteFileMapped(StringBuilder *builder, StringBuilderMapped *mappedBuilder,

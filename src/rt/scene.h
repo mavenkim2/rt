@@ -11,6 +11,7 @@
 #include "handles.h"
 #include "lights.h"
 #include "parallel.h"
+#include "scene_load.h"
 #include "subdivision.h"
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/util/GridHandle.h>

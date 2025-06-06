@@ -8,9 +8,20 @@
 namespace rt
 {
 
+struct OfflineMesh
+{
+    Vec3f *p     = 0;
+    Vec3f *n     = 0;
+    Vec2f *uv    = 0;
+    u32 *indices = 0;
+    u32 numIndices;
+    u32 numVertices;
+    u32 numFaces;
+};
+
 static const u32 MAX_PARAMETER_COUNT = 16;
 
-GeometryType ConvertStringIDToGeometryType(StringId id)
+inline GeometryType ConvertStringIDToGeometryType(StringId id)
 {
     switch (id)
     {
@@ -35,7 +46,7 @@ enum class DataType
     Spectrum,
 };
 
-MaterialTypes ConvertStringToMaterialType(string type)
+inline MaterialTypes ConvertStringToMaterialType(string type)
 {
     if (type == "diffuse") return MaterialTypes::Diffuse;
     else if (type == "diffusetransmission") return MaterialTypes::DiffuseTransmission;
@@ -68,7 +79,7 @@ enum class TextureType
 };
 ENUM_CLASS_FLAGS(TextureType)
 
-TextureType ConvertStringToTextureType(string type)
+inline TextureType ConvertStringToTextureType(string type)
 {
     if (type == "ptex") return TextureType::ptex;
     // else if (type == "imagemap") return TextureType::imagemap;
@@ -192,7 +203,7 @@ struct ScenePacket
     }
 };
 
-bool CheckQuadPLY(string filename)
+inline bool CheckQuadPLY(string filename)
 {
     string buffer = OS_MapFileRead(filename); // OS_ReadFile(arena, filename);
     Tokenizer tokenizer;
@@ -272,7 +283,7 @@ inline u32 GetTypeStride(string word)
     return 0;
 }
 
-Mesh LoadPLY(Arena *arena, string filename, GeometryType type)
+inline OfflineMesh LoadPLY(Arena *arena, string filename, GeometryType type)
 {
     string buffer = OS_MapFileRead(filename); // OS_ReadFile(arena, filename);
     Tokenizer tokenizer;
@@ -382,7 +393,7 @@ Mesh LoadPLY(Arena *arena, string filename, GeometryType type)
     bool isQuad = type == GeometryType::QuadMesh;
 
     // Read binary data
-    Mesh mesh        = {};
+    OfflineMesh mesh = {};
     mesh.numVertices = numVertices;
     mesh.numIndices  = numFaces * 3;
     mesh.numFaces    = isQuad ? mesh.numFaces / 2 : numFaces;
@@ -441,17 +452,17 @@ Mesh LoadPLY(Arena *arena, string filename, GeometryType type)
     return mesh;
 }
 
-Mesh LoadQuadPLY(Arena *arena, string filename)
+inline OfflineMesh LoadQuadPLY(Arena *arena, string filename)
 {
     return LoadPLY(arena, filename, GeometryType::QuadMesh);
 }
 
-Mesh LoadTrianglePLY(Arena *arena, string filename)
+inline OfflineMesh LoadTrianglePLY(Arena *arena, string filename)
 {
     return LoadPLY(arena, filename, GeometryType::TriangleMesh);
 }
 
-Mesh *LoadObj(Arena *arena, string filename, int &numMeshes, int &actualNumMeshes)
+inline OfflineMesh *LoadObj(Arena *arena, string filename, int &numMeshes, int &actualNumMeshes)
 {
     TempArena temp = ScratchStart(0, 0);
     string buffer  = OS_MapFileRead(filename);
@@ -466,7 +477,7 @@ Mesh *LoadObj(Arena *arena, string filename, int &numMeshes, int &actualNumMeshe
     std::vector<Vec3i> indices;
     indices.reserve(128);
 
-    std::vector<Mesh> meshes;
+    std::vector<OfflineMesh> meshes;
     int vertexOffset = 1;
     int normalOffset = 1;
 
@@ -494,7 +505,7 @@ Mesh *LoadObj(Arena *arena, string filename, int &numMeshes, int &actualNumMeshe
                 {
                     if (!repeatedMesh)
                     {
-                        Mesh mesh;
+                        OfflineMesh mesh;
                         mesh.numVertices = (u32)vertices.size();
                         mesh.numIndices  = (u32)indices.size();
 
@@ -610,14 +621,14 @@ Mesh *LoadObj(Arena *arena, string filename, int &numMeshes, int &actualNumMeshe
     }
 
     ScratchEnd(temp);
-    numMeshes          = totalNumMeshes;
-    actualNumMeshes    = (int)meshes.size();
-    Mesh *outputMeshes = PushArrayNoZero(arena, Mesh, actualNumMeshes);
-    MemoryCopy(outputMeshes, meshes.data(), sizeof(Mesh) * actualNumMeshes);
+    numMeshes                 = totalNumMeshes;
+    actualNumMeshes           = (int)meshes.size();
+    OfflineMesh *outputMeshes = PushArrayNoZero(arena, OfflineMesh, actualNumMeshes);
+    MemoryCopy(outputMeshes, meshes.data(), sizeof(OfflineMesh) * actualNumMeshes);
     return outputMeshes;
 }
 
-Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes)
+inline OfflineMesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes)
 {
     TempArena temp = ScratchStart(0, 0);
     string buffer  = OS_MapFileRead(filename);
@@ -634,7 +645,7 @@ Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes)
     std::vector<Vec2f> uvs;
     uvs.reserve(128);
 
-    std::vector<Mesh> meshes;
+    std::vector<OfflineMesh> meshes;
     int vertexOffset = 1;
     int normalOffset = 1;
     int texOffset    = 1;
@@ -669,7 +680,7 @@ Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes)
                 std::vector<Vec3f> newPositions;
                 newPositions.reserve(vertices.size());
                 std::vector<Vec2f> newUvs;
-                newUvs.reserve(uvs.size());
+                if (hasUvs) newUvs.reserve(uvs.size());
                 std::vector<Vec3f> newNormals;
                 newNormals.reserve(normals.size());
 
@@ -680,9 +691,9 @@ Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes)
                 int hashSize = NextPowerOfTwo(numIndices);
                 HashIndex hashTable(temp.arena, hashSize, hashSize);
 
-                Mesh mesh;
-                mesh.numIndices = (u32)indices.size();
-                mesh.indices    = PushArrayNoZero(arena, u32, indices.size());
+                OfflineMesh mesh = {};
+                mesh.numIndices  = (u32)indices.size();
+                mesh.indices     = PushArrayNoZero(arena, u32, indices.size());
 
                 for (u32 i = 0; i < numIndices; i++)
                 {
@@ -737,7 +748,7 @@ Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes)
 
                 mesh.p = PushArrayNoZero(arena, Vec3f, mesh.numVertices);
                 if (hasUvs) mesh.uv = PushArrayNoZero(arena, Vec2f, newUvs.size());
-                mesh.n = PushArrayNoZero(arena, Vec3f, newNormals.size());
+                mesh.n = PushArrayNoZero(arena, Vec3f, mesh.numVertices);
 
                 MemoryCopy(mesh.p, newPositions.data(), sizeof(Vec3f) * newPositions.size());
                 if (hasUvs) MemoryCopy(mesh.uv, newUvs.data(), sizeof(Vec2f) * newUvs.size());
@@ -828,9 +839,9 @@ Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes)
 
     ScratchEnd(temp);
 
-    numMeshes          = totalNumMeshes;
-    Mesh *outputMeshes = PushArrayNoZero(arena, Mesh, numMeshes);
-    MemoryCopy(outputMeshes, meshes.data(), sizeof(Mesh) * numMeshes);
+    numMeshes                 = totalNumMeshes;
+    OfflineMesh *outputMeshes = PushArrayNoZero(arena, OfflineMesh, numMeshes);
+    MemoryCopy(outputMeshes, meshes.data(), sizeof(OfflineMesh) * numMeshes);
     return outputMeshes;
 }
 
