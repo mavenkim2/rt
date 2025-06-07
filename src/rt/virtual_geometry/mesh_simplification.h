@@ -60,15 +60,15 @@ struct Pair
     }
 };
 
+struct VertexGraphNode
+{
+    u32 offset;
+    u32 count;
+    int next;
+};
+
 struct MeshSimplifier
 {
-    struct VertexGraphNode
-    {
-        u32 offset;
-        u32 count;
-        int next;
-    };
-
     // Constants
     f32 lockedPenaty     = 1e8f;
     f32 inversionPenalty = 100.f;

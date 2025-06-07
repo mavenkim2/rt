@@ -9,13 +9,13 @@ namespace rt
 {
 // https://en.wikipedia.org/wiki/LU_decomposition
 template <typename T>
-int LUPDecompose(T *A, int N, double Tol, int *P)
+int LUPDecompose(T *A, int N, T Tol, int *P)
 {
-    for (int i = 0; i <= N; i++) P[i] = i; // Unit permutation matrix, P[N] initialized with N
+    for (int i = 0; i < N; i++) P[i] = i; // Unit permutation matrix, P[N] initialized with N
 
     for (int i = 0; i < N; i++)
     {
-        T maxA   = 0.0;
+        T maxA   = 0;
         int imax = i;
 
         for (int k = i; k < N; k++)
@@ -40,9 +40,6 @@ int LUPDecompose(T *A, int N, double Tol, int *P)
             {
                 Swap(A[N * i + j], A[N * imax + j]);
             }
-
-            // counting pivots starting from N (for determinant)
-            P[N]++;
         }
 
         for (int j = i + 1; j < N; j++)
@@ -79,9 +76,9 @@ void LUPSolve(T *A, int *P, T *b, int N, T *x)
 
 // Due to floating point inaccuracy, use residuals to minimize error
 template <typename T>
-bool LUPSolveIterate(T *A, int *P, T *b, int N, T *x, u32 numIters)
+bool LUPSolveIterate(T *A, T *LU, int *P, T *b, int N, T *x, u32 numIters)
 {
-    LUPSolve(A, P, b, N, x);
+    LUPSolve(LU, P, b, N, x);
 
     ScratchArena scratch;
 
@@ -99,7 +96,7 @@ bool LUPSolveIterate(T *A, int *P, T *b, int N, T *x, u32 numIters)
             }
         }
 
-        LUPSolve(A, P, residual, N, error);
+        LUPSolve(LU, P, residual, N, error);
 
         f32 mse = 0.f;
         for (int i = 0; i < N; i++)
@@ -209,9 +206,11 @@ void CreateAttributeQuadric(Quadric &q, QuadricGrad *g, const Vec3f &p0, const V
     f32 M[9] = {
         p01.x, p01.y, p01.z, p02.x, p02.y, p02.z, n.x, n.y, n.z,
     };
+    f32 LU[9];
+    MemoryCopy(LU, M, sizeof(LU));
 
     int pivots[3];
-    bool isInvertible = LUPDecompose(M, 3, 1e-12, pivots);
+    bool isInvertible = LUPDecompose(LU, 3, 1e-12f, pivots);
 
     for (int i = 0; i < numAttributes; i++)
     {
@@ -227,15 +226,15 @@ void CreateAttributeQuadric(Quadric &q, QuadricGrad *g, const Vec3f &p0, const V
             0.f,
         };
 
-        if (isInvertible) LUPSolveIterate(M, pivots, b, 3, grad.e, 1);
+        if (isInvertible) LUPSolveIterate(M, LU, pivots, b, 3, grad.e, 1);
 
         g[i].g = grad;
         g[i].d = a0 - Dot(grad, p0);
 
         OuterProduct(grad, q.c00, q.c01, q.c02, q.c11, q.c12, q.c22);
 
-        q.dn += g[i].d * g[i].g;
-        q.d2 += Sqr(g[i].d);
+        q.dn += q.area * g[i].d * g[i].g;
+        q.d2 += q.area * Sqr(g[i].d);
     }
 
     // Multiply quadric by area (in preparation to be summed by other faces)
@@ -245,6 +244,24 @@ void CreateAttributeQuadric(Quadric &q, QuadricGrad *g, const Vec3f &p0, const V
         g[i].g *= q.area;
         g[i].d *= q.area;
     }
+}
+
+f32 EvaluateQuadric(const Vec3f &p, const Quadric &q)
+{
+    Vec3f r = q.dn;
+
+    r.x += q.c01 * p.y;
+    r.y += q.c12 * p.z;
+    r.z += q.c02 * p.x;
+
+    r *= 2.f;
+
+    r.x += q.c00 * p.x;
+    r.y += q.c11 * p.y;
+    r.z += q.c22 * p.z;
+
+    f32 error = Dot(r, p) + q.d2;
+    return error;
 }
 
 f32 EvaluateQuadric(const Vec3f &p, const Quadric &q, const QuadricGrad *g, f32 *attributes,
@@ -261,30 +278,14 @@ f32 EvaluateQuadric(const Vec3f &p, const Quadric &q, const QuadricGrad *g, f32 
     // where p = [v]
     //           [s]
 
-    Vec3f r = q.dn;
-
-    r.x += q.c01 * p.y;
-    r.y += q.c12 * p.z;
-    r.z += q.c02 * p.x;
-
-    r *= 2.f;
-
-    r.x += q.c00 * p.x;
-    r.y += q.c11 * p.y;
-    r.z += q.c22 * p.z;
-
-    f32 error = Dot(r, p) + q.d2;
-
+    f32 error   = EvaluateQuadric(p, q);
     f32 invArea = 1.f / q.area;
 
     for (int i = 0; i < numAttributes; i++)
     {
-        Vec3f grad    = g[i].g;
-        f32 pgd       = g[i].d + Dot(grad, p);
+        f32 pgd       = g[i].d + Dot(g[i].g, p);
         f32 s         = pgd * invArea;
         attributes[i] = s / attributeWeights[i];
-
-        f32 gp = Dot(grad, p);
 
         // 2s * Dot(-g, p) + -2s * d + dj2 + s^2 * area
         //
@@ -294,15 +295,48 @@ f32 EvaluateQuadric(const Vec3f &p, const Quadric &q, const QuadricGrad *g, f32 
         // -pgd * s
 
         error -= pgd * s;
+    }
 
-        // f32 attributeVal = Dot(Vec3f(gradients[i]), p) + d[i];
-        // f32 s            = attributeVal / area;
-        //
-        // error += s * (a * s - 2 * attributeVal);
-        // attributes[i] = attributeVal / attributeWeight;
+    return Abs(error);
+}
+
+f32 EvaluateQuadricLocked(const Vec3f &p, const Quadric &q, const QuadricGrad *g,
+                          f32 *attributes, const f32 *attributeWeights, u32 numAttributes)
+{
+    f32 error = EvaluateQuadric(p, q);
+
+    for (int i = 0; i < numAttributes; i++)
+    {
+        f32 pgd = g[i].d + Dot(g[i].g, p);
+        f32 s   = attributes[i] * attributeWeights[i];
+
+        error += s * (q.area * s - 2 * pgd);
     }
 
     return error;
+}
+
+void Rebase(Quadric &q, QuadricGrad *g, f32 *attributes, f32 *attributeWeights,
+            u32 numAttributes, Vec3f &p)
+{
+    f32 d              = -Dot(q.gVol, p);
+    f32 invArea        = 1.f / q.area;
+    f32 quarterInvArea = .25f * invArea;
+
+    // gVol is the normalized normal multiplied by twice the area.
+    q.dn   = q.gVol * d * quarterInvArea;
+    q.d2   = Sqr(d) * quarterInvArea;
+    q.dVol = d;
+
+    for (int i = 0; i < numAttributes; i++)
+    {
+        f32 a0 = attributes[i] * attributeWeights[i];
+        f32 gd = a0 - Dot(g[i].g, p) * invArea;
+
+        q.dn += g[i].g * gd;
+        g[i].d = gd * q.area;
+        q.d2   = g[i].d * gd;
+    }
 }
 
 void Quadric::InitializeEdge(const Vec3f &p0, const Vec3f &p1)
@@ -352,7 +386,7 @@ void Quadric::Add(Quadric &other)
     c02 += other.c02;
 
     c11 += other.c11;
-    c12 += other.c02;
+    c12 += other.c12;
     c22 += other.c22;
 
     dn += other.dn;
@@ -393,6 +427,7 @@ struct Heap
         indicesIndex = PushArrayNoZero(arena, u32, arraySize);
         keys         = (T *)PushArrayNoZero(arena, u8, sizeof(T) * arraySize);
         heapNum      = 0;
+        numKeys      = 0;
         maxSize      = arraySize;
     }
 
@@ -528,23 +563,33 @@ f32 *MeshSimplifier::GetAttributes(u32 vertexIndex)
     return vertexData + (3 + numAttributes) * vertexIndex + 3;
 }
 
+u32 NextInTriangle(u32 indexIndex, u32 offset)
+{
+    return indexIndex - indexIndex % 3 + (indexIndex + offset) % 3;
+}
+
 bool MeshSimplifier::CheckInversion(const Vec3f &newPosition, u32 index0, u32 index1)
 {
     for (int i = 0; i < 2; i++)
     {
-        u32 vertexIndex       = i == 0 ? index0 : index1;
-        VertexGraphNode *node = &vertexNodes[vertexIndex];
-        while (node->next != -1)
+        int vertexIndex      = i == 0 ? index0 : index1;
+        int otherVertexIndex = i == 0 ? index1 : index0;
+        while (vertexIndex != -1)
         {
-            for (int i = node->offset; i < node->offset + node->count; i++)
+            VertexGraphNode *node = &vertexNodes[vertexIndex];
+            for (int j = node->offset; j < node->offset + node->count; j++)
             {
-                u32 indexIndex0 = indexData[i];
-                u32 indexIndex1 = (indexIndex0 & ~0x3) + ((indexIndex0 + 1) & 3);
-                u32 indexIndex2 = (indexIndex0 & ~0x3) + ((indexIndex0 + 2) & 3);
+                u32 indexIndex0 = indexData[j];
+                u32 indexIndex1 = NextInTriangle(indexIndex0, 1);
+                u32 indexIndex2 = NextInTriangle(indexIndex0, 2);
 
                 u32 vertexIndex0 = indices[indexIndex0];
                 u32 vertexIndex1 = indices[indexIndex1];
                 u32 vertexIndex2 = indices[indexIndex2];
+
+                // This triangle will be collapsed if this pair is collapsed
+                if (vertexIndex1 == otherVertexIndex || vertexIndex2 == otherVertexIndex)
+                    continue;
 
                 Vec3f p0 = GetPosition(vertexIndex0);
                 Vec3f p1 = GetPosition(vertexIndex1);
@@ -557,6 +602,7 @@ bool MeshSimplifier::CheckInversion(const Vec3f &newPosition, u32 index0, u32 in
                 bool result = Dot(Cross(pNewEdge, p21), Cross(p01, p21)) >= 0.f;
                 if (!result) return true;
             }
+            vertexIndex = node->next;
         }
     }
 
@@ -607,20 +653,25 @@ f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
     }
 
     // Add triangle quadrics
+    Vec3f basePosition = GetPosition(pair.index0);
     Quadric quadric;
-    for (int i = 0; i < adjTris.Length(); i++)
-    {
-        quadric.Add(triangleQuadrics[adjTris[i]]);
-    }
-
     QuadricGrad *quadricGrad = 0;
+    f32 *attributeWeights    = 0;
     if (numAttributes)
         quadricGrad = PushArrayNoZero(scratch.temp.arena, QuadricGrad, numAttributes);
 
     for (int i = 0; i < adjTris.Length(); i++)
     {
-        AddQuadric(quadricGrad, &triangleAttrQuadrics[numAttributes * adjTris[i]],
-                   numAttributes);
+        u32 tri                   = adjTris[i];
+        u32 vertexIndex           = indices[3 * tri];
+        Vec3f rebasedPosition     = GetPosition(vertexIndex) - basePosition;
+        QuadricGrad *attrQuadrics = &triangleAttrQuadrics[numAttributes * adjTris[i]];
+
+        Rebase(triangleQuadrics[tri], attrQuadrics, GetAttributes(vertexIndex),
+               attributeWeights, numAttributes, rebasedPosition);
+
+        quadric.Add(triangleQuadrics[tri]);
+        AddQuadric(quadricGrad, attrQuadrics, numAttributes);
     }
 
     // Add edge quadric
@@ -630,8 +681,7 @@ f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
     // int nodeIndex = indices[pair.indexIndex0];
     // }
 
-    // TODO: handle locked edges, preserving boundary edges, rebase to new coordinate system
-    // for floating point accuracy
+    // TODO: handle locked edges/verts + preserving boundary edges
 
     Vec3f p;
 
@@ -666,8 +716,7 @@ f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
 
         f32 A11 = quadric.c11 - BBt11 * invA;
         f32 A12 = quadric.c12 - BBt12 * invA;
-
-        f32 A22 = quadric.c12 - BBt12 * invA;
+        f32 A22 = quadric.c22 - BBt22 * invA;
 
         // b = b1 - 1/a * B * b2
         Vec3f bbb2 = b1 - invA * Bb2;
@@ -693,14 +742,17 @@ f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
                 0,
             };
 
+            f32 LU[16];
+            MemoryCopy(LU, A, sizeof(LU));
+
             f32 b[4] = {-bbb2.x, -bbb2.y, -bbb2.z, -quadric.dVol};
 
             // Solve the 4x4 linear system
             int pivots[4];
-            if (LUPDecompose(A, 4, 1e-8f, pivots))
+            if (LUPDecompose(LU, 4, 1e-8f, pivots))
             {
                 f32 result[4];
-                if (LUPSolveIterate(A, pivots, b, 4, result, 4))
+                if (LUPSolveIterate(A, LU, pivots, b, 4, result, 4))
                 {
                     p.x   = result[0];
                     p.y   = result[1];
@@ -708,22 +760,24 @@ f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
                     valid = true;
                 }
             }
+            if (valid) valid = !CheckInversion(p, pair.index0, pair.index1);
         }
-        if (valid) valid = !CheckInversion(p, pair.index0, pair.index1);
         if (!valid)
         {
             f32 A[9] = {
                 A00, A01, A02, A01, A11, A12, A02, A12, A22,
             };
+            f32 LU[9];
+            MemoryCopy(LU, A, sizeof(LU));
 
             f32 b[3] = {-bbb2.x, -bbb2.y, -bbb2.z};
 
             // Solve the 4x4 linear system
             int pivots[3];
-            if (LUPDecompose(A, 3, 1e-8f, pivots))
+            if (LUPDecompose(LU, 3, 1e-8f, pivots))
             {
                 f32 result[3];
-                if (LUPSolveIterate(A, pivots, b, 3, result, 4))
+                if (LUPSolveIterate(A, LU, pivots, b, 3, result, 4))
                 {
                     p.x   = result[0];
                     p.y   = result[1];
@@ -731,8 +785,8 @@ f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
                     valid = true;
                 }
             }
+            if (valid) valid = !CheckInversion(p, pair.index0, pair.index1);
         }
-        if (valid) valid = !CheckInversion(p, pair.index0, pair.index1);
     }
 
     if (!valid)
@@ -936,9 +990,8 @@ f32 MeshSimplifier::Simplify(Arena *arena, u32 targetNumVerts, u32 targetNumTris
                             remainingNumTriangles--;
                         }
                         triangleIsRemoved.SetBit(triangle);
-                        indexData[node->offset + j] =
-                            indexData[node->offset + node->count - 1];
-                        hasPair = true;
+                        indexData[node->offset + j] = indexData[node->offset + --node->count];
+                        hasPair                     = true;
                         break;
                     }
                 }
