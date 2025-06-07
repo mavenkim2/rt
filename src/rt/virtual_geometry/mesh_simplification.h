@@ -23,28 +23,24 @@ struct Quadric
 
     f32 d2;
 
+    f32 area;
+
     // Volume optimization
     // Dot(gVol, p) + dVol = 0
     Vec3f gVol;
     f32 dVol;
 
-    f32 area;
-
-    Vec3f gradients[maxAttributes];
-    f32 d[maxAttributes];
-
-    u32 numAttributes;
-
-    Quadric(u32 numAttributes);
-    Quadric(const Vec3f &p0, const Vec3f &p1, const Vec3f &p2, f32 *__restrict attr0,
-            f32 *__restrict attr1, f32 *__restrict attr2, f32 *__restrict attributeWeights,
-            u32 numAttributes);
+    Quadric();
+    Quadric(const Vec3f &p0, const Vec3f &p1, const Vec3f &p2);
 
     void InitializeEdge(const Vec3f &p0, const Vec3f &p1);
-    f32 Evaluate(const Vec3f &p, f32 *__restrict attributes, f32 *__restrict attributeWeights);
     void Add(Quadric &other);
+};
 
-    bool Optimize(Vec3f &p, bool volume);
+struct QuadricGrad
+{
+    Vec3f g;
+    f32 d;
 };
 
 struct Pair
@@ -86,6 +82,7 @@ struct MeshSimplifier
 
     // Quadrics
     StaticArray<Quadric> triangleQuadrics;
+    QuadricGrad *triangleAttrQuadrics;
 
     // Graph mapping vertices to triangle faces
     VertexGraphNode *vertexNodes;
