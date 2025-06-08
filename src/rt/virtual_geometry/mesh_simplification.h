@@ -45,19 +45,15 @@ struct QuadricGrad
 
 struct Pair
 {
-    int index0;
-    int index1;
+    f32 error;
 
-    bool operator==(const Pair &other)
-    {
-        return index0 == other.index0 && index1 == other.index1;
-    }
+    Vec3f p0;
+    Vec3f p1;
 
-    u32 GetIndex(u32 index)
-    {
-        Assert(index < 2);
-        return index == 0 ? index0 : index1;
-    }
+    bool operator<(const Pair &other) const { return error < other.error; }
+
+    bool operator==(const Pair &other) { return p0 == other.p1 && p1 == other.p1; }
+
     int Hash();
 };
 
@@ -86,18 +82,19 @@ struct MeshSimplifier
     Quadric *triangleQuadrics;
     QuadricGrad *triangleAttrQuadrics;
 
-    // Graph mapping vertices to triangle faces
-    VertexGraphNode *vertexNodes;
-
-    u32 *indexData;
-    u32 *triangleToPairIndices;
+    StaticArray<Pair> pairs;
+    HashIndex cornerHash;
+    HashIndex pairHash0;
+    HashIndex pairHash1;
 
     MeshSimplifier(f32 *vertexData, u32 numVertices, u32 *indices, u32 numIndices);
 
     Vec3f &GetPosition(u32 vertexIndex);
     f32 *GetAttributes(u32 vertexIndex);
+    bool AddUniquePair(Pair &pair);
     bool CheckInversion(const Vec3f &newPosition, u32 vertexIndex0, u32 vertexIndex1);
     void CalculateTriQuadrics(u32 triIndex);
+
     f32 EvaluatePair(Pair &pair, Vec3f *newPosition = 0);
     f32 Simplify(Arena *arena, u32 targetNumVerts, u32 targetNumTris, f32 targetError,
                  u32 limitNumVerts, u32 limitNumTris, f32 limitError);

@@ -372,6 +372,26 @@ struct Array
 
     void Push(T &element) { Add(element); }
 
+    __forceinline bool PushUnique(T &element)
+    {
+        for (int i = 0; i < size_; i++)
+        {
+            if (data[i] == element) return false;
+        }
+        Push(element);
+        return true;
+    }
+
+    __forceinline bool PushUnique(T &&element)
+    {
+        for (int i = 0; i < size_; i++)
+        {
+            if (data[i] == element) return false;
+        }
+        Push(element);
+        return true;
+    }
+
     void Push(T &&element) { Add(std::move(element)); }
 
     void Remove(u32 index)
