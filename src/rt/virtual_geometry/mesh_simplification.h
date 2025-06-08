@@ -58,6 +58,7 @@ struct Pair
         Assert(index < 2);
         return index == 0 ? index0 : index1;
     }
+    int Hash();
 };
 
 struct VertexGraphNode
@@ -74,6 +75,7 @@ struct MeshSimplifier
     f32 inversionPenalty = 100.f;
 
     // Contains position, and all attributes (normals, uvs, etc.)
+    f32 *attributeWeights;
     f32 *vertexData;
     u32 *indices;
     u32 numVertices;
@@ -81,7 +83,7 @@ struct MeshSimplifier
     u32 numAttributes;
 
     // Quadrics
-    StaticArray<Quadric> triangleQuadrics;
+    Quadric *triangleQuadrics;
     QuadricGrad *triangleAttrQuadrics;
 
     // Graph mapping vertices to triangle faces
@@ -95,6 +97,7 @@ struct MeshSimplifier
     Vec3f &GetPosition(u32 vertexIndex);
     f32 *GetAttributes(u32 vertexIndex);
     bool CheckInversion(const Vec3f &newPosition, u32 vertexIndex0, u32 vertexIndex1);
+    void CalculateTriQuadrics(u32 triIndex);
     f32 EvaluatePair(Pair &pair, Vec3f *newPosition = 0);
     f32 Simplify(Arena *arena, u32 targetNumVerts, u32 targetNumTris, f32 targetError,
                  u32 limitNumVerts, u32 limitNumTris, f32 limitError);

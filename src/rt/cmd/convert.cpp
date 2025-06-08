@@ -2211,7 +2211,7 @@ int main(int argc, char **argv)
 
     OfflineMesh *meshes = LoadObjWithWedges(arena, testFilename, numOfflineMeshes);
 
-    OfflineMesh *mesh = &meshes[1];
+    OfflineMesh *mesh = &meshes[0];
     u32 targetNumTris = mesh->numIndices / 6;
     u32 limitNumTris  = 256;
     MeshSimplifier simplifier((f32 *)mesh->p, mesh->numVertices, mesh->indices,

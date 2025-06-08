@@ -94,13 +94,14 @@ struct StaticArray
         size_++;
     }
 
-    __forceinline void PushUnique(T element)
+    __forceinline bool PushUnique(T element)
     {
         for (int i = 0; i < size_; i++)
         {
-            if (data[i] == element) return;
+            if (data[i] == element) return false;
         }
         Push(element);
+        return true;
     }
 
     __forceinline void push_back(T element) { Push(element); }
