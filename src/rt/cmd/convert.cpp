@@ -2214,10 +2214,10 @@ int main(int argc, char **argv)
     OfflineMesh *mesh = &meshes[0];
     u32 targetNumTris = mesh->numIndices / 6;
     u32 limitNumTris  = 256;
-    MeshSimplifier simplifier((f32 *)mesh->p, mesh->numVertices, mesh->indices,
-                                     mesh->numIndices);
-    f32 maxError = simplifier.Simplify(arena, mesh->numVertices, targetNumTris, 0.f, 0,
-                                       limitNumTris, FLT_MAX);
+    MeshSimplifier simplifier(arena, (f32 *)mesh->p, mesh->numVertices, mesh->indices,
+                              mesh->numIndices);
+    f32 maxError =
+        simplifier.Simplify(mesh->numVertices, targetNumTris, 0.f, 0, limitNumTris, FLT_MAX);
     printf("test error: %f\n", maxError);
 
     // LoadPBRT(arena, filename);

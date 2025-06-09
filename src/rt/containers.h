@@ -374,7 +374,7 @@ struct Array
 
     __forceinline bool PushUnique(T &element)
     {
-        for (int i = 0; i < size_; i++)
+        for (int i = 0; i < size; i++)
         {
             if (data[i] == element) return false;
         }
@@ -384,7 +384,7 @@ struct Array
 
     __forceinline bool PushUnique(T &&element)
     {
-        for (int i = 0; i < size_; i++)
+        for (int i = 0; i < size; i++)
         {
             if (data[i] == element) return false;
         }
@@ -489,12 +489,11 @@ struct HashIndex
 
     b32 RemoveFromHash(i32 key, i32 index)
     {
-        b32 result = 0;
-        i32 slot   = key & hashMask;
+        i32 slot = key & hashMask;
         if (hash[slot] == index)
         {
-            hash[slot] = -1;
-            result     = 1;
+            hash[slot] = indexChain[index];
+            return true;
         }
         else
         {
@@ -503,13 +502,11 @@ struct HashIndex
                 if (indexChain[i] == index)
                 {
                     indexChain[i] = indexChain[index];
-                    result        = 1;
-                    break;
+                    return true;
                 }
             }
         }
-        indexChain[index] = -1;
-        return result;
+        return false;
     }
 };
 

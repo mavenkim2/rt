@@ -409,8 +409,6 @@ void AddQuadric(QuadricGrad *g, const QuadricGrad *other, u32 numAttributes)
     }
 }
 
-int Pair::Hash() { return rt::Hash(index0, index1); }
-
 template <typename T>
 struct Heap
 {
@@ -430,6 +428,7 @@ struct Heap
     }
 
     int GetParent(int index) const { return index == 0 ? 0 : (index - 1) >> 1; }
+    bool IsPresent(int index) { return (index < heapNum) && heapIndices[index] != -1; }
 
     void Add(const T *keys, int index)
     {
@@ -529,13 +528,22 @@ struct Heap
     }
 };
 
-MeshSimplifier::MeshSimplifier(f32 *vertexData, u32 numVertices, u32 *indices, u32 numIndices)
-    : vertexData(vertexData), indices(indices), numVertices(numVertices),
-      numIndices(numIndices)
+MeshSimplifier::MeshSimplifier(Arena *arena, f32 *vertexData, u32 numVertices, u32 *indices,
+                               u32 numIndices)
+    : arena(arena), vertexData(vertexData), indices(indices), numVertices(numVertices),
+      numIndices(numIndices),
+      cornerHash(arena, NextPowerOfTwo(numIndices), NextPowerOfTwo(numIndices)),
+      pairHash0(arena, NextPowerOfTwo(numIndices), NextPowerOfTwo(numIndices)),
+      pairHash1(arena, NextPowerOfTwo(numIndices), NextPowerOfTwo(numIndices))
 {
 }
 
 Vec3f &MeshSimplifier::GetPosition(u32 vertexIndex)
+{
+    return *(Vec3f *)(vertexData + (3 + numAttributes) * vertexIndex);
+}
+
+const Vec3f &MeshSimplifier::GetPosition(u32 vertexIndex) const
 {
     return *(Vec3f *)(vertexData + (3 + numAttributes) * vertexIndex);
 }
@@ -550,51 +558,30 @@ u32 NextInTriangle(u32 indexIndex, u32 offset)
     return indexIndex - indexIndex % 3 + (indexIndex + offset) % 3;
 }
 
-bool MeshSimplifier::CheckInversion(const Vec3f &newPosition, u32 *adjTris, u32 count)
+bool MeshSimplifier::CheckInversion(const Vec3f &newPosition, u32 *movedCorners,
+                                    u32 count) const
 {
     for (int i = 0; i < count; i++)
     {
-        u32 triangle = adjTris[i];
-        indices[3 * triangle];
-        if (adjTris[i])
-        {
-        }
-    }
+        u32 corner      = movedCorners[i];
+        u32 indexIndex0 = corner;
+        u32 indexIndex1 = NextInTriangle(indexIndex0, 1);
+        u32 indexIndex2 = NextInTriangle(indexIndex0, 2);
 
-    for (int i = 0; i < 2; i++)
-    {
-        int vertexIndex      = i == 0 ? index0 : index1;
-        int otherVertexIndex = i == 0 ? index1 : index0;
-        while (vertexIndex != -1)
-        {
-            VertexGraphNode *node = &vertexNodes[vertexIndex];
-            for (int j = node->offset; j < node->offset + node->count; j++)
-            {
-                u32 indexIndex0 = indexData[j];
-                u32 indexIndex1 = NextInTriangle(indexIndex0, 1);
-                u32 indexIndex2 = NextInTriangle(indexIndex0, 2);
+        u32 vertexIndex0 = indices[indexIndex0];
+        u32 vertexIndex1 = indices[indexIndex1];
+        u32 vertexIndex2 = indices[indexIndex2];
 
-                u32 vertexIndex0 = indices[indexIndex0];
-                u32 vertexIndex1 = indices[indexIndex1];
-                u32 vertexIndex2 = indices[indexIndex2];
+        Vec3f p0 = GetPosition(vertexIndex0);
+        Vec3f p1 = GetPosition(vertexIndex1);
+        Vec3f p2 = GetPosition(vertexIndex2);
 
-                // This triangle will be collapsed if this pair is collapsed
-                if (vertexIndex1 == otherVertexIndex || vertexIndex2 == otherVertexIndex)
-                    continue;
+        Vec3f p21      = p2 - p1;
+        Vec3f p01      = p0 - p1;
+        Vec3f pNewEdge = newPosition - p1;
 
-                Vec3f p0 = GetPosition(vertexIndex0);
-                Vec3f p1 = GetPosition(vertexIndex1);
-                Vec3f p2 = GetPosition(vertexIndex2);
-
-                Vec3f p21      = p2 - p1;
-                Vec3f p01      = p0 - p1;
-                Vec3f pNewEdge = newPosition - p1;
-
-                bool result = Dot(Cross(pNewEdge, p21), Cross(p01, p21)) >= 0.f;
-                if (!result) return true;
-            }
-            vertexIndex = node->next;
-        }
+        bool result = Dot(Cross(pNewEdge, p21), Cross(p01, p21)) >= 0.f;
+        if (!result) return true;
     }
 
     return false;
@@ -603,7 +590,7 @@ bool MeshSimplifier::CheckInversion(const Vec3f &newPosition, u32 *adjTris, u32 
 static const int next[3] = {1, 2, 0};
 
 template <typename Func>
-void IterateHashBreak(HashIndex &index, int hash, const &Func func)
+void IterateHashBreak(HashIndex &index, int hash, const Func &func)
 {
     for (int i = index.FirstInHash(hash); i != -1; i = index.NextInHash(i))
     {
@@ -612,12 +599,24 @@ void IterateHashBreak(HashIndex &index, int hash, const &Func func)
 }
 
 template <typename Func>
-void IterateHash(HashIndex &index, int hash, const &Func func)
+void IterateHash(HashIndex &index, int hash, const Func &func)
 {
     for (int i = index.FirstInHash(hash); i != -1; i = index.NextInHash(i))
     {
         func(i);
     }
+}
+
+template <typename Func>
+void MeshSimplifier::IterateCorners(const Vec3f &position, const Func &func)
+{
+    int hash = Hash(position);
+    IterateHash(cornerHash, hash, [&](int cornerIndex) {
+        if (position == GetPosition(indices[cornerIndex]))
+        {
+            func(cornerIndex);
+        }
+    });
 }
 
 void MeshSimplifier::CalculateTriQuadrics(u32 triIndex)
@@ -637,7 +636,7 @@ void MeshSimplifier::CalculateTriQuadrics(u32 triIndex)
                            attributeWeights, numAttributes);
 }
 
-bool MeshSimplifier::AddUniquePair(Pair &pair)
+bool MeshSimplifier::AddUniquePair(Pair &pair, int pairIndex)
 {
     int p0Hash = Hash(pair.p0);
     int p1Hash = Hash(pair.p1);
@@ -661,8 +660,6 @@ bool MeshSimplifier::AddUniquePair(Pair &pair)
 
     if (!duplicate)
     {
-        pairs.Push(pair);
-        int pairIndex = pairs.Length() - 1;
         pairHash0.AddInHash(p0Hash, pairIndex);
         pairHash1.AddInHash(p1Hash, pairIndex);
     }
@@ -672,17 +669,10 @@ bool MeshSimplifier::AddUniquePair(Pair &pair)
 
 f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
 {
-    VertexGraphNode *node = &vertexNodes[pair.index0];
-
     // Find the set of triangles adjacent to the pair
     ScratchArena scratch;
 
-    Array<u32> adjTris(scratch.temp.arena, 24);
-
-    int hashes[] = {
-        Hash(pair.p0),
-        Hash(pair.p1),
-    };
+    Array<u32> adjCorners(scratch.temp.arena, 24);
 
     Vec3f pos[] = {
         pair.p0,
@@ -691,8 +681,38 @@ f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
 
     for (int i = 0; i < 2; i++)
     {
-        IterateHash(cornerHash, hashes[i],
-                    [&](int cornerIndex) { adjTris.PushUnique(cornerIndex / 3); });
+        IterateCorners(pos[i], [&](int cornerIndex) { adjCorners.Push(cornerIndex); });
+    }
+
+    // Set of all triangles adjacent to the pair
+    StaticArray<u32> adjTris(scratch.temp.arena, adjCorners.Length());
+
+    // Find the triangles that are moved and not collapsed
+    StaticArray<u32> movedCorners(scratch.temp.arena, adjCorners.Length());
+
+    for (u32 corner : adjCorners)
+    {
+        u32 tri     = corner / 3;
+        bool unique = adjTris.PushUnique(tri);
+
+        if (unique)
+        {
+            u32 vertIndex0 = indices[3 * tri];
+            u32 vertIndex1 = indices[3 * tri + 1];
+            u32 vertIndex2 = indices[3 * tri + 2];
+
+            Vec3f p0 = GetPosition(vertIndex0);
+            Vec3f p1 = GetPosition(vertIndex1);
+            Vec3f p2 = GetPosition(vertIndex2);
+
+            bool pos0Found = pair.p0 == p0 || pair.p0 == p1 || pair.p0 == p2;
+            bool pos1Found = pair.p1 == p0 || pair.p1 == p1 || pair.p1 == p2;
+
+            if (!(pos0Found && pos1Found))
+            {
+                movedCorners.Push(corner);
+            }
+        }
     }
 
     // Add triangle quadrics
@@ -804,7 +824,8 @@ f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
             }
             if (valid)
             {
-                valid = !CheckInversion(p + basePosition, pair.index0, pair.index1);
+                valid = !CheckInversion(p + basePosition, movedCorners.data,
+                                        movedCorners.Length());
             }
         }
         if (!valid)
@@ -832,7 +853,8 @@ f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
             }
             if (valid)
             {
-                valid = !CheckInversion(p + basePosition, pair.index0, pair.index1);
+                valid = !CheckInversion(p + basePosition, movedCorners.data,
+                                        movedCorners.Length());
             }
         }
     }
@@ -840,7 +862,7 @@ f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
     if (!valid)
     {
         p     = (pair.p0 + pair.p1) / 2.f;
-        valid = !CheckInversion(p, pair.index0, pair.index1);
+        valid = !CheckInversion(p, movedCorners.data, movedCorners.Length());
         p -= basePosition;
     }
 
@@ -857,9 +879,8 @@ f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
     return error;
 }
 
-f32 MeshSimplifier::Simplify(Arena *arena, u32 targetNumVerts, u32 targetNumTris,
-                             f32 targetError, u32 limitNumVerts, u32 limitNumTris,
-                             f32 limitError)
+f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetError,
+                             u32 limitNumVerts, u32 limitNumTris, f32 limitError)
 {
     ScratchArena scratch;
     // Follows section 4.1 of the quadric error paper
@@ -894,7 +915,7 @@ f32 MeshSimplifier::Simplify(Arena *arena, u32 targetNumVerts, u32 targetNumTris
     {
         Vec3f position = GetPosition(indices[corner]);
         int hash       = Hash(position);
-        cornerHashSize.AddInHash(hash, corner);
+        cornerHash.AddInHash(hash, corner);
     }
 
     pairs = StaticArray<Pair>(scratch.temp.arena, 3 * numTriangles);
@@ -923,7 +944,10 @@ f32 MeshSimplifier::Simplify(Arena *arena, u32 targetNumVerts, u32 targetNumTris
             pair.p0 = p0;
             pair.p1 = p1;
 
-            AddUniquePair(pair);
+            if (AddUniquePair(pair, pairs.Length()))
+            {
+                pairs.Push(pair);
+            }
         }
     }
 
@@ -950,9 +974,9 @@ f32 MeshSimplifier::Simplify(Arena *arena, u32 targetNumVerts, u32 targetNumTris
         Vec3f newPosition;
         f32 error = EvaluatePair(pair, &newPosition);
 
-        maxError = Max(maxError, error);
+        ErrorExit(error == pair.error, "%u", pairIndex);
 
-        Assert(maxError < 100);
+        maxError = Max(maxError, error);
 
         if (maxError >= targetError && remainingNumVertices <= targetNumVerts &&
             remainingNumTriangles <= targetNumTris)
@@ -968,7 +992,7 @@ f32 MeshSimplifier::Simplify(Arena *arena, u32 targetNumVerts, u32 targetNumTris
         remainingNumVertices--;
 
         Array<u32> movedCorners(scratch.temp.arena, 24);
-        std::vector<int> movedPairs;
+        Array<int> movedPairs(scratch.temp.arena, 24);
 
         // Change the positions of all corners
         int p0Hash = Hash(pair.p0);
@@ -984,20 +1008,20 @@ f32 MeshSimplifier::Simplify(Arena *arena, u32 targetNumVerts, u32 targetNumTris
             pair.p1,
         };
 
+        pairHash0.RemoveFromHash(hashes[0], pairIndex);
+        pairHash1.RemoveFromHash(hashes[1], pairIndex);
+
         for (int i = 0; i < 2; i++)
         {
-            IterateHash(cornerHash, hashes[i], [&](int corner) {
-                if (indices[corner] == pos[i])
-                {
-                    movedCorners.PushUnique(corner);
-                    cornerHash.RemoveFromHash(Hash(indices[corner]), corner);
-                }
+            IterateCorners(pos[i], [&](int corner) {
+                bool unique = movedCorners.PushUnique(corner);
+                cornerHash.RemoveFromHash(Hash(indices[corner]), corner);
             });
 
             IterateHash(pairHash0, hashes[i], [&](int otherPairIndex) {
                 if (pairs[otherPairIndex].p0 == pos[i])
                 {
-                    movedPairs.push_back(otherPairIndex);
+                    movedPairs.Push(otherPairIndex);
                     pairHash0.RemoveFromHash(Hash(pairs[otherPairIndex].p0), otherPairIndex);
                     pairHash1.RemoveFromHash(Hash(pairs[otherPairIndex].p1), otherPairIndex);
                 }
@@ -1006,16 +1030,51 @@ f32 MeshSimplifier::Simplify(Arena *arena, u32 targetNumVerts, u32 targetNumTris
             IterateHash(pairHash1, hashes[i], [&](int otherPairIndex) {
                 if (pairs[otherPairIndex].p1 == pos[i])
                 {
-                    movedPairs.push_back(otherPairIndex);
+                    movedPairs.Push(otherPairIndex);
                     pairHash0.RemoveFromHash(Hash(pairs[otherPairIndex].p0), otherPairIndex);
                     pairHash1.RemoveFromHash(Hash(pairs[otherPairIndex].p1), otherPairIndex);
                 }
             });
         }
 
-        for (int pairIndex : movedPairs)
+        StaticArray<u32> movedTriangles(scratch.temp.arena, movedCorners.Length());
+
+        int newHash = Hash(newPosition);
+        for (u32 corner : movedCorners)
         {
-            Pair &movedPair = pairs[pairIndex];
+            GetPosition(indices[corner]) = newPosition;
+            movedTriangles.PushUnique(corner / 3);
+
+            cornerHash.AddInHash(newHash, corner);
+        }
+
+        // Recalculate quadrics
+        for (u32 tri : movedTriangles)
+        {
+            Vec3f p0 = GetPosition(indices[3 * tri]);
+            Vec3f p1 = GetPosition(indices[3 * tri + 1]);
+            Vec3f p2 = GetPosition(indices[3 * tri + 2]);
+
+            if (!(p0 == p1 || p0 == p2 || p1 == p2))
+            {
+                CalculateTriQuadrics(tri);
+            }
+            else
+            {
+                triangleIsRemoved.SetBit(tri);
+                remainingNumTriangles--;
+
+                for (int i = 0; i < 3; i++)
+                {
+                    int corner = 3 * tri + i;
+                    cornerHash.RemoveFromHash(Hash(GetPosition(indices[corner])), corner);
+                }
+            }
+        }
+
+        for (int movedPairIndex : movedPairs)
+        {
+            Pair &movedPair = pairs[movedPairIndex];
             Assert(movedPairIndex != pairIndex);
             if (movedPair.p0 == pair.p0 || movedPair.p0 == pair.p1)
             {
@@ -1027,31 +1086,48 @@ f32 MeshSimplifier::Simplify(Arena *arena, u32 targetNumVerts, u32 targetNumTris
             }
         }
 
-        for (int pairIndex : movedPairs)
+        for (int movedPairIndex : movedPairs)
         {
-            Pair &pair = pairs[pairIndex];
-            if (pair.p0 == pair.p1 || !AddUniquePair(pair))
+            Pair &pair = pairs[movedPairIndex];
+            if (pair.p0 == pair.p1 || !AddUniquePair(pair, movedPairIndex))
             {
-                heap.Remove(pairs, pairIndex);
+                heap.Remove(pairs.data, movedPairIndex);
             }
         }
 
-        // Recalculate quadrics
-        for (u32 corner : movedCorners)
+        // Reevaluate all pairs adjacent to all adjacent triangles
+        Array<u32> uniqueVerts(scratch.temp.arena, 24);
+        for (u32 tri : movedTriangles)
         {
-            GetPosition(indices[corner]) = newPosition;
-
-            u32 triangle = corner / 3;
-
-            Vec3f p0 = GetPosition(indices[3 * triangle]);
-            Vec3f p1 = GetPosition(indices[3 * triangle + 1]);
-            Vec3f p2 = GetPosition(indices[3 * triangle + 2]);
-
-            if (!(p0 == p1 || p0 == p2 || p1 == p2))
+            for (u32 corner = 0; corner < 3; corner++)
             {
+                uniqueVerts.PushUnique(indices[3 * tri + corner]);
             }
+        }
 
-            CalculateTriQuadrics(triangle);
+        Array<u32> changedPairs(scratch.temp.arena, 24);
+        for (u32 vert : uniqueVerts)
+        {
+            int hash = Hash(GetPosition(vert));
+
+            auto GetPairs = [&](int pairIndex) {
+                if (heap.IsPresent(pairIndex))
+                {
+                    heap.Remove(pairs.data, pairIndex);
+                    changedPairs.Push(pairIndex);
+                }
+            };
+
+            IterateHash(pairHash0, hash, GetPairs);
+            IterateHash(pairHash1, hash, GetPairs);
+        }
+
+        for (u32 changedPair : changedPairs)
+        {
+            f32 error                = EvaluatePair(pairs[changedPair]);
+            pairs[changedPair].error = error;
+
+            heap.Add(pairs.data, changedPair);
         }
     }
 

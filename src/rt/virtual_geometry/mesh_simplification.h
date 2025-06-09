@@ -52,20 +52,14 @@ struct Pair
 
     bool operator<(const Pair &other) const { return error < other.error; }
 
-    bool operator==(const Pair &other) { return p0 == other.p1 && p1 == other.p1; }
+    bool operator==(const Pair &other) { return p0 == other.p0 && p1 == other.p1; }
 
     int Hash();
 };
 
-struct VertexGraphNode
-{
-    u32 offset;
-    u32 count;
-    int next;
-};
-
 struct MeshSimplifier
 {
+    Arena *arena;
     // Constants
     f32 lockedPenaty     = 1e8f;
     f32 inversionPenalty = 100.f;
@@ -87,17 +81,22 @@ struct MeshSimplifier
     HashIndex pairHash0;
     HashIndex pairHash1;
 
-    MeshSimplifier(f32 *vertexData, u32 numVertices, u32 *indices, u32 numIndices);
+    MeshSimplifier(Arena *arena, f32 *vertexData, u32 numVertices, u32 *indices,
+                   u32 numIndices);
 
     Vec3f &GetPosition(u32 vertexIndex);
+    const Vec3f &GetPosition(u32 vertexIndex) const;
     f32 *GetAttributes(u32 vertexIndex);
-    bool AddUniquePair(Pair &pair);
-    bool CheckInversion(const Vec3f &newPosition, u32 vertexIndex0, u32 vertexIndex1);
+    bool AddUniquePair(Pair &pair, int pairIndex);
+    bool CheckInversion(const Vec3f &newPosition, u32 *movedCorners, u32 count) const;
     void CalculateTriQuadrics(u32 triIndex);
 
+    template <typename Func>
+    void IterateCorners(const Vec3f &position, const Func &func);
+
     f32 EvaluatePair(Pair &pair, Vec3f *newPosition = 0);
-    f32 Simplify(Arena *arena, u32 targetNumVerts, u32 targetNumTris, f32 targetError,
-                 u32 limitNumVerts, u32 limitNumTris, f32 limitError);
+    f32 Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetError, u32 limitNumVerts,
+                 u32 limitNumTris, f32 limitError);
 };
 
 } // namespace rt
