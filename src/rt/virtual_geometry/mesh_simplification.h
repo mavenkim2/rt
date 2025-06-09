@@ -2,6 +2,7 @@
 #define MESH_SIMPLIFICATION_H_
 
 #include "../base.h"
+#include "../bit_packing.h"
 
 namespace rt
 {
@@ -45,6 +46,7 @@ struct QuadricGrad
 
 struct Pair
 {
+    Vec3f newP;
     f32 error;
 
     Vec3f p0;
@@ -53,8 +55,6 @@ struct Pair
     bool operator<(const Pair &other) const { return error < other.error; }
 
     bool operator==(const Pair &other) { return p0 == other.p0 && p1 == other.p1; }
-
-    int Hash();
 };
 
 struct MeshSimplifier
@@ -76,10 +76,12 @@ struct MeshSimplifier
     Quadric *triangleQuadrics;
     QuadricGrad *triangleAttrQuadrics;
 
+    // Adjacency
     StaticArray<Pair> pairs;
     HashIndex cornerHash;
     HashIndex pairHash0;
     HashIndex pairHash1;
+    BitVector triangleIsRemoved;
 
     MeshSimplifier(Arena *arena, f32 *vertexData, u32 numVertices, u32 *indices,
                    u32 numIndices);
@@ -94,9 +96,10 @@ struct MeshSimplifier
     template <typename Func>
     void IterateCorners(const Vec3f &position, const Func &func);
 
-    f32 EvaluatePair(Pair &pair, Vec3f *newPosition = 0);
+    void EvaluatePair(Pair &pair);
     f32 Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetError, u32 limitNumVerts,
                  u32 limitNumTris, f32 limitError);
+    void Finalize(Vec3f *&finalP, u32 &finalNumVertices, u32 *&finalInd, u32 &finalNumIndices);
 };
 
 } // namespace rt

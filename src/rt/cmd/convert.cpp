@@ -2212,13 +2212,19 @@ int main(int argc, char **argv)
     OfflineMesh *meshes = LoadObjWithWedges(arena, testFilename, numOfflineMeshes);
 
     OfflineMesh *mesh = &meshes[0];
-    u32 targetNumTris = mesh->numIndices / 6;
+    u32 targetNumTris = 12000000; // mesh->numIndices / 6;
     u32 limitNumTris  = 256;
     MeshSimplifier simplifier(arena, (f32 *)mesh->p, mesh->numVertices, mesh->indices,
                               mesh->numIndices);
     f32 maxError =
         simplifier.Simplify(mesh->numVertices, targetNumTris, 0.f, 0, limitNumTris, FLT_MAX);
     printf("test error: %f\n", maxError);
+
+    OfflineMesh simplifiedMesh = {};
+    simplifier.Finalize(simplifiedMesh.p, simplifiedMesh.numVertices, simplifiedMesh.indices,
+                        simplifiedMesh.numIndices);
+
+    WriteQuadOBJ(simplifiedMesh, "../../data/island/pbrt-v4/obj/osOcean/osOcean_simp.obj");
 
     // LoadPBRT(arena, filename);
 

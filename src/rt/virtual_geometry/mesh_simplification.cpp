@@ -1,8 +1,8 @@
 #include "../hash.h"
 #include "../memory.h"
 #include "../thread_context.h"
-#include "../bit_packing.h"
 #include "../dgfs.h"
+#include <cstring>
 #include "mesh_simplification.h"
 
 namespace rt
@@ -428,7 +428,7 @@ struct Heap
     }
 
     int GetParent(int index) const { return index == 0 ? 0 : (index - 1) >> 1; }
-    bool IsPresent(int index) { return (index < heapNum) && heapIndices[index] != -1; }
+    bool IsPresent(int index) { return (index < maxSize) && heapIndices[index] != -1; }
 
     void Add(const T *keys, int index)
     {
@@ -534,7 +534,8 @@ MeshSimplifier::MeshSimplifier(Arena *arena, f32 *vertexData, u32 numVertices, u
       numIndices(numIndices),
       cornerHash(arena, NextPowerOfTwo(numIndices), NextPowerOfTwo(numIndices)),
       pairHash0(arena, NextPowerOfTwo(numIndices), NextPowerOfTwo(numIndices)),
-      pairHash1(arena, NextPowerOfTwo(numIndices), NextPowerOfTwo(numIndices))
+      pairHash1(arena, NextPowerOfTwo(numIndices), NextPowerOfTwo(numIndices)),
+      triangleIsRemoved(arena, numIndices / 3)
 {
 }
 
@@ -667,7 +668,7 @@ bool MeshSimplifier::AddUniquePair(Pair &pair, int pairIndex)
     return !duplicate;
 }
 
-f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
+void MeshSimplifier::EvaluatePair(Pair &pair)
 {
     // Find the set of triangles adjacent to the pair
     ScratchArena scratch;
@@ -874,25 +875,24 @@ f32 MeshSimplifier::EvaluatePair(Pair &pair, Vec3f *outP)
     // Evaluate the error for the optimal position
     error += EvaluateQuadric(p, quadric, quadricGrad, 0, 0, numAttributes);
 
-    if (outP) *outP = p + basePosition;
+    if (error != error)
+    {
+        error = 0.f;
+    }
 
-    return error;
+    pair.error = error;
+    pair.newP  = p + basePosition;
 }
 
 f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetError,
                              u32 limitNumVerts, u32 limitNumTris, f32 limitError)
 {
     ScratchArena scratch;
-    // Follows section 4.1 of the quadric error paper
-
-    // For every edge, compute the optimal contraction target and its cost
-
-    // Packed vertex data AOS:
-    // p.x p.y p.z n.x n.y n.z uv.x uv.y uv.z
 
     numAttributes = 0;
 
-    u32 numTriangles = numIndices / 3;
+    u32 numTriangles      = numIndices / 3;
+    u32 numValidTriangles = 0;
 
     attributeWeights = 0;
 
@@ -905,7 +905,22 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
 
     for (int triIndex = 0; triIndex < numTriangles; triIndex++)
     {
-        CalculateTriQuadrics(triIndex);
+        Vec3f p0 = GetPosition(indices[3 * triIndex]);
+        Vec3f p1 = GetPosition(indices[3 * triIndex + 1]);
+        Vec3f p2 = GetPosition(indices[3 * triIndex + 2]);
+
+        if (!(p0 == p1 || p0 == p2 || p1 == p2))
+        {
+            indices[3 * numValidTriangles]     = indices[3 * triIndex];
+            indices[3 * numValidTriangles + 1] = indices[3 * triIndex + 1];
+            indices[3 * numValidTriangles + 2] = indices[3 * triIndex + 2];
+            CalculateTriQuadrics(numValidTriangles);
+            numValidTriangles++;
+        }
+        else
+        {
+            triangleIsRemoved.SetBit(triIndex);
+        }
     }
 
     u32 cornerHashSize = NextPowerOfTwo(numIndices);
@@ -918,15 +933,15 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
         cornerHash.AddInHash(hash, corner);
     }
 
-    pairs = StaticArray<Pair>(scratch.temp.arena, 3 * numTriangles);
-    Heap<Pair> heap(scratch.temp.arena, 3 * numTriangles);
+    pairs = StaticArray<Pair>(scratch.temp.arena, 3 * numValidTriangles);
+    Heap<Pair> heap(scratch.temp.arena, 3 * numValidTriangles);
 
-    u32 pairHashSize = NextPowerOfTwo(3 * numTriangles);
+    u32 pairHashSize = NextPowerOfTwo(3 * numValidTriangles);
     pairHash0        = HashIndex(scratch.temp.arena, pairHashSize, pairHashSize);
     pairHash1        = HashIndex(scratch.temp.arena, pairHashSize, pairHashSize);
 
     // Add unique pairs to hash
-    for (int triIndex = 0; triIndex < numTriangles; triIndex++)
+    for (int triIndex = 0; triIndex < numValidTriangles; triIndex++)
     {
         int baseIndexIndex = 3 * triIndex;
         for (int vertIndex = 0; vertIndex < 3; vertIndex++)
@@ -953,17 +968,13 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
 
     for (int pairIndex = 0; pairIndex < pairs.size() - 1; pairIndex++)
     {
-        f32 error              = EvaluatePair(pairs[pairIndex]);
-        pairs[pairIndex].error = error;
+        EvaluatePair(pairs[pairIndex]);
         heap.Add(pairs.data, pairIndex);
     }
 
-    BitVector triangleIsRemoved(scratch.temp.arena, numTriangles);
-    BitVector vertexIsRemoved(scratch.temp.arena, numVertices);
-
     f32 maxError              = 0.f;
     u32 remainingNumVertices  = numVertices;
-    u32 remainingNumTriangles = numTriangles;
+    u32 remainingNumTriangles = numValidTriangles;
     for (;;)
     {
         int pairIndex = heap.Pop(pairs.data);
@@ -971,12 +982,12 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
 
         Pair &pair = pairs[pairIndex];
 
-        Vec3f newPosition;
-        f32 error = EvaluatePair(pair, &newPosition);
+        Vec3f newPosition = pair.newP;
 
-        ErrorExit(error == pair.error, "%u", pairIndex);
+        // ErrorExit(error == pair.error, "%u %u %f %f %f\n", pairIndex, remainingNumTriangles,
+        //           error, pair.error, maxError);
 
-        maxError = Max(maxError, error);
+        maxError = Max(maxError, pair.error);
 
         if (maxError >= targetError && remainingNumVertices <= targetNumVerts &&
             remainingNumTriangles <= targetNumTris)
@@ -1015,7 +1026,7 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
         {
             IterateCorners(pos[i], [&](int corner) {
                 bool unique = movedCorners.PushUnique(corner);
-                cornerHash.RemoveFromHash(Hash(indices[corner]), corner);
+                cornerHash.RemoveFromHash(Hash(GetPosition(indices[corner])), corner);
             });
 
             IterateHash(pairHash0, hashes[i], [&](int otherPairIndex) {
@@ -1048,7 +1059,7 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
             cornerHash.AddInHash(newHash, corner);
         }
 
-        // Recalculate quadrics
+        // Recalculate quadrics of valid triangles. Remove invalid triangles.
         for (u32 tri : movedTriangles)
         {
             Vec3f p0 = GetPosition(indices[3 * tri]);
@@ -1072,6 +1083,7 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
             }
         }
 
+        // Change pairs to have new position
         for (int movedPairIndex : movedPairs)
         {
             Pair &movedPair = pairs[movedPairIndex];
@@ -1086,6 +1098,7 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
             }
         }
 
+        // Remove invalid and duplicate pairs
         for (int movedPairIndex : movedPairs)
         {
             Pair &pair = pairs[movedPairIndex];
@@ -1122,53 +1135,97 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
             IterateHash(pairHash1, hash, GetPairs);
         }
 
+        Print("num pairs updated: %u, remaining tris: %u\n", changedPairs.Length(),
+              remainingNumTriangles);
+
         for (u32 changedPair : changedPairs)
         {
-            f32 error                = EvaluatePair(pairs[changedPair]);
-            pairs[changedPair].error = error;
-
+            EvaluatePair(pairs[changedPair]);
             heap.Add(pairs.data, changedPair);
         }
     }
 
+    return maxError;
+}
+
+void MeshSimplifier::Finalize(Vec3f *&finalP, u32 &finalNumVertices, u32 *&finalInd,
+                              u32 &finalNumIndices)
+{
+    ScratchArena scratch;
+
     // Compact the vertex buffer
-    StaticArray<u32> remap(scratch.temp.arena, numVertices);
+    u32 *remap = PushArrayNoZero(scratch.temp.arena, u32, numVertices);
+    MemorySet(remap, 0xff, sizeof(u32) * numVertices);
+
+    const u32 invalid = ~0u;
+
+    int hashSize = NextPowerOfTwo(numVertices);
+    HashIndex vertexHash(scratch.temp.arena, hashSize, hashSize);
+
+    const u32 attributeLen = sizeof(f32) * (3 + numAttributes);
+
+    u32 vertexCount   = 0;
+    u32 triangleCount = 0;
+    for (int i = 0; i < numIndices / 3; i++)
+    {
+        if (!triangleIsRemoved.GetBit(i))
+        {
+            triangleCount++;
+            for (int corner = 0; corner < 3; corner++)
+            {
+                int index = indices[3 * i + corner];
+
+                if (remap[index] != invalid) continue;
+
+                f32 *data = vertexData + (3 + numAttributes) * index;
+                int hash  = MurmurHash32((const char *)data, attributeLen, 0);
+
+                bool found = false;
+                for (int j = vertexHash.FirstInHash(hash); j != -1;
+                     j     = vertexHash.NextInHash(j))
+                {
+                    f32 *otherData = vertexData + (3 + numAttributes) * j;
+                    if (memcmp(data, otherData, attributeLen) == 0)
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found)
+                {
+                    remap[index] = vertexCount++;
+                    vertexHash.AddInHash(hash, index);
+                }
+            }
+        }
+    }
+
+    finalP   = PushArrayNoZero(arena, Vec3f, vertexCount);
+    finalInd = PushArrayNoZero(arena, u32, triangleCount * 3);
+
     u32 vertexDataStride = (3 + numAttributes) * sizeof(f32);
-    u32 vertexCount      = 0;
     for (int i = 0; i < numVertices; i++)
     {
-        if (!vertexIsRemoved.GetBit(i))
-        {
-            remap[i] = vertexCount;
-            MemoryCopy(vertexData + vertexDataStride * vertexCount,
-                       vertexData + vertexDataStride * i, vertexDataStride);
-            vertexCount++;
-        }
+        finalP[remap[i]] = GetPosition(i);
     }
 
     // Compact the index buffer
     u32 indexCount = 0;
-    for (int i = 0; i < numTriangles; i++)
+    for (int i = 0; i < numIndices / 3; i++)
     {
         if (!triangleIsRemoved.GetBit(i))
         {
-            Assert(!vertexIsRemoved.GetBit(indices[3 * i]));
-            Assert(!vertexIsRemoved.GetBit(indices[3 * i + 1]));
-            Assert(!vertexIsRemoved.GetBit(indices[3 * i + 2]));
-
-            indices[indexCount]     = remap[indices[3 * i]];
-            indices[indexCount + 1] = remap[indices[3 * i + 1]];
-            indices[indexCount + 2] = remap[indices[3 * i + 2]];
+            finalInd[indexCount]     = remap[indices[3 * i]];
+            finalInd[indexCount + 1] = remap[indices[3 * i + 1]];
+            finalInd[indexCount + 2] = remap[indices[3 * i + 2]];
             indexCount += 3;
         }
+        Assert(indexCount < triangleCount * 3);
     }
 
-    u32 *finalIndices = PushArrayNoZero(arena, u32, indexCount);
-    MemoryCopy(finalIndices, indices, sizeof(u32) * indexCount);
-    f32 *finalVertexData = PushArrayNoZero(arena, f32, vertexCount * (3 + numAttributes));
-    MemoryCopy(finalVertexData, vertexData, vertexDataStride * vertexCount);
-
-    return maxError;
+    finalNumVertices = vertexCount;
+    finalNumIndices  = 3 * triangleCount;
 }
 
 #if 0

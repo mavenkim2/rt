@@ -462,7 +462,8 @@ inline OfflineMesh LoadTrianglePLY(Arena *arena, string filename)
     return LoadPLY(arena, filename, GeometryType::TriangleMesh);
 }
 
-inline OfflineMesh *LoadObj(Arena *arena, string filename, int &numMeshes, int &actualNumMeshes)
+inline OfflineMesh *LoadObj(Arena *arena, string filename, int &numMeshes,
+                            int &actualNumMeshes)
 {
     TempArena temp = ScratchStart(0, 0);
     string buffer  = OS_MapFileRead(filename);
@@ -843,6 +844,49 @@ inline OfflineMesh *LoadObjWithWedges(Arena *arena, string filename, int &numMes
     OfflineMesh *outputMeshes = PushArrayNoZero(arena, OfflineMesh, numMeshes);
     MemoryCopy(outputMeshes, meshes.data(), sizeof(OfflineMesh) * numMeshes);
     return outputMeshes;
+}
+
+inline void WriteQuadOBJ(OfflineMesh &mesh, string filename)
+{
+    StringBuilder builder = {};
+    ScratchArena scratch;
+    builder.arena = scratch.temp.arena;
+    for (int i = 0; i < mesh.numVertices; i++)
+    {
+        const Vec3f &v = mesh.p[i];
+        Put(&builder, "v %f %f %f\n", v.x, v.y, v.z);
+    }
+    if (mesh.uv)
+    {
+        for (int i = 0; i < mesh.numVertices; i++)
+        {
+            const Vec2f &uv = mesh.uv[i];
+            Put(&builder, "vt %f %f \n", uv.x, uv.y);
+        }
+    }
+    if (mesh.n)
+    {
+        for (int i = 0; i < mesh.numVertices; i++)
+        {
+            const Vec3f &n = mesh.n[i];
+            Put(&builder, "vn %f %f %f\n", n.x, n.y, n.z);
+        }
+    }
+    for (int i = 0; i < mesh.numIndices; i += 4)
+    {
+        Put(&builder, "f ");
+        for (int j = 0; j < 4; j++)
+        {
+            int idx = mesh.indices[i + j] + 1;
+            Put(&builder, "%u/", idx);
+            if (mesh.uv) Put(&builder, "%u/", idx);
+            else Put(&builder, "/");
+            Assert(mesh.n);
+            Put(&builder, "%u ", idx);
+        }
+        Put(&builder, "\n");
+    }
+    WriteFileMapped(&builder, filename);
 }
 
 } // namespace rt

@@ -31,49 +31,6 @@
 namespace rt
 {
 
-void WriteQuadOBJ(OfflineMesh &mesh, string filename)
-{
-    StringBuilder builder = {};
-    ScratchArena scratch;
-    builder.arena = scratch.temp.arena;
-    for (int i = 0; i < mesh.numVertices; i++)
-    {
-        const Vec3f &v = mesh.p[i];
-        Put(&builder, "v %f %f %f\n", v.x, v.y, v.z);
-    }
-    if (mesh.uv)
-    {
-        for (int i = 0; i < mesh.numVertices; i++)
-        {
-            const Vec2f &uv = mesh.uv[i];
-            Put(&builder, "vt %f %f \n", uv.x, uv.y);
-        }
-    }
-    if (mesh.n)
-    {
-        for (int i = 0; i < mesh.numVertices; i++)
-        {
-            const Vec3f &n = mesh.n[i];
-            Put(&builder, "vn %f %f %f\n", n.x, n.y, n.z);
-        }
-    }
-    for (int i = 0; i < mesh.numIndices; i += 4)
-    {
-        Put(&builder, "f ");
-        for (int j = 0; j < 4; j++)
-        {
-            int idx = mesh.indices[i + j] + 1;
-            Put(&builder, "%u/", idx);
-            if (mesh.uv) Put(&builder, "%u/", idx);
-            else Put(&builder, "/");
-            Assert(mesh.n);
-            Put(&builder, "%u ", idx);
-        }
-        Put(&builder, "\n");
-    }
-    WriteFileMapped(&builder, filename);
-}
-
 f32 Cross2D(Vec2f a, Vec2f b) { return a.x * b.y - a.y * b.x; }
 
 // https://iquilezles.org/articles/ibilinear/
