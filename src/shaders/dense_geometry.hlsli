@@ -228,9 +228,16 @@ struct DenseGeometry
         return (pos + anchor) * scale;
     }
 
+    bool HasNormals()
+    {
+        const uint bitsPerNormal = octBitWidths[0] + octBitWidths[1];
+        return (bitsPerNormal != 0);
+    }
+
     float3 DecodeNormal(uint vertexIndex)
     {
         const uint bitsPerNormal = octBitWidths[0] + octBitWidths[1];
+
         const uint bitsOffset = bitsPerNormal * vertexIndex;
 
         uint2 vals = GetAlignedAddressAndBitOffset(shadBaseAddress + normalOffset, bitsOffset);
@@ -379,13 +386,7 @@ DenseGeometry GetDenseGeometryHeader(PackedDenseGeometryHeader packed, uint bloc
     result.ctrlOffset = (result.numVertices * vertexBitWidth + 7) >> 3;
     result.indexOffset = result.ctrlOffset + 12 * ((result.numTriangles + 31u) >> 5u);
     result.firstBitOffset = (result.indexOffset << 3) + reuseBufferLength * result.indexBitWidth;
-#if 0
-    result.normalOffset = (result.numVertices * vertexBitWidth + 7) >> 3;
-    result.faceIDOffset = result.normalOffset + ((result.numVertices * octBitWidth + 7) >> 3);
-    result.ctrlOffset = result.numFaceIDBits ? (result.faceIDOffset + 4 + (((result.numFaceIDBits + 3) * result.numTriangles + 7) >> 3)) : result.faceIDOffset;
-    result.indexOffset = result.ctrlOffset + 12 * ((result.numTriangles + 31u) >> 5u);
-    result.firstBitOffset = (result.indexOffset << 3) + reuseBufferLength * result.indexBitWidth;
-#endif
+
     result.debug = debug;
 
     return result;

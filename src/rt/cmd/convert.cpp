@@ -76,6 +76,7 @@ typedef HashMap<NamedPacket> SceneHashMap;
 struct MoanaOBJOfflineMeshes
 {
     OfflineMesh *meshes;
+    GeometryType type;
     int total;
     int num;
     int offset;
@@ -659,11 +660,56 @@ bool LoadMoanaOBJ(Arena *arena, PBRTFileInfo *state, string objFile)
     if (OS_FileExists(objFile))
     {
         int total, num;
-        OfflineMesh *meshes = LoadObj(arena, objFile, total, num);
+        // OfflineMesh *meshes = LoadObj(arena, objFile, total, num);
+        u32 faceVertexCount = 0;
+        OfflineMesh *meshes = LoadObjWithWedges(arena, objFile, num, &faceVertexCount);
+
+        for (int i = 0; i < num; i++)
+        {
+            OfflineMesh &mesh = meshes[i];
+            u32 indexCount    = 0;
+            for (int faceIndex = 0; faceIndex < mesh.numIndices / faceVertexCount; faceIndex++)
+            {
+                u32 indices[4];
+                bool invalidTri = false;
+                for (int corner = 0; corner < faceVertexCount; corner++)
+                {
+                    indices[corner] = mesh.indices[faceVertexCount * faceIndex + corner];
+                }
+                for (int corner = 0; corner < faceVertexCount; corner++)
+                {
+                    for (int corner2 = corner + 1; corner2 < faceVertexCount; corner2++)
+                    {
+                        if (indices[corner] == indices[corner2])
+                        {
+                            invalidTri = true;
+                            break;
+                        }
+                    }
+                    if (invalidTri) break;
+                }
+                if (!invalidTri)
+                {
+                    for (int corner = 0; corner < faceVertexCount; corner++)
+                    {
+                        mesh.indices[indexCount + corner] = indices[corner];
+                    }
+                    indexCount += faceVertexCount;
+                }
+            }
+            mesh.numIndices = indexCount;
+        }
+
+        GeometryType type = GeometryType::CatmullClark;
+        if (faceVertexCount == 3)
+        {
+            type = GeometryType::TriangleMesh;
+        }
+        total = num;
         Assert(state->objOfflineMeshes.size() == 0);
         Assert(state->shapes.totalCount == 0);
         state->objOfflineMeshes.emplace_back(
-            MoanaOBJOfflineMeshes{meshes, total, num, (int)state->shapes.totalCount});
+            MoanaOBJOfflineMeshes{meshes, type, total, num, (int)state->shapes.totalCount});
         return true;
     }
     return false;
@@ -692,7 +738,7 @@ string CheckMoanaOBJ(Arena *arena, string directory, string subDirectory, string
 string CheckMoanaVariant(Arena *arena, string directory, string filename)
 {
     string baseFilename = PathSkipLastSlash(filename);
-    if (baseFilename == "osOcean_geometry.pbrt") return {};
+    // if (baseFilename == "osOcean_geometry.pbrt") return {};
 
     u64 offset = FindSubstring(baseFilename, "geometry.pbrt", 0, MatchFlag_CaseInsensitive);
     if (offset == baseFilename.size) return {};
@@ -812,7 +858,9 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                         {
                             for (int j = 0; j < node->count; j++)
                             {
-                                node->values[j].packet.type = "catclark"_sid;
+                                node->values[j].packet.type =
+                                    ConvertGeometryTypeToStringId(meshes.type);
+
                                 if (moanaOfflineMeshIndex >= meshes.num)
                                 {
                                     node->values[j].cancelled = true;
@@ -1342,7 +1390,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 {
                     MoanaOBJOfflineMeshes &meshes = state->objOfflineMeshes.back();
                     Assert(moanaOfflineMeshIndex < meshes.total);
-                    packet->type = "catclark"_sid;
+                    packet->type = ConvertGeometryTypeToStringId(meshes.type);
                     if (moanaOfflineMeshIndex >= meshes.num)
                     {
                         shape->cancelled = true;
@@ -1634,8 +1682,10 @@ void WriteOfflineMesh(OfflineMesh &mesh, StringBuilder &builder,
 {
     WriteData(&builder, &dataBuilder, mesh.p, mesh.numVertices * sizeof(Vec3f), "p",
               builderOffset, cap);
-    WriteData(&builder, &dataBuilder, mesh.n, mesh.numVertices * sizeof(Vec3f), "n",
-              builderOffset, cap);
+
+    if (mesh.n)
+        WriteData(&builder, &dataBuilder, mesh.n, mesh.numVertices * sizeof(Vec3f), "n",
+                  builderOffset, cap);
 
     if (mesh.uv)
         WriteData(&builder, &dataBuilder, mesh.uv, mesh.numVertices * sizeof(Vec2f), "uv",
@@ -2206,6 +2256,7 @@ int main(int argc, char **argv)
     Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
     device              = v;
 
+#if 0
     string testFilename = "../../data/island/pbrt-v4/obj/osOcean/osOcean.obj";
     int numOfflineMeshes, actualNumOfflineMeshes;
 
@@ -2221,12 +2272,15 @@ int main(int argc, char **argv)
     printf("test error: %f\n", maxError);
 
     OfflineMesh simplifiedMesh = {};
-    simplifier.Finalize(simplifiedMesh.p, simplifiedMesh.numVertices, simplifiedMesh.indices,
-                        simplifiedMesh.numIndices);
+    simplifier.Finalize(simplifiedMesh.numVertices, simplifiedMesh.numIndices);
 
-    WriteQuadOBJ(simplifiedMesh, "../../data/island/pbrt-v4/obj/osOcean/osOcean_simp.obj");
+    simplifiedMesh.p       = (Vec3f *)simplifier.vertexData;
+    simplifiedMesh.indices = simplifier.indices;
 
-    // LoadPBRT(arena, filename);
+    WriteTriOBJ(simplifiedMesh, "../../data/island/pbrt-v4/obj/osOcean/osOcean_simp.obj");
+#else
+    LoadPBRT(arena, filename);
+#endif
 
     u64 count        = 0;
     f64 time         = 0;

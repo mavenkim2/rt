@@ -79,6 +79,7 @@ struct MeshSimplifier
     // Adjacency
     StaticArray<Pair> pairs;
     HashIndex cornerHash;
+    HashIndex vertexHash;
     HashIndex pairHash0;
     HashIndex pairHash1;
     BitVector triangleIsRemoved;
@@ -99,7 +100,7 @@ struct MeshSimplifier
     void EvaluatePair(Pair &pair);
     f32 Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetError, u32 limitNumVerts,
                  u32 limitNumTris, f32 limitError);
-    void Finalize(Vec3f *&finalP, u32 &finalNumVertices, u32 *&finalInd, u32 &finalNumIndices);
+    void Finalize(u32 &finalNumVertices, u32 &finalNumIndices);
 };
 
 } // namespace rt

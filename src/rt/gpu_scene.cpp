@@ -238,7 +238,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         fillInstanceShader =
             device->CreateShader(ShaderStage::Compute, "fill instances", fillShaderData);
 
-        string fillClusterBLASName = "../src/shaders/clas/fill_cluster_bottom_level_info.spv";
+        string fillClusterBLASName     = "../src/shaders/fill_cluster_bottom_level_info.spv";
         string fillClusterBLASInfoData = OS_ReadFile(arena, fillClusterBLASName);
         fillClusterBLASInfoShader      = device->CreateShader(
             ShaderStage::Compute, "fill cluster bottom level info", fillClusterBLASInfoData);
@@ -1180,34 +1180,31 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             tlasSemaphore.signalValue = 1;
             allCommandBuffer->SignalOutsideFrame(tlasSemaphore);
         }
-        allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                                  VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                                  VK_ACCESS_2_SHADER_READ_BIT);
-        device->SubmitCommandBuffer(allCommandBuffer);
     }
     else
     {
         Assert(numScenes == 1);
+        device->BeginEvent(allCommandBuffer, "TLAS Build");
 
-        ScenePrimitives *scene = blasScenes[0];
-        allCommandBuffer->Wait(scene->semaphore);
-        tlasSemaphore.signalValue = 1;
-        allCommandBuffer->SignalOutsideFrame(tlasSemaphore);
+        ScenePrimitives *scene     = blasScenes[0];
         Instance instance          = {};
         ScenePrimitives *baseScene = &GetScene()->scene;
+
         GPUBuffer tlasBuffer =
             allCommandBuffer
                 ->CreateTLASInstances(&instance, 1, &params->renderFromWorld, &baseScene)
                 .buffer;
-        allCommandBuffer->Barrier(&tlasBuffer,
-                                  VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-        allCommandBuffer->FlushBarriers();
         tlas = allCommandBuffer->BuildTLAS(&tlasBuffer, 1).as;
 
-        device->SubmitCommandBuffer(allCommandBuffer);
+        tlasSemaphore.signalValue = 1;
+        allCommandBuffer->SignalOutsideFrame(tlasSemaphore);
     }
+    allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                              VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                              VK_ACCESS_2_SHADER_READ_BIT);
+    allCommandBuffer->FlushBarriers();
+    device->SubmitCommandBuffer(allCommandBuffer);
 
     device->SubmitCommandBuffer(transferCmd);
 

@@ -629,7 +629,8 @@ inline OfflineMesh *LoadObj(Arena *arena, string filename, int &numMeshes,
     return outputMeshes;
 }
 
-inline OfflineMesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes)
+inline OfflineMesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes,
+                                      u32 *outFaceVertexCount = 0)
 {
     TempArena temp = ScratchStart(0, 0);
     string buffer  = OS_MapFileRead(filename);
@@ -663,7 +664,14 @@ inline OfflineMesh *LoadObjWithWedges(Arena *arena, string filename, int &numMes
         return uv;
     };
 
+    auto GetNorm = [&](int normIndex) {
+        Vec3f n = normIndex == -1 ? Vec3f(-1e8, -1e8, -1e8) : normals[normIndex];
+        return n;
+    };
+
     bool processingMesh = false;
+
+    u32 meshVertexCount = 0;
 
     for (;;)
     {
@@ -698,11 +706,15 @@ inline OfflineMesh *LoadObjWithWedges(Arena *arena, string filename, int &numMes
 
                 for (u32 i = 0; i < numIndices; i++)
                 {
+                    if (i / 3 == 1449073)
+                    {
+                        int stop = 5;
+                    }
                     i32 vertexIndex = indices[i][0];
                     int uvIndex     = indices[i][1];
                     i32 normalIndex = indices[i][2];
                     Vec3f p         = vertices[vertexIndex];
-                    Vec3f n         = normalIndex == -1 ? Vec3f(1e8) : normals[normalIndex];
+                    Vec3f n         = GetNorm(normalIndex);
                     Vec2f uv        = GetUV(uvIndex);
 
                     int hash   = Hash(p, uv, n);
@@ -712,8 +724,8 @@ inline OfflineMesh *LoadObjWithWedges(Arena *arena, string filename, int &numMes
                     {
                         Vec3i testIndices = indices[j];
                         Vec2f testUv      = GetUV(testIndices[1]);
-                        if (p == vertices[testIndices[0]] && uv == testUv &&
-                            n == normals[testIndices[2]])
+                        Vec3f testNorm    = GetNorm(testIndices[2]);
+                        if (p == vertices[testIndices[0]] && uv == testUv && n == testNorm)
                         {
                             mesh.indices[i] = remap[j];
                             found           = true;
@@ -724,8 +736,7 @@ inline OfflineMesh *LoadObjWithWedges(Arena *arena, string filename, int &numMes
                     if (!found)
                     {
                         int currentIndex = newPositions.size();
-
-                        remap[i] = currentIndex;
+                        remap[i]         = currentIndex;
 
                         newPositions.push_back(p);
                         if (hasNormals)
@@ -745,15 +756,20 @@ inline OfflineMesh *LoadObjWithWedges(Arena *arena, string filename, int &numMes
                     }
                 }
 
+                // u32 newSize = newPositions.size();
+                // u32 oldSize = vertices.size();
+                // Assert(newSize == oldSize);
+
                 mesh.numVertices = (u32)newPositions.size();
 
                 mesh.p = PushArrayNoZero(arena, Vec3f, mesh.numVertices);
                 if (hasUvs) mesh.uv = PushArrayNoZero(arena, Vec2f, newUvs.size());
-                mesh.n = PushArrayNoZero(arena, Vec3f, mesh.numVertices);
+                if (hasNormals) mesh.n = PushArrayNoZero(arena, Vec3f, mesh.numVertices);
 
                 MemoryCopy(mesh.p, newPositions.data(), sizeof(Vec3f) * newPositions.size());
                 if (hasUvs) MemoryCopy(mesh.uv, newUvs.data(), sizeof(Vec2f) * newUvs.size());
-                MemoryCopy(mesh.n, newNormals.data(), sizeof(Vec3f) * newNormals.size());
+                if (hasNormals)
+                    MemoryCopy(mesh.n, newNormals.data(), sizeof(Vec3f) * newNormals.size());
 
                 threadLocalStatistics[GetThreadIndex()].misc2 += mesh.numVertices;
                 threadLocalStatistics[GetThreadIndex()].misc3 += mesh.numIndices;
@@ -830,7 +846,15 @@ inline OfflineMesh *LoadObjWithWedges(Arena *arena, string filename, int &numMes
                                         normalIndex - normalOffset));
                 Skip();
             }
-            // Assert(faceVertexCount == 4)
+
+            if (meshVertexCount == 0)
+            {
+                meshVertexCount = faceVertexCount;
+            }
+            else if (meshVertexCount != faceVertexCount)
+            {
+                Print("Mesh has multiple types of polygons\n");
+            }
         }
         else
         {
@@ -839,6 +863,8 @@ inline OfflineMesh *LoadObjWithWedges(Arena *arena, string filename, int &numMes
     }
 
     ScratchEnd(temp);
+
+    if (outFaceVertexCount) *outFaceVertexCount = meshVertexCount;
 
     numMeshes                 = totalNumMeshes;
     OfflineMesh *outputMeshes = PushArrayNoZero(arena, OfflineMesh, numMeshes);
@@ -881,8 +907,53 @@ inline void WriteQuadOBJ(OfflineMesh &mesh, string filename)
             Put(&builder, "%u/", idx);
             if (mesh.uv) Put(&builder, "%u/", idx);
             else Put(&builder, "/");
-            Assert(mesh.n);
-            Put(&builder, "%u ", idx);
+            if (mesh.n) Put(&builder, "%u ", idx);
+            else Put(&builder, " ");
+        }
+        Put(&builder, "\n");
+    }
+    WriteFileMapped(&builder, filename);
+}
+
+inline void WriteTriOBJ(OfflineMesh &mesh, string filename)
+{
+    StringBuilder builder = {};
+    ScratchArena scratch;
+    builder.arena = scratch.temp.arena;
+    Put(&builder, "g default\n");
+    for (int i = 0; i < mesh.numVertices; i++)
+    {
+        const Vec3f &v = mesh.p[i];
+        Put(&builder, "v %f %f %f\n", v.x, v.y, v.z);
+    }
+    if (mesh.uv)
+    {
+        for (int i = 0; i < mesh.numVertices; i++)
+        {
+            const Vec2f &uv = mesh.uv[i];
+            Put(&builder, "vt %f %f \n", uv.x, uv.y);
+        }
+    }
+    if (mesh.n)
+    {
+        for (int i = 0; i < mesh.numVertices; i++)
+        {
+            const Vec3f &n = mesh.n[i];
+            Put(&builder, "vn %f %f %f\n", n.x, n.y, n.z);
+        }
+    }
+    Put(&builder, "g geo\n");
+    for (int i = 0; i < mesh.numIndices; i += 3)
+    {
+        Put(&builder, "f ");
+        for (int j = 0; j < 3; j++)
+        {
+            int idx = mesh.indices[i + j] + 1;
+            Put(&builder, "%u/", idx);
+            if (mesh.uv) Put(&builder, "%u/", idx);
+            else Put(&builder, "/");
+            if (mesh.n) Put(&builder, "%u ", idx);
+            else Put(&builder, " ");
         }
         Put(&builder, "\n");
     }

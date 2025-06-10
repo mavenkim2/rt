@@ -35,6 +35,17 @@ inline string ConvertGeometryTypeToString(GeometryType type)
     }
 }
 
+inline StringId ConvertGeometryTypeToStringId(GeometryType type)
+{
+    switch (type)
+    {
+        case GeometryType::QuadMesh: return "quadmesh"_sid;
+        case GeometryType::TriangleMesh: return "trianglemesh"_sid;
+        case GeometryType::CatmullClark: return "catclark"_sid;
+        default: return "invalid"_sid;
+    }
+}
+
 template <typename BxDFShader, typename NormalShader>
 struct Material2;
 

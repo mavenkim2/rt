@@ -19,7 +19,7 @@
 #include "../rt/shader_interop/hit_shaderinterop.h"
 #include "../rt/shader_interop/debug_shaderinterop.h"
 #include "ser.hlsli"
-#include "../rt/nvapi.h"
+//#include "../rt/nvapi.h"
 #include "wave_intrinsics.hlsli"
 
 #define SER
@@ -274,10 +274,19 @@ void main()
 
             float3 gn = normalize(cross(p0 - p2, p1 - p2));
 
-            float3 n0 = dg.DecodeNormal(vids[0]);
-            float3 n1 = dg.DecodeNormal(vids[1]);
-            float3 n2 = dg.DecodeNormal(vids[2]);
-
+            float3 n0, n1, n2;
+            if (dg.HasNormals())
+            {
+                n0 = dg.DecodeNormal(vids[0]);
+                n1 = dg.DecodeNormal(vids[1]);
+                n2 = dg.DecodeNormal(vids[2]);
+            }
+            else 
+            {
+                n0 = gn;
+                n1 = gn;
+                n2 = gn;
+            }
             
             // Calculate triangle differentials
             // p0 + dpdu * u + dpdv * v = p1

@@ -200,10 +200,7 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     {
         Mesh &mesh = meshes[i];
         quantizedVertices.Push(StaticArray<Vec3i>(meshScratch.temp.arena, mesh.numVertices));
-        if (mesh.n)
-        {
-            octNormals.Push(StaticArray<u32>(meshScratch.temp.arena, mesh.numVertices));
-        }
+        octNormals.Push(StaticArray<u32>(meshScratch.temp.arena, mesh.numVertices));
         indexTotal += mesh.numIndices;
 
         // Quantize to global grid
@@ -211,8 +208,11 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
         {
             quantizedVertices[i].Push(Vec3i(Round(mesh.p[j] * quantize)));
 
-            Vec3f n = Normalize(mesh.n[j]);
-            octNormals[i].Push(EncodeOctahedral(n));
+            if (mesh.n)
+            {
+                Vec3f n = Normalize(mesh.n[j]);
+                octNormals[i].Push(EncodeOctahedral(n));
+            }
         }
     }
 
@@ -307,9 +307,10 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     u32 materialIDStart     = scene->primIndices[geomIDStart].materialID.GetIndex();
     bool constantMaterialID = true;
 
-    u32 minFaceID   = pos_inf;
-    u32 maxFaceID   = 0;
-    bool hasFaceIDs = false;
+    u32 minFaceID      = pos_inf;
+    u32 maxFaceID      = 0;
+    bool hasFaceIDs    = false;
+    bool hasAnyNormals = false;
 
     for (int i = start; i < start + clusterNumTriangles; i++)
     {
@@ -321,6 +322,11 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
             mesh.indices[3 * primID + 1],
             mesh.indices[3 * primID + 2],
         };
+
+        if (indices[0] == indices[1] || indices[0] == indices[2] || indices[1] == indices[2])
+        {
+            int stop = 5;
+        }
 
         geomIDs[i - start] = geomID;
         primIDs[i - start] = primID;
@@ -335,21 +341,30 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
         Material *material = rootScene->materials[materialID];
 
         hasFaceIDs |= (bool(mesh.faceIDs) && material->ptexReflectanceIndex != -1);
+        hasAnyNormals |= bool(mesh.n);
 
         for (int indexIndex = 0; indexIndex < 3; indexIndex++)
         {
             min = Min(min, quantizedVertices[geomID][indices[indexIndex]]);
             max = Max(max, quantizedVertices[geomID][indices[indexIndex]]);
 
-            u32 normal = octNormals[geomID][indices[indexIndex]];
-            Vec2u n    = Vec2u(normal >> 16, normal & ((1 << 16) - 1));
-            minOct     = Min(minOct, n);
-            maxOct     = Max(maxOct, n);
+            u32 normal = ~0u;
+            if (mesh.n)
+            {
+                normal = octNormals[geomID][indices[indexIndex]];
+            }
 
-            auto *hashedIndex = vertexHashSet.Find({geomID, indices[indexIndex]});
+            Vec2u n = Vec2u(normal >> 16, normal & ((1 << 16) - 1));
+            minOct  = Min(minOct, n);
+            maxOct  = Max(maxOct, n);
+
+            auto *hashedIndex  = vertexHashSet.Find({geomID, indices[indexIndex]});
+            u32 newVertexIndex = ~0u;
+
             if (hashedIndex)
             {
                 vertexIndices[indexCount++] = hashedIndex->clusterVertexIndex;
+                newVertexIndex              = hashedIndex->clusterVertexIndex;
             }
             else
             {
@@ -359,8 +374,16 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
                 vertexIndices[indexCount++]                      = vertexCount;
 
                 vertices[vertexCount] = quantizedVertices[geomID][indices[indexIndex]];
-                normals[vertexCount]  = octNormals[geomID][indices[indexIndex]];
+                normals[vertexCount]  = normal;
                 vertexCount++;
+            }
+
+            if (indexIndex == 2 &&
+                (vertexIndices[3 * (i - start) + 0] == vertexIndices[3 * (i - start) + 1] ||
+                 vertexIndices[3 * (i - start) + 0] == vertexIndices[3 * (i - start) + 2] ||
+                 vertexIndices[3 * (i - start) + 1] == vertexIndices[3 * (i - start) + 2]))
+            {
+                int stop = 5;
             }
         }
     }
@@ -371,8 +394,12 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     u32 numBitsY = min[1] == max[1] ? 0 : Log2Int(Max(max[1] - min[1], 1)) + 1;
     u32 numBitsZ = min[2] == max[2] ? 0 : Log2Int(Max(max[2] - min[2], 1)) + 1;
 
-    u32 numOctBitsX = minOct[0] == maxOct[0] ? 0 : Log2Int(Max(maxOct[0] - minOct[0], 1u)) + 1;
-    u32 numOctBitsY = minOct[1] == maxOct[1] ? 0 : Log2Int(Max(maxOct[1] - minOct[1], 1u)) + 1;
+    u32 numOctBitsX = !hasAnyNormals || minOct[0] == maxOct[0]
+                          ? 0
+                          : Log2Int(Max(maxOct[0] - minOct[0], 1u)) + 1;
+    u32 numOctBitsY = !hasAnyNormals || minOct[1] == maxOct[1]
+                          ? 0
+                          : Log2Int(Max(maxOct[1] - minOct[1], 1u)) + 1;
 
     u32 numFaceBits = hasFaceIDs ? Log2Int(Max(maxFaceID - minFaceID, 1u)) + 1 : 0;
 
@@ -839,8 +866,6 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
         faceIDNode = buildData.shadingByteBuffer.AddNode(faceBitStreamSize);
     }
 
-    StaticArray<u32> newNormals(clusterScratch.arena, vertexCount);
-
     for (auto index : newIndexOrder)
     {
         if (usedVertices.GetBit(index))
@@ -866,11 +891,12 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
                     WriteBits((u32 *)vertexNode->values, bitOffset, p, bitWidths[i]);
                 }
             }
-            u32 normal  = normals[index];
+
+            u32 normal = ~0u;
+            if (hasAnyNormals) normal = normals[index];
             u32 normalX = (normal >> 16) - minOct[0];
             u32 normalY = (normal & ((1 << 16) - 1)) - minOct[1];
 
-            newNormals.Push(normal);
             if (normalNode)
             {
                 WriteBits((u32 *)normalNode->values, normalBitOffset, normalX, numOctBitsX);
@@ -1107,7 +1133,7 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
 
     u32 bitSize      = ((clusterNumTriangles + 31) >> 5) * sizeof(u32);
     auto *debug0Node = buildData.debugRestartCountPerDword.AddNode(vertexCount);
-    MemoryCopy(debug0Node->values, newNormals.data, vertexCount * sizeof(u32));
+    // MemoryCopy(debug0Node->values, newNormals.data, vertexCount * sizeof(u32));
     auto *debug1Node = buildData.debugRestartHighBitPerDword.AddNode(4);
     MemoryCopy(debug1Node->values, backtrack.bits, bitSize);
 
