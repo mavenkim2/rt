@@ -2256,7 +2256,7 @@ int main(int argc, char **argv)
     Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
     device              = v;
 
-#if 0
+#if 1
     string testFilename = "../../data/island/pbrt-v4/obj/osOcean/osOcean.obj";
     int numOfflineMeshes, actualNumOfflineMeshes;
 

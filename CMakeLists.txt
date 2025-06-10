@@ -211,7 +211,7 @@ target_include_directories(convert PRIVATE
     ${ZLIB_INCLUDE_DIR}
     ${VULKAN_INCLUDE_DIR}
 )
-target_link_libraries(convert PRIVATE ${PTEX_LIBRARY})
+target_link_libraries(convert PRIVATE ${PTEX_LIBRARY} ${GK_LIBRARY} ${METIS_LIBRARY})
 target_compile_definitions(convert PRIVATE ${RT_DEFINITIONS})
 target_compile_options(convert PRIVATE ${RT_CXX_FLAGS})
 

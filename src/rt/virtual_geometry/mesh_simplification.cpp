@@ -4,6 +4,7 @@
 #include "../dgfs.h"
 #include <cstring>
 #include "mesh_simplification.h"
+#include "../../third_party/METIS/include/metis.h"
 
 namespace rt
 {
@@ -1277,7 +1278,6 @@ void MeshSimplifier::Finalize(u32 &finalNumVertices, u32 &finalNumIndices)
     Print("%u %u\n", finalNumVertices, finalNumIndices);
 }
 
-#if 0
 struct ClusterGroup
 {
 };
@@ -1293,23 +1293,24 @@ void CreateClusters(Mesh &mesh)
     // 3. Simplify the cluster group
     // 4. Split into clusters
 
-    ClusterBuilder builder;
+    // ClusterBuilder builder;
+    //
+    // for (;;)
+    // {
+    //     ScratchArena scratch;
+    //
+    //     RecordAOSSplits record;
+    //     builder.BuildClusters(record, true);
+    //
+    //     PrimRef *refs = PushArrayNoZero(scratch.temp.arena, PrimRef, mesh.numFaces);
+    //     u32 offset    = 0;
+    //     u32 start     = 0;
+    //     u32 count     = mesh.numFaces;
+    //     GenerateMeshRefsHelper<GeometryType::TriangleMesh>{mesh->p, mesh->indices}(
+    //         refs, offset, 0, start, count, record);
+    // }
 
-    for (;;)
-    {
-        ScratchArena scratch;
-
-        RecordAOSSplits record;
-        builder.BuildClusters(record, true);
-
-        PrimRef *refs = PushArrayNoZero(scratch.temp.arena, PrimRef, mesh.numFaces);
-        u32 offset    = 0;
-        u32 start     = 0;
-        u32 count     = mesh.numFaces;
-        GenerateMeshRefsHelper<GeometryType::TriangleMesh>{mesh->p, mesh->indices}(
-            refs, offset, 0, start, count, record);
-    }
+    // Group clusters
 }
-#endif
 
 } // namespace rt

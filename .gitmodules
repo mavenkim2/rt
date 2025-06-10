@@ -14,3 +14,9 @@
 [submodule "nvapi"]
 	path = src/third_party/nvapi
 	url = https://github.com/NVIDIA/nvapi.git
+[submodule "src/third_party/METIS"]
+	path = src/third_party/METIS
+	url = https://github.com/KarypisLab/METIS.git
+[submodule "src/third_party/GKlib"]
+	path = src/third_party/GKlib
+	url = https://github.com/KarypisLab/GKlib.git
