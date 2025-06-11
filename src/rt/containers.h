@@ -9,6 +9,7 @@
 #include "memory.h"
 #include "string.h"
 #include "thread_statistics.h"
+#include "win32.h"
 
 namespace rt
 {
@@ -485,6 +486,14 @@ struct HashIndex
             indexChain[index] = hash[slot];
             hash[slot]        = index;
         }
+    }
+
+    void AddConcurrent(int key, int index)
+    {
+        Assert(index < indexChainSize);
+        key &= (hashCount - 1);
+
+        indexChain[index] = AtomicExchange(&hash[key], index);
     }
 
     b32 RemoveFromHash(i32 key, i32 index)
