@@ -200,6 +200,7 @@ add_executable(convert
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/cmd/convert.cpp
     ${RT_VULKAN_SOURCE_FILES}
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/ptex.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/dgfs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/debug.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/virtual_geometry/mesh_simplification.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bit_packing.cpp

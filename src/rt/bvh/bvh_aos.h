@@ -11,7 +11,7 @@ namespace rt
 //
 
 template <i32 N>
-void LoadFaceVertices(Mesh *mesh, const u32 faceIndex, Lane4F32 v[N])
+void LoadFaceVertices(const Mesh *mesh, const u32 faceIndex, Lane4F32 v[N])
 {
     for (int i = 0; i < N; i++)
     {
@@ -20,7 +20,7 @@ void LoadFaceVertices(Mesh *mesh, const u32 faceIndex, Lane4F32 v[N])
 }
 
 template <i32 N>
-void LoadVertices(Mesh *meshes[4], const u32 faceIndices[4], Vec3lf4 p[N])
+void LoadVertices(const Mesh *meshes[4], const u32 faceIndices[4], Vec3lf4 p[N])
 {
     Lane4F32 v[4][N];
     for (int i = 0; i < 4; i++)
@@ -34,7 +34,7 @@ void LoadVertices(Mesh *meshes[4], const u32 faceIndices[4], Vec3lf4 p[N])
 }
 
 template <i32 N>
-void LoadVertices(Mesh *mesh, const u32 faceIndices[4], Vec3lf4 p[N])
+void LoadVertices(const Mesh *mesh, const u32 faceIndices[4], Vec3lf4 p[N])
 {
     Lane4F32 v[4][N];
     for (int i = 0; i < 4; i++)
@@ -114,10 +114,10 @@ struct Quad8
     static void Load(const Mesh *primitives, const u32 dim, const u32 geomIDs[8],
                      const u32 faceIndices[8], Quad8 *out)
     {
-        Mesh *meshes[8] = {primitives + geomIDs[0], primitives + geomIDs[1],
-                           primitives + geomIDs[2], primitives + geomIDs[3],
-                           primitives + geomIDs[4], primitives + geomIDs[5],
-                           primitives + geomIDs[6], primitives + geomIDs[7]};
+        const Mesh *meshes[8] = {primitives + geomIDs[0], primitives + geomIDs[1],
+                                 primitives + geomIDs[2], primitives + geomIDs[3],
+                                 primitives + geomIDs[4], primitives + geomIDs[5],
+                                 primitives + geomIDs[6], primitives + geomIDs[7]};
 
         Vec3lf4 p0[4];
         LoadVertices<4>(meshes, faceIndices, p0);
@@ -188,10 +188,10 @@ struct Triangle8
     static void Load(const Mesh *primitives, const u32 dim, const u32 geomIDs[8],
                      const u32 faceIndices[8], Triangle8 *out)
     {
-        Mesh *meshes[8] = {primitives + geomIDs[0], primitives + geomIDs[1],
-                           primitives + geomIDs[2], primitives + geomIDs[3],
-                           primitives + geomIDs[4], primitives + geomIDs[5],
-                           primitives + geomIDs[6], primitives + geomIDs[7]};
+        const Mesh *meshes[8] = {primitives + geomIDs[0], primitives + geomIDs[1],
+                                 primitives + geomIDs[2], primitives + geomIDs[3],
+                                 primitives + geomIDs[4], primitives + geomIDs[5],
+                                 primitives + geomIDs[6], primitives + geomIDs[7]};
 
         Vec3lf4 p0[3];
         LoadVertices<3>(meshes, faceIndices, p0);

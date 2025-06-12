@@ -7,6 +7,7 @@
 #include "bvh/bvh_types.h"
 #include "shader_interop/dense_geometry_shaderinterop.h"
 #include "shader_interop/ray_shaderinterop.h"
+#include "mesh.h"
 #include "dgfs.h"
 #include "graphics/ptex.h"
 #include "memory.h"

@@ -1417,7 +1417,8 @@ void BuildBVH(Arena **arenas, ScenePrimitives *scene)
 
     if (scene->numPrimitives > 1)
     {
-        PrimRef *refs  = ParallelGenerateMeshRefs<type>(temp.arena, scene, record, true);
+        PrimRef *refs  = ParallelGenerateMeshRefs<type>(temp.arena, (Mesh *)scene->primitives,
+                                                        scene->numPrimitives, record, true);
         scene->nodePtr = BuildQuantizedSBVH<type>(settings, arenas, scene, refs, record);
         using IntersectorType = typename IntersectorHelper<type, PrimRef>::IntersectorType;
         scene->intersectFunc  = &IntersectorType::Intersect;
@@ -1458,109 +1459,6 @@ void BuildQuadBVH(Arena **arenas, ScenePrimitives *scene)
 void BuildCatClarkBVH(Arena **arenas, ScenePrimitives *scene)
 {
     BuildBVH<GeometryType::CatmullClark>(arenas, scene);
-}
-
-template <GeometryType type>
-PrimRef *ParallelGenerateMeshRefs(Arena *arena, ScenePrimitives *scene,
-                                  RecordAOSSplits &record, bool spatialSplits)
-{
-    u32 totalNumFaces = 0;
-    u32 extEnd        = 0;
-    PrimRef *refs     = 0;
-    Mesh *meshes      = (Mesh *)scene->primitives;
-    if (scene->numPrimitives > PARALLEL_THRESHOLD)
-    {
-        TempArena temp = ScratchStart(&arena, 1);
-
-        ParallelForOutput output =
-            ParallelFor<u32>(temp, 0, scene->numPrimitives, PARALLEL_THRESHOLD,
-                             [&](u32 &faceCount, u32 jobID, u32 start, u32 count) {
-                                 u32 outCount = 0;
-
-                                 for (u32 i = start; i < start + count; i++)
-                                 {
-                                     Mesh &mesh = meshes[i];
-                                     outCount += mesh.GetNumFaces();
-                                 }
-                                 faceCount = outCount;
-                             });
-        Reduce(totalNumFaces, output, [&](u32 &l, const u32 &r) { l += r; });
-
-        u32 offset   = 0;
-        u32 *offsets = (u32 *)output.out;
-        for (u32 i = 0; i < output.num; i++)
-        {
-            u32 numFaces = offsets[i];
-            offsets[i]   = offset;
-            offset += numFaces;
-        }
-        Assert(totalNumFaces == offset);
-        u32 extEnd = u32(totalNumFaces * (spatialSplits ? GROW_AMOUNT : 1));
-
-        // Generate PrimRefs
-        refs = PushArrayNoZero(arena, PrimRef, extEnd);
-
-        ParallelReduce<RecordAOSSplits>(
-            &record, 0, scene->numPrimitives, PARALLEL_THRESHOLD,
-            [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
-                GenerateMeshRefs<type>(meshes, refs, offsets[jobID],
-                                       jobID == output.num - 1 ? totalNumFaces
-                                                               : offsets[jobID + 1],
-                                       start, count, record);
-            },
-            [&](RecordAOSSplits &l, const RecordAOSSplits &r) { l.Merge(r); });
-
-        ScratchEnd(temp);
-    }
-    else
-    {
-        for (u32 i = 0; i < scene->numPrimitives; i++)
-        {
-            Mesh &mesh = meshes[i];
-            totalNumFaces += mesh.GetNumFaces();
-        }
-        extEnd = u32(totalNumFaces * (spatialSplits ? GROW_AMOUNT : 1));
-        refs   = PushArrayNoZero(arena, PrimRef, extEnd);
-        GenerateMeshRefs<type>(meshes, refs, 0, totalNumFaces, 0, scene->numPrimitives,
-                               record);
-    }
-    record.SetRange(0, totalNumFaces, extEnd);
-    return refs;
-}
-
-template <GeometryType type, typename PrimRef>
-void GenerateMeshRefs(Mesh *meshes, PrimRef *refs, u32 offset, u32 offsetMax, u32 start,
-                      u32 count, RecordAOSSplits &record)
-{
-    RecordAOSSplits r(neg_inf);
-    for (u32 i = start; i < start + count; i++)
-    {
-        Mesh *mesh = &meshes[i];
-
-        u32 numFaces = mesh->GetNumFaces();
-        RecordAOSSplits tempRecord(neg_inf);
-        if (numFaces > PARALLEL_THRESHOLD)
-        {
-            ParallelReduce<RecordAOSSplits>(
-                &tempRecord, 0, numFaces, PARALLEL_THRESHOLD,
-                [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
-                    Assert(offset + start < offsetMax);
-                    GenerateMeshRefsHelper<type, PrimRef>{mesh->p, mesh->indices}(
-                        refs, offset + start, i, start, count, record);
-                },
-                [&](RecordAOSSplits &l, const RecordAOSSplits &r) { l.Merge(r); });
-        }
-        else
-        {
-            Assert(offset < offsetMax);
-            GenerateMeshRefsHelper<type, PrimRef>{mesh->p, mesh->indices}(
-                refs, offset, i, 0, numFaces, tempRecord);
-        }
-        r.Merge(tempRecord);
-        offset += numFaces;
-    }
-    Assert(offsetMax == offset);
-    record = r;
 }
 
 template <GeometryType type>

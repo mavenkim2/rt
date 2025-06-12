@@ -1,6 +1,7 @@
 #ifndef HASH_H_
 #define HASH_H_
 
+#include "base.h"
 #include "string.h"
 
 namespace rt

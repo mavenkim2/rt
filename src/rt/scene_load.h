@@ -3,6 +3,8 @@
 
 #include "hash.h"
 #include "thread_statistics.h"
+#include "platform.h"
+#include "thread_context.h"
 #include <unordered_set>
 
 namespace rt

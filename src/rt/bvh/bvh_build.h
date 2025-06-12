@@ -729,7 +729,7 @@ BVHNode<N> BuildQuantizedBVH(BuildSettings settings, Arena **inArenas,
     Builder builder;
     using Heuristic       = typename Builder::Heuristic;
     settings.logBlockSize = Bsf(K);
-    new (&builder.heuristic) Heuristic(ref, scene, settings.logBlockSize);
+    new (&builder.heuristic) Heuristic(ref, settings.logBlockSize);
     builder.primRefs = ref;
     builder.scene    = scene;
 #ifdef USE_QUANTIZE_COMPRESS
@@ -769,8 +769,8 @@ BVHNode<N> BuildQuantizedSBVH(BuildSettings settings, Arena **inArenas,
     Builder builder;
     using Heuristic       = typename Builder::Heuristic;
     settings.logBlockSize = Bsf(K);
-    new (&builder.heuristic)
-        Heuristic(ref, scene, HalfArea(record.geomBounds), settings.logBlockSize);
+    new (&builder.heuristic) Heuristic(ref, (Mesh *)scene->primitives,
+                                       HalfArea(record.geomBounds), settings.logBlockSize);
     builder.primRefs = ref;
     builder.scene    = scene;
 #ifdef USE_QUANTIZE_COMPRESS

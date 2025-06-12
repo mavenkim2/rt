@@ -1,6 +1,8 @@
 #ifndef HANDLES_H
 #define HANDLES_H
 #include "template.h"
+#include "hash.h"
+#include "math/math_include.h"
 #include "string.h"
 namespace rt
 {

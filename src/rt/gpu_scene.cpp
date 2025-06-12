@@ -731,7 +731,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         RecordAOSSplits record;
         PrimRef *refs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
-            sceneScratch.temp.arena, scene, record, false);
+            sceneScratch.temp.arena, (Mesh *)scene->primitives, scene->numPrimitives, record, false);
 
         Mesh *meshes        = (Mesh *)scene->primitives;
         u32 blasNumVertices = 0;

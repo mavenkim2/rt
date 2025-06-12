@@ -11,6 +11,7 @@
 #include "handles.h"
 #include "lights.h"
 #include "parallel.h"
+#include "mesh.h"
 #include "scene_load.h"
 #include "subdivision.h"
 #include <nanovdb/NanoVDB.h>
@@ -33,179 +34,11 @@ enum class IndexType
     u32,
 };
 
-// Megastruct for geometry
-struct Mesh
-{
-    Vec3f *p;
-    Vec3f *n;
-    Vec2f *uv;
-    u32 *indices;
-    u32 *faceIDs;
-    u32 numIndices;
-    u32 numVertices;
-    u32 numFaces;
-
-    // PDF for area sampling
-    PiecewiseConstant1D areaPDF;
-    u32 GetNumFaces() const { return numFaces; }
-
-    void GetFaceIndices(int f, int outIndices[3])
-    {
-        if (indices)
-        {
-            outIndices[0] = indices[3 * f + 0];
-            outIndices[1] = indices[3 * f + 1];
-            outIndices[2] = indices[3 * f + 2];
-        }
-        else
-        {
-            outIndices[0] = 3 * f + 0;
-            outIndices[1] = 3 * f + 1;
-            outIndices[2] = 3 * f + 2;
-        }
-    }
-
-    void CreateTriangleAreaPDF(Arena *arena)
-    {
-        Assert(p && indices);
-        f32 *areas = PushArrayNoZero(arena, f32, numFaces);
-        for (int f = 0; f < numFaces; f++)
-        {
-            int triIndices[3];
-            GetFaceIndices(f, triIndices);
-            f32 area = 0.5f * Length(Cross(p[triIndices[1]] - p[triIndices[0]],
-                                           p[triIndices[2]] - p[triIndices[0]]));
-            areas[f] = area;
-        }
-        areaPDF = PiecewiseConstant1D(arena, areas, numFaces, 0.f, 1.f);
-    }
-
-    Vec3f SamplePosition(Vec2f u)
-    {
-        f32 pdf;
-        u32 faceIndex = 0;
-        f32 result    = areaPDF.Sample(u[0], &pdf, &faceIndex);
-
-        int triIndices[3];
-        GetFaceIndices(faceIndex, triIndices);
-
-        Vec3f bary        = SampleUniformTriangle(u[1]);
-        Vec3f samplePoint = bary[0] * p[triIndices[0]] + bary[1] * p[triIndices[1]] +
-                            bary[2] * p[triIndices[2]];
-        return samplePoint;
-    }
-
-    __forceinline const Vec3f &GetIndexedVertex(u32 index) const
-    {
-        if (indices)
-        {
-            Assert(index < numIndices);
-            return p[indices[index]];
-        }
-        Assert(index < numVertices);
-        return p[index];
-    }
-};
-
 #ifdef USE_GPU
 typedef GPUMesh MeshType;
 #else
 typedef Mesh MeshType;
 #endif
-
-template <GeometryType type, typename PrimRefType = PrimRef>
-struct GenerateMeshRefsHelper
-{
-    Vec3f *p;
-    u32 *indices;
-
-    __forceinline void operator()(PrimRefType *refs, u32 offset, u32 geomID, u32 start,
-                                  u32 count, RecordAOSSplits &record)
-    {
-        static_assert(type == GeometryType::TriangleMesh || type == GeometryType::QuadMesh);
-        constexpr u32 numVerticesPerFace = type == GeometryType::QuadMesh ? 4 : 3;
-        Bounds geomBounds;
-        Bounds centBounds;
-        for (u32 i = start; i < start + count; i++, offset++)
-        {
-            PrimRefType *prim = &refs[offset];
-            Vec3f v[numVerticesPerFace];
-            if (indices)
-            {
-                for (u32 j = 0; j < numVerticesPerFace; j++)
-                    v[j] = p[indices[numVerticesPerFace * i + j]];
-            }
-            else
-            {
-                for (u32 j = 0; j < numVerticesPerFace; j++)
-                    v[j] = p[numVerticesPerFace * i + j];
-            }
-
-            Vec3f min(pos_inf);
-            Vec3f max(neg_inf);
-            for (u32 j = 0; j < numVerticesPerFace; j++)
-            {
-                min = Min(min, v[j]);
-                max = Max(max, v[j]);
-            }
-
-            Assert(min != max);
-
-            Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
-            Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
-            Lane4F32::StoreU(prim->min, -mins);
-
-            if constexpr (!std::is_same_v<PrimRefType, PrimRefCompressed>)
-                prim->geomID = geomID;
-            prim->maxX   = max.x;
-            prim->maxY   = max.y;
-            prim->maxZ   = max.z;
-            prim->primID = i;
-
-            geomBounds.Extend(mins, maxs);
-            centBounds.Extend(maxs + mins);
-        }
-        record.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
-        record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
-    }
-    // Computes bounds only
-    __forceinline Bounds operator()(u32 start, u32 count)
-    {
-        static_assert(type == GeometryType::TriangleMesh || type == GeometryType::QuadMesh);
-        constexpr u32 numVerticesPerFace = type == GeometryType::QuadMesh ? 4 : 3;
-        Bounds geomBounds;
-        for (u32 i = start; i < start + count; i++)
-        {
-            Vec3f v[numVerticesPerFace];
-            if (indices)
-            {
-                for (u32 j = 0; j < numVerticesPerFace; j++)
-                    v[j] = p[indices[numVerticesPerFace * i + j]];
-            }
-            else
-            {
-                for (u32 j = 0; j < numVerticesPerFace; j++)
-                    v[j] = p[numVerticesPerFace * i + j];
-            }
-
-            Vec3f min(pos_inf);
-            Vec3f max(neg_inf);
-            for (u32 j = 0; j < numVerticesPerFace; j++)
-            {
-                min = Min(min, v[j]);
-                max = Max(max, v[j]);
-            }
-
-            Assert(min != max);
-
-            Lane4F32 mins = Lane4F32(min.x, min.y, min.z, 0);
-            Lane4F32 maxs = Lane4F32(max.x, max.y, max.z, 0);
-
-            geomBounds.Extend(mins, maxs);
-        }
-        return geomBounds;
-    }
-};
 
 struct Volume
 {
@@ -935,9 +768,6 @@ void BuildCatClarkBVH(Arena **arenas, ScenePrimitives *scene);
 template <GeometryType type>
 void ComputeTessellationParams(Mesh *meshes, TessellationParams *params, u32 start, u32 count);
 
-template <GeometryType type>
-PrimRef *ParallelGenerateMeshRefs(Arena *arena, ScenePrimitives *scene,
-                                  RecordAOSSplits &record, bool spatialSplits);
 void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
                     const Mat4 &cameraFromRender, int screenHeight);
 void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
