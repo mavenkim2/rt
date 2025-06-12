@@ -62,7 +62,7 @@ struct ClusterBuilder
     PrimRef *primRefs;
     void *h;
 
-    ClusterBuilder(Arena *arena, ScenePrimitives *scene, PrimRef *primRefs);
+    ClusterBuilder(Arena *arena, PrimRef *primRefs);
     void BuildClusters(RecordAOSSplits &record, bool parallel);
     void CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *buildData, Mesh *meshes,
                     int numMeshes, Bounds &sceneBounds);

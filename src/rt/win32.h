@@ -97,16 +97,6 @@ OS_FileIter OS_DirectoryIterStart(string path, OS_FileIterFlags flags);
 bool OS_DirectoryIterNext(Arena *arena, OS_FileIter *input, OS_FileProperties *out);
 void OS_DirectoryIterEnd(OS_FileIter *input);
 
-__forceinline int AtomicCompareExchange(volatile int *dst, int src, int comperand)
-{
-    return _InterlockedCompareExchange(dst, src, comperand);
-}
-
-__forceinline int AtomicExchange(volatile i32 *dst, i32 value)
-{
-    return _InterlockedExchange(dst, value);
-}
-
 } // namespace rt
 
 #endif

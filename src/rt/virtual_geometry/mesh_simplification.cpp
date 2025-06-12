@@ -1300,6 +1300,224 @@ int HashEdge(Vec3f &p0, Vec3f &p1)
     return hash;
 }
 
+static const u32 minGroupSize = 8;
+static const u32 maxGroupSize = 32;
+
+struct Range
+{
+    u32 begin;
+    u32 end;
+};
+
+void PartitionGraph(int *clusterIndices, idx_t *clusterOffsets, idx_t *clusterData,
+                    idx_t *clusterWeights, int *newClusterIndices, idx_t *newClusterOffsets,
+                    idx_t *newClusterData, idx_t *newClusterWeights, int numClusters,
+                    u32 slack, Range &left, Range &right, u32 &newAdjOffset)
+{
+    i32 numConstraints = 1;
+    i32 numParts       = 2;
+
+    ScratchArena scratch;
+
+    idx_t *partitionIDs = PushArrayNoZero(scratch.temp.arena, idx_t, numClusters);
+
+    const idx_t edgesCut          = 0;
+    const u32 maxClustersPerGroup = 32;
+    const int targetPartitionSize = (minGroupSize + maxGroupSize) / 2;
+    const int targetNumPartitions =
+        Max(2, (numClusters + (targetPartitionSize / 2)) / targetPartitionSize);
+
+    real_t partitionWeights[2] = {
+        float(targetNumPartitions / 2) / targetNumPartitions,
+        1.f - float(targetNumPartitions / 2) / targetNumPartitions,
+    };
+
+    idx_t options(METIS_NOPTIONS);
+
+    METIS_PartGraphRecursive(&numClusters, &numConstraints, clusterOffsets, clusterData, NULL,
+                             NULL, clusterWeights, &numParts, partitionWeights, NULL, &options,
+                             &edgesCut, partitionIDs);
+
+    u32 numClustersLeft     = 0;
+    u32 maxNumAdjacencyLeft = 0;
+
+    u32 numPartition[2] = {};
+    u32 numAdjacency[2] = {};
+
+    ScratchArena scratch;
+
+    u32 *remap = PushArrayNoZero(scratch.temp.arena, u32, numClusters);
+
+    for (int clusterIndex = 0; clusterIndex < numClusters; clusterIndex++)
+    {
+        u32 partitionID = partitionIDs[clusterIndex];
+        numClustersLeft += partitionID == 0 ? 1 : 0;
+        maxNumAdjacencyLeft +=
+            partitionID == 0 ? clusterOffsets[clusterIndex + 1] - clusterOffsets[clusterIndex]
+                             : 0;
+
+        remap[clusterIndex] = numPartition[partitionID]++;
+    }
+
+    u32 rightOffset = numClustersLeft + slack / 2;
+    u32 partititionStart[2];
+    partitionStart[0] = 0;
+    partitionStart[1] = rightOffset;
+
+    u32 partitionOffsets[2];
+    partitionOffsets[0] = 0;
+    partitionOffsets[1] = rightOffset;
+
+    u32 adjacencyOffsets[2];
+    adjacencyOffsets[0] = 0;
+    adjacencyOffsets[1] = maxNumAdjacencyLeft;
+
+    for (int clusterIndex = 0; clusterIndex < numClusters; clusterIndex++)
+    {
+        u32 partitionOffset = partitionOffsets[partitionID]++;
+
+        newClusterIndices[partitionOffset] = clusterIndices[clusterIndex];
+
+        u32 partitionID                     = partitionIDs[clusterIndex];
+        u32 numAdj                          = numAdjacency[partitionID]++;
+        newClusterOffsets[partitionOffsets] = numAdj;
+
+        u32 &adjOffset = adjacencyOffsets[partitionID];
+
+        for (int offset = clusterOffsets[clusterIndex];
+             offset < clusterOffsets[clusterIndex + 1]; offset++)
+        {
+            int neighborClusterIndex = clusterData[offset];
+
+            // If they are in the same cluster, maintain the edge
+            if (partitionIDs[neighborClusterIndex] == partitionID)
+            {
+                newClusterData[adjOffset]    = remap[neighborClusterIndex];
+                newClusterWeights[adjOffset] = clusterWeigts[offset];
+                adjOffset++;
+            }
+        }
+    }
+
+    Assert(partitionOffsets[0] == numClustersLeft);
+
+    newClusterOffsets[partitionOffset[0]] = adjacencyOffsets[0];
+    newClusterOffsets[partitionOffset[1]] = adjacencyOffsets[1];
+
+    left.begin  = 0;
+    left.end    = numClustersLeft;
+    right.begin = rightOffset;
+    right.end   = partitionOffsets[1];
+
+    newAdjOffset = maxNumAdjacencyLeft;
+}
+
+void RecursivePartitionGraph(int *__restrict clusterIndices, idx_t *__restrict clusterOffsets,
+                             idx_t *__restrict clusterData, idx_t *__restrict clusterWeights,
+                             int *__restrict newClusterIndices,
+                             idx_t *__restrict newClusterOffsets,
+                             idx_t *__restrict newClusterData,
+                             idx_t *__restrict newClusterWeights, int numClusters, u32 slack,
+                             int numSwaps, int globalClusterOffset, StaticArray<Range> &ranges,
+                             std::atomic<int> &numPartitions)
+{
+    u32 newAdjOffset;
+    Range left, right;
+
+    PartitionGraph(clusterIndices, clusterOffsets, clusterData, clusterWeights,
+                   newClusterIndices, newClusterOffsets, newClusterData, newClusterWeights,
+                   numClusters, slack, left, right, newAdjOffset);
+
+    u32 numLeft  = left.end - left.begin;
+    u32 numRight = right.end - right.begin;
+    if (numLeft <= maxGroupSize && numRight <= maxGroupSize)
+    {
+        int rangeIndex = numPartitions.fetch_add(2, std::memory_order_relaxed);
+
+        left.begin += globalClusterOffset;
+        left.end += globalClusterOffset;
+        right.begin += globalClusterOffset;
+        right.end += globalClusterOffset;
+
+        ranges[rangeIndex]     = left;
+        ranges[rangeIndex + 1] = right;
+
+        if (numSwaps & 1)
+        {
+            int extent = numClusters + slack;
+            MemoryCopy(clusterIndices, newClusterIndices, sizeof(int) * extent);
+            MemoryCopy(clusterOffsets, newClusterOffsets, sizeof(idx_t) * extent);
+            MemoryCopy(clusterData, newClusterData, sizeof(idx_t) * extent);
+            MemoryCopy(clusterWeights, newClusterWeights, sizeof(idx_t) * extent);
+        }
+
+        return;
+    }
+
+    auto Recurse = [&](int jobID) 
+    {
+        u32 clusterOffset  = jobID == 0 ? 0 : right.begin;
+        u32 newNumClusters = jobID == 0 ? numLeft : numRight;
+        u32 adjOffset      = jobID == 0 ? 0 : newAdjOffset;
+
+        u32 newSlack = slack / 2;
+        Assert(newSlack > 0);
+
+        RecursivePartitionGraph(newClusterIndices + clusterOffset,
+                                newClusterOffsets + clusterOffset, newClusterData + adjOffset,
+                                newClusterWeights + adjOffset, clusterOffsets + clusterOffset,
+                                clusterData + adjOffset, clusterWeights + adjOffset,
+                                newNumClusters, newSlack, numSwaps + 1,
+                                globalClusterOffset + clusterOffset, ranges, numPartitions);
+    });
+
+    if (numClusters > 256)
+    {
+        scheduler.ScheduleAndWait(2, 1, Recurse);
+    }
+    else
+    {
+        Recurse(0);
+        Recurse(1);
+    }
+}
+
+StaticArray<Range> RecursivePartitionGraph(Arena *arena, idx_t *__restrict clusterOffsets,
+                                           idx_t *__restrict clusterData,
+                                           idx_t *__restrict clusterWeights, int numClusters,
+                                           u32 slack, u32 dataSize)
+{
+    ScratchArena scratch(&arena, 1);
+
+    int *clusterIndices    = PushArrayNoZero(arena, int, numClusters);
+    int *newClusterIndices = PushArrayNoZero(arena, int, numClusters);
+    for (int i = 0; i < numClusters; i++)
+    {
+        clusterIndices[i] = i;
+    }
+
+    u32 maxNumPartitions = (numClusters + minGroupSize - 1) / minGroupSize;
+    Range *ranges        = PushArrayNoZero(arena, int, maxNumPartitions);
+
+    u32 offsetsSize          = 2 * slack + numClusters;
+    idx_t *newClusterOffsets = PushArrayNoZero(scratch.temp.arena, idx_t, offsetsSize);
+    idx_t *newClusterData    = PushArrayNoZero(scratch.temp.arena, idx_t, dataSize);
+    idx_t *newClusterWeights = PushArrayNoZero(scratch.temp.arena, idx_t, dataSize);
+
+    std::atomic<int> numPartitions(0);
+
+    StaticArray<Range> ranges(arena, maxNumPartitions, maxNumPartitions);
+
+    RecursivePartitionGraph(clusterIndices, clusterOffsets, clusterData, clusterWeights,
+                            newClusterIndices, newClusterOffsets, newClusterData,
+                            newClusterWeights, numClusters, slack, 0, 0, ranges,
+                            numPartitions);
+
+    ranges.Length() = numPartitions.load();
+
+    return ranges;
+}
+
 void CreateClusters(Mesh &mesh)
 {
     // 1. Split triangles into clusters
@@ -1325,19 +1543,13 @@ void CreateClusters(Mesh &mesh)
     //         refs, offset, 0, start, count, record);
     // }
 
-    u32 numIndices = 0;
-    u32 *indices;
-    Vec3f *pos;
-
     ScratchArena scratch;
 
-    u32 hashSize = NextPowerOfTwo(3 * numindices);
+    u32 numIndices = mesh.numIndices;
+    u32 *indices   = mesh.indices;
+    Vec3f *pos     = mesh.p;
 
-    struct Cluster
-    {
-        u32 triStart;
-        u32 triEnd;
-    };
+    u32 hashSize = NextPowerOfTwo(3 * numIndices);
 
     struct Edge
     {
@@ -1353,8 +1565,30 @@ void CreateClusters(Mesh &mesh)
 
     HashIndex edgeHash(scratch.temp.arena, hashSize, hashSize);
 
-    PrimRefs *primRefs;
-    ClusterBuilder builder(scratch.temp.arena, ?, primRefs);
+    ScenePrimitive scene;
+    scene.primitives    = &mesh;
+    scene.numPrimitives = 1;
+
+    RecordAOSSplits record;
+    PrimRefs *primRefs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
+        scratch.temp.arena, &scene, record, false);
+    ClusterBuilder builder(scratch.temp.arena, primRefs);
+    builder.BuildClusters(record, true);
+
+    int totalNumClusters = 0;
+    for (auto &list : builder.threadClusters)
+    {
+        totalNumClusters += array.Length();
+    }
+
+    RecordAOSSplits *clusters =
+        PushArrayNoZero(scratch.temp.arena, RecordAOSSplits, totalNumClusters);
+    u32 clusterOffset = 0;
+    for (auto &list : builder.threadClusters)
+    {
+        list.threadClusters.Flatten(clusters + clusterOffset);
+        clusterOffset += list.Length();
+    }
 
     u32 numClusters = 0;
 
@@ -1391,18 +1625,13 @@ void CreateClusters(Mesh &mesh)
         }
     });
 
-    // Basically:
-    // 1. For every edge in every cluster, add to a hash table the edge and the cluster index
-    // (hashed by the positions)
-    // 2. Create graph mapping edge index to all clusters it is in
-
     StaticArray<u32> clusterNeighborCounts(scratch.temp.arena, numClusters, numClusters);
 
     struct ClusterData
     {
         int *neighbors;
         int *weights;
-        int *numNeighbors;
+        int numNeighbors;
     };
 
     StaticArray<ClusterData> clusterDatas(scratch.temp.arena, numClusters, numClusters);
@@ -1487,8 +1716,12 @@ void CreateClusters(Mesh &mesh)
         }
     });
 
-    i32 *clusterOffsets   = PushArrayNoZero(scratch.temp.arena, i32, numClusters + 1);
-    i32 *clusterOffsets1  = &clustersOffsets[1];
+    u32 maxNumPartitions = (numClusters + minGroupSize - 1) / minGroupSize;
+
+    u32 slack = 2 * maxNumPartitions;
+    i32 *clusterOffsets =
+        PushArrayNoZero(scratch.temp.arena, i32, numClusters + 2 * maxNumPartitions);
+    i32 *clusterOffsets1  = &clusterOffsets[1];
     u32 totalNumNeighbors = 0;
 
     for (int clusterIndex = 0; clusterIndex < numClusters; clusterIndex++)
@@ -1506,23 +1739,23 @@ void CreateClusters(Mesh &mesh)
         for (int clusterIndex = start; clusterIndex < start + count; clusterIndex++)
         {
             const ClusterData &cluster = clusterDatas[clusterIndex];
-            i32 &offset                = clusterOffsets1[clusterIndex];
+            i32 offset                 = clusterOffsets1[clusterIndex];
             MemoryCopy(clusterData + offset, cluster.neighbors,
                        sizeof(int) * cluster.numNeighbors);
             MemoryCopy(clusterWeights + offset, cluster.weights,
                        sizeof(int) * cluster.numNeighbors);
 
-            offset += cluster.numNeighbors;
+            clusterOffsets1[clusterIndex] += cluster.numNeighbors;
         }
     });
 
     ReleaseArenaArray(arenas);
 
-    i32 numConstraints = 1;
-    i32 numParts       = 2;
-    METIS_PartGraphRecursive(idx_t * nvtxs, &numConstraints, clusterOffsets, clusterData, NULL,
-                             NULL, clusterWeights, &numParts, real_t * tpwgts, NULL,
-                             idx_t * options, idx_t * edgecut, idx_t * part);
+    // Recursively partition the clusters into two groups until each group satisfies
+    // constraints
+    StaticArray<Range> ranges =
+        RecursivePartitionGraph(scratch.temp.arena, clusterOffsets, clusterData,
+                                clusterWeights, numClusters, slack, totalNumNeighbors);
 }
 
 } // namespace rt

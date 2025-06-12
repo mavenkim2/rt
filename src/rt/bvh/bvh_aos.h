@@ -84,12 +84,8 @@ struct Quad8
         Assert(i < 12);
         return v[i];
     }
-    static void Load(const ScenePrimitives *scene, const u32 dim, const u32 faceIndices[8],
-                     Quad8 *out)
+    static void Load(const Mesh *mesh, const u32 dim, const u32 faceIndices[8], Quad8 *out)
     {
-        Assert(scene->numPrimitives == 1);
-        Mesh *mesh = (Mesh *)scene->primitives;
-
         Vec3lf4 p0[4];
         LoadVertices<4>(mesh, faceIndices, p0);
 
@@ -115,14 +111,13 @@ struct Quad8
         out->v3w = Lane8F32(p0[3][w], p1[3][w]);
     }
 
-    static void Load(const ScenePrimitives *scene, const u32 dim, const u32 geomIDs[8],
+    static void Load(const Mesh *primitives, const u32 dim, const u32 geomIDs[8],
                      const u32 faceIndices[8], Quad8 *out)
     {
-        Mesh *primitives = (Mesh *)scene->primitives;
-        Mesh *meshes[8]  = {primitives + geomIDs[0], primitives + geomIDs[1],
-                            primitives + geomIDs[2], primitives + geomIDs[3],
-                            primitives + geomIDs[4], primitives + geomIDs[5],
-                            primitives + geomIDs[6], primitives + geomIDs[7]};
+        Mesh *meshes[8] = {primitives + geomIDs[0], primitives + geomIDs[1],
+                           primitives + geomIDs[2], primitives + geomIDs[3],
+                           primitives + geomIDs[4], primitives + geomIDs[5],
+                           primitives + geomIDs[6], primitives + geomIDs[7]};
 
         Vec3lf4 p0[4];
         LoadVertices<4>(meshes, faceIndices, p0);
@@ -190,11 +185,9 @@ struct Triangle8
         return v[i];
     }
 
-    static void Load(const ScenePrimitives *scene, const u32 dim, const u32 geomIDs[8],
+    static void Load(const Mesh *primitives, const u32 dim, const u32 geomIDs[8],
                      const u32 faceIndices[8], Triangle8 *out)
     {
-        Mesh *primitives = (Mesh *)scene->primitives;
-
         Mesh *meshes[8] = {primitives + geomIDs[0], primitives + geomIDs[1],
                            primitives + geomIDs[2], primitives + geomIDs[3],
                            primitives + geomIDs[4], primitives + geomIDs[5],
@@ -222,12 +215,8 @@ struct Triangle8
         out->v2w = Lane8F32(p0[2][w], p1[2][w]);
     }
 
-    static void Load(const ScenePrimitives *scene, const u32 dim, const u32 faceIndices[8],
-                     Triangle8 *out)
+    static void Load(const Mesh *mesh, const u32 dim, const u32 faceIndices[8], Triangle8 *out)
     {
-        Assert(scene->numPrimitives == 1);
-        Mesh *mesh = (Mesh *)scene->primitives;
-
         Vec3lf4 p0[3];
         LoadVertices<3>(mesh, faceIndices, p0);
 
@@ -849,9 +838,7 @@ struct HeuristicAOSObjectBinning
 template <i32 numBins = 32, typename PrimRef = PrimRef>
 struct alignas(32) HeuristicAOSOrientedObjectBinning
 {
-    void Bin(const PrimRef *data, u32 start, u32 count) {
-
-    }
+    void Bin(const PrimRef *data, u32 start, u32 count) {}
 };
 
 template <i32 numBins, typename PrimRefType, typename Polygon8>
@@ -866,12 +853,12 @@ struct alignas(32) HeuristicAOSSplitBinning
     Lane4U32 exitCounts[numBins];
 
     SplitBinner<numBins> *binner;
-    const ScenePrimitives *scene;
+    const Mesh *meshes;
 
     HeuristicAOSSplitBinning() {}
 
-    HeuristicAOSSplitBinning(SplitBinner<numBins> *binner, const ScenePrimitives *scene)
-        : binner(binner), scene(scene)
+    HeuristicAOSSplitBinning(SplitBinner<numBins> *binner, const Mesh *meshes)
+        : binner(binner), meshes(meshes)
     {
         for (u32 dim = 0; dim < 3; dim++)
         {
@@ -988,8 +975,8 @@ struct alignas(32) HeuristicAOSSplitBinning
 
                         Polygon8 tri;
                         if constexpr (UseGeomIDs)
-                            Polygon8::Load(scene, dim, geomIDs, faceIndices, &tri);
-                        else Polygon8::Load(scene, dim, faceIndices, &tri);
+                            Polygon8::Load(meshes, dim, geomIDs, faceIndices, &tri);
+                        else Polygon8::Load(meshes, dim, faceIndices, &tri);
 
                         Lane8U32 startBin =
                             Lane8U32::LoadU(binIndexStart[dim][bin] + binCount);
@@ -1102,8 +1089,8 @@ struct alignas(32) HeuristicAOSSplitBinning
 
                     Polygon8 tri;
                     if constexpr (UseGeomIDs)
-                        Polygon8::Load(scene, dim, geomIDs, faceIndices, &tri);
-                    else Polygon8::Load(scene, dim, faceIndices, &tri);
+                        Polygon8::Load(meshes, dim, geomIDs, faceIndices, &tri);
+                    else Polygon8::Load(meshes, dim, faceIndices, &tri);
 
                     Lane8U32 startBin = Lane8U32::LoadU(binIndexStart[dim][diff] + qStart);
 
@@ -1201,8 +1188,8 @@ struct alignas(32) HeuristicAOSSplitBinning
 
                 Polygon8 tri;
                 if constexpr (UseGeomIDs)
-                    Polygon8::Load(scene, dim, geomIDs, faceIDQueue, &tri);
-                else Polygon8::Load(scene, dim, faceIDQueue, &tri);
+                    Polygon8::Load(meshes, dim, geomIDs, faceIDQueue, &tri);
+                else Polygon8::Load(meshes, dim, faceIDQueue, &tri);
                 ClipPolygon(dim, tri, splitValue, gL, gR);
 
                 for (u32 queueIndex = 0; queueIndex < LANE_WIDTH; queueIndex++)
@@ -1240,8 +1227,8 @@ struct alignas(32) HeuristicAOSSplitBinning
                 gL[b].v        = ref.Load();
             }
             Polygon8 tri;
-            if constexpr (UseGeomIDs) Polygon8::Load(scene, dim, geomIDs, faceIDQueue, &tri);
-            else Polygon8::Load(scene, dim, faceIDQueue, &tri);
+            if constexpr (UseGeomIDs) Polygon8::Load(meshes, dim, geomIDs, faceIDQueue, &tri);
+            else Polygon8::Load(meshes, dim, faceIDQueue, &tri);
             ClipPolygon(dim, tri, splitValue, gL, gR);
 
             for (u32 queueIndex = 0; queueIndex < numPrims; queueIndex++)
@@ -1545,15 +1532,15 @@ struct HeuristicSpatialSplits
     using HSplit = HeuristicAOSSplitBinning<numSpatialBins, PrimRef, Polygon8>;
     using OBin   = HeuristicAOSObjectBinning<numObjectBins, PrimRef>;
 
-    const ScenePrimitives *scene;
+    const Mesh *meshes;
     f32 rootArea;
     u32 logBlockSize;
     PrimRef *primRefs;
 
     HeuristicSpatialSplits() {}
-    HeuristicSpatialSplits(PrimRef *data, const ScenePrimitives *scene, f32 rootArea,
+    HeuristicSpatialSplits(PrimRef *data, const Mesh *meshes, f32 rootArea,
                            u32 logBlockSize = 0)
-        : primRefs(data), scene(scene), rootArea(rootArea), logBlockSize(logBlockSize)
+        : primRefs(data), meshes(meshes), rootArea(rootArea), logBlockSize(logBlockSize)
     {
     }
 
@@ -1597,14 +1584,14 @@ struct HeuristicSpatialSplits
                     [&](HSplit &binner, u32 jobID, u32 start, u32 count) {
                         binner.Bin(primRefs, start, count);
                     },
-                    splitBinner, scene);
+                    splitBinner, meshes);
                 Reduce(
                     *splitHeuristic, output, [&](HSplit &l, const HSplit &r) { l.Merge(r); },
-                    splitBinner, scene);
+                    splitBinner, meshes);
             }
             else
             {
-                new (splitHeuristic) HSplit(splitBinner, scene);
+                new (splitHeuristic) HSplit(splitBinner, meshes);
                 splitHeuristic->Bin(primRefs, record.start, record.count);
             }
             struct Split spatialSplit =
@@ -1834,13 +1821,12 @@ struct HeuristicObjectBinning
     using PrimRef = PrimRefType;
     using OBin    = HeuristicAOSObjectBinning<numObjectBins, PrimRef>;
 
-    const ScenePrimitives *scene;
     u32 logBlockSize;
     PrimRef *primRefs;
 
     HeuristicObjectBinning() {}
-    HeuristicObjectBinning(PrimRef *data, const ScenePrimitives *scene, u32 logBlockSize = 0)
-        : primRefs(data), scene(scene), logBlockSize(logBlockSize)
+    HeuristicObjectBinning(PrimRef *data, u32 logBlockSize = 0)
+        : primRefs(data), logBlockSize(logBlockSize)
     {
     }
 

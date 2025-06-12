@@ -4,12 +4,12 @@
 #include <initializer_list>
 #include <array>
 
+#include "atomics.h"
 #include "base.h"
 #include "math/basemath.h"
 #include "memory.h"
 #include "string.h"
 #include "thread_statistics.h"
-#include "win32.h"
 
 namespace rt
 {
@@ -491,7 +491,7 @@ struct HashIndex
     void AddConcurrent(int key, int index)
     {
         Assert(index < indexChainSize);
-        key &= (hashCount - 1);
+        key &= hashMask;
 
         indexChain[index] = AtomicExchange(&hash[key], index);
     }

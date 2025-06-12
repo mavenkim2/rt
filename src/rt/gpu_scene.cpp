@@ -740,7 +740,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             blasNumVertices += meshes[meshIndex].numVertices;
         }
 
-        ClusterBuilder builder(arena, scene, refs);
+        ClusterBuilder builder(arena, refs);
         builder.BuildClusters(record, true);
 
         builder.CreateDGFs(scene, &data, (Mesh *)scene->primitives, scene->numPrimitives,

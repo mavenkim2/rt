@@ -19,8 +19,7 @@ namespace rt
 
 typedef HeuristicObjectBinning<PrimRef> Heuristic;
 
-ClusterBuilder::ClusterBuilder(Arena *arena, ScenePrimitives *scene, PrimRef *primRefs)
-    : primRefs(primRefs)
+ClusterBuilder::ClusterBuilder(Arena *arena, PrimRef *primRefs) : primRefs(primRefs)
 {
     u32 numProcessors = OS_NumProcessors();
     arenas            = GetArenaArray(arena);
@@ -31,7 +30,7 @@ ClusterBuilder::ClusterBuilder(Arena *arena, ScenePrimitives *scene, PrimRef *pr
         threadClusters[i].l = ChunkedLinkedList<RecordAOSSplits>(arenas[i]);
     }
 
-    h = PushStructConstruct(arena, Heuristic)(primRefs, scene, 0);
+    h = PushStructConstruct(arena, Heuristic)(primRefs);
 }
 
 void DenseGeometryBuildData::Init()
