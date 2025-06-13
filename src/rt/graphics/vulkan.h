@@ -530,9 +530,13 @@ struct DescriptorSet
     std::vector<VkWriteDescriptorSet> writeDescriptorSets;
     DescriptorSetLayout *layout;
 
+    u32 numBinds = 0;
+
     DescriptorSet &Bind(int index, GPUImage *image, int subresource = -1);
     DescriptorSet &Bind(int index, GPUBuffer *buffer);
     DescriptorSet &Bind(int index, VkAccelerationStructureKHR *accel);
+
+    DescriptorSet &Bind(GPUBuffer *buffer);
     void Reset();
 };
 

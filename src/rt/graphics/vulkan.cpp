@@ -2192,6 +2192,12 @@ DescriptorSet &DescriptorSet::Bind(int index, GPUBuffer *buffer)
     return *this;
 }
 
+DescriptorSet &DescriptorSet::Bind(GPUBuffer *buffer)
+{
+    u32 index = numBinds++;
+    return Bind(index, buffer);
+}
+
 DescriptorSet &DescriptorSet::Bind(int index, VkAccelerationStructureKHR *accel)
 {
     Assert(index < layout->bindings.size() && index < descriptorInfo.size());

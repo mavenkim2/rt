@@ -11,7 +11,29 @@ namespace rt
 #define RAY_TRACING_ADDRESS_STRIDE               8
 #define FILL_CLUSTER_BOTTOM_LEVEL_INFO_GROUPSIZE 32
 
+#define MAX_CLUSTERS_PER_PAGE_BITS 8
+#define MAX_CLUSTERS_PER_PAGE      (1u << MAX_CLUSTERS_PER_PAGE_BITS)
+
 static const uint32_t kFillInstanceDescsThreads = 32;
+
+struct ClusterPageData
+{
+    uint32_t clusterStart;
+    uint32_t clusterCount;
+    uint32_t blasIndex;
+};
+
+struct DecodeClusterData
+{
+    uint32_t indexBufferOffset;
+    uint32_t vertexBufferOffset;
+};
+
+struct BLASData
+{
+    uint clusterStartIndex;
+    uint clusterCount;
+};
 
 struct ClusterData
 {
@@ -45,7 +67,7 @@ struct IndirectArgs
     uint32_t clasCount;
 };
 
-struct BUILD_CLUSTER_TRIANGLE_INFO
+struct BUILD_CLUSTERS_TRIANGLE_INFO
 {
     uint32_t clusterId;
     uint32_t clusterFlags;
@@ -66,12 +88,6 @@ struct BUILD_CLUSTER_TRIANGLE_INFO
     uint64_t opacityMicromapIndexBuffer;
 };
 
-struct BLASData
-{
-    uint clasAddressStartIndex;
-    uint clasCount;
-};
-
 struct GeometryIndexAndFlags
 {
     uint32_t geometryIndex : 24;
@@ -79,9 +95,9 @@ struct GeometryIndexAndFlags
     uint32_t geometryFlags : 3;
 };
 
-struct DecodePushConstant
+struct FillClusterTriangleInfoPushConstant
 {
-    uint numHeaders;
+    uint numClusters;
     uint indexBufferBaseAddressLowBits;
     uint indexBufferBaseAddressHighBits;
     uint vertexBufferBaseAddressLowBits;
@@ -91,8 +107,13 @@ struct DecodePushConstant
 struct FillClusterBottomLevelInfoPushConstant
 {
     uint blasCount;
-    uint clustersBaseAddressLowBits;
-    uint clustersBaseAddressHighBits;
+    uint arrayBaseAddressLowBits;
+    uint arrayBaseAddressHighBits;
+};
+
+struct FillInstanceDescsPushConstant
+{
+    uint numInstances;
 };
 
 #define GLOBALS_VERTEX_BUFFER_OFFSET_INDEX 0
