@@ -731,7 +731,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         RecordAOSSplits record;
         PrimRef *refs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
-            sceneScratch.temp.arena, (Mesh *)scene->primitives, scene->numPrimitives, record, false);
+            sceneScratch.temp.arena, (Mesh *)scene->primitives, scene->numPrimitives, record,
+            false);
 
         Mesh *meshes        = (Mesh *)scene->primitives;
         u32 blasNumVertices = 0;
@@ -773,6 +774,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                     aabbs.Length() * sizeof(VkAabbPositionsKHR))
                 .buffer;
+        info.positions = aabbs.data;
+#endif
 
         // Combine all blocks together
         info.geoByteBufferLength = data.geoByteBuffer.Length();
@@ -806,8 +809,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
         info.debugRestartCount =
             PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
-        info.positions = aabbs.data;
-        int c          = 0;
+        int c = 0;
         for (auto *node = data.types.first; node != 0; node = node->next)
         {
             info.types[c++] = node->values;
@@ -842,7 +844,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         {
             info.debugRestartCount[c++] = node->values;
         }
-#endif
 
         dgfTransferCmd->Signal(scene->semaphore);
         blasSceneInfo.Push(info);
@@ -924,10 +925,11 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
           "%u\nptex face data bytes: %u\n",
           numTriangles, numAabbs, dgfGeoBufferBytes, dgfShadBufferBytes, ptexFaceDataBytes);
 
-#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
-    CommandBuffer *computeCmd = device->BeginCommandBuffer(QueueType_Compute);
-    computeCmd->Wait(sem);
+    CommandBuffer *allCommandBuffer = device->BeginCommandBuffer(QueueType_Graphics);
+    Semaphore tlasSemaphore         = device->CreateSemaphore();
+    GPUAccelerationStructure tlas   = {};
 
+#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
     // Decode layout pipeline description
     u32 buildClasDescsSize = sizeof(BUILD_CLUSTER_TRIANGLE_INFO) * totalNumClusters;
 
@@ -957,7 +959,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         cbli[i].clusterReferencesCount = blasSceneInfo[i].numHeaders;
     }
 
-    TransferBuffer bottomLevelInfo = computeCmd->SubmitBuffer(
+    TransferBuffer bottomLevelInfo = allCommandBuffer->SubmitBuffer(
         cbli,
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -965,7 +967,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     // Decode clusters and set up clas calls
     {
-        computeCmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, decodePipeline);
+        allCommandBuffer->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, decodePipeline);
         DescriptorSet descriptorSet = decodeLayout.CreateDescriptorSet();
         descriptorSet.Bind(indexBufferBinding, &indexBuffer)
             .Bind(vertexBufferBinding, &vertexBuffer)
@@ -984,17 +986,17 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         pc.vertexBufferBaseAddressLowBits  = vertexBufferAddress & 0xffffffff;
         pc.vertexBufferBaseAddressHighBits = (vertexBufferAddress >> 32u) & 0xffffffff;
 
-        computeCmd->PushConstants(&decodeConstants, &pc, decodeLayout.pipelineLayout);
-        computeCmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &descriptorSet,
-                                       decodeLayout.pipelineLayout);
-        computeCmd->Dispatch(totalNumClusters, 1, 1);
+        allCommandBuffer->PushConstants(&decodeConstants, &pc, decodeLayout.pipelineLayout);
+        allCommandBuffer->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &descriptorSet,
+                                             decodeLayout.pipelineLayout);
+        allCommandBuffer->Dispatch(totalNumClusters, 1, 1);
 
-        computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                            VK_ACCESS_2_SHADER_WRITE_BIT,
-                            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                                VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-        computeCmd->FlushBarriers();
+        allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                  VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                  VK_ACCESS_2_SHADER_WRITE_BIT,
+                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                      VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+        allCommandBuffer->FlushBarriers();
     }
 
     // Build the CLAS
@@ -1005,9 +1007,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
         sizeof(u32) * totalNumClusters);
 
-    computeCmd->BuildCLAS(&buildClasDescs, &clusterAccelAddresses, &clusterAccelSizes,
-                          &globalsDesc, sizeof(u32) * GLOBALS_CLAS_COUNT_INDEX,
-                          totalNumClusters, numTriangles, numVertices);
+    allCommandBuffer->BuildCLAS(&buildClasDescs, &clusterAccelAddresses, &clusterAccelSizes,
+                                &globalsDesc, sizeof(u32) * GLOBALS_CLAS_COUNT_INDEX,
+                                totalNumClusters, numTriangles, numVertices);
 
     // TODO: Compact the CLAS over BLAS
     {
@@ -1025,83 +1027,42 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         pc.blasCount                = blasScenes.Length();
         DescriptorSet descriptorSet = fillBottomLevelInfoLayout.CreateDescriptorSet();
 
-        computeCmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, fillBottomLevelPipeline);
-        computeCmd->PushConstants(&fillClusterBLASConstants, &pc, decodeLayout.pipelineLayout);
-        computeCmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &descriptorSet,
-                                       fillBottomLevelInfoLayout.pipelineLayout);
-        computeCmd->Dispatch(
+        allCommandBuffer->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
+                                       fillBottomLevelPipeline);
+        allCommandBuffer->PushConstants(&fillClusterBLASConstants, &pc,
+                                        decodeLayout.pipelineLayout);
+        allCommandBuffer->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &descriptorSet,
+                                             fillBottomLevelInfoLayout.pipelineLayout);
+        allCommandBuffer->Dispatch(
             (blasScenes.Length() + FILL_CLUSTER_BOTTOM_LEVEL_INFO_GROUPSIZE - 1) /
                 FILL_CLUSTER_BOTTOM_LEVEL_INFO_GROUPSIZE,
             1, 1);
 
-        computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                            VK_ACCESS_2_SHADER_WRITE_BIT,
-                            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                                VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-        computeCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                            VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-        computeCmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                            VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-        computeCmd->FlushBarriers();
-        computeCmd->BuildClusterBLAS(&bottomLevelInfo.buffer, &blasAccelAddresses,
-                                     &globalsDesc, sizeof(u32) * GLOBALS_BLAS_COUNT_INDEX,
-                                     totalNumClusters);
+        allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                  VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                  VK_ACCESS_2_SHADER_WRITE_BIT,
+                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                      VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+        allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                  VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                  VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+        allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                  VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+        allCommandBuffer->FlushBarriers();
+        allCommandBuffer->BuildClusterBLAS(
+            &bottomLevelInfo.buffer, &blasAccelAddresses, &globalsDesc,
+            sizeof(u32) * GLOBALS_BLAS_COUNT_INDEX, totalNumClusters);
     }
 
-    // Build the TLAS over BLAS
-    GPUAccelerationStructure tlas = {};
-    // {
-    //     // First fill out instance info on GPU
-    //     Instance instance          = {};
-    //     ScenePrimitives *baseScene = &GetScene()->scene;
-    //     GPUBuffer instanceData =
-    //         computeCmd->CreateTLASInstances(&instance, 1, &params->renderFromWorld,
-    //         &baseScene)
-    //             .buffer;
-    //
-    //     computeCmd->Barrier(&instanceData, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    //                         VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
-    //     computeCmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-    //                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    //                         VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-    //                         VK_ACCESS_2_SHADER_READ_BIT);
-    //     computeCmd->FlushBarriers();
-    //
-    //     computeCmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, fillInstancePipeline);
-    //     DescriptorSet descriptorSet = fillLayout.CreateDescriptorSet();
-    //     descriptorSet.Bind(addressesBinding, &blasAccelAddresses)
-    //         .Bind(instancesBinding, &instanceData);
-    //
-    //     computeCmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &descriptorSet,
-    //                                    fillLayout.pipelineLayout);
-    //     computeCmd->Dispatch(1, 1, 1);
-    //
-    //     // Build the TLAS
-    //     computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    //                         VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-    //                         VK_ACCESS_2_SHADER_WRITE_BIT,
-    //                         VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-    //     computeCmd->FlushBarriers();
-    //     tlas = computeCmd->BuildTLAS(&instanceData, 1);
-    // }
-    Semaphore tlasSemaphore   = device->CreateSemaphore();
-    tlasSemaphore.signalValue = 1;
-    computeCmd->Signal(tlasSemaphore);
-    device->SubmitCommandBuffer(computeCmd);
+    allCommandBuffer->Signal(tlasSemaphore);
+    device->SubmitCommandBuffer(allCommandBuffer);
 
 #else
-    Semaphore tlasSemaphore = device->CreateSemaphore();
-
-    GPUAccelerationStructure tlas = {};
     // TODO: new command buffers have to wait on ones from the previous depth
     // also this doesn't work if there's actually a nontrivial TLAS
-
-    CommandBuffer *allCommandBuffer = device->BeginCommandBuffer(QueueType_Graphics);
 
     StaticArray<GPUAccelerationStructurePayload> uncompactedPayloads(sceneScratch.temp.arena,
                                                                      blasScenes.Length());
@@ -1159,6 +1120,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         scene->gpuInstanceID   = runningTotal++;
     }
 
+#endif
+
     allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                               VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                               VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
@@ -1207,8 +1170,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     device->SubmitCommandBuffer(allCommandBuffer);
 
     device->SubmitCommandBuffer(transferCmd);
-
-#endif
 
     f32 frameDt = 1.f / 60.f;
     int envMapBindlessIndex;

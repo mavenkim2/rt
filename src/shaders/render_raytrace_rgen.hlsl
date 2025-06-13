@@ -1,6 +1,10 @@
 #define ShaderInvocationReorderNV 5383
+#define RayTracingClusterAccelerationStructureNV 5437
+
 [[vk::ext_capability(ShaderInvocationReorderNV)]]
 [[vk::ext_extension("SPV_NV_shader_invocation_reorder")]]
+[[vk::ext_capability(RayTracingClusterAccelerationStructureNV)]]
+[[vk::ext_extension("SPV_NV_cluster_acceleration_structure")]]
 
 #include "common.hlsli"
 #include "bsdf/bxdf.hlsli"
@@ -18,11 +22,12 @@
 #include "../rt/shader_interop/ray_shaderinterop.h"
 #include "../rt/shader_interop/hit_shaderinterop.h"
 #include "../rt/shader_interop/debug_shaderinterop.h"
-#include "ser.hlsli"
+#include "nvidia/ser.hlsli"
+#include "nvidia/clas.hlsli"
 //#include "../rt/nvapi.h"
 #include "wave_intrinsics.hlsli"
 
-#define SER
+//#define SER
 
 RaytracingAccelerationStructure accel : register(t0);
 RWTexture2D<half4> image : register(u1);
@@ -203,12 +208,7 @@ void main()
 #ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
         if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
         {
-            float3x3 positions = NvRtCommittedTriangleObjectPositions(query);
-            float3 p0 = positions[0];
-            float3 p1 = positions[1];
-            float3 p2 = positions[2];
-
-            uint blockIndex = NvRtGetCommittedClusterID(query);
+            uint blockIndex = GetClusterIDNV(query, RayQueryCommittedIntersectionKHR);
             uint triangleIndex = query.CommittedPrimitiveIndex();
             float2 bary = query.CommittedTriangleBarycentrics();
 
@@ -259,13 +259,11 @@ void main()
             bary.x = (rotate == 1 ? 1 - oldBary.x - oldBary.y : (rotate == 2 ? oldBary.y : oldBary.x));
             bary.y = (rotate == 1 ? oldBary.x : (rotate == 2 ? 1 - oldBary.x - oldBary.y : oldBary.y));
 
-#ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
             float3 p0 = dg.DecodePosition(vids[0]);
             float3 p1 = dg.DecodePosition(vids[1]);
             float3 p2 = dg.DecodePosition(vids[2]);
-#endif
 
-            if (0)
+            if (printDebug)
             {
                 printf("%u %u %u type: %u\noldvids: %u %u %u\nvids: %u %u %u\n", instanceID, blockIndex, triangleIndex, rotate,
                         oldVids[0], oldVids[1], oldVids[2], vids[0], vids[1], vids[2]);

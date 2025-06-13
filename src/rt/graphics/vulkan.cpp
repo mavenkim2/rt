@@ -382,18 +382,13 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
             result = checkAndAddExtension(VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME);
             Assert(result);
 
-            // TODO: update my drivers
-            // clasPropertiesNV = {
-            //     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_PROPERTIES_NV};
-            // clasFeaturesNV = {
-            //     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_FEATURES_NV};
-            // result =
-            // checkAndAddExtension(VK_NV_CLUSTER_ACCELERATION_STRUCTURE_EXTENSION_NAME,
-            //                               &clasPropertiesNV, &clasFeaturesNV);
-            //
-            // ErrorExit(
-            //     result,
-            //     "Machine doesn't support VK_NV_cluster_acceleration_structure. Exiting\n");
+            clasPropertiesNV = {
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_PROPERTIES_NV};
+            clasFeaturesNV = {
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CLUSTER_ACCELERATION_STRUCTURE_FEATURES_NV};
+            result = checkAndAddExtension(VK_NV_CLUSTER_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+                                          &clasPropertiesNV, &clasFeaturesNV);
+            Assert(result);
         }
 
         *featuresChain   = 0;
