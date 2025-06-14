@@ -2743,8 +2743,9 @@ void CommandBuffer::BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddr
                               u32 numVertices)
 {
 
-    VkClusterAccelerationStructureTriangleClusterInputNV triangleClusters = {
-        VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_TRIANGLE_CLUSTER_INPUT_NV};
+    VkClusterAccelerationStructureTriangleClusterInputNV triangleClusters = {};
+    triangleClusters.sType =
+        VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_TRIANGLE_CLUSTER_INPUT_NV;
     triangleClusters.vertexFormat                  = VK_FORMAT_R32G32B32_SFLOAT;
     triangleClusters.maxGeometryIndexValue         = 1; // numMeshes - 1;
     triangleClusters.maxClusterUniqueGeometryCount = 1; // numMeshes;
@@ -2754,8 +2755,8 @@ void CommandBuffer::BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddr
     triangleClusters.maxTotalVertexCount           = numVertices;
     triangleClusters.minPositionTruncateBitCount   = 0;
 
-    VkClusterAccelerationStructureInputInfoNV inputInfo = {
-        VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_INPUT_INFO_NV};
+    VkClusterAccelerationStructureInputInfoNV inputInfo = {};
+    inputInfo.sType  = VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_INPUT_INFO_NV;
     inputInfo.opType = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_TRIANGLE_CLUSTER_NV;
     inputInfo.opMode = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_IMPLICIT_DESTINATIONS_NV;
     inputInfo.opInput.pTriangleClusters     = &triangleClusters;
@@ -2766,12 +2767,18 @@ void CommandBuffer::BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddr
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
     vkGetClusterAccelerationStructureBuildSizesNV(device->device, &inputInfo, &buildSizesInfo);
 
-    GPUBuffer buildScratch = device->CreateBuffer(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                                  buildSizesInfo.buildScratchSize);
+    GPUBuffer buildScratch = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        buildSizesInfo.buildScratchSize);
 
-    GPUBuffer implicitBuffer =
-        device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
-                             buildSizesInfo.accelerationStructureSize);
+    GPUBuffer implicitBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
+        buildSizesInfo.accelerationStructureSize);
 
     VkClusterAccelerationStructureCommandsInfoNV commandsInfo = {
         VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_COMMANDS_INFO_NV};
@@ -2806,8 +2813,8 @@ void CommandBuffer::BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddr
 }
 
 void CommandBuffer::BuildClusterBLAS(GPUBuffer *bottomLevelInfo, GPUBuffer *dstAddresses,
-                                     GPUBuffer *srcInfosCount, u32 srcInfosOffset,
-                                     u32 numClusters)
+                                     GPUBuffer *dstSizes, GPUBuffer *srcInfosCount,
+                                     u32 srcInfosOffset, u32 numClusters)
 {
     // Get build sizes
     VkClusterAccelerationStructureClustersBottomLevelInputNV bottomLevelInput = {
@@ -2828,12 +2835,18 @@ void CommandBuffer::BuildClusterBLAS(GPUBuffer *bottomLevelInfo, GPUBuffer *dstA
     vkGetClusterAccelerationStructureBuildSizesNV(device->device, &inputInfo, &buildSizesInfo);
 
     // Create scratch and implicit buffers
-    GPUBuffer buildScratch = device->CreateBuffer(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                                  buildSizesInfo.buildScratchSize);
+    GPUBuffer buildScratch = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        buildSizesInfo.buildScratchSize);
 
-    GPUBuffer implicitBuffer =
-        device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
-                             buildSizesInfo.accelerationStructureSize);
+    GPUBuffer implicitBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
+        buildSizesInfo.accelerationStructureSize);
 
     // Submit BLAS build command
     VkClusterAccelerationStructureCommandsInfoNV commandsInfo = {
@@ -2847,7 +2860,9 @@ void CommandBuffer::BuildClusterBLAS(GPUBuffer *bottomLevelInfo, GPUBuffer *dstA
     commandsInfo.dstAddressesArray.size   = dstAddresses->size;
     commandsInfo.dstAddressesArray.stride = sizeof(VkDeviceAddress);
 
-    commandsInfo.dstSizesArray = {};
+    commandsInfo.dstSizesArray.deviceAddress = device->GetDeviceAddress(dstSizes->buffer);
+    commandsInfo.dstSizesArray.size          = dstSizes->size;
+    commandsInfo.dstSizesArray.stride        = sizeof(u32);
 
     commandsInfo.srcInfosArray.deviceAddress =
         device->GetDeviceAddress(bottomLevelInfo->buffer);

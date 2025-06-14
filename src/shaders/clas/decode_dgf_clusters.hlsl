@@ -1,24 +1,20 @@
 #include "../../rt/shader_interop/as_shaderinterop.h"
 #include "../dense_geometry.hlsli"
 
-[[vk::push_constant]] FillClusterTriangleInfoPushConstant pc;
+[[vk::push_constant]] NumPushConstant pc;
 
 RWByteAddressBuffer indexBuffer : register(u0);
 RWStructuredBuffer<float3> decodeVertexBuffer : register(u1);
 
 StructuredBuffer<DecodeClusterData> decodeClusterData : register(t2);
+StructuredBuffer<BUILD_CLUSTERS_TRIANGLE_INFO> buildClusterTriangleInfos : register(t3);
 
 [numthreads(32, 1, 1)] 
-void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dtID : SV_DispatchThreadID)
+void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
 {
     uint headerIndex = groupID.x;
 
-    //if (all(dtID == 0))
-    //{
-        //globals[GLOBALS_BLAS_COUNT_INDEX] = 1;
-    //}
-
-    if (headerIndex >= pc.numClusters) return;
+    if (headerIndex >= pc.num) return;
 
     uint clusterID = groupID.x;
 
@@ -28,10 +24,10 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dtI
     PackedDenseGeometryHeader denseHeader = denseGeometryHeaders[clusterID];
     DenseGeometry header = GetDenseGeometryHeader(denseHeader, clusterID);
 
-    //if (!header.numTriangles == buildClusterTriangleInfos[clusterID].numTriangles)
-    //{
-        //printf("bad\n");
-    //}
+    if (!header.numTriangles == buildClusterTriangleInfos[clusterID].triangleCount)
+    {
+        printf("bad\n");
+    }
 
     // Decode triangle indices
     uint waveNumActiveLanes = min(32, WaveGetLaneCount());
@@ -45,14 +41,16 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex, uint3 dtI
         uint indexBits = triangleIndices[0] | (triangleIndices[1] << 8u) | (triangleIndices[2] << 16u);
         uint2 offset = GetAlignedAddressAndBitOffset(indexBufferOffset + triangleIndex * 3, 0);
 
+        const uint writeBitSize = 24;
+
         // Write the uint8 indices atomically
-        if (indexBits + offset[1] >= 32)
+        if (offset[1] + writeBitSize >= 32)
         {
-            uint mask = ~0u << ((indexBits + offset[1]) & 31u);
+            uint mask = ~0u << ((writeBitSize + offset[1]) & 31u);
             indexBuffer.InterlockedAnd(offset[0] + 4, mask);
             indexBuffer.InterlockedOr(offset[0] + 4, indexBits >> (32 - offset[1]));
         }
-        uint mask = ~(((1u << 24u) - 1u) << offset[1]);
+        uint mask = ~(((1u << writeBitSize) - 1u) << offset[1]);
         indexBuffer.InterlockedAnd(offset[0], mask);
         indexBuffer.InterlockedOr(offset[0], indexBits << offset[1]);
     }

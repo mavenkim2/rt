@@ -27,6 +27,7 @@ struct DecodeClusterData
 {
     uint32_t indexBufferOffset;
     uint32_t vertexBufferOffset;
+    uint32_t blasIndex;
 };
 
 struct BLASData
@@ -43,11 +44,7 @@ struct ClusterData
 
 struct AccelerationStructureInstance
 {
-#ifdef __cplusplus
-    float transform[12];
-#else
-    float4 transform[3];
-#endif
+    float transform[3][4];
     uint32_t instanceID : 24;
     uint32_t instanceMask : 8;
     uint32_t instanceContributionToHitGroupIndex : 24;
@@ -111,15 +108,16 @@ struct FillClusterBottomLevelInfoPushConstant
     uint arrayBaseAddressHighBits;
 };
 
-struct FillInstanceDescsPushConstant
+struct NumPushConstant
 {
-    uint numInstances;
+    uint num;
 };
 
 #define GLOBALS_VERTEX_BUFFER_OFFSET_INDEX 0
 #define GLOBALS_INDEX_BUFFER_OFFSET_INDEX  1
 #define GLOBALS_CLAS_COUNT_INDEX           2
 #define GLOBALS_BLAS_COUNT_INDEX           3
+#define GLOBALS_BLAS_CLAS_COUNT_INDEX      4
 
 #ifdef __cplusplus
 }

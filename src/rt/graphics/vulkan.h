@@ -628,7 +628,8 @@ struct CommandBuffer
                    GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
                    int numClusters, u32 numTriangles, u32 numVertices);
     void BuildClusterBLAS(GPUBuffer *bottomLevelInfo, GPUBuffer *dstAddresses,
-                          GPUBuffer *srcInfosCount, u32 srcInfosOffset, u32 numClusters);
+                          GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
+                          u32 numClusters);
 
     TransferBuffer CreateTLASInstances(Instance *instances, int numInstances,
                                        AffineSpace *transforms, ScenePrimitives **childScenes);

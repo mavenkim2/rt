@@ -13,15 +13,13 @@ RWStructuredBuffer<uint> globals : register(u4);
 [numthreads(MAX_CLUSTERS_PER_PAGE, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupID, uint groupIndex : SV_GroupIndex)
 {
-    if (dispatchThreadID.x >= pc.numClusters) return;
-
     ClusterPageData page = clusterPages[groupID.x];
-    if (groupIndex < page.clusterCount) return;
+    if (groupIndex >= page.clusterCount) return;
 
     InterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], 1);
 
-    uint64_t indexBufferBaseAddress = ((pc.indexBufferBaseAddressHighBits << 32) | (pc.indexBufferBaseAddressLowBits));
-    uint64_t vertexBufferBaseAddress = ((pc.vertexBufferBaseAddressHighBits << 32) | (pc.vertexBufferBaseAddressLowBits));
+    uint64_t indexBufferBaseAddress = ((uint64_t(pc.indexBufferBaseAddressHighBits) << 32) | (pc.indexBufferBaseAddressLowBits));
+    uint64_t vertexBufferBaseAddress = ((uint64_t(pc.vertexBufferBaseAddressHighBits) << 32) | (pc.vertexBufferBaseAddressLowBits));
 
     uint clusterID = page.clusterStart + groupIndex;
     PackedDenseGeometryHeader packedHeader = denseGeometryHeaders[clusterID];
@@ -60,6 +58,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     DecodeClusterData clusterData;
     clusterData.indexBufferOffset = indexBufferOffset;
     clusterData.vertexBufferOffset = vertexBufferOffset;
+    clusterData.blasIndex = page.blasIndex;
 
     decodeClusterDatas[clusterID] = clusterData;
 }
