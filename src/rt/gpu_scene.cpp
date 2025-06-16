@@ -318,6 +318,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                          VK_SHADER_STAGE_COMPUTE_BIT);
     fillClusterBLASInfoLayout.AddBinding(1, DescriptorType::StorageBuffer,
                                          VK_SHADER_STAGE_COMPUTE_BIT);
+    fillClusterBLASInfoLayout.AddBinding(2, DescriptorType::StorageBuffer,
+                                         VK_SHADER_STAGE_COMPUTE_BIT);
     VkPipeline fillClusterBLASInfoPipeline = device->CreateComputePipeline(
         &fillClusterBLASInfoShader, &fillClusterBLASInfoLayout, &fillClusterBLASInfoPush);
 
@@ -1257,7 +1259,9 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                        fillClusterBLASInfoPipeline);
 
         DescriptorSet ds = fillClusterBLASInfoLayout.CreateDescriptorSet();
-        ds.Bind(&blasDataBuffer).Bind(&buildClusterBottomLevelInfoBuffer);
+        ds.Bind(&blasDataBuffer)
+            .Bind(&buildClusterBottomLevelInfoBuffer)
+            .Bind(&clasGlobalsBuffer);
         allCommandBuffer->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                                              fillClusterBLASInfoLayout.pipelineLayout);
 
@@ -1293,17 +1297,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                   VK_ACCESS_2_TRANSFER_READ_BIT);
         allCommandBuffer->FlushBarriers();
     }
-
-    GPUBuffer readback = device->CreateBuffer(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, blasAccelAddresses.size, MemoryUsage::GPU_TO_CPU);
-    allCommandBuffer->CopyBuffer(&readback, &blasAccelAddresses);
-    tlasSemaphore.signalValue = 1;
-    allCommandBuffer->SignalOutsideFrame(tlasSemaphore);
-    device->SubmitCommandBuffer(allCommandBuffer);
-
-    device->Wait(tlasSemaphore);
-
-    u64 *yoink = (u64 *)readback.mappedPtr;
 
     // Build the TLAS over BLAS
     {

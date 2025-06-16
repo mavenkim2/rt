@@ -14,6 +14,9 @@ namespace rt
 #define MAX_CLUSTERS_PER_PAGE_BITS 8
 #define MAX_CLUSTERS_PER_PAGE      (1u << MAX_CLUSTERS_PER_PAGE_BITS)
 
+#define CLUSTER_PAGE_SIZE_BITS 17
+#define CLUSTER_PAGE_SIZE (1u << CLUSTER_PAGE_SIZE_BITS)
+
 static const uint32_t kFillInstanceDescsThreads = 32;
 
 struct ClusterPageData

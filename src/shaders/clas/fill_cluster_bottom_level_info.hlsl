@@ -2,7 +2,7 @@
 
 StructuredBuffer<BLASData> blasDatas : register(t0);
 RWStructuredBuffer<BUILD_CLUSTERS_BOTTOM_LEVEL_INFO> buildClusterBottomLevelInfos : register(u1);
-RWStructuredBuffer<uint> globals : register(u1);
+RWStructuredBuffer<uint> globals : register(u2);
 
 [[vk::push_constant]] FillClusterBottomLevelInfoPushConstant pc;
 
@@ -20,6 +20,6 @@ void main(uint3 DTid : SV_DispatchThreadID)
     uint64_t clasBaseAddress = ((uint64_t(pc.arrayBaseAddressHighBits) << 32) | (pc.arrayBaseAddressLowBits));
 
     buildClusterBottomLevelInfos[blasIndex].clusterReferencesCount = blas.clusterCount;
-    buildClusterBottomLevelInfos[blasIndex].clusterReferencesStride = 0;
+    buildClusterBottomLevelInfos[blasIndex].clusterReferencesStride = RAY_TRACING_ADDRESS_STRIDE;
     buildClusterBottomLevelInfos[blasIndex].clusterReferences = clasBaseAddress + RAY_TRACING_ADDRESS_STRIDE * blas.clusterStartIndex;
 }

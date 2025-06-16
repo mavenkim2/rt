@@ -29,7 +29,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     WaveInterlockedAdd(globals[GLOBALS_VERTEX_BUFFER_OFFSET_INDEX], header.numVertices, vertexBufferOffset);
     WaveInterlockedAdd(globals[GLOBALS_INDEX_BUFFER_OFFSET_INDEX], header.numTriangles * 3, indexBufferOffset);
 
-    if (WaveIsFirstLane())
+    if (groupIndex == 0)
     {
         InterlockedAdd(blasDatas[page.blasIndex].clusterCount, page.clusterCount);
     }
