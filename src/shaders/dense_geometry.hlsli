@@ -308,8 +308,8 @@ DenseGeometry GetDenseGeometryHeader(uint4 packed[NUM_CLUSTER_HEADER_FLOAT4S], u
     DenseGeometry result;
 
     result.baseAddress = baseAddress;
-    result.geoBaseAddress = packed[0].x;
-    result.shadBaseAddress = packed[0].y;
+    result.shadBaseAddress = packed[0].x;
+    result.geoBaseAddress = packed[0].y;
 
     result.anchor[0] = BitFieldExtractI32((int)packed[0].z, ANCHOR_WIDTH, 0);
     result.numTriangles = BitFieldExtractU32(packed[0].z, 8, ANCHOR_WIDTH);
@@ -365,32 +365,10 @@ DenseGeometry GetDenseGeometryHeader(uint4 packed[NUM_CLUSTER_HEADER_FLOAT4S], u
     return result;
 }
 
-#if 0
-DenseGeometry GetDenseGeometryHeader(PackedDenseGeometryHeader packed, bool debug = false)
-{
-    uint4 packedHeaderValues[NUM_CLUSTER_HEADER_FLOAT4S];
-    packedHeaderValues[0].x = packed.a;
-    packedHeaderValues[0].y = packed.z;
-    packedHeaderValues[0].z = packed.b;
-    packedHeaderValues[0].w = packed.c;
-
-    packedHeaderValues[1].x = packed.d;
-    packedHeaderValues[1].y = packed.e;
-    packedHeaderValues[1].z = packed.f;
-    packedHeaderValues[1].w = packed.g;
-
-    packedHeaderValues[2].x = packed.h;
-    packedHeaderValues[2].y = packed.i;
-    packedHeaderValues[2].z = packed.j;
-
-    return GetDenseGeometryHeader(packedHeaderValues, debug);
-}
-#endif
-
 DenseGeometry GetDenseGeometryHeader(uint basePageAddress, uint numClusters, uint clusterIndex)
 {
     uint clusterHeaderSOAStride = numClusters * 16;
-    uint baseOffset = basePageAddress + clusterIndex * 16;
+    uint baseOffset = basePageAddress + 4 + clusterIndex * 16;
 
     uint4 packedHeaderValues[NUM_CLUSTER_HEADER_FLOAT4S];
     for (int i = 0; i < NUM_CLUSTER_HEADER_FLOAT4S; i++)
@@ -415,7 +393,7 @@ uint GetPageIndexFromClusterID(uint clusterID)
     return clusterID >> MAX_CLUSTERS_PER_PAGE_BITS;
 }
 
-uint GetClusterPageIndexFromClusterID(uint clusterID)
+uint GetClusterIndexFromClusterID(uint clusterID)
 {
     return clusterID & (MAX_CLUSTERS_PER_PAGE - 1);
 }

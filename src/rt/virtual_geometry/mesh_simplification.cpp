@@ -1591,7 +1591,6 @@ void CreateClusters(Arena *arena, string filename, Mesh &mesh)
     clusterBuilder.CreateDGFs(materialIDs, &buildData, &mesh, 1, bounds);
 
     // ROADMAP
-    // 1. write the clusters to disk. read them from disk and build the CLAS
     // 2. verify the grouping / simplifying / clustering somehow
     // 3. build clas over each lod level of clusters
     // 4. write dag/hierarchy to disk
@@ -1680,7 +1679,7 @@ void CreateClusters(Arena *arena, string filename, Mesh &mesh)
         {
             numPages++;
             u64 fileOffset = AllocateSpace(&builder, CLUSTER_PAGE_SIZE);
-            u32 *ptr       = (u32 *)GetMappedPtr(&builder, fileOffset);
+            u8 *ptr        = (u8 *)GetMappedPtr(&builder, fileOffset);
 
             u32 baseGeoOffset = sizeof(ClusterPageHeader) +
                                 numClustersInPage * NUM_CLUSTER_HEADER_FLOAT4S * sizeof(Vec4u);
@@ -1704,6 +1703,7 @@ void CreateClusters(Arena *arena, string filename, Mesh &mesh)
             u32 stride            = sizeof(Vec4u);
             u32 soaStride         = numClustersInPage * stride;
             u32 currentPageOffset = sizeof(ClusterPageHeader);
+
             for (int pageClusterIndexIndex = startIndexIndex;
                  pageClusterIndexIndex < clusterIndexIndex; pageClusterIndexIndex++)
             {

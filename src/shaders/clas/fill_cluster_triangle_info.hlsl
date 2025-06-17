@@ -66,7 +66,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     buildClusterTriangleInfos[descriptorIndex] = desc;
 
     DecodeClusterData clusterData;
-    clusterData.pageIndex = groupIndex;
+    clusterData.pageIndex = pageIndex;
     clusterData.clusterIndex = clusterID;
     clusterData.indexBufferOffset = indexBufferOffset;
     clusterData.vertexBufferOffset = vertexBufferOffset;

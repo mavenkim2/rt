@@ -154,7 +154,7 @@ void main()
         {
             uint clusterID = GetClusterIDNV(query, RayQueryCommittedIntersectionKHR);
             uint pageIndex = GetPageIndexFromClusterID(clusterID); 
-            uint clusterPageIndex = GetClusterPageIndexFromClusterID(clusterID);
+            uint clusterIndex = GetClusterIndexFromClusterID(clusterID);
 
             uint triangleIndex = query.CommittedPrimitiveIndex();
             float2 bary = query.CommittedTriangleBarycentrics();
@@ -178,7 +178,7 @@ void main()
 #endif
             uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
             uint numClusters = GetNumClustersInPage(basePageAddress);
-            DenseGeometry dg = GetDenseGeometryHeader(basePageAddress, numClusters, clusterPageIndex);
+            DenseGeometry dg = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
 
             uint materialID = dg.DecodeMaterialID(triangleIndex);
             uint2 pageInformation = dg.DecodeFaceIDAndRotateInfo(triangleIndex);
@@ -213,6 +213,11 @@ void main()
                 n0 = gn;
                 n1 = gn;
                 n2 = gn;
+            }
+
+            if (0)
+            {
+                printf("%f %f %f %f %f %f %f %f %f\n", n0.x, n0.y, n0.z, n1.x, n1.y, n1.z, n2.x, n2.y, n2.z);
             }
             
             // Calculate triangle differentials
@@ -268,6 +273,10 @@ void main()
             ts = cross(n, ss);
 
             // Get material
+            if (printDebug)
+            {
+                printf("%u\n", materialID);
+            }
             GPUMaterial material = materials[NonUniformResourceIndex(materialID)];
 
             float3 origin = p0 + dp10 * bary.x + dp20 * bary.y;
