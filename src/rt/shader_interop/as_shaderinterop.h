@@ -6,8 +6,6 @@ namespace rt
 {
 #endif
 
-// #define USE_PROCEDURAL_CLUSTER_INTERSECTION
-
 #define RAY_TRACING_ADDRESS_STRIDE               8
 #define FILL_CLUSTER_BOTTOM_LEVEL_INFO_GROUPSIZE 32
 
@@ -15,22 +13,42 @@ namespace rt
 #define MAX_CLUSTERS_PER_PAGE      (1u << MAX_CLUSTERS_PER_PAGE_BITS)
 
 #define CLUSTER_PAGE_SIZE_BITS 17
-#define CLUSTER_PAGE_SIZE (1u << CLUSTER_PAGE_SIZE_BITS)
+#define CLUSTER_PAGE_SIZE      (1u << CLUSTER_PAGE_SIZE_BITS)
+
+#define CLUSTER_FILE_MAGIC 0x6A69797575
+
+#define NUM_CLUSTER_HEADER_FLOAT4S 3
+
+#define MAX_CANDIDATE_CLUSTERS (1u << 24)
+#define MAX_VISIBLE_CLUSTERS   (1u << 22)
 
 static const uint32_t kFillInstanceDescsThreads = 32;
 
-struct ClusterPageData
+struct ClusterPageHeader
 {
-    uint32_t clusterStart;
-    uint32_t clusterCount;
-    uint32_t blasIndex;
+    uint numClusters;
+};
+
+struct ClusterFileHeader
+{
+    uint magic;
+    uint numPages;
+};
+
+// Used in DAG hierarchical traversal
+struct ClusterNode
+{
+    uint pageIndex;
+    uint clusterIndex;
+    uint blasIndex;
 };
 
 struct DecodeClusterData
 {
+    uint32_t pageIndex;
+    uint32_t clusterIndex;
     uint32_t indexBufferOffset;
     uint32_t vertexBufferOffset;
-    uint32_t blasIndex;
 };
 
 struct BLASData
@@ -97,7 +115,6 @@ struct GeometryIndexAndFlags
 
 struct FillClusterTriangleInfoPushConstant
 {
-    uint numClusters;
     uint indexBufferBaseAddressLowBits;
     uint indexBufferBaseAddressHighBits;
     uint vertexBufferBaseAddressLowBits;
@@ -121,6 +138,10 @@ struct NumPushConstant
 #define GLOBALS_CLAS_COUNT_INDEX           2
 #define GLOBALS_BLAS_COUNT_INDEX           3
 #define GLOBALS_BLAS_CLAS_COUNT_INDEX      4
+
+#define GLOBALS_CLAS_INDIRECT_X 5
+#define GLOBALS_CLAS_INDIRECT_Y 6
+#define GLOBALS_CLAS_INDIRECT_Z 7
 
 #ifdef __cplusplus
 }

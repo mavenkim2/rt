@@ -13,11 +13,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     if (dispatchThreadID.x >= pc.num) return;
 
-    DecodeClusterData decodeClusterData = decodeClusterDatas[dispatchThreadID.x];
-
+    uint blasIndex = 0;
     uint destIndex;
-    InterlockedAdd(blasDatas[decodeClusterData.blasIndex].clusterCount, 1, destIndex);
+    InterlockedAdd(blasDatas[blasIndex].clusterCount, 1, destIndex);
 
-    destIndex += blasDatas[decodeClusterData.blasIndex].clusterStartIndex;
+    destIndex += blasDatas[blasIndex].clusterStartIndex;
     blasAddressArray[destIndex] = inputAddressArray[dispatchThreadID.x];
 }

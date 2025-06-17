@@ -268,18 +268,14 @@ enum class RTBindings
     Image,
     Scene,
     RTBindingData,
-    GPUMaterial,
-    PageTable,
-    PhysicalPages,
-    ShaderDebugInfo,
+    GPUMaterial     = 4,
+    PageTable       = 5,
+    PhysicalPages   = 6,
+    ShaderDebugInfo = 7,
 
-    DGFHeaders,
-    DGFBytes,
-    DGFInfo,
-
-    PtexFaceData,
-
-    Feedback,
+    ClusterPageData = 8,
+    PtexFaceData    = 11,
+    Feedback        = 12,
 };
 
 enum RayShaderTypes
@@ -537,6 +533,8 @@ struct DescriptorSet
     DescriptorSet &Bind(int index, VkAccelerationStructureKHR *accel);
 
     DescriptorSet &Bind(GPUBuffer *buffer);
+    DescriptorSet &Bind(GPUImage *img);
+    DescriptorSet &Bind(VkAccelerationStructureKHR *accel);
     void Reset();
 };
 
@@ -602,6 +600,7 @@ struct CommandBuffer
                             VkPipelineLayout pipeLayout);
     void TraceRays(RayTracingState *state, u32 width, u32 height, u32 depth);
     void Dispatch(u32 groupCountX, u32 groupCountY, u32 groupCountZ);
+    void DispatchIndirect(GPUBuffer *buffer, u32 offset = 0);
     void Barrier(GPUImage *image, VkImageLayout oldLayout, VkImageLayout newLayout,
                  VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask,
                  VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask,
@@ -626,7 +625,7 @@ struct CommandBuffer
 
     void BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
                    GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
-                   int numClusters, u32 numTriangles, u32 numVertices);
+                   int maxNumClusters, u32 numTriangles, u32 numVertices);
     void BuildClusterBLAS(GPUBuffer *bottomLevelInfo, GPUBuffer *dstAddresses,
                           GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
                           u32 numClusters);
@@ -923,8 +922,6 @@ struct Vulkan
     // void BindVertexBuffer(CommandBuffer cmd, GPUBuffer **buffers, u32 count = 1,
     //                       u32 *offsets = 0);
     // void BindIndexBuffer(CommandBuffer cmd, GPUBuffer *buffer, u64 offset = 0);
-    // void Dispatch(CommandBuffer cmd, u32 groupCountX, u32 groupCountY, u32 groupCountZ);
-    // void DispatchIndirect(CommandBuffer cmd, GPUBuffer *buffer, u32 offset = 0);
     // void SetViewport(CommandBuffer cmd, Viewport *viewport);
     // void SetScissor(CommandBuffer cmd, Rect2 scissor);
     // void EndRenderPass(CommandBuffer cmd);

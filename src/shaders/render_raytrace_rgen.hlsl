@@ -14,7 +14,6 @@
 #include "sampling.hlsli"
 #include "payload.hlsli"
 #include "dense_geometry.hlsli"
-#include "dgf_intersect.hlsli"
 #include "tex/virtual_textures.hlsli"
 #include "tex/ray_cones.hlsli"
 #include "tex/ptex.hlsli"
@@ -24,15 +23,11 @@
 #include "../rt/shader_interop/debug_shaderinterop.h"
 #include "nvidia/ser.hlsli"
 #include "nvidia/clas.hlsli"
-//#include "../rt/nvapi.h"
 #include "wave_intrinsics.hlsli"
-
-//#define SER
 
 RaytracingAccelerationStructure accel : register(t0);
 RWTexture2D<half4> image : register(u1);
 ConstantBuffer<GPUScene> scene : register(b2);
-StructuredBuffer<RTBindingData> rtBindingData : register(t3);
 StructuredBuffer<GPUMaterial> materials : register(t4);
 ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
 
@@ -87,61 +82,11 @@ void main()
         desc.TMin = 0;
         desc.TMax = FLT_MAX;
         
-#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
         RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_FORCE_OPAQUE> query;
         query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
         query.Proceed();
-#else
-#ifdef SER
-        HitObjectNV hitObject;
-        CreateHitObjectNV();
-        TraceRayHitObjectNV(hitObject, accel, RAY_FLAG_SKIP_TRIANGLES | RAY_FLAG_FORCE_OPAQUE, 
-                            0xff, 0, 1, 0, pos, 0, dir, FLT_MAX, payload);
-        ReorderThreadWithHitNV(hitObject, 0, 0);
-#else
-        RayQuery<RAY_FLAG_SKIP_TRIANGLES | RAY_FLAG_FORCE_OPAQUE> query;
-        query.TraceRayInline(accel, RAY_FLAG_NONE, 0xff, desc);
-        float2 bary;
-        uint hitKind;
 
-        uint numIters = 0;
-
-        while (query.Proceed()) 
-        {
-            numIters++;
-            if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE)
-            {
-                uint primitiveIndex = query.CandidatePrimitiveIndex();
-                uint instanceID = query.CandidateInstanceID();
-                float3 o = query.CandidateObjectRayOrigin();
-                float3 d = query.CandidateObjectRayDirection();
-
-                float tHit = 0;
-                uint kind = 0;
-                float2 tempBary = 0;
-
-                bool result = IntersectCluster(instanceID, primitiveIndex, o, d, query.RayTMin(), 
-                                               query.CommittedRayT(), tHit, kind, tempBary, numIters > 1000);
-
-                if (!result) continue;
-
-                bary = tempBary;
-                hitKind = kind;
-                query.CommitProceduralPrimitiveHit(tHit);
-            }
-        }
-#endif
-#endif
-
-#ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
-#ifdef SER
-        if (IsMissNV(hitObject))
-#else
-        if (query.CommittedStatus() != COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
-#endif
-#else
         if (query.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
-#endif
         {
             float3 d = normalize(mul(scene.lightFromRender, float4(dir, 0)).xyz);
 
@@ -205,10 +150,12 @@ void main()
             break;
         }
 
-#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
         if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
         {
-            uint blockIndex = GetClusterIDNV(query, RayQueryCommittedIntersectionKHR);
+            uint clusterID = GetClusterIDNV(query, RayQueryCommittedIntersectionKHR);
+            uint pageIndex = GetPageIndexFromClusterID(clusterID); 
+            uint clusterPageIndex = GetClusterPageIndexFromClusterID(clusterID);
+
             uint triangleIndex = query.CommittedPrimitiveIndex();
             float2 bary = query.CommittedTriangleBarycentrics();
 
@@ -216,8 +163,7 @@ void main()
             float3x4 objectToWorld = query.CommittedObjectToWorld3x4();
             float rayT = query.CommittedRayT();
             float3 objectRayDir = query.CommittedObjectRayDirection();
-#else
-#ifdef SER
+#if 0
         if (IsHitNV(hitObject))
         {
             InvokeHitObjectNV(hitObject, payload);
@@ -229,20 +175,10 @@ void main()
             float2 bary = payload.bary;
             float rayT = payload.rayT;
             uint hitKind = 0;//GetHitKindNV(hitObject);
-#else
-        if (query.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT)
-        {
-            uint primitiveIndex = query.CommittedPrimitiveIndex();
-            uint instanceID = query.CommittedInstanceID();
-            float3x4 objectToWorld = query.CommittedObjectToWorld3x4();
-            float rayT = query.CommittedRayT();
-            float3 objectRayDir = query.CommittedObjectRayDirection();
 #endif
-            uint2 blockTriangleIndices = DecodeBlockAndTriangleIndex(primitiveIndex, hitKind);
-            uint blockIndex = blockTriangleIndices[0];
-            uint triangleIndex = blockTriangleIndices[1];
-#endif
-            DenseGeometry dg = GetDenseGeometryHeader(instanceID, blockIndex, printDebug);
+            uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
+            uint numClusters = GetNumClustersInPage(basePageAddress);
+            DenseGeometry dg = GetDenseGeometryHeader(basePageAddress, numClusters, clusterPageIndex);
 
             uint materialID = dg.DecodeMaterialID(triangleIndex);
             uint2 pageInformation = dg.DecodeFaceIDAndRotateInfo(triangleIndex);
@@ -262,13 +198,6 @@ void main()
             float3 p0 = dg.DecodePosition(vids[0]);
             float3 p1 = dg.DecodePosition(vids[1]);
             float3 p2 = dg.DecodePosition(vids[2]);
-
-            if (printDebug)
-            {
-                printf("%u %u %u type: %u\noldvids: %u %u %u\nvids: %u %u %u\n", instanceID, blockIndex, triangleIndex, rotate,
-                        oldVids[0], oldVids[1], oldVids[2], vids[0], vids[1], vids[2]);
-            }
-
 
             float3 gn = normalize(cross(p0 - p2, p1 - p2));
 

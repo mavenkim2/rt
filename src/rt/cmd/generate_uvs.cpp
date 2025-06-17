@@ -93,7 +93,7 @@ void ConvertPtexToUVTexture(string textureFilename, string meshFilename)
     ScratchArena scratch;
 
     int numMeshes;
-    OfflineMesh *mesh = LoadObjWithWedges(scratch.temp.arena, meshFilename, numMeshes);
+    Mesh *mesh = LoadObjWithWedges(scratch.temp.arena, meshFilename, numMeshes);
     Assert(numMeshes == 1);
 
     Ptex::String error;
@@ -471,7 +471,7 @@ int main(int argc, char **argv)
     for (string file : files)
     {
         int numMeshes;
-        OfflineMesh *meshes = LoadObjWithWedges(arena, file, numMeshes);
+        Mesh *meshes = LoadObjWithWedges(arena, file, numMeshes);
 
         string f = RemoveFileExtension(file);
 

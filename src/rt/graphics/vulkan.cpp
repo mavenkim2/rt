@@ -2192,12 +2192,6 @@ DescriptorSet &DescriptorSet::Bind(int index, GPUBuffer *buffer)
     return *this;
 }
 
-DescriptorSet &DescriptorSet::Bind(GPUBuffer *buffer)
-{
-    u32 index = numBinds++;
-    return Bind(index, buffer);
-}
-
 DescriptorSet &DescriptorSet::Bind(int index, VkAccelerationStructureKHR *accel)
 {
     Assert(index < layout->bindings.size() && index < descriptorInfo.size());
@@ -2217,6 +2211,24 @@ DescriptorSet &DescriptorSet::Bind(int index, VkAccelerationStructureKHR *accel)
 
     writeDescriptorSets.push_back(writeSet);
     return *this;
+}
+
+DescriptorSet &DescriptorSet::Bind(GPUBuffer *buffer)
+{
+    u32 index = numBinds++;
+    return Bind(index, buffer);
+}
+
+DescriptorSet &DescriptorSet::Bind(GPUImage *image)
+{
+    u32 index = numBinds++;
+    return Bind(index, image);
+}
+
+DescriptorSet &DescriptorSet::Bind(VkAccelerationStructureKHR *accel)
+{
+    u32 index = numBinds++;
+    return Bind(index, accel);
 }
 
 void CommandBuffer::BindDescriptorSets(VkPipelineBindPoint bindPoint, DescriptorSet *set,
@@ -2244,6 +2256,11 @@ void CommandBuffer::TraceRays(RayTracingState *state, u32 width, u32 height, u32
 void CommandBuffer::Dispatch(u32 groupCountX, u32 groupCountY, u32 groupCountZ)
 {
     vkCmdDispatch(buffer, groupCountX, groupCountY, groupCountZ);
+}
+
+void CommandBuffer::DispatchIndirect(GPUBuffer *gpuBuffer, u32 offset)
+{
+    vkCmdDispatchIndirect(buffer, gpuBuffer->buffer, offset);
 }
 
 u64 Vulkan::GetDeviceAddress(VkBuffer buffer)
@@ -2739,8 +2756,8 @@ GPUAccelerationStructurePayload CommandBuffer::BuildCustomBLAS(GPUBuffer *aabbsB
 
 void CommandBuffer::BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
                               GPUBuffer *dstSizes, GPUBuffer *srcInfosCount,
-                              u32 srcInfosOffset, int numClusters, u32 numTriangles,
-                              u32 numVertices)
+                              u32 srcInfosOffset, int maxNumClusters, u32 maxNumTriangles,
+                              u32 maxNumVertices)
 {
 
     VkClusterAccelerationStructureTriangleClusterInputNV triangleClusters = {};
@@ -2751,8 +2768,8 @@ void CommandBuffer::BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddr
     triangleClusters.maxClusterUniqueGeometryCount = 1; // numMeshes;
     triangleClusters.maxClusterTriangleCount       = MAX_CLUSTER_TRIANGLES;
     triangleClusters.maxClusterVertexCount         = MAX_CLUSTER_VERTICES;
-    triangleClusters.maxTotalTriangleCount         = numTriangles;
-    triangleClusters.maxTotalVertexCount           = numVertices;
+    triangleClusters.maxTotalTriangleCount         = maxNumTriangles;
+    triangleClusters.maxTotalVertexCount           = maxNumVertices;
     triangleClusters.minPositionTruncateBitCount   = 0;
 
     VkClusterAccelerationStructureInputInfoNV inputInfo = {};
@@ -2760,7 +2777,7 @@ void CommandBuffer::BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddr
     inputInfo.opType = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_TRIANGLE_CLUSTER_NV;
     inputInfo.opMode = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_IMPLICIT_DESTINATIONS_NV;
     inputInfo.opInput.pTriangleClusters     = &triangleClusters;
-    inputInfo.maxAccelerationStructureCount = numClusters;
+    inputInfo.maxAccelerationStructureCount = maxNumClusters;
 
     // Get acceleration structure sizes and size of scratch buffer
     VkAccelerationStructureBuildSizesInfoKHR buildSizesInfo = {
@@ -2791,11 +2808,11 @@ void CommandBuffer::BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddr
 
         commandsInfo.dstAddressesArray.deviceAddress =
             device->GetDeviceAddress(dstAddresses->buffer);
-        commandsInfo.dstAddressesArray.size   = sizeof(VkDeviceAddress) * numClusters;
+        commandsInfo.dstAddressesArray.size   = dstAddresses->size;
         commandsInfo.dstAddressesArray.stride = sizeof(VkDeviceAddress);
 
         commandsInfo.dstSizesArray.deviceAddress = device->GetDeviceAddress(dstSizes->buffer);
-        commandsInfo.dstSizesArray.size          = sizeof(u32) * numClusters;
+        commandsInfo.dstSizesArray.size          = dstSizes->size;
         commandsInfo.dstSizesArray.stride        = sizeof(u32);
 
         commandsInfo.srcInfosArray.deviceAddress =

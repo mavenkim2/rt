@@ -4,17 +4,15 @@
 #include "bit_twiddling.hlsli"
 #include "common.hlsli"
 #include "../rt/shader_interop/dense_geometry_shaderinterop.h"
+#include "../rt/shader_interop/as_shaderinterop.h"
 
-StructuredBuffer<PackedDenseGeometryHeader> denseGeometryHeaders : register(t8);
-ByteAddressBuffer denseGeometryData : register(t9);
-StructuredBuffer<DGFGeometryInfo> dgfGeometryInfos : register(t10);
+ByteAddressBuffer clusterPageData : register(t8);
 
 struct DenseGeometry 
 {
+    uint baseAddress;
     uint geoBaseAddress;
     uint shadBaseAddress;
-
-    uint blockIndex;
 
     int3 anchor;
     uint2 octBase;
@@ -62,8 +60,9 @@ struct DenseGeometry
         uint mask = (1u << bitIndex) - 1u;
 
         // x = restarts, y = edge, z = backtrack
-        uint2 vals = GetAlignedAddressAndBitOffset(geoBaseAddress + ctrlOffset + dwordIndex * 12, 0);
-        uint4 stripBitmasks = denseGeometryData.Load4(vals[0]);
+        uint address = baseAddress + geoBaseAddress + ctrlOffset + dwordIndex * 12;
+        uint2 vals = GetAlignedAddressAndBitOffset(address, 0);
+        uint4 stripBitmasks = clusterPageData.Load4(vals[0]);
         stripBitmasks[0] = BitAlignU32(stripBitmasks[1], stripBitmasks[0], vals[1]);
         stripBitmasks[1] = BitAlignU32(stripBitmasks[2], stripBitmasks[1], vals[1]);
         stripBitmasks[2] = BitAlignU32(stripBitmasks[3], stripBitmasks[2], vals[1]);
@@ -126,22 +125,16 @@ struct DenseGeometry
             indexAddress.x = 2 * r + prevTriangle - 2 + increment;
 
             indexAddress = isEdge1 ? indexAddress.yxz : indexAddress;
-
-            if (0)
-            {
-                printf("block/tri index: %u %u\nnum restarts: %u\nis: %u %u %u\nprev triangle: %u %u %u\nrestart hb: %u\nother hb: %u\nnum prev restarts: %u %u %u\n", blockIndex, triangleIndex, numRestarts, isRestart, isEdge1, isBacktrack, prevRestartTriangle, prevOtherEdgeTriangle, prevTriangle, restartHighBit, otherEdgeHighBit, numPrevRestartsBeforeDwords[0], numPrevRestartsBeforeDwords[1], numPrevRestartsBeforeDwords[2]);
-                printf("bitmask: %u %u %u, vals: %u %u\n", restartBitmask, edgeBitmask, backtrackBitmask, vals[0], vals[1]);
-            }
         }
 
         // Get the first bits mask
-        uint2 baseAligned_bitOffset = GetAlignedAddressAndBitOffset(geoBaseAddress, firstBitOffset);
+        uint2 baseAligned_bitOffset = GetAlignedAddressAndBitOffset(baseAddress + geoBaseAddress, firstBitOffset);
         uint alignedFirstBitsOffset = baseAligned_bitOffset[0];
         uint firstBitsOffset = baseAligned_bitOffset[1];
 
         uint4 firstBitMask[2];
-        firstBitMask[0] = denseGeometryData.Load4(alignedFirstBitsOffset);
-        firstBitMask[1] = denseGeometryData.Load4(alignedFirstBitsOffset + 16);
+        firstBitMask[0] = clusterPageData.Load4(alignedFirstBitsOffset);
+        firstBitMask[1] = clusterPageData.Load4(alignedFirstBitsOffset + 16);
 
         firstBitMask[0][0] = BitAlignU32(firstBitMask[0][1], firstBitMask[0][0], firstBitsOffset);
         firstBitMask[0][1] = BitAlignU32(firstBitMask[0][2], firstBitMask[0][1], firstBitsOffset);
@@ -186,20 +179,6 @@ struct DenseGeometry
             vids[k] = vid;
         }
 
-        if (0)
-        {
-            float3 n0 = DecodeNormal(vids[0]);
-            float3 n1 = DecodeNormal(vids[1]);
-            float3 n2 = DecodeNormal(vids[2]);
-
-            printf("anchor: %i %i %i\nbit widths: %u %u %u %u\nnum tri: %u\nnum vert: %u\noffsets: index %u ctrl %u first %u\nprecision: %u\nblockindex: %u triIndex: %u\nindex address: %u %u %u\nvids: %u %u %u\n, reuse: %u %u %u\n, octbase: %u %u, bitwidths: %u %u\nnumfaceidbits: %u\nn: %f %f %f, %f %f %f, %f %f %f\n",
-                anchor[0], anchor[1], anchor[2], posBitWidths[0], posBitWidths[1], posBitWidths[2], indexBitWidth,
-                numTriangles, numVertices, indexOffset, ctrlOffset, firstBitOffset, posPrecision, 
-                blockIndex, triangleIndex, 
-                indexAddress[0], indexAddress[1], indexAddress[2], vids[0], vids[1], vids[2], 
-                reuseIds[0], reuseIds[1], reuseIds[2], octBase[0], octBase[1], octBitWidths[0], octBitWidths[1], numFaceIDBits, n0.x, n0.y, n0.z, n1.x, n1.y, n1.z, n2.x, n2.y, n2.z);
-        }
-
         return vids;
     }
 
@@ -208,8 +187,8 @@ struct DenseGeometry
         const uint bitsPerVertex = posBitWidths[0] + posBitWidths[1] + posBitWidths[2];
         const uint bitsOffset = vertexIndex * bitsPerVertex;
 
-        uint2 vals = GetAlignedAddressAndBitOffset(geoBaseAddress, bitsOffset);
-        uint3 data = denseGeometryData.Load3(vals[0]);
+        uint2 vals = GetAlignedAddressAndBitOffset(baseAddress + geoBaseAddress, bitsOffset);
+        uint3 data = clusterPageData.Load3(vals[0]);
 
         uint2 packed = uint2(BitAlignU32(data.y, data.x, vals[1]), 
                              BitAlignU32(data.z, data.y, vals[1]));
@@ -240,8 +219,8 @@ struct DenseGeometry
 
         const uint bitsOffset = bitsPerNormal * vertexIndex;
 
-        uint2 vals = GetAlignedAddressAndBitOffset(shadBaseAddress + normalOffset, bitsOffset);
-        uint2 data = denseGeometryData.Load2(vals[0]);
+        uint2 vals = GetAlignedAddressAndBitOffset(baseAddress + shadBaseAddress + normalOffset, bitsOffset);
+        uint2 data = clusterPageData.Load2(vals[0]);
         uint n = BitAlignU32(data.y, data.x, vals[1]);
 
         float nx = Dequantize<16>(BitFieldExtractU32(n, octBitWidths[0], 0) + octBase[0]) * 2 - 1;
@@ -253,8 +232,8 @@ struct DenseGeometry
     uint DecodeReuse(uint reuseIndex)
     {
         const uint bitsOffset = reuseIndex * indexBitWidth;
-        uint2 vals = GetAlignedAddressAndBitOffset(geoBaseAddress + indexOffset, bitsOffset);
-        uint2 result = denseGeometryData.Load2(vals[0]);
+        uint2 vals = GetAlignedAddressAndBitOffset(baseAddress + geoBaseAddress + indexOffset, bitsOffset);
+        uint2 result = clusterPageData.Load2(vals[0]);
         uint r = BitFieldExtractU32(BitAlignU32(result.y, result.x, vals[1]), indexBitWidth, 0);
         return r;
     }
@@ -280,19 +259,19 @@ struct DenseGeometry
             uint bitOffset = numHighOrderBits + numEntries * numLowOrderBits + triangleIndex * entryBitWidth;
 
             // First get the entry index
-            uint2 offsets = GetAlignedAddressAndBitOffset(shadBaseAddress + materialOffset, bitOffset);
-            uint2 result = denseGeometryData.Load2(offsets[0]);
+            uint2 offsets = GetAlignedAddressAndBitOffset(baseAddress + shadBaseAddress + materialOffset, bitOffset);
+            uint2 result = clusterPageData.Load2(offsets[0]);
             uint entryIndex = BitFieldExtractU32(BitAlignU32(result.y, result.x, offsets[1]), entryBitWidth, 0);
 
             // Then get the entry
             // LSB
             bitOffset = numHighOrderBits + entryIndex * numLowOrderBits;
-            offsets = GetAlignedAddressAndBitOffset(shadBaseAddress + materialOffset, bitOffset);
-            result = denseGeometryData.Load2(offsets[0]);
+            offsets = GetAlignedAddressAndBitOffset(baseAddress + shadBaseAddress + materialOffset, bitOffset);
+            result = clusterPageData.Load2(offsets[0]);
             uint entry = BitFieldExtractU32(BitAlignU32(result.y, result.x, offsets[1]), numLowOrderBits, 0);
             // MSB
-            offsets = GetAlignedAddressAndBitOffset(shadBaseAddress + materialOffset, 0);
-            result = denseGeometryData.Load2(offsets[0]);
+            offsets = GetAlignedAddressAndBitOffset(baseAddress + shadBaseAddress + materialOffset, 0);
+            result = clusterPageData.Load2(offsets[0]);
             uint msb = BitFieldExtractU32(BitAlignU32(result.y, result.x, offsets[1]), numHighOrderBits, 0);
 
             uint materialID = (msb << numLowOrderBits) | entry;
@@ -306,75 +285,69 @@ struct DenseGeometry
         uint2 result = 0;
         if (numFaceIDBits)
         {
-            uint2 offsets = GetAlignedAddressAndBitOffset(shadBaseAddress + faceIDOffset, 0);
-            uint2 data = denseGeometryData.Load2(offsets[0]);
+            uint2 offsets = GetAlignedAddressAndBitOffset(baseAddress + shadBaseAddress + faceIDOffset, 0);
+            uint2 data = clusterPageData.Load2(offsets[0]);
             uint minFaceID = BitAlignU32(data.y, data.x, offsets[1]);
  
-            offsets = GetAlignedAddressAndBitOffset(shadBaseAddress + faceIDOffset + 4, triangleIndex * (numFaceIDBits + 3u));
-            data = denseGeometryData.Load2(offsets[0]);
+            offsets = GetAlignedAddressAndBitOffset(baseAddress + shadBaseAddress + faceIDOffset + 4, triangleIndex * (numFaceIDBits + 3u));
+            data = clusterPageData.Load2(offsets[0]);
             uint packed = BitAlignU32(data.y, data.x, offsets[1]);
             uint faceIDDiff = BitFieldExtractU32(packed, numFaceIDBits, 0);
             uint rotateInfo = BitFieldExtractU32(packed, 3, numFaceIDBits);
 
             result.x = minFaceID + faceIDDiff;
             result.y = rotateInfo;
- 
-            if (0)
-            {
-                printf("%u %u %u\n", blockIndex, triangleIndex, result.x);
-            }
         }
         return result;
     }
 };
 
 // Taken from NaniteDataDecode.ush in Unreal Engine 5
-DenseGeometry GetDenseGeometryHeader(PackedDenseGeometryHeader packed, uint blockIndex, bool debug = false)
+DenseGeometry GetDenseGeometryHeader(uint4 packed[NUM_CLUSTER_HEADER_FLOAT4S], uint baseAddress, bool debug = false)
 {
     DenseGeometry result;
 
-    result.geoBaseAddress = packed.a;
-    result.shadBaseAddress = packed.z;
+    result.baseAddress = baseAddress;
+    result.geoBaseAddress = packed[0].x;
+    result.shadBaseAddress = packed[0].y;
 
-    result.blockIndex = blockIndex;
+    result.anchor[0] = BitFieldExtractI32((int)packed[0].z, ANCHOR_WIDTH, 0);
+    result.numTriangles = BitFieldExtractU32(packed[0].z, 8, ANCHOR_WIDTH);
 
-    result.anchor[0] = BitFieldExtractI32((int)packed.b, ANCHOR_WIDTH, 0);
-    result.numTriangles = BitFieldExtractU32(packed.b, 8, ANCHOR_WIDTH);
+    result.anchor[1] = BitFieldExtractI32((int)packed[0].w, ANCHOR_WIDTH, 0);
+    result.posBitWidths[0] = BitFieldExtractU32(packed[0].w, 5, ANCHOR_WIDTH);
+    result.indexBitWidth = BitFieldExtractU32(packed[0].w, 3, ANCHOR_WIDTH + 5) + 1;
 
-    result.anchor[1] = BitFieldExtractI32((int)packed.c, ANCHOR_WIDTH, 0);
-    result.posBitWidths[0] = BitFieldExtractU32(packed.c, 5, ANCHOR_WIDTH);
-    result.indexBitWidth = BitFieldExtractU32(packed.c, 3, ANCHOR_WIDTH + 5) + 1;
-
-    result.anchor[2] = BitFieldExtractI32((int)packed.d, ANCHOR_WIDTH, 0);
-    result.posPrecision = (int)BitFieldExtractU32(packed.d, 8, ANCHOR_WIDTH) + CLUSTER_MIN_PRECISION;
+    result.anchor[2] = BitFieldExtractI32((int)packed[1].x, ANCHOR_WIDTH, 0);
+    result.posPrecision = (int)BitFieldExtractU32(packed[1].x, 8, ANCHOR_WIDTH) + CLUSTER_MIN_PRECISION;
     
-    result.numVertices     = BitFieldExtractU32(packed.e, 9, 0);
-    uint reuseBufferLength = BitFieldExtractU32(packed.e, 8, 9);
-    result.posBitWidths[1] = BitFieldExtractU32(packed.e, 5, 17);
-    result.posBitWidths[2] = BitFieldExtractU32(packed.e, 5, 22);
-    result.octBitWidths[0] = BitFieldExtractU32(packed.e, 5, 27);
+    result.numVertices     = BitFieldExtractU32(packed[1].y, 9, 0);
+    uint reuseBufferLength = BitFieldExtractU32(packed[1].y, 8, 9);
+    result.posBitWidths[1] = BitFieldExtractU32(packed[1].y, 5, 17);
+    result.posBitWidths[2] = BitFieldExtractU32(packed[1].y, 5, 22);
+    result.octBitWidths[0] = BitFieldExtractU32(packed[1].y, 5, 27);
 
-    result.prevHighRestartBeforeDwords[1] = BitFieldExtractU32(packed.f, 6, 0);
-    result.prevHighRestartBeforeDwords[2] = BitFieldExtractU32(packed.f, 7, 6);
-    result.prevHighEdge1BeforeDwords[0] = BitFieldExtractI32(packed.f, 6, 13);
-    result.prevHighEdge1BeforeDwords[1] = BitFieldExtractI32(packed.f, 7, 19);
-    result.prevHighEdge2BeforeDwords[0] = BitFieldExtractI32(packed.f, 6, 26);
+    result.prevHighRestartBeforeDwords[1] = BitFieldExtractU32(packed[1].z, 6, 0);
+    result.prevHighRestartBeforeDwords[2] = BitFieldExtractU32(packed[1].z, 7, 6);
+    result.prevHighEdge1BeforeDwords[0] = BitFieldExtractI32(packed[1].z, 6, 13);
+    result.prevHighEdge1BeforeDwords[1] = BitFieldExtractI32(packed[1].z, 7, 19);
+    result.prevHighEdge2BeforeDwords[0] = BitFieldExtractI32(packed[1].z, 6, 26);
 
-    result.prevHighRestartBeforeDwords[0] = BitFieldExtractU32(packed.g, 5, 0);
-    result.prevHighEdge1BeforeDwords[2] = BitFieldExtractI32(packed.g, 8, 5);
-    result.prevHighEdge2BeforeDwords[1] = BitFieldExtractI32(packed.g, 7, 13);
-    result.prevHighEdge2BeforeDwords[2] = BitFieldExtractI32(packed.g, 8, 20);
+    result.prevHighRestartBeforeDwords[0] = BitFieldExtractU32(packed[1].w, 5, 0);
+    result.prevHighEdge1BeforeDwords[2] = BitFieldExtractI32(packed[1].w, 8, 5);
+    result.prevHighEdge2BeforeDwords[1] = BitFieldExtractI32(packed[1].w, 7, 13);
+    result.prevHighEdge2BeforeDwords[2] = BitFieldExtractI32(packed[1].w, 8, 20);
 
-    result.octBitWidths[1]                = BitFieldExtractU32(packed.h, 5, 0);
-    result.numPrevRestartsBeforeDwords[0] = BitFieldExtractU32(packed.h, 6, 5);
-    result.numPrevRestartsBeforeDwords[1] = BitFieldExtractU32(packed.h, 7, 11);
-    result.numPrevRestartsBeforeDwords[2] = BitFieldExtractU32(packed.h, 8, 18);
-    result.numFaceIDBits = BitFieldExtractU32(packed.h, 6, 26); 
+    result.octBitWidths[1]                = BitFieldExtractU32(packed[2].x, 5, 0);
+    result.numPrevRestartsBeforeDwords[0] = BitFieldExtractU32(packed[2].x, 6, 5);
+    result.numPrevRestartsBeforeDwords[1] = BitFieldExtractU32(packed[2].x, 7, 11);
+    result.numPrevRestartsBeforeDwords[2] = BitFieldExtractU32(packed[2].x, 8, 18);
+    result.numFaceIDBits = BitFieldExtractU32(packed[2].x, 6, 26); 
 
-    result.octBase[0] = BitFieldExtractU32(packed.i, 16, 0);
-    result.octBase[1] = BitFieldExtractU32(packed.i, 16, 16);
+    result.octBase[0] = BitFieldExtractU32(packed[2].y, 16, 0);
+    result.octBase[1] = BitFieldExtractU32(packed[2].y, 16, 16);
 
-    result.materialInfo = packed.j;
+    result.materialInfo = packed[2].z;
 
     // Size of vertex buffer and normal buffer
     const uint vertexBitWidth = result.posBitWidths[0] + result.posBitWidths[1] + result.posBitWidths[2];
@@ -392,13 +365,59 @@ DenseGeometry GetDenseGeometryHeader(PackedDenseGeometryHeader packed, uint bloc
     return result;
 }
 
-DenseGeometry GetDenseGeometryHeader(uint instanceID, uint blockIndex, bool debug = false)
+#if 0
+DenseGeometry GetDenseGeometryHeader(PackedDenseGeometryHeader packed, bool debug = false)
 {
-    const int mult = 2;
-    DGFGeometryInfo geometryInfo = dgfGeometryInfos[instanceID];
-    PackedDenseGeometryHeader packed = denseGeometryHeaders[geometryInfo.headerOffset + blockIndex];
+    uint4 packedHeaderValues[NUM_CLUSTER_HEADER_FLOAT4S];
+    packedHeaderValues[0].x = packed.a;
+    packedHeaderValues[0].y = packed.z;
+    packedHeaderValues[0].z = packed.b;
+    packedHeaderValues[0].w = packed.c;
 
-    return GetDenseGeometryHeader(packed, blockIndex, debug);
+    packedHeaderValues[1].x = packed.d;
+    packedHeaderValues[1].y = packed.e;
+    packedHeaderValues[1].z = packed.f;
+    packedHeaderValues[1].w = packed.g;
+
+    packedHeaderValues[2].x = packed.h;
+    packedHeaderValues[2].y = packed.i;
+    packedHeaderValues[2].z = packed.j;
+
+    return GetDenseGeometryHeader(packedHeaderValues, debug);
+}
+#endif
+
+DenseGeometry GetDenseGeometryHeader(uint basePageAddress, uint numClusters, uint clusterIndex)
+{
+    uint clusterHeaderSOAStride = numClusters * 16;
+    uint baseOffset = basePageAddress + clusterIndex * 16;
+
+    uint4 packedHeaderValues[NUM_CLUSTER_HEADER_FLOAT4S];
+    for (int i = 0; i < NUM_CLUSTER_HEADER_FLOAT4S; i++)
+    {
+        packedHeaderValues[i] = clusterPageData.Load4(baseOffset + i * clusterHeaderSOAStride);
+    }
+    return GetDenseGeometryHeader(packedHeaderValues, basePageAddress);
+}
+
+uint GetClusterPageBaseAddress(uint pageIndex) 
+{
+    return pageIndex * CLUSTER_PAGE_SIZE;
+}
+
+uint GetNumClustersInPage(uint baseAddress)
+{
+    return clusterPageData.Load(baseAddress);
+}
+
+uint GetPageIndexFromClusterID(uint clusterID)
+{
+    return clusterID >> MAX_CLUSTERS_PER_PAGE_BITS;
+}
+
+uint GetClusterPageIndexFromClusterID(uint clusterID)
+{
+    return clusterID & (MAX_CLUSTERS_PER_PAGE - 1);
 }
 
 #endif

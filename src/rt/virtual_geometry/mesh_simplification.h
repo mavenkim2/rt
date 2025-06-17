@@ -103,6 +103,8 @@ struct MeshSimplifier
     void Finalize(u32 &finalNumVertices, u32 &finalNumIndices);
 };
 
+void CreateClusters(Arena *arena, string filename, Mesh &mesh);
+
 } // namespace rt
 
 #endif

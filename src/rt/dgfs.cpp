@@ -34,7 +34,7 @@ ClusterBuilder::ClusterBuilder(Arena *arena, PrimRef *primRefs) : primRefs(primR
     h = PushStructConstruct(arena, Heuristic)(primRefs);
 }
 
-void DenseGeometryBuildData::Init()
+DenseGeometryBuildData::DenseGeometryBuildData()
 {
     arena             = ArenaAlloc();
     geoByteBuffer     = ChunkedLinkedList<u8>(arena, 1024);
@@ -149,8 +149,9 @@ Mesh ConvertQuadToTriangleMesh(Arena *arena, Mesh mesh)
     return result;
 }
 
-void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *buildData,
-                                Mesh *meshes, int numMeshes, Bounds &sceneBounds)
+void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
+                                DenseGeometryBuildData *buildData, Mesh *meshes, int numMeshes,
+                                Bounds &sceneBounds)
 {
 #if 0
     static const int b     = 24;
@@ -226,21 +227,20 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
             for (int clusterIndex = 0; clusterIndex < node->count; clusterIndex++)
             {
                 RecordAOSSplits &cluster = node->values[clusterIndex];
-                CreateDGFs(scene, buildData, meshScratch.temp.arena, meshes, quantizedVertices,
-                           octNormals, cluster, precision);
+                CreateDGFs(materialIDs, buildData, meshScratch.temp.arena, meshes,
+                           quantizedVertices, octNormals, cluster, precision);
             }
         }
     }
     buildData->numBlocks = total;
 }
 
-void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *buildDatas,
-                                Arena *arena, Mesh *meshes,
+void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
+                                DenseGeometryBuildData *buildDatas, Arena *arena, Mesh *meshes,
                                 const StaticArray<StaticArray<Vec3i>> &quantizedVertices,
                                 const StaticArray<StaticArray<u32>> &octNormals,
                                 RecordAOSSplits &cluster, int precision)
 {
-    Scene *rootScene       = GetScene();
     static const u32 LUT[] = {1, 2, 0};
     struct HashedIndex
     {
@@ -304,7 +304,7 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
 
     u32 geomIDStart = primRefs[start].geomID;
 
-    u32 materialIDStart     = scene->primIndices[geomIDStart].materialID.GetIndex();
+    u32 materialIDStart     = materialIDs[geomIDStart] & 0x7fffffff;
     bool constantMaterialID = true;
 
     u32 minFaceID      = pos_inf;
@@ -323,11 +323,6 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
             mesh.indices[3 * primID + 2],
         };
 
-        if (indices[0] == indices[1] || indices[0] == indices[2] || indices[1] == indices[2])
-        {
-            int stop = 5;
-        }
-
         geomIDs[i - start] = geomID;
         primIDs[i - start] = primID;
 
@@ -336,11 +331,10 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
         maxFaceID          = Max(maxFaceID, faceID);
         faceIDs[i - start] = faceID;
 
-        u32 materialID = scene->primIndices[geomID].materialID.GetIndex();
+        u32 materialID = materialIDs[geomID];
         constantMaterialID &= materialID == materialIDStart;
-        Material *material = rootScene->materials[materialID];
 
-        hasFaceIDs |= (bool(mesh.faceIDs) && material->ptexReflectanceIndex != -1);
+        hasFaceIDs |= (bool(mesh.faceIDs) && bool(materialID >> 31u));
         hasAnyNormals |= bool(mesh.n);
 
         for (int indexIndex = 0; indexIndex < 3; indexIndex++)
@@ -376,14 +370,6 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
                 vertices[vertexCount] = quantizedVertices[geomID][indices[indexIndex]];
                 normals[vertexCount]  = normal;
                 vertexCount++;
-            }
-
-            if (indexIndex == 2 &&
-                (vertexIndices[3 * (i - start) + 0] == vertexIndices[3 * (i - start) + 1] ||
-                 vertexIndices[3 * (i - start) + 0] == vertexIndices[3 * (i - start) + 2] ||
-                 vertexIndices[3 * (i - start) + 1] == vertexIndices[3 * (i - start) + 2]))
-            {
-                int stop = 5;
             }
         }
     }
@@ -1025,7 +1011,7 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
     // Constant mode
     if (constantMaterialID)
     {
-        u32 materialIndex = scene->primIndices[geomIDStart].materialID.GetIndex();
+        u32 materialIndex = materialIDs[geomIDStart];
         materialIndex |= 0x80000000;
         packed.j = materialIndex;
     }
@@ -1039,13 +1025,13 @@ void ClusterBuilder::CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *
         StaticArray<u32> entryIndex(clusterScratch.arena, clusterNumTriangles,
                                     clusterNumTriangles);
 
-        PrimitiveIndices *primIndices = scene->primIndices;
-        uniqueMaterialIDs.Push(primIndices[geomIDs[triangleOrder[0]]].materialID.GetIndex());
+        u32 materialIndex = materialIDs[geomIDs[triangleOrder[0]]] & 0x7fffffff;
+        uniqueMaterialIDs.Push(materialIndex);
         entryIndex[0] = 0;
         for (int i = 1; i < clusterNumTriangles; i++)
         {
             u32 triangleIndex = triangleOrder[i];
-            u32 materialID    = primIndices[geomIDs[triangleIndex]].materialID.GetIndex();
+            u32 materialID    = materialIDs[geomIDs[triangleIndex]] & 0x7fffffff;
             bool unique       = true;
             for (int j = 0; j < uniqueMaterialIDs.Length(); j++)
             {

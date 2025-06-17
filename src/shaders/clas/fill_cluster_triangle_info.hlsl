@@ -2,28 +2,31 @@
 #include "../wave_intrinsics.hlsli"
 #include "../dense_geometry.hlsli"
 
-StructuredBuffer<ClusterPageData> clusterPages : register(t0);
-RWStructuredBuffer<BUILD_CLUSTERS_TRIANGLE_INFO> buildClusterTriangleInfos : register(u1);
-RWStructuredBuffer<BLASData> blasDatas : register(u2);
-RWStructuredBuffer<DecodeClusterData> decodeClusterDatas : register(u3);
-RWStructuredBuffer<uint> globals : register(u4);
+RWStructuredBuffer<BUILD_CLUSTERS_TRIANGLE_INFO> buildClusterTriangleInfos : register(u0);
+RWStructuredBuffer<BLASData> blasDatas : register(u1);
+RWStructuredBuffer<DecodeClusterData> decodeClusterDatas : register(u2);
+RWStructuredBuffer<uint> globals : register(u3);
 
 [[vk::push_constant]] FillClusterTriangleInfoPushConstant pc;
 
 [numthreads(MAX_CLUSTERS_PER_PAGE, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupID, uint groupIndex : SV_GroupIndex)
 {
-    ClusterPageData page = clusterPages[groupID.x];
-    if (groupIndex >= page.clusterCount) return;
+    uint pageIndex = groupID.x;
+    uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
+    uint numClusters = GetNumClustersInPage(basePageAddress);
 
-    InterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], 1);
+    if (groupIndex >= numClusters) return;
+
+    uint descriptorIndex;
+    InterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], 1, descriptorIndex);
 
     uint64_t indexBufferBaseAddress = ((uint64_t(pc.indexBufferBaseAddressHighBits) << 32) | (pc.indexBufferBaseAddressLowBits));
     uint64_t vertexBufferBaseAddress = ((uint64_t(pc.vertexBufferBaseAddressHighBits) << 32) | (pc.vertexBufferBaseAddressLowBits));
 
-    uint clusterID = page.clusterStart + groupIndex;
-    PackedDenseGeometryHeader packedHeader = denseGeometryHeaders[clusterID];
-    DenseGeometry header = GetDenseGeometryHeader(packedHeader, clusterID);
+    uint clusterID = groupIndex;
+
+    DenseGeometry header = GetDenseGeometryHeader(basePageAddress, numClusters, clusterID);
 
     uint vertexBufferOffset, indexBufferOffset;
     WaveInterlockedAdd(globals[GLOBALS_VERTEX_BUFFER_OFFSET_INDEX], header.numVertices, vertexBufferOffset);
@@ -31,11 +34,12 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
 
     if (groupIndex == 0)
     {
-        InterlockedAdd(blasDatas[page.blasIndex].clusterCount, page.clusterCount);
+        // TODO: implement hierarchical traversal
+        InterlockedAdd(blasDatas[0].clusterCount, numClusters);
     }
 
     BUILD_CLUSTERS_TRIANGLE_INFO desc = (BUILD_CLUSTERS_TRIANGLE_INFO)0;
-    desc.clusterId = clusterID;
+    desc.clusterId = pageIndex * MAX_CLUSTERS_PER_PAGE + clusterID;
     desc.clusterFlags = 0;
     desc.triangleCount = header.numTriangles;
     desc.vertexCount = header.numVertices;
@@ -53,12 +57,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     desc.opacityMicromapArray = 0;
     desc.opacityMicromapIndexBuffer = 0;
 
-    buildClusterTriangleInfos[clusterID] = desc;
+    buildClusterTriangleInfos[descriptorIndex] = desc;
 
     DecodeClusterData clusterData;
+    clusterData.pageIndex = groupIndex;
+    clusterData.clusterIndex = clusterID;
     clusterData.indexBufferOffset = indexBufferOffset;
     clusterData.vertexBufferOffset = vertexBufferOffset;
-    clusterData.blasIndex = page.blasIndex;
 
-    decodeClusterDatas[clusterID] = clusterData;
+    decodeClusterDatas[descriptorIndex] = clusterData;
 }

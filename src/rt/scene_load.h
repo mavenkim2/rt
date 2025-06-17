@@ -5,21 +5,11 @@
 #include "thread_statistics.h"
 #include "platform.h"
 #include "thread_context.h"
+#include "mesh.h"
 #include <unordered_set>
 
 namespace rt
 {
-
-struct OfflineMesh
-{
-    Vec3f *p     = 0;
-    Vec3f *n     = 0;
-    Vec2f *uv    = 0;
-    u32 *indices = 0;
-    u32 numIndices;
-    u32 numVertices;
-    u32 numFaces;
-};
 
 static const u32 MAX_PARAMETER_COUNT = 16;
 
@@ -285,7 +275,7 @@ inline u32 GetTypeStride(string word)
     return 0;
 }
 
-inline OfflineMesh LoadPLY(Arena *arena, string filename, GeometryType type)
+inline Mesh LoadPLY(Arena *arena, string filename, GeometryType type)
 {
     string buffer = OS_MapFileRead(filename); // OS_ReadFile(arena, filename);
     Tokenizer tokenizer;
@@ -395,7 +385,7 @@ inline OfflineMesh LoadPLY(Arena *arena, string filename, GeometryType type)
     bool isQuad = type == GeometryType::QuadMesh;
 
     // Read binary data
-    OfflineMesh mesh = {};
+    Mesh mesh        = {};
     mesh.numVertices = numVertices;
     mesh.numIndices  = numFaces * 3;
     mesh.numFaces    = isQuad ? mesh.numFaces / 2 : numFaces;
@@ -454,18 +444,17 @@ inline OfflineMesh LoadPLY(Arena *arena, string filename, GeometryType type)
     return mesh;
 }
 
-inline OfflineMesh LoadQuadPLY(Arena *arena, string filename)
+inline Mesh LoadQuadPLY(Arena *arena, string filename)
 {
     return LoadPLY(arena, filename, GeometryType::QuadMesh);
 }
 
-inline OfflineMesh LoadTrianglePLY(Arena *arena, string filename)
+inline Mesh LoadTrianglePLY(Arena *arena, string filename)
 {
     return LoadPLY(arena, filename, GeometryType::TriangleMesh);
 }
 
-inline OfflineMesh *LoadObj(Arena *arena, string filename, int &numMeshes,
-                            int &actualNumMeshes)
+inline Mesh *LoadObj(Arena *arena, string filename, int &numMeshes, int &actualNumMeshes)
 {
     TempArena temp = ScratchStart(0, 0);
     string buffer  = OS_MapFileRead(filename);
@@ -480,7 +469,7 @@ inline OfflineMesh *LoadObj(Arena *arena, string filename, int &numMeshes,
     std::vector<Vec3i> indices;
     indices.reserve(128);
 
-    std::vector<OfflineMesh> meshes;
+    std::vector<Mesh> meshes;
     int vertexOffset = 1;
     int normalOffset = 1;
 
@@ -508,7 +497,7 @@ inline OfflineMesh *LoadObj(Arena *arena, string filename, int &numMeshes,
                 {
                     if (!repeatedMesh)
                     {
-                        OfflineMesh mesh;
+                        Mesh mesh;
                         mesh.numVertices = (u32)vertices.size();
                         mesh.numIndices  = (u32)indices.size();
 
@@ -624,15 +613,15 @@ inline OfflineMesh *LoadObj(Arena *arena, string filename, int &numMeshes,
     }
 
     ScratchEnd(temp);
-    numMeshes                 = totalNumMeshes;
-    actualNumMeshes           = (int)meshes.size();
-    OfflineMesh *outputMeshes = PushArrayNoZero(arena, OfflineMesh, actualNumMeshes);
-    MemoryCopy(outputMeshes, meshes.data(), sizeof(OfflineMesh) * actualNumMeshes);
+    numMeshes          = totalNumMeshes;
+    actualNumMeshes    = (int)meshes.size();
+    Mesh *outputMeshes = PushArrayNoZero(arena, Mesh, actualNumMeshes);
+    MemoryCopy(outputMeshes, meshes.data(), sizeof(Mesh) * actualNumMeshes);
     return outputMeshes;
 }
 
-inline OfflineMesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes,
-                                      u32 *outFaceVertexCount = 0)
+inline Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes,
+                               u32 *outFaceVertexCount = 0)
 {
     TempArena temp = ScratchStart(0, 0);
     string buffer  = OS_MapFileRead(filename);
@@ -649,7 +638,7 @@ inline OfflineMesh *LoadObjWithWedges(Arena *arena, string filename, int &numMes
     std::vector<Vec2f> uvs;
     uvs.reserve(128);
 
-    std::vector<OfflineMesh> meshes;
+    std::vector<Mesh> meshes;
     int vertexOffset = 1;
     int normalOffset = 1;
     int texOffset    = 1;
@@ -702,9 +691,9 @@ inline OfflineMesh *LoadObjWithWedges(Arena *arena, string filename, int &numMes
                 int hashSize = NextPowerOfTwo(numIndices);
                 HashIndex hashTable(temp.arena, hashSize, hashSize);
 
-                OfflineMesh mesh = {};
-                mesh.numIndices  = (u32)indices.size();
-                mesh.indices     = PushArrayNoZero(arena, u32, indices.size());
+                Mesh mesh       = {};
+                mesh.numIndices = (u32)indices.size();
+                mesh.indices    = PushArrayNoZero(arena, u32, indices.size());
 
                 for (u32 i = 0; i < numIndices; i++)
                 {
@@ -868,13 +857,13 @@ inline OfflineMesh *LoadObjWithWedges(Arena *arena, string filename, int &numMes
 
     if (outFaceVertexCount) *outFaceVertexCount = meshVertexCount;
 
-    numMeshes                 = totalNumMeshes;
-    OfflineMesh *outputMeshes = PushArrayNoZero(arena, OfflineMesh, numMeshes);
-    MemoryCopy(outputMeshes, meshes.data(), sizeof(OfflineMesh) * numMeshes);
+    numMeshes          = totalNumMeshes;
+    Mesh *outputMeshes = PushArrayNoZero(arena, Mesh, numMeshes);
+    MemoryCopy(outputMeshes, meshes.data(), sizeof(Mesh) * numMeshes);
     return outputMeshes;
 }
 
-inline void WriteQuadOBJ(OfflineMesh &mesh, string filename)
+inline void WriteQuadOBJ(Mesh &mesh, string filename)
 {
     StringBuilder builder = {};
     ScratchArena scratch;
@@ -917,7 +906,7 @@ inline void WriteQuadOBJ(OfflineMesh &mesh, string filename)
     WriteFileMapped(&builder, filename);
 }
 
-inline void WriteTriOBJ(OfflineMesh &mesh, string filename)
+inline void WriteTriOBJ(Mesh &mesh, string filename)
 {
     StringBuilder builder = {};
     ScratchArena scratch;

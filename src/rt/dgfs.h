@@ -52,7 +52,7 @@ struct alignas(CACHE_LINE_SIZE) DenseGeometryBuildData
     ChunkedLinkedList<u32> debugRestartCountPerDword;
     ChunkedLinkedList<u32> debugRestartHighBitPerDword;
 
-    void Init();
+    DenseGeometryBuildData();
 };
 
 struct ClusterBuilder
@@ -64,10 +64,11 @@ struct ClusterBuilder
 
     ClusterBuilder(Arena *arena, PrimRef *primRefs);
     void BuildClusters(RecordAOSSplits &record, bool parallel);
-    void CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *buildData, Mesh *meshes,
-                    int numMeshes, Bounds &sceneBounds);
-    void CreateDGFs(ScenePrimitives *scene, DenseGeometryBuildData *buildDatas, Arena *arena,
-                    Mesh *meshes, const StaticArray<StaticArray<Vec3i>> &quantizedVertices,
+    void CreateDGFs(const StaticArray<u32> &materialIDs, DenseGeometryBuildData *buildData,
+                    Mesh *meshes, int numMeshes, Bounds &sceneBounds);
+    void CreateDGFs(const StaticArray<u32> &materialIDs, DenseGeometryBuildData *buildDatas,
+                    Arena *arena, Mesh *meshes,
+                    const StaticArray<StaticArray<Vec3i>> &quantizedVertices,
                     const StaticArray<StaticArray<u32>> &normals, RecordAOSSplits &cluster,
                     int precision);
 };

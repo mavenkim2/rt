@@ -180,8 +180,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     NvAPI_Status status = NvAPI_Initialize();
     Assert(status == NVAPI_OK);
     // Compile shaders
-    Shader shader;
-
     Shader decodeDgfClustersShader;
     Shader fillBlasAddressArrayShader;
     Shader fillClusterBLASInfoShader;
@@ -192,21 +190,17 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     RayTracingShaderGroup groups[3];
     Arena *arena = params->arenas[GetThreadIndex()];
     {
-        string raygenShaderName       = "../src/shaders/render_raytrace_rgen.spv";
-        string missShaderName         = "../src/shaders/render_raytrace_miss.spv";
-        string hitShaderName          = "../src/shaders/render_raytrace_hit.spv";
-        string intersectionShaderName = "../src/shaders/render_raytrace_dgf_intersect.spv";
+        string raygenShaderName = "../src/shaders/render_raytrace_rgen.spv";
+        string missShaderName   = "../src/shaders/render_raytrace_miss.spv";
+        string hitShaderName    = "../src/shaders/render_raytrace_hit.spv";
 
-        string rgenData      = OS_ReadFile(arena, raygenShaderName);
-        string missData      = OS_ReadFile(arena, missShaderName);
-        string hitData       = OS_ReadFile(arena, hitShaderName);
-        string intersectData = OS_ReadFile(arena, intersectionShaderName);
+        string rgenData = OS_ReadFile(arena, raygenShaderName);
+        string missData = OS_ReadFile(arena, missShaderName);
+        string hitData  = OS_ReadFile(arena, hitShaderName);
 
         Shader raygenShader = device->CreateShader(ShaderStage::Raygen, "raygen", rgenData);
         Shader missShader   = device->CreateShader(ShaderStage::Miss, "miss", missData);
         Shader hitShader    = device->CreateShader(ShaderStage::Hit, "hit", hitData);
-        Shader isectShader =
-            device->CreateShader(ShaderStage::Intersect, "intersect", intersectData);
 
         groups[0].shaders[0] = raygenShader;
         groups[0].numShaders = 1;
@@ -218,19 +212,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
         groups[2].shaders[0] = hitShader;
         groups[2].stage[0]   = ShaderStage::Hit;
-#ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
-        groups[2].shaders[1] = isectShader;
-        groups[2].stage[1]   = ShaderStage::Intersect;
-        groups[2].numShaders = 2;
-        groups[2].type       = RayTracingShaderGroupType::Procedural;
-#else
         groups[2].numShaders = 1;
         groups[2].type       = RayTracingShaderGroupType::Triangle;
-#endif
-
-        string shaderName = "../src/shaders/render_raytrace.spv";
-        string shaderData = OS_ReadFile(arena, shaderName);
-        shader = device->CreateShader(ShaderStage::Compute, "pathtrace", shaderData);
 
         string decodeDgfClustersName = "../src/shaders/decode_dgf_clusters.spv";
         string decodeDgfClustersData = OS_ReadFile(arena, decodeDgfClustersName);
@@ -264,7 +247,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     }
 
     // Compile pipelines
-#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
     // decode dgf clusters
     DescriptorSetLayout decodeDgfClustersLayout = {};
     PushConstant decodeDgfClustersPush;
@@ -280,9 +262,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                        VK_SHADER_STAGE_COMPUTE_BIT);
     decodeDgfClustersLayout.AddBinding(3, DescriptorType::StorageBuffer,
                                        VK_SHADER_STAGE_COMPUTE_BIT);
-    decodeDgfClustersLayout.AddBinding(
-        (u32)RTBindings::DGFBytes, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
-    decodeDgfClustersLayout.AddBinding((u32)RTBindings::DGFHeaders,
+    decodeDgfClustersLayout.AddBinding((u32)RTBindings::ClusterPageData,
                                        DescriptorType::StorageBuffer,
                                        VK_SHADER_STAGE_COMPUTE_BIT);
     VkPipeline decodeDgfClustersPipeline = device->CreateComputePipeline(
@@ -338,9 +318,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                              VK_SHADER_STAGE_COMPUTE_BIT);
     fillClusterTriangleInfoLayout.AddBinding(3, DescriptorType::StorageBuffer,
                                              VK_SHADER_STAGE_COMPUTE_BIT);
-    fillClusterTriangleInfoLayout.AddBinding(4, DescriptorType::StorageBuffer,
-                                             VK_SHADER_STAGE_COMPUTE_BIT);
-    fillClusterTriangleInfoLayout.AddBinding((u32)RTBindings::DGFHeaders,
+    fillClusterTriangleInfoLayout.AddBinding((u32)RTBindings::ClusterPageData,
                                              DescriptorType::StorageBuffer,
                                              VK_SHADER_STAGE_COMPUTE_BIT);
     VkPipeline fillClusterTriangleInfoPipeline = device->CreateComputePipeline(
@@ -375,8 +353,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     VkPipeline getBlasAddressOffsetPipeline = device->CreateComputePipeline(
         &getBlasAddressOffsetShader, &getBlasAddressOffsetLayout, &getBlasAddressOffsetPush);
 
-#endif
-
     Swapchain swapchain = device->CreateSwapchain(params->window, VK_FORMAT_R8G8B8A8_SRGB,
                                                   params->width, params->height);
 
@@ -400,15 +376,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
 
     ShaderDebugInfo shaderDebug;
 
-    RTBindingData bindingData;
-    bindingData.materialIndex = 0;
-
     CommandBuffer *transferCmd = device->BeginCommandBuffer(QueueType_Copy);
-    GPUBuffer bindingDataBuffer =
-        transferCmd
-            ->SubmitBuffer(&bindingData, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                           sizeof(RTBindingData))
-            .buffer;
 
     ImageDesc gpuEnvMapDesc(ImageType::Type2D, envMap->width, envMap->height, 1, 1, 1,
                             VK_FORMAT_R8G8B8A8_SRGB, MemoryUsage::GPU_ONLY,
@@ -439,46 +407,16 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     // VkShaderStageFlags flags   = VK_SHADER_STAGE_COMPUTE_BIT;
     DescriptorSetLayout layout = {};
     layout.pipelineLayout      = nullptr;
-    int accelBindingIndex      = layout.AddBinding((u32)RTBindings::Accel,
-                                                   DescriptorType::AccelerationStructure, flags);
-    int imageBindingIndex =
-        layout.AddBinding((u32)RTBindings::Image, DescriptorType::StorageImage, flags);
-
-    int sceneBindingIndex =
-        layout.AddBinding((u32)RTBindings::Scene, DescriptorType::UniformBuffer, flags);
-
-    int bindingDataBindingIndex = layout.AddBinding((u32)RTBindings::RTBindingData,
-                                                    DescriptorType::StorageBuffer, flags);
-
-    int gpuMaterialBindingIndex =
-        layout.AddBinding((u32)RTBindings::GPUMaterial, DescriptorType::StorageBuffer, flags);
-
-    int pageTableBindingIndex =
-        layout.AddBinding((u32)RTBindings::PageTable, DescriptorType::SampledImage, flags);
-
-    int physicalPagesBindingIndex =
-        layout.AddBinding((u32)RTBindings::PhysicalPages, DescriptorType::SampledImage, flags);
-
-    int shaderDebugIndex = layout.AddBinding((u32)RTBindings::ShaderDebugInfo,
-                                             DescriptorType::UniformBuffer, flags);
-
-    int dgfHeaderIndex =
-        layout.AddBinding((u32)RTBindings::DGFHeaders, DescriptorType::StorageBuffer, flags);
-    int dgfBytesIndex =
-        layout.AddBinding((u32)RTBindings::DGFBytes, DescriptorType::StorageBuffer, flags);
-
-    int dgfInfoIndex =
-        layout.AddBinding((u32)RTBindings::DGFInfo, DescriptorType::StorageBuffer, flags);
-    int ptexFaceDataIndex =
-        layout.AddBinding((u32)RTBindings::PtexFaceData, DescriptorType::StorageBuffer, flags);
-
-    int feedbackBufferIndex =
-        layout.AddBinding((u32)RTBindings::Feedback, DescriptorType::StorageBuffer, flags);
-
-    // TODO: what is this?
-    // int counterIndex = layout.AddBinding(8, DescriptorType::StorageBuffer, flags);
-    // int nvApiIndex =
-    //     layout.AddBinding(NVAPI_SLOT, DescriptorType::StorageBuffer, VK_SHADER_STAGE_ALL);
+    layout.AddBinding((u32)RTBindings::Accel, DescriptorType::AccelerationStructure, flags);
+    layout.AddBinding((u32)RTBindings::Image, DescriptorType::StorageImage, flags);
+    layout.AddBinding((u32)RTBindings::Scene, DescriptorType::UniformBuffer, flags);
+    layout.AddBinding((u32)RTBindings::GPUMaterial, DescriptorType::StorageBuffer, flags);
+    layout.AddBinding((u32)RTBindings::PageTable, DescriptorType::SampledImage, flags);
+    layout.AddBinding((u32)RTBindings::PhysicalPages, DescriptorType::SampledImage, flags);
+    layout.AddBinding((u32)RTBindings::ShaderDebugInfo, DescriptorType::UniformBuffer, flags);
+    layout.AddBinding((u32)RTBindings::ClusterPageData, DescriptorType::StorageBuffer, flags);
+    layout.AddBinding((u32)RTBindings::PtexFaceData, DescriptorType::StorageBuffer, flags);
+    layout.AddBinding((u32)RTBindings::Feedback, DescriptorType::StorageBuffer, flags);
 
     layout.AddImmutableSamplers();
 
@@ -508,34 +446,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     {
         sceneBounds.Extend(bounds[i]);
     }
-
-    struct BLASSceneGPUInfo
-    {
-        DenseGeometryBuildData data;
-        GPUBuffer aabbBuffer;
-        // GPUBuffer dgfBuffer;
-        // GPUBuffer headerBuffer;
-        u32 aabbLength;
-        u8 *dgfGeoByteBuffer;
-        u8 *dgfShadByteBuffer;
-
-        u32 geoByteBufferLength;
-        u32 shadingByteBufferLength;
-
-        PackedDenseGeometryHeader *headers;
-        u32 numHeaders;
-
-        u32 blasNumVertices;
-
-        u32 **firstUses;
-        u32 **reuses;
-        VkAabbPositionsKHR *positions;
-        TriangleStripType **types;
-        u32 **debugFaceIDs;
-        u32 **debugIndices;
-        u32 **debugRestartCount;
-        u32 **debugRestartHighBit;
-    };
 
     StaticArray<ScenePrimitives *> blasScenes(arena, numScenes);
     StaticArray<ScenePrimitives *> tlasScenes(arena, numScenes);
@@ -749,10 +659,13 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     // Populate GPU materials
     StaticArray<GPUMaterial> gpuMaterials(sceneScratch.temp.arena,
                                           rootScene->materials.Length());
+    StaticArray<u32> materialIDs(sceneScratch.temp.arena, rootScene->materials.Length());
+
     for (int i = 0; i < rootScene->materials.Length(); i++)
     {
         GPUMaterial material = rootScene->materials[i]->ConvertToGPU();
         int index            = rootScene->materials[i]->ptexReflectanceIndex;
+        u32 materialID       = index;
         if (index != -1)
         {
             GPUTextureInfo &textureInfo = gpuTextureInfo[index];
@@ -768,8 +681,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                 material.numFaceIDBits        = textureInfo.numFaceIDBits;
                 material.faceDataOffset       = textureInfo.faceDataOffset;
             }
+            materialID |= (1u << 31u);
         }
         gpuMaterials.Push(material);
+        materialIDs.Push(materialID);
     }
     GPUBuffer materialBuffer =
         tileCmd
@@ -797,236 +712,34 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     tileCmd->FlushBarriers();
     device->SubmitCommandBuffer(tileCmd);
 
-    StaticArray<BLASSceneGPUInfo> blasSceneInfo(arena, blasScenes.Length());
+    string clusterPageData =
+        OS_ReadFile(sceneScratch.temp.arena, "../../data/island/pbrt-v4/obj/osOcean.geo");
+    Tokenizer tokenizer;
+    tokenizer.input  = clusterPageData;
+    tokenizer.cursor = clusterPageData.str;
 
-    u32 numAabbs           = 0;
-    u32 numTriangles       = 0;
-    u32 numVertices        = 0;
-    u32 dgfHeaderBytes     = 0;
-    u32 dgfGeoBufferBytes  = 0;
-    u32 dgfShadBufferBytes = 0;
-    u32 totalNumHeaders    = 0;
-    u32 totalNumClusters   = 0;
+    ClusterFileHeader clusterFileHeader;
+    GetPointerValue(&tokenizer, &clusterFileHeader);
+
+    Assert(clusterFileHeader.magic == CLUSTER_FILE_MAGIC);
 
     CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Copy);
-    for (int i = 0; i < blasScenes.Length(); i++)
-    {
-        ScenePrimitives *scene       = blasScenes[i];
-        scene->semaphore             = device->CreateSemaphore();
-        scene->semaphore.signalValue = 1;
+    TransferBuffer clusterPageDataBuffer =
+        dgfTransferCmd->SubmitBuffer(tokenizer.cursor, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                     clusterPageData.size - sizeof(ClusterFileHeader));
 
-        BLASSceneGPUInfo info;
-        info.data.Init();
-        DenseGeometryBuildData &data = info.data;
-
-        RecordAOSSplits record;
-        PrimRef *refs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
-            sceneScratch.temp.arena, (Mesh *)scene->primitives, scene->numPrimitives, record,
-            false);
-
-        Mesh *meshes        = (Mesh *)scene->primitives;
-        u32 blasNumVertices = 0;
-        for (int meshIndex = 0; meshIndex < scene->numPrimitives; meshIndex++)
-        {
-            blasNumVertices += meshes[meshIndex].numVertices;
-        }
-
-        ClusterBuilder builder(arena, refs);
-        builder.BuildClusters(record, true);
-
-        builder.CreateDGFs(scene, &data, (Mesh *)scene->primitives, scene->numPrimitives,
-                           sceneBounds);
-
-        for (int j = 0; j < builder.threadClusters.size(); j++)
-        {
-            for (auto *node = builder.threadClusters[j].l.first; node != 0; node = node->next)
-            {
-                totalNumClusters += node->count;
-            }
-        }
-
-        numTriangles += GetNumTriangles(builder);
-        numVertices += blasNumVertices;
-#ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
-        // Convert primrefs to aabbs, submit to GPU
-
-        StaticArray<VkAabbPositionsKHR> aabbs =
-            CreateAABBForNTriangles(sceneScratch.temp.arena, builder, data.numBlocks);
-
-        info.aabbLength = aabbs.Length();
-        numAabbs += info.aabbLength;
-
-        info.aabbBuffer =
-            dgfTransferCmd
-                ->SubmitBuffer(
-                    aabbs.data,
-                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    aabbs.Length() * sizeof(VkAabbPositionsKHR))
-                .buffer;
-        info.positions = aabbs.data;
-#endif
-
-        // Combine all blocks together
-        info.geoByteBufferLength = data.geoByteBuffer.Length();
-        dgfGeoBufferBytes += data.geoByteBuffer.Length();
-        info.dgfGeoByteBuffer =
-            PushArrayNoZero(sceneScratch.temp.arena, u8, data.geoByteBuffer.Length());
-        data.geoByteBuffer.Flatten(info.dgfGeoByteBuffer);
-
-        info.shadingByteBufferLength = data.shadingByteBuffer.Length();
-        dgfShadBufferBytes += data.shadingByteBuffer.Length();
-        info.dgfShadByteBuffer =
-            PushArrayNoZero(sceneScratch.temp.arena, u8, data.shadingByteBuffer.Length());
-        data.shadingByteBuffer.Flatten(info.dgfShadByteBuffer);
-
-        // Upload headers
-        totalNumHeaders += data.headers.Length();
-        info.headers = PushArrayNoZero(sceneScratch.temp.arena, PackedDenseGeometryHeader,
-                                       data.headers.Length());
-        data.headers.Flatten(info.headers);
-        info.numHeaders = data.headers.Length();
-
-        // Debug
-        info.types =
-            PushArrayNoZero(sceneScratch.temp.arena, TriangleStripType *, data.numBlocks);
-        // firstUses    = PushArrayNoZero(sceneScratch.temp.arena, u32 *,
-        // data.numBlocks); reuses       = PushArrayNoZero(sceneScratch.temp.arena, u32 *,
-        // data.numBlocks);
-        info.debugFaceIDs = PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
-        info.debugIndices = PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
-        info.debugRestartHighBit =
-            PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
-        info.debugRestartCount =
-            PushArrayNoZero(sceneScratch.temp.arena, u32 *, data.numBlocks);
-        int c = 0;
-        for (auto *node = data.types.first; node != 0; node = node->next)
-        {
-            info.types[c++] = node->values;
-        }
-        c = 0;
-        for (auto *node = data.debugFaceIDs.first; node != 0; node = node->next)
-        {
-            info.debugFaceIDs[c++] = node->values;
-        }
-        // c = 0;
-        // for (auto *node = data.firstUse.first; node != 0; node = node->next)
-        // {
-        //     firstUses[c++] = node->values;
-        // }
-        // c = 0;
-        // for (auto *node = data.reuse.first; node != 0; node = node->next)
-        // {
-        //     reuses[c++] = node->values;
-        // }
-        c = 0;
-        for (auto *node = data.debugIndices.first; node != 0; node = node->next)
-        {
-            info.debugIndices[c++] = node->values;
-        }
-        c = 0;
-        for (auto *node = data.debugRestartHighBitPerDword.first; node != 0; node = node->next)
-        {
-            info.debugRestartHighBit[c++] = node->values;
-        }
-        c = 0;
-        for (auto *node = data.debugRestartCountPerDword.first; node != 0; node = node->next)
-        {
-            info.debugRestartCount[c++] = node->values;
-        }
-
-        dgfTransferCmd->Signal(scene->semaphore);
-        blasSceneInfo.Push(info);
-        ReleaseArenaArray(builder.arenas);
-    }
-
-    u32 dgfGeoByteOffset  = 0;
-    u32 dgfShadByteOffset = 0;
-    u32 dgfHeaderOffset   = 0;
-    u8 *dgfBytes =
-        PushArrayNoZero(sceneScratch.temp.arena, u8, dgfGeoBufferBytes + dgfShadBufferBytes);
-    PackedDenseGeometryHeader *headers =
-        PushArrayNoZero(sceneScratch.temp.arena, PackedDenseGeometryHeader, totalNumHeaders);
-
-    DGFGeometryInfo *geometryInfo =
-        PushArrayNoZero(sceneScratch.temp.arena, DGFGeometryInfo, blasScenes.Length());
-
-    for (int i = 0; i < blasScenes.Length(); i++)
-    {
-        BLASSceneGPUInfo &info = blasSceneInfo[i];
-        MemoryCopy(dgfBytes + dgfGeoByteOffset, info.dgfGeoByteBuffer,
-                   info.geoByteBufferLength);
-        u32 byteOffset = dgfGeoByteOffset;
-        dgfGeoByteOffset += info.geoByteBufferLength;
-
-        MemoryCopy(dgfBytes + dgfGeoBufferBytes + dgfShadByteOffset, info.dgfShadByteBuffer,
-                   info.shadingByteBufferLength);
-        u32 shadByteOffset = dgfGeoBufferBytes + dgfShadByteOffset;
-        dgfShadByteOffset += info.shadingByteBufferLength;
-
-        for (int j = 0; j < info.numHeaders; j++)
-        {
-            info.headers[j].a += byteOffset;
-            info.headers[j].z += shadByteOffset;
-        }
-
-        MemoryCopy(headers + dgfHeaderOffset, info.headers,
-                   sizeof(PackedDenseGeometryHeader) * info.numHeaders);
-        u32 headerOffset = dgfHeaderOffset;
-        dgfHeaderOffset += info.numHeaders;
-
-        geometryInfo[i].headerOffset = headerOffset;
-    }
-
-    Assert(dgfGeoByteOffset == dgfGeoBufferBytes);
-    Assert(dgfShadByteOffset == dgfShadBufferBytes);
-    Assert(totalNumHeaders == dgfHeaderOffset);
-    GPUBuffer dgfHeaderBuffer =
-        dgfTransferCmd
-            ->SubmitBuffer(headers, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                           sizeof(PackedDenseGeometryHeader) * totalNumHeaders)
-            .buffer;
-    device->SetName(&dgfHeaderBuffer, "DGF Header Buffer");
-    GPUBuffer dgfByteBuffer = dgfTransferCmd
-                                  ->SubmitBuffer(dgfBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                                 dgfGeoBufferBytes + dgfShadBufferBytes)
-                                  .buffer;
-    device->SetName(&dgfByteBuffer, "DGF Byte Buffer");
-
-    GPUBuffer dgfGeometryInfoBuffer =
-        dgfTransferCmd
-            ->SubmitBuffer(geometryInfo, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                           sizeof(DGFGeometryInfo) * blasScenes.Length())
-            .buffer;
-    device->SetName(&dgfGeometryInfoBuffer, "DGF Geometry Info Buffer");
-
-    Semaphore sem   = device->CreateSemaphore();
-    sem.signalValue = 1;
-
-    dgfTransferCmd->SignalOutsideFrame(sem);
-
-    dgfTransferCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                            VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
-    dgfTransferCmd->FlushBarriers();
     device->SubmitCommandBuffer(dgfTransferCmd);
-
-    Print("num triangles: %u\nnum aabbs: %u\ndgf geo buffer bytes: %u\ndgf shad buffer bytes: "
-          "%u\nptex face data bytes: %u\n",
-          numTriangles, numAabbs, dgfGeoBufferBytes, dgfShadBufferBytes, ptexFaceDataBytes);
 
     CommandBuffer *allCommandBuffer = device->BeginCommandBuffer(QueueType_Graphics);
     Semaphore tlasSemaphore         = device->CreateSemaphore();
     GPUAccelerationStructure tlas   = {};
 
     u32 numInstances = 0;
+    u32 numBlas      = blasScenes.Length();
     for (auto &tlas : tlasScenes)
     {
         numInstances += tlas->numPrimitives;
     }
-
-#ifndef USE_PROCEDURAL_CLUSTER_INTERSECTION
-    allCommandBuffer->Wait(sem);
 
     GPUBuffer indexBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -1044,65 +757,28 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
             VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
-        sizeof(u32) * 5);
+        sizeof(u32) * 8);
 
     GPUBuffer decodeClusterDataBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        sizeof(DecodeClusterData) * totalNumClusters);
-    GPUBuffer blasDataBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                                    sizeof(BLASData) * blasSceneInfo.Length());
+        sizeof(DecodeClusterData) * MAX_CANDIDATE_CLUSTERS);
+    GPUBuffer blasDataBuffer =
+        device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(BLASData) * numBlas);
     GPUBuffer buildClusterTriangleInfoBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(BUILD_CLUSTERS_TRIANGLE_INFO) * totalNumClusters);
+        sizeof(BUILD_CLUSTERS_TRIANGLE_INFO) * MAX_CANDIDATE_CLUSTERS);
     GPUBuffer buildClusterBottomLevelInfoBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(BUILD_CLUSTERS_BOTTOM_LEVEL_INFO) * blasScenes.Length());
-
-    // Group clusters into groups of 256
-    u32 totalNumClusterPages = 0;
-    for (int i = 0; i < blasScenes.Length(); i++)
-    {
-        BLASSceneGPUInfo &blasInfo = blasSceneInfo[i];
-        u32 numPages =
-            (blasInfo.numHeaders + MAX_CLUSTERS_PER_PAGE - 1) / MAX_CLUSTERS_PER_PAGE;
-        totalNumClusterPages += numPages;
-    }
-
-    StaticArray<ClusterPageData> clusterPages(sceneScratch.temp.arena, totalNumClusterPages);
-    u32 clusterOffset = 0;
-    for (int blasIndex = 0; blasIndex < blasScenes.Length(); blasIndex++)
-    {
-        BLASSceneGPUInfo &blasInfo = blasSceneInfo[blasIndex];
-        u32 numClusters            = blasInfo.numHeaders;
-        u32 numPages      = (numClusters + MAX_CLUSTERS_PER_PAGE - 1) / MAX_CLUSTERS_PER_PAGE;
-        u32 clusterOffset = 0;
-        for (int pageIndex = 0; pageIndex < numPages; pageIndex++)
-        {
-            u32 pageNumClusters =
-                Min(MAX_CLUSTERS_PER_PAGE, numClusters - pageIndex * MAX_CLUSTERS_PER_PAGE);
-            ClusterPageData pageData;
-            pageData.clusterStart = clusterOffset;
-            pageData.clusterCount = pageNumClusters;
-            pageData.blasIndex    = blasIndex;
-            clusterPages.Push(pageData);
-
-            clusterOffset += pageNumClusters;
-        }
-    }
-
-    TransferBuffer clusterPagesBuffer =
-        allCommandBuffer->SubmitBuffer(clusterPages.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                       sizeof(ClusterPageData) * clusterPages.size());
+        sizeof(BUILD_CLUSTERS_BOTTOM_LEVEL_INFO) * numBlas);
 
     u64 indexBufferAddress  = device->GetDeviceAddress(indexBuffer.buffer);
     u64 vertexBufferAddress = device->GetDeviceAddress(vertexBuffer.buffer);
 
     FillClusterTriangleInfoPushConstant fillPc;
-    fillPc.numClusters                     = totalNumHeaders;
     fillPc.indexBufferBaseAddressLowBits   = indexBufferAddress & 0xffffffff;
     fillPc.indexBufferBaseAddressHighBits  = (indexBufferAddress >> 32u) & 0xffffffff;
     fillPc.vertexBufferBaseAddressLowBits  = vertexBufferAddress & 0xffffffff;
@@ -1121,19 +797,19 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         allCommandBuffer->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
                                        fillClusterTriangleInfoPipeline);
         DescriptorSet ds = fillClusterTriangleInfoLayout.CreateDescriptorSet();
-        ds.Bind(&clusterPagesBuffer.buffer)
-            .Bind(&buildClusterTriangleInfoBuffer)
+        ds.Bind(&buildClusterTriangleInfoBuffer)
             .Bind(&blasDataBuffer)
             .Bind(&decodeClusterDataBuffer)
             .Bind(&clasGlobalsBuffer)
-            .Bind(&dgfHeaderBuffer);
+            .Bind(&clusterPageDataBuffer.buffer);
+
         allCommandBuffer->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                                              fillClusterTriangleInfoLayout.pipelineLayout);
 
         allCommandBuffer->PushConstants(&fillClusterTriangleInfoPush, &fillPc,
                                         fillClusterTriangleInfoLayout.pipelineLayout);
 
-        allCommandBuffer->Dispatch(totalNumClusterPages, 1, 1);
+        allCommandBuffer->Dispatch(clusterFileHeader.numPages, 1, 1);
         allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                   VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
@@ -1150,14 +826,14 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             .Bind(&vertexBuffer)
             .Bind(&decodeClusterDataBuffer)
             .Bind(&buildClusterTriangleInfoBuffer)
-            .Bind(&dgfByteBuffer)
-            .Bind(&dgfHeaderBuffer);
+            .Bind(&clusterPageDataBuffer.buffer);
 
         allCommandBuffer->PushConstants(&decodeDgfClustersPush, &fillPc,
                                         decodeDgfClustersLayout.pipelineLayout);
         allCommandBuffer->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                                              decodeDgfClustersLayout.pipelineLayout);
-        allCommandBuffer->Dispatch(totalNumClusters, 1, 1);
+        allCommandBuffer->DispatchIndirect(&clasGlobalsBuffer,
+                                           sizeof(u32) * GLOBALS_CLAS_INDIRECT_X);
 
         allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                   VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
@@ -1171,17 +847,21 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(u64) * totalNumClusters);
+        sizeof(u64) * MAX_VISIBLE_CLUSTERS);
     GPUBuffer clusterAccelSizes = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(u32) * totalNumClusters);
+        sizeof(u32) * MAX_VISIBLE_CLUSTERS);
+
+    // TODO: these need to be lowered for runtime builds
+    u32 maxNumTriangles = 1u << 20;
+    u32 maxNumVertices  = 1u << 19;
     {
         // Build the CLAS
         allCommandBuffer->BuildCLAS(&buildClusterTriangleInfoBuffer, &clusterAccelAddresses,
                                     &clusterAccelSizes, &clasGlobalsBuffer,
-                                    sizeof(u32) * GLOBALS_CLAS_COUNT_INDEX, totalNumClusters,
-                                    numTriangles, numVertices);
+                                    sizeof(u32) * GLOBALS_CLAS_COUNT_INDEX,
+                                    MAX_VISIBLE_CLUSTERS, maxNumTriangles, maxNumVertices);
     }
 
     // TODO: Compact the CLAS over BLAS
@@ -1189,12 +869,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     }
 
     // Set up bottom level input
-    u32 numBlas = blasSceneInfo.Length();
-
     GPUBuffer blasClasAddressBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(u64) * totalNumClusters);
+        sizeof(u64) * MAX_VISIBLE_CLUSTERS);
 
     GPUBuffer blasAccelAddresses = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
@@ -1246,7 +924,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                              fillBlasAddressArrayLayout.pipelineLayout);
         allCommandBuffer->PushConstants(&fillBlasAddressArrayPush, &fillPc,
                                         fillBlasAddressArrayLayout.pipelineLayout);
-        allCommandBuffer->Dispatch((totalNumClusters + 31) / 32, 1, 1);
+        allCommandBuffer->DispatchIndirect(&clasGlobalsBuffer,
+                                           sizeof(u32) * GLOBALS_CLAS_INDIRECT_X);
         allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                   VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
@@ -1286,7 +965,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         // Build the BLASes
         allCommandBuffer->BuildClusterBLAS(
             &buildClusterBottomLevelInfoBuffer, &blasAccelAddresses, &blasAccelSizes,
-            &clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_COUNT_INDEX, totalNumClusters);
+            &clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_COUNT_INDEX, MAX_VISIBLE_CLUSTERS);
         allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                   VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
@@ -1364,7 +1043,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         tlas = allCommandBuffer->BuildTLAS(&tlasBuffer, 1).as;
     }
 
-#else
+#if 0
     // TODO: new command buffers have to wait on ones from the previous depth
     // also this doesn't work if there's actually a nontrivial TLAS
 
@@ -1629,17 +1308,6 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             cmd->Wait(tileSubmitSemaphore);
             device->Wait(tlasSemaphore);
 
-#ifdef USE_PROCEDURAL_CLUSTER_INTERSECTION
-            for (int i = 0; i < uncompactedPayloads.Length(); i++)
-            {
-                auto &payload = uncompactedPayloads[i];
-                device->DestroyAccelerationStructure(&payload.as);
-            }
-            for (int i = 0; i < blasSceneInfo.Length(); i++)
-            {
-                device->DestroyBuffer(&blasSceneInfo[i].aabbBuffer);
-            }
-#endif
             envMapBindlessIndex = device->BindlessIndex(&gpuEnvMap);
         }
 
@@ -1685,23 +1353,16 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         cmd->FlushBarriers();
         cmd->BindPipeline(bindPoint, rts.pipeline);
         DescriptorSet descriptorSet = layout.CreateDescriptorSet();
-        descriptorSet.Bind(accelBindingIndex, &tlas.as)
-            .Bind(imageBindingIndex, image)
-            .Bind(sceneBindingIndex, &sceneTransferBuffers[currentBuffer].buffer)
-            .Bind(bindingDataBindingIndex, &bindingDataBuffer)
-            .Bind(gpuMaterialBindingIndex, &materialBuffer)
-            .Bind(pageTableBindingIndex, &virtualTextureManager.pageTable)
-            .Bind(physicalPagesBindingIndex, &virtualTextureManager.gpuPhysicalPool)
-            .Bind(dgfHeaderIndex, &dgfHeaderBuffer)
-            .Bind(dgfBytesIndex, &dgfByteBuffer)
-            .Bind(dgfInfoIndex, &dgfGeometryInfoBuffer)
-            .Bind(ptexFaceDataIndex, &faceDataBuffer)
-            .Bind(shaderDebugIndex, &shaderDebugBuffers[currentBuffer].buffer)
-            .Bind(feedbackBufferIndex,
-                  &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
-        // .Bind(counterIndex, &counterBuffer)
-        // .Bind(nvApiIndex, &nvapiBuffer);
-        // .Bind(aabbIndex, &aabbBuffer);
+        descriptorSet.Bind(&tlas.as)
+            .Bind(image)
+            .Bind(&sceneTransferBuffers[currentBuffer].buffer)
+            .Bind(&materialBuffer)
+            .Bind(&virtualTextureManager.pageTable)
+            .Bind(&virtualTextureManager.gpuPhysicalPool)
+            .Bind(&shaderDebugBuffers[currentBuffer].buffer)
+            .Bind(&clusterPageDataBuffer.buffer)
+            .Bind(&faceDataBuffer)
+            .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
 
         cmd->BindDescriptorSets(bindPoint, &descriptorSet, rts.layout);
         cmd->PushConstants(&pushConstant, &pc, rts.layout);

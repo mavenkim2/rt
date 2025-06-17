@@ -1,28 +1,26 @@
 #include "../../rt/shader_interop/as_shaderinterop.h"
 #include "../dense_geometry.hlsli"
 
-[[vk::push_constant]] NumPushConstant pc;
-
 RWByteAddressBuffer indexBuffer : register(u0);
 RWStructuredBuffer<float3> decodeVertexBuffer : register(u1);
 
-StructuredBuffer<DecodeClusterData> decodeClusterData : register(t2);
+StructuredBuffer<DecodeClusterData> decodeClusterDatas : register(t2);
 StructuredBuffer<BUILD_CLUSTERS_TRIANGLE_INFO> buildClusterTriangleInfos : register(t3);
 
 [numthreads(32, 1, 1)] 
 void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
 {
-    uint headerIndex = groupID.x;
-
-    if (headerIndex >= pc.num) return;
-
     uint clusterID = groupID.x;
 
-    uint indexBufferOffset = decodeClusterData[clusterID].indexBufferOffset;
-    uint vertexBufferOffset = decodeClusterData[clusterID].vertexBufferOffset;
+    DecodeClusterData decodeClusterData = decodeClusterDatas[clusterID];
+    uint pageIndex = decodeClusterData.pageIndex;
+    uint clusterIndex = decodeClusterData.clusterIndex;
+    uint indexBufferOffset = decodeClusterData.indexBufferOffset;
+    uint vertexBufferOffset = decodeClusterData.vertexBufferOffset;
 
-    PackedDenseGeometryHeader denseHeader = denseGeometryHeaders[clusterID];
-    DenseGeometry header = GetDenseGeometryHeader(denseHeader, clusterID);
+    uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
+    uint numClusters = GetNumClustersInPage(basePageAddress);
+    DenseGeometry header = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
 
     if (!header.numTriangles == buildClusterTriangleInfos[clusterID].triangleCount)
     {

@@ -1529,7 +1529,7 @@ GraphPartitionResult RecursivePartitionGraph(Arena *arena, idx_t *__restrict clu
 
 static_assert(sizeof(PackedDenseGeometryHeader) % 4 == 0, "Header is mult of 4 bytes");
 
-void CreateClusters(string filename, Mesh &mesh)
+void CreateClusters(Arena *arena, string filename, Mesh &mesh)
 {
     // 1. Split triangles into clusters
     // 2. Group clusters based on how many shared edges they have (METIS)
@@ -1584,7 +1584,11 @@ void CreateClusters(string filename, Mesh &mesh)
     DenseGeometryBuildData buildData;
     Bounds bounds;
 
-    clusterBuilder.CreateDGFs(?, &buildData, &mesh, 1, &bounds);
+    // TODO: handle this
+    StaticArray<u32> materialIDs(scratch.temp.arena, 1);
+    materialIDs.Push(0);
+
+    clusterBuilder.CreateDGFs(materialIDs, &buildData, &mesh, 1, bounds);
 
     // ROADMAP
     // 1. write the clusters to disk. read them from disk and build the CLAS
@@ -1594,6 +1598,8 @@ void CreateClusters(string filename, Mesh &mesh)
     // 5. run time hierarchy selection
     // 6. streaming
     // 7. impostors/ptex baking?/simplifying attributes
+    //
+    // vertex references to deduplicate vertices used at different lod levels
 
     int numClusters = 0;
     for (auto &list : clusterBuilder.threadClusters)
@@ -1649,6 +1655,11 @@ void CreateClusters(string filename, Mesh &mesh)
         sortedClusterIndices.Push(i);
     }
 
+    u64 fileHeaderOffset = AllocateSpace(&builder, sizeof(ClusterFileHeader));
+
+    u32 numPages = 0;
+    // per page, you write the number of clusters
+    // at the top of the file, write a magic
     for (int clusterIndexIndex = 0; clusterIndexIndex < sortedClusterIndices.Length();
          clusterIndexIndex++)
     {
@@ -1659,30 +1670,31 @@ void CreateClusters(string filename, Mesh &mesh)
         u32 geoByteSize  = GetGeoByteSize(clusterIndex);
         u32 shadByteSize = GetShadByteSize(clusterIndex);
 
-        u32 totalSize = clusterMetadataSize + currentGeoBufferSize + currentShadingBufferSize +
-                        geoByteSize + shadByteSize;
+        u32 totalSize = sizeof(ClusterPageHeader) + clusterMetadataSize +
+                        currentGeoBufferSize + currentShadingBufferSize + geoByteSize +
+                        shadByteSize;
 
-        if (totalSize >= CLUSTER_PAGE_SIZE)
+        u32 numClustersInPage = clusterIndexIndex - startIndexIndex;
+
+        if (totalSize >= CLUSTER_PAGE_SIZE || numClustersInPage >= MAX_CLUSTERS_PER_PAGE)
         {
-            u32 currentPageOffset = 0;
+            numPages++;
+            u32 currentPageOffset = sizeof(ClusterPageHeader);
             u64 fileOffset        = AllocateSpace(&builder, CLUSTER_PAGE_SIZE);
             u32 *ptr              = (u32 *)GetMappedPtr(&builder, fileOffset);
 
-            u32 currentGeoOffset  = 0;
+            u32 currentGeoOffset  = sizeof(u32) + NUM_CLUSTER_HEADER_FLOAT4S * sizeof(Vec4u);
             u32 currentShadOffset = 0;
+
+            MemoryCopy(ptr, &numClustersInPage, sizeof(u32));
 
             for (int pageClusterIndexIndex = startIndexIndex;
                  pageClusterIndexIndex < clusterIndexIndex; pageClusterIndexIndex++)
             {
                 int clusterIndex = sortedClusterIndices[pageClusterIndexIndex];
-                const PackedDenseGeometryHeader &header = headers[clusterIndex];
-                for (int i = 0; i < sizeof(PackedDenseGeometryHeader); i += 4)
-                {
-                    u32 value = *((u32 *)(&header) + i);
-                    WriteBits(ptr, currentPageOffset, value, 32);
-                }
-                WriteBits(ptr, currentPageOffset, currentGeoOffset, 17);
-                WriteBits(ptr, currentPageOffset, currentShadOffset, 17);
+                PackedDenseGeometryHeader &header = headers[clusterIndex];
+                header.a                          = currentGeoOffset;
+                header.z                          = currentShadOffset;
 
                 u32 geoByteSize  = GetGeoByteSize(clusterIndex);
                 u32 shadByteSize = GetShadByteSize(clusterIndex);
@@ -1690,10 +1702,24 @@ void CreateClusters(string filename, Mesh &mesh)
                 currentGeoOffset += geoByteSize;
                 currentShadOffset += shadByteSize;
             }
+            for (int pageClusterIndexIndex = startIndexIndex;
+                 pageClusterIndexIndex < clusterIndexIndex; pageClusterIndexIndex++)
+            {
+                int clusterIndex = sortedClusterIndices[pageClusterIndexIndex];
+                PackedDenseGeometryHeader &header = headers[clusterIndex];
+                header.z += currentGeoOffset;
+            }
 
-            u32 clusterMetadataSize =
-                ((clusterIndexIndex - startIndexIndex) * clusterHeaderBitSize + 7) >> 3;
-            u32 offsetInPage = clusterMetadataSize;
+            // Write headers in SOA
+            for (int pageClusterIndexIndex = startIndexIndex;
+                 pageClusterIndexIndex < clusterIndexIndex; pageClusterIndexIndex++)
+            {
+                int clusterIndex = sortedClusterIndices[pageClusterIndexIndex];
+                PackedDenseGeometryHeader &header = headers[clusterIndex];
+                MemoryCopy(ptr + currentPageOffset, &header, sizeof(header));
+                currentPageOffset += NUM_CLUSTER_HEADER_FLOAT4S * sizeof(Vec4u);
+            }
+
             for (int pageClusterIndexIndex = startIndexIndex;
                  pageClusterIndexIndex < clusterIndexIndex; pageClusterIndexIndex++)
             {
@@ -1701,8 +1727,8 @@ void CreateClusters(string filename, Mesh &mesh)
                 u32 geoByteSize  = GetGeoByteSize(clusterIndex);
                 u32 geoOffset    = headers[clusterIndex].a;
 
-                MemoryCopy(ptr + offsetInPage, geoByteData + geoOffset, geoByteSize);
-                offsetInPage += geoByteSize;
+                MemoryCopy(ptr + currentPageOffset, geoByteData + geoOffset, geoByteSize);
+                currentPageOffset += geoByteSize;
             }
             for (int pageClusterIndexIndex = startIndexIndex;
                  pageClusterIndexIndex < clusterIndexIndex; pageClusterIndexIndex++)
@@ -1711,8 +1737,9 @@ void CreateClusters(string filename, Mesh &mesh)
                 u32 shadByteSize = GetShadByteSize(clusterIndex);
                 u32 shadOffset   = headers[clusterIndex].z;
 
-                MemoryCopy(ptr + offsetInPage, shadingByteData + shadOffset, shadByteSize);
-                offsetInPage += shadByteSize;
+                MemoryCopy(ptr + currentPageOffset, shadingByteData + shadOffset,
+                           shadByteSize);
+                currentPageOffset += shadByteSize;
             }
 
             currentGeoBufferSize     = 0;
@@ -1723,6 +1750,15 @@ void CreateClusters(string filename, Mesh &mesh)
         currentShadingBufferSize += shadByteSize;
     }
 
+    ClusterFileHeader *fileHeader =
+        (ClusterFileHeader *)GetMappedPtr(&builder, fileHeaderOffset);
+    fileHeader->magic    = CLUSTER_FILE_MAGIC;
+    fileHeader->numPages = numPages;
+
+    OS_UnmapFile(builder.ptr);
+    OS_ResizeFile(builder.filename, builder.totalSize);
+
+#if 0
     ParallelFor(0, numClusters, 32, [&](int jobID, int start, int count) {
         for (int clusterIndex = start; clusterIndex < start + count; clusterIndex++)
         {
@@ -1887,6 +1923,7 @@ void CreateClusters(string filename, Mesh &mesh)
     GraphPartitionResult partitionResult =
         RecursivePartitionGraph(scratch.temp.arena, clusterOffsets, clusterData,
                                 clusterWeights, numClusters, slack, totalNumNeighbors);
+#endif
 }
 
 } // namespace rt
