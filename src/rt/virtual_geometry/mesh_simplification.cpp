@@ -1679,46 +1679,51 @@ void CreateClusters(Arena *arena, string filename, Mesh &mesh)
         if (totalSize >= CLUSTER_PAGE_SIZE || numClustersInPage >= MAX_CLUSTERS_PER_PAGE)
         {
             numPages++;
-            u32 currentPageOffset = sizeof(ClusterPageHeader);
-            u64 fileOffset        = AllocateSpace(&builder, CLUSTER_PAGE_SIZE);
-            u32 *ptr              = (u32 *)GetMappedPtr(&builder, fileOffset);
+            u64 fileOffset = AllocateSpace(&builder, CLUSTER_PAGE_SIZE);
+            u32 *ptr       = (u32 *)GetMappedPtr(&builder, fileOffset);
 
-            u32 currentGeoOffset  = sizeof(u32) + NUM_CLUSTER_HEADER_FLOAT4S * sizeof(Vec4u);
-            u32 currentShadOffset = 0;
+            u32 baseGeoOffset = sizeof(ClusterPageHeader) +
+                                numClustersInPage * NUM_CLUSTER_HEADER_FLOAT4S * sizeof(Vec4u);
+            u32 currentGeoOffset = baseGeoOffset;
 
-            MemoryCopy(ptr, &numClustersInPage, sizeof(u32));
+            MemoryCopy(ptr, &numClustersInPage, sizeof(ClusterPageHeader));
 
             for (int pageClusterIndexIndex = startIndexIndex;
                  pageClusterIndexIndex < clusterIndexIndex; pageClusterIndexIndex++)
             {
                 int clusterIndex = sortedClusterIndices[pageClusterIndexIndex];
-                PackedDenseGeometryHeader &header = headers[clusterIndex];
-                header.a                          = currentGeoOffset;
-                header.z                          = currentShadOffset;
-
                 u32 geoByteSize  = GetGeoByteSize(clusterIndex);
-                u32 shadByteSize = GetShadByteSize(clusterIndex);
-
                 currentGeoOffset += geoByteSize;
-                currentShadOffset += shadByteSize;
             }
-            for (int pageClusterIndexIndex = startIndexIndex;
-                 pageClusterIndexIndex < clusterIndexIndex; pageClusterIndexIndex++)
-            {
-                int clusterIndex = sortedClusterIndices[pageClusterIndexIndex];
-                PackedDenseGeometryHeader &header = headers[clusterIndex];
-                header.z += currentGeoOffset;
-            }
+
+            u32 currentShadOffset = currentGeoOffset;
+            u32 baseShadOffset    = currentGeoOffset;
+            currentGeoOffset      = baseGeoOffset;
 
             // Write headers in SOA
+            u32 stride            = sizeof(Vec4u);
+            u32 soaStride         = numClustersInPage * stride;
+            u32 currentPageOffset = sizeof(ClusterPageHeader);
             for (int pageClusterIndexIndex = startIndexIndex;
                  pageClusterIndexIndex < clusterIndexIndex; pageClusterIndexIndex++)
             {
-                int clusterIndex = sortedClusterIndices[pageClusterIndexIndex];
-                PackedDenseGeometryHeader &header = headers[clusterIndex];
-                MemoryCopy(ptr + currentPageOffset, &header, sizeof(header));
-                currentPageOffset += NUM_CLUSTER_HEADER_FLOAT4S * sizeof(Vec4u);
+                int clusterIndex                 = sortedClusterIndices[pageClusterIndexIndex];
+                PackedDenseGeometryHeader header = headers[clusterIndex];
+                header.z                         = currentShadOffset;
+                header.a                         = currentGeoOffset;
+                for (u32 i = 0; i < NUM_CLUSTER_HEADER_FLOAT4S; i++)
+                {
+                    u32 copySize = Min(stride, (u32)sizeof(header) - i * stride);
+                    u32 *src     = (u32 *)&header + 4u * i;
+                    MemoryCopy(ptr + currentPageOffset + i * soaStride, src, copySize);
+                }
+                currentPageOffset += sizeof(Vec4u);
+
+                currentGeoOffset += GetGeoByteSize(clusterIndex);
+                currentShadOffset += GetShadByteSize(clusterIndex);
             }
+
+            currentPageOffset = baseGeoOffset;
 
             for (int pageClusterIndexIndex = startIndexIndex;
                  pageClusterIndexIndex < clusterIndexIndex; pageClusterIndexIndex++)
@@ -1730,6 +1735,7 @@ void CreateClusters(Arena *arena, string filename, Mesh &mesh)
                 MemoryCopy(ptr + currentPageOffset, geoByteData + geoOffset, geoByteSize);
                 currentPageOffset += geoByteSize;
             }
+            Assert(currentPageOffset == baseShadOffset);
             for (int pageClusterIndexIndex = startIndexIndex;
                  pageClusterIndexIndex < clusterIndexIndex; pageClusterIndexIndex++)
             {

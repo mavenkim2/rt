@@ -186,6 +186,7 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     Shader fillClusterTriangleInfoShader;
     Shader fillInstanceShader;
     Shader getBlasAddressOffsetShader;
+    Shader prepareIndirectShader;
 
     RayTracingShaderGroup groups[3];
     Arena *arena = params->arenas[GetThreadIndex()];
@@ -244,15 +245,16 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
         string getBlasAddressOffsetData = OS_ReadFile(arena, getBlasAddressOffsetName);
         getBlasAddressOffsetShader      = device->CreateShader(
             ShaderStage::Compute, "get blas address offset", getBlasAddressOffsetData);
+
+        string prepareIndirectName = "../src/shaders/prepare_indirect.spv";
+        string prepareIndirectData = OS_ReadFile(arena, prepareIndirectName);
+        prepareIndirectShader = device->CreateShader(ShaderStage::Compute, "prepare indirect",
+                                                     prepareIndirectData);
     }
 
     // Compile pipelines
     // decode dgf clusters
     DescriptorSetLayout decodeDgfClustersLayout = {};
-    PushConstant decodeDgfClustersPush;
-    decodeDgfClustersPush.stage  = ShaderStage::Compute;
-    decodeDgfClustersPush.size   = 4;
-    decodeDgfClustersPush.offset = 0;
 
     decodeDgfClustersLayout.AddBinding(0, DescriptorType::StorageBuffer,
                                        VK_SHADER_STAGE_COMPUTE_BIT);
@@ -265,8 +267,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     decodeDgfClustersLayout.AddBinding((u32)RTBindings::ClusterPageData,
                                        DescriptorType::StorageBuffer,
                                        VK_SHADER_STAGE_COMPUTE_BIT);
-    VkPipeline decodeDgfClustersPipeline = device->CreateComputePipeline(
-        &decodeDgfClustersShader, &decodeDgfClustersLayout, &decodeDgfClustersPush);
+    VkPipeline decodeDgfClustersPipeline =
+        device->CreateComputePipeline(&decodeDgfClustersShader, &decodeDgfClustersLayout);
 
     // fill blas address array
     DescriptorSetLayout fillBlasAddressArrayLayout = {};
@@ -352,6 +354,13 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
                                           VK_SHADER_STAGE_COMPUTE_BIT);
     VkPipeline getBlasAddressOffsetPipeline = device->CreateComputePipeline(
         &getBlasAddressOffsetShader, &getBlasAddressOffsetLayout, &getBlasAddressOffsetPush);
+
+    // prepare indirect
+    DescriptorSetLayout prepareIndirectLayout = {};
+    prepareIndirectLayout.AddBinding(0, DescriptorType::StorageBuffer,
+                                     VK_SHADER_STAGE_COMPUTE_BIT);
+    VkPipeline prepareIndirectPipeline =
+        device->CreateComputePipeline(&prepareIndirectShader, &prepareIndirectLayout);
 
     Swapchain swapchain = device->CreateSwapchain(params->window, VK_FORMAT_R8G8B8A8_SRGB,
                                                   params->width, params->height);
@@ -712,8 +721,8 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     tileCmd->FlushBarriers();
     device->SubmitCommandBuffer(tileCmd);
 
-    string clusterPageData =
-        OS_ReadFile(sceneScratch.temp.arena, "../../data/island/pbrt-v4/obj/osOcean.geo");
+    string clusterPageData = OS_ReadFile(sceneScratch.temp.arena,
+                                         "../../data/island/pbrt-v4/obj/osOcean/osOcean.geo");
     Tokenizer tokenizer;
     tokenizer.input  = clusterPageData;
     tokenizer.cursor = clusterPageData.str;
@@ -727,6 +736,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     TransferBuffer clusterPageDataBuffer =
         dgfTransferCmd->SubmitBuffer(tokenizer.cursor, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                      clusterPageData.size - sizeof(ClusterFileHeader));
+
+    Semaphore sem   = device->CreateSemaphore();
+    sem.signalValue = 1;
+    dgfTransferCmd->SignalOutsideFrame(sem);
 
     device->SubmitCommandBuffer(dgfTransferCmd);
 
@@ -818,6 +831,21 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     }
 
     {
+        // Prepare indirect args for later
+        DescriptorSet ds = prepareIndirectLayout.CreateDescriptorSet();
+        ds.Bind(&clasGlobalsBuffer);
+
+        allCommandBuffer->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
+                                             prepareIndirectLayout.pipelineLayout);
+        allCommandBuffer->Dispatch(1, 1, 1);
+        allCommandBuffer->Barrier(
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            VK_ACCESS_2_SHADER_WRITE_BIT,
+            VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+        allCommandBuffer->FlushBarriers();
+    }
+
+    {
         // Decode the clusters
         allCommandBuffer->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
                                        decodeDgfClustersPipeline);
@@ -828,12 +856,10 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
             .Bind(&buildClusterTriangleInfoBuffer)
             .Bind(&clusterPageDataBuffer.buffer);
 
-        allCommandBuffer->PushConstants(&decodeDgfClustersPush, &fillPc,
-                                        decodeDgfClustersLayout.pipelineLayout);
         allCommandBuffer->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                                              decodeDgfClustersLayout.pipelineLayout);
         allCommandBuffer->DispatchIndirect(&clasGlobalsBuffer,
-                                           sizeof(u32) * GLOBALS_CLAS_INDIRECT_X);
+                                           sizeof(u32) * GLOBALS_CLAS_COUNT_INDEX);
 
         allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                   VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
