@@ -1529,7 +1529,15 @@ GraphPartitionResult RecursivePartitionGraph(Arena *arena, idx_t *__restrict clu
 
 static_assert(sizeof(PackedDenseGeometryHeader) % 4 == 0, "Header is mult of 4 bytes");
 
-void CreateClusters(Arena *arena, string filename, Mesh &mesh)
+struct Cluster
+{
+    RecordAOSSplits record;
+    u32 mipLevel;
+    u32 childStartIndex;
+    u32 childCount;
+};
+
+void CreateClustersHelper(Arena *arena, Array<Cluster> &clusters, string filename, Mesh &mesh)
 {
     // 1. Split triangles into clusters
     // 2. Group clusters based on how many shared edges they have (METIS)
@@ -1537,24 +1545,10 @@ void CreateClusters(Arena *arena, string filename, Mesh &mesh)
     // 3. Simplify the cluster group
     // 4. Split into clusters
 
-    // ClusterBuilder builder;
-    //
-    // for (;;)
-    // {
-    //     ScratchArena scratch;
-    //
-    //     RecordAOSSplits record;
-    //     builder.BuildClusters(record, true);
-    //
-    //     PrimRef *refs = PushArrayNoZero(scratch.temp.arena, PrimRef, mesh.numFaces);
-    //     u32 offset    = 0;
-    //     u32 start     = 0;
-    //     u32 count     = mesh.numFaces;
-    //     GenerateMeshRefsHelper<GeometryType::TriangleMesh>{mesh->p, mesh->indices}(
-    //         refs, offset, 0, start, count, record);
-    // }
+    u32 depth              = 0;
+    u32 clusterLevelOffset = 0;
 
-    ScratchArena scratch;
+    ScratchArena scratch(&arena, 1);
 
     u32 numIndices = mesh.numIndices;
     u32 *indices   = mesh.indices;
@@ -1570,44 +1564,22 @@ void CreateClusters(Arena *arena, string filename, Mesh &mesh)
         int clusterIndex;
     };
 
+    // Loop until there is just one cluster remaining
     StaticArray<Edge> edges(scratch.temp.arena, 3 * numIndices, 3 * numIndices);
     std::atomic<int> edgeCount(0);
 
     HashIndex edgeHash(scratch.temp.arena, hashSize, hashSize);
 
-    RecordAOSSplits record;
-    PrimRef *primRefs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
-        scratch.temp.arena, &mesh, 1, record, false);
-    ClusterBuilder clusterBuilder(scratch.temp.arena, primRefs);
-    clusterBuilder.BuildClusters(record, true);
-
-    DenseGeometryBuildData buildData;
-    Bounds bounds;
-
-    // TODO: handle this
-    StaticArray<u32> materialIDs(scratch.temp.arena, 1);
-    materialIDs.Push(0);
-
-    clusterBuilder.CreateDGFs(materialIDs, &buildData, &mesh, 1, bounds);
-
     // ROADMAP
     // 2. verify the grouping / simplifying / clustering somehow
+    //      - still need to add edge locking + attributes
     // 3. build clas over each lod level of clusters
     // 4. write dag/hierarchy to disk
     // 5. run time hierarchy selection
     // 6. streaming
-    // 7. impostors/ptex baking?/simplifying attributes
-    //
+    // 7. impostors/ptex baking?
     // vertex references to deduplicate vertices used at different lod levels
 
-    int numClusters = 0;
-    for (auto &list : clusterBuilder.threadClusters)
-    {
-        numClusters += list.l.Length();
-    }
-
-    RecordAOSSplits *clusters =
-        PushArrayNoZero(scratch.temp.arena, RecordAOSSplits, numClusters);
     PackedDenseGeometryHeader *headers =
         PushArrayNoZero(scratch.temp.arena, PackedDenseGeometryHeader, numClusters);
     u8 *geoByteData =
@@ -1618,13 +1590,6 @@ void CreateClusters(Arena *arena, string filename, Mesh &mesh)
     buildData.geoByteBuffer.Flatten(geoByteData);
     buildData.shadingByteBuffer.Flatten(shadingByteData);
     buildData.headers.Flatten(headers);
-
-    u32 clusterOffset = 0;
-    for (auto &list : clusterBuilder.threadClusters)
-    {
-        list.l.Flatten(clusters + clusterOffset);
-        clusterOffset += list.l.Length();
-    }
 
     string outFilename =
         PushStr8F(scratch.temp.arena, "%S.geo", RemoveFileExtension(filename));
@@ -1764,7 +1729,6 @@ void CreateClusters(Arena *arena, string filename, Mesh &mesh)
     OS_UnmapFile(builder.ptr);
     OS_ResizeFile(builder.filename, builder.totalSize);
 
-#if 0
     ParallelFor(0, numClusters, 32, [&](int jobID, int start, int count) {
         for (int clusterIndex = start; clusterIndex < start + count; clusterIndex++)
         {
@@ -1922,14 +1886,204 @@ void CreateClusters(Arena *arena, string filename, Mesh &mesh)
         }
     });
 
-    ReleaseArenaArray(arenas);
-
     // Recursively partition the clusters into two groups until each group satisfies
     // constraints
     GraphPartitionResult partitionResult =
         RecursivePartitionGraph(scratch.temp.arena, clusterOffsets, clusterData,
                                 clusterWeights, numClusters, slack, totalNumNeighbors);
-#endif
+
+    // what is this hierarchy?
+    // from my understanding, it's a BVH that contains the min child error and the max parent
+    // error. thus, if the runtime view error is greater than the max parent error, then you
+    // don't need to traverse into children becasue the parent is precise enough
+
+    // Reorder the clusters so that groups are contiguous
+    u32 clusterLevelOffset;
+    Cluster *levelClusters     = clusters.data + clusterLevelOffset;
+    Cluster *reorderedClusters = PushArrayNoZero(scratch.temp.arena, Cluster, numClusters);
+    for (Range &range : partitionResult.ranges)
+    {
+        for (int clusterIndex = range.begin; clusterIndex < range.end; clusterIndex++)
+        {
+            int newClusterIndex             = partitionResult.clusterIndices[clusterIndex];
+            reorderedClusters[clusterIndex] = levelClusters[newClusterIndex];
+        }
+    }
+    MemoryCopy(levelClusters, reorderedClusters, sizeof(Cluster) * numClusters);
+
+    for (int i = 0; i < numClusters; i++)
+    {
+        ClusterData &clusterData = clusterDatas[i];
+        u32 numSharedEdges       = ? ;
+        for (int j = 0; j < clusterData.numNeighbors; j++)
+        {
+            clusterData.weights[j] numSharedEdges clusterData.weights;
+        }
+    }
+
+    u32 totalNumClusters = clusters.Length();
+    clusters.Resize(totalNumClusters + numClusters);
+    Cluster *nextLevelClusters = clusters.data + totalNumClusters;
+
+    std::atomic<u32> numLevelClusters(0);
+
+    DenseGeometryBuildData *buildDatas =
+        PushArrayNoZero(scratch.temp.arena, DenseGeometryBuildData, OS_NumProcessors());
+
+    // Simplify every group
+    ParallelFor(0, partitionResult.ranges.Length(), 1, [&](int jobID, int start, int count) {
+        ScratchArena scratch;
+        u32 threadIndex = GetThreadIndex();
+        Arena *arena    = arenas[threadIndex];
+        Assert(count == 0);
+        int groupIndex = start;
+
+        Mesh groupMesh;
+
+        Range range           = partitionResult.ranges[groupIndex];
+        u32 groupNumTriangles = 0;
+        for (int clusterIndex = range.begin; clusterIndex < range.end; clusterIndex++)
+        {
+            const Cluster &cluster = levelClusters[clusterIndex];
+            groupNumTriangles += cluster.record.Count();
+        }
+
+        StaticArray<u32> remap(scratch.temp.arena, numIndices);
+        StaticArray<u32> groupIndices(scratch.temp.arena, groupNumTriangles * 3);
+        StaticArray<Vec3f> groupVertices(scratch.temp.arena, groupNumTriangles * 3);
+        u32 vertexCount = 0;
+        u32 indexCount  = 0;
+
+        for (int clusterIndex = range.begin; clusterIndex < range.end; clusterIndex++)
+        {
+            const Cluster &cluster = levelClusters[clusterIndex];
+            for (int primID = cluster.record.Start(); primID < cluster.record.End(); primID++)
+            {
+                for (int vertIndex = 0; vertIndex < 3; vertIndex++)
+                {
+                    u32 indexIndex  = 3 * primID + vertIndex;
+                    u32 vertexIndex = indices[indexindex];
+
+                    if (remap[vertexIndex] == ~0u)
+                    {
+                        u32 newVertexIndex            = vertexCount++;
+                        remap[vertexIndex]            = newVertexIndex;
+                        groupVertices[newVertexIndex] = pos[vertexIndex];
+                    }
+                    groupIndices[indexCount + vertIndex] = remap[vertexIndex];
+                }
+                indexCount += 3;
+            }
+        }
+
+        // Merge and simplify the clusters in a group
+        u32 targetNumTris =
+            (groupNumTriangles + MAX_CLUSTER_TRIANGLES * 2 - 1) / (MAX_CLUSTER_TRIANGLES * 2);
+        f32 targetError = 0.f;
+        MeshSimplifier simplifier(scratch.temp.arena, (f32 *)groupVertices.data, vertexCount,
+                                  groupIndices.data, indexCount);
+        f32 error =
+            simplifier.Simplify(vertexCount, targetNumTris, Sqr(targetError), 0, 0, FLT_MAX);
+        error = Sqrt(error);
+
+        Mesh simplifiedMesh;
+        simplifier.Finalize(simplifiedMesh.numVertices, simplifiedMesh.numIndices);
+
+        // TODO: attributes
+        simplifiedMesh.p       = (Vec3f *)simplifier.vertexData;
+        simplifiedMesh.indices = simplifier.indices;
+
+        // Split the simplified meshes into clusters
+        RecordAOSSplits record;
+        PrimRef *primRefs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
+            scratch.temp.arena, &simplifiedMesh, 1, record, false);
+
+        ClusterBuilder clusterBuilder(arena, primRefs);
+        clusterBuilder.BuildClusters(record, false);
+
+        u32 numChildClusters = 0;
+        for (auto &list : clusterBuilder.threadClusters)
+        {
+            numChildClusters += list.l.Length();
+        }
+        u32 childStartIndex =
+            numLevelClusters.fetch_add(numChildClusters, std::memory_order_relaxed);
+        Assert(childStartIndex + numChildClusters < numClusters);
+
+        u32 offset = 0;
+
+        // Set the child start index of last level's clusters
+        for (int clusterIndex = range.begin; clusterIndex < range.end; clusterIndex++)
+        {
+            levelClusters[clusterIndex].childStartIndex = parentStartIndex;
+            levelClusters[clusterIndex].childCount      = numChildClusters;
+        }
+
+        // Add the new clusters
+        for (auto &list : clusterBuilder.threadClusters)
+        {
+            RecordAOSSplits *newClusterRecords =
+                PushArrayNoZero(scratch.temp.arena, RecordAOSSplits, numParentClusters);
+            list.l.Flatten(newClusterRecords);
+            for (int i = 0; i < list.l.Length(); i++)
+            {
+                Cluster &cluster = nextLevelClusters[childStartIndex + offset + i];
+                cluster.record   = newClusterRecords[i];
+                cluster.mipLevel = depth + 1;
+            }
+            offset += list.l.Length();
+        }
+
+        clusterBuilder.CreateDGFs(materialIDs, &buildDatas[threadIndex], ?, 1, bounds);
+    });
+
+    ReleaseArenaArray(arenas);
+}
+
+void CreateClusters(Mesh &mesh, string filename)
+{
+    u32 totalClustersEstimate = ((mesh.numIndices / 3) >> MAX_CLUSTER_TRIANGLES_BIT) * 3;
+
+    ScratchArena scratch;
+    Array<Cluster> clusters(scratch.temp.arena, totalClustersEstimate);
+
+    RecordAOSSplits record;
+    PrimRef *primRefs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
+        scratch.temp.arena, &mesh, 1, record, false);
+
+    ClusterBuilder clusterBuilder(scratch.temp.arena, primRefs);
+    clusterBuilder.BuildClusters(record, true);
+
+    int numClusters = 0;
+    for (auto &list : clusterBuilder.threadClusters)
+    {
+        numClusters += list.l.Length();
+    }
+
+    RecordAOSSplits *clusterRecords =
+        PushArrayNoZero(scratch.temp.arena, RecordAOSSplits, numClusters);
+    u32 clusterOffset = 0;
+    for (auto &list : clusterBuilder.threadClusters)
+    {
+        list.l.Flatten(clusterRecords + clusterOffset);
+        clusterOffset += list.l.Length();
+    }
+    clusters.Resize(clusterOffset);
+    for (int i = 0; i < clusterOffset; i++)
+    {
+        Cluster &cluster = clusters[i];
+        cluster.record   = clusterRecords[i];
+        cluster.mipLevel = 0;
+    }
+
+    // TODO: handle this
+    DenseGeometryBuildData buildData;
+    Bounds bounds;
+    StaticArray<u32> materialIDs(scratch.temp.arena, 1);
+    materialIDs.Push(0);
+    clusterBuilder.CreateDGFs(materialIDs, &buildData, &mesh, 1, bounds);
+
+    CreateClustersHelper(scratch.temp.arena, clusters, filename, mesh);
 }
 
 } // namespace rt
