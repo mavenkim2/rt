@@ -103,7 +103,7 @@ void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel)
     if (parallel)
     {
         scheduler.ScheduleAndWait(numChildren, 1, [&](u32 jobID) {
-            bool childParallel = childRecords[jobID].count >= BUILD_PARALLEL_THRESHOLD;
+            bool childParallel = childRecords[jobID].count >= PARALLEL_THRESHOLD;
             BuildClusters(childRecords[jobID], childParallel);
         });
     }

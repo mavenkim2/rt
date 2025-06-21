@@ -72,6 +72,8 @@ struct MeshSimplifier
     u32 numIndices;
     u32 numAttributes;
 
+    u32 remainingNumTriangles;
+
     // Quadrics
     Quadric *triangleQuadrics;
     QuadricGrad *triangleAttrQuadrics;
@@ -84,8 +86,11 @@ struct MeshSimplifier
     HashIndex pairHash1;
     BitVector triangleIsRemoved;
 
+    BitVector lockedVertices;
+
     MeshSimplifier(Arena *arena, f32 *vertexData, u32 numVertices, u32 *indices,
                    u32 numIndices);
+    void LockVertex(const Vec3f &p);
 
     Vec3f &GetPosition(u32 vertexIndex);
     const Vec3f &GetPosition(u32 vertexIndex) const;
@@ -103,7 +108,7 @@ struct MeshSimplifier
     void Finalize(u32 &finalNumVertices, u32 &finalNumIndices);
 };
 
-void CreateClusters(Arena *arena, string filename, Mesh &mesh);
+void CreateClusters(Mesh &mesh, string filename);
 
 } // namespace rt
 

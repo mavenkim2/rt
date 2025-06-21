@@ -650,6 +650,17 @@ struct ChunkedLinkedList
         u32 count;
         u32 cap;
         ChunkNode *next;
+
+        T &operator[](int index)
+        {
+            Assert(index < count);
+            return values[index];
+        }
+        const T &operator[](int index) const
+        {
+            Assert(index < count);
+            return values[index];
+        }
     };
     ChunkNode *first;
     ChunkNode *last;

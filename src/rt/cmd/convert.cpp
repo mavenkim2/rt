@@ -2279,7 +2279,7 @@ int main(int argc, char **argv)
     // WriteTriOBJ(simplifiedMesh, "../../data/island/pbrt-v4/obj/osOcean/osOcean_simp.obj");
 
     meshes[0].numFaces = meshes[0].numIndices / 3;
-    CreateClusters(arena, testFilename, meshes[0]);
+    CreateClusters(meshes[0], testFilename);
 #else
     LoadPBRT(arena, filename);
 #endif
