@@ -80,6 +80,7 @@ struct StaticArray
         data = (T *)PushArrayNoZero(arena, u8, sizeof(T) * size_);
         MemoryCopy(data, vector.data(), sizeof(T) * size_);
     }
+    StaticArray(T *buffer, u32 size) : data(buffer), capacity(size), size(size) {}
 
     __forceinline void Init(Arena *arena, i32 inCap)
     {
