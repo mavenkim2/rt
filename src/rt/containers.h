@@ -310,7 +310,7 @@ struct Array
 #endif
     }
 
-    inline void RangeCheck(i32 index) { Assert(index >= 0 && index < size); }
+    inline void RangeCheck(i32 index) const { Assert(index >= 0 && index < size); }
 
     inline T &operator[](i32 index)
     {

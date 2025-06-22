@@ -18,10 +18,9 @@
 namespace rt
 {
 
-typedef HeuristicObjectBinning<PrimRef> Heuristic;
-
 ClusterBuilder::ClusterBuilder(Arena *arena, PrimRef *primRefs) : primRefs(primRefs)
 {
+    typedef HeuristicObjectBinning<PrimRef> Heuristic;
     u32 numProcessors = OS_NumProcessors();
     arenas            = GetArenaArray(arena);
     threadClusters =
@@ -55,6 +54,7 @@ DenseGeometryBuildData::DenseGeometryBuildData()
 
 void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel)
 {
+    typedef HeuristicObjectBinning<PrimRef> Heuristic;
     auto *heuristic = (Heuristic *)h;
     const int N     = 4;
     Assert(record.count > 0);

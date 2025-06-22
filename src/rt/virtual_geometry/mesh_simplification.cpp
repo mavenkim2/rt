@@ -7,6 +7,7 @@
 #include "../mesh.h"
 #include <cstring>
 #include "../bvh/bvh_types.h"
+#include "../bvh/bvh_aos.h"
 #include "../parallel.h"
 #include "mesh_simplification.h"
 #include "../shader_interop/as_shaderinterop.h"
@@ -1331,6 +1332,7 @@ struct ClusterGroup
     // u32 clusterOffset;
     // u32 numClusters;
 
+    Vec4f lodBounds;
     PrimRef *primRefs;
     f32 *vertexData;
     u32 *indices;
@@ -1339,6 +1341,8 @@ struct ClusterGroup
     u32 shadingByteBufferOffset;
     u32 buildDataIndex;
 
+    f32 maxParentError;
+
     bool isLeaf;
 };
 
@@ -1346,9 +1350,13 @@ struct Cluster
 {
     RecordAOSSplits record;
     u32 mipLevel;
-    u32 childStartIndex;
-    u32 childCount;
+    u32 parentStartIndex;
+    u32 parentCount;
+
     u32 groupIndex;
+    u32 parentGroupIndex;
+
+    f32 lodError;
 };
 
 int HashEdge(Vec3f &p0, Vec3f &p1)
@@ -1656,6 +1664,116 @@ GraphPartitionResult RecursivePartitionGraph(Arena *arena, idx_t *clusterOffsets
 }
 
 static_assert(sizeof(PackedDenseGeometryHeader) % 4 == 0, "Header is mult of 4 bytes");
+
+#define CHILDREN_PER_HIERARCHY_NODE 4
+
+struct HierarchyNode
+{
+    Vec4f lodBounds[CHILDREN_PER_HIERARCHY_NODE];
+    f32 maxParentError[CHILDREN_PER_HIERARCHY_NODE];
+    HierarchyNode *children;
+    u32 numChildren;
+};
+
+HierarchyNode BuildHierarchy(Arena *arena, const Array<Cluster> &clusters,
+                             const Array<ClusterGroup> &clusterGroups, PrimRef *primRefs,
+                             RecordAOSSplits &record, u32 &numNodes)
+{
+    typedef HeuristicObjectBinning<PrimRef> Heuristic;
+
+    HeuristicObjectBinning<PrimRef> heuristic(primRefs, Log2Int(4));
+
+    Assert(record.count > 0);
+
+    RecordAOSSplits childRecords[CHILDREN_PER_HIERARCHY_NODE];
+    u32 numChildren = 0;
+
+    Split split = heuristic.Bin(record);
+
+    if (record.count <= CHILDREN_PER_HIERARCHY_NODE)
+    {
+        u32 threadIndex = GetThreadIndex();
+        heuristic.FlushState(split);
+
+        HierarchyNode node;
+        node.numChildren   = record.count;
+        f32 maxParentError = 0.f;
+        Vec4f lodBounds;
+
+        for (int i = 0; i < record.count; i++)
+        {
+            for (int primIndex = record.start; primIndex < record.start + record.count;
+                 primIndex++)
+            {
+                PrimRef &ref              = primRefs[primIndex];
+                u32 clusterID             = ref.primID;
+                const Cluster &cluster    = clusters[clusterID];
+                u32 groupID               = cluster.parentGroupIndex;
+                const ClusterGroup &group = clusterGroups[groupID];
+                maxParentError            = Max(maxParentError, group.maxParentError);
+            }
+
+            node.lodBounds[i]      = lodBounds;
+            node.maxParentError[i] = maxParentError;
+            node.children          = 0;
+        }
+        numNodes++;
+
+        return node;
+    }
+    heuristic.Split(split, record, childRecords[0], childRecords[1]);
+
+    // N - 1 splits produces N children
+    for (numChildren = 2; numChildren < CHILDREN_PER_HIERARCHY_NODE; numChildren++)
+    {
+        i32 bestChild = -1;
+        f32 maxArea   = neg_inf;
+        for (u32 recordIndex = 0; recordIndex < numChildren; recordIndex++)
+        {
+            RecordAOSSplits &childRecord = childRecords[recordIndex];
+            if (childRecord.count <= MAX_CLUSTER_TRIANGLES) continue;
+
+            f32 childArea = HalfArea(childRecord.geomBounds);
+            if (childArea > maxArea)
+            {
+                bestChild = recordIndex;
+                maxArea   = childArea;
+            }
+        }
+        if (bestChild == -1) break;
+
+        split = heuristic.Bin(childRecords[bestChild]);
+
+        RecordAOSSplits out;
+        heuristic.Split(split, childRecords[bestChild], out, childRecords[numChildren]);
+
+        childRecords[bestChild] = out;
+    }
+
+    HierarchyNode *nodes = PushArrayNoZero(arena, HierarchyNode, numChildren);
+    for (int i = 0; i < numChildren; i++)
+    {
+        nodes[i] = BuildHierarchy(arena, clusters, clusterGroups, primRefs, childRecords[i],
+                                  numNodes);
+    }
+
+    HierarchyNode node;
+    node.children    = nodes;
+    node.numChildren = numChildren;
+    for (int i = 0; i < numChildren; i++)
+    {
+        f32 maxParentError       = 0.f;
+        HierarchyNode &childNode = nodes[i];
+        for (int j = 0; j < childNode.numChildren; j++)
+        {
+            maxParentError = Max(maxParentError, childNode.maxParentError[j]);
+        }
+        node.maxParentError[i] = maxParentError;
+    }
+
+    numNodes++;
+    return node;
+}
 
 void CreateClustersHelper(Arena *arena, Array<Cluster> &clusters,
                           Array<ClusterGroup> &clusterGroups, string filename)
@@ -2088,11 +2206,17 @@ void CreateClustersHelper(Arena *arena, Array<Cluster> &clusters,
                     u32 newGroupIndex = start + totalNumGroups;
 
                     // Set the child start index of last level's clusters
-                    for (int clusterIndex = range.begin; clusterIndex < range.end;
-                         clusterIndex++)
+                    for (int clusterIndexIndex = range.begin; clusterIndexIndex < range.end;
+                         clusterIndexIndex++)
                     {
-                        levelClusters[clusterIndex].childStartIndex = parentStartIndex;
-                        levelClusters[clusterIndex].childCount      = numParentClusters;
+                        int clusterIndex = partitionResult.clusterIndices[clusterIndexIndex];
+
+                        levelClusters[clusterIndex].parentGroupIndex = groupIndex;
+                        levelClusters[clusterIndex].parentStartIndex = parentStartIndex;
+                        levelClusters[clusterIndex].parentCount      = numParentClusters;
+
+                        // Parent error should always be >= to child error
+                        error = Max(error, levelClusters[clusterIndex].lodError);
                     }
 
                     // Add the new clusters
@@ -2108,6 +2232,7 @@ void CreateClustersHelper(Arena *arena, Array<Cluster> &clusters,
                             cluster.record     = newClusterRecords[i];
                             cluster.mipLevel   = depth + 1;
                             cluster.groupIndex = newGroupIndex;
+                            cluster.lodError   = error;
                         }
                         offset += list.l.Length();
                     }
@@ -2122,7 +2247,8 @@ void CreateClustersHelper(Arena *arena, Array<Cluster> &clusters,
                         groupBuildData->geoByteBuffer.Length();
                     newClusterGroup.shadingByteBufferOffset =
                         groupBuildData->shadingByteBuffer.Length();
-                    newClusterGroup.isLeaf = false;
+                    newClusterGroup.isLeaf         = false;
+                    newClusterGroup.maxParentError = error;
 
                     clusterGroups[newGroupIndex] = newClusterGroup;
 
@@ -2219,6 +2345,42 @@ void CreateClusters(Mesh &mesh, string filename)
     clusterGroups.Push(clusterGroup);
 
     CreateClustersHelper(scratch.temp.arena, clusters, clusterGroups, filename);
+
+    // Build hierarchies over clusters
+    PrimRef *hierarchyPrimRefs =
+        PushArrayNoZero(scratch.temp.arena, PrimRef, clusters.Length());
+
+    Vec3f minBounds(pos_inf);
+    Vec3f maxBounds(neg_inf);
+
+    for (int i = 0; i < clusters.Length(); i++)
+    {
+        PrimRef &primRef = hierarchyPrimRefs[i];
+        primRef.primID   = i;
+        primRef.minX     = clusters[i].record.geomMin[0];
+        primRef.minY     = clusters[i].record.geomMin[1];
+        primRef.minZ     = clusters[i].record.geomMin[2];
+        primRef.maxX     = clusters[i].record.geomMax[0];
+        primRef.maxY     = clusters[i].record.geomMax[1];
+        primRef.maxZ     = clusters[i].record.geomMax[2];
+
+        minBounds.x = Min(minBounds.x, primRef.minX);
+        minBounds.y = Min(minBounds.y, primRef.minY);
+        minBounds.z = Min(minBounds.z, primRef.minZ);
+        maxBounds.x = Max(maxBounds.x, primRef.maxX);
+        maxBounds.y = Max(maxBounds.y, primRef.maxY);
+        maxBounds.z = Max(maxBounds.z, primRef.maxZ);
+    }
+
+    RecordAOSSplits hierarchyRecord;
+    hierarchyRecord.start = 0;
+    hierarchyRecord.count = clusters.Length();
+    // hierarchyRecord.geomBounds
+
+    Arena *arena           = ArenaAlloc();
+    u32 numNodes           = 0;
+    HierarchyNode rootNode = BuildHierarchy(arena, clusters, clusterGroups, hierarchyPrimRefs,
+                                            hierarchyRecord, numNodes);
 
 #if 0
     // Write all clusters to disk
