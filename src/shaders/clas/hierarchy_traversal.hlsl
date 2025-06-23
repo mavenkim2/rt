@@ -7,9 +7,51 @@ struct Queue
     uint leafWriteOffset;
 };
 
-struct HierarchyNode 
+// See if child should be visited
+float2 TestNode(float4 lodBounds)
 {
-};
+    // also candidate clusters/candidate nodes? 
+
+    // Find length to cluster center
+    float4 lodBounds;
+    float3x4 objectToRender;
+
+    float3 center = mul(objectToRender, float4(lodBounds.xyz, 1.f));
+    float radius = ?;
+    float distSqr = length2(center);
+
+    // Find angle between vector to cluster center and view vector
+    float z = dot(camera.forward, center);
+    float x = distSqr - z * z;
+
+    // Find angle between vector to cluster center and vector to tangent point on sphere
+    float distTangentSqr = distSqr - radius * radius;
+
+    float distTangent = sqrt(max(0.f, distTangentSqr));
+
+    // Find cosine of the above angles subtracted/added
+    float invDistSqr = rcp(distSqr);
+    float cosSub = (z * distTangent + x * radius) * invDistSqr;
+    float cosAdd = (z * distTangent - x * radius) * invDistSqr;
+
+    // Clipping
+    float depth = z - zNear;
+    if (distSqr < 0.f || cosSub * distTangent < zNear)
+    {
+        float cosSubX = max(0.f, x - sqrt(radius * radius - depth * depth));
+        cosSub = zNear / sqrt(cosSubX * cosSubX + zNear * zNear);
+    }
+    if (distSqr < 0.f || cosAdd * distTangent < zNear)
+    {
+        float cosAddX = x + sqrt(radius * radius - depth * depth));
+        cosAdd = zNear / sqrt(cosAddX * cosAddX + zNear * zNear);
+    }
+
+    float minZ = max(z - radius, zNear);
+    float maxZ = max(z + radius, zFar);
+
+    return z + radius > zNear ? float2(minZ * cosAdd, maxZ * cosSub) : float2(0, 0);
+}
 
 #define MAX_NODES_PER_BATCH 16
 #define PACKED_NODE_SIZE 12
