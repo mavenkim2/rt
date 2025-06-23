@@ -1665,8 +1665,6 @@ GraphPartitionResult RecursivePartitionGraph(Arena *arena, idx_t *clusterOffsets
 
 static_assert(sizeof(PackedDenseGeometryHeader) % 4 == 0, "Header is mult of 4 bytes");
 
-#define CHILDREN_PER_HIERARCHY_NODE 4
-
 struct HierarchyNode
 {
     Vec4f lodBounds[CHILDREN_PER_HIERARCHY_NODE];
@@ -2382,6 +2380,79 @@ void CreateClusters(Mesh &mesh, string filename)
     HierarchyNode rootNode = BuildHierarchy(arena, clusters, clusterGroups, hierarchyPrimRefs,
                                             hierarchyRecord, numNodes);
 
+    // Flatten tree to array
+    StaticArray<PackedHierarchyNode> hierarchy(arena, numNodes);
+    PackedHierarchyNode rootPacked;
+    rootPacked.numChildren = rootNode.numChildren;
+    for (int i = 0; i < rootNode.numChildren; i++)
+    {
+        rootPacked.lodBounds[i]      = rootNode.lodBounds[i];
+        rootPacked.maxParentError[i] = rootNode.maxParentError[i];
+    }
+    hierarchy.Push(rootPacked);
+
+    struct StackEntry
+    {
+        HierarchyNode *children;
+        u32 numChildren;
+        u32 parentIndex;
+    };
+
+    StaticArray<StackEntry> stack(scratch.temp.arena, 128);
+    StackEntry root;
+    root.children    = rootNode.children;
+    root.numChildren = rootNode.numChildren;
+    root.parentIndex = 0;
+
+    stack.Push(rootNode);
+
+    for (;;)
+    {
+        if (stack.Length() == 0) break;
+        StackEntry entry = stack.Pop();
+
+        u32 childOffset = hierarchy.Length();
+        u32 parentIndex = entry.parentIndex;
+
+        hierarchy[parentIndex].childOffset = childOffset;
+
+        for (int i = 0; i < numChildren; i++)
+        {
+            HierarchyNode &child = entry.children[i];
+            if (child.numChildren)
+            {
+                StackEntry newEntry;
+                newEntry.children    = child.children;
+                newEntry.numChildren = child.numChildren;
+                newEntry.parentIndex = childOffset + i;
+                stack.Push(newEntry);
+            }
+
+            PackedHierarchyNode packed;
+            packed.childOffset = 0;
+            packed.numChildren = child.numChildren;
+            for (int j = 0; j < child.numChildren; j++)
+            {
+                packed.lodBounds[j]      = child.lodBounds[j];
+                packed.maxParentError[j] = child.maxParentError[j];
+            }
+
+            hierarchy.Push(packed);
+        }
+    }
+    Assert(nodeOffset == numNodes);
+
+    string outFilename =
+        PushStr8F(scratch.temp.arena, "%S.geo", RemoveFileExtension(filename));
+    StringBuilderMapped builder(outFilename);
+
+    // Write hierarchy to disk
+    u64 hierarchyOffset =
+        AllocateSpace(&builder, sizeof(PackedHierarchyNode) * numNodes + sizeof(u32));
+    u8 *ptr = (u8 *)GetMappedPtr(&builder, hierarchyOffset);
+    MemoryCopy(ptr, &numNodes, sizeof(u32));
+    MemoryCopy(ptr + sizeof(u32), hierarchy.data, sizeof(PackedHierarchyNode) * numNodes);
+
 #if 0
     // Write all clusters to disk
     PackedDenseGeometryHeader *headers =
@@ -2395,9 +2466,6 @@ void CreateClusters(Mesh &mesh, string filename)
     buildData.shadingByteBuffer.Flatten(shadingByteData);
     buildData.headers.Flatten(headers);
 
-    string outFilename =
-        PushStr8F(scratch.temp.arena, "%S.geo", RemoveFileExtension(filename));
-    StringBuilderMapped builder(outFilename);
 
     int startIndexIndex          = 0;
     u32 currentGeoBufferSize     = 0;

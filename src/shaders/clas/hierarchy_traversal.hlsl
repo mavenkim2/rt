@@ -7,6 +7,10 @@ struct Queue
     uint leafWriteOffset;
 };
 
+struct HierarchyNode 
+{
+};
+
 #define MAX_NODES_PER_BATCH 16
 #define PACKED_NODE_SIZE 12
 
