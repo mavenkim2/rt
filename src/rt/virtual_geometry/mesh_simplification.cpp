@@ -2404,6 +2404,27 @@ void CreateClusters(Mesh &mesh, string filename)
     root.numChildren = rootNode.numChildren;
     root.parentIndex = 0;
 
+    // interesting idea:
+    // 1. create a bounding sphere/aabb hierarchy over instances. the leaves contain instance
+    // ids.
+    // 2. use previous frame's rays to traverse this hierarchy. instances in intersected leaves
+    // are added to the tlas. this would be in addition to standard occlusion/frustum/small
+    // element culling (maybe? i'm not sure about this last part)
+    // 3. since we control this hierarchy, instead of normal instancing you could use instanced
+    // submeshes (cluster groups), reducing overlap between instances (just like partial
+    // rebraiding)
+    // 4. thus instance data can be very highly compressed, and decompressed when needed
+
+    // 5. maybe have some form of feedback? like with virtual textures (idk how this fits in to
+    // the rest of the system)
+    // 6. when the instance is small enough, use some smaller proxy/proxies (i.e., somehow
+    // combine and simplify the instances)
+    // 7. partitioned tlas (obviously)
+    // 8. inverse render a proxy (lol)
+
+    // so if the instance is outside the frustum or occluded, and wasn't intersected, then it
+    // should be removed
+
     stack.Push(rootNode);
 
     for (;;)
@@ -2602,5 +2623,11 @@ void CreateClusters(Mesh &mesh, string filename)
     OS_ResizeFile(builder.filename, builder.totalSize);
 #endif
 }
+
+// void GenerateInstanceHierarchy()
+// {
+//     BuildTLASQuantized();
+//     HierarchyNode node;
+// }
 
 } // namespace rt

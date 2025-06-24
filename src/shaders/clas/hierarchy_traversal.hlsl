@@ -8,7 +8,7 @@ struct Queue
 };
 
 // See if child should be visited
-float2 TestNode(float4 lodBounds)
+float2 TestNode(float3x4 objectToRender, float3x3 renderToCamera, float4 lodBounds)
 {
     // also candidate clusters/candidate nodes? 
 
@@ -66,69 +66,236 @@ void WriteNode()
     nodesBuffer.Store(PACKED_NODE_SIZE
 }
 
-[numthreads(64, 1, 1)]
-void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
+struct Instance 
+{
+    float3x4 objectToRender;
+    uint globalRootNodeOffset;
+};
+
+struct InstanceData 
+{
+    uint instanceID;
+    uint nodeOffset;
+};
+
+struct CandidateNode 
+{
+    uint instanceID;
+    uint nodeOffset;
+    uint blasIndex;
+};
+
+enum WorkItemType 
+{
+    Node = 0,
+    Leaf = 1,
+};
+
+typedef uint4 WorkItem;
+
+// 8 bit bounding box planes
+struct InstanceHierarchyNode 
+{
+    float3 min[CHILDREN_PER_HIERARCHY_NODE];
+    float3 max[CHILDREN_PER_HIERARCHY_NODE];
+    uint childOffset;
+    uint numChildren;
+};
+
+struct PackedInstanceHierarchyNode 
+{
+    float3 minBounds;
+    uint minX;
+    uint minY;
+    uint minZ;
+    uint maxX;
+    uint maxY;
+    uint maxZ;
+
+    uint childOffset;
+    uint scale_numChildren;
+};
+
+InstanceHierarchyNode UnpackInstanceHierarchyNode(PackedInstanceHierarchyNode packed)
+{
+    InstanceHierarchyNode node;
+
+    return node;
+}
+
+#define NUM_CANDIDATE_NODES_INDEX 0
+#define NODE_SIZE 3
+
+RWStructuredBuffer<uint> globals : register(u0);
+StructuredBuffer<WorkItem> workItemQueue : register(t1);
+StructuredBuffer<InstanceData> instanceDatas : register(t2);
+StructuredBuffer<HierarchyNode> hierarchyNodes : register(t3);
+
+RWStructuredBuffer<uint> nodes : register(u4);
+
+#if 0
+struct InstanceHierarchyCull
+{
+    void ProcessNode() 
+    {
+        // intersect AABB against node
+        uint childIndex = ? & (CHILDREN_PER_HIERARCHY_NODE - 1);
+        
+        // Write node batches
+        InstanceHierarchyNode node;
+
+        // Child is leaf
+        if (node.childOffset == 0)
+        {
+        }
+
+        InterlockedAdd(queue.leafWriteOffset, );
+    }
+
+    void ProcessLeaf(uint4 data) 
+    {
+        InstanceHierarchyNode node;
+        // intersect the node
+        
+        bool bIntersect = false;
+        if (childIndex < node.numChildren)
+        {
+            bIntersect = ?;
+        }
+
+        uint candidateNodeIndex;
+        WaveInterlockedAddScalarTest(globals[NUM_CANDIDATE_NODES_INDEX], bIntersect, 1, candidateNodeIndex);
+        if (bIntersect)
+        {
+            uint instanceDataIndex = node.childOffset + childIndex;
+            InstanceData instanceData = instanceDatas[instanceDataIndex];
+
+            uint3 candidateNode;
+            nodes[NODE_SIZE * candidateNodeIndex + 0] = instanceData.instanceID;
+            nodes[NODE_SiZE * candidateNodeIndex + 1] = instanceData.nodeOffset;
+            nodes[NODE_SiZE * candidateNodeIndex + 2] = instanceData.blasIndex;
+
+            //CandidateNode candidateNode;
+            //candidateNode.instanceID = instanceData.instanceID;
+            //candidateNode.nodeOffset = instanceData.nodeOffset;
+            //candidateNode.blasIndex  = blasIndex;
+        }
+    }
+};
+#endif
+
+struct ClusterCull 
+{
+    void ProcessNode(WorkItem workItem, uint nodeReadOffset)
+    {
+        //uint nodeIndex = ? >> 2;
+        uint childIndex = nodeReadOffset & (CHILDREN_PER_HIERARCHY_NODE - 1);
+
+        CandidateNode candidateNode;
+        candidateNode.instanceID = workItem.x;
+        candidateNode.nodeOffset = workItem.y;
+        candidateNode.blasIndex = workItem.z;
+
+        Instance instance = instances[candidateNode.instanceID];
+        uint nodeOffset = instance.globalRootNodeOffset + candidateNode.nodeOffset;
+        HierarchyNode node = hierarchyNodes[nodeOffset];
+
+        bool isValid = childIndex < numChildren;
+
+        if (isValid)
+        {
+            float4 lodBounds = node.lodBounds[childIndex];
+            float maxParentError = node.maxParentError[childIndex];
+            float2 edgeScales = TestNode(instance.objectToRender, , lodBounds);
+
+            isValid &= edgeScales <= maxParentError;
+        }
+
+        uint nodeWriteOffset;
+        WaveInterlockedAddScalarTest(queue.nodeWriteOffset, isValid, 1, nodeWriteOffset);
+        if (isValid)
+        {
+            WorkItem childCandidateNode;
+            childCandidateNode.x = candidateNode.instanceID;
+            childCandidateNode.y = node.childOffset + childIndex;
+            childCandidateNode.z = candidateNode.blasIndex;
+            childCandidateNode.w = 0;
+
+            workItemQueue[nodeWriteOffset] = childCandidateNode;
+        }
+    }
+
+    void ProcessLeaf(WorkItem workItem)
+    {
+        // Clusters should be processed
+    }
+};
+
+template <typename Traversal>
+void TraverseHierarchy()
 {
     uint waveIndex = WaveGetLaneIndex();
     uint waveLaneCount = WaveGetLaneCount();
     uint nodesPerBatch = waveLaneCount;
 
-    uint finishedThreads = nodesPerBatch;
-    uint waveNodeReadOffset = 0;
+    uint nodeReadOffset = 0;
+
+    bool processed = false;
+
+    WorkItem workItem;
+    Traversal traversal;
 
     for (;;)
     {
-        bool alreadyProcessed = false;
-
-        // Pop node from queue
-        {
-            if (finishedThreads == nodesPerBatch)
-            {
-                alreadyProcessed = false;
-                finishedThreads = 0;
-
-                if (WaveIsFirstLane())
-                {
-                    InterlockedAdd(queue.nodeReadOffset, nodesPerBatch, waveNodeReadOffset);
-                }
-            }
-
-            waveNodeReadOffset = WaveReadLaneFirst(waveNodeReadOffset);
-
-            uint nodeIndex = waveNodeReadOffset + waveIndex;
-            uint3 nodeData = nodesBuffer.Load3(nodeIndex * PACKED_NODE_SIZE);
-            bool isReady = nodeData.x != ~0u && nodeData.y != ~0u && nodeData.z != ~0u;
-
-            uint numToProcess = WaveActiveCountBits(isReady && !alreadyProcessed); 
-            finishedThreads += numToProcess;
-            bool processLeaves = WaveActiveAnyTrue(isReady && !alreadyProcessed);
-            
-            if (isReady && !alreadyProcessed)
-            {
-                // process node batch
-                // get nodes somehow
-                
-                bool visible = false;
-                uint numVisibleChildren = WaveActiveCountBits(visible);
-                uint nodeWriteOffset;
-                if (WaveIsFirstLane())
-                {
-                    InterlockedAdd(queue.nodeWriteOffset, numVisibleChildren, nodeWriteOffset);
-                }
-                nodeWriteOffset = WaveReadLaneFirst(writeOffset);
-
-                DeviceMemoryBarrier();
-            }
-            alreadyProcessed |= isReady;
-
-            if (!processLeaves) continue;
-        }
-
-        // Process a batch of leaves
         if (WaveIsFirstLane())
         {
-            InterlockedAdd(queue.leafReadOffset, );
+            uint numNodesToRead = WaveActiveCountBits(!processed);
+            if (numNodesToRead > 0)
+            {
+                InterlockedAdd(queue.nodeReadOffset, numNodesToRead, nodeReadOffset);
+            }
+        }
+        if (!processed)
+        {
+            nodeReadOffset = WaveReadLaneFirst(nodeReadOffset) + WavePrefixCountBits(!processed);
+            uint workItemIndex = nodeReadOffset >> 2;
+            if ((waveIndex & (CHILDREN_PER_HIERARCHY_NODE - 1)) == 0)
+            {
+                workItem = workItemQueue[workItemIndex];
+            }
+            uint readLane = waveIndex & ~(CHILDREN_PER_HIERARCHY_NODE - 1);
+            workItem = WaveReadLaneAt(workItem, readLane);
+        }
+        processed = false;
+
+        bool isValid = (workItem.x != ~0u && workItem.y != ~0u && workItem.z != ~0u);
+
+        if (isValid)
+        {
+            // if node
+            traversal.ProcessNode(workItem);
+
+            processed = true;
+        }
+
+        // Process leaves
+        if (WaveActiveAllTrue(!processed))
+        {
+            uint leafReadOffset;
+            WaveInterlockedAdd(queue.leafReadOffset, 1, leafReadOffset);
+            uint leafWriteOffset = queue.leafWriteOffset;
+
+            if (leafReadOffset < leafWriteOffset)
+            {
+                workItem = workItemQueue[leafReadOffset];
+                traversal.ProcessLeaf(workItem);
+            }
         }
     }
+}
+
+[numthreads(64, 1, 1)]
+void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
+{
 }
 
