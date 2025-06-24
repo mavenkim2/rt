@@ -7,6 +7,7 @@
 #include "../mesh.h"
 #include <cstring>
 #include "../bvh/bvh_types.h"
+#include "../bvh/bvh_build.h"
 #include "../bvh/bvh_aos.h"
 #include "../parallel.h"
 #include "mesh_simplification.h"
@@ -2425,7 +2426,7 @@ void CreateClusters(Mesh &mesh, string filename)
     // so if the instance is outside the frustum or occluded, and wasn't intersected, then it
     // should be removed
 
-    stack.Push(rootNode);
+    stack.Push(root);
 
     for (;;)
     {
@@ -2437,7 +2438,7 @@ void CreateClusters(Mesh &mesh, string filename)
 
         hierarchy[parentIndex].childOffset = childOffset;
 
-        for (int i = 0; i < numChildren; i++)
+        for (int i = 0; i < entry.numChildren; i++)
         {
             HierarchyNode &child = entry.children[i];
             if (child.numChildren)
@@ -2461,7 +2462,8 @@ void CreateClusters(Mesh &mesh, string filename)
             hierarchy.Push(packed);
         }
     }
-    Assert(nodeOffset == numNodes);
+
+    Assert(hierarchy.Length() == numNodes);
 
     string outFilename =
         PushStr8F(scratch.temp.arena, "%S.geo", RemoveFileExtension(filename));
@@ -2624,10 +2626,56 @@ void CreateClusters(Mesh &mesh, string filename)
 #endif
 }
 
-// void GenerateInstanceHierarchy()
-// {
-//     BuildTLASQuantized();
-//     HierarchyNode node;
-// }
+#if 0
+struct GetHierarchyNode
+{
+    HierarchyNode *hierarchyNodes;
+    using NodeType = HierarchyNode;
+    __forceinline NodeType *operator()(const BRef &ref)
+    {
+        u32 nodeIndex = ref.nodePtr.data & ~0u;
+        return &hierarchyNodes[nodeIndex];
+    }
+};
+
+struct InstanceLeaf
+{
+    u32 instanceID[CHILDREN_PER_HIERARCHY_NODE];
+    u32 children[CHILDREN_PER_HIERARCHY_NODE];
+
+    __forceinline void Fill(const ScenePrimitives *scene, BuildRef<N> *refs, u32 &begin,
+                            u32 end)
+    {
+    }
+};
+
+void GenerateInstanceHierarchy()
+{
+    ScenePrimitive *scene;
+
+    Arena *arena   = ArenaAlloc();
+    Arena **arenas = GetArenaArray(arena);
+
+    // Flatten scene
+
+    HierarchyNode *hierarchyNodes;
+    BuildRef<CHILDREN_PER_HIERARCHY_NODE> *refs;
+
+    using BuildType =
+        BuildFuncs<CHILDREN_PER_HIERARCHY_NODE, HeuristicPartialRebraid<GetHierarchyNode>,
+                   QuantizedCompressedNode<N>, CreateQuantizedNode<N>,
+                   UpdateQuantizedCompressedNode<N>, InstanceLeaf>;
+    using Builder = BVHBuilder<N, BuildType>;
+
+    Builder builder;
+    using Heuristic = typename Builder::Heuristic;
+    new (&builder.heuristic) Heuristic(scene, refs, settings.logBlockSize);
+    builder.heuristic.getNode.hierarchyNodes = hierarchyNodes;
+    builder.primRefs                         = refs;
+    builder.scene                            = scene;
+
+    BVHNodeN rootNode = builder.BuildCompressedBVH(settings, arenas, record);
+}
+#endif
 
 } // namespace rt

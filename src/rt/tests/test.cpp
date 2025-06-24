@@ -306,53 +306,12 @@ void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
     scene->lights.push_back(infLight);
 #endif
 
-    LoadScene(&params, tempArenas, directory, filename, &envMap);
-
-    // f32 scale = 1.f / SpectrumToPhotometric(RGBColorSpace::sRGB->illuminant);
-    // ConstantSpectrum spec2(1.f);
-    // UniformInfiniteLight infLight(&spec2, scale);
-    // scene->lights.Set<UniformInfiniteLight>(&infLight, 1);
-    // scene->numLights = 1;
+    int numScenes = LoadScene(&params, tempArenas, directory, filename);
 
     f32 time = OS_GetMilliseconds(counter);
     printf("setup time: %fms\n", time);
-    f64 totalMiscTime            = 0;
-    u64 totalCompressedNodeCount = 0;
-    u64 totalNodeCount           = 0;
-    u64 totalBVHMemory           = 0;
-    u64 totalShapeMemory         = 0;
-    u64 totalInstanceMemory      = 0;
-    u64 totalNumSpatialSplits    = 0;
-    u64 maxEdgeFactor            = 0;
-    for (u32 i = 0; i < numProcessors; i++)
-    {
-        totalMiscTime += threadLocalStatistics[i].miscF;
-        totalCompressedNodeCount += threadLocalStatistics[i].misc;
-        totalNodeCount += threadLocalStatistics[i].misc2;
-        totalBVHMemory += threadMemoryStatistics[i].totalBVHMemory;
-        totalShapeMemory += threadMemoryStatistics[i].totalShapeMemory;
-        totalInstanceMemory += threadMemoryStatistics[i].totalInstanceMemory;
-        totalNumSpatialSplits += threadLocalStatistics[i].misc3;
-        maxEdgeFactor = Max(maxEdgeFactor, threadLocalStatistics[i].misc4);
-        printf("thread time %u: %fms\n", i, threadLocalStatistics[i].miscF);
-    }
-    printf("total misc time: %fms \n", totalMiscTime);
-    printf("total c node#: %llu \n", totalCompressedNodeCount);
-    printf("total node#: %llu \n", totalNodeCount);
-    printf("total bvh bytes: %llu \n", totalBVHMemory);
-    printf("total shape bytes: %llu \n", totalShapeMemory);
-    printf("total instance bytes: %llu\n", totalInstanceMemory);
-    printf("total # spatial splits: %llu\n", totalNumSpatialSplits);
-    printf("max edge factor:  %llu\n", maxEdgeFactor);
 
-    counter = OS_StartCounter();
-#ifdef USE_GPU
-#else
-    // Render(arena, params);
-    RenderSIMD(arenas, arena, params);
-#endif
-    time = OS_GetMilliseconds(counter);
-    printf("total render time: %fms\n", time);
+    Render(&params, numScenes, &envMap);
 }
 
 template <typename T>

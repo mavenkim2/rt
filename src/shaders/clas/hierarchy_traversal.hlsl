@@ -201,6 +201,7 @@ struct ClusterCull
         HierarchyNode node = hierarchyNodes[nodeOffset];
 
         bool isValid = childIndex < numChildren;
+        bool isLeaf  false;
 
         if (isValid)
         {
@@ -212,8 +213,11 @@ struct ClusterCull
         }
 
         uint nodeWriteOffset;
-        WaveInterlockedAddScalarTest(queue.nodeWriteOffset, isValid, 1, nodeWriteOffset);
-        if (isValid)
+        WaveInterlockedAddScalarTest(queue.nodeWriteOffset, isValid && !isLeaf, 1, nodeWriteOffset);
+
+        //DeviceMemoryBarrier();
+
+        if (isValid && !isLeaf)
         {
             WorkItem childCandidateNode;
             childCandidateNode.x = candidateNode.instanceID;
@@ -223,11 +227,47 @@ struct ClusterCull
 
             workItemQueue[nodeWriteOffset] = childCandidateNode;
         }
+
+        DeviceMemoryBarrier();
+
+        if (isValid && isLeaf)
+        {
+            uint leafWriteOffset;
+            uint numClusters = node.numChildren;
+            WaveInterlockedAdd(queue.leafWriteOffset, numClusters, leafWriteOffset);
+            // DeviceMemoryBarrier();
+
+            uint pageIndex = node.childOffset >> MAX_CLUSTERS_PER_PAGE_BITS;
+            uint pageClusterIndex = node.childOffset & (MAX_CLUSTERS_PER_PAGE - 1);
+
+            const int maxClusters = 1 << 24;
+            int clampedNumClusters = min((int)numClusters, maxClusters - (int)leafWriteOffset);
+
+            for (int i = 0; i < clampedNumClusters; i++)
+            {
+                WorkItem candidateCluster;
+                candidateCluster.x = (pageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | (pageClusterIndex + i);
+                candidateCluster.y = candidateNode.instanceID;
+                candidateCluster.z = candidateNode.blasIndex;
+                candidateCluster.w = 0x80000000;
+                workItemQueue[leafWriteOffset + i] = candidateCluster;
+            }
+
+            DeviceMemoryBarrier();
+        }
+
+        //DeviceMemoryBarrier();
     }
 
     void ProcessLeaf(WorkItem workItem)
     {
-        // Clusters should be processed
+        // Make sure the candidate cluster fits
+        uint clusterOffset;
+        WaveInterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX]
+        uint pageIndex = workItem.x >> MAX_CLUSTERS_PER_PAGE_BITS;
+        uint clusterIndex = workItem.x & (MAX_CLUSTERS_PER_PAGE - 1);
+        uint instanceID = workItem.y;
+        uint blasIndex = workItem.z;
     }
 };
 
@@ -241,43 +281,46 @@ void TraverseHierarchy()
     uint nodeReadOffset = 0;
 
     bool processed = false;
+    bool noMoreNodes = false;
 
     WorkItem workItem;
     Traversal traversal;
 
     for (;;)
     {
-        if (WaveIsFirstLane())
+        if (!noMoreNodes)
         {
-            uint numNodesToRead = WaveActiveCountBits(!processed);
-            if (numNodesToRead > 0)
+            if (WaveIsFirstLane())
             {
-                InterlockedAdd(queue.nodeReadOffset, numNodesToRead, nodeReadOffset);
+                uint numNodesToRead = WaveActiveCountBits(!processed);
+                if (numNodesToRead > 0)
+                {
+                    InterlockedAdd(queue.nodeReadOffset, numNodesToRead, nodeReadOffset);
+                }
+            }
+            if (!processed)
+            {
+                nodeReadOffset = WaveReadLaneFirst(nodeReadOffset) + WavePrefixCountBits(!processed);
+                uint workItemIndex = nodeReadOffset >> 2;
+                if ((waveIndex & (CHILDREN_PER_HIERARCHY_NODE - 1)) == 0)
+                {
+                    workItem = workItemQueue[workItemIndex];
+                }
+                uint readLane = waveIndex & ~(CHILDREN_PER_HIERARCHY_NODE - 1);
+                workItem = WaveReadLaneAt(workItem, readLane);
+            }
+            processed = false;
+            
+            bool isValid = (workItem.x != ~0u && workItem.y != ~0u && workItem.z != ~0u);
+            
+            if (isValid)
+            {
+                // if node
+                traversal.ProcessNode(workItem);
+                processed = true;
             }
         }
-        if (!processed)
-        {
-            nodeReadOffset = WaveReadLaneFirst(nodeReadOffset) + WavePrefixCountBits(!processed);
-            uint workItemIndex = nodeReadOffset >> 2;
-            if ((waveIndex & (CHILDREN_PER_HIERARCHY_NODE - 1)) == 0)
-            {
-                workItem = workItemQueue[workItemIndex];
-            }
-            uint readLane = waveIndex & ~(CHILDREN_PER_HIERARCHY_NODE - 1);
-            workItem = WaveReadLaneAt(workItem, readLane);
-        }
-        processed = false;
-
-        bool isValid = (workItem.x != ~0u && workItem.y != ~0u && workItem.z != ~0u);
-
-        if (isValid)
-        {
-            // if node
-            traversal.ProcessNode(workItem);
-
-            processed = true;
-        }
-
+            
         // Process leaves
         if (WaveActiveAllTrue(!processed))
         {

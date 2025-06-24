@@ -137,10 +137,10 @@ struct NumPushConstant
 
 struct PackedHierarchyNode
 {
-    Vec4f lodBounds[CHILDREN_PER_HIERARCHY_NODE];
-    f32 maxParentError[CHILDREN_PER_HIERARCHY_NODE];
-    u32 childOffset;
-    u32 numChildren;
+    float4 lodBounds[CHILDREN_PER_HIERARCHY_NODE];
+    float maxParentError[CHILDREN_PER_HIERARCHY_NODE];
+    uint childOffset;
+    uint numChildren;
 };
 
 #define GLOBALS_VERTEX_BUFFER_OFFSET_INDEX 0

@@ -142,8 +142,9 @@ void TerminateRay(ShadingThreadState *shadeState, RayStateHandle handle)
 
 // that's the problem. basically it's ray1->material1->ray2->material2,
 // so  if ray1 fills materials2, then material1 can also fill material2...
-void RenderSIMD(Arena **arenas, Arena *arena, RenderParams2 &params)
+void RenderSIMD(Arena **arenas, RenderParams2 &params)
 {
+    Arena *arena        = arenas[GetThreadIndex()];
     shadingGlobals_     = PushStruct(arena, ShadingGlobals);
     u32 numProcessors   = OS_NumProcessors();
     shadingThreadState_ = PushArray(arena, ShadingThreadState, numProcessors);

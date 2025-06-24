@@ -979,92 +979,7 @@ void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromC
     }
 }
 
-enum class TessellationStyle
-{
-    ClosestInstance,
-    PerInViewInstancePerEdge,
-};
-
-void ComputeEdgeRates(ScenePrimitives *scene, const AffineSpace &transform,
-                      const Vec4f *planes, TessellationStyle style)
-{
-    switch (scene->geometryType)
-    {
-        case GeometryType::Instance:
-        {
-            Instance *instances = (Instance *)scene->primitives;
-            ParallelFor(
-                0, scene->numPrimitives, PARALLEL_THRESHOLD, PARALLEL_THRESHOLD,
-                [&](int jobID, int start, int count) {
-                    for (int i = start; i < start + count; i++)
-                    {
-                        const Instance &instance = instances[i];
-                        AffineSpace t =
-                            transform * scene->affineTransforms[instance.transformIndex];
-                        ComputeEdgeRates(scene->childScenes[instance.id], t, planes, style);
-                    }
-                });
-        }
-        break;
-        case GeometryType::CatmullClark:
-        {
-            Mesh *controlMeshes = (Mesh *)scene->primitives;
-            ParallelFor(0, scene->numPrimitives, PARALLEL_THRESHOLD, PARALLEL_THRESHOLD,
-                        [&](int jobID, int start, int count) {
-                            for (int i = start; i < start + count; i++)
-                            {
-                                TessellationParams &params = scene->tessellationParams[i];
-
-                                switch (style)
-                                {
-                                    case TessellationStyle::ClosestInstance:
-                                    {
-                                        BeginRMutex(&params.mutex);
-                                        Bounds bounds  = Transform(transform, params.bounds);
-                                        Vec3f centroid = ToVec3f(bounds.Centroid());
-                                        f64 currentMinDistance = params.currentMinDistance;
-                                        EndRMutex(&params.mutex);
-
-                                        // NOTE: this skips the far plane test
-                                        int result =
-                                            IntersectFrustumAABB<1>(planes, &bounds, 5);
-
-                                        Vec3<f64> centroidDouble(
-                                            (f64)centroid.x, (f64)centroid.y, (f64)centroid.z);
-                                        f64 distance = Length(centroidDouble);
-
-                                        // Camera is at origin in this coordinate space
-                                        if (result && distance < currentMinDistance)
-                                        {
-                                            BeginWMutex(&params.mutex);
-                                            if (distance < params.currentMinDistance)
-                                            {
-                                                params.transform          = transform;
-                                                params.currentMinDistance = distance;
-                                            }
-                                            EndWMutex(&params.mutex);
-                                        }
-                                    }
-                                    break;
-                                    case TessellationStyle::PerInViewInstancePerEdge:
-                                    {
-                                        Assert(0);
-                                    }
-                                    break;
-                                }
-                            }
-                        });
-        }
-        break;
-        default:
-        {
-        }
-        break;
-    }
-}
-
-void LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, string filename,
-               Image *envMap)
+int LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, string filename)
 {
     TempArena temp = ScratchStart(0, 0);
     Arena *arena   = params->arenas[GetThreadIndex()];
@@ -1089,29 +1004,13 @@ void LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, stri
     state.scenes.clear();
     SetScenes(scenes);
 
-    AffineSpace space = AffineSpace::Identity();
-
-    Vec4f planes[6];
-    ExtractPlanes(planes, params->NDCFromCamera * params->cameraFromRender);
-
-#ifndef USE_GPU
-    ComputeEdgeRates(&scene->scene, space, planes, TessellationStyle::ClosestInstance);
-#endif
-
-    int maxDepth = 0;
-    for (int i = 0; i < numScenes; i++)
-    {
-        maxDepth = Max(maxDepth, scenes[i]->depth.load(std::memory_order_acquire));
-    }
-
-    BuildAllSceneBVHs(params, scenes, numScenes, maxDepth, envMap);
-
     for (u32 i = 0; i < numProcessors; i++)
     {
         ArenaRelease(tempArenas[i]);
     }
 
     ScratchEnd(temp);
+    return numScenes;
 }
 
 void BuildTLASBVH(Arena **arenas, ScenePrimitives *scene)

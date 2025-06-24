@@ -164,7 +164,7 @@ inline ShadingQueue *GetShadingQueue(u32 index)
     return &shadingGlobals_->shadingQueues[index];
 }
 QUEUE_HANDLER(RayIntersectionHandler);
-void RenderSIMD(Arena **arenas, Arena *arena, RenderParams2 &params);
+void RenderSIMD(Arena **arenas, RenderParams2 &params);
 
 } // namespace rt
 #endif

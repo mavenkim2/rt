@@ -172,12 +172,10 @@ u32 GetNumTriangles(ClusterBuilder &builder)
     return count;
 }
 
-// TODO: see if it's possible to group consecutive triangles in a strip into 1 procedural
-// primitive (when the sah is small)
-void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
-                       int maxDepth, Image *envMap)
+void Render(RenderParams2 *params, int numScenes, Image *envMap)
 {
-    NvAPI_Status status = NvAPI_Initialize();
+    ScenePrimitives **scenes = GetScenes();
+    NvAPI_Status status      = NvAPI_Initialize();
     Assert(status == NVAPI_OK);
     // Compile shaders
     Shader decodeDgfClustersShader;
@@ -436,6 +434,12 @@ void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numS
     ScratchArena sceneScratch;
 
     Bounds *bounds = PushArrayNoZero(sceneScratch.temp.arena, Bounds, numScenes);
+
+    int maxDepth = 0;
+    for (int i = 0; i < numScenes; i++)
+    {
+        maxDepth = Max(maxDepth, scenes[i]->depth.load(std::memory_order_acquire));
+    }
 
     for (int depth = maxDepth; depth >= 0; depth--)
     {

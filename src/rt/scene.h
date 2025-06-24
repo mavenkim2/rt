@@ -770,18 +770,15 @@ void ComputeTessellationParams(Mesh *meshes, TessellationParams *params, u32 sta
 
 void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
                     const Mat4 &cameraFromRender, int screenHeight);
-void BuildAllSceneBVHs(RenderParams2 *params, ScenePrimitives **scenes, int numScenes,
-                       int maxDepth, Image *envMap = 0);
 Bounds GetSceneBounds(ScenePrimitives *scene);
+void Render(RenderParams2 *params, int numScenes, Image *envMap);
 
-void LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, string filename,
-               Image *envMap = 0);
+int LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, string filename);
 DiffuseAreaLight *ParseAreaLight(Arena *arena, Tokenizer *tokenizer, AffineSpace *space,
                                  int sceneID, int geomID);
 Texture *ParseTexture(Arena *arena, Tokenizer *tokenizer, string directory, int *index = 0,
                       FilterType type        = FilterType::CatmullRom,
                       ColorEncoding encoding = ColorEncoding::None);
-Mesh ProcessMesh(SceneShapeParse *parse, Arena *arena, Mesh &mesh);
 
 } // namespace rt
 #endif
