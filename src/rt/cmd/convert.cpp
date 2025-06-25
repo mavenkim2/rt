@@ -2260,14 +2260,14 @@ int main(int argc, char **argv)
     int numMeshes, actualNumMeshes;
 
     Mesh *meshes = LoadObjWithWedges(arena, testFilename, numMeshes);
-
+    // Mesh *mesh   = &meshes[0];
+    //
     // u32 targetNumTris = 12000000; // mesh->numIndices / 6;
     // u32 limitNumTris  = 256;
     // MeshSimplifier simplifier(arena, (f32 *)mesh->p, mesh->numVertices, mesh->indices,
     //                           mesh->numIndices);
     // f32 maxError =
-    //     simplifier.Simplify(mesh->numVertices, targetNumTris, 0.f, 0, limitNumTris,
-    //     FLT_MAX);
+    //     simplifier.Simplify(mesh->numVertices, targetNumTris, 0.f, 0, limitNumTris, FLT_MAX);
     // printf("test error: %f\n", maxError);
     //
     // Mesh simplifiedMesh = {};
@@ -2275,7 +2275,7 @@ int main(int argc, char **argv)
     //
     // simplifiedMesh.p       = (Vec3f *)simplifier.vertexData;
     // simplifiedMesh.indices = simplifier.indices;
-    //
+
     // WriteTriOBJ(simplifiedMesh, "../../data/island/pbrt-v4/obj/osOcean/osOcean_simp.obj");
 
     meshes[0].numFaces = meshes[0].numIndices / 3;

@@ -59,7 +59,6 @@ struct Pair
 
 struct MeshSimplifier
 {
-    Arena *arena;
     // Constants
     f32 lockedPenaty     = 1e8f;
     f32 inversionPenalty = 100.f;
@@ -89,7 +88,7 @@ struct MeshSimplifier
     BitVector lockedVertices;
 
     MeshSimplifier(Arena *arena, f32 *vertexData, u32 numVertices, u32 *indices,
-                   u32 numIndices);
+                   u32 numIndices, u32 numAttributes);
     void LockVertex(const Vec3f &p);
 
     Vec3f &GetPosition(u32 vertexIndex);

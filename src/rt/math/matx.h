@@ -644,9 +644,9 @@ struct AffineSpace
     }
     __forceinline AffineSpace(const Mat4 &other)
         : c0(Vec3f(other.elements[0][0], other.elements[0][1], other.elements[0][2])),
-          c1(Vec3f(other.elements[1][0], other.elements[1][1], other.elements[1][2])),
-          c2(Vec3f(other.elements[2][0], other.elements[2][1], other.elements[2][2])),
-          c3(Vec3f(other.elements[3][0], other.elements[3][1], other.elements[3][2]))
+         c1(Vec3f(other.elements[1][0], other.elements[1][1], other.elements[1][2])),
+         c2(Vec3f(other.elements[2][0], other.elements[2][1], other.elements[2][2])),
+         c3(Vec3f(other.elements[3][0], other.elements[3][1], other.elements[3][2]))
     {
     }
 
@@ -704,7 +704,8 @@ struct AffineSpace
 
         return result;
     }
-    static AffineSpace Scale(f32 a) { return AffineSpace(a, 0, 0, 0, 0, a, 0, 0, 0, 0, a, 0); }
+    static AffineSpace Scale(f32 a) {
+        return AffineSpace(a, 0, 0, 0, 0, a, 0, 0, 0, 0, a, 0); }
     static AffineSpace Scale(const Vec3f &scale)
     {
         return AffineSpace(scale.x, 0, 0, 0, 0, scale.y, 0, 0, 0, 0, scale.z, 0);
