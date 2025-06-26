@@ -469,6 +469,7 @@ struct Heap
     void Remove(const T *keys, int index)
     {
         int heapIndex = heapIndices[index];
+        Assert(heapIndex < heapNum);
 
         if (heapIndex == -1) return;
 
@@ -661,7 +662,11 @@ bool MeshSimplifier::CheckInversion(const Vec3f &newPosition, u32 *movedCorners,
         Vec3f p01      = p0 - p1;
         Vec3f pNewEdge = newPosition - p1;
 
-        bool result = Dot(Cross(pNewEdge, p21), Cross(p01, p21)) >= 0.f;
+        Vec3f cross0 = Cross(pNewEdge, p21);
+        Vec3f cross1 = Cross(p01, p21);
+        f32 dot      = Dot(cross0, cross1);
+
+        bool result = dot >= 0.f;
         if (!result) return true;
     }
 
@@ -1011,7 +1016,7 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
         }
     }
 
-    for (int pairIndex = 0; pairIndex < pairs.size() - 1; pairIndex++)
+    for (int pairIndex = 0; pairIndex < pairs.size(); pairIndex++)
     {
         EvaluatePair(pairs[pairIndex]);
         heap.Add(pairs.data, pairIndex);
@@ -1219,15 +1224,65 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
                 int hash = Hash(p0);
 
                 IterateHashBreak(cornerHash, hash, [&](int corner) {
-                    if (corner != tri * 3 && i0 == indices[corner] &&
-                        i1 == indices[NextInTriangle(corner, 1)] &&
-                        i2 == indices[NextInTriangle(corner, 2)])
+                    u32 otherTri = corner / 3;
+                    if (otherTri == tri) return false;
+
+                    u32 triIndices[3];
+                    u32 otherIndices[3];
+                    triIndices[0] = indices[3 * tri];
+                    u32 nextIndex = indices[3 * tri + 1];
+                    if (nextIndex < triIndices[0])
                     {
-                        Print("dupe triangle\n");
-                        removeTri = true;
-                        return true;
+                        triIndices[1] = triIndices[0];
+                        triIndices[0] = nextIndex;
                     }
-                    return false;
+                    else triIndices[1] = nextIndex;
+                    nextIndex = indices[3 * tri + 2];
+                    if (nextIndex < triIndices[0])
+                    {
+                        triIndices[2] = triIndices[1];
+                        triIndices[1] = triIndices[0];
+                        triIndices[0] = nextIndex;
+                    }
+                    else if (nextIndex < triIndices[1])
+                    {
+                        triIndices[2] = triIndices[1];
+                        triIndices[1] = nextIndex;
+                    }
+                    else triIndices[2] = nextIndex;
+
+                    otherIndices[0] = indices[3 * otherTri];
+                    nextIndex       = indices[3 * otherTri + 1];
+                    if (nextIndex < otherIndices[0])
+                    {
+                        otherIndices[1] = otherIndices[0];
+                        otherIndices[0] = nextIndex;
+                    }
+                    else otherIndices[1] = nextIndex;
+                    nextIndex = indices[3 * otherTri + 2];
+                    if (nextIndex < otherIndices[0])
+                    {
+                        otherIndices[2] = otherIndices[1];
+                        otherIndices[1] = otherIndices[0];
+                        otherIndices[0] = nextIndex;
+                    }
+                    else if (nextIndex < otherIndices[1])
+                    {
+                        otherIndices[2] = otherIndices[1];
+                        otherIndices[1] = nextIndex;
+                    }
+                    else otherIndices[2] = nextIndex;
+
+                    for (u32 j = 0; j < 3; j++)
+                    {
+                        if (triIndices[j] != otherIndices[j])
+                        {
+                            return false;
+                        }
+                    }
+                    removeTri = true;
+                    Print("dupe tri\n");
+                    return true;
                 });
             }
 
@@ -1322,7 +1377,7 @@ void MeshSimplifier::Finalize(u32 &finalNumVertices, u32 &finalNumIndices)
     finalNumVertices = vertexCount;
     finalNumIndices  = 3 * triangleCount;
 
-    Print("%u %u\n", finalNumVertices, finalNumIndices);
+    // Print("%u %u\n", finalNumVertices, finalNumIndices);
 }
 
 inline Vec4f ConstructSphereFromPoints(Vec3f *points, u32 numPoints)
@@ -1334,7 +1389,7 @@ inline Vec4f ConstructSphereFromPoints(Vec3f *points, u32 numPoints)
         for (u32 axis = 0; axis < 3; axis++)
         {
             min[axis] = points[i][axis] < points[min[axis]][axis] ? i : min[axis];
-            max[axis] = points[i][axis] < points[max[axis]][axis] ? i : max[axis];
+            max[axis] = points[i][axis] > points[max[axis]][axis] ? i : max[axis];
         }
     }
 
@@ -1378,7 +1433,7 @@ inline Vec4f ConstructSphereFromSpheres(Vec4f *spheres, u32 numSpheres)
         for (u32 axis = 0; axis < 3; axis++)
         {
             min[axis] = spheres[i][axis] < spheres[min[axis]][axis] ? i : min[axis];
-            max[axis] = spheres[i][axis] < spheres[max[axis]][axis] ? i : max[axis];
+            max[axis] = spheres[i][axis] > spheres[max[axis]][axis] ? i : max[axis];
         }
     }
 
@@ -1396,7 +1451,7 @@ inline Vec4f ConstructSphereFromSpheres(Vec4f *spheres, u32 numSpheres)
 
     // Start adding spheres
     auto AddSpheres = [&](const Vec4f &sphere0, const Vec4f &sphere1) {
-        f32 distSqr = LengthSquared(sphere0.xyz + sphere1.xyz);
+        f32 distSqr = LengthSquared(sphere0.xyz - sphere1.xyz);
         if (Sqr(sphere0.w - sphere1.w) >= distSqr)
         {
             return sphere0.w < sphere1.w ? sphere1 : sphere0;
@@ -1428,8 +1483,6 @@ struct ClusterGroup
     f32 *vertexData;
     u32 *indices;
 
-    // u32 geoByteBufferOffset;
-    // u32 shadingByteBufferOffset;
     u32 headerOffset;
     u32 buildDataIndex;
 
@@ -1449,11 +1502,9 @@ struct Cluster
     RecordAOSSplits record;
     Vec4f lodBounds;
     u32 mipLevel;
-    u32 parentStartIndex;
-    u32 parentCount;
 
     u32 groupIndex;
-    u32 parentGroupIndex;
+    u32 childGroupIndex;
 
     f32 lodError;
 };
@@ -1766,14 +1817,23 @@ static_assert(sizeof(PackedDenseGeometryHeader) % 4 == 0, "Header is mult of 4 b
 
 struct HierarchyNode
 {
+    Bounds bounds[CHILDREN_PER_HIERARCHY_NODE];
     Vec4f lodBounds[CHILDREN_PER_HIERARCHY_NODE];
     f32 maxParentError[CHILDREN_PER_HIERARCHY_NODE];
     HierarchyNode *children;
     u32 numChildren;
 };
 
+struct GroupPart
+{
+    u32 groupIndex;
+    u32 clusterStartIndex;
+    u32 clusterCount;
+};
+
 HierarchyNode BuildHierarchy(Arena *arena, const Array<Cluster> &clusters,
-                             const Array<ClusterGroup> &clusterGroups, PrimRef *primRefs,
+                             const Array<ClusterGroup> &clusterGroups,
+                             const StaticArray<GroupPart> &parts, PrimRef *primRefs,
                              RecordAOSSplits &record, u32 &numNodes)
 {
     typedef HeuristicObjectBinning<PrimRef> Heuristic;
@@ -1795,26 +1855,23 @@ HierarchyNode BuildHierarchy(Arena *arena, const Array<Cluster> &clusters,
         HierarchyNode node;
         node.numChildren   = record.count;
         f32 maxParentError = 0.f;
-        Vec4f lodBounds;
 
         for (int i = 0; i < record.count; i++)
         {
-            for (int primIndex = record.start; primIndex < record.start + record.count;
-                 primIndex++)
-            {
-                PrimRef &ref              = primRefs[primIndex];
-                u32 clusterID             = ref.primID;
-                const Cluster &cluster    = clusters[clusterID];
-                u32 groupID               = cluster.parentGroupIndex;
-                const ClusterGroup &group = clusterGroups[groupID];
-                Assert(group.maxParentError > cluster.lodError);
-                maxParentError = Max(maxParentError, group.maxParentError);
-            }
+            PrimRef &ref              = primRefs[record.start + i];
+            u32 partID                = ref.primID;
+            u32 groupID               = parts[partID].groupIndex;
+            const ClusterGroup &group = clusterGroups[groupID];
+            maxParentError            = Max(maxParentError, group.maxParentError);
+            Vec4f lodBounds           = group.lodBounds;
 
+            node.bounds[i]         = Bounds(Lane4F32(-ref.minX, -ref.minY, -ref.minZ, 0.f),
+                                            Lane4F32(ref.maxX, ref.maxY, ref.maxZ, 0.f));
             node.lodBounds[i]      = lodBounds;
             node.maxParentError[i] = maxParentError;
-            node.children          = 0;
         }
+
+        node.children = 0;
         numNodes++;
 
         return node;
@@ -1851,21 +1908,31 @@ HierarchyNode BuildHierarchy(Arena *arena, const Array<Cluster> &clusters,
     HierarchyNode *nodes = PushArrayNoZero(arena, HierarchyNode, numChildren);
     for (int i = 0; i < numChildren; i++)
     {
-        nodes[i] = BuildHierarchy(arena, clusters, clusterGroups, primRefs, childRecords[i],
-                                  numNodes);
+        nodes[i] = BuildHierarchy(arena, clusters, clusterGroups, parts, primRefs,
+                                  childRecords[i], numNodes);
     }
+
+    ScratchArena scratch;
 
     HierarchyNode node;
     node.children    = nodes;
     node.numChildren = numChildren;
+
     for (int i = 0; i < numChildren; i++)
     {
         f32 maxParentError       = 0.f;
         HierarchyNode &childNode = nodes[i];
+        Vec4f *spheres = PushArrayNoZero(scratch.temp.arena, Vec4f, childNode.numChildren);
+        Bounds bounds;
         for (int j = 0; j < childNode.numChildren; j++)
         {
+            bounds.Extend(childNode.bounds[j]);
+            spheres[j]     = childNode.lodBounds[j];
             maxParentError = Max(maxParentError, childNode.maxParentError[j]);
         }
+
+        node.bounds[i]         = bounds;
+        node.lodBounds[i]      = ConstructSphereFromSpheres(spheres, childNode.numChildren);
         node.maxParentError[i] = maxParentError;
     }
 
@@ -1933,19 +2000,19 @@ void CreateClusters(Mesh &mesh, string filename)
     for (int i = 0; i < clusterOffset; i++)
     {
         ScratchArena clusterScratch;
-        Cluster cluster    = {};
-        cluster.record     = sortedClusterRecords[i];
-        cluster.mipLevel   = 0;
-        cluster.groupIndex = 0;
+        Cluster cluster  = {};
+        cluster.record   = sortedClusterRecords[i];
+        cluster.mipLevel = 0;
 
         // Construct the lod bounds
         Vec3f *points =
             PushArrayNoZero(clusterScratch.temp.arena, Vec3f, 3 * cluster.record.Count());
         for (u32 j = cluster.record.Start(); j < cluster.record.End(); j++)
         {
-            u32 vertexIndex0 = mesh.indices[3 * j + 0];
-            u32 vertexIndex1 = mesh.indices[3 * j + 1];
-            u32 vertexIndex2 = mesh.indices[3 * j + 2];
+            u32 primID       = primRefs[j].primID;
+            u32 vertexIndex0 = mesh.indices[3 * primID + 0];
+            u32 vertexIndex1 = mesh.indices[3 * primID + 1];
+            u32 vertexIndex2 = mesh.indices[3 * primID + 2];
 
             points[3 * (j - cluster.record.Start()) + 0] = mesh.p[vertexIndex0];
             points[3 * (j - cluster.record.Start()) + 1] = mesh.p[vertexIndex1];
@@ -1999,7 +2066,6 @@ void CreateClusters(Mesh &mesh, string filename)
         u32 prevClusterArrayEnd = clusters.Length();
         u32 numAttributes       = 0;
         Bounds bounds;
-        StaticArray<u32> materialIDs(scratch.temp.arena, 1);
 
         for (;;)
         {
@@ -2176,6 +2242,7 @@ void CreateClusters(Mesh &mesh, string filename)
             u32 maxNumPartitions = (numClusters + minGroupSize - 1) / minGroupSize;
 
             i32 *clusterOffsets   = PushArrayNoZero(scratch.temp.arena, i32, numClusters + 1);
+            clusterOffsets[0]     = 0;
             i32 *clusterOffsets1  = &clusterOffsets[1];
             u32 totalNumNeighbors = 0;
 
@@ -2247,7 +2314,7 @@ void CreateClusters(Mesh &mesh, string filename)
                         {
                             int clusterIndex =
                                 partitionResult.clusterIndices[clusterIndexIndex];
-                            const Cluster &cluster = clusters[clusterIndex];
+                            const Cluster &cluster = levelClusters[clusterIndex];
                             groupNumTriangles += cluster.record.Count();
                         }
 
@@ -2269,9 +2336,9 @@ void CreateClusters(Mesh &mesh, string filename)
                             int clusterIndex =
                                 partitionResult.clusterIndices[clusterIndexIndex];
                             u32 groupID            = clusterToGroupID[clusterIndex];
-                            const Cluster &cluster = clusters[clusterIndex];
+                            const Cluster &cluster = levelClusters[clusterIndex];
                             const ClusterGroup &prevClusterGroup =
-                                clusterGroups[cluster.groupIndex];
+                                clusterGroups[cluster.childGroupIndex];
 
                             for (int refID = cluster.record.Start();
                                  refID < cluster.record.End(); refID++)
@@ -2343,7 +2410,7 @@ void CreateClusters(Mesh &mesh, string filename)
                             int clusterIndex =
                                 partitionResult.clusterIndices[clusterIndexIndex];
                             u32 groupID            = clusterToGroupID[clusterIndex];
-                            const Cluster &cluster = clusters[clusterIndex];
+                            const Cluster &cluster = levelClusters[clusterIndex];
 
                             const ClusterData &clusterData = clusterDatas[clusterIndex];
 
@@ -2381,7 +2448,7 @@ void CreateClusters(Mesh &mesh, string filename)
                                                         Sqr(targetError), 0, 0, FLT_MAX);
                         error     = Sqrt(error);
 
-                        Mesh simplifiedMesh;
+                        Mesh simplifiedMesh = {};
                         simplifier.Finalize(simplifiedMesh.numVertices,
                                             simplifiedMesh.numIndices);
 
@@ -2397,13 +2464,15 @@ void CreateClusters(Mesh &mesh, string filename)
                                    sizeof(u32) * simplifiedMesh.numIndices);
 
                         // Split the simplified meshes into clusters
-                        u32 numFaces            = simplifiedMesh.numIndices / 3;
+                        u32 numFaces = simplifiedMesh.numIndices / 3;
+
                         simplifiedMesh.numFaces = numFaces;
                         RecordAOSSplits record;
                         PrimRef *newPrimRefs = PushArrayNoZero(arena, PrimRef, numFaces);
 
                         GenerateMeshRefs<GeometryType::TriangleMesh>(
                             &simplifiedMesh, newPrimRefs, 0, numFaces, 0, 1, record);
+                        record.SetRange(0, numFaces);
 
                         ClusterBuilder clusterBuilder(arena, newPrimRefs);
                         clusterBuilder.BuildClusters(record, false);
@@ -2431,9 +2500,7 @@ void CreateClusters(Mesh &mesh, string filename)
                             int clusterIndex =
                                 partitionResult.clusterIndices[clusterIndexIndex];
 
-                            levelClusters[clusterIndex].parentGroupIndex = groupIndex;
-                            levelClusters[clusterIndex].parentStartIndex = parentStartIndex;
-                            levelClusters[clusterIndex].parentCount      = numParentClusters;
+                            levelClusters[clusterIndex].groupIndex = groupIndex;
 
                             clusterSpheres[clusterIndexIndex - range.begin] =
                                 levelClusters[clusterIndex].lodBounds;
@@ -2455,11 +2522,11 @@ void CreateClusters(Mesh &mesh, string filename)
                             {
                                 Cluster &cluster =
                                     nextLevelClusters[parentStartIndex + offset + i];
-                                cluster.record     = newClusterRecords[i];
-                                cluster.mipLevel   = depth + 1;
-                                cluster.groupIndex = newGroupIndex;
-                                cluster.lodError   = error;
-                                cluster.lodBounds  = parentSphereBounds;
+                                cluster.record          = newClusterRecords[i];
+                                cluster.mipLevel        = depth + 1;
+                                cluster.childGroupIndex = newGroupIndex;
+                                cluster.lodError        = error;
+                                cluster.lodBounds       = parentSphereBounds;
                             }
                             offset += list.l.Length();
                         }
@@ -2484,15 +2551,35 @@ void CreateClusters(Mesh &mesh, string filename)
                     }
                 });
 
+            StaticArray<Cluster> reorderedClusters(scratch.temp.arena, levelClusters.Length(),
+                                                   levelClusters.Length());
+            u32 clusterOffset = 0;
+            for (int groupIndex = 0; groupIndex < partitionResult.ranges.Length();
+                 groupIndex++)
+            {
+                Range &range            = partitionResult.ranges[groupIndex];
+                ClusterGroup &group     = clusterGroups[totalNumGroups + groupIndex];
+                group.clusterStartIndex = range.begin;
+                group.clusterCount      = range.end - group.clusterStartIndex;
+
+                for (int i = range.begin; i < range.end; i++)
+                {
+                    int clusterIndex                   = partitionResult.clusterIndices[i];
+                    reorderedClusters[clusterOffset++] = levelClusters[clusterIndex];
+                }
+            }
+            MemoryCopy(levelClusters.data, reorderedClusters.data,
+                       reorderedClusters.Length() * sizeof(Cluster));
+
             clusters.Resize(totalNumClusters + numLevelClusters.load());
 
             levelClusters = ArrayView<Cluster>(clusters, totalNumClusters,
                                                clusters.Length() - totalNumClusters);
+            depth++;
         }
     }
 
     // Write clusters to disk
-
     StaticArray<u8 *> geoByteDatasBuffer(scratch.temp.arena, buildDatas.Length());
     StaticArray<u8 *> shadingByteDatasBuffer(scratch.temp.arena, buildDatas.Length());
     StaticArray<PackedDenseGeometryHeader *> headersBuffer(scratch.temp.arena,
@@ -2533,13 +2620,6 @@ void CreateClusters(Mesh &mesh, string filename)
         PushStr8F(scratch.temp.arena, "%S.geo", RemoveFileExtension(filename));
     StringBuilderMapped builder(outFilename);
     u64 fileHeaderOffset = AllocateSpace(&builder, sizeof(ClusterFileHeader));
-
-    struct GroupPart
-    {
-        u32 groupIndex;
-        u32 clusterStartIndex;
-        u32 clusterCount;
-    };
 
     struct PageInfo
     {
@@ -2758,6 +2838,7 @@ void CreateClusters(Mesh &mesh, string filename)
             }
         }
     }
+
     // per page, you write the number of clusters
     // at the top of the file, write a magic
 
@@ -2769,41 +2850,56 @@ void CreateClusters(Mesh &mesh, string filename)
     OS_UnmapFile(builder.ptr);
     OS_ResizeFile(builder.filename, builder.totalSize);
 
-    // Build hierarchies over clusters
-    PrimRef *hierarchyPrimRefs =
-        PushArrayNoZero(scratch.temp.arena, PrimRef, clusters.Length());
+    // Build hierarchies over cluster groups
+    PrimRef *hierarchyPrimRefs = PushArrayNoZero(scratch.temp.arena, PrimRef, parts.Length());
+    Bounds geomBounds;
+    Bounds centBounds;
 
-    Vec3f minBounds(pos_inf);
-    Vec3f maxBounds(neg_inf);
-
-    for (int i = 0; i < clusters.Length(); i++)
+    for (int i = 0; i < parts.Length(); i++)
     {
         PrimRef &primRef = hierarchyPrimRefs[i];
         primRef.primID   = i;
-        primRef.minX     = clusters[i].record.geomMin[0];
-        primRef.minY     = clusters[i].record.geomMin[1];
-        primRef.minZ     = clusters[i].record.geomMin[2];
-        primRef.maxX     = clusters[i].record.geomMax[0];
-        primRef.maxY     = clusters[i].record.geomMax[1];
-        primRef.maxZ     = clusters[i].record.geomMax[2];
 
-        minBounds.x = Min(minBounds.x, primRef.minX);
-        minBounds.y = Min(minBounds.y, primRef.minY);
-        minBounds.z = Min(minBounds.z, primRef.minZ);
-        maxBounds.x = Max(maxBounds.x, primRef.maxX);
-        maxBounds.y = Max(maxBounds.y, primRef.maxY);
-        maxBounds.z = Max(maxBounds.z, primRef.maxZ);
+        GroupPart &part     = parts[i];
+        ClusterGroup &group = clusterGroups[part.groupIndex];
+
+        Bounds partBounds;
+
+        for (int clusterGroupIndex = part.clusterStartIndex;
+             clusterGroupIndex < part.clusterStartIndex + part.clusterCount;
+             clusterGroupIndex++)
+        {
+            Cluster &cluster        = clusters[group.clusterStartIndex + clusterGroupIndex];
+            RecordAOSSplits &record = cluster.record;
+
+            Lane4F32 clusterMin(-record.geomMin[0], -record.geomMin[1], -record.geomMin[2],
+                                0.f);
+            Lane4F32 clusterMax(record.geomMax[0], record.geomMax[1], record.geomMax[2], 0.f);
+
+            partBounds.Extend(clusterMin, clusterMax);
+        }
+
+        primRef.minX = -partBounds.minP[0];
+        primRef.minY = -partBounds.minP[1];
+        primRef.minZ = -partBounds.minP[2];
+        primRef.maxX = partBounds.maxP[0];
+        primRef.maxY = partBounds.maxP[1];
+        primRef.maxZ = partBounds.maxP[2];
+
+        geomBounds.Extend(partBounds);
+        centBounds.Extend(partBounds.minP + partBounds.maxP);
     }
 
     RecordAOSSplits hierarchyRecord;
-    hierarchyRecord.start = 0;
-    hierarchyRecord.count = clusters.Length();
-    // hierarchyRecord.geomBounds
+    hierarchyRecord.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+    hierarchyRecord.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+    hierarchyRecord.start      = 0;
+    hierarchyRecord.count      = parts.Length();
 
     Arena *arena           = ArenaAlloc();
     u32 numNodes           = 0;
-    HierarchyNode rootNode = BuildHierarchy(arena, clusters, clusterGroups, hierarchyPrimRefs,
-                                            hierarchyRecord, numNodes);
+    HierarchyNode rootNode = BuildHierarchy(arena, clusters, clusterGroups, parts,
+                                            hierarchyPrimRefs, hierarchyRecord, numNodes);
 
     // Flatten tree to array
     StaticArray<PackedHierarchyNode> hierarchy(arena, numNodes);

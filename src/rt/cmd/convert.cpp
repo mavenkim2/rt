@@ -2267,7 +2267,8 @@ int main(int argc, char **argv)
     // MeshSimplifier simplifier(arena, (f32 *)mesh->p, mesh->numVertices, mesh->indices,
     //                           mesh->numIndices);
     // f32 maxError =
-    //     simplifier.Simplify(mesh->numVertices, targetNumTris, 0.f, 0, limitNumTris, FLT_MAX);
+    //     simplifier.Simplify(mesh->numVertices, targetNumTris, 0.f, 0, limitNumTris,
+    //     FLT_MAX);
     // printf("test error: %f\n", maxError);
     //
     // Mesh simplifiedMesh = {};
