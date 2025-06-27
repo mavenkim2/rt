@@ -14,6 +14,7 @@
 #include "scene.h"
 #include "thread_context.h"
 #include "platform.h"
+#include <type_traits>
 
 namespace rt
 {
@@ -407,8 +408,10 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
         u64 key;
         u32 geomID;
         u32 count;
-        u32 value0;
-        u32 value1;
+        u32 corner0;
+        u32 corner1;
+
+        static u32 Hash(u64 key, u32 geomID) { return MixBits(key ^ geomID); }
         u32 Hash() const { return MixBits(key ^ geomID); }
 
         bool operator==(const EdgeKeyValue &other) const
@@ -416,11 +419,9 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
             return key == other.key && geomID == other.geomID;
         }
     };
-    HashMap<EdgeKeyValue> edgeIDMap(clusterScratch.arena, NextPowerOfTwo(indexCount));
-    // i need:
-    // restart high bit per dword
-    // edge high bit for BOTH edges accounting for backtracks
-    // restart counts per dword
+    HashIndex edgeIDMap(clusterScratch.arena, NextPowerOfTwo(indexCount),
+                        NextPowerOfTwo(indexCount));
+    StaticArray<EdgeKeyValue> edges(clusterScratch.arena, indexCount);
 
     // Find triangles with shared edge
     for (u32 triangleIndex = 0; triangleIndex < clusterNumTriangles; triangleIndex++)
@@ -431,18 +432,28 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
 
         for (int edgeIndex = 0; edgeIndex < 3; edgeIndex++)
         {
-            u64 edgeID        = ComputeEdgeId(indices, edgeIndex);
-            auto edgeKeyValue = edgeIDMap.Find({edgeID, geomID});
-            if (edgeKeyValue == 0)
+            u64 edgeID = ComputeEdgeId(indices, edgeIndex);
+            u32 corner = 3 * triangleIndex + edgeIndex;
+            int hash   = EdgeKeyValue::Hash(edgeID, geomID);
+
+            bool found = false;
+            for (int hashIndex = edgeIDMap.FirstInHash(hash); hashIndex != -1;
+                 hashIndex     = edgeIDMap.NextInHash(hashIndex))
             {
-                edgeIDMap.Add(clusterScratch.arena, {edgeID, geomID, 1, triangleIndex, ~0u});
+                EdgeKeyValue &key = edges[hashIndex];
+                if (key.key == edgeID && key.geomID == geomID && key.corner1 == ~0u)
+                {
+                    found       = true;
+                    key.corner1 = corner;
+                    key.count++;
+                    break;
+                }
             }
-            else
+            if (!found)
             {
-                // TODO: handle non manifolds
-                Assert(edgeKeyValue->value1 == ~0u);
-                edgeKeyValue->value1 = triangleIndex;
-                edgeKeyValue->count  = 2;
+                EdgeKeyValue newKey = {edgeID, geomID, 1, corner, ~0u};
+                edges.Push(newKey);
+                edgeIDMap.AddInHash(hash, edges.Length() - 1);
             }
         }
     }
@@ -457,10 +468,20 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
 
         for (int edgeIndex = 0; edgeIndex < 3; edgeIndex++)
         {
-            u64 edgeID        = ComputeEdgeId(indices, edgeIndex);
-            auto edgeKeyValue = edgeIDMap.Find({edgeID, geomID});
-            Assert(edgeKeyValue);
-            count += edgeKeyValue->count - 1;
+            u64 edgeID = ComputeEdgeId(indices, edgeIndex);
+            u32 corner = 3 * triangleIndex + edgeIndex;
+            int hash   = EdgeKeyValue::Hash(edgeID, geomID);
+            for (int hashIndex = edgeIDMap.FirstInHash(hash); hashIndex != -1;
+                 hashIndex     = edgeIDMap.NextInHash(hashIndex))
+            {
+                EdgeKeyValue &key = edges[hashIndex];
+                if (key.key == edgeID && key.geomID == geomID &&
+                    (corner == key.corner0 || corner == key.corner1))
+                {
+                    count += key.count - 1;
+                    break;
+                }
+            }
         }
         counts[triangleIndex] = count;
     }
@@ -483,13 +504,22 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
 
         for (int edgeIndex = 0; edgeIndex < 3; edgeIndex++)
         {
-            u64 edgeID        = ComputeEdgeId(indices, edgeIndex);
-            auto edgeKeyValue = edgeIDMap.Find({edgeID, geomID});
-            Assert(edgeKeyValue);
-            data[offsets[triangleIndex]] = triangleIndex == edgeKeyValue->value0
-                                               ? edgeKeyValue->value1
-                                               : edgeKeyValue->value0;
-            offsets[triangleIndex] += edgeKeyValue->count - 1;
+            u64 edgeID = ComputeEdgeId(indices, edgeIndex);
+            u32 corner = 3 * triangleIndex + edgeIndex;
+            int hash   = EdgeKeyValue::Hash(edgeID, geomID);
+            for (int hashIndex = edgeIDMap.FirstInHash(hash); hashIndex != -1;
+                 hashIndex     = edgeIDMap.NextInHash(hashIndex))
+            {
+                EdgeKeyValue &key = edges[hashIndex];
+                if (key.key == edgeID && key.geomID == geomID &&
+                    (corner == key.corner0 || corner == key.corner1))
+                {
+                    data[offsets[triangleIndex]] =
+                        corner == key.corner0 ? key.corner1 : key.corner0;
+                    offsets[triangleIndex] += key.count - 1;
+                    break;
+                }
+            }
         }
     }
 
@@ -529,7 +559,7 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
         u32 neighborCount = counts[neighbor] & ~removedBit;
         for (int j = 0; j < neighborCount; j++)
         {
-            if (data[offsets[neighbor] + j] == tri)
+            if (data[offsets[neighbor] + j] / 3 == tri)
             {
                 Swap(data[offsets[neighbor] + j], data[offsets[neighbor] + neighborCount - 1]);
                 counts[neighbor]--;
@@ -564,7 +594,7 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
         u32 dwordIndex = numAddedTriangles >> 5;
         u32 bitIndex   = numAddedTriangles & 31u;
 
-        u32 newMinValenceTriangle = ~0u;
+        u32 newMinValenceCorner = ~0u;
 
         TriangleStripType backTrackStripType = TriangleStripType::Restart;
         u32 count                            = counts[minValenceTriangle] & ~removedBit;
@@ -611,7 +641,7 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
             // Get last neighbor from previous triangle
             Assert(counts[minValenceTriangle] & removedBit &&
                    (counts[minValenceTriangle] & ~removedBit) == 1);
-            newMinValenceTriangle = data[offsets[minValenceTriangle]];
+            u32 newMinValenceCorner = data[offsets[minValenceTriangle]];
             counts[minValenceTriangle]--;
         }
         else
@@ -621,15 +651,16 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
             u32 minI     = 0;
             for (int i = 0; i < count; i++)
             {
-                u32 neighborTriangle = data[offsets[minValenceTriangle] + i];
+                u32 neighborCorner   = data[offsets[minValenceTriangle] + i];
+                u32 neighborTriangle = data[offsets[minValenceTriangle] + i] / 3;
                 bool success = RemoveFromNeighbor(minValenceTriangle, neighborTriangle);
                 Assert(success);
                 // Find neighbor with minimum valence
                 if (counts[neighborTriangle] < minCount)
                 {
-                    minCount              = counts[neighborTriangle];
-                    newMinValenceTriangle = neighborTriangle;
-                    minI                  = i;
+                    minCount            = counts[neighborTriangle];
+                    newMinValenceCorner = neighborCorner;
+                    minI                = i;
                 }
             }
             Swap(data[offsets[minValenceTriangle] + minI],
@@ -638,96 +669,89 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
             MarkUsed(minValenceTriangle);
             Assert(minCount != ~0u);
         }
-        Assert(newMinValenceTriangle != ~0u);
+
+        Assert(newMinValenceCorner != ~0u);
+        u32 newMinValenceTriangle = newMinValenceCorner / 3;
         triangleOrder.Push(newMinValenceTriangle);
 
         // Find what edge is shared, and rotate
         u32 indices[3];
         GetIndices(indices, newMinValenceTriangle);
         u32 geomID = geomIDs[newMinValenceTriangle];
-        for (int edgeIndex = 0; edgeIndex < 3; edgeIndex++)
+
+        u32 edgeIndex = newMinValenceCorner % 3;
+        u64 edgeID    = ComputeEdgeId(indices, edgeIndex);
+        // Rotate
+        // [0, 1, 2] -> [1, 2, 0]
+        if (edgeIndex == 1)
         {
-            u64 edgeID        = ComputeEdgeId(indices, edgeIndex);
-            auto edgeKeyValue = edgeIDMap.Find({edgeID, geomID});
-            Assert(edgeKeyValue);
+            vertexIndices[3 * newMinValenceTriangle]     = indices[1];
+            vertexIndices[3 * newMinValenceTriangle + 1] = indices[2];
+            vertexIndices[3 * newMinValenceTriangle + 2] = indices[0];
+            newIndexOrder.Push(indices[0]);
 
-            if (edgeKeyValue->value0 == minValenceTriangle ||
-                edgeKeyValue->value1 == minValenceTriangle)
+            oldIndexOrder.Push(indices[0]);
+            oldIndexOrder.Push(indices[1]);
+            oldIndexOrder.Push(indices[2]);
+        }
+        // [0, 1, 2] -> [2, 0, 1]
+        else if (edgeIndex == 2)
+        {
+            vertexIndices[3 * newMinValenceTriangle]     = indices[2];
+            vertexIndices[3 * newMinValenceTriangle + 1] = indices[0];
+            vertexIndices[3 * newMinValenceTriangle + 2] = indices[1];
+            newIndexOrder.Push(indices[1]);
+
+            oldIndexOrder.Push(indices[0]);
+            oldIndexOrder.Push(indices[1]);
+            oldIndexOrder.Push(indices[2]);
+        }
+        else
+        {
+            newIndexOrder.Push(indices[2]);
+
+            oldIndexOrder.Push(indices[0]);
+            oldIndexOrder.Push(indices[1]);
+            oldIndexOrder.Push(indices[2]);
+        }
+
+        u32 oldIndices[3];
+        GetIndices(oldIndices, minValenceTriangle);
+        // Find whether we're attached to edge1 or 2 from previous triangle
+        for (int oldEdgeIndex = 0; oldEdgeIndex < 3; oldEdgeIndex++)
+        {
+            u64 oldEdgeId = ComputeEdgeId(oldIndices, oldEdgeIndex);
+
+            if (oldEdgeId == edgeID)
             {
-                // Rotate
-                // [0, 1, 2] -> [1, 2, 0]
-                if (edgeIndex == 1)
+                if (backTrackStripType != TriangleStripType::Restart)
                 {
-                    vertexIndices[3 * newMinValenceTriangle]     = indices[1];
-                    vertexIndices[3 * newMinValenceTriangle + 1] = indices[2];
-                    vertexIndices[3 * newMinValenceTriangle + 2] = indices[0];
-                    newIndexOrder.Push(indices[0]);
-
-                    oldIndexOrder.Push(indices[0]);
-                    oldIndexOrder.Push(indices[1]);
-                    oldIndexOrder.Push(indices[2]);
-                }
-                // [0, 1, 2] -> [2, 0, 1]
-                else if (edgeIndex == 2)
-                {
-                    vertexIndices[3 * newMinValenceTriangle]     = indices[2];
-                    vertexIndices[3 * newMinValenceTriangle + 1] = indices[0];
-                    vertexIndices[3 * newMinValenceTriangle + 2] = indices[1];
-                    newIndexOrder.Push(indices[1]);
-
-                    oldIndexOrder.Push(indices[0]);
-                    oldIndexOrder.Push(indices[1]);
-                    oldIndexOrder.Push(indices[2]);
-                }
-                else
-                {
-                    newIndexOrder.Push(indices[2]);
-
-                    oldIndexOrder.Push(indices[0]);
-                    oldIndexOrder.Push(indices[1]);
-                    oldIndexOrder.Push(indices[2]);
+                    Assert(
+                        (backTrackStripType == TriangleStripType::Edge1 &&
+                         oldEdgeIndex == 1) ||
+                        (backTrackStripType == TriangleStripType::Edge2 && oldEdgeIndex == 2));
+                    break;
                 }
 
-                u32 oldIndices[3];
-                GetIndices(oldIndices, minValenceTriangle);
-                // Find whether we're attached to edge1 or 2 from previous triangle
-                for (int oldEdgeIndex = 0; oldEdgeIndex < 3; oldEdgeIndex++)
+                // If a restart occurs, a new triangle could connect with
+                // edge0. Rotate the old triangle so it's connected with
+                // edge1 instead
+                if (oldEdgeIndex == 0)
                 {
-                    u64 oldEdgeId = ComputeEdgeId(oldIndices, oldEdgeIndex);
+                    Assert(numAddedTriangles == 1 ||
+                           triangleStripTypes[numAddedTriangles - 2] ==
+                               TriangleStripType::Restart);
+                    newIndexOrder[newIndexOrder.Length() - 4] = oldIndices[2];
+                    newIndexOrder[newIndexOrder.Length() - 3] = oldIndices[0];
+                    newIndexOrder[newIndexOrder.Length() - 2] = oldIndices[1];
+                    vertexIndices[3 * minValenceTriangle]     = oldIndices[2];
+                    vertexIndices[3 * minValenceTriangle + 1] = oldIndices[0];
+                    vertexIndices[3 * minValenceTriangle + 2] = oldIndices[1];
 
-                    if (oldEdgeId == edgeID)
-                    {
-                        if (backTrackStripType != TriangleStripType::Restart)
-                        {
-                            Assert((backTrackStripType == TriangleStripType::Edge1 &&
-                                    oldEdgeIndex == 1) ||
-                                   (backTrackStripType == TriangleStripType::Edge2 &&
-                                    oldEdgeIndex == 2));
-                            break;
-                        }
-
-                        // If a restart occurs, a new triangle could connect with
-                        // edge0. Rotate the old triangle so it's connected with
-                        // edge1 instead
-                        if (oldEdgeIndex == 0)
-                        {
-                            Assert(numAddedTriangles == 1 ||
-                                   triangleStripTypes[numAddedTriangles - 2] ==
-                                       TriangleStripType::Restart);
-                            newIndexOrder[newIndexOrder.Length() - 4] = oldIndices[2];
-                            newIndexOrder[newIndexOrder.Length() - 3] = oldIndices[0];
-                            newIndexOrder[newIndexOrder.Length() - 2] = oldIndices[1];
-                            vertexIndices[3 * minValenceTriangle]     = oldIndices[2];
-                            vertexIndices[3 * minValenceTriangle + 1] = oldIndices[0];
-                            vertexIndices[3 * minValenceTriangle + 2] = oldIndices[1];
-
-                            oldEdgeIndex = 1;
-                        }
-                        triangleStripTypes.Push(oldEdgeIndex == 1 ? TriangleStripType::Edge1
-                                                                  : TriangleStripType::Edge2);
-                        break;
-                    }
+                    oldEdgeIndex = 1;
                 }
+                triangleStripTypes.Push(oldEdgeIndex == 1 ? TriangleStripType::Edge1
+                                                          : TriangleStripType::Edge2);
                 break;
             }
         }

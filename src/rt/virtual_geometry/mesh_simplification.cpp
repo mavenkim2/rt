@@ -6,6 +6,7 @@
 #include <atomic>
 #include "../mesh.h"
 #include <cstring>
+#include "../scene_load.h"
 #include "../bvh/bvh_types.h"
 #include "../bvh/bvh_build.h"
 #include "../bvh/bvh_aos.h"
@@ -1494,6 +1495,10 @@ struct ClusterGroup
 
     f32 maxParentError;
 
+    // Debug
+    u32 numVertices;
+    u32 numIndices;
+
     bool isLeaf;
 };
 
@@ -2296,6 +2301,8 @@ void CreateClusters(Mesh &mesh, string filename)
             Cluster *nextLevelClusters = clusters.data + totalNumClusters;
 
             std::atomic<u32> numLevelClusters(0);
+            std::atomic<u32> numIndices(0);
+            std::atomic<u32> numVertices(0);
 
             // Simplify every group
             ParallelFor(
@@ -2452,6 +2459,9 @@ void CreateClusters(Mesh &mesh, string filename)
                         simplifier.Finalize(simplifiedMesh.numVertices,
                                             simplifiedMesh.numIndices);
 
+                        numVertices.fetch_add(simplifiedMesh.numVertices);
+                        numIndices.fetch_add(simplifiedMesh.numIndices);
+
                         // TODO: attributes
                         simplifiedMesh.p =
                             PushArrayNoZero(arena, Vec3f, simplifiedMesh.numVertices);
@@ -2488,7 +2498,7 @@ void CreateClusters(Mesh &mesh, string filename)
                         Assert(parentStartIndex + numParentClusters < numClusters);
 
                         u32 offset        = 0;
-                        u32 newGroupIndex = start + totalNumGroups;
+                        u32 newGroupIndex = groupIndex + totalNumGroups;
 
                         Vec4f *clusterSpheres = PushArrayNoZero(scratch.temp.arena, Vec4f,
                                                                 range.end - range.begin);
@@ -2542,6 +2552,9 @@ void CreateClusters(Mesh &mesh, string filename)
                         newClusterGroup.maxParentError = error;
                         newClusterGroup.lodBounds      = parentSphereBounds;
 
+                        newClusterGroup.numVertices = simplifiedMesh.numVertices;
+                        newClusterGroup.numIndices  = simplifiedMesh.numIndices;
+
                         clusterGroups[newGroupIndex] = newClusterGroup;
 
                         clusterBuilder.CreateDGFs(materialIDs, groupBuildData, &simplifiedMesh,
@@ -2551,6 +2564,54 @@ void CreateClusters(Mesh &mesh, string filename)
                     }
                 });
 
+            // Write obj to disk
+#if 0
+            u32 vertexCount   = numVertices.load();
+            u32 indexCount    = numIndices.load();
+            Mesh levelMesh    = {};
+            u32 vertexOffset  = 0;
+            u32 indexOffset   = 0;
+            levelMesh.p       = PushArrayNoZero(scratch.temp.arena, Vec3f, vertexCount);
+            levelMesh.indices = PushArrayNoZero(scratch.temp.arena, u32, indexCount);
+            HashIndex vertexHash(scratch.temp.arena, NextPowerOfTwo(vertexCount),
+                                 NextPowerOfTwo(vertexCount));
+
+            for (int groupIndex = totalNumGroups; groupIndex < clusterGroups.Length();
+                 groupIndex++)
+            {
+                ClusterGroup &clusterGroup = clusterGroups[groupIndex];
+                for (int i = 0; i < clusterGroup.numIndices; i++)
+                {
+                    f32 *data = clusterGroup.vertexData +
+                                (3 + numAttributes) * clusterGroup.indices[i];
+                    Vec3f p         = *(Vec3f *)data;
+                    int hash        = Hash(p);
+                    int vertexIndex = -1;
+                    for (int hashIndex = vertexHash.FirstInHash(hash); hashIndex != -1;
+                         hashIndex     = vertexHash.NextInHash(hashIndex))
+                    {
+                        if (levelMesh.p[hashIndex] == p)
+                        {
+                            vertexIndex = hashIndex;
+                            break;
+                        }
+                    }
+                    if (vertexIndex == -1)
+                    {
+                        vertexIndex              = vertexOffset++;
+                        levelMesh.p[vertexIndex] = p;
+                        vertexHash.AddInHash(hash, vertexIndex);
+                    }
+                    levelMesh.indices[indexOffset++] = vertexIndex;
+                }
+            }
+
+            levelMesh.numVertices = vertexOffset;
+            levelMesh.numIndices  = indexOffset;
+            WriteTriOBJ(levelMesh, "../../data/island/pbrt-v4/obj/osOcean/test.obj");
+#endif
+
+            // TODO: combine the clusters into an obj and look at it
             StaticArray<Cluster> reorderedClusters(scratch.temp.arena, levelClusters.Length(),
                                                    levelClusters.Length());
             u32 clusterOffset = 0;
