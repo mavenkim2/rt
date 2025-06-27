@@ -44,6 +44,13 @@ struct QuadricGrad
     f32 d;
 };
 
+enum Strategy
+{
+    Locked,
+    Midpoint,
+    Optimal,
+};
+
 struct Pair
 {
     Vec3f newP;
@@ -51,6 +58,8 @@ struct Pair
 
     Vec3f p0;
     Vec3f p1;
+
+    Strategy strategy;
 
     bool operator<(const Pair &other) const { return error < other.error; }
 

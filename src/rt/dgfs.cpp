@@ -641,7 +641,7 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
             // Get last neighbor from previous triangle
             Assert(counts[minValenceTriangle] & removedBit &&
                    (counts[minValenceTriangle] & ~removedBit) == 1);
-            u32 newMinValenceCorner = data[offsets[minValenceTriangle]];
+            newMinValenceCorner = data[offsets[minValenceTriangle]];
             counts[minValenceTriangle]--;
         }
         else

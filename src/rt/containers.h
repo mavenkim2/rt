@@ -124,7 +124,7 @@ struct StaticArray
 
     __forceinline b8 Empty() { return size_ != 0; }
 
-    __forceinline u32 Clear() { size_ = 0; }
+    __forceinline void Clear() { size_ = 0; }
 
     __forceinline void Resize(int s) { size_ = s; }
 
