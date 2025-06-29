@@ -1330,6 +1330,177 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
     return maxError;
 }
 
+struct KDTreeNode
+{
+    union
+    {
+        struct
+        {
+            int axis;
+            f32 split;
+        };
+        struct
+        {
+            int start;
+            int count;
+        };
+    };
+    u32 left;
+    u32 right;
+};
+
+void MeshSimplifier::ClosestPointTriangleTriangle(Vec3f &p0, Vec3f &p1, u32 tri, u32 otherTri)
+{
+    // Find closest points on pairs of edges
+
+    // Find closest points on vertex/face
+    Vec3f vertices[2][3];
+
+    for (int i = 0; i < 2; i++)
+    {
+        Vec3f n = Cross(vertices[i][1] - vertices[i][0], vertices[i][2] - vertices[i][0]);
+
+        f32 sqrLen = LengthSquared(n);
+
+        if (sqrLen < 1e-8f) continue;
+
+        f32 invSqrLen = 1.f / sqrLen;
+
+        f32 dots[3] = {Dot(vertices[!i][0] - vertices[i][0], n),
+                       Dot(vertices[!i][1] - vertices[i][0], n),
+                       Dot(vertices[!i][2] - vertices[i][0], n)};
+
+        bool sameSign = (dots[0] > 0.f && dots[1] > 0.f && dots[2] > 0.f) ||
+                        (dots[0] < 0.f && dots[1] < 0.f && dots[2] < 0.f);
+
+        if (sameSign)
+        {
+            Vec3f candidateVert = vertices[!i][index];
+
+            u32 index  = Abs(dots[0]) < Abs(dots[1]) ? 0 : 1;
+            index      = Abs(dots[2]) < Abs(dots[index]) ? 2 : index;
+            bool valid = true;
+            for (int j = 0; j < 3; j++)
+            {
+                Vec3f v = candidateVert - vertices[i][j];
+                f32 d   = Dot(Cross(n, vertices[i][(j + 1) % 3] - vertices[i][j]), v);
+                if (d <= 0.f)
+                {
+                    valid = false;
+                    break;
+                }
+            }
+
+            if (valid)
+            {
+                p0 = candidateVert - n * dots[index] * invSqrLen;
+                p1 = candidateVert;
+                return;
+            }
+        }
+    }
+}
+
+void MeshSimplifier::CreateVirtualEdges(f32 maxDist)
+{
+    // Find the closest
+    for (int tri = 0; tri < numIndices / 3; tri++)
+    {
+        Vec3f center;
+
+        FixedArray<KDTreeNode, 64> stack;
+
+        KDTreeNode node = stack.Pop();
+        if (node.IsLeaf())
+        {
+            for (int otherTri = node.start; otherTri < node.start + node.count; otherTri++)
+            {
+                // GJK :)
+                FixedArray<Vec3f, 4> points;
+
+                Vec3f support;
+                Vec3f dir = -support;
+                for (;;)
+                {
+                    Vec3f point = Support(dir, tri) - Support(-dir, otherTri);
+                    if (Dot(point, dir) < 0.f) break;
+
+                    points.Push(point);
+                    Simplex(points, dir);
+                }
+            }
+        }
+        else
+        {
+            int choice = center[axis] >= node.split;
+            stack.Push(choice ? node.left : node.right);
+            stack.Push(choice ? node.right : node.left);
+        }
+    }
+}
+
+void MeshSimplifier::BuildKDTree(Bounds bounds, u32 start, u32 count)
+{
+    struct Handle
+    {
+        f32 sortKey;
+        u32 index;
+    };
+
+    // Build KDTree
+    ScratchArena scratch;
+    Handle *handles = PushArrayNoZero(scratch.temp.arnea, Handle, count);
+
+    // Chose axis with max extent
+
+    int bestAxis  = 0;
+    f32 maxExtent = neg_inf;
+    for (int axis = 0; axis < 3; axis++)
+    {
+        f32 extent = bounds.maxP[axis] - bounds.minP[axis];
+        if (extent > maxExtent)
+        {
+            bestAxis  = axis;
+            maxExtent = extent;
+        }
+    }
+
+    for (int tri = start; tri < start + count; tri++)
+    {
+        Vec3f p0 = GetPosition(indices[3 * tri + 0]);
+        Vec3f p1 = GetPosition(indices[3 * tri + 1]);
+        Vec3f p2 = GetPosition(indices[3 * tri + 2]);
+
+        Vec3f center               = (p0 + p1 + p2) / 3.f;
+        handles[tri - start].key   = center[bestAxis];
+        handles[tri - start].index = tri;
+    }
+    SortHandles(handles, count);
+
+    u32 leftCount  = count / 2;
+    u32 rightCount = count - leftCount;
+
+    Bounds leftBounds;
+    Bounds rightBounds;
+    for (int i = 0; i < leftCount; i++)
+    {
+        for (int vertIndex = 0; vertIndex < 3; vertIndex++)
+        {
+            leftBounds.Extend(GetPosition(indices[3 * i + vertIndex]);
+        }
+    }
+    for (int i = leftCount; i < count; i++)
+    {
+        for (int vertIndex = 0; vertIndex < 3; vertIndex++)
+        {
+            rightBounds.Extend(GetPosition(indices[3 * i + vertIndex]);
+        }
+    }
+
+    BuildKDTree(leftBounds, start, leftCount);
+    BuildKDTree(rightBounds, start + leftCount, rightCount);
+}
+
 void MeshSimplifier::Finalize(u32 &finalNumVertices, u32 &finalNumIndices)
 {
     ScratchArena scratch;
