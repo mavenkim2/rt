@@ -2,6 +2,7 @@ struct Queue
 {
     uint nodeReadOffset;
     uint nodeWriteOffset;
+    uint numNodes;
 
     uint leafReadOffset;
     uint leafWriteOffset;
@@ -59,7 +60,6 @@ float2 TestNode(float3x4 objectToRender, float3x3 renderToCamera, float4 lodBoun
 groupshared uint groupNodeReadOffset;
 
 globallycoherent RWStructuredBuffer<Queue> queue : register(u0);
-globallycoherent RWByteAddressBuffer nodesBuffer : register(u1);
 
 void WriteNode()
 {
@@ -70,6 +70,7 @@ struct Instance
 {
     float3x4 objectToRender;
     uint globalRootNodeOffset;
+    uint globalPageOffset;
 };
 
 struct InstanceData 
@@ -116,22 +117,16 @@ struct PackedInstanceHierarchyNode
     uint scale_numChildren;
 };
 
-InstanceHierarchyNode UnpackInstanceHierarchyNode(PackedInstanceHierarchyNode packed)
-{
-    InstanceHierarchyNode node;
-
-    return node;
-}
-
 #define NUM_CANDIDATE_NODES_INDEX 0
 #define NODE_SIZE 3
 
-RWStructuredBuffer<uint> globals : register(u0);
-StructuredBuffer<WorkItem> workItemQueue : register(t1);
-StructuredBuffer<InstanceData> instanceDatas : register(t2);
-StructuredBuffer<HierarchyNode> hierarchyNodes : register(t3);
+ConstantBuffer<GPUScene> scene : register(b1);
+RWStructuredBuffer<uint> globals : register(u2);
+RWStructuredBuffer<WorkItem> workItemQueue : register(t3);
 
-RWStructuredBuffer<uint> nodes : register(u4);
+StructuredBuffer<InstanceData> instanceDatas : register(t4);
+StructuredBuffer<HierarchyNode> hierarchyNodes : register(t5);
+RWStructuredBuffer<uint4> selectedClusters : register(t6);
 
 #if 0
 struct InstanceHierarchyCull
@@ -186,11 +181,8 @@ struct InstanceHierarchyCull
 
 struct ClusterCull 
 {
-    void ProcessNode(WorkItem workItem, uint nodeReadOffset)
+    void ProcessNode(WorkItem workItem, uint childIndex)
     {
-        //uint nodeIndex = ? >> 2;
-        uint childIndex = nodeReadOffset & (CHILDREN_PER_HIERARCHY_NODE - 1);
-
         CandidateNode candidateNode;
         candidateNode.instanceID = workItem.x;
         candidateNode.nodeOffset = workItem.y;
@@ -255,19 +247,35 @@ struct ClusterCull
 
             DeviceMemoryBarrier();
         }
-
-        //DeviceMemoryBarrier();
     }
 
     void ProcessLeaf(WorkItem workItem)
     {
         // Make sure the candidate cluster fits
-        uint clusterOffset;
-        WaveInterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX]
         uint pageIndex = workItem.x >> MAX_CLUSTERS_PER_PAGE_BITS;
         uint clusterIndex = workItem.x & (MAX_CLUSTERS_PER_PAGE - 1);
         uint instanceID = workItem.y;
         uint blasIndex = workItem.z;
+
+        InstanceData instanceData = instances[instanceID];
+
+        uint baseAddress = GetClusterPageBaseAddress(instanceData.globalPageOffset + pageIndex);
+        uint numClusters = GetNumClustersInPage(baseAddress);
+        DenseGeometry header = GetDenseGeometryHeader(baseAddress, numClusters, clusterIndex);
+
+        float4 lodBounds = header.lodBounds;
+        float lodError = header.lodError;
+        float2 edgeScales = TestNode(instance.objectToRender, , lodBounds);
+
+        bool isValid = edgeScales.x > lodError;
+
+        uint clusterOffset;
+        WaveInterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], isValid, 1, clusterOffset);
+
+        if (isValid)
+        {
+            selectedClusters[clusterOffset] = uint4(pageIndex, clusterIndex, instanceID, blasIndex);
+        }
     }
 };
 
@@ -279,6 +287,8 @@ void TraverseHierarchy()
     uint nodesPerBatch = waveLaneCount;
 
     uint nodeReadOffset = 0;
+    uint childIndex = 0;
+    uint leafReadOffset = ~0u;
 
     bool processed = false;
     bool noMoreNodes = false;
@@ -290,33 +300,43 @@ void TraverseHierarchy()
     {
         if (!noMoreNodes)
         {
+            uint numNodesToRead = 0;
             if (WaveIsFirstLane())
             {
-                uint numNodesToRead = WaveActiveCountBits(!processed);
+                numNodesToRead = WaveActiveCountBits(!processed) >> CHILDREN_PER_HIERARCHY_NODE_BITS;
                 if (numNodesToRead > 0)
                 {
-                    InterlockedAdd(queue.nodeReadOffset, numNodesToRead, nodeReadOffset);
+                    InterlockedAdd(queue[0].nodeReadOffset, numNodesToRead, nodeReadOffset);
                 }
             }
-            if (!processed)
+            numNodesToRead = WaveReadLaneFirst(numNodesToRead);
+            if (numNodesToRead)
             {
-                nodeReadOffset = WaveReadLaneFirst(nodeReadOffset) + WavePrefixCountBits(!processed);
-                uint workItemIndex = nodeReadOffset >> 2;
-                if ((waveIndex & (CHILDREN_PER_HIERARCHY_NODE - 1)) == 0)
+                WorkItem newWorkItem;
+                if ((numNodes & (CHILDREN_PER_HIERARCHY_NODE - 1)) != 0)
                 {
-                    workItem = workItemQueue[workItemIndex];
+                    printf("bad\n");
                 }
-                uint readLane = waveIndex & ~(CHILDREN_PER_HIERARCHY_NODE - 1);
-                workItem = WaveReadLaneAt(workItem, readLane);
+                if (waveIndex < numNodesToRead)
+                {
+                    nodeReadOffset = WaveReadLaneFirst(nodeReadOffset) + waveIndex;
+                    newWorkItem = workItemQueue[nodeReadOffset];
+                }
+                uint sourceIndex = WavePrefixCountBits(!processed);
+                if (!processed)
+                {
+                    workItem = WaveReadLaneAt(newWorkItem, sourceIndex >> CHILDREN_PER_HIERARCHY_NODE_BITS);
+                    childIndex = source & (CHILDREN_PER_HIERARCHY_NODE - 1):
+                }
             }
+
             processed = false;
-            
             bool isValid = (workItem.x != ~0u && workItem.y != ~0u && workItem.z != ~0u);
             
             if (isValid)
             {
                 // if node
-                traversal.ProcessNode(workItem);
+                traversal.ProcessNode(workItem, childIndex);
                 processed = true;
             }
         }
@@ -324,14 +344,36 @@ void TraverseHierarchy()
         // Process leaves
         if (WaveActiveAllTrue(!processed))
         {
-            uint leafReadOffset;
-            WaveInterlockedAdd(queue.leafReadOffset, 1, leafReadOffset);
-            uint leafWriteOffset = queue.leafWriteOffset;
+            if (leafReadOffset == ~0u)
+            {
+                WaveInterlockedAdd(queue[0].leafReadOffset, 1, leafReadOffset);
+            }
+            uint leafWriteOffset = queue[0].leafWriteOffset;
+            
+            if (noMoreNodes && WaveActiveAllTrue(leafReadOffset >= leafWriteOffset))
+            {
+                break;
+            }
 
-            if (leafReadOffset < leafWriteOffset)
+            uint batchSize = WaveActiveCountBits(leafReadOffset < leafWriteOffset);
+
+            if ((!noMoreNodes && batchSize == 64) || (noMoreNodes && leafReadOffset < leafWriteOffset))
             {
                 workItem = workItemQueue[leafReadOffset];
                 traversal.ProcessLeaf(workItem);
+                leafReadOffset = ~0u;
+            }
+
+            uint numNodes;
+            if (WaveIsFirstLane())
+            {
+                numNodes = queue[0].numNodes;
+            }
+            numNodes = WaveReadLaneFirst(numNodes);
+
+            if (!noMoreNodes && numNodes == 0)
+            {
+                noMoreNodes = true;
             }
         }
     }

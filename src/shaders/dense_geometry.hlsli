@@ -14,6 +14,9 @@ struct DenseGeometry
     uint geoBaseAddress;
     uint shadBaseAddress;
 
+    float4 lodBounds;
+    float lodError;
+
     int3 anchor;
     uint2 octBase;
 

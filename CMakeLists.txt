@@ -262,6 +262,7 @@ set(SHADER_FILES "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl"
     "${SHADER_SRC_DIR}/tex/update_page_tables.hlsl"
     "${SHADER_SRC_DIR}/tex/generate_mips.hlsl"
     "${SHADER_SRC_DIR}/clas/prepare_indirect.hlsl"
+    "${SHADER_SRC_DIR}/clas/hierarchy_traversal.hlsl"
 )
 set_property(SOURCE 
     "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
@@ -279,6 +280,7 @@ set_property(SOURCE
     "${SHADER_SRC_DIR}/clas/get_blas_address_offset.hlsl"
     "${SHADER_SRC_DIR}/tex/generate_mips.hlsl"
     "${SHADER_SRC_DIR}/clas/prepare_indirect.hlsl"
+    "${SHADER_SRC_DIR}/clas/hierarchy_traversal.hlsl"
     PROPERTY name "cs")
 
 file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")

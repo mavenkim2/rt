@@ -134,6 +134,7 @@ struct NumPushConstant
 };
 
 #define CHILDREN_PER_HIERARCHY_NODE 4
+#define CHILDREN_PER_HIERARCHY_NODE_BITS 2
 
 struct PackedHierarchyNode
 {
