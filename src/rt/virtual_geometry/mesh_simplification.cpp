@@ -1330,6 +1330,7 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
     return maxError;
 }
 
+#if 0
 struct KDTreeNode
 {
     union
@@ -1500,6 +1501,7 @@ void MeshSimplifier::BuildKDTree(Bounds bounds, u32 start, u32 count)
     BuildKDTree(leftBounds, start, leftCount);
     BuildKDTree(rightBounds, start + leftCount, rightCount);
 }
+#endif
 
 void MeshSimplifier::Finalize(u32 &finalNumVertices, u32 &finalNumIndices)
 {
@@ -2054,6 +2056,8 @@ struct HierarchyNode
     Vec4f lodBounds[CHILDREN_PER_HIERARCHY_NODE];
     f32 maxParentError[CHILDREN_PER_HIERARCHY_NODE];
     HierarchyNode *children;
+
+    u32 partIndices[CHILDREN_PER_HIERARCHY_NODE];
     u32 numChildren;
 };
 
@@ -2062,6 +2066,7 @@ struct GroupPart
     u32 groupIndex;
     u32 clusterStartIndex;
     u32 clusterCount;
+    u32 pageIndex;
 };
 
 HierarchyNode BuildHierarchy(Arena *arena, const Array<Cluster> &clusters,
@@ -2086,8 +2091,8 @@ HierarchyNode BuildHierarchy(Arena *arena, const Array<Cluster> &clusters,
         heuristic.FlushState(split);
 
         HierarchyNode node;
-        node.numChildren   = record.count;
-        f32 maxParentError = 0.f;
+        node.children    = 0;
+        node.numChildren = record.count;
 
         for (int i = 0; i < record.count; i++)
         {
@@ -2095,13 +2100,13 @@ HierarchyNode BuildHierarchy(Arena *arena, const Array<Cluster> &clusters,
             u32 partID                = ref.primID;
             u32 groupID               = parts[partID].groupIndex;
             const ClusterGroup &group = clusterGroups[groupID];
-            maxParentError            = Max(maxParentError, group.maxParentError);
             Vec4f lodBounds           = group.lodBounds;
 
             node.bounds[i]         = Bounds(Lane4F32(-ref.minX, -ref.minY, -ref.minZ, 0.f),
                                             Lane4F32(ref.maxX, ref.maxY, ref.maxZ, 0.f));
             node.lodBounds[i]      = lodBounds;
-            node.maxParentError[i] = maxParentError;
+            node.partIndices[i]    = partID;
+            node.maxParentError[i] = group.maxParentError;
         }
 
         node.children = 0;
@@ -2472,7 +2477,7 @@ void CreateClusters(Mesh &mesh, string filename)
             });
 
             GraphPartitionResult partitionResult;
-            if (numClusters < maxGroupSize)
+            if (numClusters <= maxGroupSize)
             {
                 partitionResult.ranges = StaticArray<Range>(scratch.temp.arena, 1);
                 partitionResult.clusterIndices =
@@ -2963,31 +2968,33 @@ void CreateClusters(Mesh &mesh, string filename)
     StaticArray<GroupPart> parts(scratch.temp.arena, clusters.Length());
     StaticArray<PageInfo> pageInfos(scratch.temp.arena, clusterGroups.Length() * 4);
 
-    auto GetGeoByteSize = [&](ClusterGroup &group, int clusterGroupIndex) {
-        int clusterIndex                   = group.headerOffset + clusterGroupIndex;
-        u8 *geoByteData                    = geoByteDatasBuffer[group.buildDataIndex];
-        PackedDenseGeometryHeader *headers = headersBuffer[group.buildDataIndex];
-        u32 numClusters                    = buildDatas[group.buildDataIndex].headers.Length();
-        return (clusterIndex == numClusters - 1
-                    ? buildDatas[group.buildDataIndex].geoByteBuffer.Length()
-                    : headers[clusterIndex + 1].a) -
-               headers[clusterIndex].a;
+    auto GetGeoByteSize = [&](int headerIndex, int buildDataIndex) {
+        u8 *geoByteData                    = geoByteDatasBuffer[buildDataIndex];
+        PackedDenseGeometryHeader *headers = headersBuffer[buildDataIndex];
+        u32 numHeaders                     = buildDatas[buildDataIndex].headers.Length();
+        Assert(headerIndex < numHeaders);
+        return (headerIndex == numHeaders - 1
+                    ? buildDatas[buildDataIndex].geoByteBuffer.Length()
+                    : headers[headerIndex + 1].a) -
+               headers[headerIndex].a;
     };
 
-    auto GetShadByteSize = [&](ClusterGroup &group, int clusterGroupIndex) {
-        int clusterIndex                   = group.headerOffset + clusterGroupIndex;
-        u8 *shadingByteData                = shadingByteDatasBuffer[group.buildDataIndex];
-        PackedDenseGeometryHeader *headers = headersBuffer[group.buildDataIndex];
-        u32 numClusters                    = buildDatas[group.buildDataIndex].headers.Length();
-        return (clusterIndex == numClusters - 1
-                    ? buildDatas[group.buildDataIndex].shadingByteBuffer.Length()
-                    : headers[clusterIndex + 1].z) -
-               headers[clusterIndex].z;
+    auto GetShadByteSize = [&](int headerIndex, int buildDataIndex) {
+        u8 *shadingByteData                = shadingByteDatasBuffer[buildDataIndex];
+        PackedDenseGeometryHeader *headers = headersBuffer[buildDataIndex];
+        u32 numHeaders                     = buildDatas[buildDataIndex].headers.Length();
+        Assert(headerIndex < numHeaders);
+        return (headerIndex == numHeaders - 1
+                    ? buildDatas[buildDataIndex].shadingByteBuffer.Length()
+                    : headers[headerIndex + 1].z) -
+               headers[headerIndex].z;
     };
 
     for (int groupIndex = 0; groupIndex < clusterGroups.Length(); groupIndex++)
     {
-        ClusterGroup &group  = clusterGroups[groupIndex];
+        ClusterGroup &group = clusterGroups[groupIndex];
+        if (group.isLeaf) continue;
+
         group.pageStartIndex = pageInfos.Length();
 
         DenseGeometryBuildData &buildData  = buildDatas[group.buildDataIndex];
@@ -3001,8 +3008,14 @@ void CreateClusters(Mesh &mesh, string filename)
             u32 clusterMetadataSize =
                 ((numClustersInPage + 1) * clusterHeaderBitSize + 7) >> 3;
 
-            u32 geoByteSize  = GetGeoByteSize(group, clusterGroupIndex);
-            u32 shadByteSize = GetShadByteSize(group, clusterGroupIndex);
+            ClusterGroup &childGroup =
+                clusterGroups[clusters[group.clusterStartIndex + clusterGroupIndex]
+                                  .childGroupIndex];
+            int buildDataIndex = childGroup.buildDataIndex;
+            u32 geoByteSize =
+                GetGeoByteSize(childGroup.headerOffset + clusterGroupIndex, buildDataIndex);
+            u32 shadByteSize =
+                GetShadByteSize(childGroup.headerOffset + clusterGroupIndex, buildDataIndex);
 
             u32 totalSize = sizeof(ClusterPageHeader) + clusterMetadataSize +
                             currentGeoBufferSize + currentShadingBufferSize + geoByteSize +
@@ -3017,6 +3030,7 @@ void CreateClusters(Mesh &mesh, string filename)
                     part.groupIndex        = groupIndex;
                     part.clusterStartIndex = clusterStartIndex;
                     part.clusterCount      = clusterGroupIndex - clusterStartIndex;
+                    part.pageIndex         = pageInfos.Length();
 
                     parts.Push(part);
                     clusterStartIndex = clusterGroupIndex;
@@ -3043,6 +3057,7 @@ void CreateClusters(Mesh &mesh, string filename)
         part.groupIndex        = groupIndex;
         part.clusterStartIndex = clusterStartIndex;
         part.clusterCount      = group.clusterCount - clusterStartIndex;
+        part.pageIndex         = pageInfos.Length();
 
         parts.Push(part);
     }
@@ -3069,7 +3084,11 @@ void CreateClusters(Mesh &mesh, string filename)
                  clusterGroupIndex < part.clusterStartIndex + part.clusterCount;
                  clusterGroupIndex++)
             {
-                u32 geoByteSize = GetGeoByteSize(group, clusterGroupIndex);
+                ClusterGroup &childGroup =
+                    clusterGroups[clusters[group.clusterStartIndex + clusterGroupIndex]
+                                      .childGroupIndex];
+                u32 geoByteSize = GetGeoByteSize(childGroup.headerOffset + clusterGroupIndex,
+                                                 childGroup.buildDataIndex);
                 currentGeoOffset += geoByteSize;
             }
         }
@@ -3094,9 +3113,11 @@ void CreateClusters(Mesh &mesh, string filename)
                  clusterGroupIndex < part.clusterStartIndex + part.clusterCount;
                  clusterGroupIndex++)
             {
-                int clusterIndex = group.clusterStartIndex + clusterGroupIndex;
-                int headerIndex  = group.headerOffset + clusterGroupIndex;
-                Cluster &cluster = clusters[clusterIndex];
+                int clusterIndex         = group.clusterStartIndex + clusterGroupIndex;
+                Cluster &cluster         = clusters[clusterIndex];
+                ClusterGroup &childGroup = clusterGroups[cluster.childGroupIndex];
+                int headerIndex          = childGroup.headerOffset + clusterGroupIndex;
+                int buildDataIndex       = childGroup.buildDataIndex;
 
                 PackedDenseGeometryHeader header = headers[headerIndex];
                 header.z                         = currentShadOffset;
@@ -3118,8 +3139,8 @@ void CreateClusters(Mesh &mesh, string filename)
                            &cluster.lodError, sizeof(float));
                 currentPageOffset += sizeof(Vec4u);
 
-                currentGeoOffset += GetGeoByteSize(group, clusterIndex);
-                currentShadOffset += GetShadByteSize(group, clusterIndex);
+                currentGeoOffset += GetGeoByteSize(headerIndex, buildDataIndex);
+                currentShadOffset += GetShadByteSize(headerIndex, buildDataIndex);
             }
         }
 
@@ -3128,17 +3149,24 @@ void CreateClusters(Mesh &mesh, string filename)
         for (int partIndex = pageInfo.partStartIndex;
              partIndex < pageInfo.partStartIndex + pageInfo.partCount; partIndex++)
         {
-            GroupPart &part                    = parts[partIndex];
-            ClusterGroup &group                = clusterGroups[part.groupIndex];
-            u8 *geoByteData                    = geoByteDatasBuffer[group.buildDataIndex];
-            PackedDenseGeometryHeader *headers = headersBuffer[group.buildDataIndex];
+            GroupPart &part     = parts[partIndex];
+            ClusterGroup &group = clusterGroups[part.groupIndex];
 
             for (int clusterGroupIndex = part.clusterStartIndex;
                  clusterGroupIndex < part.clusterStartIndex + part.clusterCount;
                  clusterGroupIndex++)
             {
-                u32 geoByteSize = GetGeoByteSize(group, clusterGroupIndex);
-                u32 geoOffset   = headers[group.headerOffset + clusterGroupIndex].a;
+                int clusterIndex = group.clusterStartIndex + clusterGroupIndex;
+                ClusterGroup &childGroup =
+                    clusterGroups[clusters[clusterIndex].childGroupIndex];
+                int headerIndex    = childGroup.headerOffset + clusterGroupIndex;
+                int buildDataIndex = childGroup.buildDataIndex;
+
+                PackedDenseGeometryHeader &header = headersBuffer[buildDataIndex][headerIndex];
+                u8 *geoByteData                   = geoByteDatasBuffer[buildDataIndex];
+
+                u32 geoByteSize = GetGeoByteSize(headerIndex, buildDataIndex);
+                u32 geoOffset   = header.a;
 
                 MemoryCopy(ptr + currentPageOffset, geoByteData + geoOffset, geoByteSize);
                 currentPageOffset += geoByteSize;
@@ -3150,17 +3178,24 @@ void CreateClusters(Mesh &mesh, string filename)
         for (int partIndex = pageInfo.partStartIndex;
              partIndex < pageInfo.partStartIndex + pageInfo.partCount; partIndex++)
         {
-            GroupPart &part                    = parts[partIndex];
-            ClusterGroup &group                = clusterGroups[part.groupIndex];
-            u8 *shadingByteData                = shadingByteDatasBuffer[group.buildDataIndex];
-            PackedDenseGeometryHeader *headers = headersBuffer[group.buildDataIndex];
+            GroupPart &part     = parts[partIndex];
+            ClusterGroup &group = clusterGroups[part.groupIndex];
 
             for (int clusterGroupIndex = part.clusterStartIndex;
                  clusterGroupIndex < part.clusterStartIndex + part.clusterCount;
                  clusterGroupIndex++)
             {
-                u32 shadByteSize = GetShadByteSize(group, clusterGroupIndex);
-                u32 shadOffset   = headers[group.headerOffset + clusterGroupIndex].z;
+                int clusterIndex = group.clusterStartIndex + clusterGroupIndex;
+                ClusterGroup &childGroup =
+                    clusterGroups[clusters[clusterIndex].childGroupIndex];
+                int headerIndex    = childGroup.headerOffset + clusterGroupIndex;
+                int buildDataIndex = childGroup.buildDataIndex;
+
+                PackedDenseGeometryHeader &header = headersBuffer[buildDataIndex][headerIndex];
+                u8 *shadingByteData               = geoByteDatasBuffer[buildDataIndex];
+
+                u32 shadByteSize = GetShadByteSize(headerIndex, buildDataIndex);
+                u32 shadOffset   = header.z;
 
                 MemoryCopy(ptr + currentPageOffset, shadingByteData + shadOffset,
                            shadByteSize);
@@ -3176,9 +3211,6 @@ void CreateClusters(Mesh &mesh, string filename)
         (ClusterFileHeader *)GetMappedPtr(&builder, fileHeaderOffset);
     fileHeader->magic    = CLUSTER_FILE_MAGIC;
     fileHeader->numPages = pageInfos.Length();
-
-    OS_UnmapFile(builder.ptr);
-    OS_ResizeFile(builder.filename, builder.totalSize);
 
     // Build hierarchies over cluster groups
     PrimRef *hierarchyPrimRefs = PushArrayNoZero(scratch.temp.arena, PrimRef, parts.Length());
@@ -3234,7 +3266,10 @@ void CreateClusters(Mesh &mesh, string filename)
     // Flatten tree to array
     StaticArray<PackedHierarchyNode> hierarchy(arena, numNodes);
     PackedHierarchyNode rootPacked;
-    rootPacked.numChildren = rootNode.numChildren;
+    for (int i = 0; i < CHILDREN_PER_HIERARCHY_NODE; i++)
+    {
+        rootPacked.childOffset[i] = ~0u;
+    }
     for (int i = 0; i < rootNode.numChildren; i++)
     {
         rootPacked.lodBounds[i]      = rootNode.lodBounds[i];
@@ -3244,16 +3279,23 @@ void CreateClusters(Mesh &mesh, string filename)
 
     struct StackEntry
     {
-        HierarchyNode *children;
-        u32 numChildren;
+        HierarchyNode node;
+
         u32 parentIndex;
+        u32 childIndex;
     };
 
     StaticArray<StackEntry> stack(scratch.temp.arena, 128);
-    StackEntry root;
-    root.children    = rootNode.children;
-    root.numChildren = rootNode.numChildren;
-    root.parentIndex = 0;
+
+    for (int i = 0; i < rootNode.numChildren; i++)
+    {
+        StackEntry root;
+        root.node        = rootNode.children[i];
+        root.parentIndex = 0;
+        root.childIndex  = i;
+
+        stack.Push(root);
+    }
 
     // interesting idea:
     // 1. create a bounding sphere/aabb hierarchy over instances. the leaves contain instance
@@ -3276,8 +3318,6 @@ void CreateClusters(Mesh &mesh, string filename)
     // so if the instance is outside the frustum or occluded, and wasn't intersected, then it
     // should be removed
 
-    stack.Push(root);
-
     for (;;)
     {
         if (stack.Length() == 0) break;
@@ -3286,41 +3326,51 @@ void CreateClusters(Mesh &mesh, string filename)
         u32 childOffset = hierarchy.Length();
         u32 parentIndex = entry.parentIndex;
 
-        hierarchy[parentIndex].childOffset = childOffset;
+        hierarchy[parentIndex].childOffset[entry.childIndex] = childOffset;
 
-        for (int i = 0; i < entry.numChildren; i++)
+        HierarchyNode &child = entry.node;
+        PackedHierarchyNode packed;
+        for (int i = 0; i < CHILDREN_PER_HIERARCHY_NODE; i++)
         {
-            HierarchyNode &child = entry.children[i];
-            if (child.numChildren)
+            packed.childOffset[i] = ~0u;
+        }
+        for (int i = 0; i < child.numChildren; i++)
+        {
+            packed.lodBounds[i]      = child.lodBounds[i];
+            packed.maxParentError[i] = child.maxParentError[i];
+
+            if (child.children)
             {
                 StackEntry newEntry;
-                newEntry.children    = child.children;
-                newEntry.numChildren = child.numChildren;
-                newEntry.parentIndex = childOffset + i;
+                newEntry.node        = child.children[i];
+                newEntry.parentIndex = childOffset;
+                newEntry.childIndex  = i;
                 stack.Push(newEntry);
             }
-
-            PackedHierarchyNode packed;
-            packed.childOffset = 0;
-            packed.numChildren = child.numChildren;
-            for (int j = 0; j < child.numChildren; j++)
+            else
             {
-                packed.lodBounds[j]      = child.lodBounds[j];
-                packed.maxParentError[j] = child.maxParentError[j];
+                u32 partIndex         = child.partIndices[i];
+                GroupPart &part       = parts[partIndex];
+                packed.childOffset[i] = (part.pageIndex << 10) |
+                                        (part.clusterStartIndex << 5) |
+                                        (part.clusterCount - 1);
             }
-
-            hierarchy.Push(packed);
         }
+
+        hierarchy.Push(packed);
     }
 
     Assert(hierarchy.Length() == numNodes);
 
     // Write hierarchy to disk
-    // u64 hierarchyOffset =
-    //     AllocateSpace(&builder, sizeof(PackedHierarchyNode) * numNodes + sizeof(u32));
-    // u8 *ptr = (u8 *)GetMappedPtr(&builder, hierarchyOffset);
-    // MemoryCopy(ptr, &numNodes, sizeof(u32));
-    // MemoryCopy(ptr + sizeof(u32), hierarchy.data, sizeof(PackedHierarchyNode) * numNodes);
+    u64 hierarchyOffset =
+        AllocateSpace(&builder, sizeof(PackedHierarchyNode) * numNodes + sizeof(u32));
+    u8 *ptr = (u8 *)GetMappedPtr(&builder, hierarchyOffset);
+    MemoryCopy(ptr, &numNodes, sizeof(u32));
+    MemoryCopy(ptr + sizeof(u32), hierarchy.data, sizeof(PackedHierarchyNode) * numNodes);
+
+    OS_UnmapFile(builder.ptr);
+    OS_ResizeFile(builder.filename, builder.totalSize);
 }
 
 #if 0

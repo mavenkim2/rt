@@ -139,8 +139,7 @@ struct PackedHierarchyNode
 {
     float4 lodBounds[CHILDREN_PER_HIERARCHY_NODE];
     float maxParentError[CHILDREN_PER_HIERARCHY_NODE];
-    uint childOffset;
-    uint numChildren;
+    uint childOffset[CHILDREN_PER_HIERARCHY_NODE];
 };
 
 #define GLOBALS_VERTEX_BUFFER_OFFSET_INDEX 0
