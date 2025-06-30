@@ -200,4 +200,9 @@ float Luminance(float3 rgb)
     return dot(float3(0.2126f, 0.7152f, 0.0722f), rgb);
 }
 
+float length2(float3 v)
+{
+    return dot(v, v);
+}
+
 #endif

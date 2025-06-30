@@ -1,22 +1,29 @@
 #include "../../rt/shader_interop/as_shaderinterop.h"
+#include "../../rt/shader_interop/hierarchy_traversal_shaderinterop.h"
 
-StructuredBuffer<DecodeClusterData> decodeClusterDatas : register(t0);
-RWStructuredBuffer<BLASData> blasDatas : register(u1);
+StructuredBuffer<uint> globals : register(t0);
+StructuredBuffer<VisibleCluster> visibleClusters : register(t1);
+RWStructuredBuffer<BLASData> blasDatas : register(u2);
 
-StructuredBuffer<uint64_t> inputAddressArray : register(t2);
-RWStructuredBuffer<uint64_t> blasAddressArray : register(u3);
+StructuredBuffer<uint64_t> inputAddressArray : register(t3);
+RWStructuredBuffer<uint64_t> blasAddressArray : register(u4);
 
-[[vk::push_constant]] NumPushConstant pc;
+StructuredBuffer<CLASPageInfo> clasPageInfos : register(t5);
 
 [numthreads(32, 1, 1)]
-void main(uint3 dispatchThreadID : SV_DispatchThreadID)
+void main(uint3 dtID : SV_DispatchThreadID)
 {
-    if (dispatchThreadID.x >= pc.num) return;
+    if (dtID.x >= globals[GLOBALS_CLAS_COUNT_INDEX]) return;
 
-    uint blasIndex = 0;
+    VisibleCluster visibleCluster = visibleClusters[dtID.x];
+    CLASPageInfo clasPageInfo = clasPageInfos[visibleCluster.pageIndex];
+
+    uint blasIndex = visibleCluster.blasIndex;
     uint destIndex;
     InterlockedAdd(blasDatas[blasIndex].clusterCount, 1, destIndex);
 
     destIndex += blasDatas[blasIndex].clusterStartIndex;
-    blasAddressArray[destIndex] = inputAddressArray[dispatchThreadID.x];
+    
+    uint addressIndex = clasPageInfo.addressStartIndex + visibleCluster.clusterIndex;
+    blasAddressArray[destIndex] = inputAddressArray[addressIndex];
 }

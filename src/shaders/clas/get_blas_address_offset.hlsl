@@ -3,13 +3,11 @@
 RWStructuredBuffer<BLASData> blasDatas : register(u0);
 RWStructuredBuffer<uint> globals : register(u1);
 
-[[vk::push_constant]] NumPushConstant pc;
-
 [numthreads(32, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
 {
     uint blasIndex = DTid.x;
-    if (blasIndex >= pc.num) return;
+    if (blasIndex >= globals[GLOBALS_BLAS_COUNT_INDEX]) return;
 
     uint clasStartIndex;
     InterlockedAdd(globals[GLOBALS_BLAS_CLAS_COUNT_INDEX], blasDatas[blasIndex].clusterCount, clasStartIndex);

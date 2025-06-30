@@ -7,6 +7,7 @@
 #include "gpu_scene.h"
 #include "math/simd_base.h"
 #include "radix_sort.h"
+#include "shader_interop/hierarchy_traversal_shaderinterop.h"
 #include "string.h"
 #include "memory.h"
 #include "parallel.h"
@@ -184,6 +185,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     Shader fillClusterTriangleInfoShader;
     Shader fillInstanceShader;
     Shader getBlasAddressOffsetShader;
+    Shader instanceCullingShader;
     Shader prepareIndirectShader;
 
     RayTracingShaderGroup groups[3];
@@ -244,6 +246,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         getBlasAddressOffsetShader      = device->CreateShader(
             ShaderStage::Compute, "get blas address offset", getBlasAddressOffsetData);
 
+        string instanceCullingShaderName = "../src/shaders/instance_culling.spv";
+        string instanceCullingShaderData = OS_ReadFile(arena, instanceCullingShaderName);
+        instanceCullingShader = device->CreateShader(ShaderStage::Compute, "instance culling",
+                                                     instanceCullingShaderData);
+
         string prepareIndirectName = "../src/shaders/prepare_indirect.spv";
         string prepareIndirectData = OS_ReadFile(arena, prepareIndirectName);
         prepareIndirectShader = device->CreateShader(ShaderStage::Compute, "prepare indirect",
@@ -270,11 +277,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     // fill blas address array
     DescriptorSetLayout fillBlasAddressArrayLayout = {};
-    PushConstant fillBlasAddressArrayPush;
-    fillBlasAddressArrayPush.stage  = ShaderStage::Compute;
-    fillBlasAddressArrayPush.size   = 4;
-    fillBlasAddressArrayPush.offset = 0;
-
     fillBlasAddressArrayLayout.AddBinding(0, DescriptorType::StorageBuffer,
                                           VK_SHADER_STAGE_COMPUTE_BIT);
     fillBlasAddressArrayLayout.AddBinding(1, DescriptorType::StorageBuffer,
@@ -283,16 +285,15 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                           VK_SHADER_STAGE_COMPUTE_BIT);
     fillBlasAddressArrayLayout.AddBinding(3, DescriptorType::StorageBuffer,
                                           VK_SHADER_STAGE_COMPUTE_BIT);
+    fillBlasAddressArrayLayout.AddBinding(4, DescriptorType::StorageBuffer,
+                                          VK_SHADER_STAGE_COMPUTE_BIT);
+    fillBlasAddressArrayLayout.AddBinding(5, DescriptorType::StorageBuffer,
+                                          VK_SHADER_STAGE_COMPUTE_BIT);
 
     VkPipeline fillBlasAddressArrayPipeline = device->CreateComputePipeline(
-        &fillBlasAddressArrayShader, &fillBlasAddressArrayLayout, &fillBlasAddressArrayPush);
+        &fillBlasAddressArrayShader, &fillBlasAddressArrayLayout);
 
     // fill cluster bottom level info
-    PushConstant fillClusterBLASInfoPush = {};
-    fillClusterBLASInfoPush.stage        = ShaderStage::Compute;
-    fillClusterBLASInfoPush.size         = sizeof(FillClusterBottomLevelInfoPushConstant);
-    fillClusterBLASInfoPush.offset       = 0;
-
     DescriptorSetLayout fillClusterBLASInfoLayout = {};
     fillClusterBLASInfoLayout.AddBinding(0, DescriptorType::StorageBuffer,
                                          VK_SHADER_STAGE_COMPUTE_BIT);
@@ -300,8 +301,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                          VK_SHADER_STAGE_COMPUTE_BIT);
     fillClusterBLASInfoLayout.AddBinding(2, DescriptorType::StorageBuffer,
                                          VK_SHADER_STAGE_COMPUTE_BIT);
-    VkPipeline fillClusterBLASInfoPipeline = device->CreateComputePipeline(
-        &fillClusterBLASInfoShader, &fillClusterBLASInfoLayout, &fillClusterBLASInfoPush);
+    VkPipeline fillClusterBLASInfoPipeline =
+        device->CreateComputePipeline(&fillClusterBLASInfoShader, &fillClusterBLASInfoLayout);
 
     // fill cluster triangle info
     PushConstant fillClusterTriangleInfoPush;
@@ -340,18 +341,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         &fillInstanceShader, &fillInstanceLayout, &fillInstanceDescsPush);
 
     // get blas address offset
-    PushConstant getBlasAddressOffsetPush = {};
-    getBlasAddressOffsetPush.stage        = ShaderStage::Compute;
-    getBlasAddressOffsetPush.size         = 4;
-    getBlasAddressOffsetPush.offset       = 0;
-
     DescriptorSetLayout getBlasAddressOffsetLayout = {};
     getBlasAddressOffsetLayout.AddBinding(0, DescriptorType::StorageBuffer,
                                           VK_SHADER_STAGE_COMPUTE_BIT);
     getBlasAddressOffsetLayout.AddBinding(1, DescriptorType::StorageBuffer,
                                           VK_SHADER_STAGE_COMPUTE_BIT);
     VkPipeline getBlasAddressOffsetPipeline = device->CreateComputePipeline(
-        &getBlasAddressOffsetShader, &getBlasAddressOffsetLayout, &getBlasAddressOffsetPush);
+        &getBlasAddressOffsetShader, &getBlasAddressOffsetLayout);
 
     // prepare indirect
     DescriptorSetLayout prepareIndirectLayout = {};
@@ -359,6 +355,23 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                      VK_SHADER_STAGE_COMPUTE_BIT);
     VkPipeline prepareIndirectPipeline =
         device->CreateComputePipeline(&prepareIndirectShader, &prepareIndirectLayout);
+
+    // instance culling
+    PushConstant instanceCullingPush = {};
+    instanceCullingPush.stage        = ShaderStage::Compute;
+    instanceCullingPush.size         = 4;
+    instanceCullingPush.offset       = 0;
+
+    DescriptorSetLayout instanceCullingLayout = {};
+    instanceCullingLayout.AddBinding(0, DescriptorType::StorageBuffer,
+                                     VK_SHADER_STAGE_COMPUTE_BIT);
+    instanceCullingLayout.AddBinding(1, DescriptorType::StorageBuffer,
+                                     VK_SHADER_STAGE_COMPUTE_BIT);
+    instanceCullingLayout.AddBinding(2, DescriptorType::StorageBuffer,
+                                     VK_SHADER_STAGE_COMPUTE_BIT);
+
+    VkPipeline instanceCullingPipeline = device->CreateComputePipeline(
+        &instanceCullingShader, &instanceCullingLayout, &instanceCullingPush);
 
     Swapchain swapchain = device->CreateSwapchain(params->window, VK_FORMAT_R8G8B8A8_SRGB,
                                                   params->width, params->height);
@@ -373,6 +386,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     GPUScene gpuScene;
     gpuScene.cameraFromRaster = params->cameraFromRaster;
     gpuScene.renderFromCamera = params->renderFromCamera;
+    gpuScene.cameraFromRender = params->cameraFromRender;
     gpuScene.lightFromRender  = params->lightFromRender;
     gpuScene.dxCamera         = params->dxCamera;
     gpuScene.lensRadius       = params->lensRadius;
@@ -740,7 +754,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Copy);
     TransferBuffer clusterPageDataBuffer =
         dgfTransferCmd->SubmitBuffer(tokenizer.cursor, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                     clusterPageData.size - sizeof(ClusterFileHeader));
+                                     clusterFileHeader.numPages * CLUSTER_PAGE_SIZE);
 
     Semaphore sem   = device->CreateSemaphore();
     sem.signalValue = 1;
@@ -794,6 +808,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
         sizeof(BUILD_CLUSTERS_BOTTOM_LEVEL_INFO) * numBlas);
+    GPUBuffer clasPageInfoBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(CLASPageInfo) * clusterFileHeader.numPages);
 
     u64 indexBufferAddress  = device->GetDeviceAddress(indexBuffer.buffer);
     u64 vertexBufferAddress = device->GetDeviceAddress(vertexBuffer.buffer);
@@ -818,10 +834,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                        fillClusterTriangleInfoPipeline);
         DescriptorSet ds = fillClusterTriangleInfoLayout.CreateDescriptorSet();
         ds.Bind(&buildClusterTriangleInfoBuffer)
-            .Bind(&blasDataBuffer)
             .Bind(&decodeClusterDataBuffer)
             .Bind(&clasGlobalsBuffer)
-            .Bind(&clusterPageDataBuffer.buffer);
+            .Bind(&clusterPageDataBuffer.buffer)
+            .Bind(&clasPageInfoBuffer);
 
         allCommandBuffer->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                                              fillClusterTriangleInfoLayout.pipelineLayout);
@@ -834,25 +850,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                   VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 
-        allCommandBuffer->FlushBarriers();
-    }
-
-    {
-        // Prepare indirect args for later
-        allCommandBuffer->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
-                                       prepareIndirectPipeline);
-        DescriptorSet ds = prepareIndirectLayout.CreateDescriptorSet();
-        ds.Bind(&clasGlobalsBuffer);
-
-        allCommandBuffer->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
-                                             prepareIndirectLayout.pipelineLayout);
-        allCommandBuffer->Dispatch(1, 1, 1);
-        allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-        allCommandBuffer->Barrier(
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
-            VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
         allCommandBuffer->FlushBarriers();
     }
 
@@ -934,123 +931,59 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     u64 blasClasAddressBufferAddress = device->GetDeviceAddress(blasClasAddressBuffer.buffer);
     FillClusterBottomLevelInfoPushConstant pc;
-    pc.blasCount                = numBlas;
     pc.arrayBaseAddressLowBits  = blasClasAddressBufferAddress & (~0u);
     pc.arrayBaseAddressHighBits = blasClasAddressBufferAddress >> 32u;
 
-    {
-        // Calculate where clas addresses should be written for each blas
-        allCommandBuffer->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
-                                       getBlasAddressOffsetPipeline);
+    u32 clasBlasScratchSize, clasBlasAccelSize;
+    device->GetClusterBLASBuildSizes(maxWriteClusters, maxWriteClusters, 1,
+                                     clasBlasScratchSize, clasBlasAccelSize);
+    GPUBuffer clasBlasScratchBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        clasBlasScratchSize);
 
-        DescriptorSet ds = getBlasAddressOffsetLayout.CreateDescriptorSet();
-        ds.Bind(&blasDataBuffer).Bind(&clasGlobalsBuffer);
-        allCommandBuffer->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
-                                             getBlasAddressOffsetLayout.pipelineLayout);
-
-        allCommandBuffer->PushConstants(&getBlasAddressOffsetPush, &pc,
-                                        getBlasAddressOffsetLayout.pipelineLayout);
-
-        allCommandBuffer->Dispatch((numBlas + 31) / 32, 1, 1);
-        allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-        allCommandBuffer->FlushBarriers();
-    }
-
-    // Write the clas addresses to a new buffer
-    {
-        allCommandBuffer->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
-                                       fillBlasAddressArrayPipeline);
-        DescriptorSet ds = fillBlasAddressArrayLayout.CreateDescriptorSet();
-        ds.Bind(&decodeClusterDataBuffer)
-            .Bind(&blasDataBuffer)
-            .Bind(&clusterAccelAddresses)
-            .Bind(&blasClasAddressBuffer);
-
-        allCommandBuffer->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
-                                             fillBlasAddressArrayLayout.pipelineLayout);
-        allCommandBuffer->PushConstants(&fillBlasAddressArrayPush, &fillPc,
-                                        fillBlasAddressArrayLayout.pipelineLayout);
-        allCommandBuffer->DispatchIndirect(&clasGlobalsBuffer,
-                                           sizeof(u32) * GLOBALS_CLAS_INDIRECT_X);
-        allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-        allCommandBuffer->FlushBarriers();
-    }
-
-    {
-        // Fill out the BUILD_CLUSTERS_BOTTOM_LEVEL_INFO descriptors
-        allCommandBuffer->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
-                                       fillClusterBLASInfoPipeline);
-
-        DescriptorSet ds = fillClusterBLASInfoLayout.CreateDescriptorSet();
-        ds.Bind(&blasDataBuffer)
-            .Bind(&buildClusterBottomLevelInfoBuffer)
-            .Bind(&clasGlobalsBuffer);
-        allCommandBuffer->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
-                                             fillClusterBLASInfoLayout.pipelineLayout);
-
-        allCommandBuffer->PushConstants(&fillClusterBLASInfoPush, &pc,
-                                        fillClusterBLASInfoLayout.pipelineLayout);
-
-        allCommandBuffer->Dispatch((numBlas + 31) / 32, 1, 1);
-
-        allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                  VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                                  VK_ACCESS_2_SHADER_WRITE_BIT,
-                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
-                                      VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-        allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                                  VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-        allCommandBuffer->FlushBarriers();
-    }
-
-    {
-        // Build the BLASes
-        allCommandBuffer->BuildClusterBLAS(
-            &buildClusterBottomLevelInfoBuffer, &blasAccelAddresses, &blasAccelSizes,
-            &clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_COUNT_INDEX, maxWriteClusters);
-        allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                                  VK_ACCESS_2_SHADER_READ_BIT);
-        allCommandBuffer->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                                  VK_ACCESS_2_TRANSFER_READ_BIT);
-        allCommandBuffer->FlushBarriers();
-    }
+    GPUBuffer clasBlasImplicitBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
+        clasBlasAccelSize);
 
     // Build the TLAS over BLAS
+    StaticArray<GPUInstance> gpuInstances(sceneScratch.temp.arena, numInstances);
+    GPUBuffer tlasBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        numInstances * sizeof(VkAccelerationStructureInstanceKHR));
     {
-        GPUBuffer tlasBuffer;
         if (tlasScenes.Length() != 0)
         {
-            Assert(0);
-            // Assert(tlasScenes.Length() == 1);
-            // for (int i = 0; i < tlasScenes.Length(); i++)
-            // {
-            //     ScenePrimitives *scene = tlasScenes[i];
-            //     device->BeginEvent(allCommandBuffer, "TLAS Build");
-            //     Instance *instances = (Instance *)scene->primitives;
-            //     GPUAccelerationStructurePayload payload =
-            //         allCommandBuffer->BuildTLAS(instances, scene->numPrimitives,
-            //                                     scene->affineTransforms,
-            //                                     scene->childScenes);
-            //
-            //     scene->gpuBVH = payload.as;
-            //     tlas          = scene->gpuBVH;
-            //
-            //     tlasSemaphore.signalValue = 1;
-            //     allCommandBuffer->SignalOutsideFrame(tlasSemaphore);
-            // }
+            Assert(tlasScenes.Length() == 1);
+            for (int i = 0; i < tlasScenes.Length(); i++)
+            {
+                ScenePrimitives *scene = tlasScenes[i];
+                device->BeginEvent(allCommandBuffer, "TLAS Build");
+                Instance *instances = (Instance *)scene->primitives;
+                GPUAccelerationStructurePayload payload =
+                    allCommandBuffer->BuildTLAS(instances, scene->numPrimitives,
+                                                scene->affineTransforms, scene->childScenes);
+
+                scene->gpuBVH = payload.as;
+                tlas          = scene->gpuBVH;
+
+                tlasSemaphore.signalValue = 1;
+                allCommandBuffer->SignalOutsideFrame(tlasSemaphore);
+            }
         }
         else
         {
+            GPUInstance gpuInstance;
+            gpuInstance.objectToRender       = params->renderFromWorld;
+            gpuInstance.globalRootNodeOffset = 0;
+            gpuInstances.Push(gpuInstance);
+
             Assert(numInstances == 0);
             numInstances = 1;
             Assert(numScenes == 1);
@@ -1090,6 +1023,24 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         tlas = allCommandBuffer->BuildTLAS(&tlasBuffer, 1).as;
     }
+
+    TransferBuffer gpuInstancesBuffer =
+        allCommandBuffer->SubmitBuffer(gpuInstances.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                       sizeof(GPUInstance) * gpuInstances.Length());
+
+    // TODO: instance culling
+    Vec4u rootHierarchyNode = {};
+    rootHierarchyNode.x     = 0;
+    rootHierarchyNode.y     = 0;
+    rootHierarchyNode.z     = 0;
+
+    GPUBuffer hierarchyNodeBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                             VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                         MAX_CANDIDATE_NODES * sizeof(Vec4u));
+
+    GPUBuffer visibleClustersBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        MAX_VISIBLE_CLUSTERS * sizeof(VisibleCluster));
 
 #if 0
     // TODO: new command buffers have to wait on ones from the previous depth
@@ -1238,6 +1189,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(u32));
     GPUBuffer nvapiBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 256);
 
+    Semaphore frameSemaphore = device->CreateSemaphore();
     for (;;)
     {
         ScratchArena frameScratch;
@@ -1338,7 +1290,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         gpuScene.dispatchDimX = dispatchDimX;
         gpuScene.dispatchDimY = dispatchDimY;
 
-        device->BeginFrame();
+        device->BeginFrame(true);
 
         u32 frame       = device->GetCurrentBuffer();
         GPUImage *image = &images[frame];
@@ -1376,6 +1328,151 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         device->SubmitCommandBuffer(virtualTextureCopyCmd);
 
         cmd->ClearBuffer(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
+
+        // Virtual geometry pass
+        {
+            cmd->ClearBuffer(&visibleClustersBuffer, ~0u);
+            cmd->ClearBuffer(&clasGlobalsBuffer);
+
+            {
+                // Hierarchy traversal
+                device->BeginEvent(cmd, "Hierarchy Traversal");
+                device->EndEvent(cmd);
+            }
+            {
+                // Prepare indirect args
+                cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, prepareIndirectPipeline);
+                DescriptorSet ds = prepareIndirectLayout.CreateDescriptorSet();
+                ds.Bind(&clasGlobalsBuffer);
+
+                cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
+                                        prepareIndirectLayout.pipelineLayout);
+                cmd->Dispatch(1, 1, 1);
+                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                             VK_ACCESS_2_SHADER_WRITE_BIT,
+                             VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+                cmd->FlushBarriers();
+            }
+            {
+                // Calculate where clas addresses should be written for each blas
+                cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
+                                  getBlasAddressOffsetPipeline);
+
+                DescriptorSet ds = getBlasAddressOffsetLayout.CreateDescriptorSet();
+                ds.Bind(&blasDataBuffer).Bind(&clasGlobalsBuffer);
+                cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
+                                        getBlasAddressOffsetLayout.pipelineLayout);
+
+                cmd->DispatchIndirect(&clasGlobalsBuffer,
+                                      sizeof(u32) * GLOBALS_BLAS_INDIRECT_X);
+                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+                cmd->FlushBarriers();
+            }
+            {
+                // Write the clas addresses to a new buffer
+                cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
+                                  fillBlasAddressArrayPipeline);
+                DescriptorSet ds = fillBlasAddressArrayLayout.CreateDescriptorSet();
+                ds.Bind(&clasGlobalsBuffer)
+                    .Bind(&visibleClustersBuffer)
+                    .Bind(&blasDataBuffer)
+                    .Bind(&clusterAccelAddresses)
+                    .Bind(&blasClasAddressBuffer)
+                    .Bind(&clasPageInfoBuffer);
+
+                cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
+                                        fillBlasAddressArrayLayout.pipelineLayout);
+                cmd->DispatchIndirect(&clasGlobalsBuffer,
+                                      sizeof(u32) * GLOBALS_CLAS_INDIRECT_X);
+                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+                cmd->FlushBarriers();
+            }
+            {
+                // Fill out the BUILD_CLUSTERS_BOTTOM_LEVEL_INFO descriptors
+                cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, fillClusterBLASInfoPipeline);
+
+                DescriptorSet ds = fillClusterBLASInfoLayout.CreateDescriptorSet();
+                ds.Bind(&blasDataBuffer)
+                    .Bind(&buildClusterBottomLevelInfoBuffer)
+                    .Bind(&clasGlobalsBuffer);
+                cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
+                                        fillClusterBLASInfoLayout.pipelineLayout);
+
+                cmd->DispatchIndirect(&clasGlobalsBuffer,
+                                      sizeof(u32) * GLOBALS_BLAS_INDIRECT_X);
+
+                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                             VK_ACCESS_2_SHADER_WRITE_BIT,
+                             VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                                 VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+                cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                             VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                             VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+                cmd->FlushBarriers();
+            }
+
+            {
+                // Build the BLASes
+                device->BeginEvent(cmd, "Build BLAS");
+                cmd->BuildClusterBLAS(&clasBlasImplicitBuffer, &clasBlasScratchBuffer,
+                                      &buildClusterBottomLevelInfoBuffer, &blasAccelAddresses,
+                                      &blasAccelSizes, &clasGlobalsBuffer,
+                                      sizeof(u32) * GLOBALS_BLAS_COUNT_INDEX, maxWriteClusters,
+                                      1);
+                cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                             VK_ACCESS_2_SHADER_READ_BIT);
+                cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                             VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                             VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                             VK_ACCESS_2_TRANSFER_READ_BIT);
+                cmd->FlushBarriers();
+                device->EndEvent(cmd);
+            }
+            {
+                // Prepare instance descriptors for TLAS build
+                device->BeginEvent(cmd, "Prepare TLAS");
+                cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, fillInstancePipeline);
+
+                DescriptorSet ds = fillInstanceLayout.CreateDescriptorSet();
+                ds.Bind(&blasAccelAddresses)
+                    .Bind(&clasGlobalsBuffer)
+                    .Bind(&blasDataBuffer)
+                    .Bind(&gpuInstancesBuffer.buffer)
+                    .Bind(&tlasBuffer);
+                cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
+                                        fillInstanceLayout.pipelineLayout);
+
+                cmd->DispatchIndirect(&clasGlobalsBuffer,
+                                      sizeof(u32) * GLOBALS_BLAS_INDIRECT_X);
+                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                             VK_ACCESS_2_SHADER_WRITE_BIT,
+                             VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+                cmd->FlushBarriers();
+
+                tlas = cmd->BuildTLAS(&tlasBuffer, 1).as;
+                device->EndEvent(cmd);
+            }
+            {
+                // TODO: partitioned TLAS
+                // Build the TLAS
+                device->BeginEvent(cmd, "Build TLAS");
+                // tlas = cmd->BuildTLAS(&tlasBuffer);
+                device->EndEvent(cmd);
+            }
+        }
 
         RayPushConstant pc;
         pc.envMap   = envMapBindlessIndex;

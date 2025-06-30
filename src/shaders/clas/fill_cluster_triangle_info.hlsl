@@ -1,11 +1,12 @@
 #include "../../rt/shader_interop/as_shaderinterop.h"
+#include "../../rt/shader_interop/hierarchy_traversal_shaderinterop.h"
 #include "../wave_intrinsics.hlsli"
 #include "../dense_geometry.hlsli"
 
 RWStructuredBuffer<BUILD_CLUSTERS_TRIANGLE_INFO> buildClusterTriangleInfos : register(u0);
-RWStructuredBuffer<BLASData> blasDatas : register(u1);
-RWStructuredBuffer<DecodeClusterData> decodeClusterDatas : register(u2);
-RWStructuredBuffer<uint> globals : register(u3);
+RWStructuredBuffer<DecodeClusterData> decodeClusterDatas : register(u1);
+RWStructuredBuffer<uint> globals : register(u2);
+RWStructuredBuffer<CLASPageInfo> clasPageInfos : register(u3);
 
 [[vk::push_constant]] FillClusterTriangleInfoPushConstant pc;
 
@@ -25,7 +26,14 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     if (groupIndex >= numClusters) return;
 
     uint descriptorIndex;
-    InterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], 1, descriptorIndex);
+    WaveInterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], 1, descriptorIndex);
+
+    if (groupIndex == 0)
+    {
+        CLASPageInfo pageInfo;
+        pageInfo.addressStartIndex = descriptorIndex;
+        clasPageInfos[pageIndex] = pageInfo;
+    }
 
     uint64_t indexBufferBaseAddress = ((uint64_t(pc.indexBufferBaseAddressHighBits) << 32) | (pc.indexBufferBaseAddressLowBits));
     uint64_t vertexBufferBaseAddress = ((uint64_t(pc.vertexBufferBaseAddressHighBits) << 32) | (pc.vertexBufferBaseAddressLowBits));
@@ -37,12 +45,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     uint vertexBufferOffset, indexBufferOffset;
     WaveInterlockedAdd(globals[GLOBALS_VERTEX_BUFFER_OFFSET_INDEX], header.numVertices, vertexBufferOffset);
     WaveInterlockedAdd(globals[GLOBALS_INDEX_BUFFER_OFFSET_INDEX], header.numTriangles * 3, indexBufferOffset);
-
-    if (groupIndex == 0)
-    {
-        // TODO: implement hierarchical traversal
-        InterlockedAdd(blasDatas[0].clusterCount, numClusters);
-    }
 
     BUILD_CLUSTERS_TRIANGLE_INFO desc = (BUILD_CLUSTERS_TRIANGLE_INFO)0;
     desc.clusterId = pageIndex * MAX_CLUSTERS_PER_PAGE + clusterID;

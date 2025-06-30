@@ -1,6 +1,8 @@
 #ifndef AS_SHADER_INTEROP_H_
 #define AS_SHADER_INTEROP_H_
 
+#include "hlsl_cpp_compat.h"
+
 #ifdef __cplusplus
 namespace rt
 {
@@ -22,6 +24,9 @@ namespace rt
 #define MAX_CANDIDATE_CLUSTERS (1u << 24)
 #define MAX_VISIBLE_CLUSTERS   (1u << 22)
 
+#define MAX_CANDIDATE_NODES  (1u << 24u)
+#define MAX_CANDIDATE_LEAVES (1u << 24u)
+
 static const uint32_t kFillInstanceDescsThreads = 32;
 
 struct ClusterPageHeader
@@ -35,14 +40,6 @@ struct ClusterFileHeader
     uint numPages;
 };
 
-// Used in DAG hierarchical traversal
-struct ClusterNode
-{
-    uint pageIndex;
-    uint clusterIndex;
-    uint blasIndex;
-};
-
 struct DecodeClusterData
 {
     uint32_t pageIndex;
@@ -53,19 +50,18 @@ struct DecodeClusterData
 
 struct BLASData
 {
+    uint instanceIndex;
     uint clusterStartIndex;
     uint clusterCount;
 };
 
-struct ClusterData
-{
-    uint32_t indexBufferOffset;
-    uint32_t vertexBufferOffset;
-};
-
 struct AccelerationStructureInstance
 {
+#ifdef __cplusplus
     float transform[3][4];
+#else
+    float3x4 transform;
+#endif
     uint32_t instanceID : 24;
     uint32_t instanceMask : 8;
     uint32_t instanceContributionToHitGroupIndex : 24;
@@ -123,7 +119,6 @@ struct FillClusterTriangleInfoPushConstant
 
 struct FillClusterBottomLevelInfoPushConstant
 {
-    uint blasCount;
     uint arrayBaseAddressLowBits;
     uint arrayBaseAddressHighBits;
 };
@@ -133,7 +128,7 @@ struct NumPushConstant
     uint num;
 };
 
-#define CHILDREN_PER_HIERARCHY_NODE 4
+#define CHILDREN_PER_HIERARCHY_NODE      4
 #define CHILDREN_PER_HIERARCHY_NODE_BITS 2
 
 struct PackedHierarchyNode
@@ -141,6 +136,12 @@ struct PackedHierarchyNode
     float4 lodBounds[CHILDREN_PER_HIERARCHY_NODE];
     float maxParentError[CHILDREN_PER_HIERARCHY_NODE];
     uint childOffset[CHILDREN_PER_HIERARCHY_NODE];
+};
+
+struct GPUInstance
+{
+    float3x4 objectToRender;
+    uint globalRootNodeOffset;
 };
 
 #define GLOBALS_VERTEX_BUFFER_OFFSET_INDEX 0
@@ -155,6 +156,10 @@ struct PackedHierarchyNode
 #define GLOBALS_CLAS_INDIRECT_X 7
 #define GLOBALS_CLAS_INDIRECT_Y 8
 #define GLOBALS_CLAS_INDIRECT_Z 9
+
+#define GLOBALS_BLAS_INDIRECT_X 7
+#define GLOBALS_BLAS_INDIRECT_Y 8
+#define GLOBALS_BLAS_INDIRECT_Z 9
 
 #ifdef __cplusplus
 }

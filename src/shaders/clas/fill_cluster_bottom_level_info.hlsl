@@ -10,7 +10,7 @@ RWStructuredBuffer<uint> globals : register(u2);
 void main(uint3 DTid : SV_DispatchThreadID)
 {
     uint blasIndex = DTid.x;
-    if (blasIndex >= pc.blasCount) return;
+    if (blasIndex >= globals[GLOBALS_BLAS_COUNT_INDEX]) return;
 
     BLASData blas = blasDatas[blasIndex];
 

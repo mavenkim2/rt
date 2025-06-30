@@ -626,9 +626,10 @@ struct CommandBuffer
     void BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
                    GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
                    int maxNumClusters, u32 numTriangles, u32 numVertices);
-    void BuildClusterBLAS(GPUBuffer *bottomLevelInfo, GPUBuffer *dstAddresses,
+    void BuildClusterBLAS(GPUBuffer *implicitBuffer, GPUBuffer *scratchBuffer,
+                          GPUBuffer *bottomLevelInfo, GPUBuffer *dstAddresses,
                           GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
-                          u32 numClusters);
+                          u32 numClusters, u32 maxAccelerationStructureCount);
 
     TransferBuffer CreateTLASInstances(Instance *instances, int numInstances,
                                        AffineSpace *transforms, ScenePrimitives **childScenes);
@@ -638,7 +639,7 @@ struct CommandBuffer
                                               ScenePrimitives **childScenes);
     GPUAccelerationStructurePayload BuildBLAS(const GPUMesh *meshes, int count);
     GPUAccelerationStructurePayload BuildCustomBLAS(GPUBuffer *aabbsBuffer, u32 numAabbs);
-    void ClearBuffer(GPUBuffer *b);
+    void ClearBuffer(GPUBuffer *b, u32 val = 0);
     void ClearImage(GPUImage *image, u32 value, u32 baseMip = 0,
                     u32 numMips = VK_REMAINING_MIP_LEVELS, u32 baseLayer = 0,
                     u32 numLayers = VK_REMAINING_ARRAY_LAYERS);
@@ -880,12 +881,16 @@ struct Vulkan
                                              int numGroups, PushConstant *pc,
                                              DescriptorSetLayout *layout, u32 maxDepth,
                                              bool useClusters = false);
+    void GetClusterBLASBuildSizes(u32 maxTotalClusterCount,
+                                  u32 maxClusterCountPerAccelerationStructure,
+                                  u32 maxAccelerationStructureCount, u32 &scratchSize,
+                                  u32 &accelerationStructureSize);
     QueryPool CreateQuery(QueryType type, int count);
 
     VkAccelerationStructureInstanceKHR GetVkInstance(const AffineSpace &transform,
                                                      GPUAccelerationStructure &as);
     u32 GetQueueFamily(QueueType type);
-    void BeginFrame();
+    void BeginFrame(bool doubleBuffer = true);
     void EndFrame(int queueType);
 
     void Wait(Semaphore s);
