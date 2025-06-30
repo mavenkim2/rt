@@ -2171,13 +2171,13 @@ DescriptorSet &DescriptorSet::Bind(int index, GPUImage *image, int subresource)
     return *this;
 }
 
-DescriptorSet &DescriptorSet::Bind(int index, GPUBuffer *buffer)
+DescriptorSet &DescriptorSet::Bind(int index, GPUBuffer *buffer, u32 offset, u32 size)
 {
     Assert(index < layout->bindings.size() && index < descriptorInfo.size());
     VkDescriptorBufferInfo info = {};
     info.buffer                 = buffer->buffer;
-    info.offset                 = 0;
-    info.range                  = VK_WHOLE_SIZE;
+    info.offset                 = offset;
+    info.range                  = size;
 
     descriptorInfo[index].buffer = info;
 
@@ -2213,10 +2213,10 @@ DescriptorSet &DescriptorSet::Bind(int index, VkAccelerationStructureKHR *accel)
     return *this;
 }
 
-DescriptorSet &DescriptorSet::Bind(GPUBuffer *buffer)
+DescriptorSet &DescriptorSet::Bind(GPUBuffer *buffer, u32 offset, u32 size)
 {
     u32 index = numBinds++;
-    return Bind(index, buffer);
+    return Bind(index, buffer, offset, size);
 }
 
 DescriptorSet &DescriptorSet::Bind(GPUImage *image)

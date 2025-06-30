@@ -5,11 +5,22 @@ namespace rt
 {
 #endif
 
+struct Queue
+{
+    uint nodeReadOffset;
+    uint nodeWriteOffset;
+    uint numNodes;
+
+    uint leafReadOffset;
+    uint leafWriteOffset;
+};
+
 struct CandidateNode
 {
     uint instanceID;
     uint nodeOffset;
     uint blasIndex;
+    uint pad;
 };
 
 struct VisibleCluster

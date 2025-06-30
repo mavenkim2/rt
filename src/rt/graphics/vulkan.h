@@ -529,10 +529,11 @@ struct DescriptorSet
     u32 numBinds = 0;
 
     DescriptorSet &Bind(int index, GPUImage *image, int subresource = -1);
-    DescriptorSet &Bind(int index, GPUBuffer *buffer);
+    DescriptorSet &Bind(int index, GPUBuffer *buffer, u32 offset = 0,
+                        u32 size = VK_WHOLE_SIZE);
     DescriptorSet &Bind(int index, VkAccelerationStructureKHR *accel);
 
-    DescriptorSet &Bind(GPUBuffer *buffer);
+    DescriptorSet &Bind(GPUBuffer *buffer, u32 offset = 0, u32 size = VK_WHOLE_SIZE);
     DescriptorSet &Bind(GPUImage *img);
     DescriptorSet &Bind(VkAccelerationStructureKHR *accel);
     void Reset();

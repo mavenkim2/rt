@@ -5,16 +5,6 @@
 #include "../../rt/shader_interop/gpu_scene_shaderinterop.h"
 #include "../../rt/shader_interop/hierarchy_traversal_shaderinterop.h"
 
-struct Queue 
-{
-    uint nodeReadOffset;
-    uint nodeWriteOffset;
-    uint numNodes;
-
-    uint leafReadOffset;
-    uint leafWriteOffset;
-};
-
 // TODO: don't hardcode this 
 static const float zNear = 1e-2f;
 static const float zFar = 1000.f;
@@ -106,8 +96,8 @@ globallycoherent RWStructuredBuffer<Queue> queue : register(u0);
 ConstantBuffer<GPUScene> gpuScene : register(b1);
 RWStructuredBuffer<uint> globals : register(u2);
 
-RWStructuredBuffer<WorkItem> nodeQueue : register(u3);
-RWStructuredBuffer<WorkItem> leafQueue : register(u4);
+globallycoherent RWStructuredBuffer<WorkItem> nodeQueue : register(u3);
+globallycoherent RWStructuredBuffer<WorkItem> leafQueue : register(u4);
 
 StructuredBuffer<GPUInstance> gpuInstances : register(t5);
 StructuredBuffer<PackedHierarchyNode> hierarchyNodes : register(t6);
@@ -328,5 +318,6 @@ void TraverseHierarchy()
 [numthreads(64, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
 {
+    TraverseHierarchy<ClusterCull>();
 }
 

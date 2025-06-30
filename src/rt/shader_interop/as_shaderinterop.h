@@ -38,6 +38,7 @@ struct ClusterFileHeader
 {
     uint magic;
     uint numPages;
+    uint numNodes;
 };
 
 struct DecodeClusterData

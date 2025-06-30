@@ -263,6 +263,7 @@ set(SHADER_FILES "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl"
     "${SHADER_SRC_DIR}/tex/generate_mips.hlsl"
     "${SHADER_SRC_DIR}/clas/prepare_indirect.hlsl"
     "${SHADER_SRC_DIR}/clas/hierarchy_traversal.hlsl"
+    "${SHADER_SRC_DIR}/clas/instance_culling.hlsl"
 )
 set_property(SOURCE 
     "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
@@ -281,6 +282,7 @@ set_property(SOURCE
     "${SHADER_SRC_DIR}/tex/generate_mips.hlsl"
     "${SHADER_SRC_DIR}/clas/prepare_indirect.hlsl"
     "${SHADER_SRC_DIR}/clas/hierarchy_traversal.hlsl"
+    "${SHADER_SRC_DIR}/clas/instance_culling.hlsl"
     PROPERTY name "cs")
 
 file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")

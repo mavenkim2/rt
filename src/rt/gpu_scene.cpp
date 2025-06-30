@@ -187,6 +187,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     Shader getBlasAddressOffsetShader;
     Shader instanceCullingShader;
     Shader prepareIndirectShader;
+    Shader hierarchyTraversalShader;
 
     RayTracingShaderGroup groups[3];
     Arena *arena = params->arenas[GetThreadIndex()];
@@ -255,6 +256,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         string prepareIndirectData = OS_ReadFile(arena, prepareIndirectName);
         prepareIndirectShader = device->CreateShader(ShaderStage::Compute, "prepare indirect",
                                                      prepareIndirectData);
+
+        string hierarchyTraversalName = "../src/shaders/hierarchy_traversal.spv";
+        string hierarchyTraversalData = OS_ReadFile(arena, hierarchyTraversalName);
+        hierarchyTraversalShader      = device->CreateShader(
+            ShaderStage::Compute, "hierarchy traversal", hierarchyTraversalData);
     }
 
     // Compile pipelines
@@ -372,6 +378,33 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     VkPipeline instanceCullingPipeline = device->CreateComputePipeline(
         &instanceCullingShader, &instanceCullingLayout, &instanceCullingPush);
+
+    // hierarchy traversal
+    DescriptorSetLayout hierarchyTraversalLayout = {};
+    hierarchyTraversalLayout.AddBinding(0, DescriptorType::StorageBuffer,
+                                        VK_SHADER_STAGE_COMPUTE_BIT);
+    hierarchyTraversalLayout.AddBinding(1, DescriptorType::UniformBuffer,
+                                        VK_SHADER_STAGE_COMPUTE_BIT);
+    hierarchyTraversalLayout.AddBinding(2, DescriptorType::StorageBuffer,
+                                        VK_SHADER_STAGE_COMPUTE_BIT);
+    hierarchyTraversalLayout.AddBinding(3, DescriptorType::StorageBuffer,
+                                        VK_SHADER_STAGE_COMPUTE_BIT);
+    hierarchyTraversalLayout.AddBinding(4, DescriptorType::StorageBuffer,
+                                        VK_SHADER_STAGE_COMPUTE_BIT);
+    hierarchyTraversalLayout.AddBinding(5, DescriptorType::StorageBuffer,
+                                        VK_SHADER_STAGE_COMPUTE_BIT);
+    hierarchyTraversalLayout.AddBinding(6, DescriptorType::StorageBuffer,
+                                        VK_SHADER_STAGE_COMPUTE_BIT);
+    hierarchyTraversalLayout.AddBinding(7, DescriptorType::StorageBuffer,
+                                        VK_SHADER_STAGE_COMPUTE_BIT);
+    hierarchyTraversalLayout.AddBinding(8, DescriptorType::StorageBuffer,
+                                        VK_SHADER_STAGE_COMPUTE_BIT);
+    hierarchyTraversalLayout.AddBinding((u32)RTBindings::ClusterPageData,
+                                        DescriptorType::StorageBuffer,
+                                        VK_SHADER_STAGE_COMPUTE_BIT);
+
+    VkPipeline hierarchyTraversalPipeline =
+        device->CreateComputePipeline(&hierarchyTraversalShader, &hierarchyTraversalLayout);
 
     Swapchain swapchain = device->CreateSwapchain(params->window, VK_FORMAT_R8G8B8A8_SRGB,
                                                   params->width, params->height);
@@ -755,6 +788,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     TransferBuffer clusterPageDataBuffer =
         dgfTransferCmd->SubmitBuffer(tokenizer.cursor, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                      clusterFileHeader.numPages * CLUSTER_PAGE_SIZE);
+    Advance(&tokenizer, clusterFileHeader.numPages * CLUSTER_PAGE_SIZE);
+
+    TransferBuffer hierarchyNodeBuffer =
+        transferCmd->SubmitBuffer(tokenizer.cursor, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                  sizeof(PackedHierarchyNode) * clusterFileHeader.numNodes);
 
     Semaphore sem   = device->CreateSemaphore();
     sem.signalValue = 1;
@@ -1044,13 +1082,16 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         allCommandBuffer->SubmitBuffer(gpuInstances.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                        sizeof(GPUInstance) * gpuInstances.Length());
 
-    GPUBuffer hierarchyNodeBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                             VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                                         MAX_CANDIDATE_NODES * sizeof(Vec4u));
-
     GPUBuffer visibleClustersBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         MAX_VISIBLE_CLUSTERS * sizeof(VisibleCluster));
+
+    GPUBuffer queueBuffer =
+        device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, sizeof(Queue));
+
+    GPUBuffer workItemQueueBuffer =
+        device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                             sizeof(Vec4u) * (MAX_CANDIDATE_NODES + MAX_CANDIDATE_LEAVES));
 
 #if 0
     // TODO: new command buffers have to wait on ones from the previous depth
@@ -1342,11 +1383,52 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         // Virtual geometry pass
         {
             cmd->ClearBuffer(&visibleClustersBuffer, ~0u);
+            cmd->ClearBuffer(&workItemQueueBuffer, ~0u);
             cmd->ClearBuffer(&clasGlobalsBuffer);
+
+            // Instance culling
+            {
+                device->BeginEvent(cmd, "Instance Culling");
+
+                cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, instanceCullingPipeline);
+                DescriptorSet ds = instanceCullingLayout.CreateDescriptorSet();
+                ds.Bind(&gpuInstancesBuffer.buffer)
+                    .Bind(&clasGlobalsBuffer)
+                    .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES);
+
+                cmd->Dispatch((numInstances + 63) / 64, 1, 1);
+                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+                cmd->FlushBarriers();
+                device->EndEvent(cmd);
+            }
 
             {
                 // Hierarchy traversal
                 device->BeginEvent(cmd, "Hierarchy Traversal");
+
+                cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, hierarchyTraversalPipeline);
+                DescriptorSet ds = hierarchyTraversalLayout.CreateDescriptorSet();
+                ds.Bind(&queueBuffer)
+                    .Bind(&sceneTransferBuffers[currentBuffer].buffer)
+                    .Bind(&clasGlobalsBuffer)
+                    .Bind(&workItemQueueBuffer, 0, MAX_CANDIDATE_NODES * sizeof(Vec4u))
+                    .Bind(&workItemQueueBuffer, MAX_CANDIDATE_NODES * sizeof(Vec4u),
+                          MAX_CANDIDATE_LEAVES * sizeof(Vec4u))
+                    .Bind(&gpuInstancesBuffer.buffer)
+                    .Bind(&hierarchyNodeBuffer.buffer)
+                    .Bind(&visibleClustersBuffer)
+                    .Bind(&blasDataBuffer)
+                    .Bind(&clusterPageDataBuffer.buffer);
+
+                cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
+                                        hierarchyTraversalLayout.pipelineLayout);
+                cmd->Dispatch(1440, 1, 1);
+                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+                cmd->FlushBarriers();
                 device->EndEvent(cmd);
             }
             {
