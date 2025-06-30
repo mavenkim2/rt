@@ -2736,6 +2736,45 @@ GPUAccelerationStructurePayload CommandBuffer::BuildAS(
     return payload;
 }
 
+VkAccelerationStructureKHR CommandBuffer::BuildAS(
+    GPUBuffer *accel, GPUBuffer *scratch, VkAccelerationStructureTypeKHR accelType,
+    VkAccelerationStructureGeometryKHR *geometries, int count,
+    VkAccelerationStructureBuildRangeInfoKHR *buildRanges, u32 *maxPrimitiveCounts)
+{
+    VkAccelerationStructureBuildGeometryInfoKHR buildInfo = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+    buildInfo.type  = accelType;
+    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                      VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
+    buildInfo.pGeometries   = geometries;
+    buildInfo.geometryCount = count;
+
+    VkDeviceAddress scratchAddress = device->GetDeviceAddress(scratch->buffer);
+
+    VkAccelerationStructureKHR as;
+
+    {
+        VkAccelerationStructureCreateInfoKHR accelCreateInfo = {
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+
+        accelCreateInfo.buffer = accel->buffer;
+        accelCreateInfo.size   = accel->size;
+        accelCreateInfo.type   = accelType;
+
+        vkCreateAccelerationStructureKHR(device->device, &accelCreateInfo, 0, &as);
+    }
+
+    buildInfo.scratchData.deviceAddress = scratchAddress;
+    buildInfo.dstAccelerationStructure  = as;
+
+    VkAccelerationStructureDeviceAddressInfoKHR accelDeviceAddressInfo = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
+    accelDeviceAddressInfo.accelerationStructure = as;
+
+    vkCmdBuildAccelerationStructuresKHR(buffer, 1, &buildInfo, &buildRanges);
+    return as;
+}
+
 GPUAccelerationStructurePayload CommandBuffer::BuildCustomBLAS(GPUBuffer *aabbsBuffer,
                                                                u32 numAabbs)
 {
@@ -2949,6 +2988,24 @@ GPUAccelerationStructurePayload CommandBuffer::BuildTLAS(Instance *instances, in
     return BuildTLAS(&tlasBuffer.buffer, numInstances);
 }
 
+VkAccelerationStructureKHR CommandBuffer::BuildTLAS(GPUBuffer *accelBuffer,
+                                                    GPUBuffer *scratchBuffer,
+                                                    GPUBuffer *instanceData, u32 numInstances)
+{
+    VkAccelerationStructureBuildRangeInfoKHR buildRange = {};
+    buildRange.primitiveCount                           = numInstances;
+
+    VkAccelerationStructureGeometryKHR geometry = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+    geometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+    auto &instances       = geometry.geometry.instances;
+    instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+    instances.data.deviceAddress = device->GetDeviceAddress(instanceData->buffer);
+
+    return BuildAS(accelBuffer, scratchBuffer, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
+                   &geometry, 1, &buildRange, &numInstances);
+}
+
 TransferBuffer CommandBuffer::CreateTLASInstances(Instance *instances, int numInstances,
                                                   AffineSpace *transforms,
                                                   ScenePrimitives **childScenes)
@@ -3002,6 +3059,45 @@ void Vulkan::GetClusterBLASBuildSizes(u32 maxTotalClusterCount,
 
     scratchSize               = buildSizesInfo.buildScratchSize;
     accelerationStructureSize = buildSizesInfo.accelerationStructureSize;
+}
+
+void Vulkan::GetBuildSizes(VkAccelerationStructureTypeKHR accelType,
+                           VkAccelerationStructureGeometryKHR *geometries, int count,
+                           VkAccelerationStructureBuildRangeInfoKHR *buildRanges,
+                           u32 *maxPrimitiveCounts, u32 &buildScratchSize, u32 &accelSize)
+{
+    VkAccelerationStructureBuildGeometryInfoKHR buildInfo = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+    buildInfo.type  = accelType;
+    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR |
+                      VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
+    buildInfo.pGeometries   = geometries;
+    buildInfo.geometryCount = count;
+
+    VkAccelerationStructureBuildSizesInfoKHR sizeInfo = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+
+    vkGetAccelerationStructureBuildSizesKHR(device,
+                                            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                                            &buildInfo, maxPrimitiveCounts, &sizeInfo);
+
+    buildScratchSize = sizeInfo.buildScratchSize;
+    accelSize        = sizeInfo.accelerationStructureSize;
+}
+
+void Vulkan::GetTLASBuildSizes(u32 numInstances, u32 &buildScratchSize, u32 &accelSize)
+{
+    VkAccelerationStructureBuildRangeInfoKHR buildRange = {};
+    buildRange.primitiveCount                           = numInstances;
+
+    VkAccelerationStructureGeometryKHR geometry = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+    geometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+    auto &instances       = geometry.geometry.instances;
+    instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+
+    GetBuildSizes(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, &geometry, 1, &buildRange,
+                  &numInstances, buildScratchSize, accelSize);
 }
 
 QueryPool Vulkan::CreateQuery(QueryType type, int count)

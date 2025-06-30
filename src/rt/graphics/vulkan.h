@@ -623,6 +623,11 @@ struct CommandBuffer
             VkAccelerationStructureGeometryKHR *geometries, int count,
             VkAccelerationStructureBuildRangeInfoKHR *buildRanges, u32 *maxPrimitiveCounts);
 
+    VkAccelerationStructureKHR
+    BuildAS(GPUBuffer *accel, GPUBuffer *scratch, VkAccelerationStructureTypeKHR accelType,
+            VkAccelerationStructureGeometryKHR *geometries, int count,
+            VkAccelerationStructureBuildRangeInfoKHR *buildRanges, u32 *maxPrimitiveCounts);
+
     void BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
                    GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
                    int maxNumClusters, u32 numTriangles, u32 numVertices);
@@ -637,6 +642,8 @@ struct CommandBuffer
     GPUAccelerationStructurePayload BuildTLAS(Instance *instances, int numInstances,
                                               AffineSpace *transforms,
                                               ScenePrimitives **childScenes);
+    VkAccelerationStructureKHR BuildTLAS(GPUBuffer *accelBuffer, GPUBuffer *scratchBuffer,
+                                         GPUBuffer *instanceData, u32 numInstances);
     GPUAccelerationStructurePayload BuildBLAS(const GPUMesh *meshes, int count);
     GPUAccelerationStructurePayload BuildCustomBLAS(GPUBuffer *aabbsBuffer, u32 numAabbs);
     void ClearBuffer(GPUBuffer *b, u32 val = 0);
@@ -885,6 +892,11 @@ struct Vulkan
                                   u32 maxClusterCountPerAccelerationStructure,
                                   u32 maxAccelerationStructureCount, u32 &scratchSize,
                                   u32 &accelerationStructureSize);
+    void GetBuildSizes(VkAccelerationStructureTypeKHR accelType,
+                       VkAccelerationStructureGeometryKHR *geometries, int count,
+                       VkAccelerationStructureBuildRangeInfoKHR *buildRanges,
+                       u32 *maxPrimitiveCounts, u32 &buildScratchSize, u32 &accelSize);
+    void GetTLASBuildSizes(u32 numInstances, u32 &buildScratchSize, u32 &accelSize);
     QueryPool CreateQuery(QueryType type, int count);
 
     VkAccelerationStructureInstanceKHR GetVkInstance(const AffineSpace &transform,

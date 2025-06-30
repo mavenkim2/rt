@@ -957,6 +957,21 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         numInstances * sizeof(VkAccelerationStructureInstanceKHR));
+
+    u32 tlasScratchSize, tlasAccelSize;
+    device->GetTLASBuildSizes(numInstances, tlasScratchSize, tlasAccelSize);
+    GPUBuffer tlasScratchBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        tlasScratchSize);
+    GPUBuffer tlasAccelBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        tlasAccelSize);
+
+#if 0
     {
         if (tlasScenes.Length() != 0)
         {
@@ -998,8 +1013,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     ->CreateTLASInstances(&instance, 1, &params->renderFromWorld, &baseScene)
                     .buffer;
 
-            tlasSemaphore.signalValue = 1;
-            allCommandBuffer->SignalOutsideFrame(tlasSemaphore);
         }
 
         NumPushConstant pc;
@@ -1023,16 +1036,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         tlas = allCommandBuffer->BuildTLAS(&tlasBuffer, 1).as;
     }
+#endif
+    tlasSemaphore.signalValue = 1;
+    allCommandBuffer->SignalOutsideFrame(tlasSemaphore);
 
     TransferBuffer gpuInstancesBuffer =
         allCommandBuffer->SubmitBuffer(gpuInstances.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                        sizeof(GPUInstance) * gpuInstances.Length());
-
-    // TODO: instance culling
-    Vec4u rootHierarchyNode = {};
-    rootHierarchyNode.x     = 0;
-    rootHierarchyNode.y     = 0;
-    rootHierarchyNode.z     = 0;
 
     GPUBuffer hierarchyNodeBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                              VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -1462,14 +1472,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                              VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
                 cmd->FlushBarriers();
 
-                tlas = cmd->BuildTLAS(&tlasBuffer, 1).as;
                 device->EndEvent(cmd);
             }
             {
                 // TODO: partitioned TLAS
                 // Build the TLAS
                 device->BeginEvent(cmd, "Build TLAS");
-                // tlas = cmd->BuildTLAS(&tlasBuffer);
+                tlas = cmd->BuildTLAS(&tlasBuffer, 1).as;
                 device->EndEvent(cmd);
             }
         }
