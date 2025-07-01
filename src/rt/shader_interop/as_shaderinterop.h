@@ -21,11 +21,9 @@ namespace rt
 
 #define NUM_CLUSTER_HEADER_FLOAT4S 5
 
+#define MAX_CANDIDATE_NODES    (1u << 21u)
 #define MAX_CANDIDATE_CLUSTERS (1u << 24)
 #define MAX_VISIBLE_CLUSTERS   (1u << 22)
-
-#define MAX_CANDIDATE_NODES  (1u << 24u)
-#define MAX_CANDIDATE_LEAVES (1u << 24u)
 
 static const uint32_t kFillInstanceDescsThreads = 32;
 

@@ -1162,19 +1162,23 @@ void Vulkan::CheckInitializedThreadPool(int threadIndex)
 
         VkDescriptorPoolCreateInfo poolCreateInfo = {
             VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        VkDescriptorPoolSize poolSize[4];
+        VkDescriptorPoolSize poolSize[6];
         poolSize[0].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-        poolSize[0].descriptorCount = 10;
+        poolSize[0].descriptorCount = 30;
         poolSize[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        poolSize[1].descriptorCount = 10;
+        poolSize[1].descriptorCount = 30;
         poolSize[2].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        poolSize[2].descriptorCount = 10;
+        poolSize[2].descriptorCount = 30;
         poolSize[3].type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        poolSize[3].descriptorCount = 20;
+        poolSize[3].descriptorCount = 50;
+        poolSize[4].type            = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        poolSize[4].descriptorCount = 30;
+        poolSize[5].type            = VK_DESCRIPTOR_TYPE_SAMPLER;
+        poolSize[5].descriptorCount = 30;
 
         poolCreateInfo.pPoolSizes    = poolSize;
         poolCreateInfo.poolSizeCount = ArrayLength(poolSize);
-        poolCreateInfo.maxSets       = 10;
+        poolCreateInfo.maxSets       = 20;
 
         vkCreateDescriptorPool(device, &poolCreateInfo, 0, &pool.descriptorPool[0]);
         vkCreateDescriptorPool(device, &poolCreateInfo, 0, &pool.descriptorPool[1]);
@@ -2171,7 +2175,7 @@ DescriptorSet &DescriptorSet::Bind(int index, GPUImage *image, int subresource)
     return *this;
 }
 
-DescriptorSet &DescriptorSet::Bind(int index, GPUBuffer *buffer, u32 offset, u32 size)
+DescriptorSet &DescriptorSet::Bind(int index, GPUBuffer *buffer, u64 offset, u64 size)
 {
     Assert(index < layout->bindings.size() && index < descriptorInfo.size());
     VkDescriptorBufferInfo info = {};
@@ -2213,7 +2217,7 @@ DescriptorSet &DescriptorSet::Bind(int index, VkAccelerationStructureKHR *accel)
     return *this;
 }
 
-DescriptorSet &DescriptorSet::Bind(GPUBuffer *buffer, u32 offset, u32 size)
+DescriptorSet &DescriptorSet::Bind(GPUBuffer *buffer, u64 offset, u64 size)
 {
     u32 index = numBinds++;
     return Bind(index, buffer, offset, size);
@@ -2305,6 +2309,11 @@ void Vulkan::SetName(VkPipeline handle, const char *name)
     SetName((u64)handle, VK_OBJECT_TYPE_PIPELINE, name);
 }
 
+void Vulkan::SetName(VkPipelineLayout handle, const char *name)
+{
+    SetName((u64)handle, VK_OBJECT_TYPE_PIPELINE_LAYOUT, name);
+}
+
 void Vulkan::SetName(VkQueue handle, const char *name)
 {
     SetName((u64)handle, VK_OBJECT_TYPE_QUEUE, name);
@@ -2377,7 +2386,7 @@ void DescriptorSetLayout::CreatePipelineLayout(PushConstant *pc)
 }
 
 VkPipeline Vulkan::CreateComputePipeline(Shader *shader, DescriptorSetLayout *layout,
-                                         PushConstant *pc)
+                                         PushConstant *pc, string name)
 {
     VkPipelineShaderStageCreateInfo pipelineInfo = {
         VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
@@ -2393,6 +2402,7 @@ VkPipeline Vulkan::CreateComputePipeline(Shader *shader, DescriptorSetLayout *la
 
     VkPipeline pipeline;
     vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &createInfo, 0, &pipeline);
+    if (name.size) SetName(pipeline, (const char *)name.str);
     return pipeline;
 }
 

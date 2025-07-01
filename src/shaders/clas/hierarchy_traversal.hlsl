@@ -1,4 +1,3 @@
-#include "../common.hlsli"
 #include "../dense_geometry.hlsli"
 #include "../wave_intrinsics.hlsli"
 #include "../../rt/shader_interop/as_shaderinterop.h"
@@ -102,7 +101,7 @@ globallycoherent RWStructuredBuffer<WorkItem> leafQueue : register(u4);
 StructuredBuffer<GPUInstance> gpuInstances : register(t5);
 StructuredBuffer<PackedHierarchyNode> hierarchyNodes : register(t6);
 RWStructuredBuffer<VisibleCluster> selectedClusters : register(u7);
-RWStructuredBuffer<BLASData> blasDatas : register(u8);
+RWStructuredBuffer<BLASData> blasDatas : register(u9);
 
 struct ClusterCull 
 {
@@ -119,7 +118,7 @@ struct ClusterCull
 
         bool isValid = node.childOffset[childIndex] != ~0u;
         // TODO 
-        bool isLeaf = false;
+        bool isLeaf = bool(node.childOffset[childIndex] >> 31u);
 
         if (isValid)
         {
@@ -132,6 +131,12 @@ struct ClusterCull
 
         uint nodeWriteOffset;
         WaveInterlockedAddScalarTest(queue[0].nodeWriteOffset, isValid && !isLeaf, 1, nodeWriteOffset);
+
+        if (WaveIsFirstLane())
+        {
+            uint nodesToAdd = WaveActiveCountBits(isValid && !isLeaf);
+            InterlockedAdd(queue[0].numNodes, nodesToAdd);
+        }
 
         //DeviceMemoryBarrier();
 
@@ -148,6 +153,7 @@ struct ClusterCull
 
         DeviceMemoryBarrier();
 
+#if 0
         if (isValid && isLeaf)
         {
             uint leafWriteOffset;
@@ -174,6 +180,13 @@ struct ClusterCull
             }
 
             DeviceMemoryBarrier();
+        }
+#endif
+
+        if (WaveIsFirstLane())
+        {
+            int numNodesCompleted = (int)WaveActiveCountBits(isValid);
+            InterlockedAdd(queue[0].numNodes, -numNodesCompleted);
         }
     }
 
@@ -236,16 +249,11 @@ void TraverseHierarchy()
     {
         if (!noMoreNodes)
         {
-            uint numNodesToRead = 0;
-            if (WaveIsFirstLane())
+            uint numNodesToRead = WaveActiveCountBits(!processed) >> CHILDREN_PER_HIERARCHY_NODE_BITS;
+            if (WaveIsFirstLane() && numNodesToRead)
             {
-                numNodesToRead = WaveActiveCountBits(!processed) >> CHILDREN_PER_HIERARCHY_NODE_BITS;
-                if (numNodesToRead > 0)
-                {
-                    InterlockedAdd(queue[0].nodeReadOffset, numNodesToRead, nodeReadOffset);
-                }
+                InterlockedAdd(queue[0].nodeReadOffset, numNodesToRead, nodeReadOffset);
             }
-            numNodesToRead = WaveReadLaneFirst(numNodesToRead);
             if (numNodesToRead)
             {
                 WorkItem newWorkItem;
@@ -276,7 +284,8 @@ void TraverseHierarchy()
                 processed = true;
             }
         }
-            
+
+#if 0
         // Process leaves
         if (WaveActiveAllTrue(!processed))
         {
@@ -312,6 +321,7 @@ void TraverseHierarchy()
                 noMoreNodes = true;
             }
         }
+#endif
     }
 }
 

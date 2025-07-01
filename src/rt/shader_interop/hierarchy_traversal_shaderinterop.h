@@ -9,7 +9,7 @@ struct Queue
 {
     uint nodeReadOffset;
     uint nodeWriteOffset;
-    uint numNodes;
+    int numNodes;
 
     uint leafReadOffset;
     uint leafWriteOffset;

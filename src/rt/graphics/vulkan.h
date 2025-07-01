@@ -529,11 +529,11 @@ struct DescriptorSet
     u32 numBinds = 0;
 
     DescriptorSet &Bind(int index, GPUImage *image, int subresource = -1);
-    DescriptorSet &Bind(int index, GPUBuffer *buffer, u32 offset = 0,
-                        u32 size = VK_WHOLE_SIZE);
+    DescriptorSet &Bind(int index, GPUBuffer *buffer, u64 offset = 0,
+                        u64 size = VK_WHOLE_SIZE);
     DescriptorSet &Bind(int index, VkAccelerationStructureKHR *accel);
 
-    DescriptorSet &Bind(GPUBuffer *buffer, u32 offset = 0, u32 size = VK_WHOLE_SIZE);
+    DescriptorSet &Bind(GPUBuffer *buffer, u64 offset = 0, u64 size = VK_WHOLE_SIZE);
     DescriptorSet &Bind(GPUImage *img);
     DescriptorSet &Bind(VkAccelerationStructureKHR *accel);
     void Reset();
@@ -884,7 +884,7 @@ struct Vulkan
     void BindAccelerationStructure(VkDescriptorSet descriptorSet,
                                    VkAccelerationStructureKHR accel);
     VkPipeline CreateComputePipeline(Shader *shader, DescriptorSetLayout *layout,
-                                     PushConstant *pc = 0);
+                                     PushConstant *pc = 0, string pipelineName = {});
     RayTracingState CreateRayTracingPipeline(RayTracingShaderGroup *shaderGroups,
                                              int numGroups, PushConstant *pc,
                                              DescriptorSetLayout *layout, u32 maxDepth,
@@ -1043,6 +1043,7 @@ struct Vulkan
     void SetName(VkDescriptorSet handle, const char *name);
     void SetName(VkShaderModule handle, const char *name);
     void SetName(VkPipeline handle, const char *name);
+    void SetName(VkPipelineLayout handle, const char *name);
     void SetName(VkQueue handle, const char *name);
     void SetName(VkCommandBuffer handle, const char *name);
     void SetName(GPUBuffer *buffer, const char *name);

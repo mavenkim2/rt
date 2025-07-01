@@ -3207,11 +3207,6 @@ void CreateClusters(Mesh &mesh, string filename)
     // per page, you write the number of clusters
     // at the top of the file, write a magic
 
-    ClusterFileHeader *fileHeader =
-        (ClusterFileHeader *)GetMappedPtr(&builder, fileHeaderOffset);
-    fileHeader->magic    = CLUSTER_FILE_MAGIC;
-    fileHeader->numPages = pageInfos.Length();
-
     // Build hierarchies over cluster groups
     PrimRef *hierarchyPrimRefs = PushArrayNoZero(scratch.temp.arena, PrimRef, parts.Length());
     Bounds geomBounds;
@@ -3285,7 +3280,9 @@ void CreateClusters(Mesh &mesh, string filename)
         u32 childIndex;
     };
 
-    StaticArray<StackEntry> stack(scratch.temp.arena, 128);
+    StaticArray<StackEntry> queue(scratch.temp.arena, numNodes, numNodes);
+    u32 readOffset  = 0;
+    u32 writeOffset = 0;
 
     for (int i = 0; i < rootNode.numChildren; i++)
     {
@@ -3294,7 +3291,7 @@ void CreateClusters(Mesh &mesh, string filename)
         root.parentIndex = 0;
         root.childIndex  = i;
 
-        stack.Push(root);
+        queue[writeOffset++] = root;
     }
 
     // interesting idea:
@@ -3320,8 +3317,10 @@ void CreateClusters(Mesh &mesh, string filename)
 
     for (;;)
     {
-        if (stack.Length() == 0) break;
-        StackEntry entry = stack.Pop();
+        if (writeOffset == readOffset) break;
+
+        u32 readIndex    = readOffset++;
+        StackEntry entry = queue[readIndex];
 
         u32 childOffset = hierarchy.Length();
         u32 parentIndex = entry.parentIndex;
@@ -3345,13 +3344,15 @@ void CreateClusters(Mesh &mesh, string filename)
                 newEntry.node        = child.children[i];
                 newEntry.parentIndex = childOffset;
                 newEntry.childIndex  = i;
-                stack.Push(newEntry);
+
+                u32 writeIndex    = writeOffset++;
+                queue[writeIndex] = newEntry;
             }
             else
             {
                 u32 partIndex         = child.partIndices[i];
                 GroupPart &part       = parts[partIndex];
-                packed.childOffset[i] = (part.pageIndex << 10) |
+                packed.childOffset[i] = (1u << 31u) | (part.pageIndex << 10) |
                                         (part.clusterStartIndex << 5) |
                                         (part.clusterCount - 1);
             }
@@ -3360,14 +3361,20 @@ void CreateClusters(Mesh &mesh, string filename)
         hierarchy.Push(packed);
     }
 
+    Assert(numNodes != 0);
+    Print("num nodes: %u\n", numNodes);
     Assert(hierarchy.Length() == numNodes);
 
+    ClusterFileHeader *fileHeader =
+        (ClusterFileHeader *)GetMappedPtr(&builder, fileHeaderOffset);
+    fileHeader->magic    = CLUSTER_FILE_MAGIC;
+    fileHeader->numPages = pageInfos.Length();
+    fileHeader->numNodes = numNodes;
+
     // Write hierarchy to disk
-    u64 hierarchyOffset =
-        AllocateSpace(&builder, sizeof(PackedHierarchyNode) * numNodes + sizeof(u32));
-    u8 *ptr = (u8 *)GetMappedPtr(&builder, hierarchyOffset);
-    MemoryCopy(ptr, &numNodes, sizeof(u32));
-    MemoryCopy(ptr + sizeof(u32), hierarchy.data, sizeof(PackedHierarchyNode) * numNodes);
+    u64 hierarchyOffset = AllocateSpace(&builder, sizeof(PackedHierarchyNode) * numNodes);
+    u8 *ptr             = (u8 *)GetMappedPtr(&builder, hierarchyOffset);
+    MemoryCopy(ptr, hierarchy.data, sizeof(PackedHierarchyNode) * numNodes);
 
     OS_UnmapFile(builder.ptr);
     OS_ResizeFile(builder.filename, builder.totalSize);

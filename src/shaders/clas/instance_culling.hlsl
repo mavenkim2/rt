@@ -6,6 +6,7 @@
 StructuredBuffer<GPUInstance> gpuInstances : register(t0);
 RWStructuredBuffer<uint> globals : register(u1);
 RWStructuredBuffer<CandidateNode> nodeQueue : register(u2);
+RWStructuredBuffer<Queue> queue : register(u3);
 
 [[vk::push_constant]] NumPushConstant pc;
 
@@ -27,4 +28,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
     candidateNode.pad = 0;
 
     nodeQueue[blasIndex] = candidateNode;
+
+    InterlockedAdd(queue[0].nodeWriteOffset, 1);
+    InterlockedAdd(queue[0].numNodes, 1);
 }
