@@ -3310,7 +3310,6 @@ void CreateClusters(Mesh &mesh, string filename)
     // 6. when the instance is small enough, use some smaller proxy/proxies (i.e., somehow
     // combine and simplify the instances)
     // 7. partitioned tlas (obviously)
-    // 8. inverse render a proxy (lol)
 
     // so if the instance is outside the frustum or occluded, and wasn't intersected, then it
     // should be removed

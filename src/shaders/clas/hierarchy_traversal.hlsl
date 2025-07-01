@@ -88,8 +88,6 @@ struct PackedInstanceHierarchyNode
 #define NUM_CANDIDATE_NODES_INDEX 0
 #define NODE_SIZE 3
 
-groupshared uint groupNodeReadOffset;
-
 globallycoherent RWStructuredBuffer<Queue> queue : register(u0);
 
 ConstantBuffer<GPUScene> gpuScene : register(b1);
@@ -105,7 +103,7 @@ RWStructuredBuffer<BLASData> blasDatas : register(u9);
 
 struct ClusterCull 
 {
-    void ProcessNode(WorkItem workItem, uint childIndex)
+    void ProcessNode(WorkItem workItem, uint childIndex, uint processed)
     {
         CandidateNode candidateNode;
         candidateNode.instanceID = workItem.x;
@@ -120,11 +118,12 @@ struct ClusterCull
         // TODO 
         bool isLeaf = bool(node.childOffset[childIndex] >> 31u);
 
+        float2 edgeScales = float2(0, 0);
         if (isValid)
         {
             float4 lodBounds = node.lodBounds[childIndex];
             float maxParentError = node.maxParentError[childIndex];
-            float2 edgeScales = TestNode(instance.objectToRender, gpuScene.cameraFromRender, lodBounds);
+            edgeScales = TestNode(instance.objectToRender, gpuScene.cameraFromRender, lodBounds);
 
             isValid &= edgeScales.x <= maxParentError;
         }
@@ -146,18 +145,17 @@ struct ClusterCull
             childCandidateNode.x = candidateNode.instanceID;
             childCandidateNode.y = node.childOffset[childIndex];
             childCandidateNode.z = candidateNode.blasIndex;
-            childCandidateNode.w = 0;
+            childCandidateNode.w = (uint)edgeScales.x;
 
             nodeQueue[nodeWriteOffset] = childCandidateNode;
         }
 
         DeviceMemoryBarrier();
 
-#if 0
         if (isValid && isLeaf)
         {
             uint leafWriteOffset;
-            uint leafInfo = node.childOffset[childIndex];
+            uint leafInfo = node.childOffset[childIndex] & 0x7fffffff;
             uint numClusters = leafInfo & ((1u << 5u) - 1u);
             WaveInterlockedAdd(queue[0].leafWriteOffset, numClusters, leafWriteOffset);
             // DeviceMemoryBarrier();
@@ -180,13 +178,6 @@ struct ClusterCull
             }
 
             DeviceMemoryBarrier();
-        }
-#endif
-
-        if (WaveIsFirstLane())
-        {
-            int numNodesCompleted = (int)WaveActiveCountBits(isValid);
-            InterlockedAdd(queue[0].numNodes, -numNodesCompleted);
         }
     }
 
@@ -239,56 +230,69 @@ void TraverseHierarchy()
     uint childIndex = 0;
     uint leafReadOffset = ~0u;
 
-    bool processed = false;
+    bool processed = true;
     bool noMoreNodes = false;
 
     WorkItem workItem;
+    workItem.x = ~0u;
+    workItem.y = ~0u;
+    workItem.z = ~0u;
     Traversal traversal;
+
+    uint depth = 0;
 
     for (;;)
     {
+        if (depth == 1000)
+        {
+            break;
+        }
         if (!noMoreNodes)
         {
-            uint numNodesToRead = WaveActiveCountBits(!processed) >> CHILDREN_PER_HIERARCHY_NODE_BITS;
+            uint write = 0;
+            uint numNodesToRead = WaveActiveCountBits(processed) >> CHILDREN_PER_HIERARCHY_NODE_BITS;
+            uint newNodeReadOffset = 0;
+
             if (WaveIsFirstLane() && numNodesToRead)
             {
-                InterlockedAdd(queue[0].nodeReadOffset, numNodesToRead, nodeReadOffset);
+                InterlockedAdd(queue[0].nodeReadOffset, numNodesToRead, newNodeReadOffset);
             }
+            newNodeReadOffset = WaveReadLaneFirst(newNodeReadOffset);
+            uint sourceIndex = WavePrefixCountBits(processed);
             if (numNodesToRead)
             {
-                WorkItem newWorkItem;
-                if ((numNodesToRead & (CHILDREN_PER_HIERARCHY_NODE - 1)) != 0)
-                {
-                    printf("bad\n");
-                }
-                if (waveIndex < numNodesToRead)
-                {
-                    nodeReadOffset = WaveReadLaneFirst(nodeReadOffset) + waveIndex;
-                    newWorkItem = nodeQueue[nodeReadOffset];
-                }
-                uint sourceIndex = WavePrefixCountBits(!processed);
-                if (!processed)
-                {
-                    workItem = WaveReadLaneAt(newWorkItem, sourceIndex >> CHILDREN_PER_HIERARCHY_NODE_BITS);
-                    childIndex = sourceIndex & (CHILDREN_PER_HIERARCHY_NODE - 1);
-                }
+                nodeReadOffset = processed ? newNodeReadOffset + (sourceIndex >> CHILDREN_PER_HIERARCHY_NODE_BITS) : nodeReadOffset;
+                childIndex = processed ? sourceIndex & (CHILDREN_PER_HIERARCHY_NODE - 1) : childIndex;
             }
+
+            if ((waveIndex & (CHILDREN_PER_HIERARCHY_NODE - 1)) == 0)
+            {
+                workItem = nodeQueue[nodeReadOffset];
+            }
+            workItem = WaveReadLaneAt(workItem, waveIndex & ~(CHILDREN_PER_HIERARCHY_NODE - 1));
 
             processed = false;
             bool isValid = (workItem.x != ~0u && workItem.y != ~0u && workItem.z != ~0u);
             
             if (isValid)
             {
-                // if node
-                traversal.ProcessNode(workItem, childIndex);
+                traversal.ProcessNode(workItem, childIndex, write);
                 processed = true;
+            }
+
+            if (WaveIsFirstLane())
+            {
+                int numNodesCompleted = (int)(WaveActiveCountBits(isValid) >> CHILDREN_PER_HIERARCHY_NODE_BITS);
+                InterlockedAdd(queue[0].numNodes, -numNodesCompleted);
             }
         }
 
-#if 0
+        depth++;
+
         // Process leaves
         if (WaveActiveAllTrue(!processed))
         {
+#if 0
             if (leafReadOffset == ~0u)
             {
                 WaveInterlockedAdd(queue[0].leafReadOffset, 1, leafReadOffset);
@@ -308,6 +312,7 @@ void TraverseHierarchy()
                 traversal.ProcessLeaf(workItem);
                 leafReadOffset = ~0u;
             }
+#endif
 
             uint numNodes;
             if (WaveIsFirstLane())
@@ -319,9 +324,9 @@ void TraverseHierarchy()
             if (!noMoreNodes && numNodes == 0)
             {
                 noMoreNodes = true;
+                return;
             }
         }
-#endif
     }
 }
 

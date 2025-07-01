@@ -1303,6 +1303,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 AffineSpace(axis, Vec3f(0)) * Translate(cameraStart - camera.position);
 
             gpuScene.renderFromCamera = Inverse(cameraFromRender);
+            gpuScene.cameraFromRender = cameraFromRender;
             OS_GetMousePos(params->window, shaderDebug.mousePos.x, shaderDebug.mousePos.y);
         }
         u32 dispatchDimX =
@@ -1417,7 +1418,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 cmd->FlushBarriers();
                 device->EndEvent(cmd);
             }
-
             GPUBuffer readback =
                 device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                      workItemQueueBuffer.size, MemoryUsage::GPU_TO_CPU);
@@ -1428,7 +1428,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             device->SubmitCommandBuffer(cmd);
             device->Wait(testSemaphore);
 
-            Vec4u *data = (Vec4u *)readback.mappedPtr;
+            Vec4u *data = (Vec4u *)readback.mappedPtr + MAX_CANDIDATE_NODES;
 
             {
                 // Prepare indirect args
