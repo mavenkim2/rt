@@ -53,8 +53,7 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
     // Decode vertices
     for (uint vertexIndex = groupIndex; vertexIndex < header.numVertices; vertexIndex += waveNumActiveLanes)
     {
-        //float3 position = header.DecodePosition(vertexIndex);
-        float3 position = float3(1.f, 2.f, 3.f);
+        float3 position = header.DecodePosition(vertexIndex);
         decodeVertexBuffer[vertexBufferOffset + vertexIndex] = position;
     }
 }

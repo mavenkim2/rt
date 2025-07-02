@@ -110,6 +110,7 @@ struct GeometryIndexAndFlags
 
 struct FillClusterTriangleInfoPushConstant
 {
+    uint offset;
     uint indexBufferBaseAddressLowBits;
     uint indexBufferBaseAddressHighBits;
     uint vertexBufferBaseAddressLowBits;

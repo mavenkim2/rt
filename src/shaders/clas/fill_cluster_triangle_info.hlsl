@@ -10,7 +10,9 @@ RWStructuredBuffer<CLASPageInfo> clasPageInfos : register(u3);
 
 [[vk::push_constant]] FillClusterTriangleInfoPushConstant pc;
 
-[numthreads(MAX_CLUSTERS_PER_PAGE, 1, 1)]
+groupshared uint clusterStartIndex;
+
+[numthreads(32, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupID, uint groupIndex : SV_GroupIndex)
 {
     if (dispatchThreadID.x == 0)
@@ -19,21 +21,22 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
         globals[GLOBALS_DECODE_INDIRECT_Z] = 1;
     }
 
-    uint pageIndex = groupID.x;
+    uint pageIndex = groupID.x + pc.offset;
     uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
     uint numClusters = GetNumClustersInPage(basePageAddress);
 
     if (groupIndex >= numClusters) return;
 
-    uint descriptorIndex;
-    WaveInterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], 1, descriptorIndex);
-
     if (groupIndex == 0)
     {
+        InterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], numClusters, clusterStartIndex);
         CLASPageInfo pageInfo;
-        pageInfo.addressStartIndex = descriptorIndex;
+        pageInfo.addressStartIndex = pc.offset * MAX_CLUSTERS_PER_PAGE + clusterStartIndex;
         clasPageInfos[pageIndex] = pageInfo;
     }
+    GroupMemoryBarrierWithGroupSync();
+
+    uint descriptorIndex = clusterStartIndex + groupIndex;
 
     uint64_t indexBufferBaseAddress = ((uint64_t(pc.indexBufferBaseAddressHighBits) << 32) | (pc.indexBufferBaseAddressLowBits));
     uint64_t vertexBufferBaseAddress = ((uint64_t(pc.vertexBufferBaseAddressHighBits) << 32) | (pc.vertexBufferBaseAddressLowBits));

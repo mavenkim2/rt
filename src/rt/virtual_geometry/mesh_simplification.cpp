@@ -1723,7 +1723,6 @@ struct ClusterGroup
     f32 *vertexData;
     u32 *indices;
 
-    u32 headerOffset;
     u32 buildDataIndex;
 
     u32 clusterStartIndex;
@@ -1752,6 +1751,8 @@ struct Cluster
 
     u32 groupIndex;
     u32 childGroupIndex;
+
+    u32 headerIndex;
 
     f32 lodError;
 };
@@ -2567,7 +2568,8 @@ void CreateClusters(Mesh &mesh, string filename)
 
             clusters.Resize(totalNumClusters + numClusters);
             clusterGroups.Resize(totalNumGroups + partitionResult.ranges.Length());
-            Cluster *nextLevelClusters = clusters.data + totalNumClusters;
+
+            ArrayView<Cluster> nextLevelClusters(clusters, totalNumClusters, numClusters);
 
             std::atomic<u32> numLevelClusters(0);
             std::atomic<u32> numIndices(0);
@@ -2773,7 +2775,7 @@ void CreateClusters(Mesh &mesh, string filename)
                             int clusterIndex =
                                 partitionResult.clusterIndices[clusterIndexIndex];
 
-                            levelClusters[clusterIndex].groupIndex = groupIndex;
+                            levelClusters[clusterIndex].groupIndex = newGroupIndex;
 
                             clusterSpheres[clusterIndexIndex - range.begin] =
                                 levelClusters[clusterIndex].lodBounds;
@@ -2786,6 +2788,8 @@ void CreateClusters(Mesh &mesh, string filename)
                             clusterSpheres, range.end - range.begin);
 
                         // Add the new clusters
+                        DenseGeometryBuildData *groupBuildData = &buildDatas[threadIndex];
+                        u32 headerOffset = groupBuildData->headers.Length();
                         for (auto &list : clusterBuilder.threadClusters)
                         {
                             RecordAOSSplits *newClusterRecords = PushArrayNoZero(
@@ -2800,17 +2804,16 @@ void CreateClusters(Mesh &mesh, string filename)
                                 cluster.childGroupIndex = newGroupIndex;
                                 cluster.lodError        = error;
                                 cluster.lodBounds       = parentSphereBounds;
+                                cluster.headerIndex     = headerOffset + offset + i;
                             }
                             offset += list.l.Length();
                         }
 
-                        DenseGeometryBuildData *groupBuildData = &buildDatas[threadIndex];
                         ClusterGroup newClusterGroup;
                         newClusterGroup.vertexData       = (f32 *)simplifiedMesh.p;
                         newClusterGroup.indices          = simplifiedMesh.indices;
                         newClusterGroup.primRefs         = newPrimRefs;
                         newClusterGroup.buildDataIndex   = threadIndex;
-                        newClusterGroup.headerOffset     = groupBuildData->headers.Length();
                         newClusterGroup.isLeaf           = false;
                         newClusterGroup.maxParentError   = error;
                         newClusterGroup.lodBounds        = parentSphereBounds;
@@ -2880,7 +2883,6 @@ void CreateClusters(Mesh &mesh, string filename)
 #endif
 
             Assert(numLevelClusters.load() < levelClusters.Length());
-            // TODO: combine the clusters into an obj and look at it
             u32 clusterOffset = 0;
             StaticArray<Cluster> reorderedClusters(scratch.temp.arena, levelClusters.Length(),
                                                    levelClusters.Length());
@@ -3018,14 +3020,11 @@ void CreateClusters(Mesh &mesh, string filename)
             u32 clusterMetadataSize =
                 (numClustersInPage + 1) * NUM_CLUSTER_HEADER_FLOAT4S * sizeof(Vec4f);
 
-            ClusterGroup &childGroup =
-                clusterGroups[clusters[group.clusterStartIndex + clusterGroupIndex]
-                                  .childGroupIndex];
-            int buildDataIndex = childGroup.buildDataIndex;
-            u32 geoByteSize =
-                GetGeoByteSize(childGroup.headerOffset + clusterGroupIndex, buildDataIndex);
-            u32 shadByteSize =
-                GetShadByteSize(childGroup.headerOffset + clusterGroupIndex, buildDataIndex);
+            Cluster &cluster         = clusters[group.clusterStartIndex + clusterGroupIndex];
+            ClusterGroup &childGroup = clusterGroups[cluster.childGroupIndex];
+            int buildDataIndex       = childGroup.buildDataIndex;
+            u32 geoByteSize          = GetGeoByteSize(cluster.headerIndex, buildDataIndex);
+            u32 shadByteSize         = GetShadByteSize(cluster.headerIndex, buildDataIndex);
 
             u32 totalSize = sizeof(ClusterPageHeader) + clusterMetadataSize +
                             currentGeoBufferSize + currentShadingBufferSize + geoByteSize +
@@ -3093,11 +3092,10 @@ void CreateClusters(Mesh &mesh, string filename)
                  clusterGroupIndex < part.clusterStartIndex + part.clusterCount;
                  clusterGroupIndex++)
             {
-                ClusterGroup &childGroup =
-                    clusterGroups[clusters[group.clusterStartIndex + clusterGroupIndex]
-                                      .childGroupIndex];
-                u32 geoByteSize = GetGeoByteSize(childGroup.headerOffset + clusterGroupIndex,
-                                                 childGroup.buildDataIndex);
+                Cluster &cluster = clusters[group.clusterStartIndex + clusterGroupIndex];
+                ClusterGroup &childGroup = clusterGroups[cluster.childGroupIndex];
+                u32 geoByteSize =
+                    GetGeoByteSize(cluster.headerIndex, childGroup.buildDataIndex);
                 currentGeoOffset += geoByteSize;
             }
         }
@@ -3114,9 +3112,8 @@ void CreateClusters(Mesh &mesh, string filename)
         for (int partIndex = pageInfo.partStartIndex;
              partIndex < pageInfo.partStartIndex + pageInfo.partCount; partIndex++)
         {
-            GroupPart &part                    = parts[partIndex];
-            ClusterGroup &group                = clusterGroups[part.groupIndex];
-            PackedDenseGeometryHeader *headers = headersBuffer[group.buildDataIndex];
+            GroupPart &part     = parts[partIndex];
+            ClusterGroup &group = clusterGroups[part.groupIndex];
 
             for (int clusterGroupIndex = part.clusterStartIndex;
                  clusterGroupIndex < part.clusterStartIndex + part.clusterCount;
@@ -3125,10 +3122,10 @@ void CreateClusters(Mesh &mesh, string filename)
                 int clusterIndex         = group.clusterStartIndex + clusterGroupIndex;
                 Cluster &cluster         = clusters[clusterIndex];
                 ClusterGroup &childGroup = clusterGroups[cluster.childGroupIndex];
-                int headerIndex          = childGroup.headerOffset + clusterGroupIndex;
+                int headerIndex          = cluster.headerIndex;
                 int buildDataIndex       = childGroup.buildDataIndex;
 
-                PackedDenseGeometryHeader header = headers[headerIndex];
+                PackedDenseGeometryHeader header = headersBuffer[buildDataIndex][headerIndex];
                 header.z                         = currentShadOffset;
                 header.a                         = currentGeoOffset;
 
@@ -3166,11 +3163,11 @@ void CreateClusters(Mesh &mesh, string filename)
                  clusterGroupIndex < part.clusterStartIndex + part.clusterCount;
                  clusterGroupIndex++)
             {
-                int clusterIndex = group.clusterStartIndex + clusterGroupIndex;
-                ClusterGroup &childGroup =
-                    clusterGroups[clusters[clusterIndex].childGroupIndex];
-                int headerIndex    = childGroup.headerOffset + clusterGroupIndex;
-                int buildDataIndex = childGroup.buildDataIndex;
+                int clusterIndex         = group.clusterStartIndex + clusterGroupIndex;
+                Cluster &cluster         = clusters[clusterIndex];
+                ClusterGroup &childGroup = clusterGroups[cluster.childGroupIndex];
+                int headerIndex          = cluster.headerIndex;
+                int buildDataIndex       = childGroup.buildDataIndex;
 
                 PackedDenseGeometryHeader &header = headersBuffer[buildDataIndex][headerIndex];
                 u8 *geoByteData                   = geoByteDatasBuffer[buildDataIndex];
@@ -3195,11 +3192,11 @@ void CreateClusters(Mesh &mesh, string filename)
                  clusterGroupIndex < part.clusterStartIndex + part.clusterCount;
                  clusterGroupIndex++)
             {
-                int clusterIndex = group.clusterStartIndex + clusterGroupIndex;
-                ClusterGroup &childGroup =
-                    clusterGroups[clusters[clusterIndex].childGroupIndex];
-                int headerIndex    = childGroup.headerOffset + clusterGroupIndex;
-                int buildDataIndex = childGroup.buildDataIndex;
+                int clusterIndex         = group.clusterStartIndex + clusterGroupIndex;
+                Cluster &cluster         = clusters[clusterIndex];
+                ClusterGroup &childGroup = clusterGroups[cluster.childGroupIndex];
+                int headerIndex          = cluster.headerIndex;
+                int buildDataIndex       = childGroup.buildDataIndex;
 
                 PackedDenseGeometryHeader &header = headersBuffer[buildDataIndex][headerIndex];
                 u8 *shadingByteData               = geoByteDatasBuffer[buildDataIndex];

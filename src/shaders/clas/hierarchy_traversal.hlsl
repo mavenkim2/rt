@@ -248,7 +248,7 @@ struct ClusterCull
         float minScale = min(scale.x, min(scale.y, scale.z));
         float maxScale = max(scale.x, max(scale.y, scale.z));
 
-            float test;
+        float test;
         float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test);
 
         bool isValid = edgeScales.x > lodError * minScale;
