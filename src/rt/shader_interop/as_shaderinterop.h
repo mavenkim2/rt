@@ -19,7 +19,7 @@ namespace rt
 
 #define CLUSTER_FILE_MAGIC 0x6A697975
 
-#define NUM_CLUSTER_HEADER_FLOAT4S 5
+#define NUM_CLUSTER_HEADER_FLOAT4S 4
 
 #define MAX_CANDIDATE_NODES    (1u << 21u)
 #define MAX_CANDIDATE_CLUSTERS (1u << 24)
@@ -139,8 +139,44 @@ struct PackedHierarchyNode
 
 struct GPUInstance
 {
-    float3x4 objectToRender;
+    float3x4 renderFromObject;
     uint globalRootNodeOffset;
+};
+
+struct TestDenseGeometry
+{
+    uint baseAddress;
+    uint geoBaseAddress;
+    uint shadBaseAddress;
+
+    float4 lodBounds;
+    float lodError;
+
+    int3 anchor;
+    uint2 octBase;
+
+    uint3 posBitWidths;
+    uint2 octBitWidths;
+    uint indexBitWidth;
+    uint numFaceIDBits;
+
+    uint numTriangles;
+    uint numVertices;
+
+    uint normalOffset;
+    uint faceIDOffset;
+    uint indexOffset;
+    uint ctrlOffset;
+    uint firstBitOffset;
+    int posPrecision;
+    uint materialInfo;
+
+    uint3 numPrevRestartsBeforeDwords;
+    uint3 prevHighRestartBeforeDwords;
+    int3 prevHighEdge1BeforeDwords;
+    int3 prevHighEdge2BeforeDwords;
+
+    bool debug;
 };
 
 #define GLOBALS_VERTEX_BUFFER_OFFSET_INDEX 0
@@ -156,9 +192,11 @@ struct GPUInstance
 #define GLOBALS_CLAS_INDIRECT_Y 8
 #define GLOBALS_CLAS_INDIRECT_Z 9
 
-#define GLOBALS_BLAS_INDIRECT_X 7
-#define GLOBALS_BLAS_INDIRECT_Y 8
-#define GLOBALS_BLAS_INDIRECT_Z 9
+#define GLOBALS_BLAS_INDIRECT_X 10
+#define GLOBALS_BLAS_INDIRECT_Y 11
+#define GLOBALS_BLAS_INDIRECT_Z 12
+
+#define GLOBALS_SIZE 13
 
 #ifdef __cplusplus
 }

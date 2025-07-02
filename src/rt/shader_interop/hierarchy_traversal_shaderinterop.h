@@ -13,6 +13,8 @@ struct Queue
 
     uint leafReadOffset;
     uint leafWriteOffset;
+
+    uint debugLeafWriteOffset;
 };
 
 struct CandidateNode

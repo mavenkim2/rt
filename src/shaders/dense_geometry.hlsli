@@ -310,47 +310,54 @@ DenseGeometry GetDenseGeometryHeader(uint4 packed[NUM_CLUSTER_HEADER_FLOAT4S], u
 {
     DenseGeometry result;
 
+    result.lodBounds.x = asfloat(packed[0].x);
+    result.lodBounds.y = asfloat(packed[0].y);
+    result.lodBounds.z = asfloat(packed[0].z);
+    result.lodBounds.w = asfloat(packed[0].w);
+
     result.baseAddress = baseAddress;
-    result.shadBaseAddress = packed[0].x;
-    result.geoBaseAddress = packed[0].y;
+    result.shadBaseAddress = packed[1].x;
+    result.geoBaseAddress = packed[1].y;
 
-    result.anchor[0] = BitFieldExtractI32((int)packed[0].z, ANCHOR_WIDTH, 0);
-    result.numTriangles = BitFieldExtractU32(packed[0].z, 8, ANCHOR_WIDTH);
+    result.anchor[0] = BitFieldExtractI32((int)packed[1].z, ANCHOR_WIDTH, 0);
+    result.numTriangles = BitFieldExtractU32(packed[1].z, 8, ANCHOR_WIDTH);
 
-    result.anchor[1] = BitFieldExtractI32((int)packed[0].w, ANCHOR_WIDTH, 0);
-    result.posBitWidths[0] = BitFieldExtractU32(packed[0].w, 5, ANCHOR_WIDTH);
-    result.indexBitWidth = BitFieldExtractU32(packed[0].w, 3, ANCHOR_WIDTH + 5) + 1;
+    result.anchor[1] = BitFieldExtractI32((int)packed[1].w, ANCHOR_WIDTH, 0);
+    result.posBitWidths[0] = BitFieldExtractU32(packed[1].w, 5, ANCHOR_WIDTH);
+    result.indexBitWidth = BitFieldExtractU32(packed[1].w, 3, ANCHOR_WIDTH + 5) + 1;
 
-    result.anchor[2] = BitFieldExtractI32((int)packed[1].x, ANCHOR_WIDTH, 0);
-    result.posPrecision = (int)BitFieldExtractU32(packed[1].x, 8, ANCHOR_WIDTH) + CLUSTER_MIN_PRECISION;
+    result.anchor[2] = BitFieldExtractI32((int)packed[2].x, ANCHOR_WIDTH, 0);
+    result.posPrecision = (int)BitFieldExtractU32(packed[2].x, 8, ANCHOR_WIDTH) + CLUSTER_MIN_PRECISION;
     
-    result.numVertices     = BitFieldExtractU32(packed[1].y, 9, 0);
-    uint reuseBufferLength = BitFieldExtractU32(packed[1].y, 8, 9);
-    result.posBitWidths[1] = BitFieldExtractU32(packed[1].y, 5, 17);
-    result.posBitWidths[2] = BitFieldExtractU32(packed[1].y, 5, 22);
-    result.octBitWidths[0] = BitFieldExtractU32(packed[1].y, 5, 27);
+    result.numVertices     = BitFieldExtractU32(packed[2].y, 9, 0);
+    uint reuseBufferLength = BitFieldExtractU32(packed[2].y, 8, 9);
+    result.posBitWidths[1] = BitFieldExtractU32(packed[2].y, 5, 17);
+    result.posBitWidths[2] = BitFieldExtractU32(packed[2].y, 5, 22);
+    result.octBitWidths[0] = BitFieldExtractU32(packed[2].y, 5, 27);
 
-    result.prevHighRestartBeforeDwords[1] = BitFieldExtractU32(packed[1].z, 6, 0);
-    result.prevHighRestartBeforeDwords[2] = BitFieldExtractU32(packed[1].z, 7, 6);
-    result.prevHighEdge1BeforeDwords[0] = BitFieldExtractI32(packed[1].z, 6, 13);
-    result.prevHighEdge1BeforeDwords[1] = BitFieldExtractI32(packed[1].z, 7, 19);
-    result.prevHighEdge2BeforeDwords[0] = BitFieldExtractI32(packed[1].z, 6, 26);
+    result.prevHighRestartBeforeDwords[1] = BitFieldExtractU32(packed[2].z, 6, 0);
+    result.prevHighRestartBeforeDwords[2] = BitFieldExtractU32(packed[2].z, 7, 6);
+    result.prevHighEdge1BeforeDwords[0] = BitFieldExtractI32(packed[2].z, 6, 13);
+    result.prevHighEdge1BeforeDwords[1] = BitFieldExtractI32(packed[2].z, 7, 19);
+    result.prevHighEdge2BeforeDwords[0] = BitFieldExtractI32(packed[2].z, 6, 26);
 
-    result.prevHighRestartBeforeDwords[0] = BitFieldExtractU32(packed[1].w, 5, 0);
-    result.prevHighEdge1BeforeDwords[2] = BitFieldExtractI32(packed[1].w, 8, 5);
-    result.prevHighEdge2BeforeDwords[1] = BitFieldExtractI32(packed[1].w, 7, 13);
-    result.prevHighEdge2BeforeDwords[2] = BitFieldExtractI32(packed[1].w, 8, 20);
+    result.prevHighRestartBeforeDwords[0] = BitFieldExtractU32(packed[2].w, 5, 0);
+    result.prevHighEdge1BeforeDwords[2] = BitFieldExtractI32(packed[2].w, 8, 5);
+    result.prevHighEdge2BeforeDwords[1] = BitFieldExtractI32(packed[2].w, 7, 13);
+    result.prevHighEdge2BeforeDwords[2] = BitFieldExtractI32(packed[2].w, 8, 20);
 
-    result.octBitWidths[1]                = BitFieldExtractU32(packed[2].x, 5, 0);
-    result.numPrevRestartsBeforeDwords[0] = BitFieldExtractU32(packed[2].x, 6, 5);
-    result.numPrevRestartsBeforeDwords[1] = BitFieldExtractU32(packed[2].x, 7, 11);
-    result.numPrevRestartsBeforeDwords[2] = BitFieldExtractU32(packed[2].x, 8, 18);
-    result.numFaceIDBits = BitFieldExtractU32(packed[2].x, 6, 26); 
+    result.octBitWidths[1]                = BitFieldExtractU32(packed[3].x, 5, 0);
+    result.numPrevRestartsBeforeDwords[0] = BitFieldExtractU32(packed[3].x, 6, 5);
+    result.numPrevRestartsBeforeDwords[1] = BitFieldExtractU32(packed[3].x, 7, 11);
+    result.numPrevRestartsBeforeDwords[2] = BitFieldExtractU32(packed[3].x, 8, 18);
+    result.numFaceIDBits = BitFieldExtractU32(packed[3].x, 6, 26); 
 
-    result.octBase[0] = BitFieldExtractU32(packed[2].y, 16, 0);
-    result.octBase[1] = BitFieldExtractU32(packed[2].y, 16, 16);
+    result.octBase[0] = BitFieldExtractU32(packed[3].y, 16, 0);
+    result.octBase[1] = BitFieldExtractU32(packed[3].y, 16, 16);
 
-    result.materialInfo = packed[2].z;
+    result.materialInfo = packed[3].z;
+
+    result.lodError = asfloat(packed[3].w);
 
     // Size of vertex buffer and normal buffer
     const uint vertexBitWidth = result.posBitWidths[0] + result.posBitWidths[1] + result.posBitWidths[2];

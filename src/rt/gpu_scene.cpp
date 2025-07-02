@@ -413,6 +413,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     hierarchyTraversalLayout.AddBinding((u32)RTBindings::ClusterPageData,
                                         DescriptorType::StorageBuffer,
                                         VK_SHADER_STAGE_COMPUTE_BIT);
+    hierarchyTraversalLayout.AddBinding(10, DescriptorType::StorageBuffer,
+                                        VK_SHADER_STAGE_COMPUTE_BIT);
 
     VkPipeline hierarchyTraversalPipeline = device->CreateComputePipeline(
         &hierarchyTraversalShader, &hierarchyTraversalLayout, 0, "hierarchy traversal");
@@ -795,6 +797,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     Assert(clusterFileHeader.magic == CLUSTER_FILE_MAGIC);
 
+    Vec4f *ptr = (Vec4f *)tokenizer.cursor;
+
     CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Copy);
     TransferBuffer clusterPageDataBuffer =
         dgfTransferCmd->SubmitBuffer(tokenizer.cursor, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -843,13 +847,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        megabytes(256));
+        megabytes(320));
     GPUBuffer clasGlobalsBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
             VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
-        sizeof(u32) * 10);
+        sizeof(u32) * GLOBALS_SIZE);
 
     GPUBuffer decodeClusterDataBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -894,8 +898,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         ds.Bind(&buildClusterTriangleInfoBuffer)
             .Bind(&decodeClusterDataBuffer)
             .Bind(&clasGlobalsBuffer)
-            .Bind(&clusterPageDataBuffer.buffer)
-            .Bind(&clasPageInfoBuffer);
+            .Bind(&clasPageInfoBuffer)
+            .Bind(&clusterPageDataBuffer.buffer);
 
         allCommandBuffer->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                                              fillClusterTriangleInfoLayout.pipelineLayout);
@@ -919,7 +923,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         ds.Bind(&indexBuffer)
             .Bind(&vertexBuffer)
             .Bind(&decodeClusterDataBuffer)
-            .Bind(&buildClusterTriangleInfoBuffer)
+            .Bind(&clasGlobalsBuffer)
             .Bind(&clusterPageDataBuffer.buffer);
 
         allCommandBuffer->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
@@ -934,6 +938,19 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                       VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
         allCommandBuffer->FlushBarriers();
     }
+
+    Semaphore testSemaphore   = device->CreateSemaphore();
+    GPUBuffer readback        = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                     indexBuffer.size, MemoryUsage::GPU_TO_CPU);
+    testSemaphore.signalValue = 1;
+
+    allCommandBuffer->CopyBuffer(&readback, &indexBuffer);
+    allCommandBuffer->SignalOutsideFrame(testSemaphore);
+
+    device->SubmitCommandBuffer(allCommandBuffer);
+    device->Wait(testSemaphore);
+
+    u8 *data = (u8 *)readback.mappedPtr;
 
     GPUBuffer clusterAccelAddresses = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -1015,7 +1032,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     GPUBuffer tlasAccelBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
         tlasAccelSize);
 
     if (tlasScenes.Length() != 0)
@@ -1028,7 +1046,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             for (int instanceIndex = 0; instanceIndex < scene->numPrimitives; instanceIndex++)
             {
                 GPUInstance gpuInstance;
-                gpuInstance.objectToRender =
+                gpuInstance.renderFromObject =
                     scene->affineTransforms[instances[instanceIndex].transformIndex];
                 gpuInstance.globalRootNodeOffset = 0;
                 gpuInstances.Push(gpuInstance);
@@ -1038,7 +1056,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     else
     {
         GPUInstance gpuInstance;
-        gpuInstance.objectToRender       = params->renderFromWorld;
+        gpuInstance.renderFromObject     = params->renderFromWorld;
         gpuInstance.globalRootNodeOffset = 0;
         gpuInstances.Push(gpuInstance);
 
@@ -1054,13 +1072,17 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                        sizeof(GPUInstance) * gpuInstances.Length());
 
     GPUBuffer visibleClustersBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         MAX_VISIBLE_CLUSTERS * sizeof(VisibleCluster));
 
     GPUBuffer queueBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, sizeof(Queue));
 
     GPUBuffer workItemQueueBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        sizeof(Vec4u) * (MAX_CANDIDATE_NODES + MAX_CANDIDATE_CLUSTERS));
+
+    GPUBuffer debugLeafBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         sizeof(Vec4u) * (MAX_CANDIDATE_NODES + MAX_CANDIDATE_CLUSTERS));
 
@@ -1336,6 +1358,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         u32 currentBuffer = device->GetCurrentBuffer();
 
+        MemoryCopy(sceneTransferBuffers[currentBuffer].mappedPtr, &gpuScene, sizeof(GPUScene));
+        cmd->SubmitTransfer(&sceneTransferBuffers[currentBuffer]);
+        MemoryCopy(shaderDebugBuffers[currentBuffer].mappedPtr, &shaderDebug,
+                   sizeof(ShaderDebugInfo));
+        cmd->SubmitTransfer(&shaderDebugBuffers[currentBuffer]);
+
         // Virtual texture system
         cmdBufferName = PushStr8F(frameScratch.temp.arena, "Virtual Texture Async Copy Cmd %u",
                                   device->frameCount);
@@ -1353,12 +1381,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         cmd->ClearBuffer(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
 
         // Virtual geometry pass
-        Semaphore testSemaphore = device->CreateSemaphore();
         {
             cmd->ClearBuffer(&visibleClustersBuffer, ~0u);
             cmd->ClearBuffer(&workItemQueueBuffer, ~0u);
             cmd->ClearBuffer(&queueBuffer);
             cmd->ClearBuffer(&clasGlobalsBuffer);
+            cmd->ClearBuffer(&blasDataBuffer);
 
             cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1407,7 +1435,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&hierarchyNodeBuffer.buffer)
                     .Bind(&visibleClustersBuffer)
                     .Bind(&blasDataBuffer)
-                    .Bind(&clusterPageDataBuffer.buffer);
+                    .Bind(&clusterPageDataBuffer.buffer)
+                    .Bind(&debugLeafBuffer);
 
                 cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                                         hierarchyTraversalLayout.pipelineLayout);
@@ -1418,17 +1447,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 cmd->FlushBarriers();
                 device->EndEvent(cmd);
             }
-            GPUBuffer readback =
-                device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                     workItemQueueBuffer.size, MemoryUsage::GPU_TO_CPU);
-            testSemaphore.signalValue = 1;
-            cmd->CopyBuffer(&readback, &workItemQueueBuffer);
-            cmd->SignalOutsideFrame(testSemaphore);
-
-            device->SubmitCommandBuffer(cmd);
-            device->Wait(testSemaphore);
-
-            Vec4u *data = (Vec4u *)readback.mappedPtr + MAX_CANDIDATE_NODES;
 
             {
                 // Prepare indirect args
@@ -1448,6 +1466,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                              VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
                 cmd->FlushBarriers();
             }
+
             {
                 // Calculate where clas addresses should be written for each blas
                 cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -1465,6 +1484,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                              VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
                 cmd->FlushBarriers();
             }
+
             {
                 // Write the clas addresses to a new buffer
                 cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -1486,6 +1506,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                              VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
                 cmd->FlushBarriers();
             }
+
             {
                 // Fill out the BUILD_CLUSTERS_BOTTOM_LEVEL_INFO descriptors
                 cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, fillClusterBLASInfoPipeline);
@@ -1561,7 +1582,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 // TODO: partitioned TLAS
                 // Build the TLAS
                 device->BeginEvent(cmd, "Build TLAS");
-                tlas = cmd->BuildTLAS(&tlasBuffer, 1).as;
+                tlas.as = cmd->BuildTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &tlasBuffer, 1);
                 device->EndEvent(cmd);
             }
         }
@@ -1571,12 +1592,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         pc.frameNum = (u32)device->frameCount;
         pc.width    = envMap->width;
         pc.height   = envMap->height;
-
-        MemoryCopy(sceneTransferBuffers[currentBuffer].mappedPtr, &gpuScene, sizeof(GPUScene));
-        cmd->SubmitTransfer(&sceneTransferBuffers[currentBuffer]);
-        MemoryCopy(shaderDebugBuffers[currentBuffer].mappedPtr, &shaderDebug,
-                   sizeof(ShaderDebugInfo));
-        cmd->SubmitTransfer(&shaderDebugBuffers[currentBuffer]);
 
         VkPipelineStageFlags2 flags   = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
         VkPipelineBindPoint bindPoint = VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;

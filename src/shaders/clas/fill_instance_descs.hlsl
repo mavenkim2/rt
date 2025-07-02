@@ -16,7 +16,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     GPUInstance instance = gpuInstances[blasData.instanceIndex];
 
     AccelerationStructureInstance instanceDescriptor;
-    instanceDescriptor.transform = instance.objectToRender;
+    instanceDescriptor.transform = instance.renderFromObject;
     instanceDescriptor.instanceID = blasData.instanceIndex; // TODO: do I need this?
     instanceDescriptor.instanceMask = 0xff;
     instanceDescriptor.instanceContributionToHitGroupIndex = 0;

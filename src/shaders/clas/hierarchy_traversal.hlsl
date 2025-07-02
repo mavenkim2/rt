@@ -9,24 +9,24 @@ static const float zNear = 1e-2f;
 static const float zFar = 1000.f;
 
 // See if child should be visited
-float2 TestNode(float3x4 objectToRender, float3x4 cameraFromRender, float4 lodBounds)
+float2 TestNode(float3x4 renderFromObject, float3x4 cameraFromRender, float4 lodBounds, float maxScale, out float test)
 {
-    // also candidate clusters/candidate nodes? 
-
     // Find length to cluster center
-    float3 scale = float3(length2(objectToRender[0].xyz), length2(objectToRender[1].xyz), 
-                          length2(objectToRender[2].xyz)); 
-    scale = sqrt(scale);
-    float maxScale = max(scale.x, max(scale.y, scale.z));
-
-    float3 center = mul(objectToRender, float4(lodBounds.xyz, 1.f));
+    float3 center = mul(renderFromObject, float4(lodBounds.xyz, 1.f));
     float radius = lodBounds.w * maxScale;
     float distSqr = length2(center);
 
     // Find angle between vector to cluster center and view vector
-    float3 cameraForward = cameraFromRender[2].xyz;
-    float z = dot(cameraForward, center);
+    float3 cameraForward = -cameraFromRender[2].xyz;
+    float zf = abs(dot(cameraForward, center));
+    float zr = abs(dot(cameraFromRender[0].xyz, center));
+    float zu = abs(dot(cameraFromRender[1].xyz, center));
+
+    //float z = dot(cameraForward, center);
+    float z = max(zf, max(zr, zu));
+
     float x = distSqr - z * z;
+    x = sqrt(max(0.f, x));
 
     // Find angle between vector to cluster center and vector to tangent point on sphere
     float distTangentSqr = distSqr - radius * radius;
@@ -38,21 +38,23 @@ float2 TestNode(float3x4 objectToRender, float3x4 cameraFromRender, float4 lodBo
     float cosSub = (z * distTangent + x * radius) * invDistSqr;
     float cosAdd = (z * distTangent - x * radius) * invDistSqr;
 
+    test = cosAdd;
+
     // Clipping
     float depth = z - zNear;
     if (distSqr < 0.f || cosSub * distTangent < zNear)
     {
         float cosSubX = max(0.f, x - sqrt(radius * radius - depth * depth));
-        cosSub = zNear / sqrt(cosSubX * cosSubX + zNear * zNear);
+        cosSub = zNear * rsqrt(cosSubX * cosSubX + zNear * zNear);
     }
     if (distSqr < 0.f || cosAdd * distTangent < zNear)
     {
         float cosAddX = x + sqrt(radius * radius - depth * depth);
-        cosAdd = zNear / sqrt(cosAddX * cosAddX + zNear * zNear);
+        cosAdd = zNear * rsqrt(cosAddX * cosAddX + zNear * zNear);
     }
 
     float minZ = max(z - radius, zNear);
-    float maxZ = z + radius; //max(z + radius, zFar);
+    float maxZ = max(z + radius, zNear);
 
     return z + radius > zNear ? float2(minZ * cosAdd, maxZ * cosSub) : float2(0, 0);
 }
@@ -101,9 +103,12 @@ StructuredBuffer<PackedHierarchyNode> hierarchyNodes : register(t6);
 RWStructuredBuffer<VisibleCluster> selectedClusters : register(u7);
 RWStructuredBuffer<BLASData> blasDatas : register(u9);
 
+// Debug 
+RWStructuredBuffer<uint4> debugLeaves : register(u10);
+
 struct ClusterCull 
 {
-    void ProcessNode(WorkItem workItem, uint childIndex, uint processed)
+    void ProcessNode(WorkItem workItem, uint childIndex)
     {
         CandidateNode candidateNode;
         candidateNode.instanceID = workItem.x;
@@ -115,25 +120,35 @@ struct ClusterCull
         PackedHierarchyNode node = hierarchyNodes[nodeOffset];
 
         bool isValid = node.childOffset[childIndex] != ~0u;
-        // TODO 
         bool isLeaf = bool(node.childOffset[childIndex] >> 31u);
 
         float2 edgeScales = float2(0, 0);
+        float minScale = 0.f;
+        float test = 0.f;
         if (isValid)
         {
             float4 lodBounds = node.lodBounds[childIndex];
             float maxParentError = node.maxParentError[childIndex];
-            edgeScales = TestNode(instance.objectToRender, gpuScene.cameraFromRender, lodBounds);
 
-            isValid &= edgeScales.x <= maxParentError;
+            float3x4 renderFromObject = instance.renderFromObject;
+
+            float3 scale = float3(length2(renderFromObject[0].xyz), length2(renderFromObject[1].xyz), 
+                              length2(renderFromObject[2].xyz)); 
+            scale = sqrt(scale);
+            minScale = min(scale.x, min(scale.y, scale.z));
+            float maxScale = max(scale.x, max(scale.y, scale.z));
+
+            edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test);
+
+            isValid &= edgeScales.x <= maxParentError * minScale;
         }
 
         uint nodeWriteOffset;
         WaveInterlockedAddScalarTest(queue[0].nodeWriteOffset, isValid && !isLeaf, 1, nodeWriteOffset);
 
+        uint nodesToAdd = WaveActiveCountBits(isValid && !isLeaf);
         if (WaveIsFirstLane())
         {
-            uint nodesToAdd = WaveActiveCountBits(isValid && !isLeaf);
             InterlockedAdd(queue[0].numNodes, nodesToAdd);
         }
 
@@ -145,7 +160,7 @@ struct ClusterCull
             childCandidateNode.x = candidateNode.instanceID;
             childCandidateNode.y = node.childOffset[childIndex];
             childCandidateNode.z = candidateNode.blasIndex;
-            childCandidateNode.w = (uint)edgeScales.x;
+            childCandidateNode.w = asuint(minScale);
 
             nodeQueue[nodeWriteOffset] = childCandidateNode;
         }
@@ -157,7 +172,7 @@ struct ClusterCull
             uint leafWriteOffset;
             uint leafInfo = node.childOffset[childIndex] & 0x7fffffff;
             uint numClusters = leafInfo & ((1u << 5u) - 1u);
-            WaveInterlockedAdd(queue[0].leafWriteOffset, numClusters, leafWriteOffset);
+            InterlockedAdd(queue[0].leafWriteOffset, numClusters, leafWriteOffset);
             // DeviceMemoryBarrier();
 
             uint pageIndex = leafInfo >> 10u;
@@ -172,16 +187,44 @@ struct ClusterCull
                 candidateCluster.x = (pageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | (pageClusterIndex + i);
                 candidateCluster.y = candidateNode.instanceID;
                 candidateCluster.z = candidateNode.blasIndex;
-                candidateCluster.w = 0x80000000;
+                candidateCluster.w = asuint(edgeScales.x);//0x80000000;
 
                 leafQueue[leafWriteOffset + i] = candidateCluster;
             }
 
-            DeviceMemoryBarrier();
         }
+#if 0
+        else if (!isValid && isLeaf)
+        {
+            uint leafWriteOffset;
+            uint leafInfo = node.childOffset[childIndex] & 0x7fffffff;
+            uint numClusters = leafInfo & ((1u << 5u) - 1u);
+            InterlockedAdd(queue[0].debugLeafWriteOffset, numClusters, leafWriteOffset);
+            // DeviceMemoryBarrier();
+
+            uint pageIndex = leafInfo >> 10u;
+            uint pageClusterIndex = (leafInfo >> 5u) & ((1u << 5u) - 1u);
+
+            const int maxClusters = 1 << 24;
+            int clampedNumClusters = min((int)numClusters, maxClusters - (int)leafWriteOffset);
+
+            for (int i = 0; i < clampedNumClusters; i++)
+            {
+                WorkItem candidateCluster;
+                candidateCluster.x = ~0u;
+                candidateCluster.y = asuint(test);
+                candidateCluster.z = node.maxParentError[childIndex];
+                candidateCluster.w = asuint(edgeScales.x);//0x80000000;
+
+                debugLeaves[leafWriteOffset + i] = candidateCluster;
+            }
+        }
+#endif
+
+        DeviceMemoryBarrier();
     }
 
-    void ProcessLeaf(WorkItem workItem)
+    void ProcessLeaf(WorkItem workItem, uint leafReadOffset)
     {
         // Make sure the candidate cluster fits
         uint pageIndex = workItem.x >> MAX_CLUSTERS_PER_PAGE_BITS;
@@ -197,9 +240,18 @@ struct ClusterCull
 
         float4 lodBounds = header.lodBounds;
         float lodError = header.lodError;
-        float2 edgeScales = TestNode(instance.objectToRender, gpuScene.cameraFromRender, lodBounds);
 
-        bool isValid = edgeScales.x > lodError;
+        float3x4 renderFromObject = instance.renderFromObject;
+        float3 scale = float3(length2(renderFromObject[0].xyz), length2(renderFromObject[1].xyz), 
+                              length2(renderFromObject[2].xyz)); 
+        scale = sqrt(scale);
+        float minScale = min(scale.x, min(scale.y, scale.z));
+        float maxScale = max(scale.x, max(scale.y, scale.z));
+
+            float test;
+        float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test);
+
+        bool isValid = edgeScales.x > lodError * minScale;
 
         uint clusterOffset;
         WaveInterlockedAddScalarTest(globals[GLOBALS_CLAS_COUNT_INDEX], isValid, 1, clusterOffset);
@@ -207,10 +259,18 @@ struct ClusterCull
         if (isValid)
         {
             VisibleCluster cluster;
+#if 0
+            cluster.pageIndex = asuint(edgeScales.x);
+            cluster.clusterIndex = asuint(lodError);
+            cluster.instanceID = asuint(gpuScene.cameraFromRender[0].z);
+            cluster.blasIndex = asuint(gpuScene.cameraFromRender[0].w);
+#endif
+#if 1
             cluster.pageIndex = pageIndex;
             cluster.clusterIndex = clusterIndex;
             cluster.instanceID = instanceID;
             cluster.blasIndex = blasIndex;
+#endif
 
             InterlockedAdd(blasDatas[blasIndex].clusterCount, 1);
 
@@ -220,7 +280,7 @@ struct ClusterCull
 };
 
 template <typename Traversal>
-void TraverseHierarchy()
+void TraverseHierarchy(uint dtID)
 {
     uint waveIndex = WaveGetLaneIndex();
     uint waveLaneCount = WaveGetLaneCount();
@@ -243,13 +303,8 @@ void TraverseHierarchy()
 
     for (;;)
     {
-        if (depth == 1000)
-        {
-            break;
-        }
         if (!noMoreNodes)
         {
-            uint write = 0;
             uint numNodesToRead = WaveActiveCountBits(processed) >> CHILDREN_PER_HIERARCHY_NODE_BITS;
             uint newNodeReadOffset = 0;
 
@@ -276,13 +331,13 @@ void TraverseHierarchy()
             
             if (isValid)
             {
-                traversal.ProcessNode(workItem, childIndex, write);
+                traversal.ProcessNode(workItem, childIndex);
                 processed = true;
             }
 
+            int numNodesCompleted = (int)(WaveActiveCountBits(isValid) >> CHILDREN_PER_HIERARCHY_NODE_BITS);
             if (WaveIsFirstLane())
             {
-                int numNodesCompleted = (int)(WaveActiveCountBits(isValid) >> CHILDREN_PER_HIERARCHY_NODE_BITS);
                 InterlockedAdd(queue[0].numNodes, -numNodesCompleted);
             }
         }
@@ -292,10 +347,9 @@ void TraverseHierarchy()
         // Process leaves
         if (WaveActiveAllTrue(!processed))
         {
-#if 0
             if (leafReadOffset == ~0u)
             {
-                WaveInterlockedAdd(queue[0].leafReadOffset, 1, leafReadOffset);
+                InterlockedAdd(queue[0].leafReadOffset, 1, leafReadOffset);
             }
             uint leafWriteOffset = queue[0].leafWriteOffset;
             
@@ -306,13 +360,15 @@ void TraverseHierarchy()
 
             uint batchSize = WaveActiveCountBits(leafReadOffset < leafWriteOffset);
 
-            if ((!noMoreNodes && batchSize == 64) || (noMoreNodes && leafReadOffset < leafWriteOffset))
+            if ((!noMoreNodes && batchSize == WaveGetLaneCount()) || (noMoreNodes && leafReadOffset < leafWriteOffset))
             {
                 workItem = leafQueue[leafReadOffset];
-                traversal.ProcessLeaf(workItem);
-                leafReadOffset = ~0u;
+                if (workItem.x != ~0u && workItem.y != ~0u && workItem.z != ~0u)
+                {
+                    traversal.ProcessLeaf(workItem, leafReadOffset);
+                    leafReadOffset = ~0u;
+                }
             }
-#endif
 
             uint numNodes;
             if (WaveIsFirstLane())
@@ -324,7 +380,6 @@ void TraverseHierarchy()
             if (!noMoreNodes && numNodes == 0)
             {
                 noMoreNodes = true;
-                return;
             }
         }
     }
@@ -333,6 +388,6 @@ void TraverseHierarchy()
 [numthreads(64, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
 {
-    TraverseHierarchy<ClusterCull>();
+    TraverseHierarchy<ClusterCull>(dispatchThreadID.x);
 }
 

@@ -5,12 +5,14 @@ RWByteAddressBuffer indexBuffer : register(u0);
 RWStructuredBuffer<float3> decodeVertexBuffer : register(u1);
 
 StructuredBuffer<DecodeClusterData> decodeClusterDatas : register(t2);
-StructuredBuffer<BUILD_CLUSTERS_TRIANGLE_INFO> buildClusterTriangleInfos : register(t3);
+StructuredBuffer<uint> globals : register(t3);
 
 [numthreads(32, 1, 1)] 
 void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
 {
     uint clusterID = groupID.x;
+
+    if (clusterID >= globals[GLOBALS_CLAS_COUNT_INDEX]) return;
 
     DecodeClusterData decodeClusterData = decodeClusterDatas[clusterID];
     uint pageIndex = decodeClusterData.pageIndex;
@@ -21,11 +23,6 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
     uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
     uint numClusters = GetNumClustersInPage(basePageAddress);
     DenseGeometry header = GetDenseGeometryHeader(basePageAddress, numClusters, clusterIndex);
-
-    if (!header.numTriangles == buildClusterTriangleInfos[clusterID].triangleCount)
-    {
-        printf("bad\n");
-    }
 
     // Decode triangle indices
     uint waveNumActiveLanes = min(32, WaveGetLaneCount());
@@ -56,7 +53,8 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
     // Decode vertices
     for (uint vertexIndex = groupIndex; vertexIndex < header.numVertices; vertexIndex += waveNumActiveLanes)
     {
-        float3 position = header.DecodePosition(vertexIndex);
+        //float3 position = header.DecodePosition(vertexIndex);
+        float3 position = float3(1.f, 2.f, 3.f);
         decodeVertexBuffer[vertexBufferOffset + vertexIndex] = position;
     }
 }

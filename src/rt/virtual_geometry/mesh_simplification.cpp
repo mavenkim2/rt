@@ -1679,14 +1679,26 @@ inline Vec4f ConstructSphereFromSpheres(Vec4f *spheres, u32 numSpheres)
 
     // Start adding spheres
     auto AddSpheres = [&](const Vec4f &sphere0, const Vec4f &sphere1) {
-        f32 distSqr = LengthSquared(sphere0.xyz - sphere1.xyz);
+        Vec3f toOther = sphere1.xyz - sphere0.xyz;
+        f32 distSqr   = LengthSquared(toOther);
         if (Sqr(sphere0.w - sphere1.w) >= distSqr)
         {
             return sphere0.w < sphere1.w ? sphere1 : sphere0;
         }
         f32 dist        = Sqrt(distSqr);
         f32 newRadius   = (dist + sphere0.w + sphere1.w) * 0.5f;
-        Vec3f newCenter = Lerp((newRadius - sphere0.w) / dist, sphere0.xyz, sphere1.xyz);
+        Vec3f newCenter = sphere0.xyz;
+        if (dist > 1e-8f) newCenter += toOther * ((newRadius - sphere0.w) / dist);
+        f32 tolerance = 1e-4f;
+        // ErrorExit(LengthSquared(sphere0.xyz - newCenter) <=
+        //               Sqr(newRadius + tolerance - sphere0.w),
+        //           "%f %f %f %f %f %f %f %f\n", sphere0.x, sphere0.y, sphere0.z, sphere0.w,
+        //           newCenter.x, newCenter.y, newCenter.z, newRadius);
+        // ErrorExit(LengthSquared(sphere1.xyz - newCenter) <=
+        //               Sqr(newRadius + tolerance - sphere1.w),
+        //           "%f %f %f %f %f %f %f %f\n", sphere1.x, sphere1.y, sphere1.z, sphere1.w,
+        //           newCenter.x, newCenter.y, newCenter.z, newRadius);
+
         return Vec4f(newCenter, newRadius);
     };
 
@@ -2124,7 +2136,7 @@ HierarchyNode BuildHierarchy(Arena *arena, const Array<Cluster> &clusters,
         for (u32 recordIndex = 0; recordIndex < numChildren; recordIndex++)
         {
             RecordAOSSplits &childRecord = childRecords[recordIndex];
-            if (childRecord.count <= MAX_CLUSTER_TRIANGLES) continue;
+            if (childRecord.count <= CHILDREN_PER_HIERARCHY_NODE) continue;
 
             f32 childArea = HalfArea(childRecord.geomBounds);
             if (childArea > maxArea)
@@ -2941,8 +2953,6 @@ void CreateClusters(Mesh &mesh, string filename)
     int startIndexIndex          = 0;
     u32 currentGeoBufferSize     = 0;
     u32 currentShadingBufferSize = 0;
-    const u32 clusterHeaderBitSize =
-        sizeof(PackedDenseGeometryHeader) + 2 * CLUSTER_PAGE_SIZE_BITS;
 
     StaticArray<int> sortedClusterIndices(scratch.temp.arena, numClusters);
     // TODO: morton order sort
@@ -3006,7 +3016,7 @@ void CreateClusters(Mesh &mesh, string filename)
              clusterGroupIndex++)
         {
             u32 clusterMetadataSize =
-                ((numClustersInPage + 1) * clusterHeaderBitSize + 7) >> 3;
+                (numClustersInPage + 1) * NUM_CLUSTER_HEADER_FLOAT4S * sizeof(Vec4f);
 
             ClusterGroup &childGroup =
                 clusterGroups[clusters[group.clusterStartIndex + clusterGroupIndex]
@@ -3021,8 +3031,7 @@ void CreateClusters(Mesh &mesh, string filename)
                             currentGeoBufferSize + currentShadingBufferSize + geoByteSize +
                             shadByteSize;
 
-            if (totalSize >= CLUSTER_PAGE_SIZE ||
-                numClustersInPage + 1 >= MAX_CLUSTERS_PER_PAGE)
+            if (totalSize > CLUSTER_PAGE_SIZE || numClustersInPage == MAX_CLUSTERS_PER_PAGE)
             {
                 if (clusterGroupIndex > 0)
                 {
@@ -3123,17 +3132,18 @@ void CreateClusters(Mesh &mesh, string filename)
                 header.z                         = currentShadOffset;
                 header.a                         = currentGeoOffset;
 
+                // TODO: frustum culling bounds
                 MemoryCopy(ptr + currentPageOffset, &cluster.lodBounds, sizeof(Vec4f));
-                // MemoryCopy(ptr + sizeof(Vec4f), cluster.lodBounds, sizeof(Vec4f));
 
-                for (u32 i = 2; i < NUM_CLUSTER_HEADER_FLOAT4S; i++)
+                for (u32 i = 1; i < NUM_CLUSTER_HEADER_FLOAT4S; i++)
                 {
-                    u32 copySize = Min(stride, (u32)sizeof(header) - i * stride);
-                    u32 *src     = (u32 *)&header + 4u * i;
+                    u32 copySize = Min(stride, (u32)sizeof(header) - (i - 1) * stride);
+                    u32 *src     = (u32 *)&header + 4u * (i - 1);
                     MemoryCopy(ptr + currentPageOffset + i * soaStride, src, copySize);
                 }
 
                 // TODO
+                // printf("%u %u %f\n", partIndex, clusterGroupIndex, cluster.lodError);
                 MemoryCopy(ptr + currentPageOffset +
                                (NUM_CLUSTER_HEADER_FLOAT4S - 1) * soaStride + sizeof(Vec3f),
                            &cluster.lodError, sizeof(float));
@@ -3326,8 +3336,8 @@ void CreateClusters(Mesh &mesh, string filename)
 
         hierarchy[parentIndex].childOffset[entry.childIndex] = childOffset;
 
-        HierarchyNode &child = entry.node;
-        PackedHierarchyNode packed;
+        HierarchyNode &child       = entry.node;
+        PackedHierarchyNode packed = {};
         for (int i = 0; i < CHILDREN_PER_HIERARCHY_NODE; i++)
         {
             packed.childOffset[i] = ~0u;
