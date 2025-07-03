@@ -2803,10 +2803,11 @@ GPUAccelerationStructurePayload CommandBuffer::BuildCustomBLAS(GPUBuffer *aabbsB
                    &numAabbs);
 }
 
-void CommandBuffer::BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
-                              GPUBuffer *dstSizes, GPUBuffer *srcInfosCount,
-                              u32 srcInfosOffset, int maxNumClusters, u32 maxNumTriangles,
-                              u32 maxNumVertices, u32 dstAddressesOffset, u32 dstSizesOffset)
+GPUBuffer CommandBuffer::BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
+                                   GPUBuffer *dstSizes, GPUBuffer *srcInfosCount,
+                                   u32 srcInfosOffset, int maxNumClusters, u32 maxNumTriangles,
+                                   u32 maxNumVertices, u32 dstAddressesOffset,
+                                   u32 dstSizesOffset)
 {
 
     VkClusterAccelerationStructureTriangleClusterInputNV triangleClusters = {};
@@ -2843,7 +2844,8 @@ void CommandBuffer::BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddr
     GPUBuffer implicitBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         buildSizesInfo.accelerationStructureSize);
 
     VkClusterAccelerationStructureCommandsInfoNV commandsInfo = {
@@ -2877,6 +2879,7 @@ void CommandBuffer::BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddr
 
         vkCmdBuildClusterAccelerationStructureIndirectNV(buffer, &commandsInfo);
     }
+    return implicitBuffer;
 }
 
 void CommandBuffer::BuildClusterBLAS(GPUBuffer *implicitBuffer, GPUBuffer *scratchBuffer,
@@ -2897,11 +2900,7 @@ void CommandBuffer::BuildClusterBLAS(GPUBuffer *implicitBuffer, GPUBuffer *scrat
         VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_CLUSTERS_BOTTOM_LEVEL_NV;
     inputInfo.opMode = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_IMPLICIT_DESTINATIONS_NV;
     inputInfo.opInput.pClustersBottomLevel  = &bottomLevelInput;
-    inputInfo.maxAccelerationStructureCount = 1;
-
-    VkAccelerationStructureBuildSizesInfoKHR buildSizesInfo = {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
-    vkGetClusterAccelerationStructureBuildSizesNV(device->device, &inputInfo, &buildSizesInfo);
+    inputInfo.maxAccelerationStructureCount = maxAccelerationStructureCount;
 
     // Submit BLAS build command
     VkClusterAccelerationStructureCommandsInfoNV commandsInfo = {

@@ -2251,9 +2251,10 @@ void CreateClusters(Mesh &mesh, string filename)
     for (int i = 0; i < clusterOffset; i++)
     {
         ScratchArena clusterScratch;
-        Cluster cluster  = {};
-        cluster.record   = sortedClusterRecords[i];
-        cluster.mipLevel = 0;
+        Cluster cluster     = {};
+        cluster.record      = sortedClusterRecords[i];
+        cluster.mipLevel    = 0;
+        cluster.headerIndex = handles[i].index;
 
         // Construct the lod bounds
         Vec3f *points =
@@ -2294,6 +2295,7 @@ void CreateClusters(Mesh &mesh, string filename)
 
     clusterGroups.Push(clusterGroup);
 
+    u32 firstGroupSize = 0;
     {
         // 1. Split triangles into clusters (mesh remains)
 
@@ -2577,6 +2579,10 @@ void CreateClusters(Mesh &mesh, string filename)
             std::atomic<u32> numExternal(0);
 
             // Simplify every group
+            if (depth == 0)
+            {
+                firstGroupSize = partitionResult.ranges.Length();
+            }
             ParallelFor(
                 0, partitionResult.ranges.Length(), 1, 1,
                 [&](int jobID, int start, int count) {
@@ -3002,15 +3008,13 @@ void CreateClusters(Mesh &mesh, string filename)
                headers[headerIndex].z;
     };
 
-    for (int groupIndex = 0; groupIndex < clusterGroups.Length(); groupIndex++)
+    for (int groupIndex = 0; groupIndex < firstGroupSize + 1;
+         /*clusterGroups.Length();*/ groupIndex++)
     {
         ClusterGroup &group = clusterGroups[groupIndex];
         if (group.isLeaf) continue;
 
         group.pageStartIndex = pageInfos.Length();
-
-        DenseGeometryBuildData &buildData  = buildDatas[group.buildDataIndex];
-        PackedDenseGeometryHeader *headers = headersBuffer[group.buildDataIndex];
 
         u32 clusterStartIndex = 0;
 
@@ -3069,6 +3073,12 @@ void CreateClusters(Mesh &mesh, string filename)
 
         parts.Push(part);
     }
+
+    PageInfo pageInfo;
+    pageInfo.partStartIndex = partStartIndex;
+    pageInfo.partCount      = parts.Length() - partStartIndex;
+    pageInfo.numClusters    = numClustersInPage;
+    pageInfos.Push(pageInfo);
 
     // Write the data to the pages
     for (auto &pageInfo : pageInfos)
@@ -3199,7 +3209,7 @@ void CreateClusters(Mesh &mesh, string filename)
                 int buildDataIndex       = childGroup.buildDataIndex;
 
                 PackedDenseGeometryHeader &header = headersBuffer[buildDataIndex][headerIndex];
-                u8 *shadingByteData               = geoByteDatasBuffer[buildDataIndex];
+                u8 *shadingByteData               = shadingByteDatasBuffer[buildDataIndex];
 
                 u32 shadByteSize = GetShadByteSize(headerIndex, buildDataIndex);
                 u32 shadOffset   = header.z;

@@ -110,7 +110,6 @@ struct GeometryIndexAndFlags
 
 struct FillClusterTriangleInfoPushConstant
 {
-    uint offset;
     uint indexBufferBaseAddressLowBits;
     uint indexBufferBaseAddressHighBits;
     uint vertexBufferBaseAddressLowBits;
@@ -140,7 +139,11 @@ struct PackedHierarchyNode
 
 struct GPUInstance
 {
+#ifdef __cplusplus
+    float renderFromObject[3][4];
+#else
     float3x4 renderFromObject;
+#endif
     uint globalRootNodeOffset;
 };
 

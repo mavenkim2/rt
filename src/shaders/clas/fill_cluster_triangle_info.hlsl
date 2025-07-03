@@ -8,11 +8,15 @@ RWStructuredBuffer<DecodeClusterData> decodeClusterDatas : register(u1);
 RWStructuredBuffer<uint> globals : register(u2);
 RWStructuredBuffer<CLASPageInfo> clasPageInfos : register(u3);
 
+//temp
+RWStructuredBuffer<BLASData> blasDatas : register(u4);
+RWStructuredBuffer<DenseGeometry> headers : register(u5);
+
 [[vk::push_constant]] FillClusterTriangleInfoPushConstant pc;
 
 groupshared uint clusterStartIndex;
 
-[numthreads(32, 1, 1)]
+[numthreads(MAX_CLUSTERS_PER_PAGE, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupID, uint groupIndex : SV_GroupIndex)
 {
     if (dispatchThreadID.x == 0)
@@ -21,20 +25,21 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
         globals[GLOBALS_DECODE_INDIRECT_Z] = 1;
     }
 
-    uint pageIndex = groupID.x + pc.offset;
+    uint pageIndex = groupID.x;
     uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
     uint numClusters = GetNumClustersInPage(basePageAddress);
-
-    if (groupIndex >= numClusters) return;
 
     if (groupIndex == 0)
     {
         InterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], numClusters, clusterStartIndex);
         CLASPageInfo pageInfo;
-        pageInfo.addressStartIndex = pc.offset * MAX_CLUSTERS_PER_PAGE + clusterStartIndex;
+        pageInfo.addressStartIndex = clusterStartIndex;
         clasPageInfos[pageIndex] = pageInfo;
+        InterlockedAdd(blasDatas[0].clusterCount, numClusters);
     }
     GroupMemoryBarrierWithGroupSync();
+
+    if (groupIndex >= numClusters) return;
 
     uint descriptorIndex = clusterStartIndex + groupIndex;
 
@@ -44,10 +49,11 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     uint clusterID = groupIndex;
 
     DenseGeometry header = GetDenseGeometryHeader(basePageAddress, numClusters, clusterID);
+    header.baseAddress = groupIndex;
 
     uint vertexBufferOffset, indexBufferOffset;
-    WaveInterlockedAdd(globals[GLOBALS_VERTEX_BUFFER_OFFSET_INDEX], header.numVertices, vertexBufferOffset);
-    WaveInterlockedAdd(globals[GLOBALS_INDEX_BUFFER_OFFSET_INDEX], header.numTriangles * 3, indexBufferOffset);
+    InterlockedAdd(globals[GLOBALS_VERTEX_BUFFER_OFFSET_INDEX], header.numVertices, vertexBufferOffset);
+    InterlockedAdd(globals[GLOBALS_INDEX_BUFFER_OFFSET_INDEX], header.numTriangles * 3, indexBufferOffset);
 
     BUILD_CLUSTERS_TRIANGLE_INFO desc = (BUILD_CLUSTERS_TRIANGLE_INFO)0;
     desc.clusterId = pageIndex * MAX_CLUSTERS_PER_PAGE + clusterID;
@@ -77,4 +83,5 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     clusterData.vertexBufferOffset = vertexBufferOffset;
 
     decodeClusterDatas[descriptorIndex] = clusterData;
+
 }

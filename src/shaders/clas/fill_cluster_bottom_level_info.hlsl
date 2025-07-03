@@ -2,7 +2,7 @@
 
 StructuredBuffer<BLASData> blasDatas : register(t0);
 RWStructuredBuffer<BUILD_CLUSTERS_BOTTOM_LEVEL_INFO> buildClusterBottomLevelInfos : register(u1);
-RWStructuredBuffer<uint> globals : register(u2);
+StructuredBuffer<uint> globals : register(t2);
 
 [[vk::push_constant]] FillClusterBottomLevelInfoPushConstant pc;
 
@@ -16,7 +16,6 @@ void main(uint3 DTid : SV_DispatchThreadID)
 
     if (blas.clusterCount == 0) return;
 
-    InterlockedAdd(globals[GLOBALS_BLAS_COUNT_INDEX], 1);
     uint64_t clasBaseAddress = ((uint64_t(pc.arrayBaseAddressHighBits) << 32) | (pc.arrayBaseAddressLowBits));
 
     buildClusterBottomLevelInfos[blasIndex].clusterReferencesCount = blas.clusterCount;

@@ -629,10 +629,10 @@ struct CommandBuffer
             VkAccelerationStructureGeometryKHR *geometries, int count,
             VkAccelerationStructureBuildRangeInfoKHR *buildRanges, u32 *maxPrimitiveCounts);
 
-    void BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
-                   GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
-                   int maxNumClusters, u32 numTriangles, u32 numVertices,
-                   u32 dstAddressesOffset = 0, u32 dstSizesOffset = 0);
+    GPUBuffer BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
+                        GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
+                        int maxNumClusters, u32 numTriangles, u32 numVertices,
+                        u32 dstAddressesOffset = 0, u32 dstSizesOffset = 0);
     void BuildClusterBLAS(GPUBuffer *implicitBuffer, GPUBuffer *scratchBuffer,
                           GPUBuffer *bottomLevelInfo, GPUBuffer *dstAddresses,
                           GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
