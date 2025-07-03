@@ -22,8 +22,8 @@ float2 TestNode(float3x4 renderFromObject, float3x4 cameraFromRender, float4 lod
     float zr = abs(dot(cameraFromRender[0].xyz, center));
     float zu = abs(dot(cameraFromRender[1].xyz, center));
 
-    //float z = dot(cameraForward, center);
-    float z = max(zf, max(zr, zu));
+    float z = dot(cameraForward, center);
+    //float z = max(zf, max(zr, zu));
 
     float x = distSqr - z * z;
     x = sqrt(max(0.f, x));
@@ -38,7 +38,7 @@ float2 TestNode(float3x4 renderFromObject, float3x4 cameraFromRender, float4 lod
     float cosSub = (z * distTangent + x * radius) * invDistSqr;
     float cosAdd = (z * distTangent - x * radius) * invDistSqr;
 
-    test = cosAdd;
+    test = z;
 
     // Clipping
     float depth = z - zNear;
@@ -140,8 +140,8 @@ struct ClusterCull
 
             edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test);
 
-            isValid &= edgeScales.x <= maxParentError * minScale;
-        }
+            isValid &= edgeScales.x <= maxParentError * minScale;// + 1e-8f;
+       }
 
         uint nodeWriteOffset;
         WaveInterlockedAddScalarTest(queue[0].nodeWriteOffset, isValid && !isLeaf, 1, nodeWriteOffset);
@@ -160,7 +160,7 @@ struct ClusterCull
             childCandidateNode.x = candidateNode.instanceID;
             childCandidateNode.y = node.childOffset[childIndex];
             childCandidateNode.z = candidateNode.blasIndex;
-            childCandidateNode.w = asuint(minScale);
+            childCandidateNode.w = node.flags;
 
             nodeQueue[nodeWriteOffset] = childCandidateNode;
         }
@@ -171,12 +171,12 @@ struct ClusterCull
         {
             uint leafWriteOffset;
             uint leafInfo = node.childOffset[childIndex] & 0x7fffffff;
-            uint numClusters = leafInfo & ((1u << 5u) - 1u);
+            uint numClusters = ((leafInfo >> MAX_CLUSTERS_PER_PAGE_BITS) & ((1u << 5u) - 1u)) + 1;
             InterlockedAdd(queue[0].leafWriteOffset, numClusters, leafWriteOffset);
             // DeviceMemoryBarrier();
 
-            uint pageIndex = leafInfo >> 10u;
-            uint pageClusterIndex = (leafInfo >> 5u) & ((1u << 5u) - 1u);
+            uint pageIndex = leafInfo >> (MAX_CLUSTERS_PER_PAGE_BITS + 5);
+            uint pageClusterIndex = leafInfo & ((1u << MAX_CLUSTERS_PER_PAGE_BITS) - 1u);
 
             const int maxClusters = 1 << 24;
             int clampedNumClusters = min((int)numClusters, maxClusters - (int)leafWriteOffset);
@@ -187,37 +187,25 @@ struct ClusterCull
                 candidateCluster.x = (pageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | (pageClusterIndex + i);
                 candidateCluster.y = candidateNode.instanceID;
                 candidateCluster.z = candidateNode.blasIndex;
-                candidateCluster.w = asuint(edgeScales.x);//0x80000000;
+                candidateCluster.w = node.flags & (1u << childIndex);
 
                 leafQueue[leafWriteOffset + i] = candidateCluster;
             }
 
         }
 #if 0
-        else if (!isValid && isLeaf)
+        else if (!isValid && !isLeaf)
         {
-            uint leafWriteOffset;
-            uint leafInfo = node.childOffset[childIndex] & 0x7fffffff;
-            uint numClusters = leafInfo & ((1u << 5u) - 1u);
-            InterlockedAdd(queue[0].debugLeafWriteOffset, numClusters, leafWriteOffset);
-            // DeviceMemoryBarrier();
+            uint debugWriteOffset;
+            InterlockedAdd(queue[0].debugLeafWriteOffset, 1, debugWriteOffset);
 
-            uint pageIndex = leafInfo >> 10u;
-            uint pageClusterIndex = (leafInfo >> 5u) & ((1u << 5u) - 1u);
-
-            const int maxClusters = 1 << 24;
-            int clampedNumClusters = min((int)numClusters, maxClusters - (int)leafWriteOffset);
-
-            for (int i = 0; i < clampedNumClusters; i++)
-            {
-                WorkItem candidateCluster;
-                candidateCluster.x = ~0u;
-                candidateCluster.y = asuint(test);
-                candidateCluster.z = node.maxParentError[childIndex];
-                candidateCluster.w = asuint(edgeScales.x);//0x80000000;
-
-                debugLeaves[leafWriteOffset + i] = candidateCluster;
-            }
+            WorkItem childCandidateNode;
+            childCandidateNode.x = ~0u;
+            childCandidateNode.y = asuint(node.maxParentError[childIndex]);
+            childCandidateNode.z = asuint(edgeScales.x);
+            childCandidateNode.w = asuint(test);
+            
+            debugLeaves[debugWriteOffset] = childCandidateNode;
         }
 #endif
 
@@ -231,6 +219,7 @@ struct ClusterCull
         uint clusterIndex = workItem.x & (MAX_CLUSTERS_PER_PAGE - 1);
         uint instanceID = workItem.y;
         uint blasIndex = workItem.z;
+        uint flags = workItem.w;
 
         GPUInstance instance = gpuInstances[instanceID];
 
@@ -251,7 +240,7 @@ struct ClusterCull
         float test;
         float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test);
 
-        bool isValid = edgeScales.x > lodError * minScale;
+        bool isValid = (edgeScales.x > lodError * minScale);// || flags;
 
         uint clusterOffset;
         WaveInterlockedAddScalarTest(globals[GLOBALS_CLAS_COUNT_INDEX], isValid, 1, clusterOffset);
@@ -259,18 +248,10 @@ struct ClusterCull
         if (isValid)
         {
             VisibleCluster cluster;
-#if 0
-            cluster.pageIndex = asuint(edgeScales.x);
-            cluster.clusterIndex = asuint(lodError);
-            cluster.instanceID = asuint(gpuScene.cameraFromRender[0].z);
-            cluster.blasIndex = asuint(gpuScene.cameraFromRender[0].w);
-#endif
-#if 1
             cluster.pageIndex = pageIndex;
             cluster.clusterIndex = clusterIndex;
             cluster.instanceID = instanceID;
             cluster.blasIndex = blasIndex;
-#endif
 
             InterlockedAdd(blasDatas[blasIndex].clusterCount, 1);
 

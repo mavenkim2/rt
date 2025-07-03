@@ -8,10 +8,6 @@ RWStructuredBuffer<DecodeClusterData> decodeClusterDatas : register(u1);
 RWStructuredBuffer<uint> globals : register(u2);
 RWStructuredBuffer<CLASPageInfo> clasPageInfos : register(u3);
 
-//temp
-RWStructuredBuffer<BLASData> blasDatas : register(u4);
-RWStructuredBuffer<DenseGeometry> headers : register(u5);
-
 [[vk::push_constant]] FillClusterTriangleInfoPushConstant pc;
 
 groupshared uint clusterStartIndex;
@@ -35,7 +31,6 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
         CLASPageInfo pageInfo;
         pageInfo.addressStartIndex = clusterStartIndex;
         clasPageInfos[pageIndex] = pageInfo;
-        InterlockedAdd(blasDatas[0].clusterCount, numClusters);
     }
     GroupMemoryBarrierWithGroupSync();
 

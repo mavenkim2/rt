@@ -135,6 +135,7 @@ struct PackedHierarchyNode
     float4 lodBounds[CHILDREN_PER_HIERARCHY_NODE];
     float maxParentError[CHILDREN_PER_HIERARCHY_NODE];
     uint childOffset[CHILDREN_PER_HIERARCHY_NODE];
+    uint flags;
 };
 
 struct GPUInstance

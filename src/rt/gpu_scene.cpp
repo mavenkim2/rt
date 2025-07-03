@@ -189,6 +189,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     Shader prepareIndirectShader;
     Shader hierarchyTraversalShader;
 
+    Shader testShader;
+
     RayTracingShaderGroup groups[3];
     Arena *arena = params->arenas[GetThreadIndex()];
     {
@@ -261,6 +263,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         string hierarchyTraversalData = OS_ReadFile(arena, hierarchyTraversalName);
         hierarchyTraversalShader      = device->CreateShader(
             ShaderStage::Compute, "hierarchy traversal", hierarchyTraversalData);
+
+        string testShaderName = "../src/shaders/test.spv";
+        string testShaderData = OS_ReadFile(arena, testShaderName);
+        testShader = device->CreateShader(ShaderStage::Compute, "test shader", testShaderData);
     }
 
     // Compile pipelines
@@ -330,10 +336,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     fillClusterTriangleInfoLayout.AddBinding(2, DescriptorType::StorageBuffer,
                                              VK_SHADER_STAGE_COMPUTE_BIT);
     fillClusterTriangleInfoLayout.AddBinding(3, DescriptorType::StorageBuffer,
-                                             VK_SHADER_STAGE_COMPUTE_BIT);
-    fillClusterTriangleInfoLayout.AddBinding(4, DescriptorType::StorageBuffer,
-                                             VK_SHADER_STAGE_COMPUTE_BIT);
-    fillClusterTriangleInfoLayout.AddBinding(5, DescriptorType::StorageBuffer,
                                              VK_SHADER_STAGE_COMPUTE_BIT);
     fillClusterTriangleInfoLayout.AddBinding((u32)RTBindings::ClusterPageData,
                                              DescriptorType::StorageBuffer,
@@ -424,6 +426,15 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     VkPipeline hierarchyTraversalPipeline = device->CreateComputePipeline(
         &hierarchyTraversalShader, &hierarchyTraversalLayout, 0, "hierarchy traversal");
+
+    DescriptorSetLayout testLayout = {};
+    testLayout.AddBinding(0, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
+    testLayout.AddBinding(1, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
+    testLayout.AddBinding((u32)RTBindings::ClusterPageData, DescriptorType::StorageBuffer,
+                          VK_SHADER_STAGE_COMPUTE_BIT);
+
+    VkPipeline testPipeline =
+        device->CreateComputePipeline(&testShader, &testLayout, 0, "test");
 
     Swapchain swapchain = device->CreateSwapchain(params->window, VK_FORMAT_R8G8B8A8_SRGB,
                                                   params->width, params->height);
@@ -761,6 +772,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             }
             materialID |= (1u << 31u);
         }
+        // TODO:
         if (material.eta != 0.f)
         {
             gpuMaterials.Push(material);
@@ -1037,8 +1049,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             .Bind(&decodeClusterDataBuffer)
             .Bind(&clasGlobalsBuffer)
             .Bind(&clasPageInfoBuffer)
-            .Bind(&blasDataBuffer)
-            .Bind(&debugHeaders)
             .Bind(&clusterPageDataBuffer.buffer);
 
         allCommandBuffer->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
@@ -1312,8 +1322,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             cmd->ClearBuffer(&visibleClustersBuffer, ~0u);
             cmd->ClearBuffer(&workItemQueueBuffer, ~0u);
             cmd->ClearBuffer(&queueBuffer);
-            // cmd->ClearBuffer(&clasGlobalsBuffer);
-            // cmd->ClearBuffer(&blasDataBuffer);
+            cmd->ClearBuffer(&clasGlobalsBuffer);
+            cmd->ClearBuffer(&blasDataBuffer);
 
             cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1322,71 +1332,68 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             cmd->FlushBarriers();
 
             // Instance culling
-            // {
-            //     NumPushConstant instanceCullingPushConstant;
-            //     instanceCullingPushConstant.num = numInstances;
-            //     device->BeginEvent(cmd, "Instance Culling");
-            //
-            //     cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
-            //                                    instanceCullingPipeline);
-            //     DescriptorSet ds = instanceCullingLayout.CreateDescriptorSet();
-            //     ds.Bind(&gpuInstancesBuffer.buffer)
-            //         .Bind(&clasGlobalsBuffer)
-            //         .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
-            //         .Bind(&queueBuffer)
-            //         .Bind(&blasDataBuffer);
-            //
-            //     cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
-            //                                          instanceCullingLayout.pipelineLayout);
-            //     cmd->PushConstants(&instanceCullingPush,
-            //     &instanceCullingPushConstant,
-            //                                     instanceCullingLayout.pipelineLayout);
-            //     cmd->Dispatch((numInstances + 63) / 64, 1, 1);
-            //     cmd->Barrier(
-            //         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            //         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-            //         VK_ACCESS_2_SHADER_READ_BIT);
-            //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            //                               VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-            //                               VK_ACCESS_2_SHADER_WRITE_BIT,
-            //                               VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-            //     cmd->FlushBarriers();
-            //     device->EndEvent(cmd);
-            // }
+            {
+                NumPushConstant instanceCullingPushConstant;
+                instanceCullingPushConstant.num = numInstances;
+                device->BeginEvent(cmd, "Instance Culling");
 
-            // {
-            //     // Hierarchy traversal
-            //     device->BeginEvent(cmd, "Hierarchy Traversal");
-            //
-            //     cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
-            //     hierarchyTraversalPipeline); DescriptorSet ds =
-            //     hierarchyTraversalLayout.CreateDescriptorSet(); ds.Bind(&queueBuffer)
-            //         .Bind(&sceneTransferBuffers[currentBuffer].buffer)
-            //         .Bind(&clasGlobalsBuffer)
-            //         .Bind(&workItemQueueBuffer, 0, MAX_CANDIDATE_NODES * sizeof(Vec4u))
-            //         .Bind(&workItemQueueBuffer, MAX_CANDIDATE_NODES * sizeof(Vec4u),
-            //               MAX_CANDIDATE_CLUSTERS * sizeof(Vec4u))
-            //         .Bind(&gpuInstancesBuffer.buffer)
-            //         .Bind(&hierarchyNodeBuffer.buffer)
-            //         .Bind(&visibleClustersBuffer)
-            //         .Bind(&blasDataBuffer)
-            //         .Bind(&clusterPageDataBuffer.buffer)
-            //         .Bind(&debugLeafBuffer);
-            //
-            //     cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
-            //                             hierarchyTraversalLayout.pipelineLayout);
-            //     cmd->Dispatch(1440, 1, 1);
-            //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            //                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            //                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-            //     cmd->FlushBarriers();
-            //     device->EndEvent(cmd);
-            // }
+                cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, instanceCullingPipeline);
+                DescriptorSet ds = instanceCullingLayout.CreateDescriptorSet();
+                ds.Bind(&gpuInstancesBuffer.buffer)
+                    .Bind(&clasGlobalsBuffer)
+                    .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
+                    .Bind(&queueBuffer)
+                    .Bind(&blasDataBuffer);
+
+                cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
+                                        instanceCullingLayout.pipelineLayout);
+                cmd->PushConstants(&instanceCullingPush, &instanceCullingPushConstant,
+                                   instanceCullingLayout.pipelineLayout);
+                cmd->Dispatch((numInstances + 63) / 64, 1, 1);
+                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                             VK_ACCESS_2_SHADER_WRITE_BIT,
+                             VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+                cmd->FlushBarriers();
+                device->EndEvent(cmd);
+            }
+
+            // Hierarchy traversal
+            {
+                device->BeginEvent(cmd, "Hierarchy Traversal");
+
+                cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, hierarchyTraversalPipeline);
+                DescriptorSet ds = hierarchyTraversalLayout.CreateDescriptorSet();
+                ds.Bind(&queueBuffer)
+                    .Bind(&sceneTransferBuffers[currentBuffer].buffer)
+                    .Bind(&clasGlobalsBuffer)
+                    .Bind(&workItemQueueBuffer, 0, MAX_CANDIDATE_NODES * sizeof(Vec4u))
+                    .Bind(&workItemQueueBuffer, MAX_CANDIDATE_NODES * sizeof(Vec4u),
+                          MAX_CANDIDATE_CLUSTERS * sizeof(Vec4u))
+                    .Bind(&gpuInstancesBuffer.buffer)
+                    .Bind(&hierarchyNodeBuffer.buffer)
+                    .Bind(&visibleClustersBuffer)
+                    .Bind(&blasDataBuffer)
+                    .Bind(&clusterPageDataBuffer.buffer)
+                    .Bind(&debugLeafBuffer);
+
+                cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
+                                        hierarchyTraversalLayout.pipelineLayout);
+                cmd->Dispatch(1440, 1, 1);
+                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+                cmd->FlushBarriers();
+                device->EndEvent(cmd);
+            }
             // if (currentBuffer == 1)
             // {
             //     GPUBuffer readback =
             //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            //                              clasGlobalsBuffer.size, MemoryUsage::GPU_TO_CPU);
+            //                              workItemQueueBuffer.size, MemoryUsage::GPU_TO_CPU);
             //     Semaphore testSemaphore   = device->CreateSemaphore();
             //     testSemaphore.signalValue = 1;
             //     // cmd->Barrier(
@@ -1395,15 +1402,33 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             //     //     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             //     // VK_ACCESS_2_TRANSFER_READ_BIT);
             //     // cmd->FlushBarriers();
-            //     cmd->CopyBuffer(&readback, &clasGlobalsBuffer);
+            //     cmd->CopyBuffer(&readback, &workItemQueueBuffer);
             //     cmd->SignalOutsideFrame(testSemaphore);
             //
             //     device->SubmitCommandBuffer(cmd);
             //     device->Wait(testSemaphore);
+            //
             //     // BLASData *data = (BLASData *)readback.mappedPtr;
-            //     u32 *data = (u32 *)readback.mappedPtr;
-            //     int stop  = 5;
+            //     Vec4u *data = (Vec4u *)readback.mappedPtr;
+            //     int stop    = 5;
             // }
+
+#if 0
+            {
+                cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, testPipeline);
+                DescriptorSet ds = testLayout.CreateDescriptorSet();
+                ds.Bind(&visibleClustersBuffer)
+                    .Bind(&clasGlobalsBuffer)
+                    .Bind(&clusterPageDataBuffer.buffer);
+                cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
+                                        testLayout.pipelineLayout);
+                cmd->Dispatch(clusterFileHeader.numPages, 1, 1);
+                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+                cmd->FlushBarriers();
+            }
+#endif
 
             {
                 // Prepare indirect args
@@ -1453,8 +1478,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                   fillBlasAddressArrayPipeline);
                 DescriptorSet ds = fillBlasAddressArrayLayout.CreateDescriptorSet();
                 ds.Bind(&clasGlobalsBuffer)
-                    .Bind(&decodeClusterDataBuffer)
-                    // .Bind(&visibleClustersBuffer)
+                    .Bind(&visibleClustersBuffer)
                     .Bind(&blasDataBuffer)
                     .Bind(&clusterAccelAddresses)
                     .Bind(&blasClasAddressBuffer)
@@ -1492,10 +1516,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                              VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                              VK_ACCESS_2_SHADER_WRITE_BIT,
                              VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-                // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                //              VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                //              VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
                 cmd->FlushBarriers();
                 device->EndEvent(cmd);
             }

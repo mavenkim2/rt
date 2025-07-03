@@ -2079,6 +2079,7 @@ struct GroupPart
     u32 groupIndex;
     u32 clusterStartIndex;
     u32 clusterCount;
+    u32 clusterPageStartIndex;
     u32 pageIndex;
 };
 
@@ -2981,8 +2982,9 @@ void CreateClusters(Mesh &mesh, string filename)
         u32 numClusters;
     };
 
-    u32 numClustersInPage = 0;
-    u32 partStartIndex    = 0;
+    u32 clusterPageStartIndex = 0;
+    u32 numClustersInPage     = 0;
+    u32 partStartIndex        = 0;
     StaticArray<GroupPart> parts(scratch.temp.arena, clusters.Length());
     StaticArray<PageInfo> pageInfos(scratch.temp.arena, clusterGroups.Length() * 4);
 
@@ -3008,8 +3010,7 @@ void CreateClusters(Mesh &mesh, string filename)
                headers[headerIndex].z;
     };
 
-    for (int groupIndex = 0; groupIndex < firstGroupSize + 1;
-         /*clusterGroups.Length();*/ groupIndex++)
+    for (int groupIndex = 0; groupIndex < clusterGroups.Length(); groupIndex++)
     {
         ClusterGroup &group = clusterGroups[groupIndex];
         if (group.isLeaf) continue;
@@ -3039,10 +3040,11 @@ void CreateClusters(Mesh &mesh, string filename)
                 if (clusterGroupIndex > 0)
                 {
                     GroupPart part;
-                    part.groupIndex        = groupIndex;
-                    part.clusterStartIndex = clusterStartIndex;
-                    part.clusterCount      = clusterGroupIndex - clusterStartIndex;
-                    part.pageIndex         = pageInfos.Length();
+                    part.groupIndex            = groupIndex;
+                    part.clusterStartIndex     = clusterStartIndex;
+                    part.clusterCount          = clusterGroupIndex - clusterStartIndex;
+                    part.clusterPageStartIndex = clusterPageStartIndex;
+                    part.pageIndex             = pageInfos.Length();
 
                     parts.Push(part);
                     clusterStartIndex = clusterGroupIndex;
@@ -3058,6 +3060,7 @@ void CreateClusters(Mesh &mesh, string filename)
                 currentGeoBufferSize     = 0;
                 currentShadingBufferSize = 0;
                 numClustersInPage        = 0;
+                clusterPageStartIndex    = 0;
             }
 
             numClustersInPage++;
@@ -3066,10 +3069,13 @@ void CreateClusters(Mesh &mesh, string filename)
         }
 
         GroupPart part;
-        part.groupIndex        = groupIndex;
-        part.clusterStartIndex = clusterStartIndex;
-        part.clusterCount      = group.clusterCount - clusterStartIndex;
-        part.pageIndex         = pageInfos.Length();
+        part.groupIndex            = groupIndex;
+        part.clusterStartIndex     = clusterStartIndex;
+        part.clusterCount          = group.clusterCount - clusterStartIndex;
+        part.clusterPageStartIndex = clusterPageStartIndex;
+        part.pageIndex             = pageInfos.Length();
+
+        clusterPageStartIndex = numClustersInPage;
 
         parts.Push(part);
     }
@@ -3221,9 +3227,6 @@ void CreateClusters(Mesh &mesh, string filename)
         }
     }
 
-    // per page, you write the number of clusters
-    // at the top of the file, write a magic
-
     // Build hierarchies over cluster groups
     PrimRef *hierarchyPrimRefs = PushArrayNoZero(scratch.temp.arena, PrimRef, parts.Length());
     Bounds geomBounds;
@@ -3277,7 +3280,7 @@ void CreateClusters(Mesh &mesh, string filename)
 
     // Flatten tree to array
     StaticArray<PackedHierarchyNode> hierarchy(arena, numNodes);
-    PackedHierarchyNode rootPacked;
+    PackedHierarchyNode rootPacked = {};
     for (int i = 0; i < CHILDREN_PER_HIERARCHY_NODE; i++)
     {
         rootPacked.childOffset[i] = ~0u;
@@ -3331,6 +3334,8 @@ void CreateClusters(Mesh &mesh, string filename)
     // so if the instance is outside the frustum or occluded, and wasn't intersected, then it
     // should be removed
 
+    u32 numLeaves = 0;
+    u32 numParts  = 0;
     for (;;)
     {
         if (writeOffset == readOffset) break;
@@ -3349,6 +3354,7 @@ void CreateClusters(Mesh &mesh, string filename)
         {
             packed.childOffset[i] = ~0u;
         }
+        numLeaves += (bool)child.children;
         for (int i = 0; i < child.numChildren; i++)
         {
             packed.lodBounds[i]      = child.lodBounds[i];
@@ -3366,11 +3372,22 @@ void CreateClusters(Mesh &mesh, string filename)
             }
             else
             {
-                u32 partIndex         = child.partIndices[i];
-                GroupPart &part       = parts[partIndex];
-                packed.childOffset[i] = (1u << 31u) | (part.pageIndex << 10) |
-                                        (part.clusterStartIndex << 5) |
-                                        (part.clusterCount - 1);
+                numParts++;
+                u32 partIndex   = child.partIndices[i];
+                GroupPart &part = parts[partIndex];
+                Assert(part.clusterPageStartIndex < MAX_CLUSTERS_PER_PAGE);
+                Assert(part.clusterCount <= 32);
+                packed.childOffset[i] =
+                    (1u << 31u) | (part.pageIndex << (MAX_CLUSTERS_PER_PAGE_BITS + 5)) |
+                    ((part.clusterCount - 1) << MAX_CLUSTERS_PER_PAGE_BITS) |
+                    part.clusterPageStartIndex;
+
+                if (clusterGroups[clusters[clusterGroups[part.groupIndex].clusterStartIndex]
+                                      .childGroupIndex]
+                        .isLeaf)
+                {
+                    packed.flags |= (1 << i);
+                }
             }
         }
 
@@ -3378,7 +3395,8 @@ void CreateClusters(Mesh &mesh, string filename)
     }
 
     Assert(numNodes != 0);
-    Print("num nodes: %u\n", numNodes);
+    Print("num nodes: %u\nnum parts: %u %u, num leaves: %u\n", numNodes, parts.Length(),
+          numParts, numLeaves);
     Assert(hierarchy.Length() == numNodes);
 
     ClusterFileHeader *fileHeader =

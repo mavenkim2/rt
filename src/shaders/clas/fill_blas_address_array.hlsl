@@ -2,8 +2,7 @@
 #include "../../rt/shader_interop/hierarchy_traversal_shaderinterop.h"
 
 StructuredBuffer<uint> globals : register(t0);
-StructuredBuffer<DecodeClusterData> visibleClusters : register(t1);
-//StructuredBuffer<VisibleCluster> visibleClusters : register(t1);
+StructuredBuffer<VisibleCluster> visibleClusters : register(t1);
 RWStructuredBuffer<BLASData> blasDatas : register(u2);
 
 StructuredBuffer<uint64_t> inputAddressArray : register(t3);
@@ -16,11 +15,10 @@ void main(uint3 dtID : SV_DispatchThreadID)
 {
     if (dtID.x >= globals[GLOBALS_CLAS_COUNT_INDEX]) return;
 
-    //VisibleCluster visibleCluster = visibleClusters[dtID.x];
-    DecodeClusterData visibleCluster = visibleClusters[dtID.x];
+    VisibleCluster visibleCluster = visibleClusters[dtID.x];
     CLASPageInfo clasPageInfo = clasPageInfos[visibleCluster.pageIndex];
 
-    uint blasIndex = 0;//visibleCluster.blasIndex;
+    uint blasIndex = visibleCluster.blasIndex;
     uint destIndex;
     InterlockedAdd(blasDatas[blasIndex].clusterCount, 1, destIndex);
 

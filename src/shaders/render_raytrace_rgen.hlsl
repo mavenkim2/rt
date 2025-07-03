@@ -273,10 +273,6 @@ void main()
             ts = cross(n, ss);
 
             // Get material
-            if (printDebug)
-            {
-                printf("%u\n", materialID);
-            }
             GPUMaterial material = materials[NonUniformResourceIndex(materialID)];
 
             float3 origin = p0 + dp10 * bary.x + dp20 * bary.y;
