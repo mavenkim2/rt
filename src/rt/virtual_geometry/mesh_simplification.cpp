@@ -855,20 +855,15 @@ void MeshSimplifier::EvaluatePair(Pair &pair)
         AddQuadric(quadricGrad, attrQuadrics, numAttributes);
     }
 
-    // for (u32 tri : adjTris)
-    // {
-    //     for (u32 corner = 0; corner < 3; corner++)
-    //     {
-    //         u32 indexIndex = 3 * tri + corner;
-    //         Vec3f p0       = GetPosition(indices[indexIndex]);
-    //         Vec3f p1       = GetPosition(indices[NextInTriangle(indexIndex, 1)]);
-    //         bool add       = p0 == pair.p0 || p0 == pair.p1 || p1 == pair.p0 || p1 ==
-    //         pair.p1; if (hasEdgeQuadric.GetBit(indexIndex) && add)
-    //         {
-    //             quadric.AddEdgeQuadric(edgeQuadrics[indexIndex], p0 - basePosition);
-    //         }
-    //     }
-    // }
+    for (u32 corner : adjCorners)
+    {
+        Vec3f p0 = GetPosition(indices[corner]);
+        Vec3f p1 = GetPosition(indices[NextInTriangle(corner, 1)]);
+        if (hasEdgeQuadric.GetBit(corner))
+        {
+            quadric.AddEdgeQuadric(edgeQuadrics[corner], p0 - basePosition);
+        }
+    }
 
     bool bVertex0IsLocked = false;
     bool bVertex1IsLocked = false;
@@ -2782,22 +2777,18 @@ void CreateClusters(Mesh &mesh, string filename)
                             Float(f32 f) : value(f) {}
                         };
 
-                        totalSurfaceArea /= numTris;
-                        // if (depth > 10)
-                        // {
-                        //     Print("surface area: %f %u\n", totalSurfaceArea, groupIndex);
-                        // }
-                        Float currentSize(Max(totalSurfaceArea, .00002f));
+                        f32 triangleSize = Sqrt(totalSurfaceArea / (float)numTris);
+                        Float currentSize(Max(triangleSize, .00002f));
                         Float desired(.25f);
                         Float scale(1.f);
                         int exponent = Clamp((int)desired.exponent - (int)currentSize.exponent,
                                              -126, 127);
                         scale.exponent = exponent + 127;
                         float posScale = scale.value;
-                        // for (int i = 0; i < vertexCount; i++)
-                        // {
-                        //     *(Vec3f *)(groupVertices + (3 + numAttributes) * i) *= posScale;
-                        // }
+                        for (int i = 0; i < vertexCount; i++)
+                        {
+                            *(Vec3f *)(groupVertices + (3 + numAttributes) * i) *= posScale;
+                        }
 
                         // Simplify the clusters
                         u32 targetNumParents =
@@ -2829,22 +2820,17 @@ void CreateClusters(Mesh &mesh, string filename)
                                 Edge &edge    = edges[edgeIndex];
                                 if (clusterToGroupID[edge.clusterIndex] != groupID)
                                 {
-                                    simplifier.LockVertex(edge.p0);
-                                    simplifier.LockVertex(edge.p1);
+                                    simplifier.LockVertex(edge.p0 * posScale);
+                                    simplifier.LockVertex(edge.p1 * posScale);
                                 }
                             }
                         }
 
-                        f32 invScale = 1.f; // 1.f / posScale;
+                        f32 invScale = 1.f / posScale;
                         f32 error    = simplifier.Simplify(vertexCount, targetNumTris,
                                                            Sqr(targetError), 0, 0, FLT_MAX);
                         f32 preError = error;
                         error        = Sqrt(error) * invScale;
-                        // if (depth > 10)
-                        // {
-                        //     Print("error: %f %f %f %u\n", preError, error, invScale,
-                        //           groupIndex);
-                        // }
 
                         Mesh simplifiedMesh = {};
                         simplifier.Finalize(simplifiedMesh.numVertices,
@@ -2860,17 +2846,6 @@ void CreateClusters(Mesh &mesh, string filename)
                                    sizeof(Vec3f) * simplifiedMesh.numVertices);
                         MemoryCopy(simplifiedMesh.indices, simplifier.indices,
                                    sizeof(u32) * simplifiedMesh.numIndices);
-
-                        // for (int i = 0; i < simplifiedMesh.numIndices / 3; i++)
-                        // {
-                        //     u32 index0 = simplifiedMesh.indices[3 * i + 0];
-                        //     u32 index1 = simplifiedMesh.indices[3 * i + 1];
-                        //     u32 index2 = simplifiedMesh.indices[3 * i + 2];
-                        //     if (index0 == index1 || index0 == index2 || index1 == index2)
-                        //     {
-                        //         Assert(0);
-                        //     }
-                        // }
 
                         for (int i = 0; i < simplifiedMesh.numVertices; i++)
                         {
@@ -2987,70 +2962,69 @@ void CreateClusters(Mesh &mesh, string filename)
             HashIndex vertexHash(scratch.temp.arena, NextPowerOfTwo(vertexCount),
                                  NextPowerOfTwo(vertexCount));
 
-            for (int clusterIndex = totalNumClusters;
-                 clusterIndex < totalNumClusters + numLevelClusters.load(); clusterIndex++)
-            {
-                Cluster &cluster         = clusters[clusterIndex];
-                RecordAOSSplits &record  = cluster.record;
-                ClusterGroup &childGroup = clusterGroups[cluster.childGroupIndex];
-
-                for (int i = record.start; i < record.End(); i++)
-                {
-                    for (int vertIndex = 0; vertIndex < 3; vertIndex++)
-                    {
-                        u32 index       = childGroup.indices[3 * i + vertIndex];
-                        f32 *data       = childGroup.vertexData + (3 + numAttributes) * index;
-                        Vec3f p         = *(Vec3f *)data;
-                        int hash        = Hash(p);
-                        int vertexIndex = -1;
-                        for (int hashIndex = vertexHash.FirstInHash(hash); hashIndex != -1;
-                             hashIndex     = vertexHash.NextInHash(hashIndex))
-                        {
-                            if (levelMesh.p[hashIndex] == p)
-                            {
-                                vertexIndex = hashIndex;
-                                break;
-                            }
-                        }
-                        if (vertexIndex == -1)
-                        {
-                            vertexIndex              = vertexOffset++;
-                            levelMesh.p[vertexIndex] = p;
-                            vertexHash.AddInHash(hash, vertexIndex);
-                        }
-                        levelMesh.indices[indexOffset++] = vertexIndex;
-                    }
-                }
-            }
-            // for (int groupIndex = totalNumGroups; groupIndex < clusterGroups.Length();
-            //      groupIndex++)
+            // for (int clusterIndex = totalNumClusters;
+            //      clusterIndex < totalNumClusters + numLevelClusters.load(); clusterIndex++)
             // {
-            //     ClusterGroup &clusterGroup = clusterGroups[groupIndex];
-            //     for (int i = 0; i < clusterGroup.numIndices; i++)
+            //     Cluster &cluster         = clusters[clusterIndex];
+            //     RecordAOSSplits &record  = cluster.record;
+            //     ClusterGroup &childGroup = clusterGroups[cluster.childGroupIndex];
+            //
+            //     for (int i = record.start; i < record.End(); i++)
             //     {
-            //         f32 *data = clusterGroup.vertexData +
-            //                     (3 + numAttributes) * clusterGroup.indices[i];
-            //         Vec3f p         = *(Vec3f *)data;
-            //         int hash        = Hash(p);
-            //         int vertexIndex = -1;
-            //         for (int hashIndex = vertexHash.FirstInHash(hash); hashIndex != -1;
-            //              hashIndex     = vertexHash.NextInHash(hashIndex))
+            //         for (int vertIndex = 0; vertIndex < 3; vertIndex++)
             //         {
-            //             if (levelMesh.p[hashIndex] == p)
+            //             u32 index       = childGroup.indices[3 * i + vertIndex];
+            //             f32 *data       = childGroup.vertexData + (3 + numAttributes) *
+            //             index; Vec3f p         = *(Vec3f *)data; int hash        = Hash(p);
+            //             int vertexIndex = -1;
+            //             for (int hashIndex = vertexHash.FirstInHash(hash); hashIndex != -1;
+            //                  hashIndex     = vertexHash.NextInHash(hashIndex))
             //             {
-            //                 vertexIndex = hashIndex;
-            //                 break;
+            //                 if (levelMesh.p[hashIndex] == p)
+            //                 {
+            //                     vertexIndex = hashIndex;
+            //                     break;
+            //                 }
             //             }
+            //             if (vertexIndex == -1)
+            //             {
+            //                 vertexIndex              = vertexOffset++;
+            //                 levelMesh.p[vertexIndex] = p;
+            //                 vertexHash.AddInHash(hash, vertexIndex);
+            //             }
+            //             levelMesh.indices[indexOffset++] = vertexIndex;
             //         }
-            //         if (vertexIndex == -1)
-            //         {
-            //             vertexIndex              = vertexOffset++;
-            //             levelMesh.p[vertexIndex] = p;
-            //             vertexHash.AddInHash(hash, vertexIndex);
-            //         }
-            //         levelMesh.indices[indexOffset++] = vertexIndex;
             //     }
             // }
+            for (int groupIndex = totalNumGroups; groupIndex < clusterGroups.Length();
+                 groupIndex++)
+            {
+                ClusterGroup &clusterGroup = clusterGroups[groupIndex];
+                for (int i = 0; i < clusterGroup.numIndices; i++)
+                {
+                    f32 *data = clusterGroup.vertexData +
+                                (3 + numAttributes) * clusterGroup.indices[i];
+                    Vec3f p         = *(Vec3f *)data;
+                    int hash        = Hash(p);
+                    int vertexIndex = -1;
+                    for (int hashIndex = vertexHash.FirstInHash(hash); hashIndex != -1;
+                         hashIndex     = vertexHash.NextInHash(hashIndex))
+                    {
+                        if (levelMesh.p[hashIndex] == p)
+                        {
+                            vertexIndex = hashIndex;
+                            break;
+                        }
+                    }
+                    if (vertexIndex == -1)
+                    {
+                        vertexIndex              = vertexOffset++;
+                        levelMesh.p[vertexIndex] = p;
+                        vertexHash.AddInHash(hash, vertexIndex);
+                    }
+                    levelMesh.indices[indexOffset++] = vertexIndex;
+                }
+            }
 
             levelMesh.numVertices = vertexOffset;
             levelMesh.numIndices  = indexOffset;

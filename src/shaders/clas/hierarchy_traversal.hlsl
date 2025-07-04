@@ -202,8 +202,8 @@ struct ClusterCull
             WorkItem childCandidateNode;
             childCandidateNode.x = asuint(node.lodBounds[childIndex].x);
             childCandidateNode.y = asuint(node.lodBounds[childIndex].y);
-            childCandidateNode.z = asuint(node.lodBounds[childIndex].z);
-            childCandidateNode.w =asuint(node.maxParentError[childIndex]);
+            childCandidateNode.z = asuint(edgeScales.x);
+            childCandidateNode.w = asuint(node.maxParentError[childIndex]);
             
             debugLeaves[debugWriteOffset] = childCandidateNode;
         }

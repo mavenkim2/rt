@@ -1366,9 +1366,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             {
                 device->BeginEvent(cmd, "Hierarchy Traversal");
 
-                cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
-                hierarchyTraversalPipeline); DescriptorSet ds =
-                hierarchyTraversalLayout.CreateDescriptorSet(); ds.Bind(&queueBuffer)
+                cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, hierarchyTraversalPipeline);
+                DescriptorSet ds = hierarchyTraversalLayout.CreateDescriptorSet();
+                ds.Bind(&queueBuffer)
                     .Bind(&sceneTransferBuffers[currentBuffer].buffer)
                     .Bind(&clasGlobalsBuffer)
                     .Bind(&workItemQueueBuffer, 0, MAX_CANDIDATE_NODES * sizeof(Vec4u))
@@ -1395,7 +1395,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             // {
             //     GPUBuffer readback =
             //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            //                              clasGlobalsBuffer.size, MemoryUsage::GPU_TO_CPU);
+            //                              workItemQueueBuffer.size, MemoryUsage::GPU_TO_CPU);
             //     Semaphore testSemaphore   = device->CreateSemaphore();
             //     testSemaphore.signalValue = 1;
             //     // cmd->Barrier(
@@ -1404,7 +1404,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             //     //     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             //     // VK_ACCESS_2_TRANSFER_READ_BIT);
             //     // cmd->FlushBarriers();
-            //     cmd->CopyBuffer(&readback, &clasGlobalsBuffer);
+            //     cmd->CopyBuffer(&readback, &workItemQueueBuffer);
             //     cmd->SignalOutsideFrame(testSemaphore);
             //
             //     device->SubmitCommandBuffer(cmd);
