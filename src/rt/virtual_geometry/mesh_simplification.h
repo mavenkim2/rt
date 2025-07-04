@@ -34,8 +34,9 @@ struct Quadric
     Quadric();
     Quadric(const Vec3f &p0, const Vec3f &p1, const Vec3f &p2);
 
-    void InitializeEdge(const Vec3f &p0, const Vec3f &p1);
+    void InitializeEdge(const Vec3f &p0, const Vec3f &p1, f32 weight);
     void Add(Quadric &other);
+    void AddEdgeQuadric(Quadric &edgeQuadric, const Vec3f &p0);
 };
 
 struct QuadricGrad
@@ -84,6 +85,7 @@ struct MeshSimplifier
 
     // Quadrics
     Quadric *triangleQuadrics;
+    Quadric *edgeQuadrics;
     QuadricGrad *triangleAttrQuadrics;
 
     // Adjacency
@@ -92,7 +94,9 @@ struct MeshSimplifier
     HashIndex vertexHash;
     HashIndex pairHash0;
     HashIndex pairHash1;
+
     BitVector triangleIsRemoved;
+    BitVector hasEdgeQuadric;
 
     BitVector lockedVertices;
 
@@ -106,6 +110,7 @@ struct MeshSimplifier
     bool AddUniquePair(Pair &pair, int pairIndex);
     bool CheckInversion(const Vec3f &newPosition, u32 *movedCorners, u32 count) const;
     void CalculateTriQuadrics(u32 triIndex);
+    void CalculateEdgeQuadric(u32 edgeIndex);
 
     template <typename Func>
     void IterateCorners(const Vec3f &position, const Func &func);

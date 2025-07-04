@@ -969,6 +969,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 GPUInstance gpuInstance;
                 AffineSpace &transform =
                     scene->affineTransforms[instances[instanceIndex].transformIndex];
+
                 for (int r = 0; r < 3; r++)
                 {
                     for (int c = 0; c < 4; c++)
@@ -1389,11 +1390,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 cmd->FlushBarriers();
                 device->EndEvent(cmd);
             }
+
             // if (currentBuffer == 1)
             // {
             //     GPUBuffer readback =
             //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            //                              workItemQueueBuffer.size, MemoryUsage::GPU_TO_CPU);
+            //                              debugLeafBuffer.size, MemoryUsage::GPU_TO_CPU);
             //     Semaphore testSemaphore   = device->CreateSemaphore();
             //     testSemaphore.signalValue = 1;
             //     // cmd->Barrier(
@@ -1402,14 +1404,14 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             //     //     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             //     // VK_ACCESS_2_TRANSFER_READ_BIT);
             //     // cmd->FlushBarriers();
-            //     cmd->CopyBuffer(&readback, &workItemQueueBuffer);
+            //     cmd->CopyBuffer(&readback, &debugLeafBuffer);
             //     cmd->SignalOutsideFrame(testSemaphore);
             //
             //     device->SubmitCommandBuffer(cmd);
             //     device->Wait(testSemaphore);
             //
             //     // BLASData *data = (BLASData *)readback.mappedPtr;
-            //     Vec4u *data = (Vec4u *)readback.mappedPtr;
+            //     Vec4f *data = (Vec4f *)readback.mappedPtr;
             //     int stop    = 5;
             // }
 

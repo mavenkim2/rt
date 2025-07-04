@@ -59,7 +59,7 @@ struct AccelerationStructureInstance
 #ifdef __cplusplus
     float transform[3][4];
 #else
-    float3x4 transform;
+    row_major float3x4 transform;
 #endif
     uint32_t instanceID : 24;
     uint32_t instanceMask : 8;
@@ -143,7 +143,7 @@ struct GPUInstance
 #ifdef __cplusplus
     float renderFromObject[3][4];
 #else
-    float3x4 renderFromObject;
+    row_major float3x4 renderFromObject;
 #endif
     uint globalRootNodeOffset;
 };

@@ -349,44 +349,31 @@ void Rebase(Quadric &q, QuadricGrad *g, f32 *attributes, f32 *attributeWeights,
     }
 }
 
-void Quadric::InitializeEdge(const Vec3f &p0, const Vec3f &p1)
+void Quadric::InitializeEdge(const Vec3f &p0, const Vec3f &p1, f32 weight)
 {
-#if 0
     Vec3f n = Cross(p0, p1);
-
-    Vec3f p01 = p1 - p0;
-    Vec3f p02 = p2 - p0;
-
-    Vec3f n = Cross(p01, p02);
 
     gVol = 0.f;
     dVol = 0.f;
 
     f32 length = Length(n);
-    area       = 0.5f * length;
 
     if (length < 1e-8f) return;
 
     n /= length;
 
-    OuterProduct(n, c00, c01, c02, c11, c12, c22);
+    gVol = n;
 
-    f32 distToPlane = -Dot(n, p0);
-    dn              = distToPlane * n;
-    d2              = Sqr(distToPlane);
+    area = weight * length;
 
     // Multiply quadric by area (in preparation to be summed by other faces)
-    c00 *= area;
-    c01 *= area;
-    c02 *= area;
+    c00 = area - area * n.x * n.x;
+    c01 *= -area * n.x * n.y;
+    c02 *= -area * n.x * n.z;
 
-    c11 *= area;
-    c12 *= area;
-    c22 *= area;
-
-    dn *= area;
-    d2 *= area;
-#endif
+    c11 *= area - area * n.y * n.y;
+    c12 *= -area * n.y * n.z;
+    c22 *= area - area * n.z * n.z;
 }
 
 void Quadric::Add(Quadric &other)
@@ -408,6 +395,22 @@ void Quadric::Add(Quadric &other)
 
     // Volume optimization
     area = other.area;
+}
+
+void Quadric::AddEdgeQuadric(Quadric &edgeQuadric, const Vec3f &p0)
+{
+    c00 += edgeQuadric.c00;
+    c01 += edgeQuadric.c01;
+    c02 += edgeQuadric.c02;
+
+    c11 += edgeQuadric.c11;
+    c12 += edgeQuadric.c12;
+    c22 += edgeQuadric.c22;
+
+    f32 dist = -Dot(p0, edgeQuadric.gVol);
+    dn += edgeQuadric.area * (-p0 - edgeQuadric.gVol * dist);
+
+    d2 += edgeQuadric.area * (Dot(p0, p0) - Sqr(dist));
 }
 
 void AddQuadric(QuadricGrad *g, const QuadricGrad *other, u32 numAttributes)
@@ -565,7 +568,8 @@ MeshSimplifier::MeshSimplifier(Arena *arena, f32 *vertexData, u32 numVertices, u
       vertexHash(arena, NextPowerOfTwo(numVertices), NextPowerOfTwo(numVertices)),
       pairHash0(arena, NextPowerOfTwo(numIndices), NextPowerOfTwo(numIndices)),
       pairHash1(arena, NextPowerOfTwo(numIndices), NextPowerOfTwo(numIndices)),
-      triangleIsRemoved(arena, numIndices / 3), lockedVertices(arena, numVertices)
+      triangleIsRemoved(arena, numIndices / 3), lockedVertices(arena, numVertices),
+      hasEdgeQuadric(arena, numIndices)
 {
 
     for (int vertIndex = 0; vertIndex < numVertices; vertIndex++)
@@ -576,9 +580,9 @@ MeshSimplifier::MeshSimplifier(Arena *arena, f32 *vertexData, u32 numVertices, u
 
     u32 numTriangles      = numIndices / 3;
     remainingNumTriangles = numIndices / 3;
-
-    triangleQuadrics     = PushArrayNoZero(arena, Quadric, numTriangles);
-    triangleAttrQuadrics = 0;
+    edgeQuadrics          = PushArrayNoZero(arena, Quadric, numIndices);
+    triangleQuadrics      = PushArrayNoZero(arena, Quadric, numTriangles);
+    triangleAttrQuadrics  = 0;
     if (numAttributes)
         triangleAttrQuadrics =
             PushArrayNoZero(arena, QuadricGrad, numTriangles * numAttributes);
@@ -740,6 +744,33 @@ bool MeshSimplifier::AddUniquePair(Pair &pair, int pairIndex)
     return !duplicate;
 }
 
+void MeshSimplifier::CalculateEdgeQuadric(u32 edgeIndex)
+{
+    u32 vertexIndex0 = indices[edgeIndex];
+    u32 vertexIndex1 = indices[NextInTriangle(edgeIndex, 1)];
+
+    Vec3f pos0 = GetPosition(vertexIndex0);
+    Vec3f pos1 = GetPosition(vertexIndex1);
+
+    bool oppositeEdge = false;
+    IterateCorners(pos1, [&](int cornerIndex) {
+        u32 otherVertexIndex0 = indices[cornerIndex];
+        u32 otherVertexIndex1 = indices[NextInTriangle(cornerIndex, 1)];
+        if (vertexIndex0 == otherVertexIndex1 && vertexIndex1 == otherVertexIndex0)
+        {
+            oppositeEdge = true;
+        }
+    });
+
+    if (!oppositeEdge)
+    {
+        Quadric quadric;
+        quadric.InitializeEdge(pos0, pos1, 2.f);
+        hasEdgeQuadric.SetBit(edgeIndex);
+        edgeQuadrics[edgeIndex] = quadric;
+    }
+}
+
 void MeshSimplifier::EvaluatePair(Pair &pair)
 {
     // Find the set of triangles adjacent to the pair
@@ -807,6 +838,21 @@ void MeshSimplifier::EvaluatePair(Pair &pair)
 
         quadric.Add(triangleQuadrics[tri]);
         AddQuadric(quadricGrad, attrQuadrics, numAttributes);
+    }
+
+    for (u32 tri : adjTris)
+    {
+        for (u32 corner = 0; corner < 3; corner++)
+        {
+            u32 indexIndex = 3 * tri + corner;
+            Vec3f p0       = GetPosition(indices[indexIndex]);
+            Vec3f p1       = GetPosition(indices[NextInTriangle(indexIndex, 1)]);
+            bool add       = p0 == pair.p0 || p0 == pair.p1 || p1 == pair.p0 || p1 == pair.p1;
+            if (hasEdgeQuadric.GetBit(indexIndex) && add)
+            {
+                quadric.AddEdgeQuadric(edgeQuadrics[indexIndex], p0 - basePosition);
+            }
+        }
     }
 
     // TODO:  preserving boundary edges with edge quadrics
@@ -1002,6 +1048,11 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
 
     pairs = StaticArray<Pair>(scratch.temp.arena, 3 * numTriangles);
     Heap<Pair> heap(scratch.temp.arena, 3 * numTriangles);
+
+    for (u32 i = 0; i < numIndices; i++)
+    {
+        CalculateEdgeQuadric(i);
+    }
 
     // Add unique pairs to hash
     for (int triIndex = 0; triIndex < numTriangles; triIndex++)
@@ -1324,6 +1375,15 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
         {
             EvaluatePair(pairs[changedPair]);
             heap.Add(pairs.data, changedPair);
+        }
+
+        for (u32 tri : movedTriangles)
+        {
+            if (triangleIsRemoved.GetBit(tri)) continue;
+            for (u32 corner = 0; corner < 3; corner++)
+            {
+                CalculateEdgeQuadric(3 * tri + corner);
+            }
         }
     }
 
@@ -2541,10 +2601,6 @@ void CreateClusters(Mesh &mesh, string filename)
                         clusterOffsets1[clusterIndex] += cluster.numNeighbors;
                     }
                 });
-                if (depth == 1)
-                {
-                    int stop = 5;
-                }
 
                 // Recursively partition the clusters into two groups until each group
                 // satisfies constraints
@@ -2575,9 +2631,6 @@ void CreateClusters(Mesh &mesh, string filename)
             ArrayView<Cluster> nextLevelClusters(clusters, totalNumClusters, numClusters);
 
             std::atomic<u32> numLevelClusters(0);
-            std::atomic<u32> numIndices(0);
-            std::atomic<u32> numVertices(0);
-            std::atomic<u32> numExternal(0);
 
             // Simplify every group
             if (depth == 0)
@@ -2606,7 +2659,8 @@ void CreateClusters(Mesh &mesh, string filename)
                         }
 
                         f32 *groupVertices =
-                            PushArrayNoZero(scratch.temp.arena, f32, groupNumTriangles * 3);
+                            PushArrayNoZero(scratch.temp.arena, f32,
+                                            (groupNumTriangles * 3) * (3 + numAttributes));
                         u32 *indices =
                             PushArrayNoZero(scratch.temp.arena, u32, groupNumTriangles * 3);
                         u32 vertexCount = 0;
@@ -2679,6 +2733,49 @@ void CreateClusters(Mesh &mesh, string filename)
                             }
                         }
 
+                        // Calculate the average surface area of all the triangles
+                        f32 totalSurfaceArea = 0.f;
+                        u32 numTris          = indexCount / 3;
+                        for (u32 tri = 0; tri < numTris; tri++)
+                        {
+                            Vec3f p0 = *(Vec3f *)(groupVertices +
+                                                  (3 + numAttributes) * indices[3 * tri + 0]);
+                            Vec3f p1 = *(Vec3f *)(groupVertices +
+                                                  (3 + numAttributes) * indices[3 * tri + 1]);
+                            Vec3f p2 = *(Vec3f *)(groupVertices +
+                                                  (3 + numAttributes) * indices[3 * tri + 2]);
+                            f32 area = 0.5f * Length(Cross(p1 - p0, p2 - p0));
+                            totalSurfaceArea += area;
+                        }
+                        // Normalize the positions
+                        struct Float
+                        {
+                            union
+                            {
+                                struct
+                                {
+                                    u32 mantissa : 23;
+                                    u32 exponent : 8;
+                                    u32 sign : 1;
+                                };
+                                f32 value;
+                            };
+                            Float(f32 f) : value(f) {}
+                        };
+
+                        totalSurfaceArea /= numTris;
+                        Float currentSize(Max(totalSurfaceArea, .00002f));
+                        Float desired(.25f);
+                        Float scale(1.f);
+                        int exponent = Clamp((int)desired.exponent - (int)currentSize.exponent,
+                                             -126, 127);
+                        scale.exponent = exponent + 127;
+                        float posScale = scale.value;
+                        for (int i = 0; i < vertexCount; i++)
+                        {
+                            *(Vec3f *)(groupVertices + (3 + numAttributes) * i) *= posScale;
+                        }
+
                         // Simplify the clusters
                         u32 targetNumParents =
                             (groupNumTriangles + MAX_CLUSTER_TRIANGLES * 2 - 1) /
@@ -2709,30 +2806,20 @@ void CreateClusters(Mesh &mesh, string filename)
                                 Edge &edge    = edges[edgeIndex];
                                 if (clusterToGroupID[edge.clusterIndex] != groupID)
                                 {
-                                    numExternal.fetch_add(1);
                                     simplifier.LockVertex(edge.p0);
                                     simplifier.LockVertex(edge.p1);
                                 }
                             }
                         }
 
-                        Vec3f *testVertices =
-                            PushArrayNoZero(scratch.temp.arena, Vec3f, vertexCount);
-                        u32 *testIndices =
-                            PushArrayNoZero(scratch.temp.arena, u32, indexCount);
-                        MemoryCopy(testVertices, groupVertices, sizeof(Vec3f) * vertexCount);
-                        MemoryCopy(testIndices, indices, sizeof(u32) * indexCount);
-
-                        f32 error = simplifier.Simplify(vertexCount, targetNumTris,
-                                                        Sqr(targetError), 0, 0, FLT_MAX);
-                        error     = Sqrt(error);
+                        f32 invScale = 1.f / posScale;
+                        f32 error    = simplifier.Simplify(vertexCount, targetNumTris,
+                                                           Sqr(targetError), 0, 0, FLT_MAX);
+                        error        = Sqrt(error) * invScale;
 
                         Mesh simplifiedMesh = {};
                         simplifier.Finalize(simplifiedMesh.numVertices,
                                             simplifiedMesh.numIndices);
-
-                        numVertices.fetch_add(simplifiedMesh.numVertices);
-                        numIndices.fetch_add(simplifiedMesh.numIndices);
 
                         // TODO: attributes
                         simplifiedMesh.p =
@@ -2744,6 +2831,11 @@ void CreateClusters(Mesh &mesh, string filename)
                                    sizeof(Vec3f) * simplifiedMesh.numVertices);
                         MemoryCopy(simplifiedMesh.indices, simplifier.indices,
                                    sizeof(u32) * simplifiedMesh.numIndices);
+
+                        for (int i = 0; i < simplifiedMesh.numVertices; i++)
+                        {
+                            simplifiedMesh.p[i] *= invScale;
+                        }
 
                         // Split the simplified meshes into clusters
                         u32 numFaces = simplifiedMesh.numIndices / 3;
@@ -2841,7 +2933,7 @@ void CreateClusters(Mesh &mesh, string filename)
 
             // Write obj to disk
 #if 0
-            Print("num external: %u\n", numExternal.load());
+            // Print("num external: %u\n", numExternal.load());
             u32 vertexCount   = numVertices.load();
             u32 indexCount    = numIndices.load();
             Mesh levelMesh    = {};
@@ -3334,8 +3426,9 @@ void CreateClusters(Mesh &mesh, string filename)
     // so if the instance is outside the frustum or occluded, and wasn't intersected, then it
     // should be removed
 
-    u32 numLeaves = 0;
-    u32 numParts  = 0;
+    u32 numLeaves    = 0;
+    u32 numParts     = 0;
+    u32 numLeafParts = 0;
     for (;;)
     {
         if (writeOffset == readOffset) break;
@@ -3354,7 +3447,7 @@ void CreateClusters(Mesh &mesh, string filename)
         {
             packed.childOffset[i] = ~0u;
         }
-        numLeaves += (bool)child.children;
+        numLeaves += !(bool)child.children;
         for (int i = 0; i < child.numChildren; i++)
         {
             packed.lodBounds[i]      = child.lodBounds[i];
@@ -3382,11 +3475,13 @@ void CreateClusters(Mesh &mesh, string filename)
                     ((part.clusterCount - 1) << MAX_CLUSTERS_PER_PAGE_BITS) |
                     part.clusterPageStartIndex;
 
+                // TODO: this is broken
                 if (clusterGroups[clusters[clusterGroups[part.groupIndex].clusterStartIndex]
                                       .childGroupIndex]
                         .isLeaf)
                 {
                     packed.flags |= (1 << i);
+                    numLeafParts++;
                 }
             }
         }
@@ -3395,8 +3490,8 @@ void CreateClusters(Mesh &mesh, string filename)
     }
 
     Assert(numNodes != 0);
-    Print("num nodes: %u\nnum parts: %u %u, num leaves: %u\n", numNodes, parts.Length(),
-          numParts, numLeaves);
+    Print("num nodes: %u\nnum parts: %u %u, num leaves: %u %u\n", numNodes, parts.Length(),
+          numParts, numLeaves, numLeafParts);
     Assert(hierarchy.Length() == numNodes);
 
     ClusterFileHeader *fileHeader =

@@ -18,9 +18,9 @@ float2 TestNode(float3x4 renderFromObject, float3x4 cameraFromRender, float4 lod
 
     // Find angle between vector to cluster center and view vector
     float3 cameraForward = -cameraFromRender[2].xyz;
-    float zf = abs(dot(cameraForward, center));
-    float zr = abs(dot(cameraFromRender[0].xyz, center));
-    float zu = abs(dot(cameraFromRender[1].xyz, center));
+    //float zf = abs(dot(cameraForward, center));
+    //float zr = abs(dot(cameraFromRender[0].xyz, center));
+    //float zu = abs(dot(cameraFromRender[1].xyz, center));
 
     float z = dot(cameraForward, center);
     //float z = max(zf, max(zr, zu));
@@ -42,12 +42,12 @@ float2 TestNode(float3x4 renderFromObject, float3x4 cameraFromRender, float4 lod
 
     // Clipping
     float depth = z - zNear;
-    if (distSqr < 0.f || cosSub * distTangent < zNear)
+    if (distTangentSqr < 0.f || cosSub * distTangent < zNear)
     {
         float cosSubX = max(0.f, x - sqrt(radius * radius - depth * depth));
         cosSub = zNear * rsqrt(cosSubX * cosSubX + zNear * zNear);
     }
-    if (distSqr < 0.f || cosAdd * distTangent < zNear)
+    if (distTangentSqr < 0.f || cosAdd * distTangent < zNear)
     {
         float cosAddX = x + sqrt(radius * radius - depth * depth);
         cosAdd = zNear * rsqrt(cosAddX * cosAddX + zNear * zNear);
@@ -193,17 +193,17 @@ struct ClusterCull
             }
 
         }
-#if 0
+#if 1
         else if (!isValid && !isLeaf)
         {
             uint debugWriteOffset;
             InterlockedAdd(queue[0].debugLeafWriteOffset, 1, debugWriteOffset);
 
             WorkItem childCandidateNode;
-            childCandidateNode.x = ~0u;
-            childCandidateNode.y = asuint(node.maxParentError[childIndex]);
-            childCandidateNode.z = asuint(edgeScales.x);
-            childCandidateNode.w = asuint(test);
+            childCandidateNode.x = asuint(node.lodBounds[childIndex].x);
+            childCandidateNode.y = asuint(node.lodBounds[childIndex].y);
+            childCandidateNode.z = asuint(node.maxParentError[childIndex]);
+            childCandidateNode.w = asuint(edgeScales.x);
             
             debugLeaves[debugWriteOffset] = childCandidateNode;
         }
