@@ -202,8 +202,8 @@ struct ClusterCull
             WorkItem childCandidateNode;
             childCandidateNode.x = asuint(node.lodBounds[childIndex].x);
             childCandidateNode.y = asuint(node.lodBounds[childIndex].y);
-            childCandidateNode.z = asuint(node.maxParentError[childIndex]);
-            childCandidateNode.w = asuint(edgeScales.x);
+            childCandidateNode.z = asuint(node.lodBounds[childIndex].z);
+            childCandidateNode.w =asuint(node.maxParentError[childIndex]);
             
             debugLeaves[debugWriteOffset] = childCandidateNode;
         }
@@ -240,7 +240,7 @@ struct ClusterCull
         float test;
         float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test);
 
-        bool isValid = (edgeScales.x > lodError * minScale);// || flags;
+        bool isValid = (edgeScales.x > lodError * minScale) || flags;
 
         uint clusterOffset;
         WaveInterlockedAddScalarTest(globals[GLOBALS_CLAS_COUNT_INDEX], isValid, 1, clusterOffset);
