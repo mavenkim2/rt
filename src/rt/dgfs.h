@@ -67,7 +67,7 @@ struct ClusterBuilder
     void CreateDGFs(const StaticArray<u32> &materialIDs, DenseGeometryBuildData *buildData,
                     Mesh *meshes, int numMeshes, Bounds &sceneBounds);
     void CreateDGFs(const StaticArray<u32> &materialIDs, DenseGeometryBuildData *buildDatas,
-                    Arena *arena, Mesh *meshes,
+                    Arena *arena, Mesh *meshes, int numMeshes,
                     const StaticArray<StaticArray<Vec3i>> &quantizedVertices,
                     const StaticArray<StaticArray<u32>> &normals, RecordAOSSplits &cluster,
                     int precision);

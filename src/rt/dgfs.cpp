@@ -228,7 +228,7 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
             for (int clusterIndex = 0; clusterIndex < node->count; clusterIndex++)
             {
                 RecordAOSSplits &cluster = node->values[clusterIndex];
-                CreateDGFs(materialIDs, buildData, meshScratch.temp.arena, meshes,
+                CreateDGFs(materialIDs, buildData, meshScratch.temp.arena, meshes, numMeshes,
                            quantizedVertices, octNormals, cluster, precision);
             }
         }
@@ -238,6 +238,7 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
 
 void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
                                 DenseGeometryBuildData *buildDatas, Arena *arena, Mesh *meshes,
+                                int numMeshes,
                                 const StaticArray<StaticArray<Vec3i>> &quantizedVertices,
                                 const StaticArray<StaticArray<u32>> &octNormals,
                                 RecordAOSSplits &cluster, int precision)
@@ -315,7 +316,11 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
 
     for (int i = start; i < start + clusterNumTriangles; i++)
     {
-        u32 geomID     = primRefs[i].geomID;
+        u32 geomID = primRefs[i].geomID;
+
+        // TODO: this is kind of a hack, since the simplifier returns
+        // the data of multiple meshes in one buffer
+        u32 meshIndex  = Min(geomID, (u32)numMeshes - 1);
         Mesh &mesh     = meshes[geomID];
         u32 primID     = primRefs[i].primID;
         u32 indices[3] = {
@@ -340,13 +345,13 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
 
         for (int indexIndex = 0; indexIndex < 3; indexIndex++)
         {
-            min = Min(min, quantizedVertices[geomID][indices[indexIndex]]);
-            max = Max(max, quantizedVertices[geomID][indices[indexIndex]]);
+            min = Min(min, quantizedVertices[meshIndex][indices[indexIndex]]);
+            max = Max(max, quantizedVertices[meshIndex][indices[indexIndex]]);
 
             u32 normal = ~0u;
             if (mesh.n)
             {
-                normal = octNormals[geomID][indices[indexIndex]];
+                normal = octNormals[meshIndex][indices[indexIndex]];
             }
 
             Vec2u n = Vec2u(normal >> 16, normal & ((1 << 16) - 1));
@@ -368,7 +373,7 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
                 clusterVertexIndexToMeshVertexIndex[vertexCount] = indices[indexIndex];
                 vertexIndices[indexCount++]                      = vertexCount;
 
-                vertices[vertexCount] = quantizedVertices[geomID][indices[indexIndex]];
+                vertices[vertexCount] = quantizedVertices[meshIndex][indices[indexIndex]];
                 normals[vertexCount]  = normal;
                 vertexCount++;
             }

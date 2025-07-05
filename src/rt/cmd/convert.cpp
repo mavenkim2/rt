@@ -848,6 +848,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             if (isMoana && !state->objMeshes.empty())
             {
                 MoanaOBJMeshes &meshes = state->objMeshes.back();
+
                 if (moanaMeshIndex != meshes.num)
                 {
                     Print("%S, num: %i, imports: %i\n", currentFilename, meshes.num,
@@ -882,6 +883,29 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             }
             if (writeFile)
             {
+                if (state->objMeshes.size())
+                {
+                    u32 numMeshes = 0;
+                    for (int objMeshIndex = 0; objMeshIndex < state->objMeshes.size();
+                         objMeshIndex++)
+                    {
+                        numMeshes += state->objMeshes[objMeshIndex].num;
+                    }
+                    Mesh *meshes = PushArrayNoZero(tempArena, Mesh, numMeshes);
+                    numMeshes    = 0;
+                    for (int objMeshIndex = 0; objMeshIndex < state->objMeshes.size();
+                         objMeshIndex++)
+                    {
+                        MoanaOBJMeshes &mesh = state->objMeshes[objMeshIndex];
+                        MemoryCopy(meshes + numMeshes, mesh.meshes, sizeof(Mesh) * mesh.num);
+                        numMeshes += mesh.num;
+                    }
+                    string virtualGeoFilename =
+                        PushStr8F(tempArena, "%S%S.geo\n", directory,
+                                  RemoveFileExtension(state->filename));
+                    CreateClusters(meshes, numMeshes, virtualGeoFilename);
+                }
+
                 WriteFile(directory, state, originFile ? sls : 0);
                 ArenaRelease(state->arena);
                 for (u32 i = 0; i < state->numImports; i++)
@@ -1957,13 +1981,6 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
     if (info->fileInstances.totalCount && info->shapes.totalCount)
     {
         Print("%S has both instances and shapes\n", info->filename);
-    }
-
-    // Virtual geometry processing
-    if (info->shapes.totalCount)
-    {
-        string filename = PushStr8F(temp.arena, "%S.geo\n", info->filename);
-        CreateClusters(meshes, num, filename);
     }
 
     string dataBuilderFile =

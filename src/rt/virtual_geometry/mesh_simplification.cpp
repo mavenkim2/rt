@@ -1572,7 +1572,7 @@ void MeshSimplifier::BuildKDTree(Bounds bounds, u32 start, u32 count)
 }
 #endif
 
-void MeshSimplifier::Finalize(u32 &finalNumVertices, u32 &finalNumIndices)
+void MeshSimplifier::Finalize(u32 &finalNumVertices, u32 &finalNumIndices, u32 *geomIDs)
 {
     ScratchArena scratch;
 
@@ -1632,6 +1632,8 @@ void MeshSimplifier::Finalize(u32 &finalNumVertices, u32 &finalNumIndices)
     {
         if (!triangleIsRemoved.GetBit(i))
         {
+            geomIDs[triangleCount] = geomIDs[i];
+
             u32 triIndices[3];
             GetSortedIndices(triIndices, i);
 
@@ -1791,9 +1793,6 @@ struct ClusterGroup
     PrimRef *primRefs;
     f32 *vertexData;
     u32 *indices;
-
-    // NOTE: x = vertexOffset, y = indexOffset
-    StaticArray<Vec2u> meshVertexOffsets;
 
     u32 buildDataIndex;
 
@@ -2280,20 +2279,9 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, string filename)
         return *(Vec3f *)(ptr + (3 + numAttributes) * index);
     };
 
-    auto GetVertexIndex = [numAttributes](const ClusterGroup &group, PrimRef &ref,
-                                          u32 corner) {
-        Vec2u offsets       = group.meshVertexOffsets[ref.geomID];
-        u32 startIndexIndex = 3 * ref.primID + offsets.y;
-
-        u32 index = offsets.x + group.indices[startIndexIndex + corner];
-        return index;
-    };
-
     ScratchArena scratch;
 
     RecordAOSSplits record;
-    PrimRef *primRefs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
-        scratch.temp.arena, meshes, numMeshes, record, false);
 
     StaticArray<Vec2u> meshVertexOffsets(scratch.temp.arena, numMeshes);
     u32 totalNumVertices = 0;
@@ -2318,12 +2306,40 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, string filename)
         {
             Mesh &mesh = meshes[meshIndex];
             // TODO: attributes
-            u32 vertexOffset = (3 + numAttributes) * meshVertexOffsets[meshIndex].x;
+            u32 vertexOffset = meshVertexOffsets[meshIndex].x;
             u32 indexOffset  = meshVertexOffsets[meshIndex].y;
-            MemoryCopy(vertexData + vertexOffset, mesh.p, sizeof(Vec3f) * mesh.numVertices);
-            MemoryCopy(indexData + indexOffset, mesh.indices, sizeof(u32) * mesh.numIndices);
+            MemoryCopy(vertexData + (3 + numAttributes) * vertexOffset, mesh.p,
+                       sizeof(Vec3f) * mesh.numVertices);
+
+            for (int indexIndex = 0; indexIndex < mesh.numIndices; indexIndex++)
+            {
+                indexData[indexOffset + indexIndex] = mesh.indices[indexIndex] + vertexOffset;
+            }
         }
     });
+
+    Mesh combinedMesh        = {};
+    combinedMesh.p           = (Vec3f *)vertexData;
+    combinedMesh.indices     = indexData;
+    combinedMesh.numVertices = totalNumVertices;
+    combinedMesh.numIndices  = totalNumIndices;
+    combinedMesh.numFaces    = totalNumIndices / 3;
+
+    PrimRef *primRefs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
+        scratch.temp.arena, &combinedMesh, 1, record, false);
+
+    u32 currentMesh = 0;
+    for (int primRefIndex = 0; primRefIndex < record.Count(); primRefIndex++)
+    {
+        u32 primID = primRefs[primRefIndex].primID;
+        u32 limit  = currentMesh == numMeshes - 1 ? totalNumIndices
+                                                  : meshVertexOffsets[currentMesh + 1].y;
+        if (primID >= limit)
+        {
+            currentMesh++;
+        }
+        primRefs[primRefIndex].geomID = currentMesh;
+    }
 
     ClusterBuilder clusterBuilder(scratch.temp.arena, primRefs);
     clusterBuilder.BuildClusters(record, true);
@@ -2347,12 +2363,11 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, string filename)
         clusterOffset += list.l.Length();
     }
 
-    ClusterGroup clusterGroup      = {};
-    clusterGroup.primRefs          = primRefs;
-    clusterGroup.vertexData        = vertexData;
-    clusterGroup.indices           = indexData;
-    clusterGroup.isLeaf            = true;
-    clusterGroup.meshVertexOffsets = meshVertexOffsets;
+    ClusterGroup clusterGroup = {};
+    clusterGroup.primRefs     = primRefs;
+    clusterGroup.vertexData   = vertexData;
+    clusterGroup.indices      = indexData;
+    clusterGroup.isLeaf       = true;
 
     clusterGroups.Push(clusterGroup);
 
@@ -2393,9 +2408,9 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, string filename)
         for (u32 j = 0; j < cluster.record.count; j++)
         {
             PrimRef &ref     = primRefs[start + j];
-            u32 vertexIndex0 = GetVertexIndex(clusterGroup, ref, 0);
-            u32 vertexIndex1 = GetVertexIndex(clusterGroup, ref, 1);
-            u32 vertexIndex2 = GetVertexIndex(clusterGroup, ref, 2);
+            u32 vertexIndex0 = indexData[3 * ref.primID + 0];
+            u32 vertexIndex1 = indexData[3 * ref.primID + 1];
+            u32 vertexIndex2 = indexData[3 * ref.primID + 2];
 
             points[3 * j + 0] = GetPosition(vertexData, vertexIndex0);
             points[3 * j + 1] = GetPosition(vertexData, vertexIndex1);
@@ -2414,9 +2429,10 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, string filename)
     }
 
     Bounds bounds;
-    StaticArray<u32> materialIDs(scratch.temp.arena, 1);
+    StaticArray<u32> materialIDs(scratch.temp.arena, 2);
     materialIDs.Push(0);
-    clusterBuilder.CreateDGFs(materialIDs, &buildDatas[0], meshes, numMeshes, bounds);
+    materialIDs.Push(0);
+    clusterBuilder.CreateDGFs(materialIDs, &buildDatas[0], &combinedMesh, 1, bounds);
 
     {
         // 1. Split triangles into clusters (mesh remains)
@@ -2489,9 +2505,11 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, string filename)
 
                         for (int edgeIndexIndex = 0; edgeIndexIndex < 3; edgeIndexIndex++)
                         {
-                            u32 index0 = GetVertexIndex(clusterGroup, primRef, edgeIndexIndex);
-                            u32 index1 = GetVertexIndex(clusterGroup, primRef,
-                                                        (edgeIndexIndex + 1) % 3);
+                            u32 index0 =
+                                clusterGroup.indices[3 * primRef.primID + edgeIndexIndex];
+                            u32 index1 =
+                                clusterGroup
+                                    .indices[3 * primRef.primID + (edgeIndexIndex + 1) % 3];
 
                             Vec3f p0 = GetPosition(clusterGroup.vertexData, index0);
                             Vec3f p1 = GetPosition(clusterGroup.vertexData, index1);
@@ -2718,14 +2736,16 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, string filename)
                                             (groupNumTriangles * 3) * (3 + numAttributes));
                         u32 *indices =
                             PushArrayNoZero(scratch.temp.arena, u32, groupNumTriangles * 3);
-                        u32 vertexCount = 0;
-                        u32 indexCount  = 0;
+                        u32 *geomIDs =
+                            PushArrayNoZero(scratch.temp.arena, u32, groupNumTriangles);
+                        u32 vertexCount   = 0;
+                        u32 indexCount    = 0;
+                        u32 triangleCount = 0;
 
                         u32 numHash = NextPowerOfTwo(groupNumTriangles * 3);
 
                         HashIndex vertexHash(scratch.temp.arena, numHash, numHash);
 
-                        u32 debugcount = 0;
                         // Merge clusters into a single vertex and index buffer
                         for (int clusterIndexIndex = range.begin;
                              clusterIndexIndex < range.end; clusterIndexIndex++)
@@ -2742,19 +2762,19 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, string filename)
                             {
                                 PrimRef &ref = prevClusterGroup.primRefs[refID];
 
+                                geomIDs[triangleCount++] = ref.geomID;
+
                                 Assert(ref.minX <= cluster.record.geomMin[0]);
                                 Assert(ref.minY <= cluster.record.geomMin[1]);
                                 Assert(ref.minZ <= cluster.record.geomMin[2]);
                                 Assert(ref.maxX <= cluster.record.geomMax[0]);
                                 Assert(ref.maxY <= cluster.record.geomMax[1]);
                                 Assert(ref.maxZ <= cluster.record.geomMax[2]);
-                                u32 primID = ref.primID;
 
                                 for (int vertIndex = 0; vertIndex < 3; vertIndex++)
                                 {
-                                    u32 indexIndex = 3 * primID + vertIndex;
-                                    u32 vertexIndex =
-                                        GetVertexIndex(prevClusterGroup, ref, vertIndex);
+                                    u32 indexIndex  = 3 * ref.primID + vertIndex;
+                                    u32 vertexIndex = prevClusterGroup.indices[indexIndex];
 
                                     f32 *clusterVertexData = GetVertexData(
                                         prevClusterGroup.vertexData, vertexIndex);
@@ -2874,7 +2894,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, string filename)
 
                         Mesh simplifiedMesh = {};
                         simplifier.Finalize(simplifiedMesh.numVertices,
-                                            simplifiedMesh.numIndices);
+                                            simplifiedMesh.numIndices, geomIDs);
 
                         // TODO: attributes
                         simplifiedMesh.p =
@@ -2905,6 +2925,11 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, string filename)
                         GenerateMeshRefs<GeometryType::TriangleMesh>(
                             &simplifiedMesh, newPrimRefs, 0, numFaces, 0, 1, record);
                         record.SetRange(0, numFaces);
+
+                        for (int primRefIndex = 0; primRefIndex < numFaces; primRefIndex++)
+                        {
+                            newPrimRefs[primRefIndex].geomID = geomIDs[primRefIndex];
+                        }
 
                         ClusterBuilder clusterBuilder(arena, newPrimRefs);
                         clusterBuilder.BuildClusters(record, false);
@@ -2991,7 +3016,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, string filename)
                 });
 
             // Write obj to disk
-#if 1
+#if 0
             u32 vertexCount   = numVertices.load();
             u32 indexCount    = numIndices.load();
             Mesh levelMesh    = {};

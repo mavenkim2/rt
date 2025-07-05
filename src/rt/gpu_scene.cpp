@@ -804,8 +804,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     tileCmd->FlushBarriers();
     device->SubmitCommandBuffer(tileCmd);
 
-    string clusterPageData = OS_ReadFile(sceneScratch.temp.arena,
-                                         "../../data/island/pbrt-v4/obj/osOcean/osOcean.geo");
+    string clusterPageData =
+        OS_ReadFile(sceneScratch.temp.arena, "../../data/island/pbrt-v4/test.geo");
     Tokenizer tokenizer;
     tokenizer.input  = clusterPageData;
     tokenizer.cursor = clusterPageData.str;
