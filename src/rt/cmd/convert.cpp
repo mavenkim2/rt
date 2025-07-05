@@ -1959,6 +1959,13 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
         Print("%S has both instances and shapes\n", info->filename);
     }
 
+    // Virtual geometry processing
+    if (info->shapes.totalCount)
+    {
+        string filename = PushStr8F(temp.arena, "%S.geo\n", info->filename);
+        CreateClusters(meshes, num, filename);
+    }
+
     string dataBuilderFile =
         PushStr8F(temp.arena, "%S%S.rtdata", directory, RemoveFileExtension(info->filename));
     StringBuilderMapped dataBuilder(dataBuilderFile);
@@ -2255,7 +2262,7 @@ int main(int argc, char **argv)
     Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
     device              = v;
 
-#if 1
+#if 0
     string testFilename = "../../data/island/pbrt-v4/obj/osOcean/osOcean.obj";
     int numMeshes, actualNumMeshes;
 

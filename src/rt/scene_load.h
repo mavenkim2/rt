@@ -697,10 +697,6 @@ inline Mesh *LoadObjWithWedges(Arena *arena, string filename, int &numMeshes,
 
                 for (u32 i = 0; i < numIndices; i++)
                 {
-                    if (i / 3 == 1449073)
-                    {
-                        int stop = 5;
-                    }
                     i32 vertexIndex = indices[i][0];
                     int uvIndex     = indices[i][1];
                     i32 normalIndex = indices[i][2];

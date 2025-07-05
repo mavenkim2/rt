@@ -193,7 +193,7 @@ struct ClusterCull
             }
 
         }
-#if 1
+#if 0
         else if (!isValid && !isLeaf)
         {
             uint debugWriteOffset;
