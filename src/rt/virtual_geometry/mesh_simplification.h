@@ -121,7 +121,8 @@ struct MeshSimplifier
     void Finalize(u32 &finalNumVertices, u32 &finalNumIndices, u32 *geomIDs);
 };
 
-void CreateClusters(Mesh *meshes, u32 numMeshes, string filename);
+void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,
+                    string filename);
 
 } // namespace rt
 

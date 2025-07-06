@@ -285,6 +285,8 @@ void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
     string directory = Str8PathChopPastLastSlash(options->filename);
     string filename  = PathSkipLastSlash(options->filename);
 
+    params.directory = directory;
+
     // environment map
 #if 1
     Bounds bounds              = scene->scene.GetBounds();

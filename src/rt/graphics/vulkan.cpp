@@ -1964,11 +1964,11 @@ void CommandBuffer::CopyBuffer(GPUBuffer *dst, GPUBuffer *src)
     vkCmdCopyBuffer(buffer, src->buffer, dst->buffer, 1, &bufferCopy);
 }
 
-void CommandBuffer::SubmitTransfer(TransferBuffer *transferBuffer)
+void CommandBuffer::SubmitTransfer(TransferBuffer *transferBuffer, u32 dstOffset)
 {
     VkBufferCopy bufferCopy = {};
     bufferCopy.srcOffset    = 0;
-    bufferCopy.dstOffset    = 0;
+    bufferCopy.dstOffset    = dstOffset;
     bufferCopy.size         = transferBuffer->buffer.size;
 
     vkCmdCopyBuffer(buffer, transferBuffer->stagingBuffer.buffer,
@@ -2091,13 +2091,34 @@ void CommandBuffer::CopyImageToBuffer(GPUBuffer *dst, GPUImage *src,
 }
 
 TransferBuffer CommandBuffer::SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags,
-                                           size_t totalSize)
+                                           size_t totalSize, u32 dstOffset)
 {
     TransferBuffer transferBuffer = device->GetStagingBuffer(flags, totalSize);
     Assert(transferBuffer.mappedPtr);
     MemoryCopy(transferBuffer.mappedPtr, ptr, totalSize);
-    SubmitTransfer(&transferBuffer);
+    SubmitTransfer(&transferBuffer, dstOffset);
     return transferBuffer;
+}
+
+void CommandBuffer::SubmitBuffer(GPUBuffer *dst, void *ptr, VkBufferUsageFlags2 flags,
+                                 size_t totalSize, u32 dstOffset)
+{
+    GPUBuffer stagingBuffer = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, totalSize,
+                                                   MemoryUsage::CPU_TO_GPU);
+    void *mappedPtr         = stagingBuffer.allocation->GetMappedData();
+
+    Assert(mappedPtr);
+    MemoryCopy(mappedPtr, ptr, totalSize);
+
+    VkBufferCopy bufferCopy = {};
+    bufferCopy.srcOffset    = 0;
+    bufferCopy.dstOffset    = dstOffset;
+    bufferCopy.size         = totalSize;
+
+    vkCmdCopyBuffer(buffer, stagingBuffer.buffer, dst->buffer, 1, &bufferCopy);
+
+    dst->lastStage  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    dst->lastAccess = VK_ACCESS_2_TRANSFER_WRITE_BIT;
 }
 
 void CommandBuffer::BindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipeline)
@@ -2880,6 +2901,68 @@ GPUBuffer CommandBuffer::BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *ds
         vkCmdBuildClusterAccelerationStructureIndirectNV(buffer, &commandsInfo);
     }
     return implicitBuffer;
+}
+
+void CommandBuffer::CompactCLAS(GPUBuffer *srcAddresses, GPUBuffer *dstClasBuffer,
+                                GPUBuffer *dstAddresses, GPUBuffer *dstSizes,
+                                GPUBuffer *srcInfosCount, u32 srcInfosOffset,
+                                int maxNumClusters, u64 maxMovedBytes, u32 dstClasOffset)
+{
+
+    VkClusterAccelerationStructureMoveObjectsInputNV moveClusters = {
+        VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_MOVE_OBJECTS_INPUT_NV};
+    moveClusters.type          = VK_CLUSTER_ACCELERATION_STRUCTURE_TYPE_TRIANGLE_CLUSTER_NV;
+    moveClusters.maxMovedBytes = maxMovedBytes;
+    moveClusters.noMoveOverlap = true;
+
+    VkClusterAccelerationStructureInputInfoNV inputInfo = {};
+    inputInfo.sType  = VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_INPUT_INFO_NV;
+    inputInfo.opType = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_MOVE_OBJECTS_NV;
+    inputInfo.opMode = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_IMPLICIT_DESTINATIONS_NV;
+    inputInfo.opInput.pMoveObjects          = &moveClusters;
+    inputInfo.maxAccelerationStructureCount = maxNumClusters;
+
+    VkClusterAccelerationStructureCommandsInfoNV commandsInfo = {
+        VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_COMMANDS_INFO_NV};
+
+    // do I need this?
+    VkAccelerationStructureBuildSizesInfoKHR buildSizesInfo = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+    vkGetClusterAccelerationStructureBuildSizesNV(device->device, &inputInfo, &buildSizesInfo);
+
+    GPUBuffer scratchBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        buildSizesInfo.updateScratchSize);
+
+    // Compact
+    commandsInfo.input = inputInfo;
+    commandsInfo.dstImplicitData =
+        device->GetDeviceAddress(dstClasBuffer->buffer) + dstClasOffset;
+    commandsInfo.scratchData = device->GetDeviceAddress(scratchBuffer.buffer);
+
+    commandsInfo.dstAddressesArray.deviceAddress =
+        device->GetDeviceAddress(dstAddresses->buffer);
+    commandsInfo.dstAddressesArray.size   = dstAddresses->size;
+    commandsInfo.dstAddressesArray.stride = sizeof(VkDeviceAddress);
+
+    commandsInfo.dstSizesArray.deviceAddress =
+        dstSizes ? device->GetDeviceAddress(dstSizes->buffer) : 0;
+    commandsInfo.dstSizesArray.size   = dstSizes ? dstSizes->size : 0;
+    commandsInfo.dstSizesArray.stride = dstSizes ? sizeof(u32) : 0;
+
+    commandsInfo.srcInfosArray.deviceAddress = device->GetDeviceAddress(srcAddresses->buffer);
+    commandsInfo.srcInfosArray.size          = srcAddresses->size;
+    commandsInfo.srcInfosArray.stride =
+        sizeof(VkClusterAccelerationStructureMoveObjectsInfoNV);
+
+    commandsInfo.srcInfosCount =
+        device->GetDeviceAddress(srcInfosCount->buffer) + srcInfosOffset;
+    commandsInfo.addressResolutionFlags = {};
+
+    vkCmdBuildClusterAccelerationStructureIndirectNV(buffer, &commandsInfo);
 }
 
 void CommandBuffer::BuildClusterBLAS(GPUBuffer *implicitBuffer, GPUBuffer *scratchBuffer,

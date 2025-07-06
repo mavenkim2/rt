@@ -182,6 +182,7 @@ struct NEESample
 
 struct RenderParams2
 {
+    string directory;
     Vec3f pCamera;
     Vec3f look;
     Vec3f up;

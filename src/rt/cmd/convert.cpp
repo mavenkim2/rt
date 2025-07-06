@@ -42,6 +42,7 @@ struct ShapeType
     ScenePacket *areaLight;
     string materialName;
     int transformIndex;
+    int materialIndex;
 
     // Moana only
     Mesh *mesh;
@@ -61,6 +62,7 @@ struct NamedPacket
     ScenePacket packet;
     string name;
     string type;
+    u32 index;
 
     u32 Hash() const { return rt::Hash(name); }
     bool operator==(const NamedPacket &other) const { return name == other.name; }
@@ -207,6 +209,7 @@ struct MaterialHashNode
     string name;
     string buffer;
     MaterialHashNode *next;
+    u32 index;
 };
 
 struct MaterialMap
@@ -215,8 +218,11 @@ struct MaterialMap
     Mutex *mutexes;
     u32 count;
 
-    bool FindOrAdd(Arena *arena, string buffer, string &name)
+    int FindOrAdd(Arena *arena, string buffer, string &name, std::atomic<int> &count,
+                  int &materialIndex)
     {
+        u32 materialIndex = ~0u;
+
         u32 hash  = Hash(buffer);
         u32 index = hash & (count - 1);
         BeginRMutex(&mutexes[index]);
@@ -228,6 +234,7 @@ struct MaterialMap
             {
                 name = node->name;
                 EndRMutex(&mutexes[index]);
+                materialIndex = node->index;
                 return true;
             }
             prev = node;
@@ -244,15 +251,18 @@ struct MaterialMap
             {
                 name = node->name;
                 EndWMutex(&mutexes[index]);
+                materialIndex = node->index;
                 return true;
             }
             prev = node;
             node = node->next;
         }
 
-        prev->name   = PushStr8Copy(arena, name);
-        prev->buffer = PushStr8Copy(arena, buffer);
-        prev->next   = PushStruct(arena, MaterialHashNode);
+        materialIndex = count.fetch_add(1, std::memory_order_relaxed);
+        prev->name    = PushStr8Copy(arena, name);
+        prev->buffer  = PushStr8Copy(arena, buffer);
+        prev->next    = PushStruct(arena, MaterialHashNode);
+        prev->index   = materialIndex;
         EndWMutex(&mutexes[index]);
         return false;
     }
@@ -270,6 +280,7 @@ struct SceneLoadState
 
     IncludeMap includeMap;
 
+    std::atomic<int> materialCount(0);
     MaterialMap materialMap;
 
     void Init(Arena *arena)
@@ -341,6 +352,7 @@ string GetMaterialBuffer(Arena *arena, ScenePacket *packet, string materialType)
 struct GraphicsState
 {
     string materialName   = {};
+    int materialIndex     = -1;
     AffineSpace transform = AffineSpace::Identity();
 
     i32 transformIndex = -1;
@@ -845,6 +857,69 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             OS_UnmapFile(tokenizer.input.str);
             scheduler.Wait(&state->counter);
 
+            // Prune duplicated geo in moana island scene
+            u32 numShapes = shapes->Length();
+            if (isMoana && numShapes)
+            {
+                HashIndex shapeHash(tempArena, NextPowerOfTwo(numShapes),
+                                    NextPowerOfTwo(numShapes));
+                StaticArray<NamedPacket *> validShapes(tempArena, numShapes);
+                for (auto *node = shapes->first; node != 0; node = node->next)
+                {
+                    for (int j = 0; j < node->count; j++)
+                    {
+                        ScenePacket &packet = node->values[j].packet;
+                        int hash            = -1;
+                        for (int stringIndex = 0; stringIndex < packet.parameterCount;
+                             stringIndex++)
+                        {
+                            if (packet.parameterNames[stringIndex] == "P"_sid)
+                            {
+                                Assert(stringIndex == 0);
+                                hash = MurmurHash32((const char *)packet.bytes[stringIndex],
+                                                    packet.sizes[stringIndex], 0);
+                                break;
+                            }
+                        }
+
+                        Assert(hash != -1);
+                        bool duplicate = false;
+                        for (int hashIndex = shapeHash.FirstInHash(hash); hashIndex != -1;
+                             hashIndex     = shapeHash.NextInHash(hash))
+                        {
+                            NamedPacket *otherShape = validShapes[hashIndex];
+                            if (otherShape->packet.sizes[0] == packet.sizes[0])
+                            {
+                                if (memcmp(packet.bytes[0], otherShape->packet.bytes[0],
+                                           packet.sizes[0]) == 0)
+                                {
+                                    duplicate = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!duplicate)
+                        {
+                            validShapes.Push(&node->values[j]);
+                            shapeHash.AddInHash(hash, i32 key, i32 index)
+                        }
+
+                        node->values node->values[j].packet.type =
+                            ConvertGeometryTypeToStringId(meshes.type);
+
+                        if (moanaMeshIndex >= meshes.num)
+                        {
+                            node->values[j].cancelled = true;
+                            node->values[j].mesh      = 0;
+                        }
+                        else
+                        {
+                            node->values[j].mesh = &meshes.meshes[moanaMeshIndex++];
+                        }
+                    }
+                }
+            }
+
             if (isMoana && !state->objMeshes.empty())
             {
                 MoanaOBJMeshes &meshes = state->objMeshes.back();
@@ -883,6 +958,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             }
             if (writeFile)
             {
+                // all i need is the material. that is all i need.
                 if (state->objMeshes.size())
                 {
                     u32 numMeshes = 0;
@@ -903,7 +979,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                     string virtualGeoFilename =
                         PushStr8F(tempArena, "%S%S.geo\n", directory,
                                   RemoveFileExtension(state->filename));
-                    CreateClusters(meshes, numMeshes, virtualGeoFilename);
+                    CreateClusters(meshes, numMeshes, materialIDs, virtualGeoFilename);
                 }
 
                 WriteFile(directory, state, originFile ? sls : 0);
@@ -974,7 +1050,6 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 // currentGraphicsState.areaLightIndex = lights->Length();
                 // NamedPacket *packet                 = &lights->AddBack();
 
-                // TODO: make sure this is the right arena
                 ScenePacket *packet = PushStruct(tempArena, ScenePacket);
                 CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Light);
                 currentGraphicsState.areaLightPacket = packet;
@@ -1195,26 +1270,24 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
 
                 nPacket.name = materialName;
 
-                if (!isNamedMaterial)
-                {
-                    // NOTE: the names aren't deterministic
-                    string buffer = GetMaterialBuffer(temp.arena, packet, nPacket.type);
-                    // NOTE: this changes the material name if a duplicate is found
-                    if (!sls->materialMap.FindOrAdd(threadArena, buffer, materialName))
-                    {
-                        materials->AddBack() = nPacket;
-                    }
-                    else
-                    {
-                        threadLocalStatistics[threadIndex].misc++;
-                    }
-                }
-                else
+                int materialIndex = -1;
+                // NOTE: the names aren't deterministic
+                string buffer = GetMaterialBuffer(temp.arena, packet, nPacket.type);
+                // NOTE: this changes the material name if a duplicate is found
+                int materialIndex;
+                bool found = !sls->materialMap.FindOrAdd(threadArena, buffer, materialName,
+                                                         sls->materialCount, materialIndex);
+                if (found)
                 {
                     materials->AddBack() = nPacket;
                 }
+                else
+                {
+                    threadLocalStatistics[threadIndex].misc++;
+                }
 
-                currentGraphicsState.materialName = materialName;
+                currentGraphicsState.materialName  = materialName;
+                currentGraphicsState.materialIndex = materialIndex;
             }
             break;
             case "MakeNamedMedium"_sid:
@@ -1231,6 +1304,12 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 Assert(result);
 
                 currentGraphicsState.materialName = PushStr8Copy(tempArena, materialName);
+
+                bool found = !sls->materialMap.FindOrAdd(threadArena, buffer, materialName,
+                                                         sls->materialCount, materialIndex);
+
+                // FindOrAdd(
+                currentGraphicsState.materialIndex = ? ;
             }
             break;
             case "ObjectBegin"_sid:
@@ -1404,6 +1483,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 }
 
                 shape->materialName   = currentGraphicsState.materialName;
+                shape->materialIndex  = currentGraphicsState.materialIndex;
                 shape->areaLight      = currentGraphicsState.areaLightPacket
                                             ? currentGraphicsState.areaLightPacket
                                             : 0;
@@ -2279,35 +2359,7 @@ int main(int argc, char **argv)
     Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
     device              = v;
 
-#if 0
-    string testFilename = "../../data/island/pbrt-v4/obj/osOcean/osOcean.obj";
-    int numMeshes, actualNumMeshes;
-
-    Mesh *meshes = LoadObjWithWedges(arena, testFilename, numMeshes);
-    // Mesh *mesh   = &meshes[0];
-    //
-    // u32 targetNumTris = 12000000; // mesh->numIndices / 6;
-    // u32 limitNumTris  = 256;
-    // MeshSimplifier simplifier(arena, (f32 *)mesh->p, mesh->numVertices, mesh->indices,
-    //                           mesh->numIndices);
-    // f32 maxError =
-    //     simplifier.Simplify(mesh->numVertices, targetNumTris, 0.f, 0, limitNumTris,
-    //     FLT_MAX);
-    // printf("test error: %f\n", maxError);
-    //
-    // Mesh simplifiedMesh = {};
-    // simplifier.Finalize(simplifiedMesh.numVertices, simplifiedMesh.numIndices);
-    //
-    // simplifiedMesh.p       = (Vec3f *)simplifier.vertexData;
-    // simplifiedMesh.indices = simplifier.indices;
-
-    // WriteTriOBJ(simplifiedMesh, "../../data/island/pbrt-v4/obj/osOcean/osOcean_simp.obj");
-
-    meshes[0].numFaces = meshes[0].numIndices / 3;
-    CreateClusters(meshes[0], testFilename);
-#else
     LoadPBRT(arena, filename);
-#endif
 
     u64 count        = 0;
     f64 time         = 0;

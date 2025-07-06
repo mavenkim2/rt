@@ -2267,7 +2267,8 @@ HierarchyNode BuildHierarchy(Arena *arena, const Array<Cluster> &clusters,
 
 static_assert((sizeof(PackedDenseGeometryHeader) + 4) % 16 == 0, "bad header size");
 
-void CreateClusters(Mesh *meshes, u32 numMeshes, string filename)
+void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,
+                    string filename)
 {
     const u32 numAttributes = 0;
 
@@ -2429,10 +2430,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, string filename)
     }
 
     Bounds bounds;
-    StaticArray<u32> materialIDs(scratch.temp.arena, 2);
-    materialIDs.Push(0);
-    materialIDs.Push(0);
-    clusterBuilder.CreateDGFs(materialIDs, &buildDatas[0], &combinedMesh, 1, bounds);
+    clusterBuilder.CreateDGFs(materialIndices, &buildDatas[0], &combinedMesh, 1, bounds);
 
     {
         // 1. Split triangles into clusters (mesh remains)
@@ -3008,8 +3006,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, string filename)
 
                         clusterGroups[newGroupIndex] = newClusterGroup;
 
-                        clusterBuilder.CreateDGFs(materialIDs, groupBuildData, &simplifiedMesh,
-                                                  1, bounds);
+                        clusterBuilder.CreateDGFs(materialIndices, groupBuildData,
+                                                  &simplifiedMesh, 1, bounds);
 
                         ReleaseArenaArray(clusterBuilder.arenas);
                     }

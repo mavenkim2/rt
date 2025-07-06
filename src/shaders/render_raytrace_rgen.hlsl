@@ -204,9 +204,9 @@ void main()
             float3 n0, n1, n2;
             if (dg.HasNormals())
             {
-                n0 = dg.DecodeNormal(vids[0]);
-                n1 = dg.DecodeNormal(vids[1]);
-                n2 = dg.DecodeNormal(vids[2]);
+                //n0 = dg.DecodeNormal(vids[0]);
+                //n1 = dg.DecodeNormal(vids[1]);
+                //n2 = dg.DecodeNormal(vids[2]);
             }
             else 
             {
@@ -215,7 +215,7 @@ void main()
                 n2 = gn;
             }
 
-            if (0)
+            if (printDebug)
             {
                 printf("%f %f %f %f %f %f %f %f %f\n", n0.x, n0.y, n0.z, n1.x, n1.y, n1.z, n2.x, n2.y, n2.z);
             }

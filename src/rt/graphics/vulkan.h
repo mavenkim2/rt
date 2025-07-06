@@ -588,8 +588,11 @@ struct CommandBuffer
     }
     void WaitOn(CommandBuffer *other);
     void CopyBuffer(GPUBuffer *dst, GPUBuffer *src);
-    void SubmitTransfer(TransferBuffer *buffer);
-    TransferBuffer SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags, size_t totalSize);
+    void SubmitTransfer(TransferBuffer *buffer, u32 dstOffset = 0);
+    TransferBuffer SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags, size_t totalSize,
+                                u32 dstOffset = 0);
+    void SubmitBuffer(GPUBuffer *dst, void *ptr, VkBufferUsageFlags2 flags, size_t totalSize,
+                      u32 dstOffset);
     TransferBuffer SubmitImage(void *ptr, ImageDesc desc);
     void CopyImage(GPUBuffer *transfer, GPUImage *image, BufferImageCopy *copies, u32 num);
     void CopyImage(GPUImage *dst, GPUImage *src, const ImageToImageCopy &copy);
@@ -633,6 +636,9 @@ struct CommandBuffer
                         GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
                         int maxNumClusters, u32 numTriangles, u32 numVertices,
                         u32 dstAddressesOffset = 0, u32 dstSizesOffset = 0);
+    void CompactCLAS(GPUBuffer *srcAddresses, GPUBuffer *dstClasBuffer, GPUBuffer *dstAddress,
+                     GPUBuffer *dstBuffer, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
+                     int maxNumClusters, u64 maxMovedBytes, u32 dstClasOffset);
     void BuildClusterBLAS(GPUBuffer *implicitBuffer, GPUBuffer *scratchBuffer,
                           GPUBuffer *bottomLevelInfo, GPUBuffer *dstAddresses,
                           GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
