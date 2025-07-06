@@ -38,6 +38,13 @@ struct CLASPageInfo
     uint addressStartIndex;
 };
 
+struct StreamingRequest
+{
+    float priority;
+    uint instanceID;
+    uint pageIndex_numClusters_clusterStartIndex;
+};
+
 #ifdef __cplusplus
 }
 #endif

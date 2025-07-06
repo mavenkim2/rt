@@ -104,7 +104,7 @@ RWStructuredBuffer<VisibleCluster> selectedClusters : register(u7);
 RWStructuredBuffer<BLASData> blasDatas : register(u9);
 
 // Debug 
-RWStructuredBuffer<uint4> debugLeaves : register(u10);
+RWStructuredBuffer<StreamingRequest> requests : register(u10);
 
 struct ClusterCull 
 {
@@ -125,6 +125,7 @@ struct ClusterCull
         float2 edgeScales = float2(0, 0);
         float minScale = 0.f;
         float test = 0.f;
+        float priority = 0.f;
         if (isValid)
         {
             float4 lodBounds = node.lodBounds[childIndex];
@@ -141,6 +142,8 @@ struct ClusterCull
             edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test);
 
             isValid &= edgeScales.x <= maxParentError * minScale;// + 1e-8f;
+
+            priority = maxParentError / edgeScales.x;
        }
 
         uint nodeWriteOffset;
@@ -192,6 +195,13 @@ struct ClusterCull
                 leafQueue[leafWriteOffset + i] = candidateCluster;
             }
 
+            StreamingRequest request;
+            request.priority = priority;
+            request.pageIndex_numClusters_clusterStartIndex = leafInfo;
+
+            uint requestIndex;
+            InterlockedAdd(globals[GLOBALS_STREAMING_REQUEST_COUNT_INDEX], 1, requestIndex);
+            requests[requestIndex] = request;
         }
 #if 0
         else if (!isValid && !isLeaf)

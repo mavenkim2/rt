@@ -201,7 +201,9 @@ struct TestDenseGeometry
 #define GLOBALS_BLAS_INDIRECT_Y 11
 #define GLOBALS_BLAS_INDIRECT_Z 12
 
-#define GLOBALS_SIZE 13
+#define GLOBALS_STREAMING_REQUEST_COUNT_INDEX 13
+
+#define GLOBALS_SIZE 14
 
 #ifdef __cplusplus
 }
