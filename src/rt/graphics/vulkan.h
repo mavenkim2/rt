@@ -394,6 +394,13 @@ struct GPUImage
     GPUImage() {}
 };
 
+struct BufferToBufferCopy
+{
+    u32 srcOffset;
+    u32 dstOffset;
+    u32 size;
+};
+
 struct BufferImageCopy
 {
     u64 bufferOffset;
@@ -594,6 +601,7 @@ struct CommandBuffer
     void SubmitBuffer(GPUBuffer *dst, void *ptr, VkBufferUsageFlags2 flags, size_t totalSize,
                       u32 dstOffset);
     TransferBuffer SubmitImage(void *ptr, ImageDesc desc);
+    void CopyBuffer(GPUBuffer *dst, GPUBuffer *src, BufferToBufferCopy *copies, u32 num);
     void CopyImage(GPUBuffer *transfer, GPUImage *image, BufferImageCopy *copies, u32 num);
     void CopyImage(GPUImage *dst, GPUImage *src, const ImageToImageCopy &copy);
     void CopyImageToBuffer(GPUBuffer *dst, GPUImage *src, const BufferImageCopy *copies,

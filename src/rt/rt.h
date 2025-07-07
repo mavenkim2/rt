@@ -41,8 +41,6 @@ struct HitRecord
     }
 };
 
-#define OffsetOf(type, member) (u64) & (((type *)0)->member)
-
 struct Image
 {
     u8 *contents;

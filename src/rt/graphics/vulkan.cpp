@@ -2010,6 +2010,22 @@ TransferBuffer CommandBuffer::SubmitImage(void *ptr, ImageDesc desc)
     return transferBuffer;
 }
 
+void CommandBuffer::CopyBuffer(GPUBuffer *dst, GPUBuffer *src, BufferToBufferCopy *copies,
+                               u32 num)
+{
+    ScratchArena scratch;
+    VkBufferCopy *vkCopies = PushArrayNoZero(scratch.temp.arena, VkBufferCopy, num);
+    for (u32 i = 0; i < num; i++)
+    {
+        VkBufferCopy &copy = vkCopies[i];
+        copy.srcOffset     = copies[i].srcOffset;
+        copy.dstOffset     = copies[i].dstOffset;
+        copy.size          = copies[i].size;
+    }
+
+    vkCmdCopyBuffer(buffer, src->buffer, dst->buffer, num, vkCopies);
+}
+
 void CommandBuffer::CopyImage(GPUBuffer *transfer, GPUImage *image, BufferImageCopy *copies,
                               u32 num)
 {

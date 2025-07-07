@@ -99,6 +99,7 @@ struct DebugEvent
 #define TIMED_GPU(cmd)                   DebugEvent(__FILE__, FUNCTION_NAME, __LINE__, cmd);
 #define TIMED_GPU_RANGE_BEGIN(cmd, name) debugState.BeginRange(__FILE__, name, __LINE__, cmd)
 #define TIMED_RANGE_END(index)           debugState.EndRange(index)
+#define TIMED_CPU()                      DebugEvent(__FILE__, FUNCTION_NAME, __LINE__)
 #define TIMED_CPU_RANGE_BEGIN()          debugState.BeginRange(__FILE__, FUNCTION_NAME, __LINE__)
 
 #define TIMED_CPU_RANGE_NAME_BEGIN(name) debugState.BeginRange(__FILE__, name, __LINE__)

@@ -42,7 +42,13 @@ struct StreamingRequest
 {
     float priority;
     uint instanceID;
-    uint pageIndex_numClusters_clusterStartIndex;
+    uint pageIndex_numPages;
+};
+
+struct HierarchyFixup
+{
+    uint nodeIndex;
+    uint pageIndex;
 };
 
 #ifdef __cplusplus

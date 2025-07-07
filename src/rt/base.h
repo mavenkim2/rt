@@ -255,6 +255,8 @@ T Max(const T &a, const T &b)
         }                                                                                     \
     } while (0);
 
+#define OffsetOf(type, member) (u64) & (((type *)0)->member)
+
 //////////////////////////////
 // Mutexes
 //
