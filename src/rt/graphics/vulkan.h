@@ -76,6 +76,47 @@ inline u32 GetNumLevels(u32 width, u32 height)
     return Max(1, Max(Log2Int(NextPowerOfTwo(width)), Log2Int(NextPowerOfTwo(height))));
 }
 
+enum class CLASOpType
+{
+    Move,
+    CLAS,
+    BLAS,
+};
+ENUM_CLASS_FLAGS(CLASOpType)
+
+enum class CLASOpMode
+{
+    ImplicitDestinations,
+    ExplicitDestinations,
+};
+
+struct CLASOpInput
+{
+    union
+    {
+        struct MoveObjects
+        {
+            u64 maxMovedBytes;
+            int maxNumClusters;
+            bool noMoveOverlap;
+        } moveObjects;
+
+        struct TriangleClusters
+        {
+            // TODO: add the rest
+            u32 maxNumTriangles;
+            u32 maxNumVertices;
+        } triangleClusters;
+
+        struct ClusterBottomLevel
+        {
+            u32 maxTotalClusterCount;
+            u32 maxClusterCountPerAccelerationStructure;
+        } clusterBottomLevel;
+    };
+    u32 maxAccelerationStructureCount;
+};
+
 enum class ResourceUsage : u32
 {
     None     = 0,
@@ -640,13 +681,19 @@ struct CommandBuffer
             VkAccelerationStructureGeometryKHR *geometries, int count,
             VkAccelerationStructureBuildRangeInfoKHR *buildRanges, u32 *maxPrimitiveCounts);
 
-    GPUBuffer BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
-                        GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
-                        int maxNumClusters, u32 numTriangles, u32 numVertices,
-                        u32 dstAddressesOffset = 0, u32 dstSizesOffset = 0);
-    void CompactCLAS(GPUBuffer *srcAddresses, GPUBuffer *dstClasBuffer, GPUBuffer *dstAddress,
-                     GPUBuffer *dstBuffer, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
-                     int maxNumClusters, u64 maxMovedBytes, u32 dstClasOffset);
+    void CLASIndirect(CLASOpInput opInput, CLASOpMode opMode, CLASOpType opType,
+                      GPUBuffer *dstImplicitData, GPUBuffer *scratchBuffer,
+                      GPUBuffer *dstAddresses, GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
+                      GPUBuffer *srcInfosCount, u32 srcInfosOffset, u32 dstClasOffset);
+    void BuildCLAS(GPUBuffer *dstImplicitData, GPUBuffer *scratchBuffer,
+                   GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
+                   GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
+                   int maxNumClusters, u32 maxNumTriangles, u32 maxNumVertices,
+                   u32 dstAddressesOffset, u32 dstSizesOffset);
+    void MoveCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData, GPUBuffer *scratchBuffer,
+                  GPUBuffer *dstAddresses, GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
+                  GPUBuffer *srcInfosCount, u32 srcInfosOffset, int maxNumClusters,
+                  u64 maxMovedBytes, u32 dstClasOffset);
     void BuildClusterBLAS(GPUBuffer *implicitBuffer, GPUBuffer *scratchBuffer,
                           GPUBuffer *bottomLevelInfo, GPUBuffer *dstAddresses,
                           GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,

@@ -2840,145 +2840,145 @@ GPUAccelerationStructurePayload CommandBuffer::BuildCustomBLAS(GPUBuffer *aabbsB
                    &numAabbs);
 }
 
-GPUBuffer CommandBuffer::BuildCLAS(GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
-                                   GPUBuffer *dstSizes, GPUBuffer *srcInfosCount,
-                                   u32 srcInfosOffset, int maxNumClusters, u32 maxNumTriangles,
-                                   u32 maxNumVertices, u32 dstAddressesOffset,
-                                   u32 dstSizesOffset)
+void CommandBuffer::CLASIndirect(CLASOpInput opInput, CLASOpMode opMode, CLASOpType opType,
+                                 GPUBuffer *dstImplicitData, GPUBuffer *scratchBuffer,
+                                 GPUBuffer *dstAddresses, GPUBuffer *dstSizes,
+                                 GPUBuffer *srcInfosArray, GPUBuffer *srcInfosCount,
+                                 u32 srcInfosOffset, u32 dstClasOffset)
 {
-
-    VkClusterAccelerationStructureTriangleClusterInputNV triangleClusters = {};
-    triangleClusters.sType =
-        VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_TRIANGLE_CLUSTER_INPUT_NV;
-    triangleClusters.vertexFormat                  = VK_FORMAT_R32G32B32_SFLOAT;
-    triangleClusters.maxGeometryIndexValue         = 1; // numMeshes - 1;
-    triangleClusters.maxClusterUniqueGeometryCount = 1; // numMeshes;
-    triangleClusters.maxClusterTriangleCount       = MAX_CLUSTER_TRIANGLES;
-    triangleClusters.maxClusterVertexCount         = MAX_CLUSTER_VERTICES;
-    triangleClusters.maxTotalTriangleCount         = maxNumTriangles;
-    triangleClusters.maxTotalVertexCount           = maxNumVertices;
-    triangleClusters.minPositionTruncateBitCount   = 0;
-
-    VkClusterAccelerationStructureInputInfoNV inputInfo = {};
-    inputInfo.sType  = VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_INPUT_INFO_NV;
-    inputInfo.opType = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_TRIANGLE_CLUSTER_NV;
-    inputInfo.opMode = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_IMPLICIT_DESTINATIONS_NV;
-    inputInfo.opInput.pTriangleClusters     = &triangleClusters;
-    inputInfo.maxAccelerationStructureCount = maxNumClusters;
-
-    // Get acceleration structure sizes and size of scratch buffer
-    VkAccelerationStructureBuildSizesInfoKHR buildSizesInfo = {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
-    vkGetClusterAccelerationStructureBuildSizesNV(device->device, &inputInfo, &buildSizesInfo);
-
-    GPUBuffer buildScratch = device->CreateBuffer(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-        buildSizesInfo.buildScratchSize);
-
-    GPUBuffer implicitBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        buildSizesInfo.accelerationStructureSize);
-
-    VkClusterAccelerationStructureCommandsInfoNV commandsInfo = {
-        VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_COMMANDS_INFO_NV};
-
-    // Build CLAS
+    union OpInput
     {
-        commandsInfo.input           = inputInfo;
-        commandsInfo.dstImplicitData = device->GetDeviceAddress(implicitBuffer.buffer);
-        commandsInfo.scratchData     = device->GetDeviceAddress(buildScratch.buffer);
+        VkClusterAccelerationStructureClustersBottomLevelInputNV clustersBottomLevel;
+        VkClusterAccelerationStructureTriangleClusterInputNV triangleClusters;
+        VkClusterAccelerationStructureMoveObjectsInputNV moveObjects;
+    };
 
-        commandsInfo.dstAddressesArray.deviceAddress =
-            device->GetDeviceAddress(dstAddresses->buffer) + dstAddressesOffset;
-        commandsInfo.dstAddressesArray.size   = dstAddresses->size;
-        commandsInfo.dstAddressesArray.stride = sizeof(VkDeviceAddress);
+    VkDeviceSize srcInfosArrayStride;
+    OpInput vkOpInput;
 
-        commandsInfo.dstSizesArray.deviceAddress =
-            device->GetDeviceAddress(dstSizes->buffer) + dstSizesOffset;
-        commandsInfo.dstSizesArray.size   = dstSizes->size;
-        commandsInfo.dstSizesArray.stride = sizeof(u32);
+    VkClusterAccelerationStructureOpTypeNV vkOpType;
 
-        commandsInfo.srcInfosArray.deviceAddress =
-            device->GetDeviceAddress(triangleClusterInfo->buffer);
-        commandsInfo.srcInfosArray.size = triangleClusterInfo->size;
-        commandsInfo.srcInfosArray.stride =
-            sizeof(VkClusterAccelerationStructureBuildTriangleClusterInfoNV);
+    VkClusterAccelerationStructureOpModeNV vkOpMode =
+        opMode == CLASOpMode::ImplicitDestinations
+            ? VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_EXPLICIT_DESTINATIONS_NV
+            : VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_IMPLICIT_DESTINATIONS_NV;
 
-        commandsInfo.srcInfosCount =
-            device->GetDeviceAddress(srcInfosCount->buffer) + srcInfosOffset;
-        commandsInfo.addressResolutionFlags = {};
+    VkClusterAccelerationStructureInputInfoNV inputInfo = {
+        VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_INPUT_INFO_NV};
+    inputInfo.opMode = vkOpMode;
 
-        vkCmdBuildClusterAccelerationStructureIndirectNV(buffer, &commandsInfo);
+    if (EnumHasAnyFlags(opType, CLASOpType::Move))
+    {
+        bool inputType = EnumHasAnyFlags(opType, CLASOpType::CLAS);
+        vkOpType       = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_MOVE_OBJECTS_NV;
+        vkOpInput.moveObjects.sType =
+            VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_MOVE_OBJECTS_INPUT_NV;
+        vkOpInput.moveObjects.type =
+            inputType ? VK_CLUSTER_ACCELERATION_STRUCTURE_TYPE_TRIANGLE_CLUSTER_NV
+                      : VK_CLUSTER_ACCELERATION_STRUCTURE_TYPE_CLUSTERS_BOTTOM_LEVEL_NV;
+        vkOpInput.moveObjects.noMoveOverlap = opInput.moveObjects.noMoveOverlap;
+        vkOpInput.moveObjects.maxMovedBytes = opInput.moveObjects.maxMovedBytes;
+
+        inputInfo.opInput.pMoveObjects = &vkOpInput.moveObjects;
+        srcInfosArrayStride = sizeof(VkClusterAccelerationStructureMoveObjectsInfoNV);
     }
-    return implicitBuffer;
-}
+    else if (EnumHasAnyFlags(opType, CLASOpType::CLAS))
+    {
+        vkOpType = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_TRIANGLE_CLUSTER_NV;
+        vkOpInput.triangleClusters.sType =
+            VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_TRIANGLE_CLUSTER_INPUT_NV;
+        vkOpInput.triangleClusters.vertexFormat                  = VK_FORMAT_R32G32B32_SFLOAT;
+        vkOpInput.triangleClusters.maxGeometryIndexValue         = 1;
+        vkOpInput.triangleClusters.maxClusterUniqueGeometryCount = 1;
+        vkOpInput.triangleClusters.maxClusterTriangleCount       = MAX_CLUSTER_TRIANGLES;
+        vkOpInput.triangleClusters.maxClusterVertexCount         = MAX_CLUSTER_VERTICES;
+        vkOpInput.triangleClusters.maxTotalTriangleCount =
+            opInput.triangleClusters.maxNumTriangles;
+        vkOpInput.triangleClusters.maxTotalVertexCount =
+            opInput.triangleClusters.maxNumVertices;
+        vkOpInput.triangleClusters.minPositionTruncateBitCount = 0;
 
-void CommandBuffer::CompactCLAS(GPUBuffer *srcAddresses, GPUBuffer *dstClasBuffer,
-                                GPUBuffer *dstAddresses, GPUBuffer *dstSizes,
-                                GPUBuffer *srcInfosCount, u32 srcInfosOffset,
-                                int maxNumClusters, u64 maxMovedBytes, u32 dstClasOffset)
-{
+        inputInfo.opInput.pTriangleClusters = &vkOpInput.triangleClusters;
+        srcInfosArrayStride = sizeof(VkClusterAccelerationStructureBuildTriangleClusterInfoNV);
+    }
+    else if (EnumHasAnyFlags(opType, CLASOpType::BLAS))
+    {
+        vkOpType = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_CLUSTERS_BOTTOM_LEVEL_NV;
+        vkOpInput.clustersBottomLevel.sType =
+            VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_CLUSTERS_BOTTOM_LEVEL_INPUT_NV;
+        vkOpInput.clustersBottomLevel.maxTotalClusterCount =
+            opInput.clusterBottomLevel.maxTotalClusterCount;
+        vkOpInput.clustersBottomLevel.maxClusterCountPerAccelerationStructure =
+            opInput.clusterBottomLevel.maxClusterCountPerAccelerationStructure;
 
-    VkClusterAccelerationStructureMoveObjectsInputNV moveClusters = {
-        VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_MOVE_OBJECTS_INPUT_NV};
-    moveClusters.type          = VK_CLUSTER_ACCELERATION_STRUCTURE_TYPE_TRIANGLE_CLUSTER_NV;
-    moveClusters.maxMovedBytes = maxMovedBytes;
-    moveClusters.noMoveOverlap = true;
+        inputInfo.opInput.pClustersBottomLevel = &vkOpInput.clustersBottomLevel;
+        srcInfosArrayStride =
+            sizeof(VkClusterAccelerationStructureBuildClustersBottomLevelInfoNV);
+    }
 
-    VkClusterAccelerationStructureInputInfoNV inputInfo = {};
-    inputInfo.sType  = VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_INPUT_INFO_NV;
-    inputInfo.opType = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_MOVE_OBJECTS_NV;
-    inputInfo.opMode = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_IMPLICIT_DESTINATIONS_NV;
-    inputInfo.opInput.pMoveObjects          = &moveClusters;
-    inputInfo.maxAccelerationStructureCount = maxNumClusters;
+    inputInfo.opType                        = vkOpType;
+    inputInfo.maxAccelerationStructureCount = opInput.maxAccelerationStructureCount;
 
     VkClusterAccelerationStructureCommandsInfoNV commandsInfo = {
         VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_COMMANDS_INFO_NV};
 
-    // do I need this?
-    VkAccelerationStructureBuildSizesInfoKHR buildSizesInfo = {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
-    vkGetClusterAccelerationStructureBuildSizesNV(device->device, &inputInfo, &buildSizesInfo);
-
-    GPUBuffer scratchBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
-            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-        buildSizesInfo.updateScratchSize);
+    // // do I need this?
+    // VkAccelerationStructureBuildSizesInfoKHR buildSizesInfo = {
+    //     VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+    // vkGetClusterAccelerationStructureBuildSizesNV(device->device, &inputInfo,
+    // &buildSizesInfo);
+    //
+    // GPUBuffer scratchBuffer = device->CreateBuffer(
+    //     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+    //         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+    //         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+    //         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+    //     buildSizesInfo.updateScratchSize);
 
     // Compact
     commandsInfo.input = inputInfo;
     commandsInfo.dstImplicitData =
-        device->GetDeviceAddress(dstClasBuffer->buffer) + dstClasOffset;
-    commandsInfo.scratchData = device->GetDeviceAddress(scratchBuffer.buffer);
+        dstImplicitData ? device->GetDeviceAddress(dstImplicitData->buffer) : 0;
+    commandsInfo.scratchData = device->GetDeviceAddress(scratchBuffer->buffer);
 
     commandsInfo.dstAddressesArray.deviceAddress =
-        device->GetDeviceAddress(dstAddresses->buffer);
+        device->GetDeviceAddress(dstAddresses->buffer) +
+        sizeof(VkDeviceAddress) * dstClasOffset;
     commandsInfo.dstAddressesArray.size   = dstAddresses->size;
     commandsInfo.dstAddressesArray.stride = sizeof(VkDeviceAddress);
 
     commandsInfo.dstSizesArray.deviceAddress =
-        dstSizes ? device->GetDeviceAddress(dstSizes->buffer) : 0;
+        dstSizes ? device->GetDeviceAddress(dstSizes->buffer) + sizeof(u32) * dstClasOffset
+                 : 0;
     commandsInfo.dstSizesArray.size   = dstSizes ? dstSizes->size : 0;
     commandsInfo.dstSizesArray.stride = dstSizes ? sizeof(u32) : 0;
 
-    commandsInfo.srcInfosArray.deviceAddress = device->GetDeviceAddress(srcAddresses->buffer);
-    commandsInfo.srcInfosArray.size          = srcAddresses->size;
-    commandsInfo.srcInfosArray.stride =
-        sizeof(VkClusterAccelerationStructureMoveObjectsInfoNV);
+    commandsInfo.srcInfosArray.deviceAddress = device->GetDeviceAddress(srcInfosArray->buffer);
+    commandsInfo.srcInfosArray.size          = srcInfosArray->size;
+    commandsInfo.srcInfosArray.stride        = srcInfosArrayStride;
 
     commandsInfo.srcInfosCount =
         device->GetDeviceAddress(srcInfosCount->buffer) + srcInfosOffset;
     commandsInfo.addressResolutionFlags = {};
 
     vkCmdBuildClusterAccelerationStructureIndirectNV(buffer, &commandsInfo);
+}
+
+void CommandBuffer::BuildCLAS(GPUBuffer *dstImplicitData, GPUBuffer *scratchBuffer,
+                              GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
+                              GPUBuffer *dstSizes, GPUBuffer *srcInfosCount,
+                              u32 srcInfosOffset, int maxNumClusters, u32 maxNumTriangles,
+                              u32 maxNumVertices, u32 dstAddressesOffset, u32 dstSizesOffset)
+{
+    CLASOpInput opInput;
+    opInput.triangleClusters.maxNumTriangles = maxNumTriangles;
+    opInput.triangleClusters.maxNumVertices  = maxNumVertices;
+
+    opInput.maxAccelerationStructureCount = maxNumClusters;
+
+    CLASIndirect(opInput, CLASOpMode::ImplicitDestinations, CLASOpType::CLAS, dstImplicitData,
+                 scratchBuffer, dstAddresses, dstSizes, triangleClusterInfo, srcInfosCount,
+                 srcInfosOffset, 0);
 }
 
 void CommandBuffer::BuildClusterBLAS(GPUBuffer *implicitBuffer, GPUBuffer *scratchBuffer,
@@ -2987,47 +2987,35 @@ void CommandBuffer::BuildClusterBLAS(GPUBuffer *implicitBuffer, GPUBuffer *scrat
                                      u32 srcInfosOffset, u32 numClusters,
                                      u32 maxAccelerationStructureCount)
 {
-    // Get build sizes
-    VkClusterAccelerationStructureClustersBottomLevelInputNV bottomLevelInput = {
-        VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_CLUSTERS_BOTTOM_LEVEL_INPUT_NV};
-    bottomLevelInput.maxTotalClusterCount                    = numClusters;
-    bottomLevelInput.maxClusterCountPerAccelerationStructure = numClusters;
+    CLASOpInput opInput;
+    opInput.clusterBottomLevel.maxClusterCountPerAccelerationStructure = numClusters;
+    opInput.clusterBottomLevel.maxTotalClusterCount                    = numClusters;
+    opInput.maxAccelerationStructureCount = maxAccelerationStructureCount;
 
-    VkClusterAccelerationStructureInputInfoNV inputInfo = {
-        VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_INPUT_INFO_NV};
-    inputInfo.opType =
-        VK_CLUSTER_ACCELERATION_STRUCTURE_OP_TYPE_BUILD_CLUSTERS_BOTTOM_LEVEL_NV;
-    inputInfo.opMode = VK_CLUSTER_ACCELERATION_STRUCTURE_OP_MODE_IMPLICIT_DESTINATIONS_NV;
-    inputInfo.opInput.pClustersBottomLevel  = &bottomLevelInput;
-    inputInfo.maxAccelerationStructureCount = maxAccelerationStructureCount;
+    CLASIndirect(opInput, CLASOpMode::ImplicitDestinations, CLASOpType::CLAS, implicitBuffer,
+                 scratchBuffer, dstAddresses, dstSizes, bottomLevelInfo, srcInfosCount,
+                 srcInfosOffset, 0);
+}
 
-    // Submit BLAS build command
-    VkClusterAccelerationStructureCommandsInfoNV commandsInfo = {
-        VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_COMMANDS_INFO_NV};
-    commandsInfo.input           = inputInfo;
-    commandsInfo.dstImplicitData = device->GetDeviceAddress(implicitBuffer->buffer);
-    commandsInfo.scratchData     = device->GetDeviceAddress(scratchBuffer->buffer);
+void CommandBuffer::MoveCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData,
+                             GPUBuffer *scratchBuffer, GPUBuffer *dstAddresses,
+                             GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
+                             GPUBuffer *srcInfosCount, u32 srcInfosOffset, int maxNumClusters,
+                             u64 maxMovedBytes, u32 dstClasOffset)
+{
+    Assert((opMode == CLASOpMode::ImplicitDestinations && dstImplicitData) ||
+           (opMode == CLASOpMode::ExplicitDestinations && !dstImplicitData));
 
-    commandsInfo.dstAddressesArray.deviceAddress =
-        device->GetDeviceAddress(dstAddresses->buffer);
-    commandsInfo.dstAddressesArray.size   = dstAddresses->size;
-    commandsInfo.dstAddressesArray.stride = sizeof(VkDeviceAddress);
+    CLASOpInput opInput;
+    opInput.moveObjects.maxNumClusters = maxNumClusters;
+    opInput.moveObjects.maxMovedBytes  = maxMovedBytes;
+    opInput.moveObjects.noMoveOverlap  = true;
 
-    commandsInfo.dstSizesArray.deviceAddress = device->GetDeviceAddress(dstSizes->buffer);
-    commandsInfo.dstSizesArray.size          = dstSizes->size;
-    commandsInfo.dstSizesArray.stride        = sizeof(u32);
+    opInput.maxAccelerationStructureCount = maxNumClusters;
 
-    commandsInfo.srcInfosArray.deviceAddress =
-        device->GetDeviceAddress(bottomLevelInfo->buffer);
-    commandsInfo.srcInfosArray.stride =
-        sizeof(VkClusterAccelerationStructureBuildClustersBottomLevelInfoNV);
-    commandsInfo.srcInfosArray.size = bottomLevelInfo->size;
-
-    commandsInfo.srcInfosCount =
-        device->GetDeviceAddress(srcInfosCount->buffer) + srcInfosOffset;
-    commandsInfo.addressResolutionFlags = {};
-
-    vkCmdBuildClusterAccelerationStructureIndirectNV(buffer, &commandsInfo);
+    CLASIndirect(opInput, opMode, CLASOpType::Move | CLASOpType::CLAS, dstImplicitData,
+                 scratchBuffer, dstAddresses, dstSizes, srcInfosArray, srcInfosCount,
+                 srcInfosOffset, dstClasOffset);
 }
 
 GPUAccelerationStructurePayload CommandBuffer::BuildBLAS(const GPUMesh *meshes, int count)

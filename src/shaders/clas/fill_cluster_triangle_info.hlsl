@@ -3,10 +3,11 @@
 #include "../wave_intrinsics.hlsli"
 #include "../dense_geometry.hlsli"
 
-RWStructuredBuffer<BUILD_CLUSTERS_TRIANGLE_INFO> buildClusterTriangleInfos : register(u0);
-RWStructuredBuffer<DecodeClusterData> decodeClusterDatas : register(u1);
-RWStructuredBuffer<uint> globals : register(u2);
-RWStructuredBuffer<CLASPageInfo> clasPageInfos : register(u3);
+StructuredBuffer<uint> pageIndices : register(u0);
+RWStructuredBuffer<BUILD_CLUSTERS_TRIANGLE_INFO> buildClusterTriangleInfos : register(u1);
+RWStructuredBuffer<DecodeClusterData> decodeClusterDatas : register(u2);
+RWStructuredBuffer<uint> globals : register(u3);
+RWStructuredBuffer<CLASPageInfo> clasPageInfos : register(u4);
 
 [[vk::push_constant]] FillClusterTriangleInfoPushConstant pc;
 
@@ -21,7 +22,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
         globals[GLOBALS_DECODE_INDIRECT_Z] = 1;
     }
 
-    uint pageIndex = groupID.x;
+    uint pageIndex = pageIndices[groupID.x];
     uint basePageAddress = GetClusterPageBaseAddress(pageIndex);
     uint numClusters = GetNumClustersInPage(basePageAddress);
 
