@@ -88,6 +88,7 @@ enum class CLASOpMode
 {
     ImplicitDestinations,
     ExplicitDestinations,
+    ComputeSizes,
 };
 
 struct CLASOpInput
@@ -115,6 +116,13 @@ struct CLASOpInput
         } clusterBottomLevel;
     };
     u32 maxAccelerationStructureCount;
+};
+
+union VkOpInput
+{
+    VkClusterAccelerationStructureClustersBottomLevelInputNV clustersBottomLevel;
+    VkClusterAccelerationStructureTriangleClusterInputNV triangleClusters;
+    VkClusterAccelerationStructureMoveObjectsInputNV moveObjects;
 };
 
 enum class ResourceUsage : u32
@@ -559,6 +567,8 @@ enum class DescriptorType
 };
 
 struct DescriptorSetLayout;
+struct CommandBuffer;
+
 struct DescriptorSet
 {
     union DescriptorInfo
@@ -602,6 +612,49 @@ struct DescriptorSetLayout
     void CreatePipelineLayout(PushConstant *pc = 0);
 };
 
+struct ResourceBinding
+{
+    VkPipelineBindPoint bindPoint;
+    CommandBuffer *cmd;
+    DescriptorSet ds;
+    DescriptorSetLayout layout;
+
+    ResourceBinding &Bind(int index, GPUImage *image, int subresource = -1)
+    {
+        ds.Bind(index, image, subresource);
+        return *this;
+    }
+    ResourceBinding &Bind(int index, GPUBuffer *buffer, u64 offset = 0,
+                          u64 size = VK_WHOLE_SIZE)
+    {
+        ds.Bind(index, buffer, offset, size);
+        return *this;
+    }
+    ResourceBinding &Bind(int index, VkAccelerationStructureKHR *accel)
+    {
+        ds.Bind(index, accel);
+        return *this;
+    }
+
+    ResourceBinding &Bind(GPUBuffer *buffer, u64 offset = 0, u64 size = VK_WHOLE_SIZE)
+    {
+        ds.Bind(buffer, offset, size);
+        return *this;
+    }
+    ResourceBinding &Bind(GPUImage *img)
+    {
+        ds.Bind(img);
+        return *this;
+    }
+    ResourceBinding &Bind(VkAccelerationStructureKHR *accel)
+    {
+        ds.Bind(accel);
+        return *this;
+    }
+    ResourceBinding &PushConstants(PushConstant *push, void *ptr);
+    void End();
+};
+
 struct CommandBuffer
 {
     QueueType type;
@@ -639,8 +692,7 @@ struct CommandBuffer
     void SubmitTransfer(TransferBuffer *buffer, u32 dstOffset = 0);
     TransferBuffer SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags, size_t totalSize,
                                 u32 dstOffset = 0);
-    void SubmitBuffer(GPUBuffer *dst, void *ptr, VkBufferUsageFlags2 flags, size_t totalSize,
-                      u32 dstOffset);
+    void SubmitBuffer(GPUBuffer *dst, void *ptr, size_t totalSize, u32 dstOffset);
     TransferBuffer SubmitImage(void *ptr, ImageDesc desc);
     void CopyBuffer(GPUBuffer *dst, GPUBuffer *src, BufferToBufferCopy *copies, u32 num);
     void CopyImage(GPUBuffer *transfer, GPUImage *image, BufferImageCopy *copies, u32 num);
@@ -651,6 +703,10 @@ struct CommandBuffer
     void BindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipeline);
     void BindDescriptorSets(VkPipelineBindPoint bindPoint, DescriptorSet *set,
                             VkPipelineLayout pipeLayout);
+    ResourceBinding StartBinding(VkPipelineBindPoint bindPoint, VkPipeline pipeline,
+                                 DescriptorSetLayout layout);
+    ResourceBinding StartBindingCompute(VkPipeline pipeline, DescriptorSetLayout layout);
+
     void TraceRays(RayTracingState *state, u32 width, u32 height, u32 depth);
     void Dispatch(u32 groupCountX, u32 groupCountY, u32 groupCountZ);
     void DispatchIndirect(GPUBuffer *buffer, u32 offset = 0);
@@ -685,15 +741,19 @@ struct CommandBuffer
                       GPUBuffer *dstImplicitData, GPUBuffer *scratchBuffer,
                       GPUBuffer *dstAddresses, GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
                       GPUBuffer *srcInfosCount, u32 srcInfosOffset, u32 dstClasOffset);
-    void BuildCLAS(GPUBuffer *dstImplicitData, GPUBuffer *scratchBuffer,
+    void ComputeCLASSizes(GPUBuffer *srcInfosArray, GPUBuffer *scratchBuffer,
+                          GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
+                          u32 dstClasOffset, u32 maxNumTriangles, u32 maxNumVertices,
+                          u32 maxNumClusters);
+    void BuildCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData, GPUBuffer *scratchBuffer,
                    GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
                    GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
                    int maxNumClusters, u32 maxNumTriangles, u32 maxNumVertices,
-                   u32 dstAddressesOffset, u32 dstSizesOffset);
+                   u32 dstClasOffset);
     void MoveCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData, GPUBuffer *scratchBuffer,
                   GPUBuffer *dstAddresses, GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
                   GPUBuffer *srcInfosCount, u32 srcInfosOffset, int maxNumClusters,
-                  u64 maxMovedBytes, u32 dstClasOffset);
+                  u64 maxMovedBytes, u32 dstClasOffset = 0);
     void BuildClusterBLAS(GPUBuffer *implicitBuffer, GPUBuffer *scratchBuffer,
                           GPUBuffer *bottomLevelInfo, GPUBuffer *dstAddresses,
                           GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
@@ -951,10 +1011,18 @@ struct Vulkan
                                              int numGroups, PushConstant *pc,
                                              DescriptorSetLayout *layout, u32 maxDepth,
                                              bool useClusters = false);
+    void GetClusterBuildSizes(CLASOpInput opInput, CLASOpMode opMode, CLASOpType opType,
+                              u32 &scratchSize, u32 &accelerationStructureSize);
+    void GetCLASBuildSizes(CLASOpMode opMode, int maxNumClusters, u32 maxNumTriangles,
+                           u32 maxNumVertices, u32 &scratchSize,
+                           u32 &accelerationStructureSize);
     void GetClusterBLASBuildSizes(u32 maxTotalClusterCount,
                                   u32 maxClusterCountPerAccelerationStructure,
                                   u32 maxAccelerationStructureCount, u32 &scratchSize,
                                   u32 &accelerationStructureSize);
+    void GetMoveBuildSizes(CLASOpMode opMode, int maxNumClusters, u64 maxMovedBytes,
+                           bool noMoveOverlap, u32 &scratchSize,
+                           u32 &accelerationStructureSize);
     void GetBuildSizes(VkAccelerationStructureTypeKHR accelType,
                        VkAccelerationStructureGeometryKHR *geometries, int count,
                        VkAccelerationStructureBuildRangeInfoKHR *buildRanges,
@@ -964,6 +1032,9 @@ struct Vulkan
 
     VkAccelerationStructureInstanceKHR GetVkInstance(const AffineSpace &transform,
                                                      GPUAccelerationStructure &as);
+    void ConvertCLASIndirectInfo(CLASOpInput opInput, CLASOpType opType,
+                                 VkClusterAccelerationStructureInputInfoNV &inputInfo,
+                                 VkOpInput &vkOpInput, VkDeviceSize &srcInfosArrayStride);
     u32 GetQueueFamily(QueueType type);
     void BeginFrame(bool doubleBuffer = true);
     void EndFrame(int queueType);

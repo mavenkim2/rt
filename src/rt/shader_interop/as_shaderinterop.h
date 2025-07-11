@@ -11,8 +11,13 @@ namespace rt
 #define RAY_TRACING_ADDRESS_STRIDE               8
 #define FILL_CLUSTER_BOTTOM_LEVEL_INFO_GROUPSIZE 32
 
-#define MAX_CLUSTERS_PER_PAGE_BITS 8
-#define MAX_CLUSTERS_PER_PAGE      (1u << MAX_CLUSTERS_PER_PAGE_BITS)
+#define MAX_CLUSTERS_PER_PAGE_BITS  8u
+#define MAX_CLUSTERS_PER_PAGE       (1u << MAX_CLUSTERS_PER_PAGE_BITS)
+#define MAX_PARTS_PER_GROUP_BITS    3u
+#define MAX_PARTS_PER_GROUP         (1u << MAX_PARTS_PER_GROUP_BITS)
+
+#define MAX_CLUSTERS_PER_GROUP_BITS 5u
+#define MAX_CLUSTERS_PER_GROUP      (1u << MAX_CLUSTERS_PER_GROUP_BITS)
 
 #define CLUSTER_PAGE_SIZE_BITS 17
 #define CLUSTER_PAGE_SIZE      (1u << CLUSTER_PAGE_SIZE_BITS)
@@ -116,10 +121,10 @@ struct FillClusterTriangleInfoPushConstant
     uint vertexBufferBaseAddressHighBits;
 };
 
-struct FillClusterBottomLevelInfoPushConstant
+struct AddressPushConstant
 {
-    uint arrayBaseAddressLowBits;
-    uint arrayBaseAddressHighBits;
+    uint addressLowBits;
+    uint addressHighBits;
 };
 
 struct NumPushConstant
@@ -134,7 +139,8 @@ struct PackedHierarchyNode
 {
     float4 lodBounds[CHILDREN_PER_HIERARCHY_NODE];
     float maxParentError[CHILDREN_PER_HIERARCHY_NODE];
-    uint childOffset[CHILDREN_PER_HIERARCHY_NODE];
+    uint childRef[CHILDREN_PER_HIERARCHY_NODE];
+    uint leafInfo[CHILDREN_PER_HIERARCHY_NODE];
     uint flags;
 };
 
@@ -201,9 +207,14 @@ struct TestDenseGeometry
 #define GLOBALS_BLAS_INDIRECT_Y 11
 #define GLOBALS_BLAS_INDIRECT_Z 12
 
-#define GLOBALS_STREAMING_REQUEST_COUNT_INDEX 13
+#define GLOBALS_NEW_PAGE_DATA_BYTES 13
+#define GLOBALS_OLD_PAGE_DATA_BYTES 14
 
-#define GLOBALS_SIZE 14
+#define GLOBALS_DEFRAG_CLAS_COUNT 15
+
+#define GLOBALS_STREAMING_REQUEST_COUNT_INDEX 16
+
+#define GLOBALS_SIZE 17
 
 #ifdef __cplusplus
 }

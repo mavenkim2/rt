@@ -18,17 +18,18 @@ inline uint BitFieldExtractU32(uint data, uint size, uint offset)
 #ifdef __cplusplus
 inline u32 BitFieldPackU32(u32 val, u32 data, u32 &offset, u32 size)
 {
+    Assert(size == 32 || data < (1u << size));
     u32 o = offset & 31u;
     data  = data & ((1u << size) - 1u);
     val |= data << o;
     offset += size;
     return val;
 }
-#else 
+#else
 inline uint BitFieldPackU32(uint val, uint data, inout uint offset, uint size)
 {
     uint o = offset & 31u;
-    data  = data & ((1u << size) - 1u);
+    data   = data & ((1u << size) - 1u);
     val |= data << o;
     offset += size;
     return val;

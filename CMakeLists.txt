@@ -153,6 +153,7 @@ set (RT_SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/dgfs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/ptex.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bit_packing.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/virtual_geometry/virtual_geometry_manager.cpp
 )
 
 set (RT_VULKAN_SOURCE_FILES
@@ -265,6 +266,8 @@ set(SHADER_FILES "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl"
     "${SHADER_SRC_DIR}/clas/hierarchy_traversal.hlsl"
     "${SHADER_SRC_DIR}/clas/instance_culling.hlsl"
     "${SHADER_SRC_DIR}/clas/test.hlsl"
+    "${SHADER_SRC_DIR}/clas/clas_defrag.hlsl"
+    "${SHADER_SRC_DIR}/clas/compute_clas_addresses.hlsl"
 )
 set_property(SOURCE 
     "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
@@ -285,6 +288,8 @@ set_property(SOURCE
     "${SHADER_SRC_DIR}/clas/hierarchy_traversal.hlsl"
     "${SHADER_SRC_DIR}/clas/instance_culling.hlsl"
     "${SHADER_SRC_DIR}/clas/test.hlsl"
+    "${SHADER_SRC_DIR}/clas/clas_defrag.hlsl"
+    "${SHADER_SRC_DIR}/clas/compute_clas_addresses.hlsl"
     PROPERTY name "cs")
 
 file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")

@@ -119,8 +119,8 @@ struct ClusterCull
         uint nodeOffset = instance.globalRootNodeOffset + candidateNode.nodeOffset;
         PackedHierarchyNode node = hierarchyNodes[nodeOffset];
 
-        bool isValid = node.childOffset[childIndex] != ~0u;
-        bool isLeaf = bool(node.childOffset[childIndex] >> 31u);
+        bool isValid = node.childRef[childIndex] != ~0u;
+        bool isLeaf = node.leafInfo[childIndex] != ~0u;
 
         float2 edgeScales = float2(0, 0);
         float minScale = 0.f;
@@ -144,7 +144,7 @@ struct ClusterCull
             isValid &= edgeScales.x <= maxParentError * minScale;// + 1e-8f;
 
             priority = maxParentError / edgeScales.x;
-       }
+        }
 
         uint nodeWriteOffset;
         WaveInterlockedAddScalarTest(queue[0].nodeWriteOffset, isValid && !isLeaf, 1, nodeWriteOffset);
@@ -155,13 +155,11 @@ struct ClusterCull
             InterlockedAdd(queue[0].numNodes, nodesToAdd);
         }
 
-        //DeviceMemoryBarrier();
-
         if (isValid && !isLeaf)
         {
             WorkItem childCandidateNode;
             childCandidateNode.x = candidateNode.instanceID;
-            childCandidateNode.y = node.childOffset[childIndex];
+            childCandidateNode.y = node.childRef[childIndex];
             childCandidateNode.z = candidateNode.blasIndex;
             childCandidateNode.w = node.flags;
 
@@ -173,13 +171,18 @@ struct ClusterCull
         if (isValid && isLeaf)
         {
             uint leafWriteOffset;
-            uint leafInfo = node.childOffset[childIndex] & 0x7fffffff;
-            uint numClusters = ((leafInfo >> MAX_CLUSTERS_PER_PAGE_BITS) & ((1u << 5u) - 1u)) + 1;
-            InterlockedAdd(queue[0].leafWriteOffset, numClusters, leafWriteOffset);
-            // DeviceMemoryBarrier();
+            uint leafInfo = node.leafInfo[childIndex];
 
-            uint pageIndex = leafInfo >> (MAX_CLUSTERS_PER_PAGE_BITS + 5);
-            uint pageClusterIndex = leafInfo & ((1u << MAX_CLUSTERS_PER_PAGE_BITS) - 1u);
+            uint pageClusterIndex = BitFieldExtractU32(leafInfo, MAX_CLUSTERS_PER_PAGE_BITS, 0);
+            uint numClusters = BitFieldExtractU32(leafInfo, MAX_CLUSTERS_PER_GROUP_BITS, MAX_CLUSTERS_PER_PAGE_BITS) + 1;
+            uint numPages = BitFieldExtractU32(leafInfo, MAX_PARTS_PER_GROUP_BITS, MAX_CLUSTERS_PER_PAGE_BITS + MAX_CLUSTERS_PER_GROUP_BITS);
+            uint localPageIndex = leafInfo >> (MAX_CLUSTERS_PER_PAGE_BITS + MAX_CLUSTERS_PER_GROUP_BITS + MAX_PARTS_PER_GROUP_BITS);
+
+            InterlockedAdd(queue[0].leafWriteOffset, numClusters, leafWriteOffset);
+
+            uint gpuPageIndex = node.childRef[childIndex];
+
+            uint offset = 0;
 
             const int maxClusters = 1 << 24;
             int clampedNumClusters = min((int)numClusters, maxClusters - (int)leafWriteOffset);
@@ -187,7 +190,7 @@ struct ClusterCull
             for (int i = 0; i < clampedNumClusters; i++)
             {
                 WorkItem candidateCluster;
-                candidateCluster.x = (pageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | (pageClusterIndex + i);
+                candidateCluster.x = (gpuPageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | (pageClusterIndex + i);
                 candidateCluster.y = candidateNode.instanceID;
                 candidateCluster.z = candidateNode.blasIndex;
                 candidateCluster.w = node.flags & (1u << childIndex);
@@ -197,11 +200,12 @@ struct ClusterCull
 
             StreamingRequest request;
             request.priority = priority;
-            request.pageIndex_numClusters_clusterStartIndex = leafInfo;
+            request.instanceID = candidateNode.instanceID;
+            request.pageIndex_numPages = (localPageIndex << MAX_PARTS_PER_GROUP_BITS) | numPages;
 
             uint requestIndex;
-            InterlockedAdd(globals[GLOBALS_STREAMING_REQUEST_COUNT_INDEX], 1, requestIndex);
-            requests[requestIndex] = request;
+            InterlockedAdd(requests[0].pageIndex_numPages, 1, requestIndex);
+            requests[requestIndex + 1] = request;
         }
 #if 0
         else if (!isValid && !isLeaf)

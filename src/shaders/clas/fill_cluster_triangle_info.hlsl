@@ -3,7 +3,7 @@
 #include "../wave_intrinsics.hlsli"
 #include "../dense_geometry.hlsli"
 
-StructuredBuffer<uint> pageIndices : register(u0);
+StructuredBuffer<uint> pageIndices : register(t0);
 RWStructuredBuffer<BUILD_CLUSTERS_TRIANGLE_INFO> buildClusterTriangleInfos : register(u1);
 RWStructuredBuffer<DecodeClusterData> decodeClusterDatas : register(u2);
 RWStructuredBuffer<uint> globals : register(u3);

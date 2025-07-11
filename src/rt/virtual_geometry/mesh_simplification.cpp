@@ -3492,7 +3492,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     PackedHierarchyNode rootPacked = {};
     for (int i = 0; i < CHILDREN_PER_HIERARCHY_NODE; i++)
     {
-        rootPacked.childOffset[i] = ~0u;
+        rootPacked.childRef[i] = ~0u;
     }
     for (int i = 0; i < rootNode.numChildren; i++)
     {
@@ -3562,13 +3562,14 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         u32 childOffset = hierarchy.Length();
         u32 parentIndex = entry.parentIndex;
 
-        hierarchy[parentIndex].childOffset[entry.childIndex] = childOffset;
+        hierarchy[parentIndex].childRef[entry.childIndex] = childOffset;
 
         HierarchyNode &child       = entry.node;
         PackedHierarchyNode packed = {};
         for (int i = 0; i < CHILDREN_PER_HIERARCHY_NODE; i++)
         {
-            packed.childOffset[i] = ~0u;
+            packed.childRef[i] = ~0u;
+            packed.leafInfo[i] = ~0u;
         }
         numLeaves += !(bool)child.children;
         for (int i = 0; i < child.numChildren; i++)
@@ -3593,10 +3594,23 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 GroupPart &part = parts[partIndex];
                 Assert(part.clusterPageStartIndex < MAX_CLUSTERS_PER_PAGE);
                 Assert(part.clusterCount <= 32);
-                packed.childOffset[i] =
-                    (1u << 31u) | (part.pageIndex << (MAX_CLUSTERS_PER_PAGE_BITS + 5)) |
-                    ((part.clusterCount - 1) << MAX_CLUSTERS_PER_PAGE_BITS) |
-                    part.clusterPageStartIndex;
+
+                Assert(part.pageIndex < (1u << 16));
+                u32 numPages = clusterGroups[part.groupIndex].numPages;
+                Assert(numPages < (1u << 3));
+
+                u32 leafInfo  = 0;
+                u32 bitOffset = 0;
+                leafInfo = BitFieldPackU32(leafInfo, part.clusterPageStartIndex, bitOffset,
+                                           MAX_CLUSTERS_PER_PAGE_BITS);
+                leafInfo = BitFieldPackU32(leafInfo, part.clusterCount - 1, bitOffset,
+                                           MAX_CLUSTERS_PER_GROUP_BITS);
+                leafInfo =
+                    BitFieldPackU32(leafInfo, numPages, bitOffset, MAX_PARTS_PER_GROUP_BITS);
+                leafInfo =
+                    BitFieldPackU32(leafInfo, part.pageIndex, bitOffset, 32u - bitOffset);
+
+                packed.leafInfo[i] = leafInfo;
 
                 if (clusterGroups[part.groupIndex].mipLevel == 1)
                 {

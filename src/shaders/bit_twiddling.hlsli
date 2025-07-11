@@ -21,22 +21,6 @@ int BitFieldExtractI32(int data, uint size, uint offset)
 	return (value << shift) >> shift;
 }
 
-uint BitFieldMaskU32(uint maskWidth, uint maskLocation)
-{
-	maskWidth &= 31u;
-	maskLocation &= 31u;
-
-	return ((1u << maskWidth) - 1u) << maskLocation;
-}
-
-uint BitFieldExtractAndAlignU32(inout uint2 data, uint size, uint offset)
-{
-    uint result = BitFieldExtractU32(data[0], size, offset);
-    data[0] = BitAlignU32(data[1], data[0], offset + size);
-    data[1] >>= (offset + size) & 31u;
-    return result;
-}
-
 template <uint pow2>
 uint AlignDownPow2(uint val)
 {

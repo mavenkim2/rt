@@ -47,12 +47,6 @@ struct StreamingRequest
     uint pageIndex_numPages;
 };
 
-struct HierarchyFixup
-{
-    uint nodeIndex;
-    uint pageIndex;
-};
-
 #ifdef __cplusplus
 }
 #endif
