@@ -35,6 +35,7 @@ struct VirtualGeometryManager
     struct Page
     {
         u32 numClusters;
+        int virtualIndex;
         int nextPage;
         int prevPage;
     };
@@ -72,6 +73,7 @@ struct VirtualGeometryManager
     DescriptorSetLayout clasDefragLayout = {};
     VkPipeline clasDefragPipeline;
 
+    PushConstant computeClasAddressesPush;
     DescriptorSetLayout computeClasAddressesLayout = {};
     VkPipeline computeClasAddressesPipeline;
 
@@ -80,6 +82,7 @@ struct VirtualGeometryManager
     GPUBuffer clusterPageDataBuffer;
 
     GPUBuffer uploadBuffer;
+    GPUBuffer streamingRequestsBuffer;
     GPUBuffer readbackBuffer;
 
     GPUBuffer clusterAccelAddresses;
@@ -91,7 +94,6 @@ struct VirtualGeometryManager
 
     GPUBuffer decodeClusterDataBuffer;
     GPUBuffer buildClusterTriangleInfoBuffer;
-    GPUBuffer buildClusterBottomLevelInfoBuffer;
     GPUBuffer clasPageInfoBuffer;
 
     GPUBuffer clasImplicitData;

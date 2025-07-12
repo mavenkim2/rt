@@ -2932,7 +2932,7 @@ void CommandBuffer::CLASIndirect(CLASOpInput opInput, CLASOpMode opMode, CLASOpT
 {
 
     VkDeviceSize srcInfosArrayStride;
-    VkOpInput vkOpInput;
+    VkOpInput vkOpInput = {};
     VkClusterAccelerationStructureOpModeNV vkOpMode;
 
     switch (opMode)
@@ -3176,7 +3176,7 @@ void Vulkan::GetClusterBuildSizes(CLASOpInput opInput, CLASOpMode opMode, CLASOp
 {
     VkDeviceSize srcInfosArrayStride;
     VkClusterAccelerationStructureOpModeNV vkOpMode;
-    VkOpInput vkOpInput;
+    VkOpInput vkOpInput = {};
 
     switch (opMode)
     {

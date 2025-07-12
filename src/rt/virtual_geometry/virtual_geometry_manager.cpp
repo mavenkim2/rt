@@ -14,8 +14,12 @@ namespace rt
 
 VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
     : physicalPages(arena, maxPages), virtualTable(arena, maxVirtualPages),
-      currentClusterTotal(0)
+      meshInfos(arena, 1), currentClusterTotal(0), totalNumVirtualPages(0), totalNumNodes(0)
 {
+    for (u32 i = 0; i < maxVirtualPages; i++)
+    {
+        virtualTable.Push(-1);
+    }
     string decodeDgfClustersName   = "../src/shaders/decode_dgf_clusters.spv";
     string decodeDgfClustersData   = OS_ReadFile(arena, decodeDgfClustersName);
     Shader decodeDgfClustersShader = device->CreateShader(
@@ -83,14 +87,42 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
     clasDefragPipeline = device->CreateComputePipeline(
         &clasDefragShader, &clasDefragLayout, &clasDefragPush, "clas defrag pipeline");
 
+    computeClasAddressesPush.stage  = ShaderStage::Compute;
+    computeClasAddressesPush.size   = sizeof(AddressPushConstant);
+    computeClasAddressesPush.offset = 0;
     computeClasAddressesLayout.AddBinding(0, DescriptorType::StorageBuffer,
                                           VK_SHADER_STAGE_COMPUTE_BIT);
-    computeClasAddressesPipeline =
-        device->CreateComputePipeline(&computeClasAddressesShader, &clasDefragLayout);
+    computeClasAddressesLayout.AddBinding(1, DescriptorType::StorageBuffer,
+                                          VK_SHADER_STAGE_COMPUTE_BIT);
+    computeClasAddressesLayout.AddBinding(2, DescriptorType::StorageBuffer,
+                                          VK_SHADER_STAGE_COMPUTE_BIT);
+    computeClasAddressesLayout.AddBinding(3, DescriptorType::StorageBuffer,
+                                          VK_SHADER_STAGE_COMPUTE_BIT);
+    computeClasAddressesLayout.AddBinding(4, DescriptorType::StorageBuffer,
+                                          VK_SHADER_STAGE_COMPUTE_BIT);
+    computeClasAddressesLayout.AddBinding((u32)RTBindings::ClusterPageData,
+                                          DescriptorType::StorageBuffer,
+                                          VK_SHADER_STAGE_COMPUTE_BIT);
+    computeClasAddressesPipeline = device->CreateComputePipeline(
+        &computeClasAddressesShader, &computeClasAddressesLayout, &computeClasAddressesPush);
 
     // Buffers
     maxWriteClusters = MAX_CLUSTERS_PER_PAGE * maxPages;
 
+    streamingRequestsBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        sizeof(StreamingRequest) * maxStreamingRequestsPerFrame);
+    readbackBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        sizeof(StreamingRequest) * maxStreamingRequestsPerFrame, MemoryUsage::GPU_TO_CPU);
+    uploadBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        maxPageInstallsPerFrame * (sizeof(u32) + CLUSTER_PAGE_SIZE) + maxNodes * sizeof(u32),
+        MemoryUsage::CPU_TO_GPU);
+
+    evictedPagesBuffer    = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                 sizeof(u32) * maxPageInstallsPerFrame);
     clusterPageDataBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                      VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                                  maxPages * CLUSTER_PAGE_SIZE);
@@ -131,13 +163,15 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
     u32 expectedSize = maxPages * MAX_CLUSTERS_PER_PAGE * 2000;
 
     u32 clasScratchSize, clasAccelerationStructureSize;
-    device->GetCLASBuildSizes(CLASOpMode::ExplicitDestinations, maxNumClusters,
-                              maxNumTriangles, maxNumVertices, clasScratchSize,
-                              clasAccelerationStructureSize);
+    device->GetCLASBuildSizes(CLASOpMode::ExplicitDestinations,
+                              maxPages * MAX_CLUSTERS_PER_PAGE,
+                              maxPages * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLES,
+                              maxPages * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_VERTICES,
+                              clasScratchSize, clasAccelerationStructureSize);
 
     Assert(clasAccelerationStructureSize <= expectedSize);
     clasImplicitData = device->CreateBuffer(
-        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, clasAccelerationStructureSize);
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, expectedSize);
     clasScratchBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, clasScratchSize);
 
@@ -203,6 +237,9 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, u8 *pag
     u32 *pageOffsets  = PushArray(arena, u32, numPages + 1);
     u32 *pageOffsets1 = &pageOffsets[1];
 
+    const u32 pageShift =
+        MAX_CLUSTERS_PER_PAGE_BITS + MAX_CLUSTERS_PER_GROUP_BITS + MAX_PARTS_PER_GROUP_BITS;
+
     for (u32 nodeIndex = 0; nodeIndex < numNodes; nodeIndex++)
     {
         PackedHierarchyNode &node = nodes[nodeIndex];
@@ -211,7 +248,7 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, u8 *pag
             if (node.leafInfo[childIndex] == ~0u) continue;
 
             // Map page to nodes
-            u32 pageIndex = node.leafInfo[childIndex] >> (MAX_CLUSTERS_PER_PAGE_BITS + 5 + 3);
+            u32 pageIndex = node.leafInfo[childIndex] >> pageShift;
             pageOffsets1[pageIndex]++;
         }
     }
@@ -231,11 +268,11 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, u8 *pag
         PackedHierarchyNode &node = nodes[nodeIndex];
         for (u32 childIndex = 0; childIndex < CHILDREN_PER_HIERARCHY_NODE; childIndex++)
         {
-            if (node.leafInfo[childIndex] == ~0u) break;
+            if (node.leafInfo[childIndex] == ~0u) continue;
 
             // Map page to nodes
-            u32 pageIndex = node.leafInfo[childIndex] >> (MAX_CLUSTERS_PER_PAGE_BITS + 5 + 3);
-            u32 data      = (pageIndex << CHILDREN_PER_HIERARCHY_NODE_BITS) | childIndex;
+            u32 pageIndex = node.leafInfo[childIndex] >> pageShift;
+            u32 data      = (nodeIndex << CHILDREN_PER_HIERARCHY_NODE_BITS) | childIndex;
 
             u32 index             = pageOffsets1[pageIndex]++;
             pageToNodeData[index] = data;
@@ -268,6 +305,8 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
     u32 numRequests            = requests[0].pageIndex_numPages;
     requests++;
 
+    if (numRequests == 0) return;
+
     // u32 writeIndex
     // Radix sort by priority
     // Divide into pages that need to be loaded and pages that are already resident
@@ -281,8 +320,9 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
     u32 requestStartIndex = 0; // batchIndex * maxStreamingRequestsPerFrame;
     struct Handle
     {
-        int sortKey;
+        u64 sortKey;
         int index;
+        u32 instanceID;
     };
 
     union Float
@@ -291,17 +331,70 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         int i;
     };
 
-    Handle *handles = PushArrayNoZero(scratch.temp.arena, Handle, numRequests);
+    u32 totalNumPages = 0;
     for (u32 requestIndex = 0; requestIndex < numRequests; requestIndex++)
     {
-        Float f;
-        f.f = Max(0.f, requests[requestIndex].priority);
+        u32 pageIndex_numPages = requests[requestIndex].pageIndex_numPages;
+        u32 pageCount = BitFieldExtractU32(pageIndex_numPages, MAX_PARTS_PER_GROUP_BITS, 0);
+        u32 pageStartIndex = pageIndex_numPages >> MAX_PARTS_PER_GROUP_BITS;
 
-        handles[requestIndex].sortKey = f.i;
-        handles[requestIndex].index   = requestIndex;
+        totalNumPages += pageCount;
+    }
+    Handle *handles = PushArrayNoZero(scratch.temp.arena, Handle, totalNumPages);
+
+    // Prune duplicate page requests
+    u32 numHandles = 0;
+    for (u32 requestIndex = 0; requestIndex < numRequests; requestIndex++)
+    {
+        StreamingRequest &request = requests[requestIndex];
+        u32 pageCount =
+            BitFieldExtractU32(request.pageIndex_numPages, MAX_PARTS_PER_GROUP_BITS, 0);
+        u32 pageStartIndex = request.pageIndex_numPages >> MAX_PARTS_PER_GROUP_BITS;
+
+        for (u32 pageIndex = pageStartIndex; pageIndex < pageStartIndex + pageCount;
+             pageIndex++)
+        {
+            u32 handleIndex                 = numHandles++;
+            handles[handleIndex].sortKey    = ((u64)pageIndex << 32u) | request.instanceID;
+            handles[handleIndex].index      = requestIndex;
+            handles[handleIndex].instanceID = request.instanceID;
+        }
     }
 
-    SortHandles(handles, numRequests);
+    SortHandles(handles, numHandles);
+
+    // TODO: sort by instance ID too
+    u64 prevKey             = handles[0].sortKey;
+    u32 numCompactedHandles = 0;
+    f32 maxPriority         = 0.f;
+
+    // Compact handles
+    for (u32 handleIndex = 0; handleIndex < numHandles; handleIndex++)
+    {
+        Handle handle                   = handles[handleIndex];
+        const StreamingRequest &request = requests[handle.index];
+
+        if (prevKey != handle.sortKey)
+        {
+            maxPriority = 0.f;
+            prevKey     = handle.sortKey;
+            numCompactedHandles++;
+        }
+
+        if (request.priority > maxPriority)
+        {
+            Float f;
+            f.f = request.priority;
+
+            maxPriority                             = request.priority;
+            handles[numCompactedHandles].sortKey    = f.i;
+            handles[numCompactedHandles].index      = handle.sortKey >> 32u;
+            handles[numCompactedHandles].instanceID = handle.instanceID;
+        }
+    }
+    numCompactedHandles++;
+
+    SortHandles(handles, numCompactedHandles);
 
     struct PageRequest
     {
@@ -309,60 +402,57 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         int virtualPageIndex;
         u32 pageIndex;
     };
-    StaticArray<PageRequest> unloadedRequests(scratch.temp.arena, numRequests);
+    StaticArray<PageRequest> unloadedRequests(scratch.temp.arena, numCompactedHandles);
     int firstUsedLRUPage = -1;
 
     // Sorted by ascending priority
-    for (u32 requestIndex = 0; requestIndex < numRequests; requestIndex++)
+    for (u32 requestIndex = 0; requestIndex < numCompactedHandles; requestIndex++)
     {
-        Handle &handle            = handles[requestIndex];
-        StreamingRequest &request = requests[handle.index];
+        Handle &handle = handles[requestIndex];
 
-        u32 pageStartIndex =
-            BitFieldExtractU32(request.pageIndex_numPages, MAX_PARTS_PER_GROUP_BITS, 0);
-        u32 pageCount = request.pageIndex_numPages >> MAX_PARTS_PER_GROUP_BITS;
+        u32 pageIndex = handle.index;
 
-        u32 virtualPageOffset = meshInfos[request.instanceID].virtualPageOffset;
+        u32 virtualPageOffset = meshInfos[handle.instanceID].virtualPageOffset;
 
-        for (int pageIndex = 0; pageIndex < pageCount; pageIndex++)
+        int virtualPageIndex  = virtualPageOffset + pageIndex;
+        int physicalPageIndex = virtualTable[virtualPageIndex];
+
+        if (physicalPageIndex == -1)
         {
-            int virtualPageIndex  = virtualPageOffset + pageStartIndex + pageIndex;
-            int physicalPageIndex = virtualTable[virtualPageIndex];
-
-            if (physicalPageIndex == -1)
-            {
-                PageRequest pageRequest;
-                pageRequest.instanceID       = request.instanceID;
-                pageRequest.virtualPageIndex = virtualPageIndex;
-                pageRequest.pageIndex        = pageStartIndex + pageIndex;
-                unloadedRequests.Push(pageRequest);
-            }
-            else
-            {
-                firstUsedLRUPage =
-                    requestIndex == 0 && pageIndex == 0 ? physicalPageIndex : firstUsedLRUPage;
-                UnlinkLRU(physicalPageIndex);
-                LinkLRU(physicalPageIndex);
-            }
+            PageRequest pageRequest;
+            pageRequest.instanceID       = handle.instanceID;
+            pageRequest.virtualPageIndex = virtualPageIndex;
+            pageRequest.pageIndex        = pageIndex;
+            unloadedRequests.Push(pageRequest);
+        }
+        else
+        {
+            firstUsedLRUPage =
+                requestIndex == 0 && pageIndex == 0 ? physicalPageIndex : firstUsedLRUPage;
+            UnlinkLRU(physicalPageIndex);
+            LinkLRU(physicalPageIndex);
         }
     }
 
-    // Free pages
+    // Get pages
     StaticArray<int> pageIndices(scratch.temp.arena, unloadedRequests.Length());
-    while (physicalPages.Length() < maxPages)
+    while (physicalPages.Length() < maxPages && pageIndices.Length() < maxPageInstallsPerFrame)
     {
-        Page page = {};
+        Page page         = {};
+        page.virtualIndex = -1;
         physicalPages.Push(page);
 
         LinkLRU(physicalPages.Length() - 1);
         pageIndices.Push(physicalPages.Length() - 1);
     }
 
-    if (pageIndices.Length() != unloadedRequests.Length())
+    if (pageIndices.Length() < maxPageInstallsPerFrame &&
+        pageIndices.Length() != unloadedRequests.Length())
     {
         int lruIndex = physicalPages[lruTail].prevPage;
 
-        while (pageIndices.Length() < unloadedRequests.Length() &&
+        while (pageIndices.Length() < maxPageInstallsPerFrame &&
+               pageIndices.Length() < unloadedRequests.Length() &&
                lruIndex != firstUsedLRUPage && lruIndex != lruHead)
         {
             pageIndices.Push(lruIndex);
@@ -387,6 +477,11 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         virtualTable[request.virtualPageIndex] = gpuPageIndex;
 
         Page &page = physicalPages[gpuPageIndex];
+        if (page.virtualIndex != -1)
+        {
+            virtualTable[page.virtualIndex] = -1;
+        }
+        page.virtualIndex = request.virtualPageIndex;
 
         BufferToBufferCopy &copy = copies[requestIndex];
         copy.srcOffset           = offset;
@@ -556,8 +651,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
             .Bind(&clasPageInfoBuffer)
             .End();
 
-        // TODO: sync on indirect
-        cmd->DispatchIndirect(&clasGlobalsBuffer, sizeof(u32) * GLOBALS_CLAS_INDIRECT_X);
+        cmd->Dispatch(pageIndices.Length(), 1, 1);
 
         cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,

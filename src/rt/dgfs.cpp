@@ -398,7 +398,8 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
     Assert(numOctBitsX <= 16 && numOctBitsY <= 16);
     Assert(numBitsX < 32 && numBitsY < 32 && numBitsZ < 32);
     // Assert(numBitsX + numBitsY + numBitsZ < 64);
-    Assert(Abs(min[0]) < (1 << 23) && Abs(min[1]) < (1 << 23) && Abs(min[2]) < (1 << 23));
+    ErrorExit(Abs(min[0]) < (1 << 23) && Abs(min[1]) < (1 << 23) && Abs(min[2]) < (1 << 23),
+              "%i %i %i\n", min[0], min[1], min[2]);
 
     u32 numBits = vertexCount * (numBitsX + numBitsY + numBitsZ);
 

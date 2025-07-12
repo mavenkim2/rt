@@ -103,7 +103,6 @@ StructuredBuffer<PackedHierarchyNode> hierarchyNodes : register(t6);
 RWStructuredBuffer<VisibleCluster> selectedClusters : register(u7);
 RWStructuredBuffer<BLASData> blasDatas : register(u9);
 
-// Debug 
 RWStructuredBuffer<StreamingRequest> requests : register(u10);
 
 struct ClusterCull 
@@ -121,12 +120,13 @@ struct ClusterCull
 
         bool isValid = node.childRef[childIndex] != ~0u;
         bool isLeaf = node.leafInfo[childIndex] != ~0u;
+        bool isVisible = false;
 
         float2 edgeScales = float2(0, 0);
         float minScale = 0.f;
         float test = 0.f;
         float priority = 0.f;
-        if (isValid)
+        if (isValid || isLeaf)
         {
             float4 lodBounds = node.lodBounds[childIndex];
             float maxParentError = node.maxParentError[childIndex];
@@ -141,9 +141,11 @@ struct ClusterCull
 
             edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test);
 
-            isValid &= edgeScales.x <= maxParentError * minScale;// + 1e-8f;
+            float threshold = maxParentError * minScale;
+            isVisible = edgeScales.x <= threshold;
+            isValid &= isVisible;
 
-            priority = maxParentError / edgeScales.x;
+            priority = threshold == 0.f ? 0.f : threshold / edgeScales.x;
         }
 
         uint nodeWriteOffset;
@@ -168,9 +170,8 @@ struct ClusterCull
 
         DeviceMemoryBarrier();
 
-        if (isValid && isLeaf)
+        if (isLeaf)
         {
-            uint leafWriteOffset;
             uint leafInfo = node.leafInfo[childIndex];
 
             uint pageClusterIndex = BitFieldExtractU32(leafInfo, MAX_CLUSTERS_PER_PAGE_BITS, 0);
@@ -178,34 +179,39 @@ struct ClusterCull
             uint numPages = BitFieldExtractU32(leafInfo, MAX_PARTS_PER_GROUP_BITS, MAX_CLUSTERS_PER_PAGE_BITS + MAX_CLUSTERS_PER_GROUP_BITS);
             uint localPageIndex = leafInfo >> (MAX_CLUSTERS_PER_PAGE_BITS + MAX_CLUSTERS_PER_GROUP_BITS + MAX_PARTS_PER_GROUP_BITS);
 
-            InterlockedAdd(queue[0].leafWriteOffset, numClusters, leafWriteOffset);
-
-            uint gpuPageIndex = node.childRef[childIndex];
-
-            uint offset = 0;
-
-            const int maxClusters = 1 << 24;
-            int clampedNumClusters = min((int)numClusters, maxClusters - (int)leafWriteOffset);
-
-            for (int i = 0; i < clampedNumClusters; i++)
+            if (isValid)
             {
-                WorkItem candidateCluster;
-                candidateCluster.x = (gpuPageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | (pageClusterIndex + i);
-                candidateCluster.y = candidateNode.instanceID;
-                candidateCluster.z = candidateNode.blasIndex;
-                candidateCluster.w = node.flags & (1u << childIndex);
+                uint leafWriteOffset;
+                InterlockedAdd(queue[0].leafWriteOffset, numClusters, leafWriteOffset);
 
-                leafQueue[leafWriteOffset + i] = candidateCluster;
+                uint gpuPageIndex = node.childRef[childIndex];
+
+                const int maxClusters = 1 << 24;
+                int clampedNumClusters = min((int)numClusters, maxClusters - (int)leafWriteOffset);
+
+                for (int i = 0; i < clampedNumClusters; i++)
+                {
+                    WorkItem candidateCluster;
+                    candidateCluster.x = (gpuPageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | (pageClusterIndex + i);
+                    candidateCluster.y = candidateNode.instanceID;
+                    candidateCluster.z = candidateNode.blasIndex;
+                    candidateCluster.w = node.flags & (1u << childIndex);
+
+                    leafQueue[leafWriteOffset + i] = candidateCluster;
+                }
             }
 
-            StreamingRequest request;
-            request.priority = priority;
-            request.instanceID = candidateNode.instanceID;
-            request.pageIndex_numPages = (localPageIndex << MAX_PARTS_PER_GROUP_BITS) | numPages;
+            if (isVisible)
+            {
+                StreamingRequest request;
+                request.priority = priority;
+                request.instanceID = candidateNode.instanceID;
+                request.pageIndex_numPages = (localPageIndex << MAX_PARTS_PER_GROUP_BITS) | numPages;
 
-            uint requestIndex;
-            InterlockedAdd(requests[0].pageIndex_numPages, 1, requestIndex);
-            requests[requestIndex + 1] = request;
+                uint requestIndex;
+                InterlockedAdd(requests[0].pageIndex_numPages, 1, requestIndex);
+                requests[requestIndex + 1] = request;
+            }
         }
 #if 0
         else if (!isValid && !isLeaf)
