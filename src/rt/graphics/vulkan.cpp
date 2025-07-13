@@ -2288,31 +2288,33 @@ void CommandBuffer::BindDescriptorSets(VkPipelineBindPoint bindPoint, Descriptor
 }
 
 ResourceBinding CommandBuffer::StartBinding(VkPipelineBindPoint bindPoint, VkPipeline pipeline,
-                                            DescriptorSetLayout layout)
+                                            DescriptorSetLayout *layout)
 {
     BindPipeline(bindPoint, pipeline);
 
     ResourceBinding binding;
     binding.bindPoint = bindPoint;
-    binding.ds        = layout.CreateDescriptorSet();
-    binding.layout    = layout;
+    binding.ds        = layout->CreateDescriptorSet();
     binding.cmd       = this;
     return binding;
 }
 
 ResourceBinding CommandBuffer::StartBindingCompute(VkPipeline pipeline,
-                                                   DescriptorSetLayout layout)
+                                                   DescriptorSetLayout *layout)
 {
     return StartBinding(VK_PIPELINE_BIND_POINT_COMPUTE, pipeline, layout);
 }
 
 ResourceBinding &ResourceBinding::PushConstants(PushConstant *push, void *ptr)
 {
-    cmd->PushConstants(push, ptr, layout.pipelineLayout);
+    cmd->PushConstants(push, ptr, ds.layout->pipelineLayout);
     return *this;
 }
 
-void ResourceBinding::End() { cmd->BindDescriptorSets(bindPoint, &ds, layout.pipelineLayout); }
+void ResourceBinding::End()
+{
+    cmd->BindDescriptorSets(bindPoint, &ds, ds.layout->pipelineLayout);
+}
 
 void CommandBuffer::TraceRays(RayTracingState *state, u32 width, u32 height, u32 depth)
 {
@@ -2968,7 +2970,7 @@ void CommandBuffer::CLASIndirect(CLASOpInput opInput, CLASOpMode opMode, CLASOpT
         dstAddresses ? device->GetDeviceAddress(dstAddresses->buffer) +
                            sizeof(VkDeviceAddress) * dstClasOffset
                      : 0;
-    commandsInfo.dstAddressesArray.size   = dstAddresses->size;
+    commandsInfo.dstAddressesArray.size   = dstAddresses ? dstAddresses->size : 0;
     commandsInfo.dstAddressesArray.stride = sizeof(VkDeviceAddress);
 
     commandsInfo.dstSizesArray.deviceAddress =
@@ -3501,12 +3503,13 @@ u32 Vulkan::GetQueueFamily(QueueType queueType)
 
 void Vulkan::BeginFrame(bool doubleBuffer)
 {
-    if (frameCount >= 2)
+    u32 threshold = doubleBuffer ? 2 : 1;
+    if (frameCount >= threshold)
     {
         for (int i = 0; i < QueueType_Count; i++)
         {
             CommandQueue &queue = queues[i];
-            if (queue.submissionID >= 2)
+            if (queue.submissionID >= threshold)
             {
                 u64 val                      = queue.submissionID - doubleBuffer;
                 VkSemaphoreWaitInfo waitInfo = {VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};

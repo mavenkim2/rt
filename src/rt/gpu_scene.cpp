@@ -186,7 +186,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     Shader getBlasAddressOffsetShader;
     Shader instanceCullingShader;
     Shader prepareIndirectShader;
-    Shader hierarchyTraversalShader;
 
     Shader testShader;
 
@@ -247,11 +246,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         string prepareIndirectData = OS_ReadFile(arena, prepareIndirectName);
         prepareIndirectShader = device->CreateShader(ShaderStage::Compute, "prepare indirect",
                                                      prepareIndirectData);
-
-        string hierarchyTraversalName = "../src/shaders/hierarchy_traversal.spv";
-        string hierarchyTraversalData = OS_ReadFile(arena, hierarchyTraversalName);
-        hierarchyTraversalShader      = device->CreateShader(
-            ShaderStage::Compute, "hierarchy traversal", hierarchyTraversalData);
 
         string testShaderName = "../src/shaders/test.spv";
         string testShaderData = OS_ReadFile(arena, testShaderName);
@@ -347,35 +341,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     VkPipeline instanceCullingPipeline =
         device->CreateComputePipeline(&instanceCullingShader, &instanceCullingLayout,
                                       &instanceCullingPush, "instance culling");
-
-    // hierarchy traversal
-    DescriptorSetLayout hierarchyTraversalLayout = {};
-    hierarchyTraversalLayout.AddBinding(0, DescriptorType::StorageBuffer,
-                                        VK_SHADER_STAGE_COMPUTE_BIT);
-    hierarchyTraversalLayout.AddBinding(1, DescriptorType::UniformBuffer,
-                                        VK_SHADER_STAGE_COMPUTE_BIT);
-    hierarchyTraversalLayout.AddBinding(2, DescriptorType::StorageBuffer,
-                                        VK_SHADER_STAGE_COMPUTE_BIT);
-    hierarchyTraversalLayout.AddBinding(3, DescriptorType::StorageBuffer,
-                                        VK_SHADER_STAGE_COMPUTE_BIT);
-    hierarchyTraversalLayout.AddBinding(4, DescriptorType::StorageBuffer,
-                                        VK_SHADER_STAGE_COMPUTE_BIT);
-    hierarchyTraversalLayout.AddBinding(5, DescriptorType::StorageBuffer,
-                                        VK_SHADER_STAGE_COMPUTE_BIT);
-    hierarchyTraversalLayout.AddBinding(6, DescriptorType::StorageBuffer,
-                                        VK_SHADER_STAGE_COMPUTE_BIT);
-    hierarchyTraversalLayout.AddBinding(7, DescriptorType::StorageBuffer,
-                                        VK_SHADER_STAGE_COMPUTE_BIT);
-    hierarchyTraversalLayout.AddBinding(9, DescriptorType::StorageBuffer,
-                                        VK_SHADER_STAGE_COMPUTE_BIT);
-    hierarchyTraversalLayout.AddBinding((u32)RTBindings::ClusterPageData,
-                                        DescriptorType::StorageBuffer,
-                                        VK_SHADER_STAGE_COMPUTE_BIT);
-    hierarchyTraversalLayout.AddBinding(10, DescriptorType::StorageBuffer,
-                                        VK_SHADER_STAGE_COMPUTE_BIT);
-
-    VkPipeline hierarchyTraversalPipeline = device->CreateComputePipeline(
-        &hierarchyTraversalShader, &hierarchyTraversalLayout, 0, "hierarchy traversal");
 
     DescriptorSetLayout testLayout = {};
     testLayout.AddBinding(0, DescriptorType::StorageBuffer, VK_SHADER_STAGE_COMPUTE_BIT);
@@ -858,6 +823,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     Semaphore sem   = device->CreateSemaphore();
     sem.signalValue = 1;
     dgfTransferCmd->SignalOutsideFrame(sem);
+    dgfTransferCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                            VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_NONE);
+    dgfTransferCmd->FlushBarriers();
 
     device->SubmitCommandBuffer(dgfTransferCmd);
 
@@ -1097,7 +1066,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         gpuScene.dispatchDimX = dispatchDimX;
         gpuScene.dispatchDimY = dispatchDimY;
 
-        device->BeginFrame(true);
+        device->BeginFrame(false);
 
         u32 frame       = device->GetCurrentBuffer();
         GPUImage *image = &images[frame];
@@ -1120,11 +1089,86 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         u32 currentBuffer = device->GetCurrentBuffer();
 
-        MemoryCopy(sceneTransferBuffers[currentBuffer].mappedPtr, &gpuScene, sizeof(GPUScene));
-        cmd->SubmitTransfer(&sceneTransferBuffers[currentBuffer]);
-        MemoryCopy(shaderDebugBuffers[currentBuffer].mappedPtr, &shaderDebug,
-                   sizeof(ShaderDebugInfo));
-        cmd->SubmitTransfer(&shaderDebugBuffers[currentBuffer]);
+        if (device->frameCount == 0)
+        {
+            CommandBuffer *computeCmd =
+                device->BeginCommandBuffer(QueueType_Compute, "cmd populate readback");
+
+            MemoryCopy(sceneTransferBuffers[currentBuffer].mappedPtr, &gpuScene,
+                       sizeof(GPUScene));
+            computeCmd->SubmitTransfer(&sceneTransferBuffers[currentBuffer]);
+            MemoryCopy(shaderDebugBuffers[currentBuffer].mappedPtr, &shaderDebug,
+                       sizeof(ShaderDebugInfo));
+            computeCmd->SubmitTransfer(&shaderDebugBuffers[currentBuffer]);
+
+            computeCmd->ClearBuffer(&visibleClustersBuffer, ~0u);
+            computeCmd->ClearBuffer(&workItemQueueBuffer, ~0u);
+            computeCmd->ClearBuffer(&queueBuffer);
+            computeCmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
+            computeCmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
+            computeCmd->ClearBuffer(&blasDataBuffer);
+
+            computeCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+            computeCmd->FlushBarriers();
+
+            {
+                NumPushConstant instanceCullingPushConstant;
+                instanceCullingPushConstant.num = numInstances;
+                device->BeginEvent(computeCmd, "Instance Culling");
+
+                computeCmd
+                    ->StartBindingCompute(instanceCullingPipeline, &instanceCullingLayout)
+                    .Bind(&gpuInstancesBuffer.buffer)
+                    .Bind(&virtualGeometryManager.clasGlobalsBuffer)
+                    .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
+                    .Bind(&queueBuffer)
+                    .Bind(&blasDataBuffer)
+                    .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
+                    .End();
+
+                computeCmd->Dispatch((numInstances + 63) / 64, 1, 1);
+                computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                    VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+                computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                    VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                    VK_ACCESS_2_SHADER_WRITE_BIT,
+                                    VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+                computeCmd->FlushBarriers();
+                device->EndEvent(computeCmd);
+            }
+
+            virtualGeometryManager.HierarchyTraversal(
+                computeCmd, &queueBuffer, &sceneTransferBuffers[currentBuffer].buffer,
+                &workItemQueueBuffer, &gpuInstancesBuffer.buffer, &visibleClustersBuffer,
+                &blasDataBuffer);
+
+            computeCmd->CopyBuffer(&virtualGeometryManager.readbackBuffer,
+                                   &virtualGeometryManager.streamingRequestsBuffer);
+            computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                    VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+                                VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_NONE);
+            computeCmd->FlushBarriers();
+
+            Semaphore sem   = device->CreateSemaphore();
+            sem.signalValue = 1;
+            computeCmd->SignalOutsideFrame(sem);
+            device->SubmitCommandBuffer(computeCmd);
+            device->Wait(sem);
+        }
+        else
+        {
+            MemoryCopy(sceneTransferBuffers[currentBuffer].mappedPtr, &gpuScene,
+                       sizeof(GPUScene));
+            cmd->SubmitTransfer(&sceneTransferBuffers[currentBuffer]);
+            MemoryCopy(shaderDebugBuffers[currentBuffer].mappedPtr, &shaderDebug,
+                       sizeof(ShaderDebugInfo));
+            cmd->SubmitTransfer(&shaderDebugBuffers[currentBuffer]);
+        }
 
         // Virtual texture system
         cmdBufferName = PushStr8F(frameScratch.temp.arena, "Virtual Texture Async Copy Cmd %u",
@@ -1160,6 +1204,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             // Streaming
             virtualGeometryManager.ProcessRequests(cmd);
 
+            cmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
+            cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                         VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                         VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+            cmd->FlushBarriers();
+
             // Instance culling
             {
                 NumPushConstant instanceCullingPushConstant;
@@ -1191,57 +1242,38 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             }
 
             // Hierarchy traversal
+
+            // TODO: this freezes second time through
             {
-                device->BeginEvent(cmd, "Hierarchy Traversal");
-
-                cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, hierarchyTraversalPipeline);
-                DescriptorSet ds = hierarchyTraversalLayout.CreateDescriptorSet();
-                ds.Bind(&queueBuffer)
-                    .Bind(&sceneTransferBuffers[currentBuffer].buffer)
-                    .Bind(&virtualGeometryManager.clasGlobalsBuffer)
-                    .Bind(&workItemQueueBuffer, 0, MAX_CANDIDATE_NODES * sizeof(Vec4u))
-                    .Bind(&workItemQueueBuffer, MAX_CANDIDATE_NODES * sizeof(Vec4u),
-                          MAX_CANDIDATE_CLUSTERS * sizeof(Vec4u))
-                    .Bind(&gpuInstancesBuffer.buffer)
-                    .Bind(&virtualGeometryManager.hierarchyNodeBuffer)
-                    .Bind(&visibleClustersBuffer)
-                    .Bind(&blasDataBuffer)
-                    .Bind(&virtualGeometryManager.clusterPageDataBuffer)
-                    .Bind(&virtualGeometryManager.streamingRequestsBuffer);
-
-                cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
-                                        hierarchyTraversalLayout.pipelineLayout);
-                cmd->Dispatch(1440, 1, 1);
-                cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                             VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-                cmd->FlushBarriers();
-                device->EndEvent(cmd);
+                virtualGeometryManager.HierarchyTraversal(
+                    cmd, &queueBuffer, &sceneTransferBuffers[currentBuffer].buffer,
+                    &workItemQueueBuffer, &gpuInstancesBuffer.buffer, &visibleClustersBuffer,
+                    &blasDataBuffer);
             }
 
             // if (currentBuffer == 1)
-            // {
-            //     GPUBuffer readback =
-            //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            //                              virtualGeometryManager.streamingRequestsBuffer.size,
-            //                              MemoryUsage::GPU_TO_CPU);
-            //     Semaphore testSemaphore   = device->CreateSemaphore();
-            //     testSemaphore.signalValue = 1;
-            //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-            //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-            //     cmd->FlushBarriers();
-            //     cmd->CopyBuffer(&readback, &virtualGeometryManager.streamingRequestsBuffer);
-            //     cmd->SignalOutsideFrame(testSemaphore);
-            //
-            //     device->SubmitCommandBuffer(cmd);
-            //     device->Wait(testSemaphore);
-            //
-            //     // BLASData *data = (BLASData *)readback.mappedPtr;
-            //     StreamingRequest *data = (StreamingRequest *)readback.mappedPtr;
-            //
-            //     int stop = 5;
-            // }
+            {
+                GPUBuffer readback = device->CreateBuffer(
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    virtualGeometryManager.clasGlobalsBuffer.size, MemoryUsage::GPU_TO_CPU);
+                Semaphore testSemaphore   = device->CreateSemaphore();
+                testSemaphore.signalValue = 1;
+                cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                             VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                             VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                             VK_ACCESS_2_TRANSFER_READ_BIT);
+                cmd->FlushBarriers();
+                cmd->CopyBuffer(&readback, &virtualGeometryManager.clasGlobalsBuffer);
+                cmd->SignalOutsideFrame(testSemaphore);
+
+                device->SubmitCommandBuffer(cmd);
+                device->Wait(testSemaphore);
+
+                // BLASData *data = (BLASData *)readback.mappedPtr;
+                u32 *data = (u32 *)readback.mappedPtr;
+
+                int stop = 5;
+            }
 
 #if 0
             {

@@ -617,7 +617,6 @@ struct ResourceBinding
     VkPipelineBindPoint bindPoint;
     CommandBuffer *cmd;
     DescriptorSet ds;
-    DescriptorSetLayout layout;
 
     ResourceBinding &Bind(int index, GPUImage *image, int subresource = -1)
     {
@@ -704,8 +703,8 @@ struct CommandBuffer
     void BindDescriptorSets(VkPipelineBindPoint bindPoint, DescriptorSet *set,
                             VkPipelineLayout pipeLayout);
     ResourceBinding StartBinding(VkPipelineBindPoint bindPoint, VkPipeline pipeline,
-                                 DescriptorSetLayout layout);
-    ResourceBinding StartBindingCompute(VkPipeline pipeline, DescriptorSetLayout layout);
+                                 DescriptorSetLayout *layout);
+    ResourceBinding StartBindingCompute(VkPipeline pipeline, DescriptorSetLayout* layout);
 
     void TraceRays(RayTracingState *state, u32 width, u32 height, u32 depth);
     void Dispatch(u32 groupCountX, u32 groupCountY, u32 groupCountZ);

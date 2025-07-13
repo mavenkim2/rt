@@ -77,6 +77,9 @@ struct VirtualGeometryManager
     DescriptorSetLayout computeClasAddressesLayout = {};
     VkPipeline computeClasAddressesPipeline;
 
+    DescriptorSetLayout hierarchyTraversalLayout = {};
+    VkPipeline hierarchyTraversalPipeline;
+
     GPUBuffer evictedPagesBuffer;
     GPUBuffer hierarchyNodeBuffer;
     GPUBuffer clusterPageDataBuffer;
@@ -123,6 +126,10 @@ struct VirtualGeometryManager
     void ProcessRequests(CommandBuffer *cmd);
     u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, u8 *pageData, PackedHierarchyNode *nodes,
                    u32 numNodes, u32 numPages);
+    void HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *queueBuffer,
+                            GPUBuffer *gpuSceneBuffer, GPUBuffer *workItemQueueBuffer,
+                            GPUBuffer *gpuInstancesBuffer, GPUBuffer *visibleClustersBuffer,
+                            GPUBuffer *blasDataBuffer);
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);
 };

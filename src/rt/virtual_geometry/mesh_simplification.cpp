@@ -3743,16 +3743,20 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 ErrorExit(numPages < (1u << MAX_PARTS_PER_GROUP_BITS), "%u\n", numPages);
                 Assert(numPages != 0);
 
-                u32 leafInfo  = 0;
-                u32 bitOffset = 0;
+                u32 pageStartIndex = clusterGroups[part.groupIndex].pageStartIndex;
+                u32 leafInfo       = 0;
+                u32 bitOffset      = 0;
+                Assert(part.clusterPageStartIndex < MAX_CLUSTERS_PER_PAGE);
                 leafInfo = BitFieldPackU32(leafInfo, part.clusterPageStartIndex, bitOffset,
                                            MAX_CLUSTERS_PER_PAGE_BITS);
+                Assert(part.clusterCount - 1 < MAX_CLUSTERS_PER_GROUP);
                 leafInfo = BitFieldPackU32(leafInfo, part.clusterCount - 1, bitOffset,
                                            MAX_CLUSTERS_PER_GROUP_BITS);
+                Assert(numPages < MAX_PARTS_PER_GROUP);
                 leafInfo =
                     BitFieldPackU32(leafInfo, numPages, bitOffset, MAX_PARTS_PER_GROUP_BITS);
                 leafInfo =
-                    BitFieldPackU32(leafInfo, part.pageIndex, bitOffset, 32u - bitOffset);
+                    BitFieldPackU32(leafInfo, pageStartIndex, bitOffset, 32u - bitOffset);
 
                 packed.leafInfo[i] = leafInfo;
 
