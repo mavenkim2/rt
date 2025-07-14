@@ -163,7 +163,7 @@ struct ClusterCull
             childCandidateNode.x = candidateNode.instanceID;
             childCandidateNode.y = node.childRef[childIndex];
             childCandidateNode.z = candidateNode.blasIndex;
-            childCandidateNode.w = node.flags;
+            childCandidateNode.w = asuint(test);//node.flags;
 
             nodeQueue[nodeWriteOffset] = childCandidateNode;
         }

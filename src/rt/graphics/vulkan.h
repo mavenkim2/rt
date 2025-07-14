@@ -78,9 +78,9 @@ inline u32 GetNumLevels(u32 width, u32 height)
 
 enum class CLASOpType
 {
-    Move,
-    CLAS,
-    BLAS,
+    Move = (1 << 0),
+    CLAS = (1 << 1),
+    BLAS = (1 << 2),
 };
 ENUM_CLASS_FLAGS(CLASOpType)
 
@@ -704,7 +704,7 @@ struct CommandBuffer
                             VkPipelineLayout pipeLayout);
     ResourceBinding StartBinding(VkPipelineBindPoint bindPoint, VkPipeline pipeline,
                                  DescriptorSetLayout *layout);
-    ResourceBinding StartBindingCompute(VkPipeline pipeline, DescriptorSetLayout* layout);
+    ResourceBinding StartBindingCompute(VkPipeline pipeline, DescriptorSetLayout *layout);
 
     void TraceRays(RayTracingState *state, u32 width, u32 height, u32 depth);
     void Dispatch(u32 groupCountX, u32 groupCountY, u32 groupCountZ);
@@ -752,7 +752,7 @@ struct CommandBuffer
     void MoveCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData, GPUBuffer *scratchBuffer,
                   GPUBuffer *dstAddresses, GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
                   GPUBuffer *srcInfosCount, u32 srcInfosOffset, int maxNumClusters,
-                  u64 maxMovedBytes, u32 dstClasOffset = 0);
+                  u64 maxMovedBytes, bool noMoveOverlap, u32 dstClasOffset = 0);
     void BuildClusterBLAS(GPUBuffer *implicitBuffer, GPUBuffer *scratchBuffer,
                           GPUBuffer *bottomLevelInfo, GPUBuffer *dstAddresses,
                           GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
@@ -1011,7 +1011,8 @@ struct Vulkan
                                              DescriptorSetLayout *layout, u32 maxDepth,
                                              bool useClusters = false);
     void GetClusterBuildSizes(CLASOpInput opInput, CLASOpMode opMode, CLASOpType opType,
-                              u32 &scratchSize, u32 &accelerationStructureSize);
+                              u32 &scratchSize, u32 &updateScratchSize,
+                              u32 &accelerationStructureSize);
     void GetCLASBuildSizes(CLASOpMode opMode, int maxNumClusters, u32 maxNumTriangles,
                            u32 maxNumVertices, u32 &scratchSize,
                            u32 &accelerationStructureSize);

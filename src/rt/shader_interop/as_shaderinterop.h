@@ -122,6 +122,12 @@ struct FillClusterTriangleInfoPushConstant
     uint clusterOffset;
 };
 
+struct DefragPushConstant 
+{
+    uint evictedPageStart;
+    uint numEvictedPages;
+};
+
 struct AddressPushConstant
 {
     uint addressLowBits;

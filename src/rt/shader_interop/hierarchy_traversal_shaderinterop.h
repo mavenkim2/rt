@@ -36,8 +36,11 @@ struct VisibleCluster
 struct CLASPageInfo
 {
     uint addressStartIndex;
+    uint accelByteOffset;
     uint clasCount;
     uint clasSize;
+
+    uint tempClusterOffset;
 };
 
 struct StreamingRequest

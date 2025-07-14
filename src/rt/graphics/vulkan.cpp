@@ -2964,7 +2964,8 @@ void CommandBuffer::CLASIndirect(CLASOpInput opInput, CLASOpMode opMode, CLASOpT
     commandsInfo.input = inputInfo;
     commandsInfo.dstImplicitData =
         dstImplicitData ? device->GetDeviceAddress(dstImplicitData->buffer) : 0;
-    commandsInfo.scratchData = device->GetDeviceAddress(scratchBuffer->buffer);
+    commandsInfo.scratchData =
+        scratchBuffer ? device->GetDeviceAddress(scratchBuffer->buffer) : 0;
 
     commandsInfo.dstAddressesArray.deviceAddress =
         dstAddresses ? device->GetDeviceAddress(dstAddresses->buffer) +
@@ -3043,7 +3044,7 @@ void CommandBuffer::MoveCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData,
                              GPUBuffer *scratchBuffer, GPUBuffer *dstAddresses,
                              GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
                              GPUBuffer *srcInfosCount, u32 srcInfosOffset, int maxNumClusters,
-                             u64 maxMovedBytes, u32 dstClasOffset)
+                             u64 maxMovedBytes, bool noMoveOverlap, u32 dstClasOffset)
 {
     Assert((opMode == CLASOpMode::ImplicitDestinations && dstImplicitData) ||
            (opMode == CLASOpMode::ExplicitDestinations && !dstImplicitData));
@@ -3051,7 +3052,7 @@ void CommandBuffer::MoveCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData,
     CLASOpInput opInput;
     opInput.moveObjects.maxNumClusters = maxNumClusters;
     opInput.moveObjects.maxMovedBytes  = maxMovedBytes;
-    opInput.moveObjects.noMoveOverlap  = true;
+    opInput.moveObjects.noMoveOverlap  = noMoveOverlap;
 
     opInput.maxAccelerationStructureCount = maxNumClusters;
 
@@ -3174,7 +3175,8 @@ TransferBuffer CommandBuffer::CreateTLASInstances(Instance *instances, int numIn
 }
 
 void Vulkan::GetClusterBuildSizes(CLASOpInput opInput, CLASOpMode opMode, CLASOpType opType,
-                                  u32 &scratchSize, u32 &accelerationStructureSize)
+                                  u32 &scratchSize, u32 &updateScratchSize,
+                                  u32 &accelerationStructureSize)
 {
     VkDeviceSize srcInfosArrayStride;
     VkClusterAccelerationStructureOpModeNV vkOpMode;
@@ -3204,6 +3206,7 @@ void Vulkan::GetClusterBuildSizes(CLASOpInput opInput, CLASOpMode opMode, CLASOp
     vkGetClusterAccelerationStructureBuildSizesNV(device, &inputInfo, &buildSizesInfo);
 
     scratchSize               = buildSizesInfo.buildScratchSize;
+    updateScratchSize         = buildSizesInfo.updateScratchSize;
     accelerationStructureSize = buildSizesInfo.accelerationStructureSize;
 }
 
@@ -3218,7 +3221,8 @@ void Vulkan::GetCLASBuildSizes(CLASOpMode opMode, int maxNumClusters, u32 maxNum
     opInput.triangleClusters.maxNumVertices  = maxNumVertices;
     opInput.maxAccelerationStructureCount    = maxNumClusters;
 
-    GetClusterBuildSizes(opInput, opMode, CLASOpType::CLAS, scratchSize,
+    u32 updateScratchSize;
+    GetClusterBuildSizes(opInput, opMode, CLASOpType::CLAS, scratchSize, updateScratchSize,
                          accelerationStructureSize);
 }
 
@@ -3233,9 +3237,9 @@ void Vulkan::GetClusterBLASBuildSizes(u32 maxTotalClusterCount,
         maxClusterCountPerAccelerationStructure;
     opInput.clusterBottomLevel.maxTotalClusterCount = maxTotalClusterCount;
     opInput.maxAccelerationStructureCount           = maxAccelerationStructureCount;
-
+    u32 updateScratchSize;
     GetClusterBuildSizes(opInput, CLASOpMode::ImplicitDestinations, CLASOpType::BLAS,
-                         scratchSize, accelerationStructureSize);
+                         scratchSize, updateScratchSize, accelerationStructureSize);
 }
 
 void Vulkan::GetMoveBuildSizes(CLASOpMode opMode, int maxNumClusters, u64 maxMovedBytes,
@@ -3249,8 +3253,9 @@ void Vulkan::GetMoveBuildSizes(CLASOpMode opMode, int maxNumClusters, u64 maxMov
 
     opInput.maxAccelerationStructureCount = maxNumClusters;
 
-    GetClusterBuildSizes(opInput, opMode, CLASOpType::Move | CLASOpType::CLAS, scratchSize,
-                         accelerationStructureSize);
+    u32 buildSize;
+    GetClusterBuildSizes(opInput, opMode, CLASOpType::Move | CLASOpType::CLAS, buildSize,
+                         scratchSize, accelerationStructureSize);
 }
 
 void Vulkan::GetBuildSizes(VkAccelerationStructureTypeKHR accelType,

@@ -932,8 +932,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     ViewCamera camera = {};
     camera.position   = params->pCamera;
-    camera.forward    = Normalize(params->look - params->pCamera);
-    camera.right      = Normalize(Cross(camera.forward, params->up));
+    // camera.forward    = Normalize(params->look - params->pCamera);
+    camera.forward = Vec3f(-.290819466f, .091174677f, .9524323811f);
+    // camera.right   = Normalize(Cross(camera.forward, params->up));
+    camera.right = Normalize(Cross(camera.forward, params->up));
 
     camera.pitch = ArcSin(camera.forward.y);
     camera.yaw   = -Atan2(camera.forward.z, camera.forward.x);
@@ -1136,7 +1138,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
                 computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                    VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                                    VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                        VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
                                     VK_ACCESS_2_SHADER_WRITE_BIT,
                                     VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
                 computeCmd->FlushBarriers();
@@ -1147,6 +1150,33 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 computeCmd, &queueBuffer, &sceneTransferBuffers[currentBuffer].buffer,
                 &workItemQueueBuffer, &gpuInstancesBuffer.buffer, &visibleClustersBuffer,
                 &blasDataBuffer);
+
+            // if (device->frameCount == 2)
+            // TODO: when clusters are not in view, z is negative. This causes the edges scales
+            // to go to zero, when it should be culled instead.
+            // {
+            //     GPUBuffer readback =
+            //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            //                              workItemQueueBuffer.size, MemoryUsage::GPU_TO_CPU);
+            //     Semaphore testSemaphore   = device->CreateSemaphore();
+            //     testSemaphore.signalValue = 1;
+            //     computeCmd->Barrier(
+            //         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            //         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+            //         VK_ACCESS_2_TRANSFER_READ_BIT);
+            //     computeCmd->FlushBarriers();
+            //     computeCmd->CopyBuffer(&readback, &workItemQueueBuffer);
+            //     computeCmd->SignalOutsideFrame(testSemaphore);
+            //
+            //     device->SubmitCommandBuffer(computeCmd);
+            //     device->Wait(testSemaphore);
+            //
+            //     // BLASData *data = (BLASData *)readback.mappedPtr;
+            //     // u32 *data = (u32 *)readback.mappedPtr;
+            //     Vec4f *data = (Vec4f *)readback.mappedPtr;
+            //
+            //     int stop = 5;
+            // }
 
             computeCmd->CopyBuffer(&virtualGeometryManager.readbackBuffer,
                                    &virtualGeometryManager.streamingRequestsBuffer);
@@ -1236,7 +1266,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                              VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
                 cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                 VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
                              VK_ACCESS_2_SHADER_WRITE_BIT,
                              VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
                 cmd->FlushBarriers();
@@ -1470,29 +1501,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         transferCmd->CopyBuffer(&virtualGeometryManager.readbackBuffer,
                                 &virtualGeometryManager.streamingRequestsBuffer);
         device->SubmitCommandBuffer(transferCmd, true);
-
-        // if (device->frameCount == 2)
-        // {
-        //     // GPUBuffer readback = device->CreateBuffer(
-        //     //     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        //     //     virtualGeometryManager.clasGlobalsBuffer.size, MemoryUsage::GPU_TO_CPU);
-        //     Semaphore testSemaphore   = device->CreateSemaphore();
-        //     testSemaphore.signalValue = 1;
-        //     // cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-        //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     // cmd->FlushBarriers();
-        //     // cmd->CopyBuffer(&readback, &virtualGeometryManager.clasGlobalsBuffer);
-        //     cmd->SignalOutsideFrame(testSemaphore);
-        //
-        //     device->SubmitCommandBuffer(cmd);
-        //     device->Wait(testSemaphore);
-        //
-        //     // BLASData *data = (BLASData *)readback.mappedPtr;
-        //     // u32 *data = (u32 *)readback.mappedPtr;
-        //
-        //     int stop = 5;
-        // }
 
         debugState.EndFrame(cmd);
 

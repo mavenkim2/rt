@@ -50,6 +50,10 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
     uint64_t clasAddress = clusterBaseAddress + clasOldPageDataByteOffset + pageClusterAccelOffset + clusterInPageOffset;
     clasAddresses[descriptorIndex] = clasAddress;
 
-    clasPageInfos[pageIndex].clasSize = pageClusterAccelSize;
-    clasPageInfos[pageIndex].clasCount = numClusters;
+    if (groupIndex == 0)
+    {
+        clasPageInfos[pageIndex].accelByteOffset = clasOldPageDataByteOffset + pageClusterAccelOffset;
+        clasPageInfos[pageIndex].clasSize = pageClusterAccelSize;
+        clasPageInfos[pageIndex].clasCount = numClusters;
+    }
 }
