@@ -32,7 +32,7 @@ struct ScenePrimitives;
         Assert(result_ == VK_SUCCESS);                                                        \
     } while (0);
 
-static const int numActiveFrames = 2;
+static const int numActiveFrames = 1;
 using CopyFunction               = std::function<void(void *)>;
 
 inline u32 GetFormatSize(VkFormat format)

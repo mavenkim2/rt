@@ -30,7 +30,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupID: SV_GroupI
     {
         InterlockedAdd(globals[GLOBALS_CLAS_COUNT_INDEX], numClusters, clusterStartIndex);
         CLASPageInfo pageInfo;
-        pageInfo.addressStartIndex = clusterStartIndex;
+        pageInfo.addressStartIndex = pc.clusterOffset + clusterStartIndex;
         clasPageInfos[pageIndex] = pageInfo;
     }
     GroupMemoryBarrierWithGroupSync();

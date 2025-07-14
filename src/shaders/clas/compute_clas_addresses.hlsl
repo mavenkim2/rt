@@ -47,7 +47,7 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
 
     uint64_t clusterBaseAddress = ((uint64_t)pc.addressHighBits << 32u) | (uint64_t)pc.addressLowBits;
 
-    uint64_t clasAddress = clusterBaseAddress + pageClusterAccelOffset + clusterInPageOffset;
+    uint64_t clasAddress = clusterBaseAddress + clasOldPageDataByteOffset + pageClusterAccelOffset + clusterInPageOffset;
     clasAddresses[descriptorIndex] = clasAddress;
 
     clasPageInfos[pageIndex].clasSize = pageClusterAccelSize;

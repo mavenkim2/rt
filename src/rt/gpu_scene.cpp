@@ -778,7 +778,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         sizeof(Vec4u) * (MAX_CANDIDATE_NODES + MAX_CANDIDATE_CLUSTERS));
 
     // TODO
-    u32 maxWriteClusters = virtualGeometryManager.maxWriteClusters;
+    u32 maxWriteClusters = 200000;
     u32 clasBlasScratchSize, clasBlasAccelSize;
     device->GetClusterBLASBuildSizes(maxWriteClusters, maxWriteClusters, 1,
                                      clasBlasScratchSize, clasBlasAccelSize);
@@ -1068,6 +1068,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         device->BeginFrame(false);
 
+        Print("frame: %u\n", device->frameCount);
+
         u32 frame       = device->GetCurrentBuffer();
         GPUImage *image = &images[frame];
         string cmdBufferName =
@@ -1077,11 +1079,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
         if (device->frameCount == 0)
         {
-            cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                         VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-            cmd->Wait(submitSemaphore);
-            cmd->Wait(tileSubmitSemaphore);
+            // cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            //              VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+            //              VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+            device->Wait(submitSemaphore);
+            device->Wait(tileSubmitSemaphore);
             device->Wait(tlasSemaphore);
 
             envMapBindlessIndex = device->BindlessIndex(&gpuEnvMap);
@@ -1243,36 +1245,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
             // Hierarchy traversal
 
-            // TODO: this freezes second time through
             {
                 virtualGeometryManager.HierarchyTraversal(
                     cmd, &queueBuffer, &sceneTransferBuffers[currentBuffer].buffer,
                     &workItemQueueBuffer, &gpuInstancesBuffer.buffer, &visibleClustersBuffer,
                     &blasDataBuffer);
-            }
-
-            // if (currentBuffer == 1)
-            {
-                GPUBuffer readback = device->CreateBuffer(
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    virtualGeometryManager.clasGlobalsBuffer.size, MemoryUsage::GPU_TO_CPU);
-                Semaphore testSemaphore   = device->CreateSemaphore();
-                testSemaphore.signalValue = 1;
-                cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                             VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                             VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                             VK_ACCESS_2_TRANSFER_READ_BIT);
-                cmd->FlushBarriers();
-                cmd->CopyBuffer(&readback, &virtualGeometryManager.clasGlobalsBuffer);
-                cmd->SignalOutsideFrame(testSemaphore);
-
-                device->SubmitCommandBuffer(cmd);
-                device->Wait(testSemaphore);
-
-                // BLASData *data = (BLASData *)readback.mappedPtr;
-                u32 *data = (u32 *)readback.mappedPtr;
-
-                int stop = 5;
             }
 
 #if 0
@@ -1387,12 +1364,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 device->BeginEvent(cmd, "Build BLAS");
 
                 // TODO: need to set a proper upper bound on this
-                cmd->BuildClusterBLAS(&clasBlasImplicitBuffer, &clasBlasScratchBuffer,
-                                      &buildClusterBottomLevelInfoBuffer, &blasAccelAddresses,
-                                      &blasAccelSizes,
-                                      &virtualGeometryManager.clasGlobalsBuffer,
-                                      sizeof(u32) * GLOBALS_BLAS_COUNT_INDEX,
-                                      virtualGeometryManager.maxWriteClusters, 1);
+                cmd->BuildClusterBLAS(
+                    &clasBlasImplicitBuffer, &clasBlasScratchBuffer,
+                    &buildClusterBottomLevelInfoBuffer, &blasAccelAddresses, &blasAccelSizes,
+                    &virtualGeometryManager.clasGlobalsBuffer,
+                    sizeof(u32) * GLOBALS_BLAS_COUNT_INDEX, maxWriteClusters, 1);
                 cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
@@ -1495,7 +1471,31 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                                 &virtualGeometryManager.streamingRequestsBuffer);
         device->SubmitCommandBuffer(transferCmd, true);
 
+        // if (device->frameCount == 2)
+        // {
+        //     // GPUBuffer readback = device->CreateBuffer(
+        //     //     VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        //     //     virtualGeometryManager.clasGlobalsBuffer.size, MemoryUsage::GPU_TO_CPU);
+        //     Semaphore testSemaphore   = device->CreateSemaphore();
+        //     testSemaphore.signalValue = 1;
+        //     // cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        //     //              VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+        //     //              VK_ACCESS_2_TRANSFER_READ_BIT);
+        //     // cmd->FlushBarriers();
+        //     // cmd->CopyBuffer(&readback, &virtualGeometryManager.clasGlobalsBuffer);
+        //     cmd->SignalOutsideFrame(testSemaphore);
+        //
+        //     device->SubmitCommandBuffer(cmd);
+        //     device->Wait(testSemaphore);
+        //
+        //     // BLASData *data = (BLASData *)readback.mappedPtr;
+        //     // u32 *data = (u32 *)readback.mappedPtr;
+        //
+        //     int stop = 5;
+        // }
+
         debugState.EndFrame(cmd);
+
         device->CopyFrameBuffer(&swapchain, cmd, image);
         device->EndFrame(QueueFlag_Copy | QueueFlag_Graphics);
 

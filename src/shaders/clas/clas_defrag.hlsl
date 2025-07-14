@@ -36,8 +36,6 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
     CLASPageInfo clasPageInfo = clasPageInfos[pageIndex];
     uint addressStartIndex = clasPageInfo.addressStartIndex;
 
-    InterlockedAdd(globals[GLOBALS_OLD_PAGE_DATA_BYTES], clasPageInfo.clasSize);
-
     uint shiftLeftClas = 0;
     uint shiftLeftBytes = 0;
     uint evicted = 0;
@@ -61,6 +59,13 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
     InterlockedOr(pageEvicted, evicted);
 
     GroupMemoryBarrierWithGroupSync();
+
+    if (groupIndex == 0 && !pageEvicted)
+    {
+        InterlockedAdd(globals[GLOBALS_OLD_PAGE_DATA_BYTES], clasPageInfo.clasSize);
+    }
+
+    if (pc.num == 0) return;
 
     if (pageEvicted || (pageShiftLeftClas == 0 && pageShiftLeftBytes == 0)) return;
 

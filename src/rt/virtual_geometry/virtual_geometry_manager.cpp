@@ -169,11 +169,11 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(u64) * (maxWriteClusters + maxPages * MAX_CLUSTERS_PER_PAGE));
+        sizeof(u64) * (maxPages * MAX_CLUSTERS_PER_PAGE));
     clusterAccelSizes = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(u32) * (maxWriteClusters + maxPages * MAX_CLUSTERS_PER_PAGE));
+        sizeof(u32) * (maxPages * MAX_CLUSTERS_PER_PAGE));
 
     indexBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -218,14 +218,14 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
     moveScratchBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, moveScratchSize);
 
-    decodeClusterDataBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        sizeof(DecodeClusterData) * maxWriteClusters);
+    decodeClusterDataBuffer        = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                              VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                                          sizeof(DecodeClusterData) * maxNumClusters);
     buildClusterTriangleInfoBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(BUILD_CLUSTERS_TRIANGLE_INFO) * maxWriteClusters);
+        sizeof(BUILD_CLUSTERS_TRIANGLE_INFO) * maxNumClusters);
     clasPageInfoBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                               sizeof(CLASPageInfo) * maxPages);
 
@@ -298,9 +298,6 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, u8 *pag
     u32 *pageOffsets  = PushArray(arena, u32, numPages + 1);
     u32 *pageOffsets1 = &pageOffsets[1];
 
-    const u32 pageShift =
-        MAX_CLUSTERS_PER_PAGE_BITS + MAX_CLUSTERS_PER_GROUP_BITS + MAX_PARTS_PER_GROUP_BITS;
-
     for (u32 nodeIndex = 0; nodeIndex < numNodes; nodeIndex++)
     {
         PackedHierarchyNode &node = nodes[nodeIndex];
@@ -309,7 +306,7 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, u8 *pag
             if (node.leafInfo[childIndex] == ~0u) continue;
 
             // Map page to nodes
-            u32 pageIndex = node.leafInfo[childIndex] >> pageShift;
+            u32 pageIndex = node.childRef[childIndex];
             pageOffsets1[pageIndex]++;
         }
     }
@@ -332,7 +329,7 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, u8 *pag
             if (node.leafInfo[childIndex] == ~0u) continue;
 
             // Map page to nodes
-            u32 pageIndex = node.leafInfo[childIndex] >> pageShift;
+            u32 pageIndex = node.childRef[childIndex];
             u32 data      = (nodeIndex << CHILDREN_PER_HIERARCHY_NODE_BITS) | childIndex;
 
             u32 index             = pageOffsets1[pageIndex]++;
@@ -343,6 +340,17 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, u8 *pag
     PageToHierarchyNodeGraph graph;
     graph.offsets = pageOffsets;
     graph.data    = pageToNodeData;
+
+    for (u32 nodeIndex = 0; nodeIndex < numNodes; nodeIndex++)
+    {
+        for (u32 i = 0; i < CHILDREN_PER_HIERARCHY_NODE; i++)
+        {
+            if (nodes[nodeIndex].leafInfo[i] != ~0u)
+            {
+                nodes[nodeIndex].childRef[i] = ~0u;
+            }
+        }
+    }
 
     cmd->SubmitBuffer(&hierarchyNodeBuffer, nodes, sizeof(PackedHierarchyNode) * numNodes,
                       sizeof(PackedHierarchyNode) * totalNumNodes);
@@ -496,8 +504,11 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
     }
 
     // Get pages
+    u32 pagesToUpdate = physicalPages.Length();
     StaticArray<int> pageIndices(scratch.temp.arena, unloadedRequests.Length());
-    while (physicalPages.Length() < maxPages && pageIndices.Length() < maxPageInstallsPerFrame)
+    while (physicalPages.Length() < maxPages &&
+           pageIndices.Length() < unloadedRequests.Length() &&
+           pageIndices.Length() < maxPageInstallsPerFrame)
     {
         Page page         = {};
         page.virtualIndex = -1;
@@ -580,7 +591,6 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
                 hierarchyUploadBufferOffset + nodeInstallCopies.Length() * sizeof(u32);
             hierarchyCopy.dstOffset =
                 sizeof(PackedHierarchyNode) * (hierarchyNodeOffset + hierarchyNodeIndex) +
-                sizeof(PackedHierarchyNode) * hierarchyNodeIndex +
                 OffsetOf(PackedHierarchyNode, childRef) + sizeof(u32) * childIndex;
             hierarchyCopy.size = sizeof(u32);
 
@@ -591,53 +601,71 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
     }
 
     // TODO: direct storage
-    cmd->CopyBuffer(&clusterPageDataBuffer, &uploadBuffer, pageInstallCopies.data,
-                    pageInstallCopies.Length());
-    cmd->CopyBuffer(&hierarchyNodeBuffer, &uploadBuffer, nodeInstallCopies.data,
-                    nodeInstallCopies.Length());
+    if (pageIndices.Length())
+    {
+        cmd->CopyBuffer(&clusterPageDataBuffer, &uploadBuffer, pageInstallCopies.data,
+                        pageInstallCopies.Length());
+        cmd->CopyBuffer(&hierarchyNodeBuffer, &uploadBuffer, nodeInstallCopies.data,
+                        nodeInstallCopies.Length());
+        u32 pageInstallSize = pageIndices.Length() * sizeof(u32);
+        BufferToBufferCopy pageInstallCopy;
+        pageInstallCopy.srcOffset = evictedPagesOffset;
+        pageInstallCopy.dstOffset = 0;
+        pageInstallCopy.size      = pageInstallSize;
+        MemoryCopy((u8 *)uploadBuffer.mappedPtr + evictedPagesOffset, pageIndices.data,
+                   pageInstallSize);
 
-    u32 pageInstallSize = pageIndices.Length() * sizeof(u32);
-    BufferToBufferCopy pageInstallCopy;
-    pageInstallCopy.srcOffset = evictedPagesOffset;
-    pageInstallCopy.dstOffset = 0;
-    pageInstallCopy.size      = pageInstallSize;
-    MemoryCopy((u8 *)uploadBuffer.mappedPtr + evictedPagesOffset, pageIndices.data,
-               pageInstallSize);
+        cmd->CopyBuffer(&evictedPagesBuffer, &uploadBuffer, &pageInstallCopy, 1);
 
-    cmd->CopyBuffer(&evictedPagesBuffer, &uploadBuffer, &pageInstallCopy, 1);
-
-    cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                 VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-    cmd->FlushBarriers();
+        cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+        cmd->FlushBarriers();
+    }
 
     u32 numEvictedPages = pageIndices.Length() - evictedPageStart;
+
+    // Prepare move descriptors
+    if (pagesToUpdate && pageIndices.Length())
+    {
+        NumPushConstant pc;
+        pc.num = numEvictedPages;
+        // number of resident pages
+        ResourceBinding binding =
+            cmd->StartBindingCompute(clasDefragPipeline, &clasDefragLayout);
+        if (numEvictedPages)
+        {
+            binding.Bind(&evictedPagesBuffer, sizeof(u32) * evictedPageStart,
+                         sizeof(u32) * numEvictedPages);
+        }
+        else
+        {
+            binding.Bind(&evictedPagesBuffer);
+        }
+        binding.Bind(&clasPageInfoBuffer)
+            .Bind(&clusterAccelAddresses)
+            .Bind(&clusterAccelSizes)
+            .Bind(&clasGlobalsBuffer)
+            .Bind(&moveDescriptors)
+            .Bind(&moveDstAddresses)
+            .Bind(&moveDstSizes)
+            .PushConstants(&clasDefragPush, &pc)
+            .End();
+
+        cmd->Dispatch(pagesToUpdate, 1, 1);
+
+        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                     VK_ACCESS_2_SHADER_WRITE_BIT,
+                     VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                     VK_ACCESS_2_SHADER_READ_BIT);
+        cmd->FlushBarriers();
+    }
 
     if (numEvictedPages)
     {
         Print("evicting old geo pages\n");
-
-        // Prepare move descriptors
-        {
-            // number of resident pages
-            cmd->StartBindingCompute(clasDefragPipeline, &clasDefragLayout)
-                .Bind(&evictedPagesBuffer, sizeof(u32) * evictedPageStart,
-                      sizeof(u32) * numEvictedPages)
-                .Bind(&clasPageInfoBuffer)
-                .Bind(&clusterAccelAddresses)
-                .Bind(&clusterAccelSizes)
-                .Bind(&clasGlobalsBuffer)
-                .Bind(&moveDescriptors)
-                .Bind(&moveDstAddresses)
-                .Bind(&moveDstSizes);
-
-            cmd->Dispatch(maxPages, 1, 1);
-
-            cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                         VK_ACCESS_2_SHADER_WRITE_BIT,
-                         VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-            cmd->FlushBarriers();
-        }
 
         // Evict old CLAS
         {
@@ -655,6 +683,8 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         }
     }
 
+    if (pageIndices.Length() == 0) return;
+
     // Write cluster build descriptors
     {
         u64 indexBufferAddress  = device->GetDeviceAddress(indexBuffer.buffer);
@@ -664,6 +694,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         fillPc.indexBufferBaseAddressHighBits  = (indexBufferAddress >> 32u) & 0xffffffff;
         fillPc.vertexBufferBaseAddressLowBits  = vertexBufferAddress & 0xffffffff;
         fillPc.vertexBufferBaseAddressHighBits = (vertexBufferAddress >> 32u) & 0xffffffff;
+        fillPc.clusterOffset                   = newClasOffset;
 
         cmd->StartBindingCompute(fillClusterTriangleInfoPipeline,
                                  &fillClusterTriangleInfoLayout)

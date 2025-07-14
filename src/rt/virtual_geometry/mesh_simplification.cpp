@@ -3759,6 +3759,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                     BitFieldPackU32(leafInfo, pageStartIndex, bitOffset, 32u - bitOffset);
 
                 packed.leafInfo[i] = leafInfo;
+                packed.childRef[i] = part.pageIndex;
 
                 if (clusterGroups[part.groupIndex].mipLevel == 1)
                 {

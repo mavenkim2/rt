@@ -11,10 +11,10 @@ namespace rt
 #define RAY_TRACING_ADDRESS_STRIDE               8
 #define FILL_CLUSTER_BOTTOM_LEVEL_INFO_GROUPSIZE 32
 
-#define MAX_CLUSTERS_PER_PAGE_BITS  8u
-#define MAX_CLUSTERS_PER_PAGE       (1u << MAX_CLUSTERS_PER_PAGE_BITS)
-#define MAX_PARTS_PER_GROUP_BITS    3u
-#define MAX_PARTS_PER_GROUP         (1u << MAX_PARTS_PER_GROUP_BITS)
+#define MAX_CLUSTERS_PER_PAGE_BITS 8u
+#define MAX_CLUSTERS_PER_PAGE      (1u << MAX_CLUSTERS_PER_PAGE_BITS)
+#define MAX_PARTS_PER_GROUP_BITS   3u
+#define MAX_PARTS_PER_GROUP        (1u << MAX_PARTS_PER_GROUP_BITS)
 
 #define MAX_CLUSTERS_PER_GROUP_BITS 5u
 #define MAX_CLUSTERS_PER_GROUP      (1u << MAX_CLUSTERS_PER_GROUP_BITS)
@@ -119,6 +119,7 @@ struct FillClusterTriangleInfoPushConstant
     uint indexBufferBaseAddressHighBits;
     uint vertexBufferBaseAddressLowBits;
     uint vertexBufferBaseAddressHighBits;
+    uint clusterOffset;
 };
 
 struct AddressPushConstant

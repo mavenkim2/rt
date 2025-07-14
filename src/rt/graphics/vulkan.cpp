@@ -3034,7 +3034,7 @@ void CommandBuffer::BuildClusterBLAS(GPUBuffer *implicitBuffer, GPUBuffer *scrat
     opInput.clusterBottomLevel.maxTotalClusterCount                    = numClusters;
     opInput.maxAccelerationStructureCount = maxAccelerationStructureCount;
 
-    CLASIndirect(opInput, CLASOpMode::ImplicitDestinations, CLASOpType::CLAS, implicitBuffer,
+    CLASIndirect(opInput, CLASOpMode::ImplicitDestinations, CLASOpType::BLAS, implicitBuffer,
                  scratchBuffer, dstAddresses, dstSizes, bottomLevelInfo, srcInfosCount,
                  srcInfosOffset, 0);
 }
