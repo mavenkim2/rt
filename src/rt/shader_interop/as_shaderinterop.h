@@ -118,6 +118,56 @@ struct BUILD_RANGE_INFO
     uint32_t transformOffset;
 };
 
+#define PTLAS_TYPE_WRITE_INSTANCE              0
+#define PTLAS_TYPE_UPDATE_INSTANCE             1
+#define PTLAS_TYPE_WRITE_PARTITION_TRANSLATION 2
+
+struct PTLAS_INDIRECT_COMMAND
+{
+    uint32_t opType;
+    uint32_t argCount;
+    struct
+    {
+        uint64_t startAddress;
+        uint64_t strideInBytes;
+    };
+};
+
+#define PTLAS_WRITE_INSTANCE_INFO_STRIDE  104
+#define PTLAS_UPDATE_INSTANCE_INFO_STRIDE 16
+
+struct PTLAS_WRITE_INSTANCE_INFO
+{
+#ifdef __cplusplus
+    float transform[3][4];
+#else
+    row_major float3x4 transform;
+#endif
+    float explicitAABB[6];
+    uint32_t instanceID;
+    uint32_t instanceMask;
+    uint32_t instanceContributionToHitGroupIndex;
+    uint32_t instanceFlags;
+    uint32_t instanceIndex;
+    uint32_t partitionIndex;
+    uint64_t accelerationStructure;
+};
+
+static_assert(sizeof(PTLAS_WRITE_INSTANCE_INFO) == PTLAS_WRITE_INSTANCE_INFO_STRIDE);
+static_assert(sizeof(PTLAS_WRITE_INSTANCE_INFO) ==
+              sizeof(VkPartitionedAccelerationStructureWriteInstanceDataNV));
+
+struct PTLAS_UPDATE_INSTANCE_INFO
+{
+    uint32_t instanceIndex;
+    uint32_t instanceContributionToHitGroupIndex;
+    uint64_t accelerationStructure;
+};
+
+static_assert(sizeof(PTLAS_UPDATE_INSTANCE_INFO) == PTLAS_UPDATE_INSTANCE_INFO_STRIDE);
+static_assert(sizeof(PTLAS_UPDATE_INSTANCE_INFO) ==
+              sizeof(VkPartitionedAccelerationStructureUpdateInstanceDataNV));
+
 struct GeometryIndexAndFlags
 {
     uint32_t geometryIndex : 24;
@@ -241,7 +291,7 @@ struct TestDenseGeometry
 
 #define GLOBALS_INSTANCE_COUNT         17
 #define GLOBALS_BLAS_FINAL_COUNT_INDEX 18
-#define GLOBALS_BLAS_BYTES 19
+#define GLOBALS_BLAS_BYTES             19
 
 #define GLOBALS_SIZE 20
 

@@ -356,6 +356,11 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
         sizeof(u32) * maxInstances);
 
+    device->GetPTLASBuildSizes(maxInstances, maxInstances, 1, 0);
+
+    u32 size  = sizeof(VkPartitionedAccelerationStructureWriteInstanceDataNV);
+    u32 size2 = sizeof(PTLAS_WRITE_INSTANCE_INFO);
+
     decodeClusterDataBuffer        = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                               VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                                           sizeof(DecodeClusterData) * maxNumClusters);
@@ -1156,5 +1161,7 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
         device->EndEvent(cmd);
     }
 }
+
+// void VirtualGeometryManager::BuildPTLAS() {}
 
 } // namespace rt

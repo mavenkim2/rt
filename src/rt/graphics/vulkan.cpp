@@ -389,6 +389,15 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
             result = checkAndAddExtension(VK_NV_CLUSTER_ACCELERATION_STRUCTURE_EXTENSION_NAME,
                                           &clasPropertiesNV, &clasFeaturesNV);
             Assert(result);
+
+            ptlasPropertiesNV = {
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PARTITIONED_ACCELERATION_STRUCTURE_PROPERTIES_NV};
+            ptlasFeaturesNV = {
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PARTITIONED_ACCELERATION_STRUCTURE_FEATURES_NV};
+            result =
+                checkAndAddExtension(VK_NV_PARTITIONED_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+                                     &ptlasPropertiesNV, &ptlasFeaturesNV);
+            Assert(result);
         }
 
         *featuresChain   = 0;
@@ -3076,6 +3085,37 @@ void CommandBuffer::MoveCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData,
                  srcInfosOffset, dstClasOffset);
 }
 
+void CommandBuffer::BuildPTLAS(PTLASBuildFlags flags, GPUBuffer *ptlasBuffer,
+                               GPUBuffer *scratchBuffer, GPUBuffer *srcInfos,
+                               GPUBuffer *srcInfosCount, u32 srcInfosOffset, u32 instanceCount,
+                               u32 maxInstancesPerPartition, u32 partitionCount,
+                               u32 maxInstanceInGlobalPartitionCount)
+{
+
+    VkPartitionedAccelerationStructureInstancesInputNV inputInfo = {
+        VK_STRUCTURE_TYPE_PARTITIONED_ACCELERATION_STRUCTURE_INSTANCES_INPUT_NV};
+
+    inputInfo.flags         = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    inputInfo.instanceCount = instanceCount;
+    inputInfo.maxInstancePerPartitionCount      = maxInstancesPerPartition;
+    inputInfo.partitionCount                    = partitionCount;
+    inputInfo.maxInstanceInGlobalPartitionCount = maxInstanceInGlobalPartitionCount;
+
+    u64 ptlasAddress = device->GetDeviceAddress(ptlasBuffer->buffer);
+
+    VkBuildPartitionedAccelerationStructureInfoNV info = {
+        VK_STRUCTURE_TYPE_BUILD_PARTITIONED_ACCELERATION_STRUCTURE_INFO_NV};
+
+    info.input                        = inputInfo;
+    info.srcAccelerationStructureData = flags == PTLASBuildFlags::Update ? ptlasAddress : 0;
+    info.dstAccelerationStructureData = ptlasAddress;
+    info.scratchData                  = device->GetDeviceAddress(scratchBuffer->buffer);
+    info.srcInfos                     = device->GetDeviceAddress(srcInfos->buffer);
+    info.srcInfosCount = device->GetDeviceAddress(srcInfosCount->buffer) + srcInfosOffset;
+
+    vkCmdBuildPartitionedAccelerationStructuresNV(buffer, &info);
+}
+
 GPUAccelerationStructurePayload CommandBuffer::BuildBLAS(const GPUMesh *meshes, int count)
 {
     ScratchArena temp;
@@ -3212,6 +3252,10 @@ VkAccelerationStructureKHR CommandBuffer::BuildTLAS(GPUBuffer *accelBuffer,
     return as;
 }
 
+// void CommandBuffer::BuildPTLAS() {}
+//
+// void CommandBuffer::UpdatePTLAS() {}
+
 TransferBuffer CommandBuffer::CreateTLASInstances(Instance *instances, int numInstances,
                                                   AffineSpace *transforms,
                                                   ScenePrimitives **childScenes)
@@ -3322,6 +3366,25 @@ void Vulkan::GetMoveBuildSizes(CLASOpMode opMode, int maxNumClusters, u64 maxMov
     u32 buildSize;
     GetClusterBuildSizes(opInput, opMode, CLASOpType::Move | CLASOpType::CLAS, buildSize,
                          scratchSize, accelerationStructureSize);
+}
+
+void Vulkan::GetPTLASBuildSizes(u32 instanceCount, u32 maxInstancesPerPartition,
+                                u32 partitionCount, u32 maxInstanceInGlobalPartitionCount)
+{
+    VkPartitionedAccelerationStructureInstancesInputNV inputInfo = {
+        VK_STRUCTURE_TYPE_PARTITIONED_ACCELERATION_STRUCTURE_INSTANCES_INPUT_NV};
+
+    inputInfo.flags         = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    inputInfo.instanceCount = instanceCount;
+    inputInfo.maxInstancePerPartitionCount      = maxInstancesPerPartition;
+    inputInfo.partitionCount                    = partitionCount;
+    inputInfo.maxInstanceInGlobalPartitionCount = maxInstanceInGlobalPartitionCount;
+
+    VkAccelerationStructureBuildSizesInfoKHR buildSizes = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+
+    vkGetPartitionedAccelerationStructuresBuildSizesNV(device, &inputInfo, &buildSizes);
+    int stop = 5;
 }
 
 void Vulkan::GetBuildSizes(VkAccelerationStructureTypeKHR accelType,
