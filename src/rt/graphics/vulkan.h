@@ -20,6 +20,7 @@
 
 namespace rt
 {
+
 struct AffineSpace;
 struct Instance;
 struct Mesh;
@@ -123,12 +124,6 @@ union VkOpInput
     VkClusterAccelerationStructureClustersBottomLevelInputNV clustersBottomLevel;
     VkClusterAccelerationStructureTriangleClusterInputNV triangleClusters;
     VkClusterAccelerationStructureMoveObjectsInputNV moveObjects;
-};
-
-enum class PTLASBuildFlags
-{
-    Build,
-    Update,
 };
 
 enum class ResourceUsage : u32
@@ -764,9 +759,9 @@ struct CommandBuffer
                   GPUBuffer *dstAddresses, GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
                   GPUBuffer *srcInfosCount, u32 srcInfosOffset, int maxNumClusters,
                   u64 maxMovedBytes, bool noMoveOverlap, u32 dstClasOffset = 0);
-    void BuildPTLAS(PTLASBuildFlags flags, GPUBuffer *ptlasBuffer, GPUBuffer *scratchBuffer,
-                    GPUBuffer *srcInfos, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
-                    u32 instanceCount, u32 maxInstancesPerPartition, u32 partitionCount,
+    void BuildPTLAS(GPUBuffer *ptlasBuffer, GPUBuffer *scratchBuffer, GPUBuffer *srcInfos,
+                    GPUBuffer *srcInfosCount, u32 srcInfosOffset, u32 instanceCount,
+                    u32 maxInstancesPerPartition, u32 partitionCount,
                     u32 maxInstanceInGlobalPartitionCount);
     void BuildClusterBLAS(CLASOpMode opMode, GPUBuffer *implicitBuffer,
                           GPUBuffer *scratchBuffer, GPUBuffer *bottomLevelInfo,
@@ -1047,7 +1042,8 @@ struct Vulkan
                            bool noMoveOverlap, u32 &scratchSize,
                            u32 &accelerationStructureSize);
     void GetPTLASBuildSizes(u32 instanceCount, u32 maxInstancesPerPartition,
-                            u32 partitionCount, u32 maxInstanceInGlobalPartitionCount);
+                            u32 partitionCount, u32 maxInstanceInGlobalPartitionCount,
+                            u32 &scratchSize, u32 &accelSize);
     void GetBuildSizes(VkAccelerationStructureTypeKHR accelType,
                        VkAccelerationStructureGeometryKHR *geometries, int count,
                        VkAccelerationStructureBuildRangeInfoKHR *buildRanges,

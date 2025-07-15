@@ -270,6 +270,7 @@ set(SHADER_FILES "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl"
     "${SHADER_SRC_DIR}/clas/compute_clas_addresses.hlsl"
     "${SHADER_SRC_DIR}/clas/write_clas_defrag_addresses.hlsl"
     "${SHADER_SRC_DIR}/clas/compute_blas_addresses.hlsl"
+    "${SHADER_SRC_DIR}/clas/ptlas_write_instances.hlsl"
 )
 set_property(SOURCE 
     "${SHADER_SRC_DIR}/render_raytrace_rgen.hlsl" 
@@ -294,6 +295,7 @@ set_property(SOURCE
     "${SHADER_SRC_DIR}/clas/compute_clas_addresses.hlsl"
     "${SHADER_SRC_DIR}/clas/write_clas_defrag_addresses.hlsl"
     "${SHADER_SRC_DIR}/clas/compute_blas_addresses.hlsl"
+    "${SHADER_SRC_DIR}/clas/ptlas_write_instances.hlsl"
     PROPERTY name "cs")
 
 file(GLOB_RECURSE SHADER_INCLUDES "${SHADER_SRC_DIR}/*.hlsl" "${SHADER_SRC_DIR}/*.hlsli")

@@ -56,7 +56,7 @@ struct DecodeClusterData
 
 struct BLASData
 {
-    uint instanceIndex;
+    uint instanceRefIndex;
     uint clusterStartIndex;
     uint clusterCount;
 
@@ -153,10 +153,6 @@ struct PTLAS_WRITE_INSTANCE_INFO
     uint64_t accelerationStructure;
 };
 
-static_assert(sizeof(PTLAS_WRITE_INSTANCE_INFO) == PTLAS_WRITE_INSTANCE_INFO_STRIDE);
-static_assert(sizeof(PTLAS_WRITE_INSTANCE_INFO) ==
-              sizeof(VkPartitionedAccelerationStructureWriteInstanceDataNV));
-
 struct PTLAS_UPDATE_INSTANCE_INFO
 {
     uint32_t instanceIndex;
@@ -164,9 +160,10 @@ struct PTLAS_UPDATE_INSTANCE_INFO
     uint64_t accelerationStructure;
 };
 
+#ifdef __cplusplus
+static_assert(sizeof(PTLAS_WRITE_INSTANCE_INFO) == PTLAS_WRITE_INSTANCE_INFO_STRIDE);
 static_assert(sizeof(PTLAS_UPDATE_INSTANCE_INFO) == PTLAS_UPDATE_INSTANCE_INFO_STRIDE);
-static_assert(sizeof(PTLAS_UPDATE_INSTANCE_INFO) ==
-              sizeof(VkPartitionedAccelerationStructureUpdateInstanceDataNV));
+#endif
 
 struct GeometryIndexAndFlags
 {
@@ -196,6 +193,12 @@ struct AddressPushConstant
     uint addressHighBits;
 };
 
+struct PtlasPushConstant
+{
+    uint64_t writeAddress;
+    uint64_t updateAddress;
+};
+
 struct NumPushConstant
 {
     uint num;
@@ -207,6 +210,8 @@ struct NumPushConstant
 struct PackedHierarchyNode
 {
     float4 lodBounds[CHILDREN_PER_HIERARCHY_NODE];
+    float3 center[CHILDREN_PER_HIERARCHY_NODE];
+    float3 extents[CHILDREN_PER_HIERARCHY_NODE];
     float maxParentError[CHILDREN_PER_HIERARCHY_NODE];
     uint childRef[CHILDREN_PER_HIERARCHY_NODE];
     uint leafInfo[CHILDREN_PER_HIERARCHY_NODE];
@@ -225,6 +230,8 @@ struct GPUInstance
 
 struct InstanceRef
 {
+    // TODO: variable-bit rate compression or quantize to 8-bit relative to partition bounds
+    float bounds[6];
     uint instanceID;
     uint nodeOffset;
 };
@@ -293,7 +300,9 @@ struct TestDenseGeometry
 #define GLOBALS_BLAS_FINAL_COUNT_INDEX 18
 #define GLOBALS_BLAS_BYTES             19
 
-#define GLOBALS_SIZE 20
+#define GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX 20
+
+#define GLOBALS_SIZE 21
 
 #ifdef __cplusplus
 }

@@ -103,6 +103,10 @@ struct VirtualGeometryManager
     DescriptorSetLayout computeBlasAddressesLayout = {};
     VkPipeline computeBlasAddressesPipeline;
 
+    PushConstant ptlasWriteInstancesPush;
+    DescriptorSetLayout ptlasWriteInstancesLayout = {};
+    VkPipeline ptlasWriteInstancesPipeline;
+
     GPUBuffer evictedPagesBuffer;
     GPUBuffer hierarchyNodeBuffer;
     GPUBuffer clusterPageDataBuffer;
@@ -147,6 +151,14 @@ struct VirtualGeometryManager
     GPUBuffer blasAccelAddresses;
     GPUBuffer blasAccelSizes;
 
+    GPUBuffer tlasScratchBuffer;
+    GPUBuffer tlasAccelBuffer;
+
+    GPUBuffer ptlasIndirectCommandBuffer;
+    GPUBuffer ptlasWriteInfosBuffer;
+    GPUBuffer ptlasUpdateInfosBuffer;
+    GPUBuffer ptlasInstanceBitVectorBuffer;
+
     // u32 requestBatchWriteIndex;
     // RingBuffer<StreamingRequestBatch> streamingRequestBatches;
     // StaticArray<StreamingRequest, maxQueueBatches * maxStreamingRequestsPerFrame>
@@ -170,6 +182,7 @@ struct VirtualGeometryManager
                             GPUBuffer *gpuSceneBuffer, GPUBuffer *workItemQueueBuffer,
                             GPUBuffer *gpuInstancesBuffer, GPUBuffer *visibleClustersBuffer);
     void BuildClusterBLAS(CommandBuffer *cmd, GPUBuffer *visibleClustersBuffer);
+    void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances);
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);
 };

@@ -10,6 +10,7 @@ RWStructuredBuffer<BUILD_RANGE_INFO> buildRangeInfos : register(u5);
 [numthreads(32, 1, 1)]
 void main(uint3 DTid : SV_DispatchThreadID)
 {
+#if 0
     uint blasIndex = DTid.x;
     if (blasIndex >= globals[GLOBALS_BLAS_COUNT_INDEX]) return;
 
@@ -30,4 +31,5 @@ void main(uint3 DTid : SV_DispatchThreadID)
     instanceDescriptor.blasDeviceAddress = blasAddresses[blasData.addressIndex];
 
     instanceDescriptors[index] = instanceDescriptor;
+#endif
 }

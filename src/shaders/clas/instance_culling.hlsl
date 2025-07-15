@@ -32,7 +32,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
     nodeQueue[blasIndex] = candidateNode;
 
-    blasDatas[blasIndex].instanceIndex = ref.instanceID;
+    blasDatas[blasIndex].instanceRefIndex = instanceRefIndex;//ref.instanceID;
 
     InterlockedAdd(queue[0].nodeWriteOffset, 1);
     InterlockedAdd(queue[0].numNodes, 1);

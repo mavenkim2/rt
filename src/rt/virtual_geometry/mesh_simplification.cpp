@@ -3752,6 +3752,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         for (int i = 0; i < child.numChildren; i++)
         {
             packed.lodBounds[i]      = child.lodBounds[i];
+            packed.center[i]         = ToVec3f(child.bounds[i].Centroid());
+            packed.extents[i]        = ToVec3f(child.bounds[i].maxP - child.bounds[i].minP);
             packed.maxParentError[i] = child.maxParentError[i];
 
             if (child.children)

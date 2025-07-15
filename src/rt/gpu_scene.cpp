@@ -1191,6 +1191,14 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
             virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer);
 
+            virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer);
+            cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                         VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                         VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+                         VK_ACCESS_2_SHADER_READ_BIT);
+            cmd->FlushBarriers();
+
+#if 0
             {
                 // Prepare instance descriptors for TLAS build
                 device->BeginEvent(cmd, "Prepare TLAS");
@@ -1233,6 +1241,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 cmd->FlushBarriers();
                 device->EndEvent(cmd);
             }
+#endif
         }
 
         RayPushConstant pc;

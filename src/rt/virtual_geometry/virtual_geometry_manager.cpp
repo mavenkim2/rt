@@ -12,6 +12,11 @@
 namespace rt
 {
 
+static_assert(sizeof(PTLAS_WRITE_INSTANCE_INFO) ==
+              sizeof(VkPartitionedAccelerationStructureWriteInstanceDataNV));
+static_assert(sizeof(PTLAS_UPDATE_INSTANCE_INFO) ==
+              sizeof(VkPartitionedAccelerationStructureUpdateInstanceDataNV));
+
 VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
     : physicalPages(arena, maxPages + 2), virtualTable(arena, maxVirtualPages),
       meshInfos(arena, 1), instanceRefs(arena, maxInstances), currentClusterTotal(0),
@@ -71,6 +76,11 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
     string computeBlasAddressesData   = OS_ReadFile(arena, computeBlasAddressesName);
     Shader computeBlasAddressesShader = device->CreateShader(
         ShaderStage::Compute, "compute blas addresses", computeBlasAddressesData);
+
+    string ptlasWriteInstancesName   = "../src/shaders/ptlas_write_instances.spv";
+    string ptlasWriteInstancesData   = OS_ReadFile(arena, ptlasWriteInstancesName);
+    Shader ptlasWriteInstancesShader = device->CreateShader(
+        ShaderStage::Compute, "ptlas write instances", ptlasWriteInstancesData);
 
     // fill cluster triangle info
     fillClusterTriangleInfoPush.stage  = ShaderStage::Compute;
@@ -228,6 +238,18 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
         device->CreateComputePipeline(&computeBlasAddressesShader, &computeBlasAddressesLayout,
                                       &computeBlasAddressesPush, "compute blas addresses");
 
+    ptlasWriteInstancesPush.size   = sizeof(PtlasPushConstant);
+    ptlasWriteInstancesPush.offset = 0;
+    ptlasWriteInstancesPush.stage  = ShaderStage::Compute;
+    for (int i = 0; i <= 8; i++)
+    {
+        ptlasWriteInstancesLayout.AddBinding(i, DescriptorType::StorageBuffer,
+                                             VK_SHADER_STAGE_COMPUTE_BIT);
+    }
+    ptlasWriteInstancesPipeline =
+        device->CreateComputePipeline(&ptlasWriteInstancesShader, &ptlasWriteInstancesLayout,
+                                      &ptlasWriteInstancesPush, "compute blas addresses");
+
     // Buffers
     maxWriteClusters        = MAX_CLUSTERS_PER_PAGE * maxPages;
     instanceRefBuffer       = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT |
@@ -356,10 +378,29 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
         sizeof(u32) * maxInstances);
 
-    device->GetPTLASBuildSizes(maxInstances, maxInstances, 1, 0);
+    u32 tlasScratchSize, tlasAccelSize;
+    device->GetPTLASBuildSizes(maxInstances, maxInstances, 1, 0, tlasScratchSize,
+                               tlasAccelSize);
 
-    u32 size  = sizeof(VkPartitionedAccelerationStructureWriteInstanceDataNV);
-    u32 size2 = sizeof(PTLAS_WRITE_INSTANCE_INFO);
+    tlasScratchBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, tlasScratchSize);
+    tlasAccelBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, tlasAccelSize);
+    ptlasIndirectCommandBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        sizeof(PTLAS_INDIRECT_COMMAND));
+
+    ptlasWriteInfosBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        sizeof(PTLAS_WRITE_INSTANCE_INFO) * maxInstances);
+    ptlasUpdateInfosBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        sizeof(PTLAS_UPDATE_INSTANCE_INFO) * maxInstances);
+    ptlasInstanceBitVectorBuffer =
+        device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, maxInstances >> 3u);
 
     decodeClusterDataBuffer        = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                               VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -488,6 +529,37 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, u8 *pag
     graph.offsets = pageOffsets;
     graph.data    = pageToNodeData;
 
+    // Get bounds of instance ref
+    for (u32 rebraidIndex = 0; rebraidIndex < numRebraid; rebraidIndex++)
+    {
+        u32 rebraid               = rebraidIndices[rebraidIndex];
+        PackedHierarchyNode &node = nodes[rebraid];
+        InstanceRef ref;
+        ref.bounds[0] = pos_inf;
+        ref.bounds[1] = pos_inf;
+        ref.bounds[2] = pos_inf;
+
+        ref.bounds[3] = neg_inf;
+        ref.bounds[4] = neg_inf;
+        ref.bounds[5] = neg_inf;
+        for (int childIndex = 0; childIndex < CHILDREN_PER_HIERARCHY_NODE; childIndex++)
+        {
+            if (node.childRef[childIndex] == ~0u) continue;
+
+            for (int axis = 0; axis < 3; axis++)
+            {
+                float maxVal = node.center[childIndex][axis] + node.extents[childIndex][axis];
+                float minVal = node.center[childIndex][axis] - node.extents[childIndex][axis];
+
+                ref.bounds[axis]     = Min(ref.bounds[axis], minVal);
+                ref.bounds[3 + axis] = Max(ref.bounds[3 + axis], minVal);
+            }
+        }
+        ref.instanceID = 0;
+        ref.nodeOffset = rebraid;
+        instanceRefs.Push(ref);
+    }
+
     for (u32 nodeIndex = 0; nodeIndex < numNodes; nodeIndex++)
     {
         for (u32 i = 0; i < CHILDREN_PER_HIERARCHY_NODE; i++)
@@ -515,16 +587,6 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, u8 *pag
 
     meshInfos.Push(meshInfo);
 
-    // TEMP
-    for (u32 rebraidIndex = 0; rebraidIndex < numRebraid; rebraidIndex++)
-    {
-        u32 rebraid = rebraidIndices[rebraidIndex];
-        InstanceRef ref;
-        ref.instanceID = 0;
-        ref.nodeOffset = rebraid;
-        instanceRefs.Push(ref);
-    }
-
     return meshInfos.Length() - 1;
 }
 
@@ -543,8 +605,8 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
     // fix up the hierarchy nodes
 
     // TODO: async copy
-    // u32 batchIndex  = (requestBatchWriteIndex + (maxQueueBatches - 1)) % (maxQueueBatches);
-    // u32 numRequests = streamingRequestBatches[batchIndex];
+    // u32 batchIndex  = (requestBatchWriteIndex + (maxQueueBatches - 1)) %
+    // (maxQueueBatches); u32 numRequests = streamingRequestBatches[batchIndex];
 
     ScratchArena scratch;
     u32 requestStartIndex = 0; // batchIndex * maxStreamingRequestsPerFrame;
@@ -1162,6 +1224,42 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
     }
 }
 
-// void VirtualGeometryManager::BuildPTLAS() {}
+void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances)
+{
+    // Update/write PTLAS instances
+    {
+        u64 writeAddress  = device->GetDeviceAddress(ptlasWriteInfosBuffer.buffer);
+        u64 updateAddress = device->GetDeviceAddress(ptlasUpdateInfosBuffer.buffer);
+
+        PtlasPushConstant pc;
+        pc.writeAddress  = writeAddress;
+        pc.updateAddress = updateAddress;
+
+        cmd->StartBindingCompute(ptlasWriteInstancesPipeline, &ptlasWriteInstancesLayout)
+            .Bind(&blasAccelAddresses)
+            .Bind(&clasGlobalsBuffer)
+            .Bind(&blasDataBuffer)
+            .Bind(gpuInstances)
+            .Bind(&ptlasWriteInfosBuffer)
+            .Bind(&ptlasUpdateInfosBuffer)
+            .Bind(&ptlasIndirectCommandBuffer)
+            .Bind(&instanceRefBuffer)
+            .Bind(&ptlasInstanceBitVectorBuffer)
+            .PushConstants(&ptlasWriteInstancesPush, &pc)
+            .End();
+
+        cmd->DispatchIndirect(&clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_INDIRECT_X);
+
+        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                     VK_ACCESS_2_SHADER_WRITE_BIT,
+                     VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+        cmd->FlushBarriers();
+    }
+
+    cmd->BuildPTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &ptlasIndirectCommandBuffer,
+                    &clasGlobalsBuffer, sizeof(u32) * GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX,
+                    maxInstances, maxInstances, 1, 0);
+}
 
 } // namespace rt
