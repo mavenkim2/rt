@@ -3747,6 +3747,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             rebraidIndices.Push(hierarchy.Length());
         }
 
+        Print("node index: %u, clustertotal : %u\n", childOffset, clusterTotal);
+
         for (int i = 0; i < child.numChildren; i++)
         {
             packed.lodBounds[i]      = child.lodBounds[i];

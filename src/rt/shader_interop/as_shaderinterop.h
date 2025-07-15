@@ -30,7 +30,7 @@ namespace rt
 #define MAX_CANDIDATE_CLUSTERS (1u << 24)
 #define MAX_VISIBLE_CLUSTERS   (1u << 22)
 
-#define MAX_CLUSTERS_PER_BLAS 16384
+#define MAX_CLUSTERS_PER_BLAS 8192
 
 static const uint32_t kFillInstanceDescsThreads = 32;
 
@@ -59,6 +59,8 @@ struct BLASData
     uint instanceIndex;
     uint clusterStartIndex;
     uint clusterCount;
+
+    uint addressIndex;
 };
 
 struct AccelerationStructureInstance
@@ -106,6 +108,14 @@ struct BUILD_CLUSTERS_TRIANGLE_INFO
     uint64_t geometryIndexAndFlagsBuffer;
     uint64_t opacityMicromapArray;
     uint64_t opacityMicromapIndexBuffer;
+};
+
+struct BUILD_RANGE_INFO
+{
+    uint32_t primitiveCount;
+    uint32_t primitiveOffset;
+    uint32_t firstVertex;
+    uint32_t transformOffset;
 };
 
 struct GeometryIndexAndFlags
@@ -229,7 +239,11 @@ struct TestDenseGeometry
 
 #define GLOBALS_STREAMING_REQUEST_COUNT_INDEX 16
 
-#define GLOBALS_SIZE 17
+#define GLOBALS_INSTANCE_COUNT         17
+#define GLOBALS_BLAS_FINAL_COUNT_INDEX 18
+#define GLOBALS_BLAS_BYTES 19
+
+#define GLOBALS_SIZE 20
 
 #ifdef __cplusplus
 }

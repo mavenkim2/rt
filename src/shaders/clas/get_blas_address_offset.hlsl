@@ -9,6 +9,8 @@ void main(uint3 DTid : SV_DispatchThreadID)
     uint blasIndex = DTid.x;
     if (blasIndex >= globals[GLOBALS_BLAS_COUNT_INDEX]) return;
 
+    if (blasDatas[blasIndex].clusterCount == 0) return;
+
     uint clasStartIndex;
     InterlockedAdd(globals[GLOBALS_BLAS_CLAS_COUNT_INDEX], blasDatas[blasIndex].clusterCount, clasStartIndex);
 

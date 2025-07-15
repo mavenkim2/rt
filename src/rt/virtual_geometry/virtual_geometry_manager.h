@@ -27,8 +27,7 @@ struct VirtualGeometryManager
         maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_VERTICES;
     const u32 maxNumClusters = maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE;
 
-    // const u32 maxInstances                            = 1024;
-    const u32 maxInstances                            = 1; // 1024;
+    const u32 maxInstances                            = 1024;
     const u32 maxTotalClusterCount                    = MAX_CLUSTERS_PER_BLAS * maxInstances;
     const u32 maxClusterCountPerAccelerationStructure = MAX_CLUSTERS_PER_BLAS;
 
@@ -100,9 +99,15 @@ struct VirtualGeometryManager
     DescriptorSetLayout getBlasAddressOffsetLayout = {};
     VkPipeline getBlasAddressOffsetPipeline;
 
+    PushConstant computeBlasAddressesPush;
+    DescriptorSetLayout computeBlasAddressesLayout = {};
+    VkPipeline computeBlasAddressesPipeline;
+
     GPUBuffer evictedPagesBuffer;
     GPUBuffer hierarchyNodeBuffer;
     GPUBuffer clusterPageDataBuffer;
+
+    GPUBuffer instanceRefBuffer;
 
     GPUBuffer uploadBuffer;
     GPUBuffer streamingRequestsBuffer;
@@ -152,6 +157,7 @@ struct VirtualGeometryManager
 
     // Range in virtual page space for each instanced geometry
     StaticArray<MeshInfo> meshInfos;
+    StaticArray<InstanceRef> instanceRefs;
 
     StaticArray<int> virtualTable;
     StaticArray<Page> physicalPages;

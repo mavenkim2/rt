@@ -691,7 +691,7 @@ struct CommandBuffer
     void SubmitTransfer(TransferBuffer *buffer, u32 dstOffset = 0);
     TransferBuffer SubmitBuffer(void *ptr, VkBufferUsageFlags2 flags, size_t totalSize,
                                 u32 dstOffset = 0);
-    void SubmitBuffer(GPUBuffer *dst, void *ptr, size_t totalSize, u32 dstOffset);
+    void SubmitBuffer(GPUBuffer *dst, void *ptr, size_t totalSize, u32 dstOffset = 0);
     TransferBuffer SubmitImage(void *ptr, ImageDesc desc);
     void CopyBuffer(GPUBuffer *dst, GPUBuffer *src, BufferToBufferCopy *copies, u32 num);
     void CopyImage(GPUBuffer *transfer, GPUImage *image, BufferImageCopy *copies, u32 num);
@@ -739,11 +739,16 @@ struct CommandBuffer
     void CLASIndirect(CLASOpInput opInput, CLASOpMode opMode, CLASOpType opType,
                       GPUBuffer *dstImplicitData, GPUBuffer *scratchBuffer,
                       GPUBuffer *dstAddresses, GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
-                      GPUBuffer *srcInfosCount, u32 srcInfosOffset, u32 dstClasOffset);
+                      GPUBuffer *srcInfosCount, u32 srcInfosOffset, u32 dstClasOffset = 0);
     void ComputeCLASSizes(GPUBuffer *srcInfosArray, GPUBuffer *scratchBuffer,
                           GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
                           u32 dstClasOffset, u32 maxNumTriangles, u32 maxNumVertices,
                           u32 maxNumClusters);
+    void ComputeBLASSizes(GPUBuffer *srcInfosArray, GPUBuffer *scratchBuffer,
+                          GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
+                          u32 maxTotalClusterCount,
+                          u32 maxClusterCountPerAccelerationStructure,
+                          u32 maxAccelerationStructureCount);
     void BuildCLAS(CLASOpMode opMode, GPUBuffer *dstImplicitData, GPUBuffer *scratchBuffer,
                    GPUBuffer *triangleClusterInfo, GPUBuffer *dstAddresses,
                    GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
@@ -753,10 +758,12 @@ struct CommandBuffer
                   GPUBuffer *dstAddresses, GPUBuffer *dstSizes, GPUBuffer *srcInfosArray,
                   GPUBuffer *srcInfosCount, u32 srcInfosOffset, int maxNumClusters,
                   u64 maxMovedBytes, bool noMoveOverlap, u32 dstClasOffset = 0);
-    void BuildClusterBLAS(GPUBuffer *implicitBuffer, GPUBuffer *scratchBuffer,
-                          GPUBuffer *bottomLevelInfo, GPUBuffer *dstAddresses,
-                          GPUBuffer *dstSizes, GPUBuffer *srcInfosCount, u32 srcInfosOffset,
-                          u32 numClusters, u32 maxAccelerationStructureCount);
+    void BuildClusterBLAS(CLASOpMode opMode, GPUBuffer *implicitBuffer,
+                          GPUBuffer *scratchBuffer, GPUBuffer *bottomLevelInfo,
+                          GPUBuffer *dstAddresses, GPUBuffer *dstSizes,
+                          GPUBuffer *srcInfosCount, u32 srcInfosOffset,
+                          u32 maxClusterCountPerAccelerationStructure,
+                          u32 maxTotalClusterCount, u32 maxAccelerationStructureCount);
 
     TransferBuffer CreateTLASInstances(Instance *instances, int numInstances,
                                        AffineSpace *transforms, ScenePrimitives **childScenes);
@@ -766,6 +773,9 @@ struct CommandBuffer
                                               ScenePrimitives **childScenes);
     VkAccelerationStructureKHR BuildTLAS(GPUBuffer *accelBuffer, GPUBuffer *scratchBuffer,
                                          GPUBuffer *instanceData, u32 numInstances);
+    VkAccelerationStructureKHR BuildTLAS(GPUBuffer *accelBuffer, GPUBuffer *scratchBuffer,
+                                         GPUBuffer *instanceData, GPUBuffer *buildRangeBuffer,
+                                         u32 maxInstances);
     GPUAccelerationStructurePayload BuildBLAS(const GPUMesh *meshes, int count);
     GPUAccelerationStructurePayload BuildCustomBLAS(GPUBuffer *aabbsBuffer, u32 numAabbs);
     void ClearBuffer(GPUBuffer *b, u32 val = 0);
@@ -1016,7 +1026,7 @@ struct Vulkan
     void GetCLASBuildSizes(CLASOpMode opMode, int maxNumClusters, u32 maxNumTriangles,
                            u32 maxNumVertices, u32 &scratchSize,
                            u32 &accelerationStructureSize);
-    void GetClusterBLASBuildSizes(u32 maxTotalClusterCount,
+    void GetClusterBLASBuildSizes(CLASOpMode opMode, u32 maxTotalClusterCount,
                                   u32 maxClusterCountPerAccelerationStructure,
                                   u32 maxAccelerationStructureCount, u32 &scratchSize,
                                   u32 &accelerationStructureSize);

@@ -238,16 +238,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
     // fill instance descs
     DescriptorSetLayout fillInstanceLayout = {};
-    fillInstanceLayout.AddBinding(0, DescriptorType::StorageBuffer,
-                                  VK_SHADER_STAGE_COMPUTE_BIT);
-    fillInstanceLayout.AddBinding(1, DescriptorType::StorageBuffer,
-                                  VK_SHADER_STAGE_COMPUTE_BIT);
-    fillInstanceLayout.AddBinding(2, DescriptorType::StorageBuffer,
-                                  VK_SHADER_STAGE_COMPUTE_BIT);
-    fillInstanceLayout.AddBinding(3, DescriptorType::StorageBuffer,
-                                  VK_SHADER_STAGE_COMPUTE_BIT);
-    fillInstanceLayout.AddBinding(4, DescriptorType::StorageBuffer,
-                                  VK_SHADER_STAGE_COMPUTE_BIT);
+    for (int i = 0; i <= 5; i++)
+    {
+        fillInstanceLayout.AddBinding(i, DescriptorType::StorageBuffer,
+                                      VK_SHADER_STAGE_COMPUTE_BIT);
+    }
     VkPipeline fillInstancePipeline = device->CreateComputePipeline(
         &fillInstanceShader, &fillInstanceLayout, 0, "fill instance descs");
 
@@ -265,16 +260,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     instanceCullingPush.offset       = 0;
 
     DescriptorSetLayout instanceCullingLayout = {};
-    instanceCullingLayout.AddBinding(0, DescriptorType::StorageBuffer,
-                                     VK_SHADER_STAGE_COMPUTE_BIT);
-    instanceCullingLayout.AddBinding(1, DescriptorType::StorageBuffer,
-                                     VK_SHADER_STAGE_COMPUTE_BIT);
-    instanceCullingLayout.AddBinding(2, DescriptorType::StorageBuffer,
-                                     VK_SHADER_STAGE_COMPUTE_BIT);
-    instanceCullingLayout.AddBinding(3, DescriptorType::StorageBuffer,
-                                     VK_SHADER_STAGE_COMPUTE_BIT);
-    instanceCullingLayout.AddBinding(4, DescriptorType::StorageBuffer,
-                                     VK_SHADER_STAGE_COMPUTE_BIT);
+    for (int i = 0; i <= 5; i++)
+    {
+        instanceCullingLayout.AddBinding(i, DescriptorType::StorageBuffer,
+                                         VK_SHADER_STAGE_COMPUTE_BIT);
+    }
 
     VkPipeline instanceCullingPipeline =
         device->CreateComputePipeline(&instanceCullingShader, &instanceCullingLayout,
@@ -710,6 +700,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             clusterFileHeader.numNodes, clusterFileHeader.numPages, numRebraid);
     }
 
+    dgfTransferCmd->SubmitBuffer(
+        &virtualGeometryManager.instanceRefBuffer, virtualGeometryManager.instanceRefs.data,
+        sizeof(InstanceRef) * virtualGeometryManager.instanceRefs.Length());
+
     GPUBuffer visibleClustersBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         MAX_VISIBLE_CLUSTERS * sizeof(VisibleCluster));
@@ -742,10 +736,17 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        numInstances * sizeof(VkAccelerationStructureInstanceKHR));
+        virtualGeometryManager.maxInstances * sizeof(VkAccelerationStructureInstanceKHR));
+
+    GPUBuffer tlasBuildRangeBuffer = device->CreateBuffer(
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        sizeof(BUILD_RANGE_INFO));
 
     u32 tlasScratchSize, tlasAccelSize;
-    device->GetTLASBuildSizes(numInstances, tlasScratchSize, tlasAccelSize);
+    device->GetTLASBuildSizes(virtualGeometryManager.maxInstances, tlasScratchSize,
+                              tlasAccelSize);
     GPUBuffer tlasScratchBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
@@ -1008,6 +1009,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             computeCmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.blasDataBuffer);
+            computeCmd->ClearBuffer(&tlasBuildRangeBuffer);
 
             computeCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1016,8 +1018,9 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             computeCmd->FlushBarriers();
 
             {
+                u32 numInstanceRefs = virtualGeometryManager.instanceRefs.Length();
                 NumPushConstant instanceCullingPushConstant;
-                instanceCullingPushConstant.num = numInstances;
+                instanceCullingPushConstant.num = numInstanceRefs;
                 device->BeginEvent(computeCmd, "Instance Culling");
 
                 computeCmd
@@ -1027,10 +1030,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
                     .Bind(&queueBuffer)
                     .Bind(&virtualGeometryManager.blasDataBuffer)
+                    .Bind(&virtualGeometryManager.instanceRefBuffer)
                     .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                     .End();
 
-                computeCmd->Dispatch((numInstances + 63) / 64, 1, 1);
+                computeCmd->Dispatch((numInstanceRefs + 63) / 64, 1, 1);
                 computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                     VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
@@ -1058,32 +1062,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             // instance combining at far view distances
             // proxies for culled instances, feedback and just in time build?
 
-            // if (device->frameCount == 2)
             // TODO: when clusters are not in view, z is negative. This causes the edges scales
             // to go to zero, when it should be culled instead.
-            // {
-            //     GPUBuffer readback =
-            //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            //                              workItemQueueBuffer.size, MemoryUsage::GPU_TO_CPU);
-            //     Semaphore testSemaphore   = device->CreateSemaphore();
-            //     testSemaphore.signalValue = 1;
-            //     computeCmd->Barrier(
-            //         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            //         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-            //         VK_ACCESS_2_TRANSFER_READ_BIT);
-            //     computeCmd->FlushBarriers();
-            //     computeCmd->CopyBuffer(&readback, &workItemQueueBuffer);
-            //     computeCmd->SignalOutsideFrame(testSemaphore);
-            //
-            //     device->SubmitCommandBuffer(computeCmd);
-            //     device->Wait(testSemaphore);
-            //
-            //     // BLASData *data = (BLASData *)readback.mappedPtr;
-            //     // u32 *data = (u32 *)readback.mappedPtr;
-            //     Vec4f *data = (Vec4f *)readback.mappedPtr;
-            //
-            //     int stop = 5;
-            // }
 
             computeCmd->CopyBuffer(&virtualGeometryManager.readbackBuffer,
                                    &virtualGeometryManager.streamingRequestsBuffer);
@@ -1152,23 +1132,22 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
             // Instance culling
             {
+                u32 numInstanceRefs = virtualGeometryManager.instanceRefs.Length();
                 NumPushConstant instanceCullingPushConstant;
-                instanceCullingPushConstant.num = numInstances;
+                instanceCullingPushConstant.num = numInstanceRefs;
                 device->BeginEvent(cmd, "Instance Culling");
 
-                cmd->BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, instanceCullingPipeline);
-                DescriptorSet ds = instanceCullingLayout.CreateDescriptorSet();
-                ds.Bind(&gpuInstancesBuffer.buffer)
+                cmd->StartBindingCompute(instanceCullingPipeline, &instanceCullingLayout)
+                    .Bind(&gpuInstancesBuffer.buffer)
                     .Bind(&virtualGeometryManager.clasGlobalsBuffer)
                     .Bind(&workItemQueueBuffer, 0, sizeof(Vec4u) * MAX_CANDIDATE_NODES)
                     .Bind(&queueBuffer)
-                    .Bind(&virtualGeometryManager.blasDataBuffer);
+                    .Bind(&virtualGeometryManager.blasDataBuffer)
+                    .Bind(&virtualGeometryManager.instanceRefBuffer)
+                    .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
+                    .End();
 
-                cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
-                                        instanceCullingLayout.pipelineLayout);
-                cmd->PushConstants(&instanceCullingPush, &instanceCullingPushConstant,
-                                   instanceCullingLayout.pipelineLayout);
-                cmd->Dispatch((numInstances + 63) / 64, 1, 1);
+                cmd->Dispatch((numInstanceRefs + 63) / 64, 1, 1);
                 cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                              VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
@@ -1222,7 +1201,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&virtualGeometryManager.clasGlobalsBuffer)
                     .Bind(&virtualGeometryManager.blasDataBuffer)
                     .Bind(&gpuInstancesBuffer.buffer)
-                    .Bind(&tlasBuffer);
+                    .Bind(&tlasBuffer)
+                    .Bind(&tlasBuildRangeBuffer);
                 cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                                         fillInstanceLayout.pipelineLayout);
 
@@ -1241,7 +1221,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 // TODO: partitioned TLAS
                 // Build the TLAS
                 device->BeginEvent(cmd, "Build TLAS");
-                tlas.as = cmd->BuildTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &tlasBuffer, 1);
+                // tlas.as = cmd->BuildTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &tlasBuffer,
+                // 1);
+                tlas.as =
+                    cmd->BuildTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &tlasBuffer,
+                                   &tlasBuildRangeBuffer, virtualGeometryManager.maxInstances);
                 cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                              VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
