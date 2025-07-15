@@ -27,6 +27,11 @@ struct VirtualGeometryManager
         maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_VERTICES;
     const u32 maxNumClusters = maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE;
 
+    // const u32 maxInstances                            = 1024;
+    const u32 maxInstances                            = 1; // 1024;
+    const u32 maxTotalClusterCount                    = MAX_CLUSTERS_PER_BLAS * maxInstances;
+    const u32 maxClusterCountPerAccelerationStructure = MAX_CLUSTERS_PER_BLAS;
+
     struct StreamingRequestBatch
     {
         u32 numRequests;
@@ -52,8 +57,10 @@ struct VirtualGeometryManager
 
         // TODO: replace with filename
         u8 *pageData;
+        u32 *rebraid;
         u32 hierarchyNodeOffset;
         u32 virtualPageOffset;
+        u32 numRebraid;
     };
 
     u32 currentClusterTotal;
@@ -82,6 +89,16 @@ struct VirtualGeometryManager
 
     DescriptorSetLayout writeClasDefragLayout = {};
     VkPipeline writeClasDefragPipeline;
+
+    PushConstant fillClusterBottomLevelInfoPush;
+    DescriptorSetLayout fillClusterBLASInfoLayout = {};
+    VkPipeline fillClusterBLASInfoPipeline;
+
+    DescriptorSetLayout fillBlasAddressArrayLayout = {};
+    VkPipeline fillBlasAddressArrayPipeline;
+
+    DescriptorSetLayout getBlasAddressOffsetLayout = {};
+    VkPipeline getBlasAddressOffsetPipeline;
 
     GPUBuffer evictedPagesBuffer;
     GPUBuffer hierarchyNodeBuffer;
@@ -115,6 +132,16 @@ struct VirtualGeometryManager
     GPUBuffer moveDstAddresses;
     GPUBuffer moveDstSizes;
 
+    GPUBuffer clasBlasScratchBuffer;
+
+    GPUBuffer clasBlasImplicitBuffer;
+
+    GPUBuffer blasDataBuffer;
+    GPUBuffer buildClusterBottomLevelInfoBuffer;
+    GPUBuffer blasClasAddressBuffer;
+    GPUBuffer blasAccelAddresses;
+    GPUBuffer blasAccelSizes;
+
     // u32 requestBatchWriteIndex;
     // RingBuffer<StreamingRequestBatch> streamingRequestBatches;
     // StaticArray<StreamingRequest, maxQueueBatches * maxStreamingRequestsPerFrame>
@@ -132,11 +159,11 @@ struct VirtualGeometryManager
     VirtualGeometryManager(Arena *arena);
     void ProcessRequests(CommandBuffer *cmd);
     u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, u8 *pageData, PackedHierarchyNode *nodes,
-                   u32 numNodes, u32 numPages);
+                   u32 *rebraidIndices, u32 numNodes, u32 numPages, u32 numRebraid);
     void HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *queueBuffer,
                             GPUBuffer *gpuSceneBuffer, GPUBuffer *workItemQueueBuffer,
-                            GPUBuffer *gpuInstancesBuffer, GPUBuffer *visibleClustersBuffer,
-                            GPUBuffer *blasDataBuffer);
+                            GPUBuffer *gpuInstancesBuffer, GPUBuffer *visibleClustersBuffer);
+    void BuildClusterBLAS(CommandBuffer *cmd, GPUBuffer *visibleClustersBuffer);
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);
 };

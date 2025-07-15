@@ -2179,6 +2179,7 @@ struct HierarchyNode
     HierarchyNode *children;
 
     u32 partIndices[CHILDREN_PER_HIERARCHY_NODE];
+    u32 clusterTotals[CHILDREN_PER_HIERARCHY_NODE];
     u32 numChildren;
 };
 
@@ -2228,6 +2229,7 @@ HierarchyNode BuildHierarchy(Arena *arena, const Array<Cluster> &clusters,
                                             Lane4F32(ref.maxX, ref.maxY, ref.maxZ, 0.f));
             node.lodBounds[i]      = lodBounds;
             node.partIndices[i]    = partID;
+            node.clusterTotals[i]  = parts[partID].clusterCount;
             node.maxParentError[i] = group.maxParentError;
         }
 
@@ -2282,18 +2284,21 @@ HierarchyNode BuildHierarchy(Arena *arena, const Array<Cluster> &clusters,
     {
         f32 maxParentError       = 0.f;
         HierarchyNode &childNode = nodes[i];
-        Vec4f *spheres = PushArrayNoZero(scratch.temp.arena, Vec4f, childNode.numChildren);
+        Vec4f *spheres   = PushArrayNoZero(scratch.temp.arena, Vec4f, childNode.numChildren);
+        u32 clusterTotal = 0;
         Bounds bounds;
         for (int j = 0; j < childNode.numChildren; j++)
         {
             bounds.Extend(childNode.bounds[j]);
             spheres[j]     = childNode.lodBounds[j];
             maxParentError = Max(maxParentError, childNode.maxParentError[j]);
+            clusterTotal += childNode.clusterTotals[j];
         }
 
         node.bounds[i]         = bounds;
         node.lodBounds[i]      = ConstructSphereFromSpheres(spheres, childNode.numChildren);
         node.maxParentError[i] = maxParentError;
+        node.clusterTotals[i]  = clusterTotal;
     }
 
     numNodes++;
@@ -3632,6 +3637,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     // Flatten tree to array
     StaticArray<PackedHierarchyNode> hierarchy(arena, numNodes);
     PackedHierarchyNode rootPacked = {};
+    u32 clusterTotal               = 0;
     for (int i = 0; i < CHILDREN_PER_HIERARCHY_NODE; i++)
     {
         rootPacked.childRef[i] = ~0u;
@@ -3641,6 +3647,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     {
         rootPacked.lodBounds[i]      = rootNode.lodBounds[i];
         rootPacked.maxParentError[i] = rootNode.maxParentError[i];
+
+        clusterTotal += rootNode.clusterTotals[i];
     }
     hierarchy.Push(rootPacked);
 
@@ -3650,7 +3658,11 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
         u32 parentIndex;
         u32 childIndex;
+        bool parentClusterTotalUnderThreshold;
     };
+
+    const u32 maxClustersPerSubtree = MAX_CLUSTERS_PER_BLAS;
+    StaticArray<u32> rebraidIndices(scratch.temp.arena, numNodes);
 
     StaticArray<StackEntry> queue(scratch.temp.arena, numNodes, numNodes);
     u32 readOffset  = 0;
@@ -3659,11 +3671,17 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     for (int i = 0; i < rootNode.numChildren; i++)
     {
         StackEntry root;
-        root.node        = rootNode.children[i];
-        root.parentIndex = 0;
-        root.childIndex  = i;
+        root.node                             = rootNode.children[i];
+        root.parentIndex                      = 0;
+        root.childIndex                       = i;
+        root.parentClusterTotalUnderThreshold = clusterTotal < maxClustersPerSubtree;
 
         queue[writeOffset++] = root;
+    }
+
+    if (clusterTotal < maxClustersPerSubtree)
+    {
+        rebraidIndices.Push(hierarchy.Length());
     }
 
     // 1. instance culling hierarchy. procedural aabbs as proxies for instance groups. closest
@@ -3695,6 +3713,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     u32 numLeaves    = 0;
     u32 numParts     = 0;
     u32 numLeafParts = 0;
+
     for (;;)
     {
         if (writeOffset == readOffset) break;
@@ -3707,7 +3726,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
         hierarchy[parentIndex].childRef[entry.childIndex] = childOffset;
 
-        HierarchyNode &child       = entry.node;
+        HierarchyNode &child = entry.node;
+
         PackedHierarchyNode packed = {};
         for (int i = 0; i < CHILDREN_PER_HIERARCHY_NODE; i++)
         {
@@ -3715,6 +3735,18 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             packed.leafInfo[i] = ~0u;
         }
         numLeaves += !(bool)child.children;
+
+        u32 clusterTotal = 0;
+        for (int i = 0; i < child.numChildren; i++)
+        {
+            clusterTotal += child.clusterTotals[i];
+        }
+
+        if (!entry.parentClusterTotalUnderThreshold && clusterTotal < maxClustersPerSubtree)
+        {
+            rebraidIndices.Push(hierarchy.Length());
+        }
+
         for (int i = 0; i < child.numChildren; i++)
         {
             packed.lodBounds[i]      = child.lodBounds[i];
@@ -3726,6 +3758,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 newEntry.node        = child.children[i];
                 newEntry.parentIndex = childOffset;
                 newEntry.childIndex  = i;
+                newEntry.parentClusterTotalUnderThreshold =
+                    clusterTotal < maxClustersPerSubtree;
 
                 u32 writeIndex    = writeOffset++;
                 queue[writeIndex] = newEntry;
@@ -3787,6 +3821,20 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     u64 hierarchyOffset = AllocateSpace(&builder, sizeof(PackedHierarchyNode) * numNodes);
     u8 *ptr             = (u8 *)GetMappedPtr(&builder, hierarchyOffset);
     MemoryCopy(ptr, hierarchy.data, sizeof(PackedHierarchyNode) * numNodes);
+
+    // partial rebraiding
+    // FixedArray<u32, 128> stack;
+    u32 numRebraid    = rebraidIndices.Length();
+    u64 rebraidOffset = AllocateSpace(&builder, sizeof(u32) + sizeof(u32) * numRebraid);
+    ptr               = (u8 *)GetMappedPtr(&builder, rebraidOffset);
+    MemoryCopy(ptr, &numRebraid, sizeof(u32));
+    MemoryCopy(ptr + sizeof(u32), rebraidIndices.data, sizeof(u32) * numRebraid);
+
+    // Print("len: %u\n", rebraidIndices.Length());
+    // for (u32 index : rebraidIndices)
+    // {
+    //     Print("index: %u\n", index);
+    // }
 
     OS_UnmapFile(builder.ptr);
     OS_ResizeFile(builder.filename, builder.totalSize);

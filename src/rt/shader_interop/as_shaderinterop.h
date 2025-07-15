@@ -30,6 +30,8 @@ namespace rt
 #define MAX_CANDIDATE_CLUSTERS (1u << 24)
 #define MAX_VISIBLE_CLUSTERS   (1u << 22)
 
+#define MAX_CLUSTERS_PER_BLAS 16384
+
 static const uint32_t kFillInstanceDescsThreads = 32;
 
 struct ClusterPageHeader
@@ -122,7 +124,7 @@ struct FillClusterTriangleInfoPushConstant
     uint clusterOffset;
 };
 
-struct DefragPushConstant 
+struct DefragPushConstant
 {
     uint evictedPageStart;
     uint numEvictedPages;
@@ -159,6 +161,12 @@ struct GPUInstance
     row_major float3x4 renderFromObject;
 #endif
     uint globalRootNodeOffset;
+};
+
+struct InstanceRef
+{
+    uint instanceID;
+    uint nodeOffset;
 };
 
 struct TestDenseGeometry
