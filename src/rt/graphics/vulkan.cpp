@@ -1091,10 +1091,15 @@ b32 Vulkan::CreateSwapchain(Swapchain *swapchain)
                                                &swapchain->acquireSemaphores[i]));
                 }
             }
-            if (swapchain->releaseSemaphore == VK_NULL_HANDLE)
+            if (swapchain->releaseSemaphores.empty())
             {
-                VK_CHECK(vkCreateSemaphore(device, &semaphoreInfo, 0,
-                                           &swapchain->releaseSemaphore));
+                u32 size = (u32)swapchain->images.size();
+                swapchain->releaseSemaphores.resize(size);
+                for (u32 i = 0; i < size; i++)
+                {
+                    VK_CHECK(vkCreateSemaphore(device, &semaphoreInfo, 0,
+                                               &swapchain->releaseSemaphores[i]));
+                }
             }
         }
     }
@@ -1549,12 +1554,12 @@ void Vulkan::CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage 
     }
 
     cmd->Wait(Semaphore{swapchain->acquireSemaphores[swapchain->acquireSemaphoreIndex]});
-    cmd->Signal(Semaphore{swapchain->releaseSemaphore});
+    cmd->Signal(Semaphore{swapchain->releaseSemaphores[swapchain->imageIndex]});
     SubmitCommandBuffer(cmd, true);
 
     VkPresentInfoKHR presentInfo   = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     presentInfo.waitSemaphoreCount = 1;
-    presentInfo.pWaitSemaphores    = &swapchain->releaseSemaphore;
+    presentInfo.pWaitSemaphores    = &swapchain->releaseSemaphores[swapchain->imageIndex];
     presentInfo.swapchainCount     = 1;
     presentInfo.pSwapchains        = &swapchain->swapchain;
     presentInfo.pImageIndices      = &swapchain->imageIndex;

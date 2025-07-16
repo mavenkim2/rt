@@ -1,3 +1,5 @@
+#include "../common.hlsli"
+#include "cull.hlsli"
 #include "../../rt/shader_interop/gpu_scene_shaderinterop.h"
 #include "../../rt/shader_interop/as_shaderinterop.h"
 #include "../../rt/shader_interop/hierarchy_traversal_shaderinterop.h"
@@ -9,6 +11,7 @@ RWStructuredBuffer<CandidateNode> nodeQueue : register(u2);
 RWStructuredBuffer<Queue> queue : register(u3);
 RWStructuredBuffer<BLASData> blasDatas : register(u4);
 StructuredBuffer<InstanceRef> instanceRefs : register(t5);
+ConstantBuffer<GPUScene> gpuScene : register(b6);
 
 [[vk::push_constant]] NumPushConstant pc;
 
@@ -20,6 +23,13 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
     InstanceRef ref = instanceRefs[instanceRefIndex];
     GPUInstance instance = gpuInstances[ref.instanceID];
+
+#if 0
+    bool cull = FrustumCull(gpuScene.clipFromRender, instance.renderFromObject, 
+        float3(ref.bounds[0], ref.bounds[1], ref.bounds[2]), 
+        float3(ref.bounds[3], ref.bounds[5], ref.bounds[5]), gpuScene.p22, gpuScene.p23);
+    if (cull) return;
+#endif
 
     uint blasIndex;
     InterlockedAdd(globals[GLOBALS_BLAS_COUNT_INDEX], 1, blasIndex);

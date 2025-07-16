@@ -257,6 +257,7 @@ void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
     params.up               = up;
     params.fov              = verticalFov;
     params.aspectRatio      = aspectRatio;
+    params.rasterFromCamera = rasterFromCamera;
     params.cameraFromRaster = cameraFromRaster;
     params.renderFromCamera = renderFromCameraAffine;
     params.NDCFromCamera    = NDCFromCamera;

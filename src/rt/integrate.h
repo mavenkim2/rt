@@ -189,6 +189,7 @@ struct RenderParams2
     f32 fov;
     f32 aspectRatio;
 
+    Mat4 rasterFromCamera;
     Mat4 cameraFromRaster;
     AffineSpace renderFromCamera;
 

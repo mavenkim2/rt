@@ -1,3 +1,4 @@
+#include "cull.hlsli"
 #include "../dense_geometry.hlsli"
 #include "../wave_intrinsics.hlsli"
 #include "../../rt/shader_interop/as_shaderinterop.h"
@@ -104,6 +105,7 @@ RWStructuredBuffer<VisibleCluster> selectedClusters : register(u7);
 RWStructuredBuffer<BLASData> blasDatas : register(u9);
 
 RWStructuredBuffer<StreamingRequest> requests : register(u10);
+StructuredBuffer<InstanceRef> instanceRefs : register(t11);
 
 struct ClusterCull 
 {
@@ -147,17 +149,27 @@ struct ClusterCull
 
             priority = threshold == 0.f ? 0.f : threshold / edgeScales.x;
         }
+        if (isVisible)
+        {
+            float3 minP = node.center[childIndex] - node.extents[childIndex];
+            float3 maxP = node.center[childIndex] + node.extents[childIndex];
 
+            bool cull = FrustumCull(gpuScene.clipFromRender, instance.renderFromObject, 
+                minP, maxP, gpuScene.p22, gpuScene.p23);
+            isVisible &= !cull;
+        }
+
+        bool isNodeValid = isValid && isVisible && !isLeaf;
         uint nodeWriteOffset;
-        WaveInterlockedAddScalarTest(queue[0].nodeWriteOffset, isValid && !isLeaf, 1, nodeWriteOffset);
+        WaveInterlockedAddScalarTest(queue[0].nodeWriteOffset, isNodeValid, 1, nodeWriteOffset);
 
-        uint nodesToAdd = WaveActiveCountBits(isValid && !isLeaf);
+        uint nodesToAdd = WaveActiveCountBits(isNodeValid);
         if (WaveIsFirstLane())
         {
             InterlockedAdd(queue[0].numNodes, nodesToAdd);
         }
 
-        if (isValid && !isLeaf)
+        if (isNodeValid)
         {
             WorkItem childCandidateNode;
             childCandidateNode.x = candidateNode.instanceID;
@@ -170,7 +182,7 @@ struct ClusterCull
 
         DeviceMemoryBarrier();
 
-        if (isLeaf)
+        if (isLeaf && (isValid || isVisible))
         {
             uint leafInfo = node.leafInfo[childIndex];
 

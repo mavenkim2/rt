@@ -372,7 +372,7 @@ struct Swapchain
     std::vector<VkImageView> imageViews;
 
     std::vector<VkSemaphore> acquireSemaphores;
-    VkSemaphore releaseSemaphore;
+    std::vector<VkSemaphore> releaseSemaphores;
 
     u32 acquireSemaphoreIndex;
     u32 imageIndex;

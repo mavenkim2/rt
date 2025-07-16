@@ -171,6 +171,8 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
                                         VK_SHADER_STAGE_COMPUTE_BIT);
     hierarchyTraversalLayout.AddBinding(10, DescriptorType::StorageBuffer,
                                         VK_SHADER_STAGE_COMPUTE_BIT);
+    hierarchyTraversalLayout.AddBinding(11, DescriptorType::StorageBuffer,
+                                        VK_SHADER_STAGE_COMPUTE_BIT);
 
     hierarchyTraversalPipeline = device->CreateComputePipeline(
         &hierarchyTraversalShader, &hierarchyTraversalLayout, 0, "hierarchy traversal");
@@ -1056,6 +1058,7 @@ void VirtualGeometryManager::HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *q
         .Bind(&blasDataBuffer)
         .Bind(&clusterPageDataBuffer)
         .Bind(&streamingRequestsBuffer)
+        .Bind(&instanceRefBuffer)
         .End();
 
     cmd->Dispatch(1440, 1, 1);

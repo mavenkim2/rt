@@ -12,6 +12,7 @@ namespace rt
 struct GPUScene
 {
     float4x4 cameraFromRaster;
+    float4x4 clipFromRender;
     float3x4 renderFromCamera;
     float3x4 cameraFromRender;
     float3x4 lightFromRender;
@@ -24,6 +25,9 @@ struct GPUScene
     float height;
     uint dispatchDimX;
     uint dispatchDimY;
+
+    float p22;
+    float p23;
 };
 
 #ifdef __cplusplus

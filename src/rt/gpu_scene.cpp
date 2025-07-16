@@ -265,6 +265,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         instanceCullingLayout.AddBinding(i, DescriptorType::StorageBuffer,
                                          VK_SHADER_STAGE_COMPUTE_BIT);
     }
+    instanceCullingLayout.AddBinding(6, DescriptorType::UniformBuffer,
+                                     VK_SHADER_STAGE_COMPUTE_BIT);
 
     VkPipeline instanceCullingPipeline =
         device->CreateComputePipeline(&instanceCullingShader, &instanceCullingLayout,
@@ -290,6 +292,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     Semaphore submitSemaphore = device->CreateSemaphore();
     // Transfer data to GPU
     GPUScene gpuScene;
+    gpuScene.clipFromRender   = params->NDCFromCamera * params->cameraFromRender;
     gpuScene.cameraFromRaster = params->cameraFromRaster;
     gpuScene.renderFromCamera = params->renderFromCamera;
     gpuScene.cameraFromRender = params->cameraFromRender;
@@ -300,6 +303,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     gpuScene.focalLength      = params->focalLength;
     gpuScene.height           = params->height;
     gpuScene.fov              = params->fov;
+    gpuScene.p22              = params->rasterFromCamera[2][2];
+    gpuScene.p23              = params->rasterFromCamera[3][2];
 
     ShaderDebugInfo shaderDebug;
 
@@ -951,6 +956,15 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
             gpuScene.renderFromCamera = Inverse(cameraFromRender);
             gpuScene.cameraFromRender = cameraFromRender;
+            gpuScene.clipFromRender =
+                params->NDCFromCamera *
+                Mat4(gpuScene.cameraFromRender[0][0], gpuScene.cameraFromRender[1][0],
+                     gpuScene.cameraFromRender[2][0], gpuScene.cameraFromRender[3][0],
+                     gpuScene.cameraFromRender[0][1], gpuScene.cameraFromRender[1][1],
+                     gpuScene.cameraFromRender[2][1], gpuScene.cameraFromRender[3][1],
+                     gpuScene.cameraFromRender[0][2], gpuScene.cameraFromRender[1][2],
+                     gpuScene.cameraFromRender[2][2], gpuScene.cameraFromRender[3][2], 0.f,
+                     0.f, 0.f, 1.f);
             OS_GetMousePos(params->window, shaderDebug.mousePos.x, shaderDebug.mousePos.y);
         }
         u32 dispatchDimX =
@@ -1025,6 +1039,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&queueBuffer)
                     .Bind(&virtualGeometryManager.blasDataBuffer)
                     .Bind(&virtualGeometryManager.instanceRefBuffer)
+                    .Bind(&sceneTransferBuffers[currentBuffer].buffer)
                     .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                     .End();
 
@@ -1139,6 +1154,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&queueBuffer)
                     .Bind(&virtualGeometryManager.blasDataBuffer)
                     .Bind(&virtualGeometryManager.instanceRefBuffer)
+                    .Bind(&sceneTransferBuffers[currentBuffer].buffer)
                     .PushConstants(&instanceCullingPush, &instanceCullingPushConstant)
                     .End();
 
