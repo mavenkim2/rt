@@ -263,10 +263,11 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
     readbackBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         sizeof(StreamingRequest) * maxStreamingRequestsPerFrame, MemoryUsage::GPU_TO_CPU);
-    uploadBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        maxPageInstallsPerFrame * (sizeof(u32) + CLUSTER_PAGE_SIZE) + maxNodes * sizeof(u32),
-        MemoryUsage::CPU_TO_GPU);
+    uploadBuffer =
+        device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                             maxPageInstallsPerFrame * (sizeof(u32) + CLUSTER_PAGE_SIZE) +
+                                 2 * maxNodes * sizeof(u32),
+                             MemoryUsage::CPU_TO_GPU);
 
     evictedPagesBuffer    = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                      VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -743,7 +744,8 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         pageIndices.Push(physicalPages.Length() - 1);
     }
 
-    u32 evictedPageStart = pageIndices.Length();
+    u32 evictedPageStart   = pageIndices.Length();
+    u32 numClustersEvicted = 0;
 
     if (pageIndices.Length() < maxPageInstallsPerFrame &&
         pageIndices.Length() != unloadedRequests.Length())
@@ -756,8 +758,13 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
                lruIndex != firstUsedLRUPage && lruIndex != lruHead)
         {
             pageIndices.Push(lruIndex);
+            UnlinkLRU(lruIndex);
+            LinkLRU(lruIndex);
+
             currentClusterTotal -= physicalPages[lruIndex].numClusters;
-            lruIndex = physicalPages[lruIndex].prevPage;
+            numClustersEvicted += physicalPages[lruIndex].numClusters;
+
+            lruIndex = lruTail;
         }
     }
 
@@ -766,21 +773,50 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
     // Upload pages to GPU and apply hierarchy fixups
     StaticArray<BufferToBufferCopy> pageInstallCopies(scratch.temp.arena,
                                                       maxPageInstallsPerFrame);
-    StaticArray<BufferToBufferCopy> nodeInstallCopies(scratch.temp.arena, maxNodes);
+    StaticArray<BufferToBufferCopy> nodeInstallCopies(scratch.temp.arena, 2 * maxNodes);
     u32 offset = 0;
+
+    auto PrepareHierarchyFixup = [&](u32 instanceID, u32 pageIndex, u32 gpuPageIndex) {
+        MeshInfo &meshInfo      = meshInfos[instanceID];
+        u32 hierarchyNodeOffset = meshInfo.hierarchyNodeOffset;
+        u32 *offsets            = meshInfo.graph.offsets;
+        u32 *nodeData           = meshInfo.graph.data;
+
+        for (u32 graphIndex = offsets[pageIndex]; graphIndex < offsets[pageIndex + 1];
+             graphIndex++)
+        {
+            u32 hierarchyNodeIndex = nodeData[graphIndex] >> CHILDREN_PER_HIERARCHY_NODE_BITS;
+            u32 childIndex         = nodeData[graphIndex] & (CHILDREN_PER_HIERARCHY_NODE - 1u);
+
+            BufferToBufferCopy hierarchyCopy;
+            hierarchyCopy.srcOffset =
+                hierarchyUploadBufferOffset + nodeInstallCopies.Length() * sizeof(u32);
+            hierarchyCopy.dstOffset =
+                sizeof(PackedHierarchyNode) * (hierarchyNodeOffset + hierarchyNodeIndex) +
+                OffsetOf(PackedHierarchyNode, childRef) + sizeof(u32) * childIndex;
+            hierarchyCopy.size = sizeof(u32);
+
+            nodeInstallCopies.Push(hierarchyCopy);
+
+            *(u32 *)((u8 *)uploadBuffer.mappedPtr + hierarchyCopy.srcOffset) = gpuPageIndex;
+        }
+    };
 
     for (int requestIndex = 0; requestIndex < pageIndices.Length(); requestIndex++)
     {
-        PageRequest &request = unloadedRequests[unloadedRequests.Length() - 1 - requestIndex];
-        u32 gpuPageIndex     = pageIndices[requestIndex];
+        PageRequest &request                   = unloadedRequests[requestIndex];
+        u32 gpuPageIndex                       = pageIndices[requestIndex];
         virtualTable[request.virtualPageIndex] = gpuPageIndex;
 
         Page &page = physicalPages[gpuPageIndex];
         if (page.virtualIndex != -1)
         {
             virtualTable[page.virtualIndex] = -1;
+            PrepareHierarchyFixup(page.instanceID, page.localPageIndex, ~0u);
         }
-        page.virtualIndex = request.virtualPageIndex;
+        page.virtualIndex   = request.virtualPageIndex;
+        page.instanceID     = request.instanceID;
+        page.localPageIndex = request.pageIndex;
 
         BufferToBufferCopy copy;
         copy.srcOffset = offset;
@@ -805,26 +841,11 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         u32 *offsets            = meshInfo.graph.offsets;
         u32 *nodeData           = meshInfo.graph.data;
 
-        for (u32 graphIndex = offsets[request.pageIndex];
-             graphIndex < offsets[request.pageIndex + 1]; graphIndex++)
-        {
-            u32 hierarchyNodeIndex = nodeData[graphIndex] >> CHILDREN_PER_HIERARCHY_NODE_BITS;
-            u32 childIndex         = nodeData[graphIndex] & (CHILDREN_PER_HIERARCHY_NODE - 1u);
-
-            BufferToBufferCopy hierarchyCopy;
-            hierarchyCopy.srcOffset =
-                hierarchyUploadBufferOffset + nodeInstallCopies.Length() * sizeof(u32);
-            hierarchyCopy.dstOffset =
-                sizeof(PackedHierarchyNode) * (hierarchyNodeOffset + hierarchyNodeIndex) +
-                OffsetOf(PackedHierarchyNode, childRef) + sizeof(u32) * childIndex;
-            hierarchyCopy.size = sizeof(u32);
-
-            nodeInstallCopies.Push(hierarchyCopy);
-
-            *(u32 *)((u8 *)uploadBuffer.mappedPtr + hierarchyCopy.srcOffset) = gpuPageIndex;
-        }
+        PrepareHierarchyFixup(request.instanceID, request.pageIndex, gpuPageIndex);
     }
 
+    // TODO: have to denote leaves as streaming vs not streaming,
+    // and fix heisenbugs
     // TODO: direct storage
     if (pageIndices.Length())
     {
@@ -849,10 +870,16 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
 
     u32 numEvictedPages = pageIndices.Length() - evictedPageStart;
 
+    if (numClustersEvicted != numEvictedPages * 256)
+    {
+        int stop = 5;
+    }
+
     u64 address = device->GetDeviceAddress(clasImplicitData.buffer);
     // Prepare move descriptors
     if (pagesToUpdate && pageIndices.Length())
     {
+        Print("Prepare defrag\n");
         DefragPushConstant pc;
         pc.evictedPageStart = evictedPageStart;
         pc.numEvictedPages  = numEvictedPages;
@@ -875,13 +902,11 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+                     VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                         VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
         cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
                      VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
         cmd->FlushBarriers();
         device->EndEvent(cmd);
     }
@@ -970,9 +995,9 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
                      VK_ACCESS_2_SHADER_WRITE_BIT,
                      VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
                          VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_SHADER_READ_BIT);
+        // cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        //              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+        //              VK_ACCESS_2_SHADER_READ_BIT);
         cmd->FlushBarriers();
         device->EndEvent(cmd);
     }
@@ -1111,35 +1136,6 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
         device->EndEvent(cmd);
     }
 
-    // if (device->frameCount > 100)
-    // {
-    //     GPUBuffer readback = device->CreateBuffer(
-    //         VK_BUFFER_USAGE_TRANSFER_DST_BIT, blasDataBuffer.size, MemoryUsage::GPU_TO_CPU);
-    //     Semaphore testSemaphore   = device->CreateSemaphore();
-    //     testSemaphore.signalValue = 1;
-    //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-    //     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-    //                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-    //     cmd->FlushBarriers();
-    //     cmd->CopyBuffer(&readback, &blasDataBuffer);
-    //     cmd->SignalOutsideFrame(testSemaphore);
-    //
-    //     device->SubmitCommandBuffer(cmd);
-    //     device->Wait(testSemaphore);
-    //
-    //     BLASData *data = (BLASData *)readback.mappedPtr;
-    //     // BUILD_CLUSTERS_BOTTOM_LEVEL_INFO *data =
-    //     //     (BUILD_CLUSTERS_BOTTOM_LEVEL_INFO *)readback.mappedPtr;
-    //     // AccelerationStructureInstance *data =
-    //     //     (AccelerationStructureInstance *)readback.mappedPtr;
-    //     // StreamingRequest *data = (StreamingRequest *)readback.mappedPtr;
-    //     // PTLAS_WRITE_INSTANCE_INFO *data =
-    //     //     (PTLAS_WRITE_INSTANCE_INFO *)readback.mappedPtr;
-    //     // Vec4u *data = (Vec4u *)readback.mappedPtr;
-    //
-    //     int stop = 5;
-    // }
-
     {
         u64 blasClasAddressBufferAddress =
             device->GetDeviceAddress(blasClasAddressBuffer.buffer);
@@ -1162,10 +1158,8 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
         cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                     VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+                     VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                         VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
         cmd->FlushBarriers();
         device->EndEvent(cmd);
     }
@@ -1214,19 +1208,21 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
         // Build the BLASes
         device->BeginEvent(cmd, "Build BLAS");
 
-        cmd->BuildClusterBLAS(
-            CLASOpMode::ExplicitDestinations, &clasBlasImplicitBuffer, &clasBlasScratchBuffer,
-            &buildClusterBottomLevelInfoBuffer, &blasAccelAddresses, &blasAccelSizes,
-            &clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_FINAL_COUNT_INDEX,
-            maxClusterCountPerAccelerationStructure, maxTotalClusterCount, maxInstances);
+        // cmd->BuildClusterBLAS(
+        //     CLASOpMode::ExplicitDestinations, &clasBlasImplicitBuffer,
+        //     &clasBlasScratchBuffer, &buildClusterBottomLevelInfoBuffer, &blasAccelAddresses,
+        //     &blasAccelSizes, &clasGlobalsBuffer, sizeof(u32) *
+        //     GLOBALS_BLAS_FINAL_COUNT_INDEX, maxClusterCountPerAccelerationStructure,
+        //     maxTotalClusterCount, maxInstances);
+        cmd->BuildClusterBLAS(CLASOpMode::ExplicitDestinations, &clasBlasImplicitBuffer,
+                              &clasBlasScratchBuffer, &buildClusterBottomLevelInfoBuffer,
+                              &blasAccelAddresses, &blasAccelSizes, &clasGlobalsBuffer,
+                              sizeof(u32) * GLOBALS_BLAS_FINAL_COUNT_INDEX, maxWriteClusters,
+                              maxWriteClusters, 1);
         cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
                      VK_ACCESS_2_SHADER_READ_BIT);
-        cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                     VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                     VK_ACCESS_2_TRANSFER_READ_BIT);
         cmd->FlushBarriers();
         device->EndEvent(cmd);
     }

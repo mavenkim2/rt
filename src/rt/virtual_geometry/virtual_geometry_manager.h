@@ -39,6 +39,9 @@ struct VirtualGeometryManager
     struct Page
     {
         u32 numClusters;
+        u32 instanceID;
+        u32 localPageIndex;
+
         int virtualIndex;
         int nextPage;
         int prevPage;

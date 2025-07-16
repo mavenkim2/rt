@@ -13,7 +13,7 @@ StructuredBuffer<CLASPageInfo> clasPageInfos : register(t5);
 [numthreads(32, 1, 1)]
 void main(uint3 dtID : SV_DispatchThreadID)
 {
-    if (dtID.x >= globals[GLOBALS_CLAS_COUNT_INDEX]) return;
+    if (dtID.x >= globals[GLOBALS_VISIBLE_CLUSTER_COUNT_INDEX]) return;
 
     VisibleCluster visibleCluster = visibleClusters[dtID.x];
     CLASPageInfo clasPageInfo = clasPageInfos[visibleCluster.pageIndex];

@@ -149,6 +149,7 @@ struct ClusterCull
 
             priority = threshold == 0.f ? 0.f : threshold / edgeScales.x;
         }
+
         if (isVisible)
         {
             float3 minP = node.center[childIndex] - node.extents[childIndex];
@@ -224,6 +225,10 @@ struct ClusterCull
                 InterlockedAdd(requests[0].pageIndex_numPages, 1, requestIndex);
                 requests[requestIndex + 1] = request;
             }
+            // here's what I think is happening: 
+            // 1. there are a lot of clusters with "0" error. all of these clusters 
+            // are being requested by the streaming system, even though most of them are 
+            // unneeded. 
         }
 #if 0
         else if (!isValid && !isLeaf)
@@ -275,7 +280,7 @@ struct ClusterCull
         bool isValid = (edgeScales.x > lodError * minScale) || flags;
 
         uint clusterOffset;
-        WaveInterlockedAddScalarTest(globals[GLOBALS_CLAS_COUNT_INDEX], isValid, 1, clusterOffset);
+        WaveInterlockedAddScalarTest(globals[GLOBALS_VISIBLE_CLUSTER_COUNT_INDEX], isValid, 1, clusterOffset);
 
         if (isValid)
         {

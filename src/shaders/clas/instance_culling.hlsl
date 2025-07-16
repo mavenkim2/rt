@@ -24,12 +24,10 @@ void main(uint3 dtID : SV_DispatchThreadID)
     InstanceRef ref = instanceRefs[instanceRefIndex];
     GPUInstance instance = gpuInstances[ref.instanceID];
 
-#if 0
     bool cull = FrustumCull(gpuScene.clipFromRender, instance.renderFromObject, 
         float3(ref.bounds[0], ref.bounds[1], ref.bounds[2]), 
         float3(ref.bounds[3], ref.bounds[5], ref.bounds[5]), gpuScene.p22, gpuScene.p23);
     if (cull) return;
-#endif
 
     uint blasIndex;
     InterlockedAdd(globals[GLOBALS_BLAS_COUNT_INDEX], 1, blasIndex);

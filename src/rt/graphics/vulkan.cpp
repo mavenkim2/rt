@@ -3684,9 +3684,11 @@ u32 Vulkan::GetQueueFamily(QueueType queueType)
     return family;
 }
 
-void Vulkan::BeginFrame(bool doubleBuffer)
+bool Vulkan::BeginFrame(bool doubleBuffer)
 {
     u32 threshold = doubleBuffer ? 2 : 1;
+
+    bool success = true;
     if (frameCount >= threshold)
     {
         for (int i = 0; i < QueueType_Count; i++)
@@ -3699,10 +3701,16 @@ void Vulkan::BeginFrame(bool doubleBuffer)
                 waitInfo.pValues             = &val;
                 waitInfo.semaphoreCount      = 1;
                 waitInfo.pSemaphores         = &queue.submitSemaphore[GetCurrentBuffer()];
-                vkWaitSemaphores(device, &waitInfo, UINT64_MAX);
+                VkResult result = vkWaitSemaphores(device, &waitInfo, 1e9); // UINT64_MAX);
+
+                if (result != VK_SUCCESS)
+                {
+                    success = false;
+                }
             }
         }
     }
+    return success;
 }
 void Vulkan::EndFrame(int queueTypes)
 {

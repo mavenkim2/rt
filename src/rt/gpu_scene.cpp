@@ -740,7 +740,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     GPUBuffer tlasBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         virtualGeometryManager.maxInstances * sizeof(VkAccelerationStructureInstanceKHR));
 
     u32 tlasScratchSize, tlasAccelSize;
@@ -864,6 +864,10 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     GPUBuffer nvapiBuffer = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 256);
 
     Semaphore frameSemaphore = device->CreateSemaphore();
+
+    GPUBuffer readback = device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                              virtualGeometryManager.clasGlobalsBuffer.size,
+                                              MemoryUsage::GPU_TO_CPU);
     for (;;)
     {
         ScratchArena frameScratch;
@@ -931,6 +935,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
             camera.right = Normalize(Cross(camera.forward, params->up));
 
+            if (Length(camera.right) < 1e-8f)
+            {
+                // camera.right = Normalize(Cross
+            }
+
             LinearSpace3f axis;
             axis.e[2] = -camera.forward;
             f32 d = camera.forward.x * camera.forward.x + camera.forward.z * camera.forward.z;
@@ -974,7 +983,28 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         gpuScene.dispatchDimX = dispatchDimX;
         gpuScene.dispatchDimY = dispatchDimY;
 
-        device->BeginFrame(false);
+        if (!device->BeginFrame(false))
+        {
+            int stop = 5;
+            // if (device->frameCount > 2)
+            {
+
+                // device->SubmitCommandBuffer(cmd);
+                // device->Wait(testSemaphore);
+
+                BLASData *data = (BLASData *)readback.mappedPtr;
+                // BUILD_CLUSTERS_BOTTOM_LEVEL_INFO *data =
+                //     (BUILD_CLUSTERS_BOTTOM_LEVEL_INFO *)readback.mappedPtr;
+                // AccelerationStructureInstance *data =
+                //     (AccelerationStructureInstance *)readback.mappedPtr;
+                // StreamingRequest *data = (StreamingRequest *)readback.mappedPtr;
+                // PTLAS_WRITE_INSTANCE_INFO *data =
+                //     (PTLAS_WRITE_INSTANCE_INFO *)readback.mappedPtr;
+                // u32 *data = (u32 *)readback.mappedPtr;
+
+                int stop = 5;
+            }
+        }
 
         Print("frame: %u\n", device->frameCount);
 
@@ -1133,13 +1163,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             // Streaming
             virtualGeometryManager.ProcessRequests(cmd);
 
-            cmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
-            cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                         VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                         VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
-            cmd->FlushBarriers();
-
             // Instance culling
             {
                 u32 numInstanceRefs = virtualGeometryManager.instanceRefs.Length();
@@ -1236,6 +1259,15 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
                 device->EndEvent(cmd);
             }
+
+            cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                         VK_ACCESS_2_TRANSFER_READ_BIT);
+            cmd->FlushBarriers();
+            // Semaphore testSemaphore   = device->CreateSemaphore();
+            // testSemaphore.signalValue = 1;
+            cmd->CopyBuffer(&readback, &tlasBuffer);
+            // cmd->SignalOutsideFrame(testSemaphore);
 
             {
                 // TODO: partitioned TLAS

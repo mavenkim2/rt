@@ -1062,7 +1062,7 @@ struct Vulkan
                                  VkClusterAccelerationStructureInputInfoNV &inputInfo,
                                  VkOpInput &vkOpInput, VkDeviceSize &srcInfosArrayStride);
     u32 GetQueueFamily(QueueType type);
-    void BeginFrame(bool doubleBuffer = true);
+    bool BeginFrame(bool doubleBuffer = true);
     void EndFrame(int queueType);
 
     void Wait(Semaphore s);
