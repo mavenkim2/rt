@@ -563,6 +563,7 @@ enum class DescriptorType
     StorageBufferDynamic,
     InputAttachment,
     AccelerationStructure,
+    PTLAS,
 
     Count,
 };
@@ -577,6 +578,7 @@ struct DescriptorSet
         VkWriteDescriptorSetAccelerationStructureKHR accel;
         VkDescriptorImageInfo image;
         VkDescriptorBufferInfo buffer;
+        VkWriteDescriptorSetPartitionedAccelerationStructureNV ptlas;
     };
 
     VkDescriptorPool pool;
@@ -591,10 +593,12 @@ struct DescriptorSet
     DescriptorSet &Bind(int index, GPUBuffer *buffer, u64 offset = 0,
                         u64 size = VK_WHOLE_SIZE);
     DescriptorSet &Bind(int index, VkAccelerationStructureKHR *accel);
+    DescriptorSet &Bind(int index, u64 *ptlasAddress);
 
     DescriptorSet &Bind(GPUBuffer *buffer, u64 offset = 0, u64 size = VK_WHOLE_SIZE);
     DescriptorSet &Bind(GPUImage *img);
     DescriptorSet &Bind(VkAccelerationStructureKHR *accel);
+    DescriptorSet &Bind(u64 *ptlasAddress);
     void Reset();
 };
 
@@ -1044,6 +1048,7 @@ struct Vulkan
     void GetPTLASBuildSizes(u32 instanceCount, u32 maxInstancesPerPartition,
                             u32 partitionCount, u32 maxInstanceInGlobalPartitionCount,
                             u32 &scratchSize, u32 &accelSize);
+    VkAccelerationStructureKHR CreatePTLAS(GPUBuffer *tlasData);
     void GetBuildSizes(VkAccelerationStructureTypeKHR accelType,
                        VkAccelerationStructureGeometryKHR *geometries, int count,
                        VkAccelerationStructureBuildRangeInfoKHR *buildRanges,
@@ -1246,6 +1251,8 @@ inline VkDescriptorType ConvertDescriptorType(DescriptorType type)
         case DescriptorType::InputAttachment: return VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
         case DescriptorType::AccelerationStructure:
             return VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        case DescriptorType::PTLAS:
+            return VK_DESCRIPTOR_TYPE_PARTITIONED_ACCELERATION_STRUCTURE_NV;
         default: Assert(0); return VK_DESCRIPTOR_TYPE_MAX_ENUM;
     }
 }

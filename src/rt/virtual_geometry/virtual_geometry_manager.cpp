@@ -331,13 +331,13 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, moveScratchSize);
 
     u32 clasBlasScratchSize, clasBlasAccelSize;
-    // device->GetClusterBLASBuildSizes(maxTotalClusterCount,
+    device->GetClusterBLASBuildSizes(CLASOpMode::ExplicitDestinations, maxWriteClusters,
+                                     maxWriteClusters, 1, clasBlasScratchSize,
+                                     clasBlasAccelSize);
+    // u32 maxWriteClusters = 200000;
+    // device->GetClusterBLASBuildSizes(CLASOpMode::ExplicitDestinations, maxTotalClusterCount,
     //                                  maxClusterCountPerAccelerationStructure, maxInstances,
     //                                  clasBlasScratchSize, clasBlasAccelSize);
-    // u32 maxWriteClusters = 200000;
-    device->GetClusterBLASBuildSizes(CLASOpMode::ExplicitDestinations, maxTotalClusterCount,
-                                     maxClusterCountPerAccelerationStructure, maxInstances,
-                                     clasBlasScratchSize, clasBlasAccelSize);
 
     u32 blasSize = megabytes(512); // clasBlasAccelSize * maxInstances;
 
@@ -401,6 +401,8 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
         sizeof(PTLAS_UPDATE_INSTANCE_INFO) * maxInstances);
     ptlasInstanceBitVectorBuffer =
         device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, maxInstances >> 3u);
+
+    ptlas = device->CreatePTLAS(&tlasAccelBuffer);
 
     decodeClusterDataBuffer        = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                               VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -552,7 +554,7 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, u8 *pag
                 float minVal = node.center[childIndex][axis] - node.extents[childIndex][axis];
 
                 ref.bounds[axis]     = Min(ref.bounds[axis], minVal);
-                ref.bounds[3 + axis] = Max(ref.bounds[3 + axis], minVal);
+                ref.bounds[3 + axis] = Max(ref.bounds[3 + axis], maxVal);
             }
         }
         ref.instanceID = 0;
@@ -1106,6 +1108,35 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
         device->EndEvent(cmd);
     }
 
+    // if (device->frameCount > 100)
+    // {
+    //     GPUBuffer readback = device->CreateBuffer(
+    //         VK_BUFFER_USAGE_TRANSFER_DST_BIT, blasDataBuffer.size, MemoryUsage::GPU_TO_CPU);
+    //     Semaphore testSemaphore   = device->CreateSemaphore();
+    //     testSemaphore.signalValue = 1;
+    //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+    //     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+    //                  VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+    //     cmd->FlushBarriers();
+    //     cmd->CopyBuffer(&readback, &blasDataBuffer);
+    //     cmd->SignalOutsideFrame(testSemaphore);
+    //
+    //     device->SubmitCommandBuffer(cmd);
+    //     device->Wait(testSemaphore);
+    //
+    //     BLASData *data = (BLASData *)readback.mappedPtr;
+    //     // BUILD_CLUSTERS_BOTTOM_LEVEL_INFO *data =
+    //     //     (BUILD_CLUSTERS_BOTTOM_LEVEL_INFO *)readback.mappedPtr;
+    //     // AccelerationStructureInstance *data =
+    //     //     (AccelerationStructureInstance *)readback.mappedPtr;
+    //     // StreamingRequest *data = (StreamingRequest *)readback.mappedPtr;
+    //     // PTLAS_WRITE_INSTANCE_INFO *data =
+    //     //     (PTLAS_WRITE_INSTANCE_INFO *)readback.mappedPtr;
+    //     // Vec4u *data = (Vec4u *)readback.mappedPtr;
+    //
+    //     int stop = 5;
+    // }
+
     {
         u64 blasClasAddressBufferAddress =
             device->GetDeviceAddress(blasClasAddressBuffer.buffer);
@@ -1145,10 +1176,14 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
         pc.addressHighBits = blasBufferAddress >> 32u;
 
         // Compute BLAS sizes
-        cmd->ComputeBLASSizes(
-            &buildClusterBottomLevelInfoBuffer, &clasBlasScratchBuffer, &blasAccelSizes,
-            &clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_FINAL_COUNT_INDEX,
-            maxTotalClusterCount, maxClusterCountPerAccelerationStructure, maxInstances);
+        // cmd->ComputeBLASSizes(
+        //     &buildClusterBottomLevelInfoBuffer, &clasBlasScratchBuffer, &blasAccelSizes,
+        //     &clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_FINAL_COUNT_INDEX,
+        //     maxTotalClusterCount, maxClusterCountPerAccelerationStructure, maxInstances);
+        cmd->ComputeBLASSizes(&buildClusterBottomLevelInfoBuffer, &clasBlasScratchBuffer,
+                              &blasAccelSizes, &clasGlobalsBuffer,
+                              sizeof(u32) * GLOBALS_BLAS_FINAL_COUNT_INDEX, maxWriteClusters,
+                              maxWriteClusters, 1);
         cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
@@ -1170,36 +1205,6 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
                      VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
         cmd->FlushBarriers();
         device->EndEvent(cmd);
-
-        // if (device->frameCount == 2)
-        // {
-        //     GPUBuffer readback =
-        //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        //         blasAccelAddresses.size,
-        //                              MemoryUsage::GPU_TO_CPU);
-        //     Semaphore testSemaphore   = device->CreateSemaphore();
-        //     testSemaphore.signalValue = 1;
-        //     cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-        //                  VK_ACCESS_2_TRANSFER_READ_BIT);
-        //     cmd->FlushBarriers();
-        //     cmd->CopyBuffer(&readback, &blasAccelAddresses);
-        //     cmd->SignalOutsideFrame(testSemaphore);
-        //
-        //     device->SubmitCommandBuffer(cmd);
-        //     device->Wait(testSemaphore);
-        //
-        //     // Queue *data = (Queue *)readback.mappedPtr;
-        //     // BUILD_CLUSTERS_BOTTOM_LEVEL_INFO *data =
-        //     //     (BUILD_CLUSTERS_BOTTOM_LEVEL_INFO *)readback.mappedPtr;
-        //     // AccelerationStructureInstance *data =
-        //     //     (AccelerationStructureInstance *)readback.mappedPtr;
-        //     // StreamingRequest *data = (StreamingRequest *)readback.mappedPtr;
-        //     u64 *data = (u64 *)readback.mappedPtr;
-        //     // Vec4u *data = (Vec4u *)readback.mappedPtr;
-        //
-        //     int stop = 5;
-        // }
     }
 
     {

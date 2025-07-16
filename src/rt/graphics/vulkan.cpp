@@ -97,6 +97,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         static const std::vector<const char *> validationPriorityList[] = {
             // Preferred
             {"VK_LAYER_NV_optimus", "VK_LAYER_KHRONOS_validation"},
+            // "VK_LAYER_KHRONOS_synchronization2"},
             // Fallback
             {"VK_LAYER_LUNARG_standard_validation"},
             // Individual
@@ -276,7 +277,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         features11.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
         features12.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         features13.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-        // features14.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES;
+        features14.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES;
         deviceFeatures.pNext = &features11;
         features11.pNext     = &features12;
         features12.pNext     = &features13;
@@ -286,7 +287,7 @@ Vulkan::Vulkan(ValidationMode validationMode, GPUDevicePreference preference) : 
         properties11.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES;
         properties12.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES;
         properties13.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES;
-        // properties14.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_PROPERTIES;
+        properties14.sType     = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_PROPERTIES;
         deviceProperties.pNext = &properties11;
         properties11.pNext     = &properties12;
         properties12.pNext     = &properties13;
@@ -1171,7 +1172,7 @@ void Vulkan::CheckInitializedThreadPool(int threadIndex)
 
         VkDescriptorPoolCreateInfo poolCreateInfo = {
             VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        VkDescriptorPoolSize poolSize[6];
+        VkDescriptorPoolSize poolSize[7];
         poolSize[0].type            = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         poolSize[0].descriptorCount = 30;
         poolSize[1].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -1184,6 +1185,8 @@ void Vulkan::CheckInitializedThreadPool(int threadIndex)
         poolSize[4].descriptorCount = 30;
         poolSize[5].type            = VK_DESCRIPTOR_TYPE_SAMPLER;
         poolSize[5].descriptorCount = 30;
+        poolSize[6].type            = VK_DESCRIPTOR_TYPE_PARTITIONED_ACCELERATION_STRUCTURE_NV;
+        poolSize[6].descriptorCount = 1;
 
         poolCreateInfo.pPoolSizes    = poolSize;
         poolCreateInfo.poolSizeCount = ArrayLength(poolSize);
@@ -1470,7 +1473,10 @@ void Vulkan::CopyFrameBuffer(Swapchain *swapchain, CommandBuffer *cmd, GPUImage 
                 }
             }
         }
-        break;
+        else
+        {
+            break;
+        }
     }
 
     VkImageMemoryBarrier2 barrier = {};
@@ -2262,6 +2268,26 @@ DescriptorSet &DescriptorSet::Bind(int index, VkAccelerationStructureKHR *accel)
     return *this;
 }
 
+DescriptorSet &DescriptorSet::Bind(int index, u64 *ptlasAddress)
+{
+    VkWriteDescriptorSetPartitionedAccelerationStructureNV info = {
+        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_PARTITIONED_ACCELERATION_STRUCTURE_NV};
+    info.pAccelerationStructures    = ptlasAddress;
+    info.accelerationStructureCount = 1;
+
+    descriptorInfo[index].ptlas = info;
+
+    VkWriteDescriptorSet writeSet = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writeSet.pNext                = &descriptorInfo[index].ptlas;
+    writeSet.descriptorType       = VK_DESCRIPTOR_TYPE_PARTITIONED_ACCELERATION_STRUCTURE_NV;
+    writeSet.descriptorCount      = 1;
+    writeSet.dstSet               = VK_NULL_HANDLE;
+    writeSet.dstBinding           = layout->bindings[index].binding;
+
+    writeDescriptorSets.push_back(writeSet);
+    return *this;
+}
+
 DescriptorSet &DescriptorSet::Bind(GPUBuffer *buffer, u64 offset, u64 size)
 {
     u32 index = numBinds++;
@@ -2278,6 +2304,12 @@ DescriptorSet &DescriptorSet::Bind(VkAccelerationStructureKHR *accel)
 {
     u32 index = numBinds++;
     return Bind(index, accel);
+}
+
+DescriptorSet &DescriptorSet::Bind(u64 *ptlasAddress)
+{
+    u32 index = numBinds++;
+    return Bind(index, ptlasAddress);
 }
 
 void CommandBuffer::BindDescriptorSets(VkPipelineBindPoint bindPoint, DescriptorSet *set,
@@ -3107,7 +3139,7 @@ void CommandBuffer::BuildPTLAS(GPUBuffer *ptlasBuffer, GPUBuffer *scratchBuffer,
         VK_STRUCTURE_TYPE_BUILD_PARTITIONED_ACCELERATION_STRUCTURE_INFO_NV};
 
     info.input                        = inputInfo;
-    info.srcAccelerationStructureData = ptlasAddress;
+    info.srcAccelerationStructureData = device->frameCount == 0 ? 0 : ptlasAddress;
     info.dstAccelerationStructureData = ptlasAddress;
     info.scratchData                  = device->GetDeviceAddress(scratchBuffer->buffer);
     info.srcInfos                     = device->GetDeviceAddress(srcInfos->buffer);
@@ -3383,6 +3415,20 @@ void Vulkan::GetPTLASBuildSizes(u32 instanceCount, u32 maxInstancesPerPartition,
     vkGetPartitionedAccelerationStructuresBuildSizesNV(device, &inputInfo, &buildSizes);
     scratchSize = buildSizes.buildScratchSize;
     accelSize   = buildSizes.accelerationStructureSize;
+}
+
+VkAccelerationStructureKHR Vulkan::CreatePTLAS(GPUBuffer *tlasBuffer)
+{
+    VkAccelerationStructureCreateInfoKHR createInfo = {
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+
+    createInfo.type   = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+    createInfo.buffer = tlasBuffer->buffer;
+    createInfo.size   = tlasBuffer->size;
+
+    VkAccelerationStructureKHR accel;
+    vkCreateAccelerationStructureKHR(device, &createInfo, 0, &accel);
+    return accel;
 }
 
 void Vulkan::GetBuildSizes(VkAccelerationStructureTypeKHR accelType,

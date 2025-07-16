@@ -795,20 +795,21 @@ void MeshSimplifier::EvaluatePair(Pair &pair)
     // Find the triangles that are moved and not collapsed
     StaticArray<u32> movedCorners(scratch.temp.arena, adjCorners.Length());
 
-    if (adjCorners.Length() >= 1000)
-    {
-        Print("num corners: %u, num remaining tris: %u, num tris: %u\n", adjCorners.Length(),
-              remainingNumTriangles, numIndices / 3);
-        for (int i = 0; i < adjCorners.Length(); i++)
-        {
-            Print("%u %u\n", i, adjCorners[i]);
-            u32 index = indices[adjCorners[i]];
-            Print("%u\n", index);
-            Print("%f %f %f\n", GetPosition(index).x, GetPosition(index).y,
-                  GetPosition(index).z);
-        }
-        Assert(0);
-    }
+    // if (adjCorners.Length() >= 1000)
+    // {
+    //     Print("num corners: %u, num remaining tris: %u, num tris: %u\n",
+    //     adjCorners.Length(),
+    //           remainingNumTriangles, numIndices / 3);
+    //     for (int i = 0; i < adjCorners.Length(); i++)
+    //     {
+    //         Print("%u %u\n", i, adjCorners[i]);
+    //         u32 index = indices[adjCorners[i]];
+    //         Print("%u\n", index);
+    //         Print("%f %f %f\n", GetPosition(index).x, GetPosition(index).y,
+    //               GetPosition(index).z);
+    //     }
+    //     Assert(0);
+    // }
 
     for (u32 corner : adjCorners)
     {
@@ -3636,21 +3637,6 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
     // Flatten tree to array
     StaticArray<PackedHierarchyNode> hierarchy(arena, numNodes);
-    PackedHierarchyNode rootPacked = {};
-    u32 clusterTotal               = 0;
-    for (int i = 0; i < CHILDREN_PER_HIERARCHY_NODE; i++)
-    {
-        rootPacked.childRef[i] = ~0u;
-        rootPacked.leafInfo[i] = ~0u;
-    }
-    for (int i = 0; i < rootNode.numChildren; i++)
-    {
-        rootPacked.lodBounds[i]      = rootNode.lodBounds[i];
-        rootPacked.maxParentError[i] = rootNode.maxParentError[i];
-
-        clusterTotal += rootNode.clusterTotals[i];
-    }
-    hierarchy.Push(rootPacked);
 
     struct StackEntry
     {
@@ -3668,21 +3654,13 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     u32 readOffset  = 0;
     u32 writeOffset = 0;
 
-    for (int i = 0; i < rootNode.numChildren; i++)
-    {
-        StackEntry root;
-        root.node                             = rootNode.children[i];
-        root.parentIndex                      = 0;
-        root.childIndex                       = i;
-        root.parentClusterTotalUnderThreshold = clusterTotal < maxClustersPerSubtree;
+    StackEntry root;
+    root.node                             = rootNode;
+    root.parentIndex                      = ~0u;
+    root.childIndex                       = ~0u;
+    root.parentClusterTotalUnderThreshold = false;
 
-        queue[writeOffset++] = root;
-    }
-
-    if (clusterTotal < maxClustersPerSubtree)
-    {
-        rebraidIndices.Push(hierarchy.Length());
-    }
+    queue[writeOffset++] = root;
 
     // 1. instance culling hierarchy. procedural aabbs as proxies for instance groups. closest
     // hit intersections of these aabbs are saved, and a bvh is built over just the instances
@@ -3724,7 +3702,10 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         u32 childOffset = hierarchy.Length();
         u32 parentIndex = entry.parentIndex;
 
-        hierarchy[parentIndex].childRef[entry.childIndex] = childOffset;
+        if (parentIndex != ~0u)
+        {
+            hierarchy[parentIndex].childRef[entry.childIndex] = childOffset;
+        }
 
         HierarchyNode &child = entry.node;
 
@@ -3747,13 +3728,16 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             rebraidIndices.Push(hierarchy.Length());
         }
 
-        Print("node index: %u, clustertotal : %u\n", childOffset, clusterTotal);
+        // Print("node index: %u, clustertotal : %u\n", childOffset, clusterTotal);
 
         for (int i = 0; i < child.numChildren; i++)
         {
-            packed.lodBounds[i]      = child.lodBounds[i];
-            packed.center[i]         = ToVec3f(child.bounds[i].Centroid());
-            packed.extents[i]        = ToVec3f(child.bounds[i].maxP - child.bounds[i].minP);
+            Print("%f %f %f %f %f %f\n", child.bounds[i].minP[0], child.bounds[i].minP[1],
+                  child.bounds[i].minP[2], child.bounds[i].maxP[0], child.bounds[i].maxP[1],
+                  child.bounds[i].maxP[2]);
+            packed.lodBounds[i] = child.lodBounds[i];
+            packed.center[i]    = ToVec3f(child.bounds[i].Centroid());
+            packed.extents[i] = ToVec3f((child.bounds[i].maxP - child.bounds[i].minP) * 0.5f);
             packed.maxParentError[i] = child.maxParentError[i];
 
             if (child.children)

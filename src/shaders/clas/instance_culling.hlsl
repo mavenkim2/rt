@@ -16,7 +16,7 @@ StructuredBuffer<InstanceRef> instanceRefs : register(t5);
 void main(uint3 dtID : SV_DispatchThreadID)
 {
     uint instanceRefIndex = dtID.x;
-    if (instanceRefIndex >= pc.num) return;
+    if (instanceRefIndex >= 1) return;
 
     InstanceRef ref = instanceRefs[instanceRefIndex];
     GPUInstance instance = gpuInstances[ref.instanceID];
@@ -26,13 +26,13 @@ void main(uint3 dtID : SV_DispatchThreadID)
     
     CandidateNode candidateNode;
     candidateNode.instanceID = ref.instanceID;
-    candidateNode.nodeOffset = ref.nodeOffset;
+    candidateNode.nodeOffset = 0;//ref.nodeOffset;
     candidateNode.blasIndex = blasIndex;
     candidateNode.pad = 0;
 
     nodeQueue[blasIndex] = candidateNode;
 
-    blasDatas[blasIndex].instanceRefIndex = instanceRefIndex;//ref.instanceID;
+    blasDatas[blasIndex].instanceRefIndex = instanceRefIndex;
 
     InterlockedAdd(queue[0].nodeWriteOffset, 1);
     InterlockedAdd(queue[0].numNodes, 1);

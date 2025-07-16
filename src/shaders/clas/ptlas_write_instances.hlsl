@@ -1,3 +1,4 @@
+#include "../common.hlsli"
 #include "../../rt/shader_interop/as_shaderinterop.h"
 
 StructuredBuffer<uint64_t> blasAddresses : register(t0);
@@ -62,14 +63,31 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
         PTLAS_WRITE_INSTANCE_INFO instanceInfo;
         instanceInfo.transform = instance.renderFromObject;
-        for (int i = 0; i < 6; i++)
+
+        float3 minP = float3(FLT_MAX, FLT_MAX, FLT_MAX);
+        float3 maxP = float3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+        for (int z = 2; z <= 5; z += 3)
         {
-            instanceInfo.explicitAABB[i] = instanceRef.bounds[i];
+            for (int y = 1; y <= 4; y += 3)
+            {
+                for (int x = 0; x <= 3; x += 3)
+                {
+                    float3 pos = float3(instanceRef.bounds[x], instanceRef.bounds[y], instanceRef.bounds[z]);
+                    minP = min(minP, pos);
+                    maxP = max(maxP, pos);
+                }
+            }
         }
+        for (int i = 0; i < 3; i++)
+        {
+            instanceInfo.explicitAABB[i] = minP[i];
+            instanceInfo.explicitAABB[3 + i] = maxP[i];
+        }
+
         instanceInfo.instanceID = instanceRef.instanceID;
         instanceInfo.instanceMask = 0xff;
         instanceInfo.instanceContributionToHitGroupIndex = 0;
-        instanceInfo.instanceFlags = 1;
+        instanceInfo.instanceFlags = (1u << 0u) | (1u << 4u);
         instanceInfo.instanceIndex = blasData.instanceRefIndex;
         instanceInfo.partitionIndex = 0;
         instanceInfo.accelerationStructure = blasAddresses[blasData.addressIndex]; 

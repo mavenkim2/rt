@@ -738,12 +738,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         virtualGeometryManager.maxInstances * sizeof(VkAccelerationStructureInstanceKHR));
 
-    GPUBuffer tlasBuildRangeBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        sizeof(BUILD_RANGE_INFO));
-
     u32 tlasScratchSize, tlasAccelSize;
     device->GetTLASBuildSizes(virtualGeometryManager.maxInstances, tlasScratchSize,
                               tlasAccelSize);
@@ -1009,7 +1003,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             computeCmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
             computeCmd->ClearBuffer(&virtualGeometryManager.blasDataBuffer);
-            computeCmd->ClearBuffer(&tlasBuildRangeBuffer);
+            computeCmd->ClearBuffer(&virtualGeometryManager.ptlasInstanceBitVectorBuffer);
 
             computeCmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1113,6 +1107,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             cmd->ClearBuffer(&virtualGeometryManager.clasGlobalsBuffer);
             cmd->ClearBuffer(&virtualGeometryManager.streamingRequestsBuffer);
             cmd->ClearBuffer(&virtualGeometryManager.blasDataBuffer);
+            cmd->ClearBuffer(&tlasBuffer);
 
             cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1191,14 +1186,14 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
 
             virtualGeometryManager.BuildClusterBLAS(cmd, &visibleClustersBuffer);
 
-            virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer);
-            cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                         VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                         VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
-                         VK_ACCESS_2_SHADER_READ_BIT);
-            cmd->FlushBarriers();
+            // virtualGeometryManager.BuildPTLAS(cmd, &gpuInstancesBuffer.buffer);
+            // cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+            //              VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+            //              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+            //              VK_ACCESS_2_SHADER_READ_BIT);
+            // cmd->FlushBarriers();
 
-#if 0
+#if 1
             {
                 // Prepare instance descriptors for TLAS build
                 device->BeginEvent(cmd, "Prepare TLAS");
@@ -1210,7 +1205,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                     .Bind(&virtualGeometryManager.blasDataBuffer)
                     .Bind(&gpuInstancesBuffer.buffer)
                     .Bind(&tlasBuffer)
-                    .Bind(&tlasBuildRangeBuffer);
+                    .Bind(&virtualGeometryManager.instanceRefBuffer);
+                // .Bind(&tlasBuildRangeBuffer);
                 cmd->BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, &ds,
                                         fillInstanceLayout.pipelineLayout);
 
@@ -1229,11 +1225,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 // TODO: partitioned TLAS
                 // Build the TLAS
                 device->BeginEvent(cmd, "Build TLAS");
-                // tlas.as = cmd->BuildTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &tlasBuffer,
-                // 1);
-                tlas.as =
-                    cmd->BuildTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &tlasBuffer,
-                                   &tlasBuildRangeBuffer, virtualGeometryManager.maxInstances);
+                tlas.as = cmd->BuildTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &tlasBuffer, 1);
+                // tlas.as =
+                //     cmd->BuildTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &tlasBuffer,
+                //                    &tlasBuildRangeBuffer,
+                //                    virtualGeometryManager.maxInstances);
                 cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                              VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
@@ -1261,8 +1257,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         cmd->Barrier(image, VK_IMAGE_LAYOUT_GENERAL, flags, VK_ACCESS_2_SHADER_WRITE_BIT);
         cmd->FlushBarriers();
         cmd->BindPipeline(bindPoint, rts.pipeline);
+
+        u64 ptlasAddress =
+            device->GetDeviceAddress(virtualGeometryManager.tlasAccelBuffer.buffer);
         DescriptorSet descriptorSet = layout.CreateDescriptorSet();
-        descriptorSet.Bind(&tlas.as)
+        descriptorSet
+            .Bind(&tlas.as) // virtualGeometryManager.ptlas)
             .Bind(image)
             .Bind(&sceneTransferBuffers[currentBuffer].buffer)
             .Bind(&materialBuffer)
