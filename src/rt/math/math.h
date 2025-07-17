@@ -60,6 +60,16 @@ inline u64 LeftShift2(u64 x)
 
 inline u64 EncodeMorton2(u32 x, u32 y) { return (LeftShift2(y) << 1) | LeftShift2(x); }
 
+inline u32 MortonCode3(u32 x)
+{
+    x &= 0x000003ff;
+    x = (x ^ (x << 16)) & 0xff0000ff;
+    x = (x ^ (x << 8)) & 0x0300f00f;
+    x = (x ^ (x << 4)) & 0x030c30c3;
+    x = (x ^ (x << 2)) & 0x09249249;
+    return x;
+}
+
 static constexpr __forceinline u32 ReverseMortonCode2(u32 x)
 {
     x &= 0x55555555;

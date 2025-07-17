@@ -1225,6 +1225,8 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
                      VK_ACCESS_2_SHADER_READ_BIT);
         cmd->FlushBarriers();
         device->EndEvent(cmd);
+        // so what's the todo? fixup the streaming flags, then try to support multiple blas
+        // (again), and then what? ptlas?
     }
 }
 

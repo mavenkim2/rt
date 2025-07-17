@@ -2431,6 +2431,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     SortHandles(handles, numClusters);
     RecordAOSSplits *sortedClusterRecords =
         PushArrayNoZero(scratch.temp.arena, RecordAOSSplits, numClusters);
+
     for (int i = 0; i < numClusters; i++)
     {
         sortedClusterRecords[i] = clusterRecords[handles[i].index];
@@ -3320,12 +3321,49 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     u32 currentGeoBufferSize     = 0;
     u32 currentShadingBufferSize = 0;
 
-    StaticArray<int> sortedClusterIndices(scratch.temp.arena, numClusters);
-    // TODO: morton order sort
-    for (int i = 0; i < numClusters; i++)
+    Vec3f minP(pos_inf);
+    Vec3f maxP(neg_inf);
+    for (int groupIndex = 0; groupIndex < clusterGroups.Length(); groupIndex++)
     {
-        sortedClusterIndices.Push(i);
+        ClusterGroup &group = clusterGroups[groupIndex];
+        minP                = Min(group.lodBounds.xyz, minP);
+        maxP                = Max(group.lodBounds.xyz, maxP);
     }
+
+    Vec3f dist         = maxP - minP;
+    float maxComponent = Max(dist.x, Max(dist.y, dist.z));
+    float scale        = 1023.f / maxComponent;
+
+    struct GroupHandle
+    {
+        u64 sortKey;
+        int index;
+    };
+
+    GroupHandle *groupHandles =
+        PushArrayNoZero(scratch.temp.arena, GroupHandle, clusterGroups.Length());
+    for (int groupIndex = 0; groupIndex < clusterGroups.Length(); groupIndex++)
+    {
+        ClusterGroup &group = clusterGroups[groupIndex];
+
+        Vec3i quantizedCenter =
+            Clamp(Vec3i((group.lodBounds.xyz - minP) * scale + 0.5f), Vec3i(0), Vec3i(1023));
+
+        u32 key = (MortonCode3(quantizedCenter.z) << 2) |
+                  (MortonCode3(quantizedCenter.y) << 1) | MortonCode3(quantizedCenter.x);
+
+        if (group.mipLevel & 1)
+        {
+            key ^= ~0u;
+        }
+
+        GroupHandle handle;
+        handle.sortKey           = ((u64)group.mipLevel << 32u) | key;
+        handle.index             = groupIndex;
+        groupHandles[groupIndex] = handle;
+    }
+
+    SortHandles(groupHandles, clusterGroups.Length());
 
     string outFilename =
         PushStr8F(scratch.temp.arena, "%S.geo", RemoveFileExtension(filename));
@@ -3367,8 +3405,10 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                headers[headerIndex].z;
     };
 
-    for (int groupIndex = 0; groupIndex < clusterGroups.Length(); groupIndex++)
+    for (int handleIndex = 0; handleIndex < clusterGroups.Length(); handleIndex++)
     {
+        GroupHandle handle  = groupHandles[handleIndex];
+        u32 groupIndex      = handle.index;
         ClusterGroup &group = clusterGroups[groupIndex];
         if (group.isLeaf) continue;
 
@@ -3728,13 +3768,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             rebraidIndices.Push(hierarchy.Length());
         }
 
-        // Print("node index: %u, clustertotal : %u\n", childOffset, clusterTotal);
-
         for (int i = 0; i < child.numChildren; i++)
         {
-            Print("%f %f %f %f %f %f\n", child.bounds[i].minP[0], child.bounds[i].minP[1],
-                  child.bounds[i].minP[2], child.bounds[i].maxP[0], child.bounds[i].maxP[1],
-                  child.bounds[i].maxP[2]);
             packed.lodBounds[i] = child.lodBounds[i];
             packed.center[i]    = ToVec3f(child.bounds[i].Centroid());
             packed.extents[i] = ToVec3f((child.bounds[i].maxP - child.bounds[i].minP) * 0.5f);

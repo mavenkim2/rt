@@ -1095,7 +1095,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             // - culling
             //
             // culling
-            // - frustum
             // - occlusion
             //
             // instance combining at far view distances
