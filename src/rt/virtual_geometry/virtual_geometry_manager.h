@@ -7,6 +7,25 @@
 namespace rt
 {
 
+struct VirtualPageHandle
+{
+    u32 instanceID;
+    u32 pageIndex;
+};
+
+struct ClusterFixup
+{
+    u32 pageIndex_clusterIndex;
+
+    u32 GetPageIndex() { return pageIndex_clusterIndex >> MAX_CLUSTERS_PER_PAGE_BITS; }
+    u32 GetClusterIndex() { return pageIndex_clusterIndex & (MAX_CLUSTERS_PER_PAGE - 1); }
+};
+
+struct GPUClusterFixup
+{
+    u32 offset;
+};
+
 struct VirtualGeometryManager
 {
     const u32 streamingPoolSize = megabytes(512);
@@ -36,18 +55,25 @@ struct VirtualGeometryManager
         u32 numRequests;
     };
 
+    struct VirtualPage
+    {
+        u32 priority;
+        int pageIndex;
+    };
+
     struct Page
     {
         u32 numClusters;
-        u32 instanceID;
-        u32 localPageIndex;
+
+        VirtualPageHandle handle;
+        u32 numDependents;
 
         int virtualIndex;
         int nextPage;
         int prevPage;
     };
 
-    struct PageToHierarchyNodeGraph
+    struct Graph
     {
         u32 *offsets;
         u32 *data;
@@ -55,7 +81,11 @@ struct VirtualGeometryManager
 
     struct MeshInfo
     {
-        PageToHierarchyNodeGraph graph;
+        Graph pageToHierarchyNodeGraph;
+
+        Graph pageToParentPageGraph;
+        Graph pageToParentClusters;
+        Graph pageToNeighborPage;
 
         // TODO: replace with filename
         u8 *pageData;
@@ -175,10 +205,13 @@ struct VirtualGeometryManager
     StaticArray<MeshInfo> meshInfos;
     StaticArray<InstanceRef> instanceRefs;
 
-    StaticArray<int> virtualTable;
+    StaticArray<VirtualPage> virtualTable;
     StaticArray<Page> physicalPages;
 
     VirtualGeometryManager(Arena *arena);
+    void EditRegistration(u32 instanceID, u32 pageIndex, bool add);
+    void RecursePageDependencies(StaticArray<VirtualPageHandle> &pages, u32 instanceID,
+                                 u32 pageIndex, u32 priority);
     void ProcessRequests(CommandBuffer *cmd);
     u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, u8 *pageData, PackedHierarchyNode *nodes,
                    u32 *rebraidIndices, u32 numNodes, u32 numPages, u32 numRebraid);

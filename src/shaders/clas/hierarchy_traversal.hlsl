@@ -225,10 +225,6 @@ struct ClusterCull
                 InterlockedAdd(requests[0].pageIndex_numPages, 1, requestIndex);
                 requests[requestIndex + 1] = request;
             }
-            // here's what I think is happening: 
-            // 1. there are a lot of clusters with "0" error. all of these clusters 
-            // are being requested by the streaming system, even though most of them are 
-            // unneeded. 
         }
 #if 0
         else if (!isValid && !isLeaf)
