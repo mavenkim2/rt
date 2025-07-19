@@ -17,6 +17,21 @@
 
 namespace rt
 {
+struct ClusterFixup
+{
+    u32 pageIndex_clusterIndex;
+
+    ClusterFixup(u32 pageIndex_clusterIndex) : pageIndex_clusterIndex(pageIndex_clusterIndex)
+    {
+    }
+    ClusterFixup(u32 pageIndex, u32 clusterIndex)
+    {
+        pageIndex_clusterIndex = (pageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | clusterIndex;
+    }
+    u32 GetPageIndex() { return pageIndex_clusterIndex >> MAX_CLUSTERS_PER_PAGE_BITS; }
+    u32 GetClusterIndex() { return pageIndex_clusterIndex & (MAX_CLUSTERS_PER_PAGE - 1); }
+};
+
 // https://en.wikipedia.org/wiki/LU_decomposition
 template <typename T>
 int LUPDecompose(T *A, int N, T Tol, int *P)
@@ -3491,8 +3506,9 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     pageInfos.Push(pageInfo);
 
     // Setup page to neighbor page graph
-    u32 numNeighborData             = 0;
-    u32 *pageToNeighborPageOffsets  = PushArray(scratch.temp.arena, u32, pageInfos.Length());
+    u32 numNeighborData = 0;
+    u32 *pageToNeighborPageOffsets =
+        PushArray(scratch.temp.arena, u32, pageInfos.Length() + 1);
     u32 *pageToNeighborPageOffsets1 = &pageToNeighborPageOffsets[1];
 
     for (int pageIndex = 0; pageIndex < pageInfos.Length(); pageIndex++)
@@ -3539,8 +3555,12 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         }
     }
 
-    // Setup page to parent page graph
-    for (auto &pageInfo : pageInfos)
+    // Setup page to parent cluster graph
+    u32 *pageToParentClusterOffsets =
+        PushArray(scratch.temp.arena, u32, pageInfos.Length() + 1);
+    u32 *pageToParentClusterOffsets1 = &pageToParentClusterOffsets[1];
+    u32 numParentClusters            = 0;
+    for (int pageIndex = 0; pageIndex < pageInfos.Length(); pageIndex++)
     {
         for (int partIndex = pageInfo.partStartIndex;
              partIndex < pageInfo.partStartIndex + pageInfo.partCount; partIndex++)
@@ -3553,38 +3573,122 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                  clusterIndex < part.clusterStartIndex + part.clusterCount; clusterIndex++)
             {
                 Cluster &cluster = clusters[group.clusterStartIndex + clusterIndex];
+                if (cluster.childGroupIndex == 0) continue;
                 Assert(cluster.groupIndex == part.groupIndex);
-                ClusterGroup &group = clusterGroups[cluster.childGroupIndex];
+                ClusterGroup &childGroup = clusterGroups[cluster.childGroupIndex];
 
-                Assert(clusterIndex >= group.clusterStartIndex);
-                int clusterInGroupIndex = clusterIndex - group.clusterStartIndex;
-
-                // Find the page of the parent cluster and its index in that page
-                int clusterInPageIndex = -1;
-                int parentPageIndex    = -1;
-
-                // Only add cluster fix ups to the first
-                group.pageStartIndex;
-
-                for (int parentPartIndex = group.partStartIndex;
-                     parentPartIndex < group.partStartIndex + group.numParts;
-                     parentPartIndex++)
+                ClusterFixup fixup(part.pageIndex, part.clusterPageStartIndex + clusterIndex -
+                                                       part.clusterStartIndex);
+                for (u32 pageIndex = childGroup.pageStartIndex;
+                     pageIndex < childGroup.pageStartIndex + childGroup.numPages; pageIndex++)
                 {
-                    GroupPart &parentPart = parts[parentPartIndex];
-                    parentPart.pageIndex;
-                    if (clusterInGroupIndex >= parentPart.clusterStartIndex &&
-                        clusterInGroupIndex <
-                            parentPart.clusterStartIndex + parentPart.clusterCount)
-                    {
-                        clusterInPageIndex = clusterInGroupIndex -
-                                             parentPart.clusterStartIndex +
-                                             parentPart.clusterPageStartIndex;
-                        break;
-                    }
+                    pageToParentClusterOffsets1[pageIndex]++;
+                    numParentClusters++;
                 }
-                // the page dependency and num is to request the group the cluster is a part of
-                // the page index and cluster is to fixup the cluster itself
-                Assert(clusterInPageIndex != -1);
+            }
+        }
+    }
+
+    u32 *pageToParentClusterData = PushArrayNoZero(scratch.temp.arena, u32, numParentClusters);
+    numParentClusters            = 0;
+    for (int pageIndex = 0; pageIndex < pageInfos.Length(); pageIndex++)
+    {
+        u32 pageNumParentClusters              = pageToParentClusterOffsets1[pageIndex];
+        pageToParentClusterOffsets1[pageIndex] = numParentClusters;
+        numParentClusters += pageNumParentClusters;
+    }
+
+    for (int pageIndex = 0; pageIndex < pageInfos.Length(); pageIndex++)
+    {
+        for (int partIndex = pageInfo.partStartIndex;
+             partIndex < pageInfo.partStartIndex + pageInfo.partCount; partIndex++)
+        {
+            GroupPart &part     = parts[partIndex];
+            ClusterGroup &group = clusterGroups[part.groupIndex];
+
+            // need to find the parent groups/clusters somehow
+            for (int clusterIndex = part.clusterStartIndex;
+                 clusterIndex < part.clusterStartIndex + part.clusterCount; clusterIndex++)
+            {
+                Cluster &cluster = clusters[group.clusterStartIndex + clusterIndex];
+                if (cluster.childGroupIndex == 0) continue;
+                Assert(cluster.groupIndex == part.groupIndex);
+                ClusterGroup &childGroup = clusterGroups[cluster.childGroupIndex];
+
+                ClusterFixup fixup(part.pageIndex, part.clusterPageStartIndex + clusterIndex -
+                                                       part.clusterStartIndex);
+                for (u32 pageIndex = childGroup.pageStartIndex;
+                     pageIndex < childGroup.pageStartIndex + childGroup.numPages; pageIndex++)
+                {
+                    pageToParentClusterData[pageToParentClusterOffsets1[pageIndex]++] =
+                        fixup.pageIndex_clusterIndex;
+                }
+            }
+        }
+    }
+
+    // Setup page to parent page graph
+    u32 *pageToParentPageOffsets  = PushArray(scratch.temp.arena, u32, pageInfos.Length() + 1);
+    u32 *pageToParentPageOffsets1 = &pageToParentPageOffsets[1];
+    u32 numParentPages            = 0;
+    for (int pageIndex = 0; pageIndex < pageInfos.Length(); pageIndex++)
+    {
+        for (int clusterIndex = pageToParentClusterOffsets[pageIndex];
+             clusterIndex < pageToParentClusterOffsets[pageIndex + 1]; clusterIndex++)
+        {
+            ClusterFixup fixup(pageToParentClusterData[clusterIndex]);
+            bool add = 1;
+            for (int otherClusterIndex = clusterIndex + 1;
+                 otherClusterIndex < pageToParentClusterOffsets[pageIndex + 1];
+                 otherClusterIndex++)
+            {
+                ClusterFixup otherFixup =
+                    ClusterFixup{pageToParentClusterData[otherClusterIndex]};
+                if (fixup.GetPageIndex() == otherFixup.GetPageIndex())
+                {
+                    add = 0;
+                    break;
+                }
+            }
+            if (add)
+            {
+                pageToParentPageOffsets1[pageIndex]++;
+                numParentPages++;
+            }
+        }
+    }
+    u32 *pageToParentPageData = PushArrayNoZero(scratch.temp.arena, u32, numParentPages);
+    numParentPages            = 0;
+    for (int pageIndex = 0; pageIndex < pageInfos.Length(); pageIndex++)
+    {
+        u32 pageNumParentPages              = pageToParentPageOffsets1[pageIndex];
+        pageToParentPageOffsets1[pageIndex] = numParentPages;
+        numParentPages += pageNumParentPages;
+    }
+
+    for (int pageIndex = 0; pageIndex < pageInfos.Length(); pageIndex++)
+    {
+        for (int clusterIndex = pageToParentClusterOffsets[pageIndex];
+             clusterIndex < pageToParentClusterOffsets[pageIndex + 1]; clusterIndex++)
+        {
+            ClusterFixup fixup(pageToParentClusterData[clusterIndex]);
+            bool add = 1;
+            for (int otherClusterIndex = clusterIndex + 1;
+                 otherClusterIndex < pageToParentClusterOffsets[pageIndex + 1];
+                 otherClusterIndex++)
+            {
+                ClusterFixup otherFixup =
+                    ClusterFixup{pageToParentClusterData[otherClusterIndex]};
+                if (fixup.GetPageIndex() == otherFixup.GetPageIndex())
+                {
+                    add = 0;
+                    break;
+                }
+            }
+            if (add)
+            {
+                pageToParentPageData[pageToParentPageOffsets1[pageIndex]++] =
+                    fixup.GetPageIndex();
             }
         }
     }
@@ -3958,12 +4062,22 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     MemoryCopy(ptr + sizeof(u32), rebraidIndices.data, sizeof(u32) * numRebraid);
 
     // Graphs
-    u64 pageToNeighborPageOffset = AllocateSpace(&builder, sizeof(u32) * pageInfos.Length());
-    ptr                          = (u8 *)GetMappedPtr(&builder, pageToNeighborPageOffset);
+    u64 pageToNeighborPageOffset =
+        AllocateSpace(&builder, sizeof(u32) * pageInfos.Length() + 1);
+    ptr = (u8 *)GetMappedPtr(&builder, pageToNeighborPageOffset);
     MemoryCopy(ptr, pageToNeighborPageOffsets, sizeof(u32) * (pageInfos.Length() + 1));
     MemoryCopy(ptr, pageToNeighborData, sizeof(u32) * numNeighborData);
 
-    u64 pageToParentPageOffset = AllocateSpace(&builder, sizeof(u32) * pageInfos.Length());
+    u64 pageToParentPageOffset = AllocateSpace(&builder, sizeof(u32) * pageInfos.Length() + 1);
+    ptr                        = (u8 *)GetMappedPtr(&builder, pageToParentPageOffset);
+    MemoryCopy(ptr, pageToParentPageOffsets, sizeof(u32) * (pageInfos.Length() + 1));
+    MemoryCopy(ptr, pageToParentPageData, sizeof(u32) * numParentPages);
+
+    u64 pageToParentClusterOffset =
+        AllocateSpace(&builder, sizeof(u32) * pageInfos.Length() + 1);
+    ptr = (u8 *)GetMappedPtr(&builder, pageToParentClusterOffset);
+    MemoryCopy(ptr, pageToParentClusterOffsets, sizeof(u32) * (pageInfos.Length() + 1));
+    MemoryCopy(ptr, pageToParentClusterData, sizeof(u32) * numParentClusters);
 
     // Print("len: %u\n", rebraidIndices.Length());
     // for (u32 index : rebraidIndices)
