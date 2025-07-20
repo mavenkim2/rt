@@ -19,13 +19,12 @@ namespace rt
 struct ClusterFixup
 {
     u32 pageIndex_clusterIndex;
+    u32 pageStartIndex_numPages;
 
-    ClusterFixup(u32 pageIndex_clusterIndex) : pageIndex_clusterIndex(pageIndex_clusterIndex)
+    ClusterFixup(u32 pageIndex, u32 clusterIndex, u32 pageStartIndex, u32 numPages)
     {
-    }
-    ClusterFixup(u32 pageIndex, u32 clusterIndex)
-    {
-        pageIndex_clusterIndex = (pageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | clusterIndex;
+        pageIndex_clusterIndex  = (pageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | clusterIndex;
+        pageStartIndex_numPages = (pageStartIndex << MAX_PARTS_PER_GROUP_BITS) | numPages;
     }
     u32 GetPageIndex() { return pageIndex_clusterIndex >> MAX_CLUSTERS_PER_PAGE_BITS; }
     u32 GetClusterIndex() { return pageIndex_clusterIndex & (MAX_CLUSTERS_PER_PAGE - 1); }
@@ -3498,11 +3497,11 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         group.numParts = parts.Length() - group.numParts;
     }
 
-    PageInfo pageInfo;
-    pageInfo.partStartIndex = partStartIndex;
-    pageInfo.partCount      = parts.Length() - partStartIndex;
-    pageInfo.numClusters    = numClustersInPage;
-    pageInfos.Push(pageInfo);
+    PageInfo finalPageInfo;
+    finalPageInfo.partStartIndex = partStartIndex;
+    finalPageInfo.partCount      = parts.Length() - partStartIndex;
+    finalPageInfo.numClusters    = numClustersInPage;
+    pageInfos.Push(finalPageInfo);
 
     // Setup page to neighbor page graph
     u32 numNeighborData = 0;
@@ -3510,8 +3509,16 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         PushArray(scratch.temp.arena, u32, pageInfos.Length() + 1);
     u32 *pageToNeighborPageOffsets1 = &pageToNeighborPageOffsets[1];
 
+    // i need the page index
+    // the page start index
+    // the number of pages
+    // the cluster start index + num clusters
+    // 8 bit 5 bits 16 bits 3 bits
+    // if i ahd 3 more bits i could fit everything
+
     for (int pageIndex = 0; pageIndex < pageInfos.Length(); pageIndex++)
     {
+        PageInfo &pageInfo = pageInfos[pageIndex];
         for (int partIndex = pageInfo.partStartIndex;
              partIndex < pageInfo.partStartIndex + pageInfo.partCount; partIndex++)
         {
@@ -3522,7 +3529,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                  otherPageIndex < group.pageStartIndex + group.numPages; otherPageIndex++)
             {
                 if (pageIndex == otherPageIndex) continue;
-                pageToNeighborPageOffsets[pageIndex]++;
+                pageToNeighborPageOffsets1[pageIndex]++;
                 numNeighborData++;
             }
         }
@@ -3539,6 +3546,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
     for (int pageIndex = 0; pageIndex < pageInfos.Length(); pageIndex++)
     {
+        PageInfo &pageInfo = pageInfos[pageIndex];
         for (int partIndex = pageInfo.partStartIndex;
              partIndex < pageInfo.partStartIndex + pageInfo.partCount; partIndex++)
         {
@@ -3554,6 +3562,9 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         }
     }
 
+    ErrorExit(numNeighborData == pageToNeighborPageOffsets[pageInfos.Length()], "%u %u\n",
+              numNeighborData, pageToNeighborPageOffsets[pageInfos.Length()]);
+
     // Setup page to parent cluster graph
     u32 *pageToParentClusterOffsets =
         PushArray(scratch.temp.arena, u32, pageInfos.Length() + 1);
@@ -3561,6 +3572,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     u32 numParentClusters            = 0;
     for (int pageIndex = 0; pageIndex < pageInfos.Length(); pageIndex++)
     {
+        PageInfo &pageInfo = pageInfos[pageIndex];
         for (int partIndex = pageInfo.partStartIndex;
              partIndex < pageInfo.partStartIndex + pageInfo.partCount; partIndex++)
         {
@@ -3576,8 +3588,6 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 Assert(cluster.groupIndex == part.groupIndex);
                 ClusterGroup &childGroup = clusterGroups[cluster.childGroupIndex];
 
-                ClusterFixup fixup(part.pageIndex, part.clusterPageStartIndex + clusterIndex -
-                                                       part.clusterStartIndex);
                 for (u32 pageIndex = childGroup.pageStartIndex;
                      pageIndex < childGroup.pageStartIndex + childGroup.numPages; pageIndex++)
                 {
@@ -3588,8 +3598,9 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         }
     }
 
-    u32 *pageToParentClusterData = PushArrayNoZero(scratch.temp.arena, u32, numParentClusters);
-    numParentClusters            = 0;
+    ClusterFixup *pageToParentClusterData =
+        PushArrayNoZero(scratch.temp.arena, ClusterFixup, numParentClusters);
+    numParentClusters = 0;
     for (int pageIndex = 0; pageIndex < pageInfos.Length(); pageIndex++)
     {
         u32 pageNumParentClusters              = pageToParentClusterOffsets1[pageIndex];
@@ -3599,6 +3610,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
     for (int pageIndex = 0; pageIndex < pageInfos.Length(); pageIndex++)
     {
+        PageInfo &pageInfo = pageInfos[pageIndex];
         for (int partIndex = pageInfo.partStartIndex;
              partIndex < pageInfo.partStartIndex + pageInfo.partCount; partIndex++)
         {
@@ -3614,17 +3626,20 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 Assert(cluster.groupIndex == part.groupIndex);
                 ClusterGroup &childGroup = clusterGroups[cluster.childGroupIndex];
 
-                ClusterFixup fixup(part.pageIndex, part.clusterPageStartIndex + clusterIndex -
-                                                       part.clusterStartIndex);
+                ClusterFixup fixup(part.pageIndex,
+                                   part.clusterPageStartIndex + clusterIndex -
+                                       part.clusterStartIndex,
+                                   childGroup.pageStartIndex, childGroup.numPages);
                 for (u32 pageIndex = childGroup.pageStartIndex;
                      pageIndex < childGroup.pageStartIndex + childGroup.numPages; pageIndex++)
                 {
-                    pageToParentClusterData[pageToParentClusterOffsets1[pageIndex]++] =
-                        fixup.pageIndex_clusterIndex;
+                    pageToParentClusterData[pageToParentClusterOffsets1[pageIndex]++] = fixup;
                 }
             }
         }
     }
+
+    Assert(numParentClusters == pageToParentClusterOffsets[pageInfos.Length()]);
 
     // Setup page to parent page graph
     u32 *pageToParentPageOffsets  = PushArray(scratch.temp.arena, u32, pageInfos.Length() + 1);
@@ -3636,6 +3651,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
              clusterIndex < pageToParentClusterOffsets[pageIndex + 1]; clusterIndex++)
         {
             ClusterFixup fixup(pageToParentClusterData[clusterIndex]);
+            if (fixup.GetPageIndex() == pageIndex) continue;
             bool add = 1;
             for (int otherClusterIndex = clusterIndex + 1;
                  otherClusterIndex < pageToParentClusterOffsets[pageIndex + 1];
@@ -3671,6 +3687,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
              clusterIndex < pageToParentClusterOffsets[pageIndex + 1]; clusterIndex++)
         {
             ClusterFixup fixup(pageToParentClusterData[clusterIndex]);
+            if (fixup.GetPageIndex() == pageIndex) continue;
+
             bool add = 1;
             for (int otherClusterIndex = clusterIndex + 1;
                  otherClusterIndex < pageToParentClusterOffsets[pageIndex + 1];
@@ -3691,6 +3709,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             }
         }
     }
+
+    Assert(numParentPages == pageToParentPageOffsets[pageInfos.Length()]);
 
     // Write the data to the pages
     for (auto &pageInfo : pageInfos)
@@ -3761,7 +3781,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                     MemoryCopy(ptr + currentPageOffset + i * soaStride, src, copySize);
                 }
 
-                u32 flags = CLUSTER_STREAMING_LEAF_FLAG;
+                u32 flags = childGroup.isLeaf ? CLUSTER_STREAMING_LEAF_FLAG : 0;
 
                 MemoryCopy(ptr + currentPageOffset + (4 - 1) * soaStride + sizeof(Vec3f),
                            &cluster.lodError, sizeof(float));
@@ -4057,22 +4077,20 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     MemoryCopy(ptr + sizeof(u32), rebraidIndices.data, sizeof(u32) * numRebraid);
 
     // Graphs
-    u64 pageToNeighborPageOffset =
-        AllocateSpace(&builder, sizeof(u32) * pageInfos.Length() + 1);
-    ptr = (u8 *)GetMappedPtr(&builder, pageToNeighborPageOffset);
-    MemoryCopy(ptr, pageToNeighborPageOffsets, sizeof(u32) * (pageInfos.Length() + 1));
-    MemoryCopy(ptr, pageToNeighborData, sizeof(u32) * numNeighborData);
-
-    u64 pageToParentPageOffset = AllocateSpace(&builder, sizeof(u32) * pageInfos.Length() + 1);
-    ptr                        = (u8 *)GetMappedPtr(&builder, pageToParentPageOffset);
-    MemoryCopy(ptr, pageToParentPageOffsets, sizeof(u32) * (pageInfos.Length() + 1));
+    u32 offsetsSize = sizeof(u32) * (pageInfos.Length() + 1);
+    u64 pageToParentPageOffset =
+        AllocateSpace(&builder, offsetsSize + sizeof(u32) * numParentPages);
+    ptr = (u8 *)GetMappedPtr(&builder, pageToParentPageOffset);
+    MemoryCopy(ptr, pageToParentPageOffsets, offsetsSize);
+    ptr += offsetsSize;
     MemoryCopy(ptr, pageToParentPageData, sizeof(u32) * numParentPages);
 
     u64 pageToParentClusterOffset =
-        AllocateSpace(&builder, sizeof(u32) * pageInfos.Length() + 1);
+        AllocateSpace(&builder, offsetsSize + sizeof(ClusterFixup) * numParentClusters);
     ptr = (u8 *)GetMappedPtr(&builder, pageToParentClusterOffset);
-    MemoryCopy(ptr, pageToParentClusterOffsets, sizeof(u32) * (pageInfos.Length() + 1));
-    MemoryCopy(ptr, pageToParentClusterData, sizeof(u32) * numParentClusters);
+    MemoryCopy(ptr, pageToParentClusterOffsets, offsetsSize);
+    ptr += offsetsSize;
+    MemoryCopy(ptr, pageToParentClusterData, sizeof(ClusterFixup) * numParentClusters);
 
     // Print("len: %u\n", rebraidIndices.Length());
     // for (u32 index : rebraidIndices)

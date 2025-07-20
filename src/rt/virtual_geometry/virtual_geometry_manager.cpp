@@ -296,6 +296,9 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
                                                      VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                                  maxNodes * sizeof(PackedHierarchyNode));
+    clusterFixupBuffer    = device->CreateBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE * sizeof(GPUClusterFixup));
 
     clusterAccelAddresses = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -504,7 +507,7 @@ void VirtualGeometryManager::LinkLRU(int index)
 void VirtualGeometryManager::EditRegistration(u32 instanceID, u32 pageIndex, bool add)
 {
     MeshInfo &meshInfo = meshInfos[instanceID];
-    Graph &graph       = meshInfo.pageToParentPageGraph;
+    Graph<u32> &graph  = meshInfo.pageToParentPageGraph;
 
     int physicalPageIndex = virtualTable[meshInfo.virtualPageOffset + pageIndex].pageIndex;
     Assert(add || (!add && physicalPageIndex != -1));
@@ -562,22 +565,16 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
     Advance(&tokenizer, sizeof(u32) * numRebraid);
 
     // Graphs
-    Graph pageToNeighborPage;
-    pageToNeighborPage.offsets = (u32 *)tokenizer.cursor;
-    Advance(&tokenizer, sizeof(u32) * (clusterFileHeader.numPages + 1));
-    pageToNeighborPage.data = (u32 *)tokenizer.cursor;
-    Advance(&tokenizer, sizeof(u32) * pageToNeighborPage.offsets[clusterFileHeader.numPages]);
-
-    Graph pageToParentPage;
+    Graph<u32> pageToParentPage;
     pageToParentPage.offsets = (u32 *)tokenizer.cursor;
     Advance(&tokenizer, sizeof(u32) * (clusterFileHeader.numPages + 1));
     pageToParentPage.data = (u32 *)tokenizer.cursor;
     Advance(&tokenizer, sizeof(u32) * pageToParentPage.offsets[clusterFileHeader.numPages]);
 
-    Graph pageToParentCluster;
+    Graph<ClusterFixup> pageToParentCluster;
     pageToParentCluster.offsets = (u32 *)tokenizer.cursor;
     Advance(&tokenizer, sizeof(u32) * (clusterFileHeader.numPages + 1));
-    pageToParentCluster.data = (u32 *)tokenizer.cursor;
+    pageToParentCluster.data = (ClusterFixup *)tokenizer.cursor;
 
     u32 *pageOffsets  = PushArray(arena, u32, clusterFileHeader.numPages + 1);
     u32 *pageOffsets1 = &pageOffsets[1];
@@ -590,14 +587,18 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
             if (node.leafInfo[childIndex] == ~0u) continue;
 
             // Map page to nodes
-            u32 pageIndex = node.childRef[childIndex];
-            pageOffsets1[pageIndex]++;
+            // u32 pageIndex = node.childRef[childIndex];
+            u32 bitOffset = MAX_CLUSTERS_PER_PAGE_BITS + MAX_CLUSTERS_PER_GROUP_BITS;
+            u32 numPages  = BitFieldExtractU32(node.leafInfo[childIndex],
+                                               MAX_PARTS_PER_GROUP_BITS, bitOffset);
+            bitOffset += MAX_PARTS_PER_GROUP_BITS;
+            u32 pageStartIndex =
+                BitFieldExtractU32(node.leafInfo[childIndex], 32u - bitOffset, bitOffset);
 
-            for (u32 neighborIndex = pageToNeighborPage.offsets[pageIndex];
-                 neighborIndex < pageToNeighborPage.offsets[pageIndex + 1]; neighborIndex++)
+            for (u32 pageIndex = pageStartIndex; pageIndex < pageStartIndex + numPages;
+                 pageIndex++)
             {
-                u32 neighborPage = pageToNeighborPage.data[neighborIndex];
-                pageOffsets1[neighborPage]++;
+                pageOffsets1[pageIndex]++;
             }
         }
     }
@@ -610,7 +611,7 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
         totalCount += count;
     }
 
-    u32 *pageToNodeData = PushArrayNoZero(arena, u32, totalCount);
+    HierarchyFixup *pageToNodeData = PushArrayNoZero(arena, HierarchyFixup, totalCount);
 
     for (u32 nodeIndex = 0; nodeIndex < numNodes; nodeIndex++)
     {
@@ -620,23 +621,26 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
             if (node.leafInfo[childIndex] == ~0u) continue;
 
             // Map page to nodes
-            u32 pageIndex = node.childRef[childIndex];
-            u32 data      = (nodeIndex << CHILDREN_PER_HIERARCHY_NODE_BITS) | childIndex;
 
-            u32 index             = pageOffsets1[pageIndex]++;
-            pageToNodeData[index] = data;
+            u32 bitOffset = MAX_CLUSTERS_PER_PAGE_BITS + MAX_CLUSTERS_PER_GROUP_BITS;
+            u32 numPages  = BitFieldExtractU32(node.leafInfo[childIndex],
+                                               MAX_PARTS_PER_GROUP_BITS, bitOffset);
+            bitOffset += MAX_PARTS_PER_GROUP_BITS;
+            u32 pageStartIndex =
+                BitFieldExtractU32(node.leafInfo[childIndex], 32u - bitOffset, bitOffset);
+            u32 pageDelta = node.childRef[childIndex] - pageStartIndex;
+            HierarchyFixup fixup(nodeIndex, childIndex, pageStartIndex, pageDelta, numPages);
 
-            for (u32 neighborIndex = pageToNeighborPage.offsets[pageIndex];
-                 neighborIndex < pageToNeighborPage.offsets[pageIndex + 1]; neighborIndex++)
+            for (u32 pageIndex = pageStartIndex; pageIndex < pageStartIndex + numPages;
+                 pageIndex++)
             {
-                u32 neighborPage      = pageToNeighborPage.data[neighborIndex];
-                index                 = pageOffsets1[neighborPage]++;
-                pageToNodeData[index] = data;
+                u32 index             = pageOffsets1[pageIndex]++;
+                pageToNodeData[index] = fixup;
             }
         }
     }
 
-    Graph graph;
+    Graph<HierarchyFixup> graph;
     graph.offsets = pageOffsets;
     graph.data    = pageToNodeData;
 
@@ -692,7 +696,6 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
     meshInfo.virtualPageOffset        = totalNumVirtualPages;
     meshInfo.pageData                 = pageData;
     meshInfo.numRebraid               = numRebraid;
-    meshInfo.pageToNeighborPage       = pageToNeighborPage;
     meshInfo.pageToParentClusters     = pageToParentCluster;
     meshInfo.pageToParentPageGraph    = pageToParentPage;
 
@@ -716,21 +719,35 @@ void VirtualGeometryManager::RecursePageDependencies(StaticArray<VirtualPageHand
         pages.Push(VirtualPageHandle{instanceID, pageIndex});
     }
 
-    Assert(priority > virtualPage.priority);
+    if (priority <= virtualPage.priority) return;
     virtualPage.priority = priority;
 
-    Graph &graph   = meshInfo.pageToParentPageGraph;
-    u32 numParents = graph.offsets[pageIndex + 1] - graph.offsets[pageIndex];
+    Graph<u32> &graph = meshInfo.pageToParentPageGraph;
+    u32 numParents    = graph.offsets[pageIndex + 1] - graph.offsets[pageIndex];
 
     for (int parentPageIndex = 0; parentPageIndex < numParents; parentPageIndex++)
     {
         u32 parentPage = graph.data[graph.offsets[pageIndex] + parentPageIndex];
         VirtualPage &parentVirtualPage = virtualTable[meshInfo.virtualPageOffset + parentPage];
-        if (priority > parentVirtualPage.priority)
+        if (priority + 1 > parentVirtualPage.priority)
         {
             RecursePageDependencies(pages, instanceID, parentPage, priority + 1);
         }
     }
+}
+
+bool VirtualGeometryManager::VerifyPageDependencies(u32 virtualOffset, u32 startPage,
+                                                    u32 numPages)
+{
+    for (u32 pageIndex = startPage; pageIndex < startPage + numPages; pageIndex++)
+    {
+        VirtualPage &virtualPage = virtualTable[virtualOffset + pageIndex];
+        if (virtualPage.pageIndex == -1)
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
@@ -757,20 +774,10 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
     union Float
     {
         f32 f;
-        int i;
+        u32 u;
     };
 
-    u32 totalNumPages = 0;
-    for (u32 requestIndex = 0; requestIndex < numRequests; requestIndex++)
-    {
-        u32 pageIndex_numPages = requests[requestIndex].pageIndex_numPages;
-        u32 pageCount = BitFieldExtractU32(pageIndex_numPages, MAX_PARTS_PER_GROUP_BITS, 0);
-        u32 pageStartIndex = pageIndex_numPages >> MAX_PARTS_PER_GROUP_BITS;
-
-        totalNumPages += pageCount;
-    }
-
-    StaticArray<VirtualPageHandle> pages(scratch.temp.arena, maxPageInstallsPerFrame);
+    StaticArray<VirtualPageHandle> pages(scratch.temp.arena, maxVirtualPages);
     for (u32 requestIndex = 0; requestIndex < numRequests; requestIndex++)
     {
         StreamingRequest &request = requests[requestIndex];
@@ -781,12 +788,11 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         for (u32 pageIndex = pageStartIndex; pageIndex < pageStartIndex + pageCount;
              pageIndex++)
         {
-            u32 priority =
-                virtualTable[meshInfos[request.instanceID].virtualPageOffset + pageIndex]
-                    .priority +
-                1;
+            Float streamingPriority;
+            streamingPriority.f = request.priority;
 
-            RecursePageDependencies(pages, request.instanceID, pageIndex, priority);
+            RecursePageDependencies(pages, request.instanceID, pageIndex,
+                                    streamingPriority.u + 1);
         }
     }
 
@@ -865,32 +871,6 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
     StaticArray<BufferToBufferCopy> nodeInstallCopies(scratch.temp.arena, 2 * maxNodes);
     u32 offset = 0;
 
-    auto PrepareHierarchyFixup = [&](u32 instanceID, u32 pageIndex, u32 gpuPageIndex) {
-        MeshInfo &meshInfo      = meshInfos[instanceID];
-        u32 hierarchyNodeOffset = meshInfo.hierarchyNodeOffset;
-        u32 *offsets            = meshInfo.pageToHierarchyNodeGraph.offsets;
-        u32 *nodeData           = meshInfo.pageToHierarchyNodeGraph.data;
-
-        for (u32 graphIndex = offsets[pageIndex]; graphIndex < offsets[pageIndex + 1];
-             graphIndex++)
-        {
-            u32 hierarchyNodeIndex = nodeData[graphIndex] >> CHILDREN_PER_HIERARCHY_NODE_BITS;
-            u32 childIndex         = nodeData[graphIndex] & (CHILDREN_PER_HIERARCHY_NODE - 1u);
-
-            BufferToBufferCopy hierarchyCopy;
-            hierarchyCopy.srcOffset =
-                hierarchyUploadBufferOffset + nodeInstallCopies.Length() * sizeof(u32);
-            hierarchyCopy.dstOffset =
-                sizeof(PackedHierarchyNode) * (hierarchyNodeOffset + hierarchyNodeIndex) +
-                OffsetOf(PackedHierarchyNode, childRef) + sizeof(u32) * childIndex;
-            hierarchyCopy.size = sizeof(u32);
-
-            nodeInstallCopies.Push(hierarchyCopy);
-
-            *(u32 *)((u8 *)uploadBuffer.mappedPtr + hierarchyCopy.srcOffset) = gpuPageIndex;
-        }
-    };
-
     struct InstallRequest
     {
         VirtualPageHandle handle;
@@ -916,9 +896,9 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         if (page.virtualIndex != -1)
         {
             currentClusterTotal -= page.numClusters;
-            virtualTable[page.virtualIndex].pageIndex = -1;
-            Assert(virtualTable[page.virtualIndex].priority == 0);
             EditRegistration(page.handle.instanceID, page.handle.pageIndex, false);
+            // Assert(virtualTable[page.virtualIndex].priority == 0);
+            virtualTable[page.virtualIndex].pageIndex = -1;
 
             uninstallRequests.Push(page.handle);
         }
@@ -946,26 +926,80 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         offset += CLUSTER_PAGE_SIZE;
     }
 
+    for (VirtualPageHandle page : pages)
+    {
+        virtualTable[meshInfos[page.instanceID].virtualPageOffset + page.pageIndex].priority =
+            0;
+    }
+
     u32 newClasOffset = currentClusterTotal;
     currentClusterTotal += clustersToAdd;
 
     Array<GPUClusterFixup> gpuClusterFixup(scratch.temp.arena, uninstallRequests.Length());
+
+    auto PrepareHierarchyFixup = [&](u32 instanceID, u32 pageIndex, bool uninstall) {
+        MeshInfo &meshInfo       = meshInfos[instanceID];
+        u32 hierarchyNodeOffset  = meshInfo.hierarchyNodeOffset;
+        u32 *offsets             = meshInfo.pageToHierarchyNodeGraph.offsets;
+        HierarchyFixup *nodeData = meshInfo.pageToHierarchyNodeGraph.data;
+
+        for (u32 graphIndex = offsets[pageIndex]; graphIndex < offsets[pageIndex + 1];
+             graphIndex++)
+        {
+            HierarchyFixup &fixup = nodeData[graphIndex];
+            if (!uninstall &&
+                !VerifyPageDependencies(meshInfo.virtualPageOffset, fixup.GetPageStartIndex(),
+                                        fixup.GetNumPages()))
+                continue;
+            u32 hierarchyNodeIndex = fixup.GetNodeIndex();
+            u32 childIndex         = fixup.GetChildIndex();
+
+            BufferToBufferCopy hierarchyCopy;
+            hierarchyCopy.srcOffset =
+                hierarchyUploadBufferOffset + nodeInstallCopies.Length() * sizeof(u32);
+            hierarchyCopy.dstOffset =
+                sizeof(PackedHierarchyNode) * (hierarchyNodeOffset + hierarchyNodeIndex) +
+                OffsetOf(PackedHierarchyNode, childRef) + sizeof(u32) * childIndex;
+            hierarchyCopy.size = sizeof(u32);
+
+            nodeInstallCopies.Push(hierarchyCopy);
+
+            Assert(uninstall ||
+                   virtualTable[meshInfo.virtualPageOffset + fixup.GetPageIndex()].pageIndex !=
+                       -1);
+
+            u32 gpuPageIndex =
+                uninstall ? ~0u
+                          : virtualTable[meshInfo.virtualPageOffset + fixup.GetPageIndex()]
+                                .pageIndex;
+
+            *(u32 *)((u8 *)uploadBuffer.mappedPtr + hierarchyCopy.srcOffset) = gpuPageIndex;
+        }
+    };
+
     auto PrepareClusterFixup = [&](u32 instanceID, u32 pageIndex, bool uninstall) {
         // When adding page, must check if this completes the group
         // When removing page, must check if this uncompletes the group
-        MeshInfo &meshInfo = meshInfos[instanceID];
-        Graph &graph       = meshInfo.pageToParentClusters;
+        MeshInfo &meshInfo         = meshInfos[instanceID];
+        Graph<ClusterFixup> &graph = meshInfo.pageToParentClusters;
         for (u32 parentClusterIndex = graph.offsets[pageIndex];
              parentClusterIndex < graph.offsets[pageIndex + 1]; parentClusterIndex++)
         {
-            ClusterFixup parentCluster(graph.data[parentClusterIndex]);
+            ClusterFixup parentCluster = graph.data[parentClusterIndex];
+            if (!uninstall && !VerifyPageDependencies(meshInfo.virtualPageOffset,
+                                                      parentCluster.GetPageStartIndex(),
+                                                      parentCluster.GetNumPages()))
+                continue;
+
             u32 parentPageIndex = parentCluster.GetPageIndex();
             VirtualPage &virtualPage =
                 virtualTable[meshInfo.virtualPageOffset + parentPageIndex];
 
-            // TODO: is this necessary?
+            // TODO: is this necessary? this could happen if a page and one of its parent
+            // pages is evicted in the same frame
             if (virtualPage.pageIndex == -1)
             {
+                Assert(uninstall);
                 Print("cluster fixup skipped\n");
                 continue;
             }
@@ -975,7 +1009,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
             fixup.offset = CLUSTER_PAGE_SIZE * virtualPage.pageIndex + sizeof(u32) +
                            sizeof(Vec4u) * (parentCluster.GetClusterIndex() + numClusters * 4);
             Assert((fixup.offset & 1) == 0);
-            fixup.offset |= uninstall ? 0x1 : 0x0;
+            fixup.offset |= uninstall ? 0x0 : 0x1;
             gpuClusterFixup.Push(fixup);
         }
     };
@@ -985,36 +1019,17 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
     {
         // Only fixup parent clusters if they are still going to be resident
         PrepareClusterFixup(uninstallRequest.instanceID, uninstallRequest.pageIndex, true);
-        PrepareHierarchyFixup(uninstallRequest.instanceID, uninstallRequest.pageIndex, ~0u);
+        PrepareHierarchyFixup(uninstallRequest.instanceID, uninstallRequest.pageIndex, true);
     }
 
     // Installs
     for (InstallRequest installRequest : installRequests)
     {
-        bool allPagesInGroupCommitted = true;
-
-        MeshInfo &meshInfo = meshInfos[installRequest.handle.instanceID];
-        u32 pageIndex      = installRequest.handle.pageIndex;
-        Graph &graph       = meshInfo.pageToNeighborPage;
-        for (int neighborPageIndex = graph.offsets[pageIndex];
-             neighborPageIndex < graph.offsets[pageIndex + 1]; neighborPageIndex++)
-        {
-            u32 neighborPage = graph.data[neighborPageIndex];
-            int neighborPhysicalPageIndex =
-                virtualTable[meshInfo.virtualPageOffset + neighborPage].pageIndex;
-            if (neighborPhysicalPageIndex == -1)
-            {
-                allPagesInGroupCommitted = false;
-                break;
-            }
-        }
-        if (allPagesInGroupCommitted)
-        {
-            PrepareClusterFixup(installRequest.handle.instanceID,
-                                installRequest.handle.pageIndex, false);
-            PrepareHierarchyFixup(installRequest.handle.instanceID,
-                                  installRequest.handle.pageIndex, installRequest.pageIndex);
-        }
+        // PrepareClusterFixup(installRequest.handle.instanceID,
+        // installRequest.handle.pageIndex,
+        //                     false);
+        PrepareHierarchyFixup(installRequest.handle.instanceID,
+                              installRequest.handle.pageIndex, false);
     }
 
     // TODO: direct storage
@@ -1035,13 +1050,19 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         cmd->CopyBuffer(&evictedPagesBuffer, &uploadBuffer, &pageInstallCopy, 1);
 
         // Cluster fixups
-        BufferToBufferCopy clusterFixupsCopy;
-        clusterFixupsCopy.srcOffset = clusterFixupOffset;
-        clusterFixupsCopy.dstOffset = 0;
-        clusterFixupsCopy.size      = sizeof(GPUClusterFixup) * gpuClusterFixup.Length();
-        MemoryCopy((u8 *)uploadBuffer.mappedPtr + clusterFixupsCopy.srcOffset,
-                   gpuClusterFixup.data, clusterFixupsCopy.size);
-        cmd->CopyBuffer(&clusterFixupBuffer, &uploadBuffer, &clusterFixupsCopy, 1);
+        if (gpuClusterFixup.Length())
+        {
+            BufferToBufferCopy clusterFixupsCopy;
+            clusterFixupsCopy.srcOffset = clusterFixupOffset;
+            clusterFixupsCopy.dstOffset = 0;
+            clusterFixupsCopy.size      = sizeof(GPUClusterFixup) * gpuClusterFixup.Length();
+            MemoryCopy((u8 *)uploadBuffer.mappedPtr + clusterFixupsCopy.srcOffset,
+                       gpuClusterFixup.data, clusterFixupsCopy.size);
+            cmd->CopyBuffer(&clusterFixupBuffer, &uploadBuffer, &clusterFixupsCopy, 1);
+            cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                         VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+        }
 
         cmd->Barrier(VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT);
@@ -1417,8 +1438,6 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
                      VK_ACCESS_2_SHADER_READ_BIT);
         cmd->FlushBarriers();
         device->EndEvent(cmd);
-        // so what's the todo? fixup the streaming flags, then try to support multiple blas
-        // (again), and then what? ptlas? i still haven't figured out how that works
     }
 }
 
