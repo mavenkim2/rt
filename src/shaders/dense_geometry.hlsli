@@ -41,6 +41,8 @@ struct DenseGeometry
     int3 prevHighEdge1BeforeDwords;
     int3 prevHighEdge2BeforeDwords;
 
+    uint flags;
+
     bool debug;
 
     uint3 DecodeTriangle(uint triangleIndex)
@@ -358,6 +360,8 @@ DenseGeometry GetDenseGeometryHeader(uint4 packed[NUM_CLUSTER_HEADER_FLOAT4S], u
     result.materialInfo = packed[3].z;
 
     result.lodError = asfloat(packed[3].w);
+
+    result.flags = packed[4].x;
 
     // Size of vertex buffer and normal buffer
     const uint vertexBitWidth = result.posBitWidths[0] + result.posBitWidths[1] + result.posBitWidths[2];

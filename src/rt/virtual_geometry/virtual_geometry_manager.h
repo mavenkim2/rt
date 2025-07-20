@@ -17,13 +17,15 @@ struct ClusterFixup
 {
     u32 pageIndex_clusterIndex;
 
+    ClusterFixup(u32 pageIndex_clusterIndex) : pageIndex_clusterIndex(pageIndex_clusterIndex)
+    {
+    }
+    ClusterFixup(u32 pageIndex, u32 clusterIndex)
+    {
+        pageIndex_clusterIndex = (pageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | clusterIndex;
+    }
     u32 GetPageIndex() { return pageIndex_clusterIndex >> MAX_CLUSTERS_PER_PAGE_BITS; }
     u32 GetClusterIndex() { return pageIndex_clusterIndex & (MAX_CLUSTERS_PER_PAGE - 1); }
-};
-
-struct GPUClusterFixup
-{
-    u32 offset;
 };
 
 struct VirtualGeometryManager
@@ -39,6 +41,7 @@ struct VirtualGeometryManager
 
     const u32 hierarchyUploadBufferOffset = maxPageInstallsPerFrame * CLUSTER_PAGE_SIZE;
     const u32 evictedPagesOffset = hierarchyUploadBufferOffset + sizeof(u32) * maxNodes;
+    const u32 clusterFixupOffset = evictedPagesOffset + sizeof(u32) * maxPageInstallsPerFrame;
 
     const u32 maxNumTriangles =
         maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_TRIANGLES;
@@ -140,9 +143,15 @@ struct VirtualGeometryManager
     DescriptorSetLayout ptlasWriteInstancesLayout = {};
     VkPipeline ptlasWriteInstancesPipeline;
 
+    PushConstant clusterFixupPush;
+    DescriptorSetLayout clusterFixupLayout = {};
+    VkPipeline clusterFixupPipeline;
+
     GPUBuffer evictedPagesBuffer;
     GPUBuffer hierarchyNodeBuffer;
     GPUBuffer clusterPageDataBuffer;
+
+    GPUBuffer clusterFixupBuffer;
 
     GPUBuffer instanceRefBuffer;
 
@@ -213,8 +222,7 @@ struct VirtualGeometryManager
     void RecursePageDependencies(StaticArray<VirtualPageHandle> &pages, u32 instanceID,
                                  u32 pageIndex, u32 priority);
     void ProcessRequests(CommandBuffer *cmd);
-    u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, u8 *pageData, PackedHierarchyNode *nodes,
-                   u32 *rebraidIndices, u32 numNodes, u32 numPages, u32 numRebraid);
+    u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename);
     void HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *queueBuffer,
                             GPUBuffer *gpuSceneBuffer, GPUBuffer *workItemQueueBuffer,
                             GPUBuffer *gpuInstancesBuffer, GPUBuffer *visibleClustersBuffer);

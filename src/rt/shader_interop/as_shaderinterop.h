@@ -24,13 +24,15 @@ namespace rt
 
 #define CLUSTER_FILE_MAGIC 0x6A697975
 
-#define NUM_CLUSTER_HEADER_FLOAT4S 4
+#define NUM_CLUSTER_HEADER_FLOAT4S 5
 
 #define MAX_CANDIDATE_NODES    (1u << 21u)
 #define MAX_CANDIDATE_CLUSTERS (1u << 24)
 #define MAX_VISIBLE_CLUSTERS   (1u << 22)
 
 #define MAX_CLUSTERS_PER_BLAS 8192
+
+#define CLUSTER_STREAMING_LEAF_FLAG 0x1
 
 static const uint32_t kFillInstanceDescsThreads = 32;
 
@@ -215,7 +217,6 @@ struct PackedHierarchyNode
     float maxParentError[CHILDREN_PER_HIERARCHY_NODE];
     uint childRef[CHILDREN_PER_HIERARCHY_NODE];
     uint leafInfo[CHILDREN_PER_HIERARCHY_NODE];
-    uint flags;
 };
 
 struct GPUInstance
@@ -234,6 +235,11 @@ struct InstanceRef
     float bounds[6];
     uint instanceID;
     uint nodeOffset;
+};
+
+struct GPUClusterFixup
+{
+    uint offset;
 };
 
 struct TestDenseGeometry
@@ -300,7 +306,7 @@ struct TestDenseGeometry
 #define GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX 18
 
 #define GLOBALS_VISIBLE_CLUSTER_COUNT_INDEX 19
-#define GLOBALS_DEBUG 20
+#define GLOBALS_DEBUG                       20
 
 #define GLOBALS_SIZE 21
 

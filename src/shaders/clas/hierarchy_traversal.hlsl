@@ -176,7 +176,7 @@ struct ClusterCull
             childCandidateNode.x = candidateNode.instanceID;
             childCandidateNode.y = node.childRef[childIndex];
             childCandidateNode.z = candidateNode.blasIndex;
-            childCandidateNode.w = asuint(test);//node.flags;
+            childCandidateNode.w = asuint(test);
 
             nodeQueue[nodeWriteOffset] = childCandidateNode;
         }
@@ -208,7 +208,7 @@ struct ClusterCull
                     candidateCluster.x = (gpuPageIndex << MAX_CLUSTERS_PER_PAGE_BITS) | (pageClusterIndex + i);
                     candidateCluster.y = candidateNode.instanceID;
                     candidateCluster.z = candidateNode.blasIndex;
-                    candidateCluster.w = node.flags & (1u << childIndex);
+                    candidateCluster.w = 0;//node.flags & (1u << childIndex);
 
                     leafQueue[leafWriteOffset + i] = candidateCluster;
                 }

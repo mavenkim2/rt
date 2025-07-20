@@ -670,7 +670,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     VirtualGeometryManager virtualGeometryManager(sceneScratch.temp.arena);
     CommandBuffer *dgfTransferCmd = device->BeginCommandBuffer(QueueType_Copy);
 
-    StaticArray<ClusterFileHeader> headers(sceneScratch.temp.arena, numScenes);
     for (int sceneIndex = 0; sceneIndex < numScenes; sceneIndex++)
     {
         ScenePrimitives *scene = scenes[sceneIndex];
@@ -679,30 +678,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             PushStr8F(sceneScratch.temp.arena, "%S%S.geo", params->directory,
                       RemoveFileExtension(filename));
 
-        string clusterPageData = OS_ReadFile(sceneScratch.temp.arena, virtualGeoFilename);
-        Tokenizer tokenizer;
-        tokenizer.input  = clusterPageData;
-        tokenizer.cursor = clusterPageData.str;
-
-        ClusterFileHeader clusterFileHeader;
-        GetPointerValue(&tokenizer, &clusterFileHeader);
-
-        u8 *pageData = tokenizer.cursor;
-        Advance(&tokenizer, clusterFileHeader.numPages * CLUSTER_PAGE_SIZE);
-        PackedHierarchyNode *hierarchyNodes = (PackedHierarchyNode *)tokenizer.cursor;
-
-        headers.Push(clusterFileHeader);
-        Assert(clusterFileHeader.magic == CLUSTER_FILE_MAGIC);
-
-        Advance(&tokenizer, clusterFileHeader.numNodes * sizeof(PackedHierarchyNode));
-        u32 numRebraid;
-        GetPointerValue(&tokenizer, &numRebraid);
-
-        u32 *rebraidIndices = (u32 *)tokenizer.cursor;
-
-        virtualGeometryManager.AddNewMesh(
-            sceneScratch.temp.arena, dgfTransferCmd, pageData, hierarchyNodes, rebraidIndices,
-            clusterFileHeader.numNodes, clusterFileHeader.numPages, numRebraid);
+        virtualGeometryManager.AddNewMesh(sceneScratch.temp.arena, dgfTransferCmd,
+                                          virtualGeoFilename);
     }
 
     dgfTransferCmd->SubmitBuffer(

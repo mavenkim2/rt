@@ -8,7 +8,6 @@
 #include <cstring>
 #include "../scene_load.h"
 #include "../bvh/bvh_types.h"
-#include "../bvh/bvh_build.h"
 #include "../bvh/bvh_aos.h"
 #include "../parallel.h"
 #include "mesh_simplification.h"
@@ -3755,16 +3754,18 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 // TODO: frustum culling bounds
                 MemoryCopy(ptr + currentPageOffset, &cluster.lodBounds, sizeof(Vec4f));
 
-                for (u32 i = 1; i < NUM_CLUSTER_HEADER_FLOAT4S; i++)
+                for (u32 i = 1; i < 4; i++)
                 {
                     u32 copySize = Min(stride, (u32)sizeof(header) - (i - 1) * stride);
                     u32 *src     = (u32 *)&header + 4u * (i - 1);
                     MemoryCopy(ptr + currentPageOffset + i * soaStride, src, copySize);
                 }
 
-                MemoryCopy(ptr + currentPageOffset +
-                               (NUM_CLUSTER_HEADER_FLOAT4S - 1) * soaStride + sizeof(Vec3f),
+                u32 flags = CLUSTER_STREAMING_LEAF_FLAG;
+
+                MemoryCopy(ptr + currentPageOffset + (4 - 1) * soaStride + sizeof(Vec3f),
                            &cluster.lodError, sizeof(float));
+                MemoryCopy(ptr + currentPageOffset + 4 * soaStride, &flags, sizeof(u32));
                 currentPageOffset += sizeof(Vec4u);
 
                 currentGeoOffset += GetGeoByteSize(headerIndex, buildDataIndex);
@@ -4025,12 +4026,6 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
                 packed.leafInfo[i] = leafInfo;
                 packed.childRef[i] = part.pageIndex;
-
-                if (clusterGroups[part.groupIndex].mipLevel == 1)
-                {
-                    packed.flags |= (1 << i);
-                    numLeafParts++;
-                }
             }
         }
 
