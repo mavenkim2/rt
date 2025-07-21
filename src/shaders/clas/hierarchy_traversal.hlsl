@@ -144,7 +144,7 @@ struct ClusterCull
             edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test);
 
             float threshold = maxParentError * minScale;
-            isVisible = true;//edgeScales.x <= threshold;
+            isVisible = edgeScales.x <= threshold;
             isValid &= isVisible;
 
             priority = threshold == 0.f ? 0.f : threshold / edgeScales.x;
@@ -272,7 +272,7 @@ struct ClusterCull
         float test;
         float2 edgeScales = TestNode(renderFromObject, gpuScene.cameraFromRender, lodBounds, maxScale, test);
 
-        bool isValid = /*(edgeScales.x > lodError * minScale) ||*/ (header.flags & CLUSTER_STREAMING_LEAF_FLAG);
+        bool isValid = (edgeScales.x > lodError * minScale) || (header.flags & CLUSTER_STREAMING_LEAF_FLAG);
 
         uint clusterOffset;
         WaveInterlockedAddScalarTest(globals[GLOBALS_VISIBLE_CLUSTER_COUNT_INDEX], isValid, 1, clusterOffset);

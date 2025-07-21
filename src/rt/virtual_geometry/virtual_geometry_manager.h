@@ -66,7 +66,7 @@ struct HierarchyFixup
 struct VirtualGeometryManager
 {
     const u32 streamingPoolSize = megabytes(512);
-    const u32 maxPages          = streamingPoolSize >> CLUSTER_PAGE_SIZE_BITS;
+    const u32 maxPages          = 1024; // streamingPoolSize >> CLUSTER_PAGE_SIZE_BITS;
     const u32 maxVirtualPages   = maxPages << 8u;
 
     const u32 maxNodes                     = 1u << 17u;

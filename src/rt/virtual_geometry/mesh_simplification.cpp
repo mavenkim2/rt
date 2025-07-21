@@ -3781,7 +3781,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                     MemoryCopy(ptr + currentPageOffset + i * soaStride, src, copySize);
                 }
 
-                u32 flags = childGroup.isLeaf ? CLUSTER_STREAMING_LEAF_FLAG : 0;
+                u32 flags = CLUSTER_STREAMING_LEAF_FLAG;
 
                 MemoryCopy(ptr + currentPageOffset + (4 - 1) * soaStride + sizeof(Vec3f),
                            &cluster.lodError, sizeof(float));

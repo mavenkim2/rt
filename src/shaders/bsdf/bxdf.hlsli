@@ -11,7 +11,7 @@ bool Refract(float3 wi, float3 n, float eta, out float etap, out float3 wt)
     float cosTheta_i = dot(wi, n);
 
     bool mask = cosTheta_i > 0;
-    if (mask)
+    if (!mask)
     {
         n            = -n;
         eta          = 1 / eta;

@@ -848,44 +848,39 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
 
     u32 evictedPageStart = pageIndices.Length();
 
-    if (pageIndices.Length() < maxPageInstallsPerFrame &&
-        pageIndices.Length() != unloadedRequests.Length())
-    {
-        Assert(lruTail != -1);
-        int lruIndex = lruTail;
-
-        while (lruIndex != -1 && pageIndices.Length() < maxPageInstallsPerFrame &&
-               pageIndices.Length() < unloadedRequests.Length())
-        {
-            if (physicalPages[lruIndex].numDependents == 0)
-            {
-                pageIndices.Push(lruIndex);
-            }
-            lruIndex = physicalPages[lruIndex].prevPage;
-        }
-    }
-
     // Upload pages to GPU and apply hierarchy fixups
     StaticArray<BufferToBufferCopy> pageInstallCopies(scratch.temp.arena,
                                                       maxPageInstallsPerFrame);
     StaticArray<BufferToBufferCopy> nodeInstallCopies(scratch.temp.arena, 2 * maxNodes);
     u32 offset = 0;
 
-    struct InstallRequest
-    {
-        VirtualPageHandle handle;
-        u32 pageIndex;
-    };
-
     StaticArray<VirtualPageHandle> uninstallRequests(scratch.temp.arena,
                                                      unloadedRequests.Length());
-    StaticArray<InstallRequest> installRequests(scratch.temp.arena, unloadedRequests.Length());
+    StaticArray<VirtualPageHandle> installRequests(scratch.temp.arena,
+                                                   unloadedRequests.Length());
 
-    u32 clustersToAdd = 0;
-    for (int requestIndex = 0; requestIndex < pageIndices.Length(); requestIndex++)
+    u32 clustersToAdd  = 0;
+    u32 pagesToInstall = Min(unloadedRequests.Length(), maxPageInstallsPerFrame);
+    int lruIndex       = lruTail;
+    for (int requestIndex = 0; requestIndex < pagesToInstall; requestIndex++)
     {
         PageHandle handle         = pageHandles[requestIndex];
         VirtualPageHandle request = unloadedRequests[handle.index];
+
+        if (requestIndex >= evictedPageStart)
+        {
+            while (lruIndex != -1)
+            {
+                int index = lruIndex;
+                lruIndex  = physicalPages[lruIndex].prevPage;
+                if (physicalPages[index].numDependents == 0)
+                {
+                    pageIndices.Push(index);
+                    break;
+                }
+            }
+            if (lruIndex == -1) break;
+        }
 
         u32 gpuPageIndex = pageIndices[requestIndex];
         u32 virtualPageIndex =
@@ -897,7 +892,6 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         {
             currentClusterTotal -= page.numClusters;
             EditRegistration(page.handle.instanceID, page.handle.pageIndex, false);
-            // Assert(virtualTable[page.virtualIndex].priority == 0);
             virtualTable[page.virtualIndex].pageIndex = -1;
 
             uninstallRequests.Push(page.handle);
@@ -906,7 +900,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         page.virtualIndex = virtualPageIndex;
 
         EditRegistration(page.handle.instanceID, page.handle.pageIndex, true);
-        installRequests.Push({page.handle, gpuPageIndex});
+        installRequests.Push(page.handle);
 
         BufferToBufferCopy copy;
         copy.srcOffset = offset;
@@ -995,12 +989,9 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
             VirtualPage &virtualPage =
                 virtualTable[meshInfo.virtualPageOffset + parentPageIndex];
 
-            // TODO: is this necessary? this could happen if a page and one of its parent
-            // pages is evicted in the same frame
             if (virtualPage.pageIndex == -1)
             {
                 Assert(uninstall);
-                Print("cluster fixup skipped\n");
                 continue;
             }
             u32 numClusters = physicalPages[virtualPage.pageIndex].numClusters;
@@ -1023,13 +1014,10 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
     }
 
     // Installs
-    for (InstallRequest installRequest : installRequests)
+    for (VirtualPageHandle installRequest : installRequests)
     {
-        // PrepareClusterFixup(installRequest.handle.instanceID,
-        // installRequest.handle.pageIndex,
-        //                     false);
-        PrepareHierarchyFixup(installRequest.handle.instanceID,
-                              installRequest.handle.pageIndex, false);
+        PrepareClusterFixup(installRequest.instanceID, installRequest.pageIndex, false);
+        PrepareHierarchyFixup(installRequest.instanceID, installRequest.pageIndex, false);
     }
 
     // TODO: direct storage
