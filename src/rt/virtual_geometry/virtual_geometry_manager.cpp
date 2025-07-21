@@ -24,7 +24,7 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
 {
     for (u32 i = 0; i < maxVirtualPages; i++)
     {
-        virtualTable.Push({0, -1});
+        virtualTable.Push(VirtualPage{0, PageFlag::NonResident, -1});
     }
 
     string decodeDgfClustersName   = "../src/shaders/decode_dgf_clusters.spv";
@@ -298,7 +298,7 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
                                                  maxNodes * sizeof(PackedHierarchyNode));
     clusterFixupBuffer    = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE * sizeof(GPUClusterFixup));
+        maxClusterFixupsPerFrame * sizeof(GPUClusterFixup));
 
     clusterAccelAddresses = device->CreateBuffer(
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -354,13 +354,10 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, moveScratchSize);
 
     u32 clasBlasScratchSize, clasBlasAccelSize;
-    device->GetClusterBLASBuildSizes(CLASOpMode::ExplicitDestinations, maxWriteClusters,
-                                     maxWriteClusters, 1, clasBlasScratchSize,
-                                     clasBlasAccelSize);
-    // u32 maxWriteClusters = 200000;
-    // device->GetClusterBLASBuildSizes(CLASOpMode::ExplicitDestinations, maxTotalClusterCount,
-    //                                  maxClusterCountPerAccelerationStructure, maxInstances,
-    //                                  clasBlasScratchSize, clasBlasAccelSize);
+    // maxWriteClusters = 200000;
+    device->GetClusterBLASBuildSizes(CLASOpMode::ExplicitDestinations, maxTotalClusterCount,
+                                     maxClusterCountPerAccelerationStructure, maxInstances,
+                                     clasBlasScratchSize, clasBlasAccelSize);
 
     u32 blasSize = megabytes(512); // clasBlasAccelSize * maxInstances;
 
@@ -388,7 +385,7 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
     blasClasAddressBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(u64) * maxWriteClusters);
+        sizeof(u64) * maxTotalClusterCount);
 
     blasAccelAddresses = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
@@ -750,6 +747,22 @@ bool VirtualGeometryManager::VerifyPageDependencies(u32 virtualOffset, u32 start
     return true;
 }
 
+bool VirtualGeometryManager::CheckDuplicatedFixup(u32 virtualOffset, u32 pageIndex,
+                                                  u32 startPage, u32 numPages)
+{
+    for (u32 otherPageIndex = pageIndex + 1; otherPageIndex < startPage + numPages;
+         otherPageIndex++)
+    {
+        VirtualPage &virtualPage = virtualTable[virtualOffset + pageIndex];
+        Assert(virtualPage.pageIndex != -1);
+        if (virtualPage.pageFlag == PageFlag::ResidentThisFrame)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
 {
     // TIMED_CPU();
@@ -873,7 +886,8 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
             {
                 int index = lruIndex;
                 lruIndex  = physicalPages[lruIndex].prevPage;
-                if (physicalPages[index].numDependents == 0)
+                if (physicalPages[index].numDependents == 0 &&
+                    virtualTable[physicalPages[index].virtualIndex].priority == 0)
                 {
                     pageIndices.Push(index);
                     break;
@@ -886,6 +900,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         u32 virtualPageIndex =
             meshInfos[request.instanceID].virtualPageOffset + request.pageIndex;
         virtualTable[virtualPageIndex].pageIndex = gpuPageIndex;
+        virtualTable[virtualPageIndex].pageFlag  = PageFlag::ResidentThisFrame;
 
         Page &page = physicalPages[gpuPageIndex];
         if (page.virtualIndex != -1)
@@ -893,6 +908,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
             currentClusterTotal -= page.numClusters;
             EditRegistration(page.handle.instanceID, page.handle.pageIndex, false);
             virtualTable[page.virtualIndex].pageIndex = -1;
+            virtualTable[page.virtualIndex].pageFlag  = PageFlag::NonResident;
 
             uninstallRequests.Push(page.handle);
         }
@@ -941,10 +957,17 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
              graphIndex++)
         {
             HierarchyFixup &fixup = nodeData[graphIndex];
+
             if (!uninstall &&
                 !VerifyPageDependencies(meshInfo.virtualPageOffset, fixup.GetPageStartIndex(),
                                         fixup.GetNumPages()))
                 continue;
+
+            if (!uninstall &&
+                CheckDuplicatedFixup(meshInfo.virtualPageOffset, pageIndex,
+                                     fixup.GetPageStartIndex(), fixup.GetNumPages()))
+                continue;
+
             u32 hierarchyNodeIndex = fixup.GetNodeIndex();
             u32 childIndex         = fixup.GetChildIndex();
 
@@ -976,13 +999,20 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         // When removing page, must check if this uncompletes the group
         MeshInfo &meshInfo         = meshInfos[instanceID];
         Graph<ClusterFixup> &graph = meshInfo.pageToParentClusters;
+
         for (u32 parentClusterIndex = graph.offsets[pageIndex];
              parentClusterIndex < graph.offsets[pageIndex + 1]; parentClusterIndex++)
         {
             ClusterFixup parentCluster = graph.data[parentClusterIndex];
+
             if (!uninstall && !VerifyPageDependencies(meshInfo.virtualPageOffset,
                                                       parentCluster.GetPageStartIndex(),
                                                       parentCluster.GetNumPages()))
+                continue;
+
+            if (!uninstall && CheckDuplicatedFixup(meshInfo.virtualPageOffset, pageIndex,
+                                                   parentCluster.GetPageStartIndex(),
+                                                   parentCluster.GetNumPages()))
                 continue;
 
             u32 parentPageIndex = parentCluster.GetPageIndex();
@@ -1019,6 +1049,15 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
         PrepareClusterFixup(installRequest.instanceID, installRequest.pageIndex, false);
         PrepareHierarchyFixup(installRequest.instanceID, installRequest.pageIndex, false);
     }
+    for (VirtualPageHandle installRequest : installRequests)
+    {
+        PageFlag &pageFlag =
+            virtualTable[meshInfos[installRequest.instanceID].virtualPageOffset +
+                         installRequest.pageIndex]
+                .pageFlag;
+        Assert(pageFlag == PageFlag::ResidentThisFrame);
+        pageFlag = PageFlag::Resident;
+    }
 
     // TODO: direct storage
     if (pageIndices.Length())
@@ -1037,6 +1076,7 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
 
         cmd->CopyBuffer(&evictedPagesBuffer, &uploadBuffer, &pageInstallCopy, 1);
 
+        Assert(gpuClusterFixup.Length() <= maxClusterFixupsPerFrame);
         // Cluster fixups
         if (gpuClusterFixup.Length())
         {
@@ -1373,15 +1413,10 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
         pc.addressHighBits = blasBufferAddress >> 32u;
 
         // Compute BLAS sizes
-        // cmd->ComputeBLASSizes(
-        //     &buildClusterBottomLevelInfoBuffer, &clasBlasScratchBuffer, &blasAccelSizes,
-        //     &clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_FINAL_COUNT_INDEX,
-        //     maxTotalClusterCount, maxClusterCountPerAccelerationStructure,
-        //     maxInstances);
-        cmd->ComputeBLASSizes(&buildClusterBottomLevelInfoBuffer, &clasBlasScratchBuffer,
-                              &blasAccelSizes, &clasGlobalsBuffer,
-                              sizeof(u32) * GLOBALS_BLAS_FINAL_COUNT_INDEX, maxWriteClusters,
-                              maxWriteClusters, 1);
+        cmd->ComputeBLASSizes(
+            &buildClusterBottomLevelInfoBuffer, &clasBlasScratchBuffer, &blasAccelSizes,
+            &clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_FINAL_COUNT_INDEX,
+            maxTotalClusterCount, maxClusterCountPerAccelerationStructure, maxInstances);
         cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
@@ -1409,17 +1444,11 @@ void VirtualGeometryManager::BuildClusterBLAS(CommandBuffer *cmd,
         // Build the BLASes
         device->BeginEvent(cmd, "Build BLAS");
 
-        // cmd->BuildClusterBLAS(
-        //     CLASOpMode::ExplicitDestinations, &clasBlasImplicitBuffer,
-        //     &clasBlasScratchBuffer, &buildClusterBottomLevelInfoBuffer,
-        //     &blasAccelAddresses, &blasAccelSizes, &clasGlobalsBuffer, sizeof(u32) *
-        //     GLOBALS_BLAS_FINAL_COUNT_INDEX, maxClusterCountPerAccelerationStructure,
-        //     maxTotalClusterCount, maxInstances);
-        cmd->BuildClusterBLAS(CLASOpMode::ExplicitDestinations, &clasBlasImplicitBuffer,
-                              &clasBlasScratchBuffer, &buildClusterBottomLevelInfoBuffer,
-                              &blasAccelAddresses, &blasAccelSizes, &clasGlobalsBuffer,
-                              sizeof(u32) * GLOBALS_BLAS_FINAL_COUNT_INDEX, maxWriteClusters,
-                              maxWriteClusters, 1);
+        cmd->BuildClusterBLAS(
+            CLASOpMode::ExplicitDestinations, &clasBlasImplicitBuffer, &clasBlasScratchBuffer,
+            &buildClusterBottomLevelInfoBuffer, &blasAccelAddresses, &blasAccelSizes,
+            &clasGlobalsBuffer, sizeof(u32) * GLOBALS_BLAS_FINAL_COUNT_INDEX,
+            maxClusterCountPerAccelerationStructure, maxTotalClusterCount, maxInstances);
         cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,

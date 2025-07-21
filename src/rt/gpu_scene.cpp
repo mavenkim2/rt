@@ -1249,7 +1249,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 // TODO: partitioned TLAS
                 // Build the TLAS
                 device->BeginEvent(cmd, "Build TLAS");
-                tlas.as = cmd->BuildTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &tlasBuffer, 1);
+                tlas.as = cmd->BuildTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &tlasBuffer,
+                                         virtualGeometryManager.maxInstances);
                 // tlas.as =
                 //     cmd->BuildTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &tlasBuffer,
                 //                    &tlasBuildRangeBuffer,

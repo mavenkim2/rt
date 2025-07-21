@@ -215,11 +215,6 @@ void main()
                 n2 = gn;
             }
 
-            if (printDebug)
-            {
-                printf("%f %f %f %f %f %f %f %f %f\n", n0.x, n0.y, n0.z, n1.x, n1.y, n1.z, n2.x, n2.y, n2.z);
-            }
-            
             // Calculate triangle differentials
             // p0 + dpdu * u + dpdv * v = p1
 

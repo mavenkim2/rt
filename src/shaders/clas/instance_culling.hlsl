@@ -19,7 +19,7 @@ ConstantBuffer<GPUScene> gpuScene : register(b6);
 void main(uint3 dtID : SV_DispatchThreadID)
 {
     uint instanceRefIndex = dtID.x;
-    if (instanceRefIndex >= 1) return;
+    if (instanceRefIndex >= pc.num) return;
 
     InstanceRef ref = instanceRefs[instanceRefIndex];
     GPUInstance instance = gpuInstances[ref.instanceID];
@@ -34,7 +34,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
     
     CandidateNode candidateNode;
     candidateNode.instanceID = ref.instanceID;
-    candidateNode.nodeOffset = 0;//ref.nodeOffset;
+    candidateNode.nodeOffset = ref.nodeOffset;
     candidateNode.blasIndex = blasIndex;
     candidateNode.pad = 0;
 

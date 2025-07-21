@@ -88,6 +88,15 @@ struct VirtualGeometryManager
     const u32 maxTotalClusterCount                    = MAX_CLUSTERS_PER_BLAS * maxInstances;
     const u32 maxClusterCountPerAccelerationStructure = MAX_CLUSTERS_PER_BLAS;
 
+    const u32 maxClusterFixupsPerFrame = maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE;
+
+    enum class PageFlag
+    {
+        NonResident,
+        ResidentThisFrame,
+        Resident,
+    };
+
     struct StreamingRequestBatch
     {
         u32 numRequests;
@@ -96,6 +105,7 @@ struct VirtualGeometryManager
     struct VirtualPage
     {
         u32 priority;
+        PageFlag pageFlag;
         int pageIndex;
     };
 
@@ -250,6 +260,7 @@ struct VirtualGeometryManager
     void RecursePageDependencies(StaticArray<VirtualPageHandle> &pages, u32 instanceID,
                                  u32 pageIndex, u32 priority);
     bool VerifyPageDependencies(u32 virtualOffset, u32 startPage, u32 numPages);
+    bool CheckDuplicatedFixup(u32 virtualOffset, u32 pageIndex, u32 startPage, u32 numPages);
     void ProcessRequests(CommandBuffer *cmd);
     u32 AddNewMesh(Arena *arena, CommandBuffer *cmd, string filename);
     void HierarchyTraversal(CommandBuffer *cmd, GPUBuffer *queueBuffer,
