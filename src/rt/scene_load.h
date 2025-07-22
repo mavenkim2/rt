@@ -277,7 +277,7 @@ inline u32 GetTypeStride(string word)
 
 inline Mesh LoadPLY(Arena *arena, string filename, GeometryType type)
 {
-    string buffer = OS_MapFileRead(filename); // OS_ReadFile(arena, filename);
+    string buffer = OS_MapFileRead(filename);
     Tokenizer tokenizer;
     tokenizer.input  = buffer;
     tokenizer.cursor = buffer.str;

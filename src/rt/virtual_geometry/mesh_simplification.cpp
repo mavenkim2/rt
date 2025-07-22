@@ -2329,6 +2329,12 @@ static_assert((sizeof(PackedDenseGeometryHeader) + 4) % 16 == 0, "bad header siz
 void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,
                     string filename)
 {
+    // if (OS_FileExists(filename)) 
+    // {
+    //     Print("%S skipped\n", filename);
+    //     return;
+    // }
+
     const u32 numAttributes = 0;
 
     auto GetVertexData = [numAttributes](f32 *ptr, u32 index) {

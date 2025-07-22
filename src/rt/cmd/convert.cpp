@@ -18,6 +18,7 @@
 #include "../thread_context.h"
 #include "../hash.h"
 #include <functional>
+#include "../radix_sort.h"
 #include "../random.h"
 #include "../parallel.h"
 #include "../graphics/ptex.h"
@@ -43,9 +44,7 @@ struct ShapeType
     string materialName;
     int transformIndex;
 
-    // Moana only
     Mesh *mesh;
-    bool cancelled;
 };
 
 struct InstanceType
@@ -69,20 +68,6 @@ struct NamedPacket
 
 typedef HashMap<NamedPacket> SceneHashMap;
 
-// NOTE:
-// "island\pbrt-v4\isDunesA\xgPalmDebris\xgPalmDebris_archivePalmdead0004_mod_geometry.pbrt"
-// leaflet0123 is improperly mapped to stem0004. switched material to isDunes:archivePalm
-
-// MOANA ONLY
-struct MoanaOBJMeshes
-{
-    Mesh *meshes;
-    GeometryType type;
-    int total;
-    int num;
-    int offset;
-};
-
 struct PBRTFileInfo
 {
     enum Type
@@ -98,8 +83,6 @@ struct PBRTFileInfo
     string filename;
     ScenePacket packets[MAX] = {};
     ChunkedLinkedList<ShapeType, MemoryType_Shape> shapes;
-    // MOANA ONLY
-    std::vector<MoanaOBJMeshes> objMeshes;
     ChunkedLinkedList<InstanceType, MemoryType_Instance> fileInstances;
     u32 numInstances;
 
@@ -124,13 +107,7 @@ struct PBRTFileInfo
     {
         numInstances += import->numInstances;
 
-        // MOANA ONLY
         u32 shapeOffset = shapes.totalCount;
-        for (auto objMesh : import->objMeshes)
-        {
-            objMesh.offset += shapeOffset;
-            objMeshes.push_back(objMesh);
-        }
 
         shapes.Merge(&import->shapes);
         u32 transformOffset = transforms.totalCount;
@@ -204,8 +181,9 @@ struct IncludeMap
 
 struct MaterialHashNode
 {
-    string name;
+    u32 hash;
     string buffer;
+    u32 index;
     MaterialHashNode *next;
 };
 
@@ -215,7 +193,7 @@ struct MaterialMap
     Mutex *mutexes;
     u32 count;
 
-    bool FindOrAdd(Arena *arena, string buffer, string &name)
+    u32 FindOrAdd(Arena *arena, string buffer, std::atomic<u32> &materialCount)
     {
         u32 hash  = Hash(buffer);
         u32 index = hash & (count - 1);
@@ -224,12 +202,12 @@ struct MaterialMap
         MaterialHashNode *prev;
         while (node)
         {
-            if (node->buffer == buffer)
+            if (hash == node->hash && node->buffer == buffer)
             {
-                name = node->name;
                 EndRMutex(&mutexes[index]);
                 return true;
             }
+            Assert(hash != node->hash);
             prev = node;
             node = node->next;
         }
@@ -240,21 +218,44 @@ struct MaterialMap
         node = &map[index];
         while (node)
         {
-            if (node->buffer == buffer)
+            if (hash == node->hash && node->buffer == buffer)
             {
-                name = node->name;
                 EndWMutex(&mutexes[index]);
                 return true;
             }
+            Assert(hash != node->hash);
             prev = node;
             node = node->next;
         }
 
-        prev->name   = PushStr8Copy(arena, name);
+        prev->hash   = hash;
         prev->buffer = PushStr8Copy(arena, buffer);
         prev->next   = PushStruct(arena, MaterialHashNode);
+        prev->index  = materialCount.fetch_add(1, std::memory_order_relaxed);
         EndWMutex(&mutexes[index]);
+
         return false;
+    }
+    MaterialHashNode *Find(string buffer)
+    {
+        u32 hash  = Hash(buffer);
+        u32 index = hash & (count - 1);
+        BeginRMutex(&mutexes[index]);
+        MaterialHashNode *node = &map[index];
+        MaterialHashNode *prev;
+        while (node)
+        {
+            if (hash == node->hash && node->buffer == buffer)
+            {
+                EndRMutex(&mutexes[index]);
+                return node;
+            }
+            Assert(hash != node->hash);
+            prev = node;
+            node = node->next;
+        }
+        Assert(0);
+        return node;
     }
 };
 
@@ -264,6 +265,8 @@ struct SceneLoadState
     u32 numProcessors;
     ChunkedLinkedList<NamedPacket, MemoryType_Material> *materials;
     ChunkedLinkedList<NamedPacket, MemoryType_Light> *lights;
+
+    std::atomic<u32> materialCounter;
 
     SceneHashMap *textureHashMaps;
     const u32 hashMapSize = 8192;
@@ -298,6 +301,8 @@ struct SceneLoadState
         materialMap.count   = 16384;
         materialMap.map     = PushArray(arena, MaterialHashNode, materialMap.count);
         materialMap.mutexes = PushArray(arena, Mutex, materialMap.count);
+
+        materialCounter = 1;
     }
 };
 
@@ -348,6 +353,15 @@ struct GraphicsState
     ScenePacket *areaLightPacket;
     i32 mediaIndex = -1;
 };
+
+int CheckForID(ScenePacket *packet, StringId id)
+{
+    for (u32 p = 0; p < packet->parameterCount; p++)
+    {
+        if (packet->parameterNames[p] == id) return p;
+    }
+    return -1;
+}
 
 void PBRTSkipToNextChar(Tokenizer *tokenizer) { SkipToNextChar(tokenizer, '#'); }
 
@@ -656,119 +670,9 @@ string ReplaceColons(Arena *arena, string str)
     return newString;
 }
 
-bool LoadMoanaOBJ(Arena *arena, PBRTFileInfo *state, string objFile)
-{
-    if (OS_FileExists(objFile))
-    {
-        int total, num;
-        // Mesh *meshes = LoadObj(arena, objFile, total, num);
-        u32 faceVertexCount = 0;
-        Mesh *meshes        = LoadObjWithWedges(arena, objFile, num, &faceVertexCount);
-
-        for (int i = 0; i < num; i++)
-        {
-            Mesh &mesh     = meshes[i];
-            u32 indexCount = 0;
-            for (int faceIndex = 0; faceIndex < mesh.numIndices / faceVertexCount; faceIndex++)
-            {
-                u32 indices[4];
-                bool invalidTri = false;
-                for (int corner = 0; corner < faceVertexCount; corner++)
-                {
-                    indices[corner] = mesh.indices[faceVertexCount * faceIndex + corner];
-                }
-                for (int corner = 0; corner < faceVertexCount; corner++)
-                {
-                    for (int corner2 = corner + 1; corner2 < faceVertexCount; corner2++)
-                    {
-                        if (indices[corner] == indices[corner2])
-                        {
-                            invalidTri = true;
-                            break;
-                        }
-                    }
-                    if (invalidTri) break;
-                }
-                if (!invalidTri)
-                {
-                    for (int corner = 0; corner < faceVertexCount; corner++)
-                    {
-                        mesh.indices[indexCount + corner] = indices[corner];
-                    }
-                    indexCount += faceVertexCount;
-                }
-            }
-            mesh.numIndices = indexCount;
-        }
-
-        GeometryType type = GeometryType::CatmullClark;
-        if (faceVertexCount == 3)
-        {
-            type = GeometryType::TriangleMesh;
-        }
-        total = num;
-        Assert(state->objMeshes.size() == 0);
-        Assert(state->shapes.totalCount == 0);
-        state->objMeshes.emplace_back(
-            MoanaOBJMeshes{meshes, type, total, num, (int)state->shapes.totalCount});
-        return true;
-    }
-    return false;
-}
-
-string CheckMoanaOBJ(Arena *arena, string directory, string subDirectory, string filename)
-{
-    ScratchArena scratch;
-
-    string objFile =
-        PushStr8F(scratch.temp.arena, "%Sobj/%S/%S.obj", directory, subDirectory, filename);
-    if (OS_FileExists(objFile))
-    {
-        return PushStr8Copy(arena, objFile);
-    }
-
-    objFile = PushStr8F(scratch.temp.arena, "%Sobj/%S/archives/%S.obj", directory,
-                        subDirectory, filename);
-    if (OS_FileExists(objFile))
-    {
-        return PushStr8Copy(arena, objFile);
-    }
-    return {};
-}
-
-string CheckMoanaVariant(Arena *arena, string directory, string filename)
-{
-    string baseFilename = PathSkipLastSlash(filename);
-    // if (baseFilename == "osOcean_geometry.pbrt") return {};
-
-    u64 offset = FindSubstring(baseFilename, "geometry.pbrt", 0, MatchFlag_CaseInsensitive);
-    if (offset == baseFilename.size) return {};
-
-    string objFromPbrt = Substr8(baseFilename, 0, offset - 1);
-    u64 undOffset      = FindSubstring(baseFilename, "_", 0, MatchFlag_CaseInsensitive);
-    u64 slashOffset    = FindSubstring(filename, "/", 0, MatchFlag_CaseInsensitive);
-
-    string rootGroup = Substr8(filename, 0, slashOffset);
-    string rawGroup  = Substr8(baseFilename, 0, undOffset);
-
-    string objFile = CheckMoanaOBJ(arena, directory, rootGroup, objFromPbrt);
-    if (objFile.size) return objFile;
-
-    objFile = CheckMoanaOBJ(arena, directory, rawGroup, objFromPbrt);
-    if (objFile.size) return objFile;
-
-    if (rootGroup == "isHibiscusYoung")
-    {
-        rawGroup = "isHibiscus";
-        objFile  = CheckMoanaOBJ(arena, directory, rawGroup, objFromPbrt);
-    }
-
-    return objFile;
-}
-
 PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
-                       string moanaObjFile = {}, GraphicsState graphicsState = {},
-                       bool originFile = true, bool inWorldBegin = false, bool write = true)
+                       GraphicsState graphicsState = {}, bool originFile = true,
+                       bool inWorldBegin = false, bool write = true)
 {
     enum class ScopeType
     {
@@ -801,15 +705,6 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
     auto *materials      = &sls->materials[threadIndex];
     auto &textureHashMap = sls->textureHashMaps[threadIndex];
     auto *lights         = &sls->lights[threadIndex];
-
-    bool isMoana       = false;
-    int moanaMeshIndex = 0;
-
-    if (moanaObjFile.size)
-    {
-        LoadMoanaOBJ(tempArena, state, moanaObjFile);
-        isMoana = true;
-    }
 
     bool worldBegin = inWorldBegin;
     bool writeFile  = write;
@@ -845,70 +740,227 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             OS_UnmapFile(tokenizer.input.str);
             scheduler.Wait(&state->counter);
 
-            if (isMoana && !state->objMeshes.empty())
-            {
-                MoanaOBJMeshes &meshes = state->objMeshes.back();
-
-                if (moanaMeshIndex != meshes.num)
-                {
-                    Print("%S, num: %i, imports: %i\n", currentFilename, meshes.num,
-                          state->numImports);
-                    for (int i = 0; i < state->numImports; i++)
-                    {
-                        PBRTFileInfo *import = state->imports[i];
-                        for (auto *node = import->shapes.first; node != 0; node = node->next)
-                        {
-                            for (int j = 0; j < node->count; j++)
-                            {
-                                node->values[j].packet.type =
-                                    ConvertGeometryTypeToStringId(meshes.type);
-
-                                if (moanaMeshIndex >= meshes.num)
-                                {
-                                    node->values[j].cancelled = true;
-                                    node->values[j].mesh      = 0;
-                                }
-                                else
-                                {
-                                    node->values[j].mesh = &meshes.meshes[moanaMeshIndex++];
-                                }
-                            }
-                        }
-                    }
-                }
-            }
             for (u32 i = 0; i < state->numImports; i++)
             {
                 state->Merge(state->imports[i]);
             }
             if (writeFile)
             {
-                if (state->objMeshes.size())
+                if (state->shapes.Length())
                 {
-                    // TODO
-                    StaticArray<u32> materialIndices(tempArena, 2);
-                    materialIndices.Push(0);
-                    materialIndices.Push(0);
+                    Print("%S, num: %i\n", currentFilename, state->shapes.Length());
+                    // Remove duplicate meshes
+                    ShapeType *shapes =
+                        PushArrayNoZero(tempArena, ShapeType, state->shapes.Length());
+                    state->shapes.Flatten(shapes);
 
-                    u32 numMeshes = 0;
-                    for (int objMeshIndex = 0; objMeshIndex < state->objMeshes.size();
-                         objMeshIndex++)
+                    StaticArray<Mesh> meshes(tempArena, state->shapes.Length(),
+                                             state->shapes.Length());
+                    StaticArray<u32> materialIndices(tempArena, meshes.Length(),
+                                                     meshes.Length());
+
+                    StaticArray<int> hashes(tempArena, meshes.Length(), meshes.Length());
+                    BitVector shapeCulled(tempArena, meshes.Length());
+
+                    u32 hashSize = NextPowerOfTwo(meshes.Length());
+                    HashIndex meshHashMap(tempArena, hashSize, hashSize);
+
+                    ParallelFor(
+                        0, state->shapes.Length(), 32, 32,
+                        [&](int jobID, int start, int count) {
+                            for (int meshIndex = start; meshIndex < start + count; meshIndex++)
+                            {
+                                ShapeType &shape = shapes[meshIndex];
+                                u32 materialIndex =
+                                    shape.materialName.size
+                                        ? sls->materialMap.Find(shape.materialName)->index
+                                        : 0;
+
+                                materialIndices[meshIndex] = materialIndex;
+                                int posParameterIndex = CheckForID(&shape.packet, "P"_sid);
+                                Mesh mesh             = {};
+                                if (posParameterIndex != -1)
+                                {
+                                    mesh.numVertices =
+                                        shape.packet.sizes[posParameterIndex] / sizeof(Vec3f);
+                                    mesh.p = (Vec3f *)shape.packet.bytes[posParameterIndex];
+
+                                    int indexParameterIndex =
+                                        CheckForID(&shape.packet, "indices"_sid);
+                                    Assert(indexParameterIndex != -1);
+                                    mesh.numIndices =
+                                        shape.packet.sizes[indexParameterIndex] / sizeof(u32);
+                                    mesh.indices =
+                                        (u32 *)shape.packet.bytes[indexParameterIndex];
+
+                                    int normParameterIndex =
+                                        CheckForID(&shape.packet, "N"_sid);
+                                    Assert(normParameterIndex != -1);
+                                    Assert(shape.packet.sizes[normParameterIndex] /
+                                               sizeof(Vec3f) ==
+                                           mesh.numVertices);
+                                    if (normParameterIndex != -1)
+                                        mesh.n =
+                                            (Vec3f *)shape.packet.bytes[normParameterIndex];
+
+                                    int uvParameterIndex = CheckForID(&shape.packet, "uv"_sid);
+                                    Assert(uvParameterIndex != -1);
+                                    Assert(shape.packet.sizes[uvParameterIndex] /
+                                               sizeof(Vec2f) ==
+                                           mesh.numVertices);
+                                    if (uvParameterIndex != -1)
+                                        mesh.uv =
+                                            (Vec2f *)shape.packet.bytes[uvParameterIndex];
+                                }
+                                else
+                                {
+                                    int fileParameterIndex =
+                                        CheckForID(&shape.packet, "filename"_sid);
+                                    Assert(fileParameterIndex != -1);
+                                    string filename = StrConcat(
+                                        tempArena, directory,
+                                        Str8(shape.packet.bytes[fileParameterIndex],
+                                             shape.packet.sizes[fileParameterIndex]));
+                                    GeometryType type =
+                                        ConvertStringIDToGeometryType(shape.packet.type);
+                                    mesh = LoadPLY(tempArena, filename, type);
+                                }
+                                meshes[meshIndex] = mesh;
+
+                                int hash = MurmurHash32((const char *)mesh.p,
+                                                        sizeof(Vec3f) * mesh.numVertices, 0);
+                                meshHashMap.AddConcurrent(hash, meshIndex);
+                                hashes[meshIndex] = hash;
+                            }
+                        });
+
+                    ParallelFor(
+                        0, meshes.Length(), 32, 32, [&](int jobID, int start, int count) {
+                            for (int meshIndex = start; meshIndex < start + count; meshIndex++)
+                            {
+                                Mesh &mesh = meshes[meshIndex];
+                                int hash   = MurmurHash32((const char *)mesh.p,
+                                                          sizeof(Vec3f) * mesh.numVertices, 0);
+                                for (int hashIndex = meshHashMap.FirstInHash(hash);
+                                     hashIndex != -1;
+                                     hashIndex = meshHashMap.NextInHash(hashIndex))
+                                {
+                                    if (meshIndex != hashIndex && hash == hashes[hashIndex])
+                                    {
+                                        Mesh &otherMesh = meshes[hashIndex];
+                                        if (mesh.numVertices != otherMesh.numVertices)
+                                            continue;
+                                        if (memcmp(mesh.p, otherMesh.p,
+                                                   sizeof(Vec3f) * mesh.numVertices) == 0)
+                                        {
+                                            if (materialIndices[meshIndex] != 0 &&
+                                                materialIndices[hashIndex] != 0 &&
+                                                meshIndex > hashIndex)
+                                            {
+                                                shapeCulled.SetBit(meshIndex);
+                                                break;
+                                            }
+                                            else if (materialIndices[meshIndex] == 0 &&
+                                                     materialIndices[hashIndex] == 0 &&
+                                                     meshIndex > hashIndex)
+                                            {
+                                                shapeCulled.SetBit(meshIndex);
+                                                break;
+                                            }
+                                            else if (materialIndices[meshIndex] == 0 &&
+                                                     materialIndices[hashIndex] != 0)
+                                            {
+                                                shapeCulled.SetBit(meshIndex);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+
+                    int newNumMeshes = 0;
+                    for (int meshIndex = 0; meshIndex < meshes.Length(); meshIndex++)
                     {
-                        numMeshes += state->objMeshes[objMeshIndex].num;
+                        if (!shapeCulled.GetBit(meshIndex))
+                        {
+                            meshes[newNumMeshes++] = meshes[meshIndex];
+                        }
                     }
-                    Mesh *meshes = PushArrayNoZero(tempArena, Mesh, numMeshes);
-                    numMeshes    = 0;
-                    for (int objMeshIndex = 0; objMeshIndex < state->objMeshes.size();
-                         objMeshIndex++)
-                    {
-                        MoanaOBJMeshes &mesh = state->objMeshes[objMeshIndex];
-                        MemoryCopy(meshes + numMeshes, mesh.meshes, sizeof(Mesh) * mesh.num);
-                        numMeshes += mesh.num;
-                    }
+
+                    ParallelFor(0, newNumMeshes, 32, 32, [&](int jobID, int start, int count) {
+                        for (int meshIndex = start; meshIndex < start + count; meshIndex++)
+                        {
+                            ScratchArena scratch;
+                            Mesh &mesh      = meshes[meshIndex];
+                            u32 numVertices = mesh.numVertices;
+                            u32 hashSize    = NextPowerOfTwo(numVertices);
+                            HashIndex hashMap(scratch.temp.arena, hashSize, hashSize);
+                            StaticArray<u32> remap(tempArena, numVertices, numVertices);
+
+                            Vec3f *vertices = mesh.p;
+                            Vec3f *normals  = mesh.n;
+                            Vec2f *uvs      = mesh.uv;
+
+                            int newVertexCount = 0;
+                            for (int vertexIndex = 0; vertexIndex < numVertices; vertexIndex++)
+                            {
+                                const Vec3f &vertex = vertices[vertexIndex];
+                                int hash            = Hash(vertex);
+                                int newVertexIndex  = -1;
+                                for (int hashIndex = hashMap.FirstInHash(hash);
+                                     hashIndex != -1;
+                                     hashIndex = hashMap.NextInHash(hashIndex))
+                                {
+                                    if (vertices[hashIndex] == vertex)
+                                    {
+                                        if (normals &&
+                                            normals[hashIndex] != normals[vertexIndex])
+                                            continue;
+                                        if (uvs && uvs[hashIndex] != uvs[vertexIndex])
+                                            continue;
+                                        newVertexIndex = hashIndex;
+                                        break;
+                                    }
+                                }
+
+                                if (newVertexIndex == -1)
+                                {
+                                    newVertexIndex = newVertexCount++;
+                                    hashMap.AddInHash(hash, newVertexIndex);
+                                    vertices[newVertexIndex] = vertex;
+                                    if (normals)
+                                        normals[newVertexIndex] = normals[vertexIndex];
+                                    if (uvs) uvs[newVertexIndex] = uvs[vertexIndex];
+                                }
+                                Assert(newVertexIndex != -1);
+                                remap[vertexIndex] = (u32)newVertexIndex;
+                            }
+
+                            u32 numIndices = mesh.numIndices;
+                            u32 *indices   = mesh.indices;
+
+                            for (u32 indexIndex = 0; indexIndex < numIndices; indexIndex++)
+                            {
+                                indices[indexIndex] = remap[indices[indexIndex]];
+                            }
+
+                            Mesh newMesh        = {};
+                            newMesh.numVertices = newVertexCount;
+                            newMesh.numIndices  = numIndices;
+                            newMesh.p           = vertices;
+                            newMesh.indices     = indices;
+                            newMesh.n           = normals;
+                            newMesh.uv          = uvs;
+
+                            meshes[meshIndex] = newMesh;
+                        }
+                    });
                     string virtualGeoFilename =
                         PushStr8F(tempArena, "%S%S.geo\n", directory,
                                   RemoveFileExtension(state->filename));
-                    CreateClusters(meshes, numMeshes, materialIndices, virtualGeoFilename);
+                    CreateClusters(meshes.data, newNumMeshes, materialIndices,
+                                   virtualGeoFilename);
                 }
 
                 WriteFile(directory, state, originFile ? sls : 0);
@@ -1069,8 +1121,6 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 b32 result = GetBetweenPair(importedFilename, &tokenizer, '"');
                 Assert(result);
 
-                string importedMoanaObjFile =
-                    CheckMoanaVariant(tempArena, directory, importedFilename);
                 string newFilename = ConvertPBRTToRTScene(tempArena, importedFilename);
 
                 bool checkFileInstance =
@@ -1113,16 +1163,16 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 {
                     scheduler.Schedule(&state->counter, [=](u32 jobID) {
                         PBRTFileInfo *newState =
-                            LoadPBRT(sls, directory, copiedFilename, importedMoanaObjFile,
-                                     importedState, false, worldBegin, checkFileInstance);
+                            LoadPBRT(sls, directory, copiedFilename, importedState, false,
+                                     worldBegin, checkFileInstance);
                         if (!checkFileInstance) state->imports[index] = newState;
                     });
                 }
                 else
                 {
                     PBRTFileInfo *newState =
-                        LoadPBRT(sls, directory, copiedFilename, importedMoanaObjFile,
-                                 importedState, false, worldBegin, checkFileInstance);
+                        LoadPBRT(sls, directory, copiedFilename, importedState, false,
+                                 worldBegin, checkFileInstance);
                     if (!checkFileInstance) state->imports[index] = newState;
                 }
             }
@@ -1164,12 +1214,6 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 b32 result = GetBetweenPair(materialNameOrType, &tokenizer, '"');
                 Assert(result);
 
-                string materialName =
-                    isNamedMaterial ? PushStr8Copy(threadArena, materialNameOrType)
-                                    : PushStr8F(threadArena, "%S%S%llu", materialNameOrType,
-                                                RemoveFileExtension(state->filename),
-                                                (u64)(tokenizer.cursor - tokenizer.input.str));
-
                 NamedPacket nPacket;
                 ScenePacket *packet = &nPacket.packet;
                 *packet             = {};
@@ -1198,25 +1242,27 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                     nPacket.type = PushStr8Copy(threadArena, materialNameOrType);
                 }
 
-                nPacket.name = materialName;
-
-                if (!isNamedMaterial)
+                string materialName;
+                if (isNamedMaterial)
                 {
-                    // NOTE: the names aren't deterministic
-                    string buffer = GetMaterialBuffer(temp.arena, packet, nPacket.type);
-                    // NOTE: this changes the material name if a duplicate is found
-                    if (!sls->materialMap.FindOrAdd(threadArena, buffer, materialName))
-                    {
-                        materials->AddBack() = nPacket;
-                    }
-                    else
-                    {
-                        threadLocalStatistics[threadIndex].misc++;
-                    }
+                    materialName = PushStr8Copy(threadArena, materialNameOrType);
                 }
                 else
                 {
+                    materialName = GetMaterialBuffer(temp.arena, packet, nPacket.type);
+                }
+
+                nPacket.name = materialName;
+
+                // NOTE: this changes the material name if a duplicate is found
+                if (!sls->materialMap.FindOrAdd(threadArena, materialName,
+                                                sls->materialCounter))
+                {
                     materials->AddBack() = nPacket;
+                }
+                else
+                {
+                    threadLocalStatistics[threadIndex].misc++;
                 }
 
                 currentGraphicsState.materialName = materialName;
@@ -1251,12 +1297,6 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 Assert(result);
 
                 PBRTFileInfo *newState = PushStruct(threadArena, PBRTFileInfo);
-
-                if (isMoana)
-                {
-                    newState->objMeshes = std::move(state->objMeshes);
-                    state->objMeshes.clear();
-                }
 
                 string objectFileName = PushStr8F(threadArena, "objects/%S_obj.rtscene",
                                                   ReplaceColons(tempArena, objectName));
@@ -1364,6 +1404,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             {
                 ErrorExit(worldBegin, "Tried to specify %S after WorldBegin\n", word);
                 ShapeType *shape    = &shapes->AddBack();
+                *shape              = {};
                 ScenePacket *packet = &shape->packet;
 
                 CreateScenePacket(tempArena, word, packet, &tokenizer, MemoryType_Shape);
@@ -1377,13 +1418,15 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                     continue;
                 }
 
-                u32 numVertices = 0;
-                u32 numIndices  = 0;
+                u32 numVertices   = 0;
+                u32 numIndices    = 0;
+                int positionIndex = -1;
                 for (u32 i = 0; i < packet->parameterCount; i++)
                 {
                     if (packet->parameterNames[i] == "P"_sid)
                     {
-                        numVertices = packet->sizes[i] / sizeof(Vec3f);
+                        numVertices   = packet->sizes[i] / sizeof(Vec3f);
+                        positionIndex = i;
                     }
                     else if (packet->parameterNames[i] == "indices"_sid)
                     {
@@ -1396,44 +1439,29 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                         plyMeshFile.size = packet->sizes[i];
 
                         // TODO: this is hardcoded for the moana island scene
+#ifndef USE_GPU
                         if (GetFileExtension(plyMeshFile) == "obj" ||
                             CheckQuadPLY(StrConcat(temp.arena, directory, plyMeshFile)))
                             packet->type = "quadmesh"_sid;
                         else packet->type = "trianglemesh"_sid;
+#else
+                        packet->type = "trianglemesh"_sid;
+#endif
                     }
                 }
+#ifndef USE_GPU
                 if (packet->type == "trianglemesh"_sid && numVertices && numIndices &&
                     numVertices / 2 == numIndices / 3)
                 {
                     packet->type = "quadmesh"_sid;
                 }
+#endif
 
                 shape->materialName   = currentGraphicsState.materialName;
                 shape->areaLight      = currentGraphicsState.areaLightPacket
                                             ? currentGraphicsState.areaLightPacket
                                             : 0;
                 shape->transformIndex = currentGraphicsState.transformIndex;
-
-                shape->cancelled = false;
-                if (isMoana)
-                {
-                    MoanaOBJMeshes &meshes = state->objMeshes.back();
-                    Assert(moanaMeshIndex < meshes.total);
-                    packet->type = ConvertGeometryTypeToStringId(meshes.type);
-                    if (moanaMeshIndex >= meshes.num)
-                    {
-                        shape->cancelled = true;
-                        shape->mesh      = 0;
-                    }
-                    else
-                    {
-                        shape->mesh = &meshes.meshes[moanaMeshIndex++];
-                    }
-                }
-                else
-                {
-                    shape->mesh = 0;
-                }
 
                 AddTransform();
             }
@@ -1647,15 +1675,6 @@ void WriteDataType(StringBuilder *builder, ScenePacket *scenePacket, int p,
     }
 }
 
-int CheckForID(ScenePacket *packet, StringId id)
-{
-    for (u32 p = 0; p < packet->parameterCount; p++)
-    {
-        if (packet->parameterNames[p] == id) return p;
-    }
-    return -1;
-}
-
 void WriteNameTypeAndData(StringBuilder *builder, ScenePacket *packet, string name, int p,
                           SceneHashMap *textureHashMap = 0)
 {
@@ -1728,7 +1747,7 @@ void WriteMesh(Mesh &mesh, StringBuilder &builder, StringBuilderMapped &dataBuil
 
 int ComputeShapeSize(Arena *arena, ShapeType *shape, string directory)
 {
-    if (shape->cancelled) return 0;
+    // if (shape->cancelled) return 0;
     if (shape->mesh)
     {
         Mesh &mesh = *shape->mesh;
@@ -1871,7 +1890,7 @@ void WriteShape(PBRTFileInfo *info, ShapeType *shapeType, StringBuilder &builder
                 StringBuilderMapped &dataBuilder, string directory, u64 *builderOffset = 0,
                 u64 cap = 0)
 {
-    if (shapeType->cancelled) return;
+    // if (shapeType->cancelled) return;
     ScenePacket *packet = &shapeType->packet;
     switch (packet->type)
     {
@@ -2019,21 +2038,48 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
         }
 
         Put(&builder, "MATERIALS_START ");
+
+        u32 totalNumMaterials = 0;
         for (u32 i = 0; i < state->numProcessors; i++)
         {
             auto &list = state->materials[i];
-
-            for (auto *node = list.first; node != 0; node = node->next)
-            {
-                for (u32 j = 0; j < node->count; j++)
-                {
-                    auto &packet = node->values[j];
-                    WriteMaterials(&builder, textureHashMap, packet, state->hashMapSize - 1);
-                }
-            }
+            totalNumMaterials += list.Length();
         }
-        Put(&builder, "MATERIALS_END ");
+
+        struct Handle
+        {
+            u32 sortKey;
+            u32 index;
+        };
+
+        NamedPacket *materials = PushArrayNoZero(temp.arena, NamedPacket, totalNumMaterials);
+        Handle *handles        = PushArrayNoZero(temp.arena, Handle, totalNumMaterials);
+        u32 materialOffset     = 0;
+        for (u32 i = 0; i < state->numProcessors; i++)
+        {
+            auto &list = state->materials[i];
+            list.Flatten(materials + materialOffset);
+
+            for (u32 materialIndex = materialOffset;
+                 materialIndex < materialOffset + list.Length(); materialIndex++)
+            {
+                NamedPacket &material          = materials[materialIndex];
+                handles[materialIndex].sortKey = state->materialMap.Find(material.name)->index;
+                handles[materialIndex].index   = materialIndex;
+            }
+            materialOffset += list.Length();
+        }
+
+        SortHandles(handles, totalNumMaterials);
+
+        for (u32 materialIndex = 0; materialIndex < totalNumMaterials; materialIndex++)
+        {
+            const Handle &handle = handles[materialIndex];
+            WriteMaterials(&builder, textureHashMap, materials[handle.index],
+                           state->hashMapSize - 1);
+        }
     }
+    Put(&builder, "MATERIALS_END ");
 
     if (info->shapes.totalCount && info->fileInstances.totalCount == 0)
     {

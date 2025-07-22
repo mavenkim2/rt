@@ -620,11 +620,13 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             }
             materialID |= (1u << 31u);
         }
-        // TODO:
+        gpuMaterials.Push(material);
+#if 0
         if (material.eta != 0.f)
         {
             gpuMaterials.Push(material);
         }
+#endif
     }
     GPUBuffer materialBuffer =
         tileCmd

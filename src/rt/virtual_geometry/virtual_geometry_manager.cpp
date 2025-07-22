@@ -668,7 +668,7 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
                 ref.bounds[3 + axis] = Max(ref.bounds[3 + axis], maxVal);
             }
         }
-        ref.instanceID = 0;
+        ref.instanceID = meshInfos.Length();
         ref.nodeOffset = rebraid;
         instanceRefs.Push(ref);
     }
@@ -1077,7 +1077,9 @@ void VirtualGeometryManager::ProcessRequests(CommandBuffer *cmd)
 
         cmd->CopyBuffer(&evictedPagesBuffer, &uploadBuffer, &pageInstallCopy, 1);
 
+        // TODO: this still triggers
         Assert(gpuClusterFixup.Length() <= maxClusterFixupsPerFrame);
+
         // Cluster fixups
         if (gpuClusterFixup.Length())
         {
