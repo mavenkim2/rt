@@ -3132,8 +3132,7 @@ void CommandBuffer::BuildPTLAS(GPUBuffer *ptlasBuffer, GPUBuffer *scratchBuffer,
     VkPartitionedAccelerationStructureInstancesInputNV inputInfo = {
         VK_STRUCTURE_TYPE_PARTITIONED_ACCELERATION_STRUCTURE_INSTANCES_INPUT_NV};
 
-    inputInfo.flags         = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-    inputInfo.instanceCount = instanceCount;
+    inputInfo.instanceCount                     = instanceCount;
     inputInfo.maxInstancePerPartitionCount      = maxInstancesPerPartition;
     inputInfo.partitionCount                    = partitionCount;
     inputInfo.maxInstanceInGlobalPartitionCount = maxInstanceInGlobalPartitionCount;

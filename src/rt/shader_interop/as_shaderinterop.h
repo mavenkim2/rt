@@ -306,9 +306,12 @@ struct TestDenseGeometry
 #define GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX 18
 
 #define GLOBALS_VISIBLE_CLUSTER_COUNT_INDEX 19
-#define GLOBALS_DEBUG                       20
+#define GLOBALS_PTLAS_OP_TYPE_FLAGS         20
 
-#define GLOBALS_SIZE 21
+#define GLOBALS_PTLAS_WRITE_INSTANCE_INDEX 21
+#define GLOBALS_PTLAS_UPDATE_INSTANCE_INDEX 22
+
+#define GLOBALS_SIZE 23
 
 #ifdef __cplusplus
 }

@@ -404,16 +404,19 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
 
     tlasScratchBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, tlasScratchSize);
-    tlasAccelBuffer = device->CreateBuffer(
-        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, tlasAccelSize);
+    tlasAccelBuffer =
+        device->CreateBuffer(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                             megabytes(512)); // tlasAccelSize);
     ptlasIndirectCommandBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        sizeof(PTLAS_INDIRECT_COMMAND));
+        sizeof(PTLAS_INDIRECT_COMMAND) * 3);
 
     ptlasWriteInfosBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         sizeof(PTLAS_WRITE_INSTANCE_INFO) * maxInstances);
     ptlasUpdateInfosBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
@@ -421,8 +424,6 @@ VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
         sizeof(PTLAS_UPDATE_INSTANCE_INFO) * maxInstances);
     ptlasInstanceBitVectorBuffer =
         device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, maxInstances >> 3u);
-
-    ptlas = device->CreatePTLAS(&tlasAccelBuffer);
 
     decodeClusterDataBuffer        = device->CreateBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                               VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -1462,6 +1463,7 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
 {
     // Update/write PTLAS instances
     {
+        device->BeginEvent(cmd, "Update PTLAS Instances");
         u64 writeAddress  = device->GetDeviceAddress(ptlasWriteInfosBuffer.buffer);
         u64 updateAddress = device->GetDeviceAddress(ptlasUpdateInfosBuffer.buffer);
 
@@ -1487,13 +1489,45 @@ void VirtualGeometryManager::BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstan
         cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                      VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                      VK_ACCESS_2_SHADER_WRITE_BIT,
-                     VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+                     VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+                         VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
         cmd->FlushBarriers();
+        device->EndEvent(cmd);
     }
+
+    // cmd->BuildPTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &ptlasIndirectCommandBuffer,
+    //                 &clasGlobalsBuffer, sizeof(u32) * GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX,
+    //                 maxInstances, maxInstances, 1, 0);
 
     cmd->BuildPTLAS(&tlasAccelBuffer, &tlasScratchBuffer, &ptlasIndirectCommandBuffer,
                     &clasGlobalsBuffer, sizeof(u32) * GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX,
                     maxInstances, maxInstances, 1, 0);
+
+    // if (device->frameCount > 10)
+    // {
+    //     GPUBuffer readback =
+    //         device->CreateBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+    //                              ptlasIndirectCommandBuffer.size, MemoryUsage::GPU_TO_CPU);
+    //
+    //     cmd->Barrier(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+    //                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+    //                  VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
+    //                  VK_ACCESS_2_TRANSFER_READ_BIT);
+    //     // cmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+    //     // VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+    //     //              VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+    //     cmd->FlushBarriers();
+    //     cmd->CopyBuffer(&readback, &ptlasIndirectCommandBuffer);
+    //     Semaphore testSemaphore   = device->CreateSemaphore();
+    //     testSemaphore.signalValue = 1;
+    //     cmd->SignalOutsideFrame(testSemaphore);
+    //     device->SubmitCommandBuffer(cmd);
+    //     device->Wait(testSemaphore);
+    //
+    //     PTLAS_INDIRECT_COMMAND *data = (PTLAS_INDIRECT_COMMAND *)readback.mappedPtr;
+    //
+    //     int stop = 5;
+    // }
 }
 
 } // namespace rt

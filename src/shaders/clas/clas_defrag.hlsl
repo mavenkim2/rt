@@ -71,11 +71,6 @@ void main(uint3 groupID : SV_GroupID, uint groupIndex : SV_GroupIndex)
         InterlockedAdd(globals[GLOBALS_OLD_PAGE_DATA_BYTES], clasPageInfo.clasSize);
     }
 
-    if (groupIndex == 0 && pageEvicted)
-    {
-        InterlockedAdd(globals[GLOBALS_DEBUG], clasPageInfo.clasCount);
-    }
-
     if (pageEvicted || (pageShiftLeftClas == 0 && pageShiftLeftBytes == 0))
     {
         if (groupIndex == 0)

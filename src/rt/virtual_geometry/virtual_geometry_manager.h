@@ -238,7 +238,6 @@ struct VirtualGeometryManager
     GPUBuffer ptlasWriteInfosBuffer;
     GPUBuffer ptlasUpdateInfosBuffer;
     GPUBuffer ptlasInstanceBitVectorBuffer;
-    VkAccelerationStructureKHR ptlas;
 
     // u32 requestBatchWriteIndex;
     // RingBuffer<StreamingRequestBatch> streamingRequestBatches;

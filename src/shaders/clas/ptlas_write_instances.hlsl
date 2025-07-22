@@ -1,8 +1,9 @@
 #include "../common.hlsli"
 #include "../../rt/shader_interop/as_shaderinterop.h"
+#include "../bit_twiddling.hlslI"
 
 StructuredBuffer<uint64_t> blasAddresses : register(t0);
-RWStructuredBuffer<uint> globals : register(u1);
+globallycoherent RWStructuredBuffer<uint> globals : register(u1);
 StructuredBuffer<BLASData> blasDatas : register(t2);
 StructuredBuffer<GPUInstance> gpuInstances : register(t3);
 
@@ -24,21 +25,38 @@ void main(uint3 dtID : SV_DispatchThreadID)
     InstanceRef instanceRef = instanceRefs[blasData.instanceRefIndex];
     GPUInstance instance = gpuInstances[instanceRef.instanceID];
 
-    uint bit = blasData.instanceRefIndex & 31u;
-    uint byteAddress = (blasData.instanceRefIndex >> 5u) << 2u;
-    uint wasWritten = instanceBitVector.Load(byteAddress & (1u << bit));
+    uint2 offsets = GetAlignedAddressAndBitOffset(0, blasData.instanceRefIndex);
+    uint wasWritten = instanceBitVector.Load(offsets[0]) & (1u << offsets.y);
 
     if (wasWritten)
     {
+        uint flags;
+        uint flag = 1u << PTLAS_TYPE_UPDATE_INSTANCE;
+        InterlockedOr(globals[GLOBALS_PTLAS_OP_TYPE_FLAGS], flag, flags);
+
+        if ((flags & flag) == 0)
+        {
+            uint opIndex;
+            InterlockedAdd(globals[GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX], 1, opIndex);
+            globals[GLOBALS_PTLAS_UPDATE_INSTANCE_INDEX] = (1u << 31u) | opIndex;
+            DeviceMemoryBarrier();
+        }
+
+        uint opIndex = globals[GLOBALS_PTLAS_UPDATE_INSTANCE_INDEX];
+        while (opIndex == 0)
+        {
+            opIndex = globals[GLOBALS_PTLAS_UPDATE_INSTANCE_INDEX];
+        }
+
+        opIndex &= 0x7fffffff;
         uint index;
-        InterlockedAdd(ptlasIndirectCommands[PTLAS_TYPE_UPDATE_INSTANCE].argCount, 1, index);
+        InterlockedAdd(ptlasIndirectCommands[opIndex].argCount, 1, index);
 
         if (index == 0)
         {
-            ptlasIndirectCommands[PTLAS_TYPE_WRITE_INSTANCE].opType = PTLAS_TYPE_WRITE_INSTANCE;
-            ptlasIndirectCommands[PTLAS_TYPE_WRITE_INSTANCE].startAddress = pc.updateAddress;
-            ptlasIndirectCommands[PTLAS_TYPE_WRITE_INSTANCE].strideInBytes = PTLAS_WRITE_INSTANCE_INFO_STRIDE;
-            InterlockedAdd(globals[GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX], 1);
+            ptlasIndirectCommands[opIndex].opType = PTLAS_TYPE_UPDATE_INSTANCE;
+            ptlasIndirectCommands[opIndex].startAddress = pc.updateAddress;
+            ptlasIndirectCommands[opIndex].strideInBytes = PTLAS_UPDATE_INSTANCE_INFO_STRIDE;
         }
 
         PTLAS_UPDATE_INSTANCE_INFO instanceInfo;
@@ -50,20 +68,39 @@ void main(uint3 dtID : SV_DispatchThreadID)
     }
     else if (blasData.clusterCount != 0)
     {
+        uint flags;
+        uint flag = 1u << PTLAS_TYPE_WRITE_INSTANCE;
+        InterlockedOr(globals[GLOBALS_PTLAS_OP_TYPE_FLAGS], flag, flags);
+
+        if ((flags & flag) == 0)
+        {
+            uint opIndex;
+            InterlockedAdd(globals[GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX], 1, opIndex);
+            globals[GLOBALS_PTLAS_WRITE_INSTANCE_INDEX] = (1u << 31u) | opIndex;
+            DeviceMemoryBarrier();
+        }
+
+        uint opIndex = globals[GLOBALS_PTLAS_WRITE_INSTANCE_INDEX];
+        while (opIndex == 0)
+        {
+            opIndex = globals[GLOBALS_PTLAS_WRITE_INSTANCE_INDEX];
+        }
+        opIndex &= 0x7fffffff;
+
         uint index;
-        InterlockedAdd(ptlasIndirectCommands[PTLAS_TYPE_WRITE_INSTANCE].argCount, 1, index);
+        InterlockedAdd(ptlasIndirectCommands[opIndex].argCount, 1, index);
 
         if (index == 0)
         {
-            ptlasIndirectCommands[PTLAS_TYPE_WRITE_INSTANCE].opType = PTLAS_TYPE_UPDATE_INSTANCE;
-            ptlasIndirectCommands[PTLAS_TYPE_WRITE_INSTANCE].startAddress = pc.updateAddress;
-            ptlasIndirectCommands[PTLAS_TYPE_WRITE_INSTANCE].strideInBytes = PTLAS_UPDATE_INSTANCE_INFO_STRIDE;
-            InterlockedAdd(globals[GLOBALS_PTLAS_OP_TYPE_COUNT_INDEX], 1);
+            ptlasIndirectCommands[opIndex].opType = PTLAS_TYPE_WRITE_INSTANCE;
+            ptlasIndirectCommands[opIndex].startAddress = pc.writeAddress;
+            ptlasIndirectCommands[opIndex].strideInBytes = PTLAS_WRITE_INSTANCE_INFO_STRIDE;
         }
 
-        PTLAS_WRITE_INSTANCE_INFO instanceInfo;
+        PTLAS_WRITE_INSTANCE_INFO instanceInfo = (PTLAS_WRITE_INSTANCE_INFO)0;
         instanceInfo.transform = instance.renderFromObject;
 
+#if 1
         float3 minP = float3(FLT_MAX, FLT_MAX, FLT_MAX);
         float3 maxP = float3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
         for (int z = 2; z <= 5; z += 3)
@@ -72,17 +109,19 @@ void main(uint3 dtID : SV_DispatchThreadID)
             {
                 for (int x = 0; x <= 3; x += 3)
                 {
-                    float3 pos = float3(instanceRef.bounds[x], instanceRef.bounds[y], instanceRef.bounds[z]);
+                    float3 pos = mul(instance.renderFromObject, float4(instanceRef.bounds[x], instanceRef.bounds[y], instanceRef.bounds[z], 1.f));
                     minP = min(minP, pos);
                     maxP = max(maxP, pos);
                 }
             }
         }
+
         for (int i = 0; i < 3; i++)
         {
             instanceInfo.explicitAABB[i] = minP[i];
             instanceInfo.explicitAABB[3 + i] = maxP[i];
         }
+#endif
 
         instanceInfo.instanceID = instanceRef.instanceID;
         instanceInfo.instanceMask = 0xff;
@@ -94,6 +133,6 @@ void main(uint3 dtID : SV_DispatchThreadID)
 
         ptlasInstanceWriteInfos[index] = instanceInfo;
 
-        instanceBitVector.InterlockedOr(byteAddress, 1u << bit);
+        instanceBitVector.InterlockedOr(offsets.x, 1u << offsets.y);
     }
 }
