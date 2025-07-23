@@ -100,7 +100,7 @@ void main(uint3 dtID : SV_DispatchThreadID)
         PTLAS_WRITE_INSTANCE_INFO instanceInfo = (PTLAS_WRITE_INSTANCE_INFO)0;
         instanceInfo.transform = instance.renderFromObject;
 
-#if 1
+#if 0
         float3 minP = float3(FLT_MAX, FLT_MAX, FLT_MAX);
         float3 maxP = float3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
         for (int z = 2; z <= 5; z += 3)
@@ -122,17 +122,26 @@ void main(uint3 dtID : SV_DispatchThreadID)
             instanceInfo.explicitAABB[3 + i] = maxP[i];
         }
 #endif
+        for (int i = 0; i < 3; i++)
+        {
+            instanceInfo.explicitAABB[i] = instanceRef.bounds[i];
+            instanceInfo.explicitAABB[3 + i] = instanceRef.bounds[3 + i];
+        }
 
-        instanceInfo.instanceID = instanceRef.instanceID;
+        instanceInfo.instanceID = instanceRef.partitionIndex;//instanceRef.instanceID;
         instanceInfo.instanceMask = 0xff;
         instanceInfo.instanceContributionToHitGroupIndex = 0;
         instanceInfo.instanceFlags = (1u << 0u) | (1u << 4u);
         instanceInfo.instanceIndex = blasData.instanceRefIndex;
-        instanceInfo.partitionIndex = 0;
+        instanceInfo.partitionIndex = instanceRef.partitionIndex;
         instanceInfo.accelerationStructure = blasAddresses[blasData.addressIndex]; 
 
         ptlasInstanceWriteInfos[index] = instanceInfo;
 
         instanceBitVector.InterlockedOr(offsets.x, 1u << offsets.y);
+    }
+    else 
+    {
+        //InterlockedAdd(globals[GLOBALS_DEBUG], 1);
     }
 }

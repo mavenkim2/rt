@@ -466,6 +466,11 @@ MaterialHashMap *CreateMaterials(Arena *arena, Arena *tempArena, Tokenizer *toke
         int ptexReflectanceIndex = -1;
         switch (materialTypeIndex)
         {
+            case MaterialTypes::Interface:
+            {
+                *material = PushStructConstruct(arena, NullMaterial)();
+            }
+            break;
             case MaterialTypes::Diffuse:
             {
                 bool result = Advance(tokenizer, "reflectance ");
@@ -947,38 +952,6 @@ void LoadRTScene(Arena **arenas, Arena **tempArenas, RTSceneLoadState *state,
     scene->geometryType = type;
 }
 
-void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
-                    const Mat4 &cameraFromRender, int screenHeight)
-{
-    switch (scene->geometryType)
-    {
-        case GeometryType::Instance:
-        {
-            BuildTLASBVH(arenas, scene);
-        }
-        break;
-        case GeometryType::QuadMesh:
-        {
-            BuildQuadBVH(arenas, scene);
-        }
-        break;
-        case GeometryType::TriangleMesh:
-        {
-            BuildTriangleBVH(arenas, scene);
-        }
-        break;
-        case GeometryType::CatmullClark:
-        {
-            scene->primitives = AdaptiveTessellation(
-                arenas, scene, NDCFromCamera, cameraFromRender, screenHeight,
-                scene->tessellationParams, (Mesh *)scene->primitives, scene->numPrimitives);
-            BuildCatClarkBVH(arenas, scene);
-        }
-        break;
-        default: Assert(0);
-    }
-}
-
 int LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, string filename)
 {
     TempArena temp = ScratchStart(0, 0);
@@ -1011,6 +984,39 @@ int LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, strin
 
     ScratchEnd(temp);
     return numScenes;
+}
+
+#ifndef USE_GPU
+void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
+                    const Mat4 &cameraFromRender, int screenHeight)
+{
+    switch (scene->geometryType)
+    {
+        case GeometryType::Instance:
+        {
+            BuildTLASBVH(arenas, scene);
+        }
+        break;
+        case GeometryType::QuadMesh:
+        {
+            BuildQuadBVH(arenas, scene);
+        }
+        break;
+        case GeometryType::TriangleMesh:
+        {
+            BuildTriangleBVH(arenas, scene);
+        }
+        break;
+        case GeometryType::CatmullClark:
+        {
+            scene->primitives = AdaptiveTessellation(
+                arenas, scene, NDCFromCamera, cameraFromRender, screenHeight,
+                scene->tessellationParams, (Mesh *)scene->primitives, scene->numPrimitives);
+            BuildCatClarkBVH(arenas, scene);
+        }
+        break;
+        default: Assert(0);
+    }
 }
 
 void BuildTLASBVH(Arena **arenas, ScenePrimitives *scene)
@@ -1386,6 +1392,7 @@ void ComputeTessellationParams(Mesh *meshes, TessellationParams *params, u32 sta
         params[i].currentMinDistance = pos_inf;
     }
 }
+#endif
 
 Bounds GetTLASBounds(ScenePrimitives *scene, u32 start, u32 count)
 {

@@ -629,7 +629,7 @@ inline Vec4f BsplineDerivativeBasis(f32 u)
 }
 
 inline f32 CalculateCurvature(const Vec3f &dpdu, const Vec3f &dpdv, const Vec3f &dndu,
-                       const Vec3f &dndv)
+                              const Vec3f &dndv)
 {
     f32 E = Dot(dpdu, dpdu);
     f32 F = Dot(dpdu, dpdv);
@@ -716,10 +716,11 @@ Mask<LaneF32<N>> TriangleIntersect(const TravRay<N> &ray, const LaneF32<N> &tFar
     return mask;
 }
 
-inline bool SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene, const u32 geomID,
-                                                const u32 primID, const u32 ids[3], f32 u,
-                                                f32 v, f32 w, SurfaceInteraction &si,
-                                                bool isSecondTri = false)
+inline bool SurfaceInteractionFromTriangleIntersection(ScenePrimitives *scene,
+                                                       const u32 geomID, const u32 primID,
+                                                       const u32 ids[3], f32 u, f32 v, f32 w,
+                                                       SurfaceInteraction &si,
+                                                       bool isSecondTri = false)
 {
     Mesh *mesh                      = (Mesh *)scene->primitives + geomID;
     const PrimitiveIndices *indices = scene->primIndices + geomID;
@@ -1763,7 +1764,7 @@ struct IntersectorHelperBase<8, GeometryType::CatmullClark, PrimRef>
     using IntersectorType = BVH8PatchIntersector;
 };
 
-#ifdef USE_BVH4
+#ifdef USE_BVH4 
 template <GeometryType type, typename PrimRefType>
 using IntersectorHelper = IntersectorHelperBase<4, type, PrimRefType>;
 #elif defined(USE_BVH8)

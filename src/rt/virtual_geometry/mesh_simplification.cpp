@@ -2329,7 +2329,7 @@ static_assert((sizeof(PackedDenseGeometryHeader) + 4) % 16 == 0, "bad header siz
 void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,
                     string filename)
 {
-    // if (OS_FileExists(filename)) 
+    // if (OS_FileExists(filename))
     // {
     //     Print("%S skipped\n", filename);
     //     return;
@@ -2350,22 +2350,22 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     RecordAOSSplits record;
 
     StaticArray<Vec2u> meshVertexOffsets(scratch.temp.arena, numMeshes);
-    u32 totalNumVertices = 0;
-    u32 totalNumIndices  = 0;
+    u32 totalNumVertices  = 0;
+    u32 totalNumTriangles = 0;
     for (int i = 0; i < numMeshes; i++)
     {
-        Vec2u offsets(totalNumVertices, totalNumIndices);
+        Vec2u offsets(totalNumVertices, totalNumTriangles);
         meshVertexOffsets.Push(offsets);
         totalNumVertices += meshes[i].numVertices;
-        totalNumIndices += meshes[i].numIndices;
+        totalNumTriangles += meshes[i].numIndices / 3;
     }
 
-    u32 totalClustersEstimate = ((totalNumIndices / 3) >> (MAX_CLUSTER_TRIANGLES_BIT - 1)) * 3;
+    u32 totalClustersEstimate = ((totalNumTriangles) >> (MAX_CLUSTER_TRIANGLES_BIT - 1)) * 3;
     u32 totalGroupsEstimate   = (totalClustersEstimate + minGroupSize - 1) / minGroupSize;
 
     f32 *vertexData =
         PushArrayNoZero(scratch.temp.arena, f32, (3 + numAttributes) * totalNumVertices);
-    u32 *indexData = PushArrayNoZero(scratch.temp.arena, u32, totalNumIndices);
+    u32 *indexData = PushArrayNoZero(scratch.temp.arena, u32, totalNumTriangles * 3);
 
     ParallelFor(0, numMeshes, 1, [&](int jobID, int start, int count) {
         for (int meshIndex = start; meshIndex < start + count; meshIndex++)
@@ -2373,7 +2373,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             Mesh &mesh = meshes[meshIndex];
             // TODO: attributes
             u32 vertexOffset = meshVertexOffsets[meshIndex].x;
-            u32 indexOffset  = meshVertexOffsets[meshIndex].y;
+            u32 indexOffset  = 3 * meshVertexOffsets[meshIndex].y;
             MemoryCopy(vertexData + (3 + numAttributes) * vertexOffset, mesh.p,
                        sizeof(Vec3f) * mesh.numVertices);
 
@@ -2388,8 +2388,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     combinedMesh.p           = (Vec3f *)vertexData;
     combinedMesh.indices     = indexData;
     combinedMesh.numVertices = totalNumVertices;
-    combinedMesh.numIndices  = totalNumIndices;
-    combinedMesh.numFaces    = totalNumIndices / 3;
+    combinedMesh.numIndices  = totalNumTriangles * 3;
+    combinedMesh.numFaces    = totalNumTriangles;
 
     PrimRef *primRefs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
         scratch.temp.arena, &combinedMesh, 1, record, false);
@@ -2398,7 +2398,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     for (int primRefIndex = 0; primRefIndex < record.Count(); primRefIndex++)
     {
         u32 primID = primRefs[primRefIndex].primID;
-        u32 limit  = currentMesh == numMeshes - 1 ? totalNumIndices
+        u32 limit  = currentMesh == numMeshes - 1 ? totalNumTriangles
                                                   : meshVertexOffsets[currentMesh + 1].y;
         if (primID >= limit)
         {

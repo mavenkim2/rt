@@ -293,6 +293,7 @@ void main()
                 case GPUMaterialType::Diffuse: 
                 {
                     // Get base face data
+#if 0
                     Ptex::FaceData faceData = Ptex::GetFaceData(material, faceID);
                     int2 dim = int2(1u << faceData.log2Dim.x, 1u << faceData.log2Dim.y);
 
@@ -301,8 +302,20 @@ void main()
                     uint mipLevel = (uint)lambda;
 
                     float4 reflectance = SampleStochasticCatmullRomBorderless(faceData, material, faceID, uv, mipLevel, filterU, printDebug);
+#endif
+
+                    // Debug
+                    uint hash = Hash(instanceID);
+                    float4 reflectance;
+                    reflectance.x = max(.2f, ((hash >> 0) & 0xff) / 255.f);
+                    reflectance.y = max(.2f, ((hash >> 8) & 0xff) / 255.f);
+                    reflectance.z = max(.2f, ((hash >> 16) & 0xff) / 255.f);
+                    reflectance.w = 1.f;
+
+                    //float4 reflectance = float4(0.f, 1.f, 0.f, 1.f);
                     dir = SampleDiffuse(reflectance.xyz, wo, sample, throughput, printDebug);
 
+#if 0
                     if (depth == 1)
                     {
                         float2 newUv = faceData.rotate ? float2(1 - uv.y, uv.x) : uv;
@@ -310,6 +323,7 @@ void main()
                         const uint feedbackMipLevel = VirtualTexture::ClampMipLevel(dim, mipLevel);
                         feedbackRequest = PackFeedbackEntry(virtualPage.x, virtualPage.y, material.textureIndex, feedbackMipLevel);
                     }
+#endif
                 }
                 break;
             }

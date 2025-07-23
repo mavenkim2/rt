@@ -321,7 +321,7 @@ void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,
         // TODO: this is kind of a hack, since the simplifier returns
         // the data of multiple meshes in one buffer
         u32 meshIndex  = Min(geomID, (u32)numMeshes - 1);
-        Mesh &mesh     = meshes[geomID];
+        Mesh &mesh     = meshes[meshIndex];
         u32 primID     = primRefs[i].primID;
         u32 indices[3] = {
             mesh.indices[3 * primID + 0],

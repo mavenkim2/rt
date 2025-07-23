@@ -651,9 +651,11 @@ struct StackEntry;
 struct ScenePrimitives
 {
     static const int maxSceneDepth = 4;
+#ifndef USE_GPU
     typedef bool (*IntersectFunc)(ScenePrimitives *, StackEntry<DefaultN>, Ray2 &,
                                   SurfaceInteractions<1> &);
     typedef bool (*OccludedFunc)(ScenePrimitives *, StackEntry<DefaultN>, Ray2 &);
+#endif
 
     string filename;
 
@@ -684,8 +686,10 @@ struct ScenePrimitives
 
     std::atomic<int> depth;
     u32 numTransforms;
+#ifndef USE_GPU
     IntersectFunc intersectFunc;
     OccludedFunc occludedFunc;
+#endif
     u32 numPrimitives, numFaces;
 
     int sceneIndex;
@@ -758,6 +762,7 @@ struct MaterialNode
 
 typedef HashMap<MaterialNode> MaterialHashMap;
 
+#ifndef USE_GPU
 void BuildTLASBVH(Arena **arenas, ScenePrimitives *scene);
 
 template <GeometryType type>
@@ -770,6 +775,7 @@ void ComputeTessellationParams(Mesh *meshes, TessellationParams *params, u32 sta
 
 void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
                     const Mat4 &cameraFromRender, int screenHeight);
+#endif
 Bounds GetSceneBounds(ScenePrimitives *scene);
 void Render(RenderParams2 *params, int numScenes, Image *envMap);
 

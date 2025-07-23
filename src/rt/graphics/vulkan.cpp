@@ -2995,6 +2995,7 @@ void CommandBuffer::CLASIndirect(CLASOpInput opInput, CLASOpMode opMode, CLASOpT
     VkClusterAccelerationStructureInputInfoNV inputInfo = {
         VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_INPUT_INFO_NV};
     inputInfo.opMode = vkOpMode;
+    inputInfo.flags  = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
 
     device->ConvertCLASIndirectInfo(opInput, opType, inputInfo, vkOpInput,
                                     srcInfosArrayStride);
@@ -3132,7 +3133,8 @@ void CommandBuffer::BuildPTLAS(GPUBuffer *ptlasBuffer, GPUBuffer *scratchBuffer,
     VkPartitionedAccelerationStructureInstancesInputNV inputInfo = {
         VK_STRUCTURE_TYPE_PARTITIONED_ACCELERATION_STRUCTURE_INSTANCES_INPUT_NV};
 
-    inputInfo.instanceCount                     = instanceCount;
+    inputInfo.flags         = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    inputInfo.instanceCount = instanceCount;
     inputInfo.maxInstancePerPartitionCount      = maxInstancesPerPartition;
     inputInfo.partitionCount                    = partitionCount;
     inputInfo.maxInstanceInGlobalPartitionCount = maxInstanceInGlobalPartitionCount;
@@ -3340,6 +3342,7 @@ void Vulkan::GetClusterBuildSizes(CLASOpInput opInput, CLASOpMode opMode, CLASOp
     VkClusterAccelerationStructureInputInfoNV inputInfo = {
         VK_STRUCTURE_TYPE_CLUSTER_ACCELERATION_STRUCTURE_INPUT_INFO_NV};
     inputInfo.opMode = vkOpMode;
+    inputInfo.flags  = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
 
     ConvertCLASIndirectInfo(opInput, opType, inputInfo, vkOpInput, srcInfosArrayStride);
 

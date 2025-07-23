@@ -22,7 +22,10 @@ static const u32 PARALLEL_THRESHOLD       = 8 * 1024;
 static const u32 BUILD_PARALLEL_THRESHOLD = 2 * 1024;
 
 #define EXPONENTIAL_QUANTIZE
+
+#ifndef USE_GPU
 #define USE_QUANTIZE_COMPRESS
+#endif
 
 struct BuildSettings
 {
@@ -680,7 +683,11 @@ struct CompressedLeafNode
 };
 
 // #define USE_BVH4
+#ifdef USE_GPU
+#define USE_BVH4
+#else
 #define USE_BVH8
+#endif
 
 #if !defined(USE_BVH4) && !defined(USE_BVH8)
 #define USE_BVH4

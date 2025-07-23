@@ -63,6 +63,58 @@ struct HierarchyFixup
     }
 };
 
+struct RecordAOSSplits;
+template <i32 N>
+struct BuildRef;
+
+struct alignas(16) TempHierarchyNode
+{
+    PackedHierarchyNode *node;
+    TempHierarchyNode *nodes;
+
+    u32 GetNumChildren()
+    {
+        u32 count = 0;
+        for (u32 i = 0; i < CHILDREN_PER_HIERARCHY_NODE; i++)
+        {
+            count += node->childRef[i] != ~0u;
+        }
+        return count;
+    };
+
+    void GetBounds(Lane4F32 &outMinX, Lane4F32 &outMinY, Lane4F32 &outMinZ, Lane4F32 &outMaxX,
+                   Lane4F32 &outMaxY, Lane4F32 &outMaxZ)
+    {
+        for (int i = 0; i < 4; i++)
+        {
+            if (node->childRef[i] != ~0u)
+            {
+                outMinX[i] = node->center[i].x - node->extents[i].x;
+                outMaxX[i] = node->center[i].x + node->extents[i].x;
+
+                outMinY[i] = node->center[i].y - node->extents[i].y;
+                outMaxY[i] = node->center[i].y + node->extents[i].y;
+
+                outMinZ[i] = node->center[i].z - node->extents[i].z;
+                outMaxZ[i] = node->center[i].z + node->extents[i].z;
+            }
+        }
+    }
+    BVHNode4 Child(u32 childIndex)
+    {
+        BVHNode4 ptr;
+        Assert(node->childRef[childIndex] != ~0u);
+        TempHierarchyNode *child = &nodes[node->childRef[childIndex]];
+        ptr.data                 = (uintptr_t)child;
+        BVHNode4::CheckAlignment(child);
+        if (child->GetNumChildren() == 0)
+        {
+            ptr.data |= BVHNode4::tyLeaf;
+        }
+        return ptr;
+    }
+};
+
 struct VirtualGeometryManager
 {
     const u32 streamingPoolSize = megabytes(512);
@@ -85,10 +137,12 @@ struct VirtualGeometryManager
     const u32 maxNumClusters = maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE;
 
     const u32 maxInstances                            = 1024;
+    const u32 maxInstancesPerPartition                = 128;
+    const u32 maxPartitions                           = 12;
     const u32 maxTotalClusterCount                    = MAX_CLUSTERS_PER_BLAS * maxInstances;
     const u32 maxClusterCountPerAccelerationStructure = MAX_CLUSTERS_PER_BLAS;
 
-    const u32 maxClusterFixupsPerFrame = maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE;
+    const u32 maxClusterFixupsPerFrame = 2 * maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE;
 
     enum class PageFlag
     {
@@ -134,6 +188,9 @@ struct VirtualGeometryManager
         u32 hierarchyNodeOffset;
         u32 virtualPageOffset;
         u32 numRebraid;
+
+        PackedHierarchyNode *nodes;
+        u32 numNodes;
     };
 
     u32 currentClusterTotal;
@@ -251,6 +308,8 @@ struct VirtualGeometryManager
     StaticArray<MeshInfo> meshInfos;
     StaticArray<InstanceRef> instanceRefs;
 
+    StaticArray<InstanceRef> newInstanceRefs;
+
     StaticArray<VirtualPage> virtualTable;
     StaticArray<Page> physicalPages;
 
@@ -269,6 +328,10 @@ struct VirtualGeometryManager
     void BuildPTLAS(CommandBuffer *cmd, GPUBuffer *gpuInstances);
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);
+
+    void Test(const AffineSpace &transform);
+    void BuildHierarchy(Arena *arena, ScenePrimitives *scene, BuildRef4 *bRefs,
+                        RecordAOSSplits &record, u32 &numNodes, u32 &numPartitions);
 };
 
 } // namespace rt

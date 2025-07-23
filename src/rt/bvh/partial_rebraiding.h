@@ -6,7 +6,7 @@
 namespace rt
 {
 
-void GenerateBuildRefs(BRef *refs, ScenePrimitives *scene, u32 start, u32 count,
+inline void GenerateBuildRefs(BRef *refs, ScenePrimitives *scene, u32 start, u32 count,
                        RecordAOSSplits &record)
 {
     Bounds geom;
@@ -44,7 +44,7 @@ void GenerateBuildRefs(BRef *refs, ScenePrimitives *scene, u32 start, u32 count,
 }
 
 // NOTE: either Scene or Scene2Inst
-BRef *GenerateBuildRefs(ScenePrimitives *scene, Arena *arena, RecordAOSSplits &record)
+inline BRef *GenerateBuildRefs(ScenePrimitives *scene, Arena *arena, RecordAOSSplits &record)
 {
     u32 numInstances = scene->numPrimitives;
     u32 extEnd       = 4 * numInstances;
@@ -71,14 +71,17 @@ template <typename Node>
 void SetNodePtr(BRef *ref, Node *node, int childIndex, const ScenePrimitives *scene,
                 int instanceID)
 {
-#ifdef USE_QUANTIZE_COMPRESS
-    int size     = scene->childScenes[instanceID]->bvhPrimSize;
-    ref->nodePtr = node->Child(childIndex, size);
-    ref->type    = node->GetType(childIndex);
-    Assert(scene->childScenes);
-#else
-    ref->nodePtr = node->Child(childIndex);
-#endif
+    if constexpr (std::is_same_v<Node, QuantizedCompressedNode<DefaultN>>)
+    {
+        int size     = scene->childScenes[instanceID]->bvhPrimSize;
+        ref->nodePtr = node->Child(childIndex, size);
+        ref->type    = node->GetType(childIndex);
+        Assert(scene->childScenes);
+    }
+    else
+    {
+        ref->nodePtr = node->Child(childIndex);
+    }
 }
 
 static const f32 REBRAID_THRESHOLD = .1f;
@@ -166,7 +169,6 @@ void OpenBraid(const ScenePrimitives *scene, RecordAOSSplits &record, BRef *refs
     record.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
     Assert(offset == offsetMax);
 }
-
 struct GetQuantizedNode
 {
     using NodeType = QNode;
@@ -331,6 +333,7 @@ struct HeuristicPartialRebraid
             }
             else
             {
+
                 bool commonGeomID = true;
                 u32 count         = 0;
                 for (u32 i = record.start; i < record.start + record.count; i++)
@@ -340,6 +343,9 @@ struct HeuristicPartialRebraid
                     commonGeomID &= objectID == geomID;
                     if (heuristic(ref)) count += getNode(ref)->GetNumChildren() - 1;
                 }
+#ifdef USE_GPU
+                commonGeomID = false;
+#endif
                 if (commonGeomID)
                 {
                     record.extEnd = record.start + record.count;

@@ -746,6 +746,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             }
             if (writeFile)
             {
+#ifdef USE_GPU
                 if (state->shapes.Length())
                 {
                     Print("%S, num: %i\n", currentFilename, state->shapes.Length());
@@ -957,11 +958,12 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                         }
                     });
                     string virtualGeoFilename =
-                        PushStr8F(tempArena, "%S%S.geo\n", directory,
+                        PushStr8F(tempArena, "%S%S.geo", directory,
                                   RemoveFileExtension(state->filename));
                     CreateClusters(meshes.data, newNumMeshes, materialIndices,
                                    virtualGeoFilename);
                 }
+#endif
 
                 WriteFile(directory, state, originFile ? sls : 0);
                 ArenaRelease(state->arena);
@@ -1249,7 +1251,8 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 }
                 else
                 {
-                    materialName = GetMaterialBuffer(temp.arena, packet, nPacket.type);
+                    materialName = PushStr8Copy(
+                        threadArena, GetMaterialBuffer(temp.arena, packet, nPacket.type));
                 }
 
                 nPacket.name = materialName;
@@ -1690,8 +1693,7 @@ void WriteMaterials(StringBuilder *builder, SceneHashMap *textureHashMap, NamedP
                     u32 hashMask)
 {
     MaterialTypes type = ConvertStringToMaterialType(packet.type);
-    if (type == MaterialTypes::Interface) return;
-    u32 index = (u32)type;
+    u32 index          = (u32)type;
     Put(builder, "m %S ", packet.name);
     Put(builder, "%S ", packet.type);
     const string *names = materialParameterNames[index];
@@ -2053,8 +2055,9 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
         };
 
         NamedPacket *materials = PushArrayNoZero(temp.arena, NamedPacket, totalNumMaterials);
-        Handle *handles        = PushArrayNoZero(temp.arena, Handle, totalNumMaterials);
-        u32 materialOffset     = 0;
+        Print("total num materials: %u\n", totalNumMaterials);
+        Handle *handles    = PushArrayNoZero(temp.arena, Handle, totalNumMaterials);
+        u32 materialOffset = 0;
         for (u32 i = 0; i < state->numProcessors; i++)
         {
             auto &list = state->materials[i];
