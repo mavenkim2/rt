@@ -2216,7 +2216,7 @@ HierarchyNode BuildHierarchy(Arena *arena, const Array<Cluster> &clusters,
 {
     typedef HeuristicObjectBinning<PrimRef> Heuristic;
 
-    HeuristicObjectBinning<PrimRef> heuristic(primRefs, Log2Int(4));
+    HeuristicObjectBinning<PrimRef> heuristic(primRefs, 0); // Log2Int(4));
 
     Assert(record.count > 0);
 
@@ -2289,6 +2289,95 @@ HierarchyNode BuildHierarchy(Arena *arena, const Array<Cluster> &clusters,
     {
         nodes[i] = BuildHierarchy(arena, clusters, clusterGroups, parts, primRefs,
                                   childRecords[i], numNodes);
+    }
+
+    ScratchArena scratch;
+
+    HierarchyNode node;
+    node.children    = nodes;
+    node.numChildren = numChildren;
+
+    for (int i = 0; i < numChildren; i++)
+    {
+        f32 maxParentError       = 0.f;
+        HierarchyNode &childNode = nodes[i];
+        Vec4f *spheres   = PushArrayNoZero(scratch.temp.arena, Vec4f, childNode.numChildren);
+        u32 clusterTotal = 0;
+        Bounds bounds;
+        for (int j = 0; j < childNode.numChildren; j++)
+        {
+            bounds.Extend(childNode.bounds[j]);
+            spheres[j]     = childNode.lodBounds[j];
+            maxParentError = Max(maxParentError, childNode.maxParentError[j]);
+            clusterTotal += childNode.clusterTotals[j];
+        }
+
+        node.bounds[i]         = bounds;
+        node.lodBounds[i]      = ConstructSphereFromSpheres(spheres, childNode.numChildren);
+        node.maxParentError[i] = maxParentError;
+        node.clusterTotals[i]  = clusterTotal;
+    }
+
+    numNodes++;
+    return node;
+}
+
+HierarchyNode BuildTopLevelHierarchy(Arena *arena,
+                                     const StaticArray<HierarchyNode> &hierarchyNodes,
+                                     PrimRef *primRefs, RecordAOSSplits &record, u32 &numNodes)
+{
+    typedef HeuristicObjectBinning<PrimRef> Heuristic;
+
+    HeuristicObjectBinning<PrimRef> heuristic(primRefs, 0); // Log2Int(4));
+
+    Assert(record.count > 0);
+
+    RecordAOSSplits childRecords[CHILDREN_PER_HIERARCHY_NODE];
+    u32 numChildren = 0;
+
+    Split split = heuristic.Bin(record);
+
+    if (record.count == 1)
+    {
+        u32 threadIndex = GetThreadIndex();
+        heuristic.FlushState(split);
+
+        return hierarchyNodes[primRefs[record.start].primID];
+    }
+    heuristic.Split(split, record, childRecords[0], childRecords[1]);
+
+    // N - 1 splits produces N children
+    for (numChildren = 2; numChildren < CHILDREN_PER_HIERARCHY_NODE; numChildren++)
+    {
+        i32 bestChild = -1;
+        f32 maxArea   = neg_inf;
+        for (u32 recordIndex = 0; recordIndex < numChildren; recordIndex++)
+        {
+            RecordAOSSplits &childRecord = childRecords[recordIndex];
+            if (childRecord.count <= CHILDREN_PER_HIERARCHY_NODE) continue;
+
+            f32 childArea = HalfArea(childRecord.geomBounds);
+            if (childArea > maxArea)
+            {
+                bestChild = recordIndex;
+                maxArea   = childArea;
+            }
+        }
+        if (bestChild == -1) break;
+
+        split = heuristic.Bin(childRecords[bestChild]);
+
+        RecordAOSSplits out;
+        heuristic.Split(split, childRecords[bestChild], out, childRecords[numChildren]);
+
+        childRecords[bestChild] = out;
+    }
+
+    HierarchyNode *nodes = PushArrayNoZero(arena, HierarchyNode, numChildren);
+    for (int i = 0; i < numChildren; i++)
+    {
+        nodes[i] =
+            BuildTopLevelHierarchy(arena, hierarchyNodes, primRefs, childRecords[i], numNodes);
     }
 
     ScratchArena scratch;
@@ -2503,6 +2592,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     //     405,    218,   121,   71,    38,    21,   12,   6,    4,    1,
     // };
 
+    u32 depth = 0;
     {
         // 1. Split triangles into clusters (mesh remains)
 
@@ -2511,7 +2601,6 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         // 3. Simplify the cluster group (effectively creates num groups different meshes)
         // 4. Split simplified group into clusters
 
-        u32 depth = 0;
         struct Edge
         {
             Vec3f p0;
@@ -3864,6 +3953,11 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     Bounds geomBounds;
     Bounds centBounds;
 
+    StaticArray<u32> partStarts(scratch.temp.arena, depth + 1);
+    StaticArray<RecordAOSSplits> records(scratch.temp.arena, depth, depth);
+    partStarts.Push(0);
+
+    u32 groupDepth = 0;
     for (int i = 0; i < parts.Length(); i++)
     {
         PrimRef &primRef = hierarchyPrimRefs[i];
@@ -3871,6 +3965,25 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
         GroupPart &part     = parts[i];
         ClusterGroup &group = clusterGroups[part.groupIndex];
+
+        if (group.mipLevel != groupDepth)
+        {
+            Assert(groupDepth + 1 == group.mipLevel);
+            u32 start = partStarts[partStarts.Length() - 1];
+
+            RecordAOSSplits hierarchyRecord;
+            hierarchyRecord.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+            hierarchyRecord.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+            hierarchyRecord.start      = start;
+            hierarchyRecord.count      = i - start;
+
+            records[groupDepth] = hierarchyRecord;
+            partStarts.Push(i);
+            groupDepth++;
+
+            geomBounds = Bounds();
+            centBounds = Bounds();
+        }
 
         Bounds partBounds;
 
@@ -3899,16 +4012,65 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         centBounds.Extend(partBounds.minP + partBounds.maxP);
     }
 
+    u32 start = partStarts[partStarts.Length() - 1];
     RecordAOSSplits hierarchyRecord;
     hierarchyRecord.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
     hierarchyRecord.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
-    hierarchyRecord.start      = 0;
-    hierarchyRecord.count      = parts.Length();
+    hierarchyRecord.start      = start;
+    hierarchyRecord.count      = parts.Length() - start;
+    partStarts.Push(partStarts.Length());
+    records[groupDepth] = hierarchyRecord;
+    geomBounds          = Bounds();
+    centBounds          = Bounds();
 
-    Arena *arena           = ArenaAlloc();
-    u32 numNodes           = 0;
-    HierarchyNode rootNode = BuildHierarchy(arena, clusters, clusterGroups, parts,
-                                            hierarchyPrimRefs, hierarchyRecord, numNodes);
+    Arena *arena = ArenaAlloc();
+    u32 numNodes = 0;
+
+    // First build hierarchy over each level
+    StaticArray<HierarchyNode> depthHierarchyNodes(scratch.temp.arena, depth);
+    for (int index = 0; index < depth; index++)
+    {
+        HierarchyNode node = BuildHierarchy(arena, clusters, clusterGroups, parts,
+                                            hierarchyPrimRefs, records[index], numNodes);
+        depthHierarchyNodes.Push(node);
+    }
+
+    PrimRef *topLevelRefs =
+        PushArrayNoZero(scratch.temp.arena, PrimRef, depthHierarchyNodes.Length());
+    for (int index = 0; index < depth; index++)
+    {
+        HierarchyNode &node = depthHierarchyNodes[index];
+        PrimRef &primRef    = topLevelRefs[index];
+        for (int i = 0; i < 3; i++)
+        {
+            primRef.min[i] = neg_inf;
+            primRef.max[i] = neg_inf;
+        }
+
+        for (int childIndex = 0; childIndex < node.numChildren; childIndex++)
+        {
+            primRef.minX = Max(-node.bounds[childIndex].minP[0], primRef.minX);
+            primRef.minY = Max(-node.bounds[childIndex].minP[1], primRef.minY);
+            primRef.minZ = Max(-node.bounds[childIndex].minP[2], primRef.minZ);
+
+            primRef.maxX = Max(node.bounds[childIndex].maxP[0], primRef.maxX);
+            primRef.maxY = Max(node.bounds[childIndex].maxP[1], primRef.maxY);
+            primRef.maxZ = Max(node.bounds[childIndex].maxP[2], primRef.maxZ);
+            geomBounds.Extend(node.bounds[childIndex]);
+            centBounds.Extend(node.bounds[childIndex].minP + node.bounds[childIndex].maxP);
+        }
+        primRef.primID = index;
+    }
+
+    RecordAOSSplits topLevelRecord;
+    topLevelRecord.geomBounds = Lane8F32(-geomBounds.minP, geomBounds.maxP);
+    topLevelRecord.centBounds = Lane8F32(-centBounds.minP, centBounds.maxP);
+    topLevelRecord.start      = 0;
+    topLevelRecord.count      = depthHierarchyNodes.Length();
+
+    // Then build over the root nodes of each level
+    HierarchyNode rootNode = BuildTopLevelHierarchy(arena, depthHierarchyNodes, topLevelRefs,
+                                                    topLevelRecord, numNodes);
 
     // Flatten tree to array
     StaticArray<PackedHierarchyNode> hierarchy(arena, numNodes);

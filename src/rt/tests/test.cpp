@@ -190,7 +190,8 @@ void TestRender(Arena *arena, OS_Handle window, Options *options = 0)
     // - add area lights (making sure they cannot be intersected, but are sampled properly)
     // - render the diffuse transmission materials properly
 
-    scene_       = PushStructConstruct(arena, Scene)();
+    scene_ = PushStructConstruct(arena, Scene)();
+    scene_->ptexTextures.reserve(100);
     Scene *scene = GetScene();
     // ScenePrimitives *scenePrims     = PushStruct(arena, ScenePrimitives);
     u32 numProcessors = OS_NumProcessors();

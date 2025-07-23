@@ -286,10 +286,12 @@ void main()
             switch (material.type) 
             {
                 case GPUMaterialType::Dielectric:
+#if 1
                 {
                     dir = SampleDielectric(wo, material.eta, sample, throughput, printDebug);
                 }
                 break;
+#endif
                 case GPUMaterialType::Diffuse: 
                 {
                     // Get base face data
