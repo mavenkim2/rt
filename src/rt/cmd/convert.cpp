@@ -670,12 +670,13 @@ string ReplaceColons(Arena *arena, string str)
     return newString;
 }
 
-void WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState *sls, string directory)
+void WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState *sls, string directory,
+                 string currentFilename)
 {
 #ifdef USE_GPU
     if (state->shapes.Length())
     {
-        Print("%S, num: %i\n", state->filename, state->shapes.Length());
+        Print("%S, num: %i\n", currentFilename, state->shapes.Length());
         // Remove duplicate meshes
         ShapeType *shapes = PushArrayNoZero(tempArena, ShapeType, state->shapes.Length());
         state->shapes.Flatten(shapes);
@@ -859,7 +860,7 @@ void WriteNanite(PBRTFileInfo *state, Arena *tempArena, SceneLoadState *sls, str
             }
         });
         string virtualGeoFilename =
-            PushStr8F(tempArena, "%S%S.geo", directory, RemoveFileExtension(state->filename));
+            PushStr8F(tempArena, "%S%S.geo", directory, RemoveFileExtension(currentFilename));
         CreateClusters(meshes.data, newNumMeshes, materialIndices, virtualGeoFilename);
         ReleaseArenaArray(arenas);
     }
@@ -942,7 +943,13 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             }
             if (writeFile)
             {
-                WriteNanite(state, tempArena, sls, directory);
+                string geoFilename = state->filename;
+                if (originFile && state->shapes.Length() && state->fileInstances.Length())
+                {
+                    geoFilename = PushStr8F(tempArena, "%S_rtshape_tri.rtscene",
+                                            RemoveFileExtension(state->filename));
+                }
+                WriteNanite(state, tempArena, sls, directory, geoFilename);
                 WriteFile(directory, state, originFile ? sls : 0);
                 ArenaRelease(state->arena);
                 for (u32 i = 0; i < state->numImports; i++)
@@ -1304,7 +1311,7 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
                 {
                     state->Merge(state->imports[i]);
                 }
-                WriteNanite(state, tempArena, sls, directory);
+                WriteNanite(state, tempArena, sls, directory, state->filename);
                 WriteFile(directory, state);
                 ArenaRelease(state->arena);
                 for (u32 i = 0; i < state->numImports; i++)
@@ -1317,6 +1324,8 @@ PBRTFileInfo *LoadPBRT(SceneLoadState *sls, string directory, string filename,
             break;
             case "ObjectInstance"_sid:
             {
+                // TODO: remove duplicate shapes
+
                 ErrorExit(worldBegin, "Tried to specify %S after WorldBegin\n", word);
                 ErrorExit(!scopeCount || scope[scopeCount - 1] != ScopeType::Object,
                           "Cannot have object instance in object definition block.\n");
@@ -2060,8 +2069,8 @@ void WriteFile(string directory, PBRTFileInfo *info, SceneLoadState *state)
             WriteMaterials(&builder, textureHashMap, materials[handle.index],
                            state->hashMapSize - 1);
         }
+        Put(&builder, "MATERIALS_END ");
     }
-    Put(&builder, "MATERIALS_END ");
 
     if (info->shapes.totalCount && info->fileInstances.totalCount == 0)
     {

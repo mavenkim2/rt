@@ -688,6 +688,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     for (int sceneIndex = 0; sceneIndex < numBlas; sceneIndex++)
     {
         ScenePrimitives *scene = blasScenes[sceneIndex];
+        scene->sceneIndex      = sceneIndex;
         string filename        = scene->filename;
         string virtualGeoFilename =
             PushStr8F(sceneScratch.temp.arena, "%S%S.geo", params->directory,
@@ -696,12 +697,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         virtualGeometryManager.AddNewMesh(sceneScratch.temp.arena, dgfTransferCmd,
                                           virtualGeoFilename);
     }
-
-    virtualGeometryManager.Test(params->renderFromWorld);
-
-    dgfTransferCmd->SubmitBuffer(
-        &virtualGeometryManager.instanceRefBuffer, virtualGeometryManager.newInstanceRefs.data,
-        sizeof(InstanceRef) * virtualGeometryManager.newInstanceRefs.Length());
 
     GPUBuffer visibleClustersBuffer = device->CreateBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -772,7 +767,11 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                         gpuInstance.renderFromObject[r][c] = transform[c][r];
                     }
                 }
-                gpuInstance.globalRootNodeOffset = 0;
+                gpuInstance.globalRootNodeOffset =
+                    virtualGeometryManager
+                        .meshInfos[scene->childScenes[instances[instanceIndex].id]->sceneIndex]
+                        .hierarchyNodeOffset;
+                // virtualGeometryManager.meshInfos[instances[instanceIndex].id];
                 gpuInstances.Push(gpuInstance);
             }
         }
@@ -795,13 +794,15 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
         Assert(numScenes == 1);
     }
 
+    virtualGeometryManager.Test(tlasScenes[0]);
+
     TransferBuffer gpuInstancesBuffer =
         allCommandBuffer->SubmitBuffer(gpuInstances.data, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                        sizeof(GPUInstance) * gpuInstances.Length());
 
-    // GPUBuffer debugLeafBuffer = device->CreateBuffer(
-    //     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-    //     sizeof(Vec4u) * (MAX_CANDIDATE_NODES + MAX_CANDIDATE_CLUSTERS));
+    allCommandBuffer->SubmitBuffer(
+        &virtualGeometryManager.instanceRefBuffer, virtualGeometryManager.newInstanceRefs.data,
+        sizeof(InstanceRef) * virtualGeometryManager.newInstanceRefs.Length());
 
     tlasSemaphore.signalValue = 1;
     allCommandBuffer->SignalOutsideFrame(tlasSemaphore);

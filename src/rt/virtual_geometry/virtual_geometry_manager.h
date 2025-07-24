@@ -136,10 +136,10 @@ struct VirtualGeometryManager
         maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE * MAX_CLUSTER_VERTICES;
     const u32 maxNumClusters = maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE;
 
-    const u32 maxInstances                            = 1024;
-    const u32 maxInstancesPerPartition                = 128;
-    const u32 maxPartitions                           = 512;
-    const u32 maxTotalClusterCount                    = MAX_CLUSTERS_PER_BLAS * maxInstances;
+    const u32 maxInstances             = 1u << 21;
+    const u32 maxInstancesPerPartition = 128;
+    const u32 maxPartitions            = 1u << 14;    // 2048;
+    const u32 maxTotalClusterCount = 8 * 1024 * 1024; // MAX_CLUSTERS_PER_BLAS * maxInstances;
     const u32 maxClusterCountPerAccelerationStructure = MAX_CLUSTERS_PER_BLAS;
 
     const u32 maxClusterFixupsPerFrame = 2 * maxPageInstallsPerFrame * MAX_CLUSTERS_PER_PAGE;
@@ -306,7 +306,7 @@ struct VirtualGeometryManager
 
     // Range in virtual page space for each instanced geometry
     StaticArray<MeshInfo> meshInfos;
-    StaticArray<InstanceRef> instanceRefs;
+    // StaticArray<InstanceRef> instanceRefs;
 
     StaticArray<InstanceRef> newInstanceRefs;
 
@@ -329,9 +329,10 @@ struct VirtualGeometryManager
     void UnlinkLRU(int pageIndex);
     void LinkLRU(int index);
 
-    void Test(const AffineSpace &transform);
-    void BuildHierarchy(Arena *arena, ScenePrimitives *scene, BuildRef4 *bRefs,
-                        RecordAOSSplits &record, u32 &numNodes, u32 &numPartitions);
+    void Test(ScenePrimitives *scene);
+    void BuildHierarchy(ScenePrimitives *scene, BuildRef4 *bRefs, RecordAOSSplits &record,
+                        std::atomic<u32> &numPartitions, std::atomic<u32> &instanceRefCount,
+                        bool parallel);
 };
 
 } // namespace rt

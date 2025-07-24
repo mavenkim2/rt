@@ -22,9 +22,8 @@ static_assert(sizeof(PTLAS_UPDATE_INSTANCE_INFO) ==
 
 VirtualGeometryManager::VirtualGeometryManager(Arena *arena)
     : physicalPages(arena, maxPages + 2), virtualTable(arena, maxVirtualPages),
-      meshInfos(arena, maxInstances), instanceRefs(arena, maxInstances),
-      currentClusterTotal(0), totalNumVirtualPages(0), totalNumNodes(0), lruHead(-1),
-      lruTail(-1)
+      meshInfos(arena, maxInstances), currentClusterTotal(0), totalNumVirtualPages(0),
+      totalNumNodes(0), lruHead(-1), lruTail(-1)
 {
     for (u32 i = 0; i < maxVirtualPages; i++)
     {
@@ -646,6 +645,7 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
     graph.offsets = pageOffsets;
     graph.data    = pageToNodeData;
 
+#if 0
     // Get bounds of instance ref
     for (u32 rebraidIndex = 0; rebraidIndex < numRebraid; rebraidIndex++)
     {
@@ -676,6 +676,7 @@ u32 VirtualGeometryManager::AddNewMesh(Arena *arena, CommandBuffer *cmd, string 
         ref.nodeOffset = rebraid;
         instanceRefs.Push(ref);
     }
+#endif
 
     for (u32 nodeIndex = 0; nodeIndex < numNodes; nodeIndex++)
     {
@@ -1518,15 +1519,17 @@ struct GetHierarchyNode
     }
 };
 
-void VirtualGeometryManager::BuildHierarchy(Arena *arena, ScenePrimitives *scene,
-                                            BuildRef4 *bRefs, RecordAOSSplits &record,
-                                            u32 &numNodes, u32 &numPartitions)
+void VirtualGeometryManager::BuildHierarchy(ScenePrimitives *scene, BuildRef4 *bRefs,
+                                            RecordAOSSplits &record,
+                                            std::atomic<u32> &numPartitions,
+                                            std::atomic<u32> &instanceRefCount, bool parallel)
 {
     typedef HeuristicPartialRebraid<GetHierarchyNode> Heuristic;
     const u32 instancesPerPartition = 128;
 
     Heuristic heuristic(scene, bRefs, 0);
 
+    Assert(record.start < maxInstances);
     Assert(record.count > 0);
 
     RecordAOSSplits childRecords[CHILDREN_PER_HIERARCHY_NODE];
@@ -1540,12 +1543,14 @@ void VirtualGeometryManager::BuildHierarchy(Arena *arena, ScenePrimitives *scene
     f32 leafSAH  = intCost * area * record.count;
     f32 splitSAH = travCost * area + intCost * split.bestSAH;
 
-    if (record.count <= instancesPerPartition && leafSAH <= splitSAH)
+    if (record.count <= instancesPerPartition) //&& leafSAH <= splitSAH)
     {
         u32 threadIndex = GetThreadIndex();
         heuristic.FlushState(split);
 
-        u32 partitionIndex = numPartitions++;
+        u32 partitionIndex = numPartitions.fetch_add(1, std::memory_order_relaxed);
+        u32 instanceRefStartIndex =
+            instanceRefCount.fetch_add(record.Count(), std::memory_order_relaxed);
         for (int i = record.start; i < record.End(); i++)
         {
             InstanceRef ref;
@@ -1558,15 +1563,10 @@ void VirtualGeometryManager::BuildHierarchy(Arena *arena, ScenePrimitives *scene
             }
             ref.nodeOffset = ((TempHierarchyNode *)bRef.nodePtr.GetPtr())->node -
                              meshInfos[bRef.instanceID].nodes;
-            ref.partitionIndex = partitionIndex;
-            newInstanceRefs.Push(ref);
+            ref.partitionIndex                                        = partitionIndex;
+            newInstanceRefs[instanceRefStartIndex + i - record.start] = ref;
         }
 
-        // InstanceNode node;
-        // node.index = record.start;
-        numNodes++;
-
-        // return node;
         return;
     }
     heuristic.Split(split, record, childRecords[0], childRecords[1]);
@@ -1599,71 +1599,87 @@ void VirtualGeometryManager::BuildHierarchy(Arena *arena, ScenePrimitives *scene
     }
 
     // InstanceNode *nodes = PushArrayNoZero(arena, InstanceNode, numChildren);
-    for (int i = 0; i < numChildren; i++)
+    if (parallel)
     {
-        BuildHierarchy(arena, scene, bRefs, childRecords[i], numNodes, numPartitions);
+        scheduler.ScheduleAndWait(numChildren, 1, [&](u32 jobID) {
+            bool childParallel = childRecords[jobID].count >= BUILD_PARALLEL_THRESHOLD;
+            BuildHierarchy(scene, bRefs, childRecords[jobID], numPartitions, instanceRefCount,
+                           childParallel);
+        });
     }
-
-    // InstanceNode node;
-    // node.index = 0;
-
-    numNodes++;
-    // return node;
+    else
+    {
+        for (int i = 0; i < numChildren; i++)
+        {
+            BuildHierarchy(scene, bRefs, childRecords[i], numPartitions, instanceRefCount,
+                           false);
+        }
+    }
 }
 
-void VirtualGeometryManager::Test(const AffineSpace &transform)
+void VirtualGeometryManager::Test(ScenePrimitives *scene)
 {
     ScratchArena scratch;
     scratch.temp.arena->align = 16;
-
-    Instance instance = {};
-    AffineSpace t     = transform;
-
-    ScenePrimitives scene = {};
-
-    scene.affineTransforms = &t;
-    scene.numPrimitives    = 1;
-    scene.primitives       = &instance;
 
     // u32 numInstances;
     // Instance *instances = PushArrayNoZero(scratch.temp.arena, Instance, numInstances);
     // AffineSpace *transforms;
 
     TempHierarchyNode *nodes =
-        PushArrayNoZero(scratch.temp.arena, TempHierarchyNode, meshInfos[0].numNodes);
-    for (int i = 0; i < meshInfos[0].numNodes; i++)
+        PushArrayNoZero(scratch.temp.arena, TempHierarchyNode, totalNumNodes);
+
+    u32 nodeIndex = 0;
+    for (auto &meshInfo : meshInfos)
     {
-        nodes[i].node  = &meshInfos[0].nodes[i];
-        nodes[i].nodes = nodes;
+        for (int i = 0; i < meshInfo.numNodes; i++)
+        {
+            nodes[nodeIndex].node  = &meshInfo.nodes[i];
+            nodes[nodeIndex].nodes = nodes;
+            nodeIndex++;
+        }
     }
     BRef *bRefs = PushArrayNoZero(scratch.temp.arena, BRef, maxInstances);
 
-    newInstanceRefs = StaticArray<InstanceRef>(scratch.temp.arena, maxInstances);
+    newInstanceRefs = StaticArray<InstanceRef>(scratch.temp.arena, maxInstances, maxInstances);
 
     Bounds geom;
     Bounds cent;
     RecordAOSSplits record;
-    for (int i = 0; i < instanceRefs.Length(); i++)
+    Instance *instances = (Instance *)scene->primitives;
+    for (int i = 0; i < scene->numPrimitives; i++)
     {
-        BRef &bRef = bRefs[i];
+        BRef &bRef         = bRefs[i];
+        Instance &instance = instances[i];
+
+        u32 sceneIndex = scene->childScenes[instance.id]->sceneIndex;
 
         Bounds bounds;
-        for (int i = 0; i < 3; i++)
+        TempHierarchyNode *child = &nodes[meshInfos[sceneIndex].hierarchyNodeOffset];
+
+        for (int childIndex = 0; childIndex < CHILDREN_PER_HIERARCHY_NODE; childIndex++)
         {
-            bounds.minP[i] = instanceRefs[i].bounds[i];
-            bounds.maxP[i] = instanceRefs[i].bounds[3 + i];
+            if (child->node->childRef[childIndex] == ~0u) continue;
+            for (int axis = 0; axis < 3; axis++)
+            {
+                bounds.minP[axis] = Min(child->node->center[childIndex][axis] -
+                                            child->node->extents[childIndex][axis],
+                                        bounds.minP[axis]);
+                bounds.maxP[axis] = Max(child->node->center[childIndex][axis] +
+                                            child->node->extents[childIndex][axis],
+                                        bounds.maxP[axis]);
+            }
         }
 
-        // AffineSpace &at = scene.affineTransforms[0];
-        bounds = Transform(transform, bounds);
+        AffineSpace &transform = scene->affineTransforms[instance.transformIndex];
+        bounds                 = Transform(transform, bounds);
 
         bRef.StoreBounds(bounds);
         geom.Extend(bounds);
         cent.Extend(bounds.minP + bounds.maxP);
-        bRef.instanceID = 0;
+        bRef.instanceID = sceneIndex;
 
-        TempHierarchyNode *child = &nodes[instanceRefs[i].nodeOffset];
-        bRef.nodePtr             = uintptr_t(child);
+        bRef.nodePtr = uintptr_t(child);
         if (child->GetNumChildren() == 0)
         {
             bRef.nodePtr.data |= BVHNode4::tyLeaf;
@@ -1673,13 +1689,18 @@ void VirtualGeometryManager::Test(const AffineSpace &transform)
     record.geomBounds = Lane8F32(-geom.minP, geom.maxP);
     record.centBounds = Lane8F32(-cent.minP, cent.maxP);
     record.start      = 0;
-    record.count      = instanceRefs.Length();
-    record.extEnd     = 4 * instanceRefs.Length();
+    record.count      = scene->numPrimitives;
+    record.extEnd     = maxInstances;
 
-    u32 numNodes      = 0;
-    u32 numPartitions = 0;
-    BuildHierarchy(scratch.temp.arena, &scene, bRefs, record, numNodes, numPartitions);
-    Assert(numPartitions < maxPartitions);
+    u32 numNodes                     = 0;
+    std::atomic<u32> numPartitions   = 0;
+    std::atomic<u32> numInstanceRefs = 0;
+    bool parallel                    = scene->numPrimitives >= BUILD_PARALLEL_THRESHOLD;
+
+    BuildHierarchy(scene, bRefs, record, numPartitions, numInstanceRefs, parallel);
+    Assert(numPartitions <= maxPartitions);
+
+    newInstanceRefs.size() = numInstanceRefs;
 
     int stop = 5;
     // Bounds bounds;

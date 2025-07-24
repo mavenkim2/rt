@@ -2487,11 +2487,11 @@ ClusterBuilder GenerateValidClusters(Arena *arena, PrimRef *newPrimRefs, RecordA
 void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,
                     string filename)
 {
-    // if (OS_FileExists(filename))
-    // {
-    //     Print("%S skipped\n", filename);
-    //     return;
-    // }
+    if (OS_FileExists(filename))
+    {
+        Print("%S skipped\n", filename);
+        return;
+    }
 
     const u32 numAttributes = 0;
 
@@ -3318,7 +3318,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 });
 
             // Write obj to disk
-#if 1
+#if 0
             u32 vertexCount   = numVertices.load();
             u32 indexCount    = numIndices.load();
             Mesh levelMesh    = {};
