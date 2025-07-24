@@ -356,10 +356,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
     layout.AddBinding((u32)RTBindings::PtexFaceData, DescriptorType::StorageBuffer, flags);
     layout.AddBinding((u32)RTBindings::Feedback, DescriptorType::StorageBuffer, flags);
 
+    layout.AddBinding(13, DescriptorType::StorageBuffer, flags);
+
     layout.AddImmutableSamplers();
 
     RayTracingState rts = device->CreateRayTracingPipeline(groups, ArrayLength(groups),
-                                                           &pushConstant, &layout, 2, true);
+                                                           &pushConstant, &layout, 3, true);
     // VkPipeline pipeline = device->CreateComputePipeline(&shader, &layout, &pushConstant);
     // Build clusters
     ScratchArena sceneScratch;
@@ -1231,12 +1233,12 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                              VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR,
                              VK_ACCESS_2_TRANSFER_READ_BIT);
                 cmd->FlushBarriers();
-                cmd->CopyBuffer(&readback, &virtualGeometryManager.clasGlobalsBuffer);
-                cmd->CopyBuffer(&readback2, &virtualGeometryManager.ptlasUpdateInfosBuffer);
-                cmd->CopyBuffer(&readback3,
-                                &virtualGeometryManager.ptlasInstanceBitVectorBuffer);
-                cmd->CopyBuffer(&readback4,
-                                &virtualGeometryManager.ptlasIndirectCommandBuffer);
+                // cmd->CopyBuffer(&readback, &virtualGeometryManager.clasGlobalsBuffer);
+                // cmd->CopyBuffer(&readback2, &virtualGeometryManager.ptlasUpdateInfosBuffer);
+                // cmd->CopyBuffer(&readback3,
+                //                 &virtualGeometryManager.ptlasInstanceBitVectorBuffer);
+                // cmd->CopyBuffer(&readback4,
+                //                 &virtualGeometryManager.ptlasIndirectCommandBuffer);
             }
 
 #if 0
@@ -1340,7 +1342,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             .Bind(&shaderDebugBuffers[currentBuffer].buffer)
             .Bind(&virtualGeometryManager.clusterPageDataBuffer)
             .Bind(&faceDataBuffer)
-            .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
+            .Bind(&virtualTextureManager.feedbackBuffers[currentBuffer].buffer)
+            .Bind(&virtualGeometryManager.clasGlobalsBuffer);
 
         cmd->BindDescriptorSets(bindPoint, &descriptorSet, rts.layout);
         cmd->PushConstants(&pushConstant, &pc, rts.layout);
@@ -1362,6 +1365,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             &virtualTextureManager.feedbackBuffers[currentBuffer].buffer);
         transferCmd->CopyBuffer(&virtualGeometryManager.readbackBuffer,
                                 &virtualGeometryManager.streamingRequestsBuffer);
+        transferCmd->CopyBuffer(&readback, &virtualGeometryManager.clasGlobalsBuffer);
         device->SubmitCommandBuffer(transferCmd, true);
 
         debugState.EndFrame(cmd);

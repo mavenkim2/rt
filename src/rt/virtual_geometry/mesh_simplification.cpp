@@ -2413,6 +2413,75 @@ HierarchyNode BuildTopLevelHierarchy(Arena *arena,
 
 static_assert((sizeof(PackedDenseGeometryHeader) + 4) % 16 == 0, "bad header size");
 
+ClusterBuilder GenerateValidClusters(Arena *arena, PrimRef *newPrimRefs, RecordAOSSplits &r,
+                                     u32 *indices)
+{
+    u32 maxNumTriangles = MAX_CLUSTER_TRIANGLES;
+    ClusterBuilder clusterBuilder;
+    ScratchArena scratch;
+    for (;;)
+    {
+        struct HashedIndex
+        {
+            u32 geomID;
+            u32 index;
+            u32 Hash() const { return MixBits(((u64)geomID << 32) | index); }
+            bool operator==(const HashedIndex &other) const
+            {
+                return index == other.index && geomID == other.geomID;
+            }
+        };
+        clusterBuilder = ClusterBuilder(arena, newPrimRefs);
+        clusterBuilder.BuildClusters(r, false, maxNumTriangles);
+
+        bool valid = true;
+        for (auto &list : clusterBuilder.threadClusters)
+        {
+            for (auto *node = list.l.first; node != 0; node = node->next)
+            {
+                for (int i = 0; i < node->count; i++)
+                {
+                    RecordAOSSplits &record = node->values[i];
+                    Assert(record.count <= maxNumTriangles);
+                    u32 testCount           = 0;
+                    u32 clusterNumTriangles = record.count;
+                    HashMap<HashedIndex> vertexHashSet(
+                        scratch.temp.arena, NextPowerOfTwo(clusterNumTriangles * 3));
+
+                    u32 clusterStart = record.start;
+                    for (int i = clusterStart; i < clusterStart + clusterNumTriangles; i++)
+                    {
+                        PrimRef &ref = newPrimRefs[i];
+                        for (int vertexIndex = 0; vertexIndex < 3; vertexIndex++)
+                        {
+                            u32 index         = indices[3 * ref.primID + vertexIndex];
+                            auto *hashedIndex = vertexHashSet.Find({ref.geomID, index});
+                            if (!hashedIndex)
+                            {
+                                vertexHashSet.Add(scratch.temp.arena, {ref.geomID, index});
+                                testCount++;
+                            }
+                        }
+                    }
+                    if (testCount > MAX_CLUSTER_VERTICES)
+                    {
+                        valid = false;
+                        break;
+                    }
+                }
+                if (!valid) break;
+            }
+            if (!valid) break;
+        }
+
+        if (valid) break;
+
+        maxNumTriangles -= 2;
+        ReleaseArenaArray(clusterBuilder.arenas);
+    }
+    return clusterBuilder;
+}
+
 // TODO: the builder is no longer deterministic after adding edge quadrics?
 // also prevent the builder from solving to a garbage position
 void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndices,
@@ -2496,8 +2565,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
         primRefs[primRefIndex].geomID = currentMesh;
     }
 
-    ClusterBuilder clusterBuilder(scratch.temp.arena, primRefs);
-    clusterBuilder.BuildClusters(record, true);
+    ClusterBuilder clusterBuilder =
+        GenerateValidClusters(scratch.temp.arena, primRefs, record, indexData);
 
     Array<Cluster> clusters(scratch.temp.arena, totalClustersEstimate);
     Array<ClusterGroup> clusterGroups(scratch.temp.arena, totalGroupsEstimate);
@@ -3157,8 +3226,10 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                             newPrimRefs[primRefIndex].geomID = geomIDs[primRefIndex];
                         }
 
-                        ClusterBuilder clusterBuilder(arena, newPrimRefs);
-                        clusterBuilder.BuildClusters(record, false);
+                        u32 maxNumTriangles = MAX_CLUSTER_TRIANGLES;
+
+                        ClusterBuilder clusterBuilder = GenerateValidClusters(
+                            arena, newPrimRefs, record, simplifiedMesh.indices);
 
                         u32 numParentClusters = 0;
                         for (auto &list : clusterBuilder.threadClusters)
@@ -3173,7 +3244,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
                         u32 parentStartIndex = numLevelClusters.fetch_add(
                             numParentClusters, std::memory_order_relaxed);
-                        Assert(parentStartIndex + numParentClusters < numClusters);
+                        Assert(parentStartIndex + numParentClusters <= numClusters);
 
                         u32 offset        = 0;
                         u32 newGroupIndex = groupIndex + totalNumGroups;
@@ -3247,7 +3318,7 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
                 });
 
             // Write obj to disk
-#if 0
+#if 1
             u32 vertexCount   = numVertices.load();
             u32 indexCount    = numIndices.load();
             Mesh levelMesh    = {};
@@ -3324,9 +3395,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
             levelMesh.numVertices = vertexOffset;
             levelMesh.numIndices  = indexOffset;
-            WriteTriOBJ(levelMesh,
-                        PushStr8F(scratch.temp.arena,
-                                  "../../data/island/pbrt-v4/obj/osOcean/test_%u.obj", depth));
+            WriteTriOBJ(levelMesh, PushStr8F(scratch.temp.arena, "%S_test_%u.obj",
+                                             RemoveFileExtension(filename), depth));
 #endif
 
             u32 numNextLevelClusters = numLevelClusters.load();
@@ -3346,7 +3416,8 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
             clusters.Resize(totalNumClusters + numLevelClusters.load());
 
-            Assert(numLevelClusters.load() < levelClusters.Length());
+            Assert(numLevelClusters.load() <= levelClusters.Length());
+
             u32 clusterOffset = 0;
             StaticArray<Cluster> reorderedClusters(scratch.temp.arena, levelClusters.Length(),
                                                    levelClusters.Length());
@@ -3391,16 +3462,16 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
             MemoryCopy(clusters.data + totalNumClusters, reorderedClusters.data,
                        clusterOffset * sizeof(Cluster));
 
+            bool skip = numLevelClusters.load() == levelClusters.Length();
+
             levelClusters = ArrayView<Cluster>(clusters, totalNumClusters,
                                                clusters.Length() - totalNumClusters);
             depth++;
 
-            // u32 numEdges = 0;
-            // for (int i = 0; i < OS_NumProcessors(); i++)
-            // {
-            //     numEdges += threadLocalStatistics[i].test;
-            // }
-            // Print("num edges: %u\n", numEdges);
+            if (skip)
+            {
+                break;
+            }
         }
     }
 

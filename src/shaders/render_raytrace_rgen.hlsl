@@ -32,6 +32,7 @@ StructuredBuffer<GPUMaterial> materials : register(t4);
 ConstantBuffer<ShaderDebugInfo> debugInfo: register(b7);
 
 RWStructuredBuffer<uint> feedbackBuffer : register(u12);
+RWStructuredBuffer<uint> test : register(u13);
 
 [[vk::push_constant]] RayPushConstant push;
 
@@ -148,6 +149,11 @@ void main()
         if (depth++ >= maxDepth)
         {
             break;
+        }
+
+        if (depth > 0) 
+        {
+            InterlockedAdd(test[23], 1);
         }
 
         if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT)

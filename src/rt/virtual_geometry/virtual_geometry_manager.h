@@ -138,7 +138,7 @@ struct VirtualGeometryManager
 
     const u32 maxInstances                            = 1024;
     const u32 maxInstancesPerPartition                = 128;
-    const u32 maxPartitions                           = 12;
+    const u32 maxPartitions                           = 512;
     const u32 maxTotalClusterCount                    = MAX_CLUSTERS_PER_BLAS * maxInstances;
     const u32 maxClusterCountPerAccelerationStructure = MAX_CLUSTERS_PER_BLAS;
 

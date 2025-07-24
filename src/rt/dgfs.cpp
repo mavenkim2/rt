@@ -53,7 +53,7 @@ DenseGeometryBuildData::DenseGeometryBuildData()
     debugRestartHighBitPerDword = ChunkedLinkedList<u32>(arena);
 }
 
-void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel)
+void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel, u32 maxTriangles)
 {
     typedef HeuristicObjectBinning<PrimRef> Heuristic;
     auto *heuristic = (Heuristic *)h;
@@ -65,7 +65,7 @@ void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel)
 
     Split split = heuristic->Bin(record);
 
-    if (record.count <= MAX_CLUSTER_TRIANGLES)
+    if (record.count <= maxTriangles)
     {
         u32 threadIndex                         = GetThreadIndex();
         threadClusters[threadIndex].l.AddBack() = record;
@@ -82,7 +82,7 @@ void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel)
         for (u32 recordIndex = 0; recordIndex < numChildren; recordIndex++)
         {
             RecordAOSSplits &childRecord = childRecords[recordIndex];
-            if (childRecord.count <= MAX_CLUSTER_TRIANGLES) continue;
+            if (childRecord.count <= maxTriangles) continue;
 
             f32 childArea = HalfArea(childRecord.geomBounds);
             if (childArea > maxArea)
@@ -105,14 +105,14 @@ void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel)
     {
         scheduler.ScheduleAndWait(numChildren, 1, [&](u32 jobID) {
             bool childParallel = childRecords[jobID].count >= PARALLEL_THRESHOLD;
-            BuildClusters(childRecords[jobID], childParallel);
+            BuildClusters(childRecords[jobID], childParallel, maxTriangles);
         });
     }
     else
     {
         for (u32 i = 0; i < numChildren; i++)
         {
-            BuildClusters(childRecords[i], false);
+            BuildClusters(childRecords[i], false, maxTriangles);
         }
     }
 }

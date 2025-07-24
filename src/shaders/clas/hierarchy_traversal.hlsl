@@ -226,21 +226,6 @@ struct ClusterCull
                 requests[requestIndex + 1] = request;
             }
         }
-#if 0
-        else if (!isValid && !isLeaf)
-        {
-            uint debugWriteOffset;
-            InterlockedAdd(queue[0].debugLeafWriteOffset, 1, debugWriteOffset);
-
-            WorkItem childCandidateNode;
-            childCandidateNode.x = asuint(node.lodBounds[childIndex].x);
-            childCandidateNode.y = asuint(node.lodBounds[childIndex].y);
-            childCandidateNode.z = asuint(edgeScales.x);
-            childCandidateNode.w = asuint(node.maxParentError[childIndex]);
-            
-            debugLeaves[debugWriteOffset] = childCandidateNode;
-        }
-#endif
 
         DeviceMemoryBarrier();
     }

@@ -1537,10 +1537,10 @@ void VirtualGeometryManager::BuildHierarchy(Arena *arena, ScenePrimitives *scene
     f32 area     = HalfArea(record.geomBounds);
     f32 intCost  = 1.f;
     f32 travCost = 1.f;
-    // f32 leafSAH  = intCost * area * record.count;
-    // f32 splitSAH = travCost * area + intCost * split.bestSAH;
+    f32 leafSAH  = intCost * area * record.count;
+    f32 splitSAH = travCost * area + intCost * split.bestSAH;
 
-    if (record.count <= instancesPerPartition) // && leafSAH <= splitSAH)
+    if (record.count <= instancesPerPartition && leafSAH <= splitSAH)
     {
         u32 threadIndex = GetThreadIndex();
         heuristic.FlushState(split);
@@ -1560,7 +1560,6 @@ void VirtualGeometryManager::BuildHierarchy(Arena *arena, ScenePrimitives *scene
                              meshInfos[bRef.instanceID].nodes;
             ref.partitionIndex = partitionIndex;
             newInstanceRefs.Push(ref);
-            // bRefs[i].
         }
 
         // InstanceNode node;
@@ -1637,9 +1636,9 @@ void VirtualGeometryManager::Test(const AffineSpace &transform)
         nodes[i].node  = &meshInfos[0].nodes[i];
         nodes[i].nodes = nodes;
     }
-    BRef *bRefs = PushArrayNoZero(scratch.temp.arena, BRef, 4 * instanceRefs.Length());
+    BRef *bRefs = PushArrayNoZero(scratch.temp.arena, BRef, maxInstances);
 
-    newInstanceRefs = StaticArray<InstanceRef>(scratch.temp.arena, 4 * instanceRefs.Length());
+    newInstanceRefs = StaticArray<InstanceRef>(scratch.temp.arena, maxInstances);
 
     Bounds geom;
     Bounds cent;
@@ -1683,6 +1682,14 @@ void VirtualGeometryManager::Test(const AffineSpace &transform)
     Assert(numPartitions < maxPartitions);
 
     int stop = 5;
+    // Bounds bounds;
+    // basically:
+    // uniform voxel grid over the scene
+    // store what istances are inside each voxel
+    // secondary rays dda through the voxel grid
+    const u32 voxelX = 4096;
+    const u32 voxelY = 4096;
+    const u32 voxelZ = 8;
 }
 
 } // namespace rt

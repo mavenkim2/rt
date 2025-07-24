@@ -62,8 +62,10 @@ struct ClusterBuilder
     PrimRef *primRefs;
     void *h;
 
+    ClusterBuilder() {}
     ClusterBuilder(Arena *arena, PrimRef *primRefs);
-    void BuildClusters(RecordAOSSplits &record, bool parallel);
+    void BuildClusters(RecordAOSSplits &record, bool parallel,
+                       u32 maxTriangles = MAX_CLUSTER_TRIANGLES);
     void CreateDGFs(const StaticArray<u32> &materialIDs, DenseGeometryBuildData *buildData,
                     Mesh *meshes, int numMeshes, Bounds &sceneBounds);
     void CreateDGFs(const StaticArray<u32> &materialIDs, DenseGeometryBuildData *buildDatas,
