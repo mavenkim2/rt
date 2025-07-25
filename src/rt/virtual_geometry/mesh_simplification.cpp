@@ -6,6 +6,7 @@
 #include <atomic>
 #include "../mesh.h"
 #include <cstring>
+#include "../scene.h"
 #include "../scene_load.h"
 #include "../bvh/bvh_types.h"
 #include "../bvh/bvh_aos.h"
@@ -1449,24 +1450,6 @@ f32 MeshSimplifier::Simplify(u32 targetNumVerts, u32 targetNumTris, f32 targetEr
 }
 
 #if 0
-struct KDTreeNode
-{
-    union
-    {
-        struct
-        {
-            int axis;
-            f32 split;
-        };
-        struct
-        {
-            int start;
-            int count;
-        };
-    };
-    u32 left;
-    u32 right;
-};
 
 void MeshSimplifier::ClosestPointTriangleTriangle(Vec3f &p0, Vec3f &p1, u32 tri, u32 otherTri)
 {
@@ -1558,67 +1541,6 @@ void MeshSimplifier::CreateVirtualEdges(f32 maxDist)
     }
 }
 
-void MeshSimplifier::BuildKDTree(Bounds bounds, u32 start, u32 count)
-{
-    struct Handle
-    {
-        f32 sortKey;
-        u32 index;
-    };
-
-    // Build KDTree
-    ScratchArena scratch;
-    Handle *handles = PushArrayNoZero(scratch.temp.arnea, Handle, count);
-
-    // Chose axis with max extent
-
-    int bestAxis  = 0;
-    f32 maxExtent = neg_inf;
-    for (int axis = 0; axis < 3; axis++)
-    {
-        f32 extent = bounds.maxP[axis] - bounds.minP[axis];
-        if (extent > maxExtent)
-        {
-            bestAxis  = axis;
-            maxExtent = extent;
-        }
-    }
-
-    for (int tri = start; tri < start + count; tri++)
-    {
-        Vec3f p0 = GetPosition(indices[3 * tri + 0]);
-        Vec3f p1 = GetPosition(indices[3 * tri + 1]);
-        Vec3f p2 = GetPosition(indices[3 * tri + 2]);
-
-        Vec3f center               = (p0 + p1 + p2) / 3.f;
-        handles[tri - start].key   = center[bestAxis];
-        handles[tri - start].index = tri;
-    }
-    SortHandles(handles, count);
-
-    u32 leftCount  = count / 2;
-    u32 rightCount = count - leftCount;
-
-    Bounds leftBounds;
-    Bounds rightBounds;
-    for (int i = 0; i < leftCount; i++)
-    {
-        for (int vertIndex = 0; vertIndex < 3; vertIndex++)
-        {
-            leftBounds.Extend(GetPosition(indices[3 * i + vertIndex]);
-        }
-    }
-    for (int i = leftCount; i < count; i++)
-    {
-        for (int vertIndex = 0; vertIndex < 3; vertIndex++)
-        {
-            rightBounds.Extend(GetPosition(indices[3 * i + vertIndex]);
-        }
-    }
-
-    BuildKDTree(leftBounds, start, leftCount);
-    BuildKDTree(rightBounds, start + leftCount, rightCount);
-}
 #endif
 
 void MeshSimplifier::Finalize(u32 &finalNumVertices, u32 &finalNumIndices, u32 *geomIDs)
@@ -4339,6 +4261,331 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
 
     OS_UnmapFile(builder.ptr);
     OS_ResizeFile(builder.filename, builder.totalSize);
+}
+
+struct ClusterInfo
+{
+    StaticArray<Cluster> mipClusters;
+};
+
+struct InstanceType2
+{
+};
+
+struct IntermediateInfo
+{
+    AffineSpace *transforms;
+    InstanceType2 *instances;
+};
+
+struct KDTreeNode
+{
+    Bounds bounds;
+    union
+    {
+        struct
+        {
+            int axis;
+            f32 split;
+        };
+        struct
+        {
+            int start;
+            int count;
+        };
+    };
+    KDTreeNode *left;
+    KDTreeNode *right;
+};
+
+KDTreeNode BuildKDTree(Arena **arenas, PrimRef *refs, PrimRef *doubleBufferRefs, u32 start,
+                       u32 count)
+{
+    struct Handle
+    {
+        u32 sortKey;
+        u32 index;
+    };
+    struct Float
+    {
+        f32 f;
+        u32 i;
+    };
+
+    // Build KDTree
+    ScratchArena scratch;
+    Handle *handles = PushArrayNoZero(scratch.temp.arena, Handle, count);
+
+    // Chose axis with max extent
+    int bestAxis  = 0;
+    f32 maxExtent = neg_inf;
+    for (int axis = 0; axis < 3; axis++)
+    {
+        f32 extent = bounds.maxP[axis] - bounds.minP[axis];
+        if (extent > maxExtent)
+        {
+            bestAxis  = axis;
+            maxExtent = extent;
+        }
+    }
+
+    for (u32 refIndex = start; refIndex < start + count; refIndex++)
+    {
+        PrimRef &ref = refs[refIndex];
+        f32 center   = (ref.min[bestAxis] + ref.max[bestAxis]) / 2.f;
+        Float fl;
+        fl.f = center;
+
+        Handle handle;
+        handle.sortKey            = fl.i;
+        handle.index              = refIndex;
+        handles[refIndex - start] = handle;
+    }
+
+    SortHandles(handles, count);
+
+    PrimRef &centerRef = refs[handle[count / 2].index];
+    f32 centerSplit    = (ref.min[bestAxis] + ref.max[bestAxis]) / 2.f;
+
+    u32 leftStart               = start;
+    u32 rightStart              = start + count / 2;
+    std::atomic<u32> leftCount  = 0;
+    std::atomic<u32> rightCount = 0;
+
+    KDTreeNode *node = PushStructNoZero(arenas[GetThreadIndex()], KDTreeNode);
+    node.split       = centerSplit;
+    node.axis        = bestAxis;
+
+    ParallelFor(0, count, 4096, 32, [&](u32 jobID, u32 start, u32 count) {
+        for (u32 i = start; i < start + count; i++)
+        {
+            PrimRef &ref            = refs[i];
+            f32 center              = (ref.min[bestAxis] + ref.max[bestAxis]) / 2.f;
+            u32 index               = center >= centerSplit
+                                          ? leftStart + leftCount.fetch_add(1, std::memory_order_relaxed)
+                                          : rightStart + rightCount.fetch_add(1, std::memory_order_relaxed);
+            doubleBufferRefs[index] = ref;
+        }
+    });
+    Assert(leftCount == count / 2);
+    Assert(rightCount == count - count / 2);
+
+    if (parallel)
+    {
+        ParallelFor(0, 2, 1, [&](u32 jobID, u32 start, u32 count) {
+            Assert(count == 1);
+            BuildKDTree(arenas, doubleBufferRefs, refs, start, leftCount);
+            BuildKDTree(arenas, doubleBufferRefs, refs, start + leftCount, rightCount);
+        });
+    }
+    else
+    {
+        BuildKDTree(arenas, doubleBufferRefs, refs, start, leftCount);
+        BuildKDTree(arenas, doubleBufferRefs, refs, start + leftCount, rightCount);
+    }
+}
+
+struct Instance
+{
+    u32 id;
+    u32 transformIndex;
+};
+
+void CreateInstanceHierarchy()
+{
+    // need a list of clusters and a list of transforms...
+
+    AffineSpace *transforms;
+    Cluster lastLevelClusters;
+
+    // basically, you just take all of the cluster groups, transform all the clusters
+    // in all of the cluster groups, and then
+
+    struct Handle
+    {
+        f32 sortKey;
+        u32 index;
+    };
+
+    ScratchArena scratch;
+    Instance *instances;
+    ScenePrimitives *scene;
+
+    KDTreeNode kdTreeRootNodes;
+
+    // Flatten meshes into an array
+    struct TriangleKDTree
+    {
+        KDTreeNode *root;
+        PrimRef *refs;
+    };
+
+    Arena **arenas = GetArenaArray(scratch.temp.arena);
+
+    // Build KD tree over triangles in object space
+    for (u32 childSceneIndex = 0; childSceneIndex < scene->numChildScenes; childSceneIndex)
+    {
+        ScenePrimitives *childScene = scene->childScenes[childSceneIndex];
+        RecordAOSSplits record;
+        PrimRef *refs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
+            scratch.temp.arena, (Mesh *)childScene->primitives, childScene->numPrimitives,
+            record, false);
+        PrimRef *doubleBufferRefs =
+            PushArrayNoZero(scratch.temp.arena, childScene->numPrimitives);
+        BuildKDTree(arenas, refs, 0, childScene->numPrimitives);
+    }
+
+    KDTreeNode **rootNodes;
+
+    u32 numInstances;
+    PrimRef *primRefs = PushArrayNoZero(scratch.temp.arena, PrimRef, numInstances);
+
+    // - form kd tree over instances
+    // - iterate over every instance through the kd tree, find all oher instances with bounding
+    // boxes that intersect OR that are within a certain distance
+    // - build a triangle kd tree once per instanced
+    // - if the instance pair has not been considered yet, find the triangle distances
+    // between the instances, and if a virtual edge is detected
+
+    ParallelFor(0, numInstances, 32, [&](u32 jobID, u32 start, u32 count) {
+        for (u32 instanceIndex = start; instanceIndex < start + count; instanceIndex++)
+        {
+            Instance &instance     = instances[instanceIndex];
+            AffineSpace &transform = transforms[instance.transformIndex];
+
+            PrimRef ref;
+            ref.primID = instanceIndex;
+            for (u32 axis = 0; axis < 3; axis++)
+            {
+                ref.min[axis] = bb.minP[axis];
+                ref.max[axis] = bb.maxP[axis];
+            }
+            primRefs[instanceIndex] = ref;
+        }
+    });
+    PrimRef *doubleBufferRefs = PushArrayNoZero(scratch.temp.arena, PrimRef, numInstances);
+
+    KDTreeNode *rootInstanceNode =
+        BuildKDTree(arenas, primRefs, doubleBufferRefs, 0, numInstances);
+
+    u32 **instanceNeighbors     = PushArrayNoZero(scratch.temp.arena, u32 *, numInstances);
+    u32 *instanceNeighborCounts = PushArrayNoZero(scratch.temp.arena, u32, numInstances);
+
+    ParallelFor(0, numInstances, 32, [&](u32 jobID, u32 start, u32 count) {
+        Arena *arena = arenas[GetThreadIndex()];
+        ScratchArena scratch;
+
+        for (u32 instanceIndex = start; instanceIndex < start + count; instanceIndex++)
+        {
+            Array<u32> neighbors(scratch.temp.arena, 8);
+            PrimRef &ref = primRefs[instanceIndex];
+            Bounds bounds;
+            for (u32 axis = 0; axis < 3; axis++)
+            {
+                bounds.minP[axis] = ref.min[axis];
+                bounds.maxP[axis] = ref.max[axis];
+            }
+            u32 instanceIndex      = ref.primID;
+            Instance &instance     = instances[instanceIndex];
+            AffineSpace &transform = transforms[instance.transformIndex];
+
+            FixedArray<KDTreeNode *, 128> stack;
+            stack.Push(rootInstanceNode);
+            while (stack.Length())
+            {
+                KDTreeNode *node = stack.Pop();
+                bool leaf        = node->left == 0 && node->right == 0;
+                if (leaf)
+                {
+                    for (u32 primRefIndex = node->start;
+                         primRefIndex < node->start + node->count; primRefIndex++)
+                    {
+                        PrimRef &otherRef     = primRefs[primRefIndex];
+                        Lane8F32 intersection = Min(otherRef.Load(), ref.Load());
+                        if (None(-Extract4<0>(intersection) > Extract4<1>(intersection)))
+                            continue;
+
+                        neighbors.Push(otherRef.primID);
+                    }
+                }
+                else
+                {
+                    Bounds testBounds = node->bounds;
+                    testBounds.Intersect(bounds);
+                    if (!testBounds.Empty())
+                    {
+                        if (node->left) stack.Push(node->left);
+                        if (node->right) stack.Push(node->right);
+                    }
+                }
+            }
+            u32 *outNeighbors = PushArrayNoZero(arena, u32, neighbors.Length());
+            MemoryCopy(outNeighbors, neighbors.data, sizeof(u32) * neighbors.Length());
+            instanceNeighbors[instanceIndex] = outNeighbors;
+            instanceNeighborCounts[instanceIndex] neighbors.Length();
+        }
+    });
+
+    // DFS to find islands
+    BitVector visited(scratch.temp.arena, numInstances);
+
+    u32 *islandOffsets     = PushArrayNoZero(scratch.temp.arena, u32, numInstances + 1);
+    u32 *islandOffsets1    = &islandOffsets[1];
+    u32 *islandData        = PushArrayNoZero(scratch.temp.arena, u32, numInstances);
+    u32 currentIsland      = 0;
+    u32 currentIslandCount = 0;
+
+    for (u32 instanceIndex = 0; instanceIndex < numInstances; instanceIndex++)
+    {
+        if (visited.GetBit(instanceIndex)) continue;
+
+        FixedArray<u32, 128> stack;
+        stack.Push(instanceIndex);
+        visited.SetBit(instanceIndex);
+        while (stack.Length())
+        {
+            u32 instance = stack.Pop();
+            for (u32 neighborIndex = 0; neighborIndex < instanceNeighborCounts[instance];
+                 neighborIndex++)
+            {
+                u32 neighbor = instanceNeighbors[instance][neighborIndex];
+                if (!visited.GetBit(neighbor))
+                {
+                    visited.SetBit(neighbor);
+                    stack.Push(neighbor);
+                    islandData[currentIslandCount++] = neighbor;
+                }
+            }
+        }
+        virtualEdgesFound.SetBit(instanceIndex);
+
+        islandOffsets1[currentIsland] = currentIslandCount;
+        currentIsland++;
+    }
+
+    BitVector virtualEdgesFound(scratch.temp.arena, numInstances);
+    // Merge instances in the same island and simplify
+    for (u32 island = 0; island < currentIsland; island++)
+    {
+        for (u32 islandMemberIndex = islandOffsets[island];
+             islandMemberIndex < islandOffsets[island + 1]; islandMemberIndex++)
+        {
+            u32 instanceIndex = islandData[islandMemberIndex];
+            u32 *neighbors    = instanceNeighbors[instanceIndex];
+            u32 neighborCount = instanceNeighborCounts[instanceIndex];
+            for (u32 neighborIndex = 0; neighborIndex < neighborCount; neighborIndex++)
+            {
+                u32 neighborInstance = neighbors[neighborIndex];
+                if (!virtualEdgesFound.GetBit(neighborInstance))
+                {
+                }
+            }
+            virtualEdgesFound.SetBit(instanceIndex);
+            u32 instanceIndex = islandData[islandMemberIndex];
+        }
+    }
+    CreateClusters(Mesh * meshes, u32 numMeshes, StaticArray<u32> & materialIndices,
+                   string filename);
 }
 
 #if 0

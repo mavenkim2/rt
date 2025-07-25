@@ -1086,16 +1086,6 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
                 computeCmd, &queueBuffer, &sceneTransferBuffers[currentBuffer].buffer,
                 &workItemQueueBuffer, &gpuInstancesBuffer.buffer, &visibleClustersBuffer);
 
-            // instance hierarchy
-            // - partial rebraiding
-            // - culling
-            //
-            // culling
-            // - occlusion
-            //
-            // instance combining at far view distances
-            // proxies for culled instances, feedback and just in time build?
-
             computeCmd->CopyBuffer(&virtualGeometryManager.readbackBuffer,
                                    &virtualGeometryManager.streamingRequestsBuffer);
             computeCmd->Barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
