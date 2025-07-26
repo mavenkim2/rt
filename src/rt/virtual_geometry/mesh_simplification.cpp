@@ -4385,6 +4385,37 @@ KDTreeNode BuildKDTree(Arena **arenas, PrimRef *refs, PrimRef *doubleBufferRefs,
     }
 }
 
+template <typename LeafFunc>
+void TraverseKDTree(PrimRef *refs, KDTreeNode *rootNode, Bounds bounds, LeafFunc &&func)
+{
+    FixedArray<KDTreeNode *, 128> stack;
+    stack.Push(rootNode);
+
+    while (stack.Length())
+    {
+        KDTreeNode *node = stack.Pop();
+        bool leaf        = node->left == 0 && node->right == 0;
+        if (leaf)
+        {
+            for (u32 primRefIndex = node->start; primRefIndex < node->start + node->count;
+                 primRefIndex++)
+            {
+                func(refs[primRefIndex]);
+            }
+        }
+        else
+        {
+            Bounds testBounds = node->bounds;
+            testBounds.Intersect(bounds);
+            if (!testBounds.Empty())
+            {
+                if (node->left) stack.Push(node->left);
+                if (node->right) stack.Push(node->right);
+            }
+        }
+    }
+}
+
 struct Instance
 {
     u32 id;
@@ -4393,8 +4424,6 @@ struct Instance
 
 void CreateInstanceHierarchy()
 {
-    // need a list of clusters and a list of transforms...
-
     AffineSpace *transforms;
     Cluster lastLevelClusters;
 
@@ -4408,8 +4437,9 @@ void CreateInstanceHierarchy()
     };
 
     ScratchArena scratch;
-    Instance *instances;
     ScenePrimitives *scene;
+
+    Instance *instances = (Instance *)scene->primitives;
 
     KDTreeNode kdTreeRootNodes;
 
@@ -4422,20 +4452,29 @@ void CreateInstanceHierarchy()
 
     Arena **arenas = GetArenaArray(scratch.temp.arena);
 
-    // Build KD tree over triangles in object space
-    for (u32 childSceneIndex = 0; childSceneIndex < scene->numChildScenes; childSceneIndex)
-    {
-        ScenePrimitives *childScene = scene->childScenes[childSceneIndex];
-        RecordAOSSplits record;
-        PrimRef *refs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
-            scratch.temp.arena, (Mesh *)childScene->primitives, childScene->numPrimitives,
-            record, false);
-        PrimRef *doubleBufferRefs =
-            PushArrayNoZero(scratch.temp.arena, childScene->numPrimitives);
-        BuildKDTree(arenas, refs, 0, childScene->numPrimitives);
-    }
+    StaticArray<TriangleKDTree> trees(scratch.temp.arena, scene->numChildScenes,
+                                      scene->numChildScenes);
 
-    KDTreeNode **rootNodes;
+    // Build KD tree over triangles in object space
+    ParallelFor(0, scene->numChildScenes, 1, [&](u32 jobID, u32 start, u32 count) {
+        for (u32 sceneIndex = start; sceneIndex < start + count; sceneIndex++)
+        {
+            ScenePrimitives *childScene = scene->childScenes[sceneIndex];
+            RecordAOSSplits record;
+            PrimRef *refs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
+                scratch.temp.arena, (Mesh *)childScene->primitives, childScene->numPrimitives,
+                record, false);
+            PrimRef *doubleBufferRefs =
+                PushArrayNoZero(scratch.temp.arena, childScene->numPrimitives);
+            KDTreeNode *root = BuildKDTree(arenas, refs, 0, childScene->numPrimitives);
+
+            TriangleKDTree tree;
+            tree.root = root;
+            tree.refs = refs;
+
+            trees[sceneIndex] = tree;
+        }
+    });
 
     u32 numInstances;
     PrimRef *primRefs = PushArrayNoZero(scratch.temp.arena, PrimRef, numInstances);
@@ -4489,36 +4528,14 @@ void CreateInstanceHierarchy()
             Instance &instance     = instances[instanceIndex];
             AffineSpace &transform = transforms[instance.transformIndex];
 
-            FixedArray<KDTreeNode *, 128> stack;
-            stack.Push(rootInstanceNode);
-            while (stack.Length())
-            {
-                KDTreeNode *node = stack.Pop();
-                bool leaf        = node->left == 0 && node->right == 0;
-                if (leaf)
+            TraverseKDTree(primRefs, rootNode, bounds, [&](PrimRef &otherRef) {
+                Lane8F32 intersection = Min(otherRef.Load(), ref.Load());
+                if (All(-Extract4<0>(intersection) <= Extract4<1>(intersection)))
                 {
-                    for (u32 primRefIndex = node->start;
-                         primRefIndex < node->start + node->count; primRefIndex++)
-                    {
-                        PrimRef &otherRef     = primRefs[primRefIndex];
-                        Lane8F32 intersection = Min(otherRef.Load(), ref.Load());
-                        if (None(-Extract4<0>(intersection) > Extract4<1>(intersection)))
-                            continue;
+                    neighbors.Push(otherRef.primID);
+                }
+            });
 
-                        neighbors.Push(otherRef.primID);
-                    }
-                }
-                else
-                {
-                    Bounds testBounds = node->bounds;
-                    testBounds.Intersect(bounds);
-                    if (!testBounds.Empty())
-                    {
-                        if (node->left) stack.Push(node->left);
-                        if (node->right) stack.Push(node->right);
-                    }
-                }
-            }
             u32 *outNeighbors = PushArrayNoZero(arena, u32, neighbors.Length());
             MemoryCopy(outNeighbors, neighbors.data, sizeof(u32) * neighbors.Length());
             instanceNeighbors[instanceIndex] = outNeighbors;
@@ -4578,12 +4595,15 @@ void CreateInstanceHierarchy()
                 u32 neighborInstance = neighbors[neighborIndex];
                 if (!virtualEdgesFound.GetBit(neighborInstance))
                 {
+                    KDTreeNode *root = rootNodes[];
+                    TraverseKDTree(PrimRef * refs, KDTreeNode * rootNode, Bounds bounds,
+                                   LeafFunc && func);
                 }
             }
             virtualEdgesFound.SetBit(instanceIndex);
-            u32 instanceIndex = islandData[islandMemberIndex];
         }
     }
+
     CreateClusters(Mesh * meshes, u32 numMeshes, StaticArray<u32> & materialIndices,
                    string filename);
 }
