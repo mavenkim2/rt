@@ -4422,6 +4422,85 @@ struct Instance
     u32 transformIndex;
 };
 
+__forceinline bool TriangleAABB_SAT(Vec3f v[3])
+{
+    Vec3f edges[3] = {
+        v[1] - v[0],
+        v[2] - v[1],
+        v[0] - v[2],
+    };
+
+    for (int i = 0; i < 3; i++)
+    {
+        int y = (1 << i) & 3;
+        int z = (1 << y) & 3;
+
+        for (int j = 0; j < 3; j++)
+        {
+            int next     = (1 << j) & 3;
+            int nextNext = (1 << next) & 3;
+
+            float p0 = v[j][z] * v[next][y] - v[j][y] * v[next][z];
+            float p2 = edges[j][y] * v[nextNext][z] - edges[j][z] * v[nextNext][y];
+
+            float r = 0.5f * (Abs(edges[j][z]) + Abs(edges[j][y]));
+
+            bool result = Min(p0, p2) > r || Max(p0, p2) < -r;
+            if (result)
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+void Voxelize(ScenePrimitives *scene)
+{
+    // basically, we project the triangle onto each voxel plane, and see if the voxel
+    // center is inside the triangle
+
+    Vec3lf8 center;
+
+    Vec3f v[3];
+    Vec3f edge0 = v1 - v0;
+
+    Vec3f edges[3];
+
+    // First, test voxel AABB around triangle AABB
+    for (int voxelY = minVoxelY; voxelY < maxVoxelY; voxelY++)
+    {
+        for (int voxelX = minVoxelX; voxelX < maxVoxelX; voxelX++)
+        {
+            // Vec3f voxelCenter(voxelX + 0.5f, voxelY + 0.5f, centerZvoxelZ + 0.5f);
+            if (!TriangleAABB_SAT()) continue;
+            for (int voxelZ = minVoxelZ; voxelZ < maxVoxelZ; voxelZ++)
+            {
+                // project the center of the voxel
+                Vec3f voxelCenter(voxelX + 0.5f, voxelY + 0.5f, voxelZ + 0.5f);
+
+                Vec3f verts[3] = {
+                    v[0] - voxelCenter,
+                    v[1] - voxelCenter,
+                    v[2] - voxelCenter,
+                };
+                if (TriangleAABB_SAT(verts))
+                {
+                    Vec3i(voxelX, voxelY, voxelZ);
+                }
+            }
+        }
+    }
+}
+
+void Voxelize(ScenePrimitive *scene)
+{
+    // basically
+    ScratchArena scratch;
+    Arena **arenas = GetArenaArray(scratch.temp.arena);
+    BuildTriangleBVH(arenas, scene);
+}
+
 void CreateInstanceHierarchy()
 {
     AffineSpace *transforms;
