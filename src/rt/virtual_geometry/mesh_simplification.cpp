@@ -4298,6 +4298,7 @@ struct KDTreeNode
     KDTreeNode *right;
 };
 
+#if 0
 KDTreeNode BuildKDTree(Arena **arenas, PrimRef *refs, PrimRef *doubleBufferRefs, u32 start,
                        u32 count)
 {
@@ -4384,6 +4385,7 @@ KDTreeNode BuildKDTree(Arena **arenas, PrimRef *refs, PrimRef *doubleBufferRefs,
         BuildKDTree(arenas, doubleBufferRefs, refs, start + leftCount, rightCount);
     }
 }
+#endif
 
 template <typename LeafFunc>
 void TraverseKDTree(PrimRef *refs, KDTreeNode *rootNode, Bounds bounds, LeafFunc &&func)
@@ -4416,19 +4418,22 @@ void TraverseKDTree(PrimRef *refs, KDTreeNode *rootNode, Bounds bounds, LeafFunc
     }
 }
 
-struct Instance
-{
-    u32 id;
-    u32 transformIndex;
-};
+// struct Instance
+// {
+//     u32 id;
+//     u32 transformIndex;
+// };
 
-__forceinline bool TriangleAABB_SAT(Vec3f v[3])
+template <typename T>
+__forceinline Mask<T> TriangleAABB_SAT(Vec3<T> v[3])
 {
-    Vec3f edges[3] = {
+    Vec3<T> edges[3] = {
         v[1] - v[0],
         v[2] - v[1],
         v[0] - v[2],
     };
+
+    Mask<T> resultMask = Mask<T>(FalseTy());
 
     for (int i = 0; i < 3; i++)
     {
@@ -4437,70 +4442,85 @@ __forceinline bool TriangleAABB_SAT(Vec3f v[3])
 
         for (int j = 0; j < 3; j++)
         {
-            int next     = (1 << j) & 3;
-            int nextNext = (1 << next) & 3;
+            int nextAxis = (1 << j) & 3;
+            int nextNext = (1 << nextAxis) & 3;
 
-            float p0 = v[j][z] * v[next][y] - v[j][y] * v[next][z];
-            float p2 = edges[j][y] * v[nextNext][z] - edges[j][z] * v[nextNext][y];
+            T p0 = v[j][z] * v[nextAxis][y] - v[j][y] * v[nextAxis][z];
+            T p2 = edges[j][y] * v[nextNext][z] - edges[j][z] * v[nextNext][y];
 
-            float r = 0.5f * (Abs(edges[j][z]) + Abs(edges[j][y]));
+            T r = 0.5f * (Abs(edges[j][z]) + Abs(edges[j][y]));
 
-            bool result = Min(p0, p2) > r || Max(p0, p2) < -r;
-            if (result)
+            resultMask |= (Min(p0, p2) > r) | (Max(p0, p2) < -r);
+            if (All(resultMask))
             {
-                return false;
+                return resultMask;
             }
         }
     }
-    return true;
+    return resultMask;
 }
 
-void Voxelize(ScenePrimitives *scene)
+void Voxelize(Mesh *mesh) // ScenePrimitives *scene)
 {
-    // basically, we project the triangle onto each voxel plane, and see if the voxel
-    // center is inside the triangle
+    ScratchArena scratch;
 
-    Vec3lf8 center;
+    // StaticArray<Vec3i> voxels(scratch.temp.arena, );
 
-    Vec3f v[3];
-    Vec3f edge0 = v1 - v0;
-
-    Vec3f edges[3];
-
-    // First, test voxel AABB around triangle AABB
-    for (int voxelY = minVoxelY; voxelY < maxVoxelY; voxelY++)
+    for (int triIndex = 0; triIndex < mesh->numIndices / 3; triIndex++)
     {
-        for (int voxelX = minVoxelX; voxelX < maxVoxelX; voxelX++)
-        {
-            // Vec3f voxelCenter(voxelX + 0.5f, voxelY + 0.5f, centerZvoxelZ + 0.5f);
-            if (!TriangleAABB_SAT()) continue;
-            for (int voxelZ = minVoxelZ; voxelZ < maxVoxelZ; voxelZ++)
-            {
-                // project the center of the voxel
-                Vec3f voxelCenter(voxelX + 0.5f, voxelY + 0.5f, voxelZ + 0.5f);
+        Vec3f pos[3];
+        pos[0] = mesh->p[mesh->indices[3 * triIndex + 0]];
+        pos[1] = mesh->p[mesh->indices[3 * triIndex + 1]];
+        pos[2] = mesh->p[mesh->indices[3 * triIndex + 2]];
 
-                Vec3f verts[3] = {
-                    v[0] - voxelCenter,
-                    v[1] - voxelCenter,
-                    v[2] - voxelCenter,
-                };
-                if (TriangleAABB_SAT(verts))
+        Vec3lf8 v[3];
+        for (int i = 0; i < 3; i++)
+        {
+            for (int axis = 0; axis < 3; axis++)
+            {
+                v[i][axis] = Lane8F32(pos[i][axis]);
+            }
+        }
+
+        Bounds bounds;
+        bounds.minP = Lane4F32(Min(pos[0], Min(pos[1], pos[2])));
+        bounds.maxP = Lane4F32(Max(pos[0], Max(pos[1], pos[2])));
+
+        Lane4F32 rcpVoxelSize(1.f);
+
+        Lane4F32 minVoxel = Floor(bounds.minP * rcpVoxelSize);
+        Lane4F32 maxVoxel = Ceil(bounds.maxP * rcpVoxelSize);
+
+        const int stepSizeX = 8;
+        // First, test voxel AABB around triangle AABB
+        for (float voxelZ = minVoxel[2]; voxelZ < maxVoxel[2]; voxelZ++)
+        {
+            for (float voxelY = minVoxel[1]; voxelY < maxVoxel[1]; voxelY++)
+            {
+                Vec3lf8 voxelCenter;
+                voxelCenter.y = Lane8F32(voxelY + 0.5f);
+                voxelCenter.z = Lane8F32(voxelZ + 0.5f);
+
+                for (float voxelX = minVoxel[0]; voxelX < maxVoxel[0]; voxelX += stepSizeX)
                 {
-                    Vec3i(voxelX, voxelY, voxelZ);
+                    voxelCenter.x = Lane8F32(voxelX + 0.5f) +
+                                    Lane8F32(0.f, 1.f, 2.f, 3.f, 4.f, 5.f, 6.f, 7.f);
+
+                    Vec3lf8 verts[3] = {
+                        v[0] - voxelCenter,
+                        v[1] - voxelCenter,
+                        v[2] - voxelCenter,
+                    };
+
+                    Mask<Lane8F32> mask = TriangleAABB_SAT(verts);
+                    u32 bits            = Movemask(mask);
                 }
             }
         }
     }
 }
 
-void Voxelize(ScenePrimitive *scene)
-{
-    // basically
-    ScratchArena scratch;
-    Arena **arenas = GetArenaArray(scratch.temp.arena);
-    BuildTriangleBVH(arenas, scene);
-}
-
+#if 0
 void CreateInstanceHierarchy()
 {
     AffineSpace *transforms;
@@ -4685,57 +4705,6 @@ void CreateInstanceHierarchy()
 
     CreateClusters(Mesh * meshes, u32 numMeshes, StaticArray<u32> & materialIndices,
                    string filename);
-}
-
-#if 0
-struct GetHierarchyNode
-{
-    HierarchyNode *hierarchyNodes;
-    using NodeType = HierarchyNode;
-    __forceinline NodeType *operator()(const BRef &ref)
-    {
-        u32 nodeIndex = ref.nodePtr.data & ~0u;
-        return &hierarchyNodes[nodeIndex];
-    }
-};
-
-struct InstanceLeaf
-{
-    u32 instanceID[CHILDREN_PER_HIERARCHY_NODE];
-    u32 children[CHILDREN_PER_HIERARCHY_NODE];
-
-    __forceinline void Fill(const ScenePrimitives *scene, BuildRef<N> *refs, u32 &begin,
-                            u32 end)
-    {
-    }
-};
-
-void GenerateInstanceHierarchy()
-{
-    ScenePrimitive *scene;
-
-    Arena *arena   = ArenaAlloc();
-    Arena **arenas = GetArenaArray(arena);
-
-    // Flatten scene
-
-    HierarchyNode *hierarchyNodes;
-    BuildRef<CHILDREN_PER_HIERARCHY_NODE> *refs;
-
-    using BuildType =
-        BuildFuncs<CHILDREN_PER_HIERARCHY_NODE, HeuristicPartialRebraid<GetHierarchyNode>,
-                   QuantizedCompressedNode<N>, CreateQuantizedNode<N>,
-                   UpdateQuantizedCompressedNode<N>, InstanceLeaf>;
-    using Builder = BVHBuilder<N, BuildType>;
-
-    Builder builder;
-    using Heuristic = typename Builder::Heuristic;
-    new (&builder.heuristic) Heuristic(scene, refs, settings.logBlockSize);
-    builder.heuristic.getNode.hierarchyNodes = hierarchyNodes;
-    builder.primRefs                         = refs;
-    builder.scene                            = scene;
-
-    BVHNodeN rootNode = builder.BuildCompressedBVH(settings, arenas, record);
 }
 #endif
 

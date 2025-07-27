@@ -518,6 +518,10 @@ __forceinline Lane4F32 Ceil(const Lane4F32 &lane)
 {
     return _mm_round_ps(lane, _MM_FROUND_TO_POS_INF);
 }
+__forceinline Lane4F32 Round(const Lane4F32 &lane)
+{
+    return _mm_round_ps(lane, _MM_FROUND_TO_NEAREST_INT);
+}
 
 #else
 __forceinline Lane4F32 Floor(const Lane4F32 &lane)
@@ -527,6 +531,10 @@ __forceinline Lane4F32 Floor(const Lane4F32 &lane)
 __forceinline Lane4F32 Ceil(const Lane4F32 &lane)
 {
     return Lane4F32(ceilf(lane[0]), ceilf(lane[1]), ceilf(lane[2]), ceilf(lane[3]));
+}
+__forceinline Lane4F32 Round(const Lane4F32 &lane)
+{
+    return Lane4F32(roundf(lane[0]), roundf(lane[1]), roundf(lane[2]), roundf(lane[3]));
 }
 #endif
 

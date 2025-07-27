@@ -2321,7 +2321,19 @@ int main(int argc, char **argv)
     Vulkan *v           = PushStructConstruct(arena, Vulkan)(mode);
     device              = v;
 
+#if 0
     LoadPBRT(arena, filename);
+#endif
+    int numMeshes, actualNumMeshes;
+    Mesh *meshes = LoadObj(arena,
+                           "../../data/island/pbrt-v4/obj/isMountainB/archives/"
+                           "xgFoliageA_treeMadronaBaked_canopyOnly_lo.obj",
+                           numMeshes, actualNumMeshes);
+
+    PerformanceCounter counter = OS_StartCounter();
+    Voxelize(&meshes[0]);
+    f32 t = OS_GetMilliseconds(counter);
+    Print("%f\n", t);
 
     u64 count        = 0;
     f64 time         = 0;

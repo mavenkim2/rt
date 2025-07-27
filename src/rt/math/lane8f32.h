@@ -1,6 +1,7 @@
 #ifndef LANE8F32_H
 #define LANE8F32_H
 
+#include <immintrin.h>
 namespace rt
 {
 
@@ -525,6 +526,11 @@ __forceinline Lane8F32 Floor(const Lane8F32 &lane)
 __forceinline Lane8F32 Ceil(const Lane8F32 &lane)
 {
     return _mm256_round_ps(lane, _MM_FROUND_TO_POS_INF);
+}
+
+__forceinline Lane8F32 Round(const Lane8F32 &lane)
+{
+    return _mm256_round_ps(lane, _MM_FROUND_TO_NEAREST_INT);
 }
 
 __forceinline void Transpose8x3(const Lane4F32 &inA, const Lane4F32 &inB, const Lane4F32 &inC,
