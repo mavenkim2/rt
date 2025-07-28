@@ -4491,6 +4491,13 @@ void Voxelize(Mesh *mesh) // ScenePrimitives *scene)
         Lane4F32 minVoxel = Floor(bounds.minP * rcpVoxelSize);
         Lane4F32 maxVoxel = Ceil(bounds.maxP * rcpVoxelSize);
 
+        Vec3lf8 minP(Lane8F32(Min(pos[0].x, Min(pos[1].x, pos[2].x))),
+                     Lane8F32(Min(pos[0].y, Min(pos[1].y, pos[2].y))),
+                     Lane8F32(Min(pos[0].z, Min(pos[1].z, pos[2].z))));
+        Vec3lf8 maxP(Lane8F32(Max(pos[0].x, Max(pos[1].x, pos[2].x))),
+                     Lane8F32(Max(pos[0].y, Max(pos[1].y, pos[2].y))),
+                     Lane8F32(Max(pos[0].z, Max(pos[1].z, pos[2].z))));
+
         const int stepSizeX = 8;
         // First, test voxel AABB around triangle AABB
         for (float voxelZ = minVoxel[2]; voxelZ < maxVoxel[2]; voxelZ++)
@@ -4506,6 +4513,15 @@ void Voxelize(Mesh *mesh) // ScenePrimitives *scene)
                     voxelCenter.x = Lane8F32(voxelX + 0.5f) +
                                     Lane8F32(0.f, 1.f, 2.f, 3.f, 4.f, 5.f, 6.f, 7.f);
 
+                    Vec3lf8 voxelMin = Max(voxelCenter - Vec3lf8(Lane8F32(0.5f)), minP);
+                    Vec3lf8 voxelMax = Min(voxelCenter + Vec3lf8(Lane8F32(0.5f)), maxP);
+
+                    if (None(voxelMin.x < voxelMax.x) || None(voxelMin.y < voxelMax.y) ||
+                        None(voxelMin.z < voxelMax.z))
+                    {
+                        continue;
+                    }
+
                     Vec3lf8 verts[3] = {
                         v[0] - voxelCenter,
                         v[1] - voxelCenter,
@@ -4513,10 +4529,33 @@ void Voxelize(Mesh *mesh) // ScenePrimitives *scene)
                     };
 
                     Mask<Lane8F32> mask = TriangleAABB_SAT(verts);
-                    u32 bits            = Movemask(mask);
+                    u32 bits            = ~Movemask(mask);
+                    for (;;)
+                    {
+                        u32 increment = Bsf(bits);
+                        Assert(voxelX + increment < maxVoxel[0]);
+                        bits &= bits - 1;
+                        // honestly, everything about this seems doable.
+                        // the only thing i'm really worried about is the volumetric
+                        // integration. i don't know how that's going to work
+                        // maybe we should start with that
+                        // everything else i know
+                        // voxelize triangles
+                        // generate a ray from each voxel center, trace against the scene
+                        // if hit, add to a list
+                        // use the hit normals to fit the sggx distribution
+                        // pack bricks into 4x4x4
+                    }
                 }
             }
         }
+    }
+
+    const u32 numRays = 64;
+
+    for ()
+    {
+        bool result = Intersect(GetScene(), );
     }
 }
 
