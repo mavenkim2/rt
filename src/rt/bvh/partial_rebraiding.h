@@ -2,70 +2,12 @@
 #define PARTIAL_REBRAID_H
 
 #include "bvh_types.h"
+#include "../scene/scene.h"
 
 namespace rt
 {
 
-inline void GenerateBuildRefs(BRef *refs, ScenePrimitives *scene, u32 start, u32 count,
-                       RecordAOSSplits &record)
-{
-    Bounds geom;
-    Bounds cent;
-    const Instance *instances = (const Instance *)scene->primitives;
-    for (u32 i = start; i < start + count; i++)
-    {
-        const Instance &instance = instances[i];
-        AffineSpace &transform   = scene->affineTransforms[instance.transformIndex];
-        u32 index                = instance.id;
-        Assert(scene->childScenes);
-        ScenePrimitives *inScene = scene->childScenes[index];
-        BRef *ref                = &refs[i];
-
-        Bounds bounds = Transform(transform, inScene->GetBounds());
-        Assert((Movemask(bounds.maxP >= bounds.minP) & 0x7) == 0x7);
-
-        ref->StoreBounds(bounds);
-        geom.Extend(bounds);
-        cent.Extend(bounds.minP + bounds.maxP);
-
-        ref->instanceID = i;
-#ifdef USE_QUANTIZE_COMPRESS
-        ref->nodePtr = uintptr_t(inScene->nodePtr.GetPtr());
-        ref->type    = inScene->nodePtr.GetType();
-#else
-        ref->nodePtr = inScene->nodePtr;
-#endif
-        ref->numPrims = inScene->numFaces;
-
-        ErrorExit(ref->nodePtr.data, "Invalid scene: %u\n", index);
-    }
-    record.geomBounds = Lane8F32(-geom.minP, geom.maxP);
-    record.centBounds = Lane8F32(-cent.minP, cent.maxP);
-}
-
-// NOTE: either Scene or Scene2Inst
-inline BRef *GenerateBuildRefs(ScenePrimitives *scene, Arena *arena, RecordAOSSplits &record)
-{
-    u32 numInstances = scene->numPrimitives;
-    u32 extEnd       = 4 * numInstances;
-    BRef *b          = PushArrayNoZero(arena, BRef, extEnd);
-
-    if (numInstances > PARALLEL_THRESHOLD)
-    {
-        ParallelReduce<RecordAOSSplits>(
-            &record, 0, numInstances, PARALLEL_THRESHOLD,
-            [&](RecordAOSSplits &record, u32 jobID, u32 start, u32 count) {
-                GenerateBuildRefs(b, scene, start, count, record);
-            },
-            [&](RecordAOSSplits &l, const RecordAOSSplits &r) { l.Merge(r); });
-    }
-    else
-    {
-        GenerateBuildRefs(b, scene, 0, numInstances, record);
-    }
-    record.SetRange(0, numInstances, extEnd);
-    return b;
-}
+static const f32 REBRAID_THRESHOLD = .1f;
 
 template <typename Node>
 void SetNodePtr(BRef *ref, Node *node, int childIndex, const ScenePrimitives *scene,
@@ -83,8 +25,6 @@ void SetNodePtr(BRef *ref, Node *node, int childIndex, const ScenePrimitives *sc
         ref->nodePtr = node->Child(childIndex);
     }
 }
-
-static const f32 REBRAID_THRESHOLD = .1f;
 
 template <typename Heuristic, typename GetNode>
 void OpenBraid(const ScenePrimitives *scene, RecordAOSSplits &record, BRef *refs, u32 start,

@@ -262,5 +262,17 @@ struct MemSimdU32<4>
     static Lane4U32 LoadU(void *ptr) { return Lane4U32::LoadU(ptr); }
 };
 
+inline u32 &Set(Lane4U32 &val, u32 index)
+{
+    Assert(index < 4);
+    return val[index];
+}
+
+inline u32 Get(const Lane4U32 &val, u32 index)
+{
+    Assert(index < 4);
+    return val[index];
+}
+
 } // namespace rt
 #endif

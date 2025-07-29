@@ -76,7 +76,6 @@ struct ClusterBuilder
 };
 
 void WriteBits(u32 *data, u32 &position, u32 value, u32 numBits);
-Mesh ConvertQuadToTriangleMesh(Arena *arena, Mesh mesh);
 
 } // namespace rt
 #endif

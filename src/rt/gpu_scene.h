@@ -11,12 +11,6 @@ struct MaterialNode;
 struct Mesh;
 struct PrimitiveIndices;
 
-struct SceneShapeParse
-{
-    CommandBuffer *buffer;
-    Semaphore semaphore;
-};
-
 void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, GeometryType type,
                           string directory, AffineSpace &worldFromRender,
                           AffineSpace &renderFromWorld, Tokenizer &tokenizer,

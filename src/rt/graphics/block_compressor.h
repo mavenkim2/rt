@@ -1,6 +1,7 @@
 #ifndef BLOCK_COMPRESSOR_H_
 #define BLOCK_COMPRESSOR_H_
 
+#include <functional>
 #include "vulkan.h"
 
 namespace rt

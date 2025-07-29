@@ -1,12 +1,10 @@
 #ifndef RT_VULKAN_H
 #define RT_VULKAN_H
 
-#include <functional>
-
 #include "../base.h"
 #include "../bvh/bvh_types.h"
 #include "../containers.h"
-#include "../math/basemath.h"
+#include "../math/math_include.h"
 #include "../platform.h"
 
 #define VK_NO_PROTOTYPES
@@ -24,7 +22,6 @@ namespace rt
 struct AffineSpace;
 struct Instance;
 struct Mesh;
-struct ScenePrimitives;
 
 #define VK_CHECK(check)                                                                       \
     do                                                                                        \
@@ -34,7 +31,6 @@ struct ScenePrimitives;
     } while (0);
 
 static const int numActiveFrames = 1;
-using CopyFunction               = std::function<void(void *)>;
 
 inline u32 GetFormatSize(VkFormat format)
 {
@@ -480,26 +476,6 @@ struct ImageToImageCopy
     Vec3u extent;
 };
 
-struct GPUMesh
-{
-    GPUBuffer buffer;
-
-    u64 deviceAddress;
-    u64 vertexOffset;
-    u64 vertexSize;
-    u64 vertexStride;
-    u64 indexOffset;
-    u64 indexSize;
-    u64 indexStride;
-    u64 normalOffset;
-    u64 normalSize;
-    u64 normalStride;
-
-    u32 numIndices;
-    u32 numVertices;
-    u32 numFaces;
-};
-
 struct GPUAccelerationStructure
 {
     VkAccelerationStructureKHR as;
@@ -774,18 +750,12 @@ struct CommandBuffer
                           u32 maxClusterCountPerAccelerationStructure,
                           u32 maxTotalClusterCount, u32 maxAccelerationStructureCount);
 
-    TransferBuffer CreateTLASInstances(Instance *instances, int numInstances,
-                                       AffineSpace *transforms, ScenePrimitives **childScenes);
     GPUAccelerationStructurePayload BuildTLAS(GPUBuffer *instanceData, u32 numInstances);
-    GPUAccelerationStructurePayload BuildTLAS(Instance *instances, int numInstances,
-                                              AffineSpace *transforms,
-                                              ScenePrimitives **childScenes);
     VkAccelerationStructureKHR BuildTLAS(GPUBuffer *accelBuffer, GPUBuffer *scratchBuffer,
                                          GPUBuffer *instanceData, u32 numInstances);
     VkAccelerationStructureKHR BuildTLAS(GPUBuffer *accelBuffer, GPUBuffer *scratchBuffer,
                                          GPUBuffer *instanceData, GPUBuffer *buildRangeBuffer,
                                          u32 maxInstances);
-    GPUAccelerationStructurePayload BuildBLAS(const GPUMesh *meshes, int count);
     GPUAccelerationStructurePayload BuildCustomBLAS(GPUBuffer *aabbsBuffer, u32 numAabbs);
     void ClearBuffer(GPUBuffer *b, u32 val = 0);
     void ClearImage(GPUImage *image, u32 value, u32 baseMip = 0,

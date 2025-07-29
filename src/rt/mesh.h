@@ -4,6 +4,7 @@
 #include "base.h"
 #include "handles.h"
 #include "bvh/bvh_types.h"
+#include "thread_context.h"
 #include "math/math_include.h"
 
 namespace rt

@@ -1,12 +1,15 @@
 #include "../hash.h"
 #include "../memory.h"
+#include "../math/math_include.h"
+#include "../math/ray.h"
 #include "../thread_context.h"
 #include "../dgfs.h"
 #include "../radix_sort.h"
 #include <atomic>
 #include "../mesh.h"
+#include "../sampling.h"
 #include <cstring>
-#include "../scene.h"
+#include "../scene/scene.h"
 #include "../scene_load.h"
 #include "../bvh/bvh_types.h"
 #include "../bvh/bvh_aos.h"
@@ -4464,7 +4467,8 @@ void Voxelize(Mesh *mesh) // ScenePrimitives *scene)
 {
     ScratchArena scratch;
 
-    // StaticArray<Vec3i> voxels(scratch.temp.arena, );
+    Array<Vec3i> voxels(scratch.temp.arena, 128);
+    f32 voxelSize = 1.f;
 
     for (int triIndex = 0; triIndex < mesh->numIndices / 3; triIndex++)
     {
@@ -4535,27 +4539,104 @@ void Voxelize(Mesh *mesh) // ScenePrimitives *scene)
                         u32 increment = Bsf(bits);
                         Assert(voxelX + increment < maxVoxel[0]);
                         bits &= bits - 1;
-                        // honestly, everything about this seems doable.
-                        // the only thing i'm really worried about is the volumetric
-                        // integration. i don't know how that's going to work
-                        // maybe we should start with that
-                        // everything else i know
-                        // voxelize triangles
-                        // generate a ray from each voxel center, trace against the scene
-                        // if hit, add to a list
-                        // use the hit normals to fit the sggx distribution
-                        // pack bricks into 4x4x4
                     }
                 }
             }
         }
     }
 
+    Arena **arenas = GetArenaArray(scratch.temp.arena);
+
+    ScenePrimitives scene = {};
+    scene.primitives      = mesh;
+    scene.numPrimitives   = 1;
+
+    scene.BuildTriangleBVH(arenas);
+    u32 hitCount = 0;
+
     const u32 numRays = 64;
 
-    for ()
+    struct SGGX
     {
-        bool result = Intersect(GetScene(), );
+        float nxx;
+        float nxy;
+        float nxz;
+
+        float nyy;
+        float nyz;
+
+        float nzz;
+
+        void Add(const Vec3f &n)
+        {
+            nxx += n.x * n.x;
+            nxy += n.x * n.y;
+            nxz += n.x * n.z;
+
+            nyy += n.y * n.y;
+            nyz += n.y * n.z;
+
+            nzz += n.z * n.z;
+        }
+    };
+
+    auto GenerateRay = [&](u32 sampleIndex, float voxelSize, Vec3f &outOrigin, Vec3f &outDir,
+                           float &outTMax) {
+        for (;;)
+        {
+            Vec2f u;
+            Vec3f dir = SampleUniformSphere(u);
+
+            Vec3f tx, ty;
+            CoordinateSystem(dir, &tx, &ty);
+
+            Vec2f disk = SampleUniformDiskConcentric(u);
+            disk *= voxelSize * Sqrt(3) * 0.5f;
+
+            Vec3f invDir = 1.f / dir;
+
+            Vec3f origin = tx * disk.x + ty * disk.y;
+            Vec3f extent = Abs(invDir) * (0.5f * voxelSize);
+            Vec3f center = -origin * invDir;
+
+            Vec3f maxP = center + extent;
+            Vec3f minP = center - extent;
+
+            float minT = Max(minP.x, Max(minP.y, minP.z));
+            float maxT = Min(maxP.x, Min(maxP.y, maxP.z));
+
+            if (minT < maxT)
+            {
+                outOrigin = origin + dir * minT;
+                outTMax   = maxT - minT;
+                break;
+            }
+        }
+    };
+
+    for (Vec3i voxel : voxels)
+    {
+        SGGX sggx;
+        Vec3f voxelCenter = (Vec3f(voxel) + 0.5f) * voxelSize;
+
+        for (u32 sample = 0; sample < numRays; sample++)
+        {
+            SurfaceInteraction si;
+            Ray2 ray;
+
+            GenerateRay(sample, voxelSize, ray.o, ray.d, ray.tFar);
+            ray.o += voxelCenter;
+
+            bool intersect = scene.Intersect(ray, si);
+
+            if (intersect)
+            {
+                Vec3f n = si.n;
+                hitCount++;
+
+                sggx.Add(n);
+            }
+        }
     }
 }
 

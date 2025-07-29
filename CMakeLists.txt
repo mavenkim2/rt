@@ -142,7 +142,6 @@ set (RT_SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/scene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/simd_integrate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/spectrum.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/subdivision.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/parallel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/tests/test.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bvh/bvh_types.cpp
@@ -154,7 +153,12 @@ set (RT_SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/ptex.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bit_packing.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/virtual_geometry/virtual_geometry_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/scene/scene.cpp
 )
+
+if (NOT USE_GPU)
+    list (APPEND RT_SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/subdivision.cpp)
+endif()
 
 set (RT_VULKAN_SOURCE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/graphics/vulkan.cpp
@@ -206,6 +210,8 @@ add_executable(convert
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/virtual_geometry/mesh_simplification.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bit_packing.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/parallel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/scene/scene.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rt/bvh/bvh_types.cpp
 )
 target_include_directories(convert PRIVATE 
     ${PTEX_INCLUDE}

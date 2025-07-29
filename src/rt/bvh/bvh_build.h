@@ -3,6 +3,7 @@
 
 #include "bvh_aos.h"
 #include "bvh_types.h"
+#include "partial_rebraiding.h"
 
 namespace rt
 {
@@ -83,7 +84,7 @@ struct CreateQuantizedNode
         for (int i = 0; i < N; i++)
         {
             bool advance       = offset < numRecords;
-            geomBounds[offset] = LaneF32<N>::Load(&records[offset].geomBounds);
+            geomBounds[offset] = Lane8F32::Load(&records[offset].geomBounds);
             offset += advance;
         }
 

@@ -1,6 +1,5 @@
 #include "bit_packing.h"
 #include "camera.h"
-#include "dgfs.h"
 #include "debug.h"
 #include "graphics/vulkan.h"
 #include "integrate.h"
@@ -22,6 +21,7 @@
 #include "../third_party/nvapi/nvapi.h"
 #include "nvapi.h"
 #include "scene.h"
+#include "scene/scene.h"
 #include "win32.h"
 #include "graphics/ptex.h"
 #include "virtual_geometry/virtual_geometry_manager.h"
@@ -88,90 +88,6 @@ void AddMaterialAndLights(Arena *arena, ScenePrimitives *scene, int sceneID, Geo
         }
     }
     primIndices = PrimitiveIndices(lightHandle, materialHandle, alphaTexture);
-}
-
-// what's next?
-// 1. restir di
-// 3. clas
-//      - are memory savings possible with this? it seems like not really, and that this
-//      just speeds up rebuilds for dynamic/adaptively tessellated geometry. not really
-//      what I need.
-//      - on blackwell there's memory savings
-//      - could not get it to run
-// 4. actual bsdfs and brdfs
-// 5. add other parts of the scene, with actual instancing
-// 6. disney bsdf
-// 7. recycle memory
-// 8. textures
-StaticArray<VkAabbPositionsKHR> CreateAABBForNTriangles(Arena *arena, ClusterBuilder &builder,
-                                                        int numBlocks)
-{
-    u32 N          = TRIANGLES_PER_LEAF;
-    u32 shift      = LOG2_TRIANGLES_PER_LEAF;
-    u32 totalAabbs = MAX_CLUSTER_TRIANGLES >> shift;
-    StaticArray<VkAabbPositionsKHR> aabbs(arena, totalAabbs * numBlocks);
-    PrimRef *refs = builder.primRefs;
-    for (int index = 0; index < builder.threadClusters.Length(); index++)
-    {
-        for (auto *node = builder.threadClusters[index].l.first; node != 0; node = node->next)
-        {
-            for (int i = 0; i < node->count; i++)
-            {
-                RecordAOSSplits &record = node->values[i];
-
-                int numAabbs = (record.count + N - 1) >> shift;
-                for (int j = 0; j < numAabbs; j++)
-                {
-                    VkAabbPositionsKHR aabb;
-                    aabb.minX         = pos_inf;
-                    aabb.minY         = pos_inf;
-                    aabb.minZ         = pos_inf;
-                    aabb.maxX         = neg_inf;
-                    aabb.maxY         = neg_inf;
-                    aabb.maxZ         = neg_inf;
-                    int startRefIndex = record.start + N * j;
-                    for (int subIndex = 0; subIndex < Min(N, record.count - startRefIndex);
-                         subIndex++)
-                    {
-                        int refIndex = startRefIndex + subIndex;
-                        aabb.minX    = Min(aabb.minX, -refs[refIndex].minX);
-                        aabb.minY    = Min(aabb.minY, -refs[refIndex].minY);
-                        aabb.minZ    = Min(aabb.minZ, -refs[refIndex].minZ);
-                        aabb.maxX    = Max(aabb.maxX, refs[refIndex].maxX);
-                        aabb.maxY    = Max(aabb.maxY, refs[refIndex].maxY);
-                        aabb.maxZ    = Max(aabb.maxZ, refs[refIndex].maxZ);
-                    }
-
-                    aabbs.Push(aabb);
-                }
-
-                VkAabbPositionsKHR nullAabb = {};
-                nullAabb.minX               = f32(NaN);
-                for (int remaining = 0; remaining < totalAabbs - numAabbs; remaining++)
-                {
-                    aabbs.Push(nullAabb);
-                }
-            }
-        }
-    }
-    return aabbs;
-}
-
-u32 GetNumTriangles(ClusterBuilder &builder)
-{
-    u32 count = 0;
-    for (int index = 0; index < builder.threadClusters.Length(); index++)
-    {
-        for (auto *node = builder.threadClusters[index].l.first; node != 0; node = node->next)
-        {
-            for (int i = 0; i < node->count; i++)
-            {
-                RecordAOSSplits &record = node->values[i];
-                count += record.count;
-            }
-        }
-    }
-    return count;
 }
 
 void Render(RenderParams2 *params, int numScenes, Image *envMap)
@@ -381,7 +297,7 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             {
                 if (scenes[i]->depth == depth)
                 {
-                    bounds[i] = GetSceneBounds(scenes[i]);
+                    bounds[i] = scenes[i]->GetSceneBounds();
                 }
             }
         });
@@ -406,18 +322,8 @@ void Render(RenderParams2 *params, int numScenes, Image *envMap)
             continue;
         }
 
-        RecordAOSSplits record(neg_inf);
-
         Mesh *meshes = (Mesh *)scene->primitives;
-        if (scene->geometryType == GeometryType::QuadMesh ||
-            scene->geometryType == GeometryType::CatmullClark)
-        {
-            for (int j = 0; j < scene->numPrimitives; j++)
-            {
-                meshes[j] = ConvertQuadToTriangleMesh(sceneScratch.temp.arena, meshes[j]);
-            }
-            scene->geometryType = GeometryType::TriangleMesh;
-        }
+        Assert(scene->geometryType == GeometryType::TriangleMesh);
         blasScenes.Push(scene);
     }
 

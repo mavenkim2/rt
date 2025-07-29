@@ -3,15 +3,17 @@
 
 #include "bxdf.h"
 #include "color.h"
+#include "math/ray.h"
 #include "handles.h"
-#include "math/simd_include.h"
-#include "platform.h"
+#include "math/math_include.h"
 #include "sampler.h"
 #include "spectrum.h"
 #include "surface_interaction.h"
 
 namespace rt
 {
+struct RenderParams2;
+
 static const f32 tMinEpsilon = 0.0001f;
 
 template <typename BxDF>
@@ -37,53 +39,6 @@ struct BSDFBase;
 //         dpdv = Normalize(Cross(ns, dpdu)) * dpdvLength;
 //     }
 // };
-
-static const u32 invalidVolume = 0xffffffff;
-struct Ray2
-{
-    Vec3f o;
-    Vec3f d;
-    f32 tFar;
-    // f32 spread;
-    // f32 radius;
-    Vec3f pxOffset, pyOffset;
-    Vec3f dxOffset, dyOffset;
-
-    u32 volumeIndex = invalidVolume;
-
-    Ray2() {}
-    Ray2(const Vec3f &o, const Vec3f &d) : o(o), d(d) {}
-    Ray2(const Vec3f &o, const Vec3f &d, f32 tFar) : o(o), d(d), tFar(tFar) {}
-    Vec3f operator()(f32 t) const { return o + t * d; }
-};
-
-inline Ray2 Transform(const Mat4 &m, const Ray2 &r)
-{
-    Ray2 newRay     = r;
-    newRay.o        = TransformP(m, r.o);
-    newRay.pxOffset = TransformP(m, r.pxOffset);
-    newRay.pyOffset = TransformP(m, r.pyOffset);
-
-    newRay.d        = TransformV(m, r.d);
-    newRay.dxOffset = TransformV(m, r.dxOffset);
-    newRay.dyOffset = TransformV(m, r.dyOffset);
-
-    return newRay;
-}
-
-inline Ray2 Transform(const AffineSpace &m, const Ray2 &r)
-{
-    Ray2 newRay     = r;
-    newRay.o        = TransformP(m, r.o);
-    newRay.pxOffset = TransformP(m, r.pxOffset);
-    newRay.pyOffset = TransformP(m, r.pyOffset);
-
-    newRay.d        = TransformV(m, r.d);
-    newRay.dxOffset = TransformV(m, r.dxOffset);
-    newRay.dyOffset = TransformV(m, r.dyOffset);
-
-    return newRay;
-}
 
 struct RayDifferential
 {
@@ -180,42 +135,6 @@ struct NEESample
     bool delta;
 };
 
-struct RenderParams2
-{
-    string directory;
-    Vec3f pCamera;
-    Vec3f look;
-    Vec3f up;
-    f32 fov;
-    f32 aspectRatio;
-
-    Mat4 rasterFromCamera;
-    Mat4 cameraFromRaster;
-    AffineSpace renderFromCamera;
-
-    Mat4 NDCFromCamera;
-    Mat4 cameraFromRender;
-
-    AffineSpace renderFromWorld;
-    AffineSpace lightFromRender;
-
-    Arena **arenas;
-    OS_Handle window;
-
-    Vec3f dxCamera;
-    Vec3f dyCamera;
-
-    u32 width;
-    u32 height;
-    Vec2u pixelMin = Vec2u(0, 0);
-    Vec2u pixelMax = Vec2u(0, 0);
-    Vec2f filterRadius;
-    u32 spp;
-    u32 maxDepth;
-    f32 lensRadius  = 0.f;
-    f32 focalLength = 0.f;
-};
-
 // NEESample VolumetricSampleEmitter(const SurfaceInteraction &intr, Ray2 &ray, Sampler
 // sampler,
 //                                   SampledSpectrum beta, const SampledSpectrum &p,
@@ -248,18 +167,6 @@ inline SampledWavelengths SampleVisible(f32 u)
         swl.pdf[i]    = VisibleWavelengthsPDF(swl.lambda[i]);
     }
     return swl;
-}
-
-template <u32 N>
-__forceinline void Transpose(const Lane4F32 lanes[N], Vec3lf<N> &out)
-{
-    if constexpr (N == 1) out = ToVec3f(lanes[0]);
-    else if constexpr (N == 4)
-        Transpose4x3(lanes[0], lanes[1], lanes[2], lanes[3], out.x, out.y, out.z);
-    else if constexpr (N == 8)
-        Transpose8x3(lanes[0], lanes[1], lanes[2], lanes[3], lanes[4], lanes[5], lanes[6],
-                     lanes[7], out.x, out.y, out.z);
-    else Assert(0);
 }
 
 void DefocusBlur(const Vec3f &dIn, const Vec2f &pLens, const f32 focalLength, Vec3f &o,

@@ -5,7 +5,6 @@
 #include "../thread_context.h"
 #include <atomic>
 #include "vulkan.h"
-#include "../scene.h"
 #include "../nvapi.h"
 #include "../../third_party/nvapi/nvapi.h"
 #define VMA_IMPLEMENTATION
@@ -1618,6 +1617,7 @@ GPUBuffer Vulkan::CreateBuffer(VkBufferUsageFlags flags, size_t totalSize, Memor
             createInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         }
         break;
+        default: break;
     }
 
     VK_CHECK(vmaCreateBuffer(allocator, &createInfo, &allocCreateInfo, &buffer.buffer,
@@ -3154,45 +3154,6 @@ void CommandBuffer::BuildPTLAS(GPUBuffer *ptlasBuffer, GPUBuffer *scratchBuffer,
     vkCmdBuildPartitionedAccelerationStructuresNV(buffer, &info);
 }
 
-GPUAccelerationStructurePayload CommandBuffer::BuildBLAS(const GPUMesh *meshes, int count)
-{
-    ScratchArena temp;
-
-    StaticArray<VkAccelerationStructureGeometryKHR> geometries(temp.temp.arena, count);
-    StaticArray<VkAccelerationStructureBuildRangeInfoKHR> buildRanges(temp.temp.arena, count);
-    StaticArray<u32> maxPrimitiveCounts(temp.temp.arena, count);
-
-    VkAccelerationStructureGeometryKHR geometry = {
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
-    geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-    auto &triangles       = geometry.geometry.triangles;
-    triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-
-    for (int i = 0; i < count; i++)
-    {
-        const GPUMesh &mesh             = meshes[i];
-        VkBufferDeviceAddressInfo pInfo = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
-
-        triangles.vertexFormat             = VK_FORMAT_R32G32B32_SFLOAT;
-        triangles.vertexData.deviceAddress = mesh.deviceAddress + mesh.vertexOffset;
-        triangles.vertexStride             = sizeof(Vec3f);
-        triangles.maxVertex                = mesh.numVertices - 1;
-        triangles.indexType                = VK_INDEX_TYPE_UINT32;
-        triangles.indexData.deviceAddress  = mesh.deviceAddress + mesh.indexOffset;
-
-        geometries.Push(geometry);
-
-        int primitiveCount                                 = mesh.numIndices / 3;
-        VkAccelerationStructureBuildRangeInfoKHR rangeInfo = {};
-        rangeInfo.primitiveCount                           = primitiveCount;
-        buildRanges.Push(rangeInfo);
-        maxPrimitiveCounts.Push(primitiveCount);
-    }
-
-    return BuildAS(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, geometries.data,
-                   geometries.Length(), buildRanges.data, maxPrimitiveCounts.data);
-}
-
 GPUAccelerationStructurePayload CommandBuffer::BuildTLAS(GPUBuffer *instanceData,
                                                          u32 numInstances)
 {
@@ -3208,17 +3169,6 @@ GPUAccelerationStructurePayload CommandBuffer::BuildTLAS(GPUBuffer *instanceData
 
     return BuildAS(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, &geometry, 1, &buildRange,
                    &numInstances);
-}
-
-GPUAccelerationStructurePayload CommandBuffer::BuildTLAS(Instance *instances, int numInstances,
-                                                         AffineSpace *transforms,
-                                                         ScenePrimitives **childScenes)
-{
-    auto tlasBuffer = CreateTLASInstances(instances, numInstances, transforms, childScenes);
-    Barrier(&tlasBuffer.buffer, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
-
-    return BuildTLAS(&tlasBuffer.buffer, numInstances);
 }
 
 VkAccelerationStructureKHR CommandBuffer::BuildTLAS(GPUBuffer *accelBuffer,
@@ -3288,34 +3238,6 @@ VkAccelerationStructureKHR CommandBuffer::BuildTLAS(GPUBuffer *accelBuffer,
     vkCmdBuildAccelerationStructuresIndirectKHR(buffer, 1, &buildInfo, &indirectDeviceAddress,
                                                 &indirectStride, ppMaxPrimitiveCounts);
     return as;
-}
-
-TransferBuffer CommandBuffer::CreateTLASInstances(Instance *instances, int numInstances,
-                                                  AffineSpace *transforms,
-                                                  ScenePrimitives **childScenes)
-{
-    ScratchArena scratch;
-    VkAccelerationStructureInstanceKHR *vkInstances =
-        PushArrayNoZero(scratch.temp.arena, VkAccelerationStructureInstanceKHR, numInstances);
-    for (int instanceIndex = 0; instanceIndex < numInstances; instanceIndex++)
-    {
-        VkAccelerationStructureInstanceKHR &vkInstance = vkInstances[instanceIndex];
-        Instance &instance                             = instances[instanceIndex];
-        vkInstance.transform           = ConvertMatrix(transforms[instance.transformIndex]);
-        vkInstance.instanceCustomIndex = childScenes[instance.id]->gpuInstanceID;
-        vkInstance.mask                = 0xff;
-        vkInstance.instanceShaderBindingTableRecordOffset = 0;
-        vkInstance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-        vkInstance.accelerationStructureReference = childScenes[instance.id]->gpuBVH.address;
-    }
-
-    auto tlasBuffer =
-        SubmitBuffer(vkInstances,
-                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-                     numInstances * sizeof(VkAccelerationStructureInstanceKHR));
-
-    return tlasBuffer;
 }
 
 void Vulkan::GetClusterBuildSizes(CLASOpInput opInput, CLASOpMode opMode, CLASOpType opType,

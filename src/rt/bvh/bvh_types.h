@@ -437,16 +437,6 @@ typedef BuildRef<4> BuildRef4;
 typedef BuildRef<8> BuildRef8;
 
 template <i32 N>
-struct AABBNode
-{
-};
-
-template <i32 N>
-struct OrientedBBNode
-{
-};
-
-template <i32 N>
 struct QuantizedNode
 {
     StaticAssert(N == 4 || N == 8, NMustBe4Or8);
@@ -489,7 +479,7 @@ struct QuantizedNode
                                  LaneF32<N> &outMaxX, LaneF32<N> &outMaxY,
                                  LaneF32<N> &outMaxZ) const
     {
-        ::GetBounds(this, outMinX, outMinY, outMinZ, outMaxX, outMaxY, outMaxZ);
+        rt::GetBounds(this, outMinX, outMinY, outMinZ, outMaxX, outMaxY, outMaxZ);
     }
 
     LaneF32<N> GetValid() const
@@ -497,8 +487,10 @@ struct QuantizedNode
         const Lane8F32 compare = AsFloat(Lane8U32(BVHNode<N>::tyEmpty));
         if constexpr (N == 4)
         {
-            Assert(0);
-            // Lane8U32 lane = Lane8U32::LoadU(children);
+            Lane8F32 lane1 = Abs(Lane8F32::LoadU(children));
+            Lane8F32 r1 = Shuffle<0, 2, 4, 6, 0, 0, 0, 0>(lane1 > compare);
+            return Extract4<0>(r1);
+
         }
         else
         {
@@ -660,7 +652,7 @@ struct CompressedLeafNode
                                  LaneF32<N> &outMaxX, LaneF32<N> &outMaxY,
                                  LaneF32<N> &outMaxZ) const
     {
-        ::GetBounds(this, outMinX, outMinY, outMinZ, outMaxX, outMaxY, outMaxZ);
+        rt::GetBounds(this, outMinX, outMinY, outMinZ, outMaxX, outMaxY, outMaxZ);
     }
     BVHNode<N> Child(u32 index) const { return BVHNode<N>(index); }
     u32 GetType(u32 childIndex) const

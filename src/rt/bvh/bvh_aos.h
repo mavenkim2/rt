@@ -1,6 +1,9 @@
 #ifndef BVH_AOS_H
 #define BVH_AOS_H
+
 #include "bvh_types.h"
+#include "../mesh.h"
+#include "../thread_context.h"
 #include <atomic>
 #include <utility>
 

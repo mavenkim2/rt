@@ -1,30 +1,20 @@
 #ifndef SCENE_H
 #define SCENE_H
 
-#include "bvh/bvh_types.h"
 #include "bxdf.h"
-#ifdef USE_GPU
-#include "gpu_scene.h"
-#else
-#include "cpu_scene.h"
-#endif
 #include "handles.h"
 #include "lights.h"
-#include "parallel.h"
 #include "mesh.h"
-#include "scene_load.h"
+#include "math/math_include.h"
+#include "platform.h"
+#include "scene/scene.h"
 #include "subdivision.h"
-#include <nanovdb/NanoVDB.h>
-#include <nanovdb/util/GridHandle.h>
-#include <nanovdb/util/IO.h>
-#include <nanovdb/util/SampleFromVoxels.h>
 #include <Ptexture.h>
 
-// #include "lights.h"
 namespace rt
 {
+
 struct Image;
-struct RenderParams2;
 struct GPUMaterial;
 
 enum class IndexType
@@ -34,12 +24,7 @@ enum class IndexType
     u32,
 };
 
-#ifdef USE_GPU
-typedef GPUMesh MeshType;
-#else
-typedef Mesh MeshType;
-#endif
-
+#if 0
 struct Volume
 {
     u32 shapeIndex;
@@ -79,6 +64,7 @@ struct NanoVDBBuffer
         ptr       = 0;
     }
 };
+#endif
 
 inline f32 HenyeyGreenstein(f32 cosTheta, f32 g)
 {
@@ -142,6 +128,8 @@ struct PhaseFunction
     }
     f32 PDF(Vec3f wo, Vec3f wi) const { return HenyeyGreenstein(wo, wi, g); }
 };
+
+#if 0
 
 struct NanoVDBVolume
 {
@@ -284,14 +272,7 @@ struct NanoVDBVolume
         cMaj = datum.cMaj;
     }
 };
-
-struct Instance
-{
-    // TODO: materials
-    u32 id;
-    // GeometryID geomID;
-    u32 transformIndex;
-};
+#endif
 
 ////////////////////////////////////////////////////////
 
@@ -540,29 +521,6 @@ struct CoatedDiffuseMaterial : Material
     virtual MaterialTypes GetType() override { return MaterialTypes::CoatedDiffuse; }
 };
 
-struct PrimitiveIndices
-{
-    // TODO: these are actaully ids (type + index)
-    LightHandle lightID;
-    // u32 volumeIndex;
-    MaterialHandle materialID;
-    Texture *alphaTexture;
-
-    PrimitiveIndices() {}
-    PrimitiveIndices(LightHandle lightID, MaterialHandle materialID)
-        : lightID(lightID), materialID(materialID), alphaTexture(0)
-    {
-    }
-    PrimitiveIndices(LightHandle lightID, MaterialHandle materialID, Texture *alpha)
-        : lightID(lightID), materialID(materialID), alphaTexture(alpha)
-    {
-    }
-};
-
-struct Ray2;
-template <i32 K>
-struct SurfaceInteractions;
-
 enum class ColorEncoding
 {
     None,
@@ -629,85 +587,6 @@ struct SceneDebug
 static thread_local SceneDebug debug_;
 inline SceneDebug *GetDebug() { return &debug_; }
 
-struct TessellationParams
-{
-    Bounds bounds;
-    AffineSpace transform;
-    f64 currentMinDistance;
-    Mutex mutex;
-};
-
-struct ShapeSample
-{
-    Vec3f p;
-    Vec3f n;
-    Vec3f w;
-    f32 pdf;
-};
-
-template <int N>
-struct StackEntry;
-
-struct ScenePrimitives
-{
-    static const int maxSceneDepth = 4;
-#ifndef USE_GPU
-    typedef bool (*IntersectFunc)(ScenePrimitives *, StackEntry<DefaultN>, Ray2 &,
-                                  SurfaceInteractions<1> &);
-    typedef bool (*OccludedFunc)(ScenePrimitives *, StackEntry<DefaultN>, Ray2 &);
-#endif
-
-    string filename;
-
-    GeometryType geometryType;
-
-    Vec3f boundsMin;
-    Vec3f boundsMax;
-    BVHNodeN nodePtr;
-
-#ifdef USE_GPU
-    GPUAccelerationStructure gpuBVH;
-    Semaphore semaphore;
-#endif
-
-    // NOTE: is one of PrimitiveType
-    void *primitives;
-    int bvhPrimSize;
-
-    // NOTE: only set if not a leaf node in the scene hierarchy
-    union
-    {
-        ScenePrimitives **childScenes;
-        TessellationParams *tessellationParams;
-    };
-    u32 numChildScenes;
-    AffineSpace *affineTransforms;
-    PrimitiveIndices *primIndices;
-
-    std::atomic<int> depth;
-    u32 numTransforms;
-#ifndef USE_GPU
-    IntersectFunc intersectFunc;
-    OccludedFunc occludedFunc;
-#endif
-    u32 numPrimitives, numFaces;
-
-    int sceneIndex;
-    int gpuInstanceID;
-
-    ScenePrimitives() {}
-    Bounds GetBounds() const { return Bounds(Lane4F32(boundsMin), Lane4F32(boundsMax)); }
-    void SetBounds(const Bounds &inBounds)
-    {
-        boundsMin = ToVec3f(inBounds.minP);
-        boundsMax = ToVec3f(inBounds.maxP);
-    }
-
-    ShapeSample SampleQuad(SurfaceInteraction &intr, Vec2f &u, AffineSpace *transform,
-                           int geomID);
-    ShapeSample Sample(SurfaceInteraction &intr, AffineSpace *space, Vec2f &u, int geomID);
-};
-
 struct Scene
 {
     ScenePrimitives scene;
@@ -738,18 +617,6 @@ struct Scene
 extern Scene *scene_;
 inline Scene *GetScene() { return scene_; }
 
-extern ScenePrimitives **scenes_;
-inline ScenePrimitives **GetScenes() { return scenes_; }
-inline void SetScenes(ScenePrimitives **scenes) { scenes_ = scenes; }
-
-inline Mesh *GetMesh(int sceneID, int geomID)
-{
-    Assert(scenes_);
-    ScenePrimitives *s = scenes_[sceneID];
-    Assert(s->geometryType != GeometryType::Instance);
-    return (Mesh *)s->primitives + geomID;
-}
-
 struct MaterialNode
 {
     string str;
@@ -760,23 +627,47 @@ struct MaterialNode
     bool operator==(string s) const { return s == str; }
 };
 
+struct RenderParams2
+{
+    string directory;
+    Vec3f pCamera;
+    Vec3f look;
+    Vec3f up;
+    f32 fov;
+    f32 aspectRatio;
+
+    Mat4 rasterFromCamera;
+    Mat4 cameraFromRaster;
+    AffineSpace renderFromCamera;
+
+    Mat4 NDCFromCamera;
+    Mat4 cameraFromRender;
+
+    AffineSpace renderFromWorld;
+    AffineSpace lightFromRender;
+
+    Arena **arenas;
+    OS_Handle window;
+
+    Vec3f dxCamera;
+    Vec3f dyCamera;
+
+    u32 width;
+    u32 height;
+    Vec2u pixelMin = Vec2u(0, 0);
+    Vec2u pixelMax = Vec2u(0, 0);
+    Vec2f filterRadius;
+    u32 spp;
+    u32 maxDepth;
+    f32 lensRadius  = 0.f;
+    f32 focalLength = 0.f;
+};
+
 typedef HashMap<MaterialNode> MaterialHashMap;
 
-#ifndef USE_GPU
-void BuildTLASBVH(Arena **arenas, ScenePrimitives *scene);
-
-template <GeometryType type>
-void BuildBVH(Arena **arenas, ScenePrimitives *scene);
-void BuildQuadBVH(Arena **arenas, ScenePrimitives *scene);
-void BuildTriangleBVH(Arena **arenas, ScenePrimitives *scene);
-void BuildCatClarkBVH(Arena **arenas, ScenePrimitives *scene);
 template <GeometryType type>
 void ComputeTessellationParams(Mesh *meshes, TessellationParams *params, u32 start, u32 count);
 
-void BuildSceneBVHs(Arena **arenas, ScenePrimitives *scene, const Mat4 &NDCFromCamera,
-                    const Mat4 &cameraFromRender, int screenHeight);
-#endif
-Bounds GetSceneBounds(ScenePrimitives *scene);
 void Render(RenderParams2 *params, int numScenes, Image *envMap);
 
 int LoadScene(RenderParams2 *params, Arena **tempArenas, string directory, string filename);

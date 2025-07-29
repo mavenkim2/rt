@@ -5,6 +5,8 @@
 namespace rt
 {
 
+struct ScenePrimitives;
+
 struct UntessellatedPatch
 {
     int faceID;
@@ -356,7 +358,6 @@ struct OpenSubdivMesh
     u32 GetNumFaces() const { return untessellatedPatches.Length() + patches.Length(); }
 };
 
-struct ScenePrimitives;
 OpenSubdivMesh *AdaptiveTessellation(Arena **arenas, ScenePrimitives *scene,
                                      const Mat4 &NDCFromCamera, const Mat4 &cameraFromRender,
                                      int screenHeight, struct TessellationParams *params,

@@ -86,6 +86,11 @@ struct SGGX
         wm = wm.x * wk + wm.y * wj + wm.z * w;
         return wm;
     }
+
+    float PhaseFunction(float3 wm, float3 wi)
+    {
+        return InvPi * dot(wm, wi);
+    }
 };
 
 
@@ -115,20 +120,50 @@ void Something(float3 pos, float3 dir, float t, uint primitiveIndex, RNG &rng, i
     int3 voxel = int3(intersectPos * rcpVoxelSize) - brick.minP;
     float startT = 0.f;
 
+    int3 step = 0;
+    step.x = dir.x > 0.f ? 1 : -1;
+    step.y = dir.y > 0.f ? 1 : -1;
+    step.z = dir.z > 0.f ? 1 : -1;
+
     int3 checkStep = 0;
     checkStep.x = dir.x > 0.f ? 1 : 0;
     checkStep.y = dir.y > 0.f ? 1 : 0;
     checkStep.z = dir.z > 0.f ? 1 : 0;
 
     float3 invDir;
-    float3 next = float3(voxel + checkStep) * invDir;
+
+    float3 deltaT = 1.f / (abs(dir) * );
+    float3 nextT = float3(voxel + checkStep) * invDir;
 
     bool terminated = false;
 
-    for (;;)
+    for (int test = 0; test < 10; test++)
     {
         int voxelIndex = (voxel.z * 4 + voxel.y) * 4 + voxel.x;
         SGGX sggx;
+
+        uint64_t bitMask = brick.bitMask;
+
+        if ((bitMask >> voxelIndex) & 1) break;
+
+        float minT = nextCrossingT.x;
+        int axis = 0;
+        if (nextCrossingT.y > minT)
+        {
+            minT = nextCrossingT.y;
+            axis = 1;
+        }
+        if (nextCrossingT.z > minT)
+        {
+            minT = nextCrossingT.z;
+            axis = 2;
+        }
+
+        voxel[axis] += step[axis];
+        nextCrossingT[axis] += deltaT[axis];
+    }
+
+#if 0
         for (;;)
         {
             float nextT = min(next.x, next.y, next.z);
@@ -154,8 +189,13 @@ void Something(float3 pos, float3 dir, float t, uint primitiveIndex, RNG &rng, i
                     float3 wm = sggx.SampleSGGX(-dir, rng.Uniform);
                     float3 newDir = SampleCosineHemisphere(rng.Uniform2D());
 
-                    CoordinateSystem(w, wk, wj);
-                    throughput *= ?;
+                    // TODO: I'm pretty sure the PDF and the phase function cancel?
+                    //float phase = sggx.PhaseFunction(wm, newDir);
+
+                    //float3 wx, wy;
+                    //CoordinateSystem(wm, wx, wy);
+
+                    //throughput *= phase;
                 }
                 else 
                 {
@@ -168,7 +208,5 @@ void Something(float3 pos, float3 dir, float t, uint primitiveIndex, RNG &rng, i
                 break;
             }
         }
-
-        float nextCrossingT = ?;
-    }
+#endif
 }

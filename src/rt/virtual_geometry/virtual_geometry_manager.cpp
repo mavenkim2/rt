@@ -8,6 +8,7 @@
 #include "../thread_context.h"
 #include "virtual_geometry_manager.h"
 #include "../graphics/vulkan.h"
+#include "../parallel.h"
 #include "../scene.h"
 #include "../bvh/bvh_aos.h"
 #include "../bvh/partial_rebraiding.h"

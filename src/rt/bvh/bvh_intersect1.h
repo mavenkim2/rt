@@ -1,7 +1,11 @@
 #ifndef BVH_INTERSECT1_H
 #define BVH_INTERSECT1_H
+
 #include "bvh_types.h"
-#include "../scene.h"
+#include "../surface_interaction.h"
+#include "../scene/scene.h"
+#include "../math/ray.h"
+#include "../math/transpose.h"
 #include <immintrin.h>
 #include <xmmintrin.h>
 
@@ -208,7 +212,7 @@ struct BVHTraverser<4, types, Prim>
     static void Traverse(StackEntry entry, StackEntry *stack, i32 &stackPtr, TravRay<4> &ray)
     {
         Lane4F32 tEntry, mask;
-        auto node = GetNode<4, types>{}(entry);
+        auto node = GetNode<4, types, StackEntry>{}(entry);
         Intersect(node, ray, tEntry, mask);
 
         const i32 intersectFlags = Movemask(mask);
@@ -257,7 +261,7 @@ struct BVHTraverser<4, types, Prim>
     static void TraverseAny(StackEntry &entry, StackEntry *stack, i32 &stackPtr,
                             TravRay<4> &ray)
     {
-        auto node = GetNode<4, types>{}(entry);
+        auto node = GetNode<4, types, StackEntry>{}(entry);
         Lane4F32 tEntry, mask;
         Intersect(node, ray, tEntry, mask);
         i32 intersectFlags = Movemask(mask);
@@ -564,8 +568,8 @@ struct BVHIntersector
             // if (entry.IsLeaf())
             while (!entry.IsLeaf())
             {
-                bool entryNotReplaced =
-                    BVHTraverser<K, types, Prim>::Traverse(entry, stack, stackPtr, r);
+                bool entryNotReplaced = true;
+                BVHTraverser<K, types, Prim>::Traverse(entry, stack, stackPtr, r);
                 Assert(entry.ptr.data && entry.ptr.data != BVHNode<K>::tyEmpty);
                 if (entryNotReplaced || entry.dist > ray.tFar) goto top;
             }
@@ -1002,7 +1006,7 @@ struct QuadIntersectorBase<N, Prim<N>>
                 Select(mask, AsFloat(MemSimdU32<N>::LoadU(primIDs)), AsFloat(itr.primIDs)));
             outMask |= mask;
 
-            mask        = TriangleIntersect(r, itr.t, triV0, triV2, triV3, triItr);
+            mask        = TriangleIntersect<N>(r, itr.t, triV0, triV2, triV3, triItr);
             triMask     = Select(mask, trueMask, triMask);
             itr.u       = Select(mask, triItr.u, itr.u);
             itr.v       = Select(mask, triItr.v, itr.v);
@@ -1083,6 +1087,7 @@ struct QuadIntersectorBase<N, Prim<N>>
     }
 };
 
+#ifndef USE_GPU
 struct CatClarkPatchIntersector
 {
     typedef CatmullClarkPatch Primitive;
@@ -1450,6 +1455,7 @@ struct CatClarkPatchIntersector
         return Intersect(scene, ray, primitives, num, si, r);
     }
 };
+#endif
 
 template <i32 N>
 using TriangleIntersector = TriangleIntersectorBase<N, Triangle<N>>;
@@ -1620,26 +1626,22 @@ struct CompressedLeafIntersector
 
 template <i32 K, i32 N, i32 types>
 using BVHTriangleIntersector = BVHIntersector<K, types, TriangleIntersector<N>>;
-typedef BVHTriangleIntersector<4, 1, BVH_QN> BVH4TriangleIntersector1;
-typedef BVHTriangleIntersector<4, 8, BVH_QN> BVH4TriangleIntersector8;
+typedef BVHTriangleIntersector<4, 4, BVH_QN> BVH4TriangleIntersector4;
 typedef BVHTriangleIntersector<8, 8, BVH_QN> BVH8TriangleIntersector8;
 
 template <i32 K, i32 N, i32 types>
 using BVHTriangleIntersectorCmp = BVHIntersector<K, types, TriangleIntersectorCmp<N>>;
-typedef BVHTriangleIntersectorCmp<4, 1, BVH_QN> BVH4TriangleIntersectorCmp1;
-typedef BVHTriangleIntersectorCmp<4, 8, BVH_QN> BVH4TriangleIntersectorCmp8;
+typedef BVHTriangleIntersectorCmp<4, 4, BVH_QN> BVH4TriangleIntersectorCmp4;
 typedef BVHTriangleIntersectorCmp<8, 8, BVH_QN> BVH8TriangleIntersectorCmp8;
 
 template <i32 K, i32 N, i32 types>
 using BVHQuadIntersector = BVHIntersector<K, types, QuadIntersector<N>>;
-typedef BVHQuadIntersector<4, 1, BVH_QN> BVH4QuadIntersector1;
-typedef BVHQuadIntersector<4, 8, BVH_QN> BVH4QuadIntersector8;
+typedef BVHQuadIntersector<4, 4, BVH_QN> BVH4QuadIntersector4;
 typedef BVHQuadIntersector<8, 8, BVH_QN> BVH8QuadIntersector8;
 
 template <i32 K, i32 N, i32 types>
 using BVHQuadIntersectorCmp = BVHIntersector<K, types, QuadIntersectorCmp<N>>;
-typedef BVHQuadIntersectorCmp<4, 1, BVH_QN> BVH4QuadIntersectorCmp1;
-typedef BVHQuadIntersectorCmp<4, 8, BVH_QN> BVH4QuadIntersectorCmp8;
+typedef BVHQuadIntersectorCmp<4, 4, BVH_QN> BVH4QuadIntersectorCmp4;
 typedef BVHQuadIntersectorCmp<8, 8, BVH_QN> BVH8QuadIntersectorCmp8;
 
 template <i32 K, i32 types>
@@ -1647,9 +1649,11 @@ using BVHInstanceIntersector = BVHIntersector<K, types, InstanceIntersector>;
 typedef BVHInstanceIntersector<4, BVH_QN> BVH4InstanceIntersector;
 typedef BVHInstanceIntersector<8, BVH_QN> BVH8InstanceIntersector;
 
+#ifndef USE_GPU
 template <i32 K, i32 types>
 using CatClarkIntersector = BVHIntersector<K, types, CatClarkPatchIntersector>;
 typedef CatClarkIntersector<8, BVH_QN> BVH8PatchIntersector;
+#endif
 
 #else
 
@@ -1658,28 +1662,28 @@ template <i32 K, i32 N, i32 types>
 using BVHTriangleIntersector =
     BVHIntersector<K, types, CompressedLeafIntersector<K, TriangleIntersector<N>>>;
 typedef BVHTriangleIntersector<4, 1, BVH_QN> BVH4TriangleIntersector1;
-typedef BVHTriangleIntersector<4, 8, BVH_QN> BVH4TriangleIntersector8;
+typedef BVHTriangleIntersector<4, 4, BVH_QN> BVH4TriangleIntersector4;
 typedef BVHTriangleIntersector<8, 8, BVH_QN> BVH8TriangleIntersector8;
 
 template <i32 K, i32 N, i32 types>
 using BVHTriangleIntersectorCmp =
     BVHIntersector<K, types, CompressedLeafIntersector<K, TriangleIntersectorCmp<N>>>;
 typedef BVHTriangleIntersectorCmp<4, 1, BVH_QN> BVH4TriangleIntersectorCmp1;
-typedef BVHTriangleIntersectorCmp<4, 8, BVH_QN> BVH4TriangleIntersectorCmp8;
+typedef BVHTriangleIntersectorCmp<4, 4, BVH_QN> BVH4TriangleIntersectorCmp4;
 typedef BVHTriangleIntersectorCmp<8, 8, BVH_QN> BVH8TriangleIntersectorCmp8;
 
 template <i32 K, i32 N, i32 types>
 using BVHQuadIntersector =
     BVHIntersector<K, types, CompressedLeafIntersector<K, QuadIntersector<N>>>;
 typedef BVHQuadIntersector<4, 1, BVH_QN> BVH4QuadIntersector1;
-typedef BVHQuadIntersector<4, 8, BVH_QN> BVH4QuadIntersector8;
+typedef BVHQuadIntersector<4, 4, BVH_QN> BVH4QuadIntersector4;
 typedef BVHQuadIntersector<8, 8, BVH_QN> BVH8QuadIntersector8;
 
 template <i32 K, i32 N, i32 types>
 using BVHQuadIntersectorCmp =
     BVHIntersector<K, types, CompressedLeafIntersector<K, QuadIntersectorCmp<N>>>;
 typedef BVHQuadIntersectorCmp<4, 1, BVH_QN> BVH4QuadIntersectorCmp1;
-typedef BVHQuadIntersectorCmp<4, 8, BVH_QN> BVH4QuadIntersectorCmp8;
+typedef BVHQuadIntersectorCmp<4, 4, BVH_QN> BVH4QuadIntersectorCmp4;
 typedef BVHQuadIntersectorCmp<8, 8, BVH_QN> BVH8QuadIntersectorCmp8;
 
 template <i32 K, i32 types>
@@ -1688,10 +1692,12 @@ using BVHInstanceIntersector =
 typedef BVHInstanceIntersector<4, BVH_QN> BVH4InstanceIntersector;
 typedef BVHInstanceIntersector<8, BVH_QN> BVH8InstanceIntersector;
 
+#ifndef USE_GPU
 template <i32 K, i32 types>
 using CatClarkIntersector =
     BVHIntersector<K, types, CompressedLeafIntersector<K, CatClarkPatchIntersector>>;
 typedef CatClarkIntersector<8, BVH_QN> BVH8PatchIntersector;
+#endif
 #endif
 
 // Helpers
@@ -1701,25 +1707,25 @@ struct IntersectorHelperBase;
 template <>
 struct IntersectorHelperBase<4, GeometryType::TriangleMesh, PrimRefCompressed>
 {
-    using IntersectorType = BVH4TriangleIntersectorCmp8;
+    using IntersectorType = BVH4TriangleIntersectorCmp4;
 };
 
 template <>
 struct IntersectorHelperBase<4, GeometryType::TriangleMesh, PrimRef>
 {
-    using IntersectorType = BVH4TriangleIntersector8;
+    using IntersectorType = BVH4TriangleIntersector4;
 };
 
 template <>
 struct IntersectorHelperBase<4, GeometryType::QuadMesh, PrimRefCompressed>
 {
-    using IntersectorType = BVH4QuadIntersectorCmp8;
+    using IntersectorType = BVH4QuadIntersectorCmp4;
 };
 
 template <>
 struct IntersectorHelperBase<4, GeometryType::QuadMesh, PrimRef>
 {
-    using IntersectorType = BVH4QuadIntersector8;
+    using IntersectorType = BVH4QuadIntersector4;
 };
 
 template <>
@@ -1758,13 +1764,15 @@ struct IntersectorHelperBase<8, GeometryType::Instance, BRef>
     using IntersectorType = BVH8InstanceIntersector;
 };
 
+#ifndef USE_GPU
 template <>
 struct IntersectorHelperBase<8, GeometryType::CatmullClark, PrimRef>
 {
     using IntersectorType = BVH8PatchIntersector;
 };
+#endif
 
-#ifdef USE_BVH4 
+#ifdef USE_BVH4
 template <GeometryType type, typename PrimRefType>
 using IntersectorHelper = IntersectorHelperBase<4, type, PrimRefType>;
 #elif defined(USE_BVH8)

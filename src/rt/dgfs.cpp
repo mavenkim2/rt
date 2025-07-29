@@ -2,16 +2,15 @@
 #include "bit_packing.h"
 #include "containers.h"
 #include "math/basemath.h"
-#include "scene.h"
 #include "bvh/bvh_aos.h"
 #include "bvh/bvh_types.h"
 #include "shader_interop/dense_geometry_shaderinterop.h"
 #include "shader_interop/ray_shaderinterop.h"
+#include "parallel.h"
 #include "mesh.h"
 #include "dgfs.h"
 #include "graphics/ptex.h"
 #include "memory.h"
-#include "scene.h"
 #include "thread_context.h"
 #include "platform.h"
 #include <type_traits>
@@ -115,39 +114,6 @@ void ClusterBuilder::BuildClusters(RecordAOSSplits &record, bool parallel, u32 m
             BuildClusters(childRecords[i], false, maxTriangles);
         }
     }
-}
-
-Mesh ConvertQuadToTriangleMesh(Arena *arena, Mesh mesh)
-{
-    Assert(mesh.numFaces * 4 == mesh.numIndices);
-    u32 newNumIndices = mesh.numIndices / 4 * 6;
-    u32 *newIndices   = PushArrayNoZero(arena, u32, mesh.numIndices / 4 * 6);
-
-    u32 *faceIDs = PushArrayNoZero(arena, u32, mesh.numFaces * 2);
-    for (int faceIndex = 0; faceIndex < mesh.numFaces; faceIndex++)
-    {
-        u32 id0 = mesh.indices[4 * faceIndex + 0];
-        u32 id1 = mesh.indices[4 * faceIndex + 1];
-        u32 id2 = mesh.indices[4 * faceIndex + 2];
-        u32 id3 = mesh.indices[4 * faceIndex + 3];
-
-        u32 *writeIndices = newIndices + 6 * faceIndex;
-
-        writeIndices[0]            = id0;
-        writeIndices[1]            = id1;
-        writeIndices[2]            = id2;
-        writeIndices[3]            = id0;
-        writeIndices[4]            = id2;
-        writeIndices[5]            = id3;
-        faceIDs[2 * faceIndex + 0] = faceIndex;
-        faceIDs[2 * faceIndex + 1] = faceIndex;
-    }
-    Mesh result       = mesh;
-    result.indices    = newIndices;
-    result.numIndices = newNumIndices;
-    result.numFaces   = mesh.numFaces * 2;
-    result.faceIDs    = faceIDs;
-    return result;
 }
 
 void ClusterBuilder::CreateDGFs(const StaticArray<u32> &materialIDs,

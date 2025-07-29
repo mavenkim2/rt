@@ -277,6 +277,11 @@ __forceinline Lane4F32 operator^(const Lane4F32 &a, const Lane4F32 &b)
 {
     return _mm_xor_ps(a, b);
 }
+__forceinline Lane4F32 operator^=(Lane4F32 &a, const Lane4F32 &b)
+{
+    a = a ^ b;
+    return a;
+}
 __forceinline Lane4F32 operator<(const Lane4F32 &a, const Lane4F32 &b)
 {
     return _mm_cmplt_ps(a, b);
@@ -537,6 +542,11 @@ __forceinline Lane4F32 Round(const Lane4F32 &lane)
     return Lane4F32(roundf(lane[0]), roundf(lane[1]), roundf(lane[2]), roundf(lane[3]));
 }
 #endif
+
+__forceinline Lane4U32 AsUInt(const Lane4F32 &l)
+{
+     return _mm_castps_si128(l);
+}
 
 __forceinline Lane4U32 Flooru(Lane4F32 lane) { return _mm_cvtps_epi32(Floor(lane)); }
 

@@ -1,11 +1,10 @@
 #include "integrate.h"
 #include "base.h"
 #include "bxdf.h"
-#include "bvh/bvh_intersect1.h"
+// #include "bvh/bvh_intersect1.h"
 #include "lights.h"
 #include "bsdf.h"
-#include "math/basemath.h"
-#include "math/simd_base.h"
+#include "parallel.h"
 #include "rt.h"
 #include "scene.h"
 #include "spectrum.h"
@@ -314,12 +313,7 @@ Vec3f OffsetRayOrigin(const Vec3f &p, const Vec3f &err, const Vec3f &n, const Ve
     return outP;
 }
 
-bool Occluded(Scene *scene, Ray2 &ray)
-{
-    Assert(scene->scene.occludedFunc);
-    return scene->scene.occludedFunc(&scene->scene, StackEntry(scene->scene.nodePtr, ray.tFar),
-                                     ray);
-}
+bool Occluded(Scene *scene, Ray2 &ray) { return scene->scene.Occluded(ray); }
 bool Occluded(Scene *scene, Ray2 &r, SurfaceInteraction &si, LightSample &ls)
 {
     Vec3f from = OffsetRayOrigin(si.p, si.pError, si.n, ls.wi);
@@ -331,9 +325,7 @@ bool Occluded(Scene *scene, Ray2 &r, SurfaceInteraction &si, LightSample &ls)
 
 bool Intersect(Scene *scene, Ray2 &ray, SurfaceInteraction &si)
 {
-    Assert(scene->scene.intersectFunc);
-    return scene->scene.intersectFunc(&scene->scene,
-                                      StackEntry(scene->scene.nodePtr, ray.tFar), ray, si);
+    return scene->scene.Intersect(ray, si);
 }
 
 // Non physical solution that allows NEE to pass through transmissive surfaces

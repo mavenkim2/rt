@@ -5,8 +5,9 @@
 #include "../bit_packing.h"
 #include "../string.h"
 #include "../radix_sort.h"
-#include "../scene.h"
-#include "../integrate.h"
+#include "../parallel.h"
+// #include "../scene.h"
+// #include "../integrate.h"
 #include "vulkan.h"
 #include "ptex.h"
 #include <Ptexture.h>
@@ -357,12 +358,12 @@ void Convert(string filename)
     const u32 log2TexelWidth         = Log2Int(texelWidthPerPage);
     const u32 totalTexelWidthPerPage = 128 + 2 * borderSize;
 
-    const VkFormat baseFormat    = VK_FORMAT_R8G8B8A8_UNORM;
-    const VkFormat blockFormat   = VK_FORMAT_BC1_RGB_UNORM_BLOCK;
-    const u32 bytesPerTexel      = GetFormatSize(baseFormat);
-    const u32 bytesPerBlock      = GetFormatSize(blockFormat);
-    const u32 blockSize          = GetBlockSize(blockFormat);
-    const u32 log2BlockSize      = Log2Int(blockSize);
+    const VkFormat baseFormat  = VK_FORMAT_R8G8B8A8_UNORM;
+    const VkFormat blockFormat = VK_FORMAT_BC1_RGB_UNORM_BLOCK;
+    const u32 bytesPerTexel    = GetFormatSize(baseFormat);
+    const u32 bytesPerBlock    = GetFormatSize(blockFormat);
+    const u32 blockSize        = GetBlockSize(blockFormat);
+    const u32 log2BlockSize    = Log2Int(blockSize);
 
     const u32 blockBorderSize = borderSize >> log2BlockSize;
 
@@ -563,7 +564,7 @@ void Convert(string filename)
     const int pageByteSize           = Sqr(pageBlockWidth) * bytesPerBlock;
     const int submissionNumSqrtPages = gpuOutputWidth / pageBlockWidth;
 
-    const int pageStride   = pageBlockWidth * bytesPerBlock;
+    const int pageStride = pageBlockWidth * bytesPerBlock;
 
     struct SubmissionInfo
     {
