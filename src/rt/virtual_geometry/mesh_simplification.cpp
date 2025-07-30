@@ -1784,6 +1784,8 @@ struct ClusterGroup
     u32 partStartIndex;
     u32 numParts;
 
+    StaticArray<Vec3i> extraVoxels;
+
     // Debug
     u32 numVertices;
     u32 numIndices;
@@ -2474,6 +2476,18 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     combinedMesh.numIndices  = totalNumTriangles * 3;
     combinedMesh.numFaces    = totalNumTriangles;
 
+    Arena **arenas = GetArenaArray(scratch.temp.arena);
+
+    for (int i = 0; i < OS_NumProcessors(); i++)
+    {
+        arenas[i]->align = 16;
+    }
+
+    ScenePrimitives scene = {};
+    scene.primitives      = &combinedMesh;
+    scene.numPrimitives   = 1;
+    scene.BuildTriangleBVH(arenas);
+
     PrimRef *primRefs = ParallelGenerateMeshRefs<GeometryType::TriangleMesh>(
         scratch.temp.arena, &combinedMesh, 1, record, false);
 
@@ -2571,7 +2585,6 @@ void CreateClusters(Mesh *meshes, u32 numMeshes, StaticArray<u32> &materialIndic
     }
 
     // Create clusters
-    Arena **arenas = GetArenaArray(scratch.temp.arena);
     StaticArray<DenseGeometryBuildData> buildDatas(scratch.temp.arena, OS_NumProcessors());
     for (int i = 0; i < buildDatas.capacity; i++)
     {
@@ -4421,22 +4434,14 @@ void TraverseKDTree(PrimRef *refs, KDTreeNode *rootNode, Bounds bounds, LeafFunc
     }
 }
 
-// struct Instance
-// {
-//     u32 id;
-//     u32 transformIndex;
-// };
-
 template <typename T>
-__forceinline Mask<T> TriangleAABB_SAT(Vec3<T> v[3])
+__forceinline Mask<T> TriangleAABB_SAT(Vec3<T> v[3], Mask<T> &resultMask)
 {
     Vec3<T> edges[3] = {
         v[1] - v[0],
         v[2] - v[1],
         v[0] - v[2],
     };
-
-    Mask<T> resultMask = Mask<T>(FalseTy());
 
     for (int i = 0; i < 3; i++)
     {
@@ -4463,19 +4468,27 @@ __forceinline Mask<T> TriangleAABB_SAT(Vec3<T> v[3])
     return resultMask;
 }
 
-void Voxelize(Mesh *mesh) // ScenePrimitives *scene)
+void Voxelize(Mesh *mesh)
 {
     ScratchArena scratch;
 
-    Array<Vec3i> voxels(scratch.temp.arena, 128);
-    f32 voxelSize = 1.f;
+    f32 voxelSize    = 1.f;
+    f32 rcpVoxelSize = 1.f / voxelSize;
+
+    u32 voxelCount = 0;
+
+    u32 numSlots = NextPowerOfTwo(mesh->numIndices / 3);
+
+    SimpleHashSet<Vec3i> voxelHashSet(scratch.temp.arena, numSlots);
 
     for (int triIndex = 0; triIndex < mesh->numIndices / 3; triIndex++)
     {
+        Lane4F32 rcpVoxelSizeV(1.f);
+
         Vec3f pos[3];
-        pos[0] = mesh->p[mesh->indices[3 * triIndex + 0]];
-        pos[1] = mesh->p[mesh->indices[3 * triIndex + 1]];
-        pos[2] = mesh->p[mesh->indices[3 * triIndex + 2]];
+        pos[0] = mesh->p[mesh->indices[3 * triIndex + 0]] * rcpVoxelSize;
+        pos[1] = mesh->p[mesh->indices[3 * triIndex + 1]] * rcpVoxelSize;
+        pos[2] = mesh->p[mesh->indices[3 * triIndex + 2]] * rcpVoxelSize;
 
         Vec3lf8 v[3];
         for (int i = 0; i < 3; i++)
@@ -4490,10 +4503,8 @@ void Voxelize(Mesh *mesh) // ScenePrimitives *scene)
         bounds.minP = Lane4F32(Min(pos[0], Min(pos[1], pos[2])));
         bounds.maxP = Lane4F32(Max(pos[0], Max(pos[1], pos[2])));
 
-        Lane4F32 rcpVoxelSize(1.f);
-
-        Lane4F32 minVoxel = Floor(bounds.minP * rcpVoxelSize);
-        Lane4F32 maxVoxel = Ceil(bounds.maxP * rcpVoxelSize);
+        Lane4F32 minVoxel = Floor(bounds.minP);
+        Lane4F32 maxVoxel = Ceil(bounds.maxP);
 
         Vec3lf8 minP(Lane8F32(Min(pos[0].x, Min(pos[1].x, pos[2].x))),
                      Lane8F32(Min(pos[0].y, Min(pos[1].y, pos[2].y))),
@@ -4501,6 +4512,12 @@ void Voxelize(Mesh *mesh) // ScenePrimitives *scene)
         Vec3lf8 maxP(Lane8F32(Max(pos[0].x, Max(pos[1].x, pos[2].x))),
                      Lane8F32(Max(pos[0].y, Max(pos[1].y, pos[2].y))),
                      Lane8F32(Max(pos[0].z, Max(pos[1].z, pos[2].z))));
+
+        Vec3f norm = Normalize(Cross(pos[1] - pos[0], pos[2] - pos[0]));
+
+        Lane8F32 e = Dot(Abs(norm), Vec3f(0.5f));
+        Vec3lf8 triPlane(Lane8F32(norm.x), Lane8F32(norm.y), Lane8F32(norm.z));
+        Lane8F32 d(-Dot(pos[0], norm));
 
         const int stepSizeX = 8;
         // First, test voxel AABB around triangle AABB
@@ -4520,8 +4537,19 @@ void Voxelize(Mesh *mesh) // ScenePrimitives *scene)
                     Vec3lf8 voxelMin = Max(voxelCenter - Vec3lf8(Lane8F32(0.5f)), minP);
                     Vec3lf8 voxelMax = Min(voxelCenter + Vec3lf8(Lane8F32(0.5f)), maxP);
 
-                    if (None(voxelMin.x < voxelMax.x) || None(voxelMin.y < voxelMax.y) ||
-                        None(voxelMin.z < voxelMax.z))
+                    Mask<Lane8F32> mask = voxelMin.x < voxelMax.x & voxelMin.y < voxelMax.y &
+                                          voxelMin.z < voxelMax.z;
+
+                    if (None(mask))
+                    {
+                        continue;
+                    }
+
+                    Lane8F32 s = Dot(voxelCenter, triPlane) + d;
+
+                    mask &= s <= e & s >= -e;
+
+                    if (None(mask))
                     {
                         continue;
                     }
@@ -4532,27 +4560,26 @@ void Voxelize(Mesh *mesh) // ScenePrimitives *scene)
                         v[2] - voxelCenter,
                     };
 
-                    Mask<Lane8F32> mask = TriangleAABB_SAT(verts);
-                    u32 bits            = ~Movemask(mask);
-                    for (;;)
+                    mask = ~mask;
+                    TriangleAABB_SAT(verts, mask);
+                    u32 bits = ~Movemask(mask) & ((1u << stepSizeX) - 1u);
+                    while (bits)
                     {
                         u32 increment = Bsf(bits);
                         Assert(voxelX + increment < maxVoxel[0]);
                         bits &= bits - 1;
+                        voxelCount++;
+
+                        Vec3i voxel((i32)voxelX, (i32)voxelY, (i32)voxelZ);
+                        u32 hash = Hash(voxel);
+                        voxelHashSet.AddUnique(scratch.temp.arena, hash, voxel);
                     }
                 }
             }
         }
     }
 
-    Arena **arenas = GetArenaArray(scratch.temp.arena);
-
-    ScenePrimitives scene = {};
-    scene.primitives      = mesh;
-    scene.numPrimitives   = 1;
-
-    scene.BuildTriangleBVH(arenas);
-    u32 hitCount = 0;
+    Assert(voxelHashSet.totalCount < maxNumVoxels);
 
     const u32 numRays = 64;
 
@@ -4614,29 +4641,135 @@ void Voxelize(Mesh *mesh) // ScenePrimitives *scene)
         }
     };
 
-    for (Vec3i voxel : voxels)
+    struct Voxel
     {
-        SGGX sggx;
-        Vec3f voxelCenter = (Vec3f(voxel) + 0.5f) * voxelSize;
+        Vec3i loc;
+        f32 coverage;
+    };
 
-        for (u32 sample = 0; sample < numRays; sample++)
+    struct Handle
+    {
+        u32 sortKey;
+        u32 index;
+    };
+
+    Arena **arenas = GetArenaArray(scratch.temp.arena);
+
+    for (int i = 0; i < OS_NumProcessors(); i++)
+    {
+        arenas[i]->align = 16;
+    }
+
+    ScenePrimitives scene = {};
+    scene.primitives      = &mesh;
+    scene.numPrimitives   = 1;
+    scene.BuildTriangleBVH(arenas);
+
+    StaticArray<Voxel> voxels(scratch.temp.arena, voxelHashSet.totalCount);
+    StaticArray<Handle> handles(scratch.temp.arena, voxelHashSet.totalCount);
+    HashIndex hitVoxelHash(scratch.temp.arena, NextPowerOfTwo(voxelHashSet.totalCount),
+                           NextPowerOfTwo(voxelHashSet.totalCount));
+
+    f32 totalCoverage = 0.f;
+    for (u32 slotIndex = 0; slotIndex < voxelHashSet.numSlots; slotIndex++)
+    {
+        auto *node = &voxelHashSet.nodes[slotIndex];
+        while (node->next)
         {
-            SurfaceInteraction si;
-            Ray2 ray;
+            SGGX sggx;
+            Vec3i voxel       = node->value;
+            Vec3f voxelCenter = (Vec3f(voxel) + 0.5f) * voxelSize;
+            u32 hitCount      = 0;
 
-            GenerateRay(sample, voxelSize, ray.o, ray.d, ray.tFar);
-            ray.o += voxelCenter;
-
-            bool intersect = scene.Intersect(ray, si);
-
-            if (intersect)
+            for (u32 sample = 0; sample < numRays; sample++)
             {
-                Vec3f n = si.n;
-                hitCount++;
+                SurfaceInteraction si;
+                Ray2 ray;
 
-                sggx.Add(n);
+                GenerateRay(sample, voxelSize, ray.o, ray.d, ray.tFar);
+                ray.o += voxelCenter;
+
+                bool intersect = scene.Intersect(ray, si);
+
+                if (intersect)
+                {
+                    Vec3f n = si.n;
+                    hitCount++;
+
+                    sggx.Add(n);
+                }
+            }
+            if (hitCount)
+            {
+                union Float
+                {
+                    f32 f;
+                    u32 u;
+                };
+                f32 coverage = (f32)hitCount / numRays;
+                totalCoverage += coverage;
+
+                Float fl;
+                fl.f = coverage;
+
+                voxels.Push(Voxel{voxel, coverage});
+
+                Handle handle;
+                handle.index   = voxels.Length() - 1;
+                handle.sortKey = fl.u;
+                handles.Push(handle);
+
+                u32 hash = Hash(voxel);
+
+                hitVoxelHash.AddInHash(hash, voxels.Length() - 1);
+            }
+            else
+            {
+            }
+            node = node->next;
+        }
+    }
+
+    Assert(voxels.Length());
+    SortHandles(handles.data, handles.Length());
+
+    u32 handleIndex = 0;
+    u32 numVoxels   = voxels.Length();
+    while ((f32)numVoxels > totalCoverage)
+    {
+        Voxel &voxel = voxels[handles[handleIndex].index];
+
+        FixedArray<u32> neighbors;
+        for (int x = -1; x <= 1; x++)
+        {
+            for (int y = -1; y <= 1; y++)
+            {
+                for (int z = -1; z <= 1; z++)
+                {
+                    Vec3i neighborLoc = voxel.loc + Vec3i(x, y, z);
+                    u32 hash          = Hash(neighborLoc);
+                    for (int hashIndex = hitVoxelHash.FirstInHash(hash); hashIndex != -1;
+                         hashIndex     = hitVoxelHash.NextInHash(hashIndex))
+                    {
+                        if (voxels[hashIndex].loc == neighborLoc)
+                        {
+                            neighbors.Push((u32)hashindex);
+                            break;
+                        }
+                    }
+                }
             }
         }
+        f32 coverage = voxel.coverage / neighbors.Length();
+        for (u32 neighbor : neighbors)
+        {
+            Voxel &neighborVoxel   = voxels[neighbor];
+            f32 newCoverage        = 1.f - (1.f - neighborVoxel.coverage) * (1.f - coverage);
+            neighborVoxel.coverage = newCoverage;
+        }
+
+        // TODO: add to extra voxel list
+        numVoxels--;
     }
 }
 

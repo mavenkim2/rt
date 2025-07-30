@@ -282,6 +282,11 @@ __forceinline Lane8F32 operator!=(const Lane8F32 &a, const Lane8F32 &b)
     return _mm256_cmp_ps(a, b, _CMP_NEQ_UQ);
 }
 
+__forceinline Lane8F32 operator~(const Lane8F32 &a)
+{
+    return _mm256_xor_ps(a, Lane8F32(True));
+}
+
 __forceinline Lane8F32 operator==(const Lane8U32 &a, const Lane8U32 &b)
 {
     return _mm256_castsi256_ps(_mm256_cmpeq_epi32(a, b));

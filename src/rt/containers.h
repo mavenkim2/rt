@@ -641,6 +641,51 @@ const T *HashSet<T, numSlots, chunkSize, numStripes, tag>::GetOrCreate(Arena *ar
     return out;
 }
 
+template <typename T>
+struct SimpleHashSet
+{
+    struct Node
+    {
+        T value;
+        Node *next;
+    };
+    Node *nodes;
+    u32 numSlots;
+    u32 totalCount;
+
+    SimpleHashSet() {}
+    SimpleHashSet(Arena *arena, u32 numSlots) : numSlots(numSlots), totalCount(0)
+    {
+        Assert(IsPow2(numSlots));
+        nodes = PushArray(arena, Node, numSlots);
+    }
+    const bool AddUnique(Arena *arena, u32 hash, T value);
+};
+
+template <typename T>
+const bool SimpleHashSet<T>::AddUnique(Arena *arena, u32 hash, T value)
+{
+    Node *node = &nodes[hash & (numSlots - 1)];
+    Node *prev = 0;
+
+    while (node)
+    {
+        if (node->value == value)
+        {
+            return false;
+        }
+        prev = node;
+        node = node->next;
+    }
+
+    node        = PushStruct(arena, Node);
+    prev->value = value;
+    prev->next  = node;
+    totalCount++;
+
+    return true;
+}
+
 template <typename T, i32 memoryTag = 0>
 struct ChunkedLinkedList
 {

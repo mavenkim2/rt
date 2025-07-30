@@ -9,7 +9,6 @@
 #include "parallel.h"
 #include "mesh.h"
 #include "dgfs.h"
-#include "graphics/ptex.h"
 #include "memory.h"
 #include "thread_context.h"
 #include "platform.h"

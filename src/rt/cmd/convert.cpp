@@ -2330,8 +2330,11 @@ int main(int argc, char **argv)
                            "xgFoliageA_treeMadronaBaked_canopyOnly_lo.obj",
                            numMeshes, actualNumMeshes);
 
+    meshes[0].numFaces = meshes[0].numIndices / 4;
+    Mesh mesh          = ConvertQuadToTriangleMesh(arena, meshes[0]);
+
     PerformanceCounter counter = OS_StartCounter();
-    Voxelize(&meshes[0]);
+    Voxelize(&mesh);
     f32 t = OS_GetMilliseconds(counter);
     Print("%f\n", t);
 

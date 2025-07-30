@@ -39,9 +39,10 @@ float3 SampleDiffuse(float3 R, float3 wo, float2 u, inout float3 throughput, boo
 {
     float3 wi = SampleCosineHemisphere(u);
     wi.z = wo.z < 0 ? -wi.z : wi.z;
-    float pdf = CosineHemispherePDF(abs(wi.z));
+    //float pdf = CosineHemispherePDF(abs(wi.z));
 
-    throughput *= R * InvPi * abs(wi.z) * rcp(pdf);
+    //throughput *= R; * InvPi * abs(wi.z) * rcp(pdf);
+    throughput *= R;
 
     return wi;
 }
